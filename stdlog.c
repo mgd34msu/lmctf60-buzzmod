@@ -15,21 +15,21 @@
 #include "stdlog.h"
 
 
-/*
- *  LOCAL DEFINES
- *
- */
+ /*
+  *  LOCAL DEFINES
+  *
+  */
 
 #define MAX_DATE_STRLEN     (2+1+3+1+4+10)   /* dd mmm yyyy (10 for good luck) */
 #define MAX_TIME_STRLEN     (2+1+2+1+2+10)   /* hh:mm:ss (10 for good luck) */
 
-/*
- *  LOCAL VARIABLES
- *
- */
-static cvar_t   *logfile    = NULL;
-static cvar_t   *logstyle   = NULL;
-static FILE     *StdLogFile = NULL;
+  /*
+   *  LOCAL VARIABLES
+   *
+   */
+static cvar_t* logfile = NULL;
+static cvar_t* logstyle = NULL;
+static FILE* StdLogFile = NULL;
 
 static unsigned int uiLogstyle = 0;
 
@@ -48,44 +48,52 @@ static unsigned int uiLogstyle = 0;
  *  LOCAL FUNCTION PROTOTYPES
  *
  */
-static void _sl_LogVers( void );
-static void _sl_LogPatch( char *pPatchName );
-static void _sl_LogDate( void );
-static void _sl_LogTime( void );
-static void _sl_LogDeathFlags( unsigned long dmFlags );
-static void _sl_LogMapName( char *pMapName );
+static void _sl_LogVers(void);
+static void _sl_LogPatch(char* pPatchName);
+static void _sl_LogDate(void);
+static void _sl_LogTime(void);
+static void _sl_LogDeathFlags(unsigned long dmFlags);
+static void _sl_LogMapName(char* pMapName);
 
-static void _sl_LogPlayerName( char *pPlayerName,
-                               char *pTeamName,
-                               float timeInSeconds );
+static void _sl_LogPlayerName(char* pPlayerName,
+    char* pTeamName,
+    float timeInSeconds);
 
-static void _sl_LogScore( char *pKillerName,
-                          char *pTargetName,
-                          char *pScoreType,
-                          char *pWeaponName,
-                          int   iScore,
-                          float timeInSeconds );
+static void _sl_LogScore(char* pKillerName,
+    char* pTargetName,
+    char* pScoreType,
+    char* pWeaponName,
+    int   iScore,
+    float timeInSeconds);
 
-static void _sl_LogPlayerLeft( char *pPlayerName,
-                               float timeInSeconds );
+//BUZZKILL - IMPROVED ANALYTICS - BEGIN
+static void _sl_LogPickup(char* pPlayerEvent,
+    char* pPlayerName,
+    char* pPickupName,
+    int   iStat,
+    float timeInSeconds);
+//BUZZKILL - IMPROVED ANALYTICS - END
 
-static void _sl_LogGameStart( float timeInSeconds );
-static void _sl_LogGameEnd( float timeInSeconds );
+static void _sl_LogPlayerLeft(char* pPlayerName,
+    float timeInSeconds);
 
-static void _sl_LogPlayerConnect( char *pPlayerName,
-                                  char *pTeamName,
-                                  float timeInSeconds );
+static void _sl_LogGameStart(float timeInSeconds);
+static void _sl_LogGameEnd(float timeInSeconds);
 
-static void _sl_LogPlayerTeamChange( char *pPlayerName,
-                                     char *pTeamName,
-                                     float timeInSeconds );
+static void _sl_LogPlayerConnect(char* pPlayerName,
+    char* pTeamName,
+    float timeInSeconds);
 
-static void _sl_LogPlayerRename( char *pOldPlayerName,
-                                 char *pNewPlayerName,
-                                 float timeInSeconds );
+static void _sl_LogPlayerTeamChange(char* pPlayerName,
+    char* pTeamName,
+    float timeInSeconds);
 
-static int _sl_MaybeOpenFile( game_import_t  *gi );
-static void  _sl_MaybeCloseFile( void );
+static void _sl_LogPlayerRename(char* pOldPlayerName,
+    char* pNewPlayerName,
+    float timeInSeconds);
+
+static int _sl_MaybeOpenFile(game_import_t* gi);
+static void  _sl_MaybeCloseFile(void);
 
 /*
  *  LOCAL TYPEDEFS
@@ -95,20 +103,21 @@ static void  _sl_MaybeCloseFile( void );
 #if 1
 typedef struct
 {
-    void (*pLogVers)( void );
-    void (*pLogPatch)( char *pPatchName );
-    void (*pLogDate)( void );
-    void (*pLogTime)( void );
-    void (*pLogDeathFlags)( unsigned long dmFlags );
-    void (*pLogMapName)( char *pMapName );
-    void (*pLogPlayerName)( char *pPlayerName, char *pTeamName, float timeInSeconds );
-    void (*pLogScore)( char *pKillerName, char *pTargetName, char *pScoreType, char *pWeaponName, int   iScore, float timeInSeconds );
-    void (*pLogPlayerLeft)( char *pPlayerName, float timeInSeconds );
-    void (*pLogGameStart)( float timeInSeconds );
-    void (*pLogGameEnd)( float timeInSeconds );
-    void (*pLogPlayerConnect)( char *pPlayerName, char *pTeamName, float timeInSeconds );
-    void (*pLogPlayerTeamChange)( char *pPlayerName, char *pTeamName, float timeInSeconds );
-    void (*pLogPlayerRename)( char *pOldPlayerName, char *pNewPlayerName, float timeInSeconds );
+    void (*pLogVers)(void);
+    void (*pLogPatch)(char* pPatchName);
+    void (*pLogDate)(void);
+    void (*pLogTime)(void);
+    void (*pLogDeathFlags)(unsigned long dmFlags);
+    void (*pLogMapName)(char* pMapName);
+    void (*pLogPlayerName)(char* pPlayerName, char* pTeamName, float timeInSeconds);
+    void (*pLogScore)(char* pKillerName, char* pTargetName, char* pScoreType, char* pWeaponName, int   iScore, float timeInSeconds);
+    void (*pLogPickup)(char* pPlayerEvent, char* pPlayerName, char* pPickupName, int iStat, float timeInSeconds); // BUZZKILL - IMPROVED ANALYTICS
+    void (*pLogPlayerLeft)(char* pPlayerName, float timeInSeconds);
+    void (*pLogGameStart)(float timeInSeconds);
+    void (*pLogGameEnd)(float timeInSeconds);
+    void (*pLogPlayerConnect)(char* pPlayerName, char* pTeamName, float timeInSeconds);
+    void (*pLogPlayerTeamChange)(char* pPlayerName, char* pTeamName, float timeInSeconds);
+    void (*pLogPlayerRename)(char* pOldPlayerName, char* pNewPlayerName, float timeInSeconds);
 } LOG_FUNCS;
 
 static LOG_FUNCS _sl_LogStyles[] =
@@ -122,6 +131,7 @@ static LOG_FUNCS _sl_LogStyles[] =
         _sl_LogMapName,
         _sl_LogPlayerName,
         _sl_LogScore,
+        _sl_LogPickup,
         _sl_LogPlayerLeft,
         _sl_LogGameStart,
         _sl_LogGameEnd,
@@ -139,191 +149,218 @@ static LOG_FUNCS _sl_LogStyles[] =
  *
  */
 
-static void _sl_LogVers( void )
+static void _sl_LogVers(void)
 {
     /* StdLog + VersNr */
-    fprintf( StdLogFile, "\t\tStdLog\t1.2\n" );
+    fprintf(StdLogFile, "\t\tStdLog\t1.2\n");
 }
 
-static void _sl_LogPatch( char *pPatchName )
+static void _sl_LogPatch(char* pPatchName)
 {
-    if( NULL != pPatchName )
+    if (NULL != pPatchName)
     {
-        fprintf( StdLogFile, "\t\tPatchName\t%s\n", pPatchName );
+        fprintf(StdLogFile, "\t\tPatchName\t%s\n", pPatchName);
     }
     else
     {
-        fprintf( StdLogFile, "\t\tPatchName\t\n" );
+        fprintf(StdLogFile, "\t\tPatchName\t\n");
     }
 }
 
-static void _sl_LogDate( void )
+static void _sl_LogDate(void)
 {
     time_t t;
 
     /* Get the time */
     t = time(NULL);
-    if( -1 != t )
+    if (-1 != t)
     {
-        struct tm  *ptm;
+        struct tm* ptm;
 
-        ptm = localtime( &t );
-        if( NULL != ptm )
+        ptm = localtime(&t);
+        if (NULL != ptm)
         {
-            char        date[MAX_DATE_STRLEN+1] = {0};
+            char        date[MAX_DATE_STRLEN + 1] = { 0 };
 
-            strftime( &date[0],
-                      (sizeof(date)/sizeof(date[0]))-1,
-                      "%d %b %Y",
-                      ptm );
+            strftime(&date[0],
+                (sizeof(date) / sizeof(date[0])) - 1,
+                "%d %b %Y",
+                ptm);
 
-            fprintf( StdLogFile, "\t\tLogDate\t%s\n", &date[0] );
+            fprintf(StdLogFile, "\t\tLogDate\t%s\n", &date[0]);
         }
     }
 }
 
-static void _sl_LogTime( void )
+static void _sl_LogTime(void)
 {
     time_t t;
 
     /* Get the time */
     t = time(NULL);
-    if( -1 != t )
+    if (-1 != t)
     {
-        struct tm  *ptm;
+        struct tm* ptm;
 
-        ptm = localtime( &t );
-        if( NULL != ptm )
+        ptm = localtime(&t);
+        if (NULL != ptm)
         {
-            char        time[MAX_TIME_STRLEN+1] = {0};
+            char        time[MAX_TIME_STRLEN + 1] = { 0 };
 
-            strftime( &time[0],
-                      (sizeof(time)/sizeof(time[0]))-1,
-                      "%H:%M:%S",
-                      ptm );
+            strftime(&time[0],
+                (sizeof(time) / sizeof(time[0])) - 1,
+                "%H:%M:%S",
+                ptm);
 
-            fprintf( StdLogFile, "\t\tLogTime\t%s\n", &time[0] );
+            fprintf(StdLogFile, "\t\tLogTime\t%s\n", &time[0]);
         }
     }
 }
 
 
-static void _sl_LogDeathFlags( unsigned long dmFlags )
+static void _sl_LogDeathFlags(unsigned long dmFlags)
 {
-    fprintf( StdLogFile, "\t\tLogDeathFlags\t%ld\n", dmFlags );
+    fprintf(StdLogFile, "\t\tLogDeathFlags\t%ld\n", dmFlags);
 }
 
-static void _sl_LogMapName( char *pMapName )
+static void _sl_LogMapName(char* pMapName)
 {
-    fprintf( StdLogFile, "\t\tMap\t%s\n", pMapName );
+    fprintf(StdLogFile, "\t\tMap\t%s\n", pMapName);
 }
 
-static void _sl_LogPlayerName( char *pPlayerName,
-                               char *pTeamName,
-                               float timeInSeconds )
+static void _sl_LogPlayerName(char* pPlayerName,
+    char* pTeamName,
+    float timeInSeconds)
 {
-    if( NULL != pTeamName )
-        fprintf( StdLogFile, "\t\tPlayer\t%s\t%s\t%.1f\n", pPlayerName, pTeamName, timeInSeconds );
+    if (NULL != pTeamName)
+        fprintf(StdLogFile, "\t\tPlayer\t%s\t%s\t%.1f\n", pPlayerName, pTeamName, timeInSeconds);
     else
-        fprintf( StdLogFile, "\t\tPlayer\t%s\t\t%.1f\n", pPlayerName, timeInSeconds );
+        fprintf(StdLogFile, "\t\tPlayer\t%s\t\t%.1f\n", pPlayerName, timeInSeconds);
 }
 
-static void _sl_LogScore( char *pKillerName,
-                          char *pTargetName,
-                          char *pScoreType,
-                          char *pWeaponName,
-                          int   iScore,
-                          float timeInSeconds )
+static void _sl_LogScore(char* pKillerName,
+    char* pTargetName,
+    char* pScoreType,
+    char* pWeaponName,
+    int   iScore,
+    float timeInSeconds)
 {
     /* Killer Name */
-    if( NULL != pKillerName )
-        fprintf( StdLogFile, "%s", pKillerName );
-    fprintf( StdLogFile, "\t" );
+    if (NULL != pKillerName)
+        fprintf(StdLogFile, "%s", pKillerName);
+    fprintf(StdLogFile, "\t");
 
     /* Target Name */
-    if( NULL != pTargetName )
-        fprintf( StdLogFile, "%s", pTargetName );
-    fprintf( StdLogFile, "\t" );
-    
+    if (NULL != pTargetName)
+        fprintf(StdLogFile, "%s", pTargetName);
+    fprintf(StdLogFile, "\t");
+
     /* Score Type */
-    if( NULL != pScoreType )
-        fprintf( StdLogFile, "%s", pScoreType );
-    fprintf( StdLogFile, "\t" );
+    if (NULL != pScoreType)
+        fprintf(StdLogFile, "%s", pScoreType);
+    fprintf(StdLogFile, "\t");
 
     /* Weapon Name */
-    if( NULL != pWeaponName )
-        fprintf( StdLogFile, "%s", pWeaponName );
-    fprintf( StdLogFile, "\t" );
+    if (NULL != pWeaponName)
+        fprintf(StdLogFile, "%s", pWeaponName);
+    fprintf(StdLogFile, "\t");
 
     /* Score & Time */
-    fprintf( StdLogFile, "%d\t%.1f\n", iScore, timeInSeconds );
+    fprintf(StdLogFile, "%d\t%.1f\n", iScore, timeInSeconds);
 }
 
-static void _sl_LogPlayerLeft( char *pPlayerName,
-                               float timeInSeconds )
+// BUZZKILL - IMPROVED ANALYTICS - START
+static void _sl_LogPickup(char* pPlayerEvent,
+    char* pPlayerName,
+    char* pPickupName,
+    int   iStat,
+    float timeInSeconds)
 {
-    fprintf( StdLogFile, "\t\tPlayerLeft\t%s\t\t%.1f\n", pPlayerName, timeInSeconds );
+    /* Player Event */
+    if (NULL != pPlayerEvent)
+        fprintf(StdLogFile, "\t\t%s", pPlayerEvent);
+    fprintf(StdLogFile, "\t");
+
+    /* Player Name */
+    if (NULL != pPlayerName)
+        fprintf(StdLogFile, "%s", pPlayerName);
+    fprintf(StdLogFile, "\t");
+
+    /* Pickup Name */
+    if (NULL != pPickupName)
+        fprintf(StdLogFile, "%s", pPickupName);
+    fprintf(StdLogFile, "\t");
+
+    /* Stat & Time */
+    fprintf(StdLogFile, "%d\t%.1f\n", iStat, timeInSeconds);
+}
+// BUZZKILL - IMPROVED ANALYTICS - END
+
+static void _sl_LogPlayerLeft(char* pPlayerName,
+    float timeInSeconds)
+{
+    fprintf(StdLogFile, "\t\tPlayerLeft\t%s\t\t%.1f\n", pPlayerName, timeInSeconds);
 }
 
-static void _sl_LogGameStart( float timeInSeconds )
+static void _sl_LogGameStart(float timeInSeconds)
 {
-    fprintf( StdLogFile, "\t\tGameStart\t\t\t%.1f\n", timeInSeconds );
+    fprintf(StdLogFile, "\t\tGameStart\t\t\t%.1f\n", timeInSeconds);
 }
 
-static void _sl_LogGameEnd( float timeInSeconds )
+static void _sl_LogGameEnd(float timeInSeconds)
 {
-    fprintf( StdLogFile, "\t\tGameEnd\t\t\t%.1f\n", timeInSeconds );
+    fprintf(StdLogFile, "\t\tGameEnd\t\t\t%.1f\n", timeInSeconds);
 }
 
-static void _sl_LogPlayerConnect( char *pPlayerName,
-                                  char *pTeamName,
-                                  float timeInSeconds )
+static void _sl_LogPlayerConnect(char* pPlayerName,
+    char* pTeamName,
+    float timeInSeconds)
 {
-    if( NULL != pTeamName )
-        fprintf( StdLogFile, "\t\tPlayerConnect\t%s\t%s\t%.1f\n", pPlayerName, pTeamName, timeInSeconds );
+    if (NULL != pTeamName)
+        fprintf(StdLogFile, "\t\tPlayerConnect\t%s\t%s\t%.1f\n", pPlayerName, pTeamName, timeInSeconds);
     else
-        fprintf( StdLogFile, "\t\tPlayerConnect\t%s\t\t%.1f\n", pPlayerName, timeInSeconds );
+        fprintf(StdLogFile, "\t\tPlayerConnect\t%s\t\t%.1f\n", pPlayerName, timeInSeconds);
 }
 
-static void _sl_LogPlayerTeamChange( char *pPlayerName,
-                                     char *pTeamName,
-                                     float timeInSeconds )
+static void _sl_LogPlayerTeamChange(char* pPlayerName,
+    char* pTeamName,
+    float timeInSeconds)
 {
-    if( NULL != pTeamName )
-        fprintf( StdLogFile, "\t\tPlayerTeamChange\t%s\t%s\t%.1f\n", pPlayerName, pTeamName, timeInSeconds );
+    if (NULL != pTeamName)
+        fprintf(StdLogFile, "\t\tPlayerTeamChange\t%s\t%s\t%.1f\n", pPlayerName, pTeamName, timeInSeconds);
     else
-        fprintf( StdLogFile, "\t\tPlayerTeamChange\t%s\t\t%.1f\n", pPlayerName, timeInSeconds );
+        fprintf(StdLogFile, "\t\tPlayerTeamChange\t%s\t\t%.1f\n", pPlayerName, timeInSeconds);
 }
 
-static void _sl_LogPlayerRename( char *pOldPlayerName,
-                                 char *pNewPlayerName,
-                                 float timeInSeconds )
+static void _sl_LogPlayerRename(char* pOldPlayerName,
+    char* pNewPlayerName,
+    float timeInSeconds)
 {
-    fprintf( StdLogFile, "\t\tPlayerRename\t%s\t%s\t%.1f\n", pOldPlayerName, pNewPlayerName, timeInSeconds );
+    fprintf(StdLogFile, "\t\tPlayerRename\t%s\t%s\t%.1f\n", pOldPlayerName, pNewPlayerName, timeInSeconds);
 }
 
 
-static int _sl_MaybeOpenFile( game_import_t  *gi )
+static int _sl_MaybeOpenFile(game_import_t* gi)
 {
-    if( NULL == logfile )
-        logfile = gi->cvar( "stdlogfile", "0", CVAR_SERVERINFO );
+    if (NULL == logfile)
+        logfile = gi->cvar("stdlogfile", "0", CVAR_SERVERINFO);
 
-    if( (NULL != logfile) && (logfile->value != 0) )
+    if ((NULL != logfile) && (logfile->value != 0))
     {
-        if( NULL == StdLogFile )
+        if (NULL == StdLogFile)
         {
-            cvar_t   *filename  = gi->cvar( "stdlogname", "StdLog.log", CVAR_SERVERINFO );
-            char     *pName     = "StdLog.log";
-           
-            // Open File
-            if( filename )
-                pName = filename->string;
-            
-            StdLogFile = fopen( pName, "a+t" );
+            cvar_t* filename = gi->cvar("stdlogname", "StdLog.log", CVAR_SERVERINFO);
+            char* pName = "StdLog.log";
 
-            if( NULL == StdLogFile )
+            // Open File
+            if (filename)
+                pName = filename->string;
+
+            StdLogFile = fopen(pName, "a+t");
+
+            if (NULL == StdLogFile)
             {
-                gi->error( "Couldn't open %s", pName );
+                gi->error("Couldn't open %s", pName);
             }
         }
     }
@@ -331,28 +368,28 @@ static int _sl_MaybeOpenFile( game_import_t  *gi )
     return (NULL != StdLogFile);
 }
 
-static void _sl_MaybeCloseFile( void )
+static void _sl_MaybeCloseFile(void)
 {
-    if( logfile && StdLogFile) // LM_JORM -- was "if ( NULL != logfile)"
+    if (logfile && StdLogFile) // LM_JORM -- was "if ( NULL != logfile)"
     {
-        fclose( StdLogFile );
+        fclose(StdLogFile);
     }
 
     StdLogFile = NULL;
-    logfile    = NULL;
-    logstyle   = NULL;
-    uiLogstyle  = 0;
+    logfile = NULL;
+    logstyle = NULL;
+    uiLogstyle = 0;
 }
 
-static __inline void _sl_SetStyle( game_import_t  *gi )
+static __inline void _sl_SetStyle(game_import_t* gi)
 {
-    if( NULL == logstyle )
+    if (NULL == logstyle)
     {
-        logstyle = gi->cvar( "stdlogstyle", "0", CVAR_SERVERINFO );
-        if( logstyle )
+        logstyle = gi->cvar("stdlogstyle", "0", CVAR_SERVERINFO);
+        if (logstyle)
         {
             uiLogstyle = (unsigned int)logstyle->value;
-            if( uiLogstyle >= (sizeof(_sl_LogStyles)/sizeof(_sl_LogStyles[0])) )
+            if (uiLogstyle >= (sizeof(_sl_LogStyles) / sizeof(_sl_LogStyles[0])))
                 uiLogstyle = 0;
         }
     }
@@ -365,169 +402,186 @@ static __inline void _sl_SetStyle( game_import_t  *gi )
  *
  */
 
-int sl_OpenLogFile( game_import_t  *gi )
+int sl_OpenLogFile(game_import_t* gi)
 {
-    return _sl_MaybeOpenFile( gi );
+    return _sl_MaybeOpenFile(gi);
 }
 
-void sl_CloseLogFile( void )
+void sl_CloseLogFile(void)
 {
     _sl_MaybeCloseFile();
 }
 
-void sl_LogVers( game_import_t  *gi )
+void sl_LogVers(game_import_t* gi)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
+        _sl_SetStyle(gi);
         _sl_LogStyles[uiLogstyle].pLogVers();
     }
 }
 
-void sl_LogPatch( game_import_t  *gi,
-                  char           *pPatchName )
+void sl_LogPatch(game_import_t* gi,
+    char* pPatchName)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogPatch( pPatchName );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogPatch(pPatchName);
     }
 }
 
-void sl_LogDate( game_import_t  *gi )
+void sl_LogDate(game_import_t* gi)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
+        _sl_SetStyle(gi);
         _sl_LogStyles[uiLogstyle].pLogDate();
     }
 }
 
-void sl_LogTime( game_import_t  *gi )
+void sl_LogTime(game_import_t* gi)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
+        _sl_SetStyle(gi);
         _sl_LogStyles[uiLogstyle].pLogTime();
     }
 }
 
-void sl_LogDeathFlags( game_import_t  *gi,
-                       unsigned long   dmFlags)
+void sl_LogDeathFlags(game_import_t* gi,
+    unsigned long   dmFlags)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogDeathFlags( dmFlags );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogDeathFlags(dmFlags);
     }
 }
 
-void sl_LogMapName( game_import_t  *gi,
-                    char           *pMapName )
+void sl_LogMapName(game_import_t* gi,
+    char* pMapName)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogMapName( pMapName );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogMapName(pMapName);
     }
 }
 
-void sl_LogPlayerName( game_import_t  *gi,
-                       char           *pPlayerName,
-                       char           *pTeamName,
-                       float           timeInSeconds )
+void sl_LogPlayerName(game_import_t* gi,
+    char* pPlayerName,
+    char* pTeamName,
+    float           timeInSeconds)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogPlayerName( pPlayerName, pTeamName, timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogPlayerName(pPlayerName, pTeamName, timeInSeconds);
     }
 }
 
 qboolean Match_CanScore();
 
-void sl_LogScore( game_import_t  *gi,
-                  char           *pKillerName,
-                  char           *pTargetName,
-                  char           *pScoreType,
-                  char           *pWeaponName,
-                  int             iScore,
-                  float           timeInSeconds )
+void sl_LogScore(game_import_t* gi,
+    char* pKillerName,
+    char* pTargetName,
+    char* pScoreType,
+    char* pWeaponName,
+    int             iScore,
+    float           timeInSeconds)
 {
     if (!Match_CanScore())
         return;
 
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogScore( pKillerName, pTargetName, pScoreType, pWeaponName, iScore, timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogScore(pKillerName, pTargetName, pScoreType, pWeaponName, iScore, timeInSeconds);
     }
 }
 
-void sl_LogPlayerLeft( game_import_t  *gi,
-                       char           *pPlayerName,
-                       float           timeInSeconds )
+// BUZZKILL - IMPROVED ANALYTICS - START
+void sl_LogPickup(game_import_t* gi,
+    char* pPlayerEvent,
+    char* pPlayerName,
+    char* pPickupName,
+    int   iStat,
+    float timeInSeconds)
+
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogPlayerLeft( pPlayerName, timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogPickup(pPlayerEvent, pPlayerName, pPickupName, iStat, timeInSeconds);
+    }
+}
+// BUZZKILL - IMPROVED ANALYTICS - END
+
+void sl_LogPlayerLeft(game_import_t* gi,
+    char* pPlayerName,
+    float           timeInSeconds)
+{
+    if (_sl_MaybeOpenFile(gi))
+    {
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogPlayerLeft(pPlayerName, timeInSeconds);
     }
 }
 
-void sl_LogGameStart( game_import_t  *gi,
-                      float           timeInSeconds )
+void sl_LogGameStart(game_import_t* gi,
+    float           timeInSeconds)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogGameStart( timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogGameStart(timeInSeconds);
     }
 }
 
-void sl_LogGameEnd( game_import_t  *gi,
-                    float           timeInSeconds )
+void sl_LogGameEnd(game_import_t* gi,
+    float           timeInSeconds)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogGameEnd( timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogGameEnd(timeInSeconds);
     }
 }
 
-void sl_LogPlayerConnect( game_import_t  *gi,
-                          char           *pPlayerName,
-                          char           *pTeamName,
-                          float           timeInSeconds)
+void sl_LogPlayerConnect(game_import_t* gi,
+    char* pPlayerName,
+    char* pTeamName,
+    float           timeInSeconds)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogPlayerConnect( pPlayerName, pTeamName, timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogPlayerConnect(pPlayerName, pTeamName, timeInSeconds);
     }
 }
 
-void sl_LogPlayerTeamChange( game_import_t  *gi,
-                             char           *pPlayerName,
-                             char           *pTeamName,
-                             float           timeInSeconds)
+void sl_LogPlayerTeamChange(game_import_t* gi,
+    char* pPlayerName,
+    char* pTeamName,
+    float           timeInSeconds)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogPlayerTeamChange( pPlayerName, pTeamName, timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogPlayerTeamChange(pPlayerName, pTeamName, timeInSeconds);
     }
 }
 
-void sl_LogPlayerRename( game_import_t  *gi,
-                         char           *pOldPlayerName,
-                         char           *pNewPlayerName,
-                         float           timeInSeconds)
+void sl_LogPlayerRename(game_import_t* gi,
+    char* pOldPlayerName,
+    char* pNewPlayerName,
+    float           timeInSeconds)
 {
-    if( _sl_MaybeOpenFile( gi ) )
+    if (_sl_MaybeOpenFile(gi))
     {
-        _sl_SetStyle( gi );
-        _sl_LogStyles[uiLogstyle].pLogPlayerRename( pOldPlayerName, pNewPlayerName, timeInSeconds );
+        _sl_SetStyle(gi);
+        _sl_LogStyles[uiLogstyle].pLogPlayerRename(pOldPlayerName, pNewPlayerName, timeInSeconds);
     }
 }
 

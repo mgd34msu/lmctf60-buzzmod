@@ -6,7 +6,7 @@
 #define STATS_PING_TOTAL		0	// long ping_total; //add to this every time ping is sampled
 #define STATS_PING_SAMPLES		1	// long ping_samples; //# of samples(+1 each time you sample ping)
 #define STATS_TIME				2	// long time; //time on server in seconds? minutes? 
-												 // seconds would be cool for more precise calculation
+// seconds would be cool for more precise calculation
 #define STATS_SCORE				3	// int score; //the overall score
 #define STATS_CAPTURES			4	// int captures; //how many direct flag captures
 #define STATS_FRAGS				5	// int frags; //how many direct kills
@@ -19,8 +19,19 @@
 #define STATS_OFFENSE_FLAG		12	// int offense_flag; //took the enemy flag
 #define STATS_OFFENSE_CARRIER	13	// int offense_carrier; //killed enemy flag carrier
 #define STATS_OFFENSE_FLAGLOST	14	// int offense_flaglost; //lost the enemy flag
-#define MAX_PLAYER_STATS		15	
 
+// BUZZKILL - IMPROVED ANALYTICS - BEGIN
+#define STATS_RUNE_STRENGTH		15	// picked up strength rune
+#define STATS_RUNE_HASTE		16	// picked up haste rune
+#define STATS_RUNE_REGEN		17	// picked up regen rune
+#define STATS_RUNE_RESIST		18	// picked up resist rune
+#define STATS_ITEM_QUAD			19	// picked up quad
+#define STATS_ITEM_SHIELD		21	// picked up power shield (or screen)
+#define STATS_ITEM_ARMOR		22	// picked up red armor
+#define STATS_ITEM_MEGA			23  // picked up mega health
+// BUZZKILL - IMPROVED ANALYTICS - END
+
+#define MAX_PLAYER_STATS		24	
 
 typedef struct {
 	char name[MAX_INFO_STRING];
@@ -34,7 +45,7 @@ typedef struct _stats_player {
 
 	long stats[MAX_PLAYER_STATS];
 
-	struct _stats_player *pNext;
+	struct _stats_player* pNext;
 } stats_player_s;
 
 typedef enum {
@@ -48,7 +59,7 @@ typedef enum {
 	STATS_FLAG_CAPTURE,
 	STATS_BASE_DEFENSE
 } stats_event_t;
-	
+
 typedef struct {
 	stats_client_s killer;
 	stats_client_s killee;
@@ -61,18 +72,18 @@ typedef struct {
 } stats_single_data_s;
 
 
-void stats_add(edict_t *ent, int stat, long amount);
-void stats_set(edict_t *ent, int stat, long amount);
-long stats_get(edict_t *ent, int stat);
-void stats_set_name(edict_t *ent, char *name);
-void stats_clear(edict_t *ent);
-void Cmd_PlayerStats_f (edict_t *ent);
+void stats_add(edict_t* ent, int stat, long amount);
+void stats_set(edict_t* ent, int stat, long amount);
+long stats_get(edict_t* ent, int stat);
+void stats_set_name(edict_t* ent, char* name);
+void stats_clear(edict_t* ent);
+void Cmd_PlayerStats_f(edict_t* ent);
 void stats_log_init();
 void stats_log_reset();
 // returns pointer to lmctf_player_s struct of a dropped player given playername
 stats_player_s* stats_find_dropped_player(char* name);
 stats_player_s* stats_new_player(char* name);
 void stats_cleanup(); // clean up stats before switching to next level
-void Cmd_StatsAll_f (edict_t *ent);
+void Cmd_StatsAll_f(edict_t* ent);
 
 #endif

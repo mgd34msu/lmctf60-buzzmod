@@ -1,66 +1,67 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "bat.h"
+#include "stdlog.h"
 
 // RUNES
-void Rune_Think (edict_t *self);
+void Rune_Think(edict_t* self);
 
 #define RUNETHINKTIME 30 //time before a rune relocates itself
 
-static void tossruneset(edict_t *ent)
+static void tossruneset(edict_t* ent)
 {
 	ent->svflags &= ~SVF_NOCLIENT;
 	ent->flags |= FL_RESPAWN;
 	ent->spawnflags = DROPPED_ITEM;
-	
+
 	if (ent->model)
-		gi.setmodel (ent, ent->model);
+		gi.setmodel(ent, ent->model);
 	else
-		gi.setmodel (ent, ent->item->world_model);
-	ent->movetype = MOVETYPE_TOSS;  
+		gi.setmodel(ent, ent->item->world_model);
+	ent->movetype = MOVETYPE_TOSS;
 }
 
-static void tossrune (edict_t *ent, vec3_t dir)
-{	
-	float		*v;
+static void tossrune(edict_t* ent, vec3_t dir)
+{
+	float* v;
 	vec3_t		temp;
-	edict_t     *owner;
+	edict_t* owner;
 	trace_t	tr;
-	
-	VectorSet(ent->mins, -15,-15,-15);
+
+	VectorSet(ent->mins, -15, -15, -15);
 	VectorSet(ent->maxs, 15, 15, 15);
 	tossruneset(ent);
 	ent->touch = Touch_Item;
 	owner = ent->owner;
 	ent->owner = NULL;
 	ent->groundentity = NULL;
-	
+
 	VectorCopy(ent->s.origin, temp);
-	
-	if (!dir || !dir[0] ) // Random toss
+
+	if (!dir || !dir[0]) // Random toss
 	{
-		
+
 		v = tv(0, 0, 48);
-		VectorAdd (ent->s.origin, v, ent->s.origin);
+		VectorAdd(ent->s.origin, v, ent->s.origin);
 		ent->velocity[0] = -2000 + (random() * 4000);
 		ent->velocity[1] = -2000 + (random() * 4000);
 		ent->velocity[2] = 800 + (random() * 200);
-		
+
 	}
 	else
 	{
 		VectorScale(dir, 64, dir);
-		VectorAdd (ent->s.origin, dir, ent->s.origin);
+		VectorAdd(ent->s.origin, dir, ent->s.origin);
 		VectorScale(dir, 4, dir);
 		VectorCopy(dir, ent->velocity);
 	}
-	
-	tr = gi.trace (temp, ent->mins, ent->maxs, ent->s.origin, owner, MASK_SOLID);
+
+	tr = gi.trace(temp, ent->mins, ent->maxs, ent->s.origin, owner, MASK_SOLID);
 	if (tr.fraction < 1.0 || tr.allsolid)
 	{
 		VectorCopy(temp, ent->s.origin);
 	}
-	
+
 	ent->think = Rune_Think;
 	ent->nextthink = level.time + FRAMETIME;//RUNETHINKTIME;
 
@@ -69,211 +70,208 @@ static void tossrune (edict_t *ent, vec3_t dir)
 
 	//ent->solid = SOLID_BBOX;
 	ent->solid = SOLID_TRIGGER;
-	gi.linkentity (ent); //always pair with changes to solid
+	gi.linkentity(ent); //always pair with changes to solid
 }
 
 
 
-edict_t *SelectRuneSpawnPoint (void)
+edict_t* SelectRuneSpawnPoint(void)
 {
-	edict_t	*spot = NULL;
+	edict_t* spot = NULL;
 	int		count = 0;
 	int		selection;
-	
+
 	spot = NULL;
-	
-	while ((spot = G_Find (spot, FOFS(classname), "item_health_small")) != NULL)
+
+	while ((spot = G_Find(spot, FOFS(classname), "item_health_small")) != NULL)
 	{
 		count++;
 	}
-	
-	if (count>0)
+
+	if (count > 0)
 	{
-		
+
 		selection = random() * count;
-		
+
 		if (selection < 0)
 			selection = 0;
 		if (selection > 20) //arbitrary, lets not wait too long
 			selection = 20;
-		
+
 		spot = NULL;
 		do
 		{
-			spot = G_Find (spot, FOFS(classname), "item_health_small");
+			spot = G_Find(spot, FOFS(classname), "item_health_small");
 			selection--;
-		} 
-		while(selection > 0);
+		} while (selection > 0);
 	}
 	else
 	{
-		while ((spot = G_Find (spot, FOFS(classname), "item_health_large")) != NULL)
+		while ((spot = G_Find(spot, FOFS(classname), "item_health_large")) != NULL)
 		{
 			count++;
 		}
-		if (count>0)
+		if (count > 0)
 		{
-			
+
 			selection = random() * count;
-			
+
 			if (selection < 0)
 				selection = 0;
 			if (selection > 20) //arbitrary, lets not wait too long
 				selection = 20;
-			
+
 			spot = NULL;
 			do
 			{
-				spot = G_Find (spot, FOFS(classname), "item_health_large");
+				spot = G_Find(spot, FOFS(classname), "item_health_large");
 				selection--;
-			} 
-			while(selection > 0);
+			} while (selection > 0);
 		}
 		else
 		{
-			while ((spot = G_Find (spot, FOFS(classname), "item_health")) != NULL)
+			while ((spot = G_Find(spot, FOFS(classname), "item_health")) != NULL)
 			{
 				count++;
 			}
-			if (count>0)
+			if (count > 0)
 			{
-				
+
 				selection = random() * count;
-				
+
 				if (selection < 0)
 					selection = 0;
 				if (selection > 20) //arbitrary, lets not wait too long
 					selection = 20;
-				
+
 				spot = NULL;
 				do
 				{
-					spot = G_Find (spot, FOFS(classname), "item_health");
+					spot = G_Find(spot, FOFS(classname), "item_health");
 					selection--;
-				} 
-				while(selection > 0);
+				} while (selection > 0);
 			}
 		}
-		
+
 	}
-	
+
 	return spot;
 }
 
-float RunesRangeFromSpot (edict_t *spot)
+float RunesRangeFromSpot(edict_t* spot)
 {
-  edict_t *rune;
-  float	bestrunedistance;
-  vec3_t v;
-  float	runedistance;
-  
-  
-  bestrunedistance = 9999999;
-  
-
-  //-bat - This should use a function!
-
-  rune = G_Find (spot, FOFS(classname), "damage_rune");
-  if (rune)
-  {
-	  VectorSubtract (spot->s.origin, rune->s.origin, v);
-	  runedistance = VectorLength (v);
-	  
-	  if (runedistance < bestrunedistance)
-		  bestrunedistance = runedistance;
-  }
-
-  rune = G_Find (spot, FOFS(classname), "haste_rune");
-  if (rune)
-  {
-	  VectorSubtract (spot->s.origin, rune->s.origin, v);
-	  runedistance = VectorLength (v);
-	  
-	  if (runedistance < bestrunedistance)
-		  bestrunedistance = runedistance;
-  }
-
-  rune = G_Find (spot, FOFS(classname), "resist_rune");
-  if (rune)
-  {
-	  VectorSubtract (spot->s.origin, rune->s.origin, v);
-	  runedistance = VectorLength (v);
-	  
-	  if (runedistance < bestrunedistance)
-		  bestrunedistance = runedistance;
-  }
-
-  rune = G_Find (spot, FOFS(classname), "regen_rune");
-  if (rune)
-  {
-	  VectorSubtract (spot->s.origin, rune->s.origin, v);
-	  runedistance = VectorLength (v);
-	  
-	  if (runedistance < bestrunedistance)
-		  bestrunedistance = runedistance;
-  }
-
-  
-  rune = G_Find (spot, FOFS(classname), "vampire_rune");   //added by Vampire
-  if (rune)                                                  
-  {
-	  VectorSubtract (spot->s.origin, rune->s.origin, v);
-	  runedistance = VectorLength (v);
-	  
-	  if (runedistance < bestrunedistance)
-		  bestrunedistance = runedistance;
-  }
+	edict_t* rune;
+	float	bestrunedistance;
+	vec3_t v;
+	float	runedistance;
 
 
+	bestrunedistance = 9999999;
 
-  return bestrunedistance;
+
+	//-bat - This should use a function!
+
+	rune = G_Find(spot, FOFS(classname), "damage_rune");
+	if (rune)
+	{
+		VectorSubtract(spot->s.origin, rune->s.origin, v);
+		runedistance = VectorLength(v);
+
+		if (runedistance < bestrunedistance)
+			bestrunedistance = runedistance;
+	}
+
+	rune = G_Find(spot, FOFS(classname), "haste_rune");
+	if (rune)
+	{
+		VectorSubtract(spot->s.origin, rune->s.origin, v);
+		runedistance = VectorLength(v);
+
+		if (runedistance < bestrunedistance)
+			bestrunedistance = runedistance;
+	}
+
+	rune = G_Find(spot, FOFS(classname), "resist_rune");
+	if (rune)
+	{
+		VectorSubtract(spot->s.origin, rune->s.origin, v);
+		runedistance = VectorLength(v);
+
+		if (runedistance < bestrunedistance)
+			bestrunedistance = runedistance;
+	}
+
+	rune = G_Find(spot, FOFS(classname), "regen_rune");
+	if (rune)
+	{
+		VectorSubtract(spot->s.origin, rune->s.origin, v);
+		runedistance = VectorLength(v);
+
+		if (runedistance < bestrunedistance)
+			bestrunedistance = runedistance;
+	}
+
+
+	rune = G_Find(spot, FOFS(classname), "vampire_rune");   //added by Vampire
+	if (rune)
+	{
+		VectorSubtract(spot->s.origin, rune->s.origin, v);
+		runedistance = VectorLength(v);
+
+		if (runedistance < bestrunedistance)
+			bestrunedistance = runedistance;
+	}
+
+
+
+	return bestrunedistance;
 }
-  
+
 /*
 ================
 SelectFarthestDeathmatchSpawnPoint
 
  ================
 */
-edict_t *SelectFarthestRuneSpawnPoint (void)
+edict_t* SelectFarthestRuneSpawnPoint(void)
 {
-	edict_t	*bestspot;
+	edict_t* bestspot;
 	float	bestdistance, bestrunedistance;
-	edict_t	*spot;
+	edict_t* spot;
 
 
 	spot = NULL;
 	bestspot = NULL;
 	bestdistance = 0;
-	spot = G_Find (spot, FOFS(classname), "item_health");
+	spot = G_Find(spot, FOFS(classname), "item_health");
 	while (spot)
 	{
-		bestrunedistance = RunesRangeFromSpot (spot);
-		
+		bestrunedistance = RunesRangeFromSpot(spot);
+
 		if (bestrunedistance > bestdistance)
 		{
 			bestspot = spot;
 			bestdistance = bestrunedistance;
 		}
-		spot = G_Find (spot, FOFS(classname), "item_health");
+		spot = G_Find(spot, FOFS(classname), "item_health");
 	}
 
 	if (bestspot)
 	{
-	    return bestspot;
+		return bestspot;
 	}
 
 	spot = SelectRuneSpawnPoint();
 
 	return spot;
 }
-  
 
-void Rune_Think (edict_t *self)
+
+void Rune_Think(edict_t* self)
 {
-	edict_t *spot;
+	edict_t* spot;
 	static qboolean forward = true;
-	
+
 	if (self->solid != SOLID_NOT)
 	{
 		switch (self->runetype)
@@ -326,49 +324,49 @@ void Rune_Think (edict_t *self)
 			self->s.frame = ((self->s.frame + 1) % 14);
 			break;
 		case RUNE_VAMP:                                   //added by Vampire
-			self->s.frame = ((self->s.frame + 1) % 15);   
-			break;                                        
+			self->s.frame = ((self->s.frame + 1) % 15);
+			break;
 		default:
 			break;
 		}
 	}
 	self->think = Rune_Think;
 	self->nextthink = level.time + FRAMETIME;
-	
+
 	// Let's reuse last_move_time
 	if (self->last_move_time + RUNETHINKTIME < level.time)
 	{
 		//	spot = SelectRuneSpawnPoint();
-		
+
 		spot = SelectRuneSpawnPoint();
-		
+
 		if (!spot)
 			spot = redflag;
-		
+
 		if (spot)
 		{
-			VectorCopy (spot->s.origin, self->s.origin);
-			tossrune (self, 0);
+			VectorCopy(spot->s.origin, self->s.origin);
+			tossrune(self, 0);
 		}
 		self->last_move_time = level.time;
 	}
 }
 
-void SpawnRune (int type)
+void SpawnRune(int type)
 {
-	edict_t		*ent, *spot; 
-	char *name = NULL, *model = NULL; //MJD Uninitialized
+	edict_t* ent, * spot;
+	char* name = NULL, * model = NULL; //MJD Uninitialized
 	int effects = 0, renderfx = 0;    //MJD Uninitialized
-	
-	
+
+
 	//	if (!deathmatch->value)
 	//		return;
 	//surt single player runes support
-	
+
 	spot = SelectFarthestRuneSpawnPoint();
 	if (!spot)
 		spot = redflag;
-	
+
 	if (spot)
 	{
 		switch (type)
@@ -379,28 +377,28 @@ void SpawnRune (int type)
 			renderfx = 0; //RF_SHELL_RED;
 			model = "models/ctf/damage/tris.md2";
 			break;
-			
+
 		case RUNE_HASTE:
 			name = "haste_rune";
 			effects = 0;//EF_COLOR_SHELL;
 			renderfx = 0;//RF_SHELL_BLUE;
 			model = "models/ctf/haste/tris.md2";
 			break;
-			
+
 		case RUNE_RESIST:
 			name = "resist_rune";
 			effects = 0;//EF_COLOR_SHELL;
 			renderfx = 0;//RF_SHELL_RED | RF_SHELL_BLUE;
 			model = "models/ctf/resist/tris.md2";
 			break;
-			
+
 		case RUNE_REGEN:
 			name = "regen_rune";
 			effects = 0;//EF_COLOR_SHELL;
 			renderfx = 0;//RF_SHELL_GREEN;
 			model = "models/ctf/regen/tris.md2";
 			break;
-			
+
 		case RUNE_VAMP:                                   //added by Vampire
 			name = "vampire_rune";
 			//effects = EF_TELEPORTER | EF_ANIM01;//EF_COLOR_SHELL;
@@ -408,7 +406,7 @@ void SpawnRune (int type)
 			renderfx = RF_SHELL_RED;
 			model = "models/ctf/resist/tris.md2";
 			break;
-			
+
 		default:
 			gi.dprintf("Bad rune model selected.\n");
 			break;  // MJD If we hit this line, then name,
@@ -416,15 +414,15 @@ void SpawnRune (int type)
 			// stay uninitialized, which would be
 			// a bad thing, I think.
 		}
-		
+
 		ent = G_Spawn();
-		ent->classname = ED_NewString (name);
+		ent->classname = ED_NewString(name);
 		ED_CallSpawn(ent);
-		
-		VectorCopy (spot->s.origin, ent->s.origin);
+
+		VectorCopy(spot->s.origin, ent->s.origin);
 		ent->takedamage = DAMAGE_NO; //no damage on runes
 		ent->dontfree = 1;
-		gi.soundindex ("items/m_health.wav");
+		gi.soundindex("items/m_health.wav");
 		ent->s.effects |= effects;
 		ent->s.renderfx |= renderfx;
 		ent->model = model;
@@ -434,16 +432,19 @@ void SpawnRune (int type)
 	}
 }
 
-void SP_damage_rune (edict_t *self)
+void SP_damage_rune(edict_t* self)
 {
 	self->model = "models/items/invulner/tris.md2";
-	
-	SpawnItem (self, FindItemByClassname ("damage_rune"));
+
+	SpawnItem(self, FindItemByClassname("damage_rune"));
 }
 
 
-qboolean Pickup_Rune (edict_t *ent, edict_t *other)
+qboolean Pickup_Rune(edict_t* ent, edict_t* other)
 {
+	char* runeName = NULL; // BUZZKILL - IMPROVED ANALYTICS
+	int		runeID = 0; // BUZZKILL - IMPROVED ANALYTICS // problematic if this remains at 0
+
 	if (!other->client->rune) // don't already have rune
 	{
 		// Make sure it will respawn
@@ -455,7 +456,40 @@ qboolean Pickup_Rune (edict_t *ent, edict_t *other)
 		ent->owner = other;
 		other->client->rune = ent;
 		ent->solid = SOLID_NOT;
-		gi.linkentity (ent); //always pair with solid changes
+		gi.linkentity(ent); //always pair with solid changes
+
+		// BUZZKILL - IMPROVED ANALYTICS - START
+		// could probably do this a better way, but this works for now
+		switch (other->client->rune->runetype)
+		{
+		case RUNE_DAMAGE:
+			runeName = "rune_damage";
+			runeID = STATS_RUNE_STRENGTH;
+			break;
+		case RUNE_HASTE:
+			runeName = "rune_haste";
+			runeID = STATS_RUNE_HASTE;
+			break;
+		case RUNE_REGEN:
+			runeName = "rune_regen";
+			runeID = STATS_RUNE_REGEN;
+			break;
+		case RUNE_RESIST:
+			runeName = "rune_resist";
+			runeID = STATS_RUNE_RESIST;
+			break;
+		default:
+			gi.dprintf("Bad rune selected.\n");
+			break;
+		}
+		stats_add(other, runeID, 1);
+		sl_LogPickup(&gi,
+			"PlayerEvent",
+			other->client->pers.netname,
+			runeName,
+			1,
+			level.time);
+		// BUZZKILL - IMPROVED ANALYTICS - END
 
 		ent->svflags |= SVF_NOCLIENT;
 		ent->movetype = MOVETYPE_NONE;  // Don't block doors
@@ -466,11 +500,11 @@ qboolean Pickup_Rune (edict_t *ent, edict_t *other)
 	ent->touch = Touch_Item;
 	ent->think = Rune_Think;
 	ent->nextthink = level.time + FRAMETIME;
-	
+
 	return false;
 }
 
-void Drop_Rune_Think (edict_t *ent)
+void Drop_Rune_Think(edict_t* ent)
 {
 	ent->touch = Touch_Item;
 	ent->owner = NULL;
@@ -478,23 +512,23 @@ void Drop_Rune_Think (edict_t *ent)
 	ent->nextthink = level.time + FRAMETIME;
 }
 
-extern void drop_temp_touch (edict_t *ent, edict_t *other, cplane_t *plane, csurface_t *surf);
+extern void drop_temp_touch(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf);
 
-void Drop_Rune (edict_t *ent, gitem_t *item)
+void Drop_Rune(edict_t* ent, gitem_t* item)
 {
-	edict_t	*dropped;
-	float *v;
-	
+	edict_t* dropped;
+	float* v;
+
 	if (!item)
 		return;
-	
+
 	ent->client->pers.inventory[ITEM_INDEX(item)]--;
 
 	dropped = ent->client->rune;
 	if (!dropped)
 		return;
 	ent->client->rune = 0;
-	
+
 	tossruneset(dropped);
 
 	VectorCopy(ent->s.origin, dropped->s.origin);
@@ -503,13 +537,13 @@ void Drop_Rune (edict_t *ent, gitem_t *item)
 	dropped->owner = ent;
 
 	v = tv(0, 0, 48);
-	VectorAdd (dropped->s.origin, v, dropped->s.origin);
+	VectorAdd(dropped->s.origin, v, dropped->s.origin);
 	dropped->velocity[0] = -2000 + (random() * 4000);
 	dropped->velocity[1] = -2000 + (random() * 4000);
 	dropped->velocity[2] = 800 + (random() * 200);
 
 	ctf_TossEnt(ent, dropped);
-	
+
 	dropped->think = Drop_Rune_Think;
 	dropped->nextthink = level.time + 1;
 
@@ -518,13 +552,13 @@ void Drop_Rune (edict_t *ent, gitem_t *item)
 
 	//ent->solid = SOLID_BBOX;
 	dropped->solid = SOLID_TRIGGER;
-	gi.linkentity (dropped); //always pair with changes to solid
+	gi.linkentity(dropped); //always pair with changes to solid
 
 	gi.sound(ent, CHAN_ITEM, gi.soundindex("misc/power2.wav"), 1, ATTN_NORM, 0);
-	ValidateSelectedItem (ent);
+	ValidateSelectedItem(ent);
 }
 
-int DamageRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int damage, int knockback, int dflags)
+int DamageRuneHook(edict_t* targ, edict_t* inflictor, edict_t* attacker, int damage, int knockback, int dflags)
 {
 	if (attacker && attacker->client && attacker->client->rune)
 	{
@@ -534,11 +568,11 @@ int DamageRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int dam
 			damage *= 1.75f; //-bat
 		}
 	}
-	
+
 	return damage;
 }
 
-int ResistRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int damage, int knockback, int dflags)
+int ResistRuneHook(edict_t* targ, edict_t* inflictor, edict_t* attacker, int damage, int knockback, int dflags)
 {
 	if (targ && targ->client && targ->client->rune)
 	{
@@ -549,11 +583,11 @@ int ResistRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int dam
 			gi.sound(targ, CHAN_ITEM, gi.soundindex("ctf/resist.wav"), 1, ATTN_NORM, 0);
 		}
 	}
-	
+
 	return damage;
 }
 
-void RuneThinkHook(edict_t *ent)
+void RuneThinkHook(edict_t* ent)
 {
 	int old_armor_index;
 	int sound = 0; // Don't play a sound unless needed.
@@ -561,7 +595,7 @@ void RuneThinkHook(edict_t *ent)
 
 	if (ent && ent->client && ent->client->rune)
 	{
-		
+
 		if (ent->client->rune->runetype == RUNE_REGEN)
 		{
 			heartrate = ent->health / 5;
@@ -569,26 +603,26 @@ void RuneThinkHook(edict_t *ent)
 				heartrate = 5;
 			if (heartrate > 25)
 				heartrate = 25;
-			
+
 			if (level.framenum < ent->client->regentime + heartrate)
 				return;
-			
+
 			ent->client->regentime = level.framenum;
-			
+
 			if (ent->health < ent->max_health + 25)
 			{
 				//bat
-				ent->health+=(heartrate / 3.0f);
+				ent->health += (heartrate / 3.0f);
 				//ent->health+=(heartrate/4);
 				if (ent->health > ent->max_health + 25)
 					ent->health = ent->max_health + 25;
 				sound = 1;
 			}
-			
-			old_armor_index = ArmorIndex (ent);
+
+			old_armor_index = ArmorIndex(ent);
 			if (!old_armor_index)
 			{
-				ent->client->pers.inventory[ITEM_INDEX(FindItem("Jacket Armor"))] = heartrate/4;
+				ent->client->pers.inventory[ITEM_INDEX(FindItem("Jacket Armor"))] = heartrate / 4;
 				sound = 1;
 			}
 			else
@@ -610,7 +644,7 @@ void RuneThinkHook(edict_t *ent)
 }
 
 
-void RuneWeaponThinkHook (edict_t *ent)
+void RuneWeaponThinkHook(edict_t* ent)
 {
 	if (ent && ent->client && ent->client->rune)
 	{
@@ -618,9 +652,9 @@ void RuneWeaponThinkHook (edict_t *ent)
 		{
 			if (ent->client->isfiring)
 				gi.sound(ent, CHAN_ITEM, gi.soundindex("player/lava1.wav"), 1, ATTN_NORM, 0);
-			
+
 			if (ent->client->ps.gunframe)
-				ent->client->pers.weapon->weaponthink (ent);
+				ent->client->pers.weapon->weaponthink(ent);
 		}
 		if (ent->client->rune->runetype == RUNE_DAMAGE)
 		{

@@ -3,7 +3,7 @@
 #include "g_tourney.h"
 #include "g_ctffunc.h"
 
-stats_player_s *p_start_player = NULL;
+stats_player_s* p_start_player = NULL;
 
 void stats_log_init()
 {
@@ -12,7 +12,7 @@ void stats_log_init()
 
 void stats_log_reset()
 {
-	stats_player_s * p_current_player;
+	stats_player_s* p_current_player;
 
 	p_current_player = p_start_player;
 	while (p_current_player != NULL)
@@ -27,8 +27,8 @@ void stats_log_reset()
 
 stats_player_s* stats_find_dropped_player(char* name)
 {
-	stats_player_s *p_current_player = p_start_player;
-	
+	stats_player_s* p_current_player = p_start_player;
+
 	while (p_current_player != NULL)
 	{
 		if ((strcmp(p_current_player->info.name, name) == 0) &&
@@ -41,20 +41,20 @@ stats_player_s* stats_find_dropped_player(char* name)
 	return p_current_player;
 }
 
-void stats_init_player(stats_player_s *p_player)
+void stats_init_player(stats_player_s* p_player)
 {
 	// set up initial stats for player
 	int i;
-	for (i=0; i < MAX_PLAYER_STATS; i++)
+	for (i = 0; i < MAX_PLAYER_STATS; i++)
 		p_player->stats[i] = 0;
-//	p_player->dropped = false;
+	//	p_player->dropped = false;
 }
 
 stats_player_s* stats_new_player(char* name)
 {
 	stats_player_s* p_player;
-	
-	p_player = (stats_player_s *) gi.TagMalloc(sizeof(stats_player_s), TAG_GAME);
+
+	p_player = (stats_player_s*)gi.TagMalloc(sizeof(stats_player_s), TAG_GAME);
 	if (!p_player) {
 		gi.error(ERR_FATAL, "LMCTF: allocation failed in %s", __func__);
 		return NULL;
@@ -72,9 +72,9 @@ stats_player_s* stats_new_player(char* name)
 	return p_player;
 }
 
-void stats_set_name(edict_t *ent, char *name)
+void stats_set_name(edict_t* ent, char* name)
 {
-	
+
 	if (ent->client->p_stats_player)
 	{
 		/* here should check for duplicate name
@@ -87,12 +87,12 @@ void stats_set_name(edict_t *ent, char *name)
 
 void stats_cleanup()
 {
-	stats_player_s *p_current_player, *p_prev_player;
+	stats_player_s* p_current_player, * p_prev_player;
 
 	// clear out dropped players from start and
 	// adjust start if needed
 	p_current_player = p_start_player;
-	while ( p_current_player && (p_current_player->dropped))
+	while (p_current_player && (p_current_player->dropped))
 	{
 		p_start_player = p_current_player->pNext;
 		gi.TagFree(p_current_player);
@@ -127,24 +127,24 @@ void stats_cleanup()
 		p_current_player = p_prev_player->pNext;
 
 	}
-	
+
 	if (p_current_player)
 		p_current_player->pNext = NULL;
 }
 
-void stats_add(edict_t *ent, int stat, long amount)
+void stats_add(edict_t* ent, int stat, long amount)
 {
 	if (Match_CanScore() && ent->client->p_stats_player)
 		ent->client->p_stats_player->stats[stat] += amount;
 }
 
-void stats_set(edict_t *ent, int stat, long amount)
+void stats_set(edict_t* ent, int stat, long amount)
 {
 	if (Match_CanScore() && ent->client->p_stats_player)
 		ent->client->p_stats_player->stats[stat] = amount;
 }
 
-long stats_get(edict_t *ent, int stat)
+long stats_get(edict_t* ent, int stat)
 {
 	if (ent->client && ent->client->p_stats_player)
 		return (ent->client->p_stats_player->stats[stat]);
@@ -153,7 +153,7 @@ long stats_get(edict_t *ent, int stat)
 }
 
 
-void stats_clear(edict_t *ent)
+void stats_clear(edict_t* ent)
 {
 	if (!ent || !ent->client || !ent->client->p_stats_player)
 		return;
@@ -163,15 +163,15 @@ void stats_clear(edict_t *ent)
 }
 
 
-void stats_output(edict_t *ent, stats_player_s *p_player)
+void stats_output(edict_t* ent, stats_player_s* p_player)
 {
 	int total_encounters;
 	char teambuf[MAX_INFO_STRING];
-	char *conbuf;
+	char* conbuf;
 	char outbuf[MAX_INFO_STRING];
 	char tmpbuf[MAX_INFO_STRING];
 
-	strcpy(teambuf,"");
+	strcpy(teambuf, "");
 	ctf_teamstring(teambuf, p_player->info.teamnum, CTF_TEAM_MATCHING);
 
 	if (p_player->dropped)
@@ -179,51 +179,64 @@ void stats_output(edict_t *ent, stats_player_s *p_player)
 	else
 		conbuf = "active";
 
-	
-	
+
+
 	total_encounters = p_player->stats[STATS_FRAGS] + p_player->stats[STATS_DEATHS];
 
-	strcpy(outbuf,"");
+	strcpy(outbuf, "");
 
 
-	sprintf (tmpbuf, "\n(%s) [%s] %s\n", teambuf, conbuf, p_player->info.name);
-	strcat(outbuf,tmpbuf);
+	sprintf(tmpbuf, "\n(%s) [%s] %s\n", teambuf, conbuf, p_player->info.name);
+	strcat(outbuf, tmpbuf);
 
-	sprintf (tmpbuf,
-					"Score=%ld "
-					"Frags=%ld "
-					"Deaths=%ld "
-					"Eff=%ld%%\n",
-					p_player->stats[STATS_SCORE], p_player->stats[STATS_FRAGS], p_player->stats[STATS_DEATHS],
-					total_encounters == 0 ? 0 : 100 * p_player->stats[STATS_FRAGS] / total_encounters);
-	strcat(outbuf,tmpbuf);
+	// BUZZKILL - IMPROVED ANALYTICS - START
+	sprintf(tmpbuf, "--SCORE--------------------------------------\nScore=%ld Frags=%ld Deaths=%ld Eff=%ld%%\n",
+		p_player->stats[STATS_SCORE],
+		p_player->stats[STATS_FRAGS],
+		p_player->stats[STATS_DEATHS],
+		total_encounters == 0 ? 0 : 100 * p_player->stats[STATS_FRAGS] / total_encounters);
+	strcat(outbuf, tmpbuf);
 
-	sprintf (tmpbuf, "Def Base=%ld Def Flag=%ld Def Carrier=%ld\nGot Flag=%ld Lost Flag=%ld Captures=%ld\n", 
-				p_player->stats[STATS_DEFENSE_BASE],
-				p_player->stats[STATS_DEFENSE_FLAG],
-				p_player->stats[STATS_DEFENSE_CARRIER],
-				p_player->stats[STATS_OFFENSE_FLAG],
-				p_player->stats[STATS_OFFENSE_FLAGLOST],
-				p_player->stats[STATS_CAPTURES]);
-	strcat(outbuf,tmpbuf);
+	sprintf(tmpbuf, "--CTF----------------------------------------\nDef Base=%ld Def Flag=%ld Def Carrier=%ld\nGot Flag=%ld Lost Flag=%ld Captures=%ld\n",
+		p_player->stats[STATS_DEFENSE_BASE],
+		p_player->stats[STATS_DEFENSE_FLAG],
+		p_player->stats[STATS_DEFENSE_CARRIER],
+		p_player->stats[STATS_OFFENSE_FLAG],
+		p_player->stats[STATS_OFFENSE_FLAGLOST],
+		p_player->stats[STATS_CAPTURES]);
+	strcat(outbuf, tmpbuf);
 
-	sprintf (tmpbuf, "Kill Carrier=%ld Flag Returns=%ld Assists=%ld\nAverage Ping=%ld Samples=%ld\n",
-					p_player->stats[STATS_OFFENSE_CARRIER],
-					p_player->stats[STATS_RETURNS],
-					p_player->stats[STATS_ASSISTS],
-					p_player->stats[STATS_PING_TOTAL] / (p_player->stats[STATS_PING_SAMPLES] > 0 ? p_player->stats[STATS_PING_SAMPLES] : 1),
-					p_player->stats[STATS_PING_SAMPLES]);
-	strcat(outbuf,tmpbuf);
+	sprintf(tmpbuf, "Kill Carrier=%ld Flag Returns=%ld Assists=%ld\n--PING---------------------------------------\nAverage Ping=%ld Samples=%ld\n",
+		p_player->stats[STATS_OFFENSE_CARRIER],
+		p_player->stats[STATS_RETURNS],
+		p_player->stats[STATS_ASSISTS],
+		p_player->stats[STATS_PING_TOTAL] / (p_player->stats[STATS_PING_SAMPLES] > 0 ? p_player->stats[STATS_PING_SAMPLES] : 1),
+		p_player->stats[STATS_PING_SAMPLES]);
+	strcat(outbuf, tmpbuf);
+
+	// BUZZKILL - IMPROVED ANALYTICS - RUNES
+	sprintf(tmpbuf, "--PICKUPS------------------------------------\nStrength=%ld Haste=%ld Regen=%ld Resist=%ld\nQuad=%ld Shield=%ld Armor=%ld Mega=%ld\n---------------------------------------------\n",
+		p_player->stats[STATS_RUNE_STRENGTH],
+		p_player->stats[STATS_RUNE_HASTE],
+		p_player->stats[STATS_RUNE_REGEN],
+		p_player->stats[STATS_RUNE_RESIST],
+		p_player->stats[STATS_ITEM_QUAD],
+		p_player->stats[STATS_ITEM_SHIELD],
+		p_player->stats[STATS_ITEM_ARMOR],
+		p_player->stats[STATS_ITEM_MEGA]);
+	strcat(outbuf, tmpbuf);
+	// BUZZKILL - IMPROVED ANALYTICS - END
+
 	ctf_SafePrint(ent, PRINT_HIGH, outbuf);
 
 }
 
-void Cmd_PlayerStats_f (edict_t *ent)
+void Cmd_PlayerStats_f(edict_t* ent)
 {
-	edict_t *temp, *target;
-	stats_player_s *p_player;
+	edict_t* temp, * target;
+	stats_player_s* p_player;
 	int i;
-	char *p;
+	char* p;
 	char lowerstr[MAX_INFO_STRING];
 
 	p = gi.args();
@@ -232,7 +245,7 @@ void Cmd_PlayerStats_f (edict_t *ent)
 	{
 		LowerCase(p);
 		target = NULL;
-		for (i=0 ; i<game.maxclients ; i++)
+		for (i = 0; i < game.maxclients; i++)
 		{
 			temp = g_edicts + 1 + i;
 			strcpy(lowerstr, temp->client->pers.netname);
@@ -258,9 +271,9 @@ void Cmd_PlayerStats_f (edict_t *ent)
 
 }
 
-void Cmd_StatsAll_f (edict_t *ent)
+void Cmd_StatsAll_f(edict_t* ent)
 {
-	stats_player_s *p_player;
+	stats_player_s* p_player;
 
 	p_player = p_start_player;
 	while (p_player != NULL)
@@ -269,4 +282,3 @@ void Cmd_StatsAll_f (edict_t *ent)
 		p_player = p_player->pNext;
 	}
 }
-
