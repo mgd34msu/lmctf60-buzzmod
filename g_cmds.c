@@ -2153,15 +2153,121 @@ int numspec;
 	ForceCommand(ent, "spectator 1");
 }
 
+// BUZZKILL - RUNE TOSS - START
+extern void P_ProjectSource(gclient_t* client, vec3_t point, vec3_t distance, vec3_t forward, vec3_t right, vec3_t result)
+{
+	vec3_t	_distance;
+
+	VectorCopy(distance, _distance);
+	if (client->pers.hand == LEFT_HANDED)
+		_distance[1] *= -1;
+	else if (client->pers.hand == CENTER_HANDED)
+		_distance[1] = 0;
+	G_ProjectSource(point, _distance, forward, right, result);
+}
+
+void fire_rune(edict_t* self, vec3_t start, vec3_t aimdir, float speed, qboolean autoshot)
+{
+	edict_t* rune;
+	vec3_t	dir;
+	vec3_t	forward, right, up;
+
+	vectoangles(aimdir, dir);
+	AngleVectors(dir, forward, right, up);
+
+	rune = G_Spawn();
+	VectorCopy(self->s.origin, rune->pos1);
+	VectorCopy(start, rune->s.origin);
+	VectorScale(aimdir, speed, rune->velocity);
+	VectorSet(rune->avelocity, 300, 300, 300);
+	VectorSet(rune->mins, 0, 0, -10);
+	VectorSet(rune->maxs, 0, 0, 0);
+	gi.sound(self, CHAN_WEAPON, gi.soundindex("weapons/hgrent1a.wav"), 1, ATTN_NORM, 0);
+	gi.linkentity(rune);
+}
+
+void Cmd_ItemToss_f(edict_t* ent)
+{
+	int			index;
+	gitem_t* it;
+	char* s;
+
+	char message[MAX_INFO_STRING];
+
+	s = gi.args();
+	it = 0;
+
+	if (!s || s[0] == 0)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "Toss what?\n");
+		return;
+	}
+
+	if (Q_stricmp(s, "hook") == 0)
+		s = "grappling hook";
+	if (Q_stricmp(s, "flag") == 0)
+		s = "Enemy Flag";
+	if ((Q_stricmp(s, "rune") == 0) ||
+		(Q_stricmp(s, "artifact") == 0) ||
+		(Q_stricmp(s, "tech") == 0))
+	{
+		if (ent->client->rune)
+		{
+			it = ent->client->rune->item;
+			if (it)  // We are carrying a rune
+			{
+				index = ITEM_INDEX(it);
+				if (it->toss)
+					it->toss(ent, it);
+				else
+				{
+					sprintf(message, "Can't toss %s\n", s);
+					ctf_SafePrint(ent, PRINT_HIGH, message);
+				}
+			}
+		}
+		return;
+	}
+
+	if (Q_stricmp(s, "ammo") == 0)
+	{
+		if (ent->client->pers.weapon->ammo)
+			it = FindItem(ent->client->pers.weapon->ammo);
+	}
+
+	if (!it)
+		it = FindItem(s);
+	if (!it)
+	{
+		sprintf(message, "unknown item: %s\n", s);
+		ctf_SafePrint(ent, PRINT_HIGH, message);
+		return;
+	}
+	if (!it->toss)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "Item is not tossable.\n");
+		return;
+	}
+	index = ITEM_INDEX(it);
+	if (!ent->client->pers.inventory[index])
+	{
+		sprintf(message, "Out of item: %s\n", s);
+		ctf_SafePrint(ent, PRINT_HIGH, message);
+		return;
+	}
+
+	it->toss(ent, it);
+}
+// BUZZKILL - RUNE TOSS - END
 
 /*
 =================
 ClientCommand
 =================
 */
-void ClientCommand (edict_t *ent)
+void ClientCommand(edict_t* ent)
 {
-	char	*cmd;
+	char* cmd;
 
 	if (!ent->client)
 		return;		// not fully in game yet
@@ -2170,7 +2276,7 @@ void ClientCommand (edict_t *ent)
 
 
 #ifdef BAT_DEBUG
-	if(Q_stricmp (cmd, "danman") == 0)
+	if (Q_stricmp(cmd, "danman") == 0)
 	{
 		Cmd_DanMan(ent);
 		return;
@@ -2178,72 +2284,72 @@ void ClientCommand (edict_t *ent)
 #endif
 
 
-	if (Q_stricmp (cmd, "players") == 0)
+	if (Q_stricmp(cmd, "players") == 0)
 	{
-		Cmd_Players_f (ent);
+		Cmd_Players_f(ent);
 		return;
 	}
-	if (Q_stricmp (cmd, "say") == 0)
+	if (Q_stricmp(cmd, "say") == 0)
 	{
-		Cmd_Say_f (ent, false, false);
+		Cmd_Say_f(ent, false, false);
 		return;
 	}
-	if (Q_stricmp (cmd, "say_team") == 0)
+	if (Q_stricmp(cmd, "say_team") == 0)
 	{
-		Cmd_Say_f (ent, true, false);
+		Cmd_Say_f(ent, true, false);
 		return;
 	}
-	if (Q_stricmp (cmd, "score") == 0)
+	if (Q_stricmp(cmd, "score") == 0)
 	{
-		Cmd_Score_f (ent);
+		Cmd_Score_f(ent);
 		return;
 	}
-// ADC
-	else if (Q_stricmp (cmd, "squadboard") == 0)
+	// ADC
+	else if (Q_stricmp(cmd, "squadboard") == 0)
 	{
-		Cmd_Squadboard_f (ent);
+		Cmd_Squadboard_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "squad") == 0)
+	else if (Q_stricmp(cmd, "squad") == 0)
 	{
 		char* newcategory = gi.argv(1);
 
-		if (strlen (newcategory) == 0)
-			strncpy (ent->client->pers.squad, UNSET_CATEGORY_STR, 
-			    MAX_CATEGORY_LEN-1);
+		if (strlen(newcategory) == 0)
+			strncpy(ent->client->pers.squad, UNSET_CATEGORY_STR,
+				MAX_CATEGORY_LEN - 1);
 		else
-			strncpy (ent->client->pers.squad, newcategory, 
-			    MAX_CATEGORY_LEN-1);
+			strncpy(ent->client->pers.squad, newcategory,
+				MAX_CATEGORY_LEN - 1);
 
-		ent->client->pers.squad[MAX_CATEGORY_LEN-1] = 0;
+		ent->client->pers.squad[MAX_CATEGORY_LEN - 1] = 0;
 		return;
 	}
-	else if (Q_stricmp (cmd, "squadstatus") == 0)
+	else if (Q_stricmp(cmd, "squadstatus") == 0)
 	{
 		char* newstatus = gi.argv(1);
 
-		if (strlen (newstatus) == 0)
-			strncpy (ent->client->pers.squadStatus, UNSET_STATUS_STR, 
-			    MAX_STATUS_LEN-1);
+		if (strlen(newstatus) == 0)
+			strncpy(ent->client->pers.squadStatus, UNSET_STATUS_STR,
+				MAX_STATUS_LEN - 1);
 		else
-			strncpy (ent->client->pers.squadStatus, newstatus,
-			    MAX_STATUS_LEN-1);
+			strncpy(ent->client->pers.squadStatus, newstatus,
+				MAX_STATUS_LEN - 1);
 
-		ent->client->pers.squadStatus[MAX_STATUS_LEN-1] = 0;
+		ent->client->pers.squadStatus[MAX_STATUS_LEN - 1] = 0;
 		return;
 	}
-// ADC
-	if (Q_stricmp (cmd, "help") == 0)
+	// ADC
+	if (Q_stricmp(cmd, "help") == 0)
 	{
-		Cmd_Help_f (ent);
+		Cmd_Help_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "referee") == 0)
+	else if (Q_stricmp(cmd, "referee") == 0)
 	{
-		Cmd_Referee_f (ent);
+		Cmd_Referee_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "gameversion") == 0)
+	else if (Q_stricmp(cmd, "gameversion") == 0)
 	{
 		ctf_SafePrint(ent, PRINT_HIGH, GAMEVERSION);
 		ctf_SafePrint(ent, PRINT_HIGH, " ");
@@ -2251,65 +2357,65 @@ void ClientCommand (edict_t *ent)
 		ctf_SafePrint(ent, PRINT_HIGH, "\n");
 		return;
 	}
-	else if (Q_stricmp (cmd, "ctfhelp") == 0)
+	else if (Q_stricmp(cmd, "ctfhelp") == 0)
 	{
-		Cmd_Ctfhelp_f (ent);
+		Cmd_Ctfhelp_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "ctfmenu") == 0)
+	else if (Q_stricmp(cmd, "ctfmenu") == 0)
 	{
-		Cmd_Ctfmenu_f (ent);
+		Cmd_Ctfmenu_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "refmenu") == 0)
+	else if (Q_stricmp(cmd, "refmenu") == 0)
 	{
-		Cmd_Refmenu_f (ent);
+		Cmd_Refmenu_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "users") == 0)
+	else if (Q_stricmp(cmd, "users") == 0)
 	{
-		Cmd_Users_f (ent);
+		Cmd_Users_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "ctfkick") == 0)
+	else if (Q_stricmp(cmd, "ctfkick") == 0)
 	{
-		Cmd_Kick_f (ent);
+		Cmd_Kick_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "angleinfo") == 0)
+	else if (Q_stricmp(cmd, "angleinfo") == 0)
 	{
-		Cmd_AngleInfo_f (ent);
+		Cmd_AngleInfo_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "gotomap") == 0)
+	else if (Q_stricmp(cmd, "gotomap") == 0)
 	{
-		Cmd_GotoMap_f (ent);
+		Cmd_GotoMap_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "match") == 0)
+	else if (Q_stricmp(cmd, "match") == 0)
 	{
-		Cmd_Match_f (ent);
+		Cmd_Match_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "pingalert") == 0)
+	else if (Q_stricmp(cmd, "pingalert") == 0)
 	{
-		Cmd_PingAlert_f (ent);
+		Cmd_PingAlert_f(ent);
 		return;
 	}
-	else if (Q_stricmp (cmd, "voteyes") == 0)   //Vampire -- voting menu
+	else if (Q_stricmp(cmd, "voteyes") == 0)   //Vampire -- voting menu
 	{
 		if (VoteStarted)
-			Vote_YES (ent);
+			Vote_YES(ent);
 		else
-			gi.cprintf(ent, PRINT_LOW,"A vote has not been initiated.\n");
+			gi.cprintf(ent, PRINT_LOW, "A vote has not been initiated.\n");
 		return;
 	}
-	else if (Q_stricmp (cmd, "voteno") == 0)    //Vampire -- voting menu
+	else if (Q_stricmp(cmd, "voteno") == 0)    //Vampire -- voting menu
 	{
 		if (VoteStarted)
-			Vote_NO (ent);
+			Vote_NO(ent);
 		else
-			gi.cprintf(ent, PRINT_LOW,"A vote has not been initiated.\n");
+			gi.cprintf(ent, PRINT_LOW, "A vote has not been initiated.\n");
 		return;
 	}
 
@@ -2319,47 +2425,47 @@ void ClientCommand (edict_t *ent)
 	if (GamePaused() && !(ent->client->ctf.extra_flags & CTF_EXTRAFLAGS_REFEREE)) // LM_JORM -- Don't let players do certain things if paused
 		return;
 
-	if (Q_stricmp (cmd, "use") == 0)
-		Cmd_Use_f (ent);
-	else if (Q_stricmp (cmd, "hook") == 0)
-		Cmd_Hook_f (ent);
-	else if (Q_stricmp (cmd, "unhook") == 0)
-		Cmd_Unhook_f (ent);
-	else if (Q_stricmp (cmd, "weapprev") == 0)
-		Cmd_WeapPrev_f (ent);
-	else if (Q_stricmp (cmd, "weapnext") == 0)
-		Cmd_WeapNext_f (ent);
-	else if (Q_stricmp (cmd, "weaplast") == 0)
-		Cmd_WeapLast_f (ent);
-	else if (Q_stricmp (cmd, "drop") == 0)
-		Cmd_Drop_f (ent);
-	else if (Q_stricmp (cmd, "help") == 0)
-		Cmd_Help_f (ent);
-	else if (Q_stricmp (cmd, "inven") == 0)
-		Cmd_Inven_f (ent);
-	else if (Q_stricmp (cmd, "invnext") == 0)
-		SelectNextItem (ent, -1);
-	else if (Q_stricmp (cmd, "invprev") == 0)
-		SelectPrevItem (ent, -1);
-	else if (Q_stricmp (cmd, "invnextw") == 0)
-		SelectNextItem (ent, IT_WEAPON);
-	else if (Q_stricmp (cmd, "invprevw") == 0)
-		SelectPrevItem (ent, IT_WEAPON);
-	else if (Q_stricmp (cmd, "invnextp") == 0)
-		SelectNextItem (ent, IT_POWERUP);
-	else if (Q_stricmp (cmd, "invprevp") == 0)
-		SelectPrevItem (ent, IT_POWERUP);
-	else if (Q_stricmp (cmd, "invuse") == 0)
-		Cmd_InvUse_f (ent);
-	else if (Q_stricmp (cmd, "invdrop") == 0)
-		Cmd_InvDrop_f (ent);
-	else if (Q_stricmp (cmd, "kill") == 0)
-		Cmd_Kill_f (ent);
-	else if (Q_stricmp (cmd, "putaway") == 0)
-		Cmd_PutAway_f (ent);
-	else if (Q_stricmp (cmd, "wave") == 0)
-		Cmd_Wave_f (ent);
-	else if (Q_stricmp (cmd, "fov") == 0)
+	if (Q_stricmp(cmd, "use") == 0)
+		Cmd_Use_f(ent);
+	else if (Q_stricmp(cmd, "hook") == 0)
+		Cmd_Hook_f(ent);
+	else if (Q_stricmp(cmd, "unhook") == 0)
+		Cmd_Unhook_f(ent);
+	else if (Q_stricmp(cmd, "weapprev") == 0)
+		Cmd_WeapPrev_f(ent);
+	else if (Q_stricmp(cmd, "weapnext") == 0)
+		Cmd_WeapNext_f(ent);
+	else if (Q_stricmp(cmd, "weaplast") == 0)
+		Cmd_WeapLast_f(ent);
+	else if (Q_stricmp(cmd, "drop") == 0)
+		Cmd_Drop_f(ent);
+	else if (Q_stricmp(cmd, "help") == 0)
+		Cmd_Help_f(ent);
+	else if (Q_stricmp(cmd, "inven") == 0)
+		Cmd_Inven_f(ent);
+	else if (Q_stricmp(cmd, "invnext") == 0)
+		SelectNextItem(ent, -1);
+	else if (Q_stricmp(cmd, "invprev") == 0)
+		SelectPrevItem(ent, -1);
+	else if (Q_stricmp(cmd, "invnextw") == 0)
+		SelectNextItem(ent, IT_WEAPON);
+	else if (Q_stricmp(cmd, "invprevw") == 0)
+		SelectPrevItem(ent, IT_WEAPON);
+	else if (Q_stricmp(cmd, "invnextp") == 0)
+		SelectNextItem(ent, IT_POWERUP);
+	else if (Q_stricmp(cmd, "invprevp") == 0)
+		SelectPrevItem(ent, IT_POWERUP);
+	else if (Q_stricmp(cmd, "invuse") == 0)
+		Cmd_InvUse_f(ent);
+	else if (Q_stricmp(cmd, "invdrop") == 0)
+		Cmd_InvDrop_f(ent);
+	else if (Q_stricmp(cmd, "kill") == 0)
+		Cmd_Kill_f(ent);
+	else if (Q_stricmp(cmd, "putaway") == 0)
+		Cmd_PutAway_f(ent);
+	else if (Q_stricmp(cmd, "wave") == 0)
+		Cmd_Wave_f(ent);
+	else if (Q_stricmp(cmd, "fov") == 0)
 	{
 		ent->client->ps.fov = atoi(gi.argv(1));
 		if (ent->client->ps.fov < 1)
@@ -2368,63 +2474,63 @@ void ClientCommand (edict_t *ent)
 			ent->client->ps.fov = 160;
 	}
 	// TEAM_CODE -- LM_JORM
-	else if (Q_stricmp (cmd, "team") == 0)
-		Cmd_Team_f (ent);
-	else if (Q_stricmp (cmd, "flagstatus") == 0)
-		Cmd_FlagStatus_f (ent);
-	else if (Q_stricmp (cmd, "id") == 0)
-		Cmd_Id_f (ent);
-	else if (Q_stricmp (cmd, "position") == 0)
-		Cmd_Position_f (ent);
-	else if (Q_stricmp (cmd, "radiomenu") == 0)
-		Toggle_Radio_Menu (ent);
-	else if (Q_stricmp (cmd, "play_team") == 0)
-		Cmd_PlayTeamSound_f (ent);
-	else if (Q_stricmp (cmd, "play_voice") == 0)
-		Cmd_PlayVoiceSound_f (ent);
-	else if (Q_stricmp (cmd, "radio") == 0)
-		Cmd_Radio_f (ent);
+	else if (Q_stricmp(cmd, "team") == 0)
+		Cmd_Team_f(ent);
+	else if (Q_stricmp(cmd, "flagstatus") == 0)
+		Cmd_FlagStatus_f(ent);
+	else if (Q_stricmp(cmd, "id") == 0)
+		Cmd_Id_f(ent);
+	else if (Q_stricmp(cmd, "position") == 0)
+		Cmd_Position_f(ent);
+	else if (Q_stricmp(cmd, "radiomenu") == 0)
+		Toggle_Radio_Menu(ent);
+	else if (Q_stricmp(cmd, "play_team") == 0)
+		Cmd_PlayTeamSound_f(ent);
+	else if (Q_stricmp(cmd, "play_voice") == 0)
+		Cmd_PlayVoiceSound_f(ent);
+	else if (Q_stricmp(cmd, "radio") == 0)
+		Cmd_Radio_f(ent);
 #ifdef OLDOBSERVERCODE
-	else if (Q_stricmp (cmd, "observe") == 0)
-		Observe (ent);
-	else if (Q_stricmp (cmd, "chasecam") == 0)
-		ChaseCam (ent);
+	else if (Q_stricmp(cmd, "observe") == 0)
+		Observe(ent);
+	else if (Q_stricmp(cmd, "chasecam") == 0)
+		ChaseCam(ent);
 #else
 	//bat
 	// I'm still gonna let them use the observe command
 	//'cause people are used to it.
-	else if (Q_stricmp (cmd, "observe") == 0)
+	else if (Q_stricmp(cmd, "observe") == 0)
 		Cmd_Observe_f(ent, CTF_TEAM_OBSERVER);
-	else if (Q_stricmp (cmd, "observe_red") == 0)
+	else if (Q_stricmp(cmd, "observe_red") == 0)
 		Cmd_Observe_f(ent, CTF_TEAM_OBSERVER_RED);
-	else if (Q_stricmp (cmd, "observe_blue") == 0)
+	else if (Q_stricmp(cmd, "observe_blue") == 0)
 		Cmd_Observe_f(ent, CTF_TEAM_OBSERVER_BLUE);
 
 #endif
-	else if (Q_stricmp (cmd, "stats") == 0) // STATS - LM_Hati
-		Cmd_PlayerStats_f (ent);            // STATS - LM_Hati
-	else if (Q_stricmp (cmd, "statsall") == 0) // STATS - LM_Surt
-		Cmd_StatsAll_f (ent);            // STATS - LM_Surt
+	else if (Q_stricmp(cmd, "stats") == 0) // STATS - LM_Hati
+		Cmd_PlayerStats_f(ent);            // STATS - LM_Hati
+	else if (Q_stricmp(cmd, "statsall") == 0) // STATS - LM_Surt
+		Cmd_StatsAll_f(ent);            // STATS - LM_Surt
 #ifdef OLDOBSERVERCODE
-	else if (Q_stricmp (cmd, "togglecamera") == 0) //surt for locking the camera view
-		Obs_CamLock_Exec (ent); //surt for locking the camera view
+	else if (Q_stricmp(cmd, "togglecamera") == 0) //surt for locking the camera view
+		Obs_CamLock_Exec(ent); //surt for locking the camera view
 #endif
-	else if (Q_stricmp (cmd, "compass") == 0)
-		Cmd_Compass_f (ent);
-	else if (Q_stricmp (cmd, "give") == 0)
-		Cmd_Give_f (ent);
-	else if (Q_stricmp (cmd, "god") == 0)
-		Cmd_God_f (ent);
-	else if (Q_stricmp (cmd, "notarget") == 0)
-		Cmd_Notarget_f (ent);
-	else if (Q_stricmp (cmd, "noclip") == 0)
-		Cmd_Noclip_f (ent);
+	else if (Q_stricmp(cmd, "compass") == 0)
+		Cmd_Compass_f(ent);
+	else if (Q_stricmp(cmd, "give") == 0)
+		Cmd_Give_f(ent);
+	else if (Q_stricmp(cmd, "god") == 0)
+		Cmd_God_f(ent);
+	else if (Q_stricmp(cmd, "notarget") == 0)
+		Cmd_Notarget_f(ent);
+	else if (Q_stricmp(cmd, "noclip") == 0)
+		Cmd_Noclip_f(ent);
 	//else if (Q_stricmp (cmd, "infoent") == 0)
 	//	Cmd_InfoEnt_f (ent);
 
 
 	//bat
-	else if(Q_stricmp (cmd, "pause_match") == 0)
+	else if (Q_stricmp(cmd, "pause_match") == 0)
 	{
 		if (ent->client->ctf.extra_flags & CTF_EXTRAFLAGS_REFEREE)
 			RefTogglePause(ent);
@@ -2434,6 +2540,11 @@ void ClientCommand (edict_t *ent)
 	// END TEAM CODE
 	else if (Q_stricmp(cmd, "playerlist") == 0)
 		Cmd_PlayerList_f(ent);
+
+	// BUZZKILL - TOSS SOMETHING
+	else if (Q_stricmp(cmd, "toss") == 0)
+		Cmd_ItemToss_f(ent);
+
 	else	// anything that doesn't match a command will be a chat
 		Cmd_Say_f (ent, false, true);
 }

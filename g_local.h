@@ -32,7 +32,7 @@ _CrtMemState startup1;	// memory diagnostics
 #include "game.h"
 
 // the "gameversion" client command will print this plus compile date
-#define GAMEVERSION     "LMCTF 6.1" //surt was baseq2
+#define GAMEVERSION     "LMCTF 6.1a" //surt was baseq2
 
 #include "p_stats.h" // STATS - LM_Hati
 #include "g_menu.h" // MENUS - LM_Jorm
@@ -272,6 +272,9 @@ typedef struct gitem_s
 	int			tag;
 
 	char		*precaches;		// string of all models, sounds, and images this item will use
+
+	// BUZZKILL - TOSS THING
+	void		(*toss)(struct edict_s *ent, struct gitem_s *item);
 } gitem_t;
 
 
@@ -666,6 +669,7 @@ gitem_t	*FindItem (char *pickup_name);
 gitem_t	*FindItemByClassname (char *classname);
 #define	ITEM_INDEX(x) ((x)-itemlist)
 edict_t *Drop_Item (edict_t *ent, gitem_t *item);
+edict_t *Toss_Item (edict_t *ent, gitem_t *item);
 void SetRespawn (edict_t *ent, float delay);
 void ChangeWeapon (edict_t *ent);
 void SpawnItem (edict_t *ent, gitem_t *item);
@@ -854,6 +858,7 @@ int DamageRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int dam
 int ResistRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int damage, int knockback, int dflags);
 void RuneThinkHook(edict_t *ent);
 void RuneWeaponThinkHook (edict_t *ent);
+void Toss_Rune(edict_t *ent, gitem_t *item);
 
 // END TEAM CODE
 
@@ -1015,11 +1020,12 @@ typedef struct
 	int                             pingalertceiling;
 	int                             compass; // Tells what your compass setting is
 	char                            printdata[PRINT_CHAT+1][MAX_PRINT_BUF]; //queues printing data
-//      char                            chatdata[MAX_PRINT_BUF]; //queues chat data
+    //char							chatdata[MAX_PRINT_BUF]; //queues chat data
 	qboolean                        printready; //is there a queue waiting
-	unsigned long   ctfid; //this is guaranteed unique
-	int                                                             original_enterframe;
-	edict_t                                                 *popup_ent;
+	unsigned long					ctfid; //this is guaranteed unique
+	int                             original_enterframe;
+	edict_t                         *popup_ent;
+	//qboolean						toss_state; // BUZZKILL - should tossed thing track nearest player?
 } client_ctf_t;
 
 

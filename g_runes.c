@@ -3,6 +3,7 @@
 #include "bat.h"
 #include "stdlog.h"
 
+
 // RUNES
 void Rune_Think(edict_t* self);
 
@@ -504,6 +505,85 @@ qboolean Pickup_Rune(edict_t* ent, edict_t* other)
 	return false;
 }
 
+// BUZZKILL - TOSS THING - START
+
+//stole this from monster code in ai.c
+qboolean is_infront(edict_t* self, edict_t* other)
+{
+	vec3_t	vec;
+	float	dot;
+	vec3_t	forward;
+
+	AngleVectors(self->s.angles, forward, NULL, NULL);
+	VectorSubtract(other->s.origin, self->s.origin, vec);
+	VectorNormalize(vec);
+	dot = DotProduct(vec, forward);
+
+	if (dot > 0.3)
+		return true;
+	return false;
+}
+
+//stole this from monster code in ai.c
+qboolean is_visible(edict_t* self, edict_t* other)
+{
+	vec3_t	spot1;
+	vec3_t	spot2;
+	trace_t	trace;
+
+	VectorCopy(self->s.origin, spot1);
+	spot1[2] += self->viewheight;
+	VectorCopy(other->s.origin, spot2);
+	spot2[2] += other->viewheight;
+	trace = gi.trace(spot1, vec3_origin, vec3_origin, spot2, self, MASK_OPAQUE);
+
+	if (trace.fraction == 1.0)
+		return true;
+	return false;
+}
+
+void homing_think(edict_t* ent)
+{
+	edict_t* target = NULL;
+	edict_t* blip = NULL;
+	vec3_t	targetdir, blipdir;
+
+	while ((blip = findradius(blip, ent->s.origin, 512)) != NULL)
+	{
+		if (!blip->client)
+			continue;
+		if (blip == ent->owner)
+			continue;
+		if (!is_infront)
+			continue;
+		if (!is_visible)
+			continue;
+		VectorSubtract(blip->s.origin, ent->s.origin, blipdir);
+		blipdir[2] += 48;
+		if ((target == NULL) || (VectorLength(blipdir) < VectorLength(targetdir)))
+		{
+			target = blip;
+			VectorCopy(blipdir, targetdir);
+		}
+	}
+
+	if (target != NULL && target->client)
+	{
+		// target acquired, nudge our direction toward it
+		VectorNormalize(targetdir);
+		VectorScale(targetdir, .02f, targetdir);
+		VectorAdd(targetdir, ent->movedir, targetdir);
+		VectorNormalize(targetdir);
+		VectorCopy(targetdir, ent->movedir);
+		vectoangles(targetdir, ent->s.angles);
+		VectorCopy(blipdir, ent->velocity);
+		VectorScale(ent->velocity, 10, ent->velocity);
+	}
+	ent->touch = Touch_Item;
+	ent->nextthink = level.time + FRAMETIME;
+}
+// BUZZKILL - TOSS THING - END
+
 void Drop_Rune_Think(edict_t* ent)
 {
 	ent->touch = Touch_Item;
@@ -554,6 +634,41 @@ void Drop_Rune(edict_t* ent, gitem_t* item)
 	dropped->solid = SOLID_TRIGGER;
 	gi.linkentity(dropped); //always pair with changes to solid
 
+	gi.sound(ent, CHAN_ITEM, gi.soundindex("misc/power2.wav"), 1, ATTN_NORM, 0);
+	ValidateSelectedItem(ent);
+}
+
+// BUZZKILL - TOSS THING
+// mostly stole this from Drop_Rune
+void Toss_Rune(edict_t* ent, gitem_t* item)
+{
+	edict_t* dropped;
+
+	if (!item)
+		return;
+
+	ent->client->pers.inventory[ITEM_INDEX(item)]--;
+
+	dropped = ent->client->rune;
+	if (!dropped)
+		return;
+
+	ent->client->rune = 0;
+
+	tossruneset(dropped);
+
+	VectorCopy(ent->s.origin, dropped->s.origin);
+	tossruneset(dropped);
+	dropped->touch = drop_temp_touch;
+	dropped->owner = ent;
+
+	ctf_PassItem(ent, dropped);
+
+	dropped->nextthink = level.time + (FRAMETIME * 3);
+	dropped->think = homing_think;
+	dropped->last_move_time = level.time;
+	dropped->solid = SOLID_TRIGGER;
+	gi.linkentity(dropped);
 	gi.sound(ent, CHAN_ITEM, gi.soundindex("misc/power2.wav"), 1, ATTN_NORM, 0);
 	ValidateSelectedItem(ent);
 }

@@ -117,3 +117,5 @@ void ctf_ChangeMap(char *mapname, qboolean startmatch);
 int ClientShowID(edict_t *ent, char * buf);
 
 void CTFSquadboardMessage (edict_t *ent, edict_t *killer); // ADC
+
+void ctf_PassItem(edict_t* startent, edict_t* tossent);

@@ -29,9 +29,10 @@
 #define STATS_ITEM_SHIELD		21	// picked up power shield (or screen)
 #define STATS_ITEM_ARMOR		22	// picked up red armor
 #define STATS_ITEM_MEGA			23  // picked up mega health
+#define STATS_IS_FC				24	// is the flag carrier
 // BUZZKILL - IMPROVED ANALYTICS - END
 
-#define MAX_PLAYER_STATS		24	
+#define MAX_PLAYER_STATS		25	
 
 typedef struct {
 	char name[MAX_INFO_STRING];

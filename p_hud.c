@@ -184,10 +184,35 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     blue, red;  // TEAM PLAY -- LM_JORM
     int     bluepings, redpings;  //bat
     int     Avg_Bluepings, Avg_Redpings;  //bat
+
+    // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
+    int     blue_rune_strength = 0;
+    int     blue_rune_haste = 0;
+    int     blue_rune_regen = 0;
+    int     blue_rune_resist = 0;
+    int     blue_item_mega = 0;
+    int     blue_item_quad = 0;
+    int     blue_item_armor = 0;
+    int     blue_item_shield = 0;
+    int     red_rune_strength = 0;
+    int     red_rune_haste = 0;
+    int     red_rune_regen = 0;
+    int     red_rune_resist = 0;
+    int     red_item_mega = 0;
+    int     red_item_quad = 0;
+    int     red_item_armor = 0;
+    int     red_item_shield = 0;
+    int     bfctest = 0;
+    int     rfctest = 0;
+    char*   redfc = NULL;
+    char*   bluefc = NULL;
+    // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
+
     size_t  stringlength;
     int     i;
     size_t  j;
     int     k;
+    int     l;
     //int       sortedscores[MAX_CLIENTS];
     int     redsorted[MAX_CLIENTS];
     int     redsortedscores[MAX_CLIENTS];
@@ -207,14 +232,30 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
     
 	//int     score, total;
-	int     score;
+    int     score;
+
+    // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
+    int     rune_strength;
+    int     rune_haste;
+    int     rune_regen;
+    int     rune_resist;
+    int     item_mega;
+    int     item_armor;
+    int     item_shield;
+    int     item_quad;
+    // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
+
  //   int     picnum;
     int     x, y;
     gclient_t   *cl;
     edict_t     *cl_ent;
     char    *tag;
     qboolean    showsmall;
+    qboolean    is_red_fc;
+    qboolean    is_blue_fc;
 
+    is_red_fc = false;
+    is_blue_fc = false;
     showsmall = false;
 //    showsmall = true;
 
@@ -258,11 +299,38 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
 		score = stats_get(cl_ent, STATS_SCORE);
 
+        // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
+        rune_strength = stats_get(cl_ent, STATS_RUNE_STRENGTH);
+        rune_haste = stats_get(cl_ent, STATS_RUNE_HASTE);
+        rune_regen = stats_get(cl_ent, STATS_RUNE_REGEN);
+        rune_resist = stats_get(cl_ent, STATS_RUNE_RESIST);
+        item_quad = stats_get(cl_ent, STATS_ITEM_QUAD);
+        item_shield = stats_get(cl_ent, STATS_ITEM_SHIELD);
+        item_armor = stats_get(cl_ent, STATS_ITEM_ARMOR);
+        item_mega = stats_get(cl_ent, STATS_ITEM_MEGA);
+        // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
+
         if (cl_ent->client->ctf.teamnum == CTF_TEAM_RED) // RED TEAM
         {
             redscore += score;
             redcaps += stats_get(cl_ent, STATS_CAPTURES); 
 			redpings += cl->ping;
+
+            // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
+            red_rune_strength += rune_strength;
+            red_rune_haste += rune_haste;
+            red_rune_regen += rune_regen;
+            red_rune_resist += rune_resist;
+            red_item_quad += item_quad;
+            red_item_shield += item_shield;
+            red_item_armor += item_armor;
+            red_item_mega += item_mega;
+
+            is_red_fc = stats_get(cl_ent, STATS_IS_FC);
+
+            if (is_red_fc)
+                redfc = cl_ent->client->pers.netname;
+            // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
             for (j=0 ; j<red ; j++)
             {
@@ -277,12 +345,34 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             redsorted[j] = i;
             redsortedscores[j] = score;
             red++;
+            for (l = 0; l < red; l++)
+            {
+                rfctest += stats_get(cl_ent, STATS_IS_FC);
+                if (l == red && rfctest == 0)
+                    redfc = "";
+            }
         }
         else if (cl_ent->client->ctf.teamnum == CTF_TEAM_BLUE) // BLUE TEAM
         {
             bluescore += score;
             bluecaps  += stats_get(cl_ent, STATS_CAPTURES);
 			bluepings += cl->ping;
+
+            // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
+            blue_rune_strength += rune_strength;
+            blue_rune_haste += rune_haste;
+            blue_rune_regen += rune_regen;
+            blue_rune_resist += rune_resist;
+            blue_item_quad += item_quad;
+            blue_item_shield += item_shield;
+            blue_item_armor += item_armor;
+            blue_item_mega += item_mega;
+            
+            is_blue_fc = stats_get(cl_ent, STATS_IS_FC);
+
+            if (is_blue_fc)
+                bluefc = cl_ent->client->pers.netname;
+            // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
             for (j=0 ; j<blue ; j++)
             {
@@ -297,6 +387,12 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             bluesorted[j] = i;
             bluesortedscores[j] = score;    
             blue++;
+            for (l = 0; l < red; l++)
+            {
+                bfctest += stats_get(cl_ent, STATS_IS_FC);
+                if (l == blue && bfctest == 0)
+                    bluefc = "";
+            }
         }
         else if (cl_ent->client->ctf.teamnum == CTF_TEAM_OBSERVER_BLUE)
 		{
@@ -367,7 +463,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 		Avg_Bluepings =	0;
 	else
 		Avg_Bluepings = bluepings/blue;
-
 	
     if (showsmall)
     {
@@ -412,12 +507,11 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 				mvpstring[19] = 0;
 				Show_String(x, y, string2, mvpstring);
 			}
-			else
-			{
-				sprintf(string2, "ctf %d %d %d %ld %d ", x, y, redsorted[i],
-					stats_get(cl_ent, STATS_SCORE),	cl->ping > 999 ? 999 : cl->ping);
-			}
-
+            else
+            {
+                sprintf(string2, "ctf %d %d %d %ld %d ", x, y, redsorted[i],
+                    stats_get(cl_ent, STATS_SCORE), cl->ping > 999 ? 999 : cl->ping);
+            }
             
             j = strlen(string2);
             if (stringlength + j > 1024)
@@ -820,36 +914,77 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         "xv %i yv %i picn %s "
         "xv %i yv %i picn %s "
         "xv %i yv %i picn %s "
+
+        "xv %i yv %i picn %s "
+        "xv %i yv %i picn %s "
+        "xv %i yv %i picn %s "
+        "xv %i yv %i picn %s "
+
+        "xv %i yv %i string2 \"CAPS:%i\" "      // Captures
+        "xv %i yv %i string2 \"Q:%i\" "         // BUZZKILL - QUAD GRABS BY TEAM
+        "xv %i yv %i string2 \"   S:%i\" "      // BUZZKILL - SHIELD GRABS BY TEAM
+        "xv %i yv %i string2 \"A:%i\" "         // BUZZKILL - RED ARMOR GRABS BY TEAM
+        "xv %i yv %i string2 \"   M:%i\" "      // BUZZKILL - MEGA HEALTH GRABS BY TEAM
+        //"xv %i yv %i string2 \"AP:%3i\" "     // BUZZKILL - does anybody actually care about average ping anymore?
         
-		//Just caps - bat
-		//"xv %i yv %i string2 \"P:%3i\" "  // players
-        "xv %i yv %i string2 \"C:%3i\" "    // captures
-        
-		"xv %i yv %i string2 \"AP:%3i\" "    // bat AVG PING
-        
-		//Just caps - bat
-		//"xv %i yv %i string2 \"P:%3i\" "
-        "xv %i yv %i string2 \"C:%3i\" "
-		"xv %i yv %i string2 \"AP:%3i\" "    // bat AVG PING
-        
-		"xv %i yv %i num 4 19 "
+        "xv %i yv %i string2 \"CAPS:%i\" "
+        "xv %i yv %i string2 \"Q:%i\" "
+        "xv %i yv %i string2 \"   S:%i\" "
+        "xv %i yv %i string2 \"A:%i\" "
+        "xv %i yv %i string2 \"   M:%i\" "
+
+        "xv %i yv %i string2 \"FC:%s\" "        // BUZZKILL - FLAG CARRIER
+        "xv %i yv %i string2 \"ST:%i\" "        // BUZZKILL - STRENGTH RUNE GRABS
+        "xv %i yv %i string2 \"     HA:%i\" "   // BUZZKILL - HASTE RUNE GRABS
+        "xv %i yv %i string2 \"RG:%i\" "        // BUZZKILL - REGEN RUNE GRABS
+        "xv %i yv %i string2 \"     RS:%i\" "   // BUZZKILL - RESIST RUNE GRABS
+
+        "xv %i yv %i string2 \"FC:%s\" "
+        "xv %i yv %i string2 \"ST:%i\" "
+        "xv %i yv %i string2 \"     HA:%i\" "
+        "xv %i yv %i string2 \"RG:%i\" "
+        "xv %i yv %i string2 \"     RS:%i\" "
+
+        "xv %i yv %i num 4 19 "
         "xv %i yv %i num 4 20 ",
 
         0, 0, "redlion_i",
         160, 0, "bluewolf_i",
         32, 0, "redtag",
         192, 0, "bluetag",
-        //36, 4,  red, 
-        //36, 20, redcaps, 
 
-        36, 4,  redcaps, 
-		36, 20, Avg_Redpings,
+        0, -32, "redlion_i",
+        160, -32, "bluewolf_i",
+        32, -32, "redtag",
+        192, -32, "bluetag",
 
-        //196, 4,  blue, 
-        196, 4, bluecaps,
-		196, 20, Avg_Bluepings,
-        90, 4,
-        250, 4
+        36, -30, redcaps,
+        36, -20, red_item_quad,
+        52, -20, red_item_shield,
+        36, -10, red_item_armor,
+        52, -10, red_item_mega,
+
+        196, -30, bluecaps,
+        196, -20, blue_item_quad,
+        212, -20, blue_item_shield,
+        196, -10, blue_item_armor,
+        212, -10, blue_item_mega,
+
+        36, 2, redfc,
+        36, 12, red_rune_strength,
+        52, 12, red_rune_haste,
+        36, 22, red_rune_regen,
+        52, 22, red_rune_resist,
+
+        196, 2, bluefc,
+        196, 12, blue_rune_strength,
+        212, 12, blue_rune_haste,
+        196, 22, blue_rune_regen,
+        212, 22, blue_rune_resist,
+
+        90, -28,
+        250, -28
+
         );
 
         j = strlen(string2);

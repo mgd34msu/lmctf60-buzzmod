@@ -1184,7 +1184,7 @@ int ClientShowMOD(edict_t *ent)
 			"Welcome to %s\nRunning %s\n"
 			"Pak File is available at:\n\" "
 			"xv %i yv %i cstring2 \""
-			"http://www.planetquake.com/lmctf/\n\n",
+			"http://www.lmctf.com\n\n",
 			0,40,
 			color,
 			hostname->string,
@@ -1220,8 +1220,8 @@ int ClientShowMOD(edict_t *ent)
 
 		/*
 		Com_sprintf(string, sizeof(string),
-			"You are on the %s team!\n\nWelcome to %s\nRunning LM CTF\n"
-			"Skins are available at:\nhttp://www.planetquake.com/lmctf/\n", 
+			"You are on the %s team!\n\nWelcome to %s\nRunning LMCTF 6.1\n"
+			"Skins are available at:\nhttp://www.lmctf.com\n", 
 			color,
 			hostname->string);
 

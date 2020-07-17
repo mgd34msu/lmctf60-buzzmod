@@ -30,8 +30,6 @@ extern void Weapon_Plasma(edict_t* ent);
 extern void Use_PLASMA(edict_t* ent, gitem_t* inv);
 // END
 
-
-
 void Weapon_Hook(edict_t* ent); // CTF CODE -- LM_JORM
 
 gitem_armor_t jacketarmor_info = { 25,  50, .30f, .00, ARMOR_JACKET };
@@ -214,7 +212,12 @@ void Drop_General(edict_t* ent, gitem_t* item)
 	ValidateSelectedItem(ent);
 }
 
-
+void Toss_General(edict_t* ent, gitem_t* item)
+{
+	Toss_Item(ent, item);
+	ent->client->pers.inventory[ITEM_INDEX(item)]--;
+	ValidateSelectedItem(ent);
+}
 //======================================================================
 
 qboolean Pickup_Adrenaline(edict_t* ent, edict_t* other)
@@ -1069,6 +1072,60 @@ edict_t* Drop_Item(edict_t* ent, gitem_t* item)
 
 	return dropped;
 }
+
+// BUZZKILL - TOSS THING - START
+edict_t* Toss_Item(edict_t* ent, gitem_t* item)
+{
+	edict_t* dropped;
+	vec3_t	forward, right;
+	vec3_t	offset, temp;
+	vec3_t	start;
+
+	dropped = G_Spawn();
+
+	dropped->classname = item->classname;
+	dropped->item = item;
+	dropped->spawnflags = DROPPED_ITEM;
+	dropped->s.effects = item->world_model_flags;
+	dropped->s.renderfx = RF_GLOW;
+	VectorSet(dropped->mins, -15, -15, -15);
+	VectorSet(dropped->maxs, 0, 0, 0);
+	gi.setmodel(dropped, dropped->item->world_model);
+	dropped->solid = SOLID_TRIGGER;
+	dropped->movetype = MOVETYPE_TOSS;
+	dropped->touch = drop_temp_touch;
+	dropped->owner = ent;
+
+	if (ent->client)
+	{
+		vec3_t	_distance;
+
+		VectorSet(offset, 8, 8, ent->viewheight - 8);
+		VectorCopy(ent->client->v_angle, temp);
+		temp[0] = -15.0;
+		AngleVectors(temp, forward, right, NULL);
+
+		VectorCopy(offset, _distance);
+		if (ent->client->pers.hand == LEFT_HANDED)
+			_distance[1] *= -1;
+		else if (ent->client->pers.hand == CENTER_HANDED)
+			_distance[1] = 0;
+		G_ProjectSource(ent->s.origin, _distance, forward, right, start);
+	}
+
+	//fire_thing(ent, start, forward, 800, true);
+
+	VectorScale(forward, 100, dropped->velocity);
+	dropped->velocity[2] = 300;
+
+	dropped->think = drop_make_touchable;
+	dropped->nextthink = level.time + 1;
+
+	gi.linkentity(dropped);
+
+	return dropped;
+}
+// BUZZKILL - TOSS THING - END
 
 void Use_Item(edict_t* ent, edict_t* other, edict_t* activator)
 {
@@ -2474,7 +2531,8 @@ key for computer centers
 				0,
 				NULL,
 				0,
-				/* precache */ "misc/tele_up.wav world/klaxon1.wav"			// SOUNDS
+				/* precache */ "misc/tele_up.wav world/klaxon1.wav",			// SOUNDS
+				Toss_Rune
 					},
 
 	// Resist Rune	
@@ -2496,7 +2554,8 @@ key for computer centers
 				0,
 				NULL,
 				0,
-				/* precache */ "misc/tele_up.wav world/klaxon1.wav"			// SOUNDS
+				/* precache */ "misc/tele_up.wav world/klaxon1.wav",			// SOUNDS
+				Toss_Rune
 					},
 
 	// Haste Rune	
@@ -2518,7 +2577,8 @@ key for computer centers
 				0,
 				NULL,
 				0,
-				/* precache */ "misc/tele_up.wav world/klaxon1.wav"			// SOUNDS
+				/* precache */ "misc/tele_up.wav world/klaxon1.wav",			// SOUNDS
+				Toss_Rune
 					},
 
 	// Regen Rune	
@@ -2540,7 +2600,8 @@ key for computer centers
 				0,
 				NULL,
 				0,
-				/* precache */ "misc/tele_up.wav world/klaxon1.wav"			// SOUNDS
+				/* precache */ "misc/tele_up.wav world/klaxon1.wav",			// SOUNDS
+				Toss_Rune
 					},
 
 

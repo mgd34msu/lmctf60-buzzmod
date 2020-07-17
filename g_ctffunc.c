@@ -666,6 +666,7 @@ void ctf_playerdropflag(edict_t * whichplayer, gitem_t *item)
 			sprintf(message,"%s lost the %s flag.\n",
 				whichplayer->client->pers.netname,
 				flagcolor );
+			stats_set(whichplayer, STATS_IS_FC, 0);
 			
 			stats_add(whichplayer, STATS_OFFENSE_FLAGLOST, 1); // STATS - LM_Hati
 
@@ -741,6 +742,8 @@ qboolean ctf_flagtouch (edict_t *ent, edict_t *other)
 				sprintf(elsemessage, "%s captured the %s flag.\n",
 					other->client->pers.netname,
 					flagcolor);
+
+				stats_set(other, STATS_IS_FC, 0);
 
 				Team_cprint(otherflag->flagteam, message, elsemessage);
 
@@ -1002,6 +1005,7 @@ qboolean ctf_flagtouch (edict_t *ent, edict_t *other)
 		sprintf(elsemessage, "%s stole the %s flag.\n",
 			other->client->pers.netname,
 			flagcolor);
+		stats_set(other, STATS_IS_FC, 1);
 
 		stats_add(other, STATS_OFFENSE_FLAG, 1); // STATS - LM_Hati
 		// Log Flag Pickup - MarkDavies
@@ -1547,4 +1551,39 @@ void ctf_ChangeMap(char *mapname, qboolean startmatch)
 		matchstate = MATCH_COUNTDOWN;
 	else
 		matchstate = MATCH_NONE;
+}
+
+// BUZZKILL - TOSS THING
+void ctf_PassItem(edict_t* startent, edict_t* tossent)
+{
+	vec3_t	forward, right, start, offset, mins, maxs, end;
+	vec3_t	target;
+	trace_t	tr;
+	float* v;
+
+	v = tv(-32, -32, -32);
+	VectorCopy(v, mins);
+	v = tv(512, 512, 512);
+	VectorCopy(v, maxs);
+
+	// Set out ending point to our starting point
+	AngleVectors(startent->client->v_angle, forward, right, NULL);
+	VectorSet(offset, 8, 0, startent->viewheight - 8);
+	G_ProjectSource(startent->s.origin, offset, forward, right, start);
+
+	VectorSet(offset, 10000, 0, 0);
+	G_ProjectSource(start, offset, forward, right, end);
+
+	tr = gi.trace(start, mins, maxs, end, startent, MASK_SHOT);
+	
+	if(!tr.ent->client)
+	{
+		ctf_TossEnt(startent, tossent);
+	}
+	if (tr.ent)
+	{
+		if (tr.ent->client)
+			VectorSubtract(tr.ent->s.origin, tossent->s.origin, target);
+			target[2] += 16;
+	}
 }
