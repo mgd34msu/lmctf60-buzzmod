@@ -218,6 +218,53 @@ max_streak and suicides have no STATS_* equivalent, so they are left alone
 rather than guessed at.
 ==================
 */
+/*
+==================
+stats_record_frag
+
+One frag by attacker. Bumps the running streak, remembers the best one seen
+this level, and counts a spree on the single frag that reaches the threshold.
+==================
+*/
+void stats_record_frag(edict_t* attacker)
+{
+	long streak;
+
+	if (!attacker || !attacker->client)
+		return;
+
+	stats_add(attacker, STATS_FRAGS, 1);
+	stats_add(attacker, STATS_CUR_STREAK, 1);
+
+	streak = stats_get(attacker, STATS_CUR_STREAK);
+
+	if (streak > stats_get(attacker, STATS_MAX_STREAK))
+		stats_set(attacker, STATS_MAX_STREAK, streak);
+
+	// == not >=, so a long streak counts as one spree, not one per frag
+	if (streak == STATS_SPREE_MIN)
+		stats_add(attacker, STATS_SPREES, 1);
+}
+
+/*
+==================
+stats_record_death
+
+One death by victim, breaking any streak they had going.
+==================
+*/
+void stats_record_death(edict_t* victim, qboolean self_inflicted)
+{
+	if (!victim || !victim->client)
+		return;
+
+	stats_add(victim, STATS_DEATHS, 1);
+	stats_set(victim, STATS_CUR_STREAK, 0);
+
+	if (self_inflicted)
+		stats_add(victim, STATS_SUICIDES, 1);
+}
+
 void stats_fold_session(edict_t* ent)
 {
 	playerstats_t* ps;
@@ -242,6 +289,14 @@ void stats_fold_session(edict_t* ent)
 	ps->defense_kills += (int)(stats_get(ent, STATS_DEFENSE_BASE) +
 	                           stats_get(ent, STATS_DEFENSE_FLAG) +
 	                           stats_get(ent, STATS_DEFENSE_CARRIER));
+
+	ps->offense_kills += (int)stats_get(ent, STATS_OFFENSE_KILLS);
+	ps->suicides      += (int)stats_get(ent, STATS_SUICIDES);
+	ps->num_sprees    += (unsigned int)stats_get(ent, STATS_SPREES);
+
+	// max_streak is a lifetime best, so it takes the larger of the two
+	if ((int)stats_get(ent, STATS_MAX_STREAK) > ps->max_streak)
+		ps->max_streak = (int)stats_get(ent, STATS_MAX_STREAK);
 
 	// only the railgun is instrumented for shots/hits so far
 	ps->shots         += (unsigned long)stats_get(ent, STATS_RAIL_SHOT);
@@ -365,6 +420,13 @@ void stats_output(edict_t* ent, stats_player_s* p_player)
 		p_player->stats[STATS_DAMAGE_GIVEN],
 		p_player->stats[STATS_DAMAGE_REC],
 		p_player->stats[STATS_DAMAGE_REC] == 0 ? 100 : 100 * p_player->stats[STATS_DAMAGE_GIVEN] / p_player->stats[STATS_DAMAGE_REC]);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
+
+	snprintf(tmpbuf, sizeof(tmpbuf), "--STREAKS------------------------------------\nBest=%ld Sprees=%ld Suicides=%ld Off Kills=%ld\n---------------------------------------------\n",
+		p_player->stats[STATS_MAX_STREAK],
+		p_player->stats[STATS_SPREES],
+		p_player->stats[STATS_SUICIDES],
+		p_player->stats[STATS_OFFENSE_KILLS]);
 	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
 	// BUZZKILL - IMPROVED ANALYTICS - END

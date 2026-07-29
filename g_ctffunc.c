@@ -7,6 +7,8 @@
 #include "bat.h"
 #include <time.h>
 
+static cvar_t *ctf_switch_penalty = NULL;
+
 edict_t * ctf_findplayer(edict_t * ent_after, edict_t * ignore, int teamnum_wanted)
 {
 	edict_t * temp;
@@ -1419,20 +1421,39 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 		buf,
 		level.time );
 
-	//bat
-	//Let them keep their score all the time.
+	// Team-switch penalty.
+	//
+	// Symmetric in both directions: moving to the team that is both smaller and
+	// behind on score costs nothing, because it helps the balance. Moving to the
+	// team that is bigger and winning clears your score, so a lead cannot be
+	// ridden by hopping onto it. Teams of equal size, or a switch to the team
+	// that is losing but larger, are treated as ordinary switches and pay.
+	//
+	// bat disabled this outright ("Let them keep their score all the time"), so
+	// it stays off unless an admin asks for it: ctf_switch_penalty 1.
+	//
+	// red and blue were counted above with ent excluded, so they are the other
+	// players on each side, and ent->client->ctf.teamnum is already the new team.
+	if (!ctf_switch_penalty)
+		ctf_switch_penalty = gi.cvar("ctf_switch_penalty", "0", CVAR_ARCHIVE);
 
-	//if (((ent->client->ctf.teamnum == CTF_TEAM_BLUE) && (red > blue) && (redscore > bluescore)) ||
-	//	((ent->client->ctf.teamnum == CTF_TEAM_RED) && (blue > red) && (bluescore > redscore)) ||
-	//	nopenalty)
-	//{
-	//	// No penalty for changing teams
-	//}
-	//else
-	//{
-	//	//set the client score to 0
-	//	stats_clear(ent);
-	//}
+	if ((int)ctf_switch_penalty->value && !nopenalty)
+	{
+		int newteam = ent->client->ctf.teamnum;
+		qboolean helping_balance = false;
+
+		if (newteam == CTF_TEAM_BLUE && red > blue && redscore > bluescore)
+			helping_balance = true;
+		else if (newteam == CTF_TEAM_RED && blue > red && bluescore > redscore)
+			helping_balance = true;
+
+		if (!helping_balance)
+		{
+			stats_clear(ent);
+			ctf_SafePrint(ent, PRINT_HIGH,
+				"Score cleared: switching to the stronger team.\n");
+		}
+	}
 	
 
 	Com_sprintf(message, sizeof message, "%s is now on the %s team.\n", ent->client->pers.netname, buf);

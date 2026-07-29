@@ -481,7 +481,7 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 				{
 					self->client->resp.score--;
 					stats_add(self, STATS_SCORE, -1);
-					stats_add(self, STATS_DEATHS, 1);
+					stats_record_death(self, true);
 				}
 			}
 			self->enemy = NULL;
@@ -616,16 +616,24 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 				{
 					if (ff && matchstate == MATCH_RAILGUN_INPLAY)
 					{
+						// team kill costs the attacker a point. The
+						// stats_add(attacker, STATS_DEATHS, 1) that used to sit
+						// here credited the killer with a death they never took,
+						// which quietly wrecked their efficiency figure.
 						stats_add(attacker, STATS_SCORE, -1);
-						stats_add(attacker, STATS_DEATHS, 1);
 						attacker->client->resp.score--;
 					}
 					else
 					{
 						stats_add(attacker, STATS_SCORE, 1);
-						stats_add(attacker, STATS_FRAGS, 1);
+						stats_record_frag(attacker);
 						attacker->client->resp.score++;
 					}
+
+					// The victim's death was not recorded on this path at all,
+					// so STATS_DEATHS only ever counted suicides and world
+					// deaths -- and every efficiency number was inflated.
+					stats_record_death(self, false);
 				}
 				return;
 			}
@@ -639,7 +647,7 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 	 {
 		 self->client->resp.score--;
 		 stats_add(self, STATS_SCORE, -1);
-		 stats_add(self, STATS_DEATHS, 1);
+		 stats_record_death(self, false);
 	 }
 }
 
@@ -971,8 +979,21 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 				stats_add(attacker, STATS_OFFENSE_CARRIER, 1); // STATS - LM_Hati
 			}
 		}
-		
-		
+
+		// Killed a defender inside their own base: the mirror of the
+		// defend-the-base award, and the counter behind offense_kills.
+		if (attacker->client->ctf.teamnum != self->client->ctf.teamnum)
+		{
+			edict_t *enemy_flag =
+				ctf_getteamflag(attacker->client->ctf.teamnum, CTF_TEAM_OPPOSING);
+
+			if (enemy_flag)
+			{
+				VectorSubtract(self->s.origin, enemy_flag->homeposition, dir);
+				if (VectorLength(dir) < CTF_DEFEND_BASE_RADIUS)
+					stats_add(attacker, STATS_OFFENSE_KILLS, 1);
+			}
+		}
 	}
 	 
 	if (self->client->hook)

@@ -42,7 +42,15 @@
 #define STATS_DAMAGE_REC		35  // damage received
 // BUZZKILL - IMPROVED ANALYTICS - END
 
-#define MAX_PLAYER_STATS		36	
+// BUZZKILL - counters behind the lifetime fields in playerstats_t
+#define STATS_SUICIDES			36	// deaths the player caused themselves
+#define STATS_OFFENSE_KILLS		37	// killed a defender inside the enemy base
+#define STATS_CUR_STREAK		38	// frags in a row without dying
+#define STATS_MAX_STREAK		39	// best streak this level
+#define STATS_SPREES			40	// times a streak reached STATS_SPREE_MIN
+#define MAX_PLAYER_STATS		41
+
+#define STATS_SPREE_MIN			5	// frags in a row that count as a spree	
 
 typedef struct {
 	char name[MAX_INFO_STRING];
@@ -91,6 +99,10 @@ void stats_clear(edict_t* ent);
 
 // folds this session's counters into client->ctfstats for the SQLite backends
 void stats_fold_session(edict_t* ent);
+
+// one place each for the streak/spree and suicide bookkeeping
+void stats_record_frag(edict_t* attacker);
+void stats_record_death(edict_t* victim, qboolean self_inflicted);
 void Cmd_PlayerStats_f(edict_t* ent);
 void stats_log_init();
 void stats_log_reset();
