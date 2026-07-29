@@ -280,7 +280,7 @@
     <ClCompile Include="ctf_sqlite_player.c" />
     <ClCompile Include="ctf_sqlite_unidb.c" />
     <ClCompile Include="sqlite3.c">
-      <DisableSpecificWarnings>4244;4267;4996;4090;4018</DisableSpecificWarnings>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
       <PreprocessorDefinitions>SQLITE_THREADSAFE=0;SQLITE_OMIT_LOAD_EXTENSION=1;SQLITE_DEFAULT_MEMSTATUS=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Include="gslog.c" />

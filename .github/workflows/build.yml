@@ -90,6 +90,19 @@ jobs:
           /p:OutDir=${{ github.workspace }}\build\${{ matrix.arch }}\
           /p:PreBuildEventUseInBuild=false
           /m
+          /fl /flp:logfile=build.log;verbosity=normal
+
+      # Same gate the Linux job has. sqlite3.c is vendored and built with
+      # warnings off, so anything left here is ours.
+      - name: Fail on warnings
+        shell: bash
+        run: |
+          if grep -qE "warning [A-Z]+[0-9]+" build.log; then
+            grep -oE "warning [A-Z]+[0-9]+.*" build.log | sort -u
+            echo "::error::build produced warnings"
+            exit 1
+          fi
+          echo "no warnings"
 
       # TargetName in the project is already gamex86 / gamex86_64, which is what
       # the engine looks for, so there is nothing to rename.

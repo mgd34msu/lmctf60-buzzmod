@@ -547,7 +547,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     "xv %i yv %i string2 \"%s\" ",
                     x + 32 - 136 + 80, y, player_rune);
 
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy(string + stringlength, string2);
@@ -645,7 +645,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     "xv %i yv %i string2 \"R:%s\" ",
                     x + 32 + 80, y + 16, player_rune);
 
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy(string + stringlength, string2);
@@ -703,7 +703,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     "xv %i yv %i string2 \"%s\" ",
                     x + 32 + 56 + 80, y, player_rune);
 
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy(string + stringlength, string2);
@@ -805,7 +805,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     "xv %i yv %i string2 \"R:%s\" ",
                     x + 32 + 80, y + 16, player_rune);
 
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy(string + stringlength, string2);
