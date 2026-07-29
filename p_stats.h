@@ -49,7 +49,10 @@
 #define STATS_MAX_STREAK		39	// best streak this level
 #define STATS_SPREES			40	// times a streak reached STATS_SPREE_MIN
 #define STATS_FRAGGED			41	// killed by another player
-#define MAX_PLAYER_STATS		42
+#define STATS_CUR_CAPSTREAK		42	// captures in a row with no enemy capture between
+#define STATS_MAX_CAPSTREAK		43	// best capture streak this level
+#define STATS_SWEEPS			44	// won a match in which the enemy never capped
+#define MAX_PLAYER_STATS		45
 
 #define STATS_SPREE_MIN			5	// frags in a row that count as a spree	
 
@@ -105,6 +108,7 @@ void stats_fold_session(edict_t* ent);
 void stats_record_frag(edict_t* attacker);
 void stats_record_death(edict_t* victim, qboolean self_inflicted);
 void stats_record_fragged(edict_t* victim);
+void stats_record_capture(edict_t* capper);
 void Cmd_PlayerStats_f(edict_t* ent);
 void stats_log_init();
 void stats_log_reset();

@@ -33,7 +33,8 @@
 #define DB_CREATECTFSTATS \
 	"CREATE TABLE [ctf_stats] ([char_idx] INTEGER,  [flag_pickups] INTEGER,   " \
 	"[flag_captures] INTEGER,   [flag_returns] INTEGER,   [flag_kills] INTEGER,   " \
-	"[offense_kills] INTEGER,   [defense_kills] INTEGER,   [assists] INTEGER)"
+	"[offense_kills] INTEGER,   [defense_kills] INTEGER,   [assists] INTEGER,   " \
+	"[max_cap_streak] INTEGER,   [sweeps] INTEGER)"
 #define DB_CREATECDATA \
 	"CREATE TABLE [character_data] ([char_idx] INTEGER,  [adminlevel] INTEGER)"
 
@@ -45,7 +46,8 @@
 	"num_sprees=?, max_streak=?, suicides=? WHERE char_idx=?;"
 #define DB_UPDATECTFSTATS \
 	"UPDATE ctf_stats SET flag_pickups=?, flag_captures=?, flag_returns=?, " \
-	"flag_kills=?, offense_kills=?, defense_kills=?, assists=? WHERE char_idx=?;"
+	"flag_kills=?, offense_kills=?, defense_kills=?, assists=?, " \
+	"max_cap_streak=?, sweeps=? WHERE char_idx=?;"
 #define DB_UPDATECDATA \
 	"UPDATE character_data SET adminlevel=? WHERE char_idx=?;"
 
@@ -90,6 +92,44 @@ static void db_copy_text(char *dest, size_t destsize, const unsigned char *src)
 
 	strncpy(dest, (const char *)src, destsize - 1);
 	dest[destsize - 1] = '\0';
+}
+
+// Adds a column if the table does not already have it, so a database written
+// by an older build keeps working instead of failing every read. Table and
+// column names here are compile-time constants, never player input.
+static void db_ensure_column(sqlite3* db, const char* table, const char* column)
+{
+	sqlite3_stmt* res = NULL;
+	char sql[256];
+	qboolean found = false;
+
+	if (!db)
+		return;
+
+	snprintf(sql, sizeof(sql), "PRAGMA table_info(%s);", table);
+	if (sqlite3_prepare_v2(db, sql, -1, &res, NULL) != SQLITE_OK)
+		return;
+
+	while (sqlite3_step(res) == SQLITE_ROW)
+	{
+		const unsigned char* name = sqlite3_column_text(res, 1);
+
+		if (name && strcmp((const char*)name, column) == 0)
+		{
+			found = true;
+			break;
+		}
+	}
+	sqlite3_finalize(res);
+
+	if (found)
+		return;
+
+	snprintf(sql, sizeof(sql),
+		"ALTER TABLE %s ADD COLUMN %s INTEGER DEFAULT 0;", table, column);
+
+	if (sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK)
+		gi.dprintf("stats db: added %s.%s\n", table, column);
 }
 
 static qboolean db_has_schema(void)
@@ -158,6 +198,10 @@ qboolean DB_Conn_Start(void)
 		dbconn = NULL;
 		return false;
 	}
+
+	// databases written before capture streaks and sweeps existed
+	db_ensure_column(dbconn, "ctf_stats", "max_cap_streak");
+	db_ensure_column(dbconn, "ctf_stats", "sweeps");
 
 	return true;
 }
@@ -248,7 +292,7 @@ int DB_NewID(const char *playername)
 	sqlite3_finalize(res);
 
 	if (!db_exec(va("INSERT INTO game_stats VALUES (%d,0,0,0,0,0,0,0)", id)) ||
-		!db_exec(va("INSERT INTO ctf_stats VALUES (%d,0,0,0,0,0,0,0)", id)) ||
+		!db_exec(va("INSERT INTO ctf_stats VALUES (%d,0,0,0,0,0,0,0,0,0)", id)) ||
 		!db_exec(va("INSERT INTO character_data VALUES (%d,0)", id)))
 	{
 		db_exec("ROLLBACK;");
@@ -328,7 +372,9 @@ qboolean DB_LoadPlayer(edict_t *player)
 			ps->flag_kills    = sqlite3_column_int(res, 4);
 			ps->offense_kills = sqlite3_column_int(res, 5);
 			ps->defense_kills = sqlite3_column_int(res, 6);
-			ps->assists       = sqlite3_column_int(res, 7);
+			ps->assists        = sqlite3_column_int(res, 7);
+			ps->max_cap_streak = sqlite3_column_int(res, 8);
+			ps->sweeps         = sqlite3_column_int(res, 9);
 		}
 	}
 	sqlite3_finalize(res); res = NULL;
@@ -408,7 +454,9 @@ qboolean DB_SavePlayer(edict_t *player)
 	sqlite3_bind_int(res, 5, ps->offense_kills);
 	sqlite3_bind_int(res, 6, ps->defense_kills);
 	sqlite3_bind_int(res, 7, ps->assists);
-	sqlite3_bind_int(res, 8, id);
+	sqlite3_bind_int(res, 8, ps->max_cap_streak);
+	sqlite3_bind_int(res, 9, ps->sweeps);
+	sqlite3_bind_int(res, 10, id);
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
 	sqlite3_finalize(res); res = NULL;
 

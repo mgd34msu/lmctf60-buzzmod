@@ -1,6 +1,7 @@
 
 #include "g_local.h"
 #include "ctf_sqlite_unidb.h"
+#include "ctf_file_io.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
 
@@ -745,6 +746,17 @@ void ExitLevel (void)
 			if (ent->health > ent->client->pers.max_health)
 				ent->health = ent->client->pers.max_health;
 		}
+	}
+
+	// Fold and persist every connected player before stats_cleanup() wipes the
+	// per-level counters. Without this a player who plays five maps and then
+	// leaves only ever had the last map's numbers reach the database.
+	for (i = 0; i < game.maxclients; i++)
+	{
+		ent = g_edicts + 1 + i;
+
+		if (ent->inuse && ent->client && ent->client->pers.connected)
+			CommitPlayerData(ent);
 	}
 
 	// clean up stats before start of next level

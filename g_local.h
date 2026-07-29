@@ -380,6 +380,10 @@ typedef struct
 	int			body_que;			// dead bodies
 
 	int			power_cubes;		// ugly necessity for coop
+
+	// Appended rather than inserted: level_locals_t is written to level.sav,
+	// so keeping existing field offsets put is the polite thing to do.
+	qboolean	sweeps_awarded;	// Victory() can fire twice a level; award sweeps once
 } level_locals_t;
 
 
@@ -1098,6 +1102,8 @@ typedef struct playerstats_s
 	int offense_kills;	//number of times player kills a defender
 	int defense_kills;	//number of times player defends his base by killing a player
 	int assists;		//number of times player gains an assist (flag_kill or flag_return just before a flag_cap)
+	int max_cap_streak;	//best run of captures with no enemy capture in between
+	int sweeps;			//matches won without the enemy capturing even once
 	//end ctf
 
 	int playingtime;			//Playing time today (in seconds)

@@ -99,12 +99,14 @@ void Victory()
     long i;
     edict_t *ent=NULL;
     long redscore, bluescore;
+    long redcaps, bluecaps;
     long temp, oscore, dscore;
     char victory_buf[MAX_INFO_STRING];
     char temp_buf[MAX_INFO_STRING];
     char teambuf[MAX_INFO_STRING];
 
     bluescore = redscore = 0;
+    bluecaps = redcaps = 0;
     oscore = dscore = 0;
     dmvp = omvp = NULL;
 
@@ -119,8 +121,10 @@ void Victory()
 
         if (ent->client->ctf.teamnum == CTF_TEAM_RED) { // RED TEAM
             redscore += stats_get(ent, STATS_SCORE);
+            redcaps  += stats_get(ent, STATS_CAPTURES);
         } else if (ent->client->ctf.teamnum == CTF_TEAM_BLUE) { // BLUE TEAM
             bluescore += stats_get(ent, STATS_SCORE);
+            bluecaps  += stats_get(ent, STATS_CAPTURES);
         }
     }
 
@@ -190,6 +194,47 @@ void Victory()
         gi.sound (ent, CHAN_CTF, gi.soundindex ("ctf/end_tie.wav"), 1, ATTN_NONE, 0);
         sprintf(temp_buf, "Tie game at %ld!\n", redscore);
         strcat(victory_buf, temp_buf);
+    }
+
+    // A sweep: you were on the winning team and the other side never took your
+    // flag once. Awarded before matchstate flips to MATCH_OVER, because
+    // stats_add goes through Match_CanScore, which refuses to score after that.
+    //
+    // Victory() runs from both Match_End and BeginIntermission, so this is
+    // gated on a level flag to keep it to one award per level.
+    if (!level.sweeps_awarded) {
+        int  winner = CTF_TEAM_UNDEFINED;
+        long loser_caps = 0;
+
+        if (bluescore > redscore) {
+            winner = CTF_TEAM_BLUE;
+            loser_caps = redcaps;
+        } else if (redscore > bluescore) {
+            winner = CTF_TEAM_RED;
+            loser_caps = bluecaps;
+        }
+        // a tie is not a sweep, so winner stays undefined
+
+        if (winner != CTF_TEAM_UNDEFINED && loser_caps == 0) {
+            strcpy(teambuf, "");
+            ctf_teamstring(teambuf, winner, CTF_TEAM_MATCHING);
+            Com_sprintf(temp_buf, sizeof temp_buf,
+                "Sweep! %s held the enemy to zero captures.\n", teambuf);
+            strcat(victory_buf, temp_buf);
+
+            for (i = 0; i < game.maxclients; i++) {
+                ent = g_edicts + 1 + i;
+
+                if (!ent->inuse || !ent->client) {
+                    continue;
+                }
+                if (ent->client->ctf.teamnum == winner) {
+                    stats_add(ent, STATS_SWEEPS, 1);
+                }
+            }
+        }
+
+        level.sweeps_awarded = true;
     }
 
     ctf_BSafePrint(PRINT_HIGH, victory_buf);

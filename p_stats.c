@@ -284,6 +284,45 @@ void stats_record_fragged(edict_t* victim)
 	stats_set(victim, STATS_CUR_STREAK, 0);
 }
 
+/*
+==================
+stats_record_capture
+
+One flag capture by capper. Extends their capture streak and ends everyone
+else's on the other side: a streak means captures in a row with no enemy
+capture in between, so the moment one team scores the other team's runs stop.
+==================
+*/
+void stats_record_capture(edict_t* capper)
+{
+	edict_t* other;
+	long streak;
+	int i;
+
+	if (!capper || !capper->client)
+		return;
+
+	stats_add(capper, STATS_CAPTURES, 1);
+	stats_add(capper, STATS_CUR_CAPSTREAK, 1);
+
+	streak = stats_get(capper, STATS_CUR_CAPSTREAK);
+	if (streak > stats_get(capper, STATS_MAX_CAPSTREAK))
+		stats_set(capper, STATS_MAX_CAPSTREAK, streak);
+
+	// this capture breaks every run held by the opposing team
+	for (i = 0; i < game.maxclients; i++)
+	{
+		other = g_edicts + 1 + i;
+
+		if (!other->inuse || !other->client)
+			continue;
+		if (other->client->ctf.teamnum == capper->client->ctf.teamnum)
+			continue;
+
+		stats_set(other, STATS_CUR_CAPSTREAK, 0);
+	}
+}
+
 void stats_fold_session(edict_t* ent)
 {
 	playerstats_t* ps;
@@ -313,9 +352,14 @@ void stats_fold_session(edict_t* ent)
 	ps->suicides      += (int)stats_get(ent, STATS_SUICIDES);
 	ps->num_sprees    += (unsigned int)stats_get(ent, STATS_SPREES);
 
-	// max_streak is a lifetime best, so it takes the larger of the two
+	ps->sweeps        += (int)stats_get(ent, STATS_SWEEPS);
+
+	// both streaks are lifetime bests, so they take the larger of the two
 	if ((int)stats_get(ent, STATS_MAX_STREAK) > ps->max_streak)
 		ps->max_streak = (int)stats_get(ent, STATS_MAX_STREAK);
+
+	if ((int)stats_get(ent, STATS_MAX_CAPSTREAK) > ps->max_cap_streak)
+		ps->max_cap_streak = (int)stats_get(ent, STATS_MAX_CAPSTREAK);
 
 	// only the railgun is instrumented for shots/hits so far
 	ps->shots         += (unsigned long)stats_get(ent, STATS_RAIL_SHOT);
@@ -441,12 +485,14 @@ void stats_output(edict_t* ent, stats_player_s* p_player)
 		p_player->stats[STATS_DAMAGE_REC] == 0 ? 100 : 100 * p_player->stats[STATS_DAMAGE_GIVEN] / p_player->stats[STATS_DAMAGE_REC]);
 	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
-	snprintf(tmpbuf, sizeof(tmpbuf), "--STREAKS------------------------------------\nBest=%ld Sprees=%ld Suicides=%ld\nFragged=%ld Off Kills=%ld\n---------------------------------------------\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "--STREAKS------------------------------------\nBest=%ld Sprees=%ld Suicides=%ld\nFragged=%ld Off Kills=%ld\nCap Streak=%ld Sweeps=%ld\n---------------------------------------------\n",
 		p_player->stats[STATS_MAX_STREAK],
 		p_player->stats[STATS_SPREES],
 		p_player->stats[STATS_SUICIDES],
 		p_player->stats[STATS_FRAGGED],
-		p_player->stats[STATS_OFFENSE_KILLS]);
+		p_player->stats[STATS_OFFENSE_KILLS],
+		p_player->stats[STATS_MAX_CAPSTREAK],
+		p_player->stats[STATS_SWEEPS]);
 	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
 	// BUZZKILL - IMPROVED ANALYTICS - END

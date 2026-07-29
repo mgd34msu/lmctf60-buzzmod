@@ -854,7 +854,7 @@ qboolean ctf_flagtouch (edict_t *ent, edict_t *other)
 				//  Add score to team
 				stats_add(other, STATS_SCORE, CTF_CAPTURE_BONUS_CARRIER);
 				other->client->resp.score += CTF_CAPTURE_BONUS_CARRIER; //5 for being the actual capturer
-				stats_add(other, STATS_CAPTURES, 1);
+				stats_record_capture(other);
 				// STDLog Flag Capture - Surt
 				sl_LogScore( &gi,
 					other->client->pers.netname,
