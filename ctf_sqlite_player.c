@@ -31,12 +31,14 @@
 #define SQL_CREATE_GAMESTATS \
 	"CREATE TABLE IF NOT EXISTS [game_stats] ([shots] INTEGER,   [shots_hit] INTEGER,   " \
 	"[frags] INTEGER,   [fragged] INTEGER,   [num_sprees] INTEGER,   " \
-	"[max_streak] INTEGER,   [suicides] INTEGER)"
+	"[max_streak] INTEGER,   [suicides] INTEGER,   " \
+	"[score] INTEGER,   [deaths] INTEGER,   [damage_given] INTEGER,   [damage_received] INTEGER,   [rail_shot] INTEGER,   [rail_hit] INTEGER,   [rail_kill] INTEGER,   [ping_total] INTEGER,   [ping_samples] INTEGER,   [item_quad] INTEGER,   [item_shield] INTEGER,   [item_armor] INTEGER,   [item_mega] INTEGER,   [rune_strength] INTEGER,   [rune_haste] INTEGER,   [rune_regen] INTEGER,   [rune_resist] INTEGER)"
 #define SQL_CREATE_CTFSTATS \
 	"CREATE TABLE IF NOT EXISTS [ctf_stats] ([flag_pickups] INTEGER,   [flag_captures] INTEGER,   " \
 	"[flag_returns] INTEGER,   [flag_kills] INTEGER,   [offense_kills] INTEGER,   " \
 	"[defense_kills] INTEGER,   [assists] INTEGER,   " \
-	"[max_cap_streak] INTEGER,   [sweeps] INTEGER)"
+	"[max_cap_streak] INTEGER,   [sweeps] INTEGER,   " \
+	"[flag_drops] INTEGER,   [defense_base] INTEGER,   [defense_flag] INTEGER,   [defense_carrier] INTEGER)"
 #define SQL_CREATE_CHARDATA \
 	"CREATE TABLE IF NOT EXISTS [character_data] ([adminlevel] INTEGER)"
 
@@ -45,11 +47,13 @@
 	"playtime_total=?, playingtime=?;"
 #define SQL_UPDATE_STATS \
 	"UPDATE game_stats SET shots=?, shots_hit=?, frags=?, fragged=?, " \
-	"num_sprees=?, max_streak=?, suicides=?;"
+	"num_sprees=?, max_streak=?, suicides=?, " \
+	"score=?, deaths=?, damage_given=?, damage_received=?, rail_shot=?, rail_hit=?, rail_kill=?, ping_total=?, ping_samples=?, item_quad=?, item_shield=?, item_armor=?, item_mega=?, rune_strength=?, rune_haste=?, rune_regen=?, rune_resist=?;"
 #define SQL_UPDATE_CTFSTATS \
 	"UPDATE ctf_stats SET flag_pickups=?, flag_captures=?, flag_returns=?, " \
 	"flag_kills=?, offense_kills=?, defense_kills=?, assists=?, " \
-	"max_cap_streak=?, sweeps=?;"
+	"max_cap_streak=?, sweeps=?, " \
+	"flag_drops=?, defense_base=?, defense_flag=?, defense_carrier=?;"
 #define SQL_UPDATE_CDATA \
 	"UPDATE character_data SET adminlevel=?;"
 
@@ -133,8 +137,8 @@ static qboolean ctf_ensure_base_rows(sqlite3 *db)
 {
 	static const char *bases[] = {
 		"INSERT INTO userdata VALUES (\"\",\"\",\"\",0,0)",
-		"INSERT INTO game_stats VALUES (0,0,0,0,0,0,0)",
-		"INSERT INTO ctf_stats VALUES (0,0,0,0,0,0,0,0,0)",
+		"INSERT INTO game_stats VALUES (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)",
+		"INSERT INTO ctf_stats VALUES (0,0,0,0,0,0,0,0,0,0,0,0,0)",
 		"INSERT INTO character_data VALUES (0)",
 		NULL
 	};
@@ -255,6 +259,28 @@ qboolean CTF_LoadPlayer(edict_t *player, const char *path)
 	ctf_ensure_column(db, "ctf_stats", "max_cap_streak");
 	ctf_ensure_column(db, "ctf_stats", "sweeps");
 
+	ctf_ensure_column(db, "game_stats", "score");
+	ctf_ensure_column(db, "game_stats", "deaths");
+	ctf_ensure_column(db, "game_stats", "damage_given");
+	ctf_ensure_column(db, "game_stats", "damage_received");
+	ctf_ensure_column(db, "game_stats", "rail_shot");
+	ctf_ensure_column(db, "game_stats", "rail_hit");
+	ctf_ensure_column(db, "game_stats", "rail_kill");
+	ctf_ensure_column(db, "game_stats", "ping_total");
+	ctf_ensure_column(db, "game_stats", "ping_samples");
+	ctf_ensure_column(db, "game_stats", "item_quad");
+	ctf_ensure_column(db, "game_stats", "item_shield");
+	ctf_ensure_column(db, "game_stats", "item_armor");
+	ctf_ensure_column(db, "game_stats", "item_mega");
+	ctf_ensure_column(db, "game_stats", "rune_strength");
+	ctf_ensure_column(db, "game_stats", "rune_haste");
+	ctf_ensure_column(db, "game_stats", "rune_regen");
+	ctf_ensure_column(db, "game_stats", "rune_resist");
+	ctf_ensure_column(db, "ctf_stats", "flag_drops");
+	ctf_ensure_column(db, "ctf_stats", "defense_base");
+	ctf_ensure_column(db, "ctf_stats", "defense_flag");
+	ctf_ensure_column(db, "ctf_stats", "defense_carrier");
+
 	if (sqlite3_prepare_v2(db, "SELECT * FROM userdata", -1, &res, NULL) == SQLITE_OK &&
 		sqlite3_step(res) == SQLITE_ROW)
 	{
@@ -277,6 +303,23 @@ qboolean CTF_LoadPlayer(edict_t *player, const char *path)
 		ps->num_sprees = (unsigned int)sqlite3_column_int(res, 4);
 		ps->max_streak = sqlite3_column_int(res, 5);
 		ps->suicides   = sqlite3_column_int(res, 6);
+		ps->score           = sqlite3_column_int(res, 7);
+		ps->deaths          = sqlite3_column_int(res, 8);
+		ps->damage_given    = (unsigned long)sqlite3_column_int64(res, 9);
+		ps->damage_received = (unsigned long)sqlite3_column_int64(res, 10);
+		ps->rail_shot       = (unsigned long)sqlite3_column_int64(res, 11);
+		ps->rail_hit        = (unsigned long)sqlite3_column_int64(res, 12);
+		ps->rail_kill       = sqlite3_column_int(res, 13);
+		ps->ping_total      = (unsigned long)sqlite3_column_int64(res, 14);
+		ps->ping_samples    = (unsigned long)sqlite3_column_int64(res, 15);
+		ps->item_quad       = sqlite3_column_int(res, 16);
+		ps->item_shield     = sqlite3_column_int(res, 17);
+		ps->item_armor      = sqlite3_column_int(res, 18);
+		ps->item_mega       = sqlite3_column_int(res, 19);
+		ps->rune_strength   = sqlite3_column_int(res, 20);
+		ps->rune_haste      = sqlite3_column_int(res, 21);
+		ps->rune_regen      = sqlite3_column_int(res, 22);
+		ps->rune_resist     = sqlite3_column_int(res, 23);
 	}
 	sqlite3_finalize(res);
 	res = NULL;
@@ -293,6 +336,10 @@ qboolean CTF_LoadPlayer(edict_t *player, const char *path)
 		ps->assists        = sqlite3_column_int(res, 6);
 		ps->max_cap_streak = sqlite3_column_int(res, 7);
 		ps->sweeps         = sqlite3_column_int(res, 8);
+		ps->flag_drops      = sqlite3_column_int(res, 9);
+		ps->defense_base    = sqlite3_column_int(res, 10);
+		ps->defense_flag    = sqlite3_column_int(res, 11);
+		ps->defense_carrier = sqlite3_column_int(res, 12);
 	}
 	sqlite3_finalize(res);
 	res = NULL;
@@ -337,6 +384,28 @@ qboolean CTF_SavePlayer(edict_t *player, const char *path, const char *playernam
 	ctf_ensure_column(db, "ctf_stats", "max_cap_streak");
 	ctf_ensure_column(db, "ctf_stats", "sweeps");
 
+	ctf_ensure_column(db, "game_stats", "score");
+	ctf_ensure_column(db, "game_stats", "deaths");
+	ctf_ensure_column(db, "game_stats", "damage_given");
+	ctf_ensure_column(db, "game_stats", "damage_received");
+	ctf_ensure_column(db, "game_stats", "rail_shot");
+	ctf_ensure_column(db, "game_stats", "rail_hit");
+	ctf_ensure_column(db, "game_stats", "rail_kill");
+	ctf_ensure_column(db, "game_stats", "ping_total");
+	ctf_ensure_column(db, "game_stats", "ping_samples");
+	ctf_ensure_column(db, "game_stats", "item_quad");
+	ctf_ensure_column(db, "game_stats", "item_shield");
+	ctf_ensure_column(db, "game_stats", "item_armor");
+	ctf_ensure_column(db, "game_stats", "item_mega");
+	ctf_ensure_column(db, "game_stats", "rune_strength");
+	ctf_ensure_column(db, "game_stats", "rune_haste");
+	ctf_ensure_column(db, "game_stats", "rune_regen");
+	ctf_ensure_column(db, "game_stats", "rune_resist");
+	ctf_ensure_column(db, "ctf_stats", "flag_drops");
+	ctf_ensure_column(db, "ctf_stats", "defense_base");
+	ctf_ensure_column(db, "ctf_stats", "defense_flag");
+	ctf_ensure_column(db, "ctf_stats", "defense_carrier");
+
 	if (!BeginTransaction(db))
 	{
 		sqlite3_close(db);
@@ -364,6 +433,23 @@ qboolean CTF_SavePlayer(edict_t *player, const char *path, const char *playernam
 	sqlite3_bind_int(res, 5, (int)ps->num_sprees);
 	sqlite3_bind_int(res, 6, ps->max_streak);
 	sqlite3_bind_int(res, 7, ps->suicides);
+	sqlite3_bind_int(res, 8, ps->score);
+	sqlite3_bind_int(res, 9, ps->deaths);
+	sqlite3_bind_int64(res, 10, (sqlite3_int64)ps->damage_given);
+	sqlite3_bind_int64(res, 11, (sqlite3_int64)ps->damage_received);
+	sqlite3_bind_int64(res, 12, (sqlite3_int64)ps->rail_shot);
+	sqlite3_bind_int64(res, 13, (sqlite3_int64)ps->rail_hit);
+	sqlite3_bind_int(res, 14, ps->rail_kill);
+	sqlite3_bind_int64(res, 15, (sqlite3_int64)ps->ping_total);
+	sqlite3_bind_int64(res, 16, (sqlite3_int64)ps->ping_samples);
+	sqlite3_bind_int(res, 17, ps->item_quad);
+	sqlite3_bind_int(res, 18, ps->item_shield);
+	sqlite3_bind_int(res, 19, ps->item_armor);
+	sqlite3_bind_int(res, 20, ps->item_mega);
+	sqlite3_bind_int(res, 21, ps->rune_strength);
+	sqlite3_bind_int(res, 22, ps->rune_haste);
+	sqlite3_bind_int(res, 23, ps->rune_regen);
+	sqlite3_bind_int(res, 24, ps->rune_resist);
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
 	sqlite3_finalize(res); res = NULL;
 
@@ -379,6 +465,10 @@ qboolean CTF_SavePlayer(edict_t *player, const char *path, const char *playernam
 	sqlite3_bind_int(res, 7, ps->assists);
 	sqlite3_bind_int(res, 8, ps->max_cap_streak);
 	sqlite3_bind_int(res, 9, ps->sweeps);
+	sqlite3_bind_int(res, 10, ps->flag_drops);
+	sqlite3_bind_int(res, 11, ps->defense_base);
+	sqlite3_bind_int(res, 12, ps->defense_flag);
+	sqlite3_bind_int(res, 13, ps->defense_carrier);
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
 	sqlite3_finalize(res); res = NULL;
 

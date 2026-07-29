@@ -120,6 +120,10 @@ This is an internal support routine used for bullet/pellet based weapons.
 */
 static void fire_lead (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int kick, int te_impact, int hspread, int vspread, int mod)
 {
+	// BUZZKILL - one projectile fired. Counted per projectile, not per trigger
+	// pull, so hits can never exceed shots and accuracy stays meaningful.
+	stats_add(self, STATS_SHOTS, 1);
+
 	trace_t		tr;
 	vec3_t		dir;
 	vec3_t		forward, right, up;
@@ -331,6 +335,10 @@ void blaster_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *
 
 void fire_blaster (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed, int effect, qboolean hyper)
 {
+	// BUZZKILL - one projectile fired. Counted per projectile, not per trigger
+	// pull, so hits can never exceed shots and accuracy stays meaningful.
+	stats_add(self, STATS_SHOTS, 1);
+
 	edict_t	*bolt;
 	trace_t	tr;
 
@@ -531,6 +539,10 @@ static void Grenade_Touch (edict_t *ent, edict_t *other, cplane_t *plane, csurfa
 
 void fire_grenade (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int speed, float timer, float damage_radius)
 {
+	// BUZZKILL - one projectile fired. Counted per projectile, not per trigger
+	// pull, so hits can never exceed shots and accuracy stays meaningful.
+	stats_add(self, STATS_SHOTS, 1);
+
 	edict_t	*grenade;
 	vec3_t	dir;
 	vec3_t	forward, right, up;
@@ -564,6 +576,10 @@ void fire_grenade (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int s
 
 void fire_grenade2 (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int speed, float timer, float damage_radius, qboolean held)
 {
+	// BUZZKILL - one projectile fired. Counted per projectile, not per trigger
+	// pull, so hits can never exceed shots and accuracy stays meaningful.
+	stats_add(self, STATS_SHOTS, 1);
+
 	edict_t	*grenade;
 	vec3_t	dir;
 	vec3_t	forward, right, up;
@@ -665,6 +681,10 @@ void rocket_touch (edict_t *ent, edict_t *other, cplane_t *plane, csurface_t *su
 
 void fire_rocket (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed, float damage_radius, int radius_damage)
 {
+	// BUZZKILL - one projectile fired. Counted per projectile, not per trigger
+	// pull, so hits can never exceed shots and accuracy stays meaningful.
+	stats_add(self, STATS_SHOTS, 1);
+
 	edict_t	*rocket;
 
 	rocket = G_Spawn();
@@ -774,6 +794,7 @@ void fire_rail (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int kick
 	{
 		PlayerNoise(self, tr.endpos, PNOISE_IMPACT);
 		stats_add(self, STATS_RAIL_SHOT, 1); // BUZZKILL - RAIL STATS
+		stats_add(self, STATS_SHOTS, 1);
 	}
 }
 
@@ -951,6 +972,10 @@ void bfg_think (edict_t *self)
 
 void fire_bfg (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed, float damage_radius)
 {
+	// BUZZKILL - one projectile fired. Counted per projectile, not per trigger
+	// pull, so hits can never exceed shots and accuracy stays meaningful.
+	stats_add(self, STATS_SHOTS, 1);
+
 	edict_t	*bfg;
 
 	bfg = G_Spawn();

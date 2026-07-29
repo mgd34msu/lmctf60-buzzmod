@@ -350,6 +350,37 @@ void stats_fold_session(edict_t* ent)
 
 	ps->offense_kills += (int)stats_get(ent, STATS_OFFENSE_KILLS);
 	ps->suicides      += (int)stats_get(ent, STATS_SUICIDES);
+
+	ps->score         += (int)stats_get(ent, STATS_SCORE);
+	ps->deaths        += (int)stats_get(ent, STATS_DEATHS);
+	ps->flag_drops    += (int)stats_get(ent, STATS_OFFENSE_FLAGLOST);
+
+	// kept separately as well as summed into defense_kills: which kind of
+	// defending a player does is the interesting part, and the summed column
+	// alone threw that away
+	ps->defense_base    += (int)stats_get(ent, STATS_DEFENSE_BASE);
+	ps->defense_flag    += (int)stats_get(ent, STATS_DEFENSE_FLAG);
+	ps->defense_carrier += (int)stats_get(ent, STATS_DEFENSE_CARRIER);
+
+	ps->item_quad     += (int)stats_get(ent, STATS_ITEM_QUAD);
+	ps->item_shield   += (int)stats_get(ent, STATS_ITEM_SHIELD);
+	ps->item_armor    += (int)stats_get(ent, STATS_ITEM_ARMOR);
+	ps->item_mega     += (int)stats_get(ent, STATS_ITEM_MEGA);
+
+	ps->rune_strength += (int)stats_get(ent, STATS_RUNE_STRENGTH);
+	ps->rune_haste    += (int)stats_get(ent, STATS_RUNE_HASTE);
+	ps->rune_regen    += (int)stats_get(ent, STATS_RUNE_REGEN);
+	ps->rune_resist   += (int)stats_get(ent, STATS_RUNE_RESIST);
+
+	ps->rail_shot     += (unsigned long)stats_get(ent, STATS_RAIL_SHOT);
+	ps->rail_hit      += (unsigned long)stats_get(ent, STATS_RAIL_HIT);
+	ps->rail_kill     += (int)stats_get(ent, STATS_RAIL_KILL);
+
+	ps->damage_given    += (unsigned long)stats_get(ent, STATS_DAMAGE_GIVEN);
+	ps->damage_received += (unsigned long)stats_get(ent, STATS_DAMAGE_REC);
+
+	ps->ping_total    += (unsigned long)stats_get(ent, STATS_PING_TOTAL);
+	ps->ping_samples  += (unsigned long)stats_get(ent, STATS_PING_SAMPLES);
 	ps->num_sprees    += (unsigned int)stats_get(ent, STATS_SPREES);
 
 	ps->sweeps        += (int)stats_get(ent, STATS_SWEEPS);
@@ -361,9 +392,8 @@ void stats_fold_session(edict_t* ent)
 	if ((int)stats_get(ent, STATS_MAX_CAPSTREAK) > ps->max_cap_streak)
 		ps->max_cap_streak = (int)stats_get(ent, STATS_MAX_CAPSTREAK);
 
-	// only the railgun is instrumented for shots/hits so far
-	ps->shots         += (unsigned long)stats_get(ent, STATS_RAIL_SHOT);
-	ps->shots_hit     += (unsigned long)stats_get(ent, STATS_RAIL_HIT);
+	ps->shots         += (unsigned long)stats_get(ent, STATS_SHOTS);
+	ps->shots_hit     += (unsigned long)stats_get(ent, STATS_SHOTS_HIT);
 
 	// time on the server this session, in seconds (one frame = 100ms)
 	session_seconds = (long)((level.framenum - ent->client->ctf.original_enterframe) / 10);

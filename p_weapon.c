@@ -1385,6 +1385,8 @@ void weapon_shotgun_fire (edict_t *ent)
 
 void fire_fieldgun (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int kick, int hspread, int vspread, int count)
 {
+	stats_add(self, STATS_SHOTS, count);	// BUZZKILL - one per pellet
+
 	int		i;
 	trace_t	tr;
 	vec3_t	end, from;

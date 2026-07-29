@@ -1104,6 +1104,29 @@ typedef struct playerstats_s
 	int assists;		//number of times player gains an assist (flag_kill or flag_return just before a flag_cap)
 	int max_cap_streak;	//best run of captures with no enemy capture in between
 	int sweeps;			//matches won without the enemy capturing even once
+
+	//the rest of what the game tracks per level, kept for a career
+	int score;			//running score, summed across levels
+	int deaths;			//deaths you brought on yourself, as distinct from fragged
+	int flag_drops;		//times the enemy flag was lost after taking it
+	int defense_base;	//defended your base
+	int defense_flag;	//defended your flag
+	int defense_carrier;//defended your flag carrier
+	int item_quad;		//powerup and armour pickups
+	int item_shield;
+	int item_armor;
+	int item_mega;
+	int rune_strength;	//rune pickups
+	int rune_haste;
+	int rune_regen;
+	int rune_resist;
+	unsigned long rail_shot;	//railgun specifically, as opposed to all weapons
+	unsigned long rail_hit;
+	int rail_kill;
+	unsigned long damage_given;
+	unsigned long damage_received;
+	unsigned long ping_total;	//divided by ping_samples for an average
+	unsigned long ping_samples;
 	//end ctf
 
 	int playingtime;			//Playing time today (in seconds)

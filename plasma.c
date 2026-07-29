@@ -319,6 +319,10 @@ fire_plasma
 (edict_t *ent, vec3_t start, vec3_t dir, int reflect) {
 	edict_t *goop= Spawn_Goop(ent, start);
 
+	// BUZZKILL - one projectile fired
+	stats_add(ent, STATS_SHOTS, 1);
+
+
 	// give it some thickness for the bounce
 	VectorSet (goop->mins, -12,-12,-12);
 	VectorSet (goop->maxs, 12,12,12);
