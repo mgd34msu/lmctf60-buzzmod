@@ -79,12 +79,16 @@ jobs:
       # gravity.vcxproj sends output to $(Q2DIR)\lmctf\ so a local build lands
       # straight in the game directory. Q2DIR does not exist here, so point
       # OutDir somewhere known rather than editing the project.
+      # PreBuildEventUseInBuild=false skips the project's pre-build step, which
+      # shells out to GitWCRev.exe and fails with 9009 on a runner. The header it
+      # would have written was already generated above.
       - name: Build
         run: >
           msbuild gravity.sln
           /p:Configuration=Release
           /p:Platform=${{ matrix.platform }}
           /p:OutDir=${{ github.workspace }}\build\${{ matrix.arch }}\
+          /p:PreBuildEventUseInBuild=false
           /m
 
       # TargetName in the project is already gamex86 / gamex86_64, which is what
