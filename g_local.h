@@ -14,8 +14,6 @@ extern _CrtMemState startup1;	// memory diagnostics
 #define OutputDebugString	//not doing Windows
 #endif
 
-#include <mysqlx/xapi.h>
-
 //#define ZBOT
 
 //#define OLDOBSERVERCODE
@@ -1417,5 +1415,3 @@ struct edict_s
 };
 
 #define LM_QUAD_DEFAULT_TIME 60
-
-#endif

@@ -5,3 +5,9 @@
 /.vs
 /Debug
 /gravity.vcxproj.user
+
+# build output
+*.o
+*.d
+*.so
+GitRevisionInfo.h

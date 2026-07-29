@@ -1565,6 +1565,7 @@ void ctf_ChangeMap(char *mapname, qboolean startmatch)
 		matchstate = MATCH_COUNTDOWN;
     } else {
 		matchstate = MATCH_NONE;
+    }
 }
 
 // BUZZKILL - TOSS THING

@@ -1,0 +1,6 @@
+vrx_set_new_player_data
+OpenConfigFile
+
+Need to join via menu
+
+then we can make character data

@@ -1,0 +1,39 @@
+void Cmd_GetData_f(edict_t* ent)
+{
+    char* playername = ent->client->pers.netname;
+    char* strbuff[MAX_MSGLEN];
+    char* sql[MAX_MSGLEN];
+    sqlite3* db;
+    char* err_msg = 0;
+    sqlite3_stmt* res;
+
+    int rc = sqlite3_open(LMCTF_DATABASE, &db);
+
+    sprintf(strbuff, "SELECT * FROM players WHERE player_name = \'%s'\;", playername);
+    strcpy(sql, strbuff);
+
+    rc = sqlite3_prepare_v2(db, sql, -1, &res, 0);
+
+    int step = sqlite3_step(res);
+    
+    if (step == SQLITE_ROW)
+    {
+        stats_set(ent, SQL_SHOTS, sqlite3_column_int(res, 2));
+        stats_set(ent, SQL_SHOTS_HIT, sqlite3_column_int(res, 3));
+        stats_set(ent, SQL_SCORE, sqlite3_column_int(res, 4));
+        stats_set(ent, SQL_FRAGS, sqlite3_column_int(res, 5));
+        stats_set(ent, SQL_DEATHS, sqlite3_column_int(res, 6));
+        stats_set(ent, SQL_DEF_BASE, sqlite3_column_int(res, 7));
+        stats_set(ent, SQL_DEF_FLAG, sqlite3_column_int(res, 8));
+        stats_set(ent, SQL_DEF_CARRIER, sqlite3_column_int(res, 9));
+        stats_set(ent, SQL_FLAG_PICKUPS, sqlite3_column_int(res, 10));
+        stats_set(ent, SQL_FLAG_DROPS, sqlite3_column_int(res, 11));
+        stats_set(ent, SQL_FLAG_CAPTURES, sqlite3_column_int(res, 12));
+        stats_set(ent, SQL_FLAG_RETURNS, sqlite3_column_int(res, 13));
+        stats_set(ent, SQL_FLAG_KILLS, sqlite3_column_int(res, 14));
+        stats_set(ent, SQL_ASSISTS, sqlite3_column_int(res, 15));
+    }
+
+    sqlite3_finalize(res);
+    sqlite3_close(db);
+}
