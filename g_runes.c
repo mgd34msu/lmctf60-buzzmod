@@ -488,8 +488,15 @@ qboolean Pickup_Rune(edict_t* ent, edict_t* other)
 			gi.dprintf("Bad rune selected.\n");
 			break;
 		}
-		stats_add(other, runeID, 1);
-		stats_set(other, runeHas, 1);
+
+		// runeID and runeHas start at 0, and 0 is STATS_PING_TOTAL. Without this
+		// guard an unrecognised rune type walks the default branch and then
+		// quietly corrupts the player's ping figures instead of doing nothing.
+		if (runeID > 0 && runeHas > 0)
+		{
+			stats_add(other, runeID, 1);
+			stats_set(other, runeHas, 1);
+		}
 		sl_LogPickup(&gi,
 			"PlayerEvent",
 			other->client->pers.netname,

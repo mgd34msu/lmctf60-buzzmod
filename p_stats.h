@@ -37,7 +37,6 @@
 #define STATS_RAIL_SHOT			30  // railgun shots fired
 #define STATS_RAIL_HIT			31  // railgun hits
 #define STATS_RAIL_KILL			32  // railgun kills (not equal to hits due to armor, runes, etc.)
-#define STATS_RAIL_ACCURACY		33  // railgun accuracy
 #define STATS_DAMAGE_GIVEN		34  // damage given
 #define STATS_DAMAGE_REC		35  // damage received
 // BUZZKILL - IMPROVED ANALYTICS - END
@@ -52,7 +51,9 @@
 #define STATS_CUR_CAPSTREAK		42	// captures in a row with no enemy capture between
 #define STATS_MAX_CAPSTREAK		43	// best capture streak this level
 #define STATS_SWEEPS			44	// won a match in which the enemy never capped
-#define MAX_PLAYER_STATS		45
+#define STATS_SHOTS				45	// projectiles fired, every weapon
+#define STATS_SHOTS_HIT			46	// projectiles that dealt damage
+#define MAX_PLAYER_STATS		47
 
 #define STATS_SPREE_MIN			5	// frags in a row that count as a spree	
 

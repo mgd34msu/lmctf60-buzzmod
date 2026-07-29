@@ -550,17 +550,29 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 		return;
 
 	// BUZZKILL - ADVANCED ANALYTICS - START
-	if (attacker && attacker->client)
+	//
+	// This used to read attacker->client->pers.weapon->classname with no null
+	// check, and pers.weapon is null often enough that the rest of the codebase
+	// tests it. It also attributed the hit to whatever the attacker happened to
+	// be holding at the moment the damage landed, so a rocket still in flight
+	// while its owner switched to the railgun was recorded as a rail hit.
+	// Attribution now comes from the means of death, which describes what
+	// actually did the damage.
+	if (attacker && attacker->client && attacker != targ &&
+		damage > 0 && mod != MOD_TELEFRAG)
 	{
-		if (Q_stricmp(attacker->client->pers.weapon->classname, "weapon_railgun") == 0)
-		{
+		int weapon_mod = mod & ~MOD_FRIENDLY_FIRE;
+
+		stats_add(attacker, STATS_SHOTS_HIT, 1);
+
+		if (weapon_mod == MOD_RAILGUN)
 			stats_add(attacker, STATS_RAIL_HIT, 1);
-		}
-		/*if (targ && targ->client && damage && mod != MOD_TELEFRAG)
+
+		if (targ && targ->client)
 		{
 			stats_add(attacker, STATS_DAMAGE_GIVEN, damage);
 			stats_add(targ, STATS_DAMAGE_REC, damage);
-		}*/
+		}
 	}
 	// BUZZKILL - ADVANCED ANALYTICS - END
 

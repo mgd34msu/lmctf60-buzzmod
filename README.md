@@ -192,8 +192,17 @@ Take the library for your platform from the
 | Linux 64-bit | `gamex86_64.so` |
 | Windows 64-bit | `gamex86_64.dll` |
 | Windows 32-bit | `gamex86.dll` |
+| All | `lmctf6-buzzmod.pak` |
 
-The filenames matter — the engine looks for them by name. Then turn the database on:
+The filenames matter — the engine looks for the library by name.
+
+`lmctf6-buzzmod.pak` is required, not optional. It carries the artwork behind the
+statboard, team statboard and railboard, and the flag-carrier hit sound. Stock
+LMCTF paks do not contain them, so without it those boards draw their text on an
+empty background and the hit sound is silent. Drop it in the same `lmctf`
+directory as the other paks.
+
+Then turn the database on:
 
 ```
 set ctf_statsdb 2

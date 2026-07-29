@@ -147,6 +147,7 @@ jobs:
           cp artifacts/lmctf-buzzmod-linux-x86_64/gamex86_64.so release/
           cp artifacts/lmctf-buzzmod-windows-x64/gamex86_64.dll  release/
           cp artifacts/lmctf-buzzmod-windows-x86/gamex86.dll     release/
+          cp assets/lmctf6-buzzmod.pak                           release/
           cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
       - name: Publish release
