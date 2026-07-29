@@ -14,6 +14,8 @@ _CrtMemState startup1;	// memory diagnostics
 #define OutputDebugString	//not doing Windows
 #endif
 
+#include <mysqlx/xapi.h>
+
 //#define ZBOT
 
 //#define OLDOBSERVERCODE
@@ -658,6 +660,9 @@ void Cmd_WeapNext_f(edict_t *ent);
 void PlayTeamSound(edict_t *ent, char *sound); // LM_JORM
 void PlayVoiceSound(edict_t *ent, char *sound); // LM_Surt
 void Cmd_Squadboard_f (edict_t *ent); // ADC
+void Cmd_Statboard_f(edict_t* ent); // BUZZKILL
+void Cmd_TeamStatboard_f(edict_t* ent); // BUZZKILL
+void Cmd_Railboard_f(edict_t* ent); // BUZZKILL
 
 //
 // g_items.c
@@ -889,6 +894,9 @@ void G_CheckChaseStats (edict_t *ent);
 void ValidateSelectedItem (edict_t *ent);
 void DeathmatchScoreboardMessage (edict_t *client, edict_t *killer);
 void SquadboardMessage (edict_t *client, edict_t *killer); // ADC
+void StatboardMessage(edict_t* client, edict_t* killer); // BUZZKILL
+void TeamStatboardMessage(edict_t* client, edict_t* killer); // BUZZKILL
+void RailboardMessage(edict_t* client, edict_t* killer); // BUZZKILL
 
 //
 // g_pweapon.c
@@ -1028,6 +1036,38 @@ typedef struct
 	//qboolean						toss_state; // BUZZKILL - should tossed thing track nearest player?
 } client_ctf_t;
 
+typedef struct playerstats_s
+{
+	int administrator;
+
+	unsigned int frags;
+	unsigned int fragged;
+
+	unsigned long shots;
+	unsigned long shots_hit;
+
+	unsigned int num_sprees;
+	int max_streak;
+	int suicides;
+
+	//ctf
+	int flag_pickups;	//number of times player grabs the flag
+	int flag_captures;	//number of times player caps the flag
+	int flag_returns;	//number of times player returns his own flag
+	int flag_kills;		//number of times player kills the flag carrier
+	int offense_kills;	//number of times player kills a defender
+	int defense_kills;	//number of times player defends his base by killing a player
+	int assists;		//number of times player gains an assist (flag_kill or flag_return just before a flag_cap)
+	//end ctf
+
+	int playingtime;			//Playing time today (in seconds)
+	int total_playtime;			//Total playing time in minutes
+
+	char member_since[30];
+	char last_played[30];
+	char player_name[24];
+
+}playerstats_t;
 
 // this structure is cleared on each PutClientInServer(),
 // except for 'client->pers'
@@ -1046,7 +1086,10 @@ struct gclient_s
 	qboolean	showinventory;		// set layout stat
 	qboolean	showhelp;
 	qboolean	showhelpicon;
-	qboolean		showsquadboard;	// ADC
+	qboolean	showsquadboard;	// ADC
+	qboolean	showstatboard; //BUZZKILL
+	qboolean	showteamstatboard; //BUZZKILL
+	qboolean	showrailboard; //BUZZKILL
 
 	int			ammo_index;
 
@@ -1326,6 +1369,10 @@ struct edict_s
 	float           droptime;
 	int             entprops; //flags to tag entities with, for use with flags, which have no client
 	// END CTF CODE
+
+	// BUZZKILL -- SQL (TEMP)
+	playerstats_t ctfstats;
 };
+
 
 #endif

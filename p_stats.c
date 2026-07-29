@@ -225,6 +225,20 @@ void stats_output(edict_t* ent, stats_player_s* p_player)
 		p_player->stats[STATS_ITEM_ARMOR],
 		p_player->stats[STATS_ITEM_MEGA]);
 	strcat(outbuf, tmpbuf);
+
+	sprintf(tmpbuf, "--RAIL---------------------------------------\nShots=%ld Hits=%ld Kills=%ld Accuracy=%ld\n---------------------------------------------\n",
+		p_player->stats[STATS_RAIL_SHOT],
+		p_player->stats[STATS_RAIL_HIT],
+		p_player->stats[STATS_RAIL_KILL],
+		p_player->stats[STATS_RAIL_SHOT] == 0 ? 0 : 100 * p_player->stats[STATS_RAIL_HIT] / p_player->stats[STATS_RAIL_SHOT]);
+	strcat(outbuf, tmpbuf);
+
+	sprintf(tmpbuf, "--DAMAGE-------------------------------------\nGiven=%ld Received=%ld Eff=%ld\n---------------------------------------------\n",
+		p_player->stats[STATS_DAMAGE_GIVEN],
+		p_player->stats[STATS_DAMAGE_REC],
+		p_player->stats[STATS_DAMAGE_REC] == 0 ? 100 : 100 * p_player->stats[STATS_DAMAGE_GIVEN] / p_player->stats[STATS_DAMAGE_REC]);
+	strcat(outbuf, tmpbuf);
+
 	// BUZZKILL - IMPROVED ANALYTICS - END
 
 	ctf_SafePrint(ent, PRINT_HIGH, outbuf);

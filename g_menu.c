@@ -247,6 +247,9 @@ void Ctf_Menu (edict_t *ent)
 	cl->showmod = false;
 	cl->showctfhud = false;
 	cl->showsquadboard = false; // ADC
+	cl->showstatboard = false; // BUZZKILL
+	cl->showteamstatboard = false; // BUZZKILL
+	cl->showrailboard = false; // BUZZKILL
 
 	if (cl->showmenu)
 	{
@@ -567,6 +570,9 @@ void Toggle_Radio_Menu (edict_t *ent)
 	cl->showmod = false;
 	cl->showctfhud = false;
 	cl->showsquadboard = false; // ADC
+	cl->showstatboard = false; // BUZZKILL
+	cl->showteamstatboard = false; // BUZZKILL
+	cl->showrailboard = false; // BUZZKILL
 
 	if (cl->showmenu)
 	{
@@ -680,6 +686,9 @@ void Ref_Main_Load (edict_t *ent)
 	cl->showmod = false;
 	cl->showctfhud = false;
 	cl->showsquadboard = false; // ADC
+	cl->showstatboard = false; // BUZZKILL
+	cl->showteamstatboard = false; // BUZZKILL
+	cl->showrailboard = false; // BUZZKILL
 
 	if (cl->showmenu)
 	{

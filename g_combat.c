@@ -78,6 +78,9 @@ void Killed (edict_t *targ, edict_t *inflictor, edict_t *attacker, int damage, v
 
 	targ->enemy = attacker;
 
+	if (attacker && attacker->client && Q_stricmp(attacker->client->pers.weapon->classname, "weapon_railgun") == 0)
+		stats_add(attacker, STATS_RAIL_KILL, 1); // BUZZKILL - RAIL STATS
+
 #ifdef MONSTERS_OK
 	if ((targ->svflags & SVF_MONSTER) && (targ->deadflag != DEAD_DEAD))
 	{
@@ -399,9 +402,9 @@ qboolean CheckTeamDamage (edict_t *targ, edict_t *attacker)
 	return false;
 }
 
-void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir, vec3_t point, vec3_t normal, int damage, int knockback, int dflags, int mod)
+void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, vec3_t point, vec3_t normal, int damage, int knockback, int dflags, int mod)
 {
-	gclient_t	*client;
+	gclient_t* client;
 	int			take;
 	int			vampdrain;
 	int			save;
@@ -411,7 +414,7 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 
 	if (Match_InCountdown())
 		return;
-	
+
 	if (!targ->takedamage)
 		return;
 
@@ -420,12 +423,12 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 	// knockback still occurs
 	if ((targ != attacker) && (deathmatch->value || coop->value))
 	{
-		if (OnSameTeam (targ, attacker))
+		if (OnSameTeam(targ, attacker))
 		{
-			if (	
-					(   ((int)(dmflags->value)) & DF_NO_FRIENDLY_FIRE   )  && 
-					!(dflags & DAMAGE_NO_PROTECTION) &&
-					!(mod & MOD_TELEFRAG)   
+			if (
+				(((int)(dmflags->value)) & DF_NO_FRIENDLY_FIRE) &&
+				!(dflags & DAMAGE_NO_PROTECTION) &&
+				!(mod & MOD_TELEFRAG)
 				)
 			{
 				damage = 0;
@@ -453,7 +456,7 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 
 	VectorNormalize(dir);
 
-// bonus damage for suprising a monster
+	// bonus damage for suprising a monster
 	if (!(dflags & DAMAGE_RADIUS) && (targ->svflags & SVF_MONSTER) && (attacker->client) && (!targ->enemy) && (targ->health > 0))
 		damage *= 2;
 
@@ -463,7 +466,7 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 	// apply Damage rune
 	damage = DamageRuneHook(targ, inflictor, attacker, damage, knockback, dflags);
 
-// figure momentum add
+	// figure momentum add
 	if (!(dflags & DAMAGE_NO_KNOCKBACK))
 	{
 		if ((knockback) && (targ->movetype != MOVETYPE_NONE) && (targ->movetype != MOVETYPE_BOUNCE) && (targ->movetype != MOVETYPE_PUSH) && (targ->movetype != MOVETYPE_STOP))
@@ -476,18 +479,18 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 			else
 				mass = targ->mass;
 
-			if (targ->client  && attacker == targ)
-				VectorScale (dir, 1600.0 * (float)knockback / mass, kvel);	// the rocket jump hack...
+			if (targ->client && attacker == targ)
+				VectorScale(dir, 1600.0 * (float)knockback / mass, kvel);	// the rocket jump hack...
 			else
-				VectorScale (dir, 500.0 * (float)knockback / mass, kvel);
-			
+				VectorScale(dir, 500.0 * (float)knockback / mass, kvel);
+
 #ifdef WEAP_BALANCE_OK	
 			if ((int)ctfflags->value & CTF_WEAP_BALANCE) //a little extra umph to knockback
 			{
-				if (targ->client  && attacker == targ)
-					VectorScale (dir, 1800.0 * (float)knockback / mass, kvel);	// the rocket jump hack...
+				if (targ->client && attacker == targ)
+					VectorScale(dir, 1800.0 * (float)knockback / mass, kvel);	// the rocket jump hack...
 				else
-					VectorScale (dir, 800.0 * (float)knockback / mass, kvel);
+					VectorScale(dir, 800.0 * (float)knockback / mass, kvel);
 			}
 #endif
 			if (targ->groundentity)
@@ -495,7 +498,7 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 				if (kvel[2] < 0)
 					kvel[2] = 0;
 			}
-			VectorAdd (targ->velocity, kvel, targ->velocity);
+			VectorAdd(targ->velocity, kvel, targ->velocity);
 		}
 	}
 
@@ -503,15 +506,15 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 	save = 0;
 
 	// check for godmode
-	if ( (targ->flags & FL_GODMODE) && !(dflags & DAMAGE_NO_PROTECTION) )
+	if ((targ->flags & FL_GODMODE) && !(dflags & DAMAGE_NO_PROTECTION))
 	{
 		take = 0;
 		save = damage;
-		SpawnDamage (te_sparks, point, normal, save);
+		SpawnDamage(te_sparks, point, normal, save);
 	}
 
 	// check for invincibility
-	if ((client && client->invincible_framenum > level.framenum ) && !(dflags & DAMAGE_NO_PROTECTION))
+	if ((client && client->invincible_framenum > level.framenum) && !(dflags & DAMAGE_NO_PROTECTION))
 	{
 		if (targ->pain_debounce_time < level.time)
 		{
@@ -522,29 +525,44 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 		save = damage;
 	}
 
-	psave = CheckPowerArmor (targ, point, normal, take, dflags);
+	psave = CheckPowerArmor(targ, point, normal, take, dflags);
 	take -= psave;
 
 	// apply Resist rune
 	take = ResistRuneHook(targ, inflictor, attacker, take, knockback, dflags);
 
 	// armor protect from teammates...only protect normal armor
-	if (((int) ctfflags->value & CTF_TEAM_ARMOR_PROTECT) &&
-	    (OnSameTeam (targ, attacker)) &&
-	    (targ != attacker))
-	  asave = 0;
+	if (((int)ctfflags->value & CTF_TEAM_ARMOR_PROTECT) &&
+		(OnSameTeam(targ, attacker)) &&
+		(targ != attacker))
+		asave = 0;
 	else
 	{
-	  asave = CheckArmor (targ, point, normal, take, te_sparks, dflags);
-	  take -= asave;
+		asave = CheckArmor(targ, point, normal, take, te_sparks, dflags);
+		take -= asave;
 	}
 
 	//treat cheat/powerup savings the same as armor
 	asave += save;
 
 	// team damage avoidance
-	if (!(dflags & DAMAGE_NO_PROTECTION) && CheckTeamDamage (targ, attacker))
+	if (!(dflags & DAMAGE_NO_PROTECTION) && CheckTeamDamage(targ, attacker))
 		return;
+
+	// BUZZKILL - ADVANCED ANALYTICS - START
+	if (attacker && attacker->client)
+	{
+		if (Q_stricmp(attacker->client->pers.weapon->classname, "weapon_railgun") == 0)
+		{
+			stats_add(attacker, STATS_RAIL_HIT, 1);
+		}
+		/*if (targ && targ->client && damage && mod != MOD_TELEFRAG)
+		{
+			stats_add(attacker, STATS_DAMAGE_GIVEN, damage);
+			stats_add(targ, STATS_DAMAGE_REC, damage);
+		}*/
+	}
+	// BUZZKILL - ADVANCED ANALYTICS - END
 
 // do the damage
 	if (take)
@@ -553,7 +571,6 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 			SpawnDamage (TE_BLOOD, point, normal, take);
 		else
 			SpawnDamage (te_sparks, point, normal, take);
-
 
 		targ->health = targ->health - take;
 
@@ -593,6 +610,7 @@ void T_Damage (edict_t *targ, edict_t *inflictor, edict_t *attacker, vec3_t dir,
 		{
 			if (attacker && attacker->client)
 				attacker->client->hit_carrier_time = level.time;
+				gi.sound(attacker, CHAN_ITEM, gi.soundindex("fc-hit.wav"), 1, ATTN_NORM, 0);
 		}
 		// END LM_JORM
 			

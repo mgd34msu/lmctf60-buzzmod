@@ -1118,6 +1118,34 @@ void ClientEndServerFrame (edict_t *ent)
 		}
 	}
 // ADC
+
+// BUZZKILL
+	else if (ent->client->showstatboard && deathmatch->value)
+	{
+		if (!(level.framenum & 31))
+		{
+			StatboardMessage(ent, ent->enemy);
+			gi.unicast(ent, false);
+		}
+	}
+	else if (ent->client->showteamstatboard && deathmatch->value)
+	{
+		if (!(level.framenum & 31))
+		{
+			TeamStatboardMessage(ent, ent->enemy);
+			gi.unicast(ent, false);
+		}
+	}
+	else if (ent->client->showrailboard && deathmatch->value)
+	{
+		if (!(level.framenum & 31))
+		{
+			RailboardMessage(ent, ent->enemy);
+			gi.unicast(ent, false);
+		}
+	}
+
+// BUZZKILL
 	else if (ent->client->showmod)
 	{
 		if (!(level.framenum & 7))
@@ -1257,8 +1285,9 @@ int ClientShowID(edict_t *ent, char * buf)
 
 	if (ent->client->showscores || ent->client->showhelp ||
 		ent->client->showinventory || ent->client->showmod ||
-		ent->client->showmenu
-		|| ent->client->showsquadboard) // ADC
+		ent->client->showmenu || ent->client->showsquadboard ||
+		ent->client->showstatboard || ent->client->showteamstatboard ||
+		ent->client->showrailboard) // ADC // BUZZKILL
 		return 0;
 
 	// only update every second for each player

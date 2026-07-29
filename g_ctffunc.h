@@ -1,7 +1,7 @@
 //#define CTF_TEAM_LIMIT			3 //you can do loops less than this
 //#define CTF_TEAM_BLUE			2
 //#define CTF_TEAM_RED			1
-//#define CTF_TEAM_UNDEFINED		0
+//#define CTF_TEAM_UNDEFINED	0
 //#define CTF_TEAM_OBSERVER		-1
 
 //-----making teams for observers-----
@@ -115,7 +115,5 @@ void ctf_ChangeMap(char *mapname, qboolean startmatch);
 
 //stuff currently in other files but needed 
 int ClientShowID(edict_t *ent, char * buf);
-
 void CTFSquadboardMessage (edict_t *ent, edict_t *killer); // ADC
-
 void ctf_PassItem(edict_t* startent, edict_t* tossent);

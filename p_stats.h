@@ -30,9 +30,19 @@
 #define STATS_ITEM_ARMOR		22	// picked up red armor
 #define STATS_ITEM_MEGA			23  // picked up mega health
 #define STATS_IS_FC				24	// is the flag carrier
+#define STATS_HAS_ST			25	// has the strength rune
+#define STATS_HAS_RS			26	// has the resist rune
+#define STATS_HAS_HA			27	// has the haste rune
+#define STATS_HAS_RG			29	// has the regen rune
+#define STATS_RAIL_SHOT			30  // railgun shots fired
+#define STATS_RAIL_HIT			31  // railgun hits
+#define STATS_RAIL_KILL			32  // railgun kills (not equal to hits due to armor, runes, etc.)
+#define STATS_RAIL_ACCURACY		33  // railgun accuracy
+#define STATS_DAMAGE_GIVEN		34  // damage given
+#define STATS_DAMAGE_REC		35  // damage received
 // BUZZKILL - IMPROVED ANALYTICS - END
 
-#define MAX_PLAYER_STATS		25	
+#define MAX_PLAYER_STATS		36	
 
 typedef struct {
 	char name[MAX_INFO_STRING];

@@ -5,6 +5,7 @@
 #include "p_stats.h"
 #include "gslog.h"
 #include "bat.h"
+#include <time.h>
 
 edict_t * ctf_findplayer(edict_t * ent_after, edict_t * ignore, int teamnum_wanted)
 {

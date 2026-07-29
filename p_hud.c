@@ -182,8 +182,8 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 	int     bluescore, redscore;  // TEAM PLAY -- LM_JORM
     int     bluecaps, redcaps;  // TEAM PLAY -- LM_JORM
     int     blue, red;  // TEAM PLAY -- LM_JORM
-    int     bluepings, redpings;  //bat
-    int     Avg_Bluepings, Avg_Redpings;  //bat
+    blue = 0;
+    red = 0;
 
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
     int     blue_rune_strength = 0;
@@ -206,6 +206,10 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     rfctest = 0;
     char*   redfc = NULL;
     char*   bluefc = NULL;
+    char*   red_runes = NULL;
+    char*   blue_runes = NULL;
+    int     red_rune_acc = 0;
+    int     blue_rune_acc = 0;
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
     size_t  stringlength;
@@ -213,7 +217,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     size_t  j;
     int     k;
     int     l;
-    //int       sortedscores[MAX_CLIENTS];
+    
     int     redsorted[MAX_CLIENTS];
     int     redsortedscores[MAX_CLIENTS];
     int     bluesorted[MAX_CLIENTS];
@@ -229,9 +233,8 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     reg_observers = 0;
     int     red_observers = 0;
     int     blue_observers = 0;
+    int     total_observers = 0;
 
-    
-	//int     score, total;
     int     score;
 
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
@@ -243,13 +246,15 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     item_armor;
     int     item_shield;
     int     item_quad;
+    char*   player_rune;
+
+    player_rune = NULL;
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
- //   int     picnum;
     int     x, y;
     gclient_t   *cl;
     edict_t     *cl_ent;
-    char    *tag;
+
     qboolean    showsmall;
     qboolean    is_red_fc;
     qboolean    is_blue_fc;
@@ -257,7 +262,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     is_red_fc = false;
     is_blue_fc = false;
     showsmall = false;
-//    showsmall = true;
 
     bluescore = bluecaps = blue = 0; // TEAM PLAY -- LM_JORM
     redscore = redcaps = red = 0;  // TEAM PLAY -- LM_JORM
@@ -265,20 +269,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     observers = 0;  // TEAM PLAY -- LM_JORM
 #endif
 
-	//bat
-	redpings = 0;
-	bluepings = 0;
-
-
-
-	//
-	// This function really should be rewritten, but I probably 
-	// won't get around to it.
-	// -bat
-	//
-
 	// sort the clients by score
-    //total = 0;
     for (i=0; i<game.maxclients; i++)
     {
         cl_ent = g_edicts + 1 + i;
@@ -308,13 +299,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         item_shield = stats_get(cl_ent, STATS_ITEM_SHIELD);
         item_armor = stats_get(cl_ent, STATS_ITEM_ARMOR);
         item_mega = stats_get(cl_ent, STATS_ITEM_MEGA);
+        
         // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
         if (cl_ent->client->ctf.teamnum == CTF_TEAM_RED) // RED TEAM
         {
             redscore += score;
             redcaps += stats_get(cl_ent, STATS_CAPTURES); 
-			redpings += cl->ping;
 
             // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
             red_rune_strength += rune_strength;
@@ -326,10 +317,39 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             red_item_armor += item_armor;
             red_item_mega += item_mega;
 
+            if (cl->rune)
+            {
+                red_rune_acc += cl->rune->runetype;
+            }
+            else
+            {
+                red_rune_acc += 0;
+            }
+
             is_red_fc = stats_get(cl_ent, STATS_IS_FC);
 
             if (is_red_fc)
                 redfc = cl_ent->client->pers.netname;
+
+            switch (red_rune_acc)
+            {
+                case 1:	 red_runes = "ST";    break;
+                case 2:	 red_runes = "RS";    break;
+                case 3:	 red_runes = "ST RS";    break;
+                case 4:	 red_runes = "HA";    break;
+                case 5:	 red_runes = "ST HA";    break;
+                case 6:	 red_runes = "RS HA";    break;
+                case 7:	 red_runes = "ST RS HA";    break;
+                case 8:	 red_runes = "RG";    break;
+                case 9:	 red_runes = "ST RG";    break;
+                case 10: red_runes = "RS RG";    break;
+                case 11: red_runes = "ST RS RG";    break;
+                case 12: red_runes = "HA RG";    break;
+                case 13: red_runes = "ST HA RG";    break;
+                case 14: red_runes = "RS HA RG";    break;
+                case 15: red_runes = "ST RS HA RG";    break;
+                default: red_runes = " ";    break;
+            }
             // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
             for (j=0 ; j<red ; j++)
@@ -356,7 +376,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         {
             bluescore += score;
             bluecaps  += stats_get(cl_ent, STATS_CAPTURES);
-			bluepings += cl->ping;
 
             // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
             blue_rune_strength += rune_strength;
@@ -367,11 +386,40 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             blue_item_shield += item_shield;
             blue_item_armor += item_armor;
             blue_item_mega += item_mega;
-            
+
+            if (cl->rune)
+            {
+                blue_rune_acc += cl->rune->runetype;
+            }
+            else
+            {
+                blue_rune_acc += 0;
+            }
+
             is_blue_fc = stats_get(cl_ent, STATS_IS_FC);
 
             if (is_blue_fc)
                 bluefc = cl_ent->client->pers.netname;
+
+            switch(blue_rune_acc)
+            {
+                case 1:	 blue_runes = "ST";    break;
+                case 2:	 blue_runes = "RS";    break;
+                case 3:	 blue_runes = "ST RS";    break;
+                case 4:	 blue_runes = "HA";    break;
+                case 5:	 blue_runes = "ST HA";    break;
+                case 6:	 blue_runes = "RS HA";    break;
+                case 7:	 blue_runes = "ST RS HA";    break;
+                case 8:	 blue_runes = "RG";    break;
+                case 9:	 blue_runes = "ST RG";    break;
+                case 10: blue_runes = "RS RG";    break;
+                case 11: blue_runes = "ST RS RG";    break;
+                case 12: blue_runes = "HA RG";    break;
+                case 13: blue_runes = "ST HA RG";    break;
+                case 14: blue_runes = "RS HA RG";    break;
+                case 15: blue_runes = "ST RS HA RG";    break;
+                default: blue_runes = " ";    break;
+            }
             // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
             for (j=0 ; j<blue ; j++)
@@ -398,11 +446,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 		{
 			sorted_blue_observers[blue_observers] = i;
 			blue_observers++;
+            total_observers++;
 		}
         else if (cl_ent->client->ctf.teamnum == CTF_TEAM_OBSERVER_RED)
 		{
 			sorted_red_observers[red_observers] = i;
 			red_observers++;
+            total_observers++;
 		}
 //bat - put this back in
 //#ifdef OLDOBSERVERCODE
@@ -410,6 +460,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 		{
 			sorted_reg_observers[reg_observers] = i;
 			reg_observers++;
+            total_observers++;
 		}
 //#endif
         //total++;
@@ -439,31 +490,20 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
 
     // add the clients in sorted order
-    if (red > 6)
+    if (red > 6 || red + blue + total_observers > 16)
     {
         showsmall = true;
         if (red > 21)
             red = 21;
     }
     
-	if (blue > 6)
+	if (blue > 6 || red + blue + total_observers > 16)
     {
         showsmall = true;
         if (blue > 21)
             blue = 21;
     }
-
    
-	if(red == 0)
-		Avg_Redpings = 0;
-	else
-		Avg_Redpings = redpings/red;
-	
-	if(blue == 0)
-		Avg_Bluepings =	0;
-	else
-		Avg_Bluepings = bluepings/blue;
-	
     if (showsmall)
     {
         x = 0;
@@ -495,6 +535,26 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             x = 0;
             y = 48 + 8 * i;
 
+            if (cl->rune)
+            {
+                switch (cl->rune->runetype)
+                {
+                case 1:	 player_rune = "ST";    break;
+                case 2:	 player_rune = "RS";    break;
+                case 4:	 player_rune = "HA";    break;
+                case 8:	 player_rune = "RG";    break;
+                }
+                Com_sprintf(string2, sizeof(string2),
+                    "xv %i yv %i string2 \"%s\" ",
+                    x + 32 - 136 + 80, y, player_rune);
+
+                j = strlen(string2);
+                if (stringlength + j > 1024)
+                    break;
+                strcpy(string + stringlength, string2);
+                stringlength += j;
+            }
+
             if (cl_ent == Query_DMVP())
 			{
 				sprintf(mvpstring, "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
@@ -521,10 +581,11 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         }
         else
         {
- //           picnum = gi.imageindex ("i_fixme");
+            //picnum = gi.imageindex ("i_fixme");
             x = 0;
             y = 32 + 32 * (i%6);
-
+            //tag = NULL;
+        /*
             // add a dogtag
             if (cl_ent == ent)
                 tag = "tag1";
@@ -542,13 +603,14 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 strcpy (string + stringlength, entry);
                 stringlength += j;
             }
+        */
 
         // send the layout
-            Com_sprintf (entry, sizeof(entry),
-                "client %i %i %i %i %i %i ",
-                x, y, redsorted[i], stats_get(cl_ent, STATS_SCORE), 
-                cl->ping,
-                (level.framenum - cl->resp.enterframe)/600);    
+
+        Com_sprintf(entry, sizeof(entry),
+            "client %i %i %i %i %i %i ",
+            x, y, redsorted[i], stats_get(cl_ent, STATS_SCORE),
+            cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
             j = strlen(entry);
             if (stringlength + j > 1024)
@@ -567,6 +629,26 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, string2);
+                stringlength += j;
+            }
+
+            if (cl->rune)
+            {
+                switch (cl->rune->runetype)
+                {
+                    case 1:	 player_rune = "ST";    break;
+                    case 2:	 player_rune = "RS";    break;
+                    case 4:	 player_rune = "HA";    break;
+                    case 8:	 player_rune = "RG";    break;
+                }
+                Com_sprintf(string2, sizeof(string2),
+                    "xv %i yv %i string2 \"R:%s\" ",
+                    x + 32 + 80, y + 16, player_rune);
+
+                j = strlen(string2);
+                if (stringlength + j > 1024)
+                    break;
+                strcpy(string + stringlength, string2);
                 stringlength += j;
             }
 
@@ -608,6 +690,26 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             x = 160;
             y = 48 + 8 * i;
 
+            if (cl->rune)
+            {
+                switch (cl->rune->runetype)
+                {
+                case 1:	 player_rune = "ST";    break;
+                case 2:	 player_rune = "RS";    break;
+                case 4:	 player_rune = "HA";    break;
+                case 8:	 player_rune = "RG";    break;
+                }
+                Com_sprintf(string2, sizeof(string2),
+                    "xv %i yv %i string2 \"%s\" ",
+                    x + 32 + 56 + 80, y, player_rune);
+
+                j = strlen(string2);
+                if (stringlength + j > 1024)
+                    break;
+                strcpy(string + stringlength, string2);
+                stringlength += j;
+            }
+
             if (cl_ent == Query_DMVP())
 			{
 				sprintf(mvpstring, "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
@@ -639,11 +741,12 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         }
         else
         {
- //           picnum = gi.imageindex ("i_fixme");
+            //picnum = gi.imageindex ("i_fixme");
             //x = (i>=6) ? 160 : 0;
             x = 160;
             y = 32 + 32 * (i%6);
-
+            //tag = NULL;
+        /*
             // add a dogtag
             if (cl_ent == ent)
                 tag = "tag1";
@@ -661,12 +764,12 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 strcpy (string + stringlength, entry);
                 stringlength += j;
             }
-
+        */
         // send the layout
-            Com_sprintf (entry, sizeof(entry),
+            Com_sprintf(entry, sizeof(entry),
                 "client %i %i %i %i %i %i ",
                 x, y, bluesorted[i], stats_get(cl_ent, STATS_SCORE),
-                cl->ping, (level.framenum - cl->resp.enterframe)/600);  
+                cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
             j = strlen(entry);
             if (stringlength + j > 1024)
@@ -687,6 +790,28 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 strcpy (string + stringlength, string2);
                 stringlength += j;
             }
+
+            if (cl->rune)
+            {
+                switch (cl->rune->runetype)
+                {
+                    case 1:	 player_rune = "ST";    break;
+                    case 2:	 player_rune = "RS";    break;
+                    case 4:	 player_rune = "HA";    break;
+                    case 8:	 player_rune = "RG";    break;
+                }
+
+                Com_sprintf(string2, sizeof(string2),
+                    "xv %i yv %i string2 \"R:%s\" ",
+                    x + 32 + 80, y + 16, player_rune);
+
+                j = strlen(string2);
+                if (stringlength + j > 1024)
+                    break;
+                strcpy(string + stringlength, string2);
+                stringlength += j;
+            }
+
             if (cl_ent == Query_DMVP())
             {
                 Com_sprintf (string2, sizeof(string2),
@@ -769,21 +894,23 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 			x = 0;
 			Show_String(x, y, string2, "Red Observers:");
 			y += 8;
+            if (red + blue + total_observers <= 16)
+            {
+                for (i = 0; i < red_observers; i++)
+                {
+                    cl = &game.clients[sorted_red_observers[i]];
+                    cl_ent = g_edicts + 1 + sorted_red_observers[i];
+                    Show_String(x, y, string2, cl->pers.netname);
+                    y += 8;
+                }
 
-			for (i = 0; i < red_observers ; i++)
-			{
-				cl = &game.clients[sorted_red_observers[i]];
-				cl_ent = g_edicts + 1 + sorted_red_observers[i];  
-				Show_String(x, y, string2, cl->pers.netname);
-				y += 8;
-			}
-
-			j = strlen(string2);
-			if (stringlength + j <= 1024)
-			{
-				strcpy (string + stringlength, string2);
-				stringlength += j;
-			}
+                j = strlen(string2);
+                if (stringlength + j <= 1024)
+                {
+                    strcpy(string + stringlength, string2);
+                    stringlength += j;
+                }
+            }
 		}
 
 		if(blue_observers)
@@ -791,80 +918,85 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 			x = 160;
 			Show_String(x, y, string2, "Blue Observers:");
 			y += 8;
+            if (red + blue + total_observers <= 16)
+            {
+                for (i = 0; i < blue_observers; i++)
+                {
+                    cl = &game.clients[sorted_blue_observers[i]];
+                    cl_ent = g_edicts + 1 + sorted_blue_observers[i];
+                    //strcat(entry, cl->pers.netname);
+                    Show_String(x, y, string2, cl->pers.netname);
+                    y += 8;
+                }
 
-			for (i = 0; i < blue_observers ; i++)
-			{
-				cl = &game.clients[sorted_blue_observers[i]];
-				cl_ent = g_edicts + 1 + sorted_blue_observers[i];  
-				//strcat(entry, cl->pers.netname);
-				Show_String(x, y, string2, cl->pers.netname);
-				y += 8;
-			}
-
-			j = strlen(string2);
-			if (stringlength + j <= 1024)
-			{
-				strcpy (string + stringlength, string2);
-				stringlength += j;
-			}
+                j = strlen(string2);
+                if (stringlength + j <= 1024)
+                {
+                    strcpy(string + stringlength, string2);
+                    stringlength += j;
+                }
+            }
 		}
 
 
 
 		if(reg_observers)
 		{
-			//give more space for the reg observers
-			if(red_observers == 0 && blue_observers == 0)
-			{
-				x = 80;
-				Show_String(x, y, string2, "Observers:");
-				y += 8;
+            if (red + blue + total_observers <= 16)
+            {
+                //give more space for the reg observers
+                if (red_observers == 0 && blue_observers == 0)
+                {
+                    x = 80;
+                    Show_String(x, y, string2, "Observers:");
+                    y += 8;
 
-				//Do 2 obs per line
+                    //Do 2 obs per line
 
-				for(i = 0; i < reg_observers ; i++)
-				{
-					//x = (i & 0x01) * 160;
-					x = (i % 3) * 130;
-				
-					cl = &game.clients[sorted_reg_observers[i]];
-					cl_ent = g_edicts + 1 + sorted_reg_observers[i];  
-					Show_String(x, y, string2, cl->pers.netname);
-				
-					if((i % 3) == 2)
-						y += 8;
-				}
+                    for (i = 0; i < reg_observers; i++)
+                    {
+                        //x = (i & 0x01) * 160;
+                        x = (i % 3) * 130;
 
-				j = strlen(string2);
-				if (stringlength + j <= 1024)
-				{
-					strcpy (string + stringlength, string2);
-					stringlength += j;
-				}
-		
-			}
-			else
-			{
-				x = 80;
-				Show_String(x, y, string2, "Observers:");
-				y += 8;
+                        cl = &game.clients[sorted_reg_observers[i]];
+                        cl_ent = g_edicts + 1 + sorted_reg_observers[i];
+                        Show_String(x, y, string2, cl->pers.netname);
 
-				for (i = 0; i < reg_observers ; i++)
-				{
-					cl = &game.clients[sorted_reg_observers[i]];
-					cl_ent = g_edicts + 1 + sorted_reg_observers[i];  
-					//strcat(entry, cl->pers.netname);
-					Show_String(x, y, string2, cl->pers.netname);
-					y += 8;
-				}
+                        if ((i % 3) == 2)
+                            y += 8;
+                    }
 
-				j = strlen(string2);
-				if (stringlength + j <= 1024)
-				{
-					strcpy (string + stringlength, string2);
-					stringlength += j;
-				}
-			}
+                    j = strlen(string2);
+                    if (stringlength + j <= 1024)
+                    {
+                        strcpy(string + stringlength, string2);
+                        stringlength += j;
+                    }
+
+                }
+                else
+                {
+                    x = 80;
+                    Show_String(x, y, string2, "Observers:");
+                    y += 8;
+
+                    for (i = 0; i < reg_observers; i++)
+                    {
+                        cl = &game.clients[sorted_reg_observers[i]];
+                        cl_ent = g_edicts + 1 + sorted_reg_observers[i];
+                        //strcat(entry, cl->pers.netname);
+                        Show_String(x, y, string2, cl->pers.netname);
+                        y += 8;
+                    }
+
+                    j = strlen(string2);
+                    if (stringlength + j <= 1024)
+                    {
+                        strcpy(string + stringlength, string2);
+                        stringlength += j;
+                    }
+                }
+            }
 		}
 	}
 
@@ -915,75 +1047,43 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         "xv %i yv %i picn %s "
         "xv %i yv %i picn %s "
 
-        "xv %i yv %i picn %s "
-        "xv %i yv %i picn %s "
-        "xv %i yv %i picn %s "
-        "xv %i yv %i picn %s "
+        //"xv %i yv %i string2 \"CAPS:%i\" "    // Captures // NOT NEEDED - IN v6.1 HUD
+        "xv %i yv %i string2 \"FC:\" "// BUZZKILL - FLAG CARRIER LABEL
+        "xv %i yv %i string2 \"%s\" "           // BUZZKILL - FLAG CARRIER NAME
+        "xv %i yv %i string2 \"Runes\" "       // BUZZKILL - RUNE LISTING
+        "xv %i yv %i string2 \"%s\" "           // BUZZKILL - RUNE LISTING
 
-        "xv %i yv %i string2 \"CAPS:%i\" "      // Captures
-        "xv %i yv %i string2 \"Q:%i\" "         // BUZZKILL - QUAD GRABS BY TEAM
-        "xv %i yv %i string2 \"   S:%i\" "      // BUZZKILL - SHIELD GRABS BY TEAM
-        "xv %i yv %i string2 \"A:%i\" "         // BUZZKILL - RED ARMOR GRABS BY TEAM
-        "xv %i yv %i string2 \"   M:%i\" "      // BUZZKILL - MEGA HEALTH GRABS BY TEAM
-        //"xv %i yv %i string2 \"AP:%3i\" "     // BUZZKILL - does anybody actually care about average ping anymore?
-        
-        "xv %i yv %i string2 \"CAPS:%i\" "
-        "xv %i yv %i string2 \"Q:%i\" "
-        "xv %i yv %i string2 \"   S:%i\" "
-        "xv %i yv %i string2 \"A:%i\" "
-        "xv %i yv %i string2 \"   M:%i\" "
+        "xv %i yv %i string2 \"FC:\" "// BUZZKILL - FLAG CARRIER LABEL
+        "xv %i yv %i string2 \"%s\" "           // BUZZKILL - FLAG CARRIER NAME
+        "xv %i yv %i string2 \"Runes\" "           // BUZZKILL - RUNE LISTING
+        "xv %i yv %i string2 \"%s\" ",    // BUZZKILL - RUNE LISTING
 
-        "xv %i yv %i string2 \"FC:%s\" "        // BUZZKILL - FLAG CARRIER
-        "xv %i yv %i string2 \"ST:%i\" "        // BUZZKILL - STRENGTH RUNE GRABS
-        "xv %i yv %i string2 \"     HA:%i\" "   // BUZZKILL - HASTE RUNE GRABS
-        "xv %i yv %i string2 \"RG:%i\" "        // BUZZKILL - REGEN RUNE GRABS
-        "xv %i yv %i string2 \"     RS:%i\" "   // BUZZKILL - RESIST RUNE GRABS
-
-        "xv %i yv %i string2 \"FC:%s\" "
-        "xv %i yv %i string2 \"ST:%i\" "
-        "xv %i yv %i string2 \"     HA:%i\" "
-        "xv %i yv %i string2 \"RG:%i\" "
-        "xv %i yv %i string2 \"     RS:%i\" "
-
-        "xv %i yv %i num 4 19 "
-        "xv %i yv %i num 4 20 ",
+        //"xv %i yv %i num 4 24 "               // BUZZKILL - BLUE CAPS     // NOT NEEDED - IN v6.1 HUD
+        //"xv %i yv %i num 4 25 "               // BUZZKILL - RED CAPS      // NOT NEEDED - IN v6.1 HUD
+            
+        //"xv %i yv %i num 4 19 "               // BUZZKILL - BLUE SCORE    // NOT NEEDED - IN v6.1 HUD
+        //"xv %i yv %i num 4 20 ",              // BUZZKILL - RED SCORE     // NOT NEEDED - IN v6.1 HUD
 
         0, 0, "redlion_i",
         160, 0, "bluewolf_i",
         32, 0, "redtag",
         192, 0, "bluetag",
 
-        0, -32, "redlion_i",
-        160, -32, "bluewolf_i",
-        32, -32, "redtag",
-        192, -32, "bluetag",
+        36, 0,
+        36, 8, redfc,
+        36, 16,
+        36, 24, red_runes,
 
-        36, -30, redcaps,
-        36, -20, red_item_quad,
-        52, -20, red_item_shield,
-        36, -10, red_item_armor,
-        52, -10, red_item_mega,
+        196, 0,
+        196, 8, bluefc,
+        196, 16,
+        196, 24, blue_runes
 
-        196, -30, bluecaps,
-        196, -20, blue_item_quad,
-        212, -20, blue_item_shield,
-        196, -10, blue_item_armor,
-        212, -10, blue_item_mega,
+        //90, 4,
+        //250, 4,
 
-        36, 2, redfc,
-        36, 12, red_rune_strength,
-        52, 12, red_rune_haste,
-        36, 22, red_rune_regen,
-        52, 22, red_rune_resist,
-
-        196, 2, bluefc,
-        196, 12, blue_rune_strength,
-        212, 12, blue_rune_haste,
-        196, 22, blue_rune_regen,
-        212, 22, blue_rune_resist,
-
-        90, -28,
-        250, -28
+        //90, -28,
+        //250, -28
 
         );
 
@@ -1203,6 +1303,549 @@ void CTFSquadboardMessage (edict_t *ent, edict_t* killer) // ADC
 
 /*
 ==================
+Statboard
+
+Draw instead of help message.
+Note that it isn't that hard to overflow the 1400 byte message limit!
+==================
+*/
+void Statboard(edict_t* ent)
+{
+    StatboardMessage(ent, ent->enemy);
+    gi.unicast(ent, true);
+}
+
+/*
+==================
+StatboardMessage
+
+==================
+*/
+void StatboardMessage(edict_t* ent, edict_t* killer)
+{
+    char    string[MAX_MSGLEN];
+    char    string2[MAX_MSGLEN];
+    int     blue, red;
+
+    size_t  stringlength;
+    int     i;
+    size_t  j;
+    int     k;
+
+    int     redsorted[MAX_CLIENTS];
+    int     redsortedscores[MAX_CLIENTS];
+    int     bluesorted[MAX_CLIENTS];
+    int     bluesortedscores[MAX_CLIENTS];
+
+    int     score;
+
+    int     rune_strength;
+    int     rune_haste;
+    int     rune_regen;
+    int     rune_resist;
+    int     item_mega;
+    int     item_armor;
+    int     item_shield;
+    int     item_quad;
+
+    int     x, y;
+
+    gclient_t*  cl;
+    edict_t*    cl_ent;
+
+    blue = 0;
+    red = 0;
+    
+    // sort the clients by score
+    for (i = 0; i < game.maxclients; i++)
+    {
+        cl_ent = g_edicts + 1 + i;
+        cl = &game.clients[i];
+
+        if (!cl_ent->inuse)
+            continue;
+
+        score = stats_get(cl_ent, STATS_SCORE);
+
+        rune_strength = stats_get(cl_ent, STATS_RUNE_STRENGTH);
+        rune_haste = stats_get(cl_ent, STATS_RUNE_HASTE);
+        rune_regen = stats_get(cl_ent, STATS_RUNE_REGEN);
+        rune_resist = stats_get(cl_ent, STATS_RUNE_RESIST);
+        item_quad = stats_get(cl_ent, STATS_ITEM_QUAD);
+        item_shield = stats_get(cl_ent, STATS_ITEM_SHIELD);
+        item_armor = stats_get(cl_ent, STATS_ITEM_ARMOR);
+        item_mega = stats_get(cl_ent, STATS_ITEM_MEGA);
+
+        if (cl_ent->client->ctf.teamnum == CTF_TEAM_RED)
+        {
+
+            for (j = 0; j < red; j++)
+            {
+                if (score > redsortedscores[j])
+                    break;
+            }
+            for (k = red; k > j; k--)
+            {
+                redsorted[k] = redsorted[k - 1];
+                redsortedscores[k] = redsortedscores[k - 1];
+            }
+            redsorted[j] = i;
+            redsortedscores[j] = score;
+            red++;
+        }
+        else if (cl_ent->client->ctf.teamnum == CTF_TEAM_BLUE)
+        {
+
+            for (j = 0; j < blue; j++)
+            {
+                if (score > bluesortedscores[j])
+                    break;
+            }
+            for (k = blue; k > j; k--)
+            {
+                bluesorted[k] = bluesorted[k - 1];
+                bluesortedscores[k] = bluesortedscores[k - 1];
+            }
+            bluesorted[j] = i;
+            bluesortedscores[j] = score;
+            blue++;
+        }
+
+    }
+
+    string[0] = 0;
+    string2[0] = 0;
+    stringlength = 0;
+    y = 32 * 8;
+
+    // DRAW STATBOARD AND ADD TEAM STATS
+    {
+        Com_sprintf(string2, sizeof(string2),
+            "xv %i yv %i picn %s "
+            "xv %i yv %i picn %s ",
+
+            -102, -35, "pb",
+            -102, -27, "pt"
+
+        );
+        
+        j = strlen(string2);
+        if (stringlength + j < 1024)
+        {
+            strcpy(string + stringlength, string2);
+            stringlength += j;
+        }
+    }
+
+    for (i = 0; i < red; i++)
+    {
+        cl = &game.clients[redsorted[i]];
+        cl_ent = g_edicts + 1 + redsorted[i];
+
+        x = -91;
+        y = 34 + 8 * i;
+
+        // send the layout        
+        Com_sprintf(string2, sizeof(string2),
+            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i\" ",
+
+            x, y,
+            cl->pers.netname,
+            stats_get(cl_ent, STATS_FRAGS),
+            stats_get(cl_ent, STATS_OFFENSE_CARRIER),
+            stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE),
+            stats_get(cl_ent, STATS_RETURNS)
+
+        );
+
+        j = strlen(string2);
+        if (stringlength + j > 1024)
+            break;
+        strcpy(string + stringlength, string2);
+        stringlength += j;
+
+    }
+
+    for (i = 0; i < blue; i++)
+    {
+        cl = &game.clients[bluesorted[i]];
+        cl_ent = g_edicts + 1 + bluesorted[i];
+
+        x = 171;
+        y = 34 + 8 * i;
+
+        Com_sprintf(string2, sizeof(string2),
+            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i\" ",
+
+            x, y,
+            cl->pers.netname,
+            stats_get(cl_ent, STATS_SCORE),            
+            stats_get(cl_ent, STATS_CAPTURES),
+            stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE),
+            stats_get(cl_ent, STATS_RETURNS)
+        
+        );
+
+
+
+        j = strlen(string2);
+        if (stringlength + j > 1024)
+            break;
+        strcpy(string + stringlength, string2);
+        stringlength += j;
+
+    }
+
+    gi.WriteByte(svc_layout);
+    gi.WriteString(string);
+
+}
+
+/*
+==================
+TeamStatboard
+
+Draw instead of help message.
+Note that it isn't that hard to overflow the 1400 byte message limit!
+==================
+*/
+void TeamStatboard(edict_t* ent)
+{
+    TeamStatboardMessage(ent, ent->enemy);
+    gi.unicast(ent, true);
+}
+
+/*
+==================
+TeamStatboardMessage
+
+==================
+*/
+void TeamStatboardMessage(edict_t* ent, edict_t* killer)
+{
+    char    string[MAX_MSGLEN];
+    char    string2[MAX_MSGLEN];
+    int     blue, red;
+
+    int     blue_rune_strength = 0;
+    int     blue_rune_haste = 0;
+    int     blue_rune_regen = 0;
+    int     blue_rune_resist = 0;
+    int     blue_item_mega = 0;
+    int     blue_item_quad = 0;
+    int     blue_item_armor = 0;
+    int     blue_item_shield = 0;
+    int     red_rune_strength = 0;
+    int     red_rune_haste = 0;
+    int     red_rune_regen = 0;
+    int     red_rune_resist = 0;
+    int     red_item_mega = 0;
+    int     red_item_quad = 0;
+    int     red_item_armor = 0;
+    int     red_item_shield = 0;
+
+    size_t  stringlength;
+    int     i;
+    size_t  j;
+    int     k;
+
+    int     redsorted[MAX_CLIENTS];
+    int     redsortedscores[MAX_CLIENTS];
+    int     bluesorted[MAX_CLIENTS];
+    int     bluesortedscores[MAX_CLIENTS];
+
+    int     score;
+
+    int     rune_strength;
+    int     rune_haste;
+    int     rune_regen;
+    int     rune_resist;
+    int     item_mega;
+    int     item_armor;
+    int     item_shield;
+    int     item_quad;
+
+    //int     x;
+    int     y;
+
+    gclient_t* cl;
+    edict_t* cl_ent;
+
+    blue = 0;
+    red = 0;
+
+    // sort the clients by score
+    for (i = 0; i < game.maxclients; i++)
+    {
+        cl_ent = g_edicts + 1 + i;
+        cl = &game.clients[i];
+
+        if (!cl_ent->inuse)
+            continue;
+
+        score = stats_get(cl_ent, STATS_SCORE);
+
+        rune_strength = stats_get(cl_ent, STATS_RUNE_STRENGTH);
+        rune_haste = stats_get(cl_ent, STATS_RUNE_HASTE);
+        rune_regen = stats_get(cl_ent, STATS_RUNE_REGEN);
+        rune_resist = stats_get(cl_ent, STATS_RUNE_RESIST);
+        item_quad = stats_get(cl_ent, STATS_ITEM_QUAD);
+        item_shield = stats_get(cl_ent, STATS_ITEM_SHIELD);
+        item_armor = stats_get(cl_ent, STATS_ITEM_ARMOR);
+        item_mega = stats_get(cl_ent, STATS_ITEM_MEGA);
+
+        if (cl_ent->client->ctf.teamnum == CTF_TEAM_RED)
+        {
+            red_rune_strength += rune_strength;
+            red_rune_haste += rune_haste;
+            red_rune_regen += rune_regen;
+            red_rune_resist += rune_resist;
+            red_item_quad += item_quad;
+            red_item_shield += item_shield;
+            red_item_armor += item_armor;
+            red_item_mega += item_mega;
+
+            for (j = 0; j < red; j++)
+            {
+                if (score > redsortedscores[j])
+                    break;
+            }
+            for (k = red; k > j; k--)
+            {
+                redsorted[k] = redsorted[k - 1];
+                redsortedscores[k] = redsortedscores[k - 1];
+            }
+            redsorted[j] = i;
+            redsortedscores[j] = score;
+            red++;
+        }
+        else if (cl_ent->client->ctf.teamnum == CTF_TEAM_BLUE)
+        {
+            blue_rune_strength += rune_strength;
+            blue_rune_haste += rune_haste;
+            blue_rune_regen += rune_regen;
+            blue_rune_resist += rune_resist;
+            blue_item_quad += item_quad;
+            blue_item_shield += item_shield;
+            blue_item_armor += item_armor;
+            blue_item_mega += item_mega;
+
+            for (j = 0; j < blue; j++)
+            {
+                if (score > bluesortedscores[j])
+                    break;
+            }
+            for (k = blue; k > j; k--)
+            {
+                bluesorted[k] = bluesorted[k - 1];
+                bluesortedscores[k] = bluesortedscores[k - 1];
+            }
+            bluesorted[j] = i;
+            bluesortedscores[j] = score;
+            blue++;
+        }
+
+    }
+
+    string[0] = 0;
+    string2[0] = 0;
+    stringlength = 0;
+    y = 32 * 8;
+
+    // DRAW TEAMSTATBOARD AND ADD TEAM STATS
+    {
+        Com_sprintf(string2, sizeof(string2),
+            "xv %i yv %i picn %s "
+            "xv %i yv %i picn %s "
+
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM QUAD GRABS
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM SHIELD GRABS
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM RED ARMOR GRABS
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM MEGA HEALTH GRABS
+
+            "xv %i yv %i string2 \"%i\" "
+            "xv %i yv %i string2 \"%i\" "
+            "xv %i yv %i string2 \"%i\" "
+            "xv %i yv %i string2 \"%i\" "
+
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM STRENGTH RUNE GRABS
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM HASTE RUNE GRABS
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM RESIST RUNE GRABS
+            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM REGEN RUNE GRABS
+
+            "xv %i yv %i string2 \"%i\" "
+            "xv %i yv %i string2 \"%i\" "
+            "xv %i yv %i string2 \"%i\" "
+            "xv %i yv %i string2 \"%i\" ",
+
+            -102, -35, "tb",
+            -102, -27, "tt",
+
+            -54, -19, red_item_quad,
+            -54, -10, red_item_shield,
+            -54, -1, red_item_armor,
+            -54, 8, red_item_mega,
+
+            209, -19, blue_item_quad,
+            209, -10, blue_item_shield,
+            209, -1, blue_item_armor,
+            209, 8, blue_item_mega,
+
+            10, -19, red_rune_strength,
+            10, -10, red_rune_haste,
+            10, -1, red_rune_resist,
+            10, 8, red_rune_regen,
+
+            273, -19, blue_rune_strength,
+            273, -10, blue_rune_haste,
+            273, -1, blue_rune_resist,
+            273, 8, blue_rune_regen
+
+        );
+
+        j = strlen(string2);
+        if (stringlength + j < 1024)
+        {
+            strcpy(string + stringlength, string2);
+            stringlength += j;
+        }
+    }
+
+    gi.WriteByte(svc_layout);
+    gi.WriteString(string);
+
+}
+
+/*
+==================
+Railboard
+
+Draw instead of help message.
+Note that it isn't that hard to overflow the 1400 byte message limit!
+==================
+*/
+void Railboard(edict_t* ent)
+{
+    RailboardMessage(ent, ent->enemy);
+    gi.unicast(ent, true);
+}
+
+/*
+==================
+RailboardMessage
+
+==================
+*/
+void RailboardMessage(edict_t* ent, edict_t* killer)
+{
+    char    string[MAX_MSGLEN];
+    char    string2[MAX_MSGLEN];
+
+    size_t  stringlength;
+    int     i;
+    size_t  j;
+    int     k;
+    int     player = 0;
+    int     rails = 0;
+    int     playersorted[MAX_CLIENTS];
+    int     playersortedrails[MAX_CLIENTS];
+
+    int     x, y;
+
+    gclient_t* cl;
+    edict_t* cl_ent;
+
+    // sort the clients by rail kills
+    for (i = 0; i < game.maxclients; i++)
+    {
+        cl_ent = g_edicts + 1 + i;
+        cl = &game.clients[i];
+
+        if (!cl_ent->inuse)
+            continue;
+
+        rails = stats_get(cl_ent, STATS_RAIL_KILL);
+
+        if (cl_ent->client->ctf.teamnum == CTF_TEAM_BLUE || cl_ent->client->ctf.teamnum == CTF_TEAM_RED)
+        {
+            for (j = 0; j < player; j++)
+            {
+                if (rails > playersortedrails[j])
+                    break;
+            }
+            for (k = player; k > j; k--)
+            {
+                playersorted[k] = playersorted[k - 1];
+                playersortedrails[k] = playersortedrails[k - 1];
+            }
+            playersorted[j] = i;
+            playersortedrails[j] = rails;
+            player++;
+        }
+
+    }
+
+    string[0] = 0;
+    string2[0] = 0;
+    stringlength = 0;
+    y = 32 * 8;
+
+    // DRAW STATBOARD AND ADD RAILS
+    {
+        Com_sprintf(string2, sizeof(string2),
+            "xv %i yv %i picn %s "
+            "xv %i yv %i picn %s ",
+
+            29, -35, "rb",
+            41, -26, "rt"
+
+        );
+
+        j = strlen(string2);
+        if (stringlength + j < 1024)
+        {
+            strcpy(string + stringlength, string2);
+            stringlength += j;
+        }
+    }
+
+    for (i = 0; i < player; i++)
+    {
+        cl = &game.clients[playersorted[i]];
+        cl_ent = g_edicts + 1 + playersorted[i];
+
+        x = 40;
+        y = -18 + 8 * i;
+
+        // send the layout        
+        Com_sprintf(string2, sizeof(string2),
+            "xv %i yv %i string2 \"%-15s %2i %2i %3i %3i\" ",
+
+            x, y,
+            cl->pers.netname,
+            stats_get(cl_ent, STATS_RAIL_KILL),
+            stats_get(cl_ent, STATS_RAIL_HIT),
+            stats_get(cl_ent, STATS_RAIL_SHOT),
+            cl_ent->client->p_stats_player->stats[STATS_RAIL_SHOT] == 0 ? 0 : 100 * 
+            cl_ent->client->p_stats_player->stats[STATS_RAIL_HIT] / 
+            cl_ent->client->p_stats_player->stats[STATS_RAIL_SHOT]
+        );
+
+        j = strlen(string2);
+        if (stringlength + j > 1024)
+            break;
+        strcpy(string + stringlength, string2);
+        stringlength += j;
+
+    }
+
+    gi.WriteByte(svc_layout);
+    gi.WriteString(string);
+
+}
+
+/*
+==================
 Cmd_Score_f
 
 Display the scoreboard
@@ -1216,6 +1859,9 @@ void Cmd_Score_f (edict_t *ent)
     ent->client->showmod = false;
     ent->client->showmenu = false;
 	ent->client->showsquadboard = false; // ADC
+    ent->client->showstatboard = false; // BUZZKILL
+    ent->client->showteamstatboard = false; // BUZZKILL
+    ent->client->showrailboard = false; // BUZZKILL
 
 	if (!deathmatch->value && !coop->value)
 		return;
@@ -1260,6 +1906,105 @@ void Cmd_Squadboard_f (edict_t *ent)
 	Squadboard (ent);
 }
 // ADC
+
+// BUZZKILL
+/*
+==================
+Cmd_Statboard_f
+
+Display the statboard
+==================
+*/
+void Cmd_Statboard_f(edict_t* ent)
+{
+    ent->client->showhelp = false;
+    ent->client->showinventory = false;
+    ent->client->showctfhud = false;
+    ent->client->showmod = false;
+    ent->client->showmenu = false;
+    ent->client->showscores = false;
+    ent->client->showsquadboard = false;
+    ent->client->showteamstatboard = false;
+    ent->client->showrailboard = false;
+
+    if (!deathmatch->value && !coop->value)
+        return;
+
+    if (ent->client->showstatboard)
+    {
+        ent->client->showstatboard = false;
+        return;
+    }
+
+    ent->client->showstatboard = true;
+    Statboard(ent);
+}
+
+/*
+==================
+Cmd_TeamStatboard_f
+
+Display the teamstatboard
+==================
+*/
+void Cmd_TeamStatboard_f(edict_t* ent)
+{
+    ent->client->showinventory = false;
+    ent->client->showhelp = false;
+    ent->client->showctfhud = false;
+    ent->client->showmod = false;
+    ent->client->showmenu = false;
+    ent->client->showsquadboard = false; // ADC
+    ent->client->showstatboard = false; // BUZZKILL
+    ent->client->showscores = false; // BUZZKILL
+    ent->client->showrailboard = false; // BUZZKILL
+
+    if (!deathmatch->value && !coop->value)
+        return;
+
+    if (ent->client->showteamstatboard)
+    {
+        ent->client->showteamstatboard = false;
+        return;
+    }
+
+    ent->client->showteamstatboard = true;
+    TeamStatboard(ent);
+}
+
+/*
+==================
+Cmd_Railboard_f
+
+Display the railboard
+==================
+*/
+void Cmd_Railboard_f(edict_t * ent)
+{
+    ent->client->showhelp = false;
+    ent->client->showinventory = false;
+    ent->client->showctfhud = false;
+    ent->client->showmod = false;
+    ent->client->showmenu = false;
+    ent->client->showscores = false;
+    ent->client->showsquadboard = false;
+    ent->client->showstatboard = false;
+    ent->client->showteamstatboard = false;
+
+    if (!deathmatch->value && !coop->value)
+        return;
+
+    if (ent->client->showrailboard)
+    {
+        ent->client->showrailboard = false;
+        return;
+    }
+
+    ent->client->showrailboard = true;
+    Railboard(ent);
+}
+
+// BUZZKILL
 
 /*
 ==================
@@ -1327,6 +2072,9 @@ void Cmd_Help_f (edict_t *ent)
     ent->client->showmod = false;
     ent->client->showmenu = false;
 	ent->client->showsquadboard = false; // ADC
+    ent->client->showstatboard = false; // BUZZKILL
+    ent->client->showteamstatboard = false; // BUZZKILL
+    ent->client->showrailboard = false; // BUZZKILL
 
 	if (ent->client->showhelp && (ent->client->pers.game_helpchanged == game.helpchanged))
 	{
@@ -1640,7 +2388,8 @@ edict_t     *cl_ent;
         if (ent->client->pers.health <= 0 || level.intermissiontime
             || ent->client->showscores || ent->client->showctfhud 
             || ent->client->showmod || ent->client->showmenu
-			|| ent->client->showsquadboard) // ADC
+			|| ent->client->showsquadboard || ent->client->showstatboard
+            || ent->client->showteamstatboard || ent->client->showrailboard) // ADC //BUZZKILL
             ent->client->ps.stats[STAT_LAYOUTS] |= 1;
         if (ent->client->showinventory && ent->client->pers.health > 0)
             ent->client->ps.stats[STAT_LAYOUTS] |= 2;
@@ -1649,7 +2398,8 @@ edict_t     *cl_ent;
     {
         if (ent->client->showscores || ent->client->showhelp
             || ent->client->showctfhud || ent->client->showmod
-			|| ent->client->showsquadboard) // ADC
+			|| ent->client->showsquadboard || ent->client->showstatboard
+            || ent->client->showteamstatboard || ent->client->showrailboard) // ADC // BUZZKILL
             ent->client->ps.stats[STAT_LAYOUTS] |= 1;
         if (ent->client->showinventory && ent->client->pers.health > 0)
             ent->client->ps.stats[STAT_LAYOUTS] |= 2;
@@ -1705,7 +2455,7 @@ void G_SetSpectatorStats (edict_t *ent)
 	
 	//bat - I think that cl->pers.health is only supposed to be checked in deathmatch
 	
-	if(level.intermissiontime || cl->showscores || cl->showmenu)
+	if(level.intermissiontime || cl->showscores || cl->showmenu || cl->showrailboard || cl->showstatboard || cl->showteamstatboard)
 		cl->ps.stats[STAT_LAYOUTS] |= 1;
 	if (cl->showinventory && cl->pers.health > 0)
 		cl->ps.stats[STAT_LAYOUTS] |= 2;

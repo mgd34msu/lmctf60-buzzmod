@@ -444,7 +444,8 @@ void SP_damage_rune(edict_t* self)
 qboolean Pickup_Rune(edict_t* ent, edict_t* other)
 {
 	char* runeName = NULL; // BUZZKILL - IMPROVED ANALYTICS
-	int		runeID = 0; // BUZZKILL - IMPROVED ANALYTICS // problematic if this remains at 0
+	int		runeID = 0; // BUZZKILL - IMPROVED ANALYTICS
+	int		runeHas = 0;
 
 	if (!other->client->rune) // don't already have rune
 	{
@@ -466,24 +467,29 @@ qboolean Pickup_Rune(edict_t* ent, edict_t* other)
 		case RUNE_DAMAGE:
 			runeName = "rune_damage";
 			runeID = STATS_RUNE_STRENGTH;
+			runeHas = STATS_HAS_ST;
 			break;
 		case RUNE_HASTE:
 			runeName = "rune_haste";
 			runeID = STATS_RUNE_HASTE;
+			runeHas = STATS_HAS_HA;
 			break;
 		case RUNE_REGEN:
 			runeName = "rune_regen";
 			runeID = STATS_RUNE_REGEN;
+			runeHas = STATS_HAS_RG;
 			break;
 		case RUNE_RESIST:
 			runeName = "rune_resist";
 			runeID = STATS_RUNE_RESIST;
+			runeHas = STATS_HAS_RS;
 			break;
 		default:
 			gi.dprintf("Bad rune selected.\n");
 			break;
 		}
 		stats_add(other, runeID, 1);
+		stats_set(other, runeHas, 1);
 		sl_LogPickup(&gi,
 			"PlayerEvent",
 			other->client->pers.netname,
@@ -581,6 +587,7 @@ void homing_think(edict_t* ent)
 	}
 	ent->touch = Touch_Item;
 	ent->nextthink = level.time + FRAMETIME;
+	
 }
 // BUZZKILL - TOSS THING - END
 
@@ -590,6 +597,7 @@ void Drop_Rune_Think(edict_t* ent)
 	ent->owner = NULL;
 	ent->think = Rune_Think;
 	ent->nextthink = level.time + FRAMETIME;
+
 }
 
 extern void drop_temp_touch(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf);
@@ -603,6 +611,11 @@ void Drop_Rune(edict_t* ent, gitem_t* item)
 		return;
 
 	ent->client->pers.inventory[ITEM_INDEX(item)]--;
+
+	stats_set(ent, STATS_HAS_ST, 0);
+	stats_set(ent, STATS_HAS_RS, 0);
+	stats_set(ent, STATS_HAS_HA, 0);
+	stats_set(ent, STATS_HAS_RG, 0);
 
 	dropped = ent->client->rune;
 	if (!dropped)
@@ -648,6 +661,11 @@ void Toss_Rune(edict_t* ent, gitem_t* item)
 		return;
 
 	ent->client->pers.inventory[ITEM_INDEX(item)]--;
+
+	stats_set(ent, STATS_HAS_ST, 0);
+	stats_set(ent, STATS_HAS_RS, 0);
+	stats_set(ent, STATS_HAS_HA, 0);
+	stats_set(ent, STATS_HAS_RG, 0);
 
 	dropped = ent->client->rune;
 	if (!dropped)

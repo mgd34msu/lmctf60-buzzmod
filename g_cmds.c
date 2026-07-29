@@ -724,6 +724,9 @@ void Cmd_Inven_f (edict_t *ent)
 	ent->client->showmod = false;
 	ent->client->showmenu = false;
 	cl->showsquadboard = false; // ADC
+	ent->client->showstatboard = false; // BUZZKILL
+	ent->client->showteamstatboard = false; // BUZZKILL
+	ent->client->showrailboard = false; // BUZZKILL
 
 	if (cl->showinventory)
 	{
@@ -960,6 +963,10 @@ void Cmd_PutAway_f (edict_t *ent)
 	ent->client->showmod = false;
 	ent->client->showmenu = false;
 	ent->client->showsquadboard = false; // ADC
+	ent->client->showstatboard = false; // BUZZKILL
+	ent->client->showteamstatboard = false; // BUZZKILL
+	ent->client->showrailboard = false; // BUZZKILL
+
 	//ent->client->awayframe = level.framenum;
 	gi.WriteByte (svc_layout);
 	gi.WriteString ("");
@@ -2339,6 +2346,23 @@ void ClientCommand(edict_t* ent)
 		return;
 	}
 	// ADC
+	// BUZZKILL
+	if (Q_stricmp(cmd, "playerstats") == 0)
+	{
+		Cmd_Statboard_f(ent);
+		return;
+	}
+	if (Q_stricmp(cmd, "teamstats") == 0)
+	{
+		Cmd_TeamStatboard_f(ent);
+		return;
+	}
+	if (Q_stricmp(cmd, "railstats") == 0)
+	{
+		Cmd_Railboard_f(ent);
+		return;
+	}
+	// BUZZKILL
 	if (Q_stricmp(cmd, "help") == 0)
 	{
 		Cmd_Help_f(ent);
