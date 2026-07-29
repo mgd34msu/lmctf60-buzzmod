@@ -177,7 +177,16 @@ void COM_DefaultExtension (char *path, char *extension);
 char *COM_Parse (char **data_p);
 // data is an in/out parm, returns a parsed out token
 
-void Com_sprintf (char *dest, int size, char *fmt, ...);
+// Let the compiler type-check Com_sprintf call sites the way it does printf.
+// Without this every format/argument mismatch in the mod is invisible.
+#if defined(__GNUC__) || defined(__clang__)
+  #define q_printf_fmt(fmtarg, firstvararg) \
+      __attribute__((format(printf, fmtarg, firstvararg)))
+#else
+  #define q_printf_fmt(fmtarg, firstvararg)
+#endif
+
+void Com_sprintf (char *dest, int size, char *fmt, ...) q_printf_fmt(3, 4);
 
 void Com_PageInMemory (byte *buffer, int size);
 

@@ -291,15 +291,14 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 		score = stats_get(cl_ent, STATS_SCORE);
 
         // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
-        rune_strength = stats_get(cl_ent, STATS_RUNE_STRENGTH);
-        rune_haste = stats_get(cl_ent, STATS_RUNE_HASTE);
-        rune_regen = stats_get(cl_ent, STATS_RUNE_REGEN);
-        rune_resist = stats_get(cl_ent, STATS_RUNE_RESIST);
-        item_quad = stats_get(cl_ent, STATS_ITEM_QUAD);
-        item_shield = stats_get(cl_ent, STATS_ITEM_SHIELD);
-        item_armor = stats_get(cl_ent, STATS_ITEM_ARMOR);
-        item_mega = stats_get(cl_ent, STATS_ITEM_MEGA);
-        
+        rune_strength = (int)stats_get(cl_ent, STATS_RUNE_STRENGTH);
+        rune_haste    = (int)stats_get(cl_ent, STATS_RUNE_HASTE);
+        rune_regen    = (int)stats_get(cl_ent, STATS_RUNE_REGEN);
+        rune_resist   = (int)stats_get(cl_ent, STATS_RUNE_RESIST);
+        item_quad     = (int)stats_get(cl_ent, STATS_ITEM_QUAD);
+        item_shield   = (int)stats_get(cl_ent, STATS_ITEM_SHIELD);
+        item_armor    = (int)stats_get(cl_ent, STATS_ITEM_ARMOR);
+        item_mega     = (int)stats_get(cl_ent, STATS_ITEM_MEGA);
         // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
         if (cl_ent->client->ctf.teamnum == CTF_TEAM_RED) // RED TEAM
@@ -610,7 +609,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
         Com_sprintf(entry, sizeof(entry),
             "client %i %i %i %i %i %i ",
-            x, y, redsorted[i], stats_get(cl_ent, STATS_SCORE),
+            x, y, redsorted[i], (int)stats_get(cl_ent, STATS_SCORE),
             cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
             j = (int)strlen(entry);
@@ -624,7 +623,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 Com_sprintf (string2, sizeof(string2),
                     "xv %i yv %i string2 \"C:%i\" ",        // teamname
                     x+32+80, y+24,
-                    stats_get(cl_ent, STATS_CAPTURES));
+                    (int)stats_get(cl_ent, STATS_CAPTURES));
 
                 j = (int)strlen(string2);
                 if (stringlength + j > 1024)
@@ -769,7 +768,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         // send the layout
             Com_sprintf(entry, sizeof(entry),
                 "client %i %i %i %i %i %i ",
-                x, y, bluesorted[i], stats_get(cl_ent, STATS_SCORE),
+                x, y, bluesorted[i], (int)stats_get(cl_ent, STATS_SCORE),
                 cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
             j = (int)strlen(entry);
@@ -783,7 +782,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 Com_sprintf (string2, sizeof(string2),
                     "xv %i yv %i string2 \"C:%i\" ",        // teamname
                     x+32+80, y+24,
-                    stats_get(cl_ent, STATS_CAPTURES));
+                    (int)stats_get(cl_ent, STATS_CAPTURES));
 
                 j = (int)strlen(string2);
                 if (stringlength + j > 1024)
@@ -1098,6 +1097,46 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
     // END PLAY -- LM JORM
 
+    // BUZZKILL - team pickup totals footer.
+    //
+    // These sixteen counters plus the two team scores were being accumulated
+    // above and then thrown away -- nothing ever drew them. Rendered here.
+    //
+    // Each team gets the 20-character half of the 320-wide layout it already
+    // owns: red at xv 0, blue at xv 160.
+    //   itm  Q/S/A/M  = quad, power shield, red armor, mega health
+    //   rne  S/H/G/R  = strength, haste, regen, resist
+    {
+        int rows = (red > blue) ? red : blue;
+        int fy = 48 + 8 * rows + 8;
+
+        // only draw it when the roster leaves vertical room for three rows
+        if (fy + 16 <= 232)
+        {
+            Com_sprintf(string2, sizeof(string2),
+                "xv 0 yv %i string2 \"RED %3i pts\" "
+                "xv 0 yv %i string2 \"itm Q%2i S%2i A%2i M%2i\" "
+                "xv 0 yv %i string2 \"rne S%2i H%2i G%2i R%2i\" "
+                "xv 160 yv %i string2 \"BLUE %3i pts\" "
+                "xv 160 yv %i string2 \"itm Q%2i S%2i A%2i M%2i\" "
+                "xv 160 yv %i string2 \"rne S%2i H%2i G%2i R%2i\" ",
+
+                fy,      redscore,
+                fy + 8,  red_item_quad, red_item_shield, red_item_armor, red_item_mega,
+                fy + 16, red_rune_strength, red_rune_haste, red_rune_regen, red_rune_resist,
+
+                fy,      bluescore,
+                fy + 8,  blue_item_quad, blue_item_shield, blue_item_armor, blue_item_mega,
+                fy + 16, blue_rune_strength, blue_rune_haste, blue_rune_regen, blue_rune_resist);
+
+            j = (int)strlen(string2);
+            if (stringlength + j < 1024)
+            {
+                strcpy(string + stringlength, string2);
+                stringlength += j;
+            }
+        }
+    }
 
 	gi.WriteByte (svc_layout);
 	gi.WriteString (string);
@@ -1322,6 +1361,28 @@ StatboardMessage
 
 ==================
 */
+/*
+==================
+stats_pickup_total
+
+Every powerup and rune this player has picked up this level. StatboardMessage
+gathered these eight counters inside its sort loop, where each iteration
+overwrote the last, and then never read them -- so they could not have been
+displayed even if something had tried. Collected here at render time instead.
+==================
+*/
+static int stats_pickup_total(edict_t* cl_ent)
+{
+    return (int)(stats_get(cl_ent, STATS_RUNE_STRENGTH) +
+                 stats_get(cl_ent, STATS_RUNE_HASTE) +
+                 stats_get(cl_ent, STATS_RUNE_REGEN) +
+                 stats_get(cl_ent, STATS_RUNE_RESIST) +
+                 stats_get(cl_ent, STATS_ITEM_QUAD) +
+                 stats_get(cl_ent, STATS_ITEM_SHIELD) +
+                 stats_get(cl_ent, STATS_ITEM_ARMOR) +
+                 stats_get(cl_ent, STATS_ITEM_MEGA));
+}
+
 void StatboardMessage(edict_t* ent, edict_t* killer)
 {
     char    string[MAX_MSGLEN];
@@ -1339,15 +1400,6 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
     int     bluesortedscores[MAX_CLIENTS];
 
     int     score;
-
-    int     rune_strength;
-    int     rune_haste;
-    int     rune_regen;
-    int     rune_resist;
-    int     item_mega;
-    int     item_armor;
-    int     item_shield;
-    int     item_quad;
 
     int     x, y;
 
@@ -1368,14 +1420,7 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
         score = stats_get(cl_ent, STATS_SCORE);
 
-        rune_strength = stats_get(cl_ent, STATS_RUNE_STRENGTH);
-        rune_haste = stats_get(cl_ent, STATS_RUNE_HASTE);
-        rune_regen = stats_get(cl_ent, STATS_RUNE_REGEN);
-        rune_resist = stats_get(cl_ent, STATS_RUNE_RESIST);
-        item_quad = stats_get(cl_ent, STATS_ITEM_QUAD);
-        item_shield = stats_get(cl_ent, STATS_ITEM_SHIELD);
-        item_armor = stats_get(cl_ent, STATS_ITEM_ARMOR);
-        item_mega = stats_get(cl_ent, STATS_ITEM_MEGA);
+        // per-player pickups are gathered at render time by stats_pickup_total()
 
         if (cl_ent->client->ctf.teamnum == CTF_TEAM_RED)
         {
@@ -1448,14 +1493,15 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
         // send the layout        
         Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i\" ",
+            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i %2i\" ",
 
             x, y,
             cl->pers.netname,
-            stats_get(cl_ent, STATS_FRAGS),
-            stats_get(cl_ent, STATS_OFFENSE_CARRIER),
-            stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE),
-            stats_get(cl_ent, STATS_RETURNS)
+            (int)stats_get(cl_ent, STATS_FRAGS),
+            (int)stats_get(cl_ent, STATS_OFFENSE_CARRIER),
+            (int)(stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE)),
+            (int)stats_get(cl_ent, STATS_RETURNS),
+            stats_pickup_total(cl_ent)
 
         );
 
@@ -1476,14 +1522,18 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
         y = 34 + 8 * i;
 
         Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i\" ",
+            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i %2i\" ",
 
             x, y,
             cl->pers.netname,
-            stats_get(cl_ent, STATS_SCORE),            
-            stats_get(cl_ent, STATS_CAPTURES),
-            stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE),
-            stats_get(cl_ent, STATS_RETURNS)
+            // was STATS_SCORE / STATS_CAPTURES here while the red column showed
+            // frags / flag-carrier kills, so the two halves of the same board were
+            // labelled the same but showed different things. Unified on the red set.
+            (int)stats_get(cl_ent, STATS_FRAGS),
+            (int)stats_get(cl_ent, STATS_OFFENSE_CARRIER),
+            (int)(stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE)),
+            (int)stats_get(cl_ent, STATS_RETURNS),
+            stats_pickup_total(cl_ent)
         
         );
 
@@ -1566,10 +1616,7 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
     int     item_shield;
     int     item_quad;
 
-    //int     x;
-    int     y;
 
-    gclient_t* cl;
     edict_t* cl_ent;
 
     blue = 0;
@@ -1579,7 +1626,6 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
     for (i = 0; i < game.maxclients; i++)
     {
         cl_ent = g_edicts + 1 + i;
-        cl = &game.clients[i];
 
         if (!cl_ent->inuse)
             continue;
@@ -1651,7 +1697,6 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
     string[0] = 0;
     string2[0] = 0;
     stringlength = 0;
-    y = 32 * 8;
 
     // DRAW TEAMSTATBOARD AND ADD TEAM STATS
     {
@@ -1824,12 +1869,14 @@ void RailboardMessage(edict_t* ent, edict_t* killer)
 
             x, y,
             cl->pers.netname,
-            stats_get(cl_ent, STATS_RAIL_KILL),
-            stats_get(cl_ent, STATS_RAIL_HIT),
-            stats_get(cl_ent, STATS_RAIL_SHOT),
-            cl_ent->client->p_stats_player->stats[STATS_RAIL_SHOT] == 0 ? 0 : 100 * 
-            cl_ent->client->p_stats_player->stats[STATS_RAIL_HIT] / 
-            cl_ent->client->p_stats_player->stats[STATS_RAIL_SHOT]
+            (int)stats_get(cl_ent, STATS_RAIL_KILL),
+            (int)stats_get(cl_ent, STATS_RAIL_HIT),
+            (int)stats_get(cl_ent, STATS_RAIL_SHOT),
+            // went straight through p_stats_player, which is NULL for a client
+            // that has not finished connecting. stats_get guards it.
+            stats_get(cl_ent, STATS_RAIL_SHOT) == 0 ? 0 :
+                (int)(100 * stats_get(cl_ent, STATS_RAIL_HIT) /
+                      stats_get(cl_ent, STATS_RAIL_SHOT))
         );
 
         j = strlen(string2);
