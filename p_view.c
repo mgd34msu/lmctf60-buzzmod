@@ -981,6 +981,10 @@ void ClientEndServerFrame (edict_t *ent)
 	current_player = ent;
 	current_client = ent->client;
 
+	// Paril
+	if (!GamePaused())
+	{
+	// Paril
 	if (ent->client->hookstate) // We are still grappled
 	{
 		Weapon_Hook_Fire(ent);
@@ -1077,14 +1081,22 @@ void ClientEndServerFrame (edict_t *ent)
 	// FIXME: with client prediction, the contents
 	// should be determined by the client
 	SV_CalcBlend (ent);
+	// Paril
+	}
+	// Paril
 
 	// chase cam stuff
 	if (ent->client->resp.spectator)
 		G_SetSpectatorStats(ent);
 	else
 		G_SetStats (ent);
+
 	G_CheckChaseStats(ent);
 
+	// Paril
+	if (!GamePaused())
+	{
+	// Paril
 	G_SetClientEvent (ent);
 
 	G_SetClientEffects (ent);
@@ -1099,6 +1111,9 @@ void ClientEndServerFrame (edict_t *ent)
 	// clear weapon kicks
 	VectorClear (ent->client->kick_origin);
 	VectorClear (ent->client->kick_angles);
+	// Paril
+	}
+	// Paril
 	
 	if (ent->client->showscores &&  deathmatch->value)
 	{
@@ -1154,9 +1169,13 @@ void ClientEndServerFrame (edict_t *ent)
 	else 
 		ClientShowID(ent, NULL); 
 
+	// Paril
+	if (GamePaused())
+	{
+		ent->s.sound = 0;
+	}
+	// Paril
 	// END CTF CODE -- LM_CTF
-
-
 }
 
 
@@ -1212,12 +1231,13 @@ int ClientShowMOD(edict_t *ent)
 			"Welcome to %s\nRunning %s\n"
 			"Pak File is available at:\n\" "
 			"xv %i yv %i cstring2 \""
-			"http://www.lmctf.com\n\n",
+			"%s\n\n",
 			0,40,
 			color,
 			hostname->string,
 			GAMEVERSION,
-			0,85 );
+			0,85,
+			mod_website->string);
 		
 		strcat(string, "\" ");
 

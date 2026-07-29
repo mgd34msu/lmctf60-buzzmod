@@ -178,7 +178,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     char    entry[MAX_MSGLEN];
     char    string[MAX_MSGLEN];
     char    string2[MAX_MSGLEN];  // TEAM PLAY -- LM_JORM
-	char	mvpstring[64];
+	char	mvpstring[100];
 	int     bluescore, redscore;  // TEAM PLAY -- LM_JORM
     int     bluecaps, redcaps;  // TEAM PLAY -- LM_JORM
     int     blue, red;  // TEAM PLAY -- LM_JORM
@@ -214,7 +214,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
     size_t  stringlength;
     int     i;
-    size_t  j;
+    int     j;
     int     k;
     int     l;
     
@@ -515,7 +515,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             "xv 160 yv 40 string2 \"------------------- \" "
             );
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j <= 1024)
         {
             strcpy (string + stringlength, string2);
@@ -573,7 +573,8 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     stats_get(cl_ent, STATS_SCORE), cl->ping > 999 ? 999 : cl->ping);
             }
             
-            j = strlen(string2);
+            
+            j = (int)strlen(string2);
             if (stringlength + j > 1024)
                 break;
             strcpy (string + stringlength, string2);
@@ -597,7 +598,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             {
                 Com_sprintf (entry, sizeof(entry),
                     "xv %i yv %i picn %s ",x+32, y, tag);
-                j = strlen(entry);
+                j = (int)strlen(entry);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, entry);
@@ -612,7 +613,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             x, y, redsorted[i], stats_get(cl_ent, STATS_SCORE),
             cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
-            j = strlen(entry);
+            j = (int)strlen(entry);
             if (stringlength + j > 1024)
                 break;
             strcpy (string + stringlength, entry);
@@ -625,7 +626,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     x+32+80, y+24,
                     stats_get(cl_ent, STATS_CAPTURES));
 
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, string2);
@@ -657,7 +658,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 Com_sprintf (string2, sizeof(string2),
                     "xv %d yv %d picn dmvpicon ",
                     x, y);
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, string2);
@@ -668,7 +669,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 Com_sprintf (string2, sizeof(string2),
                     "xv %d yv %d picn omvpicon ",
                     x, y);
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, string2);
@@ -733,7 +734,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 					cl->ping > 999 ? 999 : cl->ping);
 			}
 
-            j = strlen(string2);
+            j = (int)strlen(string2);
             if (stringlength + j > 1024)
                 break;
             strcpy (string + stringlength, string2);
@@ -758,7 +759,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             {
                 Com_sprintf (entry, sizeof(entry),
                     "xv %i yv %i picn %s ",x+32, y, tag);
-                j = strlen(entry);
+                j = (int)strlen(entry);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, entry);
@@ -771,7 +772,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 x, y, bluesorted[i], stats_get(cl_ent, STATS_SCORE),
                 cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
-            j = strlen(entry);
+            j = (int)strlen(entry);
             if (stringlength + j > 1024)
                 break;
             strcpy (string + stringlength, entry);
@@ -784,7 +785,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     x+32+80, y+24,
                     stats_get(cl_ent, STATS_CAPTURES));
 
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, string2);
@@ -817,7 +818,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 Com_sprintf (string2, sizeof(string2),
                     "xv %d yv %d picn dmvpicon ",
                     x, y);
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, string2);
@@ -828,7 +829,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 Com_sprintf (string2, sizeof(string2),
                     "xv %d yv %d picn omvpicon ",
                     x, y);
-                j = strlen(string2);
+                j = (int)strlen(string2);
                 if (stringlength + j > 1024)
                     break;
                 strcpy (string + stringlength, string2);
@@ -879,7 +880,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 			y += 8;
 		}
 
-		j = strlen(string2);
+		j = (int)strlen(string2);
 		if (stringlength + j <= 1024)
 		{
 			strcpy (string + stringlength, string2);
@@ -904,7 +905,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     y += 8;
                 }
 
-                j = strlen(string2);
+			j = (int)strlen(string2);
                 if (stringlength + j <= 1024)
                 {
                     strcpy(string + stringlength, string2);
@@ -929,7 +930,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     y += 8;
                 }
 
-                j = strlen(string2);
+			j = (int)strlen(string2);
                 if (stringlength + j <= 1024)
                 {
                     strcpy(string + stringlength, string2);
@@ -966,7 +967,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                             y += 8;
                     }
 
-                    j = strlen(string2);
+				j = (int)strlen(string2);
                     if (stringlength + j <= 1024)
                     {
                         strcpy(string + stringlength, string2);
@@ -989,7 +990,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                         y += 8;
                     }
 
-                    j = strlen(string2);
+				j = (int)strlen(string2);
                     if (stringlength + j <= 1024)
                     {
                         strcpy(string + stringlength, string2);
@@ -1025,7 +1026,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
             x, y, entry
             );
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j <= 1024)
         {
             strcpy (string + stringlength, string2);
@@ -1087,7 +1088,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
         );
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j < 1024)
         {       
             strcpy (string + stringlength, string2);
@@ -1263,7 +1264,7 @@ void CTFSquadboardMessage (edict_t *ent, edict_t* killer) // ADC
 		{
 			squad = sortedClients[i]->pers.squad;
 
-			sprintf(entry+strlen(entry),
+			sprintf(entry+(int)strlen(entry),
 				"xv 0 yv %d string \"%s\" ",
 				42 + i * 8 + numCategoryLines * 8,
 				sortedClients[i]->pers.squad);
@@ -1284,7 +1285,7 @@ void CTFSquadboardMessage (edict_t *ent, edict_t* killer) // ADC
 		// for a netname. We want the names padded with spaces
 		// to make the status line up.
 
-		sprintf(entry+strlen(entry),
+		sprintf(entry+(int)strlen(entry),
 			"xv 0 yv %d %s \"   %-*s %s\" ",
 			42 + i * 8 + numCategoryLines * 8,
 			ready ? readyString : notReadyString,

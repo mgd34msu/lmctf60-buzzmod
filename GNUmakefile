@@ -48,10 +48,29 @@
 # Step 7: Type "make" to build your mod.
 ######################################################################
 
+PLATFORM := $(shell uname 2>/dev/null || echo Windows)
+PLATFORM := $(patsubst CYGWIN%,Cygwin,$(PLATFORM))
+PLATFORM := $(patsubst MSYS%,Cygwin,$(PLATFORM))
+PLATFORM := $(patsubst MINGW%,Windows,$(PLATFORM))
+PLATFORM := $(patsubst UCRT%,Windows,$(PLATFORM))
+PLATFORM := $(patsubst CLANG%,Windows,$(PLATFORM))
+
 # this nice line comes from the linux kernel makefile
 ARCH := $(shell uname -m | sed -e s/i.86/i386/ \
 	-e s/sun4u/sparc64/ -e s/arm.*/arm/ \
 	-e s/sa110/arm/ -e s/alpha/axp/)
+
+ifeq ($(PLATFORM),Windows)
+	ifeq ($(patsubst MINGW32%,,$(shell uname 2>/dev/null)),)
+		ARCH := x86
+	endif
+	ifeq ($(patsubst CLANG32%,,$(shell uname 2>/dev/null)),)
+		ARCH := x86
+	endif
+	ifeq ($(ARCH),i386)
+		ARCH := x86
+	endif
+endif
 
 # On 64-bit OS use the command: 'setarch i386 make' after 'make clean'
 # to obtain the 32-bit binary DLL on 64-bit Linux.
@@ -62,12 +81,19 @@ ARCH := $(shell uname -m | sed -e s/i.86/i386/ \
 # On Ubuntu 16.x use sudo apt install libc6-dev-i386
 # this will let you build 32-bits on ia64 systems
 #
+ifndef REV
+    REV := $(shell git rev-list HEAD | wc -l)
+endif
+
+ifndef VER
+    VER := r$(REV)~$(shell git rev-parse --short HEAD)
+endif
 
 # This is for native build
-CFLAGS=-O3 -DARCH="$(ARCH)" -DSTDC_HEADERS
+CFLAGS=-O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
 # This is for 32-bit build on 64-bit host
 ifeq ($(ARCH),i386)
-CFLAGS =-m32 -O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -I/usr/include
+CFLAGS =-m32 -O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"' -I/usr/include
 endif
 
 ######################################################################
@@ -124,27 +150,40 @@ L_OBJS =
 #
 OBJS = $(C_OBJS) $(G_OBJS) $(M_OBJS) $(P_OBJS) $(Q_OBJS)
 
-TARGET = game$(ARCH).so
+TARGET = game$(ARCH)-lmctf-$(VER).so
 
 CC = gcc -std=c11
 
 SHELL = /bin/sh
+#for Windows or when we don't know the OS.
+LIBTOOL = ldd
+CFLAGS += -g -Wall
 
-CFLAGS += -g -Wall -Wparentheses
+# Windows / MinGW (incl. MSYS2 MinGW)
+ifeq ($(PLATFORM),Windows)
+TARGET = game$(ARCH)-lmctf-$(VER).dll
+endif
+
+# MSYS2 / Cygwin
+ifeq ($(PLATFORM),Cygwin)
+TARGET = game$(ARCH)-lmctf-$(VER).dll
+CFLAGS += -DLINUX
+LDFLAGS = -ldl -lm
+endif
 
 # flavors of Linux
 ifeq ($(shell uname),Linux)
-#SVNDEV := -D'SVN_REV="$(shell svnversion -n .)"'
-#CFLAGS += $(SVNDEV)
 CFLAGS += -DLINUX
-LIBTOOL = ldd
+LDFLAGS = -ldl -lm
+ifeq ("$(wildcard /etc/alpine-release)","")
+LIBTOOL = ldd -r
+endif
 endif
 
 # OS X wants to be Linux and FreeBSD too.
 ifeq ($(shell uname),Darwin)
-#SVNDEV := -D'SVN_REV="$(shell svnversion -n .)"'
-#CFLAGS += $(SVNDEV)
 CFLAGS += -DLINUX
+LDFLAGS = -ldl -lm
 LIBTOOL = otool
 endif
 
@@ -157,7 +196,7 @@ endif
 #LDFLAGS =
 
 # but Slackware people do
-LDFLAGS = -ldl -lm
+#LDFLAGS = -ldl -lm
 
 SHLIBCFLAGS = -fPIC
 SHLIBLDFLAGS = -shared
@@ -166,14 +205,17 @@ SHLIBLDFLAGS = -shared
 # Targets
 ######################################################################
 
-all: dep $(TARGET)
+all: GitRevisionInfo dep $(TARGET)
+
+GitRevisionInfo:
+	sed -e 's/\$$//g' GitRevisionInfo.tmpl | sed -e "s/WCLOGCOUNT+2/${REV}/g" | sed -e "s/WCREV=7/${VER}/g"  | sed -e "s/WCNOW=%Y/$(shell date +%Y)/g" > GitRevisionInfo.h
 
 .c.o:
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -o $@ -c $<
 
 $(TARGET):	$(OBJS) $(L_OBJS)
 		$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(OBJS) $(L_OBJS) $(LDFLAGS)
-		$(LIBTOOL) -r $@
+		$(LIBTOOL) $@
 
 dep:
 	@echo "Updating dependencies..."
@@ -189,7 +231,7 @@ stripcr:	.
 
 clean:
 		@echo "Deleting temporary files..."
-		@rm -f $(OBJS) *.orig ~* core
+		@rm -f $(OBJS) GitRevisionInfo.h *.orig ~* core
 
 distclean:	clean
 		@echo "Deleting everything that can be rebuilt..."

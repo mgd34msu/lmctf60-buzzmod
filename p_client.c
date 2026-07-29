@@ -12,10 +12,12 @@
 #include "bat.h"
 
 // Lithium II Zbot detect plugin
+#ifdef ZBOT
 qboolean ZbotCheck(edict_t *ent, usercmd_t *ucmd);
+#endif
 
 void ClientUserinfoChanged (edict_t *ent, char *userinfo);
-void Check_Drop_Flag(edict_t *ent);
+//void Check_Drop_Flag(edict_t *ent);
 void SP_misc_teleporter_dest (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
 void Cmd_Observe_f(edict_t *ent, int Observer_Type);
@@ -1097,13 +1099,13 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 
 /*
 ==============
-InitClientPersistant
+InitClientPersistent
 
 This is only called when the game first initializes in single player,
 but is called after each death and level change in deathmatch
 ==============
 */
-void InitClientPersistant (gclient_t *client)
+void InitClientPersistent (gclient_t *client)
 {
 	gitem_t		*item;
 
@@ -1178,7 +1180,7 @@ void InitClientResp (gclient_t *client)
 ==================
 SaveClientData
 
-Some information that should be persistant, like health, 
+Some information that should be persistent, like health, 
 is still stored in the edict structure, so it needs to
 be mirrored out to the client structure before all the
 edicts are wiped.
@@ -1763,10 +1765,10 @@ int i, numspec;
 	}
 	else
 	{
-		//I only want to do this shit if they have typed the spectator command!
+		//I only want to do this if they have typed the spectator command!
 		if(ent->client->ctf.teamnum != CTF_TEAM_RED &&
 			ent->client->ctf.teamnum != CTF_TEAM_BLUE)
-		 		ent->client->ctf.New_Team = Team_To_Join(ent);
+	 		ent->client->ctf.New_Team = Team_To_Join(ent);
 
 		gi.bprintf (PRINT_HIGH, "%s joined the game\n", ent->client->pers.netname);
 	}
@@ -1808,7 +1810,7 @@ void PutClientInServer (edict_t *ent)
 	vec3_t spawn_angles;
 	gclient_t *client;
 	int 	i;
- 	client_persistant_t	saved;
+ 	client_persistent_t	saved;
 	client_respawn_t	resp;
 	stats_player_s *p_saved_stats = NULL; // STATS - LM_Hati
 
@@ -1831,17 +1833,17 @@ void PutClientInServer (edict_t *ent)
 		resp = client->resp;
 		memcpy (userinfo, client->pers.userinfo, sizeof(userinfo));
 
-		// We don't want to loose the squad so save it
+		// We don't want to lose the squad so save it
 		// off here first, then copy it back. The unitstatus
 		// will be set to "respawned" elsewhere.
 
-		strncpy (savedsquad, ent->client->pers.squad, MAX_CATEGORY_LEN-1); // ADC
+		strncpy (savedsquad, ent->client->pers.squad, sizeof savedsquad); // ADC
 		savedsquad[MAX_CATEGORY_LEN-1] = 0; // ADC
 
-		InitClientPersistant (client);
+		InitClientPersistent (client);
 		ClientUserinfoChanged (ent, userinfo);
 
-		strncpy (ent->client->pers.squad, savedsquad, MAX_CATEGORY_LEN-1); // ADC
+		strncpy (ent->client->pers.squad, savedsquad, MAX_CATEGORY_LEN); // ADC
 		ent->client->pers.squad[MAX_CATEGORY_LEN-1] = 0; // ADC
 	}
 	else if (coop->value)
@@ -1879,7 +1881,7 @@ void PutClientInServer (edict_t *ent)
 
 	
 	if(client->pers.health <= 0)
-		InitClientPersistant(client);
+		InitClientPersistent(client);
 	
 	client->resp = resp;
 
@@ -2253,7 +2255,7 @@ void ClientBegin (edict_t *ent)
 	else
 	{
 		// a spawn point will completely reinitialize the entity
-		// except for the persistant data that was initialized at
+		// except for the persistent data that was initialized at
 		// ClientConnect() time
 		G_InitEdict (ent);
 		ent->classname = "player";
@@ -2446,7 +2448,7 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 		// clear the respawning variables
 		InitClientResp (ent->client);
 		if (!game.autosaved || !ent->client->pers.weapon)
-			InitClientPersistant (ent->client);
+			InitClientPersistent (ent->client);
 	}
 
 	ClientUserinfoChanged (ent, userinfo);
@@ -2510,7 +2512,7 @@ void ClientDisconnect (edict_t *ent)
 	int 	playernum;
 	edict_t	*flag;  // CTF CODE -- LM_JORM
 	char message[MAX_INFO_STRING];
-	
+
 	if (!ent->client)
 		return;
 	
@@ -2521,7 +2523,11 @@ void ClientDisconnect (edict_t *ent)
 		ent->client->p_stats_player->info.teamnum = ent->client->ctf.teamnum;
 	}
 	// STATS-END LM_Hati
-	
+
+	// Players drop runes on quit. //QW//
+	if(ent->client->rune)
+		Drop_Rune(ent, ent->client->rune->item);
+
 	// CTF CODE -- LM_JORM
 	ent->client->ctf.extra_flags &= ~CTF_EXTRAFLAGS_REFEREE; // Turn off referee mode
 	ent->client->ctf.extra_flags &= ~CTF_EXTRAFLAGS_RCON; //turn off rcon mode
@@ -2567,7 +2573,7 @@ void ClientDisconnect (edict_t *ent)
 	playernum = ent-g_edicts-1;
 	gi.configstring (CS_PLAYERSKINS+playernum, "");
 	
-	ctf_ClientDisconnect(ent);
+	//ctf_ClientDisconnect(ent);
 	
 }
 
@@ -2735,12 +2741,13 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 		   Original code by gaia, I added the 
 		   macro condition. */
 
-#ifdef WANT_FUNKY_GRAVITY
-		if(ent->s.origin[2] > 0) //gaia
-			client->ps.pmove.gravity = -800;
-		else
-			client->ps.pmove.gravity = 800;
-#endif
+		//QW Changed macro to a cvar so admin can control this.
+		if (want_funky_gravity->value) {
+			if (ent->s.origin[2] > 0) //gaia
+				client->ps.pmove.gravity = -800;
+			else
+				client->ps.pmove.gravity = 800;
+		}
 
 		pm.s = client->ps.pmove;
 
@@ -2846,6 +2853,9 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	//bat not needed for team observers
 	//if(client->ctf.teamnum != CTF_TEAM_OBSERVER_RED &&
 	//	client->ctf.teamnum != CTF_TEAM_OBSERVER_BLUE)
+	// Paril
+	if (!GamePaused())
+	// Paril
 	{
 		if (client->latched_buttons & BUTTON_ATTACK)
 		{
@@ -2873,7 +2883,6 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 
 	if (client->resp.spectator) 
 	{
-		
 		if(client->ctf.teamnum == CTF_TEAM_OBSERVER_RED &&
 			!Team_Observer_OK(CTF_TEAM_RED, ent))
 		{
@@ -3254,7 +3263,7 @@ void ClientOldSetSkin(edict_t *ent, char *input)
 			strcmp(set, curset))
 		{
 			color = (ent->client->ctf.teamnum == CTF_TEAM_RED) ? 'r' : 'b';
-			sprintf(skin, "%s/%s-%c%c%d", dir, curset, color, gender, num);
+			Com_sprintf(skin, sizeof skin, "%s/%s-%c%c%d", dir, curset, color, gender, num);
 			s = skin;
 		}
 	}
@@ -3281,7 +3290,7 @@ void ClientOldSetSkin(edict_t *ent, char *input)
 			else
 				num = skinnum % 2;
 		}
-		sprintf(skin, "%s/%s-%c%c%d", dir, curset, color, gender, num);
+		Com_sprintf(skin, sizeof skin, "%s/%s-%c%c%d", dir, curset, color, gender, num);
 		s = skin;
 	}
 	

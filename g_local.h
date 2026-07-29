@@ -1,15 +1,15 @@
 // g_local.h -- local definitions for game module
 
-#ifndef __G_LOCAL_H__
-#define __G_LOCAL_H__
+#pragma once
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN	//non-MFC
+#define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
 #include <crtdbg.h>
-_CrtMemState startup1;	// memory diagnostics
+extern _CrtMemState startup1;	// memory diagnostics
 #else
 #define OutputDebugString	//not doing Windows
 #endif
@@ -19,6 +19,20 @@ _CrtMemState startup1;	// memory diagnostics
 //#define ZBOT
 
 //#define OLDOBSERVERCODE
+
+// shared lib symbol visibility
+#if defined _WIN32 || defined __CYGWIN__
+  #define q_imported __declspec(dllimport)
+  #define q_exported __declspec(dllexport)
+#else
+  #if __GNUC__ >= 4
+    #define q_imported __attribute__ ((visibility ("default")))
+    #define q_exported __attribute__ ((visibility ("default")))
+  #else
+    #define q_imported
+    #define q_exported
+  #endif
+#endif
 
 #include "q_shared.h"
 
@@ -33,8 +47,18 @@ _CrtMemState startup1;	// memory diagnostics
 
 #include "game.h"
 
+#include "GitRevisionInfo.h" // Derived from template via GitWCRev
+
+
+#define ISREF(ent) (ent->client->ctf.extra_flags & CTF_EXTRAFLAGS_REFEREE)
+#define CLAMP(val, low, high) ((val < low) ? low : (val > high) ? high : val)
+
 // the "gameversion" client command will print this plus compile date
-#define GAMEVERSION     "LMCTF 6.1a" //surt was baseq2
+#define GAMEVERSION     "LMCTF TE 6.0"
+
+#ifndef VER
+#define VER "r00~0000000"
+#endif
 
 #include "p_stats.h" // STATS - LM_Hati
 #include "g_menu.h" // MENUS - LM_Jorm
@@ -310,6 +334,7 @@ typedef struct
 	int			num_items;
 
 	qboolean	autosaved;
+	qboolean	teamslocked;
 } game_locals_t;
 
 
@@ -585,18 +610,30 @@ extern  cvar_t  *maplist_file;  // CTF CODE -- LM_SURT
 extern  cvar_t  *skin_file;     // CTF CODE -- LM_SURT
 extern  cvar_t  *skin_debug;    // For debugging skins file
 extern  cvar_t  *disabled_weps; // CTF CODE -- LM_SURT
-
+extern  cvar_t  *flag_init;
+extern  cvar_t  *fastswitch;
+extern  cvar_t  *mod_website;   // URL to show in team join centerprint
+extern  cvar_t  *autolock;      // lock/unlock teams with match status
+extern  cvar_t  *countdown_time; // the number of seconds to count before match start
+extern  cvar_t  *want_funky_gravity; // put players on ceiling if z-pos > 0
 
 #ifdef ZBOT
 extern  cvar_t  *use_zbotdetect; // CTF CODE -- LM_Hati
 #endif
+
+typedef struct MapInfo {
+	char *mapname;
+	int  minplayers;
+	int  maxplayers;
+        struct MapInfo *next;
+} MapInfo;
 
 extern  edict_t *redflag; // CTF CODE -- LM_JORM
 extern  edict_t *blueflag; // CTF CODE -- LM_JORM
 
 extern  char    motd[1000]; // CTF CODE -- LM_JORM
 
-extern  char    maplist[100][100]; // CTF CODE -- LM_JORM
+extern  MapInfo maplist[300]; // CTF CODE -- LM_JORM
 extern  int     maplistindex; // CTF CODE -- LM_JORM
 
 extern  int     bluescore, redscore; // CTF CODE -- LM_JORM
@@ -604,8 +641,10 @@ extern  int     bluescore, redscore; // CTF CODE -- LM_JORM
 extern  char    helptext[1000][25]; // CTF CODE -- LM_JORM
 
 extern	cvar_t	*sv_maplist;
+extern  int quad_respawn_time;
 
 #define world	(&g_edicts[0])
+
 
 // item spawnflags
 #define ITEM_TRIGGER_SPAWN		0x00000001
@@ -650,7 +689,9 @@ typedef struct
 extern	field_t fields[];
 extern	gitem_t	itemlist[];
 
-
+void SortMaplist(MapInfo arr[], int min, int max);
+int MapDivide(MapInfo arr[], int min, int max);
+void flip(MapInfo* x, MapInfo* y);
 //
 // g_cmds.c
 //
@@ -663,6 +704,7 @@ void Cmd_Squadboard_f (edict_t *ent); // ADC
 void Cmd_Statboard_f(edict_t* ent); // BUZZKILL
 void Cmd_TeamStatboard_f(edict_t* ent); // BUZZKILL
 void Cmd_Railboard_f(edict_t* ent); // BUZZKILL
+void Cmd_ToggleFastSwitch_f(edict_t *ent);
 
 //
 // g_items.c
@@ -826,11 +868,11 @@ edict_t	*PlayerTrail_LastSpot (void);
 void respawn (edict_t *ent);
 void BeginIntermission (edict_t *targ);
 void PutClientInServer (edict_t *ent);
-void InitClientPersistant (gclient_t *client);
+void InitClientPersistent (gclient_t *client);
 void InitClientResp (gclient_t *client);
 void InitBodyQue (void);
 void ClientBeginServerFrame (edict_t *ent);
-int     SexedSoundIndex (edict_t *ent, char *base);
+//int     SexedSoundIndex (edict_t *ent, char *base);
 
 // TEAM CODE -- LM_JORM
 void ClientSetSkin(edict_t *ent, char *skin);
@@ -1003,12 +1045,12 @@ typedef struct
 	int			helpchanged;
 
 	qboolean	spectator;			// client is a spectator
-} client_persistant_t;
+} client_persistent_t;
 
 // client data that stays across deathmatch respawns
 typedef struct
 {
-	client_persistant_t	coop_respawn;	// what to set client->pers to on a respawn
+	client_persistent_t	coop_respawn;	// what to set client->pers to on a respawn
 	int			enterframe;			// level.framenum the client entered the game
 	int			score;				// frags, etc
 	vec3_t		cmd_angles;			// angles sent over in the last command
@@ -1020,7 +1062,7 @@ typedef struct
 //surt LMCTF
 typedef struct
 {
-	int                             teamnum; //make this persistant
+	int                             teamnum; //make this persistent
 	int								New_Team; //bat
 	int                             extra_flags; //assorted other flags
 	qboolean                        goodskin;       // Flags that skin has been approved, no need to forcecommand
@@ -1078,7 +1120,7 @@ struct gclient_s
 	int				ping;
 
 	// private to game
-	client_persistant_t	pers;
+	client_persistent_t	pers;
 	client_respawn_t	resp;
 	pmove_state_t		old_pmove;	// for detecting out-of-pmove changes
 
@@ -1374,5 +1416,6 @@ struct edict_s
 	playerstats_t ctfstats;
 };
 
+#define LM_QUAD_DEFAULT_TIME 60
 
 #endif

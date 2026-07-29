@@ -1,16 +1,10 @@
 	
 // q_shared.h -- included first by ALL program modules
 
-#ifdef _WIN32
-// unknown pragmas are SUPPOSED to be ignored, but....
-#pragma warning(disable : 4244)     // data conversions
-#pragma warning(disable : 4018)     // signed/unsigned mismatch
-#pragma warning(disable : 4459)		// declaration of 'var' hides global declaration
-
-//surt ... trying to find errors at max debug level
-#pragma warning(disable : 4100) //unreferenced formal parameter lots in id code
-//end surt code
-
+#if defined _WIN32 && defined _MSC_VER
+#pragma warning(disable : 4244)    // data conversions
+#pragma warning(disable : 4459)    // declaration of 'var' hides global declaration
+#pragma warning(disable : 4100)    //unreferenced formal parameter lots in id code
 #endif
 
 #include <assert.h>
@@ -19,20 +13,9 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <ctype.h>
 #include <time.h>
-
-#if (defined _M_IX86 || defined __i386__) && !defined C_ONLY && !defined __sun__
-#define id386	1
-#else
-#define id386	0
-#endif
-
-#if defined _M_ALPHA && !defined C_ONLY
-#define idaxp	1
-#else
-#define idaxp	0
-#endif
 
 typedef unsigned char 		byte;
 typedef enum {false, true}	qboolean;
@@ -127,12 +110,6 @@ extern vec3_t vec3_origin;
 
 #define	IS_NAN(x) (((*(int *)&x)&nanmask)==nanmask)
 
-#if !defined C_ONLY && !defined __linux__ && !defined __sgi
-extern long Q_ftol( float f );
-#else
-#define Q_ftol( f ) ( long ) (f)
-#endif
-
 #define DotProduct(x,y)			(x[0]*y[0]+x[1]*y[1]+x[2]*y[2])
 #define VectorSubtract(a,b,c)	(c[0]=a[0]-b[0],c[1]=a[1]-b[1],c[2]=a[2]-b[2])
 #define VectorAdd(a,b,c)		(c[0]=a[0]+b[0],c[1]=a[1]+b[1],c[2]=a[2]+b[2])
@@ -166,7 +143,7 @@ void R_ConcatTransforms (float in1[3][4], float in2[3][4], float out[3][4]);
 void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up);
 int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, struct cplane_s *plane);
 float	anglemod(float a);
-float LerpAngle (float a1, float a2, float frac);
+float LerpAngle (float a2, float a1, float frac);
 
 #define BOX_ON_PLANE_SIDE(emins, emaxs, p)	\
 	(((p)->type < 3)?						\
@@ -754,7 +731,7 @@ typedef struct
 #define MZ2_SOLDIER_SHOTGUN_8			99
 #define MZ2_SOLDIER_MACHINEGUN_8		100
 
-// --- Xian shit below ---
+// --- Xian stuff below ---
 #define	MZ2_MAKRON_BFG					101
 #define MZ2_MAKRON_BLASTER_1			102
 #define MZ2_MAKRON_BLASTER_2			103

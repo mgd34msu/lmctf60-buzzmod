@@ -457,6 +457,12 @@ qboolean ctf_spawnflag(int teamnum)
 		//ent->s.effects |= EF_COLOR_SHELL | EF_FLAG1;
 		//ent->s.renderfx |= RF_SHELL_RED;
 		ent->s.effects = EF_FLAG1;
+		// Paril
+		if (flag_init->value)
+			ent->s.frame = 173;
+		else
+			ent->s.frame = 0;
+		// Paril
 		redflag = ent;
 	}
 	else if (teamnum == CTF_TEAM_BLUE && !blueflag) // BLUE FLAG
@@ -500,6 +506,12 @@ qboolean ctf_spawnflag(int teamnum)
 		//ent->s.effects |= EF_COLOR_SHELL | EF_FLAG2;
 		//ent->s.renderfx |= RF_SHELL_BLUE;
 		ent->s.effects = EF_FLAG2;
+		// Paril
+		if (flag_init->value)
+			ent->s.frame = 173;
+		else
+			ent->s.frame = 0;
+		// Paril
 		blueflag = ent;
 	}
 
@@ -664,9 +676,8 @@ void ctf_playerdropflag(edict_t * whichplayer, gitem_t *item)
 
 			//annouce to the world
 			ctf_teamstring(flagcolor, whichplayer->client->ctf.teamnum, CTF_TEAM_OPPOSING);
-			sprintf(message,"%s lost the %s flag.\n",
-				whichplayer->client->pers.netname,
-				flagcolor );
+			Com_sprintf(message, sizeof message, "%s lost the %s flag.\n",
+				whichplayer->client->pers.netname, flagcolor );
 			stats_set(whichplayer, STATS_IS_FC, 0);
 			
 			stats_add(whichplayer, STATS_OFFENSE_FLAGLOST, 1); // STATS - LM_Hati
@@ -1327,21 +1338,23 @@ qboolean ctf_SpamCheck(edict_t *ent)
 	return result;
 }
 
-void ctf_ClientDisconnect(edict_t *ent)
-{
-	if ((ctf_findplayer(NULL, NULL, CTF_TEAM_IGNORETEAM)) == NULL)
-	{
-		if (level.time > 60)
-		{
-			char serverstring[60];
-			stats_cleanup();
-			sprintf(serverstring, "exec %s\n", server_file->string);
-			gi.AddCommandString("echo Server Empty, Resetting Server as precaution.\n");
-			gi.AddCommandString("set refset 0\n");
-			gi.AddCommandString(serverstring);
-		}
-	}
-}
+//QW// This function is scheduled for demolition. Not needed.
+//
+//void ctf_ClientDisconnect(edict_t *ent)
+//{
+//	if ((ctf_findplayer(NULL, NULL, CTF_TEAM_IGNORETEAM)) == NULL)
+//	{
+//		if (level.time > 60)
+//		{
+//			char serverstring[60];
+//			stats_cleanup();
+//			sprintf(serverstring, "exec %s\n", server_file->string);
+//			gi.AddCommandString("echo Server Empty, Resetting Server as precaution.\n");
+//			gi.AddCommandString("set refset 0\n");
+//			gi.AddCommandString(serverstring);
+//		}
+//	}
+//}
 
 void ctf_SetEntTeam(edict_t* ent, int whatteam)
 {
@@ -1422,7 +1435,7 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	//}
 	
 
-	sprintf(message,"%s is now on the %s team.\n", ent->client->pers.netname, buf);
+	Com_sprintf(message, sizeof message, "%s is now on the %s team.\n", ent->client->pers.netname, buf);
 	ctf_BSafePrint(PRINT_HIGH, message);
 }
 
@@ -1548,9 +1561,9 @@ void ctf_ChangeMap(char *mapname, qboolean startmatch)
     level.intermissiontime = 0;
     stats_cleanup(); // STATS - LM_Hati
     KillMatch();
-    if (startmatch)
+    if (startmatch) {
 		matchstate = MATCH_COUNTDOWN;
-	else
+    } else {
 		matchstate = MATCH_NONE;
 }
 

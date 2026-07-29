@@ -220,7 +220,7 @@ static void _sl_LogTime(void)
 
 static void _sl_LogDeathFlags(unsigned long dmFlags)
 {
-    fprintf(StdLogFile, "\t\tLogDeathFlags\t%ld\n", dmFlags);
+    fprintf( StdLogFile, "\t\tLogDeathFlags\t%lu\n", dmFlags );
 }
 
 static void _sl_LogMapName(char* pMapName)

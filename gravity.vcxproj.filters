@@ -309,11 +309,11 @@
     <ClInclude Include="g_vote.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GitRevisionInfo.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="team.def">
-      <Filter>Resource Files</Filter>
-    </None>
     <None Include="deaths.txt">
       <Filter>Information files</Filter>
     </None>
@@ -329,9 +329,13 @@
     <None Include="TE todo.txt">
       <Filter>Information files</Filter>
     </None>
-    <None Include=".travis.yml" />
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="GNUmakefile" />
+    <None Include="Makefile" />
+    <None Include="team.def">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="GNUmakefile" />
+    <None Include="GitRevisionInfo.tmpl">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>
