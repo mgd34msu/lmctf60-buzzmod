@@ -82,16 +82,18 @@ jobs:
       # PreBuildEventUseInBuild=false skips the project's pre-build step, which
       # shells out to GitWCRev.exe and fails with 9009 on a runner. The header it
       # would have written was already generated above.
+      # PowerShell, not bash: setup-msbuild only puts msbuild on the PATH the
+      # Windows shells see. Output is teed rather than using /flp, whose
+      # semicolon PowerShell would treat as a command separator.
       - name: Build
-        shell: bash
-        run: >
-          msbuild gravity.sln
-          /p:Configuration=Release
-          /p:Platform=${{ matrix.platform }}
-          /p:OutDir=${{ github.workspace }}/build/${{ matrix.arch }}/
-          /p:PreBuildEventUseInBuild=false
-          /m
-          '/flp:logfile=build.log;verbosity=normal'
+        run: |
+          msbuild gravity.sln `
+            /p:Configuration=Release `
+            /p:Platform=${{ matrix.platform }} `
+            /p:OutDir=${{ github.workspace }}/build/${{ matrix.arch }}/ `
+            /p:PreBuildEventUseInBuild=false `
+            /m 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Same gate the Linux job has. sqlite3.c is vendored and built with
       # warnings off, so anything left here is ours.
