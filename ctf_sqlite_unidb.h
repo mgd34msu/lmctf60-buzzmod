@@ -27,3 +27,18 @@ qboolean DB_LoadPlayer(edict_t *player);
 qboolean DB_SavePlayer(edict_t *player);
 
 #endif
+
+/*
+ * Match history.
+ *
+ * A row per match plus a row per player per match, which is what makes recent
+ * form, per-map performance and trends possible. Lifetime totals alone can only
+ * ever answer "how good are they", never "how did last night go".
+ *
+ * Unified backend only: a per-player file has nowhere sensible to put a match
+ * that several people played in.
+ */
+int      DB_MatchBegin(const char *mapname);   // new match row, returns match_id
+void     DB_MatchRecord(edict_t *player, int match_id, int team);
+qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
+                        int red_caps, int blue_caps, int winner, int duration);

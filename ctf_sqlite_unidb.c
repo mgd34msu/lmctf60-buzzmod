@@ -44,6 +44,34 @@
 #define DB_CREATECDATA \
 	"CREATE TABLE IF NOT EXISTS [character_data] ([char_idx] INTEGER,  [adminlevel] INTEGER)"
 
+// One row per match played.
+#define DB_CREATEMATCHES \
+	"CREATE TABLE IF NOT EXISTS [matches] (" \
+	"[match_id] INTEGER PRIMARY KEY AUTOINCREMENT, [mapname] CHAR(64), " \
+	"[started] CHAR(30), [ended] CHAR(30), [duration] INTEGER, " \
+	"[red_score] INTEGER, [blue_score] INTEGER, " \
+	"[red_caps] INTEGER, [blue_caps] INTEGER, [winner] INTEGER)"
+
+// One row per player per match. Same statistics as the lifetime tables, but
+// scoped to the match, so a career total is the sum of these and a recent form
+// figure is the last few.
+#define DB_CREATEMATCHPLAYERS \
+	"CREATE TABLE IF NOT EXISTS [match_players] (" \
+	"[match_id] INTEGER, [char_idx] INTEGER, [playername] CHAR(64), [team] INTEGER, " \
+	"[score] INTEGER, [frags] INTEGER, [fragged] INTEGER, [deaths] INTEGER, " \
+	"[suicides] INTEGER, [shots] INTEGER, [shots_hit] INTEGER, " \
+	"[rail_shot] INTEGER, [rail_hit] INTEGER, [rail_kill] INTEGER, " \
+	"[damage_given] INTEGER, [damage_received] INTEGER, " \
+	"[max_streak] INTEGER, [num_sprees] INTEGER, " \
+	"[flag_pickups] INTEGER, [flag_captures] INTEGER, [flag_returns] INTEGER, " \
+	"[flag_kills] INTEGER, [flag_drops] INTEGER, " \
+	"[offense_kills] INTEGER, [defense_base] INTEGER, [defense_flag] INTEGER, " \
+	"[defense_carrier] INTEGER, [assists] INTEGER, " \
+	"[max_cap_streak] INTEGER, [sweeps] INTEGER, " \
+	"[item_quad] INTEGER, [item_shield] INTEGER, [item_armor] INTEGER, [item_mega] INTEGER, " \
+	"[rune_strength] INTEGER, [rune_haste] INTEGER, [rune_regen] INTEGER, [rune_resist] INTEGER, " \
+	"[ping_avg] INTEGER, [playtime] INTEGER)"
+
 #define DB_UPDATEUDATA \
 	"UPDATE userdata SET playername=?, member_since=?, last_played=?, " \
 	"playtime_total=?, playingtime=? WHERE char_idx=?;"
@@ -166,6 +194,11 @@ static qboolean build_db(void)
 		DB_CREATESTATS,
 		DB_CREATECTFSTATS,
 		DB_CREATECDATA,
+		DB_CREATEMATCHES,
+		DB_CREATEMATCHPLAYERS,
+		"CREATE INDEX IF NOT EXISTS idx_mp_char  ON match_players(char_idx)",
+		"CREATE INDEX IF NOT EXISTS idx_mp_match ON match_players(match_id)",
+		"CREATE INDEX IF NOT EXISTS idx_m_ended  ON matches(ended)",
 		NULL
 	};
 	int i;
@@ -1196,4 +1229,194 @@ int DB_Prune(int days)
 	sqlite3_finalize(res);
 
 	return before - after;
+}
+
+/*
+==================
+Match history
+==================
+*/
+
+static void db_now(char *out, size_t outsize)
+{
+	time_t now = time(NULL);
+	struct tm *lt = localtime(&now);
+
+	if (lt)
+		strftime(out, outsize, "%Y-%m-%d %H:%M:%S", lt);
+	else
+		out[0] = '\0';
+}
+
+int DB_MatchBegin(const char *mapname)
+{
+	sqlite3_stmt *res = NULL;
+	char started[32];
+	int id = -1;
+
+	if (!dbconn && !DB_Conn_Start())
+		return -1;
+
+	db_now(started, sizeof(started));
+
+	if (sqlite3_prepare_v2(dbconn,
+			"INSERT INTO matches (mapname, started, ended, duration,"
+			" red_score, blue_score, red_caps, blue_caps, winner)"
+			" VALUES (?,?,'',0,0,0,0,0,0)", -1, &res, NULL) != SQLITE_OK)
+	{
+		db_error("DB_MatchBegin");
+		return -1;
+	}
+
+	sqlite3_bind_text(res, 1, mapname ? mapname : "", -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(res, 2, started, -1, SQLITE_TRANSIENT);
+
+	if (sqlite3_step(res) == SQLITE_DONE)
+		id = (int)sqlite3_last_insert_rowid(dbconn);
+	else
+		db_error("DB_MatchBegin");
+
+	sqlite3_finalize(res);
+	return id;
+}
+
+void DB_MatchRecord(edict_t *player, int match_id, int team)
+{
+	sqlite3_stmt *res = NULL;
+	int id;
+	int i = 1;
+	long samples;
+
+	if (match_id < 0 || !player || !player->client)
+		return;
+	if (!dbconn && !DB_Conn_Start())
+		return;
+
+	// the match row references the player by char_idx, so they need one
+	id = DB_GetID(player->client->pers.netname);
+	if (id < 0)
+		id = DB_NewID(player->client->pers.netname);
+	if (id < 0)
+		return;
+
+	if (sqlite3_prepare_v2(dbconn,
+			"INSERT INTO match_players VALUES ("
+			"?,?,?,?,"                       // match, char, name, team
+			"?,?,?,?,?,?,?,"                 // score frags fragged deaths suicides shots hits
+			"?,?,?,"                         // rail shot hit kill
+			"?,?,"                           // damage given received
+			"?,?,"                           // max_streak sprees
+			"?,?,?,?,?,"                     // pickups caps returns fkills drops
+			"?,?,?,?,?,"                     // off_kills def_base def_flag def_carrier assists
+			"?,?,"                           // cap streak sweeps
+			"?,?,?,?,"                       // items
+			"?,?,?,?,"                       // runes
+			"?,?)",                          // ping_avg playtime
+			-1, &res, NULL) != SQLITE_OK)
+	{
+		db_error("DB_MatchRecord");
+		return;
+	}
+
+	sqlite3_bind_int (res, i++, match_id);
+	sqlite3_bind_int (res, i++, id);
+	sqlite3_bind_text(res, i++, player->client->pers.netname, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int (res, i++, team);
+
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_SCORE));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_FRAGS));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_FRAGGED));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_DEATHS));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_SUICIDES));
+	sqlite3_bind_int64(res, i++, (sqlite3_int64)stats_get(player, STATS_SHOTS));
+	sqlite3_bind_int64(res, i++, (sqlite3_int64)stats_get(player, STATS_SHOTS_HIT));
+
+	sqlite3_bind_int64(res, i++, (sqlite3_int64)stats_get(player, STATS_RAIL_SHOT));
+	sqlite3_bind_int64(res, i++, (sqlite3_int64)stats_get(player, STATS_RAIL_HIT));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_RAIL_KILL));
+
+	sqlite3_bind_int64(res, i++, (sqlite3_int64)stats_get(player, STATS_DAMAGE_GIVEN));
+	sqlite3_bind_int64(res, i++, (sqlite3_int64)stats_get(player, STATS_DAMAGE_REC));
+
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_MAX_STREAK));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_SPREES));
+
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_OFFENSE_FLAG));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_CAPTURES));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_RETURNS));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_OFFENSE_CARRIER));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_OFFENSE_FLAGLOST));
+
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_OFFENSE_KILLS));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_DEFENSE_BASE));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_DEFENSE_FLAG));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_DEFENSE_CARRIER));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_ASSISTS));
+
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_MAX_CAPSTREAK));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_SWEEPS));
+
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_ITEM_QUAD));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_ITEM_SHIELD));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_ITEM_ARMOR));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_ITEM_MEGA));
+
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_RUNE_STRENGTH));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_RUNE_HASTE));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_RUNE_REGEN));
+	sqlite3_bind_int (res, i++, (int)stats_get(player, STATS_RUNE_RESIST));
+
+	// average rather than the raw total, which is meaningless without the
+	// sample count travelling with it
+	samples = stats_get(player, STATS_PING_SAMPLES);
+	sqlite3_bind_int(res, i++,
+		samples > 0 ? (int)(stats_get(player, STATS_PING_TOTAL) / samples) : 0);
+
+	sqlite3_bind_int(res, i++,
+		(int)((level.framenum - player->client->ctf.original_enterframe) / 10));
+
+	if (sqlite3_step(res) != SQLITE_DONE)
+		db_error("DB_MatchRecord");
+
+	sqlite3_finalize(res);
+}
+
+qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
+                        int red_caps, int blue_caps, int winner, int duration)
+{
+	sqlite3_stmt *res = NULL;
+	char ended[32];
+	qboolean ok = false;
+
+	if (match_id < 0)
+		return false;
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	db_now(ended, sizeof(ended));
+
+	if (sqlite3_prepare_v2(dbconn,
+			"UPDATE matches SET ended=?, duration=?, red_score=?, blue_score=?,"
+			" red_caps=?, blue_caps=?, winner=? WHERE match_id=?",
+			-1, &res, NULL) != SQLITE_OK)
+	{
+		db_error("DB_MatchFinish");
+		return false;
+	}
+
+	sqlite3_bind_text(res, 1, ended, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int (res, 2, duration);
+	sqlite3_bind_int (res, 3, red_score);
+	sqlite3_bind_int (res, 4, blue_score);
+	sqlite3_bind_int (res, 5, red_caps);
+	sqlite3_bind_int (res, 6, blue_caps);
+	sqlite3_bind_int (res, 7, winner);
+	sqlite3_bind_int (res, 8, match_id);
+
+	ok = (sqlite3_step(res) == SQLITE_DONE);
+	if (!ok)
+		db_error("DB_MatchFinish");
+
+	sqlite3_finalize(res);
+	return ok;
 }

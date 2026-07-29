@@ -1,4 +1,6 @@
 #include "g_local.h"
+#include "ctf_file_io.h"
+#include "ctf_sqlite_unidb.h"
 #include "g_ctffunc.h"
 #include "stdlog.h"
 #include "g_tourney.h"
@@ -235,6 +237,46 @@ void Victory()
         }
 
         level.sweeps_awarded = true;
+    }
+
+    // Record the match. Done after the sweep award above so the per-player rows
+    // carry the sweep, and before matchstate flips to MATCH_OVER so stats_get
+    // still returns real numbers.
+    if (CTF_StatsDBMode() == CTF_STATSDB_UNIFIED) {
+        int winner_team = CTF_TEAM_UNDEFINED;
+        int db_match_id;
+
+        if (bluescore > redscore) {
+            winner_team = CTF_TEAM_BLUE;
+        } else if (redscore > bluescore) {
+            winner_team = CTF_TEAM_RED;
+        }
+
+        // A match that never reaches Victory() -- server killed mid-game --
+        // simply leaves no row, which beats a half-written one.
+        db_match_id = DB_MatchBegin(level.mapname);
+
+        if (db_match_id >= 0) {
+            for (i = 0; i < game.maxclients; i++) {
+                ent = g_edicts + 1 + i;
+
+                if (!ent->inuse || !ent->client) {
+                    continue;
+                }
+                if (ent->client->ctf.teamnum != CTF_TEAM_RED &&
+                    ent->client->ctf.teamnum != CTF_TEAM_BLUE) {
+                    continue;   // observers did not play the match
+                }
+
+                DB_MatchRecord(ent, db_match_id, ent->client->ctf.teamnum);
+            }
+
+            // level.time is seconds since the level started, which is the
+            // match length for every practical purpose here
+            DB_MatchFinish(db_match_id, (int)redscore, (int)bluescore,
+                (int)redcaps, (int)bluecaps, winner_team, (int)level.time);
+
+        }
     }
 
     ctf_BSafePrint(PRINT_HIGH, victory_buf);
