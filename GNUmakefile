@@ -109,7 +109,9 @@ endif
 C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
          g_skins.o g_tourney.o plasma.o \
 		 p_observer.o g_chase.o p_stats.o \
-		 stdlog.o gslog.o bat.o g_vote.o
+		 stdlog.o gslog.o bat.o g_vote.o \
+		 ctf_file_io.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o
+
 
 ######################################################################
 # End of user-customizable section - you shouldn't have to touch
@@ -240,3 +242,12 @@ distclean:	clean
 ifeq (.depend,$(wildcard .depend))
 include .depend
 endif
+
+# The SQLite amalgamation is third-party and does not build clean under our
+# -Wall, so give it its own rule. THREADSAFE=0 because the game module is
+# single-threaded and it saves linking pthreads.
+SQLITE_CFLAGS = -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 \
+                -DSQLITE_DEFAULT_MEMSTATUS=0 -w
+
+sqlite3.o: sqlite3.c
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) $(SQLITE_CFLAGS) -o $@ -c $<

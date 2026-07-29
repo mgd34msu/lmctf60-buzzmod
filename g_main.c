@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "ctf_sqlite_unidb.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
 
@@ -129,6 +130,9 @@ void ShutdownGame (void)
 	gi.dprintf ("==== ShutdownGame ====\n");
 
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
+
+	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
+	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 
 	gi.FreeTags (TAG_LEVEL);
 	gi.FreeTags (TAG_GAME);

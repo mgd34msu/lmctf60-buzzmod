@@ -276,6 +276,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="bat.c" />
+    <ClCompile Include="ctf_file_io.c" />
+    <ClCompile Include="ctf_sqlite_player.c" />
+    <ClCompile Include="ctf_sqlite_unidb.c" />
+    <ClCompile Include="sqlite3.c">
+      <DisableSpecificWarnings>4244;4267;4996;4090;4018</DisableSpecificWarnings>
+      <PreprocessorDefinitions>SQLITE_THREADSAFE=0;SQLITE_OMIT_LOAD_EXTENSION=1;SQLITE_DEFAULT_MEMSTATUS=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="gslog.c" />
     <ClCompile Include="g_ai.c" />
     <ClCompile Include="g_chase.c" />
@@ -339,6 +346,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="bat.h" />
+    <ClInclude Include="ctf_file_io.h" />
+    <ClInclude Include="ctf_sqlite_player.h" />
+    <ClInclude Include="ctf_sqlite_unidb.h" />
+    <ClInclude Include="sqlite3.h" />
     <ClInclude Include="game.h" />
     <ClInclude Include="GitRevisionInfo.h" />
     <ClInclude Include="gslog.h" />

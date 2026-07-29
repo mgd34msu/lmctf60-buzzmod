@@ -1595,10 +1595,11 @@ void ctf_PassItem(edict_t* startent, edict_t* tossent)
 	{
 		ctf_TossEnt(startent, tossent);
 	}
-	if (tr.ent)
+	// The original left target[2] += 16 outside the if, so it ran on an
+	// uninitialised vector whenever the trace did not land on a player.
+	if (tr.ent && tr.ent->client)
 	{
-		if (tr.ent->client)
-			VectorSubtract(tr.ent->s.origin, tossent->s.origin, target);
-			target[2] += 16;
+		VectorSubtract(tr.ent->s.origin, tossent->s.origin, target);
+		target[2] += 16;
 	}
 }

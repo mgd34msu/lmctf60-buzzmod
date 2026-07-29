@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "ctf_file_io.h"
 #include "m_player.h"
 #include "time.h" // TEAM CODE -- LM_JORM
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -2074,18 +2075,36 @@ void ClientBeginDeathmatch (edict_t *ent)
 
 	G_InitEdict (ent);
 
-	if (ent->client->p_stats_player->dropped)
+	// p_stats_player can legitimately be NULL here. ClientBegin runs without a
+	// preceding ClientConnect on a map change, and ReadGame releases every
+	// TAG_GAME allocation, which is where these nodes live. The original
+	// dereferenced it unguarded.
 	{
-		ent->client->resp.score = stats_get(ent, STATS_SCORE);
-		ent->client->ctf.teamnum = ent->client->p_stats_player->info.teamnum;
-		ent->client->p_stats_player->dropped = false;
-	}
-	else
-	{
-		stats_clear(ent);
+		int      restored_score = 0;
+		qboolean rejoining = false;
+
+		if (ent->client->p_stats_player && ent->client->p_stats_player->dropped)
+		{
+			rejoining = true;
+			restored_score = stats_get(ent, STATS_SCORE);
+			ent->client->ctf.teamnum = ent->client->p_stats_player->info.teamnum;
+			ent->client->p_stats_player->dropped = false;
+		}
+		else
+		{
+			stats_clear(ent);
+		}
+
+		InitClientResp (ent->client);
+
+		// InitClientResp memsets client->resp, so the restored score has to be
+		// written after it. The original wrote it before and lost it every time.
+		if (rejoining)
+			ent->client->resp.score = restored_score;
 	}
 
-	InitClientResp (ent->client);
+	// pull this player's persistent stats from the database, if one is enabled
+	LoadPlayerData(ent);
 
 	// TEAM CODE -- LM_JORM //
 	sl_WriteStdLogPlayerEntered( &gi, level, ent );	// StdLog - Mark Davies
@@ -2515,6 +2534,9 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
+
+	// flush this player's persistent stats before we tear anything down
+	CommitPlayerData(ent);
 	
 	// STATS-BEGIN LM_Hati
 	if (ent->client->p_stats_player)

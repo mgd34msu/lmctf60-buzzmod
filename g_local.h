@@ -1131,6 +1131,11 @@ struct gclient_s
 	qboolean	showteamstatboard; //BUZZKILL
 	qboolean	showrailboard; //BUZZKILL
 
+	// BUZZKILL -- persistent stats, loaded/saved by the stats database.
+	// Lives on gclient_s, not edict_s: SpawnEntities() zeroes every edict on
+	// each map change, gclient_t survives.
+	playerstats_t	ctfstats;
+
 	int			ammo_index;
 
 	int			buttons;
@@ -1410,8 +1415,6 @@ struct edict_s
 	int             entprops; //flags to tag entities with, for use with flags, which have no client
 	// END CTF CODE
 
-	// BUZZKILL -- SQL (TEMP)
-	playerstats_t ctfstats;
 };
 
 #define LM_QUAD_DEFAULT_TIME 60

@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "ctf_sqlite_unidb.h"
 
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
@@ -694,6 +695,13 @@ void ReadGame(char* filename)
 	int		i;
 	char	str[MAX_INFO_STRING] = { 0 };
 	size_t	count;
+
+	// Every stats_player_s node lives in TAG_GAME and is about to be freed.
+	// Drop the list head and the shared database handle first, otherwise
+	// p_start_player and each client's p_stats_player are left dangling and
+	// ClientBegin walks straight into them.
+	DB_Conn_Cleanup();
+	stats_log_init();
 
 	gi.FreeTags(TAG_GAME);
 

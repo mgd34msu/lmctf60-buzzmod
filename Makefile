@@ -73,6 +73,10 @@ HEADERS := \
 
 OBJS := \
 	bat.o \
+	ctf_file_io.o \
+	ctf_sqlite_player.o \
+	ctf_sqlite_unidb.o \
+	sqlite3.o \
 	g_ai.o \
 	g_chase.o \
 	g_cmds.o \
@@ -182,3 +186,10 @@ strip: $(TARGET)
 	$(E) [STRIP]
 	$(Q)$(STRIP) $(TARGET)
 
+
+# Third-party SQLite amalgamation: own rule, warnings off, single-threaded.
+SQLITE_CFLAGS = -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 \
+                -DSQLITE_DEFAULT_MEMSTATUS=0 -w
+
+sqlite3.o: sqlite3.c
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) $(SQLITE_CFLAGS) -o $@ -c $<

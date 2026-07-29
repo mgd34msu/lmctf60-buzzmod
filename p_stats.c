@@ -166,6 +166,15 @@ void stats_clear(edict_t* ent)
 void stats_output(edict_t* ent, stats_player_s* p_player)
 {
 	int total_encounters;
+
+	// callers can reach us with a NULL record -- a player who has disconnected
+	// keeps their netname but has p_stats_player cleared.
+	if (!p_player)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "No stats recorded for that player.\n");
+		return;
+	}
+
 	char teambuf[MAX_INFO_STRING];
 	char* conbuf;
 	char outbuf[MAX_INFO_STRING];
@@ -262,7 +271,14 @@ void Cmd_PlayerStats_f(edict_t* ent)
 		for (i = 0; i < game.maxclients; i++)
 		{
 			temp = g_edicts + 1 + i;
-			strcpy(lowerstr, temp->client->pers.netname);
+
+			// skip slots never filled or since vacated; a departed player keeps
+			// their netname but not their stats record
+			if (!temp->inuse || !temp->client || !temp->client->pers.connected)
+				continue;
+
+			strncpy(lowerstr, temp->client->pers.netname, sizeof(lowerstr) - 1);
+			lowerstr[sizeof(lowerstr) - 1] = 0;
 			LowerCase(lowerstr);
 			if (strstr(lowerstr, p))
 			{
@@ -275,6 +291,12 @@ void Cmd_PlayerStats_f(edict_t* ent)
 		target = ent;
 
 	if (!target)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "Cannot find a matching player.\n");
+		return;
+	}
+
+	if (!target->client)
 	{
 		ctf_SafePrint(ent, PRINT_HIGH, "Cannot find a matching player.\n");
 		return;
