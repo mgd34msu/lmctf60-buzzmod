@@ -12,6 +12,24 @@ libraries and opens a draft release with them attached.
 
 First BuzzMod release. Based on LMCTF TE 6.0.
 
+### Install both files
+
+This release ships **four** files. The library for your platform, and a pak:
+
+| File | |
+|-|-|
+| `gamex86_64.so` | Linux 64-bit |
+| `gamex86_64.dll` | Windows 64-bit |
+| `gamex86.dll` | Windows 32-bit |
+| `lmctf6-buzzmod.pak` | **required, all platforms** |
+
+Both go in your `lmctf` game directory. The pak carries the artwork behind the
+statboard, team statboard and railboard, and the flag-carrier hit sound. No
+stock LMCTF pak contains them — verified against every pak and loose file in
+`baseq2`, `lmctf` and `ctf`, 10,718 assets, none of the seven present. Without
+it those three boards draw their text on an empty background and the hit sound
+is silent.
+
 ### Statistics now persist
 
 Player statistics are written to a SQLite database and reloaded when the player returns.
@@ -78,6 +96,16 @@ that had not finished connecting.
 - The homing rune's line-of-sight filters never worked. Both tests were written as bare
   function names rather than calls, so they were always false and the rune tracked targets
   through walls and behind itself.
+- Hits were attributed to whichever weapon the attacker happened to be holding when the
+  damage landed, so a rocket still in flight while its owner switched weapons counted
+  against the wrong gun. Attribution now comes from the means of death. The same code read
+  `pers.weapon->classname` with no null check, which the rest of the codebase tests for.
+- Damage dealt and damage received were commented out, so both counters were dead.
+- `Pickup_Rune` left its stat index at 0 on an unrecognised rune type, and 0 is the ping
+  counter, so a bad rune quietly corrupted the player's ping figures.
+- Only the railgun counted shots and hits, and rail shots were being written to the generic
+  `shots` column — so "accuracy" was railgun accuracy under the wrong name. All weapons are
+  now instrumented separately from the rail figures.
 - The statboard showed different columns for the two teams under the same headings — red
   listed frags and flag-carrier kills, blue listed score and captures.
 - A rejoining player's score was restored and then immediately erased, because it was
