@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -28,6 +29,7 @@
 #endif
 
 #include "g_local.h"
+#include "g_ctffunc.h"
 #include "ctf_file_io.h"
 #include "ctf_sqlite_player.h"
 #include "ctf_sqlite_unidb.h"
@@ -237,4 +239,340 @@ qboolean LoadPlayerData(edict_t *ent)
 	default:
 		return true;
 	}
+}
+
+/*
+==================
+CTF_StatsDB_Command
+
+Backs "sv statsdb <subcommand>".
+==================
+*/
+void CTF_StatsDB_Command(void)
+{
+	const char *sub = gi.argv(2);
+	int mode = CTF_StatsDBMode();
+
+	if (!sub || sub[0] == '\0' || Q_stricmp(sub, "help") == 0)
+	{
+		gi.cprintf(NULL, PRINT_HIGH,
+			"sv statsdb status              backend, path and row counts\n"
+			"sv statsdb flush               write every connected player now\n"
+			"sv statsdb top <column> [n]    leaderboard, default 10, max 50\n"
+			"sv statsdb player <name>       one player's stored record\n"
+			"sv statsdb export <file>       tab-separated dump, written to the game dir\n"
+			"sv statsdb backup <file>       safe copy of the live database\n"
+			"sv statsdb rename <old> <new>  relabel, or fold one record into another\n"
+			"sv statsdb prune <days> confirm  drop players not seen in that long\n"
+			"sv statsdb reset confirm       delete every row (cannot be undone)\n");
+		return;
+	}
+
+	if (mode == CTF_STATSDB_OFF)
+	{
+		gi.cprintf(NULL, PRINT_HIGH,
+			"statsdb: disabled. Set ctf_statsdb 1 (per-player) or 2 (unified).\n");
+		return;
+	}
+
+	// flush works in either mode -- it just commits whoever is connected
+	if (Q_stricmp(sub, "flush") == 0)
+	{
+		int i, n = 0;
+
+		for (i = 0; i < game.maxclients; i++)
+		{
+			edict_t *ent = g_edicts + 1 + i;
+
+			if (!ent->inuse || !ent->client || !ent->client->pers.connected)
+				continue;
+
+			if (CommitPlayerData(ent))
+				n++;
+		}
+
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: wrote %d player(s).\n", n);
+		return;
+	}
+
+	if (mode != CTF_STATSDB_UNIFIED)
+	{
+		gi.cprintf(NULL, PRINT_HIGH,
+			"statsdb: \"%s\" needs the unified backend (ctf_statsdb 2). The "
+			"per-player files hold one record each and cannot be queried across "
+			"players.\n", sub);
+		return;
+	}
+
+	if (Q_stricmp(sub, "status") == 0)
+	{
+		DB_Status();
+	}
+	else if (Q_stricmp(sub, "top") == 0)
+	{
+		int count = 10;
+
+		if (gi.argc() < 4)
+		{
+			gi.cprintf(NULL, PRINT_HIGH, "Usage: sv statsdb top <column> [n]\n");
+			return;
+		}
+		if (gi.argc() >= 5)
+			count = atoi(gi.argv(4));
+
+		DB_Top(gi.argv(3), count);
+	}
+	else if (Q_stricmp(sub, "player") == 0)
+	{
+		if (gi.argc() < 4)
+		{
+			gi.cprintf(NULL, PRINT_HIGH, "Usage: sv statsdb player <name>\n");
+			return;
+		}
+
+		DB_PrintPlayer(gi.argv(3));
+	}
+	else if (Q_stricmp(sub, "export") == 0 || Q_stricmp(sub, "backup") == 0)
+	{
+		char path[CTF_MAX_DBPATH];
+
+		if (gi.argc() < 4)
+		{
+			gi.cprintf(NULL, PRINT_HIGH, "Usage: sv statsdb %s <filename>\n", sub);
+			return;
+		}
+
+		if (!ctf_safe_output_path(gi.argv(3), path, sizeof(path)))
+			return;
+
+		if (Q_stricmp(sub, "export") == 0)
+			DB_Export(path);
+		else
+			DB_Backup(path);
+	}
+	else if (Q_stricmp(sub, "rename") == 0)
+	{
+		if (gi.argc() < 5)
+		{
+			gi.cprintf(NULL, PRINT_HIGH, "Usage: sv statsdb rename <oldname> <newname>\n");
+			return;
+		}
+
+		DB_RenamePlayer(gi.argv(3), gi.argv(4));
+	}
+	else if (Q_stricmp(sub, "prune") == 0)
+	{
+		int days;
+
+		if (gi.argc() < 4)
+		{
+			gi.cprintf(NULL, PRINT_HIGH, "Usage: sv statsdb prune <days> confirm\n");
+			return;
+		}
+
+		days = atoi(gi.argv(3));
+		if (days < 1)
+		{
+			gi.cprintf(NULL, PRINT_HIGH, "statsdb: <days> must be 1 or more.\n");
+			return;
+		}
+
+		if (gi.argc() < 5 || Q_stricmp(gi.argv(4), "confirm") != 0)
+		{
+			gi.cprintf(NULL, PRINT_HIGH,
+				"statsdb: this permanently drops every player not seen in %d day(s).\n"
+				"         Type: sv statsdb prune %d confirm\n", days, days);
+			return;
+		}
+
+		{
+			int dropped = DB_Prune(days);
+
+			if (dropped < 0)
+				gi.cprintf(NULL, PRINT_HIGH, "statsdb: prune failed.\n");
+			else
+				gi.cprintf(NULL, PRINT_HIGH, "statsdb: dropped %d player(s).\n", dropped);
+		}
+	}
+	else if (Q_stricmp(sub, "reset") == 0)
+	{
+		// deliberately awkward: this throws away every recorded stat
+		if (gi.argc() < 4 || Q_stricmp(gi.argv(3), "confirm") != 0)
+		{
+			gi.cprintf(NULL, PRINT_HIGH,
+				"statsdb: this deletes every stored stat and cannot be undone.\n"
+				"         Type: sv statsdb reset confirm\n");
+			return;
+		}
+
+		if (!DB_Reset())
+			gi.cprintf(NULL, PRINT_HIGH, "statsdb: reset failed.\n");
+	}
+	else
+	{
+		gi.cprintf(NULL, PRINT_HIGH,
+			"statsdb: unknown subcommand \"%s\". Try: sv statsdb help\n", sub);
+	}
+}
+
+/*
+==================
+Cmd_Lifetime_f
+
+"cmd lifetime [name]" -- the persisted totals. "cmd stats" only ever showed the
+current level, so before this there was no way for a player to see the numbers
+the database had been accumulating.
+
+Reads client->ctfstats, which ClientBegin loads and stats_fold_session tops up,
+so it needs no database round trip. The figures shown are the stored totals plus
+whatever this level has added so far.
+==================
+*/
+/*
+==================
+Cmd_Rank_f
+
+"cmd rank [column] [n]" -- the leaderboard, in game, without needing an admin
+at the console. Same whitelist as "sv statsdb top".
+==================
+*/
+void Cmd_Rank_f(edict_t *ent)
+{
+	char buf[1024];
+	const char *field = "frags";
+	int count = 10;
+
+	if (!ent || !ent->client)
+		return;
+
+	if (CTF_StatsDBMode() != CTF_STATSDB_UNIFIED)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH,
+			"Rankings need the unified stats database on this server.\n");
+		return;
+	}
+
+	if (gi.argc() >= 2)
+		field = gi.argv(1);
+	if (gi.argc() >= 3)
+		count = atoi(gi.argv(2));
+
+	if (count < 1)
+		count = 10;
+	if (count > 15)
+		count = 15;			// keep it inside ctf_SafePrint's per-call budget
+
+	if (!DB_TopFormat(field, count, buf, sizeof(buf)))
+	{
+		ctf_SafePrint(ent, PRINT_HIGH,
+			"Unknown column. Try: frags, flag_captures, sweeps, max_streak, "
+			"max_cap_streak, assists, flag_returns.\n");
+		return;
+	}
+
+	ctf_SafePrint(ent, PRINT_HIGH, buf);
+}
+
+void Cmd_Lifetime_f(edict_t *ent)
+{
+	playerstats_t *ps;
+	edict_t *target = ent;
+	char buf[MAX_INFO_STRING];
+	char *arg;
+
+	if (!ent || !ent->client)
+		return;
+
+	arg = gi.args();
+
+	if (arg && strlen(arg))
+	{
+		char lowerarg[MAX_INFO_STRING];
+		char lowername[MAX_INFO_STRING];
+		int i;
+
+		strncpy(lowerarg, arg, sizeof(lowerarg) - 1);
+		lowerarg[sizeof(lowerarg) - 1] = 0;
+		LowerCase(lowerarg);
+
+		target = NULL;
+
+		for (i = 0; i < game.maxclients; i++)
+		{
+			edict_t *temp = g_edicts + 1 + i;
+
+			if (!temp->inuse || !temp->client || !temp->client->pers.connected)
+				continue;
+
+			strncpy(lowername, temp->client->pers.netname, sizeof(lowername) - 1);
+			lowername[sizeof(lowername) - 1] = 0;
+			LowerCase(lowername);
+
+			if (strstr(lowername, lowerarg))
+			{
+				target = temp;
+				break;
+			}
+		}
+
+		if (!target)
+		{
+			ctf_SafePrint(ent, PRINT_HIGH, "Cannot find a matching player.\n");
+			return;
+		}
+	}
+
+	if (CTF_StatsDBMode() == CTF_STATSDB_OFF)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "Lifetime stats are not being recorded on this server.\n");
+		return;
+	}
+
+	ps = &target->client->ctfstats;
+
+	Com_sprintf(buf, sizeof(buf),
+		"\n--LIFETIME: %s\n"
+		"Member since %s\n"
+		"Frags=%u Fragged=%u Suicides=%d\n"
+		"Best Streak=%d Sprees=%u\n"
+		"Caps=%d Pickups=%d Returns=%d FC Kills=%d\n"
+		"Off Kills=%d Def Kills=%d Assists=%d\n"
+		"Best Cap Streak=%d Sweeps=%d\n"
+		"Playtime=%d min\n",
+		target->client->pers.netname,
+		ps->member_since[0] ? ps->member_since : "(this session)",
+		ps->frags, ps->fragged, ps->suicides,
+		ps->max_streak, ps->num_sprees,
+		ps->flag_captures, ps->flag_pickups, ps->flag_returns, ps->flag_kills,
+		ps->offense_kills, ps->defense_kills, ps->assists,
+		ps->max_cap_streak, ps->sweeps,
+		ps->total_playtime);
+
+	ctf_SafePrint(ent, PRINT_HIGH, buf);
+}
+
+qboolean ctf_safe_output_path(const char *name, char *out, size_t outsize)
+{
+	int written;
+
+	if (!name || name[0] == '\0' || !out || outsize == 0)
+		return false;
+
+	// no directory traversal, no absolute paths, no separators of either flavour
+	if (strchr(name, '/') || strchr(name, '\\') || strstr(name, ".."))
+	{
+		gi.cprintf(NULL, PRINT_HIGH,
+			"statsdb: \"%s\" must be a plain filename, no path.\n", name);
+		return false;
+	}
+
+	written = snprintf(out, outsize, "%s%c%s", gamedir->string, CTF_PATHSEP, name);
+
+	if (written < 0 || (size_t)written >= outsize)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: path too long.\n");
+		return false;
+	}
+
+	return true;
 }

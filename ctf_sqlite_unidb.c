@@ -17,6 +17,10 @@
 //     silently losing the session.
 
 #include <string.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #include "g_local.h"
 #include "sqlite3.h"
@@ -490,4 +494,637 @@ done:
 		sqlite3_finalize(res);
 
 	return ok;
+}
+
+/*
+==================
+Admin surface
+
+These back the "sv statsdb" console command. Unified backend only: the
+per-player files hold one row each and have no cross-player view, so a
+leaderboard would mean opening every file in the directory.
+==================
+*/
+
+// Columns an admin is allowed to sort on, and the table each one lives in.
+// A whitelist rather than pasting gi.argv straight into the SQL -- the column
+// name cannot be bound as a parameter, so it has to be checked against a
+// known set instead.
+static const struct { const char *field; const char *table; } db_sortable[] = {
+	{ "frags",          "game_stats" },
+	{ "fragged",        "game_stats" },
+	{ "shots",          "game_stats" },
+	{ "shots_hit",      "game_stats" },
+	{ "num_sprees",     "game_stats" },
+	{ "max_streak",     "game_stats" },
+	{ "suicides",       "game_stats" },
+	{ "flag_pickups",   "ctf_stats"  },
+	{ "flag_captures",  "ctf_stats"  },
+	{ "flag_returns",   "ctf_stats"  },
+	{ "flag_kills",     "ctf_stats"  },
+	{ "offense_kills",  "ctf_stats"  },
+	{ "defense_kills",  "ctf_stats"  },
+	{ "assists",        "ctf_stats"  },
+	{ "max_cap_streak", "ctf_stats"  },
+	{ "sweeps",         "ctf_stats"  },
+	{ "playtime_total", "userdata"   },
+	{ "playingtime",    "userdata"   },
+	{ NULL, NULL }
+};
+
+static const char *db_table_for(const char *field)
+{
+	int i;
+
+	if (!field)
+		return NULL;
+
+	for (i = 0; db_sortable[i].field; i++)
+	{
+		if (Q_stricmp(field, db_sortable[i].field) == 0)
+			return db_sortable[i].table;
+	}
+
+	return NULL;
+}
+
+static int db_count_rows(const char *table)
+{
+	sqlite3_stmt *res = NULL;
+	char sql[128];
+	int n = -1;
+
+	snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s", table);
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &res, NULL) != SQLITE_OK)
+		return -1;
+
+	if (sqlite3_step(res) == SQLITE_ROW)
+		n = sqlite3_column_int(res, 0);
+
+	sqlite3_finalize(res);
+	return n;
+}
+
+void DB_Status(void)
+{
+	if (!dbconn && !DB_Conn_Start())
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: unified backend is not open.\n");
+		return;
+	}
+
+	gi.cprintf(NULL, PRINT_HIGH, "statsdb: unified, %s\n", dbname);
+	gi.cprintf(NULL, PRINT_HIGH, "  players recorded : %d\n", db_count_rows("userdata"));
+	gi.cprintf(NULL, PRINT_HIGH, "  game_stats rows  : %d\n", db_count_rows("game_stats"));
+	gi.cprintf(NULL, PRINT_HIGH, "  ctf_stats rows   : %d\n", db_count_rows("ctf_stats"));
+	{
+		struct stat st;
+
+		if (stat(dbname, &st) == 0)
+			gi.cprintf(NULL, PRINT_HIGH, "  file size        : %ld bytes\n", (long)st.st_size);
+	}
+}
+
+qboolean DB_Reset(void)
+{
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	if (!db_exec("BEGIN TRANSACTION;"))
+		return false;
+
+	if (!db_exec("DELETE FROM userdata;") ||
+		!db_exec("DELETE FROM game_stats;") ||
+		!db_exec("DELETE FROM ctf_stats;") ||
+		!db_exec("DELETE FROM character_data;"))
+	{
+		db_exec("ROLLBACK;");
+		return false;
+	}
+
+	if (!db_exec("COMMIT;"))
+		return false;
+
+	// reclaim the space rather than leaving a file full of free pages
+	db_exec("VACUUM;");
+
+	gi.cprintf(NULL, PRINT_HIGH, "statsdb: all rows deleted from %s\n", dbname);
+	return true;
+}
+
+void DB_Top(const char *field, int count)
+{
+	const char *table = db_table_for(field);
+	sqlite3_stmt *res = NULL;
+	char sql[512];
+	int rank = 0;
+
+	if (!table)
+	{
+		int i;
+
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: unknown column \"%s\". Try one of:\n",
+			field ? field : "");
+		for (i = 0; db_sortable[i].field; i++)
+			gi.cprintf(NULL, PRINT_HIGH, "  %s\n", db_sortable[i].field);
+		return;
+	}
+
+	if (!dbconn && !DB_Conn_Start())
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: unified backend is not open.\n");
+		return;
+	}
+
+	if (count < 1)
+		count = 10;
+	if (count > 50)
+		count = 50;
+
+	// field and table came from the whitelist above; only the limit is bound
+	if (Q_stricmp(table, "userdata") == 0)
+	{
+		snprintf(sql, sizeof(sql),
+			"SELECT playername, %s FROM userdata ORDER BY %s DESC LIMIT ?", field, field);
+	}
+	else
+	{
+		snprintf(sql, sizeof(sql),
+			"SELECT u.playername, t.%s FROM %s t "
+			"JOIN userdata u ON u.char_idx = t.char_idx "
+			"ORDER BY t.%s DESC LIMIT ?", field, table, field);
+	}
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &res, NULL) != SQLITE_OK)
+	{
+		db_error("DB_Top");
+		return;
+	}
+
+	sqlite3_bind_int(res, 1, count);
+
+	gi.cprintf(NULL, PRINT_HIGH, "statsdb: top %d by %s\n", count, field);
+
+	while (sqlite3_step(res) == SQLITE_ROW)
+	{
+		const unsigned char *name = sqlite3_column_text(res, 0);
+
+		rank++;
+		gi.cprintf(NULL, PRINT_HIGH, "  %2d. %-20s %d\n",
+			rank, name ? (const char *)name : "(unnamed)", sqlite3_column_int(res, 1));
+	}
+
+	sqlite3_finalize(res);
+
+	if (rank == 0)
+		gi.cprintf(NULL, PRINT_HIGH, "  (no rows)\n");
+}
+
+qboolean DB_PrintPlayer(const char *playername)
+{
+	sqlite3_stmt *res = NULL;
+	int id;
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	id = DB_GetID(playername);
+	if (id < 0)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: no record for \"%s\"\n",
+			playername ? playername : "");
+		return false;
+	}
+
+	gi.cprintf(NULL, PRINT_HIGH, "statsdb: %s (char_idx %d)\n", playername, id);
+
+	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM userdata WHERE char_idx=?",
+			-1, &res, NULL) == SQLITE_OK)
+	{
+		sqlite3_bind_int(res, 1, id);
+		if (sqlite3_step(res) == SQLITE_ROW)
+		{
+			const unsigned char *since = sqlite3_column_text(res, 2);
+			const unsigned char *last  = sqlite3_column_text(res, 3);
+
+			gi.cprintf(NULL, PRINT_HIGH, "  member since %s, last played %s\n",
+				since ? (const char *)since : "?", last ? (const char *)last : "?");
+			gi.cprintf(NULL, PRINT_HIGH, "  playtime %d min (this session %d s)\n",
+				sqlite3_column_int(res, 4), sqlite3_column_int(res, 5));
+		}
+	}
+	sqlite3_finalize(res); res = NULL;
+
+	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM game_stats WHERE char_idx=?",
+			-1, &res, NULL) == SQLITE_OK)
+	{
+		sqlite3_bind_int(res, 1, id);
+		if (sqlite3_step(res) == SQLITE_ROW)
+		{
+			gi.cprintf(NULL, PRINT_HIGH,
+				"  frags %d  fragged %d  suicides %d  best streak %d  sprees %d\n",
+				sqlite3_column_int(res, 3), sqlite3_column_int(res, 4),
+				sqlite3_column_int(res, 7), sqlite3_column_int(res, 6),
+				sqlite3_column_int(res, 5));
+			gi.cprintf(NULL, PRINT_HIGH, "  shots %d  hits %d\n",
+				sqlite3_column_int(res, 1), sqlite3_column_int(res, 2));
+		}
+	}
+	sqlite3_finalize(res); res = NULL;
+
+	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM ctf_stats WHERE char_idx=?",
+			-1, &res, NULL) == SQLITE_OK)
+	{
+		sqlite3_bind_int(res, 1, id);
+		if (sqlite3_step(res) == SQLITE_ROW)
+		{
+			gi.cprintf(NULL, PRINT_HIGH,
+				"  caps %d  pickups %d  returns %d  fc kills %d  assists %d\n",
+				sqlite3_column_int(res, 2), sqlite3_column_int(res, 1),
+				sqlite3_column_int(res, 3), sqlite3_column_int(res, 4),
+				sqlite3_column_int(res, 7));
+			gi.cprintf(NULL, PRINT_HIGH,
+				"  off kills %d  def kills %d  best cap streak %d  sweeps %d\n",
+				sqlite3_column_int(res, 5), sqlite3_column_int(res, 6),
+				sqlite3_column_int(res, 8), sqlite3_column_int(res, 9));
+		}
+	}
+	sqlite3_finalize(res);
+
+	return true;
+}
+
+// Shared by "sv statsdb top" and the player-facing "cmd rank": same whitelist,
+// same query, one writes to the console and the other to a client.
+qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize)
+{
+	const char *table = db_table_for(field);
+	sqlite3_stmt *res = NULL;
+	char sql[512];
+	char line[128];
+	size_t used;
+	int rank = 0;
+
+	if (!out || outsize == 0)
+		return false;
+
+	out[0] = '\0';
+
+	if (!table)
+		return false;
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	if (count < 1)
+		count = 10;
+	if (count > 50)
+		count = 50;
+
+	if (Q_stricmp(table, "userdata") == 0)
+	{
+		snprintf(sql, sizeof(sql),
+			"SELECT playername, %s FROM userdata ORDER BY %s DESC LIMIT ?", field, field);
+	}
+	else
+	{
+		snprintf(sql, sizeof(sql),
+			"SELECT u.playername, t.%s FROM %s t "
+			"JOIN userdata u ON u.char_idx = t.char_idx "
+			"ORDER BY t.%s DESC LIMIT ?", field, table, field);
+	}
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &res, NULL) != SQLITE_OK)
+	{
+		db_error("DB_TopFormat");
+		return false;
+	}
+
+	sqlite3_bind_int(res, 1, count);
+
+	snprintf(line, sizeof(line), "\nTop %d by %s\n", count, field);
+	strncpy(out, line, outsize - 1);
+	out[outsize - 1] = '\0';
+
+	while (sqlite3_step(res) == SQLITE_ROW)
+	{
+		const unsigned char *name = sqlite3_column_text(res, 0);
+
+		rank++;
+		snprintf(line, sizeof(line), "%2d. %-16s %d\n",
+			rank, name ? (const char *)name : "(unnamed)", sqlite3_column_int(res, 1));
+
+		used = strlen(out);
+		if (used + strlen(line) + 1 >= outsize)
+			break;					// out of room; stop cleanly rather than truncate mid-row
+
+		strcpy(out + used, line);
+	}
+
+	sqlite3_finalize(res);
+
+	if (rank == 0)
+	{
+		used = strlen(out);
+		if (used + 12 < outsize)
+			strcpy(out + used, "(no rows)\n");
+	}
+
+	return true;
+}
+
+qboolean DB_Export(const char *path)
+{
+	sqlite3_stmt *res = NULL;
+	FILE *f;
+	int rows = 0;
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	f = fopen(path, "w");
+	if (!f)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: could not open %s for writing.\n", path);
+		return false;
+	}
+
+	fprintf(f, "playername\tmember_since\tlast_played\tplaytime_total"
+		"\tshots\tshots_hit\tfrags\tfragged\tnum_sprees\tmax_streak\tsuicides"
+		"\tflag_pickups\tflag_captures\tflag_returns\tflag_kills"
+		"\toffense_kills\tdefense_kills\tassists\tmax_cap_streak\tsweeps\n");
+
+	if (sqlite3_prepare_v2(dbconn,
+			"SELECT u.playername, u.member_since, u.last_played, u.playtime_total,"
+			" g.shots, g.shots_hit, g.frags, g.fragged, g.num_sprees, g.max_streak, g.suicides,"
+			" c.flag_pickups, c.flag_captures, c.flag_returns, c.flag_kills,"
+			" c.offense_kills, c.defense_kills, c.assists, c.max_cap_streak, c.sweeps"
+			" FROM userdata u"
+			" JOIN game_stats g ON g.char_idx = u.char_idx"
+			" JOIN ctf_stats  c ON c.char_idx = u.char_idx"
+			" ORDER BY u.playername", -1, &res, NULL) != SQLITE_OK)
+	{
+		db_error("DB_Export");
+		fclose(f);
+		return false;
+	}
+
+	while (sqlite3_step(res) == SQLITE_ROW)
+	{
+		int col;
+
+		for (col = 0; col < 20; col++)
+		{
+			const unsigned char *txt = sqlite3_column_text(res, col);
+
+			fprintf(f, "%s%s", txt ? (const char *)txt : "", col == 19 ? "\n" : "\t");
+		}
+		rows++;
+	}
+
+	sqlite3_finalize(res);
+	fclose(f);
+
+	gi.cprintf(NULL, PRINT_HIGH, "statsdb: exported %d player(s) to %s\n", rows, path);
+	return true;
+}
+
+qboolean DB_Backup(const char *path)
+{
+	sqlite3 *dest = NULL;
+	sqlite3_backup *bk;
+	int rc;
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	if (sqlite3_open_v2(path, &dest,
+			SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL) != SQLITE_OK)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: could not open %s for backup.\n", path);
+		sqlite3_close(dest);
+		return false;
+	}
+
+	// the backup API copies a live database safely; plain file copy does not
+	bk = sqlite3_backup_init(dest, "main", dbconn, "main");
+	if (!bk)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: backup failed: %s\n", sqlite3_errmsg(dest));
+		sqlite3_close(dest);
+		return false;
+	}
+
+	sqlite3_backup_step(bk, -1);
+	rc = sqlite3_backup_finish(bk);
+	sqlite3_close(dest);
+
+	if (rc != SQLITE_OK)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: backup failed (%d).\n", rc);
+		return false;
+	}
+
+	gi.cprintf(NULL, PRINT_HIGH, "statsdb: backed up to %s\n", path);
+	return true;
+}
+
+qboolean DB_RenamePlayer(const char *oldname, const char *newname)
+{
+	sqlite3_stmt *res = NULL;
+	int oldid, newid;
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	oldid = DB_GetID(oldname);
+	if (oldid < 0)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: no record for \"%s\"\n", oldname);
+		return false;
+	}
+
+	newid = DB_GetID(newname);
+
+	// Simple case: the new name is unused, so just relabel the row.
+	if (newid < 0)
+	{
+		if (sqlite3_prepare_v2(dbconn,
+				"UPDATE userdata SET playername=? WHERE char_idx=?",
+				-1, &res, NULL) != SQLITE_OK)
+		{
+			db_error("DB_RenamePlayer");
+			return false;
+		}
+		sqlite3_bind_text(res, 1, newname, -1, SQLITE_TRANSIENT);
+		sqlite3_bind_int(res, 2, oldid);
+
+		if (sqlite3_step(res) != SQLITE_DONE)
+		{
+			db_error("DB_RenamePlayer");
+			sqlite3_finalize(res);
+			return false;
+		}
+		sqlite3_finalize(res);
+
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: \"%s\" is now \"%s\"\n", oldname, newname);
+		return true;
+	}
+
+	if (oldid == newid)
+	{
+		gi.cprintf(NULL, PRINT_HIGH, "statsdb: those are the same record.\n");
+		return false;
+	}
+
+	// Both names exist, so fold the old record into the new one. Counters add,
+	// bests take the larger, member_since keeps the earlier of the two.
+	if (!db_exec("BEGIN TRANSACTION;"))
+		return false;
+
+	{
+		char sql[1024];
+		qboolean ok;
+
+		snprintf(sql, sizeof(sql), "UPDATE game_stats SET"
+			" shots      = shots      + (SELECT shots      FROM game_stats WHERE char_idx=%d),"
+			" shots_hit  = shots_hit  + (SELECT shots_hit  FROM game_stats WHERE char_idx=%d),"
+			" frags      = frags      + (SELECT frags      FROM game_stats WHERE char_idx=%d),"
+			" fragged    = fragged    + (SELECT fragged    FROM game_stats WHERE char_idx=%d),"
+			" num_sprees = num_sprees + (SELECT num_sprees FROM game_stats WHERE char_idx=%d),"
+			" suicides   = suicides   + (SELECT suicides   FROM game_stats WHERE char_idx=%d),"
+			" max_streak = MAX(max_streak, (SELECT max_streak FROM game_stats WHERE char_idx=%d))"
+			" WHERE char_idx=%d",
+			oldid, oldid, oldid, oldid, oldid, oldid, oldid, newid);
+		ok = db_exec(sql);
+
+		if (ok)
+		{
+			snprintf(sql, sizeof(sql), "UPDATE ctf_stats SET"
+				" flag_pickups  = flag_pickups  + (SELECT flag_pickups  FROM ctf_stats WHERE char_idx=%d),"
+				" flag_captures = flag_captures + (SELECT flag_captures FROM ctf_stats WHERE char_idx=%d),"
+				" flag_returns  = flag_returns  + (SELECT flag_returns  FROM ctf_stats WHERE char_idx=%d),"
+				" flag_kills    = flag_kills    + (SELECT flag_kills    FROM ctf_stats WHERE char_idx=%d),"
+				" offense_kills = offense_kills + (SELECT offense_kills FROM ctf_stats WHERE char_idx=%d),"
+				" defense_kills = defense_kills + (SELECT defense_kills FROM ctf_stats WHERE char_idx=%d),"
+				" assists       = assists       + (SELECT assists       FROM ctf_stats WHERE char_idx=%d),"
+				" sweeps        = sweeps        + (SELECT sweeps        FROM ctf_stats WHERE char_idx=%d),"
+				" max_cap_streak = MAX(max_cap_streak,"
+				" (SELECT max_cap_streak FROM ctf_stats WHERE char_idx=%d))"
+				" WHERE char_idx=%d",
+				oldid, oldid, oldid, oldid, oldid, oldid, oldid, oldid, oldid, newid);
+			ok = db_exec(sql);
+		}
+
+		if (ok)
+		{
+			snprintf(sql, sizeof(sql), "UPDATE userdata SET"
+				" playtime_total = playtime_total + (SELECT playtime_total FROM userdata WHERE char_idx=%d),"
+				" member_since = MIN(NULLIF(member_since,''),"
+				" (SELECT NULLIF(member_since,'') FROM userdata WHERE char_idx=%d))"
+				" WHERE char_idx=%d", oldid, oldid, newid);
+			ok = db_exec(sql);
+		}
+
+		if (ok)
+		{
+			static const char *tables[] = { "userdata", "game_stats", "ctf_stats", "character_data", NULL };
+			int k;
+
+			for (k = 0; tables[k] && ok; k++)
+			{
+				snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE char_idx=%d", tables[k], oldid);
+				ok = db_exec(sql);
+			}
+		}
+
+		if (!ok)
+		{
+			db_exec("ROLLBACK;");
+			return false;
+		}
+	}
+
+	if (!db_exec("COMMIT;"))
+		return false;
+
+	gi.cprintf(NULL, PRINT_HIGH, "statsdb: merged \"%s\" into \"%s\"\n", oldname, newname);
+	return true;
+}
+
+int DB_Prune(int days)
+{
+	sqlite3_stmt *res = NULL;
+	char cutoff[32];
+	time_t when;
+	struct tm *lt;
+	int before = 0, after = 0;
+
+	if (days < 1)
+		return -1;
+
+	if (!dbconn && !DB_Conn_Start())
+		return -1;
+
+	when = time(NULL) - (time_t)days * 86400;
+	lt = localtime(&when);
+	if (!lt)
+		return -1;
+
+	// last_played is written by stats_fold_session in this exact layout, which
+	// sorts correctly as text
+	strftime(cutoff, sizeof(cutoff), "%Y-%m-%d %H:%M:%S", lt);
+
+	if (sqlite3_prepare_v2(dbconn, "SELECT COUNT(*) FROM userdata", -1, &res, NULL) == SQLITE_OK &&
+		sqlite3_step(res) == SQLITE_ROW)
+		before = sqlite3_column_int(res, 0);
+	sqlite3_finalize(res);
+
+	if (!db_exec("BEGIN TRANSACTION;"))
+		return -1;
+
+	// Rows with an empty last_played have never been folded, so they are left
+	// alone rather than treated as infinitely old.
+	//
+	// Built with snprintf into local buffers rather than nested va() calls:
+	// va() hands back a rotating static buffer, so va(fmt, va(...)) can clobber
+	// its own argument.
+	{
+		static const char *tables[] = { "game_stats", "ctf_stats", "character_data", NULL };
+		char sql[512];
+		int i;
+		qboolean ok = true;
+
+		for (i = 0; tables[i] && ok; i++)
+		{
+			snprintf(sql, sizeof(sql),
+				"DELETE FROM %s WHERE char_idx IN (SELECT char_idx FROM userdata"
+				" WHERE last_played <> '' AND last_played < '%s')", tables[i], cutoff);
+			ok = db_exec(sql);
+		}
+
+		if (ok)
+		{
+			snprintf(sql, sizeof(sql),
+				"DELETE FROM userdata WHERE last_played <> '' AND last_played < '%s'", cutoff);
+			ok = db_exec(sql);
+		}
+
+		if (!ok)
+		{
+			db_exec("ROLLBACK;");
+			return -1;
+		}
+	}
+
+	if (!db_exec("COMMIT;"))
+		return -1;
+
+	if (sqlite3_prepare_v2(dbconn, "SELECT COUNT(*) FROM userdata", -1, &res, NULL) == SQLITE_OK &&
+		sqlite3_step(res) == SQLITE_ROW)
+		after = sqlite3_column_int(res, 0);
+	sqlite3_finalize(res);
+
+	return before - after;
 }

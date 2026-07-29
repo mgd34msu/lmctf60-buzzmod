@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "ctf_file_io.h"
 #include "g_menu.h"
 #include "m_player.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -2835,6 +2836,10 @@ void ClientCommand(edict_t* ent)
 #endif
 	else if (Q_stricmp(cmd, "stats") == 0) // STATS - LM_Hati
 		Cmd_PlayerStats_f(ent);            // STATS - LM_Hati
+	else if (Q_stricmp(cmd, "rank") == 0)
+		Cmd_Rank_f (ent);
+	else if (Q_stricmp(cmd, "lifetime") == 0)
+		Cmd_Lifetime_f (ent);
 	else if (Q_stricmp(cmd, "statsall") == 0) // STATS - LM_Surt
 		Cmd_StatsAll_f(ent);            // STATS - LM_Surt
 #ifdef OLDOBSERVERCODE

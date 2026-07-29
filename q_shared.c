@@ -782,7 +782,9 @@ char	*va(char *format, ...)
 	static char		string[1024];
 	
 	va_start (argptr, format);
-	vsprintf (string, format,argptr);
+	// was vsprintf: an unbounded write into a fixed 1024-byte static, which any
+	// caller with a long enough format could run straight off the end
+	vsnprintf (string, sizeof(string), format, argptr);
 	va_end (argptr);
 
 	return string;	

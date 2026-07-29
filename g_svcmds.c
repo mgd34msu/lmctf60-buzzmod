@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "ctf_file_io.h"
 
 void ctf_BSafePrint(long print_priority, char * buf);
 
@@ -314,6 +315,8 @@ void	ServerCommand (void)
 		SVCmd_WriteIP_f ();
 	else if (Q_stricmp (cmd, "quadtime") == 0)
 		SVCmd_QuadTime_f ();
+	else if (Q_stricmp (cmd, "statsdb") == 0)
+		CTF_StatsDB_Command ();
 	else if ((Q_stricmp (cmd, "next") == 0) || (Q_stricmp (cmd, "skip") == 0))
 		Svcmd_NextLevel_f ();
 	else

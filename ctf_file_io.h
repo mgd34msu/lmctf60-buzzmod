@@ -27,6 +27,11 @@ qboolean ctf_get_player_file_path(const char *playername, char *out, size_t outs
 // Builds "<gamedir>/players.db" for the unified backend.
 qboolean ctf_get_unified_db_path(char *out, size_t outsize);
 
+// Builds "<gamedir>/<name>" for an admin-supplied output filename. Rejects
+// anything with a path separator or "..", so "sv statsdb export" cannot be
+// talked into writing outside the game directory.
+qboolean ctf_safe_output_path(const char *name, char *out, size_t outsize);
+
 // mkdir if absent. Returns true when the directory exists on return.
 qboolean CreateDirIfNotExists(const char *path);
 
@@ -34,6 +39,16 @@ qboolean CreateDirIfNotExists(const char *path);
 // server start rather than on the first player event, so a bad path or a
 // permission problem shows up in the console instead of mid-match.
 void CTF_StatsDB_Init(void);
+
+// "sv statsdb ..." console command.
+void CTF_StatsDB_Command(void);
+
+// "cmd lifetime [name]" -- a player's persisted totals, as opposed to "cmd
+// stats", which only ever shows the current level.
+void Cmd_Lifetime_f(edict_t *ent);
+
+// "cmd rank [column] [n]" -- leaderboard for players, not just admins.
+void Cmd_Rank_f(edict_t *ent);
 
 // Front door used by the game code. Dispatches on ctf_statsdb.
 qboolean CommitPlayerData(edict_t *ent);

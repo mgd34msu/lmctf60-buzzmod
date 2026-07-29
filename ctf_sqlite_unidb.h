@@ -12,6 +12,17 @@ void     DB_Conn_Cleanup(void);		// close it; safe to call when never opened
 int      DB_GetID(const char *playername);	// existing char_idx, or -1
 int      DB_NewID(const char *playername);	// allocate a char_idx with base rows
 
+// admin surface, unified backend only (per-player files have no cross-player view)
+qboolean DB_Reset(void);                                  // wipe every row
+void     DB_Status(void);                                 // path, size, row counts
+void     DB_Top(const char *field, int count);            // leaderboard for one column
+qboolean DB_PrintPlayer(const char *playername);          // one player's record
+qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize);
+qboolean DB_Export(const char *path);                     // TSV dump
+qboolean DB_Backup(const char *path);                     // live-safe file copy
+qboolean DB_RenamePlayer(const char *oldname, const char *newname);
+int      DB_Prune(int days);                              // rows dropped, or -1
+
 qboolean DB_LoadPlayer(edict_t *player);
 qboolean DB_SavePlayer(edict_t *player);
 
