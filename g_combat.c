@@ -608,9 +608,13 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 		if ((redflag  &&  redflag->owner == targ)	||
 			(blueflag && blueflag->owner == targ))
 		{
+			// the sound call sat outside the guard, so world damage to a flag
+			// carrier reached gi.sound with a NULL attacker
 			if (attacker && attacker->client)
+			{
 				attacker->client->hit_carrier_time = level.time;
 				gi.sound(attacker, CHAN_ITEM, gi.soundindex("fc-hit.wav"), 1, ATTN_NORM, 0);
+			}
 		}
 		// END LM_JORM
 			

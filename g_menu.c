@@ -1987,7 +1987,7 @@ void Menu_Draw (edict_t *ent)
 	if (ent->client->menumovetime == level.framenum && !GamePaused())
 		return;
 
-		ent->client->menumovetime = level.framenum;
+	ent->client->menumovetime = level.framenum;
 	
 	gi.WriteByte (svc_layout);
 	strcpy(string, "xv 32 yv 8 picn inventory ");

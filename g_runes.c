@@ -560,9 +560,11 @@ void homing_think(edict_t* ent)
 			continue;
 		if (blip == ent->owner)
 			continue;
-		if (!is_infront)
+		// these were written as bare function names, so both tests were always
+		// false and the homing rune happily locked on through walls and behind it
+		if (!is_infront(ent, blip))
 			continue;
-		if (!is_visible)
+		if (!is_visible(ent, blip))
 			continue;
 		VectorSubtract(blip->s.origin, ent->s.origin, blipdir);
 		blipdir[2] += 48;

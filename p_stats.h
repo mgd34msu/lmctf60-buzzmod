@@ -88,6 +88,9 @@ void stats_set(edict_t* ent, int stat, long amount);
 long stats_get(edict_t* ent, int stat);
 void stats_set_name(edict_t* ent, char* name);
 void stats_clear(edict_t* ent);
+
+// folds this session's counters into client->ctfstats for the SQLite backends
+void stats_fold_session(edict_t* ent);
 void Cmd_PlayerStats_f(edict_t* ent);
 void stats_log_init();
 void stats_log_reset();

@@ -162,6 +162,9 @@ qboolean CommitPlayerData(edict_t *ent)
 		return false;
 	}
 
+	// roll this session's counters into the lifetime totals before writing
+	stats_fold_session(ent);
+
 	switch (CTF_StatsDBMode())
 	{
 	case CTF_STATSDB_PERPLAYER:

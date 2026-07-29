@@ -1,9 +1,37 @@
 #include <string.h>
+#include <stdio.h>
 #include "g_local.h"
 #include "g_tourney.h"
 #include "g_ctffunc.h"
+#include <time.h>
 
 stats_player_s* p_start_player = NULL;
+
+// Appends to a fixed buffer without ever running past its end.
+//
+// stats_output used strcat into a 512-byte outbuf while emitting roughly 800
+// bytes of literal text plus 30 numeric conversions, so every "cmd stats"
+// overran the stack even with all-zero stats. Stock LMCTF fit inside 512; the
+// PICKUPS, RAIL and DAMAGE sections are what pushed it over.
+//
+// ctf_SafePrint only queues 2000 bytes per call, so that is the real ceiling.
+#define STATS_OUTBUF_SIZE	2048
+
+static void stats_appendbuf(char* dest, size_t destsize, const char* src)
+{
+	size_t used;
+
+	if (!dest || !src || destsize == 0)
+		return;
+
+	used = strlen(dest);
+	if (used + 1 >= destsize)
+		return;					// full; drop the rest rather than corrupt
+
+	strncpy(dest + used, src, destsize - used - 1);
+	dest[destsize - 1] = '\0';
+}
+
 
 void stats_log_init()
 {
@@ -74,13 +102,18 @@ stats_player_s* stats_new_player(char* name)
 
 void stats_set_name(edict_t* ent, char* name)
 {
+	if (!ent || !ent->client || !name)
+		return;
 
 	if (ent->client->p_stats_player)
 	{
 		/* here should check for duplicate name
 		   if duplicate name is found, disallow change,
 		   and force back to original name  */
-		strcpy(ent->client->p_stats_player->info.name, name);
+		strncpy(ent->client->p_stats_player->info.name, name,
+			sizeof(ent->client->p_stats_player->info.name) - 1);
+		ent->client->p_stats_player->info.name[
+			sizeof(ent->client->p_stats_player->info.name) - 1] = 0;
 	}
 	return;
 }
@@ -134,24 +167,110 @@ void stats_cleanup()
 
 void stats_add(edict_t* ent, int stat, long amount)
 {
+	if (!ent || !ent->client)
+		return;
+	if (stat < 0 || stat >= MAX_PLAYER_STATS)
+		return;
+
 	if (Match_CanScore() && ent->client->p_stats_player)
 		ent->client->p_stats_player->stats[stat] += amount;
 }
 
 void stats_set(edict_t* ent, int stat, long amount)
 {
+	if (!ent || !ent->client)
+		return;
+	if (stat < 0 || stat >= MAX_PLAYER_STATS)
+		return;
+
 	if (Match_CanScore() && ent->client->p_stats_player)
 		ent->client->p_stats_player->stats[stat] = amount;
 }
 
 long stats_get(edict_t* ent, int stat)
 {
+	if (!ent || stat < 0 || stat >= MAX_PLAYER_STATS)
+		return 0;
+
 	if (ent->client && ent->client->p_stats_player)
 		return (ent->client->p_stats_player->stats[stat]);
 	else
 		return 0;
 }
 
+
+/*
+==================
+stats_fold_session
+
+Folds this session's counters (stats_player_s.stats[], which stats_cleanup
+wipes at every level change) into the player's lifetime totals in
+client->ctfstats, which is what the SQLite backends read and write.
+
+Without this the database round-trips an all-zero struct: gameplay only ever
+touched the session array, and nothing ever wrote ctfstats.
+
+Called from CommitPlayerData just before the backend save. The session array is
+zeroed afterwards so a second commit in the same session cannot double-count.
+
+Not every lifetime field has a session counter yet -- offense_kills, num_sprees,
+max_streak and suicides have no STATS_* equivalent, so they are left alone
+rather than guessed at.
+==================
+*/
+void stats_fold_session(edict_t* ent)
+{
+	playerstats_t* ps;
+	time_t now;
+	struct tm* lt;
+	long session_seconds;
+
+	if (!ent || !ent->client || !ent->client->p_stats_player)
+		return;
+
+	ps = &ent->client->ctfstats;
+
+	ps->frags         += (unsigned int)stats_get(ent, STATS_FRAGS);
+	ps->fragged       += (unsigned int)stats_get(ent, STATS_DEATHS);
+
+	ps->flag_pickups  += (int)stats_get(ent, STATS_OFFENSE_FLAG);
+	ps->flag_captures += (int)stats_get(ent, STATS_CAPTURES);
+	ps->flag_returns  += (int)stats_get(ent, STATS_RETURNS);
+	ps->flag_kills    += (int)stats_get(ent, STATS_OFFENSE_CARRIER);
+	ps->assists       += (int)stats_get(ent, STATS_ASSISTS);
+
+	ps->defense_kills += (int)(stats_get(ent, STATS_DEFENSE_BASE) +
+	                           stats_get(ent, STATS_DEFENSE_FLAG) +
+	                           stats_get(ent, STATS_DEFENSE_CARRIER));
+
+	// only the railgun is instrumented for shots/hits so far
+	ps->shots         += (unsigned long)stats_get(ent, STATS_RAIL_SHOT);
+	ps->shots_hit     += (unsigned long)stats_get(ent, STATS_RAIL_HIT);
+
+	// time on the server this session, in seconds (one frame = 100ms)
+	session_seconds = (long)((level.framenum - ent->client->ctf.original_enterframe) / 10);
+	if (session_seconds > 0)
+	{
+		ps->playingtime    += (int)session_seconds;
+		ps->total_playtime += (int)(session_seconds / 60);
+	}
+
+	now = time(NULL);
+	lt = localtime(&now);
+	if (lt)
+	{
+		strftime(ps->last_played, sizeof(ps->last_played), "%Y-%m-%d %H:%M:%S", lt);
+		if (ps->member_since[0] == '\0')
+			strncpy(ps->member_since, ps->last_played, sizeof(ps->member_since) - 1);
+		ps->member_since[sizeof(ps->member_since) - 1] = '\0';
+	}
+
+	strncpy(ps->player_name, ent->client->pers.netname, sizeof(ps->player_name) - 1);
+	ps->player_name[sizeof(ps->player_name) - 1] = '\0';
+
+	// folded; clear the session so a second commit cannot count it twice
+	stats_init_player(ent->client->p_stats_player);
+}
 
 void stats_clear(edict_t* ent)
 {
@@ -177,7 +296,7 @@ void stats_output(edict_t* ent, stats_player_s* p_player)
 
 	char teambuf[MAX_INFO_STRING];
 	char* conbuf;
-	char outbuf[MAX_INFO_STRING];
+	char outbuf[STATS_OUTBUF_SIZE];
 	char tmpbuf[MAX_INFO_STRING];
 
 	strcpy(teambuf, "");
@@ -196,35 +315,35 @@ void stats_output(edict_t* ent, stats_player_s* p_player)
 
 
 	Com_sprintf (tmpbuf, sizeof tmpbuf, "\n(%s) [%s] %s\n", teambuf, conbuf, p_player->info.name);
-	strcat(outbuf, tmpbuf);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
 	// BUZZKILL - IMPROVED ANALYTICS - START
-	sprintf(tmpbuf, "--SCORE--------------------------------------\nScore=%ld Frags=%ld Deaths=%ld Eff=%ld%%\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "--SCORE--------------------------------------\nScore=%ld Frags=%ld Deaths=%ld Eff=%ld%%\n",
 		p_player->stats[STATS_SCORE],
 		p_player->stats[STATS_FRAGS],
 		p_player->stats[STATS_DEATHS],
 		total_encounters == 0 ? 0 : 100 * p_player->stats[STATS_FRAGS] / total_encounters);
-	strcat(outbuf, tmpbuf);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
-	sprintf(tmpbuf, "--CTF----------------------------------------\nDef Base=%ld Def Flag=%ld Def Carrier=%ld\nGot Flag=%ld Lost Flag=%ld Captures=%ld\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "--CTF----------------------------------------\nDef Base=%ld Def Flag=%ld Def Carrier=%ld\nGot Flag=%ld Lost Flag=%ld Captures=%ld\n",
 		p_player->stats[STATS_DEFENSE_BASE],
 		p_player->stats[STATS_DEFENSE_FLAG],
 		p_player->stats[STATS_DEFENSE_CARRIER],
 		p_player->stats[STATS_OFFENSE_FLAG],
 		p_player->stats[STATS_OFFENSE_FLAGLOST],
 		p_player->stats[STATS_CAPTURES]);
-	strcat(outbuf, tmpbuf);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
-	sprintf(tmpbuf, "Kill Carrier=%ld Flag Returns=%ld Assists=%ld\n--PING---------------------------------------\nAverage Ping=%ld Samples=%ld\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "Kill Carrier=%ld Flag Returns=%ld Assists=%ld\n--PING---------------------------------------\nAverage Ping=%ld Samples=%ld\n",
 		p_player->stats[STATS_OFFENSE_CARRIER],
 		p_player->stats[STATS_RETURNS],
 		p_player->stats[STATS_ASSISTS],
 		p_player->stats[STATS_PING_TOTAL] / (p_player->stats[STATS_PING_SAMPLES] > 0 ? p_player->stats[STATS_PING_SAMPLES] : 1),
 		p_player->stats[STATS_PING_SAMPLES]);
-	strcat(outbuf, tmpbuf);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
 	// BUZZKILL - IMPROVED ANALYTICS - RUNES
-	sprintf(tmpbuf, "--PICKUPS------------------------------------\nStrength=%ld Haste=%ld Regen=%ld Resist=%ld\nQuad=%ld Shield=%ld Armor=%ld Mega=%ld\n---------------------------------------------\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "--PICKUPS------------------------------------\nStrength=%ld Haste=%ld Regen=%ld Resist=%ld\nQuad=%ld Shield=%ld Armor=%ld Mega=%ld\n---------------------------------------------\n",
 		p_player->stats[STATS_RUNE_STRENGTH],
 		p_player->stats[STATS_RUNE_HASTE],
 		p_player->stats[STATS_RUNE_REGEN],
@@ -233,20 +352,20 @@ void stats_output(edict_t* ent, stats_player_s* p_player)
 		p_player->stats[STATS_ITEM_SHIELD],
 		p_player->stats[STATS_ITEM_ARMOR],
 		p_player->stats[STATS_ITEM_MEGA]);
-	strcat(outbuf, tmpbuf);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
-	sprintf(tmpbuf, "--RAIL---------------------------------------\nShots=%ld Hits=%ld Kills=%ld Accuracy=%ld\n---------------------------------------------\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "--RAIL---------------------------------------\nShots=%ld Hits=%ld Kills=%ld Accuracy=%ld\n---------------------------------------------\n",
 		p_player->stats[STATS_RAIL_SHOT],
 		p_player->stats[STATS_RAIL_HIT],
 		p_player->stats[STATS_RAIL_KILL],
 		p_player->stats[STATS_RAIL_SHOT] == 0 ? 0 : 100 * p_player->stats[STATS_RAIL_HIT] / p_player->stats[STATS_RAIL_SHOT]);
-	strcat(outbuf, tmpbuf);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
-	sprintf(tmpbuf, "--DAMAGE-------------------------------------\nGiven=%ld Received=%ld Eff=%ld\n---------------------------------------------\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "--DAMAGE-------------------------------------\nGiven=%ld Received=%ld Eff=%ld\n---------------------------------------------\n",
 		p_player->stats[STATS_DAMAGE_GIVEN],
 		p_player->stats[STATS_DAMAGE_REC],
 		p_player->stats[STATS_DAMAGE_REC] == 0 ? 100 : 100 * p_player->stats[STATS_DAMAGE_GIVEN] / p_player->stats[STATS_DAMAGE_REC]);
-	strcat(outbuf, tmpbuf);
+	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
 	// BUZZKILL - IMPROVED ANALYTICS - END
 
