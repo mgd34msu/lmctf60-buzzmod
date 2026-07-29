@@ -4,11 +4,6 @@ A fork of [QwazyWabbit's LMCTF](https://github.com/QwazyWabbitWOS/lmctf60) for Q
 adding persistent player statistics backed by SQLite, an expanded scoreboard, and a set of
 console commands for administering the stats database.
 
-Everything QwazyWabbit's version does, this does too. What is new is that the numbers
-survive the map change, the server restart, and the player reconnecting.
-
-Maintained by Mike Davis (buzzkill).
-
 ## Which version is this based on?
 
 Upstream at the fork point declares itself **`LMCTF TE 6.0`** in `g_local.h`.

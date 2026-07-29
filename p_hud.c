@@ -1391,7 +1391,8 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
     size_t  stringlength;
     int     i;
-    size_t  j;
+    int     j;      // sort index and strlen result; int so the
+                    // comparisons against red/blue/k stay signed
     int     k;
 
     int     redsorted[MAX_CLIENTS];
@@ -1475,7 +1476,7 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
         );
         
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j < 1024)
         {
             strcpy(string + stringlength, string2);
@@ -1505,7 +1506,7 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
         );
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j > 1024)
             break;
         strcpy(string + stringlength, string2);
@@ -1539,7 +1540,7 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
 
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j > 1024)
             break;
         strcpy(string + stringlength, string2);
@@ -1597,7 +1598,8 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
 
     size_t  stringlength;
     int     i;
-    size_t  j;
+    int     j;      // sort index and strlen result; int so the
+                    // comparisons against red/blue/k stay signed
     int     k;
 
     int     redsorted[MAX_CLIENTS];
@@ -1749,7 +1751,7 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
 
         );
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j < 1024)
         {
             strcpy(string + stringlength, string2);
@@ -1789,7 +1791,8 @@ void RailboardMessage(edict_t* ent, edict_t* killer)
 
     size_t  stringlength;
     int     i;
-    size_t  j;
+    int     j;      // sort index and strlen result; int so the
+                    // comparisons against red/blue/k stay signed
     int     k;
     int     player = 0;
     int     rails = 0;
@@ -1847,7 +1850,7 @@ void RailboardMessage(edict_t* ent, edict_t* killer)
 
         );
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j < 1024)
         {
             strcpy(string + stringlength, string2);
@@ -1879,7 +1882,7 @@ void RailboardMessage(edict_t* ent, edict_t* killer)
                       stats_get(cl_ent, STATS_RAIL_SHOT))
         );
 
-        j = strlen(string2);
+        j = (int)strlen(string2);
         if (stringlength + j > 1024)
             break;
         strcpy(string + stringlength, string2);
