@@ -30,6 +30,11 @@ qboolean ctf_get_unified_db_path(char *out, size_t outsize);
 // mkdir if absent. Returns true when the directory exists on return.
 qboolean CreateDirIfNotExists(const char *path);
 
+// Opens (and if needed creates) whichever backend ctf_statsdb selects, at
+// server start rather than on the first player event, so a bad path or a
+// permission problem shows up in the console instead of mid-match.
+void CTF_StatsDB_Init(void);
+
 // Front door used by the game code. Dispatches on ctf_statsdb.
 qboolean CommitPlayerData(edict_t *ent);
 qboolean LoadPlayerData(edict_t *ent);

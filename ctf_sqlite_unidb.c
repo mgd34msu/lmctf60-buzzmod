@@ -24,19 +24,19 @@
 #include "ctf_sqlite_unidb.h"
 
 #define DB_CREATEUDATA \
-	"CREATE TABLE [userdata] ([char_idx] INTEGER, [playername] CHAR(64), " \
+	"CREATE TABLE IF NOT EXISTS [userdata] ([char_idx] INTEGER, [playername] CHAR(64), " \
 	"[member_since] CHAR(30), [last_played] CHAR(30), [playtime_total] INTEGER,[playingtime] INTEGER)"
 #define DB_CREATESTATS \
-	"CREATE TABLE [game_stats] ([char_idx] INTEGER,  [shots] INTEGER,   " \
+	"CREATE TABLE IF NOT EXISTS [game_stats] ([char_idx] INTEGER,  [shots] INTEGER,   " \
 	"[shots_hit] INTEGER,   [frags] INTEGER,   [fragged] INTEGER,   " \
 	"[num_sprees] INTEGER,   [max_streak] INTEGER,   [suicides] INTEGER)"
 #define DB_CREATECTFSTATS \
-	"CREATE TABLE [ctf_stats] ([char_idx] INTEGER,  [flag_pickups] INTEGER,   " \
+	"CREATE TABLE IF NOT EXISTS [ctf_stats] ([char_idx] INTEGER,  [flag_pickups] INTEGER,   " \
 	"[flag_captures] INTEGER,   [flag_returns] INTEGER,   [flag_kills] INTEGER,   " \
 	"[offense_kills] INTEGER,   [defense_kills] INTEGER,   [assists] INTEGER,   " \
 	"[max_cap_streak] INTEGER,   [sweeps] INTEGER)"
 #define DB_CREATECDATA \
-	"CREATE TABLE [character_data] ([char_idx] INTEGER,  [adminlevel] INTEGER)"
+	"CREATE TABLE IF NOT EXISTS [character_data] ([char_idx] INTEGER,  [adminlevel] INTEGER)"
 
 #define DB_UPDATEUDATA \
 	"UPDATE userdata SET playername=?, member_since=?, last_played=?, " \
@@ -192,11 +192,22 @@ qboolean DB_Conn_Start(void)
 	db_exec("PRAGMA journal_mode=WAL;");
 	db_exec("PRAGMA synchronous=NORMAL;");
 
-	if (!db_has_schema() && !build_db())
+	// build_db is CREATE TABLE IF NOT EXISTS throughout, so running it every
+	// time is safe and repairs a database that lost a table -- the old code
+	// probed only for `userdata` and skipped the rest if that one existed.
 	{
-		sqlite3_close(dbconn);
-		dbconn = NULL;
-		return false;
+		qboolean fresh = !db_has_schema();
+
+		if (!build_db())
+		{
+			db_error("creating schema");
+			sqlite3_close(dbconn);
+			dbconn = NULL;
+			return false;
+		}
+
+		if (fresh)
+			gi.dprintf("stats db: created %s\n", dbname);
 	}
 
 	// databases written before capture streaks and sweeps existed

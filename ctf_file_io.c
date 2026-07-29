@@ -151,6 +151,37 @@ qboolean CreateDirIfNotExists(const char *path)
 	return false;
 }
 
+void CTF_StatsDB_Init(void)
+{
+	char dir[CTF_MAX_DBPATH];
+	int written;
+
+	switch (CTF_StatsDBMode())
+	{
+	case CTF_STATSDB_UNIFIED:
+		if (DB_Conn_Start())
+			gi.dprintf("stats db: unified backend ready.\n");
+		else
+			gi.dprintf("stats db: unified backend could not be opened, "
+				"stats will not persist.\n");
+		break;
+
+	case CTF_STATSDB_PERPLAYER:
+		written = snprintf(dir, sizeof(dir), "%s%cplayers", gamedir->string, CTF_PATHSEP);
+
+		if (written > 0 && (size_t)written < sizeof(dir) && CreateDirIfNotExists(dir))
+			gi.dprintf("stats db: per-player backend ready (%s).\n", dir);
+		else
+			gi.dprintf("stats db: per-player directory unavailable, "
+				"stats will not persist.\n");
+		break;
+
+	default:
+		gi.dprintf("stats db: disabled (ctf_statsdb 0).\n");
+		break;
+	}
+}
+
 qboolean CommitPlayerData(edict_t *ent)
 {
 	char path[CTF_MAX_DBPATH];

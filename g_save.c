@@ -1,6 +1,7 @@
 
 #include "g_local.h"
 #include "ctf_sqlite_unidb.h"
+#include "ctf_file_io.h"
 
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
@@ -376,6 +377,8 @@ void InitGame(void)
 	}
 
 	SkinsReadFile(); // READ our skins.ini
+
+	CTF_StatsDB_Init();	// open/create the stats database now, not mid-match
 
 
 	// END CTF CODE -- LM_JORM

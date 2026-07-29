@@ -26,19 +26,19 @@
 #include "ctf_sqlite_player.h"
 
 #define SQL_CREATE_USERDATA \
-	"CREATE TABLE [userdata] ([playername] CHAR(64), [member_since] CHAR(30), " \
+	"CREATE TABLE IF NOT EXISTS [userdata] ([playername] CHAR(64), [member_since] CHAR(30), " \
 	"[last_played] CHAR(30), [playtime_total] INTEGER,[playingtime] INTEGER)"
 #define SQL_CREATE_GAMESTATS \
-	"CREATE TABLE [game_stats] ([shots] INTEGER,   [shots_hit] INTEGER,   " \
+	"CREATE TABLE IF NOT EXISTS [game_stats] ([shots] INTEGER,   [shots_hit] INTEGER,   " \
 	"[frags] INTEGER,   [fragged] INTEGER,   [num_sprees] INTEGER,   " \
 	"[max_streak] INTEGER,   [suicides] INTEGER)"
 #define SQL_CREATE_CTFSTATS \
-	"CREATE TABLE [ctf_stats] ([flag_pickups] INTEGER,   [flag_captures] INTEGER,   " \
+	"CREATE TABLE IF NOT EXISTS [ctf_stats] ([flag_pickups] INTEGER,   [flag_captures] INTEGER,   " \
 	"[flag_returns] INTEGER,   [flag_kills] INTEGER,   [offense_kills] INTEGER,   " \
 	"[defense_kills] INTEGER,   [assists] INTEGER,   " \
 	"[max_cap_streak] INTEGER,   [sweeps] INTEGER)"
 #define SQL_CREATE_CHARDATA \
-	"CREATE TABLE [character_data] ([adminlevel] INTEGER)"
+	"CREATE TABLE IF NOT EXISTS [character_data] ([adminlevel] INTEGER)"
 
 #define SQL_UPDATE_UDATA \
 	"UPDATE userdata SET playername=?, member_since=?, last_played=?, " \
@@ -102,28 +102,63 @@ static void ctf_copy_text(char *dest, size_t destsize, const unsigned char *src)
 	dest[destsize - 1] = '\0';
 }
 
-// Creates the four tables and their single base row. Called only when the
-// database file did not already contain a userdata table.
-static qboolean ctf_build_player_db(sqlite3 *db)
+// Creates the four tables. IF NOT EXISTS throughout, so this is safe to run on
+// every save and repairs a file that somehow lost one -- the old version ran
+// only when the `userdata` probe failed, which left a partially built file
+// broken forever.
+static qboolean ctf_create_tables(sqlite3 *db)
 {
 	static const char *schema[] = {
 		SQL_CREATE_USERDATA,
 		SQL_CREATE_GAMESTATS,
 		SQL_CREATE_CTFSTATS,
 		SQL_CREATE_CHARDATA,
+		NULL
+	};
+	int i;
+
+	for (i = 0; schema[i]; i++)
+	{
+		if (!ctf_sql_exec(db, schema[i]))
+			return false;
+	}
+
+	return true;
+}
+
+// Each table in a per-player file holds exactly one row, so the base rows go in
+// once. Kept separate from table creation: re-running the CREATEs is harmless,
+// re-running the INSERTs would give the player a second, shadow row.
+static qboolean ctf_ensure_base_rows(sqlite3 *db)
+{
+	static const char *bases[] = {
 		"INSERT INTO userdata VALUES (\"\",\"\",\"\",0,0)",
 		"INSERT INTO game_stats VALUES (0,0,0,0,0,0,0)",
 		"INSERT INTO ctf_stats VALUES (0,0,0,0,0,0,0,0,0)",
 		"INSERT INTO character_data VALUES (0)",
 		NULL
 	};
+	sqlite3_stmt *res = NULL;
+	int rows = -1;
 	int i;
+
+	if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM userdata", -1, &res, NULL) != SQLITE_OK)
+	{
+		ctf_sql_error(db, "base row probe");
+		return false;
+	}
+	if (sqlite3_step(res) == SQLITE_ROW)
+		rows = sqlite3_column_int(res, 0);
+	sqlite3_finalize(res);
+
+	if (rows != 0)
+		return (rows > 0);	// already populated, or the probe failed
 
 	gi.dprintf("SQLite: creating initial database [%d]... ", CTF_STATSDB_PERPLAYER);
 
-	for (i = 0; schema[i]; i++)
+	for (i = 0; bases[i]; i++)
 	{
-		if (!ctf_sql_exec(db, schema[i]))
+		if (!ctf_sql_exec(db, bases[i]))
 			return false;
 	}
 
@@ -293,7 +328,7 @@ qboolean CTF_SavePlayer(edict_t *player, const char *path, const char *playernam
 		return false;
 	}
 
-	if (!ctf_db_has_schema(db) && !ctf_build_player_db(db))
+	if (!ctf_create_tables(db) || !ctf_ensure_base_rows(db))
 	{
 		sqlite3_close(db);
 		return false;
