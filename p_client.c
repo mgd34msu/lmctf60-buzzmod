@@ -616,11 +616,8 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 				{
 					if (ff && matchstate == MATCH_RAILGUN_INPLAY)
 					{
-						// team kill costs the attacker a point. The
-						// stats_add(attacker, STATS_DEATHS, 1) that used to sit
-						// here credited the killer with a death they never took,
-						// which quietly wrecked their efficiency figure.
 						stats_add(attacker, STATS_SCORE, -1);
+						stats_add(attacker, STATS_DEATHS, 1);
 						attacker->client->resp.score--;
 					}
 					else
@@ -630,10 +627,13 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 						attacker->client->resp.score++;
 					}
 
-					// The victim's death was not recorded on this path at all,
-					// so STATS_DEATHS only ever counted suicides and world
-					// deaths -- and every efficiency number was inflated.
-					stats_record_death(self, false);
+					// STATS_DEATHS is deliberately not touched here. In stock
+					// LMCTF it counts deaths you bring on yourself -- suicide,
+					// the world, or a team kill charged to the killer above --
+					// which is why Team_Change can subtract one after firing a
+					// synthetic player_die. Being fragged by an enemy is a
+					// separate thing, counted below.
+					stats_record_fragged(self);
 				}
 				return;
 			}

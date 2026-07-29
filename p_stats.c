@@ -265,6 +265,25 @@ void stats_record_death(edict_t* victim, qboolean self_inflicted)
 		stats_add(victim, STATS_SUICIDES, 1);
 }
 
+/*
+==================
+stats_record_fragged
+
+Killed by another player. Deliberately separate from STATS_DEATHS: in stock
+LMCTF that counter means deaths you bring on yourself, which is why
+Team_Change can subtract one from it after firing a synthetic player_die.
+This is the counter behind playerstats_t.fragged.
+==================
+*/
+void stats_record_fragged(edict_t* victim)
+{
+	if (!victim || !victim->client)
+		return;
+
+	stats_add(victim, STATS_FRAGGED, 1);
+	stats_set(victim, STATS_CUR_STREAK, 0);
+}
+
 void stats_fold_session(edict_t* ent)
 {
 	playerstats_t* ps;
@@ -278,7 +297,7 @@ void stats_fold_session(edict_t* ent)
 	ps = &ent->client->ctfstats;
 
 	ps->frags         += (unsigned int)stats_get(ent, STATS_FRAGS);
-	ps->fragged       += (unsigned int)stats_get(ent, STATS_DEATHS);
+	ps->fragged       += (unsigned int)stats_get(ent, STATS_FRAGGED);
 
 	ps->flag_pickups  += (int)stats_get(ent, STATS_OFFENSE_FLAG);
 	ps->flag_captures += (int)stats_get(ent, STATS_CAPTURES);
@@ -422,10 +441,11 @@ void stats_output(edict_t* ent, stats_player_s* p_player)
 		p_player->stats[STATS_DAMAGE_REC] == 0 ? 100 : 100 * p_player->stats[STATS_DAMAGE_GIVEN] / p_player->stats[STATS_DAMAGE_REC]);
 	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 
-	snprintf(tmpbuf, sizeof(tmpbuf), "--STREAKS------------------------------------\nBest=%ld Sprees=%ld Suicides=%ld Off Kills=%ld\n---------------------------------------------\n",
+	snprintf(tmpbuf, sizeof(tmpbuf), "--STREAKS------------------------------------\nBest=%ld Sprees=%ld Suicides=%ld\nFragged=%ld Off Kills=%ld\n---------------------------------------------\n",
 		p_player->stats[STATS_MAX_STREAK],
 		p_player->stats[STATS_SPREES],
 		p_player->stats[STATS_SUICIDES],
+		p_player->stats[STATS_FRAGGED],
 		p_player->stats[STATS_OFFENSE_KILLS]);
 	stats_appendbuf(outbuf, sizeof(outbuf), tmpbuf);
 

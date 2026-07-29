@@ -48,7 +48,8 @@
 #define STATS_CUR_STREAK		38	// frags in a row without dying
 #define STATS_MAX_STREAK		39	// best streak this level
 #define STATS_SPREES			40	// times a streak reached STATS_SPREE_MIN
-#define MAX_PLAYER_STATS		41
+#define STATS_FRAGGED			41	// killed by another player
+#define MAX_PLAYER_STATS		42
 
 #define STATS_SPREE_MIN			5	// frags in a row that count as a spree	
 
@@ -103,6 +104,7 @@ void stats_fold_session(edict_t* ent);
 // one place each for the streak/spree and suicide bookkeeping
 void stats_record_frag(edict_t* attacker);
 void stats_record_death(edict_t* victim, qboolean self_inflicted);
+void stats_record_fragged(edict_t* victim);
 void Cmd_PlayerStats_f(edict_t* ent);
 void stats_log_init();
 void stats_log_reset();
