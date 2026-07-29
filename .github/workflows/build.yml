@@ -83,14 +83,15 @@ jobs:
       # shells out to GitWCRev.exe and fails with 9009 on a runner. The header it
       # would have written was already generated above.
       - name: Build
+        shell: bash
         run: >
           msbuild gravity.sln
           /p:Configuration=Release
           /p:Platform=${{ matrix.platform }}
-          /p:OutDir=${{ github.workspace }}\build\${{ matrix.arch }}\
+          /p:OutDir=${{ github.workspace }}/build/${{ matrix.arch }}/
           /p:PreBuildEventUseInBuild=false
           /m
-          /fl /flp:logfile=build.log;verbosity=normal
+          '/flp:logfile=build.log;verbosity=normal'
 
       # Same gate the Linux job has. sqlite3.c is vendored and built with
       # warnings off, so anything left here is ours.
@@ -146,11 +147,10 @@ jobs:
           cp artifacts/lmctf-buzzmod-windows-x86/gamex86.dll     release/
           cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
-      # Draft, so the notes can be trimmed to just this release before it goes out.
-      - name: Create draft release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: release/*
           body_path: RELEASES.md
-          draft: true
+          draft: false
           name: LMCTF BuzzMod ${{ github.ref_name }}
