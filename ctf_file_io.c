@@ -22,6 +22,10 @@
 #include <direct.h>
 #define ctf_mkdir(p)	_mkdir(p)
 #define CTF_PATHSEP		'\\'
+// MSVC's sys/stat.h defines S_IFDIR but not the S_ISDIR test macro
+#ifndef S_ISDIR
+#define S_ISDIR(m)		(((m) & S_IFMT) == S_IFDIR)
+#endif
 #else
 #include <unistd.h>
 #define ctf_mkdir(p)	mkdir((p), 0755)

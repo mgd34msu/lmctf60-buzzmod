@@ -1,0 +1,139 @@
+name: build
+
+on:
+  push:
+    branches: [ "**" ]
+    tags: [ "release-*" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # GNUmakefile derives VER from git rev-list
+
+      - name: Build
+        run: |
+          make -f GNUmakefile 2>&1 | tee build.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Fail on warnings
+        run: |
+          if grep -q "warning:" build.log; then
+            grep "warning:" build.log
+            echo "::error::build produced warnings"
+            exit 1
+          fi
+          echo "no warnings"
+
+      # The engine loads the library by exact filename. The versioned name the
+      # makefile produces is for telling builds apart and would be ignored.
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp game*-lmctf-*.so dist/gamex86_64.so
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lmctf-buzzmod-linux-x86_64
+          path: dist/gamex86_64.so
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            platform: x64
+            output: gamex86_64.dll
+          - arch: x86
+            platform: Win32
+            output: gamex86.dll
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/setup-msbuild@v2
+
+      # The project's pre-build step calls TortoiseGit's GitWCRev, which is not
+      # on a runner. Same substitutions, done with plain git.
+      - name: Generate GitRevisionInfo.h
+        shell: bash
+        run: |
+          REV=$(git rev-list HEAD | wc -l)
+          SHA=$(git rev-parse --short HEAD)
+          sed -e 's/\$//g' GitRevisionInfo.tmpl \
+            | sed -e "s/WCLOGCOUNT+2/${REV}/g" \
+            | sed -e "s/WCREV=7/${SHA}/g" \
+            | sed -e "s/WCNOW=%Y/$(date +%Y)/g" > GitRevisionInfo.h
+          cat GitRevisionInfo.h
+
+      # gravity.vcxproj sends output to $(Q2DIR)\lmctf\ so a local build lands
+      # straight in the game directory. Q2DIR does not exist here, so point
+      # OutDir somewhere known rather than editing the project.
+      - name: Build
+        run: >
+          msbuild gravity.sln
+          /p:Configuration=Release
+          /p:Platform=${{ matrix.platform }}
+          /p:OutDir=${{ github.workspace }}\build\${{ matrix.arch }}\
+          /m
+
+      # TargetName in the project is already gamex86 / gamex86_64, which is what
+      # the engine looks for, so there is nothing to rename.
+      - name: Package
+        shell: bash
+        run: |
+          src="build/${{ matrix.arch }}/${{ matrix.output }}"
+          if [ ! -f "$src" ]; then
+            echo "::error::expected $src"
+            find build -type f -print
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$src" dist/
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lmctf-buzzmod-windows-${{ matrix.arch }}
+          path: dist/${{ matrix.output }}
+
+  release:
+    name: Publish release
+    needs: [ linux, windows ]
+    if: startsWith(github.ref, 'refs/tags/release-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble
+        run: |
+          mkdir -p release
+          cp artifacts/lmctf-buzzmod-linux-x86_64/gamex86_64.so release/
+          cp artifacts/lmctf-buzzmod-windows-x64/gamex86_64.dll  release/
+          cp artifacts/lmctf-buzzmod-windows-x86/gamex86.dll     release/
+          cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      # Draft, so the notes can be trimmed to just this release before it goes out.
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          body_path: RELEASES.md
+          draft: true
+          name: LMCTF BuzzMod ${{ github.ref_name }}

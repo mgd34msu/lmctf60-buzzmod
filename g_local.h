@@ -52,7 +52,7 @@ extern _CrtMemState startup1;	// memory diagnostics
 #define CLAMP(val, low, high) ((val < low) ? low : (val > high) ? high : val)
 
 // the "gameversion" client command will print this plus compile date
-#define GAMEVERSION     "LMCTF TE 6.0"
+#define GAMEVERSION     "LMCTF BuzzMod"	// fork of LMCTF TE 6.0; see RELEASES.md
 
 #ifndef VER
 #define VER "r00~0000000"
