@@ -11,6 +11,9 @@
 #include "stdlog.h"	// StdLog - Mark Davies
 #include "gslog.h"	// StdLog - Mark Davies
 #include "bat.h"
+#include "bl_main.h"
+#include "bl_spawn.h"
+#include "bl_chat.h"
 
 // Lithium II Zbot detect plugin
 #ifdef ZBOT
@@ -1045,6 +1048,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 		LookAtKiller (self, inflictor, attacker);
 		self->client->ps.pmove.pm_type = PM_DEAD;
 		ClientObituary (self, inflictor, attacker);
+		BotChat_NotifyDeath(self, attacker, meansOfDeath);
 		
 		//-bat added this for stdlogging.
 		sl_WriteStdLogDeath( &gi, level, self, inflictor, attacker);
@@ -2402,6 +2406,8 @@ void ClientUserinfoChanged (edict_t *ent, char *userinfo)
 	strncpy (ent->client->pers.userinfo, userinfo, sizeof(ent->client->pers.userinfo)-1);
 	
 	ClientSetSkin(ent, skin);
+
+	BotLib_BotClientSettings(ent);
 }
 
 
@@ -2420,6 +2426,11 @@ loadgames will.
 qboolean ClientConnect (edict_t *ent, char *userinfo)
 {
 	char	*value;
+
+	if (ent->flags & FL_BOT)
+	{
+		if (!BotMoveToFreeClientEdict(ent)) return false;
+	}
 
 	// check to see if they are on the banned IP list
 	value = Info_ValueForKey (userinfo, "ip");
@@ -2617,7 +2628,12 @@ void ClientDisconnect (edict_t *ent)
 	gi.configstring (CS_PLAYERSKINS+playernum, "");
 	
 	//ctf_ClientDisconnect(ent);
-	
+
+	/* Release the slot in the library too, or it keeps thinking about a
+	 * client that has gone. */
+	strcpy(ent->client->pers.netname, "");
+	Info_SetValueForKey(ent->client->pers.userinfo, "skin", "");
+	BotLib_BotClientSettings(ent);
 }
 
 

@@ -127,9 +127,53 @@ jobs:
           name: lmctf-buzzmod-windows-${{ matrix.arch }}
           path: dist/${{ matrix.output }}
 
+  botlib:
+    name: Botlib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install the mingw cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-mingw-w64-i686
+
+      # The bot AI is a separate shared library the game module loads at
+      # runtime. Without it the mod runs, but "sv bot addbot" does nothing.
+      - name: Build Linux x86_64
+        run: make -C bots/botlib -f GNUmakefile
+
+      - name: Build Windows x64
+        run: |
+          make -C bots/botlib -f GNUmakefile clean
+          make -C bots/botlib -f GNUmakefile \
+            CC=x86_64-w64-mingw32-gcc TARGET=botlib.dll PLATFLAGS="-DWIN32"
+          mv bots/botlib/botlib.dll botlib-x64.dll
+
+      - name: Build Windows x86
+        run: |
+          make -C bots/botlib -f GNUmakefile clean
+          make -C bots/botlib -f GNUmakefile \
+            CC=i686-w64-mingw32-gcc TARGET=botlib.dll PLATFLAGS="-DWIN32"
+          mv bots/botlib/botlib.dll botlib-x86.dll
+
+      - name: Package
+        run: |
+          make -C bots/botlib -f GNUmakefile clean
+          make -C bots/botlib -f GNUmakefile
+          mkdir -p dist
+          cp bots/botlib/botlib.so dist/
+          cp botlib-x64.dll botlib-x86.dll dist/
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lmctf-buzzmod-botlib
+          path: dist/
+
   release:
     name: Publish release
-    needs: [ linux, windows ]
+    needs: [ linux, windows, botlib ]
     if: startsWith(github.ref, 'refs/tags/release-')
     runs-on: ubuntu-latest
     permissions:
@@ -148,6 +192,11 @@ jobs:
           cp artifacts/lmctf-buzzmod-windows-x64/gamex86_64.dll  release/
           cp artifacts/lmctf-buzzmod-windows-x86/gamex86.dll     release/
           cp assets/lmctf6-buzzmod.pak                           release/
+          cp artifacts/lmctf-buzzmod-botlib/botlib.so            release/
+          cp artifacts/lmctf-buzzmod-botlib/botlib-x64.dll       release/
+          cp artifacts/lmctf-buzzmod-botlib/botlib-x86.dll       release/
+          # bot roster, characters, chat and item configs
+          tar czf release/lmctf-buzzmod-botfiles.tar.gz -C assets botfiles bots.cfg
           cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
       - name: Publish release

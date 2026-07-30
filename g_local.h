@@ -2,6 +2,22 @@
 
 #pragma once
 
+/*
+ * Gladiator/Q3 bot support. Everything bot-related is behind BOT so a build
+ * without it is byte-identical to a build from before any of this existed.
+ *
+ * BOT_IMPORT redirects the game import table through bl_redirgi.c, which is
+ * how botlib observes the world without the engine knowing it is there.
+ */
+/* The bot sources call Q_strcasecmp; this mod spells it Q_stricmp. Needed on
+ * every platform, not just the unix branch below. */
+#define Q_strcasecmp	Q_stricmp
+
+#define BOT				// bot support
+#define BOT_IMPORT		// game import redirection
+//#define BOT_DEBUG		// bot debug drawing
+
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN	//non-MFC
 #define _CRT_SECURE_NO_WARNINGS
@@ -12,6 +28,22 @@
 extern _CrtMemState startup1;	// memory diagnostics
 #else
 #define OutputDebugString	//not doing Windows
+
+#ifdef BOT
+/* windows.h hands the bot code min/max/_isnan/stricmp on MSVC. Supply the
+ * POSIX and C99 equivalents so the same call sites build everywhere else. */
+#include <math.h>
+#include <strings.h>
+#include <unistd.h>
+#ifndef min
+#define min(a,b)	(((a) < (b)) ? (a) : (b))
+#endif
+#ifndef max
+#define max(a,b)	(((a) > (b)) ? (a) : (b))
+#endif
+#define _isnan(x)	isnan(x)
+#define stricmp		strcasecmp
+#endif
 #endif
 
 //#define ZBOT
@@ -58,6 +90,15 @@ extern _CrtMemState startup1;	// memory diagnostics
 #define VER "r00~0000000"
 #endif
 
+#ifdef BOT
+#include "botlib.h"
+#include "bl_debug.h"
+#endif
+
+#ifdef BOT
+extern cvar_t  *botctfteam;         // which team "addbot" joins by default
+#endif
+
 #include "p_stats.h" // STATS - LM_Hati
 #include "g_menu.h" // MENUS - LM_Jorm
 
@@ -98,6 +139,11 @@ extern _CrtMemState startup1;	// memory diagnostics
 #define	FL_TEAMSLAVE			0x00000400	// not the first on the team
 #define FL_NO_KNOCKBACK			0x00000800
 #define FL_POWER_ARMOR			0x00001000	// power armor (if any) is active
+#ifdef BOT
+#define FL_BOT					0x00002000	// entity is a bot
+#define FL_BOTINPUT				0x00004000	// executing bot input
+#define FL_OLDORGNOTSET			0x00008000	// oldorigin may not be set
+#endif
 #define FL_RESPAWN				0x80000000	// used for item respawning
 
 
@@ -410,6 +456,13 @@ typedef struct
 	float		maxyaw;
 	float		minpitch;
 	float		maxpitch;
+#ifdef BOT
+	// read from the worldspawn/bot entity keys by bl_spawn.c
+	char		*name;
+	char		*skin;
+	char		*charfile;
+	char		*charname;
+#endif
 } spawn_temp_t;
 
 
@@ -591,6 +644,8 @@ extern	cvar_t	*bob_pitch;
 extern	cvar_t	*bob_roll;
 
 extern	cvar_t	*sv_cheats;
+qboolean	is_visible(edict_t* self, edict_t* other);
+
 extern	cvar_t	*maxclients;
 extern	cvar_t	*maxspectators;
 
@@ -1159,6 +1214,12 @@ struct gclient_s
 	qboolean	showstatboard; //BUZZKILL
 	qboolean	showteamstatboard; //BUZZKILL
 	qboolean	showrailboard; //BUZZKILL
+#ifdef BOT
+	qboolean	showloading;		// bot loading image is on screen
+	int			lasthurt_client;	// entity number of the last attacker, for bot chat
+	int			lasthurt_mod;		// means of death of the last damage taken
+#endif
+
 
 	// BUZZKILL -- persistent stats, loaded/saved by the stats database.
 	// Lives on gclient_s, not edict_s: SpawnEntities() zeroes every edict on
@@ -1441,6 +1502,9 @@ struct edict_s
 	vec3_t          hook_offset;
 	int             dontfree;
 	float           droptime;
+#ifdef BOT
+	visiblebbox_t	box;			// bot debug bounding box
+#endif
 	int             entprops; //flags to tag entities with, for use with flags, which have no client
 	// END CTF CODE
 

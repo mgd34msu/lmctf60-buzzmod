@@ -12,3 +12,7 @@
 *.so
 GitRevisionInfo.h
 .depend
+
+# built botlib
+bots/botlib/*.o
+bots/botlib/botlib.so

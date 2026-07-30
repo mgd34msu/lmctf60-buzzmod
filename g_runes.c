@@ -555,6 +555,20 @@ qboolean is_visible(edict_t* self, edict_t* other)
 	return false;
 }
 
+/*
+ * g_ai.c, which defines the stock `visible`, sits entirely inside
+ * #ifdef MONSTERS_OK -- so in a CTF build the symbol is absent while
+ * g_combat.c, g_turret.c and p_trail.c still call it. Any of those paths
+ * would abort on the missing symbol. is_visible above is the same function,
+ * line for line, so forward to it.
+ */
+#ifndef MONSTERS_OK
+qboolean visible(edict_t* self, edict_t* other)
+{
+	return is_visible(self, other);
+}
+#endif
+
 void homing_think(edict_t* ent)
 {
 	edict_t* target = NULL;

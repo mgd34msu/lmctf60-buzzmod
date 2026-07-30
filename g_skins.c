@@ -223,6 +223,18 @@ char *SkinRandom(edict_t *ent)
 		i++;
 	}
 
+	/*
+	 * An empty list for this team meant "rand() % 0" -- a divide by zero that
+	 * takes the server down the moment anyone connects. That happens whenever
+	 * skins.ini is missing, unreadable, or has no entries for one side, so
+	 * fall back to a stock skin instead of dying.
+	 */
+	if (i <= 0)
+	{
+		sprintf(skin, "%s", teamnum == SKIN_RED ? "male/cipher" : "male/claymore");
+		return skin;
+	}
+
 	i = rand() % i;
 
 	sprintf(skin, "%s/%s", skinlist[teamnum][i][SKIN_MODELNAME],

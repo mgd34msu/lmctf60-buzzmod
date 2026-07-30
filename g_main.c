@@ -8,6 +8,12 @@
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
+#include "bl_main.h"
+#include "bl_spawn.h"
+#include "bl_cmd.h"
+#include "bl_redirgi.h"
+#include "bl_chat.h"
+#include "bl_ctf.h"
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -135,6 +141,8 @@ void ShutdownGame (void)
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
 	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 
+	BotUnloadAllLibraries();	// before the tags they allocated from go away
+
 	gi.FreeTags (TAG_LEVEL);
 	gi.FreeTags (TAG_GAME);
 
@@ -161,6 +169,10 @@ and global variables
 q_exported game_export_t *GetGameAPI (game_import_t *import)
 {
 	gi = *import;
+
+	/* The bot library calls back into the engine through its own copy of the
+	 * import table, so it has to be redirected before anything uses it. */
+	BotRedirectGameImport();
 
 	globals.apiversion = GAME_API_VERSION;
 	globals.Init = InitGame;
@@ -830,6 +842,10 @@ void G_RunFrame (void)
 		return;
 	}
 
+	// spawn any bots queued last frame, then open the library's frame
+	AddQueuedBots();
+	BotLib_BotStartFrame(level.time);
+
 	//
 	// treat each object in turn
 	// even the world gets a chance to think
@@ -842,7 +858,9 @@ void G_RunFrame (void)
 
 		level.current_entity = ent;
 
-		VectorCopy (ent->s.origin, ent->s.old_origin);
+		// the bot debug drawing reuses old_origin for its laser lines
+		if (!(ent->flags & FL_OLDORGNOTSET))
+			VectorCopy (ent->s.origin, ent->s.old_origin);
 
 		// if the ground entity moved, make sure we are still on it
 		if ((ent->groundentity) && (ent->groundentity->linkcount != ent->groundentity_linkcount))
@@ -864,6 +882,34 @@ void G_RunFrame (void)
 
 		G_RunEntity (ent);
 	}
+
+	/*
+	 * Feed the library this frame's world, then think. Kept after the entity
+	 * loop rather than inside it: the bots see a fully updated world that way
+	 * and never act on a half-stepped frame.
+	 */
+	ent = &g_edicts[0];
+	for (i = 0; i < globals.num_edicts; i++, ent++)
+	{
+		if (!ent->inuse) continue;
+		if (!(ent->svflags & SVF_NOCLIENT))
+			BotLib_BotUpdateEntity(ent);
+	}
+
+	for (i = 0; i < maxclients->value; i++)
+	{
+		ent = DF_CLIENTENT(i);
+		if (!ent->inuse) continue;
+		if (!(ent->flags & FL_BOT)) continue;
+		if (!BotStarted(ent)) continue;
+
+		BotLib_BotUpdateClient(ent);
+		BotLib_BotAI(ent, FRAMETIME);
+		BotExecuteInput(ent);
+	}
+
+	// top the game up to "bots_minplayers" if it is set
+	CheckMinimumPlayers();
 
 	// see if it is time to end a deathmatch
 	CheckDMRules ();
