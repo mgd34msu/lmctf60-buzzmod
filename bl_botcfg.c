@@ -179,7 +179,8 @@ int ReadSpace(FILE *fp, char *filename, int line)
 //========================================================================
 int LoadBotsFromFile(char *filename)
 {
-	int line, lastline, c, numbots;
+	int line, lastline, c = EOF, numbots;	/* c: the tail test reads it even
+						 * when the loop never runs */
 	FILE *fp;
 	char addbot[MAX_PATH];
 	bot_t *bot, tmpbot;
