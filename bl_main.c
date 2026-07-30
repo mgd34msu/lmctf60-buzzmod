@@ -350,6 +350,20 @@ void BotLib_BotLoadMap(char *mapname)
 	for (lib = botglobals.firstbotlib; lib; lib = nextlib)
 	{
 		nextlib = lib->next;
+
+		/*
+		 * GrappleState identifies a hook in flight by matching the entity's
+		 * model index against weapindex_grapple. Model indices are per-level
+		 * configstrings, so this has to be refreshed on every map rather than
+		 * set once at library init.
+		 */
+		{
+			char idx[16];
+			Com_sprintf(idx, sizeof idx, "%d",
+				gi.modelindex("models/objects/ghook/tris.md2"));
+			lib->funcs.BotLibVarSet("weapindex_grapple", idx);
+		}
+
 		errnum = lib->funcs.BotLoadMap(mapname, MAX_MODELINDEXES, modelindexes,
 												MAX_SOUNDINDEXES, soundindexes,
 												MAX_IMAGEINDEXES, imageindexes);
@@ -939,14 +953,31 @@ int BotInitLibrary(bot_library_t *lib)
 	lib->funcs.BotLibVarSet("dmflags", dmflags->string);
 	sprintf(buf, "DMFLAGS %s", dmflags->string);
 	lib->funcs.BotDefine(buf);
-#ifdef ZOID
-	lib->funcs.BotLibVarSet("ctf", ctf->string);
-	if (ctf->value)
-	{
-		lib->funcs.BotLibVarSet("usehook", "1");
-		lib->funcs.BotLibVarSet("runes", "1");
-	} //end if
-#endif //ZOID
+	/*
+	 * This block used to sit inside #ifdef ZOID, which this mod does not
+	 * define -- so the library was never told CTF was running. The adapter
+	 * reads the "ctf" libvar to set g_gametype to GT_CTF, without which the
+	 * bots behave as if this were a free-for-all and ignore the flags.
+	 * LMCTF is always CTF, so it is unconditional.
+	 */
+	lib->funcs.BotLibVarSet("ctf", "1");
+	lib->funcs.BotLibVarSet("usehook", "1");
+	lib->funcs.BotLibVarSet("runes", "1");
+
+	/*
+	 * LMCTF's grapple is offhand: you fire it with a console command and keep
+	 * whatever weapon you are holding, unlike Zoid CTF where the grapple
+	 * occupies a weapon slot and has to be selected. The movement code
+	 * supports both -- with offhandgrapple set it issues cmd_grappleon /
+	 * cmd_grappleoff instead of asking for a weapon switch, so the bot can
+	 * shoot while swinging, the same as a player.
+	 */
+	lib->funcs.BotLibVarSet("offhandgrapple", "1");
+	lib->funcs.BotLibVarSet("cmd_grappleon", "hook");
+	lib->funcs.BotLibVarSet("cmd_grappleoff", "unhook");
+
+	/* route over TRAVEL_GRAPPLEHOOK reachabilities; see Q2BotTravelFlags */
+	lib->funcs.BotLibVarSet("bot_grapple", "1");
 #ifdef CH
 	lib->funcs.BotLibVarSet("ch", ch->string);
 #endif //CH

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "sampled_at": 1785405963986,
+  "proc_available": true,
+  "loadavg": [
+    0.29,
+    0.21,
+    0.34
+  ],
+  "cpu_count": 24,
+  "load_per_core": 0.012083333333333333,
+  "session_root_pid": 3567347,
+  "session_child_count": 8,
+  "orphans": [],
+  "degraded": null
+}
