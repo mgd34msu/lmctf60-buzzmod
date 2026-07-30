@@ -10,10 +10,19 @@
 # the routing code has been seen to misbehave under optimisation.
 ######################################################################
 ARCH := $(shell uname -m | sed -e s/i.86/i386/)
-TARGET = botlib.so
 
-CC = gcc -std=gnu17
-CFLAGS = -O0 -g -fPIC -DBOTLIB -DLINUX -DSTDC_HEADERS -w
+# Overridable so CI can cross-build the Windows library with mingw:
+#   make CC="x86_64-w64-mingw32-gcc -std=gnu17" TARGET=botlib.dll PLATFLAGS=-DWIN32
+# CC is assigned, not ?=, because make predefines it: "?=" would leave the
+# built-in "cc". A command-line CC= still overrides this, which is what the
+# cross-build relies on.
+TARGET ?= botlib.so
+CC = gcc
+PLATFLAGS ?= -DLINUX -fPIC
+
+# -std=gnu17: this is 2001 code, and C23 turns "false" into a keyword, which
+# the Q3 headers use as an enum constant.
+CFLAGS = -std=gnu17 -O0 -g -DBOTLIB -DSTDC_HEADERS -w $(PLATFLAGS)
 LDFLAGS = -shared -lm
 
 OBJS = be_aas_bspq2.o be_aas_cluster.o be_aas_debug.o be_aas_entity.o \
