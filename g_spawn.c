@@ -7,6 +7,11 @@
 #include <sys/types.h>
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
+#include "bl_main.h"
+#include "bl_spawn.h"
+#include "bl_cmd.h"
+#include "bl_redirgi.h"
+#include "bl_chat.h"
 
 typedef struct
 {
@@ -1041,6 +1046,15 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	G_FindTeams ();
 
 	PlayerTrail_Init ();
+
+	/*
+	 * Bot setup for this level. BotLib_BotLoadMap is what pulls in
+	 * maps/<mapname>.aas, so it has to come after the entities are in place.
+	 */
+	BotInitMuzzleFlashToSoundindex();
+	BotSpawn();
+	BotLib_BotLoadMap(mapname);
+	BotChat_OnStartLevel();
 
 	sl_GameStart( &gi, level );	//	StdLog - Mark Davies
 }

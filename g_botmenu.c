@@ -88,7 +88,7 @@ static void Bot_CycleSkill_Exec(edict_t *ent)
 
 static void Bot_CycleFill_Exec(edict_t *ent)
 {
-	int fill = (int)gi.cvar("bots_minplayers", "0", 0)->value;
+	int fill = (int)gi.cvar("minimumplayers", "0", 0)->value;
 	char buf[16];
 
 	/* off, then 2 up to 16 in twos -- CTF wants even numbers */
@@ -100,7 +100,7 @@ static void Bot_CycleFill_Exec(edict_t *ent)
 		fill += 2;
 
 	Com_sprintf(buf, sizeof buf, "%d", fill);
-	gi.cvar_set("bots_minplayers", buf);
+	gi.cvar_set("minimumplayers", buf);
 
 	BotMenu_Redraw(ent, ent->client->menuselect);
 }
@@ -323,7 +323,7 @@ void Ref_Bot_Menu(edict_t *ent)
 		(int)gi.cvar("bot_skill", "4", 0)->value);
 	Menu_Set(ent, 10, text, Bot_CycleSkill_Exec);
 
-	fill = (int)gi.cvar("bots_minplayers", "0", 0)->value;
+	fill = (int)gi.cvar("minimumplayers", "0", 0)->value;
 	if (fill > 0)
 		Com_sprintf(text, sizeof text, "Fill to:      %d players", fill);
 	else

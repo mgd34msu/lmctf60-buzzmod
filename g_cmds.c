@@ -7,6 +7,11 @@
 #include "stdlog.h"
 #include "bat.h"
 #include "g_vote.h"
+#include "bl_main.h"
+#include "bl_spawn.h"
+#include "bl_cmd.h"
+#include "bl_redirgi.h"
+#include "bl_chat.h"
 
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
@@ -2882,7 +2887,14 @@ void ClientCommand(edict_t* ent)
 	else if (Q_stricmp(cmd, "toss") == 0)
 		Cmd_ItemToss_f(ent);
 
+	// bot commands, and the hook/unhook the bots issue for the grapple
+	else if (BotCmd(cmd, ent, false))
+	{
+	}
+
 	else	// anything that doesn't match a command will be a chat
 		Cmd_Say_f (ent, false, true);
+
+	BotClearCommandArguments();
 }
 

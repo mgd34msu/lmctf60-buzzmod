@@ -1,5 +1,11 @@
 #include "g_local.h"
 #include "ctf_file_io.h"
+#include "bl_main.h"
+#include "bl_spawn.h"
+#include "bl_cmd.h"
+#include "bl_redirgi.h"
+#include "bl_chat.h"
+#include "bl_ctf.h"
 
 void ctf_BSafePrint(long print_priority, char * buf);
 
@@ -319,6 +325,10 @@ void	ServerCommand (void)
 		CTF_StatsDB_Command ();
 	else if ((Q_stricmp (cmd, "next") == 0) || (Q_stricmp (cmd, "skip") == 0))
 		Svcmd_NextLevel_f ();
+	else if (BotCmd(cmd, NULL, true))
+	{
+		/* handled by the bot glue -- "sv bot ..." */
+	}
 	else
 		gi.cprintf (NULL, PRINT_HIGH, "Unknown server command \"%s\"\n", cmd);
 }

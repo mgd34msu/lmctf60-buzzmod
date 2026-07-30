@@ -1239,6 +1239,21 @@ bot_library_t *BotUseLibrary(char *path)
 	//the dll name
 	strncat(botlibdir, path, MAX_PATH - strlen(botlibdir) - 1); //Riv++
 	botlibdir[MAX_PATH-1] = '\0'; //Riv++
+
+	/*
+	 * access() above resolves against the working directory, but dlopen does
+	 * not: handed a bare "botlib.so" it searches the linker paths only and
+	 * never looks in the game directory. Anchor it here, before the string is
+	 * compared against an already-loaded library or stored as its path, so
+	 * every bot agrees on the same name.
+	 */
+	if (!strchr(botlibdir, '/'))
+	{
+		char anchored[MAX_PATH];
+		Com_sprintf(anchored, sizeof anchored, "./%s", botlibdir);
+		strncpy(botlibdir, anchored, MAX_PATH - 1);
+		botlibdir[MAX_PATH-1] = '\0';
+	}
 	//check if the library is loaded already
 	for (lib = botglobals.firstbotlib; lib; lib = lib->next)
 	{
