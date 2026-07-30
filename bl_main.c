@@ -101,7 +101,7 @@ void BotExecuteInput(edict_t *bot)
 #endif //BOT_DEBUG
 
 	if (!bot_bunnyhop)   bot_bunnyhop   = gi.cvar("bot_bunnyhop", "1", 0);
-	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "1", 0);
+	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "0", 0);
 
 	client = DF_ENTCLIENT(bot);
 	//
@@ -259,6 +259,14 @@ void BotExecuteInput(edict_t *bot)
 		 * Only worth anything when the server allows air acceleration, and
 		 * skipped while attacking -- turning to build speed and aiming are
 		 * not compatible, and players do not try both at once.
+		 *
+		 * Off by default, and on the evidence not worth pursuing further.
+		 * With air acceleration switched off bots already peak at 800
+		 * units/sec and average 192 -- the grapple pulls them well past the
+		 * 300 run cap, and that is LMCTF's speed mechanic. Turning air
+		 * acceleration on made both figures worse, 527 peak and 130 mean,
+		 * because air control loosens their steering more than the technique
+		 * gains them.
 		 *
 		 * It gains less here than it would for a player, and the reason is the
 		 * command rate rather than the technique. A bot emits one usercmd per
