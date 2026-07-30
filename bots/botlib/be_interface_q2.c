@@ -63,6 +63,11 @@ Design overview
 
 /* Forward declarations for functions defined in other botlib files
  * that are not explicitly declared in the included headers. */
+extern int      bot_developer;
+static int      Q2BotTravelFlags(void);
+extern char    *LibVarGetString(char *var_name);
+extern int      AAS_AreaTravelTimeToGoalArea(int areanum, vec3_t origin, int goalareanum, int travelflags);
+extern int      AAS_AreaReachability(int areanum);
 extern int      AAS_PointAreaNum(vec3_t point);
 extern float    AAS_Time(void);
 extern void     AAS_ShowArea(int areanum, int groundfacesonly);
@@ -441,6 +446,11 @@ typedef struct {
     int         area_history[8];    /* ring buffer of recent area numbers */
     int         area_history_idx;   /* next write index */
     float       area_loop_time;     /* AAS_Time() when loop was first detected */
+    /* Progress tracking: the routing table's travel time from the bot to its
+     * goal. While that keeps falling the bot is getting somewhere, however
+     * tight a space it happens to be moving through. */
+    int         goal_best_ttime;
+    float       goal_progress_time;
     /* Chat state (mirrors Q3 bot_state_t fields for ai_chat.c) */
     float       lastchat_time;      /* AAS_Time() when last chat was sent */
     int         chatto;             /* CHAT_ALL(0), CHAT_TEAM(1) */
@@ -1285,6 +1295,53 @@ static float q2_entityitems_time;
 
 static int Q2BotStartFrame(float time)
 {
+    /* Refresh the latched diagnostic flag so bot_developer can be toggled
+     * mid-game, not only at library setup. */
+    bot_developer = (int)LibVarGetValue("bot_developer");
+    {
+        static int reported;
+        if (bot_developer && !reported && aasworld.initialized) {
+            int ttcount[32], a, r, n;
+            aas_reachability_t rr;
+            reported = 1;
+            /* One-time census of what the loaded navigation data actually
+             * contains, by travel type. */
+            for (n = 0; n < 32; n++) ttcount[n] = 0;
+            for (a = 1; a < aasworld.numareas; a++) {
+                for (r = AAS_NextAreaReachability(a, 0); r;
+                     r = AAS_NextAreaReachability(a, r)) {
+                    AAS_ReachabilityFromNum(r, &rr);
+                    n = rr.traveltype & TRAVELTYPE_MASK;
+                    if (n >= 0 && n < 32) ttcount[n]++;
+                }
+            }
+            botimport.Print(PRT_MESSAGE, "Q2Adapt: numareas=%d numreach=%d bytype:", aasworld.numareas, aasworld.reachabilitysize);
+            for (n = 0; n < 32; n++)
+                if (ttcount[n]) botimport.Print(PRT_MESSAGE, " %d=%d", n, ttcount[n]);
+            botimport.Print(PRT_MESSAGE, "  (14 = grapple)\n");
+        }
+        /* periodic grapple selection report */
+        if (bot_developer) {
+            extern int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best, q2_reach_total, q2_grapple_travel, q2_grapple_fired;
+            static float next;
+            if (AAS_Time() > next) {
+                next = AAS_Time() + 30.0f;
+                botimport.Print(PRT_MESSAGE,
+                    "Q2Adapt: grapple routes won %d/%d, hook fired %d times\n",
+                    q2_grapple_best, q2_reach_total, q2_grapple_fired);
+            }
+            botimport.Print(PRT_MESSAGE,
+                "Q2Adapt: travelflags=0x%x grapple=%d offhand=%d "
+                "weapindex_grapple=%d on='%s' off='%s'\n",
+                Q2BotTravelFlags(),
+                (int)LibVarGetValue("bot_grapple"),
+                (int)LibVarGetValue("offhandgrapple"),
+                (int)LibVarGetValue("weapindex_grapple"),
+                LibVarGetString("cmd_grappleon"),
+                LibVarGetString("cmd_grappleoff"));
+        }
+    }
+
     int ret = Export_BotLibStartFrame(time);
     /* Update dynamic item entities at 0.3s intervals (Q3 ai_main.c:1471) */
     if (AAS_Time() - q2_entityitems_time >= 0.3f) {
@@ -2250,6 +2307,8 @@ static qboolean Q2BotNavigateGoals(int client, q2_botclient_t *bc,
         if (BotGetTopGoal(bc->goalstate, &bc->ltg)) {
             bc->hasgoal      = true;
             bc->goal_set_time = now;
+            bc->goal_best_ttime    = 0;
+            bc->goal_progress_time = now;
             if (LibVarGetValue("bot_developer")) {
                 char goalname[64];
                 BotGoalName(bc->ltg.number, goalname, sizeof(goalname));
@@ -2292,59 +2351,54 @@ ctf_navigate:
     if (bc->hasgoal) {
         bot_goal_t active_goal;
         if (BotGetTopGoal(bc->goalstate, &active_goal)) {
-            /* --- Area-loop detection ---
-             * Track the bot's recent AAS areas.  If the same small set of
-             * areas keeps repeating (routing dead-end at a passageway with
-             * missing reachabilities), abandon the goal and roam to escape. */
+            /* --- Progress check ---
+             * This used to count how many distinct AAS areas the bot had
+             * recently visited and call it a routing loop whenever that was
+             * three or fewer for three seconds. Ordinary play trips that
+             * constantly -- a bot guarding its flag, holding a corridor, or
+             * fighting in one room is not lost. Ask the routing table
+             * instead: while the travel time to the goal keeps falling, the
+             * bot is making progress whatever the area count says. */
             {
                 int cur_area = BotReachabilityArea(bc->origin, client);
                 if (cur_area > 0) {
-                    /* Record area in ring buffer */
-                    int prev_idx = (bc->area_history_idx + 7) & 7;
-                    if (bc->area_history[prev_idx] != cur_area) {
-                        bc->area_history[bc->area_history_idx] = cur_area;
-                        bc->area_history_idx = (bc->area_history_idx + 1) & 7;
+                    int t_now = AAS_AreaTravelTimeToGoalArea(
+                                    cur_area, bc->origin,
+                                    active_goal.areanum, Q2BotTravelFlags());
+
+                    if (t_now > 0 &&
+                        (bc->goal_best_ttime == 0 || t_now < bc->goal_best_ttime)) {
+                        if (bot_developer && bc->ctf_ltgtype == Q2_LTG_GETFLAG &&
+                            t_now < 40 && bc->goal_best_ttime >= 40)
+                            botimport.Print(PRT_MESSAGE,
+                                "bot %d: CLOSE to flag area %d (ttime %d)\n",
+                                client, active_goal.areanum, t_now);
+                        bc->goal_best_ttime    = t_now;
+                        bc->goal_progress_time = now;
+                    } else if (bc->goal_progress_time == 0.0f) {
+                        bc->goal_progress_time = now;
                     }
-                    /* Check for loop: count distinct areas in the ring buffer.
-                     * If <= 3 distinct areas AND all 8 slots filled, we have
-                     * a routing loop. */
-                    {
-                        int i, j, distinct = 0;
-                        int seen[8];
-                        qboolean ring_full = true;
-                        for (i = 0; i < 8; i++) {
-                            if (bc->area_history[i] == 0) { ring_full = false; break; }
-                            for (j = 0; j < distinct; j++)
-                                if (seen[j] == bc->area_history[i]) break;
-                            if (j == distinct) seen[distinct++] = bc->area_history[i];
+
+                    /*
+                     * Only give up when the routing table says the goal cannot
+                     * be reached from here at all, and keeps saying so.
+                     *
+                     * An earlier version also abandoned any goal that had not
+                     * improved in ten seconds. That reads as sensible and is
+                     * quite wrong for CTF: a run at the enemy flag crosses the
+                     * whole map, and a bot that stops to fight, takes cover or
+                     * rides a lift makes no measurable progress for far longer
+                     * than that. It was throwing away roughly two thirds of
+                     * all attack goals. Quake III does not do this either --
+                     * it lets the goal's own timer expire.
+                     */
+                    if (t_now == 0 && (now - bc->goal_progress_time) > 5.0f) {
+                        if (bot_developer) {
+                            botimport.Print(PRT_MESSAGE,
+                                "bot %d: no progress to goal area %d (ttime %d) ctfrole=%d, retargeting\n",
+                                client, active_goal.areanum, t_now, bc->ctf_ltgtype);
                         }
-                        if (ring_full && distinct <= 3) {
-                            if (bc->area_loop_time == 0.0f)
-                                bc->area_loop_time = now;
-                            /* After 3 seconds of looping, abandon goal and roam */
-                            if ((now - bc->area_loop_time) > 3.0f) {
-                                if (LibVarGetValue("bot_developer")) {
-                                    botimport.Print(PRT_MESSAGE,
-                                        "NAV_DIAG client %d: AREA LOOP detected "
-                                        "(areas %d/%d/%d), forcing roam\n",
-                                        client, seen[0],
-                                        distinct > 1 ? seen[1] : 0,
-                                        distinct > 2 ? seen[2] : 0);
-                                }
-                                BotSetAvoidGoalTime(bc->goalstate,
-                                                     active_goal.number, 30.0f);
-                                BotPopGoal(bc->goalstate);
-                                if (bc->hasnbg) bc->hasnbg = false;
-                                else { bc->hasgoal = false; bc->ltg_check_time = 0.0f; }
-                                bc->nbg_check_time = 0.0f;
-                                Com_Memset(bc->area_history, 0, sizeof(bc->area_history));
-                                bc->area_loop_time = 0.0f;
-                                bc->roam_reason = 1;   /* area loop */
-                                goto roam_fallback;
-                            }
-                        } else {
-                            bc->area_loop_time = 0.0f;  /* not looping, reset */
-                        }
+                        goto retarget;
                     }
                 }
             }
@@ -2357,8 +2411,7 @@ ctf_navigate:
              * This matches Q3 which does NOT roam on routing failure. */
             if (moveresult->failure) {
                 BotResetAvoidReach(bc->movestate);
-                bc->roam_reason = 2;   /* BotMoveToGoal reported failure */
-                goto roam_fallback;
+                goto retarget;
             }
 
             /* Sustained zero-movedir detection for silent failures.
@@ -2375,8 +2428,7 @@ ctf_navigate:
                     bc->move_fail_time = now2;
                 if ((now2 - bc->move_fail_time) > 1.0f) {
                     BotResetAvoidReach(bc->movestate);
-                    bc->roam_reason = 3;   /* zero movedir for over a second */
-                    goto roam_fallback;
+                    goto retarget;
                 }
             } else {
                 bc->move_fail_time = 0.0f;  /* movement succeeded, reset */
@@ -2427,6 +2479,10 @@ ctf_navigate:
              * oscillation when the Q2 engine doesn't actually
              * consume the item (pickup mechanic mismatch). */
             else if (BotTouchingGoal(bc->origin, &active_goal)) {
+                if (bot_developer)
+                    botimport.Print(PRT_MESSAGE,
+                        "bot %d: REACHED goal area %d (ctfrole %d)\n",
+                        client, active_goal.areanum, bc->ctf_ltgtype);
                 /* Avoid for the item's respawn time (-1 = auto-lookup).
                  * Q3 uses respawntime from item config (typically 30s).
                  * The old hardcoded 10s was too short, causing bots to
@@ -2440,24 +2496,79 @@ ctf_navigate:
                     bc->ltg_check_time = 0.0f;
                 }
                 /* Immediately look for nearby items (ammo next to the
-                 * weapon we just picked up).  Pass NULL as ltg so the
-                 * route check is skipped — we don't have a new LTG yet,
-                 * and any nearby item is worth grabbing regardless of
-                 * direction.  Q3 achieves this by delaying LTG re-selection
-                 * for 20 seconds (ai_dmnet.c:308), letting NBG run without
-                 * route constraints.  We do it explicitly here instead. */
+                 * weapon that was just picked up). */
+                /*
+                 * Pass the long-term goal so the detour is judged against it.
+                 * This used to pass NULL, which tells BotChooseNBGItem not to
+                 * care how far off-route the item is -- so a bot that picked
+                 * up one thing chained from item to item indefinitely. An
+                 * attacker heading for the enemy flag never arrived: it spent
+                 * the whole round collecting. Constraining the detour is what
+                 * Q3 uses the parameter for.
+                 */
+                {
+                    bot_goal_t *nbg_ltg = NULL;
+                    /* A flag carrier does not go shopping. */
+                    if (bc->ctf_has_flag) goto skip_nbg;
+                    /* Only a goal with a real area is usable as a reference;
+                     * BotChooseNBGItem routes against it. */
+                    if (bc->ctf_ltgtype != Q2_LTG_NONE && bc->ctf_goal.areanum)
+                        nbg_ltg = &bc->ctf_goal;
+                    else if (bc->hasgoal && bc->ltg.areanum &&
+                             !(bc->ltg.flags & GFL_ROAM))
+                        nbg_ltg = &bc->ltg;
+
                 if (!bc->hasnbg &&
                     BotChooseNBGItem(bc->goalstate, bc->origin,
                                       bc->inventory, Q2BotTravelFlags(),
-                                      NULL, 200)) {
+                                      nbg_ltg, 200)) {
                     bc->hasnbg = true;
                     bc->hasgoal = true; /* NBG needs an active goal context */
                 }
+                }
+skip_nbg:
                 bc->nbg_check_time = 0.0f;
             }
             return true;
         }
     }
+
+retarget:
+    /*
+     * Drop the goal the bot cannot make headway on, remember not to pick it
+     * straight back up, and let goal selection choose another next frame.
+     * This is the normal answer to an unreachable goal; the roaming below is
+     * only for when there is no goal to be had at all.
+     */
+    if (bc->hasgoal) {
+        bot_goal_t dead;
+        if (BotGetTopGoal(bc->goalstate, &dead))
+            BotSetAvoidGoalTime(bc->goalstate, dead.number, 30.0f);
+        if (bc->hasnbg) { BotPopGoal(bc->goalstate); bc->hasnbg = false; }
+        BotPopGoal(bc->goalstate);
+        bc->hasgoal = false;
+    }
+    bc->ltg_check_time     = 0.0f;
+    bc->nbg_check_time     = 0.0f;
+    bc->goal_best_ttime    = 0;
+    bc->goal_progress_time = 0.0f;
+    bc->ctf_ltgtype        = Q2_LTG_NONE;
+    bc->ctf_decide_time    = 0.0f;
+    bc->ctf_goal_time      = 0.0f;
+
+    /*
+     * A flag carrier has nothing else to choose: its only goal is its own
+     * base. If the routing table cannot get there from where it is standing --
+     * which happens in the odd pocket of a map whose navigation data has a
+     * hole in it -- then standing still and re-picking the same goal every
+     * frame just waits to be killed. Keep moving instead, which is what the
+     * roaming below is for, until the bot is somewhere the router can work
+     * with again.
+     */
+    if (bc->ctf_has_flag) goto roam_fallback;
+
+    /* Stand still for this frame; a new goal is chosen on the next one. */
+    return false;
 
 roam_fallback:
     /* Drop stale unreachable goal — otherwise the bot roams forever
@@ -2620,6 +2731,25 @@ static bot_goal_t *Q2BotCTFGetEnemyFlag(int client)
  *
  * Mirrors Q3's BotCTFSeekGoals (ai_dmq3.c:496-766).
  */
+/*
+ * Report an active CTF goal, making sure it is actually on the goal stack.
+ *
+ * Every "return true" here means "goal selection is handled, skip item
+ * seeking" -- so returning true with an empty stack leaves the bot with
+ * nothing to navigate to. That happened whenever something popped the goal
+ * without clearing ctf_ltgtype: the throttle path kept claiming a goal
+ * existed, item seeking stayed skipped, and the bot wandered for the rest of
+ * the goal's lifetime.
+ */
+static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
+{
+    if (!bc->hasgoal) {
+        BotPushGoal(bc->goalstate, &bc->ctf_goal);
+        bc->hasgoal = true;
+    }
+    return true;
+}
+
 static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
 {
     float now = AAS_Time();
@@ -2631,13 +2761,32 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
 
     /* Detect flag carrying from entity effects.
      * The game DLL sets EF_FLAG1/EF_FLAG2 on the player entity. */
-    bc->ctf_has_flag = (bc->effects & (Q2_EF_FLAG1_CARRIER | Q2_EF_FLAG2_CARRIER)) ? true : false;
+    {
+        qboolean had = bc->ctf_has_flag;
+        bc->ctf_has_flag = (bc->effects & (Q2_EF_FLAG1_CARRIER | Q2_EF_FLAG2_CARRIER)) ? true : false;
+        if (bot_developer && bc->ctf_has_flag != had)
+            botimport.Print(PRT_MESSAGE, "bot %d: carrying=%d effects=0x%x\n",
+                            client, bc->ctf_has_flag, bc->effects);
+    }
 
     /* --- Priority 1: Carrying enemy flag → RUSH TO OWN BASE --- */
     if (bc->ctf_has_flag) {
         if (bc->ctf_ltgtype != Q2_LTG_RUSHBASE) {
             bc->ctf_ltgtype = Q2_LTG_RUSHBASE;
             bc->ctf_goal_time = now + CTF_RUSHBASE_TIME;
+
+            /*
+             * Clear whatever the bot was doing. Q2BotCTFGoalActive only pushes
+             * a goal when the stack is empty, so a bot that grabbed the flag
+             * while walking to a rocket launcher carried on to the rocket
+             * launcher -- in the enemy base, with the flag, until it was
+             * killed. Nothing outranks getting the flag home.
+             */
+            BotEmptyGoalStack(bc->goalstate);
+            bc->hasgoal = false;
+            bc->hasnbg  = false;
+            bc->goal_best_ttime    = 0;
+            bc->goal_progress_time = now;
 
             /* Own base = own flag location.
              * Determine team from which flag we're carrying:
@@ -2647,14 +2796,29 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
                 Com_Memcpy(&bc->ctf_goal, &ctf_blueflag, sizeof(bot_goal_t));
             else
                 Com_Memcpy(&bc->ctf_goal, &ctf_redflag, sizeof(bot_goal_t));
+            if (bot_developer)
+                botimport.Print(PRT_MESSAGE, "bot %d: RUSHBASE to area %d\n",
+                                client, bc->ctf_goal.areanum);
+        }
+        /* while carrying, report how the run home is going */
+        if (bot_developer) {
+            static float nextrep[64];
+            int ci = client & 63;
+            if (AAS_Time() > nextrep[ci]) {
+                vec3_t d; int a;
+                nextrep[ci] = AAS_Time() + 3.0f;
+                a = BotReachabilityArea(bc->origin, client);
+                VectorSubtract(bc->ctf_goal.origin, bc->origin, d);
+                botimport.Print(PRT_MESSAGE,
+                    "bot %d: carrying, dist=%.0f area=%d goalarea=%d ttime=%d\n",
+                    client, VectorLength(d), a, bc->ctf_goal.areanum,
+                    AAS_AreaTravelTimeToGoalArea(a, bc->origin,
+                        bc->ctf_goal.areanum, Q2BotTravelFlags()));
+            }
         }
 
         /* Push CTF goal onto goal stack for navigation */
-        if (!bc->hasgoal) {
-            BotPushGoal(bc->goalstate, &bc->ctf_goal);
-            bc->hasgoal = true;
-        }
-        return true;
+        return Q2BotCTFGoalActive(bc);
     }
 
     /* No longer carrying flag — clear rush goal */
@@ -2670,7 +2834,7 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
     if (bc->ctf_ltgtype != Q2_LTG_NONE &&
         bc->ctf_goal_time > now &&
         bc->ctf_decide_time > now)
-        return (bc->ctf_ltgtype != Q2_LTG_NONE);
+        return Q2BotCTFGoalActive(bc);
 
     bc->ctf_decide_time = now + 5.0f;
 
@@ -2687,7 +2851,7 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
     }
 
     /* --- Already have an active CTF goal? Keep it --- */
-    if (bc->ctf_ltgtype != Q2_LTG_NONE) return true;
+    if (bc->ctf_ltgtype != Q2_LTG_NONE) return Q2BotCTFGoalActive(bc);
 
     /* --- Priority 2: Decide attack vs defend (Q3 ai_dmq3.c:738-765) ---
      * ~40% chance attack (get enemy flag)
@@ -2698,6 +2862,7 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
 
         if (rnd < 0.4f) {
             /* ATTACK: go get the enemy flag */
+            /* logged after the flag choice below */
             bc->ctf_ltgtype = Q2_LTG_GETFLAG;
             bc->ctf_goal_time = now + CTF_GETFLAG_TIME;
 
@@ -2717,15 +2882,19 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
                     Com_Memcpy(&bc->ctf_goal, &ctf_blueflag, sizeof(bot_goal_t)); /* red team → get blue flag */
                 else
                     Com_Memcpy(&bc->ctf_goal, &ctf_redflag, sizeof(bot_goal_t));  /* blue team → get red flag */
+                if (bot_developer)
+                    botimport.Print(PRT_MESSAGE,
+                        "bot %d: CTF ATTACK target=%d (red=%d blue=%d)\n",
+                        client, bc->ctf_goal.areanum,
+                        ctf_redflag.areanum, ctf_blueflag.areanum);
             }
 
-            if (!bc->hasgoal) {
-                BotPushGoal(bc->goalstate, &bc->ctf_goal);
-                bc->hasgoal = true;
-            }
+            Q2BotCTFGoalActive(bc);
         }
         else if (rnd < 0.7f) {
             /* DEFEND: patrol own flag base */
+            if (bot_developer)
+                botimport.Print(PRT_MESSAGE, "bot %d: CTF role DEFEND\n", client);
             bc->ctf_ltgtype = Q2_LTG_DEFENDBASE;
             bc->ctf_goal_time = now + CTF_DEFENDBASE_TIME;
 
@@ -2743,13 +2912,12 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
                     Com_Memcpy(&bc->ctf_goal, &ctf_blueflag, sizeof(bot_goal_t));
             }
 
-            if (!bc->hasgoal) {
-                BotPushGoal(bc->goalstate, &bc->ctf_goal);
-                bc->hasgoal = true;
-            }
+            Q2BotCTFGoalActive(bc);
         }
         else {
             /* ROAM: normal item-seeking behavior for a while */
+            if (bot_developer)
+                botimport.Print(PRT_MESSAGE, "bot %d: CTF role ITEMS\n", client);
             bc->ctf_ltgtype = Q2_LTG_NONE;
             bc->ctf_roam_time = now + CTF_ROAM_TIME;
             return false; /* let normal LTG selection handle it */

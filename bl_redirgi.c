@@ -700,12 +700,17 @@ void Bot_unicast(edict_t *ent, qboolean reliable)
 {
 	if (ent->flags & FL_BOT)
 	{
+		/*
+		 * A bot has no client to send to, so the message is simply dropped.
+		 * This used to print a warning -- without a newline -- on every
+		 * unicast, and LMCTF unicasts scoreboards, layouts and centerprints
+		 * constantly, which buried the console in one unbroken line of text.
+		 * It is normal, not a fault, so only say so when debugging bots.
+		 */
 #ifdef BOT_DEBUG
-		char *ptr;
-		ptr = NULL;
-		*ptr = 0;
+		gi.dprintf("bot unicast dropped for %s\n",
+			ent->client ? ent->client->pers.netname : "bot");
 #endif //BOT_DEBUG
-		gi.dprintf("WARNING: tried to use unicast for a bot");
 		BotClearMessage();
 		return;
 	} //end else

@@ -85,6 +85,7 @@ void BotLibraryDump(void);
 void BotClientDump(void);
 qboolean BotStarted(edict_t *bot);
 //
+void BotSetGrappleModelIndex(bot_library_t *lib);
 void BotLib_BotLoadMap(char *mapname);
 int  BotLib_BotSetupClient(edict_t *ent, char *userinfo);
 void BotLib_BotShutdownClient(edict_t *client);

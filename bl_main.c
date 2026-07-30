@@ -166,10 +166,22 @@ void BotExecuteInput(edict_t *bot)
 	{
 		ucmd.buttons |= BUTTON_USE;
 	} //end if
-	//set the view angles
-	ucmd.angles[PITCH] = ANGLE2SHORT(bi->viewangles[PITCH]);
-	ucmd.angles[YAW] = ANGLE2SHORT(bi->viewangles[YAW]);
-	ucmd.angles[ROLL] = ANGLE2SHORT(bi->viewangles[ROLL]);
+	/*
+	 * Set the view angles.
+	 *
+	 * ClientThink works out the player's real view as
+	 *     v_angle = SHORT2ANGLE(ucmd.angles + pmove.delta_angles)
+	 * and the engine puts a value in delta_angles whenever it moves a client's
+	 * view for it -- at every spawn, and on teleport. Writing the angle we
+	 * want straight into ucmd.angles therefore aims the bot at that angle plus
+	 * whatever the spawn left behind, so a bot's aim was off by a fixed
+	 * rotation for its whole life: measured between 86 and 162 degrees of yaw
+	 * away from what the library asked for. Taking the delta back out makes
+	 * the bot look where it intends to.
+	 */
+	ucmd.angles[PITCH] = ANGLE2SHORT(bi->viewangles[PITCH]) - bot->client->ps.pmove.delta_angles[PITCH];
+	ucmd.angles[YAW]   = ANGLE2SHORT(bi->viewangles[YAW])   - bot->client->ps.pmove.delta_angles[YAW];
+	ucmd.angles[ROLL]  = ANGLE2SHORT(bi->viewangles[ROLL])  - bot->client->ps.pmove.delta_angles[ROLL];
 	//get the horizontal forward and right vector
 	//if swimming movement is true 3d
    //get the pitch in the range [-180, 180]
@@ -342,6 +354,25 @@ qboolean BotStarted(edict_t *bot)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
+/*
+ * Tell the library which model index the grapple hook uses.
+ *
+ * GrappleState recognises a hook in flight by matching an entity's model index
+ * against weapindex_grapple, and model indices are per-level configstrings, so
+ * this has to be set for every map. gi.modelindex doubles as the precache in
+ * Quake II: LMCTF only registers the hook model when one is first fired, so
+ * calling it here also stops the first grapple of a level from hitching.
+ */
+void BotSetGrappleModelIndex(bot_library_t *lib)
+{
+	char idx[16];
+
+	if (!lib) return;
+	Com_sprintf(idx, sizeof idx, "%d",
+		gi.modelindex("models/objects/ghook/tris.md2"));
+	lib->funcs.BotLibVarSet("weapindex_grapple", idx);
+}
+
 void BotLib_BotLoadMap(char *mapname)
 {
 	bot_library_t *lib, *nextlib;
@@ -350,20 +381,7 @@ void BotLib_BotLoadMap(char *mapname)
 	for (lib = botglobals.firstbotlib; lib; lib = nextlib)
 	{
 		nextlib = lib->next;
-
-		/*
-		 * GrappleState identifies a hook in flight by matching the entity's
-		 * model index against weapindex_grapple. Model indices are per-level
-		 * configstrings, so this has to be refreshed on every map rather than
-		 * set once at library init.
-		 */
-		{
-			char idx[16];
-			Com_sprintf(idx, sizeof idx, "%d",
-				gi.modelindex("models/objects/ghook/tris.md2"));
-			lib->funcs.BotLibVarSet("weapindex_grapple", idx);
-		}
-
+		BotSetGrappleModelIndex(lib);
 		errnum = lib->funcs.BotLoadMap(mapname, MAX_MODELINDEXES, modelindexes,
 												MAX_SOUNDINDEXES, soundindexes,
 												MAX_IMAGEINDEXES, imageindexes);
@@ -539,7 +557,20 @@ void BotLib_BotUpdateClient(edict_t *bot)
 	VectorCopy(bot->client->ps.pmove.delta_angles, buc.delta_angles);
 	//====================================
 	//view angles
-	VectorClear(buc.viewangles);
+	/*
+	 * The bot's real view angles.
+	 *
+	 * This was VectorClear, so the library was told every bot faced angle zero
+	 * on every frame. Anything that compares where a bot is looking against
+	 * where it should look was therefore meaningless -- the grapple, for one,
+	 * only fires once the bot is aimed within two degrees of the hook point,
+	 * which could never happen.
+	 *
+	 * player_state_t.viewangles is not the field to use: Quake II only fills
+	 * it for fixed views, during intermission and death. A playing client's
+	 * view lives in client->v_angle.
+	 */
+	VectorCopy(bot->client->v_angle, buc.viewangles);
 	//view offset
 	VectorCopy(bot->client->ps.viewoffset, buc.viewoffset);
 	//kick angles
@@ -946,6 +977,11 @@ int BotInitLibrary(bot_library_t *lib)
 	//automatically launch WinBSPC if AAS file not available
 	cvar = gi.cvar("autolaunchbspc", "", 0);
 	if (cvar && cvar->value) lib->funcs.BotLibVarSet("autolaunchbspc", "1");
+	/* Before BotSetupLibrary: the library latches bot_developer into a C
+	 * variable during setup, so setting it afterwards left every diagnostic
+	 * switched off no matter what the cvar said. */
+	cvar = gi.cvar("bot_developer", "0", 0);
+	if (cvar) lib->funcs.BotLibVarSet("bot_developer", cvar->string);
 	//bot skill level (1=beginner, 5=expert)
 	cvar = gi.cvar("bot_skill", "4", 0);
 	if (cvar) lib->funcs.BotLibVarSet("bot_skill", cvar->string);
@@ -1039,6 +1075,9 @@ int BotInitLibrary(bot_library_t *lib)
 	errnum = lib->funcs.BotSetupLibrary();
 	if (errnum != BLERR_NOERROR) return false;
 	//load the map
+	/* This is where a freshly loaded library first reads the map -- the
+	 * per-map hook above has not run for it yet. */
+	BotSetGrappleModelIndex(lib);
 	errnum = lib->funcs.BotLoadMap(level.mapname, MAX_MODELINDEXES, modelindexes,
 																MAX_SOUNDINDEXES, soundindexes,
 																MAX_IMAGEINDEXES, imageindexes);

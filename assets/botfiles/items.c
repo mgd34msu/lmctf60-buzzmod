@@ -695,8 +695,8 @@ iteminfo "item_flag_team1"
     type        6
     index       1
     respawntime 0
-    mins        { -16, -16, -24 }
-    maxs        { 16, 16, 32 }
+    mins        { -15, -15, -15 }
+    maxs        { 15, 15, 15 }
 }
 
 iteminfo "item_flag_team2"
@@ -707,8 +707,8 @@ iteminfo "item_flag_team2"
     type        6
     index       2
     respawntime 0
-    mins        { -16, -16, -24 }
-    maxs        { 16, 16, 32 }
+    mins        { -15, -15, -15 }
+    maxs        { 15, 15, 15 }
 }
 
 // -----------------------------------------------------------------------

@@ -22,7 +22,10 @@ PLATFLAGS ?= -DLINUX -fPIC
 
 # -std=gnu17: this is 2001 code, and C23 turns "false" into a keyword, which
 # the Q3 headers use as an enum constant.
-CFLAGS = -std=gnu17 -O0 -g -DBOTLIB -DSTDC_HEADERS -w $(PLATFLAGS)
+# -DDEBUG unlocks the library's own navigation diagnostics. They are gated at
+# runtime on the bot_developer libvar as well, so this costs nothing on a
+# server that leaves it at 0.
+CFLAGS = -std=gnu17 -O0 -g -DBOTLIB -DDEBUG -DSTDC_HEADERS -w $(PLATFLAGS)
 LDFLAGS = -shared -lm
 
 OBJS = be_aas_bspq2.o be_aas_cluster.o be_aas_debug.o be_aas_entity.o \

@@ -566,6 +566,12 @@ int BotOnTopOfEntity(bot_movestate_t *ms)
 // Returns:				-
 // Changes Globals:		-
 //===========================================================================
+int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best;
+float q2_grapple_mindist = 99999.0f;
+int q2_reach_total;
+int q2_grapple_travel;
+int q2_grapple_fired;
+
 int BotValidTravel(vec3_t origin, aas_reachability_t *reach, int travelflags)
 {
 	//if the reachability uses an unwanted travel type
@@ -747,7 +753,7 @@ int BotGetReachabilityToGoal(vec3_t origin, int areanum,
 									  bot_goal_t *goal, int travelflags, int movetravelflags,
 									  struct bot_avoidspot_s *avoidspots, int numavoidspots, int *flags)
 {
-	int i, t, besttime, bestreachnum, reachnum;
+	int i, t, besttime, bestreachnum, reachnum, allowreturn;
 	aas_reachability_t reach;
 
 	//if not in a valid area
@@ -762,6 +768,19 @@ int BotGetReachabilityToGoal(vec3_t origin, int areanum,
 	besttime = 0;
 	bestreachnum = 0;
 	//
+	/*
+	 * Two passes. The first is Quake III's behaviour unchanged, including the
+	 * rule below that refuses to walk back into the area the bot just came
+	 * from. That rule strands a bot in any area whose only reachability is the
+	 * one it arrived through -- a dead-end corridor, a ledge, the back of an
+	 * alcove -- because the single candidate is rejected and the function
+	 * returns "no route" even when the routing tables have a perfectly good
+	 * path. The second pass runs only when the first found nothing at all, and
+	 * drops just that restriction, so normal navigation is untouched and the
+	 * bot can still turn around and leave.
+	 */
+	for (allowreturn = 0; allowreturn < 2 && !bestreachnum; allowreturn++)
+	{
 	for (reachnum = AAS_NextAreaReachability(areanum, 0); reachnum;
 		reachnum = AAS_NextAreaReachability(areanum, reachnum))
 	{
@@ -786,12 +805,22 @@ int BotGetReachabilityToGoal(vec3_t origin, int areanum,
 		AAS_ReachabilityFromNum(reachnum, &reach);
 		//NOTE: do not go back to the previous area if the goal didn't change
 		//NOTE: is this actually avoidance of local routing minima between two areas???
-		if (lastgoalareanum == goal->areanum && reach.areanum == lastareanum) continue;
+		if (!allowreturn &&
+			lastgoalareanum == goal->areanum && reach.areanum == lastareanum) continue;
 		//if (AAS_AreaContentsTravelFlags(reach.areanum) & ~travelflags) continue;
 		//if the travel isn't valid
+		if ((reach.traveltype & TRAVELTYPE_MASK) == TRAVEL_GRAPPLEHOOK) {
+			extern int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best;
+			q2_grapple_seen++;
+			if (BotValidTravel(origin, &reach, movetravelflags)) q2_grapple_valid++;
+		}
 		if (!BotValidTravel(origin, &reach, movetravelflags)) continue;
 		//get the travel time
 		t = AAS_AreaTravelTimeToGoalArea(reach.areanum, reach.end, goal->areanum, travelflags);
+		if ((reach.traveltype & TRAVELTYPE_MASK) == TRAVEL_GRAPPLEHOOK && t) {
+			extern int q2_grapple_routed;
+			q2_grapple_routed++;
+		}
 		//if the goal area isn't reachable from the reachable area
 		if (!t) continue;
 		//if the bot should not use this reachability to avoid bad spots
@@ -810,7 +839,17 @@ int BotGetReachabilityToGoal(vec3_t origin, int areanum,
 			bestreachnum = reachnum;
 		} //end if
 	} //end for
+	} //end for (allowreturn)
 	//
+	if (bestreachnum)
+	{
+		extern int q2_grapple_best, q2_reach_total;
+		aas_reachability_t best;
+		AAS_ReachabilityFromNum(bestreachnum, &best);
+		q2_reach_total++;
+		if ((best.traveltype & TRAVELTYPE_MASK) == TRAVEL_GRAPPLEHOOK)
+			q2_grapple_best++;
+	}
 	return bestreachnum;
 } //end of the function BotGetReachabilityToGoal
 //===========================================================================
@@ -2710,6 +2749,7 @@ bot_moveresult_t BotTravel_Grapple(bot_movestate_t *ms, aas_reachability_t *reac
 			//activate the grapple
 			if (offhandgrapple->value)
 			{
+				{ extern int q2_grapple_fired; q2_grapple_fired++; }
 				EA_Command(ms->client, cmd_grappleon->string);
 			} //end if
 			else
@@ -3365,7 +3405,9 @@ void BotMoveToGoal(bot_moveresult_t *result, int movestate, bot_goal_t *goal, in
 				case TRAVEL_WATERJUMP: *result = BotTravel_WaterJump(ms, &reach); break;
 				case TRAVEL_TELEPORT: *result = BotTravel_Teleport(ms, &reach); break;
 				case TRAVEL_ELEVATOR: *result = BotTravel_Elevator(ms, &reach); break;
-				case TRAVEL_GRAPPLEHOOK: *result = BotTravel_Grapple(ms, &reach); break;
+				case TRAVEL_GRAPPLEHOOK:
+				{ extern int q2_grapple_travel; q2_grapple_travel++; }
+				*result = BotTravel_Grapple(ms, &reach); break;
 				case TRAVEL_ROCKETJUMP: *result = BotTravel_RocketJump(ms, &reach); break;
 				case TRAVEL_BFGJUMP: *result = BotTravel_BFGJump(ms, &reach); break;
 				case TRAVEL_JUMPPAD: *result = BotTravel_JumpPad(ms, &reach); break;
@@ -3474,7 +3516,9 @@ void BotMoveToGoal(bot_moveresult_t *result, int movestate, bot_goal_t *goal, in
 				case TRAVEL_WATERJUMP: *result = BotFinishTravel_WaterJump(ms, &reach); break;
 				case TRAVEL_TELEPORT: /*do nothing*/ break;
 				case TRAVEL_ELEVATOR: *result = BotFinishTravel_Elevator(ms, &reach); break;
-				case TRAVEL_GRAPPLEHOOK: *result = BotTravel_Grapple(ms, &reach); break;
+				case TRAVEL_GRAPPLEHOOK:
+				{ extern int q2_grapple_travel; q2_grapple_travel++; }
+				*result = BotTravel_Grapple(ms, &reach); break;
 				case TRAVEL_ROCKETJUMP:
 				case TRAVEL_BFGJUMP: *result = BotFinishTravel_WeaponJump(ms, &reach); break;
 				case TRAVEL_JUMPPAD: *result = BotFinishTravel_JumpPad(ms, &reach); break;
