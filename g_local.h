@@ -9,6 +9,10 @@
  * BOT_IMPORT redirects the game import table through bl_redirgi.c, which is
  * how botlib observes the world without the engine knowing it is there.
  */
+/* The bot sources call Q_strcasecmp; this mod spells it Q_stricmp. Needed on
+ * every platform, not just the unix branch below. */
+#define Q_strcasecmp	Q_stricmp
+
 #define BOT				// bot support
 #define BOT_IMPORT		// game import redirection
 //#define BOT_DEBUG		// bot debug drawing
@@ -39,7 +43,6 @@ extern _CrtMemState startup1;	// memory diagnostics
 #endif
 #define _isnan(x)	isnan(x)
 #define stricmp		strcasecmp
-#define Q_strcasecmp	Q_stricmp
 #endif
 #endif
 

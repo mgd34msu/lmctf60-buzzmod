@@ -976,8 +976,11 @@ int BotInitLibrary(bot_library_t *lib)
 	lib->funcs.BotLibVarSet("cmd_grappleon", "hook");
 	lib->funcs.BotLibVarSet("cmd_grappleoff", "unhook");
 
-	/* route over TRAVEL_GRAPPLEHOOK reachabilities; see Q2BotTravelFlags */
-	lib->funcs.BotLibVarSet("bot_grapple", "1");
+	/* Route over TRAVEL_GRAPPLEHOOK reachabilities; see Q2BotTravelFlags.
+	 * On by default because LMCTF's hook is always in hand, but exposed as a
+	 * cvar so it can be turned off without a rebuild. */
+	cvar = gi.cvar("bot_grapple", "1", 0);
+	lib->funcs.BotLibVarSet("bot_grapple", cvar ? cvar->string : "1");
 #ifdef CH
 	lib->funcs.BotLibVarSet("ch", ch->string);
 #endif //CH

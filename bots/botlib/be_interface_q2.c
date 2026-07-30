@@ -432,6 +432,7 @@ typedef struct {
     float       teleport_time;      /* AAS_Time() when bot last teleported */
     /* Random walk fallback when navigation fails persistently. */
     vec3_t      roam_dir;           /* current random walk direction */
+    int   roam_reason;
     float       roam_dir_time;      /* AAS_Time() when roam_dir was last set */
     float       move_fail_time;     /* AAS_Time() when movedir first became zero */
     /* Area-loop detection: when the bot cycles through the same small set
@@ -2338,6 +2339,7 @@ ctf_navigate:
                                 bc->nbg_check_time = 0.0f;
                                 Com_Memset(bc->area_history, 0, sizeof(bc->area_history));
                                 bc->area_loop_time = 0.0f;
+                                bc->roam_reason = 1;   /* area loop */
                                 goto roam_fallback;
                             }
                         } else {
@@ -2355,6 +2357,7 @@ ctf_navigate:
              * This matches Q3 which does NOT roam on routing failure. */
             if (moveresult->failure) {
                 BotResetAvoidReach(bc->movestate);
+                bc->roam_reason = 2;   /* BotMoveToGoal reported failure */
                 goto roam_fallback;
             }
 
@@ -2372,6 +2375,7 @@ ctf_navigate:
                     bc->move_fail_time = now2;
                 if ((now2 - bc->move_fail_time) > 1.0f) {
                     BotResetAvoidReach(bc->movestate);
+                    bc->roam_reason = 3;   /* zero movedir for over a second */
                     goto roam_fallback;
                 }
             } else {
@@ -2488,8 +2492,8 @@ roam_fallback:
             static float last_roam_log = 0;
             if (now - last_roam_log > 1.0f) {
                 botimport.Print(PRT_MESSAGE,
-                    "bot %d: ROAMING (bad AAS area) dir=(%.1f,%.1f) area=%d origin=(%.0f,%.0f,%.0f)\n",
-                    client, bc->roam_dir[0], bc->roam_dir[1],
+                    "bot %d: ROAMING reason=%d hasgoal=%d goalarea=%d dir=(%.1f,%.1f) area=%d origin=(%.0f,%.0f,%.0f)\n",
+                    client, bc->roam_reason, bc->hasgoal, bc->ltg.areanum, bc->roam_dir[0], bc->roam_dir[1],
                     BotReachabilityArea(bc->origin, client),
                     bc->origin[0], bc->origin[1], bc->origin[2]);
                 last_roam_log = now;
