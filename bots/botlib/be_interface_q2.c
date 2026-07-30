@@ -1345,9 +1345,16 @@ static int Q2BotStartFrame(float time)
             for (n = 0; n < 32; n++)
                 if (ttcount[n]) botimport.Print(PRT_MESSAGE, " %d=%d", n, ttcount[n]);
             botimport.Print(PRT_MESSAGE, "  (14 = grapple)\n");
-            /* How much of the map can actually route to each flag? A flag the
-             * bots cannot reach from most of the level is the real problem
-             * behind stranded carriers and abandoned attacks. */
+            /*
+             * Connectivity census, printed once per map under bot_developer.
+             *
+             * On lmctf01 only 53% of linked areas can route to a flag. The
+             * bulk of the rest -- 567 areas -- is one-way: bspc generated a
+             * way in and no way back, and that holds with every travel type
+             * enabled, so it is missing data rather than a flag we forgot to
+             * set. Those are dead ends a bot cannot navigate out of, which is
+             * what the staging areas exist to work around.
+             */
             /* Build the staging list: areas that reach both flags, sampled
              * evenly across the level so there is usually one nearby. */
             if (ctf_redflag.areanum && ctf_blueflag.areanum) {
@@ -1382,6 +1389,43 @@ static int Q2BotStartFrame(float time)
                     botimport.Print(PRT_MESSAGE,
                         "Q2Adapt: %s flag area %d reachable from %d of %d linked areas (%d%%)\n",
                         f ? "blue" : "red", flags[f], ok, tot, tot ? ok * 100 / tot : 0);
+                    /* And the other direction: can the flag reach them? If it
+                     * can but they cannot reach back, the connectivity is
+                     * one-way -- a missing return route, not a separate
+                     * region. */
+                    {
+                        int back = 0, oneway = 0, b;
+                        for (b = 1; b < aasworld.numareas; b++) {
+                            if (!AAS_AreaReachability(b)) continue;
+                            if (AAS_AreaTravelTimeToGoalArea(flags[f],
+                                    aasworld.areas[flags[f]].center, b, tfl)) {
+                                back++;
+                                if (!AAS_AreaTravelTimeToGoalArea(b,
+                                        aasworld.areas[b].center, flags[f], tfl))
+                                    oneway++;
+                            }
+                        }
+                        botimport.Print(PRT_MESSAGE,
+                            "Q2Adapt:   flag can reach %d areas, of which %d cannot get back (one-way)\n",
+                            back, oneway);
+                        /* How much of that is recoverable by allowing every
+                         * travel type the data contains? */
+                        {
+                            int all = TFL_DEFAULT|TFL_GRAPPLEHOOK|TFL_ROCKETJUMP|
+                                      TFL_BFGJUMP|TFL_DOUBLEJUMP|TFL_RAMPJUMP|
+                                      TFL_STRAFEJUMP|TFL_LAVA|TFL_SLIME|TFL_DONOTENTER;
+                            int ow2 = 0, b2;
+                            for (b2 = 1; b2 < aasworld.numareas; b2++) {
+                                if (!AAS_AreaReachability(b2)) continue;
+                                if (!AAS_AreaTravelTimeToGoalArea(flags[f],
+                                        aasworld.areas[flags[f]].center, b2, tfl)) continue;
+                                if (!AAS_AreaTravelTimeToGoalArea(b2,
+                                        aasworld.areas[b2].center, flags[f], all)) ow2++;
+                            }
+                            botimport.Print(PRT_MESSAGE,
+                                "Q2Adapt:   with every travel type allowed: %d still one-way\n", ow2);
+                        }
+                    }
                 }
             }
         }
