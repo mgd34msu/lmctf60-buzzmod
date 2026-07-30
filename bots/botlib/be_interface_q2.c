@@ -65,6 +65,7 @@ Design overview
  * that are not explicitly declared in the included headers. */
 extern int      bot_developer;
 static int      Q2BotTravelFlags(void);
+static int      Q2BotFindStagingArea(int fromarea, int goalarea);
 extern char    *LibVarGetString(char *var_name);
 extern int      AAS_AreaTravelTimeToGoalArea(int areanum, vec3_t origin, int goalareanum, int travelflags);
 extern int      AAS_AreaReachability(int areanum);
@@ -451,6 +452,13 @@ typedef struct {
      * tight a space it happens to be moving through. */
     int         goal_best_ttime;
     float       goal_progress_time;
+    /* Once a route is taken the bot sticks with it for a couple of seconds, so
+     * it does not re-plan every frame simply because it can. A route that has
+     * gone invalid is exempt -- there is nothing to commit to. */
+    float       route_commit_time;
+    /* When the direct route fails, the bot heads for a staging area first. */
+    bot_goal_t  staging_goal;
+    qboolean    has_staging;
     /* Chat state (mirrors Q3 bot_state_t fields for ai_chat.c) */
     float       lastchat_time;      /* AAS_Time() when last chat was sent */
     int         chatto;             /* CHAT_ALL(0), CHAT_TEAM(1) */
@@ -480,6 +488,24 @@ static q2_botclient_t  q2clients[Q2_BOTLIB_MAX_CLIENTS];
 static bot_goal_t ctf_redflag;           /* team 1 (red) flag spawn */
 static bot_goal_t ctf_blueflag;          /* team 2 (blue) flag spawn */
 static qboolean   ctf_flags_initialized; /* true once flag goals are found */
+
+/*
+ * Staging areas.
+ *
+ * Roughly half of lmctf01's linked areas cannot route to either flag: the
+ * compiler leaves pockets that connect locally but not to the rest of the
+ * level. A bot standing in one has no route to its goal and, before this,
+ * nothing useful to do about it.
+ *
+ * So the adapter keeps a list of areas that are known to route to both bases
+ * -- the well connected core of the map. A bot that cannot reach its goal
+ * directly heads for the nearest core area it *can* reach, and once there
+ * routes onward normally. It is the same thing a player does on being cut
+ * off: get back to somewhere you know, then carry on.
+ */
+#define Q2_MAX_STAGING 256
+static int q2_staging[Q2_MAX_STAGING];
+static int q2_numstaging;
 
 /* Per-entity velocity cache: computed from origin deltas between frames.
  * Neither Q2's bot_updateentity_t nor Q3's bot_entitystate_t carry velocity,
@@ -1319,6 +1345,45 @@ static int Q2BotStartFrame(float time)
             for (n = 0; n < 32; n++)
                 if (ttcount[n]) botimport.Print(PRT_MESSAGE, " %d=%d", n, ttcount[n]);
             botimport.Print(PRT_MESSAGE, "  (14 = grapple)\n");
+            /* How much of the map can actually route to each flag? A flag the
+             * bots cannot reach from most of the level is the real problem
+             * behind stranded carriers and abandoned attacks. */
+            /* Build the staging list: areas that reach both flags, sampled
+             * evenly across the level so there is usually one nearby. */
+            if (ctf_redflag.areanum && ctf_blueflag.areanum) {
+                int step, tfl2 = Q2BotTravelFlags();
+                q2_numstaging = 0;
+                step = aasworld.numareas / (Q2_MAX_STAGING * 4);
+                if (step < 1) step = 1;
+                for (a = 1; a < aasworld.numareas && q2_numstaging < Q2_MAX_STAGING; a += step) {
+                    if (!AAS_AreaReachability(a)) continue;
+                    if (!AAS_AreaTravelTimeToGoalArea(a, aasworld.areas[a].center,
+                                                       ctf_redflag.areanum, tfl2)) continue;
+                    if (!AAS_AreaTravelTimeToGoalArea(a, aasworld.areas[a].center,
+                                                       ctf_blueflag.areanum, tfl2)) continue;
+                    q2_staging[q2_numstaging++] = a;
+                }
+                botimport.Print(PRT_MESSAGE,
+                    "Q2Adapt: %d staging areas (route to both bases)\n", q2_numstaging);
+            }
+            {
+                int f, ok, tot, tfl = Q2BotTravelFlags();
+                int flags[2]; flags[0] = ctf_redflag.areanum;
+                flags[1] = ctf_blueflag.areanum;
+                for (f = 0; f < 2; f++) {
+                    if (!flags[f]) continue;
+                    ok = tot = 0;
+                    for (a = 1; a < aasworld.numareas; a++) {
+                        if (!AAS_AreaReachability(a)) continue;
+                        tot++;
+                        if (AAS_AreaTravelTimeToGoalArea(a, aasworld.areas[a].center,
+                                                          flags[f], tfl)) ok++;
+                    }
+                    botimport.Print(PRT_MESSAGE,
+                        "Q2Adapt: %s flag area %d reachable from %d of %d linked areas (%d%%)\n",
+                        f ? "blue" : "red", flags[f], ok, tot, tot ? ok * 100 / tot : 0);
+                }
+            }
         }
         /* periodic grapple selection report */
         if (bot_developer) {
@@ -2269,6 +2334,8 @@ static qboolean Q2BotNavigateGoals(int client, q2_botclient_t *bc,
                                     bot_moveresult_t *moveresult)
 {
     float now = AAS_Time();
+    int   reselect_tries;
+    int   retarget_done = 0;   /* at most one re-plan per frame */
 
     /* Timeout: abandon goals that haven't been reached in 60s */
     if (bc->hasgoal && bc->goal_set_time > 0.0f &&
@@ -2280,6 +2347,9 @@ static qboolean Q2BotNavigateGoals(int client, q2_botclient_t *bc,
         bc->ltg_check_time = 0.0f;
     }
 
+    reselect_tries = 0;
+
+reselect:
     /* CTF: check for CTF-specific goals before normal item seeking.
      * If CTF goal is active, skip normal LTG selection. */
     if (Q2BotCTFSeekGoals(client, bc)) {
@@ -2305,10 +2375,28 @@ static qboolean Q2BotNavigateGoals(int client, q2_botclient_t *bc,
                               bc->inventory, Q2BotTravelFlags());
         }
         if (BotGetTopGoal(bc->goalstate, &bc->ltg)) {
+            /*
+             * Check the goal is actually routable before committing to it,
+             * rather than walking off and finding out later. A goal the router
+             * cannot reach from here is dropped straight away and another
+             * chosen, so the bot never locks onto a route it cannot run.
+             */
+            int cur = BotReachabilityArea(bc->origin, client);
+            if (cur > 0 && bc->ltg.areanum > 0 &&
+                !AAS_AreaTravelTimeToGoalArea(cur, bc->origin,
+                                              bc->ltg.areanum,
+                                              Q2BotTravelFlags())) {
+                BotSetAvoidGoalTime(bc->goalstate, bc->ltg.number, 30.0f);
+                BotPopGoal(bc->goalstate);
+                bc->hasgoal = false;
+                bc->ltg_check_time = 0.0f;
+                if (++reselect_tries < 4) goto reselect;
+            } else {
             bc->hasgoal      = true;
             bc->goal_set_time = now;
             bc->goal_best_ttime    = 0;
             bc->goal_progress_time = now;
+            bc->route_commit_time  = now + 2.0f;
             if (LibVarGetValue("bot_developer")) {
                 char goalname[64];
                 BotGoalName(bc->ltg.number, goalname, sizeof(goalname));
@@ -2319,6 +2407,7 @@ static qboolean Q2BotNavigateGoals(int client, q2_botclient_t *bc,
                     bc->inventory[8], bc->inventory[9], bc->inventory[10],
                     bc->inventory[11], bc->inventory[13], bc->inventory[14],
                     bc->inventory[15], bc->inventory[16], bc->inventory[17]);
+            }
             }
         } else if (LibVarGetValue("bot_developer")) {
             botimport.Print(PRT_MESSAGE,
@@ -2392,7 +2481,8 @@ ctf_navigate:
                      * all attack goals. Quake III does not do this either --
                      * it lets the goal's own timer expire.
                      */
-                    if (t_now == 0 && (now - bc->goal_progress_time) > 5.0f) {
+                    if (t_now == 0 && (now - bc->goal_progress_time) > 5.0f &&
+                        now >= bc->route_commit_time) {
                         if (bot_developer) {
                             botimport.Print(PRT_MESSAGE,
                                 "bot %d: no progress to goal area %d (ttime %d) ctfrole=%d, retargeting\n",
@@ -2478,6 +2568,19 @@ ctf_navigate:
             /* Goal reached — pop and avoid for 10s to prevent
              * oscillation when the Q2 engine doesn't actually
              * consume the item (pickup mechanic mismatch). */
+            else if (bc->has_staging &&
+                     BotReachabilityArea(bc->origin, client) == bc->staging_goal.areanum) {
+                /* Arrived: drop the staging goal and route on normally. */
+                BotPopGoal(bc->goalstate);
+                bc->has_staging        = false;
+                bc->hasgoal            = false;
+                bc->ltg_check_time     = 0.0f;
+                bc->goal_best_ttime    = 0;
+                bc->goal_progress_time = now;
+                if (bot_developer)
+                    botimport.Print(PRT_MESSAGE, "bot %d: reached staging area %d\n",
+                                    client, bc->staging_goal.areanum);
+            }
             else if (BotTouchingGoal(bc->origin, &active_goal)) {
                 if (bot_developer)
                     botimport.Print(PRT_MESSAGE,
@@ -2535,40 +2638,104 @@ skip_nbg:
 
 retarget:
     /*
-     * Drop the goal the bot cannot make headway on, remember not to pick it
-     * straight back up, and let goal selection choose another next frame.
-     * This is the normal answer to an unreachable goal; the roaming below is
-     * only for when there is no goal to be had at all.
+     * The current route has stopped working. Rather than dropping it and
+     * standing there, look for a replacement first and only switch if one is
+     * actually found -- and do it inside this same frame, so the bot never
+     * spends a tick deciding instead of moving.
+     *
+     * If nothing better is available the bot keeps running the route it has.
+     * A route that cannot be used right now often can be a moment later: a
+     * door opens, a lift arrives, or the bot drifts into an area the router
+     * can work from. Carrying on beats wandering off at random, and the
+     * progress timer will bring us back here if it really is hopeless.
      */
     if (bc->hasgoal) {
         bot_goal_t dead;
         if (BotGetTopGoal(bc->goalstate, &dead))
             BotSetAvoidGoalTime(bc->goalstate, dead.number, 30.0f);
-        if (bc->hasnbg) { BotPopGoal(bc->goalstate); bc->hasnbg = false; }
-        BotPopGoal(bc->goalstate);
-        bc->hasgoal = false;
     }
-    bc->ltg_check_time     = 0.0f;
-    bc->nbg_check_time     = 0.0f;
-    bc->goal_best_ttime    = 0;
-    bc->goal_progress_time = 0.0f;
-    bc->ctf_ltgtype        = Q2_LTG_NONE;
-    bc->ctf_decide_time    = 0.0f;
-    bc->ctf_goal_time      = 0.0f;
+    if (bc->hasnbg) { BotPopGoal(bc->goalstate); bc->hasnbg = false; }
 
     /*
-     * A flag carrier has nothing else to choose: its only goal is its own
-     * base. If the routing table cannot get there from where it is standing --
-     * which happens in the odd pocket of a map whose navigation data has a
-     * hole in it -- then standing still and re-picking the same goal every
-     * frame just waits to be killed. Keep moving instead, which is what the
-     * roaming below is for, until the bot is somewhere the router can work
-     * with again.
+     * A flag carrier has no alternative goal worth choosing -- picking up a
+     * rocket launcher is not a substitute for getting the flag home. Skip
+     * straight to staging so it works its way back to somewhere the router
+     * can reach the base from.
      */
-    if (bc->ctf_has_flag) goto roam_fallback;
+    if (bc->ctf_has_flag) goto try_staging;
 
-    /* Stand still for this frame; a new goal is chosen on the next one. */
-    return false;
+    if (++reselect_tries < 4 &&
+        BotChooseLTGItem(bc->goalstate, bc->origin, bc->inventory,
+                          Q2BotTravelFlags()))
+    {
+        bot_goal_t fresh;
+        if (BotGetTopGoal(bc->goalstate, &fresh)) {
+            int cur = BotReachabilityArea(bc->origin, client);
+            if (cur > 0 && fresh.areanum > 0 &&
+                AAS_AreaTravelTimeToGoalArea(cur, bc->origin, fresh.areanum,
+                                             Q2BotTravelFlags()))
+            {
+                /* A usable replacement: take it and navigate on. */
+                Com_Memcpy(&bc->ltg, &fresh, sizeof(bot_goal_t));
+                bc->hasgoal            = true;
+                bc->goal_set_time      = now;
+                bc->goal_best_ttime    = 0;
+                bc->goal_progress_time = now;
+                bc->ctf_ltgtype        = Q2_LTG_NONE;
+                bc->ctf_decide_time    = 0.0f;
+                bc->ctf_goal_time      = 0.0f;
+                bc->route_commit_time  = now + 2.0f;
+                if (!retarget_done) { retarget_done = 1; goto ctf_navigate; }
+                return true;
+            }
+            /* Not usable either -- discard it and try again. */
+            BotSetAvoidGoalTime(bc->goalstate, fresh.number, 30.0f);
+            BotPopGoal(bc->goalstate);
+            goto retarget;
+        }
+    }
+
+    /*
+     * Nothing directly reachable. Head for the nearest staging area that can
+     * reach the goal, and route on from there -- the same thing a player does
+     * on finding the way blocked: get back to somewhere known, then continue.
+     * This is what rescues a flag carrier stranded in a pocket of the map.
+     */
+try_staging:
+    if (!bc->has_staging) {
+        int cur   = BotReachabilityArea(bc->origin, client);
+        int want  = bc->ctf_has_flag ? bc->ctf_goal.areanum
+                  : (bc->hasgoal ? bc->ltg.areanum : 0);
+        int stage = Q2BotFindStagingArea(cur, want);
+        if (stage > 0) {
+            Com_Memset(&bc->staging_goal, 0, sizeof(bc->staging_goal));
+            bc->staging_goal.areanum = stage;
+            VectorCopy(aasworld.areas[stage].center, bc->staging_goal.origin);
+            VectorSet(bc->staging_goal.mins, -24, -24, -24);
+            VectorSet(bc->staging_goal.maxs,  24,  24,  24);
+            bc->has_staging = true;
+            BotPushGoal(bc->goalstate, &bc->staging_goal);
+            bc->hasgoal            = true;
+            bc->goal_best_ttime    = 0;
+            bc->goal_progress_time = now;
+            bc->route_commit_time  = now + 2.0f;
+            if (bot_developer)
+                botimport.Print(PRT_MESSAGE,
+                    "bot %d: no route to area %d, staging via area %d\n",
+                    client, want, stage);
+            if (!retarget_done) { retarget_done = 1; goto ctf_navigate; }
+            return true;
+        }
+    }
+
+    /* Keep the existing goal and keep moving; reset the progress timer so this
+     * is retried later rather than fired every frame. */
+    bc->goal_progress_time = now;
+    bc->goal_best_ttime    = 0;
+    if (bc->hasgoal && !retarget_done) { retarget_done = 1; goto ctf_navigate; }
+    if (bc->hasgoal) return true;   /* already re-planned once this frame */
+
+    /* Genuinely nothing to do -- only now is wandering the right answer. */
 
 roam_fallback:
     /* Drop stale unreachable goal — otherwise the bot roams forever
@@ -2741,6 +2908,28 @@ static bot_goal_t *Q2BotCTFGetEnemyFlag(int client)
  * existed, item seeking stayed skipped, and the bot wandered for the rest of
  * the goal's lifetime.
  */
+/*
+ * Nearest staging area the bot can actually get to, that can in turn get to
+ * goalarea. Returns 0 if there is nothing useful.
+ */
+static int Q2BotFindStagingArea(int fromarea, int goalarea)
+{
+    int i, best = 0, besttime = 0, tfl = Q2BotTravelFlags();
+
+    if (fromarea <= 0 || goalarea <= 0) return 0;
+    for (i = 0; i < q2_numstaging; i++) {
+        int s = q2_staging[i], t1, t2;
+        if (s == fromarea) continue;
+        t1 = AAS_AreaTravelTimeToGoalArea(fromarea, aasworld.areas[fromarea].center, s, tfl);
+        if (!t1) continue;                     /* cannot get to this one either */
+        t2 = AAS_AreaTravelTimeToGoalArea(s, aasworld.areas[s].center, goalarea, tfl);
+        if (!t2) continue;                     /* it does not help */
+        if (!besttime || t1 < besttime) { besttime = t1; best = s; }
+    }
+    return best;
+}
+
+
 static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
 {
     if (!bc->hasgoal) {
@@ -2965,6 +3154,7 @@ static int Q2BotAI(int client, float thinktime)
         BotEmptyGoalStack(bc->goalstate);
         BotResetAvoidGoals(bc->goalstate);
         BotResetMoveState(bc->movestate);
+        bc->has_staging     = false;
         bc->hasgoal         = false;
         bc->hasnbg          = false;
         bc->ltg_check_time  = 0.0f;
