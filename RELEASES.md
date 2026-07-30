@@ -6,6 +6,68 @@ release number.
 Tag a release as `release-1`, `release-2` and so on. Pushing that tag builds all three
 libraries and opens a draft release with them attached.
 
+## Release 3 — July 2026
+
+Adds bot support. Bots are a **preview** in this release: they load, join teams
+and fight, but their navigation is not finished — see "Known limits" below
+before you put them on a public server.
+
+### What ships
+
+| File | |
+|-|-|
+| `gamex86_64.so` | Linux 64-bit game module |
+| `gamex86_64.dll` | Windows 64-bit game module |
+| `gamex86.dll` | Windows 32-bit game module |
+| `botlib.so` | Linux bot AI library |
+| `botlib-x64.dll` / `botlib-x86.dll` | Windows bot AI library |
+| `lmctf6-buzzmod.pak` | scoreboard art and the hit sound |
+| `lmctf-buzzmod-botfiles.tar.gz` | bot roster and character, chat and item configs |
+
+Navigation data is a separate download — one `.aas` file per map, 180 maps,
+about 290 MB. It is not built here because that needs the retail map paks.
+
+### Installing the bots
+
+Put `botlib.so` (or the `.dll`, renamed to `botlib.dll`) next to the Quake II
+executable, unpack the bot files into your mod directory, and drop the `.aas`
+files into `<moddir>/maps/`. Then:
+
+    set minimumplayers 10     // fill the game to ten players with bots
+    set bot_skill 4           // 1 to 5
+    set botctfteam 0          // 0 auto, 1 red, 2 blue
+    set bot_stats 0           // 1 to include bots in the stats database
+
+Referees get a **Manage Bots** page in the referee menu: add by name, add
+random, remove, remove all, and live controls for team, skill, fill-to, chat
+and stat tracking. `sv bot menu` opens it from the console.
+
+Bots use LMCTF's offhand grapple — they hook while holding a weapon, the same
+as a player, rather than switching to it. `bot_grapple 0` turns that off.
+
+Bot statistics are **off** by default. A server filling out a game usually does
+not want bots in the leaderboards; `bot_stats 1` includes them.
+
+### Known limits
+
+Bots spawn, are balanced across red and blue, pick goals, fight and chat. What
+they do not yet do is route: the pathfinding call fails and they fall back to
+wandering, so they will not reliably run flags. The navigation data is not the
+cause — it compiles clean and the bots' own positions resolve inside it. Set
+`bot_developer 1` to see which fallback is being taken.
+
+Treat bots as something to experiment with this release, not as a substitute
+for players.
+
+### Also fixed
+
+- `SkinRandom` divided by zero when a team had no skins listed, taking the
+  server down as soon as anyone connected.
+- `Cmd_Team_f` wrote through a pointer to a string literal — reachable by
+  typing `team` with no argument while on neither team.
+- `visible()` did not exist in a CTF build, though `g_combat.c`, `g_turret.c`
+  and `p_trail.c` all still called it.
+
 ---
 
 ## Release 1 — July 2026
