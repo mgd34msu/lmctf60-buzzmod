@@ -1361,6 +1361,15 @@ static int Q2BotStartFrame(float time)
             int ttcount[32], a, r, n;
             aas_reachability_t rr;
             reported = 1;
+            botimport.Print(PRT_MESSAGE,
+                "Q2Adapt: travelflags=0x%x grapple=%d offhand=%d "
+                "weapindex_grapple=%d on='%s' off='%s'\n",
+                Q2BotTravelFlags(),
+                (int)LibVarGetValue("bot_grapple"),
+                (int)LibVarGetValue("offhandgrapple"),
+                (int)LibVarGetValue("weapindex_grapple"),
+                LibVarGetString("cmd_grappleon"),
+                LibVarGetString("cmd_grappleoff"));
             /* One-time census of what the loaded navigation data actually
              * contains, by travel type. */
             for (n = 0; n < 32; n++) ttcount[n] = 0;
@@ -1497,15 +1506,7 @@ static int Q2BotStartFrame(float time)
                     "Q2Adapt: grapple routes won %d/%d, hook fired %d times\n",
                     q2_grapple_best, q2_reach_total, q2_grapple_fired);
             }
-            botimport.Print(PRT_MESSAGE,
-                "Q2Adapt: travelflags=0x%x grapple=%d offhand=%d "
-                "weapindex_grapple=%d on='%s' off='%s'\n",
-                Q2BotTravelFlags(),
-                (int)LibVarGetValue("bot_grapple"),
-                (int)LibVarGetValue("offhandgrapple"),
-                (int)LibVarGetValue("weapindex_grapple"),
-                LibVarGetString("cmd_grappleon"),
-                LibVarGetString("cmd_grappleoff"));
+
         }
     }
 

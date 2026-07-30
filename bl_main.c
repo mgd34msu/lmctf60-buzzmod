@@ -1217,6 +1217,27 @@ void BotUnloadLibrary(bot_library_t *lib)
 	if (lib->prev) lib->prev->next = lib->next;
 	else botglobals.firstbotlib = lib->next;
 	if (lib->next) lib->next->prev = lib->prev;
+	/*
+	 * Cut every bot loose from this library first.
+	 *
+	 * The per-client bot states keep a pointer to the library that drives
+	 * them, and nothing here cleared it. Once the library was dlclose'd those
+	 * pointers referred to unmapped memory, and the next frame's BotAI call
+	 * jumped through one -- a segfault with the instruction pointer somewhere
+	 * meaningless, reached from G_RunFrame. It is intermittent because it
+	 * needs the library to be freed while a bot still exists, which only
+	 * happens on particular orderings of bots leaving.
+	 */
+	{
+		int i;
+		for (i = 0; i < game.maxclients; i++)
+		{
+			if (botglobals.botstates[i].library != lib) continue;
+			botglobals.botstates[i].library = NULL;
+			botglobals.botstates[i].active  = false;
+			botglobals.botstates[i].started = false;
+		} //end for
+	}
 	//shut down the library
 	lib->funcs.BotShutdownLibrary();
 #if defined(WIN32) || defined(_WIN32)
@@ -1427,7 +1448,21 @@ void BotFreeLibrary(bot_library_t *lib)
 	lib->users--;
 	if (lib->users <= 0)
 	{
-		freebotlib = gi.cvar("freebotlib", "1", 0);
+		/*
+		 * Default changed to keeping the library loaded.
+		 *
+		 * Unloading it the moment the last bot leaves throws away the loaded
+		 * navigation data along with every goal and move state, and it all has
+		 * to be read back the next time somebody adds a bot. On a server that
+		 * fills with bots and empties again as players come and go, that is
+		 * constant churn -- one match was seen reloading the library six times
+		 * -- and it is the obvious suspect for anything holding a pointer into
+		 * a library that has just been dlclose'd.
+		 *
+		 * Set freebotlib 1 to get the old behaviour back if the memory matters
+		 * more than the reloads.
+		 */
+		freebotlib = gi.cvar("freebotlib", "0", 0);
 		if (freebotlib->value) BotUnloadLibrary(lib);
 	} //end if
 } //end of the function BotFreeLibrary
