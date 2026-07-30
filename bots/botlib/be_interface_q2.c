@@ -65,6 +65,8 @@ Design overview
  * that are not explicitly declared in the included headers. */
 extern int      bot_developer;
 static int      Q2BotTravelFlags(void);
+extern int      AAS_AreaGrounded(int areanum);
+extern int      AAS_AreaSwim(int areanum);
 static int      Q2BotFindStagingArea(int fromarea, int goalarea);
 extern char    *LibVarGetString(char *var_name);
 extern int      AAS_AreaTravelTimeToGoalArea(int areanum, vec3_t origin, int goalareanum, int travelflags);
@@ -477,6 +479,8 @@ typedef struct {
     qboolean    ctf_has_flag;       /* true if carrying enemy flag */
 } q2_botclient_t;
 
+static qboolean Q2BotSwimOut(int client, q2_botclient_t *bc);
+
 /* ====================================================================
  * Module globals
  * ==================================================================== */
@@ -506,6 +510,9 @@ static qboolean   ctf_flags_initialized; /* true once flag goals are found */
 #define Q2_MAX_STAGING 256
 static int q2_staging[Q2_MAX_STAGING];
 static int q2_numstaging;
+/* Of those, the ones on dry ground -- what a bot in the water aims for. */
+static int q2_drystaging[Q2_MAX_STAGING];
+static int q2_numdrystaging;
 
 /* Per-entity velocity cache: computed from origin deltas between frames.
  * Neither Q2's bot_updateentity_t nor Q3's bot_entitystate_t carry velocity,
@@ -1370,8 +1377,13 @@ static int Q2BotStartFrame(float time)
                                                        ctf_blueflag.areanum, tfl2)) continue;
                     q2_staging[q2_numstaging++] = a;
                 }
+                q2_numdrystaging = 0;
+                for (a = 0; a < q2_numstaging; a++)
+                    if (AAS_AreaGrounded(q2_staging[a]) && !AAS_AreaSwim(q2_staging[a]))
+                        q2_drystaging[q2_numdrystaging++] = q2_staging[a];
                 botimport.Print(PRT_MESSAGE,
-                    "Q2Adapt: %d staging areas (route to both bases)\n", q2_numstaging);
+                    "Q2Adapt: %d staging areas (%d on dry ground)\n",
+                    q2_numstaging, q2_numdrystaging);
             }
             {
                 int f, ok, tot, tfl = Q2BotTravelFlags();
@@ -1424,6 +1436,28 @@ static int Q2BotStartFrame(float time)
                             }
                             botimport.Print(PRT_MESSAGE,
                                 "Q2Adapt:   with every travel type allowed: %d still one-way\n", ow2);
+                            /* Where are they? If they cluster at odd heights or
+                             * in water they are compiler artefacts, not places
+                             * a player goes. */
+                            if (f == 0) {
+                                int shown = 0, water = 0, ground = 0;
+                                for (b2 = 1; b2 < aasworld.numareas && shown < 8; b2++) {
+                                    if (!AAS_AreaReachability(b2)) continue;
+                                    if (!AAS_AreaTravelTimeToGoalArea(flags[f],
+                                            aasworld.areas[flags[f]].center, b2, tfl)) continue;
+                                    if (AAS_AreaTravelTimeToGoalArea(b2,
+                                            aasworld.areas[b2].center, flags[f], all)) continue;
+                                    if (AAS_AreaSwim(b2)) water++;
+                                    if (AAS_AreaGrounded(b2)) ground++;
+                                    botimport.Print(PRT_MESSAGE,
+                                        "Q2Adapt:     one-way area %d at %.0f,%.0f,%.0f grounded=%d swim=%d\n",
+                                        b2, aasworld.areas[b2].center[0],
+                                        aasworld.areas[b2].center[1],
+                                        aasworld.areas[b2].center[2],
+                                        AAS_AreaGrounded(b2), AAS_AreaSwim(b2));
+                                    shown++;
+                                }
+                            }
                         }
                     }
                 }
@@ -2745,6 +2779,11 @@ retarget:
      * on finding the way blocked: get back to somewhere known, then continue.
      * This is what rescues a flag carrier stranded in a pocket of the map.
      */
+    /* In water with nowhere to route: swim for the surface and dry land. */
+    if (AAS_AreaSwim(BotReachabilityArea(bc->origin, client)) &&
+        Q2BotSwimOut(client, bc))
+        return true;
+
 try_staging:
     if (!bc->has_staging) {
         int cur   = BotReachabilityArea(bc->origin, client);
@@ -2973,6 +3012,55 @@ static int Q2BotFindStagingArea(int fromarea, int goalarea)
     return best;
 }
 
+
+/*
+ * Swim out.
+ *
+ * The underwater sections of these maps are one-way in the compiled navigation
+ * data: bspc generates the way in and not the way back, so a bot that drops or
+ * swims in has no route to anywhere -- including to a staging area, which is
+ * why staging alone cannot rescue it. Bots still have to go in: a dropped flag
+ * or a dead carrier can leave the flag down there.
+ *
+ * So when a bot is in water with no route, it stops asking the router and
+ * simply swims: toward the nearest dry area it could route from, and upward.
+ * That is what a player does. As soon as it is out, the router takes over
+ * again and staging handles the rest of the journey.
+ */
+static qboolean Q2BotSwimOut(int client, q2_botclient_t *bc)
+{
+    int i, best = -1;
+    float bestdist = 0;
+    vec3_t dir;
+
+    for (i = 0; i < q2_numdrystaging; i++) {
+        vec3_t d;
+        float len;
+        VectorSubtract(aasworld.areas[q2_drystaging[i]].center, bc->origin, d);
+        len = VectorLength(d);
+        if (best < 0 || len < bestdist) { bestdist = len; best = q2_drystaging[i]; }
+    }
+    if (best < 0) return false;
+
+    VectorSubtract(aasworld.areas[best].center, bc->origin, dir);
+    /* Bias upward: the way out of water is up, and the target is usually
+     * above as well as away. */
+    if (dir[2] < 32) dir[2] = 32;
+    VectorNormalize(dir);
+    EA_Move(client, dir, 400);
+    EA_MoveUp(client);
+    if (bot_developer) {
+        static float next[64];
+        int ci = client & 63;
+        if (AAS_Time() > next[ci]) {
+            next[ci] = AAS_Time() + 3.0f;
+            botimport.Print(PRT_MESSAGE,
+                "bot %d: swimming out toward area %d (%.0f away)\n",
+                client, best, bestdist);
+        }
+    }
+    return true;
+}
 
 static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
 {
