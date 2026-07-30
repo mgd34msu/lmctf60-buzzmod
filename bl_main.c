@@ -86,6 +86,9 @@ int BotSwimming(vec3_t origin)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
+cvar_t *bot_bunnyhop;      /* keep hopping to stay off the friction */
+cvar_t *bot_strafejump;    /* air-steer for speed; needs sv_airaccelerate */
+
 void BotExecuteInput(edict_t *bot)
 {
 	vec3_t angles, forward, right;
@@ -96,6 +99,9 @@ void BotExecuteInput(edict_t *bot)
 #ifdef BOT_DEBUG
 	if (botglobals.nobotinput) return;
 #endif //BOT_DEBUG
+
+	if (!bot_bunnyhop)   bot_bunnyhop   = gi.cvar("bot_bunnyhop", "1", 0);
+	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "0", 0);
 
 	client = DF_ENTCLIENT(bot);
 	//
@@ -201,6 +207,76 @@ void BotExecuteInput(edict_t *bot)
 	if (bi->actionflags & ACTION_MOVERIGHT) ucmd.sidemove += 400;
 	//jump/moveup
 	if (bi->actionflags & ACTION_JUMP) ucmd.upmove += 400;
+
+	/*
+	 * Keep moving the way a player does.
+	 *
+	 * Quake II bleeds speed to ground friction every frame a player is
+	 * standing on something, so anyone covering distance hops continuously to
+	 * stay off the floor. Bots walked everywhere flat-footed and were slower
+	 * than any human across open ground.
+	 *
+	 * Two things are deliberately not done here. Jumping is suppressed while
+	 * swimming, on a ladder, in the air already, or when the library asked for
+	 * a crouch, since hopping would break all four. And it is suppressed while
+	 * the bot is barely moving: a bot holding a corner or lining up a grapple
+	 * should stand still, not bounce.
+	 *
+	 * Strafe jumping is the other half of this and is handled below.
+	 */
+	{
+		float speed2 = bot->velocity[0] * bot->velocity[0] +
+		               bot->velocity[1] * bot->velocity[1];
+
+		if (bot_bunnyhop && bot_bunnyhop->value &&
+			bot->groundentity &&                       /* on the floor */
+			bot->waterlevel < 2 &&                     /* not swimming */
+			!(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
+			!(bot->client->ps.pmove.pm_flags & PMF_TIME_LAND) &&
+			!(bi->actionflags & ACTION_CROUCH) &&
+			bi->dir[2] > -0.3f && bi->dir[2] < 0.3f &&  /* not climbing a ladder */
+			speed2 > 120.0f * 120.0f)                  /* actually going somewhere */
+		{
+			ucmd.upmove += 400;
+		}
+
+		/*
+		 * Strafe jumping.
+		 *
+		 * Speed is gained in the air by holding a strafe and turning the view
+		 * the same way, so the wish direction stays just off the current
+		 * velocity. Quake II only allows it when the server sets
+		 * sv_airaccelerate above zero -- PM_AirMove skips the acceleration
+		 * entirely otherwise -- so this checks first and does nothing on a
+		 * server running the stock value. It is left out while attacking:
+		 * turning the view to build speed and trying to aim are not
+		 * compatible, and players do not do both at once either.
+		 *
+		 * Off by default, because as written it does more harm than good.
+		 * Measured with sv_airaccelerate 10, bots averaged 110 units/sec with
+		 * this on against 185 with it off: the added yaw fights the steering
+		 * the navigation asked for and walks them off their route. Gaining
+		 * speed this way needs the turn to be derived from the direction the
+		 * bot is trying to travel, inside the movement code, rather than
+		 * added on top of a finished command here. Left in, and switchable,
+		 * so the next attempt has somewhere to start.
+		 */
+		if (bot_strafejump && bot_strafejump->value &&
+			!bot->groundentity &&                       /* airborne */
+			bot->waterlevel < 2 &&
+			!(bi->actionflags & ACTION_ATTACK) &&
+			speed2 > 200.0f * 200.0f &&
+			gi.cvar("sv_airaccelerate", "0", 0)->value > 0)
+		{
+			/* Alternate sides every second or so, the way a player weaves. */
+			int side = ((int)(level.time * 1.5f) & 1) ? 1 : -1;
+
+			ucmd.sidemove += side * 400;
+			/* Turn into the strafe: a small, steady yaw is what converts the
+			 * sideways push into forward speed. */
+			ucmd.angles[YAW] += (short)ANGLE2SHORT(side * 1.2f);
+		}
+	}
 	//crouch/movedown
 	if (bi->actionflags & ACTION_CROUCH) ucmd.upmove -= 400;
 	//impulse always zero

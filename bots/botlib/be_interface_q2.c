@@ -494,6 +494,29 @@ static bot_goal_t ctf_blueflag;          /* team 2 (blue) flag spawn */
 static qboolean   ctf_flags_initialized; /* true once flag goals are found */
 
 /*
+ * Flag state.
+ *
+ * LMCTF puts EF_FLAG1 on the red flag entity and EF_FLAG2 on the blue one,
+ * and the same bit on whoever is carrying it. So an entity above the client
+ * range wearing the bit is the flag itself: at its home position it is at
+ * base, anywhere else it has been dropped. No such entity at all means
+ * somebody is carrying it.
+ *
+ * Without this the bots had no idea where their own flag was, which is why
+ * nothing ever went to fetch it back -- and a carrier cannot capture while its
+ * own flag is away from base, so matches produced steals and almost no scores.
+ */
+#define Q2_FLAG_ATBASE   0
+#define Q2_FLAG_DROPPED  1
+#define Q2_FLAG_CARRIED  2
+typedef struct {
+    int    state;
+    vec3_t origin;      /* where it is, when dropped */
+    float  seen_time;   /* last frame the flag entity was seen */
+} q2_flagstate_t;
+static q2_flagstate_t q2_redflagstate, q2_blueflagstate;
+
+/*
  * Staging areas.
  *
  * Roughly half of lmctf01's linked areas cannot route to either flag: the
@@ -1642,6 +1665,19 @@ static int Q2BotUpdateEntity(int ent, q2_bot_updateentity_t *bue)
                 if (cl >= 0 && cl < Q2_BOTLIB_MAX_CLIENTS && q2clients[cl].inuse)
                     q2clients[cl].effects = bue->effects;
             }
+        } else if (ent > maxcl &&
+                   (bue->effects & (Q2_EF_FLAG1_CARRIER | Q2_EF_FLAG2_CARRIER))) {
+            /* The flag entity itself: at base, or lying where it was dropped. */
+            q2_flagstate_t *fs = (bue->effects & Q2_EF_FLAG1_CARRIER)
+                               ? &q2_redflagstate : &q2_blueflagstate;
+            bot_goal_t *home   = (bue->effects & Q2_EF_FLAG1_CARRIER)
+                               ? &ctf_redflag : &ctf_blueflag;
+            vec3_t d;
+            VectorSubtract(bue->origin, home->origin, d);
+            fs->state = (VectorLength(d) < 64.0f) ? Q2_FLAG_ATBASE : Q2_FLAG_DROPPED;
+            VectorCopy(bue->origin, fs->origin);
+            fs->seen_time = AAS_Time();
+            state.type = 2; /* ET_ITEM */
         } else if (ent > 0 && bue->solid == 3 /* SOLID_BSP */ && bue->modelindex > 0) {
             /* Skip entity 0 (worldspawn) — it has SOLID_BSP + modelindex
              * but is NOT a mover.  Without this check, the world entity
@@ -2659,6 +2695,17 @@ ctf_navigate:
                     botimport.Print(PRT_MESSAGE, "bot %d: reached staging area %d\n",
                                     client, bc->staging_goal.areanum);
             }
+            else if (bc->ctf_has_flag && bc->ctf_ltgtype == Q2_LTG_RUSHBASE) {
+                /*
+                 * A carrier at its own base is not finished until the capture
+                 * actually registers. Treating arrival as "goal reached" and
+                 * popping it left the bot standing a few units short of the
+                 * flag with nothing left to walk towards -- close enough to
+                 * look right, not close enough to score. Keep the goal until
+                 * the flag leaves its hands, so it walks through the spot
+                 * rather than up to it.
+                 */
+            }
             else if (BotTouchingGoal(bc->origin, &active_goal)) {
                 if (bot_developer)
                     botimport.Print(PRT_MESSAGE,
@@ -3071,6 +3118,24 @@ static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
     return true;
 }
 
+/* Our own flag, and the enemy's, by proximity to each base. */
+static void Q2BotCTFOwnFlag(q2_botclient_t *bc, bot_goal_t **own, bot_goal_t **enemy,
+                            q2_flagstate_t **ownstate)
+{
+    vec3_t dr, db;
+    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
+    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
+    if (VectorLengthSquared(dr) < VectorLengthSquared(db)) {
+        if (own)      *own      = &ctf_redflag;
+        if (enemy)    *enemy    = &ctf_blueflag;
+        if (ownstate) *ownstate = &q2_redflagstate;
+    } else {
+        if (own)      *own      = &ctf_blueflag;
+        if (enemy)    *enemy    = &ctf_redflag;
+        if (ownstate) *ownstate = &q2_blueflagstate;
+    }
+}
+
 static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
 {
     float now = AAS_Time();
@@ -3108,6 +3173,12 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
             bc->hasnbg  = false;
             bc->goal_best_ttime    = 0;
             bc->goal_progress_time = now;
+            /*
+             * Head for our own base either way. If our flag is home this is a
+             * capture; if it is not, this is where the bot should be waiting
+             * when it comes back, rather than wandering the map with the enemy
+             * flag in hand.
+             */
 
             /* Own base = own flag location.
              * Determine team from which flag we're carrying:
@@ -3148,6 +3219,46 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
         if (bc->hasgoal) {
             BotPopGoal(bc->goalstate);
             bc->hasgoal = false;
+        }
+    }
+
+    /*
+     * Priority: our own flag is lying on the floor.
+     *
+     * Nobody can score while it is out there -- a carrier reaching our base
+     * with the enemy flag captures nothing. Touching it sends it home, so this
+     * outranks going hunting, and a carrier does it too if the dropped flag is
+     * on the way.
+     */
+    {
+        q2_flagstate_t *ownstate;
+        bot_goal_t *ownflag;
+        Q2BotCTFOwnFlag(bc, &ownflag, NULL, &ownstate);
+        if (ownstate->state == Q2_FLAG_DROPPED &&
+            now - ownstate->seen_time < 5.0f)
+        {
+            if (bc->ctf_ltgtype != Q2_LTG_RETURNFLAG) {
+                bc->ctf_ltgtype   = Q2_LTG_RETURNFLAG;
+                bc->ctf_goal_time = now + CTF_GETFLAG_TIME;
+                Com_Memcpy(&bc->ctf_goal, ownflag, sizeof(bot_goal_t));
+                VectorCopy(ownstate->origin, bc->ctf_goal.origin);
+                bc->ctf_goal.areanum = AAS_PointAreaNum(ownstate->origin);
+                if (!bc->ctf_goal.areanum)
+                    bc->ctf_goal.areanum = ownflag->areanum;
+                BotEmptyGoalStack(bc->goalstate);
+                bc->hasgoal = false;
+                bc->hasnbg  = false;
+                if (bot_developer)
+                    botimport.Print(PRT_MESSAGE,
+                        "bot %d: own flag is down, going to return it (area %d)\n",
+                        client, bc->ctf_goal.areanum);
+            }
+            return Q2BotCTFGoalActive(bc);
+        }
+        /* It went home, or somebody took it: stop chasing a stale position. */
+        if (bc->ctf_ltgtype == Q2_LTG_RETURNFLAG) {
+            bc->ctf_ltgtype = Q2_LTG_NONE;
+            if (bc->hasgoal) { BotPopGoal(bc->goalstate); bc->hasgoal = false; }
         }
     }
 
