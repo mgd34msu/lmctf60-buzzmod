@@ -259,6 +259,17 @@ void BotExecuteInput(edict_t *bot)
 		 * Only worth anything when the server allows air acceleration, and
 		 * skipped while attacking -- turning to build speed and aiming are
 		 * not compatible, and players do not try both at once.
+		 *
+		 * It gains less here than it would for a player, and the reason is the
+		 * command rate rather than the technique. A bot emits one usercmd per
+		 * server frame, so pmove integrates a whole 100ms in a single step and
+		 * applies air acceleration once. A player at 125fps feeds a dozen
+		 * shorter commands over the same jump, re-aiming the wish direction
+		 * each time, and compounds the gain. Sweeping the turn rate from 0 to
+		 * 20 degrees per command moved the average between 132 and 139
+		 * units/sec -- the turn is not the limiting factor, the tick is.
+		 * Bunny hopping is unaffected by this, being about staying off the
+		 * friction rather than accelerating in the air, and gains a third.
 		 */
 		if (bot_strafejump && bot_strafejump->value &&
 			bot->waterlevel < 2 &&
@@ -278,7 +289,8 @@ void BotExecuteInput(edict_t *bot)
 				/* Forward stays held; the strafe and the turn go together. */
 				if (ucmd.forwardmove < 300) ucmd.forwardmove = 300;
 				ucmd.sidemove   += botglobals.sj_side[cl] * 400;
-				ucmd.angles[YAW] -= (short)ANGLE2SHORT(botglobals.sj_side[cl] * 1.0f);
+				ucmd.angles[YAW] -= (short)ANGLE2SHORT(botglobals.sj_side[cl] *
+					gi.cvar("bot_sjturn", "6", 0)->value);
 			}
 		}
 	}
