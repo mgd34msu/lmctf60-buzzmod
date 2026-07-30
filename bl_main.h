@@ -68,6 +68,10 @@ typedef struct bot_globals_s
 	int debug_moveai;
 	int debug_weapai;
 #endif //BOT_DEBUG
+	/* strafe jumping: which way each bot is leaning, and whether it was on
+	 * the ground last frame so the side can be swapped per jump */
+	signed char sj_side[256];
+	qboolean    sj_grounded[256];
 } bot_globals_t;
 
 //bl_setup.c

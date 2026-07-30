@@ -101,7 +101,7 @@ void BotExecuteInput(edict_t *bot)
 #endif //BOT_DEBUG
 
 	if (!bot_bunnyhop)   bot_bunnyhop   = gi.cvar("bot_bunnyhop", "1", 0);
-	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "0", 0);
+	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "1", 0);
 
 	client = DF_ENTCLIENT(bot);
 	//
@@ -243,38 +243,43 @@ void BotExecuteInput(edict_t *bot)
 		/*
 		 * Strafe jumping.
 		 *
-		 * Speed is gained in the air by holding a strafe and turning the view
-		 * the same way, so the wish direction stays just off the current
-		 * velocity. Quake II only allows it when the server sets
-		 * sv_airaccelerate above zero -- PM_AirMove skips the acceleration
-		 * entirely otherwise -- so this checks first and does nothing on a
-		 * server running the stock value. It is left out while attacking:
-		 * turning the view to build speed and trying to aim are not
-		 * compatible, and players do not do both at once either.
+		 * Hold forward, hold one strafe, and turn the view the same way as
+		 * the strafe. The wish direction then sits just off the current
+		 * velocity, which is the case Quake II's air acceleration adds raw
+		 * speed for instead of clamping to the run limit. Alternate sides on
+		 * each jump and the bot travels straight while gaining.
 		 *
-		 * Off by default, because as written it does more harm than good.
-		 * Measured with sv_airaccelerate 10, bots averaged 110 units/sec with
-		 * this on against 185 with it off: the added yaw fights the steering
-		 * the navigation asked for and walks them off their route. Gaining
-		 * speed this way needs the turn to be derived from the direction the
-		 * bot is trying to travel, inside the movement code, rather than
-		 * added on top of a finished command here. Left in, and switchable,
-		 * so the next attempt has somewhere to start.
+		 * An earlier attempt did this with sidemove alone and turned the view
+		 * away from the strafe, which is the opposite of the technique: it
+		 * measured slower than not doing it at all. Forward has to stay held,
+		 * and in Quake II a positive sidemove is to the right while an
+		 * increasing yaw is to the left, so the turn is negative for a right
+		 * strafe.
+		 *
+		 * Only worth anything when the server allows air acceleration, and
+		 * skipped while attacking -- turning to build speed and aiming are
+		 * not compatible, and players do not try both at once.
 		 */
 		if (bot_strafejump && bot_strafejump->value &&
-			!bot->groundentity &&                       /* airborne */
 			bot->waterlevel < 2 &&
 			!(bi->actionflags & ACTION_ATTACK) &&
-			speed2 > 200.0f * 200.0f &&
+			speed2 > 150.0f * 150.0f &&
 			gi.cvar("sv_airaccelerate", "0", 0)->value > 0)
 		{
-			/* Alternate sides every second or so, the way a player weaves. */
-			int side = ((int)(level.time * 1.5f) & 1) ? 1 : -1;
+			int cl = DF_ENTCLIENT(bot);
 
-			ucmd.sidemove += side * 400;
-			/* Turn into the strafe: a small, steady yaw is what converts the
-			 * sideways push into forward speed. */
-			ucmd.angles[YAW] += (short)ANGLE2SHORT(side * 1.2f);
+			if (bot->groundentity) {
+				/* Landed: swap sides so the next hop leans the other way. */
+				if (!botglobals.sj_grounded[cl]) botglobals.sj_side[cl] = -botglobals.sj_side[cl];
+				botglobals.sj_grounded[cl] = true;
+				if (!botglobals.sj_side[cl]) botglobals.sj_side[cl] = 1;
+			} else {
+				botglobals.sj_grounded[cl] = false;
+				/* Forward stays held; the strafe and the turn go together. */
+				if (ucmd.forwardmove < 300) ucmd.forwardmove = 300;
+				ucmd.sidemove   += botglobals.sj_side[cl] * 400;
+				ucmd.angles[YAW] -= (short)ANGLE2SHORT(botglobals.sj_side[cl] * 1.0f);
+			}
 		}
 	}
 	//crouch/movedown
