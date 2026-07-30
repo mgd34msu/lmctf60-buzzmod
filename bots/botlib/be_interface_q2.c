@@ -512,6 +512,7 @@ static qboolean   ctf_flags_initialized; /* true once flag goals are found */
 typedef struct {
     int    state;
     vec3_t origin;      /* where it is, when dropped */
+    vec3_t home;        /* where it rests at base, learned on first sight */
     float  seen_time;   /* last frame the flag entity was seen */
 } q2_flagstate_t;
 static q2_flagstate_t q2_redflagstate, q2_blueflagstate;
@@ -1673,8 +1674,25 @@ static int Q2BotUpdateEntity(int ent, q2_bot_updateentity_t *bue)
             bot_goal_t *home   = (bue->effects & Q2_EF_FLAG1_CARRIER)
                                ? &ctf_redflag : &ctf_blueflag;
             vec3_t d;
-            VectorSubtract(bue->origin, home->origin, d);
-            fs->state = (VectorLength(d) < 64.0f) ? Q2_FLAG_ATBASE : Q2_FLAG_DROPPED;
+            /*
+             * "Home" is where the flag entity was first seen this level, not
+             * the goal origin: the goal comes from the AAS item data, which is
+             * dropped to the floor and can sit some way from where the entity
+             * actually rests. Comparing against it made the flag read as
+             * permanently dropped.
+             */
+            if (fs->seen_time == 0.0f) VectorCopy(bue->origin, fs->home);
+            VectorSubtract(bue->origin, fs->home, d);
+            {
+                int newstate = (VectorLength(d) < 64.0f) ? Q2_FLAG_ATBASE : Q2_FLAG_DROPPED;
+                if (bot_developer && newstate != fs->state)
+                    botimport.Print(PRT_MESSAGE,
+                        "flag ent %d: %s at %.0f,%.0f,%.0f home %.0f,%.0f,%.0f (%.0f away)\n",
+                        ent, newstate == Q2_FLAG_ATBASE ? "AT BASE" : "DROPPED",
+                        bue->origin[0], bue->origin[1], bue->origin[2],
+                        fs->home[0], fs->home[1], fs->home[2], VectorLength(d));
+                fs->state = newstate;
+            }
             VectorCopy(bue->origin, fs->origin);
             fs->seen_time = AAS_Time();
             state.type = 2; /* ET_ITEM */
@@ -2943,6 +2961,8 @@ static void Q2BotCTFInitFlags(void)
 {
     if (ctf_flags_initialized) return;
     ctf_flags_initialized = true;
+    Com_Memset(&q2_redflagstate, 0, sizeof(q2_redflagstate));
+    Com_Memset(&q2_blueflagstate, 0, sizeof(q2_blueflagstate));
 
     Com_Memset(&ctf_redflag, 0, sizeof(ctf_redflag));
     Com_Memset(&ctf_blueflag, 0, sizeof(ctf_blueflag));
@@ -3234,7 +3254,22 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
         q2_flagstate_t *ownstate;
         bot_goal_t *ownflag;
         Q2BotCTFOwnFlag(bc, &ownflag, NULL, &ownstate);
-        if (ownstate->state == Q2_FLAG_DROPPED &&
+        /*
+         * Off pending correct flag-state detection.
+         *
+         * The intent is right and the role matters -- nobody can score while
+         * their own flag is on the floor, and in a five a side match it
+         * usually is. But the state this depends on is not being set: the
+         * branch that reads the flag entity never runs, so seen_time stays
+         * zero and the role fired constantly on stale data. Measured against
+         * the run before it, retargets went from ~20 to 99, hook use from
+         * ~700 to 24 and steals fell, because every bot was permanently on
+         * fetch duty.
+         *
+         * Enable with bot_returnflag 1 once the entity detection is fixed.
+         */
+        if (LibVarGetValue("bot_returnflag") &&
+            ownstate->state == Q2_FLAG_DROPPED &&
             now - ownstate->seen_time < 5.0f)
         {
             if (bc->ctf_ltgtype != Q2_LTG_RETURNFLAG) {
