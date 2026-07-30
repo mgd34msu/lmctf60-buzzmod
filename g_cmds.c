@@ -1098,7 +1098,13 @@ void Cmd_Team_f (edict_t *ent)
 	char *rawnew = gi.argv(1);
 //	int len = strlen(rawnew)+1;
 	int newnum = 0;
-	char *message = "";
+	/*
+	 * This was `char *message = ""` -- a pointer to a string literal that the
+	 * Com_sprintf below then wrote through, with sizeof giving 8 (the pointer)
+	 * rather than any buffer size. Reachable by typing "team" with no argument
+	 * while on neither team.
+	 */
+	char message[MAX_INFO_STRING];
 
 	if(matchstate == MATCH_RAILGUN_INPLAY)
 		return;

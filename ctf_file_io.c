@@ -35,6 +35,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "ctf_file_io.h"
+#include "bl_ctf.h"	/* BotStatsEnabled */
 #include "ctf_sqlite_player.h"
 #include "ctf_sqlite_unidb.h"
 
@@ -188,6 +189,22 @@ void CTF_StatsDB_Init(void)
 	}
 }
 
+/*
+ * Whether this client's stats are persisted at all.
+ *
+ * Bots are excluded unless the server asks for them: a server running bots to
+ * fill out a game does not want them in the leaderboards, but one that plays
+ * bots seriously might. Set "bot_stats 1" (or use the bot menu) to include them.
+ */
+qboolean CTF_TrackStatsFor(edict_t *ent)
+{
+	if (!ent || !ent->client)
+		return false;
+	if (ent->flags & FL_BOT)
+		return BotStatsEnabled();
+	return true;
+}
+
 qboolean CommitPlayerData(edict_t *ent)
 {
 	char path[CTF_MAX_DBPATH];
@@ -198,6 +215,9 @@ qboolean CommitPlayerData(edict_t *ent)
 			(ent && ent->classname) ? ent->classname : "null");
 		return false;
 	}
+
+	if (!CTF_TrackStatsFor(ent))
+		return true;	/* nothing to write, and that is not a failure */
 
 	// roll this session's counters into the lifetime totals before writing
 	stats_fold_session(ent);
@@ -228,6 +248,10 @@ qboolean LoadPlayerData(edict_t *ent)
 			(ent && ent->classname) ? ent->classname : "null");
 		return false;
 	}
+
+	/* Do not create a userdata row for a bot we are not tracking. */
+	if (!CTF_TrackStatsFor(ent))
+		return false;
 
 	switch (CTF_StatsDBMode())
 	{

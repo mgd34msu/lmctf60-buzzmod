@@ -51,6 +51,7 @@ void Cmd_Lifetime_f(edict_t *ent);
 void Cmd_Rank_f(edict_t *ent);
 
 // Front door used by the game code. Dispatches on ctf_statsdb.
+qboolean CTF_TrackStatsFor(edict_t *ent);
 qboolean CommitPlayerData(edict_t *ent);
 qboolean LoadPlayerData(edict_t *ent);
 

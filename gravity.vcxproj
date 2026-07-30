@@ -283,6 +283,16 @@
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
       <PreprocessorDefinitions>SQLITE_THREADSAFE=0;SQLITE_OMIT_LOAD_EXTENSION=1;SQLITE_DEFAULT_MEMSTATUS=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <ClCompile Include="bl_main.c" />
+    <ClCompile Include="bl_cmd.c" />
+    <ClCompile Include="bl_spawn.c" />
+    <ClCompile Include="bl_botcfg.c" />
+    <ClCompile Include="bl_debug.c" />
+    <ClCompile Include="bl_redirgi.c" />
+    <ClCompile Include="bl_chat.c" />
+    <ClCompile Include="ai_chat.c" />
+    <ClCompile Include="bl_ctf.c" />
+    <ClCompile Include="g_botmenu.c" />
     <ClCompile Include="gslog.c" />
     <ClCompile Include="g_ai.c" />
     <ClCompile Include="g_chase.c" />

@@ -1289,6 +1289,8 @@ void DB_MatchRecord(edict_t *player, int match_id, int team)
 
 	if (match_id < 0 || !player || !player->client)
 		return;
+	if (!CTF_TrackStatsFor(player))
+		return;	/* an untracked bot leaves no row in the match */
 	if (!dbconn && !DB_Conn_Start())
 		return;
 
