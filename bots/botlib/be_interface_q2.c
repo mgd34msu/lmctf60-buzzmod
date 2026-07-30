@@ -36,6 +36,12 @@ Design overview
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <ctype.h>
+#if defined(WIN32) || defined(_WIN32)
+#include <io.h>
+#else
+#include <dirent.h>
+#endif
 
 /* Q3 botlib side */
 #include "../game_q3/q_shared.h"
@@ -655,26 +661,94 @@ static int Q2_ReadBSPEntityLump(FILE *f, long base_offset, const char *mapname)
  * On success: returns the open pak FILE*, sets *out_base to the entry's byte
  * offset within that file and *out_size to the entry's byte count.
  * The caller is responsible for fclose().  Returns NULL if not found. */
+static FILE *Q2_OpenOnePak(const char *pakpath, const char *qpath,
+                            int *out_base, int *out_size);
+
+/*
+ * Search every pak in a directory.
+ *
+ * This used to try pak0.pak through pak9.pak and stop. Quake II loads every
+ * .pak file it finds, and LMCTF ships maps in several that do not follow that
+ * naming -- q2lmctfmaps2012.pak, buzzpak.pak, seedmappak.pak, quadtime.pak.
+ * Maps living in those were invisible here: no entity lump meant no level
+ * items, no flags, and therefore no CTF behaviour at all on those maps, while
+ * the navigation data loaded perfectly well and hid the problem.
+ *
+ * Numbered paks are tried first, then anything else alphabetically, which is
+ * the order the engine itself uses.
+ */
 static FILE *Q2_OpenPakEntry(const char *dir, const char *qpath,
                               int *out_base, int *out_size)
 {
-    char pakpath[512];
-    int  paknum;
+    char  pakpath[512];
+    int   paknum;
+    FILE *f;
 
     for (paknum = 0; paknum <= 9; paknum++) {
+        Com_sprintf(pakpath, sizeof(pakpath), "%s/pak%d.pak", dir, paknum);
+        f = Q2_OpenOnePak(pakpath, qpath, out_base, out_size);
+        if (f) return f;
+    }
+
+#if defined(WIN32) || defined(_WIN32)
+    {
+        struct _finddata_t fi;
+        intptr_t h;
+        Com_sprintf(pakpath, sizeof(pakpath), "%s/*.pak", dir);
+        h = _findfirst(pakpath, &fi);
+        if (h != -1) {
+            do {
+                if (strlen(fi.name) == 8 &&
+                    tolower(fi.name[0]) == 'p' && tolower(fi.name[1]) == 'a' &&
+                    tolower(fi.name[2]) == 'k' && fi.name[3] >= '0' && fi.name[3] <= '9')
+                    continue;                      /* already tried above */
+                Com_sprintf(pakpath, sizeof(pakpath), "%s/%s", dir, fi.name);
+                f = Q2_OpenOnePak(pakpath, qpath, out_base, out_size);
+                if (f) { _findclose(h); return f; }
+            } while (_findnext(h, &fi) == 0);
+            _findclose(h);
+        }
+    }
+#else
+    {
+        DIR *d = opendir(dir);
+        struct dirent *de;
+        if (d) {
+            while ((de = readdir(d)) != NULL) {
+                size_t n = strlen(de->d_name);
+                if (n < 5 || Q_stricmp(de->d_name + n - 4, ".pak")) continue;
+                if (n == 8 &&
+                    tolower(de->d_name[0]) == 'p' && tolower(de->d_name[1]) == 'a' &&
+                    tolower(de->d_name[2]) == 'k' &&
+                    de->d_name[3] >= '0' && de->d_name[3] <= '9') continue;
+                Com_sprintf(pakpath, sizeof(pakpath), "%s/%s", dir, de->d_name);
+                f = Q2_OpenOnePak(pakpath, qpath, out_base, out_size);
+                if (f) { closedir(d); return f; }
+            }
+            closedir(d);
+        }
+    }
+#endif
+    return NULL;
+}
+
+/* Look for one file inside one pak. */
+static FILE *Q2_OpenOnePak(const char *pakpath, const char *qpath,
+                            int *out_base, int *out_size)
+{
+    {
         FILE *pf;
         int   magic, diroffset, dirsize, nentries, i;
 
-        Com_sprintf(pakpath, sizeof(pakpath), "%s/pak%d.pak", dir, paknum);
         pf = fopen(pakpath, "rb");
-        if (!pf) continue;
+        if (!pf) return NULL;
 
         if (fread(&magic,     4, 1, pf) != 1 ||
             fread(&diroffset, 4, 1, pf) != 1 ||
             fread(&dirsize,   4, 1, pf) != 1 ||
             magic != 0x4b434150 /* "PACK" */)
         {
-            fclose(pf); continue;
+            fclose(pf); return NULL;
         }
 
         nentries = dirsize / 64;
