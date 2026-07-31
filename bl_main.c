@@ -366,9 +366,19 @@ void BotExecuteInput(edict_t *bot)
 		{
 			int side = botglobals.cj_side[cl];
 
+			/*
+			 * Strafe into the pivot, but do not drag the view round with it.
+			 *
+			 * Sweeping the view is what makes a circle jump work in games that
+			 * accelerate you in the air. These servers run sv_airaccelerate at
+			 * zero, so the sweep returns exactly nothing -- while still pointing
+			 * the bot's aim thirty degrees away from whatever it was shooting
+			 * at, for three frames, every time it starts moving. The weapon is
+			 * always available and the hook is offhand; neither should ever be
+			 * paying for the legs.
+			 */
 			ucmd.forwardmove = 300;
 			ucmd.sidemove   += side * 400;
-			ucmd.angles[YAW] -= (short)ANGLE2SHORT(side * 30.0f);
 
 			if (--botglobals.cj_phase[cl] == 0 && grounded)
 			{
@@ -409,12 +419,14 @@ void BotExecuteInput(edict_t *bot)
 		{
 			int side = botglobals.sj_side[cl] ? botglobals.sj_side[cl] : 1;
 
-			/* Strafe one way and turn the same way, smoothly. A positive
-			 * sidemove is to the right while an increasing yaw is to the
-			 * left, so the turn is negative for a right strafe. */
+			/*
+			 * Strafe, and leave the view alone. The turn that goes with a
+			 * strafe jump is there to harvest air acceleration, and there is
+			 * none to harvest at sv_airaccelerate 0 -- what preserves the
+			 * momentum is being off the ground, away from ground friction, and
+			 * that costs the aim nothing.
+			 */
 			ucmd.sidemove   += side * 400;
-			ucmd.angles[YAW] -= (short)ANGLE2SHORT(side *
-				gi.cvar("bot_sjturn", "3", 0)->value);
 		}
 	}
 

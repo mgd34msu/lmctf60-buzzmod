@@ -536,6 +536,7 @@ typedef struct {
     float       ctf_roam_time;      /* AAS_Time() when CTF roam period ends */
     bot_goal_t  ctf_goal;           /* current CTF navigation goal (flag location) */
     qboolean    ctf_has_flag;       /* true if carrying enemy flag */
+    qboolean    ctf_cantcap;        /* carrying, but our own flag is not home */
     int         ctf_myflag;         /* which flag is ours: 0 unknown, 1 red, 2 blue */
 } q2_botclient_t;
 
@@ -547,6 +548,23 @@ static qboolean Q2BotOwnFlagIsRed(q2_botclient_t *bc);
 /* ====================================================================
  * Module globals
  * ==================================================================== */
+/*
+ * TEMPORARY DIAGNOSTIC (bot_developer 1) -- combat accounting, printed as the
+ * COMBAT line every 20 seconds. The question these answer is whether bots see
+ * each other at all, and if they do, what stops them shooting. Remove with the
+ * ATKTRACE and FLAGGOAL prints.
+ */
+int q2_diag_frames;        /* bot think frames */
+int q2_diag_vis;           /* frames a live enemy was visible */
+int q2_diag_engaged;       /* frames an enemy was held (bc->enemy >= 0) */
+int q2_diag_fightstate;    /* frames spent in one of the battle states */
+int q2_diag_aimcalls;      /* calls into the aim-and-fire routine */
+int q2_diag_shots;         /* of those, how many actually pressed attack */
+int q2_diag_noweapon;      /* declined: no usable weapon chosen */
+int q2_diag_blocked;       /* declined: line of fire blocked by geometry */
+int q2_diag_throttle;      /* declined: fire throttle or reaction timer */
+int q2_diag_aimoff;        /* declined: not pointing close enough to the target */
+
 int q2_ghook_fires;          /* ground hooks fired, for diagnostics */
 int q2_ghook_catches;        /* of those, how many actually caught a surface */
 int q2_ghook_misses;         /* and how many flew out and hit nothing */
@@ -2520,6 +2538,7 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
     float dist, accuracy;
     weaponinfo_t wi;
 
+    q2_diag_aimcalls++;              /* TEMPORARY DIAGNOSTIC, see COMBAT line */
     AAS_EntityInfo(enemy, &entinfo);
     if (!entinfo.valid) return;
 
@@ -2625,12 +2644,12 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
 
     /* #2 — Reaction time: don't fire until reactiontime seconds after
      * first spotting this enemy.  Mirrors Q3 ai_dmq3.c:3590. */
-    if (bc->enemysight_time > AAS_Time() - bc->reactiontime) return;
-    if (bc->teleport_time > AAS_Time() - bc->reactiontime) return;
+    if (bc->enemysight_time > AAS_Time() - bc->reactiontime) { q2_diag_throttle++; return; }
+    if (bc->teleport_time > AAS_Time() - bc->reactiontime) { q2_diag_throttle++; return; }
 
     /* Fire throttle: creates realistic fire-pause patterns.
      * Mirrors Q3 ai_dmq3.c:3594-3604. */
-    if (bc->firethrottlewait_time > AAS_Time()) return;
+    if (bc->firethrottlewait_time > AAS_Time()) { q2_diag_throttle++; return; }
     if (bc->firethrottleshoot_time < AAS_Time()) {
         if ((float)(rand() & 0x7FFF) / 0x7FFF > bc->firethrottle) {
             bc->firethrottlewait_time = AAS_Time() + bc->firethrottle;
@@ -2659,16 +2678,19 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
             if (impact_dist < wi.proj.radius) {
                 points = (wi.proj.damage - 0.5f * impact_dist) * 0.5f;
                 if (points > 0) {
+                    q2_diag_blocked++;
                     return; /* splash would hurt us, don't fire */
                 }
             }
             /* Splash is safe distance: fire at wall/floor near enemy */
         } else {
+            q2_diag_blocked++;
             return; /* Hitscan weapon blocked by wall */
         }
     }
 
     EA_Attack(client);
+    q2_diag_shots++;                 /* TEMPORARY DIAGNOSTIC, see COMBAT line */
     bc->flags ^= BFL_ATTACKED;
 }
 
@@ -2812,10 +2834,17 @@ reselect:
      * bc->ltg -- that holds whatever item goal the bot had before it took a
      * role, so routing the detour against it measures the wrong thing.
      */
+    /*
+     * A carrier who cannot capture is the exception to the no-shopping rule.
+     * The run is already stalled -- our flag is out, so arriving at the stand
+     * achieves nothing until it comes back -- and that is exactly the time to
+     * pick up the armour and ammo sitting in our own base, so the bot is ready
+     * to fight for the capture the moment it becomes possible.
+     */
     if (bc->hasgoal && !bc->hasnbg && (now - bc->nbg_check_time) >= 0.5f &&
-        !bc->ctf_has_flag &&
+        (!bc->ctf_has_flag || bc->ctf_cantcap) &&
         bc->ctf_ltgtype != Q2_LTG_GETFLAG &&
-        bc->ctf_ltgtype != Q2_LTG_RUSHBASE)
+        (bc->ctf_ltgtype != Q2_LTG_RUSHBASE || bc->ctf_cantcap))
     {
         bot_goal_t *ltg_ptr;
         if (bc->ctf_ltgtype != Q2_LTG_NONE && bc->ctf_goal.areanum)
@@ -3109,7 +3138,9 @@ ctf_navigate:
                      */
                     if (bc->ctf_has_flag ||
                         bc->ctf_ltgtype == Q2_LTG_GETFLAG ||
-                        bc->ctf_ltgtype == Q2_LTG_RUSHBASE) goto skip_nbg;
+                        bc->ctf_ltgtype == Q2_LTG_RUSHBASE) {
+                        if (!bc->ctf_cantcap) goto skip_nbg;
+                    }
                     /* Only a goal with a real area is usable as a reference;
                      * BotChooseNBGItem routes against it. */
                     if (bc->ctf_ltgtype != Q2_LTG_NONE && bc->ctf_goal.areanum)
@@ -3178,6 +3209,12 @@ retarget:
                 bc->goal_set_time      = now;
                 bc->goal_best_ttime    = 0;
                 bc->goal_progress_time = now;
+                /* TEMPORARY DIAGNOSTIC (bot_developer 1) -- how often a job is
+                 * thrown away because one route lookup came back empty. */
+                if (bot_developer && bc->ctf_ltgtype != Q2_LTG_NONE)
+                    botimport.Print(PRT_MESSAGE,
+                        "ROLEDROP bot %d: role %d dropped for item goal area %d\n",
+                        client, bc->ctf_ltgtype, fresh.areanum);
                 bc->ctf_ltgtype        = Q2_LTG_NONE;
                 bc->ctf_decide_time    = 0.0f;
                 bc->ctf_goal_time      = 0.0f;
@@ -3864,14 +3901,19 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
     }
 
     /*
-     * Being airborne when the hook lands is better -- the jump's speed carries
-     * into the pull instead of the rope having to drag the bot up off the
-     * floor. But that is a question about speed, not about time. A bot already
-     * at running speed has the momentum the pull wants whether its feet are
-     * down or not, so it fires; a slow bot on the ground is better off
-     * spending the moment accelerating, which is what it would do anyway.
+     * No test on footing or speed at all.
+     *
+     * Refusing to hook while slow and on the ground looked reasonable -- be
+     * airborne first, carry the jump into the pull -- but it blocks the one
+     * job the short ground hook exists to do, which is getting a slow bot
+     * moving in the first place. With that gate in, hooks fired dropped from
+     * 1475 a match to 1330 and mean speed fell from 319 to 306: the bots were
+     * being kept from starting the chain they were then judged on.
+     *
+     * Whether a pull is worth taking is decided where it can actually be
+     * judged -- on the anchor the trace finds, and on whether the pull keeps
+     * paying once it has hold.
      */
-    if ((bc->pm_flags & 4 /*PMF_ON_GROUND*/) && bc->speed2d < 200.0f) return;
 
     {
         vec3_t fwd, eye, target, d;
@@ -3883,7 +3925,7 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
         float cmin  = LibVarGetValue("bot_ceilhook_minspeed");
         float yaw, pitch, len;
         int   attempt, wantceil;
-        qboolean found = false;
+        qboolean found = false, elev = false;
 
         if (gdist  < 64.0f) gdist  = 400.0f;
         if (gpitch <= 0.0f) gpitch = 15.0f;   /* see bl_main.c for the sweep */
@@ -3926,7 +3968,8 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
              * spend. Aim up instead and pull -- a ledge, the shaft wall,
              * whatever the ray finds above -- and take the height directly.
              */
-            if (mr && (mr->traveltype & 0x00FFFFFF) == TRAVEL_ELEVATOR) {
+            elev = (mr && (mr->traveltype & 0x00FFFFFF) == TRAVEL_ELEVATOR);
+            if (elev) {
                 pitch = -55.0f * (float)(M_PI / 180.0);
                 len   = cdist;
             }
@@ -3954,6 +3997,21 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
                 float horiz = (float)sqrt(d[0] * d[0] + d[1] * d[1]);
                 if (horiz < 1.0f) continue;
                 if (d[2] < -horiz * 0.5f) continue;   /* steeper than ~27 down */
+                /*
+                 * And not hauled straight up either. The aim is 30 degrees off
+                 * level, but the aim is not what the rope ends up at -- under a
+                 * low ceiling that ray lands almost overhead, and a rope that
+                 * steep lifts the bot rather than carrying it, which costs the
+                 * speed for the same reason a steep floor anchor does. Upward
+                 * pulls get more room than downward ones, because height gained
+                 * going forward is not wasted, but they are still pulls along
+                 * the path and not up it.
+                 *
+                 * Riding an elevator shaft is the exception: there the height
+                 * is the point, and the alternative is standing on a platform
+                 * waiting.
+                 */
+                if (!elev && d[2] > horiz * 1.2f) continue;  /* steeper than ~50 up */
             }
 
             found = true;
@@ -4293,6 +4351,27 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
                 Com_Memcpy(&bc->ctf_goal, &ctf_blueflag, sizeof(bot_goal_t));
             else
                 Com_Memcpy(&bc->ctf_goal, &ctf_redflag, sizeof(bot_goal_t));
+              
+              /*
+               * A capture needs our own flag on its stand. An enemy can only ever be
+               * carrying ours, so an enemy carrier means this run ends in a
+               * stalemate: the bot arrives holding the flag and can do nothing with
+               * it.
+               *
+               * Standing on the empty stand waiting is the worst way to spend that
+               * time -- a stationary target holding the one thing the other team
+               * wants back. Better to get ready for the moment the flag does come
+               * home: take the armour and the ammo in our own base, and work the
+               * flag room rather than stand in it, close enough to capture the
+               * instant our flag is returned.
+               */
+              {
+                  qboolean cant = (Q2BotEnemyCarrier(client) >= 0);
+                  if (cant != bc->ctf_cantcap && bot_developer)
+                      botimport.Print(PRT_MESSAGE, "bot %d: carrier %s\n", client,
+                          cant ? "STALEMATE, our flag is out" : "can capture");
+                  bc->ctf_cantcap = cant;
+              }
             if (bot_developer)
                 botimport.Print(PRT_MESSAGE, "bot %d: RUSHBASE to area %d\n",
                                 client, bc->ctf_goal.areanum);
@@ -4391,25 +4470,61 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
     if (bot_developer && bc->ctf_ltgtype == Q2_LTG_GETFLAG) {
         static float atk_nextrep[Q2_BOTLIB_MAX_CLIENTS];
         static float atk_closest[Q2_BOTLIB_MAX_CLIENTS];
+        static float atk_seen[Q2_BOTLIB_MAX_CLIENTS];   /* last frame on this job */
+        static float atk_start[Q2_BOTLIB_MAX_CLIENTS];  /* when this stint began */
+        static int   atk_besttt[Q2_BOTLIB_MAX_CLIENTS]; /* best travel time in it */
+        static int   atk_trail[Q2_BOTLIB_MAX_CLIENTS][8];
+        static int   atk_trailn[Q2_BOTLIB_MAX_CLIENTS];
         int ci = client & (Q2_BOTLIB_MAX_CLIENTS - 1);
+        int a, tt, k;
         vec3_t d;
         float dist;
+
+        /*
+         * A gap means the bot stopped attacking and started again, so the
+         * measurement restarts with it. Without this the "closest ever" figure
+         * quietly merges a dozen separate attempts into one and hides the fact
+         * that no single run gets anywhere.
+         */
+        if (now - atk_seen[ci] > 4.0f) {
+            atk_closest[ci] = 0.0f;
+            atk_besttt[ci]  = 0;
+            atk_trailn[ci]  = 0;
+            atk_start[ci]   = now;
+        }
+        atk_seen[ci] = now;
+
         VectorSubtract(bc->ctf_goal.origin, bc->origin, d);
         dist = VectorLength(d);
         if (atk_closest[ci] <= 0.0f || dist < atk_closest[ci])
             atk_closest[ci] = dist;
+
+        a  = BotReachabilityArea(bc->origin, client);
+        tt = (a > 0 && bc->ctf_goal.areanum > 0)
+           ? AAS_AreaTravelTimeToGoalArea(a, bc->origin,
+                 bc->ctf_goal.areanum, Q2BotTravelFlags()) : -1;
+        if (tt > 0 && (atk_besttt[ci] == 0 || tt < atk_besttt[ci]))
+            atk_besttt[ci] = tt;
+
+        /* Breadcrumb of the last eight distinct areas, so a bot bouncing
+         * between two of them is visible as exactly that. */
+        if (a > 0 && (atk_trailn[ci] == 0 ||
+                      atk_trail[ci][(atk_trailn[ci] - 1) & 7] != a))
+            atk_trail[ci][atk_trailn[ci]++ & 7] = a;
+
         if (now > atk_nextrep[ci]) {
-            int a = BotReachabilityArea(bc->origin, client);
+            char trail[96];
+            int n = 0, first = atk_trailn[ci] > 8 ? atk_trailn[ci] - 8 : 0;
+            trail[0] = 0;
+            for (k = first; k < atk_trailn[ci] && n < (int)sizeof(trail) - 8; k++)
+                n += sprintf(trail + n, "%d>", atk_trail[ci][k & 7]);
             atk_nextrep[ci] = now + 3.0f;
             botimport.Print(PRT_MESSAGE,
-                "ATKTRACE bot %d: myflag=%d goalarea=%d goalorg=(%.0f %.0f %.0f) dist=%.0f closest=%.0f area=%d ttime=%d hasgoal=%d hasnbg=%d\n",
+                "ATKTRACE bot %d: myflag=%d goalarea=%d goalorg=(%.0f %.0f %.0f) dist=%.0f closest=%.0f area=%d ttime=%d bestttime=%d stint=%.0f hasgoal=%d hasnbg=%d trail=%s\n",
                 client, bc->ctf_myflag, bc->ctf_goal.areanum,
                 bc->ctf_goal.origin[0], bc->ctf_goal.origin[1], bc->ctf_goal.origin[2],
-                dist, atk_closest[ci], a,
-                (a > 0 && bc->ctf_goal.areanum > 0)
-                    ? AAS_AreaTravelTimeToGoalArea(a, bc->origin,
-                          bc->ctf_goal.areanum, Q2BotTravelFlags()) : -1,
-                bc->hasgoal, bc->hasnbg);
+                dist, atk_closest[ci], a, tt, atk_besttt[ci],
+                now - atk_start[ci], bc->hasgoal, bc->hasnbg, trail);
         }
     }
 
