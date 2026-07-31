@@ -70,6 +70,7 @@ Design overview
 /* Forward declarations for functions defined in other botlib files
  * that are not explicitly declared in the included headers. */
 extern int      bot_developer;
+extern int      BotFuzzyPointReachabilityArea(vec3_t origin);
 static int      Q2BotTravelFlags(void);
 extern int      AAS_AreaGrounded(int areanum);
 extern int      AAS_AreaSwim(int areanum);
@@ -1500,7 +1501,7 @@ static int Q2BotStartFrame(float time)
                     if (!flags[f]) continue;
                     ok = tot = 0;
                     for (a = 1; a < aasworld.numareas; a++) {
-                        if (!AAS_AreaReachability(a)) continue;
+                        if (!AAS_AreaReachability(a) || !flags[f]) continue;
                         tot++;
                         if (AAS_AreaTravelTimeToGoalArea(a, aasworld.areas[a].center,
                                                           flags[f], tfl)) ok++;
@@ -2656,8 +2657,22 @@ ctf_navigate:
              * instead: while the travel time to the goal keeps falling, the
              * bot is making progress whatever the area count says. */
             {
-                int cur_area = BotReachabilityArea(bc->origin, client);
-                if (cur_area > 0) {
+                /*
+                 * Use the same forgiving lookup the movement code uses. A bot
+                 * often stands in an area with no reachabilities of its own --
+                 * a doorway, a step, a sliver the compiler left -- and asking
+                 * the router for a route out of one of those always answers
+                 * "none". Acting on that meant abandoning perfectly good goals
+                 * the moment a bot crossed such a spot: on lmctf16 every
+                 * no-progress event came from an area with zero reachabilities,
+                 * and no attacker ever completed a run to the flag.
+                 */
+                int cur_area = BotFuzzyPointReachabilityArea(bc->origin);
+                if (cur_area <= 0 || !AAS_AreaReachability(cur_area))
+                    cur_area = 0;          /* nothing meaningful to measure */
+                /* A goal with no area cannot be routed to, and asking makes
+                 * the router complain once per frame per bot. */
+                if (cur_area > 0 && active_goal.areanum > 0) {
                     int t_now = AAS_AreaTravelTimeToGoalArea(
                                     cur_area, bc->origin,
                                     active_goal.areanum, Q2BotTravelFlags());
@@ -2692,8 +2707,9 @@ ctf_navigate:
                         now >= bc->route_commit_time) {
                         if (bot_developer) {
                             botimport.Print(PRT_MESSAGE,
-                                "bot %d: no progress to goal area %d (ttime %d) ctfrole=%d, retargeting\n",
-                                client, active_goal.areanum, t_now, bc->ctf_ltgtype);
+                                "bot %d: no progress: from area %d (reach %d) to goal area %d, ttime %d, ctfrole %d\n",
+                                client, cur_area, AAS_AreaReachability(cur_area),
+                                active_goal.areanum, t_now, bc->ctf_ltgtype);
                         }
                         goto retarget;
                     }
@@ -2829,8 +2845,20 @@ ctf_navigate:
                  */
                 {
                     bot_goal_t *nbg_ltg = NULL;
-                    /* A flag carrier does not go shopping. */
-                    if (bc->ctf_has_flag) goto skip_nbg;
+                    /*
+                     * No shopping on a flag run.
+                     *
+                     * A carrier obviously does not stop for items, but nor
+                     * does an attacker on its way to the enemy flag -- and
+                     * that one was: on lmctf16 every attacker was arriving at
+                     * item areas instead of the flag, because reaching one
+                     * goal immediately picked another nearby item and the run
+                     * never resumed. A player sprinting for the flag ignores
+                     * everything on the way.
+                     */
+                    if (bc->ctf_has_flag ||
+                        bc->ctf_ltgtype == Q2_LTG_GETFLAG ||
+                        bc->ctf_ltgtype == Q2_LTG_RUSHBASE) goto skip_nbg;
                     /* Only a goal with a real area is usable as a reference;
                      * BotChooseNBGItem routes against it. */
                     if (bc->ctf_ltgtype != Q2_LTG_NONE && bc->ctf_goal.areanum)
@@ -3144,7 +3172,7 @@ static int Q2BotFindStagingArea(int fromarea, int goalarea)
     if (fromarea <= 0 || goalarea <= 0) return 0;
     for (i = 0; i < q2_numstaging; i++) {
         int s = q2_staging[i], t1, t2;
-        if (s == fromarea) continue;
+        if (s <= 0 || s == fromarea) continue;
         t1 = AAS_AreaTravelTimeToGoalArea(fromarea, aasworld.areas[fromarea].center, s, tfl);
         if (!t1) continue;                     /* cannot get to this one either */
         t2 = AAS_AreaTravelTimeToGoalArea(s, aasworld.areas[s].center, goalarea, tfl);
@@ -3291,7 +3319,7 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
         if (bot_developer) {
             static float nextrep[64];
             int ci = client & 63;
-            if (AAS_Time() > nextrep[ci]) {
+            if (AAS_Time() > nextrep[ci] && bc->ctf_goal.areanum > 0) {
                 vec3_t d; int a;
                 nextrep[ci] = AAS_Time() + 3.0f;
                 a = BotReachabilityArea(bc->origin, client);
