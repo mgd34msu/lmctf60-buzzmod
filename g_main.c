@@ -15,6 +15,7 @@
 #include "bl_chat.h"
 #include "bl_ctf.h"
 #include "bl_know.h"
+#include "slipgate/sg_local.h"
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -915,6 +916,10 @@ void G_RunFrame (void)
 		BotLib_BotAI(ent, FRAMETIME);
 		BotExecuteInput(ent);
 	}
+
+	/* SLIPGATE bots think here; the legacy loop above skips them because
+	 * they are not registered with the old botlib (BotStarted is false). */
+	SG_RunFrame();
 
 	// top the game up to "bots_minplayers" if it is set
 	CheckMinimumPlayers();

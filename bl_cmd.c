@@ -503,6 +503,20 @@ qboolean BotCmd(char *cmd, edict_t *ent, int server)
 	if (BotServerCmd(cmd, ent, server))
 	{
 	} //end if
+	else if (server && Q_stricmp(cmd, "sg") == 0)
+	{
+		/* SLIPGATE bots: "sv sg add" / "sv sg remove" */
+		extern qboolean SG_AddBot(void);
+		extern int SG_RemoveBots(void);
+		char *sub = gi.argv(2);
+		if (Q_stricmp(sub, "add") == 0)
+		{
+			if (!SG_AddBot())
+				gi.cprintf(NULL, PRINT_HIGH, "slipgate: could not add bot\n");
+		}
+		else if (Q_stricmp(sub, "remove") == 0)
+			gi.cprintf(NULL, PRINT_HIGH, "slipgate: removed %d\n", SG_RemoveBots());
+	} //end else if
 	else if (server && Q_stricmp(cmd, "rune") == 0)
 	{
 		/* SLIPGATE: generate the rune for the loaded map.

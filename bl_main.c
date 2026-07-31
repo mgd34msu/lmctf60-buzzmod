@@ -855,10 +855,22 @@ qboolean BotStarted(edict_t *bot)
 {
 	bot_library_t *lib;
 
+	/* not ours: SLIPGATE bots wear FL_BOT but belong to their own system */
+	{
+		extern qboolean SG_OwnsBot(edict_t *ent);
+		if (SG_OwnsBot(bot)) return false;
+	}
 	//if the bot already started
 	if (botglobals.botstates[DF_ENTCLIENT(bot)].started) return true;
 	//get the library the bot uses
 	lib = GetBotLibrary(bot);
+	/*
+	 * A client can wear FL_BOT without belonging to this library at all --
+	 * SLIPGATE bots do -- and a legacy botstate that was never set up has no
+	 * library pointer. Dereferencing it took the server down the first time
+	 * the two kinds of bot shared a match.
+	 */
+	if (!lib) return false;
 	//if the library is initialized
 	if (lib->funcs.BotLibraryInitialized())
 	{
@@ -2067,6 +2079,11 @@ void BotClientDump(void)
 		else if (ent->flags & FL_BOT)
 		{
 			gi.dprintf("%3d: %-16s ", i, ent->client->pers.netname);
+			if (!botglobals.botstates[i].library)
+			{
+				gi.dprintf("(not this library's bot)\n");
+				continue;
+			}
 			path = botglobals.botstates[i].library->path;
 			if (strlen(path) > 25)
 			{
