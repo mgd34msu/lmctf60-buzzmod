@@ -308,6 +308,7 @@
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
     <ClCompile Include="bl_ctf.c" />
+    <ClCompile Include="bl_know.c" />
     <ClCompile Include="g_botmenu.c" />
     <ClCompile Include="gslog.c" />
     <ClCompile Include="g_ai.c" />

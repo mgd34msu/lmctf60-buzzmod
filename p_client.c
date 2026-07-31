@@ -14,6 +14,7 @@
 #include "bl_main.h"
 #include "bl_spawn.h"
 #include "bl_chat.h"
+#include "bl_know.h"
 
 // Lithium II Zbot detect plugin
 #ifdef ZBOT
@@ -2566,6 +2567,8 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
+
+	Know_ClientDisconnect(ent);
 
 	// flush this player's persistent stats before we tear anything down
 	CommitPlayerData(ent);

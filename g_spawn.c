@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "bl_know.h"
 #include "g_ctffunc.h"
 #include "g_tourney.h"
 
@@ -935,6 +936,13 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	memset (&level, 0, sizeof(level));
 	memset (g_edicts, 0, game.maxentities * sizeof (g_edicts[0]));
+
+	/*
+	 * Forget what the bots saw on the last map. Dropped-flag memory and the
+	 * call-out timers are per-map, and carrying them over would have bots
+	 * announcing positions from a map that is no longer loaded.
+	 */
+	Know_LevelInit();
 
 	strncpy (level.mapname, mapname, sizeof(level.mapname)-1);
 	strncpy (game.spawnpoint, spawnpoint, sizeof(game.spawnpoint)-1);
