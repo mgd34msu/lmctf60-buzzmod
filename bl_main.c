@@ -186,7 +186,7 @@ void BotExecuteInput(edict_t *bot)
 #endif //BOT_DEBUG
 
 	if (!bot_bunnyhop)   bot_bunnyhop   = gi.cvar("bot_bunnyhop", "1", 0);
-	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "0", 0);
+	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "1", 0);
 
 	if (gi.cvar("bot_developer", "0", 0)->value)
 	{
@@ -342,8 +342,34 @@ void BotExecuteInput(edict_t *bot)
 	//get the horizontal forward and right vector
 	//if swimming movement is true 3d
    //get the pitch in the range [-180, 180]
-	if (BotSwimming(bot->s.origin)) angles[PITCH] = bi->viewangles[PITCH];
-	else angles[PITCH] = 0;
+	/*
+	 * Build the basis the engine will actually use, not a convenient one.
+	 *
+	 * Pmove does this before every land move, at pmove.c:1470-1479:
+	 *
+	 *     VectorCopy(pm->viewangles, angles);
+	 *     if (angles[PITCH] > 180) angles[PITCH] -= 360;
+	 *     angles[PITCH] /= 3;
+	 *     AngleVectors(angles, pml.forward, pml.right, pml.up);
+	 *
+	 * and then builds the wish direction from the horizontal parts only:
+	 *
+	 *     wishvel[i] = pml.forward[i]*fmove + pml.right[i]*smove;   i in {0,1}
+	 *
+	 * So forward's horizontal length is scaled by cos(pitch/3) while right stays
+	 * fully horizontal. Solving for forwardmove and sidemove against a basis
+	 * built with pitch zero, as this did, means the engine reconstructs a
+	 * different direction than the one asked for -- skewed toward the strafe
+	 * axis, and shorter, which lowers wishspeed and with it both the
+	 * acceleration and the speed it is allowed to reach.
+	 *
+	 * It is worst when the bot is pitched, which is exactly when it is aiming a
+	 * hook above or below itself, and it corrupts the air strafe, where the
+	 * angle is the entire mechanism.
+	 */
+	angles[PITCH] = bi->viewangles[PITCH];
+	if (angles[PITCH] > 180.0f) angles[PITCH] -= 360.0f;
+	angles[PITCH] /= 3.0f;
 	angles[YAW] = bi->viewangles[YAW];
 	angles[ROLL] = 0;
 	AngleVectors(angles, forward, right, NULL);
@@ -602,7 +628,7 @@ void BotExecuteInput(edict_t *bot)
 		 * same way the engine does for a human with a high frame rate. It was
 		 * written when doing this twice was expensive; it is not any more.
 		 */
-		int sub   = (int)gi.cvar("bot_subframes", "4", 0)->value;
+		int sub   = (int)gi.cvar("bot_subframes", "8", 0)->value;
 		int total = ucmd.msec, base, rem, step;
 
 		if (sub < 1) sub = 1;
@@ -647,6 +673,36 @@ void BotExecuteInput(edict_t *bot)
 			 * Recomputing here is not something a human is denied -- it is the
 			 * bot catching up to what a human already does continuously.
 			 */
+			/*
+			 * Jump on the very step the bot touches down, not on the next AI
+			 * frame. Pmove runs PM_CheckJump before PM_Friction, and a jump
+			 * clears groundentity -- which is the condition PM_Friction tests
+			 * before applying any ground friction at all:
+			 *
+			 *     PM_CheckJump();     // sets pm->groundentity = NULL
+			 *     PM_Friction();      // if (pm->groundentity && ...) drop = ...
+			 *
+			 * So a jump issued on the landing step pays no friction whatsoever,
+			 * and one issued a step late pays speed * 6 * frametime -- at 800
+			 * over a 25ms step, 120 units, gone. That single frame is the whole
+			 * of bunny hopping in this engine.
+			 *
+			 * Deciding this once per AI frame meant the bot could only catch
+			 * the landing when it happened to fall on a frame boundary. Now it
+			 * is checked every step, which is what the subdivision is for.
+			 */
+			if (bot_bunnyhop && bot_bunnyhop->value && bot->groundentity &&
+			    bot->waterlevel < 2 &&
+			    !(bot->client->ps.pmove.pm_flags & PMF_TIME_LAND) &&
+			    !(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
+			    !(bi->actionflags & ACTION_CROUCH))
+			{
+				float js2 = bot->velocity[0] * bot->velocity[0] +
+				            bot->velocity[1] * bot->velocity[1];
+				float jmin = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
+				if (js2 > jmin * jmin) ucmd.upmove = 400;
+			}
+
 			if (bot_strafejump && bot_strafejump->value &&
 			    !bot->groundentity && bot->waterlevel < 2 &&
 			    !(bi->actionflags & ACTION_CROUCH))

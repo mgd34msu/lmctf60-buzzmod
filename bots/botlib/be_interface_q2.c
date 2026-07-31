@@ -512,6 +512,7 @@ typedef struct {
     float       ghook_time;
     float       ghook_lastspeed;
     float       ghook_lastgain;   /* speed added by the previous frame */
+    float       ghook_flight;     /* how long this bolt needs to reach its anchor */
     float       ghook_peakgain;   /* the best frame this pull has managed */
     float       ghook_exitspeed;  /* speed the previous pull ended on */
     float       ghook_exittime;   /* when it ended, for measuring the gap */
@@ -4126,6 +4127,19 @@ int AAS_AreaReachabilityToGoalArea(int areanum, vec3_t origin,
  * something the bot can measure exactly and a player can only estimate; there
  * is no reason to use it worse than they do.
  */
+/*
+ * What the grapple bolt itself collides with.
+ *
+ * fire_hook gives the bolt clipmask MASK_SHOT, so it stops on windows and on
+ * players as well as on world geometry. Planning an anchor with a
+ * CONTENTS_SOLID trace sees none of that: the bot picks a point through a pane
+ * of glass or through a team mate, and hook_touch then aborts the whole thing
+ * -- it only survives worldspawn, func_*, info_flag_*, bodyque and a valid
+ * enemy player. Tracing with the same mask the projectile uses is the only way
+ * for the plan and the shot to agree.
+ */
+#define Q2_MASK_SHOT  0x6000003   /* SOLID | WINDOW | MONSTER | DEADMONSTER */
+
 static qboolean Q2BotHookPathClear(int client, vec3_t eye, vec3_t anchor)
 {
     vec3_t mins = { -16.0f, -16.0f, -24.0f };
@@ -4139,7 +4153,7 @@ static qboolean Q2BotHookPathClear(int client, vec3_t eye, vec3_t anchor)
     if (len <= 64.0f) return false;
 
     VectorMA(eye, len - 48.0f, dir, stop);
-    tr = q2import.Trace(eye, mins, maxs, stop, client + 1, 1 /*CONTENTS_SOLID*/);
+    tr = q2import.Trace(eye, mins, maxs, stop, client + 1, Q2_MASK_SHOT);
     return (tr.fraction > 0.98f) ? true : false;
 }
 
@@ -4175,7 +4189,19 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
          * the rope pointing where the route goes.
          */
         if (bc->hookstate < 2) {
-            if (now > bc->ghook_time + 0.7f) {
+            /*
+             * Give the bolt time to actually get there.
+             *
+             * It leaves at GRAPPLE_FIRE_HOOK_SPEED, 800 a second, so a rope of
+             * 700 units cannot attach in under about seven eighths of a second
+             * and one at the full reach of 1400 needs one and three quarters.
+             * A flat seven-tenths of a second therefore cancelled every long
+             * hook before it could possibly land, and counted each one as a
+             * miss -- which is most of the miss rate, and it was self
+             * inflicted. The allowance now comes from the distance, with a
+             * margin for the bolt being slowed or deflected on the way.
+             */
+            if (now > bc->ghook_time + bc->ghook_flight) {
                 q2import.BotClientCommand(client, "unhook", NULL);
                 bc->ghook_active  = false;
                 bc->ghook_pulling = false;
@@ -4353,7 +4379,7 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
                 VectorSubtract(aim, eye, d);
                 if (VectorNormalize(d) > 1.0f) {
                     VectorMA(eye, reach, d, target2);
-                    tr2 = q2import.Trace(eye, NULL, NULL, target2, client + 1, 1);
+                    tr2 = q2import.Trace(eye, NULL, NULL, target2, client + 1, Q2_MASK_SHOT);
                     if (tr2.fraction < 1.0f) {
                         vec3_t dd;
                         float l;
@@ -4380,7 +4406,7 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
             fwd[2] = -(float)sin(pitch);
 
             VectorMA(eye, reach, fwd, target);
-            tr = q2import.Trace(eye, NULL, NULL, target, client + 1, 1);
+            tr = q2import.Trace(eye, NULL, NULL, target, client + 1, Q2_MASK_SHOT);
             if (tr.fraction >= 1.0f) continue;
 
             VectorSubtract(tr.endpos, eye, d);
@@ -4394,6 +4420,64 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
         }
 
         if (bestlen <= 0.0f) return;
+
+        /*
+         * Do not fire with the muzzle buried in something.
+         *
+         * fire_hook traces from the player's origin out to the muzzle point and,
+         * if that is blocked, invokes touch straight away ten units back along
+         * the aim:
+         *
+         *     tr = gi.trace(self->s.origin, NULL, NULL, bolt->s.origin, ...);
+         *     if (tr.fraction < 1.0) { VectorMA(...,-10,dir,...); bolt->touch(...); }
+         *
+         * That attaches at essentially zero rope length, which drops through the
+         * whole distance ladder to the clause below ten units -- where dir is
+         * never scaled at all and the velocity becomes a unit vector. Firing
+         * with your back to a wall is an instant, total stop.
+         */
+        {
+            bsp_trace_t mz = q2import.Trace(bc->origin, NULL, NULL, eye,
+                                            client + 1, Q2_MASK_SHOT);
+            if (mz.fraction < 1.0f) return;
+        }
+
+        /*
+         * Is this hook actually worth taking?
+         *
+         * The rope only pays once it has caught. The projectile leaves at 800
+         * and the bot keeps whatever speed it already had for the whole flight,
+         * so a hook is a spell of dead time followed by a spell at 800, and
+         * what matters is the average across both -- not the 800.
+         *
+         *     t_flight = len / 800
+         *     d_attach = len - speed * t_flight     (the bot closed some of it)
+         *     t_pull   = (d_attach - 200) / 800     (released before the brake)
+         *     average  = (speed*t_flight + 800*t_pull) / (t_flight + t_pull)
+         *
+         * Both times scale with length, so the ratio does not depend on how far
+         * the anchor is -- a long rope and a short one spend the same fraction
+         * of their cycle at 800. What decides it is the speed the bot already
+         * has. From 300 a hook cycle averages about 610 and is plainly worth
+         * it; from 700 it averages 760, barely better than carrying on, and
+         * costs a committed direction to get; above 800 it is a loss, because
+         * the rope overwrites the velocity rather than adding to it.
+         *
+         * So the test is not how far away the anchor is. It is whether the
+         * whole cycle beats what the bot is doing already.
+         */
+        {
+            float tf = bestlen / 800.0f;
+            float da = bestlen - bc->speed2d * tf;
+            float tp, avg;
+
+            if (da <= 220.0f) return;          /* arrives already braking */
+            tp  = (da - 200.0f) / 800.0f;
+            avg = (bc->speed2d * tf + 800.0f * tp) / (tf + tp);
+
+            if (avg < bc->speed2d * 1.10f) return;   /* not worth the commitment */
+        }
+
         VectorCopy(best, target);
         q2_ghook_ground++;
 
@@ -4410,6 +4494,7 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
          * because until then there is no pull to describe.
          */
         bc->ghook_pulling   = false;
+        bc->ghook_flight    = bestlen / 800.0f + 0.35f;
         bc->ghook_lastspeed = speed;
         bc->ghook_lastgain  = 0.0f;
         bc->ghook_peakgain  = 0.0f;
