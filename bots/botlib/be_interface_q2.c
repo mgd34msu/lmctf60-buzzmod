@@ -503,6 +503,8 @@ typedef struct {
     qboolean    ghook_active;
     float       ghook_time;
     float       ghook_lastspeed;
+    float       ghook_lastgain;   /* speed added by the previous frame */
+    float       ghook_peakgain;   /* the best frame this pull has managed */
     qboolean    subloop;
     float       subloop_until;
     int         subloop_return;   /* base state to resume */
@@ -3544,9 +3546,20 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
          * hold the bot.
          */
         {
+            /*
+             * Leave before the anchor arrives. What matters is the time left,
+             * not the distance: at 400 a fixed 140 units is a third of a
+             * second, at 120 it is over a second of pull thrown away. Keep a
+             * floor so a slow pull still lets go rather than swinging in.
+             */
             vec3_t togo;
+            float  dist  = 0.0f;
+            float  bail;
             VectorSubtract(bc->ghook_anchor, bc->origin, togo);
-            if (VectorLength(togo) < 140.0f) {
+            dist = VectorLength(togo);
+            bail = speed * 0.35f;
+            if (bail < 120.0f) bail = 120.0f;
+            if (dist < bail) {
                 q2import.BotClientCommand(client, "unhook", NULL);
                 bc->ghook_active = false;
                 bc->ghook_time   = now;
@@ -3567,13 +3580,45 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
          * rhythm the way a player's does; whichever comes first, that or the
          * speed levelling off, ends the pull.
          */
-        if ((bc->ghook_entryspeed > 0.0f && speed >= bc->ghook_target) ||
-            (now > bc->ghook_time + 0.25f &&
-             speed < bc->ghook_lastspeed + 2.0f) ||
-            now > bc->ghook_time + 1.5f) {
-            q2import.BotClientCommand(client, "unhook", NULL);
-            bc->ghook_active = false;
-            bc->ghook_time   = now;
+        {
+            /*
+             * Let go while the speed is still climbing.
+             *
+             * This used to wait for the climb to flatten out, which is already
+             * the wrong moment: by the time a pull has stopped adding speed it
+             * has spent the last stretch swinging the bot toward the anchor
+             * rather than along its path, and whatever it takes back on the way
+             * in has to be paid for again by the next hook. Releasing while the
+             * speed is still rising keeps every bit of it -- there is nothing
+             * to decelerate against in the air -- so the next hook starts from
+             * here instead of starting over.
+             *
+             * The moment to leave is when the pull stops paying well, not when
+             * it stops paying at all: once a frame adds less than half of the
+             * best frame this pull managed, the useful part is over.
+             */
+            float gain = speed - bc->ghook_lastspeed;
+            float held = now - bc->ghook_time;
+            qboolean done = false;
+
+            if (gain > bc->ghook_peakgain) bc->ghook_peakgain = gain;
+
+            if (bc->ghook_entryspeed > 0.0f && speed >= bc->ghook_target)
+                done = true;                       /* banked what it came for */
+            else if (held > 0.2f && gain <= 0.0f)
+                done = true;                       /* no longer paying at all */
+            else if (held > 0.2f && bc->ghook_peakgain > 0.0f &&
+                     gain < bc->ghook_peakgain * 0.5f)
+                done = true;                       /* past the useful part */
+            else if (held > 1.5f)
+                done = true;                       /* snagged something dull */
+
+            if (done) {
+                q2import.BotClientCommand(client, "unhook", NULL);
+                bc->ghook_active = false;
+                bc->ghook_time   = now;
+            }
+            bc->ghook_lastgain = gain;
         }
         bc->ghook_lastspeed = speed;
         return;
@@ -3584,6 +3629,23 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
     if (now < bc->ghook_time + 0.3f) return;
     if (in->speed <= 0.0f) return;
     if (in->dir[0] == 0.0f && in->dir[1] == 0.0f) return;
+
+    /*
+     * Do not hook across the direction of travel. A pull that agrees with
+     * where the bot is already going compounds -- each one leaves faster than
+     * the last. A pull off to the side spends its first half cancelling the
+     * speed that was already there, so a chain of them never builds anything.
+     * Slow bots are exempt: with nothing much to preserve, any pull is a gain.
+     */
+    if (speed > 200.0f) {
+        float wlen = (float)sqrt(in->dir[0] * in->dir[0] +
+                                 in->dir[1] * in->dir[1]);
+        if (wlen > 0.01f) {
+            float dot = (bc->velocity[0] * in->dir[0] +
+                         bc->velocity[1] * in->dir[1]) / (speed * wlen);
+            if (dot < 0.7f) return;             /* more than ~45 degrees off */
+        }
+    }
 
     /*
      * Prefer to be off the ground when it lands. A hook that connects while
@@ -3662,9 +3724,23 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
         bc->ghook_active    = true;
         bc->ghook_time      = now;
         bc->ghook_lastspeed = speed;
+        bc->ghook_lastgain  = 0.0f;
+        bc->ghook_peakgain  = 0.0f;
         bc->ghook_entryspeed = speed;
+        /*
+         * What this pull is worth leaving with. Somewhere between a sixth and
+         * a half again on entry speed, picked fresh each time so the rhythm
+         * varies the way a player's does rather than metronoming.
+         *
+         * The floor is running speed: a pull that cannot better what the bot
+         * would have had by simply running is not worth interrupting the run
+         * for, and without a floor a hook fired slowly sets itself a target it
+         * clears immediately and banks nothing. If the target turns out to be
+         * unreachable the gain test ends the pull anyway.
+         */
         bc->ghook_target     = (speed > 40.0f ? speed : 40.0f) *
                                (1.15f + (float)(rand() & 0x7FFF) / 0x7FFF * 0.35f);
+        if (bc->ghook_target < 320.0f) bc->ghook_target = 320.0f;
     }
 }
 
