@@ -5182,7 +5182,16 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
              * should not go on fielding a full attack on top of them.
              */
             defnow += Q2BotTeamRoleCount(client, Q2_LTG_RUSHBASE, NULL);
-            int wantdef = (teamsize * 2 + 4) / 5;   /* 2 in 5, rounded up */
+            /*
+             * How much of the side holds the base, out of five. Two was the
+             * fixed figure; it is a cvar now so the split can be measured
+             * rather than argued about.
+             */
+            int share = (int)LibVarGetValue("bot_defend_share");
+            int wantdef;
+            if (share < 0) share = 0;
+            if (share > 4) share = 4;
+            wantdef = (teamsize * share + 4) / 5;   /* rounded up */
 
             if (wantdef < 1) wantdef = 1;
             if (wantdef > teamsize - 1 && teamsize > 1) wantdef = teamsize - 1;
@@ -5882,6 +5891,26 @@ static int Q2BotAI(int client, float thinktime)
          */
         qboolean mustland = (bc->ctf_ltgtype == Q2_LTG_GETFLAG ||
                              bc->ctf_ltgtype == Q2_LTG_RUSHBASE);
+        /*
+         * The tricks are switched off for the whole of a flag run, not just
+         * the last few strides.
+         *
+         * The speed they buy is real and it is spent going sideways. Measured
+         * per attack run: with the hop chain and the ground hook running, a bot
+         * covered between three and nine times the length of the route it was
+         * following -- 37,000 units of ground for 4,000 units of progress on
+         * lmctf08 -- because a hook fires at an anchor picked up to a second
+         * ago and a circle jump throws a 400-unit strafe in whenever the bot
+         * drops below running speed, and neither of those points where the
+         * route does. With both off on lmctf03 the path came down to 1.2 times
+         * the route, mean speed fell from 318 to 221, and the match went from
+         * five steals and no captures to eleven steals and three captures.
+         *
+         * Everyone not on a flag run keeps them, and bot_flagrun_tricks 1 puts
+         * them back for attackers too.
+         */
+        if (mustland && !LibVarGetValue("bot_flagrun_tricks"))
+            q2input.precision = 1;
         if (mustland && bc->hasgoal &&
             BotGetTopGoal(bc->goalstate, &pg) && pg.areanum) {
             vec3_t pd;
@@ -6005,8 +6034,20 @@ static int Q2BotAI(int client, float thinktime)
 
     Q2BotCarrierHandoff(client, bc);
     Q2BotRuneHandoff(client, bc);
-    if (!Q2BotUnstickHook(client, bc, &q2input))
-        Q2BotGroundHook(client, bc, in_combat, &q2input, &moveresult);
+    /*
+     * The ground hook is part of the same bargain as the hop chain: it is what
+     * gets a bot above running speed, and on a flag run it is what takes it off
+     * the route. It stays for every other job; the stuck-recovery hook above
+     * still runs for everybody, because being pinned on a corner is worse.
+     */
+    if (!Q2BotUnstickHook(client, bc, &q2input)) {
+        qboolean onrun = (bc->ctf_ltgtype == Q2_LTG_GETFLAG ||
+                          bc->ctf_ltgtype == Q2_LTG_RUSHBASE);
+        if (!onrun || LibVarGetValue("bot_flagrun_tricks"))
+            Q2BotGroundHook(client, bc, in_combat, &q2input, &moveresult);
+        else
+            bc->ghook_active = false;
+    }
 
     q2import.BotInput(client, &q2input);
     EA_ResetInput(client);
@@ -6274,6 +6315,13 @@ q2_bot_export_t *GetBotAPI(q2_bot_import_t *import)
      * weapon for a bot that has none and nothing else.
      */
     LibVarSet("bot_flagrun_pickup", "6");
+
+    /* Two of every five hold the base; the rest go for the flag. */
+    LibVarSet("bot_defend_share", "2");
+
+    /* The hop chain and the ground hook are given up for the length of a flag
+     * run; 1 puts them back. See the note in Q2BotAI. */
+    LibVarSet("bot_flagrun_tricks", "0");
 
     /* Weapon indices for Q2: the botlib's movement code uses these to
      * select weapons for rocket jumping and BFG jumping.  Q3 defaults

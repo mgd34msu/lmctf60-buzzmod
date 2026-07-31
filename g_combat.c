@@ -78,7 +78,16 @@ void Killed (edict_t *targ, edict_t *inflictor, edict_t *attacker, int damage, v
 
 	targ->enemy = attacker;
 
-	if (attacker && attacker->client && Q_stricmp(attacker->client->pers.weapon->classname, "weapon_railgun") == 0)
+	/*
+	 * A player can be holding nothing at the moment a kill is credited to
+	 * them -- a rocket already in the air still counts for whoever fired it,
+	 * and by the time it lands they may have died, respawned, or dropped
+	 * everything. Reading the class name off a null weapon there crashed the
+	 * server outright: three of five test matches ended in SIGSEGV here, all
+	 * of them from rocket splash (T_RadiusDamage -> Killed).
+	 */
+	if (attacker && attacker->client && attacker->client->pers.weapon &&
+	    Q_stricmp(attacker->client->pers.weapon->classname, "weapon_railgun") == 0)
 		stats_add(attacker, STATS_RAIL_KILL, 1); // BUZZKILL - RAIL STATS
 
 #ifdef MONSTERS_OK

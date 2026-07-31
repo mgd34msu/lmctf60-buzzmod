@@ -1296,6 +1296,17 @@ int BotInitLibrary(bot_library_t *lib)
 	lib->funcs.BotLibVarSet("bot_ceilhook_minspeed", cvar ? cvar->string : "300");
 	cvar = gi.cvar("bot_know_range", "1200", 0);
 	lib->funcs.BotLibVarSet("bot_know_range", cvar ? cvar->string : "1200");
+
+	/* CTF offence, handed across the same way. How much of a side holds the
+	 * base out of five; how many seconds an unarmed attacker may spend picking
+	 * up a weapon on the way; and whether an attacker keeps the hop chain and
+	 * the ground hook while it runs. */
+	cvar = gi.cvar("bot_defend_share", "2", 0);
+	lib->funcs.BotLibVarSet("bot_defend_share", cvar ? cvar->string : "2");
+	cvar = gi.cvar("bot_flagrun_pickup", "6", 0);
+	lib->funcs.BotLibVarSet("bot_flagrun_pickup", cvar ? cvar->string : "6");
+	cvar = gi.cvar("bot_flagrun_tricks", "0", 0);
+	lib->funcs.BotLibVarSet("bot_flagrun_tricks", cvar ? cvar->string : "0");
 #ifdef CH
 	lib->funcs.BotLibVarSet("ch", ch->string);
 #endif //CH
