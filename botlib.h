@@ -170,6 +170,10 @@ typedef struct bot_updateclient_s
 	//====================================
 	int		inventory[MAX_ITEMS];
 	//
+	// which rune this client is carrying, RUNE_* from q_shared.h, 0 for none.
+	// The bots need it to decide who should hold what: regen and resist belong
+	// on whoever is running the flag, damage and haste on whoever is going in.
+	int		runetype;
 } bot_updateclient_t;
 
 //entity update

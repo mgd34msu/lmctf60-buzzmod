@@ -103,6 +103,72 @@ void BotExecuteInput(edict_t *bot)
 	if (!bot_bunnyhop)   bot_bunnyhop   = gi.cvar("bot_bunnyhop", "1", 0);
 	if (!bot_strafejump) bot_strafejump = gi.cvar("bot_strafejump", "0", 0);
 
+	if (gi.cvar("bot_developer", "0", 0)->value)
+	{
+		static int n, idle, i_nogoal, i_nocmd, i_stuck, i_air, i_dead;
+		static double sum; static float peak, next;
+		/*
+		 * Bands, and a reason for every frame that is not at running speed.
+		 * "Idle" only ever counted the frames at a dead stop, which made the
+		 * problem look ten times smaller than it is: a bot creeping along at
+		 * 150 is not idle, but it is not playing either. What matters is how
+		 * much of the match is spent below the 300 the engine will give for
+		 * free, and what is holding it there.
+		 */
+		static int b_stop, b_crawl, b_slow, b_run, b_fast;
+		static int s_dead, s_duck, s_water, s_air, s_land, s_lowcmd, s_ground;
+		static double cmdsum; static int cmdn;
+		float sp = sqrt(bot->velocity[0]*bot->velocity[0] +
+		                bot->velocity[1]*bot->velocity[1]);
+		int pmf   = bot->client->ps.pmove.pm_flags;
+		int alive = !(bot->health <= 0 ||
+		              bot->client->ps.pmove.pm_type == PM_DEAD);
+		float want = botglobals.botinputs[DF_ENTCLIENT(bot)].speed;
+		n++; sum += sp;
+		if (sp > peak) peak = sp;
+		if (alive) { cmdsum += want; cmdn++; }
+
+		if (sp <= 60)       b_stop++;
+		else if (sp <= 150) b_crawl++;
+		else if (sp <= 280) b_slow++;
+		else if (sp <= 320) b_run++;
+		else                b_fast++;
+
+		/* why is this frame not at running speed? first cause wins */
+		if (sp <= 280) {
+			if (!alive)                     s_dead++;
+			else if (pmf & 1 /*DUCKED*/)    s_duck++;
+			else if (bot->waterlevel > 1)   s_water++;
+			else if (pmf & 16 /*TIME_LAND*/) s_land++;
+			else if (!bot->groundentity)    s_air++;
+			else if (want < 300.0f)         s_lowcmd++;
+			else                            s_ground++;
+		}
+		if (sp <= 60) {
+			int hasinput = botglobals.botnewinput[DF_ENTCLIENT(bot)];
+			idle++;
+			if (!alive)                                          i_dead++;
+			else if (!hasinput)                                  i_nogoal++;
+			else if (!want)                                      i_nocmd++;
+			else if (!bot->groundentity)                         i_air++;
+			else                                                 i_stuck++;
+		}
+		if (level.time > next) {
+			next = level.time + 25.0f;
+			gi.dprintf("botspeed: mean %.0f peak %.0f cmd %.0f | bands stop %.0f crawl %.0f slow %.0f run %.0f fast %.0f\n",
+				sum/n, peak, cmdn ? cmdsum/cmdn : 0.0,
+				100.0*b_stop/n, 100.0*b_crawl/n, 100.0*b_slow/n,
+				100.0*b_run/n, 100.0*b_fast/n);
+			gi.dprintf("botslow: dead %.0f duck %.0f water %.0f land %.0f air %.0f lowcmd %.0f ground %.0f\n",
+				100.0*s_dead/n, 100.0*s_duck/n, 100.0*s_water/n,
+				100.0*s_land/n, 100.0*s_air/n, 100.0*s_lowcmd/n,
+				100.0*s_ground/n);
+			gi.dprintf("botidle: idle %.0f%% (nogoal %.0f, nocmd %.0f, stuck %.0f, air %.0f, dead %.0f)\n",
+				100.0*idle/n, 100.0*i_nogoal/n, 100.0*i_nocmd/n,
+				100.0*i_stuck/n, 100.0*i_air/n, 100.0*i_dead/n);
+		}
+	}
+
 	client = DF_ENTCLIENT(bot);
 	//
 	if (!bot->client)
@@ -199,7 +265,25 @@ void BotExecuteInput(edict_t *bot)
 	//set the view independent movement
 	ucmd.forwardmove = DotProduct(forward, bi->dir) * bi->speed;
 	ucmd.sidemove = DotProduct(right, bi->dir) * bi->speed;
-	ucmd.upmove = abs(forward[2]) * bi->dir[2] * bi->speed;
+	/*
+	 * Vertical command, for water only.
+	 *
+	 * This used to be scaled by abs(forward[2]) -- an integer abs() on a
+	 * float, so out of water (where pitch is forced to zero) it was abs(0),
+	 * and in water it was abs() of a fraction, which truncates to 0 as well.
+	 * The factor was always zero, so the bots never had a vertical command at
+	 * all, and climbing out of a pool only ever worked by way of the separate
+	 * swim-out handling.
+	 *
+	 * Kept to the swimming case on purpose: on the ground any upmove above 10
+	 * is a jump as far as PM_CheckJump is concerned, so feeding it a vertical
+	 * direction on land would make a bot hop every time its goal sat above it.
+	 * Jumping on land stays with ACTION_JUMP, which is deliberate about when.
+	 */
+	if (BotSwimming(bot->s.origin))
+		ucmd.upmove = bi->dir[2] * bi->speed;
+	else
+		ucmd.upmove = 0;
 	//normal keyboard movement
 	if (bi->actionflags & ACTION_MOVEFORWARD) ucmd.forwardmove += 400;
 	if (bi->actionflags & ACTION_MOVEBACK) ucmd.forwardmove -= 400;
@@ -209,99 +293,106 @@ void BotExecuteInput(edict_t *bot)
 	if (bi->actionflags & ACTION_JUMP) ucmd.upmove += 400;
 
 	/*
-	 * Keep moving the way a player does.
+	 * Movement technique.
 	 *
-	 * Quake II bleeds speed to ground friction every frame a player is
-	 * standing on something, so anyone covering distance hops continuously to
-	 * stay off the floor. Bots walked everywhere flat-footed and were slower
-	 * than any human across open ground.
+	 * Quake II's is specific and differs from Quake I or Source: forward stays
+	 * held the whole time. The sequence is
 	 *
-	 * Two things are deliberately not done here. Jumping is suppressed while
-	 * swimming, on a ladder, in the air already, or when the library asked for
-	 * a crouch, since hopping would break all four. And it is suppressed while
-	 * the bot is barely moving: a bot holding a corner or lining up a grapple
-	 * should stand still, not bounce.
+	 *   - hold forward and one strafe, and pan the view smoothly the same way
+	 *     as the strafe. That is the case the engine's air acceleration adds
+	 *     raw speed for rather than clamping to the run limit
+	 *   - jump again the instant the bot lands, so ground friction never gets
+	 *     a frame to work
+	 *   - alternate the strafe side on each jump, so the weave averages out
+	 *     and the bot still travels in a straight line
 	 *
-	 * Strafe jumping is the other half of this and is handled below.
+	 * Two things gate it. The bot must already be near running speed: with no
+	 * air control a jump locks in whatever speed it started with, and hopping
+	 * at half speed just makes the bot airborne and unsteerable -- measured at
+	 * 9% of all frames spent airborne going nowhere before this was gated.
+	 * And the acceleration itself only exists when the server sets
+	 * sv_airaccelerate above zero, which Quake II does not do by default; the
+	 * humans in the recorded matches were above the run cap for 42% of frames,
+	 * so the servers they played on had it on.
 	 */
 	{
 		float speed2 = bot->velocity[0] * bot->velocity[0] +
 		               bot->velocity[1] * bot->velocity[1];
-
-		if (bot_bunnyhop && bot_bunnyhop->value &&
-			bot->groundentity &&                       /* on the floor */
-			bot->waterlevel < 2 &&                     /* not swimming */
-			!(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
-			!(bot->client->ps.pmove.pm_flags & PMF_TIME_LAND) &&
-			!(bi->actionflags & ACTION_CROUCH) &&
-			bi->dir[2] > -0.3f && bi->dir[2] < 0.3f &&  /* not climbing a ladder */
-			speed2 > 120.0f * 120.0f)                  /* actually going somewhere */
-		{
-			ucmd.upmove += 400;
-		}
+		float bhmin  = gi.cvar("bot_bunnyhop_minspeed", "180", 0)->value;
+		int   cl     = DF_ENTCLIENT(bot);
+		qboolean grounded = bot->groundentity != NULL;
+		qboolean canmove  = bot->waterlevel < 2 &&
+		                    !(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
+		                    !(bi->actionflags & ACTION_CROUCH) &&
+		                    bi->dir[2] > -0.3f && bi->dir[2] < 0.3f;
 
 		/*
-		 * Strafe jumping.
+		 * Circle jump.
 		 *
-		 * Hold forward, hold one strafe, and turn the view the same way as
-		 * the strafe. The wish direction then sits just off the current
-		 * velocity, which is the case Quake II's air acceleration adds raw
-		 * speed for instead of clamping to the run limit. Alternate sides on
-		 * each jump and the bot travels straight while gaining.
+		 * A hop chain compounds whatever speed it starts with, and a bot that
+		 * starts at a walk stays at a walk. The entry is a pivot: hold forward
+		 * and a strafe, sweep the view about ninety degrees the same way, and
+		 * jump out of the turn -- that leaves the ground already above running
+		 * speed, which is what the chain then builds on.
 		 *
-		 * An earlier attempt did this with sidemove alone and turned the view
-		 * away from the strafe, which is the opposite of the technique: it
-		 * measured slower than not doing it at all. Forward has to stay held,
-		 * and in Quake II a positive sidemove is to the right while an
-		 * increasing yaw is to the left, so the turn is negative for a right
-		 * strafe.
-		 *
-		 * Only worth anything when the server allows air acceleration, and
-		 * skipped while attacking -- turning to build speed and aiming are
-		 * not compatible, and players do not try both at once.
-		 *
-		 * Off by default, and on the evidence not worth pursuing further.
-		 * With air acceleration switched off bots already peak at 800
-		 * units/sec and average 192 -- the grapple pulls them well past the
-		 * 300 run cap, and that is LMCTF's speed mechanic. Turning air
-		 * acceleration on made both figures worse, 527 peak and 130 mean,
-		 * because air control loosens their steering more than the technique
-		 * gains them.
-		 *
-		 * It gains less here than it would for a player, and the reason is the
-		 * command rate rather than the technique. A bot emits one usercmd per
-		 * server frame, so pmove integrates a whole 100ms in a single step and
-		 * applies air acceleration once. A player at 125fps feeds a dozen
-		 * shorter commands over the same jump, re-aiming the wish direction
-		 * each time, and compounds the gain. Sweeping the turn rate from 0 to
-		 * 20 degrees per command moved the average between 132 and 139
-		 * units/sec -- the turn is not the limiting factor, the tick is.
-		 * Bunny hopping is unaffected by this, being about staying off the
-		 * friction rather than accelerating in the air, and gains a third.
+		 * Only from the ground, only when actually slow, and only when the bot
+		 * has somewhere to be.
 		 */
-		if (bot_strafejump && bot_strafejump->value &&
-			bot->waterlevel < 2 &&
-			!(bi->actionflags & ACTION_ATTACK) &&
-			speed2 > 150.0f * 150.0f &&
-			gi.cvar("sv_airaccelerate", "0", 0)->value > 0)
+		if (bot_bunnyhop && bot_bunnyhop->value && canmove && grounded &&
+			bi->speed > 0.0f && !botglobals.cj_phase[cl] &&
+			speed2 < 200.0f * 200.0f &&
+			!(bot->client->ps.pmove.pm_flags & PMF_TIME_LAND))
 		{
-			int cl = DF_ENTCLIENT(bot);
+			botglobals.cj_phase[cl] = 3;
+			botglobals.cj_side[cl]  = (rand() & 1) ? 1 : -1;
+		}
 
-			if (bot->groundentity) {
-				/* Landed: swap sides so the next hop leans the other way. */
-				if (!botglobals.sj_grounded[cl]) botglobals.sj_side[cl] = -botglobals.sj_side[cl];
-				botglobals.sj_grounded[cl] = true;
-				if (!botglobals.sj_side[cl]) botglobals.sj_side[cl] = 1;
-			} else {
-				botglobals.sj_grounded[cl] = false;
-				/* Forward stays held; the strafe and the turn go together. */
-				if (ucmd.forwardmove < 300) ucmd.forwardmove = 300;
-				ucmd.sidemove   += botglobals.sj_side[cl] * 400;
-				ucmd.angles[YAW] -= (short)ANGLE2SHORT(botglobals.sj_side[cl] *
-					gi.cvar("bot_sjturn", "6", 0)->value);
+		if (botglobals.cj_phase[cl] > 0 && canmove)
+		{
+			int side = botglobals.cj_side[cl];
+
+			ucmd.forwardmove = 300;
+			ucmd.sidemove   += side * 400;
+			ucmd.angles[YAW] -= (short)ANGLE2SHORT(side * 30.0f);
+
+			if (--botglobals.cj_phase[cl] == 0 && grounded)
+			{
+				ucmd.upmove += 400;              /* jump out of the turn */
+				botglobals.sj_side[cl] = side;   /* keep weaving the same way */
 			}
 		}
+		else if (bot_bunnyhop && bot_bunnyhop->value && canmove &&
+			grounded && !(bot->client->ps.pmove.pm_flags & PMF_TIME_LAND) &&
+			speed2 > bhmin * bhmin)
+		{
+			/* Jump the moment we are on the floor again -- this is the
+			 * one-frame window that keeps friction off the speed. */
+			ucmd.upmove += 400;
+			botglobals.sj_side[cl] = -botglobals.sj_side[cl];
+			if (!botglobals.sj_side[cl]) botglobals.sj_side[cl] = 1;
+		}
+
+		/* Forward is held throughout, on the ground and in the air. */
+		if (bot_bunnyhop && bot_bunnyhop->value && canmove &&
+			bi->speed > 0.0f && speed2 > bhmin * bhmin &&
+			ucmd.forwardmove < 300)
+			ucmd.forwardmove = 300;
+
+		if (bot_strafejump && bot_strafejump->value && canmove && !grounded &&
+			!(bi->actionflags & ACTION_ATTACK) &&
+			speed2 > bhmin * bhmin)
+		{
+			int side = botglobals.sj_side[cl] ? botglobals.sj_side[cl] : 1;
+
+			/* Strafe one way and turn the same way, smoothly. A positive
+			 * sidemove is to the right while an increasing yaw is to the
+			 * left, so the turn is negative for a right strafe. */
+			ucmd.sidemove   += side * 400;
+			ucmd.angles[YAW] -= (short)ANGLE2SHORT(side *
+				gi.cvar("bot_sjturn", "3", 0)->value);
+		}
 	}
+
 	//crouch/movedown
 	if (bi->actionflags & ACTION_CROUCH) ucmd.upmove -= 400;
 	//impulse always zero
@@ -673,6 +764,7 @@ void BotLib_BotUpdateClient(edict_t *bot)
 	 */
 	VectorCopy(bot->client->v_angle, buc.viewangles);
 	//view offset
+	buc.runetype = bot->client->rune ? bot->client->rune->runetype : 0;
 	VectorCopy(bot->client->ps.viewoffset, buc.viewoffset);
 	//kick angles
 	VectorCopy(bot->client->ps.kick_angles, buc.kick_angles);
@@ -1118,6 +1210,18 @@ int BotInitLibrary(bot_library_t *lib)
 	 * cvar so it can be turned off without a rebuild. */
 	cvar = gi.cvar("bot_grapple", "1", 0);
 	lib->funcs.BotLibVarSet("bot_grapple", cvar ? cvar->string : "1");
+
+	/* The library reads libvars, not cvars. Anything the server sets that the
+	 * bot code consults has to be handed across explicitly or it silently
+	 * reads zero -- which is what kept the ground hook from ever firing. */
+	cvar = gi.cvar("bot_groundhook", "1", 0);
+	lib->funcs.BotLibVarSet("bot_groundhook", cvar ? cvar->string : "1");
+	cvar = gi.cvar("bot_groundhook_pitch", "10", 0);
+	lib->funcs.BotLibVarSet("bot_groundhook_pitch", cvar ? cvar->string : "10");
+	cvar = gi.cvar("bot_groundhook_dist", "300", 0);
+	lib->funcs.BotLibVarSet("bot_groundhook_dist", cvar ? cvar->string : "300");
+	cvar = gi.cvar("bot_know_range", "1200", 0);
+	lib->funcs.BotLibVarSet("bot_know_range", cvar ? cvar->string : "1200");
 #ifdef CH
 	lib->funcs.BotLibVarSet("ch", ch->string);
 #endif //CH

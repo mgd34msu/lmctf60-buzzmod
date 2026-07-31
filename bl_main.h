@@ -70,6 +70,10 @@ typedef struct bot_globals_s
 #endif //BOT_DEBUG
 	/* strafe jumping: which way each bot is leaning, and whether it was on
 	 * the ground last frame so the side can be swapped per jump */
+	/* circle jump: the pivot that gets a bot above running speed before a
+	 * hop chain has anything to compound */
+	signed char cj_phase[256];
+	signed char cj_side[256];
 	signed char sj_side[256];
 	qboolean    sj_grounded[256];
 } bot_globals_t;
