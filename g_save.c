@@ -213,7 +213,14 @@ void InitGame(void)
 	bob_roll = gi.cvar("bob_roll", "0.002", 0);
 
 	runes = gi.cvar("runes", "15", CVAR_SERVERINFO); // CTF CODE -- LM_CTF
-	ctfflags = gi.cvar("ctfflags", "0", CVAR_SERVERINFO); // CTF CODE -- LM_CTF
+	/*
+	 * Default now has CTF_OFFHAND_HOOK set. Without it the "hook" command does
+	 * not fire anything -- it falls through to the item's own use function,
+	 * which merely makes the grapple the current weapon and waits for an
+	 * attack that a bot never sends. The bots were selecting the grapple
+	 * several hundred times a match and never firing it once.
+	 */
+	ctfflags = gi.cvar("ctfflags", "16", CVAR_SERVERINFO); // CTF CODE -- LM_CTF
 	refset = gi.cvar("refset", "0", CVAR_SERVERINFO); // CTF CODE -- LM_CTF
 	logrename = gi.cvar("logrename", "", 0); // CTF CODE -- LM_CTF
 	hostname = gi.cvar("hostname", "noname", CVAR_SERVERINFO); // CTF CODE -- LM_CTF
