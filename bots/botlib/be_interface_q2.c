@@ -512,6 +512,8 @@ typedef struct {
     float       ghook_lastspeed;
     float       ghook_lastgain;   /* speed added by the previous frame */
     float       ghook_peakgain;   /* the best frame this pull has managed */
+    float       ghook_exitspeed;  /* speed the previous pull ended on */
+    float       ghook_exittime;   /* when it ended, for measuring the gap */
     qboolean    subloop;
     float       subloop_until;
     int         subloop_return;   /* base state to resume */
@@ -549,6 +551,18 @@ int q2_ghook_fires;          /* ground hooks fired, for diagnostics */
 int q2_ghook_catches;        /* of those, how many actually caught a surface */
 int q2_ghook_misses;         /* and how many flew out and hit nothing */
 double q2_ghook_gain;        /* total speed banked across every completed pull */
+/*
+ * Whether the pulls actually chain. A chain only compounds if the next hook
+ * catches before the speed the last one bought has drained away, so what
+ * matters is not the gain per pull but the leak between them: speed lost
+ * between letting go and catching again, and how long that takes.
+ */
+double q2_chain_leak;        /* speed lost between one release and the next catch */
+double q2_chain_gap;         /* seconds spent between them */
+int    q2_chain_links;       /* catches that followed a previous pull closely */
+int    q2_chain_cold;        /* catches that started from nothing instead */
+int    q2_ghook_ground;      /* hooks aimed at the floor ahead */
+int    q2_ghook_ceiling;     /* hooks aimed overhead to carry distance */
 
 static q2_bot_import_t q2import;         /* stored Q2 import callbacks  */
 static q2_bot_export_t q2_export;        /* returned Q2 export struct   */
@@ -1693,6 +1707,13 @@ int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best, q2_re
                     q2_grapple_best, q2_reach_total, q2_grapple_fired, q2_ghook_fires,
                     q2_ghook_catches, q2_ghook_misses,
                     q2_ghook_catches ? q2_ghook_gain / q2_ghook_catches : 0.0);
+                botimport.Print(PRT_MESSAGE,
+                    "Q2Chain: links %d, cold %d, mean leak %.0f over %.2fs "
+                    "(ground %d, ceiling %d)\n",
+                    q2_chain_links, q2_chain_cold,
+                    q2_chain_links ? q2_chain_leak / q2_chain_links : 0.0,
+                    q2_chain_links ? q2_chain_gap  / q2_chain_links : 0.0,
+                    q2_ghook_ground, q2_ghook_ceiling);
             }
 
         }
@@ -3716,6 +3737,18 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
              * went out -- otherwise the flight time is charged against the pull
              * and a good hook looks like a slow one.
              */
+            /*
+             * A link, if the last pull is recent enough that its speed should
+             * still have been there to build on. Anything longer and this hook
+             * is starting cold, which is the failure a chain is meant to avoid.
+             */
+            if (bc->ghook_exittime > 0.0f && now - bc->ghook_exittime < 2.0f) {
+                q2_chain_leak += (double)(bc->ghook_exitspeed - bc->speed2d);
+                q2_chain_gap  += (double)(now - bc->ghook_exittime);
+                q2_chain_links++;
+            } else {
+                q2_chain_cold++;
+            }
             bc->ghook_pulling   = true;
             bc->ghook_time      = now;
             bc->ghook_entryspeed = bc->speed2d;
@@ -3789,6 +3822,8 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
                 bc->ghook_pulling = false;
                 bc->ghook_time    = now;
                 q2_ghook_gain += (double)(bc->speed2d - bc->ghook_entryspeed);
+                bc->ghook_exitspeed = bc->speed2d;
+                bc->ghook_exittime  = now;
             }
             bc->ghook_lastgain = bc->accel;
         }
@@ -3798,7 +3833,16 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
 
     /* Do not interrupt a fight, and leave a moment between hooks. */
     if (in_combat || bc->ctf_has_flag == 2) return;
-    if (now < bc->ghook_time + 0.3f) return;
+    /*
+     * No cooldown. There is nothing to wait for that the state does not
+     * already say: the rope is either out or it is not, and hookstate says
+     * which. A timer here was standing in for knowledge the bot now has, and
+     * it was costing the chain more than any pull was earning -- a pull banks
+     * about forty units and a bot sheds well over a hundred a second once the
+     * rope is gone, so a third of a second of waiting undoes the last hook.
+     * If the rope is back, fire again; that is what a player does.
+     */
+    if (bc->hookstate != 0) return;         /* a rope is already out there */
     if (in->speed <= 0.0f) return;
     if (in->dir[0] == 0.0f && in->dir[1] == 0.0f) return;
 
@@ -3815,76 +3859,108 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
         if (wlen > 0.01f) {
             float dot = (bc->velocity[0] * in->dir[0] +
                          bc->velocity[1] * in->dir[1]) / (speed * wlen);
-            if (dot < 0.7f) return;             /* more than ~45 degrees off */
+            if (dot < 0.5f) return;             /* more than ~60 degrees off */
         }
     }
 
     /*
-     * Prefer to be off the ground when it lands. A hook that connects while
-     * the bot is already airborne carries the jump's speed into the pull
-     * instead of dragging it up off the floor from a standstill. Grounded
-     * firing is still allowed after a short wait, so a bot that never gets
-     * airborne is not stuck walking forever.
+     * Being airborne when the hook lands is better -- the jump's speed carries
+     * into the pull instead of the rope having to drag the bot up off the
+     * floor. But that is a question about speed, not about time. A bot already
+     * at running speed has the momentum the pull wants whether its feet are
+     * down or not, so it fires; a slow bot on the ground is better off
+     * spending the moment accelerating, which is what it would do anyway.
      */
-    if ((bc->pm_flags & 4 /*PMF_ON_GROUND*/) && now < bc->ghook_time + 1.0f) return;
+    if ((bc->pm_flags & 4 /*PMF_ON_GROUND*/) && bc->speed2d < 200.0f) return;
 
     {
         vec3_t fwd, eye, target, d;
         bsp_trace_t tr;
-        float len = LibVarGetValue("bot_groundhook_dist");
-        float yaw, pitch;
+        float gdist = LibVarGetValue("bot_groundhook_dist");
+        float gpitch = LibVarGetValue("bot_groundhook_pitch");
+        float cdist = LibVarGetValue("bot_ceilhook_dist");
+        float cpitch = LibVarGetValue("bot_ceilhook_pitch");
+        float cmin  = LibVarGetValue("bot_ceilhook_minspeed");
+        float yaw, pitch, len;
+        int   attempt, wantceil;
+        qboolean found = false;
 
-        if (len < 64.0f) len = 400.0f;
+        if (gdist  < 64.0f) gdist  = 400.0f;
+        if (gpitch <= 0.0f) gpitch = 15.0f;   /* see bl_main.c for the sweep */
+        if (cdist  < 64.0f) cdist  = 900.0f;
+        if (cpitch <= 0.0f) cpitch = 30.0f;
+        if (cmin   <= 0.0f) cmin   = 300.0f;
 
-        /*
-         * Aim where the bot is going, tilted about ten degrees down. That ray
-         * lands on the floor a medium way ahead on open ground, and on a wall
-         * or ceiling where the geometry closes in -- all three work, and all
-         * three are what a player actually does. Straight down at their own
-         * feet does nothing: the pull needs a reach to work against.
-         */
         VectorCopy(bc->origin, eye);
         VectorAdd(eye, bc->viewoffset, eye);
-
-        yaw   = (float)atan2(in->dir[1], in->dir[0]);
-        pitch = LibVarGetValue("bot_groundhook_pitch");
-        if (pitch <= 0.0f) pitch = 15.0f;   /* see bl_main.c for the sweep */
-        pitch *= (float)(M_PI / 180.0);             /* down is positive here */
+        yaw = (float)atan2(in->dir[1], in->dir[0]);
 
         /*
-         * A route that calls for an elevator means standing on a platform
-         * waiting for it, which is dead time a player with a hook does not
-         * spend. Aim up instead and pull -- a ledge, the shaft wall, whatever
-         * the ray finds above -- and take the height directly.
+         * Which way to aim depends on how fast the bot is already going.
+         *
+         * A ground hook is the way to start: a short anchor a medium way ahead
+         * gets a slow bot moving quickly. Once it is moving, that same short
+         * anchor arrives too soon to be worth much -- the pull is over before
+         * it has paid. What carries a fast bot is a long hook overhead, which
+         * stays taut far longer and turns the speed into distance rather than
+         * spending it on the floor. So the two alternate on their own: ground
+         * to get going, ceiling to go somewhere, and the chain climbs through
+         * them without needing to be sequenced explicitly.
          */
-        if (mr && (mr->traveltype & 0x00FFFFFF) == TRAVEL_ELEVATOR)
-            pitch = -55.0f * (float)(M_PI / 180.0);
+        wantceil = (bc->speed2d >= cmin);
 
-        fwd[0] = (float)(cos(yaw) * cos(pitch));
-        fwd[1] = (float)(sin(yaw) * cos(pitch));
-        fwd[2] = -(float)sin(pitch);
+        for (attempt = 0; attempt < 2 && !found; attempt++) {
+            int ceil = wantceil ^ attempt;   /* preferred first, then the other */
 
-        VectorMA(eye, len, fwd, target);
-        tr = q2import.Trace(eye, NULL, NULL, target, client + 1, 1 /*CONTENTS_SOLID*/);
+            if (ceil) {
+                len   = cdist;
+                pitch = -cpitch * (float)(M_PI / 180.0);   /* up */
+            } else {
+                len   = gdist;
+                pitch = gpitch * (float)(M_PI / 180.0);    /* down is positive */
+            }
 
-        /* Too close and the pull is wasted; nothing hit and there is nothing
-         * to pull against. */
-        VectorSubtract(tr.endpos, eye, d);
-        if (tr.fraction >= 1.0f) return;
-        if (VectorLength(d) < 150.0f) return;
+            /*
+             * A route that calls for an elevator means standing on a platform
+             * waiting for it, which is dead time a player with a hook does not
+             * spend. Aim up instead and pull -- a ledge, the shaft wall,
+             * whatever the ray finds above -- and take the height directly.
+             */
+            if (mr && (mr->traveltype & 0x00FFFFFF) == TRAVEL_ELEVATOR) {
+                pitch = -55.0f * (float)(M_PI / 180.0);
+                len   = cdist;
+            }
 
-        /*
-         * Refuse a harsh angle. A rope anchored steeply below drags the bot
-         * down into the floor, and the collision takes the speed with it --
-         * the opposite of what the hook is for. Shallow anchors pull along the
-         * ground instead of into it.
-         */
-        {
-            float horiz = (float)sqrt(d[0] * d[0] + d[1] * d[1]);
-            if (horiz < 1.0f) return;
-            if (d[2] < -horiz * 0.5f) return;      /* steeper than ~27 down */
-            (void)0;                                /* upward pulls are fine */
+            fwd[0] = (float)(cos(yaw) * cos(pitch));
+            fwd[1] = (float)(sin(yaw) * cos(pitch));
+            fwd[2] = -(float)sin(pitch);
+
+            VectorMA(eye, len, fwd, target);
+            tr = q2import.Trace(eye, NULL, NULL, target, client + 1, 1 /*CONTENTS_SOLID*/);
+
+            /* Nothing hit, or too close for the pull to be worth taking. */
+            if (tr.fraction >= 1.0f) continue;
+            VectorSubtract(tr.endpos, eye, d);
+            if (VectorLength(d) < 150.0f) continue;
+
+            /*
+             * Refuse a harsh angle. A rope anchored steeply below drags the bot
+             * down into the floor, and the collision takes the speed with it --
+             * the opposite of what the hook is for. Shallow anchors pull along
+             * the ground instead of into it; upward pulls are fine, which is
+             * the whole point of the ceiling leg.
+             */
+            {
+                float horiz = (float)sqrt(d[0] * d[0] + d[1] * d[1]);
+                if (horiz < 1.0f) continue;
+                if (d[2] < -horiz * 0.5f) continue;   /* steeper than ~27 down */
+            }
+
+            found = true;
+            if (ceil) q2_ghook_ceiling++; else q2_ghook_ground++;
         }
+
+        if (!found) return;
 
         VectorCopy(tr.endpos, target);
 

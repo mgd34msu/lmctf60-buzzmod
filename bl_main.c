@@ -1255,6 +1255,20 @@ int BotInitLibrary(bot_library_t *lib)
 	lib->funcs.BotLibVarSet("bot_groundhook_pitch", cvar ? cvar->string : "15");
 	cvar = gi.cvar("bot_groundhook_dist", "300", 0);
 	lib->funcs.BotLibVarSet("bot_groundhook_dist", cvar ? cvar->string : "300");
+
+	/*
+	 * The overhead leg of the chain. A short anchor ahead is how a slow bot
+	 * gets going, but once it is moving that anchor arrives too soon to be
+	 * worth much -- the pull ends before it has paid. A long hook overhead
+	 * stays taut far longer and turns speed into distance instead of spending
+	 * it on the floor, so above bot_ceilhook_minspeed the bots aim up instead.
+	 */
+	cvar = gi.cvar("bot_ceilhook_dist", "900", 0);
+	lib->funcs.BotLibVarSet("bot_ceilhook_dist", cvar ? cvar->string : "900");
+	cvar = gi.cvar("bot_ceilhook_pitch", "30", 0);
+	lib->funcs.BotLibVarSet("bot_ceilhook_pitch", cvar ? cvar->string : "30");
+	cvar = gi.cvar("bot_ceilhook_minspeed", "300", 0);
+	lib->funcs.BotLibVarSet("bot_ceilhook_minspeed", cvar ? cvar->string : "300");
 	cvar = gi.cvar("bot_know_range", "1200", 0);
 	lib->funcs.BotLibVarSet("bot_know_range", cvar ? cvar->string : "1200");
 #ifdef CH
