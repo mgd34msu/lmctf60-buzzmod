@@ -503,6 +503,14 @@ qboolean BotCmd(char *cmd, edict_t *ent, int server)
 	if (BotServerCmd(cmd, ent, server))
 	{
 	} //end if
+	else if (server && Q_stricmp(cmd, "rune") == 0)
+	{
+		/* SLIPGATE: generate the rune for the loaded map.
+		 * Routed here because ServerCommand already forwards unclaimed
+		 * "sv" commands to the bot glue -- no game dispatch touched. */
+		extern qboolean Rune_Generate(const char *mapname);
+		Rune_Generate(level.mapname);
+	} //end else if
 	else if (server && Q_stricmp(cmd, "modelindex") == 0)
 	{
 		BotDumpModelindex();
