@@ -133,7 +133,8 @@ static float LibVarGetValue_stub_margin(void)
 
 static void BotAirStrafe(usercmd_t *ucmd, bot_input_t *bi,
                          vec3_t forward, vec3_t right,
-                         vec3_t vel, float speed2d, float frametime)
+                         vec3_t vel, float speed2d, float frametime,
+                         float accel)
 {
 	vec3_t vdir, d;
 	float  wishspeed = 300.0f;
@@ -141,7 +142,7 @@ static void BotAirStrafe(usercmd_t *ucmd, bot_input_t *bi,
 
 	if (speed2d < 1.0f) return;
 
-	accelspeed = 1.0f * frametime * wishspeed;      /* the air branch, accel 1 */
+	accelspeed = accel * frametime * wishspeed;
 
 	c = (wishspeed - accelspeed) / speed2d;
 	if (c >  1.0f) c =  1.0f;
@@ -584,7 +585,7 @@ void BotExecuteInput(edict_t *bot)
 			 * that costs the aim nothing.
 			 */
 			BotAirStrafe(&ucmd, bi, forward, right, bot->velocity,
-			             (float)sqrt(speed2), (float)ucmd.msec / 1000.0f);
+			             (float)sqrt(speed2), (float)ucmd.msec / 1000.0f, 1.0f);
 		}
 	}
 
@@ -712,7 +713,37 @@ void BotExecuteInput(edict_t *bot)
 				float hmin = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
 				if (sp2 > hmin * hmin)
 					BotAirStrafe(&ucmd, bi, forward, right, bot->velocity,
-					             (float)sqrt(sp2), (float)ucmd.msec / 1000.0f);
+					             (float)sqrt(sp2), (float)ucmd.msec / 1000.0f, 1.0f);
+			}
+
+			/*
+			 * Ground strafing -- the half of this that was missing entirely.
+			 *
+			 * pm_maxspeed caps wishspeed, not velocity. On the ground
+			 * PM_Accelerate runs with pm_accelerate 10, so the same off-axis
+			 * input that buys a little in the air buys ten times as much here,
+			 * and what limits it is friction rather than the cap: the gain at
+			 * the best angle is roughly flat while friction scales with speed,
+			 * so they meet at an equilibrium near 370 -- comfortably past the
+			 * 300 that driving straight ahead converges on, and close to the
+			 * 376 the recorded humans averaged.
+			 *
+			 * This is what a circle jump actually is in this engine. Not the
+			 * Quake III technique of harvesting air acceleration, which is a
+			 * tenth the rate here, but building speed on the floor where the
+			 * acceleration is, and then leaving the floor to escape the
+			 * friction that caps it.
+			 */
+			if (bot_strafejump && bot_strafejump->value && bot->groundentity &&
+			    bot->waterlevel < 2 &&
+			    !(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
+			    !(bi->actionflags & ACTION_CROUCH))
+			{
+				float gs2 = bot->velocity[0] * bot->velocity[0] +
+				            bot->velocity[1] * bot->velocity[1];
+				if (gs2 > 120.0f * 120.0f)
+					BotAirStrafe(&ucmd, bi, forward, right, bot->velocity,
+					             (float)sqrt(gs2), (float)ucmd.msec / 1000.0f, 10.0f);
 			}
 
 			ClientThink(bot, &ucmd);
