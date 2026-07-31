@@ -445,7 +445,7 @@ void BotExecuteInput(edict_t *bot)
 		 * band in the speed breakdown: the bots were jumping their way out of
 		 * the acceleration they had not finished gaining.
 		 */
-		float bhmin  = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
+		float bhmin  = gi.cvar("bot_bunnyhop_minspeed", "420", 0)->value;
 		int   cl     = DF_ENTCLIENT(bot);
 		qboolean grounded = bot->groundentity != NULL;
 		/*
@@ -693,24 +693,24 @@ void BotExecuteInput(edict_t *bot)
 			 * is checked every step, which is what the subdivision is for.
 			 */
 			if (bot_bunnyhop && bot_bunnyhop->value && bot->groundentity &&
-			    bot->waterlevel < 2 &&
+			    bot->waterlevel < 2 && !bi->precision &&
 			    !(bot->client->ps.pmove.pm_flags & PMF_TIME_LAND) &&
 			    !(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
 			    !(bi->actionflags & ACTION_CROUCH))
 			{
 				float js2 = bot->velocity[0] * bot->velocity[0] +
 				            bot->velocity[1] * bot->velocity[1];
-				float jmin = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
+				float jmin = gi.cvar("bot_bunnyhop_minspeed", "420", 0)->value;
 				if (js2 > jmin * jmin) ucmd.upmove = 400;
 			}
 
 			if (bot_strafejump && bot_strafejump->value &&
-			    !bot->groundentity && bot->waterlevel < 2 &&
+			    !bot->groundentity && bot->waterlevel < 2 && !bi->precision &&
 			    !(bi->actionflags & ACTION_CROUCH))
 			{
 				float sp2 = bot->velocity[0] * bot->velocity[0] +
 				            bot->velocity[1] * bot->velocity[1];
-				float hmin = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
+				float hmin = gi.cvar("bot_bunnyhop_minspeed", "420", 0)->value;
 				if (sp2 > hmin * hmin)
 					BotAirStrafe(&ucmd, bi, forward, right, bot->velocity,
 					             (float)sqrt(sp2), (float)ucmd.msec / 1000.0f, 1.0f);
@@ -735,7 +735,7 @@ void BotExecuteInput(edict_t *bot)
 			 * friction that caps it.
 			 */
 			if (bot_strafejump && bot_strafejump->value && bot->groundentity &&
-			    bot->waterlevel < 2 &&
+			    bot->waterlevel < 2 && !bi->precision &&
 			    !(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
 			    !(bi->actionflags & ACTION_CROUCH))
 			{

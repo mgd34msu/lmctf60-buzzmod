@@ -497,6 +497,8 @@ typedef struct {
     float       handoff_time;   /* next time the carrier may throw the flag */
     int         runetype;      /* RUNE_* this bot is carrying, 0 for none */
     int         hookstate;     /* 0 idle, 1 in flight, 2 attached and pulling */
+    vec3_t      prev_origin;   /* where the bot was at the last AI frame */
+    qboolean    have_prev;
     float       speed2d;       /* ground speed, the one the 300 cap applies to */
     float       fwdspeed;      /* how much of it is going where the bot points */
     float       accel;         /* change in ground speed, units per second */
@@ -625,6 +627,8 @@ static int   q2_runs_started;
 static int   q2_retarget_noroute;   /* router says the goal is unreachable */
 static int   q2_retarget_movefail;  /* BotMoveToGoal reported failure */
 static int   q2_retarget_stalled;   /* a second of no movement direction */
+
+static qboolean Q2BotReachedGoal(q2_botclient_t *bc, bot_goal_t *goal);
 
 int q2_ghook_fires;          /* ground hooks fired, for diagnostics */
 int q2_ghook_catches;        /* of those, how many actually caught a surface */
@@ -1906,6 +1910,8 @@ static int Q2BotUpdateClient(int client, q2_bot_updateclient_t *buc)
 
         bc->speed2d   = sp;
         bc->phys_time = t;
+        VectorCopy(bc->origin, bc->prev_origin);
+        bc->have_prev = true;
     }
     bc->pm_flags = buc->pm_flags;
     bc->pm_type  = buc->pm_type;
@@ -3320,7 +3326,7 @@ ctf_navigate:
                  */
             }
             else if (bc->ctf_ltgtype == Q2_LTG_DEFENDBASE &&
-                     BotTouchingGoal(bc->origin, &active_goal)) {
+                     Q2BotReachedGoal(bc, &active_goal)) {
                 /*
                  * A defender that has reached its own flag must not simply be
                  * given the same goal again -- it arrives, the goal is popped,
@@ -3355,7 +3361,7 @@ ctf_navigate:
                     }
                 }
             }
-            else if (BotTouchingGoal(bc->origin, &active_goal)) {
+            else if (Q2BotReachedGoal(bc, &active_goal)) {
                 if (bot_developer) {
                         botimport.Print(PRT_MESSAGE,
                             "bot %d: REACHED goal area %d (ctfrole %d)\n",
@@ -4155,6 +4161,48 @@ static qboolean Q2BotHookPathClear(int client, vec3_t eye, vec3_t anchor)
     VectorMA(eye, len - 48.0f, dir, stop);
     tr = q2import.Trace(eye, mins, maxs, stop, client + 1, Q2_MASK_SHOT);
     return (tr.fraction > 0.98f) ? true : false;
+}
+
+/*
+ * Did the bot pass through this goal, not merely stand in it?
+ *
+ * BotTouchingGoal is a point test on the current origin. The AI runs at 10Hz,
+ * so a bot at 300 moves 30 units between one test and the next and a bot at
+ * 800 moves eighty -- against a goal box that is only about sixty units across
+ * once the player box is added. Past roughly 600 a bot is simply never sampled
+ * inside it: outside on one frame, outside on the far side on the next, having
+ * gone straight through the waypoint without it ever registering. It then turns
+ * round, comes back, and does it again.
+ *
+ * That is why steals fell as speed rose, all the way down, with no optimum --
+ * which is the signature of a defect that scales with speed rather than a
+ * trade between the two. Sweeping the segment the bot actually travelled fixes
+ * it: sixteen-unit samples are comfortably finer than the box.
+ */
+static qboolean Q2BotReachedGoal(q2_botclient_t *bc, bot_goal_t *goal)
+{
+    vec3_t seg, p;
+    float len;
+    int i, steps;
+
+    if (BotTouchingGoal(bc->origin, goal)) return true;
+    if (!bc->have_prev) return false;
+
+    VectorSubtract(bc->origin, bc->prev_origin, seg);
+    len = VectorLength(seg);
+    if (len <= 16.0f) return false;
+
+    steps = (int)(len / 16.0f);
+    if (steps > 64) steps = 64;
+
+    for (i = 1; i < steps; i++) {
+        float f = (float)i / (float)steps;
+        p[0] = bc->prev_origin[0] + seg[0] * f;
+        p[1] = bc->prev_origin[1] + seg[1] * f;
+        p[2] = bc->prev_origin[2] + seg[2] * f;
+        if (BotTouchingGoal(p, goal)) return true;
+    }
+    return false;
 }
 
 static void Q2BotGroundHook(int client, q2_botclient_t *bc,
@@ -5867,7 +5915,7 @@ static int Q2BotAI(int client, float thinktime)
             {
                 bot_goal_t nbg_top;
                 if (bc->hasnbg && BotGetTopGoal(bc->goalstate, &nbg_top)) {
-                    if (BotTouchingGoal(bc->origin, &nbg_top)) {
+                    if (Q2BotReachedGoal(bc, &nbg_top)) {
                         BotPopGoal(bc->goalstate);
                         bc->hasnbg = false;
                         bc->aistate = (Q2BotAggression(bc) >= 50)
@@ -5898,7 +5946,7 @@ static int Q2BotAI(int client, float thinktime)
                               Q2BotTravelFlags());
 
                 /* If we reached the last-known position, give up */
-                if (BotTouchingGoal(bc->origin, &chase_goal)) {
+                if (Q2BotReachedGoal(bc, &chase_goal)) {
                     bc->aistate    = Q2AI_SEEK_LTG;
                     bc->enemy      = -1;
                     bc->chase_time = 0;
