@@ -537,6 +537,7 @@ typedef struct {
     bot_goal_t  ctf_goal;           /* current CTF navigation goal (flag location) */
     qboolean    ctf_has_flag;       /* true if carrying enemy flag */
     qboolean    ctf_cantcap;        /* carrying, but our own flag is not home */
+    int         ctf_routefails;     /* dead route lookups during this run */
     int         ctf_myflag;         /* which flag is ours: 0 unknown, 1 red, 2 blue */
 } q2_botclient_t;
 
@@ -1540,10 +1541,20 @@ static int Q2BotStartFrame(float time)
     bot_developer = (int)LibVarGetValue("bot_developer");
     {
         static int reported;
-        if (bot_developer && !reported && aasworld.initialized) {
+        /*
+         * This block builds the defend zones and the staging areas -- which
+         * bots need in order to play at all -- alongside a census that is
+         * purely diagnostic. It was gated on bot_developer as a whole, so on
+         * a normal server every zone was empty: defenders fell through to a
+         * fallback that sends them to stand on their own flag, and
+         * Q2BotBaseGoal failed for every role. Only the printing is a
+         * developer concern; the data is not.
+         */
+        if (!reported && aasworld.initialized) {
             int ttcount[32], a, r, n;
             aas_reachability_t rr;
             reported = 1;
+            if (bot_developer)
             botimport.Print(PRT_MESSAGE,
                 "Q2Adapt: travelflags=0x%x grapple=%d offhand=%d "
                 "weapindex_grapple=%d on='%s' off='%s'\n",
@@ -1564,9 +1575,12 @@ static int Q2BotStartFrame(float time)
                     if (n >= 0 && n < 32) ttcount[n]++;
                 }
             }
+            if (bot_developer)
             botimport.Print(PRT_MESSAGE, "Q2Adapt: numareas=%d numreach=%d bytype:", aasworld.numareas, aasworld.reachabilitysize);
             for (n = 0; n < 32; n++)
+                if (bot_developer)
                 if (ttcount[n]) botimport.Print(PRT_MESSAGE, " %d=%d", n, ttcount[n]);
+            if (bot_developer)
             botimport.Print(PRT_MESSAGE, "  (14 = grapple)\n");
             /*
              * Connectivity census, printed once per map under bot_developer.
@@ -1620,6 +1634,7 @@ static int Q2BotStartFrame(float time)
                             Com_Memcpy(&z->items[z->count++], &g, sizeof(bot_goal_t));
                         }
                     }
+                    if (bot_developer)
                     botimport.Print(PRT_MESSAGE,
                         "Q2Adapt: %s defend zone has %d items within %.0f of the flag\n",
                         f2 ? "blue" : "red", z->count, Q2_DEFEND_RADIUS);
@@ -1629,6 +1644,7 @@ static int Q2BotStartFrame(float time)
                 for (a = 0; a < q2_numstaging; a++)
                     if (AAS_AreaGrounded(q2_staging[a]) && !AAS_AreaSwim(q2_staging[a]))
                         q2_drystaging[q2_numdrystaging++] = q2_staging[a];
+                if (bot_developer)
                 botimport.Print(PRT_MESSAGE,
                     "Q2Adapt: %d staging areas (%d on dry ground)\n",
                     q2_numstaging, q2_numdrystaging);
@@ -1646,6 +1662,7 @@ static int Q2BotStartFrame(float time)
                         if (AAS_AreaTravelTimeToGoalArea(a, aasworld.areas[a].center,
                                                           flags[f], tfl)) ok++;
                     }
+                    if (bot_developer)
                     botimport.Print(PRT_MESSAGE,
                         "Q2Adapt: %s flag area %d reachable from %d of %d linked areas (%d%%)\n",
                         f ? "blue" : "red", flags[f], ok, tot, tot ? ok * 100 / tot : 0);
@@ -1665,6 +1682,7 @@ static int Q2BotStartFrame(float time)
                                     oneway++;
                             }
                         }
+                        if (bot_developer)
                         botimport.Print(PRT_MESSAGE,
                             "Q2Adapt:   flag can reach %d areas, of which %d cannot get back (one-way)\n",
                             back, oneway);
@@ -1682,6 +1700,7 @@ static int Q2BotStartFrame(float time)
                                 if (!AAS_AreaTravelTimeToGoalArea(b2,
                                         aasworld.areas[b2].center, flags[f], all)) ow2++;
                             }
+                            if (bot_developer)
                             botimport.Print(PRT_MESSAGE,
                                 "Q2Adapt:   with every travel type allowed: %d still one-way\n", ow2);
                             /* Where are they? If they cluster at odd heights or
@@ -1697,6 +1716,7 @@ static int Q2BotStartFrame(float time)
                                             aasworld.areas[b2].center, flags[f], all)) continue;
                                     if (AAS_AreaSwim(b2)) water++;
                                     if (AAS_AreaGrounded(b2)) ground++;
+                                    if (bot_developer)
                                     botimport.Print(PRT_MESSAGE,
                                         "Q2Adapt:     one-way area %d at %.0f,%.0f,%.0f grounded=%d swim=%d\n",
                                         b2, aasworld.areas[b2].center[0],
@@ -1718,12 +1738,14 @@ int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best, q2_re
             static float next;
             if (AAS_Time() > next) {
                 next = AAS_Time() + 30.0f;
+                if (bot_developer)
                 botimport.Print(PRT_MESSAGE,
                     "Q2Adapt: grapple routes %d/%d, botlib hooks %d, ground hooks %d "
                     "(caught %d, missed %d, mean gain %.0f)\n",
                     q2_grapple_best, q2_reach_total, q2_grapple_fired, q2_ghook_fires,
                     q2_ghook_catches, q2_ghook_misses,
                     q2_ghook_catches ? q2_ghook_gain / q2_ghook_catches : 0.0);
+                if (bot_developer)
                 botimport.Print(PRT_MESSAGE,
                     "Q2Chain: links %d, cold %d, mean leak %.0f over %.2fs "
                     "(ground %d, ceiling %d)\n",
@@ -2051,8 +2073,16 @@ static int Q2BotAggression(q2_botclient_t *bc)
     /* Very low health — avoid all combat */
     if (bc->health < 40) return 0;
 
+    /*
+     * Ammunition and powerup slots are one later than in stock Quake II,
+     * because this mod inserts weapon_plasma at slot 18. These were the stock
+     * numbers, so every test below was reading the wrong count -- "quad" was
+     * really slugs, "rockets" were really cells -- and a bot with a loaded
+     * rocket launcher scored itself as unarmed.
+     */
+
     /* Quad damage — always fight */
-    if (inv[23] > 0) return 100;
+    if (inv[24] > 0) return 100;
 
     /* Enemy is way higher than bot — extreme height disadvantage.
      * Mirrors Q3's BotAggression (ai_dmq3.c:2210). */
@@ -2072,18 +2102,24 @@ static int Q2BotAggression(q2_botclient_t *bc)
     }
 
     /* Check from strongest to weakest weapon + sufficient ammo */
-    if (inv[17] > 0 && inv[20] > 7)   return 100; /* BFG + cells */
-    if (inv[16] > 0 && inv[22] > 5)   return 95;  /* Railgun + slugs */
-    if (inv[14] > 0 && inv[21] > 5)   return 90;  /* Rocket Launcher + rockets */
-    if (inv[15] > 0 && inv[20] > 40)  return 90;  /* Hyperblaster + cells */
-    if (inv[11] > 0 && inv[19] > 50)  return 85;  /* Chaingun + bullets */
+    if (inv[17] > 0 && inv[21] > 7)   return 100; /* BFG + cells */
+    if (inv[16] > 0 && inv[23] > 5)   return 95;  /* Railgun + slugs */
+    if (inv[14] > 0 && inv[22] > 5)   return 90;  /* Rocket Launcher + rockets */
+    if (inv[15] > 0 && inv[21] > 40)  return 90;  /* Hyperblaster + cells */
+    if (inv[11] > 0 && inv[20] > 50)  return 85;  /* Chaingun + bullets */
     if (inv[13] > 0 && inv[12] > 10)  return 80;  /* Grenade Launcher + grenades */
-    if (inv[9]  > 0 && inv[18] > 10)  return 60;  /* Super Shotgun + shells */
-    if (inv[10] > 0 && inv[19] > 30)  return 50;  /* Machinegun + bullets */
-    if (inv[8]  > 0 && inv[18] > 10)  return 50;  /* Shotgun + shells */
+    if (inv[9]  > 0 && inv[19] > 10)  return 60;  /* Super Shotgun + shells */
+    if (inv[10] > 0 && inv[20] > 30)  return 50;  /* Machinegun + bullets */
+    if (inv[8]  > 0 && inv[19] > 10)  return 50;  /* Shotgun + shells */
 
-    /* Blaster only, or weapons without ammo */
-    return 0;
+    /*
+     * Blaster only. Still worth fighting: the blaster never runs out, so a bot
+     * is never actually unarmed, and returning zero here put it straight into
+     * retreat for the whole match. Backing away from a fight it could take is
+     * worse than taking it -- and a bot that will not shoot is no use to its
+     * team whatever it is carrying.
+     */
+    return 50;
 }
 
 /* ====================================================================
@@ -3729,6 +3765,10 @@ static qboolean Q2BotUnstickHook(int client, q2_botclient_t *bc, q2_bot_input_t 
     return false;
 }
 
+/* Declared in be_aas_route.c; the AAS headers in this tree do not export it. */
+int AAS_AreaReachabilityToGoalArea(int areanum, vec3_t origin,
+                                   int goalareanum, int travelflags);
+
 static void Q2BotGroundHook(int client, q2_botclient_t *bc,
                              qboolean in_combat, q2_bot_input_t *in,
                              bot_moveresult_t *mr)
@@ -4275,11 +4315,39 @@ static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
      * goal area 722 (ctfrole 4)" -- and never went near a flag, which is why
      * steals were zero.
      *
-     * Two things are deliberately left alone: a nearby-item detour, which is
-     * meant to sit on top of the long-term goal and is popped when reached,
-     * and a staging goal, which is the router's way of getting a stranded bot
-     * back to somewhere it can navigate from.
+     * A staging goal is left alone: that is the router's way of getting a
+     * stranded bot back to somewhere it can navigate from, and overruling it
+     * strands the bot.
+     *
+     * A nearby-item detour is left alone for every role except a flag run.
+     * The detour is meant to sit on top of the long-term goal and be popped
+     * when reached, but nothing pops one the bot never reaches, and while it
+     * is there this function does nothing at all -- so the flag goal is never
+     * put back and the bot steers to the item for as long as it lives. That is
+     * what stopped every steal: attackers arrived inside 41 units of the enemy
+     * flag with an item 76 units away and 76 units below as their actual
+     * target, orbited it, and were killed. Nothing outranks fetching the flag,
+     * so on a flag run the detour is dropped and the flag goal goes back on
+     * top.
      */
+    if (bc->hasnbg &&
+        (bc->ctf_has_flag ||
+         bc->ctf_ltgtype == Q2_LTG_GETFLAG ||
+         bc->ctf_ltgtype == Q2_LTG_RUSHBASE))
+    {
+        BotPopGoal(bc->goalstate);
+        bc->hasnbg = false;
+        /* Let the combat NBG state fall out on its next tick rather than
+         * sitting in it for another two and a half seconds with no detour. */
+        bc->nbg_combat_time = 0.0f;
+        /* The pop took the detour off; whatever is underneath is judged
+         * against the CTF goal by the block below. */
+        if (bot_developer)
+            botimport.Print(PRT_MESSAGE,
+                "NBGDROP: flag run reclaimed from an item detour (role %d)\n",
+                bc->ctf_ltgtype);
+    }
+
     if (bc->hasgoal && !bc->hasnbg && !bc->has_staging) {
         bot_goal_t top;
         if (!BotGetTopGoal(bc->goalstate, &top)) {
@@ -4840,18 +4908,24 @@ static int Q2BotAI(int client, float thinktime)
             bot_goal_t top;
             qboolean havetop = BotGetTopGoal(bc->goalstate, &top);
             botimport.Print(PRT_MESSAGE,
-                "APPROACH bot %d: dist=%.0f org=(%.0f %.0f %.0f) flagorg=(%.0f %.0f %.0f) "
-                "dz=%.0f area=%d flagarea=%d ttime=%d role=%d state=%d hasgoal=%d hasnbg=%d "
+                "APPROACH bot %d: myflag=%d dist=%.0f d=(%.0f %.0f %.0f) "
+                "org=(%.0f %.0f %.0f) flagorg=(%.0f %.0f %.0f) "
+                "area=%d flagarea=%d ttime=%d role=%d state=%d "
+                "hasgoal=%d hasnbg=%d staging=%d ctfgoal=%d ctforg=(%.0f %.0f %.0f) "
                 "topgoal=%d toporg=(%.0f %.0f %.0f) health=%d vel=%.0f\n",
-                client, fdist,
+                client, bc->ctf_myflag, fdist,
+                ef->origin[0] - bc->origin[0],
+                ef->origin[1] - bc->origin[1],
+                ef->origin[2] - bc->origin[2],
                 bc->origin[0], bc->origin[1], bc->origin[2],
                 ef->origin[0], ef->origin[1], ef->origin[2],
-                ef->origin[2] - bc->origin[2],
                 BotReachabilityArea(bc->origin, client), ef->areanum,
                 AAS_AreaTravelTimeToGoalArea(
                     BotReachabilityArea(bc->origin, client), bc->origin,
                     ef->areanum, Q2BotTravelFlags()),
                 bc->ctf_ltgtype, bc->aistate, bc->hasgoal, bc->hasnbg,
+                bc->has_staging, bc->ctf_goal.areanum,
+                bc->ctf_goal.origin[0], bc->ctf_goal.origin[1], bc->ctf_goal.origin[2],
                 havetop ? top.areanum : -1,
                 havetop ? top.origin[0] : 0.0f,
                 havetop ? top.origin[1] : 0.0f,
@@ -4977,11 +5051,24 @@ static int Q2BotAI(int client, float thinktime)
                 bc->enemysight_time = now; /* #2: reaction timer starts */
                 bc->enemyposition_time = 0; /* force velocity cache update */
                 if (aggression >= 50) {
-                    /* Q3 empties goal stack when entering aggressive fight
-                     * (ai_dmnet.c AINode_Seek_LTG line 1858). */
-                    BotEmptyGoalStack(bc->goalstate);
-                    bc->hasgoal = false;
-                    bc->hasnbg  = false;
+                    /*
+                     * Q3 empties the goal stack when a fight starts
+                     * (ai_dmnet.c AINode_Seek_LTG line 1858), which suits a
+                     * deathmatch bot whose goals are all items.
+                     *
+                     * It does not suit a bot on a flag run. Dropping the stack
+                     * at every contact means the way to the enemy flag has to
+                     * be found again after each skirmish, and a carrier loses
+                     * the way home entirely -- on a map where the crossing is
+                     * already 38 seconds, that is the run over. Attackers and
+                     * carriers keep their goal and fight on the move.
+                     */
+                    if (bc->ctf_ltgtype != Q2_LTG_GETFLAG &&
+                        bc->ctf_ltgtype != Q2_LTG_RUSHBASE) {
+                        BotEmptyGoalStack(bc->goalstate);
+                        bc->hasgoal = false;
+                        bc->hasnbg  = false;
+                    }
                     bc->aistate = Q2AI_BATTLE_FIGHT;
                 } else {
                     /* Q3 preserves goals when retreating. */
@@ -5141,7 +5228,25 @@ static int Q2BotAI(int client, float thinktime)
              * Q3 ai_dmnet.c AINode_Battle_Fight: pure combat, no item
              * pickup.  The goal stack was emptied on entering this state. */
             in_combat = true;
-            if (bc->enemy >= 0) {
+            /*
+             * A bot with somewhere to be keeps going while it fights.
+             *
+             * Standing and trading shots is right for a bot whose only job is
+             * the fight in front of it. It is wrong for one carrying the flag
+             * home, and wrong for one crossing to the enemy base: those stop at
+             * the first contact and never arrive. It is also the worse way to
+             * fight -- a moving target is harder to hit and takes less splash.
+             *
+             * So an attacker or a carrier navigates and shoots at the same
+             * time; everyone else fights on the spot, dodging as before.
+             */
+            if (bc->ctf_ltgtype == Q2_LTG_GETFLAG ||
+                bc->ctf_ltgtype == Q2_LTG_RUSHBASE) {
+                Q2BotNavigateGoals(client, bc, bot_eye, &moveresult);
+                Q2BotCheckBlocked(client, bc, &moveresult);
+                if (bc->enemy >= 0)
+                    Q2BotAimAndFire(client, bc->enemy, bot_eye);
+            } else if (bc->enemy >= 0) {
                 Q2BotAttackMove(client, bc, bc->enemy);
                 Q2BotAimAndFire(client, bc->enemy, bot_eye);
             }
@@ -5156,12 +5261,33 @@ static int Q2BotAI(int client, float thinktime)
             in_combat  = true;
             if (bc->enemy >= 0)
                 Q2BotAimAndFire(client, bc->enemy, bot_eye);
-            /* Check for nearby goals every 1s (Q3 ai_dmnet.c:2429) */
-            if (!bc->hasnbg && bc->retreat_check_time < AAS_Time()) {
+            /* Check for nearby goals every 1s (Q3 ai_dmnet.c:2429).
+             *
+             * Not on a flag run. This was the last place an attacker could
+             * still be handed a shopping errand, and it is the worst one,
+             * because it fires exactly where the fighting is: in the enemy
+             * flag room. Measured on lmctf05, attackers reached 41 units of
+             * the enemy flag and 303 of 342 frames inside 400 units had a top
+             * goal that was not the flag -- 273 of them in this state, walking
+             * to an item 76 units to the side and 76 below while standing on
+             * top of the thing they came for. The route in is judged against
+             * bc->ltg, which for an attacker is a stale item goal from before
+             * it took the role, so the detour was not even measured against
+             * the flag run it was interrupting.
+             */
+            if (!bc->hasnbg && bc->retreat_check_time < AAS_Time() &&
+                !bc->ctf_has_flag &&
+                bc->ctf_ltgtype != Q2_LTG_GETFLAG &&
+                bc->ctf_ltgtype != Q2_LTG_RUSHBASE)
+            {
+                bot_goal_t *nbg_ltg =
+                    (bc->ctf_ltgtype != Q2_LTG_NONE && bc->ctf_goal.areanum)
+                        ? &bc->ctf_goal
+                        : ((bc->ltg.flags & GFL_ROAM) ? NULL : &bc->ltg);
                 bc->retreat_check_time = AAS_Time() + 1.0f;
                 if (BotChooseNBGItem(bc->goalstate, bc->origin,
                                       bc->inventory, Q2BotTravelFlags(),
-                                      &bc->ltg, 150)) {
+                                      nbg_ltg, 150)) {
                     bc->hasnbg = true;
                     bc->nbg_combat_time = AAS_Time() + 2.5f;
                     bc->aistate = Q2AI_BATTLE_NBG;
@@ -5292,14 +5418,42 @@ static int Q2BotAI(int client, float thinktime)
     if (bc->pm_type != Q2PM_DEAD && bc->pm_type != Q2PM_GIB &&
         q2input.speed <= 0.0f)
     {
-        bot_goal_t g;
         vec3_t to;
         qboolean got = false;
 
-        if (bc->hasgoal && BotGetTopGoal(bc->goalstate, &g) && g.areanum) {
-            VectorSubtract(g.origin, bc->origin, to);
-            to[2] = 0.0f;
-            if (VectorNormalize(to) > 1.0f) got = true;
+        /*
+         * Keep moving -- but along the route, never straight at the goal.
+         *
+         * Steering at the goal's origin looks like the obvious way to make a
+         * stalled bot go somewhere, and it is badly wrong in a level with any
+         * shape to it. On lmctf01 the enemy flag is 1536 units away as the
+         * crow flies and 11441 by the only route there is, and that route
+         * starts by heading the other way. So every stalled frame drove the
+         * bot at full speed into the wall between the two bases, where it
+         * pinned itself, got hooked off by the stuck handling, and did it
+         * again -- which is exactly the eight-hundred-to-thirteen-hundred unit
+         * wall the closest-approach measurements kept hitting.
+         *
+         * The next reachability is the right heading: it is the direction the
+         * route actually wants, and following it while the movement code has
+         * nothing to say keeps the bot on the path rather than across it.
+         */
+        {
+            bot_goal_t g;
+            int here, rnum;
+
+            if (bc->hasgoal && BotGetTopGoal(bc->goalstate, &g) && g.areanum &&
+                (here = BotReachabilityArea(bc->origin, client + 1)) > 0) {
+                rnum = AAS_AreaReachabilityToGoalArea(here, bc->origin,
+                                                      g.areanum, Q2BotTravelFlags());
+                if (rnum > 0) {
+                    aas_reachability_t lr;
+                    AAS_ReachabilityFromNum(rnum, &lr);
+                    VectorSubtract(lr.end, bc->origin, to);
+                    to[2] = 0.0f;
+                    if (VectorNormalize(to) > 1.0f) got = true;
+                }
+            }
         }
         if (!got && (bc->last_movedir[0] != 0.0f || bc->last_movedir[1] != 0.0f)) {
             VectorCopy(bc->last_movedir, to);

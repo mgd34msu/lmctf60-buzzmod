@@ -1,3 +1,8 @@
+// Ammunition slot numbers here are indices into the game's itemlist, and this
+// mod inserts weapon_plasma at slot 18 -- so every ammo type sits one place
+// later than it does in stock Quake II. They were the stock numbers, which
+// meant every weapon was scored against the wrong ammunition count and so
+// scored zero, leaving the blaster's flat weight to win every time.
 // Default weapon weight configuration for Q3 botlib backport to Quake II.
 // Loaded by BotLoadWeaponWeights() via be_ai_weap.c::ReadWeightConfig().
 //
@@ -36,7 +41,7 @@ weight "Blaster"
 weight "Shotgun"
     switch(8) {
         case 1: return 0;
-        default: switch(18) {
+        default: switch(19) {
             case 1: return 0;
             default: switch(200) {
                 case 200: return 340;
@@ -50,7 +55,7 @@ weight "Shotgun"
 weight "Super Shotgun"
     switch(9) {
         case 1: return 0;
-        default: switch(18) {
+        default: switch(19) {
             case 1: return 0;
             default: switch(200) {
                 case 200: return 400;
@@ -64,7 +69,7 @@ weight "Super Shotgun"
 weight "Machinegun"
     switch(10) {
         case 1: return 0;
-        default: switch(19) {
+        default: switch(20) {
             case 1: return 0;
             default: switch(200) {
                 case 600: return 250;
@@ -77,7 +82,7 @@ weight "Machinegun"
 weight "Chaingun"
     switch(11) {
         case 1: return 0;
-        default: switch(19) {
+        default: switch(20) {
             case 1: return 0;
             default: switch(200) {
                 case 400: return 370;
@@ -111,7 +116,7 @@ weight "Grenade Launcher"
 weight "Rocket Launcher"
     switch(14) {
         case 1: return 0;
-        default: switch(21) {
+        default: switch(22) {
             case 1: return 0;
             default: switch(200) {
                 case 100: return 150;
@@ -125,7 +130,7 @@ weight "Rocket Launcher"
 weight "HyperBlaster"
     switch(15) {
         case 1: return 0;
-        default: switch(20) {
+        default: switch(21) {
             case 1: return 0;
             default: switch(200) {
                 case 500: return 390;
@@ -139,7 +144,7 @@ weight "HyperBlaster"
 weight "Railgun"
     switch(16) {
         case 1: return 0;
-        default: switch(22) {
+        default: switch(23) {
             case 1: return 0;
             default: switch(200) {
                 case 250: return 360;
@@ -152,7 +157,7 @@ weight "Railgun"
 weight "BFG10K"
     switch(17) {
         case 1: return 0;
-        default: switch(20) {
+        default: switch(21) {
             case 1: return 0;
             default: switch(200) {
                 case 100: return 80;
@@ -185,7 +190,7 @@ weight "Phalanx"
 weight "Boomer"
     switch(50) {
         case 1: return 0;
-        default: switch(20) {
+        default: switch(21) {
             case 1: return 0;
             default: switch(200) {
                 case 350: return 360;
@@ -224,7 +229,7 @@ weight "ETF Rifle"
 weight "Plasma Beam"
     switch(58) {
         case 1: return 0;
-        default: switch(20) {
+        default: switch(21) {
             case 1: return 0;
             default: switch(200) {
                 case 500: return 400;

@@ -389,6 +389,16 @@ void BotGetWeaponInfo(int weaponstate, int weapon, weaponinfo_t *weaponinfo)
 {
 	bot_weaponstate_t *ws;
 
+	/*
+	 * Clear it first. Every early return below leaves the caller holding
+	 * whatever was on the stack, and both callers read the projectile speed
+	 * and damage type straight out of it afterwards to lead a shot and to
+	 * decide whether firing would hurt the shooter. Reading a stack full of
+	 * rubbish as a weapon description is a crash waiting for the first bot
+	 * that fights with an unconfigured weapon.
+	 */
+	Com_Memset(weaponinfo, 0, sizeof(weaponinfo_t));
+
 	if (!BotValidWeaponNumber(weapon)) return;
 	ws = BotWeaponStateFromHandle(weaponstate);
 	if (!ws) return;
