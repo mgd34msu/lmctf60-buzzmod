@@ -487,6 +487,7 @@ typedef struct {
 } q2_botclient_t;
 
 static qboolean Q2BotSwimOut(int client, q2_botclient_t *bc);
+static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc);
 
 /* ====================================================================
  * Module globals
@@ -544,6 +545,24 @@ static int q2_numstaging;
 /* Of those, the ones on dry ground -- what a bot in the water aims for. */
 static int q2_drystaging[Q2_MAX_STAGING];
 static int q2_numdrystaging;
+
+/*
+ * Defend zones.
+ *
+ * A defender's job is not to stand on the flag. It works the flag room and
+ * the rooms feeding into it, taking the armour and ammunition so an attacker
+ * cannot stock up on the way in, and staying in motion -- a moving target is
+ * harder to hit and takes less splash. So each base gets a list of the items
+ * within DEFEND_RADIUS of its flag, and a defending bot cycles through those
+ * rather than being sent to the flag itself.
+ */
+#define Q2_DEFEND_RADIUS   900.0f
+#define Q2_MAX_DEFENDITEMS 32
+typedef struct {
+    bot_goal_t items[Q2_MAX_DEFENDITEMS];
+    int        count;
+} q2_defendzone_t;
+static q2_defendzone_t q2_reddefend, q2_bluedefend;
 
 /* Per-entity velocity cache: computed from origin deltas between frames.
  * Neither Q2's bot_updateentity_t nor Q3's bot_entitystate_t carry velocity,
@@ -1485,6 +1504,38 @@ static int Q2BotStartFrame(float time)
                                                        ctf_blueflag.areanum, tfl2)) continue;
                     q2_staging[q2_numstaging++] = a;
                 }
+            /* Items worth holding while defending: armour and ammunition
+             * first, since denying those is most of the job. */
+            {
+                static const char *defnames[] = {
+                    "Body Armor","Combat Armor","Jacket Armor","Armor Shard",
+                    "Shells","Bullets","Rockets","Cells","Slugs","Grenades",
+                    "Health","Large Health","Small Health","Adrenaline",
+                    "Rocket Launcher","Railgun","Chaingun","Super Shotgun", NULL
+                };
+                int f2, k;
+                for (f2 = 0; f2 < 2; f2++) {
+                    q2_defendzone_t *z = f2 ? &q2_bluedefend : &q2_reddefend;
+                    bot_goal_t *flag  = f2 ? &ctf_blueflag : &ctf_redflag;
+                    z->count = 0;
+                    if (!flag->areanum) continue;
+                    for (k = 0; defnames[k] && z->count < Q2_MAX_DEFENDITEMS; k++) {
+                        int idx = -1;
+                        bot_goal_t g;
+                        while ((idx = BotGetLevelItemGoal(idx, (char *)defnames[k], &g)) >= 0
+                               && z->count < Q2_MAX_DEFENDITEMS) {
+                            vec3_t d;
+                            if (!g.areanum) continue;
+                            VectorSubtract(g.origin, flag->origin, d);
+                            if (VectorLength(d) > Q2_DEFEND_RADIUS) continue;
+                            Com_Memcpy(&z->items[z->count++], &g, sizeof(bot_goal_t));
+                        }
+                    }
+                    botimport.Print(PRT_MESSAGE,
+                        "Q2Adapt: %s defend zone has %d items within %.0f of the flag\n",
+                        f2 ? "blue" : "red", z->count, Q2_DEFEND_RADIUS);
+                }
+            }
                 q2_numdrystaging = 0;
                 for (a = 0; a < q2_numstaging; a++)
                     if (AAS_AreaGrounded(q2_staging[a]) && !AAS_AreaSwim(q2_staging[a]))
@@ -2827,16 +2878,32 @@ ctf_navigate:
                  * which is what a defender actually does. Standing still is
                  * never the answer.
                  */
+                /* Reached one point in the zone: go straight to another, so
+                 * the bot keeps circulating instead of stopping. */
                 BotPopGoal(bc->goalstate);
                 bc->hasgoal            = false;
                 bc->hasnbg             = false;
-                bc->ctf_ltgtype        = Q2_LTG_NONE;
-                bc->ctf_goal_time      = 0.0f;
-                bc->ctf_decide_time    = now + 6.0f;   /* patrol before re-deciding */
-                bc->ctf_roam_time      = now + 6.0f;
-                bc->ltg_check_time     = 0.0f;
                 bc->goal_best_ttime    = 0;
                 bc->goal_progress_time = now;
+                bc->ltg_check_time     = 0.0f;
+                {
+                    vec3_t dr, db;
+                    q2_defendzone_t *z;
+                    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
+                    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
+                    z = (VectorLengthSquared(dr) < VectorLengthSquared(db))
+                      ? &q2_reddefend : &q2_bluedefend;
+                    if (z->count > 1) {
+                        Com_Memcpy(&bc->ctf_goal, &z->items[rand() % z->count],
+                                   sizeof(bot_goal_t));
+                        bc->ctf_goal_time = now + CTF_DEFENDBASE_TIME;
+                        Q2BotCTFGoalActive(bc);
+                    } else {
+                        bc->ctf_ltgtype     = Q2_LTG_NONE;
+                        bc->ctf_decide_time = now + 4.0f;
+                        bc->ctf_roam_time   = now + 4.0f;
+                    }
+                }
             }
             else if (BotTouchingGoal(bc->origin, &active_goal)) {
                 if (bot_developer)
@@ -3495,14 +3562,29 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
             {
                 vec3_t dr, db;
                 float dist_red, dist_blue;
+                q2_defendzone_t *z;
                 VectorSubtract(bc->origin, ctf_redflag.origin, dr);
                 VectorSubtract(bc->origin, ctf_blueflag.origin, db);
                 dist_red = VectorLengthSquared(dr);
                 dist_blue = VectorLengthSquared(db);
-                if (dist_red < dist_blue)
+                if (dist_red < dist_blue) {
                     Com_Memcpy(&bc->ctf_goal, &ctf_redflag, sizeof(bot_goal_t));
-                else
+                    z = &q2_reddefend;
+                } else {
                     Com_Memcpy(&bc->ctf_goal, &ctf_blueflag, sizeof(bot_goal_t));
+                    z = &q2_bluedefend;
+                }
+
+                /*
+                 * Go to something in the flag room, not to the flag. Standing
+                 * on it achieves nothing; the job is holding the armour and
+                 * ammunition an attacker would collect on the way in, and
+                 * staying in motion while doing it. The flag itself is only
+                 * the fallback when the zone came up empty.
+                 */
+                if (z->count > 0)
+                    Com_Memcpy(&bc->ctf_goal, &z->items[rand() % z->count],
+                               sizeof(bot_goal_t));
             }
 
             Q2BotCTFGoalActive(bc);
