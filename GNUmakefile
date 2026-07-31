@@ -112,7 +112,8 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
 		 bl_main.o bl_cmd.o bl_spawn.o bl_botcfg.o bl_debug.o bl_redirgi.o \
-		 bl_chat.o ai_chat.o bl_ctf.o bl_know.o g_botmenu.o
+		 bl_chat.o ai_chat.o bl_ctf.o bl_know.o g_botmenu.o \
+		 sg_oracle.o
 
 
 ######################################################################
