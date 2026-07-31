@@ -2815,6 +2815,29 @@ ctf_navigate:
                  * rather than up to it.
                  */
             }
+            else if (bc->ctf_ltgtype == Q2_LTG_DEFENDBASE &&
+                     BotTouchingGoal(bc->origin, &active_goal)) {
+                /*
+                 * A defender that has reached its own flag must not simply be
+                 * given the same goal again -- it arrives, the goal is popped,
+                 * the CTF role pushes it straight back, and the bot stands on
+                 * the flag re-arriving every frame. Hand it back to item
+                 * seeking for a while instead: that keeps it moving around its
+                 * own base, picking things up and watching the approaches,
+                 * which is what a defender actually does. Standing still is
+                 * never the answer.
+                 */
+                BotPopGoal(bc->goalstate);
+                bc->hasgoal            = false;
+                bc->hasnbg             = false;
+                bc->ctf_ltgtype        = Q2_LTG_NONE;
+                bc->ctf_goal_time      = 0.0f;
+                bc->ctf_decide_time    = now + 6.0f;   /* patrol before re-deciding */
+                bc->ctf_roam_time      = now + 6.0f;
+                bc->ltg_check_time     = 0.0f;
+                bc->goal_best_ttime    = 0;
+                bc->goal_progress_time = now;
+            }
             else if (BotTouchingGoal(bc->origin, &active_goal)) {
                 if (bot_developer)
                     botimport.Print(PRT_MESSAGE,
