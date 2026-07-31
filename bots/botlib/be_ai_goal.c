@@ -593,7 +593,24 @@ void BotInitLevelItems(void)
 		//
 		goalareanum = 0;
 		//if it is a floating item
-		if (spawnflags & 1)
+		/*
+		 * Quake III reads spawnflag bit 0 on an item as "suspended", and
+		 * discards any such item that is neither near the floor nor reachable
+		 * from a jump pad. Quake II means something else entirely by that bit:
+		 * ITEM_TRIGGER_SPAWN, an item that appears when a trigger fires. Maps
+		 * also carry the single-player skill flags there, which are meaningless
+		 * in deathmatch.
+		 *
+		 * Applying the Quake III meaning silently deleted items from the level
+		 * list. On lmctf12 both flags are spawnflags 3 and both vanished, so
+		 * that map had no CTF behaviour at all while everything else about it
+		 * loaded correctly.
+		 *
+		 * The suspended check is therefore skipped here. A genuinely floating
+		 * item still gets a sensible goal through AAS_BestReachableArea below,
+		 * which is the path every other item takes.
+		 */
+		if (0 && (spawnflags & 1))
 		{
 			//if the item is not floating in water
 			if (!(AAS_PointContents(origin) & CONTENTS_WATER))
