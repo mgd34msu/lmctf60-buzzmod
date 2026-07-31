@@ -74,6 +74,10 @@ typedef struct bot_globals_s
 	 * hop chain has anything to compound */
 	signed char cj_phase[256];
 	signed char cj_side[256];
+	/* frames left in the strafe pulse -- the off-axis input is only worth
+	 * anything at the jump itself, and held any longer it stops being a way
+	 * to keep speed and becomes actual sideways travel */
+	signed char sj_pulse[256];
 	signed char sj_side[256];
 	qboolean    sj_grounded[256];
 } bot_globals_t;
