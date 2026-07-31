@@ -318,7 +318,22 @@ void BotExecuteInput(edict_t *bot)
 	{
 		float speed2 = bot->velocity[0] * bot->velocity[0] +
 		               bot->velocity[1] * bot->velocity[1];
-		float bhmin  = gi.cvar("bot_bunnyhop_minspeed", "180", 0)->value;
+		/*
+		 * Do not leave the ground below running speed.
+		 *
+		 * Quake II gives no air acceleration on these servers and applies no
+		 * air friction either, so horizontal speed is simply frozen for the
+		 * whole arc. Hopping at 180 therefore does not preserve momentum, it
+		 * commits to 180 until landing -- while staying on the ground would
+		 * have wound up to 300 in a fraction of a second. Jumping is worth it
+		 * only once there is something worth keeping, which means at or above
+		 * the run cap, and the hook is what puts a bot above it.
+		 *
+		 * This was 180, and it is why airborne-and-slow was the largest single
+		 * band in the speed breakdown: the bots were jumping their way out of
+		 * the acceleration they had not finished gaining.
+		 */
+		float bhmin  = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
 		int   cl     = DF_ENTCLIENT(bot);
 		qboolean grounded = bot->groundentity != NULL;
 		qboolean canmove  = bot->waterlevel < 2 &&
@@ -357,8 +372,18 @@ void BotExecuteInput(edict_t *bot)
 
 			if (--botglobals.cj_phase[cl] == 0 && grounded)
 			{
-				ucmd.upmove += 400;              /* jump out of the turn */
-				botglobals.sj_side[cl] = side;   /* keep weaving the same way */
+				/*
+				 * Only leave the ground if the pivot actually got the bot up to
+				 * speed. Jumping out of a turn that has not wound up yet freezes
+				 * the half-built speed for the length of the arc, which is the
+				 * opposite of what the entry is for. If it did not work, stay
+				 * down and let the next one start from a faster bot.
+				 */
+				if (speed2 > bhmin * bhmin)
+				{
+					ucmd.upmove += 400;              /* jump out of the turn */
+					botglobals.sj_side[cl] = side;   /* keep weaving the same way */
+				}
 			}
 		}
 		else if (bot_bunnyhop && bot_bunnyhop->value && canmove &&
