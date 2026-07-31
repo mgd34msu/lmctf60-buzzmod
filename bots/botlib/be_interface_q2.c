@@ -2781,8 +2781,26 @@ reselect:
      * Throttle is 0.5s normally, but nbg_check_time is reset to 0 when
      * an LTG is reached, so the first check after pickup is immediate
      * (matches Q3 ai_dmnet.c:1712 setting check_time = now + 0.05). */
-    if (bc->hasgoal && !bc->hasnbg && (now - bc->nbg_check_time) >= 0.5f) {
-        bot_goal_t *ltg_ptr = (bc->ltg.flags & GFL_ROAM) ? NULL : &bc->ltg;
+    /*
+     * No shopping on a flag run. The same rule already applied where a goal
+     * is reached; it was missing here, which is the check that fires while a
+     * bot is walking. Attackers within a few hundred units of the enemy flag
+     * were sitting on a nearby-item detour instead of finishing the run.
+     *
+     * For the other CTF roles the detour is judged against the CTF goal, not
+     * bc->ltg -- that holds whatever item goal the bot had before it took a
+     * role, so routing the detour against it measures the wrong thing.
+     */
+    if (bc->hasgoal && !bc->hasnbg && (now - bc->nbg_check_time) >= 0.5f &&
+        !bc->ctf_has_flag &&
+        bc->ctf_ltgtype != Q2_LTG_GETFLAG &&
+        bc->ctf_ltgtype != Q2_LTG_RUSHBASE)
+    {
+        bot_goal_t *ltg_ptr;
+        if (bc->ctf_ltgtype != Q2_LTG_NONE && bc->ctf_goal.areanum)
+            ltg_ptr = &bc->ctf_goal;
+        else
+            ltg_ptr = (bc->ltg.flags & GFL_ROAM) ? NULL : &bc->ltg;
         bc->nbg_check_time = now;
         if (BotChooseNBGItem(bc->goalstate, bc->origin, bc->inventory,
                               Q2BotTravelFlags(), ltg_ptr, 150)) {
@@ -3019,6 +3037,30 @@ ctf_navigate:
                 } else {
                     bc->hasgoal       = false;
                     bc->ltg_check_time = 0.0f;
+                }
+                /*
+                 * An attacker's goal is the enemy flag, and goes back to
+                 * being the enemy flag the moment anything else is reached.
+                 *
+                 * The no-route fallback (Q2BotBaseGoal) writes a staging
+                 * point in the enemy base into ctf_goal. Without this the bot
+                 * treats that point as the thing it came for: it arrives, the
+                 * goal is popped, the role hands the same point straight back,
+                 * and it never walks the last stretch to the flag. Measured on
+                 * lmctf05, attackers with ctfrole 4 were arriving at areas 426,
+                 * 523, 621 and so on -- items around the enemy flag -- and not
+                 * at the flag area itself.
+                 */
+                if (bc->ctf_ltgtype == Q2_LTG_GETFLAG && !bc->hasnbg) {
+                    bot_goal_t *enemyflag = Q2BotOwnFlagIsRed(bc)
+                                          ? &ctf_blueflag : &ctf_redflag;
+                    if (enemyflag->areanum &&
+                        active_goal.areanum != enemyflag->areanum)
+                    {
+                        Com_Memcpy(&bc->ctf_goal, enemyflag, sizeof(bot_goal_t));
+                        bc->goal_best_ttime    = 0;
+                        bc->goal_progress_time = now;
+                    }
                 }
                 /* Immediately look for nearby items (ammo next to the
                  * weapon that was just picked up). */
@@ -3297,6 +3339,12 @@ static void Q2BotCTFInitFlags(void)
             ctf_blueflag.mins[0], ctf_blueflag.mins[1], ctf_blueflag.mins[2],
             ctf_blueflag.maxs[0], ctf_blueflag.maxs[1], ctf_blueflag.maxs[2],
             ctf_blueflag.flags);
+        botimport.Print(PRT_MESSAGE,
+            "FLAGGOAL: base-to-base travel time red->blue=%d blue->red=%d\n",
+            AAS_AreaTravelTimeToGoalArea(ctf_redflag.areanum,
+                ctf_redflag.origin, ctf_blueflag.areanum, Q2BotTravelFlags()),
+            AAS_AreaTravelTimeToGoalArea(ctf_blueflag.areanum,
+                ctf_blueflag.origin, ctf_redflag.areanum, Q2BotTravelFlags()));
     }
 }
 
@@ -4075,11 +4123,18 @@ static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
      */
     if (bc->hasgoal && !bc->hasnbg && !bc->has_staging) {
         bot_goal_t top;
-        if (BotGetTopGoal(bc->goalstate, &top) &&
-            (top.areanum != bc->ctf_goal.areanum ||
-             !VectorCompare(top.origin, bc->ctf_goal.origin)))
+        if (!BotGetTopGoal(bc->goalstate, &top)) {
+            /* Says it has one, stack says otherwise. Push ours. */
+            bc->hasgoal = false;
+        }
+        else if (top.areanum != bc->ctf_goal.areanum ||
+                 !VectorCompare(top.origin, bc->ctf_goal.origin))
         {
-            BotPopGoal(bc->goalstate);
+            /* Emptied rather than popped once: the stack can hold several
+             * stale entries, and popping one per frame while pushing one
+             * back leaves the rest to accumulate until the goal heap
+             * overflows. */
+            BotEmptyGoalStack(bc->goalstate);
             bc->hasgoal            = false;
             bc->goal_best_ttime    = 0;
             bc->goal_progress_time = AAS_Time();
@@ -4467,6 +4522,10 @@ static int Q2BotAI(int client, float thinktime)
         Com_Memset(&respawn, 0, sizeof(respawn));
         respawn.thinktime   = thinktime;
         respawn.actionflags = Q2_ACTION_RESPAWN;
+        /* Work out which flag is ours again at the next spawn point, so a
+         * bot the mod has moved to the other team does not keep attacking
+         * its own base. */
+        bc->ctf_myflag = 0;
         /* Botlib state reset on death — clear stale navigation and
          * goals but preserve critical persistent fields.
          *
