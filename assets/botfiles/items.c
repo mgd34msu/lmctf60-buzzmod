@@ -711,6 +711,37 @@ iteminfo "item_flag_team2"
     maxs        { 15, 15, 15 }
 }
 
+
+// LMCTF spawns flags from either style: item_flag_team1/2 as above, or the
+// info_flag_red / info_flag_blue markers used by several maps (lmctf16 among
+// them). Both carry the same names so BotGetLevelItemGoal finds the flag
+// whichever the mapper used -- without these, a map using the marker style has
+// no flags in the bots' level item list and no CTF behaviour at all.
+
+iteminfo "info_flag_red"
+{
+    name        "Red Flag"
+    model       "players/male/flag1.md2"
+    modelindex  0
+    type        6
+    index       1
+    respawntime 0
+    mins        { -15, -15, -15 }
+    maxs        { 15, 15, 15 }
+}
+
+iteminfo "info_flag_blue"
+{
+    name        "Blue Flag"
+    model       "players/male/flag2.md2"
+    modelindex  0
+    type        6
+    index       2
+    respawntime 0
+    mins        { -15, -15, -15 }
+    maxs        { 15, 15, 15 }
+}
+
 // -----------------------------------------------------------------------
 // CTF TECH ITEMS
 // -----------------------------------------------------------------------
