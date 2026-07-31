@@ -3848,7 +3848,7 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
 
         yaw   = (float)atan2(in->dir[1], in->dir[0]);
         pitch = LibVarGetValue("bot_groundhook_pitch");
-        if (pitch <= 0.0f) pitch = 10.0f;
+        if (pitch <= 0.0f) pitch = 15.0f;   /* see bl_main.c for the sweep */
         pitch *= (float)(M_PI / 180.0);             /* down is positive here */
 
         /*

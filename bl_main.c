@@ -1242,8 +1242,17 @@ int BotInitLibrary(bot_library_t *lib)
 	 * reads zero -- which is what kept the ground hook from ever firing. */
 	cvar = gi.cvar("bot_groundhook", "1", 0);
 	lib->funcs.BotLibVarSet("bot_groundhook", cvar ? cvar->string : "1");
-	cvar = gi.cvar("bot_groundhook_pitch", "10", 0);
-	lib->funcs.BotLibVarSet("bot_groundhook_pitch", cvar ? cvar->string : "10");
+	/*
+	 * Fifteen degrees below the line of travel. Swept across a match at 3, 7,
+	 * 10, 15, 20 and 30: shallower anchors pay more per pull (61 units at 3
+	 * against 48 at 15) but find far fewer surfaces, and the total speed banked
+	 * over a match -- catches times gain -- peaks here. Past 20 the ray meets
+	 * the floor inside the hook's minimum reach and is refused, so at 30 only a
+	 * hundred hooks fire all match and the mean falls back to what it is with
+	 * no hook at all.
+	 */
+	cvar = gi.cvar("bot_groundhook_pitch", "15", 0);
+	lib->funcs.BotLibVarSet("bot_groundhook_pitch", cvar ? cvar->string : "15");
 	cvar = gi.cvar("bot_groundhook_dist", "300", 0);
 	lib->funcs.BotLibVarSet("bot_groundhook_dist", cvar ? cvar->string : "300");
 	cvar = gi.cvar("bot_know_range", "1200", 0);
