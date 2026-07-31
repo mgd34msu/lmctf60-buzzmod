@@ -560,10 +560,9 @@ int q2_diag_engaged;       /* frames an enemy was held (bc->enemy >= 0) */
 int q2_diag_fightstate;    /* frames spent in one of the battle states */
 int q2_diag_aimcalls;      /* calls into the aim-and-fire routine */
 int q2_diag_shots;         /* of those, how many actually pressed attack */
-int q2_diag_noweapon;      /* declined: no usable weapon chosen */
+int q2_diag_noweapon;      /* aim calls made with no weapon chosen at all */
 int q2_diag_blocked;       /* declined: line of fire blocked by geometry */
 int q2_diag_throttle;      /* declined: fire throttle or reaction timer */
-int q2_diag_aimoff;        /* declined: not pointing close enough to the target */
 
 int q2_ghook_fires;          /* ground hooks fired, for diagnostics */
 int q2_ghook_catches;        /* of those, how many actually caught a surface */
@@ -2539,6 +2538,7 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
     weaponinfo_t wi;
 
     q2_diag_aimcalls++;              /* TEMPORARY DIAGNOSTIC, see COMBAT line */
+    if (bc->best_weapon_num <= 0) q2_diag_noweapon++;
     AAS_EntityInfo(enemy, &entinfo);
     if (!entinfo.valid) return;
 
@@ -4070,6 +4070,31 @@ static int Q2BotFriendlyCarrier(int client)
  * carrier -- the EF_FLAG bit on a player -- but on someone we are not on a
  * team with. Chasing them down is how a dropped flag usually gets recovered.
  */
+/*
+ * How many of our team are already doing a given job, and how many of us there
+ * are. A side of five wants two holding the base and three going for the flag,
+ * and that is a property of the team, not something each bot can arrive at by
+ * itself -- five bots each flipping their own coin gives two defenders about
+ * a third of the time, and gives no defenders or no attackers far too often.
+ */
+static int Q2BotTeamRoleCount(int client, int ltg, int *teamsize)
+{
+    int i, maxcl = (int)LibVarGetValue("maxclients");
+    int n = 0, size = 0;
+
+    for (i = 0; i < maxcl && i < Q2_BOTLIB_MAX_CLIENTS; i++) {
+        if (!q2clients[i].inuse) continue;
+        if (i != client) {
+            if (!q2import.OnSameTeam) continue;
+            if (!q2import.OnSameTeam(client + 1, i + 1)) continue;
+        }
+        size++;
+        if (i != client && q2clients[i].ctf_ltgtype == ltg) n++;
+    }
+    if (teamsize) *teamsize = size;
+    return n;
+}
+
 static int Q2BotEnemyCarrier(int client)
 {
     int i, maxcl = (int)LibVarGetValue("maxclients");
@@ -4528,6 +4553,26 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
         }
     }
 
+    /*
+     * A run is a commitment, not a coin flip on a timer.
+     *
+     * Crossing to the enemy base costs around 38 seconds of travel. The role
+     * was being re-decided every few seconds, by a fresh random roll each
+     * time, so a bot on its way to the enemy flag would change its mind eight
+     * or more times per crossing and turn round on about half of them. In a
+     * whole match not one bot ever completed a run -- measured on one bot,
+     * twenty switches between attacking and defending in thirty decisions.
+     * That, not the length of the map, is why nothing was ever stolen.
+     *
+     * So a bot that is going for the flag, or bringing one home, keeps doing
+     * it. What ends the run is the run itself ending -- the flag taken, the
+     * bot killed, the goal expiring -- and not the clock coming round again.
+     */
+    if ((bc->ctf_ltgtype == Q2_LTG_GETFLAG ||
+         bc->ctf_ltgtype == Q2_LTG_RUSHBASE) &&
+        bc->ctf_goal_time > now)
+        return Q2BotCTFGoalActive(bc);
+
     /* --- Decision throttle: re-evaluate CTF role every 5 seconds --- */
     if (bc->ctf_ltgtype != Q2_LTG_NONE &&
         bc->ctf_goal_time > now &&
@@ -4597,7 +4642,31 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
             return Q2BotCTFGoalActive(bc);
         }
 
-        rnd = (float)(rand() & 0x7FFF) / 0x7FFF;
+        /*
+         * Two of every five hold the base, the rest go for the flag. Filling
+         * the defence first means the attackers are whoever is left over, so a
+         * side is never all defenders or all attackers -- which is what five
+         * independent coin flips produced, along with a bot changing its mind
+         * about which it was every couple of seconds.
+         */
+        {
+            int teamsize = 0;
+            int defnow = Q2BotTeamRoleCount(client, Q2_LTG_DEFENDBASE, &teamsize);
+
+            /*
+             * Whoever is carrying the flag home counts as one of the defence.
+             * They are doing a defender's job -- heading for our own base and
+             * needing to survive rather than to reach anything -- so the team
+             * should not go on fielding a full attack on top of them.
+             */
+            defnow += Q2BotTeamRoleCount(client, Q2_LTG_RUSHBASE, NULL);
+            int wantdef = (teamsize * 2 + 4) / 5;   /* 2 in 5, rounded up */
+
+            if (wantdef < 1) wantdef = 1;
+            if (wantdef > teamsize - 1 && teamsize > 1) wantdef = teamsize - 1;
+
+            rnd = (defnow < wantdef) ? 1.0f : 0.0f;
+        }
 
         /*
          * Damage and haste are worth most on someone heading into the enemy
@@ -4754,6 +4823,43 @@ static int Q2BotAI(int client, float thinktime)
         return Q2_BLERR_NOERROR;
     }
 
+    /*
+     * TEMPORARY DIAGNOSTIC (bot_developer 1) -- the final approach.
+     * Once a bot is inside 400 units of the enemy flag, report every frame
+     * until it leaves again. This is the only way to tell "stopped short",
+     * "turned away", "was killed" and "arrived but nothing happened" apart.
+     * Remove with the ATKTRACE and FLAGGOAL prints.
+     */
+    if (bot_developer && ctf_redflag.areanum && ctf_blueflag.areanum) {
+        bot_goal_t *ef = Q2BotOwnFlagIsRed(bc) ? &ctf_blueflag : &ctf_redflag;
+        vec3_t fd;
+        float fdist;
+        VectorSubtract(ef->origin, bc->origin, fd);
+        fdist = VectorLength(fd);
+        if (fdist < 400.0f) {
+            bot_goal_t top;
+            qboolean havetop = BotGetTopGoal(bc->goalstate, &top);
+            botimport.Print(PRT_MESSAGE,
+                "APPROACH bot %d: dist=%.0f org=(%.0f %.0f %.0f) flagorg=(%.0f %.0f %.0f) "
+                "dz=%.0f area=%d flagarea=%d ttime=%d role=%d state=%d hasgoal=%d hasnbg=%d "
+                "topgoal=%d toporg=(%.0f %.0f %.0f) health=%d vel=%.0f\n",
+                client, fdist,
+                bc->origin[0], bc->origin[1], bc->origin[2],
+                ef->origin[0], ef->origin[1], ef->origin[2],
+                ef->origin[2] - bc->origin[2],
+                BotReachabilityArea(bc->origin, client), ef->areanum,
+                AAS_AreaTravelTimeToGoalArea(
+                    BotReachabilityArea(bc->origin, client), bc->origin,
+                    ef->areanum, Q2BotTravelFlags()),
+                bc->ctf_ltgtype, bc->aistate, bc->hasgoal, bc->hasnbg,
+                havetop ? top.areanum : -1,
+                havetop ? top.origin[0] : 0.0f,
+                havetop ? top.origin[1] : 0.0f,
+                havetop ? top.origin[2] : 0.0f,
+                bc->health, VectorLength(bc->velocity));
+        }
+    }
+
     /* --- Initialise move state --- */
     Com_Memset(&initmove, 0, sizeof(initmove));
     VectorCopy(bc->origin,     initmove.origin);
@@ -4817,6 +4923,27 @@ static int Q2BotAI(int client, float thinktime)
         VectorAdd(bc->origin, bc->viewoffset, bot_eye);
         vis_enemy  = Q2BotFindEnemy(client, bc, bot_eye);
         aggression = Q2BotAggression(bc);
+
+        /* TEMPORARY DIAGNOSTIC (bot_developer 1) -- see the COMBAT line.
+         * Separates "never sees anybody" from "sees them and does nothing". */
+        q2_diag_frames++;
+        if (vis_enemy >= 0) q2_diag_vis++;
+        if (bc->enemy >= 0) q2_diag_engaged++;
+        if (bc->aistate == Q2AI_BATTLE_FIGHT || bc->aistate == Q2AI_BATTLE_RETREAT ||
+            bc->aistate == Q2AI_BATTLE_NBG   || bc->aistate == Q2AI_BATTLE_CHASE)
+            q2_diag_fightstate++;
+        if (bot_developer) {
+            static float nextcombat;
+            if (now > nextcombat) {
+                nextcombat = now + 20.0f;
+                botimport.Print(PRT_MESSAGE,
+                    "COMBAT: frames=%d enemyvisible=%d enemyheld=%d battlestate=%d "
+                    "aimcalls=%d shots=%d declined(throttle=%d blocked=%d) noweapon=%d\n",
+                    q2_diag_frames, q2_diag_vis, q2_diag_engaged, q2_diag_fightstate,
+                    q2_diag_aimcalls, q2_diag_shots, q2_diag_throttle,
+                    q2_diag_blocked, q2_diag_noweapon);
+            }
+        }
 
         /* --- Dead enemy detection (mirrors Q3's EntityIsDead) ---
          * If our current enemy has died (solid==0 in AAS), immediately
