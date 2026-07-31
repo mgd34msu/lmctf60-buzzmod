@@ -89,6 +89,91 @@ int BotSwimming(vec3_t origin)
 cvar_t *bot_bunnyhop;      /* keep hopping to stay off the friction */
 cvar_t *bot_strafejump;    /* air-steer for speed; needs sv_airaccelerate */
 
+
+/*
+ * Air strafing, worked out from the engine rather than by feel.
+ *
+ * PM_AirMove with sv_airaccelerate 0 calls PM_Accelerate(wishdir, wishspeed, 1)
+ * -- so there IS air control, at a tenth of the ground rate. PM_Accelerate adds
+ *
+ *     accelspeed = accel * frametime * wishspeed
+ *
+ * along wishdir, but only while addspeed = wishspeed - (velocity . wishdir) is
+ * still positive. Point the input straight down the velocity at 800 and that is
+ * 300 - 800: nothing is added at all. Point it far enough off and the dot term
+ * shrinks, the gate opens, and the component of that addition along the current
+ * heading is real speed.
+ *
+ * The gain per frame is accelspeed * cos(theta), and accelspeed saturates at
+ * accel * frametime * wishspeed, so the best angle is the smallest one that
+ * still leaves addspeed at the cap:
+ *
+ *     cos(theta) = (wishspeed - accelspeed) / speed
+ *
+ * At 800 that is about 70 degrees for roughly 10 units a frame; at 400, 47
+ * degrees for 20. Aiming for acos(300/speed) instead -- which is where I had it
+ * -- lands exactly on addspeed = 0 and gains precisely nothing.
+ *
+ * Which way to lean is not a coin flip either. Leaning toward the side the
+ * route turns accelerates the bot and steers it at the same time, so the
+ * velocity is pulled onto the path instead of away from it. That is what makes
+ * this safe to do continuously rather than in alternating bursts.
+ *
+ * The view is not involved. A player turns the mouse because eight key
+ * combinations are all they can express a direction with; a bot can name the
+ * direction outright and decompose it against whatever view it is already
+ * holding, so none of this costs any aim.
+ */
+static float LibVarGetValue_stub_margin(void)
+{
+	static cvar_t *m;
+	if (!m) m = gi.cvar("bot_strafe_margin", "0", 0);
+	return m ? m->value : 0.0f;
+}
+
+static void BotAirStrafe(usercmd_t *ucmd, bot_input_t *bi,
+                         vec3_t forward, vec3_t right,
+                         vec3_t vel, float speed2d, float frametime)
+{
+	vec3_t vdir, d;
+	float  wishspeed = 300.0f;
+	float  accelspeed, c, th, sn, cs, cross;
+
+	if (speed2d < 1.0f) return;
+
+	accelspeed = 1.0f * frametime * wishspeed;      /* the air branch, accel 1 */
+
+	c = (wishspeed - accelspeed) / speed2d;
+	if (c >  1.0f) c =  1.0f;
+	if (c < -1.0f) c = -1.0f;
+	th = (float)acos(c);
+
+	/*
+	 * The derivation gives the angle at which addspeed is exactly saturated.
+	 * Sitting right on it is optimal for one step in isolation, but the
+	 * velocity moves underneath the answer between steps, so a little margin
+	 * either way may do better in practice. Zero means take the derivation as
+	 * it stands.
+	 */
+	th += (float)(LibVarGetValue_stub_margin() * (M_PI / 180.0));
+
+	vdir[0] = vel[0] / speed2d;
+	vdir[1] = vel[1] / speed2d;
+	vdir[2] = 0.0f;
+
+	/* lean the way the route turns, so the gain also steers */
+	cross = vdir[0] * bi->dir[1] - vdir[1] * bi->dir[0];
+	if (cross < 0.0f) th = -th;
+
+	sn = (float)sin(th); cs = (float)cos(th);
+	d[0] = vdir[0] * cs - vdir[1] * sn;
+	d[1] = vdir[0] * sn + vdir[1] * cs;
+	d[2] = 0.0f;
+
+	ucmd->forwardmove = (short)(DotProduct(forward, d) * 400.0f);
+	ucmd->sidemove    = (short)(DotProduct(right,   d) * 400.0f);
+}
+
 void BotExecuteInput(edict_t *bot)
 {
 	vec3_t angles, forward, right;
@@ -390,8 +475,22 @@ void BotExecuteInput(edict_t *bot)
 			 * always available and the hook is offhand; neither should ever be
 			 * paying for the legs.
 			 */
+			/*
+			 * Jump, do not veer.
+			 *
+			 * sidemove is set above from the direction navigation asked for.
+			 * Adding four hundred on top of a forward three hundred puts the
+			 * resulting wishdir fifty-three degrees off that heading, every
+			 * hop, for the whole crossing -- which is why bots were covering
+			 * three to nine times the length of their own route. The lateral
+			 * shove is there to harvest air acceleration and there is none to
+			 * harvest at sv_airaccelerate 0, so it was buying nothing and
+			 * steering the bot off its path to buy it.
+			 *
+			 * What preserves the momentum is leaving the ground, away from
+			 * ground friction. That is kept. The heading stays navigation's.
+			 */
 			ucmd.forwardmove = 300;
-			ucmd.sidemove   += side * 400;
 
 			if (--botglobals.cj_phase[cl] == 0 && grounded)
 			{
@@ -405,7 +504,8 @@ void BotExecuteInput(edict_t *bot)
 				if (speed2 > bhmin * bhmin)
 				{
 					ucmd.upmove += 400;              /* jump out of the turn */
-					botglobals.sj_side[cl] = side;   /* keep weaving the same way */
+					botglobals.sj_side[cl] = side;
+					botglobals.sj_pulse[cl] = 1;
 				}
 			}
 		}
@@ -418,7 +518,10 @@ void BotExecuteInput(edict_t *bot)
 			ucmd.upmove += 400;
 			botglobals.sj_side[cl] = -botglobals.sj_side[cl];
 			if (!botglobals.sj_side[cl]) botglobals.sj_side[cl] = 1;
+			botglobals.sj_pulse[cl] = 1;   /* this ground frame only */
 		}
+
+		if (!grounded) botglobals.sj_pulse[cl] = 0;   /* window closes on takeoff */
 
 		/* Forward is held throughout, on the ground and in the air. */
 		if (bot_bunnyhop && bot_bunnyhop->value && canmove &&
@@ -426,11 +529,26 @@ void BotExecuteInput(edict_t *bot)
 			ucmd.forwardmove < 300)
 			ucmd.forwardmove = 300;
 
+		/*
+		 * The strafe goes in on the ground, at the jump, and only there.
+		 *
+		 * There is no air control on these servers -- sv_airaccelerate is zero
+		 * -- so an off-axis input after the bot has left the floor changes
+		 * nothing about where it goes or how fast it gets there. It is worth
+		 * something only on the frame the bot is still in contact, where it
+		 * keeps the engine adding speed instead of leaving friction to it. And
+		 * because the bot leaves the ground on that same frame, none of it has
+		 * time to become travel across the route: you strafe just before
+		 * leaving the ground, so you do not strafe.
+		 *
+		 * Held through the arc, as this was, it was neither of those things --
+		 * no speed, because there is no air control to harvest, and a long
+		 * lateral leg on every jump, which is what turned a route into three to
+		 * nine times its own length.
+		 */
 		if (bot_strafejump && bot_strafejump->value && canmove && !grounded &&
-			!(bi->actionflags & ACTION_ATTACK) &&
 			speed2 > bhmin * bhmin)
 		{
-			int side = botglobals.sj_side[cl] ? botglobals.sj_side[cl] : 1;
 
 			/*
 			 * Strafe, and leave the view alone. The turn that goes with a
@@ -439,7 +557,8 @@ void BotExecuteInput(edict_t *bot)
 			 * momentum is being off the ground, away from ground friction, and
 			 * that costs the aim nothing.
 			 */
-			ucmd.sidemove   += side * 400;
+			BotAirStrafe(&ucmd, bi, forward, right, bot->velocity,
+			             (float)sqrt(speed2), (float)ucmd.msec / 1000.0f);
 		}
 	}
 
@@ -464,10 +583,104 @@ void BotExecuteInput(edict_t *bot)
 	//The AI still runs at 10 Hz (could be changed though).
 	if (!botglobals.nocldouble)
 	{
-		if (!botglobals.nocldouble) ucmd.msec /= 2;
-		ClientThink(bot, &ucmd);
-		if (bi->actionflags & ACTION_DELAYEDJUMP) ucmd.upmove += 400;
-		ClientThink(bot, &ucmd);
+		/*
+		 * How finely the bot's tenth of a second is simulated.
+		 *
+		 * A real client sends a usercmd every rendered frame -- a dozen or more
+		 * inside one 100ms server frame -- and pmove runs once per command. The
+		 * bot glue sent two. That is not merely cosmetic, because two of the
+		 * things that decide how fast a bot travels are per-step:
+		 *
+		 *   friction  drop = speed * 6 * frametime, applied per grounded step,
+		 *             so coarse steps overshoot and shed more than they should
+		 *   landing   a hop chain wants the jump on the first step after
+		 *             touching down, and a bot that only gets two chances per
+		 *             tenth of a second spends far longer on the floor than a
+		 *             player who gets twelve
+		 *
+		 * The AI still thinks at 10Hz -- this only subdivides the movement, the
+		 * same way the engine does for a human with a high frame rate. It was
+		 * written when doing this twice was expensive; it is not any more.
+		 */
+		int sub   = (int)gi.cvar("bot_subframes", "4", 0)->value;
+		int total = ucmd.msec, base, rem, step;
+
+		if (sub < 1) sub = 1;
+		if (sub > total) sub = total;   /* a step cannot be shorter than 1ms */
+
+		/*
+		 * The steps have to add up to the time that actually passed.
+		 *
+		 * msec is an integer, so splitting a 100ms frame eight ways and
+		 * rounding up gives eight steps of 13ms -- 104ms of simulation for
+		 * 100ms of real time, and sixteen ways gives 112. That is not a finer
+		 * simulation of the same movement, it is the bot getting more time than
+		 * everyone else, and it would have arrived as free speed in the very
+		 * measurement this exists to inform. The remainder is spread over the
+		 * first few steps instead, so the total is always exact and the only
+		 * thing that changes is how finely the tenth of a second is integrated.
+		 */
+		base = total / sub;
+		rem  = total % sub;
+
+		for (step = 0; step < sub; step++)
+		{
+			ucmd.msec = (byte)(base + (step < rem ? 1 : 0));
+			if (!ucmd.msec) continue;
+
+			/*
+			 * Decide again, every step, from where the bot actually is.
+			 *
+			 * A player's head is not inside the engine. They watch the jump
+			 * happen and move the mouse the whole way through it, so the
+			 * direction they are asking for is never more than a moment old. A
+			 * bot decides once per AI frame and then hands the same command to
+			 * every step of the tenth of a second that follows.
+			 *
+			 * That is fatal for this particular technique, because the angle
+			 * that keeps PM_Accelerate paying depends on the current velocity,
+			 * and the velocity is exactly what the previous step just changed.
+			 * A command computed at 300 is the wrong command by the time the
+			 * bot is doing 500, so subdividing the frame without re-deciding
+			 * just replays a stale input more precisely.
+			 *
+			 * Recomputing here is not something a human is denied -- it is the
+			 * bot catching up to what a human already does continuously.
+			 */
+			if (bot_strafejump && bot_strafejump->value &&
+			    !bot->groundentity && bot->waterlevel < 2 &&
+			    !(bi->actionflags & ACTION_CROUCH))
+			{
+				float sp2 = bot->velocity[0] * bot->velocity[0] +
+				            bot->velocity[1] * bot->velocity[1];
+				float hmin = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
+				if (sp2 > hmin * hmin)
+					BotAirStrafe(&ucmd, bi, forward, right, bot->velocity,
+					             (float)sqrt(sp2), (float)ucmd.msec / 1000.0f);
+			}
+
+			ClientThink(bot, &ucmd);
+
+			/*
+			 * Let go of the jump key.
+			 *
+			 * PM_CheckJump sets PMF_JUMP_HELD when it fires and then refuses
+			 * every later jump until a command arrives with upmove under 10:
+			 *
+			 *     if (pm->cmd.upmove < 10) pm_flags &= ~PMF_JUMP_HELD;
+			 *     if (pm_flags & PMF_JUMP_HELD) return;
+			 *
+			 * Holding the key down through the rest of the frame therefore buys
+			 * nothing and costs the next hop, and subdividing made it worse
+			 * rather than better, because the same held command was replayed
+			 * across every step. A player taps it; so does the bot now, and the
+			 * release lands inside the same tenth of a second as the press.
+			 */
+			if (ucmd.upmove >= 10) ucmd.upmove = 0;
+
+			if (step == 0 && (bi->actionflags & ACTION_DELAYEDJUMP))
+				ucmd.upmove += 400;
+		}
 	} //end if
 	else
 	{
@@ -1288,6 +1501,25 @@ int BotInitLibrary(bot_library_t *lib)
 	 * stays taut far longer and turns speed into distance instead of spending
 	 * it on the floor, so above bot_ceilhook_minspeed the bots aim up instead.
 	 */
+	/*
+	 * How far the bot will look for an anchor, and the shortest rope worth
+	 * taking. The rope sets velocity to a flat 800 until it is under 120 units
+	 * long, so rope length is simply how long the bot gets to travel at 800 --
+	 * a short rope is a brake with extra steps.
+	 */
+	cvar = gi.cvar("bot_hook_reach", "1400", 0);
+	lib->funcs.BotLibVarSet("bot_hook_reach", cvar ? cvar->string : "1400");
+	/*
+	 * Swept 200 / 400 / 550 / 700 / 900 / 1200 at three matches each. 700 is a
+	 * real peak on both mean speed and the share of the match spent above the
+	 * run cap, and it falls away on either side: shorter ropes fire three times
+	 * as often and are worth much less each, longer ones are worth more but
+	 * grow too rare to find. Rope length is time held at 800, so this is the
+	 * point where the two effects cross.
+	 */
+	cvar = gi.cvar("bot_hook_minrope", "700", 0);
+	lib->funcs.BotLibVarSet("bot_hook_minrope", cvar ? cvar->string : "700");
+
 	cvar = gi.cvar("bot_ceilhook_dist", "900", 0);
 	lib->funcs.BotLibVarSet("bot_ceilhook_dist", cvar ? cvar->string : "900");
 	cvar = gi.cvar("bot_ceilhook_pitch", "30", 0);
@@ -1305,8 +1537,14 @@ int BotInitLibrary(bot_library_t *lib)
 	lib->funcs.BotLibVarSet("bot_defend_share", cvar ? cvar->string : "2");
 	cvar = gi.cvar("bot_flagrun_pickup", "6", 0);
 	lib->funcs.BotLibVarSet("bot_flagrun_pickup", cvar ? cvar->string : "6");
-	cvar = gi.cvar("bot_flagrun_tricks", "0", 0);
-	lib->funcs.BotLibVarSet("bot_flagrun_tricks", cvar ? cvar->string : "0");
+	/*
+	 * On by default. Carrying the flag does not stop a player using the hook --
+	 * it is how they get home alive. The tricks were switched off during a run
+	 * because they were dragging bots off their route, but that was the hop
+	 * chain steering, not the hook, and it is fixed where it was broken.
+	 */
+	cvar = gi.cvar("bot_flagrun_tricks", "1", 0);
+	lib->funcs.BotLibVarSet("bot_flagrun_tricks", cvar ? cvar->string : "1");
 #ifdef CH
 	lib->funcs.BotLibVarSet("ch", ch->string);
 #endif //CH

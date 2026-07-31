@@ -4112,6 +4112,37 @@ static qboolean Q2BotUnstickHook(int client, q2_botclient_t *bc, q2_bot_input_t 
 int AAS_AreaReachabilityToGoalArea(int areanum, vec3_t origin,
                                    int goalareanum, int travelflags);
 
+/*
+ * Will the bot actually fit down this rope?
+ *
+ * A hooked bot does not drift toward its anchor, it is driven straight at it at
+ * 800 a second, so anything in the way is hit at 800. The trace that measures
+ * the rope is a point trace -- it proves the bot can see the anchor, which is
+ * not the same as being able to travel there. A gap a rope threads is not
+ * necessarily a gap a player fits through.
+ *
+ * So the candidate is re-traced with the player's own box, stopping short of
+ * the anchor itself since the anchor is by definition solid. Distance is
+ * something the bot can measure exactly and a player can only estimate; there
+ * is no reason to use it worse than they do.
+ */
+static qboolean Q2BotHookPathClear(int client, vec3_t eye, vec3_t anchor)
+{
+    vec3_t mins = { -16.0f, -16.0f, -24.0f };
+    vec3_t maxs = {  16.0f,  16.0f,  32.0f };
+    vec3_t dir, stop;
+    bsp_trace_t tr;
+    float len;
+
+    VectorSubtract(anchor, eye, dir);
+    len = VectorNormalize(dir);
+    if (len <= 64.0f) return false;
+
+    VectorMA(eye, len - 48.0f, dir, stop);
+    tr = q2import.Trace(eye, mins, maxs, stop, client + 1, 1 /*CONTENTS_SOLID*/);
+    return (tr.fraction > 0.98f) ? true : false;
+}
+
 static void Q2BotGroundHook(int client, q2_botclient_t *bc,
                              qboolean in_combat, q2_bot_input_t *in,
                              bot_moveresult_t *mr)
@@ -4124,22 +4155,26 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
 
     if (bc->ghook_active) {
         /*
-         * The hook is a projectile. It leaves at 800 a second and has to cross
-         * the gap and catch before any of this means anything, and until it
-         * does the bot is simply running with a rope in the air.
+         * What the rope actually does, from p_weapon.c:
          *
-         * This is what was wrong with the whole technique. The pull was
-         * considered under way the moment the command was sent, so the release
-         * test started measuring immediately, saw no speed being added --
-         * because nothing was pulling yet -- and let go. Then it fired again,
-         * and again. The thousand-odd hooks a match were not a chain; they were
-         * the same miss over and over, and the speed the bots did have was
-         * coming from the hop chain underneath.
+         *     VectorScale(dir, GRAPPLE_PULL_SPEED, dir);   // 800
+         *     VectorCopy(dir, ent->velocity);              // sets, not adds
+         *
+         * It overwrites the velocity every frame with 800 straight at the
+         * anchor. Nothing accumulates and nothing peaks -- a hooked bot travels
+         * in a straight line at a flat 800 until the rope gets short, so there
+         * was never any "gain" to measure and the old release logic was reading
+         * a constant.
+         *
+         * What is real is the braking ladder underneath it. Inside 120 units
+         * the pull is scaled by the remaining length instead: 500 at 110, 350
+         * at 90, 180 at 60, and about 1 unit once the rope is under 10. Riding
+         * a hook in does not merely waste it, it parks the bot.
+         *
+         * So the whole technique is: leave while still in the 800 band, with
+         * the rope pointing where the route goes.
          */
         if (bc->hookstate < 2) {
-            /* Still flying. At 800 a second nothing within reach takes longer
-             * than about half a second to arrive; past that it is not going to
-             * catch, so cut it loose and let the cooldown pick another line. */
             if (now > bc->ghook_time + 0.7f) {
                 q2import.BotClientCommand(client, "unhook", NULL);
                 bc->ghook_active  = false;
@@ -4151,101 +4186,56 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
         }
 
         if (!bc->ghook_pulling) {
-            /*
-             * It caught. This is the real start of the pull, so the clock and
-             * the entry speed both begin here rather than back when the command
-             * went out -- otherwise the flight time is charged against the pull
-             * and a good hook looks like a slow one.
-             */
-            /*
-             * A link, if the last pull is recent enough that its speed should
-             * still have been there to build on. Anything longer and this hook
-             * is starting cold, which is the failure a chain is meant to avoid.
-             */
-            if (bc->ghook_exittime > 0.0f && now - bc->ghook_exittime < 2.0f) {
-                q2_chain_leak += (double)(bc->ghook_exitspeed - bc->speed2d);
-                q2_chain_gap  += (double)(now - bc->ghook_exittime);
-                q2_chain_links++;
-            } else {
-                q2_chain_cold++;
-            }
-            bc->ghook_pulling   = true;
-            bc->ghook_time      = now;
+            bc->ghook_pulling    = true;
+            bc->ghook_time       = now;
             bc->ghook_entryspeed = bc->speed2d;
-            bc->ghook_lastspeed = bc->speed2d;
-            bc->ghook_lastgain  = 0.0f;
-            bc->ghook_peakgain  = 0.0f;
-            bc->ghook_target    = (bc->speed2d > 40.0f ? bc->speed2d : 40.0f) *
-                                  (1.15f + (float)(rand() & 0x7FFF) / 0x7FFF * 0.35f);
-            if (bc->ghook_target < 320.0f) bc->ghook_target = 320.0f;
             q2_ghook_catches++;
-            return;
         }
 
         {
-            /*
-             * Leave before the anchor arrives. What matters is the time left,
-             * not the distance: at 400 a fixed 140 units is a third of a
-             * second, at 120 it is over a second of pull thrown away. Keep a
-             * floor so a slow pull still lets go rather than swinging in.
-             */
             vec3_t togo;
-            float  dist, bail;
+            float  dist, dot = 1.0f, wlen;
+
             VectorSubtract(bc->ghook_anchor, bc->origin, togo);
             dist = VectorLength(togo);
-            bail = bc->speed2d * 0.35f;
-            if (bail < 120.0f) bail = 120.0f;
-            if (dist < bail) {
-                q2import.BotClientCommand(client, "unhook", NULL);
-                bc->ghook_active    = false;
-                bc->ghook_pulling   = false;
-                bc->ghook_time      = now;
-                bc->ghook_lastspeed = bc->speed2d;
-                return;
-            }
-        }
 
-        {
             /*
-             * Let go while the speed is still climbing.
-             *
-             * Waiting for the climb to flatten out is already too late: by then
-             * the pull has spent its last stretch swinging the bot toward the
-             * anchor rather than along its path, and what it takes back on the
-             * way in has to be paid for again by the next hook. Releasing while
-             * the speed is still rising keeps all of it -- there is nothing in
-             * the air to decelerate against -- so the next hook starts from
-             * here instead of starting over.
-             *
-             * The moment to leave is when the pull stops paying well, not when
-             * it stops paying at all: once it is adding less than half of the
-             * best this pull managed, the useful part is behind it.
+             * Let go before the ladder. Below 120 the rope is a brake, and the
+             * bot needs a frame or two of warning at 800 -- eighty units of
+             * travel per frame -- so the release goes in around 200.
              */
-            float held = now - bc->ghook_time;
-            qboolean done = false;
-
-            if (bc->accel > bc->ghook_peakgain) bc->ghook_peakgain = bc->accel;
-
-            if (bc->speed2d >= bc->ghook_target)
-                done = true;                       /* banked what it came for */
-            else if (held > 0.15f && bc->accel <= 0.0f)
-                done = true;                       /* no longer paying at all */
-            else if (held > 0.15f && bc->ghook_peakgain > 0.0f &&
-                     bc->accel < bc->ghook_peakgain * 0.5f)
-                done = true;                       /* past the useful part */
-            else if (held > 1.5f)
-                done = true;                       /* snagged something dull */
-
-            if (done) {
+            if (dist < 200.0f) {
                 q2import.BotClientCommand(client, "unhook", NULL);
                 bc->ghook_active  = false;
                 bc->ghook_pulling = false;
                 bc->ghook_time    = now;
                 q2_ghook_gain += (double)(bc->speed2d - bc->ghook_entryspeed);
-                bc->ghook_exitspeed = bc->speed2d;
-                bc->ghook_exittime  = now;
+                return;
             }
-            bc->ghook_lastgain = bc->accel;
+
+            /*
+             * And let go if the rope stops agreeing with the route. Velocity is
+             * whatever the rope says, so a rope pointing somewhere the bot does
+             * not want to go is not speed, it is a detour at 800.
+             */
+            wlen = (float)sqrt(in->dir[0] * in->dir[0] + in->dir[1] * in->dir[1]);
+            if (wlen > 0.01f && dist > 1.0f) {
+                dot = (togo[0] * in->dir[0] + togo[1] * in->dir[1]) / (dist * wlen);
+                if (dot < 0.35f) {          /* more than ~70 degrees off route */
+                    q2import.BotClientCommand(client, "unhook", NULL);
+                    bc->ghook_active  = false;
+                    bc->ghook_pulling = false;
+                    bc->ghook_time    = now;
+                    return;
+                }
+            }
+
+            if (now > bc->ghook_time + 3.0f) {
+                q2import.BotClientCommand(client, "unhook", NULL);
+                bc->ghook_active  = false;
+                bc->ghook_pulling = false;
+                bc->ghook_time    = now;
+            }
         }
         bc->ghook_lastspeed = bc->speed2d;
         return;
@@ -4314,111 +4304,98 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
      */
 
     {
-        vec3_t fwd, eye, target, d;
-        bsp_trace_t tr;
-        float gdist = LibVarGetValue("bot_groundhook_dist");
-        float gpitch = LibVarGetValue("bot_groundhook_pitch");
-        float cdist = LibVarGetValue("bot_ceilhook_dist");
-        float cpitch = LibVarGetValue("bot_ceilhook_pitch");
-        float cmin  = LibVarGetValue("bot_ceilhook_minspeed");
-        float yaw, pitch, len;
-        int   attempt, wantceil;
-        qboolean found = false, elev = false;
+        vec3_t eye, best = {0,0,0}, d, target;
+        float  yaw, bestlen = 0.0f;
+        int    k;
+        static const float pitches[] = { -20.0f, -10.0f, 0.0f, 8.0f, -32.0f };
+        float  reach = LibVarGetValue("bot_hook_reach");
+        float  minrope = LibVarGetValue("bot_hook_minrope");
 
-        if (gdist  < 64.0f) gdist  = 400.0f;
-        if (gpitch <= 0.0f) gpitch = 15.0f;   /* see bl_main.c for the sweep */
-        if (cdist  < 64.0f) cdist  = 900.0f;
-        if (cpitch <= 0.0f) cpitch = 30.0f;
-        if (cmin   <= 0.0f) cmin   = 300.0f;
+        if (reach   < 64.0f) reach   = 1400.0f;
+        if (minrope < 64.0f) minrope = 400.0f;
 
         VectorCopy(bc->origin, eye);
         VectorAdd(eye, bc->viewoffset, eye);
         yaw = (float)atan2(in->dir[1], in->dir[0]);
 
         /*
-         * Which way to aim depends on how fast the bot is already going.
+         * Aim at a place, not at an angle.
          *
-         * A ground hook is the way to start: a short anchor a medium way ahead
-         * gets a slow bot moving quickly. Once it is moving, that same short
-         * anchor arrives too soon to be worth much -- the pull is over before
-         * it has paid. What carries a fast bot is a long hook overhead, which
-         * stays taut far longer and turns the speed into distance rather than
-         * spending it on the floor. So the two alternate on their own: ground
-         * to get going, ceiling to go somewhere, and the chain climbs through
-         * them without needing to be sequenced explicitly.
+         * The rope becomes the velocity outright, so an anchor is a decision
+         * about where to travel and for how long -- and both of those are
+         * properties of where the bot is standing relative to where it is
+         * going. A fixed pitch cannot express that: the same fifteen degrees is
+         * a wall in a corridor and empty air on a ledge. What the bot wants is
+         * the furthest solid thing lying along the path it is already taking,
+         * and the angle is then simply wherever that turns out to be.
+         *
+         * So the first and best candidate is the route itself: trace at the
+         * next point the route is heading for, carried on past it to whatever
+         * stops it. The fixed pitches below are only a fallback for when the
+         * route direction finds nothing worth holding.
          */
-        wantceil = (bc->speed2d >= cmin);
+        {
+            bot_goal_t wg;
+            int here, rnum;
+            vec3_t aim, target2;
+            bsp_trace_t tr2;
 
-        for (attempt = 0; attempt < 2 && !found; attempt++) {
-            int ceil = wantceil ^ attempt;   /* preferred first, then the other */
-
-            if (ceil) {
-                len   = cdist;
-                pitch = -cpitch * (float)(M_PI / 180.0);   /* up */
-            } else {
-                len   = gdist;
-                pitch = gpitch * (float)(M_PI / 180.0);    /* down is positive */
+            if (bc->hasgoal && BotGetTopGoal(bc->goalstate, &wg) && wg.areanum &&
+                (here = BotReachabilityArea(bc->origin, client + 1)) > 0) {
+                aas_reachability_t rr;
+                VectorCopy(wg.origin, aim);
+                rnum = AAS_AreaReachabilityToGoalArea(here, bc->origin,
+                                                      wg.areanum, Q2BotTravelFlags());
+                if (rnum > 0) {
+                    AAS_ReachabilityFromNum(rnum, &rr);
+                    VectorCopy(rr.end, aim);
+                }
+                VectorSubtract(aim, eye, d);
+                if (VectorNormalize(d) > 1.0f) {
+                    VectorMA(eye, reach, d, target2);
+                    tr2 = q2import.Trace(eye, NULL, NULL, target2, client + 1, 1);
+                    if (tr2.fraction < 1.0f) {
+                        vec3_t dd;
+                        float l;
+                        VectorSubtract(tr2.endpos, eye, dd);
+                        l = VectorLength(dd);
+                        if (l >= minrope &&
+                            Q2BotHookPathClear(client, eye, tr2.endpos)) {
+                            bestlen = l; VectorCopy(tr2.endpos, best);
+                        }
+                    }
+                }
             }
+        }
 
-            /*
-             * A route that calls for an elevator means standing on a platform
-             * waiting for it, which is dead time a player with a hook does not
-             * spend. Aim up instead and pull -- a ledge, the shaft wall,
-             * whatever the ray finds above -- and take the height directly.
-             */
-            elev = (mr && (mr->traveltype & 0x00FFFFFF) == TRAVEL_ELEVATOR);
-            if (elev) {
-                pitch = -55.0f * (float)(M_PI / 180.0);
-                len   = cdist;
-            }
+        for (k = 0; bestlen <= 0.0f &&
+                    k < (int)(sizeof(pitches) / sizeof(pitches[0])); k++) {
+            vec3_t fwd, target;
+            bsp_trace_t tr;
+            float pitch = pitches[k] * (float)(M_PI / 180.0);
+            float len;
 
             fwd[0] = (float)(cos(yaw) * cos(pitch));
             fwd[1] = (float)(sin(yaw) * cos(pitch));
             fwd[2] = -(float)sin(pitch);
 
-            VectorMA(eye, len, fwd, target);
-            tr = q2import.Trace(eye, NULL, NULL, target, client + 1, 1 /*CONTENTS_SOLID*/);
-
-            /* Nothing hit, or too close for the pull to be worth taking. */
+            VectorMA(eye, reach, fwd, target);
+            tr = q2import.Trace(eye, NULL, NULL, target, client + 1, 1);
             if (tr.fraction >= 1.0f) continue;
+
             VectorSubtract(tr.endpos, eye, d);
-            if (VectorLength(d) < 150.0f) continue;
+            len = VectorLength(d);
+            if (len < minrope) continue;        /* too short to be worth it */
 
-            /*
-             * Refuse a harsh angle. A rope anchored steeply below drags the bot
-             * down into the floor, and the collision takes the speed with it --
-             * the opposite of what the hook is for. Shallow anchors pull along
-             * the ground instead of into it; upward pulls are fine, which is
-             * the whole point of the ceiling leg.
-             */
-            {
-                float horiz = (float)sqrt(d[0] * d[0] + d[1] * d[1]);
-                if (horiz < 1.0f) continue;
-                if (d[2] < -horiz * 0.5f) continue;   /* steeper than ~27 down */
-                /*
-                 * And not hauled straight up either. The aim is 30 degrees off
-                 * level, but the aim is not what the rope ends up at -- under a
-                 * low ceiling that ray lands almost overhead, and a rope that
-                 * steep lifts the bot rather than carrying it, which costs the
-                 * speed for the same reason a steep floor anchor does. Upward
-                 * pulls get more room than downward ones, because height gained
-                 * going forward is not wasted, but they are still pulls along
-                 * the path and not up it.
-                 *
-                 * Riding an elevator shaft is the exception: there the height
-                 * is the point, and the alternative is standing on a platform
-                 * waiting.
-                 */
-                if (!elev && d[2] > horiz * 1.2f) continue;  /* steeper than ~50 up */
+            if (len > bestlen &&
+                Q2BotHookPathClear(client, eye, tr.endpos)) {
+                bestlen = len; VectorCopy(tr.endpos, best);
             }
-
-            found = true;
-            if (ceil) q2_ghook_ceiling++; else q2_ghook_ground++;
         }
 
-        if (!found) return;
-
-        VectorCopy(tr.endpos, target);
+        if (bestlen <= 0.0f) return;
+        VectorCopy(best, target);
+        q2_ghook_ground++;
 
         VectorSubtract(target, eye, d);
         Vector2Angles(d, in->viewangles);
@@ -5191,9 +5168,24 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
             int wantdef;
             if (share < 0) share = 0;
             if (share > 4) share = 4;
-            wantdef = (teamsize * share + 4) / 5;   /* rounded up */
+            /*
+             * Rounded to nearest, not up. Rounding up puts two defenders on a
+             * side of three -- more of the team holding the base than going for
+             * the flag, on exactly the sizes that can least afford it. Nearest
+             * gives 0/1, 1/1, 1/2, 2/2, 2/3 as a side grows, which is the shape
+             * intended.
+             */
+            wantdef = (teamsize * share + 2) / 5;
 
-            if (wantdef < 1) wantdef = 1;
+            /*
+             * A side of one has nothing to defend with. Holding the base needs
+             * someone else to be doing the scoring, and there is nobody, so the
+             * only move that affects the game is going to get the flag. Two in
+             * five rounds up to one defender at a team size of one, which would
+             * otherwise leave a lone bot guarding a flag nobody is contesting.
+             */
+            if (teamsize <= 1) wantdef = 0;
+            else if (wantdef < 1) wantdef = 1;
             if (wantdef > teamsize - 1 && teamsize > 1) wantdef = teamsize - 1;
 
             rnd = (defnow < wantdef) ? 1.0f : 0.0f;
