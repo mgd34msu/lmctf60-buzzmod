@@ -14,6 +14,7 @@
 #include "bl_redirgi.h"
 #include "bl_chat.h"
 #include "bl_ctf.h"
+#include "bl_know.h"
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -846,6 +847,10 @@ void G_RunFrame (void)
 	AddQueuedBots();
 	BotLib_BotStartFrame(level.time);
 
+	/* TEMPORARY DIAGNOSTIC (bot_developer 1) -- flag reachability tracing,
+	 * defined at the bottom of g_ctffunc.c. Remove with that function. */
+	BotFlagDiag();
+
 	//
 	// treat each object in turn
 	// even the world gets a chance to think
@@ -895,6 +900,9 @@ void G_RunFrame (void)
 		if (!(ent->svflags & SVF_NOCLIENT))
 			BotLib_BotUpdateEntity(ent);
 	}
+
+	/* Refresh what each bot has seen before the AI acts on it. */
+	Know_Frame();
 
 	for (i = 0; i < maxclients->value; i++)
 	{

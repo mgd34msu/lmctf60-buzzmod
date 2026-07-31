@@ -336,7 +336,20 @@ void BotExecuteInput(edict_t *bot)
 		float bhmin  = gi.cvar("bot_bunnyhop_minspeed", "295", 0)->value;
 		int   cl     = DF_ENTCLIENT(bot);
 		qboolean grounded = bot->groundentity != NULL;
-		qboolean canmove  = bot->waterlevel < 2 &&
+		/*
+		 * No tricks on the final approach.
+		 *
+		 * bi->precision is set by the adapter once the bot is closing on
+		 * something it has to land on rather than pass through. A flag is a
+		 * thirty-unit box and the hop chain reaches eight hundred a second;
+		 * attackers were arriving with a second of route left and sailing
+		 * straight over the top, lap after lap, until they were killed.
+		 * Measured: with the tricks off entirely, lmctf01 went from no steals
+		 * to four and six in a match. The speed is worth having everywhere
+		 * else, so it is given up only for the last few strides -- which is
+		 * what a player does to take the flag.
+		 */
+		qboolean canmove  = bot->waterlevel < 2 && !bi->precision &&
 		                    !(bot->client->ps.pmove.pm_flags & PMF_DUCKED) &&
 		                    !(bi->actionflags & ACTION_CROUCH) &&
 		                    bi->dir[2] > -0.3f && bi->dir[2] < 0.3f;

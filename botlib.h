@@ -140,6 +140,11 @@ typedef struct bot_input_s
 	float speed;			//speed in the range [0, 400]
 	vec3_t viewangles;	//the view angles
 	int actionflags;		//one of the ACTION_? flags
+	// Set when the bot is closing on something it has to land on rather than
+	// merely pass through -- a flag, mainly. The movement tricks are suppressed
+	// while it is set: a bot travelling at 800 cannot stop on a 30-unit target,
+	// and a player slows down to take the flag for exactly that reason.
+	int precision;
 } bot_input_t;
 
 //bot client update

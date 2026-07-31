@@ -117,3 +117,7 @@ void ctf_ChangeMap(char *mapname, qboolean startmatch);
 int ClientShowID(edict_t *ent, char * buf);
 void CTFSquadboardMessage (edict_t *ent, edict_t *killer); // ADC
 void ctf_PassItem(edict_t* startent, edict_t* tossent);
+
+/* TEMPORARY DIAGNOSTIC (bot_developer 1) -- flag reachability tracing.
+ * Defined at the bottom of g_ctffunc.c, called from G_RunFrame. */
+void BotFlagDiag(void);
