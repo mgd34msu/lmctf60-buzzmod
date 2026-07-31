@@ -191,6 +191,7 @@ typedef struct q2_bot_updateclient_s {
     int     rdflags;
     short   stats[Q2_MAX_STATS];
     int     inventory[Q2_MAX_ITEMS];
+    int     runetype;   /* RUNE_* the client carries, 0 for none */
 } q2_bot_updateclient_t;
 
 typedef struct q2_bot_updateentity_s {
@@ -332,7 +333,21 @@ typedef struct q2_bot_export_s {
 #define Q2_LTG_GETFLAG      4   /* go to enemy base, pick up their flag */
 #define Q2_LTG_RUSHBASE     5   /* carrying enemy flag, rush to own base */
 #define Q2_LTG_RETURNFLAG   6   /* own flag dropped, return it */
-#define Q2_LTG_DEFENDBASE   3   /* camp near own flag */
+#define Q2_LTG_DEFENDBASE   3   /* work the flag room and its approaches */
+#define Q2_LTG_ESCORT       7   /* stay with our own flag carrier */
+
+/*
+ * Runes, from q_shared.h. Regen and resist keep whoever holds them alive, so
+ * they belong on the flag carrier; damage and haste are for going in, so a bot
+ * holding one should be on offence. Bots pass them around to get them onto the
+ * right people.
+ */
+#define Q2_RUNE_DAMAGE   1
+#define Q2_RUNE_RESIST   2
+#define Q2_RUNE_HASTE    4
+#define Q2_RUNE_REGEN    8
+#define Q2_RUNE_DEFENSIVE (Q2_RUNE_RESIST | Q2_RUNE_REGEN)
+#define Q2_RUNE_OFFENSIVE (Q2_RUNE_DAMAGE | Q2_RUNE_HASTE)
 
 /* CTF flag carrier effects (from Q2 q_shared.h) */
 #define Q2_EF_FLAG1_CARRIER  0x00040000
@@ -465,6 +480,32 @@ typedef struct {
      * it does not re-plan every frame simply because it can. A route that has
      * gone invalid is exempt -- there is nothing to commit to. */
     float       route_commit_time;
+    /* Last movement actually issued, reused when a frame produces none, so
+     * the bot never comes to a stop while it is thinking. */
+    vec3_t      last_movedir;
+    float       last_movespeed;
+    /*
+     * Sub-loop: a short errand -- health when hurt, ammunition when dry, a
+     * powerup worth the detour -- taken while a base state is in force and
+     * returned from immediately afterwards. The base state is never given up
+     * for it.
+     */
+    /* Ground hook: hook the floor a short way ahead, ride the pull, let go
+     * while still gaining, repeat. */
+    float       handoff_time;   /* next time the carrier may throw the flag */
+    int         runetype;      /* RUNE_* this bot is carrying, 0 for none */
+    float       rune_toss_time;
+    int         stuck_frames;   /* consecutive frames told to move but not moving */
+    float       stuck_hook_time;
+    vec3_t      ghook_anchor;
+    float       ghook_entryspeed;
+    float       ghook_target;
+    qboolean    ghook_active;
+    float       ghook_time;
+    float       ghook_lastspeed;
+    qboolean    subloop;
+    float       subloop_until;
+    int         subloop_return;   /* base state to resume */
     /* When the direct route fails, the bot heads for a staging area first. */
     bot_goal_t  staging_goal;
     qboolean    has_staging;
@@ -488,10 +529,13 @@ typedef struct {
 
 static qboolean Q2BotSwimOut(int client, q2_botclient_t *bc);
 static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc);
+static qboolean Q2BotBaseGoal(int client, q2_botclient_t *bc);
 
 /* ====================================================================
  * Module globals
  * ==================================================================== */
+int q2_ghook_fires;          /* ground hooks fired, for diagnostics */
+
 static q2_bot_import_t q2import;         /* stored Q2 import callbacks  */
 static q2_bot_export_t q2_export;        /* returned Q2 export struct   */
 static q2_botclient_t  q2clients[Q2_BOTLIB_MAX_CLIENTS];
@@ -1624,13 +1668,14 @@ static int Q2BotStartFrame(float time)
         }
         /* periodic grapple selection report */
         if (bot_developer) {
-            extern int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best, q2_reach_total, q2_grapple_travel, q2_grapple_fired;
+            extern int q2_ghook_fires;
+int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best, q2_reach_total, q2_grapple_travel, q2_grapple_fired;
             static float next;
             if (AAS_Time() > next) {
                 next = AAS_Time() + 30.0f;
                 botimport.Print(PRT_MESSAGE,
-                    "Q2Adapt: grapple routes won %d/%d, hook fired %d times\n",
-                    q2_grapple_best, q2_reach_total, q2_grapple_fired);
+                    "Q2Adapt: grapple routes %d/%d, botlib hooks %d, ground hooks %d\n",
+                    q2_grapple_best, q2_reach_total, q2_grapple_fired, q2_ghook_fires);
             }
 
         }
@@ -1672,6 +1717,7 @@ static int Q2BotUpdateClient(int client, q2_bot_updateclient_t *buc)
     VectorCopy(buc->origin,     bc->origin);
     VectorCopy(buc->velocity,   bc->velocity);
     VectorCopy(buc->viewangles, bc->viewangles);
+    bc->runetype = buc->runetype;
     VectorCopy(buc->viewoffset, bc->viewoffset);
     bc->pm_flags = buc->pm_flags;
     bc->pm_type  = buc->pm_type;
@@ -2668,10 +2714,10 @@ reselect:
                     bc->inventory[15], bc->inventory[16], bc->inventory[17]);
             }
             }
-        } else if (LibVarGetValue("bot_developer")) {
-            botimport.Print(PRT_MESSAGE,
-                "bot %d: BotChooseLTGItem returned false (no goal found)\n",
-                client);
+        } else {
+            /* Nothing to pick up worth having: take the base state rather
+             * than standing about. */
+            Q2BotBaseGoal(client, bc);
         }
     }
 
@@ -3075,8 +3121,19 @@ try_staging:
     bc->goal_best_ttime    = 0;
     if (bc->hasgoal && !retarget_done) { retarget_done = 1; goto ctf_navigate; }
     if (bc->hasgoal) return true;   /* already re-planned once this frame */
+    /* No goal at all: take the base state, then navigate to it this frame. */
+    if (Q2BotBaseGoal(client, bc) && !retarget_done) {
+        retarget_done = 1;
+        goto ctf_navigate;
+    }
 
-    /* Genuinely nothing to do -- only now is wandering the right answer. */
+    /* Nothing else worked. Role roaming first -- a bot with a job still knows
+     * roughly where it should be -- and only then the random walk, which is
+     * there to break a bot out of a corner and nothing more. */
+    if (!bc->hasgoal && Q2BotBaseGoal(client, bc) && !retarget_done) {
+        retarget_done = 1;
+        goto ctf_navigate;
+    }
 
 roam_fallback:
     /* Drop stale unreachable goal — otherwise the bot roams forever
@@ -3169,6 +3226,26 @@ static void Q2BotCTFInitFlags(void)
     if (ctf_blueflag.areanum)
         botimport.Print(PRT_MESSAGE, "CTF: Blue flag at area %d\n",
                         ctf_blueflag.areanum);
+
+    /* TEMPORARY DIAGNOSTIC (bot_developer 1) -- what the bots are actually
+     * walking to, so it can be compared against where the flag entity really
+     * is (FLAGDIAG lines from the game DLL). */
+    if (bot_developer) {
+        botimport.Print(PRT_MESSAGE,
+            "FLAGGOAL: red  area=%d num=%d ent=%d org=(%.1f %.1f %.1f) mins=(%.0f %.0f %.0f) maxs=(%.0f %.0f %.0f) flags=%d\n",
+            ctf_redflag.areanum, ctf_redflag.number, ctf_redflag.entitynum,
+            ctf_redflag.origin[0], ctf_redflag.origin[1], ctf_redflag.origin[2],
+            ctf_redflag.mins[0], ctf_redflag.mins[1], ctf_redflag.mins[2],
+            ctf_redflag.maxs[0], ctf_redflag.maxs[1], ctf_redflag.maxs[2],
+            ctf_redflag.flags);
+        botimport.Print(PRT_MESSAGE,
+            "FLAGGOAL: blue area=%d num=%d ent=%d org=(%.1f %.1f %.1f) mins=(%.0f %.0f %.0f) maxs=(%.0f %.0f %.0f) flags=%d\n",
+            ctf_blueflag.areanum, ctf_blueflag.number, ctf_blueflag.entitynum,
+            ctf_blueflag.origin[0], ctf_blueflag.origin[1], ctf_blueflag.origin[2],
+            ctf_blueflag.mins[0], ctf_blueflag.mins[1], ctf_blueflag.mins[2],
+            ctf_blueflag.maxs[0], ctf_blueflag.maxs[1], ctf_blueflag.maxs[2],
+            ctf_blueflag.flags);
+    }
 }
 
 /*
@@ -3318,6 +3395,473 @@ static qboolean Q2BotSwimOut(int client, q2_botclient_t *bc)
                 "bot %d: swimming out toward area %d (%.0f away)\n",
                 client, best, bestdist);
         }
+    }
+    return true;
+}
+
+/*
+ * Give the bot something to do, always.
+ *
+ * Every path through goal selection has to leave the bot with a goal. If it
+ * does not, the bot is handed an empty move result and stands there -- which
+ * was happening on 19% of frames. Wandering in a random direction is not an
+ * answer either; it is just a different way of achieving nothing.
+ *
+ * The base state is to head for a staging area, since those are known to be
+ * reachable and to connect to both bases, so moving to one is always progress
+ * of a kind and puts the bot somewhere the router can work from. The nearest
+ * one it can actually reach is chosen, and failing that any of them.
+ */
+/*
+ * Ground hooking.
+ *
+ * Aim at the floor a short way ahead, fire, ride the pull, and let go while
+ * the speed is still climbing -- then do it again. Chained, it is far quicker
+ * than running, and it is how a player crosses open ground in LMCTF. The
+ * botlib's own grapple code only ever hooks the endpoint of a precomputed
+ * reachability and rides it to a stop, which is a different thing entirely.
+ *
+ * The anchor is chosen here rather than from the navigation data: a point
+ * along the direction the bot is already travelling, dropped to the floor,
+ * with a clear line from the bot's eye. Released the moment the speed stops
+ * rising, so the momentum is kept rather than spent arriving.
+ *
+ * Not done while fighting: aiming at the floor and aiming at an enemy are not
+ * compatible.
+ */
+/*
+ * Get off the wall.
+ *
+ * A bot pressed into geometry keeps issuing movement into it and goes nowhere
+ * -- the command is there, the bot is not moving, and it can sit like that for
+ * seconds. The way out is the hook: find what it is jammed against, and pull
+ * away from that surface rather than continuing to walk into it. Fired along
+ * the surface normal where there is room, and upward where there is not, since
+ * up is almost always clear of whatever is holding it.
+ */
+static qboolean Q2BotUnstickHook(int client, q2_botclient_t *bc, q2_bot_input_t *in)
+{
+    float now = AAS_Time();
+    float speed = sqrt(bc->velocity[0] * bc->velocity[0] +
+                       bc->velocity[1] * bc->velocity[1]);
+    vec3_t eye, probe, target, d;
+    bsp_trace_t tr;
+    int i;
+
+    /*
+     * Two ways to be going nowhere, and the hook answers both.
+     *
+     * Pressed into geometry: told to move, not moving. And hanging in the air
+     * with no ground speed -- dropping down a shaft, or coming off a ledge
+     * straight down -- where there is nothing to push against and walking
+     * commands do nothing at all. Anywhere is better than nowhere, so it hooks
+     * whatever it can see and takes the pull.
+     */
+    {
+        qboolean grounded = (bc->pm_flags & 4 /*PMF_ON_GROUND*/) != 0;
+        qboolean going_nowhere = (in->speed > 0.0f && speed < 40.0f) ||
+                                 (!grounded && speed < 40.0f);
+        if (going_nowhere) bc->stuck_frames++;
+        else               bc->stuck_frames = 0;
+    }
+
+    if (bc->stuck_frames < 5) return false;          /* half a second of it */
+    if (now < bc->stuck_hook_time) return false;
+    if (bc->ghook_active) return false;
+
+    VectorCopy(bc->origin, eye);
+    VectorAdd(eye, bc->viewoffset, eye);
+
+    /* What is it jammed against? Look the way it is trying to go. */
+    probe[0] = eye[0] + in->dir[0] * 64.0f;
+    probe[1] = eye[1] + in->dir[1] * 64.0f;
+    probe[2] = eye[2];
+    tr = q2import.Trace(eye, NULL, NULL, probe, client + 1, 1 /*CONTENTS_SOLID*/);
+
+    /* Away from that surface first, then straight up, then behind. */
+    for (i = 0; i < 3; i++) {
+        vec3_t dir;
+
+        if (i == 0 && (bc->pm_flags & 4) == 0 &&
+            (in->dir[0] != 0.0f || in->dir[1] != 0.0f)) {
+            /* Airborne and stalled: pull the way we were trying to go. */
+            dir[0] = in->dir[0]; dir[1] = in->dir[1]; dir[2] = 0.15f;
+        } else if (i == 0 && tr.fraction < 1.0f) {
+            VectorCopy(tr.plane.normal, dir);      /* out of the wall */
+            dir[2] += 0.6f;                        /* and a little over it */
+        } else if (i == 1) {
+            VectorSet(dir, 0.0f, 0.0f, 1.0f);      /* the ceiling is usually free */
+        } else if (i == 2) {
+            dir[0] = -in->dir[0]; dir[1] = -in->dir[1]; dir[2] = 0.4f;
+        } else continue;
+
+        if (VectorNormalize(dir) < 0.1f) continue;
+        VectorMA(eye, 500.0f, dir, target);
+        tr = q2import.Trace(eye, NULL, NULL, target, client + 1, 1);
+        if (tr.fraction >= 1.0f) continue;         /* nothing to pull on */
+        VectorSubtract(tr.endpos, eye, d);
+        if (VectorLength(d) < 100.0f) continue;    /* too close to be worth it */
+
+        VectorCopy(tr.endpos, target);
+        VectorSubtract(target, eye, d);
+        Vector2Angles(d, in->viewangles);
+        q2import.BotClientCommand(client, "hook", NULL);
+        q2_ghook_fires++;
+        VectorCopy(target, bc->ghook_anchor);
+        bc->ghook_active     = true;
+        bc->ghook_time       = now;
+        bc->ghook_lastspeed  = speed;
+        bc->ghook_entryspeed = speed;
+        bc->ghook_target     = 400.0f;             /* anything is better than nothing */
+        bc->stuck_frames     = 0;
+        bc->stuck_hook_time  = now + 1.5f;
+        if (bot_developer)
+            botimport.Print(PRT_MESSAGE, "bot %d: stuck, hooking clear\n", client);
+        return true;
+    }
+    bc->stuck_hook_time = now + 1.0f;              /* do not retrace every frame */
+    return false;
+}
+
+static void Q2BotGroundHook(int client, q2_botclient_t *bc,
+                             qboolean in_combat, q2_bot_input_t *in,
+                             bot_moveresult_t *mr)
+{
+    float now = AAS_Time();
+    float speed = sqrt(bc->velocity[0] * bc->velocity[0] +
+                       bc->velocity[1] * bc->velocity[1]);
+
+    if (!LibVarGetValue("bot_groundhook")) { bc->ghook_active = false; return; }
+
+    if (bc->ghook_active) {
+        /* Let go as soon as the pull stops adding speed -- that is the point
+         * of the technique. Also let go if it has simply run long. */
+        /*
+         * Let go while it is still paying. Three things end a pull: the speed
+         * stops climbing, which is the moment to leave; getting close to the
+         * anchor, because riding it in trades all that speed for a collision;
+         * and a time limit, so a hook that snagged something useless does not
+         * hold the bot.
+         */
+        {
+            vec3_t togo;
+            VectorSubtract(bc->ghook_anchor, bc->origin, togo);
+            if (VectorLength(togo) < 140.0f) {
+                q2import.BotClientCommand(client, "unhook", NULL);
+                bc->ghook_active = false;
+                bc->ghook_time   = now;
+                bc->ghook_lastspeed = speed;
+                return;
+            }
+        }
+        /*
+         * Give the pull a moment to take hold before watching for the peak.
+         * Checking from the first frame reads the instant before the rope goes
+         * taut as "no longer gaining" and lets go having gained nothing.
+         */
+        /*
+         * Bank the gain and let go. The exact peak is not the point -- what
+         * matters is leaving with more speed than the hook was fired at, so
+         * the next one builds on it. Each pull picks its own target somewhere
+         * between a sixth and a half again on entry speed, which varies the
+         * rhythm the way a player's does; whichever comes first, that or the
+         * speed levelling off, ends the pull.
+         */
+        if ((bc->ghook_entryspeed > 0.0f && speed >= bc->ghook_target) ||
+            (now > bc->ghook_time + 0.25f &&
+             speed < bc->ghook_lastspeed + 2.0f) ||
+            now > bc->ghook_time + 1.5f) {
+            q2import.BotClientCommand(client, "unhook", NULL);
+            bc->ghook_active = false;
+            bc->ghook_time   = now;
+        }
+        bc->ghook_lastspeed = speed;
+        return;
+    }
+
+    /* Do not interrupt a fight, and leave a moment between hooks. */
+    if (in_combat || bc->ctf_has_flag == 2) return;
+    if (now < bc->ghook_time + 0.3f) return;
+    if (in->speed <= 0.0f) return;
+    if (in->dir[0] == 0.0f && in->dir[1] == 0.0f) return;
+
+    /*
+     * Prefer to be off the ground when it lands. A hook that connects while
+     * the bot is already airborne carries the jump's speed into the pull
+     * instead of dragging it up off the floor from a standstill. Grounded
+     * firing is still allowed after a short wait, so a bot that never gets
+     * airborne is not stuck walking forever.
+     */
+    if ((bc->pm_flags & 4 /*PMF_ON_GROUND*/) && now < bc->ghook_time + 1.0f) return;
+
+    {
+        vec3_t fwd, eye, target, d;
+        bsp_trace_t tr;
+        float len = LibVarGetValue("bot_groundhook_dist");
+        float yaw, pitch;
+
+        if (len < 64.0f) len = 400.0f;
+
+        /*
+         * Aim where the bot is going, tilted about ten degrees down. That ray
+         * lands on the floor a medium way ahead on open ground, and on a wall
+         * or ceiling where the geometry closes in -- all three work, and all
+         * three are what a player actually does. Straight down at their own
+         * feet does nothing: the pull needs a reach to work against.
+         */
+        VectorCopy(bc->origin, eye);
+        VectorAdd(eye, bc->viewoffset, eye);
+
+        yaw   = (float)atan2(in->dir[1], in->dir[0]);
+        pitch = LibVarGetValue("bot_groundhook_pitch");
+        if (pitch <= 0.0f) pitch = 10.0f;
+        pitch *= (float)(M_PI / 180.0);             /* down is positive here */
+
+        /*
+         * A route that calls for an elevator means standing on a platform
+         * waiting for it, which is dead time a player with a hook does not
+         * spend. Aim up instead and pull -- a ledge, the shaft wall, whatever
+         * the ray finds above -- and take the height directly.
+         */
+        if (mr && (mr->traveltype & 0x00FFFFFF) == TRAVEL_ELEVATOR)
+            pitch = -55.0f * (float)(M_PI / 180.0);
+
+        fwd[0] = (float)(cos(yaw) * cos(pitch));
+        fwd[1] = (float)(sin(yaw) * cos(pitch));
+        fwd[2] = -(float)sin(pitch);
+
+        VectorMA(eye, len, fwd, target);
+        tr = q2import.Trace(eye, NULL, NULL, target, client + 1, 1 /*CONTENTS_SOLID*/);
+
+        /* Too close and the pull is wasted; nothing hit and there is nothing
+         * to pull against. */
+        VectorSubtract(tr.endpos, eye, d);
+        if (tr.fraction >= 1.0f) return;
+        if (VectorLength(d) < 150.0f) return;
+
+        /*
+         * Refuse a harsh angle. A rope anchored steeply below drags the bot
+         * down into the floor, and the collision takes the speed with it --
+         * the opposite of what the hook is for. Shallow anchors pull along the
+         * ground instead of into it.
+         */
+        {
+            float horiz = (float)sqrt(d[0] * d[0] + d[1] * d[1]);
+            if (horiz < 1.0f) return;
+            if (d[2] < -horiz * 0.5f) return;      /* steeper than ~27 down */
+            (void)0;                                /* upward pulls are fine */
+        }
+
+        VectorCopy(tr.endpos, target);
+
+        VectorSubtract(target, eye, d);
+        Vector2Angles(d, in->viewangles);
+        q2import.BotClientCommand(client, "hook", NULL);
+        q2_ghook_fires++;
+        VectorCopy(target, bc->ghook_anchor);
+        bc->ghook_active    = true;
+        bc->ghook_time      = now;
+        bc->ghook_lastspeed = speed;
+        bc->ghook_entryspeed = speed;
+        bc->ghook_target     = (speed > 40.0f ? speed : 40.0f) *
+                               (1.15f + (float)(rand() & 0x7FFF) / 0x7FFF * 0.35f);
+    }
+}
+
+/*
+ * Our own team's flag carrier, if there is one.
+ *
+ * A carrier wears EF_FLAG1 or EF_FLAG2 -- the same bit the flag entity itself
+ * carries -- so a client inside the player range with one of those bits set,
+ * who is on our team, is the team mate running the enemy flag home. Returns
+ * the client number, or -1.
+ */
+static int Q2BotFriendlyCarrier(int client)
+{
+    int i, maxcl = (int)LibVarGetValue("maxclients");
+
+    if (!q2import.OnSameTeam) return -1;
+    for (i = 0; i < maxcl && i < Q2_BOTLIB_MAX_CLIENTS; i++) {
+        if (i == client) continue;
+        if (!q2clients[i].inuse) continue;
+        if (!(q2clients[i].effects &
+              (Q2_EF_FLAG1_CARRIER | Q2_EF_FLAG2_CARRIER))) continue;
+        if (!q2import.OnSameTeam(client + 1, i + 1)) continue;
+        return i;
+    }
+    return -1;
+}
+
+/*
+ * The enemy player carrying our flag, if any. Same signal as the friendly
+ * carrier -- the EF_FLAG bit on a player -- but on someone we are not on a
+ * team with. Chasing them down is how a dropped flag usually gets recovered.
+ */
+static int Q2BotEnemyCarrier(int client)
+{
+    int i, maxcl = (int)LibVarGetValue("maxclients");
+
+    for (i = 0; i < maxcl && i < Q2_BOTLIB_MAX_CLIENTS; i++) {
+        if (i == client) continue;
+        if (!q2clients[i].inuse) continue;
+        if (!(q2clients[i].effects &
+              (Q2_EF_FLAG1_CARRIER | Q2_EF_FLAG2_CARRIER))) continue;
+        if (q2import.OnSameTeam && q2import.OnSameTeam(client + 1, i + 1)) continue;
+        return i;
+    }
+    return -1;
+}
+
+/*
+ * A carrier in trouble hands the flag on.
+ *
+ * BuzzMod has "toss flag" for exactly this. A carrier about to die drops the
+ * flag wherever it falls; a carrier who throws it to a team mate standing next
+ * to them promotes that team mate to carrier and the run continues. So when
+ * health is low and somebody friendly is close enough to pick it up, throw it.
+ */
+static void Q2BotCarrierHandoff(int client, q2_botclient_t *bc)
+{
+    int i, maxcl = (int)LibVarGetValue("maxclients");
+    float now = AAS_Time();
+
+    if (!bc->ctf_has_flag) return;
+    if (bc->health > 40) return;                 /* still fine, keep running */
+    if (now < bc->handoff_time) return;          /* do not spam the command */
+    if (!q2import.OnSameTeam) return;
+
+    for (i = 0; i < maxcl && i < Q2_BOTLIB_MAX_CLIENTS; i++) {
+        vec3_t d;
+        if (i == client || !q2clients[i].inuse) continue;
+        if (!q2import.OnSameTeam(client + 1, i + 1)) continue;
+        VectorSubtract(q2clients[i].origin, bc->origin, d);
+        if (VectorLength(d) > 250.0f) continue;
+
+        q2import.BotClientCommand(client, "toss", "flag", NULL);
+        bc->handoff_time = now + 3.0f;
+        if (bot_developer)
+            botimport.Print(PRT_MESSAGE,
+                "bot %d: hurt, throwing the flag to client %d\n", client, i);
+        return;
+    }
+}
+
+/*
+ * Get the right rune onto the right player.
+ *
+ * A defensive rune on somebody who is not carrying the flag is close to
+ * wasted, so a bot holding regen or resist gives it to the carrier when it
+ * gets near them -- unless the carrier already has one, in which case it keeps
+ * it. Tossing drops the rune at the bot's feet for the other to pick up, which
+ * is why this only fires when they are practically touching.
+ */
+static void Q2BotRuneHandoff(int client, q2_botclient_t *bc)
+{
+    int carrier;
+    vec3_t d;
+    float now = AAS_Time();
+
+    if (!(bc->runetype & Q2_RUNE_DEFENSIVE)) return;
+    if (bc->ctf_has_flag) return;                 /* we are the carrier */
+    if (now < bc->rune_toss_time) return;
+
+    carrier = Q2BotFriendlyCarrier(client);
+    if (carrier < 0) return;
+    if (q2clients[carrier].runetype & Q2_RUNE_DEFENSIVE) return;  /* already set */
+
+    VectorSubtract(q2clients[carrier].origin, bc->origin, d);
+    if (VectorLength(d) > 120.0f) return;
+
+    q2import.BotClientCommand(client, "toss", "rune", NULL);
+    bc->rune_toss_time = now + 5.0f;
+    if (bot_developer)
+        botimport.Print(PRT_MESSAGE,
+            "bot %d: passing a defensive rune to our carrier (client %d)\n",
+            client, carrier);
+}
+
+static qboolean Q2BotBaseGoal(int client, q2_botclient_t *bc)
+{
+    /*
+     * Roam according to the job.
+     *
+     * A bot without a specific goal still has a role, and the role says where
+     * it should be. A defender belongs among the supplies around its own flag;
+     * an attacker belongs working the ground around the enemy's, where it is
+     * in position the moment their flag comes back. Sending either one to a
+     * generic waypoint -- or worse, off in a random direction -- throws that
+     * away and puts them somewhere neither useful nor dangerous.
+     *
+     * So the fallback is the zone that matches the role, and only a bot with
+     * no role at all falls through to the staging areas.
+     */
+    q2_defendzone_t *zone = NULL;
+    vec3_t dr, db;
+    qboolean nearred;
+
+    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
+    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
+    nearred = VectorLengthSquared(dr) < VectorLengthSquared(db);
+
+    switch (bc->ctf_ltgtype) {
+    case Q2_LTG_DEFENDBASE:
+        zone = nearred ? &q2_reddefend : &q2_bluedefend;
+        break;
+    case Q2_LTG_GETFLAG:
+    case Q2_LTG_RETURNFLAG:
+        /* Their half of the map: where the flag is, and where whoever took
+         * ours is heading. */
+        zone = nearred ? &q2_bluedefend : &q2_reddefend;
+        break;
+    case Q2_LTG_ESCORT:
+    case Q2_LTG_RUSHBASE:
+        /* Home, with the flag or alongside it. */
+        zone = nearred ? &q2_reddefend : &q2_bluedefend;
+        break;
+    default:
+        break;
+    }
+
+    if (zone && zone->count > 0) {
+        Com_Memcpy(&bc->ctf_goal, &zone->items[rand() % zone->count],
+                   sizeof(bot_goal_t));
+        BotPushGoal(bc->goalstate, &bc->ctf_goal);
+        bc->hasgoal            = true;
+        bc->goal_best_ttime    = 0;
+        bc->goal_progress_time = AAS_Time();
+        bc->route_commit_time  = AAS_Time() + 2.0f;
+        return true;
+    }
+
+    /* No role to speak of: head for somewhere the router can work from. */
+    {
+        int cur, best = 0, besttime = 0, i, tfl = Q2BotTravelFlags();
+
+        if (q2_numstaging <= 0) return false;
+
+        cur = BotFuzzyPointReachabilityArea(bc->origin);
+        if (cur > 0 && AAS_AreaReachability(cur)) {
+            for (i = 0; i < q2_numstaging; i++) {
+                int s = q2_staging[i], tt;
+                if (s <= 0 || s == cur) continue;
+                tt = AAS_AreaTravelTimeToGoalArea(cur, bc->origin, s, tfl);
+                if (!tt) continue;
+                if (!besttime || tt < besttime) { besttime = tt; best = s; }
+            }
+        }
+        if (!best) best = q2_staging[rand() % q2_numstaging];
+        if (best <= 0) return false;
+
+        Com_Memset(&bc->ctf_goal, 0, sizeof(bc->ctf_goal));
+        bc->ctf_goal.areanum = best;
+        VectorCopy(aasworld.areas[best].center, bc->ctf_goal.origin);
+        VectorSet(bc->ctf_goal.mins, -24, -24, -24);
+        VectorSet(bc->ctf_goal.maxs,  24,  24,  24);
+        BotPushGoal(bc->goalstate, &bc->ctf_goal);
+        bc->hasgoal            = true;
+        bc->goal_best_ttime    = 0;
+        bc->goal_progress_time = AAS_Time();
+        bc->route_commit_time  = AAS_Time() + 2.0f;
     }
     return true;
 }
@@ -3513,14 +4057,62 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
     /* --- Already have an active CTF goal? Keep it --- */
     if (bc->ctf_ltgtype != Q2_LTG_NONE) return Q2BotCTFGoalActive(bc);
 
-    /* --- Priority 2: Decide attack vs defend (Q3 ai_dmq3.c:738-765) ---
-     * ~40% chance attack (get enemy flag)
-     * ~30% chance defend (patrol own flag base)
-     * ~30% chance roam (normal item-seeking FFA behavior) */
+    /*
+     * Offence has three jobs and does one of them at all times: fetch the
+     * enemy flag, get ours back, or cover whoever is carrying theirs. Picking
+     * up items is not one of them -- that is an errand taken during a job, not
+     * a job in itself, which is what it used to be for a third of the team.
+     *
+     * Recovering our flag comes first: nobody can score while it is out. If
+     * an enemy has it, run them down. Escorting comes next, since a carrier
+     * with company gets home far more often than one without. What is left
+     * splits between fetching their flag and holding ours.
+     */
     {
-        float rnd = (float)(rand() & 0x7FFF) / 0x7FFF;
+        int enemycarrier = Q2BotEnemyCarrier(client);
+        int ourcarrier   = Q2BotFriendlyCarrier(client);
+        float rnd;
 
-        if (rnd < 0.4f) {
+        if (enemycarrier >= 0) {
+            bc->ctf_ltgtype   = Q2_LTG_RETURNFLAG;
+            bc->ctf_goal_time = now + 5.0f;      /* they move; refresh often */
+            Com_Memset(&bc->ctf_goal, 0, sizeof(bc->ctf_goal));
+            VectorCopy(q2clients[enemycarrier].origin, bc->ctf_goal.origin);
+            bc->ctf_goal.areanum =
+                BotFuzzyPointReachabilityArea(q2clients[enemycarrier].origin);
+            VectorSet(bc->ctf_goal.mins, -32, -32, -32);
+            VectorSet(bc->ctf_goal.maxs,  32,  32,  32);
+            if (bot_developer)
+                botimport.Print(PRT_MESSAGE,
+                    "bot %d: chasing their carrier (client %d)\n", client, enemycarrier);
+            return Q2BotCTFGoalActive(bc);
+        }
+
+        if (ourcarrier >= 0) {
+            bc->ctf_ltgtype   = Q2_LTG_ESCORT;
+            bc->ctf_goal_time = now + 5.0f;
+            Com_Memset(&bc->ctf_goal, 0, sizeof(bc->ctf_goal));
+            VectorCopy(q2clients[ourcarrier].origin, bc->ctf_goal.origin);
+            bc->ctf_goal.areanum =
+                BotFuzzyPointReachabilityArea(q2clients[ourcarrier].origin);
+            VectorSet(bc->ctf_goal.mins, -32, -32, -32);
+            VectorSet(bc->ctf_goal.maxs,  32,  32,  32);
+            if (bot_developer)
+                botimport.Print(PRT_MESSAGE,
+                    "bot %d: escorting our carrier (client %d)\n", client, ourcarrier);
+            return Q2BotCTFGoalActive(bc);
+        }
+
+        rnd = (float)(rand() & 0x7FFF) / 0x7FFF;
+
+        /*
+         * Damage and haste are worth most on someone heading into the enemy
+         * base, so a bot holding one goes on offence rather than leaving the
+         * rune to expire guarding a corridor.
+         */
+        if (bc->runetype & Q2_RUNE_OFFENSIVE) rnd = 0.0f;
+
+        if (rnd < 0.5f) {
             /* ATTACK: go get the enemy flag */
             /* logged after the flag choice below */
             bc->ctf_ltgtype = Q2_LTG_GETFLAG;
@@ -3551,8 +4143,12 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
 
             Q2BotCTFGoalActive(bc);
         }
-        else if (rnd < 0.7f) {
-            /* DEFEND: patrol own flag base */
+        else {
+            /* DEFEND: patrol own flag base.
+             *
+             * There is no third option any more. Wandering off after items used
+             * to take a third of the team out of the game -- picking up armour
+             * is an errand you run during a job, not a job. */
             if (bot_developer)
                 botimport.Print(PRT_MESSAGE, "bot %d: CTF role DEFEND\n", client);
             bc->ctf_ltgtype = Q2_LTG_DEFENDBASE;
@@ -3576,26 +4172,41 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
                 }
 
                 /*
-                 * Go to something in the flag room, not to the flag. Standing
-                 * on it achieves nothing; the job is holding the armour and
-                 * ammunition an attacker would collect on the way in, and
-                 * staying in motion while doing it. The flag itself is only
-                 * the fallback when the zone came up empty.
+                 * A defender has three jobs, in this order.
+                 *
+                 * If a team mate is running the enemy flag home, go to them --
+                 * that covers the carrier on the way back and while they break
+                 * off for health, armour or ammunition, which is when they are
+                 * most likely to lose it.
+                 *
+                 * Otherwise work the flag room: hold the supplies an attacker
+                 * would collect on the way in, cover the approaches, and keep
+                 * moving. Standing on the flag achieves nothing, so the flag
+                 * itself is only the fallback when the zone came up empty.
                  */
-                if (z->count > 0)
-                    Com_Memcpy(&bc->ctf_goal, &z->items[rand() % z->count],
-                               sizeof(bot_goal_t));
+                {
+                    int carrier = Q2BotFriendlyCarrier(client);
+                    if (carrier >= 0) {
+                        Com_Memset(&bc->ctf_goal, 0, sizeof(bc->ctf_goal));
+                        VectorCopy(q2clients[carrier].origin, bc->ctf_goal.origin);
+                        bc->ctf_goal.areanum =
+                            BotFuzzyPointReachabilityArea(q2clients[carrier].origin);
+                        VectorSet(bc->ctf_goal.mins, -32, -32, -32);
+                        VectorSet(bc->ctf_goal.maxs,  32,  32,  32);
+                        bc->ctf_goal_time = now + 5.0f;   /* refresh often: they move */
+                        if (bot_developer)
+                            botimport.Print(PRT_MESSAGE,
+                                "bot %d: covering our carrier (client %d)\n",
+                                client, carrier);
+                    }
+                    else if (z->count > 0) {
+                        Com_Memcpy(&bc->ctf_goal, &z->items[rand() % z->count],
+                                   sizeof(bot_goal_t));
+                    }
+                }
             }
 
             Q2BotCTFGoalActive(bc);
-        }
-        else {
-            /* ROAM: normal item-seeking behavior for a while */
-            if (bot_developer)
-                botimport.Print(PRT_MESSAGE, "bot %d: CTF role ITEMS\n", client);
-            bc->ctf_ltgtype = Q2_LTG_NONE;
-            bc->ctf_roam_time = now + CTF_ROAM_TIME;
-            return false; /* let normal LTG selection handle it */
         }
     }
 
@@ -4052,6 +4663,47 @@ static int Q2BotAI(int client, float thinktime)
      *   2. Combat aim (when in_combat, EA_View already set it)
      *   3. Navigation yaw (derived from movement direction for efficient path following)
      *   4. Fallback to EA viewangles */
+    /*
+     * A living bot always gets a movement command.
+     *
+     * The AI produces nothing on a good many frames -- re-planning, arriving,
+     * waiting on a door or a lift, a routing call that came back empty -- and
+     * every one of those used to be a frame the bot spent standing still.
+     * Measured at a quarter of all frames. Nothing about the situation calls
+     * for stopping: whatever the bot was going to do next, it can do while
+     * still moving, and a stationary player is a dead player.
+     *
+     * So when the frame comes back empty, head for the current goal at running
+     * speed; failing that, carry on the way we were already going. The
+     * direction is only ever wrong for a fraction of a second, which costs far
+     * less than the stop did.
+     */
+    if (bc->pm_type != Q2PM_DEAD && bc->pm_type != Q2PM_GIB &&
+        q2input.speed <= 0.0f)
+    {
+        bot_goal_t g;
+        vec3_t to;
+        qboolean got = false;
+
+        if (bc->hasgoal && BotGetTopGoal(bc->goalstate, &g) && g.areanum) {
+            VectorSubtract(g.origin, bc->origin, to);
+            to[2] = 0.0f;
+            if (VectorNormalize(to) > 1.0f) got = true;
+        }
+        if (!got && (bc->last_movedir[0] != 0.0f || bc->last_movedir[1] != 0.0f)) {
+            VectorCopy(bc->last_movedir, to);
+            got = true;
+        }
+        if (got) {
+            VectorCopy(to, q2input.dir);
+            q2input.speed = 400.0f;
+        }
+    }
+    if (q2input.speed > 0.0f) {
+        VectorCopy(q2input.dir, bc->last_movedir);
+        bc->last_movespeed = q2input.speed;
+    }
+
     if (moveresult.flags & MOVERESULT_MOVEMENTVIEW) {
         VectorCopy(moveresult.ideal_viewangles, q2input.viewangles);
     } else if (in_combat) {
@@ -4064,6 +4716,11 @@ static int Q2BotAI(int client, float thinktime)
     } else {
         VectorCopy(q3input.viewangles, q2input.viewangles);
     }
+
+    Q2BotCarrierHandoff(client, bc);
+    Q2BotRuneHandoff(client, bc);
+    if (!Q2BotUnstickHook(client, bc, &q2input))
+        Q2BotGroundHook(client, bc, in_combat, &q2input, &moveresult);
 
     q2import.BotInput(client, &q2input);
     EA_ResetInput(client);
