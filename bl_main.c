@@ -765,6 +765,7 @@ void BotLib_BotUpdateClient(edict_t *bot)
 	VectorCopy(bot->client->v_angle, buc.viewangles);
 	//view offset
 	buc.runetype = bot->client->rune ? bot->client->rune->runetype : 0;
+	buc.hookstate = bot->client->hookstate;
 	VectorCopy(bot->client->ps.viewoffset, buc.viewoffset);
 	//kick angles
 	VectorCopy(bot->client->ps.kick_angles, buc.kick_angles);

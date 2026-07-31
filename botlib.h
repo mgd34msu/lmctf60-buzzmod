@@ -174,6 +174,10 @@ typedef struct bot_updateclient_s
 	// The bots need it to decide who should hold what: regen and resist belong
 	// on whoever is running the flag, damage and haste on whoever is going in.
 	int		runetype;
+	// grapple state: 0 idle, 1 the hook is still flying, 2 attached and
+	// pulling. Without it a bot cannot tell a hook that missed from one
+	// that caught, so it reads a miss as a pull that stopped paying.
+	int		hookstate;
 } bot_updateclient_t;
 
 //entity update

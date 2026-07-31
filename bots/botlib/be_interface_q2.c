@@ -192,6 +192,7 @@ typedef struct q2_bot_updateclient_s {
     short   stats[Q2_MAX_STATS];
     int     inventory[Q2_MAX_ITEMS];
     int     runetype;   /* RUNE_* the client carries, 0 for none */
+    int     hookstate;  /* 0 idle, 1 hook in flight, 2 attached and pulling */
 } q2_bot_updateclient_t;
 
 typedef struct q2_bot_updateentity_s {
@@ -494,6 +495,11 @@ typedef struct {
      * while still gaining, repeat. */
     float       handoff_time;   /* next time the carrier may throw the flag */
     int         runetype;      /* RUNE_* this bot is carrying, 0 for none */
+    int         hookstate;     /* 0 idle, 1 in flight, 2 attached and pulling */
+    float       speed2d;       /* ground speed, the one the 300 cap applies to */
+    float       fwdspeed;      /* how much of it is going where the bot points */
+    float       accel;         /* change in ground speed, units per second */
+    float       phys_time;     /* when the three above were last worked out */
     float       rune_toss_time;
     int         stuck_frames;   /* consecutive frames told to move but not moving */
     float       stuck_hook_time;
@@ -501,6 +507,7 @@ typedef struct {
     float       ghook_entryspeed;
     float       ghook_target;
     qboolean    ghook_active;
+    qboolean    ghook_pulling;    /* the hook has caught and is pulling */
     float       ghook_time;
     float       ghook_lastspeed;
     float       ghook_lastgain;   /* speed added by the previous frame */
@@ -527,16 +534,21 @@ typedef struct {
     float       ctf_roam_time;      /* AAS_Time() when CTF roam period ends */
     bot_goal_t  ctf_goal;           /* current CTF navigation goal (flag location) */
     qboolean    ctf_has_flag;       /* true if carrying enemy flag */
+    int         ctf_myflag;         /* which flag is ours: 0 unknown, 1 red, 2 blue */
 } q2_botclient_t;
 
 static qboolean Q2BotSwimOut(int client, q2_botclient_t *bc);
 static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc);
 static qboolean Q2BotBaseGoal(int client, q2_botclient_t *bc);
+static qboolean Q2BotOwnFlagIsRed(q2_botclient_t *bc);
 
 /* ====================================================================
  * Module globals
  * ==================================================================== */
 int q2_ghook_fires;          /* ground hooks fired, for diagnostics */
+int q2_ghook_catches;        /* of those, how many actually caught a surface */
+int q2_ghook_misses;         /* and how many flew out and hit nothing */
+double q2_ghook_gain;        /* total speed banked across every completed pull */
 
 static q2_bot_import_t q2import;         /* stored Q2 import callbacks  */
 static q2_bot_export_t q2_export;        /* returned Q2 export struct   */
@@ -1676,8 +1688,11 @@ int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best, q2_re
             if (AAS_Time() > next) {
                 next = AAS_Time() + 30.0f;
                 botimport.Print(PRT_MESSAGE,
-                    "Q2Adapt: grapple routes %d/%d, botlib hooks %d, ground hooks %d\n",
-                    q2_grapple_best, q2_reach_total, q2_grapple_fired, q2_ghook_fires);
+                    "Q2Adapt: grapple routes %d/%d, botlib hooks %d, ground hooks %d "
+                    "(caught %d, missed %d, mean gain %.0f)\n",
+                    q2_grapple_best, q2_reach_total, q2_grapple_fired, q2_ghook_fires,
+                    q2_ghook_catches, q2_ghook_misses,
+                    q2_ghook_catches ? q2_ghook_gain / q2_ghook_catches : 0.0);
             }
 
         }
@@ -1720,7 +1735,45 @@ static int Q2BotUpdateClient(int client, q2_bot_updateclient_t *buc)
     VectorCopy(buc->velocity,   bc->velocity);
     VectorCopy(buc->viewangles, bc->viewangles);
     bc->runetype = buc->runetype;
+    bc->hookstate = buc->hookstate;
     VectorCopy(buc->viewoffset, bc->viewoffset);
+
+    /*
+     * How fast, which way, and whether it is still building.
+     *
+     * The bots had the raw velocity vector and nothing else, so anything that
+     * cared about speed worked it out again itself and no two places agreed.
+     * Worse, nothing had any sense of acceleration at all -- and the whole
+     * point of a grapple chain is knowing whether you are still gaining, which
+     * is a question about the derivative, not the value. Worked out once a
+     * frame here so every part of the AI reads the same numbers.
+     *
+     * speed2d  -- ground speed, which is what the 300 cap applies to
+     * fwdspeed -- how much of it is going where the bot is pointed; a bot
+     *             sliding sideways out of a turn has speed but is not
+     *             travelling, and the difference is what a chain lives on
+     * accel    -- change in ground speed per second
+     */
+    {
+        float sp = (float)sqrt(buc->velocity[0] * buc->velocity[0] +
+                               buc->velocity[1] * buc->velocity[1]);
+        float t  = AAS_Time();
+        float dt = t - bc->phys_time;
+
+        if (bc->phys_time > 0.0f && dt > 0.0001f && dt < 0.5f)
+            bc->accel = (sp - bc->speed2d) / dt;
+        else
+            bc->accel = 0.0f;
+
+        {
+            float yaw = buc->viewangles[1] * (float)(M_PI / 180.0);
+            bc->fwdspeed = buc->velocity[0] * (float)cos(yaw) +
+                           buc->velocity[1] * (float)sin(yaw);
+        }
+
+        bc->speed2d   = sp;
+        bc->phys_time = t;
+    }
     bc->pm_flags = buc->pm_flags;
     bc->pm_type  = buc->pm_type;
     Com_Memcpy(bc->inventory, buc->inventory, sizeof(bc->inventory));
@@ -2935,11 +2988,8 @@ ctf_navigate:
                 bc->goal_progress_time = now;
                 bc->ltg_check_time     = 0.0f;
                 {
-                    vec3_t dr, db;
                     q2_defendzone_t *z;
-                    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
-                    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
-                    z = (VectorLengthSquared(dr) < VectorLengthSquared(db))
+                    z = Q2BotOwnFlagIsRed(bc)
                       ? &q2_reddefend : &q2_bluedefend;
                     if (z->count > 1) {
                         Com_Memcpy(&bc->ctf_goal, &z->items[rand() % z->count],
@@ -3232,7 +3282,7 @@ static void Q2BotCTFInitFlags(void)
     /* TEMPORARY DIAGNOSTIC (bot_developer 1) -- what the bots are actually
      * walking to, so it can be compared against where the flag entity really
      * is (FLAGDIAG lines from the game DLL). */
-    if (bot_developer) {
+    if (bot_developer || LibVarGetValue("bot_developer")) {
         botimport.Print(PRT_MESSAGE,
             "FLAGGOAL: red  area=%d num=%d ent=%d org=(%.1f %.1f %.1f) mins=(%.0f %.0f %.0f) maxs=(%.0f %.0f %.0f) flags=%d\n",
             ctf_redflag.areanum, ctf_redflag.number, ctf_redflag.entitynum,
@@ -3248,6 +3298,54 @@ static void Q2BotCTFInitFlags(void)
             ctf_blueflag.maxs[0], ctf_blueflag.maxs[1], ctf_blueflag.maxs[2],
             ctf_blueflag.flags);
     }
+}
+
+/*
+ * Which flag is ours.
+ *
+ * Settled once, at the spawn point -- a bot always spawns in its own base --
+ * and then kept until it dies. Every CTF decision used to work this out by
+ * proximity at the moment it was taken, which meant an attacker changed its
+ * mind about which flag was the enemy's the instant it crossed the middle of
+ * the map: it turned round, ran home, crossed back, and turned round again.
+ * Measured over one 200 second run, four bots each flipped target more than a
+ * hundred times and not one of them reached the enemy base.
+ *
+ * Carrying a flag settles it outright: EF_FLAG1 is the red flag, and only a
+ * blue player can be carrying it.
+ */
+static void Q2BotCTFLatchTeam(q2_botclient_t *bc)
+{
+    vec3_t dr, db;
+
+    if (bc->effects & Q2_EF_FLAG1_CARRIER) { bc->ctf_myflag = 2; return; }
+    if (bc->effects & Q2_EF_FLAG2_CARRIER) { bc->ctf_myflag = 1; return; }
+
+    /* Dead: forget it, so it is settled again at the next spawn. That also
+     * picks up a bot the mod has moved to the other team. */
+    if (bc->pm_type == Q2PM_DEAD || bc->pm_type == Q2PM_GIB) {
+        bc->ctf_myflag = 0;
+        return;
+    }
+    if (bc->ctf_myflag) return;
+    if (!ctf_redflag.areanum || !ctf_blueflag.areanum) return;
+
+    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
+    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
+    bc->ctf_myflag = (VectorLengthSquared(dr) < VectorLengthSquared(db)) ? 1 : 2;
+}
+
+/* True when the red flag is the one this bot defends. Falls back to proximity
+ * only while the team is still unknown (before the first live frame). */
+static qboolean Q2BotOwnFlagIsRed(q2_botclient_t *bc)
+{
+    vec3_t dr, db;
+
+    if (bc->ctf_myflag) return bc->ctf_myflag == 1;
+
+    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
+    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
+    return VectorLengthSquared(dr) < VectorLengthSquared(db);
 }
 
 /*
@@ -3536,15 +3634,53 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
     if (!LibVarGetValue("bot_groundhook")) { bc->ghook_active = false; return; }
 
     if (bc->ghook_active) {
-        /* Let go as soon as the pull stops adding speed -- that is the point
-         * of the technique. Also let go if it has simply run long. */
         /*
-         * Let go while it is still paying. Three things end a pull: the speed
-         * stops climbing, which is the moment to leave; getting close to the
-         * anchor, because riding it in trades all that speed for a collision;
-         * and a time limit, so a hook that snagged something useless does not
-         * hold the bot.
+         * The hook is a projectile. It leaves at 800 a second and has to cross
+         * the gap and catch before any of this means anything, and until it
+         * does the bot is simply running with a rope in the air.
+         *
+         * This is what was wrong with the whole technique. The pull was
+         * considered under way the moment the command was sent, so the release
+         * test started measuring immediately, saw no speed being added --
+         * because nothing was pulling yet -- and let go. Then it fired again,
+         * and again. The thousand-odd hooks a match were not a chain; they were
+         * the same miss over and over, and the speed the bots did have was
+         * coming from the hop chain underneath.
          */
+        if (bc->hookstate < 2) {
+            /* Still flying. At 800 a second nothing within reach takes longer
+             * than about half a second to arrive; past that it is not going to
+             * catch, so cut it loose and let the cooldown pick another line. */
+            if (now > bc->ghook_time + 0.7f) {
+                q2import.BotClientCommand(client, "unhook", NULL);
+                bc->ghook_active  = false;
+                bc->ghook_pulling = false;
+                bc->ghook_time    = now;
+                q2_ghook_misses++;
+            }
+            return;
+        }
+
+        if (!bc->ghook_pulling) {
+            /*
+             * It caught. This is the real start of the pull, so the clock and
+             * the entry speed both begin here rather than back when the command
+             * went out -- otherwise the flight time is charged against the pull
+             * and a good hook looks like a slow one.
+             */
+            bc->ghook_pulling   = true;
+            bc->ghook_time      = now;
+            bc->ghook_entryspeed = bc->speed2d;
+            bc->ghook_lastspeed = bc->speed2d;
+            bc->ghook_lastgain  = 0.0f;
+            bc->ghook_peakgain  = 0.0f;
+            bc->ghook_target    = (bc->speed2d > 40.0f ? bc->speed2d : 40.0f) *
+                                  (1.15f + (float)(rand() & 0x7FFF) / 0x7FFF * 0.35f);
+            if (bc->ghook_target < 320.0f) bc->ghook_target = 320.0f;
+            q2_ghook_catches++;
+            return;
+        }
+
         {
             /*
              * Leave before the anchor arrives. What matters is the time left,
@@ -3553,74 +3689,62 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
              * floor so a slow pull still lets go rather than swinging in.
              */
             vec3_t togo;
-            float  dist  = 0.0f;
-            float  bail;
+            float  dist, bail;
             VectorSubtract(bc->ghook_anchor, bc->origin, togo);
             dist = VectorLength(togo);
-            bail = speed * 0.35f;
+            bail = bc->speed2d * 0.35f;
             if (bail < 120.0f) bail = 120.0f;
             if (dist < bail) {
                 q2import.BotClientCommand(client, "unhook", NULL);
-                bc->ghook_active = false;
-                bc->ghook_time   = now;
-                bc->ghook_lastspeed = speed;
+                bc->ghook_active    = false;
+                bc->ghook_pulling   = false;
+                bc->ghook_time      = now;
+                bc->ghook_lastspeed = bc->speed2d;
                 return;
             }
         }
-        /*
-         * Give the pull a moment to take hold before watching for the peak.
-         * Checking from the first frame reads the instant before the rope goes
-         * taut as "no longer gaining" and lets go having gained nothing.
-         */
-        /*
-         * Bank the gain and let go. The exact peak is not the point -- what
-         * matters is leaving with more speed than the hook was fired at, so
-         * the next one builds on it. Each pull picks its own target somewhere
-         * between a sixth and a half again on entry speed, which varies the
-         * rhythm the way a player's does; whichever comes first, that or the
-         * speed levelling off, ends the pull.
-         */
+
         {
             /*
              * Let go while the speed is still climbing.
              *
-             * This used to wait for the climb to flatten out, which is already
-             * the wrong moment: by the time a pull has stopped adding speed it
-             * has spent the last stretch swinging the bot toward the anchor
-             * rather than along its path, and whatever it takes back on the way
-             * in has to be paid for again by the next hook. Releasing while the
-             * speed is still rising keeps every bit of it -- there is nothing
-             * to decelerate against in the air -- so the next hook starts from
+             * Waiting for the climb to flatten out is already too late: by then
+             * the pull has spent its last stretch swinging the bot toward the
+             * anchor rather than along its path, and what it takes back on the
+             * way in has to be paid for again by the next hook. Releasing while
+             * the speed is still rising keeps all of it -- there is nothing in
+             * the air to decelerate against -- so the next hook starts from
              * here instead of starting over.
              *
              * The moment to leave is when the pull stops paying well, not when
-             * it stops paying at all: once a frame adds less than half of the
-             * best frame this pull managed, the useful part is over.
+             * it stops paying at all: once it is adding less than half of the
+             * best this pull managed, the useful part is behind it.
              */
-            float gain = speed - bc->ghook_lastspeed;
             float held = now - bc->ghook_time;
             qboolean done = false;
 
-            if (gain > bc->ghook_peakgain) bc->ghook_peakgain = gain;
+            if (bc->accel > bc->ghook_peakgain) bc->ghook_peakgain = bc->accel;
 
-            if (bc->ghook_entryspeed > 0.0f && speed >= bc->ghook_target)
+            if (bc->speed2d >= bc->ghook_target)
                 done = true;                       /* banked what it came for */
-            else if (held > 0.2f && gain <= 0.0f)
+            else if (held > 0.15f && bc->accel <= 0.0f)
                 done = true;                       /* no longer paying at all */
-            else if (held > 0.2f && bc->ghook_peakgain > 0.0f &&
-                     gain < bc->ghook_peakgain * 0.5f)
+            else if (held > 0.15f && bc->ghook_peakgain > 0.0f &&
+                     bc->accel < bc->ghook_peakgain * 0.5f)
                 done = true;                       /* past the useful part */
             else if (held > 1.5f)
                 done = true;                       /* snagged something dull */
 
             if (done) {
                 q2import.BotClientCommand(client, "unhook", NULL);
-                bc->ghook_active = false;
-                bc->ghook_time   = now;
+                bc->ghook_active  = false;
+                bc->ghook_pulling = false;
+                bc->ghook_time    = now;
+                q2_ghook_gain += (double)(bc->speed2d - bc->ghook_entryspeed);
             }
-            bc->ghook_lastgain = gain;
+            bc->ghook_lastgain = bc->accel;
         }
-        bc->ghook_lastspeed = speed;
+        bc->ghook_lastspeed = bc->speed2d;
         return;
     }
 
@@ -3723,24 +3847,15 @@ static void Q2BotGroundHook(int client, q2_botclient_t *bc,
         VectorCopy(target, bc->ghook_anchor);
         bc->ghook_active    = true;
         bc->ghook_time      = now;
+        /*
+         * Sent, not caught. Everything that describes the pull -- entry speed,
+         * target, the clock -- is set when the hook actually reaches something,
+         * because until then there is no pull to describe.
+         */
+        bc->ghook_pulling   = false;
         bc->ghook_lastspeed = speed;
         bc->ghook_lastgain  = 0.0f;
         bc->ghook_peakgain  = 0.0f;
-        bc->ghook_entryspeed = speed;
-        /*
-         * What this pull is worth leaving with. Somewhere between a sixth and
-         * a half again on entry speed, picked fresh each time so the rhythm
-         * varies the way a player's does rather than metronoming.
-         *
-         * The floor is running speed: a pull that cannot better what the bot
-         * would have had by simply running is not worth interrupting the run
-         * for, and without a floor a hook fired slowly sets itself a target it
-         * clears immediately and banks nothing. If the target turns out to be
-         * unreachable the gain test ends the pull anyway.
-         */
-        bc->ghook_target     = (speed > 40.0f ? speed : 40.0f) *
-                               (1.15f + (float)(rand() & 0x7FFF) / 0x7FFF * 0.35f);
-        if (bc->ghook_target < 320.0f) bc->ghook_target = 320.0f;
     }
 }
 
@@ -3872,12 +3987,9 @@ static qboolean Q2BotBaseGoal(int client, q2_botclient_t *bc)
      * no role at all falls through to the staging areas.
      */
     q2_defendzone_t *zone = NULL;
-    vec3_t dr, db;
     qboolean nearred;
 
-    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
-    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
-    nearred = VectorLengthSquared(dr) < VectorLengthSquared(db);
+    nearred = Q2BotOwnFlagIsRed(bc);
 
     switch (bc->ctf_ltgtype) {
     case Q2_LTG_DEFENDBASE:
@@ -3944,6 +4056,35 @@ static qboolean Q2BotBaseGoal(int client, q2_botclient_t *bc)
 
 static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
 {
+    /*
+     * Put the CTF goal on the goal stack, and keep it there.
+     *
+     * This used to push only when the bot had no goal at all. Every bot picks
+     * up a long-term item goal within a second of spawning, so by the time a
+     * CTF role was chosen hasgoal was already set and the flag goal was never
+     * pushed: ctf_ltgtype said GETFLAG, ctf_goal held the enemy flag, and the
+     * goal the movement code actually followed was still a rocket launcher.
+     * Attackers therefore arrived at item areas with ctfrole 4 -- "REACHED
+     * goal area 722 (ctfrole 4)" -- and never went near a flag, which is why
+     * steals were zero.
+     *
+     * Two things are deliberately left alone: a nearby-item detour, which is
+     * meant to sit on top of the long-term goal and is popped when reached,
+     * and a staging goal, which is the router's way of getting a stranded bot
+     * back to somewhere it can navigate from.
+     */
+    if (bc->hasgoal && !bc->hasnbg && !bc->has_staging) {
+        bot_goal_t top;
+        if (BotGetTopGoal(bc->goalstate, &top) &&
+            (top.areanum != bc->ctf_goal.areanum ||
+             !VectorCompare(top.origin, bc->ctf_goal.origin)))
+        {
+            BotPopGoal(bc->goalstate);
+            bc->hasgoal            = false;
+            bc->goal_best_ttime    = 0;
+            bc->goal_progress_time = AAS_Time();
+        }
+    }
     if (!bc->hasgoal) {
         BotPushGoal(bc->goalstate, &bc->ctf_goal);
         bc->hasgoal = true;
@@ -3951,14 +4092,11 @@ static qboolean Q2BotCTFGoalActive(q2_botclient_t *bc)
     return true;
 }
 
-/* Our own flag, and the enemy's, by proximity to each base. */
+/* Our own flag, and the enemy's, from the team settled at spawn. */
 static void Q2BotCTFOwnFlag(q2_botclient_t *bc, bot_goal_t **own, bot_goal_t **enemy,
                             q2_flagstate_t **ownstate)
 {
-    vec3_t dr, db;
-    VectorSubtract(bc->origin, ctf_redflag.origin, dr);
-    VectorSubtract(bc->origin, ctf_blueflag.origin, db);
-    if (VectorLengthSquared(dr) < VectorLengthSquared(db)) {
+    if (Q2BotOwnFlagIsRed(bc)) {
         if (own)      *own      = &ctf_redflag;
         if (enemy)    *enemy    = &ctf_blueflag;
         if (ownstate) *ownstate = &q2_redflagstate;
@@ -3977,6 +4115,9 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
 
     Q2BotCTFInitFlags();
     if (!ctf_redflag.areanum || !ctf_blueflag.areanum) return false;
+
+    /* Settle which flag is ours before anything asks. */
+    Q2BotCTFLatchTeam(bc);
 
     /* Detect flag carrying from entity effects.
      * The game DLL sets EF_FLAG1/EF_FLAG2 on the player entity. */
@@ -4110,6 +4251,37 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
         }
     }
 
+    /*
+     * TEMPORARY DIAGNOSTIC (bot_developer 1) -- attacker progress trace.
+     * Reports, per attacking bot, the goal it is walking to, how far away it
+     * still is, and whether the router can even reach it. Remove together
+     * with the FLAGGOAL print in Q2BotCTFInitFlags.
+     */
+    if (bot_developer && bc->ctf_ltgtype == Q2_LTG_GETFLAG) {
+        static float atk_nextrep[Q2_BOTLIB_MAX_CLIENTS];
+        static float atk_closest[Q2_BOTLIB_MAX_CLIENTS];
+        int ci = client & (Q2_BOTLIB_MAX_CLIENTS - 1);
+        vec3_t d;
+        float dist;
+        VectorSubtract(bc->ctf_goal.origin, bc->origin, d);
+        dist = VectorLength(d);
+        if (atk_closest[ci] <= 0.0f || dist < atk_closest[ci])
+            atk_closest[ci] = dist;
+        if (now > atk_nextrep[ci]) {
+            int a = BotReachabilityArea(bc->origin, client);
+            atk_nextrep[ci] = now + 3.0f;
+            botimport.Print(PRT_MESSAGE,
+                "ATKTRACE bot %d: myflag=%d goalarea=%d goalorg=(%.0f %.0f %.0f) dist=%.0f closest=%.0f area=%d ttime=%d hasgoal=%d hasnbg=%d\n",
+                client, bc->ctf_myflag, bc->ctf_goal.areanum,
+                bc->ctf_goal.origin[0], bc->ctf_goal.origin[1], bc->ctf_goal.origin[2],
+                dist, atk_closest[ci], a,
+                (a > 0 && bc->ctf_goal.areanum > 0)
+                    ? AAS_AreaTravelTimeToGoalArea(a, bc->origin,
+                          bc->ctf_goal.areanum, Q2BotTravelFlags()) : -1,
+                bc->hasgoal, bc->hasnbg);
+        }
+    }
+
     /* --- Decision throttle: re-evaluate CTF role every 5 seconds --- */
     if (bc->ctf_ltgtype != Q2_LTG_NONE &&
         bc->ctf_goal_time > now &&
@@ -4194,22 +4366,14 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
             bc->ctf_ltgtype = Q2_LTG_GETFLAG;
             bc->ctf_goal_time = now + CTF_GETFLAG_TIME;
 
-            /* Determine own team to find enemy flag:
-             * Use OnSameTeam with a known entity at each flag.
-             * Simpler: bot closer to red flag → red team → enemy is blue.
-             * This is a heuristic that works for standard CTF layouts. */
+            /* The enemy flag is the one we do not defend. Which team we are
+             * on was settled at the spawn point (Q2BotCTFLatchTeam), not by
+             * whichever flag happens to be nearer right now. */
             {
-                vec3_t dr, db;
-                float dist_red, dist_blue;
-                VectorSubtract(bc->origin, ctf_redflag.origin, dr);
-                VectorSubtract(bc->origin, ctf_blueflag.origin, db);
-                dist_red = VectorLengthSquared(dr);
-                dist_blue = VectorLengthSquared(db);
-                /* Bot is closer to OWN flag typically (starts at own base) */
-                if (dist_red < dist_blue)
-                    Com_Memcpy(&bc->ctf_goal, &ctf_blueflag, sizeof(bot_goal_t)); /* red team → get blue flag */
+                if (Q2BotOwnFlagIsRed(bc))
+                    Com_Memcpy(&bc->ctf_goal, &ctf_blueflag, sizeof(bot_goal_t)); /* ours is red: take blue */
                 else
-                    Com_Memcpy(&bc->ctf_goal, &ctf_redflag, sizeof(bot_goal_t));  /* blue team → get red flag */
+                    Com_Memcpy(&bc->ctf_goal, &ctf_redflag, sizeof(bot_goal_t));  /* ours is blue: take red */
                 if (bot_developer)
                     botimport.Print(PRT_MESSAGE,
                         "bot %d: CTF ATTACK target=%d (red=%d blue=%d)\n",
@@ -4230,16 +4394,10 @@ static qboolean Q2BotCTFSeekGoals(int client, q2_botclient_t *bc)
             bc->ctf_ltgtype = Q2_LTG_DEFENDBASE;
             bc->ctf_goal_time = now + CTF_DEFENDBASE_TIME;
 
-            /* Own flag: same proximity heuristic */
+            /* Own flag: the team settled at spawn */
             {
-                vec3_t dr, db;
-                float dist_red, dist_blue;
                 q2_defendzone_t *z;
-                VectorSubtract(bc->origin, ctf_redflag.origin, dr);
-                VectorSubtract(bc->origin, ctf_blueflag.origin, db);
-                dist_red = VectorLengthSquared(dr);
-                dist_blue = VectorLengthSquared(db);
-                if (dist_red < dist_blue) {
+                if (Q2BotOwnFlagIsRed(bc)) {
                     Com_Memcpy(&bc->ctf_goal, &ctf_redflag, sizeof(bot_goal_t));
                     z = &q2_reddefend;
                 } else {
