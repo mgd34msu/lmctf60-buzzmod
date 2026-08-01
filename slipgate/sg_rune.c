@@ -254,6 +254,18 @@ static qboolean Prove_Contact(vec3_t at, vec3_t target)
 	return tr.fraction >= 1.0f;
 }
 
+static int gen_momentum_links, gen_momentum_tries;
+
+/*
+ * Entry speed for the NEXT Prove roll, consumed by Prove at placement. Zero
+ * means the from-rest proof every link has had since the first cut. Nonzero
+ * is the momentum experiment: a gap too wide for the runway inside one
+ * proof's approach can still be crossed by a body that ARRIVES at speed --
+ * which is the case min_speed on the envelope was designed to record and
+ * never had a writer for.
+ */
+static float gen_entry_speed = 0.0f;
+
 static qboolean Prove(int from, int to, qboolean jump,
                       short *cost_ms, byte *exit_speed)
 {
@@ -266,6 +278,19 @@ static qboolean Prove(int from, int to, qboolean jump,
 	int edge_hold_steps = 0;
 
 	SG_OraclePlace(&ph, gen_seeds[from].origin);
+
+	if (gen_entry_speed > 0.0f)
+	{
+		vec3_t ev;
+
+		VectorSubtract(gen_seeds[to].origin, gen_seeds[from].origin, ev);
+		ev[2] = 0.0f;
+		VectorNormalize(ev);
+		ph.velocity[0] = ev[0] * gen_entry_speed;
+		ph.velocity[1] = ev[1] * gen_entry_speed;
+		ph.pms.velocity[0] = (short)(ph.velocity[0] * 8.0f);
+		ph.pms.velocity[1] = (short)(ph.velocity[1] * 8.0f);
+	}
 
 	for (elapsed = 0; elapsed < TRY_LIMIT_MS; elapsed += STEP_MSEC)
 	{
@@ -2030,6 +2055,50 @@ static void Prove_All(void)
 					VectorCopy(anchor, l->anchor);
 					Link_Env_Hook(l, gen_seeds[i].origin, anchor);
 				}
+				else if (d[2] <= 128.0f && d[2] >= -600.0f)
+				{
+					/*
+					 * Both from-rest rolls and the rope failed. One card
+					 * left: arrive at speed. The phantom enters at 320
+					 * u/s on the target line and jumps off that momentum;
+					 * what it proves, the envelope records -- min_speed
+					 * 280 (a floor the 320 proof comfortably covers, the
+					 * same honesty Link_Env_Drop keeps), heading the
+					 * target line, the drop cone's slack. The flood
+					 * charges arrival speed via Env_AccelCost; the body
+					 * gates its hop on carrying the speed for real.
+					 */
+					int before = gen_num_links;
+
+					/*
+					 * Budgeted like the rocket-jump pass: every pair that
+					 * failed three provers gets one more full pmove roll,
+					 * and on a 3000-seed map that unbounded doubled the
+					 * generation past its harness timeout. Six thousand
+					 * rolls cover the gap-shaped candidates that matter.
+					 */
+					if (gen_momentum_tries >= 6000)
+						continue;
+					gen_momentum_tries++;
+
+					gen_entry_speed = 320.0f;
+					if (Prove(i, j, true, &cost, &espeed))
+					{
+						Link_Add(i, j,
+						         (d[2] < -160.0f) ? RL_DROP : RL_JUMP,
+						         cost, espeed);
+						if (gen_num_links != before)
+						{
+							rune_link_t *l = &gen_links[gen_num_links - 1];
+
+							l->heading = Heading_Quantize(d[0], d[1]);
+							l->heading_slack = SG_DROP_SLACK;
+							l->min_speed = (byte)(280.0f / 4.0f);
+							gen_momentum_links++;
+						}
+					}
+					gen_entry_speed = 0.0f;
+				}
 			}
 		}
 		if ((i & 255) == 0)
@@ -2195,10 +2264,10 @@ qboolean Rune_Generate(const char *mapname)
 	gi.dprintf("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
 	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
 	gi.dprintf("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d); "
-	           "plat-down drop=%d unlinked=%d\n",
+	           "plat-down drop=%d unlinked=%d; momentum=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
 	           gen_lift_links, gen_tele_links,
-	           gen_lift_down_drop, gen_lift_down_none);
+	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links);
 	Doors_Restore(held, ndoors);
 
 	Com_sprintf(path, sizeof(path), "%s/maps/%s.rune",

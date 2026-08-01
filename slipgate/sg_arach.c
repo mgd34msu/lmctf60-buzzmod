@@ -131,6 +131,8 @@ typedef struct sg_bot_s
 	                             * a full lmctf01 match (iter 41) */
 	float		stag_since;
 	float		stag_next;      /* escalation: one shelve per 2s while parked */
+	qboolean	nav_drove;      /* last frame, navigation drove the legs */
+	qboolean	engaged_last;   /* last frame, combat owned the fight */
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -1439,8 +1441,17 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * drain this system got burned by (that one shelved at 10Hz).
 	 */
 	VectorSubtract(e->s.origin, bot->stag_org, d);
-	if (VectorLength(d) > 96.0f)
+	if (VectorLength(d) > 96.0f || !bot->nav_drove || bot->engaged_last)
 	{
+		/*
+		 * Not displacement alone: the clock runs ONLY through frames where
+		 * navigation was actually driving the legs and no fight owned the
+		 * body. The first cut counted every parked second -- corner holds,
+		 * duels, posts -- and shelved the fleet's routes to rags in one
+		 * wave (iter 43: 784 firings, zero steals anywhere, kills gutted).
+		 * Parked-while-driving is the deadlock class; parked-on-purpose
+		 * is not a link's fault.
+		 */
 		VectorCopy(e->s.origin, bot->stag_org);
 		bot->stag_since = level.time;
 	}
@@ -1463,6 +1474,7 @@ static void SG_BotThink(sg_bot_t *bot)
 			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
 	}
+	bot->nav_drove = false;         /* the movement code below re-arms it */
 	/* consumed by the watch above; the feelers re-raise it if the body is
 	 * still there this frame */
 	bot->mate_block_last = false;
@@ -1879,7 +1891,20 @@ no_hold:;
 			VectorCopy(sg_rune->seeds[l->to].origin, aim);
 			have_aim = true;
 			if (l->action == RL_JUMP && e->groundentity)
-				jump_now = true;
+			{
+				/*
+				 * A momentum link's proof entered at 320 u/s and jumped
+				 * off that speed; hopping without it lands in the gap.
+				 * Hold the run until the body carries most of what the
+				 * envelope claims (from-rest links claim zero and hop
+				 * as they always did).
+				 */
+				float jh = sqrtf(e->velocity[0] * e->velocity[0] +
+				                 e->velocity[1] * e->velocity[1]);
+
+				if (jh >= (float)(l->min_speed * 4) * 0.8f)
+					jump_now = true;
+			}
 			/* the landing hop belongs on running ground, not on a link
 			 * whose traversal is itself a jump, a drop, a rope or a swim */
 			if (l->action == RL_RUN)
@@ -2279,6 +2304,7 @@ no_hold:;
 
 			view_yaw = chosen_yaw;
 			view_pitch = swim_pitch;
+			bot->nav_drove = true;
 			}
 			move_dir[0] = cosf(chosen_yaw * (float)M_PI / 180.0f);
 			move_dir[1] = sinf(chosen_yaw * (float)M_PI / 180.0f);
@@ -2318,6 +2344,7 @@ no_hold:;
 			cmd.forwardmove = 0;
 			cmd.sidemove = 0;
 			cmd.upmove = 0;
+			bot->nav_drove = false;
 		}
 
 		/* and braking OUT of a rope: hold the landing until the body is
@@ -2327,6 +2354,7 @@ no_hold:;
 			cmd.forwardmove = 0;
 			cmd.sidemove = 0;
 			cmd.upmove = 0;
+			bot->nav_drove = false;
 		}
 
 		/* rotating door working its arc: hold ground (or yield the arc),
@@ -2339,6 +2367,7 @@ no_hold:;
 			cmd.forwardmove = (door_hold == 2) ? -200 : 0;
 			cmd.upmove = 0;
 			bot->door_held_last = true;
+			bot->nav_drove = false;
 
 			if (door_ent != bot->door_hold_ent)
 			{
@@ -2373,6 +2402,7 @@ no_hold:;
 			cmd.forwardmove = 0;
 			cmd.sidemove = 0;
 			cmd.upmove = 0;
+			bot->nav_drove = false;
 			cmd.angles[YAW] = ANGLE2SHORT(post_yaw)
 			                - e->client->ps.pmove.delta_angles[YAW];
 			cmd.angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
@@ -2516,6 +2546,7 @@ no_hold:;
 		if (bot->hook_phase != 1 && bot->hook_phase != 3 &&
 		    bot->rj_phase == 0)
 			SG_CombatFrame(e, &cmd, &engaged);
+		bot->engaged_last = engaged;
 
 		/*
 		 * Combat re-aimed: rebuild the movement basis from the view pmove
