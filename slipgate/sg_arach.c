@@ -2601,6 +2601,28 @@ no_hold:;
 			bot->door_held_last = false;
 		}
 
+		/*
+		 * BREATH OUTRANKS EVERYTHING. Twelve seconds of air is what the
+		 * game gives; the lmctf01 moat tunnel costs ten at pace and any
+		 * stall drowns the swimmer -- wave 55's first-ever carrier on
+		 * that map 'sank like a rock' mid-return, and the census says
+		 * drowning, not defense, is what kills conversions there. Four
+		 * seconds from the gurgle, the route stops mattering: pitch up,
+		 * kick for the surface, breathe, and let the field resume from
+		 * wherever the gasp happened. The rope is the one thing faster
+		 * than swimming, so a live pull is left alone.
+		 */
+		if (e->waterlevel >= 3 && bot->hook_phase != 2 &&
+		    e->air_finished - level.time < 4.0f)
+		{
+			cmd.angles[PITCH] = ANGLE2SHORT(-85.0f)
+			                  - e->client->ps.pmove.delta_angles[PITCH];
+			cmd.forwardmove = 400;
+			cmd.upmove = 400;
+			view_pitch = -85.0f;
+			bot->nav_drove = false;     /* not the route's fault */
+		}
+
 		/* on post: whatever the descent wanted, guard duty overrides it */
 		if (hold_post)
 		{
