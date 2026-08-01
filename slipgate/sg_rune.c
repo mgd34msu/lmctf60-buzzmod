@@ -2005,7 +2005,18 @@ static void Prove_All(void)
 				}
 				continue;
 			}
-			if (d[2] > 512.0f || d[2] < -512.0f)
+			/*
+			 * A plunge into water is the one deep descent the game makes
+			 * safe -- the splash cancels the fall -- and the one these
+			 * cutoffs made unprovable. lmctf05's halves connect through
+			 * water at -1984: the red base was a 367-seed component with
+			 * one hook in and NO way out, the red flag inside it, and
+			 * every attacker on the map priced at infinity because of
+			 * these two lines. Depth stays capped for dry landings.
+			 */
+			if (d[2] > 512.0f ||
+			    (d[2] < -512.0f &&
+			     !((gen_seeds[j].flags & RSF_WATER) && d[2] >= -2048.0f)))
 				continue;
 
 			/*
@@ -2018,7 +2029,9 @@ static void Prove_All(void)
 			 * COSTS in health is the surface's business, not the graph's.
 			 */
 			if (d[2] < -160.0f) dg_pairs++;
-			if (d[2] < -160.0f && d[2] >= -600.0f)
+			if (d[2] < -160.0f &&
+			    (d[2] >= -600.0f ||
+			     ((gen_seeds[j].flags & RSF_WATER) && d[2] >= -2048.0f)))
 			{
 				vec3_t lip;
 
