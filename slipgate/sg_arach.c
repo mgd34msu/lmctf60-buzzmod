@@ -137,6 +137,9 @@ typedef struct sg_bot_s
 	float		fan_side_until;
 	float		escape_until;   /* backing out of a concave pocket */
 	float		escape_yaw;
+	int			rail_link;      /* RUN link being retried the proof's way */
+	int			rail_stage;     /* 0 off, 1 walk to from-seed, 2 drive line */
+	float		rail_until;
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -1477,6 +1480,28 @@ static void SG_BotThink(sg_bot_t *bot)
 	{
 		int b, oldest = 0;
 
+		/*
+		 * A RUN link earns one retry THE PROOF'S WAY before the shelf.
+		 * Seed 327's passage is a slit the phantom threads dead-center
+		 * from the seed origin -- proofs deviate under 48 units, so no
+		 * waypoint, and the feelers deflect off the slit's edges away
+		 * from the one line that works (iter 51: 135 firings, zero
+		 * waypointed links to store). Rail mode walks to the from-seed
+		 * exactly as the proof did, then drives the straight line with
+		 * the fan silenced. If THAT fails, the shelf and the futility
+		 * lesson follow as before.
+		 */
+		if (sg_rune->links[bestlink].action == RL_RUN &&
+		    bot->rail_link != bestlink)
+		{
+			bot->rail_link = bestlink;
+			bot->rail_stage = 1;
+			bot->rail_until = level.time + 4.0f;
+			bot->stag_next = level.time + 2.0f;
+			VectorCopy(e->s.origin, bot->stag_org);
+			bot->stag_since = level.time;
+			goto stag_done;
+		}
 		for (b = 0; b < SG_BL_MAX; b++)
 			if (bot->bl_until[b] < bot->bl_until[oldest])
 				oldest = b;
@@ -1501,6 +1526,7 @@ static void SG_BotThink(sg_bot_t *bot)
 			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
 	}
+stag_done:
 	bot->nav_drove = false;         /* the movement code below re-arms it */
 	/* consumed by the watch above; the feelers re-raise it if the body is
 	 * still there this frame */
@@ -2324,6 +2350,63 @@ no_hold:;
 			 * the proof is a line, and the line is the record's */
 			if (drop_yaw_locked)
 				chosen_yaw = drop_yaw;
+
+			/*
+			 * Rail mode: the retry that trusts the proof over the fan.
+			 * Stage 1 walks to the link's from-seed (the proof's start);
+			 * stage 2 drives the straight from->to line with the fan
+			 * silenced -- pmove slides along the slit's edges exactly as
+			 * the phantom's pmove did. Arrival, a better field value, or
+			 * the clock ends it; a timeout hands the link to the shelf.
+			 */
+			if (bot->rail_stage > 0 && bestlink == bot->rail_link &&
+			    bestlink >= 0)
+			{
+				rune_link_t *rl = &sg_rune->links[bestlink];
+				vec3_t rd;
+
+				if (level.time > bot->rail_until ||
+				    bot->seed == rl->to)
+				{
+					if (level.time > bot->rail_until &&
+					    bot->seed != rl->to)
+					{
+						int b2, old2 = 0;
+
+						for (b2 = 0; b2 < SG_BL_MAX; b2++)
+							if (bot->bl_until[b2] < bot->bl_until[old2])
+								old2 = b2;
+						bot->bl_link[old2] = bestlink;
+						bot->bl_until[old2] = level.time + 45.0f;
+						bot->commit_link = -1;
+						SG_TeachFutility(bot->seed);
+					}
+					bot->rail_stage = 0;
+				}
+				else if (bot->rail_stage == 1)
+				{
+					VectorSubtract(sg_rune->seeds[rl->from].origin,
+					               e->s.origin, rd);
+					rd[2] = 0.0f;
+					if (VectorLength(rd) < 24.0f)
+					{
+						bot->rail_stage = 2;
+						bot->rail_until = level.time + 3.0f;
+					}
+					else
+						chosen_yaw = atan2f(rd[1], rd[0])
+						             * 180.0f / (float)M_PI;
+				}
+				if (bot->rail_stage == 2)
+				{
+					VectorSubtract(sg_rune->seeds[rl->to].origin,
+					               e->s.origin, rd);
+					chosen_yaw = atan2f(rd[1], rd[0])
+					             * 180.0f / (float)M_PI;
+				}
+			}
+			else if (bot->rail_stage > 0)
+				bot->rail_stage = 0;    /* the surface moved on: stand down */
 
 			/* backing out of a pocket overrides everything but the lip:
 			 * the retreat only ends early if the goal line opens up */
