@@ -848,8 +848,17 @@ static const int sg_ladder_close[] = {
 	SG_W_PLASMA, SG_W_BLASTER, -1
 };
 
+/*
+ * Mid ranks the rocket over the rail as of the wave-42..47 accuracy
+ * tables: this body rails at 12-14% under the skill scatter and lands
+ * rockets at 23%, and 12% of 100 loses to 23% of a rocket plus its
+ * splash at every mid distance. The dossier's rail-first order was
+ * written for a hand steadier than the one the skill model gives us --
+ * the LADDER serves the shooter it has, not the shooter the dossier
+ * imagined (WEAPONS.md 2.1, amended).
+ */
 static const int sg_ladder_mid[] = {
-	SG_W_RAILGUN, SG_W_ROCKETLAUNCHER, SG_W_HYPERBLASTER, SG_W_CHAINGUN,
+	SG_W_ROCKETLAUNCHER, SG_W_RAILGUN, SG_W_HYPERBLASTER, SG_W_CHAINGUN,
 	SG_W_MACHINEGUN, SG_W_SHOTGUN, SG_W_BFG, SG_W_BLASTER, -1
 };
 

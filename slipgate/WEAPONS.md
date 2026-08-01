@@ -1047,6 +1047,12 @@ just never issue it.
 
 ## 2.1 (a) Weapon selection ladder
 
+> **Amended (iter 47):** mid band ranks the rocket launcher over the
+> railgun. Measured accuracy under the skill model: rail 12-14%, rocket
+> 23% -- expected damage favors the rocket at every mid distance once
+> splash is counted. The rail-first order assumed a steadier hand than
+> the scatter floors allow.
+
 Range bands: **contact** < 128, **close** 128–400, **mid** 400–900,
 **long** > 900. Distance is eye-to-target-bbox-centre, the same measure
 `sg_combat.c:387-389` already computes.
