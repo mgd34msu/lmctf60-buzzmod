@@ -1032,7 +1032,17 @@ static void SG_BotThink(sg_bot_t *bot)
 			bot->death_taught = true;
 		}
 		bot->seed = -1;
-		cmd.buttons = BUTTON_ATTACK;
+		/*
+		 * PULSE the trigger, never hold it. Respawn keys off
+		 * latched_buttons -- fresh presses only (p_client.c:3203) -- and
+		 * a button held from the first dead frame latches exactly once,
+		 * before respawn_time has elapsed, then never again: the corpse
+		 * waits forever for a press that cannot re-arrive. Observed live
+		 * the moment a human watched a body instead of a stat line.
+		 * Toggling at 5Hz lands a fresh latch every other frame.
+		 */
+		cmd.buttons = (((int)(level.time * 10.0f)) & 2)
+		              ? BUTTON_ATTACK : 0;
 		ClientThink(e, &cmd);
 		return;
 	}
