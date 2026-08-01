@@ -106,3 +106,6 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
  * frame it happens.
  */
 void SG_CombatPursuit(edict_t *self, qboolean allowed);
+
+/* debug: the trigger-veto tally, printed every 5s on sg_debug */
+void SG_CombatWhy(void);

@@ -383,6 +383,15 @@ typedef struct
 
 static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
 
+/* why the trigger stayed off, tallied per enemy-frame and printed on the
+ * debug channel every few seconds: [0] fired, [1] no clear shot,
+ * [2] splash veto, [3] range cap, [4] lead drift, [5] fire window,
+ * [6] held/switching. Diagnosis for the 3-in-3025 firing collapse. */
+static int		sg_cbt_why[10];
+static int		sg_cbt_scan[6];     /* [0]unteamed [1]same [2]far [3]fov
+                                     * [4]blocked [5]acquired */
+static float	sg_cbt_why_next;
+
 /* ------------------------------------------------------------- item cache
  *
  * FindItem walks itemlist comparing pickup_name strings (g_items.c). Doing
@@ -518,25 +527,26 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward)
 
 		theirteam = p->client->ctf.teamnum;
 		if (theirteam != CTF_TEAM_RED && theirteam != CTF_TEAM_BLUE)
-			continue;
+			{ sg_cbt_scan[0]++; continue; }
 		if (theirteam == myteam)
-			continue;
+			{ sg_cbt_scan[1]++; continue; }
 
 		Combat_Center(p, mid);
 		VectorSubtract(mid, eye, delta);
 		dist = VectorLength(delta);
 		if (dist < 1.0f || dist >= bestdist)
-			continue;
+			{ sg_cbt_scan[2]++; continue; }
 
 		/* forward cone: do not shoot backwards. The basis is the CURRENT
 		 * v_angle, which is what the previous frame's cmd angles produced. */
 		VectorScale(delta, 1.0f / dist, delta);
 		dot = DotProduct(delta, forward);
 		if (dot < SG_FOV_COS)
-			continue;
+			{ sg_cbt_scan[3]++; continue; }
 
 		if (!Combat_Visible(self, p))
-			continue;
+			{ sg_cbt_scan[4]++; continue; }
+		sg_cbt_scan[5]++;
 
 		best = p;
 		bestdist = dist;
@@ -2017,7 +2027,10 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	eye[2] += self->viewheight;
 	AngleVectors(self->client->v_angle, forward, NULL, NULL);
 
+	sg_cbt_why[7]++;                        /* frames that got this far */
 	enemy = Combat_Scan(self, eye, forward);
+	if (enemy)
+		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)
 	{
 		/*
@@ -2377,19 +2390,28 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		}
 
 		if (!clear_shot)
+		{
+			sg_cbt_why[1]++;
 			return;				/* aim is written; the trigger stays off */
+		}
 
 		/* ----------------------------------------------------- the vetoes */
 
 		/* rule R1: never fire a splash weapon whose impact point is inside its
 		 * own d_safe of the bot's bbox centre. The cliff is hard, not a taper. */
 		if (!Combat_SplashSafe(self, inhand, impact))
+		{
+			sg_cbt_why[2]++;
 			return;
+		}
 
 		/* rule F6: a hitscan weapon past its cap is worse than the blaster */
 		if (sg_weapons[inhand].range_cap > 0.0f &&
 		    dist > sg_weapons[inhand].range_cap)
+		{
+			sg_cbt_why[3]++;
 			return;
+		}
 
 		/* rule F1: a projectile is only fired when the lead is a prediction.
 		 * The tolerance is three quarters of a 32-unit bbox
@@ -2399,7 +2421,10 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 			float drift = flight * VectorLength(enemy->velocity);
 
 			if (drift >= SG_LEAD_TOLERANCE && !vel_stable)
+			{
+				sg_cbt_why[4]++;
 				return;
+			}
 		}
 
 		/*
@@ -2431,7 +2456,10 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	}
 
 	if (!st->win_fire)
+	{
+		sg_cbt_why[5]++;
 		return;
+	}
 
 	/*
 	 * The invariant, last thing before the button.
@@ -2452,7 +2480,26 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * never pers.weapon.
 	 */
 	if (Combat_Held(self) < 0 || self->client->newweapon)
+	{
+		sg_cbt_why[6]++;
 		return;
+	}
 
+	sg_cbt_why[0]++;
 	cmd->buttons |= BUTTON_ATTACK;
+}
+
+/* the tally, printed from SG_CombatFrame's caller cadence via any bot */
+void SG_CombatWhy(void)
+{
+	if (!gi.cvar("sg_debug", "0", 0)->value || level.time < sg_cbt_why_next)
+		return;
+	sg_cbt_why_next = level.time + 5.0f;
+	gi.dprintf("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d\n",
+	           sg_cbt_why[7], sg_cbt_why[8],
+	           sg_cbt_why[0], sg_cbt_why[1], sg_cbt_why[2], sg_cbt_why[3],
+	           sg_cbt_why[4], sg_cbt_why[5], sg_cbt_why[6]);
+	gi.dprintf("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d\n",
+	           sg_cbt_scan[0], sg_cbt_scan[1], sg_cbt_scan[2],
+	           sg_cbt_scan[3], sg_cbt_scan[4], sg_cbt_scan[5]);
 }

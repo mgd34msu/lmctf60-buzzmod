@@ -56,6 +56,12 @@ typedef struct sg_bot_s
 	int			hook_phase;     /* 0 none, 1 aimed+firing, 2 rope out,
 	                             * 3 released mid-air, steering to land */
 	int			hook_link;      /* which link this ride is executing */
+	qboolean	hook_bite_logged;   /* one HOOKBITE line per ride */
+	float		hook_landbrake; /* stand the landing like the proof did:
+	                             * the phantom ARRIVED at a stop; a body
+	                             * at 343 skids off the narrow step and
+	                             * falls back into the basin it climbed
+	                             * out of (iter-19 lmctf03, Gate) */
 	vec3_t		hook_anchor;
 	vec3_t		hook_dest;      /* the link's destination seed origin */
 	float		hook_deadline;
@@ -84,6 +90,8 @@ typedef struct sg_bot_s
 	                                 * commanded stillness, not link failure */
 	qboolean	mate_block_last;    /* a TEAMMATE was the obstruction: not
 	                                 * the link's failure either */
+	qboolean	def_stand;          /* this defender is the stand statue;
+	                                 * false = the patrol, which never pins */
 
 	/* loop detection wider than the watch's 96-unit ball: recent seeds
 	 * visited with the goal value each visit held. Coming back no better
@@ -494,44 +502,92 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		size++;
 	}
 
-	defenders_wanted = (size * 2 + 2) / 5;
-	if (size <= 1)
-		defenders_wanted = 0;
-
-	/* a live carrier on our side counts toward the defensive share */
-	if (own->client >= 0)
-		defenders_wanted--;
-
-	if (my_rank < defenders_wanted)
-		return SG_ROLE_DEFEND;
-
 	/*
-	 * Our flag is astray by common knowledge (the HUD tells everyone). The
-	 * attacking share turns around: the goal becomes our flag where belief
-	 * puts it, and the believed thief is priced heavily by the recover row.
+	 * STRATEGY BY GAME STATE, the way the demos play it. Four states from
+	 * two common-knowledge bits (each flag home or astray -- the HUD tells
+	 * everyone), and each state names its shape. The old static 2-in-5
+	 * quota played every state identically; games are won by playing them
+	 * differently.
+	 *
+	 *   both home        2 DEFEND, rest ATTACK. The base shape.
+	 *   theirs astray    2 DEFEND (the return-kill wave is coming),
+	 *   (ours home)      1 ESCORT walks the carrier in, rest ATTACK their
+	 *                    base -- they cannot score while we hold theirs,
+	 *                    and the next steal queues behind this capture.
+	 *   ours astray      1 DEFEND holds the stand for the return; the
+	 *   (theirs home)    rest RECOVER. An empty stand needs a watchman,
+	 *                    not a garrison.
+	 *   both astray      the decisive state. 1 DEFEND stand-watch,
+	 *                    1 ESCORT keeps our carrier alive, rest RECOVER --
+	 *                    the standoff breaks on exactly one event, their
+	 *                    carrier's death, and ours must survive to convert
+	 *                    it.
 	 */
-	if (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY)
-		return SG_ROLE_RECOVER;
-
-	/*
-	 * One escort for a live carrier of ours. The support field has to have
-	 * been flooded at least once this level for the role to mean anything --
-	 * before that it is infinite everywhere and an escort would have no
-	 * surface to descend, so those bots keep attacking.
-	 */
-	if (own->client >= 0 && own->client != my_client &&
-	    sg_fields.our_carrier_valid[team - 1])
 	{
-		int escort_rank = (defenders_wanted > 0) ? defenders_wanted : 0;
+		qboolean ours_astray =
+		    (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY);
+		qboolean theirs_astray =
+		    (sg_caco_team_belief.flag[2 - team].state == SG_FLAG_ASTRAY);
+		qboolean have_carrier = (own->client >= 0 &&
+		                         sg_fields.our_carrier_valid[team - 1]);
+		int escort_rank;
 
-		/* the carrier plays its own role; the escort is the next one down */
-		if (escort_rank == carrier_rank)
-			escort_rank++;
-		if (my_rank == escort_rank)
-			return SG_ROLE_ESCORT;
+		defenders_wanted = ours_astray ? 1 : 2;
+		if (size <= 1)
+			defenders_wanted = 0;
+		else if (size == 2)
+			defenders_wanted = 1;
+		/* a live carrier on our side counts toward the defensive share */
+		if (own->client >= 0 && !ours_astray)
+			defenders_wanted--;
+		if (defenders_wanted < 0)
+			defenders_wanted = 0;
+
+		/* role-flap diagnostic: two bots alternated DEFEND/ATTACK every
+		 * frame of it18 (600 flips/600 samples) -- print the decision
+		 * inputs on each change so the oscillating input names itself */
+		if (gi.cvar("sg_debug", "0", 0)->value)
+		{
+			static int last_dw[SG_MAXBOTS], last_oc[SG_MAXBOTS];
+			int me = (int)(bot - sg_bots);
+
+			if (me >= 0 && me < SG_MAXBOTS &&
+			    (last_dw[me] != defenders_wanted ||
+			     last_oc[me] != own->client))
+			{
+				gi.dprintf("ROLEIN %s dw=%d rank=%d own=%d astray=%d size=%d\n",
+				           bot->ent->client->pers.netname,
+				           defenders_wanted, my_rank, own->client,
+				           (int)ours_astray, size);
+				last_dw[me] = defenders_wanted;
+				last_oc[me] = own->client;
+			}
+		}
+
+		if (my_rank < defenders_wanted)
+		{
+			/* the FIRST defender is the statue on the stand; a second
+			 * is the patrol -- it never pins, so the surface walks it
+			 * around the base picking up armor and covering approaches */
+			bot->def_stand = (my_rank == 0);
+			return SG_ROLE_DEFEND;
+		}
+
+		/* one escort whenever we have a live carrier that is not me */
+		if (have_carrier && own->client != my_client)
+		{
+			escort_rank = defenders_wanted;
+			if (escort_rank == carrier_rank)
+				escort_rank++;
+			if (my_rank == escort_rank)
+				return SG_ROLE_ESCORT;
+		}
+
+		if (ours_astray)
+			return SG_ROLE_RECOVER;
+		(void)theirs_astray;    /* shape only differs via the states above */
+		return SG_ROLE_ATTACK;
 	}
-
-	return SG_ROLE_ATTACK;
 }
 
 /*
@@ -887,6 +943,20 @@ static void SG_BotThink(sg_bot_t *bot)
 				break;
 			}
 		}
+	}
+	/*
+	 * The patrol's circuit is an appetite, not a waypoint list: a
+	 * permanently item-hungry second defender oscillates between the
+	 * stand's pull and whatever armor or health just respawned nearby,
+	 * which IS the patrol (it13: without this, the unpinned patrol stood
+	 * at its field minimum -- 592 samples at one point -- because
+	 * standing there is what minimums are for).
+	 */
+	if (role == SG_ROLE_DEFEND && !bot->def_stand)
+	{
+		if (live.item[SG_FC_ARMOR] < 1.1f)  live.item[SG_FC_ARMOR] = 1.1f;
+		if (live.item[SG_FC_HEALTH] < 1.0f) live.item[SG_FC_HEALTH] = 1.0f;
+		if (live.item[SG_FC_AMMO] < 1.0f)   live.item[SG_FC_AMMO] = 1.0f;
 	}
 	w = &live;
 
@@ -1320,9 +1390,32 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * would arrive through -- the neighbor whose field value sits closest
 	 * above this one. Combat still owns the view the moment anyone shows.
 	 */
-	if (role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400)
+	if (role == SG_ROLE_DEFEND && bot->def_stand &&
+	    goal_field[bot->seed] < 400)
 	{
 		int facev = 0x7fffffff, face = -1;
+		qboolean quiet = true;
+		int s;
+
+		/*
+		 * A quiet post permits an errand. Quiet means no believed
+		 * contact -- eye or ear -- in six seconds; the errand means the
+		 * hold releases and the surface runs, and the surface already
+		 * knows the way: the defend objective pulls back toward the
+		 * stand, the need-weighted item terms pull toward the armor the
+		 * defender is missing, and the sum walks out, grabs, and walks
+		 * back without a single scripted step. The hold only pins a
+		 * defender who has nothing worth fetching or no peace to fetch
+		 * it in.
+		 */
+		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+			if (sg_caco_enemies[team - 1][s].client >= 0 &&
+			    level.time - sg_caco_enemies[team - 1][s].seen_time < 6.0f)
+				quiet = false;
+		if (quiet &&
+		    (w->item[SG_FC_ARMOR] > 0.9f || w->item[SG_FC_HEALTH] > 0.9f ||
+		     w->item[SG_FC_AMMO] > 0.9f))
+			goto no_hold;   /* needy and unthreatened: run the errand */
 
 		for (li = sg_rune->first_link[bot->seed]; li >= 0;
 		     li = sg_rune->next_link[li])
@@ -1394,6 +1487,7 @@ static void SG_BotThink(sg_bot_t *bot)
 			}
 		}
 	}
+no_hold:;
 
 	/*
 	 * Combat holds a weapon whether or not anyone is in sight, and a posted
@@ -1554,6 +1648,7 @@ static void SG_BotThink(sg_bot_t *bot)
 					           sqrtf(ld[0] * ld[0] + ld[1] * ld[1]), ld[2]);
 				}
 				bot->hook_phase = 0;
+				bot->hook_landbrake = level.time + 0.3f;
 				/* a rope ride ENDS its commitment: wherever this landing
 				 * is, the next step is argued fresh from here */
 				bot->commit_link = -1;
@@ -1666,6 +1761,7 @@ static void SG_BotThink(sg_bot_t *bot)
 						VectorCopy(sg_rune->seeds[l->to].origin,
 						           bot->hook_dest);
 						bot->hook_link = bestlink;
+						bot->hook_bite_logged = false;
 						bot->hook_phase = 1;
 						/* flight + climb budget: gravity fights the pull
 						 * on a tall rope, so the real ascent runs well
@@ -1701,7 +1797,11 @@ static void SG_BotThink(sg_bot_t *bot)
 				 * with a 96-unit lock radius it never entered.
 				 */
 				drop_yaw_locked = true;
-				drop_yaw = (liph > 24.0f)
+				/* 8, not 24: the proof fell FROM the lip point, and at
+				 * 20 units of lateral offset the recorded heading runs
+				 * into the railing beside the gap (it13: attackers
+				 * jittering on the balcony lip at goal 4700, dl=1) */
+				drop_yaw = (liph > 8.0f)
 				               ? atan2f(lipd[1], lipd[0]) * 180.0f / M_PI
 				               : l->heading * (360.0f / 256.0f);
 			}
@@ -1950,6 +2050,24 @@ static void SG_BotThink(sg_bot_t *bot)
 			if (drop_yaw_locked)
 				chosen_yaw = drop_yaw;
 
+			/*
+			 * THE AIM FRAME OWNS THE VIEW. Phase 1 wrote the anchor
+			 * bearing above; this write, running after it, was flattening
+			 * every rope's pitch to zero and pointing it down the goal
+			 * line -- 1519 of 1533 bad bites flew off the aim line
+			 * (iteration 23), every under-climb since the first match
+			 * traces here. The aim frame is a standing frame, exactly
+			 * the posture the proofs fired from.
+			 */
+			if (bot->hook_phase == 1)
+			{
+				cmd.forwardmove = 0;
+				cmd.sidemove = 0;
+				cmd.upmove = 0;
+				have_move = false;
+			}
+			else
+			{
 			cmd.angles[YAW] = ANGLE2SHORT(chosen_yaw)
 			                - e->client->ps.pmove.delta_angles[YAW];
 			cmd.angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
@@ -1959,6 +2077,7 @@ static void SG_BotThink(sg_bot_t *bot)
 
 			view_yaw = chosen_yaw;
 			view_pitch = 0.0f;
+			}
 			move_dir[0] = cosf(chosen_yaw * (float)M_PI / 180.0f);
 			move_dir[1] = sinf(chosen_yaw * (float)M_PI / 180.0f);
 			move_dir[2] = 0.0f;
@@ -1993,6 +2112,15 @@ static void SG_BotThink(sg_bot_t *bot)
 		/* braking for a rope: kill the run so the fire happens from the
 		 * standing start the proof used */
 		if (hook_brake)
+		{
+			cmd.forwardmove = 0;
+			cmd.sidemove = 0;
+			cmd.upmove = 0;
+		}
+
+		/* and braking OUT of a rope: hold the landing until the body is
+		 * standing where the phantom stood, then argue the next step */
+		if (level.time < bot->hook_landbrake && e->groundentity)
 		{
 			cmd.forwardmove = 0;
 			cmd.sidemove = 0;
@@ -2308,7 +2436,36 @@ static void SG_BotThink(sg_bot_t *bot)
 			 * kills. Rides that genuinely fail are caught where failure
 			 * is real -- the field-served check at landing, which
 			 * shelves the link (HOOKFAIL).
+			 *
+			 * But MEASURE the bite: 78-87 percent of rides fail the
+			 * field test across four maps, and the two suspects for
+			 * wrong bites at scale are teammates' bodies (the bolt
+			 * clips MASK_SHOT, which includes players) and doors closed
+			 * at runtime that generation held open for the rope-line
+			 * proof. The attach entity's classname names the culprit.
 			 */
+			if (gi.cvar("sg_debug", "0", 0)->value &&
+			    e->client->hook && e->client->hook->hook_target &&
+			    !bot->hook_bite_logged)
+			{
+				vec3_t ba;
+				edict_t *ht = e->client->hook->hook_target;
+
+				VectorSubtract(e->client->hook->s.origin,
+				               bot->hook_anchor, ba);
+				if (VectorLength(ba) > 96.0f)
+					gi.dprintf("HOOKBITE %s off=%.0f into=%s org=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) got=(%.0f %.0f %.0f)\n",
+					           e->client->pers.netname, VectorLength(ba),
+					           ht->classname ? ht->classname :
+					           (ht == g_edicts ? "world" : "?"),
+					           e->s.origin[0], e->s.origin[1], e->s.origin[2],
+					           bot->hook_anchor[0], bot->hook_anchor[1],
+					           bot->hook_anchor[2],
+					           e->client->hook->s.origin[0],
+					           e->client->hook->s.origin[1],
+					           e->client->hook->s.origin[2]);
+				bot->hook_bite_logged = true;
+			}
 			{
 
 			VectorSubtract(bot->hook_anchor, e->s.origin, rd);
@@ -2386,6 +2543,7 @@ void SG_RunFrame(void)
 	    (sg_rune && Q_stricmp(sg_rune_map, level.mapname) != 0))
 		SG_LevelChange();
 	last_time = level.time;
+	SG_CombatWhy();
 
 	if (sg_rune)
 	{

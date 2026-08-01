@@ -480,9 +480,37 @@ static qboolean ProveHook(int from, int to, vec3_t anchor_out,
 			VectorCopy(tr.endpos, anchor);
 			anchor[2] -= 4.0f;
 
-			tr = gi.trace(eye, NULL, NULL, anchor, NULL, Q2_MASK_SHOT_GEN);
-			if (tr.fraction >= 0.98f)
-				got = true;
+			/*
+			 * The rope line is proved from the MUZZLE, not the eye: the
+			 * real bolt spawns at P_ProjectSource's {8, 8, viewheight-8}
+			 * offset (p_weapon.c:2021-2023), eight units below and beside
+			 * the eye line. An eye-proved line that cleared a lip by five
+			 * units put 1618 real ropes into worldspawn short of their
+			 * anchors (iteration 21's bite census). Fire direction first,
+			 * then the offset along it, then the trace the bolt will fly.
+			 */
+			{
+				vec3_t md, mfwd, mright, muzzle;
+				float mlen;
+
+				VectorSubtract(anchor, eye, md);
+				mlen = VectorLength(md);
+				if (mlen < 1.0f)
+					continue;
+				VectorScale(md, 1.0f / mlen, mfwd);
+				/* horizontal right of the fire direction, roll zero */
+				mright[0] = mfwd[1]; mright[1] = -mfwd[0]; mright[2] = 0.0f;
+				VectorNormalize(mright);
+				VectorCopy(gen_seeds[from].origin, muzzle);
+				muzzle[2] += 22.0f - 8.0f;      /* viewheight - 8 */
+				VectorMA(muzzle, 8.0f, mfwd, muzzle);
+				VectorMA(muzzle, 8.0f, mright, muzzle);
+
+				tr = gi.trace(muzzle, NULL, NULL, anchor, NULL,
+				              Q2_MASK_SHOT_GEN);
+				if (tr.fraction >= 0.98f)
+					got = true;
+			}
 		}
 		if (!got)
 			return false;
