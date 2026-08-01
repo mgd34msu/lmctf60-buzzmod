@@ -1386,8 +1386,21 @@ static void SG_BotThink(sg_bot_t *bot)
 					break;
 				}
 		}
-		if (role == SG_ROLE_CARRY)
+		if (role == SG_ROLE_CARRY &&
+		    level.time - bot->carry_start > 10.0f)
 		{
+			/*
+			 * carry_start > 10: THE BREAKOUT WINDOW. Wave 69's census,
+			 * nine carries: every one died or orbited at 0-10% of the
+			 * way home, pinned in the flag room itself -- Trace held the
+			 * flag 37 seconds at minus one percent progress. In a small
+			 * hot room every step is contact-ward, so this very pricing
+			 * surcharged every exit and the argmin oscillated between
+			 * doors while the respawn stream swarmed. For ten seconds
+			 * after the grab the flee doctrine is silent: the carrier's
+			 * job is the door, and the door is priced by the gradient
+			 * alone. The dodging wisdom resumes in open country.
+			 */
 			int s;
 
 			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
