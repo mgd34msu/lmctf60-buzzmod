@@ -1361,16 +1361,30 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * Everyone else fights; the carrier's job is the capture point.
 		 */
 		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
+		{
 			/*
-			 * And the carrier's ROPE is not everyone's rope: phase 1 is
-			 * a standing aim frame in enemy country with the flag on its
-			 * back, and a miss re-runs the whole ritual -- wave 58's
-			 * lmctf09 carrier held ropes for 17 seconds at 10ms/s of
-			 * field progress against a 43% land rate, while lmctf41's
-			 * leg-running carriers made 219-394ms/s and died like
-			 * honest flag runners. Legs unless the gap is rope-only.
+			 * The carrier's ROPE is not everyone's rope: phase 1 is a
+			 * standing aim frame with the flag on its back, and a miss
+			 * re-runs the ritual (wave 58: 17s at 10ms/s against a 43%
+			 * land rate). But the blanket surcharge overcorrected --
+			 * waves 58-66 show five of fourteen carriers dying of the
+			 * CLOCK, legs too slow for the long returns, while the rope
+			 * at 800 u/s is the fastest thing in clear water. The aim
+			 * frame is only deadly when somebody is watching: the
+			 * surcharge now applies under fresh contact and stands down
+			 * when the country is quiet.
 			 */
-			v += 2000.0f;
+			int s2;
+
+			for (s2 = 0; s2 < SG_MAX_ENEMY_TRACK; s2++)
+				if (sg_caco_enemies[team - 1][s2].client >= 0 &&
+				    level.time - sg_caco_enemies[team - 1][s2].seen_time
+				        < 4.0f)
+				{
+					v += 2000.0f;
+					break;
+				}
+		}
 		if (role == SG_ROLE_CARRY)
 		{
 			int s;
