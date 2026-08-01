@@ -2395,6 +2395,12 @@ no_hold:;
 				bot->dead_door[oldest] = door_ent;
 				bot->dead_door_until[oldest] = level.time + 30.0f;
 				bot->door_hold_ent = NULL;
+				/* a door with no trigger on this side is one-way by the
+				 * mapper's hand (lmctf03: both bd doors trigger only from
+				 * the base side). The 30s memory reroutes THIS bot; the
+				 * field funnels the rest of the team in behind it unless
+				 * the corridor repricies globally. Same cure as the wall. */
+				SG_TeachFutility(bot->seed);
 				if (gi.cvar("sg_debug", "0", 0)->value)
 					gi.dprintf("DEADDOOR %s at (%.0f %.0f %.0f)\n",
 					           e->client->pers.netname, e->s.origin[0],
