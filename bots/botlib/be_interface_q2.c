@@ -1800,6 +1800,10 @@ static int Q2BotStartFrame(float time)
                                     }
                                     shown++;
                                 }
+                                if (bot_developer)
+                                    botimport.Print(PRT_MESSAGE,
+                                        "Q2Adapt:     one-way cluster: %d in water, %d grounded\n",
+                                        water, ground);
                             }
                         }
                     }
@@ -1809,7 +1813,12 @@ static int Q2BotStartFrame(float time)
         /* periodic grapple selection report */
         if (bot_developer) {
             extern int q2_ghook_fires;
-int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed, q2_grapple_best, q2_reach_total, q2_grapple_travel, q2_grapple_fired;
+            /* the counters live in be_ai_move.c:570-574; without extern this
+             * line declared uninitialized locals that SHADOWED them, and the
+             * 30-second grapple report printed stack garbage from day one */
+            extern int q2_grapple_seen, q2_grapple_valid, q2_grapple_routed,
+                       q2_grapple_best, q2_reach_total, q2_grapple_travel,
+                       q2_grapple_fired;
             static float next;
             if (AAS_Time() > next) {
                 next = AAS_Time() + 30.0f;
@@ -2038,8 +2047,6 @@ static int Q2BotUpdateEntity(int ent, q2_bot_updateentity_t *bue)
             /* The flag entity itself: at base, or lying where it was dropped. */
             q2_flagstate_t *fs = (bue->effects & Q2_EF_FLAG1_CARRIER)
                                ? &q2_redflagstate : &q2_blueflagstate;
-            bot_goal_t *home   = (bue->effects & Q2_EF_FLAG1_CARRIER)
-                               ? &ctf_redflag : &ctf_blueflag;
             vec3_t d;
             /*
              * "Home" is where the flag entity was first seen this level, not
@@ -3616,7 +3623,6 @@ try_staging:
         goto ctf_navigate;
     }
 
-roam_fallback:
     /* Drop stale unreachable goal — otherwise the bot roams forever
      * with hasgoal=1 but can never route to the goal.  Clearing it
      * lets BotChooseLTGItem pick a different (reachable) goal next frame. */
@@ -3850,69 +3856,6 @@ static qboolean Q2BotOwnFlagIsRed(q2_botclient_t *bc)
     VectorSubtract(bc->origin, ctf_redflag.origin, dr);
     VectorSubtract(bc->origin, ctf_blueflag.origin, db);
     return VectorLengthSquared(dr) < VectorLengthSquared(db);
-}
-
-/*
- * Q2BotCTFCarryingFlag — check if bot is carrying the enemy flag.
- * Q2 sets EF_FLAG1/EF_FLAG2 on flag carriers.
- */
-static qboolean Q2BotCTFCarryingFlag(q2_botclient_t *bc)
-{
-    return bc->ctf_has_flag;
-}
-
-/*
- * Q2BotCTFGetOwnFlag — return the flag goal for the bot's own team.
- * This is where the bot captures by touching while carrying enemy flag.
- */
-static bot_goal_t *Q2BotCTFGetOwnFlag(int client)
-{
-    /* entity_team is gone; use the OnSameTeam callback.
-     * Red team (CTF_TEAM1=1) defends ctf_redflag.
-     * We determine team by checking which flag goal the bot is "on same team" with.
-     * Simpler: track team from the last UpdateEntity call. */
-    /* Use a simpler heuristic: check which flag is closer to the bot's
-     * spawn position.  Actually, just store team in bc. */
-    /* For now, use the import callback: if bot is on same team as entity
-     * at red flag area, bot is red.  But flags aren't entities in the
-     * normal sense... Just use proximity to each flag at setup time. */
-    q2_botclient_t *bc = &q2clients[client];
-
-    /* Determine team: check OnSameTeam with the first other player on
-     * each team.  Actually the cleanest: the game DLL already tracks
-     * ctf_team via OnSameTeam.  But we need to know our OWN team here.
-     * Store it from effects: if we carried red flag at some point, we're blue.
-     * Or just check which flag the bot is NOT trying to get. */
-
-    /* Simple approach: check bot's effects (stored in entity update).
-     * If bot carries red flag (EF_FLAG1) → bot is on BLUE team → own flag is blue.
-     * If bot carries blue flag (EF_FLAG2) → bot is on RED team → own flag is red.
-     * When not carrying, use saved team from last carrier detection. */
-    if (bc->effects & Q2_EF_FLAG1_CARRIER) return &ctf_blueflag; /* blue carries red → blue's own is blue */
-    if (bc->effects & Q2_EF_FLAG2_CARRIER) return &ctf_redflag;  /* red carries blue → red's own is red */
-
-    /* Not carrying: use proximity — bot's own flag is whichever is closer.
-     * In standard CTF layouts, bots spawn near their own flag. */
-    {
-        vec3_t d1, d2;
-        VectorSubtract(bc->origin, ctf_redflag.origin, d1);
-        VectorSubtract(bc->origin, ctf_blueflag.origin, d2);
-        if (VectorLengthSquared(d1) < VectorLengthSquared(d2))
-            return &ctf_redflag;
-        else
-            return &ctf_blueflag;
-    }
-}
-
-/*
- * Q2BotCTFGetEnemyFlag — return the flag goal for the enemy team.
- */
-static bot_goal_t *Q2BotCTFGetEnemyFlag(int client)
-{
-    q2_botclient_t *bc = &q2clients[client];
-    if (bc->effects & Q2_EF_FLAG1_CARRIER) return &ctf_redflag;  /* carrying red → red is enemy's */
-    if (bc->effects & Q2_EF_FLAG2_CARRIER) return &ctf_blueflag;
-    return NULL;
 }
 
 /*

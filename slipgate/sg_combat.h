@@ -67,3 +67,42 @@ void SG_CombatPost(edict_t *self, float sightline);
 /* belief-driven expectation: pre-select for a contact at roughly this
  * range before any line of sight exists; decays in seconds */
 void SG_CombatAlert(edict_t *self, float expect_range);
+
+/*
+ * The duel, as terms rather than as a mode.
+ *
+ * Dueling is not a behaviour this file enters; it is two numbers the value
+ * surface can price a candidate seed with, plus the position they are about.
+ * The constitution's rule holds unchanged -- nothing here suspends movement,
+ * and nothing here writes a usercmd. The Body decides what to do with them.
+ *
+ * Returns true when the bot has a target it is holding this frame, or held
+ * within the last two seconds (belief outlives line of sight; the enemy table
+ * may hold a fresher fix than this bot's own last look, and is preferred when
+ * it does). On true:
+ *
+ *   enemy_org    where the target is believed to be. NULL to skip.
+ *   want_range   the distance the weapon in HAND wants against the weapon the
+ *                target was last SEEN holding -- their weapon is on their
+ *                player model, so it is an eye fact, not an inventory read.
+ *                Derived from the 2.1 ladders already in this file: a weapon's
+ *                preferred range is the rank-weighted mean of the centres of
+ *                the bands whose ladders name it. NULL to skip.
+ *   exposure_w   what being visible to that target costs right now, 0 to ~1.
+ *                Healthy and in band is near zero -- a fight you are winning
+ *                is not one to hide from. Hurt, or holding a weapon this range
+ *                does not suit, drives it to one. NULL to skip.
+ *
+ * False leaves every out untouched at its zero; the caller's early-out.
+ */
+qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
+                       float *exposure_w);
+
+/*
+ * Whether this bot may hold a corner on a target it just lost sight of.
+ * The role decides: a carrier and its escort have somewhere to be, and a
+ * defender only holds ground it is already standing on. Said every frame --
+ * false clears any hold in progress, so a role change ends the camp on the
+ * frame it happens.
+ */
+void SG_CombatPursuit(edict_t *self, qboolean allowed);

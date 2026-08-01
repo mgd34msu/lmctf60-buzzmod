@@ -32,6 +32,20 @@ typedef enum
 	 */
 	RL_LIFT,            /* ride a func_plat from its bottom to its top */
 	RL_TELEPORT,        /* step on a misc_teleporter; the game does the rest */
+	/*
+	 * Appended under the same rule again -- RL_LIFT is still 5 and
+	 * RL_TELEPORT is still 6, so every rune ever written still reads and
+	 * RUNE_VERSION stays 1.
+	 *
+	 * A rocket jump is proven like a hook and priced like nothing else in the
+	 * graph: it is the only action whose traversal costs the mover HEALTH.
+	 * The prover rolls it with the real physics -- pmove's own jump, then the
+	 * splash of the mover's own rocket applied exactly as T_RadiusDamage and
+	 * T_Damage apply it -- so the link is PROVEN like any other; what makes it
+	 * special is that the runtime must weigh the health in the anchor field
+	 * before it spends the link. See the anchor commentary below.
+	 */
+	RL_ROCKETJUMP,      /* rocket at the feet: the splash lifts the jumper */
 } rune_action_t;
 
 /* how the link came to be believed */
@@ -78,7 +92,37 @@ typedef struct rune_link_s
 	byte	heading_slack;  /* +/- tolerance, same units */
 	byte	exit_speed;     /* speed/4 the traversal ended with */
 	short	cost_ms;        /* real traversal time, milliseconds */
-	vec3_t	anchor;         /* RL_HOOK only: where the rope bites */
+	/*
+	 * anchor: three floats whose meaning is the ACTION's, claimed in the order
+	 * the actions were added and never shared. A reader that does not know an
+	 * action must not read its anchor.
+	 *
+	 *   RL_HOOK       a world point: where the rope bites.
+	 *   RL_DROP       a world point: the lip the mover steps off, found by
+	 *                 ProveDrop and walked to before the fall was rolled.
+	 *   RL_ROCKETJUMP NOT a point. The link format has no field for the price
+	 *                 of a traversal in health and gets no new one (the file
+	 *                 stays version 1), so the rocket jump keeps its two
+	 *                 numbers here:
+	 *
+	 *                   anchor[0], anchor[1]  the horizontal part of the UNIT
+	 *                       aim vector the proof fired on. It points AWAY from
+	 *                       the destination -- the shot goes down and BEHIND,
+	 *                       which is what throws the mover forward. The
+	 *                       vertical part is not stored because it is not
+	 *                       free: the vector is a unit vector and it points
+	 *                       down, so aim[2] = -sqrt(1 - x*x - y*y). Straight
+	 *                       down is (0,0), and the body may then use any yaw.
+	 *                   anchor[2]  the health the jumper pays, as the proof
+	 *                       measured it: (int)points from T_RadiusDamage with
+	 *                       NO armour, no power armour and no Resist rune.
+	 *                       Every one of those only reduces it, so this is the
+	 *                       worst case and the runtime may treat it as a
+	 *                       ceiling on the price, never a floor.
+	 *
+	 *   everything else  unused, written as zero.
+	 */
+	vec3_t	anchor;
 } rune_link_t;
 
 typedef struct rune_header_s
@@ -100,6 +144,21 @@ typedef struct rune_s
 	int				*first_link;
 	int				*next_link;
 } rune_t;
+
+/*
+ * sg_oracle.c -- the rocket-jump force and the ceiling it implies.
+ *
+ * These three live here rather than beside the other oracle calls in
+ * sg_local.h for a mechanical reason: sg_local.h includes THIS header first
+ * and only then defines sg_phantom_t, so a declaration there cannot be seen
+ * by a reader of the rune format who needs to understand RL_ROCKETJUMP. The
+ * struct tag is all a pointer declaration needs.
+ */
+struct sg_phantom_s;
+qboolean	SG_OracleRocketJumpAim(vec3_t origin, vec3_t aim,
+                                   vec3_t boom_out, float *flight_ms);
+int			SG_OracleRocketJumpStep(struct sg_phantom_s *ph, vec3_t boom);
+float		SG_OracleRocketJumpCeiling(void);
 
 /* sg_rune.c -- generation and IO */
 qboolean	Rune_Generate(const char *mapname);     /* seeds + proves + writes */

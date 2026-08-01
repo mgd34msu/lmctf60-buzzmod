@@ -12,6 +12,7 @@
 #include "bl_cmd.h"
 #include "bl_redirgi.h"
 #include "bl_chat.h"
+#include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
@@ -2233,6 +2234,13 @@ void Cmd_Say_f (edict_t *ent, qboolean team, qboolean arg0)
 
 	string_replace(ent, temp, temp, sizeof temp);
 	strcat(text, temp);
+
+	// BUZZKILL - bots hear the chat. This is the call BotChat_OnPlayerSay's
+	// comment always claimed existed and never did -- neither the legacy
+	// reply path nor SLIPGATE order-taking ever received a word before this
+	// line. SG_ChatHear ignores bot speakers itself; team carries the
+	// say_team flag so bare orders ("defend") only work on team chat.
+	SG_ChatHear(ent, temp, team);
 
 	// don't let text be too long for malicious reasons
 	if (strlen(text) > 150)

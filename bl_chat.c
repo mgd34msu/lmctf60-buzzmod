@@ -17,6 +17,7 @@
 #include "ai_chat_q2.h"
 #include "bl_chat.h"
 #include "g_ctffunc.h"	/* CTF_TEAM_* */
+#include "slipgate/sg_chat.h"	/* SLIPGATE bots hear and taunt through this */
 
 /* Q3 ai_chat.c functions (defined in game_q3/ai_chat.c, linked in) */
 extern int BotChat_EnterGame(bot_state_t *bs);
@@ -448,6 +449,11 @@ void BotChat_NotifyDeath(edict_t *self, edict_t *attacker, int mod)
 	bot_library_t *lib;
 	bot_state_t    bs;
 
+	/* SLIPGATE bots are not driven by this botlib; they take the same event
+	 * and answer it in sg_chat.c. Placed first so the legacy path below is
+	 * reached in exactly the state it was reached in before. */
+	SG_ChatDeath(self, attacker, mod);
+
 	BotChat_UpdateCvars();
 
 	/* --- Victim is a bot: trigger death chat --- */
@@ -663,6 +669,12 @@ void BotChat_OnPlayerSay(edict_t *sender, const char *msg)
 	char buf[MAX_MESSAGE_SIZE];
 
 	if (!msg || !msg[0]) return;
+
+	/* SLIPGATE bots read human chat for orders. No team flag reaches this
+	 * function, so it is passed as public chat: sg_chat.c then requires an
+	 * addressee ("arach defend") rather than a bare verb. Nothing below
+	 * changes -- the legacy console-message queue is fed exactly as before. */
+	SG_ChatHear(sender, msg, false);
 
 	/* Truncate to fit */
 	strncpy(buf, msg, sizeof(buf) - 1);

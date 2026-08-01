@@ -1482,6 +1482,436 @@ static void Link_Teleporters(void)
 
 /* ============================== end of the ADDITIVE BLOCK ============ */
 
+/* ===================================================================
+ * ADDITIVE BLOCK: rocket jumps.
+ *
+ * Everything between this banner and the one that closes it is new. It adds
+ * functions, reads the seeds and the links the earlier passes produced, and
+ * changes nothing above; one call site is appended at the very end of
+ * Prove_All.
+ *
+ * A rocket jump is the only traversal in the graph that costs the mover
+ * HEALTH, and that single fact shapes the whole pass:
+ *
+ *   - it runs LAST, after every other prover, because a rocket jump is only
+ *     worth recording where nothing cheaper already gets there;
+ *   - a pair is only offered to the prover when it needs the lift (the
+ *     destination is well above the source) and could plausibly get it (below
+ *     the ceiling the physics itself implies, SG_OracleRocketJumpCeiling);
+ *   - a proven traversal is still THROWN AWAY if the graph already reaches
+ *     the destination for less than three times what the jump cost, because
+ *     a link that adds no reach is a link that only ever costs blood;
+ *   - the price is recorded in the link (anchor[2], see sg_rune.h) so the
+ *     runtime spends it deliberately.
+ *
+ * The proof itself is the oracle's, not this file's: pmove supplies the jump,
+ * SG_OracleRocketJumpAim supplies the detonation point and the rocket's own
+ * travel time, SG_OracleRocketJumpStep supplies the push exactly as
+ * T_RadiusDamage and T_Damage would, and SG_OracleRun integrates the flight.
+ * The prover only chooses the aim and judges the landing.
+ * =================================================================== */
+
+#define SG_RJ_MIN_RISE		80.0f	/* below this a plain jump (or a jump link
+                                     * the pair loop already proved) does the
+                                     * job, and paying ~50 health for it is
+                                     * simply a bad trade */
+#define SG_RJ_REACH			320.0f	/* horizontal, derived: the flattest aim
+                                     * the prover tries (30 degrees off
+                                     * vertical) converts about 275 u/s of the
+                                     * kick into horizontal speed, and a body
+                                     * that has to still be ABOVE its launch
+                                     * height on arrival has spent under a
+                                     * second in the air by then */
+#define SG_RJ_SLACK			32		/* +/- 45 degrees around the launch */
+#define SG_RJ_MAX_TRIES		2048	/* pass budget, in rolls -- see below */
+#define SG_RJ_OPEN_MAX		256		/* redundancy search: open list cap */
+#define SG_RJ_NODE_MAX		512		/* redundancy search: expansion cap */
+
+static int rj_pairs, rj_tries, rj_noboom, rj_nolift, rj_arrived,
+           rj_redundant, rj_links, rj_budget_out;
+
+/*
+ * Is the destination already reachable from the source for less than cap_ms,
+ * using only the links the OTHER passes proved?
+ *
+ * A bounded Dijkstra, not a "does a direct link exist" test and not an
+ * unbounded search. The direct-link test was rejected because it answers the
+ * wrong question: two seeds with no direct link between them are very often
+ * one stair-flight apart, and buying that with 50 health would be absurd.
+ * Dijkstra answers the question actually being asked -- is there a route home
+ * for less than three rocket jumps' worth of time -- and the cost cap keeps
+ * it cheap on its own, because the frontier can only grow as far as cap_ms of
+ * travel reaches. The expansion and open-list caps are belt and braces: if
+ * either is hit the answer returned is TRUE, i.e. assume the map already
+ * reaches it and do not write the expensive link. An unproven link costs
+ * nothing; a health-priced link that adds no reach costs blood every time the
+ * runtime is talked into it.
+ *
+ * The snapshot deliberately does not contain the rocket-jump links this pass
+ * is itself adding. That is not an approximation: the question is whether the
+ * map reaches the destination WITHOUT buying another rocket jump, so a route
+ * that pays for one is not an answer to it.
+ */
+static int *rj_dist, *rj_stamp, rj_query;
+
+static qboolean Reach_Within(int from, int to, int cap_ms)
+{
+	int open[SG_RJ_OPEN_MAX];
+	int nopen = 0, expanded = 0;
+
+	if (from == to)
+		return true;
+	if (!sw_first || !rj_dist || !rj_stamp)
+		return true;                    /* no index: cannot claim it adds reach */
+
+	rj_query++;
+	rj_dist[from] = 0;
+	rj_stamp[from] = rj_query;
+	open[nopen++] = from;
+
+	while (nopen > 0)
+	{
+		int bi = 0, k, cur, curd, li;
+
+		for (k = 1; k < nopen; k++)
+			if (rj_dist[open[k]] < rj_dist[open[bi]])
+				bi = k;
+		cur = open[bi];
+		curd = rj_dist[cur];
+		open[bi] = open[--nopen];
+
+		if (cur == to)
+			return true;
+		if (curd > cap_ms)
+			continue;
+		if (++expanded > SG_RJ_NODE_MAX)
+			return true;                /* budget out: assume reachable */
+
+		for (li = sw_first[cur]; li >= 0; li = sw_next[li])
+		{
+			rune_link_t *l = &gen_links[li];
+			int nd;
+
+			/* a zero-cost link (a teleport pass writes short costs, a plat
+			 * can compute one) must not make a free cycle */
+			nd = curd + (l->cost_ms > 0 ? (int)l->cost_ms : 1);
+			if (nd > cap_ms)
+				continue;
+			if (rj_stamp[l->to] == rj_query && rj_dist[l->to] <= nd)
+				continue;
+			rj_stamp[l->to] = rj_query;
+			rj_dist[l->to] = nd;
+			if (nopen >= SG_RJ_OPEN_MAX)
+				return true;            /* budget out: assume reachable */
+			open[nopen++] = l->to;
+		}
+	}
+	return false;
+}
+
+/*
+ * Prove one rocket jump, the way a player performs one: stand still, aim down
+ * and back over the shoulder, jump, and fire so the rocket goes off under the
+ * feet as the body leaves the floor.
+ *
+ * The classic technique is a family, not a single move, so the aim is
+ * parameterised over three pitches -- straight down, and 15 and 30 degrees
+ * behind vertical. Straight down buys the most height and no distance; the
+ * tilted ones trade height for a horizontal throw toward the destination. The
+ * first that arrives wins, which orders them the way a player would: take the
+ * cheapest-looking shot that works.
+ *
+ * The sequencing is the game's, and it matters. The body jumps FIRST and the
+ * rocket detonates when it arrives -- SG_OracleRocketJumpAim returns the
+ * rocket's own travel time and the roll pays it, step by honest step, before
+ * calling SG_OracleRocketJumpStep. Applying the blast and the jump in one
+ * instant would have been wrong twice over: the game does not do it (the
+ * rocket has to fly the 38-odd units to the floor first), and pmove would
+ * have refused the jump anyway, because PM_CatagorizePosition takes a body
+ * with a large upward velocity off the ground before PM_CheckJump ever looks
+ * at it. Paying the flight time makes the proof weaker than the arithmetic --
+ * the body has already risen when the burst goes off, so the burst is further
+ * away and pushes less. That is the point: the arithmetic is not the claim,
+ * the roll is.
+ *
+ * Entry state is a body at rest, so min_speed on the link is 0 and no
+ * approach speed is claimed. The one thing the mover must get right is the
+ * AIM, and that is what goes in the anchor.
+ */
+static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
+                                short *cost_ms, byte *exit_speed,
+                                byte *heading_out)
+{
+	vec3_t src, dst, tdir;
+	float horiz;
+	int ai;
+	static const float tilts[3] = { 0.0f, 15.0f, 30.0f };
+
+	VectorCopy(gen_seeds[from].origin, src);
+	VectorCopy(gen_seeds[to].origin, dst);
+
+	tdir[0] = dst[0] - src[0];
+	tdir[1] = dst[1] - src[1];
+	tdir[2] = 0.0f;
+	horiz = sqrtf(tdir[0] * tdir[0] + tdir[1] * tdir[1]);
+	if (horiz < 1.0f)
+	{
+		/* straight overhead: there is no "behind", and only the vertical
+		 * shot can help anyway */
+		tdir[0] = 1.0f;
+		tdir[1] = 0.0f;
+	}
+	else
+	{
+		tdir[0] /= horiz;
+		tdir[1] /= horiz;
+	}
+
+	for (ai = 0; ai < 3; ai++)
+	{
+		sg_phantom_t ph;
+		usercmd_t cmd;
+		vec3_t aim, boom, before, kvel, want;
+		float flight_ms, t = tilts[ai] * (float)(M_PI / 180.0);
+		int elapsed, fsteps, s, health;
+		byte heading;
+
+		/* down, and back over the shoulder: the horizontal part of the aim
+		 * points AWAY from the destination, which is what throws the body
+		 * toward it */
+		aim[0] = -tdir[0] * sinf(t);
+		aim[1] = -tdir[1] * sinf(t);
+		aim[2] = -cosf(t);
+
+		if (!SG_OracleRocketJumpAim(src, aim, boom, &flight_ms))
+		{
+			rj_noboom++;
+			continue;                   /* nothing under that aim to burst on */
+		}
+
+		SG_OraclePlace(&ph, src);
+		elapsed = 0;
+
+		/*
+		 * The jump. Tapped, never held (PM_CheckJump refuses a held key), and
+		 * the height of it is pmove's business -- this only presses the key.
+		 */
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = STEP_MSEC;
+		cmd.upmove = 400;
+		SG_OracleRun(&ph, &cmd, 1);
+		elapsed += STEP_MSEC;
+
+		/*
+		 * The rocket's own flight, rolled rather than assumed away. The
+		 * rocket leaves the muzzle at the same instant the jump key goes
+		 * down, so the jump step above IS the first step of the flight --
+		 * counting it again would detonate the rocket a step late and quietly
+		 * weaken every proof by the height the body gained in that step.
+		 */
+		fsteps = (int)(flight_ms / (float)STEP_MSEC + 0.5f);
+		for (s = 1; s < fsteps; s++)
+		{
+			VectorSubtract(dst, ph.origin, want);
+			memset(&cmd, 0, sizeof(cmd));
+			cmd.msec = STEP_MSEC;
+			cmd.angles[YAW] = ANGLE2SHORT(atan2f(want[1], want[0])
+			                              * 180.0f / M_PI);
+			cmd.forwardmove = 400;      /* air control: weak, but real */
+			SG_OracleRun(&ph, &cmd, 1);
+			elapsed += STEP_MSEC;
+		}
+
+		/* the detonation, applied by the oracle exactly as the game applies
+		 * it, and paid for in health */
+		VectorCopy(ph.velocity, before);
+		health = SG_OracleRocketJumpStep(&ph, boom);
+		if (health <= 0)
+		{
+			rj_nolift++;
+			continue;                   /* out of range, or behind something */
+		}
+		VectorSubtract(ph.velocity, before, kvel);
+		if (kvel[2] <= 0.0f)
+		{
+			rj_nolift++;
+			continue;                   /* pushed sideways or down: not a jump */
+		}
+
+		/*
+		 * The heading the link records is the direction the blast actually
+		 * threw the body, taken from the velocity the oracle just added --
+		 * not from the aim the prover asked for. When the shot went straight
+		 * down there is no horizontal throw at all and the destination
+		 * bearing is the only honest thing to write.
+		 */
+		if (kvel[0] * kvel[0] + kvel[1] * kvel[1] > 1.0f)
+			heading = Heading_Quantize(kvel[0], kvel[1]);
+		else
+			heading = Heading_Quantize(tdir[0], tdir[1]);
+
+		for (; elapsed < TRY_LIMIT_MS; elapsed += STEP_MSEC)
+		{
+			VectorSubtract(dst, ph.origin, want);
+
+			if (want[0] * want[0] + want[1] * want[1] <
+			        ARRIVE_RADIUS * ARRIVE_RADIUS &&
+			    want[2] > -72.0f && want[2] < 72.0f &&
+			    (ph.groundentity || ph.waterlevel >= 2) &&
+			    Prove_Contact(ph.origin, dst))
+			{
+				float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
+				                 ph.velocity[1] * ph.velocity[1]);
+
+				rj_arrived++;
+				*cost_ms = (short)elapsed;
+				*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
+				*heading_out = heading;
+				/* the anchor's rocket-jump layout, documented in sg_rune.h:
+				 * the horizontal aim, then the price */
+				anchor_out[0] = aim[0];
+				anchor_out[1] = aim[1];
+				anchor_out[2] = (float)health;
+				return true;
+			}
+
+			/* back on the floor below the destination: this shot fell short,
+			 * and standing there running out the clock proves nothing */
+			if (ph.groundentity && elapsed > 400 &&
+			    ph.origin[2] < dst[2] - 72.0f)
+				break;
+			/* under the source and still falling: gone */
+			if (ph.origin[2] < src[2] - 200.0f)
+				break;
+
+			memset(&cmd, 0, sizeof(cmd));
+			cmd.msec = STEP_MSEC;
+			cmd.angles[YAW] = ANGLE2SHORT(atan2f(want[1], want[0])
+			                              * 180.0f / M_PI);
+			cmd.forwardmove = 400;
+			SG_OracleRun(&ph, &cmd, 1);
+		}
+	}
+	return false;
+}
+
+/*
+ * The pass. Runs after everything else, on pairs that need the lift and might
+ * get it, and writes only what survives the redundancy gate.
+ *
+ * Budget: the same two mechanisms every other prover in this file is bounded
+ * by -- the reach filters that decide which pairs are even candidates, and
+ * TRY_LIMIT_MS inside the roll -- plus one this pass needs on its own,
+ * because unlike run/jump/drop a rocket jump is a rare answer to a rare
+ * question: a hard cap on how many rolls the pass may spend. Past the cap the
+ * pass stops rather than degrading, and says so.
+ */
+static void Prove_RocketJumps(void)
+{
+	int i, j;
+	float ceiling = SG_OracleRocketJumpCeiling();
+
+	if (gen_num_seeds <= 0)
+		return;
+
+	Link_Index_Build();
+	rj_dist = gi.TagMalloc(sizeof(int) * gen_num_seeds, TAG_GAME);
+	rj_stamp = gi.TagMalloc(sizeof(int) * gen_num_seeds, TAG_GAME);
+	memset(rj_stamp, 0, sizeof(int) * gen_num_seeds);
+	rj_query = 0;
+
+	gi.dprintf("rune: rocket jumps -- window %.0f to %.0f units of rise\n",
+	           SG_RJ_MIN_RISE, ceiling);
+
+	for (i = 0; i < gen_num_seeds && rj_tries < SG_RJ_MAX_TRIES; i++)
+	{
+		if (gen_seeds[i].flags & RSF_WATER)
+			continue;                   /* no rocket jumps out of a pool */
+
+		for (j = 0; j < gen_num_seeds && rj_tries < SG_RJ_MAX_TRIES; j++)
+		{
+			vec3_t d, anchor;
+			short cost;
+			byte espeed, heading;
+			int before;
+			rune_link_t *l;
+
+			if (i == j || (gen_seeds[j].flags & RSF_WATER))
+				continue;
+
+			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d);
+			if (d[2] < SG_RJ_MIN_RISE || d[2] > ceiling)
+				continue;
+			if (d[0] * d[0] + d[1] * d[1] > SG_RJ_REACH * SG_RJ_REACH)
+				continue;
+			rj_pairs++;
+
+			/* already linked directly: whatever that link is, it is cheaper
+			 * than blood. Costs one index lookup and saves a whole roll. */
+			if (Link_Index_Find(i, j) >= 0)
+			{
+				rj_redundant++;
+				continue;
+			}
+
+			rj_tries++;
+			if (!ProveRocketJump(i, j, anchor, &cost, &espeed, &heading))
+				continue;
+
+			/*
+			 * Proven -- and now the expensive question, asked with the real
+			 * cost in hand rather than an estimate of it: does the graph
+			 * already get there for less than three of these? If it does,
+			 * the jump adds nothing but a health bill.
+			 */
+			if (Reach_Within(i, j, 3 * (int)cost))
+			{
+				rj_redundant++;
+				continue;
+			}
+
+			before = gen_num_links;
+			Link_Add(i, j, RL_ROCKETJUMP, cost, espeed);
+			if (gen_num_links == before)
+				continue;               /* Link_Add refused at LINK_MAX */
+			l = &gen_links[gen_num_links - 1];
+			VectorCopy(anchor, l->anchor);
+			l->heading = heading;
+			l->heading_slack = SG_RJ_SLACK;
+			/*
+			 * The proof stood the body still and fired, so no entry speed is
+			 * required and none is claimed -- the same honesty Link_Env_Hook
+			 * keeps. The heading is not an approach the body must arrive on
+			 * either; it is the direction the blast threw the proof, and the
+			 * cone around it says how far off that a body may end up and
+			 * still be doing what was demonstrated.
+			 */
+			l->min_speed = 0;
+			rj_links++;
+		}
+	}
+
+	if (rj_tries >= SG_RJ_MAX_TRIES)
+		rj_budget_out = 1;
+
+	gi.TagFree(sw_first);
+	gi.TagFree(sw_next);
+	sw_first = NULL;
+	sw_next = NULL;
+	gi.TagFree(rj_dist);
+	gi.TagFree(rj_stamp);
+	rj_dist = NULL;
+	rj_stamp = NULL;
+
+	gi.dprintf("rune: rocketjump pairs=%d rolls=%d noboom=%d nolift=%d "
+	           "arrived=%d redundant=%d links=%d%s\n",
+	           rj_pairs, rj_tries, rj_noboom, rj_nolift, rj_arrived,
+	           rj_redundant, rj_links,
+	           rj_budget_out ? " (BUDGET EXHAUSTED, pass stopped early)" : "");
+}
+
+/* ======================= end of the ROCKET JUMP BLOCK ================ */
+
 static void Prove_All(void)
 {
 	int i, j;
@@ -1594,6 +2024,15 @@ static void Prove_All(void)
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
 		Link_Declare_Tail(declared_mark);
 	}
+
+	/*
+	 * ROCKET JUMP BLOCK call site. Last of all, on purpose: the pass asks
+	 * whether the rest of the graph already reaches a place, and it can only
+	 * ask that once the rest of the graph exists. It runs after
+	 * Link_Declare_Tail as well, so the links it writes keep the RL_PROVEN
+	 * stamp Link_Add gives them -- they were rolled, every one of them.
+	 */
+	Prove_RocketJumps();
 }
 
 /* ------------------------------------------------------------------- IO */

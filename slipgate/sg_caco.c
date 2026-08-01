@@ -36,6 +36,7 @@
 #include "g_ctffunc.h"
 #include "bl_redirgi.h"                 /* BotClientCommand -- the chat route */
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
@@ -183,6 +184,12 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
  * the redirected gi.argv and runs ClientCommand -> Cmd_Say_f for that client,
  * exactly as bl_know.c's Know_Speak does. Teammates -- human ones included --
  * read it in their own chat.
+ *
+ * The call itself is made by sg_chat.c: one module owns the say_team channel
+ * so that the per-bot budget is counted once across every SLIPGATE line, not
+ * once per emitter. The team gap below is only recorded when the line
+ * actually went out -- a suppressed line the team never heard must not be
+ * booked as said.
  */
 static void Caco_Speak(void)
 {
@@ -213,8 +220,8 @@ static void Caco_Speak(void)
 			if (sp->deadflag == DEAD_DEAD || sp->health <= 0)
 				continue;           /* the dead do not call it out */
 
-			BotClientCommand(c->speaker, "say_team", c->line, NULL);
-			caco_teamsaid[t][k] = level.time + SG_CALL_TEAM_GAP;
+			if (SG_ChatSayTeam(sp, c->line, SG_CHAT_TOPIC_CACO))
+				caco_teamsaid[t][k] = level.time + SG_CALL_TEAM_GAP;
 		}
 }
 
@@ -350,9 +357,14 @@ static void Caco_ScanCarriers(rune_t *r, edict_t *viewer, int viewer_team)
 				c->seed = Rune_NearestSeed(r, p->s.origin);
 				c->seen_time = level.time;
 
+				/*
+				 * The line itself is sg_chat.c's: it names the spot by
+				 * the landmark a player would name it by, and it shares
+				 * the one say_team budget with every other bot line. The
+				 * belief transition, and who saw it, are decided here.
+				 */
 				if (material)
-					Caco_Queue(viewer, enemy_of + 1, SG_CALL_CARRIER,
-					           "enemy has our flag,", p->s.origin);
+					SG_ChatCarrierSeen(viewer, enemy_of + 1, p);
 			}
 		}
 	}
@@ -528,6 +540,16 @@ static void Caco_ScanItems(rune_t *r, edict_t *viewer)
 			if (b->cls == SG_BI_RUNE)
 				b->seed = -1;       /* it is in somebody's hands now */
 		}
+
+		/*
+		 * The team's word for what this bot just looked at. sg_chat.c keeps
+		 * its own record of what the team has been TOLD, which is not this
+		 * belief: the respawn clock below moves the belief with nobody
+		 * looking, and a bot saying "quad is up" off a clock would be
+		 * claiming a look nobody took.
+		 */
+		SG_ChatItemSeen(viewer, i,
+		                (e->solid != SOLID_NOT) ? true : false);
 	}
 }
 
@@ -1117,6 +1139,7 @@ void Caco_See(rune_t *r, edict_t *viewer)
 	Caco_ScanCarriers(r, viewer, viewer->client->ctf.teamnum);
 	Caco_ScanEnemies(r, viewer, viewer->client->ctf.teamnum);
 	Caco_ScanItems(r, viewer);
+	SG_ChatSee(viewer);                 /* body/power armour: not belief classes */
 }
 
 void Caco_Frame(rune_t *r)
@@ -1139,6 +1162,7 @@ void Caco_Frame(rune_t *r)
 	Caco_RelayFlush();
 	Caco_Project(r);
 	Caco_Speak();
+	SG_ChatFrame();
 }
 
 void Caco_Reset(void)
@@ -1174,6 +1198,10 @@ void Caco_Reset(void)
 	 * runes, which are not constant, get nothing from this scan but their
 	 * entity numbers (see the commentary above Caco_ScanItemSpawns) */
 	Caco_ScanItemSpawns();
+
+	/* after the item scan: sg_chat.c seeds its told-state from it */
+	SG_ChatReset();
+
 	caco_next_scan = 0.0f;
 	caco_next_human = 0.0f;
 	caco_next_advect = 0.0f;

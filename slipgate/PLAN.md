@@ -117,6 +117,35 @@ graph TD
 | blocked on server free | N23 A/B runs, N24/25 batch generation | scripts dry-run verified |
 | owner | N28 ruling | waiting |
 
+## Standing backlog (implement-all authorization, 2026-07-31)
+
+In flight (agents): duel surface term + weave + corner prediction;
+chat/personality/human orders (sg_chat); rocket-jump prover (generator).
+
+Queued for integration the moment sg_arach.c frees:
+- teammate avoidance: watch exempts teammate-blocks (door_held_last
+  pattern); feelers lane-bias + sidestep on friendly obstruction.
+  TOP PRIORITY: 5v5 shelves 204-278/match are bots billing body-blocks
+  to innocent links.
+- human-order role override: SG_Role consults SG_ChatOrderedRole /
+  SG_ChatEscortTarget (API from the chat agent).
+- rocket-jump body execution: aim anchor[0/1], fire at feet + jump,
+  health-gated by anchor[2] cost vs current health+armor.
+
+Found, not yet started:
+- pmove-basis/aim coupling (duel agent's flag): on every engaged frame,
+  combat overwrites cmd.angles AFTER the strafe solver built its basis
+  from the navigation view, so pmove reconstructs a different direction
+  than the one solved for -- the bot runs down its AIM, not its route.
+  Pre-existing on all combat frames; the fix (rebuild basis from
+  post-combat angles, re-decompose) changes tuned behavior everywhere,
+  so it gets its own measured A/B, not a drive-by.
+- skill model: per-bot aim error / reaction time / scatter ramp so
+  bot_skill means something and the eight names play differently.
+- swim/lift body fixes: whatever the lmctf01 observation match shows.
+- campaign findings: whatever tools/campaign.sh (5 maps x 5 games)
+  surfaces goes straight onto this list.
+
 ## Defect ledger
 
 - FIXED (commit a47ae1c): hook climbs never topped out — body released at

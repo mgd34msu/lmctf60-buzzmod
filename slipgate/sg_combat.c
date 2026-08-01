@@ -282,6 +282,38 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 
 #define SG_WEIGHT_TICK		1.0f	/* item worths, same cadence as Fields_Refresh */
 
+/*
+ * The duel terms. Preferences, all of them -- what they COMPOSE is measured
+ * (the 2.1 ladders, the band edges, R1b's survivability floor), but how long a
+ * lost target stays interesting and how hard a mismatched weapon should push
+ * are fitted.
+ *
+ * SG_DUEL_FRESH matches the belief table's own short window: sg_arach.c prices
+ * a "fresh contact" at 4 s for the carrier's flee term and 3 s for the idle
+ * hand's pre-select. Two seconds is tighter than both, because this one is
+ * about a firing position rather than a warning.
+ *
+ * SG_DUEL_MATCH_BIAS is how far the range preference moves off the bot's own
+ * optimum toward the side its opponent's weapon is worse at. A quarter of the
+ * gap: enough to make a railgun back away from a super shotgun, small enough
+ * that it never overrides the weapon's own band gates below.
+ */
+#define SG_DUEL_FRESH		2.0f
+#define SG_DUEL_MATCH_BIAS	0.25f
+
+/*
+ * The corner hold. A target that walked out of sight is somewhere in the set
+ * of seeds it could have reached since -- SG_LOST_HOLD seconds is how long
+ * that set stays small enough to be worth aiming at. The BFS that builds it is
+ * capped at SG_LOST_BFS seeds examined, which is also its trace count: one
+ * MASK_OPAQUE ray per seed, per recompute, per bot. SG_LOST_TICK is the
+ * recompute cadence -- the set only grows as the clock runs, so re-walking it
+ * every frame buys nothing and costs ten times the traces.
+ */
+#define SG_LOST_HOLD		3.0f
+#define SG_LOST_BFS			24
+#define SG_LOST_TICK		0.2f
+
 #define SG_COMBAT_MAXCLIENTS	256
 
 /* ------------------------------------------------------------------- state */
@@ -322,6 +354,31 @@ typedef struct
 
 	float		worth_next;		/* when the item worths go stale */
 	float		worth[SG_FIELD_CLASSES];
+
+	/* what the duel terms are about: the last look at the held target. org is
+	 * belief, not the live edict -- it ages instead of following. enemy_last
+	 * is kept where `enemy` above is cleared, because a target that walked
+	 * behind a wall is still the target the range is being held against; the
+	 * two are separate so the acquisition reset above keeps its exact meaning. */
+	int			enemy_last;		/* edict index, outlives the sighting */
+	vec3_t		enemy_org;
+	float		enemy_time;		/* level.time of the last successful scan */
+	int			enemy_weapon;	/* weapon index seen in their hands, -1 none */
+
+	/* the corner hold. lost_client is the client number, not an edict index,
+	 * so it compares directly against the belief table's own field. lost_until
+	 * is the validity test rather than lost_client, for the same reason
+	 * alert_until is: this table is static storage that starts as zeroes, and
+	 * an expired deadline is the only sentinel a zeroed record answers
+	 * correctly on the first frame of a level. */
+	int			lost_client;
+	int			lost_seed;
+	float		lost_time;		/* when the target was lost */
+	float		lost_until;		/* when the hold expires; <= level.time = none */
+	float		lost_next;		/* when the emergence set goes stale */
+	vec3_t		lost_aim;		/* the point the view is held on */
+	qboolean	lost_have;		/* is lost_aim a real emergence point */
+	qboolean	pursue;			/* role permits holding a corner at all */
 } sg_combat_state_t;
 
 static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
@@ -841,6 +898,136 @@ static int Combat_PostWeapon(edict_t *self, float sightline)
 	if (sightline < SG_R_LONG)
 		return Combat_Choose(self, SG_BAND_MID, sightline, false);
 	return Combat_Choose(self, SG_BAND_LONG, sightline, false);
+}
+
+/* -------------------------------------------------------------- the duel
+ *
+ * Range control needs one number the ladders do not state outright: the
+ * distance a given weapon WANTS. It is not a new fact and it is not fitted --
+ * it is read back out of the 2.1 ladders that are already here.
+ *
+ * A band's centre is the midpoint of the band's own edges (2.1: contact < 128,
+ * close 128-400, mid 400-900). The long band has no far edge except
+ * SG_ENGAGE_RANGE, which is a refusal to fight rather than a preference, so
+ * the long band is represented by its near edge -- the distance at which the
+ * railgun's zero degradation starts being the whole argument.
+ */
+static float Combat_BandCenter(int band)
+{
+	switch (band)
+	{
+	case SG_BAND_CONTACT:	return SG_R_CLOSE * 0.5f;
+	case SG_BAND_CLOSE:		return (SG_R_CLOSE + SG_R_MID) * 0.5f;
+	case SG_BAND_MID:		return (SG_R_MID + SG_R_LONG) * 0.5f;
+	default:				return SG_R_LONG;
+	}
+}
+
+static int Combat_LadderRank(const int *ladder, int w)
+{
+	int i;
+
+	for (i = 0; ladder[i] >= 0; i++)
+		if (ladder[i] == w)
+			return i;
+	return -1;
+}
+
+/*
+ * The range a weapon wants, from the ladders and nothing else.
+ *
+ * Every band whose ladder names the weapon votes for that band's centre, with
+ * a weight of 1/(1+rank) -- the dossier ranked it, so the rank is the strength
+ * of the opinion. The mean of those votes is the preference. The railgun, at
+ * rank 0 in mid AND long and rank 5 in the two near bands, lands near 690; the
+ * super shotgun, rank 0 at contact and rank 3 at close, lands near 105; the
+ * chaingun, ranked 1 in both near bands and 3 in mid, lands near 260. Nothing
+ * here is a number somebody chose; it is the ladder table read as a curve.
+ *
+ * The same gates Combat_BandAllows applies to a SELECTION then apply to the
+ * preference: never inside the weapon's own d_safe (R1), never past the super
+ * shotgun's 256 (R2d), never past a hitscan cap (F6). `who` supplies the state
+ * d_safe depends on -- quad and plasma mode -- so an opponent's preference is
+ * computed against the opponent.
+ */
+static float Combat_WantRange(edict_t *who, int w)
+{
+	static const int bands[4] = {
+		SG_BAND_CONTACT, SG_BAND_CLOSE, SG_BAND_MID, SG_BAND_LONG
+	};
+	float	sum = 0.0f, weight = 0.0f, want, dsafe, cap;
+	int		b;
+
+	if (w < 0 || w >= SG_NUM_WEAPONS)
+		w = SG_W_BLASTER;
+
+	for (b = 0; b < 4; b++)
+	{
+		int rank = Combat_LadderRank(Combat_Ladder(bands[b]), w);
+		float vote;
+
+		if (rank < 0)
+			continue;
+		vote = 1.0f / (1.0f + (float)rank);
+		sum += vote * Combat_BandCenter(bands[b]);
+		weight += vote;
+	}
+
+	/* every one of the eleven is named by at least one ladder -- the grenade
+	 * launcher and the BFG by exactly one each -- so the fallback is dead
+	 * code kept as a guard rather than as a behaviour */
+	want = (weight > 0.0f) ? (sum / weight) : Combat_BandCenter(SG_BAND_CLOSE);
+
+	dsafe = Combat_DSafe(who, w);
+	if (dsafe > 0.0f && want < dsafe)
+		want = dsafe;
+	if (w == SG_W_SSHOTGUN && want > SG_SSG_PREFER_RANGE)
+		want = SG_SSG_PREFER_RANGE;
+	cap = sg_weapons[w].range_cap;
+	if (cap > 0.0f && want > cap)
+		want = cap;
+	return want;
+}
+
+/*
+ * What standing in the open costs this bot right now, 0 to 1.
+ *
+ * Two independent reasons to want cover, added and clamped. The first is
+ * damage taken: R1b's 90 points of health-plus-absorbable-armour is the line
+ * the dossier already draws for "healthy enough to accept a trade", so twice
+ * it is the healthy end -- at 180 or better this term is zero, at 90 it is a
+ * half, at nothing it is one. The second is the weapon: a shot the bot cannot
+ * take is exposure paid for nothing, so a weapon Combat_BandAllows refuses at
+ * this distance scores a full one, and one that is merely off its preferred
+ * range scores the fractional miss.
+ *
+ * Healthy, in band, at the range the gun wants -- zero. That is the point: a
+ * fight already being won is not one to break line of sight over.
+ */
+static float Combat_Exposure(edict_t *self, int w, float dist, float want)
+{
+	float hurt, miss, e;
+
+	hurt = 1.0f - (float)Combat_Survivable(self)
+	              / (2.0f * (float)SG_SPLASH_HP_FLOOR);
+	if (hurt < 0.0f)
+		hurt = 0.0f;
+	if (hurt > 1.0f)
+		hurt = 1.0f;
+
+	if (!Combat_BandAllows(self, w, dist) || want < 1.0f)
+		miss = 1.0f;
+	else
+	{
+		miss = (float)fabs(dist - want) / want;
+		if (miss > 1.0f)
+			miss = 1.0f;
+	}
+
+	e = hurt + miss;
+	if (e > 1.0f)
+		e = 1.0f;
+	return e;
 }
 
 /*
@@ -1501,6 +1688,301 @@ void SG_CombatAlert(edict_t *self, float expect_range)
 	sg_combat[ci].alert_until = level.time + 3.0f;
 }
 
+/* ------------------------------------------------------------- duel terms */
+
+void SG_CombatPursuit(edict_t *self, qboolean allowed)
+{
+	int ci;
+
+	if (!self || !self->client)
+		return;
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+		return;
+	sg_combat[ci].pursue = allowed;
+	if (!allowed)
+		sg_combat[ci].lost_until = 0.0f;	/* a role change ends the camp */
+}
+
+qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
+                       float *exposure_w)
+{
+	sg_combat_state_t	*st;
+	edict_t				*foe;
+	vec3_t				org, eye, d;
+	float				dist, want;
+	int					ci, held, team, s;
+
+	if (want_range)
+		*want_range = 0.0f;
+	if (exposure_w)
+		*exposure_w = 0.0f;
+
+	if (!self || !self->inuse || !self->client)
+		return false;
+	if (self->deadflag == DEAD_DEAD || self->health <= 0)
+		return false;
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+		return false;
+	st = &sg_combat[ci];
+
+	if (st->enemy_last <= 0 || level.time - st->enemy_time > SG_DUEL_FRESH)
+		return false;
+	VectorCopy(st->enemy_org, org);
+
+	/*
+	 * The team may know better than this bot's own last look: a teammate
+	 * watching the same enemy right now is a fresher fix than a two-second-old
+	 * memory. Eyes only -- an ear places a contact well enough to warn a post
+	 * and never well enough to hold a range against (sg_local.h:87-88).
+	 */
+	team = self->client->ctf.teamnum;
+	if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
+	{
+		rune_t *r = SG_Rune();
+
+		for (s = 0; r && s < SG_MAX_ENEMY_TRACK; s++)
+		{
+			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+
+			if (en->client < 0 || en->heard_only)
+				continue;
+			if (1 + en->client != st->enemy_last)
+				continue;
+			if (en->seed < 0 || en->seed >= r->hdr.num_seeds)
+				continue;
+			if (en->seen_time <= st->enemy_time)
+				continue;
+			VectorCopy(r->seeds[en->seed].origin, org);
+		}
+	}
+
+	if (enemy_org)
+		VectorCopy(org, enemy_org);
+
+	Combat_CacheItems();
+
+	VectorCopy(self->s.origin, eye);
+	eye[2] += self->viewheight;
+	VectorSubtract(org, eye, d);
+	dist = VectorLength(d);
+
+	held = Combat_Held(self);
+	if (held < 0)
+		held = SG_W_BLASTER;		/* the grapple or hand grenades: solve as
+		                             * the blaster, the same substitution the
+		                             * firing solution makes */
+	want = Combat_WantRange(self, held);
+
+	/*
+	 * The matchup. Their weapon is the one that was on their model when this
+	 * bot last had eyes on them, so it ages with the rest of the belief. Bias
+	 * this bot's own preference away from theirs: a quarter of the gap, then
+	 * back through the same R1/R2d/F6 gates, which is why a super shotgun
+	 * cannot be talked out past 256 by a railgun standing at 690.
+	 */
+	foe = (st->enemy_last > 0 && st->enemy_last < globals.num_edicts)
+	      ? g_edicts + st->enemy_last : NULL;
+	if (foe && foe->inuse && foe->client &&
+	    st->enemy_weapon >= 0 && st->enemy_weapon < SG_NUM_WEAPONS)
+	{
+		float theirs = Combat_WantRange(foe, st->enemy_weapon);
+		float dsafe = Combat_DSafe(self, held);
+		float cap = sg_weapons[held].range_cap;
+
+		want += SG_DUEL_MATCH_BIAS * (want - theirs);
+		if (dsafe > 0.0f && want < dsafe)
+			want = dsafe;
+		if (held == SG_W_SSHOTGUN && want > SG_SSG_PREFER_RANGE)
+			want = SG_SSG_PREFER_RANGE;
+		if (cap > 0.0f && want > cap)
+			want = cap;
+		if (want > SG_ENGAGE_RANGE)
+			want = SG_ENGAGE_RANGE;
+		if (want < 1.0f)
+			want = 1.0f;
+	}
+
+	if (want_range)
+		*want_range = want;
+	if (exposure_w)
+		*exposure_w = Combat_Exposure(self, held, dist, want);
+	return true;
+}
+
+/* ------------------------------------------------------------ corner hold
+ *
+ * A target that stepped behind a corner has not vanished; it is somewhere in
+ * the set of seeds it could have walked to since, and the rune knows exactly
+ * which those are. Flood outward from where it was last believed to be,
+ * spending link cost_ms against the time that has passed -- the rune's costs
+ * are real traversal milliseconds (sg_rune.h:80), so the budget is the elapsed
+ * clock and no conversion is needed. The members of that set this bot can
+ * SEE are the mouths it might come out of.
+ *
+ * This is belief plus reachability, which is what CACO and RUNE are for. It is
+ * not prediction of intent: every reachable seed is equally admitted, and the
+ * bot simply looks at the nearest one it can cover.
+ */
+static void Combat_LostAim(edict_t *self, sg_combat_state_t *st, vec3_t eye)
+{
+	rune_t	*r = SG_Rune();
+	int		q[SG_LOST_BFS], qc[SG_LOST_BFS];
+	int		head = 0, n = 0, best = -1;
+	float	bestd = 0.0f, budget;
+	vec3_t	probe, dv;
+	int		held;
+
+	st->lost_have = false;
+	if (!r || st->lost_seed < 0 || st->lost_seed >= r->hdr.num_seeds)
+		return;
+
+	budget = (level.time - st->lost_time) * 1000.0f;
+	if (budget < 0.0f)
+		budget = 0.0f;
+
+	q[0] = st->lost_seed;
+	qc[0] = 0;
+	n = 1;
+
+	while (head < n)
+	{
+		int		s = q[head];
+		int		c = qc[head];
+		int		li;
+		trace_t	tr;
+
+		head++;
+
+		/*
+		 * One ray per examined seed, aimed where a standing player's head
+		 * would be rather than at the floor sample itself -- a seed behind a
+		 * shin-high lip is still a place somebody walks out of.
+		 */
+		VectorCopy(r->seeds[s].origin, probe);
+		probe[2] += self->viewheight;
+		tr = gi.trace(eye, NULL, NULL, probe, self, MASK_OPAQUE);
+		if (tr.fraction >= 1.0f)
+		{
+			float d;
+
+			VectorSubtract(probe, eye, dv);
+			d = VectorLength(dv);
+			if (best < 0 || d < bestd)
+			{
+				best = s;
+				bestd = d;
+			}
+		}
+
+		for (li = r->first_link[s]; li >= 0 && n < SG_LOST_BFS;
+		     li = r->next_link[li])
+		{
+			rune_link_t *l = &r->links[li];
+			int			nc = c + (int)l->cost_ms;
+			int			j;
+
+			/*
+			 * First cost wins: this is a breadth walk, not a Dijkstra, so a
+			 * seed first reached the long way keeps the long way's cost and
+			 * may fall outside the budget it would have made by the short
+			 * one. The error is one-sided -- the set can only come out
+			 * SMALLER than the truth -- which is the safe direction for a
+			 * thing that decides where to point a gun.
+			 */
+			if ((float)nc > budget)
+				continue;		/* further than the clock allows, so far */
+			for (j = 0; j < n; j++)
+				if (q[j] == l->to)
+					break;
+			if (j < n)
+				continue;
+			q[n] = l->to;
+			qc[n] = nc;
+			n++;
+		}
+	}
+
+	if (best < 0)
+		return;
+
+	/*
+	 * Where on that seed to point. A hitscan or a railgun wants the head that
+	 * will appear there; a rocket or a grenade wants the floor, because splash
+	 * pays 120 - 0.5*d from the impact point (1.10, g_combat.c:742) and a shot
+	 * into the ground greets an arrival that a shot at head height would have
+	 * already passed.
+	 */
+	held = Combat_Held(self);
+	VectorCopy(r->seeds[best].origin, st->lost_aim);
+	if (held != SG_W_ROCKETLAUNCHER && held != SG_W_GRENADELAUNCHER)
+		st->lost_aim[2] += self->viewheight;
+	st->lost_have = true;
+}
+
+/*
+ * Hold the view on the best emergence point, if there is a hold to keep.
+ * Returns true when it wrote cmd->angles. The trigger is not touched here and
+ * never will be: the scan has no target, so the pre-fire trace never ran, and
+ * the veto that authorises every shot in this file is that trace.
+ *
+ * Known consequence, stated rather than hidden: the Body runs plain forward
+ * down whatever view the frame ends up with (sg_arach.c sets forwardmove 400
+ * along the chosen yaw, and pmove builds its move basis from the angles this
+ * file may have overwritten). Holding a view therefore also leans the walk
+ * toward it -- which is the same thing that already happens on every frame a
+ * target is held, and is why SG_CombatPursuit's role bound is the guard: only
+ * roles that were heading that way anyway are allowed a hold at all.
+ */
+static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
+                                usercmd_t *cmd, vec3_t eye)
+{
+	vec3_t	aim;
+	float	len, yaw, pitch;
+	int		held;
+
+	if (!st->pursue || level.time >= st->lost_until)
+		return false;
+
+	/*
+	 * The contact-band exception. A super shotgun, or anything else whose
+	 * preferred range is inside the contact band, wins by arriving, not by
+	 * watching a doorway from across the room -- 1.7's 120 damage is a
+	 * sub-128 number. Drop the hold outright and let the surface close the
+	 * distance; a bot standing still with a shotgun is a bot being shot.
+	 */
+	held = Combat_Held(self);
+	if (held < 0)
+		held = SG_W_BLASTER;
+	if (Combat_WantRange(self, held) < SG_R_CLOSE)
+	{
+		st->lost_until = 0.0f;
+		return false;
+	}
+
+	if (level.time >= st->lost_next)
+	{
+		Combat_LostAim(self, st, eye);
+		st->lost_next = level.time + SG_LOST_TICK;
+	}
+	if (!st->lost_have)
+		return false;
+
+	VectorSubtract(st->lost_aim, eye, aim);
+	len = VectorNormalize(aim);
+	if (len < 1.0f)
+		return false;
+
+	yaw = (float)(atan2(aim[1], aim[0]) * 180.0 / M_PI);
+	pitch = (float)(-asin(aim[2]) * 180.0 / M_PI);
+	cmd->angles[YAW] = ANGLE2SHORT(yaw)
+	                 - self->client->ps.pmove.delta_angles[YAW];
+	cmd->angles[PITCH] = ANGLE2SHORT(pitch)
+	                   - self->client->ps.pmove.delta_angles[PITCH];
+	return true;
+}
+
 /* ------------------------------------------------------------------ frame */
 
 void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
@@ -1538,6 +2020,51 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	enemy = Combat_Scan(self, eye, forward);
 	if (!enemy)
 	{
+		/*
+		 * Just lost one. Record where belief last put it, as a SEED rather
+		 * than a point: the emergence set is a walk over rune links, so its
+		 * root has to be a node of that graph. Rune_NearestSeed of the last
+		 * believed origin is the honest answer; the enemy table's own seed is
+		 * the fallback for the frame where a teammate's sighting is all there
+		 * is. Nothing is recorded when neither exists -- a hold rooted at a
+		 * guess is a bot staring at a wall.
+		 */
+		if (st->enemy > 0)
+		{
+			rune_t *r = SG_Rune();
+			int seed = r ? Rune_NearestSeed(r, st->enemy_org) : -1;
+
+			if (seed < 0 && r)
+			{
+				int team = self->client->ctf.teamnum;
+				int s;
+
+				if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
+					for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+					{
+						sg_belief_enemy_t *en =
+						    &sg_caco_enemies[team - 1][s];
+
+						if (en->client >= 0 && 1 + en->client == st->enemy &&
+						    en->seed >= 0 && en->seed < r->hdr.num_seeds)
+						{
+							seed = en->seed;
+							break;
+						}
+					}
+			}
+
+			if (seed >= 0)
+			{
+				st->lost_client = st->enemy - 1;
+				st->lost_seed = seed;
+				st->lost_time = level.time;
+				st->lost_until = level.time + SG_LOST_HOLD;
+				st->lost_next = 0.0f;
+				st->lost_have = false;
+			}
+		}
+
 		st->enemy = 0;
 
 		/*
@@ -1575,6 +2102,16 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 				                 Combat_Choose(self, SG_BAND_MID, SG_R_MID,
 				                               false));
 		}
+
+		/*
+		 * The corner. Last thing in the idle path, so the weapon choice above
+		 * is already made when the emergence set is asked which height to aim
+		 * at, and so a bot with no hold to keep leaves the view exactly where
+		 * navigation put it. The trigger is untouched: this branch has no
+		 * target, so no pre-fire trace ran, and no shot is ever authorised
+		 * without one.
+		 */
+		Combat_LostHold(self, st, cmd, eye);
 		return;
 	}
 
@@ -1599,6 +2136,23 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 
 	if (out_engaged)
 		*out_engaged = true;
+
+	/*
+	 * The record the duel terms read, written by the eye that just passed the
+	 * sight gate: where it is, when that was, and which weapon was on its
+	 * model. The weapon is ChangeWeapon's own s.modelindex2 (p_weapon.c:171-232)
+	 * seen from here as pers.weapon -- a thing in view, not an inventory this
+	 * bot has no business knowing. Anything the eye did not see stays unwritten.
+	 */
+	st->enemy_last = st->enemy;
+	VectorCopy(mid, st->enemy_org);
+	st->enemy_time = level.time;
+	st->enemy_weapon = Combat_Held(enemy);
+
+	/* re-sight clears the corner hold outright: there is nothing left to
+	 * predict about a target that is standing in front of you */
+	st->lost_until = 0.0f;
+	st->lost_have = false;
 
 	/* rule F1's stability clock runs every frame a target is held, not only on
 	 * the frames a projectile is in hand -- a clock that only ticks while it

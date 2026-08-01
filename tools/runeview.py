@@ -49,7 +49,11 @@ assert HEADER_SIZE == 80, HEADER_SIZE
 assert SEED_SIZE == 16, SEED_SIZE
 assert LINK_SIZE == 28, LINK_SIZE
 
-ACTION_NAMES = {0: 'RUN', 1: 'JUMP', 2: 'DROP', 3: 'HOOK', 4: 'SWIM'}
+# Appended, never renumbered, exactly as rune_action_t in sg_rune.h is:
+# 0-4 are the original five, 5-6 the declared world-moves-you pair, 7 the
+# rocket jump. A dump of an older rune still decodes because no value moved.
+ACTION_NAMES = {0: 'RUN', 1: 'JUMP', 2: 'DROP', 3: 'HOOK', 4: 'SWIM',
+                5: 'LIFT', 6: 'TELEPORT', 7: 'ROCKETJUMP'}
 # grey, cyan, yellow, orange, blue -- per spec, do not change
 ACTION_COLORS = {
     0: '#9a9a9a',   # run
@@ -57,8 +61,11 @@ ACTION_COLORS = {
     2: '#e0c000',   # drop
     3: '#ff8c1a',   # hook
     4: '#3d7dff',   # swim
+    5: '#8f5cff',   # lift      (appended; the five above are untouched)
+    6: '#00d18a',   # teleport  (appended)
+    7: '#ff3b30',   # rocketjump -- red: it is the only link paid for in health
 }
-PROVENANCE_NAMES = {0: 'PROVEN', 1: 'OBSERVED', 2: 'ADJUSTED'}
+PROVENANCE_NAMES = {0: 'PROVEN', 1: 'OBSERVED', 2: 'ADJUSTED', 3: 'DECLARED'}
 
 
 class Rune:

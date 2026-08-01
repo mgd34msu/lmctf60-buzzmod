@@ -23,6 +23,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_chat.h"       /* human orders replace the role quota */
 
 /*
  * The client lifecycle and the glue's edict helpers are declared where the
@@ -80,6 +81,19 @@ typedef struct sg_bot_s
 	vec3_t		deaddoor_spot;      /* where that dead door was struck */
 	qboolean	door_held_last;     /* stood still for a door last frame:
 	                                 * commanded stillness, not link failure */
+	qboolean	mate_block_last;    /* a TEAMMATE was the obstruction: not
+	                                 * the link's failure either */
+
+	/* rocket-jump execution: the proof stored the aim (anchor[0/1], z
+	 * recoverable) and the worst-case health price (anchor[2]); the body
+	 * pays it only with the launcher up and the margin in hand */
+	int			rj_phase;           /* 0 none, 1 raising RL, 2 aim+fire,
+	                                 * 3 flying the arc */
+	vec3_t		rj_aim;             /* unit vector the proof fired on */
+	vec3_t		rj_dest;
+	float		rj_deadline;
+	float		rj_fire_until;      /* how long phase 2 holds the trigger */
+	float		rj_use_next;        /* weapon-switch request rate limit */
 	int			watch_link;     /* the link under progress-watch */
 	float		watch_since;
 	vec3_t		watch_org;
@@ -89,6 +103,11 @@ typedef struct sg_bot_s
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
 static rune_t	*sg_rune;
+
+rune_t *SG_Rune(void)
+{
+	return sg_rune;
+}
 static char		sg_rune_map[64];
 
 /* one cost field per flag: cost_ms from every seed TO the flag seed */
@@ -434,6 +453,20 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	if (carrying)
 		return SG_ROLE_CARRY;
 
+	/*
+	 * A standing order from a HUMAN teammate replaces the quota: the
+	 * player said "defend" and defending is what happens, for the order's
+	 * lifetime (sg_chat.c owns expiry: 90s, disconnect, team change).
+	 * Only the flag outranks a human -- a carrier carries.
+	 */
+	{
+		int forced = SG_ChatOrderedRole(bot->ent);
+
+		if (forced >= 0 &&
+		    (forced != SG_ROLE_ESCORT || SG_ChatEscortTarget(bot->ent)))
+			return (sg_role_t)forced;
+	}
+
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		if (!sg_bots[i].active || !sg_bots[i].ent || !sg_bots[i].ent->inuse)
@@ -665,6 +698,73 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
 }
 
+/*
+ * The duel, priced onto the same surface as everything else.
+ *
+ * Dueling is not a mode the body enters; it is two more terms in the sum, in
+ * the same milliseconds every other term is denominated in (Surface_At). What
+ * combat supplies is the target's believed position, the range the weapon in
+ * hand wants, and what being seen costs right now (SG_CombatDuel, sg_combat.h).
+ *
+ * SG_DUEL_RANGE_MS   value per unit of range error. Half the carrier's own
+ *                    threat repulsion above, which prices a step toward a
+ *                    believed contact at 3.0 per unit: a carrier being caught
+ *                    loses the match, a fighter standing a hundred units off
+ *                    its best range loses some damage. The relation between
+ *                    the two is the claim; the absolute is fitted.
+ * SG_DUEL_COVER_MS   value for standing where the target can see you, scaled
+ *                    by exposure. At exposure 1 it is 900 ms -- comparable to
+ *                    the 1500 ms scale the detour arithmetic uses for an item
+ *                    worth taking, so cover competes with a pickup and loses
+ *                    to the objective. Fitted.
+ */
+#define SG_DUEL_RANGE_MS	1.5f
+#define SG_DUEL_COVER_MS	900.0f
+
+/*
+ * What one seed is worth to a bot in a fight, in the same milliseconds
+ * Surface_At speaks. Applied to the seed the bot is STANDING on as well as to
+ * every candidate: a term that only prices the alternatives makes staying put
+ * free, and a bot at the wrong range that finds every step more expensive than
+ * standing still is a bot that has been argued into never moving. The current
+ * seed is measured from its own origin rather than from the bot's exact
+ * position, so both sides of the comparison are the same measurement.
+ */
+static float Duel_Price(edict_t *e, vec3_t seed_org, vec3_t enemy_org,
+                        float want, float expo)
+{
+	vec3_t	d, eyepoint;
+	float	v;
+
+	VectorSubtract(seed_org, enemy_org, d);
+	v = SG_DUEL_RANGE_MS * fabsf(VectorLength(d) - want);
+
+	if (expo > 0.0f)
+	{
+		trace_t tr;
+
+		VectorCopy(seed_org, eyepoint);
+		eyepoint[2] += e->viewheight;
+		tr = gi.trace(eyepoint, NULL, NULL, enemy_org, e, MASK_OPAQUE);
+		if (tr.fraction >= 1.0f)
+			v += expo * SG_DUEL_COVER_MS;
+	}
+	return v;
+}
+
+/*
+ * The lateral weave. Period per bot so a squad does not oscillate in phase and
+ * present one wide target; the spread is 0.4 to 0.85 s, which is fast enough
+ * that a 650 u/s rocket aimed where the bot was arrives where it is not, and
+ * slow enough that ground friction is not eating the whole reversal. 300 is
+ * pm_maxspeed's own wishspeed clamp (the strafe work above uses 400 pre-clamp
+ * for direction only; here the magnitude is the point). All three fitted.
+ */
+#define SG_WEAVE_SIDE		300
+#define SG_WEAVE_BASE		0.4f
+#define SG_WEAVE_STEP		0.05f
+#define SG_WEAVE_HOLD		150.0f	/* a step this short is a stand, not a run */
+
 static void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -698,6 +798,14 @@ static void SG_BotThink(sg_bot_t *bot)
 	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
 	float		drop_yaw = 0.0f;
 	int			sub_steps = 1, sub_msec = 0;
+
+	/* the duel terms, read once per frame and priced per candidate seed */
+	qboolean	duel = false;               /* combat has a live or fresh target */
+	vec3_t		duel_org;                   /* where it is believed to be */
+	float		duel_want = 0.0f;           /* range the weapon in hand wants */
+	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
+	qboolean	duel_hold = false;          /* the chosen step is short: weave */
+	short		weave_side = 0;             /* this frame's strafe sign */
 
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 100;
@@ -789,7 +897,28 @@ static void SG_BotThink(sg_bot_t *bot)
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag_now
 		                                    : sg_fields.to_blue_flag_now;
 	else if (role == SG_ROLE_ESCORT)
+	{
+		edict_t *ht = SG_ChatEscortTarget(e);
+
 		goal_field = sg_fields.our_carrier[team - 1];
+		if (ht && ht->inuse && ht->client && !ht->deadflag)
+		{
+			/*
+			 * Escorting the HUMAN who said "cover me": their position is
+			 * team knowledge, the same rule our own carrier lives under
+			 * (sg_caco.c's header). Flooded fresh each frame, the same
+			 * cheap on-demand flood the intercept field uses.
+			 */
+			static int escort_field[SG_MAX_SEEDS];
+			int hs = Rune_NearestSeed(sg_rune, ht->s.origin), hc = 0;
+
+			if (hs >= 0)
+			{
+				Field_Flood(sg_rune, escort_field, &hs, &hc, 1);
+				goal_field = escort_field;
+			}
+		}
+	}
 	else
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag_now
 		                                    : sg_fields.to_red_flag_now;
@@ -837,9 +966,24 @@ static void SG_BotThink(sg_bot_t *bot)
 	 */
 	precision = (goal_field[bot->seed] < 1500);
 
+	/*
+	 * Ask combat whether there is a fight on, ONCE, before the fan is walked.
+	 * The answer is last frame's -- SG_CombatFrame runs after the movement is
+	 * decided, which is the order the constitution requires (combat modifies a
+	 * usercmd the body already built) -- and a tenth of a second of staleness
+	 * on a believed position that is already up to two seconds old changes
+	 * nothing. The carrier is excluded outright: 2.4-D2 is flee, not fight,
+	 * and its own repulsion term below already prices contact.
+	 */
+	if (role != SG_ROLE_CARRY)
+		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
+
 	/* descend the surface: my seed vs every seed one proven link away */
 	sg_cur_role = role;             /* for the rune identity pricing */
 	bestval = Surface_At(bot->seed, w, goal_field, support, intercept);
+	if (duel)
+		bestval += Duel_Price(e, sg_rune->seeds[bot->seed].origin, duel_org,
+		                      duel_want, duel_expo);
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
 	{
 		rune_link_t *l = &sg_rune->links[li];
@@ -851,6 +995,27 @@ static void SG_BotThink(sg_bot_t *bot)
 				break;
 		if (b < SG_BL_MAX)
 			continue;               /* shelved: the body could not run it */
+
+		/*
+		 * A rocket jump is bought with health (the proof's worst-case
+		 * price rides in anchor[2]) and needs the launcher and a rocket.
+		 * A candidate the body cannot pay for is not a candidate.
+		 */
+		if (l->action == RL_ROCKETJUMP)
+		{
+			static gitem_t *rj_rl, *rj_ammo;
+
+			if (!rj_rl)
+			{
+				rj_rl = FindItem("Rocket Launcher");
+				rj_ammo = FindItem("Rockets");
+			}
+			if (!rj_rl || !rj_ammo ||
+			    !e->client->pers.inventory[ITEM_INDEX(rj_rl)] ||
+			    e->client->pers.inventory[ITEM_INDEX(rj_ammo)] < 1 ||
+			    e->health <= (int)l->anchor[2] + 25)
+				continue;
+		}
 
 		/*
 		 * The carrier's flee doctrine gets ears: a step toward a fresh
@@ -876,6 +1041,24 @@ static void SG_BotThink(sg_bot_t *bot)
 				}
 			}
 		}
+		/*
+		 * The fighter's two terms, the mirror of the carrier's one.
+		 *
+		 * Range control: a candidate is priced by how far it puts the bot from
+		 * the range the weapon in hand actually wants -- WEAPONS.md 2.1's
+		 * ladders, read back out as a distance by SG_CombatDuel.
+		 *
+		 * Cover: a candidate the target can SEE costs what this bot's own
+		 * state says being seen is worth -- near nothing when healthy and in
+		 * band, the full 900 ms when hurt or holding the wrong gun for the
+		 * distance. One MASK_OPAQUE ray per candidate, the same mask and the
+		 * same shape as the sight gate itself (sg_caco.c:100-114). A fan runs
+		 * about 25 links wide, and the whole term is skipped on every frame
+		 * there is no fight, which is most of them.
+		 */
+		else if (duel)
+			v += Duel_Price(e, sg_rune->seeds[l->to].origin, duel_org,
+			                duel_want, duel_expo);
 
 		if (v < bestval)
 		{
@@ -983,7 +1166,7 @@ static void SG_BotThink(sg_bot_t *bot)
 
 	if (bestlink >= 0 && bestlink == bot->watch_link &&
 	    !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400) &&
-	    !bot->door_held_last)
+	    !bot->door_held_last && !bot->mate_block_last)
 	{
 		/* door_held_last: standing at a door on command is not the link's
 		 * failure -- billing it to the link shelved seed 429's whole fan
@@ -1018,6 +1201,9 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->watch_since = level.time;
 		VectorCopy(e->s.origin, bot->watch_org);
 	}
+	/* consumed by the watch above; the feelers re-raise it if the body is
+	 * still there this frame */
+	bot->mate_block_last = false;
 
 	/*
 	 * A defender that has reached its post stands it. The stand is the
@@ -1114,6 +1300,20 @@ static void SG_BotThink(sg_bot_t *bot)
 	SG_CombatPost(e, hold_post ? post_sight : -1.0f);
 
 	/*
+	 * Whether this bot may hold a corner on a target it just lost. The role
+	 * decides and nothing else: an attacker and a recoverer are already going
+	 * that way, a defender may watch a doorway only while it is still on its
+	 * own ground -- 2500 ms of the home field, the same order as the post's own
+	 * 400 and the pre-spin's 1200 -- and the carrier and its escort never do,
+	 * because both have a clock running that a camp does not serve. Said every
+	 * frame, so a role change ends a hold on the frame it happens.
+	 */
+	SG_CombatPursuit(e, (qboolean)(role == SG_ROLE_ATTACK ||
+	                               role == SG_ROLE_RECOVER ||
+	                               (role == SG_ROLE_DEFEND &&
+	                                goal_field[bot->seed] < 2500)));
+
+	/*
 	 * The ear (and teammates' eyes) arm everyone else too: a fresh contact
 	 * on the belief table within a second and a half of travel means the
 	 * idle hand should already hold the weapon that meeting calls for.
@@ -1200,6 +1400,40 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * flies the same approach instead of falling back down the wall it
 		 * just climbed.
 		 */
+		/* rocket-jump phase steps run before the aim is built */
+		if (bot->rj_phase)
+		{
+			static gitem_t *rj_rl2;
+
+			if (!rj_rl2)
+				rj_rl2 = FindItem("Rocket Launcher");
+			if (level.time > bot->rj_deadline)
+				bot->rj_phase = 0;
+			else if (bot->rj_phase == 1 && e->client->pers.weapon == rj_rl2)
+			{
+				bot->rj_phase = 2;
+				/* two weapon frames to guarantee the fire state runs */
+				bot->rj_fire_until = level.time + 0.25f;
+			}
+			else if (bot->rj_phase == 2 && level.time > bot->rj_fire_until)
+			{
+				bot->rj_phase = 3;
+				bot->rj_deadline = level.time + 2.5f;
+			}
+			else if (bot->rj_phase == 3 && e->groundentity)
+			{
+				bot->rj_phase = 0;
+				bot->commit_link = -1;  /* the arc ended; argue fresh */
+			}
+		}
+
+		/* flying the arc: the landing is the aim, as with a cut rope */
+		if (bot->rj_phase == 3)
+		{
+			VectorCopy(bot->rj_dest, aim);
+			have_aim = true;
+		}
+
 		if (bot->hook_phase == 3)
 		{
 			if (e->groundentity || level.time > bot->hook_deadline)
@@ -1293,6 +1527,52 @@ static void SG_BotThink(sg_bot_t *bot)
 				               ? atan2f(lipd[1], lipd[0]) * 180.0f / M_PI
 				               : l->heading * (360.0f / 256.0f);
 			}
+
+			/*
+			 * A rocket-jump link arms its sequence: raise the launcher,
+			 * then one aim-and-fire frame on the PROVEN aim vector
+			 * (anchor[0/1]; z = -sqrt(1-x^2-y^2), sg_rune.h), then fly
+			 * the arc. The selection gate above already priced the
+			 * health and checked the inventory.
+			 */
+			if (l->action == RL_ROCKETJUMP && bot->rj_phase == 0 &&
+			    e->groundentity)
+			{
+				bot->rj_aim[0] = l->anchor[0];
+				bot->rj_aim[1] = l->anchor[1];
+				bot->rj_aim[2] = -sqrtf(1.0f -
+				    l->anchor[0] * l->anchor[0] -
+				    l->anchor[1] * l->anchor[1]);
+				VectorCopy(sg_rune->seeds[l->to].origin, bot->rj_dest);
+				bot->rj_phase = 1;
+				bot->rj_deadline = level.time + 4.0f;
+				bot->rj_use_next = 0.0f;
+			}
+		}
+
+		/*
+		 * Rocket-jump fire frame(s): the view IS the proven aim vector --
+		 * down and behind, which is what throws the body forward -- while
+		 * the jump and the trigger go down together. Weapon_RocketLauncher
+		 * fires along v_angle on its fire frame, same contract as the hook.
+		 */
+		if (bot->rj_phase == 2)
+		{
+			float ry, rp;
+
+			ry = atan2f(bot->rj_aim[1], bot->rj_aim[0]) * 180.0f / M_PI;
+			rp = -asinf(bot->rj_aim[2]) * 180.0f / M_PI;
+			cmd.angles[YAW] = ANGLE2SHORT(ry)
+			                - e->client->ps.pmove.delta_angles[YAW];
+			cmd.angles[PITCH] = ANGLE2SHORT(rp)
+			                - e->client->ps.pmove.delta_angles[PITCH];
+			view_yaw = ry;
+			view_pitch = rp;
+			cmd.forwardmove = 0;
+			cmd.sidemove = 0;
+			cmd.upmove = 400;
+			cmd.buttons |= BUTTON_ATTACK;
+			have_move = false;
 		}
 
 		/* while aiming to fire, the cmd angles ARE the anchor bearing --
@@ -1402,6 +1682,22 @@ static void SG_BotThink(sg_bot_t *bot)
 				probe[2] += 8.0f;
 				tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
 				              e, MASK_PLAYERSOLID);
+				/*
+				 * A teammate is not terrain. Blocked by one on the goal
+				 * line: remember it (the progress watch must not bill a
+				 * friendly body to the link -- at 5v5 that billed 204-278
+				 * shelves a match), and bias the walk to a side chosen by
+				 * slot parity, so two bots meeting head-on pass on
+				 * opposite shoulders instead of mirroring forever.
+				 */
+				if (k == 0 && tr.fraction < 1.0f && tr.ent &&
+				    tr.ent->client && !tr.ent->deadflag &&
+				    tr.ent->client->ctf.teamnum == team)
+				{
+					bot->mate_block_last = true;
+					base_yaw += ((int)(e->client - game.clients) & 1)
+					            ? 28.0f : -28.0f;
+				}
 				/*
 				 * A closed door is not a wall: walking into it (its
 				 * auto-spawned trigger, g_func.c Think_SpawnDoorTrigger,
@@ -1587,6 +1883,50 @@ static void SG_BotThink(sg_bot_t *bot)
 	}
 
 	/*
+	 * The weave, decided here and applied per step below.
+	 *
+	 * A bot whose route has run out -- no improving link, or a destination it
+	 * is already standing on top of -- has nothing left to spend its movement
+	 * on, and standing still in a firefight is the one thing that is certainly
+	 * wrong. So it oscillates sideways instead. The direction needs no work:
+	 * combat has already put the view on the target, and pmove's own basis
+	 * makes `right` exactly perpendicular to that view in the horizontal plane
+	 * -- with roll zero, right = (sin yaw, -cos yaw, 0) regardless of pitch
+	 * (AngleVectors, q_shared.c). sidemove alone is therefore across the enemy
+	 * line by construction, and forwardmove is dropped so the weave adds no
+	 * drift along it.
+	 *
+	 * The period is per bot, not per squad: four bots weaving on one clock is
+	 * one wide target. Two-thirds of a rocket's flight time at close range,
+	 * spread across ten phases by client number.
+	 *
+	 * Never for the carrier (2.4-D2 is a route, not a fight), never with a
+	 * rope out (the hook SETS velocity -- an off-axis input accumulates into
+	 * nothing), and never on the final approach, where the whole point is
+	 * being able to stop on the flag.
+	 */
+	if (duel && role != SG_ROLE_CARRY && !precision && bot->hook_phase == 0)
+	{
+		if (bestlink < 0)
+			duel_hold = true;
+		else
+		{
+			VectorSubtract(sg_rune->seeds[sg_rune->links[bestlink].to].origin,
+			               e->s.origin, d);
+			duel_hold = (VectorLength(d) < SG_WEAVE_HOLD);
+		}
+
+		if (duel_hold)
+		{
+			float period = SG_WEAVE_BASE + SG_WEAVE_STEP *
+			               (float)((int)(e->client - game.clients) % 10);
+
+			weave_side = (fmodf(level.time, period) < period * 0.5f)
+			             ? SG_WEAVE_SIDE : -SG_WEAVE_SIDE;
+		}
+	}
+
+	/*
 	 * Execute the frame in physics steps, and decide the movement again on
 	 * every one of them.
 	 *
@@ -1611,6 +1951,10 @@ static void SG_BotThink(sg_bot_t *bot)
 		int		base, rem, step;
 		short	plain_forward = cmd.forwardmove;
 		short	nav_jump = cmd.upmove;
+		/* combat's own answer to "is there a fight on RIGHT NOW", as opposed
+		 * to the up-to-two-seconds-old belief the surface terms were priced
+		 * from. The weave below needs the live one. */
+		qboolean engaged = false;
 
 		if (sub < 1)
 			sub = 1;
@@ -1642,12 +1986,9 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * the bot is flying its own landing on forwardmove down the chosen yaw
 		 * (above), and a view stolen there is a landing missed.
 		 */
-		if (bot->hook_phase != 1 && bot->hook_phase != 3)
-		{
-			qboolean engaged = false;
-
+		if (bot->hook_phase != 1 && bot->hook_phase != 3 &&
+		    bot->rj_phase == 0)
 			SG_CombatFrame(e, &cmd, &engaged);
-		}
 
 		for (step = 0; step < sub; step++)
 		{
@@ -1674,7 +2015,20 @@ static void SG_BotThink(sg_bot_t *bot)
 			 * none on the final approach, where being able to stop on the
 			 * flag is worth more than the speed.
 			 */
-			if (have_move && !precision && bot->hook_phase == 0)
+			/*
+			 * The weave replaces the step rather than adding to it: the
+			 * strafe work above leans off the direction of TRAVEL to harvest
+			 * acceleration down a route, and there is no route left to run
+			 * here. `engaged` and not `duel` is the test -- a target that
+			 * walked behind a wall two seconds ago is worth holding a range
+			 * against, and is not worth dodging.
+			 */
+			if (duel_hold && engaged)
+			{
+				cmd.forwardmove = 0;
+				cmd.sidemove = weave_side;
+			}
+			else if (have_move && !precision && bot->hook_phase == 0)
 				SG_MovePolicy(e, &cmd, basis_fwd, basis_right, move_dir,
 				              open_ahead, run_link,
 				              (float)cmd.msec / 1000.0f);
@@ -1718,6 +2072,19 @@ static void SG_BotThink(sg_bot_t *bot)
 		 */
 		if (bot->hook_phase == 0 && e->client->hookstate != 0)
 			ctf_hook_abort(e);
+
+		/* rocket-jump phase 1: ask for the launcher through the same use
+		 * path a player's "use" command runs, at a polite rate */
+		if (bot->rj_phase == 1 && level.time >= bot->rj_use_next)
+		{
+			static gitem_t *rj_rl3;
+
+			if (!rj_rl3)
+				rj_rl3 = FindItem("Rocket Launcher");
+			if (rj_rl3 && rj_rl3->use)
+				rj_rl3->use(e, rj_rl3);
+			bot->rj_use_next = level.time + 0.5f;
+		}
 
 		if (bot->hook_phase == 1)
 		{
