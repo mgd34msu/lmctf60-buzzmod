@@ -107,5 +107,24 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
  */
 void SG_CombatPursuit(edict_t *self, qboolean allowed);
 
+/*
+ * This bot's effective skill, times 100 -- 0 to 400, for telemetry that wants
+ * an int. It is the bot_skill cvar clamped to a 0..4 team level, minus a fixed
+ * personal handicap of 0 to 1 levels derived from the client index, so two bots
+ * on one server setting are not the same shooter: the sixteen names sg_arach.c
+ * spawns split into five recognisable grades of aim, reaction, trigger cadence
+ * and lead. The cvar names the team's best, not its average.
+ *
+ * Skill 4 is the ceiling and is the behaviour that shipped: the aim ramp, its
+ * floor and the fire windows are all identical there to the constants used
+ * before there was a skill model, and the lead error is exactly zero. Every
+ * skill below 4 is worse, never better. The one thing skill 4 pays that the
+ * old code did not is a 0.12 s reaction on a new target, which is a shade over
+ * one server frame.
+ *
+ * Safe on any edict; a non-client returns the team level alone.
+ */
+int SG_CombatSkill(edict_t *self);
+
 /* debug: the trigger-veto tally, printed every 5s on sg_debug */
 void SG_CombatWhy(void);

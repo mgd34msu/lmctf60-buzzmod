@@ -2521,6 +2521,11 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 
 	// Hati - initialize spam control variables
 	ent->client->spam_band_count = CTF_SPAM_BAND_MAX;
+	// BUZZKILL - spam_lock_time was never seeded; at zero, every client's
+	// first five seconds of chat on every level were silently eaten by
+	// ctf_SpamCheck's lockout test (level.time - 0 < LOCKOUT), and each
+	// swallowed line re-armed the lock. Humans included. Seed it in the past.
+	ent->client->spam_lock_time = -CTF_SPAM_LOCKOUT_TIME;
 	ent->client->spam_freq_count = CTF_SPAM_FREQ_MIN;
 	ent->client->spam_freq_time = level.time;
 	
@@ -2722,6 +2727,11 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	ent->client->spam_band_count+=CTF_SPAM_BAND_RECOVER; //this locks based on bandwidth
 	if (ent->client->spam_band_count > CTF_SPAM_BAND_MAX)
 		ent->client->spam_band_count = CTF_SPAM_BAND_MAX;
+	// BUZZKILL - spam_lock_time was never seeded; at zero, every client's
+	// first five seconds of chat on every level were silently eaten by
+	// ctf_SpamCheck's lockout test (level.time - 0 < LOCKOUT), and each
+	// swallowed line re-armed the lock. Humans included. Seed it in the past.
+	ent->client->spam_lock_time = -CTF_SPAM_LOCKOUT_TIME;
 	if (ent->client->spam_band_count < CTF_SPAM_BAND_MIN)
 		ent->client->spam_band_count = CTF_SPAM_BAND_MIN;
 	

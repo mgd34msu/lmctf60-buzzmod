@@ -121,30 +121,11 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
  */
 static void Caco_Where(vec3_t origin, char *buf, int size)
 {
-	edict_t	*item, *best = NULL;
-	float	dist, bestdist = 400.0f;
-	vec3_t	delta;
-
-	for (item = g_edicts; item < &g_edicts[globals.num_edicts]; item++)
-	{
-		if (!item->inuse || !item->item)
-			continue;
-		if (item->spawnflags & DROPPED_ITEM)
-			continue;
-		VectorSubtract(item->s.origin, origin, delta);
-		dist = VectorLength(delta);
-		if (dist < bestdist)
-		{
-			bestdist = dist;
-			best = item;
-		}
-	}
-
-	if (best && best->item && best->item->pickup_name)
-		Com_sprintf(buf, size, "by the %s", best->item->pickup_name);
-	else
-		Com_sprintf(buf, size, "at gps %d %d %d",
-		            (int)origin[0], (int)origin[1], (int)origin[2]);
+	/* one namer for every mouth: the curated landmark table in sg_chat.c.
+	 * This function's own nearest-anything scan named positions by health
+	 * boxes ("by the Health", 25 times a game) and once by the carried
+	 * flag itself ("enemy has our flag, by the Enemy Flag"). */
+	SG_ChatLocName(origin, buf, size);
 }
 
 /*

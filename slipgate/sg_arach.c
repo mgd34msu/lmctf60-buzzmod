@@ -95,6 +95,7 @@ typedef struct sg_bot_s
 	qboolean	was_carrying;       /* for the carry-duration bookend */
 	float		carry_start;
 	int			last_role;          /* role-transition observability */
+	qboolean	death_taught;       /* one danger lesson per death */
 
 	/* loop detection wider than the watch's 96-unit ball: recent seeds
 	 * visited with the goal value each visit held. Coming back no better
@@ -131,6 +132,11 @@ rune_t *SG_Rune(void)
 {
 	return sg_rune;
 }
+
+/* the danger dimension, defined with its kin further down */
+static void Danger_Load(void);
+static void Danger_Save(void);
+static void Danger_Decay(void);
 static char		sg_rune_map[64];
 
 /* one cost field per flag: cost_ms from every seed TO the flag seed */
@@ -220,6 +226,7 @@ static qboolean SG_LevelSetup(void)
 		           level.mapname);
 		return false;
 	}
+	Danger_Load();      /* what past matches taught about this map */
 	/* Com_sprintf is the tree's own bounded copy (q_shared.c) and always
 	 * terminates; strncpy at sizeof-1 does not, which is what -Wall's
 	 * stringop-truncation was reporting here. Same call Rune_Load uses. */
@@ -312,6 +319,77 @@ static float Rune_RoleFactor(int role, int entnum)
  * its bots strictly serially, so a file-static carries it into the
  * detour arithmetic without widening every signature on the path */
 static int sg_cur_role;
+
+/*
+ * The DANGER dimension: deaths teach the map. Team-indexed -- a corridor
+ * lethal for red is safe for blue -- fed by each bot registering its own
+ * death at its own seed (self-knowledge, the most honest sighting there
+ * is), decayed a little every second, priced into the same descent as
+ * every other dimension, and persisted beside the rune so the next match
+ * on this map starts educated. The rune is a higher-order surface; this
+ * is one more dimension of it.
+ */
+static int		sg_danger[2][SG_MAX_SEEDS];
+static const int *sg_cur_danger;
+static float	sg_danger_decay_next;
+
+static void Danger_Learn(int team, int seed)
+{
+	if (team < 1 || team > 2 || seed < 0 || seed >= SG_MAX_SEEDS)
+		return;
+	sg_danger[team - 1][seed] += 1200;      /* fitted: ~a detour's worth */
+	if (sg_danger[team - 1][seed] > 8000)
+		sg_danger[team - 1][seed] = 8000;
+}
+
+static void Danger_Decay(void)
+{
+	int t, i;
+
+	if (level.time < sg_danger_decay_next)
+		return;
+	sg_danger_decay_next = level.time + 1.0f;
+	for (t = 0; t < 2; t++)
+		for (i = 0; i < SG_MAX_SEEDS; i++)
+			if (sg_danger[t][i])
+				sg_danger[t][i] -= (sg_danger[t][i] >> 6) + 1;
+}
+
+static void Danger_Path(char *buf, int size)
+{
+	Com_sprintf(buf, size, "%s/maps/%s.rune.danger",
+	            "lmctf-hooktest", sg_rune_map);
+}
+
+static void Danger_Save(void)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	if (!sg_rune)
+		return;
+	Danger_Path(path, sizeof(path));
+	f = fopen(path, "wb");
+	if (!f)
+		return;
+	fwrite(sg_danger, sizeof(sg_danger), 1, f);
+	fclose(f);
+}
+
+static void Danger_Load(void)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	memset(sg_danger, 0, sizeof(sg_danger));
+	Danger_Path(path, sizeof(path));
+	f = fopen(path, "rb");
+	if (!f)
+		return;
+	if (fread(sg_danger, sizeof(sg_danger), 1, f) != 1)
+		memset(sg_danger, 0, sizeof(sg_danger));
+	fclose(f);
+}
 
 /*
  * Intercept micro-positioning: being ON the carrier's escape line is the
@@ -611,6 +689,11 @@ static float Surface_At(int seed, const sg_weights_t *w,
 
 	v = w->objective * (float)goal_field[seed];
 
+	/* the danger dimension: learned, decayed, team-indexed (set by the
+	 * caller alongside sg_cur_role); zero where nothing has died */
+	if (sg_cur_danger && seed < SG_MAX_SEEDS)
+		v += (float)sg_cur_danger[seed];
+
 	for (c = 0; c < SG_FIELD_CLASSES; c++)
 		if (w->item[c] > 0.0f)
 			v -= 1500.0f * Detour_Value(seed, c, goal_field, w->item[c]);
@@ -885,11 +968,19 @@ static void SG_BotThink(sg_bot_t *bot)
 
 	if (e->deadflag)
 	{
+		/* my own death, at my own seed: the most honest sighting there
+		 * is, and the danger dimension's only teacher */
+		if (bot->seed >= 0 && !bot->death_taught)
+		{
+			Danger_Learn(e->client->ctf.teamnum, bot->seed);
+			bot->death_taught = true;
+		}
 		bot->seed = -1;
 		cmd.buttons = BUTTON_ATTACK;
 		ClientThink(e, &cmd);
 		return;
 	}
+	bot->death_taught = false;
 
 	/* my eyes feed the team belief before I decide from it */
 	Caco_See(sg_rune, e);
@@ -1089,10 +1180,18 @@ static void SG_BotThink(sg_bot_t *bot)
 
 	/* descend the surface: my seed vs every seed one proven link away */
 	sg_cur_role = role;             /* for the rune identity pricing */
+	sg_cur_danger = sg_danger[team - 1];    /* the danger dimension, ours */
 	bestval = Surface_At(bot->seed, w, goal_field, support, intercept);
 	if (duel)
 		bestval += Duel_Price(e, sg_rune->seeds[bot->seed].origin, duel_org,
 		                      duel_want, duel_expo);
+			/* the exposure dimension as a cover prior: a seed the map
+			 * says everyone can SEE costs more while hurting, before
+			 * any runtime trace confirms who is looking (area_hint,
+			 * written by generation; 0 on old runes = no opinion) */
+			if (duel_expo > 0.0f)
+				bestval += duel_expo *
+				    (float)sg_rune->seeds[bot->seed].area_hint * 1.8f;
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
 	{
 		rune_link_t *l = &sg_rune->links[li];
@@ -1166,8 +1265,17 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * there is no fight, which is most of them.
 		 */
 		else if (duel)
+		{
 			v += Duel_Price(e, sg_rune->seeds[l->to].origin, duel_org,
 			                duel_want, duel_expo);
+			/* the exposure dimension as a cover prior: a seed the map
+			 * says everyone can SEE costs more while hurting, before
+			 * any runtime trace confirms who is looking (area_hint,
+			 * written by generation; 0 on old runes = no opinion) */
+			if (duel_expo > 0.0f)
+				v += duel_expo *
+				    (float)sg_rune->seeds[l->to].area_hint * 1.8f;
+		}
 
 		if (v < bestval)
 		{
@@ -2340,6 +2448,29 @@ no_hold:;
 		    bot->rj_phase == 0)
 			SG_CombatFrame(e, &cmd, &engaged);
 
+		/*
+		 * Combat re-aimed: rebuild the movement basis from the view pmove
+		 * will ACTUALLY use. Solving the strafe against the navigation
+		 * basis while flying the combat view made the engine reconstruct
+		 * a different direction than the one asked for -- the bot ran
+		 * down its AIM instead of its route on every engaged frame (the
+		 * duel implementation's flagged coupling, now closed).
+		 */
+		if (engaged)
+		{
+			vec3_t basis;
+
+			basis[YAW] = SHORT2ANGLE((short)(cmd.angles[YAW] +
+			             e->client->ps.pmove.delta_angles[YAW]));
+			basis[PITCH] = SHORT2ANGLE((short)(cmd.angles[PITCH] +
+			               e->client->ps.pmove.delta_angles[PITCH]));
+			if (basis[PITCH] > 180.0f)
+				basis[PITCH] -= 360.0f;
+			basis[PITCH] /= 3.0f;
+			basis[ROLL] = 0.0f;
+			AngleVectors(basis, basis_fwd, basis_right, NULL);
+		}
+
 		for (step = 0; step < sub; step++)
 		{
 			cmd.msec = (byte)(base + (step < rem ? 1 : 0));
@@ -2569,6 +2700,7 @@ void SG_RunFrame(void)
 		SG_LevelChange();
 	last_time = level.time;
 	SG_CombatWhy();
+	Danger_Decay();
 
 	if (sg_rune)
 	{
@@ -2683,6 +2815,8 @@ int SG_RemoveBots(void)
 void SG_LevelChange(void)
 {
 	int i;
+
+	Danger_Save();      /* the map's lessons outlive the level */
 
 	/* rune and fields were TAG_LEVEL -- the engine freed them */
 	sg_rune = NULL;

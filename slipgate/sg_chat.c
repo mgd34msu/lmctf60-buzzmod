@@ -14,7 +14,7 @@
  *          (g_items.c:198) -- map knowledge every player carries.
  *      Nothing else is said that no teammate has seen.
  *
- *   2. PERSONALITY. Eight bots, four voices, keyed by the netname prefix
+ *   2. PERSONALITY. Sixteen bots, four voices, keyed by the netname prefix
  *      sg_arach.c gives them ("Arach[SG]"). Public chat only: greeting,
  *      taunt, grumble, celebration. Short, lowercase, rate-limited, and
  *      probabilistic so it is not a script.
@@ -49,6 +49,16 @@
 #define SG_CHAT_DELAY_MIN	0.4f    /* reaction time before a queued line */
 #define SG_CHAT_DELAY_MAX	0.9f
 #define SG_CHAT_LINE		96      /* nothing said here is longer */
+
+/*
+ * The greeting waits out the spam lockout before it opens its mouth. See
+ * Chat_Greetings for why a line sent any earlier is silently eaten.
+ * SG_CHAT_GREET_STAGGER keeps sixteen bots from greeting in one frame.
+ */
+#define SG_CHAT_GREET_SETTLE	1.0f    /* after the bot is alive on a team */
+#define SG_CHAT_GREET_STAGGER	0.30f   /* per client slot */
+#define SG_CHAT_GREET_RETRY	(CTF_SPAM_LOCKOUT_TIME + 1.0f)
+#define SG_CHAT_GREET_TRIES	4       /* then give up and stay quiet */
 
 #define SG_CHAT_ACK_GAP		1.5f    /* floor under order acknowledgements */
 #define SG_CHAT_TAUNT_GAP	30.0f
@@ -89,46 +99,71 @@ enum {
 	SG_ACK_RECOVER, SG_ACK_FREE, SG_ACK_KINDS
 };
 
-#define SG_CHAT_MAXLINES	5
+#define SG_CHAT_MAXLINES	8
 
 /*
- * Four voices across eight bots, not eight voices: a server full of
+ * Four voices across sixteen bots, not sixteen voices: a server full of
  * individually written characters reads as a script the second two of them
  * speak in the same minute. Era-appropriate deathmatch banter, lowercase,
  * nothing over ~50 characters -- a long line is the tell that a bot wrote it.
+ *
+ * The pools are deeper than the four-per-category the first eight bots ran
+ * on. Four bots now share each voice rather than two, so a category with
+ * four lines in it would have the same phrase come back around inside a
+ * single firefight -- the echo the deeper pool exists to break up. Rows are
+ * NULL-terminated where they are short of SG_CHAT_MAXLINES; Chat_Pick counts
+ * to the first NULL, so a row may be any length up to the maximum.
  */
 static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
-	/* SG_TONE_TERSE */
+	/* SG_TONE_TERSE  -- arach, trace, ogre, knight */
 	{
-		{ "hi", "here", "lets go", "in", NULL },
-		{ "got him", "down", "next", "too slow", NULL },
-		{ "hm", "my bad", "again", NULL, NULL },
-		{ "cap", "thats one", "good", "on the board", NULL },
-		{ "flag is out", "got it", "moving", NULL, NULL }
+		{ "hi", "here", "lets go", "in", "up", "ready", "back", NULL },
+		{ "got him", "down", "next", "too slow", "yep", "stay down",
+		  "counted", NULL },
+		{ "hm", "my bad", "again", "ok", "fine", "damn", NULL },
+		{ "cap", "thats one", "good", "on the board", "point", "yes",
+		  "scored", NULL },
+		{ "flag is out", "got it", "moving", "have it", "going home",
+		  "run", NULL }
 	},
-	/* SG_TONE_COCKY */
+	/* SG_TONE_COCKY  -- caco, slip, fiend, spawn */
 	{
-		{ "who wants it", "easy day", "im here now", "lets have it", NULL },
-		{ "sit down", "too easy", "all day", "thats mine", "get better" },
-		{ "lucky", "cheap", "whatever", "sure", NULL },
-		{ "thats how you do it", "run it back", "count it", "told you", NULL },
-		{ "flags mine", "watch this", "coming through", NULL, NULL }
+		{ "who wants it", "easy day", "im here now", "lets have it",
+		  "line up", "hope you practiced", "im back", NULL },
+		{ "sit down", "too easy", "all day", "thats mine", "get better",
+		  "outclassed", "not even close", NULL },
+		{ "lucky", "cheap", "whatever", "sure", "nice shot i guess",
+		  "wont happen twice", NULL },
+		{ "thats how you do it", "run it back", "count it", "told you",
+		  "put it up", "thats a point", NULL },
+		{ "flags mine", "watch this", "coming through", "ill take that",
+		  "say goodbye to it", NULL }
 	},
-	/* SG_TONE_DRY */
+	/* SG_TONE_DRY    -- rune, phase, wizard, scrag */
 	{
-		{ "evening", "here we go again", "right then", "hello all", NULL },
-		{ "predictable", "as expected", "noted", "that was quick", NULL },
-		{ "of course", "wonderful", "hm, no", "typical", NULL },
-		{ "one for us", "acceptable", "there it is", "adequate", NULL },
-		{ "we have theirs", "flag is away", "borrowed it", NULL, NULL }
+		{ "evening", "here we go again", "right then", "hello all",
+		  "back for more", "lovely", "shall we", NULL },
+		{ "predictable", "as expected", "noted", "that was quick",
+		  "hardly a contest", "quite", "well then", NULL },
+		{ "of course", "wonderful", "hm, no", "typical", "marvellous",
+		  "how novel", "ah", NULL },
+		{ "one for us", "acceptable", "there it is", "adequate",
+		  "satisfactory", "as planned", NULL },
+		{ "we have theirs", "flag is away", "borrowed it", "taking this",
+		  "do excuse me", NULL }
 	},
-	/* SG_TONE_MECH */
+	/* SG_TONE_MECH   -- gate, field, vore, shal */
 	{
-		{ "online", "unit ready", "connected", "standing by", NULL },
-		{ "target down", "confirmed kill", "one less", "clean", NULL },
-		{ "reset", "respawning", "damage critical", "recycling", NULL },
-		{ "objective complete", "point scored", "capture logged", NULL, NULL },
-		{ "flag acquired", "carrying", "objective in hand", NULL, NULL }
+		{ "online", "unit ready", "connected", "standing by",
+		  "systems nominal", "link established", "active", NULL },
+		{ "target down", "confirmed kill", "one less", "clean",
+		  "threat eliminated", "target neutralized", NULL },
+		{ "reset", "respawning", "damage critical", "recycling",
+		  "systems failing", "rebuilding", NULL },
+		{ "objective complete", "point scored", "capture logged",
+		  "score updated", "mission success", NULL },
+		{ "flag acquired", "carrying", "objective in hand",
+		  "asset secured", "extracting", NULL }
 	}
 };
 
@@ -143,12 +178,22 @@ static const char *chat_ack[SG_TONES][SG_ACK_KINDS] = {
 	                 "recovering flag", "orders cleared" }
 };
 
-/* the roster is sg_arach.c's sg_names table; the voice map is ours */
+/*
+ * The roster is sg_arach.c's sg_names table; the voice map is ours. Sixteen
+ * names, four to a voice, so the two halves of the roster are spread evenly
+ * rather than the newer eight all landing in one tone. A name absent from
+ * this table still speaks -- Chat_Tone falls back to terse -- so the table
+ * going stale against sg_names costs flavour, not function.
+ */
 static const struct { const char *name; int tone; } chat_voice[] = {
-	{ "arach", SG_TONE_TERSE }, { "trace", SG_TONE_TERSE },
-	{ "caco",  SG_TONE_COCKY }, { "slip",  SG_TONE_COCKY },
-	{ "rune",  SG_TONE_DRY   }, { "phase", SG_TONE_DRY   },
-	{ "gate",  SG_TONE_MECH  }, { "field", SG_TONE_MECH  },
+	{ "arach",  SG_TONE_TERSE }, { "trace",  SG_TONE_TERSE },
+	{ "ogre",   SG_TONE_TERSE }, { "knight", SG_TONE_TERSE },
+	{ "caco",   SG_TONE_COCKY }, { "slip",   SG_TONE_COCKY },
+	{ "fiend",  SG_TONE_COCKY }, { "spawn",  SG_TONE_COCKY },
+	{ "rune",   SG_TONE_DRY   }, { "phase",  SG_TONE_DRY   },
+	{ "wizard", SG_TONE_DRY   }, { "scrag",  SG_TONE_DRY   },
+	{ "gate",   SG_TONE_MECH  }, { "field",  SG_TONE_MECH  },
+	{ "vore",   SG_TONE_MECH  }, { "shal",   SG_TONE_MECH  },
 	{ NULL, 0 }
 };
 
@@ -157,6 +202,8 @@ static const struct { const char *name; int tone; } chat_voice[] = {
 typedef struct
 {
 	qboolean	greeted;
+	float		greet_at;       /* 0 = not scheduled yet */
+	int			greet_tries;
 	float		next_team;      /* say_team budget */
 	float		next_say;       /* public say budget */
 	float		next_taunt;
@@ -601,6 +648,11 @@ static void Chat_LocName(vec3_t pos, char *out, int len)
 		Chat_Copy(out, "blue base", len);
 	else
 		Chat_Copy(out, "midfield", len);
+}
+
+void SG_ChatLocName(vec3_t pos, char *out, int len)
+{
+	Chat_LocName(pos, out, len);
 }
 
 /* the same name, said from one team's point of view */
@@ -1048,27 +1100,107 @@ void SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier)
 
 /* ------------------------------------------------------------- personality */
 
+/*
+ * Why the greeting used to be a line nobody ever read.
+ *
+ * The old version picked a line the first frame the bot was alive on a team
+ * and set greeted = true right there, "once, whether or not it lands". Both
+ * halves of that were wrong at exactly the same moment.
+ *
+ * Every chat line in this mod goes through Cmd_Say_f, which asks
+ * ctf_SpamCheck first (g_cmds.c:2201). ctf_SpamCheck refuses when
+ *
+ *     level.time - ent->client->spam_lock_time < CTF_SPAM_LOCKOUT_TIME
+ *
+ * (g_ctffunc.c:1313). Nothing ever initialises spam_lock_time -- ClientConnect
+ * seeds spam_band_count and spam_freq_count and stops there (p_client.c:2523)
+ * -- so it is the zero the client struct was memset to. For the first
+ * CTF_SPAM_LOCKOUT_TIME (5) seconds of a level, level.time - 0 < 5 is true for
+ * every client on the server, and every say and say_team is dropped as "already
+ * in penalty box". Bots are added at map load, spawn inside that window, and
+ * greet inside it. The say was swallowed, and the failed check then set
+ * spam_lock_time = level.time, re-arming the lockout on the way out.
+ *
+ * The once-flag is what made it permanent. greeted was set from the return-
+ * less call, so the one attempt each bot got was spent on a frame where the
+ * line could not possibly go out, and it was never retried. Item callouts
+ * survived the same bug because they fire repeatedly and well past the five
+ * second mark, so they simply land on a later attempt -- which is why the
+ * smoke test saw callouts and no greetings.
+ *
+ * The fix that matters is the schedule: book a time instead of speaking on
+ * sight, and put the first attempt past the lockout window, where the say can
+ * actually go out. Everything else is belt and braces.
+ *
+ * Note what Chat_Say can and cannot tell us. It returns false for its own
+ * refusals -- the public say budget, a bot that died before its turn -- and
+ * those are worth retrying. It cannot see spam control's verdict at all:
+ * BotClientCommand returns void, so once the line is handed to Cmd_Say_f,
+ * Chat_Say reports true whether ctf_SpamCheck passed it or ate it. So the
+ * retry below is not a delivery check, and the greeting's correctness rests on
+ * being scheduled late enough rather than on noticing a rejection. The retry
+ * gap is still longer than the lockout, because a refused attempt re-arms
+ * spam_lock_time -- retrying faster than the lockout would let a bot hold
+ * itself in the penalty box with its own retries.
+ */
 static void Chat_Greetings(void)
 {
 	int i;
 
 	for (i = 0; i < game.maxclients; i++)
 	{
-		edict_t		*e = g_edicts + 1 + i;
-		const char	*line;
+		edict_t			*e = g_edicts + 1 + i;
+		sg_chat_bot_t	*cb = &chat_bot[i];
+		const char		*line;
 
 		if (!Chat_OurBot(e))
 		{
-			chat_bot[i].greeted = false;
+			cb->greeted = false;
+			cb->greet_at = 0.0f;
+			cb->greet_tries = 0;
 			continue;
 		}
-		if (chat_bot[i].greeted || !Chat_Playing(e))
+		if (cb->greeted || !Chat_Playing(e))
+			continue;
+
+		/*
+		 * First frame this bot is alive and on a team: book a time, do not
+		 * speak. The floor is absolute level time, not a delay from now,
+		 * because the lockout window is measured from level.time against a
+		 * spam_lock_time of zero. A bot added mid-match is already past it
+		 * and only waits out the settle.
+		 */
+		if (cb->greet_at <= 0.0f)
+		{
+			float settle = level.time + SG_CHAT_GREET_SETTLE
+			             + (float)i * SG_CHAT_GREET_STAGGER;
+			float unlock = CTF_SPAM_LOCKOUT_TIME + SG_CHAT_GREET_SETTLE
+			             + (float)i * SG_CHAT_GREET_STAGGER;
+
+			cb->greet_at = (settle > unlock) ? settle : unlock;
+			continue;
+		}
+		if (level.time < cb->greet_at)
 			continue;
 
 		line = Chat_Pick(Chat_Tone(e), SG_LINE_JOIN);
-		chat_bot[i].greeted = true;     /* once, whether or not it lands */
-		if (line)
-			Chat_Say(e, line);
+		if (!line)
+		{
+			cb->greeted = true;         /* nothing to say: do not come back */
+			continue;
+		}
+
+		if (Chat_Say(e, line))
+		{
+			cb->greeted = true;
+			continue;
+		}
+
+		/* refused -- by our own say budget or by spam control. Try later. */
+		if (++cb->greet_tries >= SG_CHAT_GREET_TRIES)
+			cb->greeted = true;
+		else
+			cb->greet_at = level.time + SG_CHAT_GREET_RETRY;
 	}
 }
 

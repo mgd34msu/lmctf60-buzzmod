@@ -2141,6 +2141,52 @@ qboolean Rune_Generate(const char *mapname)
 	 * reach into, seeded before anything is proven so the pair loop sees
 	 * them like any other seed */
 	Seed_Water();
+	/*
+	 * EXPOSURE, into the reserved field. area_hint has been written zero
+	 * since the format was born; it becomes the seed's exposure count --
+	 * how many of up to 24 sampled seeds within 1000 units can see it,
+	 * eye to eye, MASK_OPAQUE. The duel's cover pricing burns a runtime
+	 * trace per candidate today; with exposure in the rune it is a
+	 * lookup, and "sneak past" becomes a gradient the whole map wide.
+	 * Old runes read as exposure 0 everywhere -- honest "unknown", and
+	 * consumers treat 0 as no-opinion.
+	 */
+	{
+		int i, j, step, vis, sampled;
+
+		gi.dprintf("rune: measuring exposure...\n");
+		for (i = 0; i < gen_num_seeds; i++)
+		{
+			vec3_t a;
+			trace_t etr;
+
+			VectorCopy(gen_seeds[i].origin, a);
+			a[2] += 22.0f;
+			vis = sampled = 0;
+			/* a stride walk gives a stable pseudo-sample without rand() */
+			step = (gen_num_seeds / 24) | 1;
+			for (j = i % step; j < gen_num_seeds && sampled < 24; j += step)
+			{
+				vec3_t b, d2;
+
+				if (j == i)
+					continue;
+				VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d2);
+				if (VectorLength(d2) > 1000.0f)
+					continue;
+				sampled++;
+				VectorCopy(gen_seeds[j].origin, b);
+				b[2] += 22.0f;
+				etr = gi.trace(a, NULL, NULL, b, NULL, MASK_OPAQUE);
+				if (etr.fraction >= 1.0f)
+					vis++;
+			}
+			/* scale to the byte-ish range; sampled can be < 24 in sparse
+			 * regions, so store the RATE, not the raw count */
+			gen_seeds[i].area_hint = (short)(sampled ?
+			    (vis * 255) / sampled : 0);
+		}
+	}
 	gi.dprintf("rune: %d seeds; proving links...\n", gen_num_seeds);
 	Prove_All();
 	gi.dprintf("rune: %d links proven\n", gen_num_links);

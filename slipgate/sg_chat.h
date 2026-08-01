@@ -130,3 +130,9 @@ void		SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
  * conditional on the return, or a dropped line will be recorded as said.
  */
 qboolean	SG_ChatSayTeam(edict_t *speaker, const char *line, int topic);
+
+/* the curated landmark namer (weapons/armour/powerups; never health,
+ * never flags): the ONE way a position is put into words. sg_caco.c's
+ * old nearest-anything namer produced "rune by the Health" spam and once
+ * located a carrier by the flag he was carrying. */
+void SG_ChatLocName(vec3_t pos, char *out, int len);

@@ -314,6 +314,61 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 #define SG_LOST_BFS			24
 #define SG_LOST_TICK		0.2f
 
+/* --------------------------------------------------------------- skill spans
+ *
+ * bot_skill, applied per bot. The cvar names the team's BEST; each bot then
+ * plays at or below it, so the sixteen names sg_arach.c spawns are
+ * distinguishable opponents at one server setting instead of sixteen copies of
+ * the same shooter.
+ *
+ * The cvar is read as 0..4 and clamped there (g_botmenu.c:77 and bl_main.c:1542
+ * already pass it around; the test config runs bot_skill 4). The personal
+ * offset is deterministic in the client index -- -((ci * 7) % 5) * 0.25, so
+ * 0 to -1 skill levels -- and a given client number therefore plays the same
+ * way for the whole match and for every match after it. 7 and 5 are coprime,
+ * so the five grades spread evenly over consecutive client numbers instead of
+ * clustering.
+ *
+ * The offset is one-sided DOWNWARD on purpose. A symmetric offset would be
+ * clamped at the ceiling exactly where the tests run -- at bot_skill 4 half
+ * the bots would land on 4.0 and the variety the offset exists for would
+ * disappear at the one setting that matters most. One-sided, bot_skill 4
+ * fields five distinct grades (4.00, 3.75, 3.50, 3.25, 3.00), the best of them
+ * being the shipped behaviour and none of them better than it.
+ *
+ * Every number below is FITTED. Nothing here is measured from anything; this
+ * is the taste end of the file, exactly like the fire cadence above it.
+ *
+ * The design constraint the endpoints are chosen against: at bot_skill 4 the
+ * behaviour that already shipped is the CEILING. So each skill-4 endpoint is
+ * written as the constant that was already in use, textually, and only the
+ * skill-0 endpoint is worse. Lower skills are honestly worse; top skill is not
+ * made stronger than it was.
+ *
+ * The single exception is the reaction delay, which did not exist at all
+ * before: at skill 4 it is 0.12 s, a little over one server frame (FRAMETIME
+ * 0.1, g_local.h:150) and well inside the jitter the fire windows already had.
+ */
+#define SG_SKILL_MAX		4.0f
+#define SG_SKILL_SPREAD		0.25f	/* skill levels per step of personal offset */
+
+#define SG_REACT_S0			0.50f	/* delay before the first pull on a NEW target */
+#define SG_REACT_S4			0.12f
+
+#define SG_SETTLE_S0		1.20f	/* seconds for the aim error to converge */
+#define SG_SETTLE_S4		SG_SETTLE
+
+#define SG_ACQUIRE_S0		14.0f	/* error cone half-angle at acquisition */
+#define SG_ACQUIRE_S4		SG_AIM_ERROR_DEG
+
+#define SG_RESIDUAL_S0		3.00f	/* the floor that cone settles onto */
+#define SG_RESIDUAL_S4		SG_AIM_RESIDUAL_DEG
+
+#define SG_FIRE_OFF_S0		0.50f	/* seconds of released trigger */
+#define SG_FIRE_OFF_S4		SG_FIRE_OFF
+
+#define SG_LEAD_JITTER_S0	4.0f	/* per-shot lead error in degrees; 0 at skill 4 */
+
 #define SG_COMBAT_MAXCLIENTS	256
 
 /* ------------------------------------------------------------------- state */
@@ -328,6 +383,10 @@ typedef struct
 {
 	int			enemy;			/* edict index of held target, 0 = none */
 	float		since;			/* level.time the target was acquired */
+	float		acquired_at;	/* same instant, read by the reaction gate --
+	                             * kept separate from `since` because `since` is
+	                             * the settle clock and the two would otherwise
+	                             * be one number doing two jobs */
 
 	vec3_t		err;			/* aim error direction, unit length */
 	float		err_next;		/* when to resample the tremor */
@@ -391,6 +450,57 @@ static int		sg_cbt_why[10];
 static int		sg_cbt_scan[6];     /* [0]unteamed [1]same [2]far [3]fov
                                      * [4]blocked [5]acquired */
 static float	sg_cbt_why_next;
+/* [9] is the reaction gate: a target held, a shot cleared, and the bot has not
+ * finished noticing yet. Kept apart from [5] so a slow bot does not read as a
+ * bot with a broken fire window. */
+
+/* ------------------------------------------------------------------- skill */
+
+static cvar_t	*sg_bot_skill;
+
+/*
+ * The bot's effective skill, a float in [0, 4]: the team level the cvar names,
+ * plus this client's own fixed offset. The cvar POINTER is resolved once --
+ * gi.cvar walks the engine's list on every call, and this is read several times
+ * per engaged bot per frame -- while the VALUE is read fresh every time, so
+ * changing bot_skill mid-match takes effect on the next frame.
+ */
+static float Combat_Skill(edict_t *self)
+{
+	float	team, s;
+	int		ci;
+
+	if (!sg_bot_skill)
+		sg_bot_skill = gi.cvar("bot_skill", "4", 0);
+
+	team = sg_bot_skill ? sg_bot_skill->value : SG_SKILL_MAX;
+	if (team < 0.0f)
+		team = 0.0f;
+	if (team > SG_SKILL_MAX)
+		team = SG_SKILL_MAX;
+
+	ci = (self && self->client) ? (int)(self->client - game.clients) : 0;
+	if (ci < 0)
+		ci = 0;
+
+	s = team - (float)((ci * 7) % 5) * SG_SKILL_SPREAD;
+	if (s < 0.0f)
+		s = 0.0f;
+	if (s > SG_SKILL_MAX)
+		s = SG_SKILL_MAX;
+	return s;
+}
+
+/* linear between a span's skill-0 and skill-4 endpoints */
+static float Combat_SkillLerp(float skill, float at0, float at4)
+{
+	return at0 + (at4 - at0) * (skill / SG_SKILL_MAX);
+}
+
+int SG_CombatSkill(edict_t *self)
+{
+	return (int)(Combat_Skill(self) * 100.0f + 0.5f);
+}
 
 /* ------------------------------------------------------------- item cache
  *
@@ -1188,7 +1298,7 @@ static int Combat_Band(sg_combat_state_t *st, float d)
  * removed, so the error is purely lateral and its magnitude maps cleanly onto
  * an angle (an offset of m added to a unit aim vector is an angle of atan(m)).
  */
-static void Combat_SampleError(sg_combat_state_t *st, vec3_t dir)
+static void Combat_SamplePerp(vec3_t dir, vec3_t out)
 {
 	vec3_t	v;
 	float	d, len;
@@ -1206,13 +1316,18 @@ static void Combat_SampleError(sg_combat_state_t *st, vec3_t dir)
 		len = VectorLength(v);
 		if (len > 0.01f)
 		{
-			VectorScale(v, 1.0f / len, st->err);
+			VectorScale(v, 1.0f / len, out);
 			return;
 		}
 	}
 
 	/* degenerate sample: no error this time rather than a fake one */
-	VectorClear(st->err);
+	VectorClear(out);
+}
+
+static void Combat_SampleError(sg_combat_state_t *st, vec3_t dir)
+{
+	Combat_SamplePerp(dir, st->err);
 }
 
 /*
@@ -2001,7 +2116,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	edict_t				*enemy;
 	vec3_t				eye, forward, mid, lead, aim, endp, impact;
 	float				dist, held, frac, mag, len, flight;
-	float				yaw, pitch;
+	float				yaw, pitch, skill, settle;
 	trace_t				tr;
 	int					ci, band, want, inhand;
 	qboolean			clear_shot, carrier, ballistic, vel_stable;
@@ -2021,6 +2136,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		return;
 	st = &sg_combat[ci];
 	Combat_CacheItems();
+	skill = Combat_Skill(self);		/* team level less this bot's own handicap */
 
 	/* eyes and current facing. v_angle is the view the last cmd produced. */
 	VectorCopy(self->s.origin, eye);
@@ -2139,6 +2255,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	{
 		st->enemy = (int)(enemy - g_edicts);
 		st->since = level.time;
+		st->acquired_at = level.time;	/* the reaction clock starts here */
 		st->err_next = 0.0f;
 		st->win_end = 0.0f;
 		st->win_fire = false;
@@ -2205,6 +2322,40 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		return;
 	VectorScale(aim, 1.0f / len, aim);
 
+	/* ---------------------------------------------------------- lead error
+	 *
+	 * Leading a moving target is the skill this file models most directly, so
+	 * it gets its own error rather than being folded into the tremor: an
+	 * angular jitter of SG_LEAD_JITTER_S0 * (4 - skill) / 4 degrees, resampled
+	 * every frame, which is per shot or finer. At skill 4 the term is exactly
+	 * zero and the solve is untouched.
+	 *
+	 * It displaces the lead POINT and re-derives the aim from it, rather than
+	 * bending the aim ray on its own. That keeps the wall check below tracing
+	 * where the shot really goes and keeps the SG_HIT_SLOP test measuring
+	 * against the point actually aimed at -- so a lead error comes out as a
+	 * MISS, which is what it is, instead of a refusal to fire.
+	 *
+	 * Hitscan is skipped: flight is 0, there is no lead to get wrong. So is
+	 * the grenade launcher, whose aim rule F4 replaces outright below.
+	 */
+	if (flight > 0.0f && inhand != SG_W_GRENADELAUNCHER && skill < SG_SKILL_MAX)
+	{
+		float jit = (float)tan(SG_LEAD_JITTER_S0
+		                       * (SG_SKILL_MAX - skill) / SG_SKILL_MAX
+		                       * M_PI / 180.0);
+		vec3_t perp;
+
+		Combat_SamplePerp(aim, perp);
+		VectorMA(lead, jit * len, perp, lead);
+
+		VectorSubtract(lead, eye, aim);
+		len = VectorLength(aim);
+		if (len < 1.0f)
+			return;
+		VectorScale(aim, 1.0f / len, aim);
+	}
+
 	/*
 	 * The grenade launcher does not fly straight. Rule F4's pitch solve
 	 * replaces the aim outright, and rule F5 restricts the weapon to targets
@@ -2257,10 +2408,19 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		st->err_next = level.time + 0.25f + 0.25f * random();
 	}
 
+	/*
+	 * Both ends of the ramp are skill terms now. A low-skill bot starts wider,
+	 * takes longer to converge, and settles onto a floor it never shoots
+	 * through; a skill-4 bot gets the exact three numbers this file shipped
+	 * with (the S4 endpoints are those constants, textually).
+	 */
+	settle = Combat_SkillLerp(skill, SG_SETTLE_S0, SG_SETTLE_S4);
 	held = level.time - st->since;
-	frac = (held >= SG_SETTLE) ? 0.0f : (1.0f - held / SG_SETTLE);
-	mag = (float)tan((SG_AIM_RESIDUAL_DEG
-	                  + (SG_AIM_ERROR_DEG - SG_AIM_RESIDUAL_DEG) * frac)
+	frac = (held >= settle) ? 0.0f : (1.0f - held / settle);
+	mag = (float)tan((Combat_SkillLerp(skill, SG_RESIDUAL_S0, SG_RESIDUAL_S4)
+	                  + (Combat_SkillLerp(skill, SG_ACQUIRE_S0, SG_ACQUIRE_S4)
+	                     - Combat_SkillLerp(skill, SG_RESIDUAL_S0,
+	                                        SG_RESIDUAL_S4)) * frac)
 	                 * M_PI / 180.0);
 
 	VectorMA(aim, mag, st->err, aim);
@@ -2446,12 +2606,32 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * that loses line of sight mid-burst does not get a free full burst the
 	 * instant it comes back.
 	 */
+	/*
+	 * Reaction, before the windows and not inside them. A bot that has just
+	 * seen a target has not decided to shoot at it yet; the delay runs from
+	 * acquired_at, which is set once per NEW target, so a target re-sighted
+	 * around a corner within the same acquisition does not pay it twice.
+	 *
+	 * It is checked ahead of the window clock deliberately: acquisition zeroes
+	 * win_end and win_fire, so the first window flip happens on the first frame
+	 * past the reaction and the first burst starts there rather than partway
+	 * through an off-window that ticked away while the bot was still noticing.
+	 */
+	if (level.time < st->acquired_at
+	                 + Combat_SkillLerp(skill, SG_REACT_S0, SG_REACT_S4))
+	{
+		sg_cbt_why[9]++;
+		return;
+	}
+
 	if (level.time >= st->win_end)
 	{
 		float base;
 
 		st->win_fire = !st->win_fire;
-		base = st->win_fire ? SG_FIRE_ON : SG_FIRE_OFF;
+		base = st->win_fire ? SG_FIRE_ON
+		                    : Combat_SkillLerp(skill, SG_FIRE_OFF_S0,
+		                                       SG_FIRE_OFF_S4);
 		st->win_end = level.time + base * (1.0f + SG_FIRE_JITTER * crandom());
 	}
 
@@ -2495,10 +2675,10 @@ void SG_CombatWhy(void)
 	if (!gi.cvar("sg_debug", "0", 0)->value || level.time < sg_cbt_why_next)
 		return;
 	sg_cbt_why_next = level.time + 5.0f;
-	gi.dprintf("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d\n",
+	gi.dprintf("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d react=%d\n",
 	           sg_cbt_why[7], sg_cbt_why[8],
 	           sg_cbt_why[0], sg_cbt_why[1], sg_cbt_why[2], sg_cbt_why[3],
-	           sg_cbt_why[4], sg_cbt_why[5], sg_cbt_why[6]);
+	           sg_cbt_why[4], sg_cbt_why[5], sg_cbt_why[6], sg_cbt_why[9]);
 	gi.dprintf("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d\n",
 	           sg_cbt_scan[0], sg_cbt_scan[1], sg_cbt_scan[2],
 	           sg_cbt_scan[3], sg_cbt_scan[4], sg_cbt_scan[5]);
