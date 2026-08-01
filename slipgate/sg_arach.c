@@ -139,6 +139,7 @@ typedef struct sg_bot_s
 	float		escape_yaw;
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
 	float		rally_since;    /* waiting for a partner before the push */
+	int			rally_cover;    /* the low-exposure seed the wait happens at */
 	int			rail_link;      /* RUN link being retried the proof's way */
 	int			rail_stage;     /* 0 off, 1 walk to from-seed, 2 drive line */
 	float		rail_until;
@@ -1200,10 +1201,40 @@ static void SG_BotThink(sg_bot_t *bot)
 		{
 			if (bot->rally_since <= 0.0f)
 			{
+				int ci2, best_cover = -1;
+				float bestd2 = 1e30f;
+
 				bot->rally_since = level.time;
+				/*
+				 * Wave 65 paired seven pushes on lmctf09 and stole
+				 * nothing: the waiter froze wherever the band caught it,
+				 * mid-corridor, lit, and the pairing died before it
+				 * formed. The rune has measured exposure since the
+				 * generator's census pass -- the wait belongs at the
+				 * darkest seed within reach.
+				 */
+				for (ci2 = 0; ci2 < sg_rune->hdr.num_seeds; ci2++)
+				{
+					vec3_t cd;
+					float dsq;
+
+					if (sg_rune->seeds[ci2].area_hint > 60)
+						continue;
+					VectorSubtract(sg_rune->seeds[ci2].origin,
+					               e->s.origin, cd);
+					dsq = cd[0] * cd[0] + cd[1] * cd[1]
+					    + cd[2] * cd[2] * 4.0f;
+					if (dsq < bestd2 && dsq < 800.0f * 800.0f)
+					{
+						bestd2 = dsq;
+						best_cover = ci2;
+					}
+				}
+				bot->rally_cover = best_cover;
 				if (gi.cvar("sg_debug", "0", 0)->value)
-					gi.dprintf("RALLY %s waits (%d coming)\n",
-					           e->client->pers.netname, mates_coming);
+					gi.dprintf("RALLY %s waits (%d coming, cover=%d)\n",
+					           e->client->pers.netname, mates_coming,
+					           best_cover);
 			}
 			if (level.time - bot->rally_since < 20.0f)
 				rally_hold = true;
@@ -2715,14 +2746,37 @@ no_hold:;
 			bot->nav_drove = false;     /* not the route's fault */
 		}
 
-		/* rallying: stand at the edge of the approach, face the push */
+		/* rallying: get to cover first, stand there, face the push */
 		if (rally_hold && have_move)
 		{
-			cmd.forwardmove = 0;
-			cmd.sidemove = 0;
-			cmd.upmove = 0;
-			bot->nav_drove = false;
-			bot->stuck_time = 0.0f;
+			vec3_t cvd;
+			qboolean at_cover = true;
+
+			if (bot->rally_cover >= 0)
+			{
+				VectorSubtract(sg_rune->seeds[bot->rally_cover].origin,
+				               e->s.origin, cvd);
+				cvd[2] = 0.0f;
+				at_cover = (VectorLength(cvd) < 48.0f);
+			}
+			if (at_cover)
+			{
+				cmd.forwardmove = 0;
+				cmd.sidemove = 0;
+				cmd.upmove = 0;
+				bot->nav_drove = false;
+				bot->stuck_time = 0.0f;
+			}
+			else
+			{
+				float cy = atan2f(cvd[1], cvd[0]) * 180.0f / (float)M_PI;
+
+				cmd.angles[YAW] = ANGLE2SHORT(cy)
+				                - e->client->ps.pmove.delta_angles[YAW];
+				cmd.forwardmove = 400;
+				view_yaw = cy;
+				bot->nav_drove = false;     /* the wait is not the route */
+			}
 		}
 
 		/* on post: whatever the descent wanted, guard duty overrides it */
