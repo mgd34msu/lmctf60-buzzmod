@@ -42,6 +42,7 @@ typedef struct sg_phantom_s
 
 void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin);
 void SG_TeachFutility(int seed);
+void SG_TeachLinkFutility(int link);
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 void SG_OracleHookStep(sg_phantom_t *ph, vec3_t anchor);
 

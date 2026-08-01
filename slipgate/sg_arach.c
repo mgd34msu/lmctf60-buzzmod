@@ -1536,7 +1536,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->bl_until[oldest] = level.time + 45.0f;
 		bot->stag_next = level.time + 2.0f;
 		bot->commit_link = -1;
-		SG_TeachFutility(bot->seed);    /* reprice the corridor globally */
+		SG_TeachLinkFutility(bestlink); /* the LINK failed, not the ground */
 		/*
 		 * A U-pocket defeats even the side latch: each detour side walks
 		 * into the pocket's own wall and the latch just alternates walls
@@ -2406,7 +2406,7 @@ no_hold:;
 						bot->bl_link[old2] = bestlink;
 						bot->bl_until[old2] = level.time + 45.0f;
 						bot->commit_link = -1;
-						SG_TeachFutility(bot->seed);
+						SG_TeachLinkFutility(bestlink);
 						if (gi.cvar("sg_debug", "0", 0)->value)
 							gi.dprintf("RAILFAIL %s link=%d seed=%d\n",
 							           e->client->pers.netname,

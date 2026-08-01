@@ -85,19 +85,6 @@ void SG_TeachFutility(int seed)
 		sg_futile[seed] = 60000;
 }
 
-static void Futility_Decay(void)
-{
-	int i;
-
-	for (i = 0; i < SG_MAX_SEEDS; i++)
-		if (sg_futile[i])
-		{
-			sg_futile[i] -= 200;
-			if (sg_futile[i] < 0)
-				sg_futile[i] = 0;
-		}
-}
-
 static int Link_EffCost(const rune_link_t *l)
 {
 	switch (l->action)
@@ -327,6 +314,49 @@ static int Heap_Pop(void)
  * transition terms, which is exactly the old flat flood and is what the
  * self-check below compares against.
  */
+/*
+ * Per-LINK futility, the finer chisel. Seed-level lessons taught at the
+ * moat transitions poisoned lmctf01's whole tunnel: a stall at the water's
+ * edge repriced every route through that ground, the argmin fell back to
+ * land links that grind, which taught more futility -- a loop that turned
+ * the map's only corridor radioactive (waves 52-53, chokes at 1470 then
+ * 3168/1923, the east and west moat entries in turn). A failed WALK is
+ * evidence about one link, not about the ground it starts from; only a
+ * dead DOOR still teaches the seed, because a door blocks the body no
+ * matter which link approaches it.
+ */
+static int sg_link_futile[SG_ENV_MAX_LINKS];
+
+void SG_TeachLinkFutility(int link)
+{
+	if (link < 0 || link >= SG_ENV_MAX_LINKS)
+		return;
+	sg_link_futile[link] += 6000;
+	if (sg_link_futile[link] > 60000)
+		sg_link_futile[link] = 60000;
+}
+
+
+static void Futility_Decay(void)
+{
+	int i;
+
+	for (i = 0; i < SG_MAX_SEEDS; i++)
+		if (sg_futile[i])
+		{
+			sg_futile[i] -= 200;
+			if (sg_futile[i] < 0)
+				sg_futile[i] = 0;
+		}
+	for (i = 0; i < SG_ENV_MAX_LINKS; i++)
+		if (sg_link_futile[i])
+		{
+			sg_link_futile[i] -= 400;
+			if (sg_link_futile[i] < 0)
+				sg_link_futile[i] = 0;
+		}
+}
+
 static void Field_FloodRun(rune_t *r, int *dist,
                            const int *sources, const int *source_cost,
                            int num_sources, int nb)
@@ -431,7 +461,8 @@ static void Field_FloodRun(rune_t *r, int *dist,
 			if (nb > 1 && Env_Bucket(b->exit_speed) != ku)
 				continue;
 
-			base = env_dist[id] + Link_EffCost(b) + sg_futile[x];
+			base = env_dist[id] + Link_EffCost(b) + sg_futile[x]
+			     + sg_link_futile[li];
 			if (nb > 1)
 				base += Env_TurnCost(b->heading, env_head[id], env_slack[id]);
 
@@ -680,6 +711,7 @@ qboolean Fields_Setup(rune_t *r)
 		sg_fields.our_carrier[0][i] = sg_fields.our_carrier[1][i] = SG_FIELD_INF;
 
 	memset(sg_futile, 0, sizeof(sg_futile));
+	memset(sg_link_futile, 0, sizeof(sg_link_futile));
 	sg_fields.next_refresh = 0.0f;
 	return true;
 }
