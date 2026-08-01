@@ -569,7 +569,6 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	int team = bot->ent->client->ctf.teamnum;
 	int size = 0, defenders_wanted, my_rank = 0, i;
 	int my_client = (int)(bot->ent - g_edicts) - 1;
-	int carrier_rank = -1;
 	sg_belief_carrier_t *own = &sg_caco_team_belief.carrier[team - 1];
 
 	if (carrying)
@@ -598,9 +597,6 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		if (&sg_bots[i] == bot)
 			my_rank = size;
 		/* where in the ranking our own carrier sits, if it is one of ours */
-		if (own->client >= 0 &&
-		    (int)(sg_bots[i].ent - g_edicts) - 1 == own->client)
-			carrier_rank = size;
 		size++;
 	}
 
@@ -632,7 +628,6 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		    (sg_caco_team_belief.flag[2 - team].state == SG_FLAG_ASTRAY);
 		qboolean have_carrier = (own->client >= 0 &&
 		                         sg_fields.our_carrier_valid[team - 1]);
-		int escort_rank;
 
 		defenders_wanted = ours_astray ? 1 : 2;
 		if (size <= 1)
@@ -675,13 +670,52 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			return SG_ROLE_DEFEND;
 		}
 
-		/* one escort whenever we have a live carrier that is not me */
+		/*
+		 * One escort whenever we have a live carrier that is not me --
+		 * and the escort is the NEAREST eligible body, not a rank slot.
+		 * The rank-slot version handed the job to whoever sat at a fixed
+		 * position in the scan order: dead, respawning, or across the
+		 * map. The waves 71-72 census reads accordingly -- no escort at
+		 * all for 30-100% of carry seconds, median distance 430-1860
+		 * when one existed, and mactf06's entire 28-second carry walked
+		 * naked. Every bot runs the same argmin over the same shared
+		 * positions; the incumbent gets a 300-unit head start so the
+		 * job does not flap between two equidistant mates.
+		 */
 		if (have_carrier && own->client != my_client)
 		{
-			escort_rank = defenders_wanted;
-			if (escort_rank == carrier_rank)
-				escort_rank++;
-			if (my_rank == escort_rank)
+			edict_t *car_ent = g_edicts + own->client + 1;
+			float bestd = 1e30f;
+			int best_i = -1, rank_i = 0, k;
+
+			for (k = 0; k < SG_MAXBOTS; k++)
+			{
+				vec3_t ed;
+				float dd;
+
+				if (!sg_bots[k].active || !sg_bots[k].ent ||
+				    !sg_bots[k].ent->inuse)
+					continue;
+				if (sg_bots[k].ent->client->ctf.teamnum != team)
+					continue;
+				if (rank_i++ < defenders_wanted)
+					continue;       /* defenders keep the base */
+				if ((int)(sg_bots[k].ent - g_edicts) - 1 == own->client)
+					continue;       /* the carrier escorts nobody */
+				if (sg_bots[k].ent->deadflag)
+					continue;
+				VectorSubtract(sg_bots[k].ent->s.origin,
+				               car_ent->s.origin, ed);
+				dd = VectorLength(ed);
+				if (sg_bots[k].last_role == (int)SG_ROLE_ESCORT)
+					dd -= 300.0f;
+				if (dd < bestd)
+				{
+					bestd = dd;
+					best_i = k;
+				}
+			}
+			if (best_i >= 0 && &sg_bots[best_i] == bot)
 				return SG_ROLE_ESCORT;
 		}
 
