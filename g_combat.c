@@ -595,6 +595,13 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 
 		targ->health = targ->health - take;
 
+		// BUZZKILL - SLIPGATE accuracy telemetry: one call where damage
+		// actually lands, so fires-vs-hits means what it says
+		{
+			void SG_CombatHit(edict_t *att, edict_t *victim);
+			SG_CombatHit(attacker, targ);
+		}
+
 		if (attacker && attacker->client && attacker->client->rune)   //added by Vampire - if the attacker is this client
 		{                                                             // and the client has a rune
 			if ((attacker->client->rune->runetype == RUNE_VAMP)&&(attacker!=targ))   // if the rune is the VAMPIRE rune and the target is not himself

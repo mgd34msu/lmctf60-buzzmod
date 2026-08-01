@@ -30,3 +30,5 @@ print(f"defenders: {len(patrol_pos)} distinct 100u-cells, moving={patrol_moving}
 chat = [l for l in lines if re.match(r'^\(?[A-Z][a-z]+\[SG\]\)?: [a-z]', l)]
 print(f"chat lines: {len(chat)}", ("| sample: " + chat[0]) if chat else "")
 EOF
+echo "kills by weapon: blaster=$(grep -c 'was blasted' "$L") rail=$(grep -c 'was railed' "$L") rocket=$(grep -cE 'ate .* rocket|was blown' "$L") mg=$(grep -c 'was machinegunned' "$L") cg=$(grep -c 'was cut in half' "$L") hb=$(grep -c 'was melted' "$L") ssg=$(grep -cE 'was blown away|was gunned down' "$L")"
+grep -h "^ACC " "$L" | tail -12

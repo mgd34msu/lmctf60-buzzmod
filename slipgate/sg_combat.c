@@ -449,6 +449,8 @@ static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
 static int		sg_cbt_why[10];
 static int		sg_cbt_scan[6];     /* [0]unteamed [1]same [2]far [3]fov
                                      * [4]blocked [5]acquired */
+static int		sg_cbt_fire[SG_NUM_WEAPONS];    /* trigger-frames per gun */
+static int		sg_cbt_hit[SG_NUM_WEAPONS];     /* landed damage events */
 static float	sg_cbt_why_next;
 /* [9] is the reaction gate: a target held, a shot cleared, and the bot has not
  * finished noticing yet. Kept apart from [5] so a slow bot does not read as a
@@ -2666,7 +2668,29 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	}
 
 	sg_cbt_why[0]++;
+	if (inhand >= 0 && inhand < SG_NUM_WEAPONS)
+		sg_cbt_fire[inhand]++;
 	cmd->buttons |= BUTTON_ATTACK;
+}
+
+/*
+ * Accuracy's other half: called from T_Damage where damage actually
+ * lands. Only bot-on-enemy hits count; splash on yourself and teammates
+ * is not accuracy, it is regret.
+ */
+void SG_CombatHit(edict_t *att, edict_t *victim)
+{
+	int w;
+
+	if (!att || !att->client || !(att->flags & FL_BOT) || att == victim)
+		return;
+	if (!victim || !victim->client)
+		return;
+	if (victim->client->ctf.teamnum == att->client->ctf.teamnum)
+		return;
+	w = Combat_Held(att);
+	if (w >= 0 && w < SG_NUM_WEAPONS)
+		sg_cbt_hit[w]++;
 }
 
 /* the tally, printed from SG_CombatFrame's caller cadence via any bot */
@@ -2682,4 +2706,12 @@ void SG_CombatWhy(void)
 	gi.dprintf("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d\n",
 	           sg_cbt_scan[0], sg_cbt_scan[1], sg_cbt_scan[2],
 	           sg_cbt_scan[3], sg_cbt_scan[4], sg_cbt_scan[5]);
+	{
+		int w;
+
+		for (w = 0; w < SG_NUM_WEAPONS; w++)
+			if (sg_cbt_fire[w])
+				gi.dprintf("ACC w%d fires=%d hits=%d\n",
+				           w, sg_cbt_fire[w], sg_cbt_hit[w]);
+	}
 }

@@ -38,25 +38,38 @@ def lint(path):
         if fr == to: self_links += 1
         if cost <= 0: zero_cost += 1
         if cost >= 30000: huge_cost += 1
-        if act == 3 and anchor[2] < seeds[fr][2]:
-            hook_anchor_low += 1   # a hook anchor BELOW its firing floor
+        if act == 3 and anchor[2] < seeds[fr][2] and seeds[to][2] > seeds[fr][2] + 40:
+            hook_anchor_low += 1   # a CLIMB whose anchor is under the floor
+                                   # (descending rides naturally anchor low --
+                                   # triaged on lmctf16: 191 of 191 legitimate)
     dups = sum(1 for k, v in dup.items() if v > 1)
     orphans = sum(1 for i in range(ns) if not outdeg[i] and not indeg[i])
     deadends = sum(1 for i in range(ns) if not outdeg[i] and indeg[i])
     sources  = sum(1 for i in range(ns) if outdeg[i] and not indeg[i])
 
-    # connectivity from seed 0 (arbitrary root) over the directed graph
-    adj = collections.defaultdict(list)
+    # connectivity in the direction the FIELDS flood: reverse reachability
+    # (who can get TO a goal). Forward-rooted checks called lmctf05 84%
+    # broken when it is simply strongly one-way (currents, drops) and 87%
+    # reverse-reachable -- the direction the bots actually use. Best root
+    # over a sample stands in for the flag seeds, which the file does not
+    # name.
+    radj = collections.defaultdict(list)
     for l in links:
         if 0 <= l[0] < ns and 0 <= l[1] < ns:
-            adj[l[0]].append(l[1])
-    seen = set([0]); stack = [0]
-    while stack:
-        u = stack.pop()
-        for v in adj[u]:
-            if v not in seen:
-                seen.add(v); stack.append(v)
-    unreach = ns - len(seen)
+            radj[l[1]].append(l[0])
+    def rsweep(root):
+        seen = {root}; stack = [root]
+        while stack:
+            u = stack.pop()
+            for v in radj[u]:
+                if v not in seen:
+                    seen.add(v); stack.append(v)
+        return len(seen)
+    best = 0
+    for root in range(0, ns, max(1, ns // 40)):
+        r = rsweep(root)
+        if r > best: best = r
+    unreach = ns - best
 
     if bad_idx:        flaws.append(f"links with out-of-range seeds: {bad_idx}")
     if self_links:     flaws.append(f"self-links (from==to): {self_links}")
