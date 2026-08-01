@@ -2583,8 +2583,17 @@ void SG_RunFrame(void)
 
 /* ---------------------------------------------------------------- spawn */
 
+/*
+ * Sixteen names, because `slot & 7` on a ten-bot 5v5 fielded TWO Arachs
+ * and TWO Cacos in every game since the format began -- and every
+ * per-name analysis quietly merged two different bots (the it18 "role
+ * flap" was two same-named clients interleaving in the telemetry, and
+ * the ghost was hunted with a printf). Names are identity; identity is
+ * data.
+ */
 static const char *sg_names[] = {
 	"Arach", "Caco", "Rune", "Slip", "Gate", "Phase", "Field", "Trace",
+	"Vore", "Fiend", "Scrag", "Ogre", "Knight", "Wizard", "Spawn", "Shal",
 };
 
 /*
@@ -2621,7 +2630,7 @@ qboolean SG_AddBot(void)
 		return false;
 
 	memset(userinfo, 0, sizeof(userinfo));
-	Info_SetValueForKey(userinfo, "name", va("%s[SG]", sg_names[slot & 7]));
+	Info_SetValueForKey(userinfo, "name", va("%s[SG]", sg_names[slot & 15]));
 	Info_SetValueForKey(userinfo, "skin", "male/grunt");
 	Info_SetValueForKey(userinfo, "hand", "0");
 
