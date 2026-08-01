@@ -1395,7 +1395,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		    !(bot->carry_startcost > 0 && bot->seed >= 0 &&
 		      goal_field[bot->seed] < SG_FIELD_INF &&
 		      goal_field[bot->seed] >
-		          (bot->carry_startcost * 3) / 4))
+		          bot->carry_startcost / 2))
 		{
 			/*
 			 * THE BREAKOUT, gauged by STATE, not clock. Wave 69: nine
@@ -1423,7 +1423,12 @@ static void SG_BotThink(sg_bot_t *bot)
 					VectorSubtract(sg_rune->seeds[l->to].origin,
 					               sg_rune->seeds[en->seed].origin, d);
 					if (VectorLength(d) < 400.0f)
-						v += 3.0f * (400.0f - VectorLength(d));
+						/* 1.5, was 3.0: this loop now only speaks in
+						 * open country past the breakout, where wave
+						 * 71's three clock-outs at 64-98% home say the
+						 * full dodge tax costs more match clock than
+						 * it saves in blood */
+						v += 1.5f * (400.0f - VectorLength(d));
 				}
 			}
 		}
