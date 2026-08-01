@@ -39,6 +39,45 @@ sg_fields_t sg_fields;
  * paying health -- which the body pays whatever state it shows up in. The
  * velocity mismatch is priced separately, below.
  */
+/*
+ * FUTILITY -- the surface's answer to a wall the body cannot solve.
+ *
+ * A proven link is a claim the ORACLE made good on; the runtime body is a
+ * worse navigator, and on lmctf01 one bare corner near each side's exit
+ * corridor defeats the feeler fan forever: the bot grinds the wall, the
+ * stagnation watchdog shelves the local fan -- and the FIELD, which never
+ * heard, funnels the bot straight back in from every neighboring seed
+ * (iter 44: Gate, 90 shelve events at seed 327, attack floors pinned at
+ * 21.5s all game). Shelves are per-bot and local; the funnel is global.
+ * So the watchdog now also teaches the seed itself: a decaying surcharge
+ * on every route THROUGH it, charged in the flood, so within a second the
+ * whole map reprices and the fleet approaches by another corridor. Decay
+ * (200ms/s) retries the corridor eventually; re-sticking re-teaches.
+ */
+static int sg_futile[SG_MAX_SEEDS];
+
+void SG_TeachFutility(int seed)
+{
+	if (seed < 0 || seed >= SG_MAX_SEEDS)
+		return;
+	sg_futile[seed] += 3000;
+	if (sg_futile[seed] > 20000)
+		sg_futile[seed] = 20000;
+}
+
+static void Futility_Decay(void)
+{
+	int i;
+
+	for (i = 0; i < SG_MAX_SEEDS; i++)
+		if (sg_futile[i])
+		{
+			sg_futile[i] -= 200;
+			if (sg_futile[i] < 0)
+				sg_futile[i] = 0;
+		}
+}
+
 static int Link_EffCost(const rune_link_t *l)
 {
 	switch (l->action)
@@ -372,7 +411,7 @@ static void Field_FloodRun(rune_t *r, int *dist,
 			if (nb > 1 && Env_Bucket(b->exit_speed) != ku)
 				continue;
 
-			base = env_dist[id] + Link_EffCost(b);
+			base = env_dist[id] + Link_EffCost(b) + sg_futile[x];
 			if (nb > 1)
 				base += Env_TurnCost(b->heading, env_head[id], env_slack[id]);
 
@@ -620,6 +659,7 @@ qboolean Fields_Setup(rune_t *r)
 	for (i = 0; i < r->hdr.num_seeds; i++)
 		sg_fields.our_carrier[0][i] = sg_fields.our_carrier[1][i] = SG_FIELD_INF;
 
+	memset(sg_futile, 0, sizeof(sg_futile));
 	sg_fields.next_refresh = 0.0f;
 	return true;
 }
@@ -636,6 +676,7 @@ void Fields_Refresh(rune_t *r)
 	if (level.time < sg_fields.next_refresh)
 		return;
 	sg_fields.next_refresh = level.time + 1.0f;
+	Futility_Decay();
 
 	{
 		/* the entity walk sees an item going up or down, but a rune moves

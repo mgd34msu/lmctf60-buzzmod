@@ -1392,7 +1392,12 @@ static void SG_BotThink(sg_bot_t *bot)
 	}
 
 	if (bestlink >= 0 && bestlink == bot->watch_link &&
-	    !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400) &&
+	    !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 1500) &&
+	    /* 1500, not 400: a PATROLLING defender runs full speed inside a
+	     * confined orbit -- Slip circled seed 1704 at 250 u/s, goal 700,
+	     * and the 400 cutoff fed the whole patrol to the shelf (iter 44,
+	     * lmctf58: 314 firings, defense routes in rags). The patrol
+	     * radius is part of the post. */
 	    !bot->door_held_last && !bot->mate_block_last)
 	{
 		/* door_held_last: standing at a door on command is not the link's
@@ -1456,7 +1461,12 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->stag_since = level.time;
 	}
 	else if (bestlink >= 0 &&
-	         !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400) &&
+	         !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 1500) &&
+	    /* 1500, not 400: a PATROLLING defender runs full speed inside a
+	     * confined orbit -- Slip circled seed 1704 at 250 u/s, goal 700,
+	     * and the 400 cutoff fed the whole patrol to the shelf (iter 44,
+	     * lmctf58: 314 firings, defense routes in rags). The patrol
+	     * radius is part of the post. */
 	         !bot->door_held_last && !bot->mate_block_last &&
 	         level.time - bot->stag_since > 8.0f &&
 	         level.time >= bot->stag_next)
@@ -1470,6 +1480,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->bl_until[oldest] = level.time + 45.0f;
 		bot->stag_next = level.time + 2.0f;
 		bot->commit_link = -1;
+		SG_TeachFutility(bot->seed);    /* reprice the corridor globally */
 		if (gi.cvar("sg_debug", "0", 0)->value)
 			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
