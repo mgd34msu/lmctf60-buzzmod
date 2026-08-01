@@ -133,6 +133,8 @@ typedef struct sg_bot_s
 	float		stag_next;      /* escalation: one shelve per 2s while parked */
 	qboolean	nav_drove;      /* last frame, navigation drove the legs */
 	qboolean	engaged_last;   /* last frame, combat owned the fight */
+	int			fan_side;       /* latched detour side: -1 left, +1 right */
+	float		fan_side_until;
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -2250,13 +2252,37 @@ no_hold:;
 					}
 				}
 				score = tr.fraction * (1.0f - 0.05f * (k > 0) * (k + 1));
+				/*
+				 * Side latch. A pillar dead ahead leaves -30 and +30 both
+				 * open and equal; the winner then alternates as each
+				 * sidestep swings the goal bearing, and the body flaps in
+				 * place against the obstacle -- seed 327 on lmctf01, the
+				 * main valley route, whole matches lost to one pillar
+				 * (iter 44-45). Once a detour side is chosen it stays
+				 * preferred for 0.7s: enough to clear a pillar, too short
+				 * to matter anywhere else. An open goal line clears it.
+				 */
+				if (bot->fan_side && level.time < bot->fan_side_until &&
+				    fan[k] * (float)bot->fan_side < 0.0f)
+					score *= 0.6f;
 				if (score > best_open)
 				{
 					best_open = score;
 					chosen_yaw = base_yaw + fan[k];
 				}
 				if (tr.fraction >= 1.0f && k == 0)
-					break;              /* goal line is open: take it */
+				{
+					bot->fan_side = 0;  /* goal line open: latch released */
+					break;
+				}
+			}
+			if (chosen_yaw != base_yaw)
+			{
+				int side = (chosen_yaw > base_yaw) ? 1 : -1;
+
+				if (bot->fan_side != side || level.time >= bot->fan_side_until)
+					bot->fan_side_until = level.time + 0.7f;
+				bot->fan_side = side;
 			}
 
 			/* at a drop lip the proven walk-off heading overrides the fan:
