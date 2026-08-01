@@ -255,6 +255,19 @@ static qboolean Prove_Contact(vec3_t at, vec3_t target)
 }
 
 static int gen_momentum_links, gen_momentum_tries;
+static int gen_waypoint_links;
+
+/*
+ * The proof's detour apex, when it had one. The oracle steers greedily but
+ * persistently and ROUNDS obstacles the runtime feeler fan cannot solve --
+ * seed 327's pillar was walked around by every proof and ground against by
+ * every body (iters 44-50, the lmctf01 valley). A RUN link's anchor field
+ * has sat empty since the format was born; the point of maximum deviation
+ * from the straight line now goes there whenever the proof deviated more
+ * than 48 units, and the body steers via it. Zero anchor = straight proof.
+ */
+static vec3_t gen_prove_wp;
+static qboolean gen_prove_has_wp;
 
 /*
  * Entry speed for the NEXT Prove roll, consumed by Prove at placement. Zero
@@ -277,6 +290,9 @@ static qboolean Prove(int from, int to, qboolean jump,
 	float edge_yaw = 0.0f;
 	int edge_hold_steps = 0;
 
+	vec3_t wp_path[128];
+	int wp_n = 0;
+
 	SG_OraclePlace(&ph, gen_seeds[from].origin);
 
 	if (gen_entry_speed > 0.0f)
@@ -294,6 +310,11 @@ static qboolean Prove(int from, int to, qboolean jump,
 
 	for (elapsed = 0; elapsed < TRY_LIMIT_MS; elapsed += STEP_MSEC)
 	{
+		if (wp_n < 128 && (elapsed / STEP_MSEC) % 2 == 0)
+		{
+			VectorCopy(ph.origin, wp_path[wp_n]);
+			wp_n++;
+		}
 		VectorSubtract(gen_seeds[to].origin, ph.origin, want);
 		d[0] = want[0]; d[1] = want[1]; d[2] = 0.0f;
 
@@ -305,6 +326,34 @@ static qboolean Prove(int from, int to, qboolean jump,
 		{
 			float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
 			                 ph.velocity[1] * ph.velocity[1]);
+
+			/* the detour apex: max 2D deviation from the endpoint line */
+			{
+				vec3_t ab;
+				float ablen, bestdev = 0.0f;
+				int pi;
+
+				VectorSubtract(gen_seeds[to].origin,
+				               gen_seeds[from].origin, ab);
+				ab[2] = 0.0f;
+				ablen = sqrtf(ab[0] * ab[0] + ab[1] * ab[1]);
+				gen_prove_has_wp = false;
+				if (ablen > 1.0f)
+					for (pi = 0; pi < wp_n; pi++)
+					{
+						float cx = (wp_path[pi][0] - gen_seeds[from].origin[0]),
+						      cy = (wp_path[pi][1] - gen_seeds[from].origin[1]);
+						float dev = fabsf(cx * ab[1] - cy * ab[0]) / ablen;
+
+						if (dev > bestdev)
+						{
+							bestdev = dev;
+							VectorCopy(wp_path[pi], gen_prove_wp);
+						}
+					}
+				if (bestdev > 48.0f)
+					gen_prove_has_wp = true;
+			}
 			*cost_ms = (short)elapsed;
 			*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
 			return true;
@@ -2049,8 +2098,19 @@ static void Prove_All(void)
 			}
 			if (d[2] <= 128.0f && d[2] >= -600.0f &&
 			    Prove(i, j, false, &cost, &espeed))
+			{
+				int before_wp = gen_num_links;
+
 				Link_Add(i, j, (d[2] < -160.0f) ? RL_DROP : RL_RUN,
 				         cost, espeed);
+				if (gen_num_links != before_wp && gen_prove_has_wp &&
+				    gen_links[gen_num_links - 1].action == RL_RUN)
+				{
+					VectorCopy(gen_prove_wp,
+					           gen_links[gen_num_links - 1].anchor);
+					gen_waypoint_links++;
+				}
+			}
 			else if (d[2] <= 128.0f && d[2] >= -600.0f &&
 			         Prove(i, j, true, &cost, &espeed))
 				Link_Add(i, j, (d[2] < -160.0f) ? RL_DROP : RL_JUMP,
@@ -2277,10 +2337,11 @@ qboolean Rune_Generate(const char *mapname)
 	gi.dprintf("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
 	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
 	gi.dprintf("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d); "
-	           "plat-down drop=%d unlinked=%d; momentum=%d\n",
+	           "plat-down drop=%d unlinked=%d; momentum=%d waypoints=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
 	           gen_lift_links, gen_tele_links,
-	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links);
+	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links,
+	           gen_waypoint_links);
 	Doors_Restore(held, ndoors);
 
 	Com_sprintf(path, sizeof(path), "%s/maps/%s.rune",

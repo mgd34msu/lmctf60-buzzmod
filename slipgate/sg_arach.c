@@ -1917,6 +1917,26 @@ no_hold:;
 
 			VectorCopy(sg_rune->seeds[l->to].origin, aim);
 			have_aim = true;
+			/*
+			 * A RUN link with a stored waypoint is one whose proof had to
+			 * ROUND something -- the oracle's detour apex lives in the
+			 * anchor (empty since the format was born, now earning rent).
+			 * Steer via it until it is done, then at the destination; the
+			 * fan still handles the last arm's-length. This is the body
+			 * finally walking the line the proof actually walked, instead
+			 * of the chord the proof never claimed.
+			 */
+			if (l->action == RL_RUN &&
+			    (l->anchor[0] != 0.0f || l->anchor[1] != 0.0f ||
+			     l->anchor[2] != 0.0f))
+			{
+				vec3_t wd;
+
+				VectorSubtract(l->anchor, e->s.origin, wd);
+				wd[2] = 0.0f;
+				if (VectorLength(wd) > 48.0f)
+					VectorCopy(l->anchor, aim);
+			}
 			if (l->action == RL_JUMP && e->groundentity)
 			{
 				/*
