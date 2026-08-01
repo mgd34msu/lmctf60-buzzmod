@@ -123,6 +123,14 @@ typedef struct sg_bot_s
 	vec3_t		watch_org;
 	int			commit_link;    /* the gradient step being held */
 	float		commit_until;
+	vec3_t		stag_org;       /* stagnation ball on the BODY, not the
+	                             * link: the identity watch above resets
+	                             * whenever the argmin flaps, and two
+	                             * near-equal links flapping at the commit
+	                             * period parked Fiend on one drop lip for
+	                             * a full lmctf01 match (iter 41) */
+	float		stag_since;
+	float		stag_next;      /* escalation: one shelve per 2s while parked */
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -1418,6 +1426,43 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->watch_since = level.time;
 		VectorCopy(e->s.origin, bot->watch_org);
 	}
+
+	/*
+	 * The identity watch above cannot see a flap: commit holds a link for
+	 * three seconds, the argmin at a saddle then hands back the OTHER
+	 * near-equal link, and the four-second clock resets every swap while
+	 * the body stands still for minutes (Fiend and Trace, one drop lip
+	 * each, the whole of lmctf01 iter 41). This ball is on the body. Parked
+	 * eight seconds -> shelve whatever link is current, then one more every
+	 * two seconds while still parked: the flap-set at a saddle is two or
+	 * three links and drains in seconds, nothing like the doorway-fan
+	 * drain this system got burned by (that one shelved at 10Hz).
+	 */
+	VectorSubtract(e->s.origin, bot->stag_org, d);
+	if (VectorLength(d) > 96.0f)
+	{
+		VectorCopy(e->s.origin, bot->stag_org);
+		bot->stag_since = level.time;
+	}
+	else if (bestlink >= 0 &&
+	         !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400) &&
+	         !bot->door_held_last && !bot->mate_block_last &&
+	         level.time - bot->stag_since > 8.0f &&
+	         level.time >= bot->stag_next)
+	{
+		int b, oldest = 0;
+
+		for (b = 0; b < SG_BL_MAX; b++)
+			if (bot->bl_until[b] < bot->bl_until[oldest])
+				oldest = b;
+		bot->bl_link[oldest] = bestlink;
+		bot->bl_until[oldest] = level.time + 45.0f;
+		bot->stag_next = level.time + 2.0f;
+		bot->commit_link = -1;
+		if (gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
+			           e->client->pers.netname, bestlink, bot->seed);
+	}
 	/* consumed by the watch above; the feelers re-raise it if the body is
 	 * still there this frame */
 	bot->mate_block_last = false;
@@ -2201,15 +2246,39 @@ no_hold:;
 			}
 			else
 			{
+			float swim_pitch = 0.0f;
+
+			/*
+			 * PM_WaterMove runs along the FULL view vector: with the
+			 * pitch flattened to zero a swimming body can only paddle
+			 * horizontally, and every swim link whose destination is
+			 * above or below is physically unexecutable -- lmctf01
+			 * carries 65k swim links and iter 41 shows zero ever taken,
+			 * the attack fields plateauing at the water. Underwater the
+			 * pitch belongs to the line to the target.
+			 */
+			if (e->waterlevel > 1 && have_aim)
+			{
+				vec3_t wd;
+				float wh;
+
+				VectorSubtract(aim, e->s.origin, wd);
+				wh = sqrtf(wd[0] * wd[0] + wd[1] * wd[1]);
+				swim_pitch = -atan2f(wd[2], wh) * 180.0f / (float)M_PI;
+				if (swim_pitch > 85.0f) swim_pitch = 85.0f;
+				if (swim_pitch < -85.0f) swim_pitch = -85.0f;
+			}
+
 			cmd.angles[YAW] = ANGLE2SHORT(chosen_yaw)
 			                - e->client->ps.pmove.delta_angles[YAW];
-			cmd.angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
+			cmd.angles[PITCH] = ANGLE2SHORT(swim_pitch)
+			                  - e->client->ps.pmove.delta_angles[PITCH];
 			cmd.forwardmove = 400;
 			if (jump_now)
 				cmd.upmove = 400;
 
 			view_yaw = chosen_yaw;
-			view_pitch = 0.0f;
+			view_pitch = swim_pitch;
 			}
 			move_dir[0] = cosf(chosen_yaw * (float)M_PI / 180.0f);
 			move_dir[1] = sinf(chosen_yaw * (float)M_PI / 180.0f);
