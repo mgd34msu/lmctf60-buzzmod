@@ -1344,6 +1344,30 @@ static void SG_BotThink(sg_bot_t *bot)
 	}
 
 	/*
+	 * A rail attempt outranks the argmin outright. Wave 53's ledger: 16
+	 * RAILTRY, 1 RAILFAIL, 0 RAILWIN -- fifteen attempts silently stood
+	 * down because futility and the shelf reshaped the surface mid-walk
+	 * and the argmin handed back a different link before the proof's line
+	 * got walked. The retry exists precisely because the surface's local
+	 * answer failed here; letting the surface interrupt it is circular.
+	 */
+	if (bot->rail_stage > 0 && bot->rail_link >= 0 &&
+	    bot->rail_link < sg_rune->hdr.num_links)
+	{
+		int b3;
+		qboolean shelved = false;
+
+		for (b3 = 0; b3 < SG_BL_MAX; b3++)
+			if (bot->bl_link[b3] == bot->rail_link &&
+			    bot->bl_until[b3] > level.time)
+				shelved = true;
+		if (!shelved)
+			bestlink = bot->rail_link;
+		else
+			bot->rail_stage = 0;
+	}
+
+	/*
 	 * Progress watch. The same link chosen for four seconds while the bot
 	 * stays inside a 96-unit ball is an orbit -- a lip behind a railing,
 	 * a door the rune cannot see, a ledge the feelers cannot round. The
