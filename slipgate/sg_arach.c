@@ -138,6 +138,7 @@ typedef struct sg_bot_s
 	float		escape_until;   /* backing out of a concave pocket */
 	float		escape_yaw;
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
+	int			carry_startcost; /* field cost at the grab: breakout gauge */
 	float		rally_since;    /* waiting for a partner before the push */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
 	int			rail_link;      /* RUN link being retried the proof's way */
@@ -1027,6 +1028,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		{
 			bot->carry_start = level.time;
 			gi.dprintf("CARRY %s begins\n", e->client->pers.netname);
+			bot->carry_startcost = -1;  /* gauged on first samples below */
 		}
 		else if (!carrying && bot->was_carrying)
 			gi.dprintf("CARRY %s ends after %.1fs\n",
@@ -1386,20 +1388,28 @@ static void SG_BotThink(sg_bot_t *bot)
 					break;
 				}
 		}
+		if (role == SG_ROLE_CARRY && bot->carry_startcost < 0 &&
+		    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
+			bot->carry_startcost = goal_field[bot->seed];
 		if (role == SG_ROLE_CARRY &&
-		    level.time - bot->carry_start > 10.0f)
+		    !(bot->carry_startcost > 0 && bot->seed >= 0 &&
+		      goal_field[bot->seed] < SG_FIELD_INF &&
+		      goal_field[bot->seed] >
+		          (bot->carry_startcost * 3) / 4))
 		{
 			/*
-			 * carry_start > 10: THE BREAKOUT WINDOW. Wave 69's census,
-			 * nine carries: every one died or orbited at 0-10% of the
-			 * way home, pinned in the flag room itself -- Trace held the
-			 * flag 37 seconds at minus one percent progress. In a small
-			 * hot room every step is contact-ward, so this very pricing
-			 * surcharged every exit and the argmin oscillated between
-			 * doors while the respawn stream swarmed. For ten seconds
-			 * after the grab the flee doctrine is silent: the carrier's
-			 * job is the door, and the door is priced by the gradient
-			 * alone. The dodging wisdom resumes in open country.
+			 * THE BREAKOUT, gauged by STATE, not clock. Wave 69: nine
+			 * carries, every one pinned at 0-10% of the way home, the
+			 * flee doctrine's own pricing surcharging every exit of a
+			 * hot flag room until the argmin oscillated between doors.
+			 * A 10-second window (wave 70) freed the ones that broke
+			 * fast and re-pinned the ones that didn't -- Trace, 72s at
+			 * 1% -- so the clock is gone: the dodge stays silent until
+			 * the carrier has actually cleared a quarter of the route
+			 * home, and resumes in open country, where it was ever
+			 * wise. lmctf05's carrier rode the silent window to 44%,
+			 * three times the old ceiling; the gate now follows the
+			 * body instead of the wall clock.
 			 */
 			int s;
 
