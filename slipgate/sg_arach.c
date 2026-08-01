@@ -1248,6 +1248,17 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * extra travel, up to ~1200ms for walking straight into them.
 		 * Everyone else fights; the carrier's job is the capture point.
 		 */
+		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
+			/*
+			 * And the carrier's ROPE is not everyone's rope: phase 1 is
+			 * a standing aim frame in enemy country with the flag on its
+			 * back, and a miss re-runs the whole ritual -- wave 58's
+			 * lmctf09 carrier held ropes for 17 seconds at 10ms/s of
+			 * field progress against a 43% land rate, while lmctf41's
+			 * leg-running carriers made 219-394ms/s and died like
+			 * honest flag runners. Legs unless the gap is rope-only.
+			 */
+			v += 2000.0f;
 		if (role == SG_ROLE_CARRY)
 		{
 			int s;
