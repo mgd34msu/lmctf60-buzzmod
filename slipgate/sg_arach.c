@@ -1497,6 +1497,9 @@ static void SG_BotThink(sg_bot_t *bot)
 			bot->rail_link = bestlink;
 			bot->rail_stage = 1;
 			bot->rail_until = level.time + 4.0f;
+			if (gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("RAILTRY %s link=%d seed=%d\n",
+				           e->client->pers.netname, bestlink, bot->seed);
 			bot->stag_next = level.time + 2.0f;
 			VectorCopy(e->s.origin, bot->stag_org);
 			bot->stag_since = level.time;
@@ -2380,7 +2383,14 @@ no_hold:;
 						bot->bl_until[old2] = level.time + 45.0f;
 						bot->commit_link = -1;
 						SG_TeachFutility(bot->seed);
+						if (gi.cvar("sg_debug", "0", 0)->value)
+							gi.dprintf("RAILFAIL %s link=%d seed=%d\n",
+							           e->client->pers.netname,
+							           bestlink, bot->seed);
 					}
+					else if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("RAILWIN %s link=%d\n",
+						           e->client->pers.netname, bestlink);
 					bot->rail_stage = 0;
 				}
 				else if (bot->rail_stage == 1)
