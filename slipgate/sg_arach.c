@@ -135,6 +135,8 @@ typedef struct sg_bot_s
 	qboolean	engaged_last;   /* last frame, combat owned the fight */
 	int			fan_side;       /* latched detour side: -1 left, +1 right */
 	float		fan_side_until;
+	float		escape_until;   /* backing out of a concave pocket */
+	float		escape_yaw;
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -1483,6 +1485,16 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->stag_next = level.time + 2.0f;
 		bot->commit_link = -1;
 		SG_TeachFutility(bot->seed);    /* reprice the corridor globally */
+		/*
+		 * A U-pocket defeats even the side latch: each detour side walks
+		 * into the pocket's own wall and the latch just alternates walls
+		 * (iter 48: Field, 102 firings at lmctf01 seed 1239, one pocket,
+		 * one game). By the time the watchdog fires, local navigation has
+		 * definitively failed -- so back OUT along the reverse of the
+		 * current facing for 1.2s and retry the approach from open ground.
+		 */
+		bot->escape_yaw = e->s.angles[YAW] + 180.0f;
+		bot->escape_until = level.time + 1.2f;
 		if (gi.cvar("sg_debug", "0", 0)->value)
 			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
@@ -2175,9 +2187,10 @@ no_hold:;
 			 * the local gradient walk around a doorframe instead of into
 			 * it.
 			 */
-			for (k = 0; k < 7; k++)
+			for (k = 0; k < 9; k++)
 			{
-				static const float fan[7] = { 0, -30, 30, -60, 60, -100, 100 };
+				static const float fan[9] = { 0, -30, 30, -60, 60, -100, 100,
+				                              -145, 145 };
 				float score;
 
 				try_yaw = (base_yaw + fan[k]) * M_PI / 180.0f;
@@ -2289,6 +2302,16 @@ no_hold:;
 			 * the proof is a line, and the line is the record's */
 			if (drop_yaw_locked)
 				chosen_yaw = drop_yaw;
+
+			/* backing out of a pocket overrides everything but the lip:
+			 * the retreat only ends early if the goal line opens up */
+			if (level.time < bot->escape_until && !drop_yaw_locked)
+			{
+				if (best_open >= 1.0f && chosen_yaw == base_yaw)
+					bot->escape_until = 0.0f;
+				else
+					chosen_yaw = bot->escape_yaw;
+			}
 
 			/*
 			 * THE AIM FRAME OWNS THE VIEW. Phase 1 wrote the anchor
