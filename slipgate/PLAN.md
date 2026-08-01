@@ -41,7 +41,7 @@ graph TD
     end
 
     subgraph SYSTEM["System"]
-        N22["22 FIRST STEAL / CAPTURE [B]"]
+        N22["22 FIRST STEAL [D] match 11:<br/>'Phase[SG] stole the red flag.'<br/>carried 500u hooking, died to Field.<br/>FIRST CAPTURE still open"]
         N23["23 A/B vs legacy 289/5.3 [B]<br/>(script [A]; RUNS blocked on freeze)"]
         N24["24 multi-map validation [B]"]
         N25["25 batch rune generation [A]"]
@@ -51,11 +51,11 @@ graph TD
         TOOL["runeview tool [D]"]
     end
 
-    subgraph MAIN["main-branch loose ends"]
+    subgraph MAIN["outside SLIPGATE (not this plan's work)"]
         N28["28 toss flag NULL [?] owner ruling — LMCTF change"]
-        N29["29 lmctf01 bspc sink [Q]"]
-        N30["30 legacy blocked-fire 37-43% [Q]"]
     end
+    %% Legacy-botlib items (bspc/aas, blocked-fire) removed: the old system
+    %% is only the A/B control. Nothing legacy is SLIPGATE work.
 
     G0 --> N1
     G0 --> N8
@@ -117,14 +117,40 @@ graph TD
 | blocked on server free | N23 A/B runs, N24/25 batch generation | scripts dry-run verified |
 | owner | N28 ruling | waiting |
 
-## Known defects on the board
+## Defect ledger
 
-- Rune[SG] hook-fires the same 4-5 anchors on y≈-1790 in a loop (fire →
-  release → re-select). Not converting traversal into progress; closest
-  flag approach in match so far ~2100u.
-- SWIM links 0 on lmctf03 — water seeding unexercised; needs a map with
-  real water volumes to verify (N24 batch will surface one).
-- bspc rs_maxfallheight parser row lives outside the repo
-  (Downloads tree aas_cfg.c:83) — needs vendoring or it dies with a
-  cache clean.
+- FIXED (commit a47ae1c): hook climbs never topped out — body released at
+  rope<200 unconditionally; prover releases near-destination or <130 then
+  steers the fall (sg_rune.c:494-534). After: 109/115 hooks land at dest
+  height; attacker closest approach 2091 → 141.
+- FIXED (r191, pending verify): Trace frozen 96s emitting fwd=400 —
+  Cmd_Unhook_f with the grapple as pers.weapon only forces -attack and
+  never aborts (g_cmds.c:1448); the live rope's dead-stop overwrites
+  velocity ~0 every frame (p_weapon.c:2099-2104) and p_client.c:2834
+  zeroes gravity. Bot now releases via ctf_hook_abort directly + clears
+  any rope it did not arm.
+- FIXED (r191, pending verify): defenders ground fwd=400 into their post
+  wall (Caco, 66s at spd=68). Hold inside 400ms of the stand, face the
+  approach seed; combat owns the view when anyone shows.
+- FIXED (r191 + rune regen, pending verify): Field orbited drop link
+  11580 a full match — ProveDrop finds lips with POINT down-probes (a
+  point slips past a railing a player box cannot) and never walked the
+  seed→lip approach. Now the phantom walks the approach or the link is
+  refused (dd_fenced counter). Body-side: any link chosen 4s with the bot
+  inside a 96u ball is shelved 30s (SHELVE log) — kills every orbit class.
+- RESOLVED (match 11): combat kills at route crossings confirmed (Field
+  and Gate both killed the carrier). NOTE: matches 2-10 steal counts were
+  read with a wrong grep ("got the" -- the game says "stole the",
+  g_ctffunc.c:1028); recounted, all genuinely zero. abmatch.sh always had
+  the right string.
+- Door truth (telemetry, matches 8-11): every door on lmctf03 is
+  TARGETED; triggers are one-sided (bd2: south only). Runtime answer:
+  yield the swing arc, wait 2.5s, then treat as wall 30s and reroute
+  (DEADDOOR). The generator's held-open links stay; the body routes
+  around dead sides.
+- OPEN: SWIM links 0 on lmctf03 — water seeding unexercised; needs a map
+  with real water volumes (N24 batch will surface one).
+- bspc rs_maxfallheight parser row preserved as
+  bots/bspc/aas_cfg.c.rs_maxfallheight.patch; live copy only in the
+  external Downloads tree.
 ```

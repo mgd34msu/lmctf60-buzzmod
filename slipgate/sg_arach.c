@@ -57,6 +57,29 @@ typedef struct sg_bot_s
 	vec3_t		hook_anchor;
 	vec3_t		hook_dest;      /* the link's destination seed origin */
 	float		hook_deadline;
+
+	/* a link chosen for seconds while the bot goes nowhere is a link the
+	 * body cannot execute, whatever the rune thinks -- shelve it awhile.
+	 * 32 slots: one doorway feeds 25 links from a single seed (662), and
+	 * an 8-slot shelf recycled them faster than they expired. */
+#define SG_BL_MAX 32
+	int			bl_link[SG_BL_MAX];
+	float		bl_until[SG_BL_MAX];
+
+	/* a door that would not yield from this side: a wall, for a while.
+	 * bd2's triggers are all SOUTH of it -- approached from the north it
+	 * simply does not open, and links proven with doors held open are
+	 * runtime lies from that side (Trace: 396 of 416 seconds pinned). */
+#define SG_DEAD_DOORS 4
+	edict_t		*dead_door[SG_DEAD_DOORS];
+	float		dead_door_until[SG_DEAD_DOORS];
+	edict_t		*door_hold_ent;     /* the door currently being waited on */
+	float		door_hold_since;
+	int			watch_link;     /* the link under progress-watch */
+	float		watch_since;
+	vec3_t		watch_org;
+	int			commit_link;    /* the gradient step being held */
+	float		commit_until;
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -548,6 +571,13 @@ static void SG_BotThink(sg_bot_t *bot)
 	qboolean	open_ahead = false;         /* room in front to hop into */
 	qboolean	run_link = false;           /* chosen link is ground running */
 	qboolean	precision = false;          /* final approach: no tricks */
+	qboolean	hold_post = false;          /* defender at its stand: guard */
+	float		post_yaw = 0.0f;            /* facing the likeliest approach */
+	int			door_hold = 0;              /* rotating door ahead: 1 stand,
+	                                         * 2 back out of its swing arc */
+	edict_t		*door_ent = NULL;           /* which door is being waited on */
+	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
+	float		drop_yaw = 0.0f;
 	int			sub_steps = 1, sub_msec = 0;
 
 	memset(&cmd, 0, sizeof(cmd));
@@ -651,11 +681,133 @@ static void SG_BotThink(sg_bot_t *bot)
 	{
 		rune_link_t *l = &sg_rune->links[li];
 		float v = Surface_At(l->to, w, goal_field, support, intercept);
+		int b;
+
+		for (b = 0; b < SG_BL_MAX; b++)
+			if (bot->bl_link[b] == li && bot->bl_until[b] > level.time)
+				break;
+		if (b < SG_BL_MAX)
+			continue;               /* shelved: the body could not run it */
 
 		if (v < bestval)
 		{
 			bestval = v;
 			bestlink = li;
+		}
+	}
+
+	/*
+	 * Commitment. The composed surface has saddles -- goal one way, a
+	 * shotgun the other, health a third, the item terms refreshed every
+	 * second -- and a per-frame argmin at a saddle flaps between near-equal
+	 * links. Both t2 attackers churned a full match at one such point
+	 * (seeds 429/430, the room north of the rotating door). A chosen step
+	 * is HELD until it finishes, times out, or gets shelved; the surface
+	 * proposes, the body disposes.
+	 */
+	if (bot->commit_link >= 0 && bot->commit_link < sg_rune->hdr.num_links)
+	{
+		rune_link_t *cl = &sg_rune->links[bot->commit_link];
+		qboolean drop_commit = false;
+		int b;
+
+		VectorSubtract(sg_rune->seeds[cl->to].origin, e->s.origin, d);
+		if (bot->seed == cl->to || VectorLength(d) < 48.0f)
+			drop_commit = true;             /* arrived: step complete */
+		/* or overachieved: hook landings scatter up to ~234 units from the
+		 * dest seed -- if the field already prices this spot at or below
+		 * the destination, the step served its purpose (holding on would
+		 * re-fire the hook from its own landing zone; match 6 bounced at
+		 * goal 9979 all game doing exactly that) */
+		if (goal_field[bot->seed] <= goal_field[cl->to])
+			drop_commit = true;
+		if (level.time > bot->commit_until)
+			drop_commit = true;
+		for (b = 0; b < SG_BL_MAX; b++)
+			if (bot->bl_link[b] == bot->commit_link &&
+			    bot->bl_until[b] > level.time)
+				drop_commit = true;
+		if (drop_commit)
+			bot->commit_link = -1;
+		else
+			bestlink = bot->commit_link;
+	}
+	if (bot->commit_link < 0 && bestlink >= 0)
+	{
+		bot->commit_link = bestlink;
+		bot->commit_until = level.time + 3.0f;
+	}
+
+	/*
+	 * Progress watch. The same link chosen for four seconds while the bot
+	 * stays inside a 96-unit ball is an orbit -- a lip behind a railing,
+	 * a door the rune cannot see, a ledge the feelers cannot round. The
+	 * cause does not matter here: shelve the link for thirty seconds and
+	 * the surface reroutes through the next-best gradient. (Field orbited
+	 * one drop lip for a full match; the generator fix removes that class,
+	 * this removes every class.)
+	 */
+	if (bestlink >= 0 && bestlink == bot->watch_link &&
+	    !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400))
+	{
+		VectorSubtract(e->s.origin, bot->watch_org, d);
+		if (VectorLength(d) > 96.0f)
+		{
+			VectorCopy(e->s.origin, bot->watch_org);
+			bot->watch_since = level.time;
+		}
+		else if (level.time - bot->watch_since > 4.0f)
+		{
+			int b, oldest = 0;
+
+			for (b = 0; b < SG_BL_MAX; b++)
+				if (bot->bl_until[b] < bot->bl_until[oldest])
+					oldest = b;
+			bot->bl_link[oldest] = bestlink;
+			bot->bl_until[oldest] = level.time + 30.0f;
+			if (gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("SHELVE %s link=%d at seed=%d\n",
+				           e->client->pers.netname, bestlink, bot->seed);
+			bot->watch_link = -1;
+		}
+	}
+	else
+	{
+		bot->watch_link = bestlink;
+		bot->watch_since = level.time;
+		VectorCopy(e->s.origin, bot->watch_org);
+	}
+
+	/*
+	 * A defender that has reached its post stands it. The stand is the
+	 * surface's minimum, so descent has nowhere left to go -- pushing
+	 * forwardmove into the pedestal just grinds the wall (Caco spent 66
+	 * straight seconds at spd=68 doing exactly that). Inside 400ms of the
+	 * post: stop, and face the seed an attacker descending on the stand
+	 * would arrive through -- the neighbor whose field value sits closest
+	 * above this one. Combat still owns the view the moment anyone shows.
+	 */
+	if (role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400)
+	{
+		int facev = 0x7fffffff, face = -1;
+
+		for (li = sg_rune->first_link[bot->seed]; li >= 0;
+		     li = sg_rune->next_link[li])
+		{
+			rune_link_t *l = &sg_rune->links[li];
+			int v = goal_field[l->to];
+
+			if (v > goal_field[bot->seed] && v < facev)
+			{
+				facev = v;
+				face = l->to;
+			}
+		}
+		hold_post = true;
+		if (face >= 0)
+		{
+			VectorSubtract(sg_rune->seeds[face].origin, e->s.origin, d);
+			post_yaw = atan2f(d[1], d[0]) * 180.0f / M_PI;
 		}
 	}
 
@@ -694,6 +846,9 @@ static void SG_BotThink(sg_bot_t *bot)
 					           sqrtf(ld[0] * ld[0] + ld[1] * ld[1]), ld[2]);
 				}
 				bot->hook_phase = 0;
+				/* a rope ride ENDS its commitment: wherever this landing
+				 * is, the next step is argued fresh from here */
+				bot->commit_link = -1;
 			}
 			else
 			{
@@ -743,11 +898,27 @@ static void SG_BotThink(sg_bot_t *bot)
 			if (l->action == RL_DROP)
 			{
 				vec3_t lipd;
+				float liph;
 
 				VectorSubtract(l->anchor, e->s.origin, lipd);
 				lipd[2] = 0.0f;
-				if (VectorLength(lipd) > 24.0f)
+				liph = VectorLength(lipd);
+				if (liph > 24.0f)
 					VectorCopy(l->anchor, aim);
+				/*
+				 * The whole drop executes the way the prover walked it:
+				 * straight at the lip, no fan (ProveDrop's approach walk
+				 * steers dead at the lip, sg_rune.c), then off along the
+				 * RECORDED heading (dd_last_heading, sg_rune.c:734). The
+				 * fan, given a railing beside the gap, deflects off the
+				 * exact line the proof demonstrated -- Phase orbited a
+				 * balcony's proven drops 60-140 units from their lips,
+				 * with a 96-unit lock radius it never entered.
+				 */
+				drop_yaw_locked = true;
+				drop_yaw = (liph > 24.0f)
+				               ? atan2f(lipd[1], lipd[0]) * 180.0f / M_PI
+				               : l->heading * (360.0f / 256.0f);
 			}
 		}
 
@@ -858,6 +1029,50 @@ static void SG_BotThink(sg_bot_t *bot)
 				probe[2] += 8.0f;
 				tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
 				              e, MASK_PLAYERSOLID);
+				/*
+				 * A closed door is not a wall: walking into it (its
+				 * auto-spawned trigger, g_func.c Think_SpawnDoorTrigger,
+				 * reaches ~60 units out) is precisely how it opens. The
+				 * rune proved these routes with doors held open; a feeler
+				 * that deflects off a door steers away from the only
+				 * action that makes the route real. Every shelve cluster
+				 * in match 7 sat beside a door complex. Doors that only a
+				 * button opens will fail to yield and the progress watch
+				 * shelves that link -- the net below the honesty.
+				 */
+				if (tr.fraction < 1.0f && tr.ent && tr.ent->classname &&
+				    strncmp(tr.ent->classname, "func_door", 9) == 0)
+				{
+					int dd;
+					qboolean dead = false;
+
+					/* a door that already refused to yield from here is a
+					 * wall: no fraction override, the fan walks around */
+					for (dd = 0; dd < SG_DEAD_DOORS; dd++)
+						if (bot->dead_door[dd] == tr.ent &&
+						    bot->dead_door_until[dd] > level.time)
+							dead = true;
+					if (!dead)
+					{
+						/*
+						 * A ROTATING door swings through the space in
+						 * front of it; a body pressing at it blocks the
+						 * swing and the door reverses shut, forever
+						 * (match 8: one bot, 75 shelves, jamming the door
+						 * with its own face). Stand outside the arc, or
+						 * back out of it, and let the floor trigger swing
+						 * it. Sliding doors travel out of the path and
+						 * are safe to press.
+						 */
+						if (k == 0 && strcmp(tr.ent->classname,
+						                     "func_door_rotating") == 0)
+						{
+							door_hold = (tr.fraction * 96.0f < 64.0f) ? 2 : 1;
+							door_ent = tr.ent;
+						}
+						tr.fraction = 1.0f;
+					}
+				}
 				score = tr.fraction * (1.0f - 0.05f * (k > 0) * (k + 1));
 				if (score > best_open)
 				{
@@ -867,6 +1082,11 @@ static void SG_BotThink(sg_bot_t *bot)
 				if (tr.fraction >= 1.0f && k == 0)
 					break;              /* goal line is open: take it */
 			}
+
+			/* at a drop lip the proven walk-off heading overrides the fan:
+			 * the proof is a line, and the line is the record's */
+			if (drop_yaw_locked)
+				chosen_yaw = drop_yaw;
 
 			cmd.angles[YAW] = ANGLE2SHORT(chosen_yaw)
 			                - e->client->ps.pmove.delta_angles[YAW];
@@ -893,6 +1113,8 @@ static void SG_BotThink(sg_bot_t *bot)
 			probe[2] += 8.0f;
 			tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
 			              e, MASK_PLAYERSOLID);
+			/* same rule as the feelers: a door ahead is not a wall, but
+			 * do NOT hop at one -- arrive on foot, inside its trigger */
 			open_ahead = (tr.fraction >= 1.0f);
 
 			VectorSubtract(e->s.origin, bot->last_origin, d);
@@ -904,6 +1126,55 @@ static void SG_BotThink(sg_bot_t *bot)
 			}
 			else
 				bot->stuck_time = 0.0f;
+		}
+
+		/* rotating door working its arc: hold ground (or yield the arc),
+		 * keep facing it, and let the trigger under our feet do the work.
+		 * A door still shut after 2.5 seconds is not going to open from
+		 * this side (no trigger reaches here): remember it as a wall for
+		 * thirty seconds and let the surface reroute. */
+		if (door_hold && have_move)
+		{
+			cmd.forwardmove = (door_hold == 2) ? -200 : 0;
+			cmd.upmove = 0;
+
+			if (door_ent != bot->door_hold_ent)
+			{
+				bot->door_hold_ent = door_ent;
+				bot->door_hold_since = level.time;
+			}
+			else if (level.time - bot->door_hold_since > 2.5f)
+			{
+				int dd, oldest = 0;
+
+				for (dd = 0; dd < SG_DEAD_DOORS; dd++)
+					if (bot->dead_door_until[dd] < bot->dead_door_until[oldest])
+						oldest = dd;
+				bot->dead_door[oldest] = door_ent;
+				bot->dead_door_until[oldest] = level.time + 30.0f;
+				bot->door_hold_ent = NULL;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("DEADDOOR %s at (%.0f %.0f %.0f)\n",
+					           e->client->pers.netname, e->s.origin[0],
+					           e->s.origin[1], e->s.origin[2]);
+			}
+		}
+		else
+			bot->door_hold_ent = NULL;
+
+		/* on post: whatever the descent wanted, guard duty overrides it */
+		if (hold_post)
+		{
+			cmd.forwardmove = 0;
+			cmd.sidemove = 0;
+			cmd.upmove = 0;
+			cmd.angles[YAW] = ANGLE2SHORT(post_yaw)
+			                - e->client->ps.pmove.delta_angles[YAW];
+			cmd.angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
+			view_yaw = post_yaw;
+			view_pitch = 0.0f;
+			have_move = false;
+			bot->stuck_time = 0.0f;
 		}
 	}
 
@@ -1036,7 +1307,20 @@ static void SG_BotThink(sg_bot_t *bot)
 	 */
 	{
 		void Cmd_Hook_f(edict_t *ent);
-		void Cmd_Unhook_f(edict_t *ent);
+
+		/*
+		 * A rope this bot does not think it owns is a rope it cannot ever
+		 * release: g_cmds.c's Cmd_Unhook_f, when the grapple happens to be
+		 * pers.weapon, only forces -attack and NEVER aborts -- the live
+		 * hook's short-rope dead-stop then overwrites velocity with ~0
+		 * every frame (p_weapon.c:2099-2104) and p_client.c:2834 zeroes
+		 * gravity, freezing the bot in place for good (Trace, 96 seconds,
+		 * 4v4 match). The bot releases through ctf_hook_abort directly --
+		 * the same unconditional abort p_weapon.c itself calls -- and this
+		 * guard clears any rope left over from a path we did not arm.
+		 */
+		if (bot->hook_phase == 0 && e->client->hookstate != 0)
+			ctf_hook_abort(e);
 
 		if (bot->hook_phase == 1)
 		{
@@ -1070,7 +1354,7 @@ static void SG_BotThink(sg_bot_t *bot)
 			{
 				was_pulling = (e->client->hookstate != 0);
 				if (was_pulling)
-					Cmd_Unhook_f(e);
+					ctf_hook_abort(e);
 				/* a cut live rope hands off to the landing steer; a rope
 				 * that never attached does not */
 				bot->hook_phase = was_pulling ? 3 : 0;
@@ -1092,18 +1376,23 @@ static void SG_BotThink(sg_bot_t *bot)
 		           cmd.angles[PITCH], cmd.msec, sub_steps);
 	}
 
-	/* every few seconds, say where this bot is and what it wants */
+	/* once a second, the full body state: enough to reconstruct any stall
+	 * offline without another instrumented rerun */
 	if (gi.cvar("sg_debug", "0", 0)->value && level.time >= bot->next_report)
 	{
 		float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 		                 e->velocity[1] * e->velocity[1]);
-		bot->next_report = level.time + 3.0f;
-		gi.dprintf("SG %s: role=%d seed=%d goal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d\n",
+		bot->next_report = level.time + 1.0f;
+		gi.dprintf("SG %s: role=%d seed=%d goal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d "
+		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d\n",
 		           e->client->pers.netname, role, bot->seed,
 		           (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
 		               ? goal_field[bot->seed] : -1,
 		           sp, e->s.origin[0], e->s.origin[1], e->s.origin[2],
-		           bestlink);
+		           bestlink,
+		           (bestlink >= 0) ? sg_rune->links[bestlink].action : -1,
+		           bot->hook_phase, door_hold, (int)drop_yaw_locked,
+		           bot->stuck_time, e->groundentity != NULL);
 	}
 }
 

@@ -583,7 +583,7 @@ static byte dd_last_heading;            /* lip direction of the last proven drop
  * lip is stored in the link's anchor so the body knows exactly where to
  * step off.
  */
-static int dd_nolip, dd_flew, dd_landed, dd_won;
+static int dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won;
 
 static qboolean ProveDrop(int from, int to, vec3_t lip_out,
                           short *cost_ms, byte *exit_speed)
@@ -653,6 +653,43 @@ static qboolean ProveDrop(int from, int to, vec3_t lip_out,
 	{
 		dd_nolip++;
 		return false;
+	}
+
+	/*
+	 * The lip was found by geometry; the APPROACH must be walked. The
+	 * down-probe is a POINT trace -- a point slides past a railing that a
+	 * player box cannot (lmctf03 link 11580: lip behind a rail; the body
+	 * orbited it for a full match, cited in PLAN.md). Roll the phantom
+	 * from the seed straight at the lip with the real physics: if it
+	 * cannot get within 24 horizontal units, the lip is scenery seen
+	 * through a fence, not a walk-off, and recording it would lie about
+	 * what a player can do here.
+	 */
+	{
+		float d2 = 1e30f;
+		int step;
+
+		SG_OraclePlace(&ph, src);
+		for (step = 0; step < 2500; step += STEP_MSEC)
+		{
+			vec3_t w;
+
+			w[0] = lip[0] - ph.origin[0];
+			w[1] = lip[1] - ph.origin[1];
+			d2 = w[0] * w[0] + w[1] * w[1];
+			if (d2 < 24.0f * 24.0f)
+				break;
+			memset(&cmd, 0, sizeof(cmd));
+			cmd.msec = STEP_MSEC;
+			cmd.angles[YAW] = ANGLE2SHORT(atan2f(w[1], w[0]) * 180.0f / M_PI);
+			cmd.forwardmove = 400;
+			SG_OracleRun(&ph, &cmd, 1);
+		}
+		if (d2 >= 24.0f * 24.0f)
+		{
+			dd_fenced++;
+			return false;
+		}
 	}
 	dd_flew++;
 
@@ -1636,8 +1673,8 @@ qboolean Rune_Generate(const char *mapname)
 	gi.dprintf("rune: %d links proven\n", gen_num_links);
 	gi.dprintf("rune: dropstats pairs=%d seek=%d noedge=%d fellsteps=%d arrived=%d nocontact=%d\n",
 	           dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact);
-	gi.dprintf("rune: geodrop nolip=%d flew=%d landedsteps=%d won=%d\n",
-	           dd_nolip, dd_flew, dd_landed, dd_won);
+	gi.dprintf("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
+	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
 	gi.dprintf("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d); "
 	           "plat-down drop=%d unlinked=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
