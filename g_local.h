@@ -668,6 +668,10 @@ extern  cvar_t  *skin_file;     // CTF CODE -- LM_SURT
 extern  cvar_t  *skin_debug;    // For debugging skins file
 extern  cvar_t  *disabled_weps; // CTF CODE -- LM_SURT
 extern  cvar_t  *flag_init;
+// BUZZKILL - spawn_loadout: admin-defined starting equipment. One cvar,
+// grammar thing[:count] plus @build references; the vocabulary is the
+// LIVE itemlist, so new items self-incorporate. See README.
+extern  cvar_t  *spawn_loadout;
 extern  cvar_t  *fastswitch;
 extern  cvar_t  *mod_website;   // URL to show in team join centerprint
 extern  cvar_t  *autolock;      // lock/unlock teams with match status
@@ -1341,6 +1345,12 @@ struct gclient_s
 	client_ctf_t    ctf;
 	stats_player_s *p_stats_player; // STATS - LM_Hati
 	// END TEAM CODE
+
+	// BUZZKILL - spawn_loadout overheal: health granted above max rots
+	// 1 point a second down to max, the megahealth mechanic applied to
+	// the spawn overage
+	qboolean	overheal;
+	float		overheal_next;
 };
 
 

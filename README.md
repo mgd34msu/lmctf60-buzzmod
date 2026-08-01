@@ -77,6 +77,30 @@ New:
 | `ctf_switch_penalty` | 0 | 1 clears your score for joining the bigger winning team |
 
 Upstream cvars are unchanged: `dmflags` `maxclients` `ctfflags` `refset`
+
+### spawn_loadout (BuzzMod)
+
+Admin-defined starting equipment. One cvar, grammar `thing[:count]`,
+space or comma separated:
+
+    set spawn_loadout "rocketlauncher:5 railgun:5 body:100 health:110"
+
+Tokens match any unambiguous fragment of a live item classname, so new
+items are addressable the day they exist -- `sv listitems` prints every
+token. Counts are ADDITIVE under the game's own caps. Semantics: a
+weapon always carries its real pickup ammo bundle and `:count` adds
+extra; ammo -> amount; armor -> points (that armor's own max applies);
+power armor -> the device plus count cells; other items -> charges.
+`health` is the one reserved word -- above max rots 1/sec down to max,
+the megahealth mechanic. Ingame runes are excluded (own lifecycle).
+
+Named builds are plain cvars, `@`-referenced, nestable to depth 4,
+composable with extra tokens; none ship by default:
+
+    set loadout_testing "rocketlauncher:5 railgun:5 grenades:5"
+    set spawn_loadout "@testing"
+
+Bad tokens and ambiguous fragments warn on the console by name.
 `logrename` `runes` `skinset` `refpassword` `motd_file` `server_file`
 `maplist_file` `skin_file` `skin_debug` `disabled_weps` `flag_init` `fastswitch`
 `mod_website` `autolock` `countdown_time`.

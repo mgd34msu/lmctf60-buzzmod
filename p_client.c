@@ -1160,6 +1160,13 @@ void InitClientPersistent (gclient_t *client)
 	client->pers.max_cells		= 200;
 	client->pers.max_slugs		= 50;
 
+	// BUZZKILL - spawn_loadout runs after the stock loadout so it only
+	// ever adds (parser and rules live in g_items.c; README documents)
+	{
+		void SpawnLoadout_Give(gclient_t *cl);
+		SpawnLoadout_Give(client);
+	}
+
 	client->pers.connected = true;
 }
 
@@ -3118,6 +3125,20 @@ any other entities in the world.
 */
 void ClientBeginServerFrame (edict_t *ent)
 {
+	// BUZZKILL - spawn_loadout overheal: rot 1/sec down to max, exactly
+	// the megahealth pace; flag clears at max so a real megahealth's own
+	// think is never doubled after this ends
+	if (ent->client->overheal)
+	{
+		if (ent->health <= ent->max_health)
+			ent->client->overheal = false;
+		else if (level.time >= ent->client->overheal_next)
+		{
+			ent->health--;
+			ent->client->overheal_next = level.time + 1.0f;
+		}
+	}
+
 	gclient_t	*client;
 	int			buttonMask;
 

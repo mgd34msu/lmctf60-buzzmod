@@ -1452,6 +1452,217 @@ void SpawnItem(edict_t* ent, gitem_t* item)
 //======================================================================
 
 
+
+/*
+============
+BUZZKILL - spawn_loadout
+
+Admin-defined starting equipment. One cvar, one grammar:
+
+    set spawn_loadout "railgun:10 rocket:10 body:100 health:110"
+    set loadout_heavy "rl:20 body:150"
+    set spawn_loadout "@heavy shells:20"
+
+thing[:count], space or comma separated. The vocabulary is the LIVE
+itemlist: a token matches any unambiguous fragment of an item classname
+(railgun -> weapon_railgun), so an item added to the mod is addressable
+the day it exists, with no registry to update. @name expands the cvar
+loadout_<name> (admin-defined builds, none shipped by default), nestable
+to depth 4 with cycle detection. `health` is the one reserved word --
+player health is a stat, not an item -- and a value above max rots one
+point a second down to max, the megahealth mechanic applied to spawn
+overage. Counts are ADDITIVE and clamp at the game's own caps, exactly
+as pickups do. Count semantics by category: weapon -> its ammo, ammo ->
+amount, armor -> points (capped by that armor's own max), power armor ->
+the device plus that many cells, anything else -> inventory charges.
+The ingame LMCTF runes are excluded: they have their own lifecycle.
+Bad tokens and ambiguous fragments warn on the console BY NAME.
+============
+*/
+static int Loadout_AmmoCap(gclient_t *cl, gitem_t *am)
+{
+	if (Q_stricmp(am->pickup_name, "Shells") == 0)   return cl->pers.max_shells;
+	if (Q_stricmp(am->pickup_name, "Bullets") == 0)  return cl->pers.max_bullets;
+	if (Q_stricmp(am->pickup_name, "Grenades") == 0) return cl->pers.max_grenades;
+	if (Q_stricmp(am->pickup_name, "Rockets") == 0)  return cl->pers.max_rockets;
+	if (Q_stricmp(am->pickup_name, "Cells") == 0)    return cl->pers.max_cells;
+	if (Q_stricmp(am->pickup_name, "Slugs") == 0)    return cl->pers.max_slugs;
+	return 999;     /* a future ammo type: no cap known here, be generous */
+}
+
+static void Loadout_AddAmmo(gclient_t *cl, gitem_t *am, int count)
+{
+	int idx = ITEM_INDEX(am), cap = Loadout_AmmoCap(cl, am);
+
+	cl->pers.inventory[idx] += count;
+	if (cl->pers.inventory[idx] > cap)
+		cl->pers.inventory[idx] = cap;
+}
+
+static gitem_t *Loadout_Match(const char *tok)
+{
+	gitem_t	*it, *found = NULL;
+	int		i, hits = 0;
+
+	/* pass 1: exact classname */
+	for (i = 1, it = itemlist + 1; i < game.num_items; i++, it++)
+		if (it->classname && Q_stricmp(tok, it->classname) == 0)
+			return it;
+	/* pass 2: unambiguous fragment */
+	for (i = 1, it = itemlist + 1; i < game.num_items; i++, it++)
+	{
+		if (!it->classname)
+			continue;
+		if (strstr(it->classname, tok))
+		{
+			hits++;
+			found = it;
+		}
+	}
+	if (hits == 1)
+		return found;
+	if (hits > 1)
+	{
+		gi.dprintf("spawn_loadout: \"%s\" is ambiguous:", tok);
+		for (i = 1, it = itemlist + 1; i < game.num_items; i++, it++)
+			if (it->classname && strstr(it->classname, tok))
+				gi.dprintf(" %s", it->classname);
+		gi.dprintf("\n");
+	}
+	else
+		gi.dprintf("spawn_loadout: unknown token \"%s\"\n", tok);
+	return NULL;
+}
+
+static void Loadout_ParseString(gclient_t *cl, const char *spec, int depth);
+
+static void Loadout_Token(gclient_t *cl, char *tok, int depth)
+{
+	char	*colon;
+	int		count = -1, idx;
+	gitem_t	*it;
+
+	if (tok[0] == '@')
+	{
+		if (depth >= 4)
+		{
+			gi.dprintf("spawn_loadout: @%s too deep (cycle?)\n", tok + 1);
+			return;
+		}
+		Loadout_ParseString(cl,
+		    gi.cvar(va("loadout_%s", tok + 1), "", 0)->string, depth + 1);
+		if (!gi.cvar(va("loadout_%s", tok + 1), "", 0)->string[0])
+			gi.dprintf("spawn_loadout: build @%s is not defined\n", tok + 1);
+		return;
+	}
+
+	colon = strchr(tok, ':');
+	if (colon)
+	{
+		*colon = 0;
+		count = atoi(colon + 1);
+		if (count < 0)
+			count = 0;
+	}
+
+	/* the one reserved word: player health, stat not item */
+	if (Q_stricmp(tok, "health") == 0)
+	{
+		cl->pers.health = (count >= 0) ? count : 100;
+		if (cl->pers.health > cl->pers.max_health)
+		{
+			cl->overheal = true;        /* rots 1/sec to max in play */
+			cl->overheal_next = 0.0f;
+		}
+		return;
+	}
+
+	it = Loadout_Match(tok);
+	if (!it)
+		return;
+	if (strstr(it->classname, "_rune"))
+	{
+		gi.dprintf("spawn_loadout: runes have their own lifecycle, \"%s\" ignored\n",
+		           it->classname);
+		return;
+	}
+	idx = ITEM_INDEX(it);
+
+	if (strncmp(it->classname, "weapon_", 7) == 0)
+	{
+		/* a weapon ALWAYS brings its real pickup bundle -- the AMMO
+		 * item's quantity (a rocket box is 5), not the weapon's own
+		 * quantity field, which means ammo-per-shot (RL: 1) -- and the
+		 * count is EXTRA on top: rocketlauncher:5 is 5+5=10 rockets.
+		 * The owner's audit caught the per-shot field being used here. */
+		cl->pers.inventory[idx] = 1;
+		if (it->ammo)
+		{
+			gitem_t *am = FindItem(it->ammo);
+
+			if (am)
+				Loadout_AddAmmo(cl, am,
+				    am->quantity + ((count > 0) ? count : 0));
+		}
+	}
+	else if (strncmp(it->classname, "ammo_", 5) == 0)
+		Loadout_AddAmmo(cl, it, (count >= 0) ? count : it->quantity);
+	else if (strncmp(it->classname, "item_power_", 11) == 0)
+	{
+		/* the device, plus the count as CELLS -- its fuel: the drain
+		 * lives in the damage code, not in item data, so this is the
+		 * one hand-written category rule in the system */
+		gitem_t *cells = FindItem("Cells");
+
+		cl->pers.inventory[idx] = 1;
+		if (cells && count > 0)
+			Loadout_AddAmmo(cl, cells, count);
+	}
+	else if (strncmp(it->classname, "item_armor_", 11) == 0)
+	{
+		gitem_armor_t *info = (gitem_armor_t *)it->info;
+		int cap = info ? info->max_count : 200;
+
+		cl->pers.inventory[idx] += (count >= 0) ? count
+		                          : (info ? info->base_count : 0);
+		if (cl->pers.inventory[idx] > cap)
+			cl->pers.inventory[idx] = cap;
+	}
+	else
+	{
+		/* powerups and the rest: inventory charges, used on demand */
+		cl->pers.inventory[idx] += (count >= 0) ? count : 1;
+	}
+}
+
+static void Loadout_ParseString(gclient_t *cl, const char *spec, int depth)
+{
+	char	buf[512], *tok;
+
+	if (!spec || !spec[0])
+		return;
+	Com_sprintf(buf, sizeof(buf), "%s", spec);
+	for (tok = strtok(buf, " ,"); tok; tok = strtok(NULL, " ,"))
+		Loadout_Token(cl, tok, depth);
+}
+
+void SpawnLoadout_Give(gclient_t *cl)
+{
+	if (spawn_loadout && spawn_loadout->string[0])
+		Loadout_ParseString(cl, spawn_loadout->string, 0);
+}
+
+void SpawnLoadout_ListItems(void)
+{
+	gitem_t	*it;
+	int		i;
+
+	gi.dprintf("addressable spawn_loadout tokens (plus 'health'):\n");
+	for (i = 1, it = itemlist + 1; i < game.num_items; i++, it++)
+		if (it->classname && it->pickup_name)
+			gi.dprintf("  %-28s %s\n", it->classname, it->pickup_name);
+}
+
 gitem_t	itemlist[] =
 {
 	{

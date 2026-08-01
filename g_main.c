@@ -89,6 +89,7 @@ cvar_t	*skin_file;	// CTF CODE -- LM_SURT
 cvar_t	*skin_debug; // For debugging skin files
 cvar_t	*disabled_weps;	// CTF CODE -- LM_SURT
 cvar_t  *flag_init;
+cvar_t  *spawn_loadout;  // BUZZKILL - admin-defined starting equipment
 cvar_t  *fastswitch;
 cvar_t  *mod_website;
 cvar_t  *autolock;

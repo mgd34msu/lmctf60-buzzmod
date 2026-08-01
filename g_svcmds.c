@@ -306,6 +306,14 @@ of the parameters
 */
 void	ServerCommand (void)
 {
+	// BUZZKILL - spawn_loadout discovery: every addressable token, live
+	if (Q_stricmp(gi.argv(1), "listitems") == 0)
+	{
+		void SpawnLoadout_ListItems(void);
+		SpawnLoadout_ListItems();
+		return;
+	}
+
 	char	*cmd;
 
 	cmd = gi.argv(1);
