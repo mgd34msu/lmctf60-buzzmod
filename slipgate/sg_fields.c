@@ -89,7 +89,15 @@ static int Link_EffCost(const rune_link_t *l)
 {
 	switch (l->action)
 	{
-	case RL_HOOK:       return l->cost_ms + 400;    /* walk to seed + brake */
+	/*
+	 * 1000, not 400: the rope's REAL ritual is a standing aim frame (the
+	 * body halts, phase 1 owns the view), the fire, and a landing brake --
+	 * wave 57's carrier trace shows ~2-3s of wall clock per rope against
+	 * cost_ms figures in the hundreds, and a carrier that chained ropes
+	 * covered 4s of field in 70s of flailing while a run would have flown.
+	 * Underpricing the ritual made the flood chain hooks where legs win.
+	 */
+	case RL_HOOK:       return l->cost_ms + 1000;
 	case RL_DROP:       return l->cost_ms + 150;    /* align the lip line */
 	case RL_ROCKETJUMP: return l->cost_ms + 900;    /* raise RL + aim + pay */
 	default:            return l->cost_ms;
