@@ -1189,12 +1189,13 @@ static void SG_BotThink(sg_bot_t *bot)
 				continue;
 			if (mb->last_goalcost < 6000)
 				mates_near++;
-			else if (mb->last_goalcost < 20000)
-				/* 20000, not 14000: a just-respawned mate on lmctf09
-				 * stands at ~17s of field, and the old horizon told the
-				 * leader nobody was coming precisely when the whole
-				 * second wave was (wave 64: still 14 solo windows to 2
-				 * paired). The 20s cap absorbs the longest legal wait. */
+			else if (mb->last_goalcost < 10000)
+				/* SYNC window only. The 20s horizon waited for whole
+				 * respawn waves and bled more pressure than pairing
+				 * returned: steals ran 1.6/wave before the rally and
+				 * 1.0/wave with it (waves 63-67, zero in 67). A partner
+				 * four seconds behind is worth four seconds; a partner
+				 * in the respawn room is not worth twenty. */
 				mates_coming++;
 		}
 		if (mates_near == 0 && mates_coming > 0)
@@ -1236,7 +1237,7 @@ static void SG_BotThink(sg_bot_t *bot)
 					           e->client->pers.netname, mates_coming,
 					           best_cover);
 			}
-			if (level.time - bot->rally_since < 20.0f)
+			if (level.time - bot->rally_since < 6.0f)
 				rally_hold = true;
 		}
 		else
