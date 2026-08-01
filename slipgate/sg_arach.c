@@ -1162,8 +1162,19 @@ static void SG_BotThink(sg_bot_t *bot)
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF)
 	{
-		int bi, mates_near = 0, foes_alive = 0;
+		int bi, mates_near = 0, mates_coming = 0;
 
+		/*
+		 * First cut waited only when two enemies were freshly SEEN and
+		 * gave up after 12s -- but an attacker sneaking in alone has
+		 * usually seen nobody, and a trailing mate 8-12s of field back
+		 * cannot close inside the cap: wave 63 paired almost nothing.
+		 * The census already proved solo arrival means death against
+		 * ANY defense, so the belief gate is gone. Wait exactly when a
+		 * partner is genuinely en route (inside 14s of field), as long
+		 * as it takes them to close -- capped at 20s -- and push solo
+		 * without ceremony when nobody is coming at all.
+		 */
 		for (bi = 0; bi < SG_MAXBOTS; bi++)
 		{
 			sg_bot_t *mb = &sg_bots[bi];
@@ -1172,19 +1183,19 @@ static void SG_BotThink(sg_bot_t *bot)
 				continue;
 			if (mb->ent->client->ctf.teamnum != team)
 				continue;
-			if (mb->last_role == (int)SG_ROLE_ATTACK &&
-			    mb->last_goalcost >= 0 && mb->last_goalcost < 6000)
+			if (mb->last_role != (int)SG_ROLE_ATTACK ||
+			    mb->last_goalcost < 0)
+				continue;
+			if (mb->last_goalcost < 6000)
 				mates_near++;
+			else if (mb->last_goalcost < 14000)
+				mates_coming++;
 		}
-		for (bi = 0; bi < SG_MAX_ENEMY_TRACK; bi++)
-			if (sg_caco_enemies[team - 1][bi].client >= 0 &&
-			    level.time - sg_caco_enemies[team - 1][bi].seen_time < 8.0f)
-				foes_alive++;
-		if (mates_near == 0 && foes_alive >= 2)
+		if (mates_near == 0 && mates_coming > 0)
 		{
 			if (bot->rally_since <= 0.0f)
 				bot->rally_since = level.time;
-			if (level.time - bot->rally_since < 12.0f)
+			if (level.time - bot->rally_since < 20.0f)
 				rally_hold = true;
 		}
 		else
