@@ -22,6 +22,27 @@ sg_fields_t sg_fields;
  * NEAREST source seed. O(n^2) at our sizes is milliseconds. Sources carry
  * an initial cost so a projected position can be seeded with its age.
  */
+/*
+ * What a link REALLY costs the body, not just what the traversal took the
+ * phantom. The proofs fired hooks from the seed at rest and walked drops
+ * onto their recorded lip line, so the body does too -- and that approach
+ * time is part of the price. A flood that ignores it systematically
+ * over-prefers hooks against runs and swims (smap05: every route funneled
+ * onto ropes). Surcharges are the flat approximation of the entry
+ * envelope; the exit-state/entry-state transition matrix -- the proper
+ * line-graph flood over the stored envelopes -- is the backlog item.
+ */
+static int Link_EffCost(const rune_link_t *l)
+{
+	switch (l->action)
+	{
+	case RL_HOOK:       return l->cost_ms + 400;    /* walk to seed + brake */
+	case RL_DROP:       return l->cost_ms + 150;    /* align the lip line */
+	case RL_ROCKETJUMP: return l->cost_ms + 900;    /* raise RL + aim + pay */
+	default:            return l->cost_ms;
+	}
+}
+
 void Field_Flood(rune_t *r, int *dist,
                  const int *sources, const int *source_cost, int num_sources)
 {
@@ -53,10 +74,13 @@ void Field_Flood(rune_t *r, int *dist,
 
 		for (j = 0; j < r->hdr.num_links; j++)
 		{
+			int ec;
+
 			if (r->links[j].to != u)
 				continue;
-			if (dist[u] + r->links[j].cost_ms < dist[r->links[j].from])
-				dist[r->links[j].from] = dist[u] + r->links[j].cost_ms;
+			ec = Link_EffCost(&r->links[j]);
+			if (dist[u] + ec < dist[r->links[j].from])
+				dist[r->links[j].from] = dist[u] + ec;
 		}
 	}
 }
@@ -287,10 +311,23 @@ void Fields_Refresh(rune_t *r)
 		int home = i ? sg_fields.blue_flag_seed : sg_fields.red_flag_seed;
 		int seed, cost = 0;
 
-		if (bf->state == SG_FLAG_HOME || bf->where_seed < 0)
+		if (bf->state == SG_FLAG_HOME)
 			seed = home;
-		else
+		else if (bf->where_seed >= 0)
 			seed = bf->where_seed;
+		else
+			/*
+			 * Astray and never sighted. The old fallback said "home" --
+			 * which sent every RECOVER bot to squat its own EMPTY stand
+			 * while the thief ran the flag the other way (campaign 1,
+			 * lmctf01 g1: role=3 parked at the vacant base all game;
+			 * both teams did it; the standoff never broke and no game
+			 * has ever seen a capture). The game broadcast WHO took it
+			 * the moment it happened; a taken flag is travelling to the
+			 * thief's stand, so that is where the hunt begins -- the
+			 * route there sweeps the drop case on the way.
+			 */
+			seed = i ? sg_fields.red_flag_seed : sg_fields.blue_flag_seed;
 		Field_Flood(r, fld, &seed, &cost, 1);
 	}
 

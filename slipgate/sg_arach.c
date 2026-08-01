@@ -55,6 +55,7 @@ typedef struct sg_bot_s
 	 * launches along v_angle; then release before the p_weapon.c brake band */
 	int			hook_phase;     /* 0 none, 1 aimed+firing, 2 rope out,
 	                             * 3 released mid-air, steering to land */
+	int			hook_link;      /* which link this ride is executing */
 	vec3_t		hook_anchor;
 	vec3_t		hook_dest;      /* the link's destination seed origin */
 	float		hook_deadline;
@@ -83,6 +84,17 @@ typedef struct sg_bot_s
 	                                 * commanded stillness, not link failure */
 	qboolean	mate_block_last;    /* a TEAMMATE was the obstruction: not
 	                                 * the link's failure either */
+
+	/* loop detection wider than the watch's 96-unit ball: recent seeds
+	 * visited with the goal value each visit held. Coming back no better
+	 * is an orbit whatever its diameter (a carrier hook-cycled a 250-unit
+	 * triangle for minutes; the ball never saw it) */
+#define SG_VISIT_RING 8
+	int			visit_seed[SG_VISIT_RING];
+	int			visit_goal[SG_VISIT_RING];  /* the seed's value at visit */
+	int			visit_min[SG_VISIT_RING];   /* best goal reached SINCE */
+	float		visit_time[SG_VISIT_RING];
+	int			visit_head;
 
 	/* rocket-jump execution: the proof stored the aim (anchor[0/1], z
 	 * recoverable) and the worst-case health price (anchor[2]); the body
@@ -797,6 +809,8 @@ static void SG_BotThink(sg_bot_t *bot)
 	edict_t		*door_ent = NULL;           /* which door is being waited on */
 	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
 	float		drop_yaw = 0.0f;
+	qboolean	hook_brake = false;         /* slow to the proof's standing
+	                                         * start before firing a rope */
 	int			sub_steps = 1, sub_msec = 0;
 
 	/* the duel terms, read once per frame and priced per candidate seed */
@@ -1206,6 +1220,98 @@ static void SG_BotThink(sg_bot_t *bot)
 	bot->mate_block_last = false;
 
 	/*
+	 * The wide-orbit detector. On arriving at a seed, check the ring: if
+	 * this seed was here within 30 seconds and the goal has not improved
+	 * since, the route is a cycle -- shelve the link about to be taken
+	 * from it. Loops wider than the watch's ball (the lmctf01 carrier's
+	 * 250-unit hook triangle) die here; honest revisits (a defender
+	 * patrolling, a fight's back-and-forth) pass because their goal
+	 * values move or their clocks expire.
+	 */
+	{
+		static int last_seed_seen[SG_MAXBOTS];
+		int me = (int)(bot - sg_bots);
+		int gv = (goal_field[bot->seed] < SG_FIELD_INF)
+		             ? goal_field[bot->seed] : 0x7ffffff;
+		int v;
+
+		/* every live entry keeps the best goal the bot has touched since
+		 * that visit -- THIS is what distinguishes a loop from a route
+		 * that passes a hallway twice. The first version compared the
+		 * seed's own field value across visits, which is CONSTANT, and
+		 * shelved every second visit on the map (campaign 2: steals
+		 * 7 -> 1, lmctf03 shelves 434). */
+		for (v = 0; v < SG_VISIT_RING; v++)
+			if (bot->visit_seed[v] >= 0 && gv < bot->visit_min[v])
+				bot->visit_min[v] = gv;
+
+		if (me >= 0 && me < SG_MAXBOTS && bot->seed != last_seed_seen[me])
+		{
+			last_seed_seen[me] = bot->seed;
+			/*
+			 * CARRIERS ONLY. Even with the min-since test, a fighter
+			 * repelled by live defense revisits without progress -- that
+			 * is resistance, not a bad link, and no signal here can tell
+			 * them apart (campaign 3: 4099 fires, 164 a game, routes
+			 * shredded map-wide). A carrier's loop loses the flag and its
+			 * fights are ones it fled; for the carrier the test is sound.
+			 */
+			for (v = 0; role == SG_ROLE_CARRY && v < SG_VISIT_RING; v++)
+				if (bot->visit_seed[v] == bot->seed &&
+				    level.time - bot->visit_time[v] < 30.0f &&
+				    level.time - bot->visit_time[v] > 3.0f &&
+				    bot->visit_min[v] >= bot->visit_goal[v] &&
+				    bestlink >= 0)
+				{
+					/* back where it was, and it never once got closer
+					 * in between: an orbit, whatever its diameter */
+					int b, oldest = 0;
+
+					for (b = 0; b < SG_BL_MAX; b++)
+						if (bot->bl_until[b] < bot->bl_until[oldest])
+							oldest = b;
+					bot->bl_link[oldest] = bestlink;
+					bot->bl_until[oldest] = level.time + 45.0f;
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("CYCLE %s seed=%d link=%d\n",
+						           e->client->pers.netname, bot->seed,
+						           bestlink);
+					break;
+				}
+			bot->visit_seed[bot->visit_head] = bot->seed;
+			bot->visit_goal[bot->visit_head] = gv;
+			bot->visit_min[bot->visit_head] = gv;
+			bot->visit_time[bot->visit_head] = level.time;
+			bot->visit_head = (bot->visit_head + 1) % SG_VISIT_RING;
+		}
+	}
+
+	/*
+	 * A carrier must NEVER be stranded by its own shelf: trapped with the
+	 * flag is the flag lost. Every link at a finite seed on the shelf and
+	 * nothing improving left? Wipe the shelf and retry the least-bad
+	 * option -- an orbit risked beats a guaranteed strand (mactf06 g3:
+	 * the carrier hung airborne on link=-1 at goal 6684 until the flag
+	 * timed out).
+	 */
+	if (role == SG_ROLE_CARRY && bestlink < 0 &&
+	    goal_field[bot->seed] < SG_FIELD_INF)
+	{
+		int b, any = 0;
+
+		for (b = 0; b < SG_BL_MAX; b++)
+			if (bot->bl_until[b] > level.time)
+				any++;
+		if (any)
+		{
+			memset(bot->bl_until, 0, sizeof(bot->bl_until));
+			if (gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("CLEARSHELF %s (carrying, stranded at %d)\n",
+				           e->client->pers.netname, bot->seed);
+		}
+	}
+
+	/*
 	 * A defender that has reached its post stands it. The stand is the
 	 * surface's minimum, so descent has nowhere left to go -- pushing
 	 * forwardmove into the pedestal just grinds the wall (Caco spent 66
@@ -1451,6 +1557,40 @@ static void SG_BotThink(sg_bot_t *bot)
 				/* a rope ride ENDS its commitment: wherever this landing
 				 * is, the next step is argued fresh from here */
 				bot->commit_link = -1;
+
+				/*
+				 * A ride that did not SERVE the field failed, and a
+				 * failed anchor gets shelved on the spot. Without this,
+				 * sibling anchors flap (each landing re-argues, picks
+				 * the other, neither converts) and the 4s same-link
+				 * watch never fires -- smap05's attackers rode ropes in
+				 * place for 180 seconds a game at the water's edge.
+				 */
+				if (bot->hook_link >= 0 &&
+				    bot->hook_link < sg_rune->hdr.num_links &&
+				    bot->seed >= 0 &&
+				    goal_field[bot->seed] < SG_FIELD_INF)
+				{
+					rune_link_t *hl = &sg_rune->links[bot->hook_link];
+
+					if (goal_field[hl->to] < SG_FIELD_INF &&
+					    goal_field[bot->seed] >
+					        goal_field[hl->to] + 300)
+					{
+						int b, oldest = 0;
+
+						for (b = 0; b < SG_BL_MAX; b++)
+							if (bot->bl_until[b] < bot->bl_until[oldest])
+								oldest = b;
+						bot->bl_link[oldest] = bot->hook_link;
+						bot->bl_until[oldest] = level.time + 60.0f;
+						if (gi.cvar("sg_debug", "0", 0)->value)
+							gi.dprintf("HOOKFAIL %s link=%d\n",
+							           e->client->pers.netname,
+							           bot->hook_link);
+					}
+				}
+				bot->hook_link = -1;
 			}
 			else
 			{
@@ -1484,20 +1624,58 @@ static void SG_BotThink(sg_bot_t *bot)
 			{
 				vec3_t ad;
 				float alen;
+				float hspd = sqrtf(e->velocity[0] * e->velocity[0] +
+				                   e->velocity[1] * e->velocity[1]);
 
-				VectorSubtract(l->anchor, e->s.origin, ad);
-				alen = VectorLength(ad);
-				if (alen > 1.0f)
+				vec3_t fsd;
+				float fsdist;
+
+				VectorSubtract(sg_rune->seeds[l->from].origin,
+				               e->s.origin, fsd);
+				fsd[2] = 0.0f;
+				fsdist = VectorLength(fsd);
+
+				/*
+				 * The proof fired from THE SEED, at rest (ProveHook
+				 * places the phantom on the seed origin and stands it
+				 * still). Both halves matter: the rope-line clearance
+				 * was traced from the seed's eye -- fired from 50 units
+				 * away the same ray clips different geometry and the
+				 * rope bites en route (smap05: 2552 attaches 150-650
+				 * from their proven anchors) -- and the swing arc is
+				 * entry-sensitive. Walk to the seed, brake, THEN fire:
+				 * the shot the proof rolled is the shot the body takes.
+				 */
+				/* the walk-to-seed gate tried here was an over-fit to
+				 * smap05: on lmctf03 it turned 95%-converting hooks into
+				 * abort loops (it7: 547 misses on the healthy map). The
+				 * brake and the eye aim stay; the pilgrimage goes. */
+				(void)fsdist;
+				if (hspd > 160.0f)
 				{
-					VectorCopy(l->anchor, bot->hook_anchor);
-					VectorCopy(sg_rune->seeds[l->to].origin, bot->hook_dest);
-					bot->hook_phase = 1;
-					/* flight + climb budget: gravity fights the pull on a
-					 * tall rope, so the real ascent runs well past the
-					 * naive rope/800 figure -- a 1.5s margin cut every
-					 * z=348 tower climb loose 176 short of its landing
-					 * (A/B match, Slip, four identical shortfalls) */
-					bot->hook_deadline = level.time + alen / 800.0f + 3.0f;
+					hook_brake = true;      /* fire next frame, slower */
+					VectorCopy(l->anchor, aim);
+				}
+				else
+				{
+					VectorSubtract(l->anchor, e->s.origin, ad);
+					alen = VectorLength(ad);
+					if (alen > 1.0f)
+					{
+						VectorCopy(l->anchor, bot->hook_anchor);
+						VectorCopy(sg_rune->seeds[l->to].origin,
+						           bot->hook_dest);
+						bot->hook_link = bestlink;
+						bot->hook_phase = 1;
+						/* flight + climb budget: gravity fights the pull
+						 * on a tall rope, so the real ascent runs well
+						 * past the naive rope/800 figure -- a 1.5s margin
+						 * cut every z=348 tower climb loose 176 short of
+						 * its landing (A/B match, Slip, four identical
+						 * shortfalls) */
+						bot->hook_deadline =
+						    level.time + alen / 800.0f + 3.0f;
+					}
 				}
 			}
 
@@ -1579,10 +1757,20 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * this overrides the navigation view for exactly one frame */
 		if (bot->hook_phase == 1)
 		{
-			vec3_t ad;
+			vec3_t ad, hook_eye;
 			float alen, ay, ap;
 
-			VectorSubtract(bot->hook_anchor, e->s.origin, ad);
+			/*
+			 * From the EYES, not the origin: the proof drew its rope line
+			 * from the phantom's eyes ("the rope line from the source's
+			 * eyes wins", sg_rune.c), and 22 units of vertical aim bias
+			 * against a wall-face anchor bites a DIFFERENT surface --
+			 * every smap05 ride was landing exactly 143 under its ledge
+			 * because the rope was attaching under the proven point.
+			 */
+			VectorCopy(e->s.origin, hook_eye);
+			hook_eye[2] += e->viewheight;
+			VectorSubtract(bot->hook_anchor, hook_eye, ad);
 			alen = VectorLength(ad);
 			ay = atan2f(ad[1], ad[0]) * 180.0f / M_PI;
 			ap = -asinf(ad[2] / (alen > 1.0f ? alen : 1.0f)) * 180.0f / M_PI;
@@ -1800,6 +1988,15 @@ static void SG_BotThink(sg_bot_t *bot)
 			}
 			else
 				bot->stuck_time = 0.0f;
+		}
+
+		/* braking for a rope: kill the run so the fire happens from the
+		 * standing start the proof used */
+		if (hook_brake)
+		{
+			cmd.forwardmove = 0;
+			cmd.sidemove = 0;
+			cmd.upmove = 0;
 		}
 
 		/* rotating door working its arc: hold ground (or yield the arc),
@@ -2101,6 +2298,19 @@ static void SG_BotThink(sg_bot_t *bot)
 			float rope;
 			qboolean arrived, was_pulling;
 
+			/*
+			 * NO attach-point verification, on evidence. Release
+			 * conditions track the DESTINATION, so a rope biting 50-150
+			 * off its proven anchor still flies a working ride -- lmctf03
+			 * converted 95% that way all along. Policing the anchor
+			 * (tried at 48, then 96) turned every imperfect rope into a
+			 * 10Hz fire-abort strobe: 2704 aborts, 9 landings, zero
+			 * kills. Rides that genuinely fail are caught where failure
+			 * is real -- the field-served check at landing, which
+			 * shelves the link (HOOKFAIL).
+			 */
+			{
+
 			VectorSubtract(bot->hook_anchor, e->s.origin, rd);
 			rope = VectorLength(rd);
 			/*
@@ -2123,6 +2333,7 @@ static void SG_BotThink(sg_bot_t *bot)
 				 * that never attached does not */
 				bot->hook_phase = was_pulling ? 3 : 0;
 				bot->hook_deadline = level.time + 1.0f;
+			}
 			}
 		}
 	}

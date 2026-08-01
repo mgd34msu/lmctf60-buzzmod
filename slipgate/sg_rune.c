@@ -203,13 +203,19 @@ static void Seed_Germinate(void)
 		e = &g_edicts[i];
 		if (!e->inuse || !e->classname)
 			continue;
-		/* things players stand at: spawns, items, flags */
+		/* things players stand at: spawns, items, flags -- and teleporter
+		 * pads and destinations, which SIT where the lattice never grows
+		 * (a pit at z=-444, a perch at +276 on lmctf03): without a
+		 * germinated seed there, the declared-link pass finds nothing
+		 * within reach and the map's one-way shortcuts never enter the
+		 * graph. The generator said so in every log; nobody listened. */
 		if (strncmp(e->classname, "info_player", 11) != 0 &&
 		    strncmp(e->classname, "item_", 5) != 0 &&
 		    strncmp(e->classname, "weapon_", 7) != 0 &&
 		    strncmp(e->classname, "ammo_", 5) != 0 &&
 		    strncmp(e->classname, "info_flag", 9) != 0 &&
-		    strncmp(e->classname, "info_position", 13) != 0)
+		    strncmp(e->classname, "info_position", 13) != 0 &&
+		    strncmp(e->classname, "misc_teleporter", 15) != 0)
 			continue;
 
 		if (Seed_Nearby(e->s.origin))
