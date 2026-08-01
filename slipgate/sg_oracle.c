@@ -146,4 +146,14 @@ void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin)
 	ph->pms.origin[1] = (short)(origin[1] * 8.0f);
 	ph->pms.origin[2] = (short)(origin[2] * 8.0f);
 	ph->pms.pm_type = PM_NORMAL;
+	/*
+	 * Weight. pmove applies pm->s.gravity, which the game sets per client
+	 * from sv_gravity every frame (p_client.c:2798) -- and a memset phantom
+	 * had zero. Every drop proof ever attempted stepped off its lip and
+	 * LEVITATED at source height until the budget died; jumps rose 270 and
+	 * never came back; only the hook proofs survived, because the rope
+	 * overwrites velocity wholesale. One uninitialized field, four failed
+	 * prover designs built on top of it.
+	 */
+	ph->pms.gravity = (short)sv_gravity->value;
 }

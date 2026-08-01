@@ -22,6 +22,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_combat.h"
 
 /*
  * The client lifecycle and the glue's edict helpers are declared where the
@@ -45,7 +46,17 @@ typedef struct sg_bot_s
 	int			seed;           /* seed we believe we are at/near */
 	float		stuck_time;     /* accumulated time without progress */
 	float		next_report;
+	float		next_cmdlog;
 	vec3_t		last_origin;
+
+	/* hook execution, two-phase: aim this frame (ClientThink turns the cmd
+	 * angles into v_angle), fire immediately after, since Weapon_Hook_Fire
+	 * launches along v_angle; then release before the p_weapon.c brake band */
+	int			hook_phase;     /* 0 none, 1 aimed+firing, 2 rope out,
+	                             * 3 released mid-air, steering to land */
+	vec3_t		hook_anchor;
+	vec3_t		hook_dest;      /* the link's destination seed origin */
+	float		hook_deadline;
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -170,6 +181,20 @@ static const sg_weights_t sg_weight_table[SG_ROLES] = {
 	{ 1.00f, { 0.35f, 0.30f, 0.20f, 0.15f, 0.20f, 0.40f }, 0.10f, 0.60f },  /* attack */
 	{ 1.00f, { 0.30f, 0.50f, 0.25f, 0.20f, 0.15f, 0.10f }, 0.40f, 0.80f },  /* defend */
 	{ 1.00f, { 0.10f, 0.45f, 0.20f, 0.50f, 0.10f, 0.05f }, 0.30f, 0.00f },  /* carry */
+	/*
+	 * recover: our flag is out there. The objective is the flag where belief
+	 * puts it, the shopping list is the defender's (armour near home, not
+	 * powerups across the map), and the thief's believed position outweighs
+	 * everything else a non-carrier can be doing -- intercept above 1.
+	 */
+	{ 1.00f, { 0.30f, 0.50f, 0.25f, 0.20f, 0.15f, 0.10f }, 0.00f, 1.20f },  /* recover */
+	/*
+	 * escort: the objective IS the carrier's field, so carrier_support is 0
+	 * (it would price the same field twice). Items stay modest so the escort
+	 * does not wander off the carrier's road for them; intercept keeps the
+	 * escort between the carrier and whoever is believed to be hunting.
+	 */
+	{ 1.00f, { 0.10f, 0.25f, 0.10f, 0.25f, 0.05f, 0.10f }, 0.00f, 0.80f },  /* escort */
 };
 
 /*
@@ -185,26 +210,87 @@ static float Detour_Value(int here, int cls, const int *goal_field,
 	int to_item = ifld[here];
 	int direct = goal_field[here];
 
-	if (to_item >= SG_FIELD_INF || direct >= SG_FIELD_INF)
+	if (direct >= SG_FIELD_INF)
 		return 0.0f;
+
 	/*
-	 * item_to_goal is unknowable per-item once flooded by class; the class
-	 * field gives cost to the NEAREST item, and the triangle detour is
-	 * approximated by to_item alone against scale. Honest limitation,
-	 * recorded: per-item fields would make this exact at more memory.
+	 * Where per-item fields exist (powerups, runes), the triangle is exact.
+	 * per_item[cls][k] was flooded FROM item k, so it reads as cost from
+	 * anywhere TO that item; the far leg is the goal field sampled at the
+	 * item's own seed. The item that costs the least extra road wins -- not
+	 * the nearest one, which is what a class field would have answered.
+	 *
+	 *     detour = cost_to_item + item_to_goal - direct
+	 *     value  = worth / (1 + max(0, detour) / scale)
 	 */
+	if (sg_fields.per_item_count[cls] > 0)
+	{
+		float best = 0.0f;
+		int k;
+
+		for (k = 0; k < sg_fields.per_item_count[cls]; k++)
+		{
+			const int *kfld = sg_fields.per_item[cls][k];
+			int kseed = sg_fields.per_item_seed[cls][k];
+			int cost_to, item_to_goal, detour;
+			float v;
+
+			if (!kfld || kseed < 0)
+				continue;
+			cost_to = kfld[here];
+			item_to_goal = goal_field[kseed];
+			if (cost_to >= SG_FIELD_INF || item_to_goal >= SG_FIELD_INF)
+				continue;
+
+			detour = cost_to + item_to_goal - direct;
+			if (detour < 0)
+				detour = 0;      /* an item on the road is free, never a bonus */
+			v = worth / (1.0f + (float)detour / 1500.0f);
+			if (v > best)
+				best = v;
+		}
+		return best;
+	}
+
+	/*
+	 * The other classes are flooded per class only: item_to_goal is
+	 * unknowable once many interchangeable items share one field, which gives
+	 * cost to the NEAREST of them, so the triangle is approximated by to_item
+	 * alone against scale. Honest limitation, recorded -- it holds for the
+	 * classes whose members are interchangeable (a health box is a health
+	 * box), which is why identity-bearing classes got per-item fields.
+	 */
+	if (to_item >= SG_FIELD_INF)
+		return 0.0f;
 	return worth / (1.0f + (float)to_item / 1500.0f);
 }
 
 /*
- * Role assignment: the owner's quota. Two in five defend (nearest-rounded),
- * carrier counts toward defence, a side of one attacks. Assigned by slot
- * order among SLIPGATE bots of the team, stable frame to frame.
+ * Role assignment: the owner's quota, then the two situational roles.
+ *
+ * Two in five defend (nearest-rounded), carrier counts toward defence, a side
+ * of one attacks. Rank is slot order among SLIPGATE bots of the team, so the
+ * assignment is stable frame to frame.
+ *
+ * Precedence, in order:
+ *
+ *   CARRY     I have the flag. Nothing else applies.
+ *   DEFEND    my rank falls inside the quota -- the post is kept whatever
+ *             else is happening; the situational roles are drawn from the
+ *             attacking share only, which is what "attackers convert" means.
+ *   RECOVER   our own flag is astray. EVERY attacker converts: getting it
+ *             back outranks escorting, so no escort is named this frame.
+ *   ESCORT    we have a live carrier who is not me: exactly one attacker,
+ *             the lowest-ranked one that is not the carrier itself.
+ *   ATTACK    everyone else.
  */
 static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 {
 	int team = bot->ent->client->ctf.teamnum;
 	int size = 0, defenders_wanted, my_rank = 0, i;
+	int my_client = (int)(bot->ent - g_edicts) - 1;
+	int carrier_rank = -1;
+	sg_belief_carrier_t *own = &sg_caco_team_belief.carrier[team - 1];
 
 	if (carrying)
 		return SG_ROLE_CARRY;
@@ -217,6 +303,10 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			continue;
 		if (&sg_bots[i] == bot)
 			my_rank = size;
+		/* where in the ranking our own carrier sits, if it is one of ours */
+		if (own->client >= 0 &&
+		    (int)(sg_bots[i].ent - g_edicts) - 1 == own->client)
+			carrier_rank = size;
 		size++;
 	}
 
@@ -225,10 +315,39 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		defenders_wanted = 0;
 
 	/* a live carrier on our side counts toward the defensive share */
-	if (sg_caco_team_belief.carrier[team - 1].client >= 0)
+	if (own->client >= 0)
 		defenders_wanted--;
 
-	return (my_rank < defenders_wanted) ? SG_ROLE_DEFEND : SG_ROLE_ATTACK;
+	if (my_rank < defenders_wanted)
+		return SG_ROLE_DEFEND;
+
+	/*
+	 * Our flag is astray by common knowledge (the HUD tells everyone). The
+	 * attacking share turns around: the goal becomes our flag where belief
+	 * puts it, and the believed thief is priced heavily by the recover row.
+	 */
+	if (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY)
+		return SG_ROLE_RECOVER;
+
+	/*
+	 * One escort for a live carrier of ours. The support field has to have
+	 * been flooded at least once this level for the role to mean anything --
+	 * before that it is infinite everywhere and an escort would have no
+	 * surface to descend, so those bots keep attacking.
+	 */
+	if (own->client >= 0 && own->client != my_client &&
+	    sg_fields.our_carrier_valid[team - 1])
+	{
+		int escort_rank = (defenders_wanted > 0) ? defenders_wanted : 0;
+
+		/* the carrier plays its own role; the escort is the next one down */
+		if (escort_rank == carrier_rank)
+			escort_rank++;
+		if (my_rank == escort_rank)
+			return SG_ROLE_ESCORT;
+	}
+
+	return SG_ROLE_ATTACK;
 }
 
 /*
@@ -262,6 +381,151 @@ static float Surface_At(int seed, const sg_weights_t *w,
 	return v;
 }
 
+/*
+ * ------------------------------------------------------------ the policy
+ *
+ * Movement, closed-form, from the engine rather than from feel. This is the
+ * legacy body's proven policy (bl_main.c:92-175, BotAirStrafe and its
+ * derivation) moved into the SLIPGATE body unchanged in substance; only the
+ * inputs are re-expressed in SLIPGATE terms -- the route direction is the
+ * heading the surface descent chose, not a botlib bi->dir.
+ *
+ * pm_maxspeed caps wishspeed, not velocity. PM_Accelerate adds
+ *
+ *     accelspeed = accel * frametime * wishspeed
+ *
+ * along wishdir for as long as addspeed = wishspeed - (velocity . wishdir)
+ * stays positive, so an input held off the direction of travel keeps that
+ * term alive and the speed climbing. The smallest angle that still leaves
+ * addspeed at the cap is
+ *
+ *     cos(theta) = (wishspeed - accelspeed) / speed
+ *
+ * On the ground accel is 10 and the limit is friction, speed * 6 * frametime,
+ * which scales with speed while the gain at the best angle does not: they meet
+ * near 370. Driving forwardmove straight down the heading converges on 300 and
+ * stops there. In the air accel is 1 -- a tenth the rate, but no friction and
+ * therefore no ceiling.
+ *
+ * Which way to lean is not a coin flip: leaning toward the side the route
+ * turns accelerates and steers at once, so the velocity is pulled onto the
+ * path instead of away from it. The view is not involved -- the bot names the
+ * direction and decomposes it against the view it is already holding, so none
+ * of this costs any aim.
+ */
+static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
+                      vec3_t vel, vec3_t dir,
+                      float speed2d, float frametime, float accel)
+{
+	vec3_t	vdir, d;
+	float	wishspeed = 300.0f;     /* pm_maxspeed clamps wishspeed to this */
+	float	accelspeed, c, th, sn, cs, cross;
+
+	if (speed2d < 1.0f)
+		return;
+
+	accelspeed = accel * frametime * wishspeed;
+
+	/*
+	 * Below wishspeed - accelspeed there is no angle to find: addspeed is
+	 * already saturated pointing straight down the route, so the input that
+	 * accelerates hardest is also the one that steers, and leaning off it
+	 * would only trade heading for nothing. Leave the caller's plain forward
+	 * alone -- this is the whole of the low-speed case, and it is why the
+	 * strafe is not a mode the bot enters and leaves.
+	 */
+	if (speed2d <= wishspeed - accelspeed)
+		return;
+
+	c = (wishspeed - accelspeed) / speed2d;
+	if (c > 1.0f) c = 1.0f;
+	if (c < -1.0f) c = -1.0f;
+	th = acosf(c);
+
+	vdir[0] = vel[0] / speed2d;
+	vdir[1] = vel[1] / speed2d;
+	vdir[2] = 0.0f;
+
+	/* lean the way the route turns, so the gain also steers */
+	cross = vdir[0] * dir[1] - vdir[1] * dir[0];
+	if (cross < 0.0f)
+		th = -th;
+
+	sn = sinf(th);
+	cs = cosf(th);
+	d[0] = vdir[0] * cs - vdir[1] * sn;
+	d[1] = vdir[0] * sn + vdir[1] * cs;
+	d[2] = 0.0f;
+
+	/*
+	 * Decomposed against the basis pmove will actually build (pitch/3, see
+	 * the caller), so the engine reconstructs the direction that was asked
+	 * for. 400 on both axes before the clamp: wishvel is scaled down to
+	 * pm_maxspeed anyway, and what matters is the direction.
+	 */
+	cmd->forwardmove = (short)(DotProduct(fwd, d) * 400.0f);
+	cmd->sidemove = (short)(DotProduct(right, d) * 400.0f);
+}
+
+/*
+ * One physics step of movement, decided from where the bot actually is.
+ *
+ * The caller has already put the plain command in place -- forward down the
+ * view, no strafe -- so every early return here leaves honest, unaltered
+ * running. Three things can be added to it:
+ *
+ *   ground strafe   accel 10, the strong half of this engine
+ *   air strafe      accel 1, the same derivation, only A changes
+ *   landing jump    Pmove runs PM_CheckJump before PM_Friction, and a jump
+ *                   clears groundentity -- which is the condition PM_Friction
+ *                   tests before applying any ground friction at all. A jump
+ *                   issued on the step the bot touches down therefore pays no
+ *                   friction; one issued a step late pays speed * 6 * ft.
+ *                   That single step is the whole of bunny hopping here.
+ */
+static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
+                          vec3_t right, vec3_t dir,
+                          qboolean open_ahead, qboolean run_link,
+                          float frametime)
+{
+	float	sp2, sp, toward;
+	int		pmf = e->client->ps.pmove.pm_flags;
+
+	if (e->waterlevel > 1 || (pmf & PMF_DUCKED))
+		return;
+
+	sp2 = e->velocity[0] * e->velocity[0] + e->velocity[1] * e->velocity[1];
+	if (sp2 < 200.0f * 200.0f)
+		return;                 /* below this, straight ahead is the fastest
+		                         * thing there is: addspeed is wide open */
+	sp = sqrtf(sp2);
+
+	/*
+	 * The strafe leans off the direction of TRAVEL, so travel has to be
+	 * roughly where the route wants to go before leaning off it means
+	 * anything. A bot that needs to turn ninety degrees should turn, not
+	 * harvest acceleration into the wall it is heading for.
+	 */
+	toward = (e->velocity[0] * dir[0] + e->velocity[1] * dir[1]) / sp;
+	if (toward < 0.5f)
+		return;
+
+	if (e->groundentity)
+	{
+		/*
+		 * Tap, never hold: PM_CheckJump sets PMF_JUMP_HELD when it fires and
+		 * refuses every jump after it until a command arrives with upmove
+		 * under 10. The caller releases after every step.
+		 */
+		if (run_link && open_ahead && sp > 320.0f && !(pmf & PMF_TIME_LAND))
+			cmd->upmove = 400;
+
+		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 10.0f);
+	}
+	else
+		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
+}
+
 static void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -275,6 +539,16 @@ static void SG_BotThink(sg_bot_t *bot)
 	float yaw;
 	qboolean carrying;
 	static int intercept_field[SG_MAX_SEEDS];
+
+	/* movement policy state for this frame */
+	vec3_t		basis_fwd, basis_right;     /* the basis pmove will build */
+	vec3_t		move_dir;                   /* heading the route wants */
+	float		view_yaw = 0.0f, view_pitch = 0.0f;
+	qboolean	have_move = false;          /* a direction to travel at all */
+	qboolean	open_ahead = false;         /* room in front to hop into */
+	qboolean	run_link = false;           /* chosen link is ground running */
+	qboolean	precision = false;          /* final approach: no tricks */
+	int			sub_steps = 1, sub_msec = 0;
 
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 100;
@@ -308,6 +582,11 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * The role's principal field:
 	 *   carrier  -> own stand (the capture point)
 	 *   defender -> own stand's surroundings (the home field IS the post)
+	 *   recover  -> OUR flag where belief puts it: the -now field for our own
+	 *               flag, which floods from the believed position when it is
+	 *               astray and from home otherwise
+	 *   escort   -> our carrier's believed position (the support field, used
+	 *               here as the objective rather than as a side term)
 	 *   attacker -> the enemy flag WHERE BELIEF PUTS IT (home stand, or the
 	 *               spot it was last seen lying, via the -now field)
 	 * When our flag is astray and its taker was seen, the intercept field
@@ -316,6 +595,11 @@ static void SG_BotThink(sg_bot_t *bot)
 	if (role == SG_ROLE_CARRY || role == SG_ROLE_DEFEND)
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
 		                                    : sg_fields.to_blue_flag;
+	else if (role == SG_ROLE_RECOVER)
+		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag_now
+		                                    : sg_fields.to_blue_flag_now;
+	else if (role == SG_ROLE_ESCORT)
+		goal_field = sg_fields.our_carrier[team - 1];
 	else
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag_now
 		                                    : sg_fields.to_red_flag_now;
@@ -348,6 +632,19 @@ static void SG_BotThink(sg_bot_t *bot)
 		return;
 	}
 
+	/*
+	 * The precision case: no tricks on the final approach.
+	 *
+	 * A flag is a thirty-unit box and a hop chain covers eight hundred units a
+	 * second; the legacy bots arrived with a second of route left and sailed
+	 * straight over the top, lap after lap. The legacy adapter suppressed the
+	 * tricks within about 700 units of a must-touch goal (bl_main.c:451-464).
+	 * The SLIPGATE field is denominated in real milliseconds of traversal, so
+	 * the same idea is stated in time: inside a second and a half of the
+	 * objective, run plainly and be able to stop. Speed serves the objective.
+	 */
+	precision = (goal_field[bot->seed] < 1500);
+
 	/* descend the surface: my seed vs every seed one proven link away */
 	bestval = Surface_At(bot->seed, w, goal_field, support, intercept);
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
@@ -376,15 +673,101 @@ static void SG_BotThink(sg_bot_t *bot)
 		qboolean have_aim = false;
 		qboolean jump_now = false;
 
-		if (bestlink >= 0)
+		/*
+		 * Just let go of a rope: the prover steered forwardmove 400 at the
+		 * destination until the phantom grounded (sg_rune.c:529-534), and
+		 * the link was only recorded because that landing worked. The body
+		 * flies the same approach instead of falling back down the wall it
+		 * just climbed.
+		 */
+		if (bot->hook_phase == 3)
+		{
+			if (e->groundentity || level.time > bot->hook_deadline)
+			{
+				if (e->groundentity && gi.cvar("sg_debug", "0", 0)->value)
+				{
+					vec3_t ld;
+
+					VectorSubtract(bot->hook_dest, e->s.origin, ld);
+					gi.dprintf("HOOKLAND %s dist=%.0f dz=%.0f\n",
+					           e->client->pers.netname,
+					           sqrtf(ld[0] * ld[0] + ld[1] * ld[1]), ld[2]);
+				}
+				bot->hook_phase = 0;
+			}
+			else
+			{
+				VectorCopy(bot->hook_dest, aim);
+				have_aim = true;
+			}
+		}
+
+		if (!have_aim && bestlink >= 0)
 		{
 			rune_link_t *l = &sg_rune->links[bestlink];
 
 			VectorCopy(sg_rune->seeds[l->to].origin, aim);
 			have_aim = true;
-			if ((l->action == RL_JUMP || l->action == RL_HOOK) &&
-			    e->groundentity)
-				jump_now = (l->action == RL_JUMP);
+			if (l->action == RL_JUMP && e->groundentity)
+				jump_now = true;
+			/* the landing hop belongs on running ground, not on a link
+			 * whose traversal is itself a jump, a drop, a rope or a swim */
+			if (l->action == RL_RUN)
+				run_link = true;
+
+			/*
+			 * A hook link executes the way the rune proved it: aim at the
+			 * STORED anchor, fire, ride the flat-800 pull, release near
+			 * the destination or inside the brake band (the p_weapon.c
+			 * ladder starts at 120), then steer the fall onto the landing.
+			 * The view is the aim: LMCTF's Weapon_Hook_Fire fires along
+			 * v_angle.
+			 */
+			if (l->action == RL_HOOK && bot->hook_phase == 0)
+			{
+				vec3_t ad;
+				float alen;
+
+				VectorSubtract(l->anchor, e->s.origin, ad);
+				alen = VectorLength(ad);
+				if (alen > 1.0f)
+				{
+					VectorCopy(l->anchor, bot->hook_anchor);
+					VectorCopy(sg_rune->seeds[l->to].origin, bot->hook_dest);
+					bot->hook_phase = 1;
+					bot->hook_deadline = level.time + alen / 800.0f + 1.5f;
+				}
+			}
+
+			/* a drop link goes via its stored lip, not the far endpoint */
+			if (l->action == RL_DROP)
+			{
+				vec3_t lipd;
+
+				VectorSubtract(l->anchor, e->s.origin, lipd);
+				lipd[2] = 0.0f;
+				if (VectorLength(lipd) > 24.0f)
+					VectorCopy(l->anchor, aim);
+			}
+		}
+
+		/* while aiming to fire, the cmd angles ARE the anchor bearing --
+		 * this overrides the navigation view for exactly one frame */
+		if (bot->hook_phase == 1)
+		{
+			vec3_t ad;
+			float alen, ay, ap;
+
+			VectorSubtract(bot->hook_anchor, e->s.origin, ad);
+			alen = VectorLength(ad);
+			ay = atan2f(ad[1], ad[0]) * 180.0f / M_PI;
+			ap = -asinf(ad[2] / (alen > 1.0f ? alen : 1.0f)) * 180.0f / M_PI;
+			cmd.angles[YAW] = ANGLE2SHORT(ay)
+			                - e->client->ps.pmove.delta_angles[YAW];
+			cmd.angles[PITCH] = ANGLE2SHORT(ap)
+			                - e->client->ps.pmove.delta_angles[PITCH];
+			view_yaw = ay;
+			view_pitch = ap;
 		}
 		else if (bot->seed >= 0)
 		{
@@ -492,6 +875,26 @@ static void SG_BotThink(sg_bot_t *bot)
 			if (jump_now)
 				cmd.upmove = 400;
 
+			view_yaw = chosen_yaw;
+			view_pitch = 0.0f;
+			move_dir[0] = cosf(chosen_yaw * (float)M_PI / 180.0f);
+			move_dir[1] = sinf(chosen_yaw * (float)M_PI / 180.0f);
+			move_dir[2] = 0.0f;
+			have_move = true;
+
+			/*
+			 * Room to hop into. A landing jump commits the bot to whatever
+			 * speed and heading it left with for the whole arc, so it is only
+			 * worth taking where the way ahead is actually clear -- the same
+			 * player-box trace the feelers use, run further out along the
+			 * heading that was chosen.
+			 */
+			VectorMA(e->s.origin, 160.0f, move_dir, probe);
+			probe[2] += 8.0f;
+			tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
+			              e, MASK_PLAYERSOLID);
+			open_ahead = (tr.fraction >= 1.0f);
+
 			VectorSubtract(e->s.origin, bot->last_origin, d);
 			if (VectorLength(d) < 4.0f)
 			{
@@ -504,7 +907,190 @@ static void SG_BotThink(sg_bot_t *bot)
 		}
 	}
 
-	ClientThink(e, &cmd);
+	/*
+	 * The basis the engine will actually use, not a convenient one.
+	 *
+	 * Pmove builds it before every land move (pmove.c, PM_AirMove; quoted at
+	 * bl_main.c:347-370): the view angles with PITCH divided by three, and
+	 * then wishvel[i] = forward[i]*fmove + right[i]*smove for i in {0,1}. So
+	 * forward's horizontal length is scaled by cos(pitch/3) while right stays
+	 * fully horizontal. Solving against a pitch-zero basis makes the engine
+	 * reconstruct a different direction than the one asked for -- shorter, and
+	 * skewed toward the strafe axis, which lowers wishspeed and with it the
+	 * acceleration. Here the navigation view is pitch zero, so the division
+	 * changes nothing today; it is written the engine's way so that it stays
+	 * correct the moment the body pitches.
+	 */
+	{
+		vec3_t basis;
+
+		basis[PITCH] = view_pitch;
+		if (basis[PITCH] > 180.0f)
+			basis[PITCH] -= 360.0f;
+		basis[PITCH] /= 3.0f;
+		basis[YAW] = view_yaw;
+		basis[ROLL] = 0.0f;
+		AngleVectors(basis, basis_fwd, basis_right, NULL);
+	}
+
+	/*
+	 * Execute the frame in physics steps, and decide the movement again on
+	 * every one of them.
+	 *
+	 * The angle that keeps PM_Accelerate paying depends on the current
+	 * velocity, and the velocity is exactly what the previous step just
+	 * changed: a command computed at 300 is the wrong command by the time the
+	 * bot is doing 500. The landing jump wants the very step the bot touches
+	 * down, and a bot that only gets one chance per tenth of a second spends
+	 * far longer on the floor than a player whose client sends a dozen
+	 * commands in the same window. A real client does this continuously; this
+	 * is the bot catching up to that, not overtaking it.
+	 *
+	 * The clock is not touched. msec is the frame's real time, and the steps
+	 * are that integer split with the remainder spread over the first few, so
+	 * they sum to exactly what passed -- eight steps of 13ms for a 100ms frame
+	 * would be 104ms of simulation for 100ms of play, which is free speed
+	 * rather than finer movement. Finer decisions, never a longer clock.
+	 */
+	{
+		int		total = cmd.msec;
+		int		sub = (int)gi.cvar("sg_subframes", "8", 0)->value;
+		int		base, rem, step;
+		short	plain_forward = cmd.forwardmove;
+		short	nav_jump = cmd.upmove;
+
+		if (sub < 1)
+			sub = 1;
+		if (sub > total)
+			sub = total;            /* a step cannot be shorter than 1ms */
+		base = total / sub;
+		rem = total % sub;
+		sub_steps = sub;
+
+		/*
+		 * Combat rides the frame's command: view and trigger only, movement
+		 * untouched. It writes the base cmd once and every subframe inherits
+		 * it. Ordering rule from sg_combat.h: at hook_phase 1 the cmd angles
+		 * ARE the anchor bearing (the rope fires along v_angle), so combat
+		 * must not steal the view that frame.
+		 */
+		if (bot->hook_phase == 0)
+		{
+			qboolean engaged = false;
+
+			SG_CombatFrame(e, &cmd, &engaged);
+		}
+
+		for (step = 0; step < sub; step++)
+		{
+			cmd.msec = (byte)(base + (step < rem ? 1 : 0));
+			if (!cmd.msec)
+				continue;
+			sub_msec = cmd.msec;
+
+			/*
+			 * Every step starts from the plain command -- forward down the
+			 * view, no strafe -- so anything the policy declines to do leaves
+			 * ordinary running behind. The navigation jump (a jump LINK, or
+			 * the stuck hop) belongs to the frame, not to every step, so it
+			 * goes in once and is released like any other.
+			 */
+			cmd.forwardmove = plain_forward;
+			cmd.sidemove = 0;
+			if (step == 0)
+				cmd.upmove = nav_jump;
+
+			/*
+			 * No tricks while a rope is out -- the hook SETS velocity, so
+			 * there is nothing for an off-axis input to accumulate -- and
+			 * none on the final approach, where being able to stop on the
+			 * flag is worth more than the speed.
+			 */
+			if (have_move && !precision && bot->hook_phase == 0)
+				SG_MovePolicy(e, &cmd, basis_fwd, basis_right, move_dir,
+				              open_ahead, run_link,
+				              (float)cmd.msec / 1000.0f);
+
+			ClientThink(e, &cmd);
+
+			/*
+			 * Let go of the jump. PM_CheckJump clears PMF_JUMP_HELD only when
+			 * a command arrives with upmove under 10 and refuses to jump at
+			 * all while it is set, so holding the key buys nothing and costs
+			 * the next hop. The release lands inside the same tenth of a
+			 * second as the press.
+			 */
+			if (cmd.upmove >= 10)
+				cmd.upmove = 0;
+		}
+		cmd.msec = (byte)sub_msec;
+	}
+
+	/*
+	 * Hook lifecycle, after the think so v_angle reflects this frame's
+	 * aim. Fire with the game's own Cmd_Hook_f -- the same entry the
+	 * console command uses -- and release before the rope enters the
+	 * p_weapon.c brake band (ladder starts at 120; 200 leaves a frame of
+	 * margin at pull speed). A rope that never attached by its deadline
+	 * is cut loose.
+	 */
+	{
+		void Cmd_Hook_f(edict_t *ent);
+		void Cmd_Unhook_f(edict_t *ent);
+
+		if (bot->hook_phase == 1)
+		{
+			Cmd_Hook_f(e);
+			bot->hook_phase = 2;
+			if (gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("HOOKFIRE %s at (%.0f %.0f %.0f)\n",
+				           e->client->pers.netname, bot->hook_anchor[0],
+				           bot->hook_anchor[1], bot->hook_anchor[2]);
+		}
+		else if (bot->hook_phase == 2)
+		{
+			vec3_t rd, td;
+			float rope;
+			qboolean arrived, was_pulling;
+
+			VectorSubtract(bot->hook_anchor, e->s.origin, rd);
+			rope = VectorLength(rd);
+			/*
+			 * Release the way the prover released (sg_rune.c:494-502):
+			 * horizontally near the DESTINATION with the height nearly
+			 * made, or rope inside the brake band. The old rope<200 cut
+			 * every climb loose below its lip -- the bot slid back down
+			 * and re-fired the same anchor forever.
+			 */
+			VectorSubtract(bot->hook_dest, e->s.origin, td);
+			arrived = (td[0] * td[0] + td[1] * td[1] < 80.0f * 80.0f &&
+			           td[2] > -96.0f && td[2] < 96.0f);
+			if (arrived || rope < 130.0f ||
+			    level.time > bot->hook_deadline || e->client->hookstate == 0)
+			{
+				was_pulling = (e->client->hookstate != 0);
+				if (was_pulling)
+					Cmd_Unhook_f(e);
+				/* a cut live rope hands off to the landing steer; a rope
+				 * that never attached does not */
+				bot->hook_phase = was_pulling ? 3 : 0;
+				bot->hook_deadline = level.time + 1.0f;
+			}
+		}
+	}
+
+	/* the literal emission record: what this frame's usercmd contained */
+	if (gi.cvar("sg_debug", "0", 0)->value >= 2 || 
+	    (gi.cvar("sg_debug", "0", 0)->value && level.time >= bot->next_cmdlog))
+	{
+		bot->next_cmdlog = level.time + 1.0f;
+		/* the last step of the frame: fwd/side/up are that step's command,
+		 * and msec x steps is how the frame's real time was spent */
+		gi.dprintf("CMD %s: fwd=%d side=%d up=%d btn=%d yaw=%d pitch=%d msec=%d x%d\n",
+		           e->client->pers.netname, cmd.forwardmove, cmd.sidemove,
+		           cmd.upmove, cmd.buttons, cmd.angles[YAW],
+		           cmd.angles[PITCH], cmd.msec, sub_steps);
+	}
 
 	/* every few seconds, say where this bot is and what it wants */
 	if (gi.cvar("sg_debug", "0", 0)->value && level.time >= bot->next_report)

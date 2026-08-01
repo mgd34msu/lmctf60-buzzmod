@@ -2647,7 +2647,7 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
 {
     q2_botclient_t *bc = &q2clients[client];
     aas_entityinfo_t entinfo;
-    vec3_t bestorigin, dir, aim_angles;
+    vec3_t bestorigin, traceorigin, dir, aim_angles;
     bsp_trace_t trace;
     float dist, accuracy;
     weaponinfo_t wi;
@@ -2729,6 +2729,14 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
         }
     }
 
+    /* Unscattered aim point: bestorigin so far reflects target selection
+     * (enemy origin, leading prediction, splash-ground targeting) but not
+     * yet the accuracy error applied below.  Save it for the fire/no-fire
+     * veto trace further down -- a bot should decide "I have a shot" from
+     * where the enemy actually is, not from where its own aim error lands,
+     * or aim scatter alone can veto shots whose true line was clear. */
+    VectorCopy(bestorigin, traceorigin);
+
     /* Apply accuracy scatter (Q3 ai_dmq3.c:3500) */
     bestorigin[0] += 20.0f * ((float)(rand() & 0x7FFF) / 0x7FFF * 2.0f - 1.0f) * (1.0f - accuracy);
     bestorigin[1] += 20.0f * ((float)(rand() & 0x7FFF) / 0x7FFF * 2.0f - 1.0f) * (1.0f - accuracy);
@@ -2776,8 +2784,13 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
     }
 
     /* Pre-fire LOS check and Q3-style splash damage avoidance.
-     * Mirrors Q3 ai_dmq3.c BotCheckAttack lines 3629-3667. */
-    trace = q2import.Trace(bot_eye, NULL, NULL, bestorigin,
+     * Mirrors Q3 ai_dmq3.c BotCheckAttack lines 3629-3667.
+     * Traces to traceorigin (pre-scatter aim point) rather than bestorigin
+     * (post-scatter): the veto decision is "is the line to the target
+     * clear", and the target is the enemy, not wherever this bot's aim
+     * error happened to jitter to.  bestorigin (scattered) is still used
+     * for EA_View above, so the shot itself keeps its inaccuracy. */
+    trace = q2import.Trace(bot_eye, NULL, NULL, traceorigin,
                            client + 1, 1 /* CONTENTS_SOLID */);
     if (trace.fraction < 1.0f) {
         weaponinfo_t wi;
@@ -2787,7 +2800,7 @@ static void Q2BotAimAndFire(int client, int enemy, vec3_t bot_eye)
              * Q3 formula: self_damage = (damage - 0.5 * impact_dist) * 0.5 */
             vec3_t diff;
             float aim_dist, impact_dist, points;
-            VectorSubtract(bestorigin, bot_eye, diff);
+            VectorSubtract(traceorigin, bot_eye, diff);
             aim_dist = VectorLength(diff);
             impact_dist = aim_dist * trace.fraction;
             if (impact_dist < wi.proj.radius) {

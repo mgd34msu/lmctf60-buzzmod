@@ -1,0 +1,16 @@
+bspc is built from an external tree (currently
+~/Downloads/q3a_bot_backport_for_q2-main/bspc/); this repo carries only the
+config header and the lmctf.cfg values. The rs_maxfallheight field added to
+aas_cfg.h and lmctf.cfg needs one parser row in that external tree's
+aas_cfg.c (it is applied there today at line 83, and dies with that tree) or
+the cfg value is silently ignored. Apply before recompiling any .aas:
+
+--- a/bspc/aas_cfg.c
++++ b/bspc/aas_cfg.c
+@@ -81,6 +81,7 @@
+ 	{"rs_falldamage5", CFG_OFS(rs_falldamage5), FT_FLOAT},
+ 	{"rs_falldamage10", CFG_OFS(rs_falldamage10), FT_FLOAT},
++	{"rs_maxfallheight", CFG_OFS(rs_maxfallheight), FT_FLOAT},
+ 	{"rs_maxjumpfallheight", CFG_OFS(rs_maxjumpfallheight), FT_FLOAT},
+ 	{NULL, 0, 0, 0}
+ };

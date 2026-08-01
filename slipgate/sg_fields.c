@@ -112,7 +112,7 @@ static unsigned Class_Signature(const fieldclass_t *fc)
 	for (i = 0; i < globals.num_edicts; i++)
 	{
 		e = &g_edicts[i];
-		if (!e->inuse || !e->classname || e->solid == SOLID_NOT)
+		if (!e->inuse || !e->classname || !Caco_ItemBelievedUp(e))
 			continue;               /* taken items are SOLID_NOT while waiting */
 		if (!Class_Match(fc, e->classname))
 			continue;
@@ -121,26 +121,60 @@ static unsigned Class_Signature(const fieldclass_t *fc)
 	return sig;
 }
 
+/*
+ * Which classes get a field per item as well as a field per class. Powerups
+ * and runes: a quad is not an invulnerability and a haste rune is not a
+ * vampire rune, so the surface has to be able to price a named one, and there
+ * are only a handful of each on any map.
+ */
+static qboolean Class_PerItem(int cls)
+{
+	return (cls == SG_FC_POWERUP || cls == SG_FC_RUNE);
+}
+
 static void Class_Build(rune_t *r, int cls)
 {
-	int sources[256], costs[256], n = 0;
+	int sources[256] = { 0 }, costs[256] = { 0 }, n = 0;
 	edict_t *e;
 	int i;
 
 	for (i = 0; i < globals.num_edicts && n < 256; i++)
 	{
 		e = &g_edicts[i];
-		if (!e->inuse || !e->classname || e->solid == SOLID_NOT)
+		if (!e->inuse || !e->classname || !Caco_ItemBelievedUp(e))
 			continue;
 		if (!Class_Match(&field_classes[cls], e->classname))
 			continue;
-		sources[n] = Rune_NearestSeed(r, e->s.origin);
+		sources[n] = Caco_ItemBeliefSeed(r, e);
 		costs[n] = 0;
 		if (sources[n] >= 0)
 			n++;
 	}
 	Field_Flood(r, sg_fields.item[cls], sources, costs, n);
 	sg_fields.item_sig[cls] = Class_Signature(&field_classes[cls]);
+
+	/*
+	 * The same live entities, one field each, flooded FROM the item -- so the
+	 * field reads as cost from anywhere TO that item, and the far leg of the
+	 * detour triangle is a lookup of the goal field at the item's own seed.
+	 * The buffers are allocated once at setup; this only refloods them.
+	 */
+	if (!Class_PerItem(cls))
+	{
+		sg_fields.per_item_count[cls] = 0;
+		return;
+	}
+	if (n > SG_MAX_PER_ITEM)
+		n = SG_MAX_PER_ITEM;
+	for (i = 0; i < n; i++)
+	{
+		sg_fields.per_item_seed[cls][i] = sources[i];
+		if (sg_fields.per_item[cls][i])
+			Field_FromOne(r, sg_fields.per_item[cls][i], sources[i]);
+	}
+	for (i = n; i < SG_MAX_PER_ITEM; i++)
+		sg_fields.per_item_seed[cls][i] = -1;
+	sg_fields.per_item_count[cls] = n;
 }
 
 qboolean Fields_Setup(rune_t *r)
@@ -184,14 +218,28 @@ qboolean Fields_Setup(rune_t *r)
 	memcpy(sg_fields.to_blue_flag_now, sg_fields.to_blue_flag,
 	       sizeof(int) * r->hdr.num_seeds);
 
+	/*
+	 * Every pointer in sg_fields was TAG_LEVEL and is dangling by now, so all
+	 * of them are (re)allocated here rather than lazily -- a "if (!ptr)" test
+	 * would see the previous level's freed address and skip.
+	 */
 	for (i = 0; i < SG_FIELD_CLASSES; i++)
 	{
+		int k;
+
 		sg_fields.item[i] = Field_Alloc(r);
+		sg_fields.per_item_count[i] = 0;
+		for (k = 0; k < SG_MAX_PER_ITEM; k++)
+		{
+			sg_fields.per_item[i][k] = Class_PerItem(i) ? Field_Alloc(r) : NULL;
+			sg_fields.per_item_seed[i][k] = -1;
+		}
 		Class_Build(r, i);
 	}
 
 	sg_fields.our_carrier[0] = Field_Alloc(r);   /* index by team-1 */
 	sg_fields.our_carrier[1] = Field_Alloc(r);
+	sg_fields.our_carrier_valid[0] = sg_fields.our_carrier_valid[1] = false;
 	for (i = 0; i < r->hdr.num_seeds; i++)
 		sg_fields.our_carrier[0][i] = sg_fields.our_carrier[1][i] = SG_FIELD_INF;
 
@@ -212,9 +260,19 @@ void Fields_Refresh(rune_t *r)
 		return;
 	sg_fields.next_refresh = level.time + 1.0f;
 
-	for (i = 0; i < SG_FIELD_CLASSES; i++)
-		if (Class_Signature(&field_classes[i]) != sg_fields.item_sig[i])
-			Class_Build(r, i);
+	{
+		/* the entity walk sees an item going up or down, but a rune moves
+		 * WHILE up every 30s (Rune_Think, g_runes.c:338) -- the belief
+		 * signature is what notices that */
+		static unsigned belief_sig;
+		unsigned bsig = Caco_ItemBeliefSig();
+
+		for (i = 0; i < SG_FIELD_CLASSES; i++)
+			if (Class_Signature(&field_classes[i]) != sg_fields.item_sig[i]
+			    || (Class_PerItem(i) && bsig != belief_sig))
+				Class_Build(r, i);
+		belief_sig = bsig;
+	}
 
 	/* flag positions per CACO: seed the "now" field wherever belief puts it */
 	for (i = 0; i < 2; i++)
@@ -238,6 +296,9 @@ void Fields_Refresh(rune_t *r)
 		int cost = 0;
 
 		if (c->client >= 0 && c->seed >= 0)
+		{
 			Field_Flood(r, sg_fields.our_carrier[i], &c->seed, &cost, 1);
+			sg_fields.our_carrier_valid[i] = true;
+		}
 	}
 }

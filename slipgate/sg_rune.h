@@ -24,6 +24,14 @@ typedef enum
 	RL_DROP,            /* a fall the mover survives */
 	RL_HOOK,            /* grapple at the anchor stored in the link */
 	RL_SWIM,            /* through water */
+	/*
+	 * Appended, never inserted: every value above keeps the number it had, so
+	 * a rune written before these existed still reads correctly and
+	 * RUNE_VERSION stays 1. These are actions the mover cannot prove by
+	 * rolling physics -- the world moves it, not the other way round.
+	 */
+	RL_LIFT,            /* ride a func_plat from its bottom to its top */
+	RL_TELEPORT,        /* step on a misc_teleporter; the game does the rest */
 } rune_action_t;
 
 /* how the link came to be believed */
@@ -32,11 +40,30 @@ typedef enum
 	RL_PROVEN = 0,      /* the oracle rolled it */
 	RL_OBSERVED,        /* a player demonstrated it in play */
 	RL_ADJUSTED,        /* proven, but cost corrected by experience */
+	/*
+	 * Appended, never inserted -- the same rule the action enum above keeps,
+	 * for the same reason: RL_PROVEN/OBSERVED/ADJUSTED hold the numbers they
+	 * have always held, so a rune written before this value existed still
+	 * reads correctly and RUNE_VERSION stays 1. RL_DECLARED marks a link that
+	 * was READ OFF the map rather than simulated: the lift and teleport links
+	 * come from a func_plat's spawn positions and a misc_teleporter's target,
+	 * with the cost computed from g_func.c's own move maths. Calling those
+	 * PROVEN would be a lie about how they were established, and the runtime
+	 * has a real interest in the difference -- a declared link's cost has
+	 * never been measured against a clock.
+	 */
+	RL_DECLARED,        /* read off the map's spawn data, not simulated */
 } rune_provenance_t;
+
+/* seed flags: bits in rune_seed_t.flags, a field that has always been there
+ * and has always been written as 0 -- so setting a bit needs no new version */
+#define RSF_WATER	1       /* the seed is a point INSIDE a water volume, not
+                             * a floor point: reached and left by swimming */
 
 typedef struct rune_seed_s
 {
-	vec3_t	origin;         /* on the floor, player-standable, proven */
+	vec3_t	origin;         /* on the floor, player-standable, proven --
+	                         * or inside water when flags & RSF_WATER */
 	short	area_hint;      /* reserved: coarse region id, 0 for now */
 	short	flags;
 } rune_seed_t;

@@ -74,6 +74,7 @@ typedef struct
 extern sg_team_belief_t sg_caco_team_belief;
 
 void Caco_See(rune_t *r, edict_t *viewer);      /* one bot's eyes, per frame */
+void Caco_HumanEyes(rune_t *r, int team);       /* what human teammates see */
 void Caco_Frame(rune_t *r);                     /* shared HUD scan + aging */
 void Caco_Reset(void);
 
@@ -86,6 +87,15 @@ enum
 	SG_FIELD_CLASSES
 };
 
+/*
+ * Per-item fields: a class field gives cost to the NEAREST item of the class,
+ * which is all the detour arithmetic needs when the items are interchangeable.
+ * For the classes where identity decides the worth -- powerups and runes, a
+ * handful of entities each -- one field per item is kept as well, so the
+ * detour triangle can be evaluated exactly against THAT item's position.
+ */
+#define SG_MAX_PER_ITEM		8
+
 typedef struct
 {
 	int		red_flag_seed, blue_flag_seed;
@@ -97,6 +107,14 @@ typedef struct
 	int		*our_carrier[2];                    /* support field, per team-1 */
 
 	float	next_refresh;
+
+	/* appended: per-item detour fields, only for the per-item classes */
+	int		*per_item[SG_FIELD_CLASSES][SG_MAX_PER_ITEM];
+	int		per_item_seed[SG_FIELD_CLASSES][SG_MAX_PER_ITEM];
+	int		per_item_count[SG_FIELD_CLASSES];
+
+	/* appended: has the carrier support field ever been flooded this level? */
+	qboolean our_carrier_valid[2];
 } sg_fields_t;
 
 extern sg_fields_t sg_fields;
@@ -108,9 +126,19 @@ void		Field_Flood(rune_t *r, int *dist,
 
 /* ------------------------------------------------------------- arachnotron */
 
-/* roles, per the owner's specification: 2-in-5 defend, rest attack,
- * carrier is a role of its own that also counts toward defence */
-typedef enum { SG_ROLE_ATTACK = 0, SG_ROLE_DEFEND, SG_ROLE_CARRY, SG_ROLES } sg_role_t;
+/*
+ * Roles, per the owner's specification: 2-in-5 defend, rest attack, carrier
+ * is a role of its own that also counts toward defence. RECOVER and ESCORT
+ * are appended (the values of the first three are load-bearing for the weight
+ * table's row order): attackers become recoverers while our own flag is
+ * astray, and one attacker escorts a live carrier of ours.
+ */
+typedef enum
+{
+	SG_ROLE_ATTACK = 0, SG_ROLE_DEFEND, SG_ROLE_CARRY,
+	SG_ROLE_RECOVER, SG_ROLE_ESCORT,
+	SG_ROLES
+} sg_role_t;
 
 /*
  * The composition weights: how much each concern matters to each role.
@@ -135,3 +163,66 @@ void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
 
 rune_t		*Rune_Load(const char *mapname);
 int			Rune_NearestSeed(rune_t *r, vec3_t p);
+
+/* ------------------------------------------------ caco: powerup and rune
+ *
+ * WHERE a powerup spawns is map knowledge -- everybody who has played the
+ * map knows the quad pad. Whether it is standing there RIGHT NOW is not:
+ * that is known if somebody has looked at the pad since it last respawned,
+ * or worked out from the clock by somebody who watched it get taken.
+ *
+ * Runes are a different animal in LMCTF and get a different model; see the
+ * commentary over the belief code in sg_caco.c.
+ */
+
+#define SG_MAX_BELIEF_ITEMS	32
+
+enum
+{
+	SG_BI_POWERUP = 0,      /* item_quad, item_invulnerability */
+	SG_BI_RUNE              /* damage/haste/resist/regen/vampire_rune */
+};
+
+typedef struct
+{
+	vec3_t		org;                    /* where it is believed to be */
+	int			seed;                   /* nearest seed to org, -1 unknown */
+	float		seen_up_time;           /* last time it was SEEN standing */
+	float		believed_respawn_time;  /* when the clock says it is back */
+	qboolean	believed_up;
+
+	/* bookkeeping behind the belief, not part of it */
+	int			ent;                    /* edict index of the item entity */
+	int			cls;                    /* SG_BI_* */
+	float		respawn_delay;          /* seconds; 0 = no clock to infer from */
+} sg_belief_item_t;
+
+extern sg_belief_item_t	sg_caco_items[SG_MAX_BELIEF_ITEMS];
+extern int				sg_caco_num_items;
+
+/* the calls sg_fields.c needs to stop reading item entities directly */
+qboolean	Caco_ItemBelievedUp(edict_t *e);
+int			Caco_ItemBeliefSeed(rune_t *r, edict_t *e);
+unsigned	Caco_ItemBeliefSig(void);   /* mix into the class rebuild test */
+
+/* ---------------------------------------------- caco: carrier projection
+ *
+ * An aged belief about an enemy carrier is not a point, it is a set: every
+ * seed he could plausibly have reached since we last saw him, advanced once
+ * a second down his own route-home field. sg_caco_proj[i] is the set for the
+ * carrier holding team i+1's flag; sg_caco_team_belief.enemy_carrier[i].seed
+ * is its deepest member.
+ */
+
+#define SG_PROJ_MAX		32      /* plausible positions kept per carrier */
+#define SG_PROJ_BRANCH	3       /* the best step plus two alternatives */
+
+typedef struct
+{
+	int		seed[SG_PROJ_MAX];  /* ordered: [0] is deepest along their route */
+	int		n;
+	int		client;             /* who the set is about, -1 = idle */
+	float	from_time;          /* the sighting it was last collapsed to */
+} sg_proj_t;
+
+extern sg_proj_t sg_caco_proj[2];
