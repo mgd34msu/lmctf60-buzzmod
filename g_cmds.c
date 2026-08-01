@@ -2390,7 +2390,19 @@ void Cmd_ItemToss_f(edict_t* ent)
 	if (Q_stricmp(s, "hook") == 0)
 		s = "grappling hook";
 	if (Q_stricmp(s, "flag") == 0)
-		s = "Enemy Flag";
+	{
+		// BUZZKILL - the flag item's toss slot was never wired (gitem_t
+		// initializers end before it, leaving NULL), so "toss flag" only
+		// ever printed "Item is not tossable."  Route it through the
+		// flag's own drop handler, which already does the full dropped-
+		// flag dance (timer, position, team messages).
+		it = FindItem("Enemy Flag");
+		if (it && ent->client->pers.inventory[ITEM_INDEX(it)])
+			ctf_playerdropflag(ent, it);
+		else
+			ctf_SafePrint(ent, PRINT_HIGH, "You have no flag.\n");
+		return;
+	}
 	if ((Q_stricmp(s, "rune") == 0) ||
 		(Q_stricmp(s, "artifact") == 0) ||
 		(Q_stricmp(s, "tech") == 0))
@@ -2415,7 +2427,9 @@ void Cmd_ItemToss_f(edict_t* ent)
 
 	if (Q_stricmp(s, "ammo") == 0)
 	{
-		if (ent->client->pers.weapon->ammo)
+		// BUZZKILL - pers.weapon is NULL for observers and the just-dead;
+		// "toss ammo" then dereferenced it and took the server down
+		if (ent->client->pers.weapon && ent->client->pers.weapon->ammo)
 			it = FindItem(ent->client->pers.weapon->ammo);
 	}
 
