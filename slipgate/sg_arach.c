@@ -1493,8 +1493,10 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * definitively failed -- so back OUT along the reverse of the
 		 * current facing for 1.2s and retry the approach from open ground.
 		 */
-		bot->escape_yaw = e->s.angles[YAW] + 180.0f;
-		bot->escape_until = level.time + 1.2f;
+		/* jittered: identical retreats produce identical re-approaches,
+		 * and an obstacle that beats one line beats it every time */
+		bot->escape_yaw = e->s.angles[YAW] + 180.0f + (float)(rand() % 81 - 40);
+		bot->escape_until = level.time + 1.0f + (float)(rand() % 9) * 0.1f;
 		if (gi.cvar("sg_debug", "0", 0)->value)
 			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);

@@ -58,11 +58,31 @@ static int sg_futile[SG_MAX_SEEDS];
 
 void SG_TeachFutility(int seed)
 {
+	static int last_seed = -1;
+	static int streak;
+	int amount;
+
 	if (seed < 0 || seed >= SG_MAX_SEEDS)
 		return;
-	sg_futile[seed] += 3000;
-	if (sg_futile[seed] > 20000)
-		sg_futile[seed] = 20000;
+	/*
+	 * A wall that keeps winning earns a compounding lesson. The flat 3s
+	 * (capped 20s) surcharge cannot break a corridor MONOPOLY: on lmctf01
+	 * the valley is the only 26s route, the alternatives cost more than
+	 * the cap, so the flood funneled Gate back into seed 327 between
+	 * every escape -- 136 firings, one game, one pillar (iter 49). Repeat
+	 * firings at one seed now scale the charge up to 5x with no ceiling
+	 * but the decay itself, which heals a 45s lesson in under four
+	 * minutes. A seed that stops biting resets the streak.
+	 */
+	if (seed == last_seed)
+		streak = (streak < 5) ? streak + 1 : 5;
+	else
+		streak = 1;
+	last_seed = seed;
+	amount = 3000 * streak;
+	sg_futile[seed] += amount;
+	if (sg_futile[seed] > 60000)
+		sg_futile[seed] = 60000;
 }
 
 static void Futility_Decay(void)
