@@ -92,6 +92,9 @@ typedef struct sg_bot_s
 	                                 * the link's failure either */
 	qboolean	def_stand;          /* this defender is the stand statue;
 	                                 * false = the patrol, which never pins */
+	qboolean	was_carrying;       /* for the carry-duration bookend */
+	float		carry_start;
+	int			last_role;          /* role-transition observability */
 
 	/* loop detection wider than the watch's 96-unit ball: recent seeds
 	 * visited with the goal value each visit held. Coming back no better
@@ -903,6 +906,28 @@ static void SG_BotThink(sg_bot_t *bot)
 	}
 
 	role = SG_Role(bot, carrying);
+
+	/* carry bookends and role transitions: short carries slip between the
+	 * 1Hz samples, so the transitions themselves get lines */
+	if (gi.cvar("sg_debug", "0", 0)->value)
+	{
+		if (carrying && !bot->was_carrying)
+		{
+			bot->carry_start = level.time;
+			gi.dprintf("CARRY %s begins\n", e->client->pers.netname);
+		}
+		else if (!carrying && bot->was_carrying)
+			gi.dprintf("CARRY %s ends after %.1fs\n",
+			           e->client->pers.netname,
+			           level.time - bot->carry_start);
+		if ((int)role != bot->last_role)
+		{
+			if (role == SG_ROLE_ESCORT)
+				gi.dprintf("ESCORT %s begins\n", e->client->pers.netname);
+			bot->last_role = (int)role;
+		}
+	}
+	bot->was_carrying = carrying;
 	/*
 	 * The role row is a BIAS, not an absolute. What an item is actually worth
 	 * to THIS bot right now -- health as its own health drops, armour by
