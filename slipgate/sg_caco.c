@@ -988,12 +988,134 @@ static void Caco_RelayFlush(void)
  * flag home-state runs on a cadence with no viewer at all (HUD knowledge
  * needs no eyes).
  */
+sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
+
+/*
+ * Every enemy a teammate lays eyes on, not just carriers: the defender's
+ * pre-spin and the rune-threat weighting both need "someone is out there
+ * and roughly where". Upsert by client number; a full table evicts the
+ * stalest sighting. The RF_GLOW test is the rune tell (p_view.c:792-794).
+ */
+static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
+{
+	int i;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t *p = g_edicts + 1 + i;
+		sg_belief_enemy_t *tab = sg_caco_enemies[viewer_team - 1];
+		int s, slot = -1;
+
+		qboolean seen, heard = false;
+
+		if (!p->inuse || !p->client || p->deadflag)
+			continue;
+		if (p->client->ctf.teamnum == viewer_team ||
+		    p->client->ctf.teamnum <= CTF_TEAM_UNDEFINED)
+			continue;
+		seen = Caco_Visible(viewer, p);
+		if (!seen)
+		{
+			/*
+			 * The ear. PHS is the engine's own "could a sound from there
+			 * reach here" set (gi.inPHS, game.h:112), and the loud states
+			 * are server-visible facts: a firing weapon (WEAPON_FIRING,
+			 * g_local.h:173) or a rope out. No sight line, but noise in
+			 * the PHS places the maker COARSELY -- enough to warn a post,
+			 * never to aim, which is what heard_only means downstream.
+			 */
+			if ((p->client->weaponstate == WEAPON_FIRING ||
+			     p->client->hookstate != 0) &&
+			    gi.inPHS(viewer->s.origin, p->s.origin))
+				heard = true;
+			if (!heard)
+				continue;
+		}
+
+		/* this client's slot, else an empty one, else the stalest */
+		for (s = 0; s < SG_MAX_ENEMY_TRACK && slot < 0; s++)
+			if (tab[s].client == i)
+				slot = s;
+		for (s = 0; s < SG_MAX_ENEMY_TRACK && slot < 0; s++)
+			if (tab[s].client < 0)
+				slot = s;
+		if (slot < 0)
+		{
+			slot = 0;
+			for (s = 1; s < SG_MAX_ENEMY_TRACK; s++)
+				if (tab[s].seen_time < tab[slot].seen_time)
+					slot = s;
+		}
+		/* a fresh eye entry outranks an ear: don't degrade it */
+		if (!seen && tab[slot].client == i && !tab[slot].heard_only &&
+		    level.time - tab[slot].seen_time < 2.0f)
+			continue;
+
+		tab[slot].client = i;
+		tab[slot].seed = Rune_NearestSeed(r, p->s.origin);
+		tab[slot].seen_time = level.time;
+		tab[slot].heard_only = !seen;
+		if (seen)
+			tab[slot].runed = (p->s.renderfx & RF_GLOW) != 0;
+	}
+}
+
+/*
+ * The D4 inference chain, every link a believed or team-known fact:
+ * the Damage rune's pad state comes from item belief (a rune sighting,
+ * aged by its own wander clock), "not ours" from team knowledge (client
+ * ->rune is server truth about teammates), and "an enemy glows" from the
+ * sighting table. All three together and the ×1.80 Resist posture is
+ * justified; any link missing and it is not.
+ */
+qboolean Caco_EnemyHasDamageRune(int team)
+{
+	int i;
+	qboolean taken = false, glowing = false;
+
+	for (i = 0; i < sg_caco_num_items; i++)
+	{
+		sg_belief_item_t *it = &sg_caco_items[i];
+		edict_t *re = (it->ent > 0) ? g_edicts + it->ent : NULL;
+
+		if (re && re->classname &&
+		    strcmp(re->classname, "damage_rune") == 0)
+		{
+			taken = !it->believed_up;
+			break;
+		}
+	}
+	if (!taken)
+		return false;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t *p = g_edicts + 1 + i;
+
+		if (p->inuse && p->client && p->client->ctf.teamnum == team &&
+		    p->client->rune && p->client->rune->classname &&
+		    strcmp(p->client->rune->classname, "damage_rune") == 0)
+			return false;               /* it is in OUR hands */
+	}
+
+	for (i = 0; i < SG_MAX_ENEMY_TRACK; i++)
+	{
+		sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][i];
+
+		if (en->client >= 0 && en->runed &&
+		    level.time - en->seen_time < 20.0f)
+			glowing = true;
+	}
+	return glowing;
+}
+
 void Caco_See(rune_t *r, edict_t *viewer)
 {
 	if (!viewer || !viewer->client)
 		return;
 	Caco_ScanFlags(r, viewer, viewer->client->ctf.teamnum);
 	Caco_ScanCarriers(r, viewer, viewer->client->ctf.teamnum);
+	Caco_ScanEnemies(r, viewer, viewer->client->ctf.teamnum);
 	Caco_ScanItems(r, viewer);
 }
 
@@ -1024,6 +1146,14 @@ void Caco_Reset(void)
 	int i;
 
 	memset(&sg_caco_team_belief, 0, sizeof(sg_caco_team_belief));
+	memset(sg_caco_enemies, 0, sizeof(sg_caco_enemies));
+	{
+		int t, s;
+
+		for (t = 0; t < 2; t++)
+			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+				sg_caco_enemies[t][s].client = -1;
+	}
 	memset(caco_callout, 0, sizeof(caco_callout));
 	memset(caco_teamsaid, 0, sizeof(caco_teamsaid));
 	memset(caco_relay, 0, sizeof(caco_relay));

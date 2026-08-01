@@ -134,7 +134,7 @@ static qboolean Class_PerItem(int cls)
 
 static void Class_Build(rune_t *r, int cls)
 {
-	int sources[256] = { 0 }, costs[256] = { 0 }, n = 0;
+	int sources[256] = { 0 }, costs[256] = { 0 }, ents[256] = { 0 }, n = 0;
 	edict_t *e;
 	int i;
 
@@ -147,6 +147,7 @@ static void Class_Build(rune_t *r, int cls)
 			continue;
 		sources[n] = Caco_ItemBeliefSeed(r, e);
 		costs[n] = 0;
+		ents[n] = i;        /* identity: which entity this slot prices */
 		if (sources[n] >= 0)
 			n++;
 	}
@@ -169,11 +170,15 @@ static void Class_Build(rune_t *r, int cls)
 	for (i = 0; i < n; i++)
 	{
 		sg_fields.per_item_seed[cls][i] = sources[i];
+		sg_fields.per_item_ent[cls][i] = ents[i];
 		if (sg_fields.per_item[cls][i])
 			Field_FromOne(r, sg_fields.per_item[cls][i], sources[i]);
 	}
 	for (i = n; i < SG_MAX_PER_ITEM; i++)
+	{
 		sg_fields.per_item_seed[cls][i] = -1;
+		sg_fields.per_item_ent[cls][i] = -1;
+	}
 	sg_fields.per_item_count[cls] = n;
 }
 

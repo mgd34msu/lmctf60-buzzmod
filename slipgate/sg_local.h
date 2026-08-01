@@ -71,6 +71,29 @@ typedef struct
 	sg_belief_carrier_t	enemy_carrier[2];   /* who has team N+1's flag */
 } sg_team_belief_t;
 
+/*
+ * General enemy sightings, per team: any enemy a teammate has SEEN, not
+ * only carriers. A rune carrier glows (RF_GLOW, p_view.c:792-794) so a
+ * sighting also knows THAT a rune is in enemy hands -- though never which
+ * one, because the glow is generic.
+ */
+#define SG_MAX_ENEMY_TRACK	8
+typedef struct
+{
+	int			client;         /* -1 empty */
+	int			seed;
+	float		seen_time;
+	qboolean	runed;          /* glowed when last seen */
+	qboolean	heard_only;     /* placed by ear, not eye: good enough to
+	                             * warn a post, never good enough to aim */
+} sg_belief_enemy_t;
+
+extern sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
+
+/* the D4 inference: Damage rune off its pad, not in our hands, and a
+ * glowing enemy on record -- the glow never names the rune, the pad does */
+qboolean	Caco_EnemyHasDamageRune(int team);
+
 extern sg_team_belief_t sg_caco_team_belief;
 
 void Caco_See(rune_t *r, edict_t *viewer);      /* one bot's eyes, per frame */
@@ -111,6 +134,7 @@ typedef struct
 	/* appended: per-item detour fields, only for the per-item classes */
 	int		*per_item[SG_FIELD_CLASSES][SG_MAX_PER_ITEM];
 	int		per_item_seed[SG_FIELD_CLASSES][SG_MAX_PER_ITEM];
+	int		per_item_ent[SG_FIELD_CLASSES][SG_MAX_PER_ITEM];
 	int		per_item_count[SG_FIELD_CLASSES];
 
 	/* appended: has the carrier support field ever been flooded this level? */

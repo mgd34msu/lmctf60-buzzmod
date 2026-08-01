@@ -11,7 +11,7 @@ graph TD
         G0["gravity in oracle phantoms [D]<br/>(the levitation bug: pms.gravity=0)"]
         N1["1 drop links [D] (6977 in 50k rune)"]
         N2["2 hook climb anchors [D] (11850)"]
-        N3["3 swim volume seeds [D-code] (SWIM=0 on lmctf03 — verify wet map)"]
+        N3["3 swim volume seeds [D]<br/>lmctf01: 65129 SWIM links, smap05: 11744<br/>(lmctf03 simply has no water);<br/>in-play swim still unobserved"]
         N4["4 lift links (func_plat) [D]"]
         N5["5 teleporter links [D]"]
         N6["6 south-strip one-way pairs [D] (dissolved by rebuild: frontier 2)"]

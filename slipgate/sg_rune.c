@@ -35,7 +35,7 @@
 #define TRY_LIMIT_MS	3000		/* a link longer than this is not local */
 
 /* prover autopsy: where drop attempts actually die */
-static int dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact, dg_timeout;
+static int dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact;
 
 static rune_seed_t	*gen_seeds;
 static int			gen_num_seeds;

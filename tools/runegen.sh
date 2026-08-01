@@ -43,7 +43,9 @@ GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
 
-PORT_START=28500        # unique port per run, PORT_START + map index
+PORT_START="${PORT_START:-28500}"  # unique port per run, PORT_START + map
+                                   # index; env-overridable so parallel
+                                   # lanes use disjoint ranges
 STARTUP_SLEEP=8          # seconds given to the server to boot before "sv rune"
 GEN_BUDGET=900            # seconds given to rune generation before "quit"
 SHUTDOWN_MARGIN=60        # extra wall-clock seconds before the hard `timeout` kill

@@ -75,6 +75,11 @@ typedef struct sg_bot_s
 	float		dead_door_until[SG_DEAD_DOORS];
 	edict_t		*door_hold_ent;     /* the door currently being waited on */
 	float		door_hold_since;
+	qboolean	deaddoor_ahead;     /* last frame's goal line hit a door
+	                                 * already known dead: shelve fast */
+	vec3_t		deaddoor_spot;      /* where that dead door was struck */
+	qboolean	door_held_last;     /* stood still for a door last frame:
+	                                 * commanded stillness, not link failure */
 	int			watch_link;     /* the link under progress-watch */
 	float		watch_since;
 	vec3_t		watch_org;
@@ -173,7 +178,10 @@ static qboolean SG_LevelSetup(void)
 		           level.mapname);
 		return false;
 	}
-	strncpy(sg_rune_map, level.mapname, sizeof(sg_rune_map) - 1);
+	/* Com_sprintf is the tree's own bounded copy (q_shared.c) and always
+	 * terminates; strncpy at sizeof-1 does not, which is what -Wall's
+	 * stringop-truncation was reporting here. Same call Rune_Load uses. */
+	Com_sprintf(sg_rune_map, sizeof(sg_rune_map), "%s", level.mapname);
 
 	if (!Fields_Setup(sg_rune))
 	{
@@ -226,6 +234,111 @@ static const sg_weights_t sg_weight_table[SG_ROLES] = {
  * All three terms are field lookups. An item dead on the route costs
  * nothing extra and pays full worth; one far off the road decays away.
  */
+/*
+ * Different runes are worth different things to different ROLES: a
+ * defender wants staying power at the post (Resist, Regen), an attacker
+ * and a carrier want the map to shrink (Haste), a recoverer wants the
+ * re-kill (Damage). Class-level worth (Worth_Rune, sg_combat.c) prices
+ * "a rune, given my state"; this table prices "THIS rune, given my job".
+ * Values orbit 1.0 -- they are the fitted component, like every weight.
+ */
+static float Rune_RoleFactor(int role, int entnum)
+{
+	static const struct { const char *cls; float w[SG_ROLES]; } tab[] = {
+		/*                  ATTACK DEFEND CARRY  RECOVER ESCORT */
+		{ "damage_rune",  { 1.15f, 1.15f, 0.70f, 1.25f, 1.10f } },
+		{ "haste_rune",   { 1.30f, 0.80f, 1.30f, 1.15f, 1.00f } },
+		{ "resist_rune",  { 0.90f, 1.25f, 1.20f, 1.00f, 1.15f } },
+		{ "regen_rune",   { 0.90f, 1.15f, 1.05f, 0.90f, 1.00f } },
+		{ "vampire_rune", { 1.05f, 1.00f, 0.80f, 1.05f, 1.00f } },
+	};
+	edict_t *e;
+	int i;
+
+	if (entnum <= 0 || entnum >= globals.num_edicts)
+		return 1.0f;
+	e = g_edicts + entnum;
+	if (!e->classname)
+		return 1.0f;
+	for (i = 0; i < (int)(sizeof(tab) / sizeof(tab[0])); i++)
+		if (strcmp(e->classname, tab[i].cls) == 0)
+			return tab[i].w[role];
+	return 1.0f;
+}
+
+/* the role whose surface is being evaluated this frame -- SLIPGATE runs
+ * its bots strictly serially, so a file-static carries it into the
+ * detour arithmetic without widening every signature on the path */
+static int sg_cur_role;
+
+/*
+ * Intercept micro-positioning: being ON the carrier's escape line is the
+ * naive hold -- it closes at rope speed and blocks your own team's shots.
+ * The right ground sits ACROSS the motion: off the axis (the carrier
+ * crosses the view laterally instead of head-on), above it (a missed
+ * rocket still splashes the floor, and escape ropes mostly pull UP), and
+ * beside a narrow crossing (few links out = a corridor the projection
+ * says they must thread, where speed stops helping them). Scored over
+ * the projection set's members and their link-neighbors; the axis is the
+ * set's own deepest-to-shallowest line. Falls back to the projected seed
+ * itself when the set is degenerate.
+ */
+static int Intercept_HoldSeed(int team, int fallback)
+{
+	sg_proj_t *pr = &sg_caco_proj[team - 1];
+	vec3_t axis;
+	float axlen, bestscore = -1.0f;
+	int i, best = -1;
+
+	if (pr->n < 2 || pr->client < 0)
+		return fallback;
+
+	VectorSubtract(sg_rune->seeds[pr->seed[0]].origin,
+	               sg_rune->seeds[pr->seed[pr->n - 1]].origin, axis);
+	axis[2] = 0.0f;
+	axlen = VectorLength(axis);
+	if (axlen < 64.0f)
+		return fallback;            /* no meaningful motion to be across */
+	axis[0] /= axlen; axis[1] /= axlen;
+
+	for (i = 0; i < pr->n; i++)
+	{
+		int p = pr->seed[i], li, fan = 0;
+		float choke;
+
+		if (p < 0 || p >= sg_rune->hdr.num_seeds)
+			continue;
+		for (li = sg_rune->first_link[p]; li >= 0; li = sg_rune->next_link[li])
+			fan++;
+		choke = 600.0f / (4.0f + (float)fan);
+
+		for (li = sg_rune->first_link[p]; li >= 0; li = sg_rune->next_link[li])
+		{
+			int c = sg_rune->links[li].to;
+			vec3_t off;
+			float lat, dz, score;
+
+			VectorSubtract(sg_rune->seeds[c].origin,
+			               sg_rune->seeds[p].origin, off);
+			dz = off[2];
+			off[2] = 0.0f;
+			/* perpendicular component of the offset against the axis */
+			lat = fabsf(off[0] * axis[1] - off[1] * axis[0]);
+			if (lat > 250.0f)
+				lat = 250.0f;
+			score = lat + choke;
+			if (dz > 0.0f)
+				score += (dz > 200.0f) ? 200.0f : dz;
+			if (score > bestscore)
+			{
+				bestscore = score;
+				best = c;
+			}
+		}
+	}
+	return (best >= 0) ? best : fallback;
+}
+
 static float Detour_Value(int here, int cls, const int *goal_field,
                           float worth)
 {
@@ -269,6 +382,9 @@ static float Detour_Value(int here, int cls, const int *goal_field,
 			if (detour < 0)
 				detour = 0;      /* an item on the road is free, never a bonus */
 			v = worth / (1.0f + (float)detour / 1500.0f);
+			if (cls == SG_FC_RUNE)
+				v *= Rune_RoleFactor(sg_cur_role,
+				                     sg_fields.per_item_ent[cls][k]);
 			if (v > best)
 				best = v;
 		}
@@ -559,7 +675,6 @@ static void SG_BotThink(sg_bot_t *bot)
 	int team, li, bestlink = -1;
 	float bestval;
 	vec3_t want, d;
-	float yaw;
 	qboolean carrying;
 	static int intercept_field[SG_MAX_SEEDS];
 
@@ -573,6 +688,10 @@ static void SG_BotThink(sg_bot_t *bot)
 	qboolean	precision = false;          /* final approach: no tricks */
 	qboolean	hold_post = false;          /* defender at its stand: guard */
 	float		post_yaw = 0.0f;            /* facing the likeliest approach */
+	float		post_sight = -1.0f;         /* clear distance down that facing;
+	                                         * WEAPONS.md 2.4-D3 picks the
+	                                         * pre-held weapon from it */
+	sg_weights_t	live;                   /* the role row, modulated by state */
 	int			door_hold = 0;              /* rotating door ahead: 1 stand,
 	                                         * 2 back out of its swing arc */
 	edict_t		*door_ent = NULL;           /* which door is being waited on */
@@ -606,7 +725,48 @@ static void SG_BotThink(sg_bot_t *bot)
 	}
 
 	role = SG_Role(bot, carrying);
-	w = &sg_weight_table[role];
+	/*
+	 * The role row is a BIAS, not an absolute. What an item is actually worth
+	 * to THIS bot right now -- health as its own health drops, armour by
+	 * deficit, a weapon when it has none worth the name, ammo against the
+	 * floor of the weapon it holds, the quad against its respawn clock, a rune
+	 * it is allowed to pick up -- is state, and SG_CombatWeights supplies it
+	 * from WEAPONS.md 2.3. Every worth there is derived from a cited line of
+	 * this tree; the row below stays exactly as fitted and is multiplied
+	 * through. The result is clamped to the same [0, 2.0] the detour decay's
+	 * 1500 ms scale (Detour_Value, above) makes meaningful.
+	 */
+	SG_CombatWeights(e, &sg_weight_table[role], &live);
+	/*
+	 * Rune threat (WEAPONS.md 2.4-D4, the honest half): a sighted enemy
+	 * glowing with RF_GLOW (p_view.c:792-794) holds SOME rune -- the glow
+	 * never says which, so this is a generic bump to how much OUR side
+	 * should want rune-class pickups, not the dossier's Damage-specific
+	 * Resist play, which is unknowable from a sighting.
+	 */
+	{
+		int s;
+
+		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+		{
+			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+
+			if (en->client >= 0 && en->runed &&
+			    level.time - en->seen_time < 15.0f)
+			{
+				/* generic: someone glows, runes matter more. When the
+				 * inference chain can NAME the Damage rune in enemy
+				 * hands, the dossier's full Resist posture applies
+				 * (WEAPONS.md 2.4-D4: x1.80). */
+				live.item[SG_FC_RUNE] *=
+				    Caco_EnemyHasDamageRune(team) ? 1.80f : 1.45f;
+				if (live.item[SG_FC_RUNE] > 2.0f)
+					live.item[SG_FC_RUNE] = 2.0f;
+				break;
+			}
+		}
+	}
+	w = &live;
 
 	/*
 	 * The role's principal field:
@@ -642,9 +802,11 @@ static void SG_BotThink(sg_bot_t *bot)
 		if (ec->seed >= 0)
 		{
 			int cost = 0;
+			int hold = Intercept_HoldSeed(team, ec->seed);
 
-			/* believed thief position: flood on demand, cheap at our size */
-			Field_Flood(sg_rune, intercept_field, &ec->seed, &cost, 1);
+			/* the hold ground across the thief's projected motion --
+			 * or their believed position when the projection is thin */
+			Field_Flood(sg_rune, intercept_field, &hold, &cost, 1);
 			intercept = intercept_field;
 		}
 	}
@@ -676,6 +838,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	precision = (goal_field[bot->seed] < 1500);
 
 	/* descend the surface: my seed vs every seed one proven link away */
+	sg_cur_role = role;             /* for the rune identity pricing */
 	bestval = Surface_At(bot->seed, w, goal_field, support, intercept);
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
 	{
@@ -688,6 +851,31 @@ static void SG_BotThink(sg_bot_t *bot)
 				break;
 		if (b < SG_BL_MAX)
 			continue;               /* shelved: the body could not run it */
+
+		/*
+		 * The carrier's flee doctrine gets ears: a step toward a fresh
+		 * believed contact -- seen or heard -- is priced as if it cost
+		 * extra travel, up to ~1200ms for walking straight into them.
+		 * Everyone else fights; the carrier's job is the capture point.
+		 */
+		if (role == SG_ROLE_CARRY)
+		{
+			int s;
+
+			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+			{
+				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+
+				if (en->client >= 0 && en->seed >= 0 &&
+				    level.time - en->seen_time < 4.0f)
+				{
+					VectorSubtract(sg_rune->seeds[l->to].origin,
+					               sg_rune->seeds[en->seed].origin, d);
+					if (VectorLength(d) < 400.0f)
+						v += 3.0f * (400.0f - VectorLength(d));
+				}
+			}
+		}
 
 		if (v < bestval)
 		{
@@ -747,9 +935,60 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * one drop lip for a full match; the generator fix removes that class,
 	 * this removes every class.)
 	 */
-	if (bestlink >= 0 && bestlink == bot->watch_link &&
-	    !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400))
+	/*
+	 * Route through a door already known dead: no 4-second trial needed,
+	 * the verdict is in. Shelve on sight -- one link per frame drains a
+	 * 25-link doorway fan in seconds, where the watch alone drained it
+	 * slower than the shelf refilled (Trace, 117 shelves at seed 662,
+	 * match 12: a shelve-expire-reshelve treadmill).
+	 */
+	if (bot->deaddoor_ahead)
 	{
+		/*
+		 * Shelve ONLY a link that actually heads into the dead door. The
+		 * first version shelved whatever bestlink was current whenever a
+		 * dead door lay on the goal line -- at ten frames a second that
+		 * emptied seed 429's whole fan into a 120-second shelf and left
+		 * the bot orbiting on link=-1 for 23 aggregate minutes (batch,
+		 * ports 28446-49). The goal line pointing at a door is a fact
+		 * about the door; it is not a verdict on a link that leaves in
+		 * another direction.
+		 */
+		if (bestlink >= 0)
+		{
+			vec3_t to_door, to_dest;
+			float dy, ly;
+
+			VectorSubtract(bot->deaddoor_spot, e->s.origin, to_door);
+			VectorSubtract(sg_rune->seeds[sg_rune->links[bestlink].to].origin,
+			               e->s.origin, to_dest);
+			dy = atan2f(to_door[1], to_door[0]);
+			ly = atan2f(to_dest[1], to_dest[0]);
+			dy = dy - ly;
+			while (dy > M_PI) dy -= 2.0f * (float)M_PI;
+			while (dy < -M_PI) dy += 2.0f * (float)M_PI;
+			if (fabsf(dy) < 0.6f)       /* ~35 degrees: the doorway cone */
+			{
+				int b, oldest = 0;
+
+				for (b = 0; b < SG_BL_MAX; b++)
+					if (bot->bl_until[b] < bot->bl_until[oldest])
+						oldest = b;
+				bot->bl_link[oldest] = bestlink;
+				bot->bl_until[oldest] = level.time + 120.0f;
+			}
+		}
+		bot->deaddoor_ahead = false;    /* one frame's verdict, once */
+	}
+
+	if (bestlink >= 0 && bestlink == bot->watch_link &&
+	    !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 400) &&
+	    !bot->door_held_last)
+	{
+		/* door_held_last: standing at a door on command is not the link's
+		 * failure -- billing it to the link shelved seed 429's whole fan
+		 * through the WATCH path even after the fast-drain was gated
+		 * (batch 2: 753 attacker-seconds on link=-1) */
 		VectorSubtract(e->s.origin, bot->watch_org, d);
 		if (VectorLength(d) > 96.0f)
 		{
@@ -764,7 +1003,9 @@ static void SG_BotThink(sg_bot_t *bot)
 				if (bot->bl_until[b] < bot->bl_until[oldest])
 					oldest = b;
 			bot->bl_link[oldest] = bestlink;
-			bot->bl_until[oldest] = level.time + 30.0f;
+			/* an honest traversal failure: 45s. The 120s figure is for
+			 * links proven to head into a dead door, nothing else. */
+			bot->bl_until[oldest] = level.time + 45.0f;
 			if (gi.cvar("sg_debug", "0", 0)->value)
 				gi.dprintf("SHELVE %s link=%d at seed=%d\n",
 				           e->client->pers.netname, bestlink, bot->seed);
@@ -806,9 +1047,136 @@ static void SG_BotThink(sg_bot_t *bot)
 		hold_post = true;
 		if (face >= 0)
 		{
+			vec3_t	pdir, peye, pend;
+			trace_t ptr;
+
 			VectorSubtract(sg_rune->seeds[face].origin, e->s.origin, d);
 			post_yaw = atan2f(d[1], d[0]) * 180.0f / M_PI;
+
+			/*
+			 * How far the post can SEE down that approach. WEAPONS.md 2.4-D3
+			 * picks the pre-held weapon from this length and nothing else,
+			 * because 1.1's spread saturation distances are hard numbers: a
+			 * super shotgun is a sub-160 weapon and a railgun is the only
+			 * thing that does not degrade past 900. MASK_OPAQUE is the same
+			 * mask the sight gate uses (sg_caco.c:100-114), and 2000 is the
+			 * engage range combat already refuses to fight beyond.
+			 */
+			VectorCopy(e->s.origin, peye);
+			peye[2] += e->viewheight;
+			pdir[0] = cosf(post_yaw * (float)M_PI / 180.0f);
+			pdir[1] = sinf(post_yaw * (float)M_PI / 180.0f);
+			pdir[2] = 0.0f;
+			VectorMA(peye, 2000.0f, pdir, pend);
+			ptr = gi.trace(peye, NULL, NULL, pend, e, MASK_OPAQUE);
+			post_sight = 2000.0f * ptr.fraction;
 		}
+
+		/*
+		 * A fresh contact on the belief table -- an ear included -- beats
+		 * the static approach guess: face where the noise IS, not where
+		 * the map says trouble usually comes from. The pre-held weapon
+		 * keeps following post_sight; only the facing swings.
+		 */
+		{
+			int s, best = -1;
+			float bestt = 0.0f;
+
+			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+			{
+				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+
+				if (en->client >= 0 && en->seed >= 0 &&
+				    level.time - en->seen_time < 4.0f &&
+				    goal_field[en->seed] < 2500 &&
+				    en->seen_time > bestt)
+				{
+					bestt = en->seen_time;
+					best = en->seed;
+				}
+			}
+			if (best >= 0)
+			{
+				VectorSubtract(sg_rune->seeds[best].origin, e->s.origin, d);
+				post_yaw = atan2f(d[1], d[0]) * 180.0f / M_PI;
+			}
+		}
+	}
+
+	/*
+	 * Combat holds a weapon whether or not anyone is in sight, and a posted
+	 * defender's is chosen by the sightline above (rule D3b: pre-select, do
+	 * not pre-fire -- holding the right weapon costs nothing, raising one
+	 * mid-contact costs a full weapon cycle). A negative sightline is "not
+	 * posted", which has to be said every frame or a bot that leaves its stand
+	 * would keep pre-selecting for a post it no longer holds.
+	 */
+	SG_CombatPost(e, hold_post ? post_sight : -1.0f);
+
+	/*
+	 * The ear (and teammates' eyes) arm everyone else too: a fresh contact
+	 * on the belief table within a second and a half of travel means the
+	 * idle hand should already hold the weapon that meeting calls for.
+	 * Range is estimated by the straight line to the believed seed --
+	 * corridors bend it, but a band estimate only has to be right to
+	 * within a band.
+	 */
+	if (!hold_post)
+	{
+		int s;
+
+		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+		{
+			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+
+			if (en->client >= 0 && en->seed >= 0 &&
+			    level.time - en->seen_time < 3.0f &&
+			    goal_field[en->seed] < SG_FIELD_INF &&
+			    sg_fields.item[0] != NULL)   /* fields alive */
+			{
+				vec3_t ed;
+				float dist;
+
+				VectorSubtract(sg_rune->seeds[en->seed].origin,
+				               e->s.origin, ed);
+				dist = VectorLength(ed);
+				if (dist < 1200.0f)
+				{
+					SG_CombatAlert(e, dist);
+					break;
+				}
+			}
+		}
+	}
+
+	/*
+	 * Chaingun pre-spin (WEAPONS.md 2.4-D3a): the gun fires slow for its
+	 * first second of spin-up (p_weapon.c Chaingun frames), so a defender
+	 * who believes an enemy is closing on the post -- a teammate SAW one
+	 * recently, within ~1200ms of travel by the post's own field -- starts
+	 * the barrels before the corner, trading a few bullets for the full
+	 * rate at first contact. Belief only: no sighting, no spin.
+	 */
+	if (hold_post && e->client->pers.weapon)
+	{
+		static gitem_t *cgitem;
+		int s;
+
+		if (!cgitem)
+			cgitem = FindItem("Chaingun");
+		if (e->client->pers.weapon == cgitem)
+			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+			{
+				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+
+				if (en->client >= 0 && en->seed >= 0 &&
+				    level.time - en->seen_time < 3.0f &&
+				    goal_field[en->seed] < 1200)
+				{
+					cmd.buttons |= BUTTON_ATTACK;
+					break;
+				}
+			}
 	}
 
 	/*
@@ -890,7 +1258,12 @@ static void SG_BotThink(sg_bot_t *bot)
 					VectorCopy(l->anchor, bot->hook_anchor);
 					VectorCopy(sg_rune->seeds[l->to].origin, bot->hook_dest);
 					bot->hook_phase = 1;
-					bot->hook_deadline = level.time + alen / 800.0f + 1.5f;
+					/* flight + climb budget: gravity fights the pull on a
+					 * tall rope, so the real ascent runs well past the
+					 * naive rope/800 figure -- a 1.5s margin cut every
+					 * z=348 tower climb loose 176 short of its landing
+					 * (A/B match, Slip, four identical shortfalls) */
+					bot->hook_deadline = level.time + alen / 800.0f + 3.0f;
 				}
 			}
 
@@ -1002,7 +1375,7 @@ static void SG_BotThink(sg_bot_t *bot)
 
 		if (have_aim)
 		{
-			vec3_t fwd, probe, right2;
+			vec3_t fwd, probe;
 			trace_t tr;
 			float best_open = -1.0f;
 			float try_yaw, base_yaw, chosen_yaw;
@@ -1052,6 +1425,11 @@ static void SG_BotThink(sg_bot_t *bot)
 						if (bot->dead_door[dd] == tr.ent &&
 						    bot->dead_door_until[dd] > level.time)
 							dead = true;
+					if (dead && k == 0)
+					{
+						bot->deaddoor_ahead = true;
+						VectorCopy(tr.endpos, bot->deaddoor_spot);
+					}
 					if (!dead)
 					{
 						/*
@@ -1137,6 +1515,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		{
 			cmd.forwardmove = (door_hold == 2) ? -200 : 0;
 			cmd.upmove = 0;
+			bot->door_held_last = true;
 
 			if (door_ent != bot->door_hold_ent)
 			{
@@ -1160,7 +1539,10 @@ static void SG_BotThink(sg_bot_t *bot)
 			}
 		}
 		else
+		{
 			bot->door_hold_ent = NULL;
+			bot->door_held_last = false;
+		}
 
 		/* on post: whatever the descent wanted, guard duty overrides it */
 		if (hold_post)
@@ -1244,8 +1626,23 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * it. Ordering rule from sg_combat.h: at hook_phase 1 the cmd angles
 		 * ARE the anchor bearing (the rope fires along v_angle), so combat
 		 * must not steal the view that frame.
+		 *
+		 * Phase 2 -- rope out, being pulled -- used to be gated out too, on the
+		 * assumption that shooting and grappling could not share the attack
+		 * button. That is true only when the grapple is pers.weapon
+		 * (g_cmds.c:1405-1412), which SG_CombatFrame now guarantees never
+		 * happens (WEAPONS.md rule S3). An OFFHAND rope is sustained by
+		 * ClientEndServerFrame with no button and no view input
+		 * (p_view.c:988-990), and while it pulls it SETS velocity outright
+		 * (p_weapon.c:2071-2102) -- so the view costs the movement nothing on
+		 * those frames and the trigger is free. That is WEAPONS.md 2.4-D2's
+		 * flee doctrine: a carrier that grapples and shoots at the same time.
+		 *
+		 * Phase 3 stays gated out for the opposite reason: the rope is gone,
+		 * the bot is flying its own landing on forwardmove down the chosen yaw
+		 * (above), and a view stolen there is a landing missed.
 		 */
-		if (bot->hook_phase == 0)
+		if (bot->hook_phase != 1 && bot->hook_phase != 3)
 		{
 			qboolean engaged = false;
 
