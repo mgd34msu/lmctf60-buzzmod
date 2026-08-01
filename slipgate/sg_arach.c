@@ -137,6 +137,8 @@ typedef struct sg_bot_s
 	float		fan_side_until;
 	float		escape_until;   /* backing out of a concave pocket */
 	float		escape_yaw;
+	int			last_goalcost;  /* this frame's goal-field cost, for mates */
+	float		rally_since;    /* waiting for a partner before the push */
 	int			rail_link;      /* RUN link being retried the proof's way */
 	int			rail_stage;     /* 0 off, 1 walk to from-seed, 2 drive line */
 	float		rail_until;
@@ -958,6 +960,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	qboolean	run_link = false;           /* chosen link is ground running */
 	qboolean	precision = false;          /* final approach: no tricks */
 	qboolean	hold_post = false;          /* defender at its stand: guard */
+	qboolean	rally_hold = false;         /* attacker waiting for a partner */
 	float		post_yaw = 0.0f;            /* facing the likeliest approach */
 	float		post_sight = -1.0f;         /* clear distance down that facing;
 	                                         * WEAPONS.md 2.4-D3 picks the
@@ -1036,6 +1039,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		}
 	}
 	bot->was_carrying = carrying;
+
 	/*
 	 * The role row is a BIAS, not an absolute. What an item is actually worth
 	 * to THIS bot right now -- health as its own health drops, armour by
@@ -1139,6 +1143,55 @@ static void SG_BotThink(sg_bot_t *bot)
 	else
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag_now
 		                                    : sg_fields.to_red_flag_now;
+
+	bot->last_goalcost = (bot->seed >= 0 &&
+	                      goal_field[bot->seed] < SG_FIELD_INF)
+	                     ? goal_field[bot->seed] : -1;
+
+	/*
+	 * THE RALLY. Wave 61's arrival census: three quarters of all attacks
+	 * reach the enemy base ALONE -- one body against three or more armed
+	 * defenders at the stand, dead every time, which is why floors sit
+	 * under 300 while steals stay near one a wave. An attacker in the
+	 * approach band (2-5s of field) with no partner inside 6s and at
+	 * least two enemies believed alive holds its ground -- twelve
+	 * seconds at most, gone the moment a mate closes or the wait times
+	 * out. Solo pushes still happen; they just stop being the ONLY kind.
+	 */
+	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
+	    goal_field[bot->seed] < SG_FIELD_INF)
+	{
+		int bi, mates_near = 0, foes_alive = 0;
+
+		for (bi = 0; bi < SG_MAXBOTS; bi++)
+		{
+			sg_bot_t *mb = &sg_bots[bi];
+
+			if (!mb->active || mb == bot || !mb->ent || !mb->ent->inuse)
+				continue;
+			if (mb->ent->client->ctf.teamnum != team)
+				continue;
+			if (mb->last_role == (int)SG_ROLE_ATTACK &&
+			    mb->last_goalcost >= 0 && mb->last_goalcost < 6000)
+				mates_near++;
+		}
+		for (bi = 0; bi < SG_MAX_ENEMY_TRACK; bi++)
+			if (sg_caco_enemies[team - 1][bi].client >= 0 &&
+			    level.time - sg_caco_enemies[team - 1][bi].seen_time < 8.0f)
+				foes_alive++;
+		if (mates_near == 0 && foes_alive >= 2)
+		{
+			if (bot->rally_since <= 0.0f)
+				bot->rally_since = level.time;
+			if (level.time - bot->rally_since < 12.0f)
+				rally_hold = true;
+		}
+		else
+			bot->rally_since = 0.0f;
+	}
+	else
+		bot->rally_since = 0.0f;
 
 	if (role != SG_ROLE_CARRY)
 	{
@@ -2632,6 +2685,16 @@ no_hold:;
 			cmd.upmove = 400;
 			view_pitch = -85.0f;
 			bot->nav_drove = false;     /* not the route's fault */
+		}
+
+		/* rallying: stand at the edge of the approach, face the push */
+		if (rally_hold && have_move)
+		{
+			cmd.forwardmove = 0;
+			cmd.sidemove = 0;
+			cmd.upmove = 0;
+			bot->nav_drove = false;
+			bot->stuck_time = 0.0f;
 		}
 
 		/* on post: whatever the descent wanted, guard duty overrides it */
