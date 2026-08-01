@@ -1188,18 +1188,35 @@ static void SG_BotThink(sg_bot_t *bot)
 				continue;
 			if (mb->last_goalcost < 6000)
 				mates_near++;
-			else if (mb->last_goalcost < 14000)
+			else if (mb->last_goalcost < 20000)
+				/* 20000, not 14000: a just-respawned mate on lmctf09
+				 * stands at ~17s of field, and the old horizon told the
+				 * leader nobody was coming precisely when the whole
+				 * second wave was (wave 64: still 14 solo windows to 2
+				 * paired). The 20s cap absorbs the longest legal wait. */
 				mates_coming++;
 		}
 		if (mates_near == 0 && mates_coming > 0)
 		{
 			if (bot->rally_since <= 0.0f)
+			{
 				bot->rally_since = level.time;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("RALLY %s waits (%d coming)\n",
+					           e->client->pers.netname, mates_coming);
+			}
 			if (level.time - bot->rally_since < 20.0f)
 				rally_hold = true;
 		}
 		else
+		{
+			if (bot->rally_since > 0.0f &&
+			    gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("RALLY %s released after %.1fs (near=%d)\n",
+				           e->client->pers.netname,
+				           level.time - bot->rally_since, mates_near);
 			bot->rally_since = 0.0f;
+		}
 	}
 	else
 		bot->rally_since = 0.0f;
