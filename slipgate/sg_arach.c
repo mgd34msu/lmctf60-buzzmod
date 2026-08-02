@@ -155,6 +155,12 @@ typedef struct sg_bot_s
 	int			carry_bestcost;  /* least field cost this carry has reached */
 	float		carry_lost_at;   /* last progress-loss event: rate limiter */
 	float		rally_since;    /* waiting for a partner before the push */
+	float		strict_since;   /* the strict grab-hold's OWN clock -- it
+	                             * shared rally_since for thirteen waves and
+	                             * the approach-band rally reset it every
+	                             * pairing pass: the 20s hold never ran 20s,
+	                             * and GRABMODE showed grabs at room=5
+	                             * stamped "clean" (wave 164) */
 	int			last_room;      /* defenders believed at the stand, last census */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
 	int			rail_link;      /* RUN link being retried the proof's way */
@@ -1118,8 +1124,8 @@ static void SG_BotThink(sg_bot_t *bot)
 			 * the doctrine pivot is evidence, not taste. */
 			gi.dprintf("GRABMODE %s room=%d %s\n",
 			           e->client->pers.netname, bot->last_room,
-			           (bot->rally_since > 0.0f &&
-			            level.time - bot->rally_since >= 20.0f)
+			           (bot->strict_since > 0.0f &&
+			            level.time - bot->strict_since >= 20.0f)
 			               ? "forced" : "clean");
 		}
 		else if (!carrying && bot->was_carrying)
@@ -1897,11 +1903,13 @@ rally_done:;
 				if (room >= 1 &&
 				    gi.cvar("sg_strictgrab", "0", 0)->value)
 				{
-					if (bot->rally_since <= 0.0f)
-						bot->rally_since = level.time;
-					if (level.time - bot->rally_since < 20.0f)
+					if (bot->strict_since <= 0.0f)
+						bot->strict_since = level.time;
+					if (level.time - bot->strict_since < 20.0f)
 						rally_hold = true;
 				}
+				else
+					bot->strict_since = 0.0f;
 
 				/*
 				 * THE PRE-BREACH BOMB. Threshold duels run 99-58 against
