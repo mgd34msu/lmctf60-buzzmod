@@ -13,12 +13,16 @@ names = {0: 'attack', 1: 'defend', 2: 'carry', 3: 'recover', 4: 'escort'}
 stats = collections.defaultdict(lambda: {'dist': 0.0, 'prog': 0.0, 'n': 0})
 prev = {}
 for line in open(sys.argv[1], errors='replace'):
-    m = re.match(r'SG (\S+): role=(\d+) seed=-?\d+ goal=(-?\d+) spd=\d+ '
+    m = re.match(r'SG (\S+): role=(\d+) seed=-?\d+ goal=(-?\d+)'
+                 r'(?: sgoal=(-?\d+))? spd=\d+ '
                  r'org=\((-?\d+) (-?\d+) (-?\d+)\)', line)
     if not m:
         continue
-    who, role, goal = m.group(1), int(m.group(2)), int(m.group(3))
-    pos = tuple(int(x) for x in m.groups()[3:6])
+    # sgoal (static route field) when present: immune to the composed
+    # surface rebuilding under a stationary bot (wave 169's finding)
+    who, role = m.group(1), int(m.group(2))
+    goal = int(m.group(4)) if m.group(4) is not None else int(m.group(3))
+    pos = tuple(int(x) for x in m.groups()[4:7])
     if who in prev:
         prole, pgoal, ppos = prev[who]
         if prole == role and pgoal > 0 and goal > 0:
