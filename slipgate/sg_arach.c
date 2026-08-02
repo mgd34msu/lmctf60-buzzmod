@@ -4180,6 +4180,38 @@ no_hold:;
 			if (slew_rate > 0.0f &&
 			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
 				goto hook_wait;
+
+			/*
+			 * THE PRE-FIRE TRACE. The bite census (waves 154-157,
+			 * 5,961 off-anchor bites): 97%% into worldspawn at a
+			 * median 322 units SHORT -- architecture eating a bolt
+			 * fired down a line the generation proof never ran from
+			 * this exact stance. This is not the reverted mid-flight
+			 * anchor police (that strobed live ropes to death); it
+			 * declines the doomed fire BEFORE the ritual spends the
+			 * standing frame. A line that reaches within 300 of the
+			 * anchor still flies -- the 50-150-off bites that convert
+			 * were defended by evidence and stay untouched. A vetoed
+			 * line falls to the deadline path and the route reprices.
+			 */
+			{
+				vec3_t eye;
+				trace_t htr;
+
+				VectorCopy(e->s.origin, eye);
+				eye[2] += e->viewheight;
+				htr = gi.trace(eye, NULL, NULL, bot->hook_anchor, e,
+				               MASK_SOLID);
+				VectorSubtract(htr.endpos, bot->hook_anchor, ad2);
+				if (VectorLength(ad2) > 300.0f)
+				{
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("HOOKVETO %s short=%.0f\n",
+						           e->client->pers.netname,
+						           VectorLength(ad2));
+					goto hook_wait;
+				}
+			}
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
 			if (gi.cvar("sg_debug", "0", 0)->value)
