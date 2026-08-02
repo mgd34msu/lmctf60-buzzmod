@@ -3419,6 +3419,13 @@ void ClientOldSetSkin(edict_t *ent, char *input)
 	
 	// combine name and skin into a configstring
 	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, s) );
+
+	/* the uniform on the record: two silent repaint failures cost two
+	 * live reports -- the third fix verifies itself from the wave logs */
+	if ((ent->flags & FL_BOT) && gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("SKIN %s team=%d wears %s\n",
+		           ent->client->pers.netname,
+		           ent->client->ctf.teamnum, s);
 	
 	if (s == skin)
 	{
