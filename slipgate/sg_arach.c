@@ -1756,8 +1756,17 @@ rally_done:;
 				sg_belief_enemy_t *en3 = &sg_caco_enemies[team - 1][s3];
 				vec3_t dd3;
 
+				/* strict mode remembers twice as long: a sentry who
+				 * ducks behind the pedestal for four seconds vanished
+				 * from this count while remaining entirely alive, and
+				 * the "cleared" room killed its carrier at 5%% of the
+				 * route (waves 151-153). Absence of sighting is not
+				 * evidence of death; eight seconds is patience, not
+				 * paranoia. */
 				if (en3->client < 0 || en3->seed < 0 ||
-				    level.time - en3->seen_time >= 4.0f)
+				    level.time - en3->seen_time >=
+				        (gi.cvar("sg_strictgrab", "0", 0)->value
+				             ? 8.0f : 4.0f))
 					continue;
 				VectorSubtract(sg_rune->seeds[en3->seed].origin,
 				               e->s.origin, dd3);
