@@ -155,6 +155,7 @@ typedef struct sg_bot_s
 	int			carry_bestcost;  /* least field cost this carry has reached */
 	float		carry_lost_at;   /* last progress-loss event: rate limiter */
 	float		rally_since;    /* waiting for a partner before the push */
+	int			last_room;      /* defenders believed at the stand, last census */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
 	int			rail_link;      /* RUN link being retried the proof's way */
 	int			rail_stage;     /* 0 off, 1 walk to from-seed, 2 drive line */
@@ -1107,7 +1108,20 @@ static void SG_BotThink(sg_bot_t *bot)
 	if (gi.cvar("sg_debug", "0", 0)->value)
 	{
 		if (carrying && !bot->was_carrying)
+		{
 			gi.dprintf("CARRY %s begins\n", e->client->pers.netname);
+			/* the grab's honesty, on the record: how many defenders
+			 * the last census believed present, and whether the
+			 * patience valve had already expired (a FORCED grab into
+			 * a room the hold never cleared). If parity grabs are
+			 * ~all forced, the strict hold never wins at parity and
+			 * the doctrine pivot is evidence, not taste. */
+			gi.dprintf("GRABMODE %s room=%d %s\n",
+			           e->client->pers.netname, bot->last_room,
+			           (bot->rally_since > 0.0f &&
+			            level.time - bot->rally_since >= 20.0f)
+			               ? "forced" : "clean");
+		}
 		else if (!carrying && bot->was_carrying)
 			gi.dprintf("CARRY %s ends after %.1fs\n",
 			           e->client->pers.netname,
@@ -1811,6 +1825,7 @@ rally_done:;
 				if (esz > accounted)
 					room++;
 			}
+			bot->last_room = room;
 			/*
 			 * Hold only when OUTNUMBERED at the stand. Wave 114: mactf06
 			 * attackers reached 250 of the flag and stole nothing all
