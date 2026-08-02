@@ -4193,12 +4193,39 @@ no_hold:;
 			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
 				goto hook_wait;
 
-			/* (The pre-fire trace lived here for one wave -- 24,728
-			 * vetoes, land rate unmoved at 23%. The off-anchor bite
-			 * was never the failure driver; imperfect bites fly, as
-			 * the ride comment below always said. Reverted on its own
-			 * census; the failure lives in the RIDE, whose ends the
-			 * HOOKEND line below now names.) */
+			/* (The anchor-distance veto lived here for one wave --
+			 * 24,728 vetoes, land rate unmoved. Wrong test: bites
+			 * were never the failure.) The HOOKABORT census named
+			 * the real one: 2,403 bolts a wave die on the SKYBOX --
+			 * a lip anchor plus three degrees of slew slack at four
+			 * hundred units sails the bolt over the edge. This trace
+			 * tests the ACTUAL fire line for the ACTUAL failure: if
+			 * the view's own ray ends in sky, wait a frame for the
+			 * slew to settle instead of donating the rope to the
+			 * void. Cannot strobe a live rope; fires still happen the
+			 * moment the line lands on architecture. */
+			{
+				vec3_t sdir, seye, send;
+				trace_t str;
+
+				sdir[0] = cosf(bot->vp_cur * (float)M_PI / 180.0f)
+				        * cosf(bot->vy_cur * (float)M_PI / 180.0f);
+				sdir[1] = cosf(bot->vp_cur * (float)M_PI / 180.0f)
+				        * sinf(bot->vy_cur * (float)M_PI / 180.0f);
+				sdir[2] = -sinf(bot->vp_cur * (float)M_PI / 180.0f);
+				VectorCopy(e->s.origin, seye);
+				seye[2] += e->viewheight;
+				VectorMA(seye, 4096.0f, sdir, send);
+				str = gi.trace(seye, NULL, NULL, send, e, MASK_SOLID);
+				if (str.surface &&
+				    (str.surface->flags & SURF_SKY))
+				{
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("HOOKSKYHOLD %s\n",
+						           e->client->pers.netname);
+					goto hook_wait;
+				}
+			}
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
 			if (gi.cvar("sg_debug", "0", 0)->value)
