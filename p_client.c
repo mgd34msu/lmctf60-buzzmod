@@ -2427,13 +2427,14 @@ void ClientUserinfoChanged (edict_t *ent, char *userinfo)
 		ent->client->pers.spectator = false;
 
 
-	// set skin
+	// set skin -- but ONLY through the forcing path below. This raw
+	// configstring write published whatever the client asked for, enemy
+	// colors included, one frame ahead of validation; in CTF the color
+	// letter in the skin base is the team's and no client request may
+	// override it (every skin in the lmctf paks carries its team letter:
+	// cr-rm/cr-bm, femd-r/femd-b, rb-rm/rb-bm). ClientSetSkin at the end
+	// of this function is now the only writer.
 	skin = Info_ValueForKey (userinfo, "skin");
-
-	playernum = ent-g_edicts-1;
-
-	// combine name and skin into a configstring
-	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, skin) );
 
 	// fov
 	if (deathmatch->value && ((int)dmflags->value & DF_FIXED_FOV))
