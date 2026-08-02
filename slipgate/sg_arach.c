@@ -1449,7 +1449,12 @@ rally_done:;
 		 */
 		if (role == SG_ROLE_ATTACK && goal_field[bot->seed] < 4000 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
-			v += 2.5f * (float)sg_rune->seeds[l->to].area_hint;
+			/* 0.5, not 2.5: the lmctf58 audit caught this surcharge
+			 * out-arguing the ~125/hop goal gradient (exposure bytes run
+			 * 200+ on open approaches) -- six attackers orbited a pure
+			 * flat run to the flag for ten minutes behind a wall made of
+			 * preference. A preference stays UNDER the gradient. */
+			v += 0.5f * (float)sg_rune->seeds[l->to].area_hint;
 
 		/*
 		 * SPREAD THE AXES. Two attackers on the same cheapest gradient
@@ -1484,13 +1489,15 @@ rally_done:;
 				               mb6->ent->s.origin, md6);
 				if (VectorLength(md6) < 400.0f)
 				{
-					v += 800.0f;
+					v += 150.0f;    /* was 800: six times the hop
+					                 * gradient welded juniors to the
+					                 * midfield (same audit) */
 					break;
 				}
 			}
 		}
 		else if (role == SG_ROLE_CARRY)
-			v += 2.0f * (float)sg_rune->seeds[l->to].area_hint;
+			v += 0.4f * (float)sg_rune->seeds[l->to].area_hint; /* was 2.0: same audit */
 
 		if (l->action == RL_HOOK && level.time < bot->hookban_until &&
 		    e->waterlevel < 2)
