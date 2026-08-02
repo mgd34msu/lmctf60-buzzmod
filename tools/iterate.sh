@@ -13,7 +13,7 @@
 
 set -u
 
-Q2DED="${Q2DED:-$HOME/q2linux/q2reproded}"
+Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
 GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
