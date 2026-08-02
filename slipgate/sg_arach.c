@@ -3699,9 +3699,14 @@ no_hold:;
 			               "Grenades"))
 			{
 				bot->nade_phase = 2;
-				bot->nade_until = level.time + 2.2f;  /* long cook: the
-				                     * fuse pops on arrival, not after a
-				                     * second of bouncing off the pedestal */
+				/* the engine's in-hand deadline: cook_start + TIMER +
+				 * 0.2. The release moment is computed against FLIGHT
+				 * TIME each aim frame below -- the fixed 2.2s cook
+				 * left ~1s of fuse to spend BOUNCING off the impact
+				 * point at 667 u/s, which is exactly the one-room-off
+				 * miss NADEPOP measured (medians 434 and 717, radius
+				 * 165, waves 140/142) */
+				bot->nade_until = level.time + 3.2f;
 				if (gi.cvar("sg_debug", "0", 0)->value)
 					gi.dprintf("NADE %s cooking\n",
 					           e->client->pers.netname);
@@ -3725,22 +3730,30 @@ no_hold:;
 			 */
 			vec3_t na;
 			float nyaw, npitch, nh;
-			/* mirror p_weapon.c exactly: the clock the engine reads is
-			 * grenade_time = cook_start + TIMER + 0.2, so a 2.2s cook
-			 * releases with timer=1.0 and flies at 667, not the 693 the
-			 * old guess used -- the solve must price the real throw */
-			float nsp = 400.0f + (3.0f - 1.0f) * ((800.0f - 400.0f) / 3.0f);
+			/* the engine's clock: timer remaining if released this frame
+			 * is nade_until - now (p_weapon.c: grenade_time = cook_start
+			 * + TIMER + 0.2, and nade_until holds exactly that sum) */
+			float ntmr = bot->nade_until - level.time;
+			float nheld = 3.0f - (ntmr < 0.0f ? 0.0f
+			                     : (ntmr > 3.0f ? 3.0f : ntmr));
+			float nsp = 400.0f + nheld * ((800.0f - 400.0f) / 3.0f);
 			float ng = e->client->ps.pmove.gravity
 			           ? (float)e->client->ps.pmove.gravity : 800.0f;
-			float ns2 = nsp * nsp, ndisc;
+			float ns2 = nsp * nsp, ndisc, nfly = -1.0f;
 
 			VectorSubtract(bot->nade_at, e->s.origin, na);
 			nh = sqrtf(na[0] * na[0] + na[1] * na[1]);
 			nyaw = atan2f(na[1], na[0]) * 180.0f / (float)M_PI;
 			ndisc = ns2 * ns2 - ng * (ng * nh * nh + 2.0f * na[2] * ns2);
 			if (ndisc > 0.0f && nh > 32.0f)
-				npitch = -atanf((ns2 - sqrtf(ndisc)) / (ng * nh))
-				         * 180.0f / (float)M_PI;
+			{
+				float ntan = (ns2 - sqrtf(ndisc)) / (ng * nh);
+
+				npitch = -atanf(ntan) * 180.0f / (float)M_PI;
+				/* flight time from the same closed form: horizontal
+				 * range over horizontal speed */
+				nfly = nh * sqrtf(1.0f + ntan * ntan) / nsp;
+			}
 			else
 				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
 				         - 30.0f;
@@ -3748,7 +3761,19 @@ no_hold:;
 			                - e->client->ps.pmove.delta_angles[YAW];
 			cmd.angles[PITCH] = ANGLE2SHORT(npitch)
 			                  - e->client->ps.pmove.delta_angles[PITCH];
-			if (level.time < bot->nade_until)
+			/*
+			 * THE TRUE AIRBURST. Release when the fuse remaining equals
+			 * the flight ahead, so the pop happens ON ARRIVAL -- the
+			 * fixed cook landed the bomb with a second to spend
+			 * bouncing away from the aim point, and NADEPOP measured
+			 * the result: medians 434 and 717 against a 165 radius.
+			 * Solve degenerate (no closed pitch) throws at once; the
+			 * 0.6s floor keeps the POP outside our own splash radius
+			 * (0.4s of fuse is ~250 units of clearance), not merely
+			 * the hand attached.
+			 */
+			if (ntmr > 0.6f &&
+			    (nfly < 0.0f ? 0 : (ntmr - 0.2f > nfly + 0.05f)))
 				cmd.buttons |= BUTTON_ATTACK;
 			else
 			{
@@ -3756,8 +3781,9 @@ no_hold:;
 				bot->nade_phase = 0;
 				bot->nade_next = level.time + 8.0f;
 				if (gi.cvar("sg_debug", "0", 0)->value)
-					gi.dprintf("NADE %s thrown\n",
-					           e->client->pers.netname);
+					gi.dprintf("NADE %s thrown fly=%.2f fuse=%.2f\n",
+					           e->client->pers.netname,
+					           nfly, ntmr - 0.2f);
 			}
 		}
 		bot->engaged_last = engaged;
