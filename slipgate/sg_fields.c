@@ -780,7 +780,14 @@ void Fields_Refresh(rune_t *r)
 		Field_Flood(r, fld, &seed, &cost, 1);
 	}
 
-	/* our-carrier support fields, one per team, from believed position */
+	/* our-carrier support fields, one per team -- flooded from a point
+	 * AHEAD of the carrier, not from its heels. The field refreshes once
+	 * a second and a rope-speed carrier outruns its own past: escorts
+	 * routed to the believed position screened nothing (waves 111-112:
+	 * 0-11% of carry seconds with an escort inside 700). The flood seed
+	 * now walks three hops down the carrier's homeward gradient first,
+	 * so the escort converges on where the carrier is GOING and the
+	 * screen forms on the path, not the wake. */
 	for (i = 0; i < 2; i++)
 	{
 		sg_belief_carrier_t *c = &sg_caco_team_belief.carrier[i];
@@ -788,7 +795,30 @@ void Fields_Refresh(rune_t *r)
 
 		if (c->client >= 0 && c->seed >= 0)
 		{
-			Field_Flood(r, sg_fields.our_carrier[i], &c->seed, &cost, 1);
+			int *home = i ? sg_fields.to_blue_flag
+			              : sg_fields.to_red_flag;
+			int seed = c->seed, hop;
+
+			for (hop = 0; hop < 3; hop++)
+			{
+				int li2, best = -1, bv = home[seed];
+
+				for (li2 = r->first_link[seed]; li2 >= 0;
+				     li2 = r->next_link[li2])
+				{
+					rune_link_t *l2 = &r->links[li2];
+
+					if (home[l2->to] < bv)
+					{
+						bv = home[l2->to];
+						best = l2->to;
+					}
+				}
+				if (best < 0)
+					break;
+				seed = best;
+			}
+			Field_Flood(r, sg_fields.our_carrier[i], &seed, &cost, 1);
 			sg_fields.our_carrier_valid[i] = true;
 		}
 	}
