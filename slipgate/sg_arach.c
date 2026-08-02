@@ -1623,8 +1623,16 @@ rally_done:;
 				int b2, was_best = bot->carry_bestcost;
 
 				bot->carry_lost_at = level.time;
+				/* wipe STALE testimony only: a shelf priced at the
+				 * old position is hearsay here, but one recorded in
+				 * the last three seconds is the body reporting from
+				 * where it stands now, and un-shelving those sent
+				 * carriers into retry-fail churn (offgraph frames
+				 * 0->3->5->12%% across waves 141-144). Shelves live
+				 * 120s, so age reads off the expiry. */
 				for (b2 = 0; b2 < SG_BL_MAX; b2++)
-					bot->bl_until[b2] = 0.0f;
+					if (bot->bl_until[b2] < level.time + 117.0f)
+						bot->bl_until[b2] = 0.0f;
 				bot->carry_startcost = cc;
 				bot->carry_bestcost = cc;
 				if (gi.cvar("sg_debug", "0", 0)->value)
