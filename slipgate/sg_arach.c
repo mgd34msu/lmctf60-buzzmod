@@ -140,6 +140,8 @@ typedef struct sg_bot_s
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
 	float		vy_cur, vp_cur; /* the view's ACTUAL heading: slew state */
 	qboolean	view_on;        /* slew state valid (false snaps on respawn) */
+	qboolean	speedhook;      /* this rope is a burst, not a transit */
+	float		speedhook_next; /* cooldown on burst ropes */
 	int			carry_startcost; /* field cost at the grab: breakout gauge */
 	float		rally_since;    /* waiting for a partner before the push */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
@@ -2301,7 +2303,58 @@ no_hold:;
 			/* the landing hop belongs on running ground, not on a link
 			 * whose traversal is itself a jump, a drop, a rope or a swim */
 			if (l->action == RL_RUN)
+			{
 				run_link = true;
+
+				/*
+				 * THE SPEED HOOK -- the tech that made LMCTF movement an
+				 * art: a short rope thrown high-ahead on an open runway,
+				 * ridden three tenths of a second to the pull's 800 u/s,
+				 * released, momentum kept. Fired ON THE RUN (no brake, no
+				 * standing frame -- the anchor sits near the current view
+				 * line so the slew arrives in a step or two), gated to
+				 * long clear stretches when nobody is engaged and the
+				 * legs are the bottleneck. Cooldown keeps it a burst,
+				 * not a lifestyle.
+				 */
+				if (bot->hook_phase == 0 && !bot->engaged_last &&
+				    level.time >= bot->speedhook_next &&
+				    e->groundentity && e->waterlevel == 0 &&
+				    goal_field[bot->seed] > 4000)
+				{
+					float hsp2 = e->velocity[0] * e->velocity[0]
+					           + e->velocity[1] * e->velocity[1];
+
+					if (hsp2 > 220.0f * 220.0f && hsp2 < 480.0f * 480.0f)
+					{
+						vec3_t hd, heye, hend;
+						trace_t htr;
+						float hyaw;
+
+						VectorSubtract(aim, e->s.origin, hd);
+						hyaw = atan2f(hd[1], hd[0]);
+						heye[0] = e->s.origin[0];
+						heye[1] = e->s.origin[1];
+						heye[2] = e->s.origin[2] + e->viewheight;
+						hend[0] = heye[0] + cosf(hyaw) * 480.0f;
+						hend[1] = heye[1] + sinf(hyaw) * 480.0f;
+						hend[2] = heye[2] + 280.0f;    /* ~30 deg up */
+						htr = gi.trace(heye, NULL, NULL, hend, e,
+						               MASK_SOLID);
+						if (htr.fraction < 1.0f && !htr.startsolid &&
+						    htr.fraction * 560.0f > 170.0f &&
+						    htr.plane.normal[2] < 0.7f)
+						{
+							VectorCopy(htr.endpos, bot->hook_anchor);
+							VectorCopy(aim, bot->hook_dest);
+							bot->hook_phase = 1;
+							bot->hook_deadline = level.time + 1.0f;
+							bot->speedhook = true;
+							bot->speedhook_next = level.time + 4.0f;
+						}
+					}
+				}
+			}
 
 			/*
 			 * A hook link executes the way the rune proved it: aim at the
@@ -2754,7 +2807,7 @@ no_hold:;
 			 * traces here. The aim frame is a standing frame, exactly
 			 * the posture the proofs fired from.
 			 */
-			if (bot->hook_phase == 1)
+			if (bot->hook_phase == 1 && !bot->speedhook)
 			{
 				cmd.forwardmove = 0;
 				cmd.sidemove = 0;
@@ -3359,7 +3412,27 @@ no_hold:;
 			VectorSubtract(bot->hook_dest, e->s.origin, td);
 			arrived = (td[0] * td[0] + td[1] * td[1] < 80.0f * 80.0f &&
 			           td[2] > -96.0f && td[2] < 96.0f);
-			if (arrived || rope < 130.0f ||
+			if (bot->speedhook)
+			{
+				/* the burst release: cut at speed and KEEP it -- no
+				 * landing brake, no shelf accounting, phase straight to
+				 * zero and the legs inherit 600+ */
+				float bs2 = e->velocity[0] * e->velocity[0]
+				          + e->velocity[1] * e->velocity[1]
+				          + e->velocity[2] * e->velocity[2];
+
+				if (bs2 > 600.0f * 600.0f ||
+				    level.time > bot->hook_deadline ||
+				    e->client->hookstate == 0)
+				{
+					if (e->client->hookstate != 0)
+						ctf_hook_abort(e);
+					bot->hook_phase = 0;
+					bot->speedhook = false;
+					bot->commit_link = -1;
+				}
+			}
+			else if (arrived || rope < 130.0f ||
 			    level.time > bot->hook_deadline || e->client->hookstate == 0)
 			{
 				was_pulling = (e->client->hookstate != 0);
