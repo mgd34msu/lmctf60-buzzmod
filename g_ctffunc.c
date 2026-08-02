@@ -1399,10 +1399,16 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	 * before their balancer verdict spent whole matches in enemy
 	 * colors).
 	 */
+	if (whatteam == CTF_TEAM_RED || whatteam == CTF_TEAM_BLUE)
 	{
-		void ClientSetSkin(edict_t *e2, char *sk);
+		/* ClientOldSetSkin is the one path that FORCES color from the
+		 * team unconditionally -- ClientSetSkin's list validation waves
+		 * through any existing skin (male/grunt included, which is why
+		 * the first repaint changed nothing: neutral brown reads as red
+		 * from ten feet). */
+		void ClientOldSetSkin(edict_t *e2, char *sk);
 
-		ClientSetSkin(ent,
+		ClientOldSetSkin(ent,
 		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
 	}
 	//	return;
