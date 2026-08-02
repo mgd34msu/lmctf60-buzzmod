@@ -18,7 +18,7 @@ GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
 BOTS="${BOTS:-10}"
-SECS="${SECS:-300}"
+SECS="${SECS:-600}"  # ten-minute games, owner-ordered wave format
 PORT_BASE="${PORT_BASE:-28520}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
