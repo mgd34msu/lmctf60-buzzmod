@@ -2666,17 +2666,29 @@ no_hold:;
 				bot->hook_phase = 0;
 				bot->flow_release = false;
 				bot->commit_link = -1;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("HOOKEND %s apex\n",
+					           e->client->pers.netname);
 			}
 			else if (e->groundentity || level.time > bot->hook_deadline)
 			{
-				if (e->groundentity && gi.cvar("sg_debug", "0", 0)->value)
+				if (gi.cvar("sg_debug", "0", 0)->value)
 				{
-					vec3_t ld;
+					if (e->groundentity)
+					{
+						vec3_t ld;
 
-					VectorSubtract(bot->hook_dest, e->s.origin, ld);
-					gi.dprintf("HOOKLAND %s dist=%.0f dz=%.0f\n",
-					           e->client->pers.netname,
-					           sqrtf(ld[0] * ld[0] + ld[1] * ld[1]), ld[2]);
+						VectorSubtract(bot->hook_dest, e->s.origin, ld);
+						gi.dprintf("HOOKLAND %s dist=%.0f dz=%.0f\n",
+						           e->client->pers.netname,
+						           sqrtf(ld[0] * ld[0] + ld[1] * ld[1]),
+						           ld[2]);
+					}
+					else
+						/* deadline hit still airborne: the throw
+						 * never came down anywhere useful */
+						gi.dprintf("HOOKEND %s drop\n",
+						           e->client->pers.netname);
 				}
 				bot->hook_phase = 0;
 				if (!bot->flow_release)
@@ -4181,37 +4193,12 @@ no_hold:;
 			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
 				goto hook_wait;
 
-			/*
-			 * THE PRE-FIRE TRACE. The bite census (waves 154-157,
-			 * 5,961 off-anchor bites): 97%% into worldspawn at a
-			 * median 322 units SHORT -- architecture eating a bolt
-			 * fired down a line the generation proof never ran from
-			 * this exact stance. This is not the reverted mid-flight
-			 * anchor police (that strobed live ropes to death); it
-			 * declines the doomed fire BEFORE the ritual spends the
-			 * standing frame. A line that reaches within 300 of the
-			 * anchor still flies -- the 50-150-off bites that convert
-			 * were defended by evidence and stay untouched. A vetoed
-			 * line falls to the deadline path and the route reprices.
-			 */
-			{
-				vec3_t eye;
-				trace_t htr;
-
-				VectorCopy(e->s.origin, eye);
-				eye[2] += e->viewheight;
-				htr = gi.trace(eye, NULL, NULL, bot->hook_anchor, e,
-				               MASK_SOLID);
-				VectorSubtract(htr.endpos, bot->hook_anchor, ad2);
-				if (VectorLength(ad2) > 300.0f)
-				{
-					if (gi.cvar("sg_debug", "0", 0)->value)
-						gi.dprintf("HOOKVETO %s short=%.0f\n",
-						           e->client->pers.netname,
-						           VectorLength(ad2));
-					goto hook_wait;
-				}
-			}
+			/* (The pre-fire trace lived here for one wave -- 24,728
+			 * vetoes, land rate unmoved at 23%. The off-anchor bite
+			 * was never the failure driver; imperfect bites fly, as
+			 * the ride comment below always said. Reverted on its own
+			 * census; the failure lives in the RIDE, whose ends the
+			 * HOOKEND line below now names.) */
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
 			if (gi.cvar("sg_debug", "0", 0)->value)
@@ -4352,6 +4339,16 @@ no_hold:;
 				{
 					if (e->client->hookstate != 0)
 						ctf_hook_abort(e);
+					/* the burst's three ends, named: reached speed
+					 * (the SILENT SUCCESS that made the land-rate
+					 * denominator a lie), stalled to deadline, or
+					 * the rope never held */
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("HOOKEND %s %s\n",
+						           e->client->pers.netname,
+						           bs2 > 600.0f * 600.0f ? "burst"
+						           : (e->client->hookstate == 0
+						              ? "noattach" : "burststall"));
 					bot->hook_phase = 0;
 					bot->speedhook = false;
 					bot->commit_link = -1;
@@ -4365,6 +4362,9 @@ no_hold:;
 					ctf_hook_abort(e);
 				/* a cut live rope hands off to the landing steer; a rope
 				 * that never attached does not */
+				if (!was_pulling && gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("HOOKEND %s noattach\n",
+					           e->client->pers.netname);
 				bot->hook_phase = was_pulling ? 3 : 0;
 				bot->hook_deadline = level.time + 1.0f;
 			}
