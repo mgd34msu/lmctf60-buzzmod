@@ -1738,8 +1738,23 @@ rally_done:;
 		 * about 25 links wide, and the whole term is skipped on every frame
 		 * there is no fight, which is most of them.
 		 */
-		else if (duel)
+		else if (duel &&
+		         !(role == SG_ROLE_ATTACK &&
+		           gi.cvar("sg_press", "0", 0)->value))
 		{
+			/*
+			 * THE PRESS (sg_press, A/B wave 169+). The travel
+			 * decomposition (waves 164-168): twenty percent of ALL
+			 * attacker distance is spent actively receding from the
+			 * goal -- and range control is the suspect with the
+			 * motive: an engaged attacker prices its steps toward the
+			 * range its weapon wants, which for the long guns means
+			 * BACKWARD, and at parity engagement never ends. Under
+			 * press, attackers keep the aim, keep the weave, and keep
+			 * walking forward; only defenders and escorts hold range
+			 * discipline. The escort's 3.1 efficiency against the
+			 * attacker's 1.6 was always this contrast.
+			 */
 			v += Duel_Price(e, sg_rune->seeds[l->to].origin, duel_org,
 			                duel_want, duel_expo);
 			/* the exposure dimension as a cover prior: a seed the map

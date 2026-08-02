@@ -42,7 +42,10 @@ GRABS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
 # shipping candidate for the same root (A/B wave 168+): incumbent route
 # holds unless beaten by 15% on s03-05, control on s06-07
 NAKED=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-STICKY=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# sticky read null on wave 168 (its reach was within-seed only); press is
+# the wave 169+ A/B -- attackers skip duel range-control on s03-05
+STICKY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+PRESS=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -58,6 +61,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_nakedcarry "${NAKED[$i]}" +set sg_sticky "${STICKY[$i]}" \
+                +set sg_press "${PRESS[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &
