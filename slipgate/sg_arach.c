@@ -767,6 +767,23 @@ static float Surface_At(int seed, const sg_weights_t *w,
 
 	v = w->objective * (float)goal_field[seed];
 
+	/*
+	 * THE NAKED CARRY (sg_nakedcarry, A/B wave 166+). Every navigation
+	 * link from map file to field flood verified sound tonight, yet
+	 * parity carriers drift away from a correct destination -- and one
+	 * price term is self-reinforcing: the learned danger field records
+	 * every carrier death along the road home and taxes that road for
+	 * the next carrier. At parity the deaths are dense, so the tax
+	 * compounds until home costs more than wandering. Naked mode prices
+	 * a carrier's step by time-to-home and NOTHING else: no danger, no
+	 * item detours, no cover terms. If naked carriers close on their
+	 * stands, the wall was the pricing; if they still wander, the
+	 * descent itself goes under the microscope.
+	 */
+	if (sg_cur_role == SG_ROLE_CARRY &&
+	    gi.cvar("sg_nakedcarry", "0", 0)->value)
+		return v;
+
 	/* the danger dimension: learned, decayed, team-indexed (set by the
 	 * caller alongside sg_cur_role); zero where nothing has died */
 	if (sg_cur_danger && seed < SG_MAX_SEEDS)
