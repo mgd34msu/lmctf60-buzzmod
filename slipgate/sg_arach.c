@@ -2268,6 +2268,28 @@ rally_done:;
 	}
 
 	/*
+	 * HOLD SHORT OF AN UNCAPPABLE STAND (both-flags doctrine, wave 175).
+	 * A carrier whose own flag is astray cannot score by touching the
+	 * stand -- but it marched there anyway and camped the most
+	 * predictable spot on the map until something killed it. Now it
+	 * closes to earshot of home (2500 of field) and HOLDS off-stand,
+	 * fighting from wherever it stands, until the team returns the
+	 * flag; the last steps happen when they can score. The standoff
+	 * breaks on exactly one event, and ours must survive to convert it.
+	 */
+	if (role == SG_ROLE_CARRY &&
+	    sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY &&
+	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
+	    goal_field[bot->seed] < 2500)
+	{
+		rally_hold = true;
+		if (gi.cvar("sg_debug", "0", 0)->value &&
+		    level.time >= bot->next_report - 0.9f)
+			gi.dprintf("CARRYHOLD %s cost=%d\n",
+			           e->client->pers.netname, goal_field[bot->seed]);
+	}
+
+	/*
 	 * THE UNSTICK OF LAST RESORT. A rope through a doorway parked a bot
 	 * on a wall ledge off the navigable mesh (wave 97, screenshot in
 	 * hand) and every clever layer beneath this line -- watchdog,
