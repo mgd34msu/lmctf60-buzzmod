@@ -152,6 +152,8 @@ typedef struct sg_bot_s
 	qboolean	speedhook;      /* this rope is a burst, not a transit */
 	float		speedhook_next; /* cooldown on burst ropes */
 	int			carry_startcost; /* field cost at the grab: breakout gauge */
+	int			carry_bestcost;  /* least field cost this carry has reached */
+	float		carry_lost_at;   /* last progress-loss event: rate limiter */
 	float		rally_since;    /* waiting for a partner before the push */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
 	int			rail_link;      /* RUN link being retried the proof's way */
@@ -1090,17 +1092,22 @@ static void SG_BotThink(sg_bot_t *bot)
 
 	role = SG_Role(bot, carrying);
 
-	/* carry bookends and role transitions: short carries slip between the
-	 * 1Hz samples, so the transitions themselves get lines */
+	/* carry bookends: the STATE here is game logic, not telemetry -- the
+	 * breakout gauge and the progress guard read it whether or not anyone
+	 * is watching (it lived inside the debug gate until wave 141, which
+	 * would have blinded both on any quiet server) */
+	if (carrying && !bot->was_carrying)
+	{
+		bot->carry_start = level.time;
+		bot->carry_startcost = -1;  /* gauged on first samples below */
+		bot->carry_bestcost = -1;
+		bot->carry_lost_at = 0.0f;
+		sg_grab_time[team - CTF_TEAM_RED] = level.time;
+	}
 	if (gi.cvar("sg_debug", "0", 0)->value)
 	{
 		if (carrying && !bot->was_carrying)
-		{
-			bot->carry_start = level.time;
 			gi.dprintf("CARRY %s begins\n", e->client->pers.netname);
-			bot->carry_startcost = -1;  /* gauged on first samples below */
-			sg_grab_time[team - CTF_TEAM_RED] = level.time;
-		}
 		else if (!carrying && bot->was_carrying)
 			gi.dprintf("CARRY %s ends after %.1fs\n",
 			           e->client->pers.netname,
@@ -1590,6 +1597,44 @@ rally_done:;
 		if (role == SG_ROLE_CARRY && bot->carry_startcost < 0 &&
 		    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
 			bot->carry_startcost = goal_field[bot->seed];
+
+		/*
+		 * THE PROGRESS GUARD. Wave 140's carry traces: the 53-second 5v1
+		 * carry ran its cost 12800 down to 6400, fell into the pool, and
+		 * finished the fight at 8623 -- a third of the route home handed
+		 * back in one drop, then a crawl. A carrier that loses ground it
+		 * already paid for is off its route (act=-1 frames, 61 of them
+		 * that game); the shelf that priced the old position is stale
+		 * testimony there. On a 2500-cost regression from the carry's
+		 * best: wipe the shelf, re-arm the breakout gauge from here, and
+		 * say so in the log. The descent replans from where the body
+		 * actually is, not where the plan thought it would be.
+		 */
+		if (role == SG_ROLE_CARRY && bot->seed >= 0 &&
+		    goal_field[bot->seed] < SG_FIELD_INF)
+		{
+			int cc = goal_field[bot->seed];
+
+			if (bot->carry_bestcost < 0 || cc < bot->carry_bestcost)
+				bot->carry_bestcost = cc;
+			else if (cc > bot->carry_bestcost + 2500 &&
+			         level.time > bot->carry_lost_at + 2.0f)
+			{
+				int b2, was_best = bot->carry_bestcost;
+
+				bot->carry_lost_at = level.time;
+				for (b2 = 0; b2 < SG_BL_MAX; b2++)
+					bot->bl_until[b2] = 0.0f;
+				bot->carry_startcost = cc;
+				bot->carry_bestcost = cc;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("CARRYLOST %s best=%d now=%d org=(%.0f %.0f %.0f)\n",
+					           e->client->pers.netname,
+					           was_best, cc,
+					           e->s.origin[0], e->s.origin[1],
+					           e->s.origin[2]);
+			}
+		}
 		if (role == SG_ROLE_CARRY &&
 		    !(bot->carry_startcost > 0 && bot->seed >= 0 &&
 		      goal_field[bot->seed] < SG_FIELD_INF &&
