@@ -900,7 +900,17 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		 * refuses every jump after it until a command arrives with upmove
 		 * under 10. The caller releases after every step.
 		 */
-		if (run_link && open_ahead && sp > 320.0f && !(pmf & PMF_TIME_LAND))
+		/*
+		 * 270, not 320: the audit under honest respawns (waves 84-86,
+		 * 45k live samples) read fleet median 199 against a 300 run
+		 * speed -- and this gate was the circle. Ground friction caps a
+		 * run at 300, the hop is the only way THROUGH 300, and a hop
+		 * gated at 320 waits for a speed that running cannot reach. Hop
+		 * at the approach to the cap, let the air-strafe harvest do the
+		 * exceeding: the carrier control group (median 310, straight
+		 * sprints) already proved the ceiling is real.
+		 */
+		if (run_link && open_ahead && sp > 270.0f && !(pmf & PMF_TIME_LAND))
 			cmd->upmove = 400;
 
 		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 10.0f);
