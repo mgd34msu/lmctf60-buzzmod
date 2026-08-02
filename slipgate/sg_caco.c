@@ -40,6 +40,29 @@
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
+/*
+ * The last enemy death each team knows about, by team of the VICTIM.
+ * Obituaries are broadcast text -- a kill is common knowledge the frame
+ * it happens -- so this is belief, not omniscience. The attack surge
+ * reads it: a defender dead near their own stand opens a respawn-wide
+ * window, and the window is for sprinting, not waiting.
+ */
+vec3_t	sg_caco_death_org[2];
+float	sg_caco_death_time[2] = { -1000.0f, -1000.0f };
+
+void SG_NoteDeath(edict_t *victim)
+{
+	int t;
+
+	if (!victim->client)
+		return;
+	t = victim->client->ctf.teamnum;
+	if (t != CTF_TEAM_RED && t != CTF_TEAM_BLUE)
+		return;
+	VectorCopy(victim->s.origin, sg_caco_death_org[t - CTF_TEAM_RED]);
+	sg_caco_death_time[t - CTF_TEAM_RED] = level.time;
+}
+
 static float caco_next_scan;
 static float caco_next_human;
 static float caco_next_advect;

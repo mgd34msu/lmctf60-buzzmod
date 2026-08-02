@@ -1244,6 +1244,32 @@ static void SG_BotThink(sg_bot_t *bot)
 				 * in the respawn room is not worth twenty. */
 				mates_coming++;
 		}
+		{
+			/*
+			 * THE SURGE: a defender dead near their own stand opens a
+			 * respawn-wide window, and waves 84-85 show the thief dying
+			 * 3-5 seconds after the grab to the respawn stream -- the
+			 * window is the only time the room is thin. A fresh enemy
+			 * death (< 6s) within 1200 of the enemy flag cancels the
+			 * wait: push NOW, paired or not.
+			 */
+			int et = (team == CTF_TEAM_RED) ? 1 : 0;    /* victim = them */
+			edict_t *ef = G_Find(NULL, FOFS(classname),
+			                     (team == CTF_TEAM_RED) ? "info_flag_blue"
+			                                            : "info_flag_red");
+
+			if (ef && level.time - sg_caco_death_time[et] < 6.0f)
+			{
+				vec3_t dd2;
+
+				VectorSubtract(sg_caco_death_org[et], ef->s.origin, dd2);
+				if (VectorLength(dd2) < 1200.0f)
+				{
+					bot->rally_since = 0.0f;
+					goto rally_done;
+				}
+			}
+		}
 		if (mates_near == 0 && mates_coming > 0)
 		{
 			if (bot->rally_since <= 0.0f)
@@ -1295,6 +1321,7 @@ static void SG_BotThink(sg_bot_t *bot)
 				           level.time - bot->rally_since, mates_near);
 			bot->rally_since = 0.0f;
 		}
+rally_done:;
 	}
 	else
 		bot->rally_since = 0.0f;

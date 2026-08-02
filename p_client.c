@@ -756,6 +756,11 @@ player_die
 */
 void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_t point)
 {
+	{
+		void SG_NoteDeath(edict_t *victim);
+
+		SG_NoteDeath(self);     /* the obituary is common knowledge */
+	}
 	int		n;
 	edict_t	*attacker_flag=NULL, *defender_flag=NULL;  // CTF CODE -- LM_JORM
 	// int		teamnum;// CTF CODE -- LM_JORM
