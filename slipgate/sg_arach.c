@@ -2083,14 +2083,30 @@ rally_done:;
 	 * the respawn stream meets a gun instead of a fleeing back. Then it
 	 * escorts, as before, in country where escorting means something.
 	 */
-	if (role == SG_ROLE_ESCORT &&
+	/*
+	 * ...and not only the ESCORT. The route-fraction census (waves
+	 * 141-148, 83 parity carries): 77%% of carriers die inside the first
+	 * quarter of the route, median at 3%% -- the room, not the road. At
+	 * the grab moment the fighter still wears ATTACK, and an attacker's
+	 * post-grab field is the enemy flag ON OUR CARRIER'S BACK: it pulls
+	 * him into the carrier's wake out the same door, a second target on
+	 * one rail line. The hold now catches ATTACK too -- the fighter
+	 * plugs the room he is already standing in, which was the pair-split
+	 * doctrine's second half all along.
+	 */
+	if ((role == SG_ROLE_ESCORT || role == SG_ROLE_ATTACK) &&
 	    level.time - sg_grab_time[team - CTF_TEAM_RED] < 8.0f &&
 	    bot->seed >= 0)
 	{
 		int *att = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
 		                                  : sg_fields.to_red_flag;
 
-		if (att && att[bot->seed] < 3000)
+		/* escorts hold at 3000 as before; an ATTACKER holds only from
+		 * INSIDE the room (the threshold fighter reads under ~1200) --
+		 * at 3000 the hold would freeze attackers still mid-corridor,
+		 * parked on the rail lines they were built to cross */
+		if (att && att[bot->seed] < (role == SG_ROLE_ATTACK ? 1500
+		                                                    : 3000))
 			rally_hold = true;      /* stand and fight: the room is the job */
 	}
 
