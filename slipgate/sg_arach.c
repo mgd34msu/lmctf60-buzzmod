@@ -1630,7 +1630,7 @@ rally_done:;
 		 */
 		if (role == SG_ROLE_ATTACK)
 		{
-			int s3;
+			int s3, room = 0;
 
 			for (s3 = 0; s3 < SG_MAX_ENEMY_TRACK; s3++)
 			{
@@ -1643,13 +1643,22 @@ rally_done:;
 				VectorSubtract(sg_rune->seeds[en3->seed].origin,
 				               e->s.origin, dd3);
 				if (VectorLength(dd3) < 900.0f)
-				{
-					if (bot->rally_since <= 0.0f)
-						bot->rally_since = level.time;
-					if (level.time - bot->rally_since < 10.0f)
-						rally_hold = true;
-					break;
-				}
+					room++;
+			}
+			/*
+			 * Hold only when OUTNUMBERED at the stand. Wave 114: mactf06
+			 * attackers reached 250 of the flag and stole nothing all
+			 * game -- the threshold hold against a single sentry is a
+			 * stalemate the sentry wins by existing. One defender: take
+			 * the grab and make them turn their back to chase. Two or
+			 * more: the room fight first, as before.
+			 */
+			if (room >= 2)
+			{
+				if (bot->rally_since <= 0.0f)
+					bot->rally_since = level.time;
+				if (level.time - bot->rally_since < 10.0f)
+					rally_hold = true;
 			}
 		}
 	}
