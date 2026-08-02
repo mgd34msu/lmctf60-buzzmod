@@ -2719,6 +2719,63 @@ no_hold:;
 				bot->fan_side = side;
 			}
 
+			/*
+			 * LOOK DOWN THE ROAD. The nav view aimed at the CURRENT
+			 * link's destination -- fifty to a hundred and fifty units
+			 * out -- so every hop whipped the view to the next waypoint
+			 * and the whole fleet read as erratic even after the slew
+			 * (reported from the chase-cam twice). A human looks far
+			 * down the route. When the goal line is open and the step
+			 * is a plain run, the view extends along the committed
+			 * route up to two more hops -- taken only when the far
+			 * bearing stays within 25 degrees of the fan's answer, so
+			 * the legs lose nothing to the gaze.
+			 */
+			if (best_open >= 1.0f && bestlink >= 0 &&
+			    sg_rune->links[bestlink].action == RL_RUN &&
+			    bot->hook_phase == 0 && level.time >= bot->escape_until)
+			{
+				int cur = sg_rune->links[bestlink].to;
+				int hops;
+				vec3_t farp;
+
+				VectorCopy(sg_rune->seeds[cur].origin, farp);
+				for (hops = 0; hops < 2; hops++)
+				{
+					int li2, bl2 = -1, bv2 = goal_field[cur];
+
+					for (li2 = sg_rune->first_link[cur]; li2 >= 0;
+					     li2 = sg_rune->next_link[li2])
+					{
+						rune_link_t *l2 = &sg_rune->links[li2];
+
+						if (l2->action != RL_RUN)
+							continue;
+						if (goal_field[l2->to] < bv2)
+						{
+							bv2 = goal_field[l2->to];
+							bl2 = l2->to;
+						}
+					}
+					if (bl2 < 0)
+						break;
+					cur = bl2;
+					VectorCopy(sg_rune->seeds[cur].origin, farp);
+				}
+				{
+					vec3_t fd2;
+					float fyaw, fdiff;
+
+					VectorSubtract(farp, e->s.origin, fd2);
+					fyaw = atan2f(fd2[1], fd2[0]) * 180.0f / (float)M_PI;
+					fdiff = fyaw - chosen_yaw;
+					while (fdiff > 180.0f) fdiff -= 360.0f;
+					while (fdiff < -180.0f) fdiff += 360.0f;
+					if (fabsf(fdiff) < 25.0f)
+						chosen_yaw = fyaw;
+				}
+			}
+
 			/* at a drop lip the proven walk-off heading overrides the fan:
 			 * the proof is a line, and the line is the record's */
 			if (drop_yaw_locked)
@@ -3037,6 +3094,18 @@ no_hold:;
 		/* on post: whatever the descent wanted, guard duty overrides it */
 		if (hold_post)
 		{
+			/*
+			 * A sentry, not a statue. The stand guard stood frozen for
+			 * five straight minutes and read as a broken bot from one
+			 * seat away (reported live, twice). The post now sweeps: a
+			 * slow 35-degree arc around the approach bearing, the pace
+			 * of a bored guard's neck. Combat still owns the view the
+			 * moment anything shows.
+			 */
+			float sweep = 35.0f * sinf(level.time * 0.7f
+			                           + (float)(bot - sg_bots));
+
+			post_yaw += sweep;
 			cmd.forwardmove = 0;
 			cmd.sidemove = 0;
 			cmd.upmove = 0;
