@@ -13,7 +13,7 @@
 
 set -u
 
-Q2DED="${Q2DED:-/tmp/claude-1000/-home-buzzkill-Projects-lmctf60/efcdc762-1fa3-4536-ae59-d172d832eebc/scratchpad/yquake2/release/q2ded}"
+Q2DED="${Q2DED:-$HOME/q2linux/q2reproded}"
 GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
