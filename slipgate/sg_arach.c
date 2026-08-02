@@ -1256,6 +1256,74 @@ static void SG_BotThink(sg_bot_t *bot)
 		edict_t *ht = SG_ChatEscortTarget(e);
 
 		goal_field = sg_fields.our_carrier[team - 1];
+
+		/*
+		 * THE INTERPOSITION (sg_interpose, A/B wave 180+). The killer
+		 * census's standing fact: carriers die to live defenders with
+		 * escorts RIGHT THERE -- near the carrier, which is where the
+		 * support field sends them, and nowhere in particular relative
+		 * to the gun. A bodyguard does not stand next to the client; he
+		 * stands on the line the bullet takes. With a live carrier and
+		 * a fresh threat believed near it, the escort's goal becomes
+		 * the MIDPOINT of carrier and threat: body on the line, rail
+		 * eats the escort, carrier keeps the flag. Falls through to
+		 * the ordinary screen when there is no named threat.
+		 */
+		if (gi.cvar("sg_interpose", "0", 0)->value)
+		{
+			sg_belief_carrier_t *oc =
+			    &sg_caco_team_belief.carrier[team - 1];
+
+			if (oc->client >= 0 && oc->seed >= 0)
+			{
+				int s11, ts = -1;
+				float td11, best11 = 1200.0f;
+
+				for (s11 = 0; s11 < SG_MAX_ENEMY_TRACK; s11++)
+				{
+					sg_belief_enemy_t *en11 =
+					    &sg_caco_enemies[team - 1][s11];
+					vec3_t dd11;
+
+					if (en11->client < 0 || en11->seed < 0 ||
+					    level.time - en11->seen_time >= 4.0f)
+						continue;
+					VectorSubtract(
+					    sg_rune->seeds[en11->seed].origin,
+					    sg_rune->seeds[oc->seed].origin, dd11);
+					td11 = VectorLength(dd11);
+					if (td11 < best11)
+					{
+						best11 = td11;
+						ts = s11;
+					}
+				}
+				if (ts >= 0)
+				{
+					static int interpose_field[SG_MAX_SEEDS];
+					vec3_t mid;
+					int ms, mc = 0;
+
+					VectorAdd(
+					    sg_rune->seeds[oc->seed].origin,
+					    sg_rune->seeds[
+					        sg_caco_enemies[team - 1][ts].seed].origin,
+					    mid);
+					VectorScale(mid, 0.5f, mid);
+					ms = Rune_NearestSeed(sg_rune, mid);
+					if (ms >= 0)
+					{
+						Field_Flood(sg_rune, interpose_field,
+						            &ms, &mc, 1);
+						goal_field = interpose_field;
+						if (gi.cvar("sg_debug", "0", 0)->value &&
+						    level.time >= bot->next_report - 0.9f)
+							gi.dprintf("INTERPOSE %s seed=%d\n",
+							           e->client->pers.netname, ms);
+					}
+				}
+			}
+		}
 		if (ht && ht->inuse && ht->client && !ht->deadflag)
 		{
 			/*
