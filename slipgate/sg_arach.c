@@ -2107,7 +2107,19 @@ rally_done:;
 		 * parked on the rail lines they were built to cross */
 		if (att && att[bot->seed] < (role == SG_ROLE_ATTACK ? 1500
 		                                                    : 3000))
+		{
 			rally_hold = true;      /* stand and fight: the room is the job */
+			/* once per engagement, not per frame: the hold's own
+			 * evidence trail -- wave 149 moved no census and nothing
+			 * could say whether the plug ever engaged at all */
+			if (bot->rally_since <= 0.0f &&
+			    gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("PLUG %s role=%d cost=%d\n",
+				           e->client->pers.netname, (int)role,
+				           att[bot->seed]);
+			if (bot->rally_since <= 0.0f)
+				bot->rally_since = level.time;
+		}
 	}
 
 	/*
