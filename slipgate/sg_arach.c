@@ -1424,13 +1424,31 @@ static void SG_BotThink(sg_bot_t *bot)
 			int s2;
 
 			for (s2 = 0; s2 < SG_MAX_ENEMY_TRACK; s2++)
-				if (sg_caco_enemies[team - 1][s2].client >= 0 &&
-				    level.time - sg_caco_enemies[team - 1][s2].seen_time
-				        < 4.0f)
+			{
+				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s2];
+				vec3_t pd;
+
+				if (en->client < 0 || en->seed < 0 ||
+				    level.time - en->seen_time >= 4.0f)
+					continue;
+				/*
+				 * CLOSE contact only. 'Seen recently anywhere' kept
+				 * pursued carriers on their legs the whole run home,
+				 * and 32 games of the fast-respawn meta produced zero
+				 * captures with rail-armed pursuit running them down.
+				 * A pursuer 1500 units back cannot punish a half-second
+				 * aim stand -- the rope at 800 u/s GAINS on them. Only
+				 * an enemy believed inside 700 makes the standing frame
+				 * a real gamble.
+				 */
+				VectorSubtract(sg_rune->seeds[en->seed].origin,
+				               e->s.origin, pd);
+				if (VectorLength(pd) < 700.0f)
 				{
 					v += 2000.0f;
 					break;
 				}
+			}
 		}
 		if (role == SG_ROLE_CARRY && bot->carry_startcost < 0 &&
 		    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
