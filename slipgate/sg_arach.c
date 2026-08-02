@@ -142,6 +142,8 @@ typedef struct sg_bot_s
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
 	float		vy_cur, vp_cur; /* the view's ACTUAL heading: slew state */
 	qboolean	view_on;        /* slew state valid (false snaps on respawn) */
+	int			hookfail_streak; /* consecutive failed rides */
+	float		hookban_until;  /* streak of 2: the rope is confiscated */
 	qboolean	speedhook;      /* this rope is a burst, not a transit */
 	float		speedhook_next; /* cooldown on burst ropes */
 	int			carry_startcost; /* field cost at the grab: breakout gauge */
@@ -1434,6 +1436,8 @@ rally_done:;
 		    goal_field[bot->seed] < 600 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			continue;
+		if (l->action == RL_HOOK && level.time < bot->hookban_until)
+			continue;           /* the rope is confiscated: walk */
 
 		for (b = 0; b < SG_BL_MAX; b++)
 			if (bot->bl_link[b] == li && bot->bl_until[b] > level.time)
@@ -2306,10 +2310,33 @@ no_hold:;
 								oldest = b;
 						bot->bl_link[oldest] = bot->hook_link;
 						bot->bl_until[oldest] = level.time + 60.0f;
+						/*
+						 * Two failed rides in a row and the rope is
+						 * CONFISCATED: shelving one anchor at a time
+						 * drained a doorway's fan of near-identical
+						 * ropes failure by failure while the door
+						 * itself stood open a walk away (wave 98,
+						 * narrated live in capitals). Twenty seconds
+						 * on the legs beats another lap of the wall.
+						 */
+						bot->hookfail_streak++;
+						if (bot->hookfail_streak >= 2)
+						{
+							bot->hookban_until = level.time + 20.0f;
+							bot->hookfail_streak = 0;
+							if (gi.cvar("sg_debug", "0", 0)->value)
+								gi.dprintf("HOOKBAN %s 20s\n",
+								           e->client->pers.netname);
+						}
 						if (gi.cvar("sg_debug", "0", 0)->value)
 							gi.dprintf("HOOKFAIL %s link=%d\n",
 							           e->client->pers.netname,
 							           bot->hook_link);
+					}
+					else
+					{
+						/* the ride served: forgiveness */
+						bot->hookfail_streak = 0;
 					}
 				}
 				bot->hook_link = -1;
@@ -2380,6 +2407,7 @@ no_hold:;
 				 * not a lifestyle.
 				 */
 				if (bot->hook_phase == 0 && !bot->engaged_last &&
+				    level.time >= bot->hookban_until &&
 				    level.time >= bot->speedhook_next &&
 				    e->groundentity && e->waterlevel == 0 &&
 				    goal_field[bot->seed] > 4000)
@@ -3331,14 +3359,50 @@ no_hold:;
 			}
 
 			/*
-			 * Every step starts from the plain command -- forward down the
-			 * view, no strafe -- so anything the policy declines to do leaves
-			 * ordinary running behind. The navigation jump (a jump LINK, or
-			 * the stuck hop) belongs to the frame, not to every step, so it
-			 * goes in once and is released like any other.
+			 * THE LEGS ARE FREE OF THE EYES. Movement was welded to the
+			 * view -- forwardmove always ran down the gaze -- which is
+			 * why the look-ahead experiment steered bodies into walls,
+			 * why hook aim needed a standing frame, and why the fleet
+			 * read as a mob of people walking wherever they happened to
+			 * be staring (called out in exactly those words). A Quake
+			 * body translates in four directions relative to ANY view:
+			 * the course is a world-space fact (move_dir, the fan's
+			 * answer), the view is whatever combat or the rope or the
+			 * route wants, and forward/side are just the course
+			 * decomposed into the ACTUAL slewed view frame, every
+			 * subframe, so even mid-turn the body holds its line.
+			 * Underwater stays welded -- pmove swims along the full
+			 * view vector by design, and the swim pitch already aims
+			 * the view down the course.
 			 */
-			cmd.forwardmove = plain_forward;
-			cmd.sidemove = 0;
+			if (plain_forward > 0 && have_move && e->waterlevel <= 1)
+			{
+				vec3_t vb, vf, vr;
+				float fl;
+
+				vb[YAW] = bot->vy_cur;
+				vb[PITCH] = bot->vp_cur / 3.0f;
+				vb[ROLL] = 0.0f;
+				AngleVectors(vb, vf, vr, NULL);
+				fl = sqrtf(vf[0] * vf[0] + vf[1] * vf[1]);
+				if (fl > 0.01f)
+				{
+					cmd.forwardmove = (short)(400.0f *
+					    (move_dir[0] * vf[0] + move_dir[1] * vf[1]) / fl);
+					cmd.sidemove = (short)(400.0f *
+					    (move_dir[0] * vr[0] + move_dir[1] * vr[1]));
+				}
+				else
+				{
+					cmd.forwardmove = plain_forward;
+					cmd.sidemove = 0;
+				}
+			}
+			else
+			{
+				cmd.forwardmove = plain_forward;
+				cmd.sidemove = 0;
+			}
 			if (step == 0)
 				cmd.upmove = nav_jump;
 
