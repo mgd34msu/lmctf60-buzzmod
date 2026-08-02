@@ -35,8 +35,10 @@ mkdir -p "$LOG_DIR"
 LABELS=(s01-2v2 s02-2v2 s03-5v5 s04-5v5 s05-5v5 s06-5v5 s07-5v5 s08-7v7 s09-7v7 s10-5v1)
 MAPS=("$DUEL" "$DUEL" "$F1" "$F2" "$F3" "$F4" "$F5" "$DENS" "$DENS" "$CTRL")
 FILLS=("2" "2" "5" "5" "5" "5" "5" "7" "7" "5:1")
-# strict-grab A/B (wave 151+): three 5v5 servers strict, two current
-GRABS=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# strict-grab A/B, crossed design: wave 151 ran strict on s03-05 and
+# current on s06-07; wave 152 swaps the ground so the maps stop
+# confounding the doctrines. Judge across the pair.
+GRABS=("0" "0" "0" "0" "0" "1" "1" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
