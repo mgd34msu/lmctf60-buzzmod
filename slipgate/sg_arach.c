@@ -1419,6 +1419,20 @@ rally_done:;
 		float v = Surface_At(l->to, w, goal_field, support, intercept);
 		int b;
 
+		/*
+		 * No ropes in the house. Wave 96, watched live: an attacker
+		 * spinning in the flag room firing hooks at the walls while the
+		 * flag sat unguarded a body-length away -- in-room hook links
+		 * ping-pong a bot around the goal minimum, and rope-fire counts
+		 * tripled the day the slew made firing cheap. Inside 600ms of
+		 * the objective the legs beat any rope ritual; only a fleeing
+		 * carrier keeps the choice.
+		 */
+		if (l->action == RL_HOOK && role != SG_ROLE_CARRY &&
+		    goal_field[bot->seed] < 600 &&
+		    goal_field[bot->seed] < SG_FIELD_INF)
+			continue;
+
 		for (b = 0; b < SG_BL_MAX; b++)
 			if (bot->bl_link[b] == li && bot->bl_until[b] > level.time)
 				break;
@@ -1573,6 +1587,21 @@ rally_done:;
 			bestlink = li;
 		}
 	}
+
+	/*
+	 * THE LAST TEN METERS ARE A STRAIGHT LINE. An attacker at the goal
+	 * minimum kept arguing with the link graph -- the argmin flaps
+	 * between near-equal links and the bot orbits a flag it could
+	 * TOUCH (wave 96, live witness: every defender dead, the attacker
+	 * spinning beside the stand). Inside 400ms the graph has nothing
+	 * left to teach: drop the link and let the aim fall through to the
+	 * goal-entity fallback -- a straight walk, a touch, done. The
+	 * carrier gets the same grace at its own stand.
+	 */
+	if ((role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY) &&
+	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
+	    goal_field[bot->seed] < 400)
+		bestlink = -1;
 
 	/*
 	 * Commitment. The composed surface has saddles -- goal one way, a
