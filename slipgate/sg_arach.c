@@ -1239,13 +1239,13 @@ static void SG_BotThink(sg_bot_t *bot)
 				continue;
 			if (mb->last_goalcost < 6000)
 				mates_near++;
-			else if (mb->last_goalcost < 10000)
-				/* SYNC window only. The 20s horizon waited for whole
-				 * respawn waves and bled more pressure than pairing
-				 * returned: steals ran 1.6/wave before the rally and
-				 * 1.0/wave with it (waves 63-67, zero in 67). A partner
-				 * four seconds behind is worth four seconds; a partner
-				 * in the respawn room is not worth twenty. */
+			else if (mb->last_goalcost < 20000)
+				/* THE APPEAL. The 20s horizon was convicted (1.6 -> 1.0
+				 * steals/wave, waves 63-67) and shrunk to a 6s sync --
+				 * but that trial ran in the corpse-wait era, when a
+				 * 'partner en route' was usually a body that would never
+				 * stand up. Bots respawn now; partners genuinely arrive.
+				 * Retried at the full horizon on fresh evidence. */
 				mates_coming++;
 		}
 		{
@@ -1313,7 +1313,7 @@ static void SG_BotThink(sg_bot_t *bot)
 					           e->client->pers.netname, mates_coming,
 					           best_cover);
 			}
-			if (level.time - bot->rally_since < 6.0f)
+			if (level.time - bot->rally_since < 15.0f)
 				rally_hold = true;
 		}
 		else
