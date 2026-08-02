@@ -3767,13 +3767,16 @@ no_hold:;
 			 * fixed cook landed the bomb with a second to spend
 			 * bouncing away from the aim point, and NADEPOP measured
 			 * the result: medians 434 and 717 against a 165 radius.
-			 * Solve degenerate (no closed pitch) throws at once; the
-			 * 0.6s floor keeps the POP outside our own splash radius
-			 * (0.4s of fuse is ~250 units of clearance), not merely
-			 * the hand attached.
+			 * A degenerate solve means the throw is TOO SLOW SO FAR --
+			 * speed builds with the cook (wave 143: releasing on
+			 * degenerate threw every bomb at 400 u/s on frame one,
+			 * fuse=3.0, two pops all wave) -- so keep cooking until
+			 * the closed form comes back. The 0.6s floor keeps the POP
+			 * outside our own splash radius (0.4s of fuse is ~250
+			 * units of clearance) and throws whatever the solve says.
 			 */
 			if (ntmr > 0.6f &&
-			    (nfly < 0.0f ? 0 : (ntmr - 0.2f > nfly + 0.05f)))
+			    (nfly < 0.0f || ntmr - 0.2f > nfly + 0.05f))
 				cmd.buttons |= BUTTON_ATTACK;
 			else
 			{
