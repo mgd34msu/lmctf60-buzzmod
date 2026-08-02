@@ -1258,6 +1258,30 @@ static void SG_BotThink(sg_bot_t *bot)
 		goal_field = sg_fields.our_carrier[team - 1];
 
 		/*
+		 * THE SCOOP (sg_scoop, A/B wave 183+). Sixty-two parity drops:
+		 * defense returned thirty-four, we re-scooped three. The
+		 * dropped flag is a live steal lying on the ground for up to
+		 * thirty seconds, the escort is standing beside the corpse --
+		 * and it keeps descending a dead carrier's field while a
+		 * defender walks over and touches the flag home. No live
+		 * carrier plus enemy flag astray: the escort takes the
+		 * attacker's -now field, which floods from the believed drop
+		 * spot. First body to the flag wins the relay; ours is
+		 * closest by construction.
+		 */
+		if (gi.cvar("sg_scoop", "0", 0)->value &&
+		    sg_caco_team_belief.carrier[team - 1].client < 0 &&
+		    sg_caco_team_belief.flag[2 - team].state == SG_FLAG_ASTRAY)
+		{
+			goal_field = (team == CTF_TEAM_RED)
+			    ? sg_fields.to_blue_flag_now
+			    : sg_fields.to_red_flag_now;
+			if (gi.cvar("sg_debug", "0", 0)->value &&
+			    level.time >= bot->next_report - 0.9f)
+				gi.dprintf("SCOOP %s\n", e->client->pers.netname);
+		}
+
+		/*
 		 * THE INTERPOSITION (sg_interpose, A/B wave 180+). The killer
 		 * census's standing fact: carriers die to live defenders with
 		 * escorts RIGHT THERE -- near the carrier, which is where the
