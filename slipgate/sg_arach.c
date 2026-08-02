@@ -1437,6 +1437,22 @@ rally_done:;
 		    goal_field[bot->seed] < 600 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			continue;
+		/*
+		 * COVER ON THE APPROACH. lmctf58's attack front dies at 3.3s out
+		 * with no stalls and no wedges -- moving freely into a covered
+		 * sightline, game after game (waves 112-115). The rune has
+		 * carried measured exposure on every seed since the census pass;
+		 * it priced cover for hurting duelists only. Now the final
+		 * approach pays for visible ground too: an attacker inside 4s of
+		 * the goal, and a carrier anywhere on the run home, prefers the
+		 * corridor to the courtyard whenever the costs are close.
+		 */
+		if (role == SG_ROLE_ATTACK && goal_field[bot->seed] < 4000 &&
+		    goal_field[bot->seed] < SG_FIELD_INF)
+			v += 2.5f * (float)sg_rune->seeds[l->to].area_hint;
+		else if (role == SG_ROLE_CARRY)
+			v += 2.0f * (float)sg_rune->seeds[l->to].area_hint;
+
 		if (l->action == RL_HOOK && level.time < bot->hookban_until &&
 		    e->waterlevel < 2)
 			continue;           /* the rope is confiscated: walk -- but
