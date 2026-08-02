@@ -2725,6 +2725,26 @@ no_hold:;
 				chosen_yaw = drop_yaw;
 
 			/*
+			 * A burst rope aims WHILE RUNNING: the exemption that kept
+			 * the speedhook's legs moving also skipped the phase-1 aim
+			 * writer, so the view never turned to the anchor, the fire
+			 * gate waited for an arrival that could not come, and the
+			 * bot stuck in phase 1 forever -- which gates out COMBAT
+			 * too. Three of wave 92's five games went totally silent,
+			 * every bot wedged on its first burst attempt. The burst
+			 * view now steers to the anchor here (yaw now, pitch via
+			 * swim-pitch's slot below), and phase 1 carries a hard
+			 * deadline as the belt to this suspender.
+			 */
+			if (bot->hook_phase == 1 && bot->speedhook)
+			{
+				vec3_t sha;
+
+				VectorSubtract(bot->hook_anchor, e->s.origin, sha);
+				chosen_yaw = atan2f(sha[1], sha[0]) * 180.0f / (float)M_PI;
+			}
+
+			/*
 			 * Rail mode: the retry that trusts the proof over the fan.
 			 * Stage 1 walks to the link's from-seed (the proof's start);
 			 * stage 2 drives the straight from->to line with the fan
@@ -2833,6 +2853,18 @@ no_hold:;
 				float wh;
 
 				VectorSubtract(aim, e->s.origin, wd);
+				wh = sqrtf(wd[0] * wd[0] + wd[1] * wd[1]);
+				swim_pitch = -atan2f(wd[2], wh) * 180.0f / (float)M_PI;
+				if (swim_pitch > 85.0f) swim_pitch = 85.0f;
+				if (swim_pitch < -85.0f) swim_pitch = -85.0f;
+			}
+			else if (bot->hook_phase == 1 && bot->speedhook)
+			{
+				vec3_t wd;
+				float wh;
+
+				VectorSubtract(bot->hook_anchor, e->s.origin, wd);
+				wd[2] -= e->viewheight;
 				wh = sqrtf(wd[0] * wd[0] + wd[1] * wd[1]);
 				swim_pitch = -atan2f(wd[2], wh) * 180.0f / (float)M_PI;
 				if (swim_pitch > 85.0f) swim_pitch = 85.0f;
@@ -3325,7 +3357,16 @@ no_hold:;
 			bot->rj_use_next = level.time + 0.5f;
 		}
 
-		if (bot->hook_phase == 1)
+		if (bot->hook_phase == 1 && level.time > bot->hook_deadline)
+		{
+			/* the aim never arrived (blocked slew, moving anchor line,
+			 * whatever): stand down clean. Without this, a wedged phase
+			 * 1 gates out combat FOREVER -- wave 92's three silent
+			 * games. */
+			bot->hook_phase = 0;
+			bot->speedhook = false;
+		}
+		else if (bot->hook_phase == 1)
 		{
 			/* the rope fires along the ACTUAL view, which now slews:
 			 * hold phase 1 (a standing frame anyway) until the view has
