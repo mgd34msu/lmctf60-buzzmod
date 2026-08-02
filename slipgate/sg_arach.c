@@ -131,6 +131,8 @@ typedef struct sg_bot_s
 	                             * a full lmctf01 match (iter 41) */
 	float		stag_since;
 	float		stag_next;      /* escalation: one shelve per 2s while parked */
+	vec3_t		wedge_org;      /* the unstick of last resort watches from here */
+	float		wedge_since;
 	qboolean	nav_drove;      /* last frame, navigation drove the legs */
 	qboolean	engaged_last;   /* last frame, combat owned the fight */
 	int			fan_side;       /* latched detour side: -1 left, +1 right */
@@ -1798,6 +1800,37 @@ rally_done:;
 
 		if (att && att[bot->seed] < 3000)
 			rally_hold = true;      /* stand and fight: the room is the job */
+	}
+
+	/*
+	 * THE UNSTICK OF LAST RESORT. A rope through a doorway parked a bot
+	 * on a wall ledge off the navigable mesh (wave 97, screenshot in
+	 * hand) and every clever layer beneath this line -- watchdog,
+	 * escape, futility, rail -- churned without physically freeing it.
+	 * Fifteen seconds of true zero displacement, standing exempted only
+	 * for a defender on post or a rally hold, and the bot does what
+	 * every stuck player has done since 1997: kill, respawn, rejoin the
+	 * war. A death costs less than a statue.
+	 */
+	VectorSubtract(e->s.origin, bot->wedge_org, d);
+	if (VectorLength(d) > 96.0f)
+	{
+		VectorCopy(e->s.origin, bot->wedge_org);
+		bot->wedge_since = level.time;
+	}
+	else if (level.time - bot->wedge_since > 15.0f &&
+	         !(role == SG_ROLE_DEFEND &&
+	           goal_field[bot->seed >= 0 ? bot->seed : 0] < 1500) &&
+	         bot->rally_since <= 0.0f)
+	{
+		void Cmd_Kill_f(edict_t *ent);
+
+		gi.dprintf("WEDGEKILL %s at (%.0f %.0f %.0f)\n",
+		           e->client->pers.netname, e->s.origin[0],
+		           e->s.origin[1], e->s.origin[2]);
+		Cmd_Kill_f(e);
+		bot->wedge_since = level.time;
+		return;
 	}
 
 	VectorSubtract(e->s.origin, bot->stag_org, d);
