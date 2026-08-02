@@ -55,8 +55,11 @@ NOWEAVE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # was BELOW the field layer: seed-center servoing. Lookahead is the fix
 # on trial (178+): aim slides down the route when the seed underfoot is
 # near. Tactics stays on its servers; lookahead joins them.
-TACTICS=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
-LOOKAHEAD=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# both instruments that motivated 176-178 collapsed against the 5v1
+# control (see memory); flags stay built but off pending a caps-based
+# verdict on a real sample
+TACTICS=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+LOOKAHEAD=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
