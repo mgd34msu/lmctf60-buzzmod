@@ -1390,6 +1390,21 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	//{
 	//	ForceCommand(ent, "spectator 0");
 	//	//ent->client->ctf.teamnum = whatteam;
+
+	/*
+	 * UNIFORM DOCTRINE: color is the team's, always, automatically --
+	 * model and gender are the player's. Every path that changes a
+	 * team lands here, so the repaint lands here too; without it, a
+	 * client keeps whatever color its last force painted (bots joined
+	 * before their balancer verdict spent whole matches in enemy
+	 * colors).
+	 */
+	{
+		void ClientSetSkin(edict_t *e2, char *sk);
+
+		ClientSetSkin(ent,
+		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
+	}
 	//	return;
 	//}
 
