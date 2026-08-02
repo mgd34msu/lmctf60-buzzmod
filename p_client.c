@@ -1840,6 +1840,24 @@ a deathmatch.
 */
 void PutClientInServer (edict_t *ent)
 {
+	/*
+	 * THE UNIFORM IS PART OF THE SPAWN. Third fix in the skin saga: the
+	 * first repaint ran before the team existed (painted at team=0,
+	 * proven by SKIN telemetry), the second hooked a team-setter that
+	 * TeamJoin never calls. Every client on a real team passes through
+	 * HERE at every spawn -- so the color is forced here, every time,
+	 * and there is no path left that can dodge it.
+	 */
+	if (ent->client &&
+	    (ent->client->ctf.teamnum == CTF_TEAM_RED ||
+	     ent->client->ctf.teamnum == CTF_TEAM_BLUE))
+	{
+		void ClientOldSetSkin(edict_t *e2, char *sk);
+
+		ClientOldSetSkin(ent,
+		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
+	}
+
 	trace_t		tr; // CTF CODE -- LM_JORM
 	
 	vec3_t mins = {-16, -16, -24};
