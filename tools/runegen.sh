@@ -110,7 +110,7 @@ run_one() {
 
     ( sleep "$STARTUP_SLEEP"; echo "sv rune"; sleep "$GEN_BUDGET"; echo "quit" ) | \
         ( cd "$GAMEDIR_ROOT" && exec stdbuf -oL timeout "$TIMEOUT_SECS" "$Q2DED" \
-              +set game "$GAME" +set dedicated 1 +set port "$port" \
+              +set game "$GAME" +set dedicated 1 +set port "$port" +set net_port "$port" \
               +exec "$CFG" +map "$map" ) > "$logfile" 2>&1 &
     pid=$!
 

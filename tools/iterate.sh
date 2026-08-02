@@ -38,7 +38,7 @@ for map in "$@"; do
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + BOTS + SECS + 40 )) \
                 "$Q2DED" +set game "$GAME" +set dedicated 1 \
-                +set port $(( PORT_BASE + i )) +set maxclients 14 \
+                +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 14 \
                 +exec "$CFG" +map "$map"
         ) > "$LOG_DIR/$map.log" 2>&1
     ) &
