@@ -1437,8 +1437,13 @@ rally_done:;
 		    goal_field[bot->seed] < 600 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			continue;
-		if (l->action == RL_HOOK && level.time < bot->hookban_until)
-			continue;           /* the rope is confiscated: walk */
+		if (l->action == RL_HOOK && level.time < bot->hookban_until &&
+		    e->waterlevel < 2)
+			continue;           /* the rope is confiscated: walk -- but
+			                     * never underwater, where walking does
+			                     * not exist and the ban was a drowning
+			                     * sentence (10 wedge deaths on the
+			                     * lmctf05 pool floor, wave 111) */
 
 		for (b = 0; b < SG_BL_MAX; b++)
 			if (bot->bl_link[b] == li && bot->bl_until[b] > level.time)
