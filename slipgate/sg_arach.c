@@ -3615,10 +3615,28 @@ no_hold:;
 		 * grenade code throws on release. Combat resumes next frame
 		 * and the ladder takes the weapon back.
 		 */
-		if (bot->nade_phase == 1 && level.time >= bot->nade_until)
+		if (bot->nade_phase == 1)
 		{
-			bot->nade_phase = 2;
-			bot->nade_until = level.time + 1.3f;
+			/* cook only once the grenade is VERIFIABLY in hand -- the
+			 * switch runs through down/up animations, and holding the
+			 * trigger early fires whatever is still equipped (wave 127:
+			 * zero grenades thrown, the cook squeezed the rail) */
+			if (e->client->pers.weapon &&
+			    e->client->pers.weapon->pickup_name &&
+			    !Q_stricmp(e->client->pers.weapon->pickup_name,
+			               "Grenades"))
+			{
+				bot->nade_phase = 2;
+				bot->nade_until = level.time + 1.3f;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("NADE %s cooking\n",
+					           e->client->pers.netname);
+			}
+			else if (level.time >= bot->nade_until + 1.2f)
+			{
+				bot->nade_phase = 0;    /* switch never landed */
+				bot->nade_next = level.time + 4.0f;
+			}
 		}
 		if (bot->nade_phase == 2)
 		{
@@ -3640,6 +3658,9 @@ no_hold:;
 				cmd.buttons &= ~BUTTON_ATTACK;   /* the release throws */
 				bot->nade_phase = 0;
 				bot->nade_next = level.time + 8.0f;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("NADE %s thrown\n",
+					           e->client->pers.netname);
 			}
 		}
 		bot->engaged_last = engaged;
