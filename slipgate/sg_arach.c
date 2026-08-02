@@ -3254,6 +3254,83 @@ no_hold:;
 	}
 }
 
+/*
+ * BOTFILL -- the roster keeps itself. sv_botfill names the players each
+ * team should field; bots make up whatever humans do not, one change per
+ * second so joins stagger like the launch scripts always staggered them.
+ * A human connecting displaces a bot on the team the balancer gives them;
+ * a human leaving is backfilled the next second. Zero (the default) turns
+ * the whole thing off and the manual `sv sg add` world works as before.
+ * Only SLIPGATE's own bots are ever removed -- the legacy library's bots
+ * belong to the legacy library (SG_OwnsBot is the property line).
+ */
+static qboolean Botfill_RemoveOne(int team)
+{
+	void ClientDisconnect(edict_t *ent);
+	int i, worst = -1, worst_score = 0x7fffffff;
+
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		if (!sg_bots[i].active || !sg_bots[i].ent || !sg_bots[i].ent->inuse)
+			continue;
+		if (sg_bots[i].ent->client->ctf.teamnum != team)
+			continue;
+		if (sg_bots[i].ent->client->resp.score < worst_score)
+		{
+			worst_score = sg_bots[i].ent->client->resp.score;
+			worst = i;
+		}
+	}
+	if (worst < 0)
+		return false;
+	gi.bprintf(PRINT_HIGH, "%s yields its slot.\n",
+	           sg_bots[worst].ent->client->pers.netname);
+	ClientDisconnect(sg_bots[worst].ent);
+	G_FreeClientEdict(sg_bots[worst].ent);
+	sg_bots[worst].active = false;
+	sg_bots[worst].ent = NULL;
+	return true;
+}
+
+static void Botfill_Frame(void)
+{
+	static float next_check;
+	cvar_t *fill = gi.cvar("sv_botfill", "0", 0);
+	int want = (int)fill->value;
+	int humans[2] = {0, 0}, bots[2] = {0, 0};
+	int i, t;
+
+	if (want <= 0 || level.time < next_check)
+		return;
+	next_check = level.time + 1.0f;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t *e = g_edicts + 1 + i;
+
+		if (!e->inuse || !e->client)
+			continue;
+		t = e->client->ctf.teamnum;
+		if (t != CTF_TEAM_RED && t != CTF_TEAM_BLUE)
+			continue;
+		if (e->flags & FL_BOT)
+			bots[t - CTF_TEAM_RED]++;
+		else
+			humans[t - CTF_TEAM_RED]++;
+	}
+
+	for (t = 0; t < 2; t++)
+	{
+		if (humans[t] + bots[t] > want && bots[t] > 0)
+		{
+			Botfill_RemoveOne(CTF_TEAM_RED + t);
+			return;             /* one change per second */
+		}
+	}
+	if (humans[0] + bots[0] < want || humans[1] + bots[1] < want)
+		SG_AddBot();            /* the balancer lands it on the short side */
+}
+
 void SG_RunFrame(void)
 {
 	int i;
@@ -3277,6 +3354,7 @@ void SG_RunFrame(void)
 		Caco_Frame(sg_rune);
 		Fields_Refresh(sg_rune);
 	}
+	Botfill_Frame();
 
 	for (i = 0; i < SG_MAXBOTS; i++)
 		if (sg_bots[i].active && sg_bots[i].ent && sg_bots[i].ent->inuse)

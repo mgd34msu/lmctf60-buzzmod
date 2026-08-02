@@ -2164,7 +2164,19 @@ void ClientBeginDeathmatch (edict_t *ent)
 	//If they are observers, then let them stay that way!
 	//-bat
 	if(oldteam == CTF_TEAM_UNDEFINED)
-		TeamJoin(ent);						// Join random team
+	{
+		/*
+		 * Only a BOT gets drafted onto a random team here. This branch
+		 * used to draft every undefined client -- including a human who
+		 * connected to watch and never formally took an observer slot --
+		 * into the game on every map change, and once on a team the
+		 * (also broken) observer command could not pull them back out.
+		 * A teamless human now stays teamless: the join menu decides,
+		 * and Observer_Start below parks the body out of the world.
+		 */
+		if (ent->flags & FL_BOT)
+			TeamJoin(ent);						// Join random team
+	}
 	else if (oldteam < CTF_TEAM_UNDEFINED)
 		Cmd_Observe_f(ent, oldteam);
 	else // Team already defined
@@ -2185,6 +2197,17 @@ void ClientBeginDeathmatch (edict_t *ent)
 	
 	// locate ent at a spawn point
 	PutClientInServer (ent);
+
+	/* a teamless human is a spectator, bodily: without this the spawn
+	 * above leaves a solid armed body standing in the world while every
+	 * list calls it an observer */
+	if (!(ent->flags & FL_BOT) &&
+	    ent->client->ctf.teamnum <= CTF_TEAM_UNDEFINED)
+	{
+		extern void Observer_Start(edict_t *e);
+
+		Observer_Start(ent);
+	}
 
 	//sprintf(DBuffer, "ed2 t %d p %d r %d", ent->client->ctf.teamnum,
 	//	ent->client->pers.spectator, ent->client->resp.spectator);

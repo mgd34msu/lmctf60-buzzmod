@@ -2343,6 +2343,20 @@ int numspec;
 	//ent->client->pers.spectator = 1;
 	//ent->client->resp.spectator = 1;
 	ForceCommand(ent, "spectator 1");
+	/*
+	 * The conversion that was never called: spectator_respawn has no call
+	 * sites in this codebase and every Observer_Start site sits behind
+	 * OLDOBSERVERCODE -- so this function set the team number, the lists
+	 * said observer, and the body stayed solid in the world (reported
+	 * live, wave 77 era). Observer_Start is the physical half: non-solid,
+	 * noclip, model off. The team number is already negative here, so
+	 * its own guard passes.
+	 */
+	{
+		extern void Observer_Start(edict_t *e);
+
+		Observer_Start(ent);
+	}
 }
 
 // BUZZKILL - RUNE TOSS - START
