@@ -2462,7 +2462,20 @@ void ClientUserinfoChanged (edict_t *ent, char *userinfo)
 	
 	ClientSetSkin(ent, skin);
 
-	BotLib_BotClientSettings(ent);
+	/*
+	 * The LEGACY bot library dresses only its own bots. It runs dead
+	 * last in this function -- after every skin force -- and it was
+	 * repainting SLIPGATE's bots from bots.cfg (male/claymore, the
+	 * final word over every uniform rule; the complete paint history
+	 * in wave 104's SKIN/SKINL telemetry reads force-correct,
+	 * force-correct, claymore). Ownership is the property line.
+	 */
+	{
+		qboolean SG_OwnsBot(edict_t *e2);
+
+		if (!SG_OwnsBot(ent))
+			BotLib_BotClientSettings(ent);
+	}
 }
 
 
@@ -3311,7 +3324,11 @@ void ClientSetSkin(edict_t *ent, char *skin)
 	
 	// combine name and skin into a configstring
 	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, newskin) );
-	
+
+	if ((ent->flags & FL_BOT) && gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("SKINL %s team=%d wears %s\n",
+		           ent->client->pers.netname,
+		           ent->client->ctf.teamnum, newskin);
 	
 	Info_SetValueForKey (ent->client->pers.userinfo, "skin", newskin);
 	ent->client->ctf.goodskin = false; // We need to re-force our skin
