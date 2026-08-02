@@ -1802,9 +1802,25 @@ rally_done:;
 							nl7 = VectorLength(nd7);
 							if (nl7 > 250.0f && nl7 < 800.0f)
 							{
-								VectorCopy(
-								    sg_rune->seeds[en7->seed].origin,
-								    bot->nade_at);
+								/* the bomb goes to the STAND, not the
+								 * ghost: beliefs run seconds stale and
+								 * fiftyograms of shrapnel on a patrol's
+								 * old footprints kills nobody (waves
+								 * 128-129: 49 throws, zero obituaries).
+								 * The stand is fixed, known, and where
+								 * the statue lives. */
+								edict_t *nf = G_Find(NULL,
+								    FOFS(classname),
+								    (team == CTF_TEAM_RED)
+								        ? "info_flag_blue"
+								        : "info_flag_red");
+
+								if (nf)
+									VectorCopy(nf->s.origin, bot->nade_at);
+								else
+									VectorCopy(
+									    sg_rune->seeds[en7->seed].origin,
+									    bot->nade_at);
 								nades->use(e, nades);
 								bot->nade_phase = 1;
 								bot->nade_until = level.time + 0.5f;
@@ -3627,7 +3643,9 @@ no_hold:;
 			               "Grenades"))
 			{
 				bot->nade_phase = 2;
-				bot->nade_until = level.time + 1.3f;
+				bot->nade_until = level.time + 2.2f;  /* long cook: the
+				                     * fuse pops on arrival, not after a
+				                     * second of bouncing off the pedestal */
 				if (gi.cvar("sg_debug", "0", 0)->value)
 					gi.dprintf("NADE %s cooking\n",
 					           e->client->pers.netname);
@@ -3651,7 +3669,7 @@ no_hold:;
 			 */
 			vec3_t na;
 			float nyaw, npitch, nh;
-			float nsp = 400.0f + 1.3f * ((800.0f - 400.0f) / 3.0f);
+			float nsp = 400.0f + 2.2f * ((800.0f - 400.0f) / 3.0f);
 			float ng = e->client->ps.pmove.gravity
 			           ? (float)e->client->ps.pmove.gravity : 800.0f;
 			float ns2 = nsp * nsp, ndisc;
