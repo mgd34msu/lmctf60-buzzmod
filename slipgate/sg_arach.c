@@ -3640,13 +3640,32 @@ no_hold:;
 		}
 		if (bot->nade_phase == 2)
 		{
+			/*
+			 * The bomb aims like the rope: solve the projectile. Throw
+			 * speed scales with cook (400 to 800 across the 3s timer;
+			 * our 1.3s cook gives ~575), gravity is the server's, and
+			 * the launch pitch to land ON the post is closed-form -- the
+			 * same equation the ballistic anchor uses. The flat -25
+			 * guess sailed 24 of 24 throws over the room (wave 128,
+			 * zero kills, duel ratio unmoved).
+			 */
 			vec3_t na;
 			float nyaw, npitch, nh;
+			float nsp = 400.0f + 1.3f * ((800.0f - 400.0f) / 3.0f);
+			float ng = e->client->ps.pmove.gravity
+			           ? (float)e->client->ps.pmove.gravity : 800.0f;
+			float ns2 = nsp * nsp, ndisc;
 
 			VectorSubtract(bot->nade_at, e->s.origin, na);
 			nh = sqrtf(na[0] * na[0] + na[1] * na[1]);
 			nyaw = atan2f(na[1], na[0]) * 180.0f / (float)M_PI;
-			npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI - 25.0f;
+			ndisc = ns2 * ns2 - ng * (ng * nh * nh + 2.0f * na[2] * ns2);
+			if (ndisc > 0.0f && nh > 32.0f)
+				npitch = -atanf((ns2 - sqrtf(ndisc)) / (ng * nh))
+				         * 180.0f / (float)M_PI;
+			else
+				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
+				         - 30.0f;
 			cmd.angles[YAW] = ANGLE2SHORT(nyaw)
 			                - e->client->ps.pmove.delta_angles[YAW];
 			cmd.angles[PITCH] = ANGLE2SHORT(npitch)
