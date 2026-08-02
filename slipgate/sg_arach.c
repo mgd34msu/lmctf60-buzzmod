@@ -157,6 +157,10 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
+	int			tac_seed;       /* committed tactical waypoint (-1 none) */
+	float		tac_time;       /* when the waypoint was committed */
+	int			tac_role;       /* role the waypoint serves: strategy
+	                             * change retires the tactic */
 	float		strict_since;   /* the strict grab-hold's OWN clock -- it
 	                             * shared rally_since for thirteen waves and
 	                             * the approach-band rally reset it every
@@ -377,6 +381,8 @@ static int sg_cur_role;
  */
 static int		sg_danger[2][SG_MAX_SEEDS];
 static const int *sg_cur_danger;
+static qboolean sg_route_pure_now;  /* tactics priced at selection: the
+                                     * per-frame walk stays pure */
 static float	sg_danger_decay_next;
 
 static void Danger_Learn(int team, int seed)
@@ -769,6 +775,12 @@ static float Surface_At(int seed, const sg_weights_t *w,
 
 	v = w->objective * (float)goal_field[seed];
 
+	/* tactics mode: the waypoint was scored with the full surface at
+	 * commitment; between commitments the descent runs on its flood
+	 * and nothing else -- one field, no ties, no scribble */
+	if (sg_route_pure_now)
+		return v;
+
 	/*
 	 * THE NAKED CARRY (sg_nakedcarry, A/B wave 166+). Every navigation
 	 * link from map file to field flood verified sound tonight, yet
@@ -1031,6 +1043,8 @@ static void SG_BotThink(sg_bot_t *bot)
 	edict_t *e = bot->ent;
 	usercmd_t cmd;
 	const int *goal_field, *support = NULL, *intercept = NULL;
+	const int *route_field;
+	qboolean route_pure;
 	const sg_weights_t *w;
 	sg_role_t role;
 	int team, li, bestlink = -1;
@@ -1269,6 +1283,123 @@ static void SG_BotThink(sg_bot_t *bot)
 	                     ? goal_field[bot->seed] : -1;
 
 	/*
+	 * STRATEGY AND TACTICS (sg_tactics, A/B wave 177+). The owner's
+	 * architecture: strategy is long-term and hard to change -- the role
+	 * and its destination field, already sticky at 0.3 changes a minute.
+	 * Tactics are room-scale goals that SERVE it: a committed waypoint
+	 * picked from the band 0.8-2.5 seconds down the strategic gradient,
+	 * scored ONCE with the full composed surface -- items, danger,
+	 * cover, all of it -- then held. Between commitments the per-frame
+	 * descent runs on the waypoint's own flood, a single stable field
+	 * with nothing to tie against: strategy and tactics stop fighting
+	 * in one equation at ten hertz, which is where the Brownian walk
+	 * was born. The waypoint retires on arrival, on strategy change,
+	 * on staleness (10s), or on unreachability -- the smooth
+	 * transition, priced at the tactical boundary and nowhere else.
+	 */
+	route_field = goal_field;
+	route_pure = false;
+	if (gi.cvar("sg_tactics", "0", 0)->value &&
+	    role != SG_ROLE_ESCORT && bot->seed >= 0 &&
+	    goal_field[bot->seed] < SG_FIELD_INF &&
+	    goal_field[bot->seed] >= 400)
+	{
+		static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
+		int bi = (int)(bot - sg_bots);
+		qboolean need = (bot->tac_seed < 0 ||
+		                 bot->tac_role != (int)role ||
+		                 level.time - bot->tac_time > 10.0f ||
+		                 tac_fields[bi][bot->seed] >= SG_FIELD_INF ||
+		                 tac_fields[bi][bot->seed] < 300);
+
+		if (need)
+		{
+			/*
+			 * The owner's five questions, as code. (1) this room's
+			 * goal: the waypoint, picked from the band one room down
+			 * the strategic gradient. (2) the NEXT room's goal: g2,
+			 * picked the same way from the band beyond. (3)+(4) the
+			 * next room reaches back into this one: each waypoint
+			 * candidate pays the graph cost from itself to g2, so
+			 * the door chosen out of this room is the one that faces
+			 * onward -- a decision here made better because of what
+			 * comes next. (5) every band descends the role's own
+			 * strategic field: tactics can only ever serve strategy,
+			 * never replace it.
+			 */
+			static int g2_field[SG_MAX_SEEDS];
+			int s10, best10 = -1, g2 = -1, cur = goal_field[bot->seed];
+			float bv10 = 1e30f, gv10 = 1e30f;
+
+			for (s10 = 0; s10 < sg_rune->hdr.num_seeds &&
+			     s10 < SG_MAX_SEEDS; s10++)
+			{
+				float sv;
+
+				if (goal_field[s10] >= SG_FIELD_INF ||
+				    goal_field[s10] > cur - 2500 ||
+				    goal_field[s10] < cur - 4500)
+					continue;
+				sv = Surface_At(s10, w, goal_field, support,
+				                intercept);
+				if (sv < gv10)
+				{
+					gv10 = sv;
+					g2 = s10;
+				}
+			}
+			if (g2 >= 0)
+			{
+				int gc = 0;
+
+				Field_Flood(sg_rune, g2_field, &g2, &gc, 1);
+			}
+			for (s10 = 0; s10 < sg_rune->hdr.num_seeds &&
+			     s10 < SG_MAX_SEEDS; s10++)
+			{
+				float sv;
+
+				if (goal_field[s10] >= SG_FIELD_INF ||
+				    goal_field[s10] > cur - 800 ||
+				    goal_field[s10] < cur - 2500)
+					continue;
+				sv = Surface_At(s10, w, goal_field, support,
+				                intercept);
+				if (g2 >= 0 && g2_field[s10] < SG_FIELD_INF)
+					sv += 0.5f * (float)g2_field[s10];
+				if (sv < bv10)
+				{
+					bv10 = sv;
+					best10 = s10;
+				}
+			}
+			if (best10 >= 0)
+			{
+				int cost10 = 0;
+
+				bot->tac_seed = best10;
+				bot->tac_time = level.time;
+				bot->tac_role = (int)role;
+				Field_Flood(sg_rune, tac_fields[bi],
+				            &bot->tac_seed, &cost10, 1);
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("TACTIC %s seed=%d strat=%d\n",
+					           e->client->pers.netname,
+					           best10, goal_field[best10]);
+			}
+			else
+				bot->tac_seed = -1;     /* no room ahead: strategy raw */
+		}
+		if (bot->tac_seed >= 0 &&
+		    tac_fields[bi][bot->seed] < SG_FIELD_INF)
+		{
+			route_field = tac_fields[bi];
+			route_pure = true;      /* tactics were priced at selection:
+			                         * the walk itself stays pure */
+		}
+	}
+
+	/*
 	 * THE RALLY. Wave 61's arrival census: three quarters of all attacks
 	 * reach the enemy base ALONE -- one body against three or more armed
 	 * defenders at the stand, dead every time, which is why floors sit
@@ -1457,7 +1588,8 @@ rally_done:;
 	/* descend the surface: my seed vs every seed one proven link away */
 	sg_cur_role = role;             /* for the rune identity pricing */
 	sg_cur_danger = sg_danger[team - 1];    /* the danger dimension, ours */
-	bestval = Surface_At(bot->seed, w, goal_field, support, intercept);
+	sg_route_pure_now = route_pure;
+	bestval = Surface_At(bot->seed, w, route_field, support, intercept);
 	if (duel)
 		bestval += Duel_Price(e, sg_rune->seeds[bot->seed].origin, duel_org,
 		                      duel_want, duel_expo);
@@ -1471,7 +1603,7 @@ rally_done:;
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
 	{
 		rune_link_t *l = &sg_rune->links[li];
-		float v = Surface_At(l->to, w, goal_field, support, intercept);
+		float v = Surface_At(l->to, w, route_field, support, intercept);
 		int b;
 
 		/*
@@ -4795,6 +4927,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].ent = ent;
 	sg_bots[slot].active = true;
 	sg_bots[slot].seed = -1;
+	sg_bots[slot].tac_seed = -1;
+	sg_bots[slot].tac_role = -1;
 	sg_bots[slot].stuck_time = 0.0f;
 
 	gi.dprintf("slipgate: %s entered\n",
