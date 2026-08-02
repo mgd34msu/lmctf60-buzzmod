@@ -142,6 +142,10 @@ typedef struct sg_bot_s
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
 	float		vy_cur, vp_cur; /* the view's ACTUAL heading: slew state */
 	qboolean	view_on;        /* slew state valid (false snaps on respawn) */
+	int			nade_phase;     /* 0 idle, 1 switching, 2 cooking */
+	float		nade_until;
+	float		nade_next;      /* throw cadence */
+	vec3_t		nade_at;        /* where the bomb is going */
 	int			hookfail_streak; /* consecutive failed rides */
 	float		hookban_until;  /* streak of 2: the rope is confiscated */
 	qboolean	flow_release;   /* cut early on momentum: no landing brake */
@@ -1760,6 +1764,54 @@ rally_done:;
 						bot->rally_since = level.time;
 					if (level.time - bot->rally_since < 10.0f)
 						rally_hold = true;
+				}
+
+				/*
+				 * THE PRE-BREACH BOMB. Threshold duels run 99-58 against
+				 * us: a posted rail beats an arriving one, structurally.
+				 * The unfair tool has sat in the loadout unthrown all
+				 * campaign -- five hand grenades a spawn. During a
+				 * threshold fight, cook one and lob it onto the sentry's
+				 * believed post THROUGH cover. No line of sight, no duel:
+				 * the room softens before the breach.
+				 */
+				if (rally_hold && bot->nade_phase == 0 &&
+				    level.time >= bot->nade_next)
+				{
+					static gitem_t *nades;
+					int s7;
+
+					if (!nades)
+						nades = FindItem("Grenades");
+					if (nades &&
+					    e->client->pers.inventory[ITEM_INDEX(nades)] > 0)
+					{
+						for (s7 = 0; s7 < SG_MAX_ENEMY_TRACK; s7++)
+						{
+							sg_belief_enemy_t *en7 =
+							    &sg_caco_enemies[team - 1][s7];
+							vec3_t nd7;
+							float nl7;
+
+							if (en7->client < 0 || en7->seed < 0 ||
+							    level.time - en7->seen_time >= 5.0f)
+								continue;
+							VectorSubtract(
+							    sg_rune->seeds[en7->seed].origin,
+							    e->s.origin, nd7);
+							nl7 = VectorLength(nd7);
+							if (nl7 > 250.0f && nl7 < 800.0f)
+							{
+								VectorCopy(
+								    sg_rune->seeds[en7->seed].origin,
+								    bot->nade_at);
+								nades->use(e, nades);
+								bot->nade_phase = 1;
+								bot->nade_until = level.time + 0.5f;
+								break;
+							}
+						}
+					}
 				}
 			}
 		}
@@ -3553,8 +3605,43 @@ no_hold:;
 		 * (above), and a view stolen there is a landing missed.
 		 */
 		if (bot->hook_phase != 1 && bot->hook_phase != 3 &&
-		    bot->rj_phase == 0)
+		    bot->rj_phase == 0 && bot->nade_phase == 0)
 			SG_CombatFrame(e, &cmd, &engaged);
+
+		/*
+		 * The bomb sequence owns weapon, view, and trigger while it
+		 * runs: switch (0.5s), cook with the button held (1.3s, view
+		 * arced 25 degrees over the target's bearing), release -- the
+		 * grenade code throws on release. Combat resumes next frame
+		 * and the ladder takes the weapon back.
+		 */
+		if (bot->nade_phase == 1 && level.time >= bot->nade_until)
+		{
+			bot->nade_phase = 2;
+			bot->nade_until = level.time + 1.3f;
+		}
+		if (bot->nade_phase == 2)
+		{
+			vec3_t na;
+			float nyaw, npitch, nh;
+
+			VectorSubtract(bot->nade_at, e->s.origin, na);
+			nh = sqrtf(na[0] * na[0] + na[1] * na[1]);
+			nyaw = atan2f(na[1], na[0]) * 180.0f / (float)M_PI;
+			npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI - 25.0f;
+			cmd.angles[YAW] = ANGLE2SHORT(nyaw)
+			                - e->client->ps.pmove.delta_angles[YAW];
+			cmd.angles[PITCH] = ANGLE2SHORT(npitch)
+			                  - e->client->ps.pmove.delta_angles[PITCH];
+			if (level.time < bot->nade_until)
+				cmd.buttons |= BUTTON_ATTACK;
+			else
+			{
+				cmd.buttons &= ~BUTTON_ATTACK;   /* the release throws */
+				bot->nade_phase = 0;
+				bot->nade_next = level.time + 8.0f;
+			}
+		}
 		bot->engaged_last = engaged;
 
 		/*
