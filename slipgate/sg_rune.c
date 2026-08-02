@@ -1268,6 +1268,150 @@ static void Prove_Swims(void)
 	           gen_swim_links, gen_swim_retag);
 }
 
+
+/* ------------------------------------------------------- door sidedness
+ *
+ * A door with a targetname opens only when something else fires it, and
+ * the something is usually a trigger volume the mapper placed on ONE
+ * side: lmctf03's bd sally-ports trigger only from the base side, and
+ * the runtime learned each dead face by walking into it, thirty seconds
+ * of memory at a time, forever (DEADDOOR + futility, iters 44-64). The
+ * graph should never have offered those crossings. After all provers
+ * run, every link whose straight line crosses a triggered door's box is
+ * audited: no activator volume on the from-seed's side of the crossing,
+ * no link. A door with no targetname opens on touch and is no one's
+ * business here; a door whose only activator is a button dies from both
+ * sides, honestly, until the body learns to press buttons.
+ */
+static qboolean Seg_HitsBox(vec3_t a, vec3_t b, vec3_t mins, vec3_t maxs)
+{
+	float tmin = 0.0f, tmax = 1.0f;
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		float d = b[i] - a[i];
+
+		if (fabsf(d) < 0.001f)
+		{
+			if (a[i] < mins[i] || a[i] > maxs[i])
+				return false;
+		}
+		else
+		{
+			float t1 = (mins[i] - a[i]) / d;
+			float t2 = (maxs[i] - a[i]) / d;
+
+			if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
+			if (t1 > tmin) tmin = t1;
+			if (t2 < tmax) tmax = t2;
+			if (tmin > tmax)
+				return false;
+		}
+	}
+	return true;
+}
+
+static void Door_Sidedness(void)
+{
+	int di, li, kept = 0, dropped = 0, doors_checked = 0;
+
+	for (di = 1; di < globals.num_edicts; di++)
+	{
+		edict_t *door = &g_edicts[di];
+		vec3_t dmins, dmaxs;
+		edict_t *acts[16];
+		int num_acts = 0, ai;
+		int w;
+
+		if (!door->inuse || !door->classname || !door->targetname)
+			continue;
+		if (strncmp(door->classname, "func_door", 9) != 0)
+			continue;
+
+		for (ai = 1; ai < globals.num_edicts && num_acts < 16; ai++)
+		{
+			edict_t *tr = &g_edicts[ai];
+
+			if (!tr->inuse || !tr->classname || !tr->target)
+				continue;
+			if (Q_stricmp(tr->target, door->targetname) != 0)
+				continue;
+			if (strncmp(tr->classname, "trigger_", 8) != 0)
+				continue;
+			acts[num_acts++] = tr;
+		}
+		doors_checked++;
+
+		VectorCopy(door->absmin, dmins);
+		VectorCopy(door->absmax, dmaxs);
+		for (w = 0; w < 3; w++)
+		{
+			dmins[w] -= 16.0f;
+			dmaxs[w] += 16.0f;
+		}
+
+		for (li = 0; li < gen_num_links; li++)
+		{
+			rune_link_t *l = &gen_links[li];
+			vec3_t from, to;
+			qboolean armed = false;
+
+			if (l->cost_ms < 0)
+				continue;           /* already condemned */
+			VectorCopy(gen_seeds[l->from].origin, from);
+			VectorCopy(gen_seeds[l->to].origin, to);
+			from[2] += 24.0f;
+			to[2] += 24.0f;
+			if (!Seg_HitsBox(from, to, dmins, dmaxs))
+				continue;
+
+			/*
+			 * The crossing is real. Armed iff an activator volume sits
+			 * on the FROM side: the from seed inside a volume (grown
+			 * 64), or the walk from the seed to the door passing
+			 * through one -- the trigger fires before the body arrives.
+			 */
+			for (ai = 0; ai < num_acts && !armed; ai++)
+			{
+				vec3_t tmins, tmaxs;
+
+				VectorCopy(acts[ai]->absmin, tmins);
+				VectorCopy(acts[ai]->absmax, tmaxs);
+				for (w = 0; w < 3; w++)
+				{
+					tmins[w] -= 64.0f;
+					tmaxs[w] += 64.0f;
+				}
+				if (Seg_HitsBox(from, from, tmins, tmaxs) ||
+				    Seg_HitsBox(from, to, tmins, tmaxs))
+					armed = true;
+			}
+			if (armed)
+				kept++;
+			else
+			{
+				l->cost_ms = -1;    /* condemned: swept below */
+				dropped++;
+			}
+		}
+	}
+
+	/* sweep the condemned */
+	if (dropped)
+	{
+		int w2 = 0;
+
+		for (li = 0; li < gen_num_links; li++)
+			if (gen_links[li].cost_ms >= 0)
+				gen_links[w2++] = gen_links[li];
+		gen_num_links = w2;
+	}
+
+	gi.dprintf("rune: door sidedness: %d doors, %d crossings kept, "
+	           "%d dead faces dropped\n", doors_checked, kept, dropped);
+}
+
 /*
  * Is this ordered pair already linked? A plain scan: the swim pass builds a
  * from-index but frees it again, and the callers here run a handful of times
@@ -2199,6 +2343,9 @@ static void Prove_All(void)
 		Link_Plats();           /* func_plat: bottom seed -> top seed */
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
 		Link_Declare_Tail(declared_mark);
+	}
+	Door_Sidedness();       /* one-way doors leave the graph entirely */
+	{
 	}
 
 	/*
