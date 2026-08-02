@@ -155,6 +155,8 @@ typedef struct sg_bot_s
 	int			carry_bestcost;  /* least field cost this carry has reached */
 	float		carry_lost_at;   /* last progress-loss event: rate limiter */
 	float		rally_since;    /* waiting for a partner before the push */
+	int			sticky_link;    /* incumbent route link: challengers must
+	                             * beat it by the switching margin */
 	float		strict_since;   /* the strict grab-hold's OWN clock -- it
 	                             * shared rally_since for thirteen waves and
 	                             * the approach-band rally reset it every
@@ -1749,12 +1751,31 @@ rally_done:;
 				    (float)sg_rune->seeds[l->to].area_hint * 1.8f;
 		}
 
+		/*
+		 * THE SWITCHING COST (sg_sticky, A/B wave 168+). The owner's
+		 * diagnosis, measured: offense converts 1.6 ms of progress per
+		 * unit walked against the escort's 3.1 on the same maps -- half
+		 * of all offensive walking buys nothing -- and the chosen link
+		 * changes every ~2.4 seconds. The surface offers ties, and the
+		 * per-frame argmin flips between them: a bot following a LINE
+		 * on the gradient, not the gradient. The incumbent route now
+		 * holds its seat unless a challenger beats it by 15 percent --
+		 * a mind-change gets priced at the moment it is made, which is
+		 * the owner's wasted-distance penalty moved to where it can
+		 * steer. Shelved, blocked, or completed incumbents pay nothing:
+		 * displacement stays free when the route is actually dead.
+		 */
+		if (bot->sticky_link == li &&
+		    gi.cvar("sg_sticky", "0", 0)->value)
+			v *= 0.85f;
+
 		if (v < bestval)
 		{
 			bestval = v;
 			bestlink = li;
 		}
 	}
+	bot->sticky_link = bestlink;
 
 	/*
 	 * THE LAST TEN METERS ARE A STRAIGHT LINE. An attacker at the goal

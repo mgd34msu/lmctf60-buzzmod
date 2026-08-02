@@ -38,8 +38,11 @@ FILLS=("2" "2" "5" "5" "5" "5" "5" "7" "7" "5:1")
 # strict grab adopted (crossed A/B, waves 151-152: strict 9 steals to
 # current's 4 on identical map coverage). All 5v5 servers run strict.
 GRABS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
-# naked-carry A/B (wave 166+): carrier prices time-to-home ONLY on s03-05
-NAKED=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# naked-carry was the wave 166-167 diagnostic; sticky routing is the
+# shipping candidate for the same root (A/B wave 168+): incumbent route
+# holds unless beaten by 15% on s03-05, control on s06-07
+NAKED=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+STICKY=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -54,7 +57,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 "$Q2DED" +set game "$GAME" +set dedicated 1 \
                 +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
-                +set sg_nakedcarry "${NAKED[$i]}" \
+                +set sg_nakedcarry "${NAKED[$i]}" +set sg_sticky "${STICKY[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &
@@ -66,5 +69,6 @@ echo "=== WAVE $NAME: duel=$DUEL fives=$F1,$F2,$F3,$F4,$F5 dens=$DENS ctrl=$CTRL
 for i in 0 1 2 3 4 5 6 7 8 9; do
     echo "---- ${LABELS[$i]} ${MAPS[$i]} ----"
     "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
+    python3 "$SCRIPT_DIR/effstat.py" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
 done
 echo "logs: $LOG_DIR"
