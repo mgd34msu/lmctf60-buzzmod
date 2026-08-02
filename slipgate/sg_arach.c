@@ -1450,6 +1450,45 @@ rally_done:;
 		if (role == SG_ROLE_ATTACK && goal_field[bot->seed] < 4000 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			v += 2.5f * (float)sg_rune->seeds[l->to].area_hint;
+
+		/*
+		 * SPREAD THE AXES. Two attackers on the same cheapest gradient
+		 * arrive down the same corridor into the same sightline -- the
+		 * perimeter maps (lmctf58, mactf06 before the pair-split) eat
+		 * that single file forever. En route, the junior of any attacker
+		 * pair pays for steps NEAR its senior: pressure splits into two
+		 * axes with no explicit corridor model at all, and the sentry's
+		 * dilemma starts before the threshold.
+		 */
+		if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+		    goal_field[bot->seed] < SG_FIELD_INF &&
+		    goal_field[bot->seed] > 2500 && goal_field[bot->seed] < 12000)
+		{
+			int bi6;
+
+			for (bi6 = 0; bi6 < SG_MAXBOTS; bi6++)
+			{
+				sg_bot_t *mb6 = &sg_bots[bi6];
+				vec3_t md6;
+
+				if (!mb6->active || mb6 == bot || !mb6->ent ||
+				    !mb6->ent->inuse)
+					continue;
+				if (mb6->ent->client->ctf.teamnum != team)
+					continue;
+				if (mb6->last_role != (int)SG_ROLE_ATTACK)
+					continue;
+				if ((int)(mb6->ent - g_edicts) >= (int)(e - g_edicts))
+					continue;       /* only the junior spreads */
+				VectorSubtract(sg_rune->seeds[l->to].origin,
+				               mb6->ent->s.origin, md6);
+				if (VectorLength(md6) < 400.0f)
+				{
+					v += 800.0f;
+					break;
+				}
+			}
+		}
 		else if (role == SG_ROLE_CARRY)
 			v += 2.0f * (float)sg_rune->seeds[l->to].area_hint;
 
