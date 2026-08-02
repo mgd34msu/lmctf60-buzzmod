@@ -2998,6 +2998,54 @@ no_hold:;
 
 			VectorCopy(sg_rune->seeds[l->to].origin, aim);
 			have_aim = true;
+
+			/*
+			 * THE LOOKAHEAD (sg_lookahead, A/B wave 178+). The Brownian
+			 * hunt's terminal finding: unopposed attackers churn their
+			 * COMMANDED heading 81 degrees a second while goals, seeds,
+			 * links, and dodges all measure stable -- the body servos on
+			 * the center of a seed it is about to overrun, overshoots,
+			 * turns back, orbits. A runner does not stare at his next
+			 * footprint; he looks down the road. When the immediate seed
+			 * is close (inside 160) and the route continues, the aim
+			 * slides one RUN link further down the gradient: the seed
+			 * underfoot becomes something passed THROUGH, the heading
+			 * derives from where the route goes next, and the fan still
+			 * owns the last arm's-length via precision mode. Only plain
+			 * runs chain -- hooks, jumps, drops keep exact aim, their
+			 * geometry is the point.
+			 */
+			if (gi.cvar("sg_lookahead", "0", 0)->value &&
+			    l->action == RL_RUN && !precision)
+			{
+				vec3_t nd0;
+
+				VectorSubtract(sg_rune->seeds[l->to].origin,
+				               e->s.origin, nd0);
+				nd0[2] = 0.0f;
+				if (VectorLength(nd0) < 160.0f)
+				{
+					int li2, nx = -1, nv = route_field[l->to];
+
+					for (li2 = sg_rune->first_link[l->to];
+					     li2 >= 0; li2 = sg_rune->next_link[li2])
+					{
+						rune_link_t *l2 = &sg_rune->links[li2];
+
+						if (l2->action != RL_RUN)
+							continue;
+						if (route_field[l2->to] < nv)
+						{
+							nv = route_field[l2->to];
+							nx = li2;
+						}
+					}
+					if (nx >= 0)
+						VectorCopy(
+						    sg_rune->seeds[sg_rune->links[nx].to].origin,
+						    aim);
+				}
+			}
 			/*
 			 * A RUN link with a stored waypoint is one whose proof had to
 			 * ROUND something -- the oracle's detour apex lives in the
