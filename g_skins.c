@@ -106,6 +106,19 @@ void SkinsReadFile()
 			tempbuf++;
 
 		// Ignore lines with # or / or ;
+		/* strip trailing CR/whitespace: a DOS-edited ini made every
+		 * section header unmatchable, the whole file landed in [red],
+		 * blue drew from an empty list, and ten bots wore the fallback
+		 * (three live reports and a runtime list dump to find it) */
+		{
+			size_t ll = strlen(line);
+
+			while (ll > 0 && (line[ll - 1] == '\r' ||
+			                  line[ll - 1] == ' ' ||
+			                  line[ll - 1] == '\t'))
+				line[--ll] = 0;
+		}
+
 		if (line[0] == '#' || line[0] == '/' || line[0] == ';')
 			continue;
 
@@ -231,7 +244,8 @@ char *SkinRandom(edict_t *ent)
 	 */
 	if (i <= 0)
 	{
-		sprintf(skin, "%s", teamnum == SKIN_RED ? "male/cipher" : "male/claymore");
+		/* the fallback wears TEAM colors like everything else */
+		sprintf(skin, "%s", teamnum == SKIN_RED ? "male/rb-rm1" : "male/rb-bm1");
 		return skin;
 	}
 
