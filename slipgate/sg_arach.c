@@ -2509,6 +2509,49 @@ no_hold:;
 						VectorCopy(l->anchor, bot->hook_anchor);
 						VectorCopy(sg_rune->seeds[l->to].origin,
 						           bot->hook_dest);
+
+						/*
+						 * ANCHOR OVERDRIVE for climbs: the stored anchor
+						 * sits wherever the proof's rope bit -- often on
+						 * the wall BESIDE the ledge -- so riding it means
+						 * riding to the terminus and cutting it means
+						 * scraping the lip. A human hooks the ceiling
+						 * PAST the ledge so the fling's physics carry up
+						 * and over. When the destination rises, probe
+						 * for a bite above-and-beyond it; take it if the
+						 * rope reaches, keep the proof's anchor if not.
+						 */
+						if (sg_rune->seeds[l->to].origin[2] -
+						    e->s.origin[2] > 96.0f)
+						{
+							vec3_t adir, cand, eye2;
+							trace_t otr;
+							float ah;
+
+							VectorSubtract(sg_rune->seeds[l->to].origin,
+							               e->s.origin, adir);
+							adir[2] = 0.0f;
+							ah = VectorLength(adir);
+							if (ah > 1.0f)
+							{
+								adir[0] /= ah; adir[1] /= ah;
+								VectorCopy(sg_rune->seeds[l->to].origin,
+								           cand);
+								VectorMA(cand, 140.0f, adir, cand);
+								cand[2] += 220.0f;
+								VectorCopy(e->s.origin, eye2);
+								eye2[2] += e->viewheight;
+								otr = gi.trace(eye2, NULL, NULL, cand,
+								               e, MASK_SOLID);
+								if (otr.fraction < 1.0f &&
+								    !otr.startsolid &&
+								    otr.endpos[2] >
+								        sg_rune->seeds[l->to].origin[2]
+								        + 80.0f)
+									VectorCopy(otr.endpos,
+									           bot->hook_anchor);
+							}
+						}
 						bot->hook_link = bestlink;
 						bot->hook_bite_logged = false;
 						bot->hook_phase = 1;
@@ -3627,7 +3670,7 @@ no_hold:;
 					 * must clear ABOVE the destination, never scrape
 					 * under it.
 					 */
-					if (tt < 1.2f && toward > 0.82f && td[2] < 160.0f)
+					if (tt < 1.2f && toward > 0.82f)
 					{
 						float grav = e->client->ps.pmove.gravity
 						             ? (float)e->client->ps.pmove.gravity
