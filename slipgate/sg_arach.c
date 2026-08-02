@@ -1669,7 +1669,16 @@ rally_done:;
 			 * the grab and make them turn their back to chase. Two or
 			 * more: the room fight first, as before.
 			 */
-			if (room >= 2)
+			/*
+			 * A/B, waves 118+: ALWAYS fight the room first. The killer
+			 * census flipped the theory -- all 93 carrier deaths across
+			 * seven waves came from SURVIVORS, zero from the respawn
+			 * stream. Grabbing past a live sentry hands them a free rail
+			 * into a fleeing back; the sprint never mattered. The fight
+			 * happens before the flag moves, at any defender count, and
+			 * the surge still grabs the instant one drops.
+			 */
+			if (room >= 1)
 			{
 				if (bot->rally_since <= 0.0f)
 					bot->rally_since = level.time;
