@@ -3967,7 +3967,14 @@ no_hold:;
 				 * fresh contact (3s) is believed and the legs are on the
 				 * ground doing route work.
 				 */
-				if (role == SG_ROLE_CARRY && cmd.forwardmove != 0)
+				/* open ground only: wave 147's first jink census traded
+				 * rails (47%%->25%%) for WEDGES -- carrier suicides went
+				 * from one every other wave to four in one, the
+				 * serpentine drifting bodies into corners the feelers
+				 * had already vetoed. No open room ahead, no jink: a
+				 * wall stops more rails than it starts. */
+				if (role == SG_ROLE_CARRY && cmd.forwardmove != 0 &&
+				    open_ahead)
 				{
 					int s9;
 
