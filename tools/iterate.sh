@@ -47,6 +47,8 @@ NAKED=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # 5v5 servers press; 7v7 stays stock as the density control
 STICKY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 PRESS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
+# no-weave A/B (wave 176+): dodge oscillators off on s03-05
+NOWEAVE=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -62,7 +64,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_nakedcarry "${NAKED[$i]}" +set sg_sticky "${STICKY[$i]}" \
-                +set sg_press "${PRESS[$i]}" \
+                +set sg_press "${PRESS[$i]}" +set sg_noweave "${NOWEAVE[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &

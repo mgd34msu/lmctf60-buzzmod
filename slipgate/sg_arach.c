@@ -3810,7 +3810,16 @@ no_hold:;
 	 * nothing), and never on the final approach, where the whole point is
 	 * being able to stop on the flag.
 	 */
-	if (duel && role != SG_ROLE_CARRY && !precision && bot->hook_phase == 0)
+	/* sg_noweave (A/B wave 176+): the Brownian census -- median 73
+	 * degrees of heading change per travelling second, 32%% outright
+	 * reversals -- with goals, seeds, and links all measured stable.
+	 * The lateral oscillators are the remaining suspects, and they
+	 * trigger on BELIEF-engagement, which at parity is nearly always.
+	 * Dodging nobody's bullets is the owner's "unnecessary movement"
+	 * by definition; this gate measures what the dodge layers cost. */
+	if (duel && role != SG_ROLE_CARRY && !precision &&
+	    bot->hook_phase == 0 &&
+	    !gi.cvar("sg_noweave", "0", 0)->value)
 	{
 		if (bestlink < 0)
 			duel_hold = true;
@@ -4181,7 +4190,8 @@ no_hold:;
 				 * had already vetoed. No open room ahead, no jink: a
 				 * wall stops more rails than it starts. */
 				if (role == SG_ROLE_CARRY && cmd.forwardmove != 0 &&
-				    open_ahead)
+				    open_ahead &&
+				    !gi.cvar("sg_noweave", "0", 0)->value)
 				{
 					int s9;
 
