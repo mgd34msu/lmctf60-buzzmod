@@ -34,7 +34,7 @@ mkdir -p "$LOG_DIR"
 # server layout: label, map, botfill spec (single value or "R B")
 LABELS=(s01-2v2 s02-2v2 s03-5v5 s04-5v5 s05-5v5 s06-5v5 s07-5v5 s08-7v7 s09-7v7 s10-5v1)
 MAPS=("$DUEL" "$DUEL" "$F1" "$F2" "$F3" "$F4" "$F5" "$DENS" "$DENS" "$CTRL")
-FILLS=("2" "2" "5" "5" "5" "5" "5" "7" "7" "5 1")
+FILLS=("2" "2" "5" "5" "5" "5" "5" "7" "7" "5:1")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (

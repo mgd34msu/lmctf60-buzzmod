@@ -4182,9 +4182,11 @@ static void Botfill_Frame(void)
 	int humans[2] = {0, 0}, bots[2] = {0, 0};
 	int i, t;
 
-	/* one value fills both teams to it; two values ("5 1") set red and
-	 * blue separately -- the mixed-density waves' asymmetric rooms */
-	if (sscanf(fill->string, "%d %d", &want[0], &want[1]) < 2)
+	/* one value fills both teams to it; "5:1" sets red and blue
+	 * separately -- colon, not space, because the engine's set command
+	 * reads a third token as a serverinfo flag and sets NOTHING (wave
+	 * 139: the 5v1 control ran its whole game with zero bots) */
+	if (sscanf(fill->string, "%d:%d", &want[0], &want[1]) < 2)
 		want[1] = want[0] = (int)fill->value;
 
 	if ((want[0] <= 0 && want[1] <= 0) || level.time < next_check)
