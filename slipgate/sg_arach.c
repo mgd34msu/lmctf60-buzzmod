@@ -1847,25 +1847,36 @@ rally_done:;
 							nl7 = VectorLength(nd7);
 							if (nl7 > 250.0f && nl7 < 800.0f)
 							{
-								/* the bomb goes to the STAND, not the
-								 * ghost: beliefs run seconds stale and
-								 * fiftyograms of shrapnel on a patrol's
-								 * old footprints kills nobody (waves
-								 * 128-129: 49 throws, zero obituaries).
-								 * The stand is fixed, known, and where
-								 * the statue lives. */
-								edict_t *nf = G_Find(NULL,
-								    FOFS(classname),
-								    (team == CTF_TEAM_RED)
-								        ? "info_flag_blue"
-								        : "info_flag_red");
-
-								if (nf)
-									VectorCopy(nf->s.origin, bot->nade_at);
-								else
+								/* NADEPOP's verdict on the stand doctrine
+								 * (wave 140): 25 pops, mean 4847 units
+								 * from the nearest enemy, two inside the
+								 * blast radius -- the airburst shells a
+								 * pedestal nobody stands on. The bomb now
+								 * takes a FRESH sighting (under 2s) at
+								 * face value and falls back to the stand
+								 * only when the belief has gone stale --
+								 * the ghost was the wrong target at ten
+								 * seconds old, not at one. */
+								if (level.time - en7->seen_time < 2.0f)
 									VectorCopy(
 									    sg_rune->seeds[en7->seed].origin,
 									    bot->nade_at);
+								else
+								{
+									edict_t *nf = G_Find(NULL,
+									    FOFS(classname),
+									    (team == CTF_TEAM_RED)
+									        ? "info_flag_blue"
+									        : "info_flag_red");
+
+									if (nf)
+										VectorCopy(nf->s.origin,
+										           bot->nade_at);
+									else
+										VectorCopy(
+										    sg_rune->seeds[en7->seed].origin,
+										    bot->nade_at);
+								}
 								nades->use(e, nades);
 								bot->nade_phase = 1;
 								bot->nade_until = level.time + 0.5f;
