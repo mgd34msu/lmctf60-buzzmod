@@ -1108,7 +1108,15 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     //   rne  S/H/G/R  = strength, haste, regen, resist
     {
         int rows = (red > blue) ? red : blue;
-        int fy = 48 + 8 * rows + 8;
+        // The footer sits BELOW the roster, and the roster's row height
+        // depends on which scoreboard this is: the small layout packs
+        // players at 8 pixels (y = 48 + 8i), the big portrait layout at
+        // 32 (y = 32 + 32i).  The first cut assumed 8 always -- at five
+        // players a side the footer landed at y=96, printed straight
+        // over the third portrait row (reported live from the big
+        // board).  Compute from the layout actually in effect.
+        int fy = showsmall ? (48 + 8 * rows + 8)
+                           : (32 + 32 * ((rows > 6 ? 6 : rows)) + 8);
 
         // only draw it when the roster leaves vertical room for three rows
         if (fy + 16 <= 232)
