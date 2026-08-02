@@ -138,6 +138,8 @@ typedef struct sg_bot_s
 	float		escape_until;   /* backing out of a concave pocket */
 	float		escape_yaw;
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
+	float		vy_cur, vp_cur; /* the view's ACTUAL heading: slew state */
+	qboolean	view_on;        /* slew state valid (false snaps on respawn) */
 	int			carry_startcost; /* field cost at the grab: breakout gauge */
 	float		rally_since;    /* waiting for a partner before the push */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
@@ -1010,6 +1012,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	qboolean	hook_brake = false;         /* slow to the proof's standing
 	                                         * start before firing a rope */
 	int			sub_steps = 1, sub_msec = 0;
+	float		slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
 
 	/* the duel terms, read once per frame and priced per candidate seed */
 	qboolean	duel = false;               /* combat has a live or fresh target */
@@ -1032,6 +1035,7 @@ static void SG_BotThink(sg_bot_t *bot)
 			bot->death_taught = true;
 		}
 		bot->seed = -1;
+		bot->view_on = false;   /* respawn snaps the view fresh */
 		/*
 		 * PULSE the trigger, never hold it. Respawn keys off
 		 * latched_buttons -- fresh presses only (p_client.c:3203) -- and
@@ -3086,12 +3090,64 @@ no_hold:;
 			AngleVectors(basis, basis_fwd, basis_right, NULL);
 		}
 
+		/*
+		 * THE VIEW SLEWS; IT NO LONGER TELEPORTS. Every writer above --
+		 * navigation, combat, the rope aim, the swim pitch -- asks for a
+		 * heading, and until now the ask was granted instantly: a 180
+		 * happened in one server frame, superhuman to play against and
+		 * unwatchable in chase-cam (reported live). The desired heading
+		 * is decoded once here, and each subframe advances the actual
+		 * view toward it along the shortest arc at sg_turnrate degrees a
+		 * second (default 600: a competitive flick, half a second for a
+		 * full 360). Zero restores the teleport.
+		 */
+		{
+			float want_y = SHORT2ANGLE((short)(cmd.angles[YAW] +
+			               e->client->ps.pmove.delta_angles[YAW]));
+			float want_p = SHORT2ANGLE((short)(cmd.angles[PITCH] +
+			               e->client->ps.pmove.delta_angles[PITCH]));
+			float rate = gi.cvar("sg_turnrate", "600", 0)->value;
+
+			if (!bot->view_on || rate <= 0.0f)
+			{
+				bot->vy_cur = want_y;
+				bot->vp_cur = want_p;
+				bot->view_on = true;
+			}
+			slew_want_y = want_y;
+			slew_want_p = want_p;
+			slew_rate = rate;
+		}
+
 		for (step = 0; step < sub; step++)
 		{
 			cmd.msec = (byte)(base + (step < rem ? 1 : 0));
 			if (!cmd.msec)
 				continue;
 			sub_msec = cmd.msec;
+
+			if (slew_rate > 0.0f)
+			{
+				float dt = (float)cmd.msec / 1000.0f;
+				float dy = slew_want_y - bot->vy_cur;
+				float dp = slew_want_p - bot->vp_cur;
+				float stepmax = slew_rate * dt;
+
+				while (dy > 180.0f) dy -= 360.0f;
+				while (dy < -180.0f) dy += 360.0f;
+				while (dp > 180.0f) dp -= 360.0f;
+				while (dp < -180.0f) dp += 360.0f;
+				if (dy > stepmax) dy = stepmax;
+				if (dy < -stepmax) dy = -stepmax;
+				if (dp > stepmax) dp = stepmax;
+				if (dp < -stepmax) dp = -stepmax;
+				bot->vy_cur += dy;
+				bot->vp_cur += dp;
+				cmd.angles[YAW] = ANGLE2SHORT(bot->vy_cur)
+				                - e->client->ps.pmove.delta_angles[YAW];
+				cmd.angles[PITCH] = ANGLE2SHORT(bot->vp_cur)
+				                  - e->client->ps.pmove.delta_angles[PITCH];
+			}
 
 			/*
 			 * Every step starts from the plain command -- forward down the
@@ -3184,6 +3240,24 @@ no_hold:;
 
 		if (bot->hook_phase == 1)
 		{
+			/* the rope fires along the ACTUAL view, which now slews:
+			 * hold phase 1 (a standing frame anyway) until the view has
+			 * arrived within 3 degrees of the anchor bearing */
+			vec3_t ad2;
+			float ay, ap, ddy, ddp;
+
+			VectorSubtract(bot->hook_anchor, e->s.origin, ad2);
+			ad2[2] -= e->viewheight;
+			ay = atan2f(ad2[1], ad2[0]) * 180.0f / (float)M_PI;
+			ap = -atan2f(ad2[2], sqrtf(ad2[0] * ad2[0] + ad2[1] * ad2[1]))
+			     * 180.0f / (float)M_PI;
+			ddy = ay - bot->vy_cur;
+			ddp = ap - bot->vp_cur;
+			while (ddy > 180.0f) ddy -= 360.0f;
+			while (ddy < -180.0f) ddy += 360.0f;
+			if (slew_rate > 0.0f &&
+			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
+				goto hook_wait;
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
 			if (gi.cvar("sg_debug", "0", 0)->value)
@@ -3266,6 +3340,7 @@ no_hold:;
 		}
 	}
 
+hook_wait:;
 	/* the literal emission record: what this frame's usercmd contained */
 	if (gi.cvar("sg_debug", "0", 0)->value >= 2 || 
 	    (gi.cvar("sg_debug", "0", 0)->value && level.time >= bot->next_cmdlog))
