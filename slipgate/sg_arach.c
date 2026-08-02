@@ -3669,7 +3669,11 @@ no_hold:;
 			 */
 			vec3_t na;
 			float nyaw, npitch, nh;
-			float nsp = 400.0f + 2.2f * ((800.0f - 400.0f) / 3.0f);
+			/* mirror p_weapon.c exactly: the clock the engine reads is
+			 * grenade_time = cook_start + TIMER + 0.2, so a 2.2s cook
+			 * releases with timer=1.0 and flies at 667, not the 693 the
+			 * old guess used -- the solve must price the real throw */
+			float nsp = 400.0f + (3.0f - 1.0f) * ((800.0f - 400.0f) / 3.0f);
 			float ng = e->client->ps.pmove.gravity
 			           ? (float)e->client->ps.pmove.gravity : 800.0f;
 			float ns2 = nsp * nsp, ndisc;
