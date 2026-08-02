@@ -3822,6 +3822,15 @@ qboolean SG_AddBot(void)
 	ent->flags |= FL_BOT;
 	ClientUserinfoChanged(ent, userinfo);
 	ClientBegin(ent);
+	/*
+	 * Again, now that a TEAM exists. The skin force inside the first
+	 * userinfo pass ran while teamnum was still UNDEFINED, its red/blue
+	 * ternary defaulted to blue, and every bot the balancer then sent
+	 * red played the whole match in the wrong colors (reported live
+	 * off the scoreboard portraits, wave 99 era). The second pass sees
+	 * the real team and paints the uniform right.
+	 */
+	ClientUserinfoChanged(ent, ent->client->pers.userinfo);
 
 	sg_bots[slot].ent = ent;
 	sg_bots[slot].active = true;
