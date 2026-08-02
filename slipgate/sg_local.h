@@ -186,6 +186,7 @@ typedef struct
 
 qboolean	SG_OwnsBot(edict_t *ent);
 qboolean	SG_AddBot(void);
+qboolean	SG_AddBotTeam(int teamnum);
 int			SG_RemoveBots(void);
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */

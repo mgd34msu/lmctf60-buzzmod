@@ -4174,11 +4174,16 @@ static void Botfill_Frame(void)
 {
 	static float next_check;
 	cvar_t *fill = gi.cvar("sv_botfill", "0", 0);
-	int want = (int)fill->value;
+	int want[2];
 	int humans[2] = {0, 0}, bots[2] = {0, 0};
 	int i, t;
 
-	if (want <= 0 || level.time < next_check)
+	/* one value fills both teams to it; two values ("5 1") set red and
+	 * blue separately -- the mixed-density waves' asymmetric rooms */
+	if (sscanf(fill->string, "%d %d", &want[0], &want[1]) < 2)
+		want[1] = want[0] = (int)fill->value;
+
+	if ((want[0] <= 0 && want[1] <= 0) || level.time < next_check)
 		return;
 	next_check = level.time + 1.0f;
 
@@ -4201,12 +4206,12 @@ static void Botfill_Frame(void)
 	 * a roster decision is not an emergency, and patience ends every
 	 * oscillation a second controller could start */
 	{
-		static int over_streak[2], under_streak;
+		static int over_streak[2], under_streak[2];
 		qboolean acted = false;
 
 		for (t = 0; t < 2 && !acted; t++)
 		{
-			if (humans[t] + bots[t] > want && bots[t] > 0)
+			if (humans[t] + bots[t] > want[t] && bots[t] > 0)
 			{
 				if (++over_streak[t] >= 3)
 				{
@@ -4218,17 +4223,22 @@ static void Botfill_Frame(void)
 			else
 				over_streak[t] = 0;
 		}
-		if (!acted &&
-		    (humans[0] + bots[0] < want || humans[1] + bots[1] < want))
+		for (t = 0; t < 2; t++)
 		{
-			if (++under_streak >= 3)
+			if (acted)
+				break;
+			if (humans[t] + bots[t] < want[t])
 			{
-				SG_AddBot();
-				under_streak = 0;
+				if (++under_streak[t] >= 3)
+				{
+					SG_AddBotTeam(CTF_TEAM_RED + t);
+					under_streak[t] = 0;
+					acted = true;
+				}
 			}
+			else
+				under_streak[t] = 0;
 		}
-		else if (!acted)
-			under_streak = 0;
 	}
 }
 
@@ -4294,6 +4304,11 @@ qboolean SG_OwnsBot(edict_t *ent)
 
 qboolean SG_AddBot(void)
 {
+	return SG_AddBotTeam(0);
+}
+
+qboolean SG_AddBotTeam(int teamnum)
+{
 	edict_t *ent;
 	char userinfo[MAX_INFO_STRING];
 	int i, slot = -1;
@@ -4324,6 +4339,16 @@ qboolean SG_AddBot(void)
 	{
 		G_FreeClientEdict(ent);
 		return false;
+	}
+	/* Same pattern as BotCTFAssignTeam: written while inuse is still
+	 * false, so ClientBegin sees a client already on a team and keeps
+	 * it, penalty-free -- the asymmetric fills (5v1) need bots landing
+	 * where the census says, not where the balancer would put them. */
+	if (teamnum == CTF_TEAM_RED || teamnum == CTF_TEAM_BLUE)
+	{
+		ent->client->ctf.teamnum = teamnum;
+		if (ent->client->p_stats_player)
+			ent->client->p_stats_player->info.teamnum = teamnum;
 	}
 	ent->inuse = true;
 	ent->flags |= FL_BOT;
