@@ -149,6 +149,7 @@ typedef struct sg_bot_s
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
+static float	sg_grab_time[2] = { -1000.0f, -1000.0f };  /* per team */
 static rune_t	*sg_rune;
 
 rune_t *SG_Rune(void)
@@ -1087,6 +1088,7 @@ static void SG_BotThink(sg_bot_t *bot)
 			bot->carry_start = level.time;
 			gi.dprintf("CARRY %s begins\n", e->client->pers.netname);
 			bot->carry_startcost = -1;  /* gauged on first samples below */
+			sg_grab_time[team - CTF_TEAM_RED] = level.time;
 		}
 		else if (!carrying && bot->was_carrying)
 			gi.dprintf("CARRY %s ends after %.1fs\n",
@@ -1745,6 +1747,28 @@ rally_done:;
 	 * three links and drains in seconds, nothing like the doorway-fan
 	 * drain this system got burned by (that one shelved at 10Hz).
 	 */
+	/*
+	 * THE REARGUARD. Waves 88-90: nineteen steals, zero captures, ten of
+	 * fifteen carriers dead within ten percent of home -- killed in the
+	 * flag room by the respawn stream while their escort dutifully
+	 * followed them toward the exit, duplicating the carrier's path when
+	 * the carrier needed the ROOM plugged behind it. For eight seconds
+	 * after a grab, an escort still deep in the enemy base stands and
+	 * fights where it is -- combat runs free, navigation holds -- and
+	 * the respawn stream meets a gun instead of a fleeing back. Then it
+	 * escorts, as before, in country where escorting means something.
+	 */
+	if (role == SG_ROLE_ESCORT &&
+	    level.time - sg_grab_time[team - CTF_TEAM_RED] < 8.0f &&
+	    bot->seed >= 0)
+	{
+		int *att = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
+		                                  : sg_fields.to_red_flag;
+
+		if (att && att[bot->seed] < 3000)
+			rally_hold = true;      /* stand and fight: the room is the job */
+	}
+
 	VectorSubtract(e->s.origin, bot->stag_org, d);
 	if (VectorLength(d) > 96.0f || !bot->nav_drove || bot->engaged_last)
 	{
