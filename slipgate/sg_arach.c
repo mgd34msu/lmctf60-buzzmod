@@ -1680,10 +1680,41 @@ rally_done:;
 			 */
 			if (room >= 1)
 			{
-				if (bot->rally_since <= 0.0f)
-					bot->rally_since = level.time;
-				if (level.time - bot->rally_since < 10.0f)
-					rally_hold = true;
+				/*
+				 * THE PAIR SPLITS THE SENTRY. When two attackers stand
+				 * at the threshold, holding them BOTH just gives the
+				 * sentry one target at a time. The lower client index
+				 * fights -- holds the sentry's eyes -- and the other
+				 * skips the hold entirely and circles to the grab. A
+				 * sentry cannot watch both; whichever it picks loses
+				 * something. Solo attackers fight first, as the killer
+				 * census demands.
+				 */
+				int bi5, mate_holding = 0;
+
+				for (bi5 = 0; bi5 < SG_MAXBOTS; bi5++)
+				{
+					sg_bot_t *mb5 = &sg_bots[bi5];
+
+					if (!mb5->active || mb5 == bot || !mb5->ent ||
+					    !mb5->ent->inuse)
+						continue;
+					if (mb5->ent->client->ctf.teamnum != team)
+						continue;
+					if (mb5->last_role == (int)SG_ROLE_ATTACK &&
+					    mb5->last_goalcost >= 0 &&
+					    mb5->last_goalcost < 1200 &&
+					    (int)(mb5->ent - g_edicts) <
+					        (int)(e - g_edicts))
+						mate_holding = 1;
+				}
+				if (!mate_holding)
+				{
+					if (bot->rally_since <= 0.0f)
+						bot->rally_since = level.time;
+					if (level.time - bot->rally_since < 10.0f)
+						rally_hold = true;
+				}
 			}
 		}
 	}
