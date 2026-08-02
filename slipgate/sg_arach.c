@@ -1820,6 +1820,28 @@ rally_done:;
 				}
 
 				/*
+				 * THE STRICT GRAB (sg_strictgrab 1, A/B wave 151+).
+				 * Wave 150's verdict on the current doctrine: parity
+				 * carriers die at a median ZERO percent of the route --
+				 * at the pedestal -- because both sanctioned grabs
+				 * take the flag under live guns: the 10s stalemate
+				 * grab, and the pair-split circle-grab into a watched
+				 * room. Strict mode holds while ANY defender is
+				 * believed alive in the room, mate or no mate, twenty
+				 * seconds of patience before conceding to the old
+				 * rule. Three 5v5 servers run strict against two on
+				 * current; the steals-vs-caps trade decides.
+				 */
+				if (room >= 1 &&
+				    gi.cvar("sg_strictgrab", "0", 0)->value)
+				{
+					if (bot->rally_since <= 0.0f)
+						bot->rally_since = level.time;
+					if (level.time - bot->rally_since < 20.0f)
+						rally_hold = true;
+				}
+
+				/*
 				 * THE PRE-BREACH BOMB. Threshold duels run 99-58 against
 				 * us: a posted rail beats an arriving one, structurally.
 				 * The unfair tool has sat in the loadout unthrown all

@@ -35,6 +35,8 @@ mkdir -p "$LOG_DIR"
 LABELS=(s01-2v2 s02-2v2 s03-5v5 s04-5v5 s05-5v5 s06-5v5 s07-5v5 s08-7v7 s09-7v7 s10-5v1)
 MAPS=("$DUEL" "$DUEL" "$F1" "$F2" "$F3" "$F4" "$F5" "$DENS" "$DENS" "$CTRL")
 FILLS=("2" "2" "5" "5" "5" "5" "5" "7" "7" "5:1")
+# strict-grab A/B (wave 151+): three 5v5 servers strict, two current
+GRABS=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -48,7 +50,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 timeout $(( 8 + 45 + SECS + 40 )) \
                 "$Q2DED" +set game "$GAME" +set dedicated 1 \
                 +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
-                +set sv_botfill "${FILLS[$i]}" \
+                +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &
