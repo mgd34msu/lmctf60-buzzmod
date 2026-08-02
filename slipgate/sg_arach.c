@@ -144,6 +144,7 @@ typedef struct sg_bot_s
 	qboolean	view_on;        /* slew state valid (false snaps on respawn) */
 	int			hookfail_streak; /* consecutive failed rides */
 	float		hookban_until;  /* streak of 2: the rope is confiscated */
+	qboolean	flow_release;   /* cut early on momentum: no landing brake */
 	qboolean	speedhook;      /* this rope is a burst, not a transit */
 	float		speedhook_next; /* cooldown on burst ropes */
 	int			carry_startcost; /* field cost at the grab: breakout gauge */
@@ -2279,7 +2280,9 @@ no_hold:;
 					           sqrtf(ld[0] * ld[0] + ld[1] * ld[1]), ld[2]);
 				}
 				bot->hook_phase = 0;
-				bot->hook_landbrake = level.time + 0.3f;
+				if (!bot->flow_release)
+					bot->hook_landbrake = level.time + 0.3f;
+				bot->flow_release = false;
 				/* a rope ride ENDS its commitment: wherever this landing
 				 * is, the next step is argued fresh from here */
 				bot->commit_link = -1;
@@ -3579,6 +3582,53 @@ no_hold:;
 			VectorSubtract(bot->hook_dest, e->s.origin, td);
 			arrived = (td[0] * td[0] + td[1] * td[1] < 80.0f * 80.0f &&
 			           td[2] > -96.0f && td[2] < 96.0f);
+
+			/*
+			 * THE EARLY RELEASE -- ride the rope only as long as the
+			 * rope is doing something momentum cannot. The old release
+			 * conditions rode every rope to its terminus (observed
+			 * live: a bot riding all the way onto the platform where a
+			 * human cuts loose under the ceiling and lets the throw
+			 * fling them through the door into a bhop chain). Each ride
+			 * frame projects the ballistic throw: velocity toward the
+			 * destination within ~35 degrees, arrival inside 1.2s, and
+			 * the parabola landing within a jumpable window of the
+			 * destination height -- cut NOW, fly the rest, keep every
+			 * unit of speed. flow_release skips the landing brake: the
+			 * whole point of the cut is what happens after it.
+			 */
+			if (!bot->speedhook && e->client->hookstate != 0)
+			{
+				float hd2 = sqrtf(td[0] * td[0] + td[1] * td[1]);
+				float hv2 = sqrtf(e->velocity[0] * e->velocity[0] +
+				                  e->velocity[1] * e->velocity[1]);
+
+				if (hv2 > 300.0f && hd2 > 40.0f)
+				{
+					float tt = hd2 / hv2;
+					float toward = (e->velocity[0] * td[0] +
+					                e->velocity[1] * td[1]) / (hv2 * hd2);
+
+					if (tt < 1.2f && toward > 0.82f)
+					{
+						float grav = e->client->ps.pmove.gravity
+						             ? (float)e->client->ps.pmove.gravity
+						             : 800.0f;
+						float zp = e->velocity[2] * tt
+						         - 0.5f * grav * tt * tt;
+
+						if (zp - td[2] > -100.0f && zp - td[2] < 220.0f)
+						{
+							ctf_hook_abort(e);
+							bot->hook_phase = 3;
+							bot->flow_release = true;
+							bot->hook_deadline = level.time + 1.4f;
+							bot->hookfail_streak = 0;
+						}
+					}
+				}
+			}
+
 			if (bot->speedhook)
 			{
 				/* the burst release: cut at speed and KEEP it -- no

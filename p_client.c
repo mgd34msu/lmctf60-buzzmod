@@ -2402,7 +2402,6 @@ The game can override any of the settings in place
 void ClientUserinfoChanged (edict_t *ent, char *userinfo)
 {
 	char	*s, *skin;
-	int 	playernum;
 	
 	// check for malformed or illegal info strings
 	if (!Info_Validate(userinfo))
