@@ -2268,7 +2268,22 @@ no_hold:;
 
 		if (bot->hook_phase == 3)
 		{
-			if (e->groundentity || level.time > bot->hook_deadline)
+			/*
+			 * APEX CHAINING: hook short of the lip, cut, and at the top
+			 * of the throw the next rope is already legal -- the classic
+			 * chain (named exactly by the owner). A flow-cut flight ends
+			 * its phase at the apex (vertical speed dying, still
+			 * airborne), the surface argues the next step from the air,
+			 * and if that step is a rope it fires right there.
+			 */
+			if (bot->flow_release && !e->groundentity &&
+			    e->velocity[2] < 60.0f)
+			{
+				bot->hook_phase = 0;
+				bot->flow_release = false;
+				bot->commit_link = -1;
+			}
+			else if (e->groundentity || level.time > bot->hook_deadline)
 			{
 				if (e->groundentity && gi.cvar("sg_debug", "0", 0)->value)
 				{
@@ -2322,14 +2337,7 @@ no_hold:;
 						 * narrated live in capitals). Twenty seconds
 						 * on the legs beats another lap of the wall.
 						 */
-						/* a failed CLIMB never counts toward the
-						 * confiscation: in a shaft the rope is the only
-						 * way up, and taking it away is solitary
-						 * confinement -- the room fills with grounded
-						 * bots running circles (live report). */
-						if (sg_rune->seeds[hl->to].origin[2] -
-						    e->s.origin[2] < 200.0f)
-							bot->hookfail_streak++;
+						bot->hookfail_streak++;
 						if (bot->hookfail_streak >= 2)
 						{
 							bot->hookban_until = level.time + 20.0f;
@@ -2511,45 +2519,64 @@ no_hold:;
 						           bot->hook_dest);
 
 						/*
-						 * ANCHOR OVERDRIVE for climbs: the stored anchor
-						 * sits wherever the proof's rope bit -- often on
-						 * the wall BESIDE the ledge -- so riding it means
-						 * riding to the terminus and cutting it means
-						 * scraping the lip. A human hooks the ceiling
-						 * PAST the ledge so the fling's physics carry up
-						 * and over. When the destination rises, probe
-						 * for a bite above-and-beyond it; take it if the
-						 * rope reaches, keep the proof's anchor if not.
+						 * THE BALLISTIC ANCHOR. The rope sets speed to a
+						 * flat 800 along itself, so a cut rope IS a
+						 * projectile launch at 800 -- and where to hook
+						 * for a fling that LANDS somewhere is therefore
+						 * closed-form: solve the projectile equation for
+						 * launch pitch to the destination at s=800, and
+						 * the anchor is wherever that ray bites the
+						 * world. Low solution first (flatter, faster),
+						 * high if the low ray finds no bite. When
+						 * neither ray bites within rope reach, the
+						 * proof's stored anchor and a full ride remain
+						 * -- physics first, terminus as the fallback.
 						 */
-						if (sg_rune->seeds[l->to].origin[2] -
-						    e->s.origin[2] > 96.0f)
 						{
-							vec3_t adir, cand, eye2;
-							trace_t otr;
-							float ah;
+							vec3_t bd, eye2;
+							float bx, by2, s2 = 800.0f * 800.0f;
+							float grav2 = e->client->ps.pmove.gravity
+							              ? (float)e->client->ps.pmove.gravity
+							              : 800.0f;
+							float disc;
 
 							VectorSubtract(sg_rune->seeds[l->to].origin,
-							               e->s.origin, adir);
-							adir[2] = 0.0f;
-							ah = VectorLength(adir);
-							if (ah > 1.0f)
+							               e->s.origin, bd);
+							by2 = bd[2];
+							bx = sqrtf(bd[0] * bd[0] + bd[1] * bd[1]);
+							disc = s2 * s2 - grav2 *
+							       (grav2 * bx * bx + 2.0f * by2 * s2);
+							if (bx > 64.0f && disc > 0.0f)
 							{
-								adir[0] /= ah; adir[1] /= ah;
-								VectorCopy(sg_rune->seeds[l->to].origin,
-								           cand);
-								VectorMA(cand, 140.0f, adir, cand);
-								cand[2] += 220.0f;
+								float az = atan2f(bd[1], bd[0]);
+								float root = sqrtf(disc);
+								int lohi;
+
 								VectorCopy(e->s.origin, eye2);
 								eye2[2] += e->viewheight;
-								otr = gi.trace(eye2, NULL, NULL, cand,
-								               e, MASK_SOLID);
-								if (otr.fraction < 1.0f &&
-								    !otr.startsolid &&
-								    otr.endpos[2] >
-								        sg_rune->seeds[l->to].origin[2]
-								        + 80.0f)
-									VectorCopy(otr.endpos,
-									           bot->hook_anchor);
+								for (lohi = 0; lohi < 2; lohi++)
+								{
+									float tanth = (s2 - (lohi ? -root : root))
+									              / (grav2 * bx);
+									float th = atanf(tanth);
+									vec3_t ray, hit;
+									trace_t btr;
+
+									ray[0] = cosf(az) * cosf(th);
+									ray[1] = sinf(az) * cosf(th);
+									ray[2] = sinf(th);
+									VectorMA(eye2, 700.0f, ray, hit);
+									btr = gi.trace(eye2, NULL, NULL, hit,
+									               e, MASK_SOLID);
+									if (btr.fraction < 1.0f &&
+									    !btr.startsolid &&
+									    btr.fraction * 700.0f > 150.0f)
+									{
+										VectorCopy(btr.endpos,
+										           bot->hook_anchor);
+										break;
+									}
+								}
 							}
 						}
 						bot->hook_link = bestlink;
