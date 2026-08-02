@@ -2322,7 +2322,14 @@ no_hold:;
 						 * narrated live in capitals). Twenty seconds
 						 * on the legs beats another lap of the wall.
 						 */
-						bot->hookfail_streak++;
+						/* a failed CLIMB never counts toward the
+						 * confiscation: in a shaft the rope is the only
+						 * way up, and taking it away is solitary
+						 * confinement -- the room fills with grounded
+						 * bots running circles (live report). */
+						if (sg_rune->seeds[hl->to].origin[2] -
+						    e->s.origin[2] < 200.0f)
+							bot->hookfail_streak++;
 						if (bot->hookfail_streak >= 2)
 						{
 							bot->hookban_until = level.time + 20.0f;
@@ -3609,7 +3616,18 @@ no_hold:;
 					float toward = (e->velocity[0] * td[0] +
 					                e->velocity[1] * td[1]) / (hv2 * hd2);
 
-					if (tt < 1.2f && toward > 0.82f)
+					/*
+					 * td[2] < 160: the cut is for HORIZONTAL finishes.
+					 * Cutting a vertical climb throws the body up BESIDE
+					 * the ledge lip to fall straight back down -- one
+					 * shaft room turned the whole fleet into confused
+					 * circlers within a wave of the feature shipping
+					 * (live report, lowest port). Climbs ride to the
+					 * top; that is what riding is FOR. And the parabola
+					 * must clear ABOVE the destination, never scrape
+					 * under it.
+					 */
+					if (tt < 1.2f && toward > 0.82f && td[2] < 160.0f)
 					{
 						float grav = e->client->ps.pmove.gravity
 						             ? (float)e->client->ps.pmove.gravity
@@ -3617,7 +3635,7 @@ no_hold:;
 						float zp = e->velocity[2] * tt
 						         - 0.5f * grav * tt * tt;
 
-						if (zp - td[2] > -100.0f && zp - td[2] < 220.0f)
+						if (zp - td[2] > 24.0f && zp - td[2] < 260.0f)
 						{
 							ctf_hook_abort(e);
 							bot->hook_phase = 3;
