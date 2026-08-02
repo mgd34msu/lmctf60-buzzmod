@@ -1773,6 +1773,44 @@ rally_done:;
 				if (VectorLength(dd3) < 900.0f)
 					room++;
 			}
+
+			/*
+			 * THE UNACCOUNTED MAN (strict only). The killer-recency
+			 * census (waves 151-154): ten of thirteen carrier killers
+			 * had not recently died -- live defenders the sighting
+			 * census never saw, not the respawn stream. A room cannot
+			 * be SIGHTED clear; but the scoreboard is public: count
+			 * the enemy roster, subtract everyone believed anywhere
+			 * fresh, and if a man is missing from the ledger, assume
+			 * exactly one of the missing is home. The 20s patience
+			 * valve still forces the grab eventually.
+			 */
+			if (gi.cvar("sg_strictgrab", "0", 0)->value)
+			{
+				int s8, esz = 0, accounted = 0, i8;
+
+				for (i8 = 0; i8 < game.maxclients; i8++)
+				{
+					edict_t *pe = g_edicts + 1 + i8;
+
+					if (pe->inuse && pe->client &&
+					    pe->client->ctf.teamnum ==
+					        ((team == CTF_TEAM_RED) ? CTF_TEAM_BLUE
+					                                : CTF_TEAM_RED))
+						esz++;
+				}
+				for (s8 = 0; s8 < SG_MAX_ENEMY_TRACK; s8++)
+				{
+					sg_belief_enemy_t *en8 =
+					    &sg_caco_enemies[team - 1][s8];
+
+					if (en8->client >= 0 &&
+					    level.time - en8->seen_time < 8.0f)
+						accounted++;
+				}
+				if (esz > accounted)
+					room++;
+			}
 			/*
 			 * Hold only when OUTNUMBERED at the stand. Wave 114: mactf06
 			 * attackers reached 250 of the flag and stole nothing all
