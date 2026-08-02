@@ -42,10 +42,11 @@ GRABS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
 # shipping candidate for the same root (A/B wave 168+): incumbent route
 # holds unless beaten by 15% on s03-05, control on s06-07
 NAKED=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-# sticky read null on wave 168 (its reach was within-seed only); press is
-# the wave 169+ A/B -- attackers skip duel range-control on s03-05
+# sticky read null on wave 168 (its reach was within-seed only); press
+# ADOPTED wave 172 (A/B 169-171: steals 11-11, caps 2-0 press) -- all
+# 5v5 servers press; 7v7 stays stock as the density control
 STICKY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-PRESS=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+PRESS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
