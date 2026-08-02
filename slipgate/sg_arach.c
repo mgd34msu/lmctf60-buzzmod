@@ -3949,9 +3949,50 @@ no_hold:;
 				cmd.sidemove = weave_side;
 			}
 			else if (have_move && !precision && bot->hook_phase == 0)
+			{
 				SG_MovePolicy(e, &cmd, basis_fwd, basis_right, move_dir,
 				              open_ahead, run_link,
 				              (float)cmd.msec / 1000.0f);
+
+				/*
+				 * THE CARRIER'S JINK. The parity killer census (waves
+				 * 141-146, 5v5/7v7): 30 of 64 carrier deaths to the
+				 * rail, escorts standing right there for 54 of the 65
+				 * carries -- a screen does not bend a hitscan line, only
+				 * the target's own motion does. This is NOT the weave
+				 * (2.4-D2 stands: a carrier never trades its route for a
+				 * fight): forward motion is kept whole and a half-rate
+				 * side component serpentines the line of travel, ~26
+				 * degrees of wander for ~11%% of the pace, only while a
+				 * fresh contact (3s) is believed and the legs are on the
+				 * ground doing route work.
+				 */
+				if (role == SG_ROLE_CARRY && cmd.forwardmove != 0)
+				{
+					int s9;
+
+					for (s9 = 0; s9 < SG_MAX_ENEMY_TRACK; s9++)
+					{
+						sg_belief_enemy_t *en9 =
+						    &sg_caco_enemies[team - 1][s9];
+
+						if (en9->client >= 0 &&
+						    level.time - en9->seen_time < 3.0f)
+						{
+							float jp = SG_WEAVE_BASE + SG_WEAVE_STEP *
+							    (float)((int)(e->client - game.clients) % 10);
+							short js = (fmodf(level.time, jp) < jp * 0.5f)
+							           ? 1 : -1;
+
+							cmd.sidemove = (short)(cmd.sidemove / 2
+							               + js * (cmd.forwardmove > 0
+							                       ? cmd.forwardmove
+							                       : -cmd.forwardmove) / 2);
+							break;
+						}
+					}
+				}
+			}
 
 			ClientThink(e, &cmd);
 
