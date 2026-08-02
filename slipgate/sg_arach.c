@@ -1613,7 +1613,46 @@ rally_done:;
 	if ((role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY) &&
 	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
 	    goal_field[bot->seed] < 400)
+	{
 		bestlink = -1;
+
+		/*
+		 * THE CLEAN GRAB. Fifty-one of fifty-four carriers died at a
+		 * median five percent of the way home (waves 111-113) --
+		 * grabbing a hot room hands the flag to the respawn stream
+		 * within seconds. A human clears the room first. An attacker
+		 * inside touch range now holds at the threshold while a
+		 * defender is believed alive within 900 of the stand -- combat
+		 * runs free from the hold, the room fight happens BEFORE the
+		 * grab -- and takes the flag the moment the room dies (the
+		 * surge cancels every hold when a defender drops). Ten seconds
+		 * caps the patience: a stalemate grab beats no grab.
+		 */
+		if (role == SG_ROLE_ATTACK)
+		{
+			int s3;
+
+			for (s3 = 0; s3 < SG_MAX_ENEMY_TRACK; s3++)
+			{
+				sg_belief_enemy_t *en3 = &sg_caco_enemies[team - 1][s3];
+				vec3_t dd3;
+
+				if (en3->client < 0 || en3->seed < 0 ||
+				    level.time - en3->seen_time >= 4.0f)
+					continue;
+				VectorSubtract(sg_rune->seeds[en3->seed].origin,
+				               e->s.origin, dd3);
+				if (VectorLength(dd3) < 900.0f)
+				{
+					if (bot->rally_since <= 0.0f)
+						bot->rally_since = level.time;
+					if (level.time - bot->rally_since < 10.0f)
+						rally_hold = true;
+					break;
+				}
+			}
+		}
+	}
 
 	/*
 	 * Commitment. The composed surface has saddles -- goal one way, a
