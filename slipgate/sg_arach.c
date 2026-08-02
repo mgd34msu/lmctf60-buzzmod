@@ -2826,6 +2826,52 @@ no_hold:;
 			{
 				VectorCopy(gf->s.origin, aim);
 				have_aim = true;
+
+				/*
+				 * GRAB THROUGH, NOT AT. Escape speed in the first five
+				 * seconds of a carry measured 256 -- slower than plain
+				 * running -- because the terminal walk aimed AT the
+				 * flag: arrive, stop, turn, accelerate, die (365 samples
+				 * across six ten-wide waves). A human runs THROUGH the
+				 * stand at full stride, already on the exit line. Inside
+				 * 160 units the aim shifts past the flag to the first
+				 * seed of the route home; the touch happens mid-sprint
+				 * and the grab inherits a running start.
+				 */
+				if (role == SG_ROLE_ATTACK && bot->seed >= 0)
+				{
+					vec3_t fd4;
+
+					VectorSubtract(gf->s.origin, e->s.origin, fd4);
+					fd4[2] = 0.0f;
+					if (VectorLength(fd4) < 160.0f)
+					{
+						int fs = Rune_NearestSeed(sg_rune, gf->s.origin);
+						int *home4 = (team == CTF_TEAM_RED)
+						             ? sg_fields.to_red_flag
+						             : sg_fields.to_blue_flag;
+
+						if (fs >= 0)
+						{
+							int li4, best4 = -1, bv4 = home4[fs];
+
+							for (li4 = sg_rune->first_link[fs]; li4 >= 0;
+							     li4 = sg_rune->next_link[li4])
+							{
+								rune_link_t *l4 = &sg_rune->links[li4];
+
+								if (home4[l4->to] < bv4)
+								{
+									bv4 = home4[l4->to];
+									best4 = l4->to;
+								}
+							}
+							if (best4 >= 0)
+								VectorCopy(sg_rune->seeds[best4].origin,
+								           aim);
+						}
+					}
+				}
 			}
 		}
 
