@@ -121,6 +121,8 @@ RUNETOSS=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # sound-directed fire trial (244+): speculative rockets at heard ghosts
 # soundfire ADOPTED wave 246 (244-245 pooled: 1.3 vs 0.5 steals/g, free)
 SOUNDFIRE=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
+# landing-point lead trial (247+): rockets aim at airborne targets' touchdown
+LANDLEAD=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -139,6 +141,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
                 +set sg_preturn "${PRETURN[$i]}" +set sg_flycook "${FLYCOOK[$i]}" \
                 +set sg_runetoss "${RUNETOSS[$i]}" +set sg_soundfire "${SOUNDFIRE[$i]}" \
+                +set sg_landlead "${LANDLEAD[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &

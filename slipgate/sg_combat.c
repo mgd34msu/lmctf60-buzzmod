@@ -1394,6 +1394,45 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	if (sg_weapons[w].speed <= 0.0f)
 		return 0.0f;			/* hitscan: aim at the centre, rule F2 */
 
+	/*
+	 * THE LANDING-POINT LEAD (sg_landlead, wave 247). The owner:
+	 * airborne players are on a committed arc -- judge where they
+	 * land and put the rocket there. Linear lead extends velocity
+	 * into the sky gravity will never let them reach; this branch
+	 * steps the target's own parabola to its touchdown and aims the
+	 * splash at the floor that catches them. Rockets only: the
+	 * splash forgives timing the way rule D1 promises.
+	 */
+	if (w == SG_W_ROCKETLAUNCHER && !enemy->groundentity &&
+	    gi.cvar("sg_landlead", "0", 0)->value)
+	{
+		vec3_t p0, p1;
+		trace_t ltr;
+		float tt, grav = 800.0f;
+		int seg;
+
+		VectorCopy(mid, p0);
+		for (seg = 1; seg <= 30; seg++)
+		{
+			tt = 0.05f * (float)seg;
+			p1[0] = mid[0] + enemy->velocity[0] * tt;
+			p1[1] = mid[1] + enemy->velocity[1] * tt;
+			p1[2] = mid[2] + enemy->velocity[2] * tt
+			      - 0.5f * grav * tt * tt;
+			ltr = gi.trace(p0, enemy->mins, enemy->maxs, p1,
+			               enemy, MASK_PLAYERSOLID);
+			if (ltr.fraction < 1.0f)
+			{
+				VectorCopy(ltr.endpos, lead);
+				VectorSubtract(lead, eye, delta);
+				return sg_weapons[w].windup +
+				       VectorLength(delta) / sg_weapons[w].speed;
+			}
+			VectorCopy(p1, p0);
+		}
+		/* no floor inside 1.5s: fall through to the linear model */
+	}
+
 	flight = sg_weapons[w].windup + dist / sg_weapons[w].speed;
 	VectorMA(mid, flight, enemy->velocity, lead);
 
