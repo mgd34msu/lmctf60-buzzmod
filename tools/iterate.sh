@@ -33,7 +33,16 @@ mkdir -p "$LOG_DIR"
 
 # server layout: label, map, botfill spec (single value or "R B")
 LABELS=(s01-2v2 s02-2v2 s03-5v5 s04-5v5 s05-5v5 s06-5v5 s07-5v5 s08-7v7 s09-7v7 s10-5v1)
-MAPS=("$DUEL" "$DUEL" "$F1" "$F2" "$F3" "$F4" "$F5" "$DENS" "$DENS" "$CTRL")
+# the five 5v5 maps ROTATE across servers by wave number: fixed assignment
+# let map identity confound every arm comparison (the owner's frag check,
+# wave 184: the "scoop suppression" was mactf06's 1.62 defender K/D
+# wearing a doctrine's clothes). Arms keep servers; maps move under them.
+ROT=$(( $(echo "$NAME" | tr -cd '0-9') % 5 ))
+FIVES=("$F1" "$F2" "$F3" "$F4" "$F5")
+R0=${FIVES[$(( (0 + ROT) % 5 ))]}; R1=${FIVES[$(( (1 + ROT) % 5 ))]}
+R2=${FIVES[$(( (2 + ROT) % 5 ))]}; R3=${FIVES[$(( (3 + ROT) % 5 ))]}
+R4=${FIVES[$(( (4 + ROT) % 5 ))]}
+MAPS=("$DUEL" "$DUEL" "$R0" "$R1" "$R2" "$R3" "$R4" "$DENS" "$DENS" "$CTRL")
 FILLS=("2" "2" "5" "5" "5" "5" "5" "7" "7" "5:1")
 # strict grab adopted (crossed A/B, waves 151-152: strict 9 steals to
 # current's 4 on identical map coverage). All 5v5 servers run strict.
