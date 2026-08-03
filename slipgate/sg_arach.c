@@ -158,6 +158,7 @@ typedef struct sg_bot_s
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
 	float		runetoss_next;  /* rune handoff cadence (sg_runetoss) */
+	float		soundfire_next; /* speculative rocket cadence */
 	float		runeconv_until; /* courier window: converge on carrier */
 	float		nav_yaw_cur;    /* smoothed walk heading (sg_smooth) */
 	float		nav_yaw_t;      /* its clock */
@@ -4801,6 +4802,64 @@ no_hold:;
 					           nfly, ntmr - 0.2f);
 			}
 		}
+		/*
+		 * SOUND-DIRECTED FIRE (sg_soundfire, wave 244). The owner:
+		 * "I can shoot rockets in the direction of sounds while
+		 * travelling a route." The ear places heard_only beliefs that
+		 * combat refuses to aim at -- this aims at them on purpose,
+		 * once per cadence, launcher already in hand, one flick
+		 * frame, zero route seconds. Free speculation; the splash
+		 * does the rest or nothing does.
+		 */
+		if (gi.cvar("sg_soundfire", "0", 0)->value &&
+		    !duel && !engaged && role != SG_ROLE_CARRY &&
+		    bot->nade_phase == 0 && bot->hook_phase == 0 &&
+		    level.time >= bot->soundfire_next &&
+		    e->client->pers.weapon &&
+		    e->client->pers.weapon->pickup_name &&
+		    !Q_stricmp(e->client->pers.weapon->pickup_name,
+		               "Rocket Launcher"))
+		{
+			int s15;
+
+			for (s15 = 0; s15 < SG_MAX_ENEMY_TRACK; s15++)
+			{
+				sg_belief_enemy_t *en15 =
+				    &sg_caco_enemies[team - 1][s15];
+				vec3_t sd15;
+				float sl15;
+
+				if (en15->client < 0 || en15->seed < 0 ||
+				    !en15->heard_only ||
+				    level.time - en15->seen_time >= 2.0f)
+					continue;
+				VectorSubtract(sg_rune->seeds[en15->seed].origin,
+				               e->s.origin, sd15);
+				sl15 = VectorLength(sd15);
+				if (sl15 < 600.0f || sl15 > 1500.0f)
+					continue;   /* too close = own splash; too
+					             * far = pure noise */
+				{
+					float sy15 = atan2f(sd15[1], sd15[0])
+					             * 180.0f / (float)M_PI;
+					float sp15 = -atan2f(sd15[2],
+					    sqrtf(sd15[0]*sd15[0] + sd15[1]*sd15[1]))
+					             * 180.0f / (float)M_PI;
+
+					cmd.angles[YAW] = ANGLE2SHORT(sy15)
+					    - e->client->ps.pmove.delta_angles[YAW];
+					cmd.angles[PITCH] = ANGLE2SHORT(sp15)
+					    - e->client->ps.pmove.delta_angles[PITCH];
+					cmd.buttons |= BUTTON_ATTACK;
+					bot->soundfire_next = level.time + 8.0f;
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("SNDFIRE %s rng=%.0f\n",
+						           e->client->pers.netname, sl15);
+				}
+				break;
+			}
+		}
+
 		bot->engaged_last = engaged;
 
 		/*
