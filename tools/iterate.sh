@@ -136,17 +136,29 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
             sleep "$SECS"
             echo "quit"
         ) | (
+            # doctrine flags travel by config file, never argv: the engine
+            # caps the command line at 50 tokens and has killed two waves
+            # silently when adopted flags outgrew it (188, 253)
+            WCFG="waveflags-s$(( i + 1 )).cfg"
+            {
+                echo "exec $CFG"
+                echo "set sv_botfill \"${FILLS[$i]}\""
+                echo "set sg_strictgrab ${GRABS[$i]}"
+                echo "set sg_press ${PRESS[$i]}"
+                echo "set sg_interpose ${INTERPOSE[$i]}"
+                echo "set sg_scoop ${SCOOP[$i]}"
+                echo "set sg_preturn ${PRETURN[$i]}"
+                echo "set sg_flycook ${FLYCOOK[$i]}"
+                echo "set sg_runetoss ${RUNETOSS[$i]}"
+                echo "set sg_soundfire ${SOUNDFIRE[$i]}"
+                echo "set sg_landlead ${LANDLEAD[$i]}"
+                echo "set sg_watercarry ${WATERCARRY[$i]}"
+            } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 45 + SECS + 40 )) \
                 "$Q2DED" +set game "$GAME" +set dedicated 1 \
                 +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
-                +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
-                +set sg_press "${PRESS[$i]}" \
-                +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
-                +set sg_preturn "${PRETURN[$i]}" +set sg_flycook "${FLYCOOK[$i]}" \
-                +set sg_runetoss "${RUNETOSS[$i]}" +set sg_soundfire "${SOUNDFIRE[$i]}" \
-                +set sg_landlead "${LANDLEAD[$i]}" +set sg_watercarry "${WATERCARRY[$i]}" \
-                +exec "$CFG" +map "${MAPS[$i]}"
+                +exec "$WCFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &
     sleep 7
