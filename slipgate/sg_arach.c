@@ -2145,10 +2145,15 @@ rally_done:;
 		 */
 		if (sg_human_live &&
 		    gi.cvar("sg_flagprior", "0", 0)->value &&
+		    sg_cur_role != SG_ROLE_CARRY &&
 		    (sg_caco_team_belief.flag[0].state == SG_FLAG_ASTRAY ||
 		     sg_caco_team_belief.flag[1].state == SG_FLAG_ASTRAY))
-			/* the cvar IS the dose: 1 = 380ms max, 2 = 765, ... --
-			 * wave-over-wave dose response, per the owner's cadence */
+			/* the cvar IS the dose. Wave 214 (dose 2): carrier route
+			 * coverage FELL under the discount -- the window corpus
+			 * is hunters' roads, not escapees' (POV-agnostic cut).
+			 * The roads go to the roles they came from: hunters
+			 * inherit them, the carrier keeps its pure homeward
+			 * pricing. */
 			v -= 1.5f * gi.cvar("sg_flagprior", "0", 0)->value *
 			     (float)sg_human_live[li];
 
