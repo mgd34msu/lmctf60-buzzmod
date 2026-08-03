@@ -15,5 +15,4 @@ afk-
 # --- kept explicitly by ruling: crack, imageomega, silk, lequen, zest,
 # jab/jabberwock, rusty, alienkiller, em/2t, seedless==sinsemilla (one
 # person, all tags), buzzkill (all tag variants = the owner).
-# --- unruled, held OUT of POV data pending ruling: serverkill
-serverkill
+# --- serverkill == buzzkill per Mike ("pretty sure", 2026-08-03): POV-eligible
