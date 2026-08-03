@@ -602,6 +602,27 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 			SG_CombatHit(attacker, targ);
 		}
 
+		/* DMG census (sg_debug, telemetry grant 2026-08-03): the true
+		 * damage ledger at the one site where it lands -- attacker,
+		 * victim, amount, mod, carrier state, both airborne states,
+		 * and range. Observation only; the game plays identically. */
+		if (gi.cvar("sg_debug", "0", 0)->value && client &&
+		    attacker && attacker->client)
+		{
+			vec3_t dgv;
+			float rng;
+
+			VectorSubtract(targ->s.origin, attacker->s.origin, dgv);
+			rng = VectorLength(dgv);
+			gi.dprintf("DMG %s>%s take=%d mod=%d fc=%d agnd=%d tgnd=%d rng=%.0f\n",
+			           attacker->client->pers.netname,
+			           targ->client->pers.netname, take, mod,
+			           ((redflag && redflag->owner == targ) ||
+			            (blueflag && blueflag->owner == targ)),
+			           attacker->groundentity != NULL,
+			           targ->groundentity != NULL, rng);
+		}
+
 		if (attacker && attacker->client && attacker->client->rune)   //added by Vampire - if the attacker is this client
 		{                                                             // and the client has a rune
 			if ((attacker->client->rune->runetype == RUNE_VAMP)&&(attacker!=targ))   // if the rune is the VAMPIRE rune and the target is not himself
