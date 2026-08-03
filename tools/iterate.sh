@@ -83,7 +83,9 @@ SMOOTH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 WAVEPUSH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # fast carry (wave 205+): human bar = whole route in 14s; rope tax under
 # contact drops 2000->500 on s03-05 now that escorts exist to spend it
-FASTCARRY=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# fast carry read NEGATIVE (205-208: survival halved, 9.7 vs 17.6s) --
+# the rope tax earns its keep even with escorts; null ledger.
+FASTCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
