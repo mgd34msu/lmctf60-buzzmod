@@ -74,6 +74,8 @@ LOOKAHEAD=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # dropped flag instead of escorting a corpse.
 INTERPOSE=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 SCOOP=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# human prior (wave 188+): demo-corpus highway discount, crossed with scoop
+HUMAN=("0" "0" "0" "1" "1" "1" "0" "1" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -92,6 +94,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sg_press "${PRESS[$i]}" +set sg_noweave "${NOWEAVE[$i]}" \
                 +set sg_tactics "${TACTICS[$i]}" +set sg_lookahead "${LOOKAHEAD[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
+                +set sg_humanprior "${HUMAN[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &

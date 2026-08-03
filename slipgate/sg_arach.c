@@ -195,6 +195,9 @@ static int		*sg_field_blue;
 
 /* ------------------------------------------------------------------ rune */
 
+static unsigned char *sg_human_use; /* per-link human traffic tier (0-255)
+                                     * from the demo corpus; NULL = none */
+
 rune_t *Rune_Load(const char *mapname)
 {
 	char path[MAX_OSPATH];
@@ -235,6 +238,33 @@ rune_t *Rune_Load(const char *mapname)
 	{
 		r->next_link[i] = r->first_link[r->links[i].from];
 		r->first_link[r->links[i].from] = i;
+	}
+
+	/*
+	 * The human sidecar (<map>.hmn, humanbake.py): one traffic tier per
+	 * link, log-scaled 0-255, cut from 59 hours of recorded human play.
+	 * Optional -- a missing or mismatched sidecar leaves the array NULL
+	 * and every consumer prices as before.
+	 */
+	sg_human_use = NULL;
+	Com_sprintf(path, sizeof(path), "%s/maps/%s.hmn",
+	            gamedir->string[0] ? gamedir->string : ".", mapname);
+	f = fopen(path, "rb");
+	if (f)
+	{
+		int hh[4];
+
+		if (fread(hh, sizeof(int), 4, f) == 4 &&
+		    hh[0] == 0x484D4E31 && hh[2] == r->hdr.num_links)
+		{
+			sg_human_use = gi.TagMalloc(r->hdr.num_links, TAG_LEVEL);
+			if (fread(sg_human_use, 1, r->hdr.num_links, f) !=
+			    (size_t)r->hdr.num_links)
+				sg_human_use = NULL;
+			else
+				gi.dprintf("rune: human prior loaded (%s)\n", path);
+		}
+		fclose(f);
 	}
 	return r;
 }
@@ -286,6 +316,7 @@ static qboolean SG_LevelSetup(void)
 	{
 		gi.dprintf("slipgate: field setup failed (no flags?)\n");
 		sg_rune = NULL;
+		sg_human_use = NULL;
 		return false;
 	}
 	Caco_Reset();
@@ -1989,6 +2020,19 @@ rally_done:;
 				v += duel_expo *
 				    (float)sg_rune->seeds[l->to].area_hint * 1.8f;
 		}
+
+		/*
+		 * THE HUMAN PRIOR (sg_humanprior, A/B wave 188+). Fifty-nine
+		 * hours of recorded play, log-tiered per link: a candidate on
+		 * a human highway prices up to ~380ms cheaper. Humans
+		 * concentrate (top 1%% of transitions carry up to 13%% of all
+		 * traffic) and their concentration encodes twenty years of
+		 * knowing which roads survive contact -- the discount lets
+		 * the descent inherit that without a single scripted route.
+		 */
+		if (sg_human_use &&
+		    gi.cvar("sg_humanprior", "0", 0)->value)
+			v -= 1.5f * (float)sg_human_use[li];
 
 		/*
 		 * THE SWITCHING COST (sg_sticky, A/B wave 168+). The owner's
@@ -5105,6 +5149,7 @@ void SG_LevelChange(void)
 
 	/* rune and fields were TAG_LEVEL -- the engine freed them */
 	sg_rune = NULL;
+	sg_human_use = NULL;    /* TAG_LEVEL too: freed with its rune */
 	sg_field_red = sg_field_blue = NULL;
 	sg_rune_map[0] = 0;
 	for (i = 0; i < SG_MAXBOTS; i++)
