@@ -2046,6 +2046,18 @@ rally_done:;
 		 * extra travel, up to ~1200ms for walking straight into them.
 		 * Everyone else fights; the carrier's job is the capture point.
 		 */
+		/*
+		 * THE WET ROUTE (sg_watercarry, wave 253). The lmctf01 census:
+		 * thirteen of thirteen carrier deaths were rails on the dry
+		 * corridors, while humans convert 71 percent there by swimming
+		 * the moat -- underwater is the one country without railguns.
+		 * A carrier prices swim links 800 cheaper; breath doctrine
+		 * already owns the drowning risk.
+		 */
+		if (role == SG_ROLE_CARRY && l->action == RL_SWIM &&
+		    gi.cvar("sg_watercarry", "0", 0)->value)
+			v -= 800.0f;
+
 		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
 		{
 			/*
