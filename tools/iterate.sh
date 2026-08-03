@@ -88,7 +88,9 @@ WAVEPUSH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 FASTCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # flag-live prior (wave 213+): human carry-window roads, discount only
 # while a flag is out
-FLAGPRIOR=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# flag-live prior NULL across dose 1 / dose 2 / role-scoped (213-215) --
+# wave 213's 7-0 was rotation luck. Off; ledger.
+FLAGPRIOR=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
