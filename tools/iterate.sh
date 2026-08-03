@@ -94,7 +94,9 @@ FLAGPRIOR=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # quickrope NEGATIVE pooled 216-217 (sloppy ropes worse than ritual).
 # legcarrier (218+): carrier skips optional speed-bursts, keeps climbs.
 QUICKROPE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-LEGCARRIER=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# legs read POSITIVE pooled 218-219 (spd 216 vs 136, slow 26 vs 50) --
+# dose 2 adds the landing-brake exemption for carriers
+LEGCARRIER=("0" "0" "2" "2" "2" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (

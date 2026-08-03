@@ -4123,8 +4123,13 @@ no_hold:;
 		}
 
 		/* and braking OUT of a rope: hold the landing until the body is
-		 * standing where the phantom stood, then argue the next step */
-		if (level.time < bot->hook_landbrake && e->groundentity)
+		 * standing where the phantom stood, then argue the next step --
+		 * except a carrier under legcarrier dose 2: the pace ledger
+		 * (218-219: legs +59%% speed) says the flag pays for stillness
+		 * with blood, and a landing run out beats a landing stood */
+		if (level.time < bot->hook_landbrake && e->groundentity &&
+		    !(sg_cur_role == SG_ROLE_CARRY &&
+		      gi.cvar("sg_legcarrier", "0", 0)->value >= 2.0f))
 		{
 			cmd.forwardmove = 0;
 			cmd.sidemove = 0;
