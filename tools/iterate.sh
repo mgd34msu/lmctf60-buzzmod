@@ -96,10 +96,13 @@ FLAGPRIOR=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 QUICKROPE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # legs read POSITIVE pooled 218-219 (spd 216 vs 136, slow 26 vs 50) --
 # dose 2 adds the landing-brake exemption for carriers
-LEGCARRIER=("0" "0" "3" "3" "3" "0" "0" "0" "0" "0")
+# dose 3 (no shopping) REVERSED the gains (221: spd 112, slow 45%) --
+# the detour term was also the tie-breaker keeping routes flowing.
+# Dose 2 is the validated peak (14% slow, 229 spd).
+LEGCARRIER=("0" "0" "2" "2" "2" "0" "0" "0" "0" "0")
 # hop-fire (wave 222+): jump into the rope fire -- airborne drag, no
 # ground friction (the owner's technique)
-HOPFIRE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+HOPFIRE=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
