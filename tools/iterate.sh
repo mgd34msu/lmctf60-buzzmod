@@ -68,9 +68,12 @@ PRESS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
 # servers wave 183. Scoop is the new A/B on s03-05: escorts relay the
 # dropped flag instead of escorting a corpse.
 INTERPOSE=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
-SCOOP=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
-# human prior (wave 188+): demo-corpus highway discount, crossed with scoop
-HUMAN=("0" "0" "0" "1" "1" "1" "0" "1" "0" "0")
+# scoop ADOPTED wave 193: full-cycle crossed verdict 188-192 read +59%
+# steals (1.27 vs 0.80/g) and 2-3x carrier lifespan, map-balanced.
+# human prior read null on steals (1.07 vs 1.10) -- off; the scoop+prior
+# carry interaction (30.1s cell median) is recorded, not adopted.
+SCOOP=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
+HUMAN=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
