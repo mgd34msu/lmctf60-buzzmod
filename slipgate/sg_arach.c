@@ -4573,6 +4573,52 @@ no_hold:;
 				/* flight time from the same closed form: horizontal
 				 * range over horizontal speed */
 				nfly = nh * sqrtf(1.0f + ntan * ntan) / nsp;
+
+				/*
+				 * THE ARC CHECK (wave 237). Three timing doses moved
+				 * nothing because most throws never get their
+				 * parabola -- from the band, the arc to the stand
+				 * runs through corridor walls, and the grenade
+				 * bounces to a random floor pop (air%% pinned at 30,
+				 * median 556). Sample the intended arc; a blocked
+				 * flight is an attempt abandoned at zero cost, per
+				 * the owner's economy. Volume falls to what is real.
+				 */
+				{
+					vec3_t ap, lp;
+					trace_t atr;
+					float tstep = nfly / 6.0f, tt2;
+					int seg;
+					float cy = cosf(nyaw * (float)M_PI / 180.0f);
+					float sy = sinf(nyaw * (float)M_PI / 180.0f);
+					float hv2 = nsp / sqrtf(1.0f + ntan * ntan);
+					float vv2 = hv2 * ntan;
+
+					VectorCopy(e->s.origin, lp);
+					lp[2] += e->viewheight;
+					for (seg = 1; seg <= 6; seg++)
+					{
+						tt2 = tstep * (float)seg;
+						ap[0] = e->s.origin[0] + cy * hv2 * tt2;
+						ap[1] = e->s.origin[1] + sy * hv2 * tt2;
+						ap[2] = e->s.origin[2] + e->viewheight
+						      + vv2 * tt2 - 0.5f * ng * tt2 * tt2;
+						atr = gi.trace(lp, NULL, NULL, ap, e,
+						               MASK_SOLID);
+						if (atr.fraction < 1.0f)
+						{
+							nfly = -2.0f;   /* blocked: no throw */
+							break;
+						}
+						VectorCopy(ap, lp);
+					}
+				}
+				if (nfly < -1.5f)
+				{
+					bot->nade_phase = 0;    /* abandon, cost-free */
+					bot->nade_next = level.time + 4.0f;
+					cmd.buttons &= ~BUTTON_ATTACK;
+				}
 			}
 			else
 				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
