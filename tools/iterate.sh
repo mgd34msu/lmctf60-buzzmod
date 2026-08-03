@@ -86,6 +86,9 @@ WAVEPUSH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # fast carry read NEGATIVE (205-208: survival halved, 9.7 vs 17.6s) --
 # the rope tax earns its keep even with escorts; null ledger.
 FASTCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+# flag-live prior (wave 213+): human carry-window roads, discount only
+# while a flag is out
+FLAGPRIOR=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -102,7 +105,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
-                +set sg_wavepush "${WAVEPUSH[$i]}" +set sg_fastcarry "${FASTCARRY[$i]}" \
+                +set sg_fastcarry "${FASTCARRY[$i]}" +set sg_flagprior "${FLAGPRIOR[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &

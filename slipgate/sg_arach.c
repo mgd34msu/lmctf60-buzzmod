@@ -200,6 +200,9 @@ static int		*sg_field_blue;
 
 static unsigned char *sg_human_use; /* per-link human traffic tier (0-255)
                                      * from the demo corpus; NULL = none */
+static unsigned char *sg_human_live; /* same, cut from the 20s windows
+                                      * after a steal: how humans move
+                                      * when a flag is OUT (.hml) */
 
 rune_t *Rune_Load(const char *mapname)
 {
@@ -266,6 +269,26 @@ rune_t *Rune_Load(const char *mapname)
 				sg_human_use = NULL;
 			else
 				gi.dprintf("rune: human prior loaded (%s)\n", path);
+		}
+		fclose(f);
+	}
+	sg_human_live = NULL;
+	Com_sprintf(path, sizeof(path), "%s/maps/%s.hml",
+	            gamedir->string[0] ? gamedir->string : ".", mapname);
+	f = fopen(path, "rb");
+	if (f)
+	{
+		int hh[4];
+
+		if (fread(hh, sizeof(int), 4, f) == 4 &&
+		    hh[0] == 0x484D4C31 && hh[2] == r->hdr.num_links)
+		{
+			sg_human_live = gi.TagMalloc(r->hdr.num_links, TAG_LEVEL);
+			if (fread(sg_human_live, 1, r->hdr.num_links, f) !=
+			    (size_t)r->hdr.num_links)
+				sg_human_live = NULL;
+			else
+				gi.dprintf("rune: flag-live prior loaded (%s)\n", path);
 		}
 		fclose(f);
 	}
@@ -2110,6 +2133,21 @@ rally_done:;
 		if (sg_human_use &&
 		    gi.cvar("sg_humanprior", "0", 0)->value)
 			v -= 1.5f * (float)sg_human_use[li];
+
+		/*
+		 * THE FLAG-LIVE PRIOR (sg_flagprior, A/B wave 213+). The
+		 * global prior nulled -- but the corpus shows humans run 60%%
+		 * DIFFERENT roads while a flag is out (carrywindows census),
+		 * and those are the twenty seconds that decide every game.
+		 * The discount applies only inside the window the evidence
+		 * came from: either flag astray, up to ~380ms off the roads
+		 * humans run when it matters.
+		 */
+		if (sg_human_live &&
+		    gi.cvar("sg_flagprior", "0", 0)->value &&
+		    (sg_caco_team_belief.flag[0].state == SG_FLAG_ASTRAY ||
+		     sg_caco_team_belief.flag[1].state == SG_FLAG_ASTRAY))
+			v -= 1.5f * (float)sg_human_live[li];
 
 		/*
 		 * THE SWITCHING COST (sg_sticky, A/B wave 168+). The owner's
@@ -5266,6 +5304,7 @@ void SG_LevelChange(void)
 	/* rune and fields were TAG_LEVEL -- the engine freed them */
 	sg_rune = NULL;
 	sg_human_use = NULL;    /* TAG_LEVEL too: freed with its rune */
+	sg_human_live = NULL;
 	sg_field_red = sg_field_blue = NULL;
 	sg_rune_map[0] = 0;
 	for (i = 0; i < SG_MAXBOTS; i++)
