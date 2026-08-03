@@ -3157,10 +3157,12 @@ no_hold:;
 		 * unchanged -- only the eyes and the landing basis pre-align.
 		 */
 		if (gi.cvar("sg_preturn", "0", 0)->value &&
-		    bot->hook_phase == 3 && bot->flow_release &&
+		    ((bot->hook_phase == 3 && bot->flow_release) ||
+		     bot->rj_phase == 3) &&
 		    !e->groundentity && sg_rune)
 		{
-			int ls = Rune_NearestSeed(sg_rune, bot->hook_dest);
+			int ls = Rune_NearestSeed(sg_rune,
+			    (bot->rj_phase == 3) ? bot->rj_dest : bot->hook_dest);
 
 			if (ls >= 0)
 			{
