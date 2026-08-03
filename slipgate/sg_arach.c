@@ -4801,6 +4801,16 @@ no_hold:;
 			/* (quickrope's 10-degree carrier fire read NEGATIVE
 			 * pooled 216-217 -- sloppy ropes ride worse than the
 			 * ritual they save. The sniper's 3 stands for all.) */
+			/* THE HOP-FIRE, corrected (wave 223): the owner hops
+			 * BEFORE the hook, not with it -- wave 222 put jump and
+			 * fire on one command frame and the drag still started
+			 * grounded. Now the hop goes in as the aim closes (8
+			 * degrees); by the 3-degree fire gate the body is
+			 * already airborne and the pull never meets friction. */
+			if (gi.cvar("sg_hopfire", "0", 0)->value &&
+			    e->groundentity &&
+			    fabsf(ddy) < 8.0f && fabsf(ddp) < 8.0f)
+				cmd.upmove = 400;
 			if (slew_rate > 0.0f &&
 			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
 				goto hook_wait;
@@ -4838,14 +4848,6 @@ no_hold:;
 					goto hook_wait;
 				}
 			}
-			/* THE HOP-FIRE (sg_hopfire, wave 222): the owner's
-			 * technique -- jump as the rope fires, so the drag
-			 * begins airborne and fights no ground friction. A
-			 * human hops into every short hook; our bots took the
-			 * pull flat-footed through the whole first drag. */
-			if (gi.cvar("sg_hopfire", "0", 0)->value &&
-			    e->groundentity)
-				cmd.upmove = 400;
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
 			if (gi.cvar("sg_debug", "0", 0)->value)
