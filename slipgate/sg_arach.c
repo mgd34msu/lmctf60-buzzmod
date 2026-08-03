@@ -2767,7 +2767,12 @@ rally_done:;
 				vec3_t rd14;
 
 				VectorSubtract(ce->s.origin, e->s.origin, rd14);
-				if (VectorLength(rd14) < 300.0f)
+				if (gi.cvar("sg_debug", "0", 0)->value &&
+				    level.time >= bot->next_report - 0.9f)
+					gi.dprintf("RTCAND %s dist=%.0f\n",
+					           e->client->pers.netname,
+					           VectorLength(rd14));
+				if (VectorLength(rd14) < 700.0f)
 				{
 					/* face the carrier for the toss frame: the
 					 * flick, same as the bomb release */
