@@ -102,7 +102,11 @@ QUICKROPE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 LEGCARRIER=("0" "0" "2" "2" "2" "0" "0" "0" "0" "0")
 # hop-fire (wave 222+): jump into the rope fire -- airborne drag, no
 # ground friction (the owner's technique)
-HOPFIRE=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# hop-fire null on hookland%% in both implementations (222-223); off.
+# pre-turn (224+): mid-flight aim slides to the onward step -- the 93deg
+# grammar constant
+HOPFIRE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+PRETURN=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -119,7 +123,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
-                +set sg_legcarrier "${LEGCARRIER[$i]}" +set sg_hopfire "${HOPFIRE[$i]}" \
+                +set sg_hopfire "${HOPFIRE[$i]}" +set sg_preturn "${PRETURN[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &

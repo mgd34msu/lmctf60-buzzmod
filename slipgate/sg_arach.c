@@ -3147,6 +3147,50 @@ no_hold:;
 			have_aim = true;
 		}
 
+		/*
+		 * THE PRE-TURN (sg_preturn, wave 224). The grammar census: a
+		 * human flies with eyes a median 93 degrees off velocity --
+		 * the body arrives already facing where it goes NEXT. During a
+		 * cut-rope flight the aim slides from the landing spot to the
+		 * best onward step from the landing seed, so touchdown exits
+		 * at speed instead of standing to re-argue. Ballistics are
+		 * unchanged -- only the eyes and the landing basis pre-align.
+		 */
+		if (gi.cvar("sg_preturn", "0", 0)->value &&
+		    bot->hook_phase == 3 && bot->flow_release &&
+		    !e->groundentity && sg_rune)
+		{
+			int ls = Rune_NearestSeed(sg_rune, bot->hook_dest);
+
+			if (ls >= 0)
+			{
+				int li3, nx3 = -1, nv3;
+				const int *rf3 = goal_field;
+
+				nv3 = (rf3[ls] < SG_FIELD_INF) ? rf3[ls] : 0x7fffffff;
+				for (li3 = sg_rune->first_link[ls]; li3 >= 0;
+				     li3 = sg_rune->next_link[li3])
+				{
+					rune_link_t *l3 = &sg_rune->links[li3];
+
+					if (l3->action != RL_RUN)
+						continue;
+					if (rf3[l3->to] < nv3)
+					{
+						nv3 = rf3[l3->to];
+						nx3 = li3;
+					}
+				}
+				if (nx3 >= 0)
+				{
+					VectorCopy(
+					    sg_rune->seeds[sg_rune->links[nx3].to].origin,
+					    aim);
+					have_aim = true;
+				}
+			}
+		}
+
 		if (bot->hook_phase == 3)
 		{
 			/*
