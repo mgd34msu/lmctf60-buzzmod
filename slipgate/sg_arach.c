@@ -158,6 +158,7 @@ typedef struct sg_bot_s
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
 	float		runetoss_next;  /* rune handoff cadence (sg_runetoss) */
+	float		runeconv_until; /* courier window: converge on carrier */
 	float		nav_yaw_cur;    /* smoothed walk heading (sg_smooth) */
 	float		nav_yaw_t;      /* its clock */
 	int			tac_seed;       /* committed tactical waypoint (-1 none) */
@@ -1436,6 +1437,50 @@ static void SG_BotThink(sg_bot_t *bot)
 	else
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag_now
 		                                    : sg_fields.to_red_flag_now;
+
+	/*
+	 * THE RUNE COURIER (wave 243). Candidacy is a lottery -- 107
+	 * near-misses one rotation, zero the next -- because holders guard
+	 * while carriers sprint. So candidacy itself becomes the errand: a
+	 * non-carrier holding RESIST or REGEN while a live carrier runs
+	 * bare re-goals onto the carrier's support field for up to eight
+	 * seconds, closes, and the toss fires at 400. The rune rides to
+	 * the flag on the courier's legs, not on luck.
+	 */
+	if (gi.cvar("sg_runetoss", "0", 0)->value &&
+	    role != SG_ROLE_CARRY && role != SG_ROLE_DEFEND &&
+	    e->client->rune &&
+	    (e->client->rune->runetype == RUNE_RESIST ||
+	     e->client->rune->runetype == RUNE_REGEN) &&
+	    level.time >= bot->runetoss_next)
+	{
+		sg_belief_carrier_t *rc0 = &sg_caco_team_belief.carrier[team - 1];
+
+		if (rc0->client >= 0)
+		{
+			edict_t *ce0 = g_edicts + 1 + rc0->client;
+
+			if (ce0->inuse && ce0->client && ce0->health > 0 &&
+			    (!ce0->client->rune ||
+			     (ce0->client->rune->runetype != RUNE_RESIST &&
+			      ce0->client->rune->runetype != RUNE_REGEN)))
+			{
+				if (bot->runeconv_until <= 0.0f)
+					bot->runeconv_until = level.time + 8.0f;
+				if (level.time < bot->runeconv_until)
+					goal_field = sg_fields.our_carrier[team - 1];
+				else
+				{
+					bot->runeconv_until = 0.0f;
+					bot->runetoss_next = level.time + 20.0f;
+				}
+			}
+			else
+				bot->runeconv_until = 0.0f;
+		}
+		else
+			bot->runeconv_until = 0.0f;
+	}
 
 	bot->last_goalcost = (bot->seed >= 0 &&
 	                      goal_field[bot->seed] < SG_FIELD_INF)
@@ -2772,7 +2817,7 @@ rally_done:;
 					gi.dprintf("RTCAND %s dist=%.0f\n",
 					           e->client->pers.netname,
 					           VectorLength(rd14));
-				if (VectorLength(rd14) < 1200.0f)
+				if (VectorLength(rd14) < 400.0f)
 				{
 					/* face the carrier for the toss frame: the
 					 * flick, same as the bomb release */
