@@ -4839,6 +4839,33 @@ no_hold:;
 				if (sl15 < 600.0f || sl15 > 1500.0f)
 					continue;   /* too close = own splash; too
 					             * far = pure noise */
+				/* wave 245: never rocket a ghost a teammate is
+				 * standing on -- the one premium this free trick
+				 * could quietly charge is friendly splash */
+				{
+					int bi15, mate15 = 0;
+
+					for (bi15 = 0; bi15 < SG_MAXBOTS; bi15++)
+					{
+						sg_bot_t *mb15 = &sg_bots[bi15];
+						vec3_t md15;
+
+						if (!mb15->active || mb15 == bot ||
+						    !mb15->ent || !mb15->ent->inuse)
+							continue;
+						if (mb15->ent->client->ctf.teamnum != team)
+							continue;
+						VectorSubtract(mb15->ent->s.origin,
+						    sg_rune->seeds[en15->seed].origin, md15);
+						if (VectorLength(md15) < 250.0f)
+						{
+							mate15 = 1;
+							break;
+						}
+					}
+					if (mate15)
+						continue;
+				}
 				{
 					float sy15 = atan2f(sd15[1], sd15[0])
 					             * 180.0f / (float)M_PI;
