@@ -1763,6 +1763,13 @@ rally_done:;
 			    e->client->pers.inventory[ITEM_INDEX(nades9)] > 0)
 			{
 				VectorCopy(nf9->s.origin, bot->nade_at);
+				/* the owner's airburst spec: a grounded grenade
+				 * telegraphs -- sight and sound and everyone steps
+				 * aside; a proper cook expires in the AIR over the
+				 * spot. Aim chest-high above the target so
+				 * fuse-meets-flight pops airborne (234: 71 percent
+				 * ground pops, zero kills). */
+				bot->nade_at[2] += 56.0f;
 				nades9->use(e, nades9);
 				bot->nade_phase = 1;
 				bot->nade_until = level.time + 0.5f;
