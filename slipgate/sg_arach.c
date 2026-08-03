@@ -1738,6 +1738,36 @@ static void SG_BotThink(sg_bot_t *bot)
 			bot->rally_since = 0.0f;
 		}
 rally_done:;
+
+		/*
+		 * THE FLYING COOK, truly at the band this time (the wave-230
+		 * relocation never landed -- its edit died in a chain that
+		 * kept going; the ledger is corrected). Every attacker in
+		 * the approach band cooks on the run at full volume: the
+		 * silent cook keeps the eyes on the route, the stand takes
+		 * the throw, failure costs nothing, and the successes
+		 * accrue -- sixty-five to five.
+		 */
+		if (gi.cvar("sg_flycook", "0", 0)->value &&
+		    bot->nade_phase == 0 && level.time >= bot->nade_next)
+		{
+			static gitem_t *nades9;
+			edict_t *nf9;
+
+			if (!nades9)
+				nades9 = FindItem("Grenades");
+			nf9 = G_Find(NULL, FOFS(classname),
+			             (team == CTF_TEAM_RED) ? "info_flag_blue"
+			                                    : "info_flag_red");
+			if (nades9 && nf9 &&
+			    e->client->pers.inventory[ITEM_INDEX(nades9)] > 0)
+			{
+				VectorCopy(nf9->s.origin, bot->nade_at);
+				nades9->use(e, nades9);
+				bot->nade_phase = 1;
+				bot->nade_until = level.time + 0.5f;
+			}
+		}
 	}
 	else
 		bot->rally_since = 0.0f;
@@ -2380,12 +2410,7 @@ rally_done:;
 				 * motion inside the approach band; the throw target
 				 * stays the stand, which is where the run points
 				 * anyway, so the view-pull steers nothing wrong. */
-				if ((rally_hold ||
-				     (gi.cvar("sg_flycook", "0", 0)->value &&
-				      bot->seed >= 0 &&
-				      goal_field[bot->seed] > 2000 &&
-				      goal_field[bot->seed] < 6000 &&
-				      goal_field[bot->seed] < SG_FIELD_INF)) &&
+				if (rally_hold &&
 				    bot->nade_phase == 0 &&
 				    level.time >= bot->nade_next)
 				{
@@ -2395,28 +2420,6 @@ rally_done:;
 					if (!nades)
 						nades = FindItem("Grenades");
 					if (nades &&
-					    e->client->pers.inventory[ITEM_INDEX(nades)] > 0 &&
-					    gi.cvar("sg_flycook", "0", 0)->value &&
-					    !rally_hold)
-					{
-						/* flying cook: the band is the trigger; no
-						 * sighting required -- the stand is fixed and
-						 * the run is already pointed at it (wave 228:
-						 * two throws a game because approach bots had
-						 * seen nobody yet) */
-						edict_t *nf8 = G_Find(NULL, FOFS(classname),
-						    (team == CTF_TEAM_RED) ? "info_flag_blue"
-						                           : "info_flag_red");
-
-						if (nf8)
-						{
-							VectorCopy(nf8->s.origin, bot->nade_at);
-							nades->use(e, nades);
-							bot->nade_phase = 1;
-							bot->nade_until = level.time + 0.5f;
-						}
-					}
-					else if (nades &&
 					    e->client->pers.inventory[ITEM_INDEX(nades)] > 0)
 					{
 						for (s7 = 0; s7 < SG_MAX_ENEMY_TRACK; s7++)
