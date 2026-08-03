@@ -110,7 +110,10 @@ HOPFIRE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # speed twice; two-step flattened -- corridor clipping)
 PRETURN=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # flying cook (228+): grenade cooks during the approach run
-FLYCOOK=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# flying cook ADOPTED fleet-wide wave 239 as free area denial (pooled
+# cost margin positive since silent cook; kill-chasing parked after 7
+# null mechanisms -- static aims cannot hit movers)
+FLYCOOK=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
