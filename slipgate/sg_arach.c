@@ -157,6 +157,7 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
+	float		runetoss_next;  /* rune handoff cadence (sg_runetoss) */
 	float		nav_yaw_cur;    /* smoothed walk heading (sg_smooth) */
 	float		nav_yaw_t;      /* its clock */
 	int			tac_seed;       /* committed tactical waypoint (-1 none) */
@@ -2733,6 +2734,56 @@ rally_done:;
 				           att[bot->seed]);
 			if (bot->rally_since <= 0.0f)
 				bot->rally_since = level.time;
+		}
+	}
+
+	/*
+	 * THE RUNE HANDOFF (sg_runetoss, wave 240 -- the owner's recovered
+	 * "extremely important": a teammate holding a defensive rune gives
+	 * it to the carrier). A bot with RESIST or REGEN, within 300 of our
+	 * live carrier who holds nothing better, faces the carrier for one
+	 * frame and drops the rune into its path; the carrier's own item
+	 * pricing (SG_FC_RUNE) takes it from the floor. One toss per bot
+	 * per 20s; combat frames exempt -- a fight is not the moment.
+	 */
+	if (gi.cvar("sg_runetoss", "0", 0)->value &&
+	    role != SG_ROLE_CARRY && !duel &&
+	    e->client->rune &&
+	    (e->client->rune->runetype == RUNE_RESIST ||
+	     e->client->rune->runetype == RUNE_REGEN) &&
+	    level.time >= bot->runetoss_next)
+	{
+		sg_belief_carrier_t *rc = &sg_caco_team_belief.carrier[team - 1];
+
+		if (rc->client >= 0)
+		{
+			edict_t *ce = g_edicts + 1 + rc->client;
+
+			if (ce->inuse && ce->client && ce->health > 0 &&
+			    (!ce->client->rune ||
+			     (ce->client->rune->runetype != RUNE_RESIST &&
+			      ce->client->rune->runetype != RUNE_REGEN)))
+			{
+				vec3_t rd14;
+
+				VectorSubtract(ce->s.origin, e->s.origin, rd14);
+				if (VectorLength(rd14) < 300.0f)
+				{
+					/* face the carrier for the toss frame: the
+					 * flick, same as the bomb release */
+					float ry = atan2f(rd14[1], rd14[0])
+					           * 180.0f / (float)M_PI;
+
+					cmd.angles[YAW] = ANGLE2SHORT(ry)
+					    - e->client->ps.pmove.delta_angles[YAW];
+					Drop_Rune(e, e->client->rune->item);
+					bot->runetoss_next = level.time + 20.0f;
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("RUNETOSS %s to %s\n",
+						           e->client->pers.netname,
+						           ce->client->pers.netname);
+				}
+			}
 		}
 	}
 
