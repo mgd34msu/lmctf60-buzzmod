@@ -97,6 +97,9 @@ QUICKROPE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # legs read POSITIVE pooled 218-219 (spd 216 vs 136, slow 26 vs 50) --
 # dose 2 adds the landing-brake exemption for carriers
 LEGCARRIER=("0" "0" "3" "3" "3" "0" "0" "0" "0" "0")
+# hop-fire (wave 222+): jump into the rope fire -- airborne drag, no
+# ground friction (the owner's technique)
+HOPFIRE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -113,7 +116,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
-                +set sg_quickrope "${QUICKROPE[$i]}" +set sg_legcarrier "${LEGCARRIER[$i]}" \
+                +set sg_legcarrier "${LEGCARRIER[$i]}" +set sg_hopfire "${HOPFIRE[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &

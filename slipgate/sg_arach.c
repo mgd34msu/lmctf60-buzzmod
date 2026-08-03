@@ -4838,6 +4838,14 @@ no_hold:;
 					goto hook_wait;
 				}
 			}
+			/* THE HOP-FIRE (sg_hopfire, wave 222): the owner's
+			 * technique -- jump as the rope fires, so the drag
+			 * begins airborne and fights no ground friction. A
+			 * human hops into every short hook; our bots took the
+			 * pull flat-footed through the whole first drag. */
+			if (gi.cvar("sg_hopfire", "0", 0)->value &&
+			    e->groundentity)
+				cmd.upmove = 400;
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
 			if (gi.cvar("sg_debug", "0", 0)->value)
