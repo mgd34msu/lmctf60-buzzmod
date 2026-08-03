@@ -3386,12 +3386,22 @@ no_hold:;
 						    htr.fraction * 560.0f > 170.0f &&
 						    htr.plane.normal[2] < 0.7f)
 						{
-							VectorCopy(htr.endpos, bot->hook_anchor);
-							VectorCopy(aim, bot->hook_dest);
-							bot->hook_phase = 1;
-							bot->hook_deadline = level.time + 1.0f;
-							bot->speedhook = true;
-							bot->speedhook_next = level.time + 4.0f;
+							/* wave 218 (sg_legcarrier): the burst is
+							 * the OPTIONAL rope -- a standing aim for
+							 * speed legs already have. The carrier
+							 * keeps climb ropes and loses the
+							 * ceremony; everyone else bursts on. */
+							if (!(gi.cvar("sg_legcarrier", "0",
+							              0)->value &&
+							      sg_cur_role == SG_ROLE_CARRY))
+							{
+								VectorCopy(htr.endpos, bot->hook_anchor);
+								VectorCopy(aim, bot->hook_dest);
+								bot->hook_phase = 1;
+								bot->hook_deadline = level.time + 1.0f;
+								bot->speedhook = true;
+								bot->speedhook_next = level.time + 4.0f;
+							}
 						}
 					}
 				}
@@ -4775,21 +4785,12 @@ no_hold:;
 			ddp = ap - bot->vp_cur;
 			while (ddy > 180.0f) ddy -= 360.0f;
 			while (ddy < -180.0f) ddy += 360.0f;
-			{
-				/* the carrier's quick release (sg_quickrope, wave
-				 * 216): 56%% of all slow carrier seconds are this
-				 * ritual (stop-cause census, 209-215), and the bite
-				 * record proved imperfect ropes fly and convert. A
-				 * fleeing carrier fires at 10 degrees; everyone else
-				 * keeps the sniper's 3. */
-				float ftol = (gi.cvar("sg_quickrope", "0", 0)->value &&
-				              sg_cur_role == SG_ROLE_CARRY)
-				             ? 10.0f : 3.0f;
-
-				if (slew_rate > 0.0f &&
-				    (fabsf(ddy) > ftol || fabsf(ddp) > ftol))
-					goto hook_wait;
-			}
+			/* (quickrope's 10-degree carrier fire read NEGATIVE
+			 * pooled 216-217 -- sloppy ropes ride worse than the
+			 * ritual they save. The sniper's 3 stands for all.) */
+			if (slew_rate > 0.0f &&
+			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
+				goto hook_wait;
 
 			/* (The anchor-distance veto lived here for one wave --
 			 * 24,728 vetoes, land rate unmoved. Wrong test: bites
