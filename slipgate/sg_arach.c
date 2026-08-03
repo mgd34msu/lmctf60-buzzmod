@@ -2372,7 +2372,21 @@ rally_done:;
 				 * believed post THROUGH cover. No line of sight, no duel:
 				 * the room softens before the breach.
 				 */
-				if (rally_hold && bot->nade_phase == 0 &&
+				/* THE FLYING COOK (sg_flycook, wave 228): the owner
+				 * cooks on approach, not at a standstill -- the last
+				 * seconds of the run double as the fuse, a death
+				 * drops the live grenade where the fight is, and the
+				 * threshold ceremony disappears. The cook engages in
+				 * motion inside the approach band; the throw target
+				 * stays the stand, which is where the run points
+				 * anyway, so the view-pull steers nothing wrong. */
+				if ((rally_hold ||
+				     (gi.cvar("sg_flycook", "0", 0)->value &&
+				      bot->seed >= 0 &&
+				      goal_field[bot->seed] > 2000 &&
+				      goal_field[bot->seed] < 6000 &&
+				      goal_field[bot->seed] < SG_FIELD_INF)) &&
+				    bot->nade_phase == 0 &&
 				    level.time >= bot->nade_next)
 				{
 					static gitem_t *nades;
