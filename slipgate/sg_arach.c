@@ -157,6 +157,8 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
+	float		nav_yaw_cur;    /* smoothed walk heading (sg_smooth) */
+	float		nav_yaw_t;      /* its clock */
 	int			tac_seed;       /* committed tactical waypoint (-1 none) */
 	float		tac_time;       /* when the waypoint was committed */
 	int			tac_role;       /* role the waypoint serves: strategy
@@ -3743,6 +3745,45 @@ no_hold:;
 				if (bot->fan_side != side || level.time >= bot->fan_side_until)
 					bot->fan_side_until = level.time + 0.7f;
 				bot->fan_side = side;
+			}
+
+			/*
+			 * THE STEADY HAND (sg_smooth, A/B wave 195+). The human
+			 * calibration: 52 degrees median heading change per
+			 * travelling second against every bot's 70-73 -- and the
+			 * commanded direction churns 81, so the scribble is born
+			 * here, where the fan re-picks the walk ten times a
+			 * second. A human wrist turns through headings; it does
+			 * not teleport between them. The walk heading now slews
+			 * at 300 degrees a second -- fast enough for any corner
+			 * at 1Hz, too slow to flap -- except in a fight, at a
+			 * drop lip, in precision range, or in water, where the
+			 * snap IS the skill.
+			 */
+			if (gi.cvar("sg_smooth", "0", 0)->value &&
+			    !duel && !precision && bot->hook_phase == 0 &&
+			    e->waterlevel < 2)
+			{
+				float sdt = level.time - bot->nav_yaw_t;
+				float sdy = chosen_yaw - bot->nav_yaw_cur;
+
+				while (sdy > 180.0f) sdy -= 360.0f;
+				while (sdy < -180.0f) sdy += 360.0f;
+				if (sdt > 0.0f && sdt < 0.5f)
+				{
+					float cap = 300.0f * sdt;
+
+					if (sdy > cap) sdy = cap;
+					else if (sdy < -cap) sdy = -cap;
+					chosen_yaw = bot->nav_yaw_cur + sdy;
+				}
+				bot->nav_yaw_cur = chosen_yaw;
+				bot->nav_yaw_t = level.time;
+			}
+			else
+			{
+				bot->nav_yaw_cur = chosen_yaw;
+				bot->nav_yaw_t = level.time;
 			}
 
 			/* at a drop lip the proven walk-off heading overrides the fan:
