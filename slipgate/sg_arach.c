@@ -4610,8 +4610,14 @@ no_hold:;
 			 * outside our own splash radius (0.4s of fuse is ~250
 			 * units of clearance) and throws whatever the solve says.
 			 */
+			/* wave 236: pop EARLY -- hold the cook until remaining
+			 * fuse undercuts the flight by 0.15s, so the grenade
+			 * expires airborne short of the floor it would have
+			 * bounced off (235: aim height alone left 69 percent of
+			 * pops grounded -- bounces and clipped arcs land before
+			 * the fuse, and a landed grenade is an announcement) */
 			if (ntmr > 0.6f &&
-			    (nfly < 0.0f || ntmr - 0.2f > nfly + 0.05f))
+			    (nfly < 0.0f || ntmr - 0.2f > nfly - 0.15f))
 				cmd.buttons |= BUTTON_ATTACK;
 			else
 			{
