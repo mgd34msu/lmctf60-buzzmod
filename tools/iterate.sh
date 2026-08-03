@@ -122,7 +122,9 @@ RUNETOSS=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # soundfire ADOPTED wave 246 (244-245 pooled: 1.3 vs 0.5 steals/g, free)
 SOUNDFIRE=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # landing-point lead trial (247+): rockets aim at airborne targets' touchdown
-LANDLEAD=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# landlead ADOPTED wave 249 (247-248: steals 1.7 vs 1.0, rkt dmg +20%,
+# airborne share 47 vs 33)
+LANDLEAD=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
