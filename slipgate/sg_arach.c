@@ -441,6 +441,7 @@ static const int *sg_cur_danger;
 static qboolean sg_route_pure_now;  /* tactics priced at selection: the
                                      * per-frame walk stays pure */
 static qboolean sg_cur_push;        /* conductor's downbeat: march, no detours */
+static int sg_cur_health;           /* pricing bot's health (dose gates) */
 static float	sg_danger_decay_next;
 
 static void Danger_Learn(int team, int seed)
@@ -863,7 +864,13 @@ static float Surface_At(int seed, const sg_weights_t *w,
 
 	for (c = 0; c < SG_FIELD_CLASSES; c++)
 		if (w->item[c] > 0.0f)
-			v -= sg_cur_push ? 0.0f :
+			/* legcarrier dose 3: a healthy carrier does not shop --
+			 * humans never detour mid-carry (corpus: 310 u/s flat).
+			 * Hurt carriers keep the detour; health is worth a stop. */
+			v -= (sg_cur_push ||
+			      (sg_cur_role == SG_ROLE_CARRY && sg_cur_health > 60 &&
+			       gi.cvar("sg_legcarrier", "0", 0)->value >= 3.0f))
+			     ? 0.0f :
 			     1500.0f * Detour_Value(seed, c, goal_field, w->item[c]);
 
 	if (support && w->carrier_support > 0.0f && support[seed] < SG_FIELD_INF)
@@ -1792,6 +1799,7 @@ rally_done:;
 
 	/* descend the surface: my seed vs every seed one proven link away */
 	sg_cur_role = role;             /* for the rune identity pricing */
+	sg_cur_health = e->health;
 	sg_cur_danger = sg_danger[team - 1];    /* the danger dimension, ours */
 	/* downbeat live: attackers march, detours wait for the next bar */
 	sg_cur_push = (role == SG_ROLE_ATTACK &&

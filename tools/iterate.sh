@@ -96,7 +96,7 @@ FLAGPRIOR=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 QUICKROPE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # legs read POSITIVE pooled 218-219 (spd 216 vs 136, slow 26 vs 50) --
 # dose 2 adds the landing-brake exemption for carriers
-LEGCARRIER=("0" "0" "2" "2" "2" "0" "0" "0" "0" "0")
+LEGCARRIER=("0" "0" "3" "3" "3" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
