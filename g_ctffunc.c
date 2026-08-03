@@ -629,6 +629,10 @@ void ctf_TossEnt(edict_t * startent, edict_t * tossent)
 	trace_t		tr;
 	vec3_t		forward,right,offset;
 
+	/* BUZZKILL - N28 crash guard: a disconnecting carrier can reach
+	 * here with a dead client; nothing to aim the toss with. */
+	if (!startent || !startent->client || !tossent)
+		return;
 	AngleVectors (startent->client->v_angle, forward, right, NULL);
 	VectorSet(offset, 24, 0, -16);
 	G_ProjectSource (startent->s.origin, offset, forward, right, tossent->s.origin);
@@ -663,6 +667,12 @@ void ctf_playerdropflag(edict_t * whichplayer, gitem_t *item)
 	if (whichplayer && whichplayer->client)
 	{
 		whichflag = ctf_getteamflag(whichplayer->client->ctf.teamnum, CTF_TEAM_OPPOSING);
+		/* BUZZKILL - N28 crash guard: getteamflag can return NULL during
+		 * level transitions (ExitLevel frames in the overnight cores);
+		 * the reset ran before the guard and dereferenced it. Pure
+		 * crash prevention -- an absent flag has nothing to toss. */
+		if (!whichflag)
+			return;
 		ctf_resetflagandplayer(whichflag,whichplayer);
 		if (whichflag)
 		{
