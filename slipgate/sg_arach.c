@@ -1762,13 +1762,37 @@ rally_done:;
 			if (nades9 && nf9 &&
 			    e->client->pers.inventory[ITEM_INDEX(nades9)] > 0)
 			{
+				/* wave 238: the target book. Clean arcs delivered
+				 * bombs to an empty pedestal (237: median pop 588
+				 * with clear flights) -- defenders POST 400-600 off
+				 * the stand. The danger field already knows where
+				 * the deaths happen: aim at the hottest seed within
+				 * 600 of their stand, the sentry's actual post. */
+				int ns13 = Rune_NearestSeed(sg_rune, nf9->s.origin);
+				int s13, best13 = -1, bv13 = 0;
+
 				VectorCopy(nf9->s.origin, bot->nade_at);
-				/* the owner's airburst spec: a grounded grenade
-				 * telegraphs -- sight and sound and everyone steps
-				 * aside; a proper cook expires in the AIR over the
-				 * spot. Aim chest-high above the target so
-				 * fuse-meets-flight pops airborne (234: 71 percent
-				 * ground pops, zero kills). */
+				if (ns13 >= 0)
+				{
+					for (s13 = 0; s13 < sg_rune->hdr.num_seeds &&
+					     s13 < SG_MAX_SEEDS; s13++)
+					{
+						vec3_t dd13;
+
+						VectorSubtract(sg_rune->seeds[s13].origin,
+						               nf9->s.origin, dd13);
+						if (VectorLength(dd13) > 600.0f)
+							continue;
+						if (sg_danger[team - 1][s13] > bv13)
+						{
+							bv13 = sg_danger[team - 1][s13];
+							best13 = s13;
+						}
+					}
+					if (best13 >= 0)
+						VectorCopy(sg_rune->seeds[best13].origin,
+						           bot->nade_at);
+				}
 				bot->nade_at[2] += 56.0f;
 				nades9->use(e, nades9);
 				bot->nade_phase = 1;
