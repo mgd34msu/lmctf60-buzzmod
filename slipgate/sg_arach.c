@@ -2772,7 +2772,7 @@ rally_done:;
 					gi.dprintf("RTCAND %s dist=%.0f\n",
 					           e->client->pers.netname,
 					           VectorLength(rd14));
-				if (VectorLength(rd14) < 700.0f)
+				if (VectorLength(rd14) < 1200.0f)
 				{
 					/* face the carrier for the toss frame: the
 					 * flick, same as the bomb release */
