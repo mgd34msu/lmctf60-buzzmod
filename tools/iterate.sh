@@ -119,7 +119,8 @@ FLYCOOK=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # holding teammate meets a bare carrier (funnel starved: 0-107-0 cand/wave)
 RUNETOSS=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # sound-directed fire trial (244+): speculative rockets at heard ghosts
-SOUNDFIRE=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# soundfire ADOPTED wave 246 (244-245 pooled: 1.3 vs 0.5 steals/g, free)
+SOUNDFIRE=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
