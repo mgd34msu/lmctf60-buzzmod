@@ -114,6 +114,8 @@ PRETURN=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # cost margin positive since silent cook; kill-chasing parked after 7
 # null mechanisms -- static aims cannot hit movers)
 FLYCOOK=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
+# rune handoff trial (240+): teammates arm the carrier on s03-05
+RUNETOSS=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -131,6 +133,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
                 +set sg_preturn "${PRETURN[$i]}" +set sg_flycook "${FLYCOOK[$i]}" \
+                +set sg_runetoss "${RUNETOSS[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &
