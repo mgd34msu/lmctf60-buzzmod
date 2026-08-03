@@ -50,16 +50,13 @@ GRABS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
 # naked-carry was the wave 166-167 diagnostic; sticky routing is the
 # shipping candidate for the same root (A/B wave 168+): incumbent route
 # holds unless beaten by 15% on s03-05, control on s06-07
-NAKED=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # sticky read null on wave 168 (its reach was within-seed only); press
 # ADOPTED wave 172 (A/B 169-171: steals 11-11, caps 2-0 press) -- all
 # 5v5 servers press; 7v7 stays stock as the density control
-STICKY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 PRESS=("0" "0" "1" "1" "1" "1" "1" "0" "0" "0")
 # no-weave read null (wave 176: turns 67 vs 79, eff identical) -- dodges
 # stay, they cost nothing. Tactics is the wave 177+ A/B: the owner's
 # strategy/tactics architecture on s03-05.
-NOWEAVE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # tactics read mixed on 177 (commits worked, walk unchanged) -- the churn
 # was BELOW the field layer: seed-center servoing. Lookahead is the fix
 # on trial (178+): aim slides down the route when the seed underfoot is
@@ -67,8 +64,6 @@ NOWEAVE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # both instruments that motivated 176-178 collapsed against the 5v1
 # control (see memory); flags stay built but off pending a caps-based
 # verdict on a real sample
-TACTICS=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-LOOKAHEAD=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # interpose: +27% carrier lifespan pooled 180-182 -- ADOPTED all parity
 # servers wave 183. Scoop is the new A/B on s03-05: escorts relay the
 # dropped flag instead of escorting a corpse.
@@ -90,9 +85,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 "$Q2DED" +set game "$GAME" +set dedicated 1 \
                 +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
-                +set sg_nakedcarry "${NAKED[$i]}" +set sg_sticky "${STICKY[$i]}" \
-                +set sg_press "${PRESS[$i]}" +set sg_noweave "${NOWEAVE[$i]}" \
-                +set sg_tactics "${TACTICS[$i]}" +set sg_lookahead "${LOOKAHEAD[$i]}" \
+                +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
                 +set sg_humanprior "${HUMAN[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
