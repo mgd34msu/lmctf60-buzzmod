@@ -1945,7 +1945,22 @@ rally_done:;
 				               e->s.origin, pd);
 				if (VectorLength(pd) < 700.0f)
 				{
-					v += 2000.0f;
+					/*
+					 * THE FAST CARRY (sg_fastcarry, A/B wave 205+).
+					 * The human corpus set the bar: a successful
+					 * carry is 14 seconds of covering the WHOLE
+					 * route, and humans convert 12.8 percent of
+					 * steals doing it. Our carriers survive human
+					 * lengths (interpose) and cover a third of the
+					 * ground -- this 2000ms rope tax under contact
+					 * was tuned in the era before escorts, screens,
+					 * or the scoop existed to spend it. With a
+					 * bodyguard on the line, the aim-stand gamble is
+					 * priced at 500: the rope comes back to the run
+					 * home.
+					 */
+					v += gi.cvar("sg_fastcarry", "0", 0)->value
+					     ? 500.0f : 2000.0f;
 					break;
 				}
 			}

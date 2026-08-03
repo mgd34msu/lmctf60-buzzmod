@@ -81,6 +81,9 @@ SMOOTH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # (198-200: 1.3 vs 2.2; 201-203: 1.4 vs 2.7 steals/g) -- the organic
 # rally outperforms every synchronization overlay tried. Null ledger.
 WAVEPUSH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+# fast carry (wave 205+): human bar = whole route in 14s; rope tax under
+# contact drops 2000->500 on s03-05 now that escorts exist to spend it
+FASTCARRY=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -97,7 +100,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
-                +set sg_smooth "${SMOOTH[$i]}" +set sg_wavepush "${WAVEPUSH[$i]}" \
+                +set sg_wavepush "${WAVEPUSH[$i]}" +set sg_fastcarry "${FASTCARRY[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &
