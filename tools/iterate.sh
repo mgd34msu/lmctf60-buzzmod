@@ -126,9 +126,10 @@ SOUNDFIRE=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # airborne share 47 vs 33)
 LANDLEAD=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # wet route trial (253+): carriers price swim links as rail-free highways
-# wet route ADOPTED wave 255 (253-254: carrier swim 68 vs 1, steals
-# 1.2 vs 0.8, free; the moat is the rail-free highway)
-WATERCARRY=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
+# wet route REVERTED wave 256 (owner physics check: swim = half speed,
+# rails pass through water -- the "advantage" was exploiting bot
+# defenders' swimmer-blindness, not human-grade play)
+WATERCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
