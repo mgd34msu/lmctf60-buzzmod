@@ -179,7 +179,6 @@ typedef struct sg_bot_s
 static sg_bot_t	sg_bots[SG_MAXBOTS];
 static float	sg_grab_time[2] = { -1000.0f, -1000.0f };  /* per team */
 static float	sg_push_until[2];   /* the conductor's window (sg_wavepush) */
-static float	sg_push_next[2];    /* earliest next downbeat */
 static rune_t	*sg_rune;
 
 rune_t *SG_Rune(void)
@@ -1548,37 +1547,53 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * the census's 75-percent-alone number is the target -- and the
 	 * respawn-surge rule still cancels every wait it ever cancelled.
 	 */
+	/*
+	 * v2, THE BROADCAST SURGE. v1's metronome read negative (steals
+	 * 1.3 vs 2.2 pooled 198-200): a downbeat on a clock suppresses the
+	 * organic rally pairing and marches under-armed waves into rooms
+	 * that were never thin. The surge rule was always the true clock --
+	 * a defender dead near their own stand IS the window -- but it
+	 * released only the one attacker who happened to be in the band.
+	 * Now the kill rings the whole team's bell: every rally releases
+	 * into the same respawn-wide window, detours pause only during the
+	 * eight seconds the window is actually open.
+	 */
 	if (gi.cvar("sg_wavepush", "0", 0)->value &&
-	    role == SG_ROLE_ATTACK && bot->seed >= 0 &&
-	    level.time >= sg_push_next[team - CTF_TEAM_RED] &&
-	    goal_field[bot->seed] < 6000 &&
-	    goal_field[bot->seed] < SG_FIELD_INF)
+	    role == SG_ROLE_ATTACK &&
+	    level.time >= sg_push_until[team - CTF_TEAM_RED])
 	{
-		int bi9, att9 = 0;
+		int et9 = (team == CTF_TEAM_RED) ? 1 : 0;
+		edict_t *ef9 = G_Find(NULL, FOFS(classname),
+		                      (team == CTF_TEAM_RED) ? "info_flag_blue"
+		                                             : "info_flag_red");
 
-		for (bi9 = 0; bi9 < SG_MAXBOTS; bi9++)
+		if (ef9 && level.time - sg_caco_death_time[et9] < 2.0f)
 		{
-			sg_bot_t *mb9 = &sg_bots[bi9];
+			vec3_t dp9;
 
-			if (mb9->active && mb9->ent && mb9->ent->inuse &&
-			    mb9->ent->client->ctf.teamnum == team &&
-			    mb9->ent->health > 0 &&
-			    mb9->last_role == (int)SG_ROLE_ATTACK)
-				att9++;
-		}
-		if (att9 >= 3)
-		{
-			sg_push_until[team - CTF_TEAM_RED] = level.time + 12.0f;
-			sg_push_next[team - CTF_TEAM_RED] = level.time + 40.0f;
-			if (gi.cvar("sg_debug", "0", 0)->value)
-				gi.dprintf("PUSH team=%d att=%d\n", team, att9);
+			VectorSubtract(sg_caco_death_org[et9], ef9->s.origin, dp9);
+			if (VectorLength(dp9) < 1200.0f)
+			{
+				sg_push_until[team - CTF_TEAM_RED] = level.time + 8.0f;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("PUSH team=%d surge\n", team);
+			}
 		}
 	}
 
 	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
-	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
+	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF &&
-	    level.time >= sg_push_until[team - CTF_TEAM_RED])
+	    level.time < sg_push_until[team - CTF_TEAM_RED])
+	{
+		/* the bell rang: no waiting, no rally, run the window */
+		bot->rally_since = 0.0f;
+		goto rally_done;
+	}
+
+	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
+	    goal_field[bot->seed] < SG_FIELD_INF)
 	{
 		int bi, mates_near = 0, mates_coming = 0;
 
