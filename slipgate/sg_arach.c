@@ -2147,7 +2147,10 @@ rally_done:;
 		    gi.cvar("sg_flagprior", "0", 0)->value &&
 		    (sg_caco_team_belief.flag[0].state == SG_FLAG_ASTRAY ||
 		     sg_caco_team_belief.flag[1].state == SG_FLAG_ASTRAY))
-			v -= 1.5f * (float)sg_human_live[li];
+			/* the cvar IS the dose: 1 = 380ms max, 2 = 765, ... --
+			 * wave-over-wave dose response, per the owner's cadence */
+			v -= 1.5f * gi.cvar("sg_flagprior", "0", 0)->value *
+			     (float)sg_human_live[li];
 
 		/*
 		 * THE SWITCHING COST (sg_sticky, A/B wave 168+). The owner's

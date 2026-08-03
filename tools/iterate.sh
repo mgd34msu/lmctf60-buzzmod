@@ -88,7 +88,7 @@ WAVEPUSH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 FASTCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # flag-live prior (wave 213+): human carry-window roads, discount only
 # while a flag is out
-FLAGPRIOR=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+FLAGPRIOR=("0" "0" "2" "2" "2" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
