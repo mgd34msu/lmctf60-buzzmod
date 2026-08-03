@@ -4775,9 +4775,21 @@ no_hold:;
 			ddp = ap - bot->vp_cur;
 			while (ddy > 180.0f) ddy -= 360.0f;
 			while (ddy < -180.0f) ddy += 360.0f;
-			if (slew_rate > 0.0f &&
-			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
-				goto hook_wait;
+			{
+				/* the carrier's quick release (sg_quickrope, wave
+				 * 216): 56%% of all slow carrier seconds are this
+				 * ritual (stop-cause census, 209-215), and the bite
+				 * record proved imperfect ropes fly and convert. A
+				 * fleeing carrier fires at 10 degrees; everyone else
+				 * keeps the sniper's 3. */
+				float ftol = (gi.cvar("sg_quickrope", "0", 0)->value &&
+				              sg_cur_role == SG_ROLE_CARRY)
+				             ? 10.0f : 3.0f;
+
+				if (slew_rate > 0.0f &&
+				    (fabsf(ddy) > ftol || fabsf(ddp) > ftol))
+					goto hook_wait;
+			}
 
 			/* (The anchor-distance veto lived here for one wave --
 			 * 24,728 vetoes, land rate unmoved. Wrong test: bites

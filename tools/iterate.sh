@@ -91,6 +91,9 @@ FASTCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # flag-live prior NULL across dose 1 / dose 2 / role-scoped (213-215) --
 # wave 213's 7-0 was rotation luck. Off; ledger.
 FLAGPRIOR=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+# quickrope (wave 216+): carrier fires at 10deg -- the hook ritual is 56%
+# of slow carrier time (stop-cause census 209-215)
+QUICKROPE=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -107,7 +110,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
-                +set sg_fastcarry "${FASTCARRY[$i]}" +set sg_flagprior "${FLAGPRIOR[$i]}" \
+                +set sg_flagprior "${FLAGPRIOR[$i]}" +set sg_quickrope "${QUICKROPE[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &
