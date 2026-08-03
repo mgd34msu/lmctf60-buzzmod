@@ -3185,29 +3185,11 @@ no_hold:;
 				}
 				if (nx3 >= 0)
 				{
-					/* wave 226: look TWO steps down -- align the
-					 * landing with the corridor, not the next tile */
-					int ls2 = sg_rune->links[nx3].to, nx4 = -1;
-					int nv4 = (rf3[ls2] < SG_FIELD_INF)
-					          ? rf3[ls2] : 0x7fffffff;
-
-					for (li3 = sg_rune->first_link[ls2]; li3 >= 0;
-					     li3 = sg_rune->next_link[li3])
-					{
-						rune_link_t *l4 = &sg_rune->links[li3];
-
-						if (l4->action != RL_RUN)
-							continue;
-						if (rf3[l4->to] < nv4)
-						{
-							nv4 = rf3[l4->to];
-							nx4 = li3;
-						}
-					}
+					/* one step: the dose curve peaked here (+46%%
+					 * chains) and flattened at two (226: the far aim
+					 * clips corridor corners). The next tile it is. */
 					VectorCopy(
-					    sg_rune->seeds[(nx4 >= 0)
-					        ? sg_rune->links[nx4].to
-					        : sg_rune->links[nx3].to].origin,
+					    sg_rune->seeds[sg_rune->links[nx3].to].origin,
 					    aim);
 					have_aim = true;
 				}

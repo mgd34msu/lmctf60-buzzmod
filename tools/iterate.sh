@@ -106,7 +106,9 @@ LEGCARRIER=("0" "0" "2" "2" "2" "0" "0" "0" "0" "0")
 # pre-turn (224+): mid-flight aim slides to the onward step -- the 93deg
 # grammar constant
 HOPFIRE=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-PRETURN=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# pre-turn ADOPTED wave 227 (one-step peak: +46%/+10% chains, 2x carry
+# speed twice; two-step flattened -- corridor clipping)
+PRETURN=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
