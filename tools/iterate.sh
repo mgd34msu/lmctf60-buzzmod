@@ -77,7 +77,10 @@ HUMAN=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # steady hand read mixed (195-197: steals 1.6 vs 2.2, suicides 9 vs 15)
 # -- off, in the null ledger. The conductor is the 198+ A/B on s03-05.
 SMOOTH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-WAVEPUSH=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# conductor v1 (metronome) AND v2 (broadcast surge) both read negative
+# (198-200: 1.3 vs 2.2; 201-203: 1.4 vs 2.7 steals/g) -- the organic
+# rally outperforms every synchronization overlay tried. Null ledger.
+WAVEPUSH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
