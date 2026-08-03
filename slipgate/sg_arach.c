@@ -4567,10 +4567,25 @@ no_hold:;
 			else
 				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
 				         - 30.0f;
-			cmd.angles[YAW] = ANGLE2SHORT(nyaw)
-			                - e->client->ps.pmove.delta_angles[YAW];
-			cmd.angles[PITCH] = ANGLE2SHORT(npitch)
-			                  - e->client->ps.pmove.delta_angles[PITCH];
+			/*
+			 * THE SILENT COOK (wave 233). The zero-cost audit caught
+			 * the veer: this block owned the view for the whole cook
+			 * and the legs followed it off the route -- a 33 percent
+			 * steal tax on the trial arm. The owner's cook touches
+			 * nothing: the view belongs to navigation until the
+			 * release frame, when the aim exists for exactly one
+			 * command -- the flick. Attack stays held throughout;
+			 * cooking needs the trigger, not the eyes.
+			 */
+			if (!(gi.cvar("sg_flycook", "0", 0)->value) ||
+			    (nfly >= 0.0f && ntmr - 0.2f <= nfly + 0.15f) ||
+			    ntmr <= 0.75f)
+			{
+				cmd.angles[YAW] = ANGLE2SHORT(nyaw)
+				                - e->client->ps.pmove.delta_angles[YAW];
+				cmd.angles[PITCH] = ANGLE2SHORT(npitch)
+				                  - e->client->ps.pmove.delta_angles[PITCH];
+			}
 			/*
 			 * THE TRUE AIRBURST. Release when the fuse remaining equals
 			 * the flight ahead, so the pop happens ON ARRIVAL -- the
