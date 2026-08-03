@@ -74,8 +74,10 @@ INTERPOSE=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # carry interaction (30.1s cell median) is recorded, not adopted.
 SCOOP=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 HUMAN=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-# steady hand (wave 195+): walk heading slews at wrist rate on s03-05
-SMOOTH=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
+# steady hand read mixed (195-197: steals 1.6 vs 2.2, suicides 9 vs 15)
+# -- off, in the null ledger. The conductor is the 198+ A/B on s03-05.
+SMOOTH=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+WAVEPUSH=("0" "0" "1" "1" "1" "0" "0" "0" "0" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -92,7 +94,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 +set sv_botfill "${FILLS[$i]}" +set sg_strictgrab "${GRABS[$i]}" \
                 +set sg_press "${PRESS[$i]}" \
                 +set sg_interpose "${INTERPOSE[$i]}" +set sg_scoop "${SCOOP[$i]}" \
-                +set sg_humanprior "${HUMAN[$i]}" +set sg_smooth "${SMOOTH[$i]}" \
+                +set sg_smooth "${SMOOTH[$i]}" +set sg_wavepush "${WAVEPUSH[$i]}" \
                 +exec "$CFG" +map "${MAPS[$i]}"
         ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
     ) &

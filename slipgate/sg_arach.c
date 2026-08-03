@@ -178,6 +178,8 @@ typedef struct sg_bot_s
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
 static float	sg_grab_time[2] = { -1000.0f, -1000.0f };  /* per team */
+static float	sg_push_until[2];   /* the conductor's window (sg_wavepush) */
+static float	sg_push_next[2];    /* earliest next downbeat */
 static rune_t	*sg_rune;
 
 rune_t *SG_Rune(void)
@@ -416,6 +418,7 @@ static int		sg_danger[2][SG_MAX_SEEDS];
 static const int *sg_cur_danger;
 static qboolean sg_route_pure_now;  /* tactics priced at selection: the
                                      * per-frame walk stays pure */
+static qboolean sg_cur_push;        /* conductor's downbeat: march, no detours */
 static float	sg_danger_decay_next;
 
 static void Danger_Learn(int team, int seed)
@@ -838,7 +841,8 @@ static float Surface_At(int seed, const sg_weights_t *w,
 
 	for (c = 0; c < SG_FIELD_CLASSES; c++)
 		if (w->item[c] > 0.0f)
-			v -= 1500.0f * Detour_Value(seed, c, goal_field, w->item[c]);
+			v -= sg_cur_push ? 0.0f :
+			     1500.0f * Detour_Value(seed, c, goal_field, w->item[c]);
 
 	if (support && w->carrier_support > 0.0f && support[seed] < SG_FIELD_INF)
 		v += w->carrier_support * (float)support[seed];
@@ -1534,9 +1538,47 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * seconds at most, gone the moment a mate closes or the wait times
 	 * out. Solo pushes still happen; they just stop being the ONLY kind.
 	 */
+	/*
+	 * THE CONDUCTOR (sg_wavepush, A/B wave 198+). The rally waits for
+	 * partners; the conductor makes partners exist. Once every 40
+	 * seconds, when three or more attackers are alive and the nearest
+	 * is within striking range, the team calls a downbeat: a 12-second
+	 * window in which every rally releases at once and item detours
+	 * stop pulling attackers sideways. Arrivals stack into a wave --
+	 * the census's 75-percent-alone number is the target -- and the
+	 * respawn-surge rule still cancels every wait it ever cancelled.
+	 */
+	if (gi.cvar("sg_wavepush", "0", 0)->value &&
+	    role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	    level.time >= sg_push_next[team - CTF_TEAM_RED] &&
+	    goal_field[bot->seed] < 6000 &&
+	    goal_field[bot->seed] < SG_FIELD_INF)
+	{
+		int bi9, att9 = 0;
+
+		for (bi9 = 0; bi9 < SG_MAXBOTS; bi9++)
+		{
+			sg_bot_t *mb9 = &sg_bots[bi9];
+
+			if (mb9->active && mb9->ent && mb9->ent->inuse &&
+			    mb9->ent->client->ctf.teamnum == team &&
+			    mb9->ent->health > 0 &&
+			    mb9->last_role == (int)SG_ROLE_ATTACK)
+				att9++;
+		}
+		if (att9 >= 3)
+		{
+			sg_push_until[team - CTF_TEAM_RED] = level.time + 12.0f;
+			sg_push_next[team - CTF_TEAM_RED] = level.time + 40.0f;
+			if (gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("PUSH team=%d att=%d\n", team, att9);
+		}
+	}
+
 	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
-	    goal_field[bot->seed] < SG_FIELD_INF)
+	    goal_field[bot->seed] < SG_FIELD_INF &&
+	    level.time >= sg_push_until[team - CTF_TEAM_RED])
 	{
 		int bi, mates_near = 0, mates_coming = 0;
 
@@ -1713,6 +1755,9 @@ rally_done:;
 	/* descend the surface: my seed vs every seed one proven link away */
 	sg_cur_role = role;             /* for the rune identity pricing */
 	sg_cur_danger = sg_danger[team - 1];    /* the danger dimension, ours */
+	/* downbeat live: attackers march, detours wait for the next bar */
+	sg_cur_push = (role == SG_ROLE_ATTACK &&
+	               level.time < sg_push_until[team - CTF_TEAM_RED]);
 	sg_route_pure_now = route_pure;
 	bestval = Surface_At(bot->seed, w, route_field, support, intercept);
 	if (duel)
