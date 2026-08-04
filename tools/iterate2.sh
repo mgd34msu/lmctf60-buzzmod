@@ -108,7 +108,10 @@ RUNEDOSE=(0      0        2        2        2         2        2         0      
 # pure pursuit A/B (311+): value = arc distance. s03/s04/s06 at 300,
 # s07 + s09 control. Read: turn1hz_med (predict 92->55-65), reversals
 # (50->38-42%), wallbumps as the corner-cut guard-rail, steals/caps.
-PURSUIT=(0       0        300      300      0         300      0         0        0        0)
+# 313: s04 becomes the honest OFF comparator (311 ran the 5v5 pair
+# ON/ON by mistake -- no contrast); pursuitz 18 lifts the stair veto.
+PURSUIT=(0       0        300      0        0         300      0         0        0        0)
+PURSUITZ=(8      8        18       8        8         18       8         8        8        8)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -161,6 +164,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_wetwork ${WETWORK[$i]}"
                 echo "set sg_nadelead ${NADELEAD[$i]}"
                 echo "set sg_pursuit ${PURSUIT[$i]}"
+                echo "set sg_pursuitz ${PURSUITZ[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \

@@ -4050,7 +4050,11 @@ no_hold:;
 						continue;
 					pend[0] = pp[0];
 					pend[1] = pp[1];
-					pend[2] = e->s.origin[2] + 8.0f;
+					/* sg_pursuitz: chord z-allowance. 8 vetoed every
+					 * stair and ramp (311: guard collapsed the chord
+					 * to the seed center most ticks); 18 is STEPSIZE */
+					pend[2] = e->s.origin[2] +
+					          (gi.cvar("sg_pursuitz", "8", 0)->value);
 					ptr = gi.trace(e->s.origin, e->mins, e->maxs, pend,
 					               e, MASK_PLAYERSOLID);
 					/* a teammate is not terrain, and a door is not a
@@ -4064,6 +4068,13 @@ no_hold:;
 					if (ptr.fraction >= 1.0f)
 					{
 						VectorCopy(pp, aim);
+						/* guard census: k==nchain is the full chord,
+						 * k==1 is a collapse to today's behavior */
+						if (gi.cvar("sg_debug", "0", 0)->value &&
+						    level.time >= bot->next_report - 0.9f)
+							gi.dprintf("PURSUITK %s k=%d n=%d\n",
+							           e->client->pers.netname,
+							           k, nchain);
 						break;
 					}
 				}
