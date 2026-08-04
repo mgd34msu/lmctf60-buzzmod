@@ -146,7 +146,9 @@ CARRYCOVER=("0" "0" "800" "800" "800" "800" "800" "800" "800" "0")
 # carrier press trial (280+): the carrier stops duel-pricing entirely --
 # 61% of carrier frames made no homeward progress (274-279 traces); 48/49
 # carries died before the final tenth. Cover holds at 800 underneath.
-CARRYPRESS=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
+# carrier press NULL (280-282, 13 carries): penetration median WORSE
+# (16.8k vs 15.5k), prog frac 0.44 vs 0.39, home stretch 0/13. Ledger.
+CARRYPRESS=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # hunter flag-prior RE-TESTED under the current stack (269 dose 1, 270
 # dose 2) after the 213-215 null: return latency flat both waves, one
 # parity cap (269/s07) vs a 24-parity-steal 0-cap wave at dose 2 --
