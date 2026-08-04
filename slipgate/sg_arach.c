@@ -1125,7 +1125,26 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 10.0f);
 	}
 	else
+	{
+		/*
+		 * THE LANDING TICK (sg_landtick, wave 286+). The think runs at
+		 * 10Hz but pmove executes 8 sub-steps per command -- a jump
+		 * decided only on frames that BEGIN grounded is a 1-in-8
+		 * lottery against a mid-frame touchdown, and every lost draw
+		 * pays speed * 6 * ft in friction. The demo census priced it:
+		 * bots lose 66 u/s per touchdown (humans 34-46) and chain half
+		 * the relaunches of a pub player. The human technique is the
+		 * fix: HOLD jump while falling, and the landing sub-step fires
+		 * it frictionless (PMF_JUMP_HELD was already released the
+		 * frame after the previous hop, so the hold is armed).
+		 */
+		if (gi.cvar("sg_landtick", "0", 0)->value &&
+		    run_link && open_ahead &&
+		    e->velocity[2] < 0.0f && sp > 270.0f)
+			cmd->upmove = 400;
+
 		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
+	}
 }
 
 /*

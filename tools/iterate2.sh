@@ -46,6 +46,12 @@ ESCAPE=(0        0        0        1        1         1        0         1      
 # duel-roles A/B (285+): s01 ON s02 OFF -- breaks the size==2 dw=1 pin
 # (2v2 census: dw stuck 131/138, zero caps in 16 waves)
 DUEL=(  1        0        0        0        0         0        0         0        0        0)
+# defense dwell A/B (286+): s05 ON vs s03 OFF (both have .dpo data);
+# landing-tick A/B (286+): s06 ON vs s07 OFF (farms feel it most --
+# read = touch_loss and relaunch rate from the serverrecord demos,
+# plus carrier speed).
+DEFPOST=(0       0        0        0        1         0        0         0        0        0)
+LANDTICK=(0      0        0        0        0         1        0         1        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -81,7 +87,9 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_carrycover ${COVER[$i]}"
                 echo "set sg_escapeprior ${ESCAPE[$i]}"
                 echo "set sg_duelroles ${DUEL[$i]}"
-                if [ "$i" = "2" ] || [ "$i" = "5" ]; then
+                echo "set sg_defpost ${DEFPOST[$i]}"
+                echo "set sg_landtick ${LANDTICK[$i]}"
+                if [ "$i" = "2" ] || [ "$i" = "5" ] || [ "$i" = "6" ]; then
                     echo "serverrecord wave$NAME-${LABELS[$i]}"
                 fi
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
