@@ -83,6 +83,10 @@ FANDENSE=(0      0        0        0        0         0        0         0      
 # airgain PARKED (296-297: negative at both doses -- the harvest turns
 # velocity off the route; needs view/path co-rotation, ledgered).
 AIRGAIN=(0       0        0        0        0         0        0         0        0        0)
+# wetwork A/B (300+): s04 ON vs s03 OFF -- swimmers are half-speed rail
+# targets and rails pierce water; read = DMG mod-11 kills on waterlevel
+# targets + steals. Water maps matter: lmctf22 has the canal.
+WETWORK=(0       0        0        1        0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -128,6 +132,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"
                 echo "set sg_airgain ${AIRGAIN[$i]}"
+                echo "set sg_wetwork ${WETWORK[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \

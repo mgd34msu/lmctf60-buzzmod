@@ -2344,6 +2344,25 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	carrier = Combat_IsEnemyCarrier(self, enemy);
 	band = Combat_Band(st, dist);
 	want = Combat_Choose(self, band, dist, carrier);
+
+	/*
+	 * WETWORK (sg_wetwork, wave 300+). The owner's physics check that
+	 * killed the wet route cuts the other way here: a swimmer moves at
+	 * HALF wishspeed (pmove.c) and fire_rail's mask has no
+	 * CONTENTS_WATER -- rails reach into water undegraded. A swimming
+	 * target is the easiest rail shot in the game and the band ladders
+	 * don't know it. Hold the rail on swimmers if it's in the pack.
+	 */
+	if (enemy->waterlevel > 1 &&
+	    gi.cvar("sg_wetwork", "0", 0)->value)
+	{
+		static const int wet_rg[] = { SG_W_RAILGUN, -1 };
+		int wr = Combat_WalkLadder(self, wet_rg, dist, false);
+
+		if (wr >= 0)
+			want = wr;
+	}
+
 	Combat_Arbitrate(self, st, want);
 
 	/*
