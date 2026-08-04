@@ -27,13 +27,18 @@ mkdir -p "$LOG_DIR"
 # duel verdict in (7-0, adopted): a1/a2 repurposed to the carrier-cover
 # revalidation (last broken-era adoption unchecked). a1 cover 800 ON,
 # a2 cover 0 -- the only pair anywhere with cover OFF.
-LABELS=(a1-5v5-cover a2-5v5-nocov a3-5v5-nade  a4-5v5-ctrl)
-MAPS=(  mactf06      mactf06      lmctf09      lmctf09)
+# cover reval closed (survives, stays 800); nadelead adopted (zero
+# cost). Aux decomposes the defense package: which half concedes?
+#   a1 defpost-only  a2 defreact-only  a3 both  a4 neither
+LABELS=(a1-5v5-post  a2-5v5-react a3-5v5-both  a4-5v5-none)
+MAPS=(  lmctf22      lmctf22      lmctf22      lmctf22)
 FILLS=( "5"          "5"          "5"          "5")
 SECS=(  900          900          900          900)
 DUELR=( 0            0            0            0)
-NADEL=( 0            0            1            0)
-COVERA=(800          0            800          800)
+NADEL=( 1            1            1            1)
+COVERA=(800          800          800          800)
+DPOSTA=(3            0            3            0)
+DREACTA=(0           3            3            0)
 
 for i in 0 1 2 3; do
     (
@@ -63,6 +68,8 @@ for i in 0 1 2 3; do
                 echo "set sg_tactics 1"
                 echo "set sg_duelroles ${DUELR[$i]}"
                 echo "set sg_nadelead ${NADEL[$i]}"
+                echo "set sg_defpost ${DPOSTA[$i]}"
+                echo "set sg_defreact ${DREACTA[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \

@@ -104,7 +104,9 @@ WETWORK=(1       1        1        1        1         1        1         1      
 # nadelead A/B (309+): s04 ON vs s03 OFF -- cooked grenade re-aims at
 # an airborne live enemy's touchdown while cooking (rocket landlead's
 # solver, better fuse). Read: NADEPOP proximity + grenade obituaries.
-NADELEAD=(0      0        0        1        0         0        0         0        0        0)
+# nadelead ADOPTED wave 335 (6 aux rounds: zero cost, slight lean --
+# the owner's zero-cost-volume economy: free attempts at max volume)
+NADELEAD=(1      1        1        1        1         1        1         1        0        1)
 # courier dose 2 (310+): escorts out-price defenders for resist/regen
 # (starvation fix for the adopted handoff: 10,098 candidates, 40 tosses,
 # 74% of games form no pairing at all). Read is within-arm: RTCAND
