@@ -1643,7 +1643,49 @@ static void SG_BotThink(sg_bot_t *bot)
 					 * fixed cost-lead AHEAD of the carrier on its homeward
 					 * field -- the door the carrier runs through next.
 					 */
-					if (gi.cvar("sg_interpose", "0", 0)->value >= 2)
+					/*
+					 * THE FORMATION (sg_interpose dose 3, wave 326 -- the
+					 * owner's design). Lead and trail are STATIONS on the
+					 * carrier's own route, at fixed cost-offsets that move
+					 * with it: the leader sweeps the parked defenders ahead
+					 * (90% of carrier kills), the trailer bodies the chasers,
+					 * and the spacing keeps both out of the rail-and-splash
+					 * envelope that made the midpoint useless. Station by
+					 * slot parity: even leads at -1300ms, odd trails at
+					 * +900ms. Dose 2 (static exit seed) kept as history.
+					 */
+					if (gi.cvar("sg_interpose", "0", 0)->value >= 3)
+					{
+						int *cf = (team == CTF_TEAM_RED)
+						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
+						int cc = cf[oc->seed], s13;
+						int lead = ((int)(e->client - game.clients) & 1) ? 0 : 1;
+						int want = lead ? cc - 1300 : cc + 900;
+						int band = 450;
+						float bd13 = -1.0f;
+
+						if (want < 0)
+							want = 0;  /* carrier nearly home: lead collapses to the stand */
+						for (s13 = 0; s13 < sg_rune->hdr.num_seeds &&
+						     s13 < SG_MAX_SEEDS; s13++)
+						{
+							vec3_t dd13;
+							float dl13;
+
+							if (cf[s13] >= SG_FIELD_INF ||
+							    cf[s13] < want - band || cf[s13] > want + band)
+								continue;
+							VectorSubtract(sg_rune->seeds[s13].origin,
+							    sg_rune->seeds[oc->seed].origin, dd13);
+							dl13 = VectorLength(dd13);
+							if (bd13 < 0.0f || dl13 < bd13)
+							{
+								bd13 = dl13;
+								ms = s13;
+							}
+						}
+					}
+					else if (gi.cvar("sg_interpose", "0", 0)->value >= 2)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;

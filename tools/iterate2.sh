@@ -123,7 +123,7 @@ APPCOVER=(0      0        200      0        0         200      0         0      
 # exit-escort A/B (319+): interpose dose 2 -- escorts occupy the exit
 # seed ahead of the carrier on its homeward field instead of the
 # unreachable midpoint. s03/s06 ON (dose 2), s04/s07 stock interpose.
-INTERDOSE=(0     0        2        0        0         0        0         0        0        0)
+INTERDOSE=(0     0        3        0        0         0        0         0        0        0)
 # owner's blend (321+): sg_smooth value = slew deg/s. s04 ON 240 vs
 # s03 OFF (5v5 pair, demos both) -- read: turn1hz/reversals/steals.
 # blend PARKED (321-322: ON worse both waves -- slew lag fights the fan)
