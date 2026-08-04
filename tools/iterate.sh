@@ -135,7 +135,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
     (
         (
             sleep 8
-            sleep 20   # instant initial fill: roster lands in seconds now
+            sleep 20   # instant initial fill: roster lands in seconds
             # the owner's ground truth: record two servers per wave --
             # a parity game and the sentinel -- watchable for jank,
             # parseable by the same gauges the human demos calibrated
@@ -144,6 +144,11 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
             fi
             sleep "$SECS"
             echo "quit"
+            # no lingering shell: if quit is ignored (rotation race), the
+            # hard timeout below is the backstop -- but the window between
+            # game-end and quit is now zero, not forty-five seconds of
+            # empty server lying to whoever connects (the owner's
+            # quake009: same map, wiped roster, a husk with a heartbeat)
         ) | (
             # doctrine flags travel by config file, never argv: the engine
             # caps the command line at 50 tokens and has killed two waves
@@ -164,7 +169,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_watercarry ${WATERCARRY[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
-                timeout $(( 8 + 45 + SECS + 40 )) \
+                timeout $(( 8 + 20 + SECS + 8 )) \
                 "$Q2DED" +set game "$GAME" +set dedicated 1 \
                 +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
                 +exec "$WCFG" +map "${MAPS[$i]}"
