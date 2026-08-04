@@ -130,6 +130,12 @@ LANDLEAD=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # rails pass through water -- the "advantage" was exploiting bot
 # defenders' swimmer-blindness, not human-grade play)
 WATERCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
+# flag-live prior, hunter-scoped (269+): while either flag is astray,
+# non-carrier roles price the corpus carry-window roads ~380ms cheaper
+# (dose = cvar value). Wave 214's carrier-coverage regression led to the
+# carrier exclusion in code; the hunter dose itself was never trialed.
+# Read: time-to-return after enemy steal, enemy-carrier kill latency.
+FLAGPRIOR=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
@@ -174,6 +180,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_soundfire ${SOUNDFIRE[$i]}"
                 echo "set sg_landlead ${LANDLEAD[$i]}"
                 echo "set sg_watercarry ${WATERCARRY[$i]}"
+                echo "set sg_flagprior ${FLAGPRIOR[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + SECS + 8 )) \
