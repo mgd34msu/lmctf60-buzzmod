@@ -95,7 +95,7 @@ AIRGAIN=(0       0        0        0        0         0        0         0      
 # wetwork A/B (300+): s04 ON vs s03 OFF -- swimmers are half-speed rail
 # targets and rails pierce water; read = DMG mod-11 kills on waterlevel
 # targets + steals. Water maps matter: lmctf22 has the canal.
-WETWORK=(0       0        0        1        0         0        0         0        0        0)
+WETWORK=(1       1        1        1        1         1        1         1        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
