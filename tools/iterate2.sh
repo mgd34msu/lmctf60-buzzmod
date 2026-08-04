@@ -100,6 +100,11 @@ WETWORK=(1       1        1        1        1         1        1         1      
 # an airborne live enemy's touchdown while cooking (rocket landlead's
 # solver, better fuse). Read: NADEPOP proximity + grenade obituaries.
 NADELEAD=(0      0        0        1        0         0        0         0        0        0)
+# courier dose 2 (310+): escorts out-price defenders for resist/regen
+# (starvation fix for the adopted handoff: 10,098 candidates, 40 tosses,
+# 74% of games form no pairing at all). Read is within-arm: RTCAND
+# distance distribution + RUNETOSS conversions, fleet history as base.
+RUNEDOSE=(0      0        2        2        2         2        2         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -132,7 +137,11 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_scoop $A"
                 echo "set sg_preturn $A"
                 echo "set sg_flycook $A"
-                echo "set sg_runetoss $A"
+                if [ "${RUNEDOSE[$i]}" != "0" ]; then
+                    echo "set sg_runetoss ${RUNEDOSE[$i]}"
+                else
+                    echo "set sg_runetoss $A"
+                fi
                 echo "set sg_soundfire $A"
                 echo "set sg_landlead $A"
                 echo "set sg_carrycover ${COVER[$i]}"

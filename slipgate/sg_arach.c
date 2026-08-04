@@ -491,6 +491,11 @@ static float Rune_RoleFactor(int role, int entnum)
 		/*                  ATTACK DEFEND CARRY  RECOVER ESCORT */
 		{ "damage_rune",  { 1.15f, 1.15f, 0.70f, 1.25f, 1.10f } },
 		{ "haste_rune",   { 1.30f, 0.80f, 1.30f, 1.15f, 1.00f } },
+		/* courier-starvation fix (10,098 candidates, 40 tosses: the
+		 * bots that hold defensive runes are DEFEND, anchored home,
+		 * while the toss needs a holder NEAR THE CARRIER; under
+		 * sg_runetoss>=2 the escort out-prices the defender for
+		 * resist/regen so handoffs can actually form) */
 		{ "resist_rune",  { 0.90f, 1.25f, 1.20f, 1.00f, 1.15f } },
 		{ "regen_rune",   { 0.90f, 1.15f, 1.05f, 0.90f, 1.00f } },
 		{ "vampire_rune", { 1.05f, 1.00f, 0.80f, 1.05f, 1.00f } },
@@ -505,7 +510,14 @@ static float Rune_RoleFactor(int role, int entnum)
 		return 1.0f;
 	for (i = 0; i < (int)(sizeof(tab) / sizeof(tab[0])); i++)
 		if (strcmp(e->classname, tab[i].cls) == 0)
-			return tab[i].w[role];
+		{
+			float w2 = tab[i].w[role];
+
+			if (role == SG_ROLE_ESCORT && i >= 2 && i <= 3 &&
+			    gi.cvar("sg_runetoss", "0", 0)->value >= 2)
+				w2 = 1.40f;
+			return w2;
+		}
 	return 1.0f;
 }
 
@@ -1676,14 +1688,30 @@ static void SG_BotThink(sg_bot_t *bot)
 	route_field = goal_field;
 	route_pure = false;
 	if (gi.cvar("sg_tactics", "0", 0)->value &&
-	    role != SG_ROLE_ESCORT && bot->seed >= 0 &&
+	    role != SG_ROLE_ESCORT &&
+	    /* CARRY excluded (trial-prep audit): route_pure suppresses the
+	     * danger and detour terms for 10s a commit -- the exact corridors
+	     * cover/carrypress/legcarrier exist to keep carriers off */
+	    role != SG_ROLE_CARRY && bot->seed >= 0 &&
 	    goal_field[bot->seed] < SG_FIELD_INF &&
 	    goal_field[bot->seed] >= 400)
 	{
 		static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
 		int bi = (int)(bot - sg_bots);
-		qboolean need = (bot->tac_seed < 0 ||
+		qboolean need;
+
+		/* the waypoint must be scored with the FULL surface (the
+		 * design's own guarantee) -- this global was previously
+		 * whatever the prior bot in the serial frame left behind,
+		 * making waypoint quality depend on iteration order */
+		sg_route_pure_now = false;
+		need = (bot->tac_seed < 0 ||
 		                 bot->tac_role != (int)role ||
+		                 /* a tac_time AHEAD of the level clock is a
+		                  * previous map's timestamp (level.time resets
+		                  * to 0 on changelevel; the bots[] array does
+		                  * not) -- stale by definition */
+		                 bot->tac_time > level.time ||
 		                 level.time - bot->tac_time > 10.0f ||
 		                 tac_fields[bi][bot->seed] >= SG_FIELD_INF ||
 		                 tac_fields[bi][bot->seed] < 300);
