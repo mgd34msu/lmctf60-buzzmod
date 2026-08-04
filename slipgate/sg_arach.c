@@ -5556,7 +5556,13 @@ static void Botfill_Frame(void)
 				break;
 			if (humans[t] + bots[t] < want[t])
 			{
-				if (++under_streak[t] >= 3)
+				/* an EMPTY server fills instantly -- the hysteresis
+				 * exists to damp roster churn in live games, and a
+				 * fresh map after rotation has no roster to damp; a
+				 * human walking in stared at an empty arena for 45
+				 * seconds (the owner, wave 264, four times over) */
+				if (bots[0] + bots[1] == 0 ||
+				    ++under_streak[t] >= 3)
 				{
 					SG_AddBotTeam(CTF_TEAM_RED + t);
 					under_streak[t] = 0;
