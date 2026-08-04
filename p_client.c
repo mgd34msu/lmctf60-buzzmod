@@ -2843,9 +2843,14 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	{
 		client->ps.pmove.pm_type = PM_FREEZE;
 		// can exit intermission after five seconds
-		if (level.time > level.intermissiontime + 5.0 
+		if (level.time > level.intermissiontime + 5.0
 			&& (ucmd->buttons & BUTTON_ANY) )
+		{
+			gi.dprintf("INTERMEXIT by %s frame=%d (intermission since %.1f)\n",
+				ent->client->pers.netname, level.framenum,
+				level.intermissiontime);
 			level.exitintermission = true;
+		}
 		return;
 	}
 

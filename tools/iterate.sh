@@ -156,6 +156,13 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
             WCFG="waveflags-s$(( i + 1 )).cfg"
             {
                 echo "exec $CFG"
+                # no maplist on wave servers: the mod's startup maplist force
+                # (CheckDMRules maplistindex==-1) queues a "gamemap lmctf09"
+                # that yquake2's SV_Map Cbuf_CopyToDefer holds until the first
+                # REAL client begins -- it then fires, wiping the game the
+                # moment a human joins. Dead file name = maplistindex -2 =
+                # no force, no deferred map change, ever.
+                echo "set maplist_file nomaplist.txt"
                 echo "set sv_botfill \"${FILLS[$i]}\""
                 echo "set sg_strictgrab ${GRABS[$i]}"
                 echo "set sg_press ${PRESS[$i]}"

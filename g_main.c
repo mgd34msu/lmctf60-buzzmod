@@ -686,6 +686,8 @@ void CheckDMRules (void)
 			level.changemap = ent->map;
 			level.exitintermission = 1;
                         gi.dprintf("Startup Map :  %s\n",  firstmap->mapname);
+			gi.dprintf("MAPLISTFORCE frame=%d exitintermission=1 changemap=%s\n",
+				level.framenum, level.changemap);
 			return;
 		}
 	}
@@ -743,6 +745,12 @@ void ExitLevel (void)
 	int		i;
 	edict_t	*ent;
 	char	command [MAX_INFO_STRING];
+
+	/* rotation forensics: every level exit is a roster-wiping event on a
+	 * dedicated test server, so say who/when in the console log */
+	gi.dprintf("EXITLEVEL frame=%d time=%.1f changemap=%s\n",
+		level.framenum, level.time,
+		level.changemap ? level.changemap : "(null)");
 
 	Com_sprintf (command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
 
