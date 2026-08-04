@@ -4573,6 +4573,27 @@ no_hold:;
 				 * seed of the route home; the touch happens mid-sprint
 				 * and the grab inherits a running start.
 				 */
+				/*
+				 * CAPTURE THROUGH (owner's point, wave 321): the same
+				 * disease on the scoring touch -- converge, stop, cap.
+				 * Inside 160 the carrier aims PAST its flag along the
+				 * line it arrived on; the touch happens mid-stride.
+				 */
+				if (role == SG_ROLE_CARRY && bot->seed >= 0)
+				{
+					vec3_t fd7;
+					float fl7;
+
+					VectorSubtract(gf->s.origin, e->s.origin, fd7);
+					fd7[2] = 0.0f;
+					fl7 = VectorLength(fd7);
+					if (fl7 > 1.0f && fl7 < 160.0f)
+					{
+						VectorScale(fd7, (fl7 + 150.0f) / fl7, fd7);
+						VectorAdd(e->s.origin, fd7, aim);
+						aim[2] = gf->s.origin[2];
+					}
+				}
 				if (role == SG_ROLE_ATTACK && bot->seed >= 0)
 				{
 					vec3_t fd4;
@@ -4783,12 +4804,17 @@ no_hold:;
 			{
 				float sdt = level.time - bot->nav_yaw_t;
 				float sdy = chosen_yaw - bot->nav_yaw_cur;
+				/* the cvar IS the slew rate in deg/s (owner's blend,
+				 * wave 321): 1 keeps the legacy 300 */
+				float srate = gi.cvar("sg_smooth", "0", 0)->value;
 
+				if (srate <= 1.0f)
+					srate = 300.0f;
 				while (sdy > 180.0f) sdy -= 360.0f;
 				while (sdy < -180.0f) sdy += 360.0f;
 				if (sdt > 0.0f && sdt < 0.5f)
 				{
-					float cap = 300.0f * sdt;
+					float cap = srate * sdt;
 
 					if (sdy > cap) sdy = cap;
 					else if (sdy < -cap) sdy = -cap;
