@@ -1124,6 +1124,57 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
  *                   friction; one issued a step late pays speed * 6 * ft.
  *                   That single step is the whole of bunny hopping here.
  */
+#define SG_PURSUIT_MAX 8    /* seeds of chain; 8 x 128u median link covers
+                             * any lookahead worth trying */
+
+/*
+ * The point `look` units of arc down the polyline org -> chain[0] -> ...
+ * -> chain[n-1], measured horizontally. A runner does not stare at his
+ * next footprint and not at the horizon either: he holds a point a fixed
+ * stride-count down the road, and the road bends under it. The fixed
+ * arc-distance is the whole of the anti-zigzag: the seed centers keep
+ * arriving 3.2 times a second, but the point they define moves
+ * continuously.
+ */
+static qboolean SG_PursuitPoint(vec3_t org, vec3_t chain[], int n,
+                                float look, vec3_t out)
+{
+	vec3_t	cur;
+	float	rem = look;
+	int		i;
+
+	if (n <= 0)
+		return false;
+	VectorCopy(org, cur);
+	for (i = 0; i < n; i++)
+	{
+		vec3_t	seg;
+		float	len;
+
+		VectorSubtract(chain[i], cur, seg);
+		seg[2] = 0.0f;
+		len = VectorLength(seg);
+		if (len < 1.0f)
+		{
+			VectorCopy(chain[i], cur);
+			continue;
+		}
+		if (len >= rem)
+		{
+			float f = rem / len;
+
+			out[0] = cur[0] + (chain[i][0] - cur[0]) * f;
+			out[1] = cur[1] + (chain[i][1] - cur[1]) * f;
+			out[2] = cur[2] + (chain[i][2] - cur[2]) * f;
+			return true;
+		}
+		rem -= len;
+		VectorCopy(chain[i], cur);
+	}
+	VectorCopy(cur, out);       /* chain ran out: aim at its far end */
+	return true;
+}
+
 static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
                           vec3_t right, vec3_t dir,
                           qboolean open_ahead, qboolean run_link,
@@ -3625,6 +3676,7 @@ no_hold:;
 	{
 		vec3_t aim;
 		qboolean have_aim = false;
+		qboolean aim_is_anchor = false;
 		qboolean jump_now = false;
 
 		/*
@@ -3853,6 +3905,7 @@ no_hold:;
 			 * geometry is the point.
 			 */
 			if (gi.cvar("sg_lookahead", "0", 0)->value &&
+			    !gi.cvar("sg_pursuit", "0", 0)->value &&
 			    l->action == RL_RUN && !precision)
 			{
 				vec3_t nd0;
@@ -3901,7 +3954,111 @@ no_hold:;
 				VectorSubtract(l->anchor, e->s.origin, wd);
 				wd[2] = 0.0f;
 				if (VectorLength(wd) > 48.0f)
+				{
 					VectorCopy(l->anchor, aim);
+					aim_is_anchor = true;
+				}
+			}
+
+			/*
+			 * PURE PURSUIT (sg_pursuit, wave 311+). The demo census
+			 * reconstructed the COMMANDED heading from the rune alone:
+			 * aiming at the next seed center churns 68-78 deg/s at a
+			 * 42-45%% reversal rate -- the whole of the Brownian walk,
+			 * before the fan or combat touch it -- because the target
+			 * sits a median 54-60 units out and jumps 3.2 times a
+			 * second. Where the chain is GEOMETRICALLY STRAIGHT the
+			 * body still turns 40 deg/s. The same reconstruction on a
+			 * point held 300 units down the chain reads 36-43 deg at
+			 * 29-31%%. The seed centers are beads on a road; steer at
+			 * the road. The cvar value IS the arc distance.
+			 */
+			if (gi.cvar("sg_pursuit", "0", 0)->value > 0.0f &&
+			    !aim_is_anchor && l->action == RL_RUN && !precision &&
+			    e->waterlevel < 2 && bot->hook_phase == 0 &&
+			    bot->rj_phase == 0)
+			{
+				vec3_t	chain[SG_PURSUIT_MAX];
+				float	look = gi.cvar("sg_pursuit", "0", 0)->value;
+				int		nchain = 0, cs = l->to, k;
+				float	acc = 0.0f;
+
+				VectorCopy(sg_rune->seeds[cs].origin, chain[nchain]);
+				nchain++;
+				while (nchain < SG_PURSUIT_MAX && acc < look)
+				{
+					int li5, nx5 = -1, nv5 = route_field[cs];
+					vec3_t sgd;
+
+					if (nv5 >= SG_FIELD_INF)
+						break;
+					for (li5 = sg_rune->first_link[cs]; li5 >= 0;
+					     li5 = sg_rune->next_link[li5])
+					{
+						rune_link_t *l5 = &sg_rune->links[li5];
+
+						/* plain runs only: jumps/ropes/drops are
+						 * geometry executed exactly, and a pursuit
+						 * point across a gap steers off the lip */
+						if (l5->action != RL_RUN)
+							continue;
+						/* a link whose proof had to ROUND something is
+						 * not a chord -- its anchor IS the route */
+						if (l5->anchor[0] != 0.0f ||
+						    l5->anchor[1] != 0.0f ||
+						    l5->anchor[2] != 0.0f)
+							continue;
+						if (route_field[l5->to] < nv5)
+						{
+							nv5 = route_field[l5->to];
+							nx5 = li5;
+						}
+					}
+					if (nx5 < 0)
+						break;
+					cs = sg_rune->links[nx5].to;
+					VectorCopy(sg_rune->seeds[cs].origin, chain[nchain]);
+					VectorSubtract(chain[nchain], chain[nchain - 1], sgd);
+					sgd[2] = 0.0f;
+					acc += VectorLength(sgd);
+					nchain++;
+				}
+
+				/*
+				 * THE CORNER GUARD. A chord held 300 units out crosses
+				 * whatever stands inside the bend. The fan's own
+				 * player-box trace, run to the pursuit point; if the box
+				 * does not fit, walk the point back down the chain a
+				 * vertex at a time. At k == 1 the point IS the seed
+				 * center -- the guard can only cost the improvement,
+				 * never the safety.
+				 */
+				for (k = nchain; k >= 1; k--)
+				{
+					vec3_t pp, pend;
+					trace_t ptr;
+
+					if (!SG_PursuitPoint(e->s.origin, chain, k, look, pp))
+						continue;
+					pend[0] = pp[0];
+					pend[1] = pp[1];
+					pend[2] = e->s.origin[2] + 8.0f;
+					ptr = gi.trace(e->s.origin, e->mins, e->maxs, pend,
+					               e, MASK_PLAYERSOLID);
+					/* a teammate is not terrain, and a door is not a
+					 * wall (the fan's two exceptions, same reasons) */
+					if (ptr.fraction < 1.0f && ptr.ent &&
+					    ((ptr.ent->client && !ptr.ent->deadflag) ||
+					     (ptr.ent->classname &&
+					      strncmp(ptr.ent->classname, "func_door",
+					              9) == 0)))
+						ptr.fraction = 1.0f;
+					if (ptr.fraction >= 1.0f)
+					{
+						VectorCopy(pp, aim);
+						break;
+					}
+				}
 			}
 			if (l->action == RL_JUMP && e->groundentity)
 			{
