@@ -134,7 +134,7 @@ WATERCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # (cvar value = probe distance; 0 = stock 160). Wave 270 census: carriers
 # 38% airtime / 177 u/s vs attackers 51% / 205 -- the conversion-wall role
 # is the most grounded one. Read: carrier airtime, carry speed, caps.
-CARRYHOP=("0" "0" "100" "100" "100" "100" "100" "100" "100" "0")
+CARRYHOP=("0" "0" "60" "60" "60" "60" "60" "60" "60" "0")
 # hunter flag-prior RE-TESTED under the current stack (269 dose 1, 270
 # dose 2) after the 213-215 null: return latency flat both waves, one
 # parity cap (269/s07) vs a 24-parity-steal 0-cap wave at dose 2 --
