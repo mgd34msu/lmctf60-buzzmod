@@ -62,7 +62,9 @@ ESCAPE=(0        0        0        0        0         0        0         0      
 # (2v2 census: dw stuck 131/138, zero caps in 16 waves)
 # duelroles NULL (285-299 pooled: 7 ON vs 10 OFF, zero caps both) --
 # the dw pin was not the binding constraint at duel density. Ledger.
-DUEL=(  0        0        0        0        0         0        0         0        0        0)
+# duel-roles ADOPTED wave 332 (aux verdict 7 caps to 0 over three
+# rounds -- the old null was the broken-carrier era's artifact)
+DUEL=(  1        1        0        0        0         0        0         0        0        0)
 # defense dwell A/B (286+): s05 ON vs s03 OFF (both have .dpo data);
 # landing-tick A/B (286+): s06 ON vs s07 OFF (farms feel it most --
 # read = touch_loss and relaunch rate from the serverrecord demos,
