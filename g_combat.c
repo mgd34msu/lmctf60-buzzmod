@@ -614,13 +614,14 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 
 			VectorSubtract(targ->s.origin, attacker->s.origin, dgv);
 			rng = VectorLength(dgv);
-			gi.dprintf("DMG %s>%s take=%d mod=%d fc=%d agnd=%d tgnd=%d rng=%.0f\n",
+			gi.dprintf("DMG %s>%s take=%d mod=%d fc=%d agnd=%d tgnd=%d rng=%.0f twl=%d\n",
 			           attacker->client->pers.netname,
 			           targ->client->pers.netname, take, mod,
 			           ((redflag && redflag->owner == targ) ||
 			            (blueflag && blueflag->owner == targ)),
 			           attacker->groundentity != NULL,
-			           targ->groundentity != NULL, rng);
+			           targ->groundentity != NULL, rng,
+			           targ->waterlevel);
 		}
 
 		if (attacker && attacker->client && attacker->client->rune)   //added by Vampire - if the attacker is this client
