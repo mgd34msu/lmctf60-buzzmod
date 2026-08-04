@@ -135,7 +135,13 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
     (
         (
             sleep 8
-            sleep 45   # botfill assembles the roster: 3s hysteresis per seat, 14 seats worst case
+            sleep 20   # instant initial fill: roster lands in seconds now
+            # the owner's ground truth: record two servers per wave --
+            # a parity game and the sentinel -- watchable for jank,
+            # parseable by the same gauges the human demos calibrated
+            if [ "$i" = "3" ] || [ "$i" = "9" ]; then
+                echo "serverrecord wave$NAME-${LABELS[$i]}"
+            fi
             sleep "$SECS"
             echo "quit"
         ) | (
