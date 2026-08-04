@@ -142,7 +142,7 @@ CARRYHOP=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # sighting (<3s) cost +cvar ms for the carrier only. DMG ledger 268-273:
 # rails are still the top carrier killer, from grounded shooters at
 # 135-415u. Read: rail share of carrier deaths, carry survival, caps.
-CARRYCOVER=("0" "0" "800" "800" "800" "800" "800" "800" "800" "0")
+CARRYCOVER=("0" "0" "1200" "1200" "1200" "1200" "1200" "1200" "1200" "0")
 # hunter flag-prior RE-TESTED under the current stack (269 dose 1, 270
 # dose 2) after the 213-215 null: return latency flat both waves, one
 # parity cap (269/s07) vs a 24-parity-steal 0-cap wave at dose 2 --
