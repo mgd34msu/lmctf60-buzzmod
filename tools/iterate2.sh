@@ -38,16 +38,19 @@ fi
 # same-map A/B pairs: s03/s04 (5v5 lmctf22, escape off/on) and s06/s07
 # (5v3 lmctf44 carry farms, escape on/off). Escape corpus is strongest on
 # lmctf22/lmctf44/mactf06/smap05 -- the test runs where the data lives.
-LABELS=(s01-2v2  s02-2v2  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v1)
-MAPS=(  lmctf03  lmctf03  lmctf22  lmctf22  mactf06   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
-FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:1")
-SECS=(  600      600      900      900      900       900      900       600      900      600)
+# 298: s08 becomes the defense-package OFF comparator on mactf06 --
+# s05's zero-conceded read was confounded by map identity (mactf06
+# concedes ~nothing regardless); the pair settles it. 7v7 shelved.
+LABELS=(s01-2v2  s02-2v2  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-5v5  s09-ctrl s10-5v1)
+MAPS=(  lmctf03  lmctf03  lmctf22  lmctf22  mactf06   lmctf44  lmctf44   mactf06  lmctf01  smap05)
+FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "5"      "5"      "5:1")
+SECS=(  600      600      900      900      900       900      900       900      900      600)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
 # trials on shared servers -- reads were cross-contaminated).
 # s03/s04: fandense dose-2 A/B (escape OFF both).
 # s06/s07: escape A/B alone (landtick OFF both).
 # s05: defpost+defreact together (defense package vs history).
-ESCAPE=(0        0        0        0        0         1        0         0        0        0)
+ESCAPE=(0        0        0        0        0         1        0         0        0        0)  # s08 escape stays 0
 # duel-roles A/B (285+): s01 ON s02 OFF -- breaks the size==2 dw=1 pin
 # (2v2 census: dw stuck 131/138, zero caps in 16 waves)
 DUEL=(  1        0        0        0        0         0        0         0        0        0)
@@ -77,7 +80,9 @@ FANDENSE=(0      0        0        0        0         0        0         0      
 # air-gain fix A/B (296+): s04 ON vs s03 OFF -- SG_Strafe derived its
 # air angle from wishspeed 300 against an engine that clamps air
 # wishspeed to 30 (pmove.c:382). Read: air_gain_med from botkin.
-AIRGAIN=(0       0        0        2        0         0        0         0        0        0)
+# airgain PARKED (296-297: negative at both doses -- the harvest turns
+# velocity off the route; needs view/path co-rotation, ledgered).
+AIRGAIN=(0       0        0        0        0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
