@@ -117,16 +117,49 @@ def parse_sound(r):
     if flags & 4: r.skip(6)         # position
 
 # ------------------------------------------------------------- temp entity
-# payload shapes by TE_ type (protocol 34, vanilla + lmctf usage)
+# payload shapes by TE_ type, verified against this game DLL's actual
+# gi.WriteByte/WritePosition/WriteDir/WriteShort call sites (not vanilla
+# id Software shapes -- this mod's source is the wire-format ground truth).
+# POS = WritePosition (3x s16, 6 bytes). DIR = WriteDir (1 byte, packed
+# lookup index). ENT = WriteShort (2 bytes).
+#
+# Verified call sites (2026-08-03 audit, lmctf60 g_*.c/p_*.c/plasma.c):
+#   0  TE_GUNSHOT             fire_lead: WritePosition+WriteDir      = POS+DIR (7)
+#   1  TE_BLOOD               SpawnDamage: WritePosition+WriteDir    = POS+DIR (7)
+#   2  TE_BLASTER             WritePosition+WriteDir                 = POS+DIR (7)
+#   3  TE_RAILTRAIL           WritePosition(start)+WritePosition(end)= POS+POS (12) -- was POS+DIR, wrong
+#   4  TE_SHOTGUN             fire_lead: WritePosition+WriteDir      = POS+DIR (7) -- was POS, wrong
+#   5  TE_EXPLOSION1          WritePosition only                     = POS (6)
+#   6  TE_EXPLOSION2          WritePosition only                     = POS (6)
+#   7  TE_ROCKET_EXPLOSION    WritePosition only                     = POS (6)
+#   8  TE_GRENADE_EXPLOSION   WritePosition only                     = POS (6)
+#   9  TE_SPARKS (te_sparks)  SpawnDamage: WritePosition+WriteDir    = POS+DIR (7) -- was POS, wrong
+#   10 TE_SPLASH              WriteByte(count)+WritePosition+WriteDir+WriteByte(color) = 1+POS+DIR+1 (9) -- was POS+DIR, wrong
+#   11 TE_BUBBLETRAIL         WritePosition(start)+WritePosition(end)= POS+POS (12) -- was POS+DIR, wrong
+#   12 TE_SCREEN_SPARKS       SpawnDamage(pa_te_type): POS+DIR       = POS+DIR (7)
+#   13 TE_SHIELD_SPARKS       SpawnDamage(pa_te_type): POS+DIR       = POS+DIR (7) -- was POS+POS, wrong
+#   14 TE_BULLET_SPARKS       SpawnDamage(te_sparks): POS+DIR        = POS+DIR (7) -- was POS, wrong
+#   15 TE_LASER_SPARKS        WriteByte(count)+WritePosition+WriteDir+WriteByte(skinnum) = 1+POS+DIR+1 (9) -- was ENT+POS+POS, wrong
+#   16 TE_PARASITE_ATTACK     monster-only, not reachable in ctf matches; shape unverified, left as-is
+#   17 TE_ROCKET_EXPLOSION_WATER  WritePosition only                 = POS (6) -- was POS+POS, wrong
+#   18 TE_GRENADE_EXPLOSION_WATER WritePosition only                 = POS (6) -- was POS+DIR, wrong
+#   19 TE_MEDIC_CABLE_ATTACK  monster-only, not reachable in ctf matches; shape unverified, left as-is
+#   20 TE_BFG_EXPLOSION       WritePosition only                     = POS (6) -- was POS+1, wrong
+#   21 TE_BFG_BIGEXPLOSION    WritePosition only                     = POS (6) -- was POS+POS, wrong
+#   22 TE_BOSSTPORT           monster-only, not reachable in ctf matches; shape unverified, left as-is
+#   23 TE_BFG_LASER           WritePosition(start)+WritePosition(end)= POS+POS (12)
+#   24 TE_GRAPPLE_CABLE       WriteShort(ent)+WritePosition x3 (start,end,offset) = ENT+POS+POS+POS (20) -- was ENT+2+POS+POS(16), wrong; this is the hook cable, fired constantly in hooktest demos
+#   25-33 not written anywhere in this game DLL against a literal TE_
+#         constant; left at prior best-guess vanilla shapes, unverified.
 def parse_temp_entity(r):
     t = r.u8()
     POS = 6; DIR = 1; ENT = 2
     shapes = {
-        0: POS+DIR, 1: POS+DIR, 2: POS+DIR, 3: POS+DIR, 4: POS,
-        5: POS, 6: POS, 7: POS, 8: POS, 9: POS, 10: POS+DIR, 11: POS+DIR,
-        12: POS+DIR, 13: POS+POS, 14: POS, 15: ENT+POS+POS, 16: ENT+POS+POS+POS,
-        17: POS+POS, 18: POS+DIR, 19: POS, 20: POS+1, 21: POS+POS,
-        22: POS+POS, 23: POS+POS, 24: ENT+2+POS+POS, 25: POS, 26: POS+DIR,
+        0: POS+DIR, 1: POS+DIR, 2: POS+DIR, 3: POS+POS, 4: POS+DIR,
+        5: POS, 6: POS, 7: POS, 8: POS, 9: POS+DIR, 10: 1+POS+DIR+1, 11: POS+POS,
+        12: POS+DIR, 13: POS+DIR, 14: POS+DIR, 15: 1+POS+DIR+1, 16: ENT+POS+POS+POS,
+        17: POS, 18: POS, 19: POS, 20: POS, 21: POS,
+        22: POS+POS, 23: POS+POS, 24: ENT+POS+POS+POS, 25: POS, 26: POS+DIR,
         27: POS+DIR, 28: POS, 29: POS, 30: POS+DIR, 31: POS, 32: POS,
         33: POS,
     }

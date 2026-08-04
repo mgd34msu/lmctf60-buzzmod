@@ -79,6 +79,28 @@ def parse_delta_entity_track(r, bits, org):
 
 
 def walk_entities(path, maxplayers=32):
+    """Auto-detects and decodes either of two on-disk .dm2 shapes:
+
+    1. Client demos (recorded by a playing/spectating client): svc_frame
+       carries frame+deltaframe+suppresscount+areabits, followed by a
+       separate svc_playerinfo and svc_packetentities per server frame --
+       the format every other tool in this file assumes.
+
+    2. Server demos (recorded via the `serverrecord` console command --
+       see SV_RecordDemoMessage in yquake2's src/server/sv_entities.c):
+       svc_frame carries ONLY a 4-byte framenum (no deltaframe/suppress/
+       areabits), immediately followed by svc_packetentities with NO
+       svc_playerinfo at all, entities always sent in full (delta'd
+       against an all-zero baseline every frame, never against the prior
+       frame), terminated the usual way, then the frame's accumulated
+       multicast traffic (temp entities, sounds, prints, ...) appended
+       raw with normal svc tags. The signon block (svc_serverdata +
+       configstrings) is unmodified vanilla shape; SV_ServerRecord_f
+       hardcodes playernum to -1 (0xffff) in that block, which is what
+       this function sniffs to pick the mode -- getting this wrong
+       desyncs almost every block (verified: <1% of blocks parsed clean
+       under the client-demo assumption on wave265-s04-5v5.dm2).
+    """
     data = open(path, 'rb').read()
     off = 0
     playernum = None
@@ -87,7 +109,20 @@ def walk_entities(path, maxplayers=32):
     ents = {}          # entnum -> [x, y, z] live state
     tracks = {}        # entnum -> list of (frame_idx, x, y, z)
     frame_idx = 0
+    svrecord = None    # None until block0 tells us which shape this is
     import re as _re
+
+    def parse_packetentities_track():
+        while True:
+            bits, num = D.parse_entity_bits(r)
+            if num == 0:
+                break
+            if bits & U_REMOVE:
+                ents.pop(num, None)
+                continue
+            o = ents.setdefault(num, [0.0, 0.0, 0.0])
+            parse_delta_entity_track(r, bits, o)
+
     while off + 4 <= len(data):
         (mlen,) = struct.unpack_from('<i', data, off)
         off += 4
@@ -100,6 +135,7 @@ def walk_entities(path, maxplayers=32):
                 svc = r.u8()
                 if svc == 12:
                     r.skip(9); r.str_(); playernum = r.u16(); r.str_()
+                    svrecord = (playernum == 0xffff)
                 elif svc == 13:
                     idx = r.u16()
                     sstr = r.str_()
@@ -114,20 +150,26 @@ def walk_entities(path, maxplayers=32):
                     o = ents.setdefault(num, [0.0, 0.0, 0.0])
                     parse_delta_entity_track(r, bits, o)
                 elif svc == 20:
-                    r.skip(9)
-                    ab = r.u8(); r.skip(ab)
+                    if svrecord:
+                        r.skip(4)                 # framenum only
+                        svc2 = r.u8()
+                        if svc2 != 18:
+                            raise ValueError(
+                                f"svrecord frame not followed by "
+                                f"packetentities (got {svc2})")
+                        parse_packetentities_track()
+                        frame_idx += 1
+                        for num, o in ents.items():
+                            if 1 <= num <= maxplayers:
+                                tracks.setdefault(num, []).append(
+                                    (frame_idx, o[0], o[1], o[2]))
+                    else:
+                        r.skip(9)
+                        ab = r.u8(); r.skip(ab)
                 elif svc == 17:
                     parse_playerstate_full(r, {})
                 elif svc == 18:
-                    while True:
-                        bits, num = D.parse_entity_bits(r)
-                        if num == 0:
-                            break
-                        if bits & U_REMOVE:
-                            ents.pop(num, None)
-                            continue
-                        o = ents.setdefault(num, [0.0, 0.0, 0.0])
-                        parse_delta_entity_track(r, bits, o)
+                    parse_packetentities_track()
                     frame_idx += 1
                     for num, o in ents.items():
                         if 1 <= num <= maxplayers:
@@ -144,7 +186,7 @@ def walk_entities(path, maxplayers=32):
         except Exception:
             continue
     return {'map': mapname, 'pov': playernum, 'skins': skins,
-            'tracks': tracks, 'frames': frame_idx}
+            'tracks': tracks, 'frames': frame_idx, 'svrecord': bool(svrecord)}
 
 
 if __name__ == '__main__':

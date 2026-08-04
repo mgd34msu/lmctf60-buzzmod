@@ -203,6 +203,17 @@ static int		*sg_field_blue;
 
 static unsigned char *sg_human_use; /* per-link human traffic tier (0-255)
                                      * from the demo corpus; NULL = none */
+static unsigned char *sg_def_post[2];  /* per-seed human defensive dwell
+                                        * tier by team (.dpo plane 0/1):
+                                        * where humans actually stand while
+                                        * their flag is home -- 19% of it
+                                        * within 250u of the stand, the
+                                        * rest on the approaches */
+static unsigned char *sg_def_icept[2]; /* per-seed steal-response END
+                                        * positions (.dpo plane 2/3): the
+                                        * spots humans run to when the
+                                        * flag leaves, aimed at the
+                                        * carrier's future, not his now */
 static unsigned char *sg_human_escape; /* the ESCAPEE's cut: only the flag
                                         * carrier's own entity trajectory in
                                         * the 20s after each steal (.hme) --
@@ -318,6 +329,40 @@ rune_t *Rune_Load(const char *mapname)
 				sg_human_escape = NULL;
 			else
 				gi.dprintf("rune: escape prior loaded (%s)\n", path);
+		}
+		fclose(f);
+	}
+	sg_def_post[0] = sg_def_post[1] = NULL;
+	sg_def_icept[0] = sg_def_icept[1] = NULL;
+	Com_sprintf(path, sizeof(path), "%s/maps/%s.dpo",
+	            gamedir->string[0] ? gamedir->string : ".", mapname);
+	f = fopen(path, "rb");
+	if (f)
+	{
+		int hh[4];
+
+		/* four per-seed planes: post tier red/blue, intercept tier
+		 * red/blue; validates on seed count, not links */
+		if (fread(hh, sizeof(int), 4, f) == 4 &&
+		    hh[0] == 0x314F5044 && hh[2] == r->hdr.num_seeds)
+		{
+			int ns = r->hdr.num_seeds, k, ok = 1;
+			unsigned char *planes[4];
+
+			for (k = 0; k < 4; k++)
+			{
+				planes[k] = gi.TagMalloc(ns, TAG_LEVEL);
+				if (fread(planes[k], 1, ns, f) != (size_t)ns)
+					ok = 0;
+			}
+			if (ok)
+			{
+				sg_def_post[0] = planes[0];
+				sg_def_post[1] = planes[1];
+				sg_def_icept[0] = planes[2];
+				sg_def_icept[1] = planes[3];
+				gi.dprintf("rune: defense prior loaded (%s)\n", path);
+			}
 		}
 		fclose(f);
 	}
@@ -2337,6 +2382,20 @@ rally_done:;
 			 * pricing. */
 			v -= 1.5f * gi.cvar("sg_flagprior", "0", 0)->value *
 			     (float)sg_human_live[li];
+
+		/*
+		 * DEFENSE DWELL (sg_defpost, wave 286+). The corpus inverted
+		 * the stand-freeze doctrine: only 19% of human defensive
+		 * standing time is within 250u of the stand -- humans post on
+		 * the APPROACHES. Cheap first cut per the extraction's own
+		 * sequencing: defenders price steps toward high-dwell seeds
+		 * cheaper (their team's plane), same idiom as every prior.
+		 */
+		if (sg_cur_role == SG_ROLE_DEFEND &&
+		    sg_def_post[team - 1] &&
+		    gi.cvar("sg_defpost", "0", 0)->value > 0)
+			v -= 1.5f * gi.cvar("sg_defpost", "0", 0)->value *
+			     (float)sg_def_post[team - 1][l->to];
 
 		/*
 		 * THE ESCAPE PRIOR (sg_escapeprior, wave 284+). The missing
