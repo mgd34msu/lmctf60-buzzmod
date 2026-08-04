@@ -130,13 +130,16 @@ LANDLEAD=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # rails pass through water -- the "advantage" was exploiting bot
 # defenders' swimmer-blindness, not human-grade play)
 WATERCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
-# flag-live prior, hunter-scoped (269+): while either flag is astray,
-# non-carrier roles price the corpus carry-window roads ~380ms cheaper
-# (dose = cvar value). Wave 214's carrier-coverage regression led to the
-# carrier exclusion in code; the hunter dose itself was never trialed.
-# Read: time-to-return after enemy steal, enemy-carrier kill latency.
-FLAGPRIOR=("0" "0" "2" "2" "2" "2" "2" "2" "2" "0")
-
+# carry-hop trial (271+): carriers hop with a shorter clear-ahead bar
+# (cvar value = probe distance; 0 = stock 160). Wave 270 census: carriers
+# 38% airtime / 177 u/s vs attackers 51% / 205 -- the conversion-wall role
+# is the most grounded one. Read: carrier airtime, carry speed, caps.
+CARRYHOP=("0" "0" "100" "100" "100" "100" "100" "100" "100" "0")
+# hunter flag-prior RE-TESTED under the current stack (269 dose 1, 270
+# dose 2) after the 213-215 null: return latency flat both waves, one
+# parity cap (269/s07) vs a 24-parity-steal 0-cap wave at dose 2 --
+# parked again, the ledger stands. (269-270 began as an unwitting
+# ledger repeat; the new-stack read is the salvage.)
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
         (
@@ -181,6 +184,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_landlead ${LANDLEAD[$i]}"
                 echo "set sg_watercarry ${WATERCARRY[$i]}"
                 echo "set sg_flagprior ${FLAGPRIOR[$i]}"
+                echo "set sg_carryhop ${CARRYHOP[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + SECS + 8 )) \

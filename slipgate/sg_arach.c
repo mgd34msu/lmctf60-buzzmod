@@ -4334,7 +4334,21 @@ no_hold:;
 			 * player-box trace the feelers use, run further out along the
 			 * heading that was chosen.
 			 */
-			VectorMA(e->s.origin, 160.0f, move_dir, probe);
+			/*
+			 * Carriers get a shorter clearance bar when sg_carryhop is
+			 * set (the trial value IS the distance): escape corridors
+			 * rarely offer 160 clear units, so the fleeing carrier --
+			 * the one role whose touch-loss decides games -- was the
+			 * role hopping least (wave 270 census: 38%% airtime vs the
+			 * attackers' 51%%).
+			 */
+			{
+				float hop_reach = 160.0f;
+				if (sg_cur_role == SG_ROLE_CARRY &&
+				    gi.cvar("sg_carryhop", "0", 0)->value > 0)
+					hop_reach = gi.cvar("sg_carryhop", "0", 0)->value;
+				VectorMA(e->s.origin, hop_reach, move_dir, probe);
+			}
 			probe[2] += 8.0f;
 			tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
 			              e, MASK_PLAYERSOLID);
