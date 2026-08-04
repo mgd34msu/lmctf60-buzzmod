@@ -123,14 +123,15 @@ APPCOVER=(0      0        200      0        0         200      0         0      
 # exit-escort A/B (319+): interpose dose 2 -- escorts occupy the exit
 # seed ahead of the carrier on its homeward field instead of the
 # unreachable midpoint. s03/s06 ON (dose 2), s04/s07 stock interpose.
-INTERDOSE=(0     0        2        0        0         2        0         0        0        0)
+INTERDOSE=(0     0        2        0        0         0        0         0        0        0)
 # owner's blend (321+): sg_smooth value = slew deg/s. s04 ON 240 vs
 # s03 OFF (5v5 pair, demos both) -- read: turn1hz/reversals/steals.
-SMOOTHDOSE=(0    0        0        240      0         0        0         0        0        0)
+# blend PARKED (321-322: ON worse both waves -- slew lag fights the fan)
+SMOOTHDOSE=(0    0        0        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
-TACTICS=(0       0        0        0        0         0        1         0        0        0)
+TACTICS=(0       0        0        0        0         1        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
