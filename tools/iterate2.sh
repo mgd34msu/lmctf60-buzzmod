@@ -46,7 +46,7 @@ fi
 # to 7v7 density coverage.
 LABELS=(s01-2v2  s02-2v2  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v1)
 MAPS=(  lmctf03  lmctf03  lmctf22  lmctf22  mactf06   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
-FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:1")
+FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:0")
 SECS=(  600      600      900      900      900       900      900       600      900      600)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
 # trials on shared servers -- reads were cross-contaminated).
