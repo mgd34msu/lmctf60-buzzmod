@@ -52,6 +52,10 @@ DUEL=(  1        0        0        0        0         0        0         0      
 # plus carrier speed).
 DEFPOST=(0       0        0        0        1         0        0         0        0        0)
 LANDTICK=(0      0        0        0        0         1        0         1        0        0)
+# link latch A/B (290+): s04 ON vs s03 OFF (5v5 pair, demos on s03) --
+# read = turn1hz/reversals/180s from botkin, plus steals as the cost
+# column. 700ms latch ~= the 1Hz surface refresh with margin.
+LINKLATCH=(0     0        0        700      0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -65,7 +69,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
     (
         (
             sleep 20
-            if [ "$i" = "2" ] || [ "$i" = "5" ] || [ "$i" = "6" ]; then
+            if [ "$i" = "2" ] || [ "$i" = "3" ] || [ "$i" = "5" ] || [ "$i" = "6" ]; then
                 echo "serverrecord wave$NAME-${LABELS[$i]}"
             fi
             sleep "${SECS[$i]}"
@@ -92,6 +96,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_duelroles ${DUEL[$i]}"
                 echo "set sg_defpost ${DEFPOST[$i]}"
                 echo "set sg_landtick ${LANDTICK[$i]}"
+                echo "set sg_linklatch ${LINKLATCH[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \

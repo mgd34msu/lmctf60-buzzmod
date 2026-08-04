@@ -157,6 +157,11 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
+	float		latch_until;    /* link latch: the incumbent holds its
+	                             * seat until this time unless beaten by
+	                             * 15% -- re-decision cadence matched to
+	                             * the surface's 1Hz refresh, not the
+	                             * 10Hz physics tick (sg_linklatch) */
 	float		runetoss_next;  /* rune handoff cadence (sg_runetoss) */
 	float		soundfire_next; /* speculative rocket cadence */
 	float		runeconv_until; /* courier window: converge on carrier */
@@ -1225,6 +1230,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	sg_role_t role;
 	int team, li, bestlink = -1;
 	float bestval;
+	float incumbent_v = 1e30f;
 	vec3_t want, d;
 	qboolean carrying;
 	static int intercept_field[SG_MAX_SEEDS];
@@ -2503,11 +2509,39 @@ rally_done:;
 		    gi.cvar("sg_sticky", "0", 0)->value)
 			v *= 0.85f;
 
+		if (li == bot->sticky_link)
+			incumbent_v = v;
+
 		if (v < bestval)
 		{
 			bestval = v;
 			bestlink = li;
 		}
+	}
+
+	/*
+	 * THE LINK LATCH (sg_linklatch, wave 289+). The demo census: 87
+	 * deg/s of heading noise, a 49% reversal rate, a full 180 every
+	 * nine seconds -- a 10Hz argmin flapping across noise-level ties
+	 * on a surface whose item terms refresh at 1Hz. The incumbent
+	 * keeps its seat for the cvar's milliseconds unless a challenger
+	 * beats it by 15%; a dead incumbent (infinite v, no longer offered
+	 * from this seed) abdicates immediately. This is the re-decision
+	 * cadence matched to the information's own refresh rate.
+	 */
+	if (gi.cvar("sg_linklatch", "0", 0)->value > 0 &&
+	    bestlink >= 0 && bot->sticky_link >= 0 &&
+	    bestlink != bot->sticky_link &&
+	    level.time < bot->latch_until &&
+	    incumbent_v < 1e29f &&
+	    bestval > incumbent_v * 0.85f)
+	{
+		bestlink = bot->sticky_link;
+	}
+	else if (bestlink != bot->sticky_link)
+	{
+		bot->latch_until = level.time +
+		    gi.cvar("sg_linklatch", "0", 0)->value / 1000.0f;
 	}
 	bot->sticky_link = bestlink;
 
