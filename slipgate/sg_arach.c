@@ -1527,29 +1527,31 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * (their believed position) joins the composition for non-carriers.
 	 */
 	if (role == SG_ROLE_CARRY || role == SG_ROLE_DEFEND)
+	{
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
 		                                    : sg_fields.to_blue_flag;
 
-	/*
-	 * FIELD-MODE DEFENSE (dose 3+, wave 307). The pricing bias (doses
-	 * 1-2) read null, as the extraction predicted: it bends wandering
-	 * instead of choosing a post. Field mode CHOOSES: the defender's
-	 * whole goal becomes the corpus's top post seed (the existing
-	 * near-goal hold then keeps it there), and while our flag is
-	 * astray the goal becomes the top intercept seed -- the human
-	 * response's END position, not the carrier's current one.
-	 */
-	if (role == SG_ROLE_DEFEND)
-	{
-		qboolean astray =
-		    (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY);
+		/*
+		 * FIELD-MODE DEFENSE (dose 3+, wave 307). The pricing bias (doses
+		 * 1-2) read null, as the extraction predicted: it bends wandering
+		 * instead of choosing a post. Field mode CHOOSES: the defender's
+		 * whole goal becomes the corpus's top post seed (the existing
+		 * near-goal hold then keeps it there), and while our flag is
+		 * astray the goal becomes the top intercept seed -- the human
+		 * response's END position, not the carrier's current one.
+		 */
+		if (role == SG_ROLE_DEFEND)
+		{
+			qboolean astray =
+			    (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY);
 
-		if (!astray && sg_fields.to_post[team - 1] &&
-		    gi.cvar("sg_defpost", "0", 0)->value >= 3)
-			goal_field = sg_fields.to_post[team - 1];
-		else if (astray && sg_fields.to_icept[team - 1] &&
-		         gi.cvar("sg_defreact", "0", 0)->value >= 3)
-			goal_field = sg_fields.to_icept[team - 1];
+			if (!astray && sg_fields.to_post[team - 1] &&
+			    gi.cvar("sg_defpost", "0", 0)->value >= 3)
+				goal_field = sg_fields.to_post[team - 1];
+			else if (astray && sg_fields.to_icept[team - 1] &&
+			         gi.cvar("sg_defreact", "0", 0)->value >= 3)
+				goal_field = sg_fields.to_icept[team - 1];
+		}
 	}
 	else if (role == SG_ROLE_RECOVER)
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag_now
