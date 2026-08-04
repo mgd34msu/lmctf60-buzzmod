@@ -4281,9 +4281,21 @@ no_hold:;
 			{
 				float score;
 
+				float reach = 96.0f;
+
+				/* dose 2: reach scales with speed -- a fixed 96u probe
+				 * at 400 u/s is 0.24s of warning, and the census's
+				 * full-speed wall bumps live exactly there */
+				if (gi.cvar("sg_fandense", "0", 0)->value >= 2)
+				{
+					float fsp = sqrtf(e->velocity[0] * e->velocity[0] +
+					                  e->velocity[1] * e->velocity[1]);
+					reach = 96.0f + (fsp > 274.0f ? (fsp - 274.0f) * 0.5f : 0.0f);
+					if (reach > 220.0f) reach = 220.0f;
+				}
 				try_yaw = (base_yaw + fan[k]) * M_PI / 180.0f;
 				fwd[0] = cosf(try_yaw); fwd[1] = sinf(try_yaw); fwd[2] = 0;
-				VectorMA(e->s.origin, 96.0f, fwd, probe);
+				VectorMA(e->s.origin, reach, fwd, probe);
 				probe[2] += 8.0f;
 				tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
 				              e, MASK_PLAYERSOLID);

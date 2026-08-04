@@ -42,7 +42,12 @@ LABELS=(s01-2v2  s02-2v2  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7
 MAPS=(  lmctf03  lmctf03  lmctf22  lmctf22  mactf06   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
 FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:1")
 SECS=(  600      600      900      900      900       900      900       600      900      600)
-ESCAPE=(0        0        0        1        1         1        0         1        0        0)
+# 295 relayout: ONE variable per pair (284-294 stacked escape+movement
+# trials on shared servers -- reads were cross-contaminated).
+# s03/s04: fandense dose-2 A/B (escape OFF both).
+# s06/s07: escape A/B alone (landtick OFF both).
+# s05: defpost+defreact together (defense package vs history).
+ESCAPE=(0        0        0        0        0         1        0         0        0        0)
 # duel-roles A/B (285+): s01 ON s02 OFF -- breaks the size==2 dw=1 pin
 # (2v2 census: dw stuck 131/138, zero caps in 16 waves)
 DUEL=(  1        0        0        0        0         0        0         0        0        0)
@@ -51,7 +56,8 @@ DUEL=(  1        0        0        0        0         0        0         0      
 # read = touch_loss and relaunch rate from the serverrecord demos,
 # plus carrier speed).
 DEFPOST=(0       0        0        0        1         0        0         0        0        0)
-LANDTICK=(0      0        0        0        0         1        0         1        0        0)
+DEFREACT=(0      0        0        0        1         0        0         0        0        0)
+LANDTICK=(0      0        0        0        0         0        0         0        0        0)
 # link latch A/B (290+): s04 ON vs s03 OFF (5v5 pair, demos on s03) --
 # read = turn1hz/reversals/180s from botkin, plus steals as the cost
 # column. 700ms latch ~= the 1Hz surface refresh with margin.
@@ -66,7 +72,7 @@ LINKLATCH=(0     0        0        0        0         0        0         0      
 # steals even) -- the 176 null stands, honestly measured this time.
 NOWEAVE=(0       0        0        0        0         0        0         0        0        0)
 # fan densify A/B (294+): s04 ON vs s03 OFF -- read = wallbumps_per_min
-FANDENSE=(0      0        0        1        0         0        0         0        0        0)
+FANDENSE=(0      0        0        2        0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -106,6 +112,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_escapeprior ${ESCAPE[$i]}"
                 echo "set sg_duelroles ${DUEL[$i]}"
                 echo "set sg_defpost ${DEFPOST[$i]}"
+                echo "set sg_defreact ${DEFREACT[$i]}"
                 echo "set sg_landtick ${LANDTICK[$i]}"
                 echo "set sg_linklatch ${LINKLATCH[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
