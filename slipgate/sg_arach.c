@@ -2427,6 +2427,23 @@ rally_done:;
 			     (float)sg_def_post[team - 1][l->to];
 
 		/*
+		 * DEFENSE INTERCEPT (sg_defreact, wave 295+). The response
+		 * census, n=1044: on a steal humans leave the post in 0.9s
+		 * and run the ESCAPE CORRIDOR toward where the carrier will
+		 * be -- aim-at-lead 0.48-0.68 vs aim-at-now ~0. Our defender
+		 * already chases the believed CURRENT position (the flag
+		 * field re-floods from it); this term bends that pursuit
+		 * toward the corpus's learned cut-off seeds while our flag
+		 * is astray. Direct chase is 8% of human responses.
+		 */
+		if (sg_cur_role == SG_ROLE_DEFEND &&
+		    sg_def_icept[team - 1] &&
+		    sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY &&
+		    gi.cvar("sg_defreact", "0", 0)->value > 0)
+			v -= 1.5f * gi.cvar("sg_defreact", "0", 0)->value *
+			     (float)sg_def_icept[team - 1][l->to];
+
+		/*
 		 * THE ESCAPE PRIOR (sg_escapeprior, wave 284+). The missing
 		 * corpus cut: .hml was POV-agnostic and therefore mostly the
 		 * HUNTERS' roads (re-tested null twice). This one is only the
