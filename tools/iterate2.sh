@@ -41,25 +41,34 @@ fi
 # 298: s08 becomes the defense-package OFF comparator on mactf06 --
 # s05's zero-conceded read was confounded by map identity (mactf06
 # concedes ~nothing regardless); the pair settles it. 7v7 shelved.
-LABELS=(s01-2v2  s02-2v2  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-5v5  s09-ctrl s10-5v1)
-MAPS=(  lmctf03  lmctf03  lmctf22  lmctf22  mactf06   lmctf44  lmctf44   mactf06  lmctf01  smap05)
-FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "5"      "5"      "5:1")
-SECS=(  600      600      900      900      900       900      900       900      900      600)
+# 301: defense A/B moves to the farms (they concede 1-7/wave -- the
+# sensitive instrument; mactf06 concedes nothing to anyone). s08 back
+# to 7v7 density coverage.
+LABELS=(s01-2v2  s02-2v2  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v1)
+MAPS=(  lmctf03  lmctf03  lmctf22  lmctf22  mactf06   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
+FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:1")
+SECS=(  600      600      900      900      900       900      900       600      900      600)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
 # trials on shared servers -- reads were cross-contaminated).
 # s03/s04: fandense dose-2 A/B (escape OFF both).
 # s06/s07: escape A/B alone (landtick OFF both).
 # s05: defpost+defreact together (defense package vs history).
-ESCAPE=(0        0        0        0        0         1        0         0        0        0)  # s08 escape stays 0
+# escape prior NULL on clean pairs (295-299: 16 ON vs 18 OFF). Ledger:
+# the contaminated-era 13v7 was noise. The corpus cut survives for
+# future re-derivation (windows were hunter-biased at the SEED level?
+# open question) but the flag is parked.
+ESCAPE=(0        0        0        0        0         0        0         0        0        0)
 # duel-roles A/B (285+): s01 ON s02 OFF -- breaks the size==2 dw=1 pin
 # (2v2 census: dw stuck 131/138, zero caps in 16 waves)
-DUEL=(  1        0        0        0        0         0        0         0        0        0)
+# duelroles NULL (285-299 pooled: 7 ON vs 10 OFF, zero caps both) --
+# the dw pin was not the binding constraint at duel density. Ledger.
+DUEL=(  0        0        0        0        0         0        0         0        0        0)
 # defense dwell A/B (286+): s05 ON vs s03 OFF (both have .dpo data);
 # landing-tick A/B (286+): s06 ON vs s07 OFF (farms feel it most --
 # read = touch_loss and relaunch rate from the serverrecord demos,
 # plus carrier speed).
-DEFPOST=(0       0        0        0        1         0        0         0        0        0)
-DEFREACT=(0      0        0        0        1         0        0         0        0        0)
+DEFPOST=(0       0        0        0        1         1        0         0        0        0)
+DEFREACT=(0      0        0        0        1         1        0         0        0        0)
 LANDTICK=(0      0        0        0        0         0        0         0        0        0)
 # link latch A/B (290+): s04 ON vs s03 OFF (5v5 pair, demos on s03) --
 # read = turn1hz/reversals/180s from botkin, plus steals as the cost
