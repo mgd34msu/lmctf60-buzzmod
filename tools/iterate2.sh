@@ -65,6 +65,9 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
     (
         (
             sleep 20
+            if [ "$i" = "2" ] || [ "$i" = "5" ] || [ "$i" = "6" ]; then
+                echo "serverrecord wave$NAME-${LABELS[$i]}"
+            fi
             sleep "${SECS[$i]}"
             echo "quit"
         ) | (
@@ -89,9 +92,6 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_duelroles ${DUEL[$i]}"
                 echo "set sg_defpost ${DEFPOST[$i]}"
                 echo "set sg_landtick ${LANDTICK[$i]}"
-                if [ "$i" = "2" ] || [ "$i" = "5" ] || [ "$i" = "6" ]; then
-                    echo "serverrecord wave$NAME-${LABELS[$i]}"
-                fi
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \
