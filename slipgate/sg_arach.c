@@ -2223,7 +2223,17 @@ rally_done:;
 		 */
 		else if (duel &&
 		         !(role == SG_ROLE_ATTACK &&
-		           gi.cvar("sg_press", "0", 0)->value))
+		           gi.cvar("sg_press", "0", 0)->value) &&
+		         /* CARRIER PRESS (sg_carrypress, wave 280+). The carry
+		          * traces (274-279): 61%% of carrier frames make no
+		          * homeward progress at ~190 u/s, and 48 of 49 carries
+		          * die before the route's final tenth -- the carrier
+		          * was still holding duel range against pursuers, the
+		          * receding behavior the press cured for attackers in
+		          * the only parity-cap A/B ever won. A fleeing carrier
+		          * has no business pricing weapon range: forward. */
+		         !(role == SG_ROLE_CARRY &&
+		           gi.cvar("sg_carrypress", "0", 0)->value))
 		{
 			/*
 			 * THE PRESS (sg_press, A/B wave 169+). The travel

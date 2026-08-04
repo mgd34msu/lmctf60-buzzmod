@@ -143,6 +143,10 @@ CARRYHOP=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # rails are still the top carrier killer, from grounded shooters at
 # 135-415u. Read: rail share of carrier deaths, carry survival, caps.
 CARRYCOVER=("0" "0" "800" "800" "800" "800" "800" "800" "800" "0")
+# carrier press trial (280+): the carrier stops duel-pricing entirely --
+# 61% of carrier frames made no homeward progress (274-279 traces); 48/49
+# carries died before the final tenth. Cover holds at 800 underneath.
+CARRYPRESS=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
 # hunter flag-prior RE-TESTED under the current stack (269 dose 1, 270
 # dose 2) after the 213-215 null: return latency flat both waves, one
 # parity cap (269/s07) vs a 24-parity-steal 0-cap wave at dose 2 --
@@ -194,6 +198,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_flagprior ${FLAGPRIOR[$i]}"
                 echo "set sg_carryhop ${CARRYHOP[$i]}"
                 echo "set sg_carrycover ${CARRYCOVER[$i]}"
+                echo "set sg_carrypress ${CARRYPRESS[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + SECS + 8 )) \
