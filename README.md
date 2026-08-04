@@ -3,6 +3,9 @@
 Quake II CTF mod. Fork of [QwazyWabbit's LMCTF](https://github.com/QwazyWabbitWOS/lmctf60)
 with persistent player stats.
 
+> **Note:** This mod is in active development and is likely not in working
+> condition at any given moment. Please be patient.
+
 ## Install
 
 Grab both files from [releases](https://github.com/mgd34msu/lmctf60-buzzmod/releases)
