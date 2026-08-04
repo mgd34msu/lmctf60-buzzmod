@@ -67,8 +67,8 @@ DUEL=(  0        0        0        0        0         0        0         0      
 # landing-tick A/B (286+): s06 ON vs s07 OFF (farms feel it most --
 # read = touch_loss and relaunch rate from the serverrecord demos,
 # plus carrier speed).
-DEFPOST=(0       0        0        0        1         2        0         0        0        0)
-DEFREACT=(0      0        0        0        1         2        0         0        0        0)
+DEFPOST=(0       0        0        0        3         3        0         0        0        0)
+DEFREACT=(0      0        0        0        3         3        0         0        0        0)
 LANDTICK=(0      0        0        0        0         0        0         0        0        0)
 # link latch A/B (290+): s04 ON vs s03 OFF (5v5 pair, demos on s03) --
 # read = turn1hz/reversals/180s from botkin, plus steals as the cost

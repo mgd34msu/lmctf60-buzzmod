@@ -219,6 +219,14 @@ static unsigned char *sg_def_icept[2]; /* per-seed steal-response END
                                         * spots humans run to when the
                                         * flag leaves, aimed at the
                                         * carrier's future, not his now */
+/* .dpo plane accessor for sg_fields (the arrays are file-static here) */
+unsigned char *SG_DefPlane(int post, int team1)
+{
+	if (team1 < 0 || team1 > 1)
+		return NULL;
+	return post ? sg_def_post[team1] : sg_def_icept[team1];
+}
+
 static unsigned char *sg_human_escape; /* the ESCAPEE's cut: only the flag
                                         * carrier's own entity trajectory in
                                         * the 20s after each steal (.hme) --
@@ -1458,6 +1466,28 @@ static void SG_BotThink(sg_bot_t *bot)
 	if (role == SG_ROLE_CARRY || role == SG_ROLE_DEFEND)
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
 		                                    : sg_fields.to_blue_flag;
+
+	/*
+	 * FIELD-MODE DEFENSE (dose 3+, wave 307). The pricing bias (doses
+	 * 1-2) read null, as the extraction predicted: it bends wandering
+	 * instead of choosing a post. Field mode CHOOSES: the defender's
+	 * whole goal becomes the corpus's top post seed (the existing
+	 * near-goal hold then keeps it there), and while our flag is
+	 * astray the goal becomes the top intercept seed -- the human
+	 * response's END position, not the carrier's current one.
+	 */
+	if (role == SG_ROLE_DEFEND)
+	{
+		qboolean astray =
+		    (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY);
+
+		if (!astray && sg_fields.to_post[team - 1] &&
+		    gi.cvar("sg_defpost", "0", 0)->value >= 3)
+			goal_field = sg_fields.to_post[team - 1];
+		else if (astray && sg_fields.to_icept[team - 1] &&
+		         gi.cvar("sg_defreact", "0", 0)->value >= 3)
+			goal_field = sg_fields.to_icept[team - 1];
+	}
 	else if (role == SG_ROLE_RECOVER)
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag_now
 		                                    : sg_fields.to_blue_flag_now;

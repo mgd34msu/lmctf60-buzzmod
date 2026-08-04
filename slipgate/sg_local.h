@@ -133,6 +133,8 @@ typedef struct
 	int		*item[SG_FIELD_CLASSES];
 	unsigned item_sig[SG_FIELD_CLASSES];
 	int		*our_carrier[2];                    /* support field, per team-1 */
+	int		*to_post[2];                        /* learned defensive post (.dpo) */
+	int		*to_icept[2];                       /* learned steal-intercept (.dpo) */
 
 	float	next_refresh;
 
@@ -258,3 +260,4 @@ typedef struct
 } sg_proj_t;
 
 extern sg_proj_t sg_caco_proj[2];
+unsigned char *SG_DefPlane(int post, int team1);

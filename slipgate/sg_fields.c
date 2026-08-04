@@ -685,6 +685,46 @@ qboolean Fields_Setup(rune_t *r)
 		           sg_fields.red_flag_seed, sg_fields.blue_flag_seed);
 	}
 
+	/*
+	 * Learned defensive fields (.dpo planes, wave 307+): flood from the
+	 * corpus's top post seed and top intercept seed per team. Missing
+	 * plane -> the team's own flag field, i.e. exactly today's behavior.
+	 */
+	{
+		int t, i;
+
+		for (t = 0; t < 2; t++)
+		{
+			int *own = t == 0 ? sg_fields.to_red_flag
+			                  : sg_fields.to_blue_flag;
+			unsigned char *pp = SG_DefPlane(1, t);
+			unsigned char *ip = SG_DefPlane(0, t);
+			int best;
+
+			sg_fields.to_post[t] = Field_Alloc(r);
+			best = -1;
+			if (pp)
+				for (i = 0; i < r->hdr.num_seeds; i++)
+					if (best < 0 || pp[i] > pp[best]) best = i;
+			if (best >= 0 && pp[best] > 0)
+				Field_FromOne(r, sg_fields.to_post[t], best);
+			else
+				memcpy(sg_fields.to_post[t], own,
+				       sizeof(int) * r->hdr.num_seeds);
+
+			sg_fields.to_icept[t] = Field_Alloc(r);
+			best = -1;
+			if (ip)
+				for (i = 0; i < r->hdr.num_seeds; i++)
+					if (best < 0 || ip[i] > ip[best]) best = i;
+			if (best >= 0 && ip[best] > 0)
+				Field_FromOne(r, sg_fields.to_icept[t], best);
+			else
+				memcpy(sg_fields.to_icept[t], own,
+				       sizeof(int) * r->hdr.num_seeds);
+		}
+	}
+
 	/* dropped-flag fields start as copies of the home fields */
 	sg_fields.to_red_flag_now = Field_Alloc(r);
 	sg_fields.to_blue_flag_now = Field_Alloc(r);
