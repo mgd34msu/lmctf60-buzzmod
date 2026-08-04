@@ -5026,6 +5026,49 @@ no_hold:;
 		if (bot->nade_phase == 2)
 		{
 			/*
+			 * THE BOMB LEADS THE LANDING (sg_nadelead, wave 309+). The
+			 * owner's doctrine already won this argument for rockets
+			 * (landlead, adopted 249): an airborne enemy is on a
+			 * committed arc. The cooked grenade is the same shot with
+			 * a better fuse -- while cooking, if the live enemy is in
+			 * the air, walk its parabola to the touchdown and put the
+			 * bomb THERE instead of at the danger book's historic
+			 * post. Ground targets keep the book (a runner outlives
+			 * the fuse; the eight nulled mechanisms all chased them).
+			 */
+			if (gi.cvar("sg_nadelead", "0", 0)->value)
+			{
+				edict_t *len9 = SG_CombatLiveEnemy(e);
+
+				if (len9 && !len9->groundentity)
+				{
+					vec3_t lp0, lp1;
+					trace_t lltr;
+					float ltt, lgrav = 800.0f;
+					int lseg;
+
+					VectorCopy(len9->s.origin, lp0);
+					for (lseg = 1; lseg <= 30; lseg++)
+					{
+						ltt = 0.05f * (float)lseg;
+						lp1[0] = len9->s.origin[0] + len9->velocity[0] * ltt;
+						lp1[1] = len9->s.origin[1] + len9->velocity[1] * ltt;
+						lp1[2] = len9->s.origin[2] + len9->velocity[2] * ltt
+						       - 0.5f * lgrav * ltt * ltt;
+						lltr = gi.trace(lp0, len9->mins, len9->maxs, lp1,
+						                len9, MASK_PLAYERSOLID);
+						if (lltr.fraction < 1.0f)
+						{
+							VectorCopy(lltr.endpos, bot->nade_at);
+							bot->nade_at[2] += 24.0f;
+							break;
+						}
+						VectorCopy(lp1, lp0);
+					}
+				}
+			}
+
+			/*
 			 * The bomb aims like the rope: solve the projectile. Throw
 			 * speed scales with cook (400 to 800 across the 3s timer;
 			 * our 1.3s cook gives ~575), gravity is the server's, and

@@ -96,6 +96,10 @@ AIRGAIN=(0       0        0        0        0         0        0         0      
 # targets and rails pierce water; read = DMG mod-11 kills on waterlevel
 # targets + steals. Water maps matter: lmctf22 has the canal.
 WETWORK=(1       1        1        1        1         1        1         1        0        0)
+# nadelead A/B (309+): s04 ON vs s03 OFF -- cooked grenade re-aims at
+# an airborne live enemy's touchdown while cooking (rocket landlead's
+# solver, better fuse). Read: NADEPOP proximity + grenade obituaries.
+NADELEAD=(0      0        0        1        0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -142,6 +146,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_fandense ${FANDENSE[$i]}"
                 echo "set sg_airgain ${AIRGAIN[$i]}"
                 echo "set sg_wetwork ${WETWORK[$i]}"
+                echo "set sg_nadelead ${NADELEAD[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \

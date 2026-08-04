@@ -107,6 +107,9 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
  */
 void SG_CombatPursuit(edict_t *self, qboolean allowed);
 
+/* the live enemy entity, or NULL (grenade landing-lead consumer) */
+edict_t *SG_CombatLiveEnemy(edict_t *self);
+
 /*
  * This bot's effective skill, times 100 -- 0 to 400, for telemetry that wants
  * an int. It is the bot_skill cvar clamped to a 0..4 team level, minus a fixed

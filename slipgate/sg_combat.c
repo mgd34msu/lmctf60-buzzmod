@@ -1865,6 +1865,29 @@ void SG_CombatAlert(edict_t *self, float expect_range)
 
 /* ------------------------------------------------------------- duel terms */
 
+/*
+ * The live target, for callers outside the combat file (the grenade
+ * lead wants the enemy's ENTITY -- velocity and box -- not a seed
+ * belief). NULL unless this bot re-sighted its enemy this frame-ish.
+ */
+edict_t *SG_CombatLiveEnemy(edict_t *self)
+{
+	sg_combat_state_t *st;
+	int idx = (int)(self->client - game.clients);
+	edict_t *en;
+
+	if (idx < 0 || idx >= SG_COMBAT_MAXCLIENTS)
+		return NULL;
+	st = &sg_combat[idx];
+	if (st->enemy <= 0)
+		return NULL;
+	en = g_edicts + st->enemy;
+	if (!en->inuse || !en->client || en->deadflag ||
+	    en->health <= 0)
+		return NULL;
+	return en;
+}
+
 void SG_CombatPursuit(edict_t *self, qboolean allowed)
 {
 	int ci;
