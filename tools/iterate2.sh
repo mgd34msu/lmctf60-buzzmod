@@ -119,7 +119,7 @@ PURSUITZ=(8      8        8        8        8         8        8         8      
 # attackers price steps visible to fresh sightings near the target
 # stand. Read: steals (should HOLD or rise -- covered approach means
 # arriving alive), carrier survival post-grab, early-kill share.
-APPCOVER=(0      0        400      0        0         400      0         0        0        0)
+APPCOVER=(0      0        200      0        0         200      0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
