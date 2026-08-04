@@ -131,7 +131,10 @@ SMOOTHDOSE=(0    0        0        0        0         0        0         0      
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
-TACTICS=(0       0        0        0        0         1        0         0        0        0)
+# tactics ADOPTED wave 327 (4-wave verdict 323-326: caps 9v3 on more
+# steals, led every wave). The owner's satisficing architecture -- the
+# largest doctrine effect ever measured here. s09 control stays clean.
+TACTICS=(1       1        1        1        1         1        1         1        0        1)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
