@@ -5368,6 +5368,20 @@ no_hold:;
 						           e->client->pers.netname);
 					goto hook_wait;
 				}
+				/* same hold for a teammate in the fire line: the bolt
+				 * dies on their body (hook_touch rejects teammates) --
+				 * ~57 wasted fires a wave. MASK_SHOT sees bodies where
+				 * the sky trace's MASK_SOLID cannot. */
+				str = gi.trace(seye, NULL, NULL, send, e, MASK_SHOT);
+				if (str.ent && str.ent->client &&
+				    str.ent->client->ctf.teamnum ==
+				    e->client->ctf.teamnum)
+				{
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("HOOKMATEHOLD %s\n",
+						           e->client->pers.netname);
+					goto hook_wait;
+				}
 			}
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
@@ -5489,6 +5503,19 @@ no_hold:;
 							bot->flow_release = true;
 							bot->hook_deadline = level.time + 1.4f;
 							bot->hookfail_streak = 0;
+							/*
+							 * THE FALL-THROUGH (found wave 285): without
+							 * this exit, control ran on into the release
+							 * chain below, which saw the rope this cut
+							 * just killed (hookstate 0), printed a false
+							 * "noattach", and reset hook_phase to 0 --
+							 * destroying the flow ride armed two lines
+							 * up. 91% of the noattach mass, ~3,200 rides
+							 * a wave, were the bots' BEST hooks being
+							 * reported as their failures and stripped of
+							 * the landing steer/pre-turn/brake.
+							 */
+							goto hook_wait;
 						}
 					}
 				}
@@ -5536,6 +5563,11 @@ no_hold:;
 					gi.dprintf("HOOKEND %s noattach\n",
 					           e->client->pers.netname);
 				bot->hook_phase = was_pulling ? 3 : 0;
+				/* this phase-3 entry is a plain rope cut, never a flow
+				 * release -- the flag used to stay latched from an
+				 * earlier wiped release and made ~1,000 rides a wave
+				 * take the apex cut and skip the landing brake */
+				bot->flow_release = false;
 				bot->hook_deadline = level.time + 1.0f;
 			}
 			}
