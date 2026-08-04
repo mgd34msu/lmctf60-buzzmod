@@ -1021,6 +1021,19 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 	if (speed2d < 1.0f)
 		return;
 
+	/*
+	 * THE AIR CAP (sg_airgain, wave 296+). PM_AirAccelerate clamps the
+	 * wishspeed IT uses to 30 (pmove.c:382) -- the whole strafe-jump
+	 * exploit lives in that clamp: the projection gate is v.wish < 30,
+	 * open at ANY speed for a wish pointed far enough off the velocity.
+	 * This derivation with wishspeed 300 computes an air angle for an
+	 * engine that does not exist; measured air gain ran NEGATIVE
+	 * (-0.8/100ms vs the pub human's +3.0). In air, derive from the
+	 * engine's real constant.
+	 */
+	if (accel < 5.0f && gi.cvar("sg_airgain", "0", 0)->value)
+		wishspeed = 30.0f;
+
 	accelspeed = accel * frametime * wishspeed;
 
 	/*

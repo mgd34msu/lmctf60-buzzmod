@@ -72,7 +72,12 @@ LINKLATCH=(0     0        0        0        0         0        0         0      
 # steals even) -- the 176 null stands, honestly measured this time.
 NOWEAVE=(0       0        0        0        0         0        0         0        0        0)
 # fan densify A/B (294+): s04 ON vs s03 OFF -- read = wallbumps_per_min
-FANDENSE=(0      0        0        2        0         0        0         0        0        0)
+# fandense NULL at both doses (294-295: bumps flat, dose-2 speed cost).
+FANDENSE=(0      0        0        0        0         0        0         0        0        0)
+# air-gain fix A/B (296+): s04 ON vs s03 OFF -- SG_Strafe derived its
+# air angle from wishspeed 300 against an engine that clamps air
+# wishspeed to 30 (pmove.c:382). Read: air_gain_med from botkin.
+AIRGAIN=(0       0        0        1        0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -117,6 +122,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_linklatch ${LINKLATCH[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"
+                echo "set sg_airgain ${AIRGAIN[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \
