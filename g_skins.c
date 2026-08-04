@@ -249,7 +249,12 @@ char *SkinRandom(edict_t *ent)
 		return skin;
 	}
 
-	i = rand() % i;
+	/* BUZZKILL - the uniform was a slot machine: rand() re-rolled the
+	 * variant on EVERY repaint, so a player's outfit changed each spawn
+	 * (SKIN telemetry: the same bot in rm6, rm1, rm3 within a game).
+	 * Keyed to the client slot instead: team-correct variety that stays
+	 * stable for as long as the player keeps the seat. */
+	i = (int)(ent - g_edicts - 1) % i;
 
 	sprintf(skin, "%s/%s", skinlist[teamnum][i][SKIN_MODELNAME],
 		skinlist[teamnum][i][SKIN_SKINNAME]);
