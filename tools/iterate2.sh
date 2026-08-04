@@ -77,7 +77,7 @@ FANDENSE=(0      0        0        0        0         0        0         0      
 # air-gain fix A/B (296+): s04 ON vs s03 OFF -- SG_Strafe derived its
 # air angle from wishspeed 300 against an engine that clamps air
 # wishspeed to 30 (pmove.c:382). Read: air_gain_med from botkin.
-AIRGAIN=(0       0        0        1        0         0        0         0        0        0)
+AIRGAIN=(0       0        0        2        0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every

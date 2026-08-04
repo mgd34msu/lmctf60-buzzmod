@@ -1036,6 +1036,12 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 
 	accelspeed = accel * frametime * wishspeed;
 
+	/* dose 1 read NEGATIVE (296): the honest ~84-degree air lean turns
+	 * the velocity off the route and the nav corrections eat more than
+	 * the harvest pays. Dose 2 caps the lean at ~40 degrees: partial
+	 * gain that stays roughly route-aligned. */
+	#define SG_AIRLEAN_CAP 0.70f
+
 	/*
 	 * Below wishspeed - accelspeed there is no angle to find: addspeed is
 	 * already saturated pointing straight down the route, so the input that
@@ -1060,6 +1066,11 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 	cross = vdir[0] * dir[1] - vdir[1] * dir[0];
 	if (cross < 0.0f)
 		th = -th;
+
+	if (accel < 5.0f &&
+	    gi.cvar("sg_airgain", "0", 0)->value >= 2 &&
+	    th > SG_AIRLEAN_CAP)
+		th = SG_AIRLEAN_CAP;
 
 	sn = sinf(th);
 	cs = cosf(th);
