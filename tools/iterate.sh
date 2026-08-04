@@ -135,7 +135,7 @@ WATERCARRY=("0" "0" "0" "0" "0" "0" "0" "0" "0" "0")
 # (dose = cvar value). Wave 214's carrier-coverage regression led to the
 # carrier exclusion in code; the hunter dose itself was never trialed.
 # Read: time-to-return after enemy steal, enemy-carrier kill latency.
-FLAGPRIOR=("0" "0" "1" "1" "1" "1" "1" "1" "1" "0")
+FLAGPRIOR=("0" "0" "2" "2" "2" "2" "2" "2" "2" "0")
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
