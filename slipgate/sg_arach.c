@@ -752,7 +752,24 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		if (size <= 1)
 			defenders_wanted = 0;
 		else if (size == 2)
-			defenders_wanted = 1;
+		{
+			/*
+			 * DUEL ROLES (sg_duelroles, wave 285+). The hardcoded 1
+			 * was a catch-22 the 268-283 census convicted: dw stuck
+			 * at 1 in 131/138 transitions, zero duel caps in 16
+			 * waves, while the statue defender sat p90=173u from
+			 * its post -- 2v2 could never push together because
+			 * dw=0 required already holding the flag. Under the
+			 * flag, duel teams run the same state machine as
+			 * everyone: theirs-astray pushes BOTH bots (they cannot
+			 * score while we hold theirs), ours-astray keeps the
+			 * watchman. Off, the old pin stands.
+			 */
+			if (gi.cvar("sg_duelroles", "0", 0)->value)
+				defenders_wanted = theirs_astray ? 0 : 1;
+			else
+				defenders_wanted = 1;
+		}
 		/* a live carrier on our side counts toward the defensive share */
 		if (own->client >= 0 && !ours_astray)
 			defenders_wanted--;
