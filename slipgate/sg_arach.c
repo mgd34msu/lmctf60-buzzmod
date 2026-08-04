@@ -1143,9 +1143,13 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		 * it frictionless (PMF_JUMP_HELD was already released the
 		 * frame after the previous hop, so the hold is armed).
 		 */
+		/* 240, not the ground gate's 270: touch-loss drops the landing
+		 * under 270 and disarms the very hold meant to prevent it --
+		 * air speed at arm time understates speed at the touchdown the
+		 * hold is FOR (wave 289-290 read: relaunches +45% where armed) */
 		if (gi.cvar("sg_landtick", "0", 0)->value &&
 		    run_link && open_ahead &&
-		    e->velocity[2] < 0.0f && sp > 270.0f)
+		    e->velocity[2] < 0.0f && sp > 240.0f)
 			cmd->upmove = 400;
 
 		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
