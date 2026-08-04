@@ -4481,7 +4481,8 @@ no_hold:;
 			view_yaw = ay;
 			view_pitch = ap;
 		}
-		else if (bot->seed >= 0)
+		else if (bot->seed >= 0 &&
+		         goal_field[bot->seed] >= SG_FIELD_INF)
 		{
 			/*
 			 * Off the known surface: the field is infinite here. The right
