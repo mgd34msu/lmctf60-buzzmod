@@ -3279,6 +3279,14 @@ rally_done:;
 	else if (level.time - bot->wedge_since > 15.0f &&
 	         !(role == SG_ROLE_DEFEND &&
 	           goal_field[bot->seed >= 0 ? bot->seed : 0] < 1500) &&
+	         /* A LIVE CARRIER IS NEVER SUICIDED (carry forensics, 791
+	          * episodes): 12 of the 19 parity carries that REACHED
+	          * within 300u of home ended as WEDGEKILL orbits at the
+	          * stand -- zero damage, no enemy inside 900u. The wedge
+	          * valve was executing the very carries everything else
+	          * exists to produce. The progress guard's shelf wipe is
+	          * the carrier's remedy; a death hands the flag back. */
+	         role != SG_ROLE_CARRY &&
 	         bot->rally_since <= 0.0f)
 	{
 		void Cmd_Kill_f(edict_t *ent);
@@ -4418,14 +4426,34 @@ no_hold:;
 			/* last resort: the goal itself, by belief */
 			edict_t *gf = NULL;
 
-			if (role == SG_ROLE_ATTACK)
+			/*
+			 * TERMINAL HOMING (carry forensics, wave 312): the carrier
+			 * at its own stand aims at the LIVE FLAG ITEM, not the
+			 * info_flag_* spawn marker. The two usually coincide --
+			 * but the item droptofloors and on several stands settles
+			 * offset enough that a bot walking exactly onto the marker
+			 * orbits 16u from the touch that scores (the 200-second
+			 * wedge orbits, 12 of 19 parity arrivals). The engine's
+			 * own redflag/blueflag pointers name the real entity.
+			 */
+			if (role == SG_ROLE_CARRY)
+			{
+				edict_t *own_item = (team == CTF_TEAM_RED) ? redflag
+				                                           : blueflag;
+
+				if (own_item && own_item->inuse &&
+				    !own_item->owner)
+					gf = own_item;
+			}
+
+			if (!gf && role == SG_ROLE_ATTACK)
 			{
 				/* enemy stand position is common knowledge */
 				gf = G_Find(NULL, FOFS(classname),
 				            (team == CTF_TEAM_RED) ? "info_flag_blue"
 				                                   : "info_flag_red");
 			}
-			else
+			else if (!gf)
 			{
 				gf = G_Find(NULL, FOFS(classname),
 				            (team == CTF_TEAM_RED) ? "info_flag_red"
