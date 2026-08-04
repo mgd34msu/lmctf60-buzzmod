@@ -1629,15 +1629,56 @@ static void SG_BotThink(sg_bot_t *bot)
 				{
 					static int interpose_field[SG_MAX_SEEDS];
 					vec3_t mid;
-					int ms, mc = 0;
+					int ms = -1, mc = 0;
 
-					VectorAdd(
-					    sg_rune->seeds[oc->seed].origin,
-					    sg_rune->seeds[
-					        sg_caco_enemies[team - 1][ts].seed].origin,
-					    mid);
-					VectorScale(mid, 0.5f, mid);
-					ms = Rune_NearestSeed(sg_rune, mid);
+					/*
+					 * EXIT ESCORT (sg_interpose dose 2, wave 319). The
+					 * forensics killed the midpoint: 6.8 INTERPOSE calls per
+					 * carry-second, 2% of kills with a teammate on the kill
+					 * line -- the midpoint of a carrier and a 269u threat is
+					 * INSIDE the duel, unreachable from the escort's median
+					 * 1131u start. Dose 2 occupies the EXIT: the seed a
+					 * fixed cost-lead AHEAD of the carrier on its homeward
+					 * field -- the door the carrier runs through next.
+					 */
+					if (gi.cvar("sg_interpose", "0", 0)->value >= 2)
+					{
+						int *cf = (team == CTF_TEAM_RED)
+						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
+						int cc = cf[oc->seed], s12;
+						int want_lo = cc - 2200, want_hi = cc - 900;
+						float bd12 = -1.0f;
+
+						for (s12 = 0; s12 < sg_rune->hdr.num_seeds &&
+						     s12 < SG_MAX_SEEDS; s12++)
+						{
+							vec3_t dd12;
+							float dl12;
+
+							if (cf[s12] >= SG_FIELD_INF ||
+							    cf[s12] < want_lo || cf[s12] > want_hi)
+								continue;
+							VectorSubtract(sg_rune->seeds[s12].origin,
+							    sg_rune->seeds[oc->seed].origin, dd12);
+							dl12 = VectorLength(dd12);
+							if (bd12 < 0.0f || dl12 < bd12)
+							{
+								bd12 = dl12;
+								ms = s12;
+							}
+						}
+					}
+
+					if (ms < 0)
+					{
+						VectorAdd(
+						    sg_rune->seeds[oc->seed].origin,
+						    sg_rune->seeds[
+						        sg_caco_enemies[team - 1][ts].seed].origin,
+						    mid);
+						VectorScale(mid, 0.5f, mid);
+						ms = Rune_NearestSeed(sg_rune, mid);
+					}
 					if (ms >= 0)
 					{
 						Field_Flood(sg_rune, interpose_field,

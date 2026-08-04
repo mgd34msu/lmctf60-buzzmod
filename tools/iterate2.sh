@@ -120,6 +120,10 @@ PURSUITZ=(8      8        8        8        8         8        8         8      
 # stand. Read: steals (should HOLD or rise -- covered approach means
 # arriving alive), carrier survival post-grab, early-kill share.
 APPCOVER=(0      0        200      0        0         200      0         0        0        0)
+# exit-escort A/B (319+): interpose dose 2 -- escorts occupy the exit
+# seed ahead of the carrier on its homeward field instead of the
+# unreachable midpoint. s03/s06 ON (dose 2), s04/s07 stock interpose.
+INTERDOSE=(0     0        2        0        0         2        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -148,7 +152,11 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sv_botfill \"${FILLS[$i]}\""
                 echo "set sg_strictgrab $A"
                 echo "set sg_press $A"
-                echo "set sg_interpose $A"
+                if [ "${INTERDOSE[$i]}" != "0" ]; then
+                    echo "set sg_interpose ${INTERDOSE[$i]}"
+                else
+                    echo "set sg_interpose $A"
+                fi
                 echo "set sg_scoop $A"
                 echo "set sg_preturn $A"
                 echo "set sg_flycook $A"
