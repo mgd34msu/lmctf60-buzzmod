@@ -39,6 +39,28 @@ void Observer_Start (edict_t *ent)
 	ent->s.modelindex = 0;
 	ent->client->ps.gunindex = 0;
 	ent->client->ps.pmove.pm_flags &= ~PMF_NO_PREDICTION;
+	/* BUZZKILL - the missing half of the conversion: the server flew
+	 * observers noclip while their CLIENT kept predicting a walking
+	 * body -- the divergence carried the camera out of any valid PVS
+	 * and the world rendered empty (the owner, live, wave 265).
+	 * Spectator physics on both ends, camera parked at a real spawn. */
+	ent->client->ps.pmove.pm_type = PM_SPECTATOR;
+	{
+		edict_t *sp = G_Find(NULL, FOFS(classname),
+		                     "info_player_deathmatch");
+
+		if (sp)
+		{
+			int k;
+
+			VectorCopy(sp->s.origin, ent->s.origin);
+			ent->s.origin[2] += 24;
+			for (k = 0; k < 3; k++)
+				ent->client->ps.pmove.origin[k] =
+				    (short)(ent->s.origin[k] * 8);
+			gi.linkentity(ent);
+		}
+	}
 
 	//surt
 	//your score set to 0 when you become observer
