@@ -110,8 +110,16 @@ RUNEDOSE=(0      0        2        2        2         2        2         0      
 # (50->38-42%), wallbumps as the corner-cut guard-rail, steals/caps.
 # 313: s04 becomes the honest OFF comparator (311 ran the 5v5 pair
 # ON/ON by mistake -- no contrast); pursuitz 18 lifts the stair veto.
-PURSUIT=(0       0        300      0        0         300      0         0        0        0)
-PURSUITZ=(8      8        18       8        8         18       8         8        8        8)
+# pursuit PARKED (311+313: chord active 92% of ticks, body grammar
+# unchanged 83.5v85.3 -- command-level fix real, body noise lives in
+# the fan/combat/hook layers; falsifiable prediction failed honestly).
+PURSUIT=(0       0        0        0        0         0        0         0        0        0)
+PURSUITZ=(8      8        8        8        8         8        8         8        8        8)
+# approach cover A/B (314+): s03 ON vs s04 OFF, s06 ON vs s07 OFF --
+# attackers price steps visible to fresh sightings near the target
+# stand. Read: steals (should HOLD or rise -- covered approach means
+# arriving alive), carrier survival post-grab, early-kill share.
+APPCOVER=(0      0        400      0        0         400      0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -165,6 +173,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_nadelead ${NADELEAD[$i]}"
                 echo "set sg_pursuit ${PURSUIT[$i]}"
                 echo "set sg_pursuitz ${PURSUITZ[$i]}"
+                echo "set sg_approachcover ${APPCOVER[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \

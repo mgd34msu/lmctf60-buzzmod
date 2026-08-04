@@ -2592,6 +2592,49 @@ rally_done:;
 			     (float)sg_human_escape[li];
 
 		/*
+		 * APPROACH COVER (sg_approachcover, wave 314+). The carry
+		 * forensics moved the fight: 90% of early carrier kills came
+		 * from defenders ALREADY PARKED within 1000u of the robbed
+		 * stand (81% there five seconds before), rail 47% from
+		 * grounded shooters at 237u -- and the nearest enemy is 210u
+		 * away at the grab. Cover bought after the grab arrives too
+		 * late; the line must be chosen on the way IN. Same trace,
+		 * same book as the carrier's, applied to the attacker against
+		 * every fresh eye sighting near the target stand.
+		 */
+		if (sg_cur_role == SG_ROLE_ATTACK &&
+		    gi.cvar("sg_approachcover", "0", 0)->value > 0)
+		{
+			int acs;
+
+			for (acs = 0; acs < SG_MAX_ENEMY_TRACK; acs++)
+			{
+				sg_belief_enemy_t *aen =
+				    &sg_caco_enemies[team - 1][acs];
+				vec3_t aeye, athr, aspan;
+				trace_t actr;
+
+				if (aen->client < 0 || aen->heard_only ||
+				    level.time - aen->seen_time > 4.0f ||
+				    aen->seed < 0)
+					continue;
+				VectorCopy(sg_rune->seeds[l->to].origin, aeye);
+				aeye[2] += 22.0f;
+				VectorCopy(sg_rune->seeds[aen->seed].origin, athr);
+				athr[2] += 22.0f;
+				VectorSubtract(athr, aeye, aspan);
+				if (VectorLength(aspan) > 900.0f)
+					continue;
+				actr = gi.trace(aeye, NULL, NULL, athr, e, MASK_SOLID);
+				if (actr.fraction >= 1.0f)
+				{
+					v += gi.cvar("sg_approachcover", "0", 0)->value;
+					break;  /* one exposure is enough to price */
+				}
+			}
+		}
+
+		/*
 		 * CARRIER COVER (sg_carrycover, wave 274+). The 268-273 DMG
 		 * ledger: rails are still the carrier's top killer (2998 dmg
 		 * to rocket-direct's 2317), fired mostly by GROUNDED defenders
