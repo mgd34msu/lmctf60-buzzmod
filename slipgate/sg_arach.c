@@ -2317,7 +2317,7 @@ rally_done:;
 			}
 			if (best_cs >= 0)
 			{
-				vec3_t	eye, thr;
+				vec3_t	eye, thr, span;
 				trace_t	ctr;
 
 				VectorCopy(sg_rune->seeds[l->to].origin, eye);
@@ -2325,9 +2325,17 @@ rally_done:;
 				VectorCopy(sg_rune->seeds[
 				    sg_caco_enemies[team - 1][best_cs].seed].origin, thr);
 				thr[2] += 22.0f;
-				ctr = gi.trace(eye, NULL, NULL, thr, e, MASK_SOLID);
-				if (ctr.fraction >= 1.0f)
-					v += gi.cvar("sg_carrycover", "0", 0)->value;
+				/* range gate (wave 279): the 268-277 ledger kills all
+				 * sit inside ~800u -- a sighting across the map must
+				 * not bend the route (dose 1200 showed the failure:
+				 * 53-second carries that never arrive). */
+				VectorSubtract(thr, eye, span);
+				if (VectorLength(span) < 900.0f)
+				{
+					ctr = gi.trace(eye, NULL, NULL, thr, e, MASK_SOLID);
+					if (ctr.fraction >= 1.0f)
+						v += gi.cvar("sg_carrycover", "0", 0)->value;
+				}
 			}
 		}
 
