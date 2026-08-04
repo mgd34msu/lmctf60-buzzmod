@@ -4246,10 +4246,22 @@ no_hold:;
 			 * the local gradient walk around a doorframe instead of into
 			 * it.
 			 */
-			for (k = 0; k < 9; k++)
+			/* sg_fandense (wave 294+): the census read a full-speed wall
+			 * bump every ~7 seconds, and the geometry that does it lives
+			 * in the 30-degree blind wedge between the fan's first rays.
+			 * Dense mode adds the 15s; the preference-decay ordering is
+			 * preserved (nearest the goal line first). */
 			{
-				static const float fan[9] = { 0, -30, 30, -60, 60, -100, 100,
-				                              -145, 145 };
+			static const float fan_dense[11] = { 0, -15, 15, -30, 30, -60,
+			                                     60, -100, 100, -145, 145 };
+			static const float fan_base[9]   = { 0, -30, 30, -60, 60, -100,
+			                                     100, -145, 145 };
+			const float *fan = gi.cvar("sg_fandense", "0", 0)->value
+			                   ? fan_dense : fan_base;
+			int fan_n = gi.cvar("sg_fandense", "0", 0)->value ? 11 : 9;
+
+			for (k = 0; k < fan_n; k++)
+			{
 				float score;
 
 				try_yaw = (base_yaw + fan[k]) * M_PI / 180.0f;
@@ -4347,6 +4359,7 @@ no_hold:;
 					bot->fan_side = 0;  /* goal line open: latch released */
 					break;
 				}
+			}
 			}
 			if (chosen_yaw != base_yaw)
 			{

@@ -62,7 +62,11 @@ LINKLATCH=(0     0        0        0        0         0        0         0      
 # the metronomic combat weave the #1 visible jank; sg_noweave is the
 # existing switch and botkin the honest instrument the old gauges never
 # were. Read: turn1hz/reversals/180s + steals as the cost column.
-NOWEAVE=(0       0        0        1        0         0        0         0        0        0)
+# noweave NULL on the demo instrument (292-293 pooled: turn metrics and
+# steals even) -- the 176 null stands, honestly measured this time.
+NOWEAVE=(0       0        0        0        0         0        0         0        0        0)
+# fan densify A/B (294+): s04 ON vs s03 OFF -- read = wallbumps_per_min
+FANDENSE=(0      0        0        1        0         0        0         0        0        0)
 
 # ------------------------------------------------------- doctrine flags
 # Adopted stack fleet-wide except s09 (the clean-control server: every
@@ -105,6 +109,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_landtick ${LANDTICK[$i]}"
                 echo "set sg_linklatch ${LINKLATCH[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
+                echo "set sg_fandense ${FANDENSE[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
                 timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \
