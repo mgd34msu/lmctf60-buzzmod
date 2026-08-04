@@ -2286,6 +2286,52 @@ rally_done:;
 			     (float)sg_human_live[li];
 
 		/*
+		 * CARRIER COVER (sg_carrycover, wave 274+). The 268-273 DMG
+		 * ledger: rails are still the carrier's top killer (2998 dmg
+		 * to rocket-direct's 2317), fired mostly by GROUNDED defenders
+		 * at 135-415 units -- standing shots down clear lines. A rail
+		 * needs line of sight; a human carrier buys cover with corners
+		 * the way this graph buys speed with links. For the carrier
+		 * only, while the team's freshest EYE sighting is under 3s
+		 * old, a candidate step the sighted enemy can see costs the
+		 * cvar's value in ms extra. One trace per candidate, against
+		 * the one sighting that matters most.
+		 */
+		if (sg_cur_role == SG_ROLE_CARRY &&
+		    gi.cvar("sg_carrycover", "0", 0)->value > 0)
+		{
+			int			cs, best_cs = -1;
+			float		best_t = -1.0f;
+
+			for (cs = 0; cs < SG_MAX_ENEMY_TRACK; cs++)
+			{
+				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][cs];
+
+				if (en->client >= 0 && !en->heard_only &&
+				    level.time - en->seen_time < 3.0f &&
+				    en->seen_time > best_t)
+				{
+					best_t = en->seen_time;
+					best_cs = cs;
+				}
+			}
+			if (best_cs >= 0)
+			{
+				vec3_t	eye, thr;
+				trace_t	ctr;
+
+				VectorCopy(sg_rune->seeds[l->to].origin, eye);
+				eye[2] += 22.0f;
+				VectorCopy(sg_rune->seeds[
+				    sg_caco_enemies[team - 1][best_cs].seed].origin, thr);
+				thr[2] += 22.0f;
+				ctr = gi.trace(eye, NULL, NULL, thr, e, MASK_SOLID);
+				if (ctr.fraction >= 1.0f)
+					v += gi.cvar("sg_carrycover", "0", 0)->value;
+			}
+		}
+
+		/*
 		 * THE SWITCHING COST (sg_sticky, A/B wave 168+). The owner's
 		 * diagnosis, measured: offense converts 1.6 ms of progress per
 		 * unit walked against the escort's 3.1 on the same maps -- half
