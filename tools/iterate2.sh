@@ -72,8 +72,11 @@ DUEL=(  1        1        0        0        0         0        0         0      
 # defense frontier re-trial (333+): field-mode on s03 vs s04 OFF --
 # the old null is void (measured on broken offense). Read: steals
 # CONCEDED on the pair (defense quality), caps as cost column.
-DEFPOST=(0       0        3        0        0         0        0         0        0        0)
-DEFREACT=(0      0        3        0        0         0        0         0        0        0)
+# defpost PARKED permanently (2x2: posts concede 28-30 vs 18-21 --
+# corpus posts pull defenders off the stand and bots punish it)
+DEFPOST=(0       0        0        0        0         0        0         0        0        0)
+# defreact ADOPTED fleet-wide wave 337 (react-only = fewest conceded)
+DEFREACT=(3      3        3        3        3         3        3         3        0        3)
 LANDTICK=(0      0        0        0        0         0        0         0        0        0)
 # link latch A/B (290+): s04 ON vs s03 OFF (5v5 pair, demos on s03) --
 # read = turn1hz/reversals/180s from botkin, plus steals as the cost
@@ -138,7 +141,9 @@ INTERDOSE=(0     0        0        0        0         0        0         0      
 # owner's blend (321+): sg_smooth value = slew deg/s. s04 ON 240 vs
 # s03 OFF (5v5 pair, demos both) -- read: turn1hz/reversals/steals.
 # blend PARKED (321-322: ON worse both waves -- slew lag fights the fan)
-SMOOTHDOSE=(0    0        0        0        0         0        0         0        0        0)
+# gentle-blend residue test (337+): 500 deg/s on s03 vs s04 OFF,
+# demos both -- only adopts if post-tactics jitter still shows
+SMOOTHDOSE=(0    0        500      0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
