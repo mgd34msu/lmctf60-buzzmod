@@ -204,10 +204,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     red_item_shield = 0;
     int     bfctest = 0;
     int     rfctest = 0;
-    char*   redfc = NULL;
-    char*   bluefc = NULL;
-    char*   red_runes = NULL;
-    char*   blue_runes = NULL;
+    /* BUZZKILL - never hand NULL to the formatter: glibc renders it as
+     * a literal "(null)" on every player's HUD (the owner's screenshot,
+     * wave 266 era). A dash is the honest empty. */
+    char*   redfc = "-";
+    char*   bluefc = "-";
+    char*   red_runes = "-";
+    char*   blue_runes = "-";
     int     red_rune_acc = 0;
     int     blue_rune_acc = 0;
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
