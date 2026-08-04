@@ -69,8 +69,11 @@ DUEL=(  1        1        0        0        0         0        0         0      
 # landing-tick A/B (286+): s06 ON vs s07 OFF (farms feel it most --
 # read = touch_loss and relaunch rate from the serverrecord demos,
 # plus carrier speed).
-DEFPOST=(0       0        0        0        3         3        0         0        0        0)
-DEFREACT=(0      0        0        0        3         3        0         0        0        0)
+# defense frontier re-trial (333+): field-mode on s03 vs s04 OFF --
+# the old null is void (measured on broken offense). Read: steals
+# CONCEDED on the pair (defense quality), caps as cost column.
+DEFPOST=(0       0        3        0        0         0        0         0        0        0)
+DEFREACT=(0      0        3        0        0         0        0         0        0        0)
 LANDTICK=(0      0        0        0        0         0        0         0        0        0)
 # link latch A/B (290+): s04 ON vs s03 OFF (5v5 pair, demos on s03) --
 # read = turn1hz/reversals/180s from botkin, plus steals as the cost
@@ -121,7 +124,8 @@ PURSUITZ=(8      8        8        8        8         8        8         8      
 # attackers price steps visible to fresh sightings near the target
 # stand. Read: steals (should HOLD or rise -- covered approach means
 # arriving alive), carrier survival post-grab, early-kill share.
-APPCOVER=(0      0        200      0        0         200      0         0        0        0)
+# appcover ADOPTED fleet-wide wave 333 (healthy-era reval 28v18 caps)
+APPCOVER=(200    200      200      200      200       200      200       200      0        200)
 # exit-escort A/B (319+): interpose dose 2 -- escorts occupy the exit
 # seed ahead of the carrier on its homeward field instead of the
 # unreachable midpoint. s03/s06 ON (dose 2), s04/s07 stock interpose.
