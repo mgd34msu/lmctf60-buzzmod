@@ -203,6 +203,12 @@ static int		*sg_field_blue;
 
 static unsigned char *sg_human_use; /* per-link human traffic tier (0-255)
                                      * from the demo corpus; NULL = none */
+static unsigned char *sg_human_escape; /* the ESCAPEE's cut: only the flag
+                                        * carrier's own entity trajectory in
+                                        * the 20s after each steal (.hme) --
+                                        * the roads humans actually flee on,
+                                        * as opposed to .hml's hunter-heavy
+                                        * POV-agnostic window */
 static unsigned char *sg_human_live; /* same, cut from the 20s windows
                                       * after a steal: how humans move
                                       * when a flag is OUT (.hml) */
@@ -292,6 +298,26 @@ rune_t *Rune_Load(const char *mapname)
 				sg_human_live = NULL;
 			else
 				gi.dprintf("rune: flag-live prior loaded (%s)\n", path);
+		}
+		fclose(f);
+	}
+	sg_human_escape = NULL;
+	Com_sprintf(path, sizeof(path), "%s/maps/%s.hme",
+	            gamedir->string[0] ? gamedir->string : ".", mapname);
+	f = fopen(path, "rb");
+	if (f)
+	{
+		int hh[4];
+
+		if (fread(hh, sizeof(int), 4, f) == 4 &&
+		    hh[0] == 0x484D4531 && hh[2] == r->hdr.num_links)
+		{
+			sg_human_escape = gi.TagMalloc(r->hdr.num_links, TAG_LEVEL);
+			if (fread(sg_human_escape, 1, r->hdr.num_links, f) !=
+			    (size_t)r->hdr.num_links)
+				sg_human_escape = NULL;
+			else
+				gi.dprintf("rune: escape prior loaded (%s)\n", path);
 		}
 		fclose(f);
 	}
@@ -2294,6 +2320,21 @@ rally_done:;
 			 * pricing. */
 			v -= 1.5f * gi.cvar("sg_flagprior", "0", 0)->value *
 			     (float)sg_human_live[li];
+
+		/*
+		 * THE ESCAPE PRIOR (sg_escapeprior, wave 284+). The missing
+		 * corpus cut: .hml was POV-agnostic and therefore mostly the
+		 * HUNTERS' roads (re-tested null twice). This one is only the
+		 * flag carrier's own entity trajectory in the 20s after each
+		 * steal -- the roads humans actually flee on. Applied to the
+		 * carry role alone; cvar value is the dose, same scale as the
+		 * other priors (1.5ms per tier point per dose).
+		 */
+		if (sg_human_escape &&
+		    sg_cur_role == SG_ROLE_CARRY &&
+		    gi.cvar("sg_escapeprior", "0", 0)->value > 0)
+			v -= 1.5f * gi.cvar("sg_escapeprior", "0", 0)->value *
+			     (float)sg_human_escape[li];
 
 		/*
 		 * CARRIER COVER (sg_carrycover, wave 274+). The 268-273 DMG
