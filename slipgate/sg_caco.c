@@ -1049,6 +1049,8 @@ static void Caco_RelayFlush(void)
  */
 sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
 
+static unsigned sg_ear_said;    /* EAR print sampler */
+
 /*
  * Which row of the sighting table this client gets: his own if he already
  * has one, else an empty one, else the stalest -- a full table forgets the
@@ -1259,7 +1261,10 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 
 		Caco_EnemyPlace(team - 1, ecl, seed, false, false);
 
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		/* sampled 1-in-32: wave 390 measured ~9k accepted events per
+		 * game on a busy server -- the ear works, the log need not
+		 * relive every footstep */
+		if (gi.cvar("sg_debug", "0", 0)->value && !(sg_ear_said++ & 31))
 			gi.dprintf("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
 			           "err<=%.0f seed=%i\n",
 			           b->client->pers.netname,

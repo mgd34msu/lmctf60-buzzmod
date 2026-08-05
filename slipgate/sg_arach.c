@@ -216,6 +216,8 @@ typedef struct sg_bot_s
 	int			exitasym_n;
 	qboolean	exitasym_armed;     /* this carry's coin, rolled once at the grab */
 	int			fake_ping;          /* synthetic ping base, rolled at join (owner: 5-15, near-local) */
+	int			prev_seed;          /* the seed most recently LEFT (sg_nobacktrack) */
+	float		prev_seed_time;
 	float		breather_until;     /* sg_breather: sub-max throttle window */
 	float		breather_next;      /* next roll of the breather dice */
 	float		plan_next;          /* sg_drawplan: next in-world plan draw */
@@ -2563,8 +2565,15 @@ rally_done:;
 	VectorSubtract(e->s.origin, bot->last_origin, d);
 	if (bot->seed < 0 || VectorLength(d) > 48.0f)
 	{
+		int was = bot->seed;
+
 		bot->seed = Rune_NearestSeed(sg_rune, e->s.origin);
 		VectorCopy(e->s.origin, bot->last_origin);
+		if (was >= 0 && bot->seed != was)
+		{
+			bot->prev_seed = was;
+			bot->prev_seed_time = level.time;
+		}
 	}
 	if (bot->seed < 0)
 	{
@@ -3190,6 +3199,21 @@ rally_done:;
 			v *= 1.0f + ((float)rj / 1023.0f - 0.5f) * 0.02f *
 			     gi.cvar("sg_routejitter", "0", 0)->value;
 		}
+
+		/*
+		 * NO IMMEDIATE BACKTRACK (sg_nobacktrack, wave 392 trial). The
+		 * smap05 map-center orbit -- and the chronic ~130 suicides a
+		 * wave behind it -- is two seeds on a field plateau electing
+		 * each other forever at full sprint. The latch (wave 385-390)
+		 * pooled null against it: holding a link longer does not help
+		 * when the flap is BETWEEN legs. This prices the one link that
+		 * returns to the seed just departed, for a few seconds, unless
+		 * pricing leaves no other finite way down. A human does turn
+		 * around sometimes; a human does not do-si-do.
+		 */
+		if (li >= 0 && sg_rune->links[li].to == bot->prev_seed &&
+		    level.time - bot->prev_seed_time < 3.0f)
+			v *= 1.0f + gi.cvar("sg_nobacktrack", "0", 0)->value / 100.0f;
 
 		/* EXIT-LANE ASYMMETRY (sg_exitasym). Humans tend to leave by a
 		 * different lane than they came in on, but not always -- a coin

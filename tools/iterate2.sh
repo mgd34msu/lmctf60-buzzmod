@@ -96,11 +96,15 @@ LANDTICK=(0      0        0        0        0         0        0         0      
 # been dark since tactics won the WAYPOINT-level verdict; this is the
 # LINK-level residue. 600ms = the field's own 1Hz refresh cadence, on the
 # A arms of the matched pairs; canaries and clean control untouched.
-# 389: s04 equalized to 600 so the mactf06 FILM pair (s03 vs s04) differs
-# ONLY in sg_breather -- wave 388 ran both variables on one pair, which
-# breaks the one-variable law; its film read is a first look, not pool.
-# Latch keeps its clean pair at s06/s07 plus the fleet suicide count.
-LINKLATCH=(600   0        600      600      600       600      0         600      0        0)
+# LATCH: NULL, retired (pooled 385-390 matched pairs 50 vs 53; wave
+# 385's 7v17 was noise). Ledgered with film. The orbit trap's real fix
+# is NOBACKTRACK below.
+LINKLATCH=(0     0        0        0        0         0        0         0        0        0)
+
+# 392 trial: the do-si-do killer. Prices the immediate-return link for
+# 3s after leaving a seed. s06 armed vs s07 control; metric = suicides
+# on the pair + the 5v0 canary's failed-carry count.
+NOBACKTRACK=(0   0        0        0        0         60       0         0        0        0)
 # weave A/B (292+): s04 no-weave vs s03 weave -- the demo census ranked
 # the metronomic combat weave the #1 visible jank; sg_noweave is the
 # existing switch and botkin the honest instrument the old gauges never
@@ -260,6 +264,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_defreact ${DEFREACT[$i]}"
                 echo "set sg_landtick ${LANDTICK[$i]}"
                 echo "set sg_linklatch ${LINKLATCH[$i]}"
+                echo "set sg_nobacktrack ${NOBACKTRACK[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"
                 echo "set sg_airgain ${AIRGAIN[$i]}"
