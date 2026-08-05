@@ -4,11 +4,11 @@
  * Quake II hands the game library a table of engine function pointers at load
  * time and the mod parks it in the global `gi`. SG_NetInstall runs once, on
  * the statement right after that store, takes a private verbatim copy of the
- * table, and then overwrites seventeen of the slots in `gi` with the
+ * table, and then overwrites nineteen of the slots in `gi` with the
  * functions below. Every one of them ends up calling through the private
  * copy. From that point on the entire mod -- not just bot code -- issues its
- * console prints, its network writes and its console-argument reads through
- * here.
+ * console prints, its network writes, its sounds and its console-argument
+ * reads through here.
  *
  * THE PREMISE. SLIPGATE bots are created inside the game library
  * (sg_arach.c, SG_AddBotTeam). The engine is never told. svs.clients[] has
@@ -31,15 +31,20 @@
  * one away" expressible. Read this buffer as a cancellation point, not as a
  * re-implementation of the engine's writers.
  *
- * WHAT IS DELIBERATELY NOT WRAPPED. dprintf, positioned_sound, configstring,
- * error, trace, pointcontents, inPVS, inPHS, SetAreaPortalState,
- * AreasConnected, linkentity, unlinkentity, BoxEdicts, Pmove, TagMalloc,
- * TagFree, FreeTags, cvar, cvar_set, cvar_forceset, AddCommandString,
- * DebugGraph, sound, modelindex, soundindex, imageindex and setmodel all
- * stay the engine's own. positioned_sound being unwrapped while sound is
- * unwrapped too is now consistent; neither is per-recipient (both resolve
- * through the engine's own client list, which contains no bots), so neither
- * needs a filter and adding one would only break audio for real players.
+ * THE TWO SOUND SLOTS ARE WRAPPED, BUT NOT FILTERED. sound and
+ * positioned_sound forward to the engine first and verbatim, and only then
+ * tell SG_NoteSound (sg_caco.c) that a noise happened. They are NOT
+ * per-recipient calls -- both resolve through the engine's own client list,
+ * which contains no bots -- so there is nothing here to suppress, and
+ * filtering them would only break audio for real players. The wrapper exists
+ * to give bots an ear on real sounds instead of on server-private player
+ * state; see the commentary over SG_NoteSound.
+ *
+ * WHAT IS DELIBERATELY NOT WRAPPED. dprintf, configstring, error, trace,
+ * pointcontents, inPVS, inPHS, SetAreaPortalState, AreasConnected,
+ * linkentity, unlinkentity, BoxEdicts, Pmove, TagMalloc, TagFree, FreeTags,
+ * cvar, cvar_set, cvar_forceset, AddCommandString, DebugGraph, modelindex,
+ * soundindex, imageindex and setmodel all stay the engine's own.
  *
  * The four index/setmodel slots used to be wrapped so a deleted third-party
  * bot library could keep a name for every registered asset. Those arrays had
@@ -72,9 +77,184 @@ static qboolean SG_IsEngineless(edict_t *ent)
 	return (ent->flags & FL_BOT) ? true : false;
 }
 
-/* ------------------------------------------------------- console prints */
+/* ---------------------------------------------------- the event recorder
+ *
+ * Everything the mod says to a client and every message it puts on the wire
+ * already passes through this file, so the cheapest honest record of "what
+ * did this server actually send, to whom, when" is a tap at the five points
+ * that finish those operations: the two flush points (SG_multicast,
+ * SG_unicast) and the three print paths.
+ *
+ * OFF BY DEFAULT and free when off. sg_eventlog gates it, and the gate is
+ * tested before any formatting happens -- in the suppressed print paths, which
+ * are the hot ones with bots on the server, a disabled recorder costs one
+ * pointer test and one float compare and the wrapper returns exactly as it did
+ * before. Nothing here can change what reaches a client: every call site
+ * records and then takes the same branch it always took, and the suppression
+ * and retraction semantics are untouched. A bot-bound unicast is still thrown
+ * away, and is recorded as DROPPED precisely because it was.
+ *
+ * File is per match: <sg_eventlog_dir or gamedir>/events-<map>-<frame>.log,
+ * opened on the first recorded event and closed at level change.
+ */
 
 #define SG_PRINT_MAX	2048    /* formatting scratch, bounded */
+
+static cvar_t	*sg_eventlog;       /* 0 = off, 1 = on */
+static cvar_t	*sg_eventlog_dir;   /* empty = the game directory */
+static FILE	*sg_ev_file;
+static qboolean	sg_ev_tried;        /* opened or failed already this level */
+static int	sg_ev_base;         /* frames elapsed before this level began */
+
+static qboolean SG_EvOn(void)
+{
+	if (!sg_eventlog)
+		sg_eventlog = sg_engine.cvar("sg_eventlog", "0", 0);
+	return sg_eventlog->value != 0.0f;
+}
+
+static void SG_EvOpen(void)
+{
+	char	path[MAX_QPATH * 3];
+	char	*dir;
+	char	*map;
+
+	sg_ev_tried = true;
+
+	if (!sg_eventlog_dir)
+		sg_eventlog_dir = sg_engine.cvar("sg_eventlog_dir", "", 0);
+
+	dir = sg_eventlog_dir->string;
+	if (!dir[0])
+	{
+		cvar_t *gamedir = sg_engine.cvar("gamedir", "", 0);
+
+		dir = gamedir->string[0] ? gamedir->string : ".";
+	}
+
+	map = level.mapname[0] ? level.mapname : "nomap";
+
+	snprintf(path, sizeof(path), "%s/events-%s-%i.log", dir, map, sg_ev_base);
+
+	sg_ev_file = fopen(path, "a");
+	if (!sg_ev_file)
+		sg_engine.dprintf("SG_Net: could not open event log %s\n", path);
+	else
+		sg_engine.dprintf("SG_Net: recording events to %s\n", path);
+}
+
+/*
+ * One record. Flushed per line on purpose: these servers are run under a
+ * kill-after timeout, so anything sitting in a stdio buffer at the end of a
+ * match is anything the match never gets to explain.
+ */
+static void SG_EvLine(char *recipient, char *kind, char *detail)
+{
+	if (!sg_ev_tried)
+		SG_EvOpen();
+	if (!sg_ev_file)
+		return;
+	fprintf(sg_ev_file, "%.2f %s %s %s\n", level.time, recipient, kind,
+	        detail);
+	fflush(sg_ev_file);
+}
+
+/* "<edict number>:<netname>" for one client, or a fixed word. */
+static char *SG_EvWho(edict_t *ent)
+{
+	static char buf[80];
+
+	if (!ent)
+		return "console";
+	if (!ent->client)
+		return "nonclient";
+
+	snprintf(buf, sizeof(buf), "%i:%s", (int)(ent - g_edicts),
+	         ent->client->pers.netname[0] ? ent->client->pers.netname : "?");
+	return buf;
+}
+
+/*
+ * Who a multicast actually reaches, resolved the way the engine resolves it:
+ * the connected clients, tested against the message's position with the same
+ * visibility set the multicast type names. Engine-less clients are left out
+ * because the engine's own multicast walks svs.clients, which has no entry for
+ * them -- a bot is not a recipient of anything, and a record that pretended
+ * otherwise would be the same fiction this layer exists to avoid.
+ */
+static char *SG_EvMulticastWho(vec3_t origin, multicast_t to)
+{
+	static char	buf[512];
+	int		i, len = 0, n = 0;
+	qboolean	usepvs, usephs;
+
+	if (to == MULTICAST_ALL || to == MULTICAST_ALL_R)
+		return "all";
+
+	usepvs = (to == MULTICAST_PVS || to == MULTICAST_PVS_R);
+	usephs = (to == MULTICAST_PHS || to == MULTICAST_PHS_R);
+
+	buf[0] = '\0';
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t	*e = g_edicts + 1 + i;
+		int	room, w;
+
+		if (!e->inuse || !e->client || !e->client->pers.connected)
+			continue;
+		if (SG_IsEngineless(e))
+			continue;
+		if (origin)
+		{
+			if (usepvs && !sg_engine.inPVS(origin, e->s.origin))
+				continue;
+			if (usephs && !sg_engine.inPHS(origin, e->s.origin))
+				continue;
+		}
+
+		/*
+		 * snprintf reports the length it WANTED, not the length it wrote, so
+		 * the return value is only safe to add to len after it has been shown
+		 * to have fit. On a short buffer, back out the partial entry and stop
+		 * with a whole list rather than a torn one.
+		 */
+		room = (int)sizeof(buf) - len;
+		w = snprintf(buf + len, (size_t)room, "%s%i:%s",
+		             n ? "," : "", (int)(e - g_edicts),
+		             e->client->pers.netname[0]
+		                 ? e->client->pers.netname : "?");
+		if (w < 0 || w >= room)
+		{
+			buf[len] = '\0';
+			break;
+		}
+		len += w;
+		n++;
+	}
+	if (!n)
+		return "none";
+	return buf;
+}
+
+/*
+ * A print, made safe to put on one whitespace-delimited line. The text is the
+ * last field, so interior spaces are fine; newlines and tabs are not.
+ */
+static char *SG_EvText(char *s)
+{
+	static char	buf[SG_PRINT_MAX];
+	int		i, n = 0;
+
+	for (i = 0; s[i] && n < (int)sizeof(buf) - 1; i++)
+		buf[n++] = (s[i] == '\n' || s[i] == '\r' || s[i] == '\t')
+		           ? ' ' : s[i];
+	while (n > 0 && buf[n - 1] == ' ')
+		n--;
+	buf[n] = '\0';
+	return buf;
+}
+
+/* ------------------------------------------------------- console prints */
 
 /*
  * All three print wrappers hand the engine the FINISHED text under a "%s",
@@ -98,35 +278,59 @@ static void SG_bprintf(int printlevel, char *fmt, ...)
 	vsnprintf(buf, sizeof(buf), fmt, argptr);
 	va_end(argptr);
 
+	if (SG_EvOn())
+		SG_EvLine("all", "bprint", SG_EvText(buf));
+
 	sg_engine.bprintf(printlevel, "%s", buf);
 }
 
+/*
+ * The two per-recipient print paths share a shape: when the recipient has no
+ * engine side, the wrapper returns without formatting -- unless the recorder
+ * is on, in which case the text has to be produced to be recorded, and the
+ * event is filed as DROPPED. Either way the engine is not called, which is
+ * the suppression this layer exists for.
+ */
 static void SG_cprintf(edict_t *ent, int printlevel, char *fmt, ...)
 {
-	char	buf[SG_PRINT_MAX];
-	va_list	argptr;
+	char		buf[SG_PRINT_MAX];
+	va_list		argptr;
+	qboolean	drop = SG_IsEngineless(ent);
 
-	if (SG_IsEngineless(ent))
+	if (drop && !SG_EvOn())
 		return;
 
 	va_start(argptr, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, argptr);
 	va_end(argptr);
+
+	if (SG_EvOn())
+		SG_EvLine(SG_EvWho(ent), drop ? "DROPPED" : "cprint",
+		          SG_EvText(buf));
+	if (drop)
+		return;
 
 	sg_engine.cprintf(ent, printlevel, "%s", buf);
 }
 
 static void SG_centerprintf(edict_t *ent, char *fmt, ...)
 {
-	char	buf[SG_PRINT_MAX];
-	va_list	argptr;
+	char		buf[SG_PRINT_MAX];
+	va_list		argptr;
+	qboolean	drop = SG_IsEngineless(ent);
 
-	if (SG_IsEngineless(ent))
+	if (drop && !SG_EvOn())
 		return;
 
 	va_start(argptr, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, argptr);
 	va_end(argptr);
+
+	if (SG_EvOn())
+		SG_EvLine(SG_EvWho(ent), drop ? "DROPPED" : "centerprint",
+		          SG_EvText(buf));
+	if (drop)
+		return;
 
 	sg_engine.centerprintf(ent, "%s", buf);
 }
@@ -183,6 +387,22 @@ static void SG_NetFlush(void)
 
 	for (i = 0; i < sg_netmsg_len; i++)
 		sg_engine.WriteByte(sg_netmsg[i]);
+}
+
+/* A staged binary message: the opcode it opens with, and how long it is. */
+static void SG_EvBinary(char *recipient, char *kind)
+{
+	char	op[16], size[16];
+
+	if (sg_netmsg_len <= 0)
+		return;
+	if (!kind)
+	{
+		snprintf(op, sizeof(op), "op%i", sg_netmsg[0]);
+		kind = op;
+	}
+	snprintf(size, sizeof(size), "%i", sg_netmsg_len);
+	SG_EvLine(recipient, kind, size);
 }
 
 /* ------------------------------------------------------------ the writers
@@ -400,9 +620,13 @@ static void SG_multicast(vec3_t origin, multicast_t to)
 {
 	if (sg_netmsg_over)
 	{
+		if (SG_EvOn())
+			SG_EvLine("-", "OVERFLOW", "multicast");
 		SG_NetReset();
 		return;
 	}
+	if (SG_EvOn())
+		SG_EvBinary(SG_EvMulticastWho(origin, to), NULL);
 	SG_NetFlush();
 	sg_engine.multicast(origin, to);
 	SG_NetReset();
@@ -420,15 +644,24 @@ static void SG_unicast(edict_t *ent, qboolean reliable)
 		 * showing-scores client every 32nd frame and again on every death
 		 * and intermission, so a print on this path is a print several times
 		 * a second per bot.
+		 *
+		 * The recorder is the one place that retraction becomes visible, and
+		 * it is a file rather than the console for exactly the reason above.
 		 */
+		if (SG_EvOn())
+			SG_EvBinary(SG_EvWho(ent), "DROPPED");
 		SG_NetReset();
 		return;
 	}
 	if (sg_netmsg_over)
 	{
+		if (SG_EvOn())
+			SG_EvLine(SG_EvWho(ent), "OVERFLOW", "unicast");
 		SG_NetReset();
 		return;
 	}
+	if (SG_EvOn())
+		SG_EvBinary(SG_EvWho(ent), NULL);
 	SG_NetFlush();
 	sg_engine.unicast(ent, reliable);
 	SG_NetReset();
@@ -568,6 +801,35 @@ void SG_BotClientCommand(int clientIndex, char *arg0, ...)
 	SG_ClearBotArgs();
 }
 
+/* --------------------------------------------------------------- sounds
+ *
+ * These two are pure taps and must stay that way. The engine is handed the
+ * call FIRST and verbatim -- same arguments, same order, same everything --
+ * so nothing about what a human client hears changes by a byte. Only after
+ * the sound is really on its way does the ear get told it happened.
+ *
+ * They are wrapped for one reason: a sound is the only honest evidence a bot
+ * has that something is going on where it cannot see. Reading a player's
+ * weaponstate to guess at it, which is what CACO used to do, is knowledge no
+ * player has and it arrived with an exactness no sound carries.
+ */
+
+static void SG_sound(edict_t *ent, int channel, int soundindex, float volume,
+                     float attenuation, float timeofs)
+{
+	sg_engine.sound(ent, channel, soundindex, volume, attenuation, timeofs);
+	SG_NoteSound(ent, NULL, channel, soundindex, volume, attenuation);
+}
+
+static void SG_positioned_sound(vec3_t origin, edict_t *ent, int channel,
+                                int soundindex, float volume,
+                                float attenuation, float timeofs)
+{
+	sg_engine.positioned_sound(origin, ent, channel, soundindex, volume,
+	                           attenuation, timeofs);
+	SG_NoteSound(ent, origin, channel, soundindex, volume, attenuation);
+}
+
 /* --------------------------------------------------- client slot handling */
 
 /*
@@ -643,6 +905,24 @@ void SG_FreeClientEdict(edict_t *ent)
 void SG_NetNewLevel(void)
 {
 	sg_char_said = sg_byte_said = sg_short_said = 0;
+
+	/*
+	 * SpawnEntities calls this BEFORE it clears `level`, so level.framenum
+	 * here is still the OUTGOING level's last frame. Accumulating it makes
+	 * sg_ev_base "frames since the server started", which is what tags the
+	 * next log file -- level.framenum itself restarts at zero every map and
+	 * would collide on every revisit.
+	 *
+	 * The file is closed here and opened lazily for the same ordering reason:
+	 * level.mapname does not name the new map until after this returns.
+	 */
+	sg_ev_base += level.framenum;
+	if (sg_ev_file)
+	{
+		fclose(sg_ev_file);
+		sg_ev_file = NULL;
+	}
+	sg_ev_tried = false;
 }
 
 /* --------------------------------------------------------- the install */
@@ -668,6 +948,9 @@ void SG_NetInstall(void)
 	gi.bprintf       = SG_bprintf;
 	gi.cprintf       = SG_cprintf;
 	gi.centerprintf  = SG_centerprintf;
+
+	gi.sound            = SG_sound;
+	gi.positioned_sound = SG_positioned_sound;
 
 	gi.multicast     = SG_multicast;
 	gi.unicast       = SG_unicast;

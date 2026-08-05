@@ -1020,8 +1020,9 @@ sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
  * Which row of the sighting table this client gets: his own if he already
  * has one, else an empty one, else the stalest -- a full table forgets the
  * oldest thing it knows, which is the one least likely to still be true.
- * Split out because the eye and the damage ring both write this table and
- * must agree on where; the eviction rule is not a thing to have two of.
+ * Split out because the eye, the ear and the damage ring all write this
+ * table and must agree on where; the eviction rule is not a thing to have
+ * three of.
  */
 static int Caco_EnemySlot(sg_belief_enemy_t *tab, int client)
 {
@@ -1044,10 +1045,44 @@ static int Caco_EnemySlot(sg_belief_enemy_t *tab, int client)
 }
 
 /*
+ * The shared writer over that slot rule, used by the eye
+ * (Caco_ScanEnemies, below) and the ear (SG_NoteSound, further down).
+ * `seen` is what separates the two callers: an eye entry is exact and
+ * carries the rune tell, an ear entry is a region and carries neither.
+ */
+static void Caco_EnemyPlace(int team1, int client, int seed, qboolean seen,
+                            qboolean runed)
+{
+	sg_belief_enemy_t *tab = sg_caco_enemies[team1];
+	int slot = Caco_EnemySlot(tab, client);
+
+	/* a fresh eye entry outranks an ear: don't degrade it */
+	if (!seen && tab[slot].client == client && !tab[slot].heard_only &&
+	    level.time - tab[slot].seen_time < 2.0f)
+		return;
+
+	tab[slot].client = client;
+	tab[slot].seed = seed;
+	tab[slot].seen_time = level.time;
+	tab[slot].heard_only = !seen;
+	if (seen)
+		tab[slot].runed = runed;
+}
+
+/*
  * Every enemy a teammate lays eyes on, not just carriers: the defender's
  * pre-spin and the rune-threat weighting both need "someone is out there
- * and roughly where". Upsert by client number; a full table evicts the
- * stalest sighting. The RF_GLOW test is the rune tell (p_view.c:792-794).
+ * and roughly where". The RF_GLOW test is the rune tell (p_view.c:792-794).
+ *
+ * EYES ONLY. This used to grow an "ear" here by polling two server-private
+ * fields -- client->weaponstate == WEAPON_FIRING and client->hookstate --
+ * and, when either was set inside the PHS, filing the enemy's EXACT origin
+ * as a heard_only belief. That was fabricated hearing twice over: it heard
+ * states rather than sounds (so it was deaf to every other noise a player
+ * makes, and it "heard" a held-down trigger continuously rather than per
+ * shot), and having no sound to measure it had no distance or volume to
+ * degrade the position with, so the ear was quietly as accurate as the eye.
+ * Hearing now enters through SG_NoteSound, off the real sound calls.
  */
 static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 {
@@ -1056,47 +1091,148 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 	for (i = 0; i < game.maxclients; i++)
 	{
 		edict_t *p = g_edicts + 1 + i;
-		sg_belief_enemy_t *tab = sg_caco_enemies[viewer_team - 1];
-		int slot;
-
-		qboolean seen, heard = false;
 
 		if (!p->inuse || !p->client || p->deadflag)
 			continue;
 		if (p->client->ctf.teamnum == viewer_team ||
 		    p->client->ctf.teamnum <= CTF_TEAM_UNDEFINED)
 			continue;
-		seen = Caco_Visible(viewer, p);
-		if (!seen)
-		{
-			/*
-			 * The ear. PHS is the engine's own "could a sound from there
-			 * reach here" set (gi.inPHS, game.h:112), and the loud states
-			 * are server-visible facts: a firing weapon (WEAPON_FIRING,
-			 * g_local.h:173) or a rope out. No sight line, but noise in
-			 * the PHS places the maker COARSELY -- enough to warn a post,
-			 * never to aim, which is what heard_only means downstream.
-			 */
-			if ((p->client->weaponstate == WEAPON_FIRING ||
-			     p->client->hookstate != 0) &&
-			    gi.inPHS(viewer->s.origin, p->s.origin))
-				heard = true;
-			if (!heard)
-				continue;
-		}
-
-		slot = Caco_EnemySlot(tab, i);
-		/* a fresh eye entry outranks an ear: don't degrade it */
-		if (!seen && tab[slot].client == i && !tab[slot].heard_only &&
-		    level.time - tab[slot].seen_time < 2.0f)
+		if (!Caco_Visible(viewer, p))
 			continue;
 
-		tab[slot].client = i;
-		tab[slot].seed = Rune_NearestSeed(r, p->s.origin);
-		tab[slot].seen_time = level.time;
-		tab[slot].heard_only = !seen;
-		if (seen)
-			tab[slot].runed = (p->s.renderfx & RF_GLOW) != 0;
+		Caco_EnemyPlace(viewer_team - 1, i, Rune_NearestSeed(r, p->s.origin),
+		                true, (p->s.renderfx & RF_GLOW) != 0);
+	}
+}
+
+/* ------------------------------------------------------------------- the ear
+ *
+ * Called from the sound wrappers in sg_net.c for every gi.sound and
+ * gi.positioned_sound the mod issues, AFTER the engine has been handed the
+ * call through unchanged. Nothing here touches the wire; this is a tap on a
+ * real event, which is the whole difference from what it replaces.
+ *
+ * WHAT A BOT IS ALLOWED TO LEARN. Two engine facts and nothing else: gi.inPHS,
+ * which is precisely "could a sound made there be heard here", and the
+ * attenuation the caller passed, which is what decides how far the sound
+ * actually carries for a human client. No server-private player state is read.
+ *
+ * THE RADII. Quake II's client mixes a sound at
+ * scale = 1 - (dist - SOUND_FULLVOLUME) * attenuation * 0.0005
+ * (snd_dma.c, S_SpatializeOrigin) with SOUND_FULLVOLUME 80, so a sound is
+ * inaudible past 80 + 2000/attenuation units:
+ *
+ *     ATTN_NONE   (0)  map-wide -- the engine sends it to every client
+ *     ATTN_NORM   (1)  2080u    -- weapons, pain, most of what matters
+ *     ATTN_IDLE   (2)  1080u    -- quieter incidentals
+ *     ATTN_STATIC (3)   746u    -- very short
+ *
+ * scaled by the volume the caller asked for, since a half-volume sound hits
+ * the same floor at half the distance. Past that radius the bot is not told.
+ * ATTN_NONE skips the PHS test as well as the radius, because the engine
+ * itself ignores both for a full-volume-everywhere sound.
+ *
+ * WHAT IT PLACES. A region, not a fix. The error grows with distance and
+ * shrinks with volume -- both through the same frac, the share of the audible
+ * radius the sound had to cross -- and the belief is snapped to the nearest
+ * rune seed of a point offset from the truth by up to frac * 300 units. A shot
+ * at the edge of hearing lands the enemy up to three hundred units from where
+ * they really are; a shot in the next room lands close. It is filed
+ * heard_only, which every consumer already reads as "warn a post, never aim"
+ * (sg_combat.c, sg_arach.c, sg_chat.c).
+ */
+
+#define SG_EAR_FULLVOL	80.0f       /* SOUND_FULLVOLUME */
+#define SG_EAR_SPAN	2000.0f     /* 1 / 0.0005, the client's distance slope */
+#define SG_EAR_SPREAD	300.0f      /* worst-case placement error, units */
+#define SG_EAR_MAPWIDE	2080.0f     /* ATTN_NONE has no falloff to measure
+                                     * against, so the ATTN_NORM radius is the
+                                     * yardstick for how vague it is */
+
+void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
+                  int soundindex, float volume, float attenuation)
+{
+	rune_t *r = SG_Rune();
+	vec3_t sorg;
+	int eteam, ecl, i;
+
+	if (!r)
+		return;                     /* no rune loaded: nowhere to place onto */
+	if (!emitter || !emitter->inuse || !emitter->client)
+		return;                     /* world noise names nobody */
+
+	eteam = emitter->client->ctf.teamnum;
+	if (eteam <= CTF_TEAM_UNDEFINED)
+		return;
+	if (volume <= 0.0f)
+		return;
+	if (volume > 1.0f)
+		volume = 1.0f;
+
+	if (origin_or_null)
+		VectorCopy(origin_or_null, sorg);
+	else
+		VectorCopy(emitter->s.origin, sorg);
+
+	ecl = (int)(emitter - g_edicts) - 1;
+	if (ecl < 0 || ecl >= game.maxclients)
+		return;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t *b = g_edicts + 1 + i;
+		vec3_t d, guess;
+		float dist, radius, frac;
+		int seed, team;
+
+		if (!b->inuse || !b->client || b->deadflag)
+			continue;
+		if (b == emitter)
+			continue;
+		if (!SG_OwnsBot(b))
+			continue;               /* only SLIPGATE bots listen through here */
+
+		team = b->client->ctf.teamnum;
+		if (team <= CTF_TEAM_UNDEFINED || team == eteam)
+			continue;               /* teammates are not tracked as enemies */
+
+		VectorSubtract(sorg, b->s.origin, d);
+		dist = VectorLength(d);
+
+		if (attenuation > 0.0f)
+		{
+			radius = (SG_EAR_FULLVOL + SG_EAR_SPAN / attenuation) * volume;
+			if (dist > radius)
+				continue;           /* out of earshot */
+			if (!gi.inPHS(b->s.origin, sorg))
+				continue;           /* no path for the sound to travel */
+		}
+		else
+		{
+			radius = SG_EAR_MAPWIDE;
+		}
+
+		frac = (radius > 0.0f) ? dist / radius : 1.0f;
+		if (frac > 1.0f)
+			frac = 1.0f;
+
+		guess[0] = sorg[0] + (float)crandom() * frac * SG_EAR_SPREAD;
+		guess[1] = sorg[1] + (float)crandom() * frac * SG_EAR_SPREAD;
+		guess[2] = sorg[2] + (float)crandom() * frac * SG_EAR_SPREAD;
+
+		seed = Rune_NearestSeed(r, guess);
+		if (seed < 0)
+			continue;
+
+		Caco_EnemyPlace(team - 1, ecl, seed, false, false);
+
+		if (gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
+			           "err<=%.0f seed=%i\n",
+			           b->client->pers.netname,
+			           emitter->client->pers.netname,
+			           soundindex, channel, dist, radius,
+			           frac * SG_EAR_SPREAD, seed);
 	}
 }
 

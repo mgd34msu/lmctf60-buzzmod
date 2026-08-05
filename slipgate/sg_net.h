@@ -42,6 +42,24 @@ void		SG_NetInstall(void);
 void		SG_NetNewLevel(void);
 
 /*
+ * The ear. Implemented in sg_caco.c and called from the gi.sound /
+ * gi.positioned_sound wrappers in sg_net.c once the engine has already been
+ * handed the call unchanged -- so this is a tap on a sound that really
+ * happened, never a substitute for one.
+ *
+ * `origin` is the explicit position a positioned_sound carried, or NULL when
+ * the sound belongs to the emitter's own origin. The remaining arguments are
+ * the caller's verbatim: they are what the ear measures audible range from,
+ * and passing anything else would make bots hear a different world than the
+ * one the humans on the server are listening to.
+ *
+ * Declared here rather than in sg_local.h because sg_net.c must not pull in
+ * SLIPGATE-internal types to make one call; every parameter is a base type.
+ */
+void		SG_NoteSound(edict_t *emitter, vec3_t origin, int channel,
+                             int soundindex, float volume, float attenuation);
+
+/*
  * Inject a console command on a client's behalf and run it through the
  * mod's own ClientCommand, the same entry point the engine uses when a
  * human types. Variadic: client index (0-based, edict 0 is the world),
