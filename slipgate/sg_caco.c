@@ -133,6 +133,39 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 
 	if (!gi.inPVS(eye, mid))
 		return false;
+
+	/*
+	 * BELIEF HAS EYES, NOT SONAR (census gap 11, both default off).
+	 * PVS+trace alone forms a sighting of a man directly behind the
+	 * viewer at any distance the map allows -- the legacy knowledge
+	 * system carried both an is-infront test and a range cap, and a
+	 * human's peripheral awareness has both too. sg_beliefcone is the
+	 * full cone width in degrees (0 = off; combat's own cone is 120 and
+	 * belief should stay wider); sg_beliefrange is a distance cap in
+	 * units (0 = off). A/B instruments: they make bots strictly worse,
+	 * so they ship dark until the film says the honesty is worth it.
+	 */
+	{
+		float cone = gi.cvar("sg_beliefcone", "0", 0)->value;
+		float range = gi.cvar("sg_beliefrange", "0", 0)->value;
+		vec3_t to;
+
+		VectorSubtract(mid, eye, to);
+		if (range > 0.0f && VectorLength(to) > range)
+			return false;
+		if (cone > 0.0f && viewer->client)
+		{
+			vec3_t fwd;
+			float d;
+
+			AngleVectors(viewer->client->v_angle, fwd, NULL, NULL);
+			VectorNormalize(to);
+			d = DotProduct(to, fwd);
+			if (d < cos(cone * 0.5f * M_PI / 180.0f))
+				return false;
+		}
+	}
+
 	tr = gi.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
