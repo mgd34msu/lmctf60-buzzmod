@@ -201,7 +201,10 @@ EXITASYM=(0      0        0        0        0         70       0         0      
 # throttle the biggest remaining tell. sg_breather = mean seconds of safe
 # travel between sub-max windows; s03 armed vs s04 control on the
 # mactf06 film pair.
-BREATHER=(0      0        8        0        0         0        0         0        0        0)
+# dose-response (390+): first blind read at 8 was marginal-correct --
+# rest structure appeared (a held 25s stop, doubled stopped-time) but
+# aggregate texture tied. 4 doubles the cadence; same 0.35 throttle.
+BREATHER=(0      0        4        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
