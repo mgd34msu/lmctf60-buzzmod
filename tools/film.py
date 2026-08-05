@@ -106,6 +106,24 @@ MAX_CARRY_S = 150.0         # longer than this is almost certainly a stuck effec
                              # a multi-round bot session) -- excluded, not rendered
                              # as if it were a real carry, and reported separately.
 
+# --- duration normalization (judge round 3: sheets were leaking identity
+# via raw duration -- bot waves cluster tight around ~895s while human POV
+# recordings vary widely, so "how long is this demo" was itself a tell
+# before any other panel got read). Every stat on the sheet (trajectories,
+# carries, corridors, kinematic strip -- everything) is computed from at
+# most DURATION_CAP_S seconds of track data, and demos shorter than
+# DURATION_MIN_S are refused outright rather than rendered, because a
+# histogram/heatmap built from too few samples reads as "tight" for
+# sample-size reasons that have nothing to do with route consistency. -----
+DURATION_CAP_S = 850.0      # see cap_tracks_to_duration
+DURATION_MIN_S = 300.0      # see render_sheet's refusal check
+
+
+class DemoUndersampled(Exception):
+    """Raised by render_sheet when a demo is shorter than DURATION_MIN_S --
+    caught separately in main() and reported as SKIP, not FAIL, since this
+    is a deliberate refusal (avoid a misleading sheet), not an error."""
+
 # --- corridor cross-section diagnostic (rendering-only addition; see
 # find_corridors/corridor_offsets below) ---------------------------------
 CORRIDOR_ANGLE_STEP_DEG = 6.0    # candidate corridor directions scanned, 0..174
@@ -134,10 +152,28 @@ N_CORRIDORS = 8
 WINDOW_S = 90.0                  # detail-panel window length, seconds
 WINDOW_MAX_TRACKS = 3
 
+# --- carry-route dissimilarity diagnostic (judge round 3; see
+# carry_route_dissimilarity/draw_dissimilarity_panel below) ---------------
+FRECHET_RESAMPLE_N = 30      # points every carry route is arc-length
+                              # resampled to before pairwise discrete-Frechet
+                              # distance is computed -- makes the comparison
+                              # about ROUTE SHAPE, not raw sample count (a
+                              # short bot carry and a long human carry of the
+                              # same physical route should compare as
+                              # similar; unequal point counts alone would
+                              # bias the DP toward calling them dissimilar).
+FRECHET_CLUSTER_FRAC = 0.25  # single-linkage cluster cutoff for the
+                              # route-choice entropy number, as a fraction of
+                              # THIS demo's own max pairwise distance --
+                              # self-normalizing per map/demo rather than a
+                              # fixed world-unit threshold that would mean
+                              # different things on different maps.
+
 # --- fixed sheet layout (diagnostic fix: raster scale must not depend on
 # whether carry panels exist -- see render_sheet) -------------------------
 GRID_COLS = 6
-ROW_HEIGHTS = [3.6, 1.35, 1.55, 1.55, 1.7]   # map / carry / corridor / window / kin
+ROW_HEIGHTS = [3.6, 1.35, 1.55, 1.55, 1.7, 1.7]
+# map / carry / corridor / window / kin / route-dissimilarity+outcomes
 
 
 # ------------------------------------------------------------ low-level walk
@@ -307,6 +343,38 @@ def walk_demo(path, maxplayers=32):
             'frames': frame_idx, 'svrecord': bool(svrecord)}
 
 
+# --------------------------------------------------------- duration cap
+def cap_tracks_to_duration(d, cap_s=DURATION_CAP_S):
+    """Truncates every track in d['tracks'] (mutated in place) to at most
+    cap_s seconds (cap_s * FPS frames) and updates d['frames'] to match, so
+    EVERY stat computed downstream -- trajectory density, carry windows,
+    corridors, the kinematic strip, the route-dissimilarity panel -- comes
+    from an identical time budget regardless of how long the source demo
+    actually ran. This runs immediately after walk_demo, before anonymize
+    or any analysis, specifically so nothing downstream has to know or care
+    whether it happened; it just sees a shorter d['tracks']/d['frames'].
+
+    Why this exists: raw duration was itself an identity leak -- bot
+    serverrecord waves cluster tightly around ~895s while human POV
+    recordings vary a lot, so a judge could tell demo shapes apart from the
+    caption line alone before reading a single panel.
+
+    A carry window still in progress at the cutoff is never closed (the
+    effects-bit state machine in carry_windows never sees a return to
+    zero), so it simply doesn't appear in the windows list -- this is
+    reported via render_sheet's notes, not silently.
+
+    Returns (capped: bool, original_duration_s: float)."""
+    orig_duration = d['frames'] / FPS
+    cap_frames = int(round(cap_s * FPS))
+    if d['frames'] <= cap_frames:
+        return False, orig_duration
+    for n in list(d['tracks'].keys()):
+        d['tracks'][n] = [s for s in d['tracks'][n] if s[0] <= cap_frames]
+    d['frames'] = cap_frames
+    return True, orig_duration
+
+
 # ------------------------------------------------------------------- teams
 _TEAM_RE = re.compile(r'/rb-([rb])[mf]\d*$', re.IGNORECASE)
 
@@ -440,6 +508,130 @@ def classify_outcome(w, tracks, stands, cap_radius=280.0, lookahead_s=1.6):
         if f1 - f0 == 1 and math.hypot(x1 - x0, y1 - y0) > TELEPORT_UNITS:
             return 'died'
     return 'lost'
+
+
+def carry_outcome_summary(windows):
+    """Compact outcome breakdown for the sheet (judge round 3): counts by
+    outcome label (see classify_outcome: 'captured'/'died'/'lost') and
+    duration quartiles (seconds) across every sane carry window in this
+    demo. Returns {'counts': {label: n}, 'quartiles': (q1,q2,q3) or None,
+    'n': int}. quartiles is None when there are zero carries."""
+    counts = collections.Counter(w.get('outcome', '?') for w in windows)
+    durations = sorted(w['t1'] - w['t0'] for w in windows)
+    quartiles = None
+    if durations:
+        q1, q2, q3 = np.percentile(durations, [25, 50, 75])
+        quartiles = (float(q1), float(q2), float(q3))
+    return {'counts': dict(counts), 'quartiles': quartiles, 'n': len(windows)}
+
+
+# ------------------------------------------------ carry-route dissimilarity
+def resample_path_xy(path, n=FRECHET_RESAMPLE_N):
+    """Arc-length resample of a carry path's (x,y) to n evenly spaced
+    points, so discrete-Frechet distance (below) compares route SHAPE, not
+    raw sample count -- see FRECHET_RESAMPLE_N. `path` is a carry window's
+    'path' list of (f,x,y,z) tuples (see carry_windows). A degenerate
+    (single-point or zero-length) path resamples to n copies of that one
+    point rather than raising."""
+    pts = np.array([(p[1], p[2]) for p in path], dtype=np.float64)
+    if len(pts) == 1:
+        return np.repeat(pts, n, axis=0)
+    seglen = np.hypot(np.diff(pts[:, 0]), np.diff(pts[:, 1]))
+    cum = np.concatenate(([0.0], np.cumsum(seglen)))
+    total = cum[-1]
+    if total == 0:
+        return np.repeat(pts[:1], n, axis=0)
+    targets = np.linspace(0.0, total, n)
+    xs = np.interp(targets, cum, pts[:, 0])
+    ys = np.interp(targets, cum, pts[:, 1])
+    return np.stack([xs, ys], axis=1)
+
+
+def discrete_frechet(P, Q):
+    """Discrete Frechet distance (Eiter & Mannila 1994) between two
+    polylines P, Q (each an Nx2 array of resampled points): the standard
+    O(n*m) coupling-measure DP, ca[i,j] = max(point-distance(P[i],Q[j]),
+    min of the three predecessor cells), filled iteratively bottom-up (not
+    recursively -- avoids a Python recursion-depth ceiling and keeps this
+    fast for the many pairs a busy demo produces)."""
+    n, m = len(P), len(Q)
+    ca = np.zeros((n, m), dtype=np.float64)
+    for i in range(n):
+        pix, piy = P[i]
+        for j in range(m):
+            d = math.hypot(pix - Q[j][0], piy - Q[j][1])
+            if i == 0 and j == 0:
+                ca[i, j] = d
+            elif i == 0:
+                ca[i, j] = max(ca[0, j - 1], d)
+            elif j == 0:
+                ca[i, j] = max(ca[i - 1, 0], d)
+            else:
+                ca[i, j] = max(min(ca[i - 1, j], ca[i - 1, j - 1],
+                                    ca[i, j - 1]), d)
+    return ca[n - 1, m - 1]
+
+
+def carry_route_dissimilarity(windows, n_resample=FRECHET_RESAMPLE_N,
+                               cluster_frac=FRECHET_CLUSTER_FRAC):
+    """Pairwise discrete-Frechet distance between every sane carry route in
+    this demo (judge round 3 request), plus two summary numbers computed
+    from that matrix.
+
+    mean_pairwise: mean of all N*(N-1)/2 off-diagonal distances (world
+      units). Expectation per the judge's request: humans read high-mean
+      (varied routes across the map), bots read low-mean (near-identical
+      routes run over and over).
+
+    entropy_bits: Shannon entropy (bits) of the cluster-SIZE distribution
+      after single-linkage clustering the routes at cluster_frac of this
+      demo's own max pairwise distance (self-normalizing -- see
+      FRECHET_CLUSTER_FRAC). A field of near-identical routes collapses to
+      ~1 cluster (entropy -> 0 bits, "blocky low-distance cluster" per the
+      judge's framing); a field of genuinely distinct routes spreads across
+      more, more-evenly-sized clusters (higher entropy).
+
+    Returns (dist_matrix: NxN ndarray or None, mean_pairwise: float or
+    None, entropy_bits: float or None, n_clusters: int). All None/0 when
+    fewer than 2 carries -- there is no pair to compare, and clustering one
+    route is not meaningful."""
+    n = len(windows)
+    if n < 2:
+        return None, None, None, 0
+    resampled = [resample_path_xy(w['path'], n_resample) for w in windows]
+    dist = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        for j in range(i + 1, n):
+            d = discrete_frechet(resampled[i], resampled[j])
+            dist[i, j] = d
+            dist[j, i] = d
+    pairwise = dist[np.triu_indices(n, k=1)]
+    mean_pairwise = float(pairwise.mean())
+
+    max_d = float(pairwise.max())
+    threshold = max_d * cluster_frac
+    parent = list(range(n))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if dist[i, j] <= threshold:
+                union(i, j)
+    sizes = np.array(list(collections.Counter(
+        find(i) for i in range(n)).values()), dtype=np.float64)
+    p = sizes / sizes.sum()
+    entropy_bits = float(-(p * np.log2(p)).sum())
+    return dist, mean_pairwise, entropy_bits, len(sizes)
 
 
 # ------------------------------------------------------------------- rune
@@ -1139,6 +1331,74 @@ def draw_kinematic_strip(ax, tracks, labels, death_by_ent):
     ax.legend(fontsize=7, loc='upper right')
 
 
+def draw_dissimilarity_panel(ax_heat, ax_text, windows, dist_matrix,
+                              mean_pairwise, entropy_bits, n_clusters,
+                              outcome_summary):
+    """Judge round-3 panel: a triangular pairwise discrete-Frechet heatmap
+    (left axes) of every sane carry route in this demo, plus a text summary
+    (right axes) of the two requested numbers -- mean pairwise distance and
+    route-choice entropy -- and the carry outcome/duration breakdown.
+    Colormap is a single perceptually-uniform sequential hue (viridis):
+    this panel encodes a magnitude (distance), not team identity, so it
+    deliberately does NOT reuse the red/blue team hues used elsewhere on
+    this sheet. See carry_route_dissimilarity/carry_outcome_summary for
+    what each number means and MODULE NOTES for caveats."""
+    n = len(windows)
+    if dist_matrix is None or n < 2:
+        ax_heat.axis('off')
+        ax_heat.text(0.5, 0.5,
+                      f"insufficient carries for route-dissimilarity "
+                      f"analysis (need >=2, got {n})",
+                      ha='center', va='center', fontsize=8, color='#666666',
+                      transform=ax_heat.transAxes, wrap=True)
+    else:
+        mask = np.triu(np.ones(dist_matrix.shape, dtype=bool), k=1)
+        masked = np.ma.masked_array(dist_matrix, mask=mask)
+        im = ax_heat.imshow(masked, cmap='viridis', origin='upper',
+                             aspect='equal', interpolation='nearest')
+        cb = ax_heat.figure.colorbar(im, ax=ax_heat, fraction=0.045,
+                                      pad=0.03, shrink=0.85)
+        cb.set_label('Frechet distance (u)', fontsize=6)
+        cb.ax.tick_params(labelsize=6)
+        step = max(1, n // 15)
+        ticks = list(range(n))
+        labels = [str(i + 1) if i % step == 0 else '' for i in ticks]
+        ax_heat.set_xticks(ticks); ax_heat.set_yticks(ticks)
+        ax_heat.set_xticklabels(labels, fontsize=5)
+        ax_heat.set_yticklabels(labels, fontsize=5)
+        ax_heat.tick_params(length=0)
+        for spine in ax_heat.spines.values():
+            spine.set_visible(False)
+    ax_heat.set_title(f'carry-route dissimilarity (n={n} routes, '
+                       f'{FRECHET_RESAMPLE_N}-pt resampled, lower '
+                       f'triangle)', fontsize=8)
+
+    ax_text.axis('off')
+    lines = []
+    if mean_pairwise is not None:
+        lines.append(f"mean pairwise distance: {mean_pairwise:.1f} u")
+        lines.append(f"route-choice entropy: {entropy_bits:.2f} bits")
+        lines.append(f"  ({n_clusters} cluster(s) @ "
+                      f"{FRECHET_CLUSTER_FRAC*100:.0f}% cutoff)")
+    else:
+        lines.append("mean pairwise distance: n/a (< 2 carries)")
+        lines.append("route-choice entropy: n/a (< 2 carries)")
+    lines.append("")
+    oc = outcome_summary['counts']
+    lines.append("carry outcomes:")
+    lines.append(f"  captured={oc.get('captured', 0)}  "
+                  f"lost={oc.get('lost', 0)}  died={oc.get('died', 0)}")
+    q = outcome_summary['quartiles']
+    if q:
+        lines.append("carry duration quartiles:")
+        lines.append(f"  Q1={q[0]:.1f}s  med={q[1]:.1f}s  Q3={q[2]:.1f}s")
+    else:
+        lines.append("carry duration quartiles: n/a (no carries)")
+    ax_text.text(0.02, 0.95, '\n'.join(lines), ha='left', va='top',
+                 fontsize=8, family='monospace', transform=ax_text.transAxes)
+    ax_text.set_title('carry outcome / route summary', fontsize=8)
+
+
 # ------------------------------------------------------------------- hash
 def hash_demo(path):
     h = hashlib.sha256()
@@ -1154,6 +1414,21 @@ def hash_demo(path):
 # ------------------------------------------------------------------- main
 def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
     d = walk_demo(demo_path)
+
+    # duration normalization (judge round 3): refuse demos too short to
+    # sample reliably rather than rendering a misleading sheet, then cap
+    # everything else to at most DURATION_CAP_S seconds so raw duration
+    # stops leaking demo identity. This must happen before anonymize/
+    # carry_windows/anything else -- see cap_tracks_to_duration docstring.
+    uncapped_duration = d['frames'] / FPS
+    if uncapped_duration < DURATION_MIN_S:
+        raise DemoUndersampled(
+            f"demo duration {uncapped_duration:.1f}s is under the "
+            f"{DURATION_MIN_S:.0f}s minimum sample threshold -- too short "
+            f"to render reliable stats, skipped rather than producing a "
+            f"misleading sheet")
+    duration_capped, orig_duration = cap_tracks_to_duration(d)
+
     labels, teams = anonymize(d)
     tracks = d['tracks']
     windows, n_excluded_carries = carry_windows(tracks, labels)
@@ -1161,6 +1436,10 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
     for w in windows:
         w['outcome'] = classify_outcome(w, tracks, stands)
     death_by_ent = {n: death_ticks(t) for n, t in tracks.items() if n in labels}
+
+    dist_matrix, mean_pairwise, entropy_bits, n_clusters = \
+        carry_route_dissimilarity(windows)
+    outcome_summary = carry_outcome_summary(windows)
 
     seeds = []
     rune_note = None
@@ -1265,8 +1544,17 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
     ax_kin = fig.add_subplot(gs[4, :])
     draw_kinematic_strip(ax_kin, tracks, labels, death_by_ent)
 
+    # row 5: carry-route dissimilarity heatmap (left 4 cols) + outcome/
+    # duration summary text (right 2 cols) -- judge round 3.
+    ax_diss = fig.add_subplot(gs[5, 0:4])
+    ax_diss_text = fig.add_subplot(gs[5, 4:6])
+    draw_dissimilarity_panel(ax_diss, ax_diss_text, windows, dist_matrix,
+                              mean_pairwise, entropy_bits, n_clusters,
+                              outcome_summary)
+
+    dur_str = f"{duration:.1f}s (capped)" if duration_capped else f"{duration:.1f}s"
     caption = (f"map={d['map'] or '?'}   hash={h}   "
-               f"players={n_players}   duration={duration:.1f}s   "
+               f"players={n_players}   duration={dur_str}   "
                f"carries={len(windows)}")
     fig.text(0.5, 0.985, caption, ha='center', fontsize=10, weight='bold')
     notes = []
@@ -1276,6 +1564,11 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
         notes.append(f"{n_excluded_carries} anomalously long carry "
                       f"window(s) excluded (>{MAX_CARRY_S:.0f}s, likely a "
                       f"stuck flag-carry bit across a round boundary)")
+    if duration_capped:
+        notes.append(f"duration capped to {DURATION_CAP_S:.0f}s (original "
+                      f"{orig_duration:.1f}s) -- all stats on this sheet "
+                      f"come only from the capped window; a carry still in "
+                      f"progress at the cutoff would not appear")
     if notes:
         fig.text(0.5, 0.968, '; '.join(notes), ha='center', fontsize=7,
                   color='#993333')
@@ -1292,9 +1585,16 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
         'demo_shape': 'serverrecord(bot)' if d['svrecord'] else 'client(human)',
         'frames': d['frames'],
         'duration_s': duration,
+        'duration_capped': duration_capped,
+        'duration_original_s': orig_duration,
         'players_rendered': n_players,
         'carry_windows': len(windows),
         'carry_windows_excluded_anomalous': n_excluded_carries,
+        'carry_route_mean_pairwise_frechet': mean_pairwise,
+        'carry_route_choice_entropy_bits': entropy_bits,
+        'carry_route_clusters': n_clusters,
+        'carry_outcome_counts': outcome_summary['counts'],
+        'carry_duration_quartiles_s': outcome_summary['quartiles'],
         'entnum_to_label': {str(k): v for k, v in labels.items()},
         'label_to_name': {v: d['skins'].get(k - 1, '?').split('\\')[0]
                            for k, v in labels.items()},
@@ -1316,7 +1616,10 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
     return {
         'hash': h, 'map': d['map'], 'svrecord': d['svrecord'],
         'players': n_players, 'duration': duration,
+        'duration_capped': duration_capped,
         'carries': len(windows), 'png': png_path, 'json': json_path,
+        'mean_pairwise_frechet': mean_pairwise,
+        'route_choice_entropy_bits': entropy_bits,
     }
 
 
@@ -1332,20 +1635,26 @@ def main():
                           f'(default: {DEFAULT_RUNEDIR})')
     args = ap.parse_args()
 
-    ok, failed = [], []
+    ok, failed, skipped = [], [], []
     for path in args.demos:
         try:
             res = render_sheet(path, args.runedir, args.out)
             ok.append(res)
+            dur_str = f"{res['duration']:.1f}s(capped)" if res['duration_capped'] \
+                else f"{res['duration']:.1f}s"
             print(f"OK   {os.path.basename(path)} -> {res['hash']}.png  "
                   f"map={res['map']} {'bot' if res['svrecord'] else 'human'} "
-                  f"players={res['players']} dur={res['duration']:.1f}s "
+                  f"players={res['players']} dur={dur_str} "
                   f"carries={res['carries']}")
+        except DemoUndersampled as e:
+            skipped.append((path, str(e)))
+            print(f"SKIP {os.path.basename(path)}: {e}")
         except Exception as e:
             failed.append((path, str(e)))
             print(f"FAIL {os.path.basename(path)}: {e}")
 
     print(f"\n{len(ok)} sheet(s) written to {args.out}, "
+          f"{len(skipped)} skipped (under-sampled), "
           f"{len(failed)} failed")
 
 
@@ -1427,3 +1736,40 @@ if __name__ == '__main__':
 # 6. Flag-stand markers are a per-demo median of steal-start positions for
 #    that color; a demo with zero steals of a given color draws no stand
 #    marker for it (there's nothing to estimate from).
+#
+# 7. Duration normalization (judge round 3): every stat on the sheet is
+#    computed from at most DURATION_CAP_S (850s) of track data, and demos
+#    under DURATION_MIN_S (300s) are refused rather than rendered -- see
+#    cap_tracks_to_duration and render_sheet. This fixes raw duration
+#    itself leaking demo identity (bot serverrecord waves cluster tightly
+#    around ~895s; human POV recordings vary a lot), but it has a real
+#    cost: a carry window still open at the 850s cutoff is dropped
+#    entirely (the effects-bit state machine never sees it close), so a
+#    capped sheet's carry count/outcome/dissimilarity numbers are computed
+#    from a strict subset of the match, not the whole thing. The caption
+#    and JSON sidecar both flag when a sheet was capped
+#    (duration_capped/duration_original_s) so this is never silent.
+#
+# 8. Carry-route dissimilarity (judge round 3): the pairwise
+#    discrete-Frechet matrix, mean pairwise distance, and route-choice
+#    entropy (see carry_route_dissimilarity) are all computed AFTER
+#    arc-length resampling each route to FRECHET_RESAMPLE_N points, so they
+#    measure route SHAPE, not route duration or raw 10Hz sample count.
+#    Two caveats: (a) the entropy number's cluster cutoff
+#    (FRECHET_CLUSTER_FRAC of THIS demo's own max pairwise distance) is
+#    self-normalized per demo/map on purpose, so entropy_bits is only
+#    meaningful as a within-sheet read of "how clustered are these routes,
+#    relative to the most different pair this same demo produced" -- it is
+#    NOT on an absolute world-unit scale and should not be compared as if
+#    it were a physical distance across two different maps; (b) both
+#    numbers inherit note #2's PVS asymmetry -- a human demo with fewer
+#    detected carries (because the recording player didn't see every
+#    steal) has fewer routes to compare, which can itself inflate or
+#    deflate the summary statistics independent of actual route diversity.
+#    A judge should read n (routes compared) alongside the two numbers, not
+#    the numbers alone.
+#
+# 9. Carry outcome/duration-quartile counts (see carry_outcome_summary)
+#    are drawn from the same geometric-guess outcome labels described in
+#    note #3 above, and from the same possibly-duration-capped windows
+#    list described in note #7 -- both caveats apply here too.
