@@ -28,6 +28,41 @@ The database creates itself. `1` gives one file per player instead; `0` is off.
 
 Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmstats).
 
+## SLIPGATE bots
+
+SLIPGATE is a from-scratch bot system built into the mod, aimed at bots that
+play LMCTF the way humans play it — grapple-first movement, real flag-carrier
+escape runs, escorts that screen the carrier, and defense that guards
+sightlines instead of standing on the flag.
+
+The bots navigate on a per-map graph proven by actual physics runs (runs,
+jumps, drops, grapple swings, rocket jumps), price their decisions on a live
+cost surface (items, danger, duel range, cover, teammate support), and share
+one team-wide belief of where enemies and flags are. Movement doctrine and
+combat habits are mined from a large corpus of demos from the game's
+competitive era and validated in continuous automated ten-server experiments —
+every behavior ships only after winning a controlled A/B trial.
+
+Working today: full steal → carry → escort → capture play at every team size
+from 2v2 to 7v7, cooked-grenade area denial, sound-directed speculative fire,
+landing-point rocket leads on airborne targets, covered approach routing,
+route commitment ("stay the course until it stops being good enough"), and
+computed rail-lane defense posts.
+
+Looking to add, in general terms:
+
+- Smarter high-density play — coordinated breaches when the flag room never
+  clears, instead of waiting forever or dying at the pedestal
+- Attackers that exploit a railer's rhythm — sprint windows between shots,
+  fling arcs that end behind cover
+- Smoother travel movement where it still looks bot-like, without giving up
+  any speed or outcomes
+- True air-strafe acceleration chained through hook flights
+- Defense that adapts its posts per map instead of one doctrine everywhere
+- Bots modeled on individual players from the demo archive — styles, not
+  just averages
+- Rune-aware strategy beyond incidental pickups
+
 ## What's tracked
 
 Frags, deaths, suicides, captures, flag pickups, returns, carrier kills, offense
@@ -80,6 +115,30 @@ New:
 | `ctf_switch_penalty` | 0 | 1 clears your score for joining the bigger winning team |
 
 Upstream cvars are unchanged: `dmflags` `maxclients` `ctfflags` `refset`
+
+### spawn_loadout (BuzzMod)
+
+Admin-defined starting equipment. One cvar, grammar `thing[:count]`,
+space or comma separated:
+
+    set spawn_loadout "rocketlauncher:5 railgun:5 body:100 health:110"
+
+Tokens match any unambiguous fragment of a live item classname, so new
+items are addressable the day they exist -- `sv listitems` prints every
+token. Counts are ADDITIVE under the game's own caps. Semantics: a
+weapon always carries its real pickup ammo bundle and `:count` adds
+extra; ammo -> amount; armor -> points (that armor's own max applies);
+power armor -> the device plus count cells; other items -> charges.
+`health` is the one reserved word -- above max rots 1/sec down to max,
+the megahealth mechanic. Ingame runes are excluded (own lifecycle).
+
+Named builds are plain cvars, `@`-referenced, nestable to depth 4,
+composable with extra tokens; none ship by default:
+
+    set loadout_testing "rocketlauncher:5 railgun:5 grenades:5"
+    set spawn_loadout "@testing"
+
+Bad tokens and ambiguous fragments warn on the console by name.
 `logrename` `runes` `skinset` `refpassword` `motd_file` `server_file`
 `maplist_file` `skin_file` `skin_debug` `disabled_weps` `flag_init` `fastswitch`
 `mod_website` `autolock` `countdown_time`.
