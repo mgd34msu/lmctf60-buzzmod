@@ -1630,10 +1630,35 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('demos', nargs='+', help='.dm2 demo files')
     ap.add_argument('--out', required=True, help='output directory')
+    ap.add_argument('--pool', action='store_true',
+                    help='no sheets: pool carry routes across ALL input '
+                         'demos and print one dissimilarity/entropy read '
+                         '(per-wave entropies on 5-13 carries bounce '
+                         '+/-0.7 bits; arms differ by less)')
     ap.add_argument('--runedir', default=DEFAULT_RUNEDIR,
                      help='directory holding <map>.rune files '
                           f'(default: {DEFAULT_RUNEDIR})')
     args = ap.parse_args()
+
+    if args.pool:
+        pooled = []
+        for demo in args.demos:
+            try:
+                d = walk_demo(demo)
+                cap_tracks_to_duration(d)
+                labels, _teams = anonymize(d)
+                ws, _excl = carry_windows(d['tracks'], labels)
+                pooled.extend(ws)
+            except DemoUndersampled:
+                print(f"SKIP {demo.rsplit('/',1)[-1]} (under-sampled)")
+            except Exception as e:
+                print(f"FAIL {demo.rsplit('/',1)[-1]} ({type(e).__name__})")
+        _dist, mean_pw, ent_bits, n_cl = carry_route_dissimilarity(pooled)
+        print(f"POOLED demos={len(args.demos)} carries={len(pooled)} "
+              f"mean_frechet={(mean_pw if mean_pw is not None else float('nan')):.0f} "
+              f"entropy={(ent_bits if ent_bits is not None else float('nan')):.2f} bits "
+              f"clusters={n_cl}")
+        return
 
     ok, failed, skipped = [], [], []
     for path in args.demos:
