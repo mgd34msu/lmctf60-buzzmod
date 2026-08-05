@@ -157,6 +157,12 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
+	int			legs;           /* objective-leg counter: the jitter seed
+	                             * re-rolls when the GOAL changes, not
+	                             * only on death (361's quiet wave: ten
+	                             * bots rode one tilt each for 15 min
+	                             * and stacked back into ropes) */
+	int			last_role_for_legs;
 	int			lives;          /* respawn count: the route-jitter seed
 	                             * (a LIFE rides one opinion of the map) */
 	int			was_dead;
@@ -2269,6 +2275,12 @@ rally_done:;
 		bot->was_dead = 0;
 		bot->lives++;
 	}
+	/* leg ticker: a new role is a new errand -- new opinion of the map */
+	if ((int)role != bot->last_role_for_legs)
+	{
+		bot->last_role_for_legs = (int)role;
+		bot->legs++;
+	}
 
 	sg_cur_role = role;             /* for the rune identity pricing */
 	sg_cur_health = e->health;
@@ -2833,7 +2845,7 @@ rally_done:;
 		{
 			unsigned rj = ((unsigned)li * 2654435761u) ^
 			              ((unsigned)(e - g_edicts) * 40503u) ^
-			              ((unsigned)bot->lives * 9176u);
+			              ((unsigned)(bot->lives + bot->legs) * 9176u);
 
 			rj = (rj >> 4) & 1023u;
 			v *= 1.0f + ((float)rj / 1023.0f - 0.5f) * 0.02f *
