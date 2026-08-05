@@ -1,11 +1,5 @@
 #include "g_local.h"
 #include "ctf_file_io.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
-#include "bl_ctf.h"
 
 void ctf_BSafePrint(long print_priority, char * buf);
 
@@ -333,9 +327,27 @@ void	ServerCommand (void)
 		CTF_StatsDB_Command ();
 	else if ((Q_stricmp (cmd, "next") == 0) || (Q_stricmp (cmd, "skip") == 0))
 		Svcmd_NextLevel_f ();
-	else if (BotCmd(cmd, NULL, true))
+	else if (Q_stricmp (cmd, "sg") == 0)
 	{
-		/* handled by the bot glue -- "sv bot ..." */
+		/* SLIPGATE bots: "sv sg add" / "sv sg remove".
+		 * Dispatched here now; it used to reach SLIPGATE through the legacy
+		 * bot glue's BotCmd, which forwarded unclaimed "sv" commands. */
+		extern qboolean SG_AddBot(void);
+		extern int SG_RemoveBots(void);
+		char *sub = gi.argv(2);
+		if (Q_stricmp(sub, "add") == 0)
+		{
+			if (!SG_AddBot())
+				gi.cprintf(NULL, PRINT_HIGH, "slipgate: could not add bot\n");
+		}
+		else if (Q_stricmp(sub, "remove") == 0)
+			gi.cprintf(NULL, PRINT_HIGH, "slipgate: removed %d\n", SG_RemoveBots());
+	}
+	else if (Q_stricmp (cmd, "rune") == 0)
+	{
+		/* SLIPGATE: generate the rune for the loaded map. */
+		extern qboolean Rune_Generate(const char *mapname);
+		Rune_Generate(level.mapname);
 	}
 	else
 		gi.cprintf (NULL, PRINT_HIGH, "Unknown server command \"%s\"\n", cmd);

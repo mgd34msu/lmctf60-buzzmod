@@ -8,13 +8,7 @@
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
-#include "bl_ctf.h"
-#include "bl_know.h"
+#include "slipgate/sg_redirgi.h"
 #include "slipgate/sg_local.h"
 
 #ifdef _WIN32
@@ -144,8 +138,6 @@ void ShutdownGame (void)
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
 	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 
-	BotUnloadAllLibraries();	// before the tags they allocated from go away
-
 	gi.FreeTags (TAG_LEVEL);
 	gi.FreeTags (TAG_GAME);
 
@@ -173,8 +165,9 @@ q_exported game_export_t *GetGameAPI (game_import_t *import)
 {
 	gi = *import;
 
-	/* The bot library calls back into the engine through its own copy of the
-	 * import table, so it has to be redirected before anything uses it. */
+	/* The whole game writes prints, network messages and command arguments
+	 * through this redirection (see slipgate/sg_redirgi.c), so it has to be
+	 * installed before anything uses gi. */
 	BotRedirectGameImport();
 
 	globals.apiversion = GAME_API_VERSION;
@@ -853,10 +846,6 @@ void G_RunFrame (void)
 		return;
 	}
 
-	// spawn any bots queued last frame, then open the library's frame
-	AddQueuedBots();
-	BotLib_BotStartFrame(level.time);
-
 	/* TEMPORARY DIAGNOSTIC (bot_developer 1) -- flag reachability tracing,
 	 * defined at the bottom of g_ctffunc.c. Remove with that function. */
 	BotFlagDiag();
@@ -899,39 +888,11 @@ void G_RunFrame (void)
 	}
 
 	/*
-	 * Feed the library this frame's world, then think. Kept after the entity
-	 * loop rather than inside it: the bots see a fully updated world that way
-	 * and never act on a half-stepped frame.
+	 * SLIPGATE bots think here, after the entity loop rather than inside it:
+	 * they see a fully updated world that way and never act on a half-stepped
+	 * frame.
 	 */
-	ent = &g_edicts[0];
-	for (i = 0; i < globals.num_edicts; i++, ent++)
-	{
-		if (!ent->inuse) continue;
-		if (!(ent->svflags & SVF_NOCLIENT))
-			BotLib_BotUpdateEntity(ent);
-	}
-
-	/* Refresh what each bot has seen before the AI acts on it. */
-	Know_Frame();
-
-	for (i = 0; i < maxclients->value; i++)
-	{
-		ent = DF_CLIENTENT(i);
-		if (!ent->inuse) continue;
-		if (!(ent->flags & FL_BOT)) continue;
-		if (!BotStarted(ent)) continue;
-
-		BotLib_BotUpdateClient(ent);
-		BotLib_BotAI(ent, FRAMETIME);
-		BotExecuteInput(ent);
-	}
-
-	/* SLIPGATE bots think here; the legacy loop above skips them because
-	 * they are not registered with the old botlib (BotStarted is false). */
 	SG_RunFrame();
-
-	// top the game up to "bots_minplayers" if it is set
-	CheckMinimumPlayers();
 
 	// see if it is time to end a deathmatch
 	CheckDMRules ();

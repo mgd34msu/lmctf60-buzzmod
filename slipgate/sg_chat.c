@@ -31,13 +31,13 @@
  *
  * The chat route is the game's own: BotClientCommand(client, "say_team",
  * line, NULL) fills the redirected gi.argv and runs ClientCommand ->
- * Cmd_Say_f for that client (bl_redirgi.c), so human teammates read it in
+ * Cmd_Say_f for that client (sg_redirgi.c), so human teammates read it in
  * their own chat window. Same route bl_know.c and sg_caco.c use.
  */
 
 #include "g_local.h"
 #include "g_ctffunc.h"
-#include "bl_redirgi.h"                 /* BotClientCommand -- the chat route */
+#include "slipgate/sg_redirgi.h"                 /* BotClientCommand -- the chat route */
 #include "p_stats.h"                    /* stats_get -- the scoreboard's own count */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"

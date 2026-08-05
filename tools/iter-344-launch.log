@@ -1,0 +1,354 @@
+./iterate2.sh: line 228: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+./iterate2.sh: line 228: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+./iterate2.sh: line 228: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+=== WAVE 344 (free layout) ===
+---- s01-2v2 lmctf03 fill=2 600s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s01-2v2-lmctf03.log: No such file or directory
+---- s02-2v2 lmctf03 fill=2 600s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s02-2v2-lmctf03.log: No such file or directory
+---- s03-5v5 lmctf22 fill=5 900s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s03-5v5-lmctf22.log: No such file or directory
+---- s04-5v5 lmctf22 fill=5 900s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s04-5v5-lmctf22.log: No such file or directory
+---- s05-5v5 mactf06 fill=5 900s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s05-5v5-mactf06.log: No such file or directory
+---- s06-5v3 lmctf44 fill=5:3 900s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s06-5v3-lmctf44.log: No such file or directory
+---- s07-5v3 lmctf44 fill=5:3 900s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s07-5v3-lmctf44.log: No such file or directory
+---- s08-7v7 lmctf09 fill=7 600s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s08-7v7-lmctf09.log: No such file or directory
+---- s09-ctrl lmctf01 fill=5 900s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s09-ctrl-lmctf01.log: No such file or directory
+---- s10-5v1 smap05 fill=5:0 600s ----
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+STEALS=  CAPS=  RETURNS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+KILLS=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+HOOK: fires= lands= fails=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+SHELVES=  DEADDOORS=  CYCLES=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+acts: swim= lift= tele= rj=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+roles: escort_samples= recover_samples=
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log'
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory
+kills by weapon: blaster= rail= rocket= mg= cg= hb= ssg=
+grep: /home/buzzkill/Projects/lmctf6-stats/tools/iter-344/s10-5v1-smap05.log: No such file or directory

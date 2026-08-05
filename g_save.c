@@ -8,11 +8,6 @@
 #include "g_skins.h"
 #include "g_ctffunc.h" //surt for log renaming
 #include "bat.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
 
 #define Function(f) {#f, f}
 
@@ -392,10 +387,6 @@ void InitGame(void)
 	SkinsReadFile(); // READ our skins.ini
 
 	CTF_StatsDB_Init();	// open/create the stats database now, not mid-match
-
-	/* Must follow "game.maxclients = maxclients->value" above: BotSetup sizes
-	 * its per-client arrays from it, and reads the bot roster. */
-	BotSetup();
 
 	// END CTF CODE -- LM_JORM
 

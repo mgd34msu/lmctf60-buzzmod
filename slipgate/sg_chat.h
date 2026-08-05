@@ -100,21 +100,20 @@ edict_t		*SG_ChatEscortTarget(edict_t *bot);
  * team chat, while an addressed one ("arach defend") is obeyed either way.
  * Speakers with FL_BOT are ignored outright -- bots do not order bots.
  *
- *     UNWIRED AT THE GAME END. It is called from BotChat_OnPlayerSay
- *     (bl_chat.c), and BotChat_OnPlayerSay has no caller anywhere in the
- *     tree -- its own comment says "called from Cmd_Say_f", but g_cmds.c
- *     does not call it. Until one line goes into Cmd_Say_f (g_cmds.c, after
- *     the message text is assembled into `temp` at ~2234):
+ *     Wired in Cmd_Say_f (g_cmds.c), right after the message text is
+ *     assembled into `temp`, as SG_ChatHear(ent, temp, team). It is called
+ *     directly rather than through the legacy bot's chat hook so the team
+ *     flag survives: routed as public chat, a bare team-chat verb would need
+ *     an addressee before it was obeyed.
  *
- *         BotChat_OnPlayerSay(ent, temp);
+ * SG_ChatDeath is the taunt/grumble feed; it takes the victim, the attacker
+ * and the means of death.
  *
- *     no chat reaches this module and no order can be given. Wiring it there
- *     also loses the team flag, so orders arrive as public chat and need an
- *     addressee; calling SG_ChatHear(ent, temp, team) directly from
- *     Cmd_Say_f instead makes bare team-chat verbs work as specified.
- *
- * SG_ChatDeath is the taunt/grumble feed; it wants the same three arguments
- * BotChat_NotifyDeath is given.
+ *     STILL UNWIRED. Nothing calls it. The legacy bot's own death hook that
+ *     used to sit in ClientDie (BotChat_NotifyDeath) fed that bot, never this
+ *     one, so removing the legacy bot did not disconnect anything here --
+ *     there was never a connection. One line in ClientDie (p_client.c),
+ *     SG_ChatDeath(self, attacker, meansOfDeath), would light it up.
  */
 void		SG_ChatReset(void);
 void		SG_ChatFrame(void);

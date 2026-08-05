@@ -7,11 +7,7 @@
 #include "stdlog.h"
 #include "bat.h"
 #include "g_vote.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
+#include "slipgate/sg_redirgi.h"    // BotClearCommandArguments
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 
 void spectator_respawn (edict_t *ent);
@@ -2235,11 +2231,10 @@ void Cmd_Say_f (edict_t *ent, qboolean team, qboolean arg0)
 	string_replace(ent, temp, temp, sizeof temp);
 	strcat(text, temp);
 
-	// BUZZKILL - bots hear the chat. This is the call BotChat_OnPlayerSay's
-	// comment always claimed existed and never did -- neither the legacy
-	// reply path nor SLIPGATE order-taking ever received a word before this
-	// line. SG_ChatHear ignores bot speakers itself; team carries the
-	// say_team flag so bare orders ("defend") only work on team chat.
+	// BUZZKILL - bots hear the chat. Before this line no chat reached the bots
+	// at all and no spoken order could be given. SG_ChatHear ignores bot
+	// speakers itself; team carries the say_team flag so bare orders
+	// ("defend") only work on team chat.
 	SG_ChatHear(ent, temp, team);
 
 	// don't let text be too long for malicious reasons
@@ -2922,11 +2917,6 @@ void ClientCommand(edict_t* ent)
 	// BUZZKILL - TOSS SOMETHING
 	else if (Q_stricmp(cmd, "toss") == 0)
 		Cmd_ItemToss_f(ent);
-
-	// bot commands, and the hook/unhook the bots issue for the grapple
-	else if (BotCmd(cmd, ent, false))
-	{
-	}
 
 	else	// anything that doesn't match a command will be a chat
 		Cmd_Say_f (ent, false, true);

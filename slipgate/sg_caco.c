@@ -34,7 +34,7 @@
 
 #include "g_local.h"
 #include "g_ctffunc.h"
-#include "bl_redirgi.h"                 /* BotClientCommand -- the chat route */
+#include "slipgate/sg_redirgi.h"                 /* BotClientCommand -- the chat route */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
 

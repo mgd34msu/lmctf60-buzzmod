@@ -35,9 +35,19 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "ctf_file_io.h"
-#include "bl_ctf.h"	/* BotStatsEnabled */
 #include "ctf_sqlite_player.h"
 #include "ctf_sqlite_unidb.h"
+
+/*
+ * "bot_stats" used to be read through BotStatsEnabled() in bl_ctf.c. That file
+ * went with the legacy bot, but the cvar still governs whether SLIPGATE's bots
+ * reach the leaderboards, so the read moved here unchanged.
+ */
+static qboolean BotStatsEnabled(void)
+{
+	cvar_t *c = gi.cvar("bot_stats", "0", 0);
+	return (c && c->value) ? true : false;
+}
 
 static cvar_t *ctf_statsdb = NULL;
 
