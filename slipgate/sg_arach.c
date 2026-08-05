@@ -157,7 +157,12 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
-	float		ribbon_off;     /* per-leg lateral offset (sg_ribbon):
+	float		ribbon_off;
+	float		ribbon_goal;    /* v2: the offset DRIFTS toward a goal
+	                             * resampled every ~1.5s -- one run
+	                             * sweeps the band instead of riding a
+	                             * lane (the railroad-artifact verdict) */
+	float		ribbon_next;     /* per-leg lateral offset (sg_ribbon):
 	                             * sampled once per committed link so
 	                             * repeated runs spread into a band --
 	                             * the film judge's rope-vs-brush tell */
@@ -2847,7 +2852,19 @@ rally_done:;
 		bot->ribbon_link = bestlink;
 		bot->ribbon_off = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
 		                  gi.cvar("sg_ribbon", "0", 0)->value;
+		bot->ribbon_goal = bot->ribbon_off;
 	}
+	/* v2 drift: the film judge's verdict on v1 -- a fixed per-leg lane
+	 * quantizes into railroads; a human band needs the offset to WANDER
+	 * along the run. Low-frequency, trace-clamped downstream. */
+	if (level.time >= bot->ribbon_next)
+	{
+		bot->ribbon_goal = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
+		                   gi.cvar("sg_ribbon", "0", 0)->value;
+		bot->ribbon_next = level.time +
+		    1.0f + (float)(rand() % 100) / 100.0f;
+	}
+	bot->ribbon_off += 0.20f * (bot->ribbon_goal - bot->ribbon_off);
 	bot->sticky_link = bestlink;
 
 	/*
