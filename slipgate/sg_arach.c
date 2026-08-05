@@ -6260,7 +6260,7 @@ hook_wait:;
 			sgoal = sfld[bot->seed];
 		bot->next_report = level.time + 1.0f;
 		gi.dprintf("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d "
-		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d\n",
+		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d eng=%d\n",
 		           e->client->pers.netname, role, bot->seed,
 		           (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
 		               ? goal_field[bot->seed] : -1,
@@ -6269,7 +6269,8 @@ hook_wait:;
 		           bestlink,
 		           (bestlink >= 0) ? sg_rune->links[bestlink].action : -1,
 		           bot->hook_phase, door_hold, (int)drop_yaw_locked,
-		           bot->stuck_time, e->groundentity != NULL);
+		           bot->stuck_time, e->groundentity != NULL,
+		           (int)bot->engaged_last);
 	}
 }
 
