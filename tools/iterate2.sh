@@ -143,7 +143,7 @@ INTERDOSE=(0     0        0        0        0         0        0         0      
 # blend PARKED (321-322: ON worse both waves -- slew lag fights the fan)
 # gentle-blend residue test (337+): 500 deg/s on s03 vs s04 OFF,
 # demos both -- only adopts if post-tactics jitter still shows
-SMOOTHDOSE=(0    0        500      0        0         0        0         0        0        0)
+SMOOTHDOSE=(0    0        0        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
