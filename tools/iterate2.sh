@@ -161,7 +161,13 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # ribbon NULL, both versions and doses (351-357 pooled 32.8v34.1u):
 # aim offsets are re-centered by the steering stack. Ledger. The band
 # is ROUTE diversity -- see ROUTEJITTER.
-RIBBON=(0        0        0        0        0         0        0         0        0        0)
+# ribbon RESURRECTED (376+): its "null" was measured on the morgue'd
+# corridor-std metric -- but the v1 film showed railroad lanes, i.e.
+# the mechanism DOES move the body. The fair judges' last tell is the
+# needle-over-empty-base, exactly what a drifting per-traversal offset
+# fills. A/B s03 ON (48u drift) vs s04 control; verdict on parity film
+# needle shape, not on any single number.
+RIBBON=(0        0        48       0        0         0        0         0        0        0)
 # route jitter (359+): per-bot-per-life deterministic pricing tilt
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
