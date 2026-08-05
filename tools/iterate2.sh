@@ -44,12 +44,15 @@ fi
 # 301: defense A/B moves to the farms (they concede 1-7/wave -- the
 # sensitive instrument; mactf06 concedes nothing to anyone). s08 back
 # to 7v7 density coverage.
-LABELS=(s01-2v2  s02-2v2  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v1)
+# v4 canaries: s02 = the PERMANENT no-opposition canary (5v0 smap05 --
+# flawless execution on film or the build is broken); s10 = the fixed-
+# matchup canary (5v1 smap05, must hold its band).
+LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v1)
 # lane A/B moved to mactf06 (coverage 29/48 -- THE lane map; lmctf22
 # reads 12/48, too weak to show the doctrine). lmctf22 keeps coverage
 # on s05.
-MAPS=(  lmctf03  lmctf03  mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
-FILLS=( "2"      "2"      "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:0")
+MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
+FILLS=( "2"      "5:0"      "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:0")
 SECS=(  600      600      900      900      900       900      900       600      900      600)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
 # trials on shared servers -- reads were cross-contaminated).
