@@ -171,9 +171,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
     (
         (
             sleep 20
-            if [ "$i" = "2" ] || [ "$i" = "3" ] || [ "$i" = "5" ] || [ "$i" = "6" ]; then
-                echo "serverrecord wave$NAME-${LABELS[$i]}"
-            fi
+            echo "serverrecord wave$NAME-${LABELS[$i]}"
             sleep "${SECS[$i]}"
             echo "quit"
         ) | (
