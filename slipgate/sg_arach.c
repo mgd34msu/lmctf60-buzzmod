@@ -6345,7 +6345,14 @@ no_hold:;
 										if (sl > 1.0f)
 										{
 											VectorScale(sd, 1.0f / sl, sd);
-											if (DotProduct(sd, atr.plane.normal) < -0.7f)
+											/* floors don't veto: descending onto a lip
+											 * near the target is a landing, not a crash
+											 * (wave 380: graze fix halved vetoes but
+											 * 100-300/game remained -- late-arc floor
+											 * touchdowns reading as head-on). Walls and
+											 * ceilings only. */
+											if (atr.plane.normal[2] < 0.7f &&
+											    DotProduct(sd, atr.plane.normal) < -0.7f)
 											{
 												arc_clear = false;
 												break;
