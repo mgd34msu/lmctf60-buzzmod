@@ -157,6 +157,9 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
+	int			lives;          /* respawn count: the route-jitter seed
+	                             * (a LIFE rides one opinion of the map) */
+	int			was_dead;
 	float		ribbon_off;
 	float		ribbon_goal;    /* v2: the offset DRIFTS toward a goal
 	                             * resampled every ~1.5s -- one run
@@ -2258,6 +2261,15 @@ rally_done:;
 		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
 
 	/* descend the surface: my seed vs every seed one proven link away */
+	/* life ticker for the route-jitter seed */
+	if (e->health <= 0)
+		bot->was_dead = 1;
+	else if (bot->was_dead)
+	{
+		bot->was_dead = 0;
+		bot->lives++;
+	}
+
 	sg_cur_role = role;             /* for the rune identity pricing */
 	sg_cur_health = e->health;
 	sg_cur_danger = sg_danger[team - 1];    /* the danger dimension, ours */
@@ -2804,6 +2816,30 @@ rally_done:;
 		 * steer. Shelved, blocked, or completed incumbents pay nothing:
 		 * displacement stays free when the route is actually dead.
 		 */
+		/*
+		 * ROUTE JITTER (sg_routejitter, wave 359). The film verdict
+		 * chain: rope-vs-brush (calibrated 8/8 judge) -> ribbon v1
+		 * (lanes, not a band) -> ribbon v2+dose (pooled null: the
+		 * steering re-centers whatever the aim does). The band humans
+		 * paint is ROUTE diversity, not in-lane wander: near-optimal
+		 * link chains differ per player and per run, where our argmin
+		 * rides the single optimum every time. Each bot-life gets a
+		 * deterministic per-link pricing tilt (cvar = max percent);
+		 * ties and near-ties then split the population across
+		 * different roads. Deterministic per life: no per-frame noise,
+		 * no flapping -- a LIFE rides one opinion of the map.
+		 */
+		if (gi.cvar("sg_routejitter", "0", 0)->value > 0.0f)
+		{
+			unsigned rj = ((unsigned)li * 2654435761u) ^
+			              ((unsigned)(e - g_edicts) * 40503u) ^
+			              ((unsigned)bot->lives * 9176u);
+
+			rj = (rj >> 4) & 1023u;
+			v *= 1.0f + ((float)rj / 1023.0f - 0.5f) * 0.02f *
+			     gi.cvar("sg_routejitter", "0", 0)->value;
+		}
+
 		if (bot->sticky_link == li &&
 		    gi.cvar("sg_sticky", "0", 0)->value)
 			v *= 0.85f;
