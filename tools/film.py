@@ -33,11 +33,29 @@ on human demos -- using the richer signal on one demo type and not the
 other would itself be a tell, breaking the blind. See MODULE NOTES at the
 bottom for the full limitations list.
 
+CORPUS ASYMMETRY / --pov-parity (see apply_pov_parity and MODULE NOTE 10):
+a HUMAN .dm2 is a client recording, so it only contains entity updates for
+players inside the recorder's PVS -- other players' tracks are full of
+holes (measured on this corpus: every non-recorder track carries 11-42% of
+the frames, whole-demo coverage 0.30-0.41), and every sheet panel inherits
+those holes as scars: sparse density maps, thin corridor histograms, carry
+windows that end when the recorder looks away. A BOT serverrecord demo has
+no PVS culling at all -- every player is sampled every frame, coverage
+1.000 -- so bot sheets render CLEANER than human sheets for reasons that
+have nothing to do with how the players moved. --pov-parity removes that
+asymmetry by picking a virtual recorder inside a serverrecord demo and
+dropping every other entity's samples that a real client at that recorder's
+position would not have received.
+
 CLI:
     film.py <demo.dm2> [...more demos] --out <dir> [--runedir <dir>]
+            [--pov-parity [--pov-ent N] [--pov-radius U] [--pov-fov DEG]]
 
 Writes <hash>.png (the sheet) and <hash>.json (source-mapping sidecar,
 NOT blind -- this file exists for the unblinding step only) per demo.
+Nothing about --pov-parity is ever drawn on the PNG: whether a sheet was
+filtered is recorded ONLY in the sidecar, because a caption saying
+"pov-parity" would itself unblind the sheet as a bot demo.
 """
 import argparse
 import collections
@@ -119,6 +137,38 @@ DURATION_CAP_S = 850.0      # see cap_tracks_to_duration
 DURATION_MIN_S = 300.0      # see render_sheet's refusal check
 
 
+# --- POV parity (see apply_pov_parity and MODULE NOTE 10) ---------------
+# Radius, in world units, of the sphere around the virtual recorder inside
+# which another player's sample is kept. This is the calibrated stand-in
+# for a BSP PVS test: without map visibility data we cannot ask "is this
+# entity's leaf visible from the recorder's leaf", so we ask "is it near
+# enough that a real client would usually have had it" and pick the radius
+# empirically. Calibration (2026-08-05, mactf06): the target statistic is
+# whole-demo visible-player-seconds coverage (coverage_stats below --
+# kept samples over players*frames), measured on the real client demos of
+# the same map with the same code. The four renderable mactf06 human demos
+# in the corpus read 0.300 / 0.320 / 0.375 / 0.410, median 0.348. Sweeping
+# this radius over two 5v5 serverrecord waves (film.py --coverage-report
+# --pov-parity --pov-radius R), with the virtual recorder chosen by
+# pick_pov_entity:
+#     R      wave368   wave369   mean
+#     400     0.165     0.137    0.151
+#     800     0.310     0.301    0.306
+#     850     0.333     0.320    0.327
+#     875     0.347     0.329    0.338
+#     900     0.360     0.339    0.350   <- matches human median 0.348
+#     950     0.388     0.361    0.375
+#    1000     0.413     0.381    0.397
+#    2000     ~0.80     ~0.65    ~0.72
+# 900u is the value whose bot-corpus mean coverage equals the human median,
+# and it puts both waves inside the human per-demo spread rather than only
+# on average. ONE radius is used for every demo on purpose: fitting a
+# radius per demo would guarantee a match by construction and measure
+# nothing.
+POV_RADIUS_DEFAULT = 900.0
+POV_FOV_DEG_DEFAULT = None   # facing gate off by default -- see MODULE NOTE 10
+
+
 class DemoUndersampled(Exception):
     """Raised by render_sheet when a demo is shorter than DURATION_MIN_S --
     caught separately in main() and reported as SKIP, not FAIL, since this
@@ -178,10 +228,20 @@ ROW_HEIGHTS = [3.6, 1.35, 1.55, 1.55, 1.7, 1.7]
 
 # ------------------------------------------------------------ low-level walk
 def parse_delta_entity_film(r, bits, o, is_svrecord=False):
-    """o = [x, y, z, effects]. Same field order as dm2speed.parse_delta_entity,
-    but captures origin AND the full effects value (needed for EF_FLAG1/
-    EF_FLAG2 carry detection) instead of skipping it. Mirrors
-    demoents.parse_delta_entity_track's shape with one addition.
+    """o = [x, y, z, effects, yaw]. Same field order as
+    dm2speed.parse_delta_entity, but captures origin, the full effects value
+    (needed for EF_FLAG1/EF_FLAG2 carry detection) and the entity yaw angle
+    instead of skipping them. Mirrors demoents.parse_delta_entity_track's
+    shape with two additions.
+
+    yaw (the U_ANGLE2 byte, angles[YAW]) is the recording-relevant one: for
+    a player entity this mod writes the client's actual look direction into
+    it -- p_view.c line 1033, `ent->s.angles[YAW] = ent->client->
+    v_angle[YAW]` -- so it is a real view angle, not a movement heading, and
+    it is present in BOTH demo shapes (measured: the U_ANGLE2 bit is set on
+    79.8% of player-entity updates in a serverrecord wave and 71.2% in a
+    human client demo). It is captured here for the optional facing gate in
+    apply_pov_parity; nothing else on the sheet uses it.
 
     is_svrecord matters ONLY for the effects field, and only because of a
     real quirk in yquake2's demo writer (server/sv_entities.c
@@ -210,6 +270,7 @@ def parse_delta_entity_film(r, bits, o, is_svrecord=False):
     matching their true incremental delta wire semantics)."""
     if is_svrecord:
         o[3] = 0
+        o[4] = 0.0
     if bits & U_MODEL: r.skip(1)
     if bits & U_MODEL2: r.skip(1)
     if bits & U_MODEL3: r.skip(1)
@@ -239,7 +300,10 @@ def parse_delta_entity_film(r, bits, o, is_svrecord=False):
     if bits & U_ORIGIN2: o[1] = r.s16() / 8.0
     if bits & U_ORIGIN3: o[2] = r.s16() / 8.0
     if bits & U_ANGLE1: r.skip(1)
-    if bits & U_ANGLE2: r.skip(1)
+    # angles[YAW]: one byte, 0..255 mapped over 0..360 degrees (the vanilla
+    # MSG_WriteAngle quantization). Same svrecord caveat as effects above --
+    # an absent bit means "equals the zero reference", handled at the top.
+    if bits & U_ANGLE2: o[4] = r.u8() * (360.0 / 256.0)
     if bits & U_ANGLE3: r.skip(1)
     if bits & U_OLDORIGIN: r.skip(6)
     if bits & U_SOUND: r.skip(1)
@@ -255,14 +319,22 @@ def walk_demo(path, maxplayers=32):
     shape's frame+deltaframe+suppresscount+areabits header).
 
     Returns {'map', 'skins', 'tracks': {entnum: [(frame,x,y,z,effects)]},
-    'frames', 'svrecord'}. tracks are filtered to entnum 1..maxplayers
-    (player slots) exactly like demoents.py and botkin.py."""
+    'yaws': {entnum: {frame: yaw_degrees}}, 'frames', 'svrecord'}. tracks
+    are filtered to entnum 1..maxplayers (player slots) exactly like
+    demoents.py and botkin.py.
+
+    'yaws' is kept in a SEPARATE dict rather than as a sixth element of each
+    track tuple on purpose: every consumer in this module unpacks tracks as
+    `for f, x, y, z, eff in track`, and widening the tuple would mean
+    touching all of them for a field only apply_pov_parity's optional
+    facing gate reads."""
     data = open(path, 'rb').read()
     off = 0
     mapname = None
     skins = {}
     ents = {}
     tracks = {}
+    yaws = {}
     frame_idx = 0
     svrecord = None
 
@@ -274,7 +346,7 @@ def walk_demo(path, maxplayers=32):
             if bits & U_REMOVE:
                 ents.pop(num, None)
                 continue
-            o = ents.setdefault(num, [0.0, 0.0, 0.0, 0])
+            o = ents.setdefault(num, [0.0, 0.0, 0.0, 0, 0.0])
             parse_delta_entity_film(r, bits, o, is_svrecord=bool(svrecord))
 
     def snapshot():
@@ -284,6 +356,7 @@ def walk_demo(path, maxplayers=32):
             if 1 <= num <= maxplayers:
                 tracks.setdefault(num, []).append(
                     (frame_idx, o[0], o[1], o[2], o[3]))
+                yaws.setdefault(num, {})[frame_idx] = o[4]
 
     while off + 4 <= len(data):
         (mlen,) = struct.unpack_from('<i', data, off)
@@ -309,7 +382,7 @@ def walk_demo(path, maxplayers=32):
                             mapname = m.group(1)
                 elif svc == 14:
                     bits, num = D.parse_entity_bits(r)
-                    o = ents.setdefault(num, [0.0, 0.0, 0.0, 0])
+                    o = ents.setdefault(num, [0.0, 0.0, 0.0, 0, 0.0])
                     parse_delta_entity_film(r, bits, o)
                 elif svc == 20:
                     if svrecord:
@@ -339,7 +412,7 @@ def walk_demo(path, maxplayers=32):
                 else: raise ValueError(svc)
         except Exception:
             continue
-    return {'map': mapname, 'skins': skins, 'tracks': tracks,
+    return {'map': mapname, 'skins': skins, 'tracks': tracks, 'yaws': yaws,
             'frames': frame_idx, 'svrecord': bool(svrecord)}
 
 
@@ -371,6 +444,9 @@ def cap_tracks_to_duration(d, cap_s=DURATION_CAP_S):
         return False, orig_duration
     for n in list(d['tracks'].keys()):
         d['tracks'][n] = [s for s in d['tracks'][n] if s[0] <= cap_frames]
+    for n in list(d.get('yaws', {}).keys()):
+        d['yaws'][n] = {f: y for f, y in d['yaws'][n].items()
+                        if f <= cap_frames}
     d['frames'] = cap_frames
     return True, orig_duration
 
@@ -392,6 +468,23 @@ def team_of(skin):
 
 
 # --------------------------------------------------------------- anonymize
+def track_travel(track):
+    """Total horizontal distance covered by a track over consecutive-frame
+    (dt=0.1s) steps, teleports/respawns excluded (same >TELEPORT_UNITS rule
+    as hspeed_series/death_ticks). Used to tell a roster participant from a
+    parked entity, and to pick which tracks the kinematic strip shows."""
+    total = 0.0
+    for i in range(1, len(track)):
+        f0, x0, y0, z0, _ = track[i - 1]
+        f1, x1, y1, z1, _ = track[i]
+        if f1 - f0 != 1:
+            continue
+        dist = math.hypot(x1 - x0, y1 - y0)
+        if dist <= TELEPORT_UNITS:
+            total += dist
+    return total
+
+
 def anonymize(d):
     """Assigns P1..Pn by entnum ascending. Drops short/noise tracks AND
     entities whose skin doesn't resolve to a red/blue team -- these are
@@ -400,6 +493,22 @@ def anonymize(d):
     connected without ever joining a side. A 'player' on this sheet is a
     roster participant; entnum range alone (1..maxclients) isn't enough
     to tell a competitor from a bystander, but a resolved team is.
+
+    Also drops PARKED entities: a track that never moves at all (zero total
+    travel, i.e. one single distinct position for its whole life) is not a
+    roster participant either -- it is a connected-but-not-playing slot
+    whose entity the server wrote once and never updated again, so the
+    walker's persistent entity table re-snapshots that one frozen position
+    every frame. Five such entities exist in lmctf-2022-02-08-mactf06-20.37
+    (each with 3831 samples at exactly 1 distinct position). Left in, they
+    do three bad things: they pile thousands of samples into a single
+    density cell, they inflate the visible-player-seconds coverage number
+    used for POV parity calibration, and -- because they have the most
+    samples of any track in the demo -- they used to win the kinematic
+    strip's "busiest 3 tracks" selection and render it as three flat 0.00
+    u/s lines (see draw_kinematic_strip). The rule is applied to both demo
+    shapes identically; serverrecord demos simply have no such entities.
+
     Returns (labels: {entnum: 'Pk'}, teams: {entnum: 'red'/'blue'})."""
     tracks = d['tracks']
     keep = []
@@ -410,11 +519,181 @@ def anonymize(d):
         team = team_of(d['skins'].get(n - 1))
         if team is None:
             continue
+        if track_travel(t) <= 0.0:
+            continue
         keep.append(n)
         teams[n] = team
     keep.sort()
     labels = {n: f"P{i+1}" for i, n in enumerate(keep)}
     return labels, teams
+
+
+# -------------------------------------------------------------- POV parity
+def coverage_stats(tracks, labels, frames):
+    """Visible-player-seconds coverage: how much of a full omniscient
+    recording of this match the demo actually contains.
+
+    visible_fraction = (sum of samples over all rostered tracks) /
+                       (n_players * frames)
+    i.e. 1.0 for a serverrecord capture (every player sampled every frame)
+    and, measured across this corpus's mactf06 client demos, 0.32-0.40 for
+    a real human POV recording. This is the statistic --pov-parity is
+    calibrated against; it is computed by this one function for both demo
+    shapes so the two corpora are never measured by different code.
+
+    Returns {'visible_fraction', 'per_track': {entnum: fraction},
+    'max_track_fraction', 'median_other_fraction', 'players', 'frames'}."""
+    n = len(labels)
+    if not n or not frames:
+        return {'visible_fraction': 0.0, 'per_track': {}, 'players': n,
+                'frames': frames, 'max_track_fraction': 0.0,
+                'median_other_fraction': 0.0}
+    per = {e: len(tracks.get(e, [])) / float(frames) for e in labels}
+    fracs = sorted(per.values())
+    total = sum(len(tracks.get(e, [])) for e in labels)
+    others = fracs[:-1] if len(fracs) > 1 else fracs
+    return {
+        'visible_fraction': total / float(n * frames),
+        'per_track': per,
+        'max_track_fraction': fracs[-1],
+        'median_other_fraction': float(np.median(others)) if others else 0.0,
+        'players': n,
+        'frames': frames,
+    }
+
+
+def track_cells(track, bin_size=None):
+    """How many distinct world cells a track's samples land in, on the same
+    fixed grid the density panel uses. A measure of how much of the MAP a
+    track saw, as opposed to how far it ran (a defender who paces a small
+    area racks up travel without covering ground)."""
+    if bin_size is None:
+        bin_size = TRAJ_DENSITY_BIN
+    return len({(int(s[1] // bin_size), int(s[2] // bin_size))
+                for s in track})
+
+
+def pick_pov_entity(tracks, labels):
+    """The virtual recorder for --pov-parity: the rostered entity whose own
+    track visits the most distinct map cells (track_cells), ties broken by
+    most samples, then most travel, then lowest entnum.
+
+    WHY THIS RULE, VALIDATED: it is the same rule for both demo shapes, and
+    on a client demo it recovers the ACTUAL recorder every time -- on all
+    four renderable mactf06 human demos in this corpus it selects entity 1,
+    the recording player's own entity, whose per-track coverage is 0.83,
+    0.94, 1.00, 1.00 (i.e. the one track the engine never culled). That is
+    the check that makes it legitimate to apply to a serverrecord demo,
+    where every track is complete and the rule instead selects the bot that
+    actually roamed the map.
+
+    Two rules that look reasonable and are NOT used, because they select
+    the wrong kind of player: most samples (in a serverrecord demo every
+    player has the identical count, so it decides nothing), and most travel
+    (in wave369 the top traveler, ent 15 at 203k units, paces a confined
+    area -- as a virtual recorder it produces a sheet with a density fill
+    fraction of 0.244 against a human range of 0.417-0.502, because its
+    visibility bubble never sweeps most of the map). Recorder choice is the
+    single biggest lever on a parity sheet: across the ten candidates in
+    wave369 the resulting fill fraction ranges 0.228-0.448. Anyone reading
+    a parity sheet should know the rotation spread exists; --pov-ent N
+    exists to reproduce it."""
+    best = None
+    for n in sorted(labels):
+        t = tracks.get(n, [])
+        key = (track_cells(t), len(t), track_travel(t))
+        if best is None or key > best[0]:
+            best = (key, n)
+    return best[1] if best else None
+
+
+def apply_pov_parity(d, labels, pov_ent=None, radius=POV_RADIUS_DEFAULT,
+                     fov_deg=POV_FOV_DEG_DEFAULT):
+    """Rewrites d['tracks'] in place so a serverrecord (omniscient) demo
+    carries the same partial-view scars a client demo does.
+
+    WHY: see the module docstring. A human .dm2 only contains entity
+    updates for players the recording client's server-side PVS test let
+    through (server/sv_ents.c SV_BuildClientFrame: leaf of the client's
+    view origin -> CM_ClusterPVS -> per-entity cluster test; entities that
+    fail it are sent as U_REMOVE and vanish from the client's entity list,
+    which is why 37% of the player-entity updates in a human demo here are
+    removes and 0% of them are in a serverrecord wave). A serverrecord
+    capture runs no such test, so every bot sheet is built from complete
+    tracks while every human sheet is built from shredded ones.
+
+    HOW: pick a virtual recorder (pick_pov_entity, or --pov-ent), then keep
+    another entity's sample at frame f only when the recorder also has a
+    sample at f and the two are within `radius` world units (3D). The
+    recorder's own track is never filtered -- a real client always has
+    itself.
+
+    WHY A DISTANCE GATE AND NOT A CONE: the real cull is position-only.
+    SV_BuildClientFrame tests the client's view ORIGIN's PVS cluster; it
+    never consults the client's view angles, so a player standing behind
+    the recorder is received exactly like one in front. A facing gate is
+    therefore available (fov_deg, using the real view yaw this mod writes
+    into the entity's angles[YAW] -- p_view.c:1033) but OFF by default,
+    because switching it on would impose a scar on the bot corpus that the
+    human corpus does not have. Distance is the honest approximation: it is
+    the one property of the PVS test we can evaluate without the BSP, it is
+    monotone in the same direction as real visibility, and it has exactly
+    one free parameter to calibrate (POV_RADIUS_DEFAULT). What it cannot
+    reproduce is occlusion -- a player on the far side of a wall 200u away
+    is kept here and would have been culled for real -- which is precisely
+    why the radius is fit to the human coverage statistic rather than
+    guessed from map geometry: the fitted radius absorbs the missing
+    wall-culling into a smaller sphere.
+
+    Returns an info dict (recorded in the JSON sidecar, never on the PNG)."""
+    tracks = d['tracks']
+    if pov_ent is not None:
+        # An explicitly requested recorder that doesn't exist is an error,
+        # not a silent no-op: falling through unfiltered would hand back a
+        # fully omniscient sheet that looks exactly like a parity sheet
+        # everywhere except one line of the sidecar.
+        if pov_ent not in labels:
+            raise ValueError(
+                f"--pov-ent {pov_ent} is not a rostered track in this demo "
+                f"(rostered: {sorted(labels)})")
+    else:
+        pov_ent = pick_pov_entity(tracks, labels)
+    if pov_ent is None or pov_ent not in tracks:
+        return {'applied': False, 'reason': 'no rostered track to record from'}
+
+    rec = {s[0]: (s[1], s[2], s[3]) for s in tracks[pov_ent]}
+    rec_yaw = d.get('yaws', {}).get(pov_ent, {})
+    r2 = radius * radius
+    half_fov = (fov_deg / 2.0) if fov_deg else None
+
+    before = sum(len(t) for t in tracks.values())
+    for n in list(tracks.keys()):
+        if n == pov_ent:
+            continue
+        kept = []
+        for s in tracks[n]:
+            f, x, y, z = s[0], s[1], s[2], s[3]
+            p = rec.get(f)
+            if p is None:
+                continue
+            dx, dy, dz = x - p[0], y - p[1], z - p[2]
+            if dx * dx + dy * dy + dz * dz > r2:
+                continue
+            if half_fov is not None:
+                yaw = rec_yaw.get(f)
+                if yaw is None:
+                    continue
+                bearing = math.degrees(math.atan2(dy, dx))
+                delta = abs((bearing - yaw + 180.0) % 360.0 - 180.0)
+                if delta > half_fov:
+                    continue
+            kept.append(s)
+        tracks[n] = kept
+    after = sum(len(t) for t in tracks.values())
+    return {'applied': True, 'pov_entnum': pov_ent, 'radius_u': radius,
+            'fov_deg': fov_deg, 'samples_before': before,
+            'samples_after': after,
+            'sample_keep_fraction': (after / before) if before else 0.0}
 
 
 # --------------------------------------------------------- carry detection
@@ -1089,6 +1368,52 @@ def trajectory_density_hist(tracks, labels, teams, team, extent,
     return H, xe, ye
 
 
+def density_fill_stats(tracks, labels, teams, extent, seeds=None,
+                        bin_size=TRAJ_DENSITY_BIN):
+    """How much of the map panel's density grid this demo actually lit up.
+
+    fill_fraction      = occupied cells / all cells in the fixed grid
+    reachable_fraction = occupied cells / cells that contain at least one
+                         rune seed (i.e. cells that are walkable floor at
+                         all -- most of the grid is void, so this is the
+                         more readable of the two; it is None when no rune
+                         was loaded).
+    Both are computed from the same fixed, seed-derived extent the map
+    panel is drawn on (see draw_trajectory_map's DIAGNOSTIC FIX 1), so they
+    are comparable sheet-to-sheet for a given map. Occupancy pools both
+    teams -- a cell counts as filled if either team crossed it."""
+    occupied = None
+    for team in ('red', 'blue'):
+        res = trajectory_density_hist(tracks, labels, teams, team, extent,
+                                       bin_size=bin_size)
+        if res is None:
+            continue
+        H = res[0]
+        occupied = (H >= 1) if occupied is None else (occupied | (H >= 1))
+    if occupied is None:
+        return {'fill_fraction': 0.0, 'reachable_fraction': None,
+                'cells_occupied': 0, 'cells_total': 0, 'cells_reachable': 0}
+    total = int(occupied.size)
+    n_occ = int(occupied.sum())
+    reach = None
+    n_reach = 0
+    if seeds:
+        xmin, xmax, ymin, ymax = extent
+        nx, ny = occupied.shape
+        sx = np.asarray([s[0] for s in seeds], dtype=np.float64)
+        sy = np.asarray([s[1] for s in seeds], dtype=np.float64)
+        ix = np.clip(((sx - xmin) / bin_size).astype(int), 0, nx - 1)
+        iy = np.clip(((sy - ymin) / bin_size).astype(int), 0, ny - 1)
+        seedgrid = np.zeros_like(occupied)
+        seedgrid[ix, iy] = True
+        n_reach = int(seedgrid.sum())
+        if n_reach:
+            reach = float((occupied & seedgrid).sum()) / n_reach
+    return {'fill_fraction': n_occ / float(total), 'reachable_fraction': reach,
+            'cells_occupied': n_occ, 'cells_total': total,
+            'cells_reachable': n_reach}
+
+
 def draw_trajectory_map(ax, seeds, tracks, labels, teams, windows, stands,
                          extent=None):
     if seeds:
@@ -1309,26 +1634,66 @@ def draw_window_panel(ax, tracks, labels, teams, f0, f1):
 
 
 def draw_kinematic_strip(ax, tracks, labels, death_by_ent):
-    busiest = sorted(
+    """BUG FIX (flat 0.00 strip): this panel used to pick the three tracks
+    with the most SAMPLES. On a client demo that is the wrong ranking -- a
+    parked, never-updated entity is sampled on every single frame (the
+    walker re-snapshots its frozen position), so it outranks every real
+    player, and the strip came out as three flat 0.00 u/s lines while the
+    map panel above it plainly showed players moving. Observed on
+    lmctf-2022-02-08-mactf06-20.37.dm2, where entities 2/9/10/12/13 each had
+    3831 samples at ONE distinct position and won the old selection outright
+    (a human sheet with a dead strip is exactly the kind of artifact that
+    gets a human judged as a bot).
+
+    Two independent guards now:
+      1. rank by TRAVEL, not sample count (track_travel), so the panel shows
+         the demo's three busiest MOVERS. anonymize() already drops
+         zero-travel entities from the roster, so this is belt-and-braces
+         against any track that is merely mostly-frozen.
+      2. reject a candidate whose speed series is empty or all-zero/NaN and
+         fall through to the next candidate, so a degenerate series can
+         never occupy one of the three slots. If every candidate is
+         degenerate the panel says so in words rather than drawing a
+         convincing-looking flat line.
+
+    Speed itself is derived from positions (hspeed_series), for both demo
+    shapes, deliberately: the playerstate stream (svc_playerinfo) carries a
+    real pmove velocity, but ONLY for the recording client and ONLY in
+    client demos -- serverrecord captures contain no playerstate at all.
+    Using it where available would make the strip a different instrument on
+    human demos than on bot demos, which is the exact corpus asymmetry this
+    tool exists to avoid."""
+    candidates = sorted(
         ((n, t) for n, t in tracks.items() if n in labels),
-        key=lambda kv: -len(kv[1]))[:3]
-    for i, (n, track) in enumerate(busiest):
+        key=lambda kv: -track_travel(kv[1]))
+    drawn = 0
+    for n, track in candidates:
+        if drawn >= 3:
+            break
         series = hspeed_series(track)
-        if not series:
+        finite = [v for _, v in series if v == v]
+        if not series or not finite or max(finite) <= 0.0:
             continue
         ts = [s[0] for s in series]
         vs = [s[1] for s in series]
-        color = KIN_COLORS[i % len(KIN_COLORS)]
+        color = KIN_COLORS[drawn % len(KIN_COLORS)]
         ax.plot(ts, vs, color=color, lw=0.8, alpha=0.85,
-                label=f"track {i+1}")
+                label=f"track {drawn+1}")
         for fr in death_by_ent.get(n, []):
             ax.axvline(fr / FPS, color=color, lw=0.6, ls=':', alpha=0.5)
+        drawn += 1
+    if drawn == 0:
+        ax.text(0.5, 0.5, 'no track in this demo has a non-zero speed '
+                'series -- strip suppressed rather than drawn flat',
+                ha='center', va='center', fontsize=8, color='#993333',
+                transform=ax.transAxes)
     ax.set_xlabel('time (s)', fontsize=8)
     ax.set_ylabel('h-speed (u/s)', fontsize=8)
     ax.set_title('kinematic strip -- busiest 3 tracks (dotted = death tick)',
                   fontsize=9)
     ax.tick_params(labelsize=7)
-    ax.legend(fontsize=7, loc='upper right')
+    if drawn:
+        ax.legend(fontsize=7, loc='upper right')
 
 
 def draw_dissimilarity_panel(ax_heat, ax_text, windows, dist_matrix,
@@ -1412,7 +1777,9 @@ def hash_demo(path):
 
 
 # ------------------------------------------------------------------- main
-def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
+def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6,
+                 pov_parity=False, pov_ent=None,
+                 pov_radius=POV_RADIUS_DEFAULT, pov_fov=POV_FOV_DEG_DEFAULT):
     d = walk_demo(demo_path)
 
     # duration normalization (judge round 3): refuse demos too short to
@@ -1429,7 +1796,23 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
             f"misleading sheet")
     duration_capped, orig_duration = cap_tracks_to_duration(d)
 
+    # POV parity (see apply_pov_parity). Order matters: anonymize once to
+    # get a roster to pick the virtual recorder from, filter, then anonymize
+    # AGAIN so the final roster is the one that survived the filter -- a
+    # player the virtual recorder never got near enough to see should drop
+    # off this sheet exactly like a player a human recorder never saw drops
+    # off theirs (MIN_TRACK_SAMPLES / zero-travel rules do that).
     labels, teams = anonymize(d)
+    pov_info = {'applied': False}
+    if pov_parity:
+        if not d['svrecord']:
+            pov_info = {'applied': False,
+                        'reason': 'not a serverrecord demo -- a client demo '
+                                  'is already PVS-filtered by the engine'}
+        else:
+            pov_info = apply_pov_parity(d, labels, pov_ent=pov_ent,
+                                        radius=pov_radius, fov_deg=pov_fov)
+            labels, teams = anonymize(d)
     tracks = d['tracks']
     windows, n_excluded_carries = carry_windows(tracks, labels)
     stands = flag_stands(windows)
@@ -1453,6 +1836,10 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
         rune_note = "map name not recovered from demo"
 
     map_extent = compute_seed_extent(seeds)
+    hist_extent = map_extent if map_extent is not None \
+        else _autoscale_extent(tracks, labels)
+    coverage = coverage_stats(tracks, labels, d['frames'])
+    fill = density_fill_stats(tracks, labels, teams, hist_extent, seeds)
     corridors = find_corridors(seeds, tracks, labels)
     corridor_note = None
     if not corridors:
@@ -1523,12 +1910,14 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
     # to GRID_COLS, so every one of the 8 panels gets a distinct cell.
     corridor_gs = gs[2, :].subgridspec(1, N_CORRIDORS, wspace=0.45)
     corridor_diversity_list = []
+    corridor_crossings = []
     for i in range(N_CORRIDORS):
         ax = fig.add_subplot(corridor_gs[0, i])
         if i < len(corridors):
             offs = corridor_offsets(corridors[i], tracks, labels)
             draw_corridor_panel(ax, corridors[i], offs, i + 1)
             corridor_diversity_list.append(corridor_diversity(offs))
+            corridor_crossings.append(len(offs))
         else:
             ax.axis('off')
             if i == 0 and corridor_note:
@@ -1601,7 +1990,21 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
         'label_to_team': {labels[k]: teams[k] for k in labels},
         'rune_used': bool(seeds),
         'map_extent': list(map_extent) if map_extent else None,
+        # pov_parity, coverage and density_fill live in the sidecar ONLY --
+        # never in the caption or anywhere else on the PNG. A sheet that
+        # announced it had been POV-filtered would identify itself as a
+        # serverrecord demo, which is exactly the tell this mode removes.
+        'pov_parity': pov_info,
+        'coverage': {
+            'visible_fraction': coverage['visible_fraction'],
+            'max_track_fraction': coverage['max_track_fraction'],
+            'median_other_track_fraction': coverage['median_other_fraction'],
+            'per_track_fraction': {labels[e]: v
+                                   for e, v in coverage['per_track'].items()},
+        },
+        'density_fill': fill,
         'corridors': [{'p0': c['p0'], 'p1': c['p1'], 'traffic': c['traffic'],
+                       'crossings': corridor_crossings[i],
                        **corridor_diversity_list[i]}
                       for i, c in enumerate(corridors)],
         'window_s': WINDOW_S,
@@ -1620,6 +2023,12 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
         'carries': len(windows), 'png': png_path, 'json': json_path,
         'mean_pairwise_frechet': mean_pairwise,
         'route_choice_entropy_bits': entropy_bits,
+        'pov_parity': pov_info,
+        'visible_fraction': coverage['visible_fraction'],
+        'fill_fraction': fill['fill_fraction'],
+        'reachable_fraction': fill['reachable_fraction'],
+        'corridor_crossings': corridor_crossings,
+        'outcome_counts': outcome_summary['counts'],
     }
 
 
@@ -1638,7 +2047,63 @@ def main():
     ap.add_argument('--runedir', default=DEFAULT_RUNEDIR,
                      help='directory holding <map>.rune files '
                           f'(default: {DEFAULT_RUNEDIR})')
+    ap.add_argument('--pov-parity', action='store_true',
+                     help='serverrecord demos only: keep another player\'s '
+                          'sample only when a virtual recorder could '
+                          'plausibly have seen it, so bot sheets carry the '
+                          'same partial-view scars client (human) demos do '
+                          '(see apply_pov_parity). No-op on client demos, '
+                          'which the engine already PVS-filtered.')
+    ap.add_argument('--pov-ent', type=int, default=None,
+                     help='entity number to use as the virtual recorder '
+                          '(default: most samples, then most travel)')
+    ap.add_argument('--pov-radius', type=float, default=POV_RADIUS_DEFAULT,
+                     help='visibility radius in world units for --pov-parity '
+                          f'(default: {POV_RADIUS_DEFAULT:.0f}, calibrated '
+                          'against human client-demo coverage)')
+    ap.add_argument('--pov-fov', type=float, default=POV_FOV_DEG_DEFAULT,
+                     help='optional facing gate in degrees (full cone width) '
+                          'for --pov-parity. OFF by default and normally '
+                          'should stay off: the engine cull is position-only '
+                          '(SV_BuildClientFrame tests the view origin\'s PVS '
+                          'cluster, not the view angles), so a cone imposes a '
+                          'scar the human corpus does not have.')
+    ap.add_argument('--coverage-report', action='store_true',
+                     help='no sheets: print the visible-player-seconds '
+                          'coverage of each input demo (the statistic '
+                          '--pov-radius is calibrated against) and their '
+                          'median')
     args = ap.parse_args()
+
+    if args.coverage_report:
+        rows = []
+        for demo in args.demos:
+            try:
+                d = walk_demo(demo)
+                if d['frames'] / FPS < DURATION_MIN_S:
+                    print(f"SKIP {os.path.basename(demo)} (under-sampled)")
+                    continue
+                cap_tracks_to_duration(d)
+                labels, _teams = anonymize(d)
+                if args.pov_parity and d['svrecord']:
+                    apply_pov_parity(d, labels, pov_ent=args.pov_ent,
+                                     radius=args.pov_radius,
+                                     fov_deg=args.pov_fov)
+                    labels, _teams = anonymize(d)
+                cov = coverage_stats(d['tracks'], labels, d['frames'])
+                rows.append(cov['visible_fraction'])
+                print(f"{'bot ' if d['svrecord'] else 'human'} "
+                      f"{os.path.basename(demo):45s} map={d['map']} "
+                      f"players={cov['players']:2d} "
+                      f"coverage={cov['visible_fraction']:.3f} "
+                      f"max_track={cov['max_track_fraction']:.3f} "
+                      f"median_other={cov['median_other_fraction']:.3f}")
+            except Exception as e:
+                print(f"FAIL {os.path.basename(demo)}: {type(e).__name__}: {e}")
+        if rows:
+            print(f"\nn={len(rows)} coverage min={min(rows):.3f} "
+                  f"median={float(np.median(rows)):.3f} max={max(rows):.3f}")
+        return
 
     if args.pool:
         pooled = []
@@ -1647,6 +2112,11 @@ def main():
                 d = walk_demo(demo)
                 cap_tracks_to_duration(d)
                 labels, _teams = anonymize(d)
+                if args.pov_parity and d['svrecord']:
+                    apply_pov_parity(d, labels, pov_ent=args.pov_ent,
+                                     radius=args.pov_radius,
+                                     fov_deg=args.pov_fov)
+                    labels, _teams = anonymize(d)
                 ws, _excl = carry_windows(d['tracks'], labels)
                 pooled.extend(ws)
             except DemoUndersampled:
@@ -1663,14 +2133,23 @@ def main():
     ok, failed, skipped = [], [], []
     for path in args.demos:
         try:
-            res = render_sheet(path, args.runedir, args.out)
+            res = render_sheet(path, args.runedir, args.out,
+                                pov_parity=args.pov_parity,
+                                pov_ent=args.pov_ent,
+                                pov_radius=args.pov_radius,
+                                pov_fov=args.pov_fov)
             ok.append(res)
             dur_str = f"{res['duration']:.1f}s(capped)" if res['duration_capped'] \
                 else f"{res['duration']:.1f}s"
+            pov = res['pov_parity']
+            pov_str = (f" pov=ent{pov['pov_entnum']}@{pov['radius_u']:.0f}u"
+                       if pov.get('applied') else "")
             print(f"OK   {os.path.basename(path)} -> {res['hash']}.png  "
                   f"map={res['map']} {'bot' if res['svrecord'] else 'human'} "
                   f"players={res['players']} dur={dur_str} "
-                  f"carries={res['carries']}")
+                  f"carries={res['carries']}{pov_str} "
+                  f"vis={res['visible_fraction']:.3f} "
+                  f"fill={res['fill_fraction']:.3f}")
         except DemoUndersampled as e:
             skipped.append((path, str(e)))
             print(f"SKIP {os.path.basename(path)}: {e}")
@@ -1798,3 +2277,52 @@ if __name__ == '__main__':
 #    are drawn from the same geometric-guess outcome labels described in
 #    note #3 above, and from the same possibly-duration-capped windows
 #    list described in note #7 -- both caveats apply here too.
+#
+# 10. POV parity (--pov-parity, see apply_pov_parity). Note #2 above
+#    describes the asymmetry: a client (human) demo only contains what the
+#    recorder's PVS let through, a serverrecord (bot) demo contains
+#    everything. Measured on this corpus, that is not a subtle difference
+#    -- human mactf06 demos carry 0.30-0.41 of the player-seconds a full
+#    recording would have, bot waves carry 1.000 -- and every panel on the
+#    sheet inherits it, so bot sheets render systematically CLEANER than
+#    human sheets for recording-vantage reasons alone. --pov-parity imposes
+#    the same scars on the bot corpus. What it does NOT do, and what a
+#    judge must still discount:
+#      (a) It is a distance gate, not a visibility test. No BSP data is
+#          read, so it cannot cull a player standing behind a wall 200u
+#          away, and it does cull one visible 1000u down a long sightline.
+#          The radius is fitted to the human coverage statistic
+#          (POV_RADIUS_DEFAULT), which absorbs the missing wall-culling
+#          into a smaller sphere on average but not sample-by-sample.
+#      (b) Recorder choice moves the numbers more than the radius does.
+#          Rotating the virtual recorder over all ten candidates in
+#          wave369 moves the sheet's density fill fraction across
+#          0.228-0.448 and its coverage across 0.284-0.376. pick_pov_entity
+#          uses a rule validated to recover the true recorder on human
+#          demos, but "which player is the camera" remains a real free
+#          choice, and --pov-ent N is there to re-run it.
+#      (c) Carry COUNTS are still not comparable across demo shapes, and
+#          not only in the direction note #2 predicted. A human demo can
+#          also OVER-count: losing sight of a carrier mid-run closes one
+#          window and the carrier's reappearance opens another, so one real
+#          flag run can be reported as several. In the calibration pair the
+#          human sheets show 21 and 14 carries against 5 and 4 on the
+#          parity bot sheets -- part behavior, part fragmentation.
+#      (d) Nothing about this mode is drawn on the PNG (it lives in the
+#          sidecar's 'pov_parity' block), because a caption saying
+#          "pov-parity" would itself unblind the sheet.
+#
+# 11. Kinematic strip track selection (bug fix, see draw_kinematic_strip).
+#    The strip used to pick the three tracks with the most SAMPLES, which
+#    on a client demo selects parked entities -- an entity the server wrote
+#    once and never updated is re-snapshotted at its frozen position on
+#    every frame, so it outranks every real player and the strip rendered
+#    as flat 0.00 u/s lines while the map panel above it showed players
+#    moving (lmctf-2022-02-08-mactf06-20.37.dm2: five such entities with
+#    3831 samples at one distinct position each). Selection is now by
+#    travel distance, parked entities are dropped from the roster entirely
+#    (anonymize), and a candidate whose speed series is all-zero is skipped
+#    rather than drawn. Speed remains position-derived for both demo
+#    shapes: svc_playerinfo carries a real pmove velocity but only for the
+#    recording client and only in client demos, so using it would make the
+#    strip a different instrument on the two corpora.
