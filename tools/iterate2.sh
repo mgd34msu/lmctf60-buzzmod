@@ -210,6 +210,9 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_pursuitz ${PURSUITZ[$i]}"
                 echo "set sg_smooth ${SMOOTHDOSE[$i]}"
                 echo "set sg_tactics ${TACTICS[$i]}"
+                if [ "$i" = "7" ]; then
+                    echo "set sg_crowdhold 1"
+                fi
                 echo "set sg_approachcover ${APPCOVER[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \

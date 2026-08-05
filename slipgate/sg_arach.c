@@ -2991,6 +2991,20 @@ rally_done:;
 				if (room >= 1 &&
 				    gi.cvar("sg_strictgrab", "0", 0)->value)
 				{
+					/*
+					 * THE CROWD VALVE (sg_crowdhold, wave 343). The 7v7
+					 * forensics: carriers there die at 4.2s median with the
+					 * WHOLE route left and 2+ enemies in the room -- the 20s
+					 * patience expires into a crowd the room fight can never
+					 * clear at that density, and the forced grab is a death
+					 * sentence (1 cap in 23 carries; 5v5 converts 36%). With
+					 * the valve, patience only concedes while the room holds
+					 * at most the cvar's count; a fuller room re-arms the
+					 * clock -- no grab into a crowd, ever.
+					 */
+					if (gi.cvar("sg_crowdhold", "0", 0)->value > 0 &&
+					    room > (int)gi.cvar("sg_crowdhold", "0", 0)->value)
+						bot->strict_since = level.time;
 					if (bot->strict_since <= 0.0f)
 						bot->strict_since = level.time;
 					if (level.time - bot->strict_since < 20.0f)
