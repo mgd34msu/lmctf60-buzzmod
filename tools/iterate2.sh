@@ -192,6 +192,12 @@ ROUTEJITTER=(8   8        8        0        8         8        8         8      
 # not always. Coin per carry at dose%; armed carries price the inbound
 # links 1.5x. s06 armed vs s07 control (the 5v3 pair: carry-rich).
 EXITASYM=(0      0        0        0        0         70       0         0        0        0)
+
+# 388 trial: the movement-texture judge (4/4 blind) named bang-bang
+# throttle the biggest remaining tell. sg_breather = mean seconds of safe
+# travel between sub-max windows; s03 armed vs s04 control on the
+# mactf06 film pair.
+BREATHER=(0      0        8        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
@@ -260,6 +266,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_ribbon ${RIBBON[$i]}"
                 echo "set sg_routejitter ${ROUTEJITTER[$i]}"
                 echo "set sg_exitasym ${EXITASYM[$i]}"
+                echo "set sg_breather ${BREATHER[$i]}"
                 if [ "$i" = "7" ]; then
                     echo "set sg_crowdhold 1"
                 fi

@@ -209,6 +209,8 @@ typedef struct sg_bot_s
 	int			exitasym_n;
 	qboolean	exitasym_armed;     /* this carry's coin, rolled once at the grab */
 	int			fake_ping;          /* synthetic ping base, rolled at join (owner: 5-15, near-local) */
+	float		breather_until;     /* sg_breather: sub-max throttle window */
+	float		breather_next;      /* next roll of the breather dice */
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -5495,6 +5497,43 @@ no_hold:;
 	 * would be 104ms of simulation for 100ms of play, which is free speed
 	 * rather than finer movement. Finer decisions, never a longer clock.
 	 */
+
+	/*
+	 * THE BREATHER (sg_breather, wave 388 trial). The movement-texture
+	 * judge, 4/4 blind on mactf06: "constant run plateau with
+	 * instantaneous needle spikes, zero acceleration ramping, no
+	 * burst/rest cadence, texture statistically identical from t=0 to
+	 * t=850." A human's throttle is not a switch: they ease off checking
+	 * corners, after fights, waiting on timers. This eases off ONLY on
+	 * safe legs -- never carrying, never on the rope, never engaged, feet
+	 * on the floor -- for 0.5-1.8s at a time, on average once per
+	 * cvar-seconds of safe travel. Danger cancels it instantly; the cap
+	 * on cost is a fraction of a second of arrival time per leg.
+	 */
+	{
+		float dose = gi.cvar("sg_breather", "0", 0)->value;
+
+		if (dose > 0.0f && role != SG_ROLE_CARRY &&
+		    bot->hook_phase == 0 && !bot->engaged_last &&
+		    e->groundentity != NULL)
+		{
+			if (level.time >= bot->breather_next)
+			{
+				bot->breather_next = level.time +
+				    dose * (0.5f + (float)(rand() % 100) / 100.0f);
+				bot->breather_until = level.time +
+				    0.5f + (float)(rand() % 130) / 100.0f;
+			}
+			if (level.time < bot->breather_until)
+			{
+				cmd.forwardmove = (short)(cmd.forwardmove * 0.35f);
+				cmd.sidemove = (short)(cmd.sidemove * 0.35f);
+			}
+		}
+		else
+			bot->breather_until = 0.0f;     /* danger ends the stroll */
+	}
+
 	{
 		int		total = cmd.msec;
 		int		sub = (int)gi.cvar("sg_subframes", "8", 0)->value;
