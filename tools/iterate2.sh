@@ -154,6 +154,11 @@ SMOOTHDOSE=(0    0        0        0        0         0        0         0      
 # computed sightline post. Read: steals CONCEDED per arm + the per-map
 # lane-coverage print (low coverage = geometry has no lane; gate later).
 RAILLANE=(1      1        1        1        1         1        1         1        0        1)
+# THE RIBBON (351+): the calibrated blind judge's first verdict, 8/8 --
+# "rope vs brush": every bot traversal lands on the same polyline.
+# Per-leg persistent lateral offset (value = max units). A/B s03 ON
+# vs s04 OFF; the verdict is the NEXT FILM, not a number.
+RIBBON=(0        0        48       0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
@@ -219,6 +224,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_smooth ${SMOOTHDOSE[$i]}"
                 echo "set sg_tactics ${TACTICS[$i]}"
                 echo "set sg_raillane ${RAILLANE[$i]}"
+                echo "set sg_ribbon ${RIBBON[$i]}"
                 if [ "$i" = "7" ]; then
                     echo "set sg_crowdhold 1"
                 fi

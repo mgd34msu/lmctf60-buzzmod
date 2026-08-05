@@ -157,6 +157,11 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
+	float		ribbon_off;     /* per-leg lateral offset (sg_ribbon):
+	                             * sampled once per committed link so
+	                             * repeated runs spread into a band --
+	                             * the film judge's rope-vs-brush tell */
+	int			ribbon_link;
 	float		latch_until;    /* link latch: the incumbent holds its
 	                             * seat until this time unless beaten by
 	                             * 15% -- re-decision cadence matched to
@@ -2832,6 +2837,17 @@ rally_done:;
 		bot->latch_until = level.time +
 		    gi.cvar("sg_linklatch", "0", 0)->value / 1000.0f;
 	}
+	if (bestlink >= 0 && bestlink != bot->ribbon_link)
+	{
+		/* new leg: sample the lane offset once and hold it. The film
+		 * verdict (calibrated blind judge, 8/8): every traversal lands
+		 * on the SAME polyline -- a rope, where humans paint a 50-150u
+		 * brush. Per-tick noise would be jitter, not diversity; the
+		 * offset must PERSIST across the leg. */
+		bot->ribbon_link = bestlink;
+		bot->ribbon_off = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
+		                  gi.cvar("sg_ribbon", "0", 0)->value;
+	}
 	bot->sticky_link = bestlink;
 
 	/*
@@ -4043,6 +4059,30 @@ no_hold:;
 			rune_link_t *l = &sg_rune->links[bestlink];
 
 			VectorCopy(sg_rune->seeds[l->to].origin, aim);
+			if (gi.cvar("sg_ribbon", "0", 0)->value > 0.0f &&
+			    l->action == RL_RUN && bot->ribbon_off != 0.0f)
+			{
+				vec3_t rdir, roff, rprobe;
+				trace_t rtr;
+
+				VectorSubtract(aim, e->s.origin, rdir);
+				rdir[2] = 0.0f;
+				if (VectorLength(rdir) > 32.0f)
+				{
+					float rl = VectorLength(rdir);
+
+					roff[0] = -rdir[1] / rl * bot->ribbon_off;
+					roff[1] = rdir[0] / rl * bot->ribbon_off;
+					roff[2] = 0.0f;
+					VectorAdd(aim, roff, rprobe);
+					rtr = gi.trace(e->s.origin, e->mins, e->maxs, rprobe,
+					               e, MASK_PLAYERSOLID);
+					/* the corridor decides: a blocked offset collapses to the
+					 * seed line -- the band is only as wide as the room */
+					if (rtr.fraction >= 1.0f)
+						VectorCopy(rprobe, aim);
+				}
+			}
 			have_aim = true;
 
 			/*
