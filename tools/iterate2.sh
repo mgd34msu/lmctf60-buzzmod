@@ -158,7 +158,7 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # "rope vs brush": every bot traversal lands on the same polyline.
 # Per-leg persistent lateral offset (value = max units). A/B s03 ON
 # vs s04 OFF; the verdict is the NEXT FILM, not a number.
-RIBBON=(0        0        48       0        0         0        0         0        0        0)
+RIBBON=(0        0        96       0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
