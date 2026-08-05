@@ -27,7 +27,7 @@ for ln in lines:
 print("attacker floors:", dict(sorted(goals.items(), key=lambda kv: kv[1])))
 print(f"defenders: {len(patrol_pos)} distinct 100u-cells, moving={patrol_moving} still={still}")
 # chat lines (public "Name[SG]: msg" or team "(Name[SG]): msg")
-chat = [l for l in lines if re.match(r'^\(?[A-Z][a-z]+\[SG\]\)?: [a-z]', l)]
+chat = [l for l in lines if re.match(r'^\(?(?:\[SG\])?[A-Z][a-z]+(?:\[SG\])?\)?: [a-z]', l)]
 print(f"chat lines: {len(chat)}", ("| sample: " + chat[0]) if chat else "")
 EOF
 echo "kills by weapon: blaster=$(grep -c 'was blasted' "$L") rail=$(grep -c 'was railed' "$L") rocket=$(grep -cE 'ate .* rocket|was blown' "$L") mg=$(grep -c 'was machinegunned' "$L") cg=$(grep -c 'was cut in half' "$L") hb=$(grep -c 'was melted' "$L") ssg=$(grep -cE 'was blown away|was gunned down' "$L")"

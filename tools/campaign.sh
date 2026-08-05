@@ -91,7 +91,7 @@ for map in "${MAPS[@]}"; do
         RJ=$(grep -c 'act=7' "$log")
         # chat lines only: public "Name[SG]: msg" or team "(Name[SG]): msg";
         # telemetry lines all start with an uppercase tag (SG/CMD/HOOK...)
-        CH=$(grep -cE '^\(?[A-Z][a-z]+\[SG\]\)?: ' "$log" 2>/dev/null || echo 0)
+        CH=$(grep -cE '^\(?(\[SG\])?[A-Z][a-z]+(\[SG\])?\)?: ' "$log" 2>/dev/null || echo 0)
         TS=$((TS+S)); TC=$((TC+C)); TK=$((TK+K))
         printf "%-10s %-4s %7s %9s %6s %8s %6s %6s %6s %7s\n" \
                "$map" "g$g" "$S" "$C" "$K" "$SH" "$SW" "$LF" "$RJ" "$CH"

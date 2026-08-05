@@ -358,6 +358,12 @@ static qboolean Chat_NameIs(edict_t *e, const char *word)
 	if (!e || !e->client || !word || !word[0])
 		return false;
 	n = e->client->pers.netname;
+	if (n[0] == '[')
+	{
+		const char *close = strchr(n, ']');
+		if (close)
+			n = close + 1;          /* "[SG]Arach" -> "Arach" */
+	}
 	for (i = 0; word[i] && n[i]; i++)
 		if (tolower((unsigned char)word[i]) != tolower((unsigned char)n[i]))
 			return false;

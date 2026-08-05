@@ -6706,8 +6706,12 @@ qboolean SG_AddBotTeam(int teamnum)
 		return false;
 
 	memset(userinfo, 0, sizeof(userinfo));
-	Info_SetValueForKey(userinfo, "name", va("%s[SG]", sg_names[slot & 15]));
-	Info_SetValueForKey(userinfo, "skin", "male/grunt");
+	/* tag FIRST -- owner's ruling 2026-08-05: "[SG]Arach", not "Arach[SG]" */
+	Info_SetValueForKey(userinfo, "name", va("[SG]%s", sg_names[slot & 15]));
+	/* a CTF-conforming request from the start; the team letter is corrected
+	 * in the second userinfo pass once the team is known, and servers
+	 * without a skin list get a parseable rb-set name instead of grunt */
+	Info_SetValueForKey(userinfo, "skin", va("male/rb-rm%d", 1 + (slot % 6)));
 	Info_SetValueForKey(userinfo, "hand", "0");
 
 	ent = SG_SpawnClientEdict();
@@ -6740,8 +6744,19 @@ qboolean SG_AddBotTeam(int teamnum)
 	 * ternary defaulted to blue, and every bot the balancer then sent
 	 * red played the whole match in the wrong colors (reported live
 	 * off the scoreboard portraits, wave 99 era). The second pass sees
-	 * the real team and paints the uniform right.
+	 * the real team and paints the uniform right. The REQUEST is also
+	 * re-lettered here (owner's ruling: CTF bots wear their team's CTF
+	 * skin) so even the no-skin-list fallback path parses to the right
+	 * color.
 	 */
+	if (ent->client->ctf.teamnum == CTF_TEAM_RED ||
+	    ent->client->ctf.teamnum == CTF_TEAM_BLUE)
+	{
+		Info_SetValueForKey(ent->client->pers.userinfo, "skin",
+		    va("male/rb-%cm%d",
+		       ent->client->ctf.teamnum == CTF_TEAM_RED ? 'r' : 'b',
+		       1 + (slot % 6)));
+	}
 	ClientUserinfoChanged(ent, ent->client->pers.userinfo);
 
 	sg_bots[slot].ent = ent;

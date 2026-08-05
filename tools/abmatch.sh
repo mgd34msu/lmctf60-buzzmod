@@ -23,9 +23,9 @@
 #
 # SLIPGATE bots are auto-named from slipgate/sg_arach.c's sg_names[] table
 # ("Arach", "Caco", "Rune", "Slip", "Gate", "Phase", "Field", "Trace") with
-# a literal "[SG]" suffix appended (sg_arach.c:997,
-# va("%s[SG]", sg_names[slot & 7])) -- the first 4 "sv sg add" calls in a
-# fresh match produce Arach[SG], Caco[SG], Rune[SG], Slip[SG].
+# a literal "[SG]" prefix prepended (sg_arach.c:997,
+# va("[SG]%s", sg_names[slot & 15])) -- the first 4 "sv sg add" calls in a
+# fresh match produce [SG]Arach, [SG]Caco, [SG]Rune, [SG]Slip.
 #
 # Flag-steal log line (g_ctffunc.c:1028): "%s stole the %s flag.\n"
 # Flag-capture log line (g_ctffunc.c:765): "%s captured the %s flag.\n"
@@ -60,7 +60,7 @@ LEGACY_BOTS=(
 )
 # First 4 "sv sg add" calls always land these 4 names (sg_names[slot & 7]
 # for slot 0..3), see the header comment above.
-SG_BOT_NAMES=("Arach[SG]" "Caco[SG]" "Rune[SG]" "Slip[SG]")
+SG_BOT_NAMES=("[SG]Arach" "[SG]Caco" "[SG]Rune" "[SG]Slip")
 LEGACY_BOT_NAMES=("Ranger" "Sarge" "Bitterman" "Grunt")
 
 usage() {
@@ -141,7 +141,7 @@ echo "total captures:  $total_captures"
 echo
 echo "--- per-bot-name lines (frags/deaths + steals, from the raw log) ---"
 for name in "${LEGACY_BOT_NAMES[@]}" "${SG_BOT_NAMES[@]}"; do
-    # -F: literal match, so the "[SG]" suffix's brackets aren't treated as
+    # -F: literal match, so the "[SG]" prefix's brackets aren't treated as
     # a regex character class.
     matches="$(grep -F "$name" "$LOGFILE")"
     count=$(printf '%s\n' "$matches" | grep -c . || true)
