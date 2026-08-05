@@ -6258,6 +6258,47 @@ no_hold:;
 
 						if (zp - td[2] > 24.0f && zp - td[2] < 260.0f)
 						{
+							/*
+							 * THE BODY HAS A BOX (owner's order, wave 372):
+							 * the fling arc is flown by a player-sized box,
+							 * not a point. Walk the parabola in six segments
+							 * with the real mins/maxs; an arc that clips
+							 * architecture is not released -- keep riding the
+							 * rope, which is the safe fallback and also what
+							 * a human does when the fling line is not there.
+							 */
+							{
+								vec3_t ap0, ap1;
+								trace_t atr;
+								int aseg;
+								qboolean arc_clear = true;
+
+								VectorCopy(e->s.origin, ap0);
+								for (aseg = 1; aseg <= 6; aseg++)
+								{
+									float at = tt * (float)aseg / 6.0f;
+
+									ap1[0] = e->s.origin[0] + e->velocity[0] * at;
+									ap1[1] = e->s.origin[1] + e->velocity[1] * at;
+									ap1[2] = e->s.origin[2] + e->velocity[2] * at
+									       - 0.5f * grav * at * at;
+									atr = gi.trace(ap0, e->mins, e->maxs, ap1,
+									               e, MASK_PLAYERSOLID);
+									if (atr.fraction < 1.0f && aseg < 6)
+									{
+										arc_clear = false;
+										break;
+									}
+									VectorCopy(ap1, ap0);
+								}
+								if (!arc_clear)
+								{
+									if (gi.cvar("sg_debug", "0", 0)->value)
+										gi.dprintf("HOOKARCVETO %s\n",
+										           e->client->pers.netname);
+									goto hook_wait;
+								}
+							}
 							ctf_hook_abort(e);
 							bot->hook_phase = 3;
 							bot->flow_release = true;
