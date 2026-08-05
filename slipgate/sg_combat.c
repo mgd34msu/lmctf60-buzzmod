@@ -28,6 +28,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
 
 #include <math.h>
 
@@ -489,11 +490,18 @@ static cvar_t	*sg_bot_skill;
  * gi.cvar walks the engine's list on every call, and this is read several times
  * per engaged bot per frame -- while the VALUE is read fresh every time, so
  * changing bot_skill mid-match takes effect on the next frame.
+ *
+ * The offset used to be (ci * 7) % 5 -- five grades handed out by arithmetic
+ * on a client index, which made the roster a skill ladder and nothing else.
+ * The persona table names the grade instead (sg_persona.c), over the SAME
+ * envelope: grade 0 is the team's full skill, grade 4 a full point under it,
+ * and the sixteen rows average grade 2.0 exactly as the modulo did. With
+ * sg_persona 0 there is no row and the modulo runs, unchanged.
  */
 static float Combat_Skill(edict_t *self)
 {
 	float	team, s;
-	int		ci;
+	int		ci, grade;
 
 	if (!sg_bot_skill)
 		sg_bot_skill = gi.cvar("bot_skill", "4", 0);
@@ -508,7 +516,11 @@ static float Combat_Skill(edict_t *self)
 	if (ci < 0)
 		ci = 0;
 
-	s = team - (float)((ci * 7) % 5) * SG_SKILL_SPREAD;
+	grade = SG_PersonaAimGrade(self);
+	if (grade < 0)
+		grade = (ci * 7) % 5;
+
+	s = team - (float)grade * SG_SKILL_SPREAD;
 	if (s < 0.0f)
 		s = 0.0f;
 	if (s > SG_SKILL_MAX)
@@ -649,7 +661,16 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
                             const float *threat)
 {
 	edict_t	*best = NULL;
-	float	bestdist = SG_ENGAGE_RANGE;
+	/*
+	 * How far out this bot is willing to START something. The cap itself is
+	 * a refusal to fight across the map (SG_ENGAGE_RANGE); the persona moves
+	 * it by at most 15% either way, which is the difference between a Fiend
+	 * who takes the corridor shot and a Wizard who lets it walk. Nearest
+	 * still wins inside whatever the cap turns out to be -- this bends who
+	 * is a candidate, not how one is chosen. Exactly SG_ENGAGE_RANGE when
+	 * no persona applies.
+	 */
+	float	bestdist = SG_ENGAGE_RANGE * SG_PersonaAggression(self);
 	int		myteam = self->client->ctf.teamnum;
 	int		i;
 
@@ -1147,6 +1168,18 @@ static float Combat_WantRange(edict_t *who, int w)
 	 * launcher and the BFG by exactly one each -- so the fallback is dead
 	 * code kept as a guard rather than as a behaviour */
 	want = (weight > 0.0f) ? (sum / weight) : Combat_BandCenter(SG_BAND_CLOSE);
+
+	/*
+	 * The persona's standing preference about distance, applied to the
+	 * ladder's answer and NOT to the gates below it: the splash floor, the
+	 * super shotgun's 256 and the weapon's own range cap all still get the
+	 * last word, so a short-preferring bot cannot be talked inside its own
+	 * rocket and a long-preferring one cannot carry a shotgun to a rail
+	 * fight. +/-15%, so it moves the band's centre and never the band.
+	 * `who` may be a human here -- Combat_Duel prices the FOE's preference
+	 * through this same function -- and a human has no row, so this is 1.0.
+	 */
+	want *= SG_PersonaRangeBias(who);
 
 	dsafe = Combat_DSafe(who, w);
 	if (dsafe > 0.0f && want < dsafe)

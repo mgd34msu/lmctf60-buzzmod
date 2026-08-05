@@ -24,6 +24,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_chat.h"       /* human orders replace the role quota */
+#include "slipgate/sg_persona.h"    /* the roster's names, wired to behaviour */
 
 /*
  * The client lifecycle and the glue's edict helpers are declared where the
@@ -4222,9 +4223,17 @@ stag_done:
 	 * post: stop, and face the seed an attacker descending on the stand
 	 * would arrive through -- the neighbor whose field value sits closest
 	 * above this one. Combat still owns the view the moment anyone shows.
+	 *
+	 * That 400 is the pin radius, and it is therefore the one live number on
+	 * this path that means "willingness to hold a post" -- so it is what
+	 * camp_tendency scales. Gate widens it by up to 15% and Fiend narrows it
+	 * by the same: the camper settles from farther out, the roamer keeps
+	 * walking until it is standing on the thing. The errand release below is
+	 * untouched, so a needy bot still leaves whatever its persona says. 400
+	 * exactly when no persona applies.
 	 */
 	if (role == SG_ROLE_DEFEND && bot->def_stand &&
-	    goal_field[bot->seed] < 400)
+	    (float)goal_field[bot->seed] < 400.0f * SG_PersonaCampScale(e))
 	{
 		int facev = 0x7fffffff, face = -1;
 		qboolean quiet = true;
@@ -4900,8 +4909,21 @@ no_hold:;
 						hend[2] = heye[2] + 280.0f;    /* ~30 deg up */
 						htr = gi.trace(heye, NULL, NULL, hend, e,
 						               MASK_SOLID);
+						/*
+						 * The bar the optional rope has to clear, and the
+						 * one number on this gate that is a PREFERENCE
+						 * rather than a fact -- the speed window and the
+						 * ground test are physics, but "is 170 units of
+						 * rope worth the throw" is taste. Slip's taste is
+						 * a shorter rope more often; Vore's is to keep
+						 * running. Divided, not multiplied: enthusiasm
+						 * LOWERS the bar. The cooldown below moves with
+						 * it so an eager bot also comes back to it
+						 * sooner, and both are 1.0 with no persona.
+						 */
 						if (htr.fraction < 1.0f && !htr.startsolid &&
-						    htr.fraction * 560.0f > 170.0f &&
+						    htr.fraction * 560.0f >
+						        170.0f / SG_PersonaHookScale(e) &&
 						    htr.plane.normal[2] < 0.7f)
 						{
 							/* wave 218 (sg_legcarrier): the burst is
@@ -4918,7 +4940,8 @@ no_hold:;
 								bot->hook_phase = 1;
 								bot->hook_deadline = level.time + 1.0f;
 								bot->speedhook = true;
-								bot->speedhook_next = level.time + 4.0f;
+								bot->speedhook_next = level.time
+								    + 4.0f / SG_PersonaHookScale(e);
 							}
 						}
 					}
@@ -7346,9 +7369,24 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].exitasym_n = 0;
 	sg_bots[slot].exitasym_armed = false;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
+	SG_PersonaBind(ent, slot);      /* the name now indexes a character */
 
-	gi.dprintf("slipgate: %s entered\n",
-	           Info_ValueForKey(userinfo, "name"));
+	/*
+	 * The persona in the join print, because the first question asked of a
+	 * behaviour difference is always "which one is that" and the second is
+	 * "was it cast that way or is it broken". A NULL persona (sg_persona 0)
+	 * prints the old line unchanged.
+	 */
+	{
+		const char *pname = SG_PersonaName(ent);
+
+		if (pname)
+			gi.dprintf("slipgate: %s entered (persona %s)\n",
+			           Info_ValueForKey(userinfo, "name"), pname);
+		else
+			gi.dprintf("slipgate: %s entered\n",
+			           Info_ValueForKey(userinfo, "name"));
+	}
 	return true;
 }
 
