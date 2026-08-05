@@ -209,6 +209,7 @@ typedef struct sg_bot_s
 	int			exitasym_set[16];   /* the inbound set, snapshotted at the grab */
 	int			exitasym_n;
 	qboolean	exitasym_armed;     /* this carry's coin, rolled once at the grab */
+	int			fake_ping;          /* synthetic ping base, rolled at join (owner: 5-15, near-local) */
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -2293,6 +2294,13 @@ rally_done:;
 		bot->lives++;
 		bot->inlinks_n = 0;     /* a new life rides in on its own roads */
 	}
+	/* the scoreboard ping a human would show from a near-local connection:
+	 * stable per-session base with a +/-1 flicker, never outside 5-15
+	 * (owner's ruling 2026-08-05: bots blend in everywhere, analytics
+	 * included) */
+	e->client->ping = bot->fake_ping + (rand() % 3) - 1;
+	if (e->client->ping < 5) e->client->ping = 5;
+	if (e->client->ping > 15) e->client->ping = 15;
 	/* leg ticker: a new role is a new errand -- new opinion of the map */
 	if ((int)role != bot->last_role_for_legs)
 	{
@@ -6746,6 +6754,7 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].inlinks_n = 0;
 	sg_bots[slot].exitasym_n = 0;
 	sg_bots[slot].exitasym_armed = false;
+	sg_bots[slot].fake_ping = 5 + rand() % 11;
 
 	gi.dprintf("slipgate: %s entered\n",
 	           Info_ValueForKey(userinfo, "name"));
