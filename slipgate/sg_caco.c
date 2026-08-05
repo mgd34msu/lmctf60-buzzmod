@@ -34,7 +34,7 @@
 
 #include "g_local.h"
 #include "g_ctffunc.h"
-#include "slipgate/sg_redirgi.h"                 /* BotClientCommand -- the chat route */
+#include "slipgate/sg_net.h"                    /* SG_BotClientCommand -- the chat route */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
 
@@ -184,7 +184,7 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 
 /*
  * Say the queued lines whose moment has come, through the game's real chat:
- * BotClientCommand(client, "say_team", line, NULL) routes the arguments into
+ * SG_BotClientCommand(client, "say_team", line, NULL) routes the arguments into
  * the redirected gi.argv and runs ClientCommand -> Cmd_Say_f for that client,
  * exactly as bl_know.c's Know_Speak does. Teammates -- human ones included --
  * read it in their own chat.

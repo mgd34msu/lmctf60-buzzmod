@@ -34,8 +34,7 @@ void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
 void		ClientBegin(edict_t *ent);
 void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
-edict_t		*G_SpawnClient(void);
-void		G_FreeClientEdict(edict_t *ent);
+#include "slipgate/sg_net.h"
 
 #define SG_MAXBOTS      16
 #define FIELD_INF       0x3fffffff
@@ -6537,7 +6536,7 @@ static qboolean Botfill_RemoveOne(int team)
 	gi.bprintf(PRINT_HIGH, "%s yields its slot.\n",
 	           sg_bots[worst].ent->client->pers.netname);
 	ClientDisconnect(sg_bots[worst].ent);
-	G_FreeClientEdict(sg_bots[worst].ent);
+	SG_FreeClientEdict(sg_bots[worst].ent);
 	sg_bots[worst].active = false;
 	sg_bots[worst].ent = NULL;
 	return true;
@@ -6711,14 +6710,14 @@ qboolean SG_AddBotTeam(int teamnum)
 	Info_SetValueForKey(userinfo, "skin", "male/grunt");
 	Info_SetValueForKey(userinfo, "hand", "0");
 
-	ent = G_SpawnClient();
+	ent = SG_SpawnClientEdict();
 	if (!ent)
 		return false;
 	ent->flags &= ~FL_BOT;
 	ent->inuse = false;
 	if (!ClientConnect(ent, userinfo))
 	{
-		G_FreeClientEdict(ent);
+		SG_FreeClientEdict(ent);
 		return false;
 	}
 	/* Same pattern as BotCTFAssignTeam: written while inuse is still
@@ -6773,7 +6772,7 @@ int SG_RemoveBots(void)
 		if (sg_bots[i].ent && sg_bots[i].ent->inuse)
 		{
 			ClientDisconnect(sg_bots[i].ent);
-			G_FreeClientEdict(sg_bots[i].ent);
+			SG_FreeClientEdict(sg_bots[i].ent);
 		}
 		sg_bots[i].active = false;
 		sg_bots[i].ent = NULL;

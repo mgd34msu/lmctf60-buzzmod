@@ -7,7 +7,7 @@
 #include "stdlog.h"
 #include "bat.h"
 #include "g_vote.h"
-#include "slipgate/sg_redirgi.h"    // BotClearCommandArguments
+#include "slipgate/sg_net.h"        // SG_ClearBotArgs
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 
 void spectator_respawn (edict_t *ent);
@@ -2921,6 +2921,6 @@ void ClientCommand(edict_t* ent)
 	else	// anything that doesn't match a command will be a chat
 		Cmd_Say_f (ent, false, true);
 
-	BotClearCommandArguments();
+	SG_ClearBotArgs();
 }
 

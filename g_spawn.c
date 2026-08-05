@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "slipgate/sg_net.h"
 #include "g_ctffunc.h"
 #include "g_tourney.h"
 
@@ -7,7 +8,6 @@
 #include <sys/types.h>
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
-#include "slipgate/sg_redirgi.h"	// BotInitMuzzleFlashToSoundindex
 
 typedef struct
 {
@@ -927,6 +927,8 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	SaveClientData ();
 
+	SG_NetNewLevel ();
+
 	gi.FreeTags (TAG_LEVEL);
 
 	memset (&level, 0, sizeof(level));
@@ -1042,9 +1044,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	G_FindTeams ();
 
 	PlayerTrail_Init ();
-
-	/* Rebuild the muzzleflash-to-soundindex table for this level's precache. */
-	BotInitMuzzleFlashToSoundindex();
 
 	sl_GameStart( &gi, level );	//	StdLog - Mark Davies
 }

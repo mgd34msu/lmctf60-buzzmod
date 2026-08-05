@@ -8,7 +8,7 @@
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
-#include "slipgate/sg_redirgi.h"
+#include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
 
 #ifdef _WIN32
@@ -166,9 +166,10 @@ q_exported game_export_t *GetGameAPI (game_import_t *import)
 	gi = *import;
 
 	/* The whole game writes prints, network messages and command arguments
-	 * through this redirection (see slipgate/sg_redirgi.c), so it has to be
-	 * installed before anything uses gi. */
-	BotRedirectGameImport();
+	 * through this redirection (see slipgate/sg_net.c), so it has to be
+	 * installed before anything uses gi -- and before anything caches a
+	 * copy of a slot. */
+	SG_NetInstall();
 
 	globals.apiversion = GAME_API_VERSION;
 	globals.Init = InitGame;

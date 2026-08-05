@@ -26,18 +26,18 @@
  *
  * ONE emitter owns say_team. SG_ChatSayTeam holds the per-bot budget and the
  * per-topic team cooldown, and sg_caco.c's Caco_Speak routes through it
- * rather than calling BotClientCommand itself. Two emitters with separate
+ * rather than calling SG_BotClientCommand itself. Two emitters with separate
  * limits cannot keep a channel readable no matter how tight each one is.
  *
- * The chat route is the game's own: BotClientCommand(client, "say_team",
+ * The chat route is the game's own: SG_BotClientCommand(client, "say_team",
  * line, NULL) fills the redirected gi.argv and runs ClientCommand ->
- * Cmd_Say_f for that client (sg_redirgi.c), so human teammates read it in
+ * Cmd_Say_f for that client (slipgate/sg_net.c), so human teammates read it in
  * their own chat window. Same route bl_know.c and sg_caco.c use.
  */
 
 #include "g_local.h"
 #include "g_ctffunc.h"
-#include "slipgate/sg_redirgi.h"                 /* BotClientCommand -- the chat route */
+#include "slipgate/sg_net.h"                    /* SG_BotClientCommand -- the chat route */
 #include "p_stats.h"                    /* stats_get -- the scoreboard's own count */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"
@@ -450,7 +450,7 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	}
 
 	Chat_Copy(buf, line, sizeof(buf));
-	BotClientCommand(cl, "say_team", buf, NULL);
+	SG_BotClientCommand(cl, "say_team", buf, NULL);
 
 	if (topic != SG_CHAT_TOPIC_ORDER)
 	{
@@ -479,7 +479,7 @@ static qboolean Chat_Say(edict_t *speaker, const char *line)
 		return false;
 
 	Chat_Copy(buf, line, sizeof(buf));
-	BotClientCommand(cl, "say", buf, NULL);
+	SG_BotClientCommand(cl, "say", buf, NULL);
 	chat_bot[cl].next_say = level.time + SG_CHAT_SAY_GAP;
 	return true;
 }
@@ -1135,7 +1135,7 @@ void SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier)
  * Note what Chat_Say can and cannot tell us. It returns false for its own
  * refusals -- the public say budget, a bot that died before its turn -- and
  * those are worth retrying. It cannot see spam control's verdict at all:
- * BotClientCommand returns void, so once the line is handed to Cmd_Say_f,
+ * SG_BotClientCommand returns void, so once the line is handed to Cmd_Say_f,
  * Chat_Say reports true whether ctf_SpamCheck passed it or ate it. So the
  * retry below is not a delivery check, and the greeting's correctness rests on
  * being scheduled late enough rather than on noticing a rejection. The retry
@@ -1315,7 +1315,7 @@ void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 				char buf[SG_CHAT_LINE];
 
 				Chat_Copy(buf, line, sizeof(buf));
-				BotClientCommand(cl, "say", buf, NULL);
+				SG_BotClientCommand(cl, "say", buf, NULL);
 				chat_bot[cl].next_say = level.time + SG_CHAT_SAY_GAP;
 			}
 		}
