@@ -141,11 +141,39 @@ ROW_HEIGHTS = [3.6, 1.35, 1.55, 1.55, 1.7]   # map / carry / corridor / window /
 
 
 # ------------------------------------------------------------ low-level walk
-def parse_delta_entity_film(r, bits, o):
+def parse_delta_entity_film(r, bits, o, is_svrecord=False):
     """o = [x, y, z, effects]. Same field order as dm2speed.parse_delta_entity,
     but captures origin AND the full effects value (needed for EF_FLAG1/
     EF_FLAG2 carry detection) instead of skipping it. Mirrors
-    demoents.parse_delta_entity_track's shape with one addition."""
+    demoents.parse_delta_entity_track's shape with one addition.
+
+    is_svrecord matters ONLY for the effects field, and only because of a
+    real quirk in yquake2's demo writer (server/sv_entities.c
+    SV_RecordDemoMessage): unlike a normal client update -- which deltas
+    each entity against the state actually last SENT to that client, so an
+    absent field bit genuinely means "unchanged since last frame" -- a
+    serverrecord capture calls
+        MSG_WriteDeltaEntity(&nostate, &ent->s, &buf, false, true)
+    with an all-zero `nostate` as the "from" state on EVERY frame, for
+    EVERY entity, not the previous frame's actual state. DeltaEntityBits()
+    (common/movemsg.c) only sets a field's bit when it differs from `from`,
+    so once effects goes back to 0 (flag dropped/captured, powerup
+    expired), `to->effects (0) == from->effects (0)` and the bit is simply
+    omitted -- exactly like when it was already 0 and stayed 0. A reader
+    that treats "bit absent" as "retain last known value" (correct for
+    client demos, where that IS the delta semantics) will see the entity's
+    effects value get stuck at its last nonzero reading forever, because
+    the wire never re-asserts zero. Verified empirically against
+    wave360-s03-5v5.dm2 (serverrecord, game log shows a completed steal+
+    capture): every tracked player's effects value went nonzero at some
+    point and then simply never changed again for the rest of the file.
+    The fix: for serverrecord demos only, re-derive effects from scratch
+    every frame -- absent bits mean the field equals its zero default,
+    because that IS what "from" was. Client demos are unaffected (the
+    'retain previous value when bit absent' behavior stays default there,
+    matching their true incremental delta wire semantics)."""
+    if is_svrecord:
+        o[3] = 0
     if bits & U_MODEL: r.skip(1)
     if bits & U_MODEL2: r.skip(1)
     if bits & U_MODEL3: r.skip(1)
@@ -211,7 +239,7 @@ def walk_demo(path, maxplayers=32):
                 ents.pop(num, None)
                 continue
             o = ents.setdefault(num, [0.0, 0.0, 0.0, 0])
-            parse_delta_entity_film(r, bits, o)
+            parse_delta_entity_film(r, bits, o, is_svrecord=bool(svrecord))
 
     def snapshot():
         nonlocal frame_idx
@@ -632,6 +660,77 @@ def corridor_offsets(corridor, tracks, labels, pad_frac=0.15,
     return offsets
 
 
+LANE_MIN_SHARE = 0.05    # a bin must hold >= this fraction of a corridor's
+                          # total crossings to count as its own "lane" --
+                          # below this, treat it as noise around a bigger
+                          # lane rather than a distinct path
+
+
+def corridor_diversity(offsets, bin_width=CROSS_SECTION_BIN,
+                        cap=CORRIDOR_OFFSET_CAP, min_share=LANE_MIN_SHARE):
+    """Three diversity numbers for a corridor's perpendicular-offset
+    distribution (see corridor_offsets docstring for what this distribution
+    means -- "rope vs band"): a single-file lane and a spread-out crowd
+    should NOT look the same on a judge's sheet, and a raw histogram alone
+    makes that judgment call visually rather than numerically.
+
+    lane_count: number of distinct local maxima (a bin, or flat run of
+      equal-height bins, strictly higher than both its neighbors -- or
+      higher than its one neighbor if it's an edge bin) whose share of
+      total crossings is >= min_share. A tight single-file corridor scores
+      1; a corridor with genuinely separate paths (e.g. two door-width
+      lanes either side of an obstacle) scores >1.
+
+    top_lane_share: the tallest bin's share of total crossings (0..1) --
+      how dominant the single most-used lane is, regardless of whether it
+      clears the min_share bar on its own (it always will, being the max).
+
+    width_fraction: (max(offsets) - min(offsets)) / (2 * cap), i.e. the
+      observed spread of crossings as a fraction of the widest possible
+      capture window (see CORRIDOR_OFFSET_CAP). Close to 0 means everyone
+      threads the same narrow line; close to 1 means traffic is spread
+      across the full width this panel can even see. This is a numeric
+      read of the same "rope vs band" signal the histogram shows visually.
+
+    Returns {'lane_count': int, 'top_lane_share': float,
+    'width_fraction': float}, all zero if offsets is empty."""
+    zero = {'lane_count': 0, 'top_lane_share': 0.0, 'width_fraction': 0.0}
+    if not offsets:
+        return zero
+    lo = math.floor(min(offsets) / bin_width) * bin_width
+    hi = math.ceil(max(offsets) / bin_width) * bin_width
+    if hi <= lo:
+        hi = lo + bin_width
+    bins = np.arange(lo, hi + bin_width, bin_width)
+    counts, _ = np.histogram(offsets, bins=bins)
+    total = int(counts.sum())
+    if total == 0:
+        return zero
+    shares = counts / total
+
+    lane_count = 0
+    n = len(counts)
+    i = 0
+    while i < n:
+        if shares[i] < min_share:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and counts[j + 1] == counts[i]:
+            j += 1
+        left_ok = (i == 0) or (counts[i] > counts[i - 1])
+        right_ok = (j == n - 1) or (counts[j] > counts[j + 1])
+        if left_ok and right_ok:
+            lane_count += 1
+        i = j + 1
+
+    top_lane_share = float(shares.max())
+    width = max(offsets) - min(offsets)
+    width_fraction = min(1.0, width / (2 * cap)) if cap > 0 else 0.0
+    return {'lane_count': lane_count, 'top_lane_share': top_lane_share,
+            'width_fraction': width_fraction}
+
+
 # --------------------------------------------------------- windowed detail
 def best_travel_window(tracks, labels, total_frames, window_s=WINDOW_S):
     """Finds the window_s-second window (all kept tracks pooled) with the
@@ -686,13 +785,36 @@ def pick_window_tracks(tracks, labels, f0, f1, max_tracks=WINDOW_MAX_TRACKS):
 
 
 # --------------------------------------------------------------- rendering
+import matplotlib.colors as mcolors
+
 TEAM_COLOR = {'red': '#c0392b', 'blue': '#2166ac', None: '#7f7f7f'}
 MAP_COLOR = '#c9c9c9'
 KIN_COLORS = ['#c0392b', '#2166ac', '#7a7a7a']
 
+# DIAGNOSTIC FIX (log-scale trajectory density): world-space bin size for
+# the full-game trajectory panel's per-pixel traversal-count histogram.
+# "per-pixel" here means one fixed-size world-unit cell, not one screen
+# pixel -- consistent with the rest of this sheet's fixed-raster-scale
+# design (see the DIAGNOSTIC FIX 1 comment in draw_trajectory_map below):
+# the same map always gets the same bin grid regardless of which demo is
+# being rendered, so density maps are comparable sheet-to-sheet.
+TRAJ_DENSITY_BIN = 16.0
+
+
+def _truncated_cmap(name, lo=0.28, hi=1.0, n=256):
+    """A sequential colormap with its palest end clipped off -- the raw
+    'Reds'/'Blues' colormaps start at near-white, which would make sparse
+    (but real) low-traffic cells invisible against this sheet's white
+    background. Clipping the low end means even a single-crossing cell
+    still shows a visible tint."""
+    base = plt.get_cmap(name)
+    return mcolors.ListedColormap(base(np.linspace(lo, hi, n)))
+
+
+DENSITY_CMAPS = {'red': _truncated_cmap('Reds'), 'blue': _truncated_cmap('Blues')}
+
 
 def alpha_ramp_segments(xs, ys, base_hex, lo=0.12, hi=0.92):
-    import matplotlib.colors as mcolors
     if len(xs) < 2:
         return None
     pts = list(zip(xs, ys))
@@ -704,22 +826,127 @@ def alpha_ramp_segments(xs, ys, base_hex, lo=0.12, hi=0.92):
     return LineCollection(segs, colors=colors, linewidths=1.6)
 
 
+def _autoscale_extent(tracks, labels, pad_frac=0.05):
+    """Fallback world-extent when no rune was loaded for this map (see
+    compute_seed_extent) -- derived from this demo's own kept-track points
+    instead, so the density histogram still has bin edges to work with."""
+    xs, ys = [], []
+    for n, track in tracks.items():
+        if n not in labels:
+            continue
+        for f, x, y, z, eff in track:
+            xs.append(x); ys.append(y)
+    if not xs:
+        return (-100.0, 100.0, -100.0, 100.0)
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    dx = (xmax - xmin) or 100.0
+    dy = (ymax - ymin) or 100.0
+    return (xmin - dx * pad_frac, xmax + dx * pad_frac,
+            ymin - dy * pad_frac, ymax + dy * pad_frac)
+
+
+def _densify_track_points(track, step=None):
+    """Sub-samples points along consecutive-frame (dt=0.1s), non-teleport
+    segments of a track at roughly `step` world-unit spacing (default:
+    half a density bin), so the 10Hz sample rate doesn't leave gaps in the
+    per-pixel traversal-count histogram along fast-moving segments -- this
+    makes the histogram count how much of the floor a path actually
+    covered, not just where its 10Hz samples happened to land. Segments
+    spanning a teleport (>TELEPORT_UNITS in one tick, same rule as
+    hspeed_series/death_ticks) are not interpolated across, but both
+    endpoints are still counted individually."""
+    if step is None:
+        step = TRAJ_DENSITY_BIN * 0.5
+    pts = []
+    prev = None
+    for f, x, y, z, eff in track:
+        if prev is not None:
+            f0, x0, y0 = prev
+            if f - f0 == 1:
+                dist = math.hypot(x - x0, y - y0)
+                if dist <= TELEPORT_UNITS:
+                    nseg = max(1, int(dist // step))
+                    for k in range(1, nseg):
+                        t = k / nseg
+                        pts.append((x0 + (x - x0) * t, y0 + (y - y0) * t))
+        pts.append((x, y))
+        prev = (f, x, y)
+    return pts
+
+
+def trajectory_density_hist(tracks, labels, teams, team, extent,
+                             bin_size=TRAJ_DENSITY_BIN):
+    """Per-pixel (see TRAJ_DENSITY_BIN) traversal-count 2D histogram for
+    every kept track on `team`, pooled. Returns (H, xedges, yedges) like
+    np.histogram2d, or None if `team` has no kept tracks with data."""
+    xmin, xmax, ymin, ymax = extent
+    nx = max(1, int(math.ceil((xmax - xmin) / bin_size)))
+    ny = max(1, int(math.ceil((ymax - ymin) / bin_size)))
+    xedges = xmin + np.arange(nx + 1) * bin_size
+    yedges = ymin + np.arange(ny + 1) * bin_size
+    xs, ys = [], []
+    for n, track in tracks.items():
+        if n not in labels or teams.get(n) != team:
+            continue
+        for x, y in _densify_track_points(track):
+            xs.append(x); ys.append(y)
+    if not xs:
+        return None
+    H, xe, ye = np.histogram2d(xs, ys, bins=[xedges, yedges])
+    return H, xe, ye
+
+
 def draw_trajectory_map(ax, seeds, tracks, labels, teams, windows, stands,
                          extent=None):
     if seeds:
         sx = [s[0] for s in seeds]
         sy = [s[1] for s in seeds]
         ax.scatter(sx, sy, s=1.5, c=MAP_COLOR, zorder=1, linewidths=0)
-    for n, track in tracks.items():
-        if n not in labels:
+    # DIAGNOSTIC FIX (log-scale trajectory density): the old alpha-ramp
+    # line plot drew every kept track's full-game path as a translucent
+    # line; with a busy roster and a long match, thousands of overlapping
+    # segments saturate to solid color and all spatial information about
+    # WHERE traffic concentrates is lost (a "hairball"). This bins every
+    # traversed point (both teams pooled per-team, then overlaid) into a
+    # fixed-size world-space grid and renders traversal COUNT on a log
+    # color scale, so a corridor crossed 200 times reads as visibly denser
+    # than one crossed twice, instead of both reading as "a line was here."
+    hist_extent = extent if extent is not None else _autoscale_extent(tracks, labels)
+    layers = []
+    vmax = 1
+    for team in ('red', 'blue'):
+        res = trajectory_density_hist(tracks, labels, teams, team, hist_extent)
+        if res is None:
             continue
-        xs = [p[1] for p in track]
-        ys = [p[2] for p in track]
-        base = TEAM_COLOR.get(teams.get(n))
-        lc = alpha_ramp_segments(xs, ys, base)
-        if lc is not None:
-            lc.set_zorder(2)
-            ax.add_collection(lc)
+        H, xe, ye = res
+        layers.append((team, H, xe, ye))
+        vmax = max(vmax, int(H.max()))
+    if layers:
+        norm = mcolors.LogNorm(vmin=1, vmax=vmax)
+        for team, H, xe, ye in layers:
+            Hm = np.ma.masked_less(H, 1)
+            # histogram2d indexes H as [x, y]; imshow wants [row=y, col=x].
+            ax.imshow(Hm.T, origin='lower',
+                      extent=(xe[0], xe[-1], ye[0], ye[-1]),
+                      cmap=DENSITY_CMAPS[team], norm=norm, alpha=0.88,
+                      interpolation='nearest', zorder=2, aspect='auto')
+        sm = plt.cm.ScalarMappable(norm=norm, cmap='Greys')
+        sm.set_array([])
+        # fig.colorbar(..., ax=ax) (rather than an inset axes placed by
+        # hand) carves its space OUT of ax's own layout box before the
+        # equal-aspect data limits are resolved at draw time, so it can
+        # never land on top of plotted density -- it shrinks the map panel
+        # by a small, always-identical amount instead, which preserves
+        # this sheet's fixed-scale guarantee (every render shrinks it the
+        # same way, so world-units-per-pixel is still constant map-to-map).
+        cb = ax.figure.colorbar(sm, ax=ax, fraction=0.035, pad=0.015,
+                                 shrink=0.5, aspect=25)
+        cb.set_label('traversal count (log)', fontsize=6)
+        cb.ax.tick_params(labelsize=6)
+    # event markers (steal/captured/died/lost/stand) are drawn AFTER the
+    # density layers and at a higher zorder, so they stay legible on top
+    # of even the most saturated density cells.
     for color, pos in stands.items():
         ax.scatter([pos[0]], [pos[1]], marker='*', s=260,
                     c=TEAM_COLOR[color], edgecolors='black',
@@ -759,14 +986,22 @@ def draw_trajectory_map(ax, seeds, tracks, labels, teams, windows, stands,
         ax.set_xlim(extent[0], extent[1])
         ax.set_ylim(extent[2], extent[3])
         ax.set_aspect('equal', adjustable='box')
+        # Keep the shrunk (equal-aspect) box centered in its cell even
+        # after fig.colorbar(..., ax=ax) steals a slice of this axes'
+        # width for the density colorbar -- otherwise the box anchors to
+        # whichever corner is left over from the steal, which reads as the
+        # map being randomly offset rather than just smaller.
+        ax.set_anchor('C')
     else:
         ax.set_aspect('equal', adjustable='datalim')
     ax.set_xticks([]); ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_visible(False)
     legend_handles = [
-        Line2D([0], [0], color=TEAM_COLOR['red'], lw=2, label='red team'),
-        Line2D([0], [0], color=TEAM_COLOR['blue'], lw=2, label='blue team'),
+        Line2D([0], [0], color=DENSITY_CMAPS['red'](0.85), lw=6,
+               label='red team density'),
+        Line2D([0], [0], color=DENSITY_CMAPS['blue'](0.85), lw=6,
+               label='blue team density'),
         Line2D([0], [0], marker='*', color='none', markerfacecolor='gray',
                markeredgecolor='black', markersize=11, label='flag stand'),
         Line2D([0], [0], marker='^', color='none', markerfacecolor='gray',
@@ -780,7 +1015,8 @@ def draw_trajectory_map(ax, seeds, tracks, labels, teams, windows, stands,
     ]
     ax.legend(handles=legend_handles, loc='upper right', fontsize=7,
               framealpha=0.85)
-    ax.set_title('full-game trajectory', fontsize=10)
+    ax.set_title(f'full-game trajectory density ({TRAJ_DENSITY_BIN:.0f}u cells, log scale)',
+                 fontsize=10)
 
 
 def draw_carry_panel(ax, w, tracks, labels, teams, idx):
@@ -809,8 +1045,6 @@ def draw_carry_panel(ax, w, tracks, labels, teams, idx):
 
 
 def draw_corridor_panel(ax, corridor, offsets, idx):
-    x0, y0 = corridor['p0']
-    x1, y1 = corridor['p1']
     if not offsets:
         ax.text(0.5, 0.5, 'no crossings', ha='center', va='center',
                 fontsize=8, transform=ax.transAxes, color='#666666')
@@ -822,12 +1056,33 @@ def draw_corridor_panel(ax, corridor, offsets, idx):
         bins = np.arange(lo, hi + CROSS_SECTION_BIN, CROSS_SECTION_BIN)
         ax.hist(offsets, bins=bins, color='#555577', edgecolor='none')
     ax.axvline(0, color='#c0392b', lw=0.8, ls='--', alpha=0.7)
+    div = corridor_diversity(offsets)
+    # DIAGNOSTIC FIX (corridor slot overlap, text half): with 8 panels
+    # across one figure width each panel is only ~1.1-1.3in wide -- the
+    # old single long title line (world coordinates + counts + bins all on
+    # one line) was wider than that at any legible font size and spilled
+    # text across the panel boundary into whichever neighbor happened to
+    # be drawn first, which is what actually produced the "clashing
+    # titles" a judge would see (the histograms themselves were, by that
+    # point, already in distinct cells -- see the corridor_gs fix in
+    # render_sheet). Keeping every line short and dropping the world
+    # coordinates from the on-sheet title (still in the JSON sidecar's
+    # 'corridors' list, which is explicitly not the blind artifact) fixes
+    # the visual collision without touching the layout.
+    # One Text object (set_title with embedded newlines), not a title plus
+    # a second hand-placed text block -- two separately-anchored text
+    # objects both sitting near the axes' top edge is what caused the
+    # stats line to overlap the "corridor N" label in an earlier version
+    # of this fix; matplotlib lays out a single multi-line title's lines
+    # without that collision.
     ax.set_title(
-        f"corridor {idx}: ({x0:.0f},{y0:.0f})-({x1:.0f},{y1:.0f})\n"
-        f"n={len(offsets)} crossings, {CROSS_SECTION_BIN:.0f}u bins",
-        fontsize=7)
-    ax.set_xlabel('perpendicular offset (u)', fontsize=7)
-    ax.tick_params(labelsize=6)
+        f"corridor {idx}\n"
+        f"n={len(offsets)}\n"
+        f"lanes={div['lane_count']}  top={div['top_lane_share']*100:.0f}%\n"
+        f"width={div['width_fraction']*100:.0f}%",
+        fontsize=6, linespacing=1.5)
+    ax.set_xlabel('offset (u)', fontsize=6.5)
+    ax.tick_params(labelsize=5.5)
     ax.set_yticks([])
 
 
@@ -977,15 +1232,24 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
                 "caption notes)", ha='center', va='center', fontsize=8,
                 color='#666666', transform=ax.transAxes)
 
-    # row 2: corridor cross-section histograms -- fixed N_CORRIDORS slots
-    col_w = GRID_COLS / N_CORRIDORS
+    # row 2: corridor cross-section histograms -- fixed N_CORRIDORS slots.
+    # DIAGNOSTIC FIX (corridor slot overlap): GRID_COLS (6) does not evenly
+    # divide N_CORRIDORS (8), so splitting this row's integer column range
+    # by round(i * GRID_COLS/N_CORRIDORS) produced duplicate column ranges
+    # for some i (two panels landing on the exact same gs[2, c0:c1] cell,
+    # drawn one over the other -- two histograms and two clashing titles
+    # superimposed) while other slots were skipped. A nested subgridspec
+    # scoped to just this row's cell sidesteps the divisibility problem
+    # entirely: it gets its own N_CORRIDORS equal-width columns, unrelated
+    # to GRID_COLS, so every one of the 8 panels gets a distinct cell.
+    corridor_gs = gs[2, :].subgridspec(1, N_CORRIDORS, wspace=0.45)
+    corridor_diversity_list = []
     for i in range(N_CORRIDORS):
-        c0 = int(round(i * col_w))
-        c1 = max(c0 + 1, int(round((i + 1) * col_w)))
-        ax = fig.add_subplot(gs[2, c0:c1])
+        ax = fig.add_subplot(corridor_gs[0, i])
         if i < len(corridors):
             offs = corridor_offsets(corridors[i], tracks, labels)
             draw_corridor_panel(ax, corridors[i], offs, i + 1)
+            corridor_diversity_list.append(corridor_diversity(offs))
         else:
             ax.axis('off')
             if i == 0 and corridor_note:
@@ -1037,8 +1301,9 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6):
         'label_to_team': {labels[k]: teams[k] for k in labels},
         'rune_used': bool(seeds),
         'map_extent': list(map_extent) if map_extent else None,
-        'corridors': [{'p0': c['p0'], 'p1': c['p1'], 'traffic': c['traffic']}
-                      for c in corridors],
+        'corridors': [{'p0': c['p0'], 'p1': c['p1'], 'traffic': c['traffic'],
+                       **corridor_diversity_list[i]}
+                      for i, c in enumerate(corridors)],
         'window_s': WINDOW_S,
         'window_t0_s': win_f0 / FPS,
         'window_t1_s': win_f1 / FPS,
@@ -1095,8 +1360,34 @@ if __name__ == '__main__':
 #    the carrying player's entity. This was cross-validated against a bot
 #    (serverrecord) demo where it matched the modelindex3 flag-attachment
 #    signal exactly on carry START but modelindex3 silently failed to clear
-#    on carry END (a real quirk in this codebase's reset path) -- effects
-#    was the more complete of the two and is what's used here.
+#    on carry END. That "silently fails to clear" symptom turned out NOT to
+#    be a game-code reset bug (nor is the earlier version of this note's
+#    "effects is the more complete of the two" framing quite right) -- it's
+#    a wire-format quirk in yquake2's server/sv_entities.c
+#    SV_RecordDemoMessage: every serverrecord frame deltas each entity
+#    against an all-zero reference state (MSG_WriteDeltaEntity(&nostate,
+#    &ent->s, ...) with nostate memset to 0), not against the actual
+#    previous frame like a normal client update does. So a field that
+#    returns to zero (effects clearing, modelindex3 clearing) stops being
+#    included in the delta from that frame on, because it now MATCHES the
+#    always-zero reference -- there is no "it's zero now" signal on the
+#    wire, only silence, and silence is exactly what a naive incremental-
+#    delta reader also does when a field is genuinely unchanged. This bit
+#    film.py (walk_demo/parse_delta_entity_film) for effects specifically:
+#    once a carry started, effects would get stuck at its last nonzero
+#    value for the rest of the demo, so the carry-detection state machine
+#    (which looks for a return-to-zero to CLOSE a window) never saw one,
+#    and reported carries=0 on demos where the game log showed real steals.
+#    Confirmed against wave360-s03-5v5.dm2 (serverrecord; log line 12822
+#    "Field[SG] captured the blue flag."): every tracked player's raw
+#    effects value went nonzero at some point and then never changed again
+#    for the rest of the file, under the old decode. Fixed by re-deriving
+#    effects from scratch every frame for serverrecord demos specifically
+#    (an absent effects bit means "equals its zero default", not "carry
+#    forward the last value") -- see parse_delta_entity_film's is_svrecord
+#    parameter. Client demos are untouched: their delta stream really is
+#    incremental against the previous frame, so "bit absent = unchanged"
+#    is the correct read there and always was.
 #
 # 2. On at least one human client demo probed during development, a known
 #    steal+capture pair (confirmed via svc_print text, which this tool does
