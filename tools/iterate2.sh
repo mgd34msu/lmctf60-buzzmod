@@ -166,7 +166,7 @@ RIBBON=(0        0        0        0        0         0        0         0      
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
 # corridor band width on film (human bar 69u).
-ROUTEJITTER=(0   0        20       0        0         0        0         0        0        0)
+ROUTEJITTER=(0   0        8        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
