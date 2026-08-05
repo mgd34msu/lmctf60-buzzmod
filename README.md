@@ -28,6 +28,41 @@ The database creates itself. `1` gives one file per player instead; `0` is off.
 
 Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmstats).
 
+## SLIPGATE bots
+
+SLIPGATE is a from-scratch bot system built into the mod, aimed at bots that
+play LMCTF the way humans play it — grapple-first movement, real flag-carrier
+escape runs, escorts that screen the carrier, and defense that guards
+sightlines instead of standing on the flag.
+
+The bots navigate on a per-map graph proven by actual physics runs (runs,
+jumps, drops, grapple swings, rocket jumps), price their decisions on a live
+cost surface (items, danger, duel range, cover, teammate support), and share
+one team-wide belief of where enemies and flags are. Movement doctrine and
+combat habits are mined from a large corpus of demos from the game's
+competitive era and validated in continuous automated ten-server experiments —
+every behavior ships only after winning a controlled A/B trial.
+
+Working today: full steal → carry → escort → capture play at every team size
+from 2v2 to 7v7, cooked-grenade area denial, sound-directed speculative fire,
+landing-point rocket leads on airborne targets, covered approach routing,
+route commitment ("stay the course until it stops being good enough"), and
+computed rail-lane defense posts.
+
+Looking to add, in general terms:
+
+- Smarter high-density play — coordinated breaches when the flag room never
+  clears, instead of waiting forever or dying at the pedestal
+- Attackers that exploit a railer's rhythm — sprint windows between shots,
+  fling arcs that end behind cover
+- Smoother travel movement where it still looks bot-like, without giving up
+  any speed or outcomes
+- True air-strafe acceleration chained through hook flights
+- Defense that adapts its posts per map instead of one doctrine everywhere
+- Bots modeled on individual players from the demo archive — styles, not
+  just averages
+- Rune-aware strategy beyond incidental pickups
+
 ## What's tracked
 
 Frags, deaths, suicides, captures, flag pickups, returns, carrier kills, offense
