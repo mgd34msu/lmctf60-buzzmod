@@ -134,6 +134,8 @@ typedef struct
 	unsigned item_sig[SG_FIELD_CLASSES];
 	int		*our_carrier[2];                    /* support field, per team-1 */
 	int		*to_post[2];                        /* learned defensive post (.dpo) */
+	int		*to_lane[2];                        /* rail-lane post: sees the most
+	                                             * approach corridor (computed) */
 	int		*to_icept[2];                       /* learned steal-intercept (.dpo) */
 
 	float	next_refresh;

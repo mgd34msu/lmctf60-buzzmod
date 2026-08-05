@@ -725,6 +725,89 @@ qboolean Fields_Setup(rune_t *r)
 		}
 	}
 
+	/*
+	 * THE RAIL LANE (sg_raillane, wave 345 -- the owner's craft: "rails
+	 * guard sight lines; I held them so well the enemy couldn't reach
+	 * our base"). Per team, once per level: among candidate posts near
+	 * the stand, pick the seed that SEES the most of the approach
+	 * corridor -- the band of seeds an attacker must cross on its way
+	 * in. Geometry, not corpus dwell: the .dpo posts failed because
+	 * they pulled defenders off the stand; the lane is defined by
+	 * covering the way TO the stand.
+	 */
+	{
+		int t, i, j;
+
+		for (t = 0; t < 2; t++)
+		{
+			int *own = t == 0 ? sg_fields.to_red_flag
+			                  : sg_fields.to_blue_flag;
+			int flag_seed = t == 0 ? sg_fields.red_flag_seed
+			                       : sg_fields.blue_flag_seed;
+			int appr[48], na = 0;
+			int best = -1;
+			float bestscore = -1.0f;
+
+			/* the corridor: sample seeds 1.5-4s out on the home field */
+			for (i = 0; i < r->hdr.num_seeds && na < 48; i += 7)
+				if (own[i] < SG_FIELD_INF &&
+				    own[i] >= 1500 && own[i] <= 4000)
+					appr[na++] = i;
+
+			/* candidates: seeds inside 2s of the stand */
+			for (i = 0; i < r->hdr.num_seeds; i++)
+			{
+				float score = 0.0f;
+				vec3_t eye;
+
+				if (own[i] >= SG_FIELD_INF || own[i] > 2000)
+					continue;
+				VectorCopy(r->seeds[i].origin, eye);
+				eye[2] += 22.0f;
+				for (j = 0; j < na; j++)
+				{
+					vec3_t thr;
+					trace_t ltr;
+
+					VectorCopy(r->seeds[appr[j]].origin, thr);
+					thr[2] += 22.0f;
+					ltr = gi.trace(eye, NULL, NULL, thr, NULL,
+					               MASK_SOLID);
+					if (ltr.fraction >= 1.0f)
+						score += 1.0f;
+				}
+				/* seeing the stand itself is required: a lane that
+				 * cannot also watch the flag is a camp, not a guard */
+				{
+					vec3_t fthr;
+					trace_t ftr;
+
+					VectorCopy(r->seeds[flag_seed].origin, fthr);
+					fthr[2] += 22.0f;
+					ftr = gi.trace(eye, NULL, NULL, fthr, NULL,
+					               MASK_SOLID);
+					if (ftr.fraction < 1.0f)
+						continue;
+				}
+				if (score > bestscore)
+				{
+					bestscore = score;
+					best = i;
+				}
+			}
+			sg_fields.to_lane[t] = Field_Alloc(r);
+			if (best >= 0)
+			{
+				Field_FromOne(r, sg_fields.to_lane[t], best);
+				gi.dprintf("slipgate: rail lane team%d seed=%d covers %.0f/%d approach seeds\n",
+				           t + 1, best, bestscore, na);
+			}
+			else
+				memcpy(sg_fields.to_lane[t], own,
+				       sizeof(int) * r->hdr.num_seeds);
+		}
+	}
+
 	/* dropped-flag fields start as copies of the home fields */
 	sg_fields.to_red_flag_now = Field_Alloc(r);
 	sg_fields.to_blue_flag_now = Field_Alloc(r);

@@ -1548,6 +1548,13 @@ static void SG_BotThink(sg_bot_t *bot)
 			if (!astray && sg_fields.to_post[team - 1] &&
 			    gi.cvar("sg_defpost", "0", 0)->value >= 3)
 				goal_field = sg_fields.to_post[team - 1];
+			else if (!astray && !bot->def_stand &&
+			         sg_fields.to_lane[team - 1] &&
+			         gi.cvar("sg_raillane", "0", 0)->value)
+				/* the second defender holds the computed rail lane; the
+				 * watchman stays on the stand (the .dpo lesson: never
+				 * empty the stand for a post) */
+				goal_field = sg_fields.to_lane[team - 1];
 			else if (astray && sg_fields.to_icept[team - 1] &&
 			         gi.cvar("sg_defreact", "0", 0)->value >= 3)
 				goal_field = sg_fields.to_icept[team - 1];
