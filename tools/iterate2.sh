@@ -167,7 +167,11 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # needle-over-empty-base, exactly what a drifting per-traversal offset
 # fills. A/B s03 ON (48u drift) vs s04 control; verdict on parity film
 # needle shape, not on any single number.
-RIBBON=(0        0        48       0        0         0        0         0        0        0)
+# ADOPTED wave 380 (pooled 377/378/379, three independent blind readers):
+# control arm carried the needle-over-empty-base corridors every wave
+# (3-4/2/2 vs 2/1/1) and every extreme lane concentration (43%, 25%).
+# s04 + s09 stay 0 as the standing controls, same pattern as ROUTEJITTER.
+RIBBON=(48       48       48       0        48        48       48        48       0        48)
 # route jitter (359+): per-bot-per-life deterministic pricing tilt
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
