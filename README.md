@@ -40,8 +40,8 @@ jumps, drops, grapple swings, rocket jumps), price their decisions on a live
 cost surface (items, danger, duel range, cover, teammate support), and share
 one team-wide belief of where enemies and flags are. Movement doctrine and
 combat habits are mined from a large corpus of demos from the game's
-competitive era and validated in continuous automated ten-server experiments —
-every behavior ships only after winning a controlled A/B trial.
+competitive era and validated in continuous automated experiments — every
+behavior ships only after winning a controlled A/B trial.
 
 Working today: full steal → carry → escort → capture play at every team size
 from 2v2 to 7v7, cooked-grenade area denial, sound-directed speculative fire,
