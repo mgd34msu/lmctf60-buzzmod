@@ -211,6 +211,7 @@ typedef struct sg_bot_s
 	int			fake_ping;          /* synthetic ping base, rolled at join (owner: 5-15, near-local) */
 	float		breather_until;     /* sg_breather: sub-max throttle window */
 	float		breather_next;      /* next roll of the breather dice */
+	float		plan_next;          /* sg_drawplan: next in-world plan draw */
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -1346,6 +1347,119 @@ static float Duel_Price(edict_t *e, vec3_t seed_org, vec3_t enemy_org,
 #define SG_WEAVE_BASE		0.4f
 #define SG_WEAVE_STEP		0.05f
 #define SG_WEAVE_HOLD		150.0f	/* a step this short is a stand, not a run */
+
+/*
+ * IN-WORLD PLAN DRAWING (sg_drawplan, capability census gap 9).
+ *
+ * A route defect is obvious to the eye and nearly invisible in a log: an
+ * orbit, a chain that doubles back on itself, a belief parked inside a
+ * wall. Set sg_drawplan to a bot's client number PLUS ONE (or -1 for every
+ * bot) and once a second that bot draws what it has committed to -- a beam
+ * from the body to the current link's destination, a second beam on to
+ * where the route field goes after that, and a short post at every enemy
+ * position its own team still believes in. A spectator then watches the
+ * decision instead of reconstructing it.
+ *
+ * Cost when the cvar is 0, which is always in a real match: one float
+ * compare per bot per frame. The cvar itself is read inside, so it is read
+ * at most once per bot per second and never on a hot path.
+ *
+ * The wire format is the mod's own bfg-laser emission, copied from
+ * g_weapon.c (bfg_think, the TE_BFG_LASER block): svc_temp_entity, the
+ * effect byte, two positions, one multicast. The scope is the single
+ * deviation -- MULTICAST_ALL instead of that site's MULTICAST_PHS, because
+ * the spectator doing the diagnosing is rarely within earshot of the bot he
+ * is watching, and a debug overlay that is off by default can afford it.
+ */
+static void SG_PlanBeam(vec3_t from, vec3_t to)
+{
+	gi.WriteByte(svc_temp_entity);
+	gi.WriteByte(TE_BFG_LASER);
+	gi.WritePosition(from);
+	gi.WritePosition(to);
+	gi.multicast(from, MULTICAST_ALL);
+}
+
+static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
+                        const int *route_field)
+{
+	edict_t	*e = bot->ent;
+	vec3_t	a, b, c;
+	int		dp, k, nx = -1;
+
+	dp = (int)gi.cvar("sg_drawplan", "0", 0)->value;
+	if (!dp || !sg_rune || !e || !e->client || !e->inuse)
+		return;
+	if (dp > 0 && dp - 1 != (int)(e->client - game.clients))
+		return;
+
+	/*
+	 * The committed link is the one this frame chose; when the final
+	 * approach drops the link entirely (the last ten metres are a straight
+	 * line) the incumbent is what the bot was last riding, and that is the
+	 * honest thing to draw.
+	 */
+	if (link < 0)
+		link = bot->sticky_link;
+
+	VectorCopy(e->s.origin, a);
+	a[2] += 16.0f;
+
+	if (link >= 0 && link < sg_rune->hdr.num_links)
+	{
+		int to = sg_rune->links[link].to;
+
+		VectorCopy(sg_rune->seeds[to].origin, b);
+		b[2] += 16.0f;
+		SG_PlanBeam(a, b);
+
+		/*
+		 * One more step down the same field, by the same first-order
+		 * descent the lookahead aim uses -- so the second segment is
+		 * the route the bot is about to take rather than a guess at it.
+		 */
+		if (route_field)
+		{
+			int li2, nv = route_field[to];
+
+			for (li2 = sg_rune->first_link[to]; li2 >= 0;
+			     li2 = sg_rune->next_link[li2])
+			{
+				if (route_field[sg_rune->links[li2].to] < nv)
+				{
+					nv = route_field[sg_rune->links[li2].to];
+					nx = li2;
+				}
+			}
+		}
+		if (nx >= 0)
+		{
+			VectorCopy(sg_rune->seeds[sg_rune->links[nx].to].origin, c);
+			c[2] += 16.0f;
+			SG_PlanBeam(b, c);
+		}
+	}
+
+	/* the belief the route was priced against: one post per sighting still
+	 * inside the staleness window (sg_caco.c owns the table) */
+	if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
+	{
+		for (k = 0; k < SG_MAX_ENEMY_TRACK; k++)
+		{
+			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][k];
+
+			if (en->client < 0 || en->seed < 0 ||
+			    en->seed >= sg_rune->hdr.num_seeds)
+				continue;
+			if (level.time - en->seen_time > SG_BELIEF_STALE)
+				continue;
+			VectorCopy(sg_rune->seeds[en->seed].origin, b);
+			VectorCopy(b, c);
+			c[2] += 72.0f;
+			SG_PlanBeam(b, c);
+		}
+	}
+}
 
 static void SG_BotThink(sg_bot_t *bot)
 {
@@ -6541,6 +6655,17 @@ hook_wait:;
 		           bot->stuck_time, e->groundentity != NULL,
 		           (int)bot->engaged_last);
 	}
+
+	/*
+	 * The same once-a-second cadence, for the eye instead of the log
+	 * (sg_drawplan). Its own clock, because the debug report above is
+	 * gated on sg_debug and the two are useful separately.
+	 */
+	if (level.time >= bot->plan_next)
+	{
+		bot->plan_next = level.time + 1.0f;
+		SG_DrawPlan(bot, team, bestlink, route_field);
+	}
 }
 
 /*
@@ -6726,11 +6851,44 @@ qboolean SG_AddBot(void)
 	return SG_AddBotTeam(0);
 }
 
+/*
+ * DUPLICATE-NAME GUARD (capability census gap 12b).
+ *
+ * The sixteen names above exist because two clients wearing one name merge
+ * in every per-name analysis. A HUMAN wearing the name a bot is about to
+ * take is the same fault arriving from the other side -- nothing stops a
+ * player calling himself "[SG]Arach" -- and it lands on the scoreboard as
+ * well as in the telemetry.
+ *
+ * The seat keeps its identity: the slot number, the skin and everything
+ * else derived from the slot are untouched. Only the DISPLAY name walks
+ * forward to the next free entry in the table.
+ */
+static qboolean SG_NameOnHuman(const char *name)
+{
+	int i;
+
+	for (i = 1; i <= game.maxclients; i++)
+	{
+		edict_t *e = &g_edicts[i];
+
+		if (!e->inuse || !e->client)
+			continue;
+		if (e->flags & FL_BOT)      /* a bot's name is ours to move, not to
+		                             * dodge; the slots already differ */
+			continue;
+		if (!Q_stricmp(e->client->pers.netname, name))
+			return true;
+	}
+	return false;
+}
+
 qboolean SG_AddBotTeam(int teamnum)
 {
 	edict_t *ent;
 	char userinfo[MAX_INFO_STRING];
-	int i, slot = -1;
+	char name[32];
+	int i, slot = -1, tries;
 
 	if (!SG_LevelSetup())
 		return false;
@@ -6745,8 +6903,19 @@ qboolean SG_AddBotTeam(int teamnum)
 		return false;
 
 	memset(userinfo, 0, sizeof(userinfo));
-	/* tag FIRST -- owner's ruling 2026-08-05: "[SG]Arach", not "Arach[SG]" */
-	Info_SetValueForKey(userinfo, "name", va("[SG]%s", sg_names[slot & 15]));
+	/* tag FIRST -- owner's ruling 2026-08-05: "[SG]Arach", not "Arach[SG]".
+	 * The name walks past any connected human already wearing it; sixteen
+	 * tries is the whole table, and past that the collision is accepted
+	 * rather than the bot refused -- a duplicate name is a nuisance, a
+	 * short-handed team is a broken match. */
+	for (tries = 0; tries < 16; tries++)
+	{
+		Com_sprintf(name, sizeof(name), "[SG]%s",
+		            sg_names[(slot + tries) & 15]);
+		if (!SG_NameOnHuman(name))
+			break;
+	}
+	Info_SetValueForKey(userinfo, "name", name);
 	/* a CTF-conforming request from the start; the team letter is corrected
 	 * in the second userinfo pass once the team is known, and servers
 	 * without a skin list get a parseable rb-set name instead of grunt */
