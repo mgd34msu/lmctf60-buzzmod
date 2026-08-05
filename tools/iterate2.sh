@@ -175,6 +175,12 @@ RIBBON=(0        0        48       0        0         0        0         0      
 # jitter ADOPTED at dose 8 (pooled verdict: 2.41 bits vs control 1.99
 # vs dose-20 2.21; pooled humans 2.62). s04 stays the clean control.
 ROUTEJITTER=(8   8        8        0        8         8        8         8        0        8)
+
+# EXIT-LANE ASYMMETRY (379 trial, ruled 2026-08-05): a human tends to
+# leave with the flag by a different road than the one ridden in -- but
+# not always. Coin per carry at dose%; armed carries price the inbound
+# links 1.5x. s06 armed vs s07 control (the 5v3 pair: carry-rich).
+EXITASYM=(0      0        0        0        0         70       0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
@@ -242,6 +248,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_raillane ${RAILLANE[$i]}"
                 echo "set sg_ribbon ${RIBBON[$i]}"
                 echo "set sg_routejitter ${ROUTEJITTER[$i]}"
+                echo "set sg_exitasym ${EXITASYM[$i]}"
                 if [ "$i" = "7" ]; then
                     echo "set sg_crowdhold 1"
                 fi
