@@ -201,6 +201,14 @@ typedef struct sg_bot_s
 	int			rail_link;      /* RUN link being retried the proof's way */
 	int			rail_stage;     /* 0 off, 1 walk to from-seed, 2 drive line */
 	float		rail_until;
+
+	/* exit-lane asymmetry (sg_exitasym): the links ridden in on this leg,
+	 * a ring so the last 16 survive any errand */
+	int			inlinks[16];
+	int			inlinks_n;
+	int			exitasym_set[16];   /* the inbound set, snapshotted at the grab */
+	int			exitasym_n;
+	qboolean	exitasym_armed;     /* this carry's coin, rolled once at the grab */
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -1443,7 +1451,16 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->carry_bestcost = -1;
 		bot->carry_lost_at = 0.0f;
 		sg_grab_time[team - CTF_TEAM_RED] = level.time;
+
+		/* exit-lane asymmetry: snapshot the roads ridden in on, then
+		 * roll this carry's coin (sg_exitasym, default 0 = never) */
+		bot->exitasym_n = (bot->inlinks_n < 16) ? bot->inlinks_n : 16;
+		memcpy(bot->exitasym_set, bot->inlinks, sizeof(bot->exitasym_set));
+		bot->exitasym_armed = (random() * 100.0f <
+		                       gi.cvar("sg_exitasym", "0", 0)->value);
 	}
+	else if (!carrying && bot->was_carrying)
+		bot->exitasym_armed = false;
 	if (gi.cvar("sg_debug", "0", 0)->value)
 	{
 		if (carrying && !bot->was_carrying)
@@ -2274,6 +2291,7 @@ rally_done:;
 	{
 		bot->was_dead = 0;
 		bot->lives++;
+		bot->inlinks_n = 0;     /* a new life rides in on its own roads */
 	}
 	/* leg ticker: a new role is a new errand -- new opinion of the map */
 	if ((int)role != bot->last_role_for_legs)
@@ -2852,6 +2870,21 @@ rally_done:;
 			     gi.cvar("sg_routejitter", "0", 0)->value;
 		}
 
+		/* EXIT-LANE ASYMMETRY (sg_exitasym). Humans tend to leave by a
+		 * different lane than they came in on, but not always -- a coin
+		 * flipped once per carry, the dose set by the cvar. */
+		if (role == SG_ROLE_CARRY && bot->exitasym_armed)
+		{
+			int ea;
+
+			for (ea = 0; ea < bot->exitasym_n; ea++)
+				if (bot->exitasym_set[ea] == li)
+				{
+					v *= 1.5f;
+					break;
+				}
+		}
+
 		if (bot->sticky_link == li &&
 		    gi.cvar("sg_sticky", "0", 0)->value)
 			v *= 0.85f;
@@ -2897,6 +2930,15 @@ rally_done:;
 		 * on the SAME polyline -- a rope, where humans paint a 50-150u
 		 * brush. Per-tick noise would be jitter, not diversity; the
 		 * offset must PERSIST across the leg. */
+		/* the leg just closed out goes into the exit-lane ring
+		 * (sg_exitasym): this rollover is the only true per-link
+		 * advance -- the role-change ticker fires far too rarely
+		 * to remember an inbound route */
+		if (bot->ribbon_link >= 0)
+		{
+			bot->inlinks[bot->inlinks_n % 16] = bot->ribbon_link;
+			bot->inlinks_n++;
+		}
 		bot->ribbon_link = bestlink;
 		bot->ribbon_off = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
 		                  gi.cvar("sg_ribbon", "0", 0)->value;
@@ -6682,6 +6724,9 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].tac_seed = -1;
 	sg_bots[slot].tac_role = -1;
 	sg_bots[slot].stuck_time = 0.0f;
+	sg_bots[slot].inlinks_n = 0;
+	sg_bots[slot].exitasym_n = 0;
+	sg_bots[slot].exitasym_armed = false;
 
 	gi.dprintf("slipgate: %s entered\n",
 	           Info_ValueForKey(userinfo, "name"));
