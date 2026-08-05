@@ -6284,7 +6284,16 @@ no_hold:;
 									       - 0.5f * grav * at * at;
 									atr = gi.trace(ap0, e->mins, e->maxs, ap1,
 									               e, MASK_PLAYERSOLID);
-									if (atr.fraction < 1.0f && aseg < 6)
+									/*
+									 * aseg 1 is exempt: the box leaves from beside
+									 * the very wall the rope hangs on, so the first
+									 * sixth of every legitimate arc scrapes it
+									 * (wave 376: 76-389 vetoes per game, fleet caps
+									 * halved, 5v0 canary dimmed). Segments 2-5 are
+									 * the honest mid-flight clip test; 6 is landing
+									 * contact and was always exempt.
+									 */
+									if (atr.fraction < 1.0f && aseg > 1 && aseg < 6)
 									{
 										arc_clear = false;
 										break;
