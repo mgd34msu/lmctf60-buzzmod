@@ -5,6 +5,7 @@
 #include "g_skins.h"
 #include "bat.h"
 #include "g_vote.h"    //Vampire -- voting menu
+#include "slipgate/sg_local.h" // the bot roster behind the Manage Bots menu
 
 void Cmd_Team_f (edict_t *ent);
 void Team_Change(edict_t *ent, int newnum);
@@ -56,6 +57,11 @@ void Ref_PracticeFlagRed_Exec(edict_t *ent);
 void Ref_PracticeFlagBlue_Exec(edict_t *ent);
 void ClearPassword_Exec (edict_t *ent);
 void Ref_Kick_Menu (edict_t *ent);
+void Ref_Bots_Menu (edict_t *ent);
+void Ref_Bot_AddRed (edict_t *ent);
+void Ref_Bot_AddBlue (edict_t *ent);
+void Ref_Bot_KickWorst (edict_t *ent);
+void Ref_Bot_RemoveAll (edict_t *ent);
 void RefTogglePause(edict_t *ent);
 void Ref_Map_Menu (edict_t *ent);
 void SetMapsForMenu (edict_t *ent);
@@ -731,11 +737,68 @@ void Ref_Main_Menu (edict_t *ent)
 	Menu_Set(ent, 10, "Practice Settings", Ref_Practice_Menu);
 	Menu_Set(ent, 11, "Toggle Fast Switch", Cmd_ToggleFastSwitch_f);
 	Menu_Set(ent, 12, "Referee Help", Ref_Help_Menu);
+	Menu_Set(ent, 13, "Manage Bots", Ref_Bots_Menu);
 
 	if (ent->client->ctf.extra_flags & CTF_EXTRAFLAGS_RCON)
 		Menu_Set(ent, 14, "Save Config (RCON)", SaveServer_Exec);
 
 	Menu_Draw (ent);
+}
+
+/*
+ * The referee's bot roster. A referee standing in the server has no console,
+ * so every verb an admin can type at `sv sg` that changes the roster needs a
+ * seat here too -- this entry point existed before, and went out with the
+ * legacy bot library it used to drive. It is back, driving SLIPGATE's own
+ * entry points directly: nothing below knows the old bl_ library ever
+ * existed, and there is no second copy of the "which bot goes" rule.
+ *
+ * Each action redraws this menu rather than returning to the referee menu,
+ * because adding a full team is four presses and bouncing out after every
+ * one of them is how you end up with three bots and a confused referee.
+ */
+void Ref_Bots_Menu (edict_t *ent)
+{
+	Menu_Free(ent);
+	ent->client->menu = MENU_LOCAL;
+	ent->client->menuselect = 1;
+
+	Menu_Set(ent, 1, "LMCTF Bot Menu", Ref_Main_Menu);
+	Menu_Set(ent, 2, "--------------", NULL);
+	Menu_Set(ent, 4, "Add Bot (red)", Ref_Bot_AddRed);
+	Menu_Set(ent, 5, "Add Bot (blue)", Ref_Bot_AddBlue);
+	Menu_Set(ent, 6, "Kick Worst Bot", Ref_Bot_KickWorst);
+	Menu_Set(ent, 7, "Remove All Bots", Ref_Bot_RemoveAll);
+	Menu_Set(ent, 9, "Back", Ref_Main_Menu);
+
+	Menu_Draw (ent);
+}
+
+void Ref_Bot_AddRed (edict_t *ent)
+{
+	if (!SG_AddBotTeam(CTF_TEAM_RED))
+		gi.cprintf(ent, PRINT_HIGH, "slipgate: could not add bot\n");
+	Ref_Bots_Menu(ent);
+}
+
+void Ref_Bot_AddBlue (edict_t *ent)
+{
+	if (!SG_AddBotTeam(CTF_TEAM_BLUE))
+		gi.cprintf(ent, PRINT_HIGH, "slipgate: could not add bot\n");
+	Ref_Bots_Menu(ent);
+}
+
+void Ref_Bot_KickWorst (edict_t *ent)
+{
+	if (!SG_KickWorst())
+		gi.cprintf(ent, PRINT_HIGH, "slipgate: no bots\n");
+	Ref_Bots_Menu(ent);
+}
+
+void Ref_Bot_RemoveAll (edict_t *ent)
+{
+	gi.cprintf(ent, PRINT_HIGH, "slipgate: removed %d\n", SG_RemoveBots());
+	Ref_Bots_Menu(ent);
 }
 
 void RefTogglePause(edict_t *ent)

@@ -234,6 +234,8 @@ rune_t *SG_Rune(void)
 static void Danger_Load(void);
 static void Danger_Save(void);
 static void Danger_Decay(void);
+/* likewise the weights file, which level setup reads before the rune */
+static void Weights_Load(void);
 static char		sg_rune_map[64];
 
 /* one cost field per flag: cost_ms from every seed TO the flag seed */
@@ -448,6 +450,11 @@ static qboolean SG_LevelSetup(void)
 	if (sg_rune && Q_stricmp(sg_rune_map, level.mapname) == 0)
 		return true;
 
+	/* once per map, ahead of the rune: a map with no rune still answers
+	 * `sv sg weights`, and the admin editing the file between maps expects
+	 * the next map to be running it */
+	Weights_Load();
+
 	sg_rune = Rune_Load(level.mapname);
 	if (!sg_rune)
 	{
@@ -485,8 +492,12 @@ static qboolean SG_LevelSetup(void)
  * take what is on the way, defenders deny armour near home, carriers value
  * health and armour and the way home, everyone values interception when our
  * flag is out and believed seen.
+ *
+ * These are the SHIPPED rows -- what a fresh install runs and what a missing
+ * or malformed weights file falls back to. The live table below is seeded
+ * from here.
  */
-static const sg_weights_t sg_weight_table[SG_ROLES] = {
+static const sg_weights_t sg_weight_compiled[SG_ROLES] = {
 	/* objective  weap  armr  ammo  hlth  rune  powr   support intercept */
 	{ 1.00f, { 0.35f, 0.30f, 0.20f, 0.15f, 0.20f, 0.40f }, 0.10f, 0.60f },  /* attack */
 	{ 1.00f, { 0.30f, 0.50f, 0.25f, 0.20f, 0.15f, 0.10f }, 0.40f, 0.80f },  /* defend */
@@ -506,6 +517,186 @@ static const sg_weights_t sg_weight_table[SG_ROLES] = {
 	 */
 	{ 1.00f, { 0.10f, 0.25f, 0.10f, 0.25f, 0.05f, 0.10f }, 0.00f, 0.80f },  /* escort */
 };
+
+/*
+ * The LIVE table the body actually reads. It starts as a copy of the
+ * compiled rows above and stays that way unless <gamedir>/slipgate-weights.cfg
+ * says otherwise -- no file, no difference, byte for byte.
+ *
+ * The reason this exists: the weights are the one fitted component, and
+ * fitting them meant a rebuild and a fleet restart per candidate row. Ten
+ * servers that are never supposed to stop cannot pay that, so the numbers
+ * that get TUNED now live where they can be edited between maps, while the
+ * numbers that get SHIPPED stay in the const table above as the thing a
+ * fresh install runs and the thing a bad file falls back to.
+ */
+static sg_weights_t	sg_weight_table[SG_ROLES];
+static qboolean		sg_weights_ready;
+
+static const char *sg_role_names[SG_ROLES] = {
+	"attack", "defend", "carry", "recover", "escort"
+};
+
+/*
+ * Key names ARE the struct's field identifiers, so a key in the file and a
+ * member in sg_weights_t are the same word -- the item classes spell out
+ * their SG_FC_ enum tails. Order is load-bearing: Weights_Slot below maps
+ * this index onto the struct, and the two must agree.
+ */
+static const char *sg_weight_fields[] = {
+	"objective",
+	"weapon", "armor", "ammo", "health", "rune", "powerup",
+	"carrier_support", "intercept"
+};
+#define SG_WEIGHT_FIELDS ((int)(sizeof(sg_weight_fields) / \
+                                sizeof(sg_weight_fields[0])))
+
+/* which entries the file spoke for, so `sv sg weights` can say who set what */
+static byte	sg_weight_fromfile[SG_ROLES][SG_WEIGHT_FIELDS];
+
+static float *Weights_Slot(int role, int fi)
+{
+	sg_weights_t *w = &sg_weight_table[role];
+
+	if (fi == 0)
+		return &w->objective;
+	if (fi <= SG_FIELD_CLASSES)
+		return &w->item[fi - 1];
+	if (fi == SG_FIELD_CLASSES + 1)
+		return &w->carrier_support;
+	return &w->intercept;
+}
+
+/* the same gamedir the runes come out of (Rune_Load): the engine's own
+ * "gamedir" cvar, not g_local.h's `gamedir` global, which is really the
+ * "game" cvar and is a different string on a server started with +set game */
+static void Weights_Path(char *buf, int size)
+{
+	cvar_t *gamedir = gi.cvar("gamedir", "", 0);
+
+	Com_sprintf(buf, size, "%s/slipgate-weights.cfg",
+	            gamedir->string[0] ? gamedir->string : ".");
+}
+
+/*
+ * "<role>.<field> <value>". Returns false for a key that names no row or no
+ * member -- the caller reports it and keeps reading, because one fat-fingered
+ * line should cost that line and not the other forty-four.
+ */
+static qboolean Weights_Set(const char *key, float v)
+{
+	char	buf[64], *dot;
+	int		role, fi;
+
+	Com_sprintf(buf, sizeof(buf), "%s", key);
+	dot = strchr(buf, '.');
+	if (!dot)
+		return false;
+	*dot++ = 0;
+
+	for (role = 0; role < SG_ROLES; role++)
+		if (Q_stricmp(buf, sg_role_names[role]) == 0)
+			break;
+	if (role >= SG_ROLES)
+		return false;
+
+	for (fi = 0; fi < SG_WEIGHT_FIELDS; fi++)
+		if (Q_stricmp(dot, sg_weight_fields[fi]) == 0)
+			break;
+	if (fi >= SG_WEIGHT_FIELDS)
+		return false;
+
+	*Weights_Slot(role, fi) = v;
+	sg_weight_fromfile[role][fi] = 1;
+	return true;
+}
+
+/*
+ * Always from the compiled rows up. A reload that DROPS a key has to put the
+ * shipped value back; leaving the previous file's number standing would make
+ * the live table depend on the order the admin edited things in, which is the
+ * kind of state nobody can reason about at 2am mid-wave.
+ */
+static void Weights_Load(void)
+{
+	char	path[MAX_OSPATH], line[256];
+	FILE	*f;
+	int		n = 0, bad = 0;
+
+	memcpy(sg_weight_table, sg_weight_compiled, sizeof(sg_weight_table));
+	memset(sg_weight_fromfile, 0, sizeof(sg_weight_fromfile));
+	sg_weights_ready = true;
+
+	Weights_Path(path, sizeof(path));
+	f = fopen(path, "r");
+	if (!f)
+		return;                 /* the ordinary case: shipped values, silently */
+
+	while (fgets(line, sizeof(line), f))
+	{
+		char *hash, *key, *val;
+
+		hash = strchr(line, '#');
+		if (hash)
+			*hash = 0;
+		key = strtok(line, " \t\r\n");
+		if (!key)
+			continue;           /* blank or comment-only */
+		val = strtok(NULL, " \t\r\n");
+		if (!val)
+		{
+			gi.dprintf("slipgate: weights: %s has no value\n", key);
+			bad++;
+			continue;
+		}
+		if (Weights_Set(key, (float)atof(val)))
+			n++;
+		else
+		{
+			gi.dprintf("slipgate: weights: unknown key %s\n", key);
+			bad++;
+		}
+	}
+	fclose(f);
+	gi.dprintf("slipgate: weights: %d from %s%s\n", n, path,
+	           bad ? va(" (%d rejected)", bad) : "");
+}
+
+/*
+ * The read the body does. Self-arming so the table can never be read as the
+ * zeroed BSS it starts life as: SG_LevelSetup calls Weights_Load explicitly,
+ * but a zeroed objective would silently flatten every field in the system,
+ * and that failure is far too quiet to leave to call order.
+ */
+static const sg_weights_t *Weights_Row(int role)
+{
+	if (!sg_weights_ready)
+		Weights_Load();
+	return &sg_weight_table[role];
+}
+
+void SG_WeightsReload(void)
+{
+	Weights_Load();
+}
+
+void SG_WeightsPrint(void)
+{
+	char	path[MAX_OSPATH];
+	int		role, fi;
+
+	Weights_Path(path, sizeof(path));
+	if (!sg_weights_ready)
+		Weights_Load();
+
+	gi.cprintf(NULL, PRINT_HIGH, "slipgate weights (%s):\n", path);
+	for (role = 0; role < SG_ROLES; role++)
+		for (fi = 0; fi < SG_WEIGHT_FIELDS; fi++)
+			gi.cprintf(NULL, PRINT_HIGH, "  %-8s %-16s %6.2f  %s\n",
+			           sg_role_names[role], sg_weight_fields[fi],
+			           *Weights_Slot(role, fi),
+			           sg_weight_fromfile[role][fi] ? "file" : "compiled");
+}
 
 /*
  * Detour worth: an item matters by how little it takes you off your road.
@@ -1624,7 +1815,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * through. The result is clamped to the same [0, 2.0] the detour decay's
 	 * 1500 ms scale (Detour_Value, above) makes meaningful.
 	 */
-	SG_CombatWeights(e, &sg_weight_table[role], &live);
+	SG_CombatWeights(e, Weights_Row(role), &live);
 	/*
 	 * Rune threat (WEAPONS.md 2.4-D4, the honest half): a sighted enemy
 	 * glowing with RF_GLOW (p_view.c:792-794) holds SOME rune -- the glow
@@ -6832,16 +7023,23 @@ hook_wait:;
  * Only SLIPGATE's own bots are ever removed -- the legacy library's bots
  * belong to the legacy library (SG_OwnsBot is the property line).
  */
-static qboolean Botfill_RemoveOne(int team)
+/*
+ * Which bot goes, by the only rule the roster has ever used: lowest score.
+ * team 0 means "either team", which is what an admin typing `kick worst`
+ * is asking. Split out of Botfill_RemoveOne so the balancer and the console
+ * retire the same bot for the same reason -- two different notions of
+ * "worst" is how an admin and an automatic balancer end up fighting over
+ * the roster in the middle of a wave.
+ */
+static int Botfill_WorstIndex(int team)
 {
-	void ClientDisconnect(edict_t *ent);
 	int i, worst = -1, worst_score = 0x7fffffff;
 
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		if (!sg_bots[i].active || !sg_bots[i].ent || !sg_bots[i].ent->inuse)
 			continue;
-		if (sg_bots[i].ent->client->ctf.teamnum != team)
+		if (team && sg_bots[i].ent->client->ctf.teamnum != team)
 			continue;
 		if (sg_bots[i].ent->client->resp.score < worst_score)
 		{
@@ -6849,14 +7047,31 @@ static qboolean Botfill_RemoveOne(int team)
 			worst = i;
 		}
 	}
+	return worst;
+}
+
+/* the teardown half, shared by every path that retires a bot: disconnect,
+ * free the edict, and clear the slot in that order -- the slot must not be
+ * reusable until the edict is actually gone */
+static void Botfill_Drop(int slot)
+{
+	void ClientDisconnect(edict_t *ent);
+
+	ClientDisconnect(sg_bots[slot].ent);
+	SG_FreeClientEdict(sg_bots[slot].ent);
+	sg_bots[slot].active = false;
+	sg_bots[slot].ent = NULL;
+}
+
+static qboolean Botfill_RemoveOne(int team)
+{
+	int worst = Botfill_WorstIndex(team);
+
 	if (worst < 0)
 		return false;
 	gi.bprintf(PRINT_HIGH, "%s yields its slot.\n",
 	           sg_bots[worst].ent->client->pers.netname);
-	ClientDisconnect(sg_bots[worst].ent);
-	SG_FreeClientEdict(sg_bots[worst].ent);
-	sg_bots[worst].active = false;
-	sg_bots[worst].ent = NULL;
+	Botfill_Drop(worst);
 	return true;
 }
 
@@ -7156,6 +7371,116 @@ int SG_RemoveBots(void)
 		n++;
 	}
 	return n;
+}
+
+/*
+ * The roster as the admin sees it. Every column here is something that has
+ * had to be dug out of a debug print at least once: the slot (the removal
+ * verbs take it), the effective skill -- bot_skill LESS this client's own
+ * fixed handicap, so two bots on one server genuinely differ and a "bad"
+ * bot is usually just a low-offset one -- the role being played right now,
+ * and the seed the bot believes it is at, which is the first question
+ * anybody asks when one looks stuck.
+ */
+void SG_ListBots(void)
+{
+	int i, n = 0;
+
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		edict_t *e = sg_bots[i].ent;
+		int role, team;
+
+		if (!sg_bots[i].active || !e || !e->inuse || !e->client)
+			continue;
+		if (!n)
+			gi.cprintf(NULL, PRINT_HIGH,
+			           "slot name                 team  score skill role     seed\n");
+		team = e->client->ctf.teamnum;
+		role = sg_bots[i].last_role;
+		gi.cprintf(NULL, PRINT_HIGH, "%3d  %-20s %-5s %5d %5.2f %-8s %4d\n",
+		           i, e->client->pers.netname,
+		           team == CTF_TEAM_RED ? "red" :
+		           team == CTF_TEAM_BLUE ? "blue" : "-",
+		           e->client->resp.score,
+		           (float)SG_CombatSkill(e) / 100.0f,
+		           (role >= 0 && role < SG_ROLES) ? sg_role_names[role] : "-",
+		           sg_bots[i].seed);
+		n++;
+	}
+	if (!n)
+		gi.cprintf(NULL, PRINT_HIGH, "slipgate: no bots\n");
+	else
+		gi.cprintf(NULL, PRINT_HIGH, "slipgate: %d bot%s\n",
+		           n, n == 1 ? "" : "s");
+}
+
+/*
+ * Name matching built for the admin, not for the parser. The scoreboard
+ * shows "[SG]Arach"; whoever is typing under pressure writes "arach".
+ * Accept the slot number `sv sg list` just printed, the netname as shown,
+ * or the netname with our own [SG] tag stripped -- that tag is decoration
+ * this code puts on, so it is not something a human should have to
+ * reproduce to name the thing they are looking at.
+ */
+qboolean SG_RemoveBotNamed(const char *who)
+{
+	int i, slot = -1;
+
+	if (!who || !*who)
+		return false;
+
+	if (who[0] >= '0' && who[0] <= '9')
+	{
+		slot = atoi(who);
+		if (slot < 0 || slot >= SG_MAXBOTS)
+			return false;
+	}
+	else
+	{
+		for (i = 0; i < SG_MAXBOTS; i++)
+		{
+			const char *nm;
+
+			if (!sg_bots[i].active || !sg_bots[i].ent ||
+			    !sg_bots[i].ent->inuse || !sg_bots[i].ent->client)
+				continue;
+			nm = sg_bots[i].ent->client->pers.netname;
+			if (Q_stricmp(nm, who) == 0)
+			{
+				slot = i;
+				break;
+			}
+			/* the tag is emitted verbatim as "[SG]", so an exact compare
+			 * finds it; only what follows it needs the loose match */
+			if (!strncmp(nm, "[SG]", 4) && Q_stricmp(nm + 4, who) == 0)
+			{
+				slot = i;
+				break;
+			}
+		}
+	}
+
+	if (slot < 0 || !sg_bots[slot].active || !sg_bots[slot].ent ||
+	    !sg_bots[slot].ent->inuse)
+		return false;
+
+	gi.bprintf(PRINT_HIGH, "%s was removed.\n",
+	           sg_bots[slot].ent->client->pers.netname);
+	Botfill_Drop(slot);
+	return true;
+}
+
+qboolean SG_KickWorst(void)
+{
+	int worst = Botfill_WorstIndex(0);   /* 0: either team */
+
+	if (worst < 0)
+		return false;
+	gi.bprintf(PRINT_HIGH, "%s was cut, lowest score.\n",
+	           sg_bots[worst].ent->client->pers.netname);
+	Botfill_Drop(worst);
+	return true;
 }
 
 void SG_LevelChange(void)

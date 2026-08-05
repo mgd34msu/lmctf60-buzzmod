@@ -237,6 +237,12 @@ qboolean	SG_OwnsBot(edict_t *ent);
 qboolean	SG_AddBot(void);
 qboolean	SG_AddBotTeam(int teamnum);
 int			SG_RemoveBots(void);
+/* the admin surface behind `sv sg` and the referee's Manage Bots menu */
+void		SG_ListBots(void);                  /* slot/name/team/score/skill/role/seed */
+qboolean	SG_RemoveBotNamed(const char *who); /* netname ([SG] optional) or slot */
+qboolean	SG_KickWorst(void);                 /* lowest score, either team */
+void		SG_WeightsPrint(void);              /* live table and each entry's source */
+void		SG_WeightsReload(void);             /* re-read slipgate-weights.cfg live */
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
 
