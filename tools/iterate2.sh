@@ -89,7 +89,14 @@ LANDTICK=(0      0        0        0        0         0        0         0      
 # column. 700ms latch ~= the 1Hz surface refresh with margin.
 # link latch NULL (290-291): turn grammar unchanged -- the incumbent
 # dies at every seed crossing, same within-seed-only trap as sticky.
-LINKLATCH=(0     0        0        0        0         0        0         0        0        0)
+# 385 trial: the smap05 map-center orbit (wave 383 canary, 11 steals 1 cap)
+# is two seeds flapping on a field plateau at full sprint until the 15s
+# stuck self-kill -- the chronic ~130 suicides/wave burn, flat since at
+# least wave 340. The latch was built for exactly this (wave 289) and has
+# been dark since tactics won the WAYPOINT-level verdict; this is the
+# LINK-level residue. 600ms = the field's own 1Hz refresh cadence, on the
+# A arms of the matched pairs; canaries and clean control untouched.
+LINKLATCH=(600   0        600      0        600       600      0         600      0        0)
 # weave A/B (292+): s04 no-weave vs s03 weave -- the demo census ranked
 # the metronomic combat weave the #1 visible jank; sg_noweave is the
 # existing switch and botkin the honest instrument the old gauges never
