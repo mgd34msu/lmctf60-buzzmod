@@ -754,8 +754,15 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 {
 	{
 		void SG_NoteDeath(edict_t *victim);
+		void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
+		extern int meansOfDeath;
 
 		SG_NoteDeath(self);     /* the obituary is common knowledge */
+		/* the mouth that was always wired shut: taunt/grumble lines were
+		 * written waves ago and called from nowhere (capability census,
+		 * 2026-08-05). Bots that never react to a kill or a death read
+		 * as bots. */
+		SG_ChatDeath(self, attacker, meansOfDeath);
 	}
 	int		n;
 	edict_t	*attacker_flag=NULL, *defender_flag=NULL;  // CTF CODE -- LM_JORM
