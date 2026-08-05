@@ -127,7 +127,7 @@ CORRIDOR_OFFSET_CAP = 160.0      # max |perpendicular offset| (~3x the lane
                                   # gets counted too, swamping the local
                                   # rope-vs-band signal with map-scale noise
 CROSS_SECTION_BIN = 4.0          # cross-section histogram bin width (spec'd)
-N_CORRIDORS = 3
+N_CORRIDORS = 8
 
 # --- windowed-detail diagnostic (rendering-only addition; see
 # best_travel_window/draw_window_panel below) -----------------------------
