@@ -144,6 +144,10 @@ INTERDOSE=(0     0        0        0        0         0        0         0      
 # gentle-blend residue test (337+): 500 deg/s on s03 vs s04 OFF,
 # demos both -- only adopts if post-tactics jitter still shows
 SMOOTHDOSE=(0    0        0        0        0         0        0         0        0        0)
+# rail-lane A/B (345+): s03 ON vs s04 OFF -- second defender holds the
+# computed sightline post. Read: steals CONCEDED per arm + the per-map
+# lane-coverage print (low coverage = geometry has no lane; gate later).
+RAILLANE=(0      0        1        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
@@ -210,6 +214,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_pursuitz ${PURSUITZ[$i]}"
                 echo "set sg_smooth ${SMOOTHDOSE[$i]}"
                 echo "set sg_tactics ${TACTICS[$i]}"
+                echo "set sg_raillane ${RAILLANE[$i]}"
                 if [ "$i" = "7" ]; then
                     echo "set sg_crowdhold 1"
                 fi
