@@ -1017,6 +1017,33 @@ static void Caco_RelayFlush(void)
 sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
 
 /*
+ * Which row of the sighting table this client gets: his own if he already
+ * has one, else an empty one, else the stalest -- a full table forgets the
+ * oldest thing it knows, which is the one least likely to still be true.
+ * Split out because the eye and the damage ring both write this table and
+ * must agree on where; the eviction rule is not a thing to have two of.
+ */
+static int Caco_EnemySlot(sg_belief_enemy_t *tab, int client)
+{
+	int s, slot = -1;
+
+	for (s = 0; s < SG_MAX_ENEMY_TRACK && slot < 0; s++)
+		if (tab[s].client == client)
+			slot = s;
+	for (s = 0; s < SG_MAX_ENEMY_TRACK && slot < 0; s++)
+		if (tab[s].client < 0)
+			slot = s;
+	if (slot < 0)
+	{
+		slot = 0;
+		for (s = 1; s < SG_MAX_ENEMY_TRACK; s++)
+			if (tab[s].seen_time < tab[slot].seen_time)
+				slot = s;
+	}
+	return slot;
+}
+
+/*
  * Every enemy a teammate lays eyes on, not just carriers: the defender's
  * pre-spin and the rune-threat weighting both need "someone is out there
  * and roughly where". Upsert by client number; a full table evicts the
@@ -1030,7 +1057,7 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 	{
 		edict_t *p = g_edicts + 1 + i;
 		sg_belief_enemy_t *tab = sg_caco_enemies[viewer_team - 1];
-		int s, slot = -1;
+		int slot;
 
 		qboolean seen, heard = false;
 
@@ -1058,20 +1085,7 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 				continue;
 		}
 
-		/* this client's slot, else an empty one, else the stalest */
-		for (s = 0; s < SG_MAX_ENEMY_TRACK && slot < 0; s++)
-			if (tab[s].client == i)
-				slot = s;
-		for (s = 0; s < SG_MAX_ENEMY_TRACK && slot < 0; s++)
-			if (tab[s].client < 0)
-				slot = s;
-		if (slot < 0)
-		{
-			slot = 0;
-			for (s = 1; s < SG_MAX_ENEMY_TRACK; s++)
-				if (tab[s].seen_time < tab[slot].seen_time)
-					slot = s;
-		}
+		slot = Caco_EnemySlot(tab, i);
 		/* a fresh eye entry outranks an ear: don't degrade it */
 		if (!seen && tab[slot].client == i && !tab[slot].heard_only &&
 		    level.time - tab[slot].seen_time < 2.0f)
@@ -1084,6 +1098,214 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 		if (seen)
 			tab[slot].runed = (p->s.renderfx & RF_GLOW) != 0;
 	}
+}
+
+/* ------------------------------------------------------------ the hit sense */
+
+sg_damage_hit_t sg_caco_damage[SG_DMG_CLIENTS][SG_DMG_RING];
+
+/*
+ * Did this land on a line that existed for no time at all? Pellets and
+ * slugs did; everything else -- blaster bolts included, they fly -- had to
+ * travel to get here.
+ */
+static qboolean Caco_Hitscan(int mod)
+{
+	switch (mod)
+	{
+	case MOD_SHOTGUN:
+	case MOD_SSHOTGUN:
+	case MOD_MACHINEGUN:
+	case MOD_CHAINGUN:
+	case MOD_RAILGUN:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* how far back down the incoming line a projectile's firing point is
+ * believed to be, world permitting -- a region, deliberately coarse */
+#define SG_DMG_BACKTRACK	512.0f
+
+/*
+ * The third sense, called from T_Damage at the one site where damage
+ * actually lands (g_combat.c, beside SG_CombatHit). Every test that decides
+ * whether a hit is interesting lives here: the game file is not the place
+ * to know what a bot believes.
+ *
+ * What a hit tells you depends entirely on what hit you, and the split is
+ * hitscan against flight:
+ *
+ *   A slug or a burst of machinegun arrives down a straight line that
+ *   existed for zero time. The shooter WAS at the far end of it at the
+ *   instant it landed, so his real origin is honest evidence and is what
+ *   gets believed. A hit genuinely reveals the man.
+ *
+ *   A rocket or a grenade was fired seconds ago from somewhere the shooter
+ *   has since left, and has been travelling ever since. Its arrival says
+ *   only "from that way", so the belief is placed back along the line as
+ *   far as the world allows and no further -- a region, not a point.
+ *
+ *   Splash is looser still. For MOD_*_SPLASH the direction T_Damage hands
+ *   over runs from the DETONATION, not from the shooter, so what gets
+ *   believed is roughly where the thing went off. Worth knowing, and not
+ *   the same fact; this is written down so nobody later reads it as one.
+ *
+ * Neither branch clears heard_only. The bot did not see the man. A belief
+ * placed by pain is good enough to warn a post and to swing a scan cone
+ * around, and never good enough to aim at, which is what that flag has
+ * meant downstream since the ear first set it.
+ */
+void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
+                   vec3_t dir)
+{
+	sg_damage_hit_t	*ring, *slot;
+	vec3_t			eye, from;
+	qboolean		seen, hitscan;
+	int				ci, ac, team, i;
+
+	if (!victim || !victim->inuse || !victim->client)
+		return;
+	if (!(victim->flags & FL_BOT))
+		return;
+	if (!attacker || !attacker->inuse || !attacker->client ||
+	    attacker == victim)
+		return;
+
+	mod &= ~MOD_FRIENDLY_FIRE;
+	team = victim->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return;
+	if (attacker->client->ctf.teamnum == team)
+		return;		/* a teammate's rocket is regret, not contact */
+
+	ci = (int)(victim->client - game.clients);
+	ac = (int)(attacker->client - game.clients);
+	if (ci < 0 || ci >= SG_DMG_CLIENTS || ac < 0)
+		return;
+
+	VectorCopy(victim->s.origin, eye);
+	eye[2] += victim->viewheight;
+
+	/*
+	 * Where it came from is the reverse of the way it was going. T_Damage
+	 * normalises dir before any of this (g_combat.c), but a few damage
+	 * paths hand over a zero vector, and for those the bearing to the man
+	 * himself is the only direction there is.
+	 */
+	VectorNegate(dir, from);
+	if (VectorNormalize(from) < 0.1f)
+	{
+		VectorSubtract(attacker->s.origin, eye, from);
+		if (VectorNormalize(from) < 1.0f)
+			return;
+	}
+
+	seen = Caco_Visible(victim, attacker);
+	hitscan = Caco_Hitscan(mod);
+
+	/* oldest entry loses: four of them, and no head index to keep in sync */
+	ring = sg_caco_damage[ci];
+	slot = ring;
+	for (i = 1; i < SG_DMG_RING; i++)
+		if (ring[i].time < slot->time)
+			slot = &ring[i];
+
+	slot->attacker = ac;
+	slot->mod = mod;
+	slot->damage = damage;
+	slot->time = level.time;
+	slot->unseen = !seen;
+	VectorCopy(from, slot->from);
+
+	if (seen)
+		return;		/* the eye already has him; belief needs nothing */
+
+	{
+		rune_t	*r = SG_Rune();
+		vec3_t	pos;
+		int		seed;
+
+		if (!r)
+			return;
+
+		if (hitscan)
+			VectorCopy(attacker->s.origin, pos);
+		else
+		{
+			trace_t	tr;
+			vec3_t	back;
+
+			VectorMA(eye, SG_DMG_BACKTRACK, from, back);
+			tr = gi.trace(eye, NULL, NULL, back, victim, MASK_OPAQUE);
+			VectorCopy(tr.endpos, pos);
+			/* off whatever surface it stopped against, so the seed lookup
+			 * cannot snap to a node on the far side of that wall */
+			VectorMA(pos, -16.0f, from, pos);
+		}
+
+		seed = Rune_NearestSeed(r, pos);
+		if (seed >= 0)
+		{
+			sg_belief_enemy_t	*tab = sg_caco_enemies[team - 1];
+			int					s = Caco_EnemySlot(tab, ac);
+
+			/* a fresh eye entry outranks a hit, the same way it outranks
+			 * an ear -- pain places a man coarsely at best */
+			if (!(tab[s].client == ac && !tab[s].heard_only &&
+			      level.time - tab[s].seen_time < 2.0f))
+			{
+				if (tab[s].client != ac)
+					tab[s].runed = false;	/* a hit says nothing about glow */
+				tab[s].client = ac;
+				tab[s].seed = seed;
+				tab[s].seen_time = level.time;
+				tab[s].heard_only = true;
+			}
+		}
+
+		if (gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("HITFROM %s<%s dmg=%d mod=%d %s seed=%d dir=%.2f,%.2f,%.2f\n",
+			           victim->client->pers.netname,
+			           attacker->client->pers.netname, damage, mod,
+			           hitscan ? "hitscan" : "flight", seed,
+			           from[0], from[1], from[2]);
+	}
+}
+
+/*
+ * The newest hit inside the window whose shooter this bot could not see.
+ * Hits with the man in plain sight are skipped on purpose: the scan already
+ * has him, and steering attention toward a target it is currently holding
+ * would be a bias that does nothing.
+ */
+qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from)
+{
+	sg_damage_hit_t	*ring, *best = NULL;
+	int				ci, i;
+
+	if (!self || !self->client || window <= 0.0f)
+		return false;
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_DMG_CLIENTS)
+		return false;
+
+	ring = sg_caco_damage[ci];
+	for (i = 0; i < SG_DMG_RING; i++)
+	{
+		if (ring[i].attacker < 0 || !ring[i].unseen)
+			continue;
+		if (level.time - ring[i].time > window)
+			continue;
+		if (!best || ring[i].time > best->time)
+			best = &ring[i];
+	}
+	if (!best)
+		return false;
+	if (out_from)
+		VectorCopy(best->from, out_from);
+	return true;
 }
 
 /*
@@ -1181,6 +1403,16 @@ void Caco_Reset(void)
 		for (t = 0; t < 2; t++)
 			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 				sg_caco_enemies[t][s].client = -1;
+	}
+	memset(sg_caco_damage, 0, sizeof(sg_caco_damage));
+	{
+		int c, k;
+
+		/* a zeroed entry names client 0, who is a real player; -1 is the
+		 * only thing that means "nothing landed here" */
+		for (c = 0; c < SG_DMG_CLIENTS; c++)
+			for (k = 0; k < SG_DMG_RING; k++)
+				sg_caco_damage[c][k].attacker = -1;
 	}
 	memset(caco_callout, 0, sizeof(caco_callout));
 	memset(caco_teamsaid, 0, sizeof(caco_teamsaid));

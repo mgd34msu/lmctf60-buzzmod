@@ -602,6 +602,15 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 			SG_CombatHit(attacker, targ);
 		}
 
+		// BUZZKILL - SLIPGATE: the hit sense. A bot shot by someone it
+		// cannot see learns it here or nowhere; every test that decides
+		// whether the hit means anything is on the slipgate side
+		{
+			void SG_NoteDamage(edict_t *victim, edict_t *att, int dmg,
+			                   int means, vec3_t d);
+			SG_NoteDamage(targ, attacker, take, mod, dir);
+		}
+
 		/* DMG census (sg_debug, telemetry grant 2026-08-03): the true
 		 * damage ledger at the one site where it lands -- attacker,
 		 * victim, amount, mod, carrier state, both airborne states,

@@ -106,6 +106,51 @@ void Caco_HumanEyes(rune_t *r, int team);       /* what human teammates see */
 void Caco_Frame(rune_t *r);                     /* shared HUD scan + aging */
 void Caco_Reset(void);
 
+/*
+ * The damage ring: the third sense, after the eye and the ear.
+ *
+ * A bot railed from behind gets nothing from either of the other two. The
+ * eye needs a sight line it does not have. The ear (Caco_ScanEnemies, the
+ * PHS test) needs the shooter to be SAMPLED mid-WEAPON_FIRING, and a
+ * hitscan weapon is back to WEAPON_READY long before the next scan frame
+ * comes round -- the shot is over before anyone looks. The hit itself is
+ * the only evidence that ever arrives, so T_Damage hands it here, where
+ * the rest of what a bot BELIEVES lives, rather than to the combat file
+ * that only deals in what a bot can see.
+ *
+ * Four entries is the whole ring. This exists to answer one question --
+ * "am I under fire, and roughly from where" -- and a fifth simultaneous
+ * attacker does not change that answer. The table is per client and sized
+ * to a fixed ceiling, bounds-checked, exactly the way sg_combat.c sizes
+ * its own per-client state and for the same reason: this file does not own
+ * the bot body and cannot add a field to it.
+ */
+#define SG_DMG_RING			4
+#define SG_DMG_CLIENTS		256
+
+typedef struct
+{
+	int			attacker;       /* client number, -1 empty */
+	int			mod;            /* means of death, MOD_FRIENDLY_FIRE masked off */
+	int			damage;
+	vec3_t		from;           /* unit vector: the victim's eye toward
+	                             * whatever the harm arrived from */
+	float		time;
+	qboolean	unseen;         /* no sight line to the attacker when it landed */
+} sg_damage_hit_t;
+
+extern sg_damage_hit_t sg_caco_damage[SG_DMG_CLIENTS][SG_DMG_RING];
+
+/* the T_Damage hand-off (g_combat.c, beside SG_CombatHit): every landed hit
+ * on a bot, shooter seen or not */
+void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
+                   vec3_t dir);
+
+/* the newest hit from a shooter this bot could NOT see, if one landed within
+ * `window` seconds. Fills a unit vector pointing back down the incoming line.
+ * False leaves out_from untouched. */
+qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from);
+
 /* ------------------------------------------------------------------ fields */
 
 enum

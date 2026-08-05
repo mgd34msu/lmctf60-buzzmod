@@ -369,6 +369,25 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 
 #define SG_LEAD_JITTER_S0	4.0f	/* per-shot lead error in degrees; 0 at skill 4 */
 
+/*
+ * How long a hit from a shooter the bot could not see keeps steering where
+ * the bot looks (sg_caco.c's damage ring supplies the bearing). A human
+ * spins on being hit and then gets on with it; this is the length of the
+ * "and then gets on with it".
+ *
+ * The span runs the other way from every other one in this block, and that
+ * is deliberate rather than an oversight: the low-skill bot stays rattled
+ * LONGER, still checking a bearing the shot has long since left, while the
+ * skill-4 bot checks once and returns to the fight in front of it. Stated
+ * plainly because it does not fit the block's own rule that skill 4 is the
+ * ceiling -- the bias only ever ADDS candidates to the scan, so a longer
+ * window is not strictly worse for the bot that has it. It is a fluster
+ * clock, not a skill ladder, and it is written here with the skill spans
+ * because it is scaled by the same number.
+ */
+#define SG_THREAT_S0		2.40f	/* rattled this long at bot_skill 0 */
+#define SG_THREAT_S4		1.20f
+
 #define SG_COMBAT_MAXCLIENTS	256
 
 /* ------------------------------------------------------------------- state */
@@ -447,8 +466,12 @@ static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
  * [2] splash veto, [3] range cap, [4] lead drift, [5] fire window,
  * [6] held/switching. Diagnosis for the 3-in-3025 firing collapse. */
 static int		sg_cbt_why[10];
-static int		sg_cbt_scan[6];     /* [0]unteamed [1]same [2]far [3]fov
-                                     * [4]blocked [5]acquired */
+static int		sg_cbt_scan[7];     /* [0]unteamed [1]same [2]far [3]fov
+                                     * [4]blocked [5]acquired
+                                     * [6] admitted by the threat cone alone --
+                                     * outside the forward cone, kept because
+                                     * something recently shot the bot from
+                                     * that way */
 static int		sg_cbt_fire[SG_NUM_WEAPONS];    /* trigger-frames per gun */
 static int		sg_cbt_hit[SG_NUM_WEAPONS];     /* landed damage events */
 static float	sg_cbt_why_next;
@@ -610,8 +633,20 @@ static void Combat_Center(edict_t *e, vec3_t out)
  * Team is client->ctf.teamnum (g_local.h:1122), CTF_TEAM_RED/BLUE from
  * g_ctffunc.h:12-13. A client not on a team -- observer, connecting, or
  * mid-join -- has neither value and is skipped, which is what we want.
+ *
+ * `threat`, when it is not NULL, is a second cone of the same half-angle
+ * pointed back down the line something just shot the bot along (the damage
+ * ring, sg_caco.c). A candidate inside EITHER cone is considered. This is
+ * the whole of the reaction: nothing here turns the bot by hand. If the
+ * shooter is actually standing back there, the scan now returns him and the
+ * ordinary aim path swings the view around -- which is a bot spinning on
+ * being hit. If he is behind a wall, Combat_Visible fails exactly as it
+ * always did and the bot does not turn, because there is nothing to see.
+ * Aim error and the fire windows are untouched: this is where a bot LOOKS,
+ * not how well it shoots.
  */
-static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward)
+static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
+                            const float *threat)
 {
 	edict_t	*best = NULL;
 	float	bestdist = SG_ENGAGE_RANGE;
@@ -654,7 +689,11 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward)
 		VectorScale(delta, 1.0f / dist, delta);
 		dot = DotProduct(delta, forward);
 		if (dot < SG_FOV_COS)
-			{ sg_cbt_scan[3]++; continue; }
+		{
+			if (!threat || DotProduct(delta, threat) < SG_FOV_COS)
+				{ sg_cbt_scan[3]++; continue; }
+			sg_cbt_scan[6]++;
+		}
 
 		if (!Combat_Visible(self, p))
 			{ sg_cbt_scan[4]++; continue; }
@@ -2188,11 +2227,13 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	sg_combat_state_t	*st;
 	edict_t				*enemy;
 	vec3_t				eye, forward, mid, lead, aim, endp, impact;
+	vec3_t				threat;
 	float				dist, held, frac, mag, len, flight;
 	float				yaw, pitch, skill, settle;
 	trace_t				tr;
 	int					ci, band, want, inhand;
 	qboolean			clear_shot, carrier, ballistic, vel_stable;
+	qboolean			rattled;
 
 	if (out_engaged)
 		*out_engaged = false;
@@ -2216,8 +2257,17 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	eye[2] += self->viewheight;
 	AngleVectors(self->client->v_angle, forward, NULL, NULL);
 
+	/*
+	 * Anything shoot us lately from somewhere we were not looking? The
+	 * window is the fluster clock: about 1.2 s at the top of the ladder,
+	 * twice that at the bottom.
+	 */
+	rattled = SG_RecentUnseenHit(self,
+	                             Combat_SkillLerp(skill, SG_THREAT_S0,
+	                                              SG_THREAT_S4), threat);
+
 	sg_cbt_why[7]++;                        /* frames that got this far */
-	enemy = Combat_Scan(self, eye, forward);
+	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL);
 	if (enemy)
 		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)
@@ -2793,9 +2843,10 @@ void SG_CombatWhy(void)
 	           sg_cbt_why[7], sg_cbt_why[8],
 	           sg_cbt_why[0], sg_cbt_why[1], sg_cbt_why[2], sg_cbt_why[3],
 	           sg_cbt_why[4], sg_cbt_why[5], sg_cbt_why[6], sg_cbt_why[9]);
-	gi.dprintf("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d\n",
+	gi.dprintf("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d threat=%d\n",
 	           sg_cbt_scan[0], sg_cbt_scan[1], sg_cbt_scan[2],
-	           sg_cbt_scan[3], sg_cbt_scan[4], sg_cbt_scan[5]);
+	           sg_cbt_scan[3], sg_cbt_scan[4], sg_cbt_scan[5],
+	           sg_cbt_scan[6]);
 	{
 		int w;
 
