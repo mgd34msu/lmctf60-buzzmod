@@ -6327,18 +6327,30 @@ no_hold:;
 									atr = gi.trace(ap0, e->mins, e->maxs, ap1,
 									               e, MASK_PLAYERSOLID);
 									/*
-									 * aseg 1 is exempt: the box leaves from beside
-									 * the very wall the rope hangs on, so the first
-									 * sixth of every legitimate arc scrapes it
-									 * (wave 376: 76-389 vetoes per game, fleet caps
-									 * halved, 5v0 canary dimmed). Segments 2-5 are
-									 * the honest mid-flight clip test; 6 is landing
-									 * contact and was always exempt.
+									 * aseg 1 exempt: the box leaves from beside the
+									 * wall the rope hangs on. And a CONTACT is not a
+									 * CRASH (wave 378: ~300 vetoes/game survived the
+									 * seg-1 exemption -- corridor flings graze walls
+									 * constantly, and pmove clip-slide carries them
+									 * through). Only a head-on hit -- the segment
+									 * direction driving into the plane -- kills the
+									 * fling; grazes fly on. Seg 6 is landing contact.
 									 */
 									if (atr.fraction < 1.0f && aseg > 1 && aseg < 6)
 									{
-										arc_clear = false;
-										break;
+										vec3_t sd;
+										float sl;
+										VectorSubtract(ap1, ap0, sd);
+										sl = VectorLength(sd);
+										if (sl > 1.0f)
+										{
+											VectorScale(sd, 1.0f / sl, sd);
+											if (DotProduct(sd, atr.plane.normal) < -0.7f)
+											{
+												arc_clear = false;
+												break;
+											}
+										}
 									}
 									VectorCopy(ap1, ap0);
 								}
