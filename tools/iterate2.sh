@@ -153,7 +153,7 @@ SMOOTHDOSE=(0    0        0        0        0         0        0         0      
 # rail-lane A/B (345+): s03 ON vs s04 OFF -- second defender holds the
 # computed sightline post. Read: steals CONCEDED per arm + the per-map
 # lane-coverage print (low coverage = geometry has no lane; gate later).
-RAILLANE=(0      0        1        0        0         0        0         0        0        0)
+RAILLANE=(1      1        1        1        1         1        1         1        0        1)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.

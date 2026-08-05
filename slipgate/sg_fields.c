@@ -796,6 +796,13 @@ qboolean Fields_Setup(rune_t *r)
 				}
 			}
 			sg_fields.to_lane[t] = Field_Alloc(r);
+			/* the owner's map gate: a lane that cannot see 40% of the
+			 * corridor is not a lane -- idle the doctrine there (the
+			 * 347-349 A/B won on 60%-coverage mactf06; 25% lmctf22
+			 * read null in the earlier pair) */
+			if (best >= 0 && na > 0 &&
+			    bestscore / (float)na < 0.40f)
+				best = -1;
 			if (best >= 0)
 			{
 				Field_FromOne(r, sg_fields.to_lane[t], best);
