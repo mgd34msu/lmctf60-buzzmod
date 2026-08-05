@@ -181,6 +181,12 @@ typedef struct sg_bot_s
 	                             * the surface's 1Hz refresh, not the
 	                             * 10Hz physics tick (sg_linklatch) */
 	float		runetoss_next;  /* rune handoff cadence (sg_runetoss) */
+	float		handoff_next;   /* flag handoff cadence (sg_handoff): a pass
+	                             * the receiver never picks up leaves the
+	                             * flag on the floor for our own attackers
+	                             * to re-grab, and the re-grabber arrives at
+	                             * the same low health -- without a cooldown
+	                             * that is a drop loop */
 	float		soundfire_next; /* speculative rocket cadence */
 	float		runeconv_until; /* courier window: converge on carrier */
 	float		nav_yaw_cur;    /* smoothed walk heading (sg_smooth) */
@@ -3575,6 +3581,154 @@ rally_done:;
 				           att[bot->seed]);
 			if (bot->rally_since <= 0.0f)
 				bot->rally_since = level.time;
+		}
+	}
+
+	/*
+	 * THE FLAG HANDOFF (sg_handoff, census gap 10). The owner's rulings:
+	 * "flag handoff can use drop, but it would be better to use the buzzmod
+	 * toss", then "it is another valid way to pass the flag besides drop"
+	 * and "we should probably limit the range of the flag toss a bit". A
+	 * carrier about to die gives the flag to a teammate who is nearer home
+	 * than it is, instead of dying with it in the open and handing the
+	 * defense a free return.
+	 *
+	 * WHAT drop AND toss ACTUALLY DO HERE. They are the same act. "toss
+	 * flag" is special-cased in Cmd_ItemToss_f (g_cmds.c) into
+	 * ctf_playerdropflag because the flag item's toss slot is NULL; "drop
+	 * flag" reaches ctf_playerdropflag through the item's drop slot
+	 * (g_items.c). Both end in ctf_TossEnt, which lobs at a FIXED
+	 * forward*200 with z=300 -- about 150 units of ground range, not
+	 * settable from the command. So the command word is the owner's
+	 * preference, and the RANGE CAP below is the whole of "limit the range
+	 * a bit": the carrier does not attempt a pass it cannot make. Widening
+	 * the lob itself would mean editing ctf_TossEnt, which also throws
+	 * runes and every death-drop -- game code, not a bot decision.
+	 *
+	 * The receiver is priced on the CARRIER'S OWN home field (goal_field is
+	 * to_{red,blue}_flag for a CARRY bot, set above and not reassigned for
+	 * this role), so "nearer home" means nearer along the route rather than
+	 * nearer in a straight line through a wall, and the line of sight is
+	 * checked so the flag is not lobbed into a doorframe.
+	 */
+	if (gi.cvar("sg_handoff", "0", 0)->value &&
+	    role == SG_ROLE_CARRY && goal_field &&
+	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
+	    level.time >= bot->handoff_next &&
+	    (bot->engaged_last || duel))
+	{
+		/*
+		 * The bail-out health, skill-scaled: skill 4 backs itself to live
+		 * and holds the flag down to 35; skill 0 lets go at 60. The low
+		 * skill passes EARLIER on purpose -- it is the one least likely to
+		 * finish the run, so its flag is worth more in better hands.
+		 */
+		float	sk = (float)SG_CombatSkill(e) / 100.0f;     /* 0 .. 4 */
+		float	hp_thr = 60.0f + (35.0f - 60.0f) * (sk / 4.0f);
+
+		if ((float)e->health < hp_thr)
+		{
+			int		mi, best = -1;
+			int		my_cost = goal_field[bot->seed];
+			int		best_cost = my_cost;
+			vec3_t	eye;
+
+			VectorCopy(e->s.origin, eye);
+			eye[2] += e->viewheight;
+
+			for (mi = 1; mi <= game.maxclients; mi++)
+			{
+				edict_t	*me = g_edicts + mi;
+				vec3_t	md;
+				float	mdist;
+				int		ms, mc;
+				trace_t	mtr;
+
+				if (me == e || !me->inuse || !me->client)
+					continue;
+				if (me->deadflag || me->health <= 0)
+					continue;
+				if (me->client->ctf.teamnum != team)
+					continue;
+				/* observers and the not-yet-joined cannot receive */
+				if (!ctf_validateplayer(me, CTF_TEAM_ANYTEAM))
+					continue;
+
+				VectorSubtract(me->s.origin, e->s.origin, md);
+				mdist = VectorLength(md);
+				if (mdist > 350.0f)     /* the cap (owner's ruling) */
+					continue;
+
+				ms = Rune_NearestSeed(sg_rune, me->s.origin);
+				if (ms < 0 || goal_field[ms] >= SG_FIELD_INF)
+					continue;
+				mc = goal_field[ms];
+				/* beat the carrier by a real margin, not field noise */
+				if (mc + 300 >= best_cost)
+					continue;
+
+				mtr = gi.trace(eye, NULL, NULL, me->s.origin, e,
+				               MASK_SOLID);
+				if (mtr.fraction < 1.0f && mtr.ent != me)
+					continue;
+
+				best = mi;
+				best_cost = mc;
+			}
+
+			if (best > 0)
+			{
+				edict_t	*re = g_edicts + best;
+				vec3_t	hd;
+				float	hy, hdist;
+				char	*word;
+
+				VectorSubtract(re->s.origin, e->s.origin, hd);
+				hdist = VectorLength(hd);
+				hy = atan2f(hd[1], hd[0]) * 180.0f / (float)M_PI;
+
+				/*
+				 * ctf_TossEnt aims the lob with client->v_angle, NOT with
+				 * the usercmd -- pmove has not run yet this frame, so
+				 * steering by cmd.angles alone would throw the flag along
+				 * LAST frame's facing. Set the view angle the release
+				 * actually reads (pitch flat, so the arc clears the floor
+				 * instead of burying itself), and set the usercmd too so
+				 * the body ends the frame facing where it threw.
+				 */
+				e->client->v_angle[YAW] = hy;
+				e->client->v_angle[PITCH] = 0.0f;
+				cmd.angles[YAW] = ANGLE2SHORT(hy)
+				    - e->client->ps.pmove.delta_angles[YAW];
+
+				/* the owner named both words: near enough to place it in
+				 * a mate's hands is a drop, past that it is a throw */
+				word = (hdist <= 150.0f) ? "drop" : "toss";
+				SG_BotClientCommand((int)(e - g_edicts) - 1,
+				                    word, "flag", NULL);
+
+				/*
+				 * The carry gauges belong to the carry that just ended --
+				 * the same three the grab resets. The role itself follows
+				 * next think, because SG_Role derives CARRY from actually
+				 * holding the flag.
+				 */
+				bot->carry_startcost = -1;
+				bot->carry_bestcost = -1;
+				bot->carry_lost_at = 0.0f;
+				bot->handoff_next = level.time + 10.0f;
+
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("HANDOFF %s -> %s %s dist=%.0f cost "
+					           "%d->%d hp=%d thr=%.0f\n",
+					           e->client->pers.netname,
+					           re->client->pers.netname, word, hdist,
+					           my_cost, best_cost, e->health, hp_thr);
+			}
+			else if (gi.cvar("sg_debug", "0", 0)->value &&
+			         level.time >= bot->next_report - 0.9f)
+				gi.dprintf("HANDOFF %s no receiver hp=%d thr=%.0f\n",
+				           e->client->pers.netname, e->health, hp_thr);
 		}
 	}
 
