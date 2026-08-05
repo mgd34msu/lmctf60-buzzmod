@@ -28,9 +28,14 @@ The database creates itself. `1` gives one file per player instead; `0` is off.
 
 Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmstats).
 
-## SLIPGATE bots
+## SLIPGATE bots (in development — not yet released)
 
-SLIPGATE is a from-scratch bot system built into the mod, aimed at bots that
+SLIPGATE is a from-scratch bot system being developed for the mod. **It is
+not part of any release yet** — it lives on a development branch and only
+runs on our internal test servers. It will ship in a future release once
+it's ready.
+
+The goal: bots that
 play LMCTF the way humans play it — grapple-first movement, real flag-carrier
 escape runs, escorts that screen the carrier, and defense that guards
 sightlines instead of standing on the flag.
@@ -43,7 +48,7 @@ combat habits are mined from a large corpus of demos from the game's
 competitive era and validated in continuous automated experiments — every
 behavior ships only after winning a controlled A/B trial.
 
-Working today: full steal → carry → escort → capture play at every team size
+Working today on the development builds: full steal → carry → escort → capture play at every team size
 from 2v2 to 7v7, cooked-grenade area denial, sound-directed speculative fire,
 landing-point rocket leads on airborne targets, covered approach routing,
 route commitment ("stay the course until it stops being good enough"), and
