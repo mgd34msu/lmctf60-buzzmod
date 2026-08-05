@@ -2,6 +2,7 @@
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
 #include "bat.h"
+#include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
 
 int MvpDisp;
 
@@ -74,6 +75,24 @@ void BeginIntermission (edict_t *targ)
     // LM_JORM -- Proclaim a victory!
     Victory();
     // END LM_JORM
+
+	/*
+	 * SLIPGATE's bots react to the result, right where the server has just
+	 * announced it. This is the one place every way of ending a level meets --
+	 * timelimit, fraglimit, a target_changelevel and a match end all arrive
+	 * here -- and the intermissiontime guard above makes it fire once.
+	 *
+	 * After Victory() rather than before it because that is the reading order
+	 * a player sees, and the scores are the same either side: the only thing
+	 * Victory() adds is STATS_SWEEPS, which nothing here sums.
+	 *
+	 * Nothing is said in this call. The lines are booked and go out over the
+	 * next four seconds from SG_ChatFrame, which keeps running through
+	 * intermission -- well inside the five seconds a client must wait before
+	 * it can end intermission (ClientThink, this file's counterpart in
+	 * p_client.c).
+	 */
+	SG_ChatLevelEnd();
 
 	game.autosaved = false;
 

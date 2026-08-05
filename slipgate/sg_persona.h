@@ -116,3 +116,4 @@ int SG_PersonaAimGrade(edict_t *ent);
  * sg_chat.c decides what a "frequency" means to it. Consumed nowhere yet.
  */
 float SG_PersonaBanterFreq(edict_t *ent);
+float SG_PersonaBanterFreqSlot(int cl);

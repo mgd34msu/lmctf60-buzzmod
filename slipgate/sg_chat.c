@@ -16,8 +16,17 @@
  *
  *   2. PERSONALITY. Sixteen bots, four voices, keyed by the netname prefix
  *      sg_arach.c gives them ("Arach[SG]"). Public chat only: greeting,
- *      taunt, grumble, celebration. Short, lowercase, rate-limited, and
- *      probabilistic so it is not a script.
+ *      map open, taunt, grumble, celebration, match end, idle banter. Short,
+ *      lowercase, rate-limited, and probabilistic so it is not a script.
+ *
+ *      Three things keep sixteen mouths from reading as one. Every line is
+ *      rolled, not scheduled, so a category firing is never certain. Every
+ *      line a bot speaks is off the table for EVERY bot for the next
+ *      SG_CHAT_REUSE_GAP seconds (Chat_Recent), because the tell is not one
+ *      bot repeating itself, it is two bots saying the same four words a
+ *      breath apart. And each bot's odds are scaled by a fixed per-slot
+ *      chattiness (Chat_Chatty), so the loud ones and the quiet ones are the
+ *      same loud ones and quiet ones all night.
  *
  *   3. HUMAN ORDERS. A human teammate's chat is parsed for
  *      "[addressee] <verb>" and stored as a role override with a 90-second
@@ -37,7 +46,8 @@
 
 #include "g_local.h"
 #include "g_ctffunc.h"
-#include "slipgate/sg_net.h"                    /* SG_BotClientCommand -- the chat route */
+#include "slipgate/sg_net.h"
+#include "slipgate/sg_persona.h"                    /* SG_BotClientCommand -- the chat route */
 #include "p_stats.h"                    /* stats_get -- the scoreboard's own count */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"
@@ -66,6 +76,68 @@
 #define SG_CHAT_GRUMBLE_GAP	45.0f
 #define SG_CHAT_GRUMBLE_ODDS	0.15f
 
+/*
+ * The roster size, used only to space the level-open and level-end staggers
+ * across the bots that are actually on the server. sg_arach.c's SG_MAXBOTS is
+ * private to that file, and a slot number is all this needs, so the number is
+ * repeated here rather than exported. Too small a value only bunches the
+ * stagger; nothing here indexes by it.
+ */
+#define SG_CHAT_ROSTER		16
+
+/*
+ * MAP OPEN. One line per bot per level, well short of certain, spread so the
+ * server does not open with a wall of text. The window starts after the bot's
+ * own greeting has cleared the public say budget -- scheduled any earlier the
+ * line is simply eaten by that budget (Chat_SayEx refuses), which would silence
+ * the low slots every single map.
+ */
+#define SG_CHAT_OPEN_ODDS	0.35f
+#define SG_CHAT_OPEN_SPAN	20.0f   /* spread across this many seconds */
+#define SG_CHAT_OPEN_JITTER	0.50f   /* so the spacing is not a metronome */
+
+/*
+ * MATCH END. Fired from BeginIntermission (p_hud.c) and delivered over the
+ * following few seconds. The whole stagger fits inside four seconds because
+ * intermission can be exited after five (p_client.c:2823) -- a line booked
+ * later than that is a line nobody reads.
+ */
+#define SG_CHAT_END_ODDS	0.50f
+#define SG_CHAT_END_STAGGER	0.25f   /* per roster slot: 16 * 0.25 = 4.0s */
+#define SG_CHAT_END_JITTER	0.20f
+#define SG_CHAT_CLOSE_MARGIN	5   /* summed team score within this = close */
+
+/*
+ * IDLE BANTER. The rarest mouth in the file: an attempt is booked no sooner
+ * than SG_CHAT_IDLE_GAP and the attempt itself is a coin flip, so the mean gap
+ * between two idle lines from one bot is comfortably past two minutes even for
+ * the chattiest slot. It only fires in a genuine lull -- nothing shooting at
+ * this bot for SG_CHAT_IDLE_CALM, and no team callout anywhere on its side for
+ * SG_CHAT_IDLE_QUIET. Banter over a live callout is how a channel stops being
+ * read.
+ */
+#define SG_CHAT_IDLE_GAP	90.0f
+#define SG_CHAT_IDLE_JITTER	60.0f
+#define SG_CHAT_IDLE_ODDS	0.50f
+#define SG_CHAT_IDLE_CALM	10.0f   /* out of contact at least this long */
+#define SG_CHAT_IDLE_QUIET	10.0f   /* team channel silent at least this long */
+
+/*
+ * THE REUSE GUARD. A line that has gone out in the last SG_CHAT_REUSE_GAP
+ * seconds is not offered to anybody -- the same bot or any other. The ring
+ * holds pointers into the pool table below, never a caller's buffer, so a
+ * recorded entry stays valid for the life of the process.
+ */
+#define SG_CHAT_REUSE_GAP	20.0f
+/*
+ * Deep enough that the ring cannot wrap inside its own window and quietly
+ * forgive a line early: the public say budget lets one bot speak every
+ * SG_CHAT_SAY_GAP, so sixteen of them can put at most 16 * (20 / 8) = 40
+ * lines into a twenty-second window, and the queued steal callout is the only
+ * other thing recorded.
+ */
+#define SG_CHAT_REUSE_RING	48
+
 #define SG_CHAT_LM_RANGE	448.0f  /* a landmark names a spot within this */
 #define SG_CHAT_TAKER_AGE	2.0f    /* a sighting this fresh names a taker */
 #define SG_CHAT_TAKER_RANGE	512.0f  /* and only this close to the pad */
@@ -91,7 +163,11 @@ enum { SG_TONE_TERSE = 0, SG_TONE_COCKY, SG_TONE_DRY, SG_TONE_MECH, SG_TONES };
 
 enum {
 	SG_LINE_JOIN = 0, SG_LINE_KILL, SG_LINE_DEATH,
-	SG_LINE_CAP, SG_LINE_STEAL, SG_LINE_CATS
+	SG_LINE_CAP, SG_LINE_STEAL,
+	SG_LINE_OPEN,                   /* the map just came up */
+	SG_LINE_WIN, SG_LINE_LOSE, SG_LINE_CLOSE,   /* how the match ended */
+	SG_LINE_IDLE,                   /* nothing happening, filling the air */
+	SG_LINE_CATS
 };
 
 enum {
@@ -113,6 +189,10 @@ enum {
  * single firefight -- the echo the deeper pool exists to break up. Rows are
  * NULL-terminated where they are short of SG_CHAT_MAXLINES; Chat_Pick counts
  * to the first NULL, so a row may be any length up to the maximum.
+ *
+ * Row order is the SG_LINE_* enum's order, and nothing but this comment keeps
+ * the two in step: a category added there needs a row added to all four
+ * voices here, or a voice reads its neighbour's lines.
  */
 static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 	/* SG_TONE_TERSE  -- arach, trace, ogre, knight */
@@ -124,7 +204,17 @@ static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 		{ "cap", "thats one", "good", "on the board", "point", "yes",
 		  "scored", NULL },
 		{ "flag is out", "got it", "moving", "have it", "going home",
-		  "run", NULL }
+		  "run", NULL },
+		{ "new map", "know this one", "lets run it", "fresh start",
+		  "ok, this one", "good map", NULL },
+		{ "gg", "won that", "thats the map", "we take it", "done",
+		  "good one", NULL },
+		{ "gg all", "next map", "beat us", "bad one for us", "our fault",
+		  "nice game", NULL },
+		{ "that was close", "close one", "right to the wire",
+		  "good match", "well played", NULL },
+		{ "quiet", "long map", "still here", "im awake", "waiting",
+		  "hm", NULL }
 	},
 	/* SG_TONE_COCKY  -- caco, slip, fiend, spawn */
 	{
@@ -137,7 +227,18 @@ static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 		{ "thats how you do it", "run it back", "count it", "told you",
 		  "put it up", "thats a point", NULL },
 		{ "flags mine", "watch this", "coming through", "ill take that",
-		  "say goodbye to it", NULL }
+		  "say goodbye to it", NULL },
+		{ "my map", "easy map", "i live in that flag room",
+		  "lets see who shows up", "hope you know the route",
+		  "this ones mine", NULL },
+		{ "told you", "not even close", "gg easy", "we owned that",
+		  "learn the map", "any time", NULL },
+		{ "lag", "rematch", "we werent trying", "you got lucky",
+		  "next map is mine", "wont happen next map", NULL },
+		{ "too close", "we let that get close", "good game i guess",
+		  "you got lucky at the end", "next one wont be close", NULL },
+		{ "somebody do something", "im getting bored", "wake up out there",
+		  "who wants a go", "this is too easy", NULL }
 	},
 	/* SG_TONE_DRY    -- rune, phase, wizard, scrag */
 	{
@@ -150,7 +251,20 @@ static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 		{ "one for us", "acceptable", "there it is", "adequate",
 		  "satisfactory", "as planned", NULL },
 		{ "we have theirs", "flag is away", "borrowed it", "taking this",
-		  "do excuse me", NULL }
+		  "do excuse me", NULL },
+		{ "ah, this map", "i rather like this one", "not this one again",
+		  "that flag room is a deathtrap", "quaint", "well, its a map",
+		  NULL },
+		{ "well played us", "that went nicely", "a fine result",
+		  "thank you all", "good game everyone", "most satisfactory",
+		  NULL },
+		{ "how disappointing", "they earned it", "next time perhaps",
+		  "good game to them", "hm, deserved", "so it goes", NULL },
+		{ "closer than i would like", "a proper game at last",
+		  "well fought all", "that was worth playing", "very nearly", NULL },
+		{ "quiet, isnt it", "i shall put the kettle on",
+		  "one does get comfortable", "any moment now",
+		  "lovely weather in here", NULL }
 	},
 	/* SG_TONE_MECH   -- gate, field, vore, shal */
 	{
@@ -163,7 +277,18 @@ static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 		{ "objective complete", "point scored", "capture logged",
 		  "score updated", "mission success", NULL },
 		{ "flag acquired", "carrying", "objective in hand",
-		  "asset secured", "extracting", NULL }
+		  "asset secured", "extracting", NULL },
+		{ "map loaded", "terrain acquired", "layout known",
+		  "route table ready", "scanning layout", "position confirmed",
+		  NULL },
+		{ "match complete", "objective secured", "victory logged",
+		  "we win", "mission accomplished", "score final", NULL },
+		{ "match lost", "objective failed", "defeat logged",
+		  "outperformed", "recalibrating", "analysis pending", NULL },
+		{ "margin minimal", "close result", "within tolerance",
+		  "narrow finish", "closely contested", NULL },
+		{ "idle", "no contacts", "awaiting contact", "power conserved",
+		  "scan clear", "holding position", NULL }
 	}
 };
 
@@ -210,6 +335,18 @@ typedef struct
 	float		next_grumble;
 	float		next_ack;       /* floor under a human spamming orders */
 
+	/* the map-open line: booked once, spoken at most once */
+	qboolean	opened;
+	float		open_at;        /* 0 = not scheduled yet */
+
+	/* the match-end line, booked by SG_ChatLevelEnd */
+	int			end_cat;        /* -1 = nothing booked */
+	float		end_at;
+
+	/* idle banter */
+	float		next_idle;      /* next ATTEMPT, which is then rolled */
+	float		combat_at;      /* last moment this bot was in a fight */
+
 	/* the standing order, if any */
 	int			order_role;     /* SG_CHAT_ROLE_NONE when none */
 	float		order_expire;
@@ -234,6 +371,26 @@ typedef struct
 
 static sg_chatq_t	chat_q[2][SG_CHAT_TOPICS];      /* [team-1][topic] */
 static float		chat_teamsaid[2][SG_CHAT_TOPICS];
+
+/*
+ * When each side last had a callout land, per team-1. chat_teamsaid cannot
+ * answer that question -- it is a per-topic "not before" stamp, so a quiet
+ * topic and a topic that just fired look alike once their gaps differ. Idle
+ * banter is the only reader: it stays out of the way of live information.
+ */
+static float		chat_team_last[2];
+
+/*
+ * The reuse ring. Entries are pointers into chat_line[][][] and nowhere else;
+ * Chat_Note is called only where a pool pointer is in hand, never with a
+ * caller's buffer, because an entry outlives the call that made it.
+ *
+ * Pointer identity is the comparison on purpose. Two rows holding the same
+ * text are the same line to a reader, and the compiler is free to fold them to
+ * one address, which makes the guard catch that case for free.
+ */
+static struct { const char *line; float at; } chat_recent[SG_CHAT_REUSE_RING];
+static int			chat_recent_head;
 
 /*
  * Belief bookkeeping for the items CACO already tracks (quad, invuln, the
@@ -384,9 +541,74 @@ static int Chat_Tone(edict_t *e)
 	return SG_TONE_TERSE;               /* a renamed bot still gets a voice */
 }
 
+/*
+ * How chatty this particular bot is: 0.5 to 1.5, fixed for the life of the
+ * slot, multiplying the odds of every rolled personality line.
+ *
+ * (slot * 7) % 11 is the whole derivation. 7 and 11 are coprime, so the eleven
+ * rates are hit in a stride that puts NEIGHBOURING slots far apart -- slots 0,
+ * 1, 2, 3 come out 0.5, 1.2, 0.8, 1.5 -- and bots are added into consecutive
+ * slots, so a run of adjacent rates would have made the first half of a
+ * botfilled team uniformly quiet and the second half uniformly loud. It is
+ * deterministic rather than rolled because a bot that is talkative tonight and
+ * withdrawn tomorrow is not a personality, it is noise. Eleven rates over
+ * sixteen slots means a few pairs share one; that is fine, they still differ
+ * in voice.
+ */
+static float Chat_Chatty(int cl)
+{
+	float pf;
+
+	if (cl < 0)
+		return 1.0f;
+	/* the persona table owns per-bot character when it is on; the coprime
+	 * spread below is the fallback voice of a persona-less build */
+	pf = SG_PersonaBanterFreqSlot(cl);
+	if (pf > 0.0f)
+		return pf;
+	return 0.5f + (float)((cl * 7) % 11) * 0.1f;
+}
+
+/* has this exact line been said by anybody inside the reuse window */
+static qboolean Chat_Recent(const char *line)
+{
+	int i;
+
+	if (!line)
+		return false;
+	for (i = 0; i < SG_CHAT_REUSE_RING; i++)
+		if (chat_recent[i].line == line &&
+		    level.time - chat_recent[i].at < SG_CHAT_REUSE_GAP)
+			return true;
+	return false;
+}
+
+/*
+ * Record a line as said. Called where the line actually went out, not where it
+ * was picked: a line the say budget refused was never heard, and burning it
+ * for twenty seconds would thin the pools for nothing.
+ */
+static void Chat_Note(const char *line)
+{
+	if (!line)
+		return;
+	chat_recent[chat_recent_head].line = line;
+	chat_recent[chat_recent_head].at = level.time;
+	chat_recent_head = (chat_recent_head + 1) % SG_CHAT_REUSE_RING;
+}
+
+/*
+ * A line from this voice's row, preferring one nobody has used lately.
+ *
+ * The fallback matters: when every line in a short row is inside the reuse
+ * window the pick is made from the whole row anyway. Going silent instead
+ * would turn the guard into a mute button on exactly the categories with the
+ * fewest lines, which is the opposite of what it is for.
+ */
 static const char *Chat_Pick(int tone, int cat)
 {
-	int n = 0;
+	const char	*fresh[SG_CHAT_MAXLINES];
+	int			n = 0, f = 0, i;
 
 	if (tone < 0 || tone >= SG_TONES || cat < 0 || cat >= SG_LINE_CATS)
 		return NULL;
@@ -394,6 +616,13 @@ static const char *Chat_Pick(int tone, int cat)
 		n++;
 	if (n == 0)
 		return NULL;
+
+	for (i = 0; i < n; i++)
+		if (!Chat_Recent(chat_line[tone][cat][i]))
+			fresh[f++] = chat_line[tone][cat][i];
+
+	if (f > 0)
+		return fresh[(int)(random() * f) % f];
 	return chat_line[tone][cat][(int)(random() * n) % n];
 }
 
@@ -458,6 +687,10 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	Chat_Copy(buf, line, sizeof(buf));
 	SG_BotClientCommand(cl, "say_team", buf, NULL);
 
+	/* stamped for every topic, acknowledgements included: idle banter reads
+	 * this to stay off a channel that is carrying something */
+	chat_team_last[team - 1] = level.time;
+
 	if (topic != SG_CHAT_TOPIC_ORDER)
 	{
 		chat_bot[cl].next_team = level.time + SG_CHAT_BOT_GAP;
@@ -467,26 +700,64 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	return true;
 }
 
-/* the public channel: personality only, and on its own slower budget */
-static qboolean Chat_Say(edict_t *speaker, const char *line)
+/*
+ * The public channel: personality only, and on its own slower budget.
+ *
+ * Two things speak from outside the ordinary alive-and-well case, so they are
+ * flags here rather than a second copy of the emitter:
+ *
+ *   SG_SAYF_DEAD    the speaker is a corpse or is frozen at the intermission
+ *                   point. A grumble comes from a bot that just died, and a
+ *                   match-end line comes from one the level has already
+ *                   stopped; Chat_Playing refuses both, correctly, for
+ *                   callouts -- but neither of these is a callout.
+ *   SG_SAYF_NOGAP   skip the public say budget, still stamping it. Used only
+ *                   by the match-end line, which is one line per bot at a
+ *                   moment that will not come again this level; letting a
+ *                   taunt from four seconds earlier eat it would silence
+ *                   whoever was busiest at the whistle.
+ *
+ * The speaker must still be one of ours and on a team either way.
+ */
+#define SG_SAYF_DEAD	1
+#define SG_SAYF_NOGAP	2
+
+static qboolean Chat_SayEx(edict_t *speaker, const char *line, int flags)
 {
 	char	buf[SG_CHAT_LINE];
 	int		cl;
 
 	if (!speaker || !line || !line[0])
 		return false;
-	if (!Chat_OurBot(speaker) || !Chat_Playing(speaker))
+	if (!Chat_OurBot(speaker))
+		return false;
+	if (flags & SG_SAYF_DEAD)
+	{
+		if (speaker->client->ctf.teamnum != CTF_TEAM_RED &&
+		    speaker->client->ctf.teamnum != CTF_TEAM_BLUE)
+			return false;
+	}
+	else if (!Chat_Playing(speaker))
 		return false;
 
 	cl = Chat_ClientNum(speaker);
 	if (cl < 0 || cl >= game.maxclients)
 		return false;
-	if (level.time < chat_bot[cl].next_say)
+	if (!(flags & SG_SAYF_NOGAP) && level.time < chat_bot[cl].next_say)
 		return false;
 
 	Chat_Copy(buf, line, sizeof(buf));
 	SG_BotClientCommand(cl, "say", buf, NULL);
 	chat_bot[cl].next_say = level.time + SG_CHAT_SAY_GAP;
+	return true;
+}
+
+/* say a line picked out of the pools, and burn it for everybody if it lands */
+static qboolean Chat_SayPooled(edict_t *speaker, const char *line, int flags)
+{
+	if (!Chat_SayEx(speaker, line, flags))
+		return false;
+	Chat_Note(line);
 	return true;
 }
 
@@ -1138,11 +1409,11 @@ void SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier)
  * sight, and put the first attempt past the lockout window, where the say can
  * actually go out. Everything else is belt and braces.
  *
- * Note what Chat_Say can and cannot tell us. It returns false for its own
+ * Note what Chat_SayEx can and cannot tell us. It returns false for its own
  * refusals -- the public say budget, a bot that died before its turn -- and
  * those are worth retrying. It cannot see spam control's verdict at all:
  * SG_BotClientCommand returns void, so once the line is handed to Cmd_Say_f,
- * Chat_Say reports true whether ctf_SpamCheck passed it or ate it. So the
+ * it reports true whether ctf_SpamCheck passed it or ate it. So the
  * retry below is not a delivery check, and the greeting's correctness rests on
  * being scheduled late enough rather than on noticing a rejection. The retry
  * gap is still longer than the lockout, because a refused attempt re-arms
@@ -1196,7 +1467,7 @@ static void Chat_Greetings(void)
 			continue;
 		}
 
-		if (Chat_Say(e, line))
+		if (Chat_SayPooled(e, line, 0))
 		{
 			cb->greeted = true;
 			continue;
@@ -1263,7 +1534,7 @@ static void Chat_TeamEvents(void)
 			sp = Chat_Speaker(t + 1);
 			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_CAP) : NULL;
 			if (sp && line)
-				Chat_Say(sp, line);
+				Chat_SayPooled(sp, line, 0);
 		}
 		chat_lastscore[t] = score[t];
 
@@ -1273,7 +1544,17 @@ static void Chat_TeamEvents(void)
 			sp = Chat_Speaker(t + 1);
 			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_STEAL) : NULL;
 			if (sp && line)
+			{
+				/*
+				 * Burned at queue time, not on delivery: Chat_Queue copies
+				 * the text into its slot and the pool pointer is gone by the
+				 * time Chat_Flush speaks it. A queued line is committed
+				 * anyway -- the slot is taken and no second steal callout
+				 * will be queued behind it.
+				 */
 				Chat_Queue(sp, t + 1, SG_CHAT_TOPIC_STEAL, line);
+				Chat_Note(line);
+			}
 		}
 		chat_lastcarrier[t] = carrier;
 	}
@@ -1297,8 +1578,11 @@ void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 			line = Chat_Pick(Chat_Tone(attacker), SG_LINE_KILL);
 			chat_bot[cl].next_taunt = level.time + SG_CHAT_TAUNT_GAP;
 			if (line)
-				Chat_Say(attacker, line);
+				Chat_SayPooled(attacker, line, 0);
 		}
+		/* a kill is a fight: idle banter stays away from one */
+		if (cl >= 0 && cl < game.maxclients)
+			chat_bot[cl].combat_at = level.time;
 	}
 
 	if (victim && Chat_OurBot(victim))
@@ -1311,20 +1595,267 @@ void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 			line = Chat_Pick(Chat_Tone(victim), SG_LINE_DEATH);
 			chat_bot[cl].next_grumble = level.time + SG_CHAT_GRUMBLE_GAP;
 			/*
-			 * Chat_Say refuses a dead speaker, and by here the victim is
-			 * one, so the grumble goes out through the queue-free path with
-			 * the budget checked by hand.
+			 * By here the victim is a corpse, which Chat_Playing refuses --
+			 * hence SG_SAYF_DEAD. The public say budget still applies: a bot
+			 * that just taunted does not also get to grumble.
 			 */
-			if (line && victim->client &&
-			    level.time >= chat_bot[cl].next_say)
-			{
-				char buf[SG_CHAT_LINE];
-
-				Chat_Copy(buf, line, sizeof(buf));
-				SG_BotClientCommand(cl, "say", buf, NULL);
-				chat_bot[cl].next_say = level.time + SG_CHAT_SAY_GAP;
-			}
+			if (line)
+				Chat_SayPooled(victim, line, SG_SAYF_DEAD);
 		}
+		if (cl >= 0 && cl < game.maxclients)
+			chat_bot[cl].combat_at = level.time;
+	}
+}
+
+/*
+ * THE MAP-OPEN LINE. One per bot per level, at roughly a third of them, so a
+ * full server opens with five or six voices rather than sixteen or none.
+ *
+ * Two things about the schedule are load-bearing.
+ *
+ * It sits behind the bot's OWN greeting plus the public say budget. Both lines
+ * go out on the same budgeted channel, and the greeting is booked first
+ * (Chat_Greetings runs ahead of this in SG_ChatFrame), so a map-open line
+ * booked any earlier is refused by SG_CHAT_SAY_GAP and lost. Scheduling it
+ * off greet_at rather than off level.time is what keeps the low slots -- the
+ * ones a botfilled team fills first -- from being silenced every map.
+ *
+ * And the roll is made ONCE, when the line is booked, not when it comes due.
+ * Rolling at the due moment would mean rerolling every frame from then on,
+ * which is not a 35% chance of speaking, it is a certainty with a delay.
+ */
+static void Chat_LevelOpen(void)
+{
+	int i;
+
+	if (level.intermissiontime)
+		return;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t			*e = g_edicts + 1 + i;
+		sg_chat_bot_t	*cb = &chat_bot[i];
+		const char		*line;
+
+		if (!Chat_OurBot(e))
+		{
+			cb->opened = false;
+			cb->open_at = 0.0f;
+			continue;
+		}
+		if (cb->opened || !Chat_Playing(e))
+			continue;
+
+		if (cb->open_at <= 0.0f)
+		{
+			if (cb->greet_at <= 0.0f)
+				continue;               /* not greeted yet: nothing to trail */
+
+			if (random() >= SG_CHAT_OPEN_ODDS * Chat_Chatty(i))
+			{
+				cb->opened = true;      /* this one has nothing to say */
+				continue;
+			}
+
+			/*
+			 * Slot-spaced first, jittered second: the spacing guarantees no
+			 * two bots land in the same frame, the jitter keeps the result
+			 * from sounding like a roll call.
+			 */
+			cb->open_at = cb->greet_at + SG_CHAT_SAY_GAP
+			            + (float)(i % SG_CHAT_ROSTER)
+			              * (SG_CHAT_OPEN_SPAN / (float)SG_CHAT_ROSTER)
+			            + random() * SG_CHAT_OPEN_JITTER;
+			continue;
+		}
+		if (level.time < cb->open_at)
+			continue;
+
+		cb->opened = true;                  /* one attempt, spoken or not */
+		line = Chat_Pick(Chat_Tone(e), SG_LINE_OPEN);
+		if (line)
+			Chat_SayPooled(e, line, 0);
+	}
+}
+
+/*
+ * The team's score as the game itself announces it: summed per-player
+ * STATS_SCORE, exactly the sum Victory() prints as "Blue: N beats red: M"
+ * (g_tourney.c:117-127). Deliberately NOT Chat_Captures -- a bot gloating
+ * about a win the scoreboard does not show is worse than a bot that says
+ * nothing, and capture totals and score totals disagree often.
+ */
+static int Chat_TeamScore(int team)
+{
+	int	total = 0, i;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t *e = g_edicts + 1 + i;
+
+		if (!e->inuse || !e->client)
+			continue;
+		if (e->client->ctf.teamnum != team)
+			continue;
+		total += (int)stats_get(e, STATS_SCORE);
+	}
+	return total;
+}
+
+/*
+ * THE MATCH-END LINE, booked from BeginIntermission (p_hud.c) and delivered
+ * over the next four seconds by Chat_LevelEndFlush.
+ *
+ * Booked rather than spoken on the spot for the ordinary reason -- sixteen
+ * lines in one frame is a wall, not a conversation -- and the whole stagger is
+ * kept inside four seconds because a client may exit intermission five seconds
+ * in (p_client.c:2823) and take the rest of the lines with it.
+ *
+ * A margin inside SG_CHAT_CLOSE_MARGIN either way, ties included, is a close
+ * game and both sides say so. Gloating over two points reads as a bot that
+ * only knows how to compare two numbers.
+ */
+void SG_ChatLevelEnd(void)
+{
+	int	score[2], i;
+
+	score[0] = Chat_TeamScore(CTF_TEAM_RED);
+	score[1] = Chat_TeamScore(CTF_TEAM_BLUE);
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t			*e = g_edicts + 1 + i;
+		sg_chat_bot_t	*cb = &chat_bot[i];
+		int				team, diff;
+
+		if (!Chat_OurBot(e))
+			continue;
+		team = e->client->ctf.teamnum;
+		if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+			continue;
+		if (cb->end_cat >= 0)
+			continue;               /* already booked, and once is enough */
+		if (random() >= SG_CHAT_END_ODDS * Chat_Chatty(i))
+			continue;
+
+		diff = score[team - 1] - score[2 - team];
+		if (diff > SG_CHAT_CLOSE_MARGIN)
+			cb->end_cat = SG_LINE_WIN;
+		else if (diff < -SG_CHAT_CLOSE_MARGIN)
+			cb->end_cat = SG_LINE_LOSE;
+		else
+			cb->end_cat = SG_LINE_CLOSE;
+
+		cb->end_at = level.time
+		           + (float)(i % SG_CHAT_ROSTER) * SG_CHAT_END_STAGGER
+		           + random() * SG_CHAT_END_JITTER;
+	}
+}
+
+static void Chat_LevelEndFlush(void)
+{
+	int i;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t			*e = g_edicts + 1 + i;
+		sg_chat_bot_t	*cb = &chat_bot[i];
+		const char		*line;
+		int				cat;
+
+		/*
+		 * end_at > 0 is belt and braces, not bookkeeping: it makes an
+		 * all-zero chat_bot -- the state before SG_ChatReset has ever run --
+		 * read as "nothing booked" rather than as category zero, which is
+		 * SG_LINE_JOIN, due at time zero, for every slot at once.
+		 */
+		if (cb->end_cat < 0 || cb->end_at <= 0.0f || level.time < cb->end_at)
+			continue;
+
+		cat = cb->end_cat;
+		cb->end_cat = -1;               /* consumed either way */
+		cb->end_at = 0.0f;
+
+		if (!Chat_OurBot(e))
+			continue;
+
+		line = Chat_Pick(Chat_Tone(e), cat);
+		if (line)
+		{
+			/*
+			 * Frozen at the intermission point, possibly a corpse, and past
+			 * caring about the say budget: this is the last thing this bot
+			 * says on this level.
+			 */
+			Chat_SayPooled(e, line, SG_SAYF_DEAD | SG_SAYF_NOGAP);
+		}
+	}
+}
+
+/*
+ * IDLE BANTER. The lull filler, and the easiest line in the file to get wrong:
+ * it carries no information, so every time it lands on top of something that
+ * does, it has cost more than it gave.
+ *
+ * Hence three gates before the roll. The bot must be out of contact for
+ * SG_CHAT_IDLE_CALM -- nothing has hurt it and its side has no fresh eyes on an
+ * enemy standing near it. Its team's channel must have been silent for
+ * SG_CHAT_IDLE_QUIET. And the attempt itself is booked no sooner than
+ * SG_CHAT_IDLE_GAP, then rolled, so the mean gap between two idle lines from
+ * one mouth runs past two minutes even at the chattiest slot rate.
+ *
+ * "In contact" is read off pain_debounce_time, which T_Damage pushes to
+ * level.time + 2 whenever it hurts a player (g_combat.c:528-531), plus CACO's
+ * enemy sightings through Chat_EnemySeenNear. Neither is a perfect combat
+ * flag; together they cover the two cases that matter, being shot at and
+ * standing next to somebody who will.
+ */
+static void Chat_Idle(void)
+{
+	int i;
+
+	if (level.intermissiontime)
+		return;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t			*e = g_edicts + 1 + i;
+		sg_chat_bot_t	*cb = &chat_bot[i];
+		const char		*line;
+		int				team;
+
+		if (!Chat_OurBot(e) || !Chat_Playing(e))
+			continue;
+		team = e->client->ctf.teamnum;
+
+		if (e->pain_debounce_time > level.time ||
+		    Chat_EnemySeenNear(team, e->s.origin))
+			cb->combat_at = level.time;
+
+		if (cb->next_idle <= 0.0f)
+		{
+			cb->next_idle = level.time + SG_CHAT_IDLE_GAP
+			              + random() * SG_CHAT_IDLE_JITTER;
+			continue;
+		}
+		if (level.time < cb->next_idle)
+			continue;
+
+		/* the attempt is spent whatever comes of it, or a bot held quiet by
+		 * a long firefight would speak the instant the firefight ended */
+		cb->next_idle = level.time + SG_CHAT_IDLE_GAP
+		              + random() * SG_CHAT_IDLE_JITTER;
+
+		if (level.time - cb->combat_at < SG_CHAT_IDLE_CALM)
+			continue;
+		if (level.time - chat_team_last[team - 1] < SG_CHAT_IDLE_QUIET)
+			continue;
+		if (random() >= SG_CHAT_IDLE_ODDS * Chat_Chatty(i))
+			continue;
+
+		line = Chat_Pick(Chat_Tone(e), SG_LINE_IDLE);
+		if (line)
+			Chat_SayPooled(e, line, 0);
 	}
 }
 
@@ -1643,9 +2174,12 @@ void SG_ChatFrame(void)
 {
 	Chat_ExpireOrders();
 	Chat_Greetings();
+	Chat_LevelOpen();               /* after Chat_Greetings: it trails greet_at */
 	Chat_SelfPickups();
 	Chat_TeamEvents();
 	Chat_Countdown();
+	Chat_LevelEndFlush();
+	Chat_Idle();                    /* last: everything above may silence it */
 	Chat_Flush();
 }
 
@@ -1658,12 +2192,19 @@ void SG_ChatReset(void)
 	memset(chat_teamsaid, 0, sizeof(chat_teamsaid));
 	memset(chat_item, 0, sizeof(chat_item));
 	memset(chat_watch, 0, sizeof(chat_watch));
+	memset(chat_recent, 0, sizeof(chat_recent));
+	memset(chat_team_last, 0, sizeof(chat_team_last));
+	chat_recent_head = 0;
 	chat_num_watch = 0;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		chat_bot[i].order_role = SG_CHAT_ROLE_NONE;
 		chat_bot[i].order_from = -1;
+		/* the one field whose "none" is not zero: zero is SG_LINE_JOIN, and
+		 * a level that opened with sixteen bots shouting "hi" at intermission
+		 * is what this line prevents */
+		chat_bot[i].end_cat = -1;
 	}
 
 	/*

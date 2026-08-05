@@ -109,11 +109,26 @@ edict_t		*SG_ChatEscortTarget(edict_t *bot);
  * SG_ChatDeath is the taunt/grumble feed; it takes the victim, the attacker
  * and the means of death.
  *
- *     STILL UNWIRED. Nothing calls it. The legacy bot's own death hook that
- *     used to sit in ClientDie (BotChat_NotifyDeath) fed that bot, never this
- *     one, so removing the legacy bot did not disconnect anything here --
- *     there was never a connection. One line in ClientDie (p_client.c),
- *     SG_ChatDeath(self, attacker, meansOfDeath), would light it up.
+ *     Wired in player_die (p_client.c) as
+ *     SG_ChatDeath(self, attacker, meansOfDeath). It fed nothing for several
+ *     waves -- the legacy bot's own death hook, BotChat_NotifyDeath, fed that
+ *     bot and never this one, so there was never a connection to remove.
+ *
+ * SG_ChatLevelEnd is the match-end feed: winners gloat, losers grumble, and a
+ * close game is called close by both sides.
+ *
+ *     Wired in BeginIntermission (p_hud.c), immediately after Victory(), which
+ *     is the one place every way of ending a level converges -- timelimit,
+ *     fraglimit, a target_changelevel and a match end all arrive there, and
+ *     its own `if (level.intermissiontime) return;` makes it fire once. The
+ *     lines are booked, not spoken: they go out over the following four
+ *     seconds from SG_ChatFrame, which keeps running through intermission
+ *     (G_RunFrame calls SG_RunFrame past the exitintermission check), and
+ *     four seconds fits inside the five a client must wait before it can end
+ *     intermission.
+ *
+ *     Read the outcome the way the scoreboard reads it: summed per-player
+ *     STATS_SCORE per team, the same sum Victory() announces.
  */
 void		SG_ChatReset(void);
 void		SG_ChatFrame(void);
@@ -122,6 +137,7 @@ void		SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier);
 void		SG_ChatItemSeen(edict_t *viewer, int index, qboolean up);
 void		SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat);
 void		SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
+void		SG_ChatLevelEnd(void);
 
 /*
  * The single say_team gate. Returns false when the line was suppressed --

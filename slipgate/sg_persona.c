@@ -278,3 +278,21 @@ float SG_PersonaBanterFreq(edict_t *ent)
 
 	return p ? p->banter_freq : 1.0f;
 }
+
+/*
+ * The chat file indexes bots by client slot, not edict; 0 means "persona
+ * is off, use your own fallback" so a persona-less build keeps the
+ * coprime chattiness spread instead of sixteen identical 1.0s.
+ */
+float SG_PersonaBanterFreqSlot(int cl)
+{
+	if (!gi.cvar("sg_persona", "1", 0)->value)
+		return 0.0f;
+	/* cl is a CLIENT index; personas are bound per-client at join
+	 * (persona_of), and roster slot != client slot -- the spawn scan
+	 * allocates clients high-to-low. Indexing sg_personas[cl] here was
+	 * the same off-by-a-mapping the bind guard exists to catch. */
+	if (cl < 0 || cl >= SG_PERSONA_MAXCLIENTS || !persona_of[cl])
+		return 0.0f;
+	return persona_of[cl]->banter_freq;
+}
