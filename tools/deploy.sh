@@ -25,4 +25,14 @@ for name in game.so gamex86_64.so; do
     cp "$SRC" "$DEST_DIR/.deploy-tmp.$name"
     mv -f "$DEST_DIR/.deploy-tmp.$name" "$DEST_DIR/$name"
 done
+
+# Data files the game reads from the gamedir ride along when present;
+# same atomic pattern, same reason (escape-priors.json was mined from
+# 1549 human steals and the consumer silently no-ops without it).
+for data in escape-priors.json slipgate-weights.cfg; do
+    if [ -f "/home/buzzkill/Projects/lmctf6-stats/tools/$data" ]; then
+        cp "/home/buzzkill/Projects/lmctf6-stats/tools/$data" "$DEST_DIR/.deploy-tmp.$data"
+        mv -f "$DEST_DIR/.deploy-tmp.$data" "$DEST_DIR/$data"
+    fi
+done
 echo "deployed $(basename "$SRC") -> $DEST_DIR/{game,gamex86_64}.so"

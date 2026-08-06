@@ -202,7 +202,11 @@ ROUTEJITTER=(8   8        8        0        8         8        8         8      
 # leave with the flag by a different road than the one ridden in -- but
 # not always. Coin per carry at dose%; armed carries price the inbound
 # links 1.5x. s06 armed vs s07 control (the 5v3 pair: carry-rich).
-EXITASYM=(0      0        0        0        0         70       0         0        0        0)
+# VERDICT 379-401 pooled: dose 70 converts 0.18 vs control 0.26 -- the
+# inbound road is the proven-safe road, and pricing it away costs caps.
+# No judge ever cited exit-lane repetition (ribbon owns that tell).
+# Dose-response: 35 from wave 402; park if the penalty persists.
+EXITASYM=(0      0        0        0        0         35       0         0        0        0)
 
 # 388 trial: the movement-texture judge (4/4 blind) named bang-bang
 # throttle the biggest remaining tell. sg_breather = mean seconds of safe
