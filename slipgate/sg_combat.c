@@ -281,6 +281,71 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 #define SG_BAND_DEADBAND	64.0f
 #define SG_SWITCH_HOLD		0.8f
 
+/* ------------------------------------------------- human switch discipline
+ *
+ * HOW A PLAYER CARRIES A GUN (sg_wswitch, owner enhancement 2).
+ *
+ * The hysteresis above is a machine's reading of rule S1: want a gun for
+ * 800 ms and the 700-1100 ms is paid for. What it does not model is WHEN a
+ * human decides. Two halves of that, and the bot gets both of them backwards.
+ *
+ * A player walking a corridor toward a room they expect company in has the
+ * right gun UP before the corner -- the decision was made in the corridor,
+ * off nothing but a guess about the room. The bot rounds that corner holding
+ * whatever it last shot with and starts thinking about the rail after it is
+ * already being shot at. Then, mid-duel, a human with the wrong gun mostly
+ * does not switch AT ALL: a switch is a second of being a spectator in your
+ * own fight, so they empty what is in their hands and reload their opinion
+ * afterwards. The bot swaps the instant a band edge says to, every time, and
+ * a band edge is 64 units of a strafing target. Watch two bots cross 400
+ * units on a mid-band boundary and they weapon-cycle at each other.
+ *
+ * So: switch EARLY on a belief, LATE on a surprise. Every number here is
+ * FITTED -- this is the taste end of the file, like the fire cadence.
+ *
+ *   DECIDE    the pause between "the wrong gun is in my hands" and the
+ *             request going out, skill-scaled the way the reaction delay is:
+ *             600 ms at the bottom of the ladder, 200 ms at the top. It runs
+ *             CONCURRENTLY with rule S1's 800 ms want-hold, not on top of it
+ *             -- the gate is on the REQUEST, and the arbitration clocks keep
+ *             running underneath it, so the delay costs what it says and not
+ *             a second and a half. Where the want-hold is the longer of the
+ *             two it therefore still wins, and this gate binds on the paths
+ *             that used to switch INSTANTLY: a gun that runs dry mid-fight,
+ *             an unknown one, and a target re-acquired onto a want the bot
+ *             had already been holding before it lost sight. Those are the
+ *             swaps that read as machine-fast, and they are the ones that now
+ *             cost a visible beat.
+ *   COOLDOWN  one mid-fight switch per 4 s. Having committed to the second
+ *             gun, finish the fight with it.
+ *   PRE_MISS  the corridor switch's bar: the held gun's own wanted range has
+ *             to miss the believed contact range by this fraction of that
+ *             range before the switch is worth its 700-1100 ms. A third is
+ *             about one band wide, which is the resolution the belief has.
+ *   PRE_FRESH how old a sighting may be and still be a room to walk into.
+ *             The same 3 s the body already prices an idle hand's pre-select
+ *             at (sg_arach.c:4399), stated here because this path reads the
+ *             belief table itself instead of waiting to be told.
+ *   PRE_REACH how far away a believed enemy may be and still be a meeting
+ *             rather than a rumour. 1200 units, which is the body's own alert
+ *             radius (sg_arach.c:4409) and is deliberately NOT
+ *             SG_ENGAGE_RANGE: 2000 units of straight line through map
+ *             geometry is not a room the bot is about to walk into, and
+ *             readying the long band's answer for it would be a bot carrying
+ *             a rail everywhere on the strength of a rumour.
+ *
+ * The panic exception is not a number: at contact range with a gun that
+ * cannot shoot, neither gate applies. That switch is not a preference being
+ * revised, it is a dry click at 100 units, and it is the one mid-fight swap a
+ * human makes instantly.
+ */
+#define SG_WS_DECIDE_S0		0.60f
+#define SG_WS_DECIDE_S4		0.20f
+#define SG_WS_COOLDOWN		4.0f
+#define SG_WS_PRE_MISS		0.33f
+#define SG_WS_PRE_FRESH		3.0f
+#define SG_WS_PRE_REACH		1200.0f
+
 #define SG_WEIGHT_TICK		1.0f	/* item worths, same cadence as Fields_Refresh */
 
 /*
@@ -458,6 +523,19 @@ typedef struct
 	vec3_t		lost_aim;		/* the point the view is held on */
 	qboolean	lost_have;		/* is lost_aim a real emergence point */
 	qboolean	pursue;			/* role permits holding a corner at all */
+
+	/* the switch discipline (sg_wswitch). ws_gate is the instant a MID-FIGHT
+	 * switch request becomes legal: the decision delay when a fight starts,
+	 * the 4 s cooldown once one has been spent. ws_armed is when that deadline
+	 * was set, so the debug line can say how long the bot stood there holding
+	 * the wrong gun. ws_panic is this frame's contact-range exception, written
+	 * by the engaged path and read by the two places that honour it. ws_pre is
+	 * the weapon the corridor pre-switch last asked for, so the debug channel
+	 * gets one line per decision instead of one per frame. */
+	float		ws_gate;
+	float		ws_armed;
+	qboolean	ws_panic;
+	int			ws_pre;
 } sg_combat_state_t;
 
 static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
@@ -483,6 +561,23 @@ static float	sg_cbt_why_next;
 /* ------------------------------------------------------------------- skill */
 
 static cvar_t	*sg_bot_skill;
+static cvar_t	*sg_wswitch;
+
+/*
+ * The switch-discipline gate. sg_wswitch 0 is every path it guards compiled
+ * in and never taken: no corridor pre-switch, no decision delay, no cooldown,
+ * no panic exception, and the selection behaves exactly as it did before this
+ * block existed. The POINTER is cached for the same reason bot_skill's is --
+ * this is read per engaged bot per frame and gi.cvar walks the engine's list
+ * -- while the VALUE is read fresh, so flipping it mid-match takes effect on
+ * the next frame.
+ */
+static qboolean Combat_WSwitch(void)
+{
+	if (!sg_wswitch)
+		sg_wswitch = gi.cvar("sg_wswitch", "0", 0);
+	return (qboolean)(sg_wswitch && sg_wswitch->value != 0.0f);
+}
 
 /*
  * The bot's effective skill, a float in [0, 4]: the team level the cvar names,
@@ -590,6 +685,7 @@ static void Combat_CacheItems(void)
 		sg_combat[i].alert_range = -1.0f;
 		sg_combat[i].alert_until = 0.0f;
 		sg_combat[i].band = -1;			/* no band committed yet */
+		sg_combat[i].ws_pre = -1;		/* nothing pre-switched to yet */
 	}
 
 	/* LMCTF has ONE flag item (g_items.c:2478), the same test ctf_flagtouch
@@ -1264,7 +1360,9 @@ static float Combat_Exposure(edict_t *self, int w, float dist, float want)
  */
 static void Combat_Request(edict_t *self, sg_combat_state_t *st, int w)
 {
-	gitem_t *it;
+	gitem_t		*it;
+	qboolean	midfight;
+	int			held;
 
 	if (w < 0 || w >= SG_NUM_WEAPONS)
 		return;
@@ -1280,8 +1378,40 @@ static void Combat_Request(edict_t *self, sg_combat_state_t *st, int w)
 	if (!self->client->pers.inventory[sg_widx[w]])
 		return;
 
+	/*
+	 * The discipline gates (sg_wswitch). st->enemy is the whole test for
+	 * "mid-fight" and it needs no flag of its own: the idle path clears it
+	 * before it arbitrates and the engaged path sets it before it does, so a
+	 * corridor pre-switch is never charged the duel's cooldown and a duel
+	 * never gets the corridor's freedom. Panic is the standing exception --
+	 * see the block by SG_WS_DECIDE_S0.
+	 */
+	midfight = (qboolean)(st->enemy > 0);
+	if (Combat_WSwitch() && midfight && !st->ws_panic &&
+	    level.time < st->ws_gate)
+		return;
+
+	held = Combat_Held(self);
 	st->switch_next = level.time + SG_SWITCH_RATE;
 	it->use(self, it);			/* Use_Weapon -> client->newweapon = it */
+
+	if (Combat_WSwitch() && midfight)
+	{
+		float waited = level.time - st->ws_armed;
+
+		/* the cooldown is armed from the switch, not from the fight: a bot
+		 * that panicked at 100 units has spent its swap for the next 4 s the
+		 * same as one that deliberated for it */
+		st->ws_gate = level.time + SG_WS_COOLDOWN;
+		st->ws_armed = level.time;
+
+		if (gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("WSWITCH mid %s w%d->w%d waited=%.0fms (%s)\n",
+			           self->client->pers.netname, held, w,
+			           waited * 1000.0f,
+			           st->ws_panic ? "panic: gun cannot shoot at contact"
+			                        : "decision delay elapsed");
+	}
 }
 
 /*
@@ -1296,6 +1426,22 @@ static void Combat_Arbitrate(edict_t *self, sg_combat_state_t *st, int want)
 
 	if (want < 0)
 		return;
+
+	/*
+	 * The panic exception (sg_wswitch), which is the branch below it with the
+	 * ammo test taken out. A gun the band gates refuse at contact range is in
+	 * exactly the position a dry one is -- it is not going to be allowed to
+	 * fire -- and the only difference between them is that this one still has
+	 * bullets in it. ws_panic is false whenever the cvar is off, so this is
+	 * unreachable in the shipped behaviour.
+	 */
+	if (st->ws_panic)
+	{
+		st->want = want;
+		st->want_since = level.time;
+		Combat_Request(self, st, want);
+		return;
+	}
 
 	if (held < 0 || !Combat_Avail(self, held))
 	{
@@ -1322,6 +1468,109 @@ static void Combat_Arbitrate(edict_t *self, sg_combat_state_t *st, int want)
 		return;
 
 	Combat_Request(self, st, want);
+}
+
+/*
+ * THE CORRIDOR SWITCH (sg_wswitch, the pre-switch half of the discipline).
+ *
+ * Called only from the idle path, and only where that path used to do nothing
+ * at all: the bot is not posted, not carrying, and has no alert from the body,
+ * and the gun in its hands is loaded and is not the spawn blaster. Today that
+ * bot walks the whole corridor holding the last thing it fired.
+ *
+ * The range prior is the cheapest honest one available: the straight-line
+ * distance to the nearest FRESH enemy the belief table has a seed for
+ * (sg_caco_enemies -- a teammate's eye or an ear, aged out at SG_WS_PRE_FRESH).
+ * Corridors bend that line, but the answer only has to be right to within a
+ * band, and a band is a factor of three wide. The bar for acting on it is the
+ * one number this file already has for "the gun in my hands is wrong for this
+ * distance": Combat_WantRange, the 2.1 ladders read as a curve. If what is
+ * held wants 690 units and the meeting is coming at 150, that is a rail being
+ * carried into a shotgun room and it is worth the 700-1100 ms NOW, in a
+ * corridor, where the cost is nothing but walking.
+ *
+ * It asks through Combat_Arbitrate like every other selection, so rule S1's
+ * rate limit and 800 ms want-hold and rule S3's grapple ban all still hold: a
+ * belief that flickers between two seeds cannot make the bot cycle guns.
+ */
+static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
+{
+	rune_t	*r = SG_Rune();
+	float	best = -1.0f, age = 0.0f, have, miss, bar;
+	int		team, s, band, want;
+
+	if (held < 0 || !r || !r->seeds)
+		return;
+	team = self->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return;
+
+	for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+	{
+		sg_belief_enemy_t	*en = &sg_caco_enemies[team - 1][s];
+		vec3_t				d;
+		float				dist;
+
+		if (en->client < 0 || en->seed < 0 || en->seed >= r->hdr.num_seeds)
+			continue;
+		if (level.time - en->seen_time > SG_WS_PRE_FRESH)
+			continue;
+
+		VectorSubtract(r->seeds[en->seed].origin, self->s.origin, d);
+		dist = VectorLength(d);
+		if (dist > SG_WS_PRE_REACH)
+			continue;			/* not a fight this bot is walking into */
+		if (best < 0.0f || dist < best)
+		{
+			best = dist;
+			age = level.time - en->seen_time;
+		}
+	}
+
+	if (best < 0.0f)
+		return;					/* nobody believed to be anywhere near */
+
+	/*
+	 * The persona, on the BAR rather than on the switch: aggression is a
+	 * willingness to commit to what is in hand, so an aggressive bot needs a
+	 * wider mismatch before it will spend a corridor on a swap and a
+	 * methodical one pre-switches for a smaller one. +/-15%, the band
+	 * sg_persona.h fixes for every consumer, applied to a preference and
+	 * never to a gate.
+	 */
+	have = Combat_WantRange(self, held);
+	miss = (float)fabs(best - have);
+	bar = SG_WS_PRE_MISS * best * SG_PersonaAggression(self);
+	if (miss < bar)
+		return;					/* what is held is close enough to right */
+
+	band = (best < SG_R_CLOSE) ? SG_BAND_CONTACT
+	     : (best < SG_R_MID)   ? SG_BAND_CLOSE
+	     : (best < SG_R_LONG)  ? SG_BAND_MID
+	                           : SG_BAND_LONG;
+	want = Combat_Choose(self, band, best, false);
+	if (want == held)
+	{
+		st->ws_pre = held;
+		return;					/* the ladder agrees with the hand */
+	}
+	if (want == SG_W_BLASTER)
+		return;					/* Combat_Choose's last resort is the spawn
+		                         * gun, and the idle path directly above this
+		                         * one exists to get bots OFF it. A belief is
+		                         * never a reason to raise it: a ladder that
+		                         * ran out of rungs is a pack that has nothing
+		                         * for that range, not an argument for holding
+		                         * the worst weapon in the game while walking */
+
+	if (want != st->ws_pre && gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("WSWITCH pre %s w%d->w%d expect=%.0f hand-wants=%.0f "
+		           "miss=%.0f bar=%.0f belief=%.1fs\n",
+		           self->client->pers.netname, held, want, best, have,
+		           miss, bar, age);
+	st->ws_pre = want;
+
+	Combat_Arbitrate(self, st, want);
 }
 
 /*
@@ -2360,6 +2609,8 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		}
 
 		st->enemy = 0;
+		st->ws_panic = false;	/* the exception belongs to a fight in
+		                         * progress; it does not outlive one */
 
 		/*
 		 * Idle. Rule D3b: pre-SELECT, do not pre-fire. A posted defender holds
@@ -2395,6 +2646,12 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 				Combat_Arbitrate(self, st,
 				                 Combat_Choose(self, SG_BAND_MID, SG_R_MID,
 				                               false));
+			else if (Combat_WSwitch())
+			{
+				/* the gun is loaded and is not the spawn blaster, so the old
+				 * code was finished here. Ready the room ahead instead. */
+				Combat_PreSwitch(self, st, h);
+			}
 		}
 
 		/*
@@ -2427,6 +2684,25 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		st->band = -1;
 		VectorClear(st->vel_dir);
 		st->vel_stable = level.time;
+
+		/*
+		 * A fight just started: arm the decision delay (sg_wswitch). The
+		 * clock is skill-scaled the way the reaction delay is, then bent by
+		 * the persona in the same direction it bends the corridor bar --
+		 * aggression is commitment to the gun in hand, so an aggressive bot
+		 * deliberates LONGER before swapping mid-duel and a methodical one
+		 * gets to the right gun sooner. Set on ACQUISITION and not on a band
+		 * change, because the surprise is what is being modelled: a target
+		 * that walks from mid into close was watched the whole way.
+		 */
+		if (Combat_WSwitch())
+		{
+			st->ws_gate = level.time +
+			              Combat_SkillLerp(skill, SG_WS_DECIDE_S0,
+			                               SG_WS_DECIDE_S4) *
+			              SG_PersonaAggression(self);
+			st->ws_armed = level.time;
+		}
 	}
 
 	if (out_engaged)
@@ -2477,6 +2753,27 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		if (wr >= 0)
 			want = wr;
 	}
+
+	/*
+	 * The panic test (sg_wswitch), written every frame the cvar is on and
+	 * read by Combat_Arbitrate and Combat_Request below. Contact range with a
+	 * gun that cannot shoot -- dry, unknown (the grapple, hand grenades), or
+	 * one Combat_BandAllows refuses at this distance, which at contact means
+	 * a splash weapon inside its own d_safe. Neither the decision delay nor
+	 * the 4 s cooldown applies to that swap, because a player standing 100
+	 * units from someone with a rocket launcher in their hands does not
+	 * deliberate either.
+	 */
+	if (Combat_WSwitch())
+	{
+		int h = Combat_Held(self);
+
+		st->ws_panic = (qboolean)(dist < SG_R_CLOSE &&
+		                          (h < 0 || !Combat_Avail(self, h) ||
+		                           !Combat_BandAllows(self, h, dist)));
+	}
+	else
+		st->ws_panic = false;
 
 	Combat_Arbitrate(self, st, want);
 
