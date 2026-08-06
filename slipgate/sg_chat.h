@@ -62,7 +62,15 @@
  * shotgun, and the two forms are switched between per item, not per line.
  */
 #define SG_CHAT_TOPIC_TIMER			7
-#define SG_CHAT_TOPICS				8
+/*
+ * Majors take/witness calls (sg_itemcomm). Their own lane, not ITEM_GONE's
+ * (smoke, 2026-08-05): the first quad call of a game got eaten by shotgun
+ * chatter sharing the topic, and per Rule 19 an eaten call leaves the team
+ * ignorant -- honest, but a human prioritizes "QUAD TAKEN" over "took
+ * shells", so the channel should too.
+ */
+#define SG_CHAT_TOPIC_MAJOR			8
+#define SG_CHAT_TOPICS				9
 
 /* ------------------------------------------------- the integrator's calls
  *

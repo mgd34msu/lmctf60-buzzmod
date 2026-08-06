@@ -168,7 +168,8 @@ static const float chat_topic_gap[SG_CHAT_TOPICS] = {
 	6.0f,       /* SG_CHAT_TOPIC_ITEM_SOON */
 	0.0f,       /* SG_CHAT_TOPIC_ORDER   -- capped at one ack per order */
 	8.0f,       /* SG_CHAT_TOPIC_STEAL */
-	SG_CHAT_TIMER_GAP   /* SG_CHAT_TOPIC_TIMER */
+	SG_CHAT_TIMER_GAP,  /* SG_CHAT_TOPIC_TIMER */
+	2.0f        /* SG_CHAT_TOPIC_MAJOR -- short: majors are rare and urgent */
 };
 
 /* ----------------------------------------------------------- personality */
@@ -1884,7 +1885,7 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src)
 		break;
 	}
 
-	if (!Chat_QueueArm(speaker, team, SG_CHAT_TOPIC_ITEM_GONE, line,
+	if (!Chat_QueueArm(speaker, team, SG_CHAT_TOPIC_MAJOR, line,
 	                   kind, slot, (int)(item - g_edicts), src, back_at) &&
 	    kind != SG_ARM_NONE &&
 	    gi.cvar("sg_debug", "0", 0)->value > 0.0f)
