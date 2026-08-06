@@ -1414,12 +1414,27 @@ def density_fill_stats(tracks, labels, teams, extent, seeds=None,
             'cells_reachable': n_reach}
 
 
-def draw_trajectory_map(ax, seeds, tracks, labels, teams, windows, stands,
-                         extent=None):
+def draw_map_silhouette(ax, seeds, extent=None):
+    """The faint rune-seed cloud that every map panel is drawn on top of.
+
+    Lifted verbatim out of draw_trajectory_map (which still calls it) so the
+    routes sheet in routesheet.py can put its node graph on the identical
+    background without duplicating the call -- a pure refactor, no behavior
+    change: same marker size, same color, same zorder, same call order, so a
+    rung-1 sheet rendered before and after this change is byte-identical.
+
+    `extent` is accepted and ignored; it exists so callers that already hold
+    the map's fixed seed-derived extent can pass it without a special case
+    (the seed cloud IS the extent's source, so clipping to it is a no-op)."""
     if seeds:
         sx = [s[0] for s in seeds]
         sy = [s[1] for s in seeds]
         ax.scatter(sx, sy, s=1.5, c=MAP_COLOR, zorder=1, linewidths=0)
+
+
+def draw_trajectory_map(ax, seeds, tracks, labels, teams, windows, stands,
+                         extent=None):
+    draw_map_silhouette(ax, seeds, extent)
     # DIAGNOSTIC FIX (log-scale trajectory density): the old alpha-ramp
     # line plot drew every kept track's full-game path as a translucent
     # line; with a busy roster and a long match, thousands of overlapping
