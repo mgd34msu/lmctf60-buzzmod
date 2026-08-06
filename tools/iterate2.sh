@@ -104,7 +104,10 @@ LINKLATCH=(0     0        0        0        0         0        0         0      
 # 392 trial: the do-si-do killer. Prices the immediate-return link for
 # 3s after leaving a seed. s06 armed vs s07 control; metric = suicides
 # on the pair + the 5v0 canary's failed-carry count.
-NOBACKTRACK=(0   0        0        0        0         60       0         0        0        0)
+# ADOPTED wave 396 (pooled 392-395: 29 vs 39 suicides on the matched
+# pair, right direction all four waves -- the do-si-do killer works, and
+# two set-#3 judges saw the orbit it kills on film). s09 stays clean.
+NOBACKTRACK=(60  60       60       60       60        60       60        60       0        60)
 # weave A/B (292+): s04 no-weave vs s03 weave -- the demo census ranked
 # the metronomic combat weave the #1 visible jank; sg_noweave is the
 # existing switch and botkin the honest instrument the old gauges never
