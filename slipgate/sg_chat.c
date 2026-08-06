@@ -394,7 +394,7 @@ static sg_chat_bot_t chat_bot[MAX_CLIENTS];
  * Chat_ArmClock at the moment SG_ChatSayTeam reports the line actually went
  * out. Suppressed line, no clock, and sg_debug says so.
  */
-enum { SG_ARM_NONE = 0, SG_ARM_ITEM, SG_ARM_WATCH };
+enum { SG_ARM_NONE = 0, SG_ARM_ITEM, SG_ARM_WATCH, SG_ARM_QUIET };
 
 typedef struct
 {
@@ -1402,12 +1402,18 @@ static sg_radioq_t	radio_q[2];         /* per team-1 */
  */
 #define SG_QUAD_LIVE	(300.0f * FRAMETIME)
 
+/*
+ * EITHER 60 OR 30, never both (owner's correction, 2026-08-05, his words:
+ * "quad 30 when they hear an enemy quad sound dying off and there was no
+ * other quad callout, or quad 60 when they take the quad themselves or see
+ * the quad taken"). A called take at 60 SILENCES the 30 for that cycle;
+ * the 30 exists for the quad nobody called -- its trigger is the EAR
+ * (sg_caco_quadheard) noticing the enemy quad's voice has died away.
+ */
 static struct
 {
-	qboolean	armed;
-	int			slot;                   /* the sg_caco_items row it belongs to */
-	float		back_at;                /* the clock this call is about */
-	float		at;                     /* when to make it: the wear-off */
+	float		called_until;           /* a 60-call covered this cycle */
+	float		quiet_fired_at;         /* last ear-driven 30-call, anti-repeat */
 } radio_q30[2];
 
 /*
@@ -1544,12 +1550,7 @@ static void Chat_RadioTaken(int ti, const sg_chatq_t *q)
 	if (q->arm_kind == SG_ARM_ITEM &&
 	    strcmp(item->classname, "item_quad") == 0 &&
 	    q->arm_back_at > level.time)
-	{
-		radio_q30[ti].armed = true;
-		radio_q30[ti].slot = q->arm_slot;
-		radio_q30[ti].back_at = q->arm_back_at;
-		radio_q30[ti].at = q->arm_back_at - SG_QUAD_LIVE;
-	}
+		radio_q30[ti].called_until = q->arm_back_at;
 }
 
 static void Chat_RadioFrame(void)
@@ -1567,27 +1568,39 @@ static void Chat_RadioFrame(void)
 
 	for (t = 0; t < 2; t++)
 	{
-		if (radio_q30[t].armed && level.time >= radio_q30[t].at)
+		/*
+		 * The uncalled quad. The ear stamped every enemy-quad hit sound;
+		 * when that voice has been dead 5-8 seconds, the quad wore off
+		 * around (last heard + a beat), and if NOBODY called the take --
+		 * no 60 covering this cycle, no clock on the row -- one owner
+		 * says "quad 30" now, the way a human reads the same silence.
+		 * Imprecise by nature and by the owner's own admission ("we may
+		 * be slightly off"): the jitter is the honesty.
+		 */
+		float heard = sg_caco_quadheard[t];
+
+		if (SG_ItemComm() && heard > 0.0f &&
+		    level.time - heard > 5.0f && level.time - heard < 8.0f &&
+		    level.time > radio_q30[t].quiet_fired_at + 20.0f &&
+		    level.time > radio_q30[t].called_until)
 		{
-			int slot = radio_q30[t].slot;
+			edict_t *sp = Chat_Speaker(t + 1);
 
-			radio_q30[t].armed = false;
-
-			/*
-			 * The clock has to still be the one this call is about. A fresher
-			 * take re-armed it (and re-armed this record with it), and a
-			 * sighting of the pad standing again clears back_at outright --
-			 * either way the news is stale, and a stale timer call is worse
-			 * than silence because the team acts on it.
-			 */
-			if (SG_ItemComm() && slot >= 0 && slot < SG_MAX_BELIEF_ITEMS &&
-			    chat_item[slot].back_at[t] == radio_q30[t].back_at)
+			radio_q30[t].quiet_fired_at = level.time;
+			if (sp)
 			{
-				edict_t *sp = Chat_Speaker(t + 1);
+				char line[32];
 
-				/* the existing one-owner speaker: whoever is free to talk */
-				if (sp)
-					Chat_RadioQueue(sp, t + 1, "_quad30");
+				Com_sprintf(line, sizeof(line), "quad 30");
+				/* the 30-call IS the callout for this cycle: it arms the
+				 * team clock through the same spoken-line law as a take
+				 * call, at wear-off + the pad's respawn, +/- the slop a
+				 * human ear carries */
+				Chat_QueueArm(sp, t + 1, SG_CHAT_TOPIC_MAJOR, line,
+				              SG_ARM_QUIET, -1, 0, SG_ITEMCALL_MATE,
+				              heard + 30.0f +
+				              ((float)(rand() % 40) / 10.0f - 2.0f));
+				Chat_RadioQueue(sp, t + 1, "_quad30");
 			}
 		}
 
@@ -1764,7 +1777,26 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		return;
 	}
 
-	if (q->arm_kind == SG_ARM_ITEM)
+	if (q->arm_kind == SG_ARM_QUIET)
+	{
+		/* the ear-driven "quad 30": no slot rode the queue, so find the
+		 * quad row now. One pad per map in practice; the first match is
+		 * the match. */
+		int i;
+
+		for (i = 0; i < SG_MAX_BELIEF_ITEMS; i++)
+			if (sg_caco_items[ti][i].ent > 0 &&
+			    g_edicts[sg_caco_items[ti][i].ent].classname &&
+			    strcmp(g_edicts[sg_caco_items[ti][i].ent].classname,
+			           "item_quad") == 0)
+			{
+				chat_item[i].back_at[ti] = q->arm_back_at;
+				chat_item[i].soon_said[ti] = false;
+				sg_caco_items[ti][i].believed_respawn_time = q->arm_back_at;
+				break;
+			}
+	}
+	else if (q->arm_kind == SG_ARM_ITEM)
 	{
 		chat_item[q->arm_slot].back_at[ti] = q->arm_back_at;
 		chat_item[q->arm_slot].soon_said[ti] = false;

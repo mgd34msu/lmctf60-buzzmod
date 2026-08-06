@@ -94,6 +94,7 @@ typedef struct
 } sg_belief_enemy_t;
 
 extern sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
+extern float sg_caco_quadheard[2];  /* last enemy-quad sound heard, per team */
 
 /* the D4 inference: Damage rune off its pad, not in our hands, and a
  * glowing enemy on record -- the glow never names the rune, the pad does */

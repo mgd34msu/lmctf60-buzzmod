@@ -1266,6 +1266,16 @@ static void Caco_RelayFlush(void)
  */
 sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
 
+/*
+ * When each team LAST HEARD an enemy quad working (items/damage3.wav off a
+ * quadded enemy, through the honest ear below). The radio's "quad 30" is a
+ * call a human makes off exactly this signal dying away -- owner's ruling
+ * 2026-08-05: EITHER the take is called at 60, OR nobody called it and the
+ * wear-off is called at 30. Never both.
+ */
+float sg_caco_quadheard[2];
+static int sg_quadsound_idx;
+
 static unsigned sg_ear_said;    /* EAR print sampler */
 
 /*
@@ -1477,6 +1487,13 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 			continue;
 
 		Caco_EnemyPlace(team - 1, ecl, seed, false, false);
+
+		/* the quad's own voice: any hit sound from a quadded enemy. The
+		 * index is resolved lazily -- precache order is stable per map. */
+		if (!sg_quadsound_idx)
+			sg_quadsound_idx = gi.soundindex("items/damage3.wav");
+		if (soundindex == sg_quadsound_idx)
+			sg_caco_quadheard[team - 1] = level.time;
 
 		/* sampled 1-in-32: wave 390 measured ~9k accepted events per
 		 * game on a busy server -- the ear works, the log need not
