@@ -1314,6 +1314,286 @@ void SG_ChatSee(edict_t *viewer)
 	}
 }
 
+/* ------------------------------------------------------------- the radio
+ *
+ * THE OWNER'S RULING, 2026-08-05: "callout in conjunction, that's just good
+ * teamplay."
+ *
+ * LMCTF has had a real radio since it shipped and the bots have never touched
+ * it. PlayTeamSound (g_cmds.c:121) stuffs `play radio/<sound>` at every
+ * same-team client running radio sound, prints the radiotext line at the ones
+ * running text mode, and refuses a sender whose own radio bits are clear --
+ * which is why sg_arach.c now sets those bits on a joining bot. A team callout
+ * and the radio call that goes with it are ONE act to a player, so this rides
+ * the itemcomm line rather than growing a second opinion about who speaks: the
+ * same emission moment, the same single speaker, the same team. sg_radio 0
+ * (the default) makes every function here return before it does anything.
+ *
+ * THREE THINGS IT IS NOT.
+ *
+ *   It is NOT frame-perfect. A human hears the pickup, moves a hand to the
+ *   key and presses it, and the hand is a second or three behind the eye.
+ *   Firing the radio inside the pickup frame is the tell that gave every
+ *   previous generation of bot away, so the call is queued with
+ *   SG_RADIO_LAG_MIN..MAX of hand time on it and flushed from the chat frame.
+ *
+ *   It is NOT a second channel of information. Everything said here has just
+ *   gone out as text to the same team from the same mouth. sg_radio adds a
+ *   noise a human teammate can act on without reading, and adds no fact.
+ *
+ *   It is NOT exempt from spam control. ctf_SpamCheck (g_ctffunc.c:1314)
+ *   gates humans on the radio and gates bots identically. The one thing done
+ *   differently is that a refused call is dropped SILENTLY: the three refusal
+ *   tests are READ here rather than tripped, because tripping ctf_SpamCheck
+ *   prints "blocked by spam control" at the bot AND re-arms its lockout, so a
+ *   call nobody asked for would go on making the bot quieter.
+ *
+ * The sounds are the ones the paks actually carry, and every one of them is
+ * `_`-prefixed -- PlayTeamSound plays those verbatim instead of prepending a
+ * gender (g_cmds.c:150-153), so one name works for any skin.
+ */
+
+#define SG_RADIO_LAG_MIN	1.0f
+#define SG_RADIO_LAG_MAX	3.0f
+#define SG_RADIO_SOUND		24
+
+static qboolean SG_Radio(void)
+{
+	return (gi.cvar("sg_radio", "0", 0)->value > 0.0f) ? true : false;
+}
+
+/*
+ * One call in the air per team. A radio is a channel and not a mailbox: a
+ * second call queued while the first is still under somebody's finger is the
+ * same news arriving twice, and the item topic's own cooldown has already
+ * decided that the team hears this once.
+ */
+typedef struct
+{
+	qboolean	pending;
+	int			speaker;                /* client number */
+	float		due;
+	char		sound[SG_RADIO_SOUND];
+} sg_radioq_t;
+
+static sg_radioq_t	radio_q[2];         /* per team-1 */
+
+/*
+ * THE QUAD-30 CALL.
+ *
+ * "when the enemy's quad has just worn off and respawn is ~30s out" is a call
+ * a human makes off nothing but a clock he started himself, and it is the
+ * second half of timing quad: the first half tells the team when to leave, the
+ * second tells them the danger is over and the pad is worth walking to.
+ *
+ * The thirty seconds is READ, not assumed. Use_Quad (g_items.c:367-389) sets
+ * quad_framenum to level.framenum + 300 and FRAMETIME is 0.1 (g_local.h:141),
+ * so a quad taken off its pad burns for thirty seconds while the pad's own
+ * respawn runs sixty (LM_QUAD_DEFAULT_TIME, the item's quantity). Wear-off is
+ * therefore the armed clock minus thirty, which is also exactly halfway -- and
+ * saying so in arithmetic rather than writing 30.0f twice is what keeps the
+ * two halves from drifting apart if the mod ever retunes one of them.
+ *
+ * The one modelling assumption is the one a player makes out loud: that the
+ * quad went live at the pickup. Without DF_INSTANT_ITEMS a taker can sit on it
+ * (Pickup_Powerup, g_items.c:195-205), and a human calling "quad's dead" at
+ * thirty is wrong in exactly the same way and for exactly the same reason.
+ */
+#define SG_QUAD_LIVE	(300.0f * FRAMETIME)
+
+static struct
+{
+	qboolean	armed;
+	int			slot;                   /* the sg_caco_items row it belongs to */
+	float		back_at;                /* the clock this call is about */
+	float		at;                     /* when to make it: the wear-off */
+} radio_q30[2];
+
+/*
+ * Which takes are worth a radio call, and what the paks call the sound. The
+ * table is short because the radio is short: LMCTF ships a fixed set of
+ * recordings and there is no "_ra20" to play for red armour however much a
+ * team would like one.
+ *
+ * _equad is in the paks and is deliberately unused. It names the threat
+ * ("enemy has quad") and drops the number, and the number is what the team
+ * cannot work out for itself -- the witness's text line already says who took
+ * it. One call per take is the whole budget; it is spent on the clock.
+ */
+static const struct { const char *cls; const char *sound; } radio_take[] = {
+	/* the sixty in the name is the pad's own respawn, not a round number:
+	 * Pickup_Powerup sets it from the item's quantity and quad's quantity is
+	 * LM_QUAD_DEFAULT_TIME = 60 (g_items.c:2253) */
+	{ "item_quad",              "_quad60" },
+	/* likewise Pickup_PowerArmor off quantity, which the power shield gives
+	 * as 60 (g_items.c:1823). The watch list already keeps its clock, so the
+	 * take arms one and the call has something true to say */
+	{ "item_power_shield",      "_ps60" },
+	{ NULL, NULL }
+};
+
+/*
+ * ctf_SpamCheck's three refusal tests, read rather than tripped. The referee
+ * exemption is carried across too: the check grants it and this must not be
+ * stricter than the thing it is predicting.
+ */
+static qboolean Chat_RadioSpamClear(edict_t *e)
+{
+	if (e->client->ctf.extra_flags & CTF_EXTRAFLAGS_REFEREE)
+		return true;
+	if (e->client->spam_band_count <= 0)
+		return false;
+	if (e->client->spam_freq_count > CTF_SPAM_FREQ_MAX_ALLOWED)
+		return false;
+	if (level.time - e->client->spam_lock_time < CTF_SPAM_LOCKOUT_TIME)
+		return false;
+	return true;
+}
+
+static void Chat_RadioQueue(edict_t *speaker, int team, const char *sound)
+{
+	sg_radioq_t *q;
+	int			cl;
+
+	if (!SG_Radio() || !sound || !sound[0])
+		return;
+	if (!Chat_OurBot(speaker) || !Chat_Playing(speaker))
+		return;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return;
+	cl = Chat_ClientNum(speaker);
+	if (cl < 0 || cl >= game.maxclients)
+		return;
+
+	q = &radio_q[team - 1];
+	if (q->pending)
+		return;                     /* one hand on the key at a time */
+
+	q->speaker = cl;
+	q->due = level.time + SG_RADIO_LAG_MIN +
+	         random() * (SG_RADIO_LAG_MAX - SG_RADIO_LAG_MIN);
+	Chat_Copy(q->sound, sound, sizeof(q->sound));
+	q->pending = true;
+}
+
+static void Chat_RadioSay(int t)
+{
+	sg_radioq_t	*q = &radio_q[t];
+	edict_t		*sp;
+	char		sound[SG_RADIO_SOUND];
+
+	if (!q->pending || level.time < q->due)
+		return;
+
+	/* off the slot before anything can refuse it: a call the spam gate eats
+	 * must not sit in the queue jamming the next one */
+	q->pending = false;
+
+	if (q->speaker < 0 || q->speaker >= game.maxclients)
+		return;
+	sp = g_edicts + 1 + q->speaker;
+	if (!Chat_OurBot(sp) || !Chat_Playing(sp))
+		return;                     /* died or left while the hand was moving */
+	if (sp->client->ctf.teamnum != t + 1)
+		return;                     /* switched sides: not his team's news */
+	if (!Chat_RadioSpamClear(sp))
+		return;                     /* humans get spam-limited too */
+
+	/* PlayTeamSound takes a plain char *, and it is the mod's own signature */
+	Chat_Copy(sound, q->sound, sizeof(sound));
+	PlayTeamSound(sp, sound);
+}
+
+/*
+ * The take call and, for the quad, the wear-off call it schedules. Called from
+ * Chat_ArmClock's SAID path and nowhere else -- a callout the channel swallowed
+ * taught the team nothing and has nothing to be in conjunction with.
+ */
+static void Chat_RadioTaken(int ti, const sg_chatq_t *q)
+{
+	edict_t	*item, *sp;
+	int		i;
+
+	if (!SG_Radio())
+		return;
+	if (q->arm_ent <= 0 || q->arm_ent >= globals.num_edicts)
+		return;
+	if (q->speaker < 0 || q->speaker >= game.maxclients)
+		return;
+
+	item = g_edicts + q->arm_ent;
+	sp = g_edicts + 1 + q->speaker;
+	if (!item->inuse || !item->classname)
+		return;
+
+	for (i = 0; radio_take[i].cls; i++)
+	{
+		if (strcmp(item->classname, radio_take[i].cls) != 0)
+			continue;
+		Chat_RadioQueue(sp, ti + 1, radio_take[i].sound);
+		break;
+	}
+
+	/*
+	 * Arm the wear-off call on the same clock the line just earned. Re-arming
+	 * is how "no fresher quad callout" is enforced: a later take overwrites
+	 * this record with its own, and the fire test below only speaks for the
+	 * clock the team is actually holding.
+	 */
+	if (q->arm_kind == SG_ARM_ITEM &&
+	    strcmp(item->classname, "item_quad") == 0 &&
+	    q->arm_back_at > level.time)
+	{
+		radio_q30[ti].armed = true;
+		radio_q30[ti].slot = q->arm_slot;
+		radio_q30[ti].back_at = q->arm_back_at;
+		radio_q30[ti].at = q->arm_back_at - SG_QUAD_LIVE;
+	}
+}
+
+static void Chat_RadioFrame(void)
+{
+	int t;
+
+	if (!SG_Radio())
+	{
+		/* the cvar going off mid-match must not leave a call in the air or a
+		 * wear-off armed against a clock nobody is watching any more */
+		memset(radio_q, 0, sizeof(radio_q));
+		memset(radio_q30, 0, sizeof(radio_q30));
+		return;
+	}
+
+	for (t = 0; t < 2; t++)
+	{
+		if (radio_q30[t].armed && level.time >= radio_q30[t].at)
+		{
+			int slot = radio_q30[t].slot;
+
+			radio_q30[t].armed = false;
+
+			/*
+			 * The clock has to still be the one this call is about. A fresher
+			 * take re-armed it (and re-armed this record with it), and a
+			 * sighting of the pad standing again clears back_at outright --
+			 * either way the news is stale, and a stale timer call is worse
+			 * than silence because the team acts on it.
+			 */
+			if (SG_ItemComm() && slot >= 0 && slot < SG_MAX_BELIEF_ITEMS &&
+			    chat_item[slot].back_at[t] == radio_q30[t].back_at)
+			{
+				edict_t *sp = Chat_Speaker(t + 1);
+
+				/* the existing one-owner speaker: whoever is free to talk */
+				if (sp)
+					Chat_RadioQueue(sp, t + 1, "_quad30");
+			}
+		}
+
+		Chat_RadioSay(t);
+	}
+}
+
 /* ------------------------------------------------------ the taken callout
  *
  * THE OWNER'S RULING, 2026-08-05, in his words:
@@ -1494,6 +1774,14 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		chat_watch[q->arm_slot].back_at[ti] = q->arm_back_at;
 		chat_watch[q->arm_slot].soon_said[ti] = false;
 	}
+
+	/*
+	 * IN CONJUNCTION (owner, 2026-08-05). The radio call belongs to the same
+	 * instant as the clock: the line was spoken, the team believes the number,
+	 * and the noise that goes with it is queued behind a human's hand time.
+	 * Inert with sg_radio 0.
+	 */
+	Chat_RadioTaken(ti, q);
 
 	if (dbg)
 		gi.dprintf("SG itemcomm: %s armed %s for team %d -- back at %.1f "
@@ -2675,6 +2963,9 @@ void SG_ChatFrame(void)
 	Chat_LevelEndFlush();
 	Chat_Idle();                    /* last: everything above may silence it */
 	Chat_Flush();
+	/* after Chat_Flush: a take call queued THIS frame arms its clock in there,
+	 * and the radio that rides with it starts its hand time from that moment */
+	Chat_RadioFrame();
 }
 
 void SG_ChatReset(void)
@@ -2688,6 +2979,9 @@ void SG_ChatReset(void)
 	memset(chat_watch, 0, sizeof(chat_watch));
 	memset(chat_recent, 0, sizeof(chat_recent));
 	memset(chat_team_last, 0, sizeof(chat_team_last));
+	/* a level change is not a place to be still holding somebody's radio key */
+	memset(radio_q, 0, sizeof(radio_q));
+	memset(radio_q30, 0, sizeof(radio_q30));
 	chat_recent_head = 0;
 	chat_num_watch = 0;
 

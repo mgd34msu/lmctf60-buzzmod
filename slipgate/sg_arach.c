@@ -182,6 +182,18 @@ typedef struct sg_bot_s
 	                             * 15% -- re-decision cadence matched to
 	                             * the surface's 1Hz refresh, not the
 	                             * 10Hz physics tick (sg_linklatch) */
+	/*
+	 * THE EARLY-RETURN ERRAND (sg_itemlead). The pad this bot left for ahead
+	 * of the team's clock, and the clock it left on. lead_ent 0 is "no errand"
+	 * -- entity 0 is the world and can never be a pad -- so the whole feature
+	 * is off for a bot until something sets it.
+	 */
+	int			lead_ent;       /* edict index of the pad, 0 = no errand */
+	int			lead_slot;      /* its row in sg_caco_items */
+	int			lead_seed;      /* the pad's seed: where the errand goes */
+	float		lead_at;        /* T, this team's believed return time */
+	float		lead_next;      /* attempt cadence while nothing is claimed */
+
 	float		runetoss_next;  /* rune handoff cadence (sg_runetoss) */
 	float		handoff_next;   /* flag handoff cadence (sg_handoff): a pass
 	                             * the receiver never picks up leaves the
@@ -2381,6 +2393,320 @@ static qboolean Beat_HurtSince(edict_t *e, float since)
 	return false;
 }
 
+/* -------------------------------------------------- the early-return errand
+ *
+ * THE OWNER'S RULING, 2026-08-05: a bot whose team clock is armed "should GET
+ * BACK EARLY like humans, not arrive at T exactly".
+ *
+ * The pricing already knew the clock existed -- Worth_Quad (sg_combat.c) prices
+ * an empty pedestal at zero unless it is within SG_QUAD_CAMP_LEAD of coming
+ * back -- but a weight can only bend a route the bot was already walking. What
+ * a player who timed the quad does is not a bend: he stops doing the thing he
+ * was doing, leaves with time in hand, and stands NEAR the pad facing the door
+ * until it spawns. That is an errand, so it is written as one.
+ *
+ * WHAT BEING WRONG COSTS, which is where the gates come from. Leaving for a pad
+ * is leaving a job. The errand is refused to a carrier, refused while our own
+ * flag is out, refused while our team has a live carrier who needs bodies
+ * around him, refused to anyone in a fight or freshly hit -- every one of those
+ * is a thing the team loses while one bot admires its own timing -- and refused
+ * to everybody but ONE bot per team per pad, because five bots on one pedestal
+ * is not anticipation, it is a queue.
+ *
+ * WHY POWERUP PADS ONLY. The errand needs three things and only the powerup
+ * rows carry all three: a per-team respawn clock (sg_caco_items, armed under
+ * sg_itemcomm by a callout that was actually spoken), a spawn position that is
+ * map knowledge, and enough worth to justify the walk. Red armour's clock lives
+ * in sg_chat.c's private watch table, which this file cannot read and which has
+ * no route field behind it; the day it moves into the belief table this code
+ * picks it up with no edit. Runes are excluded by construction -- the ruling
+ * gives them no clock at all, so there is never a T to be early for.
+ */
+
+#define SG_LEAD_BASE		4.0f    /* seconds of lead before the persona */
+#define SG_LEAD_CAMP		8.0f    /* ... and what camp_tendency adds to it */
+#define SG_LEAD_JITTER		2.0f    /* rolled per attempt: no synchronised herd */
+#define SG_LEAD_STANDOFF	400     /* ms of field: ~120u at 300 u/s, and the
+                                     * same number the defender's post pins at */
+#define SG_LEAD_GRACE		4.0f    /* how long past T the wait is still a wait */
+#define SG_LEAD_RETRY		1.0f    /* attempt cadence while nothing is claimed */
+#define SG_LEAD_LEASE		1.0f    /* the claim a live errand re-stamps */
+#define SG_LEAD_SPEED		300.0f  /* u/s: pm_maxspeed, the file's own ruler */
+
+static qboolean Lead_On(void)
+{
+	/* the clock belongs to itemcomm; with no clock there is nothing to be
+	 * early for, and the two cvars are one feature in two halves */
+	if (!SG_ItemComm())
+		return false;
+	return (gi.cvar("sg_itemlead", "0", 0)->value > 0.0f) ? true : false;
+}
+
+static void Lead_Abort(sg_bot_t *bot, const char *why)
+{
+	edict_t *e = bot->ent;
+
+	if (!bot->lead_ent)
+		return;
+	if (gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("ITEMLEAD %s abort (%s)\n", e->client->pers.netname, why);
+
+	/*
+	 * Hand the pad back instead of letting the lease run out on its own. The
+	 * expiry is the safety net for a bot that stops asking without saying so
+	 * (a disconnect, a level change); a bot that KNOWS it is not going should
+	 * not make the next claimant wait a second for the news.
+	 */
+	if (e && e->client && bot->lead_slot >= 0 &&
+	    bot->lead_slot < sg_caco_num_items)
+	{
+		int ti = (e->client->ctf.teamnum == CTF_TEAM_BLUE) ? 1 : 0;
+		int cl = (int)(e - g_edicts) - 1;
+
+		if (sg_caco_items[ti][bot->lead_slot].claimed_by == cl)
+		{
+			sg_caco_items[ti][bot->lead_slot].claimed_until = 0.0f;
+			sg_caco_items[ti][bot->lead_slot].claimed_by = -1;
+		}
+	}
+
+	bot->lead_ent = 0;
+	bot->lead_slot = -1;
+	bot->lead_seed = -1;
+	bot->lead_at = 0.0f;
+	/* an errand starting or ending is a STRATEGY change, and the tactical
+	 * waypoint's own contract is that a strategy change retires it -- without
+	 * this the bot descends the previous goal's flood for up to ten seconds
+	 * after changing its mind */
+	bot->tac_seed = -1;
+}
+
+/*
+ * The route to a pad that is NOT standing. The class and per-item fields are
+ * flooded from items CACO believes are up (sg_fields.c Class_Build), which is
+ * exactly the set an empty pedestal is not in -- so the errand floods its own,
+ * the way the escort and the interposition do a few hundred lines below. One
+ * flood per frame per errand, and at most one errand per team.
+ */
+static qboolean Lead_Flood(int *field, int padseed, int here)
+{
+	int cost = 0;
+
+	if (!sg_rune || padseed < 0 || padseed >= sg_rune->hdr.num_seeds)
+		return false;
+	Field_Flood(sg_rune, field, &padseed, &cost, 1);
+	if (here < 0 || here >= sg_rune->hdr.num_seeds)
+		return false;
+	return (field[here] < SG_FIELD_INF) ? true : false;
+}
+
+/*
+ * The whole errand, once per frame. Returns the field to route on while one is
+ * running and NULL otherwise; the caller substitutes it for the role's own
+ * goal field, which is what makes the pad a live goal rather than a preference.
+ */
+static const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
+{
+	static int			lead_field[SG_MAX_SEEDS];
+	edict_t				*e = bot->ent;
+	const sg_persona_t	*p;
+	sg_belief_item_t	*b;
+	float				lead, camp, travel, best_t = 0.0f;
+	int					team, ti, cl, i, best = -1, padseed = -1;
+
+	if (!Lead_On())
+	{
+		Lead_Abort(bot, "switched off");
+		return NULL;
+	}
+	if (!sg_rune || bot->seed < 0 || !e->client)
+		return NULL;
+
+	team = e->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return NULL;
+	ti = team - 1;
+	cl = (int)(e - g_edicts) - 1;
+	if (cl < 0 || cl >= game.maxclients)
+		return NULL;
+
+	/*
+	 * The jobs that outrank a pad. Said before the live-errand branch as well
+	 * as before the commit, so one of these arriving mid-errand ends it on the
+	 * frame it arrives -- which is the difference between a bot that times
+	 * items and a bot that ignores the game to time items.
+	 */
+	if (carrying)
+	{
+		Lead_Abort(bot, "carrying");
+		return NULL;
+	}
+	if (sg_caco_team_belief.flag[ti].state == SG_FLAG_ASTRAY ||
+	    role == SG_ROLE_RECOVER)
+	{
+		Lead_Abort(bot, "our flag out");
+		return NULL;
+	}
+	if (sg_caco_team_belief.carrier[ti].client >= 0)
+	{
+		Lead_Abort(bot, "carrier live");
+		return NULL;
+	}
+	/*
+	 * The watchman is not available for errands. The .dpo lesson this file
+	 * already records -- never empty the stand for a post -- applies at least
+	 * as hard to emptying it for a pedestal on the other side of the map. The
+	 * patrol defender is free to go; it is the one whose whole job is not
+	 * being in one place.
+	 */
+	if (role == SG_ROLE_DEFEND && bot->def_stand)
+	{
+		Lead_Abort(bot, "watchman");
+		return NULL;
+	}
+	if (bot->engaged_last || SG_CombatDuel(e, NULL, NULL, NULL))
+	{
+		Lead_Abort(bot, "engaged");
+		return NULL;
+	}
+	if (Beat_HurtSince(e, level.time - 3.0f))
+	{
+		Lead_Abort(bot, "taking fire");
+		return NULL;
+	}
+
+	/* ------------------------------------------------ an errand in progress */
+	if (bot->lead_ent > 0)
+	{
+		if (bot->lead_slot < 0 || bot->lead_slot >= sg_caco_num_items)
+		{
+			Lead_Abort(bot, "stale row");
+			return NULL;
+		}
+		b = &sg_caco_items[ti][bot->lead_slot];
+		if (b->ent != bot->lead_ent)
+		{
+			/* the table was rebuilt under us (level change): the row names a
+			 * different entity now and the errand is about nothing */
+			Lead_Abort(bot, "stale row");
+			return NULL;
+		}
+		if (b->believed_up)
+		{
+			/* it is standing there: the ordinary detour arithmetic prices it
+			 * now, and prices it better than a scripted walk would */
+			Lead_Abort(bot, "spawned");
+			return NULL;
+		}
+		if (b->believed_respawn_time <= 0.0f)
+		{
+			Lead_Abort(bot, "clock gone");
+			return NULL;
+		}
+		if (b->claimed_until > level.time && b->claimed_by != cl)
+		{
+			Lead_Abort(bot, "claim lost");
+			return NULL;
+		}
+		bot->lead_at = b->believed_respawn_time;    /* a fresher call moves T */
+		if (level.time > bot->lead_at + SG_LEAD_GRACE)
+		{
+			Lead_Abort(bot, "waited out");
+			return NULL;
+		}
+
+		/* the lease, re-stamped: stop asking and the pad is free in a second */
+		b->claimed_by = cl;
+		b->claimed_until = level.time + SG_LEAD_LEASE;
+
+		if (!Lead_Flood(lead_field, bot->lead_seed, bot->seed))
+		{
+			Lead_Abort(bot, "no route");
+			return NULL;
+		}
+		return lead_field;
+	}
+
+	/* ------------------------------------------------------- committing one */
+	if (level.time < bot->lead_next)
+		return NULL;
+	bot->lead_next = level.time + SG_LEAD_RETRY;
+
+	/*
+	 * The lead itself. Four seconds is the floor a player leaves on at all;
+	 * camp_tendency spends up to eight more, so Gate leaves early enough to
+	 * settle and Fiend turns up as it lands. The jitter is rolled per attempt
+	 * rather than per bot so two bots with the same persona on the same clock
+	 * do not step off together every single time.
+	 */
+	p = SG_PersonaFor(e);
+	camp = p ? p->camp_tendency : 0.5f;
+	lead = SG_LEAD_BASE + camp * SG_LEAD_CAMP + random() * SG_LEAD_JITTER;
+
+	for (i = 0; i < sg_caco_num_items; i++)
+	{
+		vec3_t	d;
+		float	guess;
+
+		b = &sg_caco_items[ti][i];
+		if (b->cls != SG_BI_POWERUP || b->believed_up)
+			continue;
+		if (b->believed_respawn_time <= level.time)
+			continue;
+		if (b->claimed_until > level.time && b->claimed_by != cl)
+			continue;                   /* somebody on this side has it */
+
+		/*
+		 * The cheap half of the travel estimate: straight line at pm_maxspeed.
+		 * Corridors only ever make the real road longer, so this UNDERSTATES
+		 * travel and therefore opens the window early -- which is what it is
+		 * for. The honest number comes off the flood below, once, for the one
+		 * candidate worth flooding for.
+		 */
+		VectorSubtract(b->org, e->s.origin, d);
+		guess = VectorLength(d) / SG_LEAD_SPEED;
+		if (level.time < b->believed_respawn_time - guess - lead)
+			continue;
+
+		if (best < 0 || b->believed_respawn_time < best_t)
+		{
+			best = i;
+			best_t = b->believed_respawn_time;
+		}
+	}
+
+	if (best < 0)
+		return NULL;
+
+	b = &sg_caco_items[ti][best];
+	padseed = Rune_NearestSeed(sg_rune, b->org);
+	if (!Lead_Flood(lead_field, padseed, bot->seed))
+		return NULL;                    /* no road: the clock is somebody
+		                                 * else's problem */
+
+	/* the honest test, on the route the body will actually walk */
+	travel = (float)lead_field[bot->seed] / 1000.0f;
+	if (level.time < b->believed_respawn_time - travel - lead)
+		return NULL;
+
+	bot->lead_ent = b->ent;
+	bot->lead_slot = best;
+	bot->lead_seed = padseed;
+	bot->lead_at = b->believed_respawn_time;
+	b->claimed_by = cl;
+	b->claimed_until = level.time + SG_LEAD_LEASE;
+	bot->tac_seed = -1;                 /* a new strategy retires the tactic */
+
+	if (gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("ITEMLEAD %s -> %s: T %.1f (in %.1fs) lead %.1fs "
+		           "travel %.1fs\n",
+		           e->client->pers.netname,
+		           g_edicts[b->ent].classname ? g_edicts[b->ent].classname
+		                                      : "item",
+		           bot->lead_at, bot->lead_at - level.time, lead, travel);
+	return lead_field;
+}
+
 static void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -2445,6 +2771,9 @@ static void SG_BotThink(sg_bot_t *bot)
 		}
 		bot->seed = -1;
 		bot->view_on = false;   /* respawn snaps the view fresh */
+		/* a corpse is not standing anybody's pad: release the lease early
+		 * rather than making the next claimant wait it out */
+		Lead_Abort(bot, "died");
 		bot->beat_ready = true; /* dead HERE, on this level: the spawn beat
 		                         * has something to be the far side of */
 		/*
@@ -2982,6 +3311,23 @@ static void SG_BotThink(sg_bot_t *bot)
 		}
 		else
 			bot->runeconv_until = 0.0f;
+	}
+
+	/*
+	 * THE EARLY RETURN (sg_itemlead, owner's ruling 2026-08-05). Last of the
+	 * goal overrides on purpose: the errand is a thing a bot does when nothing
+	 * else is happening, and every branch above -- the carrier's stand, the
+	 * recovery, the scoop, the interposition, the courier -- is something
+	 * happening. Lead_Field refuses the errand outright while any of the jobs
+	 * it names is live, so the ordering here and the gates in there say the
+	 * same thing twice, which is deliberate: this line is the one a reader
+	 * finds first.
+	 */
+	{
+		const int *lead = Lead_Field(bot, role, carrying);
+
+		if (lead)
+			goal_field = lead;
 	}
 
 	bot->last_goalcost = (bot->seed >= 0 &&
@@ -5203,10 +5549,26 @@ stag_done:
 	 * untouched, so a needy bot still leaves whatever its persona says. 400
 	 * exactly when no persona applies.
 	 */
-	if (role == SG_ROLE_DEFEND && bot->def_stand &&
+	/*
+	 * THE PAD WAIT (sg_itemlead). An errand that has ARRIVED is the same
+	 * problem the post solved: the goal field's minimum is the pedestal, and
+	 * descent with nowhere left to go grinds the body into it. A player who
+	 * came back early does not stand ON the pad either -- he stops short of
+	 * it, where the approaches are in front of him rather than behind, and
+	 * waits. The standoff is 400ms of field, which at pm_maxspeed is about
+	 * 120 units, and the facing below is the post's own: the neighbour an
+	 * arrival would descend through, overridden by wherever a fresh contact
+	 * says the noise actually is.
+	 *
+	 * First in the chain, so an errand's hold outranks the defender's -- a
+	 * defender on an errand is standing the pad, not the stand, and its
+	 * goal field says so.
+	 */
+	if (bot->lead_ent > 0 && goal_field[bot->seed] < SG_LEAD_STANDOFF)
+		hold_post = true;
+	else if (role == SG_ROLE_DEFEND && bot->def_stand &&
 	    (float)goal_field[bot->seed] < 400.0f * SG_PersonaCampScale(e))
 	{
-		int facev = 0x7fffffff, face = -1;
 		qboolean quiet = true;
 		int s;
 
@@ -5230,6 +5592,18 @@ stag_done:
 		     w->item[SG_FC_AMMO] > 0.9f))
 			goto no_hold;   /* needy and unthreatened: run the errand */
 
+		hold_post = true;
+	}
+
+	/*
+	 * The facing, shared by both holds: whichever seed an arrival would
+	 * descend on this one through -- the neighbour whose field value sits
+	 * closest above ours. Combat still owns the view the moment anyone shows.
+	 */
+	if (hold_post)
+	{
+		int facev = 0x7fffffff, face = -1;
+
 		for (li = sg_rune->first_link[bot->seed]; li >= 0;
 		     li = sg_rune->next_link[li])
 		{
@@ -5242,7 +5616,6 @@ stag_done:
 				face = l->to;
 			}
 		}
-		hold_post = true;
 		if (face >= 0)
 		{
 			vec3_t	pdir, peye, pend;
@@ -8387,6 +8760,30 @@ qboolean SG_AddBotTeam(int teamnum)
 	}
 	ClientUserinfoChanged(ent, ent->client->pers.userinfo);
 
+	/*
+	 * THE RADIO IS ON (sg_radio, owner's ruling 2026-08-05: "callout in
+	 * conjunction, that's just good teamplay"). PlayTeamSound (g_cmds.c:121)
+	 * tests these bits TWICE -- once on the sender, where a clear pair is
+	 * "Your radio is off!" and no call at all, and once per recipient, where a
+	 * clear pair skips that client. A human never sees the menu that sets them
+	 * for a bot, so a bot with them clear is a bot that can neither speak on
+	 * the radio nor be spoken to, and every call it made would be refused at
+	 * the first test with a print aimed at itself.
+	 *
+	 * Both bits, not just the sound one: the text half is what a receiver
+	 * running radiotext reads, and a bot is a receiver too when a teammate
+	 * calls. The bot-bound half costs nothing -- ForceCommand's unicast at a
+	 * bot is retracted by the net shim (sg_net.c SG_unicast: bots have no
+	 * engine-side client to address) and the radiotext print goes down the
+	 * suppressed print path in the same file.
+	 *
+	 * Set unconditionally rather than under sg_radio: the cvar decides whether
+	 * bots CALL, and a bot that joined while it was 0 must still be reachable
+	 * by a human's radio the moment it goes to 1.
+	 */
+	ent->client->ctf.extra_flags |=
+	    (CTF_EXTRAFLAGS_RADIO_TEXT | CTF_EXTRAFLAGS_RADIO_SOUND);
+
 	sg_bots[slot].ent = ent;
 	sg_bots[slot].active = true;
 	sg_bots[slot].seed = -1;
@@ -8398,6 +8795,12 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].exitasym_armed = false;
 	sg_bots[slot].beat_ready = false;   /* a join is not a respawn */
 	sg_bots[slot].beat_until = 0.0f;
+	/* no errand, and no row: slot 0 is a real belief row, -1 is nobody's */
+	sg_bots[slot].lead_ent = 0;
+	sg_bots[slot].lead_slot = -1;
+	sg_bots[slot].lead_seed = -1;
+	sg_bots[slot].lead_at = 0.0f;
+	sg_bots[slot].lead_next = 0.0f;
 	sg_bots[slot].escprior_bucket = -1;
 	sg_bots[slot].escprior_until = 0.0f;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;

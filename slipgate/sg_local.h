@@ -291,6 +291,23 @@ typedef struct
 	int			ent;                    /* edict index of the item entity */
 	int			cls;                    /* SG_BI_* */
 	float		respawn_delay;          /* seconds; 0 = no clock to infer from */
+
+	/*
+	 * THE ERRAND LEASE (sg_itemlead, owner's ruling 2026-08-05: "bots with an
+	 * armed team clock should get back early like humans"). Exactly one bot
+	 * per team per pad may leave early for it -- five bots standing on one
+	 * pedestal is not anticipation, it is a queue -- and the claim lives here
+	 * because the row is ALREADY per team, so a red errand cannot reserve the
+	 * pad against blue and neither team can read the other's plan.
+	 *
+	 * It is a LEASE and not a lock: the holder re-stamps claimed_until every
+	 * frame it is still on the errand, so a bot that dies, changes role or
+	 * simply stops asking releases the pad within a second without anybody
+	 * having to remember to unlock it. claimed_by is a CLIENT index so the
+	 * holder can re-take its own lease; -1 is nobody.
+	 */
+	float		claimed_until;
+	int			claimed_by;
 } sg_belief_item_t;
 
 /*

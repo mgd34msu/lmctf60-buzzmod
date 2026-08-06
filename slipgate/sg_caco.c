@@ -571,6 +571,10 @@ static void Caco_ScanItemSpawns(void)
 			b->seed = -1;
 			b->seen_up_time = -1.0f;            /* nobody has looked yet */
 			b->believed_respawn_time = 0.0f;
+			/* the errand lease starts free, and free is -1 rather than the
+			 * zero memset leaves: client 0 is a real player */
+			b->claimed_until = 0.0f;
+			b->claimed_by = -1;
 
 			if (cls == SG_BI_POWERUP)
 			{
