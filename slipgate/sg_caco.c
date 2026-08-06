@@ -1278,6 +1278,7 @@ sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
  */
 float sg_caco_quadheard[2];
 static int sg_quadsound_idx;
+static int sg_hastesound_idx;
 
 static unsigned sg_ear_said;    /* EAR print sampler */
 
@@ -1498,6 +1499,13 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 			sg_quadsound_idx = gi.soundindex("items/damage2.wav");
 		if (soundindex == sg_quadsound_idx)
 			sg_caco_quadheard[team - 1] = level.time;
+
+		/* the haste rune's firing voice: this client is hasted NOW */
+		if (!sg_hastesound_idx)
+			sg_hastesound_idx = gi.soundindex("player/lava1.wav");
+		if (soundindex == sg_hastesound_idx && ecl >= 0 &&
+		    ecl < SG_DMG_CLIENTS)
+			sg_caco_hastefire[team - 1][ecl] = level.time;
 
 		/* sampled 1-in-32: wave 390 measured ~9k accepted events per
 		 * game on a busy server -- the ear works, the log need not
@@ -1756,6 +1764,18 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from)
  */
 
 float		sg_caco_railshot[2][SG_DMG_CLIENTS];
+
+/*
+ * When each team last heard a client firing WITH HASTE -- the rune plays
+ * player/lava1.wav on CHAN_ITEM every firing frame (RuneWeaponThinkHook,
+ * g_runes.c:807-814), a server-side sound the honest ear genuinely hears.
+ * A hasted railer's weapon frames advance twice per tick, so his rail
+ * cycles at RELOAD/2 = 0.8s. The owner's own FYI (2026-08-05): pros ran
+ * custom rail sounds with reload-ready cues, so precise rhythm reading
+ * is period-authentic, and haste-on-rail is exactly why haste defends
+ * long corridors so well.
+ */
+float		sg_caco_hastefire[2][SG_DMG_CLIENTS];
 static unsigned	sg_rail_said;       /* RAILSHOT print sampler */
 
 qboolean SG_RailRhythm(void)
@@ -1865,6 +1885,11 @@ qboolean SG_RailCold(int team, int client)
 	t = sg_caco_railshot[team - 1][client];
 	if (t <= 0.0f)
 		return false;               /* never heard him fire: assume loaded */
+	/* a hasted railer cycles at half the reload (double weaponthink,
+	 * g_runes.c:812-813) -- heard hasted fire lately, halve the window */
+	if (sg_caco_hastefire[team - 1][client] > 0.0f &&
+	    level.time - sg_caco_hastefire[team - 1][client] < 10.0f)
+		return (level.time - t < SG_RAIL_WINDOW * 0.5f) ? true : false;
 	return (level.time - t < SG_RAIL_WINDOW) ? true : false;
 }
 
@@ -1970,6 +1995,7 @@ void Caco_Reset(void)
 	memset(sg_caco_damage, 0, sizeof(sg_caco_damage));
 	/* 0 is "never heard him fire", which is the value the table wants */
 	memset(sg_caco_railshot, 0, sizeof(sg_caco_railshot));
+	memset(sg_caco_hastefire, 0, sizeof(sg_caco_hastefire));
 	{
 		int c, k;
 

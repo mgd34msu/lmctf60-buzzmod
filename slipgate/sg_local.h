@@ -211,6 +211,7 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from);
  * side knows".
  */
 extern float sg_caco_railshot[2][SG_DMG_CLIENTS];
+extern float sg_caco_hastefire[2][SG_DMG_CLIENTS];
 
 /* the one reader of the cvar: default 0 leaves every path below dead and the
  * build byte-identical */
