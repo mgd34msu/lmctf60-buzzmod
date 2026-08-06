@@ -222,6 +222,23 @@ typedef struct sg_bot_s
 	float		breather_until;     /* sg_breather: sub-max throttle window */
 	float		breather_next;      /* next roll of the breather dice */
 	float		plan_next;          /* sg_drawplan: next in-world plan draw */
+
+	/*
+	 * DEATH LANE MEMORY (sg_tilt). Where the last life ended, who ended
+	 * it, and the seeds within two links of the spot -- the lane this bot
+	 * will not walk back into for a while. Per bot, never shared: tilt is
+	 * a grudge, and a grudge belongs to whoever earned it.
+	 */
+#define SG_TILT_LANE	64          /* seeds kept per lane; see Tilt_Lane */
+	int			tilt_lane[SG_TILT_LANE];
+	int			tilt_lane_n;
+	int			tilt_seed;          /* the seed the last death happened at */
+	int			tilt_killer_seed;   /* where the killer was BELIEVED, -1 none */
+	float		tilt_death_time;    /* when it happened: the repeat clock */
+	float		tilt_window;        /* how long the next life avoids the lane */
+	float		tilt_until;         /* armed at respawn, expires on its own */
+	float		tilt_caution_until; /* post-death willingness damping */
+	unsigned	tilt_said;          /* 1-in-16 sampler for the price line */
 } sg_bot_t;
 
 static sg_bot_t	sg_bots[SG_MAXBOTS];
@@ -1110,6 +1127,233 @@ static void Danger_Load(void)
 	if (fread(sg_danger, sizeof(sg_danger), 1, f) != 1)
 		memset(sg_danger, 0, sizeof(sg_danger));
 	fclose(f);
+}
+
+/* ------------------------------------------------------------------- tilt
+ *
+ * TILT: the grudge the danger dimension cannot hold.
+ *
+ * Danger is the TEAM's ledger and it is slow on purpose -- one death adds
+ * 1200ms to one seed, decayed a percent a second, persisted across matches.
+ * That is the map's reputation, and it should be slow. It is not what a
+ * human does thirty seconds after being railed in the same doorway twice.
+ *
+ * What a human does is personal, short and lopsided: he comes out of the
+ * respawn, looks at the door he just died in, and takes the other way --
+ * not because the arithmetic changed but because he remembers. He plays the
+ * next twenty seconds a shade smaller than the twenty before them, and if
+ * the same lane kills him twice inside a minute he stays away from it twice
+ * as long. Then it wears off and he is himself again.
+ *
+ * Three things this is NOT, stated here because every one of them is the
+ * obvious next step and every one of them is wrong:
+ *
+ *   - it is not aim. Tilt never touches the gun. A rattled player is not a
+ *     worse SHOT in any way this tree is willing to model; he goes to
+ *     different places and starts fewer fights. Skill is the shooter's,
+ *     tilt is the router's, and the two do not meet.
+ *   - it is not danger. It never writes sg_danger, never persists, and dies
+ *     with the level. A grudge that outlives the match is a weight, not a
+ *     grudge.
+ *   - it is not permanent. Every term here has an expiry measured in
+ *     seconds. A bot that permanently refuses a lane has been lobotomised,
+ *     not humanised -- and on a two-lane map it would simply stop playing.
+ *
+ * Off by default (sg_tilt 0): nothing is recorded, nothing is priced, and
+ * the surface is the byte it was before this existed.
+ */
+
+#define SG_TILT_WINDOW	25.0f   /* "not through there again", in seconds */
+#define SG_TILT_REPEAT	60.0f   /* two deaths inside this is a pattern */
+#define SG_TILT_PRICE	1.30f   /* what a lane step costs while it lasts */
+#define SG_TILT_CAUTION	8.0f    /* post-respawn timidity at skill 0 */
+#define SG_TILT_CAUTION4 4.0f   /* ...and at skill 4: the good player
+                                 * shakes it off in half the time */
+#define SG_TILT_ENGAGE	0.80f   /* engagement willingness while cautious */
+#define SG_TILT_COVER	0.5f    /* the approach-cover dose, borrowed: while
+                                 * cautious, EVERY role pays for open ground
+                                 * the way an attacker on the last approach
+                                 * already does */
+
+/*
+ * The BFS scratch: one byte per seed, TAG_LEVEL like the rune it indexes,
+ * allocated on the first death of the level and freed with it. It is shared
+ * because it never outlives a single Tilt_Lane call -- the lane it produces
+ * is what gets kept, per bot.
+ */
+static unsigned char *sg_tilt_mark;
+
+/*
+ * "Within two links" of a seed, the undirected way.
+ *
+ * The rune's adjacency index (first_link/next_link) runs OUTWARD only, and
+ * outward alone is the wrong neighbourhood here: a bot walking INTO the
+ * doorway it died in arrives on seeds that reach the death seed, which the
+ * outgoing index cannot name. Most links are proven in both directions and
+ * the two sets nearly coincide -- but "nearly" is how a bot ends up
+ * strolling back through its own killer's sightline, so this reads both
+ * endpoints of every link and treats the graph as undirected.
+ *
+ * Two whole passes over the link array, at most, and only when somebody
+ * dies -- a few tens of thousands of comparisons a death, against a body
+ * that just stopped playing for a second and a half. The lane is capped at
+ * SG_TILT_LANE seeds: a two-hop ball on a dense map can be larger, and the
+ * truncation is by link order rather than by distance, which is honest
+ * enough for a preference and keeps the per-candidate membership test a
+ * short linear walk instead of another allocation.
+ */
+static void Tilt_Lane(sg_bot_t *bot, int seed)
+{
+	rune_t	*r = sg_rune;
+	int		hop, li, n = 0;
+
+	bot->tilt_lane_n = 0;
+	if (!r || !r->links || seed < 0 || seed >= r->hdr.num_seeds)
+		return;
+	if (!sg_tilt_mark)
+		sg_tilt_mark = gi.TagMalloc(r->hdr.num_seeds, TAG_LEVEL);
+	if (!sg_tilt_mark)
+		return;
+
+	/* mark holds distance+1, so zero can keep meaning "not reached" */
+	memset(sg_tilt_mark, 0, r->hdr.num_seeds);
+	sg_tilt_mark[seed] = 1;
+	bot->tilt_lane[n++] = seed;
+
+	for (hop = 1; hop <= 2 && n < SG_TILT_LANE; hop++)
+	{
+		for (li = 0; li < r->hdr.num_links && n < SG_TILT_LANE; li++)
+		{
+			rune_link_t	*l = &r->links[li];
+			int			a = l->from, b = l->to;
+
+			if (a < 0 || b < 0 ||
+			    a >= r->hdr.num_seeds || b >= r->hdr.num_seeds)
+				continue;
+			/* a node marked THIS pass reads hop+1 and is therefore not
+			 * expanded again until the next one: level order, one pass
+			 * per level, no queue */
+			if (sg_tilt_mark[a] == hop && !sg_tilt_mark[b])
+			{
+				sg_tilt_mark[b] = (unsigned char)(hop + 1);
+				bot->tilt_lane[n++] = b;
+			}
+			else if (sg_tilt_mark[b] == hop && !sg_tilt_mark[a])
+			{
+				sg_tilt_mark[a] = (unsigned char)(hop + 1);
+				bot->tilt_lane[n++] = a;
+			}
+		}
+	}
+	bot->tilt_lane_n = n;
+}
+
+static qboolean Tilt_InLane(const sg_bot_t *bot, int seed)
+{
+	int i;
+
+	for (i = 0; i < bot->tilt_lane_n; i++)
+		if (bot->tilt_lane[i] == seed)
+			return true;
+	return false;
+}
+
+/*
+ * The death note. Called from the one place that already knows a bot has
+ * died at a seed it still remembers -- beside Danger_Learn, before the
+ * corpse's seed is dropped.
+ *
+ * Who did it comes from the bot's OWN damage ring (sg_caco.c): the freshest
+ * entry in it is the last thing that hurt this body, which is the killer in
+ * every case that is not a fall or a lava pool -- and for those the ring is
+ * empty and the killer stays unnamed, which is correct. Where he was comes
+ * from the enemy belief table and nowhere else: the ring names a client,
+ * belief places him, and if belief cannot, the lane is still the lane. The
+ * killer's seed is recorded for the debug line and for whatever reads it
+ * later; the aversion itself is about the GROUND, not the man.
+ */
+static void Tilt_Note(edict_t *e, sg_bot_t *bot)
+{
+	float	window = SG_TILT_WINDOW, best = -1.0f;
+	int		team = e->client->ctf.teamnum;
+	int		ci, k, killer = -1;
+
+	if (gi.cvar("sg_tilt", "0", 0)->value <= 0.0f)
+		return;
+
+	ci = (int)(e->client - game.clients);
+	if (ci >= 0 && ci < SG_DMG_CLIENTS)
+		for (k = 0; k < SG_DMG_RING; k++)
+			if (sg_caco_damage[ci][k].attacker >= 0 &&
+			    sg_caco_damage[ci][k].time > best)
+			{
+				best = sg_caco_damage[ci][k].time;
+				killer = sg_caco_damage[ci][k].attacker;
+			}
+
+	bot->tilt_killer_seed = -1;
+	if (killer >= 0 && (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE))
+		for (k = 0; k < SG_MAX_ENEMY_TRACK; k++)
+			if (sg_caco_enemies[team - 1][k].client == killer)
+			{
+				bot->tilt_killer_seed = sg_caco_enemies[team - 1][k].seed;
+				break;
+			}
+
+	Tilt_Lane(bot, bot->seed);
+
+	/*
+	 * REPEAT-DEATH ESCALATION. Twice in the same lane inside a minute is
+	 * not bad luck, it is somebody sitting there. The test is the new
+	 * lane against the OLD death seed -- the lane was just built around
+	 * where this life ended, so asking whether the previous death is
+	 * inside it is exactly "within two links of each other" without
+	 * building a second neighbourhood to compare.
+	 */
+	if (bot->tilt_seed >= 0 &&
+	    level.time - bot->tilt_death_time < SG_TILT_REPEAT &&
+	    Tilt_InLane(bot, bot->tilt_seed))
+		window *= 2.0f;
+
+	bot->tilt_seed = bot->seed;
+	bot->tilt_death_time = level.time;
+	bot->tilt_window = window;
+	/* the windows themselves are ARMED at respawn, not here: the clock a
+	 * human runs on is "the first N seconds of the next life", and the
+	 * corpse's second and a half on the floor is not part of it */
+
+	if (gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("TILT %s died seed=%d lane=%d killer=%d kseed=%d "
+		           "window=%.0f%s\n",
+		           e->client->pers.netname, bot->tilt_seed,
+		           bot->tilt_lane_n, killer, bot->tilt_killer_seed,
+		           window, window > SG_TILT_WINDOW ? " REPEAT" : "");
+}
+
+/*
+ * POST-DEATH CAUTION, the part combat has to know about: how far out this
+ * bot is willing to start something, as a factor on whatever the persona
+ * already decided. One number, read by sg_combat.c's target scan, and it is
+ * 1.0 for every bot that is not a SLIPGATE bot inside its own caution
+ * window -- including every legacy bot and every human, who have no window
+ * and no entry in this table.
+ *
+ * The willingness is the whole of it. Aim, reaction, trigger cadence and
+ * lead are the skill model's and tilt does not touch them: a player who
+ * just died shoots exactly as well as he did a minute ago and merely picks
+ * fewer fights to shoot in.
+ */
+float SG_TiltCaution(edict_t *ent)
+{
+	int i;
+
+	if (gi.cvar("sg_tilt", "0", 0)->value <= 0.0f)
+		return 1.0f;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == ent)
+			return (level.time < sg_bots[i].tilt_caution_until)
+			       ? SG_TILT_ENGAGE : 1.0f;
+	return 1.0f;
 }
 
 /*
@@ -2028,6 +2272,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		if (bot->seed >= 0 && !bot->death_taught)
 		{
 			Danger_Learn(e->client->ctf.teamnum, bot->seed);
+			Tilt_Note(e, bot);      /* the same death, remembered personally */
 			bot->death_taught = true;
 		}
 		bot->seed = -1;
@@ -2045,6 +2290,30 @@ static void SG_BotThink(sg_bot_t *bot)
 		              ? BUTTON_ATTACK : 0;
 		ClientThink(e, &cmd);
 		return;
+	}
+	/*
+	 * The respawn edge, and the only one this file actually gets: the
+	 * lives ticker further down keys off health <= 0, which a body with
+	 * deadflag set never reaches because the block above returns first.
+	 * death_taught is still true on the first LIVE frame after a death,
+	 * so this is the frame the new life starts on -- which is where the
+	 * tilt clocks belong. A window started on the corpse would spend a
+	 * second and a half of itself lying on the floor.
+	 */
+	if (bot->death_taught && gi.cvar("sg_tilt", "0", 0)->value > 0.0f)
+	{
+		/* the caution runs shorter for the better shooter: the same
+		 * span the threat clock uses, and for the same reason -- the
+		 * skill-4 bot gets his composure back first. Skill is read
+		 * through combat's own accessor (0..400) so there is exactly
+		 * one skill model in this tree. */
+		float sk = (float)SG_CombatSkill(e) / 400.0f;   /* 0..1 */
+
+		if (sk < 0.0f) sk = 0.0f;
+		if (sk > 1.0f) sk = 1.0f;
+		bot->tilt_until = level.time + bot->tilt_window;
+		bot->tilt_caution_until = level.time + SG_TILT_CAUTION +
+		    (SG_TILT_CAUTION4 - SG_TILT_CAUTION) * sk;
 	}
 	bot->death_taught = false;
 
@@ -3530,6 +3799,54 @@ rally_done:;
 		if (li >= 0 && sg_rune->links[li].to == bot->prev_seed &&
 		    level.time - bot->prev_seed_time < 3.0f)
 			v *= 1.0f + gi.cvar("sg_nobacktrack", "0", 0)->value / 100.0f;
+
+		/*
+		 * NOT THROUGH THERE AGAIN (sg_tilt). The lane the last life
+		 * ended in costs a third more for the first twenty-five
+		 * seconds of this one -- fifty if the same lane took two
+		 * lives inside a minute. A third is deliberately a
+		 * PREFERENCE and not a wall: where the map offers a second
+		 * road the bot takes it, and where it does not, the tilt
+		 * loses to the gradient and the bot walks the only corridor
+		 * there is, which is also what the human does after standing
+		 * at the respawn swearing about it. Nothing here is
+		 * permanent and nothing here is written down: the window
+		 * runs out, the lane is forgotten, and the map's real
+		 * lessons stay in the danger dimension where they belong.
+		 */
+		if (bot->tilt_lane_n > 0 && level.time < bot->tilt_until &&
+		    gi.cvar("sg_tilt", "0", 0)->value > 0.0f &&
+		    Tilt_InLane(bot, l->to))
+		{
+			v *= SG_TILT_PRICE;
+
+			/* one line in sixteen: a bot in a two-hop ball prices
+			 * every candidate it owns, every frame, and the log is
+			 * for reading */
+			if (gi.cvar("sg_debug", "0", 0)->value &&
+			    !(bot->tilt_said++ & 15))
+				gi.dprintf("TILTAVOID %s link=%d to=%d dseed=%d "
+				           "left=%.1f%s\n",
+				           e->client->pers.netname, li, l->to,
+				           bot->tilt_seed,
+				           bot->tilt_until - level.time,
+				           (level.time < bot->tilt_caution_until)
+				           ? " cautious" : "");
+		}
+
+		/*
+		 * POST-DEATH CAUTION, the routing half. The approach-cover
+		 * term below already teaches an attacker on the last leg to
+		 * pay for open ground; for the few seconds after a respawn
+		 * EVERY role pays it, at the same dose, whatever it is doing.
+		 * A player who just died walks the wall side of the room for
+		 * a while -- and that is the whole of the behaviour: he is
+		 * not slower, not worse, and not hiding. The willingness half
+		 * lives in sg_combat.c, through SG_TiltCaution.
+		 */
+		if (level.time < bot->tilt_caution_until &&
+		    gi.cvar("sg_tilt", "0", 0)->value > 0.0f)
+			v += SG_TILT_COVER * (float)sg_rune->seeds[l->to].area_hint;
 
 		/* EXIT-LANE ASYMMETRY (sg_exitasym). Humans tend to leave by a
 		 * different lane than they came in on, but not always -- a coin
@@ -7711,6 +8028,15 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].exitasym_n = 0;
 	sg_bots[slot].exitasym_armed = false;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
+	/* a fresh joiner holds no grudge, and seed 0 is a real place: -1 is
+	 * the only value that means "nobody has died here yet" */
+	sg_bots[slot].tilt_seed = -1;
+	sg_bots[slot].tilt_killer_seed = -1;
+	sg_bots[slot].tilt_lane_n = 0;
+	sg_bots[slot].tilt_until = 0.0f;
+	sg_bots[slot].tilt_caution_until = 0.0f;
+	sg_bots[slot].tilt_death_time = -1000.0f;
+	sg_bots[slot].tilt_window = 0.0f;
 	SG_PersonaBind(ent, slot);      /* the name now indexes a character */
 
 	/*
@@ -7888,9 +8214,23 @@ void SG_LevelChange(void)
 	sg_clock_read_next = sg_clock_latch_next = 0.0f;
 	sg_clock_known = false;
 	sg_clock_left = 0.0f;
+	sg_tilt_mark = NULL;    /* TAG_LEVEL as well: the engine freed it */
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		sg_bots[i].active = false;
 		sg_bots[i].ent = NULL;
+		/*
+		 * A grudge is about a PLACE, and seed 137 on the next map is a
+		 * different place. Tilt dies with the level -- what survives a
+		 * map change is the danger dimension, which is saved above and
+		 * is the only thing here that has earned it.
+		 */
+		sg_bots[i].tilt_lane_n = 0;
+		sg_bots[i].tilt_seed = -1;
+		sg_bots[i].tilt_killer_seed = -1;
+		sg_bots[i].tilt_until = 0.0f;
+		sg_bots[i].tilt_caution_until = 0.0f;
+		sg_bots[i].tilt_death_time = -1000.0f;
+		sg_bots[i].tilt_window = 0.0f;
 	}
 }

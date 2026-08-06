@@ -669,8 +669,17 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 	 * still wins inside whatever the cap turns out to be -- this bends who
 	 * is a candidate, not how one is chosen. Exactly SG_ENGAGE_RANGE when
 	 * no persona applies.
+	 *
+	 * The second factor is the tilt clock (sg_arach.c, sg_tilt): for a few
+	 * skill-scaled seconds after a respawn the bot starts fewer fights --
+	 * it takes the corridor shot it would otherwise have taken, but not
+	 * the one across the room. Exactly 1.0 with sg_tilt off, outside the
+	 * window, and for anything that is not a SLIPGATE bot. Nothing below
+	 * this line changes: a fight this bot DOES take is fought with the
+	 * same aim, the same reaction and the same trigger it always had.
 	 */
-	float	bestdist = SG_ENGAGE_RANGE * SG_PersonaAggression(self);
+	float	bestdist = SG_ENGAGE_RANGE * SG_PersonaAggression(self) *
+	                   SG_TiltCaution(self);
 	int		myteam = self->client->ctf.teamnum;
 	int		i;
 

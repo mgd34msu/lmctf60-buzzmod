@@ -244,6 +244,14 @@ qboolean	SG_KickWorst(void);                 /* lowest score, either team */
 void		SG_WeightsPrint(void);              /* live table and each entry's source */
 void		SG_WeightsReload(void);             /* re-read the global weights file and
                                              * this map's playbook, in that order */
+/*
+ * Post-death caution (sg_tilt): a factor on how far out this bot is willing
+ * to START a fight, applied on top of whatever the persona already decided.
+ * 1.0 for anyone who is not a SLIPGATE bot inside its own window -- humans,
+ * legacy bots, and every bot that has not died recently. Route and
+ * willingness only: tilt never touches aim, reaction or the trigger.
+ */
+float		SG_TiltCaution(edict_t *ent);
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
 
