@@ -1941,9 +1941,14 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6,
                               mean_pairwise, entropy_bits, n_clusters,
                               outcome_summary)
 
-    dur_str = f"{duration:.1f}s (capped)" if duration_capped else f"{duration:.1f}s"
+    # The caption carries NOTHING structural (leak checklist L1/L2, and the
+    # embarrassing sequel to the set-#3 seal: the cap NOTE was removed while
+    # this line kept printing duration= -- and players=, which reads 10 on
+    # every wave and anything on a pub demo. Sets #3 and #4 both showed
+    # judges these fields; the ledger carries the taint. Map and hash only:
+    # the map is matched across the whole set by design, the hash is the
+    # blind identity.
     caption = (f"map={d['map'] or '?'}   hash={h}   "
-               f"players={n_players}   duration={dur_str}   "
                f"carries={len(windows)}")
     fig.text(0.5, 0.985, caption, ha='center', fontsize=10, weight='bold')
     notes = []
