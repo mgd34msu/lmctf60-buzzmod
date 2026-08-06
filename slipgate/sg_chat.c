@@ -16,8 +16,12 @@
  *
  *   2. PERSONALITY. Sixteen bots, four voices, keyed by the netname prefix
  *      sg_arach.c gives them ("Arach[SG]"). Public chat only: greeting,
- *      map open, taunt, grumble, celebration, match end, idle banter. Short,
- *      lowercase, rate-limited, and probabilistic so it is not a script.
+ *      map open, taunt, grumble, celebration, match end, idle banter -- plus
+ *      the five reactions the capability census found missing, which a human
+ *      has and the bots did not: surviving a big hit, watching an enemy kill
+ *      himself, being spoken to by name, conceding a capture, and getting the
+ *      flag back. Short, lowercase, rate-limited, and probabilistic so it is
+ *      not a script.
  *
  *      Three things keep sixteen mouths from reading as one. Every line is
  *      rolled, not scheduled, so a category firing is never certain. Every
@@ -75,6 +79,78 @@
 #define SG_CHAT_TAUNT_ODDS	0.30f
 #define SG_CHAT_GRUMBLE_GAP	45.0f
 #define SG_CHAT_GRUMBLE_ODDS	0.15f
+
+/*
+ * HURT AND STILL HERE. A rocket lands, the bot walks away on twenty health,
+ * and three seconds later nothing is shooting at it any more. That is when a
+ * player says "lucky shot" -- not during, when his hands are on the keys that
+ * matter, and not a minute later, when it is somebody else's fight.
+ *
+ * The reader is the damage ring sg_caco.c already keeps (four entries per
+ * client, every landed enemy hit with the number on it), so "something big
+ * landed and I am still standing" needs no sense of its own. The read idiom is
+ * Beat_HurtSince's (sg_arach.c:2380): walk the four slots, take anything newer
+ * than a stamp. Note what the ring does NOT hold -- SG_NoteDamage refuses a
+ * teammate's splash and refuses the world -- so a fall down a lift shaft
+ * cannot produce "lucky shot", which is exactly right.
+ */
+#define SG_CHAT_HURT_DMG	30      /* one hit at least this big */
+#define SG_CHAT_HURT_WAIT	3.0f    /* said this long after it, never during */
+#define SG_CHAT_HURT_CALM	3.0f    /* and only if it has stayed quiet since */
+#define SG_CHAT_HURT_ODDS	0.10f
+#define SG_CHAT_HURT_GAP	45.0f   /* one per bot per this: grumble's rate */
+
+/*
+ * SOMEBODY ELSE'S MISTAKE. An enemy walks into his own rocket, or the lava, or
+ * off the ledge, and whoever watched it says something. The watching is the
+ * whole gate -- this is a bystander line, so the speaker must have had the
+ * corpse in sight, or at least in earshot through the PHS, because a scream
+ * carries through a wall and a player laughs at what he heard as readily as at
+ * what he saw. One mouth per death, and it spends the taunt cooldown, because
+ * to the channel that is what it is.
+ */
+#define SG_CHAT_SUICIDE_ODDS	0.15f
+
+/*
+ * ADDRESSED REPLY. A human types a bot's name and nothing the order grammar
+ * recognises -- "arach where are you", "nice one arach", "arach?" -- and the
+ * bot answers. Sixteen names that answer to being called is the difference
+ * between a roster and a scoreboard; the limits below are what keep it from
+ * becoming a way to make the server talk to itself.
+ *
+ * THE DELAY IS A TYPIST, not a timer. The census's note is the whole model: a
+ * human reads the line at SG_CHAT_REPLY_READ characters a second, takes
+ * SG_CHAT_REPLY_THINK to decide there is anything worth saying, and then types
+ * his own answer at SG_CHAT_REPLY_TYPE -- a fast player's mid-game rate, which
+ * is nothing like his desk rate, because one hand is still on the mouse. The
+ * sum is clamped into MIN..MAX: under two seconds reads as a macro, over five
+ * and he is answering a conversation that has moved on.
+ */
+#define SG_CHAT_REPLY_GAP	30.0f   /* one reply per bot per this */
+#define SG_CHAT_REPLY_MIN	2.0f
+#define SG_CHAT_REPLY_MAX	5.0f
+#define SG_CHAT_REPLY_READ	25.0f   /* characters a second, reading */
+#define SG_CHAT_REPLY_TYPE	5.0f    /* characters a second, typing mid-game */
+#define SG_CHAT_REPLY_THINK	0.6f    /* the beat before the hands move */
+#define SG_CHAT_REPLY_CALM	3.0f    /* nothing has hit it for this long */
+
+/*
+ * THE FLAG EVENTS NOBODY HAD A WORD FOR. Our own capture has had a voice since
+ * the personality pools went in (SG_LINE_CAP, off Chat_Captures) and so has the
+ * steal (SG_LINE_STEAL, off the carrier belief). The two that were silent are
+ * the two a pub server is loudest about: the enemy scoring ON us, and our own
+ * flag coming back to its stand.
+ *
+ * Those two events are the same event half the time, which is why the window
+ * below exists. A capture puts the CONCEDING side's flag back on its stand --
+ * red carries blue's flag over red's line, blue's flag goes home -- so a flag
+ * that came home inside SG_CHAT_RETURN_CAPWIN of the other side scoring came
+ * home because they scored, and has already been groaned about. Only a return
+ * outside that window is a return somebody earned.
+ */
+#define SG_CHAT_CONCEDE_ODDS	0.50f
+#define SG_CHAT_RETURN_ODDS		0.40f
+#define SG_CHAT_RETURN_CAPWIN	1.0f
 
 /*
  * The roster size, used only to space the level-open and level-end staggers
@@ -169,7 +245,13 @@ static const float chat_topic_gap[SG_CHAT_TOPICS] = {
 	0.0f,       /* SG_CHAT_TOPIC_ORDER   -- capped at one ack per order */
 	8.0f,       /* SG_CHAT_TOPIC_STEAL */
 	SG_CHAT_TIMER_GAP,  /* SG_CHAT_TOPIC_TIMER */
-	2.0f        /* SG_CHAT_TOPIC_MAJOR -- short: majors are rare and urgent */
+	2.0f,       /* SG_CHAT_TOPIC_MAJOR -- short: majors are rare and urgent */
+	/*
+	 * SG_CHAT_TOPIC_REPLY. Short, because the per-bot 30-second reply gap is
+	 * already the hard limit and this only has to stop two bots named in one
+	 * breath from answering in the same frame.
+	 */
+	2.0f
 };
 
 /* ----------------------------------------------------------- personality */
@@ -182,6 +264,17 @@ enum {
 	SG_LINE_OPEN,                   /* the map just came up */
 	SG_LINE_WIN, SG_LINE_LOSE, SG_LINE_CLOSE,   /* how the match ended */
 	SG_LINE_IDLE,                   /* nothing happening, filling the air */
+	/*
+	 * The reactions the census named as missing. APPENDED, never inserted:
+	 * the row order below is this enum's order and nothing but a comment
+	 * keeps them in step, so a category slotted into the middle would shift
+	 * every row after it into the wrong category in all four voices at once.
+	 */
+	SG_LINE_HURT,                   /* took a big one and lived */
+	SG_LINE_SUICIDE,                /* an enemy killed himself, we watched */
+	SG_LINE_REPLY,                  /* a human said this bot's name */
+	SG_LINE_CONCEDE,                /* they capped on us */
+	SG_LINE_RETURN,                 /* our flag is back on its stand */
 	SG_LINE_CATS
 };
 
@@ -227,6 +320,13 @@ enum {
  * Row order is the SG_LINE_* enum's order, and nothing but this comment keeps
  * the two in step: a category added there needs a row added to all four
  * voices here, or a voice reads its neighbour's lines.
+ *
+ * A row tagged MINE is a STRUCTURE with placeholder text in it. The category
+ * is wired, gated and rate-limited exactly like every other row -- what it has
+ * not had yet is a pass over the real chat corpus, so the lines read as
+ * somebody's guess at how a player phrases it rather than as how a player
+ * phrased it. Replacing the strings is the whole job; nothing else about the
+ * category changes when they are.
  */
 static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 	/* SG_TONE_TERSE  -- arach, trace, ogre, knight.
@@ -251,31 +351,45 @@ static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 		{ "tough one", "gg wp", "ggs", "well played", "lol close call",
 		  "close one", "that was close", NULL },
 		{ "brb", "back", "break", "quiet", "still here", "waiting",
-		  "hm", NULL }
+		  "hm", NULL },
+		{ "ouch", "phew", "still up", "that hurt", "close", NULL },
+		{ "lol", "rofl", "nice one", "hah", "saved me the trouble", NULL },
+		{ "?", "what", "ok", "yeah", "busy", "here", NULL },
+		{ "damn", "no!", "they scored", "on us", "good lord", NULL },
+		{ "returned", "got it back", "flags home", "back", "clear", NULL }
 	},
-	/* SG_TONE_COCKY  -- caco, slip, fiend, spawn.
-	 * Where the TAUNT bucket landed, caps-lock and all. */
+	/* SG_TONE_COCKY  -- caco, slip, fiend, spawn */
 	{
-		{ "who wants it", "we were born ready", "dont u worry", "yoyo",
-		  "whats up", "im here", "line up", "hope you practiced", NULL },
-		{ "DIE !!", "zoom", "no u", "im fast", "bam", "lol", "sit down",
-		  "too easy", "all day", "thats mine", NULL },
-		{ "you gotta be kidding me", "ns", "sure", "lol wat", "no!",
-		  "wow", "lucky", "cheap", "whatever", NULL },
-		{ "there you go", "lol yay", "bam", "nice!", "told you",
-		  "run it back", "count it", "thats how you do it", NULL },
-		{ "im fast", "zoom", "dont u worry", "flags mine", "watch this",
-		  "coming through", "ill take that", NULL },
-		{ "here we go", "we were born ready", "lets run it", "my map",
-		  "easy map", "i live in that flag room", "this ones mine", NULL },
-		{ "gg", "that's game", "word", "really ggs!", "told you",
-		  "we owned that", "any time", NULL },
-		{ "good to take the L", "gfg", "tough one", "nah.", "gg", "lag",
-		  "rematch", "you got lucky", NULL },
-		{ "lol close call", "insane game", "phew!", "crazy!", "too close",
-		  "we let that get close", "next one wont be close", NULL },
-		{ "zoom", "brb", "somebody do something", "im getting bored",
-		  "wake up out there", "who wants a go", NULL }
+		{ "who wants it", "easy day", "im here now", "lets have it",
+		  "line up", "hope you practiced", "im back", NULL },
+		{ "sit down", "too easy", "all day", "thats mine", "get better",
+		  "outclassed", "not even close", NULL },
+		{ "lucky", "cheap", "whatever", "sure", "nice shot i guess",
+		  "wont happen twice", NULL },
+		{ "thats how you do it", "run it back", "count it", "told you",
+		  "put it up", "thats a point", NULL },
+		{ "flags mine", "watch this", "coming through", "ill take that",
+		  "say goodbye to it", NULL },
+		{ "my map", "easy map", "i live in that flag room",
+		  "lets see who shows up", "hope you know the route",
+		  "this ones mine", NULL },
+		{ "told you", "not even close", "gg easy", "we owned that",
+		  "learn the map", "any time", NULL },
+		{ "lag", "rematch", "we werent trying", "you got lucky",
+		  "next map is mine", "wont happen next map", NULL },
+		{ "too close", "we let that get close", "good game i guess",
+		  "you got lucky at the end", "next one wont be close", NULL },
+		{ "somebody do something", "im getting bored", "wake up out there",
+		  "who wants a go", "this is too easy", NULL },
+		{ "barely felt it", "is that it", "still standing", "nice try",
+		  "youll have to do better", NULL },
+		{ "lol", "did it for me", "saved me a rocket", "quality",
+		  "thats embarrassing", NULL },
+		{ "what", "yeah", "im busy", "talk later", "go on then", NULL },
+		{ "who was watching that", "sloppy", "cover the base", "come on",
+		  "that ones on us", NULL },
+		{ "got it back", "youre welcome", "flags home", "i had it",
+		  "nice try though", NULL }
 	},
 	/* SG_TONE_DRY    -- rune, phase, wizard, scrag.
 	 * Mined understatement plus the written asides nobody in the corpus
@@ -303,7 +417,16 @@ static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 		  "very nearly", NULL },
 		{ "need a mo", "be back", "i suppose", "quiet, isnt it",
 		  "i shall put the kettle on", "any moment now",
-		  "lovely weather in here", NULL }
+		  "lovely weather in here", NULL },
+		{ "ow", "that stung", "how rude", "nearly had me",
+		  "closer than i would like", NULL },
+		{ "oh dear", "how embarrassing", "well done him", "quite the exit",
+		  "marvellous", NULL },
+		{ "yes", "hm", "im listening", "one moment", "do go on", NULL },
+		{ "how disappointing", "we let that in", "must we", "hm, careless",
+		  "somebody was asleep", NULL },
+		{ "returned", "flag is home", "recovered", "back where it belongs",
+		  "there we are", NULL }
 	},
 	/* SG_TONE_MECH   -- gate, field, vore, shal.
 	 * A character rather than an imitation, so it keeps its written
@@ -329,7 +452,17 @@ static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 		{ "gg wp", "margin minimal", "close result", "within tolerance",
 		  "narrow finish", "closely contested", NULL },
 		{ "BASE IS CLEAR", "idle", "no contacts", "awaiting contact",
-		  "power conserved", "scan clear", "holding position", NULL }
+		  "power conserved", "scan clear", "holding position", NULL },
+		{ "damage taken", "integrity holding", "impact absorbed",
+		  "still operational", "armor compromised", NULL },
+		{ "self terminated", "no action required", "target removed itself",
+		  "logged", "efficient", NULL },
+		{ "acknowledged", "listening", "standing by", "occupied",
+		  "go ahead", NULL },
+		{ "objective lost", "enemy scored", "defense failed",
+		  "score against", "recalibrating", NULL },
+		{ "flag recovered", "objective home", "asset returned",
+		  "flag secured", "position restored", NULL }
 	}
 };
 
@@ -387,6 +520,26 @@ typedef struct
 	/* idle banter */
 	float		next_idle;      /* next ATTEMPT, which is then rolled */
 	float		combat_at;      /* last moment this bot was in a fight */
+
+	/*
+	 * The big hit that landed and did not kill. hurt_seen is the newest ring
+	 * stamp already accounted for, so one hit is noticed once however many
+	 * frames it stays in the four-slot ring; hurt_at is the one being waited
+	 * out, and zero means nothing is pending.
+	 */
+	float		hurt_at;
+	float		hurt_seen;
+	float		next_hurt;
+
+	/*
+	 * The reply owed to a human who used this bot's name. reply_line points
+	 * into chat_line[][][] and nowhere else -- picked at hearing time so its
+	 * length can be typed at a human rate -- and NULL means nothing is owed.
+	 */
+	const char	*reply_line;
+	float		reply_at;
+	qboolean	reply_team;     /* answer on the channel he used */
+	float		next_reply;
 
 	/* the standing order, if any */
 	int			order_role;     /* SG_CHAT_ROLE_NONE when none */
@@ -528,6 +681,16 @@ static qboolean	chat_flagpos_ok[2];
 /* team events watched off common knowledge (the scoreboard, the HUD icon) */
 static int	chat_lastscore[2];      /* team capture totals, per team-1 */
 static int	chat_lastcarrier[2];
+
+/*
+ * Our own flag on its own stand, per team-1, and when the other side last
+ * scored on us. Both are HUD-level facts -- the score line shows a taken flag
+ * and the scoreboard shows the capture -- so believing either needs no
+ * sighting from anybody. The second exists only to tell the two ways a flag
+ * comes home apart; see SG_CHAT_RETURN_CAPWIN.
+ */
+static qboolean	chat_flaghome[2];
+static float	chat_conceded_at[2];
 
 /* ------------------------------------------------------------- utilities */
 
@@ -1137,6 +1300,87 @@ static qboolean Chat_EnemySeenNear(int team, vec3_t org)
 			return true;
 	}
 	return false;
+}
+
+/* ------------------------------------------------------ the damage ring
+ *
+ * sg_caco.c books every landed hit on one of our bots in a four-slot ring per
+ * client (sg_local.h:143), with the attacker, the number and the moment. Two
+ * questions are asked of it here and both are Beat_HurtSince's question
+ * (sg_arach.c:2380) with a different filter on it: "has anything landed since
+ * X" and "has anything BIG landed since X".
+ *
+ * The idiom is copied rather than shared for the reason the ring exists at
+ * all: it is the module boundary. Exporting a four-line loop out of sg_arach.c
+ * so this file could call it would put a private beat helper in a public header
+ * and buy nothing.
+ *
+ * What the ring does not hold is as load-bearing as what it does. SG_NoteDamage
+ * refuses a hit with no client attacker, refuses a teammate's splash, and
+ * refuses the world -- so a fall, the lava and a crusher are all invisible
+ * here. That is correct for both readers: "lucky shot" is a thing said about a
+ * shooter, and being in contact means somebody is shooting at you.
+ */
+
+static qboolean Chat_HurtSince(edict_t *e, float since)
+{
+	int ci, k;
+
+	if (!e || !e->client)
+		return false;
+	ci = (int)(e->client - game.clients);
+	if (ci < 0 || ci >= SG_DMG_CLIENTS)
+		return false;
+	for (k = 0; k < SG_DMG_RING; k++)
+		if (sg_caco_damage[ci][k].attacker >= 0 &&
+		    sg_caco_damage[ci][k].time > since)
+			return true;
+	return false;
+}
+
+/* when the newest hit of at least `dmg` landed, 0.0 for none since `since` */
+static float Chat_BigHitSince(edict_t *e, int dmg, float since)
+{
+	float	best = 0.0f;
+	int		ci, k;
+
+	if (!e || !e->client)
+		return 0.0f;
+	ci = (int)(e->client - game.clients);
+	if (ci < 0 || ci >= SG_DMG_CLIENTS)
+		return 0.0f;
+	for (k = 0; k < SG_DMG_RING; k++)
+	{
+		sg_damage_hit_t *h = &sg_caco_damage[ci][k];
+
+		if (h->attacker < 0 || h->damage < dmg)
+			continue;
+		if (h->time <= since || h->time <= best)
+			continue;
+		best = h->time;
+	}
+	return best;
+}
+
+/*
+ * Busy hands. A bot carrying a flag is running, a bot that has been hit inside
+ * the window is fighting, and a bot with a fresh enemy sighting on its own
+ * side's books is about to be. None of the three stops to type.
+ *
+ * The carry test is EF_FLAG1/EF_FLAG2 on the player entity, which is how
+ * sg_caco.c finds carriers (Caco_ScanCarriers) and how the HUD draws them.
+ */
+static qboolean Chat_Busy(edict_t *e)
+{
+	if (!e || !e->client)
+		return true;
+	if (e->s.effects & (EF_FLAG1 | EF_FLAG2))
+		return true;
+	if (e->pain_debounce_time > level.time)
+		return true;
+	if (Chat_HurtSince(e, level.time - SG_CHAT_REPLY_CALM))
+		return true;
+	return Chat_EnemySeenNear(e->client->ctf.teamnum, e->s.origin);
 }
 
 /* ------------------------------------------------------- item callouts */
@@ -2375,6 +2619,73 @@ static int Chat_Captures(int team)
 }
 
 /*
+ * THEY SCORED ON US. The mirror of the capture cheer, and the half of the
+ * moment nobody had written: sixteen bots that celebrate their own captures
+ * and say nothing at all when the other side scores are sixteen bots that are
+ * only watching their own half of the game.
+ *
+ * It spends the grumble cooldown rather than one of its own, because that is
+ * what it is -- the same mouth, the same register, and the same reason for
+ * wanting three quarters of a minute between two of them.
+ */
+static void Chat_Conceded(int team)
+{
+	edict_t		*sp = Chat_Speaker(team);
+	const char	*line;
+	int			cl;
+
+	if (!sp)
+		return;
+	cl = Chat_ClientNum(sp);
+	if (cl < 0 || cl >= game.maxclients)
+		return;
+	if (level.time < chat_bot[cl].next_grumble)
+		return;
+	if (random() >= SG_CHAT_CONCEDE_ODDS * Chat_Chatty(cl))
+		return;
+
+	line = Chat_Pick(Chat_Tone(sp), SG_LINE_CONCEDE);
+	if (!line)
+		return;                         /* empty pool: nothing to say */
+	if (Chat_SayPooled(sp, line, 0))
+		chat_bot[cl].next_grumble = level.time + SG_CHAT_GRUMBLE_GAP;
+}
+
+/*
+ * OUR FLAG IS BACK. Said to the team rather than to the server: a return is
+ * information -- it is the difference between "we are defending" and "we are
+ * playing" -- where a capture is a scoreboard event everybody already watched.
+ *
+ * It rides SG_CHAT_TOPIC_CACO, which is the flag lane. sg_caco.c keeps its own
+ * queue slots and only shares the topic's team stamp, whose gap is zero, so
+ * nothing here can eat one of its flag callouts or be eaten by one; the
+ * per-bot say_team budget is the limit that actually applies.
+ */
+static void Chat_Returned(int team)
+{
+	edict_t		*sp = Chat_Speaker(team);
+	const char	*line;
+	int			cl;
+
+	if (!sp)
+		return;
+	cl = Chat_ClientNum(sp);
+	if (cl < 0 || cl >= game.maxclients)
+		return;
+	if (random() >= SG_CHAT_RETURN_ODDS * Chat_Chatty(cl))
+		return;
+
+	line = Chat_Pick(Chat_Tone(sp), SG_LINE_RETURN);
+	if (!line)
+		return;
+	/* burned at queue time for the reason the steal callout is: Chat_Queue
+	 * copies the text into its slot and the pool pointer is gone by the time
+	 * Chat_Flush speaks it */
+	Chat_Queue(sp, team, SG_CHAT_TOPIC_CACO, line);
+	Chat_Note(line);
+}
+
+/*
  * Captures and who holds a flag are on everyone's screen -- the scoreboard
  * and the HUD carrier icon -- so celebrating either leaks nothing. A steal
  * goes to the team as information; a capture goes public, because everybody
@@ -2383,6 +2694,13 @@ static int Chat_Captures(int team)
  * The stored total is overwritten every frame, not only when it rises: a
  * capturer who disconnects takes his captures off the board with him, and a
  * counter that only ever climbed would fire again on the next one.
+ *
+ * TWO PASSES, and the split is load-bearing. A capture puts the conceding
+ * side's flag back on its stand in the same frame it moves the score, and the
+ * return pass has to be able to see that the concession happened -- to BOTH
+ * sides -- before it decides whether a flag coming home is worth cheering.
+ * One pass would let blue's capture stamp red's concession after red's flag
+ * had already been examined, and red would cheer a return it did not earn.
  */
 static void Chat_TeamEvents(void)
 {
@@ -2404,6 +2722,10 @@ static void Chat_TeamEvents(void)
 			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_CAP) : NULL;
 			if (sp && line)
 				Chat_SayPooled(sp, line, 0);
+
+			/* and the other side has a word for it too */
+			chat_conceded_at[1 - t] = level.time;
+			Chat_Conceded(2 - t);
 		}
 		chat_lastscore[t] = score[t];
 
@@ -2427,14 +2749,123 @@ static void Chat_TeamEvents(void)
 		}
 		chat_lastcarrier[t] = carrier;
 	}
+
+	/*
+	 * The return pass. sg_caco_team_belief.flag[t] is team t+1's OWN flag
+	 * (sg_local.h: [0] red, [1] blue) and its state is read straight off
+	 * ctf_flagathome by Caco_ScanFlags -- HUD knowledge, not a sighting.
+	 */
+	for (t = 0; t < 2; t++)
+	{
+		qboolean home = (sg_caco_team_belief.flag[t].state == SG_FLAG_HOME)
+		              ? true : false;
+
+		if (home && !chat_flaghome[t] &&
+		    level.time - chat_conceded_at[t] > SG_CHAT_RETURN_CAPWIN)
+			Chat_Returned(t + 1);
+		chat_flaghome[t] = home;
+	}
+}
+
+/*
+ * A death nobody else can take credit for. Two shapes, and the mod is only
+ * half the answer:
+ *
+ *   The map killed him. MOD_LAVA, MOD_SLIME, MOD_WATER, MOD_FALLING,
+ *   MOD_CRUSH, MOD_TRIGGER_HURT and the console MOD_SUICIDE are the deaths
+ *   the game's own obituary phrases without an attacker.
+ *
+ *   He killed himself with something of his own. The mod then names a weapon
+ *   -- his rocket, his grenade, the barrel he shot -- and what identifies it
+ *   is the attacker field pointing back at him, or at the world.
+ *
+ * MOD_TELEFRAG is deliberately absent from the list: somebody else stood on
+ * the pad. meansOfDeath arrives with the friendly-fire bit still set on it,
+ * so it is masked here the way SG_NoteDamage masks it.
+ */
+static qboolean Chat_SelfInflicted(edict_t *victim, edict_t *attacker, int mod)
+{
+	switch (mod & ~MOD_FRIENDLY_FIRE)
+	{
+	case MOD_SUICIDE:
+	case MOD_FALLING:
+	case MOD_LAVA:
+	case MOD_SLIME:
+	case MOD_WATER:
+	case MOD_CRUSH:
+	case MOD_TRIGGER_HURT:
+		return true;
+	default:
+		break;
+	}
+	return (!attacker || attacker == victim || attacker == world)
+	     ? true : false;
+}
+
+/*
+ * BYSTANDER. One of theirs has just killed himself and one of OURS watched it
+ * happen. Everything about the line is off that watching: the speaker must
+ * have had the body in sight, or at least inside its PHS -- a scream carries
+ * through a wall, and a player laughs at what he heard as readily as at what
+ * he saw -- and exactly one bot on that side gets to say it, because two bots
+ * laughing at one death is the tell this whole file is built around avoiding.
+ *
+ * The first candidate whose taunt cooldown is clear wins, which is the same
+ * "prefer a mouth that is free" rule Chat_Speaker applies to callouts. The
+ * roll comes after the pick rather than before it, so a server where the only
+ * witness happens to be on cooldown stays quiet instead of hunting for a
+ * second one.
+ */
+static void Chat_Bystander(edict_t *victim)
+{
+	edict_t		*seer = NULL;
+	const char	*line;
+	int			team, i, cl;
+
+	if (!victim || !victim->client)
+		return;
+	team = victim->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return;
+
+	for (i = 0; i < game.maxclients && !seer; i++)
+	{
+		edict_t	*e = g_edicts + 1 + i;
+		vec3_t	eye;
+
+		if (!Chat_OurBot(e) || !Chat_Playing(e))
+			continue;
+		if (e->client->ctf.teamnum == team)
+			continue;               /* his own side does not find it funny */
+		if (level.time < chat_bot[i].next_taunt)
+			continue;
+
+		VectorCopy(e->s.origin, eye);
+		eye[2] += e->viewheight;
+		if (!Chat_Visible(e, victim) && !gi.inPHS(eye, victim->s.origin))
+			continue;               /* neither saw it nor heard it */
+		seer = e;
+	}
+	if (!seer)
+		return;
+
+	cl = Chat_ClientNum(seer);
+	if (cl < 0 || cl >= game.maxclients)
+		return;
+	if (random() >= SG_CHAT_SUICIDE_ODDS * Chat_Chatty(cl))
+		return;
+
+	line = Chat_Pick(Chat_Tone(seer), SG_LINE_SUICIDE);
+	if (!line)
+		return;                     /* empty pool: nothing to say */
+	if (Chat_SayPooled(seer, line, 0))
+		chat_bot[cl].next_taunt = level.time + SG_CHAT_TAUNT_GAP;
 }
 
 void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 {
 	const char	*line;
 	int			cl;
-
-	(void)mod;                          /* the taunt does not read the weapon */
 
 	if (attacker && attacker != victim && Chat_OurBot(attacker) &&
 	    Chat_Playing(attacker))
@@ -2474,6 +2905,15 @@ void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 		if (cl >= 0 && cl < game.maxclients)
 			chat_bot[cl].combat_at = level.time;
 	}
+
+	/*
+	 * And somebody else's mistake, watched. The taunt above is about what a
+	 * bot DID; this one is about what it saw, which is why it is off the
+	 * victim and the mod rather than off the attacker.
+	 */
+	if (victim && victim->inuse && victim->client &&
+	    Chat_SelfInflicted(victim, attacker, mod))
+		Chat_Bystander(victim);
 }
 
 /*
@@ -2725,6 +3165,91 @@ static void Chat_Idle(void)
 		line = Chat_Pick(Chat_Tone(e), SG_LINE_IDLE);
 		if (line)
 			Chat_SayPooled(e, line, 0);
+	}
+}
+
+/*
+ * HURT AND STILL HERE. The other half of SG_ChatDeath's grumble: a bot says
+ * something when it dies, and until now said nothing at all when it nearly
+ * did. "ouch" three seconds after a rocket you walked away from is one of the
+ * most ordinary noises on a pub server.
+ *
+ * The shape is Chat_Idle's, and for the same reason -- this line carries no
+ * information, so it has to stay out of the way of everything that does.
+ *
+ *   NOTICING is off the damage ring. Chat_BigHitSince returns the newest hit
+ *   of at least SG_CHAT_HURT_DMG that is newer than the stamp this bot has
+ *   already accounted for, so one rocket is noticed once no matter how many
+ *   frames it sits in the four-slot ring, and a second bigger hit while the
+ *   first is still being waited out simply becomes the one it mentions.
+ *
+ *   WAITING is what makes it a reaction rather than a scream. Nothing is said
+ *   for SG_CHAT_HURT_WAIT, and then only if the fight has actually ended --
+ *   nothing landed in SG_CHAT_HURT_CALM, no pain still on the clock, no fresh
+ *   enemy on the team's books nearby. A bot narrating its own health mid
+ *   firefight is the tell.
+ *
+ *   AND THE ATTEMPT IS SPENT either way. A bot held quiet by a long fight
+ *   must not open its mouth about a rocket from forty seconds ago the instant
+ *   the fight ends; the grievance expires with the moment.
+ */
+static void Chat_Hurt(void)
+{
+	int i;
+
+	if (level.intermissiontime)
+		return;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t			*e = g_edicts + 1 + i;
+		sg_chat_bot_t	*cb = &chat_bot[i];
+		const char		*line;
+		float			hit;
+
+		if (!Chat_OurBot(e) || !Chat_Playing(e))
+		{
+			/*
+			 * Dead, gone, or a corpse: "and I lived" is no longer true.
+			 * The stamp is dragged up to now as well, because the ring is
+			 * not cleared by dying -- without this, the rocket that KILLED
+			 * the bot is still sitting in it at respawn, older than the
+			 * wait, and the bot walks out of the gate saying "still up"
+			 * about the hit that just killed it.
+			 */
+			cb->hurt_at = 0.0f;
+			cb->hurt_seen = level.time;
+			continue;
+		}
+
+		hit = Chat_BigHitSince(e, SG_CHAT_HURT_DMG, cb->hurt_seen);
+		if (hit > 0.0f)
+		{
+			cb->hurt_seen = hit;
+			cb->hurt_at = hit;
+		}
+
+		if (cb->hurt_at <= 0.0f)
+			continue;
+		if (level.time - cb->hurt_at < SG_CHAT_HURT_WAIT)
+			continue;
+
+		cb->hurt_at = 0.0f;             /* the moment is spent, win or lose */
+
+		if (level.time < cb->next_hurt)
+			continue;
+		if (e->pain_debounce_time > level.time ||
+		    Chat_HurtSince(e, level.time - SG_CHAT_HURT_CALM) ||
+		    Chat_EnemySeenNear(e->client->ctf.teamnum, e->s.origin))
+			continue;                   /* still in it */
+		if (random() >= SG_CHAT_HURT_ODDS * Chat_Chatty(i))
+			continue;
+
+		line = Chat_Pick(Chat_Tone(e), SG_LINE_HURT);
+		if (!line)
+			continue;                   /* empty pool: nothing to say */
+		if (Chat_SayPooled(e, line, 0))
+			cb->next_hurt = level.time + SG_CHAT_HURT_GAP;
 	}
 }
 
@@ -3215,10 +3740,173 @@ static void Chat_HearItemCall(edict_t *speaker,
 		           take ? "take" : "timer", team, respawn, back_at);
 }
 
+/* ------------------------------------------------------ addressed replies
+ *
+ * BEING SPOKEN TO IS NOT BEING ORDERED. The order grammar reads the FIRST
+ * token because "arach defend" is how an order gets typed mid-fight. Being
+ * talked to is not typed that way: "arach?", "hey arach", "nice one arach"
+ * are all somebody addressing that bot and only one of them puts the name in
+ * front. So the reply looks for a name anywhere in the line.
+ *
+ * WHICH IS A PROBLEM, because half the roster's names are ordinary CTF
+ * vocabulary. gate, field, rune, spawn, slip and trace all turn up in lines
+ * that are about the map and not about a bot -- "quad at the gate", "rune is
+ * up", "watch the spawn" -- and a bot answering "?" to those is the noise this
+ * file spends three thousand lines avoiding.
+ *
+ * Two word lists sort it out, and they are deliberately about GRAMMAR rather
+ * than about a blocklist of phrases:
+ *
+ *   A name after a locator ("at the gate", "by the rune") is a place. The
+ *   speaker is naming where something is.
+ *
+ *   A name in front of a state word ("rune is up", "gate was clear") is a
+ *   subject. The speaker is telling his team a fact about a thing.
+ *
+ * Anything else that names one of ours is taken as addressing it. The cost of
+ * the rule is the occasional real question phrased as a statement going
+ * unanswered, which is the right way round: a bot that misses one is quiet,
+ * and a bot that answers the map is broken.
+ */
+
+static const char *chat_locator[] = {
+	"at", "the", "by", "near", "on", "in", "to", "from", "our", "their",
+	"a", "an", "of", "past", "behind", "under", "over", NULL
+};
+
+static const char *chat_stateword[] = {
+	"is", "was", "are", "were", "up", "down", "gone", "taken", "back",
+	"respawn", "respawns", "spawns", "has", "had", NULL
+};
+
+static qboolean Chat_InList(const char *w, const char **list)
+{
+	int i;
+
+	for (i = 0; list[i]; i++)
+		if (strcmp(w, list[i]) == 0)
+			return true;
+	return false;
+}
+
+/*
+ * One of ours, named somewhere in this line by a human on its own team, in a
+ * position that reads as address rather than as description. NULL for none.
+ */
+static edict_t *Chat_Mentioned(char tok[SG_CHAT_MAXTOK][SG_CHAT_TOKLEN], int n,
+                               int team)
+{
+	int i, k;
+
+	for (i = 0; i < n; i++)
+	{
+		if (i > 0 && Chat_InList(tok[i - 1], chat_locator))
+			continue;               /* "at the gate": a place, not a bot */
+		if (i + 1 < n && Chat_InList(tok[i + 1], chat_stateword))
+			continue;               /* "rune is up": a thing, not a bot */
+
+		for (k = 0; k < game.maxclients; k++)
+		{
+			edict_t *e = g_edicts + 1 + k;
+
+			if (!Chat_OurBot(e) || e->client->ctf.teamnum != team)
+				continue;
+			if (Chat_NameIs(e, tok[i]))
+				return e;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * Book the reply. The line is PICKED here rather than at delivery so that its
+ * own length can be typed at a human rate -- which means the reuse guard is
+ * consulted a few seconds before the line lands, the same trade the steal
+ * callout makes in Chat_TeamEvents and for the same reason: the alternative is
+ * not knowing how long the thing is.
+ *
+ * The gap runs from the moment the bot was SPOKEN TO, not from the answer, so
+ * a human who says the same name three times in ten seconds gets one reply
+ * either way.
+ */
+static void Chat_ReplyBook(edict_t *bot, const char *heard, qboolean teamchat)
+{
+	const char	*line;
+	float		delay;
+	int			cl;
+
+	if (!bot || !Chat_OurBot(bot) || !Chat_Playing(bot))
+		return;
+	cl = Chat_ClientNum(bot);
+	if (cl < 0 || cl >= game.maxclients)
+		return;
+	if (chat_bot[cl].reply_line)
+		return;                     /* already answering: once is once */
+	if (level.time < chat_bot[cl].next_reply)
+		return;
+	if (Chat_Busy(bot))
+		return;                     /* carrying, or being shot at */
+
+	line = Chat_Pick(Chat_Tone(bot), SG_LINE_REPLY);
+	if (!line)
+		return;                     /* empty pool: stay quiet */
+
+	delay = SG_CHAT_REPLY_THINK
+	      + (float)strlen(heard ? heard : "") / SG_CHAT_REPLY_READ
+	      + (float)strlen(line) / SG_CHAT_REPLY_TYPE;
+	if (delay < SG_CHAT_REPLY_MIN)
+		delay = SG_CHAT_REPLY_MIN;
+	else if (delay > SG_CHAT_REPLY_MAX)
+		delay = SG_CHAT_REPLY_MAX;
+
+	chat_bot[cl].reply_line = line;
+	chat_bot[cl].reply_at = level.time + delay;
+	chat_bot[cl].reply_team = teamchat;
+	chat_bot[cl].next_reply = level.time + SG_CHAT_REPLY_GAP;
+}
+
+/*
+ * Deliver it, on the channel it was spoken on. Both routes are the ordinary
+ * ones and both can refuse: the public say budget can eat a reply and so can
+ * the team budget, and a refused reply is simply not said. That is the honest
+ * outcome -- a bot with a callout already in its mouth is a bot whose hands
+ * were full -- and it is why the reply is a courtesy rather than a promise.
+ */
+static void Chat_ReplyFlush(void)
+{
+	int i;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t			*e = g_edicts + 1 + i;
+		sg_chat_bot_t	*cb = &chat_bot[i];
+		const char		*line = cb->reply_line;
+
+		if (!line || level.time < cb->reply_at)
+			continue;
+
+		cb->reply_line = NULL;      /* consumed however it goes */
+		cb->reply_at = 0.0f;
+
+		if (!Chat_OurBot(e) || !Chat_Playing(e))
+			continue;               /* died in the middle of typing it */
+		if (Chat_Busy(e))
+			continue;               /* a fight started: he stopped typing */
+
+		if (cb->reply_team)
+		{
+			if (SG_ChatSayTeam(e, line, SG_CHAT_TOPIC_REPLY))
+				Chat_Note(line);
+		}
+		else
+			Chat_SayPooled(e, line, 0);
+	}
+}
+
 void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 {
 	char		tok[SG_CHAT_MAXTOK][SG_CHAT_TOKLEN];
-	edict_t		*named = NULL, *acker = NULL;
+	edict_t		*named = NULL, *acker = NULL, *mentioned = NULL;
 	qboolean	broadcast = false, clear = false, addressed = false;
 	int			n, i, idx = 0, role, team, ack;
 
@@ -3275,13 +3963,35 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 		idx = 0;
 	}
 
+	/*
+	 * Who, if anybody, this line is TALKING TO, as opposed to who it is
+	 * ordering. The addressee above is the first token because that is how an
+	 * order is typed; this looks at the whole line. Worked out before either
+	 * of the not-an-order exits below, because both of them are the reply's
+	 * cue and only one of them ever reaches the verb parser.
+	 *
+	 * Deliberately NOT short-circuited on `named`. The order parser's first
+	 * token match has no grammar filter on it, so "gate is up" -- a human
+	 * calling the power screen -- makes Gate the addressee of an order that
+	 * turns out not to exist, and answering it would be the exact false
+	 * positive Chat_Mentioned's two word lists are there to catch.
+	 */
+	mentioned = Chat_Mentioned(tok, n, team);
+
 	/* an unaddressed order is only an order on the team channel */
 	if (!addressed && !teamchat)
+	{
+		Chat_ReplyBook(mentioned, msg, teamchat);
 		return;
+	}
 
 	role = Chat_Verb(tok, n, idx, &clear);
 	if (role == SG_CHAT_ROLE_NONE && !clear)
+	{
+		/* named, and nothing the grammar knows: he is being spoken to */
+		Chat_ReplyBook(mentioned, msg, teamchat);
 		return;
+	}
 
 	if (named)
 	{
@@ -3408,6 +4118,10 @@ void SG_ChatFrame(void)
 	Chat_TeamEvents();
 	Chat_Countdown();
 	Chat_LevelEndFlush();
+	/* ahead of the fillers: a human is waiting on this one, and a bot that
+	 * spends its say budget on banter first has ignored him */
+	Chat_ReplyFlush();
+	Chat_Hurt();
 	Chat_Idle();                    /* last: everything above may silence it */
 	Chat_Flush();
 	/* after Chat_Flush: a take call queued THIS frame arms its clock in there,
@@ -3467,4 +4181,12 @@ void SG_ChatReset(void)
 	chat_lastscore[0] = Chat_Captures(CTF_TEAM_RED);
 	chat_lastscore[1] = Chat_Captures(CTF_TEAM_BLUE);
 	chat_lastcarrier[0] = chat_lastcarrier[1] = -1;
+
+	/*
+	 * Both flags start on their stands, and saying so here rather than
+	 * letting the first frame discover it is what stops a level opening with
+	 * two teams cheering a return that never happened.
+	 */
+	chat_flaghome[0] = chat_flaghome[1] = true;
+	chat_conceded_at[0] = chat_conceded_at[1] = 0.0f;
 }

@@ -70,7 +70,15 @@
  * shells", so the channel should too.
  */
 #define SG_CHAT_TOPIC_MAJOR			8
-#define SG_CHAT_TOPICS				9
+/*
+ * Answering a human who typed this bot's name and no order the grammar
+ * knows. Its own lane rather than ORDER's, which is exempt from the per-bot
+ * say_team budget: an acknowledgement earns that exemption by being useless
+ * four seconds late, and small talk does not. A reply that the budget eats is
+ * a reply nobody was owed.
+ */
+#define SG_CHAT_TOPIC_REPLY			9
+#define SG_CHAT_TOPICS				10
 
 /* ------------------------------------------------- the integrator's calls
  *
@@ -123,6 +131,14 @@ edict_t		*SG_ChatEscortTarget(edict_t *bot);
  * through here, so that path dedupes against the clock it is about to be
  * handed by Chat_ArmClock; see the war story over Chat_HearItemCall.
  *
+ *     It also feeds the ADDRESSED REPLY. A line that names one of ours and
+ *     carries no verb the grammar recognises is somebody talking TO that
+ *     bot, and the bot answers once, on the channel it was spoken on, after
+ *     a delay that models a typist. One reply per bot per 30 seconds, never
+ *     while carrying a flag or in contact, and never to another bot -- the
+ *     FL_BOT refusal above is what makes the last one structural rather
+ *     than a rule somebody has to remember.
+ *
  *     Wired in Cmd_Say_f (g_cmds.c), right after the message text is
  *     assembled into `temp`, as SG_ChatHear(ent, temp, team). It is called
  *     directly rather than through the legacy bot's chat hook so the team
@@ -130,7 +146,10 @@ edict_t		*SG_ChatEscortTarget(edict_t *bot);
  *     an addressee before it was obeyed.
  *
  * SG_ChatDeath is the taunt/grumble feed; it takes the victim, the attacker
- * and the means of death.
+ * and the means of death. The means of death is read now rather than
+ * ignored: a death nobody can take credit for -- the lava, the ledge, his
+ * own rocket -- gets a BYSTANDER line out of one enemy who watched it, which
+ * is the one death a pub server always has a word for.
  *
  *     Wired in player_die (p_client.c) as
  *     SG_ChatDeath(self, attacker, meansOfDeath). It fed nothing for several
