@@ -239,6 +239,7 @@ typedef struct sg_bot_s
 	int			fake_ping;          /* synthetic ping base, rolled at join (owner: 5-15, near-local) */
 	int			prev_seed;          /* the seed most recently LEFT (sg_nobacktrack) */
 	float		prev_seed_time;
+	float		term_brake;         /* terminal cornering: throttle vs alignment */
 	float		breather_until;     /* sg_breather: sub-max throttle window */
 	float		breather_next;      /* next roll of the breather dice */
 	/* sg_spawnbeat: the orientation beat a player takes on respawn */
@@ -3730,6 +3731,8 @@ rally_done:;
 		}
 	}
 
+	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
+
 	/* where am I on the rune? */
 	VectorSubtract(e->s.origin, bot->last_origin, d);
 	if (bot->seed < 0 || VectorLength(d) > 48.0f)
@@ -6639,6 +6642,43 @@ no_hold:;
 						aim[2] = gf->s.origin[2];
 					}
 				}
+
+				/*
+				 * THE TERMINAL BRAKE (set-#4 forensics, wave 397: Field at
+				 * its own stand, flag home, 118 seconds of full-sprint orbit
+				 * at radius ~90). Pure physics: at 300 u/s under sg_turnrate
+				 * the minimum turn radius IS that orbit -- a missile circling
+				 * a target it aims at perfectly, and CAPTURE THROUGH feeds it
+				 * by projecting the aim along an arrival line that rotates
+				 * with the body. The human answer at every stand: brake into
+				 * the turn. Throttle follows alignment inside 220u -- badly
+				 * misaligned means slow, slow means tight, tight means the
+				 * spiral ends in a touch. sg_termbrake 0 restores the orbit
+				 * for A/B; the 5v0 canary's partial conversions are the
+				 * standing instrument that has flagged this for 25 waves.
+				 */
+				if ((role == SG_ROLE_CARRY || role == SG_ROLE_ATTACK) &&
+				    gi.cvar("sg_termbrake", "1", 0)->value)
+				{
+					vec3_t tb, tv;
+					float tbl, spd2;
+
+					VectorSubtract(gf->s.origin, e->s.origin, tb);
+					tb[2] = 0.0f;
+					tbl = VectorLength(tb);
+					VectorCopy(e->velocity, tv);
+					tv[2] = 0.0f;
+					spd2 = VectorLength(tv);
+					if (tbl > 1.0f && tbl < 220.0f && spd2 > 120.0f)
+					{
+						float al = DotProduct(tv, tb) / (spd2 * tbl);
+
+						if (al < 0.50f)
+							bot->term_brake = 0.30f;
+						else if (al < 0.85f)
+							bot->term_brake = 0.55f;
+					}
+				}
 				if (role == SG_ROLE_ATTACK && bot->seed >= 0)
 				{
 					vec3_t fd4;
@@ -7967,6 +8007,14 @@ no_hold:;
 			{
 				cmd.forwardmove = (short)(cmd.forwardmove * 0.30f);
 				cmd.sidemove = (short)(cmd.sidemove * 0.30f);
+			}
+
+			/* the terminal brake: cornering throttle at the stands,
+			 * same final-word slot for the same reason */
+			if (bot->term_brake < 1.0f)
+			{
+				cmd.forwardmove = (short)(cmd.forwardmove * bot->term_brake);
+				cmd.sidemove = (short)(cmd.sidemove * bot->term_brake);
 			}
 
 			ClientThink(e, &cmd);
