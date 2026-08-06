@@ -1324,6 +1324,7 @@ static float Rune_RoleFactor(int role, int entnum)
  * its bots strictly serially, so a file-static carries it into the
  * detour arithmetic without widening every signature on the path */
 static int sg_cur_role;
+static int sg_cur_team;      /* for the shelf-cliff pricing */
 
 /*
  * The DANGER dimension: deaths teach the map. Team-indexed -- a corridor
@@ -2083,6 +2084,24 @@ static float Surface_At(int seed, const sg_weights_t *w,
 
 		if (ao != 1.0f)
 			v = w->objective * ao * (float)goal_field[seed];
+	}
+
+	/*
+	 * THE SHELF PAYS ITS CLIFF (sg_shelfcost, steal-genesis study): an
+	 * attacker pricing a seed under the enemy stand pays the measured
+	 * climb-back asymmetry RL_DROP never charged. 101 attempts on that
+	 * floor, 91% dead in 1.2s, zero steals -- removing a zero-yield room
+	 * cannot cost caps. Zero everywhere on flat-stand maps.
+	 */
+	if (sg_cur_role == SG_ROLE_ATTACK &&
+	    gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
+	{
+		int ti9 = (sg_cur_team == CTF_TEAM_RED) ? 0 : 1;
+
+		if (sg_fields.shelf_cliff[ti9] &&
+		    sg_fields.shelf_cliff[ti9][seed] > 0)
+			v += gi.cvar("sg_shelfcost", "0", 0)->value *
+			     (float)sg_fields.shelf_cliff[ti9][seed];
 	}
 
 	/* tactics mode: the waypoint was scored with the full surface at
@@ -4524,6 +4543,7 @@ rally_done:;
 	}
 
 	sg_cur_role = role;             /* for the rune identity pricing */
+	sg_cur_team = team;
 	sg_cur_health = e->health;
 	sg_cur_danger = sg_danger[team - 1];    /* the danger dimension, ours */
 	/* downbeat live: attackers march, detours wait for the next bar */

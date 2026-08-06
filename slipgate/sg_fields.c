@@ -729,6 +729,61 @@ qboolean Fields_Setup(rune_t *r)
 	Field_FromOne(r, sg_fields.to_red_flag, sg_fields.red_flag_seed);
 	Field_FromOne(r, sg_fields.to_blue_flag, sg_fields.blue_flag_seed);
 
+	/*
+	 * THE SUB-STAND SHELF (steal-genesis study, 2026-08-06). mactf06
+	 * film: 101 of 280 close approaches terminated on the floor 141u
+	 * BELOW the flag platform -- 91% died there in ~1.2s, zero steals
+	 * ever -- because RL_DROP prices every drop at +150 while the climb
+	 * back costs ~1275. Per team, for every seed within 350u horizontal
+	 * of the ENEMY stand and 96u+ below it, store the measured cliff:
+	 * this seed's static cost to that flag minus the best platform-level
+	 * seed's inside the same radius. Flat stands store nothing -- lmctf22
+	 * and lmctf44 are the built-in null arms. Consumed by the ATTACK
+	 * pricing behind sg_shelfcost (default 0).
+	 */
+	{
+		int t;
+
+		for (t = 0; t < 2; t++)
+		{
+			int enemy_seed = t ? sg_fields.red_flag_seed
+			                   : sg_fields.blue_flag_seed;
+			int *sf = t ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
+			float *fo = r->seeds[enemy_seed].origin;
+			int i, best_plat = 0x7fffffff;
+
+			sg_fields.shelf_cliff[t] = Field_Alloc(r);
+			for (i = 0; i < r->hdr.num_seeds; i++)
+				sg_fields.shelf_cliff[t][i] = 0;
+
+			for (i = 0; i < r->hdr.num_seeds; i++)
+			{
+				float dx = r->seeds[i].origin[0] - fo[0];
+				float dy = r->seeds[i].origin[1] - fo[1];
+
+				if (dx * dx + dy * dy > 350.0f * 350.0f)
+					continue;
+				if (r->seeds[i].origin[2] > fo[2] - 48.0f &&
+				    sf[i] < best_plat)
+					best_plat = sf[i];
+			}
+			if (best_plat == 0x7fffffff)
+				continue;
+			for (i = 0; i < r->hdr.num_seeds; i++)
+			{
+				float dx = r->seeds[i].origin[0] - fo[0];
+				float dy = r->seeds[i].origin[1] - fo[1];
+
+				if (dx * dx + dy * dy > 350.0f * 350.0f)
+					continue;
+				if (r->seeds[i].origin[2] > fo[2] - 96.0f)
+					continue;
+				if (sf[i] > best_plat)
+					sg_fields.shelf_cliff[t][i] = sf[i] - best_plat;
+			}
+		}
+	}
+
 	{
 		int i, nr = 0, nb = 0;
 

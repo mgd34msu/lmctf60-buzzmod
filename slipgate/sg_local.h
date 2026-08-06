@@ -301,6 +301,14 @@ typedef struct
 	int		mega_seed[SG_MAX_MEGA];
 	int		mega_ent[SG_MAX_MEGA];
 	int		mega_count;
+	/*
+	 * SUB-STAND SHELF (steal-genesis study, waves 433-439): per-team
+	 * cliff penalty for seeds under the enemy stand -- the measured
+	 * static-cost asymmetry RL_DROP's flat +150 never priced. Zero on
+	 * flat-stand maps (the built-in null). [0]=red attackers (vs blue
+	 * stand), [1]=blue attackers.
+	 */
+	int		*shelf_cliff[2];
 } sg_fields_t;
 
 extern sg_fields_t sg_fields;

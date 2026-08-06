@@ -243,7 +243,16 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # dose-response (390+): first blind read at 8 was marginal-correct --
 # rest structure appeared (a held 25s stop, doubled stopped-time) but
 # aggregate texture tied. 4 doubles the cadence; same 0.35 throttle.
-BREATHER=(0      0        4        0        0         0        0         0        0        0)
+# equalized 4/4 on the film pair (the 84-wave pool read a conversion
+# cost -- Rule 21 flag on the ledger, dedicated dose ladder owed) so the
+# pair is single-variable for SHELFCOST.
+BREATHER=(0      0        4        4        0         0        0         0        0        0)
+
+# THE SHELF TRIAL (steal-genesis study): sg_shelfcost 1 on s03 vs s04
+# control, mactf06 -- the map with the measured 1275-cost shelf. Bars
+# pre-registered: below-terminal share 0.36 -> <0.10; steals/game up
+# toward the 8.5 arithmetic ceiling; caps must not fall.
+SHELFCOST=(0     0        1        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
@@ -329,6 +338,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_megaworth ${MEGAWORTH[$i]}"
                 echo "set sg_atkobj ${ATKOBJ[$i]}"
                 echo "set sg_wswitch ${WSWITCH[$i]}"
+                echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"
                 echo "set sg_airgain ${AIRGAIN[$i]}"
