@@ -2234,8 +2234,10 @@ void Cmd_Say_f (edict_t *ent, qboolean team, qboolean arg0)
 
 	// BUZZKILL - bots hear the chat. Before this line no chat reached the bots
 	// at all and no spoken order could be given. SG_ChatHear ignores bot
-	// speakers itself; team carries the say_team flag so bare orders
-	// ("defend") only work on team chat.
+	// speakers for ORDERS; it reads item calls off every team line regardless
+	// of who typed it, which is how a bot's own say_team feeds the team clock.
+	// team carries the say_team flag so bare orders ("defend") only work on
+	// team chat, and so an item call only counts on the channel one team hears.
 	SG_ChatHear(ent, temp, team);
 
 	// BUZZKILL - one line spoken, counted against the speaker for the session

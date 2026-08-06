@@ -110,10 +110,18 @@ edict_t		*SG_ChatEscortTarget(edict_t *bot);
  * SG_ChatCarrierSeen and SG_ChatItemSeen are belief TRANSITIONS, passed the
  * bot that saw them. Neither is called from anywhere but a sighting.
  *
- * SG_ChatHear takes chat from a non-bot speaker. teamchat says whether it
- * arrived on say_team: an unaddressed order ("defend") is only obeyed on
- * team chat, while an addressed one ("arach defend") is obeyed either way.
- * Speakers with FL_BOT are ignored outright -- bots do not order bots.
+ * SG_ChatHear takes chat from any speaker. teamchat says whether it arrived
+ * on say_team: an unaddressed order ("defend") is only obeyed on team chat,
+ * while an addressed one ("arach defend") is obeyed either way.
+ *
+ * Two readers sit behind it and they treat the speaker differently on
+ * purpose. The ORDER parser ignores FL_BOT speakers outright -- bots do not
+ * order bots. The ITEM-CALL parser does not look at FL_BOT at all: a team
+ * line naming a major arms that team's respawn clock whether a human or one
+ * of ours typed it, per the owner's ruling of 2026-08-05 ("there should be
+ * no difference in parsing a human"). A bot's own say_team comes back
+ * through here, so that path dedupes against the clock it is about to be
+ * handed by Chat_ArmClock; see the war story over Chat_HearItemCall.
  *
  *     Wired in Cmd_Say_f (g_cmds.c), right after the message text is
  *     assembled into `temp`, as SG_ChatHear(ent, temp, team). It is called

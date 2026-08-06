@@ -2840,6 +2840,355 @@ static void Chat_Order(edict_t *bot, edict_t *from, int role, qboolean clear)
 	chat_bot[cl].order_team = from->client->ctf.teamnum;
 }
 
+/* ------------------------------------------------- the item call, PARSED
+ *
+ * THE OWNER'S RULING, 2026-08-05, in his words:
+ *
+ *   "just be able to parse team messages from your own bot teammates, and
+ *    there should be no difference in parsing a human, right??"
+ *
+ * Right. Everything below reads the say_team TEXT and nothing else. It does
+ * not ask whether the speaker is a bot, and there is deliberately no branch
+ * in here that could: FL_BOT is not tested once between this comment and the
+ * end of Chat_HearItemCall. A human typing "quad 30" and a bot emitting
+ * "quad 30" put the same eleven characters on the same channel, and a
+ * teammate reading them learns the same thing, which is the entire point.
+ *
+ * That makes the itemcomm knowledge two-routed. The direct route is the one
+ * that was already here -- SG_ChatItemTaken queues the line with its clock
+ * riding along, Chat_ArmClock applies it when SG_ChatSayTeam reports the line
+ * went out. The parse route is this one, and a bot's own line arrives down it
+ * too, because SG_ChatSayTeam's say_team goes SG_BotClientCommand ->
+ * ClientCommand -> Cmd_Say_f -> SG_ChatHear (g_cmds.c:2239) like anybody
+ * else's. Hence the dedupe below. One knowledge event, two routes, one clock.
+ *
+ * Order of the two, for whoever debugs this later: the parse fires FIRST. It
+ * happens inside SG_ChatSayTeam's say_team, and Chat_ArmClock runs after
+ * SG_ChatSayTeam returns (Chat_QueueDrain). For an ordinary take both arm the
+ * same number in the same frame, so the second write is a no-op; for the
+ * ear-driven "quad 30", whose real arm is jittered off when the quad was
+ * HEARD rather than off now, the direct route lands second and correctly
+ * wins. The dedupe is therefore aimed at what it is actually for: a human
+ * repeating himself, an echoed line, and the "soon" callouts ("quad in 12"),
+ * which say a number the team is already holding.
+ *
+ * The suppression law is untouched and gets a little stronger here. A line
+ * the per-bot budget or the topic cooldown ate is never handed to say_team at
+ * all, so it never reaches this parser either. No line, no clock, both ways.
+ */
+
+/* how close two clocks have to be before the second one is the same event */
+#define SG_CHAT_PARSE_SAME	3.0f
+
+/* longest sane call, and invuln's own 300 is the reason for the number */
+#define SG_CHAT_PARSE_MAXSEC	300
+
+/*
+ * The majors vocabulary, as spoken. Both columns matter: the left is what
+ * the bots themselves emit through Chat_ItemName ("invuln", "red armor",
+ * "power shield"), the right is what a human types instead, and neither is
+ * privileged. Two-word rows sit ahead of any single-word row that would
+ * shadow them, so "power shield" is read whole rather than as a stray
+ * "shield" one token late.
+ *
+ * Runes are absent on purpose and permanently: they carry no clock anywhere
+ * in this build (see chat_major), so "haste taken" has no number to arm.
+ * Mega is present and will simply find no row -- it is neither a CACO belief
+ * class nor on the watch list -- which is the same standing absence
+ * chat_timer_major already writes down.
+ */
+static const struct { const char *w1; const char *w2; const char *cls; }
+chat_call_word[] = {
+	{ "quad",            NULL,       "item_quad" },
+	{ "invuln",          NULL,       "item_invulnerability" },
+	{ "invul",           NULL,       "item_invulnerability" },
+	{ "invulnerability", NULL,       "item_invulnerability" },
+	{ "pent",            NULL,       "item_invulnerability" },
+	{ "red",             "armor",    "item_armor_body" },
+	{ "red",             "armour",   "item_armor_body" },
+	{ "ra",              NULL,       "item_armor_body" },
+	{ "power",           "shield",   "item_power_shield" },
+	{ "power",           "screen",   "item_power_screen" },
+	{ "ps",              NULL,       "item_power_shield" },
+	{ "shield",          NULL,       "item_power_shield" },
+	{ "mega",            NULL,       "item_health_mega" },
+	{ NULL, NULL, NULL }
+};
+
+/* the item phrase starting at token i, with how many tokens it ate */
+static const char *Chat_CallItem(char tok[SG_CHAT_MAXTOK][SG_CHAT_TOKLEN],
+                                 int n, int i, int *used)
+{
+	int k;
+
+	if (i < 0 || i >= n)
+		return NULL;
+	for (k = 0; chat_call_word[k].w1; k++)
+	{
+		if (strcmp(tok[i], chat_call_word[k].w1) != 0)
+			continue;
+		if (chat_call_word[k].w2)
+		{
+			if (i + 1 >= n)
+				continue;
+			if (strcmp(tok[i + 1], chat_call_word[k].w2) != 0)
+				continue;
+			*used = 2;
+		}
+		else
+			*used = 1;
+		return chat_call_word[k].cls;
+	}
+	return NULL;
+}
+
+/* somebody has it in his hands. "get" is not here: "get quad" is an order */
+static qboolean Chat_CallTakeVerb(const char *w)
+{
+	return (strcmp(w, "took") == 0 || strcmp(w, "take") == 0 ||
+	        strcmp(w, "taking") == 0 || strcmp(w, "got") == 0 ||
+	        strcmp(w, "grabbed") == 0 || strcmp(w, "picked") == 0 ||
+	        strcmp(w, "have") == 0 || strcmp(w, "has") == 0)
+	     ? true : false;
+}
+
+/* filler a verb is allowed to drag behind it: "picked up the quad" */
+static qboolean Chat_CallSkip(const char *w)
+{
+	return (strcmp(w, "up") == 0 || strcmp(w, "the") == 0 ||
+	        strcmp(w, "a") == 0 || strcmp(w, "an") == 0 ||
+	        strcmp(w, "my") == 0)
+	     ? true : false;
+}
+
+/*
+ * Filler between the item and its number. The last four are not human
+ * typing at all -- they are this file's own chat_timer_fmt rows coming back
+ * in ("quad in 12, mine", "quad up soon, ~12", "quad t-12"), which the parser
+ * has no business failing to read just because a bot wrote them.
+ */
+static qboolean Chat_CallTimerWord(const char *w)
+{
+	return (strcmp(w, "in") == 0 || strcmp(w, "back") == 0 ||
+	        strcmp(w, "is") == 0 || strcmp(w, "up") == 0 ||
+	        strcmp(w, "soon") == 0 || strcmp(w, "t") == 0)
+	     ? true : false;
+}
+
+/* a token that is nothing but digits, and a small enough number to mean it */
+static qboolean Chat_CallNumber(const char *s, int *out)
+{
+	int v = 0, i;
+
+	if (!s || !s[0])
+		return false;
+	for (i = 0; s[i]; i++)
+	{
+		if (!isdigit((unsigned char)s[i]))
+			return false;
+		v = v * 10 + (s[i] - '0');
+		if (v > SG_CHAT_PARSE_MAXSEC)
+			return false;
+	}
+	*out = v;
+	return true;
+}
+
+/* the belief row or watch row this class occupies, for this team */
+static qboolean Chat_CallRow(int ti, const char *cls, int *kind, int *slot,
+                             int *ent)
+{
+	int i, num;
+
+	for (i = 0; i < sg_caco_num_items && i < SG_MAX_BELIEF_ITEMS; i++)
+	{
+		num = sg_caco_items[ti][i].ent;
+		if (num > 0 && g_edicts[num].classname &&
+		    strcmp(g_edicts[num].classname, cls) == 0)
+		{
+			*kind = SG_ARM_ITEM;
+			*slot = i;
+			*ent = num;
+			return true;
+		}
+	}
+	for (i = 0; i < chat_num_watch; i++)
+	{
+		num = chat_watch[i].ent;
+		if (num > 0 && g_edicts[num].classname &&
+		    strcmp(g_edicts[num].classname, cls) == 0)
+		{
+			*kind = SG_ARM_WATCH;
+			*slot = i;
+			*ent = num;
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * One team-chat line, read for an item call. `team` is the SPEAKER's team and
+ * the only team that can be armed off it, which is also the only team that
+ * heard the line: Cmd_Say_f's broadcast loop skips every client failing
+ * OnSameTeam(ent, other) when the say_team flag is set (g_cmds.c:2263-2268),
+ * so an enemy never sees the text this function is reading. The routing does
+ * the containment; nothing in here needs to re-check it, and nothing in here
+ * touches the other team's row.
+ */
+static void Chat_HearItemCall(edict_t *speaker,
+                              char tok[SG_CHAT_MAXTOK][SG_CHAT_TOKLEN],
+                              int n, int team)
+{
+	const char	*cls = NULL, *what;
+	int			i, used = 0, secs = 0, ti = team - 1;
+	int			kind = SG_ARM_NONE, slot = -1, ent = 0;
+	qboolean	take = false, timed = false, dbg;
+	float		respawn, back_at, held, gap;
+
+	if (!SG_ItemComm())
+		return;
+
+	/*
+	 * The "at <place>" tail is scenery. Cutting the line there keeps a
+	 * landmark from being read as the item ("took ra at the ps") and keeps
+	 * any number in a place name out of the timer form.
+	 */
+	for (i = 0; i < n; i++)
+		if (strcmp(tok[i], "at") == 0)
+		{
+			n = i;
+			break;
+		}
+
+	for (i = 0; i < n; i++)
+	{
+		int j;
+
+		/*
+		 * "<anything> took <item>". "enemy took quad" needs no case of its
+		 * own -- it is this sentence with one more leading word, and the
+		 * clock it earns is the HEARING team's either way, exactly as the
+		 * witness call has always worked.
+		 */
+		if (Chat_CallTakeVerb(tok[i]))
+		{
+			j = i + 1;
+			while (j < n && Chat_CallSkip(tok[j]))
+				j++;
+			cls = Chat_CallItem(tok, n, j, &used);
+			if (cls)
+			{
+				take = true;
+				break;
+			}
+			continue;
+		}
+
+		cls = Chat_CallItem(tok, n, i, &used);
+		if (!cls)
+			continue;
+		j = i + used;
+
+		/* "<item> taken" */
+		if (j < n && (strcmp(tok[j], "taken") == 0 ||
+		              strcmp(tok[j], "gone") == 0))
+		{
+			take = true;
+			break;
+		}
+
+		/* "<item> [in|back|is|up|soon|t] <seconds>" -- "quad 30" */
+		while (j < n && Chat_CallTimerWord(tok[j]))
+			j++;
+		if (j < n && Chat_CallNumber(tok[j], &secs) && secs > 0)
+		{
+			timed = true;
+			break;
+		}
+
+		cls = NULL;             /* the item was named but nothing was said */
+	}
+
+	if (!cls || (!take && !timed))
+		return;
+
+	if (!Chat_CallRow(ti, cls, &kind, &slot, &ent))
+		return;                 /* mega, and anything else with no clock */
+
+	/*
+	 * A take is timed from the parse moment and not a tenth earlier. The
+	 * owner's own accounting: a human types with lag, and the lag IS the
+	 * imprecision -- inventing a correction for it would be inventing
+	 * knowledge, which is the thing this file exists not to do.
+	 */
+	respawn = timed ? (float)secs : Chat_MajorRespawn(g_edicts + ent);
+	if (respawn <= 0.0f)
+		return;
+	back_at = level.time + respawn;
+
+	dbg = (gi.cvar("sg_debug", "0", 0)->value > 0.0f) ? true : false;
+	what = Chat_ItemName(g_edicts + ent);
+	if (!what)
+		what = "item";
+
+	held = (kind == SG_ARM_ITEM) ? chat_item[slot].back_at[ti]
+	                             : chat_watch[slot].back_at[ti];
+	gap = held - back_at;
+	if (gap < 0.0f)
+		gap = -gap;
+
+	/*
+	 * DEDUPE. A clock this team is already holding, landing within three
+	 * seconds of what this line would arm, is the same knowledge arriving
+	 * down the other route -- the bot's own emitted line, or its "soon"
+	 * callout naming a number off the very clock being compared. Re-arming
+	 * would move the countdown by a frame's worth of nothing and print a
+	 * second story about one event. Leave it alone.
+	 */
+	if (held > level.time && gap <= SG_CHAT_PARSE_SAME)
+	{
+		static int skips = 0;
+
+		if (dbg && (skips++ % 8) == 0)
+			gi.dprintf("SG itemcomm: %s said %s, team %d -- clock already "
+			           "within %.1fs (%.1f vs %.1f), parse skipped "
+			           "(1-in-8)\n", speaker->client->pers.netname, what,
+			           team, gap, held, back_at);
+		return;
+	}
+
+	if (kind == SG_ARM_ITEM)
+	{
+		chat_item[slot].up[ti] = false;
+		chat_item[slot].back_at[ti] = back_at;
+		chat_item[slot].soon_said[ti] = false;
+		sg_caco_items[ti][slot].believed_up = false;
+		sg_caco_items[ti][slot].believed_respawn_time = back_at;
+		/* a parsed quad call covers the cycle like any other: no bot
+		 * fade-watch or reminder speaks behind a human who already did
+		 * (owner: "if 3 teammates see the enemy grab the quad, we don't
+		 * want 3 separate quad timers at once firing") */
+		if (sg_caco_items[ti][slot].ent > 0 &&
+		    g_edicts[sg_caco_items[ti][slot].ent].classname &&
+		    strcmp(g_edicts[sg_caco_items[ti][slot].ent].classname,
+		           "item_quad") == 0)
+			radio_q30[ti].called_until = back_at;
+	}
+	else
+	{
+		chat_watch[slot].up[ti] = false;
+		chat_watch[slot].back_at[ti] = back_at;
+		chat_watch[slot].soon_said[ti] = false;
+	}
+
+	if (dbg)
+		gi.dprintf("SG itemcomm: %s said %s (%s) -- parsed, armed team %d "
+		           "for %.0fs, back at %.1f\n",
+		           speaker->client->pers.netname, what,
+		           take ? "take" : "timer", team, respawn, back_at);
+}
+
 void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 {
 	char		tok[SG_CHAT_MAXTOK][SG_CHAT_TOKLEN];
@@ -2849,8 +3198,6 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 
 	if (!speaker || !speaker->inuse || !speaker->client || !msg)
 		return;
-	if (speaker->flags & FL_BOT)
-		return;                         /* bots do not take orders from bots */
 
 	team = speaker->client->ctf.teamnum;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
@@ -2859,6 +3206,19 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 	n = Chat_Tokens(msg, tok);
 	if (n < 1)
 		return;
+
+	/*
+	 * The item-call ear, ahead of the order parser and ahead of the bot
+	 * test, because a bot's call is a call (owner, 2026-08-05: "there should
+	 * be no difference in parsing a human"). Team channel only: an item call
+	 * is knowledge for the side that heard it, and the public channel is
+	 * heard by both.
+	 */
+	if (teamchat)
+		Chat_HearItemCall(speaker, tok, n, team);
+
+	if (speaker->flags & FL_BOT)
+		return;                         /* bots do not take orders from bots */
 
 	/* addressee: one of ours by name, or the whole team */
 	for (i = 0; i < game.maxclients && !named; i++)
