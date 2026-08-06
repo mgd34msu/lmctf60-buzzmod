@@ -216,6 +216,14 @@ typedef struct sg_bot_s
 	int			exitasym_set[16];   /* the inbound set, snapshotted at the grab */
 	int			exitasym_n;
 	qboolean	exitasym_armed;     /* this carry's coin, rolled once at the grab */
+
+	/* human escape priors (sg_escapeprior): the exit this carry drew from
+	 * the corpus, the stand it is measured from, and how long the draw
+	 * still steers. -1 = this carry drew nothing and prices as before. */
+	int			escprior_bucket;
+	float		escprior_until;
+	float		escprior_dose;      /* the discount, folded at the draw */
+	vec3_t		escprior_org;       /* the robbed stand's seed origin */
 	int			fake_ping;          /* synthetic ping base, rolled at join (owner: 5-15, near-local) */
 	int			prev_seed;          /* the seed most recently LEFT (sg_nobacktrack) */
 	float		prev_seed_time;
@@ -527,6 +535,130 @@ static unsigned char *sg_human_live; /* same, cut from the 20s windows
                                       * after a steal: how humans move
                                       * when a flag is OUT (.hml) */
 
+/*
+ * THE ESCAPE PRIORS (sg_escapeprior, enhancement 6, escapepriors.py).
+ * Which WAY humans leave a stand they just robbed, per map and per stolen
+ * flag, as an eight-bucket compass distribution: counts of the bearing
+ * from the stand to where the human carrier actually was three seconds
+ * after the grab. Mined from 268 client demos / 1549 usable steals.
+ *
+ * Held here as raw counts, one distribution for the CURRENT map, chosen
+ * at load time by the same key order the mining tool writes:
+ * "<map>:<stolen flag colour>" first, plain "<map>" as the fallback. A
+ * CTF map is usually a mirror of itself, so the two stands' exits are
+ * mirror bearings of one habit; pooling them is a real loss of signal
+ * (measured over the corpus: the pooled entry's bucket entropy is
+ * 0.3-0.8 bits higher than either colour's on most maps), and the
+ * carrier always knows which stand he just robbed.
+ */
+#define SG_ESC_BUCKETS	8
+static int	sg_escape_count[2][SG_ESC_BUCKETS];  /* [0]=red flag stolen, [1]=blue */
+static int	sg_escape_total[2];                  /* 0 = no prior for that flag */
+
+/*
+ * The compass bucket of a planar direction: 45 degrees per bucket, bucket
+ * 0 centred on +x and buckets advancing counter-clockwise (E NE N NW W SW
+ * S SE). The fold into 0..2pi happens BEFORE the scale for the same
+ * reason Heading_Quantize (sg_rune.c) folds -- a negative angle scaled and
+ * truncated is not a wrap. escapepriors.py bearing_bucket() is this
+ * function; the two must agree or the mined buckets name other exits.
+ */
+static int SG_Bearing8(float dx, float dy)
+{
+	float a = atan2f(dy, dx) * (180.0f / (float)M_PI) + 22.5f;
+
+	while (a < 0.0f)
+		a += 360.0f;
+	return ((int)(a / 45.0f)) & 7;
+}
+
+/*
+ * A deliberately tiny reader for the one shape escapepriors.py writes:
+ * find the quoted key, then read eight integers out of the bracket that
+ * follows it. No JSON library, and no pretence of being one -- anything
+ * that is not exactly the expected shape leaves the prior unset and the
+ * pricing silent, which is the same outcome as a missing file.
+ *
+ * Matching the key WITH its quotes is what keeps "lmctf01" from matching
+ * inside "lmctf01:red" or "lmctf01b", and the tool guarantees no map name
+ * appears anywhere in the file outside the maps object.
+ */
+static qboolean Escape_Parse(const char *buf, const char *key, int *out)
+{
+	const char *p;
+	char quoted[80];
+	int i, got[SG_ESC_BUCKETS];
+
+	Com_sprintf(quoted, sizeof(quoted), "\"%s\"", key);
+	p = strstr(buf, quoted);
+	if (!p)
+		return false;
+	p += strlen(quoted);
+	while (*p == ' ' || *p == '\t' || *p == ':')
+		p++;
+	if (*p != '[')
+		return false;
+	p++;
+	for (i = 0; i < SG_ESC_BUCKETS; i++)
+	{
+		while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' ||
+		       *p == ',')
+			p++;
+		if (*p < '0' || *p > '9')
+			return false;
+		got[i] = atoi(p);
+		while (*p >= '0' && *p <= '9')
+			p++;
+	}
+	for (i = 0; i < SG_ESC_BUCKETS; i++)
+		out[i] = got[i];
+	return true;
+}
+
+static void Escape_Load(const char *mapname)
+{
+	char path[MAX_OSPATH];
+	char lower[64], key[80];
+	static char buf[32768];
+	cvar_t *gamedir = gi.cvar("gamedir", "", 0);
+	size_t n;
+	FILE *f;
+	int c, i, k;
+
+	memset(sg_escape_count, 0, sizeof(sg_escape_count));
+	sg_escape_total[0] = sg_escape_total[1] = 0;
+
+	Com_sprintf(path, sizeof(path), "%s/escape-priors.json",
+	            gamedir->string[0] ? gamedir->string : ".");
+	f = fopen(path, "rb");
+	if (!f)
+		return;
+	n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = 0;
+
+	/* the file is keyed in lower case; a server that spelled the map
+	 * LMCTF35 on the map command still means the same map */
+	for (i = 0; mapname[i] && i < (int)sizeof(lower) - 1; i++)
+		lower[i] = (char)tolower((unsigned char)mapname[i]);
+	lower[i] = 0;
+
+	for (k = 0; k < 2; k++)
+	{
+		Com_sprintf(key, sizeof(key), "%s:%s", lower,
+		            k == 0 ? "red" : "blue");
+		if (!Escape_Parse(buf, key, sg_escape_count[k]) &&
+		    !Escape_Parse(buf, lower, sg_escape_count[k]))
+			continue;
+		for (c = 0, i = 0; i < SG_ESC_BUCKETS; i++)
+			c += sg_escape_count[k][i];
+		sg_escape_total[k] = c;
+	}
+	if (sg_escape_total[0] > 0 || sg_escape_total[1] > 0)
+		gi.dprintf("rune: escape bearings loaded (%s: red n=%d, blue n=%d)\n",
+		           path, sg_escape_total[0], sg_escape_total[1]);
+}
+
 rune_t *Rune_Load(const char *mapname)
 {
 	char path[MAX_OSPATH];
@@ -669,6 +801,7 @@ rune_t *Rune_Load(const char *mapname)
 		}
 		fclose(f);
 	}
+	Escape_Load(mapname);
 	return r;
 }
 
@@ -2388,9 +2521,85 @@ static void SG_BotThink(sg_bot_t *bot)
 		memcpy(bot->exitasym_set, bot->inlinks, sizeof(bot->exitasym_set));
 		bot->exitasym_armed = (random() * 100.0f <
 		                       gi.cvar("sg_exitasym", "0", 0)->value);
+
+		/*
+		 * HUMAN ESCAPE PRIORS (sg_escapeprior, enhancement 6). The
+		 * corpus says a human leaving a robbed stand does not pick a
+		 * uniform direction -- on lmctf41's red stand 76% of 30 human
+		 * steals left east, on smap26's 74% left north -- and it also
+		 * says he does not pick the SAME one every time. An argmin
+		 * carrier has the opposite failing in both directions: one
+		 * exit, always, and no reason for it to be the one people use.
+		 *
+		 * So the exit is DRAWN, once per carry, from that map's mined
+		 * distribution, and the draw only tilts pricing: the bucket
+		 * drawn gets its own measured probability as a discount for
+		 * the next three seconds (the window the bearings were mined
+		 * over), and every other road stays exactly as priced. A
+		 * bucket humans used a fifth of the time gets drawn a fifth of
+		 * the time and bends the price a fifth as hard as a bucket
+		 * they used always -- the distribution's shape survives into
+		 * behaviour instead of collapsing to its mode.
+		 *
+		 * The draw is a hash of the body, its life, and the clock, not
+		 * random(): two carriers grabbing at once must draw
+		 * independently, and one carrier must draw the same exit for
+		 * the whole three seconds no matter how many times the fan is
+		 * priced in between.
+		 */
+		bot->escprior_bucket = -1;
+		bot->escprior_until = 0.0f;
+		bot->escprior_dose = 0.0f;
+		if (sg_rune && gi.cvar("sg_escapeprior", "0", 0)->value > 0.0f)
+		{
+			/* the flag this carrier now holds is the ENEMY flag, and
+			 * its stand is the one he just robbed */
+			int fk = (team == CTF_TEAM_RED) ? 1 : 0;   /* 0 red, 1 blue */
+			int stand = (team == CTF_TEAM_RED)
+			                ? sg_fields.blue_flag_seed
+			                : sg_fields.red_flag_seed;
+
+			if (sg_escape_total[fk] > 0 && stand >= 0 &&
+			    stand < sg_rune->hdr.num_seeds)
+			{
+				unsigned h = ((unsigned)(e - g_edicts) * 2654435761u) ^
+				             ((unsigned)(bot->lives + bot->legs) * 40503u) ^
+				             ((unsigned)(level.time * 10.0f) * 2246822519u);
+				int b, acc = 0, pick;
+
+				h ^= h >> 13;
+				h *= 2654435761u;
+				h ^= h >> 16;
+				pick = (int)(h % (unsigned)sg_escape_total[fk]);
+				for (b = 0; b < SG_ESC_BUCKETS - 1; b++)
+				{
+					acc += sg_escape_count[fk][b];
+					if (pick < acc)
+						break;
+				}
+				VectorCopy(sg_rune->seeds[stand].origin,
+				           bot->escprior_org);
+				bot->escprior_bucket = b;
+				bot->escprior_until = level.time + 3.0f;
+				bot->escprior_dose =
+				    gi.cvar("sg_escapeprior", "0", 0)->value / 100.0f *
+				    ((float)sg_escape_count[fk][b] /
+				     (float)sg_escape_total[fk]);
+				if (bot->escprior_dose > 0.9f)
+					bot->escprior_dose = 0.9f;
+				if (gi.cvar("sg_debug", "0", 0)->value)
+					gi.dprintf("ESCPRIOR %s bucket=%d p=%d/%d dose=%.2f\n",
+					           e->client->pers.netname, b,
+					           sg_escape_count[fk][b],
+					           sg_escape_total[fk], bot->escprior_dose);
+			}
+		}
 	}
 	else if (!carrying && bot->was_carrying)
+	{
 		bot->exitasym_armed = false;
+		bot->escprior_bucket = -1;
+	}
 	if (gi.cvar("sg_debug", "0", 0)->value)
 	{
 		if (carrying && !bot->was_carrying)
@@ -3937,6 +4146,35 @@ rally_done:;
 					v *= 1.5f;
 					break;
 				}
+		}
+
+		/*
+		 * THE ESCAPE PRIOR (sg_escapeprior). The exit drawn at the
+		 * grab, spent here: a candidate that leaves the robbed stand
+		 * on the drawn compass bearing is cheaper by the human
+		 * probability of that bearing, for the three seconds the
+		 * bearings were mined over. The bearing is measured from the
+		 * STAND, not from the body -- that is what the corpus
+		 * measured, and it keeps the whole first leg pointed at one
+		 * exit instead of re-deciding as the carrier drifts.
+		 *
+		 * Candidates inside 160 units of the stand carry no bearing
+		 * worth the name and are left alone -- the same displacement
+		 * floor escapepriors.py MIN_RUN_U demanded before it would
+		 * believe a human's bearing. The v > 0 guard is for the one
+		 * case a multiplicative discount inverts: a candidate the
+		 * human-highway prior has already priced below zero would be
+		 * made MORE expensive by scaling toward zero.
+		 */
+		if (role == SG_ROLE_CARRY && bot->escprior_bucket >= 0 &&
+		    level.time < bot->escprior_until && v > 0.0f)
+		{
+			float ex = sg_rune->seeds[l->to].origin[0] - bot->escprior_org[0];
+			float ey = sg_rune->seeds[l->to].origin[1] - bot->escprior_org[1];
+
+			if (ex * ex + ey * ey > 160.0f * 160.0f &&
+			    SG_Bearing8(ex, ey) == bot->escprior_bucket)
+				v *= 1.0f - bot->escprior_dose;
 		}
 
 		if (bot->sticky_link == li &&
@@ -8160,6 +8398,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].exitasym_armed = false;
 	sg_bots[slot].beat_ready = false;   /* a join is not a respawn */
 	sg_bots[slot].beat_until = 0.0f;
+	sg_bots[slot].escprior_bucket = -1;
+	sg_bots[slot].escprior_until = 0.0f;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
 	/* a fresh joiner holds no grudge, and seed 0 is a real place: -1 is
 	 * the only value that means "nobody has died here yet" */
