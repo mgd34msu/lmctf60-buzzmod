@@ -190,13 +190,32 @@ enum {
 	SG_ACK_RECOVER, SG_ACK_FREE, SG_ACK_KINDS
 };
 
-#define SG_CHAT_MAXLINES	8
+#define SG_CHAT_MAXLINES	12
 
 /*
  * Four voices across sixteen bots, not sixteen voices: a server full of
  * individually written characters reads as a script the second two of them
  * speak in the same minute. Era-appropriate deathmatch banter, lowercase,
  * nothing over ~50 characters -- a long line is the tell that a bot wrote it.
+ *
+ * MOST OF THESE LINES ARE NOT WRITTEN. They were mined out of the human demo
+ * corpus by tools/chatmine.py -- 268 client .dm2 recordings from 2020-2023,
+ * 4459 chat lines said, filtered down to what a stranger could say again --
+ * and every mined line here is verbatim, as typed, down to the missing
+ * apostrophe in "thats game" and the caps-lock in "DIE !!". The buckets that
+ * fed each row:
+ *
+ *   GREETING   -> JOIN, OPEN        TAUNT      -> KILL, STEAL (cocky)
+ *   GRUMBLE    -> DEATH             GG_ENDGAME -> WIN, LOSE, CLOSE
+ *   REACTION   -> CAP, DEATH, IDLE  CALL       -> STEAL, IDLE
+ *
+ * tools/chat-corpus.json is the mined list, and re-running the miner reports
+ * any line in it that has stopped appearing in the corpus. Written lines that
+ * survived are the ones no human in the corpus had occasion to type -- the
+ * dry voice's asides and the whole mech register, which is a character rather
+ * than an imitation of pub chat. The lines that read like an assistant doing
+ * an impression of 1998 ("nice game", "gg easy", "outclassed") are gone,
+ * replaced by what people actually said.
  *
  * The pools are deeper than the four-per-category the first eight bots ran
  * on. Four bots now share each voice rather than two, so a category with
@@ -210,100 +229,107 @@ enum {
  * voices here, or a voice reads its neighbour's lines.
  */
 static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
-	/* SG_TONE_TERSE  -- arach, trace, ogre, knight */
+	/* SG_TONE_TERSE  -- arach, trace, ogre, knight.
+	 * The corpus's two-letter classics live here: gg, ns, n1, rdy, hf. */
 	{
-		{ "hi", "here", "lets go", "in", "up", "ready", "back", NULL },
-		{ "got him", "down", "next", "too slow", "yep", "stay down",
-		  "counted", NULL },
-		{ "hm", "my bad", "again", "ok", "fine", "damn", NULL },
-		{ "cap", "thats one", "good", "on the board", "point", "yes",
-		  "scored", NULL },
+		{ "hi", "hey", "rdy", "gl hf", "hf", "im here", "we good",
+		  "here", "in", "up", NULL },
+		{ "got him", "down", "next", "too slow", "stay down", "yep",
+		  "ok", "word", NULL },
+		{ "damn", "ouch", "ns", "n1", "oh", "no", "hm", "my bad",
+		  "again", "ok", NULL },
+		{ "cap", "thats one", "yes", "good", "n1", "there you go",
+		  "on the board", "point", NULL },
 		{ "flag is out", "got it", "moving", "have it", "going home",
-		  "run", NULL },
-		{ "new map", "know this one", "lets run it", "fresh start",
-		  "ok, this one", "good map", NULL },
-		{ "gg", "won that", "thats the map", "we take it", "done",
-		  "good one", NULL },
-		{ "gg all", "next map", "beat us", "bad one for us", "our fault",
-		  "nice game", NULL },
-		{ "that was close", "close one", "right to the wire",
-		  "good match", "well played", NULL },
-		{ "quiet", "long map", "still here", "im awake", "waiting",
+		  "run", "back", NULL },
+		{ "here we go", "lets run it", "gl hf", "i like it", "ok",
+		  "new map", "know this one", NULL },
+		{ "gg", "ggs", "gg wp", "that's game", "well played",
+		  "won that", "we take it", NULL },
+		{ "gg", "ggs", "gg's", "well played", "good game", "beat us",
+		  "our fault", "next map", NULL },
+		{ "tough one", "gg wp", "ggs", "well played", "lol close call",
+		  "close one", "that was close", NULL },
+		{ "brb", "back", "break", "quiet", "still here", "waiting",
 		  "hm", NULL }
 	},
-	/* SG_TONE_COCKY  -- caco, slip, fiend, spawn */
+	/* SG_TONE_COCKY  -- caco, slip, fiend, spawn.
+	 * Where the TAUNT bucket landed, caps-lock and all. */
 	{
-		{ "who wants it", "easy day", "im here now", "lets have it",
-		  "line up", "hope you practiced", "im back", NULL },
-		{ "sit down", "too easy", "all day", "thats mine", "get better",
-		  "outclassed", "not even close", NULL },
-		{ "lucky", "cheap", "whatever", "sure", "nice shot i guess",
-		  "wont happen twice", NULL },
-		{ "thats how you do it", "run it back", "count it", "told you",
-		  "put it up", "thats a point", NULL },
-		{ "flags mine", "watch this", "coming through", "ill take that",
-		  "say goodbye to it", NULL },
-		{ "my map", "easy map", "i live in that flag room",
-		  "lets see who shows up", "hope you know the route",
-		  "this ones mine", NULL },
-		{ "told you", "not even close", "gg easy", "we owned that",
-		  "learn the map", "any time", NULL },
-		{ "lag", "rematch", "we werent trying", "you got lucky",
-		  "next map is mine", "wont happen next map", NULL },
-		{ "too close", "we let that get close", "good game i guess",
-		  "you got lucky at the end", "next one wont be close", NULL },
-		{ "somebody do something", "im getting bored", "wake up out there",
-		  "who wants a go", "this is too easy", NULL }
+		{ "who wants it", "we were born ready", "dont u worry", "yoyo",
+		  "whats up", "im here", "line up", "hope you practiced", NULL },
+		{ "DIE !!", "zoom", "no u", "im fast", "bam", "lol", "sit down",
+		  "too easy", "all day", "thats mine", NULL },
+		{ "you gotta be kidding me", "ns", "sure", "lol wat", "no!",
+		  "wow", "lucky", "cheap", "whatever", NULL },
+		{ "there you go", "lol yay", "bam", "nice!", "told you",
+		  "run it back", "count it", "thats how you do it", NULL },
+		{ "im fast", "zoom", "dont u worry", "flags mine", "watch this",
+		  "coming through", "ill take that", NULL },
+		{ "here we go", "we were born ready", "lets run it", "my map",
+		  "easy map", "i live in that flag room", "this ones mine", NULL },
+		{ "gg", "that's game", "word", "really ggs!", "told you",
+		  "we owned that", "any time", NULL },
+		{ "good to take the L", "gfg", "tough one", "nah.", "gg", "lag",
+		  "rematch", "you got lucky", NULL },
+		{ "lol close call", "insane game", "phew!", "crazy!", "too close",
+		  "we let that get close", "next one wont be close", NULL },
+		{ "zoom", "brb", "somebody do something", "im getting bored",
+		  "wake up out there", "who wants a go", NULL }
 	},
-	/* SG_TONE_DRY    -- rune, phase, wizard, scrag */
+	/* SG_TONE_DRY    -- rune, phase, wizard, scrag.
+	 * Mined understatement plus the written asides nobody in the corpus
+	 * had occasion to type. */
 	{
-		{ "evening", "here we go again", "right then", "hello all",
-		  "back for more", "lovely", "shall we", NULL },
-		{ "predictable", "as expected", "noted", "that was quick",
-		  "hardly a contest", "quite", "well then", NULL },
-		{ "of course", "wonderful", "hm, no", "typical", "marvellous",
-		  "how novel", "ah", NULL },
-		{ "one for us", "acceptable", "there it is", "adequate",
-		  "satisfactory", "as planned", NULL },
+		{ "been a while", "good to see you", "hello?", "good luck",
+		  "evening", "right then", "shall we", "lovely", NULL },
+		{ "i suppose", "i bet", "well...", "predictable", "as expected",
+		  "noted", "that was quick", "quite", NULL },
+		{ "good lord", "ns", "well...", "def weird", "of course",
+		  "wonderful", "typical", "ah", NULL },
+		{ "there you go", "nicely done", "nice one", "one for us",
+		  "there it is", "acceptable", "as planned", NULL },
 		{ "we have theirs", "flag is away", "borrowed it", "taking this",
-		  "do excuse me", NULL },
-		{ "ah, this map", "i rather like this one", "not this one again",
-		  "that flag room is a deathtrap", "quaint", "well, its a map",
-		  NULL },
-		{ "well played us", "that went nicely", "a fine result",
-		  "thank you all", "good game everyone", "most satisfactory",
-		  NULL },
-		{ "how disappointing", "they earned it", "next time perhaps",
-		  "good game to them", "hm, deserved", "so it goes", NULL },
-		{ "closer than i would like", "a proper game at last",
-		  "well fought all", "that was worth playing", "very nearly", NULL },
-		{ "quiet, isnt it", "i shall put the kettle on",
-		  "one does get comfortable", "any moment now",
+		  "do excuse me", "back", NULL },
+		{ "i like it", "lets run it", "gl hf", "ah, this map",
+		  "not this one again", "quaint",
+		  "that flag room is a deathtrap", NULL },
+		{ "well played", "nicely done", "good game", "ggs everyone",
+		  "loved this game", "that went nicely", "thank you all", NULL },
+		{ "well played", "good game", "tough one", "gg's", "nite",
+		  "they earned it", "next time perhaps", "so it goes", NULL },
+		{ "that was tough!", "great game", "nicely done", "gg wp",
+		  "closer than i would like", "a proper game at last",
+		  "very nearly", NULL },
+		{ "need a mo", "be back", "i suppose", "quiet, isnt it",
+		  "i shall put the kettle on", "any moment now",
 		  "lovely weather in here", NULL }
 	},
-	/* SG_TONE_MECH   -- gate, field, vore, shal */
+	/* SG_TONE_MECH   -- gate, field, vore, shal.
+	 * A character rather than an imitation, so it keeps its written
+	 * register; the mined lines here are the flat, procedural ones. */
 	{
-		{ "online", "unit ready", "connected", "standing by",
+		{ "ready", "good to go", "online", "unit ready", "standing by",
 		  "systems nominal", "link established", "active", NULL },
 		{ "target down", "confirmed kill", "one less", "clean",
-		  "threat eliminated", "target neutralized", NULL },
-		{ "reset", "respawning", "damage critical", "recycling",
+		  "threat eliminated", "target neutralized", "ok", NULL },
+		{ "ns", "reset", "respawning", "damage critical", "recycling",
 		  "systems failing", "rebuilding", NULL },
 		{ "objective complete", "point scored", "capture logged",
-		  "score updated", "mission success", NULL },
+		  "score updated", "mission success", "yes", NULL },
 		{ "flag acquired", "carrying", "objective in hand",
-		  "asset secured", "extracting", NULL },
+		  "asset secured", "extracting", "back", NULL },
 		{ "map loaded", "terrain acquired", "layout known",
 		  "route table ready", "scanning layout", "position confirmed",
-		  NULL },
-		{ "match complete", "objective secured", "victory logged",
+		  "gl hf", NULL },
+		{ "gg", "match complete", "objective secured", "victory logged",
 		  "we win", "mission accomplished", "score final", NULL },
-		{ "match lost", "objective failed", "defeat logged",
+		{ "gg", "ggs", "match lost", "objective failed", "defeat logged",
 		  "outperformed", "recalibrating", "analysis pending", NULL },
-		{ "margin minimal", "close result", "within tolerance",
+		{ "gg wp", "margin minimal", "close result", "within tolerance",
 		  "narrow finish", "closely contested", NULL },
-		{ "idle", "no contacts", "awaiting contact", "power conserved",
-		  "scan clear", "holding position", NULL }
+		{ "BASE IS CLEAR", "idle", "no contacts", "awaiting contact",
+		  "power conserved", "scan clear", "holding position", NULL }
 	}
 };
 
