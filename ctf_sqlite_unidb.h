@@ -26,8 +26,6 @@ int      DB_Prune(int days);                              // rows dropped, or -1
 qboolean DB_LoadPlayer(edict_t *player);
 qboolean DB_SavePlayer(edict_t *player);
 
-#endif
-
 /*
  * Match history.
  *
@@ -42,3 +40,18 @@ int      DB_MatchBegin(const char *mapname);   // new match row, returns match_i
 void     DB_MatchRecord(edict_t *player, int match_id, int team);
 qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
                         int red_caps, int blue_caps, int winner, int duration);
+int      DB_MatchLastId(void);                 // id DB_MatchBegin last handed out, or -1
+
+/*
+ * SLIPGATE session recorder -- sg_session_events, one row per client per
+ * match. The attendance record beside the leaderboard: bots included and
+ * flagged is_bot, names that never earned a char_idx included too.
+ *
+ * Gated on the sg_sessiondb cvar (default 0) and on the unified backend
+ * (ctf_statsdb 2); with either off, every entry point below returns at once.
+ */
+void     DB_SessionNewLevel(void);             // SpawnEntities: clear per-level counters
+void     DB_SessionNoteChat(edict_t *ent);     // Cmd_Say_f: one line spoken by this client
+int      DB_SessionRecord(void);               // BeginIntermission: write the rows
+
+#endif

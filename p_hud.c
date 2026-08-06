@@ -3,6 +3,7 @@
 #include "g_tourney.h"
 #include "bat.h"
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
+#include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
 
 int MvpDisp;
 
@@ -93,6 +94,19 @@ void BeginIntermission (edict_t *targ)
 	 * p_client.c).
 	 */
 	SG_ChatLevelEnd();
+
+	/*
+	 * The session attendance, for the same reason and in the same place: the
+	 * Victory() call above has just opened and closed the match row, so the
+	 * match_id the rows hang off exists, and the intermissiontime guard at
+	 * the top of this function makes the write happen once. DB_SessionRecord
+	 * latches the match id it wrote as well, so an end that somehow reached
+	 * here twice still leaves one set of rows.
+	 *
+	 * Returns immediately unless sg_sessiondb is on AND the unified stats
+	 * backend is the one running (ctf_statsdb 2).
+	 */
+	DB_SessionRecord();
 
 	game.autosaved = false;
 

@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "ctf_file_io.h"
+#include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNoteChat from Cmd_Say_f
 #include "g_menu.h"
 #include "m_player.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -2236,6 +2237,13 @@ void Cmd_Say_f (edict_t *ent, qboolean team, qboolean arg0)
 	// speakers itself; team carries the say_team flag so bare orders
 	// ("defend") only work on team chat.
 	SG_ChatHear(ent, temp, team);
+
+	// BUZZKILL - one line spoken, counted against the speaker for the session
+	// record. Here rather than in the broadcast loop below, which runs once
+	// per listener, and after the spam check above, which is what decides
+	// whether a line is said at all. Costs one cvar test when sg_sessiondb
+	// is off, which is the default.
+	DB_SessionNoteChat(ent);
 
 	// don't let text be too long for malicious reasons
 	if (strlen(text) > 150)

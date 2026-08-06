@@ -1,6 +1,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_net.h"
+#include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
 #include "g_ctffunc.h"
 #include "g_tourney.h"
 
@@ -928,6 +929,11 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	SaveClientData ();
 
 	SG_NetNewLevel ();
+
+	// BUZZKILL - the session recorder's per-level state: chat counts, the
+	// written-match latch, and the match id the rows hang off. All three are
+	// level scoped, because a match is a level here.
+	DB_SessionNewLevel ();
 
 	gi.FreeTags (TAG_LEVEL);
 
