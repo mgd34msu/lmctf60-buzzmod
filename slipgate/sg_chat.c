@@ -375,12 +375,39 @@ typedef struct
 
 static sg_chat_bot_t chat_bot[MAX_CLIENTS];
 
+/*
+ * THE CLOCK RIDES ON THE LINE (owner's ruling, 2026-08-05).
+ *
+ *   "bots should know when an item is coming back IF AND ONLY IF another bot
+ *    on the team has called it out in team chat when the item is taken."
+ *
+ * Which makes WHEN the clock is armed the whole question, and the answer is
+ * not "when the bot decided to speak". A queued line still has two gates to
+ * clear -- the reaction delay below, then SG_ChatSayTeam's per-bot budget and
+ * per-topic team cooldown -- and a line the cooldown eats was never heard by
+ * anybody. Arming at queue time would give the team a countdown off a sentence
+ * that never reached the channel, which is the omniscience this whole file
+ * exists to take away.
+ *
+ * So the arm travels WITH the line, in the fields below, and is applied by
+ * Chat_ArmClock at the moment SG_ChatSayTeam reports the line actually went
+ * out. Suppressed line, no clock, and sg_debug says so.
+ */
+enum { SG_ARM_NONE = 0, SG_ARM_ITEM, SG_ARM_WATCH };
+
 typedef struct
 {
 	qboolean	pending;
 	int			speaker;        /* client number */
 	float		due;
 	char		line[SG_CHAT_LINE];
+
+	/* the respawn clock this line earns for its team IF it is spoken */
+	int			arm_kind;       /* SG_ARM_* -- NONE for every ordinary line */
+	int			arm_slot;       /* index into sg_caco_items rows, or chat_watch */
+	int			arm_ent;        /* the item entity, for the sg_debug line */
+	int			arm_src;        /* SG_ITEMCALL_* -- who is making the call */
+	float		arm_back_at;    /* absolute: take time + the item's own delay */
 } sg_chatq_t;
 
 static sg_chatq_t	chat_q[2][SG_CHAT_TOPICS];      /* [team-1][topic] */
@@ -779,30 +806,50 @@ static qboolean Chat_SayPooled(edict_t *speaker, const char *line, int flags)
  * Queue a team line behind a reaction delay. One slot per team per topic:
  * a second sighting of the same thing while the first is still on its way
  * is the same news, and six bots blurting it in one frame reads as one.
+ *
+ * Returns whether the line took the slot. Every caller but the item-taken
+ * one ignores it, as they always have; that one needs to know, because a
+ * refused line is a respawn clock the team does not get.
  */
-static void Chat_Queue(edict_t *speaker, int team, int topic, const char *line)
+static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
+                              const char *line, int arm_kind, int arm_slot,
+                              int arm_ent, int arm_src, float arm_back_at)
 {
 	sg_chatq_t *q;
 
 	if (!speaker || !speaker->client || !(speaker->flags & FL_BOT))
-		return;
+		return false;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
-		return;
+		return false;
 	if (topic < 0 || topic >= SG_CHAT_TOPICS)
-		return;
+		return false;
 
 	q = &chat_q[team - 1][topic];
 	if (q->pending)
-		return;
+		return false;
 	if (level.time < chat_teamsaid[team - 1][topic])
-		return;
+		return false;
 
 	Chat_Copy(q->line, line, sizeof(q->line));
 	q->speaker = Chat_ClientNum(speaker);
 	q->due = level.time + SG_CHAT_DELAY_MIN +
 	         random() * (SG_CHAT_DELAY_MAX - SG_CHAT_DELAY_MIN);
+	q->arm_kind = arm_kind;
+	q->arm_slot = arm_slot;
+	q->arm_ent = arm_ent;
+	q->arm_src = arm_src;
+	q->arm_back_at = arm_back_at;
 	q->pending = true;
+	return true;
 }
+
+static void Chat_Queue(edict_t *speaker, int team, int topic, const char *line)
+{
+	Chat_QueueArm(speaker, team, topic, line, SG_ARM_NONE, 0, 0, 0, 0.0f);
+}
+
+/* defined below, beside the majors table it is about */
+static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said);
 
 static void Chat_Flush(void)
 {
@@ -812,21 +859,32 @@ static void Chat_Flush(void)
 		for (k = 0; k < SG_CHAT_TOPICS; k++)
 		{
 			sg_chatq_t	*q = &chat_q[t][k];
+			sg_chatq_t	held;
 			edict_t		*sp;
+			qboolean	said = false;
 
 			if (!q->pending || level.time < q->due)
 				continue;
 
-			/* consumed either way: a muted line must not jam the slot */
+			/*
+			 * Taken off the slot before anything can fail: a muted line must
+			 * not jam it, and the copy is what carries the arm through the
+			 * emit so a re-entrant queue on the same slot cannot claim it.
+			 */
+			held = *q;
 			q->pending = false;
+			q->arm_kind = SG_ARM_NONE;
 
-			if (q->speaker < 0 || q->speaker >= game.maxclients)
-				continue;
-			sp = g_edicts + 1 + q->speaker;
-			if (sp->client && sp->client->ctf.teamnum != t + 1)
-				continue;               /* he switched sides mid-thought */
+			if (held.speaker >= 0 && held.speaker < game.maxclients)
+			{
+				sp = g_edicts + 1 + held.speaker;
+				/* not "he switched sides mid-thought" -- then the line is his
+				 * old team's news said by somebody who is no longer on it */
+				if (!sp->client || sp->client->ctf.teamnum == t + 1)
+					said = SG_ChatSayTeam(sp, held.line, k);
+			}
 
-			SG_ChatSayTeam(sp, q->line, k);
+			Chat_ArmClock(t, &held, said);
 		}
 }
 
@@ -900,8 +958,22 @@ static void Chat_ScanLandmarks(void)
  * SG_CHAT_LM_RANGE wins; failing that the two flag stands split the map into
  * three, which is how a callout with no landmark to hand is phrased. Team
  * neutral -- see Chat_LocNameFor for the "our/their" form the callouts use.
+ *
+ * `skip` is a landmark position to leave out of the running, or NULL for none,
+ * and it exists for one case: naming the spot where an item was just taken.
+ * Half the majors ARE landmarks, so without it a bot says
+ * "took quad at the quad", which tells a teammate nothing he did not already
+ * have from the first two words. Skipping the item's own landmark makes the
+ * call fall through to the next thing in sight, or to the base thirds.
+ *
+ * False means it had nothing to name the place by -- no landmark in range and
+ * no flag stands to divide the map with -- and `out` is untouched. The caller
+ * then says the item without a place, which is the owner's own instruction:
+ * "calling the item specifically will help and it should count even without
+ * the location" (2026-08-05).
  */
-static void Chat_LocName(vec3_t pos, char *out, int len)
+static qboolean Chat_LocNameSkip(vec3_t pos, const float *skip,
+                                 char *out, int len)
 {
 	float	best = SG_CHAT_LM_RANGE, dist, dred, dblue;
 	int		bi = -1, i;
@@ -909,6 +981,12 @@ static void Chat_LocName(vec3_t pos, char *out, int len)
 
 	for (i = 0; i < chat_num_lm; i++)
 	{
+		if (skip)
+		{
+			VectorSubtract(chat_lm[i].org, skip, d);
+			if (VectorLength(d) < 1.0f)
+				continue;               /* that landmark IS the thing taken */
+		}
 		VectorSubtract(chat_lm[i].org, pos, d);
 		dist = VectorLength(d);
 		if (dist < best)
@@ -920,14 +998,12 @@ static void Chat_LocName(vec3_t pos, char *out, int len)
 	if (bi >= 0)
 	{
 		Chat_Copy(out, chat_lm[bi].name, len);
-		return;
+		return true;
 	}
 
 	if (!chat_flagpos_ok[0] || !chat_flagpos_ok[1])
-	{
-		Chat_Copy(out, "out there", len);
-		return;
-	}
+		return false;
+
 	VectorSubtract(chat_flagpos[0], pos, d);
 	dred = VectorLength(d);
 	VectorSubtract(chat_flagpos[1], pos, d);
@@ -939,6 +1015,13 @@ static void Chat_LocName(vec3_t pos, char *out, int len)
 		Chat_Copy(out, "blue base", len);
 	else
 		Chat_Copy(out, "midfield", len);
+	return true;
+}
+
+static void Chat_LocName(vec3_t pos, char *out, int len)
+{
+	if (!Chat_LocNameSkip(pos, NULL, out, len))
+		Chat_Copy(out, "out there", len);
 }
 
 void SG_ChatLocName(vec3_t pos, char *out, int len)
@@ -947,9 +1030,11 @@ void SG_ChatLocName(vec3_t pos, char *out, int len)
 }
 
 /* the same name, said from one team's point of view */
-static void Chat_LocNameFor(vec3_t pos, int team, char *out, int len)
+static qboolean Chat_LocNameForSkip(vec3_t pos, const float *skip, int team,
+                                    char *out, int len)
 {
-	Chat_LocName(pos, out, len);
+	if (!Chat_LocNameSkip(pos, skip, out, len))
+		return false;
 
 	if (strcmp(out, "red base") == 0)
 		Chat_Copy(out, (team == CTF_TEAM_RED) ? "our base" : "their base",
@@ -957,6 +1042,13 @@ static void Chat_LocNameFor(vec3_t pos, int team, char *out, int len)
 	else if (strcmp(out, "blue base") == 0)
 		Chat_Copy(out, (team == CTF_TEAM_BLUE) ? "our base" : "their base",
 		           len);
+	return true;
+}
+
+static void Chat_LocNameFor(vec3_t pos, int team, char *out, int len)
+{
+	if (!Chat_LocNameForSkip(pos, NULL, team, out, len))
+		Chat_Copy(out, "out there", len);
 }
 
 /* ------------------------------------------------------------ item names */
@@ -1041,14 +1133,17 @@ void SG_ChatItemSeen(edict_t *viewer, int index, qboolean up)
 	if (index < 0 || index >= sg_caco_num_items)
 		return;
 
-	b = &sg_caco_items[index];
+	team = viewer->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return;
+	ti = team - 1;
+
+	b = &sg_caco_items[ti][index];      /* this viewer's team's row */
 	c = &chat_item[index];
 	e = g_edicts + b->ent;
 	name = Chat_ItemName(e);
 	if (!name)
 		return;
-	team = viewer->client->ctf.teamnum;
-	ti = team - 1;
 
 	if (up)
 	{
@@ -1079,9 +1174,18 @@ void SG_ChatItemSeen(edict_t *viewer, int index, qboolean up)
 		return;                         /* the team already believed it gone */
 	c->up[ti] = false;
 	c->soon_said[ti] = false;
-	c->back_at[ti] = (b->respawn_delay > 0.0f)
-	               ? level.time + b->respawn_delay
-	               : 0.0f;
+
+	/*
+	 * SIGHTING, NOT STOPWATCH (owner's ruling, 2026-08-05). An empty pad is
+	 * evidence that the thing is gone and evidence of nothing else -- this bot
+	 * has no idea whether it emptied a second ago or fifty, so it cannot count
+	 * down to the return. Under sg_itemcomm the countdown comes from the bot
+	 * who was THERE saying so; here it stays at whatever the team was told.
+	 */
+	if (!SG_ItemComm())
+		c->back_at[ti] = (b->respawn_delay > 0.0f)
+		               ? level.time + b->respawn_delay
+		               : 0.0f;
 
 	if (Chat_EnemySeenNear(team, b->org))
 		Com_sprintf(line, sizeof(line), "enemy took %s", name);
@@ -1195,7 +1299,11 @@ void SG_ChatSee(edict_t *viewer)
 				continue;
 			w->up[ti] = false;
 			w->soon_said[ti] = false;
-			w->back_at[ti] = level.time + w->respawn;
+
+			/* the same rule as the powerup pads: seeing the armour gone is
+			 * knowledge, knowing when it is back is a callout (2026-08-05) */
+			if (!SG_ItemComm())
+				w->back_at[ti] = level.time + w->respawn;
 
 			if (Chat_EnemySeenNear(team, e->s.origin))
 				Com_sprintf(line, sizeof(line), "enemy took %s", w->name);
@@ -1204,6 +1312,297 @@ void SG_ChatSee(edict_t *viewer)
 			Chat_Queue(viewer, team, SG_CHAT_TOPIC_ITEM_GONE, line);
 		}
 	}
+}
+
+/* ------------------------------------------------------ the taken callout
+ *
+ * THE OWNER'S RULING, 2026-08-05, in his words:
+ *
+ *   "items can be timed, but runes (the in-game kind) spawn randomly. bots
+ *    should know when an item is coming back IF AND ONLY IF another bot on the
+ *    team has called it out in team chat when the item is taken ... So if quad
+ *    is taken and a bot says 'i just took quad at __location__' then we know in
+ *    exactly [live-time plus respawn] it will be back ... A bot on the other
+ *    team could see a bot on a different team take the red armor or quad, and
+ *    they could call that out ... calling the item specifically will help and
+ *    it should count even without the location."
+ *
+ * Three ways a clock is earned, and there is no fourth:
+ *
+ *   (a) TAKER'S CALL. One of ours picks the thing up and says so. No sighting
+ *       needed by anybody -- it is holding the item, which is the one unseen
+ *       claim SLIPGATE.md has always allowed.
+ *   (b) WITNESS CALL. Somebody else took it and one of ours WATCHED, from the
+ *       other team. That bot may say "enemy took quad at the rl", and its own
+ *       team gets the clock. Note which team: the witness's, never the taker's.
+ *   (c) TEAMMATE'S TAKE, WITNESSED. A human (or a legacy bot) on our side takes
+ *       it and says nothing, because humans do not narrate. One of ours who saw
+ *       it happen calls it, and our team gets the clock off that.
+ *
+ * The respawn interval is read, never guessed, per item -- the ruling says
+ * "live-time plus respawn" and the mod's own numbers are the respawn.
+ */
+
+static const struct { const char *cls; float respawn; } chat_major[] = {
+	/* g_items.c:198 -- Pickup_Powerup: SetRespawn(ent, ent->item->quantity).
+	 * Quad's quantity is LM_QUAD_DEFAULT_TIME = 60 and invuln's is 300, so
+	 * the -1 here means "ask the item", not "assume a minute". */
+	{ "item_quad",              -1.0f },
+	{ "item_invulnerability",   -1.0f },
+	/* g_items.c:759 -- Pickup_Armor's 20 is written into the game code rather
+	 * than into the item, so it is transcribed rather than read */
+	{ "item_armor_body",        20.0f },
+	/* g_items.c:912 -- Pickup_PowerArmor: SetRespawn(ent, ent->item->quantity) */
+	{ "item_power_shield",      -1.0f },
+	{ "item_power_screen",      -1.0f },
+	/*
+	 * The runes are majors worth CALLING and are never worth TIMING -- a zero
+	 * here, permanently. Pickup_Rune schedules no respawn at all (g_runes.c:
+	 * 450-460): the rune stays in the carrier's hands until he dies or drops
+	 * it, and the loose rune relocates itself to a random health spot every 30
+	 * seconds (Rune_Think, g_runes.c:334-352). "runes ... spawn randomly", per
+	 * the ruling; a rune countdown would be a number invented on the spot.
+	 */
+	{ "damage_rune",             0.0f },
+	{ "haste_rune",              0.0f },
+	{ "resist_rune",             0.0f },
+	{ "regen_rune",              0.0f },
+	{ "vampire_rune",            0.0f },
+	/*
+	 * The mega is deliberately absent. It has no clock anywhere in this build
+	 * -- it is not a CACO belief class and not on the watch list -- and its
+	 * real denial is 100s of decay on top of 20s of respawn (g_items.c:586-595),
+	 * which is not the arithmetic the rest of this table does. Adding it means
+	 * adding it to the watch list first, and this line is here so the next
+	 * reader knows that rather than guessing it was forgotten.
+	 */
+	{ NULL, 0.0f }
+};
+
+/* seconds until it is back, 0 when no clock exists for this item at all */
+static float Chat_MajorRespawn(edict_t *e)
+{
+	int i;
+
+	if (!e || !e->classname)
+		return 0.0f;
+	for (i = 0; chat_major[i].cls; i++)
+	{
+		if (strcmp(e->classname, chat_major[i].cls) != 0)
+			continue;
+		if (chat_major[i].respawn >= 0.0f)
+			return chat_major[i].respawn;
+		return (e->item && e->item->quantity > 0)
+		     ? (float)e->item->quantity : 0.0f;
+	}
+	return 0.0f;
+}
+
+/* is this one of the things a bot bothers to open its mouth about */
+qboolean SG_ChatItemMajor(edict_t *e)
+{
+	int i;
+
+	if (!e || !e->classname || !Chat_ItemName(e))
+		return false;
+	for (i = 0; chat_major[i].cls; i++)
+		if (strcmp(e->classname, chat_major[i].cls) == 0)
+			return true;
+	return false;
+}
+
+/*
+ * The speaker discipline, exported for sg_caco.c's witness pick: the same
+ * question Chat_Speaker asks of a candidate, so a witnessing bot is chosen the
+ * way every other single-owner callout chooses its voice.
+ */
+qboolean SG_ChatBudgetClear(edict_t *bot)
+{
+	int cl;
+
+	if (!Chat_OurBot(bot) || !Chat_Playing(bot))
+		return false;
+	cl = Chat_ClientNum(bot);
+	if (cl < 0 || cl >= game.maxclients)
+		return false;
+	return (level.time >= chat_bot[cl].next_team) ? true : false;
+}
+
+/* which sg_caco_items slot / chat_watch slot this entity is, -1 for neither */
+static int Chat_BeliefSlot(edict_t *e)
+{
+	int i, num = (int)(e - g_edicts);
+
+	for (i = 0; i < sg_caco_num_items; i++)
+		if (sg_caco_items[0][i].ent == num)
+			return i;
+	return -1;
+}
+
+static int Chat_WatchSlot(edict_t *e)
+{
+	int i, num = (int)(e - g_edicts);
+
+	for (i = 0; i < chat_num_watch; i++)
+		if (chat_watch[i].ent == num)
+			return i;
+	return -1;
+}
+
+static const char *chat_arm_src[] = {
+	"taker-call", "mate-call", "witness-call"
+};
+
+/*
+ * The moment the ruling turns on: a queued call has just been handed to
+ * SG_ChatSayTeam and either went out or did not. Only "did" arms a clock.
+ */
+static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
+{
+	qboolean	dbg = (gi.cvar("sg_debug", "0", 0)->value > 0.0f)
+	                ? true : false;
+	const char	*what, *src;
+
+	if (q->arm_kind == SG_ARM_NONE)
+		return;
+
+	what = Chat_ItemName(g_edicts + q->arm_ent);
+	if (!what)
+		what = "item";
+	src = (q->arm_src >= 0 && q->arm_src < 3) ? chat_arm_src[q->arm_src]
+	                                          : "call";
+
+	if (!said)
+	{
+		/* the line lost to the per-bot budget or the topic cooldown, so the
+		 * team was never told and does not get to count */
+		if (dbg)
+			gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
+			           "(line eaten) -- no clock armed\n",
+			           src, what, ti + 1);
+		return;
+	}
+
+	if (q->arm_kind == SG_ARM_ITEM)
+	{
+		chat_item[q->arm_slot].back_at[ti] = q->arm_back_at;
+		chat_item[q->arm_slot].soon_said[ti] = false;
+		sg_caco_items[ti][q->arm_slot].believed_respawn_time = q->arm_back_at;
+	}
+	else
+	{
+		chat_watch[q->arm_slot].back_at[ti] = q->arm_back_at;
+		chat_watch[q->arm_slot].soon_said[ti] = false;
+	}
+
+	if (dbg)
+		gi.dprintf("SG itemcomm: %s armed %s for team %d -- back at %.1f "
+		           "(in %.0fs)\n", src, what, ti + 1, q->arm_back_at,
+		           q->arm_back_at - level.time);
+}
+
+/*
+ * One team's reaction to a major changing hands. `speaker` is the single bot
+ * that gets to say it -- sg_caco.c picks the taker itself for (a) and one
+ * witness for (b) and (c) -- and `team` is the team being told, which for a
+ * witness call is the WITNESS's team and never the taker's.
+ */
+void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src)
+{
+	char		line[SG_CHAT_LINE], place[48];
+	const char	*name;
+	float		respawn, back_at;
+	int			ti, bslot, wslot, kind, slot;
+	qboolean	located;
+
+	if (!Chat_OurBot(speaker) || !Chat_Playing(speaker))
+		return;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return;
+	if (!item || !item->inuse)
+		return;
+	name = Chat_ItemName(item);
+	if (!name)
+		return;
+	ti = team - 1;
+
+	bslot = Chat_BeliefSlot(item);
+	wslot = Chat_WatchSlot(item);
+
+	/*
+	 * What this team knows WITHOUT being told, because its own bot either has
+	 * the thing in its hands or watched it go: the pad is empty. That is a
+	 * sighting and it lands whether or not the line survives the channel --
+	 * "seeing is knowing" is the half of the ruling that did not change.
+	 */
+	if (bslot >= 0)
+	{
+		chat_item[bslot].up[ti] = false;
+		chat_item[bslot].soon_said[ti] = false;
+		sg_caco_items[ti][bslot].believed_up = false;
+		if (sg_caco_items[ti][bslot].cls == SG_BI_RUNE)
+			sg_caco_items[ti][bslot].seed = -1;     /* in somebody's hands */
+	}
+	if (wslot >= 0)
+	{
+		chat_watch[wslot].up[ti] = false;
+		chat_watch[wslot].soon_said[ti] = false;
+	}
+
+	/* the clock the line will earn if it is spoken, and nothing for a rune */
+	respawn = Chat_MajorRespawn(item);
+	back_at = (respawn > 0.0f) ? level.time + respawn : 0.0f;
+
+	kind = SG_ARM_NONE;
+	slot = 0;
+	if (back_at > 0.0f)
+	{
+		if (bslot >= 0)
+		{
+			kind = SG_ARM_ITEM;
+			slot = bslot;
+		}
+		else if (wslot >= 0)
+		{
+			kind = SG_ARM_WATCH;
+			slot = wslot;
+		}
+	}
+
+	/* where it went, named the way a player names it -- and the item's own
+	 * landmark left out, so "took quad at the quad" cannot happen */
+	located = Chat_LocNameForSkip(item->s.origin, item->s.origin, team,
+	                             place, sizeof(place));
+
+	switch (src)
+	{
+	case SG_ITEMCALL_TAKER:
+		if (located)
+			Com_sprintf(line, sizeof(line), "took %s at %s", name, place);
+		else
+			Com_sprintf(line, sizeof(line), "took %s", name);
+		break;
+	case SG_ITEMCALL_MATE:
+		if (located)
+			Com_sprintf(line, sizeof(line), "%s taken at %s", name, place);
+		else
+			Com_sprintf(line, sizeof(line), "%s taken", name);
+		break;
+	default:
+		if (located)
+			Com_sprintf(line, sizeof(line), "enemy took %s at %s", name, place);
+		else
+			Com_sprintf(line, sizeof(line), "enemy took %s", name);
+		break;
+	}
+
+	if (!Chat_QueueArm(speaker, team, SG_CHAT_TOPIC_ITEM_GONE, line,
+	                   kind, slot, (int)(item - g_edicts), src, back_at) &&
+	    kind != SG_ARM_NONE &&
+	    gi.cvar("sg_debug", "0", 0)->value > 0.0f)
+		gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
+		           "(topic busy) -- no clock armed\n",
+		           chat_arm_src[(src >= 0 && src < 3) ? src : 0], name, team);
 }
 
 /*
@@ -1304,7 +1703,7 @@ static void Chat_Countdown(void)
 		for (i = 0; i < sg_caco_num_items; i++)
 		{
 			sg_chat_item_t	*c = &chat_item[i];
-			edict_t			*ie = g_edicts + sg_caco_items[i].ent;
+			edict_t			*ie = g_edicts + sg_caco_items[0][i].ent;
 
 			if (c->up[ti] || c->soon_said[ti] || c->back_at[ti] <= 0.0f)
 				continue;
@@ -1344,6 +1743,19 @@ static void Chat_SelfPickups(void)
 {
 	char	line[SG_CHAT_LINE];
 	int		i;
+
+	/*
+	 * Superseded wholesale by the taken callout above when sg_itemcomm is on
+	 * (owner's ruling, 2026-08-05). This scan is a once-a-frame poll of what
+	 * bots are HOLDING, which is a second-hand way of noticing a pickup: it
+	 * sees quad, invuln and runes and is blind to red armour, it cannot name
+	 * where the thing was, and it arms a clock at queue time rather than at
+	 * emission. SG_NoteItemTaken sees the pickup itself, covers every major,
+	 * names the spot, and arms only what was actually said. Two mouths on one
+	 * event would also mean the team hears it twice.
+	 */
+	if (SG_ItemComm())
+		return;
 
 	for (i = 0; i < game.maxclients; i++)
 	{
@@ -1398,7 +1810,7 @@ static void Chat_SelfPickups(void)
 		{
 			for (k = 0; k < sg_caco_num_items; k++)
 			{
-				sg_belief_item_t	*b = &sg_caco_items[k];
+				sg_belief_item_t	*b = &sg_caco_items[team - 1][k];
 				edict_t				*ie = g_edicts + b->ent;
 				qboolean			mine = false;
 
@@ -2305,8 +2717,8 @@ void SG_ChatReset(void)
 	 */
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
-		chat_item[i].up[0] = chat_item[i].up[1] =
-			sg_caco_items[i].believed_up;
+		chat_item[i].up[0] = sg_caco_items[0][i].believed_up;
+		chat_item[i].up[1] = sg_caco_items[1][i].believed_up;
 		chat_item[i].back_at[0] = chat_item[i].back_at[1] = 0.0f;
 		chat_item[i].soon_said[0] = chat_item[i].soon_said[1] = false;
 	}

@@ -2299,7 +2299,10 @@ static float Worth_Health(edict_t *e)
 				continue;
 			if (strcmp(it->classname, "item_health_mega") != 0)
 				continue;
-			if (!Caco_ItemBelievedUp(it))
+			/* the bot's own team's view, on principle -- the mega is not a
+			 * belief class, so this answers off the entity either way, and
+			 * the day it joins the table it is already asking correctly */
+			if (!Caco_ItemBelievedUpFor(e->client->ctf.teamnum, it))
 				continue;
 			worth *= 2.5f;
 			break;
@@ -2428,14 +2431,23 @@ static float Worth_Ammo(edict_t *e)
 
 static float Worth_Quad(edict_t *e)
 {
-	int i;
+	int i, ti;
 
 	if (Combat_IsQuad(e))
 		return 0.0f;			/* already carrying it */
 
+	/*
+	 * THIS bot's team's row (owner's ruling, 2026-08-05). The pricing is where
+	 * the per-team split actually bites: a team that has not been told the quad
+	 * is coming back prices an empty pedestal at zero and walks past it, while
+	 * the side whose bot called the take arrives four seconds early to camp it.
+	 * That difference is the whole point of splitting the table.
+	 */
+	ti = (e->client && e->client->ctf.teamnum == CTF_TEAM_BLUE) ? 1 : 0;
+
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
-		sg_belief_item_t	*b = &sg_caco_items[i];
+		sg_belief_item_t	*b = &sg_caco_items[ti][i];
 		edict_t				*it;
 
 		if (b->cls != SG_BI_POWERUP)
@@ -2472,16 +2484,25 @@ static float Worth_Rune(edict_t *e)
 {
 	float	best = 0.0f;
 	int		tier;
-	int		i;
+	int		i, ti;
 
 	if (e->client->rune)
 		return 0.0f;
 
 	tier = Weapon_Tier(e);
 
+	/*
+	 * "BOTS ON THE OTHER TEAM WILL ONLY KNOW WHERE RUNES ARE IF THEY SEE THEM,
+	 * NOT FROM THE DIFFERENT TEAM'S KNOWLEDGE" (owner's ruling, 2026-08-05).
+	 * A rune belief is a sighting and nothing else -- there is no clock behind
+	 * it to fall back on -- so reading the wrong team's row here would be the
+	 * purest form of the leak the ruling names.
+	 */
+	ti = (e->client->ctf.teamnum == CTF_TEAM_BLUE) ? 1 : 0;
+
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
-		sg_belief_item_t	*b = &sg_caco_items[i];
+		sg_belief_item_t	*b = &sg_caco_items[ti][i];
 		edict_t				*it;
 		float				mult;
 

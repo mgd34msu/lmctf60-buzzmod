@@ -142,6 +142,33 @@ void		SG_ChatFrame(void);
 void		SG_ChatSee(edict_t *viewer);
 void		SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier);
 void		SG_ChatItemSeen(edict_t *viewer, int index, qboolean up);
+
+/* ------------------------------------------------------ the taken callout
+ *
+ * The owner's ruling of 2026-08-05: a team learns when an item is coming back
+ * IF AND ONLY IF one of its own bots called the take out loud, and a callout
+ * that the channel swallowed teaches nobody anything. sg_caco.c owns the
+ * pickup hook (SG_NoteItemTaken) and the eyes; this side owns the words, the
+ * one-speaker discipline, and the clock -- which is armed at EMISSION, inside
+ * Chat_Flush, and never when the line is merely queued.
+ *
+ * Who is speaking, which decides the wording and the sg_debug label:
+ *
+ *   SG_ITEMCALL_TAKER   one of ours took it and is saying so. Needs no
+ *                       sighting from anybody: the bot is holding the thing.
+ *   SG_ITEMCALL_MATE    a human or legacy bot on OUR side took it and one of
+ *                       ours watched. Humans do not narrate their own pickups.
+ *   SG_ITEMCALL_ENEMY   the other side took it and one of ours watched. The
+ *                       team told is the WITNESS's, never the taker's.
+ */
+#define SG_ITEMCALL_TAKER	0
+#define SG_ITEMCALL_MATE	1
+#define SG_ITEMCALL_ENEMY	2
+
+void		SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item,
+                             int src);
+qboolean	SG_ChatItemMajor(edict_t *e);   /* worth a bot's breath at all */
+qboolean	SG_ChatBudgetClear(edict_t *bot);  /* Chat_Speaker's own test */
 void		SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat);
 void		SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
 void		SG_ChatLevelEnd(void);

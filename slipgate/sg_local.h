@@ -293,11 +293,45 @@ typedef struct
 	float		respawn_delay;          /* seconds; 0 = no clock to infer from */
 } sg_belief_item_t;
 
-extern sg_belief_item_t	sg_caco_items[SG_MAX_BELIEF_ITEMS];
+/*
+ * ONE TABLE PER TEAM (sg_itemcomm, owner's ruling 2026-08-05).
+ *
+ * It used to be one table for the server, which meant red looking at the quad
+ * pad taught blue that the quad was gone. sg_caco_enemies has been per team
+ * since it was written for exactly that reason; the item table was the last
+ * shared belief left, and it was the one carrying a RESPAWN CLOCK -- so the
+ * leak was not merely "they know it is empty", it was "they know to the second
+ * when it is back".
+ *
+ * Row [team-1] is what that team believes. The two rows hold the same STATIC
+ * geometry -- ent, cls, org and respawn_delay for a powerup pad are map
+ * knowledge every player on both sides has -- and differ only in the dynamic
+ * part: believed_up, seen_up_time, believed_respawn_time, and a rune's seed.
+ * Index i names the same entity in both rows, so a caller that has an index
+ * from one row may use it on the other.
+ *
+ * With sg_itemcomm 0 both rows are written identically at every site, so the
+ * split is invisible and the build behaves exactly as it did before it.
+ */
+extern sg_belief_item_t	sg_caco_items[2][SG_MAX_BELIEF_ITEMS];
 extern int				sg_caco_num_items;
+
+/* the one reader of the cvar: item belief is per team AND respawn clocks are
+ * earned by a spoken callout rather than by scanning */
+qboolean	SG_ItemComm(void);
+
+/*
+ * The pickup hand-off. Touch_Item (g_items.c) calls this for every successful
+ * pickup by anybody, bot or human, and every decision about whether it matters
+ * is made on this side. It is what arms a respawn clock now -- by way of a
+ * bot's mouth, never directly; the war story is over its definition in
+ * sg_caco.c and over the majors table in sg_chat.c.
+ */
+void		SG_NoteItemTaken(edict_t *taker, edict_t *item);
 
 /* the calls sg_fields.c needs to stop reading item entities directly */
 qboolean	Caco_ItemBelievedUp(edict_t *e);
+qboolean	Caco_ItemBelievedUpFor(int team, edict_t *e);
 int			Caco_ItemBeliefSeed(rune_t *r, edict_t *e);
 unsigned	Caco_ItemBeliefSig(void);   /* mix into the class rebuild test */
 

@@ -449,8 +449,42 @@ static void Caco_ScanCarriers(rune_t *r, edict_t *viewer, int viewer_team)
 /* g_runes.c:10, RUNETHINKTIME -- how long before a rune moves on its own */
 #define SG_RUNE_WANDER	30.0f
 
-sg_belief_item_t	sg_caco_items[SG_MAX_BELIEF_ITEMS];
+sg_belief_item_t	sg_caco_items[2][SG_MAX_BELIEF_ITEMS];
 int					sg_caco_num_items;
+
+/*
+ * THE OWNER'S RULING, 2026-08-05, verbatim where it binds:
+ *
+ *   "items can be timed, but runes (the in-game kind) spawn randomly. bots
+ *    should know when an item is coming back IF AND ONLY IF another bot on
+ *    the team has called it out in team chat when the item is taken ...
+ *    BOTS ON THE OTHER TEAM WILL ONLY KNOW WHERE RUNES ARE IF THEY SEE THEM,
+ *    NOT FROM THE DIFFERENT TEAM'S KNOWLEDGE."
+ *
+ * Three things follow, and this cvar switches all three on together because
+ * any one of them alone is incoherent:
+ *
+ *   1. item belief is per team (the [2] on the table above);
+ *   2. a respawn clock is armed by a callout that was ACTUALLY SPOKEN, not by
+ *      a bot walking past a pad with a stopwatch in its head;
+ *   3. runes never get a clock at all -- LMCTF runes relocate themselves at
+ *      random every 30 seconds and respawn nowhere on a schedule, so a rune
+ *      timer would be a fabricated fact and not a modelling shortcut.
+ *
+ * Default 0 keeps the shared-belief build byte-identical: every site that
+ * writes belief writes both rows, and nothing here arms a clock from a call.
+ */
+qboolean SG_ItemComm(void)
+{
+	return (gi.cvar("sg_itemcomm", "0", 0)->value > 0.0f) ? true : false;
+}
+
+/* row index for a team number, and the "not on a team" case folded to red so
+ * a stray caller reads a valid row rather than off the end of the table */
+static int Caco_TeamRow(int team)
+{
+	return (team == CTF_TEAM_BLUE) ? 1 : 0;
+}
 
 static const char *caco_rune_class[] = {
 	"damage_rune", "haste_rune", "resist_rune", "regen_rune",
@@ -472,14 +506,23 @@ static int Caco_ItemClassOf(edict_t *e)
 	return -1;
 }
 
-static sg_belief_item_t *Caco_ItemBelief(edict_t *e)
+/* the index of an entity's belief slot, valid in BOTH rows, -1 when the
+ * entity is not one of the belief classes */
+static int Caco_ItemIndex(edict_t *e)
 {
 	int i, num = (int)(e - g_edicts);
 
 	for (i = 0; i < sg_caco_num_items; i++)
-		if (sg_caco_items[i].ent == num)
-			return &sg_caco_items[i];
-	return NULL;
+		if (sg_caco_items[0][i].ent == num)
+			return i;
+	return -1;
+}
+
+static sg_belief_item_t *Caco_ItemBelief(int team, edict_t *e)
+{
+	int i = Caco_ItemIndex(e);
+
+	return (i < 0) ? NULL : &sg_caco_items[Caco_TeamRow(team)][i];
 }
 
 /*
@@ -499,7 +542,7 @@ static void Caco_ScanItemSpawns(void)
 	{
 		edict_t				*e = &g_edicts[i];
 		sg_belief_item_t	*b;
-		int					cls;
+		int					cls, t, slot;
 
 		if (!e->inuse)
 			continue;
@@ -511,28 +554,40 @@ static void Caco_ScanItemSpawns(void)
 		if (cls == SG_BI_POWERUP && (e->spawnflags & DROPPED_ITEM))
 			continue;
 
-		b = &sg_caco_items[sg_caco_num_items++];
-		b->ent = i;
-		b->cls = cls;
-		b->seed = -1;
-		b->seen_up_time = -1.0f;            /* nobody has looked yet */
-		b->believed_respawn_time = 0.0f;
+		slot = sg_caco_num_items++;
 
-		if (cls == SG_BI_POWERUP)
+		/*
+		 * Both rows, identically. A pad's position and its respawn delay are
+		 * map knowledge -- read once, off the item definition, and handed to
+		 * both sides because both sides have played the map. What the split
+		 * buys is the DYNAMIC half below, which each team then moves on its
+		 * own sightings and its own team chat.
+		 */
+		for (t = 0; t < 2; t++)
 		{
-			VectorCopy(e->s.origin, b->org);
-			b->respawn_delay = (e->item && e->item->quantity > 0)
-			                 ? (float)e->item->quantity
-			                 : (float)LM_QUAD_DEFAULT_TIME;
-			/* what a player assumes walking in: the quad is on its pad
-			 * until somebody has reason to think otherwise */
-			b->believed_up = true;
-		}
-		else
-		{
-			VectorClear(b->org);
-			b->respawn_delay = 0.0f;        /* no clock exists to infer from */
-			b->believed_up = false;         /* and no location either, yet */
+			b = &sg_caco_items[t][slot];
+			b->ent = i;
+			b->cls = cls;
+			b->seed = -1;
+			b->seen_up_time = -1.0f;            /* nobody has looked yet */
+			b->believed_respawn_time = 0.0f;
+
+			if (cls == SG_BI_POWERUP)
+			{
+				VectorCopy(e->s.origin, b->org);
+				b->respawn_delay = (e->item && e->item->quantity > 0)
+				                 ? (float)e->item->quantity
+				                 : (float)LM_QUAD_DEFAULT_TIME;
+				/* what a player assumes walking in: the quad is on its pad
+				 * until somebody has reason to think otherwise */
+				b->believed_up = true;
+			}
+			else
+			{
+				VectorClear(b->org);
+				b->respawn_delay = 0.0f;    /* no clock exists to infer from */
+				b->believed_up = false;     /* and no location either, yet */
+			}
 		}
 	}
 }
@@ -545,37 +600,65 @@ static void Caco_ScanItemSpawns(void)
  */
 static void Caco_ScanItems(rune_t *r, edict_t *viewer)
 {
-	int i;
+	qboolean	comm;
+	int			i, mine, t;
 
-	if (!r || !viewer)
+	if (!r || !viewer || !viewer->client)
 		return;
+
+	comm = SG_ItemComm();
+	mine = Caco_TeamRow(viewer->client->ctf.teamnum);
 
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
-		sg_belief_item_t	*b = &sg_caco_items[i];
-		edict_t				*e = g_edicts + b->ent;
+		edict_t	*e = g_edicts + sg_caco_items[0][i].ent;
+		qboolean up;
 
 		if (!e->inuse)
 			continue;
 		if (!Caco_Visible(viewer, e))
 			continue;
 
-		if (e->solid != SOLID_NOT)
+		up = (e->solid != SOLID_NOT) ? true : false;
+
+		/*
+		 * SEEING IS KNOWING, AND ONLY THAT (owner's ruling, 2026-08-05).
+		 * A bot walking past the pad learns whether the thing is standing
+		 * there -- that half of the old scan is honest and stays. What the
+		 * scan may no longer do is start a countdown: a player who glances
+		 * at an empty pad does not know whether it emptied a second ago or
+		 * fifty, so the clock is not his to start. It is started by a
+		 * teammate SAYING when it went, and by nothing else.
+		 */
+		for (t = 0; t < 2; t++)
 		{
-			b->believed_up = true;
-			b->seen_up_time = level.time;
-			b->believed_respawn_time = 0.0f;
-			VectorCopy(e->s.origin, b->org);
-			b->seed = Rune_NearestSeed(r, b->org);
-		}
-		else
-		{
-			b->believed_up = false;
-			b->believed_respawn_time = (b->respawn_delay > 0.0f)
-				? level.time + b->respawn_delay
-				: 0.0f;
-			if (b->cls == SG_BI_RUNE)
-				b->seed = -1;       /* it is in somebody's hands now */
+			sg_belief_item_t *b = &sg_caco_items[t][i];
+
+			/* with the ruling off, one bot's eyes still teach both sides,
+			 * which is the behaviour this build shipped with */
+			if (comm && t != mine)
+				continue;
+
+			if (up)
+			{
+				b->believed_up = true;
+				b->seen_up_time = level.time;
+				b->believed_respawn_time = 0.0f;    /* a look beats a clock */
+				VectorCopy(e->s.origin, b->org);
+				b->seed = Rune_NearestSeed(r, b->org);
+			}
+			else
+			{
+				b->believed_up = false;
+				if (!comm)
+					b->believed_respawn_time = (b->respawn_delay > 0.0f)
+						? level.time + b->respawn_delay
+						: 0.0f;
+				/* comm on: whatever clock this team was TOLD stands; an
+				 * empty pad neither confirms nor starts one */
+				if (b->cls == SG_BI_RUNE)
+					b->seed = -1;   /* it is in somebody's hands now */
+			}
 		}
 
 		/*
@@ -585,18 +668,17 @@ static void Caco_ScanItems(rune_t *r, edict_t *viewer)
 		 * looking, and a bot saying "quad is up" off a clock would be
 		 * claiming a look nobody took.
 		 */
-		SG_ChatItemSeen(viewer, i,
-		                (e->solid != SOLID_NOT) ? true : false);
+		SG_ChatItemSeen(viewer, i, up);
 	}
 }
 
-static void Caco_AgeItems(rune_t *r)
+static void Caco_AgeItemsRow(rune_t *r, int t)
 {
 	int i;
 
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
-		sg_belief_item_t *b = &sg_caco_items[i];
+		sg_belief_item_t *b = &sg_caco_items[t][i];
 
 		/* a spawn location known from the map still needs a seed; that is
 		 * arithmetic on map knowledge, not a look at the world */
@@ -635,22 +717,52 @@ static void Caco_AgeItems(rune_t *r)
 	}
 }
 
+/* both teams' rows: each side runs its own clocks, off its own callouts */
+static void Caco_AgeItems(rune_t *r)
+{
+	Caco_AgeItemsRow(r, 0);
+	Caco_AgeItemsRow(r, 1);
+}
+
 /*
- * What sg_fields.c asks instead of asking the entity. An item outside the
- * belief classes (weapons, armour, ammo, health) is answered exactly as the
- * field code answers it today, so wiring these in changes only the two
- * classes that are meant to change.
+ * What one team believes about one item. An item outside the belief classes
+ * (weapons, armour, ammo, health) is answered exactly as the field code
+ * answers it today, so wiring these in changes only the two classes that are
+ * meant to change.
  */
-qboolean Caco_ItemBelievedUp(edict_t *e)
+qboolean Caco_ItemBelievedUpFor(int team, edict_t *e)
 {
 	sg_belief_item_t *b;
 
 	if (!e || !e->inuse || !e->classname)
 		return false;
-	b = Caco_ItemBelief(e);
+	b = Caco_ItemBelief(team, e);
 	if (!b)
 		return (e->solid != SOLID_NOT) ? true : false;
 	return b->believed_up;
+}
+
+/*
+ * The SHARED view, and the one place in SLIPGATE where the split is knowingly
+ * flattened. sg_fields.c floods one set of item-class fields for the whole
+ * server -- a cost surface over the map, not a bot's opinion -- and it has no
+ * team to ask. Splitting the floods would double every item field's memory
+ * and put a team on the signature of every reader in sg_arach.c, to move a
+ * distance number that does not by itself send anyone anywhere.
+ *
+ * What actually decides a detour is the WORTH (sg_combat.c Worth_Quad,
+ * Worth_Rune), and that is priced from the bot's own team row -- a team that
+ * believes the quad is gone prices it at zero and walks past the pad however
+ * the field reads. So the union here costs a slightly stale nearest-of-class
+ * distance and never a route to an item the team does not believe in.
+ *
+ * With sg_itemcomm 0 the two rows are identical and this is the old answer
+ * exactly.
+ */
+qboolean Caco_ItemBelievedUp(edict_t *e)
+{
+	return (Caco_ItemBelievedUpFor(CTF_TEAM_RED, e) ||
+	        Caco_ItemBelievedUpFor(CTF_TEAM_BLUE, e)) ? true : false;
 }
 
 /*
@@ -662,26 +774,127 @@ qboolean Caco_ItemBelievedUp(edict_t *e)
 unsigned Caco_ItemBeliefSig(void)
 {
 	unsigned	sig = 2166136261u;
-	int			i;
+	int			i, t;
 
-	for (i = 0; i < sg_caco_num_items; i++)
-	{
-		sig = (sig ^ (unsigned)sg_caco_items[i].believed_up) * 16777619u;
-		sig = (sig ^ (unsigned)sg_caco_items[i].seed) * 16777619u;
-	}
+	/* both rows: the field is shared, so it has to rebuild when EITHER side's
+	 * belief moves -- and with sg_itemcomm 0 the rows are identical, so this
+	 * changes value at exactly the moments it always did */
+	for (t = 0; t < 2; t++)
+		for (i = 0; i < sg_caco_num_items; i++)
+		{
+			sig = (sig ^ (unsigned)sg_caco_items[t][i].believed_up) * 16777619u;
+			sig = (sig ^ (unsigned)sg_caco_items[t][i].seed) * 16777619u;
+		}
 	return sig;
 }
 
 int Caco_ItemBeliefSeed(rune_t *r, edict_t *e)
 {
-	sg_belief_item_t *b;
+	int i, t;
 
 	if (!e || !e->inuse)
 		return -1;
-	b = Caco_ItemBelief(e);
-	if (b)
-		return b->believed_up ? b->seed : -1;
-	return Rune_NearestSeed(r, e->s.origin);
+	i = Caco_ItemIndex(e);
+	if (i < 0)
+		return Rune_NearestSeed(r, e->s.origin);
+
+	/* the shared field again: seeded from whichever side still believes in
+	 * the thing, for the reason written over Caco_ItemBelievedUp */
+	for (t = 0; t < 2; t++)
+		if (sg_caco_items[t][i].believed_up)
+			return sg_caco_items[t][i].seed;
+	return -1;
+}
+
+/*
+ * ------------------------------------------------------ the pickup hand-off
+ *
+ * Touch_Item (g_items.c) is the one place in the game every successful pickup
+ * passes through, bot or human, so it is where the hook goes -- one call, and
+ * every decision about whether this pickup matters made on this side. The
+ * ruling of 2026-08-05 is what it implements: an item's return time is
+ * knowledge a bot's MOUTH transmits, not knowledge the server hands out.
+ *
+ * Nothing here happens with sg_itemcomm 0, so the hook is inert in the
+ * shipped default and the shared-belief build is untouched.
+ */
+
+/* one of ours, on that team, alive, with a clear sight line to the item at the
+ * moment it went. Prefers a bot whose say_team budget is free, exactly as
+ * Chat_Speaker does, so the witness call comes out of a mouth that can use it. */
+static edict_t *Caco_ItemWitness(edict_t *item, int team, edict_t *taker)
+{
+	edict_t	*fallback = NULL;
+	int		i;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t *e = g_edicts + 1 + i;
+
+		if (e == taker)
+			continue;
+		if (!e->inuse || !e->client || !(e->flags & FL_BOT) || !SG_OwnsBot(e))
+			continue;
+		if (e->client->ctf.teamnum != team)
+			continue;
+		if (e->deadflag == DEAD_DEAD || e->health <= 0)
+			continue;
+		if (!Caco_Visible(e, item))
+			continue;                   /* it did not see it happen */
+
+		if (SG_ChatBudgetClear(e))
+			return e;
+		if (!fallback)
+			fallback = e;
+	}
+	return fallback;
+}
+
+void SG_NoteItemTaken(edict_t *taker, edict_t *item)
+{
+	int takerteam, t;
+
+	if (!SG_ItemComm())
+		return;                     /* shared-belief build: nothing to do */
+	if (!taker || !taker->client || !item || !item->inuse)
+		return;
+	/*
+	 * A dropped copy is not a pad. It has no respawn (g_items.c:198 and :759
+	 * both skip SetRespawn for DROPPED_ITEM), it is not in the belief table
+	 * for the same reason Caco_ScanItemSpawns skips it, and "quad is back in
+	 * 60" said about a corpse's quad would be a lie with a number on it.
+	 */
+	if (item->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM))
+		return;
+	if (!SG_ChatItemMajor(item))
+		return;
+
+	takerteam = taker->client->ctf.teamnum;
+
+	for (t = 0; t < 2; t++)
+	{
+		int		team = t + 1;
+		int		src;
+		edict_t	*speaker;
+
+		if (team == takerteam && SG_OwnsBot(taker) && (taker->flags & FL_BOT))
+		{
+			/* (a) it is holding the thing; no eyes are needed and no other
+			 * bot on the team is asked to speak for it */
+			speaker = taker;
+			src = SG_ITEMCALL_TAKER;
+		}
+		else
+		{
+			/* (b) and (c): somebody else took it and one of ours watched */
+			speaker = Caco_ItemWitness(item, team, taker);
+			if (!speaker)
+				continue;           /* nobody on this side saw a thing */
+			src = (team == takerteam) ? SG_ITEMCALL_MATE : SG_ITEMCALL_ENEMY;
+		}
+
+		SG_ChatItemTaken(speaker, team, item, src);
+	}
 }
 
 static void Caco_Age(rune_t *r)
@@ -1497,7 +1710,10 @@ qboolean Caco_EnemyHasDamageRune(int team)
 
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
-		sg_belief_item_t *it = &sg_caco_items[i];
+		/* THIS team's row: the whole point of the D4 chain is that it is
+		 * built out of what this side has seen (owner's ruling 2026-08-05 --
+		 * the other team's look at the Damage pad is not ours to reason from) */
+		sg_belief_item_t *it = &sg_caco_items[Caco_TeamRow(team)][i];
 		edict_t *re = (it->ent > 0) ? g_edicts + it->ent : NULL;
 
 		if (re && re->classname &&
