@@ -242,7 +242,8 @@ void		SG_ListBots(void);                  /* slot/name/team/score/skill/role/see
 qboolean	SG_RemoveBotNamed(const char *who); /* netname ([SG] optional) or slot */
 qboolean	SG_KickWorst(void);                 /* lowest score, either team */
 void		SG_WeightsPrint(void);              /* live table and each entry's source */
-void		SG_WeightsReload(void);             /* re-read slipgate-weights.cfg live */
+void		SG_WeightsReload(void);             /* re-read the global weights file and
+                                             * this map's playbook, in that order */
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
 

@@ -524,7 +524,8 @@ static const sg_weights_t sg_weight_compiled[SG_ROLES] = {
 /*
  * The LIVE table the body actually reads. It starts as a copy of the
  * compiled rows above and stays that way unless <gamedir>/slipgate-weights.cfg
- * says otherwise -- no file, no difference, byte for byte.
+ * or this map's <gamedir>/slipgate-weights-<mapname>.cfg says otherwise --
+ * no files, no difference, byte for byte.
  *
  * The reason this exists: the weights are the one fitted component, and
  * fitting them meant a rebuild and a fleet restart per candidate row. Ten
@@ -554,8 +555,23 @@ static const char *sg_weight_fields[] = {
 #define SG_WEIGHT_FIELDS ((int)(sizeof(sg_weight_fields) / \
                                 sizeof(sg_weight_fields[0])))
 
-/* which entries the file spoke for, so `sv sg weights` can say who set what */
-static byte	sg_weight_fromfile[SG_ROLES][SG_WEIGHT_FIELDS];
+/*
+ * Who set what, so `sv sg weights` can say. Three layers, applied in this
+ * order, each one writing over the one before it: the compiled rows, then
+ * the global file, then the per-map file. The tag is the LAST layer that
+ * touched that entry, which is the one whose number is standing.
+ */
+#define SG_WSRC_COMPILED	0
+#define SG_WSRC_FILE		1
+#define SG_WSRC_MAP			2
+
+static const char *sg_weight_srcnames[] = { "compiled", "file", "map" };
+
+static byte	sg_weight_src[SG_ROLES][SG_WEIGHT_FIELDS];
+/* the layer the parse currently running is speaking for */
+static byte	sg_weight_srcnow;
+/* the per-map file that was actually read, empty when there was none */
+static char	sg_weight_mappath[MAX_OSPATH];
 
 static float *Weights_Slot(int role, int fi)
 {
@@ -572,13 +588,18 @@ static float *Weights_Slot(int role, int fi)
 
 /* the same gamedir the runes come out of (Rune_Load): the engine's own
  * "gamedir" cvar, not g_local.h's `gamedir` global, which is really the
- * "game" cvar and is a different string on a server started with +set game */
-static void Weights_Path(char *buf, int size)
+ * "game" cvar and is a different string on a server started with +set game.
+ * mapname NULL asks for the global file, a map name for that map's playbook
+ * (<gamedir>/slipgate-weights-<mapname>.cfg). */
+static void Weights_Path(char *buf, int size, const char *mapname)
 {
-	cvar_t *gamedir = gi.cvar("gamedir", "", 0);
+	cvar_t		*gamedir = gi.cvar("gamedir", "", 0);
+	const char	*dir = gamedir->string[0] ? gamedir->string : ".";
 
-	Com_sprintf(buf, size, "%s/slipgate-weights.cfg",
-	            gamedir->string[0] ? gamedir->string : ".");
+	if (mapname && mapname[0])
+		Com_sprintf(buf, size, "%s/slipgate-weights-%s.cfg", dir, mapname);
+	else
+		Com_sprintf(buf, size, "%s/slipgate-weights.cfg", dir);
 }
 
 /*
@@ -610,30 +631,26 @@ static qboolean Weights_Set(const char *key, float v)
 		return false;
 
 	*Weights_Slot(role, fi) = v;
-	sg_weight_fromfile[role][fi] = 1;
+	sg_weight_src[role][fi] = sg_weight_srcnow;
 	return true;
 }
 
 /*
- * Always from the compiled rows up. A reload that DROPS a key has to put the
- * shipped value back; leaving the previous file's number standing would make
- * the live table depend on the order the admin edited things in, which is the
- * kind of state nobody can reason about at 2am mid-wave.
+ * One layer: parse `path` over whatever is already in the live table,
+ * stamping every entry it sets with sg_weight_srcnow. A file that is not
+ * there is the ordinary case and says nothing -- that silence is what makes
+ * a server with no weights files behave exactly as it did before any of
+ * this existed. Returns whether the file was there and read.
  */
-static void Weights_Load(void)
+static qboolean Weights_ReadFile(const char *path)
 {
-	char	path[MAX_OSPATH], line[256];
+	char	line[256];
 	FILE	*f;
 	int		n = 0, bad = 0;
 
-	memcpy(sg_weight_table, sg_weight_compiled, sizeof(sg_weight_table));
-	memset(sg_weight_fromfile, 0, sizeof(sg_weight_fromfile));
-	sg_weights_ready = true;
-
-	Weights_Path(path, sizeof(path));
 	f = fopen(path, "r");
 	if (!f)
-		return;                 /* the ordinary case: shipped values, silently */
+		return false;           /* the ordinary case: shipped values, silently */
 
 	while (fgets(line, sizeof(line), f))
 	{
@@ -663,6 +680,44 @@ static void Weights_Load(void)
 	fclose(f);
 	gi.dprintf("slipgate: weights: %d from %s%s\n", n, path,
 	           bad ? va(" (%d rejected)", bad) : "");
+	return true;
+}
+
+/*
+ * Always from the compiled rows up, then the global file, then this map's
+ * playbook. A reload that DROPS a key has to put the shipped value back;
+ * leaving the previous file's number standing would make the live table
+ * depend on the order the admin edited things in, which is the kind of state
+ * nobody can reason about at 2am mid-wave. The same argument is why the map
+ * layer is re-applied from scratch here rather than patched on a map change:
+ * the only way the table can say what q2dm1 means is to be rebuilt for it.
+ *
+ * Map layer last because it is the narrower statement. A map whose flag room
+ * punishes armour detours wants ONE row different from the fleet's, and the
+ * global file stays the place the fleet-wide sweep lives.
+ */
+static void Weights_Load(void)
+{
+	char	path[MAX_OSPATH];
+
+	memcpy(sg_weight_table, sg_weight_compiled, sizeof(sg_weight_table));
+	memset(sg_weight_src, 0, sizeof(sg_weight_src));
+	sg_weight_mappath[0] = 0;
+	sg_weights_ready = true;
+
+	sg_weight_srcnow = SG_WSRC_FILE;
+	Weights_Path(path, sizeof(path), NULL);
+	Weights_ReadFile(path);
+
+	/* level.mapname is empty before the first map is up -- Weights_Row can
+	 * arm the table that early. No map, no map layer. */
+	if (!level.mapname[0])
+		return;
+
+	sg_weight_srcnow = SG_WSRC_MAP;
+	Weights_Path(path, sizeof(path), level.mapname);
+	if (Weights_ReadFile(path))
+		Com_sprintf(sg_weight_mappath, sizeof(sg_weight_mappath), "%s", path);
 }
 
 /*
@@ -688,17 +743,22 @@ void SG_WeightsPrint(void)
 	char	path[MAX_OSPATH];
 	int		role, fi;
 
-	Weights_Path(path, sizeof(path));
+	Weights_Path(path, sizeof(path), NULL);
 	if (!sg_weights_ready)
 		Weights_Load();
 
 	gi.cprintf(NULL, PRINT_HIGH, "slipgate weights (%s):\n", path);
+	/* only when there IS one: a server running no map playbook prints
+	 * exactly what it always printed */
+	if (sg_weight_mappath[0])
+		gi.cprintf(NULL, PRINT_HIGH, "  over map file (%s):\n",
+		           sg_weight_mappath);
 	for (role = 0; role < SG_ROLES; role++)
 		for (fi = 0; fi < SG_WEIGHT_FIELDS; fi++)
 			gi.cprintf(NULL, PRINT_HIGH, "  %-8s %-16s %6.2f  %s\n",
 			           sg_role_names[role], sg_weight_fields[fi],
 			           *Weights_Slot(role, fi),
-			           sg_weight_fromfile[role][fi] ? "file" : "compiled");
+			           sg_weight_srcnames[sg_weight_src[role][fi]]);
 }
 
 /*
