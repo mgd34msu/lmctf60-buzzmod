@@ -1267,11 +1267,13 @@ static void Caco_RelayFlush(void)
 sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
 
 /*
- * When each team LAST HEARD an enemy quad working (items/damage3.wav off a
- * quadded enemy, through the honest ear below). The radio's "quad 30" is a
- * call a human makes off exactly this signal dying away -- owner's ruling
- * 2026-08-05: EITHER the take is called at 60, OR nobody called it and the
- * wear-off is called at 30. Never both.
+ * When each team last heard an enemy quad ANNOUNCE ITS OWN ENDING. The
+ * owner's correction (2026-08-05): the "quad 30" cue is not silence after
+ * the hit sounds -- it is the fade warning itself, items/damage2.wav,
+ * which p_view.c:435 plays exactly once at 3.0s remaining ("beginning to
+ * fade"). Hear that from an enemy and you KNOW: 3s left + 30 to respawn.
+ * EITHER the take was called at 60, OR nobody called it and this fade
+ * sound earns the 30. Never both.
  */
 float sg_caco_quadheard[2];
 static int sg_quadsound_idx;
@@ -1488,10 +1490,11 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 
 		Caco_EnemyPlace(team - 1, ecl, seed, false, false);
 
-		/* the quad's own voice: any hit sound from a quadded enemy. The
-		 * index is resolved lazily -- precache order is stable per map. */
+		/* the quad announcing its own ending (damage2 = the fade warning,
+		 * played once at 3s remaining). Index resolved lazily -- precache
+		 * order is stable per map. */
 		if (!sg_quadsound_idx)
-			sg_quadsound_idx = gi.soundindex("items/damage3.wav");
+			sg_quadsound_idx = gi.soundindex("items/damage2.wav");
 		if (soundindex == sg_quadsound_idx)
 			sg_caco_quadheard[team - 1] = level.time;
 

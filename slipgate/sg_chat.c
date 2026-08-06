@@ -1569,18 +1569,18 @@ static void Chat_RadioFrame(void)
 	for (t = 0; t < 2; t++)
 	{
 		/*
-		 * The uncalled quad. The ear stamped every enemy-quad hit sound;
-		 * when that voice has been dead 5-8 seconds, the quad wore off
-		 * around (last heard + a beat), and if NOBODY called the take --
-		 * no 60 covering this cycle, no clock on the row -- one owner
-		 * says "quad 30" now, the way a human reads the same silence.
-		 * Imprecise by nature and by the owner's own admission ("we may
-		 * be slightly off"): the jitter is the honesty.
+		 * The uncalled quad. The ear stamped the FADE WARNING -- the
+		 * sound the quad plays in its own last three seconds (owner's
+		 * correction: "the sound it makes when it is turning off...
+		 * that's when you know you can call quad 30"). Hear it, and the
+		 * arithmetic is exact: 3s of quad left, 30 to respawn behind it.
+		 * If nobody called the take -- no 60 covering this cycle -- one
+		 * owner calls the 30 within a human beat of the warning.
 		 */
 		float heard = sg_caco_quadheard[t];
 
 		if (SG_ItemComm() && heard > 0.0f &&
-		    level.time - heard > 5.0f && level.time - heard < 8.0f &&
+		    level.time - heard > 0.5f && level.time - heard < 4.0f &&
 		    level.time > radio_q30[t].quiet_fired_at + 20.0f &&
 		    level.time > radio_q30[t].called_until)
 		{
@@ -1596,10 +1596,13 @@ static void Chat_RadioFrame(void)
 				 * team clock through the same spoken-line law as a take
 				 * call, at wear-off + the pad's respawn, +/- the slop a
 				 * human ear carries */
+				/* the fade fires at 3.0s remaining, so the pad is back
+				 * at heard + 3 + 30; the half-second of jitter is the
+				 * hand, not the ear */
 				Chat_QueueArm(sp, t + 1, SG_CHAT_TOPIC_MAJOR, line,
 				              SG_ARM_QUIET, -1, 0, SG_ITEMCALL_MATE,
-				              heard + 30.0f +
-				              ((float)(rand() % 40) / 10.0f - 2.0f));
+				              heard + 33.0f +
+				              ((float)(rand() % 10) / 10.0f - 0.5f));
 				Chat_RadioQueue(sp, t + 1, "_quad30");
 			}
 		}
