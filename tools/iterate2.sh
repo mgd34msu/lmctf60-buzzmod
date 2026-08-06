@@ -51,7 +51,10 @@ LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7
 # lane A/B moved to mactf06 (coverage 29/48 -- THE lane map; lmctf22
 # reads 12/48, too weak to show the doctrine). lmctf22 keeps coverage
 # on s05.
-MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
+# s06/s07 moved to lmctf22 (405+): the comm-stack pair needs a QUAD map
+# -- lmctf44 fields only megas (BSP entity census). lmctf44 coverage is
+# not lost; the mega machinery got its shakedown there on 404.
+MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf22  lmctf22   lmctf09  lmctf01  smap05)
 FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:1")
 SECS=(  600      600      900      900      900       900      900       600      900      600)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
