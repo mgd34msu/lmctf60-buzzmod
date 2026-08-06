@@ -1780,6 +1780,26 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		return;
 	}
 
+	/*
+	 * ONE VOICE PER QUAD CYCLE PER TEAM (owner, 2026-08-05: "we don't
+	 * like when multiple people on the team call the same quad timer...
+	 * it creates confusion"). ANY armed quad clock -- take-call, fade
+	 * call, a parsed human line -- marks the cycle covered, and every
+	 * other would-be caller (the fade watcher, the countdown reminder)
+	 * checks this mark and stays quiet. Set here, not in the radio path,
+	 * so a text-only server gets the same discipline.
+	 */
+	{
+		const char *acls = NULL;
+
+		if (q->arm_kind == SG_ARM_ITEM &&
+		    sg_caco_items[ti][q->arm_slot].ent > 0)
+			acls = g_edicts[sg_caco_items[ti][q->arm_slot].ent].classname;
+		if (q->arm_kind == SG_ARM_QUIET || (acls &&
+		    strcmp(acls, "item_quad") == 0))
+			radio_q30[ti].called_until = q->arm_back_at;
+	}
+
 	if (q->arm_kind == SG_ARM_QUIET)
 	{
 		/* the ear-driven "quad 30": no slot rode the queue, so find the
@@ -2038,6 +2058,11 @@ static void Chat_Countdown(void)
 			 * cooldown eats is a line this team does not get told twice
 			 * on the same respawn either */
 			c->soon_said[ti] = true;
+			/* a covered quad cycle already had its one voice; the reminder
+			 * would be the second caller the owner banned */
+			if (ie->classname && strcmp(ie->classname, "item_quad") == 0 &&
+			    radio_q30[ti].called_until >= c->back_at[ti])
+				continue;
 			Chat_SoonSay(ti, ie, Chat_ItemName(ie), c->back_at[ti]);
 		}
 
