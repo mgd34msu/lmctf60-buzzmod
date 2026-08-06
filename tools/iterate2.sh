@@ -205,12 +205,14 @@ ROUTEJITTER=(8   8        8        0        8         8        8         8      
 # leave with the flag by a different road than the one ridden in -- but
 # not always. Coin per carry at dose%; armed carries price the inbound
 # links 1.5x. s06 armed vs s07 control (the 5v3 pair: carry-rich).
-# 402+: the freed pair carries the COMM STACK as one variable -- the
-# whole communication economy (per-team chat-armed clocks, radio with
-# human lag, early returns, mega obituary clocks) ON at s06, OFF at s07.
-# Metric: caps/steals on the pair (must be free or better), call counts,
-# clock accuracy vs truth, itemlead conversions. Judged pooled.
-COMMSTACK=(0     0        0        0        0         1        0         0        0        0)
+# ADOPTED (2026-08-06, 30-wave pool: comm 36% vs ctrl 34% conversion,
+# cap-positive, every subsystem verified live). The communication
+# economy runs fleet-wide except the clean control; the freed pair
+# carries MEGAWORTH next (stage-2 volume program lever 2).
+COMMSTACK=(1     1        1        1        1         1        1         1        0        1)
+
+# megaworth A/B: overheal mega pickups, s06 armed vs s07 control.
+MEGAWORTH=(0     0        0        0        0         1        0         0        0        0)
 
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
@@ -308,6 +310,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                     echo "set sg_radio 1"
                     echo "set sg_itemlead 1"
                 fi
+                echo "set sg_megaworth ${MEGAWORTH[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"
                 echo "set sg_airgain ${AIRGAIN[$i]}"
