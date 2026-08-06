@@ -217,6 +217,11 @@ COMMSTACK=(1     1        1        1        1         1        1         1      
 # detour budget (4000ms was too generous) or attack-role-only gating.
 MEGAWORTH=(0     0        0        0        0         0        0         0        0        0)
 
+# stage-2 lever 3: attack-objective commitment. sg_atkobj is percent
+# (100 = shipped). 125 on s06 vs 100 control: do attackers who price
+# the flag 25% harder steal at human volume without dying broke?
+ATKOBJ=(100    100      100      100      100       125      100       100      100      100)
+
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
 # pooled waves; no judge ever named the tell it was built for. Off,
@@ -314,6 +319,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                     echo "set sg_itemlead 1"
                 fi
                 echo "set sg_megaworth ${MEGAWORTH[$i]}"
+                echo "set sg_atkobj ${ATKOBJ[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"
                 echo "set sg_airgain ${AIRGAIN[$i]}"

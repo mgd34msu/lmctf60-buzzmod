@@ -2068,7 +2068,22 @@ static float Surface_At(int seed, const sg_weights_t *w,
 	if (goal_field[seed] >= SG_FIELD_INF)
 		return 1e30f;
 
+	/*
+	 * sg_atkobj (stage-2 volume lever 3): a per-server multiplier on the
+	 * ATTACK role's objective pull, because the shared-gamedir weights
+	 * file cannot A/B across a pair. 1.0 (default) is byte-identical;
+	 * >1 makes attackers price the flag harder relative to items/cover,
+	 * the hypothesis being that human-level steal VOLUME comes from
+	 * commitment, not routes. Trialed like everything else.
+	 */
 	v = w->objective * (float)goal_field[seed];
+	if (sg_cur_role == SG_ROLE_ATTACK)
+	{
+		float ao = gi.cvar("sg_atkobj", "100", 0)->value / 100.0f;
+
+		if (ao != 1.0f)
+			v = w->objective * ao * (float)goal_field[seed];
+	}
 
 	/* tactics mode: the waypoint was scored with the full surface at
 	 * commitment; between commitments the descent runs on its flood
