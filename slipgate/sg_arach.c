@@ -262,6 +262,7 @@ typedef struct sg_bot_s
 	float		prev_seed_time;
 	float		term_brake;         /* terminal cornering: throttle vs alignment */
 	qboolean	terminal;           /* inside the last-ten-meters gate this frame */
+	qboolean	sink_ban;           /* wet carrier: downward steps out of contention */
 	float		breather_until;     /* sg_breather: sub-max throttle window */
 	float		breather_next;      /* next roll of the breather dice */
 	/* sg_spawnbeat: the orientation beat a player takes on respawn */
@@ -4255,6 +4256,39 @@ rally_done:;
 			if (duel_expo > 0.0f)
 				bestval += duel_expo *
 				    (float)sg_rune->seeds[bot->seed].area_hint * 1.8f;
+	/*
+	 * THE CARRIER DOES NOT SINK (pit forensics, waves 383-411: 83
+	 * unopposed smap05 carries, 87% touched the mid-map basin, 33 ended
+	 * "sank like a rock"). The flood's cheapest way out of that basin
+	 * fires its long ropes from the BOTTOM of the water (seeds 541/545/
+	 * 551/554 at z=-744), so the descent walks a carrier 250 units DOWN
+	 * to reach a rope it then has four seconds of air to land. Breath
+	 * doctrine is a motor override at the gurgle; it cannot un-choose
+	 * the step that spent the air. A wet carrier prices every downward
+	 * step out of contention -- but ONLY when some candidate is not
+	 * downward, so a genuine one-way underwater tunnel still runs and
+	 * no carrier is ever stranded.
+	 */
+	{
+		qboolean sink_ban = false;
+
+		if (role == SG_ROLE_CARRY && bot->seed >= 0 && e->waterlevel > 0)
+		{
+			int li2;
+			float z0 = sg_rune->seeds[bot->seed].origin[2];
+
+			for (li2 = sg_rune->first_link[bot->seed]; li2 >= 0;
+			     li2 = sg_rune->next_link[li2])
+				if (sg_rune->seeds[sg_rune->links[li2].to].origin[2] >=
+				    z0 - 16.0f)
+				{
+					sink_ban = true;
+					break;
+				}
+		}
+		bot->sink_ban = sink_ban;
+	}
+
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
 	{
 		rune_link_t *l = &sg_rune->links[li];
@@ -4388,6 +4422,15 @@ rally_done:;
 		if (role == SG_ROLE_CARRY && l->action == RL_SWIM &&
 		    gi.cvar("sg_watercarry", "0", 0)->value)
 			v -= 800.0f;
+
+		/* the sink ban's teeth: 12000 exceeds the basin's worst gap
+		 * (max eff link 4055 + field spread 2221), so any non-sinking
+		 * candidate wins; the pre-pass above guarantees one exists */
+		if ((bot->sink_ban ||
+		     (role == SG_ROLE_CARRY && l->action == RL_SWIM)) &&
+		    sg_rune->seeds[l->to].origin[2] <
+		        sg_rune->seeds[bot->seed].origin[2] - 16.0f)
+			v += 12000.0f;
 
 		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
 		{
