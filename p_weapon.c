@@ -1648,6 +1648,15 @@ void weapon_railgun_fire (edict_t *ent)
 	gi.WriteByte (MZ_RAILGUN | is_silenced);
 	gi.multicast (ent->s.origin, MULTICAST_PVS);
 
+	// BUZZKILL - SLIPGATE: the rail rhythm. The slug is away and the flash
+	// and the trail are on the wire, which is the whole of what a player in
+	// the room perceives; every test about who could have perceived it, and
+	// what a bot is allowed to do with it, is on the slipgate side
+	{
+		void SG_NoteRailShot(edict_t *shooter);
+		SG_NoteRailShot(ent);
+	}
+
 	ent->client->ps.gunframe++;
 	PlayerNoise(ent, start, PNOISE_WEAPON);
 

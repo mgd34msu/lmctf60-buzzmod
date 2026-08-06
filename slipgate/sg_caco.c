@@ -1597,6 +1597,18 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 	if (ci < 0 || ci >= SG_DMG_CLIENTS || ac < 0)
 		return;
 
+	/*
+	 * THE FELT HALF OF THE RAIL RHYTHM. A slug that lands is a slug that
+	 * was fired, and the man it landed on is in no doubt about when. The
+	 * heard half (SG_NoteRailShot) already covers this case -- a hitscan
+	 * hit means a sight line, and a sight line is inside the PHS -- so
+	 * this is belt and braces rather than new knowledge. It is written
+	 * anyway because it is the reading that survives: the ear is a tap on
+	 * one call site in a game file and the pain is the bot's own body.
+	 */
+	if (mod == MOD_RAILGUN && ac < SG_DMG_CLIENTS && SG_RailRhythm())
+		sg_caco_railshot[team - 1][ac] = level.time;
+
 	VectorCopy(victim->s.origin, eye);
 	eye[2] += victim->viewheight;
 
@@ -1720,6 +1732,142 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from)
 	return true;
 }
 
+/* ---------------------------------------------------------- the rail rhythm
+ *
+ * The fourth sense, and the narrowest: not WHERE an enemy is but WHEN his
+ * gun was last empty. The numbers and the reasoning are in sg_local.h, over
+ * SG_RAIL_RELOAD.
+ *
+ * WHAT A BOT IS ALLOWED TO LEARN, again. One engine fact: gi.inPHS. In
+ * Quake II the railgun makes no server-side sound at all -- weapon_railgun_fire
+ * calls no gi.sound, so the ear in this same file never hears one. What a
+ * human client actually gets is two client-side sounds off two network
+ * messages: railgf1a.wav on the MZ_RAILGUN muzzle flash (multicast PVS,
+ * ATTN_NORM) and railgf1a.wav again on the TE_RAILTRAIL temp entity
+ * (multicast PHS, ATTN_NONE). The second is the wider of the two and it has
+ * no distance falloff to measure against, so the audibility test that matches
+ * what a player in that room would really hear is the PHS and nothing else.
+ * No radius, no weaponstate, no ammunition count.
+ *
+ * WHAT IT PLACES: nothing. This writes a TIME and no position. The eye, the
+ * ear and the hit sense between them already decide where an enemy is
+ * believed to be, and a rail shot heard through three rooms would place him
+ * worse than any of them. All this knows is that somebody's rail went off.
+ */
+
+float		sg_caco_railshot[2][SG_DMG_CLIENTS];
+static unsigned	sg_rail_said;       /* RAILSHOT print sampler */
+
+qboolean SG_RailRhythm(void)
+{
+	return (gi.cvar("sg_railrhythm", "0", 0)->value > 0.0f) ? true : false;
+}
+
+void SG_NoteRailShot(edict_t *shooter)
+{
+	int	sc, steam, i;
+
+	if (!SG_RailRhythm())
+		return;                     /* default: this call costs one cvar read */
+	if (!shooter || !shooter->inuse || !shooter->client)
+		return;                     /* a monster's railgun names no client */
+
+	steam = shooter->client->ctf.teamnum;
+	if (steam <= CTF_TEAM_UNDEFINED)
+		return;
+
+	sc = (int)(shooter - g_edicts) - 1;
+	if (sc < 0 || sc >= game.maxclients || sc >= SG_DMG_CLIENTS)
+		return;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t	*b = g_edicts + 1 + i;
+		int		team;
+
+		if (!b->inuse || !b->client || b->deadflag)
+			continue;
+		if (b == shooter)
+			continue;
+		if (!SG_OwnsBot(b))
+			continue;               /* only SLIPGATE bots listen through here */
+
+		team = b->client->ctf.teamnum;
+		if (team <= CTF_TEAM_UNDEFINED || team == steam)
+			continue;               /* a teammate's rail is not a lane to time */
+
+		if (!gi.inPHS(b->s.origin, shooter->s.origin))
+			continue;               /* the trail message never reached here */
+
+		sg_caco_railshot[team - 1][sc] = level.time;
+
+		/* sampled 1-in-8: a two-railer server fires on the order of a
+		 * shot a second and the log is for reading */
+		if (gi.cvar("sg_debug", "0", 0)->value && !(sg_rail_said++ & 7))
+			gi.dprintf("RAILSHOT %s heard %s reload=%.1f window=%.1f\n",
+			           b->client->pers.netname,
+			           shooter->client->pers.netname,
+			           SG_RAIL_RELOAD, SG_RAIL_WINDOW);
+	}
+}
+
+qboolean SG_RailThreat(int team, float fresh, int *out_client, int *out_seed)
+{
+	sg_belief_enemy_t	*tab;
+	int					s, best = -1;
+	float				bt = -1.0f;
+
+	if (!SG_RailRhythm())
+		return false;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return false;
+
+	tab = sg_caco_enemies[team - 1];
+	for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+	{
+		sg_belief_enemy_t *en = &tab[s];
+
+		if (en->client < 0 || en->client >= SG_DMG_CLIENTS || en->seed < 0)
+			continue;
+		if (level.time - en->seen_time > fresh)
+			continue;
+		/* the belief says where; the rail table says whether he is the
+		 * kind of enemy this feature is about at all */
+		if (sg_caco_railshot[team - 1][en->client] <= 0.0f ||
+		    level.time - sg_caco_railshot[team - 1][en->client] >
+		        SG_RAIL_MEMORY)
+			continue;
+		if (en->seen_time > bt)
+		{
+			bt = en->seen_time;
+			best = s;
+		}
+	}
+	if (best < 0)
+		return false;
+
+	if (out_client)
+		*out_client = tab[best].client;
+	if (out_seed)
+		*out_seed = tab[best].seed;
+	return true;
+}
+
+qboolean SG_RailCold(int team, int client)
+{
+	float	t;
+
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return false;
+	if (client < 0 || client >= SG_DMG_CLIENTS)
+		return false;
+
+	t = sg_caco_railshot[team - 1][client];
+	if (t <= 0.0f)
+		return false;               /* never heard him fire: assume loaded */
+	return (level.time - t < SG_RAIL_WINDOW) ? true : false;
+}
+
 /*
  * The D4 inference chain, every link a believed or team-known fact:
  * the Damage rune's pad state comes from item belief (a rune sighting,
@@ -1820,6 +1968,8 @@ void Caco_Reset(void)
 				sg_caco_enemies[t][s].client = -1;
 	}
 	memset(sg_caco_damage, 0, sizeof(sg_caco_damage));
+	/* 0 is "never heard him fire", which is the value the table wants */
+	memset(sg_caco_railshot, 0, sizeof(sg_caco_railshot));
 	{
 		int c, k;
 

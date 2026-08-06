@@ -221,6 +221,27 @@ typedef struct sg_bot_s
 	int			rail_stage;     /* 0 off, 1 walk to from-seed, 2 drive line */
 	float		rail_until;
 
+	/*
+	 * THE RAIL RHYTHM (sg_railrhythm). The lane this bot is waiting out:
+	 * who is believed to be holding it, when the wait started, and how
+	 * long this bot is willing to let it last. railhold_since is the
+	 * sentinel -- 0 is "not waiting", the same way rally_since is -- so
+	 * that a slot never zeroed between maps cannot arrive wearing a wait
+	 * it did not choose.
+	 */
+	float		railhold_since;
+	float		railhold_patience;
+	float		railhold_next;      /* refractory: earliest a NEW wait may be
+	                                 * armed. Without it a wait that expires
+	                                 * re-arms on the very next frame from
+	                                 * the same unchanged geometry -- the bot
+	                                 * never moved, so nothing about the two
+	                                 * traces is different -- and the cap the
+	                                 * whole design rests on is not a cap at
+	                                 * all, it is a stutter that lasts as
+	                                 * long as the sighting does */
+	int			railhold_enemy;     /* client number, for the log line */
+
 	/* exit-lane asymmetry (sg_exitasym): the links ridden in on this leg,
 	 * a ring so the last 16 survive any errand */
 	int			inlinks[16];
@@ -2734,6 +2755,10 @@ static void SG_BotThink(sg_bot_t *bot)
 	qboolean	precision = false;          /* final approach: no tricks */
 	qboolean	hold_post = false;          /* defender at its stand: guard */
 	qboolean	rally_hold = false;         /* attacker waiting for a partner */
+	qboolean	rail_hold = false;          /* waiting out a railer's reload */
+	int			rail_seed = -1;             /* where that railer is believed */
+	int			rail_client = -1;           /* and who he is */
+	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
 	float		post_yaw = 0.0f;            /* facing the likeliest approach */
 	float		post_sight = -1.0f;         /* clear distance down that facing;
 	                                         * WEAPONS.md 2.4-D3 picks the
@@ -2772,6 +2797,8 @@ static void SG_BotThink(sg_bot_t *bot)
 		}
 		bot->seed = -1;
 		bot->view_on = false;   /* respawn snaps the view fresh */
+		bot->railhold_since = 0.0f;     /* a corpse is not waiting on a lane */
+		bot->railhold_enemy = -1;
 		/* a corpse is not standing anybody's pad: release the lease early
 		 * rather than making the next claimant wait it out */
 		Lead_Abort(bot, "died");
@@ -3848,6 +3875,36 @@ rally_done:;
 	sg_cur_push = (role == SG_ROLE_ATTACK &&
 	               level.time < sg_push_until[team - CTF_TEAM_RED]);
 	sg_route_pure_now = route_pure;
+
+	/*
+	 * THE RAIL RHYTHM, resolved ONCE for the whole fan (sg_railrhythm).
+	 * The candidate loop runs about twenty-five links wide at ten hertz;
+	 * scanning the sighting table inside it would pay for the same answer
+	 * twenty-five times. Off by default: SG_RailThreat returns false on
+	 * the cvar read before it touches anything, and both the pricing term
+	 * and the hold below are dead behind rail_seed < 0.
+	 *
+	 * Four seconds of sighting age, the same freshness the approach-cover
+	 * term uses, and eye or ear both count. An ear placement is a region
+	 * up to three hundred units wide, which is a room -- coarse for
+	 * shooting at and good enough for "do not walk into that doorway
+	 * yet", which is the only thing it is asked here.
+	 */
+	if (SG_RailThreat(team, 4.0f, &rail_client, &rail_seed))
+	{
+		/* a carrier is what rails punish: 274-279 put rails at the top of
+		 * the carrier kill ledger, 2998 damage to rocket-direct's 2317.
+		 * The dose it pays for a lit step is half again the rest of the
+		 * team's. */
+		rail_dose = gi.cvar("sg_railrhythm", "0", 0)->value *
+		            ((role == SG_ROLE_CARRY) ? 1.5f : 1.0f);
+	}
+	else
+	{
+		rail_seed = -1;
+		rail_client = -1;
+	}
+
 	bestval = Surface_At(bot->seed, w, route_field, support, intercept);
 	if (duel)
 		bestval += Duel_Price(e, sg_rune->seeds[bot->seed].origin, duel_org,
@@ -4316,6 +4373,45 @@ rally_done:;
 					v += gi.cvar("sg_approachcover", "0", 0)->value;
 					break;  /* one exposure is enough to price */
 				}
+			}
+		}
+
+		/*
+		 * RAIL COVER (sg_railrhythm). The other half of the counter-play,
+		 * and the half that runs when there is no lane to time: a burst
+		 * that ENDS somewhere the railer can see is a burst that ends in
+		 * front of a loaded gun. The trace is the approach-cover trace --
+		 * same eye height, same mask, same 900-unit gate, MASK_SOLID from
+		 * the candidate seed to the believed post -- but the sighting was
+		 * chosen once for the whole fan above, so this costs exactly one
+		 * ray per candidate rather than one per candidate per enemy.
+		 *
+		 * Every role pays it. Approach cover is an attacker's term and
+		 * carrier cover is a carrier's; a rail lane is neither, it is a
+		 * fact about the room, and the defender walking back to a post
+		 * across it dies the same way. The carrier's dose is the larger
+		 * one, folded in where the sighting was resolved.
+		 *
+		 * A PREFERENCE, not a wall, for the reason the lmctf58 audit
+		 * wrote down two terms above: the dose is the cvar's and it
+		 * belongs under the ~125/hop goal gradient. There is no branch
+		 * here that can make a seed unreachable.
+		 */
+		if (rail_seed >= 0)
+		{
+			vec3_t	reye, rthr, rspan;
+			trace_t	rtr;
+
+			VectorCopy(sg_rune->seeds[l->to].origin, reye);
+			reye[2] += 22.0f;
+			VectorCopy(sg_rune->seeds[rail_seed].origin, rthr);
+			rthr[2] += 22.0f;
+			VectorSubtract(rthr, reye, rspan);
+			if (VectorLength(rspan) < 900.0f)
+			{
+				rtr = gi.trace(reye, NULL, NULL, rthr, e, MASK_SOLID);
+				if (rtr.fraction >= 1.0f)
+					v += rail_dose;
 			}
 		}
 
@@ -5322,6 +5418,122 @@ rally_done:;
 	}
 
 	/*
+	 * A railhold clock AHEAD of the level clock is a previous map's
+	 * timestamp: level.time restarts at zero on changelevel and sg_bots[]
+	 * does not, the same trap the tactical waypoint's tac_time documents.
+	 * Stale by definition, and cleared before anything below reads it.
+	 */
+	if (bot->railhold_since > level.time ||
+	    bot->railhold_next > level.time + SG_RAIL_HOLD_GAP)
+	{
+		bot->railhold_since = 0.0f;
+		bot->railhold_next = 0.0f;
+		bot->railhold_enemy = -1;
+	}
+
+	/*
+	 * TIMING THE CROSSING (sg_railrhythm). Last of the holds and
+	 * deliberately the weakest of them: everything above -- the room
+	 * fight, the plug, the standoff, a defender's post -- is a decision
+	 * about the game, and this is a decision about one doorway. It yields
+	 * to all of them and never argues with the terminal brake or an item
+	 * errand.
+	 *
+	 * THE SHAPE OF IT. The step the surface just chose enters a believed
+	 * railer's sight line, this bot is standing somewhere that same
+	 * railer cannot see, and his last heard shot is old enough that the
+	 * gun is loaded again. That is the moment a human waits -- not for
+	 * long, and not for the shot to be aimed at him. Any rail going off
+	 * anywhere opens the window (SG_RailCold reads the shot table, which
+	 * the ear stamps for every slug in the PHS), and when it does the
+	 * hold releases on the next frame and the crossing happens inside the
+	 * reload.
+	 *
+	 * TWO TRACES, and only when a railer is already known and a step is
+	 * already chosen. Both are the approach-cover ray: candidate seed to
+	 * believed post, and body to believed post.
+	 *
+	 * THE CAP IS THE POINT. Patience runs 0.8s at skill 0 to 1.5s at
+	 * skill 4, a carrier takes the top of that band, and the wait cannot
+	 * be renewed while it is running -- so the worst this feature can
+	 * cost a capture is a second and a half of one leg, once, against a
+	 * lane that was going to be crossed in front of a loaded rail.
+	 */
+	if (rail_seed >= 0 && rail_client >= 0 && bestlink >= 0 &&
+	    !rally_hold && !precision && bot->lead_ent == 0 &&
+	    bot->seed >= 0 &&
+	    (bot->railhold_since > 0.0f || level.time >= bot->railhold_next))
+	{
+		vec3_t	rthr, rstep, rbody;
+		trace_t	rtr;
+
+		VectorCopy(sg_rune->seeds[rail_seed].origin, rthr);
+		rthr[2] += 22.0f;
+		VectorCopy(sg_rune->seeds[sg_rune->links[bestlink].to].origin,
+		           rstep);
+		rstep[2] += 22.0f;
+		VectorCopy(e->s.origin, rbody);
+		rbody[2] += e->viewheight;
+
+		/* is the crossing imminent -- does the next step enter his lane? */
+		rtr = gi.trace(rstep, NULL, NULL, rthr, e, MASK_SOLID);
+		if (rtr.fraction >= 1.0f)
+		{
+			/* and is there cover to wait in, here, right now? A bot
+			 * already standing in his line gains nothing by stopping in
+			 * it: waiting in the open is the worst of both. */
+			rtr = gi.trace(rbody, NULL, NULL, rthr, e, MASK_SOLID);
+			if (rtr.fraction < 1.0f && !SG_RailCold(team, rail_client))
+			{
+				if (bot->railhold_since <= 0.0f)
+				{
+					float sk = (float)SG_CombatSkill(e) / 100.0f;  /* 0..4 */
+
+					bot->railhold_since = level.time;
+					bot->railhold_patience =
+					    (role == SG_ROLE_CARRY)
+					        ? 1.5f
+					        : 0.8f + (1.5f - 0.8f) * (sk / 4.0f);
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("RAILHOLD %s at seed=%d waits on "
+						           "cl=%d seed=%d patience=%.1f%s\n",
+						           e->client->pers.netname, bot->seed,
+						           rail_client, rail_seed,
+						           bot->railhold_patience,
+						           (role == SG_ROLE_CARRY)
+						               ? " carrier" : "");
+				}
+				/* re-stamped every waiting frame, not only at the arm:
+				 * if the freshest railer changes identity mid-wait the
+				 * release line must name the man actually waited out --
+				 * and the patience clock deliberately does NOT restart,
+				 * or a room with two railers in it would have no cap */
+				bot->railhold_enemy = rail_client;
+				if (level.time - bot->railhold_since <
+				    bot->railhold_patience)
+					rail_hold = true;
+			}
+		}
+	}
+	if (!rail_hold && bot->railhold_since > 0.0f)
+	{
+		/* one line per crossing, and it says which of the two things
+		 * ended the wait: the rail going off (the window is open and the
+		 * crossing is timed) or the patience running out (humans do not
+		 * wait forever, and neither does this) */
+		if (gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("RAILCROSS %s waited %.1fs on cl=%d (%s)\n",
+			           e->client->pers.netname,
+			           level.time - bot->railhold_since,
+			           bot->railhold_enemy,
+			           SG_RailCold(team, bot->railhold_enemy)
+			               ? "window" : "patience");
+		bot->railhold_since = 0.0f;
+		bot->railhold_enemy = -1;
+		bot->railhold_next = level.time + SG_RAIL_HOLD_GAP;
+	}
+
+	/*
 	 * THE UNSTICK OF LAST RESORT. A rope through a doorway parked a bot
 	 * on a wall ledge off the navigable mesh (wave 97, screenshot in
 	 * hand) and every clever layer beneath this line -- watchdog,
@@ -5348,6 +5560,12 @@ rally_done:;
 	          * exists to produce. The progress guard's shelf wipe is
 	          * the carrier's remedy; a death hands the flag back. */
 	         role != SG_ROLE_CARRY &&
+	         /* and a rail-rhythm wait is the same class of standing as a
+	          * rally: parked on purpose, briefly, by a bot that knows
+	          * exactly why. It cannot reach fifteen seconds on its own --
+	          * 1.5s of wait per 5.5s of refractory -- but a bot must never
+	          * be killed for a stand this file asked it to make */
+	         bot->railhold_since <= 0.0f &&
 	         bot->rally_since <= 0.0f)
 	{
 		void Cmd_Kill_f(edict_t *ent);
@@ -7213,6 +7431,29 @@ no_hold:;
 			cmd.upmove = 400;
 			view_pitch = -85.0f;
 			bot->nav_drove = false;     /* not the route's fault */
+		}
+
+		/*
+		 * WAITING OUT A RELOAD (sg_railrhythm). The wait happens where
+		 * the body already is, because the decision above only arms it
+		 * from a spot the railer cannot see -- the last cover point is
+		 * the one being stood on. No walk to it, no facing change: the
+		 * eyes stay on the route and combat, which never stops, keeps
+		 * whatever target it was holding.
+		 *
+		 * THE TERMINAL BRAKE OUTRANKS IT, literally: bot->term_brake is
+		 * set earlier in this same stage and a value under 1.0 means the
+		 * body is throttling into a link that has to be entered at a
+		 * measured speed. A hold dropped on top of that would strand the
+		 * bot mid-corner. The brake wins and the crossing goes ahead.
+		 */
+		if (rail_hold && have_move && bot->term_brake >= 1.0f)
+		{
+			cmd.forwardmove = 0;
+			cmd.sidemove = 0;
+			cmd.upmove = 0;
+			bot->nav_drove = false;     /* the wait is not the route */
+			bot->stuck_time = 0.0f;     /* nor is it being stuck */
 		}
 
 		/* rallying: get to cover first, stand there, face the push */

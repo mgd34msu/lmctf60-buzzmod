@@ -152,6 +152,86 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
  * False leaves out_from untouched. */
 qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from);
 
+/* ------------------------------------------------------------ the rail rhythm
+ *
+ * The owner, describing his own play: "rails guard sight lines on many maps
+ * ... the hard counter to my sight-lines coverage was raw speed". A rail is
+ * not a stream of harm, it is one slug and then a long wait, and a human who
+ * has to cross a guarded lane counts that wait. He hears the shot, steps out
+ * while the shooter is empty, and ends the burst behind something before the
+ * next one is loaded. Nothing here reads the enemy's weaponstate or his
+ * ammunition; the only clock is the one every player in earshot shares.
+ *
+ * THE RELOAD, read off p_weapon.c rather than remembered.
+ *
+ * Weapon_Railgun calls Weapon_Generic(ent, 3, 18, 56, 61, ..., fire_frames
+ * {4}), so FRAME_ACTIVATE_LAST is 3, FRAME_FIRE_FIRST is 4, FRAME_FIRE_LAST
+ * is 18 and FRAME_IDLE_FIRST is 19. On the frame the trigger is accepted the
+ * state goes READY -> FIRING with gunframe 4; that same call falls straight
+ * on into the FIRING block, matches fire_frames[0], and runs
+ * weapon_railgun_fire, which advances gunframe to 5 itself. Every later frame
+ * advances it by one, and the state returns to READY the frame gunframe
+ * reaches FRAME_IDLE_FIRST + 1 = 20 -- fifteen frames after the shot, by
+ * which time the READY branch of that call has already been passed. The
+ * earliest the next slug can leave is therefore the frame after that:
+ * sixteen server frames at FRAMETIME 0.1, or 1.6 seconds shot to shot.
+ */
+#define SG_RAIL_RELOAD	1.6f
+
+/*
+ * How much of the reload a crossing is allowed to spend. Half a second of
+ * the 1.6 is left on the table on purpose: the belief this is measured
+ * against is a position the bot was told about, not a position it can see,
+ * and the crossing takes real time to finish. A window that ran to the last
+ * tenth would be arithmetic, not caution.
+ */
+#define SG_RAIL_WINDOW	1.1f
+
+/* How long a man stays "a railer" after his last slug. Weapons are picked up
+ * and put down; twenty seconds is about how long a player's reputation for
+ * holding a lane survives without evidence. */
+#define SG_RAIL_MEMORY	20.0f
+
+/*
+ * The refractory between waits, and the whole reason the cap is a cap. A
+ * wait ends and the body has not moved, so the geometry that armed it is
+ * identical and it would arm again on the very next frame -- a bot pinned
+ * in a doorway for as long as the sighting lasts. Four seconds is a little
+ * over two reloads: long enough that any lane gets crossed, short enough
+ * that a second genuine lane later in the leg still gets timed.
+ */
+#define SG_RAIL_HOLD_GAP	4.0f
+
+/*
+ * When each enemy client was last heard or felt firing a rail, per team.
+ * Per team for the same reason sg_caco_enemies is (red hearing a shot must
+ * not tell blue anything), and sized to the damage ring's ceiling because
+ * this is the same kind of table for the same reason: neither file owns the
+ * bot body and neither can add a field to it. 0 means "never, as far as this
+ * side knows".
+ */
+extern float sg_caco_railshot[2][SG_DMG_CLIENTS];
+
+/* the one reader of the cvar: default 0 leaves every path below dead and the
+ * build byte-identical */
+qboolean	SG_RailRhythm(void);
+
+/* the tap, called from weapon_railgun_fire (p_weapon.c) once the slug is away
+ * and the flash and trail are on the wire. Every test about who could have
+ * perceived it is on this side. */
+void		SG_NoteRailShot(edict_t *shooter);
+
+/* the freshest belief about an enemy this team has heard fire a rail inside
+ * SG_RAIL_MEMORY, provided the sighting itself is younger than `fresh`.
+ * False leaves the outputs untouched. */
+qboolean	SG_RailThreat(int team, float fresh, int *out_client,
+		             int *out_seed);
+
+/* is that enemy believed EMPTY right now -- his last heard shot inside the
+ * window? False covers both "he fired too long ago" and "we have never heard
+ * him fire", which is the cautious reading of an unknown gun. */
+qboolean	SG_RailCold(int team, int client);
+
 /* ------------------------------------------------------------------ fields */
 
 enum
