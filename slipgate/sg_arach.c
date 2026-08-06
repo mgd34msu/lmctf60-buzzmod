@@ -4426,8 +4426,15 @@ rally_done:;
 		/* the sink ban's teeth: 12000 exceeds the basin's worst gap
 		 * (max eff link 4055 + field spread 2221), so any non-sinking
 		 * candidate wins; the pre-pass above guarantees one exists */
+		/* widened per the pre-registered fallback (416 forensics: two
+		 * carriers FELL dry straight into the cistern -- the wet-trigger
+		 * never saw a choice -- then hooked until the air ran out): a
+		 * DESTINATION inside water counts as sinking regardless of how
+		 * dry the carrier currently is, whenever it is also downward. */
 		if ((bot->sink_ban ||
-		     (role == SG_ROLE_CARRY && l->action == RL_SWIM)) &&
+		     (role == SG_ROLE_CARRY &&
+		      (l->action == RL_SWIM ||
+		       (sg_rune->seeds[l->to].flags & RSF_WATER)))) &&
 		    sg_rune->seeds[l->to].origin[2] <
 		        sg_rune->seeds[bot->seed].origin[2] - 16.0f)
 			v += 12000.0f;
