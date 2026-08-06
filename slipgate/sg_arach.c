@@ -261,6 +261,7 @@ typedef struct sg_bot_s
 	int			prev_seed;          /* the seed most recently LEFT (sg_nobacktrack) */
 	float		prev_seed_time;
 	float		term_brake;         /* terminal cornering: throttle vs alignment */
+	qboolean	terminal;           /* inside the last-ten-meters gate this frame */
 	float		breather_until;     /* sg_breather: sub-max throttle window */
 	float		breather_next;      /* next roll of the breather dice */
 	/* sg_spawnbeat: the orientation beat a player takes on respawn */
@@ -4096,6 +4097,7 @@ rally_done:;
 	}
 
 	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
+	bot->terminal = false;
 
 	/* where am I on the rune? */
 	VectorSubtract(e->s.origin, bot->last_origin, d);
@@ -5046,6 +5048,7 @@ rally_done:;
 	    goal_field[bot->seed] < 400)
 	{
 		bestlink = -1;
+		bot->terminal = true;
 
 		/*
 		 * THE CLEAN GRAB. Fifty-one of fifty-four carriers died at a
@@ -8715,6 +8718,17 @@ no_hold:;
 					AngleVectors(vb, mf, mr, NULL);
 				}
 
+				/*
+				 * THE LAST TEN METERS, THE MOVEMENT HALF (406 canary
+				 * forensics): the brake slowed the orbit but the strafe
+				 * LEAN kept re-making it -- realign, accelerate past
+				 * 200, lean off-axis, miss, brake, repeat, 80 seconds
+				 * at goal-cost 200. Wave 96 ruled the walk straight;
+				 * the aim obeyed, the legs never did. In terminal mode
+				 * there is no lean and no hop: plain forward down the
+				 * exact aim, throttle on the brake, touch.
+				 */
+				if (!bot->terminal)
 				SG_MovePolicy(e, &cmd, mf, mr, move_dir,
 				              open_ahead, run_link,
 				              (float)cmd.msec / 1000.0f, airp);
