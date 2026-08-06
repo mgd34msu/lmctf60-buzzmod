@@ -220,7 +220,9 @@ MEGAWORTH=(0     0        0        0        0         0        0         0      
 # stage-2 lever 3: attack-objective commitment. sg_atkobj is percent
 # (100 = shipped). 125 on s06 vs 100 control: do attackers who price
 # the flag 25% harder steal at human volume without dying broke?
-ATKOBJ=(100    100      100      100      100       125      100       100      100      100)
+# dose-response: 125 gave +10% steals +11% caps over 11 waves (mild
+# positive, sagging tail). 150 asks whether commitment scales or breaks.
+ATKOBJ=(100    100      100      100      100       150      100       100      100      100)
 
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
