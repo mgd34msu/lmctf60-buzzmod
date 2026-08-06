@@ -1953,11 +1953,13 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6,
         notes.append(f"{n_excluded_carries} anomalously long carry "
                       f"window(s) excluded (>{MAX_CARRY_S:.0f}s, likely a "
                       f"stuck flag-carry bit across a round boundary)")
-    if duration_capped:
-        notes.append(f"duration capped to {DURATION_CAP_S:.0f}s (original "
-                      f"{orig_duration:.1f}s) -- all stats on this sheet "
-                      f"come only from the capped window; a carry still in "
-                      f"progress at the cutoff would not appear")
+    # Duration says NOTHING on the sheet, ever (judge set #3): the cap note
+    # printed the original to the tenth, and bot waves share one timelimit
+    # to the tenth -- a judge sorted the corpus on "exactly 895.2s" alone.
+    # Worse, the note's mere PRESENCE discriminated: human client demos run
+    # under the cap and carried no note, bot waves always did. The cap and
+    # the original now live only in the JSON sidecar, which is unblinding
+    # material by definition.
     if notes:
         fig.text(0.5, 0.968, '; '.join(notes), ha='center', fontsize=7,
                   color='#993333')
