@@ -225,12 +225,29 @@ TACTICS=(1       1        1        1        1         1        1         1      
 ADOPT_ON=( 1 1 1 1 1 1 1 1 0 0 )     # strictgrab/press/interpose/scoop/preturn/flycook/runetoss/soundfire/landlead
 COVER=(  800 800 800 800 800 800 800 800 0 0 )
 
+# SESSION SHAPE (judge set #3): human pub film has late joins, a leaver,
+# a refill; wave film had sixteen bots at t=0 and wall-to-wall presence,
+# and a judge sorted the corpus on exactly that. The film pair now fills
+# like a pub: 2v2 at the whistle, a body every ~70s to full, one leaves
+# at 7:30 and the seat refills a minute later. SAME schedule both arms --
+# the ramp is scenery, not a variable.
+STAGGER=(0       0        1        1        0         0        0         0        0        0)
+
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
         (
             sleep 20
             echo "serverrecord wave$NAME-${LABELS[$i]}"
-            sleep "${SECS[$i]}"
+            if [ "${STAGGER[$i]}" = "1" ]; then
+                sleep 65;  echo "set sv_botfill \"3:3\""
+                sleep 70;  echo "set sv_botfill \"4:4\""
+                sleep 75;  echo "set sv_botfill \"5:5\""
+                sleep 240; echo "set sv_botfill \"5:4\""
+                sleep 65;  echo "set sv_botfill \"5:5\""
+                sleep $(( ${SECS[$i]} - 515 ))
+            else
+                sleep "${SECS[$i]}"
+            fi
             echo "quit"
         ) | (
             WCFG="waveflags-s$(( i + 1 )).cfg"
@@ -239,7 +256,11 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "exec $CFG"
                 echo "set maplist_file nomaplist.txt"
                 echo "set timelimit 0"
-                echo "set sv_botfill \"${FILLS[$i]}\""
+                if [ "${STAGGER[$i]}" = "1" ]; then
+                    echo "set sv_botfill \"2:2\""
+                else
+                    echo "set sv_botfill \"${FILLS[$i]}\""
+                fi
                 echo "set sg_strictgrab $A"
                 echo "set sg_press $A"
                 if [ "${INTERDOSE[$i]}" != "0" ]; then
