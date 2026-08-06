@@ -55,7 +55,14 @@
 #define SG_CHAT_TOPIC_ITEM_SOON		4   /* respawn clock says it is close */
 #define SG_CHAT_TOPIC_ORDER			5   /* acknowledging a human's order */
 #define SG_CHAT_TOPIC_STEAL			6   /* our team has their flag */
-#define SG_CHAT_TOPICS				7
+/*
+ * The short-form major-item timer call (sg_timercall). Its own topic rather
+ * than a second user of ITEM_SOON: the twenty-second gap that keeps one
+ * voice on the clock must not be spendable by an "up in ~Ns" about a
+ * shotgun, and the two forms are switched between per item, not per line.
+ */
+#define SG_CHAT_TOPIC_TIMER			7
+#define SG_CHAT_TOPICS				8
 
 /* ------------------------------------------------- the integrator's calls
  *

@@ -144,6 +144,19 @@
 #define SG_CHAT_SOON		10.0f    /* "up in ~Ns" fires this far ahead */
 
 /*
+ * THE TIMER CALL (sg_timercall, enhancement 8). A team that knows the clock
+ * says so in four characters, and it says it once. "quad up in ~9s" is a
+ * sentence; what actually went over say_team in 1998 was "quad 9" -- and one
+ * voice said it, not five, because the fifth is what makes a team channel
+ * unreadable. The pieces are already here: the respawn clock this file keeps
+ * off ent->item->quantity, Chat_Speaker's single owner, and the per-topic
+ * team cooldown. This gives the short form its own topic so the gap can be a
+ * generous twenty seconds without slowing the ordinary item chatter down,
+ * and leaves everything at sg_timercall 0 exactly as it was.
+ */
+#define SG_CHAT_TIMER_GAP	20.0f   /* one timer call per team per this */
+
+/*
  * Per-topic team cooldowns. CACO's flag topics keep their own 8-second gap
  * inside sg_caco.c, so this table asks nothing further of them.
  */
@@ -154,7 +167,8 @@ static const float chat_topic_gap[SG_CHAT_TOPICS] = {
 	3.0f,       /* SG_CHAT_TOPIC_ITEM_GONE */
 	6.0f,       /* SG_CHAT_TOPIC_ITEM_SOON */
 	0.0f,       /* SG_CHAT_TOPIC_ORDER   -- capped at one ack per order */
-	8.0f        /* SG_CHAT_TOPIC_STEAL */
+	8.0f,       /* SG_CHAT_TOPIC_STEAL */
+	SG_CHAT_TIMER_GAP   /* SG_CHAT_TOPIC_TIMER */
 };
 
 /* ----------------------------------------------------------- personality */
@@ -1193,6 +1207,87 @@ void SG_ChatSee(edict_t *viewer)
 }
 
 /*
+ * Which pads get the short form. Deliberately not "everything with a clock":
+ * a timer call is a call on the things a match turns on, and "sg 12" is
+ * noise. The classes here are the ones the belief tables already keep a
+ * respawn clock for -- quad and invuln come off sg_caco_items, red armour off
+ * this file's own watch list -- plus the mega, which carries no clock in this
+ * build and so simply never matches. It is written down anyway: the day mega
+ * joins the watch list the callout is already spelled, and a reader looking
+ * for "why does nobody call mega" finds the answer in one line instead of in
+ * the absence of one.
+ */
+static const struct { const char *cls; const char *shortname; }
+chat_timer_major[] = {
+	{ "item_quad",              "quad" },
+	{ "item_invulnerability",   "invul" },
+	{ "item_armor_body",        "ra" },
+	{ "item_health_mega",       "mega" },
+	{ NULL, NULL }
+};
+
+static const char *Chat_TimerShort(edict_t *e)
+{
+	int i;
+
+	if (!e || !e->classname)
+		return NULL;
+	for (i = 0; chat_timer_major[i].cls; i++)
+		if (strcmp(e->classname, chat_timer_major[i].cls) == 0)
+			return chat_timer_major[i].shortname;
+	return NULL;
+}
+
+/*
+ * The same call in each voice's register. Item first in every one of them,
+ * because a teammate reading fast reads the first word: the tone lives in
+ * what comes after it, not in front of it. "%s" is the pad, "%d" the
+ * seconds -- both arguments in that order in all four rows.
+ *
+ * char * const rather than const char *: Com_sprintf takes a plain char *
+ * format, so a const row would need a cast at the one place it is read.
+ */
+static char * const chat_timer_fmt[SG_TONES] = {
+	"%s %d",                /* terse */
+	"%s in %d, mine",       /* cocky */
+	"%s up soon, ~%d",      /* dry */
+	"%s t-%d"               /* mech */
+};
+
+/*
+ * Emit one countdown for a pad, in whichever form is switched on. The
+ * speaker is Chat_Speaker's single owner either way; the topic is what
+ * differs, and with it the team cooldown the line has to clear.
+ */
+static void Chat_SoonSay(int ti, edict_t *item, const char *name,
+                         float back_at)
+{
+	char		line[SG_CHAT_LINE];
+	edict_t		*sp = Chat_Speaker(ti + 1);
+	const char	*shortname = NULL;
+	int			secs;
+
+	if (!sp)
+		return;
+	secs = (int)(back_at - level.time + 0.5f);
+
+	if (gi.cvar("sg_timercall", "0", 0)->value > 0.0f)
+		shortname = Chat_TimerShort(item);
+	if (shortname)
+	{
+		Com_sprintf(line, sizeof(line), chat_timer_fmt[Chat_Tone(sp)],
+		            shortname, secs);
+		Chat_Queue(sp, ti + 1, SG_CHAT_TOPIC_TIMER, line);
+		return;
+	}
+
+	if (!name)
+		return;
+	Com_sprintf(line, sizeof(line), "%s up in ~%ds", name, secs);
+	Chat_Queue(sp, ti + 1, SG_CHAT_TOPIC_ITEM_SOON, line);
+}
+
+/*
  * The one thing said off a clock rather than off eyes, and the one thing a
  * player says off a clock too: a respawn is due. SetRespawn's delay comes
  * from ent->item->quantity (g_items.c:198), which is map knowledge; the
@@ -1202,7 +1297,6 @@ void SG_ChatSee(edict_t *viewer)
  */
 static void Chat_Countdown(void)
 {
-	char	line[SG_CHAT_LINE];
 	int		i, ti;
 
 	for (ti = 0; ti < 2; ti++)
@@ -1210,29 +1304,23 @@ static void Chat_Countdown(void)
 		for (i = 0; i < sg_caco_num_items; i++)
 		{
 			sg_chat_item_t	*c = &chat_item[i];
-			const char		*name;
-			edict_t			*sp;
+			edict_t			*ie = g_edicts + sg_caco_items[i].ent;
 
 			if (c->up[ti] || c->soon_said[ti] || c->back_at[ti] <= 0.0f)
 				continue;
 			if (c->back_at[ti] - level.time > SG_CHAT_SOON)
 				continue;
 
-			name = Chat_ItemName(g_edicts + sg_caco_items[i].ent);
-			sp = Chat_Speaker(ti + 1);
+			/* burned before the emit, as it always was: a line the topic
+			 * cooldown eats is a line this team does not get told twice
+			 * on the same respawn either */
 			c->soon_said[ti] = true;
-			if (!name || !sp)
-				continue;
-
-			Com_sprintf(line, sizeof(line), "%s up in ~%ds", name,
-			            (int)(c->back_at[ti] - level.time + 0.5f));
-			Chat_Queue(sp, ti + 1, SG_CHAT_TOPIC_ITEM_SOON, line);
+			Chat_SoonSay(ti, ie, Chat_ItemName(ie), c->back_at[ti]);
 		}
 
 		for (i = 0; i < chat_num_watch; i++)
 		{
 			sg_chat_watch_t	*w = &chat_watch[i];
-			edict_t			*sp;
 
 			if (w->up[ti] || w->soon_said[ti] || w->back_at[ti] <= 0.0f ||
 			    !w->name)
@@ -1240,14 +1328,8 @@ static void Chat_Countdown(void)
 			if (w->back_at[ti] - level.time > SG_CHAT_SOON)
 				continue;
 
-			sp = Chat_Speaker(ti + 1);
 			w->soon_said[ti] = true;
-			if (!sp)
-				continue;
-
-			Com_sprintf(line, sizeof(line), "%s up in ~%ds", w->name,
-			            (int)(w->back_at[ti] - level.time + 0.5f));
-			Chat_Queue(sp, ti + 1, SG_CHAT_TOPIC_ITEM_SOON, line);
+			Chat_SoonSay(ti, g_edicts + w->ent, w->name, w->back_at[ti]);
 		}
 	}
 }

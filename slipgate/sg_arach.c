@@ -221,6 +221,17 @@ typedef struct sg_bot_s
 	float		prev_seed_time;
 	float		breather_until;     /* sg_breather: sub-max throttle window */
 	float		breather_next;      /* next roll of the breather dice */
+	/* sg_spawnbeat: the orientation beat a player takes on respawn */
+	float		beat_from;          /* when the beat started */
+	float		beat_until;         /* and when it gives the legs back */
+	float		beat_arc;           /* half-width of the look sweep, degrees */
+	int			beat_sign;          /* which shoulder it checks first */
+	qboolean	beat_ready;         /* this bot has run dead frames on THIS
+	                                 * level: the slot is not memset on
+	                                 * SG_AddBotTeam, so was_dead can arrive
+	                                 * from the previous map and the first
+	                                 * spawn of a level would otherwise wear
+	                                 * a beat it never earned */
 	float		plan_next;          /* sg_drawplan: next in-world plan draw */
 
 	/*
@@ -2213,6 +2224,30 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 	}
 }
 
+/*
+ * Has anything landed on this body since `since`? The damage ring
+ * (sg_caco.c, four entries per client) already books every hit T_Damage
+ * delivers, seen shooter or not, so the spawn beat needs no sense of its
+ * own: the question "did the world just object" is exactly the one the ring
+ * was built to answer, and it answers it for splash and falls and the rail
+ * from a room away alike.
+ */
+static qboolean Beat_HurtSince(edict_t *e, float since)
+{
+	int ci, k;
+
+	if (!e || !e->client)
+		return false;
+	ci = (int)(e->client - game.clients);
+	if (ci < 0 || ci >= SG_DMG_CLIENTS)
+		return false;
+	for (k = 0; k < SG_DMG_RING; k++)
+		if (sg_caco_damage[ci][k].attacker >= 0 &&
+		    sg_caco_damage[ci][k].time > since)
+			return true;
+	return false;
+}
+
 static void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -2277,6 +2312,8 @@ static void SG_BotThink(sg_bot_t *bot)
 		}
 		bot->seed = -1;
 		bot->view_on = false;   /* respawn snaps the view fresh */
+		bot->beat_ready = true; /* dead HERE, on this level: the spawn beat
+		                         * has something to be the far side of */
 		/*
 		 * PULSE the trigger, never hold it. Respawn keys off
 		 * latched_buttons -- fresh presses only (p_client.c:3203) -- and
@@ -3192,6 +3229,45 @@ rally_done:;
 		bot->was_dead = 0;
 		bot->lives++;
 		bot->inlinks_n = 0;     /* a new life rides in on its own roads */
+
+		/*
+		 * THE SPAWN BEAT (sg_spawnbeat, enhancement 7). Watched in
+		 * chase-cam, the tell is not the route, it is the START of the
+		 * route: the bot materialises and is already at full pace down a
+		 * corridor it cannot have looked at yet. A player spawns, checks
+		 * a shoulder, and THEN goes -- half a second of orientation that
+		 * every human pays and no bot ever did.
+		 *
+		 * Half a second is the whole feature. The beat is skill-scaled
+		 * because the better player pays less of it (0.9s at bot_skill
+		 * 0, 0.4s at 4), the cvar is a multiplier on that so the beat
+		 * can be widened without touching the ladder, and 0 -- the
+		 * default -- is the fleet exactly as it shipped.
+		 *
+		 * Never on the first spawn of a level: joins already arrive
+		 * staggered across their own greeting window, and sixteen bots
+		 * all pausing on the opening whistle is a tell of its own.
+		 * beat_ready is what makes that test honest (see its field).
+		 */
+		{
+			float	mult = gi.cvar("sg_spawnbeat", "0", 0)->value;
+
+			if (mult > 0.0f && bot->beat_ready)
+			{
+				float	sk = (float)SG_CombatSkill(e) / 100.0f; /* 0..4 */
+				float	dur = (0.9f - 0.5f * (sk / 4.0f)) * mult;
+
+				if (dur > 2.0f)
+					dur = 2.0f;     /* a knob, not a nap */
+				bot->beat_from = level.time;
+				bot->beat_until = level.time + dur;
+				/* 60 to 120 degrees of sweep, stated as its half-width */
+				bot->beat_arc = 30.0f + (float)(rand() % 31);
+				bot->beat_sign = (rand() & 1) ? 1 : -1;
+			}
+			else
+				bot->beat_until = 0.0f;
+		}
 	}
 	/* the scoreboard ping a human would show from a near-local connection:
 	 * stable per-session base with a +/-1 flicker, never outside 5-15
@@ -7048,6 +7124,47 @@ no_hold:;
 		}
 
 		/*
+		 * THE SPAWN BEAT'S EYES. The last writer before the slew, so it
+		 * is looking around rather than arguing with navigation about
+		 * where to look; the slew below then carries the sweep at
+		 * sg_turnrate like any other ask, which is why this asks for an
+		 * ANGLE and not a rate.
+		 *
+		 * The sweep is centred on the heading the frame already wanted --
+		 * the route's, this early -- so the beat ends looking down the
+		 * road it is about to run instead of snapping back onto it. One
+		 * full sine over the window is centre, one shoulder, through
+		 * centre, the other shoulder, centre: what a player's mouse does
+		 * in the half second after the screen comes back.
+		 *
+		 * Danger ends it on the frame danger arrives. `engaged` is
+		 * combat's live answer, not last frame's, and the damage ring
+		 * catches the shot that came from somewhere the eye had not got
+		 * to yet -- which, spawning, is most of the map.
+		 */
+		if (bot->beat_until > level.time)
+		{
+			/* bot->engaged_last is this same value by here -- it was
+			 * assigned from `engaged` a few lines up, so the live read
+			 * is the one worth making */
+			if (engaged || Beat_HurtSince(e, bot->beat_from))
+				bot->beat_until = 0.0f;
+			else
+			{
+				float span = bot->beat_until - bot->beat_from;
+				float t = (span > 0.001f)
+				          ? (level.time - bot->beat_from) / span : 1.0f;
+				float yaw = SHORT2ANGLE((short)(cmd.angles[YAW] +
+				            e->client->ps.pmove.delta_angles[YAW]));
+
+				yaw += (float)bot->beat_sign * bot->beat_arc *
+				       sinf(t * 2.0f * (float)M_PI);
+				cmd.angles[YAW] = ANGLE2SHORT(yaw)
+				                - e->client->ps.pmove.delta_angles[YAW];
+			}
+		}
+
+		/*
 		 * THE VIEW SLEWS; IT NO LONGER TELEPORTS. Every writer above --
 		 * navigation, combat, the rope aim, the swim pitch -- asks for a
 		 * heading, and until now the ask was granted instantly: a 180
@@ -7225,6 +7342,20 @@ no_hold:;
 						}
 					}
 				}
+			}
+
+			/*
+			 * THE SPAWN BEAT'S LEGS, applied last so nothing downstream
+			 * can hand the throttle back. The breather scales the
+			 * command where it is first built and SG_MovePolicy rebuilds
+			 * it afterwards from the course; a beat that wants the body
+			 * genuinely idling has to be the final word, and this is the
+			 * only place that exists.
+			 */
+			if (bot->beat_until > level.time)
+			{
+				cmd.forwardmove = (short)(cmd.forwardmove * 0.30f);
+				cmd.sidemove = (short)(cmd.sidemove * 0.30f);
 			}
 
 			ClientThink(e, &cmd);
@@ -8027,6 +8158,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].inlinks_n = 0;
 	sg_bots[slot].exitasym_n = 0;
 	sg_bots[slot].exitasym_armed = false;
+	sg_bots[slot].beat_ready = false;   /* a join is not a respawn */
+	sg_bots[slot].beat_until = 0.0f;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
 	/* a fresh joiner holds no grudge, and seed 0 is a real place: -1 is
 	 * the only value that means "nobody has died here yet" */
