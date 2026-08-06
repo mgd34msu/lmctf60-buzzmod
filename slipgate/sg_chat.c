@@ -573,7 +573,17 @@ static sg_chat_bot_t chat_bot[MAX_CLIENTS];
  * Chat_ArmClock at the moment SG_ChatSayTeam reports the line actually went
  * out. Suppressed line, no clock, and sg_debug says so.
  */
-enum { SG_ARM_NONE = 0, SG_ARM_ITEM, SG_ARM_WATCH, SG_ARM_QUIET };
+enum { SG_ARM_NONE = 0, SG_ARM_ITEM, SG_ARM_WATCH, SG_ARM_QUIET,
+       SG_ARM_MEGATAKE };
+
+/*
+ * Who each team believes is wearing the mega (client index, -1 nobody).
+ * Written only when a mega take-call actually goes out -- the record is
+ * knowledge and knowledge rides the spoken line (Rule 19). Read by
+ * SG_ChatMegaDeath: the obituary is public, so "the mega guy just died"
+ * plus this record is the one honest way to start the mega's clock.
+ */
+static int chat_mega_taker[2] = { -1, -1 };
 
 typedef struct
 {
@@ -588,6 +598,7 @@ typedef struct
 	int			arm_ent;        /* the item entity, for the sg_debug line */
 	int			arm_src;        /* SG_ITEMCALL_* -- who is making the call */
 	float		arm_back_at;    /* absolute: take time + the item's own delay */
+	int			arm_who;        /* taker client index for the mega record, -1 */
 } sg_chatq_t;
 
 static sg_chatq_t	chat_q[2][SG_CHAT_TOPICS];      /* [team-1][topic] */
@@ -1003,7 +1014,8 @@ static qboolean Chat_SayPooled(edict_t *speaker, const char *line, int flags)
  */
 static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
                               const char *line, int arm_kind, int arm_slot,
-                              int arm_ent, int arm_src, float arm_back_at)
+                              int arm_ent, int arm_src, float arm_back_at,
+                              int arm_who)
 {
 	sg_chatq_t *q;
 
@@ -1029,13 +1041,14 @@ static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
 	q->arm_ent = arm_ent;
 	q->arm_src = arm_src;
 	q->arm_back_at = arm_back_at;
+	q->arm_who = arm_who;
 	q->pending = true;
 	return true;
 }
 
 static void Chat_Queue(edict_t *speaker, int team, int topic, const char *line)
 {
-	Chat_QueueArm(speaker, team, topic, line, SG_ARM_NONE, 0, 0, 0, 0.0f);
+	Chat_QueueArm(speaker, team, topic, line, SG_ARM_NONE, 0, 0, 0, 0.0f, -1);
 }
 
 /* defined below, beside the majors table it is about */
@@ -1494,6 +1507,16 @@ static void Chat_ScanWatched(void)
 		/* g_items.c:912 -- Pickup_PowerArmor uses ent->item->quantity */
 		{ "item_power_shield",  -1.0f },
 		{ "item_power_screen",  -1.0f },
+		/*
+		 * The mega, respawn 0: watched for presence and for the call,
+		 * never auto-timed -- its pad timer only starts when the bonus
+		 * decays off the taker (g_items.c:568-596), so the only honest
+		 * clocks are the taker's DEATH (decay ends within a think tick,
+		 * then SetRespawn 20) and a sighting. Owner's ruling 2026-08-05.
+		 * Skipped when sg_itemcomm is off so the stock build's callouts
+		 * stay byte-identical.
+		 */
+		{ "item_health_mega",    0.0f },
 		{ NULL, 0.0f }
 	};
 	int i;
@@ -1516,6 +1539,9 @@ static void Chat_ScanWatched(void)
 			sg_chat_watch_t *w;
 
 			if (strcmp(e->classname, want[k].cls) != 0)
+				continue;
+			if (!SG_ItemComm() &&
+			    strcmp(want[k].cls, "item_health_mega") == 0)
 				continue;
 
 			w = &chat_watch[chat_num_watch++];
@@ -1872,7 +1898,7 @@ static void Chat_RadioFrame(void)
 				Chat_QueueArm(sp, t + 1, SG_CHAT_TOPIC_MAJOR, line,
 				              SG_ARM_QUIET, -1, 0, SG_ITEMCALL_MATE,
 				              heard + 33.0f +
-				              ((float)(rand() % 10) / 10.0f - 0.5f));
+				              ((float)(rand() % 10) / 10.0f - 0.5f), -1);
 				Chat_RadioQueue(sp, t + 1, "_quad30");
 			}
 		}
@@ -1936,13 +1962,15 @@ static const struct { const char *cls; float respawn; } chat_major[] = {
 	{ "regen_rune",              0.0f },
 	{ "vampire_rune",            0.0f },
 	/*
-	 * The mega is deliberately absent. It has no clock anywhere in this build
-	 * -- it is not a CACO belief class and not on the watch list -- and its
-	 * real denial is 100s of decay on top of 20s of respawn (g_items.c:586-595),
-	 * which is not the arithmetic the rest of this table does. Adding it means
-	 * adding it to the watch list first, and this line is here so the next
-	 * reader knows that rather than guessing it was forgotten.
+	 * The mega: call-worthy, never AUTO-timed (owner's ruling 2026-08-05).
+	 * Its respawn only schedules when the +100 finishes decaying off the
+	 * taker -- damage-dependent, and a regen rune halves the decay and
+	 * releases the pad early at max+25 (g_items.c:568-596) -- so a number
+	 * at take time would be invented. The take call goes out NUMBERLESS;
+	 * the clock arms from the taker's death (public obituary + SetRespawn
+	 * 20) or a sighting, in SG_ChatMegaDeath and SG_ChatSee.
 	 */
+	{ "item_health_mega",        0.0f },
 	{ NULL, 0.0f }
 };
 
@@ -2070,6 +2098,18 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 			radio_q30[ti].called_until = q->arm_back_at;
 	}
 
+	if (q->arm_kind == SG_ARM_MEGATAKE)
+	{
+		/* no clock -- the record IS the arm; see chat_mega_taker */
+		chat_mega_taker[ti] = q->arm_who;
+		if (gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("SG itemcomm: mega taker recorded for team %d "
+			           "(client %d) -- clock waits on the obituary\n",
+			           ti + 1, q->arm_who);
+		Chat_RadioTaken(ti, q);
+		return;
+	}
+
 	if (q->arm_kind == SG_ARM_QUIET)
 	{
 		/* the ear-driven "quad 30": no slot rode the queue, so find the
@@ -2121,7 +2161,8 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
  * witness for (b) and (c) -- and `team` is the team being told, which for a
  * witness call is the WITNESS's team and never the taker's.
  */
-void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src)
+void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src,
+                      edict_t *taker)
 {
 	char		line[SG_CHAT_LINE], place[48];
 	const char	*name;
@@ -2183,6 +2224,19 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src)
 		}
 	}
 
+	/*
+	 * The mega's numberless call still carries a payload: WHO has it.
+	 * Applied at emission like every clock, because a team that never
+	 * heard the call must not know whose obituary matters.
+	 */
+	if (kind == SG_ARM_NONE && wslot >= 0 && taker && taker->client &&
+	    item->classname &&
+	    strcmp(item->classname, "item_health_mega") == 0)
+	{
+		kind = SG_ARM_MEGATAKE;
+		slot = wslot;
+	}
+
 	/* where it went, named the way a player names it -- and the item's own
 	 * landmark left out, so "took quad at the quad" cannot happen */
 	located = Chat_LocNameForSkip(item->s.origin, item->s.origin, team,
@@ -2211,12 +2265,57 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src)
 	}
 
 	if (!Chat_QueueArm(speaker, team, SG_CHAT_TOPIC_MAJOR, line,
-	                   kind, slot, (int)(item - g_edicts), src, back_at) &&
+	                   kind, slot, (int)(item - g_edicts), src, back_at,
+	                   (kind == SG_ARM_MEGATAKE && taker && taker->client)
+	                       ? (int)(taker->client - game.clients) : -1) &&
 	    kind != SG_ARM_NONE &&
 	    gi.cvar("sg_debug", "0", 0)->value > 0.0f)
 		gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
 		           "(topic busy) -- no clock armed\n",
 		           chat_arm_src[(src >= 0 && src < 3) ? src : 0], name, team);
+}
+
+/*
+ * THE MEGA OBITUARY (owner's ruling, 2026-08-05). The pad's timer starts
+ * when the bonus stops decaying, and the one public event that pins that
+ * moment is the taker's death: a dead owner fails MegaHealth_think's
+ * decay checks on its next tick (<=1s, g_items.c:568-596) and SetRespawn
+ * runs at 20. Death + ~21s, jittered by the tick. A team knows whose
+ * death matters only if it heard the take call -- that is what
+ * chat_mega_taker holds -- and the regen-rune path never reaches here
+ * alive, which is exactly the uncertainty a human keeps.
+ */
+void SG_ChatMegaDeath(edict_t *victim)
+{
+	int ci, ti, i;
+
+	if (!SG_ItemComm() || !victim || !victim->client)
+		return;
+	ci = (int)(victim->client - game.clients);
+
+	for (ti = 0; ti < 2; ti++)
+	{
+		if (chat_mega_taker[ti] != ci)
+			continue;
+		chat_mega_taker[ti] = -1;
+
+		for (i = 0; i < chat_num_watch; i++)
+		{
+			edict_t *we = &g_edicts[chat_watch[i].ent];
+
+			if (!we->inuse || !we->classname ||
+			    strcmp(we->classname, "item_health_mega") != 0)
+				continue;
+			chat_watch[i].back_at[ti] = level.time + 21.0f +
+			    (float)(rand() % 20) / 10.0f;
+			chat_watch[i].soon_said[ti] = false;
+			if (gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("SG itemcomm: mega taker died -- team %d "
+				           "clock armed, back at %.1f\n",
+				           ti + 1, chat_watch[i].back_at[ti]);
+			break;
+		}
+	}
 }
 
 /*
@@ -3675,7 +3774,32 @@ static void Chat_HearItemCall(edict_t *speaker,
 	 */
 	respawn = timed ? (float)secs : Chat_MajorRespawn(g_edicts + ent);
 	if (respawn <= 0.0f)
+	{
+		/*
+		 * The mega's take-form carries no number but does carry the
+		 * WHO: a first-person "took mega" from a teammate records the
+		 * speaker as the wearer, so his obituary can start the clock
+		 * (SG_ChatMegaDeath). "enemy took mega" names a taker we
+		 * cannot identify -- presence moved, nothing recorded, the
+		 * same honest blank a human keeps.
+		 */
+		if (!timed && speaker->client &&
+		    g_edicts[ent].classname &&
+		    strcmp(g_edicts[ent].classname, "item_health_mega") == 0)
+		{
+			int e2;
+			qboolean enemyform = false;
+
+			for (e2 = 0; e2 < n && !enemyform; e2++)
+				if (strcmp(tok[e2], "enemy") == 0 ||
+				    strcmp(tok[e2], "they") == 0)
+					enemyform = true;
+			if (!enemyform)
+				chat_mega_taker[ti] =
+				    (int)(speaker->client - game.clients);
+		}
 		return;
+	}
 	back_at = level.time + respawn;
 
 	dbg = (gi.cvar("sg_debug", "0", 0)->value > 0.0f) ? true : false;
@@ -4140,6 +4264,7 @@ void SG_ChatReset(void)
 	memset(chat_watch, 0, sizeof(chat_watch));
 	memset(chat_recent, 0, sizeof(chat_recent));
 	memset(chat_team_last, 0, sizeof(chat_team_last));
+	chat_mega_taker[0] = chat_mega_taker[1] = -1;
 	/* a level change is not a place to be still holding somebody's radio key */
 	memset(radio_q, 0, sizeof(radio_q));
 	memset(radio_q30, 0, sizeof(radio_q30));

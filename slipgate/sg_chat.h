@@ -200,8 +200,10 @@ void		SG_ChatItemSeen(edict_t *viewer, int index, qboolean up);
 #define SG_ITEMCALL_MATE	1
 #define SG_ITEMCALL_ENEMY	2
 
+void		SG_ChatMegaDeath(edict_t *victim); /* the obituary starts the mega clock */
 void		SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item,
-                             int src);
+                             int src,
+		                 edict_t *taker);
 qboolean	SG_ChatItemMajor(edict_t *e);   /* worth a bot's breath at all */
 qboolean	SG_ChatBudgetClear(edict_t *bot);  /* Chat_Speaker's own test */
 void		SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat);

@@ -52,6 +52,7 @@ float	sg_caco_death_time[2] = { -1000.0f, -1000.0f };
 
 void SG_NoteDeath(edict_t *victim)
 {
+	SG_ChatMegaDeath(victim);   /* the mega clock's one honest trigger */
 	int t;
 
 	if (!victim->client)
@@ -897,7 +898,7 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 			src = (team == takerteam) ? SG_ITEMCALL_MATE : SG_ITEMCALL_ENEMY;
 		}
 
-		SG_ChatItemTaken(speaker, team, item, src);
+		SG_ChatItemTaken(speaker, team, item, src, taker);
 	}
 }
 
