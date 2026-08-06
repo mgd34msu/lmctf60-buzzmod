@@ -194,6 +194,18 @@ typedef struct sg_bot_s
 	float		lead_at;        /* T, this team's believed return time */
 	float		lead_next;      /* attempt cadence while nothing is claimed */
 
+	/*
+	 * THE MEGA OFFER (sg_megaworth), for the debug line only -- the pricing
+	 * itself is stateless. mega_on is last frame's offer, so the commit prints
+	 * on the edge; mega_hp is last frame's health, so a +100 jump is a take.
+	 * mega_hp 0 means "no reading" and is what a corpse leaves behind, which
+	 * is why a respawn from 5 to 100 cannot read as a pickup.
+	 */
+	qboolean	mega_on;
+	int			mega_hp;
+	float		mega_since;     /* when the standing offer turned on */
+	float		mega_next;      /* offers refused until here (the back-off) */
+
 	float		runetoss_next;  /* rune handoff cadence (sg_runetoss) */
 	float		handoff_next;   /* flag handoff cadence (sg_handoff): a pass
 	                             * the receiver never picks up leaves the
@@ -1312,6 +1324,8 @@ static qboolean sg_route_pure_now;  /* tactics priced at selection: the
                                      * per-frame walk stays pure */
 static qboolean sg_cur_push;        /* conductor's downbeat: march, no detours */
 static int sg_cur_health;           /* pricing bot's health (dose gates) */
+static float sg_cur_mega;           /* this bot's overheal worth this frame,
+                                     * 0 = no mega detour on offer */
 static float	sg_danger_decay_next;
 
 static void Danger_Learn(int team, int seed)
@@ -1733,6 +1747,71 @@ static float Detour_Value(int here, int cls, const int *goal_field,
 }
 
 /*
+ * (d) THE DETOUR BUDGET for the mega, Worth_Quad's own arithmetic applied to
+ * the mega's own fields.
+ *
+ * The triangle is the one Detour_Value evaluates for the per-item classes and
+ * it is exact here for the same reason: to_mega[k] was flooded FROM pad k, so
+ * it reads as cost from anywhere TO that pad, and the far leg is the goal field
+ * sampled at the pad's own seed.
+ *
+ *     detour = cost_to_pad + pad_to_goal - direct
+ *     value  = worth / (1 + max(0, detour) / 1500)
+ *
+ * plus one thing the class arithmetic does not have: a HARD ceiling. The decay
+ * alone never quite reaches zero, and a mega on the far side of the map would
+ * still tug a little at every seed forever. Four seconds of extra road is the
+ * bound -- past that the bot is not detouring for the mega, it is going to the
+ * mega and calling the flag a detour, which is the failure mode this whole
+ * feature has to not have.
+ */
+#define SG_MEGA_MAXDETOUR	4000    /* ms of extra road, hard refusal above */
+#define SG_MEGA_PATIENCE	12.0f   /* seconds an offer may stand unspent */
+#define SG_MEGA_BACKOFF		20.0f   /* ...and the refusal after, the pad's own
+                                     * respawn (SetRespawn 20, g_items.c:596) */
+
+static float Mega_Detour(int here, const int *goal_field, int *out_ent)
+{
+	float	best = 0.0f;
+	int		direct = goal_field[here];
+	int		k;
+
+	if (out_ent)
+		*out_ent = -1;
+	if (direct >= SG_FIELD_INF)
+		return 0.0f;
+
+	for (k = 0; k < sg_fields.mega_count; k++)
+	{
+		const int	*kfld = sg_fields.to_mega[k];
+		int			kseed = sg_fields.mega_seed[k];
+		int			cost_to, pad_to_goal, detour;
+		float		v;
+
+		if (!kfld || kseed < 0)
+			continue;
+		cost_to = kfld[here];
+		pad_to_goal = goal_field[kseed];
+		if (cost_to >= SG_FIELD_INF || pad_to_goal >= SG_FIELD_INF)
+			continue;
+
+		detour = cost_to + pad_to_goal - direct;
+		if (detour < 0)
+			detour = 0;         /* a pad on the road is free, never a bonus */
+		if (detour > SG_MEGA_MAXDETOUR)
+			continue;
+		v = sg_cur_mega / (1.0f + (float)detour / 1500.0f);
+		if (v > best)
+		{
+			best = v;
+			if (out_ent)
+				*out_ent = sg_fields.mega_ent[k];
+		}
+	}
+	return best;
+}
+
+/*
  * Role assignment: the owner's quota, then the two situational roles.
  *
  * Two in five defend (nearest-rounded), carrier counts toward defence, a side
@@ -2013,6 +2092,22 @@ static float Surface_At(int seed, const sg_weights_t *w,
 			       gi.cvar("sg_legcarrier", "0", 0)->value >= 3.0f))
 			     ? 0.0f :
 			     1500.0f * Detour_Value(seed, c, goal_field, w->item[c]);
+
+	/*
+	 * THE MEGA (sg_megaworth). A separate term rather than a bend in the
+	 * health class, because the two say opposite things at 100 hp: the class
+	 * is worth 0.05 there and the mega is worth its whole budget. sg_cur_mega
+	 * is already zero unless the role, the belief, the headroom and the fight
+	 * all permit it (Mega_Worth), so this line is an OFFER and never a
+	 * requirement -- the objective term is untouched and a bot that finds
+	 * nothing cheap enough simply walks its road.
+	 *
+	 * Below the naked-carry and route-pure early returns above on purpose: a
+	 * carrier does not shop, and a committed tactical waypoint was scored
+	 * with this term already in it.
+	 */
+	if (sg_cur_mega > 0.0f && sg_fields.mega_count > 0)
+		v -= 1500.0f * Mega_Detour(seed, goal_field, NULL);
 
 	if (support && w->carrier_support > 0.0f && support[seed] < SG_FIELD_INF)
 		v += w->carrier_support * (float)support[seed];
@@ -3116,6 +3211,63 @@ static const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	return lead_field;
 }
 
+/* ----------------------------------------------------------------- the mega
+ *
+ * (c) THE ROLE GATE. The state half of the price lives with combat
+ * (SG_WorthMega); this is the half that knows what the bot is FOR, and every
+ * branch of it errs the same way -- toward not detouring. A mega taken is
+ * worth 100 points of margin; a mega taken by the wrong bot at the wrong
+ * moment is a flag, and those do not trade evenly.
+ *
+ *   CARRY    never. The carrier's job is the ground between here and home and
+ *            nothing else; legcarrier dose 3 already says a healthy carrier
+ *            does not shop, and this says the hurt one does not either -- a
+ *            carrier stopping for 100 hp is a carrier standing still on a pad
+ *            the enemy knows the location of.
+ *   ESCORT   never, and for the same reason from the other side: the escort
+ *            role exists only while there IS a live carrier of ours, so an
+ *            escort on an errand is a carrier without a screen.
+ *   RECOVER  never. Our flag is astray; there is no lull to spend.
+ *   ATTACK   yes, except under the conductor's downbeat -- the push is a bar
+ *            the team steps off on together and detours wait for the next one.
+ *            "Pre-push" is exactly what the un-armed window is.
+ *   DEFEND   yes on a lull, which is the same six seconds of no believed
+ *            contact the pad wait already asks for. A defender who can hear
+ *            somebody is a defender at the stand.
+ *
+ * And nobody in a fight: a bot with a live duel has a better use for the next
+ * four seconds than a walk.
+ */
+static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
+{
+	int team = e->client->ctf.teamnum;
+
+	if (!SG_MegaOn() || sg_fields.mega_count <= 0)
+		return 0.0f;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return 0.0f;
+
+	if (role == SG_ROLE_CARRY || role == SG_ROLE_ESCORT ||
+	    role == SG_ROLE_RECOVER)
+		return 0.0f;
+	if (role == SG_ROLE_ATTACK &&
+	    level.time < sg_push_until[team - CTF_TEAM_RED])
+		return 0.0f;
+	if (role == SG_ROLE_DEFEND)
+	{
+		int s;
+
+		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+			if (sg_caco_enemies[team - 1][s].client >= 0 &&
+			    level.time - sg_caco_enemies[team - 1][s].seen_time < 6.0f)
+				return 0.0f;    /* not a lull */
+	}
+	if (bot->engaged_last || SG_CombatDuel(e, NULL, NULL, NULL))
+		return 0.0f;
+
+	return SG_WorthMega(e);
+}
+
 static void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -3193,6 +3345,12 @@ static void SG_BotThink(sg_bot_t *bot)
 		/* a corpse is not standing anybody's pad: release the lease early
 		 * rather than making the next claimant wait it out */
 		Lead_Abort(bot, "died");
+		/* no reading, so the respawn's jump to 100 is not a pickup; the
+		 * back-off dies with the life that earned it */
+		bot->mega_on = false;
+		bot->mega_hp = 0;
+		bot->mega_since = 0.0f;
+		bot->mega_next = 0.0f;
 		bot->beat_ready = true; /* dead HERE, on this level: the spawn beat
 		                         * has something to be the far side of */
 		/*
@@ -3748,6 +3906,80 @@ static void SG_BotThink(sg_bot_t *bot)
 		if (lead)
 			goal_field = lead;
 	}
+
+	/*
+	 * THE MEGA OFFER (sg_megaworth), resolved once for the whole frame and
+	 * BEFORE the tactical waypoint is scored -- the waypoint is committed for
+	 * up to ten seconds off one Surface_At sweep, so a term that arrived after
+	 * it would not reach the route until the next commitment.
+	 */
+	sg_cur_mega = Mega_Worth(bot, e, role);
+
+	/*
+	 * NO CAMPING THE PAD, and no obsession either -- the offer is bounded in
+	 * TIME as well as in road.
+	 *
+	 * The term's shape has a well at the pad: detour is zero standing on it
+	 * and grows in every direction, which is what makes the bot walk there.
+	 * Ordinarily the well destroys itself -- arriving means touching the
+	 * item, the health goes to 200, SG_WorthMega reads 0 on that same frame
+	 * and the well is gone. But a bot that cannot quite reach the pad (a lip
+	 * the body will not climb, a door it cannot open) would otherwise sit in
+	 * the well indefinitely, and sitting there is worth exactly nothing:
+	 * MegaHealth_think bleeds the overheal back off at 1 hp/s from the moment
+	 * of pickup and the pad itself is on a 20 s respawn, so the prize is not
+	 * something you can wait for the way you wait for a quad. Twelve seconds
+	 * of standing offer without a pickup is a route that is not working; drop
+	 * it and refuse another for the pad's own respawn period.
+	 */
+	if (sg_cur_mega > 0.0f && level.time < bot->mega_next)
+		sg_cur_mega = 0.0f;
+	if (sg_cur_mega > 0.0f)
+	{
+		if (!bot->mega_on)
+			bot->mega_since = level.time;
+		else if (level.time - bot->mega_since > SG_MEGA_PATIENCE)
+		{
+			sg_cur_mega = 0.0f;
+			bot->mega_next = level.time + SG_MEGA_BACKOFF;
+			if (SG_MegaOn() && gi.cvar("sg_debug", "0", 0)->value)
+				gi.dprintf("MEGA %s give up: %.0fs on offer, no pickup\n",
+				           e->client->pers.netname, SG_MEGA_PATIENCE);
+		}
+	}
+
+	if (SG_MegaOn() && gi.cvar("sg_debug", "0", 0)->value)
+	{
+		/* the commit: the frame the offer turns on. The detour reported is
+		 * the best one standing from where the bot is now, in ms of extra
+		 * road -- back-solved from the value, which is what the surface
+		 * actually spends. */
+		if (sg_cur_mega > 0.0f && !bot->mega_on && bot->seed >= 0)
+		{
+			int		pad = -1;
+			float	val = Mega_Detour(bot->seed, goal_field, &pad);
+			float	det = (val > 0.0f)
+			              ? 1500.0f * (sg_cur_mega / val - 1.0f) : -1.0f;
+
+			if (val > 0.0f)
+				gi.dprintf("MEGA %s commit: pad %d hp %d worth %.2f "
+				           "detour %.0fms pull %.0f\n",
+				           e->client->pers.netname, pad, e->health,
+				           sg_cur_mega, det, 1500.0f * val);
+		}
+		/*
+		 * The take. No pickup hook is needed and none is added: the mega is
+		 * the only thing in the game that moves a player's health by 100 in
+		 * one frame (count 100 with HEALTH_IGNORE_MAX, g_items.c:598-604),
+		 * and a respawn cannot forge it because the dead branch above zeroes
+		 * mega_hp on the way through.
+		 */
+		if (bot->mega_hp > 0 && e->health - bot->mega_hp >= 90)
+			gi.dprintf("MEGA %s take: hp %d -> %d\n",
+			           e->client->pers.netname, bot->mega_hp, e->health);
+	}
+	bot->mega_on = (sg_cur_mega > 0.0f);
+	bot->mega_hp = e->health;
 
 	bot->last_goalcost = (bot->seed >= 0 &&
 	                      goal_field[bot->seed] < SG_FIELD_INF)
@@ -9762,6 +9994,10 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].lead_seed = -1;
 	sg_bots[slot].lead_at = 0.0f;
 	sg_bots[slot].lead_next = 0.0f;
+	sg_bots[slot].mega_on = false;
+	sg_bots[slot].mega_hp = 0;
+	sg_bots[slot].mega_since = 0.0f;
+	sg_bots[slot].mega_next = 0.0f;
 	sg_bots[slot].escprior_bucket = -1;
 	sg_bots[slot].escprior_until = 0.0f;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;

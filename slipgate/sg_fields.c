@@ -599,6 +599,56 @@ static qboolean Class_PerItem(int cls)
 	return (cls == SG_FC_POWERUP || cls == SG_FC_RUNE);
 }
 
+/*
+ * THE MEGA PADS (sg_megaworth), one field each.
+ *
+ * Built off the back of the health class rather than on a clock of its own:
+ * item_health_mega carries the "item_health" prefix, so a mega going up or
+ * down already moves SG_FC_HEALTH's signature and already calls Class_Build
+ * here. One hook, no second cadence, no second scan of the edict list to
+ * decide whether a rebuild is due.
+ *
+ * Off by default, and "off" means no flood at all -- mega_count stays 0, the
+ * buffers stay untouched, and every consumer's first test fails.
+ */
+qboolean SG_MegaOn(void)
+{
+	return (gi.cvar("sg_megaworth", "0", 0)->value > 0.0f) ? true : false;
+}
+
+static void Mega_Build(rune_t *r)
+{
+	edict_t *e;
+	int i;
+
+	sg_fields.mega_count = 0;
+	if (!SG_MegaOn())
+		return;
+
+	for (i = 0; i < globals.num_edicts &&
+	     sg_fields.mega_count < SG_MAX_MEGA; i++)
+	{
+		int k = sg_fields.mega_count, seed;
+
+		e = &g_edicts[i];
+		if (!e->inuse || !e->classname || !Caco_ItemBelievedUp(e))
+			continue;           /* a taken mega is SOLID_NOT for 20 s */
+		if (strcmp(e->classname, "item_health_mega") != 0)
+			continue;
+		seed = Caco_ItemBeliefSeed(r, e);
+		if (seed < 0 || !sg_fields.to_mega[k])
+			continue;
+		sg_fields.mega_seed[k] = seed;
+		sg_fields.mega_ent[k] = i;
+		Field_FromOne(r, sg_fields.to_mega[k], seed);
+		sg_fields.mega_count++;
+	}
+}
+
+/* the on/off edge, so flipping the cvar mid-level does not wait for the next
+ * health item to change state before the fields exist (or stop existing) */
+static qboolean sg_mega_was;
+
 static void Class_Build(rune_t *r, int cls)
 {
 	int sources[256] = { 0 }, costs[256] = { 0 }, ents[256] = { 0 }, n = 0;
@@ -620,6 +670,13 @@ static void Class_Build(rune_t *r, int cls)
 	}
 	Field_Flood(r, sg_fields.item[cls], sources, costs, n);
 	sg_fields.item_sig[cls] = Class_Signature(&field_classes[cls]);
+
+	/* the mega rides the health class's rebuild: same entities, same edge */
+	if (cls == SG_FC_HEALTH)
+	{
+		Mega_Build(r);
+		sg_mega_was = SG_MegaOn();
+	}
 
 	/*
 	 * The same live entities, one field each, flooded FROM the item -- so the
@@ -828,6 +885,23 @@ qboolean Fields_Setup(rune_t *r)
 	 * of them are (re)allocated here rather than lazily -- a "if (!ptr)" test
 	 * would see the previous level's freed address and skip.
 	 */
+	/*
+	 * The mega buffers are allocated whatever the cvar says, for the same
+	 * reason every other pointer here is: they were TAG_LEVEL and are
+	 * dangling by now, and a lazy "allocate when the cvar turns on" would
+	 * read the previous level's freed address. Allocation is not behaviour
+	 * -- with the cvar off nothing is ever flooded into them and mega_count
+	 * stays 0, so the surface is the byte it was before this existed. Ahead
+	 * of the class loop because Class_Build(SG_FC_HEALTH) floods them.
+	 */
+	for (i = 0; i < SG_MAX_MEGA; i++)
+	{
+		sg_fields.to_mega[i] = Field_Alloc(r);
+		sg_fields.mega_seed[i] = -1;
+		sg_fields.mega_ent[i] = -1;
+	}
+	sg_fields.mega_count = 0;
+
 	for (i = 0; i < SG_FIELD_CLASSES; i++)
 	{
 		int k;
@@ -880,6 +954,15 @@ void Fields_Refresh(rune_t *r)
 			    || (Class_PerItem(i) && bsig != belief_sig))
 				Class_Build(r, i);
 		belief_sig = bsig;
+	}
+
+	/* the cvar's own edge: turning sg_megaworth on mid-level must not wait
+	 * for the next health item to change state before there is a field, and
+	 * turning it off must drop the pull on the spot */
+	if (SG_MegaOn() != sg_mega_was)
+	{
+		Mega_Build(r);
+		sg_mega_was = SG_MegaOn();
 	}
 
 	/* flag positions per CACO: seed the "now" field wherever belief puts it */

@@ -599,6 +599,8 @@ typedef struct
 
 	float		worth_next;		/* when the item worths go stale */
 	float		worth[SG_FIELD_CLASSES];
+	float		worth_mega;		/* the overheal worth (sg_megaworth); not a
+	                             * class, so it sits beside them */
 
 	/* what the duel terms are about: the last look at the held target. org is
 	 * belief, not the live edict -- it ages instead of following. enemy_last
@@ -2287,7 +2289,12 @@ static float Worth_Health(edict_t *e)
 	 * H1 -- the mega is +100 OVER max and then denies itself for 100 s of
 	 * decay plus 20 s of respawn (g_items.c:586-595): the longest denial clock
 	 * on the map. Worth a full 1500 ms budget even at full health.
+	 *
+	 * Stands down under sg_megaworth: Worth_Mega says this properly, with the
+	 * mega's own fields behind it, and leaving both standing would price the
+	 * same pad twice.
 	 */
+	if (!SG_MegaOn())
 	{
 		int i;
 
@@ -2310,6 +2317,105 @@ static float Worth_Health(edict_t *e)
 	}
 
 	return Combat_Clamp(worth);
+}
+
+/*
+ * THE MEGA, priced as OVERHEAL (sg_megaworth). The census at wave 404 is the
+ * whole argument: zero megas taken by bots in 850 s on a map that has one,
+ * while the humans on the same map take it AT FULL HEALTH -- because +100 over
+ * max is not health, it is a second life's worth of margin that lets an
+ * attacker push deeper and survive the steal. Pickup_Health takes the mega at
+ * any health (HEALTH_IGNORE_MAX, g_items.c:598-604) and adds its full count of
+ * 100 over max_health; only the ordinary boxes are refused at 100.
+ *
+ * Worth_Health cannot say this. It is the price of THE HEALTH CLASS given the
+ * bot's state, and at 100 hp that price is correctly 0.05 -- a healthy bot does
+ * not want a health box. The 2.5x H1 bump above tries to speak for the mega
+ * through that number and cannot: 0.05 x 2.5 is 0.125, about 190 ms of detour
+ * budget, and it is spent on a field that points at the NEAREST health item of
+ * any kind. So the mega gets its own worth and its own fields, and when this
+ * feature is on the H1 bump stands down rather than double-counting.
+ *
+ * (b) THE HEADROOM GATE, and the one place this must not read like health:
+ * a bot at 100/100 PASSES. Taking at full is the entire point. The cap only
+ * refuses a bot that is already carrying the overheal -- at 170 a second mega
+ * buys 30 points and hands the other 70 to whoever comes next, which is a
+ * donation, not a detour.
+ */
+#define SG_MEGA_HEADROOM	170
+
+static float Worth_Mega(edict_t *e)
+{
+	float	worth;
+	int		h = e->health;
+	int		i, team;
+
+	if (!SG_MegaOn())
+		return 0.0f;
+	if (h >= SG_MEGA_HEADROOM)
+		return 0.0f;
+
+	/*
+	 * The tiers are the overheal actually collected, not the damage taken:
+	 * a bot at 100 banks the full +100 and a bot at 40 banks 60 of headroom
+	 * plus the 100 it was missing, which is worth more. Every one of these
+	 * is inside SG_WORTH_MAX and the 1500 ms detour scale reads them as
+	 * "1500 ms of extra road at full health, 2000 at half".
+	 */
+	if (h >= 100)
+		worth = 1.00f;			/* 1500 ms: the full budget, at FULL health */
+	else if (h >= 75)
+		worth = 1.15f;
+	else if (h >= 50)
+		worth = 1.35f;
+	else
+		worth = 1.60f;			/* hurt: the mega is a life, not a margin */
+
+	/*
+	 * (a) BELIEF, and this bot's team's row only. A mega the other side
+	 * watched respawn is not a mega this side knows about; reading the
+	 * global entity state here would leak the sighting, which is the one
+	 * thing the belief table exists to stop.
+	 */
+	team = e->client->ctf.teamnum;
+	for (i = 0; i < globals.num_edicts; i++)
+	{
+		edict_t *it = &g_edicts[i];
+
+		if (!it->inuse || !it->classname)
+			continue;
+		if (strcmp(it->classname, "item_health_mega") != 0)
+			continue;
+		if (!Caco_ItemBelievedUpFor(team, it))
+			continue;
+		return Combat_Clamp(worth);
+	}
+	return 0.0f;
+}
+
+float SG_WorthMega(edict_t *self)
+{
+	int ci;
+
+	if (!self || !self->client)
+		return 0.0f;
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+		return 0.0f;
+
+	/*
+	 * NO CAMPING THE PAD. The tiers above are recomputed once a second like
+	 * every other worth, but the headroom test is re-asked HERE, every frame:
+	 * the instant the mega lands the bot is at 200 and the pull has to be
+	 * gone on that frame. A second of stale worth is a second of standing on
+	 * an empty pedestal, and standing on it buys nothing -- MegaHealth_think
+	 * bleeds the overheal back off at 1 hp/s from the moment of pickup
+	 * (g_items.c:569-592) and the pad itself is 20 s from respawning, so
+	 * every second waited is a point of the prize spent. Take it and push.
+	 */
+	if (self->health >= SG_MEGA_HEADROOM)
+		return 0.0f;
+	return sg_combat[ci].worth_mega;
 }
 
 /*
@@ -2578,6 +2684,7 @@ void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
 		st->worth[SG_FC_AMMO] = Worth_Ammo(self);
 		st->worth[SG_FC_POWERUP] = Worth_Quad(self);
 		st->worth[SG_FC_RUNE] = Worth_Rune(self);
+		st->worth_mega = Worth_Mega(self);
 	}
 
 	/* the static row is read as a role BIAS, the worth as the state */

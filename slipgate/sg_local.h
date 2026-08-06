@@ -251,6 +251,23 @@ enum
  */
 #define SG_MAX_PER_ITEM		8
 
+/*
+ * THE MEGA (sg_megaworth). item_health_mega matches the "item_health" prefix,
+ * so it is already inside SG_FC_HEALTH's class flood -- and that is exactly
+ * the problem the census found. A class field answers "cost to the NEAREST
+ * health box", and a 10-point stimpack two rooms nearer hides the mega behind
+ * it; the class worth then collapses to 0.05 at full health because the class
+ * is priced as HEALTH, which a healthy bot does not want. The mega is not
+ * health: it is +100 OVER max (HEALTH_IGNORE_MAX | HEALTH_TIMED,
+ * g_items.c:598-640), which is why a human takes it at 100/100.
+ *
+ * Identity worth needs identity fields, the same argument that gave the
+ * powerups and runes theirs -- so the megas get one field each, flooded FROM
+ * the pad, and the detour triangle can be evaluated exactly against THAT pad.
+ * Four is generous: no shipped map carries more than two.
+ */
+#define SG_MAX_MEGA			4
+
 typedef struct
 {
 	int		red_flag_seed, blue_flag_seed;
@@ -275,12 +292,24 @@ typedef struct
 
 	/* appended: has the carrier support field ever been flooded this level? */
 	qboolean our_carrier_valid[2];
+
+	/* appended: one field per believed-up mega, flooded FROM the pad, so
+	 * to_mega[k][x] is the cost to get from x TO that pad (sg_megaworth).
+	 * mega_count is 0 whenever the cvar is off -- nothing is flooded and
+	 * nothing reads these. */
+	int		*to_mega[SG_MAX_MEGA];
+	int		mega_seed[SG_MAX_MEGA];
+	int		mega_ent[SG_MAX_MEGA];
+	int		mega_count;
 } sg_fields_t;
 
 extern sg_fields_t sg_fields;
 
 qboolean	Fields_Setup(rune_t *r);
 void		Fields_Refresh(rune_t *r);
+/* the one place the sg_megaworth cvar is read, so pricing, flooding and the
+ * debug line can never disagree about whether the feature is on */
+qboolean	SG_MegaOn(void);
 void		Field_Flood(rune_t *r, int *dist,
 		            const int *sources, const int *source_cost, int n);
 

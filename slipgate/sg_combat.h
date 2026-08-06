@@ -58,6 +58,16 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged);
 void SG_CombatWeights(edict_t *self, const sg_weights_t *role, sg_weights_t *out);
 
 /*
+ * The overheal worth of the mega for this bot, 0 to 2.0 (sg_megaworth). Not a
+ * class weight: SG_FC_HEALTH prices "a health box, given my state" and collapses
+ * at full health, while the mega is +100 OVER max and is worth taking at 100/100.
+ * Zero whenever the cvar is off, whenever no mega is believed up by this bot's
+ * TEAM, and whenever the bot is already carrying the overheal. The role gate and
+ * the detour budget live with the router in sg_arach.c; this is the state half.
+ */
+float SG_WorthMega(edict_t *self);
+
+/*
  * Tell combat this bot is standing a post and how far it can see down the
  * approach, in units (WEAPONS.md 2.4-D3: the pre-held weapon is a function of
  * the sightline length, because the spread saturation distances are hard
