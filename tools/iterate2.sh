@@ -211,8 +211,11 @@ ROUTEJITTER=(8   8        8        0        8         8        8         8      
 # carries MEGAWORTH next (stage-2 volume program lever 2).
 COMMSTACK=(1     1        1        1        1         1        1         1        0        1)
 
-# megaworth A/B: overheal mega pickups, s06 armed vs s07 control.
-MEGAWORTH=(0     0        0        0        0         1        0         0        0        0)
+# megaworth PARKED (11-wave verdict: 17% vs 24% conversion -- the
+# detour costs more than the overheal buys at these gates). Honest
+# negative to the ledger with its film; retriable with a tighter
+# detour budget (4000ms was too generous) or attack-role-only gating.
+MEGAWORTH=(0     0        0        0        0         0        0         0        0        0)
 
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
