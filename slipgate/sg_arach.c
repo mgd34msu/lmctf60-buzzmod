@@ -916,6 +916,22 @@ static void Air_Build(void)
 		sg_airnext[i] = -1;
 		dist[i] = (sg_rune->seeds[i].flags & RSF_WATER) ? 0x7fffff : 0;
 	}
+	/*
+	 * THE SHELF BREATHES (waves 424-429: bimodal massacres on the same
+	 * binary -- the basin's boundary to DRY land is hook-only, so the
+	 * dry-seeds-only target set left every cistern seed at -1 and the
+	 * fallback pitch-up died under the overhang exactly as before). A
+	 * water seed with any link at all to a dry seed is standing where a
+	 * head clears the surface: wading depth. Those are air too.
+	 */
+	for (li = 0; li < sg_rune->hdr.num_links; li++)
+	{
+		rune_link_t *l = &sg_rune->links[li];
+
+		if ((sg_rune->seeds[l->from].flags & RSF_WATER) &&
+		    !(sg_rune->seeds[l->to].flags & RSF_WATER))
+			dist[l->from] = 0;
+	}
 	do
 	{
 		changed = 0;
