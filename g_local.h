@@ -421,6 +421,7 @@ typedef struct
 	// Appended rather than inserted: level_locals_t is written to level.sav,
 	// so keeping existing field offsets put is the polite thing to do.
 	qboolean	sweeps_awarded;	// Victory() can fire twice a level; award sweeps once
+	qboolean	match_recorded;	// same double-fire: write the matches row once
 } level_locals_t;
 
 
