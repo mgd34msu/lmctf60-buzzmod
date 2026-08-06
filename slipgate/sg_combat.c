@@ -435,6 +435,96 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 
 #define SG_LEAD_JITTER_S0	4.0f	/* per-shot lead error in degrees; 0 at skill 4 */
 
+/* ------------------------------------------------------------ aim texture
+ *
+ * The block above gets the SIZE of a human's aim error right and the SHAPE of
+ * it wrong. Watch a demo: nobody's crosshair converges on a target the way a
+ * decaying cone does. The hand swings, it goes PAST, it comes back, it goes
+ * past again a little less, and the second correction is the one that lands.
+ * Then, holding the target, the crosshair does not sit still and it does not
+ * buzz -- it wanders off a fraction of a degree and gets pulled back, on a
+ * cycle you can count in seconds.
+ *
+ * Three things are missing, and they are all shape, not magnitude:
+ *
+ *   1. the overshoot on acquisition, and its one-or-two damped corrections
+ *   2. the settle window growing with the size of the swing -- Fitts's law,
+ *      which is about a hand and a target and is as true of a mouse as it is
+ *      of a finger and a button
+ *   3. the tracking wander, which is slow and continuous, where this file's
+ *      tremor was a fresh random direction stamped down every 0.25-0.5 s
+ *
+ * All of it is behind sg_aimtexture, default 0. With the cvar off every
+ * expression below is the one that shipped, textually, and the state fields
+ * this block adds are never written.
+ *
+ * The numbers are FITTED, like the whole block above them. The one that is
+ * not free is SG_TEX_FITTS_REF: the settle multiplier is written so that it
+ * comes out at exactly 1.0 at that flick angle, so the reference is the flick
+ * at which the settle window is UNCHANGED from today. It is set at 30 deg
+ * because the scan gate only admits targets inside a 120 deg cone
+ * (SG_FOV_COS), which puts the median acquisition swing in the twenties --
+ * so the multiplier is centred on the roster's own typical flick and the
+ * AVERAGE settle length across a match is what it always was. Only its
+ * distribution changes: a small re-acquisition converges sooner, a wide
+ * swing later.
+ */
+#define SG_TEX_OVER_TRACK	0.08f	/* overshoot, as a fraction of the swing, */
+#define SG_TEX_OVER_FLICK	0.15f	/* for style 0 and style 1 respectively */
+/*
+ * Ceiling on the overshoot, in degrees, and it is NOT a taste number -- it is
+ * the point where the compensation below runs out of ramp to pay with. The
+ * budget Combat_TexSpan has to spend is res*span + span^2/3, tightest at
+ * skill 4 (0.8 and 8.2), which caps the overshoot's own mean square at
+ *
+ *     sqrt((0.8*8.2 + 8.2^2/3) / SG_TEX_SHAPE_MS) == 12.9 deg
+ *
+ * Past that the ramp is already at zero and the extra overshoot is a straight
+ * accuracy loss with nothing on the other side of the ledger. 12 rather than
+ * 12.9 for the margin. It binds in practice only where it should: the scan
+ * gate's 120 deg cone puts most acquisitions well under it, and the swings
+ * that reach it are the threat-cone ones -- a bot spun round by a shot in the
+ * back, which is exactly the case where 15% of the swing stops being an
+ * overshoot and becomes a pirouette.
+ */
+#define SG_TEX_OVER_CAP		12.0f
+/*
+ * Overshoot is a defect, so the file's own rule applies: skill 4 is the
+ * CEILING and only skill 0 is worse. The band above is what a skill-4 bot
+ * does; a skill-0 bot does a quarter more of it.
+ */
+#define SG_TEX_OVER_MUL_S0	1.25f
+#define SG_TEX_OVER_MUL_S4	1.00f
+
+#define SG_TEX_FITTS_REF	30.0f	/* the flick the window is calibrated on */
+#define SG_TEX_FITTS_A		0.45f	/* A + B == 1 keeps m(REF) == 1 exactly */
+#define SG_TEX_FITTS_B		0.55f
+#define SG_TEX_FITTS_LO		0.55f
+#define SG_TEX_FITTS_HI		1.70f
+
+#define SG_TEX_STYLE_WIN	0.30f	/* a flicker settles in 0.85x the window a
+                                     * tracker takes, and rides 1.15x for the
+                                     * smooth end -- the same +/-15% band the
+                                     * persona traits are squeezed into */
+
+#define SG_TEX_FLICK_MIN	3.0f	/* under this the swing is a nudge and the
+                                     * whole texture is skipped: a 2 deg
+                                     * "flick" with an overshoot on it is a
+                                     * twitch nobody makes */
+
+#define SG_TEX_WANDER_TAU	0.90f	/* seconds for the tracking direction to
+                                     * have substantially wandered */
+
+/*
+ * Mean square of the correction shape (1-x)cos(2*pi*n*x) over x in [0,1]:
+ *
+ *     1/6 + 1/(16*pi^2*n^2)  ==  0.173 (n=1), 0.169 (n=2)
+ *
+ * One number for both because the difference is under 3% and this is a term
+ * that gets subtracted under a square root.
+ */
+#define SG_TEX_SHAPE_MS		0.173f
+
 /*
  * How long a hit from a shooter the bot could not see keeps steering where
  * the bot looks (sg_caco.c's damage ring supplies the bearing). A human
@@ -475,6 +565,17 @@ typedef struct
 
 	vec3_t		err;			/* aim error direction, unit length */
 	float		err_next;		/* when to resample the tremor */
+
+	/* the aim texture, all of it written only while sg_aimtexture is on.
+	 * tex_dir is re-orthogonalised against the live aim every frame rather
+	 * than trusted from acquisition: the target keeps moving during the
+	 * settle, and an offset that has drifted out of the plane perpendicular
+	 * to the aim stops being a pure angle and starts being a range error. */
+	vec3_t		tex_dir;		/* which way "past the target" is, unit */
+	float		tex_over;		/* overshoot amplitude, degrees, >0 = armed */
+	float		tex_win;		/* this acquisition's settle window, seconds */
+	float		tex_cyc;		/* corrections inside it: 1.0 or 2.0 */
+	float		tex_wander;		/* level.time of the last wander step */
 
 	float		win_end;		/* when the current trigger window expires */
 	qboolean	win_fire;		/* is the current window a firing window */
@@ -577,6 +678,24 @@ static qboolean Combat_WSwitch(void)
 	if (!sg_wswitch)
 		sg_wswitch = gi.cvar("sg_wswitch", "0", 0);
 	return (qboolean)(sg_wswitch && sg_wswitch->value != 0.0f);
+}
+
+static cvar_t	*sg_aimtexture;
+
+/*
+ * Is the aim texture armed? Pointer resolved once, value read fresh, for the
+ * same reason sg_bot_skill is: gi.cvar walks the engine's list and this is
+ * asked several times per engaged bot per frame, but flipping the cvar
+ * mid-match has to take on the next one.
+ *
+ * Default 0. Everything this switch guards is additive, so with it off the
+ * aim path is the one that shipped and not a re-derivation of it.
+ */
+static qboolean Combat_TexOn(void)
+{
+	if (!sg_aimtexture)
+		sg_aimtexture = gi.cvar("sg_aimtexture", "0", 0);
+	return (qboolean)(sg_aimtexture && sg_aimtexture->value != 0.0f);
 }
 
 /*
@@ -1671,6 +1790,293 @@ static void Combat_SampleError(sg_combat_state_t *st, vec3_t dir)
 	Combat_SamplePerp(dir, st->err);
 }
 
+/* ----------------------------------------------------------- aim texture */
+
+/*
+ * Track or flick, 0..1, derived rather than authored.
+ *
+ * The persona table was NOT given a flick_style column, and that is a ruling
+ * rather than laziness. sg_persona.h says it out loud: "Bend behaviour, never
+ * invent it... Anything that wanted a new branch belongs in the system that
+ * owns the behaviour, not here." A correction shape is a branch in the aim
+ * code; the table's job is to say who the bot is, and it already does, in a
+ * column that answers this question. Aggression IS the tell. The roster's
+ * loud ones -- Fiend 1.50, Spawn 1.40, Caco 1.30 -- are the ones the chat
+ * file gives the swaggering lines to and the ones the table's own comment
+ * calls "not actually the best shots"; a snatch-and-correct flick is exactly
+ * how that plays. The patient end -- Wizard 0.65, Gate 0.70, Rune 0.75, the
+ * dry observers holding a lane -- tracks smoothly and settles slowly.
+ *
+ * Read through SG_PersonaAggression rather than off the row, so this lands
+ * inside the same +/-15% squeeze every other consumer gets and cannot widen
+ * the band from out here. That maps the roster's 0.5-1.5 onto 0.85-1.15,
+ * which is why the rescale below is exactly that span: the sixteen rows use
+ * the full 0..1 of style and nothing clamps in practice. With sg_persona 0
+ * the multiplier is 1.0 and every bot comes out at 0.5 -- dead centre, which
+ * is the right answer when the roster has no characters in it.
+ */
+static float Combat_FlickStyle(edict_t *self)
+{
+	float	s = (SG_PersonaAggression(self) - 0.85f) / 0.30f;
+
+	if (s < 0.0f)
+		s = 0.0f;
+	if (s > 1.0f)
+		s = 1.0f;
+	return s;
+}
+
+/*
+ * Fitts's law, in the only form this file needs: a bigger swing takes longer
+ * to land on. log2 is spelled with log() and the conversion constant because
+ * that is the one form every toolchain this builds under has always had.
+ */
+static float Combat_TexFitts(float flick)
+{
+	float	m;
+
+	m = SG_TEX_FITTS_A + SG_TEX_FITTS_B
+	    * (float)(log(1.0 + (double)flick / SG_TEX_FITTS_REF)
+	              * 1.4426950408889634);
+
+	if (m < SG_TEX_FITTS_LO)
+		m = SG_TEX_FITTS_LO;
+	if (m > SG_TEX_FITTS_HI)
+		m = SG_TEX_FITTS_HI;
+	return m;
+}
+
+/*
+ * THE COMPENSATION. Read this before touching any number above it.
+ *
+ * The overshoot is a new error term, and a new error term makes the bot worse
+ * unless something else gives. The rule this feature was accepted under is
+ * that it changes the SHAPE of the miss and not the SIZE of it, so the ramp
+ * pays for the overshoot out of its own width.
+ *
+ * The quantity held fixed is the mean square angular error over the settle
+ * window, because that is what a cone-shaped error's hit probability actually
+ * tracks. Today, with the offset ramping linearly from (res + span) down to
+ * res over x in [0,1]:
+ *
+ *     E_off^2 = mean of (res + span*(1-x))^2 = res^2 + res*span + span^2/3
+ *
+ * With the texture on, the overshoot rides in a direction that is independent
+ * of the tremor's, so it adds in mean square rather than coherently, and its
+ * own mean square is (SG_TEX_SHAPE_MS * over^2):
+ *
+ *     E_on^2 = res^2 + res*span' + span'^2/3 + SHAPE_MS*over^2
+ *
+ * Setting the two equal and solving the quadratic for span' is this function.
+ * With over == 0 it returns span exactly -- which is the test that matters,
+ * because it means a flick too small to be armed (SG_TEX_FLICK_MIN) is not
+ * quietly handed a narrower cone.
+ *
+ * What this does NOT compensate, and does not have to:
+ *
+ *   - the tracking wander. It only changes how st->err MOVES, never how long
+ *     it is, so the magnitude statistics are untouched by construction. That
+ *     is the whole reason it was written as a direction process instead of an
+ *     added offset -- an added offset would have needed a second term here
+ *     and a second argument about it.
+ *   - the settle window's Fitts scaling. It is centred on the median
+ *     acquisition flick (see SG_TEX_FITTS_REF), so it moves length between
+ *     acquisitions without changing the average.
+ *
+ * Size of the correction, for the record: at skill 4 (res 0.8, span 8.2) and
+ * a 30 deg flick at mid style, over is about 3.5 deg and span' comes out at
+ * 7.9 -- a 4% narrower ramp buying a 3.5 deg overshoot. At the worst case the
+ * cvar can produce (style 1, skill 0, a swing past SG_TEX_OVER_CAP) the two
+ * mean squares still come out equal to four decimal places at every skill,
+ * which is what the cap was chosen to guarantee.
+ *
+ * Degrees are combined here rather than tangents, as everywhere else in this
+ * block; tan is applied once at the end and the two agree to within a couple
+ * of percent across the whole cone.
+ */
+static float Combat_TexSpan(float span, float res, float over)
+{
+	float	target, root;
+
+	target = res * span + span * span / 3.0f
+	       - SG_TEX_SHAPE_MS * over * over;
+	if (target <= 0.0f)
+		return 0.0f;		/* the overshoot alone already spends the budget */
+
+	root = (float)sqrt((double)(res * res) + (4.0 / 3.0) * (double)target);
+	root = 1.5f * (root - res);
+	return (root > 0.0f) ? root : 0.0f;
+}
+
+/*
+ * The swing landed. Work out how far past the target the hand went, which way
+ * "past" is, and how long the correction has to play out in.
+ *
+ * `forward` is where the view was pointing when this frame started -- the
+ * flick's origin -- and `dir` is where the new target is, unit length.
+ */
+static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
+                              float skill, vec3_t forward, vec3_t dir)
+{
+	vec3_t	past;
+	float	d, len, flick, style, over, win;
+
+	st->tex_over = 0.0f;
+	st->tex_win = 0.0f;
+	st->tex_cyc = 1.0f;
+	VectorClear(st->tex_dir);
+
+	d = DotProduct(forward, dir);
+	if (d > 1.0f)
+		d = 1.0f;
+	if (d < -1.0f)
+		d = -1.0f;
+	flick = (float)(acos((double)d) * 180.0 / M_PI);
+	if (flick < SG_TEX_FLICK_MIN)
+		return;				/* a nudge, not a flick; nothing to overshoot */
+
+	/*
+	 * Which way the swing was still travelling when it arrived. dir*(f.dir)
+	 * minus f is perpendicular to dir by construction and points away from
+	 * where the view came from, so adding along it is continuing the rotation
+	 * rather than starting a new one. It degenerates at exactly 0 and exactly
+	 * 180 degrees, where there is no swing plane to overshoot in -- 0 is
+	 * already excluded by the flick floor, 180 is a bot that got shot in the
+	 * back, and neither wants a made-up direction.
+	 */
+	VectorScale(dir, d, past);
+	VectorSubtract(past, forward, past);
+	len = VectorLength(past);
+	if (len < 0.01f)
+		return;
+	VectorScale(past, 1.0f / len, st->tex_dir);
+
+	style = Combat_FlickStyle(self);
+
+	over = flick * (SG_TEX_OVER_TRACK
+	                + (SG_TEX_OVER_FLICK - SG_TEX_OVER_TRACK) * style)
+	     * Combat_SkillLerp(skill, SG_TEX_OVER_MUL_S0, SG_TEX_OVER_MUL_S4);
+	if (over > SG_TEX_OVER_CAP)
+		over = SG_TEX_OVER_CAP;
+
+	win = Combat_SkillLerp(skill, SG_SETTLE_S0, SG_SETTLE_S4)
+	    * Combat_TexFitts(flick)
+	    * (1.0f + SG_TEX_STYLE_WIN * (0.5f - style));
+
+	st->tex_over = over;
+	st->tex_win = win;
+	/*
+	 * One correction or two. Integer cycles are not a rounding convenience:
+	 * the envelope below is linear, and
+	 *
+	 *     integral of (1-x)*cos(2*pi*n*x) over [0,1] == 0 for integer n
+	 *
+	 * exactly. That is what makes the overshoot zero-mean over the window
+	 * with no bias term to subtract and no step left at the end of it, so
+	 * the bot is not quietly aiming a fraction of a degree to one side for
+	 * the whole settle. Interpolating n between 1 and 2 would have broken
+	 * that for a difference nobody can see, so style picks a shape instead:
+	 * the flicker snatches and double-corrects, the tracker slides in once.
+	 */
+	st->tex_cyc = (style >= 0.5f) ? 2.0f : 1.0f;
+
+	if (gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("AIMTEX %s flick=%.1f over=%.2f settle=%dms cyc=%d "
+		           "style=%.2f\n",
+		           self->client->pers.netname, flick, over,
+		           (int)(win * 1000.0f + 0.5f), (int)st->tex_cyc, style);
+}
+
+/*
+ * The correction, as a signed multiple of the overshoot amplitude, and the
+ * direction it acts along re-squared to the live aim on the way past.
+ *
+ * (1-x)*cos(2*pi*n*x): full overshoot on the frame the swing lands, through
+ * zero, out the other side by less, and home. Linear envelope rather than the
+ * exponential a damped spring would give, for the integral argument above --
+ * an exponential leaves about 4% of the amplitude as a standing bias and
+ * there is no reason to pay that.
+ */
+static float Combat_TexShape(sg_combat_state_t *st, vec3_t dir)
+{
+	vec3_t	d;
+	float	x, len;
+
+	if (st->tex_over <= 0.0f || st->tex_win <= 0.0f)
+		return 0.0f;
+
+	x = (level.time - st->since) / st->tex_win;
+	if (x < 0.0f || x >= 1.0f)
+		return 0.0f;		/* settled; the ramp has it from here */
+
+	VectorCopy(st->tex_dir, d);
+	len = DotProduct(d, dir);
+	VectorMA(d, -len, dir, d);
+	len = VectorLength(d);
+	if (len < 0.01f)
+		return 0.0f;
+	VectorScale(d, 1.0f / len, st->tex_dir);
+
+	return (1.0f - x) * (float)cos(2.0 * M_PI * st->tex_cyc * (double)x);
+}
+
+/*
+ * Tracking, between acquisitions: the error DIRECTION wanders instead of
+ * jumping.
+ *
+ * What this replaces is a fresh random lateral stamped down every 0.25-0.5 s,
+ * which is white noise -- the crosshair teleports around the target at 2-4 Hz.
+ * Nobody's hand does that. A hand drifts off a fraction of a degree over a
+ * second or so and gets pulled back, and the pull-back is the correction the
+ * player is not aware of making. Blending a fresh perpendicular in at
+ * dt/tau per frame is that: an exponential filter over white noise is a
+ * random walk with a spring on it, which is the drift-and-recentre in one
+ * line and no extra state.
+ *
+ * The vector is put back to unit length every step. That is load-bearing, not
+ * tidiness: the ramp multiplies this direction, so a direction allowed to
+ * shrink would become a smaller error, and this term would stop being a pure
+ * shape change and start owing the compensation above an argument.
+ */
+static void Combat_TexWander(sg_combat_state_t *st, vec3_t dir)
+{
+	vec3_t	kick;
+	float	dt, w, len;
+
+	/*
+	 * A new target restarts the settle clock, and st->since is rewritten
+	 * when it does -- so a wander stamp older than it means "this direction
+	 * belongs to the last target" without a second flag to keep in sync.
+	 */
+	if (st->tex_wander < st->since)
+	{
+		Combat_SampleError(st, dir);
+		st->tex_wander = level.time;
+		return;
+	}
+
+	dt = level.time - st->tex_wander;
+	st->tex_wander = level.time;
+	if (dt <= 0.0f)
+		return;
+
+	w = dt / SG_TEX_WANDER_TAU;
+	if (w > 1.0f)
+		w = 1.0f;
+
+	Combat_SamplePerp(dir, kick);
+	VectorScale(st->err, 1.0f - w, st->err);
+	VectorMA(st->err, w, kick, st->err);
+
+	len = DotProduct(st->err, dir);
+	VectorMA(st->err, -len, dir, st->err);
+	len = VectorLength(st->err);
+	if (len < 0.01f)
+		Combat_SampleError(st, dir);	/* wandered through the middle */
+	else
+		VectorScale(st->err, 1.0f / len, st->err);
+}
+
 /*
  * Rule F1's second clause: has the target's velocity pointed the same way for
  * long enough that the lead is a prediction rather than a guess? Direction
@@ -2521,10 +2927,11 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	vec3_t				threat;
 	float				dist, held, frac, mag, len, flight;
 	float				yaw, pitch, skill, settle;
+	float				residual, span, shape;
 	trace_t				tr;
 	int					ci, band, want, inhand;
 	qboolean			clear_shot, carrier, ballistic, vel_stable;
-	qboolean			rattled;
+	qboolean			rattled, textured;
 
 	if (out_engaged)
 		*out_engaged = false;
@@ -2702,6 +3109,31 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 			                               SG_WS_DECIDE_S4) *
 			              SG_PersonaAggression(self);
 			st->ws_armed = level.time;
+		}
+
+		/*
+		 * The aim texture's one hook. This branch is the only place a target
+		 * transition happens: a genuinely new enemy comes through it, and so
+		 * does a re-acquisition after the target went behind something,
+		 * because the idle path zeroes st->enemy on the way out and the
+		 * comparison above cannot match zero.
+		 *
+		 * Cleared whether or not the cvar is on, so a texture armed while
+		 * sg_aimtexture was 1 cannot still be playing out against a target
+		 * acquired after it was set back to 0.
+		 */
+		st->tex_over = 0.0f;
+		st->tex_win = 0.0f;
+		if (Combat_TexOn() && dist > 1.0f)
+		{
+			vec3_t	dir;
+
+			/* aim is still the raw eye->centre vector here, before the lead
+			 * and the error bend it -- which is the right thing to measure a
+			 * swing against: it is where the target IS, not where this bot is
+			 * about to decide to point. */
+			VectorScale(aim, 1.0f / dist, dir);
+			Combat_TexAcquire(self, st, skill, forward, dir);
 		}
 	}
 
@@ -2882,12 +3314,31 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * contact down to a residual that never reaches zero. The direction is
 	 * resampled on a slow tick so it reads as tremor rather than a fixed bias
 	 * that a target could out-run in one direction.
+	 *
+	 * That first sentence was aspirational: the cone shrinks, it never goes
+	 * past. sg_aimtexture is the branch that makes it true -- the overshoot,
+	 * its corrections, and a tracking direction that wanders instead of
+	 * jumping. Off, this is the code that shipped and the three tex_ lines
+	 * below are no-ops.
 	 */
-	if (level.time >= st->err_next)
+	textured = Combat_TexOn();
+
+	if (textured)
+		Combat_TexWander(st, aim);
+	else if (level.time >= st->err_next)
 	{
 		Combat_SampleError(st, aim);
 		st->err_next = level.time + 0.25f + 0.25f * random();
 	}
+
+	/*
+	 * The correction shape is read off the CLEAN aim, before the tremor and
+	 * the overshoot are added to it -- both of those are offsets in the plane
+	 * perpendicular to this ray, and squaring the overshoot direction up
+	 * against a ray that already has one of them in it would fold a little of
+	 * the tremor into the correction's direction.
+	 */
+	shape = textured ? Combat_TexShape(st, aim) : 0.0f;
 
 	/*
 	 * Both ends of the ramp are skill terms now. A low-skill bot starts wider,
@@ -2896,15 +3347,29 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * with (the S4 endpoints are those constants, textually).
 	 */
 	settle = Combat_SkillLerp(skill, SG_SETTLE_S0, SG_SETTLE_S4);
+	residual = Combat_SkillLerp(skill, SG_RESIDUAL_S0, SG_RESIDUAL_S4);
+	span = Combat_SkillLerp(skill, SG_ACQUIRE_S0, SG_ACQUIRE_S4) - residual;
+
+	/*
+	 * Textured, the window is this acquisition's -- the skill span above,
+	 * stretched by the flick angle and the bot's style -- and the ramp has
+	 * been narrowed to pay for the overshoot riding inside it. Untextured,
+	 * tex_win is zero, tex_over is zero, and both lines below are the
+	 * arithmetic that shipped.
+	 */
+	if (textured && st->tex_win > 0.0f)
+		settle = st->tex_win;
+	if (textured)
+		span = Combat_TexSpan(span, residual, st->tex_over);
+
 	held = level.time - st->since;
 	frac = (held >= settle) ? 0.0f : (1.0f - held / settle);
-	mag = (float)tan((Combat_SkillLerp(skill, SG_RESIDUAL_S0, SG_RESIDUAL_S4)
-	                  + (Combat_SkillLerp(skill, SG_ACQUIRE_S0, SG_ACQUIRE_S4)
-	                     - Combat_SkillLerp(skill, SG_RESIDUAL_S0,
-	                                        SG_RESIDUAL_S4)) * frac)
-	                 * M_PI / 180.0);
+	mag = (float)tan((residual + span * frac) * M_PI / 180.0);
 
 	VectorMA(aim, mag, st->err, aim);
+	if (shape != 0.0f)
+		VectorMA(aim, (float)tan((double)(st->tex_over * shape)
+		                         * M_PI / 180.0), st->tex_dir, aim);
 	VectorNormalize(aim);
 
 	/* ------------------------------------------------------------- the view
