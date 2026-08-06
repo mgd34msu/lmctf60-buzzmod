@@ -877,6 +877,57 @@ int Rune_NearestSeed(rune_t *r, vec3_t p)
 
 /* --------------------------------------------------------------- fields */
 
+/*
+ * THE WAY TO AIR (waves 415-419 forensics). The gurgle override kicked
+ * straight up, and straight up is exactly wrong under the smap05 shelf
+ * overhang: a drowning bot pinned itself to a ceiling at spd=0 with its
+ * nose pointed at rock until "sank like a rock". Air is a GRAPH question
+ * -- so answer it once per map: a multi-source relaxation from every dry
+ * seed backward through swimmable links gives each water seed its next
+ * hop toward breathable surface. The override then swims the actual way
+ * out, overhangs and all. NULL on maps with no water; -1 for a water
+ * seed with no path (a sealed pool -- then straight up remains the only
+ * prayer and the old behavior stands).
+ */
+static int	*sg_airnext;
+
+static void Air_Build(void)
+{
+	int i, li, changed, passes = 0;
+	int n = sg_rune->hdr.num_seeds;
+	int *dist;
+
+	sg_airnext = gi.TagMalloc(sizeof(int) * n, TAG_LEVEL);
+	dist = gi.TagMalloc(sizeof(int) * n, TAG_LEVEL);
+	for (i = 0; i < n; i++)
+	{
+		sg_airnext[i] = -1;
+		dist[i] = (sg_rune->seeds[i].flags & RSF_WATER) ? 0x7fffff : 0;
+	}
+	do
+	{
+		changed = 0;
+		for (li = 0; li < sg_rune->hdr.num_links; li++)
+		{
+			rune_link_t *l = &sg_rune->links[li];
+
+			if (l->action != RL_SWIM && l->action != RL_RUN &&
+			    l->action != RL_JUMP)
+				continue;
+			if (!(sg_rune->seeds[l->from].flags & RSF_WATER))
+				continue;
+			if (dist[l->to] < 0x7fffff &&
+			    dist[l->from] > dist[l->to] + 1)
+			{
+				dist[l->from] = dist[l->to] + 1;
+				sg_airnext[l->from] = l->to;
+				changed = 1;
+			}
+		}
+	} while (changed && ++passes < 64);
+	gi.TagFree(dist);
+}
+
 static qboolean SG_LevelSetup(void)
 {
 	if (sg_rune && Q_stricmp(sg_rune_map, level.mapname) == 0)
@@ -894,6 +945,7 @@ static qboolean SG_LevelSetup(void)
 		           level.mapname);
 		return false;
 	}
+	Air_Build();        /* every water seed learns its way to air */
 	Danger_Load();      /* what past matches taught about this map */
 	/* Com_sprintf is the tree's own bounded copy (q_shared.c) and always
 	 * terminates; strncpy at sizeof-1 does not, which is what -Wall's
@@ -7813,13 +7865,38 @@ no_hold:;
 		 * than swimming, so a live pull is left alone.
 		 */
 		if (e->waterlevel >= 3 && bot->hook_phase != 2 &&
-		    e->air_finished - level.time < 4.0f)
+		    e->air_finished - level.time <
+		        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f))
 		{
-			cmd.angles[PITCH] = ANGLE2SHORT(-85.0f)
-			                  - e->client->ps.pmove.delta_angles[PITCH];
+			int an = (sg_airnext && bot->seed >= 0)
+			         ? sg_airnext[bot->seed] : -1;
+
+			if (an >= 0)
+			{
+				/* swim the graph's way out, not the ceiling's */
+				vec3_t ad;
+				float ay, ap, al;
+
+				VectorSubtract(sg_rune->seeds[an].origin, e->s.origin,
+				               ad);
+				al = VectorLength(ad);
+				ay = atan2f(ad[1], ad[0]) * 180.0f / (float)M_PI;
+				ap = (al > 1.0f)
+				     ? -asinf(ad[2] / al) * 180.0f / (float)M_PI : -85.0f;
+				cmd.angles[YAW] = ANGLE2SHORT(ay)
+				                - e->client->ps.pmove.delta_angles[YAW];
+				cmd.angles[PITCH] = ANGLE2SHORT(ap)
+				                  - e->client->ps.pmove.delta_angles[PITCH];
+				view_pitch = ap;
+			}
+			else
+			{
+				cmd.angles[PITCH] = ANGLE2SHORT(-85.0f)
+				                  - e->client->ps.pmove.delta_angles[PITCH];
+				view_pitch = -85.0f;
+			}
 			cmd.forwardmove = 400;
 			cmd.upmove = 400;
-			view_pitch = -85.0f;
 			bot->nav_drove = false;     /* not the route's fault */
 		}
 
