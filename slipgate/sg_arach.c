@@ -277,6 +277,17 @@ typedef struct sg_bot_s
 	float		plan_next;          /* sg_drawplan: next in-world plan draw */
 
 	/*
+	 * sg_airstrafe: the co-rotating air-strafe chain. One clock (the lean
+	 * sinusoid), one chain record (when it started, what it entered at,
+	 * what it peaked at), one sampler for the report.
+	 */
+	float		as_phase;           /* radians; the lean sinusoid's clock */
+	float		as_since;           /* chain start, 0 = no chain running */
+	float		as_entry;           /* 2D speed the chain was entered at */
+	float		as_peak;            /* fastest 2D speed seen inside it */
+	unsigned	as_said;            /* 1-in-8 sampler for the chain line */
+
+	/*
 	 * DEATH LANE MEMORY (sg_tilt). Where the last life ended, who ended
 	 * it, and the seeds within two links of the spot -- the lane this bot
 	 * will not walk back into for a while. Per bot, never shared: tilt is
@@ -2069,6 +2080,184 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 }
 
 /*
+ * ------------------------------------------------- the air-strafe chain
+ *
+ * THE VIEW AND THE PATH TURN TOGETHER (sg_airstrafe, default 0 = off).
+ *
+ * What a human does that the body above does not: he rotates the VIEW and
+ * the strafe key together while airborne, so the wish direction stays off
+ * the velocity for the whole flight instead of for the instant the route
+ * happens to bend. Chained across hops that is 800-1600 u/s on a pub
+ * server; this fleet's sustained runs have never exceeded ground speed.
+ *
+ * WHICH ENGINE IS ACTUALLY RUNNING. SG_Strafe's air branch offers a
+ * derivation from PM_AirAccelerate's 30-unit clamp (sg_arach.c:1984), and
+ * that dose measured NEGATIVE. It had to: PM_AirAccelerate is only reached
+ * when air acceleration is switched on, and it is not. The fleet's engine
+ * is yquake2 (engines/yquake2/release/q2ded); in its pmove
+ *
+ *     src/common/pmove.c:62      float pm_airaccelerate = 0;
+ *     src/server/sv_main.c:636   Cvar_Get("sv_airaccelerate", "0", LATCH)
+ *
+ * and PM_AirMove's airborne branch (pmove.c:673-680) reads
+ *
+ *     if (pm_airaccelerate) PM_AirAccelerate(wishdir, wishspeed, 10);
+ *     else                  PM_Accelerate(wishdir, wishspeed, 1);
+ *
+ * so with the cvar at its default the air runs the SAME function the
+ * ground does, at accel 1 instead of 10 and with PM_Friction skipped
+ * because groundentity is NULL. (q2repro agrees line for line:
+ * src/server/main.c:2145 and game3_pmove/template.c, PM_AirMove.) So the
+ * angle to fly is the one SG_Strafe's own comment derives at
+ * sg_arach.c:1958, with the engine's real constants:
+ *
+ *     addspeed   = wishspeed - (velocity . wishdir)      PM_Accelerate
+ *     accelspeed = accel * frametime * wishspeed, capped at addspeed
+ *
+ *     cos(theta) = (wishspeed - accelspeed) / speed
+ *
+ * wishspeed is pm_maxspeed = 300 (PM_AirMove clamps wishvel to it before
+ * accelerating), accel is 1, and frametime is ONE SUB-STEP -- 12 or 13 ms
+ * at sg_subframes 8 -- so accelspeed = 1 * 0.0125 * 300 = 3.75 u/s.
+ *
+ *     speed  300    400    500    600    800   1000
+ *     theta  9.0d  42.2d  53.6d  60.5d  68.3d  72.8d
+ *
+ * and the gain at that angle is accelspeed * cos(theta) = 3.75 * 296.25 /
+ * speed ~= 1111 / speed per sub-step: 2.8 u/s per step at 400, and eighty
+ * steps go by in a second. Below 296.25 there is no angle to find -- the
+ * cap is not binding and straight ahead is already the fastest input --
+ * which is exactly why this only ever touches a body that has already been
+ * pushed through the ground cap by a hop.
+ *
+ * WHY THE VIEW HAS TO MOVE FOR ANY OF IT TO PAY. The angle is measured
+ * from the direction of TRAVEL, so holding it drags the velocity off the
+ * route at roughly the same rate it feeds it -- wave 296's finding, and the
+ * reason its dose 2 capped the lean at 40 degrees and harvested little. A
+ * human does not hold the lean, he SWINGS it: the view (and with it the
+ * strafe axis) sweeps through the heading and out the other side, so the
+ * path is a shallow S whose mean is the road and whose every instant is
+ * off-axis. Here that swing is a sinusoid centred on the route heading,
+ * amplitude theta, biased by the standing heading error so the swing that
+ * corrects gets the longer half. The lean is a signed unit number; this
+ * function turns it into the command.
+ *
+ * WHERE THE ROTATION IS SPENT. The view carries SG_AS_VIEWSHARE of theta
+ * and the input carries the rest, exactly as a player's forward+strafe
+ * diagonal does. The split costs nothing in physics because the wish
+ * direction is decomposed against the view pmove will ACTUALLY use this
+ * sub-step (bot->vy_cur, post-slew) rather than the view that was asked
+ * for -- so a slewed, lagging, rate-limited view still reconstructs the
+ * commanded direction to the degree. Nothing here writes velocity: the
+ * whole gain comes out of cmd.forwardmove, cmd.sidemove and cmd.angles,
+ * through the same PM_Accelerate a human client drives.
+ */
+typedef struct
+{
+	float		lean;       /* the sinusoid, -1..1; sign is the lean side */
+	float		vy_cur;     /* the view yaw pmove will use THIS sub-step */
+	float		vp_cur;     /* and its pitch, before the engine's /3 */
+	qboolean	chain;      /* dose 2: hop chaining as well as the lean */
+} sg_air_t;
+
+#define SG_AIR_ACCEL	1.0f    /* PM_AirMove's airborne PM_Accelerate accel */
+
+/*
+ * The chain's shape, all of it fitted rather than derived -- the ANGLE is
+ * the engine's and is computed above; these are the preferences around it.
+ *
+ * SG_AS_PERIOD     seconds per full swing. A hop off 270 up under 800
+ *                  gravity is airborne 0.675s, so one period is two hops:
+ *                  one shoulder per flight, which is the cadence a player
+ *                  swaps strafe keys on.
+ * SG_AS_VIEWSHARE  how much of the angle the VIEW carries; the input
+ *                  carries the rest, exactly as forward+strafe does.
+ * SG_AS_VIEWMAX    and the ceiling on that, in degrees. At the period
+ *                  above this peaks near 150 deg/s of view movement --
+ *                  inside sg_turnrate's 600 and inside a human wrist.
+ * SG_AS_CORR       heading error, in degrees, that saturates the bias on
+ *                  the swing. The bias is what keeps the mean of the S on
+ *                  the road instead of walking it off one shoulder.
+ * SG_AS_ABORT      heading error that ends the chain outright: past this
+ *                  the body needs to turn, not to harvest.
+ * SG_AS_RUN        straight road a chain wants before it commits, units.
+ * SG_AS_HOLD       and the fraction of that a chain already running is
+ *                  held to, so the road test cannot chatter a chain to
+ *                  death across its own bar.
+ * SG_AS_FLOOR      2D speed under which there is nothing to chain.
+ * SG_AS_FLAGKEEP   never this close to either stand: speed is for TRAVEL.
+ * SG_AS_MINCHAIN   a chain shorter than this is not worth a log line.
+ */
+#define SG_AS_PERIOD	1.35f
+#define SG_AS_VIEWSHARE	0.55f
+#define SG_AS_VIEWMAX	32.0f
+#define SG_AS_CORR		25.0f
+#define SG_AS_ABORT		40.0f
+#define SG_AS_RUN		320.0f
+#define SG_AS_HOLD		0.70f   /* the road bar a live chain is held to */
+#define SG_AS_FLOOR		240.0f
+#define SG_AS_FLAGKEEP	220.0f
+#define SG_AS_MINCHAIN	0.6f
+
+static void SG_AirStrafeCmd(usercmd_t *cmd, const sg_air_t *air,
+                            vec3_t vel, float speed2d, float frametime)
+{
+	vec3_t	basis, vf, vr, vdir, d;
+	float	wishspeed = 300.0f;     /* pm_maxspeed clamps wishvel to this */
+	float	accelspeed, c, th, sn, cs, fl;
+
+	if (speed2d < 1.0f)
+		return;
+
+	accelspeed = SG_AIR_ACCEL * frametime * wishspeed;
+
+	/*
+	 * Under wishspeed - accelspeed the cap is not binding: addspeed is
+	 * saturated pointing straight down the travel line and leaning off it
+	 * would trade heading for nothing. Same early return SG_Strafe makes,
+	 * and the reason this is not a mode the body enters and leaves.
+	 */
+	if (speed2d <= wishspeed - accelspeed)
+		return;
+
+	c = (wishspeed - accelspeed) / speed2d;
+	if (c > 1.0f) c = 1.0f;
+	if (c < -1.0f) c = -1.0f;
+	th = acosf(c) * air->lean;   /* the optimum, swung by the sinusoid */
+
+	vdir[0] = vel[0] / speed2d;
+	vdir[1] = vel[1] / speed2d;
+	vdir[2] = 0.0f;
+
+	sn = sinf(th);
+	cs = cosf(th);
+	d[0] = vdir[0] * cs - vdir[1] * sn;
+	d[1] = vdir[0] * sn + vdir[1] * cs;
+	d[2] = 0.0f;
+
+	/*
+	 * The basis pmove will build from the SLEWED view (PM_AirMove takes
+	 * viewangles with PITCH divided by three), and the same reconstruction
+	 * the per-sub-step course decomposition uses: forward's horizontal part
+	 * is shortened by cos(pitch/3), so it is renormalised before the
+	 * projection or the pair comes out skewed toward the strafe axis.
+	 */
+	basis[YAW] = air->vy_cur;
+	basis[PITCH] = air->vp_cur;
+	if (basis[PITCH] > 180.0f)
+		basis[PITCH] -= 360.0f;
+	basis[PITCH] /= 3.0f;
+	basis[ROLL] = 0.0f;
+	AngleVectors(basis, vf, vr, NULL);
+
+	fl = sqrtf(vf[0] * vf[0] + vf[1] * vf[1]);
+	if (fl < 0.01f)
+		return;
+	cmd->forwardmove = (short)(400.0f * (d[0] * vf[0] + d[1] * vf[1]) / fl);
+	cmd->sidemove = (short)(400.0f * (d[0] * vr[0] + d[1] * vr[1]));
+}
+
+/*
  * One physics step of movement, decided from where the bot actually is.
  *
  * The caller has already put the plain command in place -- forward down the
@@ -2135,10 +2324,135 @@ static qboolean SG_PursuitPoint(vec3_t org, vec3_t chain[], int n,
 	return true;
 }
 
+/*
+ * Is there a straight, clear road ahead worth committing a hop chain to?
+ *
+ * The same walk the pursuit point makes -- plain RUN links, no rounding
+ * anchors, strictly down the field -- collected into a chain, and then two
+ * questions asked of the point `want` units of ARC down it:
+ *
+ *   the chord      how far that point actually is in a straight line. The
+ *                  seed centers are beads on a road and the polyline
+ *                  through them zigzags even where the road does not (the
+ *                  pursuit census: 40 deg/s of churn on geometrically
+ *                  straight chain), so leg-by-leg bend angles measure the
+ *                  beads, not the road. Chord over arc does not: a road
+ *                  that goes somewhere gives back most of what was walked.
+ *   the room       the fan's own player-box trace, run to that point. A
+ *                  chain in the air cannot dodge, so the corridor has to
+ *                  be there before the first hop, not discovered on the
+ *                  third.
+ *
+ * SG_AS_CHORD is the fraction of the arc the chord has to keep, and the
+ * chord also has to point within SG_AS_BEND of the heading the body is
+ * actually steering on -- a road that doubles back scores well on chord
+ * alone.
+ */
+#define SG_AS_BEND	30.0f       /* degrees the chord may sit off the route */
+#define SG_AS_CHORD	0.80f       /* chord / arc a road has to keep */
+
+/*
+ * Standing inside `keep` of either flag stand. The chain's hard veto: a
+ * body that is about to touch a flag needs to be able to stop on it, and
+ * an air-strafe is a commitment to a heading for the length of a flight.
+ * Both stands, not just the goal one -- arriving at speed and leaving at
+ * speed are the same mistake at the same place.
+ */
+static qboolean SG_NearAFlag(edict_t *e, float keep)
+{
+	int	t;
+
+	if (!sg_rune)
+		return false;
+	for (t = 0; t < 2; t++)
+	{
+		int		seed = t ? sg_fields.blue_flag_seed
+		                 : sg_fields.red_flag_seed;
+		vec3_t	fd;
+
+		if (seed < 0)
+			continue;
+		VectorSubtract(sg_rune->seeds[seed].origin, e->s.origin, fd);
+		if (VectorLength(fd) < keep)
+			return true;
+	}
+	return false;
+}
+
+static qboolean SG_RunRoom(edict_t *e, int seed0, const int *route_field,
+                           vec3_t dir, float want)
+{
+	vec3_t	chain[SG_PURSUIT_MAX], pp, pend, ch;
+	trace_t	tr;
+	float	acc = 0.0f, len;
+	int		n = 0, cs = seed0;
+
+	if (!sg_rune || cs < 0 || !route_field)
+		return false;
+
+	VectorCopy(sg_rune->seeds[cs].origin, chain[n]);
+	n++;
+	while (n < SG_PURSUIT_MAX && acc < want)
+	{
+		int			li5, nx5 = -1, nv5 = route_field[cs];
+		rune_link_t	*l5;
+		vec3_t		sgd;
+
+		if (nv5 >= SG_FIELD_INF)
+			break;
+		for (li5 = sg_rune->first_link[cs]; li5 >= 0;
+		     li5 = sg_rune->next_link[li5])
+		{
+			l5 = &sg_rune->links[li5];
+			if (l5->action != RL_RUN)
+				continue;
+			if (l5->anchor[0] != 0.0f || l5->anchor[1] != 0.0f ||
+			    l5->anchor[2] != 0.0f)
+				continue;
+			if (route_field[l5->to] < nv5)
+			{
+				nv5 = route_field[l5->to];
+				nx5 = li5;
+			}
+		}
+		if (nx5 < 0)
+			break;
+		cs = sg_rune->links[nx5].to;
+		VectorCopy(sg_rune->seeds[cs].origin, chain[n]);
+		VectorSubtract(chain[n], chain[n - 1], sgd);
+		sgd[2] = 0.0f;
+		acc += VectorLength(sgd);
+		n++;
+	}
+
+	if (!SG_PursuitPoint(e->s.origin, chain, n, want, pp))
+		return false;
+
+	VectorSubtract(pp, e->s.origin, ch);
+	ch[2] = 0.0f;
+	len = VectorLength(ch);
+	if (len < want * SG_AS_CHORD)
+		return false;               /* the road bends inside the window */
+	if ((ch[0] * dir[0] + ch[1] * dir[1]) / len <
+	    cosf(SG_AS_BEND * (float)M_PI / 180.0f))
+		return false;               /* and it has to go where we are going */
+
+	/* the room, at the fan's own z-allowance: STEPSIZE, so stairs and
+	 * ramps are road and not wall */
+	pend[0] = pp[0];
+	pend[1] = pp[1];
+	pend[2] = e->s.origin[2] + 18.0f;
+	tr = gi.trace(e->s.origin, e->mins, e->maxs, pend, e, MASK_PLAYERSOLID);
+	/* a teammate is not terrain (the fan's exception, same reason) */
+	if (tr.fraction < 1.0f && tr.ent && tr.ent->client && !tr.ent->deadflag)
+		return true;
+	return tr.fraction >= 1.0f;
+}
+
 static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
                           vec3_t right, vec3_t dir,
                           qboolean open_ahead, qboolean run_link,
-                          float frametime)
+                          float frametime, const sg_air_t *air)
 {
 	float	sp2, sp, toward;
 	int		pmf = e->client->ps.pmove.pm_flags;
@@ -2179,7 +2493,20 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		 * exceeding: the carrier control group (median 310, straight
 		 * sprints) already proved the ceiling is real.
 		 */
-		if (run_link && open_ahead && sp > 270.0f && !(pmf & PMF_TIME_LAND))
+		/*
+		 * JUMP CHAINING (sg_airstrafe dose 2). Inside a live chain the
+		 * gate is not "fast enough to be worth a hop" but "on the ground
+		 * at all": PM_CheckJump runs BEFORE PM_Friction and a jump clears
+		 * groundentity, which is the condition PM_Friction tests, so the
+		 * step that leaves pays nothing and the step that stays pays
+		 * speed * 6 * frametime. 270 was chosen to keep bots from hopping
+		 * on the way up to running speed; a chain is already through it,
+		 * and every ground step it spends waiting is the friction the
+		 * whole feature exists to skip. TIME_LAND still binds -- the
+		 * engine refuses the jump outright while it is set.
+		 */
+		if (run_link && open_ahead && !(pmf & PMF_TIME_LAND) &&
+		    (sp > 270.0f || (air && air->chain)))
 			cmd->upmove = 400;
 
 		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 10.0f);
@@ -2202,12 +2529,18 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		 * under 270 and disarms the very hold meant to prevent it --
 		 * air speed at arm time understates speed at the touchdown the
 		 * hold is FOR (wave 289-290 read: relaunches +45% where armed) */
-		if (gi.cvar("sg_landtick", "0", 0)->value &&
+		/* a chain holds the same jump for the same reason, without
+		 * needing sg_landtick set: the hold IS the chain */
+		if ((gi.cvar("sg_landtick", "0", 0)->value ||
+		     (air && air->chain)) &&
 		    run_link && open_ahead &&
 		    e->velocity[2] < 0.0f && sp > 240.0f)
 			cmd->upmove = 400;
 
-		SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
+		if (air)
+			SG_AirStrafeCmd(cmd, air, e->velocity, sp, frametime);
+		else
+			SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
 	}
 }
 
@@ -2799,6 +3132,10 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->view_on = false;   /* respawn snaps the view fresh */
 		bot->railhold_since = 0.0f;     /* a corpse is not waiting on a lane */
 		bot->railhold_enemy = -1;
+		/* a chain that ended in a death ended; the frame that would have
+		 * closed it never ran, and a stale start would date the next one */
+		bot->as_since = 0.0f;
+		bot->as_phase = 0.0f;
 		/* a corpse is not standing anybody's pad: release the lease early
 		 * rather than making the next claimant wait it out */
 		Lead_Abort(bot, "died");
@@ -7651,6 +7988,10 @@ no_hold:;
 		 * to the up-to-two-seconds-old belief the surface terms were priced
 		 * from. The weave below needs the live one. */
 		qboolean engaged = false;
+		/* sg_airstrafe, decided once for the frame and spent per sub-step */
+		qboolean as_ok = false;         /* the chain is live this frame */
+		qboolean as_chain = false;      /* dose 2: hop chaining as well */
+		float    as_lean = 0.0f;        /* the sinusoid, -1..1 */
 
 		if (sub < 1)
 			sub = 1;
@@ -8057,6 +8398,162 @@ no_hold:;
 		}
 
 		/*
+		 * THE AIR-STRAFE CHAIN, armed once a frame and spent per sub-step
+		 * (sg_airstrafe: 0 off, 1 the lean, 2 the lean and the hops).
+		 *
+		 * The angle is the engine's and is derived at SG_AirStrafeCmd; what
+		 * is decided here is whether the body is allowed to fly it, and
+		 * which way the swing is leaning at this instant.
+		 *
+		 * THE SWING. sin() over SG_AS_PERIOD, plus the standing heading
+		 * error over SG_AS_CORR. The bias is the whole of the anti-drift:
+		 * the lean is measured off the direction of TRAVEL, so a swing held
+		 * one way walks the body off its road, and adding the error to the
+		 * sinusoid gives the correcting shoulder the longer half of every
+		 * cycle. Past SG_AS_ABORT the error is not a lean to be biased, it
+		 * is a turn to be made, and the chain ends.
+		 *
+		 * THE VETOES, in the order they are worth stating: never on a rope
+		 * (the hook SETS velocity and an off-axis input accumulates into
+		 * nothing), never while combat is live (`engaged`, this frame's
+		 * answer, not the belief), never with the terminal brake down
+		 * (bot->term_brake is the carrier's cornering throttle -- a chain
+		 * there is a flag missed), never inside SG_AS_FLAGKEEP of a stand,
+		 * never on the final approach, in water, ducked, mid-rocket-jump,
+		 * mid-bomb, or through the spawn beat.
+		 *
+		 * THE ROAD. A hop chain commits the body for the length of a
+		 * flight, so it wants a road to spend that on: run_link and
+		 * open_ahead say the next step is ground running with room in it,
+		 * and SG_RunRoom walks the same seeds the lookahead trusts, holds
+		 * the point a stride down them, and asks whether the chord to it is
+		 * straight, on-heading, and clear of the player box.
+		 *
+		 * THE APPETITE. The bar on that road is divided by the persona's
+		 * hook enthusiasm -- the trait that already means "appetite for the
+		 * optional piece of movement tech" -- so the keen bots commit on
+		 * roads the cautious ones walk. Same +/-15% band every other
+		 * consumer gets, and sixteen bots stop doing it identically.
+		 */
+		{
+			float dose = gi.cvar("sg_airstrafe", "0", 0)->value;
+			float sp = sqrtf(e->velocity[0] * e->velocity[0] +
+			                 e->velocity[1] * e->velocity[1]);
+
+			if (dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
+			    run_link && open_ahead && bestlink >= 0 && sg_rune &&
+			    !precision && !engaged &&
+			    bot->hook_phase == 0 && bot->rj_phase == 0 &&
+			    bot->nade_phase == 0 && bot->term_brake >= 1.0f &&
+			    e->waterlevel <= 1 && bot->beat_until <= level.time &&
+			    !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
+			    !SG_NearAFlag(e, SG_AS_FLAGKEEP))
+			{
+				vec3_t	vdir;
+				float	cross, dot, err;
+				/* the bar on the road, and the lower bar a chain ALREADY
+				 * running is held to. A player who has committed to a
+				 * chain does not re-audit the corridor every tenth of a
+				 * second and stop dead when it narrows; he finishes the
+				 * hop he is in. Without the hysteresis the road test
+				 * chatters on and off across the bar and no chain lives
+				 * long enough to reach the speeds the technique is for. */
+				float	want = SG_AS_RUN / SG_PersonaHookScale(e);
+
+				if (bot->as_since != 0.0f)
+					want *= SG_AS_HOLD;
+
+				vdir[0] = e->velocity[0] / sp;
+				vdir[1] = e->velocity[1] / sp;
+				vdir[2] = 0.0f;
+				/* signed error from travel to route: positive is the route
+				 * lying counter-clockwise, which is the sign a positive
+				 * lean rotates the wish toward */
+				cross = vdir[0] * move_dir[1] - vdir[1] * move_dir[0];
+				dot = vdir[0] * move_dir[0] + vdir[1] * move_dir[1];
+				err = atan2f(cross, dot) * 180.0f / (float)M_PI;
+
+				if (err > -SG_AS_ABORT && err < SG_AS_ABORT &&
+				    SG_RunRoom(e, sg_rune->links[bestlink].to,
+				               route_field, move_dir, want))
+				{
+					float dt = (float)total / 1000.0f;
+
+					as_ok = true;
+					as_chain = (dose >= 2.0f);
+
+					bot->as_phase += 2.0f * (float)M_PI * dt / SG_AS_PERIOD;
+					while (bot->as_phase > 2.0f * (float)M_PI)
+						bot->as_phase -= 2.0f * (float)M_PI;
+
+					as_lean = sinf(bot->as_phase) + err / SG_AS_CORR;
+					if (as_lean > 1.0f)
+						as_lean = 1.0f;
+					if (as_lean < -1.0f)
+						as_lean = -1.0f;
+				}
+			}
+
+			if (as_ok)
+			{
+				/* the same closed form the command uses, at the frame's
+				 * speed and one sub-step of frametime, turned into the
+				 * VIEW's share of the swing and asked for through the slew
+				 * below like any other heading */
+				float	ft = (float)base / 1000.0f;
+				float	accelspeed = SG_AIR_ACCEL * ft * 300.0f;
+				float	c = (300.0f - accelspeed) / sp;
+				float	lv, yaw;
+
+				if (bot->as_since == 0.0f)
+				{
+					bot->as_since = level.time;
+					bot->as_entry = sp;
+					bot->as_peak = sp;
+				}
+				else if (sp > bot->as_peak)
+					bot->as_peak = sp;
+
+				if (c > 1.0f)
+					c = 1.0f;
+				if (c < -1.0f)
+					c = -1.0f;
+				lv = acosf(c) * 180.0f / (float)M_PI *
+				     as_lean * SG_AS_VIEWSHARE;
+				if (lv > SG_AS_VIEWMAX)
+					lv = SG_AS_VIEWMAX;
+				if (lv < -SG_AS_VIEWMAX)
+					lv = -SG_AS_VIEWMAX;
+
+				yaw = SHORT2ANGLE((short)(cmd.angles[YAW] +
+				      e->client->ps.pmove.delta_angles[YAW]));
+				yaw += lv;
+				cmd.angles[YAW] = ANGLE2SHORT(yaw)
+				                - e->client->ps.pmove.delta_angles[YAW];
+			}
+			else
+			{
+				if (bot->as_since != 0.0f)
+				{
+					float dur = level.time - bot->as_since;
+
+					/* one sustained chain in eight: a fleet chaining hops
+					 * would otherwise write a line a second per bot, and
+					 * the log is for reading */
+					if (dur >= SG_AS_MINCHAIN &&
+					    gi.cvar("sg_debug", "0", 0)->value &&
+					    !(bot->as_said++ & 7))
+						gi.dprintf("AIRCHAIN %s %.2fs entry=%.0f "
+						           "peak=%.0f\n",
+						           e->client->pers.netname, dur,
+						           bot->as_entry, bot->as_peak);
+					bot->as_since = 0.0f;
+				}
+				bot->as_phase = 0.0f;
+			}
+		}
+
+		/*
 		 * THE VIEW SLEWS; IT NO LONGER TELEPORTS. Every writer above --
 		 * navigation, combat, the rope aim, the swim pitch -- asks for a
 		 * heading, and until now the ask was granted instantly: a 180
@@ -8184,9 +8681,43 @@ no_hold:;
 			}
 			else if (have_move && !precision && bot->hook_phase == 0)
 			{
-				SG_MovePolicy(e, &cmd, basis_fwd, basis_right, move_dir,
+				sg_air_t		airs;
+				const sg_air_t	*airp = NULL;
+				vec3_t			mf, mr;
+
+				VectorCopy(basis_fwd, mf);
+				VectorCopy(basis_right, mr);
+				if (as_ok)
+				{
+					vec3_t vb;
+
+					airs.lean = as_lean;
+					airs.chain = as_chain;
+					airs.vy_cur = bot->vy_cur;
+					airs.vp_cur = bot->vp_cur;
+					airp = &airs;
+
+					/*
+					 * A chain swings the VIEW, so the basis the policy
+					 * decomposes against has to be the swung one -- the
+					 * frame basis was built from the heading that was
+					 * ASKED for, and solving a lean against a view the
+					 * engine is not holding points the wish somewhere
+					 * else. Rebuilt per sub-step, the same way the course
+					 * decomposition above is.
+					 */
+					vb[YAW] = bot->vy_cur;
+					vb[PITCH] = bot->vp_cur;
+					if (vb[PITCH] > 180.0f)
+						vb[PITCH] -= 360.0f;
+					vb[PITCH] /= 3.0f;
+					vb[ROLL] = 0.0f;
+					AngleVectors(vb, mf, mr, NULL);
+				}
+
+				SG_MovePolicy(e, &cmd, mf, mr, move_dir,
 				              open_ahead, run_link,
-				              (float)cmd.msec / 1000.0f);
+				              (float)cmd.msec / 1000.0f, airp);
 
 				/*
 				 * THE CARRIER'S JINK. The parity killer census (waves
