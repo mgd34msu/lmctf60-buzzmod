@@ -255,13 +255,18 @@ WSWITCH=(0     0        0        0        0         0        0         0        
 # between arms -- and caps 25 vs 13 (committed guns convert; less
 # mid-fight spectator time). s09-ctrl stays 0. Residual 0.83 -> 0.90
 # gap stays on the rung-3 list.
-# RUNG-3 SET #1 (2026-08-07): FAILED 18/18. Tell #1 on every bot sheet,
-# every judge: blaster-dominated matches with machine accuracy -- the
-# adopted commitment keeps the SPAWN gun. Mode 2 (s06) refuses to
-# commit to the blaster; s07 stays mode 1 as control. Behind it, ranked:
-# metronomic cadence bins (rail 1.7s razor spike), pegged fight ranges,
-# empty arsenal rows, straight-in approach rose.
-WCOMMIT=(1     1        1        1        1         2        1         1        0        1)
+# Mode 2 STRUCK 2026-08-07 (9 waves/arm): caps CRASHED 7 vs 22 and
+# diagonal moved AWAY (0.758 vs 0.813) -- refusing blaster commitment
+# sends fresh spawns into the switch ritual at first contact. Mode 1
+# fleet-wide stays. The blaster tell's accuracy half goes to aimtexture.
+WCOMMIT=(1     1        1        1        1         1        1         1        0        1)
+
+# AIMTEXTURE enters trial (TRIALS.md queue; the set-#1 judges' words:
+# "machine-grade aim", "hit triangles on every burst", "spawn-weapon
+# accuracy humans don't show"). Instrument: mean_aim_offset_deg, Stage-A
+# separability 1.000, human 10.89 vs bot 6.97 deg. Bars: offset toward
+# the human anchor; caps hold.
+AIMTEX=(0     0        0        0        0         1        0         0        0        0)
 
 # RUNG-2 SET #1 (2026-08-07, judges 11/18): the named tell is OFF-GRAPH
 # FRACTION -- humans grapple through open air 3-18% of samples, bots pin
@@ -269,12 +274,18 @@ WCOMMIT=(1     1        1        1        1         2        1         1        
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-# TAP VARIANCE (sg_tapvar, rung-3 ranked tell #2: razor cadence bins).
-# Skill-scaled per-shot re-aim beat on slow weapons. Armed s03 vs s04.
-# Bars: intershot_cv toward the human 0.58 anchor from 0.23; rangesep
-# and caps hold. Runs CONCURRENTLY with s06/s07 mode-2 -- independent
-# pairs, independent variables, one variable per pair.
-TAPVAR=(0     0        1        0        0         0        0         0        0        0)
+# TAPVAR NULL at dose 1 on its pre-registered bar (intershot_cv 0.421
+# vs 0.413, 9 waves/arm) -- though the aggregate cv scalar may dilute a
+# slow-weapon-only effect (fleet cv rose 0.23->0.41 across the wcommit
+# adoption era). Reverted; re-trials only after fightsheet grows a
+# per-slow-weapon cadence-spread scalar. Build the eye first.
+TAPVAR=(0     0        0        0        0         0        0         0        0        0)
+
+# FREERIDE (owner signed): the film pair takes it. Probe: rides 56 vs
+# 25, fail-per-ride identical, zero environmental deaths. Bars:
+# off-graph 0.026 -> toward the 0.03-0.18 human band on route sheets;
+# caps hold; 5v0 canary flawless.
+FREERIDE=(0    0        1        0        0         0        0         0        0        0)
 
 # NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
 # dead flat): the flood layer is exonerated -- a 90% rope-price cut
@@ -406,6 +417,8 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_wcommit ${WCOMMIT[$i]}"
                 echo "set sg_ropecost ${ROPECOST[$i]}"
                 echo "set sg_tapvar ${TAPVAR[$i]}"
+                echo "set sg_freeride ${FREERIDE[$i]}"
+                echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"
