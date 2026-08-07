@@ -768,7 +768,10 @@ qboolean Fields_Setup(rune_t *r)
 					best_plat = sf[i];
 			}
 			if (best_plat == 0x7fffffff)
+			{
+				gi.dprintf("SHELF t=%d: no platform-level seed in radius\n", t);
 				continue;
+			}
 			for (i = 0; i < r->hdr.num_seeds; i++)
 			{
 				float dx = r->seeds[i].origin[0] - fo[0];
@@ -780,6 +783,30 @@ qboolean Fields_Setup(rune_t *r)
 					continue;
 				if (sf[i] > best_plat)
 					sg_fields.shelf_cliff[t][i] = sf[i] - best_plat;
+			}
+			{
+				int n = 0, mx = 0, sub = 0;
+
+				for (i = 0; i < r->hdr.num_seeds; i++)
+				{
+					float dx = r->seeds[i].origin[0] - fo[0];
+					float dy = r->seeds[i].origin[1] - fo[1];
+
+					if (dx * dx + dy * dy > 350.0f * 350.0f)
+						continue;
+					if (r->seeds[i].origin[2] <= fo[2] - 96.0f)
+					{
+						sub++;
+						if (sg_fields.shelf_cliff[t][i] > 0)
+						{
+							n++;
+							if (sg_fields.shelf_cliff[t][i] > mx)
+								mx = sg_fields.shelf_cliff[t][i];
+						}
+					}
+				}
+				gi.dprintf("SHELF t=%d: %d sub-stand seeds, %d cliffed, max %d, best_plat %d\n",
+				           t, sub, n, mx, best_plat);
 			}
 		}
 	}

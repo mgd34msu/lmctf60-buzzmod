@@ -4774,6 +4774,29 @@ rally_done:;
 		        sg_rune->seeds[bot->seed].origin[2] - 16.0f)
 			v += 12000.0f;
 
+		/*
+		 * THE SHELF PAYS ITS CLIFF, at the layer that actually walks
+		 * (sg_shelfcost, steal-genesis study). The first cut priced the
+		 * waypoint surface and read a flat null in three waves: between
+		 * commitments the descent runs on the flood alone, and the flood
+		 * happily steps DOWN onto the zero-yield floor under the enemy
+		 * stand (101 close approaches there, 91% dead in 1.2s, zero
+		 * steals). Same teeth as the sink ban: a downward step whose
+		 * destination is a cliffed sub-stand seed prices past every dry
+		 * alternative. Steps OUT of the pit pay nothing -- a knocked-in
+		 * bot still climbs like it means it.
+		 */
+		if (gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
+		{
+			int shti = (team == CTF_TEAM_RED) ? 0 : 1;
+
+			if (sg_fields.shelf_cliff[shti] &&
+			    sg_fields.shelf_cliff[shti][l->to] > 0 &&
+			    sg_rune->seeds[l->to].origin[2] <
+			        sg_rune->seeds[bot->seed].origin[2] - 16.0f)
+				v += gi.cvar("sg_shelfcost", "0", 0)->value * 12000.0f;
+		}
+
 		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
 		{
 			/*
