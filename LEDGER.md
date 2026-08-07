@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~10:00, wave ~520.*
+*Last updated: 2026-08-07 ~10:45, wave ~524.*
 
 ## The ladder
 
@@ -13,7 +13,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | **IN TRIAL** | Set #1 failed 11/18; tell = off-graph fraction; sg_ropecost armed |
 | 3. Fights | **IN TRIAL** | Named gap: weapon commitment 0.68 vs human 0.90; sg_wcommit armed |
-| 4. Team decisions | instrument built | teamsheet.py committed; Stage A owed |
+| 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | not started | outcomes card unbuilt |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
@@ -55,7 +55,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 1. Rung 2: ropecost in trial; secondary tell queued (deterministic p=1.0 transition cells).
 2. Rung 3: wcommit in trial.
-3. teamsheet.py: Stage A calibration owed (task #3).
+3. teamsheet.py: panels 1/3/4 unvalidated -- parity-radius calibration + bigger human corpus owed (task #7).
 4. Airstrafe chain-length tuning: never trialed.
 5. Dark features built, never armed: aimtexture, tilt, clockplay, spawnbeat, belief cone/range, handoff, session-db, railrhythm. Enter only when a rung names their gap.
 
