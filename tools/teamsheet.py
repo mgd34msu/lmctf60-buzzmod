@@ -78,6 +78,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import film as F
+import routesheet as RS         # roc_auc / _ranks / glob helpers ONLY, for
+                                 # --calibrate -- same reuse fightsheet.py
+                                 # makes of this module
 
 import numpy as np
 
@@ -369,13 +372,20 @@ def compute_scalars(dist_by_team, windows, defense_frac_overall,
 
 def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
                  pov_radius=F.POV_RADIUS_DEFAULT,
-                 pov_fov=F.POV_FOV_DEG_DEFAULT, stands_file=None):
+                 pov_fov=F.POV_FOV_DEG_DEFAULT, stands_file=None,
+                 escort_radius=ESCORT_RADIUS, defense_radius=DEFENSE_RADIUS):
     """Everything --scalars and the renderer both need, computed once.
 
     Control flow mirrors F.render_sheet's / routesheet.analyze_demo's /
     fightsheet.analyze_demo's exactly -- refuse, cap, anonymize, parity-
     filter, re-anonymize -- because that ordering was debugged there and
-    re-deriving it would be a good way to reintroduce a fixed bug."""
+    re-deriving it would be a good way to reintroduce a fixed bug.
+
+    escort_radius/defense_radius default to the sheet's own fixed instrument
+    constants and only ever move away from them inside --calibrate's
+    +/-100u radius-stability check (run_calibration below); render_team_sheet
+    never passes anything but the defaults, so what gets drawn on a PNG is
+    never a function of a calibration run (L7/L8 still hold)."""
     d = F.walk_demo(demo_path)
     uncapped = d['frames'] / F.FPS
     if uncapped < F.DURATION_MIN_S:
@@ -407,7 +417,7 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
 
     for w in windows:
         frac, total, escorted, team = window_escort_fraction(
-            w, posidx, teams, labels)
+            w, posidx, teams, labels, radius=escort_radius)
         w['escort_fraction'] = frac
         w['escort_total'] = total
         w['escort_escorted'] = escorted
@@ -416,7 +426,7 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
 
     dist_by_team = teammate_pairwise_distances(posidx, members)
 
-    present = defenders_present(tracks, members, stands)
+    present = defenders_present(tracks, members, stands, radius=defense_radius)
     defense_bins = {t: bin_binary_fraction(present[t], d['frames'])
                     for t in TEAMS}
     defense_frac_overall = {
@@ -734,6 +744,154 @@ def load_stands_file(path):
         return json.load(f)
 
 
+# ------------------------------------------------------------- calibration
+DEFAULT_HUMAN_GLOB = '~/Games/Quake2/lmctf-hooktest/demos/*.dm2'
+DEFAULT_BOT_GLOBS = [
+    '~/.local/share/YamagiQ2/lmctf-hooktest/demos/wave39[0-9]*-s03*.dm2',
+    '~/.local/share/YamagiQ2/lmctf-hooktest/demos/wave40*-s03*.dm2',
+]
+
+
+def _calib_cache_key(path, pov_parity, escort_radius, defense_radius,
+                     stands_path):
+    """Separate from _cache_key (used by --scalars) because --calibrate's
+    radius-stability check re-runs the same file at three different
+    (escort_radius, defense_radius) pairs and must not collide with, or be
+    collided into by, the plain --scalars cache entries for that file."""
+    st = os.stat(path)
+    return f"{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}|" \
+           f"{int(bool(pov_parity))}|{escort_radius}|{defense_radius}|" \
+           f"{stands_path or ''}|teamsheet-calib-v1"
+
+
+def collect_scalars(paths, pov_parity, escort_radius, defense_radius,
+                    stands_file, stands_path, cache, maps=None, label=''):
+    """Walk a file list and return [{'path','map','shape', **scalars}].
+
+    Cached on (path, mtime, size, parity flag, escort/defense radius,
+    stands file) because the gate gets re-run with perturbed escort/defense
+    radii and the demo walk is the expensive part."""
+    rows = []
+    for p in paths:
+        key = _calib_cache_key(p, pov_parity, escort_radius, defense_radius,
+                               stands_path)
+        if key in cache:
+            row = dict(cache[key])
+        else:
+            try:
+                a = analyze_demo(p, pov_parity=pov_parity,
+                                 stands_file=stands_file,
+                                 escort_radius=escort_radius,
+                                 defense_radius=defense_radius)
+            except (F.DemoUndersampled, StandsMissing) as e:
+                cache[key] = {'skip': f'{type(e).__name__}: {e}'}
+                continue
+            except Exception as e:
+                sys.stderr.write(f"FAIL {os.path.basename(p)}: "
+                                 f"{type(e).__name__}: {e}\n")
+                continue
+            row = {'map': a['d']['map'],
+                  'shape': 'bot' if a['d']['svrecord'] else 'human',
+                  'parity_applied': bool(a['pov_parity'].get('applied')),
+                  'visible_fraction': a['coverage']['visible_fraction'],
+                  'n_players': len(a['labels']),
+                  'n_carries': len(a['windows'])}
+            row.update(a['scalars'])
+            cache[key] = row
+        if row.get('skip'):
+            continue
+        if maps and row.get('map') not in maps:
+            continue
+        row = dict(row)
+        row['path'] = p
+        rows.append(row)
+        sys.stderr.write(f"  [{label}] {os.path.basename(p):45s} "
+                         f"map={row.get('map')} carries={row.get('n_carries')}\n")
+    return rows
+
+
+def run_calibration(human_paths, bot_paths, escort_radius, defense_radius,
+                    stands_file, stands_path, cache, maps=None):
+    """Stage A of the design's two-stage gate, ported from fightsheet.py's
+    run_calibration with the same math (RS.roc_auc, same separability
+    definition) and the same rationale: the instrument has to prove it has
+    power on data where the answer is known before it is allowed to certify
+    anything.
+
+    pov-parity is forced ON for the bot arm (L5): without it the bot side is
+    an omniscient recording and any separation could be coverage rather than
+    behaviour.  Unlike fightsheet.py, the radius knob under test here is not
+    the pov-parity radius (left at F.POV_RADIUS_DEFAULT throughout) but
+    escort_radius/defense_radius -- the two thresholds panels 2 and 3
+    actually draw with -- because those are this sheet's own free
+    parameters, the ones a Stage-A run has to show are not doing the
+    separating by themselves."""
+    hr = collect_scalars(human_paths, False, escort_radius, defense_radius,
+                         stands_file, stands_path, cache, maps=maps,
+                         label='human')
+    br = collect_scalars(bot_paths, True, escort_radius, defense_radius,
+                         stands_file, stands_path, cache, maps=maps,
+                         label='bot')
+    shared = sorted({r['map'] for r in hr} & {r['map'] for r in br})
+    hr = [r for r in hr if r['map'] in shared]
+    br = [r for r in br if r['map'] in shared]
+    out = {'maps': shared, 'n_human': len(hr), 'n_bot': len(br), 'auc': {},
+          'human_paths': [r['path'] for r in hr],
+          'bot_paths': [r['path'] for r in br]}
+    for k in SCALAR_KEYS:
+        hv = [r.get(k) for r in hr]
+        bv = [r.get(k) for r in br]
+        auc = RS.roc_auc(bv, hv)
+        out['auc'][k] = {
+            'auc_bot_over_human': auc,
+            'separability': (max(auc, 1.0 - auc) if auc is not None else None),
+            'n_human': sum(1 for v in hv if v is not None),
+            'n_bot': sum(1 for v in bv if v is not None),
+            'human_mean': (float(np.mean([v for v in hv if v is not None]))
+                          if any(v is not None for v in hv) else None),
+            'bot_mean': (float(np.mean([v for v in bv if v is not None]))
+                        if any(v is not None for v in bv) else None),
+        }
+    return out
+
+
+def print_calibration(res, title='STAGE A'):
+    print(f"\n=== {title}: maps={','.join(res['maps']) or '(none shared)'} "
+         f"n_human={res['n_human']} n_bot={res['n_bot']} ===")
+    print(f"{'scalar':30s} {'human_mean':>11s} {'bot_mean':>11s} "
+         f"{'AUC(b>h)':>9s} {'separab.':>9s}  panel")
+    best = None
+    for k in SCALAR_KEYS:
+        a = res['auc'][k]
+        hm = '        n/a' if a['human_mean'] is None else f"{a['human_mean']:11.4f}"
+        bm = '        n/a' if a['bot_mean'] is None else f"{a['bot_mean']:11.4f}"
+        au = '      n/a' if a['auc_bot_over_human'] is None \
+            else f"{a['auc_bot_over_human']:9.3f}"
+        sp = '      n/a' if a['separability'] is None \
+            else f"{a['separability']:9.3f}"
+        print(f"{k:30s} {hm} {bm} {au} {sp}  {SCALAR_PANEL[k]}")
+        if a['separability'] is not None and (best is None
+                                             or a['separability'] > best[1]):
+            best = (k, a['separability'], a['auc_bot_over_human'])
+    if best:
+        direction = 'higher on bots' if best[2] >= 0.5 else 'higher on humans'
+        print(f"top separating statistic: {best[0]} "
+             f"(separability {best[1]:.3f}, {direction}, "
+             f"{SCALAR_PANEL[best[0]]})")
+        gate = 'PASS' if best[1] >= 0.85 else 'FAIL'
+        print(f"Stage A gate (separability >= 0.85 on at least one "
+             f"scalar): {gate}")
+    hot = [k for k in SCALAR_KEYS
+          if (res['auc'][k]['separability'] or 0) >= 0.95]
+    if hot:
+        print(f"WARNING: separability >= 0.95 on {', '.join(hot)} -- the "
+             f"design requires these be inspected by hand and put through "
+             f"the +/-100u escort/defense-radius check before they are "
+             f"believed. A near-perfect separator is what an instrument "
+             f"leak looks like from the inside.")
+    return best, hot
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('demos', nargs='*', help='.dm2 demo files')
@@ -756,7 +914,65 @@ def main():
     ap.add_argument('--cache', default=DEFAULT_CACHE,
                     help='parse cache for --scalars, keyed on file path, '
                          'mtime, size and parity/stands settings')
+    ap.add_argument('--calibrate', action='store_true',
+                    help='Stage A gate: run the instrument over a labeled '
+                         'known-set and report ROC AUC per scalar. Renders '
+                         'nothing and never writes a label onto any sheet.')
+    ap.add_argument('--human', nargs='+', default=[DEFAULT_HUMAN_GLOB],
+                    help='globs for the human client-demo arm of --calibrate')
+    ap.add_argument('--bot', nargs='+', default=DEFAULT_BOT_GLOBS,
+                    help='globs for the serverrecord arm of --calibrate')
+    ap.add_argument('--maps', nargs='+', default=None,
+                    help='restrict --calibrate to these maps')
+    ap.add_argument('--radius-check', action='store_true',
+                    help='force the +/-100u escort/defense-radius '
+                         'perturbation check (it runs automatically for any '
+                         'scalar that reaches 0.95 separability)')
     args = ap.parse_args()
+
+    if args.calibrate:
+        stands_file = load_stands_file(args.stands) if args.stands else None
+        cpath = os.path.expanduser(args.cache)
+        cache = {}
+        if os.path.exists(cpath):
+            try:
+                cache = json.load(open(cpath))
+            except Exception:
+                cache = {}
+        human = RS._expand(args.human)
+        bot = RS._expand(args.bot)
+        sys.stderr.write(f"calibrate: {len(human)} human candidate(s), "
+                         f"{len(bot)} bot candidate(s)\n")
+        res = run_calibration(human, bot, ESCORT_RADIUS, DEFENSE_RADIUS,
+                              stands_file, args.stands, cache,
+                              maps=args.maps)
+        best, hot = print_calibration(res)
+        if args.radius_check or hot:
+            if hot and not args.radius_check:
+                print(f"\n(running the escort/defense-radius check "
+                     f"automatically because {', '.join(hot)} reached "
+                     f"0.95 separability)")
+            for dr in (-100.0, +100.0):
+                er2 = ESCORT_RADIUS + dr
+                dr2 = DEFENSE_RADIUS + dr
+                alt = run_calibration(human, bot, er2, dr2, stands_file,
+                                      args.stands, cache, maps=args.maps)
+                print_calibration(alt, title=f'STAGE A (escort {er2:.0f}u, '
+                                             f'defense {dr2:.0f}u)')
+                print("  radius-perturbation swing vs baseline:")
+                for k in SCALAR_KEYS:
+                    a0 = res['auc'][k]['auc_bot_over_human']
+                    a1 = alt['auc'][k]['auc_bot_over_human']
+                    if a0 is None or a1 is None:
+                        continue
+                    flag = '  <-- COVERAGE-SENSITIVE' if abs(a1 - a0) > 0.10 \
+                        else ''
+                    print(f"    {k:30s} {a0:.3f} -> {a1:.3f} "
+                         f"(d={a1 - a0:+.3f}){flag}")
+        os.makedirs(os.path.dirname(cpath) or '.', exist_ok=True)
+        with open(cpath, 'w') as f:
+            json.dump(cache, f)
+        return
 
     if not args.demos:
         ap.error('no demos given')
@@ -855,3 +1071,125 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ----------------------------------------------------------------- MODULE
+# NOTE: FIRST STAGE A RESULT (2026-08-07, mactf06 + lmctf22, pov-parity
+# forced on the bot arm / off the human arm, --stands from the two known
+# flag-stand pairs). Recorded here because it contradicts the plain reading
+# of the gate ("PASS, ship it") and the next person should not have to
+# rediscover why that reading is wrong.
+#
+# --- mactf06: n_human=4 (of 9 candidates; 5 fail the 300s DURATION_MIN_S
+#     floor, same ceiling fightsheet.py hit on this map), n_bot=42 (of 44;
+#     wave514-s03/s04 are 245-247s, under the floor) -----------------------
+#
+#   scalar                       human    bot     separability  escort/def-
+#                                                                radius-stable
+#   spacing_median               717.41   607.75   0.827         YES [V]
+#   escort_fraction                0.254    0.351   0.595         YES (+/-0.048)
+#   defense_fraction               0.296    0.199   0.815         YES (+/-0.083)
+#   mean_simultaneous_attackers    1.582    1.094   0.982         YES [V]
+#
+# --- lmctf22: n_human=4 (of 12; 8 fail the 300s floor), n_bot=21 (of 22;
+#     wave514-s05 fails the floor) ----------------------------------------
+#
+#   scalar                       human    bot     separability  escort/def-
+#                                                                radius-stable
+#   spacing_median               907.86   574.44   0.940         YES [V]
+#   escort_fraction                 0.143   0.468   0.917         YES (+/-0.036)
+#   defense_fraction                0.121   0.145   0.607         YES (+/-0.024)
+#   mean_simultaneous_attackers     0.908   0.868   0.595         YES [V]
+#
+# [V] = the +/-100u escort/defense-radius check the design asked for finds
+# these scalars perfectly stable, but that stability is VACUOUS, not a
+# finding -- see (a) below.
+#
+# Stage A gate (separability >= 0.85 on at least one scalar, both arms
+# labeled correctly): PASSES on both maps -- mactf06 via
+# mean_simultaneous_attackers (panel 4), lmctf22 via spacing_median (panel 1)
+# and escort_fraction (panel 2). Read no further than that line and the gate
+# looks clean. It is not, for three separate reasons:
+#
+# (a) THE ESCORT/DEFENSE-RADIUS CHECK IS BLIND TO THE ONLY CONFOUND THAT
+#     MATTERS FOR PANELS 1 AND 4. window_escort_fraction and
+#     defenders_present are the only two functions in this module that read
+#     ESCORT_RADIUS/DEFENSE_RADIUS; teammate_pairwise_distances (panel 1)
+#     and attacker_counts (panel 4) never touch either constant. So the
+#     +/-100u perturbation the design specifies can only ever report
+#     Delta=+0.000 on spacing_median and mean_simultaneous_attackers -- not
+#     because those scalars are robust, but because the knob being turned
+#     is wired to a different pair of panels. Both scalars marked [V] above
+#     "pass" the design's own stability test by construction, whether or
+#     not they are measuring anything real.
+#
+#     The confound that DOES reach panels 1 and 4 is the pov-parity radius
+#     (F.POV_RADIUS_DEFAULT, 900u) used to build the bot arm's track data in
+#     the first place: apply_pov_parity decides frame-by-frame which
+#     teammates' positions the bot side even HAS, and both
+#     teammate_pairwise_distances and attacker_counts are pooled over
+#     exactly those tracks. A supplementary sweep of pov-parity radius
+#     alone (800u/900u/1000u, escort/defense held at their defaults, same
+#     roc_auc math) shows real movement, not the Delta=0.000 the
+#     escort/defense check reported:
+#
+#       mactf06 mean_simultaneous_attackers   sep 1.000 -> 0.982 -> 0.911
+#         (800u -> 900u -> 1000u; Delta=-0.089 end to end)
+#       lmctf22 spacing_median                sep 1.000 -> 0.940 -> 0.845
+#         (800u -> 900u -> 1000u; Delta=-0.155 end to end -- CROSSES BELOW
+#         the 0.85 gate at the high end of a physically ordinary radius
+#         range)
+#       lmctf22 mean_simultaneous_attackers    sep 0.655 -> 0.595 -> 0.512
+#         (already below the gate, and still sliding)
+#
+#     Both of this run's headline "PASS" scalars are the ones this sweep
+#     moves the most. Neither should be read as a validated behavioural
+#     finding yet; both need the pov-parity radius calibrated against a
+#     ground truth (not just checked for stability) before a judge sees
+#     them. Compare escort_fraction, which DOES depend on ESCORT_RADIUS and
+#     so gets an honest test from the design's own check -- it holds at
+#     sep=0.917 across all three pov-parity radii on lmctf22, the one
+#     scalar in this whole run that clears 0.85 and survives BOTH
+#     perturbations without moving.
+#
+# (b) LMCTF22'S HUMAN ARM HAS A ROSTER-SIZE ARTIFACT THE BOT ARM CANNOT
+#     HAVE. n_players per demo (tracked entities, not a claim about the
+#     roster the humans actually fielded) is 10/10/10/10 on mactf06's human
+#     arm and a uniform 10 on every bot file on both maps (every bot demo
+#     here is explicitly a 5v5 fixture) -- but lmctf22's four qualifying
+#     human demos are 6, 10, 11, 9. The n=6 demo (effectively a 3v3) is a
+#     visible outlier on exactly the scalar carrying that map's gate:
+#     spacing_median=1488u (the other three human demos run 605-798u, and
+#     bots run 526-619u across the pov-radius sweep) and
+#     escort_fraction=0.004 (the other three run 0.147-0.237). AUC's rank
+#     math is not as fragile to one point as a mean-difference test would
+#     be -- three of the four human spacing values already sit above most
+#     of the bot range on their own -- but at n_human=4 one lopsided-roster
+#     demo still has outsized leverage on both the mean shown above and the
+#     rank sum underneath it, and the bot arm structurally cannot produce
+#     an equivalent point because every bot fixture here is a fixed 5v5.
+#     This is a corpus-composition risk layered on top of (a), not a
+#     replacement for it.
+#
+# (c) n_human=4 ON BOTH MAPS is the same hard ceiling fightsheet.py hit on
+#     mactf06 (its Stage A note (c)), for the same reason: DURATION_MIN_S
+#     (300s) throws out most of the hand-collected human corpus (5/9 on
+#     mactf06, 8/12 on lmctf22) before pov-parity or radius questions even
+#     enter it. A properly powered Stage A for this rung needs a deeper
+#     human corpus on both maps, not just a passing gate on the corpus
+#     that exists today.
+#
+# WHAT THIS MEANS FOR RUNG-4 JUDGING: the gate technically passes, but only
+# panel 2 (escort_fraction) currently has a result that (i) clears 0.85 and
+# (ii) survives being tested against the radius knob that actually reaches
+# it. Panels 1 and 4 (spacing_median, mean_simultaneous_attackers) must be
+# treated as unvalidated -- not necessarily wrong, but their current
+# separability numbers are known to be substantially inflated by pov-parity
+# coverage and, on lmctf22, by a roster-size outlier in a four-demo sample
+# -- until the pov-parity radius itself gets a calibration run of its own
+# (mirroring fightsheet.py's parity-radius treatment, not this module's
+# escort/defense-radius treatment) and the human corpus grows past n=4.
+# Panel 3 (defense_fraction) does not clear 0.85 on either map yet and
+# should stay diagnostic-only regardless. Escort_fraction's own map split
+# (0.595 on mactf06, 0.917 on lmctf22) is itself worth a follow-up run
+# rather than an assumption that it generalizes.
