@@ -235,6 +235,13 @@ ATKOBJ=(125    125      125      125      125       125      125       125      
 # the successor feature must SUPPRESS mid-fight switches, not add them.
 WSWITCH=(0     0        0        0        0         0        0         0        0        0)
 
+# WEAPON COMMITMENT (sg_wcommit), the wswitch verdict's named successor:
+# keep the held gun anywhere it appears in the current band ladder.
+# Armed s06 vs s07 control on lmctf44 -- the map with the 0.897 human
+# switch_diagonal anchor. Bars: diagonal mass toward 0.90 from 0.68,
+# caps must not fall.
+WCOMMIT=(0     0        0        0        0         1        0         0        0        0)
+
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
 # pooled waves; no judge ever named the tell it was built for. Off,
@@ -351,6 +358,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_megaworth ${MEGAWORTH[$i]}"
                 echo "set sg_atkobj ${ATKOBJ[$i]}"
                 echo "set sg_wswitch ${WSWITCH[$i]}"
+                echo "set sg_wcommit ${WCOMMIT[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"

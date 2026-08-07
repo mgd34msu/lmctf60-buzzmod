@@ -1268,6 +1268,37 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 	}
 
 	ladder = Combat_Ladder(band);
+
+	/*
+	 * WEAPON COMMITMENT (sg_wcommit). The rung-3 gate's strongest tell
+	 * (separability 1.000): consecutive human shots stay on ONE gun --
+	 * switch_diagonal_mass 0.90 against this body's 0.68 -- because a
+	 * human carries a main weapon across bands and switches only when
+	 * forced. The band arbitration re-derives the optimal gun per 64
+	 * units of range and spends the whole fight commuting between local
+	 * optima (wswitch, which only slowed the REQUESTS down, was struck
+	 * for moving the tell the wrong way). Under commitment the held gun
+	 * is KEPT whenever it appears anywhere in the current band's ladder,
+	 * has ammo, and the band gates allow it -- rail fights at every
+	 * range like it does in the corpus; the SSG at 900 units still
+	 * switches because BandAllows already refuses it. Doctrine ladders
+	 * above (carrier, intercept) outrank commitment on purpose.
+	 */
+	if (gi.cvar("sg_wcommit", "0", 0)->value != 0.0f)
+	{
+		int held = Combat_Held(self);
+
+		if (held >= 0 && Combat_Stocked(self, held) &&
+		    Combat_BandAllows(self, held, dist))
+		{
+			int i;
+
+			for (i = 0; ladder[i] >= 0; i++)
+				if (ladder[i] == held)
+					return held;
+		}
+	}
+
 	w = Combat_WalkLadder(self, ladder, dist, true);
 	if (w < 0)
 		w = Combat_WalkLadder(self, ladder, dist, false);
