@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~14:30, wave ~535.*
+*Last updated: 2026-08-07 ~15:10, wave ~537.*
 
 ## The ladder
 
@@ -12,7 +12,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | **IN TRIAL** | Set #1 failed 11/18; tell = off-graph fraction; sg_ropecost armed |
-| 3. Fights | wcommit ADOPTED; set #1 pending | commitment 0.691→0.828 vs human 0.897, caps 25 vs 13 (12 waves/arm); residual 0.83→0.90 gap open |
+| 3. Fights | set #1 FAILED 18/18; mode-2 fix armed | tell #1 unanimous: spawn-blaster commitment with machine accuracy; ranked behind: metronomic cadence, pegged ranges, empty arsenal rows |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
@@ -21,7 +21,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| (none — ropecost closed null; movement-gate probe running) | | | | |
+| wcommit mode 2 (no blaster commitment) | s06 vs s07 mode-1 ctrl | r567, wave ~536 | blaster share collapses; switch_diagonal holds ≥0.83; caps hold | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
