@@ -365,6 +365,10 @@ static void Futility_Decay(void)
 		}
 }
 
+/* per-seed destination surcharge, applied only while the flag fields
+ * flood (the low-road pricing behind sg_shelfcost); zero otherwise */
+static int		sg_shelf_pen[SG_MAX_SEEDS];
+
 static void Field_FloodRun(rune_t *r, int *dist,
                            const int *sources, const int *source_cost,
                            int num_sources, int nb)
@@ -470,7 +474,7 @@ static void Field_FloodRun(rune_t *r, int *dist,
 				continue;
 
 			base = env_dist[id] + Link_EffCost(b) + sg_futile[x]
-			     + sg_link_futile[li];
+			     + sg_link_futile[li] + sg_shelf_pen[u];
 			if (nb > 1)
 				base += Env_TurnCost(b->heading, env_head[id], env_slack[id]);
 
@@ -726,8 +730,55 @@ qboolean Fields_Setup(rune_t *r)
 
 	sg_fields.to_red_flag = Field_Alloc(r);
 	sg_fields.to_blue_flag = Field_Alloc(r);
-	Field_FromOne(r, sg_fields.to_red_flag, sg_fields.red_flag_seed);
-	Field_FromOne(r, sg_fields.to_blue_flag, sg_fields.blue_flag_seed);
+
+	/*
+	 * THE LOW ROAD PAYS AT THE FIELD (sg_shelfcost, third cut). Entry
+	 * forensics on the first two nulls: 238 of 345 pit entries WALKED IN
+	 * LATERALLY at pit-floor height (median entry drop 0u) -- the floor
+	 * under the enemy stand is the terminus of a whole low approach
+	 * corridor the flag field genuinely prefers, because one cheap hook
+	 * link connects pit to platform. No step-layer surcharge can fire on
+	 * a flat walk-in. So the flag floods themselves now charge it: any
+	 * link whose DESTINATION is a sub-stand seed of the flooded flag adds
+	 * sg_shelfcost x 12000, which propagates back up the entire low
+	 * corridor and re-routes the approach to platform level. The hook OUT
+	 * lands on the platform (not sub-stand), so a knocked-in bot's escape
+	 * still prices clean.
+	 */
+	if (gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
+	{
+		int t;
+
+		for (t = 0; t < 2; t++)
+		{
+			int fseed = t ? sg_fields.blue_flag_seed
+			              : sg_fields.red_flag_seed;
+			float *fo = r->seeds[fseed].origin;
+			int i, ns = r->hdr.num_seeds;
+
+			if (ns > SG_MAX_SEEDS)
+				ns = SG_MAX_SEEDS;
+			for (i = 0; i < ns; i++)
+			{
+				float dx = r->seeds[i].origin[0] - fo[0];
+				float dy = r->seeds[i].origin[1] - fo[1];
+
+				sg_shelf_pen[i] = 0;
+				if (dx * dx + dy * dy <= 350.0f * 350.0f &&
+				    r->seeds[i].origin[2] <= fo[2] - 96.0f)
+					sg_shelf_pen[i] = (int)
+					    (gi.cvar("sg_shelfcost", "0", 0)->value * 12000.0f);
+			}
+			Field_FromOne(r, t ? sg_fields.to_blue_flag
+			                   : sg_fields.to_red_flag, fseed);
+		}
+		memset(sg_shelf_pen, 0, sizeof(sg_shelf_pen));
+	}
+	else
+	{
+		Field_FromOne(r, sg_fields.to_red_flag, sg_fields.red_flag_seed);
+		Field_FromOne(r, sg_fields.to_blue_flag, sg_fields.blue_flag_seed);
+	}
 
 	/*
 	 * THE SUB-STAND SHELF (steal-genesis study, 2026-08-06). mactf06
