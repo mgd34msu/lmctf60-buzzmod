@@ -4805,10 +4805,15 @@ rally_done:;
 		 * commitments the descent runs on the flood alone, and the flood
 		 * happily steps DOWN onto the zero-yield floor under the enemy
 		 * stand (101 close approaches there, 91% dead in 1.2s, zero
-		 * steals). Same teeth as the sink ban: a downward step whose
-		 * destination is a cliffed sub-stand seed prices past every dry
-		 * alternative. Steps OUT of the pit pay nothing -- a knocked-in
-		 * bot still climbs like it means it.
+		 * steals). Fourth cut, per PITTRACE: 74 of 89 pit entries were
+		 * plain attack-role link descent, LATERAL at floor height -- and
+		 * the field-layer surcharge alone made it worse, because link
+		 * selection scores the DESTINATION's potential and the pit basin
+		 * stays cheap (its hook out is free by design) while the corridor
+		 * around it got dearer. So the movement layer now charges ANY
+		 * step whose destination is a masked sub-stand seed, downward or
+		 * flat; steps OUT of the pit still pay nothing -- a knocked-in
+		 * bot climbs like it means it.
 		 */
 		if (gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
 		{
@@ -4816,9 +4821,17 @@ rally_done:;
 
 			if (sg_fields.shelf_cliff[shti] &&
 			    sg_fields.shelf_cliff[shti][l->to] > 0 &&
-			    sg_rune->seeds[l->to].origin[2] <
-			        sg_rune->seeds[bot->seed].origin[2] - 16.0f)
-				v += gi.cvar("sg_shelfcost", "0", 0)->value * 12000.0f;
+			    !(bot->seed >= 0 &&
+			      sg_fields.shelf_cliff[shti][bot->seed] > 0 &&
+			      sg_rune->seeds[l->to].origin[2] >
+			          sg_rune->seeds[bot->seed].origin[2] + 16.0f))
+				/* 60000, not 12000 (fifth cut): the flood surcharge
+				 * props the whole low corridor to ~12000+ field units,
+				 * so a 12000 step charge on the pit's tiny base was
+				 * arithmetically COMPETITIVE with turning back -- the
+				 * two layers cancelled at the lip. The step charge must
+				 * dominate the field spread it created. */
+				v += gi.cvar("sg_shelfcost", "0", 0)->value * 60000.0f;
 		}
 
 		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
