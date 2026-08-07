@@ -244,7 +244,13 @@ WSWITCH=(0     0        0        0        0         0        0         0        
 # between arms -- and caps 25 vs 13 (committed guns convert; less
 # mid-fight spectator time). s09-ctrl stays 0. Residual 0.83 -> 0.90
 # gap stays on the rung-3 list.
-WCOMMIT=(1     1        1        1        1         1        1         1        0        1)
+# RUNG-3 SET #1 (2026-08-07): FAILED 18/18. Tell #1 on every bot sheet,
+# every judge: blaster-dominated matches with machine accuracy -- the
+# adopted commitment keeps the SPAWN gun. Mode 2 (s06) refuses to
+# commit to the blaster; s07 stays mode 1 as control. Behind it, ranked:
+# metronomic cadence bins (rail 1.7s razor spike), pegged fight ranges,
+# empty arsenal rows, straight-in approach rose.
+WCOMMIT=(1     1        1        1        1         2        1         1        0        1)
 
 # RUNG-2 SET #1 (2026-08-07, judges 11/18): the named tell is OFF-GRAPH
 # FRACTION -- humans grapple through open air 3-18% of samples, bots pin

@@ -1288,6 +1288,18 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 	{
 		int held = Combat_Held(self);
 
+		/*
+		 * Mode 2 (rung-3 set #1, 18/18): commitment as shipped kept the
+		 * SPAWN BLASTER all game -- every judge named blaster-dominated
+		 * timelines with machine accuracy on every bot sheet, a conduct
+		 * no human sustains. The last-resort gun is not a gun a human
+		 * commits to; mode 2 refuses it and lets the ladder walk pick a
+		 * real weapon the moment one is stocked.
+		 */
+		if (gi.cvar("sg_wcommit", "0", 0)->value >= 2.0f &&
+		    held == SG_W_BLASTER)
+			held = -1;
+
 		if (held >= 0 && Combat_Stocked(self, held) &&
 		    Combat_BandAllows(self, held, dist))
 		{
