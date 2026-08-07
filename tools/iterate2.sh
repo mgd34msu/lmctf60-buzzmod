@@ -192,14 +192,17 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # control arm carried the needle-over-empty-base corridors every wave
 # (3-4/2/2 vs 2/1/1) and every extreme lane concentration (43%, 25%).
 # s04 + s09 stay 0 as the standing controls, same pattern as ROUTEJITTER.
-RIBBON=(48       48       48       0        48        48       48        48       0        48)
+# s04 equalized to fleet values 2026-08-07: its ribbon/jitter-0 control
+# state silently confounded every film-pair A/B (the dead breather flag,
+# the shelf trial's arms). s09 is the ONLY control from here on.
+RIBBON=(48       48       48       48       48        48       48        48       0        48)
 # route jitter (359+): per-bot-per-life deterministic pricing tilt
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
 # corridor band width on film (human bar 69u).
 # jitter ADOPTED at dose 8 (pooled verdict: 2.41 bits vs control 1.99
 # vs dose-20 2.21; pooled humans 2.62). s04 stays the clean control.
-ROUTEJITTER=(8   8        8        0        8         8        8         8        0        8)
+ROUTEJITTER=(8   8        8        8        8         8        8         8        0        8)
 
 # EXIT-LANE ASYMMETRY (379 trial, ruled 2026-08-05): a human tends to
 # leave with the flag by a different road than the one ridden in -- but
@@ -258,10 +261,14 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # equalized 4/4 on the film pair (the 84-wave pool read a conversion
 # cost -- Rule 21 flag on the ledger, dedicated dose ladder owed) so the
 # pair is single-variable for SHELFCOST.
-# PHASE B: the breather dose ladder the 84-wave cost flag has been owed
-# -- 0 / 4 / 8 on three same-format mactf06 arms (s03/s04/s10), one
-# variable, film+caps combined verdict.
-BREATHER=(0      0        0        4        0         0        0         0        0        8)
+# ADOPTED fleet-wide 2026-08-07 (dose ladder 0/4/8, 19 waves/arm,
+# mactf06): conversion 0.046 / 0.114 / 0.116 -- the clean s03/s10 pair
+# (identical ribbon/jitter) shows the pause near-tripling steal->cap
+# conversion; 4 and 8 indistinguishable, smaller dose taken. The old
+# 84-wave "breather costs conversion" flag died with the discovery that
+# its control arm also ran ribbon/jitter 0 -- three variables, not one.
+# s09-ctrl stays 0 as always.
+BREATHER=(4      4        4        4        4         4        4         4        0        4)
 
 # THE SHELF TRIAL (steal-genesis study): sg_shelfcost 1 on s03 vs s04
 # control, mactf06 -- the map with the measured 1275-cost shelf. Bars
