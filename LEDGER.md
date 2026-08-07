@@ -21,7 +21,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| sg_ropecost 400 | s03 vs s04 ctrl | r556, wave ~520 | off-graph into human 0.03–0.18 band; caps flat; 5v0 canary flawless | ~8 waves/arm |
+| sg_ropecost **100** (400 was flat null @6w) | s03 vs s04 ctrl | wave ~527 | off-graph into human 0.03–0.18 band; caps flat; flat again = flood layer exonerated, move to movement gates | ~6 waves/arm |
 | sg_wcommit 1 | s06 vs s07 ctrl | r553, wave 518 | switch_diagonal 0.68 → toward 0.897; caps flat | ~15 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
