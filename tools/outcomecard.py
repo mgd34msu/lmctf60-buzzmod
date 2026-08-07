@@ -881,3 +881,146 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ----------------------------------------------------------------- MODULE
+# NOTE: FIRST STAGE A RESULT (2026-08-07, mactf06 + lmctf22, pov-parity
+# forced on the bot arm / off the human arm at POV_RADIUS_DEFAULT (900u),
+# cap_radius=280u (CAP_RADIUS, the shipped default), --stands from the two
+# known flag-stand pairs). Recorded here because the plain gate reading
+# ("PASS on mactf06, ship it") hides two separate problems the next person
+# should not have to rediscover.
+#
+# --- mactf06: n_human=4 (of 9; 5 fail the 300s DURATION_MIN_S floor, the
+#     same ceiling fightsheet.py and teamsheet.py hit on this map), n_bot=48
+#     (of 50; wave514-s03/s04 are 245-247s, under the floor -- the same two
+#     files teamsheet.py's Stage A note flags) ----------------------------
+#
+#   scalar               human    bot     AUC(b>h)  separab.  cap_radius-stable
+#   caps_red               0.500   0.167     0.432     0.568   n/a (below gate)
+#   caps_blue              0.500   0.000     0.250     0.750   n/a (below gate)
+#   total_caps             1.000   0.167     0.188     0.812   n/a (below gate)
+#   first_cap_t_norm       0.522   0.509     0.524     0.524   n/a (below gate)
+#   lead_changes           0.000   0.000     0.500     0.500   n/a (below gate)
+#   steals_total          14.250   3.708     0.036     0.964   VACUOUS (+/-0.000) [V]
+#   conversion              0.061   0.043     0.253     0.747   n/a (below gate)
+#
+# --- lmctf22: n_human=4 (of 12; 8 fail the 300s floor), n_bot=24 (of 25;
+#     wave514-s05 fails the floor) ----------------------------------------
+#
+#   scalar               human    bot     AUC(b>h)  separab.  cap_radius-stable
+#   caps_red               0.500   0.167     0.323     0.677   n/a (below gate)
+#   caps_blue              1.250   0.500     0.250     0.750   n/a (below gate)
+#   total_caps             1.750   0.667     0.182     0.818   n/a (below gate)
+#   first_cap_t_norm       0.353   0.504     0.694     0.694   n/a (below gate)
+#   lead_changes            0.000   0.000     0.500     0.500   n/a (below gate)
+#   steals_total          13.500   6.917     0.172     0.828   n/a (below gate)
+#   conversion              0.144   0.109     0.276     0.724   n/a (below gate)
+#
+# [V] = the +/-100u cap_radius perturbation the design specifies reports
+# Delta=+0.000 on steals_total, but that stability is VACUOUS, not a
+# finding -- see (a) below.
+#
+# Stage A gate (separability >= 0.85 on at least one scalar): PASSES on
+# mactf06 via steals_total (panel 4, pressure balance) -- and ONLY there.
+# lmctf22 FAILS outright (best is steals_total at 0.828, same panel, same
+# direction, short of the bar). Read no further than the mactf06 PASS line
+# and it looks clean; it is not, for three separate reasons:
+#
+# (a) THE CAP_RADIUS CHECK IS BLIND TO THE ONE SCALAR THAT CLEARS THE GATE.
+#     steals_total = len(windows), the raw count of carry-window STARTS
+#     (compute_scalars) -- it is computed before label_windows ever runs
+#     F.classify_outcome, so it never reads cap_radius at all. The +/-100u
+#     perturbation the design specifies can only ever report Delta=0.000 on
+#     it, exactly as measured (0.036 -> 0.036 -> 0.036 AUC, both
+#     directions, on mactf06; the same 0.172 -> 0.172 -> 0.172 pattern shows
+#     on lmctf22). This is the same shape of problem teamsheet.py's Stage A
+#     note (a) found in spacing_median/mean_simultaneous_attackers versus
+#     escort_radius/defense_radius: a stability check wired to a knob the
+#     passing scalar never reads "passes" it by construction, whether or
+#     not the underlying number means anything.
+#
+#     The confound that DOES reach steals_total is the same one teamsheet.py
+#     flagged: the pov-parity RADIUS (F.POV_RADIUS_DEFAULT, 900u) used to
+#     build the bot arm's tracks, since a carry-window is only detected if
+#     the flag carrier's EF_FLAG bit transition survives that filter. A
+#     supplementary sweep of pov-parity radius alone (800u/900u/1000u,
+#     cap_radius held at the shipped default 280u, same roc_auc math) was
+#     run for exactly this reason:
+#
+#       mactf06 steals_total   sep 0.966 -> 0.964 -> 0.956
+#         (800u -> 900u -> 1000u; Delta=-0.010 end to end)
+#
+#     Unlike teamsheet.py's two flagged panels (which moved 0.089-0.155
+#     under the same kind of sweep, one of them crossing back below 0.85),
+#     steals_total barely moves at all across a physically ordinary
+#     pov-parity radius range. This IS a real stability finding -- just not
+#     the one the design's own cap_radius check could ever have produced.
+#
+# (b) PER-DEMO VALUES (radius=900u, the shipped default; the 800u/1000u
+#     sweep runs above show the same shape) -- reported because n_human=4 is
+#     small enough that any one demo has real leverage on both the mean and
+#     the rank sum underneath the AUC:
+#
+#       human: lmctf-2022-02-08-mactf06-20.01=6, -20.37=16,
+#              lmctf-2022-02-15-mactf06-20.42=14, -20.54=21   (mean 14.25)
+#       bot:   48 wave498-522 s03/s04 files, range 0-11, e.g.
+#              wave501-s04=10, wave505-s04=8, wave516-s04=8 at the high end,
+#              wave506-s03=1, wave515-s03=1, wave518-s04=1 at the low end
+#              (mean 3.71)
+#
+#     No single demo on either side sits near the opposite population's
+#     range -- human values run 6-21, the highest bot value across all
+#     three pov-parity radii tested is 11 (wave501-s04 at 1000u) -- so this
+#     is not one outlier demo carrying the whole gate the way lmctf22's 3v3
+#     human demo does on teamsheet.py's spacing_median (see (c) below).
+#     mactf06's four qualifying human demos are all n_players=10 (checked
+#     directly against F.anonymize); this map's human arm has no roster-size
+#     artifact.
+#
+# (c) BEHAVIOR OR POPULATION SHAPE? steals_total is a raw count, not a rate,
+#     and the two arms are not playing on the same effective clock by
+#     accident: F.cap_tracks_to_duration caps every demo (both shapes) at
+#     DURATION_CAP_S (850s), and the bot wave files here run 894-895s
+#     uncapped (all 48 hit the 850s ceiling), while the four qualifying
+#     human demos run 652s/383s/763s/1321s (only the last hits the ceiling;
+#     mean effective duration ~662s). If anything the bot arm gets MORE
+#     analysis window than most of the human arm, not less -- so the 3.8x
+#     gap in raw steal count understates the per-minute gap (roughly 14.25
+#     steals / ~11.0 min human vs 3.71 steals / ~14.2 min bot -- about
+#     1.3/min vs 0.26/min). conversion (captures so far / steals so far) is
+#     NOT the driver either: mactf06's conversion means are 0.061 human vs
+#     0.043 bot -- same order of magnitude, not the multi-fold gap
+#     steals_total shows. So this does not fit the "bots capture less
+#     because their conversion is lower" population-shape story the way
+#     total_caps or caps_blue might have (both sit below the gate here
+#     anyway, at 0.812/0.750). What the data shows is bots simply
+#     INITIATING far fewer flag steals per unit match time than humans,
+#     independent of what happens after the pickup -- that reads as
+#     BEHAVIOR (how the match unfolds: humans go for the flag far more
+#     often), not corpus composition or a scoring-efficiency artifact. It
+#     should still be treated as REGIME-DEPENDENT rather than durable: a
+#     lower steal-initiation tempo is a property of THIS bot AI era's
+#     objective-seeking behaviour, and stage 2 of the project's own goal is
+#     to change exactly that behaviour, at which point this gap -- like the
+#     population-shape gaps the design warned about -- should be expected
+#     to shrink or invert, not hold steady as a fixed signature of "bot vs
+#     human."
+#
+# WHAT THIS MEANS FOR RUNG-5 JUDGING: the gate technically passes on
+# mactf06 via steals_total (panel 4), and unlike teamsheet.py's panels 1
+# and 4, this one result DOES survive the confound sweep that actually
+# reaches it (pov-parity radius) as well as the vacuous cap_radius check
+# the design specified. It is currently the one outcomecard.py scalar fit
+# to show a judge, WITH the caveat in (c): read it as "this era's bots rush
+# the flag much less often than humans," not as a permanent behavioural
+# constant. Every other scalar on both maps, and every scalar on lmctf22
+# without exception (best is steals_total at 0.828, short of the bar), must
+# stay diagnostic-only. lmctf22's human arm carries the same roster-size
+# risk teamsheet.py's Stage A note (b) already found (the n=6 demo,
+# lmctf-2021-11-14-lmctf22-20.32, is effectively a 3v3) and its
+# steals_total separability rises to 0.854 at cap_radius=380u -- but that
+# is a cap_radius-perturbed number, not the shipped default, and it is
+# itself flagged COVERAGE-SENSITIVE (Delta=-0.104) by the design's own
+# check, so it is not a second passing result, just a near miss worth
+# re-running once the human corpus on this map is deeper than n=4.
