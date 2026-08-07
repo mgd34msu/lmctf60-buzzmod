@@ -238,12 +238,13 @@ ATKOBJ=(125    125      125      125      125       125      125       125      
 # the successor feature must SUPPRESS mid-fight switches, not add them.
 WSWITCH=(0     0        0        0        0         0        0         0        0        0)
 
-# WEAPON COMMITMENT (sg_wcommit), the wswitch verdict's named successor:
-# keep the held gun anywhere it appears in the current band ladder.
-# Armed s06 vs s07 control on lmctf44 -- the map with the 0.897 human
-# switch_diagonal anchor. Bars: diagonal mass toward 0.90 from 0.68,
-# caps must not fall.
-WCOMMIT=(0     0        0        0        0         1        0         0        0        0)
+# WEAPON COMMITMENT: ADOPTED fleet-wide 2026-08-07 (12 waves/arm,
+# lmctf44): switch_diagonal 0.828 armed vs 0.691 control vs 0.897 human
+# -- two-thirds of the strongest rung-3 tell closed, zero overlap
+# between arms -- and caps 25 vs 13 (committed guns convert; less
+# mid-fight spectator time). s09-ctrl stays 0. Residual 0.83 -> 0.90
+# gap stays on the rung-3 list.
+WCOMMIT=(1     1        1        1        1         1        1         1        0        1)
 
 # RUNG-2 SET #1 (2026-08-07, judges 11/18): the named tell is OFF-GRAPH
 # FRACTION -- humans grapple through open air 3-18% of samples, bots pin

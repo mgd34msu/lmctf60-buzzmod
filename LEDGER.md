@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~11:15, wave ~526.*
+*Last updated: 2026-08-07 ~13:45, wave ~532.*
 
 ## The ladder
 
@@ -12,7 +12,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | **IN TRIAL** | Set #1 failed 11/18; tell = off-graph fraction; sg_ropecost armed |
-| 3. Fights | **IN TRIAL** | Named gap: weapon commitment 0.68 vs human 0.90; sg_wcommit armed |
+| 3. Fights | wcommit ADOPTED; set #1 pending | commitment 0.691→0.828 vs human 0.897, caps 25 vs 13 (12 waves/arm); residual 0.83→0.90 gap open |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
@@ -22,10 +22,10 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
 | sg_ropecost **100** (400 was flat null @6w) | s03 vs s04 ctrl | wave ~527 | off-graph into human 0.03–0.18 band; caps flat; flat again = flood layer exonerated, move to movement gates | ~6 waves/arm |
-| sg_wcommit 1 | s06 vs s07 ctrl | r553, wave 518 | switch_diagonal 0.68 → toward 0.897; caps flat | ~15 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
+- **wcommit** (2026-08-07): keep the held gun anywhere in the band ladder — switch_diagonal 0.691→0.828 (human 0.897), caps 25 vs 13, zero arm overlap, 12 waves/arm.
 - **breather 4** (2026-08-07): dose ladder 0/4/8, 19 waves/arm — conversion 0.046/0.114/0.116; smaller equal dose shipped.
 - atkobj 125: +7% steals, caps flat; 150 was null.
 - Movement stack that passed rung 1: jitter 8, ribbon 48, tactics, nobacktrack 60.
@@ -54,7 +54,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 ## Not fully polished
 
 1. Rung 2: ropecost in trial; secondary tell queued (deterministic p=1.0 transition cells).
-2. Rung 3: wcommit in trial.
+2. Rung 3: wcommit adopted; residual commitment gap 0.83→0.90; blind set #1 next.
 3. teamsheet.py: panels 1/3/4 unvalidated -- parity-radius calibration + bigger human corpus owed (task #7).
 4. Airstrafe chain-length tuning: never trialed.
 5. Dark features built, never armed: aimtexture, tilt, clockplay, spawnbeat, belief cone/range, handoff, session-db, railrhythm. Enter only when a rung names their gap.
