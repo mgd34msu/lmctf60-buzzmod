@@ -57,7 +57,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 1. Rung 2: ropecost in trial; secondary tell queued (deterministic p=1.0 transition cells).
 2. Rung 3: wcommit adopted; residual commitment gap 0.83→0.90; blind set #1 next.
-3. teamsheet.py: panels 1/3/4 unvalidated -- parity-radius calibration + bigger human corpus owed (task #7).
+3. teamsheet.py: validation complete -- escort_fraction (lmctf22) sole VALIDATED scalar; others coverage/sample-sensitive at n=4 human. Corpus growth (18-map manifest + s10 lmctf57 bot film) is the path to more eyes.
 4. Airstrafe chain-length tuning: never trialed.
 5. Dark features built, never armed: aimtexture, tilt, clockplay, spawnbeat, belief cone/range, handoff, session-db, railrhythm. Enter only when a rung names their gap.
 
