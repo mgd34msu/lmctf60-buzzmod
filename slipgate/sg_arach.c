@@ -7234,28 +7234,53 @@ no_hold:;
 				 * legs are the bottleneck. Cooldown keeps it a burst,
 				 * not a lifestyle.
 				 */
+				/*
+				 * FREERIDE (sg_freeride, rung-2 off-graph tell, owner
+				 * signed 2026-08-07). The speed hook was already the
+				 * right tech; the judges' 3-18% human off-graph mass
+				 * against our 0.026 was a DOSE gap: the burst was gated
+				 * to the far half of the map (goal_field > 4000), one
+				 * rope per 4s, and a straight-ahead probe only. Under
+				 * freeride the runway reaches the approach (> 2000 --
+				 * the no-ropes-in-the-house rule still owns the flag
+				 * room), the cooldown halves, the speed window's top
+				 * lifts to 560 (humans chain ropes off fast runs), and
+				 * a missed straight probe retries once at +/-22 deg --
+				 * the corner sling. Everything else -- persona taste,
+				 * the worth bar, the plane test, hookban -- unchanged.
+				 */
 				if (bot->hook_phase == 0 && !bot->engaged_last &&
 				    level.time >= bot->hookban_until &&
 				    level.time >= bot->speedhook_next &&
 				    e->groundentity && e->waterlevel == 0 &&
-				    goal_field[bot->seed] > 4000)
+				    goal_field[bot->seed] >
+				        (gi.cvar("sg_freeride", "0", 0)->value > 0.0f
+				             ? 2000 : 4000))
 				{
 					float hsp2 = e->velocity[0] * e->velocity[0]
 					           + e->velocity[1] * e->velocity[1];
+					float hcap = (gi.cvar("sg_freeride", "0", 0)->value
+					              > 0.0f) ? 560.0f : 480.0f;
 
-					if (hsp2 > 220.0f * 220.0f && hsp2 < 480.0f * 480.0f)
+					if (hsp2 > 220.0f * 220.0f && hsp2 < hcap * hcap)
 					{
 						vec3_t hd, heye, hend;
 						trace_t htr;
 						float hyaw;
+						int hfan;
 
 						VectorSubtract(aim, e->s.origin, hd);
 						hyaw = atan2f(hd[1], hd[0]);
 						heye[0] = e->s.origin[0];
 						heye[1] = e->s.origin[1];
 						heye[2] = e->s.origin[2] + e->viewheight;
-						hend[0] = heye[0] + cosf(hyaw) * 480.0f;
-						hend[1] = heye[1] + sinf(hyaw) * 480.0f;
+						for (hfan = 0; hfan < 3; hfan++)
+						{
+						float hy2 = hyaw + ((hfan == 1) ? 0.384f :
+						                    (hfan == 2) ? -0.384f : 0.0f);
+
+						hend[0] = heye[0] + cosf(hy2) * 480.0f;
+						hend[1] = heye[1] + sinf(hy2) * 480.0f;
 						hend[2] = heye[2] + 280.0f;    /* ~30 deg up */
 						htr = gi.trace(heye, NULL, NULL, hend, e,
 						               MASK_SOLID);
@@ -7271,10 +7296,18 @@ no_hold:;
 						 * it so an eager bot also comes back to it
 						 * sooner, and both are 1.0 with no persona.
 						 */
-						if (htr.fraction < 1.0f && !htr.startsolid &&
-						    htr.fraction * 560.0f >
-						        170.0f / SG_PersonaHookScale(e) &&
-						    htr.plane.normal[2] < 0.7f)
+						if (htr.fraction >= 1.0f || htr.startsolid ||
+						    htr.fraction * 560.0f <=
+						        170.0f / SG_PersonaHookScale(e) ||
+						    htr.plane.normal[2] >= 0.7f)
+						{
+							/* the side probes exist only under
+							 * freeride; stock behavior is one look */
+							if (gi.cvar("sg_freeride", "0", 0)->value
+							    > 0.0f)
+								continue;
+							break;
+						}
 						{
 							/* wave 218 (sg_legcarrier): the burst is
 							 * the OPTIONAL rope -- a standing aim for
@@ -7291,8 +7324,12 @@ no_hold:;
 								bot->hook_deadline = level.time + 1.0f;
 								bot->speedhook = true;
 								bot->speedhook_next = level.time
-								    + 4.0f / SG_PersonaHookScale(e);
+								    + ((gi.cvar("sg_freeride", "0",
+								        0)->value > 0.0f) ? 2.0f : 4.0f)
+								      / SG_PersonaHookScale(e);
 							}
+						}
+						break;
 						}
 					}
 				}
