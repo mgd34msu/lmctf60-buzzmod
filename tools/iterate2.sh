@@ -47,16 +47,16 @@ fi
 # v4 canaries: s02 = the PERMANENT no-opposition canary (5v0 smap05 --
 # flawless execution on film or the build is broken); s10 = the fixed-
 # matchup canary (5v1 smap05, must hold its band).
-LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v1)
+LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v5)
 # lane A/B moved to mactf06 (coverage 29/48 -- THE lane map; lmctf22
 # reads 12/48, too weak to show the doctrine). lmctf22 keeps coverage
 # on s05.
 # s06/s07 on lmctf44 for the MEGAWORTH A/B (2 megas, no quad -- the
 # clean mega environment; the comm stack is adopted fleet-wide so the
 # quad-map duty is done). BSP census is the map-picker's law now.
-MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  smap05)
-FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5:1")
-SECS=(  600      600      900      900      900       900      900       600      900      600)
+MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  mactf06)
+FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5")
+SECS=(  600      600      900      900      900       900      900       600      900      900)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
 # trials on shared servers -- reads were cross-contaminated).
 # s03/s04: fandense dose-2 A/B (escape OFF both).
@@ -246,13 +246,21 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # equalized 4/4 on the film pair (the 84-wave pool read a conversion
 # cost -- Rule 21 flag on the ledger, dedicated dose ladder owed) so the
 # pair is single-variable for SHELFCOST.
-BREATHER=(0      0        4        4        0         0        0         0        0        0)
+# PHASE B: the breather dose ladder the 84-wave cost flag has been owed
+# -- 0 / 4 / 8 on three same-format mactf06 arms (s03/s04/s10), one
+# variable, film+caps combined verdict.
+BREATHER=(0      0        0        4        0         0        0         0        0        8)
 
 # THE SHELF TRIAL (steal-genesis study): sg_shelfcost 1 on s03 vs s04
 # control, mactf06 -- the map with the measured 1275-cost shelf. Bars
 # pre-registered: below-terminal share 0.36 -> <0.10; steals/game up
 # toward the 8.5 arithmetic ceiling; caps must not fall.
-SHELFCOST=(0     0        1        0        0         0        0         0        0        0)
+# STRUCK 2026-08-07 (waves 489-496 census): entries into the pit
+# collapsed 89->23 in probes, but steals fell 5.0->4.5/game and close
+# approaches -19% -- the doomed low road was cheap TEMPO, and rerouting
+# it cost more than the zero-yield room wasted. Rule 21. Code stays,
+# cvar stays dark.
+SHELFCOST=(0     0        0        0        0         0        0         0        0        0)
 # owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
 # s06 OFF (crossed with interdose so each pair carries one variable).
 # Waypoint commitment = "is this route still good enough" at 10s holds.
@@ -275,7 +283,7 @@ COVER=(  800 800 800 800 800 800 800 800 0 0 )
 # like a pub: 2v2 at the whistle, a body every ~70s to full, one leaves
 # at 7:30 and the seat refills a minute later. SAME schedule both arms --
 # the ramp is scenery, not a variable.
-STAGGER=(0       0        1        1        0         0        0         0        0        0)
+STAGGER=(0       0        1        1        0         0        0         0        0        1)
 
 for i in 0 1 2 3 4 5 6 7 8 9; do
     (
