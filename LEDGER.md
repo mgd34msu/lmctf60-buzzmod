@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~15:10, wave ~537.*
+*Last updated: 2026-08-07 ~15:25, wave ~537. Concurrent pairs: s03/s04 tapvar, s06/s07 mode-2; probes + 2 agents in flight.*
 
 ## The ladder
 
@@ -22,6 +22,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
 | wcommit mode 2 (no blaster commitment) | s06 vs s07 mode-1 ctrl | r567, wave ~536 | blaster share collapses; switch_diagonal holds ≥0.83; caps hold | ~8 waves/arm |
+| sg_tapvar (slow-weapon re-aim beat) | s03 vs s04 ctrl | r569, wave ~538 | intershot_cv 0.23 → toward human 0.58; rangesep/caps hold | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
