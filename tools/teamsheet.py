@@ -1193,3 +1193,204 @@ if __name__ == '__main__':
 # should stay diagnostic-only regardless. Escort_fraction's own map split
 # (0.595 on mactf06, 0.917 on lmctf22) is itself worth a follow-up run
 # rather than an assumption that it generalizes.
+#
+#
+# ----------------------------------------------------------------- MODULE
+# NOTE ADDENDUM (2026-08-07): PARITY-RADIUS CALIBRATION, closing out note
+# (a) above. That note flagged spacing_median and mean_simultaneous_attackers
+# as pov-parity-radius sensitive from a 3-point spot check (800/900/1000u)
+# and left defense_fraction's gate status as "does not clear 0.85 on either
+# map yet." This is the actual 5-point sweep the note asked for
+# (700/800/900/1000/1100u), plus a leave-one-out pass over the human corpus
+# on each map, plus a verdict per scalar per map. Appended below the
+# original run rather than rewriting it -- both stay on the record.
+#
+# CORPUS: bot arm is wave498-535 s03/s04 (mactf06) and s05 (lmctf22) from
+# the YamagiQ2 hooktest tree, excluding wave530 (a mixed-fixture wave, not
+# a clean 5v5) -- a different, larger bot corpus than the DEFAULT_BOT_GLOBS
+# wave39x/40x range the run above used, chosen for this exercise because it
+# is deep enough to make a sweep and a leave-one-out pass meaningful. Human
+# arm is unchanged: every *.dm2 in the hand-collected corpus for each map,
+# still gated by F.DURATION_MIN_S (300s). Same two flag-stand pairs, same
+# ESCORT_RADIUS/DEFENSE_RADIUS defaults (400u/600u) throughout -- only the
+# pov-parity radius moves in this run, exactly the knob note (a) identified
+# as the one the design's own +/-100u escort/defense check is blind to.
+# n_human=4/4 (unchanged from the run above; same DURATION_MIN_S ceiling),
+# n_bot=70 of 72 mactf06 candidates (wave514-s03/s04 still the only floor
+# failures, the same file the original note already named), n_bot=35 of 36
+# lmctf22 candidates (wave514-s05, same reason).
+#
+# 1. PARITY-RADIUS SWEEP (700/800/900/1000/1100u; human values are radius-
+#    invariant by construction -- see item 2):
+#
+#    mactf06 (n_human=4, n_bot=70; escort_fraction n_bot=69 at 700-800u,
+#    70 at 900-1100u -- one bot demo's only carry window is undetectable
+#    until the pov-parity radius is wide enough to keep the carrier's own
+#    track continuous)
+#      scalar                          700u   800u   900u  1000u  1100u
+#      spacing_median   [human=717.4]  sep:  1.000  0.996  0.814  0.621  0.539
+#                                  bot mean:  461.8  530.4  603.3  669.6  726.7
+#      escort_fraction  [human=0.254]  sep:  0.681  0.685  0.693  0.704  0.704
+#                                  bot mean:  0.424  0.428  0.422  0.423  0.424
+#      defense_fraction [human=0.296]  sep:  0.939  0.896  0.829  0.750  0.725
+#                                  bot mean:  0.155  0.175  0.199  0.230  0.254
+#      mean_simultaneous_attackers [human=1.582] sep: 1.000 1.000 0.982 0.911 0.793
+#                                  bot mean:  0.839  0.951  1.095  1.227  1.359
+#
+#    lmctf22 (n_human=4, n_bot=35)
+#      scalar                          700u   800u   900u  1000u  1100u
+#      spacing_median   [human=907.9]  sep:  1.000  1.000  0.943  0.871  0.786
+#                                  bot mean:  456.4  519.2  568.1  610.4  652.0
+#      escort_fraction  [human=0.143]  sep:  0.950  0.950  0.950  0.950  0.957
+#                                  bot mean:  0.499  0.489  0.485  0.481  0.482
+#      defense_fraction [human=0.121]  sep:  0.536  0.557  0.607  0.600  0.679
+#                                  bot mean:  0.124  0.134  0.146  0.157  0.173
+#      mean_simultaneous_attackers [human=0.907] sep: 0.771 0.657 0.529 0.557 0.729
+#                                  bot mean:  0.732  0.811  0.891  0.975  1.068
+#
+#    This confirms and sharpens the 3-point spot check in note (a): at the
+#    900u default, lmctf22 spacing_median sits at 0.943 (the note's 3-point
+#    check said 0.940 -- the small difference is a different, larger bot
+#    corpus, see CORPUS above, not a contradiction) and keeps falling past
+#    1000u to 0.786 at 1100u, well inside a physically ordinary radius
+#    range. mactf06's mean_simultaneous_attackers does the same thing in the
+#    other direction: a clean 1.000 at 700-800u, still clearing the gate at
+#    900-1000u (0.982, 0.911), and only dropping below 0.85 at 1100u
+#    (0.793). Both scalars note (a) flagged are confirmed radius-sensitive,
+#    not radius-stable.
+#
+#    escort_fraction on lmctf22 is the one scalar in this whole sweep that
+#    does NOT move with radius (0.950 at every point through 1000u, 0.957 at
+#    1100u), because -- per analyze_demo's own comment -- it is gated by
+#    ESCORT_RADIUS (already checked by the design's own +/-100u pass) and
+#    reads teammate-to-carrier distance inside a carry window rather than
+#    pooling raw teammate/attacker tracks straight off apply_pov_parity's
+#    output the way spacing_median and mean_simultaneous_attackers do (both
+#    of those have no fixed-radius gate of their own standing between them
+#    and the parity filter). escort_fraction on mactf06, by contrast, never
+#    clears 0.85 at any radius (0.681-0.704) -- its earlier SUB-GATE reading
+#    on that map was already correct and this sweep does not change it.
+#
+#    defense_fraction moves with radius on both maps (mactf06 0.939 -> 0.725,
+#    lmctf22 0.536 -> 0.679 -- opposite directions) and never had a radius
+#    check of any kind before this run (ESCORT_RADIUS/DEFENSE_RADIUS's own
+#    +/-100u pass doesn't touch pov-parity radius either). It was flagged
+#    sub-gate in the standing debt this addendum closes out, and that holds:
+#    worse on lmctf22 (max 0.679, never gates) than on mactf06 (gates at
+#    700-800u but not at the 900u default or above).
+#
+# 2. HUMAN ARM WITH vs WITHOUT --pov-parity: run identically with
+#    --pov-parity on and off across all 8 qualifying human demos (4/map).
+#    Result: pov_parity['applied'] is False on every one of them, every
+#    time, reason "not a serverrecord demo" -- and all four scalars come out
+#    bit-for-bit identical between the two runs. This isn't a surprising
+#    reading of the data; it's analyze_demo's own control flow (see the
+#    pov_parity branch a few hundred lines above): pov-parity is only ever
+#    invoked when d['svrecord'] is true, so the --pov-parity flag is a
+#    complete no-op on the human arm by construction. The "WITH vs WITHOUT"
+#    comparison this addendum's brief asked for is trivial here and stays
+#    trivial -- but the asymmetry it documents is real and is what the whole
+#    instrument depends on: only the bot arm's tracks are ever coverage-
+#    filtered after the fact, because the human arm's tracks already carry
+#    the engine's own PVS filtering, and a second synthetic filter on top of
+#    a real one would double-cull it rather than match it. The candidate
+#    artifact isn't "parity applied inconsistently" (it isn't -- it's
+#    applied exactly once, on the side that needs it); the candidate
+#    artifact is that the one free parameter controlling how much of the bot
+#    arm's coverage gets thrown away (pov-parity radius) has no counterpart
+#    being tuned on the human side, so any scalar sensitive to that
+#    parameter is a scalar whose apparent behavioural gap could just be an
+#    untuned coverage gap. That is exactly what section 1 measures.
+#
+# 3. LEAVE-ONE-OUT (human demos, bot arm fixed at the 900u default; n=4 per
+#    map, so each row drops one quarter of the human corpus):
+#
+#    mactf06 (all four qualifying demos run a uniform 10 tracked players --
+#    no roster-size outlier on this map)
+#      scalar                       full   x-20.01  x-20.37  x-20.42  x-20.54
+#      spacing_median               0.814  0.752    0.795    0.752    0.957
+#      escort_fraction              0.693  0.686    0.690    0.652    0.743
+#      defense_fraction             0.829  0.995    0.771    0.771    0.776
+#      mean_simultaneous_attackers  0.982  0.976    0.976    1.000    0.976
+#      (x-HH.MM = excluding lmctf-2022-0{2-08,2-15}-mactf06-HH.MM.dm2)
+#
+#    lmctf22 (20.32 is the n=6 / 3v3 demo the run above's note (b) flagged;
+#    the other three run 10, 11 and 9 tracked players)
+#      scalar                       full   x-20.32* x-21.01  x-21.45  x-20.49
+#      spacing_median               0.943  0.924    1.000    0.924    0.924
+#      escort_fraction              0.950  0.933    0.962    0.952    0.952
+#      defense_fraction             0.607  0.524    0.752    0.724    0.524
+#      mean_simultaneous_attackers  0.529  0.695    0.505    0.600    0.524
+#      (x-HH.MM = excluding the matching lmctf-*-lmctf22-HH.MM.dm2; *x-20.32
+#      = excluding lmctf-2021-11-14-lmctf22-20.32.dm2, the 3v3 outlier:
+#      spacing_median=1488.0u, escort_fraction=0.0037, vs 605-798u and
+#      0.147-0.237 on the other three -- exactly the demo note (b) named
+#      without a number attached.)
+#
+#    THE OUTLIER'S LEVERAGE, numbered: on mean_simultaneous_attackers, the
+#    3v3 demo is the single biggest lever in this whole leave-one-out table
+#    -- dropping it moves separability from 0.529 to 0.695 (+0.166), more
+#    than any other exclusion on either map for any scalar. That's because
+#    its own mean_simultaneous_attackers (0.634) sits almost exactly on top
+#    of the bot arm's 900u mean (0.891), so it contributes real overlap
+#    rather than a distant point a rank test shrugs off. On spacing_median
+#    and escort_fraction, though, the 3v3 demo is NOT the leverage point
+#    despite being the visible corpus oddity: excluding it barely moves
+#    either scalar (spacing_median 0.943->0.924, escort_fraction
+#    0.950->0.933), while excluding lmctf-2021-11-14-lmctf22-21.01.dm2 -- an
+#    ordinary 10-player demo whose spacing_median (604.8u) happens to sit
+#    closest to the bot arm's range -- pushes spacing_median to a perfect
+#    1.000. That is the "AUC's rank math is not as fragile to one point as a
+#    mean-difference test would be" prediction from note (b), now confirmed
+#    with a number: the demo that looks like the outlier by roster size is
+#    not the demo carrying the statistical leverage.
+#
+#    mactf06's defense_fraction shows the same instability with NO roster
+#    outlier in the corpus at all (x-20.01: 0.829->0.995, +0.166, the same
+#    magnitude as the lmctf22 mean_simultaneous_attackers swing above): at
+#    n_human=4, every scalar has at least one demo capable of a +/-0.15-0.20
+#    swing on its own, roster composition or not. This is an n=4
+#    sample-size property, not specifically a 3v3-roster property, and it
+#    will not go away without a deeper human corpus on both maps (note (c)
+#    above, still unchanged).
+#
+# 4. VERDICTS (VALIDATED = separability >= 0.85 at every one of the 5
+#    radii AND every one of the 4 leave-one-out exclusions; SUB-GATE = never
+#    reaches 0.85 anywhere in that combined set; COVERAGE-SENSITIVE =
+#    reaches 0.85 somewhere in that set but not everywhere):
+#
+#      map       scalar                        min     max     verdict
+#      mactf06   spacing_median                0.539   1.000   COVERAGE-SENSITIVE
+#      mactf06   escort_fraction               0.652   0.743   SUB-GATE
+#      mactf06   defense_fraction              0.725   0.995   COVERAGE-SENSITIVE
+#      mactf06   mean_simultaneous_attackers   0.793   1.000   COVERAGE-SENSITIVE
+#      lmctf22   spacing_median                0.786   1.000   COVERAGE-SENSITIVE
+#      lmctf22   escort_fraction               0.933   0.962   VALIDATED
+#      lmctf22   defense_fraction              0.524   0.752   SUB-GATE
+#      lmctf22   mean_simultaneous_attackers   0.505   0.771   SUB-GATE
+#
+# WHAT THIS MEANS FOR RUNG-4 JUDGING, updated: escort_fraction on lmctf22 is
+# now the ONLY scalar on either map that has been through the full
+# radius-sweep-plus-leave-one-out treatment and clears 0.85 everywhere in
+# it -- the one number in this module that can be called VALIDATED rather
+# than "passed a gate check once." escort_fraction on mactf06 is the
+# opposite: it is the most STABLE scalar under both perturbations (radius
+# range 0.681-0.704, leave-one-out range 0.652-0.743) and it is stable at a
+# level that never clears the gate -- a clean SUB-GATE reading, not a
+# coverage artifact. spacing_median (both maps), defense_fraction (mactf06)
+# and mean_simultaneous_attackers (mactf06) are COVERAGE-SENSITIVE: real
+# separation exists at some radii or exclusions and not others, so none of
+# the three should be shown to a judge without the pov-parity radius (or
+# the excluded demo) attached, and none should be read as a validated
+# behavioural finding yet. defense_fraction and mean_simultaneous_attackers
+# on lmctf22 are SUB-GATE outright (max 0.752 and 0.771 respectively, never
+# reaching 0.85 anywhere in the sweep or the leave-one-out pass) --
+# diagnostic-only, full stop, on that map. Panel 3 (defense_fraction)
+# therefore stays diagnostic-only everywhere, exactly as note (a) already
+# required, now for a fully tested reason instead of a provisional one.
+# Panels 1 and 4 (spacing_median, mean_simultaneous_attackers) must be
+# captioned or reported with the pov-parity radius attached whenever they
+# are shown, because the number a judge sees genuinely depends on a
+# parameter that has never been fit to anything: POV_RADIUS_DEFAULT (900u)
+# is film.py's own instrument constant, not a value calibrated for this
+# rung.
