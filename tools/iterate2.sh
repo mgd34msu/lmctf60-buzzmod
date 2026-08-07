@@ -252,11 +252,12 @@ WCOMMIT=(1     1        1        1        1         1        1         1        
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-# dose 400: FLAT NULL at 6 waves (off-graph 0.027 vs 0.027, caps flat)
-# -- a 60% flood-price cut moved nothing. Escalated to 100 as the
-# decisive step: flat again = the flood layer is exonerated and the
-# mediator lives in the movement gates (no-ropes-in-house, envelope).
-ROPECOST=(1000  1000     100      1000     1000      1000     1000      1000     1000     1000)
+# NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
+# dead flat): the flood layer is exonerated -- a 90% rope-price cut
+# changes nothing observable. Mediator probes (rope rides at 1000 vs
+# 100, sg_debug) locate the binding gate; the next change goes where
+# they point. Pair returned to steady state.
+ROPECOST=(1000  1000     1000     1000     1000      1000     1000      1000     1000     1000)
 
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22

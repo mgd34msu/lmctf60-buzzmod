@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~13:45, wave ~532.*
+*Last updated: 2026-08-07 ~14:30, wave ~535.*
 
 ## The ladder
 
@@ -21,7 +21,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| sg_ropecost **100** (400 was flat null @6w) | s03 vs s04 ctrl | wave ~527 | off-graph into human 0.03–0.18 band; caps flat; flat again = flood layer exonerated, move to movement gates | ~6 waves/arm |
+| (none — ropecost closed null; movement-gate probe running) | | | | |
 
 ## Adopted (film + data on record, most recent first)
 
@@ -40,6 +40,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 - **wswitch** (2026-08-07): moved the commitment tell the wrong way (0.676 armed vs 0.696 ctrl vs 0.897 human), caps 35 vs 40. Named the rung-3 gap its successor (wcommit) now targets.
 - **smap05 rune regeneration** (2026-08-07): struck — graph census shows zero dead-end seeds post-wading-fix; 14 isolated orphans (1%) cannot trap.
 - **84-wave breather cost flag** (2026-08-07): dead — its control arm also ran ribbon/jitter 0; three variables, not one. Superseded by the clean ladder.
+- **ropecost** (2026-08-07): flood rope-price null at 400 AND 100 (off-graph 0.026 flat, 6 waves each) — the flood layer is exonerated; the off-graph gap's binding constraint is elsewhere. Mediator probes running.
 - megaworth (17% vs 24%), linklatch, atkobj-150: nulls with film.
 - exit-asym: parked on Rule 21 (31% cap cost for a cosmetic).
 
