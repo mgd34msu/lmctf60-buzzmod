@@ -4446,6 +4446,30 @@ rally_done:;
 		{
 			bot->prev_seed = was;
 			bot->prev_seed_time = level.time;
+
+			/*
+			 * PITTRACE (sg_debug): the moment a bot's seed enters the
+			 * masked sub-stand region, say who, from where, in what role,
+			 * chasing what tactical waypoint. Three flat nulls said the
+			 * pit traffic rides neither the waypoint surface nor the
+			 * descent steps nor the flag flood -- this line names the
+			 * actual carrier of the traffic.
+			 */
+			if (gi.cvar("sg_debug", "0", 0)->value && team >= 1 && team <= 2)
+			{
+				int pti = (team == CTF_TEAM_RED) ? 0 : 1;
+
+				if (sg_fields.shelf_cliff[pti] &&
+				    sg_fields.shelf_cliff[pti][bot->seed] > 0 &&
+				    !(sg_fields.shelf_cliff[pti][was] > 0))
+					gi.dprintf("PITTRACE %s role=%s seed %d->%d z=%.0f "
+					           "tac_seed=%d tac_role=%d hook=%d\n",
+					           e->client->pers.netname,
+					           sg_role_names[bot->last_role],
+					           was, bot->seed, e->s.origin[2],
+					           bot->tac_seed, bot->tac_role,
+					           bot->hook_phase);
+			}
 		}
 	}
 	if (bot->seed < 0)
