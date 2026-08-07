@@ -251,7 +251,11 @@ WCOMMIT=(0     0        0        0        0         1        0         0        
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-ROPECOST=(1000  1000     400      1000     1000      1000     1000      1000     1000     1000)
+# dose 400: FLAT NULL at 6 waves (off-graph 0.027 vs 0.027, caps flat)
+# -- a 60% flood-price cut moved nothing. Escalated to 100 as the
+# decisive step: flat again = the flood layer is exonerated and the
+# mediator lives in the movement gates (no-ropes-in-house, envelope).
+ROPECOST=(1000  1000     100      1000     1000      1000     1000      1000     1000     1000)
 
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
