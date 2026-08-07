@@ -47,7 +47,7 @@ fi
 # v4 canaries: s02 = the PERMANENT no-opposition canary (5v0 smap05 --
 # flawless execution on film or the build is broken); s10 = the fixed-
 # matchup canary (5v1 smap05, must hold its band).
-LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v5)
+LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-5v5  s09-ctrl s10-5v5)
 # lane A/B moved to mactf06 (coverage 29/48 -- THE lane map; lmctf22
 # reads 12/48, too weak to show the doctrine). lmctf22 keeps coverage
 # on s05.
@@ -58,8 +58,11 @@ LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7
 # there and zero bot film; 18 maps are blind-set capable and we have
 # judged on two. s10 farms fight/team/outcome film on the widest-corpus
 # map we never play. Route sheets still need node fixtures -- unchanged.
-MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  lmctf57)
-FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5")
+# s05+s08 PAIRED 2026-08-07 (owner: everything concurrent that can be):
+# third trial pair, lmctf22 5v5 both, s08 the control arm. lmctf09 7v7
+# coverage was complete; three pairs beat one farm.
+MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf22  lmctf01  lmctf57)
+FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "5"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
 # trials on shared servers -- reads were cross-contaminated).
@@ -70,7 +73,11 @@ SECS=(  600      600      900      900      900       900      900       600    
 # the contaminated-era 13v7 was noise. The corpus cut survives for
 # future re-derivation (windows were hunter-biased at the SEED level?
 # open question) but the flag is parked.
-ESCAPE=(0        0        0        0        0         0        0         0        0        0)
+# ESCAPE PRIORS armed s05 vs s08 control (dark feature enters trial,
+# owner directive 2026-08-07: all dark features get judged). Mined from
+# 1549 human steals; consumer no-ops without escape-priors.json (deploy
+# ships it). Bars: carrier conversion up on outcomecard, caps hold.
+ESCAPE=(0        0        0        0        1         0        0         0        0        0)
 # duel-roles A/B (285+): s01 ON s02 OFF -- breaks the size==2 dw=1 pin
 # (2v2 census: dw stuck 131/138, zero caps in 16 waves)
 # duelroles NULL (285-299 pooled: 7 ON vs 10 OFF, zero caps both) --
