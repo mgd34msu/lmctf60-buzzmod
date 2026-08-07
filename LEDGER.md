@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~10:45, wave ~524.*
+*Last updated: 2026-08-07 ~11:15, wave ~526.*
 
 ## The ladder
 
@@ -14,7 +14,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | 2. Routes | **IN TRIAL** | Set #1 failed 11/18; tell = off-graph fraction; sg_ropecost armed |
 | 3. Fights | **IN TRIAL** | Named gap: weapon commitment 0.68 vs human 0.90; sg_wcommit armed |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
-| 5. Match outcomes | not started | outcomes card unbuilt |
+| 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
 ## In trial now
@@ -61,9 +61,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 ## Not implemented
 
-1. Outcomes card (rung-5 instrument) — task #4.
-2. Stage-A harnesses for rungs 4–5.
-3. Rung-2 set-composition rule (map discriminator weighting).
+1. Rung-2 set-composition rule (map discriminator weighting).
 
 ## Canaries
 
