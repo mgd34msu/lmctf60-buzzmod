@@ -54,7 +54,11 @@ LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7
 # s06/s07 on lmctf44 for the MEGAWORTH A/B (2 megas, no quad -- the
 # clean mega environment; the comm stack is adopted fleet-wide so the
 # quad-map duty is done). BSP census is the map-picker's law now.
-MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  mactf06)
+# s10 -> lmctf57 (corpus manifest 2026-08-07): 69 usable human minutes
+# there and zero bot film; 18 maps are blind-set capable and we have
+# judged on two. s10 farms fight/team/outcome film on the widest-corpus
+# map we never play. Route sheets still need node fixtures -- unchanged.
+MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf09  lmctf01  lmctf57)
 FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
