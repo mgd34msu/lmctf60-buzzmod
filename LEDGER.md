@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~15:25, wave ~537. Concurrent pairs: s03/s04 tapvar, s06/s07 mode-2; probes + 2 agents in flight.*
+*Last updated: 2026-08-07 ~15:40, wave ~538. Concurrent pairs: s03/s04 tapvar, s06/s07 mode-2. Queued for next free pair: route dither (rung-2 tell #2).*
 
 ## The ladder
 
@@ -41,7 +41,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 - **wswitch** (2026-08-07): moved the commitment tell the wrong way (0.676 armed vs 0.696 ctrl vs 0.897 human), caps 35 vs 40. Named the rung-3 gap its successor (wcommit) now targets.
 - **smap05 rune regeneration** (2026-08-07): struck — graph census shows zero dead-end seeds post-wading-fix; 14 isolated orphans (1%) cannot trap.
 - **84-wave breather cost flag** (2026-08-07): dead — its control arm also ran ribbon/jitter 0; three variables, not one. Superseded by the clean ladder.
-- **ropecost** (2026-08-07): flood rope-price null at 400 AND 100 (off-graph 0.026 flat, 6 waves each) — the flood layer is exonerated; the off-graph gap's binding constraint is elsewhere. Mediator probes running.
+- **ropecost** (2026-08-07): flood rope-price null at 400 AND 100 (off-graph 0.026 flat, 6 waves each); mediator probes sealed it — rides 25@1000 vs 13@100, zero price elasticity. Bots rope as point-to-point links; humans rope as locomotion. The fix is structural (see Open Questions), not a price.
 - megaworth (17% vs 24%), linklatch, atkobj-150: nulls with film.
 - exit-asym: parked on Rule 21 (31% cap cost for a cosmetic).
 
@@ -64,6 +64,17 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 ## Not implemented
 
 1. Rung-2 set-composition rule (map discriminator weighting).
+
+## Open questions for the owner
+
+1. **Rope locomotion (rung-2 off-graph tell).** The tell needs bots that
+   pull ropes opportunistically DURING ground travel (swing-assist), not
+   cheaper rope links — a new movement behavior touching the pmove
+   sub-step and hook phases. Recommendation: build it as sg_freeride
+   behind a cvar, trial it on the film pair like everything else; it is
+   the named blocker for rung 2 and nothing else addresses it. Working
+   everything it doesn't block meanwhile (route dither targets rung-2
+   tell #2 next).
 
 ## Canaries
 
