@@ -258,6 +258,13 @@ WCOMMIT=(1     1        1        1        1         2        1         1        
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
+# TAP VARIANCE (sg_tapvar, rung-3 ranked tell #2: razor cadence bins).
+# Skill-scaled per-shot re-aim beat on slow weapons. Armed s03 vs s04.
+# Bars: intershot_cv toward the human 0.58 anchor from 0.23; rangesep
+# and caps hold. Runs CONCURRENTLY with s06/s07 mode-2 -- independent
+# pairs, independent variables, one variable per pair.
+TAPVAR=(0     0        1        0        0         0        0         0        0        0)
+
 # NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
 # dead flat): the flood layer is exonerated -- a 90% rope-price cut
 # changes nothing observable. Mediator probes (rope rides at 1000 vs
@@ -387,6 +394,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_wswitch ${WSWITCH[$i]}"
                 echo "set sg_wcommit ${WCOMMIT[$i]}"
                 echo "set sg_ropecost ${ROPECOST[$i]}"
+                echo "set sg_tapvar ${TAPVAR[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"

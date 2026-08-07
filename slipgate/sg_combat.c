@@ -580,6 +580,11 @@ typedef struct
 	float		win_end;		/* when the current trigger window expires */
 	qboolean	win_fire;		/* is the current window a firing window */
 
+	/* tap variance (sg_tapvar): the beat between a slow weapon coming
+	 * ready and the next deliberate trigger press */
+	float		tap_until;
+	qboolean	tap_pending;
+
 	float		switch_next;	/* rate limit on weapon-switch requests */
 
 	int			band;			/* committed range band */
@@ -3739,6 +3744,44 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	{
 		sg_cbt_why[9]++;
 		return;
+	}
+
+	/*
+	 * TAP VARIANCE (sg_tapvar, rung-3 set #1 ranked tell #2). Every
+	 * judge read the rail cadence as "a single razor spike at ~1.7s,
+	 * zero spread": a held button refires a slow weapon the frame its
+	 * cycle completes, and the ON/OFF windows below never gate it
+	 * because the cycle outlasts the window rhythm. A human re-aims
+	 * between deliberate shots -- pub rail cadence is ragged. Each time
+	 * a slow weapon finishes firing and comes ready again, the next
+	 * press waits a skill-scaled beat drawn fresh per shot: the ladder's
+	 * bottom taps 0.2-0.7s late, the top 0.05-0.19s (pros with reload
+	 * cues ARE near-metronomic -- the spread stays honest to skill).
+	 */
+	if (gi.cvar("sg_tapvar", "0", 0)->value > 0.0f)
+	{
+		int hw = Combat_Held(self);
+
+		if (hw == SG_W_RAILGUN || hw == SG_W_SSHOTGUN ||
+		    hw == SG_W_ROCKETLAUNCHER || hw == SG_W_GRENADELAUNCHER ||
+		    hw == SG_W_SHOTGUN || hw == SG_W_BFG)
+		{
+			if (self->client->weaponstate == WEAPON_FIRING)
+				st->tap_pending = true;
+			else if (st->tap_pending &&
+			         self->client->weaponstate == WEAPON_READY)
+			{
+				st->tap_pending = false;
+				st->tap_until = level.time +
+				    Combat_SkillLerp(skill, 0.45f, 0.12f) *
+				    (0.4f + 1.2f * random());
+			}
+			if (level.time < st->tap_until)
+			{
+				sg_cbt_why[5]++;
+				return;
+			}
+		}
 	}
 
 	if (level.time >= st->win_end)
