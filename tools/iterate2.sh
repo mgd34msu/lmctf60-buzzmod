@@ -245,6 +245,14 @@ WSWITCH=(0     0        0        0        0         0        0         0        
 # caps must not fall.
 WCOMMIT=(0     0        0        0        0         1        0         0        0        0)
 
+# RUNG-2 SET #1 (2026-08-07, judges 11/18): the named tell is OFF-GRAPH
+# FRACTION -- humans grapple through open air 3-18% of samples, bots pin
+# near zero because the flood prices every rope +1000ms of ritual. The
+# dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
+# into the human band on the next route sheets; caps must not fall; the
+# 5v0 canary must stay flawless (a rope-happy wreck there kills it).
+ROPECOST=(1000  1000     400      1000     1000      1000     1000      1000     1000     1000)
+
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
 # pooled waves; no judge ever named the tell it was built for. Off,
@@ -366,6 +374,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_atkobj ${ATKOBJ[$i]}"
                 echo "set sg_wswitch ${WSWITCH[$i]}"
                 echo "set sg_wcommit ${WCOMMIT[$i]}"
+                echo "set sg_ropecost ${ROPECOST[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
                 echo "set sg_fandense ${FANDENSE[$i]}"

@@ -85,6 +85,26 @@ void SG_TeachFutility(int seed)
 		sg_futile[seed] = 60000;
 }
 
+/*
+ * THE ROPE'S PRICE AS A DOSE (sg_ropecost, rung-2 set #1). Three blind
+ * judges named the same tell on every caught route sheet: off-graph
+ * fraction -- humans spend 3-18% of samples >96u from any nav node
+ * (grapple flight through open air), bots pin near zero. The +1000
+ * ritual surcharge below is why: it prices legs over ropes nearly
+ * everywhere. It was fitted from a CARRIER's flail (wave 57); the rest
+ * of the roster inherited it. Default 1000 keeps today's flood
+ * exactly; the trial lowers it on one film arm. Read once per field
+ * build (Fields_Setup), not per relaxation.
+ */
+static int sg_ropecost_ms = 1000;
+
+void SG_RopecostRefresh(void)
+{
+	sg_ropecost_ms = (int)gi.cvar("sg_ropecost", "1000", 0)->value;
+	if (sg_ropecost_ms < 0)
+		sg_ropecost_ms = 0;
+}
+
 static int Link_EffCost(const rune_link_t *l)
 {
 	switch (l->action)
@@ -97,7 +117,7 @@ static int Link_EffCost(const rune_link_t *l)
 	 * covered 4s of field in 70s of flailing while a run would have flown.
 	 * Underpricing the ritual made the flood chain hooks where legs win.
 	 */
-	case RL_HOOK:       return l->cost_ms + 1000;
+	case RL_HOOK:       return l->cost_ms + sg_ropecost_ms;
 	case RL_DROP:       return l->cost_ms + 150;    /* align the lip line */
 	case RL_ROCKETJUMP: return l->cost_ms + 900;    /* raise RL + aim + pay */
 	default:            return l->cost_ms;
@@ -717,6 +737,7 @@ qboolean Fields_Setup(rune_t *r)
 
 	/* the next flood is this level's first: it carries the self-check */
 	sg_floodcheck_armed = true;
+	SG_RopecostRefresh();
 
 	rf = G_Find(NULL, FOFS(classname), "info_flag_red");
 	bf = G_Find(NULL, FOFS(classname), "info_flag_blue");
