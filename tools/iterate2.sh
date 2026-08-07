@@ -228,7 +228,12 @@ ATKOBJ=(125    125      125      125      125       125      125       125      
 
 # wswitch A/B takes the pair: the fight-sheet's switch-diagonal scalar
 # is the primary instrument (humans commit to a gun; bots alternate).
-WSWITCH=(0     0        0        0        0         1        0         0        0        0)
+# STRUCK 2026-08-07 (40 waves each arm, fightsheet pooled): wswitch=1
+# moved switch_diagonal_mass 0.696 -> 0.676, AWAY from the human anchor
+# (0.897 on lmctf44; commitment is the tell and HIGH is human), caps 40
+# -> 35. The named rung-3 gap is commitment (bot 0.68 vs human 0.90) --
+# the successor feature must SUPPRESS mid-fight switches, not add them.
+WSWITCH=(0     0        0        0        0         0        0         0        0        0)
 
 # PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
 # caps for cosmetics. Dose 70 cost 31% relative conversion over 22
