@@ -7324,10 +7324,28 @@ no_hold:;
 						heye[0] = e->s.origin[0];
 						heye[1] = e->s.origin[1];
 						heye[2] = e->s.origin[2] + e->viewheight;
+						/*
+						 * WANDER THROW (sg_ropetravel 2). The wave
+						 * reports killed the volume theory: fleet
+						 * bots already land ~600 ropes a game and
+						 * off-graph never moves, because proven-link
+						 * flight rides exactly the air the node cloud
+						 * was mined from. The human 0.03-0.18 is
+						 * IDIOSYNCRATIC flight -- one-off arcs through
+						 * space nobody routes through. Dose 2: one
+						 * throw in ~7 widens the fan to +/-60 degrees
+						 * and takes the arc for its own sake.
+						 */
+						int hwander =
+						    (gi.cvar("sg_ropetravel", "0", 0)->value
+						     >= 2.0f && (rand() % 7) == 0);
+
 						for (hfan = 0; hfan < 3; hfan++)
 						{
-						float hy2 = hyaw + ((hfan == 1) ? 0.384f :
-						                    (hfan == 2) ? -0.384f : 0.0f);
+						float hy2 = hyaw + (hwander
+						    ? ((hfan - 1) * 1.05f)
+						    : ((hfan == 1) ? 0.384f :
+						       (hfan == 2) ? -0.384f : 0.0f));
 						/*
 						 * FREERIDE v2 (sg_freeride 2, rung-2 set #2:
 						 * failed 16/18 on the same off-graph tell).

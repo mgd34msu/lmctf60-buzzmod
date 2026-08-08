@@ -286,21 +286,22 @@ AIMTEX=(1     1        1        1        1         1        1         1        0
 # feature; gate-widening cannot reach it. Dark until built.
 FREERIDE=(0    0        0        0        0         0        0         0        0        0)
 
-# ROPE-PRIMARY TRAVEL (sg_ropetravel, rung-2's named blocker, owner
-# signed the concept): chain beats at apex (0.25s) and landing (0.35s),
-# speed ceiling 700, freeride gates inherited. Probe: 275 rope
-# completions vs stock ~25 -- the 10x the arithmetic demanded -- zero
-# drownings. Armed s03 vs s04. Bars: off-graph 0.024 -> toward the
-# 0.03-0.18 human band; caps hold; canary flawless.
-ROPETRAVEL=(0  0        1        0        0         0        0         0        0        0)
+# ROPETRAVEL dose 1 null (off-graph 0.024 vs 0.023) and the wave
+# reports voided the volume theory: BOTH arms already land ~600 ropes a
+# game -- proven-link flight is on-graph by construction (the node
+# cloud was mined from that same air). The human 0.03-0.18 band is
+# idiosyncratic one-off arcs. Dose 2 = wander throw: 1-in-7 speedhook
+# opportunities widen the fan to +/-60deg and take the arc for its own
+# sake. Same bars.
+ROPETRAVEL=(0  0        2        0        0         0        0         0        0        0)
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
-# TAPVAR v2 dose 1: executes (probe) but null on the eye (0.109 vs
-# 0.125) -- 0.2s jitter cannot widen a 1.7s cycle. Dose 3 = 0.24-0.66s
-# holds at top skill, the scale human re-aim occupies. If this misses,
-# the tell is fire discipline (hold while repositioning), not jitter.
-TAPVAR=(0     0        0        0        0         3        0         0        0        0)
+# TAPVAR STRUCK FINAL 2026-08-08: dose 3 flat too (0.144 vs 0.147) with
+# caps leaning down 10 vs 18. Executed, measured, never moved the eye at
+# any dose. The cadence tell needs FIRE DISCIPLINE (hold while
+# repositioning) -- design work, not jitter. Ledgered.
+TAPVAR=(0     0        0        0        0         0        0         0        0        0)
 
 # ROUTE DITHER struck 2026-08-08 (9 waves/arm): entropy 1.493 vs 1.570
 # (wrong direction on the proxy), off/caps flat. The aggregate scalar
