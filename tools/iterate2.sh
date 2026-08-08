@@ -286,6 +286,14 @@ AIMTEX=(1     1        1        1        1         1        1         1        0
 # feature; gate-widening cannot reach it. Dark until built.
 FREERIDE=(0    0        0        0        0         0        0         0        0        0)
 
+# ROPE-PRIMARY TRAVEL (sg_ropetravel, rung-2's named blocker, owner
+# signed the concept): chain beats at apex (0.25s) and landing (0.35s),
+# speed ceiling 700, freeride gates inherited. Probe: 275 rope
+# completions vs stock ~25 -- the 10x the arithmetic demanded -- zero
+# drownings. Armed s03 vs s04. Bars: off-graph 0.024 -> toward the
+# 0.03-0.18 human band; caps hold; canary flawless.
+ROPETRAVEL=(0  0        1        0        0         0        0         0        0        0)
+
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
 # TAPVAR v2 dose 1: executes (probe) but null on the eye (0.109 vs
@@ -432,6 +440,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_tapvar ${TAPVAR[$i]}"
                 echo "set sg_freeride ${FREERIDE[$i]}"
                 echo "set sg_routedither ${ROUTEDITHER[$i]}"
+                echo "set sg_ropetravel ${ROPETRAVEL[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"

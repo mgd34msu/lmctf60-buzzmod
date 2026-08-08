@@ -6916,6 +6916,10 @@ no_hold:;
 				bot->hook_phase = 0;
 				bot->flow_release = false;
 				bot->commit_link = -1;
+				/* ropetravel: a clean apex is a link in the chain --
+				 * the next rope is legal on the next beat */
+				if (gi.cvar("sg_ropetravel", "0", 0)->value > 0.0f)
+					bot->speedhook_next = level.time + 0.25f;
 				if (gi.cvar("sg_debug", "0", 0)->value)
 					gi.dprintf("HOOKEND %s apex\n",
 					           e->client->pers.netname);
@@ -6947,6 +6951,12 @@ no_hold:;
 				/* a rope ride ENDS its commitment: wherever this landing
 				 * is, the next step is argued fresh from here */
 				bot->commit_link = -1;
+				/* ropetravel: a grounded landing chains too -- the beat
+				 * is slightly longer than the apex's because the legs
+				 * carry a step before the next throw */
+				if (gi.cvar("sg_ropetravel", "0", 0)->value > 0.0f &&
+				    e->groundentity && bot->hookfail_streak == 0)
+					bot->speedhook_next = level.time + 0.35f;
 
 				/*
 				 * A ride that did not SERVE the field failed, and a
@@ -7278,12 +7288,28 @@ no_hold:;
 				    level.time >= bot->speedhook_next &&
 				    e->groundentity && e->waterlevel == 0 &&
 				    goal_field[bot->seed] >
-				        (gi.cvar("sg_freeride", "0", 0)->value > 0.0f
+				        ((gi.cvar("sg_freeride", "0", 0)->value > 0.0f ||
+				          gi.cvar("sg_ropetravel", "0", 0)->value > 0.0f)
 				             ? 2000 : 4000))
 				{
+					/*
+					 * ROPE-PRIMARY TRAVEL (sg_ropetravel, rung-2's
+					 * named blocker): humans TRAVEL by rope -- 3-18%
+					 * of their samples are flight -- and the
+					 * arithmetic killed every occasional-rope cut
+					 * (0.3% of player time at doubled volume). Under
+					 * ropetravel the successful ride's cooldown drops
+					 * to a 0.25s chain beat (set at the landing/apex
+					 * sites), the speed ceiling lifts to 700 so fast
+					 * landings chain, and the apex-chaining machinery
+					 * already in the tree does the rest. The rope
+					 * becomes the gait; legs become the connector.
+					 */
 					float hsp2 = e->velocity[0] * e->velocity[0]
 					           + e->velocity[1] * e->velocity[1];
-					float hcap = (gi.cvar("sg_freeride", "0", 0)->value
+					float hcap = (gi.cvar("sg_ropetravel", "0",
+					              0)->value > 0.0f) ? 700.0f :
+					             (gi.cvar("sg_freeride", "0", 0)->value
 					              > 0.0f) ? 560.0f : 480.0f;
 
 					if (hsp2 > 220.0f * 220.0f && hsp2 < hcap * hcap)
@@ -7343,7 +7369,9 @@ no_hold:;
 							/* the side probes exist only under
 							 * freeride; stock behavior is one look */
 							if (gi.cvar("sg_freeride", "0", 0)->value
-							    > 0.0f)
+							    > 0.0f ||
+							    gi.cvar("sg_ropetravel", "0",
+							            0)->value > 0.0f)
 								continue;
 							break;
 						}
@@ -7363,7 +7391,9 @@ no_hold:;
 								bot->hook_deadline = level.time + 1.0f;
 								bot->speedhook = true;
 								bot->speedhook_next = level.time
-								    + ((gi.cvar("sg_freeride", "0",
+								    + ((gi.cvar("sg_ropetravel", "0",
+								        0)->value > 0.0f) ? 1.0f :
+								       (gi.cvar("sg_freeride", "0",
 								        0)->value > 0.0f) ? 2.0f : 4.0f)
 								      / SG_PersonaHookScale(e);
 							}
