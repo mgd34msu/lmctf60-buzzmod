@@ -262,12 +262,16 @@ WSWITCH=(0     0        0        0        0         0        0         0        
 # fleet-wide stays. The blaster tell's accuracy half goes to aimtexture.
 WCOMMIT=(1     1        1        1        1         1        1         1        0        1)
 
-# AIMTEXTURE enters trial (TRIALS.md queue; the set-#1 judges' words:
-# "machine-grade aim", "hit triangles on every burst", "spawn-weapon
-# accuracy humans don't show"). Instrument: mean_aim_offset_deg, Stage-A
-# separability 1.000, human 10.89 vs bot 6.97 deg. Bars: offset toward
-# the human anchor; caps hold.
-AIMTEX=(0     0        0        0        0         1        0         0        0        0)
+# AIMTEXTURE ADOPTED fleet-wide 2026-08-08 (16 waves/arm): aim offset
+# 7.66+-0.14 vs 7.36+-0.12 toward the 10.89 human anchor, caps flat,
+# slow-cadence raggedness up as a side gain. Small, free, honest.
+# Dose-ladder (amplitude scaling) is the noted future step. s09 stays 0.
+AIMTEX=(1     1        1        1        1         1        1         1        0        1)
+
+# TAPVAR RE-TRIAL against its new eye (slow_cadence_cv, sep 0.9375;
+# the old aggregate diluted it to a false null). s06 armed vs s07.
+# Bars: slow_cadence_cv 0.13 -> toward the 0.25-0.30 human band; caps
+# hold.
 
 # RUNG-2 SET #1 (2026-08-07, judges 11/18): the named tell is OFF-GRAPH
 # FRACTION -- humans grapple through open air 3-18% of samples, bots pin
@@ -284,12 +288,13 @@ FREERIDE=(0    0        0        0        0         0        0         0        
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
-TAPVAR=(0     0        0        0        0         0        0         0        0        0)
+TAPVAR=(0     0        0        0        0         1        0         0        0        0)
 
-# ROUTE DITHER (rung-2 tell #2: p=1.0 transition cells): per-visit
-# tie-break noise under one hop of gradient. Armed s03 vs s04.
-# Bars: off-diagonal transition mass up on route sheets; caps hold.
-ROUTEDITHER=(0 0        120      0        0         0        0         0        0        0)
+# ROUTE DITHER struck 2026-08-08 (9 waves/arm): entropy 1.493 vs 1.570
+# (wrong direction on the proxy), off/caps flat. The aggregate scalar
+# cannot see cell-level determinism; a max-transition-mass eye is the
+# prerequisite for any retry. Dark.
+ROUTEDITHER=(0 0        0        0        0         0        0         0        0        0)
 
 # NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
 # dead flat): the flood layer is exonerated -- a 90% rope-price cut
