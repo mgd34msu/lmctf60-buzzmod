@@ -177,6 +177,16 @@ CLASS_ORDER = [CLASS_BLASTER, CLASS_SHOTGUN, CLASS_MACHINEGUN, CLASS_GRENADE,
 CLASS_INDEX = {c: i for i, c in enumerate(CLASS_ORDER)}
 N_CLASSES = len(CLASS_ORDER)
 
+# The slow-refire weapons: railgun, super shotgun, rocket launcher, grenade
+# launcher, shotgun, BFG (super shotgun and shotgun already share
+# CLASS_SHOTGUN, see MZ_TO_CLASS below).  Used to isolate the cadence tell a
+# judge actually reads off panel 5 -- rail/shotgun/rocket panels -- from the
+# rapid-fire classes (blaster, machinegun, hyperblaster) whose sub-second
+# refire cycle dominates the class-weighted intershot_cv average and dilutes
+# it (see slow_cadence_cv in _compute_scalars).
+SLOW_CLASSES = {CLASS_RAIL, CLASS_SHOTGUN, CLASS_ROCKET, CLASS_GRENADE,
+                CLASS_BFG}
+
 MZ_TO_CLASS = {
     MZ_BLASTER: CLASS_BLASTER,
     MZ_MACHINEGUN: CLASS_MACHINEGUN,
@@ -1126,6 +1136,7 @@ SCALAR_KEYS = [
     'brokeoff_share',
     'switch_diagonal_mass',
     'intershot_cv',
+    'slow_cadence_cv',
     'mean_aim_offset_deg',
 ]
 
@@ -1136,6 +1147,7 @@ SCALAR_PANEL = {
     'brokeoff_share': 'panel 4 (disengage traces)',
     'switch_diagonal_mass': 'panel 6 (weapon-switch matrix)',
     'intershot_cv': 'panel 5 (fire discipline)',
+    'slow_cadence_cv': 'panel 5 (fire discipline, slow weapons only)',
     'mean_aim_offset_deg': '(no panel -- diagnostic scalar only)',
 }
 
@@ -1301,6 +1313,24 @@ def _compute_scalars(ranges_by_class, intervals, approaches, dis_mix,
         wts.append(len(vals))
     cv = (float(np.average(cvs, weights=wts)) if cvs else None)
 
+    # Same maths as intershot_cv, restricted to the slow-refire classes
+    # (SLOW_CLASSES): rail, shotgun, rocket, grenade, bfg.  intershot_cv pools
+    # every class weighted by shot count, and the rapid-fire classes
+    # (blaster, machinegun, hyperblaster) throw far more shots than the slow
+    # ones, so they dominate that average and dilute the ragged-cadence tell
+    # a judge actually reads off the rail/shotgun/rocket panels.
+    slow_cvs, slow_wts = [], []
+    for c, vals in intervals.items():
+        if c not in SLOW_CLASSES or len(vals) < 8:
+            continue
+        m = float(np.mean(vals))
+        if m <= 0:
+            continue
+        slow_cvs.append(float(np.std(vals)) / m)
+        slow_wts.append(len(vals))
+    slow_cv = (float(np.average(slow_cvs, weights=slow_wts))
+               if slow_cvs else None)
+
     aim = [s['aim_off'] for s in shots if s['aim_off'] is not None]
     aim_mean = float(np.mean(aim)) if len(aim) >= 8 else None
 
@@ -1319,6 +1349,7 @@ def _compute_scalars(ranges_by_class, intervals, approaches, dis_mix,
         'brokeoff_share': (dis_mix['broke off'] if dis_total else None),
         'switch_diagonal_mass': diag_mass,
         'intershot_cv': cv,
+        'slow_cadence_cv': slow_cv,
         'mean_aim_offset_deg': aim_mean,
     }
 
