@@ -583,7 +583,8 @@ typedef struct
 	/* tap variance (sg_tapvar): the beat between a slow weapon coming
 	 * ready and the next deliberate trigger press */
 	float		tap_until;
-	qboolean	tap_pending;
+	qboolean	tap_pending;    /* legacy of the weaponstate cut; unused */
+	int			tap_ammo;       /* last seen ammo count for the held gun */
 
 	float		switch_next;	/* rate limit on weapon-switch requests */
 
@@ -3766,15 +3767,29 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		    hw == SG_W_ROCKETLAUNCHER || hw == SG_W_GRENADELAUNCHER ||
 		    hw == SG_W_SHOTGUN || hw == SG_W_BFG)
 		{
-			if (self->client->weaponstate == WEAPON_FIRING)
-				st->tap_pending = true;
-			else if (st->tap_pending &&
-			         self->client->weaponstate == WEAPON_READY)
+			/*
+			 * Shot detection by AMMO DECREMENT, not weaponstate: under
+			 * a held trigger the gun re-enters FIRING inside the same
+			 * server frame and a 10Hz think never observes READY -- the
+			 * first cut of this feature was inert for exactly that
+			 * reason (probe: 0 taps in 400s of 5v5). Ammo cannot lie.
+			 */
 			{
-				st->tap_pending = false;
-				st->tap_until = level.time +
-				    Combat_SkillLerp(skill, 0.45f, 0.12f) *
-				    (0.4f + 1.2f * random());
+				int ta = (self->client->ammo_index > 0)
+				    ? self->client->pers.inventory[self->client->ammo_index]
+				    : 0;
+
+				if (ta < st->tap_ammo)
+				{
+					st->tap_until = level.time +
+					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
+					    (0.4f + 1.2f * random());
+					if (gi.cvar("sg_debug", "0", 0)->value)
+						gi.dprintf("TAPDBG %s w=%d delay=%.2f\n",
+						           self->client->pers.netname, hw,
+						           st->tap_until - level.time);
+				}
+				st->tap_ammo = ta;
 			}
 			if (level.time < st->tap_until)
 			{
