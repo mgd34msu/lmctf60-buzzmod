@@ -214,10 +214,16 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # oscillation into the margin ring. Bars: off-graph 0.024 -> 0.05+;
 # caps hold; canary flawless (rung-1 film risk noted -- amplitude is
 # raw-movement texture).
-# ribbon 112: null #8 on off-graph (0.025 vs 0.027) -- the edge strip
-# is fenced by fall-safety feelers; amplitude cannot cross a veto.
-# Owner question posted (edge-feeler relaxation vs accept-as-residual).
+# ribbon 112 was null #8 BECAUSE lookahead/pursuit overwrite the aim
+# after the ribbon offset lands. EDGERIDE re-applies the offset LAST on
+# the final road point (owner ruling on OQ#2: one trial, falls = kill
+# switch). Wall trace and every fall guard untouched; carrier exempt.
 RIBBON=(48       48       48       48       48        48       48        48       0        48)
+
+# Bars: off-graph 0.024 -> 0.05+; ZERO environmental deaths above
+# baseline on the trial arm and canary; caps hold. Any fall regression
+# = struck on the spot, tell accepted as residual per the ruling.
+EDGERIDE=(0     0        112      0        0         0        0         0        0        0)
 # route jitter (359+): per-bot-per-life deterministic pricing tilt
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
@@ -459,6 +465,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_routedither ${ROUTEDITHER[$i]}"
                 echo "set sg_ropetravel ${ROPETRAVEL[$i]}"
                 echo "set sg_firedisc ${FIREDISC[$i]}"
+                echo "set sg_edgeride ${EDGERIDE[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"

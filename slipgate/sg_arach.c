@@ -7236,6 +7236,51 @@ no_hold:;
 					}
 				}
 			}
+			/*
+			 * EDGERIDE (sg_edgeride, owner ruling on Open Question #2).
+			 * The forensics: 62% of the last rung-2 tell is human feet
+			 * 10-40u past the seed edge on walkway margins. Ribbon
+			 * offsets died here twice because lookahead and pursuit
+			 * OVERWRITE the aim after the offset lands ("the steering
+			 * re-centers whatever the aim does"). So the offset is
+			 * re-applied LAST, to the final road point, per-leg side
+			 * and amplitude from the ribbon state scaled to the cvar.
+			 * The wall trace still collapses a blocked offset; the
+			 * feeler fan and every fall guard run downstream untouched
+			 * -- feet ride AT the safety boundary, never past it.
+			 * Carrier exempt. Falls are the trial's kill switch.
+			 */
+			if (gi.cvar("sg_edgeride", "0", 0)->value > 0.0f &&
+			    l->action == RL_RUN && !precision &&
+			    e->groundentity && bot->hook_phase == 0 &&
+			    sg_cur_role != SG_ROLE_CARRY &&
+			    bot->ribbon_off != 0.0f)
+			{
+				vec3_t edir, eoff, eprobe;
+				trace_t etr;
+				float el, esc;
+
+				VectorSubtract(aim, e->s.origin, edir);
+				edir[2] = 0.0f;
+				el = VectorLength(edir);
+				if (el > 48.0f)
+				{
+					esc = gi.cvar("sg_edgeride", "0", 0)->value /
+					      ((gi.cvar("sg_ribbon", "48", 0)->value
+					        > 0.0f)
+					       ? gi.cvar("sg_ribbon", "48", 0)->value
+					       : 48.0f);
+					eoff[0] = -edir[1] / el * bot->ribbon_off * esc;
+					eoff[1] = edir[0] / el * bot->ribbon_off * esc;
+					eoff[2] = 0.0f;
+					VectorAdd(aim, eoff, eprobe);
+					etr = gi.trace(e->s.origin, e->mins, e->maxs,
+					               eprobe, e, MASK_PLAYERSOLID);
+					if (etr.fraction >= 1.0f)
+						VectorCopy(eprobe, aim);
+				}
+			}
+
 			if (l->action == RL_JUMP && e->groundentity)
 			{
 				/*
