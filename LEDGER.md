@@ -12,7 +12,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | rope-primary travel IN TRIAL | built on the tree's apex-chain machinery; probe 275 completions vs stock ~25 — the 10× the arithmetic demanded |
+| 2. Routes | forensics rewrote the tell; ribbon dose in trial | off-graph = 60u edge strip; 62% of gap is grounded edge-hugging past the 96u seed radius; ribbon 48 inside by construction; 0% AFK |
 | 3. Fights | set #2: 14/18 (from 18/18) — first bot passes | ranked tells: metronome cadence (tapvar v2 armed — v1 was INERT, never executed), blaster diet+accuracy, range truncation ~900 vs 1600, straight-in lobe |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
@@ -22,7 +22,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| **ropetravel dose 2** (wander throw) | s03 vs s04 ctrl | r596, wave ~607 | off-graph → 0.03–0.18; caps hold; canary flawless | ~8 waves/arm |
+| **ribbon 112** (forensics-guided) | s03 vs s04=48 ctrl | wave ~616 | off-graph 0.024 → 0.05+; caps hold; canary flawless | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
@@ -45,6 +45,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 - **84-wave breather cost flag** (2026-08-07): dead — its control arm also ran ribbon/jitter 0; three variables, not one. Superseded by the clean ladder.
 - **freeride v1+v2 family** (2026-08-08): closed — even doubled ride volume is 0.3% of player time vs the 3–18% human band; off-graph is locomotion identity. Rope-primary travel is the named rung-2 feature, unbuilt.
 - **tapvar, final** (2026-08-08): struck at every dose once actually executing — the razor-cadence tell is FIRE DISCIPLINE (hold while repositioning), design owed, not jitter.
+- **rope family, complete** (2026-08-08): seven mechanisms flat; forensics showed why — route/action choices stay on the seed cloud by construction; the metric is a boundary strip and the gap is lateral FOOT PLACEMENT. The lever was the adopted ribbon all along.
 - **ropetravel volume theory** (2026-08-08): voided by the wave reports — both arms already land ~600 ropes/game; proven-link flight is on-graph by construction. Human off-graph is idiosyncratic arcs; wander throw (dose 2) tests that.
 - **tapvar v1 'nulls'** (2026-08-08): VOID — the feature never executed (weaponstate invisible at think cadence); v2 (ammo decrement) in trial. Provenance rule applied: verdicts on an inert feature judge nothing.
 - **route dither** (2026-08-08): struck — aggregate entropy proxy moved wrong-direction; cell-level max-transition-mass eye required for retry.
