@@ -220,10 +220,12 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # switch). Wall trace and every fall guard untouched; carrier exempt.
 RIBBON=(48       48       48       48       48        48       48        48       0        48)
 
-# Bars: off-graph 0.024 -> 0.05+; ZERO environmental deaths above
-# baseline on the trial arm and canary; caps hold. Any fall regression
-# = struck on the spot, tell accepted as residual per the ruling.
-EDGERIDE=(0     0        112      0        0         0        0         0        0        0)
+# EDGERIDE STRUCK BY ITS KILL SWITCH 2026-08-08: off-graph flat (0.026
+# vs 0.031) AND falls 3 vs 1. Per the owner's ruling the edge-strip
+# tell is ACCEPTED AS RESIDUAL -- nine mechanisms, forensics, and a
+# measured fall cost on the record. Never falling is the accepted
+# signature.
+EDGERIDE=(0     0        0        0        0         0        0         0        0        0)
 # route jitter (359+): per-bot-per-life deterministic pricing tilt
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
@@ -311,13 +313,12 @@ ROPETRAVEL=(0  0        0        0        0         0        0         0        
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
-# FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell): trigger gated on
-# the bot's OWN heading stability (0.18s planted beat; strafe reversals
-# restart the clock; carrier exempt). The ragged human inter-shot
-# spread is the movement showing through the trigger. Armed s06 vs s07.
-# Bars: slow_cadence_cv toward 0.25-0.30; hit rate may DROP (that is
-# human); caps hold.
-FIREDISC=(0    0        0        0        0         1        0         0        0        0)
+# FIRE DISCIPLINE struck 2026-08-08: planted-shot gating SYNCHRONIZES
+# fire with stability windows -- cadence got MORE regular (0.121 vs
+# 0.162), caps up 16v12 but the bar is the bar. Fifth cadence mechanism
+# down; no sixth blind cut -- set #3 asks the judges what they still
+# see.
+FIREDISC=(0    0        0        0        0         0        0         0        0        0)
 
 # TAPVAR STRUCK FINAL 2026-08-08: dose 3 flat too (0.144 vs 0.147) with
 # caps leaning down 10 vs 18. Executed, measured, never moved the eye at

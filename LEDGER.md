@@ -12,7 +12,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | 8 nulls; edge strip = fall-safety margin; OQ#2 posted | ribbon-112 null too — amplitude cannot cross a feeler veto; awaiting owner ruling on edge-feeler relaxation |
+| 2. Routes | edge-strip tell ACCEPTED AS RESIDUAL (owner ruling executed) | edgeride struck by its own kill switch (falls 3v1, off-graph flat) — 9 mechanisms + forensics + fall cost on record; set #3 measures the residual baseline |
 | 3. Fights | set #2: 14/18 (from 18/18) — first bot passes | ranked tells: metronome cadence (tapvar v2 armed — v1 was INERT, never executed), blaster diet+accuracy, range truncation ~900 vs 1600, straight-in lobe |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
@@ -22,7 +22,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| (rung-2 paused on Open Question #2; rung-3 fire-discipline building) | | | | |
+| (both pairs steady; set #3 pairs cutting from clean film) | | | | |
 
 ## Adopted (film + data on record, most recent first)
 
@@ -89,7 +89,8 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 ## Open questions for the owner
 
-2. **The edge strip (rung-2's last tell).** Eight mechanisms nulled; the
+2. **RESOLVED — the edge strip.** Ruling executed: one edgeride trial, struck by its own fall kill switch. Residual accepted.
+   Original question: Eight mechanisms nulled; the
    forensics say the human signal is feet 10–40u past the seed edge on
    walkway margins — ground the bots' fall-safety feelers refuse. The
    two honest paths: (a) sg_edgeride — relax the edge margin on grounded
