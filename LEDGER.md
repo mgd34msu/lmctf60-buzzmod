@@ -12,7 +12,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | set #2 FAILED 16/18; blocked on rope-primary locomotion | off-graph anchors every bot call; gate-widening family closed by arithmetic |
+| 2. Routes | rope-primary travel IN TRIAL | built on the tree's apex-chain machinery; probe 275 completions vs stock ~25 — the 10× the arithmetic demanded |
 | 3. Fights | set #2: 14/18 (from 18/18) — first bot passes | ranked tells: metronome cadence (tapvar v2 armed — v1 was INERT, never executed), blaster diet+accuracy, range truncation ~900 vs 1600, straight-in lobe |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
@@ -22,7 +22,8 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| **tapvar v2** (ammo-decrement, actually fires) | s06 vs s07 ctrl | r591, wave ~589 | slow_cadence_cv → toward 0.25–0.30; caps hold | ~8 waves/arm |
+| **ropetravel** (rung-2 blocker) | s03 vs s04 ctrl | r594, wave ~597 | off-graph → 0.03–0.18 band; caps hold; canary flawless | ~8 waves/arm |
+| **tapvar dose 3** (0.24–0.66s holds) | s06 vs s07 ctrl | r593, wave ~595 | slow_cadence_cv → 0.25–0.30; caps hold | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
