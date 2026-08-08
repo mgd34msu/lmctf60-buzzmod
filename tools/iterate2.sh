@@ -214,7 +214,10 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # oscillation into the margin ring. Bars: off-graph 0.024 -> 0.05+;
 # caps hold; canary flawless (rung-1 film risk noted -- amplitude is
 # raw-movement texture).
-RIBBON=(48       48       112      48       48        48       48        48       0        48)
+# ribbon 112: null #8 on off-graph (0.025 vs 0.027) -- the edge strip
+# is fenced by fall-safety feelers; amplitude cannot cross a veto.
+# Owner question posted (edge-feeler relaxation vs accept-as-residual).
+RIBBON=(48       48       48       48       48        48       48        48       0        48)
 # route jitter (359+): per-bot-per-life deterministic pricing tilt
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =

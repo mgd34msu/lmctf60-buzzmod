@@ -12,7 +12,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | forensics rewrote the tell; ribbon dose in trial | off-graph = 60u edge strip; 62% of gap is grounded edge-hugging past the 96u seed radius; ribbon 48 inside by construction; 0% AFK |
+| 2. Routes | 8 nulls; edge strip = fall-safety margin; OQ#2 posted | ribbon-112 null too — amplitude cannot cross a feeler veto; awaiting owner ruling on edge-feeler relaxation |
 | 3. Fights | set #2: 14/18 (from 18/18) — first bot passes | ranked tells: metronome cadence (tapvar v2 armed — v1 was INERT, never executed), blaster diet+accuracy, range truncation ~900 vs 1600, straight-in lobe |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
@@ -22,7 +22,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| **ribbon 112** (forensics-guided) | s03 vs s04=48 ctrl | wave ~616 | off-graph 0.024 → 0.05+; caps hold; canary flawless | ~8 waves/arm |
+| (rung-2 paused on Open Question #2; rung-3 fire-discipline building) | | | | |
 
 ## Adopted (film + data on record, most recent first)
 
@@ -86,6 +86,18 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
    the named blocker for rung 2 and nothing else addresses it. Working
    everything it doesn't block meanwhile (route dither targets rung-2
    tell #2 next).
+
+## Open questions for the owner
+
+2. **The edge strip (rung-2's last tell).** Eight mechanisms nulled; the
+   forensics say the human signal is feet 10–40u past the seed edge on
+   walkway margins — ground the bots' fall-safety feelers refuse. The
+   two honest paths: (a) sg_edgeride — relax the edge margin on grounded
+   walkway legs behind a cvar, falls as a hard guard (Rule 21 watch); or
+   (b) accept the tell as a standing residual and judge rung-2 with it
+   in place. Recommendation: try (a) once — a single dose trial with
+   fall-count as an automatic kill switch; if it costs a single canary
+   fall, (b) becomes the ruling. Rung-3 work continues meanwhile.
 
 ## Canaries
 
