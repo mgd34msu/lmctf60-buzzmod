@@ -286,14 +286,12 @@ AIMTEX=(1     1        1        1        1         1        1         1        0
 # feature; gate-widening cannot reach it. Dark until built.
 FREERIDE=(0    0        0        0        0         0        0         0        0        0)
 
-# ROPETRAVEL dose 1 null (off-graph 0.024 vs 0.023) and the wave
-# reports voided the volume theory: BOTH arms already land ~600 ropes a
-# game -- proven-link flight is on-graph by construction (the node
-# cloud was mined from that same air). The human 0.03-0.18 band is
-# idiosyncratic one-off arcs. Dose 2 = wander throw: 1-in-7 speedhook
-# opportunities widen the fan to +/-60deg and take the arc for its own
-# sake. Same bars.
-ROPETRAVEL=(0  0        2        0        0         0        0         0        0        0)
+# ROPETRAVEL family CLOSED 2026-08-08: dose 2 (wander throw) null too,
+# 0.022 vs 0.027 -- SEVEN rope-side mechanisms flat on this instrument.
+# The tell's model is under forensic dissection (what physically makes
+# human off-graph samples: flight? camping? AFK residue, which Rule 20
+# accepts as permanent?). No further cuts until the film answers.
+ROPETRAVEL=(0  0        0        0        0         0        0         0        0        0)
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
