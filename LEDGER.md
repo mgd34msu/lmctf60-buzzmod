@@ -22,8 +22,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| **ropetravel** (rung-2 blocker) | s03 vs s04 ctrl | r594, wave ~597 | off-graph → 0.03–0.18 band; caps hold; canary flawless | ~8 waves/arm |
-| **tapvar dose 3** (0.24–0.66s holds) | s06 vs s07 ctrl | r593, wave ~595 | slow_cadence_cv → 0.25–0.30; caps hold | ~8 waves/arm |
+| **ropetravel dose 2** (wander throw) | s03 vs s04 ctrl | r596, wave ~607 | off-graph → 0.03–0.18; caps hold; canary flawless | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
@@ -45,6 +44,8 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 - **smap05 rune regeneration** (2026-08-07): struck — graph census shows zero dead-end seeds post-wading-fix; 14 isolated orphans (1%) cannot trap.
 - **84-wave breather cost flag** (2026-08-07): dead — its control arm also ran ribbon/jitter 0; three variables, not one. Superseded by the clean ladder.
 - **freeride v1+v2 family** (2026-08-08): closed — even doubled ride volume is 0.3% of player time vs the 3–18% human band; off-graph is locomotion identity. Rope-primary travel is the named rung-2 feature, unbuilt.
+- **tapvar, final** (2026-08-08): struck at every dose once actually executing — the razor-cadence tell is FIRE DISCIPLINE (hold while repositioning), design owed, not jitter.
+- **ropetravel volume theory** (2026-08-08): voided by the wave reports — both arms already land ~600 ropes/game; proven-link flight is on-graph by construction. Human off-graph is idiosyncratic arcs; wander throw (dose 2) tests that.
 - **tapvar v1 'nulls'** (2026-08-08): VOID — the feature never executed (weaponstate invisible at think cadence); v2 (ammo decrement) in trial. Provenance rule applied: verdicts on an inert feature judge nothing.
 - **route dither** (2026-08-08): struck — aggregate entropy proxy moved wrong-direction; cell-level max-transition-mass eye required for retry.
 - **freeride** (2026-08-07): STRUCK as armed — 2.2× rope volume, off-graph flat 0.024 vs 0.027 (speedhook arcs hug the corridor node cloud; human mass is HIGH arcs through open space). Steep-anchor geometry is the ledgered next hypothesis. Caps dipped 10 vs 18.
