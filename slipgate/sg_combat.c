@@ -3781,7 +3781,12 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 
 				if (ta < st->tap_ammo)
 				{
+					/* the cvar is a DOSE: 1 = the 0.08-0.22s jitter
+					 * that provably fires but cannot widen a 1.7s
+					 * cycle's CV; 3 = 0.24-0.66s holds, the scale a
+					 * human's deliberate re-aim actually occupies */
 					st->tap_until = level.time +
+					    gi.cvar("sg_tapvar", "0", 0)->value *
 					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
 					    (0.4f + 1.2f * random());
 					if (gi.cvar("sg_debug", "0", 0)->value)

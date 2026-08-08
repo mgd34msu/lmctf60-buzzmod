@@ -288,13 +288,11 @@ FREERIDE=(0    0        0        0        0         0        0         0        
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
-# TAPVAR v2 (ammo-decrement shot detection): the weaponstate cut was
-# INERT -- a held trigger re-enters FIRING within the frame and a 10Hz
-# think never sees READY (probe: 0 taps in 400s). Both prior "nulls"
-# were trials of a feature that never executed. v2 taps on ammo
-# decrement (probe: fires, delays 0.08-0.22s). Re-armed s06 vs s07.
-# Bars unchanged: slow_cadence_cv toward 0.25-0.30; caps hold.
-TAPVAR=(0     0        0        0        0         1        0         0        0        0)
+# TAPVAR v2 dose 1: executes (probe) but null on the eye (0.109 vs
+# 0.125) -- 0.2s jitter cannot widen a 1.7s cycle. Dose 3 = 0.24-0.66s
+# holds at top skill, the scale human re-aim occupies. If this misses,
+# the tell is fire discipline (hold while repositioning), not jitter.
+TAPVAR=(0     0        0        0        0         3        0         0        0        0)
 
 # ROUTE DITHER struck 2026-08-08 (9 waves/arm): entropy 1.493 vs 1.570
 # (wrong direction on the proxy), off/caps flat. The aggregate scalar
