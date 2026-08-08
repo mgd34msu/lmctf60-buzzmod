@@ -7302,10 +7302,25 @@ no_hold:;
 						{
 						float hy2 = hyaw + ((hfan == 1) ? 0.384f :
 						                    (hfan == 2) ? -0.384f : 0.0f);
+						/*
+						 * FREERIDE v2 (sg_freeride 2, rung-2 set #2:
+						 * failed 16/18 on the same off-graph tell).
+						 * v1 doubled ride volume and moved NOTHING,
+						 * because a 30-degree rope skims the corridor
+						 * and its flight never leaves the node cloud;
+						 * human off-graph mass is HIGH arcs through
+						 * open room air. v2 probes ~54 degrees up:
+						 * shorter reach, higher anchor, and the swing
+						 * itself is the off-graph flight.
+						 */
+						float hfar = (gi.cvar("sg_freeride", "0",
+						              0)->value >= 2.0f) ? 300.0f : 480.0f;
+						float hup  = (gi.cvar("sg_freeride", "0",
+						              0)->value >= 2.0f) ? 420.0f : 280.0f;
 
-						hend[0] = heye[0] + cosf(hy2) * 480.0f;
-						hend[1] = heye[1] + sinf(hy2) * 480.0f;
-						hend[2] = heye[2] + 280.0f;    /* ~30 deg up */
+						hend[0] = heye[0] + cosf(hy2) * hfar;
+						hend[1] = heye[1] + sinf(hy2) * hfar;
+						hend[2] = heye[2] + hup;    /* v1 ~30deg, v2 ~54deg */
 						htr = gi.trace(heye, NULL, NULL, hend, e,
 						               MASK_SOLID);
 						/*

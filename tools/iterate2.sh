@@ -279,12 +279,12 @@ AIMTEX=(1     1        1        1        1         1        1         1        0
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-# FREERIDE STRUCK as armed 2026-08-07 (8 waves): off-graph 0.024 vs
-# 0.027 -- 2.2x rope volume never touched the tell because speedhook
-# arcs hug the corridor node cloud; human off-graph mass is HIGH arcs
-# through open vertical space. Next cut if any: anchor GEOMETRY
-# (steeper probes), ledgered as hypothesis. Caps also dipped 10 vs 18.
-FREERIDE=(0    0        0        0        0         0        0         0        0        0)
+# FREERIDE v2 (rung-2 set #2 failed 16/18, off-graph the sole anchor of
+# every bot call): steep-arc probes (~54deg vs v1's corridor-skimming
+# 30deg) so the swing itself is off-graph flight through open room air.
+# Armed s03=2 vs s04. Bars unchanged: off-graph toward 0.03-0.18; caps
+# hold; canary flawless.
+FREERIDE=(0    0        2        0        0         0        0         0        0        0)
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
