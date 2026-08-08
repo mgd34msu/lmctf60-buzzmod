@@ -54,6 +54,9 @@ typedef struct sg_bot_s
 	/* hook execution, two-phase: aim this frame (ClientThink turns the cmd
 	 * angles into v_angle), fire immediately after, since Weapon_Hook_Fire
 	 * launches along v_angle; then release before the p_weapon.c brake band */
+	unsigned	dither_salt;    /* route dither: rerolled per seed visit
+	                             * so a choice holds within a visit but
+	                             * varies across visits */
 	int			hook_phase;     /* 0 none, 1 aimed+firing, 2 rope out,
 	                             * 3 released mid-air, steering to land */
 	int			hook_link;      /* which link this ride is executing */
@@ -4446,6 +4449,7 @@ rally_done:;
 		{
 			bot->prev_seed = was;
 			bot->prev_seed_time = level.time;
+			bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
 
 			/*
 			 * PITTRACE (sg_debug): the moment a bot's seed enters the
@@ -4653,6 +4657,26 @@ rally_done:;
 		rune_link_t *l = &sg_rune->links[li];
 		float v = Surface_At(l->to, w, route_field, support, intercept);
 		int b;
+
+		/*
+		 * ROUTE DITHER (sg_routedither, rung-2 set #1 tell #2): the
+		 * transition matrices show p=1.0 cells -- at a given seed this
+		 * body always makes the identical next choice, and a judge
+		 * reads the determinism off the sheet. A human's tie-break
+		 * varies. Per-visit pseudo-noise under one hop of gradient
+		 * (~125ms at dose 120): ties and near-ties resolve differently
+		 * on different visits, the gradient itself never overruled.
+		 * The salt rerolls on seed entry so the choice HOLDS within a
+		 * visit -- no flip-flop -- and varies across visits.
+		 */
+		if (gi.cvar("sg_routedither", "0", 0)->value > 0.0f)
+		{
+			unsigned dh = bot->dither_salt ^ (unsigned)li * 2654435761u;
+
+			dh ^= dh >> 13; dh *= 2246822519u; dh ^= dh >> 16;
+			v += gi.cvar("sg_routedither", "0", 0)->value *
+			     (float)(dh & 1023) / 1023.0f;
+		}
 
 		/*
 		 * No ropes in the house. Wave 96, watched live: an attacker

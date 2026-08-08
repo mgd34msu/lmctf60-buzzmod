@@ -73,11 +73,12 @@ SECS=(  600      600      900      900      900       900      900       600    
 # the contaminated-era 13v7 was noise. The corpus cut survives for
 # future re-derivation (windows were hunter-biased at the SEED level?
 # open question) but the flag is parked.
-# ESCAPE PRIORS armed s05 vs s08 control (dark feature enters trial,
-# owner directive 2026-08-07: all dark features get judged). Mined from
-# 1549 human steals; consumer no-ops without escape-priors.json (deploy
-# ships it). Bars: carrier conversion up on outcomecard, caps hold.
-ESCAPE=(0        0        0        0        1         0        0         0        0        0)
+# ESCAPE PRIORS ADOPTED fleet-wide 2026-08-07 (8 waves/arm, lmctf22):
+# conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 -- volume
+# AND conversion up, the cleanest dark-feature win. Mined from 1549
+# human steals. s09-ctrl stays 0. s05/s08 become the rung-4 film pair
+# (escort_fraction is validated on lmctf22).
+ESCAPE=(1        1        1        1        1         1        1         1        0        1)
 # duel-roles A/B (285+): s01 ON s02 OFF -- breaks the size==2 dw=1 pin
 # (2v2 census: dw stuck 131/138, zero caps in 16 waves)
 # duelroles NULL (285-299 pooled: 7 ON vs 10 OFF, zero caps both) --
@@ -274,18 +275,17 @@ AIMTEX=(0     0        0        0        0         1        0         0        0
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-# TAPVAR NULL at dose 1 on its pre-registered bar (intershot_cv 0.421
-# vs 0.413, 9 waves/arm) -- though the aggregate cv scalar may dilute a
-# slow-weapon-only effect (fleet cv rose 0.23->0.41 across the wcommit
-# adoption era). Reverted; re-trials only after fightsheet grows a
-# per-slow-weapon cadence-spread scalar. Build the eye first.
-TAPVAR=(0     0        0        0        0         0        0         0        0        0)
+# FREERIDE STRUCK as armed 2026-08-07 (8 waves): off-graph 0.024 vs
+# 0.027 -- 2.2x rope volume never touched the tell because speedhook
+# arcs hug the corridor node cloud; human off-graph mass is HIGH arcs
+# through open vertical space. Next cut if any: anchor GEOMETRY
+# (steeper probes), ledgered as hypothesis. Caps also dipped 10 vs 18.
+FREERIDE=(0    0        0        0        0         0        0         0        0        0)
 
-# FREERIDE (owner signed): the film pair takes it. Probe: rides 56 vs
-# 25, fail-per-ride identical, zero environmental deaths. Bars:
-# off-graph 0.026 -> toward the 0.03-0.18 human band on route sheets;
-# caps hold; 5v0 canary flawless.
-FREERIDE=(0    0        1        0        0         0        0         0        0        0)
+# ROUTE DITHER (rung-2 tell #2: p=1.0 transition cells): per-visit
+# tie-break noise under one hop of gradient. Armed s03 vs s04.
+# Bars: off-diagonal transition mass up on route sheets; caps hold.
+ROUTEDITHER=(0 0        120      0        0         0        0         0        0        0)
 
 # NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
 # dead flat): the flood layer is exonerated -- a 90% rope-price cut
@@ -418,6 +418,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_ropecost ${ROPECOST[$i]}"
                 echo "set sg_tapvar ${TAPVAR[$i]}"
                 echo "set sg_freeride ${FREERIDE[$i]}"
+                echo "set sg_routedither ${ROUTEDITHER[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
