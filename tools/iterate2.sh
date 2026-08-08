@@ -207,7 +207,14 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # s04 equalized to fleet values 2026-08-07: its ribbon/jitter-0 control
 # state silently confounded every film-pair A/B (the dead breather flag,
 # the shelf trial's arms). s09 is the ONLY control from here on.
-RIBBON=(48       48       48       48       48        48       48        48       0        48)
+# RIBBON DOSE TRIAL 2026-08-08 (off-graph forensics): the tell is a
+# 60u boundary strip at the seed-cloud edge and 62% of the human gap is
+# grounded EDGE-HUGGING 96-160u off centerline -- ribbon 48 keeps feet
+# inside the 96u seed radius by construction. s03 at 112 pushes the
+# oscillation into the margin ring. Bars: off-graph 0.024 -> 0.05+;
+# caps hold; canary flawless (rung-1 film risk noted -- amplitude is
+# raw-movement texture).
+RIBBON=(48       48       112      48       48        48       48        48       0        48)
 # route jitter (359+): per-bot-per-life deterministic pricing tilt
 # (value = max percent). Near-ties split the population across roads;
 # a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
