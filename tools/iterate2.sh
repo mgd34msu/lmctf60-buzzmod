@@ -279,16 +279,19 @@ AIMTEX=(1     1        1        1        1         1        1         1        0
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-# FREERIDE v2 (rung-2 set #2 failed 16/18, off-graph the sole anchor of
-# every bot call): steep-arc probes (~54deg vs v1's corridor-skimming
-# 30deg) so the swing itself is off-graph flight through open room air.
-# Armed s03=2 vs s04. Bars unchanged: off-graph toward 0.03-0.18; caps
-# hold; canary flawless.
-FREERIDE=(0    0        2        0        0         0        0         0        0        0)
+# FREERIDE v2 struck 2026-08-08: off-graph 0.024 vs 0.027 -- and the
+# arithmetic seals the family: doubled ride volume is ~0.3% of player
+# time against a 3-18% human band. The tell is LOCOMOTION IDENTITY --
+# humans travel by rope. Rope-primary travel is the named rung-2
+# feature; gate-widening cannot reach it. Dark until built.
+FREERIDE=(0    0        0        0        0         0        0         0        0        0)
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
-TAPVAR=(0     0        0        0        0         1        0         0        0        0)
+# tapvar struck for good 2026-08-08: with the correct eye the delta is
+# zero (0.173 vs 0.179). Aimtexture's wander already moved cadence
+# 0.137->0.17 fleet-wide -- the tell shrinks by another road.
+TAPVAR=(0     0        0        0        0         0        0         0        0        0)
 
 # ROUTE DITHER struck 2026-08-08 (9 waves/arm): entropy 1.493 vs 1.570
 # (wrong direction on the proxy), off/caps flat. The aggregate scalar
