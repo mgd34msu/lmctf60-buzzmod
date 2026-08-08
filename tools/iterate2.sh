@@ -282,6 +282,10 @@ AIMTEX=(0     0        0        0        0         1        0         0        0
 # (steeper probes), ledgered as hypothesis. Caps also dipped 10 vs 18.
 FREERIDE=(0    0        0        0        0         0        0         0        0        0)
 
+# tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
+# separability 0.9375); re-trials on the next free pair.
+TAPVAR=(0     0        0        0        0         0        0         0        0        0)
+
 # ROUTE DITHER (rung-2 tell #2: p=1.0 transition cells): per-visit
 # tie-break noise under one hop of gradient. Armed s03 vs s04.
 # Bars: off-diagonal transition mass up on route sheets; caps hold.
