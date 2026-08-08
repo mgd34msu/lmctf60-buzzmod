@@ -12,7 +12,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | **IN TRIAL** | Set #1 failed 11/18; tell = off-graph fraction; sg_ropecost armed |
+| 2. Routes | set #2 FAILED 16/18; freeride v2 armed | off-graph anchors every bot call; steep-arc swing flight is the surviving fix |
 | 3. Fights | set #1 FAILED 18/18; mode-2 fix armed | tell #1 unanimous: spawn-blaster commitment with machine accuracy; ranked behind: metronomic cadence, pegged ranges, empty arsenal rows |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
@@ -23,6 +23,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
 | **tapvar re-trial** (vs its new eye) | s06 vs s07 ctrl | wave ~571 | slow_cadence_cv 0.13 → toward human 0.25–0.30; caps hold | ~8 waves/arm |
+| **freeride v2** (54° arcs) | s03 vs s04 ctrl | r588, wave ~576 | off-graph 0.024 → toward 0.03–0.18; caps hold; canary flawless | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
