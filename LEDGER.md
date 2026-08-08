@@ -12,8 +12,8 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | set #2 FAILED 16/18; freeride v2 armed | off-graph anchors every bot call; steep-arc swing flight is the surviving fix |
-| 3. Fights | set #1 FAILED 18/18; mode-2 fix armed | tell #1 unanimous: spawn-blaster commitment with machine accuracy; ranked behind: metronomic cadence, pegged ranges, empty arsenal rows |
+| 2. Routes | set #2 FAILED 16/18; blocked on rope-primary locomotion | off-graph anchors every bot call; gate-widening family closed by arithmetic |
+| 3. Fights | set #2: 14/18 (from 18/18) — first bot passes | ranked tells: metronome cadence (tapvar v2 armed — v1 was INERT, never executed), blaster diet+accuracy, range truncation ~900 vs 1600, straight-in lobe |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
@@ -22,8 +22,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| **tapvar re-trial** (vs its new eye) | s06 vs s07 ctrl | wave ~571 | slow_cadence_cv 0.13 → toward human 0.25–0.30; caps hold | ~8 waves/arm |
-| **freeride v2** (54° arcs) | s03 vs s04 ctrl | r588, wave ~576 | off-graph 0.024 → toward 0.03–0.18; caps hold; canary flawless | ~8 waves/arm |
+| **tapvar v2** (ammo-decrement, actually fires) | s06 vs s07 ctrl | r591, wave ~589 | slow_cadence_cv → toward 0.25–0.30; caps hold | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
@@ -44,6 +43,8 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 - **wswitch** (2026-08-07): moved the commitment tell the wrong way (0.676 armed vs 0.696 ctrl vs 0.897 human), caps 35 vs 40. Named the rung-3 gap its successor (wcommit) now targets.
 - **smap05 rune regeneration** (2026-08-07): struck — graph census shows zero dead-end seeds post-wading-fix; 14 isolated orphans (1%) cannot trap.
 - **84-wave breather cost flag** (2026-08-07): dead — its control arm also ran ribbon/jitter 0; three variables, not one. Superseded by the clean ladder.
+- **freeride v1+v2 family** (2026-08-08): closed — even doubled ride volume is 0.3% of player time vs the 3–18% human band; off-graph is locomotion identity. Rope-primary travel is the named rung-2 feature, unbuilt.
+- **tapvar v1 'nulls'** (2026-08-08): VOID — the feature never executed (weaponstate invisible at think cadence); v2 (ammo decrement) in trial. Provenance rule applied: verdicts on an inert feature judge nothing.
 - **route dither** (2026-08-08): struck — aggregate entropy proxy moved wrong-direction; cell-level max-transition-mass eye required for retry.
 - **freeride** (2026-08-07): STRUCK as armed — 2.2× rope volume, off-graph flat 0.024 vs 0.027 (speedhook arcs hug the corridor node cloud; human mass is HIGH arcs through open space). Steep-anchor geometry is the ledgered next hypothesis. Caps dipped 10 vs 18.
 - **wcommit mode 2** (2026-08-07): STRUCK — caps 7 vs 22, diagonal away (0.758 vs 0.813); refusing blaster commitment sends spawns into the switch ritual at first contact. Mode 1 stays; the accuracy half of the blaster tell rides aimtexture.
