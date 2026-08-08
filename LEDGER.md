@@ -4,7 +4,8 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-07 ~21:00, wave ~555. Pairs: s03/s04 route dither, s06/s07 aimtexture (extended), s05/s08 rung-4 film farm on adopted config. Escape priors = first dark-feature adoption.*
+*Last updated: 2026-08-08 ~00:45, wave ~570. s03/s04 steady for rung-2 set #2 film; tapvar re-trial on s06/s07. Two dark features adopted (escape priors, aimtexture), five struck/parked with lessons.*
+<!-- prior stamp: 2026-08-07 ~21:00, wave ~555. Pairs: s03/s04 route dither, s06/s07 -->
 
 ## The ladder
 
@@ -21,11 +22,11 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| **route dither** (rung-2 tell #2) | s03 vs s04 ctrl | r582, wave ~555 | off-diagonal transition mass up; caps hold | ~8 waves/arm |
-| **aimtexture** (extended) | s06 vs s07 ctrl | continuing | 7.75 vs 7.44 @8w toward 10.89; ruling at 16 waves | ~8 more |
+| **tapvar re-trial** (vs its new eye) | s06 vs s07 ctrl | wave ~571 | slow_cadence_cv 0.13 → toward human 0.25–0.30; caps hold | ~8 waves/arm |
 
 ## Adopted (film + data on record, most recent first)
 
+- **aimtexture** (2026-08-08): +0.30° toward the human aim anchor (7.66 vs 7.36, 16 waves, caps flat), cadence raggedness side gain; dose-ladder noted. Second dark-feature adoption.
 - **escape priors** (2026-08-07): human-mined carrier escape routes — conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 (8 waves/arm, lmctf22). First dark-feature adoption.
 - **wcommit** (2026-08-07): keep the held gun anywhere in the band ladder — switch_diagonal 0.691→0.828 (human 0.897), caps 25 vs 13, zero arm overlap, 12 waves/arm.
 - **breather 4** (2026-08-07): dose ladder 0/4/8, 19 waves/arm — conversion 0.046/0.114/0.116; smaller equal dose shipped.
@@ -42,6 +43,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 - **wswitch** (2026-08-07): moved the commitment tell the wrong way (0.676 armed vs 0.696 ctrl vs 0.897 human), caps 35 vs 40. Named the rung-3 gap its successor (wcommit) now targets.
 - **smap05 rune regeneration** (2026-08-07): struck — graph census shows zero dead-end seeds post-wading-fix; 14 isolated orphans (1%) cannot trap.
 - **84-wave breather cost flag** (2026-08-07): dead — its control arm also ran ribbon/jitter 0; three variables, not one. Superseded by the clean ladder.
+- **route dither** (2026-08-08): struck — aggregate entropy proxy moved wrong-direction; cell-level max-transition-mass eye required for retry.
 - **freeride** (2026-08-07): STRUCK as armed — 2.2× rope volume, off-graph flat 0.024 vs 0.027 (speedhook arcs hug the corridor node cloud; human mass is HIGH arcs through open space). Steep-anchor geometry is the ledgered next hypothesis. Caps dipped 10 vs 18.
 - **wcommit mode 2** (2026-08-07): STRUCK — caps 7 vs 22, diagonal away (0.758 vs 0.813); refusing blaster commitment sends spawns into the switch ritual at first contact. Mode 1 stays; the accuracy half of the blaster tell rides aimtexture.
 - **tapvar dose 1** (2026-08-07): null on its bar (cv 0.421 vs 0.413) — aggregate cv may dilute a slow-weapon effect; fightsheet owes a cadence-spread scalar before re-trial.
