@@ -586,6 +586,11 @@ typedef struct
 	qboolean	tap_pending;    /* legacy of the weaponstate cut; unused */
 	int			tap_ammo;       /* last seen ammo count for the held gun */
 
+	/* fire discipline (sg_firedisc): the bot's OWN heading stability --
+	 * humans hold fire while jockeying and shoot planted */
+	vec3_t		self_dir;
+	float		self_stable;
+
 	float		switch_next;	/* rate limit on weapon-switch requests */
 
 	int			band;			/* committed range band */
@@ -3797,6 +3802,41 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 				st->tap_ammo = ta;
 			}
 			if (level.time < st->tap_until)
+			{
+				sg_cbt_why[5]++;
+				return;
+			}
+		}
+	}
+
+	/*
+	 * FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell -- the answer
+	 * the tapvar family could not be). The judges read bot cadence as
+	 * needles on the refire line because the trigger is independent of
+	 * the legs: a bot mid-jink fires the frame the gun cycles. A human
+	 * holds through the jockeying and shoots from a planted beat --
+	 * the ragged inter-shot spread IS the movement showing through the
+	 * trigger. Suppress fire until the body's own heading has been
+	 * stable ~0.18s; every strafe reversal restarts the clock. The
+	 * carrier is exempt (its flee trigger conduct is separately tuned).
+	 */
+	if (gi.cvar("sg_firedisc", "0", 0)->value > 0.0f &&
+	    !Combat_Carrying(self))
+	{
+		float sp2 = self->velocity[0] * self->velocity[0]
+		          + self->velocity[1] * self->velocity[1];
+
+		if (sp2 > 150.0f * 150.0f)
+		{
+			vec3_t nd;
+
+			nd[0] = self->velocity[0]; nd[1] = self->velocity[1];
+			nd[2] = 0.0f;
+			VectorNormalize(nd);
+			if (DotProduct(nd, st->self_dir) < 0.86f)
+				st->self_stable = level.time;
+			VectorCopy(nd, st->self_dir);
+			if (level.time < st->self_stable + 0.18f)
 			{
 				sg_cbt_why[5]++;
 				return;

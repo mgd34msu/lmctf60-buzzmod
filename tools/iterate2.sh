@@ -305,6 +305,14 @@ ROPETRAVEL=(0  0        0        0        0         0        0         0        
 
 # tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
 # separability 0.9375); re-trials on the next free pair.
+# FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell): trigger gated on
+# the bot's OWN heading stability (0.18s planted beat; strafe reversals
+# restart the clock; carrier exempt). The ragged human inter-shot
+# spread is the movement showing through the trigger. Armed s06 vs s07.
+# Bars: slow_cadence_cv toward 0.25-0.30; hit rate may DROP (that is
+# human); caps hold.
+FIREDISC=(0    0        0        0        0         1        0         0        0        0)
+
 # TAPVAR STRUCK FINAL 2026-08-08: dose 3 flat too (0.144 vs 0.147) with
 # caps leaning down 10 vs 18. Executed, measured, never moved the eye at
 # any dose. The cadence tell needs FIRE DISCIPLINE (hold while
@@ -450,6 +458,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_freeride ${FREERIDE[$i]}"
                 echo "set sg_routedither ${ROUTEDITHER[$i]}"
                 echo "set sg_ropetravel ${ROPETRAVEL[$i]}"
+                echo "set sg_firedisc ${FIREDISC[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
