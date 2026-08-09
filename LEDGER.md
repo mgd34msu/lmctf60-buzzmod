@@ -4,17 +4,18 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*RUNG 3 PASSED 2026-08-08 ~20:15 (set #3, three fresh judges, 5/18 — bots out-humaned the humans 6/9 vs 2/9). Rung-2 residual baseline recorded 18/18 with one new actionable tell (revisit-2 spike). Last updated: 2026-08-08 ~00:45, wave ~570. s03/s04 steady for rung-2 set #2 film; tapvar re-trial on s06/s07. Two dark features adopted (escape priors, aimtexture), five struck/parked with lessons.*
-<!-- prior stamp: 2026-08-07 ~21:00, wave ~555. Pairs: s03/s04 route dither, s06/s07 -->
+*Last updated: 2026-08-09 ~03:45, wave ~670. **Rungs 1 and 3 PASSED**;
+rung 2 residual-capped by owner ruling; rung 4 has its first verdict and
+its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## The ladder
 
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | residual baseline recorded: set #3 18/18 | off-graph (accepted residual) + a NEW independent tell: interval-2 revisit spike 0.32 vs human 0.20 (A-to-B-to-A ping-pong) — actionable, nobacktrack dose escalation is the cheap trial |
+| 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual texture for stage 2: hit-triangle accuracy (judge C's anchor) |
-| 4. Team decisions | set #1 FAILED 16/18; escortdose armed | unanimous tell #1: bots OVER-escort (0.33–0.75 vs human 0.02–0.32 lone-wolf runs); tell #2: team-mirror symmetry (role-locked presses, balanced means). Protocol committed |
+| 4. Team decisions | set #1 FAILED 16/18; first fix null | tell #1 (unanimous): bots OVER-escort — 0.33–0.75 vs human 0.02–0.32 lone-wolf runs; tell #2: team-mirror symmetry. escortdose null (proximity ≠ role); next cut must move PROXIMITY (teammate routing away from the carrier lane) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
@@ -22,7 +23,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 | Trial | Arms | Armed | Bars (pre-registered) | Verdict due |
 |---|---|---|---|---|
-| (both pairs steady; set #3 pairs cutting from clean film) | | | | |
+| (none — all pairs steady on the adopted stack) | | | | |
 
 ## Adopted (film + data on record, most recent first)
 
@@ -39,6 +40,10 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 ## The morgue (honest nulls and strikes, with their lessons)
 
+- **escortdose** (2026-08-09): null on its bar (escort_fraction 0.485 vs 0.477, 17 waves/arm) — the metric is teammate PROXIMITY within 400u of the carrier, and teammates are near the carrier whatever their role; a role gate cannot move it. **Unpredicted side effect worth its own trial: caps 86 vs 54, steals 218 vs 148** on the dose arm — assigned escorts may be wasted bodies. Cvar left dark at 100.
+- **nobacktrack 150** (2026-08-08): struck — revisit-2 flat (0.284 vs 0.273), caps 8 vs 18. The ping-pong is field-plateau oscillation between legs, not priced immediate returns.
+- **edgeride** (2026-08-08): struck by its own kill switch — falls 3 vs 1, off-graph flat. Owner ruling executed; the edge-strip tell is an accepted residual and never-falling is the accepted signature.
+- **fire discipline** (2026-08-08): struck wrong-direction — gating shots on planted footing SYNCHRONIZED fire with stability windows, cadence got more regular (0.121 vs 0.162). Caps rose 16v12; the bar is the bar.
 - **shelf / sg_shelfcost** (2026-08-07): five cuts to a working mechanism (pit entries 89→23), STRUCK on outcome — steals 4.5 vs 5.0, close approaches −19%. Lesson: a 91%-fatal route that buys approach tempo is not a defect. Code retained, cvar dark.
 - **wswitch** (2026-08-07): moved the commitment tell the wrong way (0.676 armed vs 0.696 ctrl vs 0.897 human), caps 35 vs 40. Named the rung-3 gap its successor (wcommit) now targets.
 - **smap05 rune regeneration** (2026-08-07): struck — graph census shows zero dead-end seeds post-wading-fix; 14 isolated orphans (1%) cannot trap.
@@ -66,19 +71,24 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 
 ## Not fully polished
 
-1. Rung 2: ropecost in trial; secondary tell queued (deterministic p=1.0 transition cells).
-2. Rung 3: wcommit adopted; residual commitment gap 0.83→0.90; blind set #1 next.
-3. teamsheet.py: validation complete -- escort_fraction (lmctf22) sole VALIDATED scalar; others coverage/sample-sensitive at n=4 human. Corpus growth (18-map manifest + s10 lmctf57 bot film) is the path to more eyes.
-4. Airstrafe chain-length tuning: never trialed.
-5. Dark features built, never armed: aimtexture, tilt, clockplay, spawnbeat, belief cone/range, handoff, session-db, railrhythm. Enter only when a rung names their gap.
+1. **Rung 4** — the live rung. Tell #1 (over-escort) needs a PROXIMITY-side cut, not a role gate: teammate routing that keeps non-escorts off the carrier's lane. Tell #2 (team-mirror symmetry) is unaddressed and may need per-team persona spread.
+2. **Rung 2 second tell** — interval-2 revisit spike; pricing doses struck, needs plateau tie-break diagnosis (an eye first).
+3. **Rung 5** — instrument valid on mactf06 only; protocol undesigned.
+4. **Escort-as-cap-lever** — the escortdose side effect (caps 86v54) deserves a confirming trial on its own bar.
+5. teamsheet panels 1/3/4 — coverage/sample-sensitive at n=4 human; corpus growth is the path (18-map manifest + s10/lmctf57 farm).
+6. Airstrafe chain tuning: never trialed.
+7. Dark features still unjudged: tilt, clockplay, spawnbeat, belief cone/range, handoff, railrhythm — each blocked on an instrument eye (TRIALS.md has the queue and the eyes each needs). sessiondb is a config flip, not a trial.
 
 ## Not implemented
 
-1. Rung-2 set-composition rule (map discriminator weighting).
+1. Rung-5 set protocol.
+2. Rung-2 set-composition rule (map discriminator weighting).
+3. Stage 2 (beat human numbers while still passing): steal initiation 0.26/min vs human 1.3/min is the measured gap.
 
 ## Open questions for the owner
 
-1. **Rope locomotion (rung-2 off-graph tell).** The tell needs bots that
+1. **RESOLVED (2026-08-08).** Rope locomotion was built (ropetravel), trialed at two doses, and closed with the whole rope family; forensics reassigned the tell to foot placement, and the owner's edgeride ruling capped it as residual.
+   Original question: **Rope locomotion (rung-2 off-graph tell).** The tell needs bots that
    pull ropes opportunistically DURING ground travel (swing-assist), not
    cheaper rope links — a new movement behavior touching the pmove
    sub-step and hook phases. Recommendation: build it as sg_freeride
