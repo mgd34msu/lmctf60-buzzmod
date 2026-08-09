@@ -122,7 +122,11 @@ LINKLATCH=(0     0        0        0        0         0        0         0      
 # ADOPTED wave 396 (pooled 392-395: 29 vs 39 suicides on the matched
 # pair, right direction all four waves -- the do-si-do killer works, and
 # two set-#3 judges saw the orbit it kills on film). s09 stays clean.
-NOBACKTRACK=(60  60       60       60       60        60       60        60       0        60)
+# REVISIT-2 SPIKE trial 2026-08-08 (rung-2 set #3's one actionable
+# tell outside the accepted residual: interval-2 ping-pong 0.32 vs
+# human 0.20). Dose escalation on the adopted pricing: s03=150 vs
+# s04=60. Bars: spike toward 0.20 on route sheets; caps hold.
+NOBACKTRACK=(60 60      150      60       60        60       60        60       0        60)
 # weave A/B (292+): s04 no-weave vs s03 weave -- the demo census ranked
 # the metronomic combat weave the #1 visible jank; sg_noweave is the
 # existing switch and botkin the honest instrument the old gauges never
