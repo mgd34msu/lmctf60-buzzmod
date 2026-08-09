@@ -4,7 +4,7 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-08 ~00:45, wave ~570. s03/s04 steady for rung-2 set #2 film; tapvar re-trial on s06/s07. Two dark features adopted (escape priors, aimtexture), five struck/parked with lessons.*
+*RUNG 3 PASSED 2026-08-08 ~20:15 (set #3, three fresh judges, 5/18 — bots out-humaned the humans 6/9 vs 2/9). Rung-2 residual baseline recorded 18/18 with one new actionable tell (revisit-2 spike). Last updated: 2026-08-08 ~00:45, wave ~570. s03/s04 steady for rung-2 set #2 film; tapvar re-trial on s06/s07. Two dark features adopted (escape priors, aimtexture), five struck/parked with lessons.*
 <!-- prior stamp: 2026-08-07 ~21:00, wave ~555. Pairs: s03/s04 route dither, s06/s07 -->
 
 ## The ladder
@@ -12,8 +12,8 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | Rung | State | Evidence |
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
-| 2. Routes | edge-strip tell ACCEPTED AS RESIDUAL (owner ruling executed) | edgeride struck by its own kill switch (falls 3v1, off-graph flat) — 9 mechanisms + forensics + fall cost on record; set #3 measures the residual baseline |
-| 3. Fights | set #2: 14/18 (from 18/18) — first bot passes | ranked tells: metronome cadence (tapvar v2 armed — v1 was INERT, never executed), blaster diet+accuracy, range truncation ~900 vs 1600, straight-in lobe |
+| 2. Routes | residual baseline recorded: set #3 18/18 | off-graph (accepted residual) + a NEW independent tell: interval-2 revisit spike 0.32 vs human 0.20 (A-to-B-to-A ping-pong) — actionable, nobacktrack dose escalation is the cheap trial |
+| 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual texture for stage 2: hit-triangle accuracy (judge C's anchor) |
 | 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
