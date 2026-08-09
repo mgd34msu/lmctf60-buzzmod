@@ -73,6 +73,13 @@ SECS=(  600      600      900      900      900       900      900       600    
 # the contaminated-era 13v7 was noise. The corpus cut survives for
 # future re-derivation (windows were hunter-biased at the SEED level?
 # open question) but the flag is parked.
+# ESCORT DOSE (rung-4 set #1 FAILED 16/18; tell #1 unanimous: bots
+# escort EVERY carry at 0.33-0.75 while pub humans run alone at
+# 0.02-0.32). Dose = percent of carries escorted at all, rolled once
+# per carry. s05=35 vs s08=100 control on the rung-4 pair. Bars:
+# escort_fraction into the human band on teamsheet; caps hold.
+ESCORTDOSE=(100 100     100      100      35        100      100       100      100      100)
+
 # ESCAPE PRIORS ADOPTED fleet-wide 2026-08-07 (8 waves/arm, lmctf22):
 # conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 -- volume
 # AND conversion up, the cleanest dark-feature win. Mined from 1549
@@ -471,6 +478,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_ropetravel ${ROPETRAVEL[$i]}"
                 echo "set sg_firedisc ${FIREDISC[$i]}"
                 echo "set sg_edgeride ${EDGERIDE[$i]}"
+                echo "set sg_escortdose ${ESCORTDOSE[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"

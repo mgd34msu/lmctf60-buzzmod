@@ -14,7 +14,7 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual baseline recorded: set #3 18/18 | off-graph (accepted residual) + a NEW independent tell: interval-2 revisit spike 0.32 vs human 0.20 (A-to-B-to-A ping-pong) — actionable, nobacktrack dose escalation is the cheap trial |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual texture for stage 2: hit-triangle accuracy (judge C's anchor) |
-| 4. Team decisions | instrument part-calibrated | Stage A: escort_fraction validated (0.917, radius-stable); panels 1/3/4 diagnostic-only (pov-parity inflation + n=4 human arm) |
+| 4. Team decisions | set #1 FAILED 16/18; escortdose armed | unanimous tell #1: bots OVER-escort (0.33–0.75 vs human 0.02–0.32 lone-wolf runs); tell #2: team-mirror symmetry (role-locked presses, balanced means). Protocol committed |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 

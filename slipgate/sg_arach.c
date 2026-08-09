@@ -2046,7 +2046,33 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				}
 			}
 			if (best_i >= 0 && &sg_bots[best_i] == bot)
-				return SG_ROLE_ESCORT;
+			{
+				/*
+				 * ESCORT DOSE (sg_escortdose, rung-4 set #1 tell #1,
+				 * named by all three judges on every bot sheet): the
+				 * fleet escorts EVERY carry at 0.33-0.75 escort
+				 * fraction while pub humans run flags alone (0.02-
+				 * 0.32, "classic lone-wolf hero run"). The machinery
+				 * out-organizes the population it imitates. The dose
+				 * is the percent of carries that get an escort AT
+				 * ALL; the roll happens once per carry (rerolled when
+				 * the carrier changes) so a carry is escorted or
+				 * abandoned for its whole life, like a pub decides.
+				 */
+				static int esc_carrier[2] = { -1, -1 };
+				static qboolean esc_on[2] = { true, true };
+				int et = (team == CTF_TEAM_RED) ? 0 : 1;
+				int cc = own->client;
+
+				if (esc_carrier[et] != cc)
+				{
+					esc_carrier[et] = cc;
+					esc_on[et] = ((rand() % 100) <
+					    (int)gi.cvar("sg_escortdose", "100", 0)->value);
+				}
+				if (esc_on[et])
+					return SG_ROLE_ESCORT;
+			}
 		}
 
 		if (ours_astray)
