@@ -73,14 +73,14 @@ SECS=(  600      600      900      900      900       900      900       600    
 # the contaminated-era 13v7 was noise. The corpus cut survives for
 # future re-derivation (windows were hunter-biased at the SEED level?
 # open question) but the flag is parked.
-# ESCORT-AS-CAP-LEVER (2026-08-09). The rung-4 film trial was null on
-# escort_fraction (proximity != role) but its dose arm ran caps 86 vs
-# 54 and steals 218 vs 148 over 17 waves -- an unpredicted result that
-# must be confirmed on its OWN pre-registered bar before adoption:
-# assigned escorts may simply be wasted bodies that would score as
-# attackers. s05=35 vs s08=100 control, same pair, bar = caps up with
-# escort_fraction free to do whatever it likes.
-ESCORTDOSE=(100 100     100      100      35        100      100       100      100      100)
+# ESCORT DOSE 35 ADOPTED fleet-wide 2026-08-09. Confirmed on its own
+# pre-registered bar (caps up): 42 vs 22 caps and 92 vs 55 steals over
+# 8 waves/arm, replicating the 86-vs-54 side effect that prompted it.
+# Assigned escorts WERE wasted bodies -- freeing two thirds of them to
+# attack nearly doubles caps. Neutral on the rung-4 film tell (escort
+# PROXIMITY is incidental and did not move), so this is a pure
+# outcomes win taken on outcomes evidence. s09-ctrl stays 100.
+ESCORTDOSE=(35  35       35       35       35        35       35        35       100      35)
 
 # ESCAPE PRIORS ADOPTED fleet-wide 2026-08-07 (8 waves/arm, lmctf22):
 # conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 -- volume
@@ -294,13 +294,15 @@ WSWITCH=(0     0        0        0        0         0        0         0        
 # fleet-wide stays. The blaster tell's accuracy half goes to aimtexture.
 WCOMMIT=(1     1        1        1        1         1        1         1        0        1)
 
-# AIMTEXTURE ADOPTED fleet-wide 2026-08-08 (16 waves/arm): aim offset
-# 7.66+-0.14 vs 7.36+-0.12 toward the 10.89 human anchor, caps flat.
-# DOSE LADDER 2026-08-09 (the noted future step, now cheap: the cvar
-# multiplies the overshoot amplitude, 1.0 == adopted behavior exactly).
-# s03=2.5 vs s04=1.0 control. Bars: aim offset further toward 10.89;
-# caps hold. s09 stays 0.
-AIMTEX=(1     1        2.5      1        1         1        1         1        0        1)
+# AIMTEXTURE stays at dose 1.0. Ladder 2.5 STRUCK 2026-08-09: aim
+# offset went the WRONG way (6.54 vs 6.74 -- further from the 10.89
+# human anchor, not closer). Mechanism: the trigger's own aim gate
+# censors the texture. A bigger overshoot does not produce sloppier
+# SHOTS, it produces shots that the clear-shot/lead checks veto, so
+# only well-settled aim survives to fire time. Amplitude cannot move a
+# fire-time scalar; reaching the human offset needs a looser fire gate,
+# which is a different (and riskier) feature.
+AIMTEX=(1     1        1        1        1         1        1         1        0        1)
 
 # TAPVAR RE-TRIAL against its new eye (slow_cadence_cv, sep 0.9375;
 # the old aggregate diluted it to a false null). s06 armed vs s07.

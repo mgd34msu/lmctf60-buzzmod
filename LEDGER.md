@@ -27,6 +27,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## Adopted (film + data on record, most recent first)
 
+- **escortdose 35** (2026-08-09): assigned escorts were wasted bodies — 42 vs 22 caps and 92 vs 55 steals (8 waves/arm) confirming the 86-vs-54 side effect on its own pre-registered bar. Freeing two thirds of escorts to attack nearly doubles caps. Neutral on the rung-4 film tell.
 - **aimtexture** (2026-08-08): +0.30° toward the human aim anchor (7.66 vs 7.36, 16 waves, caps flat), cadence raggedness side gain; dose-ladder noted. Second dark-feature adoption.
 - **escape priors** (2026-08-07): human-mined carrier escape routes — conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 (8 waves/arm, lmctf22). First dark-feature adoption.
 - **wcommit** (2026-08-07): keep the held gun anywhere in the band ladder — switch_diagonal 0.691→0.828 (human 0.897), caps 25 vs 13, zero arm overlap, 12 waves/arm.
@@ -40,6 +41,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## The morgue (honest nulls and strikes, with their lessons)
 
+- **aimtexture dose 2.5** (2026-08-09): struck, wrong direction (6.54 vs 6.74 — further from the 10.89 human anchor). **The trigger's aim gate censors the texture**: bigger overshoot doesn't make sloppier shots, it makes shots the clear-shot/lead checks veto, so only well-settled aim reaches fire time. Amplitude cannot move a fire-time scalar — closing the aim gap needs a looser fire gate, a different and riskier feature.
 - **sg_handoff** (2026-08-09): STRUCK before trial. The new handoff eye
   measures humans handing off on 1.8% of carries and bots on 1.6% **with
   the feature dark** — the bots already sit at the human baseline, so
