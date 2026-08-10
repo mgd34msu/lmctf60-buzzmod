@@ -71,6 +71,16 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## Protocol lessons ledgered
 
+- **Breather causes part of the rung-4 escort tell, and Rule 21 protects
+  it (2026-08-10).** Ablation, 8 waves/arm, measured as a between-arm
+  delta at fixed parity per the eye's validated use: escort_fraction_obs
+  0.519 at dose 0 vs 0.644 at dose 4 — the drift forensics were right.
+  But the same ablation replicated breather's original cap win
+  (conversion 0.149 vs 0.224), so dose 0 is refused on the fork declared
+  before the numbers were seen. Dose 2 is in trial to find whether the
+  conversion survives with less of the escort; if not, this share of the
+  tell is accepted as residual, exactly like rung-2's edge strip.
+
 - **THE ESCORT EYE IS COMPROMISED (2026-08-10).** Rung 4's sole
   "validated" scalar fails the goal's own standard — an eye that cannot
   rank the knowns judges nothing. Three findings:

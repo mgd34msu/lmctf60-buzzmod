@@ -390,15 +390,18 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # 84-wave "breather costs conversion" flag died with the discovery that
 # its control arm also ran ribbon/jitter 0 -- three variables, not one.
 # s09-ctrl stays 0 as always.
-# DRIFT ABLATION 2026-08-10: bot escort_fraction rose 0.422 -> 0.577
-# after the week's adoptions, and the forensics finger breather first --
-# a paused carrier is easy for any teammate to close on and linger
-# beside (mean single-mate streak 3.85s -> 6.52s). s03=0 vs s04=4
-# isolates it, measured on escort_fraction_obs AND caps. Note the
-# Rule-21 fork this sets up: breather bought conversion 0.046 -> 0.114,
-# so if it also causes the escort tell we must weigh a real cap loss
-# against a film tell, and caps win.
-BREATHER=(4      4        0        4        4         4        4         4        0        4)
+# DRIFT ABLATION RESULT 2026-08-10 (8 waves/arm): breather DOES cause a
+# slice of the rung-4 escort tell -- escort_fraction_obs 0.519 at dose 0
+# vs 0.644 at dose 4 -- and it is simultaneously a real cap winner,
+# conversion 0.149 vs 0.224, replicating its original adoption. That is
+# the Rule-21 fork, pre-declared before the numbers: caps outrank film
+# texture, so dose 0 is refused.
+# BUT the original ladder tested 0/4/8 and found 4 ~= 8; the space
+# BETWEEN 0 and 4 was never probed. Dose 2 asks whether most of the
+# conversion survives with less of the escort. Free win if it does;
+# if conversion falls with it, Rule 21 rules and the breather-caused
+# share of the escort tell is accepted as residual.
+BREATHER=(4      4        2        4        4         4        4         4        0        4)
 
 # THE SHELF TRIAL (steal-genesis study): sg_shelfcost 1 on s03 vs s04
 # control, mactf06 -- the map with the measured 1275-cost shelf. Bars
