@@ -40,6 +40,12 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## The morgue (honest nulls and strikes, with their lessons)
 
+- **sg_handoff** (2026-08-09): STRUCK before trial. The new handoff eye
+  measures humans handing off on 1.8% of carries and bots on 1.6% **with
+  the feature dark** — the bots already sit at the human baseline, so
+  arming it could only push them past it. Eye retained as a diagnostic
+  (separability 0.486, chance-level, not Stage-A gradeable at n=8 human
+  games).
 - **escortdose** (2026-08-09): null on its bar (escort_fraction 0.485 vs 0.477, 17 waves/arm) — the metric is teammate PROXIMITY within 400u of the carrier, and teammates are near the carrier whatever their role; a role gate cannot move it. **Unpredicted side effect worth its own trial: caps 86 vs 54, steals 218 vs 148** on the dose arm — assigned escorts may be wasted bodies. Cvar left dark at 100.
 - **nobacktrack 150** (2026-08-08): struck — revisit-2 flat (0.284 vs 0.273), caps 8 vs 18. The ping-pong is field-plateau oscillation between legs, not priced immediate returns.
 - **edgeride** (2026-08-08): struck by its own kill switch — falls 3 vs 1, off-graph flat. Owner ruling executed; the edge-strip tell is an accepted residual and never-falling is the accepted signature.
@@ -62,6 +68,14 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 - exit-asym: parked on Rule 21 (31% cap cost for a cosmetic).
 
 ## Protocol lessons ledgered
+
+- **The coordination baseline is LOW, and our teamplay features overshoot
+  it (2026-08-09).** Two independent measurements now say the same thing:
+  pub humans escort carriers on 0.02–0.32 of carry time (bots: 0.33–0.75)
+  and hand off on 1.8% of carries (bots already 1.6% with the feature
+  off). Every remaining "better teamwork" feature must be checked against
+  the human rate BEFORE it is built, not after — the corpus is a pub, and
+  out-organizing a pub is a tell, not an improvement.
 
 - **The hit-triangle artifact (2026-08-09).** fightsheet's "hits" counted
   every TE_BLOOD, which the game emits for lava/slime (no cooldown — one
@@ -92,7 +106,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 4. **Escort-as-cap-lever** — the escortdose side effect (caps 86v54) deserves a confirming trial on its own bar.
 5. teamsheet panels 1/3/4 — coverage/sample-sensitive at n=4 human; corpus growth is the path (18-map manifest + s10/lmctf57 farm).
 6. Airstrafe chain tuning: never trialed.
-7. Dark features still unjudged: tilt, clockplay, spawnbeat, belief cone/range, handoff, railrhythm — each blocked on an instrument eye (TRIALS.md has the queue and the eyes each needs). sessiondb is a config flip, not a trial.
+7. Dark features still unjudged: tilt, clockplay, spawnbeat, belief cone/range, railrhythm — each blocked on an instrument eye (TRIALS.md has the queue and the eyes each needs). **handoff struck 2026-08-09** (bots already at the human rate). sessiondb is a config flip, not a trial.
 
 ## Not implemented
 
