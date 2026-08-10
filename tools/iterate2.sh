@@ -73,14 +73,15 @@ SECS=(  600      600      900      900      900       900      900       600    
 # the contaminated-era 13v7 was noise. The corpus cut survives for
 # future re-derivation (windows were hunter-biased at the SEED level?
 # open question) but the flag is parked.
-# ESCORT DOSE 35 ADOPTED fleet-wide 2026-08-09. Confirmed on its own
-# pre-registered bar (caps up): 42 vs 22 caps and 92 vs 55 steals over
-# 8 waves/arm, replicating the 86-vs-54 side effect that prompted it.
-# Assigned escorts WERE wasted bodies -- freeing two thirds of them to
-# attack nearly doubles caps. Neutral on the rung-4 film tell (escort
-# PROXIMITY is incidental and did not move), so this is a pure
-# outcomes win taken on outcomes evidence. s09-ctrl stays 100.
-ESCORTDOSE=(35  35       35       35       35        35       35        35       100      35)
+# ESCORT DOSE 35 adopted fleet-wide 2026-08-09 (42 vs 22 caps, 92 vs 55
+# steals, 8 waves/arm on its own pre-registered bar) -- but an early
+# fleet-wide peek read caps/game DOWN (1.41 vs 2.14), so the adoption is
+# PROVISIONAL. That peek was confounded (mixed maps and formats the
+# trial never covered; its pre-adopt window contained the winning arm),
+# and a peek is not a census. s08 returns to 100 as a control for a
+# 16-wave confirmation -- double the original -- on the matched pair
+# that earned it. Miss = revert to 100 and re-trial at 60.
+ESCORTDOSE=(35  35       35       35       35        35       35        100      100      35)
 
 # ESCAPE PRIORS ADOPTED fleet-wide 2026-08-07 (8 waves/arm, lmctf22):
 # conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 -- volume

@@ -117,50 +117,35 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 ## Not implemented
 3. Stage 2 (beat human numbers while still passing): steal initiation 0.26/min vs human 1.3/min is the measured gap.
 
-## Open questions for the owner
+## Owner questions — ALL RESOLVED
 
-3. **Rung-5 sequencing (proceeding, but flagging).** The goal reads
-   "passes blind judgment — and then until the bots beat the humans' own
-   numbers." Rung 5 appears to invert that: its only validated eye is
-   steal volume (bots 0.26/min vs humans 1.3/min), so it cannot pass
-   until stage-2 work lands. On inspection this is not a reordering —
-   **closing the steal-volume gap IS rung-5's blocker and stage-2's
-   first number simultaneously.** So the work starts now either way and
-   nothing is blocked; only the judging date moves. Flagged because the
-   ladder-order reading is yours to confirm, not mine to assume.
+All three standing questions were returned to me on 2026-08-09 with the
+decisions delegated. Rulings, with the reasoning that produced them:
 
-1. **RESOLVED (2026-08-08).** Rope locomotion was built (ropetravel), trialed at two doses, and closed with the whole rope family; forensics reassigned the tell to foot placement, and the owner's edgeride ruling capped it as residual.
-   Original question: **Rope locomotion (rung-2 off-graph tell).** The tell needs bots that
-   pull ropes opportunistically DURING ground travel (swing-assist), not
-   cheaper rope links — a new movement behavior touching the pmove
-   sub-step and hook phases. Recommendation: build it as sg_freeride
-   behind a cvar, trial it on the film pair like everything else; it is
-   the named blocker for rung 2 and nothing else addresses it. Working
-   everything it doesn't block meanwhile (route dither targets rung-2
-   tell #2 next).
+1. **Rope locomotion (rung-2 off-graph).** RESOLVED 2026-08-08 — built,
+   trialed at two doses, closed with the whole rope family; forensics
+   reassigned the tell to foot placement.
+2. **The edge strip.** RESOLVED 2026-08-08 — one edgeride trial, struck
+   by its own fall kill switch (falls 3v1). Tell accepted as residual;
+   never falling is the accepted bot signature on route sheets.
+3. **Rung-5 ladder order.** RESOLVED 2026-08-09 — no exception needed,
+   because it was never an inversion. Rung 5's only validated eye IS the
+   steal-volume gap, so its blocker and stage-2's first number are the
+   same work. The rung-5 line stays open, judging happens after the
+   volume work, and no fresh judges get spent on a 0.964-separability
+   near-certain fail. Nothing is blocked in the meantime.
 
-## Open questions for the owner
+## Standing policy: rung-1 regression (ruled 2026-08-09)
 
-3. **Rung-5 sequencing (proceeding, but flagging).** The goal reads
-   "passes blind judgment — and then until the bots beat the humans' own
-   numbers." Rung 5 appears to invert that: its only validated eye is
-   steal volume (bots 0.26/min vs humans 1.3/min), so it cannot pass
-   until stage-2 work lands. On inspection this is not a reordering —
-   **closing the steal-volume gap IS rung-5's blocker and stage-2's
-   first number simultaneously.** So the work starts now either way and
-   nothing is blocked; only the judging date moves. Flagged because the
-   ladder-order reading is yours to confirm, not mine to assume.
+A passed rung is not re-judged on a calendar — that would burn fresh
+judges, which are the scarcest instrument here, for no information.
+Instead: **any ADOPTED change touching the raw-movement layer (pmove,
+steering, ribbon/jitter, gait/rope) fires a rung-1 re-judge before the
+next higher-rung set runs.** Struck features fire nothing.
 
-2. **RESOLVED — the edge strip.** Ruling executed: one edgeride trial, struck by its own fall kill switch. Residual accepted.
-   Original question: Eight mechanisms nulled; the
-   forensics say the human signal is feet 10–40u past the seed edge on
-   walkway margins — ground the bots' fall-safety feelers refuse. The
-   two honest paths: (a) sg_edgeride — relax the edge margin on grounded
-   walkway legs behind a cvar, falls as a hard guard (Rule 21 watch); or
-   (b) accept the tell as a standing residual and judge rung-2 with it
-   in place. Recommendation: try (a) once — a single dose trial with
-   fall-count as an automatic kill switch; if it costs a single canary
-   fall, (b) becomes the ruling. Rung-3 work continues meanwhile.
+Current debt: **zero.** Every movement-layer feature attempted since the
+rung-1 pass — freeride, ropetravel, edgeride, route dither, ribbon-112 —
+was struck. Nothing underneath rung 1 has moved.
 
 ## Canaries
 
