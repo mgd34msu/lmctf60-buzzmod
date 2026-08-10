@@ -1492,3 +1492,197 @@ if __name__ == '__main__':
 # parameter that has never been fit to anything: POV_RADIUS_DEFAULT (900u)
 # is film.py's own instrument constant, not a value calibrated for this
 # rung.
+#
+#
+# ----------------------------------------------------------------- MODULE
+# NOTE ADDENDUM (2026-08-10): escort_fraction_obs STABILITY BATTERY. LEDGER.md
+# 2026-08-10 ("THE ESCORT EYE IS COMPROMISED") demoted escort_fraction on
+# forensic evidence: (1) human carry windows are observed far less than
+# bots' under pov-parity, and window_escort_fraction scores an unobserved
+# frame as unescorted, deflating the human number specifically; (2)
+# pov-parity itself was shown to move the BOT number (raw 0.556 -> parity
+# 0.643 on one mactf06 sample) by preferentially deleting the carrier's
+# solo stretches, a knob (parity on/off, not parity radius) Stage A never
+# tested. escort_fraction_obs (window_escort_fraction_obs, added same day)
+# is the fix: a carrier-sampled frame only counts, in numerator or
+# denominator, when a teammate was ALSO sampled at that frame -- an
+# unobservable frame is dropped rather than read as "not escorted". A single
+# run on that day's data reported separability 0.944 (mactf06) / 0.969
+# (lmctf22), both above the 0.85 gate. This addendum is the same radius-
+# sweep-plus-leave-one-out battery escort_fraction was put through in the
+# addendum above, plus the parity-on/off test that battery never ran
+# either, applied to escort_fraction_obs for the first time.
+#
+# CORPUS: bot arm is every wave740+ *-5v5.dm2 file in the YamagiQ2 hooktest
+# tree on s03/s04 (mactf06, n=50: waves 740-763 + 882) and s05/s08 (lmctf22,
+# n=49: waves 740-763 s05 + 882 s05 -- wave882-s08 is a 7v7 fixture, excluded
+# the same way wave530 was excluded from the corpus above). This is deeper
+# than the n=16-wave (740-755) corpus the single 0.944/0.969 measurement
+# used, and a different, later-wave corpus than either run above (wave39x/
+# 40x or wave498-535) -- so absolute bot means below are not expected to
+# match either earlier addendum; LEDGER.md's own drift finding (bot
+# escort_fraction on mactf06 rose 0.422 -> 0.577 across waves 498-535 ->
+# 740+, from adopted features breather-4 and escape-priors) already predicts
+# they will not. Human arm is unchanged: every *mactf06*/*lmctf22*.dm2 in
+# the hand-collected corpus, gated by DURATION_MIN_S (300s) as always --
+# n_human=4/4 on both maps, the same four demos both earlier addenda used
+# (confirmed by matching human escort_fraction means below: 0.2541 mactf06,
+# 0.1425 lmctf22 -- identical to the very first Stage-A record's 0.254 and
+# 0.143). Same two --stands entries, same ESCORT_RADIUS default (400u)
+# throughout -- only pov-parity radius (item 1) and pov-parity on/off (item
+# 3) move.
+#
+# 1. POV-PARITY RADIUS SWEEP (700/800/900/1000/1100u; bot arm, parity ON;
+#    human values are radius-invariant by construction, see run above):
+#
+#    mactf06 (n_human=4 [human escort_fraction=0.2541, escort_fraction_obs=
+#    0.3249], n_bot=50 at every radius)
+#      radius                700u   800u   900u  1000u  1100u
+#      escort_fraction      sep:  0.913  0.923  0.913  0.913  0.913
+#                       bot mean:  0.5662 0.5533 0.5417 0.5377 0.5342
+#      escort_fraction_obs  sep:  0.969  0.954  0.944  0.929  0.918
+#                       bot mean:  0.6767 0.6408 0.6132 0.5936 0.5781
+#
+#    lmctf22 (n_human=4 [human escort_fraction=0.1425, escort_fraction_obs=
+#    0.1968], n_bot=49 at every radius)
+#      radius                700u   800u   900u  1000u  1100u
+#      escort_fraction      sep:  0.949  0.944  0.954  0.959  0.969
+#                       bot mean:  0.4490 0.4415 0.4350 0.4306 0.4305
+#      escort_fraction_obs  sep:  0.985  0.985  0.980  0.974  0.974
+#                       bot mean:  0.6451 0.5975 0.5621 0.5359 0.5183
+#
+#    escort_fraction_obs clears 0.85 at every one of the 10 (radius, map)
+#    cells, same as escort_fraction does on this corpus -- but note that
+#    escort_fraction itself now clears 0.85 on mactf06 too (0.913-0.923),
+#    which the addendum above's smaller/earlier corpus never achieved
+#    (0.681-0.704, SUB-GATE). That is corpus drift (see CORPUS above), not
+#    a contradiction: this run's bot mean (0.53-0.57) sits well above the
+#    earlier corpus's (0.42-0.43), consistent with LEDGER.md's +37% drift
+#    finding. escort_fraction_obs's radius range is wider in absolute AUC
+#    terms on mactf06 (0.918-0.969, spread 0.051) than escort_fraction's
+#    (0.913-0.923, spread 0.010) -- the new scalar moves MORE with radius
+#    here, though both stay clear of the gate at every point tested.
+#
+# 2. LEAVE-ONE-OUT (human demos, bot arm fixed at the 900u default; n=4 per
+#    map):
+#
+#    mactf06 (all four qualifying demos run 10 tracked players -- no roster
+#    outlier on this map, matching the addendum above)
+#      scalar                       full   x-20.01  x-20.37  x-20.42  x-20.54
+#      escort_fraction_obs          0.944  0.932    0.932    0.925    0.986
+#      escort_fraction              0.913  0.898    0.898    0.891    0.966
+#      (x-HH.MM = excluding lmctf-2022-0{2-08,2-15}-mactf06-HH.MM.dm2, same
+#      four files the addendum above used)
+#
+#    lmctf22 (20.32 is the n=6 / 3v3 demo the first Stage-A note flagged)
+#      scalar                       full   x-20.32* x-21.01  x-21.45  x-20.49
+#      escort_fraction_obs          0.980  0.973    0.986    0.980    0.980
+#      escort_fraction              0.954  0.939    0.980    0.946    0.952
+#      (*x-20.32 = excluding lmctf-2021-11-14-lmctf22-20.32.dm2, the 3v3
+#      outlier: escort_fraction_obs=0.0179, escort_fraction=0.0037 on that
+#      demo alone, vs 0.22-0.30 obs / 0.15-0.24 esc on the other three)
+#
+#    THE 3v3 OUTLIER'S LEVERAGE ON escort_fraction_obs, quantified: dropping
+#    it moves separability by only -0.007 (0.980 -> 0.973) -- the smallest
+#    move of any of the four lmctf22 exclusions in absolute terms, and in
+#    the OPPOSITE direction from what "outlier" would suggest (dropping a
+#    supposedly distorting point should raise separability, not lower it
+#    slightly). This is the same pattern the addendum above found for
+#    escort_fraction and spacing_median on lmctf22: the demo that looks like
+#    the corpus's visible oddity by roster size is not the demo carrying
+#    statistical leverage. On this scalar and this corpus, no single
+#    exclusion on either map moves separability by more than 0.061
+#    (mactf06 x-20.54, 0.944 -> 0.986) -- every leave-one-out cell stays
+#    comfortably clear of the 0.85 gate on both maps for escort_fraction_obs,
+#    a materially calmer leave-one-out table than escort_fraction saw in the
+#    addendum above on mactf06 (that scalar never cleared the gate there at
+#    all) or than spacing_median/mean_simultaneous_attackers saw on either
+#    map (swings up to +/-0.17).
+#
+# 3. PARITY ON/OFF (bot arm, escort_radius=400u, escort/defense-radius
+#    default, pov-parity radius fixed at the 900u default; this knob was
+#    never run for either scalar before today -- LEDGER.md's 0.556 -> 0.643
+#    mactf06 finding that triggered this whole battery was a hand-forensic
+#    spot check on a different, smaller sample, not a corpus-wide run):
+#
+#      map       scalar                raw      pov     delta    rel%
+#      mactf06   escort_fraction       0.4917   0.5417  +0.0500  +10.2%
+#      mactf06   escort_fraction_obs   0.4917   0.6132  +0.1215  +24.7%
+#      lmctf22   escort_fraction       0.4327   0.4350  +0.0023   +0.5%
+#      lmctf22   escort_fraction_obs   0.4327   0.5621  +0.1294  +29.9%
+#
+#    THIS IS THE ANSWER TO THE QUESTION THE SCALAR WAS BUILT TO SETTLE, AND
+#    IT IS THE OPPOSITE OF WHAT THE DESIGN PREDICTED. escort_fraction_obs
+#    does not reduce pov-parity sensitivity -- it is MORE sensitive to the
+#    parity on/off knob than escort_fraction, on both maps, by a wide
+#    margin: roughly 2.4x the absolute swing on mactf06 (+0.122 vs +0.050)
+#    and, on lmctf22, a swing that goes from functionally flat (+0.002,
+#    consistent with LEDGER.md's "direction reverses on lmctf22" -- this
+#    run finds it merely flattens rather than reverses, likely the same
+#    corpus-drift effect noted in item 1) to the single largest parity
+#    effect measured anywhere in this battery (+0.129, +29.9% relative).
+#    The 2026-08-10 escort_fraction_obs commit already saw a piece of this
+#    ("raised the pov-parity bot number as much or more, because parity was
+#    deleting the bot's solo stretches too") from a single measurement; this
+#    battery confirms it was not a fluke and puts a number on it: the fix
+#    for the coverage-ASYMMETRY problem (numerator/denominator honesty) did
+#    not fix, and in fact worsened, the coverage-MAGNITUDE problem (how much
+#    the bot number moves when the parity filter is toggled). Both problems
+#    were named in LEDGER.md's three-part diagnosis; escort_fraction_obs
+#    was designed against finding (1) (the asymmetric-scoring deflation)
+#    and finding (2) (parity inflating the bot number) was never its target
+#    -- but the brief for this scalar frames coverage-honesty as a general
+#    fix for coverage-sensitivity, and on this specific, pre-registered,
+#    most-interesting-question-in-the-battery test, that broader claim does
+#    not hold. The separability gain reported in the 2026-08-10 commit
+#    (0.903->0.944, 0.961->0.969) is real and reproduced by item 1 above,
+#    but it is happening DESPITE larger parity swings, not because the
+#    scalar became less sensitive to the coverage knob -- both arms' means
+#    are moving further under parity, and by chance (so far, on this
+#    corpus) they move in a way rank-order separation survives. That is a
+#    weaker, more fragile kind of validation than "the confound was
+#    removed," and it should be reported as such rather than folded
+#    silently into the VERDICT below.
+#
+#    Human pov-parity remains a confirmed structural no-op on both maps for
+#    both scalars (bit-identical on/off across all 4+4 qualifying demos,
+#    same control-flow reason the addendum above already established:
+#    pov-parity only ever fires when d['svrecord'] is true).
+#
+# 4. VERDICTS (VALIDATED = separability >= 0.85 at every one of the 5 radii
+#    AND every one of the 4 leave-one-out exclusions; SUB-GATE = never
+#    reaches 0.85 anywhere in that combined set; COVERAGE-SENSITIVE =
+#    reaches 0.85 somewhere in that set but not everywhere):
+#
+#      map       scalar                        min     max     verdict
+#      mactf06   escort_fraction_obs           0.918   0.986   VALIDATED
+#      mactf06   escort_fraction               0.891   0.966   VALIDATED*
+#      lmctf22   escort_fraction_obs           0.973   0.986   VALIDATED
+#      lmctf22   escort_fraction               0.939   0.980   VALIDATED*
+#
+#    (*escort_fraction's VALIDATED reading here is corpus-specific -- see
+#    item 1's drift note. On the earlier, smaller wave498-535 corpus the
+#    addendum above recorded escort_fraction SUB-GATE on mactf06 [0.652-
+#    0.743]. Both readings are honest for their own corpus; the scalar's
+#    separability is not corpus-invariant, which is itself evidence for
+#    LEDGER.md's real-drift finding rather than a measurement error here.)
+#
+# WHAT THIS MEANS FOR RUNG-4 JUDGING: escort_fraction_obs clears the
+# combined radius-sweep-plus-leave-one-out bar on BOTH maps, something no
+# scalar in this module (including escort_fraction on its original corpus)
+# had done before this run -- on separability alone this is the strongest
+# result the module has produced. It should NOT, however, be presented as
+# "the coverage-honesty fix that solved parity-sensitivity," because item 3
+# shows the opposite of that on the one test designed to check it directly:
+# escort_fraction_obs swings MORE under the parity on/off toggle than
+# escort_fraction did, on both maps, and by a wide margin on lmctf22
+# specifically. The scalar is VALIDATED on the separability bar this
+# module's whole battery series uses, but its own design rationale --
+# coverage-honesty as a general antidote to coverage-sensitivity -- is NOT
+# confirmed by this data and should be treated as an open question, not a
+# closed one, before escort_fraction_obs replaces escort_fraction as any
+# rung-4 centerpiece. A parity-radius-by-parity-on/off interaction sweep
+# (does the +0.12/+0.13 parity delta itself grow or shrink across
+# 700-1100u, the way escort_fraction_obs's radius sweep in item 1 already
+# shows more radius-movement than escort_fraction's) is the natural next
+# probe and has not been run.
