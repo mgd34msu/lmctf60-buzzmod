@@ -83,15 +83,14 @@ SECS=(  600      600      900      900      900       900      900       600    
 # possible regression the forensics must explain.
 LONEWOLF=(1    1        1        1        1         1        1         1        1        1)
 
-# ESCORT DOSE 35 adopted fleet-wide 2026-08-09 (42 vs 22 caps, 92 vs 55
-# steals, 8 waves/arm on its own pre-registered bar) -- but an early
-# fleet-wide peek read caps/game DOWN (1.41 vs 2.14), so the adoption is
-# PROVISIONAL. That peek was confounded (mixed maps and formats the
-# trial never covered; its pre-adopt window contained the winning arm),
-# and a peek is not a census. s08 returns to 100 as a control for a
-# 16-wave confirmation -- double the original -- on the matched pair
-# that earned it. Miss = revert to 100 and re-trial at 60.
-ESCORTDOSE=(35  35       35       35       35        35       35        100      100      35)
+# ESCORT DOSE 35 CONFIRMED 2026-08-10 and fully adopted. Three
+# independent samples agree: 86v54 (side effect), 42v22 (original
+# 8-wave trial), 83v52 over 17 waves/arm (this confirmation, 4.88 vs
+# 3.06 caps/game, steals 201 vs 118). The early fleet-wide peek that
+# read caps DOWN was confounded as suspected -- mixed maps and formats
+# the trial never covered, and a pre-adopt window containing the
+# winning arm. Peeks are not censuses. s09-ctrl stays 100.
+ESCORTDOSE=(35  35       35       35       35        35       35        35       100      35)
 
 # ESCAPE PRIORS ADOPTED fleet-wide 2026-08-07 (8 waves/arm, lmctf22):
 # conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 -- volume

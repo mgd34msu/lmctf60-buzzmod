@@ -27,7 +27,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## Adopted (film + data on record, most recent first)
 
-- **escortdose 35** (2026-08-09): assigned escorts were wasted bodies — 42 vs 22 caps and 92 vs 55 steals (8 waves/arm) confirming the 86-vs-54 side effect on its own pre-registered bar. Freeing two thirds of escorts to attack nearly doubles caps. Neutral on the rung-4 film tell.
+- **escortdose 35** (2026-08-09, **CONFIRMED 2026-08-10**): assigned escorts were wasted bodies. Three independent samples — 86v54 (side effect), 42v22 (8-wave trial), **83v52 over 17 waves/arm** (4.88 vs 3.06 caps/game, steals 201 vs 118). Freeing two thirds of escorts to attack raises caps ~60%. Neutral on the rung-4 film tell. The interim fleet-wide peek that read caps DOWN was confounded (mixed maps/formats, pre-adopt window containing the winning arm) — a peek is not a census.
 - **aimtexture** (2026-08-08): +0.30° toward the human aim anchor (7.66 vs 7.36, 16 waves, caps flat), cadence raggedness side gain; dose-ladder noted. Second dark-feature adoption.
 - **escape priors** (2026-08-07): human-mined carrier escape routes — conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 (8 waves/arm, lmctf22). First dark-feature adoption.
 - **wcommit** (2026-08-07): keep the held gun anywhere in the band ladder — switch_diagonal 0.691→0.828 (human 0.897), caps 25 vs 13, zero arm overlap, 12 waves/arm.
