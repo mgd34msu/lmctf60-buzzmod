@@ -71,6 +71,19 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## Protocol lessons ledgered
 
+- **CONVERSION BARS NEED 16+ WAVES PER ARM (2026-08-10).** The
+  breather dose-2 probe exposed this: its control arm ran the unchanged
+  adopted dose 4 and produced conversion 0.224 in one 8-wave block and
+  0.118 in the next — same config, adjacent waves, ~2x apart. Control
+  drift that size swamps every effect measured at n=8. **Film scalars
+  are fine at 8 waves** (per-demo n, tight sem, and dose 4 reproduced
+  at 0.601–0.644 across the same two blocks). **Caps and conversion are
+  not** — they are ratios of single-digit counts. Escortdose survived
+  scrutiny precisely because it was confirmed at 17 waves per arm.
+  Retroactive consequence: the breather ablation's ESCORT half stands
+  (0.519 vs 0.644, replicated); its CONVERSION half (0.149 vs 0.224) is
+  no longer load-bearing, so the Rule-21 fork rests on breather's
+  ORIGINAL 19-wave ladder rather than on that 8-wave read.
 - **Breather causes part of the rung-4 escort tell, and Rule 21 protects
   it (2026-08-10).** Ablation, 8 waves/arm, measured as a between-arm
   delta at fixed parity per the eye's validated use: escort_fraction_obs

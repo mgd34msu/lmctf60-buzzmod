@@ -390,18 +390,16 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # 84-wave "breather costs conversion" flag died with the discovery that
 # its control arm also ran ribbon/jitter 0 -- three variables, not one.
 # s09-ctrl stays 0 as always.
-# DRIFT ABLATION RESULT 2026-08-10 (8 waves/arm): breather DOES cause a
-# slice of the rung-4 escort tell -- escort_fraction_obs 0.519 at dose 0
-# vs 0.644 at dose 4 -- and it is simultaneously a real cap winner,
-# conversion 0.149 vs 0.224, replicating its original adoption. That is
-# the Rule-21 fork, pre-declared before the numbers: caps outrank film
-# texture, so dose 0 is refused.
-# BUT the original ladder tested 0/4/8 and found 4 ~= 8; the space
-# BETWEEN 0 and 4 was never probed. Dose 2 asks whether most of the
-# conversion survives with less of the escort. Free win if it does;
-# if conversion falls with it, Rule 21 rules and the breather-caused
-# share of the escort tell is accepted as residual.
-BREATHER=(4      4        2        4        4         4        4         4        0        4)
+# BREATHER stays at the adopted dose 4. The dose-2 probe is VOID: its
+# control arm (s04, unchanged dose 4) read conversion 0.224 in the
+# ablation and 0.118 in the dose-2 trial -- same config, adjacent wave
+# ranges, ~2x apart. Control drift that large swamps the effect, so no
+# conversion verdict at this sample size means anything.
+# STANDING RULE from this (see LEDGER): conversion/caps bars need 16+
+# waves per arm; the 8-wave standard is only sound for film scalars,
+# which carry per-demo n and tight sem. Escortdose held up precisely
+# because it was confirmed at 17.
+BREATHER=(4      4        4        4        4         4        4         4        0        4)
 
 # THE SHELF TRIAL (steal-genesis study): sg_shelfcost 1 on s03 vs s04
 # control, mactf06 -- the map with the measured 1275-cost shelf. Bars
