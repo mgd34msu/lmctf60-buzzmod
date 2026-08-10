@@ -63,6 +63,21 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## Protocol lessons ledgered
 
+- **The hit-triangle artifact (2026-08-09).** fightsheet's "hits" counted
+  every TE_BLOOD, which the game emits for lava/slime (no cooldown — one
+  per 0.1s tick), rail pierce, rocket splash and grapple contact as well
+  as weapon impacts: 47% of blood events in a sampled bot demo had no
+  preceding shot. No Stage-A scalar reads `hits` (verified in
+  `_compute_scalars`), so **no verdict is contaminated** — but the
+  markers judges quoted as "machine-precision aim" were partly this
+  artifact. Being fixed; rung-3's residual accuracy tell must be
+  re-measured against honest markers before stage 2 chases it.
+- **smap05 orphan seeds: CLOSED (2026-08-09).** Verified in film across
+  5 demos / ~50 minutes of bot play: orphans do become the geometrically
+  nearest seed occasionally (0.07–0.18% of samples) but the longest
+  continuous dwell is 0.6s and every instance recovers. Harmless as the
+  graph argument claimed, now confirmed from film.
+
 - s04 ran ribbon/jitter 0 until 2026-08-07 — every film-pair A/B before then was multi-variable. s09 is the ONLY control now.
 - lmctf22 is a weak rung-2 judging map: it suppresses off-graph flight for both populations; its human sheet drew a unanimous conviction-4 bot miscall. **Codified in tools/set-composition.md** — a map qualifies per rung, by that rung's own Stage-A separability on that map.
 - Pooled census only — incremental reads are sampling luck (bimodal canary lesson, waves 424–429).
