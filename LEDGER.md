@@ -64,7 +64,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 ## Protocol lessons ledgered
 
 - s04 ran ribbon/jitter 0 until 2026-08-07 — every film-pair A/B before then was multi-variable. s09 is the ONLY control now.
-- lmctf22 is a weak rung-2 judging map: it suppresses off-graph flight for both populations; its human sheet drew a unanimous conviction-4 bot miscall.
+- lmctf22 is a weak rung-2 judging map: it suppresses off-graph flight for both populations; its human sheet drew a unanimous conviction-4 bot miscall. **Codified in tools/set-composition.md** — a map qualifies per rung, by that rung's own Stage-A separability on that map.
 - Pooled census only — incremental reads are sampling luck (bimodal canary lesson, waves 424–429).
 - Sheets show map/hash/carries ONLY (duration and player-count leaks burned judge sets #3–#4).
 - /tmp dies on reboot: instruments and law live in the repo or project memory, never only in scratchpad (2026-08-07 reboot took the steal-genesis scripts).
@@ -82,7 +82,6 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 ## Not implemented
 
 1. Rung-5 set protocol.
-2. Rung-2 set-composition rule (map discriminator weighting).
 3. Stage 2 (beat human numbers while still passing): steal initiation 0.26/min vs human 1.3/min is the measured gap.
 
 ## Open questions for the owner
