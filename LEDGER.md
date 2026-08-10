@@ -16,7 +16,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
 | 4. Team decisions | set #1 FAILED 16/18; first fix null | tell #1 (unanimous): bots OVER-escort — 0.33–0.75 vs human 0.02–0.32 lone-wolf runs; tell #2: team-mirror symmetry. escortdose null (proximity ≠ role); next cut must move PROXIMITY (teammate routing away from the carrier lane) |
-| 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
+| 5. Match outcomes | protocol written; judging deferred by design | its only eye (steals_total, 0.964) measures the steal-volume gap stage 2 exists to close — so rung-5's blocker and stage-2's first number are THE SAME WORK. Judging waits; the work does not |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
 ## In trial now
@@ -113,11 +113,19 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 7. Dark features still unjudged: tilt, clockplay, spawnbeat, belief cone/range, railrhythm — each blocked on an instrument eye (TRIALS.md has the queue and the eyes each needs). **handoff struck 2026-08-09** (bots already at the human rate). sessiondb is a config flip, not a trial.
 
 ## Not implemented
-
-1. Rung-5 set protocol.
 3. Stage 2 (beat human numbers while still passing): steal initiation 0.26/min vs human 1.3/min is the measured gap.
 
 ## Open questions for the owner
+
+3. **Rung-5 sequencing (proceeding, but flagging).** The goal reads
+   "passes blind judgment — and then until the bots beat the humans' own
+   numbers." Rung 5 appears to invert that: its only validated eye is
+   steal volume (bots 0.26/min vs humans 1.3/min), so it cannot pass
+   until stage-2 work lands. On inspection this is not a reordering —
+   **closing the steal-volume gap IS rung-5's blocker and stage-2's
+   first number simultaneously.** So the work starts now either way and
+   nothing is blocked; only the judging date moves. Flagged because the
+   ladder-order reading is yours to confirm, not mine to assume.
 
 1. **RESOLVED (2026-08-08).** Rope locomotion was built (ropetravel), trialed at two doses, and closed with the whole rope family; forensics reassigned the tell to foot placement, and the owner's edgeride ruling capped it as residual.
    Original question: **Rope locomotion (rung-2 off-graph tell).** The tell needs bots that
@@ -130,6 +138,16 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
    tell #2 next).
 
 ## Open questions for the owner
+
+3. **Rung-5 sequencing (proceeding, but flagging).** The goal reads
+   "passes blind judgment — and then until the bots beat the humans' own
+   numbers." Rung 5 appears to invert that: its only validated eye is
+   steal volume (bots 0.26/min vs humans 1.3/min), so it cannot pass
+   until stage-2 work lands. On inspection this is not a reordering —
+   **closing the steal-volume gap IS rung-5's blocker and stage-2's
+   first number simultaneously.** So the work starts now either way and
+   nothing is blocked; only the judging date moves. Flagged because the
+   ladder-order reading is yours to confirm, not mine to assume.
 
 2. **RESOLVED — the edge strip.** Ruling executed: one edgeride trial, struck by its own fall kill switch. Residual accepted.
    Original question: Eight mechanisms nulled; the
