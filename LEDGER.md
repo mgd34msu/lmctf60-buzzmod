@@ -15,7 +15,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
-| 4. Team decisions | **EYE DEMOTED — no validated scalar** | forensics (2026-08-10): escort_fraction is not apples-to-apples. Human carry windows are ~58% observed vs bots' 91%; unobserved frames count as UNESCORTED, so the human 'lone wolf' band is partly demos that could not see the escort. Two cuts (escortdose, lonewolf) nulled against a compromised metric |
+| 4. Team decisions | tell CONFIRMED real; eye rebuilt, calibration owed | escort_fraction_obs (coverage-honest) RAISED separability to 0.944/0.969 — the gap survived normalization, so set #1's 16/18 stands and both nulls were honest. Two mechanisms down (role gate, support pull); drift suspects are our own cap-winning adoptions |
 | 5. Match outcomes | protocol written; judging deferred by design | its only eye (steals_total, 0.964) measures the steal-volume gap stage 2 exists to close — so rung-5's blocker and stage-2's first number are THE SAME WORK. Judging waits; the work does not |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
@@ -96,9 +96,16 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
      Not a controlled ablation; flagged for one.
   A genuine behavioral component survives all of this — bot single-mate
   streaks run 3–10x longer than human ones, which chokepoint geometry
-  cannot produce — so the tell is not imaginary. But it cannot be
-  *sized* until the eye is fixed, and rung-4 set #1's 16/18 was judged
-  against panels carrying all three distortions.
+  cannot produce — so the tell is not imaginary.
+  **RESOLVED same day:** escort_fraction_obs (unobserved frames excluded
+  from numerator AND denominator) raised the human number as predicted —
+  and raised the pov-parity bot number as much or more, because parity
+  was deleting the bot's solo stretches too. Gap flat on mactf06, wider
+  on lmctf22, separability UP on both (0.903→0.944, 0.961→0.969). **The
+  tell is real, set #1's verdict stands, and both nulls were honest.**
+  The demotion is lifted; full VALIDATED status waits on the same
+  stability battery the old scalar passed (radius sweep + leave-one-out),
+  which the new one has not yet run.
 
 - **The coordination baseline is LOW, and our teamplay features overshoot
   it (2026-08-09).** Two independent measurements now say the same thing:
