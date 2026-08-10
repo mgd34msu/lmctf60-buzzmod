@@ -14,7 +14,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 |---|---|---|
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
-| 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual texture for stage 2: hit-triangle accuracy (judge C's anchor) |
+| 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
 | 4. Team decisions | set #1 FAILED 16/18; first fix null | tell #1 (unanimous): bots OVER-escort — 0.33–0.75 vs human 0.02–0.32 lone-wolf runs; tell #2: team-mirror symmetry. escortdose null (proximity ≠ role); next cut must move PROXIMITY (teammate routing away from the carrier lane) |
 | 5. Match outcomes | instrument part-calibrated | Stage A: steals_total 0.964 on mactf06 (regime-dependent by design); lmctf22 gate FAILS |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
@@ -84,8 +84,12 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
   preceding shot. No Stage-A scalar reads `hits` (verified in
   `_compute_scalars`), so **no verdict is contaminated** — but the
   markers judges quoted as "machine-precision aim" were partly this
-  artifact. Being fixed; rung-3's residual accuracy tell must be
-  re-measured against honest markers before stage 2 chases it.
+  artifact. **FIXED 2026-08-09** (attribution to a preceding shot,
+  capped per shot+victim, unattributed kept and printed). The apparent
+  7x bot accuracy advantage was mostly the artifact: bot demos ran
+  83–91% unattributed blood vs humans' 43–58%. Honest gap is ~2x
+  (0.58 vs 0.29 hits/shot) — real, but a quarter the size the markers
+  implied. Scalars bit-identical, so no verdict moved.
 - **smap05 orphan seeds: CLOSED (2026-08-09).** Verified in film across
   5 demos / ~50 minutes of bot play: orphans do become the geometrically
   nearest seed occasionally (0.07–0.18% of samples) but the longest
