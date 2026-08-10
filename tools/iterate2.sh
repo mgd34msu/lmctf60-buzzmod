@@ -391,7 +391,15 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # 84-wave "breather costs conversion" flag died with the discovery that
 # its control arm also ran ribbon/jitter 0 -- three variables, not one.
 # s09-ctrl stays 0 as always.
-BREATHER=(4      4        4        4        4         4        4         4        0        4)
+# DRIFT ABLATION 2026-08-10: bot escort_fraction rose 0.422 -> 0.577
+# after the week's adoptions, and the forensics finger breather first --
+# a paused carrier is easy for any teammate to close on and linger
+# beside (mean single-mate streak 3.85s -> 6.52s). s03=0 vs s04=4
+# isolates it, measured on escort_fraction_obs AND caps. Note the
+# Rule-21 fork this sets up: breather bought conversion 0.046 -> 0.114,
+# so if it also causes the escort tell we must weigh a real cap loss
+# against a film tell, and caps win.
+BREATHER=(4      4        0        4        4         4        4         4        0        4)
 
 # THE SHELF TRIAL (steal-genesis study): sg_shelfcost 1 on s03 vs s04
 # control, mactf06 -- the map with the measured 1275-cost shelf. Bars
