@@ -74,10 +74,19 @@ source rather than vanilla id Software behaviour:
     own making.  MZ_LOGIN is discarded beside it, for the reason above.
   * svc_muzzleflash2 (svc 2) is the monster stream.  Discarded entirely.
   * TE_BLOOD is emitted from exactly one call site, g_combat.c:553, and only
-    when `take` damage lands on a client or monster.  In a ctf match that
-    means: a shot hit a live player.  It is an honest hit signal, and
-    SpawnDamage (g_combat.c:123) multicasts it MULTICAST_PVS from the
-    impact point.
+    when `take` damage lands on a client or monster, and SpawnDamage
+    (g_combat.c:123) multicasts it MULTICAST_PVS from the impact point.  It
+    is an honest DAMAGE signal, but T_Damage is called for more than a
+    weapon hit landing: lava/slime tick damage (p_view.c, no per-victim
+    cooldown -- it fires every 0.1s a player stands in it), rocket/grenade
+    splash hitting everyone in the blast radius from one shot, a rail slug
+    piercing several stacked players, and grapple contact damage all fire
+    the same TE_BLOOD.  Counting every one as "a shot landed" measured
+    hits=1236 against shots=180 on a bot demo, with 47% of blood events
+    having no preceding shot at all -- see attribute_hits, which ties a
+    blood event to a plausible preceding shot before it is allowed to draw
+    an engagement-timeline "hit landed" triangle, and keeps the
+    unattributed count alongside it rather than dropping it.
 
     Hand-audited limitation, symmetric across both shapes and stated in the
     notes strip: the hook (p_weapon.c:1943) and the plasma gun
@@ -326,6 +335,17 @@ TARGET_FOV_DEG = 35.0      # half-width of the cone a shot is attributed in
 HIT_RADIUS = 64.0          # u; TE_BLOOD this close to a player = that player
                            # was hit (player origin is box centre, blood
                            # spawns on the box surface ~<32u away)
+HIT_ATTRIB_WINDOW_S = 1.5  # a TE_BLOOD may trail the shot that plausibly
+                           # caused it by up to this long and still be
+                           # credited to it. Wide enough to cover a slow
+                           # projectile's flight time (rocket/grenade travel
+                           # well under a second at ctf engagement ranges)
+                           # plus the +/-1 frame slop the 10Hz snapshot grid
+                           # already introduces into every event timestamp
+                           # (see EVENT TIMING in walk_demo_events); tight
+                           # enough that an unrelated lava tick or a second,
+                           # separate fight rarely drifts inside it.
+HIT_ATTRIB_WINDOW_FRAMES = int(round(HIT_ATTRIB_WINDOW_S * F.FPS))
 DEATH_LOOKAHEAD_S = 6.0    # a respawn this soon after a fight ends means the
                            # fight ended in a death
 DISENGAGE_WINDOW_S = 3.0   # trailing window drawn in panel 4
@@ -885,11 +905,61 @@ def _other_team(t):
     return None
 
 
-def attribute_hits(bloods, posidx, labels):
+def attribute_hits(bloods, shots, teams, posidx, labels):
     """A TE_BLOOD is attributed to the nearest rostered player within
-    HIT_RADIUS of it at that frame.  TE_BLOOD comes from exactly one call
+    HIT_RADIUS of it at that frame -- that part is unchanged, and still
+    correctly identifies the VICTIM: TE_BLOOD comes from exactly one call
     site (g_combat.c:553) and only fires when damage actually lands on a
-    client or monster, so on a ctf map it means a player took a hit."""
+    client or monster.
+
+    What TE_BLOOD does NOT tell you is who or what caused it, and that is
+    the artifact this function exists to fix.  T_Damage -- the one call
+    site -- fires for a weapon hit, but also for lava/slime tick damage
+    (p_view.c has no per-victim cooldown on it: it fires every 0.1s a
+    player stands in it), for a rocket/grenade splashing everyone in its
+    blast radius from one shot, for a rail slug piercing every stacked
+    player it passes through, and for grapple contact damage.  Counting
+    every blood event as "a shot landed" measured hits=1236 against
+    shots=180 on a bot demo, with 47% of blood events having no preceding
+    shot at all -- and that inflated count is what drives the "hit landed"
+    triangle markers on the engagement timeline, which is not a cosmetic
+    bug: judges have quoted "hit triangles over almost every bar" as
+    evidence of bot-ness, when the triangles were mostly lava.
+
+    So: a blood event is additionally attributed to a SHOT when a shot was
+    fired by a player on the team opposite the victim, no more than
+    HIT_ATTRIB_WINDOW_FRAMES frames before the blood frame (never after --
+    a shot cannot cause damage that already happened), and the (shot,
+    victim) pair has not already been used.  Ties among legal candidates
+    resolve to the most recent shot, the more causally plausible one.
+
+    The cap is on the (shot, victim) PAIR, not on the shot alone, on
+    purpose: one shotgun blast or rail slug legitimately hitting three
+    stacked players is three real hits and must stay three.  What the pair
+    cap forecloses is a single shot being blamed for a whole run of
+    unrelated blood ticks against the SAME victim -- e.g. that victim
+    wandering through lava for the next second, which would otherwise ride
+    the shot's attribution window and look like the shot kept landing.
+
+    A blood event that finds no legal candidate shot is still returned,
+    marked unattributed, rather than dropped -- so environmental damage
+    stays visible in the totals (console/sidecar) instead of silently
+    vanishing.  Requiring an opposite-team shooter means a friendly-fire
+    hit on a server running FF on would show up unattributed too; accepted
+    as the conservative side to be wrong on, since the alternative (any
+    shot by anyone) reopens the door to crediting an unrelated bystander's
+    shot for damage it did not cause.
+
+    Returns a list of dicts: frame, victim, dist, attributed (bool),
+    shot_frame, shot_ent, shot_idx -- the last three are None when
+    unattributed.  shot_idx indexes into `shots` and is what the caller
+    uses to dedupe multiple attributed hits from one splash shot down to a
+    single "landed" marker."""
+    shots_by_shooter_team = collections.defaultdict(list)
+    for i, s in enumerate(shots):
+        shots_by_shooter_team[teams.get(s['ent'])].append((i, s))
+
+    used = set()   # (shot_idx, victim) pairs already spent
     out = []
     for b in bloods:
         f, p = b['frame'], b['pos']
@@ -904,8 +974,32 @@ def attribute_hits(bloods, posidx, labels):
                 continue
             if best is None or dist < best[0]:
                 best = (dist, e)
-        if best is not None:
-            out.append({'frame': f, 'victim': best[1], 'dist': best[0]})
+        if best is None:
+            continue
+        dist, victim = best
+        rec = {'frame': f, 'victim': victim, 'dist': dist,
+               'attributed': False, 'shot_frame': None, 'shot_ent': None,
+               'shot_idx': None}
+        cand_team = _other_team(teams.get(victim))
+        best_shot = None
+        for i, s in shots_by_shooter_team.get(cand_team, []):
+            if s['ent'] == victim:
+                continue
+            delta = f - s['frame']
+            if delta < 0 or delta > HIT_ATTRIB_WINDOW_FRAMES:
+                continue
+            if (i, victim) in used:
+                continue
+            if best_shot is None or s['frame'] > best_shot[1]['frame']:
+                best_shot = (i, s)
+        if best_shot is not None:
+            i, s = best_shot
+            used.add((i, victim))
+            rec['attributed'] = True
+            rec['shot_frame'] = s['frame']
+            rec['shot_ent'] = s['ent']
+            rec['shot_idx'] = i
+        out.append(rec)
     return out
 
 
@@ -1225,18 +1319,34 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
     posidx = position_index(tracks, ents=set(labels))
     shots, respawns, bloods = split_events(d, labels)
     shots = attribute_shots(shots, posidx, d['yaws'], teams, labels)
-    hits = attribute_hits(bloods, posidx, labels)
+    hits = attribute_hits(bloods, shots, teams, posidx, labels)
     deaths_by_ent = {n: F.death_ticks(tracks.get(n, [])) for n in labels}
 
     engs = segment_engagements(tracks, labels, teams, shots)
+    # Markers are built from ATTRIBUTED hits only (unattributed = no
+    # plausible shot behind it -- see attribute_hits) so the timeline stops
+    # drawing a triangle over every lava tick.
     hits_by_frame = collections.defaultdict(list)
     for h in hits:
-        hits_by_frame[h['frame']].append(h)
+        if h['attributed']:
+            hits_by_frame[h['frame']].append(h)
     for e in engs:
         a, b = e['pair']
-        e['hits'] = [h for f in range(e['f0'], e['f1'] + 1)
-                     for h in hits_by_frame.get(f, [])
-                     if h['victim'] in (a, b)]
+        eng_hits = [h for f in range(e['f0'], e['f1'] + 1)
+                    for h in hits_by_frame.get(f, [])
+                    if h['victim'] in (a, b)]
+        # One splash/pierce shot may legitimately be attributed to several
+        # victims (attribute_hits' per-(shot,victim) cap allows that), but
+        # it still only "landed" once for the marker -- dedupe by shot so a
+        # single rocket does not draw three stacked triangles.
+        seen_shots = set()
+        landed = []
+        for h in sorted(eng_hits, key=lambda h: h['frame']):
+            if h['shot_idx'] in seen_shots:
+                continue
+            seen_shots.add(h['shot_idx'])
+            landed.append(h)
+        e['hits'] = landed
         e['class'] = classify_disengage(e, respawns, posidx, deaths_by_ent)
         e['approach'] = approach_angle(e, posidx)
 
@@ -1374,7 +1484,11 @@ def draw_engagement_timeline(ax, engs, frames):
     panel reads as a timeline, and padded with empty rows.  x is normalized
     match time, never seconds (L1).  Within a row: the pair's separation as a
     faint background trace scaled over 0..ENGAGE_RADIUS, a tick per shot
-    coloured by weapon class, and a filled triangle per landed hit.
+    coloured by weapon class, and a filled triangle per landed hit -- ATTRIBUTED
+    hits only (attribute_hits), one triangle per shot even when that shot's
+    splash is attributed to several victims, so this panel cannot be read as
+    "hit triangle over almost every bar" off environmental damage that was
+    never a weapon hit in the first place.
 
     Selecting by shot count and DRAWING in time order are deliberately
     different things: which fights get a slot must not depend on when they
@@ -1714,7 +1828,17 @@ def render_fight_sheet(demo_path, out_dir, pov_parity=False, pov_ent=None,
             'shots': len(a['shots']),
             'shots_attributed': sum(1 for s in a['shots']
                                     if s['target'] is not None),
-            'hits': len(a['hits']),
+            # 'hits' is TE_BLOOD events tied to a plausible preceding shot
+            # (attribute_hits) -- what the timeline's triangle markers draw.
+            # 'hits_unattributed' is TE_BLOOD events that found a victim but
+            # no plausible shot: lava/slime tick damage, monster damage, or
+            # a shot outside the attribution window.  Both are kept and
+            # printed so the artifact -- environmental damage inflating raw
+            # blood counts -- stays visible instead of being silently
+            # dropped by only reporting the attributed number.
+            'hits': sum(1 for hh in a['hits'] if hh['attributed']),
+            'hits_unattributed': sum(1 for hh in a['hits']
+                                     if not hh['attributed']),
             'respawns_ev_player_teleport': len(a['respawns']),
             'shots_by_class': dict(collections.Counter(
                 s['cls'] for s in a['shots'])),
@@ -1744,7 +1868,10 @@ def render_fight_sheet(demo_path, out_dir, pov_parity=False, pov_ent=None,
             'players': len(labels), 'png': png_path, 'json': json_path,
             'pov_parity': a['pov_parity'], 'scalars': a['scalars'],
             'n_engagements': len(a['engagements']),
-            'n_shots': len(a['shots']), 'n_hits': len(a['hits']),
+            'n_shots': len(a['shots']),
+            'n_hits': sum(1 for hh in a['hits'] if hh['attributed']),
+            'n_hits_unattributed': sum(1 for hh in a['hits']
+                                       if not hh['attributed']),
             'block_errors': d['block_errors'],
             'visible_fraction': a['coverage']['visible_fraction'],
             'audit': audit}
@@ -2168,7 +2295,9 @@ def main():
                   f"players={res['players']}{pov_str} "
                   f"vis={res['visible_fraction']:.3f} "
                   f"eng={res['n_engagements']} shots={res['n_shots']} "
-                  f"hits={res['n_hits']} err={res['block_errors']} "
+                  f"hits={res['n_hits']} "
+                  f"(unattributed={res['n_hits_unattributed']}) "
+                  f"err={res['block_errors']} "
                   f"rangesep={_f('range_sep_mean_pairwise')} "
                   f"straight={_f('straight_in_mass')} "
                   f"broke={_f('brokeoff_share')} "
