@@ -15,7 +15,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
-| 4. Team decisions | tell CONFIRMED real; eye rebuilt, calibration owed | escort_fraction_obs (coverage-honest) RAISED separability to 0.944/0.969 — the gap survived normalization, so set #1's 16/18 stands and both nulls were honest. Two mechanisms down (role gate, support pull); drift suspects are our own cap-winning adoptions |
+| 4. Team decisions | tell real; eye VALIDATED for rank-order only | escort_fraction_obs passes every radius and leave-one-out (0.918–0.986 both maps) but is MORE parity-sensitive than the old scalar — separation survives the coverage knob rather than being freed from it. **Measure rung-4 fixes as between-arm deltas at fixed parity; never as distance-to-human-band.** Two mechanisms down; breather ablation live |
 | 5. Match outcomes | protocol written; judging deferred by design | its only eye (steals_total, 0.964) measures the steal-volume gap stage 2 exists to close — so rung-5's blocker and stage-2's first number are THE SAME WORK. Judging waits; the work does not |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
@@ -106,6 +106,14 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
   The demotion is lifted; full VALIDATED status waits on the same
   stability battery the old scalar passed (radius sweep + leave-one-out),
   which the new one has not yet run.
+  **Battery run 2026-08-10: separability VALIDATED (0.918–0.986 across
+  all radii and leave-one-outs, both maps) but the design rationale
+  FAILED** — escort_fraction_obs is *more* parity-sensitive than the old
+  scalar (+0.122 vs +0.050 mactf06; +0.129 vs +0.002 lmctf22). It
+  separates despite the coverage knob, not because it escaped it. So the
+  eye is sound for RANK ORDER and between-arm comparison at fixed
+  parity, and unsound as an absolute magnitude — no rung-4 verdict may
+  cite "distance to the human band" as evidence.
 
 - **The coordination baseline is LOW, and our teamplay features overshoot
   it (2026-08-09).** Two independent measurements now say the same thing:
