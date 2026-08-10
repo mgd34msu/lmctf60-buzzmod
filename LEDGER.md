@@ -15,7 +15,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
-| 4. Team decisions | set #1 FAILED 16/18; first fix null | tell #1 (unanimous): bots OVER-escort — 0.33–0.75 vs human 0.02–0.32 lone-wolf runs; tell #2: team-mirror symmetry. escortdose null (proximity ≠ role); next cut must move PROXIMITY (teammate routing away from the carrier lane) |
+| 4. Team decisions | **EYE DEMOTED — no validated scalar** | forensics (2026-08-10): escort_fraction is not apples-to-apples. Human carry windows are ~58% observed vs bots' 91%; unobserved frames count as UNESCORTED, so the human 'lone wolf' band is partly demos that could not see the escort. Two cuts (escortdose, lonewolf) nulled against a compromised metric |
 | 5. Match outcomes | protocol written; judging deferred by design | its only eye (steals_total, 0.964) measures the steal-volume gap stage 2 exists to close — so rung-5's blocker and stage-2's first number are THE SAME WORK. Judging waits; the work does not |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
@@ -70,6 +70,35 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 - exit-asym: parked on Rule 21 (31% cap cost for a cosmetic).
 
 ## Protocol lessons ledgered
+
+- **THE ESCORT EYE IS COMPROMISED (2026-08-10).** Rung 4's sole
+  "validated" scalar fails the goal's own standard — an eye that cannot
+  rank the knowns judges nothing. Three findings:
+  1. **Coverage asymmetry.** Human carry windows are ~58% observed
+     (median, mactf06) against bots' 91% under pov-parity. Unobserved
+     frames are scored as *unescorted*, so the human 0.02–0.32 "lone
+     wolf" band is partly demos that never saw the teammate. On lmctf22,
+     37% of captured human escort events are the *recording player's own
+     presence* — a self-selection the bot side cannot replicate, since
+     its recorder is chosen to maximize coverage.
+  2. **Parity itself inflates the bot number.** Applying pov-parity to
+     bot mactf06 film RAISES escort_fraction 0.556 → 0.643, because the
+     filter preferentially deletes the carrier's SOLO stretches (nobody
+     near = the segment drops out). ~15% relative inflation from the
+     mechanism alone. Direction reverses on lmctf22, so it is not a
+     correctable constant. The earlier Stage-A work tested parity
+     *radius* stability and passed; it never tested parity on/off.
+  3. **Real drift, from our own adoptions.** Bot escort_fraction on
+     mactf06 went 0.422 (waves 498–535) → 0.577 (waves 740+), +37%.
+     Prime suspects are ADOPTED features: breather 4 (a paused carrier
+     is easy to linger beside — mean single-mate streak 3.85s → 6.52s)
+     and escape priors (carrier routing now crosses more team traffic).
+     Not a controlled ablation; flagged for one.
+  A genuine behavioral component survives all of this — bot single-mate
+  streaks run 3–10x longer than human ones, which chokepoint geometry
+  cannot produce — so the tell is not imaginary. But it cannot be
+  *sized* until the eye is fixed, and rung-4 set #1's 16/18 was judged
+  against panels carrying all three distortions.
 
 - **The coordination baseline is LOW, and our teamplay features overshoot
   it (2026-08-09).** Two independent measurements now say the same thing:
