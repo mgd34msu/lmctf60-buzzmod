@@ -230,7 +230,20 @@ def window_escort_fraction(w, posidx, teams, labels, radius=ESCORT_RADIUS):
     escorted, team) -- total/escorted are frame counts, kept so the
     demo-level scalar can be a duration-weighted mean rather than a mean of
     per-window fractions (a 2-second window and a 90-second window should
-    not count equally)."""
+    not count equally).
+
+    KNOWN DISTORTION, kept for the record rather than fixed in place (see
+    window_escort_fraction_obs below for the fix): `total` here is every
+    carrier-sampled frame, escorted or not, and a frame where the carrier
+    was sampled but no teammate's position was sampled ANYWHERE in the demo
+    (occluded, off the recorder's PVS, out of the bot pov-parity sphere --
+    the module cannot tell which) is silently counted in `total` and NOT in
+    `escorted`, i.e. scored as unescorted. Human demos hit this far more
+    than bot demos (real BSP occlusion vs a 900u distance sphere with no
+    occlusion at all), so this scalar deflates the human number specifically
+    rather than measuring escort behaviour on equal footing. This function
+    is left exactly as it was -- the Stage-A record above is keyed to this
+    exact number and must stay reproducible -- do not redefine it here."""
     carrier = w['entnum']
     team = teams.get(carrier)
     mates = [n for n in labels if teams.get(n) == team and n != carrier]
@@ -249,6 +262,55 @@ def window_escort_fraction(w, posidx, teams, labels, radius=ESCORT_RADIUS):
                 break
     frac = (escorted / total) if total else None
     return frac, total, escorted, team
+
+
+def window_escort_fraction_obs(w, posidx, teams, labels, radius=ESCORT_RADIUS):
+    """Same question as window_escort_fraction (is the carrier escorted),
+    but with an honest denominator: a carrier-sampled frame only counts
+    (in either the numerator or the denominator) when at least one of the
+    carrier's teammates was ALSO sampled somewhere in the demo at that same
+    frame -- i.e. the demo stream could, in principle, have shown a nearby
+    teammate at that instant. A frame where the carrier was sampled but no
+    teammate's position exists anywhere in the demo at that frame gives no
+    information about whether an escort was present (occlusion, PVS, or the
+    bot pov-parity sphere could each explain the absence) and is dropped
+    from both the numerator and the denominator, rather than being read as
+    "not escorted" the way window_escort_fraction reads it.
+
+    Returns (fraction_obs or None, total_obs, escorted_obs, implied_frames,
+    team). implied_frames is the window's nominal frame span (last sampled
+    carrier frame minus first, +1) -- what carry_coverage's denominator
+    uses, i.e. how many frames the window would have spanned under
+    continuous sampling regardless of what was actually captured."""
+    carrier = w['entnum']
+    team = teams.get(carrier)
+    mates = [n for n in labels if teams.get(n) == team and n != carrier]
+    total_obs = 0
+    escorted_obs = 0
+    r2 = radius * radius
+    for f, x, y, z in w['path']:
+        mate_seen = False
+        within = False
+        for m in mates:
+            p = posidx.get(m, {}).get(f)
+            if p is None:
+                continue
+            mate_seen = True
+            dx, dy, dz = p[0] - x, p[1] - y, p[2] - z
+            if dx * dx + dy * dy + dz * dz <= r2:
+                within = True
+                break
+        if not mate_seen:
+            continue
+        total_obs += 1
+        if within:
+            escorted_obs += 1
+    if w['path']:
+        implied_frames = w['path'][-1][0] - w['path'][0][0] + 1
+    else:
+        implied_frames = 0
+    frac_obs = (escorted_obs / total_obs) if total_obs else None
+    return frac_obs, total_obs, escorted_obs, implied_frames, team
 
 
 def defenders_present(tracks, members, stands, radius=DEFENSE_RADIUS):
@@ -333,12 +395,17 @@ def bin_mean_series(counts, frames_total, nbins=TIME_BINS):
 
 # ------------------------------------------------------------- the scalars
 SCALAR_KEYS = ['spacing_median', 'escort_fraction', 'defense_fraction',
-               'mean_simultaneous_attackers']
+               'mean_simultaneous_attackers', 'escort_fraction_obs',
+               'carry_coverage']
 SCALAR_PANEL = {
     'spacing_median': 'panel 1 (spacing)',
     'escort_fraction': 'panel 2 (escort)',
     'defense_fraction': 'panel 3 (defense posture)',
     'mean_simultaneous_attackers': 'panel 4 (push synchronization)',
+    'escort_fraction_obs': 'panel 2 (escort, observed-frames-only -- '
+                           'not drawn, scalar-only)',
+    'carry_coverage': 'panel 2 (escort denominator honesty check -- '
+                      'not drawn, scalar-only)',
 }
 
 
@@ -362,11 +429,30 @@ def compute_scalars(dist_by_team, windows, defense_frac_overall,
     else:
         mean_simultaneous_attackers = None
 
+    # NEW (see window_escort_fraction_obs): escort_fraction computed over
+    # frames where the carrier AND at least one teammate were both sampled
+    # -- a frame neither side could have shown an escort in is excluded
+    # from both the numerator and the denominator, instead of being read
+    # as "not escorted". carry_coverage is the honesty check alongside it:
+    # what fraction of each window's nominal (implied) frame span actually
+    # produced a scoreable (carrier+teammate observed) frame at all -- so a
+    # reader can see directly how much of the escort_fraction_obs
+    # denominator survived, and how that differs between demo shapes,
+    # rather than having to rediscover the asymmetry.
+    tot_obs = sum(w['escort_obs_total'] for w in windows)
+    esc_obs = sum(w['escort_obs_escorted'] for w in windows)
+    escort_fraction_obs = (esc_obs / tot_obs) if tot_obs else None
+
+    implied_total = sum(w['implied_frames'] for w in windows)
+    carry_coverage = (tot_obs / implied_total) if implied_total else None
+
     return {
         'spacing_median': spacing_median,
         'escort_fraction': escort_fraction,
         'defense_fraction': defense_fraction,
         'mean_simultaneous_attackers': mean_simultaneous_attackers,
+        'escort_fraction_obs': escort_fraction_obs,
+        'carry_coverage': carry_coverage,
     }
 
 
@@ -423,6 +509,14 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
         w['escort_escorted'] = escorted
         w['thief_team'] = team
         w['outcome'] = F.classify_outcome(w, tracks, stands)
+
+        frac_obs, total_obs, escorted_obs, implied_frames, _team_obs = \
+            window_escort_fraction_obs(w, posidx, teams, labels,
+                                       radius=escort_radius)
+        w['escort_fraction_obs'] = frac_obs
+        w['escort_obs_total'] = total_obs
+        w['escort_obs_escorted'] = escorted_obs
+        w['implied_frames'] = implied_frames
 
     dist_by_team = teammate_pairwise_distances(posidx, members)
 
@@ -707,6 +801,8 @@ def render_team_sheet(demo_path, out_dir, pov_parity=False, pov_ent=None,
             {'thief_team': w.get('thief_team'), 'color': w['color'],
              't0': w['t0'], 't1': w['t1'],
              'escort_fraction': w['escort_fraction'],
+             'escort_fraction_obs': w.get('escort_fraction_obs'),
+             'implied_frames': w.get('implied_frames'),
              'outcome': w.get('outcome')}
             for w in windows],
         'defense_frac_overall': a['defense_frac_overall'],
@@ -1057,7 +1153,9 @@ def main():
                   f"spacing={_f('spacing_median')} "
                   f"escort={_f('escort_fraction')} "
                   f"defense={_f('defense_fraction')} "
-                  f"attackers={_f('mean_simultaneous_attackers')}")
+                  f"attackers={_f('mean_simultaneous_attackers')} "
+                  f"escort_obs={_f('escort_fraction_obs')} "
+                  f"carry_cov={_f('carry_coverage')}")
         except (F.DemoUndersampled, StandsMissing) as e:
             skipped.append((p, str(e)))
             print(f"SKIP {os.path.basename(p)}: {e}")
