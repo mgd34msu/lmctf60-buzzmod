@@ -124,6 +124,22 @@ MAX_CARRY_S = 150.0         # longer than this is almost certainly a stuck effec
                              # a multi-round bot session) -- excluded, not rendered
                              # as if it were a real carry, and reported separately.
 
+# --- handoff detection (classify_outcome's 'handed_off' label): a carrier
+# dies next to / drops for a teammate who immediately continues the run.
+# Two windows of the SAME flag color, DIFFERENT entnum, SAME team as the
+# first carrier, where the second starts close in time and space to where
+# the first ended. HANDOFF_TIME_S is generous (a drop -> pickup can take a
+# couple seconds of teammate travel); HANDOFF_TIME_TOLERANCE_S absorbs the
+# 10Hz (FPS) frame quantization, where the two windows' t0/t1 can appear to
+# overlap by a tick depending on per-entity frame order within the same
+# server frame. HANDOFF_DIST_U is tighter than cap_radius -- a handoff is a
+# body-length exchange, not a stand-radius event. Unvalidated against real
+# handoff footage; see film.py's handoff measurement notes for what the
+# corpus actually showed with these values.
+HANDOFF_TIME_S = 2.0
+HANDOFF_TIME_TOLERANCE_S = 0.15
+HANDOFF_DIST_U = 300.0
+
 # --- duration normalization (judge round 3: sheets were leaking identity
 # via raw duration -- bot waves cluster tight around ~895s while human POV
 # recordings vary widely, so "how long is this demo" was itself a tell
@@ -765,10 +781,23 @@ def death_ticks(track):
     return out
 
 
-def classify_outcome(w, tracks, stands, cap_radius=280.0, lookahead_s=1.6):
+def classify_outcome(w, tracks, stands, cap_radius=280.0, lookahead_s=1.6,
+                      windows=None, teams=None,
+                      handoff_time_s=HANDOFF_TIME_S,
+                      handoff_dist_u=HANDOFF_DIST_U):
     """Best-effort outcome label from position + teleport geometry only
     (no print text, see module docstring). thief_team is the OTHER color
-    from the flag carried (you can only carry the enemy flag)."""
+    from the flag carried (you can only carry the enemy flag).
+
+    windows/teams are OPTIONAL (default None, meaning "not supplied") and
+    only enable the 'handed_off' label -- every existing call site that
+    omits them (teamsheet.py, outcomecard.py) gets the exact original
+    'captured'/'died'/'lost' behavior, unchanged. When both are supplied
+    (film.py's own render_sheet does this), a 'died' or 'lost' ending is
+    upgraded to 'handed_off' if another carry window for the SAME flag
+    color, a DIFFERENT entnum on the SAME team as this carrier, begins
+    within handoff_time_s of this window's end and within handoff_dist_u
+    of this window's ending position -- see HANDOFF_* constants."""
     thief_color = 'blue' if w['color'] == 'red' else 'red'
     end_pos = w['path'][-1][1:3]
     stand = stands.get(thief_color)
@@ -779,19 +808,41 @@ def classify_outcome(w, tracks, stands, cap_radius=280.0, lookahead_s=1.6):
     track = tracks.get(w['entnum'], [])
     end_frame = w['path'][-1][0]
     la = int(lookahead_s * FPS)
+    died = False
     for i in range(1, len(track)):
         f0, x0, y0, z0, _ = track[i - 1]
         f1, x1, y1, z1, _ = track[i]
         if f1 < end_frame or f1 > end_frame + la:
             continue
         if f1 - f0 == 1 and math.hypot(x1 - x0, y1 - y0) > TELEPORT_UNITS:
-            return 'died'
-    return 'lost'
+            died = True
+            break
+    if windows is not None and teams is not None:
+        carrier_team = teams.get(w['entnum'])
+        if carrier_team is not None:
+            for w2 in windows:
+                if w2 is w or w2['color'] != w['color']:
+                    continue
+                if w2['entnum'] == w['entnum']:
+                    continue
+                if teams.get(w2['entnum']) != carrier_team:
+                    continue
+                dt = w2['t0'] - w['t1']
+                if dt < -HANDOFF_TIME_TOLERANCE_S or dt > handoff_time_s:
+                    continue
+                start_pos = w2['path'][0][1:3]
+                dist = math.hypot(start_pos[0] - end_pos[0],
+                                   start_pos[1] - end_pos[1])
+                if dist <= handoff_dist_u:
+                    return 'handed_off'
+    return 'died' if died else 'lost'
 
 
 def carry_outcome_summary(windows):
     """Compact outcome breakdown for the sheet (judge round 3): counts by
-    outcome label (see classify_outcome: 'captured'/'died'/'lost') and
+    outcome label (see classify_outcome: 'captured'/'died'/'lost', plus
+    'handed_off' when film.py's own render_sheet call supplies windows/
+    teams) and
     duration quartiles (seconds) across every sane carry window in this
     demo. Returns {'counts': {label: n}, 'quartiles': (q1,q2,q3) or None,
     'n': int}. quartiles is None when there are zero carries."""
@@ -1484,7 +1535,8 @@ def draw_trajectory_map(ax, seeds, tracks, labels, teams, windows, stands,
                     c=TEAM_COLOR[color], edgecolors='black',
                     linewidths=0.8, zorder=4)
     markers = {'steal': ('^', 90), 'captured': ('*', 140),
-               'died': ('X', 70), 'lost': ('v', 70)}
+               'died': ('X', 70), 'lost': ('v', 70),
+               'handed_off': ('P', 90)}
     for w in windows:
         sx0, sy0 = w['path'][0][1], w['path'][0][2]
         ex0, ey0 = w['path'][-1][1], w['path'][-1][2]
@@ -1832,7 +1884,8 @@ def render_sheet(demo_path, rune_dir, out_dir, max_carry_panels=6,
     windows, n_excluded_carries = carry_windows(tracks, labels)
     stands = flag_stands(windows)
     for w in windows:
-        w['outcome'] = classify_outcome(w, tracks, stands)
+        w['outcome'] = classify_outcome(w, tracks, stands,
+                                        windows=windows, teams=teams)
     death_by_ent = {n: death_ticks(t) for n, t in tracks.items() if n in labels}
 
     dist_matrix, mean_pairwise, entropy_bits, n_clusters = \
