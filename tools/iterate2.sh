@@ -73,6 +73,17 @@ SECS=(  600      600      900      900      900       900      900       600    
 # the contaminated-era 13v7 was noise. The corpus cut survives for
 # future re-derivation (windows were hunter-biased at the SEED level?
 # open question) but the flag is parked.
+# LONE WOLF (sg_lonewolf, rung-4 tell #1 -- the PROXIMITY cut that
+# escortdose's role gate could not be). Scales carrier_support for every
+# non-escort role: defenders (0.40) and attackers (0.10) stop drifting
+# down the carrier's lane, so escort_fraction falls because teammates
+# genuinely are elsewhere, not because they are fleeing. 1.0 == today.
+# Armed s03=0.15 vs s04=1.0 control on the mactf06 film pair -- NOT the
+# s05/s08 pair, which owes 16 waves of escortdose confirmation and must
+# stay single-variable. Bars: escort_fraction 0.48 -> the human
+# 0.02-0.32 band; caps hold.
+LONEWOLF=(1    1        0.15     1        1         1        1         1        1        1)
+
 # ESCORT DOSE 35 adopted fleet-wide 2026-08-09 (42 vs 22 caps, 92 vs 55
 # steals, 8 waves/arm on its own pre-registered bar) -- but an early
 # fleet-wide peek read caps/game DOWN (1.41 vs 2.14), so the adoption is
@@ -487,6 +498,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_firedisc ${FIREDISC[$i]}"
                 echo "set sg_edgeride ${EDGERIDE[$i]}"
                 echo "set sg_escortdose ${ESCORTDOSE[$i]}"
+                echo "set sg_lonewolf ${LONEWOLF[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"

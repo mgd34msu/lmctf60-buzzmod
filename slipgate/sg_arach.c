@@ -2189,7 +2189,36 @@ static float Surface_At(int seed, const sg_weights_t *w,
 		v -= 1500.0f * Mega_Detour(seed, goal_field, NULL);
 
 	if (support && w->carrier_support > 0.0f && support[seed] < SG_FIELD_INF)
-		v += w->carrier_support * (float)support[seed];
+	{
+		float csup = w->carrier_support;
+
+		/*
+		 * LONE WOLF (sg_lonewolf, rung-4 set #1 tell #1). All three
+		 * judges read the same thing off every bot sheet: our carries
+		 * run escorted 0.33-0.75 of their length while pub humans run
+		 * flags alone at 0.02-0.32. sg_escortdose gated the ESCORT
+		 * ROLE and moved nothing, because escort_fraction measures
+		 * teammate PROXIMITY and the proximity is incidental -- every
+		 * non-escort role also carries a carrier_support pull (defend
+		 * 0.40, attack 0.10), so the whole team drifts down the
+		 * carrier's lane whatever its assignment.
+		 *
+		 * This is the honest cut: REMOVE the artificial cohesion
+		 * rather than add artificial dispersion. A pub is not a team
+		 * fleeing its own carrier -- it is players whose objectives
+		 * simply diverge. The dose scales the support pull for every
+		 * role except the assigned escort, whose whole job it is.
+		 * 1.0 == today's behavior exactly.
+		 */
+		if (sg_cur_role != SG_ROLE_ESCORT)
+		{
+			cvar_t *lw = gi.cvar("sg_lonewolf", "1", 0);
+
+			if (lw && lw->value >= 0.0f)
+				csup *= lw->value;
+		}
+		v += csup * (float)support[seed];
+	}
 
 	if (intercept && w->intercept > 0.0f && intercept[seed] < SG_FIELD_INF)
 		v += w->intercept * (float)intercept[seed];
