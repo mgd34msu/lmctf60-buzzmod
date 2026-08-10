@@ -73,16 +73,15 @@ SECS=(  600      600      900      900      900       900      900       600    
 # the contaminated-era 13v7 was noise. The corpus cut survives for
 # future re-derivation (windows were hunter-biased at the SEED level?
 # open question) but the flag is parked.
-# LONE WOLF (sg_lonewolf, rung-4 tell #1 -- the PROXIMITY cut that
-# escortdose's role gate could not be). Scales carrier_support for every
-# non-escort role: defenders (0.40) and attackers (0.10) stop drifting
-# down the carrier's lane, so escort_fraction falls because teammates
-# genuinely are elsewhere, not because they are fleeing. 1.0 == today.
-# Armed s03=0.15 vs s04=1.0 control on the mactf06 film pair -- NOT the
-# s05/s08 pair, which owes 16 waves of escortdose confirmation and must
-# stay single-variable. Bars: escort_fraction 0.48 -> the human
-# 0.02-0.32 band; caps hold.
-LONEWOLF=(1    1        0.15     1        1         1        1         1        1        1)
+# LONE WOLF null 2026-08-10 (0.629 vs 0.638): the SECOND mechanism to
+# miss this tell after escortdose's role gate. Removing the carrier
+# support pull does not separate teammates from the carrier -- so the
+# proximity is not produced by any pull we control. Forensics before a
+# third cut (the rung-2 lesson: seven mechanisms died guessing at a
+# tell whose model was wrong). Also flagged: bot escort_fraction on
+# mactf06 read 0.351 at Stage A (waves 498-535) and 0.63 now -- a
+# possible regression the forensics must explain.
+LONEWOLF=(1    1        1        1        1         1        1         1        1        1)
 
 # ESCORT DOSE 35 adopted fleet-wide 2026-08-09 (42 vs 22 caps, 92 vs 55
 # steals, 8 waves/arm on its own pre-registered bar) -- but an early
