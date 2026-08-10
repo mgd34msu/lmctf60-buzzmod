@@ -2012,6 +2012,15 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	over = flick * (SG_TEX_OVER_TRACK
 	                + (SG_TEX_OVER_FLICK - SG_TEX_OVER_TRACK) * style)
 	     * Combat_SkillLerp(skill, SG_TEX_OVER_MUL_S0, SG_TEX_OVER_MUL_S4);
+	/*
+	 * The cvar is a DOSE on the overshoot amplitude (1.0 == the adopted
+	 * texture exactly). Adoption closed 3.2 degrees of the aim-offset gap
+	 * out of ~3.9 remaining against the 10.89 human anchor; the ladder
+	 * asks whether the rest is simply more of the same medicine. The cap
+	 * still binds afterwards, so a big dose widens the common case
+	 * without inventing physically absurd flicks.
+	 */
+	over *= gi.cvar("sg_aimtexture", "0", 0)->value;
 	if (over > SG_TEX_OVER_CAP)
 		over = SG_TEX_OVER_CAP;
 
