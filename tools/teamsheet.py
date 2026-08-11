@@ -81,6 +81,10 @@ import film as F
 import routesheet as RS         # roc_auc / _ranks / glob helpers ONLY, for
                                  # --calibrate -- same reuse fightsheet.py
                                  # makes of this module
+import mapflags as MF           # read_game_file/bsp_entities/parse_ents ONLY,
+                                 # for major_item_locations -- same
+                                 # already-proven-elsewhere reuse rule
+                                 # resolve_stands applies to F.flag_stands
 
 import numpy as np
 
@@ -114,6 +118,43 @@ SPACING_YMAX = 4000.0      # u; headroom over a full map diagonal -- this is a
                             # being a constant is what makes it safe to use
                             # uncalibrated, not its exact value
 PUSH_YMAX = 6.0             # attacker count; headroom above a 5-a-side roster
+
+# --- EYE 1 (major_item_presence, gates the item-timing dark feature) and
+# EYE 2 (postspawn_purpose, gates sg_spawnbeat) instrument constants ------
+MAJOR_ITEM_CLASSNAMES = ('item_health_mega', 'item_armor_body')
+                            # mega health and red/body armor -- verified in
+                            # this mod's own source, not assumed: both
+                            # respawn on the SAME fixed cycle
+                            # (g_items.c:595 MegaHealth_think's
+                            # SetRespawn(self, 20); g_items.c:759
+                            # Pickup_Armor's generic SetRespawn(ent, 20),
+                            # which item_armor_body falls through to
+                            # unmodified -- there is no armor-specific
+                            # override).
+MAJOR_ITEM_RESPAWN_S = 20.0 # both items in MAJOR_ITEM_CLASSNAMES, confirmed above
+MAJOR_ITEM_RADIUS = 300.0   # u; "near the item", per the design brief
+ITEM_PICKUP_RADIUS = 48.0   # u; item bbox is +/-16, player bbox +/-16 in the
+                            # horizontal -- ~32u is the true touch distance;
+                            # 48u pads for 10Hz position quantization (the
+                            # tick the engine registers a touch and the
+                            # tick this stream happens to sample are not
+                            # guaranteed to be the same one).
+ITEM_TAKE_MERGE_S = 3.0     # two dwell episodes -- by the same or different
+                            # players -- within this many seconds of each
+                            # other are almost certainly the same physical
+                            # pickup moment (a contested item two players
+                            # both reach for), not two independent takes;
+                            # merged to the earlier one so a scramble does
+                            # not manufacture a fake short respawn cycle.
+ITEM_PRE_RESPAWN_WINDOW_S = 5.0  # per the design brief
+POSTSPAWN_WINDOW_S = 3.0    # seconds after a respawn measured for heading
+                            # consistency, per the design brief
+POSTSPAWN_MIN_FRAMES = 10   # >=1.0s of clean, gap-free, teleport-free path
+                            # required before a life's heading-consistency
+                            # ratio is trusted -- below this the ratio is
+                            # close to structurally 1.0 or undefined on 1-2
+                            # samples regardless of intent (see
+                            # postspawn_heading_consistency's docstring).
 
 TEAM_COLOR = F.TEAM_COLOR
 TEAMS = ('red', 'blue')
@@ -313,6 +354,253 @@ def window_escort_fraction_obs(w, posidx, teams, labels, radius=ESCORT_RADIUS):
     return frac_obs, total_obs, escorted_obs, implied_frames, team
 
 
+def major_item_locations(mapname, gamedir, items_file):
+    """[(x, y, z), ...] major-item (mega health / body armor) origins for
+    `mapname`, plus a short provenance string.
+
+    Primary source: the map's own BSP entity lump, read with mapflags.py's
+    existing read_game_file/bsp_entities/parse_ents (reused verbatim, not
+    re-implemented here -- the same rule resolve_stands already follows by
+    reusing F.flag_stands rather than re-deriving flag positions).
+    Requires --gamedir, a Quake2 game directory containing
+    maps/<mapname>.bsp, loose or inside a .pak (mapflags.read_game_file
+    checks both, later pak wins, matching the engine's own search order).
+
+    Fallback: --items, a JSON file of {mapname: [[x,y,z], ...]}, for a map
+    whose BSP is unavailable. That is NOT the same case as a map whose BSP
+    IS available but simply has no item_health_mega/item_armor_body
+    entity in it at all -- lmctf22 is exactly this case (confirmed by
+    running this function against it; see the measurement note at the
+    bottom of this file). A map with zero major items is a real map fact,
+    not a missing-data gap --items can fix, and is reported as a distinct
+    'none: bsp read but no major item entity' reason rather than silently
+    falling through to --items and reading as "nobody supplied it".
+
+    Returns (locations, source) where source is 'bsp', 'items-file', or a
+    'none: ...' string naming why neither source had an answer."""
+    if gamedir:
+        try:
+            data = MF.read_game_file(gamedir, f'maps/{mapname}.bsp')
+        except Exception:
+            data = None
+        if data:
+            ents = MF.parse_ents(MF.bsp_entities(data))
+            locs = []
+            for e in ents:
+                if e.get('classname') in MAJOR_ITEM_CLASSNAMES:
+                    o = e.get('origin', '0 0 0').split()
+                    if len(o) == 3:
+                        locs.append(tuple(float(v) for v in o))
+            if locs:
+                return locs, 'bsp'
+            if data[:4] == b'IBSP':
+                return [], ('none: bsp read but no item_health_mega/'
+                            'item_armor_body entity in it -- this map has '
+                            'no major item, not a missing-data gap')
+    entry = (items_file or {}).get(mapname or '')
+    if entry:
+        return [tuple(float(v) for v in p) for p in entry], 'items-file'
+    return [], 'none: no --gamedir BSP read and no --items entry for this map'
+
+
+def _item_take_events(loc, tracks, labels, radius=ITEM_PICKUP_RADIUS):
+    """Probable-take moments (seconds) for one major-item location: a
+    maximal run of consecutive-frame samples, from ANY rostered player on
+    either team, within `radius` of `loc`, that is followed by a sampled
+    frame OUTSIDE `radius` for that same player -- the 'dwelling ... then
+    leaving' signal the design brief specifies. t_take is the episode's
+    FIRST frame, not its last: the item is claimed on contact, so the
+    entry frame is the closer approximation of the true touch instant;
+    'leaving' is only used to CONFIRM the episode was a real visit rather
+    than a still-in-progress approach the track happens to end during (a
+    dangling episode still `in_radius` at the track's last sample is
+    dropped, not promoted to a take on a guess).
+
+    Episodes from DIFFERENT players that start within ITEM_TAKE_MERGE_S of
+    each other are merged into one take event (earliest start kept) -- a
+    contested pickup with two players in the area at once must not read
+    as two independent respawn cycles."""
+    raw = []
+    r2 = radius * radius
+    for n in labels:
+        in_radius = False
+        ep_start = None
+        for f, x, y, z, _eff in tracks.get(n, []):
+            near = ((x - loc[0]) ** 2 + (y - loc[1]) ** 2
+                    + (z - loc[2]) ** 2) <= r2
+            if near and not in_radius:
+                ep_start = f
+            if not near and in_radius and ep_start is not None:
+                raw.append(ep_start / F.FPS)
+                ep_start = None
+            in_radius = near
+    raw.sort()
+    merged = []
+    for t in raw:
+        if merged and t - merged[-1] <= ITEM_TAKE_MERGE_S:
+            continue
+        merged.append(t)
+    return merged
+
+
+def item_pre_respawn_windows(take_times, respawn_s=MAJOR_ITEM_RESPAWN_S,
+                             pre_s=ITEM_PRE_RESPAWN_WINDOW_S):
+    """[(t0, t1), ...] -- one window per detected take, ending at that
+    take's own inferred respawn moment (take_time + respawn_s) and
+    starting pre_s seconds before it. ONE window per take, not a repeating
+    respawn_s cycle projected forward indefinitely: after a respawn the
+    item sits live and unclaimed for however long it takes someone to walk
+    back over it, and nothing in a position-only stream says when (or
+    whether) that happens -- only the interval this module can actually
+    ground in an observed take-then-leave gets a window."""
+    return [(t + respawn_s - pre_s, t + respawn_s) for t in take_times]
+
+
+def major_item_scalars(tracks, teams, members, locations, radius=MAJOR_ITEM_RADIUS):
+    """EYE 1 (gates the item-timing dark feature -- see the measurement
+    note at the bottom of this file for the exact match/mismatch against
+    TRIALS.md's own sg_clockplay entry, which as written models score/
+    clock-margin posture, not item timing; this eye was built to the
+    brief given to this module, and that naming tension is reported rather
+    than papered over).
+
+    Returns (major_item_presence, major_item_presence_dwell_overall,
+    n_locations, n_take_events):
+
+    major_item_presence -- the PRIMARY number. For each major-item
+    location, build its own pre-respawn windows (item_pre_respawn_windows)
+    from take events observed AT THAT LOCATION; within those windows only,
+    accumulate per team how many sampled player-frames were within
+    `radius` of that item (numerator) against every sampled player-frame
+    that fell in one of that item's own windows regardless of distance
+    (denominator). Multiple major-item locations are POOLED BY SUMMING
+    their counts -- the same pooling compute_scalars already uses for
+    escort_fraction's tot/esc across every carry window in a demo,
+    regardless of which carrier produced it. Per-team fractions are then
+    averaged unweighted into one demo-level number, mirroring how
+    compute_scalars' defense_fraction averages defense_frac_overall across
+    TEAMS -- consistent treatment for two scalars asking the same shape of
+    question ('what fraction of team X's time was spent doing Y').
+
+    major_item_presence_dwell_overall -- the FALLBACK proxy, computed
+    unconditionally alongside the primary number rather than only when
+    asked for: fraction of a team's TOTAL player-time (the whole capped
+    demo, no take/respawn inference at all) spent within `radius` of ANY
+    major-item location (a single per-frame minimum-distance check, so a
+    player near two items at once is not double-counted the way the
+    windowed primary's sum-across-locations pooling would double-count
+    it). This is the number the module docstring's escape hatch points to
+    if the take/respawn inference above proves too noisy to trust."""
+    r2 = radius * radius
+
+    win_num = {t: 0 for t in TEAMS}
+    win_den = {t: 0 for t in TEAMS}
+    n_take_events = 0
+    for loc in locations:
+        takes = _item_take_events(loc, tracks, [n for ents in members.values()
+                                                for n in ents])
+        n_take_events += len(takes)
+        windows = item_pre_respawn_windows(takes)
+        if not windows:
+            continue
+        for team, ents in members.items():
+            for n in ents:
+                for f, x, y, z, _eff in tracks.get(n, []):
+                    t_s = f / F.FPS
+                    if not any(w0 <= t_s < w1 for w0, w1 in windows):
+                        continue
+                    win_den[team] += 1
+                    d2 = ((x - loc[0]) ** 2 + (y - loc[1]) ** 2
+                          + (z - loc[2]) ** 2)
+                    if d2 <= r2:
+                        win_num[team] += 1
+
+    dwell_num = {t: 0 for t in TEAMS}
+    dwell_den = {t: 0 for t in TEAMS}
+    if locations:
+        for team, ents in members.items():
+            for n in ents:
+                for f, x, y, z, _eff in tracks.get(n, []):
+                    dwell_den[team] += 1
+                    best = min((x - lx) ** 2 + (y - ly) ** 2 + (z - lz) ** 2
+                              for lx, ly, lz in locations)
+                    if best <= r2:
+                        dwell_num[team] += 1
+
+    def _avg(num, den):
+        fracs = [num[t] / den[t] for t in TEAMS if den[t] > 0]
+        return float(np.mean(fracs)) if fracs else None
+
+    presence = _avg(win_num, win_den) if locations else None
+    dwell_overall = _avg(dwell_num, dwell_den) if locations else None
+    return presence, dwell_overall, len(locations), n_take_events
+
+
+def postspawn_heading_consistency(tracks, labels, window_s=POSTSPAWN_WINDOW_S,
+                                  min_frames=POSTSPAWN_MIN_FRAMES):
+    """EYE 2 (gates sg_spawnbeat). Per-demo mean of (net displacement /
+    path length) over the first `window_s` seconds after each detected
+    respawn, pooled across every rostered player -- 1.0 is a straight
+    beeline away from the landing spot, low is doubling back or standing
+    and turning ('wander'). Returns (mean or None, n_events).
+
+    Respawn moments are F.death_ticks' own teleport-jump detector (already
+    proven by the kinematic strip and classify_outcome, ZERO NEW PARSING
+    per this module's own rule) -- the frame where a track's position
+    jumps by more than F.TELEPORT_UNITS on a single consecutive-frame step
+    is read as the landing frame of a new life, the same convention every
+    other consumer of death_ticks in this toolbox uses. This also fires on
+    a map-opening spawn this module never saw a preceding death for; that
+    life still begins somewhere the player could not have pre-planned a
+    heading for, so it is kept rather than filtered on unavailable death
+    evidence.
+
+    The window is walked frame-by-frame from the landing frame and CUT
+    SHORT at the first non-consecutive frame gap or the first jump beyond
+    TELEPORT_UNITS (a life that ends again inside the 3-second window has
+    no intact 3-second path to measure) -- whatever was captured before
+    the cut still counts, as long as it clears min_frames. A life that
+    dies again, or goes unobserved, before min_frames of clean path exist
+    is dropped rather than scored on 1-2 samples, where the ratio is close
+    to structurally 1.0 or undefined regardless of intent -- the same
+    trade window_escort_fraction_obs makes when it drops an unobservable
+    frame instead of guessing at it."""
+    window_frames = int(round(window_s * F.FPS))
+    ratios = []
+    for n in labels:
+        track = tracks.get(n, [])
+        if len(track) < 2:
+            continue
+        by_frame = {s[0]: s for s in track}
+        for land_f in F.death_ticks(track):
+            landing = by_frame.get(land_f)
+            if landing is None:
+                continue
+            _f0, sx, sy, _sz, _e0 = landing
+            path_len = 0.0
+            px, py = sx, sy
+            cur_f = land_f
+            n_clean = 0
+            for _step in range(window_frames):
+                nxt = by_frame.get(cur_f + 1)
+                if nxt is None:
+                    break
+                _f1, x1, y1, _z1, _e1 = nxt
+                dist = math.hypot(x1 - px, y1 - py)
+                if dist > F.TELEPORT_UNITS:
+                    break
+                path_len += dist
+                px, py = x1, y1
+                cur_f += 1
+                n_clean += 1
+            if n_clean < min_frames or path_len <= 0:
+                continue
+            net = math.hypot(px - sx, py - sy)
+            ratios.append(min(net / path_len, 1.0))
+    mean = float(np.mean(ratios)) if ratios else None
+    return mean, len(ratios)
+
+
 def defenders_present(tracks, members, stands, radius=DEFENSE_RADIUS):
     """{team: {frame: True}} -- frames at which >=1 of that team's rostered
     players was sampled within `radius` (x/y only -- flag_stands has no z,
@@ -394,9 +682,15 @@ def bin_mean_series(counts, frames_total, nbins=TIME_BINS):
 
 
 # ------------------------------------------------------------- the scalars
+# APPEND-ONLY (L-diff): new keys are always added at the END of this list,
+# never inserted -- --scalars' CSV header is 'demo_shape,map,basename,' +
+# ','.join(SCALAR_KEYS), so every existing column's position and value stay
+# byte-identical across a diff on the same two demos, and only trailing
+# columns appear or change when this list grows.
 SCALAR_KEYS = ['spacing_median', 'escort_fraction', 'defense_fraction',
                'mean_simultaneous_attackers', 'escort_fraction_obs',
-               'carry_coverage']
+               'carry_coverage', 'major_item_presence',
+               'major_item_presence_dwell_overall', 'postspawn_purpose']
 SCALAR_PANEL = {
     'spacing_median': 'panel 1 (spacing)',
     'escort_fraction': 'panel 2 (escort)',
@@ -406,11 +700,21 @@ SCALAR_PANEL = {
                            'not drawn, scalar-only)',
     'carry_coverage': 'panel 2 (escort denominator honesty check -- '
                       'not drawn, scalar-only)',
+    'major_item_presence': 'EYE 1 / item-timing dark feature -- pre-'
+                           'respawn-window presence (not drawn, '
+                           'scalar-only)',
+    'major_item_presence_dwell_overall': 'EYE 1 fallback proxy -- dwell-'
+                           'near-major-items share, no take/respawn '
+                           'inference (not drawn, scalar-only)',
+    'postspawn_purpose': 'EYE 2 / sg_spawnbeat -- post-respawn heading '
+                         'consistency (not drawn, scalar-only)',
 }
 
 
 def compute_scalars(dist_by_team, windows, defense_frac_overall,
-                    red_counts, blue_counts, frames_total):
+                    red_counts, blue_counts, frames_total,
+                    item_presence=None, item_presence_dwell=None,
+                    postspawn_purpose=None):
     all_d = [v for team in TEAMS for vals in dist_by_team[team].values()
              for v in vals]
     spacing_median = float(np.median(all_d)) if all_d else None
@@ -453,13 +757,17 @@ def compute_scalars(dist_by_team, windows, defense_frac_overall,
         'mean_simultaneous_attackers': mean_simultaneous_attackers,
         'escort_fraction_obs': escort_fraction_obs,
         'carry_coverage': carry_coverage,
+        'major_item_presence': item_presence,
+        'major_item_presence_dwell_overall': item_presence_dwell,
+        'postspawn_purpose': postspawn_purpose,
     }
 
 
 def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
                  pov_radius=F.POV_RADIUS_DEFAULT,
                  pov_fov=F.POV_FOV_DEG_DEFAULT, stands_file=None,
-                 escort_radius=ESCORT_RADIUS, defense_radius=DEFENSE_RADIUS):
+                 escort_radius=ESCORT_RADIUS, defense_radius=DEFENSE_RADIUS,
+                 gamedir=None, items_file=None):
     """Everything --scalars and the renderer both need, computed once.
 
     Control flow mirrors F.render_sheet's / routesheet.analyze_demo's /
@@ -471,7 +779,15 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
     constants and only ever move away from them inside --calibrate's
     +/-100u radius-stability check (run_calibration below); render_team_sheet
     never passes anything but the defaults, so what gets drawn on a PNG is
-    never a function of a calibration run (L7/L8 still hold)."""
+    never a function of a calibration run (L7/L8 still hold).
+
+    gamedir/items_file feed EYE 1 (major_item_presence) only -- see
+    major_item_locations. Neither is drawn on any panel (FAIRNESS RULE),
+    so a demo analyzed without either still renders and scores normally;
+    major_item_presence and major_item_presence_dwell_overall simply come
+    back None (this map's major-item locations are unknown), the same
+    "None means unavailable, not zero" convention every other optional
+    scalar in this module already follows."""
     d = F.walk_demo(demo_path)
     uncapped = d['frames'] / F.FPS
     if uncapped < F.DURATION_MIN_S:
@@ -532,14 +848,33 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
     red_push_bins = bin_mean_series(red_counts, d['frames'])
     blue_push_bins = bin_mean_series(blue_counts, d['frames'])
 
+    # EYE 1 (major_item_presence) -- see major_item_locations/
+    # major_item_scalars. item_locations_source is carried into the
+    # sidecar/scalar report only; it is never drawn (FAIRNESS RULE).
+    item_locations, item_locations_source = major_item_locations(
+        d['map'], gamedir, items_file)
+    item_presence, item_presence_dwell, n_item_locs, n_item_takes = \
+        major_item_scalars(tracks, teams, members, item_locations)
+
+    # EYE 2 (postspawn_purpose) -- see postspawn_heading_consistency.
+    postspawn_purpose, n_postspawn_events = postspawn_heading_consistency(
+        tracks, labels)
+
     scalars = compute_scalars(dist_by_team, windows, defense_frac_overall,
-                              red_counts, blue_counts, d['frames'])
+                              red_counts, blue_counts, d['frames'],
+                              item_presence=item_presence,
+                              item_presence_dwell=item_presence_dwell,
+                              postspawn_purpose=postspawn_purpose)
     coverage = F.coverage_stats(tracks, labels, d['frames'])
 
     return {
         'd': d, 'labels': labels, 'teams': teams, 'tracks': tracks,
         'members': members, 'posidx': posidx, 'windows': windows,
         'n_excluded_carries': n_excluded_carries, 'stands': stands,
+        'item_locations': item_locations,
+        'item_locations_source': item_locations_source,
+        'n_item_locations': n_item_locs, 'n_item_take_events': n_item_takes,
+        'n_postspawn_events': n_postspawn_events,
         'dist_by_team': dist_by_team,
         'defense_bins': defense_bins,
         'defense_frac_overall': defense_frac_overall,
@@ -735,10 +1070,12 @@ def draw_notes_strip(ax):
 # ================================================================== render
 def render_team_sheet(demo_path, out_dir, pov_parity=False, pov_ent=None,
                       pov_radius=F.POV_RADIUS_DEFAULT,
-                      pov_fov=F.POV_FOV_DEG_DEFAULT, stands_file=None):
+                      pov_fov=F.POV_FOV_DEG_DEFAULT, stands_file=None,
+                      gamedir=None, items_file=None):
     a = analyze_demo(demo_path, pov_parity=pov_parity, pov_ent=pov_ent,
                      pov_radius=pov_radius, pov_fov=pov_fov,
-                     stands_file=stands_file)
+                     stands_file=stands_file, gamedir=gamedir,
+                     items_file=items_file)
     d = a['d']
     labels, teams = a['labels'], a['teams']
     windows = a['windows']
@@ -807,6 +1144,12 @@ def render_team_sheet(demo_path, out_dir, pov_parity=False, pov_ent=None,
             for w in windows],
         'defense_frac_overall': a['defense_frac_overall'],
         'scalars': a['scalars'],
+        'major_item_locations': {
+            'locations': [list(p) for p in a['item_locations']],
+            'source': a['item_locations_source'],
+            'n_take_events': a['n_item_take_events'],
+        },
+        'n_postspawn_events': a['n_postspawn_events'],
         'rendered_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
     }
     json_path = os.path.join(out_dir, f'{h}.json')
@@ -824,16 +1167,24 @@ def render_team_sheet(demo_path, out_dir, pov_parity=False, pov_ent=None,
 DEFAULT_CACHE = '~/.cache/teamsheet-scalars.json'
 
 
-def _cache_key(path, pov_parity, radius, fov, stands_path):
+def _cache_key(path, pov_parity, radius, fov, stands_path, gamedir=None,
+              items_path=None):
     st = os.stat(path)
     if not pov_parity:
         radius = fov = None
     return f"{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}|" \
            f"{int(bool(pov_parity))}|{radius}|{fov}|{stands_path or ''}" \
-           f"|teamsheet-v1"
+           f"|{gamedir or ''}|{items_path or ''}|teamsheet-v2"
 
 
 def load_stands_file(path):
+    if not path:
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def load_items_file(path):
     if not path:
         return None
     with open(path) as f:
@@ -849,7 +1200,7 @@ DEFAULT_BOT_GLOBS = [
 
 
 def _calib_cache_key(path, pov_parity, escort_radius, defense_radius,
-                     stands_path):
+                     stands_path, gamedir=None, items_path=None):
     """Separate from _cache_key (used by --scalars) because --calibrate's
     radius-stability check re-runs the same file at three different
     (escort_radius, defense_radius) pairs and must not collide with, or be
@@ -857,20 +1208,24 @@ def _calib_cache_key(path, pov_parity, escort_radius, defense_radius,
     st = os.stat(path)
     return f"{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}|" \
            f"{int(bool(pov_parity))}|{escort_radius}|{defense_radius}|" \
-           f"{stands_path or ''}|teamsheet-calib-v1"
+           f"{stands_path or ''}|{gamedir or ''}|{items_path or ''}" \
+           f"|teamsheet-calib-v2"
 
 
 def collect_scalars(paths, pov_parity, escort_radius, defense_radius,
-                    stands_file, stands_path, cache, maps=None, label=''):
+                    stands_file, stands_path, cache, maps=None, label='',
+                    gamedir=None, items_file=None, items_path=None):
     """Walk a file list and return [{'path','map','shape', **scalars}].
 
     Cached on (path, mtime, size, parity flag, escort/defense radius,
-    stands file) because the gate gets re-run with perturbed escort/defense
-    radii and the demo walk is the expensive part."""
+    stands file, gamedir, items file) because the gate gets re-run with
+    perturbed escort/defense radii and the demo walk is the expensive
+    part."""
     rows = []
     for p in paths:
         key = _calib_cache_key(p, pov_parity, escort_radius, defense_radius,
-                               stands_path)
+                               stands_path, gamedir=gamedir,
+                               items_path=items_path)
         if key in cache:
             row = dict(cache[key])
         else:
@@ -878,7 +1233,8 @@ def collect_scalars(paths, pov_parity, escort_radius, defense_radius,
                 a = analyze_demo(p, pov_parity=pov_parity,
                                  stands_file=stands_file,
                                  escort_radius=escort_radius,
-                                 defense_radius=defense_radius)
+                                 defense_radius=defense_radius,
+                                 gamedir=gamedir, items_file=items_file)
             except (F.DemoUndersampled, StandsMissing) as e:
                 cache[key] = {'skip': f'{type(e).__name__}: {e}'}
                 continue
@@ -907,7 +1263,8 @@ def collect_scalars(paths, pov_parity, escort_radius, defense_radius,
 
 
 def run_calibration(human_paths, bot_paths, escort_radius, defense_radius,
-                    stands_file, stands_path, cache, maps=None):
+                    stands_file, stands_path, cache, maps=None,
+                    gamedir=None, items_file=None, items_path=None):
     """Stage A of the design's two-stage gate, ported from fightsheet.py's
     run_calibration with the same math (RS.roc_auc, same separability
     definition) and the same rationale: the instrument has to prove it has
@@ -921,13 +1278,19 @@ def run_calibration(human_paths, bot_paths, escort_radius, defense_radius,
     escort_radius/defense_radius -- the two thresholds panels 2 and 3
     actually draw with -- because those are this sheet's own free
     parameters, the ones a Stage-A run has to show are not doing the
-    separating by themselves."""
+    separating by themselves.
+
+    gamedir/items_file feed EYE 1 only, identically on both arms (same
+    map, same BSP, so the item locations an arm gets are never a function
+    of demo shape)."""
     hr = collect_scalars(human_paths, False, escort_radius, defense_radius,
                          stands_file, stands_path, cache, maps=maps,
-                         label='human')
+                         label='human', gamedir=gamedir,
+                         items_file=items_file, items_path=items_path)
     br = collect_scalars(bot_paths, True, escort_radius, defense_radius,
                          stands_file, stands_path, cache, maps=maps,
-                         label='bot')
+                         label='bot', gamedir=gamedir,
+                         items_file=items_file, items_path=items_path)
     shared = sorted({r['map'] for r in hr} & {r['map'] for r in br})
     hr = [r for r in hr if r['map'] in shared]
     br = [r for r in br if r['map'] in shared]
@@ -996,6 +1359,18 @@ def main():
                     help='JSON file: mapname -> {"red":[x,y,z],'
                          '"blue":[x,y,z]}, used when a demo\'s own carry '
                          'windows never establish one of the two stands')
+    ap.add_argument('--gamedir', default=None,
+                    help='Quake2 game directory (maps/<name>.bsp loose or '
+                         'in a .pak) EYE 1 (major_item_presence) reads '
+                         'item_health_mega/item_armor_body origins from, '
+                         'via mapflags.py\'s own BSP entity reader')
+    ap.add_argument('--items', default=None,
+                    help='JSON file: mapname -> [[x,y,z], ...] major-item '
+                         'locations, used when --gamedir is not given or a '
+                         'map\'s BSP is unreadable -- NOT used when the '
+                         'BSP was read successfully and simply has no '
+                         'major-item entity (that is a map fact, not a '
+                         'missing-data gap; see major_item_locations)')
     ap.add_argument('--pov-parity', action='store_true',
                     help='serverrecord demos only: keep another player\'s '
                          'sample only when a virtual recorder could '
@@ -1028,6 +1403,7 @@ def main():
 
     if args.calibrate:
         stands_file = load_stands_file(args.stands) if args.stands else None
+        items_file = load_items_file(args.items) if args.items else None
         cpath = os.path.expanduser(args.cache)
         cache = {}
         if os.path.exists(cpath):
@@ -1041,7 +1417,8 @@ def main():
                          f"{len(bot)} bot candidate(s)\n")
         res = run_calibration(human, bot, ESCORT_RADIUS, DEFENSE_RADIUS,
                               stands_file, args.stands, cache,
-                              maps=args.maps)
+                              maps=args.maps, gamedir=args.gamedir,
+                              items_file=items_file, items_path=args.items)
         best, hot = print_calibration(res)
         if args.radius_check or hot:
             if hot and not args.radius_check:
@@ -1052,7 +1429,10 @@ def main():
                 er2 = ESCORT_RADIUS + dr
                 dr2 = DEFENSE_RADIUS + dr
                 alt = run_calibration(human, bot, er2, dr2, stands_file,
-                                      args.stands, cache, maps=args.maps)
+                                      args.stands, cache, maps=args.maps,
+                                      gamedir=args.gamedir,
+                                      items_file=items_file,
+                                      items_path=args.items)
                 print_calibration(alt, title=f'STAGE A (escort {er2:.0f}u, '
                                              f'defense {dr2:.0f}u)')
                 print("  radius-perturbation swing vs baseline:")
@@ -1074,6 +1454,7 @@ def main():
         ap.error('no demos given')
 
     stands_file = load_stands_file(args.stands) if args.stands else None
+    items_file = load_items_file(args.items) if args.items else None
 
     if args.scalars:
         cpath = os.path.expanduser(args.cache)
@@ -1086,7 +1467,8 @@ def main():
         print('demo_shape,map,basename,' + ','.join(SCALAR_KEYS))
         for p in args.demos:
             key = _cache_key(p, args.pov_parity, args.pov_radius,
-                             args.pov_fov, args.stands)
+                             args.pov_fov, args.stands,
+                             gamedir=args.gamedir, items_path=args.items)
             if key in cache:
                 row = cache[key]
                 if row.get('skip'):
@@ -1099,7 +1481,9 @@ def main():
                                      pov_ent=args.pov_ent,
                                      pov_radius=args.pov_radius,
                                      pov_fov=args.pov_fov,
-                                     stands_file=stands_file)
+                                     stands_file=stands_file,
+                                     gamedir=args.gamedir,
+                                     items_file=items_file)
                 except (F.DemoUndersampled, StandsMissing) as e:
                     sys.stderr.write(f"SKIP {os.path.basename(p)}: "
                                      f"{type(e).__name__}: {e}\n")
@@ -1132,7 +1516,9 @@ def main():
                                     pov_ent=args.pov_ent,
                                     pov_radius=args.pov_radius,
                                     pov_fov=args.pov_fov,
-                                    stands_file=stands_file)
+                                    stands_file=stands_file,
+                                    gamedir=args.gamedir,
+                                    items_file=items_file)
             ok.append(res)
             pov = res['pov_parity']
             if res['svrecord'] and not pov.get('applied'):
@@ -1155,7 +1541,10 @@ def main():
                   f"defense={_f('defense_fraction')} "
                   f"attackers={_f('mean_simultaneous_attackers')} "
                   f"escort_obs={_f('escort_fraction_obs')} "
-                  f"carry_cov={_f('carry_coverage')}")
+                  f"carry_cov={_f('carry_coverage')} "
+                  f"item_presence={_f('major_item_presence')} "
+                  f"item_dwell={_f('major_item_presence_dwell_overall')} "
+                  f"postspawn={_f('postspawn_purpose')}")
         except (F.DemoUndersampled, StandsMissing) as e:
             skipped.append((p, str(e)))
             print(f"SKIP {os.path.basename(p)}: {e}")
