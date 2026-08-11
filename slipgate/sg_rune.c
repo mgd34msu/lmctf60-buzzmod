@@ -700,7 +700,7 @@ static qboolean ProveDrop(int from, int to, vec3_t lip_out,
 	trace_t tr;
 	sg_phantom_t ph;
 	usercmd_t cmd;
-	float horiz, walked;
+	float horiz, walked = 0.0f;
 	int elapsed;
 	qboolean found_lip = false;
 

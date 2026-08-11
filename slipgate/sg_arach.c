@@ -33,6 +33,9 @@
  * (see bl_spawn.c:26-28). Same functions, same signatures.
  */
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
+void		Cmd_Kill_f(edict_t *ent);
+void		Cmd_Hook_f(edict_t *ent);
+void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
 void		ClientBegin(edict_t *ent);
 void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
@@ -6548,8 +6551,6 @@ rally_done:;
 	         bot->railhold_since <= 0.0f &&
 	         bot->rally_since <= 0.0f)
 	{
-		void Cmd_Kill_f(edict_t *ent);
-
 		gi.dprintf("WEDGEKILL %s at (%.0f %.0f %.0f)\n",
 		           e->client->pers.netname, e->s.origin[0],
 		           e->s.origin[1], e->s.origin[2]);
@@ -9312,10 +9313,10 @@ no_hold:;
 				 * hop he is in. Without the hysteresis the road test
 				 * chatters on and off across the bar and no chain lives
 				 * long enough to reach the speeds the technique is for. */
-				float	want = SG_AS_RUN / SG_PersonaHookScale(e);
+				float	aswant = SG_AS_RUN / SG_PersonaHookScale(e);
 
 				if (bot->as_since != 0.0f)
-					want *= SG_AS_HOLD;
+					aswant *= SG_AS_HOLD;
 
 				vdir[0] = e->velocity[0] / sp;
 				vdir[1] = e->velocity[1] / sp;
@@ -9329,7 +9330,7 @@ no_hold:;
 
 				if (err > -SG_AS_ABORT && err < SG_AS_ABORT &&
 				    SG_RunRoom(e, sg_rune->links[bestlink].to,
-				               route_field, move_dir, want))
+				               route_field, move_dir, aswant))
 				{
 					float dt = (float)total / 1000.0f;
 
@@ -9700,8 +9701,6 @@ no_hold:;
 	 * is cut loose.
 	 */
 	{
-		void Cmd_Hook_f(edict_t *ent);
-
 		/*
 		 * A rope this bot does not think it owns is a rope it cannot ever
 		 * release: g_cmds.c's Cmd_Unhook_f, when the grapple happens to be
@@ -10184,8 +10183,6 @@ static int Botfill_WorstIndex(int team)
  * reusable until the edict is actually gone */
 static void Botfill_Drop(int slot)
 {
-	void ClientDisconnect(edict_t *ent);
-
 	ClientDisconnect(sg_bots[slot].ent);
 	SG_FreeClientEdict(sg_bots[slot].ent);
 	sg_bots[slot].active = false;
@@ -10548,8 +10545,6 @@ qboolean SG_AddBotTeam(int teamnum)
 int SG_RemoveBots(void)
 {
 	int i, n = 0;
-	void ClientDisconnect(edict_t *ent);
-
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		if (!sg_bots[i].active)

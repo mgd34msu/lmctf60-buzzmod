@@ -775,19 +775,19 @@ qboolean Fields_Setup(rune_t *r)
 			int fseed = t ? sg_fields.blue_flag_seed
 			              : sg_fields.red_flag_seed;
 			float *fo = r->seeds[fseed].origin;
-			int i, ns = r->hdr.num_seeds;
+			int fi, ns = r->hdr.num_seeds;
 
 			if (ns > SG_MAX_SEEDS)
 				ns = SG_MAX_SEEDS;
-			for (i = 0; i < ns; i++)
+			for (fi = 0; fi < ns; fi++)
 			{
-				float dx = r->seeds[i].origin[0] - fo[0];
-				float dy = r->seeds[i].origin[1] - fo[1];
+				float dx = r->seeds[fi].origin[0] - fo[0];
+				float dy = r->seeds[fi].origin[1] - fo[1];
 
-				sg_shelf_pen[i] = 0;
+				sg_shelf_pen[fi] = 0;
 				if (dx * dx + dy * dy <= 350.0f * 350.0f &&
-				    r->seeds[i].origin[2] <= fo[2] - 96.0f)
-					sg_shelf_pen[i] = (int)
+				    r->seeds[fi].origin[2] <= fo[2] - 96.0f)
+					sg_shelf_pen[fi] = (int)
 					    (gi.cvar("sg_shelfcost", "0", 0)->value * 12000.0f);
 			}
 			Field_FromOne(r, t ? sg_fields.to_blue_flag
@@ -822,22 +822,22 @@ qboolean Fields_Setup(rune_t *r)
 			                   : sg_fields.blue_flag_seed;
 			int *sf = t ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
 			float *fo = r->seeds[enemy_seed].origin;
-			int i, best_plat = 0x7fffffff;
+			int si, best_plat = 0x7fffffff;
 
 			sg_fields.shelf_cliff[t] = Field_Alloc(r);
-			for (i = 0; i < r->hdr.num_seeds; i++)
-				sg_fields.shelf_cliff[t][i] = 0;
+			for (si = 0; si < r->hdr.num_seeds; si++)
+				sg_fields.shelf_cliff[t][si] = 0;
 
-			for (i = 0; i < r->hdr.num_seeds; i++)
+			for (si = 0; si < r->hdr.num_seeds; si++)
 			{
-				float dx = r->seeds[i].origin[0] - fo[0];
-				float dy = r->seeds[i].origin[1] - fo[1];
+				float dx = r->seeds[si].origin[0] - fo[0];
+				float dy = r->seeds[si].origin[1] - fo[1];
 
 				if (dx * dx + dy * dy > 350.0f * 350.0f)
 					continue;
-				if (r->seeds[i].origin[2] > fo[2] - 48.0f &&
-				    sf[i] < best_plat)
-					best_plat = sf[i];
+				if (r->seeds[si].origin[2] > fo[2] - 48.0f &&
+				    sf[si] < best_plat)
+					best_plat = sf[si];
 			}
 			if (best_plat == 0x7fffffff)
 			{
@@ -845,36 +845,36 @@ qboolean Fields_Setup(rune_t *r)
 					gi.dprintf("SHELF t=%d: no platform-level seed in radius\n", t);
 				continue;
 			}
-			for (i = 0; i < r->hdr.num_seeds; i++)
+			for (si = 0; si < r->hdr.num_seeds; si++)
 			{
-				float dx = r->seeds[i].origin[0] - fo[0];
-				float dy = r->seeds[i].origin[1] - fo[1];
+				float dx = r->seeds[si].origin[0] - fo[0];
+				float dy = r->seeds[si].origin[1] - fo[1];
 
 				if (dx * dx + dy * dy > 350.0f * 350.0f)
 					continue;
-				if (r->seeds[i].origin[2] > fo[2] - 96.0f)
+				if (r->seeds[si].origin[2] > fo[2] - 96.0f)
 					continue;
-				if (sf[i] > best_plat)
-					sg_fields.shelf_cliff[t][i] = sf[i] - best_plat;
+				if (sf[si] > best_plat)
+					sg_fields.shelf_cliff[t][si] = sf[si] - best_plat;
 			}
 			{
 				int n = 0, mx = 0, sub = 0;
 
-				for (i = 0; i < r->hdr.num_seeds; i++)
+				for (si = 0; si < r->hdr.num_seeds; si++)
 				{
-					float dx = r->seeds[i].origin[0] - fo[0];
-					float dy = r->seeds[i].origin[1] - fo[1];
+					float dx = r->seeds[si].origin[0] - fo[0];
+					float dy = r->seeds[si].origin[1] - fo[1];
 
 					if (dx * dx + dy * dy > 350.0f * 350.0f)
 						continue;
-					if (r->seeds[i].origin[2] <= fo[2] - 96.0f)
+					if (r->seeds[si].origin[2] <= fo[2] - 96.0f)
 					{
 						sub++;
-						if (sg_fields.shelf_cliff[t][i] > 0)
+						if (sg_fields.shelf_cliff[t][si] > 0)
 						{
 							n++;
-							if (sg_fields.shelf_cliff[t][i] > mx)
-								mx = sg_fields.shelf_cliff[t][i];
+							if (sg_fields.shelf_cliff[t][si] > mx)
+								mx = sg_fields.shelf_cliff[t][si];
 						}
 					}
 				}
@@ -886,12 +886,12 @@ qboolean Fields_Setup(rune_t *r)
 	}
 
 	{
-		int i, nr = 0, nb = 0;
+		int si, nr = 0, nb = 0;
 
-		for (i = 0; i < r->hdr.num_seeds; i++)
+		for (si = 0; si < r->hdr.num_seeds; si++)
 		{
-			if (sg_fields.to_red_flag[i] < SG_FIELD_INF) nr++;
-			if (sg_fields.to_blue_flag[i] < SG_FIELD_INF) nb++;
+			if (sg_fields.to_red_flag[si] < SG_FIELD_INF) nr++;
+			if (sg_fields.to_blue_flag[si] < SG_FIELD_INF) nb++;
 		}
 		gi.dprintf("slipgate: field coverage red %d/%d blue %d/%d (flag seeds %d, %d)\n",
 		           nr, r->hdr.num_seeds, nb, r->hdr.num_seeds,
@@ -901,10 +901,10 @@ qboolean Fields_Setup(rune_t *r)
 	/*
 	 * Learned defensive fields (.dpo planes, wave 307+): flood from the
 	 * corpus's top post seed and top intercept seed per team. Missing
-	 * plane -> the team's own flag field, i.e. exactly today's behavior.
+	 * plane -> the team's own flag field, si.e. exactly today's behavior.
 	 */
 	{
-		int t, i;
+		int t, si;
 
 		for (t = 0; t < 2; t++)
 		{
@@ -917,7 +917,7 @@ qboolean Fields_Setup(rune_t *r)
 			sg_fields.to_post[t] = Field_Alloc(r);
 			best = -1;
 			if (pp)
-				for (i = 0; i < r->hdr.num_seeds; i++)
+				for (si = 0; si < r->hdr.num_seeds; i++)
 					if (best < 0 || pp[i] > pp[best]) best = i;
 			if (best >= 0 && pp[best] > 0)
 				Field_FromOne(r, sg_fields.to_post[t], best);
@@ -949,7 +949,7 @@ qboolean Fields_Setup(rune_t *r)
 	 * covering the way TO the stand.
 	 */
 	{
-		int t, i, j;
+		int t, li, j;
 
 		for (t = 0; t < 2; t++)
 		{
@@ -962,20 +962,20 @@ qboolean Fields_Setup(rune_t *r)
 			float bestscore = -1.0f;
 
 			/* the corridor: sample seeds 1.5-4s out on the home field */
-			for (i = 0; i < r->hdr.num_seeds && na < 48; i += 7)
-				if (own[i] < SG_FIELD_INF &&
-				    own[i] >= 1500 && own[i] <= 4000)
-					appr[na++] = i;
+			for (li = 0; li < r->hdr.num_seeds && na < 48; li += 7)
+				if (own[li] < SG_FIELD_INF &&
+				    own[li] >= 1500 && own[li] <= 4000)
+					appr[na++] = li;
 
 			/* candidates: seeds inside 2s of the stand */
-			for (i = 0; i < r->hdr.num_seeds; i++)
+			for (li = 0; li < r->hdr.num_seeds; li++)
 			{
 				float score = 0.0f;
 				vec3_t eye;
 
-				if (own[i] >= SG_FIELD_INF || own[i] > 2000)
+				if (own[li] >= SG_FIELD_INF || own[li] > 2000)
 					continue;
-				VectorCopy(r->seeds[i].origin, eye);
+				VectorCopy(r->seeds[li].origin, eye);
 				eye[2] += 22.0f;
 				for (j = 0; j < na; j++)
 				{
@@ -1005,7 +1005,7 @@ qboolean Fields_Setup(rune_t *r)
 				if (score > bestscore)
 				{
 					bestscore = score;
-					best = i;
+					best = li;
 				}
 			}
 			sg_fields.to_lane[t] = Field_Alloc(r);
