@@ -390,15 +390,15 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # 84-wave "breather costs conversion" flag died with the discovery that
 # its control arm also ran ribbon/jitter 0 -- three variables, not one.
 # s09-ctrl stays 0 as always.
-# ANTI-LINGER (sg_unlinger, rung-4 cut #3): a non-escort continuously
-# within 400u of its own carrier for >1.5s pays this surcharge on links
-# that keep it there, until it separates. Passing stays free -- only
-# the co-jog is priced, which is exactly the measured human gap
-# (single-mate streaks 3-10x longer for bots). Armed s03=3000 vs s04.
-# Bars: escort_fraction_obs between-arm delta DOWN at fixed parity
-# (film scalar, 8 waves); caps guard at the 16-wave floor before any
-# adoption.
-UNLINGER=(0    0        3000     0        0         0        0         0        0        0)
+# ANTI-LINGER struck 2026-08-11 at the 16-wave floor: the 7-wave film
+# delta was noise (0.601 vs 0.636 final, ~0.5 sem), conversion leaning
+# down (0.120 vs 0.168). THIRD mechanism dead on this tell. A routing
+# surcharge cannot separate bodies whose destinations coincide -- and
+# the forensics' position data suggests the streaks are POSTED
+# DEFENDERS: the carrier comes home to a defended stand and ends its
+# run inside 400u of a camper. Split diagnostic running before any
+# fourth mechanism.
+UNLINGER=(0    0        0        0        0         0        0         0        0        0)
 
 # BREATHER stays at the adopted dose 4. The dose-2 probe is VOID: its
 # control arm (s04, unchanged dose 4) read conversion 0.224 in the
