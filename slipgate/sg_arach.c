@@ -57,6 +57,9 @@ typedef struct sg_bot_s
 	unsigned	dither_salt;    /* route dither: rerolled per seed visit
 	                             * so a choice holds within a visit but
 	                             * varies across visits */
+	vec3_t		hp_cur_dep;     /* hook ping-pong: this ride's departure */
+	vec3_t		hp_prev_dep;    /* previous ride's departure point */
+	float		hp_prev_land;   /* when the previous ride completed */
 	float		linger_since;   /* anti-linger: when this non-escort first
 	                             * came within 400u of its own carrier;
 	                             * 0 = not currently adjacent */
@@ -7087,6 +7090,45 @@ no_hold:;
 				/* a rope ride ENDS its commitment: wherever this landing
 				 * is, the next step is argued fresh from here */
 				bot->commit_link = -1;
+				/*
+				 * HOOK PING-PONG SHELF (sg_hookpong, rung-2 revisit
+				 * diagnosis 2026-08-11): 29% of all A-B-A events sit
+				 * on three HOOK-heavy spans at 8-45x the human rate --
+				 * grapple-decision oscillation, not field flatness,
+				 * which is why pricing immediate returns had nothing
+				 * to bite on. If this landing puts the body back where
+				 * the PREVIOUS ride departed within 8s, the ridden
+				 * link joins the shelf ring exactly like a failed
+				 * anchor: the pair stops flapping for 45s and the
+				 * surface argues a different road.
+				 */
+				if (gi.cvar("sg_hookpong", "0", 0)->value > 0.0f &&
+				    bot->hp_prev_land > 0.0f &&
+				    level.time - bot->hp_prev_land < 8.0f &&
+				    bot->hook_link >= 0)
+				{
+					vec3_t hpd;
+
+					VectorSubtract(e->s.origin, bot->hp_prev_dep, hpd);
+					if (VectorLength(hpd) < 250.0f)
+					{
+						int b9, old9 = 0;
+
+						for (b9 = 0; b9 < SG_BL_MAX; b9++)
+							if (bot->bl_until[b9] < bot->bl_until[old9])
+								old9 = b9;
+						bot->bl_link[old9] = bot->hook_link;
+						bot->bl_until[old9] = level.time + 45.0f;
+						SG_TeachLinkFutility(bot->hook_link);
+						if (gi.cvar("sg_debug", "0", 0)->value)
+							gi.dprintf("HOOKPONG %s link=%d\n",
+							           e->client->pers.netname,
+							           bot->hook_link);
+					}
+				}
+				VectorCopy(bot->hp_cur_dep, bot->hp_prev_dep);
+				bot->hp_prev_land = level.time;
+
 				/* ropetravel: a grounded landing chains too -- the beat
 				 * is slightly longer than the apex's because the legs
 				 * carry a step before the next throw */
@@ -7586,7 +7628,9 @@ no_hold:;
 							{
 								VectorCopy(htr.endpos, bot->hook_anchor);
 								VectorCopy(aim, bot->hook_dest);
-								bot->hook_phase = 1;
+								VectorCopy(e->s.origin, bot->hp_cur_dep);
+								VectorCopy(e->s.origin, bot->hp_cur_dep);
+						bot->hook_phase = 1;
 								bot->hook_deadline = level.time + 1.0f;
 								bot->speedhook = true;
 								bot->speedhook_next = level.time

@@ -363,6 +363,16 @@ FIREDISC=(0    0        0        0        0         0        0         0        
 # repositioning) -- design work, not jitter. Ledgered.
 TAPVAR=(0     0        0        0        0         0        0         0        0        0)
 
+# HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
+# three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).
+# A landing that returns the body to the previous ride's departure
+# within 8s shelves the ridden link for 45s. Armed s03=1 vs s04.
+# Bars: revisit_spike2_mass toward human 0.20 from 0.31; caps read
+# with the MEASURED ARM BIAS correction (A/A: s03 converts 0.076 lower
+# than s04 with nothing armed -- the raw caps comparison is invalid on
+# this pair; compare against the A/A baseline delta).
+HOOKPONG=(0    0        1        0        0         0        0         0        0        0)
+
 # DITHER RETRY 2026-08-11 on its NEW eye (max_transition_mass, sep
 # 0.901 -- the cell-level scalar whose absence voided the first trial's
 # read). s06=120 vs s07=0. Bars: max_transition_mass down toward the
@@ -539,6 +549,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_lonewolf ${LONEWOLF[$i]}"
                 echo "set sg_unlinger ${UNLINGER[$i]}"
                 echo "set sg_depace ${DEPACE[$i]}"
+                echo "set sg_hookpong ${HOOKPONG[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"

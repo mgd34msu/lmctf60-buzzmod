@@ -74,6 +74,29 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## Protocol lessons ledgered
 
+- **THE s03/s04 PAIR HAS A REAL CONVERSION ARM BIAS (A/A null test,
+  2026-08-11).** Identical configs, nothing armed, 15 waves/arm:
+  conversion 0.104 (s03) vs 0.180 (s04). Cause unknown. The FILM
+  scalar is clean on the same waves (escort_obs 0.606 vs 0.593, ~0.2
+  sem), so every film-based strike stands — but raw caps comparisons on
+  this pair are invalid; future caps reads use the A/A delta as
+  baseline or arm-swap designs. No past verdict flips: each strike had
+  independent film evidence.
+- **CO-TRAVEL RULED AN ACCEPTED RESIDUAL (2026-08-11, delegated
+  authority).** Five mechanisms (role gate, support pull, spatial
+  surcharge, de-pace, routejitter-25 — the last two backfired), full
+  forensic decomposition (86–89% mid-field co-travel), and a clean
+  film instrument. The convoy is the team-level expression of optimal
+  routing at uniform speed; separating it costs more than it buys.
+  Same evidentiary shape as rung-2's edge strip. Rung-4 sets are
+  judged with it standing.
+- **The revisit spike is three map spots, not a field property
+  (plateau diagnosis, 2026-08-11).** Pairs (22,27)/(5,10)/(8,12) on
+  mactf06 carry 29% of all A→B→A events at 8–45× the human rate, all
+  HOOK-heavy — grapple-decision oscillation. Never judge-cited; the
+  residual mass away from those spots runs only ~2.3× human. Targeted
+  fix (sg_hookpong) in trial.
+
 - **CONVERSION BARS NEED 16+ WAVES PER ARM (2026-08-10).** The
   breather dose-2 probe exposed this: its control arm ran the unchanged
   adopted dose 4 and produced conversion 0.224 in one 8-wave block and
