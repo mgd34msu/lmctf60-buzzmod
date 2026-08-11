@@ -363,11 +363,16 @@ FIREDISC=(0    0        0        0        0         0        0         0        
 # repositioning) -- design work, not jitter. Ledgered.
 TAPVAR=(0     0        0        0        0         0        0         0        0        0)
 
+# DITHER RETRY 2026-08-11 on its NEW eye (max_transition_mass, sep
+# 0.901 -- the cell-level scalar whose absence voided the first trial's
+# read). s06=120 vs s07=0. Bars: max_transition_mass down toward the
+# human 0.344 from bot 0.387; caps at the 16-wave floor.
+# Original strike record below kept for provenance:
 # ROUTE DITHER struck 2026-08-08 (9 waves/arm): entropy 1.493 vs 1.570
 # (wrong direction on the proxy), off/caps flat. The aggregate scalar
 # cannot see cell-level determinism; a max-transition-mass eye is the
 # prerequisite for any retry. Dark.
-ROUTEDITHER=(0 0        0        0        0         0        0         0        0        0)
+ROUTEDITHER=(0 0        0        0        0         120      0         0        0        0)
 
 # NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
 # dead flat): the flood layer is exonerated -- a 90% rope-price cut
