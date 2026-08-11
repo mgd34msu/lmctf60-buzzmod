@@ -528,6 +528,41 @@ def edge_density(P, p_min=EDGE_P_MIN):
     return float((P >= p_min).sum()) / float(n * n)
 
 
+# Rung-2 judges repeatedly convicted a wave on "saturated p=1.0 cells in the
+# transition matrix" -- at some node, a bot always makes the identical next
+# choice.  mean_route_entropy_bits cannot show this: it is pi-weighted over
+# EVERY node (transition_entropy's `rowH` term), so a handful of busy,
+# perfectly deterministic nodes get averaged against the rest of the graph
+# and the aggregate can sit anywhere.  That is exactly what happened to the
+# route-dither retry -- entropy moved the wrong direction while the
+# cell-level determinism a judge actually reads off panel 2 was never
+# measured on its own.  max_transition_mass is that missing cell-level eye.
+def max_transition_mass(counts, min_transitions=8):
+    """Transition-count-weighted mean of each qualifying node's most-frequent
+    next-node share -- how deterministic this team's node-to-node choices are.
+
+    For every node with at least `min_transitions` outgoing transitions
+    recorded, max_p = (count of its most common next node) / (its total
+    outgoing count).  Those per-node max_p values are combined with a mean
+    weighted by each node's own outgoing transition count, not by node count,
+    for the same reason intershot_cv (fightsheet.py) is count-weighted across
+    weapon classes: a node passed through constantly and always exited the
+    same way should outweigh a barely-visited node that happens to have a
+    single recorded exit, or a handful of thin nodes could swing the number as
+    much as the busiest lane on the sheet. High = deterministic.
+
+    Returns None when no node on this matrix clears `min_transitions` --
+    the same "not enough to estimate" convention ROUTE_MIN_TRANSITIONS uses
+    elsewhere on this sheet, rather than a noisy number built from one or two
+    node visits."""
+    rs = counts.sum(axis=1)
+    qual = rs >= min_transitions
+    if not qual.any():
+        return None
+    max_p = counts[qual].max(axis=1) / rs[qual]
+    return float(np.average(max_p, weights=rs[qual]))
+
+
 # ------------------------------------------------------------------- draw
 def draw_route_graph(ax, seeds, nodes, P_by_team, visits_by_team, fixture):
     """Panel 1: the node graph over the map silhouette, one edge set per team.
@@ -783,12 +818,16 @@ def analyze_demo(demo_path, rune_dir, pov_parity=False, pov_ent=None,
     ent_vals = [v for v in ent.values() if v is not None]
     off_vals = [v for v in offgraph.values() if v is not None]
     kl_vals = [v for v in kl_by_team.values() if v is not None]
+    mtm_by_team = {t: max_transition_mass(counts_by_team[t])
+                  for t in ('red', 'blue')}
+    mtm_vals = [v for v in mtm_by_team.values() if v is not None]
     scalars = {
         'mean_route_entropy_bits': float(np.mean(ent_vals)) if ent_vals else None,
         'occupancy_kl_bits': float(np.mean(kl_vals)) if kl_vals else None,
         'offgraph_fraction': float(np.mean(off_vals)) if off_vals else None,
         'revisit_spike2_mass': float(dens[0]) if len(dens) else None,
         'edge_density': edge_density(P_all),
+        'max_transition_mass': float(np.mean(mtm_vals)) if mtm_vals else None,
     }
 
     coverage = F.coverage_stats(tracks, labels, d['frames'])
@@ -807,13 +846,15 @@ def analyze_demo(demo_path, rune_dir, pov_parity=False, pov_ent=None,
 
 
 SCALAR_KEYS = ['mean_route_entropy_bits', 'occupancy_kl_bits',
-               'offgraph_fraction', 'revisit_spike2_mass', 'edge_density']
+               'offgraph_fraction', 'revisit_spike2_mass', 'edge_density',
+               'max_transition_mass']
 SCALAR_PANEL = {
     'mean_route_entropy_bits': 'panel 3 (entropy bars)',
     'occupancy_kl_bits': 'panel 5 (KL bars)',
     'offgraph_fraction': 'panel 6 (off-graph)',
     'revisit_spike2_mass': 'panel 4 (revisit histogram)',
     'edge_density': 'panels 1-2 (route graph / matrix)',
+    'max_transition_mass': 'panel 2 (transition matrix, cell-level)',
 }
 
 
