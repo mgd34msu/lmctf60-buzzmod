@@ -256,7 +256,15 @@ EDGERIDE=(0     0        0        0        0         0        0         0       
 # corridor band width on film (human bar 69u).
 # jitter ADOPTED at dose 8 (pooled verdict: 2.41 bits vs control 1.99
 # vs dose-20 2.21; pooled humans 2.62). s04 stays the clean control.
-ROUTEJITTER=(8   8        8        8        8         8        8         8        0        8)
+# ROUTEJITTER dose trial 2026-08-11 (rung-4 cut #5): four mechanisms
+# dead on the co-travel tell, and the structural read is route-
+# optimality identity -- teammates ride the same cheapest road at the
+# same speed. Routejitter is the adopted lever that splits lives
+# across near-optimal roads; 8 was fitted for rung-1 film, 25 asks for
+# team-level divergence. s03=25 vs s04=8. Bars at the 16-wave floor:
+# escort_obs delta down; caps hold. Null here = the co-travel residual
+# goes to the owner like rung-2's edge strip did.
+ROUTEJITTER=(8   8        25       8        8         8        8         8        0        8)
 
 # EXIT-LANE ASYMMETRY (379 trial, ruled 2026-08-05): a human tends to
 # leave with the flag by a different road than the one ridden in -- but
@@ -390,14 +398,12 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # 84-wave "breather costs conversion" flag died with the discovery that
 # its control arm also ran ribbon/jitter 0 -- three variables, not one.
 # s09-ctrl stays 0 as always.
-# DE-PACE (sg_depace, rung-4 cut #4): the post-zone split proved the
-# gap is 86-89% MID-FIELD CO-TRAVEL, and anti-linger nulled because a
-# corridor offers no lateral gradient. Humans separate TEMPORALLY.
-# A lingering non-escort scales its throttle by the cvar (0.55) until
-# it exits the carrier's 400u bubble. Armed s03=0.55 vs s04. Bars:
-# escort_fraction_obs delta down at fixed parity, 16 waves; caps at
-# the same floor.
-DEPACE=(0      0        0.55     0        0         0        0         0        0        0)
+# DE-PACE struck 2026-08-11 at the 16-wave floor, double miss: escort
+# WRONG WAY (0.638 vs 0.564) and conversion down (0.110 vs 0.177).
+# Backfire mechanism: slowing a lingering teammate keeps it in the
+# bubble LONGER when the carrier approaches from behind. Fourth
+# mechanism dead on this tell.
+DEPACE=(0      0        0        0        0         0        0         0        0        0)
 
 # ANTI-LINGER struck 2026-08-11 at the 16-wave floor: the 7-wave film
 # delta was noise (0.601 vs 0.636 final, ~0.5 sem), conversion leaning

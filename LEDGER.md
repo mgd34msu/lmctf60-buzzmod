@@ -15,7 +15,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
-| 4. Team decisions | tell real; eye VALIDATED for rank-order only | escort_fraction_obs passes every radius and leave-one-out (0.918–0.986 both maps) but is MORE parity-sensitive than the old scalar — separation survives the coverage knob rather than being freed from it. **Measure rung-4 fixes as between-arm deltas at fixed parity; never as distance-to-human-band.** Two mechanisms down; breather ablation live |
+| 4. Team decisions | four mechanisms down; routejitter-25 is cut #5 | escort_fraction_obs passes every radius and leave-one-out (0.918–0.986 both maps) but is MORE parity-sensitive than the old scalar — separation survives the coverage knob rather than being freed from it. **Measure rung-4 fixes as between-arm deltas at fixed parity; never as distance-to-human-band.** Two mechanisms down; breather ablation live |
 | 5. Match outcomes | protocol written; judging deferred by design | its only eye (steals_total, 0.964) measures the steal-volume gap stage 2 exists to close — so rung-5's blocker and stage-2's first number are THE SAME WORK. Judging waits; the work does not |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
@@ -41,6 +41,9 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## The morgue (honest nulls and strikes, with their lessons)
 
+- **de-pace** (2026-08-11): struck at the 16-wave floor, double miss — escort WRONG WAY (0.638 vs 0.564), conversion down. Slowing a lingering teammate keeps it in the bubble longer when the carrier approaches from behind. Fourth mechanism dead on the co-travel tell.
+- **anti-linger** (2026-08-11): struck — the 7-wave delta was noise; corridors give a spatial surcharge no gradient (every link sits in the carrier's bubble).
+- **post-zone hypothesis** (2026-08-11): refuted cleanly — 86–89% of the escort gap is mid-field co-travel, not defenders at the stand; humans are MORE post-zone-dominated than bots. The ~12% defender share is the likely Rule-21 residual.
 - **aimtexture dose 2.5** (2026-08-09): struck, wrong direction (6.54 vs 6.74 — further from the 10.89 human anchor). **The trigger's aim gate censors the texture**: bigger overshoot doesn't make sloppier shots, it makes shots the clear-shot/lead checks veto, so only well-settled aim reaches fire time. Amplitude cannot move a fire-time scalar — closing the aim gap needs a looser fire gate, a different and riskier feature.
 - **sg_handoff** (2026-08-09): STRUCK before trial. The new handoff eye
   measures humans handing off on 1.8% of carries and bots on 1.6% **with
