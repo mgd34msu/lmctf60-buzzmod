@@ -57,6 +57,9 @@ typedef struct sg_bot_s
 	unsigned	dither_salt;    /* route dither: rerolled per seed visit
 	                             * so a choice holds within a visit but
 	                             * varies across visits */
+	float		linger_since;   /* anti-linger: when this non-escort first
+	                             * came within 400u of its own carrier;
+	                             * 0 = not currently adjacent */
 	int			hook_phase;     /* 0 none, 1 aimed+firing, 2 rope out,
 	                             * 3 released mid-air, steering to land */
 	int			hook_link;      /* which link this ride is executing */
@@ -4707,11 +4710,84 @@ rally_done:;
 		bot->sink_ban = sink_ban;
 	}
 
+	/*
+	 * ANTI-LINGER (sg_unlinger, rung-4 cut #3). The forensics' surviving
+	 * lead after two nulls: bot single-mate contact streaks beside the
+	 * carrier run 3-10x longer than human ones (3.85-7.69s vs 0.68-
+	 * 1.39s). The mechanism is not attraction -- the role gate and the
+	 * support pull both nulled -- it is LINGERING: identical pacing on
+	 * identical cheapest roads means a teammate that falls in beside the
+	 * carrier simply stays there. Humans pass their carrier constantly
+	 * (the relay pattern); they do not co-jog. So the cut is targeted:
+	 * a non-escort continuously within 400u of its own carrier for
+	 * >1.5s pays a surcharge on links that KEEP it there, until it
+	 * separates. Passing stays free; only the co-jog is priced. The
+	 * escort is exempt -- lingering is its entire job.
+	 */
+	{
+		qboolean linger_hot = false;
+		vec3_t car_org = { 0, 0, 0 };
+
+		if (gi.cvar("sg_unlinger", "0", 0)->value > 0.0f &&
+		    role != SG_ROLE_CARRY && role != SG_ROLE_ESCORT)
+		{
+			static gitem_t *lg_flag;
+			edict_t *car = NULL;
+			int ci;
+
+			if (!lg_flag)
+				lg_flag = FindItem("Enemy Flag");
+			if (lg_flag)
+				for (ci = 1; ci <= game.maxclients; ci++)
+				{
+					edict_t *ce = g_edicts + ci;
+
+					if (!ce->inuse || !ce->client || ce == e ||
+					    ce->client->ctf.teamnum != team || ce->deadflag)
+						continue;
+					if (ce->client->pers.inventory[
+					        ITEM_INDEX(lg_flag)] > 0)
+					{
+						car = ce;
+						break;
+					}
+				}
+			if (car)
+			{
+				vec3_t cd;
+
+				VectorCopy(car->s.origin, car_org);
+				VectorSubtract(e->s.origin, car_org, cd);
+				if (VectorLength(cd) < 400.0f)
+				{
+					if (bot->linger_since <= 0.0f)
+						bot->linger_since = level.time;
+					else if (level.time - bot->linger_since > 1.5f)
+						linger_hot = true;
+				}
+				else
+					bot->linger_since = 0.0f;
+			}
+			else
+				bot->linger_since = 0.0f;
+		}
+		else
+			bot->linger_since = 0.0f;
+
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
 	{
 		rune_link_t *l = &sg_rune->links[li];
 		float v = Surface_At(l->to, w, route_field, support, intercept);
 		int b;
+
+		if (linger_hot)
+		{
+			vec3_t ld9;
+
+			VectorSubtract(sg_rune->seeds[l->to].origin, car_org, ld9);
+			if (VectorLength(ld9) < 400.0f)
+				v += gi.cvar("sg_unlinger", "0", 0)->value;
+		}
 
 		/*
 		 * ROUTE DITHER (sg_routedither, rung-2 set #1 tell #2): the
@@ -5498,6 +5574,7 @@ rally_done:;
 			bestlink = li;
 		}
 	}
+	}       /* anti-linger scope */
 
 	/*
 	 * THE LINK LATCH (sg_linklatch, wave 289+). The demo census: 87

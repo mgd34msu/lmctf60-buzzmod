@@ -390,6 +390,16 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # 84-wave "breather costs conversion" flag died with the discovery that
 # its control arm also ran ribbon/jitter 0 -- three variables, not one.
 # s09-ctrl stays 0 as always.
+# ANTI-LINGER (sg_unlinger, rung-4 cut #3): a non-escort continuously
+# within 400u of its own carrier for >1.5s pays this surcharge on links
+# that keep it there, until it separates. Passing stays free -- only
+# the co-jog is priced, which is exactly the measured human gap
+# (single-mate streaks 3-10x longer for bots). Armed s03=3000 vs s04.
+# Bars: escort_fraction_obs between-arm delta DOWN at fixed parity
+# (film scalar, 8 waves); caps guard at the 16-wave floor before any
+# adoption.
+UNLINGER=(0    0        3000     0        0         0        0         0        0        0)
+
 # BREATHER stays at the adopted dose 4. The dose-2 probe is VOID: its
 # control arm (s04, unchanged dose 4) read conversion 0.224 in the
 # ablation and 0.118 in the dose-2 trial -- same config, adjacent wave
@@ -506,6 +516,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_edgeride ${EDGERIDE[$i]}"
                 echo "set sg_escortdose ${ESCORTDOSE[$i]}"
                 echo "set sg_lonewolf ${LONEWOLF[$i]}"
+                echo "set sg_unlinger ${UNLINGER[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
