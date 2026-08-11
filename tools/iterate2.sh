@@ -256,15 +256,16 @@ EDGERIDE=(0     0        0        0        0         0        0         0       
 # corridor band width on film (human bar 69u).
 # jitter ADOPTED at dose 8 (pooled verdict: 2.41 bits vs control 1.99
 # vs dose-20 2.21; pooled humans 2.62). s04 stays the clean control.
-# ROUTEJITTER dose trial 2026-08-11 (rung-4 cut #5): four mechanisms
-# dead on the co-travel tell, and the structural read is route-
-# optimality identity -- teammates ride the same cheapest road at the
-# same speed. Routejitter is the adopted lever that splits lives
-# across near-optimal roads; 8 was fitted for rung-1 film, 25 asks for
-# team-level divergence. s03=25 vs s04=8. Bars at the 16-wave floor:
-# escort_obs delta down; caps hold. Null here = the co-travel residual
-# goes to the owner like rung-2's edge strip did.
-ROUTEJITTER=(8   8        25       8        8         8        8         8        0        8)
+# ROUTEJITTER-25 struck 2026-08-11: escort WRONG WAY (0.648 vs 0.547)
+# and conversion down -- second consecutive backfire, fifth mechanism
+# dead on the co-travel tell. Reverted to the adopted 8.
+# A/A NULL TEST now running: the last three trials all read s03
+# conversion BELOW s04 by similar margins regardless of which feature
+# was armed (0.120/0.177, 0.110/0.177, 0.089/0.140). Both arms are now
+# IDENTICAL for 16 waves; if the gap persists with nothing armed, the
+# pair is biased and every caps read on it needs paired-block
+# correction -- including evidence behind past strikes.
+ROUTEJITTER=(8   8        8        8        8         8        8         8        0        8)
 
 # EXIT-LANE ASYMMETRY (379 trial, ruled 2026-08-05): a human tends to
 # leave with the flag by a different road than the one ridden in -- but
