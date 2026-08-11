@@ -3899,12 +3899,12 @@ static void SG_BotThink(sg_bot_t *bot)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
 						int cc = cf[oc->seed], s13;
 						int lead = ((int)(e->client - game.clients) & 1) ? 0 : 1;
-						int want = lead ? cc - 1300 : cc + 900;
+						int wcost = lead ? cc - 1300 : cc + 900;
 						int band = 450;
 						float bd13 = -1.0f;
 
-						if (want < 0)
-							want = 0;  /* carrier nearly home: lead collapses to the stand */
+						if (wcost < 0)
+							wcost = 0;  /* carrier nearly home: lead collapses to the stand */
 						for (s13 = 0; s13 < sg_rune->hdr.num_seeds &&
 						     s13 < SG_MAX_SEEDS; s13++)
 						{
@@ -3912,7 +3912,7 @@ static void SG_BotThink(sg_bot_t *bot)
 							float dl13;
 
 							if (cf[s13] >= SG_FIELD_INF ||
-							    cf[s13] < want - band || cf[s13] > want + band)
+							    cf[s13] < wcost - band || cf[s13] > wcost + band)
 								continue;
 							VectorSubtract(sg_rune->seeds[s13].origin,
 							    sg_rune->seeds[oc->seed].origin, dd13);

@@ -901,7 +901,7 @@ qboolean Fields_Setup(rune_t *r)
 	/*
 	 * Learned defensive fields (.dpo planes, wave 307+): flood from the
 	 * corpus's top post seed and top intercept seed per team. Missing
-	 * plane -> the team's own flag field, si.e. exactly today's behavior.
+	 * plane -> the team's own flag field, i.e. exactly today's behavior.
 	 */
 	{
 		int t, si;
@@ -917,8 +917,8 @@ qboolean Fields_Setup(rune_t *r)
 			sg_fields.to_post[t] = Field_Alloc(r);
 			best = -1;
 			if (pp)
-				for (si = 0; si < r->hdr.num_seeds; i++)
-					if (best < 0 || pp[i] > pp[best]) best = i;
+				for (si = 0; si < r->hdr.num_seeds; si++)
+					if (best < 0 || pp[si] > pp[best]) best = si;
 			if (best >= 0 && pp[best] > 0)
 				Field_FromOne(r, sg_fields.to_post[t], best);
 			else
@@ -928,8 +928,8 @@ qboolean Fields_Setup(rune_t *r)
 			sg_fields.to_icept[t] = Field_Alloc(r);
 			best = -1;
 			if (ip)
-				for (i = 0; i < r->hdr.num_seeds; i++)
-					if (best < 0 || ip[i] > ip[best]) best = i;
+				for (si = 0; si < r->hdr.num_seeds; si++)
+					if (best < 0 || ip[si] > ip[best]) best = si;
 			if (best >= 0 && ip[best] > 0)
 				Field_FromOne(r, sg_fields.to_icept[t], best);
 			else

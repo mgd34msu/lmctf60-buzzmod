@@ -3,6 +3,12 @@
 #include "m_player.h"
 #include "time.h" // TEAM CODE -- LM_JORM
 #include "g_ctffunc.h" //surt for some nice wrapper functions
+
+void SG_NoteDeath(edict_t *victim);
+void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
+void SpawnLoadout_Give(gclient_t *cl);
+void ClientOldSetSkin(edict_t *e2, char *sk);
+void Observer_Start(edict_t *e);
 #include "g_tourney.h"
 #include "g_skins.h"
 #include "p_stats.h"
@@ -753,8 +759,6 @@ player_die
 void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_t point)
 {
 	{
-		void SG_NoteDeath(edict_t *victim);
-		void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
 		extern int meansOfDeath;
 
 		SG_NoteDeath(self);     /* the obituary is common knowledge */
@@ -1169,10 +1173,7 @@ void InitClientPersistent (gclient_t *client)
 
 	// BUZZKILL - spawn_loadout runs after the stock loadout so it only
 	// ever adds (parser and rules live in g_items.c; README documents)
-	{
-		void SpawnLoadout_Give(gclient_t *cl);
-		SpawnLoadout_Give(client);
-	}
+	SpawnLoadout_Give(client);
 
 	client->pers.connected = true;
 }
@@ -1854,8 +1855,6 @@ void PutClientInServer (edict_t *ent)
 	    (ent->client->ctf.teamnum == CTF_TEAM_RED ||
 	     ent->client->ctf.teamnum == CTF_TEAM_BLUE))
 	{
-		void ClientOldSetSkin(edict_t *e2, char *sk);
-
 		ClientOldSetSkin(ent,
 		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
 	}
@@ -2228,11 +2227,7 @@ void ClientBeginDeathmatch (edict_t *ent)
 	 * list calls it an observer */
 	if (!(ent->flags & FL_BOT) &&
 	    ent->client->ctf.teamnum <= CTF_TEAM_UNDEFINED)
-	{
-		extern void Observer_Start(edict_t *e);
-
 		Observer_Start(ent);
-	}
 
 	//sprintf(DBuffer, "ed2 t %d p %d r %d", ent->client->ctf.teamnum,
 	//	ent->client->pers.spectator, ent->client->resp.spectator);
