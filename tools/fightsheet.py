@@ -109,6 +109,7 @@ by film.py's hash_demo so one demo carries one hash across every rung and a
 single unblinding table serves all of them.
 """
 import argparse
+import bisect
 import collections
 import glob as globmod
 import json
@@ -332,6 +333,13 @@ ENGAGE_RADIUS = 1200.0     # u; two opposite-team players closer than this are
 ENGAGE_GAP_S = 2.0         # contact may lapse this long without ending it
 ENGAGE_MIN_S = 1.0         # shorter contacts are passing traffic, not fights
 TARGET_FOV_DEG = 35.0      # half-width of the cone a shot is attributed in
+REAR_ACQUIRE_CONE_DEG = 120.0  # full width of the forward-facing cone used by
+                           # rear_acquire() -- matches combat's own firing
+                           # cone per TRIALS.md's sg_beliefcone note
+                           # (sg_arach.c: belief is meant to stay WIDER than
+                           # the 120-degree firing cone). A target more than
+                           # half this, 60 degrees, off the shooter's view
+                           # yaw counts as acquired from outside the cone.
 HIT_RADIUS = 64.0          # u; TE_BLOOD this close to a player = that player
                            # was hit (player origin is box centre, blood
                            # spawns on the box surface ~<32u away)
@@ -1151,6 +1159,141 @@ def approach_angle(eng, posidx):
     return (bearing - heading + 180.0) % 360.0 - 180.0
 
 
+def rear_acquire(eng, posidx, yaws):
+    """Whether the fight's opening shot was aimed at a target outside the
+    shooter's forward REAR_ACQUIRE_CONE_DEG-wide cone -- a target the shooter
+    had not turned to face before opening fire.
+
+    FACING PROXY.  The design brief for this scalar asked for the shooter's
+    movement heading over the prior 0.5s, on the assumption that view angles
+    "may not be in the demo stream." They are: this mod writes the client's
+    real v_angle[YAW] into the entity's angles[YAW] on the wire
+    (p_view.c:1033) and `forward_fill_yaws` already normalizes the one
+    serverrecord-only quirk in it (a zero-reference delta reads as an absent
+    bit exactly when the true yaw quantizes to 0, so "absent" and "zero"
+    agree on both demo shapes -- see that function's docstring for the
+    measurement). `attribute_shots` already trusts this same series as
+    ground truth for "what was this player looking at" when it assigns a
+    shot's target. View yaw is used here instead of movement heading for the
+    same reason: target ACQUISITION is a facing/vision-cone question, not a
+    footwork one -- a player can walk one direction while looking another,
+    and sg_beliefcone/sg_beliefrange gate on facing (a human-like FOV), not
+    on where the feet are pointed. Movement heading (approach_angle, above)
+    stays movement heading because that panel asks a different question --
+    how a player WALKS into a fight -- and is left unchanged.
+
+    Returns True (target outside the cone -- a "rear acquire"), False
+    (target inside it), or None where the shot frame has no usable yaw or
+    position for either player. Kept in that three-way shape, matching
+    approach_angle, so a caller can drop the Nones without special-casing."""
+    s = eng['shots'][0]
+    e, f = s['ent'], s['frame']
+    other = eng['pair'][1] if eng['pair'][0] == e else eng['pair'][0]
+    sp = posidx.get(e, {}).get(f)
+    yaw = yaws.get(e, {}).get(f)
+    op = posidx.get(other, {}).get(f)
+    if sp is None or yaw is None or op is None:
+        return None
+    bearing = math.degrees(math.atan2(op[1] - sp[1], op[0] - sp[0]))
+    off_yaw = abs((bearing - yaw + 180.0) % 360.0 - 180.0)
+    return off_yaw > (REAR_ACQUIRE_CONE_DEG / 2.0)
+
+
+# --------------------------------------------------- rail-rhythm crossings
+# sg_railrhythm (TRIALS.md #2) has no scalar that can see it: the doctrine
+# it drives -- a bot timing a lane crossing against a believed railer's
+# reload window -- fires in open movement, before any fight is detected, so
+# it sits upstream of every engagement-scoped scalar above (approach_angle,
+# classify_disengage). fightsheet has no notion of a lane or a sightline, so
+# this is not the crossing itself, but the nearest proxy fightsheet's own
+# structures reach: the CROSSING INTO CONTACT an engagement already marks --
+# its start frame (an approach into the enemy's line) and, when a fight ends
+# in a deliberate retreat, its end frame (crossing back OUT). Both are
+# moments a player begins exposure to one specific opposing player, which is
+# what the doctrine's timing is measured against.
+RAIL_WINDOW_S = 0.7        # a crossing begun this soon after an enemy's rail
+                            # shot counts as "timed" (spec). At
+                            # CLASS_REFIRE_S[CLASS_RAIL] (1.7s, derived from
+                            # the weapon's own gunframe cycle -- see that
+                            # table's comment), a crossing with no knowledge
+                            # of the cadence would land in this window about
+                            # 0.7/1.7 = 41% of the time by chance -- the
+                            # scalar is read against that null, not zero.
+RAIL_MIN_CROSSINGS = 8     # per-team sample gate before a team's fraction is
+                            # trusted -- the same threshold intershot_cv and
+                            # slow_cadence_cv use (len(vals) < 8) for a
+                            # per-class mean.
+
+
+def rail_window_crossings(engs, teams, shots):
+    """Per-team (qualify, total) crossing counts for rail_window_exposure.
+
+    A CROSSING is the frame a player begins exposure to one specific
+    opposing player: an engagement's start frame (e['f0']) or, only when the
+    engagement ends in class == 'broke off' (classify_disengage), its end
+    frame (e['f1']) as well. classify_disengage is decided at the PAIR level
+    -- fightsheet does not record which of the two players initiated a
+    break -- so both members of the pair are credited at both frames,
+    exactly as every other pair-level fact on this sheet (disengage class,
+    the engagement itself) already applies to both players alike.
+
+    A crossing is ELIGIBLE only when the opposing player's held weapon class
+    at the crossing frame is rail. There is no inventory signal on this
+    wire, so "held" is read the only way the shot stream allows: the class
+    of that player's most recent shot at or before the crossing frame (a
+    player with no prior shot has no known held class and is not eligible).
+    Because eligibility is defined by that shot, the shot making a crossing
+    eligible for CLASS_RAIL IS the enemy's last rail shot -- there is no
+    separate "find the last rail shot" step once held-class is read.
+
+    A crossing QUALIFIES when it begins within RAIL_WINDOW_S seconds of that
+    shot (0 <= time_since <= RAIL_WINDOW_S; a crossing cannot be timed
+    against a shot that has not happened yet, so a negative gap cannot
+    occur here -- the held-class lookup only ever looks backward).
+
+    Returns {'red': (qualify, total), 'blue': (qualify, total)} -- counts,
+    not a fraction, so the caller pools before dividing: 'weighted by
+    crossing count' in the spec, not an unweighted mean of per-player
+    fractions."""
+    by_ent = collections.defaultdict(list)
+    for s in shots:
+        by_ent[s['ent']].append(s)
+    for ent in by_ent:
+        by_ent[ent].sort(key=lambda s: s['frame'])
+    frames_by_ent = {ent: [s['frame'] for s in arr]
+                     for ent, arr in by_ent.items()}
+
+    def held_at(enemy, frame):
+        arr = by_ent.get(enemy)
+        fr = frames_by_ent.get(enemy)
+        if not arr:
+            return None, None
+        i = bisect.bisect_right(fr, frame) - 1
+        if i < 0:
+            return None, None
+        s = arr[i]
+        return s['cls'], frame - s['frame']
+
+    counts = {'red': [0, 0], 'blue': [0, 0]}
+    for e in engs:
+        a, b = e['pair']
+        frames = [e['f0']]
+        if e.get('class') == 'broke off':
+            frames.append(e['f1'])
+        for f in frames:
+            for player, enemy in ((a, b), (b, a)):
+                t = teams.get(player)
+                if t not in counts:
+                    continue
+                cls, since_frames = held_at(enemy, f)
+                if cls != CLASS_RAIL or since_frames is None:
+                    continue
+                counts[t][1] += 1
+                if 0 <= (since_frames / F.FPS) <= RAIL_WINDOW_S:
+                    counts[t][0] += 1
+    return {t: tuple(v) for t, v in counts.items()}
+
+
 def intershot_intervals(shots):
     """{class: [seconds]} -- gaps between consecutive shots by the same
     player with the same weapon class.
@@ -1232,6 +1375,8 @@ SCALAR_KEYS = [
     'intershot_cv',
     'slow_cadence_cv',
     'mean_aim_offset_deg',
+    'rail_window_exposure',
+    'rear_acquire_share',
 ]
 
 SCALAR_PANEL = {
@@ -1243,6 +1388,10 @@ SCALAR_PANEL = {
     'intershot_cv': 'panel 5 (fire discipline)',
     'slow_cadence_cv': 'panel 5 (fire discipline, slow weapons only)',
     'mean_aim_offset_deg': '(no panel -- diagnostic scalar only)',
+    'rail_window_exposure': '(no panel -- scalar only, see TRIALS.md #2 '
+                            'sg_railrhythm)',
+    'rear_acquire_share': '(no panel -- scalar only, see TRIALS.md #3 '
+                          'sg_beliefcone/sg_beliefrange)',
 }
 
 # RULE 21 GUARD, declared in writing before any judge sees a sheet.
@@ -1349,6 +1498,7 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
         e['hits'] = landed
         e['class'] = classify_disengage(e, respawns, posidx, deaths_by_ent)
         e['approach'] = approach_angle(e, posidx)
+        e['rear_acquire'] = rear_acquire(e, posidx, d['yaws'])
 
     ranges_by_class = collections.defaultdict(list)
     for s in shots:
@@ -1364,10 +1514,23 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
     dis_total = sum(dis_counts.values())
     dis_mix = {c: (dis_counts.get(c, 0) / dis_total if dis_total else 0.0)
                for c in DISENGAGE_CLASSES}
+    rail_crossings = rail_window_crossings(engs, teams, shots)
+
+    # rear_acquire_share's per-PLAYER groups: the opening shooter of each
+    # engagement (eng['shots'][0]['ent']) against whether that opening shot
+    # was a rear acquire (see rear_acquire). Built here, once, rather than
+    # inside _compute_scalars, so collect_scalars callers that only want the
+    # pooled scalar and callers (this task's own gate run) that want the
+    # per-player breakdown read the identical grouping.
+    rear_by_shooter = collections.defaultdict(list)
+    for e in engs:
+        if e['rear_acquire'] is None:
+            continue
+        rear_by_shooter[e['shots'][0]['ent']].append(e['rear_acquire'])
 
     scalars = _compute_scalars(ranges_by_class, intervals, approaches,
                                dis_mix, dis_total, P_by_team, counts_by_team,
-                               shots)
+                               shots, rail_crossings, rear_by_shooter)
     coverage = F.coverage_stats(tracks, labels, d['frames'])
     return {
         'd': d, 'labels': labels, 'teams': teams, 'tracks': tracks,
@@ -1376,6 +1539,7 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
         'intervals': intervals, 'approaches': approaches,
         'P_by_team': P_by_team, 'counts_by_team': counts_by_team,
         'disengage_mix': dis_mix, 'disengage_total': dis_total,
+        'rail_crossings': rail_crossings, 'rear_by_shooter': dict(rear_by_shooter),
         'scalars': scalars, 'coverage': coverage, 'pov_parity': pov_info,
         'pov_parity_events': pov_ev_info,
         'duration_capped': duration_capped,
@@ -1384,7 +1548,8 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
 
 
 def _compute_scalars(ranges_by_class, intervals, approaches, dis_mix,
-                     dis_total, P_by_team, counts_by_team, shots):
+                     dis_total, P_by_team, counts_by_team, shots,
+                     rail_crossings, rear_by_shooter):
     """The Stage A headline scalars.
 
     Every one is a shape statistic -- a dispersion, a distance between two
@@ -1452,6 +1617,40 @@ def _compute_scalars(ranges_by_class, intervals, approaches, dis_mix,
             diag.append(float(np.trace(cnt) / tot))
     diag_mass = float(np.mean(diag)) if diag else None
 
+    # rail_window_exposure: per-team fraction of eligible crossings (see
+    # rail_window_crossings) begun within RAIL_WINDOW_S of the opposing
+    # player's last rail shot, pooled within each team (not averaged
+    # per-player, so a team with one railer-heavy pair does not get diluted
+    # by teammates who never crossed an armed rail), then averaged red/blue
+    # so the final scalar does not favour whichever team happened to draw
+    # more rail crossings this demo.
+    rail_fracs = []
+    for t in ('red', 'blue'):
+        q, tot = rail_crossings.get(t, (0, 0))
+        if tot >= RAIL_MIN_CROSSINGS:
+            rail_fracs.append(q / tot)
+    rail_exposure = float(np.mean(rail_fracs)) if rail_fracs else None
+
+    # rear_acquire_share: same shape as slow_cadence_cv -- a per-group mean,
+    # then a group-count-weighted average across groups -- except the group
+    # is a PLAYER (the opening shooter of an engagement, see rear_by_shooter
+    # above) rather than a weapon class. Per spec: "the share per player,
+    # aggregated per demo." Pooling every episode-start across all shooters
+    # before dividing, instead of this per-player-then-weighted-average
+    # step, would let a single trigger-happy shooter's episode count dominate
+    # the demo number; averaging per player and weighting by how many
+    # episode-starts each contributed keeps one prolific player from
+    # swamping teammates who opened fewer fights, same reasoning as
+    # intershot_cv's per-class weighting.
+    rear_shares, rear_wts = [], []
+    for ent, vals in rear_by_shooter.items():
+        if len(vals) < 8:
+            continue
+        rear_shares.append(float(np.mean(vals)))
+        rear_wts.append(len(vals))
+    rear_share = (float(np.average(rear_shares, weights=rear_wts))
+                 if rear_shares else None)
+
     return {
         'range_sep_rail_shotgun': w_rs,
         'range_sep_mean_pairwise': w_mean,
@@ -1461,6 +1660,8 @@ def _compute_scalars(ranges_by_class, intervals, approaches, dis_mix,
         'intershot_cv': cv,
         'slow_cadence_cv': slow_cv,
         'mean_aim_offset_deg': aim_mean,
+        'rail_window_exposure': rail_exposure,
+        'rear_acquire_share': rear_share,
     }
 
 
