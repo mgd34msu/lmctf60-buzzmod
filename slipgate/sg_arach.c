@@ -1924,6 +1924,38 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		                         sg_fields.our_carrier_valid[team - 1]);
 
 		defenders_wanted = ours_astray ? 1 : 2;
+
+		/*
+		 * TEAM SKEW (sg_teamskew, rung-4 tell #2: team-mirror symmetry).
+		 * All three set-#1 judges read "identical AI on both sides" off
+		 * the sheets: balanced escort means, alternating presses,
+		 * role-locked plateaus that never rotate. Real pub teams are
+		 * lopsided and DRIFT -- one side runs attack-heavy for a few
+		 * minutes, then reshuffles. Each team rolls a defender-count
+		 * skew of -1, 0, or +1 that rerolls every ~3 minutes on
+		 * independent per-team clocks, so the two sides' role mixes
+		 * decorrelate and wander the way two unrelated rosters do.
+		 * The existing states below still own the astray cases.
+		 */
+		if (gi.cvar("sg_teamskew", "0", 0)->value > 0.0f && size >= 4)
+		{
+			static float ts_until[2];
+			static int ts_skew[2];
+			int ts = (team == CTF_TEAM_RED) ? 0 : 1;
+
+			if (level.time >= ts_until[ts])
+			{
+				ts_skew[ts] = (rand() % 3) - 1;
+				ts_until[ts] = level.time + 150.0f +
+				               (float)(rand() % 90);
+			}
+			defenders_wanted += ts_skew[ts];
+			if (defenders_wanted < 0)
+				defenders_wanted = 0;
+			if (defenders_wanted > size - 1)
+				defenders_wanted = size - 1;
+		}
+
 		if (size <= 1)
 			defenders_wanted = 0;
 		else if (size == 2)
