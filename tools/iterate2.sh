@@ -363,6 +363,16 @@ FIREDISC=(0    0        0        0        0         0        0         0        
 # repositioning) -- design work, not jitter. Ledgered.
 TAPVAR=(0     0        0        0        0         0        0         0        0        0)
 
+# TEAM SKEW (sg_teamskew, rung-4 tell #2: team-mirror symmetry -- the
+# untried tell). Each team's defender count skews by -1/0/+1 on an
+# independent ~3-minute reroll clock, so the two sides' role mixes
+# decorrelate like unrelated pub rosters. Armed s05=1 vs s08 control
+# (lmctf22, the validated rung-4 map). Bars: judged at the SET level
+# (this is a judge-visible texture, not a single-scalar target) plus
+# escort/defense panel asymmetry between teams; caps at the 16-wave
+# floor.
+TEAMSKEW=(0    0        0        0        1         0        0         0        0        0)
+
 # HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
 # three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).
 # A landing that returns the body to the previous ride's departure
@@ -550,6 +560,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_unlinger ${UNLINGER[$i]}"
                 echo "set sg_depace ${DEPACE[$i]}"
                 echo "set sg_hookpong ${HOOKPONG[$i]}"
+                echo "set sg_teamskew ${TEAMSKEW[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"
