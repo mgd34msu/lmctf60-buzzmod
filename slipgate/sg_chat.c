@@ -1656,7 +1656,7 @@ void SG_ChatSee(edict_t *viewer)
 
 static qboolean SG_Radio(void)
 {
-	return (gi.cvar("sg_radio", "0", 0)->value > 0.0f) ? true : false;
+	return (gi.cvar("sg_radio", "1", 0)->value > 0.0f) ? true : false;
 }
 
 /*

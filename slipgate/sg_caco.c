@@ -477,7 +477,7 @@ int					sg_caco_num_items;
  */
 qboolean SG_ItemComm(void)
 {
-	return (gi.cvar("sg_itemcomm", "0", 0)->value > 0.0f) ? true : false;
+	return (gi.cvar("sg_itemcomm", "1", 0)->value > 0.0f) ? true : false;
 }
 
 /* row index for a team number, and the "not on a team" case folded to red so

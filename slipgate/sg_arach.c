@@ -1324,7 +1324,7 @@ static float Rune_RoleFactor(int role, int entnum)
 			float w2 = tab[i].w[role];
 
 			if (role == SG_ROLE_ESCORT && i >= 2 && i <= 3 &&
-			    gi.cvar("sg_runetoss", "0", 0)->value >= 2)
+			    gi.cvar("sg_runetoss", "2", 0)->value >= 2)
 				w2 = 1.40f;
 			return w2;
 		}
@@ -2108,7 +2108,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				{
 					esc_carrier[et] = cc;
 					esc_on[et] = ((rand() % 100) <
-					    (int)gi.cvar("sg_escortdose", "100", 0)->value);
+					    (int)gi.cvar("sg_escortdose", "35", 0)->value);
 				}
 				if (esc_on[et])
 					return SG_ROLE_ESCORT;
@@ -2149,7 +2149,7 @@ static float Surface_At(int seed, const sg_weights_t *w,
 	v = w->objective * (float)goal_field[seed];
 	if (sg_cur_role == SG_ROLE_ATTACK)
 	{
-		float ao = gi.cvar("sg_atkobj", "100", 0)->value / 100.0f;
+		float ao = gi.cvar("sg_atkobj", "125", 0)->value / 100.0f;
 
 		if (ao != 1.0f)
 			v = w->objective * ao * (float)goal_field[seed];
@@ -3091,7 +3091,7 @@ static qboolean Lead_On(void)
 	 * early for, and the two cvars are one feature in two halves */
 	if (!SG_ItemComm())
 		return false;
-	return (gi.cvar("sg_itemlead", "0", 0)->value > 0.0f) ? true : false;
+	return (gi.cvar("sg_itemlead", "1", 0)->value > 0.0f) ? true : false;
 }
 
 static void Lead_Abort(sg_bot_t *bot, const char *why)
@@ -3604,7 +3604,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->escprior_bucket = -1;
 		bot->escprior_until = 0.0f;
 		bot->escprior_dose = 0.0f;
-		if (sg_rune && gi.cvar("sg_escapeprior", "0", 0)->value > 0.0f)
+		if (sg_rune && gi.cvar("sg_escapeprior", "1", 0)->value > 0.0f)
 		{
 			/* the flag this carrier now holds is the ENEMY flag, and
 			 * its stand is the one he just robbed */
@@ -3636,7 +3636,7 @@ static void SG_BotThink(sg_bot_t *bot)
 				bot->escprior_bucket = b;
 				bot->escprior_until = level.time + 3.0f;
 				bot->escprior_dose =
-				    gi.cvar("sg_escapeprior", "0", 0)->value / 100.0f *
+				    gi.cvar("sg_escapeprior", "1", 0)->value / 100.0f *
 				    ((float)sg_escape_count[fk][b] /
 				     (float)sg_escape_total[fk]);
 				if (bot->escprior_dose > 0.9f)
@@ -3779,13 +3779,13 @@ static void SG_BotThink(sg_bot_t *bot)
 				goal_field = sg_fields.to_post[team - 1];
 			else if (!astray && !bot->def_stand &&
 			         sg_fields.to_lane[team - 1] &&
-			         gi.cvar("sg_raillane", "0", 0)->value)
+			         gi.cvar("sg_raillane", "1", 0)->value)
 				/* the second defender holds the computed rail lane; the
 				 * watchman stays on the stand (the .dpo lesson: never
 				 * empty the stand for a post) */
 				goal_field = sg_fields.to_lane[team - 1];
 			else if (astray && sg_fields.to_icept[team - 1] &&
-			         gi.cvar("sg_defreact", "0", 0)->value >= 3)
+			         gi.cvar("sg_defreact", "3", 0)->value >= 3)
 				goal_field = sg_fields.to_icept[team - 1];
 		}
 	}
@@ -3810,7 +3810,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * spot. First body to the flag wins the relay; ours is
 		 * closest by construction.
 		 */
-		if (gi.cvar("sg_scoop", "0", 0)->value &&
+		if (gi.cvar("sg_scoop", "1", 0)->value &&
 		    sg_caco_team_belief.carrier[team - 1].client < 0 &&
 		    sg_caco_team_belief.flag[2 - team].state == SG_FLAG_ASTRAY)
 		{
@@ -3834,7 +3834,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * eats the escort, carrier keeps the flag. Falls through to
 		 * the ordinary screen when there is no named threat.
 		 */
-		if (gi.cvar("sg_interpose", "0", 0)->value)
+		if (gi.cvar("sg_interpose", "1", 0)->value)
 		{
 			sg_belief_carrier_t *oc =
 			    &sg_caco_team_belief.carrier[team - 1];
@@ -3890,7 +3890,7 @@ static void SG_BotThink(sg_bot_t *bot)
 					 * slot parity: even leads at -1300ms, odd trails at
 					 * +900ms. Dose 2 (static exit seed) kept as history.
 					 */
-					if (gi.cvar("sg_interpose", "0", 0)->value >= 3)
+					if (gi.cvar("sg_interpose", "1", 0)->value >= 3)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
@@ -3921,7 +3921,7 @@ static void SG_BotThink(sg_bot_t *bot)
 							}
 						}
 					}
-					else if (gi.cvar("sg_interpose", "0", 0)->value >= 2)
+					else if (gi.cvar("sg_interpose", "1", 0)->value >= 2)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
@@ -4003,7 +4003,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * seconds, closes, and the toss fires at 400. The rune rides to
 	 * the flag on the courier's legs, not on luck.
 	 */
-	if (gi.cvar("sg_runetoss", "0", 0)->value &&
+	if (gi.cvar("sg_runetoss", "2", 0)->value &&
 	    role != SG_ROLE_CARRY && role != SG_ROLE_DEFEND &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
@@ -4150,7 +4150,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	 */
 	route_field = goal_field;
 	route_pure = false;
-	if (gi.cvar("sg_tactics", "0", 0)->value &&
+	if (gi.cvar("sg_tactics", "1", 0)->value &&
 	    role != SG_ROLE_ESCORT &&
 	    /* CARRY excluded (trial-prep audit): route_pure suppresses the
 	     * danger and detour terms for 10s a commit -- the exact corridors
@@ -4457,7 +4457,7 @@ rally_done:;
 		 * the throw, failure costs nothing, and the successes
 		 * accrue -- sixty-five to five.
 		 */
-		if (gi.cvar("sg_flycook", "0", 0)->value &&
+		if (gi.cvar("sg_flycook", "1", 0)->value &&
 		    bot->nade_phase == 0 && level.time >= bot->nade_next)
 		{
 			static gitem_t *nades9;
@@ -5193,7 +5193,7 @@ rally_done:;
 		 */
 		else if (duel &&
 		         !(role == SG_ROLE_ATTACK &&
-		           gi.cvar("sg_press", "0", 0)->value) &&
+		           gi.cvar("sg_press", "1", 0)->value) &&
 		         /* CARRIER PRESS (sg_carrypress, wave 280+). The carry
 		          * traces (274-279): 61%% of carrier frames make no
 		          * homeward progress at ~190 u/s, and 48 of 49 carries
@@ -5292,8 +5292,8 @@ rally_done:;
 		if (sg_cur_role == SG_ROLE_DEFEND &&
 		    sg_def_icept[team - 1] &&
 		    sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY &&
-		    gi.cvar("sg_defreact", "0", 0)->value > 0)
-			v -= 1.5f * gi.cvar("sg_defreact", "0", 0)->value *
+		    gi.cvar("sg_defreact", "3", 0)->value > 0)
+			v -= 1.5f * gi.cvar("sg_defreact", "3", 0)->value *
 			     (float)sg_def_icept[team - 1][l->to];
 
 		/*
@@ -5307,8 +5307,8 @@ rally_done:;
 		 */
 		if (sg_human_escape &&
 		    sg_cur_role == SG_ROLE_CARRY &&
-		    gi.cvar("sg_escapeprior", "0", 0)->value > 0)
-			v -= 1.5f * gi.cvar("sg_escapeprior", "0", 0)->value *
+		    gi.cvar("sg_escapeprior", "1", 0)->value > 0)
+			v -= 1.5f * gi.cvar("sg_escapeprior", "1", 0)->value *
 			     (float)sg_human_escape[li];
 
 		/*
@@ -5323,7 +5323,7 @@ rally_done:;
 		 * every fresh eye sighting near the target stand.
 		 */
 		if (sg_cur_role == SG_ROLE_ATTACK &&
-		    gi.cvar("sg_approachcover", "0", 0)->value > 0)
+		    gi.cvar("sg_approachcover", "200", 0)->value > 0)
 		{
 			int acs;
 
@@ -5348,7 +5348,7 @@ rally_done:;
 				actr = gi.trace(aeye, NULL, NULL, athr, e, MASK_SOLID);
 				if (actr.fraction >= 1.0f)
 				{
-					v += gi.cvar("sg_approachcover", "0", 0)->value;
+					v += gi.cvar("sg_approachcover", "200", 0)->value;
 					break;  /* one exposure is enough to price */
 				}
 			}
@@ -5406,7 +5406,7 @@ rally_done:;
 		 * the one sighting that matters most.
 		 */
 		if (sg_cur_role == SG_ROLE_CARRY &&
-		    gi.cvar("sg_carrycover", "0", 0)->value > 0)
+		    gi.cvar("sg_carrycover", "800", 0)->value > 0)
 		{
 			int			cs, best_cs = -1;
 			float		best_t = -1.0f;
@@ -5449,7 +5449,7 @@ rally_done:;
 						 * still alive at the horn scored nothing.
 						 * Exactly 1.0x -- the same float, the same
 						 * route -- with sg_clockplay off. */
-						v += gi.cvar("sg_carrycover", "0", 0)->value *
+						v += gi.cvar("sg_carrycover", "800", 0)->value *
 						     Clock_CoverScale(team);
 				}
 			}
@@ -5482,7 +5482,7 @@ rally_done:;
 		 * different roads. Deterministic per life: no per-frame noise,
 		 * no flapping -- a LIFE rides one opinion of the map.
 		 */
-		if (gi.cvar("sg_routejitter", "0", 0)->value > 0.0f)
+		if (gi.cvar("sg_routejitter", "8", 0)->value > 0.0f)
 		{
 			unsigned rj = ((unsigned)li * 2654435761u) ^
 			              ((unsigned)(e - g_edicts) * 40503u) ^
@@ -5490,7 +5490,7 @@ rally_done:;
 
 			rj = (rj >> 4) & 1023u;
 			v *= 1.0f + ((float)rj / 1023.0f - 0.5f) * 0.02f *
-			     gi.cvar("sg_routejitter", "0", 0)->value;
+			     gi.cvar("sg_routejitter", "8", 0)->value;
 		}
 
 		/*
@@ -5506,7 +5506,7 @@ rally_done:;
 		 */
 		if (li >= 0 && sg_rune->links[li].to == bot->prev_seed &&
 		    level.time - bot->prev_seed_time < 3.0f)
-			v *= 1.0f + gi.cvar("sg_nobacktrack", "0", 0)->value / 100.0f;
+			v *= 1.0f + gi.cvar("sg_nobacktrack", "60", 0)->value / 100.0f;
 
 		/*
 		 * NOT THROUGH THERE AGAIN (sg_tilt). The lane the last life
@@ -5657,7 +5657,7 @@ rally_done:;
 		}
 		bot->ribbon_link = bestlink;
 		bot->ribbon_off = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
-		                  gi.cvar("sg_ribbon", "0", 0)->value;
+		                  gi.cvar("sg_ribbon", "48", 0)->value;
 		bot->ribbon_goal = bot->ribbon_off;
 	}
 	/* v2 drift: the film judge's verdict on v1 -- a fixed per-leg lane
@@ -5666,7 +5666,7 @@ rally_done:;
 	if (level.time >= bot->ribbon_next)
 	{
 		bot->ribbon_goal = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
-		                   gi.cvar("sg_ribbon", "0", 0)->value;
+		                   gi.cvar("sg_ribbon", "48", 0)->value;
 		bot->ribbon_next = level.time +
 		    1.0f + (float)(rand() % 100) / 100.0f;
 	}
@@ -5720,7 +5720,7 @@ rally_done:;
 				 * paranoia. */
 				if (en3->client < 0 || en3->seed < 0 ||
 				    level.time - en3->seen_time >=
-				        (gi.cvar("sg_strictgrab", "0", 0)->value
+				        (gi.cvar("sg_strictgrab", "1", 0)->value
 				             ? 8.0f : 4.0f))
 					continue;
 				VectorSubtract(sg_rune->seeds[en3->seed].origin,
@@ -5740,7 +5740,7 @@ rally_done:;
 			 * exactly one of the missing is home. The 20s patience
 			 * valve still forces the grab eventually.
 			 */
-			if (gi.cvar("sg_strictgrab", "0", 0)->value)
+			if (gi.cvar("sg_strictgrab", "1", 0)->value)
 			{
 				int s8, esz = 0, accounted = 0, i8;
 
@@ -5836,7 +5836,7 @@ rally_done:;
 				 * current; the steals-vs-caps trade decides.
 				 */
 				if (room >= 1 &&
-				    gi.cvar("sg_strictgrab", "0", 0)->value)
+				    gi.cvar("sg_strictgrab", "1", 0)->value)
 				{
 					/*
 					 * THE CROWD VALVE (sg_crowdhold, wave 343). The 7v7
@@ -6329,7 +6329,7 @@ rally_done:;
 	 * pricing (SG_FC_RUNE) takes it from the floor. One toss per bot
 	 * per 20s; combat frames exempt -- a fight is not the moment.
 	 */
-	if (gi.cvar("sg_runetoss", "0", 0)->value &&
+	if (gi.cvar("sg_runetoss", "2", 0)->value &&
 	    role != SG_ROLE_CARRY && !duel &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
@@ -7031,7 +7031,7 @@ no_hold:;
 		 * at speed instead of standing to re-argue. Ballistics are
 		 * unchanged -- only the eyes and the landing basis pre-align.
 		 */
-		if (gi.cvar("sg_preturn", "0", 0)->value &&
+		if (gi.cvar("sg_preturn", "1", 0)->value &&
 		    ((bot->hook_phase == 3 && bot->flow_release) ||
 		     bot->rj_phase == 3) &&
 		    !e->groundentity && sg_rune)
@@ -7237,7 +7237,7 @@ no_hold:;
 			rune_link_t *l = &sg_rune->links[bestlink];
 
 			VectorCopy(sg_rune->seeds[l->to].origin, aim);
-			if (gi.cvar("sg_ribbon", "0", 0)->value > 0.0f &&
+			if (gi.cvar("sg_ribbon", "48", 0)->value > 0.0f &&
 			    l->action == RL_RUN && bot->ribbon_off != 0.0f)
 			{
 				vec3_t rdir, roff, rprobe;
@@ -8809,7 +8809,7 @@ no_hold:;
 	 * on cost is a fraction of a second of arrival time per leg.
 	 */
 	{
-		float dose = gi.cvar("sg_breather", "0", 0)->value;
+		float dose = gi.cvar("sg_breather", "4", 0)->value;
 
 		if (dose > 0.0f && role != SG_ROLE_CARRY &&
 		    bot->hook_phase == 0 && !bot->engaged_last &&
@@ -8931,7 +8931,7 @@ no_hold:;
 			 * post. Ground targets keep the book (a runner outlives
 			 * the fuse; the eight nulled mechanisms all chased them).
 			 */
-			if (gi.cvar("sg_nadelead", "0", 0)->value)
+			if (gi.cvar("sg_nadelead", "1", 0)->value)
 			{
 				edict_t *len9 = SG_CombatLiveEnemy(e);
 
@@ -9057,7 +9057,7 @@ no_hold:;
 			 * command -- the flick. Attack stays held throughout;
 			 * cooking needs the trigger, not the eyes.
 			 */
-			if (!(gi.cvar("sg_flycook", "0", 0)->value) ||
+			if (!(gi.cvar("sg_flycook", "1", 0)->value) ||
 			    (nfly >= 0.0f && ntmr - 0.2f <= nfly + 0.15f) ||
 			    ntmr <= 0.75f)
 			{
@@ -9109,7 +9109,7 @@ no_hold:;
 		 * frame, zero route seconds. Free speculation; the splash
 		 * does the rest or nothing does.
 		 */
-		if (gi.cvar("sg_soundfire", "0", 0)->value &&
+		if (gi.cvar("sg_soundfire", "1", 0)->value &&
 		    !duel && !engaged && role != SG_ROLE_CARRY &&
 		    bot->nade_phase == 0 && bot->hook_phase == 0 &&
 		    level.time >= bot->soundfire_next &&

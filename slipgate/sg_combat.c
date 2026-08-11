@@ -707,7 +707,7 @@ static cvar_t	*sg_aimtexture;
 static qboolean Combat_TexOn(void)
 {
 	if (!sg_aimtexture)
-		sg_aimtexture = gi.cvar("sg_aimtexture", "0", 0);
+		sg_aimtexture = gi.cvar("sg_aimtexture", "1", 0);
 	return (qboolean)(sg_aimtexture && sg_aimtexture->value != 0.0f);
 }
 
@@ -1295,7 +1295,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 	 * switches because BandAllows already refuses it. Doctrine ladders
 	 * above (carrier, intercept) outrank commitment on purpose.
 	 */
-	if (gi.cvar("sg_wcommit", "0", 0)->value != 0.0f)
+	if (gi.cvar("sg_wcommit", "1", 0)->value != 0.0f)
 	{
 		int held = Combat_Held(self);
 
@@ -1307,7 +1307,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 		 * commits to; mode 2 refuses it and lets the ladder walk pick a
 		 * real weapon the moment one is stocked.
 		 */
-		if (gi.cvar("sg_wcommit", "0", 0)->value >= 2.0f &&
+		if (gi.cvar("sg_wcommit", "1", 0)->value >= 2.0f &&
 		    held == SG_W_BLASTER)
 			held = -1;
 
@@ -2020,7 +2020,7 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	 * still binds afterwards, so a big dose widens the common case
 	 * without inventing physically absurd flicks.
 	 */
-	over *= gi.cvar("sg_aimtexture", "0", 0)->value;
+	over *= gi.cvar("sg_aimtexture", "1", 0)->value;
 	if (over > SG_TEX_OVER_CAP)
 		over = SG_TEX_OVER_CAP;
 
@@ -2205,7 +2205,7 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	 * splash forgives timing the way rule D1 promises.
 	 */
 	if (w == SG_W_ROCKETLAUNCHER && !enemy->groundentity &&
-	    gi.cvar("sg_landlead", "0", 0)->value)
+	    gi.cvar("sg_landlead", "1", 0)->value)
 	{
 		vec3_t p0, p1;
 		trace_t ltr;
@@ -3368,7 +3368,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * don't know it. Hold the rail on swimmers if it's in the pack.
 	 */
 	if (enemy->waterlevel > 1 &&
-	    gi.cvar("sg_wetwork", "0", 0)->value)
+	    gi.cvar("sg_wetwork", "1", 0)->value)
 	{
 		static const int wet_rg[] = { SG_W_RAILGUN, -1 };
 		int wr = Combat_WalkLadder(self, wet_rg, dist, false);

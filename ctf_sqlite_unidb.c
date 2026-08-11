@@ -1510,7 +1510,7 @@ static int sess_written_match = -1;
 static qboolean DB_SessionEnabled(void)
 {
 	if (!sg_sessiondb)
-		sg_sessiondb = gi.cvar("sg_sessiondb", "0", 0);
+		sg_sessiondb = gi.cvar("sg_sessiondb", "1", 0);
 	return sg_sessiondb->value != 0.0f;
 }
 
