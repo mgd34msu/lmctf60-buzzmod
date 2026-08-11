@@ -93,6 +93,7 @@
       <HeaderFileName />
     </Midl>
     <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>MaxSpeed</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;C_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -143,6 +144,7 @@
       </HeaderFileName>
     </Midl>
     <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>MaxSpeed</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -191,6 +193,7 @@
       <HeaderFileName />
     </Midl>
     <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;C_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -239,6 +242,7 @@
       </HeaderFileName>
     </Midl>
     <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;BUILDING_REF_GL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -342,6 +346,15 @@
     <ClCompile Include="p_view.c" />
     <ClCompile Include="p_weapon.c" />
     <ClCompile Include="q_shared.c" />
+    <ClCompile Include="slipgate\sg_arach.c" />
+    <ClCompile Include="slipgate\sg_caco.c" />
+    <ClCompile Include="slipgate\sg_chat.c" />
+    <ClCompile Include="slipgate\sg_combat.c" />
+    <ClCompile Include="slipgate\sg_fields.c" />
+    <ClCompile Include="slipgate\sg_net.c" />
+    <ClCompile Include="slipgate\sg_oracle.c" />
+    <ClCompile Include="slipgate\sg_persona.c" />
+    <ClCompile Include="slipgate\sg_rune.c" />
     <ClCompile Include="stdlog.c" />
   </ItemGroup>
   <ItemGroup>
