@@ -6,6 +6,59 @@ release number.
 Tag a release as `release-1`, `release-2` and so on. Pushing that tag builds all three
 libraries and opens a draft release with them attached.
 
+## Release 4 — August 2026
+
+The bots are new, top to bottom. Release 3's preview bots (the external
+botlib) are gone; this release ships **SLIPGATE**, a from-scratch bot
+platform built directly into the game modules and developed against a
+single standard: film of bot play is judged blind against recorded human
+games, and a change ships only if fresh judges cannot tell the two apart.
+On the movement and fighting tests they cannot — the bots were called
+"human" more often than the actual humans were on the fights set. The
+full design and evidence record is in `SLIPGATE.md` and `LEDGER.md`.
+
+### What ships
+
+| File | |
+|-|-|
+| `gamex86_64.so` | Linux 64-bit game module |
+| `gamex86_64.dll` | Windows 64-bit game module |
+| `gamex86.dll` | Windows 32-bit game module |
+| `lmctf6-buzzmod.pak` | scoreboard art and the hit sound |
+
+That is the whole download. There is no bot library, no character files,
+and no 290 MB navigation pack — the bots live inside the game module and
+build their own navigation data.
+
+### Running the bots
+
+Once per map, on the server, generate the map's movement graph:
+
+    sv rune
+
+The file is written under the mod directory and reused on every later
+load. Then manage the roster:
+
+    sv sg add            // add a bot on the smaller team
+    sv sg add red        // or force a team
+    sv sg list
+    sv sg remove <name>
+    sv sg kick worst
+
+Bots join as ordinary clients: they appear in the scoreboard, talk in
+team chat (item callouts, quad timing, banter mined from real games),
+and flow into the stats database like any player when `sg_sessiondb` is
+on. All tuning cvars ship at the values that passed blind judgment; you
+do not need to set anything.
+
+### Known limits
+
+Team-level reads (escort spacing, defender symmetry) and raw capture
+volume are still distinguishable from human play under instrumented
+comparison and are the focus of the next release. Nothing here affects
+play against them on a pub — those tells took purpose-built measurement
+to find.
+
 ## Release 3 — July 2026
 
 Adds bot support. Bots are a **preview** in this release: they load, join teams
