@@ -9,6 +9,9 @@
 #include "g_ctffunc.h" //surt for log renaming
 #include "bat.h"
 
+qboolean SG_OwnsBot(edict_t * ent);
+int SG_RemoveBots(void);
+
 #define Function(f) {#f, f}
 
 void Randomize_Map_List(int Num_Of_Maps);
@@ -864,10 +867,6 @@ void WriteLevel(char* filename)
 	edict_t* ent;
 	FILE* f;
 	void	(*base)(void);	/* Pointer to function with no arguments */
-	/* declared locally, the way this tree declares the rest of the
-	 * SLIPGATE glue (see g_svcmds.c and bl_spawn.c) */
-	qboolean SG_OwnsBot(edict_t * ent);
-	int SG_RemoveBots(void);
 	int bots;
 
 	/*

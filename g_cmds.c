@@ -11,6 +11,8 @@
 #include "slipgate/sg_net.h"        // SG_ClearBotArgs
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 
+void Observer_Start(edict_t *e);
+
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
 void RefTogglePause(edict_t *ent);
@@ -2357,11 +2359,7 @@ int numspec;
 	 * noclip, model off. The team number is already negative here, so
 	 * its own guard passes.
 	 */
-	{
-		extern void Observer_Start(edict_t *e);
-
-		Observer_Start(ent);
-	}
+	Observer_Start(ent);
 }
 
 // BUZZKILL - RUNE TOSS - START

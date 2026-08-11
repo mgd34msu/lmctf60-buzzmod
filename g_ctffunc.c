@@ -7,6 +7,8 @@
 #include "bat.h"
 #include <time.h>
 
+void ClientOldSetSkin(edict_t *e2, char *sk);
+
 static cvar_t *ctf_switch_penalty = NULL;
 
 edict_t * ctf_findplayer(edict_t * ent_after, edict_t * ignore, int teamnum_wanted)
@@ -1416,8 +1418,6 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 		 * through any existing skin (male/grunt included, which is why
 		 * the first repaint changed nothing: neutral brown reads as red
 		 * from ten feet). */
-		void ClientOldSetSkin(edict_t *e2, char *sk);
-
 		ClientOldSetSkin(ent,
 		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
 	}

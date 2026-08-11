@@ -26,6 +26,8 @@ void Weapon_Railgun(edict_t* ent);
 void Weapon_BFG(edict_t* ent);
 // SKWiD MOD
 #include "plasma.h"
+
+void SG_NoteItemTaken(edict_t *taker, edict_t *item);
 extern void Weapon_Plasma(edict_t* ent);
 extern void Use_PLASMA(edict_t* ent, gitem_t* inv);
 // END
@@ -1007,11 +1009,7 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 	// after `taken` is settled and before the entity is freed or respawned,
 	// so ent->item and ent's position are still the item that was taken.
 	// Inert unless sg_itemcomm is on.
-	{
-		void SG_NoteItemTaken(edict_t *taker, edict_t *item);
-
-		SG_NoteItemTaken(other, ent);
-	}
+	SG_NoteItemTaken(other, ent);
 	// BUZZKILL - SLIPGATE - END
 
 	if (!((coop->value) && (ent->item->flags & IT_STAY_COOP)) || (ent->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)))

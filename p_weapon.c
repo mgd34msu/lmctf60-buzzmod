@@ -11,6 +11,8 @@ extern void Weapon_PLASMA_Generic (edict_t *,int,int,int,int,int *,int *,void(*f
 // END
 #include "g_ctffunc.h"
 
+void SG_NoteRailShot(edict_t *shooter);
+
 #define GRAPPLE_FIRE_HOOK_SPEED        800
 #define GRAPPLE_PULL_SPEED             800
 #define GRAPPLE_PULL_BALANCED_SPEED    800
@@ -1652,10 +1654,7 @@ void weapon_railgun_fire (edict_t *ent)
 	// and the trail are on the wire, which is the whole of what a player in
 	// the room perceives; every test about who could have perceived it, and
 	// what a bot is allowed to do with it, is on the slipgate side
-	{
-		void SG_NoteRailShot(edict_t *shooter);
-		SG_NoteRailShot(ent);
-	}
+	SG_NoteRailShot(ent);
 
 	ent->client->ps.gunframe++;
 	PlayerNoise(ent, start, PNOISE_WEAPON);
