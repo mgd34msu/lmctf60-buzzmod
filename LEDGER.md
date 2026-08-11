@@ -4,9 +4,16 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-09 ~03:45, wave ~670. **Rungs 1 and 3 PASSED**;
-rung 2 residual-capped by owner ruling; rung 4 has its first verdict and
-its named tells. Fleet steady on the adopted stack, no armed variables.*
+*Last updated: 2026-08-11. **RELEASE 4 PUBLISHED** — tag `release-4` at
+main merge 1b7a5e2, all four CI jobs (Linux x86_64, Windows x86, Windows
+x64, Publish release) verified **individually** green; release carries
+the three game modules + pak, with the dead botlib bundle dropped from
+packaging. The stale `slipgate-1.0` tag (cut on a red commit) was
+deleted. Standing lesson: CI is verified per job via
+`gh run view --json conclusion,jobs`, never via aggregate `gh run watch`
+exit codes — the aggregate lied twice. Development continues on
+`slipgate`; three trials armed (hookpong s03, dither-120 s06, teamskew
+s05) are past their 16-wave floors and awaiting ruling.*
 
 ## The ladder
 
