@@ -41,6 +41,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 
 ## The morgue (honest nulls and strikes, with their lessons)
 
+- **sg_beliefcone / sg_beliefrange** (2026-08-11): STRUCK before trial — the acquisition gap runs backward (bots open on off-cone targets LESS than humans; the combat firing cone already restricts). Fourth and fifth features retired by measurement.
 - **sg_spawnbeat** (2026-08-11): STRUCK before trial — bots already sit on the human post-spawn baseline (postspawn_purpose 0.665 vs 0.674, separability 0.625/0.566, chance-adjacent). Third feature retired by measurement.
 - **de-pace** (2026-08-11): struck at the 16-wave floor, double miss — escort WRONG WAY (0.638 vs 0.564), conversion down. Slowing a lingering teammate keeps it in the bubble longer when the carrier approaches from behind. Fourth mechanism dead on the co-travel tell.
 - **anti-linger** (2026-08-11): struck — the 7-wave delta was noise; corridors give a spatial surcharge no gradient (every link sits in the carrier's bubble).
