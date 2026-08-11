@@ -1,0 +1,18 @@
+# SLIPGATE priority map list -- from demo popularity analysis.
+# One mapname per line, in priority order. Lines starting with # are
+# comments. Consumed by tools/runegen.sh, e.g.:
+#
+#   tools/runegen.sh $(grep -v '^#' tools/topmaps.txt)
+#
+lmctf01
+lmctf09
+lmctf22
+lmctf41
+lmctf44
+mactf06
+lmctf26
+lmctf58
+lmctf74
+smap05
+lmctf03
+lmctf05

@@ -1,0 +1,14 @@
+# Analyzer parity with the real build. The GNUmakefile compiles every unit
+# from the repo ROOT through the sg_*.c symlinks, so quoted includes like
+# "g_local.h" resolve there; compile_flags.txt gives clangd the same -I set.
+# The slipgate headers are deliberately not self-contained (they rely on
+# g_local.h coming first, matching the tree's include convention), so when
+# clangd parses one standalone it needs the same precondition supplied.
+If:
+  PathMatch:
+    - .*slipgate/.*\.[ch]
+    - sg_.*\.c
+CompileFlags:
+  Add:
+    - -include
+    - g_local.h

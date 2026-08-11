@@ -1,0 +1,2 @@
+./iterate2.sh: line 160: syntax error near unexpected token `('
+./iterate2.sh: line 160: `echo "=== WAVE $NAME (free layout) ==="'

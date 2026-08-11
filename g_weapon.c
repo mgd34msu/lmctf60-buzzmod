@@ -482,6 +482,37 @@ static void Grenade_Explode (edict_t *ent)
 		mod = MOD_HG_SPLASH;
 	else
 		mod = MOD_G_SPLASH;
+
+	/* NADEPOP census (sg_debug): where a hand grenade actually detonates
+	 * relative to the nearest living enemy -- ~200 SLIPGATE throws produced
+	 * zero obituaries and nothing in the logs could say whether the miss
+	 * was flight (mid-air pop), placement (empty stand), or timing. */
+	if ((ent->spawnflags & 1) && ent->owner && ent->owner->client &&
+	    gi.cvar("sg_debug", "0", 0)->value)
+	{
+		float best = 99999.0f;
+		int oteam = ent->owner->client->ctf.teamnum, k;
+
+		for (k = 0; k < game.maxclients; k++)
+		{
+			edict_t *pl = g_edicts + 1 + k;
+			vec3_t dv;
+
+			if (!pl->inuse || !pl->client || pl->health <= 0)
+				continue;
+			if (pl->client->ctf.teamnum == oteam ||
+			    (pl->client->ctf.teamnum != CTF_TEAM_RED &&
+			     pl->client->ctf.teamnum != CTF_TEAM_BLUE))
+				continue;
+			VectorSubtract(pl->s.origin, ent->s.origin, dv);
+			if (VectorLength(dv) < best)
+				best = VectorLength(dv);
+		}
+		gi.dprintf("NADEPOP %s air=%d enemy=%.0f\n",
+		           ent->owner->client->pers.netname,
+		           ent->groundentity == NULL, best);
+	}
+
 	T_RadiusDamage(ent, ent->owner, ent->dmg, ent->enemy, ent->dmg_radius, mod);
 
 	VectorMA (ent->s.origin, -0.02f, ent->velocity, origin);

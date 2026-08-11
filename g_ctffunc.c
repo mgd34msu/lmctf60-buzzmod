@@ -629,6 +629,10 @@ void ctf_TossEnt(edict_t * startent, edict_t * tossent)
 	trace_t		tr;
 	vec3_t		forward,right,offset;
 
+	/* BUZZKILL - N28 crash guard: a disconnecting carrier can reach
+	 * here with a dead client; nothing to aim the toss with. */
+	if (!startent || !startent->client || !tossent)
+		return;
 	AngleVectors (startent->client->v_angle, forward, right, NULL);
 	VectorSet(offset, 24, 0, -16);
 	G_ProjectSource (startent->s.origin, offset, forward, right, tossent->s.origin);
@@ -663,6 +667,12 @@ void ctf_playerdropflag(edict_t * whichplayer, gitem_t *item)
 	if (whichplayer && whichplayer->client)
 	{
 		whichflag = ctf_getteamflag(whichplayer->client->ctf.teamnum, CTF_TEAM_OPPOSING);
+		/* BUZZKILL - N28 crash guard: getteamflag can return NULL during
+		 * level transitions (ExitLevel frames in the overnight cores);
+		 * the reset ran before the guard and dereferenced it. Pure
+		 * crash prevention -- an absent flag has nothing to toss. */
+		if (!whichflag)
+			return;
 		ctf_resetflagandplayer(whichflag,whichplayer);
 		if (whichflag)
 		{
@@ -1390,6 +1400,27 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	//{
 	//	ForceCommand(ent, "spectator 0");
 	//	//ent->client->ctf.teamnum = whatteam;
+
+	/*
+	 * UNIFORM DOCTRINE: color is the team's, always, automatically --
+	 * model and gender are the player's. Every path that changes a
+	 * team lands here, so the repaint lands here too; without it, a
+	 * client keeps whatever color its last force painted (bots joined
+	 * before their balancer verdict spent whole matches in enemy
+	 * colors).
+	 */
+	if (whatteam == CTF_TEAM_RED || whatteam == CTF_TEAM_BLUE)
+	{
+		/* ClientOldSetSkin is the one path that FORCES color from the
+		 * team unconditionally -- ClientSetSkin's list validation waves
+		 * through any existing skin (male/grunt included, which is why
+		 * the first repaint changed nothing: neutral brown reads as red
+		 * from ten feet). */
+		void ClientOldSetSkin(edict_t *e2, char *sk);
+
+		ClientOldSetSkin(ent,
+		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
+	}
 	//	return;
 	//}
 

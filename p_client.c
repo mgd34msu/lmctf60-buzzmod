@@ -11,10 +11,6 @@
 #include "stdlog.h"	// StdLog - Mark Davies
 #include "gslog.h"	// StdLog - Mark Davies
 #include "bat.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_chat.h"
-#include "bl_know.h"
 
 // Lithium II Zbot detect plugin
 #ifdef ZBOT
@@ -756,6 +752,18 @@ player_die
 */
 void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_t point)
 {
+	{
+		void SG_NoteDeath(edict_t *victim);
+		void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
+		extern int meansOfDeath;
+
+		SG_NoteDeath(self);     /* the obituary is common knowledge */
+		/* the mouth that was always wired shut: taunt/grumble lines were
+		 * written waves ago and called from nowhere (capability census,
+		 * 2026-08-05). Bots that never react to a kill or a death read
+		 * as bots. */
+		SG_ChatDeath(self, attacker, meansOfDeath);
+	}
 	int		n;
 	edict_t	*attacker_flag=NULL, *defender_flag=NULL;  // CTF CODE -- LM_JORM
 	// int		teamnum;// CTF CODE -- LM_JORM
@@ -1049,8 +1057,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 		LookAtKiller (self, inflictor, attacker);
 		self->client->ps.pmove.pm_type = PM_DEAD;
 		ClientObituary (self, inflictor, attacker);
-		BotChat_NotifyDeath(self, attacker, meansOfDeath);
-		
+
 		//-bat added this for stdlogging.
 		sl_WriteStdLogDeath( &gi, level, self, inflictor, attacker);
 		
@@ -1159,6 +1166,13 @@ void InitClientPersistent (gclient_t *client)
 	client->pers.max_grenades	= 50;
 	client->pers.max_cells		= 200;
 	client->pers.max_slugs		= 50;
+
+	// BUZZKILL - spawn_loadout runs after the stock loadout so it only
+	// ever adds (parser and rules live in g_items.c; README documents)
+	{
+		void SpawnLoadout_Give(gclient_t *cl);
+		SpawnLoadout_Give(client);
+	}
 
 	client->pers.connected = true;
 }
@@ -1828,6 +1842,24 @@ a deathmatch.
 */
 void PutClientInServer (edict_t *ent)
 {
+	/*
+	 * THE UNIFORM IS PART OF THE SPAWN. Third fix in the skin saga: the
+	 * first repaint ran before the team existed (painted at team=0,
+	 * proven by SKIN telemetry), the second hooked a team-setter that
+	 * TeamJoin never calls. Every client on a real team passes through
+	 * HERE at every spawn -- so the color is forced here, every time,
+	 * and there is no path left that can dodge it.
+	 */
+	if (ent->client &&
+	    (ent->client->ctf.teamnum == CTF_TEAM_RED ||
+	     ent->client->ctf.teamnum == CTF_TEAM_BLUE))
+	{
+		void ClientOldSetSkin(edict_t *e2, char *sk);
+
+		ClientOldSetSkin(ent,
+		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
+	}
+
 	trace_t		tr; // CTF CODE -- LM_JORM
 	
 	vec3_t mins = {-16, -16, -24};
@@ -2157,7 +2189,19 @@ void ClientBeginDeathmatch (edict_t *ent)
 	//If they are observers, then let them stay that way!
 	//-bat
 	if(oldteam == CTF_TEAM_UNDEFINED)
-		TeamJoin(ent);						// Join random team
+	{
+		/*
+		 * Only a BOT gets drafted onto a random team here. This branch
+		 * used to draft every undefined client -- including a human who
+		 * connected to watch and never formally took an observer slot --
+		 * into the game on every map change, and once on a team the
+		 * (also broken) observer command could not pull them back out.
+		 * A teamless human now stays teamless: the join menu decides,
+		 * and Observer_Start below parks the body out of the world.
+		 */
+		if (ent->flags & FL_BOT)
+			TeamJoin(ent);						// Join random team
+	}
 	else if (oldteam < CTF_TEAM_UNDEFINED)
 		Cmd_Observe_f(ent, oldteam);
 	else // Team already defined
@@ -2178,6 +2222,17 @@ void ClientBeginDeathmatch (edict_t *ent)
 	
 	// locate ent at a spawn point
 	PutClientInServer (ent);
+
+	/* a teamless human is a spectator, bodily: without this the spawn
+	 * above leaves a solid armed body standing in the world while every
+	 * list calls it an observer */
+	if (!(ent->flags & FL_BOT) &&
+	    ent->client->ctf.teamnum <= CTF_TEAM_UNDEFINED)
+	{
+		extern void Observer_Start(edict_t *e);
+
+		Observer_Start(ent);
+	}
 
 	//sprintf(DBuffer, "ed2 t %d p %d r %d", ent->client->ctf.teamnum,
 	//	ent->client->pers.spectator, ent->client->resp.spectator);
@@ -2349,7 +2404,6 @@ The game can override any of the settings in place
 void ClientUserinfoChanged (edict_t *ent, char *userinfo)
 {
 	char	*s, *skin;
-	int 	playernum;
 	
 	// check for malformed or illegal info strings
 	if (!Info_Validate(userinfo))
@@ -2374,13 +2428,14 @@ void ClientUserinfoChanged (edict_t *ent, char *userinfo)
 		ent->client->pers.spectator = false;
 
 
-	// set skin
+	// set skin -- but ONLY through the forcing path below. This raw
+	// configstring write published whatever the client asked for, enemy
+	// colors included, one frame ahead of validation; in CTF the color
+	// letter in the skin base is the team's and no client request may
+	// override it (every skin in the lmctf paks carries its team letter:
+	// cr-rm/cr-bm, femd-r/femd-b, rb-rm/rb-bm). ClientSetSkin at the end
+	// of this function is now the only writer.
 	skin = Info_ValueForKey (userinfo, "skin");
-
-	playernum = ent-g_edicts-1;
-
-	// combine name and skin into a configstring
-	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, skin) );
 
 	// fov
 	if (deathmatch->value && ((int)dmflags->value & DF_FIXED_FOV))
@@ -2407,8 +2462,6 @@ void ClientUserinfoChanged (edict_t *ent, char *userinfo)
 	strncpy (ent->client->pers.userinfo, userinfo, sizeof(ent->client->pers.userinfo)-1);
 	
 	ClientSetSkin(ent, skin);
-
-	BotLib_BotClientSettings(ent);
 }
 
 
@@ -2427,11 +2480,6 @@ loadgames will.
 qboolean ClientConnect (edict_t *ent, char *userinfo)
 {
 	char	*value;
-
-	if (ent->flags & FL_BOT)
-	{
-		if (!BotMoveToFreeClientEdict(ent)) return false;
-	}
 
 	// check to see if they are on the banned IP list
 	value = Info_ValueForKey (userinfo, "ip");
@@ -2521,6 +2569,11 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 
 	// Hati - initialize spam control variables
 	ent->client->spam_band_count = CTF_SPAM_BAND_MAX;
+	// BUZZKILL - spam_lock_time was never seeded; at zero, every client's
+	// first five seconds of chat on every level were silently eaten by
+	// ctf_SpamCheck's lockout test (level.time - 0 < LOCKOUT), and each
+	// swallowed line re-armed the lock. Humans included. Seed it in the past.
+	ent->client->spam_lock_time = -CTF_SPAM_LOCKOUT_TIME;
 	ent->client->spam_freq_count = CTF_SPAM_FREQ_MIN;
 	ent->client->spam_freq_time = level.time;
 	
@@ -2567,8 +2620,6 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
-
-	Know_ClientDisconnect(ent);
 
 	// flush this player's persistent stats before we tear anything down
 	CommitPlayerData(ent);
@@ -2632,11 +2683,8 @@ void ClientDisconnect (edict_t *ent)
 	
 	//ctf_ClientDisconnect(ent);
 
-	/* Release the slot in the library too, or it keeps thinking about a
-	 * client that has gone. */
 	strcpy(ent->client->pers.netname, "");
 	Info_SetValueForKey(ent->client->pers.userinfo, "skin", "");
-	BotLib_BotClientSettings(ent);
 }
 
 
@@ -2722,6 +2770,11 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	ent->client->spam_band_count+=CTF_SPAM_BAND_RECOVER; //this locks based on bandwidth
 	if (ent->client->spam_band_count > CTF_SPAM_BAND_MAX)
 		ent->client->spam_band_count = CTF_SPAM_BAND_MAX;
+	// BUZZKILL - spam_lock_time was never seeded; at zero, every client's
+	// first five seconds of chat on every level were silently eaten by
+	// ctf_SpamCheck's lockout test (level.time - 0 < LOCKOUT), and each
+	// swallowed line re-armed the lock. Humans included. Seed it in the past.
+	ent->client->spam_lock_time = -CTF_SPAM_LOCKOUT_TIME;
 	if (ent->client->spam_band_count < CTF_SPAM_BAND_MIN)
 		ent->client->spam_band_count = CTF_SPAM_BAND_MIN;
 	
@@ -2767,9 +2820,14 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	{
 		client->ps.pmove.pm_type = PM_FREEZE;
 		// can exit intermission after five seconds
-		if (level.time > level.intermissiontime + 5.0 
+		if (level.time > level.intermissiontime + 5.0
 			&& (ucmd->buttons & BUTTON_ANY) )
+		{
+			gi.dprintf("INTERMEXIT by %s frame=%d (intermission since %.1f)\n",
+				ent->client->pers.netname, level.framenum,
+				level.intermissiontime);
 			level.exitintermission = true;
+		}
 		return;
 	}
 
@@ -3108,6 +3166,20 @@ any other entities in the world.
 */
 void ClientBeginServerFrame (edict_t *ent)
 {
+	// BUZZKILL - spawn_loadout overheal: rot 1/sec down to max, exactly
+	// the megahealth pace; flag clears at max so a real megahealth's own
+	// think is never doubled after this ends
+	if (ent->client->overheal)
+	{
+		if (ent->health <= ent->max_health)
+			ent->client->overheal = false;
+		else if (level.time >= ent->client->overheal_next)
+		{
+			ent->health--;
+			ent->client->overheal_next = level.time + 1.0f;
+		}
+	}
+
 	gclient_t	*client;
 	int			buttonMask;
 
@@ -3233,7 +3305,11 @@ void ClientSetSkin(edict_t *ent, char *skin)
 	
 	// combine name and skin into a configstring
 	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, newskin) );
-	
+
+	if ((ent->flags & FL_BOT) && gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("SKINL %s team=%d wears %s\n",
+		           ent->client->pers.netname,
+		           ent->client->ctf.teamnum, newskin);
 	
 	Info_SetValueForKey (ent->client->pers.userinfo, "skin", newskin);
 	ent->client->ctf.goodskin = false; // We need to re-force our skin
@@ -3360,6 +3436,13 @@ void ClientOldSetSkin(edict_t *ent, char *input)
 	
 	// combine name and skin into a configstring
 	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, s) );
+
+	/* the uniform on the record: two silent repaint failures cost two
+	 * live reports -- the third fix verifies itself from the wave logs */
+	if ((ent->flags & FL_BOT) && gi.cvar("sg_debug", "0", 0)->value)
+		gi.dprintf("SKIN %s team=%d wears %s\n",
+		           ent->client->pers.netname,
+		           ent->client->ctf.teamnum, s);
 	
 	if (s == skin)
 	{

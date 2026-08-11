@@ -90,15 +90,6 @@ extern _CrtMemState startup1;	// memory diagnostics
 #define VER "r00~0000000"
 #endif
 
-#ifdef BOT
-#include "botlib.h"
-#include "bl_debug.h"
-#endif
-
-#ifdef BOT
-extern cvar_t  *botctfteam;         // which team "addbot" joins by default
-#endif
-
 #include "p_stats.h" // STATS - LM_Hati
 #include "g_menu.h" // MENUS - LM_Jorm
 
@@ -430,6 +421,7 @@ typedef struct
 	// Appended rather than inserted: level_locals_t is written to level.sav,
 	// so keeping existing field offsets put is the polite thing to do.
 	qboolean	sweeps_awarded;	// Victory() can fire twice a level; award sweeps once
+	qboolean	match_recorded;	// same double-fire: write the matches row once
 } level_locals_t;
 
 
@@ -456,13 +448,6 @@ typedef struct
 	float		maxyaw;
 	float		minpitch;
 	float		maxpitch;
-#ifdef BOT
-	// read from the worldspawn/bot entity keys by bl_spawn.c
-	char		*name;
-	char		*skin;
-	char		*charfile;
-	char		*charname;
-#endif
 } spawn_temp_t;
 
 
@@ -668,6 +653,10 @@ extern  cvar_t  *skin_file;     // CTF CODE -- LM_SURT
 extern  cvar_t  *skin_debug;    // For debugging skins file
 extern  cvar_t  *disabled_weps; // CTF CODE -- LM_SURT
 extern  cvar_t  *flag_init;
+// BUZZKILL - spawn_loadout: admin-defined starting equipment. One cvar,
+// grammar thing[:count] plus @build references; the vocabulary is the
+// LIVE itemlist, so new items self-incorporate. See README.
+extern  cvar_t  *spawn_loadout;
 extern  cvar_t  *fastswitch;
 extern  cvar_t  *mod_website;   // URL to show in team join centerprint
 extern  cvar_t  *autolock;      // lock/unlock teams with match status
@@ -1214,11 +1203,6 @@ struct gclient_s
 	qboolean	showstatboard; //BUZZKILL
 	qboolean	showteamstatboard; //BUZZKILL
 	qboolean	showrailboard; //BUZZKILL
-#ifdef BOT
-	qboolean	showloading;		// bot loading image is on screen
-	int			lasthurt_client;	// entity number of the last attacker, for bot chat
-	int			lasthurt_mod;		// means of death of the last damage taken
-#endif
 
 
 	// BUZZKILL -- persistent stats, loaded/saved by the stats database.
@@ -1341,6 +1325,12 @@ struct gclient_s
 	client_ctf_t    ctf;
 	stats_player_s *p_stats_player; // STATS - LM_Hati
 	// END TEAM CODE
+
+	// BUZZKILL - spawn_loadout overheal: health granted above max rots
+	// 1 point a second down to max, the megahealth mechanic applied to
+	// the spawn overage
+	qboolean	overheal;
+	float		overheal_next;
 };
 
 
@@ -1502,9 +1492,6 @@ struct edict_s
 	vec3_t          hook_offset;
 	int             dontfree;
 	float           droptime;
-#ifdef BOT
-	visiblebbox_t	box;			// bot debug bounding box
-#endif
 	int             entprops; //flags to tag entities with, for use with flags, which have no client
 	// END CTF CODE
 

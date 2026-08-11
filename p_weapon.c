@@ -1648,6 +1648,15 @@ void weapon_railgun_fire (edict_t *ent)
 	gi.WriteByte (MZ_RAILGUN | is_silenced);
 	gi.multicast (ent->s.origin, MULTICAST_PVS);
 
+	// BUZZKILL - SLIPGATE: the rail rhythm. The slug is away and the flash
+	// and the trail are on the wire, which is the whole of what a player in
+	// the room perceives; every test about who could have perceived it, and
+	// what a bot is allowed to do with it, is on the slipgate side
+	{
+		void SG_NoteRailShot(edict_t *shooter);
+		SG_NoteRailShot(ent);
+	}
+
 	ent->client->ps.gunframe++;
 	PlayerNoise(ent, start, PNOISE_WEAPON);
 
@@ -1786,12 +1795,20 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 
 	if (other &&
 		(strcmp(other->classname, "bodyque") != 0) &&
-		(!ctf_validateplayer(other, CTF_TEAM_ANYTEAM)) && 
+		(!ctf_validateplayer(other, CTF_TEAM_ANYTEAM)) &&
 		(strcmp(other->classname, "worldspawn") != 0) &&
 		(strncmp(other->classname, "func", 4) != 0) &&
 		(strncmp(other->classname, "info_flag", 9) != 0)
 		)
 	{
+		/* HOOKABORT census (sg_debug): the noattach mass -- 6,488 per
+		 * wave -- ends in these abort paths, and no earlier telemetry
+		 * could see WHICH: an aborted bolt never attaches, so the bite
+		 * census was structurally blind to it. Name the entity. */
+		if (self->owner->client && gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("HOOKABORT %s entity=%s\n",
+			           self->owner->client->pers.netname,
+			           other->classname ? other->classname : "?");
 		ctf_hook_abort(self->owner);
 		return;
 	}
@@ -1808,6 +1825,11 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 		((other->client) && (self->owner->client->ctf.teamnum == other->client->ctf.teamnum)) ||
 		other->deadflag)
 	{
+		if (self->owner->client && gi.cvar("sg_debug", "0", 0)->value)
+			gi.dprintf("HOOKABORT %s %s\n",
+			           self->owner->client->pers.netname,
+			           (surf && (surf->flags & SURF_SKY)) ? "sky"
+			           : (other->client ? "teammate" : "corpse"));
 		ctf_hook_abort(self->owner);
 		return;
 	}

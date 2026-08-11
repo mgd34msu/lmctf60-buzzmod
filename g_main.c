@@ -8,13 +8,8 @@
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
-#include "bl_ctf.h"
-#include "bl_know.h"
+#include "slipgate/sg_net.h"
+#include "slipgate/sg_local.h"
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -88,6 +83,7 @@ cvar_t	*skin_file;	// CTF CODE -- LM_SURT
 cvar_t	*skin_debug; // For debugging skin files
 cvar_t	*disabled_weps;	// CTF CODE -- LM_SURT
 cvar_t  *flag_init;
+cvar_t  *spawn_loadout;  // BUZZKILL - admin-defined starting equipment
 cvar_t  *fastswitch;
 cvar_t  *mod_website;
 cvar_t  *autolock;
@@ -142,8 +138,6 @@ void ShutdownGame (void)
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
 	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 
-	BotUnloadAllLibraries();	// before the tags they allocated from go away
-
 	gi.FreeTags (TAG_LEVEL);
 	gi.FreeTags (TAG_GAME);
 
@@ -171,9 +165,11 @@ q_exported game_export_t *GetGameAPI (game_import_t *import)
 {
 	gi = *import;
 
-	/* The bot library calls back into the engine through its own copy of the
-	 * import table, so it has to be redirected before anything uses it. */
-	BotRedirectGameImport();
+	/* The whole game writes prints, network messages and command arguments
+	 * through this redirection (see slipgate/sg_net.c), so it has to be
+	 * installed before anything uses gi -- and before anything caches a
+	 * copy of a slot. */
+	SG_NetInstall();
 
 	globals.apiversion = GAME_API_VERSION;
 	globals.Init = InitGame;
@@ -684,6 +680,8 @@ void CheckDMRules (void)
 			level.changemap = ent->map;
 			level.exitintermission = 1;
                         gi.dprintf("Startup Map :  %s\n",  firstmap->mapname);
+			gi.dprintf("MAPLISTFORCE frame=%d exitintermission=1 changemap=%s\n",
+				level.framenum, level.changemap);
 			return;
 		}
 	}
@@ -741,6 +739,12 @@ void ExitLevel (void)
 	int		i;
 	edict_t	*ent;
 	char	command [MAX_INFO_STRING];
+
+	/* rotation forensics: every level exit is a roster-wiping event on a
+	 * dedicated test server, so say who/when in the console log */
+	gi.dprintf("EXITLEVEL frame=%d time=%.1f changemap=%s\n",
+		level.framenum, level.time,
+		level.changemap ? level.changemap : "(null)");
 
 	Com_sprintf (command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
 
@@ -843,10 +847,6 @@ void G_RunFrame (void)
 		return;
 	}
 
-	// spawn any bots queued last frame, then open the library's frame
-	AddQueuedBots();
-	BotLib_BotStartFrame(level.time);
-
 	/* TEMPORARY DIAGNOSTIC (bot_developer 1) -- flag reachability tracing,
 	 * defined at the bottom of g_ctffunc.c. Remove with that function. */
 	BotFlagDiag();
@@ -889,35 +889,11 @@ void G_RunFrame (void)
 	}
 
 	/*
-	 * Feed the library this frame's world, then think. Kept after the entity
-	 * loop rather than inside it: the bots see a fully updated world that way
-	 * and never act on a half-stepped frame.
+	 * SLIPGATE bots think here, after the entity loop rather than inside it:
+	 * they see a fully updated world that way and never act on a half-stepped
+	 * frame.
 	 */
-	ent = &g_edicts[0];
-	for (i = 0; i < globals.num_edicts; i++, ent++)
-	{
-		if (!ent->inuse) continue;
-		if (!(ent->svflags & SVF_NOCLIENT))
-			BotLib_BotUpdateEntity(ent);
-	}
-
-	/* Refresh what each bot has seen before the AI acts on it. */
-	Know_Frame();
-
-	for (i = 0; i < maxclients->value; i++)
-	{
-		ent = DF_CLIENTENT(i);
-		if (!ent->inuse) continue;
-		if (!(ent->flags & FL_BOT)) continue;
-		if (!BotStarted(ent)) continue;
-
-		BotLib_BotUpdateClient(ent);
-		BotLib_BotAI(ent, FRAMETIME);
-		BotExecuteInput(ent);
-	}
-
-	// top the game up to "bots_minplayers" if it is set
-	CheckMinimumPlayers();
+	SG_RunFrame();
 
 	// see if it is time to end a deathmatch
 	CheckDMRules ();

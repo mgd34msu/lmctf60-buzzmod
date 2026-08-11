@@ -2,6 +2,8 @@
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
 #include "bat.h"
+#include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
+#include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
 
 int MvpDisp;
 
@@ -74,6 +76,37 @@ void BeginIntermission (edict_t *targ)
     // LM_JORM -- Proclaim a victory!
     Victory();
     // END LM_JORM
+
+	/*
+	 * SLIPGATE's bots react to the result, right where the server has just
+	 * announced it. This is the one place every way of ending a level meets --
+	 * timelimit, fraglimit, a target_changelevel and a match end all arrive
+	 * here -- and the intermissiontime guard above makes it fire once.
+	 *
+	 * After Victory() rather than before it because that is the reading order
+	 * a player sees, and the scores are the same either side: the only thing
+	 * Victory() adds is STATS_SWEEPS, which nothing here sums.
+	 *
+	 * Nothing is said in this call. The lines are booked and go out over the
+	 * next four seconds from SG_ChatFrame, which keeps running through
+	 * intermission -- well inside the five seconds a client must wait before
+	 * it can end intermission (ClientThink, this file's counterpart in
+	 * p_client.c).
+	 */
+	SG_ChatLevelEnd();
+
+	/*
+	 * The session attendance, for the same reason and in the same place: the
+	 * Victory() call above has just opened and closed the match row, so the
+	 * match_id the rows hang off exists, and the intermissiontime guard at
+	 * the top of this function makes the write happen once. DB_SessionRecord
+	 * latches the match id it wrote as well, so an end that somehow reached
+	 * here twice still leaves one set of rows.
+	 *
+	 * Returns immediately unless sg_sessiondb is on AND the unified stats
+	 * backend is the one running (ctf_statsdb 2).
+	 */
+	DB_SessionRecord();
 
 	game.autosaved = false;
 
@@ -204,10 +237,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     red_item_shield = 0;
     int     bfctest = 0;
     int     rfctest = 0;
-    char*   redfc = NULL;
-    char*   bluefc = NULL;
-    char*   red_runes = NULL;
-    char*   blue_runes = NULL;
+    /* BUZZKILL - never hand NULL to the formatter: glibc renders it as
+     * a literal "(null)" on every player's HUD (the owner's screenshot,
+     * wave 266 era). A dash is the honest empty. */
+    char*   redfc = "-";
+    char*   bluefc = "-";
+    char*   red_runes = "-";
+    char*   blue_runes = "-";
     int     red_rune_acc = 0;
     int     blue_rune_acc = 0;
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
@@ -1108,7 +1144,15 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     //   rne  S/H/G/R  = strength, haste, regen, resist
     {
         int rows = (red > blue) ? red : blue;
-        int fy = 48 + 8 * rows + 8;
+        // The footer sits BELOW the roster, and the roster's row height
+        // depends on which scoreboard this is: the small layout packs
+        // players at 8 pixels (y = 48 + 8i), the big portrait layout at
+        // 32 (y = 32 + 32i).  The first cut assumed 8 always -- at five
+        // players a side the footer landed at y=96, printed straight
+        // over the third portrait row (reported live from the big
+        // board).  Compute from the layout actually in effect.
+        int fy = showsmall ? (48 + 8 * rows + 8)
+                           : (32 + 32 * ((rows > 6 ? 6 : rows)) + 8);
 
         // only draw it when the roster leaves vertical room for three rows
         if (fy + 16 <= 232)

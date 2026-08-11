@@ -1,11 +1,7 @@
 #include "g_local.h"
+#include "g_ctffunc.h"          /* CTF_TEAM_RED/BLUE for `sv sg add red|blue` */
+#include "slipgate/sg_local.h"  /* the SLIPGATE admin surface behind `sv sg` */
 #include "ctf_file_io.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
-#include "bl_ctf.h"
 
 void ctf_BSafePrint(long print_priority, char * buf);
 
@@ -296,6 +292,67 @@ void SVCmd_QuadTime_f(void)
 }
 
 /*
+ * SLIPGATE bots, the admin surface. Dispatched here now; it used to reach
+ * SLIPGATE through the legacy bot glue's BotCmd, which forwarded unclaimed
+ * "sv" commands.
+ *
+ * Backward compatibility is load-bearing on exactly one verb: bare
+ * `sv sg remove` still removes EVERY bot. That is what the launch scripts
+ * and the match harness have typed since the format began, and quietly
+ * giving it a narrower meaning would empty the wrong roster mid-wave. The
+ * per-bot removal is the argument form, which nothing existing sends.
+ */
+static void SVCmd_SG_f (void)
+{
+	char *sub = gi.argv(2);
+	char *arg = gi.argv(3);
+
+	if (Q_stricmp(sub, "add") == 0)
+	{
+		int team = 0;   /* 0: let the balancer place it, as it always has */
+
+		if (Q_stricmp(arg, "red") == 0)
+			team = CTF_TEAM_RED;
+		else if (Q_stricmp(arg, "blue") == 0)
+			team = CTF_TEAM_BLUE;
+		else if (*arg)
+		{
+			gi.cprintf(NULL, PRINT_HIGH, "usage: sv sg add [red|blue]\n");
+			return;
+		}
+		if (!SG_AddBotTeam(team))
+			gi.cprintf(NULL, PRINT_HIGH, "slipgate: could not add bot\n");
+	}
+	else if (Q_stricmp(sub, "remove") == 0)
+	{
+		if (!*arg)
+			gi.cprintf(NULL, PRINT_HIGH, "slipgate: removed %d\n",
+			           SG_RemoveBots());
+		else if (!SG_RemoveBotNamed(arg))
+			gi.cprintf(NULL, PRINT_HIGH, "slipgate: no bot \"%s\"\n", arg);
+	}
+	else if (Q_stricmp(sub, "kick") == 0)
+	{
+		if (Q_stricmp(arg, "worst") != 0)
+			gi.cprintf(NULL, PRINT_HIGH, "usage: sv sg kick worst\n");
+		else if (!SG_KickWorst())
+			gi.cprintf(NULL, PRINT_HIGH, "slipgate: no bots\n");
+	}
+	else if (Q_stricmp(sub, "list") == 0)
+		SG_ListBots();
+	else if (Q_stricmp(sub, "weights") == 0)
+	{
+		if (Q_stricmp(arg, "reload") == 0)
+			SG_WeightsReload();
+		SG_WeightsPrint();
+	}
+	else
+		gi.cprintf(NULL, PRINT_HIGH,
+		           "usage: sv sg <add [red|blue] | list | remove [name|slot] "
+		           "| kick worst | weights [reload]>\n");
+}
+
+/*
 =================
 ServerCommand
 
@@ -306,6 +363,14 @@ of the parameters
 */
 void	ServerCommand (void)
 {
+	// BUZZKILL - spawn_loadout discovery: every addressable token, live
+	if (Q_stricmp(gi.argv(1), "listitems") == 0)
+	{
+		void SpawnLoadout_ListItems(void);
+		SpawnLoadout_ListItems();
+		return;
+	}
+
 	char	*cmd;
 
 	cmd = gi.argv(1);
@@ -325,9 +390,13 @@ void	ServerCommand (void)
 		CTF_StatsDB_Command ();
 	else if ((Q_stricmp (cmd, "next") == 0) || (Q_stricmp (cmd, "skip") == 0))
 		Svcmd_NextLevel_f ();
-	else if (BotCmd(cmd, NULL, true))
+	else if (Q_stricmp (cmd, "sg") == 0)
+		SVCmd_SG_f ();
+	else if (Q_stricmp (cmd, "rune") == 0)
 	{
-		/* handled by the bot glue -- "sv bot ..." */
+		/* SLIPGATE: generate the rune for the loaded map. */
+		extern qboolean Rune_Generate(const char *mapname);
+		Rune_Generate(level.mapname);
 	}
 	else
 		gi.cprintf (NULL, PRINT_HIGH, "Unknown server command \"%s\"\n", cmd);

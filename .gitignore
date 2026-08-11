@@ -16,3 +16,12 @@ GitRevisionInfo.h
 # built botlib
 bots/botlib/*.o
 bots/botlib/botlib.so
+
+# server logs and tool output that never belongs in history
+bspc.log
+.goodvibes/
+tools/rune-logs/
+tools/campaign-*/
+tools/ab-*.log
+tools/iter-*/
+tools/__pycache__/

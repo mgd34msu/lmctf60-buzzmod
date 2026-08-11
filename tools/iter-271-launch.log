@@ -1,0 +1,334 @@
+=== WAVE 271: duel=lmctf03 fives=mactf06,lmctf05,lmctf01,lmctf22,lmctf02c dens=lmctf09 ctrl=smap05 ===
+---- s01-2v2 lmctf03 ----
+STEALS=0  CAPS=0  RETURNS=0
+KILLS=1
+HOOK: fires=155 lands=39 fails=21
+SHELVES=43  DEADDOORS=0  CYCLES=0
+acts: swim=0 lift=0 tele=0 rj=2
+roles: escort_samples=0 recover_samples=0
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 27 | sample: (Rune[SG]): haste rune at our base
+kills by weapon: blaster=0 rail=0 rocket=0 mg=0 cg=0 hb=0 ssg=0
+ACC w1 fires=9 hits=6
+ACC w6 fires=21 hits=2
+ACC w8 fires=14 hits=1
+ACC w1 fires=9 hits=6
+ACC w6 fires=21 hits=2
+ACC w8 fires=14 hits=1
+ACC w1 fires=9 hits=6
+ACC w6 fires=21 hits=2
+ACC w8 fires=14 hits=1
+ACC w1 fires=9 hits=6
+ACC w6 fires=21 hits=2
+ACC w8 fires=14 hits=1
+EFF: attack=0.85 defend=0.65
+BOT: Rune[SG]     eff=1.59 avg_spd=    3 max_spd= 777 dist=   1380 role=defend
+BOT: Caco[SG]     eff=0.93 avg_spd=  159 max_spd= 754 dist=  63931 role=attack
+BOT: Slip[SG]     eff=0.80 avg_spd=  255 max_spd= 789 dist= 102463 role=attack
+BOT: Arach[SG]    eff=0.61 avg_spd=   27 max_spd= 749 dist=   8304 role=defend
+---- s02-2v2 lmctf03 ----
+STEALS=0  CAPS=0  RETURNS=0
+KILLS=1
+HOOK: fires=152 lands=21 fails=12
+SHELVES=53  DEADDOORS=1  CYCLES=0
+acts: swim=0 lift=0 tele=0 rj=0
+roles: escort_samples=0 recover_samples=0
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 22 | sample: (Arach[SG]): damage rune at our base
+kills by weapon: blaster=0 rail=0 rocket=0 mg=0 cg=0 hb=0 ssg=0
+ACC w6 fires=7 hits=2
+ACC w8 fires=12 hits=0
+ACC w6 fires=7 hits=2
+ACC w8 fires=12 hits=0
+ACC w6 fires=7 hits=2
+ACC w8 fires=12 hits=0
+ACC w6 fires=7 hits=2
+ACC w8 fires=12 hits=0
+ACC w6 fires=7 hits=2
+ACC w8 fires=12 hits=0
+ACC w6 fires=7 hits=2
+ACC w8 fires=12 hits=0
+EFF: attack=0.74 defend=1.10
+BOT: Rune[SG]     eff=1.59 avg_spd=    3 max_spd= 777 dist=   1380 role=defend
+BOT: Arach[SG]    eff=1.08 avg_spd=   23 max_spd= 749 dist=  11764 role=defend
+BOT: Caco[SG]     eff=0.91 avg_spd=  150 max_spd= 754 dist=  62212 role=attack
+BOT: Slip[SG]     eff=0.62 avg_spd=  263 max_spd= 789 dist=  95422 role=attack
+---- s03-5v5 lmctf05 ----
+STEALS=1  CAPS=0  RETURNS=1
+KILLS=55
+HOOK: fires=507 lands=194 fails=97
+SHELVES=139  DEADDOORS=0  CYCLES=0
+acts: swim=159 lift=1 tele=57 rj=6
+roles: escort_samples=1 recover_samples=6
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 61 | sample: (Arach[SG]): damage rune at the cg
+kills by weapon: blaster=0 rail=37 rocket=13 mg=0 cg=0 hb=0 ssg=0
+ACC w6 fires=172 hits=25
+ACC w7 fires=1 hits=1
+ACC w8 fires=280 hits=41
+ACC w6 fires=186 hits=26
+ACC w7 fires=1 hits=1
+ACC w8 fires=291 hits=42
+ACC w6 fires=186 hits=26
+ACC w7 fires=1 hits=1
+ACC w8 fires=291 hits=42
+ACC w6 fires=195 hits=26
+ACC w7 fires=1 hits=1
+ACC w8 fires=291 hits=42
+EFF: attack=1.75 defend=0.85
+BOT: Vore[SG]     eff=2.19 avg_spd=  139 max_spd= 781 dist=  67412 role=attack
+BOT: Fiend[SG]    eff=2.00 avg_spd=  121 max_spd= 754 dist=  20532 role=attack
+BOT: Field[SG]    eff=1.74 avg_spd=  179 max_spd= 788 dist=  58731 role=attack
+BOT: Slip[SG]     eff=1.60 avg_spd=  137 max_spd= 789 dist=  40702 role=attack
+BOT: Phase[SG]    eff=1.54 avg_spd=  156 max_spd= 744 dist=  74846 role=attack
+BOT: Trace[SG]    eff=1.48 avg_spd=  144 max_spd= 775 dist=  64351 role=attack
+BOT: Caco[SG]     eff=1.00 avg_spd=  228 max_spd= 788 dist=  51621 role=defend
+BOT: Gate[SG]     eff=0.81 avg_spd=  232 max_spd= 777 dist=  81490 role=defend
+BOT: Arach[SG]    eff=0.71 avg_spd=  100 max_spd= 745 dist=  23193 role=defend
+---- s04-5v5 lmctf01 ----
+STEALS=0  CAPS=0  RETURNS=0
+KILLS=42
+HOOK: fires=647 lands=189 fails=126
+SHELVES=159  DEADDOORS=0  CYCLES=0
+acts: swim=237 lift=0 tele=8 rj=0
+roles: escort_samples=0 recover_samples=0
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 70 | sample: (Arach[SG]): regen rune at our base
+kills by weapon: blaster=0 rail=31 rocket=10 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=9 hits=0
+ACC w6 fires=160 hits=17
+ACC w8 fires=260 hits=34
+ACC w0 fires=9 hits=0
+ACC w6 fires=160 hits=17
+ACC w8 fires=260 hits=34
+ACC w0 fires=9 hits=0
+ACC w6 fires=160 hits=17
+ACC w8 fires=260 hits=34
+ACC w0 fires=9 hits=0
+ACC w6 fires=160 hits=17
+ACC w8 fires=260 hits=34
+EFF: attack=1.71 defend=0.69
+BOT: Slip[SG]     eff=3.41 avg_spd=  171 max_spd= 799 dist=  73867 role=attack
+BOT: Vore[SG]     eff=1.85 avg_spd=  154 max_spd= 800 dist=  66297 role=attack
+BOT: Field[SG]    eff=1.37 avg_spd=  209 max_spd= 799 dist=  88413 role=attack
+BOT: Fiend[SG]    eff=1.28 avg_spd=  172 max_spd= 770 dist=  62325 role=attack
+BOT: Trace[SG]    eff=1.26 avg_spd=  185 max_spd= 797 dist=  77117 role=attack
+BOT: Phase[SG]    eff=1.20 avg_spd=  197 max_spd= 806 dist=  84702 role=attack
+BOT: Rune[SG]     eff=1.01 avg_spd=   47 max_spd= 779 dist=  19054 role=defend
+BOT: Caco[SG]     eff=0.73 avg_spd=  215 max_spd= 772 dist=  42286 role=defend
+BOT: Gate[SG]     eff=0.60 avg_spd=  226 max_spd= 761 dist=  38335 role=defend
+BOT: Arach[SG]    eff=0.49 avg_spd=   59 max_spd= 442 dist=   9708 role=defend
+---- s05-5v5 lmctf22 ----
+STEALS=3  CAPS=0  RETURNS=3
+KILLS=82
+HOOK: fires=836 lands=302 fails=112
+SHELVES=75  DEADDOORS=0  CYCLES=0
+acts: swim=17 lift=3 tele=11 rj=6
+roles: escort_samples=15 recover_samples=66
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 118 | sample: Rune[SG]: back for more
+kills by weapon: blaster=0 rail=64 rocket=11 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=15 hits=2
+ACC w6 fires=159 hits=25
+ACC w8 fires=695 hits=71
+ACC w0 fires=15 hits=2
+ACC w6 fires=159 hits=25
+ACC w8 fires=700 hits=72
+ACC w0 fires=15 hits=2
+ACC w6 fires=161 hits=26
+ACC w8 fires=700 hits=72
+ACC w0 fires=15 hits=2
+ACC w6 fires=161 hits=26
+ACC w8 fires=700 hits=72
+EFF: attack=1.38 defend=0.97 recover=1.59
+BOT: Trace[SG]    eff=1.53 avg_spd=  227 max_spd= 798 dist= 103123 role=attack
+BOT: Fiend[SG]    eff=1.46 avg_spd=  235 max_spd= 794 dist=  96888 role=attack
+BOT: Vore[SG]     eff=1.45 avg_spd=  222 max_spd= 778 dist=  96887 role=attack
+BOT: Phase[SG]    eff=1.45 avg_spd=  227 max_spd= 779 dist=  89537 role=attack
+BOT: Field[SG]    eff=1.43 avg_spd=  229 max_spd= 797 dist=  86860 role=attack
+BOT: Arach[SG]    eff=1.08 avg_spd=  180 max_spd= 772 dist=  39414 role=defend
+BOT: Gate[SG]     eff=0.95 avg_spd=  243 max_spd= 789 dist=  37788 role=defend
+BOT: Caco[SG]     eff=0.91 avg_spd=  231 max_spd= 775 dist=  37905 role=defend
+BOT: Slip[SG]     eff=0.86 avg_spd=  170 max_spd= 788 dist=  72017 role=attack
+BOT: Rune[SG]     eff=0.60 avg_spd=   26 max_spd= 767 dist=   4140 role=defend
+---- s06-5v5 lmctf02c ----
+STEALS=0  CAPS=0  RETURNS=0
+KILLS=45
+HOOK: fires=1124 lands=333 fails=226
+SHELVES=83  DEADDOORS=0  CYCLES=0
+acts: swim=5 lift=1 tele=0 rj=0
+roles: escort_samples=0 recover_samples=0
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 110 | sample: (Arach[SG]): damage rune at our base
+kills by weapon: blaster=0 rail=35 rocket=4 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=1 hits=1
+ACC w6 fires=73 hits=13
+ACC w8 fires=442 hits=38
+ACC w0 fires=1 hits=1
+ACC w6 fires=73 hits=13
+ACC w8 fires=442 hits=38
+ACC w0 fires=1 hits=1
+ACC w6 fires=73 hits=13
+ACC w8 fires=442 hits=38
+ACC w0 fires=1 hits=1
+ACC w6 fires=73 hits=13
+ACC w8 fires=454 hits=39
+EFF: attack=1.66 defend=1.77
+BOT: Gate[SG]     eff=1.89 avg_spd=  219 max_spd= 778 dist=  90205 role=defend
+BOT: Rune[SG]     eff=1.85 avg_spd=  194 max_spd= 780 dist=  84090 role=defend
+BOT: Vore[SG]     eff=1.82 avg_spd=  232 max_spd= 806 dist= 100146 role=attack
+BOT: Caco[SG]     eff=1.72 avg_spd=  233 max_spd= 782 dist= 108754 role=defend
+BOT: Phase[SG]    eff=1.71 avg_spd=  212 max_spd= 778 dist=  97346 role=attack
+BOT: Fiend[SG]    eff=1.67 avg_spd=  232 max_spd= 806 dist=  99070 role=attack
+BOT: Slip[SG]     eff=1.65 avg_spd=  224 max_spd= 777 dist=  98833 role=attack
+BOT: Arach[SG]    eff=1.62 avg_spd=  134 max_spd= 774 dist=  67586 role=defend
+BOT: Field[SG]    eff=1.59 avg_spd=  214 max_spd= 775 dist=  92690 role=attack
+BOT: Trace[SG]    eff=1.49 avg_spd=  226 max_spd= 779 dist=  90363 role=attack
+---- s07-5v5 mactf06 ----
+STEALS=0  CAPS=0  RETURNS=0
+KILLS=61
+HOOK: fires=727 lands=340 fails=189
+SHELVES=40  DEADDOORS=0  CYCLES=0
+acts: swim=3 lift=0 tele=4 rj=1
+roles: escort_samples=0 recover_samples=0
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 142 | sample: (Arach[SG]): haste rune at our base
+kills by weapon: blaster=0 rail=50 rocket=11 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=8 hits=0
+ACC w6 fires=194 hits=15
+ACC w8 fires=615 hits=61
+ACC w0 fires=8 hits=0
+ACC w6 fires=194 hits=15
+ACC w8 fires=615 hits=61
+ACC w0 fires=8 hits=0
+ACC w6 fires=194 hits=15
+ACC w8 fires=615 hits=61
+ACC w0 fires=8 hits=0
+ACC w6 fires=195 hits=15
+ACC w8 fires=628 hits=63
+EFF: attack=1.33 defend=1.05
+BOT: Fiend[SG]    eff=1.54 avg_spd=  243 max_spd= 800 dist=  92559 role=attack
+BOT: Slip[SG]     eff=1.53 avg_spd=  238 max_spd= 790 dist=  94232 role=attack
+BOT: Arach[SG]    eff=1.33 avg_spd=   73 max_spd= 778 dist=  17633 role=defend
+BOT: Phase[SG]    eff=1.32 avg_spd=  239 max_spd= 800 dist=  94063 role=attack
+BOT: Field[SG]    eff=1.31 avg_spd=  216 max_spd= 800 dist=  87597 role=attack
+BOT: Trace[SG]    eff=1.22 avg_spd=  226 max_spd= 785 dist=  92012 role=attack
+BOT: Vore[SG]     eff=1.10 avg_spd=  228 max_spd= 792 dist=  97971 role=attack
+BOT: Gate[SG]     eff=1.04 avg_spd=  246 max_spd= 778 dist=  50309 role=defend
+BOT: Rune[SG]     eff=0.98 avg_spd=  246 max_spd= 769 dist=  30368 role=defend
+BOT: Caco[SG]     eff=0.92 avg_spd=  240 max_spd= 767 dist=  16981 role=defend
+---- s08-7v7 lmctf09 ----
+STEALS=2  CAPS=0  RETURNS=2
+KILLS=146
+HOOK: fires=1569 lands=468 fails=289
+SHELVES=122  DEADDOORS=0  CYCLES=0
+acts: swim=6 lift=9 tele=7 rj=0
+roles: escort_samples=12 recover_samples=100
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 159 | sample: Rune[SG]: evening
+kills by weapon: blaster=0 rail=111 rocket=20 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=60 hits=9
+ACC w2 fires=2 hits=0
+ACC w6 fires=405 hits=63
+ACC w8 fires=1349 hits=141
+ACC w0 fires=60 hits=9
+ACC w2 fires=2 hits=0
+ACC w6 fires=408 hits=65
+ACC w8 fires=1357 hits=142
+ACC w0 fires=60 hits=9
+ACC w2 fires=2 hits=0
+ACC w6 fires=408 hits=65
+ACC w8 fires=1358 hits=143
+EFF: attack=1.73 defend=1.05 recover=1.87
+BOT: Field[SG]    eff=1.92 avg_spd=  206 max_spd=1005 dist=  97113 role=attack
+BOT: Arach[SG]    eff=1.91 avg_spd=   13 max_spd= 778 dist=   4977 role=defend
+BOT: Vore[SG]     eff=1.90 avg_spd=  226 max_spd= 805 dist= 103831 role=attack
+BOT: Scrag[SG]    eff=1.79 avg_spd=  246 max_spd= 793 dist= 106762 role=attack
+BOT: Phase[SG]    eff=1.73 avg_spd=  214 max_spd= 792 dist= 100855 role=attack
+BOT: Fiend[SG]    eff=1.71 avg_spd=  192 max_spd=1140 dist=  84985 role=attack
+BOT: Knight[SG]   eff=1.70 avg_spd=  233 max_spd= 798 dist=  99621 role=attack
+BOT: Wizard[SG]   eff=1.68 avg_spd=  213 max_spd= 800 dist=  99683 role=attack
+BOT: Slip[SG]     eff=1.64 avg_spd=  218 max_spd= 777 dist= 101418 role=attack
+BOT: Ogre[SG]     eff=1.63 avg_spd=  193 max_spd= 781 dist=  88785 role=attack
+BOT: Trace[SG]    eff=1.59 avg_spd=  180 max_spd= 807 dist=  85224 role=attack
+BOT: Gate[SG]     eff=1.21 avg_spd=  217 max_spd= 773 dist=  41342 role=defend
+BOT: Rune[SG]     eff=0.94 avg_spd=   14 max_spd= 441 dist=   4193 role=defend
+BOT: Caco[SG]     eff=0.89 avg_spd=  207 max_spd= 741 dist=  40527 role=defend
+---- s09-7v7 lmctf09 ----
+STEALS=1  CAPS=0  RETURNS=1
+KILLS=151
+HOOK: fires=1436 lands=447 fails=294
+SHELVES=116  DEADDOORS=0  CYCLES=0
+acts: swim=9 lift=9 tele=9 rj=6
+roles: escort_samples=0 recover_samples=49
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 154 | sample: (Caco[SG]): damage rune at our base
+kills by weapon: blaster=0 rail=110 rocket=23 mg=1 cg=0 hb=0 ssg=0
+ACC w0 fires=43 hits=2
+ACC w3 fires=6 hits=5
+ACC w6 fires=407 hits=69
+ACC w8 fires=1389 hits=133
+ACC w0 fires=43 hits=2
+ACC w3 fires=6 hits=5
+ACC w6 fires=407 hits=69
+ACC w8 fires=1392 hits=136
+ACC w0 fires=47 hits=2
+ACC w3 fires=6 hits=5
+ACC w6 fires=407 hits=69
+ACC w8 fires=1393 hits=137
+EFF: attack=1.64 defend=0.95 recover=1.11
+BOT: Fiend[SG]    eff=1.86 avg_spd=  206 max_spd= 785 dist=  90900 role=attack
+BOT: Field[SG]    eff=1.78 avg_spd=  226 max_spd= 800 dist=  94017 role=attack
+BOT: Scrag[SG]    eff=1.72 avg_spd=  214 max_spd= 799 dist=  97409 role=attack
+BOT: Slip[SG]     eff=1.71 avg_spd=  221 max_spd= 788 dist=  96064 role=attack
+BOT: Trace[SG]    eff=1.70 avg_spd=  216 max_spd= 799 dist=  97404 role=attack
+BOT: Wizard[SG]   eff=1.66 avg_spd=  189 max_spd= 772 dist=  84501 role=attack
+BOT: Knight[SG]   eff=1.59 avg_spd=  208 max_spd= 800 dist=  90457 role=attack
+BOT: Phase[SG]    eff=1.47 avg_spd=  229 max_spd= 774 dist= 106533 role=attack
+BOT: Vore[SG]     eff=1.43 avg_spd=  205 max_spd= 774 dist=  86794 role=attack
+BOT: Ogre[SG]     eff=1.40 avg_spd=  209 max_spd= 800 dist=  89748 role=attack
+BOT: Arach[SG]    eff=1.22 avg_spd=   21 max_spd= 749 dist=  10778 role=defend
+BOT: Gate[SG]     eff=1.20 avg_spd=  107 max_spd= 753 dist=  42240 role=defend
+BOT: Rune[SG]     eff=1.10 avg_spd=   55 max_spd= 771 dist=  15366 role=defend
+BOT: Caco[SG]     eff=0.68 avg_spd=  220 max_spd= 770 dist=  47705 role=defend
+---- s10-5v1 smap05 ----
+STEALS=5  CAPS=2  RETURNS=0
+KILLS=21
+HOOK: fires=423 lands=126 fails=91
+SHELVES=111  DEADDOORS=0  CYCLES=5
+acts: swim=173 lift=0 tele=47 rj=9
+roles: escort_samples=392 recover_samples=319
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 80 | sample: (Arach[SG]): haste rune at the rg
+kills by weapon: blaster=0 rail=14 rocket=6 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=7 hits=1
+ACC w6 fires=59 hits=9
+ACC w8 fires=180 hits=17
+ACC w0 fires=7 hits=1
+ACC w6 fires=59 hits=9
+ACC w8 fires=181 hits=18
+ACC w0 fires=7 hits=1
+ACC w6 fires=59 hits=9
+ACC w8 fires=181 hits=18
+ACC w0 fires=7 hits=1
+ACC w6 fires=59 hits=9
+ACC w8 fires=181 hits=18
+EFF: attack=1.42 defend=1.10 carry=1.40 recover=1.19 escort=1.37
+BOT: Arach[SG]    eff=2.29 avg_spd=   19 max_spd= 773 dist=   7690 role=defend
+BOT: Slip[SG]     eff=1.62 avg_spd=  186 max_spd= 785 dist=  75865 role=attack
+BOT: Rune[SG]     eff=1.47 avg_spd=  182 max_spd= 765 dist=  72472 role=recover
+BOT: Gate[SG]     eff=1.21 avg_spd=  198 max_spd=1100 dist=  59618 role=attack
+BOT: Caco[SG]     eff=1.18 avg_spd=  187 max_spd= 780 dist=  63247 role=defend
+BOT: Phase[SG]    eff=1.10 avg_spd=  197 max_spd= 780 dist=  61344 role=attack
+botledger: 91 rows appended for wave 271
+logs: /home/buzzkill/Projects/lmctf6-stats/tools/iter-271

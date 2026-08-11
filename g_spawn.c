@@ -1,6 +1,7 @@
 
 #include "g_local.h"
-#include "bl_know.h"
+#include "slipgate/sg_net.h"
+#include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
 #include "g_ctffunc.h"
 #include "g_tourney.h"
 
@@ -8,11 +9,6 @@
 #include <sys/types.h>
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
 
 typedef struct
 {
@@ -932,17 +928,17 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	SaveClientData ();
 
+	SG_NetNewLevel ();
+
+	// BUZZKILL - the session recorder's per-level state: chat counts, the
+	// written-match latch, and the match id the rows hang off. All three are
+	// level scoped, because a match is a level here.
+	DB_SessionNewLevel ();
+
 	gi.FreeTags (TAG_LEVEL);
 
 	memset (&level, 0, sizeof(level));
 	memset (g_edicts, 0, game.maxentities * sizeof (g_edicts[0]));
-
-	/*
-	 * Forget what the bots saw on the last map. Dropped-flag memory and the
-	 * call-out timers are per-map, and carrying them over would have bots
-	 * announcing positions from a map that is no longer loaded.
-	 */
-	Know_LevelInit();
 
 	strncpy (level.mapname, mapname, sizeof(level.mapname)-1);
 	strncpy (game.spawnpoint, spawnpoint, sizeof(game.spawnpoint)-1);
@@ -1054,15 +1050,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	G_FindTeams ();
 
 	PlayerTrail_Init ();
-
-	/*
-	 * Bot setup for this level. BotLib_BotLoadMap is what pulls in
-	 * maps/<mapname>.aas, so it has to come after the entities are in place.
-	 */
-	BotInitMuzzleFlashToSoundindex();
-	BotSpawn();
-	BotLib_BotLoadMap(mapname);
-	BotChat_OnStartLevel();
 
 	sl_GameStart( &gi, level );	//	StdLog - Mark Davies
 }

@@ -8,11 +8,6 @@
 #include "g_skins.h"
 #include "g_ctffunc.h" //surt for log renaming
 #include "bat.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
 
 #define Function(f) {#f, f}
 
@@ -249,6 +244,7 @@ void InitGame(void)
 	skin_file = gi.cvar("skin_file", "skins.ini", 0);
 	skin_debug = gi.cvar("skin_debug", "0", 0);	// for debugging team skins in SkinsReadFile
 	flag_init = gi.cvar("flag_init", "0", 0);	// flag spawning frame initialization.
+	spawn_loadout = gi.cvar("spawn_loadout", "", 0);	// BUZZKILL - starting equipment
 	want_funky_gravity = gi.cvar("want_funky_gravity", "0", 0); // player z-pos > 0 causes negative gravity
 
 
@@ -391,10 +387,6 @@ void InitGame(void)
 	SkinsReadFile(); // READ our skins.ini
 
 	CTF_StatsDB_Init();	// open/create the stats database now, not mid-match
-
-	/* Must follow "game.maxclients = maxclients->value" above: BotSetup sizes
-	 * its per-client arrays from it, and reads the bot roster. */
-	BotSetup();
 
 	// END CTF CODE -- LM_JORM
 
@@ -872,6 +864,42 @@ void WriteLevel(char* filename)
 	edict_t* ent;
 	FILE* f;
 	void	(*base)(void);	/* Pointer to function with no arguments */
+	/* declared locally, the way this tree declares the rest of the
+	 * SLIPGATE glue (see g_svcmds.c and bl_spawn.c) */
+	qboolean SG_OwnsBot(edict_t * ent);
+	int SG_RemoveBots(void);
+	int bots;
+
+	/*
+	 * SLIPGATE bots do not survive a save, and pretending otherwise is
+	 * worse than saying so. A bot is a real client edict driven by a
+	 * body of runtime state -- rune fields, beliefs, route latches, the
+	 * whole sg_bots table -- none of which is in the save format and none
+	 * of which the load path would rebuild. Written as-is they come back
+	 * as client shells nobody drives, holding roster slots and standing
+	 * still in the flag room.
+	 *
+	 * So they are removed here, before the entity dump, and the console
+	 * is told why. This is the file that would carry them: the engine
+	 * writes the level file first on an explicit save (SV_Savegame_f) and
+	 * the server file after it, so by the time the client structures are
+	 * written the bots are already gone. On a map change the engine has
+	 * cleared every client's inuse flag before calling in, so no bot is
+	 * live here, nothing is removed and nothing is printed -- the map
+	 * change tears the bots down on its own path.
+	 *
+	 * sv_botfill refills the roster within a second of the load.
+	 */
+	bots = 0;
+	for (i = 1; i <= game.maxclients; i++)
+		if (g_edicts[i].inuse && SG_OwnsBot(&g_edicts[i]))
+			bots++;
+	if (bots)
+	{
+		bots = SG_RemoveBots();
+		gi.dprintf("slipgate: %d bot(s) removed before the save -- bot state "
+			"is not saved; sv_botfill refills after the load\n", bots);
+	}
 
 	f = fopen(filename, "wb");
 	if (!f)

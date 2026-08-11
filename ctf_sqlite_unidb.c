@@ -72,6 +72,38 @@
 	"[rune_strength] INTEGER, [rune_haste] INTEGER, [rune_regen] INTEGER, [rune_resist] INTEGER, " \
 	"[ping_avg] INTEGER, [playtime] INTEGER)"
 
+/*
+ * One row per client per match, written by the SLIPGATE session recorder
+ * (sg_sessiondb). Deliberately NOT the same thing as match_players:
+ *
+ *   - match_players is the leaderboard feed. It is keyed on char_idx, it goes
+ *     through CTF_TrackStatsFor, and a bot the server is not tracking leaves
+ *     no row in it at all.
+ *   - this table is the attendance record. It is keyed on the name as it was
+ *     worn during the match, so a client that has no char_idx -- an untracked
+ *     bot, a one-visit guest -- still gets counted. is_bot is the flag a
+ *     leaderboard query excludes on, which is what lets the row exist without
+ *     polluting anything that reads match_players.
+ *
+ * char_idx is carried when the player already had one, and is -1 otherwise.
+ * It is never ALLOCATED from here: creating a userdata row for a bot the
+ * server declined to track is exactly what CTF_TrackStatsFor exists to stop.
+ *
+ * joined_at / left_at are wall clock, reconstructed from the frame counters
+ * (one frame = 100ms) rather than stored as level-relative seconds, because
+ * matches.started is stamped when the match is RECORDED -- at the end -- and
+ * a level-relative offset would have nothing to be relative to.
+ */
+#define DB_CREATESESSIONEVENTS \
+	"CREATE TABLE IF NOT EXISTS [sg_session_events] (" \
+	"[match_id] INTEGER, [char_idx] INTEGER, [client_name] CHAR(64), " \
+	"[is_bot] INTEGER, [team] INTEGER, " \
+	"[caps] INTEGER, [steals] INTEGER, [returns] INTEGER, " \
+	"[kills] INTEGER, [deaths] INTEGER, " \
+	"[damage_given] INTEGER, [damage_taken] INTEGER, " \
+	"[items_taken_major] INTEGER, [chat_lines] INTEGER, " \
+	"[joined_at] CHAR(30), [left_at] CHAR(30))"
+
 #define DB_UPDATEUDATA \
 	"UPDATE userdata SET playername=?, member_since=?, last_played=?, " \
 	"playtime_total=?, playingtime=? WHERE char_idx=?;"
@@ -89,6 +121,7 @@
 
 static sqlite3 *dbconn = NULL;
 static char     dbname[CTF_MAX_DBPATH];
+static int      db_last_match_id = -1;
 
 static void db_error(const char *what)
 {
@@ -196,9 +229,12 @@ static qboolean build_db(void)
 		DB_CREATECDATA,
 		DB_CREATEMATCHES,
 		DB_CREATEMATCHPLAYERS,
+		DB_CREATESESSIONEVENTS,
 		"CREATE INDEX IF NOT EXISTS idx_mp_char  ON match_players(char_idx)",
 		"CREATE INDEX IF NOT EXISTS idx_mp_match ON match_players(match_id)",
 		"CREATE INDEX IF NOT EXISTS idx_m_ended  ON matches(ended)",
+		"CREATE INDEX IF NOT EXISTS idx_se_match ON sg_session_events(match_id)",
+		"CREATE INDEX IF NOT EXISTS idx_se_name  ON sg_session_events(client_name)",
 		NULL
 	};
 	int i;
@@ -1237,15 +1273,19 @@ Match history
 ==================
 */
 
-static void db_now(char *out, size_t outsize)
+static void db_stamp(char *out, size_t outsize, time_t when)
 {
-	time_t now = time(NULL);
-	struct tm *lt = localtime(&now);
+	struct tm *lt = localtime(&when);
 
 	if (lt)
 		strftime(out, outsize, "%Y-%m-%d %H:%M:%S", lt);
 	else
 		out[0] = '\0';
+}
+
+static void db_now(char *out, size_t outsize)
+{
+	db_stamp(out, outsize, time(NULL));
 }
 
 int DB_MatchBegin(const char *mapname)
@@ -1272,12 +1312,26 @@ int DB_MatchBegin(const char *mapname)
 	sqlite3_bind_text(res, 2, started, -1, SQLITE_TRANSIENT);
 
 	if (sqlite3_step(res) == SQLITE_DONE)
+	{
 		id = (int)sqlite3_last_insert_rowid(dbconn);
+		db_last_match_id = id;
+	}
 	else
 		db_error("DB_MatchBegin");
 
 	sqlite3_finalize(res);
 	return id;
+}
+
+/*
+ * The id DB_MatchBegin last handed out, or -1 if no match has been recorded.
+ * The session recorder needs it because it writes from BeginIntermission,
+ * which is downstream of the Victory() call that opens the match row but is
+ * not the code that holds the id.
+ */
+int DB_MatchLastId(void)
+{
+	return db_last_match_id;
 }
 
 void DB_MatchRecord(edict_t *player, int match_id, int team)
@@ -1421,4 +1475,239 @@ qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
 
 	sqlite3_finalize(res);
 	return ok;
+}
+
+/* ================================================================= *
+ * SLIPGATE session recorder (sg_sessiondb)
+ *
+ * One row per client per match in sg_session_events -- who was actually on
+ * the server, on which side, and what they did while they were there.
+ *
+ * The counts are read from the per-client session stats array at match end
+ * (stats_get), not reconstructed from the sg_eventlog stream: every figure
+ * below already has a counter that the game maintains as it happens, and a
+ * counter is a better source than a re-parse of the text the server printed.
+ * The one exception is chat_lines, which no counter existed for -- see
+ * DB_SessionNoteChat.
+ *
+ * OFF BY DEFAULT. sg_sessiondb gates it, and it also needs the unified
+ * backend (ctf_statsdb 2), because a match_id only exists there.
+ * ================================================================= */
+
+static cvar_t *sg_sessiondb = NULL;
+
+/*
+ * Chat lines spoken this level, one slot per client index. Not part of the
+ * STATS_* array on purpose: stats_add routes through Match_CanScore, which
+ * refuses to count anything outside a running match, and chat before the
+ * countdown ends is still chat somebody typed.
+ */
+static int sess_chatlines[MAX_CLIENTS];
+
+/* the match already written, so a second call cannot double the attendance */
+static int sess_written_match = -1;
+
+static qboolean DB_SessionEnabled(void)
+{
+	if (!sg_sessiondb)
+		sg_sessiondb = gi.cvar("sg_sessiondb", "1", 0);
+	return sg_sessiondb->value != 0.0f;
+}
+
+/* 0-based client index for a client edict, or -1 if it is not one. */
+static int sess_client_index(edict_t *ent)
+{
+	int i;
+
+	if (!ent || !ent->client)
+		return -1;
+
+	i = (int)(ent - g_edicts) - 1;
+	if (i < 0 || i >= MAX_CLIENTS)
+		return -1;
+
+	return i;
+}
+
+/*
+ * One line said by this client. Called from Cmd_Say_f once the line has
+ * cleared the spam check and is going out, so this counts lines SPOKEN --
+ * a bot's chat arrives through SG_BotClientCommand -> ClientCommand ->
+ * Cmd_Say_f and is counted the same way a human's is.
+ *
+ * Counting here rather than in SG_cprintf's say path on purpose: the print
+ * path fires once per RECIPIENT, so a single line on a full server would
+ * score sixteen, and it would score them against the listeners rather than
+ * the speaker.
+ */
+void DB_SessionNoteChat(edict_t *ent)
+{
+	int i;
+
+	if (!DB_SessionEnabled())
+		return;
+
+	i = sess_client_index(ent);
+	if (i < 0)
+		return;
+
+	sess_chatlines[i]++;
+}
+
+/*
+ * Called from SpawnEntities at every level change. The chat counters are
+ * level scoped like the STATS_* array they sit beside, and the written-match
+ * latch is cleared so the next match can record.
+ *
+ * db_last_match_id goes with them, and that one matters: without it, a level
+ * that ends without Victory() opening a match row would leave the previous
+ * level's id standing, and the attendance for this match would be filed
+ * against the last one.
+ */
+void DB_SessionNewLevel(void)
+{
+	memset(sess_chatlines, 0, sizeof(sess_chatlines));
+	sess_written_match = -1;
+	db_last_match_id = -1;
+}
+
+/* the tracked major pickups, as one number */
+static int sess_major_items(edict_t *ent)
+{
+	return (int)(stats_get(ent, STATS_ITEM_QUAD) +
+	             stats_get(ent, STATS_ITEM_SHIELD) +
+	             stats_get(ent, STATS_ITEM_ARMOR) +
+	             stats_get(ent, STATS_ITEM_MEGA) +
+	             stats_get(ent, STATS_RUNE_STRENGTH) +
+	             stats_get(ent, STATS_RUNE_HASTE) +
+	             stats_get(ent, STATS_RUNE_REGEN) +
+	             stats_get(ent, STATS_RUNE_RESIST));
+}
+
+/*
+ * Write the attendance for the match Victory() just recorded.
+ *
+ * Called from BeginIntermission, which is where every way of ending a level
+ * converges and which has already run Victory() by the time we get here --
+ * so DB_MatchLastId() names the row this attendance belongs to.
+ *
+ * Bots: written whatever bot_stats says, flagged is_bot=1. That does not
+ * contradict CTF_TrackStatsFor, which exists to keep untracked bots out of
+ * the char_idx tables -- this table is keyed on the name and takes char_idx
+ * only when the player already had one, so nothing is allocated for a bot
+ * the server declined to track and no leaderboard reading match_players sees
+ * a bot appear. A query over this table that wants humans only says
+ * "WHERE is_bot = 0".
+ *
+ * Returns the number of rows written.
+ */
+int DB_SessionRecord(void)
+{
+	sqlite3_stmt *res = NULL;
+	int   match_id;
+	int   i, rows = 0;
+	qboolean intrans;
+	time_t now;
+	char  left_at[32];
+
+	if (!DB_SessionEnabled())
+		return 0;
+	if (CTF_StatsDBMode() != CTF_STATSDB_UNIFIED)
+		return 0;
+
+	match_id = DB_MatchLastId();
+	if (match_id < 0)
+		return 0;			/* no match row to hang the session off */
+	if (match_id == sess_written_match)
+		return 0;			/* already written for this match */
+
+	if (!dbconn && !DB_Conn_Start())
+		return 0;
+
+	if (sqlite3_prepare_v2(dbconn,
+			"INSERT INTO sg_session_events VALUES ("
+			"?,?,?,?,?,"			// match char name is_bot team
+			"?,?,?,"			// caps steals returns
+			"?,?,"				// kills deaths
+			"?,?,"				// damage given taken
+			"?,?,"				// major items, chat lines
+			"?,?)",				// joined_at left_at
+			-1, &res, NULL) != SQLITE_OK)
+	{
+		db_error("DB_SessionRecord");
+		return 0;
+	}
+
+	now = time(NULL);
+	db_stamp(left_at, sizeof(left_at), now);
+
+	/*
+	 * One transaction for the whole roster: sixteen separate commits at the
+	 * moment a level changes is sixteen fsyncs the server has to wait out.
+	 * If BEGIN is refused -- something else already has one open -- the rows
+	 * still go in one at a time, so the only thing lost is the speed.
+	 */
+	intrans = db_exec("BEGIN;");
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		edict_t *ent = g_edicts + 1 + i;
+		char     joined_at[32];
+		long     onserver;
+		int      b = 1;
+
+		if (!ent->inuse || !ent->client)
+			continue;
+
+		/*
+		 * How long they had been here, in seconds, from the frame the client
+		 * entered the game. Clamped at zero: a client that entered on this
+		 * very frame would otherwise round to a negative session.
+		 */
+		onserver = (long)(level.framenum - ent->client->ctf.original_enterframe) / 10;
+		if (onserver < 0)
+			onserver = 0;
+		db_stamp(joined_at, sizeof(joined_at), now - (time_t)onserver);
+
+		sqlite3_bind_int (res, b++, match_id);
+		sqlite3_bind_int (res, b++, DB_GetID(ent->client->pers.netname));
+		sqlite3_bind_text(res, b++, ent->client->pers.netname, -1, SQLITE_TRANSIENT);
+		sqlite3_bind_int (res, b++, (ent->flags & FL_BOT) ? 1 : 0);
+		sqlite3_bind_int (res, b++, ent->client->ctf.teamnum);
+
+		sqlite3_bind_int (res, b++, (int)stats_get(ent, STATS_CAPTURES));
+		sqlite3_bind_int (res, b++, (int)stats_get(ent, STATS_OFFENSE_FLAG));
+		sqlite3_bind_int (res, b++, (int)stats_get(ent, STATS_RETURNS));
+
+		sqlite3_bind_int (res, b++, (int)stats_get(ent, STATS_FRAGS));
+		sqlite3_bind_int (res, b++, (int)stats_get(ent, STATS_DEATHS));
+
+		sqlite3_bind_int64(res, b++, (sqlite3_int64)stats_get(ent, STATS_DAMAGE_GIVEN));
+		sqlite3_bind_int64(res, b++, (sqlite3_int64)stats_get(ent, STATS_DAMAGE_REC));
+
+		sqlite3_bind_int (res, b++, sess_major_items(ent));
+		sqlite3_bind_int (res, b++, sess_chatlines[i]);
+
+		sqlite3_bind_text(res, b++, joined_at, -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(res, b++, left_at, -1, SQLITE_TRANSIENT);
+
+		if (sqlite3_step(res) == SQLITE_DONE)
+			rows++;
+		else
+			db_error("DB_SessionRecord");
+
+		sqlite3_reset(res);
+		sqlite3_clear_bindings(res);
+	}
+
+	if (intrans)
+		db_exec("COMMIT;");
+	sqlite3_finalize(res);
+
+	sess_written_match = match_id;
+
+	if (rows)
+		gi.dprintf("session db: match %i, %i client rows\n", match_id, rows);
+
+	return rows;
 }

@@ -1,0 +1,11 @@
+-I.
+-Islipgate
+-Ibots
+-Ibots/botlib
+-Ibots/bspc
+-DLINUX
+-DSTDC_HEADERS
+-DARCH="x86_64"
+-DVER="dev"
+-std=gnu89
+-Wall

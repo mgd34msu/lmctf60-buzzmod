@@ -1,0 +1,219 @@
+=== WAVE 347 (free layout) ===
+---- s01-2v2 lmctf03 fill=2 600s ----
+STEALS=2  CAPS=1  RETURNS=0
+KILLS=7
+HOOK: fires=154 lands=47 fails=17
+SHELVES=82  DEADDOORS=4  CYCLES=0
+acts: swim=0 lift=0 tele=18 rj=2
+roles: escort_samples=52 recover_samples=81
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 58 | sample: (Arach[SG]): damage rune at our base
+kills by weapon: blaster=0 rail=4 rocket=2 mg=0 cg=0 hb=0 ssg=0
+ACC w1 fires=2 hits=0
+ACC w6 fires=14 hits=3
+ACC w8 fires=47 hits=7
+ACC w1 fires=2 hits=0
+ACC w6 fires=14 hits=3
+ACC w8 fires=47 hits=7
+ACC w1 fires=2 hits=0
+ACC w6 fires=14 hits=3
+ACC w8 fires=47 hits=7
+ACC w1 fires=2 hits=0
+ACC w6 fires=14 hits=3
+ACC w8 fires=47 hits=7
+---- s02-2v2 lmctf03 fill=2 600s ----
+STEALS=3  CAPS=1  RETURNS=0
+KILLS=17
+HOOK: fires=172 lands=71 fails=31
+SHELVES=49  DEADDOORS=3  CYCLES=0
+acts: swim=0 lift=14 tele=0 rj=9
+roles: escort_samples=58 recover_samples=120
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 76 | sample: (Caco[SG]): damage rune at yellow armor
+kills by weapon: blaster=0 rail=7 rocket=5 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=11 hits=2
+ACC w6 fires=68 hits=15
+ACC w8 fires=76 hits=10
+ACC w0 fires=11 hits=2
+ACC w6 fires=68 hits=15
+ACC w8 fires=76 hits=10
+ACC w0 fires=11 hits=2
+ACC w6 fires=68 hits=15
+ACC w8 fires=76 hits=10
+ACC w0 fires=11 hits=2
+ACC w6 fires=68 hits=15
+ACC w8 fires=76 hits=10
+---- s03-5v5 mactf06 fill=5 900s ----
+STEALS=6  CAPS=0  RETURNS=4
+KILLS=236
+HOOK: fires=1055 lands=568 fails=343
+SHELVES=28  DEADDOORS=0  CYCLES=0
+acts: swim=3 lift=8 tele=6 rj=11
+roles: escort_samples=101 recover_samples=155
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 287 | sample: (Arach[SG]): haste rune at our base
+kills by weapon: blaster=0 rail=170 rocket=40 mg=0 cg=0 hb=0 ssg=2
+ACC w6 fires=601 hits=83
+ACC w8 fires=2192 hits=214
+ACC w0 fires=73 hits=5
+ACC w1 fires=108 hits=93
+ACC w2 fires=5 hits=4
+ACC w6 fires=602 hits=83
+ACC w8 fires=2205 hits=217
+ACC w0 fires=73 hits=5
+ACC w1 fires=108 hits=93
+ACC w2 fires=5 hits=4
+ACC w6 fires=613 hits=84
+ACC w8 fires=2221 hits=218
+---- s04-5v5 mactf06 fill=5 900s ----
+STEALS=10  CAPS=2  RETURNS=6
+KILLS=247
+HOOK: fires=1271 lands=711 fails=407
+SHELVES=31  DEADDOORS=0  CYCLES=1
+acts: swim=9 lift=10 tele=15 rj=5
+roles: escort_samples=317 recover_samples=707
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 410 | sample: (Arach[SG]): haste rune at our base
+kills by weapon: blaster=0 rail=176 rocket=50 mg=0 cg=0 hb=1 ssg=2
+ACC w0 fires=50 hits=7
+ACC w1 fires=50 hits=66
+ACC w2 fires=43 hits=36
+ACC w6 fires=933 hits=120
+ACC w7 fires=44 hits=13
+ACC w8 fires=2163 hits=218
+ACC w0 fires=50 hits=7
+ACC w1 fires=50 hits=66
+ACC w2 fires=43 hits=36
+ACC w6 fires=933 hits=120
+ACC w7 fires=44 hits=13
+ACC w8 fires=2191 hits=220
+---- s05-5v5 lmctf22 fill=5 900s ----
+STEALS=9  CAPS=2  RETURNS=6
+KILLS=145
+HOOK: fires=1554 lands=722 fails=281
+SHELVES=69  DEADDOORS=0  CYCLES=15
+acts: swim=14 lift=11 tele=3 rj=6
+roles: escort_samples=492 recover_samples=1218
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 244 | sample: (Caco[SG]): damage rune at our base
+kills by weapon: blaster=0 rail=96 rocket=35 mg=0 cg=0 hb=1 ssg=1
+ACC w3 fires=11 hits=2
+ACC w4 fires=4 hits=0
+ACC w6 fires=405 hits=72
+ACC w7 fires=3 hits=2
+ACC w8 fires=945 hits=107
+ACC w0 fires=12 hits=1
+ACC w2 fires=16 hits=20
+ACC w3 fires=11 hits=2
+ACC w4 fires=4 hits=0
+ACC w6 fires=405 hits=72
+ACC w7 fires=3 hits=2
+ACC w8 fires=984 hits=110
+---- s06-5v3 lmctf44 fill=5:3 900s ----
+STEALS=9  CAPS=0  RETURNS=6
+KILLS=73
+HOOK: fires=855 lands=417 fails=229
+SHELVES=53  DEADDOORS=0  CYCLES=1
+acts: swim=5 lift=12 tele=13 rj=28
+roles: escort_samples=216 recover_samples=493
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 159 | sample: Rune[SG]: evening
+kills by weapon: blaster=0 rail=48 rocket=15 mg=0 cg=0 hb=1 ssg=1
+ACC w7 fires=33 hits=8
+ACC w8 fires=538 hits=58
+ACC w0 fires=6 hits=1
+ACC w2 fires=4 hits=14
+ACC w6 fires=206 hits=38
+ACC w7 fires=33 hits=8
+ACC w8 fires=560 hits=59
+ACC w0 fires=6 hits=1
+ACC w2 fires=4 hits=14
+ACC w6 fires=206 hits=38
+ACC w7 fires=33 hits=8
+ACC w8 fires=582 hits=61
+---- s07-5v3 lmctf44 fill=5:3 900s ----
+STEALS=11  CAPS=2  RETURNS=6
+KILLS=81
+HOOK: fires=996 lands=449 fails=211
+SHELVES=54  DEADDOORS=0  CYCLES=2
+acts: swim=8 lift=13 tele=20 rj=6
+roles: escort_samples=473 recover_samples=981
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 175 | sample: Rune[SG]: shall we
+kills by weapon: blaster=0 rail=53 rocket=17 mg=0 cg=0 hb=0 ssg=4
+ACC w0 fires=2 hits=0
+ACC w2 fires=53 hits=59
+ACC w4 fires=10 hits=7
+ACC w6 fires=278 hits=39
+ACC w7 fires=22 hits=9
+ACC w8 fires=641 hits=64
+ACC w0 fires=2 hits=0
+ACC w2 fires=53 hits=59
+ACC w4 fires=10 hits=7
+ACC w6 fires=278 hits=39
+ACC w7 fires=22 hits=9
+ACC w8 fires=641 hits=64
+---- s08-7v7 lmctf09 fill=7 600s ----
+STEALS=0  CAPS=0  RETURNS=0
+KILLS=159
+HOOK: fires=1339 lands=608 fails=375
+SHELVES=32  DEADDOORS=0  CYCLES=0
+acts: swim=18 lift=9 tele=14 rj=9
+roles: escort_samples=0 recover_samples=0
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 161 | sample: Rune[SG]: hello all
+kills by weapon: blaster=0 rail=116 rocket=29 mg=0 cg=1 hb=0 ssg=1
+ACC w6 fires=524 hits=66
+ACC w8 fires=1385 hits=142
+ACC w0 fires=62 hits=4
+ACC w2 fires=17 hits=21
+ACC w4 fires=13 hits=14
+ACC w6 fires=524 hits=66
+ACC w8 fires=1386 hits=143
+ACC w0 fires=62 hits=4
+ACC w2 fires=17 hits=21
+ACC w4 fires=13 hits=14
+ACC w6 fires=524 hits=66
+ACC w8 fires=1389 hits=144
+---- s09-ctrl lmctf01 fill=5 900s ----
+STEALS=5  CAPS=0  RETURNS=3
+KILLS=116
+HOOK: fires=1018 lands=491 fails=282
+SHELVES=303  DEADDOORS=0  CYCLES=1
+acts: swim=245 lift=5 tele=11 rj=17
+roles: escort_samples=252 recover_samples=326
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 114 | sample: (Arach[SG]): rune by the Health
+kills by weapon: blaster=0 rail=76 rocket=24 mg=0 cg=0 hb=0 ssg=0
+ACC w0 fires=75 hits=4
+ACC w6 fires=404 hits=63
+ACC w8 fires=760 hits=82
+ACC w0 fires=75 hits=4
+ACC w6 fires=404 hits=63
+ACC w8 fires=760 hits=82
+ACC w0 fires=75 hits=4
+ACC w6 fires=404 hits=63
+ACC w8 fires=760 hits=82
+ACC w0 fires=75 hits=4
+ACC w6 fires=404 hits=63
+ACC w8 fires=760 hits=82
+---- s10-5v1 smap05 fill=5:0 600s ----
+STEALS=6  CAPS=4  RETURNS=0
+KILLS=0
+HOOK: fires=351 lands=123 fails=72
+SHELVES=69  DEADDOORS=0  CYCLES=13
+acts: swim=31 lift=0 tele=0 rj=0
+roles: escort_samples=669 recover_samples=0
+attacker floors: {}
+defenders: 0 distinct 100u-cells, moving=0 still=0
+chat lines: 42 | sample: (Arach[SG]): haste rune at the rg
+kills by weapon: blaster=0 rail=0 rocket=0 mg=0 cg=0 hb=0 ssg=0

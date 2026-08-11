@@ -3,29 +3,14 @@
 #include "stdlog.h"
 
 
-//bat
-#ifdef OLDOBSERVERCODE
-
-void Drop_All (edict_t *ent)
-{
-	edict_t *flag;
-	flag = ClientHasFlag(ent);
-	if (flag)
-	{
-		ctf_playerdropflag(ent, flag->item);
-	}
-
-	if (ent->client->hook)
-	{
-		G_FreeEdict (ent->client->hook);
-		ent->client->hook = NULL;
-	}
-	if (ent->client->rune && ent->client->rune->item)
-	{
-		Drop_Rune(ent, ent->client->rune->item);
-	}
-}
-
+/*
+ * Observer_Start LIVES OUTSIDE the OLDOBSERVERCODE tomb. The 'new'
+ * observer system (Cmd_Observe_f + spectator cvar) shipped without any
+ * function that physically converts the body -- this whole file compiled
+ * to nothing, spectator_respawn has no callers, and a client could hold
+ * an observer team number while standing solid in the world. The
+ * conversion half is needed by the live path, so it lives in live code.
+ */
 // Turn us into an observer
 //    And make us incapable of affecting the game
 void Observer_Start (edict_t *ent)
@@ -69,6 +54,30 @@ void Observer_Start (edict_t *ent)
 	ctf_BSafePrint(PRINT_HIGH, message);
 	gi.centerprintf (ent, "You are now an observer.");
 
+}
+
+
+//bat
+#ifdef OLDOBSERVERCODE
+
+void Drop_All (edict_t *ent)
+{
+	edict_t *flag;
+	flag = ClientHasFlag(ent);
+	if (flag)
+	{
+		ctf_playerdropflag(ent, flag->item);
+	}
+
+	if (ent->client->hook)
+	{
+		G_FreeEdict (ent->client->hook);
+		ent->client->hook = NULL;
+	}
+	if (ent->client->rune && ent->client->rune->item)
+	{
+		Drop_Rune(ent, ent->client->rune->item);
+	}
 }
 
 void Observer_Stop (edict_t *ent)

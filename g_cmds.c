@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "ctf_file_io.h"
+#include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNoteChat from Cmd_Say_f
 #include "g_menu.h"
 #include "m_player.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -7,11 +8,8 @@
 #include "stdlog.h"
 #include "bat.h"
 #include "g_vote.h"
-#include "bl_main.h"
-#include "bl_spawn.h"
-#include "bl_cmd.h"
-#include "bl_redirgi.h"
-#include "bl_chat.h"
+#include "slipgate/sg_net.h"        // SG_ClearBotArgs
+#include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
@@ -2234,6 +2232,21 @@ void Cmd_Say_f (edict_t *ent, qboolean team, qboolean arg0)
 	string_replace(ent, temp, temp, sizeof temp);
 	strcat(text, temp);
 
+	// BUZZKILL - bots hear the chat. Before this line no chat reached the bots
+	// at all and no spoken order could be given. SG_ChatHear ignores bot
+	// speakers for ORDERS; it reads item calls off every team line regardless
+	// of who typed it, which is how a bot's own say_team feeds the team clock.
+	// team carries the say_team flag so bare orders ("defend") only work on
+	// team chat, and so an item call only counts on the channel one team hears.
+	SG_ChatHear(ent, temp, team);
+
+	// BUZZKILL - one line spoken, counted against the speaker for the session
+	// record. Here rather than in the broadcast loop below, which runs once
+	// per listener, and after the spam check above, which is what decides
+	// whether a line is said at all. Costs one cvar test when sg_sessiondb
+	// is off, which is the default.
+	DB_SessionNoteChat(ent);
+
 	// don't let text be too long for malicious reasons
 	if (strlen(text) > 150)
 		text[150] = 0;
@@ -2335,6 +2348,20 @@ int numspec;
 	//ent->client->pers.spectator = 1;
 	//ent->client->resp.spectator = 1;
 	ForceCommand(ent, "spectator 1");
+	/*
+	 * The conversion that was never called: spectator_respawn has no call
+	 * sites in this codebase and every Observer_Start site sits behind
+	 * OLDOBSERVERCODE -- so this function set the team number, the lists
+	 * said observer, and the body stayed solid in the world (reported
+	 * live, wave 77 era). Observer_Start is the physical half: non-solid,
+	 * noclip, model off. The team number is already negative here, so
+	 * its own guard passes.
+	 */
+	{
+		extern void Observer_Start(edict_t *e);
+
+		Observer_Start(ent);
+	}
 }
 
 // BUZZKILL - RUNE TOSS - START
@@ -2390,7 +2417,19 @@ void Cmd_ItemToss_f(edict_t* ent)
 	if (Q_stricmp(s, "hook") == 0)
 		s = "grappling hook";
 	if (Q_stricmp(s, "flag") == 0)
-		s = "Enemy Flag";
+	{
+		// BUZZKILL - the flag item's toss slot was never wired (gitem_t
+		// initializers end before it, leaving NULL), so "toss flag" only
+		// ever printed "Item is not tossable."  Route it through the
+		// flag's own drop handler, which already does the full dropped-
+		// flag dance (timer, position, team messages).
+		it = FindItem("Enemy Flag");
+		if (it && ent->client->pers.inventory[ITEM_INDEX(it)])
+			ctf_playerdropflag(ent, it);
+		else
+			ctf_SafePrint(ent, PRINT_HIGH, "You have no flag.\n");
+		return;
+	}
 	if ((Q_stricmp(s, "rune") == 0) ||
 		(Q_stricmp(s, "artifact") == 0) ||
 		(Q_stricmp(s, "tech") == 0))
@@ -2415,7 +2454,9 @@ void Cmd_ItemToss_f(edict_t* ent)
 
 	if (Q_stricmp(s, "ammo") == 0)
 	{
-		if (ent->client->pers.weapon->ammo)
+		// BUZZKILL - pers.weapon is NULL for observers and the just-dead;
+		// "toss ammo" then dereferenced it and took the server down
+		if (ent->client->pers.weapon && ent->client->pers.weapon->ammo)
 			it = FindItem(ent->client->pers.weapon->ammo);
 	}
 
@@ -2887,14 +2928,9 @@ void ClientCommand(edict_t* ent)
 	else if (Q_stricmp(cmd, "toss") == 0)
 		Cmd_ItemToss_f(ent);
 
-	// bot commands, and the hook/unhook the bots issue for the grapple
-	else if (BotCmd(cmd, ent, false))
-	{
-	}
-
 	else	// anything that doesn't match a command will be a chat
 		Cmd_Say_f (ent, false, true);
 
-	BotClearCommandArguments();
+	SG_ClearBotArgs();
 }
 

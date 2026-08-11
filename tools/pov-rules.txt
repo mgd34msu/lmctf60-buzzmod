@@ -1,0 +1,18 @@
+# POV kinematics exclusion rules (Mike, 2026-08-03).
+# Demos by these recorders are EXCLUDED from POV-derived data (movement
+# grammar, kinematics, POV route matrices). Their event streams and
+# entity-layer data remain usable. Substring match, case-insensitive.
+vereke
+ref|
+obs-cam
+shloo
+sluggy
+go team
+crt
+[?]jack
+(afk)
+afk-
+# --- kept explicitly by ruling: crack, imageomega, silk, lequen, zest,
+# jab/jabberwock, rusty, alienkiller, em/2t, seedless==sinsemilla (one
+# person, all tags), buzzkill (all tag variants = the owner).
+# --- serverkill == buzzkill per Mike ("pretty sure", 2026-08-03): POV-eligible
