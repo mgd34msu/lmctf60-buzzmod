@@ -390,6 +390,15 @@ EXITASYM=(0      0        0        0        0         0        0         0      
 # 84-wave "breather costs conversion" flag died with the discovery that
 # its control arm also ran ribbon/jitter 0 -- three variables, not one.
 # s09-ctrl stays 0 as always.
+# DE-PACE (sg_depace, rung-4 cut #4): the post-zone split proved the
+# gap is 86-89% MID-FIELD CO-TRAVEL, and anti-linger nulled because a
+# corridor offers no lateral gradient. Humans separate TEMPORALLY.
+# A lingering non-escort scales its throttle by the cvar (0.55) until
+# it exits the carrier's 400u bubble. Armed s03=0.55 vs s04. Bars:
+# escort_fraction_obs delta down at fixed parity, 16 waves; caps at
+# the same floor.
+DEPACE=(0      0        0.55     0        0         0        0         0        0        0)
+
 # ANTI-LINGER struck 2026-08-11 at the 16-wave floor: the 7-wave film
 # delta was noise (0.601 vs 0.636 final, ~0.5 sem), conversion leaning
 # down (0.120 vs 0.168). THIRD mechanism dead on this tell. A routing
@@ -517,6 +526,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_escortdose ${ESCORTDOSE[$i]}"
                 echo "set sg_lonewolf ${LONEWOLF[$i]}"
                 echo "set sg_unlinger ${UNLINGER[$i]}"
+                echo "set sg_depace ${DEPACE[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"
                 echo "set sg_noweave ${NOWEAVE[$i]}"

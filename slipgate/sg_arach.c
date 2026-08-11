@@ -60,6 +60,8 @@ typedef struct sg_bot_s
 	float		linger_since;   /* anti-linger: when this non-escort first
 	                             * came within 400u of its own carrier;
 	                             * 0 = not currently adjacent */
+	qboolean	linger_hot;     /* detection latched this think; consumed
+	                             * by the de-pace throttle at cmd time */
 	int			hook_phase;     /* 0 none, 1 aimed+firing, 2 rope out,
 	                             * 3 released mid-air, steering to land */
 	int			hook_link;      /* which link this ride is executing */
@@ -4728,7 +4730,8 @@ rally_done:;
 		qboolean linger_hot = false;
 		vec3_t car_org = { 0, 0, 0 };
 
-		if (gi.cvar("sg_unlinger", "0", 0)->value > 0.0f &&
+		if ((gi.cvar("sg_unlinger", "0", 0)->value > 0.0f ||
+		     gi.cvar("sg_depace", "0", 0)->value > 0.0f) &&
 		    role != SG_ROLE_CARRY && role != SG_ROLE_ESCORT)
 		{
 			static gitem_t *lg_flag;
@@ -4773,6 +4776,7 @@ rally_done:;
 		}
 		else
 			bot->linger_since = 0.0f;
+		bot->linger_hot = linger_hot;
 
 	for (li = sg_rune->first_link[bot->seed]; li >= 0; li = sg_rune->next_link[li])
 	{
@@ -9564,6 +9568,28 @@ no_hold:;
 			{
 				cmd.forwardmove = (short)(cmd.forwardmove * 0.30f);
 				cmd.sidemove = (short)(cmd.sidemove * 0.30f);
+			}
+
+			/*
+			 * DE-PACE (sg_depace, rung-4 cut #4). The post-zone split
+			 * killed the defender hypothesis: 86-89% of the escort
+			 * gap is mid-field co-travel, and the anti-linger
+			 * surcharge nulled because corridors have no lateral room
+			 * -- every candidate link sits inside the carrier's 400u
+			 * bubble, so a spatial price has no gradient. Humans
+			 * separate TEMPORALLY: varied speeds, item stops,
+			 * staggered starts. A lingering non-escort eases off the
+			 * throttle (cvar = the scale) until it falls out of the
+			 * bubble; the carrier never slows, the convoy de-phases,
+			 * and in film it reads as pacing variation, not flight.
+			 */
+			if (bot->linger_hot &&
+			    gi.cvar("sg_depace", "0", 0)->value > 0.0f)
+			{
+				float dp = gi.cvar("sg_depace", "0", 0)->value;
+
+				cmd.forwardmove = (short)(cmd.forwardmove * dp);
+				cmd.sidemove = (short)(cmd.sidemove * dp);
 			}
 
 			/* the terminal brake: cornering throttle at the stands,
