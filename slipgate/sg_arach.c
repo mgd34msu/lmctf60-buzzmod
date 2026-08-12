@@ -41,6 +41,7 @@ void		ClientBegin(edict_t *ent);
 void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
 
 #define SG_MAXBOTS      16
 #define FIELD_INF       0x3fffffff
@@ -5702,27 +5703,12 @@ rally_done:;
 
 		if (role == SG_ROLE_ATTACK)
 		{
-			edict_t *fent = (team == CTF_TEAM_RED) ? blueflag : redflag;
+			edict_t *fent = SG_EnemyFlag(team);
 
-			if (fent && fent->inuse && !fent->owner)
-			{
-				vec3_t fd12, fs12, ft12;
-
-				VectorSubtract(fent->s.origin, e->s.origin, fd12);
-				if (VectorLength(fd12) < 512.0f)
-				{
-					trace_t ftr;
-
-					VectorCopy(e->s.origin, fs12);
-					fs12[2] += e->viewheight;
-					VectorCopy(fent->s.origin, ft12);
-					ft12[2] += 16.0f;
-					ftr = gi.trace(fs12, NULL, NULL, ft12, e,
-					               MASK_OPAQUE);
-					if (ftr.fraction >= 1.0f)
-						flag_los = true;
-				}
-			}
+			if (fent &&
+			    SG_DistXY(fent->s.origin, e->s.origin) < 512.0f &&
+			    SG_CanSee(e, fent->s.origin, 16.0f))
+				flag_los = true;
 		}
 
 		if ((role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY) &&
@@ -8002,23 +7988,13 @@ no_hold:;
 			 * own redflag/blueflag pointers name the real entity.
 			 */
 			if (role == SG_ROLE_CARRY)
-			{
-				edict_t *own_item = (team == CTF_TEAM_RED) ? redflag
-				                                           : blueflag;
-
-				if (own_item && own_item->inuse &&
-				    !own_item->owner)
-					gf = own_item;
-			}
+				gf = SG_OwnFlag(team);
 
 			if (!gf && role == SG_ROLE_ATTACK)
 			{
 				/* enemy stand position is common knowledge */
-				edict_t *marker = G_Find(NULL, FOFS(classname),
-				            (team == CTF_TEAM_RED) ? "info_flag_blue"
-				                                   : "info_flag_red");
-				edict_t *enemy_item = (team == CTF_TEAM_RED) ? blueflag
-				                                             : redflag;
+				edict_t *marker = SG_FlagStand(team, false);
+				edict_t *enemy_item = SG_EnemyFlag(team);
 
 				gf = marker;
 				/*
@@ -8033,16 +8009,10 @@ no_hold:;
 				 * item -- but only while it sits at home: a dropped
 				 * flag elsewhere is Rule 19 intel the bot may not have.
 				 */
-				if (enemy_item && enemy_item->inuse &&
-				    !enemy_item->owner && marker)
-				{
-					vec3_t md9;
-
-					VectorSubtract(enemy_item->s.origin,
-					               marker->s.origin, md9);
-					if (VectorLength(md9) < 64.0f)
-						gf = enemy_item;
-				}
+				if (enemy_item && marker &&
+				    SG_DistXY(enemy_item->s.origin,
+				              marker->s.origin) < 64.0f)
+					gf = enemy_item;
 			}
 			else if (!gf)
 			{
