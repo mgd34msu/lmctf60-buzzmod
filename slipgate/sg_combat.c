@@ -3373,60 +3373,20 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 }
 
 
-void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
+/*
+ * TARGET HELD (split from SG_CombatFrame, 2026-08-12 standards pass;
+ * body verbatim): continuity and the settle clock, the engaged flag,
+ * the corner-hold clear, and rule F1's stability clock. Emits the
+ * range and the projectile-stability verdict the aim model reads.
+ */
+static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
+                      edict_t *enemy, float skill, vec3_t eye,
+                      vec3_t forward, vec3_t mid, vec3_t aim,
+                      float *dist_out, qboolean *vel_stable_out,
+                      qboolean *out_engaged)
 {
-	sg_combat_state_t	*st;
-	edict_t				*enemy;
-	vec3_t				eye, forward, mid, lead, aim, endp, impact;
-	vec3_t				threat;
-	float				dist, held, frac, mag, len, flight;
-	float				yaw, pitch, skill, settle;
-	float				residual, span, shape;
-	trace_t				tr;
-	int					ci, band, want, inhand;
-	qboolean			clear_shot, carrier, ballistic, vel_stable;
-	qboolean			rattled, textured;
-
-	if (out_engaged)
-		*out_engaged = false;
-
-	if (!self || !self->inuse || !self->client || !cmd)
-		return;
-	if (self->deadflag == DEAD_DEAD || self->health <= 0)
-		return;
-	if (self->movetype == MOVETYPE_NOCLIP)
-		return;
-
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	st = &sg_combat[ci];
-	Combat_CacheItems();
-	skill = Combat_Skill(self);		/* team level less this bot's own handicap */
-
-	/* eyes and current facing. v_angle is the view the last cmd produced. */
-	VectorCopy(self->s.origin, eye);
-	eye[2] += self->viewheight;
-	AngleVectors(self->client->v_angle, forward, NULL, NULL);
-
-	/*
-	 * Anything shoot us lately from somewhere we were not looking? The
-	 * window is the fluster clock: about 1.2 s at the top of the ladder,
-	 * twice that at the bottom.
-	 */
-	rattled = SG_RecentUnseenHit(self,
-	                             Combat_SkillLerp(skill, SG_THREAT_S0,
-	                                              SG_THREAT_S4), threat);
-
-	sg_cbt_why[7]++;                        /* frames that got this far */
-	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL);
-	if (enemy)
-		sg_cbt_why[8]++;                    /* frames with a target */
-	if (!enemy)
-	{
-		Cbt_Idle(self, st, cmd, eye);
-		return;
-	}
+	float dist;
+	qboolean vel_stable;
 
 	Combat_Center(enemy, mid);
 	VectorSubtract(mid, eye, aim);
@@ -3516,6 +3476,69 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * the frames a projectile is in hand -- a clock that only ticks while it
 	 * is being read never reaches its threshold */
 	vel_stable = Combat_VelStable(st, enemy);
+
+	*dist_out = dist;
+	*vel_stable_out = vel_stable;
+}
+
+
+void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
+{
+	sg_combat_state_t	*st;
+	edict_t				*enemy;
+	vec3_t				eye, forward, mid, lead, aim, endp, impact;
+	vec3_t				threat;
+	float				dist, held, frac, mag, len, flight;
+	float				yaw, pitch, skill, settle;
+	float				residual, span, shape;
+	trace_t				tr;
+	int					ci, band, want, inhand;
+	qboolean			clear_shot, carrier, ballistic, vel_stable;
+	qboolean			rattled, textured;
+
+	if (out_engaged)
+		*out_engaged = false;
+
+	if (!self || !self->inuse || !self->client || !cmd)
+		return;
+	if (self->deadflag == DEAD_DEAD || self->health <= 0)
+		return;
+	if (self->movetype == MOVETYPE_NOCLIP)
+		return;
+
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+		return;
+	st = &sg_combat[ci];
+	Combat_CacheItems();
+	skill = Combat_Skill(self);		/* team level less this bot's own handicap */
+
+	/* eyes and current facing. v_angle is the view the last cmd produced. */
+	VectorCopy(self->s.origin, eye);
+	eye[2] += self->viewheight;
+	AngleVectors(self->client->v_angle, forward, NULL, NULL);
+
+	/*
+	 * Anything shoot us lately from somewhere we were not looking? The
+	 * window is the fluster clock: about 1.2 s at the top of the ladder,
+	 * twice that at the bottom.
+	 */
+	rattled = SG_RecentUnseenHit(self,
+	                             Combat_SkillLerp(skill, SG_THREAT_S0,
+	                                              SG_THREAT_S4), threat);
+
+	sg_cbt_why[7]++;                        /* frames that got this far */
+	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL);
+	if (enemy)
+		sg_cbt_why[8]++;                    /* frames with a target */
+	if (!enemy)
+	{
+		Cbt_Idle(self, st, cmd, eye);
+		return;
+	}
+
+	Cbt_Track(self, st, enemy, skill, eye, forward, mid, aim,
+	          &dist, &vel_stable, out_engaged);
 
 	/* ------------------------------------------------------ the weapon */
 
