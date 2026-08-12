@@ -45,6 +45,8 @@ else
     fail "q2ded not found at $Q2DED -- build yquake2 (github.com/yquake2/yquake2) and either place it there or export Q2DED=/path/to/q2ded"
 fi
 
+GAMEROOT="${Q2ROOT:-$HOME/Games/Quake2}"
+
 # 3b. Quake 2 base data (retail -- we cannot ship it)
 if ls "$GAMEROOT"/baseq2/pak0.pak >/dev/null 2>&1 || ls "${Q2ROOT:-$HOME/Games/Quake2}"/baseq2/pak*.pak >/dev/null 2>&1; then
     pass "baseq2 retail data"
@@ -53,7 +55,6 @@ else
 fi
 
 # 4. The game directory the fleet runs in
-GAMEROOT="${Q2ROOT:-$HOME/Games/Quake2}"
 GAMEDIR="$GAMEROOT/lmctf-hooktest"
 if [ -d "$GAMEDIR" ]; then
     pass "fleet gamedir $GAMEDIR"
