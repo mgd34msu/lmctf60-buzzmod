@@ -391,7 +391,7 @@ STRICTGRAB=(1  1        1        1        1         0        1         1        
 # trial was ruled against an aggregate; dose 0.5 on s03 vs s04 control,
 # eye = fightsheet rail_window_exposure (0.896), 16-wave floor from the
 # arming wave. Prior hookpong (s03) struck null on revisit_spike2_mass.
-RAILRHYTHM=(0  0        0.5      0        0         0        0         0        0        0)
+RAILRHYTHM=(0  0        0        0        0         0        0         0        0        0)
 
 # HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
 # three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).

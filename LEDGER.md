@@ -41,6 +41,16 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## Railrhythm STRUCK, final (2026-08-12 ~13:20)
+
+Dose 0.5, 18 waves/arm on its purpose-built eye: rail_window_exposure
+0.0819 vs 0.0848 control -- the delta is ~15% of one arm sd. Second
+strike (the first, at full dose, was ruled on a bad aggregate; this
+retrial had the right instrument and an honest dose). The mechanism is
+dead. s03/s04 pair returns to adopted-steady canary duty -- nothing
+arms until a mechanism worth arming exists (patrol and itemlead-dose
+await owner sign-off).
+
 ## RULE 24 (owner, 2026-08-12 ~12:15): humans are the MINIMUM bar
 
 "Humans should be the minimum bar, and bots should have very few areas
