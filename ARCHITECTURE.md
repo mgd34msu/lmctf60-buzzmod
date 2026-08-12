@@ -28,9 +28,18 @@ engine (yquake2)             id's masonry -- untouched
    └─ ACTUATION               move/emit: policy becomes a usercmd
    └─ PRESENTATION            net client shim, personas, chat voice
    └─ RECORD                  stats DB, stdlog -- one write path
-   └─ INSTRUMENTS             film/route/fight/team/outcome/conduct/trip
-                              sheets -- first-class, not an afterthought
 ```
+
+**Scope note (2026-08-12, owner's boundary):** this document describes
+RELEASE ASSETS only -- the code that ships as the three game modules
+plus the pak, nothing else. The development environment (the fleet,
+the film instruments, the judging harness, the corpus and fixtures) is
+deliberately absent from the layering above: it never ships, and
+treating it as platform structure muddies both. Its own architecture
+and law live in `TOOLING.md`. The one place the two worlds touch is
+the release job's Assemble step, which packages exactly four files --
+that list is the boundary, and the release-4 near-miss (a dead
+dev-file bundle in the packaging) is why it stays explicit.
 
 Two seams get formal surfaces:
 - **`sg_hooks.h`** — every game-DLL-facing SLIPGATE entry point, one
@@ -50,7 +59,8 @@ Two seams get formal surfaces:
 - **Earned perception.** Belief tables with ages, Rule 19 comms as the
   only item intelligence. No judged rung required weakening it.
 - **The film gate.** Instruments + blind judges + pre-registered bars.
-  It caught what code review never would have.
+  It caught what code review never would have. (The gate is
+  development process, not release structure -- see TOOLING.md.)
 - **Evidence-carrying banners.** Wave numbers and verdicts in comments
   are this codebase's institutional memory.
 - **The print shim.** All 164 bprintf/cprintf sites already funnel
