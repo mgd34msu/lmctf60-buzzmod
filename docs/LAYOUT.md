@@ -65,10 +65,18 @@ is the same missing primitive.
    fit-verified by measurement, whole-screen downgrade never partial
    truncation), and content too deep for any single screen belongs to
    the console print stream, which composes across frames without
-   practical limit. Serving is push-on-change: stats events mark
-   boards dirty; a 1 Hz dirty-gated tick rebuilds and pushes to
-   current viewers; milestone events (captures, match end) push
-   immediately; caches serve all requests instantly.
+   practical limit. Serving is push-on-change in three tiers, cheap
+   to expensive: SETTLED boards (season standings, records, lifetime,
+   activity) rebuild exactly once per game at the match-end stats
+   commit -- one DB query per map serves every viewer all match;
+   TICKED boards (in-match scoreboards) rebuild on a 1 Hz dirty-gated
+   coalescing tick; MILESTONE events (captures, match end, the match
+   report) push immediately, their rarity being their own rate limit.
+   Caches serve all requests instantly; match end fires the milestone
+   and settled tiers together. The pipe is asymmetric: the uplink is
+   free-form (any client command with arguments reaches our handler),
+   so request-driven DB reports are unlimited in what they ask -- only
+   the response must dress in the fixed vocabulary.
 3. **Configstring-backed dynamic text**: 512 free slots is a huge
    untapped surface — team names, top-scorer lines, rotating info,
    per-client strings via stat_string, all updatable without layout
