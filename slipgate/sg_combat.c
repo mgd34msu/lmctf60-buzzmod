@@ -3111,6 +3111,155 @@ static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
 
 /* ------------------------------------------------------------------ frame */
 
+/*
+ * THE TRIGGER (split from SG_CombatFrame, 2026-08-12 standards pass;
+ * body verbatim): everything between a firing solution and the button
+ * -- tap variance, fire discipline, the ON/OFF windows, and the rule-S3
+ * invariant. Ends the combat frame either way.
+ */
+static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
+                        sg_combat_state_t *st, float skill, int inhand)
+{
+	/*
+	 * TAP VARIANCE (sg_tapvar, rung-3 set #1 ranked tell #2). Every
+	 * judge read the rail cadence as "a single razor spike at ~1.7s,
+	 * zero spread": a held button refires a slow weapon the frame its
+	 * cycle completes, and the ON/OFF windows below never gate it
+	 * because the cycle outlasts the window rhythm. A human re-aims
+	 * between deliberate shots -- pub rail cadence is ragged. Each time
+	 * a slow weapon finishes firing and comes ready again, the next
+	 * press waits a skill-scaled beat drawn fresh per shot: the ladder's
+	 * bottom taps 0.2-0.7s late, the top 0.05-0.19s (pros with reload
+	 * cues ARE near-metronomic -- the spread stays honest to skill).
+	 */
+	if (sg_cv.tapvar->value > 0.0f)
+	{
+		int hw = Combat_Held(self);
+
+		if (hw == SG_W_RAILGUN || hw == SG_W_SSHOTGUN ||
+		    hw == SG_W_ROCKETLAUNCHER || hw == SG_W_GRENADELAUNCHER ||
+		    hw == SG_W_SHOTGUN || hw == SG_W_BFG)
+		{
+			/*
+			 * Shot detection by AMMO DECREMENT, not weaponstate: under
+			 * a held trigger the gun re-enters FIRING inside the same
+			 * server frame and a 10Hz think never observes READY -- the
+			 * first cut of this feature was inert for exactly that
+			 * reason (probe: 0 taps in 400s of 5v5). Ammo cannot lie.
+			 */
+			{
+				int ta = (self->client->ammo_index > 0)
+				    ? self->client->pers.inventory[self->client->ammo_index]
+				    : 0;
+
+				if (ta < st->tap_ammo)
+				{
+					/* the cvar is a DOSE: 1 = the 0.08-0.22s jitter
+					 * that provably fires but cannot widen a 1.7s
+					 * cycle's CV; 3 = 0.24-0.66s holds, the scale a
+					 * human's deliberate re-aim actually occupies */
+					st->tap_until = level.time +
+					    sg_cv.tapvar->value *
+					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
+					    (0.4f + 1.2f * random());
+					if (sg_cv.debug->value)
+						gi.dprintf("TAPDBG %s w=%d delay=%.2f\n",
+						           self->client->pers.netname, hw,
+						           st->tap_until - level.time);
+				}
+				st->tap_ammo = ta;
+			}
+			if (level.time < st->tap_until)
+			{
+				sg_cbt_why[5]++;
+				return;
+			}
+		}
+	}
+
+	/*
+	 * FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell -- the answer
+	 * the tapvar family could not be). The judges read bot cadence as
+	 * needles on the refire line because the trigger is independent of
+	 * the legs: a bot mid-jink fires the frame the gun cycles. A human
+	 * holds through the jockeying and shoots from a planted beat --
+	 * the ragged inter-shot spread IS the movement showing through the
+	 * trigger. Suppress fire until the body's own heading has been
+	 * stable ~0.18s; every strafe reversal restarts the clock. The
+	 * carrier is exempt (its flee trigger conduct is separately tuned).
+	 */
+	if (sg_cv.firedisc->value > 0.0f &&
+	    !Combat_Carrying(self))
+	{
+		float sp2 = self->velocity[0] * self->velocity[0]
+		          + self->velocity[1] * self->velocity[1];
+
+		if (sp2 > 150.0f * 150.0f)
+		{
+			vec3_t nd;
+
+			nd[0] = self->velocity[0]; nd[1] = self->velocity[1];
+			nd[2] = 0.0f;
+			VectorNormalize(nd);
+			if (DotProduct(nd, st->self_dir) < 0.86f)
+				st->self_stable = level.time;
+			VectorCopy(nd, st->self_dir);
+			if (level.time < st->self_stable + 0.18f)
+			{
+				sg_cbt_why[5]++;
+				return;
+			}
+		}
+	}
+
+	if (level.time >= st->win_end)
+	{
+		float base;
+
+		st->win_fire = !st->win_fire;
+		base = st->win_fire ? SG_FIRE_ON
+		                    : Combat_SkillLerp(skill, SG_FIRE_OFF_S0,
+		                                       SG_FIRE_OFF_S4);
+		st->win_end = level.time + base * (1.0f + SG_FIRE_JITTER * crandom());
+	}
+
+	if (!st->win_fire)
+	{
+		sg_cbt_why[5]++;
+		return;
+	}
+
+	/*
+	 * The invariant, last thing before the button.
+	 *
+	 * BUTTON_ATTACK is the ROPE whenever the grapple is pers.weapon: Cmd_Hook_f
+	 * degenerates to ForceCommand("+attack") (g_cmds.c:1405-1412) and
+	 * Weapon_Hook aborts the rope the moment the button is not held
+	 * (p_weapon.c:2139-2144). Combat_Held returns -1 for the grapple and for
+	 * anything else it cannot name, so this single test is the whole of rule
+	 * S3's enforcement at the trigger. Rule S2 is the second half: while
+	 * newweapon is non-NULL a switch is in flight (p_weapon.c:376) and the
+	 * trigger stays off until ChangeWeapon lands it.
+	 *
+	 * Note what is NOT tested: hookstate. An OFFHAND rope is sustained every
+	 * server frame by ClientEndServerFrame with no button input at all
+	 * (p_view.c:988-990), which is what makes WEAPONS.md 2.4-D2 possible --
+	 * a bot can grapple and shoot at the same time, provided the grapple is
+	 * never pers.weapon.
+	 */
+	if (Combat_Held(self) < 0 || self->client->newweapon)
+	{
+		sg_cbt_why[6]++;
+		return;
+	}
+
+	sg_cbt_why[0]++;
+	if (inhand >= 0 && inhand < SG_NUM_WEAPONS)
+		sg_cbt_fire[inhand]++;
+	cmd->buttons |= BUTTON_ATTACK;
+}
+
+
 void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 {
 	sg_combat_state_t	*st;
@@ -3762,143 +3911,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		return;
 	}
 
-	/*
-	 * TAP VARIANCE (sg_tapvar, rung-3 set #1 ranked tell #2). Every
-	 * judge read the rail cadence as "a single razor spike at ~1.7s,
-	 * zero spread": a held button refires a slow weapon the frame its
-	 * cycle completes, and the ON/OFF windows below never gate it
-	 * because the cycle outlasts the window rhythm. A human re-aims
-	 * between deliberate shots -- pub rail cadence is ragged. Each time
-	 * a slow weapon finishes firing and comes ready again, the next
-	 * press waits a skill-scaled beat drawn fresh per shot: the ladder's
-	 * bottom taps 0.2-0.7s late, the top 0.05-0.19s (pros with reload
-	 * cues ARE near-metronomic -- the spread stays honest to skill).
-	 */
-	if (sg_cv.tapvar->value > 0.0f)
-	{
-		int hw = Combat_Held(self);
-
-		if (hw == SG_W_RAILGUN || hw == SG_W_SSHOTGUN ||
-		    hw == SG_W_ROCKETLAUNCHER || hw == SG_W_GRENADELAUNCHER ||
-		    hw == SG_W_SHOTGUN || hw == SG_W_BFG)
-		{
-			/*
-			 * Shot detection by AMMO DECREMENT, not weaponstate: under
-			 * a held trigger the gun re-enters FIRING inside the same
-			 * server frame and a 10Hz think never observes READY -- the
-			 * first cut of this feature was inert for exactly that
-			 * reason (probe: 0 taps in 400s of 5v5). Ammo cannot lie.
-			 */
-			{
-				int ta = (self->client->ammo_index > 0)
-				    ? self->client->pers.inventory[self->client->ammo_index]
-				    : 0;
-
-				if (ta < st->tap_ammo)
-				{
-					/* the cvar is a DOSE: 1 = the 0.08-0.22s jitter
-					 * that provably fires but cannot widen a 1.7s
-					 * cycle's CV; 3 = 0.24-0.66s holds, the scale a
-					 * human's deliberate re-aim actually occupies */
-					st->tap_until = level.time +
-					    sg_cv.tapvar->value *
-					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
-					    (0.4f + 1.2f * random());
-					if (sg_cv.debug->value)
-						gi.dprintf("TAPDBG %s w=%d delay=%.2f\n",
-						           self->client->pers.netname, hw,
-						           st->tap_until - level.time);
-				}
-				st->tap_ammo = ta;
-			}
-			if (level.time < st->tap_until)
-			{
-				sg_cbt_why[5]++;
-				return;
-			}
-		}
-	}
-
-	/*
-	 * FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell -- the answer
-	 * the tapvar family could not be). The judges read bot cadence as
-	 * needles on the refire line because the trigger is independent of
-	 * the legs: a bot mid-jink fires the frame the gun cycles. A human
-	 * holds through the jockeying and shoots from a planted beat --
-	 * the ragged inter-shot spread IS the movement showing through the
-	 * trigger. Suppress fire until the body's own heading has been
-	 * stable ~0.18s; every strafe reversal restarts the clock. The
-	 * carrier is exempt (its flee trigger conduct is separately tuned).
-	 */
-	if (sg_cv.firedisc->value > 0.0f &&
-	    !Combat_Carrying(self))
-	{
-		float sp2 = self->velocity[0] * self->velocity[0]
-		          + self->velocity[1] * self->velocity[1];
-
-		if (sp2 > 150.0f * 150.0f)
-		{
-			vec3_t nd;
-
-			nd[0] = self->velocity[0]; nd[1] = self->velocity[1];
-			nd[2] = 0.0f;
-			VectorNormalize(nd);
-			if (DotProduct(nd, st->self_dir) < 0.86f)
-				st->self_stable = level.time;
-			VectorCopy(nd, st->self_dir);
-			if (level.time < st->self_stable + 0.18f)
-			{
-				sg_cbt_why[5]++;
-				return;
-			}
-		}
-	}
-
-	if (level.time >= st->win_end)
-	{
-		float base;
-
-		st->win_fire = !st->win_fire;
-		base = st->win_fire ? SG_FIRE_ON
-		                    : Combat_SkillLerp(skill, SG_FIRE_OFF_S0,
-		                                       SG_FIRE_OFF_S4);
-		st->win_end = level.time + base * (1.0f + SG_FIRE_JITTER * crandom());
-	}
-
-	if (!st->win_fire)
-	{
-		sg_cbt_why[5]++;
-		return;
-	}
-
-	/*
-	 * The invariant, last thing before the button.
-	 *
-	 * BUTTON_ATTACK is the ROPE whenever the grapple is pers.weapon: Cmd_Hook_f
-	 * degenerates to ForceCommand("+attack") (g_cmds.c:1405-1412) and
-	 * Weapon_Hook aborts the rope the moment the button is not held
-	 * (p_weapon.c:2139-2144). Combat_Held returns -1 for the grapple and for
-	 * anything else it cannot name, so this single test is the whole of rule
-	 * S3's enforcement at the trigger. Rule S2 is the second half: while
-	 * newweapon is non-NULL a switch is in flight (p_weapon.c:376) and the
-	 * trigger stays off until ChangeWeapon lands it.
-	 *
-	 * Note what is NOT tested: hookstate. An OFFHAND rope is sustained every
-	 * server frame by ClientEndServerFrame with no button input at all
-	 * (p_view.c:988-990), which is what makes WEAPONS.md 2.4-D2 possible --
-	 * a bot can grapple and shoot at the same time, provided the grapple is
-	 * never pers.weapon.
-	 */
-	if (Combat_Held(self) < 0 || self->client->newweapon)
-	{
-		sg_cbt_why[6]++;
-		return;
-	}
-
-	sg_cbt_why[0]++;
-	if (inhand >= 0 && inhand < SG_NUM_WEAPONS)
-		sg_cbt_fire[inhand]++;
-	cmd->buttons |= BUTTON_ATTACK;
+	Cbt_Trigger(self, cmd, st, skill, inhand);
 }
 
 /*
