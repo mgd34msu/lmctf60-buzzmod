@@ -41,6 +41,26 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## RUNG 4 SET #2: PASSED (2026-08-12 ~07:50)
+
+Pooled 6/18 against the pre-registered chance-or-worse bar (precedents:
+3/18 rung 1, 5/18 rung 3). Two of three judges FULLY INVERTED (0/6
+each) -- the same shape as rung 3's pass: both read the bots'
+consistent escort coverage as human deliberateness and the humans'
+ragged solo carries as machine behavior. The third judge guessed the
+opposite polarity and scored 6/6 with it. Set: 3 post-deploy teamskew
+bot games (waves 924/934/945, s05) vs the 3 protocol human lmctf22
+demos, sealed captions, per rung4-protocol.md verbatim.
+
+**Actionable residual, logged per the tell-ranking procedure**: all 18
+sheet-sorts were CORRECT -- escort_fraction separates the populations
+completely (bot 0.4-0.8 vs human 0.03-0.32 on this set). The disguise
+holds on polarity ignorance alone. The lever is escortdose (adopted at
+35): a dose-down trial arms on the freed s05/s08 pair -- escortdose 20
+vs 35, bar escort_fraction_obs toward the human 0.03-0.32 band, caps
+guarded at the 16-wave floor (the 35 adoption was a caps winner; going
+lower must not give the caps back).
+
 ## Verdicts, first post-deploy floor (2026-08-12 ~06:40, waves 924-940)
 
 - **hookpong STRUCK (null)**: revisit_spike2_mass 0.307 (on) vs 0.299
@@ -146,7 +166,7 @@ commit zero-warning, every CI job verified individually.
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
-| 4. Team decisions | four mechanisms down; routejitter-25 is cut #5 | escort_fraction_obs passes every radius and leave-one-out (0.918–0.986 both maps) but is MORE parity-sensitive than the old scalar — separation survives the coverage knob rather than being freed from it. **Measure rung-4 fixes as between-arm deltas at fixed parity; never as distance-to-human-band.** Two mechanisms down; breather ablation live |
+| 4. Team decisions | **PASSED** -- set #2: 6/18, two judges inverted | escort_fraction_obs passes every radius and leave-one-out (0.918–0.986 both maps) but is MORE parity-sensitive than the old scalar — separation survives the coverage knob rather than being freed from it. **Measure rung-4 fixes as between-arm deltas at fixed parity; never as distance-to-human-band.** Two mechanisms down; breather ablation live |
 | 5. Match outcomes | protocol written; judging deferred by design | its only eye (steals_total, 0.964) measures the steal-volume gap stage 2 exists to close — so rung-5's blocker and stage-2's first number are THE SAME WORK. Judging waits; the work does not |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
