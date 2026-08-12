@@ -133,10 +133,16 @@ is pollable).
 
 ## 5. The coming split (owner's direction, 2026-08-12)
 
-SLIPGATE is likely to become its own repository — the bot platform as
-a standalone project, with LMCTF as its first host game. That reorders
-nothing below but re-weights it: every seam item is now also a
-split-readiness item.
+SLIPGATE will likely become its own repository eventually — the bot
+platform as a standalone project, with LMCTF as its first host. This
+is a LONG-TERM direction, not a near-term task: beyond the seam work
+below, a real split needs game-mode generalization the platform does
+not have today — the decision layer thinks in CTF (roles, flag
+fields, carrier logic would need a DM-only mode or a pluggable
+objective model), and the movement layer assumes LMCTF's offhand
+grapple (a non-offhand-hook or hookless host changes the proof and
+pursuit machinery). Nothing here schedules that work; the direction
+just informs today's choices:
 
 - `sg_hooks.h` (P1 item 5) becomes the platform's public API in
   waiting — after the split it is the surface a host game implements
