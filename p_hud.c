@@ -351,7 +351,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int         dropped;
     int         legacy_len;
     int         line_len;
-    qboolean    rune_line_emitted_this_row;
 
     int     mvp_n;
     int     mvp_x[9], mvp_y[9];
@@ -361,6 +360,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     // Observers listing scratch -- see the conversion note at its use
     // site below for the duplication quirk this replicates.
     int         els2_n;
+    int         els2_start = 0;    /* current category's slice start */
     int         els2_x[64], els2_y[64];
     char        els2_text[64][32];
     int         els2_len;
@@ -620,7 +620,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         {
             x = 0;
             y = 48 + 8 * i;
-            rune_line_emitted_this_row = false;
 
             if (cl->rune)
             {
@@ -644,7 +643,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 elems[n].u.text.highlight = true;
                 n++;
 
-                rune_line_emitted_this_row = true;
             }
 
             if (cl_ent == Query_DMVP())
@@ -652,30 +650,15 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 				Com_sprintf(red_buf[i].main_text, sizeof(red_buf[i].main_text), "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
 				red_buf[i].main_text[19] = 0;
 
-				// Discovered quirk, preserved on purpose (see this
-				// function's banner): Show_String's strcat meant a
-				// DMVP/OMVP row that ALSO carried a rune got the rune
-				// line's bytes folded a second time into this row's
-				// flush, because the original never cleared string2
-				// between the rune block above and Show_String here.
-				// The ctf/else branch below uses a plain (overwriting)
-				// sprintf and never inherits this.
-				line_len = (rune_line_emitted_this_row ?
-						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 - 136 + 80, y, player_rune) : 0)
-					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, red_buf[i].main_text);
+				// FIXED (found during the declarative conversion): the
+				// original's strcat path drew an MVP row's rune line
+				// TWICE -- once from the rune block above and again
+				// folded into this row's flush, because string2 was
+				// never cleared between them. One rune line per row.
+				line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, red_buf[i].main_text);
 				if (legacy_len + line_len > 1024)
 					break;
 				legacy_len += line_len;
-
-				if (rune_line_emitted_this_row)
-				{
-					elems[n].kind = UI_TEXT;
-					elems[n].u.text.x = x + 32 - 136 + 80;
-					elems[n].u.text.y = y;
-					elems[n].u.text.text = player_rune;
-					elems[n].u.text.highlight = true;
-					n++;
-				}
 
 				elems[n].kind = UI_TEXT;
 				elems[n].u.text.x = x;
@@ -689,22 +672,12 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 				Com_sprintf(red_buf[i].main_text, sizeof(red_buf[i].main_text), "O%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
 				red_buf[i].main_text[19] = 0;
 
-				line_len = (rune_line_emitted_this_row ?
-						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 - 136 + 80, y, player_rune) : 0)
-					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, red_buf[i].main_text);
+				/* FIXED: one rune line per row (the pre-conversion strcat
+				 * path drew an MVP row's rune twice; see the red DMVP site) */
+				line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, red_buf[i].main_text);
 				if (legacy_len + line_len > 1024)
 					break;
 				legacy_len += line_len;
-
-				if (rune_line_emitted_this_row)
-				{
-					elems[n].kind = UI_TEXT;
-					elems[n].u.text.x = x + 32 - 136 + 80;
-					elems[n].u.text.y = y;
-					elems[n].u.text.text = player_rune;
-					elems[n].u.text.highlight = true;
-					n++;
-				}
 
 				elems[n].kind = UI_TEXT;
 				elems[n].u.text.x = x;
@@ -831,7 +804,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         {
             x = 160;
             y = 48 + 8 * i;
-            rune_line_emitted_this_row = false;
 
             if (cl->rune)
             {
@@ -855,7 +827,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 elems[n].u.text.highlight = true;
                 n++;
 
-                rune_line_emitted_this_row = true;
             }
 
             if (cl_ent == Query_DMVP())
@@ -863,22 +834,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 				Com_sprintf(blue_buf[i].main_text, sizeof(blue_buf[i].main_text), "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
 				blue_buf[i].main_text[19] = 0;
 
-				line_len = (rune_line_emitted_this_row ?
-						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 + 56 + 80, y, player_rune) : 0)
-					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, blue_buf[i].main_text);
+				/* FIXED: one rune line per row (the pre-conversion
+				 * strcat path drew an MVP row's rune twice; see the
+				 * red DMVP site) */
+				line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, blue_buf[i].main_text);
 				if (legacy_len + line_len > 1024)
 					break;
 				legacy_len += line_len;
-
-				if (rune_line_emitted_this_row)
-				{
-					elems[n].kind = UI_TEXT;
-					elems[n].u.text.x = x + 32 + 56 + 80;
-					elems[n].u.text.y = y;
-					elems[n].u.text.text = player_rune;
-					elems[n].u.text.highlight = true;
-					n++;
-				}
 
 				elems[n].kind = UI_TEXT;
 				elems[n].u.text.x = x;
@@ -892,22 +854,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 				Com_sprintf(blue_buf[i].main_text, sizeof(blue_buf[i].main_text), "O%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
 				blue_buf[i].main_text[19] = 0;
 
-				line_len = (rune_line_emitted_this_row ?
-						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 + 56 + 80, y, player_rune) : 0)
-					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, blue_buf[i].main_text);
+				/* FIXED: one rune line per row (the pre-conversion
+				 * strcat path drew an MVP row's rune twice; see the
+				 * red DMVP site) */
+				line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, blue_buf[i].main_text);
 				if (legacy_len + line_len > 1024)
 					break;
 				legacy_len += line_len;
-
-				if (rune_line_emitted_this_row)
-				{
-					elems[n].kind = UI_TEXT;
-					elems[n].u.text.x = x + 32 + 56 + 80;
-					elems[n].u.text.y = y;
-					elems[n].u.text.text = player_rune;
-					elems[n].u.text.highlight = true;
-					n++;
-				}
 
 				elems[n].kind = UI_TEXT;
 				elems[n].u.text.x = x;
@@ -1123,13 +1076,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 }
 
                 sec_len = 0;
-                for (i = 0; i < els2_n; i++)
+                for (i = els2_start; i < els2_n; i++)
                     sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
                 els2_len = sec_len;
 
                 if (legacy_len + els2_len <= 1024)
                 {
-                    for (i = 0; i < els2_n; i++)
+                    for (i = els2_start; i < els2_n; i++)
                     {
                         elems[n].kind = UI_TEXT;
                         elems[n].u.text.x = els2_x[i];
@@ -1163,13 +1116,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 }
 
                 sec_len = 0;
-                for (i = 0; i < els2_n; i++)
+                for (i = els2_start; i < els2_n; i++)
                     sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
                 els2_len = sec_len;
 
                 if (legacy_len + els2_len <= 1024)
                 {
-                    for (i = 0; i < els2_n; i++)
+                    for (i = els2_start; i < els2_n; i++)
                     {
                         elems[n].kind = UI_TEXT;
                         elems[n].u.text.x = els2_x[i];
@@ -1193,6 +1146,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 if (red_observers == 0 && blue_observers == 0)
                 {
                     x = 80;
+                    els2_start = els2_n;   /* FIXED: flush this category's slice only */
                     els2_x[els2_n] = x; els2_y[els2_n] = y;
                     Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "Observers:");
                     els2_n++;
@@ -1215,13 +1169,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     }
 
                     sec_len = 0;
-                    for (i = 0; i < els2_n; i++)
+                    for (i = els2_start; i < els2_n; i++)
                         sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
                     els2_len = sec_len;
 
                     if (legacy_len + els2_len <= 1024)
                     {
-                        for (i = 0; i < els2_n; i++)
+                        for (i = els2_start; i < els2_n; i++)
                         {
                             elems[n].kind = UI_TEXT;
                             elems[n].u.text.x = els2_x[i];
@@ -1236,6 +1190,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 else
                 {
                     x = 80;
+                    els2_start = els2_n;   /* FIXED: flush this category's slice only */
                     els2_x[els2_n] = x; els2_y[els2_n] = y;
                     Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "Observers:");
                     els2_n++;
@@ -1252,13 +1207,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     }
 
                     sec_len = 0;
-                    for (i = 0; i < els2_n; i++)
+                    for (i = els2_start; i < els2_n; i++)
                         sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
                     els2_len = sec_len;
 
                     if (legacy_len + els2_len <= 1024)
                     {
-                        for (i = 0; i < els2_n; i++)
+                        for (i = els2_start; i < els2_n; i++)
                         {
                             elems[n].kind = UI_TEXT;
                             elems[n].u.text.x = els2_x[i];
