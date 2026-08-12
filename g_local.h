@@ -753,6 +753,8 @@ void Cmd_TeamStatboard_f(edict_t* ent); // BUZZKILL
 void Cmd_Railboard_f(edict_t* ent); // BUZZKILL
 void Cmd_Season_f(edict_t* ent);
 void Cmd_Records_f(edict_t* ent);
+void Cmd_Activity_f(edict_t* ent);
+void Cmd_Momentum_f(edict_t* ent);
 void Cmd_ToggleFastSwitch_f(edict_t *ent);
 
 //
@@ -1208,6 +1210,8 @@ struct gclient_s
 	qboolean	showrailboard; //BUZZKILL
 	qboolean	showseason;			// settled board: Season Top 10
 	qboolean	showrecords;		// settled board: Server Records
+	qboolean	showactivity;		// settled board: Activity (last 7 days)
+	qboolean	showmomentum;		// settled board: Momentum (biggest 7-day movers)
 
 
 	// BUZZKILL -- persistent stats, loaded/saved by the stats database.
