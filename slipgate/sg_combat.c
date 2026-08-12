@@ -3260,6 +3260,119 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 }
 
 
+/*
+ * NO TARGET (split from SG_CombatFrame, 2026-08-12 standards pass; body
+ * verbatim, one indent shallower): record where the lost enemy was
+ * believed to be, run the pre-select doctrine, and hold the corner.
+ * The combat frame ends here whenever the scan comes back empty.
+ */
+static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
+                     vec3_t eye)
+{
+	/*
+	 * Just lost one. Record where belief last put it, as a SEED rather
+	 * than a point: the emergence set is a walk over rune links, so its
+	 * root has to be a node of that graph. Rune_NearestSeed of the last
+	 * believed origin is the honest answer; the enemy table's own seed is
+	 * the fallback for the frame where a teammate's sighting is all there
+	 * is. Nothing is recorded when neither exists -- a hold rooted at a
+	 * guess is a bot staring at a wall.
+	 */
+	if (st->enemy > 0)
+	{
+		rune_t *r = SG_Rune();
+		int seed = r ? Rune_NearestSeed(r, st->enemy_org) : -1;
+
+		if (seed < 0 && r)
+		{
+			int team = self->client->ctf.teamnum;
+			int s;
+
+			if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
+				for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+				{
+					sg_belief_enemy_t *en =
+					    &sg_caco_enemies[team - 1][s];
+
+					if (en->client >= 0 && 1 + en->client == st->enemy &&
+					    en->seed >= 0 && en->seed < r->hdr.num_seeds)
+					{
+						seed = en->seed;
+						break;
+					}
+				}
+		}
+
+		if (seed >= 0)
+		{
+			st->lost_client = st->enemy - 1;
+			st->lost_seed = seed;
+			st->lost_time = level.time;
+			st->lost_until = level.time + SG_LOST_HOLD;
+			st->lost_next = 0.0f;
+			st->lost_have = false;
+		}
+	}
+
+	st->enemy = 0;
+	st->ws_panic = false;	/* the exception belongs to a fight in
+	                         * progress; it does not outlive one */
+
+	/*
+	 * Idle. Rule D3b: pre-SELECT, do not pre-fire. A posted defender holds
+	 * the weapon its sightline calls for; a carrier holds the flee
+	 * doctrine's weapon (D2 point 2); anyone else only acts when what they
+	 * are holding cannot shoot -- the grapple, hand grenades, a dry
+	 * weapon -- or when they are still on the spawn blaster with something
+	 * better in the pack. Holding a weapon costs nothing; raising one
+	 * mid-contact costs a full weapon cycle.
+	 */
+	if (st->post_sight >= 0.0f)
+		Combat_Arbitrate(self, st, Combat_PostWeapon(self, st->post_sight));
+	else if (Combat_Carrying(self))
+		Combat_Arbitrate(self, st,
+		                 Combat_Choose(self, SG_BAND_MID, SG_R_MID, false));
+	else if (st->alert_range >= 0.0f && level.time < st->alert_until)
+	{
+		/* belief says contact is coming at roughly this range */
+		int ab = (st->alert_range < SG_R_CLOSE) ? SG_BAND_CONTACT
+		       : (st->alert_range < SG_R_MID)   ? SG_BAND_CLOSE
+		       : (st->alert_range < SG_R_LONG)  ? SG_BAND_MID
+		                                        : SG_BAND_LONG;
+
+		Combat_Arbitrate(self, st,
+		                 Combat_Choose(self, ab, st->alert_range, false));
+	}
+	else
+	{
+		int h = Combat_Held(self);
+
+		if (h < 0 || !Combat_Avail(self, h) ||
+		    (h == SG_W_BLASTER && Weapon_Tier(self) > 1))
+			Combat_Arbitrate(self, st,
+			                 Combat_Choose(self, SG_BAND_MID, SG_R_MID,
+			                               false));
+		else if (Combat_WSwitch())
+		{
+			/* the gun is loaded and is not the spawn blaster, so the old
+			 * code was finished here. Ready the room ahead instead. */
+			Combat_PreSwitch(self, st, h);
+		}
+	}
+
+	/*
+	 * The corner. Last thing in the idle path, so the weapon choice above
+	 * is already made when the emergence set is asked which height to aim
+	 * at, and so a bot with no hold to keep leaves the view exactly where
+	 * navigation put it. The trigger is untouched: this branch has no
+	 * target, so no pre-fire trace ran, and no shot is ever authorised
+	 * without one.
+	 */
+	Combat_LostHold(self, st, cmd, eye);
+	return;
+}
+
+
 void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 {
 	sg_combat_state_t	*st;
@@ -3311,106 +3424,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)
 	{
-		/*
-		 * Just lost one. Record where belief last put it, as a SEED rather
-		 * than a point: the emergence set is a walk over rune links, so its
-		 * root has to be a node of that graph. Rune_NearestSeed of the last
-		 * believed origin is the honest answer; the enemy table's own seed is
-		 * the fallback for the frame where a teammate's sighting is all there
-		 * is. Nothing is recorded when neither exists -- a hold rooted at a
-		 * guess is a bot staring at a wall.
-		 */
-		if (st->enemy > 0)
-		{
-			rune_t *r = SG_Rune();
-			int seed = r ? Rune_NearestSeed(r, st->enemy_org) : -1;
-
-			if (seed < 0 && r)
-			{
-				int team = self->client->ctf.teamnum;
-				int s;
-
-				if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
-					for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-					{
-						sg_belief_enemy_t *en =
-						    &sg_caco_enemies[team - 1][s];
-
-						if (en->client >= 0 && 1 + en->client == st->enemy &&
-						    en->seed >= 0 && en->seed < r->hdr.num_seeds)
-						{
-							seed = en->seed;
-							break;
-						}
-					}
-			}
-
-			if (seed >= 0)
-			{
-				st->lost_client = st->enemy - 1;
-				st->lost_seed = seed;
-				st->lost_time = level.time;
-				st->lost_until = level.time + SG_LOST_HOLD;
-				st->lost_next = 0.0f;
-				st->lost_have = false;
-			}
-		}
-
-		st->enemy = 0;
-		st->ws_panic = false;	/* the exception belongs to a fight in
-		                         * progress; it does not outlive one */
-
-		/*
-		 * Idle. Rule D3b: pre-SELECT, do not pre-fire. A posted defender holds
-		 * the weapon its sightline calls for; a carrier holds the flee
-		 * doctrine's weapon (D2 point 2); anyone else only acts when what they
-		 * are holding cannot shoot -- the grapple, hand grenades, a dry
-		 * weapon -- or when they are still on the spawn blaster with something
-		 * better in the pack. Holding a weapon costs nothing; raising one
-		 * mid-contact costs a full weapon cycle.
-		 */
-		if (st->post_sight >= 0.0f)
-			Combat_Arbitrate(self, st, Combat_PostWeapon(self, st->post_sight));
-		else if (Combat_Carrying(self))
-			Combat_Arbitrate(self, st,
-			                 Combat_Choose(self, SG_BAND_MID, SG_R_MID, false));
-		else if (st->alert_range >= 0.0f && level.time < st->alert_until)
-		{
-			/* belief says contact is coming at roughly this range */
-			int ab = (st->alert_range < SG_R_CLOSE) ? SG_BAND_CONTACT
-			       : (st->alert_range < SG_R_MID)   ? SG_BAND_CLOSE
-			       : (st->alert_range < SG_R_LONG)  ? SG_BAND_MID
-			                                        : SG_BAND_LONG;
-
-			Combat_Arbitrate(self, st,
-			                 Combat_Choose(self, ab, st->alert_range, false));
-		}
-		else
-		{
-			int h = Combat_Held(self);
-
-			if (h < 0 || !Combat_Avail(self, h) ||
-			    (h == SG_W_BLASTER && Weapon_Tier(self) > 1))
-				Combat_Arbitrate(self, st,
-				                 Combat_Choose(self, SG_BAND_MID, SG_R_MID,
-				                               false));
-			else if (Combat_WSwitch())
-			{
-				/* the gun is loaded and is not the spawn blaster, so the old
-				 * code was finished here. Ready the room ahead instead. */
-				Combat_PreSwitch(self, st, h);
-			}
-		}
-
-		/*
-		 * The corner. Last thing in the idle path, so the weapon choice above
-		 * is already made when the emergence set is asked which height to aim
-		 * at, and so a bot with no hold to keep leaves the view exactly where
-		 * navigation put it. The trigger is untouched: this branch has no
-		 * target, so no pre-fire trace ran, and no shot is ever authorised
-		 * without one.
-		 */
-		Combat_LostHold(self, st, cmd, eye);
+		Cbt_Idle(self, st, cmd, eye);
 		return;
 	}
 
