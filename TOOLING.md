@@ -12,6 +12,17 @@ tooling world. **Nothing described here ships.** The release boundary
 is the build workflow's Assemble step: three game modules and the pak,
 enumerated explicitly, nothing implied.
 
+## Getting the environment (the zero-contact bar)
+
+The acceptance test for everything below: someone who has never spoken
+to us clones the repo, runs `tools/setup.sh`, follows what it prints,
+and has our dev experience. The doctor checks the toolchain, creates
+the film venv from `tools/requirements.txt`, and names every external
+thing it cannot conjure (the yquake2 engine build, the map files, a
+human demo corpus) with exactly how to supply it. The watchdog units
+ship in `tools/systemd/`. The tool-by-tool reference is
+`tools/README.md`.
+
 ## What the environment is
 
 - **The fleet** — ten local dedicated servers in paired A/B arms,

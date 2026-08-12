@@ -26,13 +26,22 @@ STAND_R = 384.0
 TURN_MARGIN = 600.0
 
 def trips_for_track(tr, sx):
+    """One trip per genuine approach: after any trip ends (arrival,
+    turn-back, or death) a NEW trip cannot start until the player has
+    left the approach zone entirely -- without this hysteresis a bot
+    loitering at the stand re-triggered an "arrival" every few frames
+    and the counts were inflated bounds, not rates (the first published
+    run of this census carried exactly that inflation)."""
     out = []
     for seg in conduct.contiguous_segments(tr):
         cur = None                       # (start_i, min_dist, min_i)
+        armed = True                     # may a new trip begin?
         for i, s in enumerate(seg):
             d = math.hypot(s[1] - sx[0], s[2] - sx[1])
             if cur is None:
-                if d < APPROACH_START:
+                if d >= APPROACH_START:
+                    armed = True
+                if armed and d < APPROACH_START:
                     prev = seg[i-1] if i else None
                     pd = math.hypot(prev[1]-sx[0], prev[2]-sx[1]) if prev else 1e9
                     if pd >= d:          # closing when crossing the line
@@ -43,9 +52,11 @@ def trips_for_track(tr, sx):
             if d <= STAND_R:
                 out.append(('arrived', cur[1], (i - cur[0]) * DT))
                 cur = None
+                armed = False
             elif d > cur[1] + TURN_MARGIN:
                 out.append(('turned', cur[1], (i - cur[0]) * DT))
                 cur = None
+                armed = False
         if cur is not None:              # segment ended mid-trip = death/PVS loss
             out.append(('died', cur[1], (len(seg)-1 - cur[0]) * DT))
     return out

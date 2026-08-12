@@ -32,7 +32,8 @@ while [ ! -f "$STOP" ]; do
     fi
     echo "$(date +%H:%M:%S) wave $WAVE" >> waveloop.log
     T0=$(date +%s)
-    ./iterate2.sh "$WAVE" >> "iter-$WAVE-launch.log" 2>&1
+    mkdir -p runs-archive
+    ./iterate2.sh "$WAVE" >> "runs-archive/iter-$WAVE-launch.log" 2>&1
     T1=$(date +%s)
     # A wave that "finished" in under two minutes did not run -- the
     # overlap guard refused (stale q2ded) or the launch failed. Spinning

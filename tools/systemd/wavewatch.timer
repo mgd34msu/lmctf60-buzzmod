@@ -1,0 +1,7 @@
+[Unit]
+Description=SLIPGATE fleet watchdog timer
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
