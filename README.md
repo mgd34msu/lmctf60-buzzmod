@@ -88,6 +88,15 @@ Players:
 | `lifetime [name]` | career totals |
 | `rank [stat] [n]` | leaderboard |
 | `statsall` | everyone, this level |
+| `season` | top 10 of the last 30 days (shared database only) |
+| `records` | all-time server records (shared database only) |
+| `activity` | busiest players of the last 7 days (shared database only) |
+| `momentum` | biggest recent movers in capture rate (shared database only) |
+| `card [name]` | one player's career card (shared database only) |
+| `vs <name>` | you against them, only counting games you both played (shared database only) |
+
+A match summary — final score, top capper, top defender, top killer, accuracy
+leader — prints to everyone at the end of each game.
 
 Admin, `sv statsdb`:
 

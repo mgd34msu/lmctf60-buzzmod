@@ -4,8 +4,15 @@ Written 2026-08-12 from two ground-truth surveys: the yquake2 layout
 interpreter read from engine source (`docs/layout-isa.md`, the full
 token table with citations) and a complete inventory of this game
 DLL's current usage. Every number below is measured, not remembered.
-This document is the foundation for the declarative screen layer
-(layout builder + stat-slot registry) on the convergence list.
+
+The design this document dictated is now BUILT: the stat-slot registry
+(ui_stats.h), the bounded appender (ui_text), the layout compiler with
+its wire-budget enforcement (ui_layout), the density variant ladder
+(ui_layout_compile_ladder -- whole-screen downgrade, never partial
+truncation), and all three serving tiers (ui_boards: settled once per
+game, ticked 1 Hz dirty-gated, milestone immediate). Sections below
+describe the rationale; where they speak of the design as future work,
+read them as the reasons the code is shaped the way it is.
 
 ## The hard numbers
 
@@ -82,6 +89,8 @@ is the same missing primitive.
    per-client strings via stat_string, all updatable without layout
    resends.
 
-The builder lands as a convergence block after the record layer
-(ARCHITECTURE.md P2); the two guards added today are the interim
-protection.
+All of the above is implemented. What remains from the original
+design space, deliberately deferred rather than forgotten: the token
+peephole pass on compiled output, ping columns migrating from layout
+text onto stat slots, and per-viewer row highlighting on the settled
+boards (which needs stat-indirection to keep the shared cache).
