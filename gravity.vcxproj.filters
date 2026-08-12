@@ -229,6 +229,9 @@
     <ClCompile Include="slipgate\sg_move.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_price.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_caco.c">
       <Filter>Source Files</Filter>
     </ClCompile>

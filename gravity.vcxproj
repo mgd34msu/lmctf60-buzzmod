@@ -356,6 +356,7 @@
     <ClCompile Include="slipgate\sg_tilt.c" />
     <ClCompile Include="slipgate\sg_lead.c" />
     <ClCompile Include="slipgate\sg_move.c" />
+    <ClCompile Include="slipgate\sg_price.c" />
     <ClCompile Include="slipgate\sg_caco.c" />
     <ClCompile Include="slipgate\sg_chat.c" />
     <ClCompile Include="slipgate\sg_combat.c" />
