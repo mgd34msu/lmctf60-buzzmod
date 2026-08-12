@@ -22,6 +22,9 @@
     <ClCompile Include="bat.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ctf_sqlite_core.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="g_ai.c">
       <Filter>Source Files</Filter>
     </ClCompile>

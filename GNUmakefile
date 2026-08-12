@@ -110,7 +110,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
          g_skins.o g_tourney.o plasma.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
-		 ctf_file_io.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
+		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
 		 sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o

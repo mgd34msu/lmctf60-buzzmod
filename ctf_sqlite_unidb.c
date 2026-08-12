@@ -25,6 +25,7 @@
 #include "g_local.h"
 #include "sqlite3.h"
 #include "ctf_file_io.h"
+#include "ctf_sqlite_core.h"
 #include "ctf_sqlite_unidb.h"
 #include "slipgate/sg_cvars.h"
 
@@ -124,31 +125,6 @@ static sqlite3 *dbconn = NULL;
 static char     dbname[CTF_MAX_DBPATH];
 static int      db_last_match_id = -1;
 
-static void db_error(const char *what)
-{
-	gi.dprintf("sqlite error %d: %s (%s)\n",
-		dbconn ? sqlite3_errcode(dbconn) : -1,
-		dbconn ? sqlite3_errmsg(dbconn) : "no handle",
-		what);
-}
-
-static qboolean db_exec(const char *sql)
-{
-	char *err = NULL;
-
-	if (!dbconn)
-		return false;
-
-	if (sqlite3_exec(dbconn, sql, NULL, NULL, &err) != SQLITE_OK)
-	{
-		gi.dprintf("sqlite error: %s (%s)\n", err ? err : "unknown", sql);
-		sqlite3_free(err);
-		return false;
-	}
-
-	return true;
-}
-
 static void db_copy_text(char *dest, size_t destsize, const unsigned char *src)
 {
 	if (!dest || destsize == 0)
@@ -164,44 +140,6 @@ static void db_copy_text(char *dest, size_t destsize, const unsigned char *src)
 	dest[destsize - 1] = '\0';
 }
 
-// Adds a column if the table does not already have it, so a database written
-// by an older build keeps working instead of failing every read. Table and
-// column names here are compile-time constants, never player input.
-static void db_ensure_column(sqlite3* db, const char* table, const char* column)
-{
-	sqlite3_stmt* res = NULL;
-	char sql[256];
-	qboolean found = false;
-
-	if (!db)
-		return;
-
-	snprintf(sql, sizeof(sql), "PRAGMA table_info(%s);", table);
-	if (sqlite3_prepare_v2(db, sql, -1, &res, NULL) != SQLITE_OK)
-		return;
-
-	while (sqlite3_step(res) == SQLITE_ROW)
-	{
-		const unsigned char* name = sqlite3_column_text(res, 1);
-
-		if (name && strcmp((const char*)name, column) == 0)
-		{
-			found = true;
-			break;
-		}
-	}
-	sqlite3_finalize(res);
-
-	if (found)
-		return;
-
-	snprintf(sql, sizeof(sql),
-		"ALTER TABLE %s ADD COLUMN %s INTEGER DEFAULT 0;", table, column);
-
-	if (sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK)
-		gi.dprintf("stats db: added %s.%s\n", table, column);
-}
-
 static qboolean db_has_schema(void)
 {
 	sqlite3_stmt *res = NULL;
@@ -211,7 +149,7 @@ static qboolean db_has_schema(void)
 			"SELECT name FROM sqlite_master WHERE type='table' AND name='userdata';",
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("schema probe");
+		db_error(dbconn, "schema probe");
 		return false;
 	}
 
@@ -242,7 +180,7 @@ static qboolean build_db(void)
 
 	for (i = 0; schema[i]; i++)
 	{
-		if (!db_exec(schema[i]))
+		if (!db_exec(dbconn, schema[i]))
 			return false;
 	}
 
@@ -257,18 +195,13 @@ qboolean DB_Conn_Start(void)
 	if (!ctf_get_unified_db_path(dbname, sizeof(dbname)))
 		return false;
 
-	if (sqlite3_open_v2(dbname, &dbconn,
-			SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL) != SQLITE_OK)
+	if (!db_open_tuned(dbname, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, &dbconn))
 	{
-		db_error(dbname);
+		db_error(dbconn, dbname);
 		sqlite3_close(dbconn);
 		dbconn = NULL;
 		return false;
 	}
-
-	// keep a crash from truncating the file mid-write
-	db_exec("PRAGMA journal_mode=WAL;");
-	db_exec("PRAGMA synchronous=NORMAL;");
 
 	// build_db is CREATE TABLE IF NOT EXISTS throughout, so running it every
 	// time is safe and repairs a database that lost a table -- the old code
@@ -278,7 +211,7 @@ qboolean DB_Conn_Start(void)
 
 		if (!build_db())
 		{
-			db_error("creating schema");
+			db_error(dbconn, "creating schema");
 			sqlite3_close(dbconn);
 			dbconn = NULL;
 			return false;
@@ -289,31 +222,31 @@ qboolean DB_Conn_Start(void)
 	}
 
 	// databases written before capture streaks and sweeps existed
-	db_ensure_column(dbconn, "ctf_stats", "max_cap_streak");
-	db_ensure_column(dbconn, "ctf_stats", "sweeps");
+	db_ensure_column(dbconn, "ctf_stats", "max_cap_streak", "INTEGER");
+	db_ensure_column(dbconn, "ctf_stats", "sweeps", "INTEGER");
 
 	// columns added when every tracked statistic started persisting
-	db_ensure_column(dbconn, "game_stats", "score");
-	db_ensure_column(dbconn, "game_stats", "deaths");
-	db_ensure_column(dbconn, "game_stats", "damage_given");
-	db_ensure_column(dbconn, "game_stats", "damage_received");
-	db_ensure_column(dbconn, "game_stats", "rail_shot");
-	db_ensure_column(dbconn, "game_stats", "rail_hit");
-	db_ensure_column(dbconn, "game_stats", "rail_kill");
-	db_ensure_column(dbconn, "game_stats", "ping_total");
-	db_ensure_column(dbconn, "game_stats", "ping_samples");
-	db_ensure_column(dbconn, "game_stats", "item_quad");
-	db_ensure_column(dbconn, "game_stats", "item_shield");
-	db_ensure_column(dbconn, "game_stats", "item_armor");
-	db_ensure_column(dbconn, "game_stats", "item_mega");
-	db_ensure_column(dbconn, "game_stats", "rune_strength");
-	db_ensure_column(dbconn, "game_stats", "rune_haste");
-	db_ensure_column(dbconn, "game_stats", "rune_regen");
-	db_ensure_column(dbconn, "game_stats", "rune_resist");
-	db_ensure_column(dbconn, "ctf_stats", "flag_drops");
-	db_ensure_column(dbconn, "ctf_stats", "defense_base");
-	db_ensure_column(dbconn, "ctf_stats", "defense_flag");
-	db_ensure_column(dbconn, "ctf_stats", "defense_carrier");
+	db_ensure_column(dbconn, "game_stats", "score", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "deaths", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "damage_given", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "damage_received", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "rail_shot", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "rail_hit", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "rail_kill", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "ping_total", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "ping_samples", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "item_quad", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "item_shield", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "item_armor", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "item_mega", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "rune_strength", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "rune_haste", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "rune_regen", "INTEGER");
+	db_ensure_column(dbconn, "game_stats", "rune_resist", "INTEGER");
+	db_ensure_column(dbconn, "ctf_stats", "flag_drops", "INTEGER");
+	db_ensure_column(dbconn, "ctf_stats", "defense_base", "INTEGER");
+	db_ensure_column(dbconn, "ctf_stats", "defense_flag", "INTEGER");
+	db_ensure_column(dbconn, "ctf_stats", "defense_carrier", "INTEGER");
 
 	return true;
 }
@@ -340,7 +273,7 @@ int DB_GetID(const char *playername)
 			"SELECT char_idx FROM userdata WHERE playername=?",
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_GetID");
+		db_error(dbconn, "DB_GetID");
 		return -1;
 	}
 
@@ -351,6 +284,31 @@ int DB_GetID(const char *playername)
 
 	sqlite3_finalize(res);
 	return id;
+}
+
+// One base row for a new char_idx: `sql` is an INSERT with a single `?` for
+// the id and a literal 0 for every other column. Used three times by
+// DB_NewID for game_stats, ctf_stats and character_data -- bound, not built
+// with va(), because va() hands back one rotating static buffer and the
+// caller was passing three live va() results to the same db_exec chain.
+static qboolean db_newid_base_row(sqlite3 *db, const char *sql, int id)
+{
+	sqlite3_stmt *res = NULL;
+
+	if (sqlite3_prepare_v2(db, sql, -1, &res, NULL) != SQLITE_OK)
+	{
+		db_error(db, "DB_NewID insert");
+		return false;
+	}
+	sqlite3_bind_int(res, 1, id);
+	if (sqlite3_step(res) != SQLITE_DONE)
+	{
+		db_error(db, "DB_NewID insert");
+		sqlite3_finalize(res);
+		return false;
+	}
+	sqlite3_finalize(res);
+	return true;
 }
 
 int DB_NewID(const char *playername)
@@ -366,7 +324,7 @@ int DB_NewID(const char *playername)
 			"SELECT IFNULL(MAX(char_idx), -1) + 1 FROM userdata",
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_NewID");
+		db_error(dbconn, "DB_NewID");
 		return -1;
 	}
 
@@ -381,38 +339,49 @@ int DB_NewID(const char *playername)
 
 	gi.dprintf("SQLite (single mode): creating initial data for player id %d..", id);
 
-	if (!db_exec("BEGIN TRANSACTION;"))
+	if (!db_begin(dbconn))
 		return -1;
 
 	if (sqlite3_prepare_v2(dbconn,
 			"INSERT INTO userdata VALUES (?,?,\"\",\"\",0,0)",
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_NewID insert");
-		db_exec("ROLLBACK;");
+		db_error(dbconn, "DB_NewID insert");
+		db_rollback(dbconn);
 		return -1;
 	}
 	sqlite3_bind_int(res, 1, id);
 	sqlite3_bind_text(res, 2, playername ? playername : "", -1, SQLITE_TRANSIENT);
 	if (sqlite3_step(res) != SQLITE_DONE)
 	{
-		db_error("DB_NewID insert");
+		db_error(dbconn, "DB_NewID insert");
 		sqlite3_finalize(res);
-		db_exec("ROLLBACK;");
+		db_rollback(dbconn);
 		return -1;
 	}
 	sqlite3_finalize(res);
+	res = NULL;
 
-	if (!db_exec(va("INSERT INTO game_stats VALUES (%d,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)", id)) ||
-		!db_exec(va("INSERT INTO ctf_stats VALUES (%d,0,0,0,0,0,0,0,0,0,0,0,0,0)", id)) ||
-		!db_exec(va("INSERT INTO character_data VALUES (%d,0)", id)))
+	// game_stats / ctf_stats / character_data: every column but char_idx is
+	// zero for a brand new player, so the only bound parameter each of these
+	// three needs is the id itself.
+	if (!db_newid_base_row(dbconn,
+			"INSERT INTO game_stats VALUES (?,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)", id) ||
+		!db_newid_base_row(dbconn,
+			"INSERT INTO ctf_stats VALUES (?,0,0,0,0,0,0,0,0,0,0,0,0,0)", id) ||
+		!db_newid_base_row(dbconn,
+			"INSERT INTO character_data VALUES (?,0)", id))
 	{
-		db_exec("ROLLBACK;");
+		db_rollback(dbconn);
 		return -1;
 	}
 
-	if (!db_exec("COMMIT;"))
+	if (!db_commit(dbconn))
+	{
+		db_error(dbconn, "DB_NewID commit");
+		db_rollback(dbconn);
 		return -1;
+	}
 
 	gi.dprintf(" inserted bases.\n");
 	return id;
@@ -551,7 +520,7 @@ qboolean DB_SavePlayer(edict_t *player)
 			return false;
 	}
 
-	if (!db_exec("BEGIN TRANSACTION;"))
+	if (!db_begin(dbconn))
 		return false;
 
 	if (sqlite3_prepare_v2(dbconn, DB_UPDATEUDATA, -1, &res, NULL) != SQLITE_OK)
@@ -621,13 +590,13 @@ qboolean DB_SavePlayer(edict_t *player)
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
 	sqlite3_finalize(res); res = NULL;
 
-	ok = db_exec("COMMIT;");
+	ok = db_commit(dbconn);
 
 done:
 	if (!ok)
 	{
-		db_error("DB_SavePlayer");
-		db_exec("ROLLBACK;");
+		db_error(dbconn, "DB_SavePlayer");
+		db_rollback(dbconn);
 	}
 	if (res)
 		sqlite3_finalize(res);
@@ -730,23 +699,23 @@ qboolean DB_Reset(void)
 	if (!dbconn && !DB_Conn_Start())
 		return false;
 
-	if (!db_exec("BEGIN TRANSACTION;"))
+	if (!db_begin(dbconn))
 		return false;
 
-	if (!db_exec("DELETE FROM userdata;") ||
-		!db_exec("DELETE FROM game_stats;") ||
-		!db_exec("DELETE FROM ctf_stats;") ||
-		!db_exec("DELETE FROM character_data;"))
+	if (!db_exec(dbconn, "DELETE FROM userdata;") ||
+		!db_exec(dbconn, "DELETE FROM game_stats;") ||
+		!db_exec(dbconn, "DELETE FROM ctf_stats;") ||
+		!db_exec(dbconn, "DELETE FROM character_data;"))
 	{
-		db_exec("ROLLBACK;");
+		db_rollback(dbconn);
 		return false;
 	}
 
-	if (!db_exec("COMMIT;"))
+	if (!db_commit(dbconn))
 		return false;
 
 	// reclaim the space rather than leaving a file full of free pages
-	db_exec("VACUUM;");
+	db_exec(dbconn, "VACUUM;");
 
 	gi.cprintf(NULL, PRINT_HIGH, "statsdb: all rows deleted from %s\n", dbname);
 	return true;
@@ -797,7 +766,7 @@ void DB_Top(const char *field, int count)
 
 	if (sqlite3_prepare_v2(dbconn, sql, -1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_Top");
+		db_error(dbconn, "DB_Top");
 		return;
 	}
 
@@ -936,7 +905,7 @@ qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize)
 
 	if (sqlite3_prepare_v2(dbconn, sql, -1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_TopFormat");
+		db_error(dbconn, "DB_TopFormat");
 		return false;
 	}
 
@@ -1004,7 +973,7 @@ qboolean DB_Export(const char *path)
 			" JOIN ctf_stats  c ON c.char_idx = u.char_idx"
 			" ORDER BY u.playername", -1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_Export");
+		db_error(dbconn, "DB_Export");
 		fclose(f);
 		return false;
 	}
@@ -1093,7 +1062,7 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 				"UPDATE userdata SET playername=? WHERE char_idx=?",
 				-1, &res, NULL) != SQLITE_OK)
 		{
-			db_error("DB_RenamePlayer");
+			db_error(dbconn, "DB_RenamePlayer");
 			return false;
 		}
 		sqlite3_bind_text(res, 1, newname, -1, SQLITE_TRANSIENT);
@@ -1101,7 +1070,7 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 
 		if (sqlite3_step(res) != SQLITE_DONE)
 		{
-			db_error("DB_RenamePlayer");
+			db_error(dbconn, "DB_RenamePlayer");
 			sqlite3_finalize(res);
 			return false;
 		}
@@ -1119,7 +1088,7 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 
 	// Both names exist, so fold the old record into the new one. Counters add,
 	// bests take the larger, member_since keeps the earlier of the two.
-	if (!db_exec("BEGIN TRANSACTION;"))
+	if (!db_begin(dbconn))
 		return false;
 
 	{
@@ -1136,7 +1105,7 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 			" max_streak = MAX(max_streak, (SELECT max_streak FROM game_stats WHERE char_idx=%d))"
 			" WHERE char_idx=%d",
 			oldid, oldid, oldid, oldid, oldid, oldid, oldid, newid);
-		ok = db_exec(sql);
+		ok = db_exec(dbconn, sql);
 
 		if (ok)
 		{
@@ -1153,7 +1122,7 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 				" (SELECT max_cap_streak FROM ctf_stats WHERE char_idx=%d))"
 				" WHERE char_idx=%d",
 				oldid, oldid, oldid, oldid, oldid, oldid, oldid, oldid, oldid, newid);
-			ok = db_exec(sql);
+			ok = db_exec(dbconn, sql);
 		}
 
 		if (ok)
@@ -1163,7 +1132,7 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 				" member_since = MIN(NULLIF(member_since,''),"
 				" (SELECT NULLIF(member_since,'') FROM userdata WHERE char_idx=%d))"
 				" WHERE char_idx=%d", oldid, oldid, newid);
-			ok = db_exec(sql);
+			ok = db_exec(dbconn, sql);
 		}
 
 		if (ok)
@@ -1174,18 +1143,18 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 			for (k = 0; tables[k] && ok; k++)
 			{
 				snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE char_idx=%d", tables[k], oldid);
-				ok = db_exec(sql);
+				ok = db_exec(dbconn, sql);
 			}
 		}
 
 		if (!ok)
 		{
-			db_exec("ROLLBACK;");
+			db_rollback(dbconn);
 			return false;
 		}
 	}
 
-	if (!db_exec("COMMIT;"))
+	if (!db_commit(dbconn))
 		return false;
 
 	gi.cprintf(NULL, PRINT_HIGH, "statsdb: merged \"%s\" into \"%s\"\n", oldname, newname);
@@ -1220,7 +1189,7 @@ int DB_Prune(int days)
 		before = sqlite3_column_int(res, 0);
 	sqlite3_finalize(res);
 
-	if (!db_exec("BEGIN TRANSACTION;"))
+	if (!db_begin(dbconn))
 		return -1;
 
 	// Rows with an empty last_played have never been folded, so they are left
@@ -1240,24 +1209,24 @@ int DB_Prune(int days)
 			snprintf(sql, sizeof(sql),
 				"DELETE FROM %s WHERE char_idx IN (SELECT char_idx FROM userdata"
 				" WHERE last_played <> '' AND last_played < '%s')", tables[i], cutoff);
-			ok = db_exec(sql);
+			ok = db_exec(dbconn, sql);
 		}
 
 		if (ok)
 		{
 			snprintf(sql, sizeof(sql),
 				"DELETE FROM userdata WHERE last_played <> '' AND last_played < '%s'", cutoff);
-			ok = db_exec(sql);
+			ok = db_exec(dbconn, sql);
 		}
 
 		if (!ok)
 		{
-			db_exec("ROLLBACK;");
+			db_rollback(dbconn);
 			return -1;
 		}
 	}
 
-	if (!db_exec("COMMIT;"))
+	if (!db_commit(dbconn))
 		return -1;
 
 	if (sqlite3_prepare_v2(dbconn, "SELECT COUNT(*) FROM userdata", -1, &res, NULL) == SQLITE_OK &&
@@ -1305,7 +1274,7 @@ int DB_MatchBegin(const char *mapname)
 			" red_score, blue_score, red_caps, blue_caps, winner)"
 			" VALUES (?,?,'',0,0,0,0,0,0)", -1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_MatchBegin");
+		db_error(dbconn, "DB_MatchBegin");
 		return -1;
 	}
 
@@ -1318,7 +1287,7 @@ int DB_MatchBegin(const char *mapname)
 		db_last_match_id = id;
 	}
 	else
-		db_error("DB_MatchBegin");
+		db_error(dbconn, "DB_MatchBegin");
 
 	sqlite3_finalize(res);
 	return id;
@@ -1371,7 +1340,7 @@ void DB_MatchRecord(edict_t *player, int match_id, int team)
 			"?,?)",                          // ping_avg playtime
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_MatchRecord");
+		db_error(dbconn, "DB_MatchRecord");
 		return;
 	}
 
@@ -1433,7 +1402,7 @@ void DB_MatchRecord(edict_t *player, int match_id, int team)
 		(int)((level.framenum - player->client->ctf.original_enterframe) / 10));
 
 	if (sqlite3_step(res) != SQLITE_DONE)
-		db_error("DB_MatchRecord");
+		db_error(dbconn, "DB_MatchRecord");
 
 	sqlite3_finalize(res);
 }
@@ -1457,7 +1426,7 @@ qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
 			" red_caps=?, blue_caps=?, winner=? WHERE match_id=?",
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_MatchFinish");
+		db_error(dbconn, "DB_MatchFinish");
 		return false;
 	}
 
@@ -1472,7 +1441,7 @@ qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
 
 	ok = (sqlite3_step(res) == SQLITE_DONE);
 	if (!ok)
-		db_error("DB_MatchFinish");
+		db_error(dbconn, "DB_MatchFinish");
 
 	sqlite3_finalize(res);
 	return ok;
@@ -1635,7 +1604,7 @@ int DB_SessionRecord(void)
 			"?,?)",				// joined_at left_at
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		db_error("DB_SessionRecord");
+		db_error(dbconn, "DB_SessionRecord");
 		return 0;
 	}
 
@@ -1648,7 +1617,7 @@ int DB_SessionRecord(void)
 	 * If BEGIN is refused -- something else already has one open -- the rows
 	 * still go in one at a time, so the only thing lost is the speed.
 	 */
-	intrans = db_exec("BEGIN;");
+	intrans = db_begin(dbconn);
 
 	for (i = 0; i < game.maxclients; i++)
 	{
@@ -1695,14 +1664,14 @@ int DB_SessionRecord(void)
 		if (sqlite3_step(res) == SQLITE_DONE)
 			rows++;
 		else
-			db_error("DB_SessionRecord");
+			db_error(dbconn, "DB_SessionRecord");
 
 		sqlite3_reset(res);
 		sqlite3_clear_bindings(res);
 	}
 
 	if (intrans)
-		db_exec("COMMIT;");
+		db_commit(dbconn);
 	sqlite3_finalize(res);
 
 	sess_written_match = match_id;

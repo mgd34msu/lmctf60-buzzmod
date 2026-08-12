@@ -281,6 +281,7 @@
   <ItemGroup>
     <ClCompile Include="bat.c" />
     <ClCompile Include="ctf_file_io.c" />
+    <ClCompile Include="ctf_sqlite_core.c" />
     <ClCompile Include="ctf_sqlite_player.c" />
     <ClCompile Include="ctf_sqlite_unidb.c" />
     <ClCompile Include="sqlite3.c">
@@ -372,6 +373,7 @@
   <ItemGroup>
     <ClInclude Include="bat.h" />
     <ClInclude Include="ctf_file_io.h" />
+    <ClInclude Include="ctf_sqlite_core.h" />
     <ClInclude Include="ctf_sqlite_player.h" />
     <ClInclude Include="ctf_sqlite_unidb.h" />
     <ClInclude Include="sqlite3.h" />
