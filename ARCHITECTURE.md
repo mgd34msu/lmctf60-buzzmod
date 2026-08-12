@@ -1,0 +1,124 @@
+# The cathedral, drawn properly
+
+Written 2026-08-12, after the standards pass and the three-territory
+primitive audit (slipgate layer, buzzmod layer, cross-layer seams).
+This is how buzzmod + SLIPGATE would be built knowing what we know —
+and it is a COMPASS for converging the existing tree, not a demolition
+order. The one asset no rewrite can buy back is ~900 waves of
+film-verified behavior; every move below is film-gated like every
+feature ever was. Companion documents: `slipgate/STYLE.md` (the line
+law), `LEDGER.md` (the evidence), the three audit reports (2026-08-12,
+preserved in the session record and summarized here).
+
+## 1. The layering as it should be
+
+```
+engine (yquake2)             id's masonry -- untouched
+└─ stock game DLL (q2/lmctf) the church -- renovated only at our seams
+   └─ PRIMITIVES              what everything above shares
+   │    field algebra         Field_Alloc/Flood, Surface_At + components
+   │    belief tables         aging sightings, never entity lookups
+   │    frame context         sg_think_t, built once per frame
+   │    registry              sg_cvars X-macro: a value lives once
+   │    util                  SG_DistXY/CanSee/flag resolvers, timers,
+   │                          team-index, RNG helpers
+   │    db core               one SQLite primitive set for both backends
+   └─ PERCEPTION              caco: what a bot has EARNED knowing
+   └─ DECISION                the stage pipeline: goal → price → descend
+   └─ ACTUATION               move/emit: policy becomes a usercmd
+   └─ PRESENTATION            net client shim, personas, chat voice
+   └─ RECORD                  stats DB, stdlog -- one write path
+   └─ INSTRUMENTS             film/route/fight/team/outcome/conduct/trip
+                              sheets -- first-class, not an afterthought
+```
+
+Two seams get formal surfaces:
+- **`sg_hooks.h`** — every game-DLL-facing SLIPGATE entry point, one
+  line each, so `grep SG_ sg_hooks.h` answers "what can legacy call."
+  Today 8 of 20 hooks are hand-declared in callers and one
+  (SG_CombatHit) has no header prototype anywhere.
+- **Event hooks vs polling, decided per datum**: events for what a poll
+  cannot reconstruct (damage direction, item-taken timing, rail
+  rhythm); polling for what entity state always carries (flag status).
+  The tree already follows this instinctively; it becomes doctrine.
+
+## 2. What hindsight validates — keep, unchanged
+
+- **Cost-field algebra as the decision language.** Every behavior that
+  passed judgment is expressed as field composition. This is the
+  platform's load-bearing invention.
+- **Earned perception.** Belief tables with ages, Rule 19 comms as the
+  only item intelligence. No judged rung required weakening it.
+- **The film gate.** Instruments + blind judges + pre-registered bars.
+  It caught what code review never would have.
+- **Evidence-carrying banners.** Wave numbers and verdicts in comments
+  are this codebase's institutional memory.
+- **The print shim.** All 164 bprintf/cprintf sites already funnel
+  through one choke point in sg_net.c without either layer knowing —
+  the seam pattern working as intended.
+
+## 3. What we'd do differently from day one → the convergence list
+
+Ranked by (payoff × safety), each item its own film-gated commit.
+Counts are from the audits, not estimates.
+
+**P1 — primitives with existing proven patterns (do first)**
+1. Timer/cooldown primitives — 171 comparison sites across 59 fields
+   in three identical hand-rolled shapes. `SG_TimerReady/Arm/Expired`,
+   `SG_Stopwatch`.
+2. Team-index primitives — 104 unmarked `team - 1` sites plus a second
+   spelling (`team - CTF_TEAM_RED`, 7) and opponent-index (3).
+   `SG_TEAM_IDX`/`SG_OPP_IDX`.
+3. Adopt `SG_FlagStand` at the 7 sites still hand-rolling the G_Find
+   it was built to replace (think-path re-scans for immobile entities).
+4. Cache the mega entity — two sibling functions each run O(num_edicts)
+   scans per bot-second for a spawn point that never moves; the fix
+   pattern (Combat_CacheItems) already exists in the same file.
+5. `sg_hooks.h` — the legacy seam, one header.
+
+**P2 — the buzzmod record layer (one write path)**
+6. `ctf_sqlite_core.{c,h}` — the two backends carry duplicate copies of
+   error/exec/transaction/migration/schema primitives and have ALREADY
+   drifted (WAL tuning exists in one, not the other). One core, both
+   call it.
+7. Prepared-statement reuse — 38 prepare sites re-parse SQL per call;
+   DB_SessionRecord already demonstrates the reset/clear-bindings
+   idiom. Generalize it.
+8. DB_NewID's missing rollback on failed COMMIT; its three va()-built
+   INSERTs become bound parameters.
+9. stdlog joins the gamedir path convention (the one Rule 7 violation
+   in buzzmod); failed log open stops being server-fatal.
+
+**P3 — wiring and flow (in progress / opportunistic)**
+10. `sg_think_t` through the eleven stages (defined; wiring underway).
+11. Split the sg_bot.h junk drawer into sg_corpus.h / sg_frame.h.
+12. Player-lookup-by-name-fragment helper (two copies today);
+    spawn_loadout resolution cached across respawns (three itemlist
+    scans per token per spawn today); ctf_BSafePrint stops discarding
+    its priority argument into an unconditional dprintf.
+13. Angle-normalize and RNG-range helpers (7 and 18 sites); the
+    `safe_append` idiom named when its second copy appears.
+14. Control-flow simplification, one flow at a time, canary-gated —
+    the relocated-not-reduced complexity from the standards pass.
+
+**Fixed already during the audit** (2026-08-12): the three stale
+ERR_FATAL gi.error sites (NULL-format on the fatal path) and the two
+FL_BOT-vs-SG_OwnsBot debug gates.
+
+## 4. What the audits cleared
+
+Worth recording what needs NO work, so effort doesn't drift there:
+string/buffer safety in both added layers (zero raw sprintf/strcpy in
+slipgate; buzzmod's are all bounds-guarded — the historic crash class
+is dead), ring buffers (two, both correct, deliberately simple),
+reimplemented data structures (none), time representations (four, no
+cross-representation comparison exists), per-frame scans introduced by
+buzzmod (none), and g_ctffunc's zero SG_ hooks (deliberate: flag state
+is pollable).
+
+## 5. The rule for all of it
+
+The fleet never stops, trials never share a window with refactors, and
+a convergence step that cannot prove behavior identity (build gates +
+canary wave) does not land. The cathedral goes up around the services,
+never instead of them.
