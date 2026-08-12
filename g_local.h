@@ -100,6 +100,9 @@ extern _CrtMemState startup1;	// memory diagnostics
 #define	svc_temp_entity		3
 #define	svc_layout			4
 #define	svc_inventory		5
+#define	svc_sound			9	// engine sound message; with no flag bits it plays
+								// as a full-volume local sound for the one client
+								// it is unicast to -- private feedback delivery
 #define	svc_stufftext		11
 
 //==================================================================
