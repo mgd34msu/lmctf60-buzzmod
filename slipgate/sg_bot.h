@@ -301,6 +301,41 @@ typedef struct sg_bot_s
 
 extern sg_bot_t sg_bots[SG_MAXBOTS];
 
+/*
+ * The frame context (2026-08-12 standards pass): everything one think
+ * frame decides, built once in SG_BotThink and handed to every stage.
+ * Stages unpack what they read at their top and write back what they
+ * emit -- one parameter instead of thirty, and a new stage costs a
+ * field, not eleven signature edits.
+ */
+typedef struct sg_think_s {
+	edict_t			*e;
+	usercmd_t		cmd;
+	const int		*goal_field, *support, *intercept;
+	const int		*route_field;
+	qboolean		route_pure;
+	const sg_weights_t *w;
+	sg_weights_t	live;
+	sg_role_t		role;
+	int				team, bestlink;
+	float			bestval, incumbent_v;
+	qboolean		carrying;
+	vec3_t			move_dir;
+	float			view_yaw, view_pitch;
+	qboolean		have_move, open_ahead, run_link, precision;
+	qboolean		hold_post, rally_hold, rail_hold, think_over;
+	int				rail_seed, rail_client;
+	float			rail_dose, post_yaw, post_sight;
+	int				door_hold;
+	edict_t			*door_ent;
+	qboolean		drop_yaw_locked;
+	float			drop_yaw;
+	qboolean		hook_brake;
+	qboolean		duel, duel_hold;
+	vec3_t			duel_org;
+	float			duel_want, duel_expo;
+} sg_think_t;
+
 void SG_BotThink(sg_bot_t *bot);
 qboolean SG_LevelSetup(void);
 void Botfill_Frame(void);
