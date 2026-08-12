@@ -123,9 +123,9 @@ void Botfill_Frame(void)
 		if (t != CTF_TEAM_RED && t != CTF_TEAM_BLUE)
 			continue;
 		if (e->flags & FL_BOT)
-			bots[t - CTF_TEAM_RED]++;
+			bots[SG_TeamIdx(t)]++;
 		else
-			humans[t - CTF_TEAM_RED]++;
+			humans[SG_TeamIdx(t)]++;
 	}
 
 	/* hysteresis: act only when the imbalance has stood three checks --
@@ -141,7 +141,7 @@ void Botfill_Frame(void)
 			{
 				if (++over_streak[t] >= 3)
 				{
-					Botfill_RemoveOne(CTF_TEAM_RED + t);
+					Botfill_RemoveOne(SG_TeamFromIdx(t));
 					over_streak[t] = 0;
 					acted = true;
 				}
@@ -163,7 +163,7 @@ void Botfill_Frame(void)
 				if (bots[0] + bots[1] == 0 ||
 				    ++under_streak[t] >= 3)
 				{
-					SG_AddBotTeam(CTF_TEAM_RED + t);
+					SG_AddBotTeam(SG_TeamFromIdx(t));
 					under_streak[t] = 0;
 					acted = true;
 				}

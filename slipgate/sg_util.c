@@ -3,6 +3,21 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_util.h"
 
+int SG_TeamIdx(int team)
+{
+	return team - CTF_TEAM_RED;
+}
+
+int SG_TeamFromIdx(int idx)
+{
+	return CTF_TEAM_RED + idx;
+}
+
+int SG_EnemyTeam(int team)
+{
+	return (team == CTF_TEAM_RED) ? CTF_TEAM_BLUE : CTF_TEAM_RED;
+}
+
 edict_t *SG_OwnFlag(int team)
 {
 	edict_t *f = (team == CTF_TEAM_RED) ? redflag : blueflag;

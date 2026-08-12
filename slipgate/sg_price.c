@@ -10,6 +10,7 @@
 #include "slipgate/sg_bot.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_util.h"
 
 int sg_cur_team;      /* for the shelf-cliff pricing */
 #define SG_MEGA_MAXDETOUR	4000    /* ms of extra road, hard refusal above */
@@ -221,7 +222,7 @@ float Surface_At(int seed, const sg_weights_t *w,
 	if (sg_cur_role == SG_ROLE_ATTACK &&
 	    sg_cv.shelfcost->value > 0.0f)
 	{
-		int ti9 = (sg_cur_team == CTF_TEAM_RED) ? 0 : 1;
+		int ti9 = SG_TeamIdx(sg_cur_team);
 
 		if (sg_fields.shelf_cliff[ti9] &&
 		    sg_fields.shelf_cliff[ti9][seed] > 0)

@@ -56,6 +56,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
 
 /* ------------------------------------------------------------- constants */
 
@@ -923,7 +924,7 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	{
 		if (level.time < chat_bot[cl].next_team)
 			return false;
-		if (level.time < chat_teamsaid[team - 1][topic])
+		if (level.time < chat_teamsaid[SG_TeamIdx(team)][topic])
 			return false;
 	}
 
@@ -932,12 +933,12 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 
 	/* stamped for every topic, acknowledgements included: idle banter reads
 	 * this to stay off a channel that is carrying something */
-	chat_team_last[team - 1] = level.time;
+	chat_team_last[SG_TeamIdx(team)] = level.time;
 
 	if (topic != SG_CHAT_TOPIC_ORDER)
 	{
 		chat_bot[cl].next_team = level.time + SG_CHAT_BOT_GAP;
-		chat_teamsaid[team - 1][topic] =
+		chat_teamsaid[SG_TeamIdx(team)][topic] =
 			level.time + chat_topic_gap[topic];
 	}
 	return true;
@@ -1027,10 +1028,10 @@ static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
 	if (topic < 0 || topic >= SG_CHAT_TOPICS)
 		return false;
 
-	q = &chat_q[team - 1][topic];
+	q = &chat_q[SG_TeamIdx(team)][topic];
 	if (q->pending)
 		return false;
-	if (level.time < chat_teamsaid[team - 1][topic])
+	if (level.time < chat_teamsaid[SG_TeamIdx(team)][topic])
 		return false;
 
 	Chat_Copy(q->line, line, sizeof(q->line));
@@ -1084,7 +1085,7 @@ static void Chat_Flush(void)
 				sp = g_edicts + 1 + held.speaker;
 				/* not "he switched sides mid-thought" -- then the line is his
 				 * old team's news said by somebody who is no longer on it */
-				if (!sp->client || sp->client->ctf.teamnum == t + 1)
+				if (!sp->client || sp->client->ctf.teamnum == SG_TeamFromIdx(t))
 					said = SG_ChatSayTeam(sp, held.line, k);
 			}
 
@@ -1143,13 +1144,13 @@ static void Chat_ScanLandmarks(void)
 			}
 	}
 
-	e = G_Find(NULL, FOFS(classname), "info_flag_red");
+	e = SG_FlagStand(CTF_TEAM_RED, true);
 	if (e)
 	{
 		VectorCopy(e->s.origin, chat_flagpos[0]);
 		chat_flagpos_ok[0] = true;
 	}
-	e = G_Find(NULL, FOFS(classname), "info_flag_blue");
+	e = SG_FlagStand(CTF_TEAM_BLUE, true);
 	if (e)
 	{
 		VectorCopy(e->s.origin, chat_flagpos[1]);
@@ -1300,7 +1301,7 @@ static qboolean Chat_EnemySeenNear(int team, vec3_t org)
 
 	for (i = 0; i < SG_MAX_ENEMY_TRACK; i++)
 	{
-		sg_belief_enemy_t	*en = &sg_caco_enemies[team - 1][i];
+		sg_belief_enemy_t	*en = &sg_caco_enemies[SG_TeamIdx(team)][i];
 		vec3_t				d;
 
 		if (en->client < 0 || en->heard_only)
@@ -1421,7 +1422,7 @@ void SG_ChatItemSeen(edict_t *viewer, int index, qboolean up)
 	team = viewer->client->ctf.teamnum;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return;
-	ti = team - 1;
+	ti = SG_TeamIdx(team);
 
 	b = &sg_caco_items[ti][index];      /* this viewer's team's row */
 	c = &chat_item[index];
@@ -1569,7 +1570,7 @@ void SG_ChatSee(edict_t *viewer)
 	if (!Chat_OurBot(viewer) || !Chat_Playing(viewer))
 		return;
 	team = viewer->client->ctf.teamnum;
-	ti = team - 1;
+	ti = SG_TeamIdx(team);
 
 	for (i = 0; i < chat_num_watch; i++)
 	{
@@ -1769,7 +1770,7 @@ static void Chat_RadioQueue(edict_t *speaker, int team, const char *sound)
 	if (cl < 0 || cl >= game.maxclients)
 		return;
 
-	q = &radio_q[team - 1];
+	q = &radio_q[SG_TeamIdx(team)];
 	if (q->pending)
 		return;                     /* one hand on the key at a time */
 
@@ -1798,7 +1799,7 @@ static void Chat_RadioSay(int t)
 	sp = g_edicts + 1 + q->speaker;
 	if (!Chat_OurBot(sp) || !Chat_Playing(sp))
 		return;                     /* died or left while the hand was moving */
-	if (sp->client->ctf.teamnum != t + 1)
+	if (sp->client->ctf.teamnum != SG_TeamFromIdx(t))
 		return;                     /* switched sides: not his team's news */
 	if (!Chat_RadioSpamClear(sp))
 		return;                     /* humans get spam-limited too */
@@ -1881,7 +1882,7 @@ static void Chat_RadioFrame(void)
 		    level.time > radio_q30[t].quiet_fired_at + 20.0f &&
 		    level.time > radio_q30[t].called_until)
 		{
-			edict_t *sp = Chat_Speaker(t + 1);
+			edict_t *sp = Chat_Speaker(SG_TeamFromIdx(t));
 
 			radio_q30[t].quiet_fired_at = level.time;
 			if (sp)
@@ -1896,11 +1897,11 @@ static void Chat_RadioFrame(void)
 				/* the fade fires at 3.0s remaining, so the pad is back
 				 * at heard + 3 + 30; the half-second of jitter is the
 				 * hand, not the ear */
-				Chat_QueueArm(sp, t + 1, SG_CHAT_TOPIC_MAJOR, line,
+				Chat_QueueArm(sp, SG_TeamFromIdx(t), SG_CHAT_TOPIC_MAJOR, line,
 				              SG_ARM_QUIET, -1, 0, SG_ITEMCALL_MATE,
 				              heard + 33.0f +
 				              ((float)(rand() % 10) / 10.0f - 0.5f), -1);
-				Chat_RadioQueue(sp, t + 1, "_quad30");
+				Chat_RadioQueue(sp, SG_TeamFromIdx(t), "_quad30");
 			}
 		}
 
@@ -2180,7 +2181,7 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src,
 	name = Chat_ItemName(item);
 	if (!name)
 		return;
-	ti = team - 1;
+	ti = SG_TeamIdx(team);
 
 	bslot = Chat_BeliefSlot(item);
 	wslot = Chat_WatchSlot(item);
@@ -2529,7 +2530,7 @@ static void Chat_SelfPickups(void)
 		{
 			for (k = 0; k < sg_caco_num_items; k++)
 			{
-				sg_belief_item_t	*b = &sg_caco_items[team - 1][k];
+				sg_belief_item_t	*b = &sg_caco_items[SG_TeamIdx(team)][k];
 				edict_t				*ie = g_edicts + b->ent;
 				qboolean			mine = false;
 
@@ -2546,9 +2547,9 @@ static void Chat_SelfPickups(void)
 				if (!mine)
 					continue;
 
-				chat_item[k].up[team - 1] = false;
-				chat_item[k].soon_said[team - 1] = false;
-				chat_item[k].back_at[team - 1] = (b->respawn_delay > 0.0f)
+				chat_item[k].up[SG_TeamIdx(team)] = false;
+				chat_item[k].soon_said[SG_TeamIdx(team)] = false;
+				chat_item[k].back_at[SG_TeamIdx(team)] = (b->respawn_delay > 0.0f)
 				                               ? level.time + b->respawn_delay
 				                               : 0.0f;
 			}
@@ -2818,7 +2819,7 @@ static void Chat_TeamEvents(void)
 
 		if (score[t] > chat_lastscore[t])
 		{
-			sp = Chat_Speaker(t + 1);
+			sp = Chat_Speaker(SG_TeamFromIdx(t));
 			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_CAP) : NULL;
 			if (sp && line)
 				Chat_SayPooled(sp, line, 0);
@@ -2832,7 +2833,7 @@ static void Chat_TeamEvents(void)
 		carrier = sg_caco_team_belief.carrier[t].client;
 		if (carrier >= 0 && chat_lastcarrier[t] < 0)
 		{
-			sp = Chat_Speaker(t + 1);
+			sp = Chat_Speaker(SG_TeamFromIdx(t));
 			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_STEAL) : NULL;
 			if (sp && line)
 			{
@@ -2843,7 +2844,7 @@ static void Chat_TeamEvents(void)
 				 * anyway -- the slot is taken and no second steal callout
 				 * will be queued behind it.
 				 */
-				Chat_Queue(sp, t + 1, SG_CHAT_TOPIC_STEAL, line);
+				Chat_Queue(sp, SG_TeamFromIdx(t), SG_CHAT_TOPIC_STEAL, line);
 				Chat_Note(line);
 			}
 		}
@@ -2862,7 +2863,7 @@ static void Chat_TeamEvents(void)
 
 		if (home && !chat_flaghome[t] &&
 		    level.time - chat_conceded_at[t] > SG_CHAT_RETURN_CAPWIN)
-			Chat_Returned(t + 1);
+			Chat_Returned(SG_TeamFromIdx(t));
 		chat_flaghome[t] = home;
 	}
 }
@@ -3147,7 +3148,7 @@ void SG_ChatLevelEnd(void)
 		if (random() >= SG_CHAT_END_ODDS * Chat_Chatty(i))
 			continue;
 
-		diff = score[team - 1] - score[2 - team];
+		diff = score[SG_TeamIdx(team)] - score[SG_TeamIdx(SG_EnemyTeam(team))];
 		if (diff > SG_CHAT_CLOSE_MARGIN)
 			cb->end_cat = SG_LINE_WIN;
 		else if (diff < -SG_CHAT_CLOSE_MARGIN)
@@ -3257,7 +3258,7 @@ static void Chat_Idle(void)
 
 		if (level.time - cb->combat_at < SG_CHAT_IDLE_CALM)
 			continue;
-		if (level.time - chat_team_last[team - 1] < SG_CHAT_IDLE_QUIET)
+		if (level.time - chat_team_last[SG_TeamIdx(team)] < SG_CHAT_IDLE_QUIET)
 			continue;
 		if (random() >= SG_CHAT_IDLE_ODDS * Chat_Chatty(i))
 			continue;
@@ -3692,7 +3693,7 @@ static void Chat_HearItemCall(edict_t *speaker,
                               int n, int team)
 {
 	const char	*cls = NULL, *what;
-	int			i, used = 0, secs = 0, ti = team - 1;
+	int			i, used = 0, secs = 0, ti = SG_TeamIdx(team);
 	int			kind = SG_ARM_NONE, slot = -1, ent = 0;
 	qboolean	take = false, timed = false, dbg;
 	float		respawn, back_at, held, gap;

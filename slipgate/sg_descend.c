@@ -173,7 +173,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	sg_cur_danger = Danger_Field(team);    /* the danger dimension, ours */
 	/* downbeat live: attackers march, detours wait for the next bar */
 	sg_cur_push = (role == SG_ROLE_ATTACK &&
-	               SG_TimerPending(sg_push_until[team - CTF_TEAM_RED]));
+	               SG_TimerPending(sg_push_until[SG_TeamIdx(team)]));
 	sg_route_pure_now = route_pure;
 
 	/*
@@ -513,7 +513,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 */
 		if (sg_cv.shelfcost->value > 0.0f)
 		{
-			int shti = (team == CTF_TEAM_RED) ? 0 : 1;
+			int shti = SG_TeamIdx(team);
 
 			if (sg_fields.shelf_cliff[shti] &&
 			    sg_fields.shelf_cliff[shti][l->to] > 0 &&
@@ -548,7 +548,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 			for (s2 = 0; s2 < SG_MAX_ENEMY_TRACK; s2++)
 			{
-				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s2];
+				sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s2];
 				vec3_t pd;
 
 				if (en->client < 0 || en->seed < 0 ||
@@ -661,7 +661,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 			{
-				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+				sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 				if (en->client >= 0 && en->seed >= 0 &&
 				    SG_AgeUnder(en->seen_time, 4.0f))
@@ -776,10 +776,10 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * cheaper (their team's plane), same idiom as every prior.
 		 */
 		if (sg_cur_role == SG_ROLE_DEFEND &&
-		    sg_def_post[team - 1] &&
+		    sg_def_post[SG_TeamIdx(team)] &&
 		    sg_cv.defpost->value > 0)
 			v -= 1.5f * sg_cv.defpost->value *
-			     (float)sg_def_post[team - 1][l->to];
+			     (float)sg_def_post[SG_TeamIdx(team)][l->to];
 
 		/*
 		 * DEFENSE INTERCEPT (sg_defreact, wave 295+). The response
@@ -792,11 +792,11 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * is astray. Direct chase is 8% of human responses.
 		 */
 		if (sg_cur_role == SG_ROLE_DEFEND &&
-		    sg_def_icept[team - 1] &&
-		    sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY &&
+		    sg_def_icept[SG_TeamIdx(team)] &&
+		    sg_caco_team_belief.flag[SG_TeamIdx(team)].state == SG_FLAG_ASTRAY &&
 		    sg_cv.defreact->value > 0)
 			v -= 1.5f * sg_cv.defreact->value *
-			     (float)sg_def_icept[team - 1][l->to];
+			     (float)sg_def_icept[SG_TeamIdx(team)][l->to];
 
 		/*
 		 * THE ESCAPE PRIOR (sg_escapeprior, wave 284+). The missing
@@ -832,7 +832,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			for (acs = 0; acs < SG_MAX_ENEMY_TRACK; acs++)
 			{
 				sg_belief_enemy_t *aen =
-				    &sg_caco_enemies[team - 1][acs];
+				    &sg_caco_enemies[SG_TeamIdx(team)][acs];
 				vec3_t aeye, athr, aspan;
 				trace_t actr;
 
@@ -915,7 +915,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 			for (cs = 0; cs < SG_MAX_ENEMY_TRACK; cs++)
 			{
-				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][cs];
+				sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][cs];
 
 				if (en->client >= 0 && !en->heard_only &&
 				    SG_AgeUnder(en->seen_time, 3.0f) &&
@@ -933,7 +933,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				VectorCopy(SG_Rune()->seeds[l->to].origin, eye);
 				eye[2] += 22.0f;
 				VectorCopy(SG_Rune()->seeds[
-				    sg_caco_enemies[team - 1][best_cs].seed].origin, thr);
+				    sg_caco_enemies[SG_TeamIdx(team)][best_cs].seed].origin, thr);
 				thr[2] += 22.0f;
 				/* range gate (wave 279): the 268-277 ledger kills all
 				 * sit inside ~800u -- a sighting across the map must
@@ -1275,7 +1275,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 			for (s3 = 0; s3 < SG_MAX_ENEMY_TRACK; s3++)
 			{
-				sg_belief_enemy_t *en3 = &sg_caco_enemies[team - 1][s3];
+				sg_belief_enemy_t *en3 = &sg_caco_enemies[SG_TeamIdx(team)][s3];
 				vec3_t dd3;
 
 				/* strict mode remembers twice as long: a sentry who
@@ -1316,15 +1316,13 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					edict_t *pe = g_edicts + 1 + i8;
 
 					if (pe->inuse && pe->client &&
-					    pe->client->ctf.teamnum ==
-					        ((team == CTF_TEAM_RED) ? CTF_TEAM_BLUE
-					                                : CTF_TEAM_RED))
+					    pe->client->ctf.teamnum == SG_EnemyTeam(team))
 						esz++;
 				}
 				for (s8 = 0; s8 < SG_MAX_ENEMY_TRACK; s8++)
 				{
 					sg_belief_enemy_t *en8 =
-					    &sg_caco_enemies[team - 1][s8];
+					    &sg_caco_enemies[SG_TeamIdx(team)][s8];
 
 					if (en8->client >= 0 &&
 					    SG_AgeUnder(en8->seen_time, 8.0f))
@@ -1459,7 +1457,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						for (s7 = 0; s7 < SG_MAX_ENEMY_TRACK; s7++)
 						{
 							sg_belief_enemy_t *en7 =
-							    &sg_caco_enemies[team - 1][s7];
+							    &sg_caco_enemies[SG_TeamIdx(team)][s7];
 							vec3_t nd7;
 							float nl7;
 
@@ -1488,11 +1486,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 									    bot->nade_at);
 								else
 								{
-									edict_t *nf = G_Find(NULL,
-									    FOFS(classname),
-									    (team == CTF_TEAM_RED)
-									        ? "info_flag_blue"
-									        : "info_flag_red");
+									edict_t *nf = SG_FlagStand(team, false);
 
 									if (nf)
 										VectorCopy(nf->s.origin,
@@ -1713,7 +1707,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	 * doctrine's second half all along.
 	 */
 	if ((role == SG_ROLE_ESCORT || role == SG_ROLE_ATTACK) &&
-	    SG_AgeUnder(sg_grab_time[team - CTF_TEAM_RED], 8.0f) &&
+	    SG_AgeUnder(sg_grab_time[SG_TeamIdx(team)], 8.0f) &&
 	    bot->seed >= 0)
 	{
 		int *att = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
@@ -1904,7 +1898,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	     e->client->rune->runetype == RUNE_REGEN) &&
 	    SG_TimerReady(bot->runetoss_next))
 	{
-		sg_belief_carrier_t *rc = &sg_caco_team_belief.carrier[team - 1];
+		sg_belief_carrier_t *rc = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
 		if (rc->client >= 0)
 		{
@@ -1954,7 +1948,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	 * breaks on exactly one event, and ours must survive to convert it.
 	 */
 	if (role == SG_ROLE_CARRY &&
-	    sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY &&
+	    sg_caco_team_belief.flag[SG_TeamIdx(team)].state == SG_FLAG_ASTRAY &&
 	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
 	    goal_field[bot->seed] < 2500)
 	{
@@ -2352,8 +2346,8 @@ stag_done:
 		 * it in.
 		 */
 		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-			if (sg_caco_enemies[team - 1][s].client >= 0 &&
-			    SG_AgeUnder(sg_caco_enemies[team - 1][s].seen_time, 6.0f))
+			if (sg_caco_enemies[SG_TeamIdx(team)][s].client >= 0 &&
+			    SG_AgeUnder(sg_caco_enemies[SG_TeamIdx(team)][s].seen_time, 6.0f))
 				quiet = false;
 		if (quiet &&
 		    (w->item[SG_FC_ARMOR] > 0.9f || w->item[SG_FC_HEALTH] > 0.9f ||
@@ -2481,7 +2475,7 @@ stag_done:
 
 			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 			{
-				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+				sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 				if (en->client >= 0 && en->seed >= 0 &&
 				    SG_AgeUnder(en->seen_time, 4.0f) &&
@@ -2539,7 +2533,7 @@ no_hold:;
 
 		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+			sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 			if (en->client >= 0 && en->seed >= 0 &&
 			    SG_AgeUnder(en->seen_time, 3.0f) &&
@@ -2579,7 +2573,7 @@ no_hold:;
 		if (e->client->pers.weapon == cgitem)
 			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 			{
-				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+				sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 				if (en->client >= 0 && en->seed >= 0 &&
 				    SG_AgeUnder(en->seen_time, 3.0f) &&

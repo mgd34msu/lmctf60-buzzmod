@@ -472,6 +472,13 @@ qboolean	Caco_ItemBelievedUpFor(int team, edict_t *e);
 int			Caco_ItemBeliefSeed(rune_t *r, edict_t *e);
 unsigned	Caco_ItemBeliefSig(void);   /* mix into the class rebuild test */
 
+/* the mega entity cache (sg_caco.c): entity numbers for every
+ * item_health_mega on the map, found once at level setup instead of on
+ * every call. Returns the count and points *out_ents at the array; the
+ * caller still applies its own inuse/belief filtering per entity, exactly
+ * as it did when it found them by walking globals.num_edicts itself. */
+int			SG_MegaEntities(const int **out_ents);
+
 /* ---------------------------------------------- caco: carrier projection
  *
  * An aged belief about an enemy carrier is not a point, it is a set: every

@@ -136,7 +136,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	team = e->client->ctf.teamnum;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return NULL;
-	ti = team - 1;
+	ti = SG_TeamIdx(team);
 	cl = (int)(e - g_edicts) - 1;
 	if (cl < 0 || cl >= game.maxclients)
 		return NULL;

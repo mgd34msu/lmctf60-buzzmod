@@ -40,7 +40,7 @@ static int intercept_field[SG_MAX_SEEDS];
  */
 static int Intercept_HoldSeed(int team, int fallback)
 {
-	sg_proj_t *pr = &sg_caco_proj[team - 1];
+	sg_proj_t *pr = &sg_caco_proj[SG_TeamIdx(team)];
 	vec3_t axis;
 	float axlen, bestscore = -1.0f;
 	int i, best = -1;
@@ -134,15 +134,15 @@ static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
 	    role == SG_ROLE_RECOVER)
 		return 0.0f;
 	if (role == SG_ROLE_ATTACK &&
-	    SG_TimerPending(sg_push_until[team - CTF_TEAM_RED]))
+	    SG_TimerPending(sg_push_until[SG_TeamIdx(team)]))
 		return 0.0f;
 	if (role == SG_ROLE_DEFEND)
 	{
 		int s;
 
 		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-			if (sg_caco_enemies[team - 1][s].client >= 0 &&
-			    SG_AgeUnder(sg_caco_enemies[team - 1][s].seen_time, 6.0f))
+			if (sg_caco_enemies[SG_TeamIdx(team)][s].client >= 0 &&
+			    SG_AgeUnder(sg_caco_enemies[SG_TeamIdx(team)][s].seen_time, 6.0f))
 				return 0.0f;    /* not a lull */
 	}
 	if (bot->engaged_last || SG_CombatDuel(e, NULL, NULL, NULL))
@@ -196,12 +196,10 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 	 */
 	if (sg_cv.wavepush->value &&
 	    role == SG_ROLE_ATTACK &&
-	    SG_TimerReady(sg_push_until[team - CTF_TEAM_RED]))
+	    SG_TimerReady(sg_push_until[SG_TeamIdx(team)]))
 	{
-		int et9 = (team == CTF_TEAM_RED) ? 1 : 0;
-		edict_t *ef9 = G_Find(NULL, FOFS(classname),
-		                      (team == CTF_TEAM_RED) ? "info_flag_blue"
-		                                             : "info_flag_red");
+		int et9 = SG_TeamIdx(SG_EnemyTeam(team));
+		edict_t *ef9 = SG_FlagStand(team, false);
 
 		if (ef9 && SG_AgeUnder(sg_caco_death_time[et9], 2.0f))
 		{
@@ -210,7 +208,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 			VectorSubtract(sg_caco_death_org[et9], ef9->s.origin, dp9);
 			if (VectorLength(dp9) < 1200.0f)
 			{
-				SG_TimerArm(&sg_push_until[team - CTF_TEAM_RED], 8.0f);
+				SG_TimerArm(&sg_push_until[SG_TeamIdx(team)], 8.0f);
 				if (sg_cv.debug->value)
 					gi.dprintf("PUSH team=%d surge\n", team);
 			}
@@ -220,7 +218,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF &&
-	    SG_TimerPending(sg_push_until[team - CTF_TEAM_RED]))
+	    SG_TimerPending(sg_push_until[SG_TeamIdx(team)]))
 	{
 		/* the bell rang: no waiting, no rally, run the window */
 		bot->rally_since = 0.0f;
@@ -275,10 +273,8 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 			 * death (< 6s) within 1200 of the enemy flag cancels the
 			 * wait: push NOW, paired or not.
 			 */
-			int et = (team == CTF_TEAM_RED) ? 1 : 0;    /* victim = them */
-			edict_t *ef = G_Find(NULL, FOFS(classname),
-			                     (team == CTF_TEAM_RED) ? "info_flag_blue"
-			                                            : "info_flag_red");
+			int et = SG_TeamIdx(SG_EnemyTeam(team));    /* victim = them */
+			edict_t *ef = SG_FlagStand(team, false);
 
 			if (ef && SG_AgeUnder(sg_caco_death_time[et], 6.0f))
 			{
@@ -362,9 +358,7 @@ rally_done:;
 
 			if (!nades9)
 				nades9 = FindItem("Grenades");
-			nf9 = G_Find(NULL, FOFS(classname),
-			             (team == CTF_TEAM_RED) ? "info_flag_blue"
-			                                    : "info_flag_red");
+			nf9 = SG_FlagStand(team, false);
 			if (nades9 && nf9 &&
 			    e->client->pers.inventory[ITEM_INDEX(nades9)] > 0)
 			{
@@ -423,9 +417,9 @@ void Think_InterceptField(sg_role_t role, int team,
 {
 	if (role != SG_ROLE_CARRY)
 	{
-		sg_belief_carrier_t *ec = &sg_caco_team_belief.enemy_carrier[team - 1];
+		sg_belief_carrier_t *ec = &sg_caco_team_belief.enemy_carrier[SG_TeamIdx(team)];
 
-		*support_out = sg_fields.our_carrier[team - 1];
+		*support_out = sg_fields.our_carrier[SG_TeamIdx(team)];
 		if (ec->seed >= 0)
 		{
 			int cost = 0;
@@ -458,7 +452,7 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 		bot->carry_startcost = -1;  /* gauged on first samples below */
 		bot->carry_bestcost = -1;
 		bot->carry_lost_at = 0.0f;
-		SG_Mark(&sg_grab_time[team - CTF_TEAM_RED]);
+		SG_Mark(&sg_grab_time[SG_TeamIdx(team)]);
 
 		/* exit-lane asymmetry: snapshot the roads ridden in on, then
 		 * roll this carry's coin (sg_exitasym, default 0 = never) */
@@ -499,7 +493,7 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 		{
 			/* the flag this carrier now holds is the ENEMY flag, and
 			 * its stand is the one he just robbed */
-			int fk = (team == CTF_TEAM_RED) ? 1 : 0;   /* 0 red, 1 blue */
+			int fk = SG_TeamIdx(SG_EnemyTeam(team));   /* 0 red, 1 blue */
 			int stand = (team == CTF_TEAM_RED)
 			                ? sg_fields.blue_flag_seed
 			                : sg_fields.red_flag_seed;
@@ -612,7 +606,7 @@ void Think_LiveWeights(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+			sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 			if (en->client >= 0 && en->runed &&
 			    SG_AgeUnder(en->seen_time, 15.0f))
@@ -694,21 +688,21 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		if (role == SG_ROLE_DEFEND)
 		{
 			qboolean astray =
-			    (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY);
+			    (sg_caco_team_belief.flag[SG_TeamIdx(team)].state == SG_FLAG_ASTRAY);
 
-			if (!astray && sg_fields.to_post[team - 1] &&
+			if (!astray && sg_fields.to_post[SG_TeamIdx(team)] &&
 			    sg_cv.defpost->value >= 3)
-				goal_field = sg_fields.to_post[team - 1];
+				goal_field = sg_fields.to_post[SG_TeamIdx(team)];
 			else if (!astray && !bot->def_stand &&
-			         sg_fields.to_lane[team - 1] &&
+			         sg_fields.to_lane[SG_TeamIdx(team)] &&
 			         sg_cv.raillane->value)
 				/* the second defender holds the computed rail lane; the
 				 * watchman stays on the stand (the .dpo lesson: never
 				 * empty the stand for a post) */
-				goal_field = sg_fields.to_lane[team - 1];
-			else if (astray && sg_fields.to_icept[team - 1] &&
+				goal_field = sg_fields.to_lane[SG_TeamIdx(team)];
+			else if (astray && sg_fields.to_icept[SG_TeamIdx(team)] &&
 			         sg_cv.defreact->value >= 3)
-				goal_field = sg_fields.to_icept[team - 1];
+				goal_field = sg_fields.to_icept[SG_TeamIdx(team)];
 		}
 	}
 	else if (role == SG_ROLE_RECOVER)
@@ -718,7 +712,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	{
 		edict_t *ht = SG_ChatEscortTarget(e);
 
-		goal_field = sg_fields.our_carrier[team - 1];
+		goal_field = sg_fields.our_carrier[SG_TeamIdx(team)];
 
 		/*
 		 * THE SCOOP (sg_scoop, A/B wave 183+). Sixty-two parity drops:
@@ -733,8 +727,9 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * closest by construction.
 		 */
 		if (sg_cv.scoop->value &&
-		    sg_caco_team_belief.carrier[team - 1].client < 0 &&
-		    sg_caco_team_belief.flag[2 - team].state == SG_FLAG_ASTRAY)
+		    sg_caco_team_belief.carrier[SG_TeamIdx(team)].client < 0 &&
+		    sg_caco_team_belief.flag[SG_TeamIdx(SG_EnemyTeam(team))].state ==
+		        SG_FLAG_ASTRAY)
 		{
 			goal_field = (team == CTF_TEAM_RED)
 			    ? sg_fields.to_blue_flag_now
@@ -759,7 +754,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		if (sg_cv.interpose->value)
 		{
 			sg_belief_carrier_t *oc =
-			    &sg_caco_team_belief.carrier[team - 1];
+			    &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
 			if (oc->client >= 0 && oc->seed >= 0)
 			{
@@ -769,7 +764,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				for (s11 = 0; s11 < SG_MAX_ENEMY_TRACK; s11++)
 				{
 					sg_belief_enemy_t *en11 =
-					    &sg_caco_enemies[team - 1][s11];
+					    &sg_caco_enemies[SG_TeamIdx(team)][s11];
 					vec3_t dd11;
 
 					if (en11->client < 0 || en11->seed < 0 ||
@@ -876,7 +871,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						VectorAdd(
 						    SG_Rune()->seeds[oc->seed].origin,
 						    SG_Rune()->seeds[
-						        sg_caco_enemies[team - 1][ts].seed].origin,
+						        sg_caco_enemies[SG_TeamIdx(team)][ts].seed].origin,
 						    mid);
 						VectorScale(mid, 0.5f, mid);
 						ms = Rune_NearestSeed(SG_Rune(), mid);
@@ -932,7 +927,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	     e->client->rune->runetype == RUNE_REGEN) &&
 	    SG_TimerReady(bot->runetoss_next))
 	{
-		sg_belief_carrier_t *rc0 = &sg_caco_team_belief.carrier[team - 1];
+		sg_belief_carrier_t *rc0 = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
 		if (rc0->client >= 0)
 		{
@@ -946,7 +941,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				if (bot->runeconv_until <= 0.0f)
 					SG_TimerArm(&bot->runeconv_until, 8.0f);
 				if (SG_TimerPending(bot->runeconv_until))
-					goal_field = sg_fields.our_carrier[team - 1];
+					goal_field = sg_fields.our_carrier[SG_TeamIdx(team)];
 				else
 				{
 					bot->runeconv_until = 0.0f;

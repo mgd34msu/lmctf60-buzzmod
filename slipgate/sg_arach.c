@@ -551,7 +551,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	int team = bot->ent->client->ctf.teamnum;
 	int size = 0, defenders_wanted, my_rank = 0, i;
 	int my_client = (int)(bot->ent - g_edicts) - 1;
-	sg_belief_carrier_t *own = &sg_caco_team_belief.carrier[team - 1];
+	sg_belief_carrier_t *own = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
 	if (carrying)
 		return SG_ROLE_CARRY;
@@ -605,11 +605,12 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	 */
 	{
 		qboolean ours_astray =
-		    (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY);
+		    (sg_caco_team_belief.flag[SG_TeamIdx(team)].state == SG_FLAG_ASTRAY);
 		qboolean theirs_astray =
-		    (sg_caco_team_belief.flag[2 - team].state == SG_FLAG_ASTRAY);
+		    (sg_caco_team_belief.flag[SG_TeamIdx(SG_EnemyTeam(team))].state ==
+		     SG_FLAG_ASTRAY);
 		qboolean have_carrier = (own->client >= 0 &&
-		                         sg_fields.our_carrier_valid[team - 1]);
+		                         sg_fields.our_carrier_valid[SG_TeamIdx(team)]);
 
 		defenders_wanted = ours_astray ? 1 : 2;
 
@@ -629,7 +630,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		{
 			static float ts_until[2];
 			static int ts_skew[2];
-			int ts = (team == CTF_TEAM_RED) ? 0 : 1;
+			int ts = SG_TeamIdx(team);
 
 			if (SG_TimerReady(ts_until[ts]))
 			{
@@ -789,7 +790,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				 */
 				static int esc_carrier[2] = { -1, -1 };
 				static qboolean esc_on[2] = { true, true };
-				int et = (team == CTF_TEAM_RED) ? 0 : 1;
+				int et = SG_TeamIdx(team);
 				int cc = own->client;
 
 				if (esc_carrier[et] != cc)
@@ -1063,7 +1064,7 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 			 */
 			if (sg_cv.debug->value && team >= 1 && team <= 2)
 			{
-				int pti = (team == CTF_TEAM_RED) ? 0 : 1;
+				int pti = SG_TeamIdx(team);
 
 				if (sg_fields.shelf_cliff[pti] &&
 				    sg_fields.shelf_cliff[pti][bot->seed] > 0 &&

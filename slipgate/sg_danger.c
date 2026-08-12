@@ -25,9 +25,9 @@ void Danger_Learn(int team, int seed)
 {
 	if (team < 1 || team > 2 || seed < 0 || seed >= SG_MAX_SEEDS)
 		return;
-	sg_danger[team - 1][seed] += 1200;      /* fitted: ~a detour's worth */
-	if (sg_danger[team - 1][seed] > 8000)
-		sg_danger[team - 1][seed] = 8000;
+	sg_danger[SG_TeamIdx(team)][seed] += 1200;      /* fitted: ~a detour's worth */
+	if (sg_danger[SG_TeamIdx(team)][seed] > 8000)
+		sg_danger[SG_TeamIdx(team)][seed] = 8000;
 }
 
 void Danger_Decay(void)
@@ -84,6 +84,6 @@ void Danger_Load(void)
 /* the read side: pricing borrows the team ledger, never writes it */
 const int *Danger_Field(int team)
 {
-	return sg_danger[team - 1];
+	return sg_danger[SG_TeamIdx(team)];
 }
 

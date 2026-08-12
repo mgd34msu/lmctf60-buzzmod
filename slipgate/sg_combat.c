@@ -32,6 +32,7 @@
 
 #include <math.h>
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
 
 /* ------------------------------------------------------------------- facts
  *
@@ -1683,7 +1684,7 @@ static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 
 	for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 	{
-		sg_belief_enemy_t	*en = &sg_caco_enemies[team - 1][s];
+		sg_belief_enemy_t	*en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 		vec3_t				d;
 		float				dist;
 
@@ -2360,11 +2361,12 @@ static float Worth_Health(edict_t *e)
 	 */
 	if (!SG_MegaOn())
 	{
-		int i;
+		const int *ents;
+		int i, n = SG_MegaEntities(&ents);
 
-		for (i = 0; i < globals.num_edicts; i++)
+		for (i = 0; i < n; i++)
 		{
-			edict_t *it = &g_edicts[i];
+			edict_t *it = &g_edicts[ents[i]];
 
 			if (!it->inuse || !it->classname)
 				continue;
@@ -2410,9 +2412,10 @@ static float Worth_Health(edict_t *e)
 
 static float Worth_Mega(edict_t *e)
 {
-	float	worth;
-	int		h = e->health;
-	int		i, team;
+	float		worth;
+	int			h = e->health;
+	int			i, n, team;
+	const int	*ents;
 
 	if (!SG_MegaOn())
 		return 0.0f;
@@ -2442,9 +2445,10 @@ static float Worth_Mega(edict_t *e)
 	 * thing the belief table exists to stop.
 	 */
 	team = e->client->ctf.teamnum;
-	for (i = 0; i < globals.num_edicts; i++)
+	n = SG_MegaEntities(&ents);
+	for (i = 0; i < n; i++)
 	{
-		edict_t *it = &g_edicts[i];
+		edict_t *it = &g_edicts[ents[i]];
 
 		if (!it->inuse || !it->classname)
 			continue;
@@ -2668,7 +2672,7 @@ static float Worth_Rune(edict_t *e)
 	 * it to fall back on -- so reading the wrong team's row here would be the
 	 * purest form of the leak the ruling names.
 	 */
-	ti = (e->client->ctf.teamnum == CTF_TEAM_BLUE) ? 1 : 0;
+	ti = SG_TeamIdx(e->client->ctf.teamnum);
 
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
@@ -2870,7 +2874,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 
 		for (s = 0; r && s < SG_MAX_ENEMY_TRACK; s++)
 		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+			sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 			if (en->client < 0 || en->heard_only)
 				continue;
@@ -3292,7 +3296,7 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 				for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 				{
 					sg_belief_enemy_t *en =
-					    &sg_caco_enemies[team - 1][s];
+					    &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 					if (en->client >= 0 && 1 + en->client == st->enemy &&
 					    en->seed >= 0 && en->seed < r->hdr.num_seeds)

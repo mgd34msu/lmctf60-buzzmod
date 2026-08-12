@@ -15,6 +15,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
 
 sg_fields_t sg_fields;
 
@@ -740,8 +741,8 @@ qboolean Fields_Setup(rune_t *r)
 	sg_floodcheck_armed = true;
 	SG_RopecostRefresh();
 
-	rf = G_Find(NULL, FOFS(classname), "info_flag_red");
-	bf = G_Find(NULL, FOFS(classname), "info_flag_blue");
+	rf = SG_FlagStand(CTF_TEAM_RED, true);
+	bf = SG_FlagStand(CTF_TEAM_BLUE, true);
 	if (!rf || !bf)
 		return false;
 

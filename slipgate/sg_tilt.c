@@ -165,9 +165,9 @@ void Tilt_Note(edict_t *e, sg_bot_t *bot)
 	bot->tilt_killer_seed = -1;
 	if (killer >= 0 && (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE))
 		for (k = 0; k < SG_MAX_ENEMY_TRACK; k++)
-			if (sg_caco_enemies[team - 1][k].client == killer)
+			if (sg_caco_enemies[SG_TeamIdx(team)][k].client == killer)
 			{
-				bot->tilt_killer_seed = sg_caco_enemies[team - 1][k].seed;
+				bot->tilt_killer_seed = sg_caco_enemies[SG_TeamIdx(team)][k].seed;
 				break;
 			}
 

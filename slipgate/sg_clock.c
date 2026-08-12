@@ -118,7 +118,7 @@ int Clock_DefendShift(int team)
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return 0;
 
-	switch (sg_clock_posture[team - 1])
+	switch (sg_clock_posture[SG_TeamIdx(team)])
 	{
 	case SG_CLOCK_AHEAD_LATE:	return 1;   /* one more on the stand */
 	case SG_CLOCK_BEHIND_LATE:	return -1;  /* all in */
@@ -137,7 +137,7 @@ float Clock_CoverScale(int team)
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return 1.0f;
 
-	switch (sg_clock_posture[team - 1])
+	switch (sg_clock_posture[SG_TeamIdx(team)])
 	{
 	case SG_CLOCK_AHEAD_LATE:	return 1.3f;
 	case SG_CLOCK_BEHIND_LATE:	return 0.8f;
@@ -224,7 +224,7 @@ void Clock_Frame(void)
 			gi.dprintf("CLOCKPLAY %s: %s, %+d defender (caps %d-%d, "
 			           "%.0f%% clock left)\n",
 			           t ? "blue" : "red", sg_clock_names[want],
-			           Clock_DefendShift(t + CTF_TEAM_RED),
+			           Clock_DefendShift(SG_TeamFromIdx(t)),
 			           sg_clock_caps[t], sg_clock_caps[1 - t],
 			           sg_clock_left * 100.0f);
 	}

@@ -9,6 +9,27 @@
 #ifndef SG_UTIL_H
 #define SG_UTIL_H
 
+/* Team/index conversions -- CTF_TEAM_RED and CTF_TEAM_BLUE (1 and 2,
+ * g_ctffunc.h) are the wire values, but most per-team state is a
+ * 2-element array (row 0 red, row 1 blue), and finding the OTHER
+ * team came up just as often. Both directions were hand-derived at
+ * well over a hundred sites -- `team - CTF_TEAM_RED` as an array
+ * index, `(team == CTF_TEAM_RED) ? 0 : 1` written the other way
+ * around, an enemy team spelled out as a ternary -- each a fresh
+ * chance for the two forms to drift.
+ *
+ *   SG_TeamIdx(team)     team - CTF_TEAM_RED       (0 red, 1 blue)
+ *   SG_TeamFromIdx(idx)  CTF_TEAM_RED + idx         (inverse of above)
+ *   SG_EnemyTeam(team)   the other of RED/BLUE
+ *
+ * All three assume team is CTF_TEAM_RED or CTF_TEAM_BLUE; a caller
+ * that has not already ruled out CTF_TEAM_UNDEFINED (or a spectator)
+ * rules it out itself, the same discipline the sites they replace
+ * already required of themselves. */
+int	SG_TeamIdx(int team);
+int	SG_TeamFromIdx(int idx);
+int	SG_EnemyTeam(int team);
+
 /* The live flag ITEMS (droptofloor-settled, the thing a touch scores
  * on), by the engine's own pointers.  NULL when absent or carried. */
 edict_t	*SG_OwnFlag(int team);      /* the flag this team defends */

@@ -635,7 +635,7 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 	{
 		for (k = 0; k < SG_MAX_ENEMY_TRACK; k++)
 		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][k];
+			sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][k];
 
 			if (en->client < 0 || en->seed < 0 ||
 			    en->seed >= SG_Rune()->hdr.num_seeds)
@@ -1700,9 +1700,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			}
 			else if (!gf)
 			{
-				gf = G_Find(NULL, FOFS(classname),
-				            (team == CTF_TEAM_RED) ? "info_flag_red"
-				                                   : "info_flag_blue");
+				gf = SG_FlagStand(team, true);
 			}
 			if (gf)
 			{
@@ -2902,7 +2900,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			for (s15 = 0; s15 < SG_MAX_ENEMY_TRACK; s15++)
 			{
 				sg_belief_enemy_t *en15 =
-				    &sg_caco_enemies[team - 1][s15];
+				    &sg_caco_enemies[SG_TeamIdx(team)][s15];
 				vec3_t sd15;
 				float sl15;
 
@@ -3391,7 +3389,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					for (s9 = 0; s9 < SG_MAX_ENEMY_TRACK; s9++)
 					{
 						sg_belief_enemy_t *en9 =
-						    &sg_caco_enemies[team - 1][s9];
+						    &sg_caco_enemies[SG_TeamIdx(team)][s9];
 
 						if (en9->client >= 0 &&
 						    SG_AgeUnder(en9->seen_time, 3.0f))
