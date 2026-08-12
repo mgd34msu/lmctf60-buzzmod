@@ -377,11 +377,11 @@ TAPVAR=(0     0        0        0        0         0        0         0        0
 # escort/defense panel asymmetry between teams; caps at the 16-wave
 # floor.
 TEAMSKEW=(0    0        0        0        1         0        0         0        0        0)
-# ESCORTDOSE dose-down (armed 2026-08-12 post rung-4 pass): the set's
-# actionable residual is escort magnitude/consistency; 20 on s05 vs the
-# adopted 35 on s08. Bar: escort_fraction_obs toward the human band,
-# caps guarded (the 35 adoption was a caps winner).
-ESCORTDOSE2=(0 0        0        0        20        0        0         0        0        0)
+# ESCORTDOSE dose-down DISARMED 2026-08-12 (Rule 23, the owner's order:
+# bots better than humans do not get dumbed down). The dose-down chased
+# a judge tell by degrading escort consistency below the caps-optimal
+# 35; rung 4 passed with the gap intact. Accepted bots-better residual.
+ESCORTDOSE2=(0 0        0        0        0         0        0         0        0        0)
 # STRICTGRAB-OFF (armed 2026-08-12 ~09:00, the flag-home eye's finding:
 # 98.1% of arrivals have the flag home, 0.3% grab within 3s -- the
 # clean-grab hold IS the conversion gap). s06=0 vs s07=1 (adopted).

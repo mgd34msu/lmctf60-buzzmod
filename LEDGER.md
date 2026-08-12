@@ -41,6 +41,19 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## RULE 23 (owner, 2026-08-12 ~12:10): bots better than humans stay better
+
+"If bots are better than humans, do not dumb them down." Standing law,
+alongside Rule 21 (caps > cosmetics). Immediate effect: the escortdose
+20-vs-35 dose-down is DISARMED -- it degraded caps-optimal escort
+consistency to chase a judge tell rung 4 passed despite. The
+escort-magnitude separation (bot 0.4-0.8 vs human 0.03-0.32) is now an
+ACCEPTED bots-better residual, like rung 2's never-falling. Forward
+consequence: humanization mechanisms are legitimate only where they do
+not reduce play quality (texture, cadence, voice -- yes; degrading
+escorts, aim, or grabs -- no). Stage 2 IS this rule's spirit: beat the
+humans' numbers while passing.
+
 ## lmctf44 is broken for stealing; strictgrab trial re-pointed (2026-08-12 ~11:10)
 
 The strictgrab liveness peek: both arms IDENTICAL -- 43k stand-arrivals,
