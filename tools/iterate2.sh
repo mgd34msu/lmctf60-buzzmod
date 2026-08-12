@@ -538,7 +538,6 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 else
                     echo "set sv_botfill \"${FILLS[$i]}\""
                 fi
-                echo "set sg_strictgrab $A"
                 echo "set sg_press $A"
                 if [ "${INTERDOSE[$i]}" != "0" ]; then
                     echo "set sg_interpose ${INTERDOSE[$i]}"
