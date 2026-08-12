@@ -41,6 +41,19 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## Trip census corrects the stage-2 map (2026-08-12 ~08:55)
+
+tools/tripcensus.py, both populations: bots make MORE approach trips
+per player-minute (40.8 vs 25.7) and arrive at 94.7% vs 69.9% -- and
+the human numbers are bounds contaminated by client-PVS loss (their
+died-en-route 21% includes coverage loss; real human arrival is
+higher). The defense card's 'half the approach pressure' finding was
+the coverage artifact its own caveat named: human stand-minutes only
+count busy moments. CORRECTED STAGE-2 MAP: pressure is not the gap;
+conversion at the stand is (bots arrive constantly, convert at ~2%).
+Next eye: fraction of bot arrivals with the enemy flag HOME -- if bots
+arrive into empty stands, the gap is timing, not routing.
+
 ## RUNG 4 SET #2: PASSED (2026-08-12 ~07:50)
 
 Pooled 6/18 against the pre-registered chance-or-worse bar (precedents:
