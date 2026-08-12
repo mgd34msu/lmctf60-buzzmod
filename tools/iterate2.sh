@@ -372,6 +372,11 @@ TAPVAR=(0     0        0        0        0         0        0         0        0
 # escort/defense panel asymmetry between teams; caps at the 16-wave
 # floor.
 TEAMSKEW=(0    0        0        0        1         0        0         0        0        0)
+# RAILRHYTHM (low-dose retrial, armed 2026-08-12 post-deploy): the first
+# trial was ruled against an aggregate; dose 0.5 on s03 vs s04 control,
+# eye = fightsheet rail_window_exposure (0.896), 16-wave floor from the
+# arming wave. Prior hookpong (s03) struck null on revisit_spike2_mass.
+RAILRHYTHM=(0  0        0.5      0        0         0        0         0        0        0)
 
 # HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
 # three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).
@@ -381,7 +386,7 @@ TEAMSKEW=(0    0        0        0        1         0        0         0        
 # with the MEASURED ARM BIAS correction (A/A: s03 converts 0.076 lower
 # than s04 with nothing armed -- the raw caps comparison is invalid on
 # this pair; compare against the A/A baseline delta).
-HOOKPONG=(0    0        1        0        0         0        0         0        0        0)
+HOOKPONG=(0    0        0        0        0         0        0         0        0        0)
 
 # DITHER RETRY 2026-08-11 on its NEW eye (max_transition_mass, sep
 # 0.901 -- the cell-level scalar whose absence voided the first trial's
@@ -392,7 +397,7 @@ HOOKPONG=(0    0        1        0        0         0        0         0        
 # (wrong direction on the proxy), off/caps flat. The aggregate scalar
 # cannot see cell-level determinism; a max-transition-mass eye is the
 # prerequisite for any retry. Dark.
-ROUTEDITHER=(0 0        0        0        0         120      0         0        0        0)
+ROUTEDITHER=(0 0        0        0        0         0        0         0        0        0)
 
 # NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
 # dead flat): the flood layer is exonerated -- a 90% rope-price cut
@@ -560,6 +565,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_unlinger ${UNLINGER[$i]}"
                 echo "set sg_depace ${DEPACE[$i]}"
                 echo "set sg_hookpong ${HOOKPONG[$i]}"
+                echo "set sg_railrhythm ${RAILRHYTHM[$i]}"
                 echo "set sg_teamskew ${TEAMSKEW[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"

@@ -41,6 +41,24 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## Verdicts, first post-deploy floor (2026-08-12 ~06:40, waves 924-940)
+
+- **hookpong STRUCK (null)**: revisit_spike2_mass 0.307 (on) vs 0.299
+  (off), max_transition_mass flat -- the hook A-B-A shelf does not
+  touch the spike. The plateau tell needs a different tie-break.
+- **dither-120 STRUCK (null)**: max_transition_mass 0.5412 vs 0.5413,
+  identical to four decimals on its own purpose-built eye.
+- **teamskew PASSES ITS GATE**: attacker-count variance +68% (sd 0.27
+  -> 0.45), defense variance up, means flat, escort_fraction_obs
+  unmoved (0.400 vs 0.402). The mechanism expresses without film
+  regression; the mirror-symmetry tell itself goes to the rung-4 set
+  #2 blind judgment. s05 stays armed for the set cut.
+- **Armed next**: railrhythm dose 0.5 on the freed s03/s04 pair (eye:
+  rail_window_exposure, 16 waves from arming). **itemlead dose is
+  BLOCKED honestly**: sg_itemlead is a boolean gate in code (magnitude
+  unused) -- a dose arm would be inert and its verdict void; giving it
+  a real dose knob is a game-code change awaiting owner sign-off.
+
 ## Conduct audit (2026-08-11, owner-ordered: "have you watched them?")
 
 Nobody had. `tools/conduct.py` now measures visible stupidity and
