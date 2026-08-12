@@ -152,6 +152,11 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
  * False leaves out_from untouched. */
 qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from);
 
+/* has anything landed on this body since `since`? Reads the same damage
+ * ring: the spawn beat and the early-return errand both need "did the
+ * world just object" and neither needs a sense of its own. */
+qboolean Beat_HurtSince(edict_t *e, float since);
+
 /* ------------------------------------------------------------ the rail rhythm
  *
  * The owner, describing his own play: "rails guard sight lines on many maps

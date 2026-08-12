@@ -7,7 +7,6 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
-#include "slipgate/sg_bot.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_util.h"

@@ -5,6 +5,16 @@
 #ifndef SG_DESCEND_H
 #define SG_DESCEND_H
 
+/* per-link human traffic tiers, loaded alongside the rune (0-255) --
+ * the descent's own link-cost pricing terms */
+extern unsigned char *sg_human_use;
+extern unsigned char *sg_human_live;    /* cut from the 20s windows */
+extern unsigned char *sg_human_escape;  /* the ESCAPEE's cut: only the flag */
+
+/* per-seed human defensive dwell / steal-response END, per team */
+extern unsigned char *sg_def_post[2];
+extern unsigned char *sg_def_icept[2];
+
 int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
                           int team, qboolean carrying,
                           const sg_weights_t *live,

@@ -5,6 +5,8 @@
 #ifndef SG_MOVE_H
 #define SG_MOVE_H
 
+extern int *sg_airnext;   /* per-seed way to air (Air_Build) */
+
 void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
                 int team, qboolean carrying,
                 const sg_weights_t *live, const sg_weights_t *w,

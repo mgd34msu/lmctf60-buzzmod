@@ -342,20 +342,5 @@ typedef struct sg_think_s {
 void SG_BotThink(sg_bot_t *bot);
 qboolean SG_LevelSetup(void);
 void Botfill_Frame(void);
-qboolean Beat_HurtSince(edict_t *e, float since);
-
-extern const char *sg_role_names[];
-extern int *sg_airnext;   /* per-seed way to air (Air_Build) */
-extern float sg_grab_time[2];
-extern float sg_push_until[2];
-extern unsigned char *sg_human_use;
-extern unsigned char *sg_human_live;
-extern unsigned char *sg_human_escape;
-extern unsigned char *sg_def_post[2];
-extern unsigned char *sg_def_icept[2];
-#define SG_ESC_BUCKETS	8
-extern int sg_escape_count[2][SG_ESC_BUCKETS];
-extern int sg_escape_total[2];
-extern int sg_cur_role;   /* pricing bot role, frame-scoped */
 
 #endif

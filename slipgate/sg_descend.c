@@ -20,6 +20,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_descend.h"
+#include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
 
 void		Cmd_Kill_f(edict_t *ent);
 

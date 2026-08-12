@@ -13,6 +13,7 @@
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_weights.h"    /* sg_role_names -- the roster print */
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);

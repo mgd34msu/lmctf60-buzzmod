@@ -11,6 +11,7 @@ extern qboolean		sg_route_pure_now;
 extern qboolean		sg_cur_push;
 extern int			sg_cur_health;
 extern float		sg_cur_mega;
+extern int			sg_cur_role;   /* pricing bot role, frame-scoped */
 
 float	Rune_RoleFactor(int role, int entnum);
 float	Detour_Value(int seed, int fc, const int *goal_field, float wv);

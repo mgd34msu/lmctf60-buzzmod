@@ -22,6 +22,7 @@
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
+#include "slipgate/sg_price.h"     /* sg_cur_role */
 
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
