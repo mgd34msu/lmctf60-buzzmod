@@ -45,11 +45,23 @@ else
     fail "q2ded not found at $Q2DED -- build yquake2 (github.com/yquake2/yquake2) and either place it there or export Q2DED=/path/to/q2ded"
 fi
 
+# 3b. Quake 2 base data (retail -- we cannot ship it)
+if ls "$GAMEROOT"/baseq2/pak0.pak >/dev/null 2>&1 || ls "${Q2ROOT:-$HOME/Games/Quake2}"/baseq2/pak*.pak >/dev/null 2>&1; then
+    pass "baseq2 retail data"
+else
+    fail "baseq2/pak0.pak not found under $GAMEROOT -- Quake 2 retail data required (Steam/GOG/CD); copy baseq2/ into your Q2 root"
+fi
+
 # 4. The game directory the fleet runs in
 GAMEROOT="${Q2ROOT:-$HOME/Games/Quake2}"
 GAMEDIR="$GAMEROOT/lmctf-hooktest"
 if [ -d "$GAMEDIR" ]; then
     pass "fleet gamedir $GAMEDIR"
+    if ls "$GAMEDIR"/*.pak >/dev/null 2>&1; then
+        pass "mod paks present ($(ls "$GAMEDIR"/*.pak | wc -l))"
+    else
+        fail "no paks in $GAMEDIR -- copy assets/lmctf6-buzzmod.pak in, plus the original LMCTF 6.0 asset paks (community mirrors)"
+    fi
     [ -d "$GAMEDIR/maps" ] && pass "maps/ present" \
         || fail "maps/: the fleet's map rotation needs the map .bsp files (retail/community paks -- not distributable with this repo). Copy your LMCTF map set into $GAMEDIR/maps or a pak."
 else

@@ -345,7 +345,25 @@ The shared parsing library and the mining/report/forensics scripts built on it. 
 
 ---
 
-## BRING YOUR OWN DEMOS
+## WHAT YOU SUPPLY
+
+This repository ships source code, our own pak
+(`assets/lmctf6-buzzmod.pak`), and every mined/derived data artifact.
+Five things it cannot ship, with where each comes from:
+
+| You supply | Why we can't ship it | Where to get it |
+|---|---|---|
+| **Quake 2 base data** (`baseq2/pak0.pak`) | retail id Software content | a Quake 2 purchase (Steam/GOG/original CD); place `baseq2/` under your Q2 root |
+| **The engine** (`q2ded` + client) | built for your machine | build yquake2 from source (github.com/yquake2/yquake2); `setup.sh` looks for it or honors `$Q2DED` |
+| **LMCTF base mod assets** (models, sounds, textures) | the original mod's distribution | the LMCTF 6.0 release archives (community mirrors); unpack into your mod directory alongside our pak |
+| **Map files** (`.bsp`, loose or in paks) | community/retail map content | LMCTF map archives; the fleet's rotation maps are listed in `iterate2.sh`'s MAPS table — supply at least those |
+| **A human demo corpus** (`.dm2`) | private recordings | your own — see below |
+
+`tools/setup.sh` checks for all of these and names what's missing.
+Navigation data (`.rune` files) is NOT on the list — the game
+generates it per map with `sv rune` (or batch: `runegen.sh`).
+
+### Bring your own demos
 
 The human demo corpus itself is NOT distributed with this repository —
 the `.dm2` files we mined are private recordings. Everything derived
