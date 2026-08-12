@@ -2598,6 +2598,72 @@ static void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 }
 
 
+/*
+ * THE LIVE ROW (split from SG_BotThink, 2026-08-11 standards pass; body
+ * verbatim): the fitted role row modulated by this bot's state -- combat
+ * worths, the rune-threat bump, the patrol appetite.
+ */
+static void Think_LiveWeights(sg_bot_t *bot, edict_t *e, sg_role_t role,
+                              int team, sg_weights_t *live)
+{
+	/*
+	 * The role row is a BIAS, not an absolute. What an item is actually worth
+	 * to THIS bot right now -- health as its own health drops, armour by
+	 * deficit, a weapon when it has none worth the name, ammo against the
+	 * floor of the weapon it holds, the quad against its respawn clock, a rune
+	 * it is allowed to pick up -- is state, and SG_CombatWeights supplies it
+	 * from WEAPONS.md 2.3. Every worth there is derived from a cited line of
+	 * this tree; the row below stays exactly as fitted and is multiplied
+	 * through. The result is clamped to the same [0, 2.0] the detour decay's
+	 * 1500 ms scale (Detour_Value, above) makes meaningful.
+	 */
+	SG_CombatWeights(e, Weights_Row(role), live);
+	/*
+	 * Rune threat (WEAPONS.md 2.4-D4, the honest half): a sighted enemy
+	 * glowing with RF_GLOW (p_view.c:792-794) holds SOME rune -- the glow
+	 * never says which, so this is a generic bump to how much OUR side
+	 * should want rune-class pickups, not the dossier's Damage-specific
+	 * Resist play, which is unknowable from a sighting.
+	 */
+	{
+		int s;
+
+		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+		{
+			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+
+			if (en->client >= 0 && en->runed &&
+			    level.time - en->seen_time < 15.0f)
+			{
+				/* generic: someone glows, runes matter more. When the
+				 * inference chain can NAME the Damage rune in enemy
+				 * hands, the dossier's full Resist posture applies
+				 * (WEAPONS.md 2.4-D4: x1.80). */
+				live->item[SG_FC_RUNE] *=
+				    Caco_EnemyHasDamageRune(team) ? 1.80f : 1.45f;
+				if (live->item[SG_FC_RUNE] > 2.0f)
+					live->item[SG_FC_RUNE] = 2.0f;
+				break;
+			}
+		}
+	}
+	/*
+	 * The patrol's circuit is an appetite, not a waypoint list: a
+	 * permanently item-hungry second defender oscillates between the
+	 * stand's pull and whatever armor or health just respawned nearby,
+	 * which IS the patrol (it13: without this, the unpinned patrol stood
+	 * at its field minimum -- 592 samples at one point -- because
+	 * standing there is what minimums are for).
+	 */
+	if (role == SG_ROLE_DEFEND && !bot->def_stand)
+	{
+		if (live->item[SG_FC_ARMOR] < 1.1f)  live->item[SG_FC_ARMOR] = 1.1f;
+		if (live->item[SG_FC_HEALTH] < 1.0f) live->item[SG_FC_HEALTH] = 1.0f;
+		if (live->item[SG_FC_AMMO] < 1.0f)   live->item[SG_FC_AMMO] = 1.0f;
+	}
+}
+
+
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -2676,61 +2742,7 @@ void SG_BotThink(sg_bot_t *bot)
 
 	Think_CarryBookends(bot, e, role, team, carrying);
 
-	/*
-	 * The role row is a BIAS, not an absolute. What an item is actually worth
-	 * to THIS bot right now -- health as its own health drops, armour by
-	 * deficit, a weapon when it has none worth the name, ammo against the
-	 * floor of the weapon it holds, the quad against its respawn clock, a rune
-	 * it is allowed to pick up -- is state, and SG_CombatWeights supplies it
-	 * from WEAPONS.md 2.3. Every worth there is derived from a cited line of
-	 * this tree; the row below stays exactly as fitted and is multiplied
-	 * through. The result is clamped to the same [0, 2.0] the detour decay's
-	 * 1500 ms scale (Detour_Value, above) makes meaningful.
-	 */
-	SG_CombatWeights(e, Weights_Row(role), &live);
-	/*
-	 * Rune threat (WEAPONS.md 2.4-D4, the honest half): a sighted enemy
-	 * glowing with RF_GLOW (p_view.c:792-794) holds SOME rune -- the glow
-	 * never says which, so this is a generic bump to how much OUR side
-	 * should want rune-class pickups, not the dossier's Damage-specific
-	 * Resist play, which is unknowable from a sighting.
-	 */
-	{
-		int s;
-
-		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
-
-			if (en->client >= 0 && en->runed &&
-			    level.time - en->seen_time < 15.0f)
-			{
-				/* generic: someone glows, runes matter more. When the
-				 * inference chain can NAME the Damage rune in enemy
-				 * hands, the dossier's full Resist posture applies
-				 * (WEAPONS.md 2.4-D4: x1.80). */
-				live.item[SG_FC_RUNE] *=
-				    Caco_EnemyHasDamageRune(team) ? 1.80f : 1.45f;
-				if (live.item[SG_FC_RUNE] > 2.0f)
-					live.item[SG_FC_RUNE] = 2.0f;
-				break;
-			}
-		}
-	}
-	/*
-	 * The patrol's circuit is an appetite, not a waypoint list: a
-	 * permanently item-hungry second defender oscillates between the
-	 * stand's pull and whatever armor or health just respawned nearby,
-	 * which IS the patrol (it13: without this, the unpinned patrol stood
-	 * at its field minimum -- 592 samples at one point -- because
-	 * standing there is what minimums are for).
-	 */
-	if (role == SG_ROLE_DEFEND && !bot->def_stand)
-	{
-		if (live.item[SG_FC_ARMOR] < 1.1f)  live.item[SG_FC_ARMOR] = 1.1f;
-		if (live.item[SG_FC_HEALTH] < 1.0f) live.item[SG_FC_HEALTH] = 1.0f;
-		if (live.item[SG_FC_AMMO] < 1.0f)   live.item[SG_FC_AMMO] = 1.0f;
-	}
+	Think_LiveWeights(bot, e, role, team, &live);
 	w = &live;
 
 	/*
