@@ -636,27 +636,20 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 						stats_record_frag(attacker);
 						attacker->client->resp.score++;
 
-						// the frag bell, two deliveries. The world copy is
-						// emitted from the fallen player, so the sound rings
-						// where the kill landed and only players near the
-						// victim hear it -- nothing is emitted at the
-						// attacker's own position. The fragger additionally
-						// gets a private full-volume copy (svc_sound with no
-						// entity or position flags, unicast: a local sound
-						// for that one client), so confirmation never
-						// depends on how far away the kill was. When the
-						// fragger is close enough to hear the world copy,
-						// both arrive in the same client frame and mix as a
-						// single louder bell. Bots have no connection to
-						// deliver the private copy to.
-						gi.sound(self, CHAN_AUTO,
-							gi.soundindex("frag-bell.wav"), 1, ATTN_NORM, 0);
-						if (!(attacker->flags & FL_BOT))
+						// the frag bell (G_KillSound, g_combat.c: world copy
+						// from the fallen player, private copy to the
+						// fragger, ctf_killsound scope). Gated on !ff so a
+						// team kill never rings it -- this score branch is
+						// also reachable by friendly fire outside railgun
+						// play. The carrier check works here because the
+						// obituary runs before the flag is tossed.
+						if (!ff)
 						{
-							gi.WriteByte(svc_sound);
-							gi.WriteByte(0);
-							gi.WriteByte(gi.soundindex("frag-bell.wav"));
-							gi.unicast(attacker, false);
+							qboolean carrier =
+								((redflag  && redflag->owner  == self) ||
+								 (blueflag && blueflag->owner == self));
+
+							G_KillSound(self, attacker, carrier);
 						}
 					}
 

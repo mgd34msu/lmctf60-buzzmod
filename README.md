@@ -127,6 +127,11 @@ New:
 |-|-|-|
 | `ctf_statsdb` | 0 | 0 off, 1 per-player files, 2 shared database |
 | `ctf_switch_penalty` | 0 | 1 clears your score for joining the bigger winning team |
+| `ctf_hitsound` | 1 | hit confirmation: 0 off, 1 flag-carrier hits only, 2 all hits |
+| `ctf_killsound` | 2 | frag bell: 0 off, 1 flag-carrier frags only, 2 all frags |
+
+Both sounds ring from the player the event happened to, and the attacker
+always hears a private confirmation copy no matter the distance.
 
 Upstream cvars are unchanged: `dmflags` `maxclients` `ctfflags` `refset`
 

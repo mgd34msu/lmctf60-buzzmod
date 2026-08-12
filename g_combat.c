@@ -416,6 +416,58 @@ qboolean CheckTeamDamage (edict_t *targ, edict_t *attacker)
 	return false;
 }
 
+// -- feedback sounds -------------------------------------------------------
+//
+// Two event sounds, hit and kill, each with the same two-delivery contract:
+// a world copy emitted from the player the event HAPPENED TO (so the sound
+// rings where it landed and only that neighborhood hears it -- nothing is
+// emitted at the attacker's own position), plus a private full-volume copy
+// unicast to the attacker (svc_sound with no entity or position flags plays
+// as a local sound for that one client), so confirmation never depends on
+// distance. An attacker close to the event hears both copies mixed in the
+// same client frame as one louder sound.
+//
+// Each sound has a scope cvar: 0 silent, 1 flag-carrier events only (the
+// classic LMCTF arrangement), 2 every player event (the full Quake 3
+// soundscape). Both archived so a server keeps its choice.
+
+static cvar_t *ctf_hitsound;	// 0 off, 1 carrier hits only, 2 all hits
+static cvar_t *ctf_killsound;	// 0 off, 1 carrier frags only, 2 all frags
+
+static void FeedbackSound(edict_t *event_ent, edict_t *actor, char *sample)
+{
+	int idx = gi.soundindex(sample);
+
+	gi.sound(event_ent, CHAN_AUTO, idx, 1, ATTN_NORM, 0);
+
+	// bots have no connection to deliver the private copy to
+	if (actor && actor->client && !(actor->flags & FL_BOT))
+	{
+		gi.WriteByte(svc_sound);
+		gi.WriteByte(0);
+		gi.WriteByte(idx);
+		gi.unicast(actor, false);
+	}
+}
+
+void G_HitSound(edict_t *targ, edict_t *attacker, qboolean carrier)
+{
+	if (!ctf_hitsound)
+		ctf_hitsound = gi.cvar("ctf_hitsound", "1", CVAR_ARCHIVE);
+
+	if (ctf_hitsound->value >= 2 || (carrier && ctf_hitsound->value >= 1))
+		FeedbackSound(targ, attacker, "fc-hit.wav");
+}
+
+void G_KillSound(edict_t *victim, edict_t *attacker, qboolean carrier)
+{
+	if (!ctf_killsound)
+		ctf_killsound = gi.cvar("ctf_killsound", "2", CVAR_ARCHIVE);
+
+	if (ctf_killsound->value >= 2 || (carrier && ctf_killsound->value >= 1))
+		FeedbackSound(victim, attacker, "frag-bell.wav");
+}
+
 void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, vec3_t point, vec3_t normal, int damage, int knockback, int dflags, int mod)
 {
 	gclient_t* client;
@@ -662,16 +714,20 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 
 
 		// LM_JORM -- CTF Track those who hit the flag carrier
-		if ((redflag  &&  redflag->owner == targ)	||
-			(blueflag && blueflag->owner == targ))
 		{
-			// the sound call sat outside the guard, so world damage to a flag
-			// carrier reached gi.sound with a NULL attacker
-			if (attacker && attacker->client)
-			{
+			qboolean carrier = ((redflag  && redflag->owner  == targ) ||
+			                    (blueflag && blueflag->owner == targ));
+
+			// assist crediting keeps its original trigger exactly,
+			// including a carrier splashing themself
+			if (carrier && attacker && attacker->client)
 				attacker->client->hit_carrier_time = level.time;
-				gi.sound(attacker, CHAN_ITEM, gi.soundindex("fc-hit.wav"), 1, ATTN_NORM, 0);
-			}
+
+			// the hit sound moved off the attacker's position and onto the
+			// player the damage landed on -- see the feedback contract at
+			// FeedbackSound() above. Self-damage stays silent.
+			if (attacker && attacker->client && targ->client && targ != attacker)
+				G_HitSound(targ, attacker, carrier);
 		}
 		// END LM_JORM
 			

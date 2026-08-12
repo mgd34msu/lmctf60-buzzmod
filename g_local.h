@@ -679,6 +679,12 @@ typedef struct MapInfo {
 } MapInfo;
 
 extern  edict_t *redflag; // CTF CODE -- LM_JORM
+
+// feedback sounds (g_combat.c): world copy from the player the event
+// happened to, private copy to the attacker; scope cvars ctf_hitsound /
+// ctf_killsound (0 off, 1 flag-carrier events only, 2 all player events)
+void G_HitSound(edict_t *targ, edict_t *attacker, qboolean carrier);
+void G_KillSound(edict_t *victim, edict_t *attacker, qboolean carrier);
 extern  edict_t *blueflag; // CTF CODE -- LM_JORM
 
 extern  char    motd[1000]; // CTF CODE -- LM_JORM
