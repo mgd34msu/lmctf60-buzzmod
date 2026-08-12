@@ -376,26 +376,38 @@ TAPVAR=(0     0        0        0        0         0        0         0        0
 # (this is a judge-visible texture, not a single-scalar target) plus
 # escort/defense panel asymmetry between teams; caps at the 16-wave
 # floor.
-TEAMSKEW=(0    0        0        0        1         0        0         0        0        0)
+TEAMSKEW=(1    1        1        1        1         1        1         1        1        1)
 # ESCORTDOSE dose-down DISARMED 2026-08-12 (Rule 23, the owner's order:
 # bots better than humans do not get dumbed down). The dose-down chased
 # a judge tell by degrading escort consistency below the caps-optimal
 # 35; rung 4 passed with the gap intact. Accepted bots-better residual.
 ESCORTDOSE2=(0 0        0        0        0         0        0         0        0        0)
-# STRICTGRAB-OFF (armed 2026-08-12 ~09:00, the flag-home eye's finding:
-# 98.1% of arrivals have the flag home, 0.3% grab within 3s -- the
-# clean-grab hold IS the conversion gap). s06=0 vs s07=1 (adopted).
-# Bars: grab latency at home-arrival, steals/wave, caps guarded 16w.
-STRICTGRAB=(1  1        1        1        1         0        1         1        1        1)
+# STRICTGRAB ruled 2026-08-12 at the 16-wave floor and ADOPTED OFF:
+# equal approach volume, 3x steal conversion with the hold released
+# (0.003 vs 0.001), caps dead even (20 v 21), guard held. The clean-
+# grab hold WAS the conversion gap.
+STRICTGRAB=(0  0        0        0        0         0        0         0        0        0)
 # RAILRHYTHM (low-dose retrial, armed 2026-08-12 post-deploy): the first
 # trial was ruled against an aggregate; dose 0.5 on s03 vs s04 control,
 # eye = fightsheet rail_window_exposure (0.896), 16-wave floor from the
 # arming wave. Prior hookpong (s03) struck null on revisit_spike2_mass.
 RAILRHYTHM=(0  0        0        0        0         0        0         0        0        0)
-# PATROL (armed 2026-08-12, owner's go): posted defenders walk legs
-# instead of pacing in place. s03=1 vs s04 control; bars: defender
-# grind share toward human, guard_frac held, caps guarded, 16 waves.
-PATROL=(0      0        1        0        0         0        0         0        0        0)
+# PATROL struck 2026-08-12 at the 16-wave floor: null on every
+# defensive metric (grind 16.35 v 16.36, guard 0.48 v 0.49, approach
+# 3.50 v 3.49). Walking legs neither helped nor hurt; the grind gap
+# needs a different lever.
+PATROL=(0      0        0        0        0         0        0         0        0        0)
+
+# Grind lever search 2026-08-12: patrol struck null, and defpost is
+# already permanently parked above (posts concede more). No third guess
+# without forensics -- the mactf06 pair holds as a clean control while
+# the stand-split decomposition produces the next real lever.
+
+# FASTCARRY (armed 2026-08-12, the conversion chain's next link: with
+# the clean-grab hold released steals tripled, so steal->cap survival
+# is the live bottleneck). s06=1 vs s07 control on lmctf09; bars:
+# carry survival fraction, caps/wave up, steals held, 16 waves.
+FASTCARRY=(0   0        0        0        0         1        0         0        0        0)
 
 # HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
 # three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).
@@ -586,6 +598,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_railrhythm ${RAILRHYTHM[$i]}"
                 echo "set sg_strictgrab ${STRICTGRAB[$i]}"
                 echo "set sg_patrol ${PATROL[$i]}"
+                echo "set sg_fastcarry ${FASTCARRY[$i]}"
                 if [ "${ESCORTDOSE2[$i]}" != "0" ]; then
                     echo "set sg_escortdose ${ESCORTDOSE2[$i]}"
                 fi

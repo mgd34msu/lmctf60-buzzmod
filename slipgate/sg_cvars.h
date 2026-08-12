@@ -79,11 +79,11 @@
 	X(soundfire, "sg_soundfire", "1") \
 	X(spawnbeat, "sg_spawnbeat", "0") \
 	X(sticky, "sg_sticky", "0") \
-	X(strictgrab, "sg_strictgrab", "1") \
+	X(strictgrab, "sg_strictgrab", "0") \
 	X(subframes, "sg_subframes", "8") \
 	X(tactics, "sg_tactics", "1") \
 	X(tapvar, "sg_tapvar", "0") \
-	X(teamskew, "sg_teamskew", "0") \
+	X(teamskew, "sg_teamskew", "1") \
 	X(termbrake, "sg_termbrake", "1") \
 	X(tilt, "sg_tilt", "0") \
 	X(timercall, "sg_timercall", "0") \
