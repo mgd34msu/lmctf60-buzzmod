@@ -4,6 +4,18 @@ The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
+*Updated 2026-08-12 ~01:20: **THE DEPLOY PACKAGE GOES OUT** — the
+through-the-flag grab fix (9900458 + d54c971 + the wall clamp) and the
+last_role debug-gate fix (30cbaa1) ride the standards-pass build to the
+fleet at the next wave boundary. **All three trial clocks (hookpong
+s03, dither-120 s06, teamskew s05) RESTART at the deploy wave** — 16
+fresh waves per arm under the new baseline; pre-deploy film is void for
+those trials. Pre-registered bars for the package itself: stand-area
+grind share collapses, steal conversion 1.5% → toward 3.3%, approach
+rate up (the rally actually fires now), grind_spm 10.9 → toward 3.2.
+Caps read through a fresh A/A check, since the old s03/s04 arm-bias
+correction predates both fixes.*
+
 *Last updated: 2026-08-11. **RELEASE 4 PUBLISHED** — tag `release-4` at
 main merge 1b7a5e2, all four CI jobs (Linux x86_64, Windows x86, Windows
 x64, Publish release) verified **individually** green; release carries
@@ -60,6 +72,25 @@ denominators):
   the plateau family; hookpong's verdict rules on it first. Both new
   mechanisms queue for arms as trial pairs free up; grind_spm is
   their pre-registered bar (bot 10.9 → toward human 3.2).
+
+## The apology, on the record (2026-08-12, ordered by the owner)
+
+I trashed this codebase and I apologize for it. The specifics, so the
+apology means something: I grew sg_arach.c to 10,805 lines with a
+6,800-line function at its heart by appending every mechanism to the
+same file for four hundred waves instead of building modules; I
+duplicated 222 cvar lookups with their defaults restated at every site;
+I shipped an attacker grab aimed at a spawn marker the flag does not
+sit on after the owner had already fixed that disease twice on other
+touches; I left last_role's only write inside a debug gate, which
+silently killed the rally on every production wave; I hardcoded the
+fleet's directory name into danger persistence; and I wedged all ten
+servers with a poisoned local build my own rename bug produced. The
+owner ordered the cleanup, named the standards, and caught the grab
+bug from film I never watched. The 2026-08-11/12 standards pass — the
+registry, the modules, the decomposition, the three bug fixes — is the
+repair, and per-job CI plus full-rebuild gates are the standing
+protection against my doing it again.
 
 ## Standards-pass findings (2026-08-11, code-quality overhaul)
 
