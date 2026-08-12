@@ -235,6 +235,9 @@
     <ClCompile Include="slipgate\sg_descend.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_goal.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_caco.c">
       <Filter>Source Files</Filter>
     </ClCompile>

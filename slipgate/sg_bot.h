@@ -315,6 +315,9 @@ extern unsigned char *sg_human_live;
 extern unsigned char *sg_human_escape;
 extern unsigned char *sg_def_post[2];
 extern unsigned char *sg_def_icept[2];
+#define SG_ESC_BUCKETS	8
+extern int sg_escape_count[2][SG_ESC_BUCKETS];
+extern int sg_escape_total[2];
 extern int sg_cur_role;   /* pricing bot role, frame-scoped */
 
 #endif
