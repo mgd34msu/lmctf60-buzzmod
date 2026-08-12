@@ -89,7 +89,19 @@ thing decides, not how ("Think_ApproachBand", not "Think_Helper2").
 Loop counters are unique within their function — a rename collision
 between nested scopes produced the wave-900 wedge.
 
-## 12. Working beats beautiful; the ledger arbitrates
+## 12. The client never sees development-speak
+
+Every string a player or admin can encounter — broadcasts, command
+output, menu text, chat lines, cvar names, release notes — speaks the
+game's language, never the workshop's. No waves, trials, arms, probes,
+censuses, canaries, rungs, or verdicts outside of code comments and
+the LEDGER. Diagnostics that must speak dev go behind the debug cvar
+(default off), which is the one sanctioned channel. Development tools
+may live in the repository; they are never part of what the client
+needs to see. Audited clean 2026-08-12; the audit greps are the
+enforcement.
+
+## 13. Working beats beautiful; the ledger arbitrates
 
 When a cleanup risks behavior mid-trial, the cleanup waits for the
 window. When beauty and verified behavior conflict, behavior wins and
