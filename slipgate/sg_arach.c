@@ -631,11 +631,11 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			static int ts_skew[2];
 			int ts = (team == CTF_TEAM_RED) ? 0 : 1;
 
-			if (level.time >= ts_until[ts])
+			if (SG_TimerReady(ts_until[ts]))
 			{
 				ts_skew[ts] = (rand() % 3) - 1;
-				ts_until[ts] = level.time + 150.0f +
-				               (float)(rand() % 90);
+				SG_TimerArm(&ts_until[ts], 150.0f +
+				            (float)(rand() % 90));
 			}
 			defenders_wanted += ts_skew[ts];
 			if (defenders_wanted < 0)
@@ -1019,9 +1019,9 @@ static void Think_RespawnEdge(sg_bot_t *bot, edict_t *e)
 
 		if (sk < 0.0f) sk = 0.0f;
 		if (sk > 1.0f) sk = 1.0f;
-		bot->tilt_until = level.time + bot->tilt_window;
-		bot->tilt_caution_until = level.time + SG_TILT_CAUTION +
-		    (SG_TILT_CAUTION4 - SG_TILT_CAUTION) * sk;
+		SG_TimerArm(&bot->tilt_until, bot->tilt_window);
+		SG_TimerArm(&bot->tilt_caution_until, SG_TILT_CAUTION +
+		    (SG_TILT_CAUTION4 - SG_TILT_CAUTION) * sk);
 	}
 }
 
@@ -1050,7 +1050,7 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 		if (was >= 0 && bot->seed != was)
 		{
 			bot->prev_seed = was;
-			bot->prev_seed_time = level.time;
+			SG_Mark(&bot->prev_seed_time);
 			bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
 
 			/*
@@ -1270,10 +1270,10 @@ void SG_RunFrame(void)
 	 * them, and level.time restarting is the tell. Same map or different,
 	 * every pointer we held is stale the moment this trips.
 	 */
-	if (level.time < last_time ||
+	if (SG_TimerPending(last_time) ||
 	    (sg_rune && Q_stricmp(sg_rune_map, level.mapname) != 0))
 		SG_LevelChange();
-	last_time = level.time;
+	SG_Mark(&last_time);
 	SG_CombatWhy();
 	Danger_Decay();
 

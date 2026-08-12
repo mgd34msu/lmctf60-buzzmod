@@ -143,8 +143,8 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 				if (dur > 2.0f)
 					dur = 2.0f;     /* a knob, not a nap */
-				bot->beat_from = level.time;
-				bot->beat_until = level.time + dur;
+				SG_Mark(&bot->beat_from);
+				SG_TimerArm(&bot->beat_until, dur);
 				/* 60 to 120 degrees of sweep, stated as its half-width */
 				bot->beat_arc = 30.0f + (float)(rand() % 31);
 				bot->beat_sign = (rand() & 1) ? 1 : -1;
@@ -173,7 +173,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	sg_cur_danger = Danger_Field(team);    /* the danger dimension, ours */
 	/* downbeat live: attackers march, detours wait for the next bar */
 	sg_cur_push = (role == SG_ROLE_ATTACK &&
-	               level.time < sg_push_until[team - CTF_TEAM_RED]);
+	               SG_TimerPending(sg_push_until[team - CTF_TEAM_RED]));
 	sg_route_pure_now = route_pure;
 
 	/*
@@ -301,8 +301,8 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				if (VectorLength(cd) < 400.0f)
 				{
 					if (bot->linger_since <= 0.0f)
-						bot->linger_since = level.time;
-					else if (level.time - bot->linger_since > 1.5f)
+						SG_Mark(&bot->linger_since);
+					else if (SG_AgeOver(bot->linger_since, 1.5f))
 						linger_hot = true;
 				}
 				else
@@ -425,7 +425,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		else if (role == SG_ROLE_CARRY)
 			v += 0.4f * (float)SG_Rune()->seeds[l->to].area_hint; /* was 2.0: same audit */
 
-		if (l->action == RL_HOOK && level.time < bot->hookban_until &&
+		if (l->action == RL_HOOK && SG_TimerPending(bot->hookban_until) &&
 		    e->waterlevel < 2)
 			continue;           /* the rope is confiscated: walk -- but
 			                     * never underwater, where walking does
@@ -434,7 +434,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			                     * lmctf05 pool floor, wave 111) */
 
 		for (b = 0; b < SG_BL_MAX; b++)
-			if (bot->bl_link[b] == li && bot->bl_until[b] > level.time)
+			if (bot->bl_link[b] == li && SG_TimerPending(bot->bl_until[b]))
 				break;
 		if (b < SG_BL_MAX)
 			continue;               /* shelved: the body could not run it */
@@ -552,7 +552,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				vec3_t pd;
 
 				if (en->client < 0 || en->seed < 0 ||
-				    level.time - en->seen_time >= 4.0f)
+				    SG_AgeAtLeast(en->seen_time, 4.0f))
 					continue;
 				/*
 				 * CLOSE contact only. 'Seen recently anywhere' kept
@@ -612,11 +612,11 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			if (bot->carry_bestcost < 0 || cc < bot->carry_bestcost)
 				bot->carry_bestcost = cc;
 			else if (cc > bot->carry_bestcost + 2500 &&
-			         level.time > bot->carry_lost_at + 2.0f)
+			         SG_TimerReadyStrict(bot->carry_lost_at + 2.0f))
 			{
 				int b2, was_best = bot->carry_bestcost;
 
-				bot->carry_lost_at = level.time;
+				SG_Mark(&bot->carry_lost_at);
 				/* wipe STALE testimony only: a shelf priced at the
 				 * old position is hearsay here, but one recorded in
 				 * the last three seconds is the body reporting from
@@ -664,7 +664,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
 
 				if (en->client >= 0 && en->seed >= 0 &&
-				    level.time - en->seen_time < 4.0f)
+				    SG_AgeUnder(en->seen_time, 4.0f))
 				{
 					VectorSubtract(SG_Rune()->seeds[l->to].origin,
 					               SG_Rune()->seeds[en->seed].origin, d);
@@ -837,7 +837,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				trace_t actr;
 
 				if (aen->client < 0 || aen->heard_only ||
-				    level.time - aen->seen_time > 4.0f ||
+				    SG_AgeOver(aen->seen_time, 4.0f) ||
 				    aen->seed < 0)
 					continue;
 				VectorCopy(SG_Rune()->seeds[l->to].origin, aeye);
@@ -918,7 +918,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][cs];
 
 				if (en->client >= 0 && !en->heard_only &&
-				    level.time - en->seen_time < 3.0f &&
+				    SG_AgeUnder(en->seen_time, 3.0f) &&
 				    en->seen_time > best_t)
 				{
 					best_t = en->seen_time;
@@ -1007,7 +1007,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * around sometimes; a human does not do-si-do.
 		 */
 		if (li >= 0 && SG_Rune()->links[li].to == bot->prev_seed &&
-		    level.time - bot->prev_seed_time < 3.0f)
+		    SG_AgeUnder(bot->prev_seed_time, 3.0f))
 			v *= 1.0f + sg_cv.nobacktrack->value / 100.0f;
 
 		/*
@@ -1024,7 +1024,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * runs out, the lane is forgotten, and the map's real
 		 * lessons stay in the danger dimension where they belong.
 		 */
-		if (bot->tilt_lane_n > 0 && level.time < bot->tilt_until &&
+		if (bot->tilt_lane_n > 0 && SG_TimerPending(bot->tilt_until) &&
 		    sg_cv.tilt->value > 0.0f &&
 		    Tilt_InLane(bot, l->to))
 		{
@@ -1039,8 +1039,8 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				           "left=%.1f%s\n",
 				           e->client->pers.netname, li, l->to,
 				           bot->tilt_seed,
-				           bot->tilt_until - level.time,
-				           (level.time < bot->tilt_caution_until)
+				           SG_TimerRemaining(bot->tilt_until),
+				           SG_TimerPending(bot->tilt_caution_until)
 				           ? " cautious" : "");
 		}
 
@@ -1054,7 +1054,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * not slower, not worse, and not hiding. The willingness half
 		 * lives in sg_combat.c, through SG_TiltCaution.
 		 */
-		if (level.time < bot->tilt_caution_until &&
+		if (SG_TimerPending(bot->tilt_caution_until) &&
 		    sg_cv.tilt->value > 0.0f)
 			v += SG_TILT_COVER * (float)SG_Rune()->seeds[l->to].area_hint;
 
@@ -1092,7 +1092,7 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * made MORE expensive by scaling toward zero.
 		 */
 		if (role == SG_ROLE_CARRY && bot->escprior_bucket >= 0 &&
-		    level.time < bot->escprior_until && v > 0.0f)
+		    SG_TimerPending(bot->escprior_until) && v > 0.0f)
 		{
 			float ex = SG_Rune()->seeds[l->to].origin[0] - bot->escprior_org[0];
 			float ey = SG_Rune()->seeds[l->to].origin[1] - bot->escprior_org[1];
@@ -1171,7 +1171,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	if (sg_cv.linklatch->value > 0 &&
 	    bestlink >= 0 && bot->sticky_link >= 0 &&
 	    bestlink != bot->sticky_link &&
-	    level.time < bot->latch_until &&
+	    SG_TimerPending(bot->latch_until) &&
 	    incumbent_v < 1e29f &&
 	    bestval > incumbent_v * 0.85f)
 	{
@@ -1179,8 +1179,8 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	}
 	else if (bestlink != bot->sticky_link)
 	{
-		bot->latch_until = level.time +
-		    sg_cv.linklatch->value / 1000.0f;
+		SG_TimerArm(&bot->latch_until,
+		    sg_cv.linklatch->value / 1000.0f);
 	}
 	if (bestlink >= 0 && bestlink != bot->ribbon_link)
 	{
@@ -1206,12 +1206,12 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	/* v2 drift: the film judge's verdict on v1 -- a fixed per-leg lane
 	 * quantizes into railroads; a human band needs the offset to WANDER
 	 * along the run. Low-frequency, trace-clamped downstream. */
-	if (level.time >= bot->ribbon_next)
+	if (SG_TimerReady(bot->ribbon_next))
 	{
 		bot->ribbon_goal = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
 		                   sg_cv.ribbon->value;
-		bot->ribbon_next = level.time +
-		    1.0f + (float)(rand() % 100) / 100.0f;
+		SG_TimerArm(&bot->ribbon_next,
+		    1.0f + (float)(rand() % 100) / 100.0f);
 	}
 	bot->ribbon_off += 0.20f * (bot->ribbon_goal - bot->ribbon_off);
 	bot->sticky_link = bestlink;
@@ -1286,9 +1286,9 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 * evidence of death; eight seconds is patience, not
 				 * paranoia. */
 				if (en3->client < 0 || en3->seed < 0 ||
-				    level.time - en3->seen_time >=
+				    SG_AgeAtLeast(en3->seen_time,
 				        (sg_cv.strictgrab->value
-				             ? 8.0f : 4.0f))
+				             ? 8.0f : 4.0f)))
 					continue;
 				VectorSubtract(SG_Rune()->seeds[en3->seed].origin,
 				               e->s.origin, dd3);
@@ -1327,7 +1327,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					    &sg_caco_enemies[team - 1][s8];
 
 					if (en8->client >= 0 &&
-					    level.time - en8->seen_time < 8.0f)
+					    SG_AgeUnder(en8->seen_time, 8.0f))
 						accounted++;
 				}
 				if (esz > accounted)
@@ -1384,8 +1384,8 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				if (!mate_holding)
 				{
 					if (bot->rally_since <= 0.0f)
-						bot->rally_since = level.time;
-					if (level.time - bot->rally_since < 10.0f)
+						SG_Mark(&bot->rally_since);
+					if (SG_AgeUnder(bot->rally_since, 10.0f))
 						rally_hold = true;
 				}
 
@@ -1418,10 +1418,10 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					 */
 					if (sg_cv.crowdhold->value > 0 &&
 					    room > (int)sg_cv.crowdhold->value)
-						bot->strict_since = level.time;
+						SG_Mark(&bot->strict_since);
 					if (bot->strict_since <= 0.0f)
-						bot->strict_since = level.time;
-					if (level.time - bot->strict_since < 20.0f)
+						SG_Mark(&bot->strict_since);
+					if (SG_AgeUnder(bot->strict_since, 20.0f))
 						rally_hold = true;
 				}
 				else
@@ -1446,7 +1446,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 * anyway, so the view-pull steers nothing wrong. */
 				if (rally_hold &&
 				    bot->nade_phase == 0 &&
-				    level.time >= bot->nade_next)
+				    SG_TimerReady(bot->nade_next))
 				{
 					static gitem_t *nades;
 					int s7;
@@ -1464,7 +1464,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 							float nl7;
 
 							if (en7->client < 0 || en7->seed < 0 ||
-							    level.time - en7->seen_time >= 5.0f)
+							    SG_AgeAtLeast(en7->seen_time, 5.0f))
 								continue;
 							VectorSubtract(
 							    SG_Rune()->seeds[en7->seed].origin,
@@ -1482,7 +1482,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 								 * only when the belief has gone stale --
 								 * the ghost was the wrong target at ten
 								 * seconds old, not at one. */
-								if (level.time - en7->seen_time < 2.0f)
+								if (SG_AgeUnder(en7->seen_time, 2.0f))
 									VectorCopy(
 									    SG_Rune()->seeds[en7->seed].origin,
 									    bot->nade_at);
@@ -1504,7 +1504,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 								}
 								nades->use(e, nades);
 								bot->nade_phase = 1;
-								bot->nade_until = level.time + 0.5f;
+								SG_TimerArm(&bot->nade_until, 0.5f);
 								break;
 							}
 						}
@@ -1540,11 +1540,11 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * goal 9979 all game doing exactly that) */
 		if (goal_field[bot->seed] <= goal_field[cl->to])
 			drop_commit = true;
-		if (level.time > bot->commit_until)
+		if (SG_TimerReadyStrict(bot->commit_until))
 			drop_commit = true;
 		for (b = 0; b < SG_BL_MAX; b++)
 			if (bot->bl_link[b] == bot->commit_link &&
-			    bot->bl_until[b] > level.time)
+			    SG_TimerPending(bot->bl_until[b]))
 				drop_commit = true;
 		if (drop_commit)
 			bot->commit_link = -1;
@@ -1554,7 +1554,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	if (bot->commit_link < 0 && bestlink >= 0)
 	{
 		bot->commit_link = bestlink;
-		bot->commit_until = level.time + 3.0f;
+		SG_TimerArm(&bot->commit_until, 3.0f);
 	}
 
 	/*
@@ -1573,7 +1573,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 		for (b3 = 0; b3 < SG_BL_MAX; b3++)
 			if (bot->bl_link[b3] == bot->rail_link &&
-			    bot->bl_until[b3] > level.time)
+			    SG_TimerPending(bot->bl_until[b3]))
 				shelved = true;
 		if (!shelved)
 			bestlink = bot->rail_link;
@@ -1630,7 +1630,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					if (bot->bl_until[b] < bot->bl_until[oldest])
 						oldest = b;
 				bot->bl_link[oldest] = bestlink;
-				bot->bl_until[oldest] = level.time + 120.0f;
+				SG_TimerArm(&bot->bl_until[oldest], 120.0f);
 			}
 		}
 		bot->deaddoor_ahead = false;    /* one frame's verdict, once */
@@ -1653,9 +1653,9 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		if (VectorLength(d) > 96.0f)
 		{
 			VectorCopy(e->s.origin, bot->watch_org);
-			bot->watch_since = level.time;
+			SG_Mark(&bot->watch_since);
 		}
-		else if (level.time - bot->watch_since > 4.0f)
+		else if (SG_AgeOver(bot->watch_since, 4.0f))
 		{
 			int b, oldest = 0;
 
@@ -1665,7 +1665,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			bot->bl_link[oldest] = bestlink;
 			/* an honest traversal failure: 45s. The 120s figure is for
 			 * links proven to head into a dead door, nothing else. */
-			bot->bl_until[oldest] = level.time + 45.0f;
+			SG_TimerArm(&bot->bl_until[oldest], 45.0f);
 			if (sg_cv.debug->value)
 				gi.dprintf("SHELVE %s link=%d at seed=%d\n",
 				           e->client->pers.netname, bestlink, bot->seed);
@@ -1675,7 +1675,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	else
 	{
 		bot->watch_link = bestlink;
-		bot->watch_since = level.time;
+		SG_Mark(&bot->watch_since);
 		VectorCopy(e->s.origin, bot->watch_org);
 	}
 
@@ -1713,7 +1713,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	 * doctrine's second half all along.
 	 */
 	if ((role == SG_ROLE_ESCORT || role == SG_ROLE_ATTACK) &&
-	    level.time - sg_grab_time[team - CTF_TEAM_RED] < 8.0f &&
+	    SG_AgeUnder(sg_grab_time[team - CTF_TEAM_RED], 8.0f) &&
 	    bot->seed >= 0)
 	{
 		int *att = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
@@ -1736,7 +1736,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				           e->client->pers.netname, (int)role,
 				           att[bot->seed]);
 			if (bot->rally_since <= 0.0f)
-				bot->rally_since = level.time;
+				SG_Mark(&bot->rally_since);
 		}
 	}
 
@@ -1770,7 +1770,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	if (sg_cv.handoff->value &&
 	    role == SG_ROLE_CARRY && goal_field &&
 	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
-	    level.time >= bot->handoff_next &&
+	    SG_TimerReady(bot->handoff_next) &&
 	    (bot->engaged_last || duel))
 	{
 		/*
@@ -1872,7 +1872,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				bot->carry_startcost = -1;
 				bot->carry_bestcost = -1;
 				bot->carry_lost_at = 0.0f;
-				bot->handoff_next = level.time + 10.0f;
+				SG_TimerArm(&bot->handoff_next, 10.0f);
 
 				if (sg_cv.debug->value)
 					gi.dprintf("HANDOFF %s -> %s %s dist=%.0f cost "
@@ -1882,7 +1882,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					           my_cost, best_cost, e->health, hp_thr);
 			}
 			else if (sg_cv.debug->value &&
-			         level.time >= bot->next_report - 0.9f)
+			         SG_TimerReady(bot->next_report - 0.9f))
 				gi.dprintf("HANDOFF %s no receiver hp=%d thr=%.0f\n",
 				           e->client->pers.netname, e->health, hp_thr);
 		}
@@ -1902,7 +1902,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
 	     e->client->rune->runetype == RUNE_REGEN) &&
-	    level.time >= bot->runetoss_next)
+	    SG_TimerReady(bot->runetoss_next))
 	{
 		sg_belief_carrier_t *rc = &sg_caco_team_belief.carrier[team - 1];
 
@@ -1919,7 +1919,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 				VectorSubtract(ce->s.origin, e->s.origin, rd14);
 				if (sg_cv.debug->value &&
-				    level.time >= bot->next_report - 0.9f)
+				    SG_TimerReady(bot->next_report - 0.9f))
 					gi.dprintf("RTCAND %s dist=%.0f\n",
 					           e->client->pers.netname,
 					           VectorLength(rd14));
@@ -1933,7 +1933,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					cmd->angles[YAW] = ANGLE2SHORT(ry)
 					    - e->client->ps.pmove.delta_angles[YAW];
 					Drop_Rune(e, e->client->rune->item);
-					bot->runetoss_next = level.time + 20.0f;
+					SG_TimerArm(&bot->runetoss_next, 20.0f);
 					if (sg_cv.debug->value)
 						gi.dprintf("RUNETOSS %s to %s\n",
 						           e->client->pers.netname,
@@ -1960,7 +1960,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	{
 		rally_hold = true;
 		if (sg_cv.debug->value &&
-		    level.time >= bot->next_report - 0.9f)
+		    SG_TimerReady(bot->next_report - 0.9f))
 			gi.dprintf("CARRYHOLD %s cost=%d\n",
 			           e->client->pers.netname, goal_field[bot->seed]);
 	}
@@ -2010,7 +2010,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	if (rail_seed >= 0 && rail_client >= 0 && bestlink >= 0 &&
 	    !rally_hold && !precision && bot->lead_ent == 0 &&
 	    bot->seed >= 0 &&
-	    (bot->railhold_since > 0.0f || level.time >= bot->railhold_next))
+	    (bot->railhold_since > 0.0f || SG_TimerReady(bot->railhold_next)))
 	{
 		vec3_t	rthr, rstep, rbody;
 		trace_t	rtr;
@@ -2037,7 +2037,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				{
 					float sk = (float)SG_CombatSkill(e) / 100.0f;  /* 0..4 */
 
-					bot->railhold_since = level.time;
+					SG_Mark(&bot->railhold_since);
 					bot->railhold_patience =
 					    (role == SG_ROLE_CARRY)
 					        ? 1.5f
@@ -2057,8 +2057,8 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 * and the patience clock deliberately does NOT restart,
 				 * or a room with two railers in it would have no cap */
 				bot->railhold_enemy = rail_client;
-				if (level.time - bot->railhold_since <
-				    bot->railhold_patience)
+				if (SG_AgeUnder(bot->railhold_since,
+				    bot->railhold_patience))
 					rail_hold = true;
 			}
 		}
@@ -2072,13 +2072,13 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		if (sg_cv.debug->value)
 			gi.dprintf("RAILCROSS %s waited %.1fs on cl=%d (%s)\n",
 			           e->client->pers.netname,
-			           level.time - bot->railhold_since,
+			           SG_Age(bot->railhold_since),
 			           bot->railhold_enemy,
 			           SG_RailCold(team, bot->railhold_enemy)
 			               ? "window" : "patience");
 		bot->railhold_since = 0.0f;
 		bot->railhold_enemy = -1;
-		bot->railhold_next = level.time + SG_RAIL_HOLD_GAP;
+		SG_TimerArm(&bot->railhold_next, SG_RAIL_HOLD_GAP);
 	}
 
 	/*
@@ -2095,9 +2095,9 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	if (VectorLength(d) > 96.0f)
 	{
 		VectorCopy(e->s.origin, bot->wedge_org);
-		bot->wedge_since = level.time;
+		SG_Mark(&bot->wedge_since);
 	}
-	else if (level.time - bot->wedge_since > 15.0f &&
+	else if (SG_AgeOver(bot->wedge_since, 15.0f) &&
 	         !(role == SG_ROLE_DEFEND &&
 	           goal_field[bot->seed >= 0 ? bot->seed : 0] < 1500) &&
 	         /* A LIVE CARRIER IS NEVER SUICIDED (carry forensics, 791
@@ -2120,7 +2120,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		           e->client->pers.netname, e->s.origin[0],
 		           e->s.origin[1], e->s.origin[2]);
 		Cmd_Kill_f(e);
-		bot->wedge_since = level.time;
+		SG_Mark(&bot->wedge_since);
 		*think_over = true;
 		return bestlink;
 	}
@@ -2138,7 +2138,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * is not a link's fault.
 		 */
 		VectorCopy(e->s.origin, bot->stag_org);
-		bot->stag_since = level.time;
+		SG_Mark(&bot->stag_since);
 	}
 	else if (bestlink >= 0 &&
 	         !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 1500) &&
@@ -2148,8 +2148,8 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	     * lmctf58: 314 firings, defense routes in rags). The patrol
 	     * radius is part of the post. */
 	         !bot->door_held_last && !bot->mate_block_last &&
-	         level.time - bot->stag_since > 8.0f &&
-	         level.time >= bot->stag_next)
+	         SG_AgeOver(bot->stag_since, 8.0f) &&
+	         SG_TimerReady(bot->stag_next))
 	{
 		int b, oldest = 0;
 
@@ -2169,21 +2169,21 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		{
 			bot->rail_link = bestlink;
 			bot->rail_stage = 1;
-			bot->rail_until = level.time + 4.0f;
+			SG_TimerArm(&bot->rail_until, 4.0f);
 			if (sg_cv.debug->value)
 				gi.dprintf("RAILTRY %s link=%d seed=%d\n",
 				           e->client->pers.netname, bestlink, bot->seed);
-			bot->stag_next = level.time + 2.0f;
+			SG_TimerArm(&bot->stag_next, 2.0f);
 			VectorCopy(e->s.origin, bot->stag_org);
-			bot->stag_since = level.time;
+			SG_Mark(&bot->stag_since);
 			goto stag_done;
 		}
 		for (b = 0; b < SG_BL_MAX; b++)
 			if (bot->bl_until[b] < bot->bl_until[oldest])
 				oldest = b;
 		bot->bl_link[oldest] = bestlink;
-		bot->bl_until[oldest] = level.time + 45.0f;
-		bot->stag_next = level.time + 2.0f;
+		SG_TimerArm(&bot->bl_until[oldest], 45.0f);
+		SG_TimerArm(&bot->stag_next, 2.0f);
 		bot->commit_link = -1;
 		SG_TeachLinkFutility(bestlink); /* the LINK failed, not the ground */
 		/*
@@ -2197,7 +2197,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		/* jittered: identical retreats produce identical re-approaches,
 		 * and an obstacle that beats one line beats it every time */
 		bot->escape_yaw = e->s.angles[YAW] + 180.0f + (float)(rand() % 81 - 40);
-		bot->escape_until = level.time + 1.0f + (float)(rand() % 9) * 0.1f;
+		SG_TimerArm(&bot->escape_until, 1.0f + (float)(rand() % 9) * 0.1f);
 		if (sg_cv.debug->value)
 			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
@@ -2247,8 +2247,8 @@ stag_done:
 			 */
 			for (v = 0; role == SG_ROLE_CARRY && v < SG_VISIT_RING; v++)
 				if (bot->visit_seed[v] == bot->seed &&
-				    level.time - bot->visit_time[v] < 30.0f &&
-				    level.time - bot->visit_time[v] > 3.0f &&
+				    SG_AgeUnder(bot->visit_time[v], 30.0f) &&
+				    SG_AgeOver(bot->visit_time[v], 3.0f) &&
 				    bot->visit_min[v] >= bot->visit_goal[v] &&
 				    bestlink >= 0)
 				{
@@ -2260,7 +2260,7 @@ stag_done:
 						if (bot->bl_until[b] < bot->bl_until[oldest])
 							oldest = b;
 					bot->bl_link[oldest] = bestlink;
-					bot->bl_until[oldest] = level.time + 45.0f;
+					SG_TimerArm(&bot->bl_until[oldest], 45.0f);
 					if (sg_cv.debug->value)
 						gi.dprintf("CYCLE %s seed=%d link=%d\n",
 						           e->client->pers.netname, bot->seed,
@@ -2270,7 +2270,7 @@ stag_done:
 			bot->visit_seed[bot->visit_head] = bot->seed;
 			bot->visit_goal[bot->visit_head] = gv;
 			bot->visit_min[bot->visit_head] = gv;
-			bot->visit_time[bot->visit_head] = level.time;
+			SG_Mark(&bot->visit_time[bot->visit_head]);
 			bot->visit_head = (bot->visit_head + 1) % SG_VISIT_RING;
 		}
 	}
@@ -2289,7 +2289,7 @@ stag_done:
 		int b, any = 0;
 
 		for (b = 0; b < SG_BL_MAX; b++)
-			if (bot->bl_until[b] > level.time)
+			if (SG_TimerPending(bot->bl_until[b]))
 				any++;
 		if (any)
 		{
@@ -2353,7 +2353,7 @@ stag_done:
 		 */
 		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 			if (sg_caco_enemies[team - 1][s].client >= 0 &&
-			    level.time - sg_caco_enemies[team - 1][s].seen_time < 6.0f)
+			    SG_AgeUnder(sg_caco_enemies[team - 1][s].seen_time, 6.0f))
 				quiet = false;
 		if (quiet &&
 		    (w->item[SG_FC_ARMOR] > 0.9f || w->item[SG_FC_HEALTH] > 0.9f ||
@@ -2393,7 +2393,7 @@ stag_done:
 				if (hold_post)
 					bot->patrol_seed = -1;  /* leg unreachable: stand */
 			}
-			else if (level.time >= bot->patrol_until)
+			else if (SG_TimerReady(bot->patrol_until))
 			{
 				/* pick the next leg: a RUN neighbour still in the band */
 				int pli, cand[8], nc = 0;
@@ -2412,11 +2412,11 @@ stag_done:
 				if (nc > 0)
 				{
 					bot->patrol_seed = cand[rand() % nc];
-					bot->patrol_until = level.time + 5.0f
-					                  + random() * 7.0f;
+					SG_TimerArm(&bot->patrol_until, 5.0f
+					                  + random() * 7.0f);
 				}
 				else
-					bot->patrol_until = level.time + 5.0f;
+					SG_TimerArm(&bot->patrol_until, 5.0f);
 			}
 		}
 	}
@@ -2484,7 +2484,7 @@ stag_done:
 				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
 
 				if (en->client >= 0 && en->seed >= 0 &&
-				    level.time - en->seen_time < 4.0f &&
+				    SG_AgeUnder(en->seen_time, 4.0f) &&
 				    goal_field[en->seed] < 2500 &&
 				    en->seen_time > bestt)
 				{
@@ -2542,7 +2542,7 @@ no_hold:;
 			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
 
 			if (en->client >= 0 && en->seed >= 0 &&
-			    level.time - en->seen_time < 3.0f &&
+			    SG_AgeUnder(en->seen_time, 3.0f) &&
 			    goal_field[en->seed] < SG_FIELD_INF &&
 			    sg_fields.item[0] != NULL)   /* fields alive */
 			{
@@ -2582,7 +2582,7 @@ no_hold:;
 				sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
 
 				if (en->client >= 0 && en->seed >= 0 &&
-				    level.time - en->seen_time < 3.0f &&
+				    SG_AgeUnder(en->seen_time, 3.0f) &&
 				    goal_field[en->seed] < 1200)
 				{
 					cmd->buttons |= BUTTON_ATTACK;

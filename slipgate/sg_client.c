@@ -11,6 +11,7 @@
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
 
 void		ClientDisconnect(edict_t *ent);
@@ -108,9 +109,9 @@ void Botfill_Frame(void)
 	if (sscanf(fill->string, "%d:%d", &want[0], &want[1]) < 2)
 		want[1] = want[0] = (int)fill->value;
 
-	if ((want[0] <= 0 && want[1] <= 0) || level.time < next_check)
+	if ((want[0] <= 0 && want[1] <= 0) || SG_TimerPending(next_check))
 		return;
-	next_check = level.time + 1.0f;
+	SG_TimerArm(&next_check, 1.0f);
 
 	for (i = 0; i < game.maxclients; i++)
 	{

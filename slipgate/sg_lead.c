@@ -12,6 +12,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_lead.h"
+#include "slipgate/sg_util.h"
 
 /* -------------------------------------------------- the early-return errand
  *
@@ -213,13 +214,13 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 			Lead_Abort(bot, "clock gone");
 			return NULL;
 		}
-		if (b->claimed_until > level.time && b->claimed_by != cl)
+		if (SG_TimerPending(b->claimed_until) && b->claimed_by != cl)
 		{
 			Lead_Abort(bot, "claim lost");
 			return NULL;
 		}
 		bot->lead_at = b->believed_respawn_time;    /* a fresher call moves T */
-		if (level.time > bot->lead_at + SG_LEAD_GRACE)
+		if (SG_TimerReadyStrict(bot->lead_at + SG_LEAD_GRACE))
 		{
 			Lead_Abort(bot, "waited out");
 			return NULL;
@@ -228,7 +229,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		 * calls land, but no errand stands the pad longer than
 		 * SG_LEAD_MAXWAIT total -- a clock that keeps being wrong is a
 		 * miscalled item, and the team needs the body back */
-		if (level.time > bot->lead_since + SG_LEAD_MAXWAIT)
+		if (SG_TimerReadyStrict(bot->lead_since + SG_LEAD_MAXWAIT))
 		{
 			Lead_Abort(bot, "miscalled");
 			return NULL;
@@ -236,7 +237,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 
 		/* the lease, re-stamped: stop asking and the pad is free in a second */
 		b->claimed_by = cl;
-		b->claimed_until = level.time + SG_LEAD_LEASE;
+		SG_TimerArm(&b->claimed_until, SG_LEAD_LEASE);
 
 		if (!Lead_Flood(lead_field, bot->lead_seed, bot->seed))
 		{
@@ -247,9 +248,9 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	}
 
 	/* ------------------------------------------------------- committing one */
-	if (level.time < bot->lead_next)
+	if (SG_TimerPending(bot->lead_next))
 		return NULL;
-	bot->lead_next = level.time + SG_LEAD_RETRY;
+	SG_TimerArm(&bot->lead_next, SG_LEAD_RETRY);
 
 	/*
 	 * The lead itself. Four seconds is the floor a player leaves on at all;
@@ -274,9 +275,9 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		b = &sg_caco_items[ti][i];
 		if (b->cls != SG_BI_POWERUP || b->believed_up)
 			continue;
-		if (b->believed_respawn_time <= level.time)
+		if (SG_TimerReady(b->believed_respawn_time))
 			continue;
-		if (b->claimed_until > level.time && b->claimed_by != cl)
+		if (SG_TimerPending(b->claimed_until) && b->claimed_by != cl)
 			continue;                   /* somebody on this side has it */
 
 		/*
@@ -288,7 +289,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		 */
 		VectorSubtract(b->org, e->s.origin, d);
 		guess = VectorLength(d) / SG_LEAD_SPEED;
-		if (level.time < b->believed_respawn_time - guess - lead)
+		if (SG_TimerPending(b->believed_respawn_time - guess - lead))
 			continue;
 
 		if (best < 0 || b->believed_respawn_time < best_t)
@@ -309,16 +310,16 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 
 	/* the honest test, on the route the body will actually walk */
 	travel = (float)lead_field[bot->seed] / 1000.0f;
-	if (level.time < b->believed_respawn_time - travel - lead)
+	if (SG_TimerPending(b->believed_respawn_time - travel - lead))
 		return NULL;
 
 	bot->lead_ent = b->ent;
-	bot->lead_since = level.time;   /* the total-wait clock starts here */
+	SG_Mark(&bot->lead_since);   /* the total-wait clock starts here */
 	bot->lead_slot = best;
 	bot->lead_seed = padseed;
 	bot->lead_at = b->believed_respawn_time;
 	b->claimed_by = cl;
-	b->claimed_until = level.time + SG_LEAD_LEASE;
+	SG_TimerArm(&b->claimed_until, SG_LEAD_LEASE);
 	bot->tac_seed = -1;                 /* a new strategy retires the tactic */
 
 	if (sg_cv.debug->value)
@@ -327,7 +328,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		           e->client->pers.netname,
 		           g_edicts[b->ent].classname ? g_edicts[b->ent].classname
 		                                      : "item",
-		           bot->lead_at, bot->lead_at - level.time, lead, travel);
+		           bot->lead_at, SG_TimerRemaining(bot->lead_at), lead, travel);
 	return lead_field;
 }
 

@@ -44,3 +44,53 @@ qboolean SG_CanSee(edict_t *e, const vec3_t pt, float lift_z)
 	tr = gi.trace(eye, NULL, NULL, tgt, e, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
+
+void SG_TimerArm(float *stamp, float delay)
+{
+	*stamp = level.time + delay;
+}
+
+qboolean SG_TimerReady(float stamp)
+{
+	return level.time >= stamp;
+}
+
+qboolean SG_TimerReadyStrict(float stamp)
+{
+	return level.time > stamp;
+}
+
+qboolean SG_TimerPending(float stamp)
+{
+	return level.time < stamp;
+}
+
+float SG_TimerRemaining(float stamp)
+{
+	return stamp - level.time;
+}
+
+void SG_Mark(float *stamp)
+{
+	*stamp = level.time;
+}
+
+float SG_Age(float since)
+{
+	return level.time - since;
+}
+
+qboolean SG_AgeOver(float since, float span)
+{
+	return (level.time - since) > span;
+}
+
+qboolean SG_AgeAtLeast(float since, float span)
+{
+	return (level.time - since) >= span;
+}
+
+qboolean SG_AgeUnder(float since, float span)
+{
+	return (level.time - since) < span;
+}

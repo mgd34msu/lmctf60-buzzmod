@@ -7,6 +7,7 @@
 #include "g_tourney.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
 #include "slipgate/sg_clock.h"
 
 /* ------------------------------------------------------------- clockplay */
@@ -169,9 +170,9 @@ void Clock_Frame(void)
 		return;
 	}
 
-	if (level.time >= sg_clock_read_next)
+	if (SG_TimerReady(sg_clock_read_next))
 	{
-		sg_clock_read_next = level.time + 1.0f;
+		SG_TimerArm(&sg_clock_read_next, 1.0f);
 		sg_clock_caps[0] = Clock_Caps(CTF_TEAM_RED);
 		sg_clock_caps[1] = Clock_Caps(CTF_TEAM_BLUE);
 
@@ -180,16 +181,16 @@ void Clock_Frame(void)
 		if (sg_clock_known)
 		{
 			float total = timelimit->value * 60.0f;
-			float left = (total - level.time) / total;
+			float left = SG_TimerRemaining(total) / total;
 
 			sg_clock_left = (left < 0.0f) ? 0.0f
 			              : (left > 1.0f) ? 1.0f : left;
 		}
 	}
 
-	if (level.time < sg_clock_latch_next)
+	if (SG_TimerPending(sg_clock_latch_next))
 		return;
-	sg_clock_latch_next = level.time + SG_CLOCK_LATCH;
+	SG_TimerArm(&sg_clock_latch_next, SG_CLOCK_LATCH);
 
 	for (t = 0; t < 2; t++)
 	{

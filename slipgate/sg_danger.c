@@ -6,6 +6,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_danger.h"
 #include "slipgate/sg_rune.h"
+#include "slipgate/sg_util.h"
 
 /*
  * The DANGER dimension: deaths teach the map. Team-indexed -- a corridor
@@ -33,9 +34,9 @@ void Danger_Decay(void)
 {
 	int t, i;
 
-	if (level.time < sg_danger_decay_next)
+	if (SG_TimerPending(sg_danger_decay_next))
 		return;
-	sg_danger_decay_next = level.time + 1.0f;
+	SG_TimerArm(&sg_danger_decay_next, 1.0f);
 	for (t = 0; t < 2; t++)
 		for (i = 0; i < SG_MAX_SEEDS; i++)
 			if (sg_danger[t][i])

@@ -134,7 +134,7 @@ static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
 	    role == SG_ROLE_RECOVER)
 		return 0.0f;
 	if (role == SG_ROLE_ATTACK &&
-	    level.time < sg_push_until[team - CTF_TEAM_RED])
+	    SG_TimerPending(sg_push_until[team - CTF_TEAM_RED]))
 		return 0.0f;
 	if (role == SG_ROLE_DEFEND)
 	{
@@ -142,7 +142,7 @@ static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
 
 		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 			if (sg_caco_enemies[team - 1][s].client >= 0 &&
-			    level.time - sg_caco_enemies[team - 1][s].seen_time < 6.0f)
+			    SG_AgeUnder(sg_caco_enemies[team - 1][s].seen_time, 6.0f))
 				return 0.0f;    /* not a lull */
 	}
 	if (bot->engaged_last || SG_CombatDuel(e, NULL, NULL, NULL))
@@ -196,21 +196,21 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 	 */
 	if (sg_cv.wavepush->value &&
 	    role == SG_ROLE_ATTACK &&
-	    level.time >= sg_push_until[team - CTF_TEAM_RED])
+	    SG_TimerReady(sg_push_until[team - CTF_TEAM_RED]))
 	{
 		int et9 = (team == CTF_TEAM_RED) ? 1 : 0;
 		edict_t *ef9 = G_Find(NULL, FOFS(classname),
 		                      (team == CTF_TEAM_RED) ? "info_flag_blue"
 		                                             : "info_flag_red");
 
-		if (ef9 && level.time - sg_caco_death_time[et9] < 2.0f)
+		if (ef9 && SG_AgeUnder(sg_caco_death_time[et9], 2.0f))
 		{
 			vec3_t dp9;
 
 			VectorSubtract(sg_caco_death_org[et9], ef9->s.origin, dp9);
 			if (VectorLength(dp9) < 1200.0f)
 			{
-				sg_push_until[team - CTF_TEAM_RED] = level.time + 8.0f;
+				SG_TimerArm(&sg_push_until[team - CTF_TEAM_RED], 8.0f);
 				if (sg_cv.debug->value)
 					gi.dprintf("PUSH team=%d surge\n", team);
 			}
@@ -220,7 +220,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF &&
-	    level.time < sg_push_until[team - CTF_TEAM_RED])
+	    SG_TimerPending(sg_push_until[team - CTF_TEAM_RED]))
 	{
 		/* the bell rang: no waiting, no rally, run the window */
 		bot->rally_since = 0.0f;
@@ -280,7 +280,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 			                     (team == CTF_TEAM_RED) ? "info_flag_blue"
 			                                            : "info_flag_red");
 
-			if (ef && level.time - sg_caco_death_time[et] < 6.0f)
+			if (ef && SG_AgeUnder(sg_caco_death_time[et], 6.0f))
 			{
 				vec3_t dd2;
 
@@ -299,7 +299,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 				int ci2, best_cover = -1;
 				float bestd2 = 1e30f;
 
-				bot->rally_since = level.time;
+				SG_Mark(&bot->rally_since);
 				/*
 				 * Wave 65 paired seven pushes on lmctf09 and stole
 				 * nothing: the waiter froze wherever the band caught it,
@@ -331,7 +331,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 					           e->client->pers.netname, mates_coming,
 					           best_cover);
 			}
-			if (level.time - bot->rally_since < 15.0f)
+			if (SG_AgeUnder(bot->rally_since, 15.0f))
 				hold = true;
 		}
 		else
@@ -340,7 +340,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
 			    sg_cv.debug->value)
 				gi.dprintf("RALLY %s released after %.1fs (near=%d)\n",
 				           e->client->pers.netname,
-				           level.time - bot->rally_since, mates_near);
+				           SG_Age(bot->rally_since), mates_near);
 			bot->rally_since = 0.0f;
 		}
 rally_done:;
@@ -355,7 +355,7 @@ rally_done:;
 		 * accrue -- sixty-five to five.
 		 */
 		if (sg_cv.flycook->value &&
-		    bot->nade_phase == 0 && level.time >= bot->nade_next)
+		    bot->nade_phase == 0 && SG_TimerReady(bot->nade_next))
 		{
 			static gitem_t *nades9;
 			edict_t *nf9;
@@ -402,7 +402,7 @@ rally_done:;
 				bot->nade_at[2] += 56.0f;
 				nades9->use(e, nades9);
 				bot->nade_phase = 1;
-				bot->nade_until = level.time + 0.5f;
+				SG_TimerArm(&bot->nade_until, 0.5f);
 			}
 		}
 	}
@@ -454,11 +454,11 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 	 * would have blinded both on any quiet server) */
 	if (carrying && !bot->was_carrying)
 	{
-		bot->carry_start = level.time;
+		SG_Mark(&bot->carry_start);
 		bot->carry_startcost = -1;  /* gauged on first samples below */
 		bot->carry_bestcost = -1;
 		bot->carry_lost_at = 0.0f;
-		sg_grab_time[team - CTF_TEAM_RED] = level.time;
+		SG_Mark(&sg_grab_time[team - CTF_TEAM_RED]);
 
 		/* exit-lane asymmetry: snapshot the roads ridden in on, then
 		 * roll this carry's coin (sg_exitasym, default 0 = never) */
@@ -525,7 +525,7 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 				VectorCopy(SG_Rune()->seeds[stand].origin,
 				           bot->escprior_org);
 				bot->escprior_bucket = b;
-				bot->escprior_until = level.time + 3.0f;
+				SG_TimerArm(&bot->escprior_until, 3.0f);
 				bot->escprior_dose =
 				    sg_cv.escapeprior->value / 100.0f *
 				    ((float)sg_escape_count[fk][b] /
@@ -559,13 +559,13 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 			gi.dprintf("GRABMODE %s room=%d %s\n",
 			           e->client->pers.netname, bot->last_room,
 			           (bot->strict_since > 0.0f &&
-			            level.time - bot->strict_since >= 20.0f)
+			            SG_AgeAtLeast(bot->strict_since, 20.0f))
 			               ? "forced" : "clean");
 		}
 		else if (!carrying && bot->was_carrying)
 			gi.dprintf("CARRY %s ends after %.1fs\n",
 			           e->client->pers.netname,
-			           level.time - bot->carry_start);
+			           SG_Age(bot->carry_start));
 		if ((int)role != bot->last_role && role == SG_ROLE_ESCORT)
 			gi.dprintf("ESCORT %s begins\n", e->client->pers.netname);
 	}
@@ -615,7 +615,7 @@ void Think_LiveWeights(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
 
 			if (en->client >= 0 && en->runed &&
-			    level.time - en->seen_time < 15.0f)
+			    SG_AgeUnder(en->seen_time, 15.0f))
 			{
 				/* generic: someone glows, runes matter more. When the
 				 * inference chain can NAME the Damage rune in enemy
@@ -740,7 +740,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			    ? sg_fields.to_blue_flag_now
 			    : sg_fields.to_red_flag_now;
 			if (sg_cv.debug->value &&
-			    level.time >= bot->next_report - 0.9f)
+			    SG_TimerReady(bot->next_report - 0.9f))
 				gi.dprintf("SCOOP %s\n", e->client->pers.netname);
 		}
 
@@ -773,7 +773,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					vec3_t dd11;
 
 					if (en11->client < 0 || en11->seed < 0 ||
-					    level.time - en11->seen_time >= 4.0f)
+					    SG_AgeAtLeast(en11->seen_time, 4.0f))
 						continue;
 					VectorSubtract(
 					    SG_Rune()->seeds[en11->seed].origin,
@@ -887,7 +887,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						            &ms, &mc, 1);
 						goal_field = interpose_field;
 						if (sg_cv.debug->value &&
-						    level.time >= bot->next_report - 0.9f)
+						    SG_TimerReady(bot->next_report - 0.9f))
 							gi.dprintf("INTERPOSE %s seed=%d\n",
 							           e->client->pers.netname, ms);
 					}
@@ -930,7 +930,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
 	     e->client->rune->runetype == RUNE_REGEN) &&
-	    level.time >= bot->runetoss_next)
+	    SG_TimerReady(bot->runetoss_next))
 	{
 		sg_belief_carrier_t *rc0 = &sg_caco_team_belief.carrier[team - 1];
 
@@ -944,13 +944,13 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			      ce0->client->rune->runetype != RUNE_REGEN)))
 			{
 				if (bot->runeconv_until <= 0.0f)
-					bot->runeconv_until = level.time + 8.0f;
-				if (level.time < bot->runeconv_until)
+					SG_TimerArm(&bot->runeconv_until, 8.0f);
+				if (SG_TimerPending(bot->runeconv_until))
 					goal_field = sg_fields.our_carrier[team - 1];
 				else
 				{
 					bot->runeconv_until = 0.0f;
-					bot->runetoss_next = level.time + 20.0f;
+					SG_TimerArm(&bot->runetoss_next, 20.0f);
 				}
 			}
 			else
@@ -1002,16 +1002,16 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	 * of standing offer without a pickup is a route that is not working; drop
 	 * it and refuse another for the pad's own respawn period.
 	 */
-	if (sg_cur_mega > 0.0f && level.time < bot->mega_next)
+	if (sg_cur_mega > 0.0f && SG_TimerPending(bot->mega_next))
 		sg_cur_mega = 0.0f;
 	if (sg_cur_mega > 0.0f)
 	{
 		if (!bot->mega_on)
-			bot->mega_since = level.time;
-		else if (level.time - bot->mega_since > SG_MEGA_PATIENCE)
+			SG_Mark(&bot->mega_since);
+		else if (SG_AgeOver(bot->mega_since, SG_MEGA_PATIENCE))
 		{
 			sg_cur_mega = 0.0f;
-			bot->mega_next = level.time + SG_MEGA_BACKOFF;
+			SG_TimerArm(&bot->mega_next, SG_MEGA_BACKOFF);
 			if (SG_MegaOn() && sg_cv.debug->value)
 				gi.dprintf("MEGA %s give up: %.0fs on offer, no pickup\n",
 				           e->client->pers.netname, SG_MEGA_PATIENCE);
@@ -1096,8 +1096,8 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		                  * previous map's timestamp (level.time resets
 		                  * to 0 on changelevel; the bots[] array does
 		                  * not) -- stale by definition */
-		                 bot->tac_time > level.time ||
-		                 level.time - bot->tac_time > 10.0f ||
+		                 SG_TimerPending(bot->tac_time) ||
+		                 SG_AgeOver(bot->tac_time, 10.0f) ||
 		                 tac_fields[bi][bot->seed] >= SG_FIELD_INF ||
 		                 tac_fields[bi][bot->seed] < 300);
 
@@ -1167,7 +1167,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				int cost10 = 0;
 
 				bot->tac_seed = best10;
-				bot->tac_time = level.time;
+				SG_Mark(&bot->tac_time);
 				bot->tac_role = (int)role;
 				Field_Flood(SG_Rune(), tac_fields[bi],
 				            &bot->tac_seed, &cost10, 1);

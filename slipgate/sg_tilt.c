@@ -8,6 +8,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_tilt.h"
+#include "slipgate/sg_util.h"
 
 /* ------------------------------------------------------------------- tilt
  *
@@ -181,12 +182,12 @@ void Tilt_Note(edict_t *e, sg_bot_t *bot)
 	 * building a second neighbourhood to compare.
 	 */
 	if (bot->tilt_seed >= 0 &&
-	    level.time - bot->tilt_death_time < SG_TILT_REPEAT &&
+	    SG_AgeUnder(bot->tilt_death_time, SG_TILT_REPEAT) &&
 	    Tilt_InLane(bot, bot->tilt_seed))
 		window *= 2.0f;
 
 	bot->tilt_seed = bot->seed;
-	bot->tilt_death_time = level.time;
+	SG_Mark(&bot->tilt_death_time);
 	bot->tilt_window = window;
 	/* the windows themselves are ARMED at respawn, not here: the clock a
 	 * human runs on is "the first N seconds of the next life", and the
@@ -221,7 +222,7 @@ float SG_TiltCaution(edict_t *ent)
 		return 1.0f;
 	for (i = 0; i < SG_MAXBOTS; i++)
 		if (sg_bots[i].active && sg_bots[i].ent == ent)
-			return (level.time < sg_bots[i].tilt_caution_until)
+			return SG_TimerPending(sg_bots[i].tilt_caution_until)
 			       ? SG_TILT_ENGAGE : 1.0f;
 	return 1.0f;
 }

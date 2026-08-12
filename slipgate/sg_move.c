@@ -640,7 +640,7 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 			if (en->client < 0 || en->seed < 0 ||
 			    en->seed >= SG_Rune()->hdr.num_seeds)
 				continue;
-			if (level.time - en->seen_time > SG_BELIEF_STALE)
+			if (SG_AgeOver(en->seen_time, SG_BELIEF_STALE))
 				continue;
 			VectorCopy(SG_Rune()->seeds[en->seed].origin, b);
 			VectorCopy(b, c);
@@ -707,18 +707,18 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 			if (!rj_rl2)
 				rj_rl2 = FindItem("Rocket Launcher");
-			if (level.time > bot->rj_deadline)
+			if (SG_TimerReadyStrict(bot->rj_deadline))
 				bot->rj_phase = 0;
 			else if (bot->rj_phase == 1 && e->client->pers.weapon == rj_rl2)
 			{
 				bot->rj_phase = 2;
 				/* two weapon frames to guarantee the fire state runs */
-				bot->rj_fire_until = level.time + 0.25f;
+				SG_TimerArm(&bot->rj_fire_until, 0.25f);
 			}
-			else if (bot->rj_phase == 2 && level.time > bot->rj_fire_until)
+			else if (bot->rj_phase == 2 && SG_TimerReadyStrict(bot->rj_fire_until))
 			{
 				bot->rj_phase = 3;
-				bot->rj_deadline = level.time + 2.5f;
+				SG_TimerArm(&bot->rj_deadline, 2.5f);
 			}
 			else if (bot->rj_phase == 3 && e->groundentity)
 			{
@@ -802,12 +802,12 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				/* ropetravel: a clean apex is a link in the chain --
 				 * the next rope is legal on the next beat */
 				if (sg_cv.ropetravel->value > 0.0f)
-					bot->speedhook_next = level.time + 0.25f;
+					SG_TimerArm(&bot->speedhook_next, 0.25f);
 				if (sg_cv.debug->value)
 					gi.dprintf("HOOKEND %s apex\n",
 					           e->client->pers.netname);
 			}
-			else if (e->groundentity || level.time > bot->hook_deadline)
+			else if (e->groundentity || SG_TimerReadyStrict(bot->hook_deadline))
 			{
 				if (sg_cv.debug->value)
 				{
@@ -829,7 +829,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				}
 				bot->hook_phase = 0;
 				if (!bot->flow_release)
-					bot->hook_landbrake = level.time + 0.3f;
+					SG_TimerArm(&bot->hook_landbrake, 0.3f);
 				bot->flow_release = false;
 				/* a rope ride ENDS its commitment: wherever this landing
 				 * is, the next step is argued fresh from here */
@@ -848,7 +848,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 */
 				if (sg_cv.hookpong->value > 0.0f &&
 				    bot->hp_prev_land > 0.0f &&
-				    level.time - bot->hp_prev_land < 8.0f &&
+				    SG_AgeUnder(bot->hp_prev_land, 8.0f) &&
 				    bot->hook_link >= 0)
 				{
 					vec3_t hpd;
@@ -862,7 +862,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 							if (bot->bl_until[b9] < bot->bl_until[old9])
 								old9 = b9;
 						bot->bl_link[old9] = bot->hook_link;
-						bot->bl_until[old9] = level.time + 45.0f;
+						SG_TimerArm(&bot->bl_until[old9], 45.0f);
 						SG_TeachLinkFutility(bot->hook_link);
 						if (sg_cv.debug->value)
 							gi.dprintf("HOOKPONG %s link=%d\n",
@@ -871,14 +871,14 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					}
 				}
 				VectorCopy(bot->hp_cur_dep, bot->hp_prev_dep);
-				bot->hp_prev_land = level.time;
+				SG_Mark(&bot->hp_prev_land);
 
 				/* ropetravel: a grounded landing chains too -- the beat
 				 * is slightly longer than the apex's because the legs
 				 * carry a step before the next throw */
 				if (sg_cv.ropetravel->value > 0.0f &&
 				    e->groundentity && bot->hookfail_streak == 0)
-					bot->speedhook_next = level.time + 0.35f;
+					SG_TimerArm(&bot->speedhook_next, 0.35f);
 
 				/*
 				 * A ride that did not SERVE the field failed, and a
@@ -905,7 +905,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 							if (bot->bl_until[b] < bot->bl_until[oldest])
 								oldest = b;
 						bot->bl_link[oldest] = bot->hook_link;
-						bot->bl_until[oldest] = level.time + 60.0f;
+						SG_TimerArm(&bot->bl_until[oldest], 60.0f);
 						/*
 						 * Two failed rides in a row and the rope is
 						 * CONFISCATED: shelving one anchor at a time
@@ -918,7 +918,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						bot->hookfail_streak++;
 						if (bot->hookfail_streak >= 2)
 						{
-							bot->hookban_until = level.time + 20.0f;
+							SG_TimerArm(&bot->hookban_until, 20.0f);
 							bot->hookfail_streak = 0;
 							if (sg_cv.debug->value)
 								gi.dprintf("HOOKBAN %s 20s\n",
@@ -1150,7 +1150,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						/* guard census: k==nchain is the full chord,
 						 * k==1 is a collapse to today's behavior */
 						if (sg_cv.debug->value &&
-						    level.time >= bot->next_report - 0.9f)
+						    SG_TimerReady(bot->next_report - 0.9f))
 							gi.dprintf("PURSUITK %s k=%d n=%d\n",
 							           e->client->pers.netname,
 							           k, nchain);
@@ -1251,8 +1251,8 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 * the worth bar, the plane test, hookban -- unchanged.
 				 */
 				if (bot->hook_phase == 0 && !bot->engaged_last &&
-				    level.time >= bot->hookban_until &&
-				    level.time >= bot->speedhook_next &&
+				    SG_TimerReady(bot->hookban_until) &&
+				    SG_TimerReady(bot->speedhook_next) &&
 				    e->groundentity && e->waterlevel == 0 &&
 				    goal_field[bot->seed] >
 				        ((sg_cv.freeride->value > 0.0f ||
@@ -1370,12 +1370,12 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 								VectorCopy(e->s.origin, bot->hp_cur_dep);
 								VectorCopy(e->s.origin, bot->hp_cur_dep);
 						bot->hook_phase = 1;
-								bot->hook_deadline = level.time + 1.0f;
+								SG_TimerArm(&bot->hook_deadline, 1.0f);
 								bot->speedhook = true;
-								bot->speedhook_next = level.time
-								    + ((sg_cv.ropetravel->value > 0.0f) ? 1.0f :
-								       (sg_cv.freeride->value > 0.0f) ? 2.0f : 4.0f)
-								      / SG_PersonaHookScale(e);
+								SG_TimerArm(&bot->speedhook_next,
+								    ((sg_cv.ropetravel->value > 0.0f) ? 1.0f :
+								     (sg_cv.freeride->value > 0.0f) ? 2.0f : 4.0f)
+								    / SG_PersonaHookScale(e));
 							}
 						}
 						break;
@@ -1508,8 +1508,8 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						 * cut every z=348 tower climb loose 176 short of
 						 * its landing (A/B match, Slip, four identical
 						 * shortfalls) */
-						bot->hook_deadline =
-						    level.time + alen / 800.0f + 3.0f;
+						SG_TimerArm(&bot->hook_deadline,
+						    alen / 800.0f + 3.0f);
 					}
 				}
 			}
@@ -1562,7 +1562,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				    l->anchor[1] * l->anchor[1]);
 				VectorCopy(SG_Rune()->seeds[l->to].origin, bot->rj_dest);
 				bot->rj_phase = 1;
-				bot->rj_deadline = level.time + 4.0f;
+				SG_TimerArm(&bot->rj_deadline, 4.0f);
 				bot->rj_use_next = 0.0f;
 			}
 		}
@@ -1927,7 +1927,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					 * wall: no fraction override, the fan walks around */
 					for (dd = 0; dd < SG_DEAD_DOORS; dd++)
 						if (bot->dead_door[dd] == tr.ent &&
-						    bot->dead_door_until[dd] > level.time)
+						    SG_TimerPending(bot->dead_door_until[dd]))
 							dead = true;
 					if (dead && k == 0)
 					{
@@ -1966,7 +1966,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 * preferred for 0.7s: enough to clear a pillar, too short
 				 * to matter anywhere else. An open goal line clears it.
 				 */
-				if (bot->fan_side && level.time < bot->fan_side_until &&
+				if (bot->fan_side && SG_TimerPending(bot->fan_side_until) &&
 				    fan[k] * (float)bot->fan_side < 0.0f)
 					score *= 0.6f;
 				if (score > best_open)
@@ -1985,8 +1985,8 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			{
 				int side = (chosen_yaw > base_yaw) ? 1 : -1;
 
-				if (bot->fan_side != side || level.time >= bot->fan_side_until)
-					bot->fan_side_until = level.time + 0.7f;
+				if (bot->fan_side != side || SG_TimerReady(bot->fan_side_until))
+					SG_TimerArm(&bot->fan_side_until, 0.7f);
 				bot->fan_side = side;
 			}
 
@@ -2007,7 +2007,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			    !duel && !precision && bot->hook_phase == 0 &&
 			    e->waterlevel < 2)
 			{
-				float sdt = level.time - bot->nav_yaw_t;
+				float sdt = SG_Age(bot->nav_yaw_t);
 				float sdy = chosen_yaw - bot->nav_yaw_cur;
 				/* the cvar IS the slew rate in deg/s (owner's blend,
 				 * wave 321): 1 keeps the legacy 300 */
@@ -2026,12 +2026,12 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					chosen_yaw = bot->nav_yaw_cur + sdy;
 				}
 				bot->nav_yaw_cur = chosen_yaw;
-				bot->nav_yaw_t = level.time;
+				SG_Mark(&bot->nav_yaw_t);
 			}
 			else
 			{
 				bot->nav_yaw_cur = chosen_yaw;
-				bot->nav_yaw_t = level.time;
+				SG_Mark(&bot->nav_yaw_t);
 			}
 
 			/* at a drop lip the proven walk-off heading overrides the fan:
@@ -2073,10 +2073,10 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				rune_link_t *rl = &SG_Rune()->links[bestlink];
 				vec3_t rd;
 
-				if (level.time > bot->rail_until ||
+				if (SG_TimerReadyStrict(bot->rail_until) ||
 				    bot->seed == rl->to)
 				{
-					if (level.time > bot->rail_until &&
+					if (SG_TimerReadyStrict(bot->rail_until) &&
 					    bot->seed != rl->to)
 					{
 						int b2, old2 = 0;
@@ -2085,7 +2085,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 							if (bot->bl_until[b2] < bot->bl_until[old2])
 								old2 = b2;
 						bot->bl_link[old2] = bestlink;
-						bot->bl_until[old2] = level.time + 45.0f;
+						SG_TimerArm(&bot->bl_until[old2], 45.0f);
 						bot->commit_link = -1;
 						SG_TeachLinkFutility(bestlink);
 						if (sg_cv.debug->value)
@@ -2106,7 +2106,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					if (VectorLength(rd) < 24.0f)
 					{
 						bot->rail_stage = 2;
-						bot->rail_until = level.time + 3.0f;
+						SG_TimerArm(&bot->rail_until, 3.0f);
 					}
 					else
 						chosen_yaw = atan2f(rd[1], rd[0])
@@ -2125,7 +2125,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 			/* backing out of a pocket overrides everything but the lip:
 			 * the retreat only ends early if the goal line opens up */
-			if (level.time < bot->escape_until && !drop_yaw_locked)
+			if (SG_TimerPending(bot->escape_until) && !drop_yaw_locked)
 			{
 				if (best_open >= 1.0f && chosen_yaw == base_yaw)
 					bot->escape_until = 0.0f;
@@ -2258,7 +2258,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * except a carrier under legcarrier dose 2: the pace ledger
 		 * (218-219: legs +59%% speed) says the flag pays for stillness
 		 * with blood, and a landing run out beats a landing stood */
-		if (level.time < bot->hook_landbrake && e->groundentity &&
+		if (SG_TimerPending(bot->hook_landbrake) && e->groundentity &&
 		    !(sg_cur_role == SG_ROLE_CARRY &&
 		      sg_cv.legcarrier->value >= 2.0f))
 		{
@@ -2283,9 +2283,9 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			if (door_ent != bot->door_hold_ent)
 			{
 				bot->door_hold_ent = door_ent;
-				bot->door_hold_since = level.time;
+				SG_Mark(&bot->door_hold_since);
 			}
-			else if (level.time - bot->door_hold_since > 2.5f)
+			else if (SG_AgeOver(bot->door_hold_since, 2.5f))
 			{
 				int dd, oldest = 0;
 
@@ -2293,7 +2293,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					if (bot->dead_door_until[dd] < bot->dead_door_until[oldest])
 						oldest = dd;
 				bot->dead_door[oldest] = door_ent;
-				bot->dead_door_until[oldest] = level.time + 30.0f;
+				SG_TimerArm(&bot->dead_door_until[oldest], 30.0f);
 				bot->door_hold_ent = NULL;
 				/* a door with no trigger on this side is one-way by the
 				 * mapper's hand (lmctf03: both bd doors trigger only from
@@ -2325,7 +2325,7 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * than swimming, so a live pull is left alone.
 		 */
 		if (e->waterlevel >= 3 && bot->hook_phase != 2 &&
-		    e->air_finished - level.time <
+		    SG_TimerRemaining(e->air_finished) <
 		        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f))
 		{
 			int an = (sg_airnext && bot->seed >= 0)
@@ -2594,14 +2594,14 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		    bot->hook_phase == 0 && !bot->engaged_last &&
 		    e->groundentity != NULL)
 		{
-			if (level.time >= bot->breather_next)
+			if (SG_TimerReady(bot->breather_next))
 			{
-				bot->breather_next = level.time +
-				    dose * (0.5f + (float)(rand() % 100) / 100.0f);
-				bot->breather_until = level.time +
-				    0.5f + (float)(rand() % 130) / 100.0f;
+				SG_TimerArm(&bot->breather_next,
+				    dose * (0.5f + (float)(rand() % 100) / 100.0f));
+				SG_TimerArm(&bot->breather_until,
+				    0.5f + (float)(rand() % 130) / 100.0f);
 			}
-			if (level.time < bot->breather_until)
+			if (SG_TimerPending(bot->breather_until))
 			{
 				cmd->forwardmove = (short)(cmd->forwardmove * 0.35f);
 				cmd->sidemove = (short)(cmd->sidemove * 0.35f);
@@ -2686,15 +2686,15 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 * point at 667 u/s, which is exactly the one-room-off
 				 * miss NADEPOP measured (medians 434 and 717, radius
 				 * 165, waves 140/142) */
-				bot->nade_until = level.time + 3.2f;
+				SG_TimerArm(&bot->nade_until, 3.2f);
 				if (sg_cv.debug->value)
 					gi.dprintf("NADE %s cooking\n",
 					           e->client->pers.netname);
 			}
-			else if (level.time >= bot->nade_until + 1.2f)
+			else if (SG_TimerReady(bot->nade_until + 1.2f))
 			{
 				bot->nade_phase = 0;    /* switch never landed */
-				bot->nade_next = level.time + 4.0f;
+				SG_TimerArm(&bot->nade_next, 4.0f);
 			}
 		}
 		if (bot->nade_phase == 2)
@@ -2756,7 +2756,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			/* the engine's clock: timer remaining if released this frame
 			 * is nade_until - now (p_weapon.c: grenade_time = cook_start
 			 * + TIMER + 0.2, and nade_until holds exactly that sum) */
-			float ntmr = bot->nade_until - level.time;
+			float ntmr = SG_TimerRemaining(bot->nade_until);
 			float nheld = 3.0f - (ntmr < 0.0f ? 0.0f
 			                     : (ntmr > 3.0f ? 3.0f : ntmr));
 			float nsp = 400.0f + nheld * ((800.0f - 400.0f) / 3.0f);
@@ -2819,7 +2819,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				if (nfly < -1.5f)
 				{
 					bot->nade_phase = 0;    /* abandon, cost-free */
-					bot->nade_next = level.time + 4.0f;
+					SG_TimerArm(&bot->nade_next, 4.0f);
 					cmd->buttons &= ~BUTTON_ATTACK;
 				}
 			}
@@ -2872,7 +2872,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			{
 				cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */
 				bot->nade_phase = 0;
-				bot->nade_next = level.time + 8.0f;
+				SG_TimerArm(&bot->nade_next, 8.0f);
 				if (sg_cv.debug->value)
 					gi.dprintf("NADE %s thrown fly=%.2f fuse=%.2f\n",
 					           e->client->pers.netname,
@@ -2891,7 +2891,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		if (sg_cv.soundfire->value &&
 		    !duel && !engaged && role != SG_ROLE_CARRY &&
 		    bot->nade_phase == 0 && bot->hook_phase == 0 &&
-		    level.time >= bot->soundfire_next &&
+		    SG_TimerReady(bot->soundfire_next) &&
 		    e->client->pers.weapon &&
 		    e->client->pers.weapon->pickup_name &&
 		    !Q_stricmp(e->client->pers.weapon->pickup_name,
@@ -2908,7 +2908,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 				if (en15->client < 0 || en15->seed < 0 ||
 				    !en15->heard_only ||
-				    level.time - en15->seen_time >= 2.0f)
+				    SG_AgeAtLeast(en15->seen_time, 2.0f))
 					continue;
 				VectorSubtract(SG_Rune()->seeds[en15->seed].origin,
 				               e->s.origin, sd15);
@@ -2955,7 +2955,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 					cmd->angles[PITCH] = ANGLE2SHORT(sp15)
 					    - e->client->ps.pmove.delta_angles[PITCH];
 					cmd->buttons |= BUTTON_ATTACK;
-					bot->soundfire_next = level.time + 8.0f;
+					SG_TimerArm(&bot->soundfire_next, 8.0f);
 					if (sg_cv.debug->value)
 						gi.dprintf("SNDFIRE %s rng=%.0f\n",
 						           e->client->pers.netname, sl15);
@@ -3008,7 +3008,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		 * catches the shot that came from somewhere the eye had not got
 		 * to yet -- which, spawning, is most of the map.
 		 */
-		if (bot->beat_until > level.time)
+		if (SG_TimerPending(bot->beat_until))
 		{
 			/* bot->engaged_last is this same value by here -- it was
 			 * assigned from `engaged` a few lines up, so the live read
@@ -3019,7 +3019,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			{
 				float span = bot->beat_until - bot->beat_from;
 				float t = (span > 0.001f)
-				          ? (level.time - bot->beat_from) / span : 1.0f;
+				          ? SG_Age(bot->beat_from) / span : 1.0f;
 				float yaw = SHORT2ANGLE((short)(cmd->angles[YAW] +
 				            e->client->ps.pmove.delta_angles[YAW]));
 
@@ -3078,7 +3078,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			    !precision && !engaged &&
 			    bot->hook_phase == 0 && bot->rj_phase == 0 &&
 			    bot->nade_phase == 0 && bot->term_brake >= 1.0f &&
-			    e->waterlevel <= 1 && bot->beat_until <= level.time &&
+			    e->waterlevel <= 1 && SG_TimerReady(bot->beat_until) &&
 			    !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
 			    !SG_NearAFlag(e, SG_AS_FLAGKEEP))
 			{
@@ -3140,7 +3140,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 				if (bot->as_since == 0.0f)
 				{
-					bot->as_since = level.time;
+					SG_Mark(&bot->as_since);
 					bot->as_entry = sp;
 					bot->as_peak = sp;
 				}
@@ -3168,7 +3168,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			{
 				if (bot->as_since != 0.0f)
 				{
-					float dur = level.time - bot->as_since;
+					float dur = SG_Age(bot->as_since);
 
 					/* one sustained chain in eight: a fleet chaining hops
 					 * would otherwise write a line a second per bot, and
@@ -3394,7 +3394,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						    &sg_caco_enemies[team - 1][s9];
 
 						if (en9->client >= 0 &&
-						    level.time - en9->seen_time < 3.0f)
+						    SG_AgeUnder(en9->seen_time, 3.0f))
 						{
 							float jp = SG_WEAVE_BASE + SG_WEAVE_STEP *
 							    (float)((int)(e->client - game.clients) % 10);
@@ -3419,7 +3419,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			 * genuinely idling has to be the final word, and this is the
 			 * only place that exists.
 			 */
-			if (bot->beat_until > level.time)
+			if (SG_TimerPending(bot->beat_until))
 			{
 				cmd->forwardmove = (short)(cmd->forwardmove * 0.30f);
 				cmd->sidemove = (short)(cmd->sidemove * 0.30f);
@@ -3495,7 +3495,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 		/* rocket-jump phase 1: ask for the launcher through the same use
 		 * path a player's "use" command runs, at a polite rate */
-		if (bot->rj_phase == 1 && level.time >= bot->rj_use_next)
+		if (bot->rj_phase == 1 && SG_TimerReady(bot->rj_use_next))
 		{
 			static gitem_t *rj_rl3;
 
@@ -3503,10 +3503,10 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				rj_rl3 = FindItem("Rocket Launcher");
 			if (rj_rl3 && rj_rl3->use)
 				rj_rl3->use(e, rj_rl3);
-			bot->rj_use_next = level.time + 0.5f;
+			SG_TimerArm(&bot->rj_use_next, 0.5f);
 		}
 
-		if (bot->hook_phase == 1 && level.time > bot->hook_deadline)
+		if (bot->hook_phase == 1 && SG_TimerReadyStrict(bot->hook_deadline))
 		{
 			/* the aim never arrived (blocked slew, moving anchor line,
 			 * whatever): stand down clean. Without this, a wedged phase
@@ -3783,7 +3783,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 							ctf_hook_abort(e);
 							bot->hook_phase = 3;
 							bot->flow_release = true;
-							bot->hook_deadline = level.time + 1.4f;
+							SG_TimerArm(&bot->hook_deadline, 1.4f);
 							bot->hookfail_streak = 0;
 							/*
 							 * THE FALL-THROUGH (found wave 285): without
@@ -3813,7 +3813,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				          + e->velocity[2] * e->velocity[2];
 
 				if (bs2 > 600.0f * 600.0f ||
-				    level.time > bot->hook_deadline ||
+				    SG_TimerReadyStrict(bot->hook_deadline) ||
 				    e->client->hookstate == 0)
 				{
 					if (e->client->hookstate != 0)
@@ -3834,7 +3834,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				}
 			}
 			else if (arrived || rope < 130.0f ||
-			    level.time > bot->hook_deadline || e->client->hookstate == 0)
+			    SG_TimerReadyStrict(bot->hook_deadline) || e->client->hookstate == 0)
 			{
 				was_pulling = (e->client->hookstate != 0);
 				if (was_pulling)
@@ -3850,7 +3850,7 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 				 * earlier wiped release and made ~1,000 rides a wave
 				 * take the apex cut and skip the landing brake */
 				bot->flow_release = false;
-				bot->hook_deadline = level.time + 1.0f;
+				SG_TimerArm(&bot->hook_deadline, 1.0f);
 			}
 			}
 		}
@@ -3858,10 +3858,10 @@ void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
 
 hook_wait:;
 	/* the literal emission record: what this frame's usercmd contained */
-	if (sg_cv.debug->value >= 2 || 
-	    (sg_cv.debug->value && level.time >= bot->next_cmdlog))
+	if (sg_cv.debug->value >= 2 ||
+	    (sg_cv.debug->value && SG_TimerReady(bot->next_cmdlog)))
 	{
-		bot->next_cmdlog = level.time + 1.0f;
+		SG_TimerArm(&bot->next_cmdlog, 1.0f);
 		/* the last step of the frame: fwd/side/up are that step's command,
 		 * and msec x steps is how the frame's real time was spent */
 		gi.dprintf("CMD %s: fwd=%d side=%d up=%d btn=%d yaw=%d pitch=%d msec=%d x%d\n",
@@ -3872,7 +3872,7 @@ hook_wait:;
 
 	/* once a second, the full body state: enough to reconstruct any stall
 	 * offline without another instrumented rerun */
-	if (sg_cv.debug->value && level.time >= bot->next_report)
+	if (sg_cv.debug->value && SG_TimerReady(bot->next_report))
 	{
 		float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 		                 e->velocity[1] * e->velocity[1]);
@@ -3892,7 +3892,7 @@ hook_wait:;
 
 		if (bot->seed >= 0 && sfld && sfld[bot->seed] < SG_FIELD_INF)
 			sgoal = sfld[bot->seed];
-		bot->next_report = level.time + 1.0f;
+		SG_TimerArm(&bot->next_report, 1.0f);
 		gi.dprintf("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d "
 		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d eng=%d\n",
 		           e->client->pers.netname, role, bot->seed,
@@ -3912,9 +3912,9 @@ hook_wait:;
 	 * (sg_drawplan). Its own clock, because the debug report above is
 	 * gated on sg_debug and the two are useful separately.
 	 */
-	if (level.time >= bot->plan_next)
+	if (SG_TimerReady(bot->plan_next))
 	{
-		bot->plan_next = level.time + 1.0f;
+		SG_TimerArm(&bot->plan_next, 1.0f);
 		SG_DrawPlan(bot, team, bestlink, route_field);
 	}
 }
