@@ -172,6 +172,7 @@ typedef struct sg_bot_s
 	int			lead_slot;      /* its row in sg_caco_items */
 	int			lead_seed;      /* the pad's seed: where the errand goes */
 	float		lead_at;        /* T, this team's believed return time */
+	float		lead_since;     /* when this errand committed (miscall cap) */
 	float		lead_next;      /* attempt cadence while nothing is claimed */
 
 	/*

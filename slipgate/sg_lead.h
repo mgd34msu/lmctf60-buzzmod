@@ -12,6 +12,8 @@
 #define SG_LEAD_GRACE		4.0f    /* how long past T the wait is still a wait */
 #define SG_LEAD_RETRY		1.0f    /* attempt cadence while nothing is claimed */
 #define SG_LEAD_LEASE		1.0f    /* the claim a live errand re-stamps */
+#define SG_LEAD_MAXWAIT		20.0f   /* total stand ceiling: past this the
+                                     * clock was a miscall (owner's rule) */
 #define SG_LEAD_SPEED		300.0f  /* u/s: pm_maxspeed, the file's own ruler */
 
 void		Lead_Abort(sg_bot_t *bot, const char *why);

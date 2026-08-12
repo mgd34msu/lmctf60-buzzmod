@@ -224,6 +224,15 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 			Lead_Abort(bot, "waited out");
 			return NULL;
 		}
+		/* the miscall ceiling (owner's rule): T may slide as fresher
+		 * calls land, but no errand stands the pad longer than
+		 * SG_LEAD_MAXWAIT total -- a clock that keeps being wrong is a
+		 * miscalled item, and the team needs the body back */
+		if (level.time > bot->lead_since + SG_LEAD_MAXWAIT)
+		{
+			Lead_Abort(bot, "miscalled");
+			return NULL;
+		}
 
 		/* the lease, re-stamped: stop asking and the pad is free in a second */
 		b->claimed_by = cl;
@@ -251,7 +260,11 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	 */
 	p = SG_PersonaFor(e);
 	camp = p ? p->camp_tendency : 0.5f;
-	lead = SG_LEAD_BASE + camp * SG_LEAD_CAMP + random() * SG_LEAD_JITTER;
+	/* the cvar is a DOSE: 1 = the shipped earliness; higher arrives
+	 * earlier (a persona-scaled multiplier on the whole window). The
+	 * gate stays >0 -- see Lead_On. */
+	lead = (SG_LEAD_BASE + camp * SG_LEAD_CAMP + random() * SG_LEAD_JITTER)
+	     * sg_cv.itemlead->value;
 
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
@@ -300,6 +313,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		return NULL;
 
 	bot->lead_ent = b->ent;
+	bot->lead_since = level.time;   /* the total-wait clock starts here */
 	bot->lead_slot = best;
 	bot->lead_seed = padseed;
 	bot->lead_at = b->believed_respawn_time;
