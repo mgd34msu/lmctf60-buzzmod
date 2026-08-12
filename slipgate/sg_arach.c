@@ -2113,6 +2113,267 @@ static void Think_RespawnEdge(sg_bot_t *bot, edict_t *e)
 	}
 }
 
+/*
+ * THE APPROACH BAND (split from SG_BotThink, 2026-08-11 standards pass;
+ * body verbatim): the rally, the broadcast surge, and the flying cook --
+ * everything an attacker decides between two and five seconds out.
+ * Returns whether the bot holds its ground waiting on a partner.
+ */
+static qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
+                                   sg_role_t role, int team,
+                                   const int *goal_field)
+{
+	qboolean hold = false;
+
+	/*
+	 * THE RALLY. Wave 61's arrival census: three quarters of all attacks
+	 * reach the enemy base ALONE -- one body against three or more armed
+	 * defenders at the stand, dead every time, which is why floors sit
+	 * under 300 while steals stay near one a wave. An attacker in the
+	 * approach band (2-5s of field) with no partner inside 6s and at
+	 * least two enemies believed alive holds its ground -- twelve
+	 * seconds at most, gone the moment a mate closes or the wait times
+	 * out. Solo pushes still happen; they just stop being the ONLY kind.
+	 */
+	/*
+	 * THE CONDUCTOR (sg_wavepush, A/B wave 198+). The rally waits for
+	 * partners; the conductor makes partners exist. Once every 40
+	 * seconds, when three or more attackers are alive and the nearest
+	 * is within striking range, the team calls a downbeat: a 12-second
+	 * window in which every rally releases at once and item detours
+	 * stop pulling attackers sideways. Arrivals stack into a wave --
+	 * the census's 75-percent-alone number is the target -- and the
+	 * respawn-surge rule still cancels every wait it ever cancelled.
+	 */
+	/*
+	 * v2, THE BROADCAST SURGE. v1's metronome read negative (steals
+	 * 1.3 vs 2.2 pooled 198-200): a downbeat on a clock suppresses the
+	 * organic rally pairing and marches under-armed waves into rooms
+	 * that were never thin. The surge rule was always the true clock --
+	 * a defender dead near their own stand IS the window -- but it
+	 * released only the one attacker who happened to be in the band.
+	 * Now the kill rings the whole team's bell: every rally releases
+	 * into the same respawn-wide window, detours pause only during the
+	 * eight seconds the window is actually open.
+	 */
+	if (sg_cv.wavepush->value &&
+	    role == SG_ROLE_ATTACK &&
+	    level.time >= sg_push_until[team - CTF_TEAM_RED])
+	{
+		int et9 = (team == CTF_TEAM_RED) ? 1 : 0;
+		edict_t *ef9 = G_Find(NULL, FOFS(classname),
+		                      (team == CTF_TEAM_RED) ? "info_flag_blue"
+		                                             : "info_flag_red");
+
+		if (ef9 && level.time - sg_caco_death_time[et9] < 2.0f)
+		{
+			vec3_t dp9;
+
+			VectorSubtract(sg_caco_death_org[et9], ef9->s.origin, dp9);
+			if (VectorLength(dp9) < 1200.0f)
+			{
+				sg_push_until[team - CTF_TEAM_RED] = level.time + 8.0f;
+				if (sg_cv.debug->value)
+					gi.dprintf("PUSH team=%d surge\n", team);
+			}
+		}
+	}
+
+	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
+	    goal_field[bot->seed] < SG_FIELD_INF &&
+	    level.time < sg_push_until[team - CTF_TEAM_RED])
+	{
+		/* the bell rang: no waiting, no rally, run the window */
+		bot->rally_since = 0.0f;
+		goto rally_done;
+	}
+
+	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
+	    goal_field[bot->seed] < SG_FIELD_INF)
+	{
+		int bi, mates_near = 0, mates_coming = 0;
+
+		/*
+		 * First cut waited only when two enemies were freshly SEEN and
+		 * gave up after 12s -- but an attacker sneaking in alone has
+		 * usually seen nobody, and a trailing mate 8-12s of field back
+		 * cannot close inside the cap: wave 63 paired almost nothing.
+		 * The census already proved solo arrival means death against
+		 * ANY defense, so the belief gate is gone. Wait exactly when a
+		 * partner is genuinely en route (inside 14s of field), as long
+		 * as it takes them to close -- capped at 20s -- and push solo
+		 * without ceremony when nobody is coming at all.
+		 */
+		for (bi = 0; bi < SG_MAXBOTS; bi++)
+		{
+			sg_bot_t *mb = &sg_bots[bi];
+
+			if (!mb->active || mb == bot || !mb->ent || !mb->ent->inuse)
+				continue;
+			if (mb->ent->client->ctf.teamnum != team)
+				continue;
+			if (mb->last_role != (int)SG_ROLE_ATTACK ||
+			    mb->last_goalcost < 0)
+				continue;
+			if (mb->last_goalcost < 6000)
+				mates_near++;
+			else if (mb->last_goalcost < 20000)
+				/* THE APPEAL. The 20s horizon was convicted (1.6 -> 1.0
+				 * steals/wave, waves 63-67) and shrunk to a 6s sync --
+				 * but that trial ran in the corpse-wait era, when a
+				 * 'partner en route' was usually a body that would never
+				 * stand up. Bots respawn now; partners genuinely arrive.
+				 * Retried at the full horizon on fresh evidence. */
+				mates_coming++;
+		}
+		{
+			/*
+			 * THE SURGE: a defender dead near their own stand opens a
+			 * respawn-wide window, and waves 84-85 show the thief dying
+			 * 3-5 seconds after the grab to the respawn stream -- the
+			 * window is the only time the room is thin. A fresh enemy
+			 * death (< 6s) within 1200 of the enemy flag cancels the
+			 * wait: push NOW, paired or not.
+			 */
+			int et = (team == CTF_TEAM_RED) ? 1 : 0;    /* victim = them */
+			edict_t *ef = G_Find(NULL, FOFS(classname),
+			                     (team == CTF_TEAM_RED) ? "info_flag_blue"
+			                                            : "info_flag_red");
+
+			if (ef && level.time - sg_caco_death_time[et] < 6.0f)
+			{
+				vec3_t dd2;
+
+				VectorSubtract(sg_caco_death_org[et], ef->s.origin, dd2);
+				if (VectorLength(dd2) < 1200.0f)
+				{
+					bot->rally_since = 0.0f;
+					goto rally_done;
+				}
+			}
+		}
+		if (mates_near == 0 && mates_coming > 0)
+		{
+			if (bot->rally_since <= 0.0f)
+			{
+				int ci2, best_cover = -1;
+				float bestd2 = 1e30f;
+
+				bot->rally_since = level.time;
+				/*
+				 * Wave 65 paired seven pushes on lmctf09 and stole
+				 * nothing: the waiter froze wherever the band caught it,
+				 * mid-corridor, lit, and the pairing died before it
+				 * formed. The rune has measured exposure since the
+				 * generator's census pass -- the wait belongs at the
+				 * darkest seed within reach.
+				 */
+				for (ci2 = 0; ci2 < sg_rune->hdr.num_seeds; ci2++)
+				{
+					vec3_t cd;
+					float dsq;
+
+					if (sg_rune->seeds[ci2].area_hint > 60)
+						continue;
+					VectorSubtract(sg_rune->seeds[ci2].origin,
+					               e->s.origin, cd);
+					dsq = cd[0] * cd[0] + cd[1] * cd[1]
+					    + cd[2] * cd[2] * 4.0f;
+					if (dsq < bestd2 && dsq < 800.0f * 800.0f)
+					{
+						bestd2 = dsq;
+						best_cover = ci2;
+					}
+				}
+				bot->rally_cover = best_cover;
+				if (sg_cv.debug->value)
+					gi.dprintf("RALLY %s waits (%d coming, cover=%d)\n",
+					           e->client->pers.netname, mates_coming,
+					           best_cover);
+			}
+			if (level.time - bot->rally_since < 15.0f)
+				hold = true;
+		}
+		else
+		{
+			if (bot->rally_since > 0.0f &&
+			    sg_cv.debug->value)
+				gi.dprintf("RALLY %s released after %.1fs (near=%d)\n",
+				           e->client->pers.netname,
+				           level.time - bot->rally_since, mates_near);
+			bot->rally_since = 0.0f;
+		}
+rally_done:;
+
+		/*
+		 * THE FLYING COOK, truly at the band this time (the wave-230
+		 * relocation never landed -- its edit died in a chain that
+		 * kept going; the ledger is corrected). Every attacker in
+		 * the approach band cooks on the run at full volume: the
+		 * silent cook keeps the eyes on the route, the stand takes
+		 * the throw, failure costs nothing, and the successes
+		 * accrue -- sixty-five to five.
+		 */
+		if (sg_cv.flycook->value &&
+		    bot->nade_phase == 0 && level.time >= bot->nade_next)
+		{
+			static gitem_t *nades9;
+			edict_t *nf9;
+
+			if (!nades9)
+				nades9 = FindItem("Grenades");
+			nf9 = G_Find(NULL, FOFS(classname),
+			             (team == CTF_TEAM_RED) ? "info_flag_blue"
+			                                    : "info_flag_red");
+			if (nades9 && nf9 &&
+			    e->client->pers.inventory[ITEM_INDEX(nades9)] > 0)
+			{
+				/* wave 238: the target book. Clean arcs delivered
+				 * bombs to an empty pedestal (237: median pop 588
+				 * with clear flights) -- defenders POST 400-600 off
+				 * the stand. The danger field already knows where
+				 * the deaths happen: aim at the hottest seed within
+				 * 600 of their stand, the sentry's actual post. */
+				int ns13 = Rune_NearestSeed(sg_rune, nf9->s.origin);
+				int s13, best13 = -1, bv13 = 0;
+
+				VectorCopy(nf9->s.origin, bot->nade_at);
+				if (ns13 >= 0)
+				{
+					for (s13 = 0; s13 < sg_rune->hdr.num_seeds &&
+					     s13 < SG_MAX_SEEDS; s13++)
+					{
+						vec3_t dd13;
+
+						VectorSubtract(sg_rune->seeds[s13].origin,
+						               nf9->s.origin, dd13);
+						if (VectorLength(dd13) > 600.0f)
+							continue;
+						if (Danger_Field(team)[s13] > bv13)
+						{
+							bv13 = Danger_Field(team)[s13];
+							best13 = s13;
+						}
+					}
+					if (best13 >= 0)
+						VectorCopy(sg_rune->seeds[best13].origin,
+						           bot->nade_at);
+				}
+				bot->nade_at[2] += 56.0f;
+				nades9->use(e, nades9);
+				bot->nade_phase = 1;
+				bot->nade_until = level.time + 0.5f;
+			}
+		}
+	}
+	else
+		bot->rally_since = 0.0f;
+	return hold;
+}
+
+
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -2899,251 +3160,7 @@ void SG_BotThink(sg_bot_t *bot)
 		}
 	}
 
-	/*
-	 * THE RALLY. Wave 61's arrival census: three quarters of all attacks
-	 * reach the enemy base ALONE -- one body against three or more armed
-	 * defenders at the stand, dead every time, which is why floors sit
-	 * under 300 while steals stay near one a wave. An attacker in the
-	 * approach band (2-5s of field) with no partner inside 6s and at
-	 * least two enemies believed alive holds its ground -- twelve
-	 * seconds at most, gone the moment a mate closes or the wait times
-	 * out. Solo pushes still happen; they just stop being the ONLY kind.
-	 */
-	/*
-	 * THE CONDUCTOR (sg_wavepush, A/B wave 198+). The rally waits for
-	 * partners; the conductor makes partners exist. Once every 40
-	 * seconds, when three or more attackers are alive and the nearest
-	 * is within striking range, the team calls a downbeat: a 12-second
-	 * window in which every rally releases at once and item detours
-	 * stop pulling attackers sideways. Arrivals stack into a wave --
-	 * the census's 75-percent-alone number is the target -- and the
-	 * respawn-surge rule still cancels every wait it ever cancelled.
-	 */
-	/*
-	 * v2, THE BROADCAST SURGE. v1's metronome read negative (steals
-	 * 1.3 vs 2.2 pooled 198-200): a downbeat on a clock suppresses the
-	 * organic rally pairing and marches under-armed waves into rooms
-	 * that were never thin. The surge rule was always the true clock --
-	 * a defender dead near their own stand IS the window -- but it
-	 * released only the one attacker who happened to be in the band.
-	 * Now the kill rings the whole team's bell: every rally releases
-	 * into the same respawn-wide window, detours pause only during the
-	 * eight seconds the window is actually open.
-	 */
-	if (sg_cv.wavepush->value &&
-	    role == SG_ROLE_ATTACK &&
-	    level.time >= sg_push_until[team - CTF_TEAM_RED])
-	{
-		int et9 = (team == CTF_TEAM_RED) ? 1 : 0;
-		edict_t *ef9 = G_Find(NULL, FOFS(classname),
-		                      (team == CTF_TEAM_RED) ? "info_flag_blue"
-		                                             : "info_flag_red");
-
-		if (ef9 && level.time - sg_caco_death_time[et9] < 2.0f)
-		{
-			vec3_t dp9;
-
-			VectorSubtract(sg_caco_death_org[et9], ef9->s.origin, dp9);
-			if (VectorLength(dp9) < 1200.0f)
-			{
-				sg_push_until[team - CTF_TEAM_RED] = level.time + 8.0f;
-				if (sg_cv.debug->value)
-					gi.dprintf("PUSH team=%d surge\n", team);
-			}
-		}
-	}
-
-	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
-	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
-	    goal_field[bot->seed] < SG_FIELD_INF &&
-	    level.time < sg_push_until[team - CTF_TEAM_RED])
-	{
-		/* the bell rang: no waiting, no rally, run the window */
-		bot->rally_since = 0.0f;
-		goto rally_done;
-	}
-
-	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
-	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
-	    goal_field[bot->seed] < SG_FIELD_INF)
-	{
-		int bi, mates_near = 0, mates_coming = 0;
-
-		/*
-		 * First cut waited only when two enemies were freshly SEEN and
-		 * gave up after 12s -- but an attacker sneaking in alone has
-		 * usually seen nobody, and a trailing mate 8-12s of field back
-		 * cannot close inside the cap: wave 63 paired almost nothing.
-		 * The census already proved solo arrival means death against
-		 * ANY defense, so the belief gate is gone. Wait exactly when a
-		 * partner is genuinely en route (inside 14s of field), as long
-		 * as it takes them to close -- capped at 20s -- and push solo
-		 * without ceremony when nobody is coming at all.
-		 */
-		for (bi = 0; bi < SG_MAXBOTS; bi++)
-		{
-			sg_bot_t *mb = &sg_bots[bi];
-
-			if (!mb->active || mb == bot || !mb->ent || !mb->ent->inuse)
-				continue;
-			if (mb->ent->client->ctf.teamnum != team)
-				continue;
-			if (mb->last_role != (int)SG_ROLE_ATTACK ||
-			    mb->last_goalcost < 0)
-				continue;
-			if (mb->last_goalcost < 6000)
-				mates_near++;
-			else if (mb->last_goalcost < 20000)
-				/* THE APPEAL. The 20s horizon was convicted (1.6 -> 1.0
-				 * steals/wave, waves 63-67) and shrunk to a 6s sync --
-				 * but that trial ran in the corpse-wait era, when a
-				 * 'partner en route' was usually a body that would never
-				 * stand up. Bots respawn now; partners genuinely arrive.
-				 * Retried at the full horizon on fresh evidence. */
-				mates_coming++;
-		}
-		{
-			/*
-			 * THE SURGE: a defender dead near their own stand opens a
-			 * respawn-wide window, and waves 84-85 show the thief dying
-			 * 3-5 seconds after the grab to the respawn stream -- the
-			 * window is the only time the room is thin. A fresh enemy
-			 * death (< 6s) within 1200 of the enemy flag cancels the
-			 * wait: push NOW, paired or not.
-			 */
-			int et = (team == CTF_TEAM_RED) ? 1 : 0;    /* victim = them */
-			edict_t *ef = G_Find(NULL, FOFS(classname),
-			                     (team == CTF_TEAM_RED) ? "info_flag_blue"
-			                                            : "info_flag_red");
-
-			if (ef && level.time - sg_caco_death_time[et] < 6.0f)
-			{
-				vec3_t dd2;
-
-				VectorSubtract(sg_caco_death_org[et], ef->s.origin, dd2);
-				if (VectorLength(dd2) < 1200.0f)
-				{
-					bot->rally_since = 0.0f;
-					goto rally_done;
-				}
-			}
-		}
-		if (mates_near == 0 && mates_coming > 0)
-		{
-			if (bot->rally_since <= 0.0f)
-			{
-				int ci2, best_cover = -1;
-				float bestd2 = 1e30f;
-
-				bot->rally_since = level.time;
-				/*
-				 * Wave 65 paired seven pushes on lmctf09 and stole
-				 * nothing: the waiter froze wherever the band caught it,
-				 * mid-corridor, lit, and the pairing died before it
-				 * formed. The rune has measured exposure since the
-				 * generator's census pass -- the wait belongs at the
-				 * darkest seed within reach.
-				 */
-				for (ci2 = 0; ci2 < sg_rune->hdr.num_seeds; ci2++)
-				{
-					vec3_t cd;
-					float dsq;
-
-					if (sg_rune->seeds[ci2].area_hint > 60)
-						continue;
-					VectorSubtract(sg_rune->seeds[ci2].origin,
-					               e->s.origin, cd);
-					dsq = cd[0] * cd[0] + cd[1] * cd[1]
-					    + cd[2] * cd[2] * 4.0f;
-					if (dsq < bestd2 && dsq < 800.0f * 800.0f)
-					{
-						bestd2 = dsq;
-						best_cover = ci2;
-					}
-				}
-				bot->rally_cover = best_cover;
-				if (sg_cv.debug->value)
-					gi.dprintf("RALLY %s waits (%d coming, cover=%d)\n",
-					           e->client->pers.netname, mates_coming,
-					           best_cover);
-			}
-			if (level.time - bot->rally_since < 15.0f)
-				rally_hold = true;
-		}
-		else
-		{
-			if (bot->rally_since > 0.0f &&
-			    sg_cv.debug->value)
-				gi.dprintf("RALLY %s released after %.1fs (near=%d)\n",
-				           e->client->pers.netname,
-				           level.time - bot->rally_since, mates_near);
-			bot->rally_since = 0.0f;
-		}
-rally_done:;
-
-		/*
-		 * THE FLYING COOK, truly at the band this time (the wave-230
-		 * relocation never landed -- its edit died in a chain that
-		 * kept going; the ledger is corrected). Every attacker in
-		 * the approach band cooks on the run at full volume: the
-		 * silent cook keeps the eyes on the route, the stand takes
-		 * the throw, failure costs nothing, and the successes
-		 * accrue -- sixty-five to five.
-		 */
-		if (sg_cv.flycook->value &&
-		    bot->nade_phase == 0 && level.time >= bot->nade_next)
-		{
-			static gitem_t *nades9;
-			edict_t *nf9;
-
-			if (!nades9)
-				nades9 = FindItem("Grenades");
-			nf9 = G_Find(NULL, FOFS(classname),
-			             (team == CTF_TEAM_RED) ? "info_flag_blue"
-			                                    : "info_flag_red");
-			if (nades9 && nf9 &&
-			    e->client->pers.inventory[ITEM_INDEX(nades9)] > 0)
-			{
-				/* wave 238: the target book. Clean arcs delivered
-				 * bombs to an empty pedestal (237: median pop 588
-				 * with clear flights) -- defenders POST 400-600 off
-				 * the stand. The danger field already knows where
-				 * the deaths happen: aim at the hottest seed within
-				 * 600 of their stand, the sentry's actual post. */
-				int ns13 = Rune_NearestSeed(sg_rune, nf9->s.origin);
-				int s13, best13 = -1, bv13 = 0;
-
-				VectorCopy(nf9->s.origin, bot->nade_at);
-				if (ns13 >= 0)
-				{
-					for (s13 = 0; s13 < sg_rune->hdr.num_seeds &&
-					     s13 < SG_MAX_SEEDS; s13++)
-					{
-						vec3_t dd13;
-
-						VectorSubtract(sg_rune->seeds[s13].origin,
-						               nf9->s.origin, dd13);
-						if (VectorLength(dd13) > 600.0f)
-							continue;
-						if (Danger_Field(team)[s13] > bv13)
-						{
-							bv13 = Danger_Field(team)[s13];
-							best13 = s13;
-						}
-					}
-					if (best13 >= 0)
-						VectorCopy(sg_rune->seeds[best13].origin,
-						           bot->nade_at);
-				}
-				bot->nade_at[2] += 56.0f;
-				nades9->use(e, nades9);
-				bot->nade_phase = 1;
-				bot->nade_until = level.time + 0.5f;
-			}
-		}
-	}
-	else
-		bot->rally_since = 0.0f;
+	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
 
 	if (role != SG_ROLE_CARRY)
 	{
