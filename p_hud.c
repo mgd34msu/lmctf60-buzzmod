@@ -198,9 +198,60 @@ void Show_String(int x, int y, char *string, char *Text)
 	strcat(string, DBuffer);
 }
 
+// Board_LineLen -- legacy-cap byte accounting for the ui_layout.h
+// conversions below (StatboardMessage, TeamStatboardMessage,
+// CTFSquadboardMessage, DeathmatchScoreboardMessage).
+//
+// Every producer converted here used to test its own running
+// "stringlength" against a hand-picked ceiling (1024 bytes; the
+// squadboard used 1000) before strcpy-ing one more formatted line in.
+// ui_layout_compile() now has a bigger budget to work with
+// (UI_LAYOUT_BUDGET, 1380 bytes, ui_layout.h) -- but letting that
+// larger budget decide how many rows/lines survive would be a visible
+// content change (more rows shown than before), which this pass does
+// not make. The extra headroom is deliberately left unspent until a
+// future change spends it on purpose.
+//
+// This measures the byte length of one already-formatted wire line
+// (or, for a multi-token header, one caller sums several calls) the
+// same way each producer's own Com_sprintf-then-strlen call did, so
+// the admission decisions below land on the exact old truncation
+// point rather than a new, larger one.
+static int Board_LineLen(const char *fmt, ...)
+{
+	char	scratch[512];
+	va_list	argptr;
+
+	va_start(argptr, fmt);
+	vsnprintf(scratch, sizeof(scratch), fmt, argptr);
+	va_end(argptr);
+
+	return (int)strlen(scratch);
+}
 
 extern edict_t *Railgun_Victor;
 
+
+// DeathmatchScoreboardMessage's red/blue roster rows are NOT converted
+// to a UI_TABLE: a row is a heterogeneous, conditionally-present mix
+// (a raw client/ctf token, plus an optional captures line, an
+// optional rune line, an optional MVP marker) rather than a fixed set
+// of columns, and the original breaks the ENTIRE roster loop -- not
+// just the current row -- the moment any one of those pieces doesn't
+// fit. UI_TABLE's contract (ui_layout.h) is fixed columns with whole-
+// row atomicity, which does not model either of those, so this
+// function builds its ui_elem_t array directly, piece by piece,
+// keeping the original's own nested if/else/break control flow
+// unchanged (STYLE.md rule 9) rather than forcing it through a shape
+// that does not fit.
+#define DMSCORE_MAX_ROWS	21	// matches the original's own red/blue cap ("if (red > 21) red = 21;")
+
+typedef struct
+{
+	char	main_text[80];	// this row's client/ctf raw token, or its DMVP/OMVP string2 line
+	char	capt_text[24];	// "C:<n>" (portrait mode only)
+	char	rune_text[8];	// "R:<code>" (portrait mode only; showsmall draws the bare code)
+} dmscore_row_bufs_t;
 
 /*
 ==================
@@ -210,15 +261,16 @@ DeathmatchScoreboardMessage
 */
 void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 {
-    char    entry[MAX_MSGLEN];
-    char    string[MAX_MSGLEN];
-    char    string2[MAX_MSGLEN];  // TEAM PLAY -- LM_JORM
-	char	mvpstring[100];
+    char                storage[UI_LAYOUT_BUDGET];
+    ui_buf_t            sb;
+    ui_screen_t         screen;
+    ui_elem_t           elems[320];
+    dmscore_row_bufs_t  red_buf[DMSCORE_MAX_ROWS];
+    dmscore_row_bufs_t  blue_buf[DMSCORE_MAX_ROWS];
+
 	int     bluescore, redscore;  // TEAM PLAY -- LM_JORM
     int     bluecaps, redcaps;  // TEAM PLAY -- LM_JORM
     int     blue, red;  // TEAM PLAY -- LM_JORM
-    blue = 0;
-    red = 0;
 
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
     int     blue_rune_strength = 0;
@@ -250,21 +302,15 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     blue_rune_acc = 0;
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
-    size_t  stringlength;
     int     i;
     int     j;
     int     k;
     int     l;
-    
+
     int     redsorted[MAX_CLIENTS];
     int     redsortedscores[MAX_CLIENTS];
     int     bluesorted[MAX_CLIENTS];
     int     bluesortedscores[MAX_CLIENTS];
-#ifdef OLDOBSERVERCODE
-    int     sorted[MAX_CLIENTS];
-    int     observers;
-#endif
-    //bat
     int     sorted_reg_observers[MAX_CLIENTS];
 	int     sorted_red_observers[MAX_CLIENTS];
 	int     sorted_blue_observers[MAX_CLIENTS];
@@ -285,8 +331,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     item_shield;
     int     item_quad;
     char*   player_rune;
-
-    player_rune = NULL;
     // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - END
 
     int     x, y;
@@ -297,17 +341,48 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     qboolean    is_red_fc;
     qboolean    is_blue_fc;
 
+    // ui_layout.h conversion state -- see this function's banner and
+    // Board_LineLen's banner (top of file). legacy_len replaces
+    // "stringlength" and is checked against the SAME 1024-byte cap the
+    // hand-written producer used; ui_layout_compile's own 1380-byte
+    // budget (UI_LAYOUT_BUDGET) is real headroom this pass leaves
+    // unspent, not a wider cap this board now gets to use.
+    int         n;
+    int         dropped;
+    int         legacy_len;
+    int         line_len;
+    qboolean    rune_line_emitted_this_row;
+
+    int     mvp_n;
+    int     mvp_x[9], mvp_y[9];
+    char    mvp_text[9][100];
+    int     mvp_total_len;
+
+    // Observers listing scratch -- see the conversion note at its use
+    // site below for the duplication quirk this replicates.
+    int         els2_n;
+    int         els2_x[64], els2_y[64];
+    char        els2_text[64][32];
+    int         els2_len;
+    int         sec_len;
+    qboolean    gate_ok;
+
+    int     foot_len;
+
+    int     rows;
+    int     fy;
+    int     pf_len;
+    char    pf_text[6][32];
+
+    player_rune = NULL;
     is_red_fc = false;
     is_blue_fc = false;
     showsmall = false;
 
     bluescore = bluecaps = blue = 0; // TEAM PLAY -- LM_JORM
     redscore = redcaps = red = 0;  // TEAM PLAY -- LM_JORM
-#ifdef OLDOBSERVERCODE
-    observers = 0;  // TEAM PLAY -- LM_JORM
-#endif
 
-	// sort the clients by score
+	// sort the clients by score -- unchanged from the hand-written version
     for (i=0; i<game.maxclients; i++)
     {
         cl_ent = g_edicts + 1 + i;
@@ -342,7 +417,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         if (cl_ent->client->ctf.teamnum == CTF_TEAM_RED) // RED TEAM
         {
             redscore += score;
-            redcaps += stats_get(cl_ent, STATS_CAPTURES); 
+            redcaps += stats_get(cl_ent, STATS_CAPTURES);
 
             // BUZZKILL - ADVANCED ANALYTICS SCOREBOARD - START
             red_rune_strength += rune_strength;
@@ -470,7 +545,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 bluesortedscores[k] = bluesortedscores[k-1];
             }
             bluesorted[j] = i;
-            bluesortedscores[j] = score;    
+            bluesortedscores[j] = score;
             blue++;
             for (l = 0; l < red; l++)
             {
@@ -491,72 +566,47 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 			red_observers++;
             total_observers++;
 		}
-//bat - put this back in
-//#ifdef OLDOBSERVERCODE
 		else
 		{
 			sorted_reg_observers[reg_observers] = i;
 			reg_observers++;
             total_observers++;
 		}
-//#endif
-        //total++;
-
-        /*
-        for (j=0 ; j<total ; j++)
-        {
-            if (score > sortedscores[j])
-                break;
-        }
-        for (k=total ; k>j ; k--)
-        {
-            sorted[k] = sorted[k-1];
-            sortedscores[k] = sortedscores[k-1];
-        }
-        sorted[j] = i;
-        sortedscores[j] = score;
-        total++;
-        */
     }
 
-    // print level name and exit rules
-    string[0] = 0;
-
-    //stringlength = strlen(string);
-    stringlength = 0;
-
-
     // add the clients in sorted order
+    legacy_len = 0;
+    n = 0;
+
     if (red > 6 || red + blue + total_observers > 16)
     {
         showsmall = true;
         if (red > 21)
             red = 21;
     }
-    
+
 	if (blue > 6 || red + blue + total_observers > 16)
     {
         showsmall = true;
         if (blue > 21)
             blue = 21;
     }
-   
+
     if (showsmall)
     {
-        x = 0;
-        y = 32;
-        Com_sprintf (string2, sizeof(string2),
-            "xv 0 yv 32 string2 \"Scr Png Name        \" "
-            "xv 0 yv 40 string2 \"------------------- \" "
-            "xv 160 yv 32 string2 \"Scr Png Name        \" "
-            "xv 160 yv 40 string2 \"------------------- \" "
-            );
+        int hdr_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", 0, 32, "Scr Png Name        ")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 0, 40, "------------------- ")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 160, 32, "Scr Png Name        ")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 160, 40, "------------------- ");
 
-        j = (int)strlen(string2);
-        if (stringlength + j <= 1024)
+        if (legacy_len + hdr_len <= 1024)
         {
-            strcpy (string + stringlength, string2);
-            stringlength += j;
+            legacy_len += hdr_len;
+
+            elems[n].kind = UI_TEXT; elems[n].u.text.x = 0;   elems[n].u.text.y = 32; elems[n].u.text.text = "Scr Png Name        "; elems[n].u.text.highlight = true; n++;
+            elems[n].kind = UI_TEXT; elems[n].u.text.x = 0;   elems[n].u.text.y = 40; elems[n].u.text.text = "------------------- "; elems[n].u.text.highlight = true; n++;
+            elems[n].kind = UI_TEXT; elems[n].u.text.x = 160; elems[n].u.text.y = 32; elems[n].u.text.text = "Scr Png Name        "; elems[n].u.text.highlight = true; n++;
+            elems[n].kind = UI_TEXT; elems[n].u.text.x = 160; elems[n].u.text.y = 40; elems[n].u.text.text = "------------------- "; elems[n].u.text.highlight = true; n++;
         }
     }
 
@@ -564,13 +614,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     for (i=0 ; i<red ; i++)
     {
         cl = &game.clients[redsorted[i]];
-        cl_ent = g_edicts + 1 + redsorted[i];   
+        cl_ent = g_edicts + 1 + redsorted[i];
 
-    
         if (showsmall)
         {
             x = 0;
             y = 48 + 8 * i;
+            rune_line_emitted_this_row = false;
 
             if (cl->rune)
             {
@@ -581,93 +631,136 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 case 4:	 player_rune = "HA";    break;
                 case 8:	 player_rune = "RG";    break;
                 }
-                Com_sprintf(string2, sizeof(string2),
-                    "xv %i yv %i string2 \"%s\" ",
-                    x + 32 - 136 + 80, y, player_rune);
 
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 - 136 + 80, y, player_rune);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy(string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_TEXT;
+                elems[n].u.text.x = x + 32 - 136 + 80;
+                elems[n].u.text.y = y;
+                elems[n].u.text.text = player_rune;
+                elems[n].u.text.highlight = true;
+                n++;
+
+                rune_line_emitted_this_row = true;
             }
 
             if (cl_ent == Query_DMVP())
 			{
-				sprintf(mvpstring, "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
-				mvpstring[19] = 0;
-				Show_String(x, y, string2, mvpstring);
+				Com_sprintf(red_buf[i].main_text, sizeof(red_buf[i].main_text), "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
+				red_buf[i].main_text[19] = 0;
+
+				// Discovered quirk, preserved on purpose (see this
+				// function's banner): Show_String's strcat meant a
+				// DMVP/OMVP row that ALSO carried a rune got the rune
+				// line's bytes folded a second time into this row's
+				// flush, because the original never cleared string2
+				// between the rune block above and Show_String here.
+				// The ctf/else branch below uses a plain (overwriting)
+				// sprintf and never inherits this.
+				line_len = (rune_line_emitted_this_row ?
+						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 - 136 + 80, y, player_rune) : 0)
+					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, red_buf[i].main_text);
+				if (legacy_len + line_len > 1024)
+					break;
+				legacy_len += line_len;
+
+				if (rune_line_emitted_this_row)
+				{
+					elems[n].kind = UI_TEXT;
+					elems[n].u.text.x = x + 32 - 136 + 80;
+					elems[n].u.text.y = y;
+					elems[n].u.text.text = player_rune;
+					elems[n].u.text.highlight = true;
+					n++;
+				}
+
+				elems[n].kind = UI_TEXT;
+				elems[n].u.text.x = x;
+				elems[n].u.text.y = y;
+				elems[n].u.text.text = red_buf[i].main_text;
+				elems[n].u.text.highlight = true;
+				n++;
 			}
             else if (cl_ent == Query_OMVP())
 			{
-				sprintf(mvpstring, "O%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
-				mvpstring[19] = 0;
-				Show_String(x, y, string2, mvpstring);
+				Com_sprintf(red_buf[i].main_text, sizeof(red_buf[i].main_text), "O%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
+				red_buf[i].main_text[19] = 0;
+
+				line_len = (rune_line_emitted_this_row ?
+						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 - 136 + 80, y, player_rune) : 0)
+					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, red_buf[i].main_text);
+				if (legacy_len + line_len > 1024)
+					break;
+				legacy_len += line_len;
+
+				if (rune_line_emitted_this_row)
+				{
+					elems[n].kind = UI_TEXT;
+					elems[n].u.text.x = x + 32 - 136 + 80;
+					elems[n].u.text.y = y;
+					elems[n].u.text.text = player_rune;
+					elems[n].u.text.highlight = true;
+					n++;
+				}
+
+				elems[n].kind = UI_TEXT;
+				elems[n].u.text.x = x;
+				elems[n].u.text.y = y;
+				elems[n].u.text.text = red_buf[i].main_text;
+				elems[n].u.text.highlight = true;
+				n++;
 			}
             else
             {
-                sprintf(string2, "ctf %d %d %d %ld %d ", x, y, redsorted[i],
+                Com_sprintf(red_buf[i].main_text, sizeof(red_buf[i].main_text), "ctf %d %d %d %ld %d ", x, y, redsorted[i],
                     stats_get(cl_ent, STATS_SCORE), cl->ping > 999 ? 999 : cl->ping);
+
+                line_len = (int)strlen(red_buf[i].main_text);
+                if (legacy_len + line_len > 1024)
+                    break;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_RAW;
+                elems[n].u.raw.text = red_buf[i].main_text;
+                n++;
             }
-            
-            
-            j = (int)strlen(string2);
-            if (stringlength + j > 1024)
-                break;
-            strcpy (string + stringlength, string2);
-            stringlength += j;
         }
         else
         {
-            //picnum = gi.imageindex ("i_fixme");
             x = 0;
             y = 32 + 32 * (i%6);
-            //tag = NULL;
-        /*
-            // add a dogtag
-            if (cl_ent == ent)
-                tag = "tag1";
-            else if (cl_ent == killer)
-                tag = "tag2";
-            else
-                tag = NULL;
-            if (tag)
-            {
-                Com_sprintf (entry, sizeof(entry),
-                    "xv %i yv %i picn %s ",x+32, y, tag);
-                j = (int)strlen(entry);
-                if (stringlength + j > 1024)
-                    break;
-                strcpy (string + stringlength, entry);
-                stringlength += j;
-            }
-        */
 
-        // send the layout
+            Com_sprintf(red_buf[i].main_text, sizeof(red_buf[i].main_text), "client %i %i %i %i %i %i ",
+                x, y, redsorted[i], (int)stats_get(cl_ent, STATS_SCORE),
+                cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
-        Com_sprintf(entry, sizeof(entry),
-            "client %i %i %i %i %i %i ",
-            x, y, redsorted[i], (int)stats_get(cl_ent, STATS_SCORE),
-            cl->ping, (level.framenum - cl->resp.enterframe) / 600);
-
-            j = (int)strlen(entry);
-            if (stringlength + j > 1024)
+            line_len = (int)strlen(red_buf[i].main_text);
+            if (legacy_len + line_len > 1024)
                 break;
-            strcpy (string + stringlength, entry);
-            stringlength += j;
+            legacy_len += line_len;
+
+            elems[n].kind = UI_RAW;
+            elems[n].u.raw.text = red_buf[i].main_text;
+            n++;
 
             if (stats_get(cl_ent, STATS_CAPTURES))
             {
-                Com_sprintf (string2, sizeof(string2),
-                    "xv %i yv %i string2 \"C:%i\" ",        // teamname
-                    x+32+80, y+24,
-                    (int)stats_get(cl_ent, STATS_CAPTURES));
+                Com_sprintf (red_buf[i].capt_text, sizeof(red_buf[i].capt_text), "C:%i", (int)stats_get(cl_ent, STATS_CAPTURES));
 
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x+32+80, y+24, red_buf[i].capt_text);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy (string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_TEXT;
+                elems[n].u.text.x = x+32+80;
+                elems[n].u.text.y = y+24;
+                elems[n].u.text.text = red_buf[i].capt_text;
+                elems[n].u.text.highlight = true;
+                n++;
             }
 
             if (cl->rune)
@@ -679,38 +772,49 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     case 4:	 player_rune = "HA";    break;
                     case 8:	 player_rune = "RG";    break;
                 }
-                Com_sprintf(string2, sizeof(string2),
-                    "xv %i yv %i string2 \"R:%s\" ",
-                    x + 32 + 80, y + 16, player_rune);
 
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                Com_sprintf(red_buf[i].rune_text, sizeof(red_buf[i].rune_text), "R:%s", player_rune);
+
+                line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 + 80, y + 16, red_buf[i].rune_text);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy(string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_TEXT;
+                elems[n].u.text.x = x + 32 + 80;
+                elems[n].u.text.y = y + 16;
+                elems[n].u.text.text = red_buf[i].rune_text;
+                elems[n].u.text.highlight = true;
+                n++;
             }
 
             if (cl_ent == Query_DMVP())
             {
-                Com_sprintf (string2, sizeof(string2),
-                    "xv %d yv %d picn dmvpicon ",
-                    x, y);
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %d yv %d picn dmvpicon ", x, y);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy (string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_PIC;
+                elems[n].u.pic.x = x;
+                elems[n].u.pic.y = y;
+                elems[n].u.pic.stat_driven = false;
+                elems[n].u.pic.image.name = "dmvpicon";
+                n++;
             }
             else if (cl_ent == Query_OMVP())
             {
-                Com_sprintf (string2, sizeof(string2),
-                    "xv %d yv %d picn omvpicon ",
-                    x, y);
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %d yv %d picn omvpicon ", x, y);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy (string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_PIC;
+                elems[n].u.pic.x = x;
+                elems[n].u.pic.y = y;
+                elems[n].u.pic.stat_driven = false;
+                elems[n].u.pic.image.name = "omvpicon";
+                n++;
             }
 
         }
@@ -721,12 +825,13 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     for (i=0 ; i<blue ; i++)
     {
         cl = &game.clients[bluesorted[i]];
-        cl_ent = g_edicts + 1 + bluesorted[i];  
+        cl_ent = g_edicts + 1 + bluesorted[i];
 
         if (showsmall)
         {
             x = 160;
             y = 48 + 8 * i;
+            rune_line_emitted_this_row = false;
 
             if (cl->rune)
             {
@@ -737,96 +842,132 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                 case 4:	 player_rune = "HA";    break;
                 case 8:	 player_rune = "RG";    break;
                 }
-                Com_sprintf(string2, sizeof(string2),
-                    "xv %i yv %i string2 \"%s\" ",
-                    x + 32 + 56 + 80, y, player_rune);
 
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 + 56 + 80, y, player_rune);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy(string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_TEXT;
+                elems[n].u.text.x = x + 32 + 56 + 80;
+                elems[n].u.text.y = y;
+                elems[n].u.text.text = player_rune;
+                elems[n].u.text.highlight = true;
+                n++;
+
+                rune_line_emitted_this_row = true;
             }
 
             if (cl_ent == Query_DMVP())
 			{
-				sprintf(mvpstring, "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
-				mvpstring[19] = 0;
-				Show_String(x, y, string2, mvpstring);
+				Com_sprintf(blue_buf[i].main_text, sizeof(blue_buf[i].main_text), "D%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
+				blue_buf[i].main_text[19] = 0;
+
+				line_len = (rune_line_emitted_this_row ?
+						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 + 56 + 80, y, player_rune) : 0)
+					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, blue_buf[i].main_text);
+				if (legacy_len + line_len > 1024)
+					break;
+				legacy_len += line_len;
+
+				if (rune_line_emitted_this_row)
+				{
+					elems[n].kind = UI_TEXT;
+					elems[n].u.text.x = x + 32 + 56 + 80;
+					elems[n].u.text.y = y;
+					elems[n].u.text.text = player_rune;
+					elems[n].u.text.highlight = true;
+					n++;
+				}
+
+				elems[n].kind = UI_TEXT;
+				elems[n].u.text.x = x;
+				elems[n].u.text.y = y;
+				elems[n].u.text.text = blue_buf[i].main_text;
+				elems[n].u.text.highlight = true;
+				n++;
 			}
             else if (cl_ent == Query_OMVP())
 			{
-				sprintf(mvpstring, "O%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
-				mvpstring[19] = 0;
-				Show_String(x, y, string2, mvpstring);
+				Com_sprintf(blue_buf[i].main_text, sizeof(blue_buf[i].main_text), "O%3d %3d %s", cl->resp.score, cl->ping, cl->pers.netname);
+				blue_buf[i].main_text[19] = 0;
+
+				line_len = (rune_line_emitted_this_row ?
+						Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 + 56 + 80, y, player_rune) : 0)
+					+ Board_LineLen("xv %i yv %i string2 \"%s\" ", x, y, blue_buf[i].main_text);
+				if (legacy_len + line_len > 1024)
+					break;
+				legacy_len += line_len;
+
+				if (rune_line_emitted_this_row)
+				{
+					elems[n].kind = UI_TEXT;
+					elems[n].u.text.x = x + 32 + 56 + 80;
+					elems[n].u.text.y = y;
+					elems[n].u.text.text = player_rune;
+					elems[n].u.text.highlight = true;
+					n++;
+				}
+
+				elems[n].kind = UI_TEXT;
+				elems[n].u.text.x = x;
+				elems[n].u.text.y = y;
+				elems[n].u.text.text = blue_buf[i].main_text;
+				elems[n].u.text.highlight = true;
+				n++;
 			}
 			else
 			{
-
-				sprintf(string2,
+				Com_sprintf(blue_buf[i].main_text, sizeof(blue_buf[i].main_text),
 					"ctf %d %d %d %ld %d ",
 					x, y,
 					bluesorted[i],
 					stats_get(cl_ent, STATS_SCORE),
 					cl->ping > 999 ? 999 : cl->ping);
-			}
 
-            j = (int)strlen(string2);
-            if (stringlength + j > 1024)
-                break;
-            strcpy (string + stringlength, string2);
-            stringlength += j;
+				line_len = (int)strlen(blue_buf[i].main_text);
+				if (legacy_len + line_len > 1024)
+					break;
+				legacy_len += line_len;
+
+				elems[n].kind = UI_RAW;
+				elems[n].u.raw.text = blue_buf[i].main_text;
+				n++;
+			}
         }
         else
         {
-            //picnum = gi.imageindex ("i_fixme");
-            //x = (i>=6) ? 160 : 0;
             x = 160;
             y = 32 + 32 * (i%6);
-            //tag = NULL;
-        /*
-            // add a dogtag
-            if (cl_ent == ent)
-                tag = "tag1";
-            else if (cl_ent == killer)
-                tag = "tag2";
-            else
-                tag = NULL;
-            if (tag)
-            {
-                Com_sprintf (entry, sizeof(entry),
-                    "xv %i yv %i picn %s ",x+32, y, tag);
-                j = (int)strlen(entry);
-                if (stringlength + j > 1024)
-                    break;
-                strcpy (string + stringlength, entry);
-                stringlength += j;
-            }
-        */
-        // send the layout
-            Com_sprintf(entry, sizeof(entry),
-                "client %i %i %i %i %i %i ",
+
+            Com_sprintf(blue_buf[i].main_text, sizeof(blue_buf[i].main_text), "client %i %i %i %i %i %i ",
                 x, y, bluesorted[i], (int)stats_get(cl_ent, STATS_SCORE),
                 cl->ping, (level.framenum - cl->resp.enterframe) / 600);
 
-            j = (int)strlen(entry);
-            if (stringlength + j > 1024)
+            line_len = (int)strlen(blue_buf[i].main_text);
+            if (legacy_len + line_len > 1024)
                 break;
-            strcpy (string + stringlength, entry);
-            stringlength += j;
+            legacy_len += line_len;
+
+            elems[n].kind = UI_RAW;
+            elems[n].u.raw.text = blue_buf[i].main_text;
+            n++;
 
             if (stats_get(cl_ent, STATS_CAPTURES))
             {
-                Com_sprintf (string2, sizeof(string2),
-                    "xv %i yv %i string2 \"C:%i\" ",        // teamname
-                    x+32+80, y+24,
-                    (int)stats_get(cl_ent, STATS_CAPTURES));
+                Com_sprintf (blue_buf[i].capt_text, sizeof(blue_buf[i].capt_text), "C:%i", (int)stats_get(cl_ent, STATS_CAPTURES));
 
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x+32+80, y+24, blue_buf[i].capt_text);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy (string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_TEXT;
+                elems[n].u.text.x = x+32+80;
+                elems[n].u.text.y = y+24;
+                elems[n].u.text.text = blue_buf[i].capt_text;
+                elems[n].u.text.highlight = true;
+                n++;
             }
 
             if (cl->rune)
@@ -839,38 +980,48 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
                     case 8:	 player_rune = "RG";    break;
                 }
 
-                Com_sprintf(string2, sizeof(string2),
-                    "xv %i yv %i string2 \"R:%s\" ",
-                    x + 32 + 80, y + 16, player_rune);
+                Com_sprintf(blue_buf[i].rune_text, sizeof(blue_buf[i].rune_text), "R:%s", player_rune);
 
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", x + 32 + 80, y + 16, blue_buf[i].rune_text);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy(string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_TEXT;
+                elems[n].u.text.x = x + 32 + 80;
+                elems[n].u.text.y = y + 16;
+                elems[n].u.text.text = blue_buf[i].rune_text;
+                elems[n].u.text.highlight = true;
+                n++;
             }
 
             if (cl_ent == Query_DMVP())
             {
-                Com_sprintf (string2, sizeof(string2),
-                    "xv %d yv %d picn dmvpicon ",
-                    x, y);
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %d yv %d picn dmvpicon ", x, y);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy (string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_PIC;
+                elems[n].u.pic.x = x;
+                elems[n].u.pic.y = y;
+                elems[n].u.pic.stat_driven = false;
+                elems[n].u.pic.image.name = "dmvpicon";
+                n++;
             }
             else if (cl_ent == Query_OMVP())
             {
-                Com_sprintf (string2, sizeof(string2),
-                    "xv %d yv %d picn omvpicon ",
-                    x, y);
-                j = (int)strlen(string2);
-                if (stringlength + j > 1024)
+                line_len = Board_LineLen("xv %d yv %d picn omvpicon ", x, y);
+                if (legacy_len + line_len > 1024)
                     break;
-                strcpy (string + stringlength, string2);
-                stringlength += j;
+                legacy_len += line_len;
+
+                elems[n].kind = UI_PIC;
+                elems[n].u.pic.x = x;
+                elems[n].u.pic.y = y;
+                elems[n].u.pic.stat_driven = false;
+                elems[n].u.pic.image.name = "omvpicon";
+                n++;
             }
 
         }
@@ -879,24 +1030,24 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
 
     y = 32 * 8;
-	string2[0] = 0;
-
 
 	if(MvpDisp)
 	{
-		sprintf(mvpstring, "*** %s MVPs ***", level.mapname);
-		Show_String(80, y, string2, mvpstring);
+		mvp_n = 0;
+
+		Com_sprintf(mvp_text[mvp_n], sizeof(mvp_text[mvp_n]), "*** %s MVPs ***", level.mapname);
+		mvp_x[mvp_n] = 80; mvp_y[mvp_n] = y; mvp_n++;
 		y += 8;
 
     	if(Railgun_Victor)
 		{
-			sprintf(mvpstring, "Railgod -> %s", Railgun_Victor->client->pers.netname);
-			Show_String(100, y, string2, mvpstring);
+			Com_sprintf(mvp_text[mvp_n], sizeof(mvp_text[mvp_n]), "Railgod -> %s", Railgun_Victor->client->pers.netname);
+			mvp_x[mvp_n] = 100; mvp_y[mvp_n] = y; mvp_n++;
 			y += 8;
 		}
 
-		sprintf(mvpstring, "1) %s %4ld", Highscore_Table[0].Player, Highscore_Table[0].Score);
-		Show_String(130, y, string2, mvpstring);
+		Com_sprintf(mvp_text[mvp_n], sizeof(mvp_text[mvp_n]), "1) %s %4ld", Highscore_Table[0].Player, Highscore_Table[0].Score);
+		mvp_x[mvp_n] = 130; mvp_y[mvp_n] = y; mvp_n++;
 		y += 8;
 
 		x = 0;
@@ -910,43 +1061,84 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     			if(Railgun_Victor)
 					y += 8;
 			}
-			
-			sprintf(mvpstring, "%d) %15s %4ld", i + 1, Highscore_Table[i].Player, Highscore_Table[i].Score);
-				
-			Show_String(x, y, string2, mvpstring);
+
+			Com_sprintf(mvp_text[mvp_n], sizeof(mvp_text[mvp_n]), "%d) %15s %4ld", i + 1, Highscore_Table[i].Player, Highscore_Table[i].Score);
+			mvp_x[mvp_n] = x; mvp_y[mvp_n] = y; mvp_n++;
 			y += 8;
 		}
 
-		j = (int)strlen(string2);
-		if (stringlength + j <= 1024)
-		{
-			strcpy (string + stringlength, string2);
-			stringlength += j;
-		}
+		mvp_total_len = 0;
+		for (i = 0; i < mvp_n; i++)
+			mvp_total_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", mvp_x[i], mvp_y[i], mvp_text[i]);
 
+		if (legacy_len + mvp_total_len <= 1024)
+		{
+			legacy_len += mvp_total_len;
+
+			for (i = 0; i < mvp_n; i++)
+			{
+				elems[n].kind = UI_TEXT;
+				elems[n].u.text.x = mvp_x[i];
+				elems[n].u.text.y = mvp_y[i];
+				elems[n].u.text.text = mvp_text[i];
+				elems[n].u.text.highlight = true;
+				n++;
+			}
+		}
 	}
 	else
 	{
+		// Observers listing. Discovered quirk, preserved on purpose
+		// (see this function's banner): the original accumulates every
+		// non-empty category (red/blue/reg observers) into the SAME
+		// string2 buffer without ever clearing it between them, and
+		// re-copies the FULL accumulated buffer on every successful
+		// per-category flush -- so when more than one category is
+		// non-empty, an EARLIER category's lines get emitted again
+		// inside every LATER category's flush. This is a genuine bug
+		// in the shipped producer, not a deliberate repeat; it is
+		// reproduced exactly below (els2_* mirrors string2, monotonic
+		// across all three categories) rather than fixed, per this
+		// pass's byte-for-byte requirement -- see the conversion notes.
+		els2_n = 0;
+		gate_ok = (red + blue + total_observers <= 16) ? true : false;
+
 		if(red_observers)
 		{
 			x = 0;
-			Show_String(x, y, string2, "Red Observers:");
+			els2_x[els2_n] = x; els2_y[els2_n] = y;
+			Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "Red Observers:");
+			els2_n++;
 			y += 8;
-            if (red + blue + total_observers <= 16)
+            if (gate_ok)
             {
                 for (i = 0; i < red_observers; i++)
                 {
                     cl = &game.clients[sorted_red_observers[i]];
                     cl_ent = g_edicts + 1 + sorted_red_observers[i];
-                    Show_String(x, y, string2, cl->pers.netname);
+                    els2_x[els2_n] = x; els2_y[els2_n] = y;
+                    Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "%s", cl->pers.netname);
+                    els2_n++;
                     y += 8;
                 }
 
-			j = (int)strlen(string2);
-                if (stringlength + j <= 1024)
+                sec_len = 0;
+                for (i = 0; i < els2_n; i++)
+                    sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
+                els2_len = sec_len;
+
+                if (legacy_len + els2_len <= 1024)
                 {
-                    strcpy(string + stringlength, string2);
-                    stringlength += j;
+                    for (i = 0; i < els2_n; i++)
+                    {
+                        elems[n].kind = UI_TEXT;
+                        elems[n].u.text.x = els2_x[i];
+                        elems[n].u.text.y = els2_y[i];
+                        elems[n].u.text.text = els2_text[i];
+                        elems[n].u.text.highlight = true;
+                        n++;
+                    }
+                    legacy_len += els2_len;
                 }
             }
 		}
@@ -954,24 +1146,39 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 		if(blue_observers)
 		{
 			x = 160;
-			Show_String(x, y, string2, "Blue Observers:");
+			els2_x[els2_n] = x; els2_y[els2_n] = y;
+			Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "Blue Observers:");
+			els2_n++;
 			y += 8;
-            if (red + blue + total_observers <= 16)
+            if (gate_ok)
             {
                 for (i = 0; i < blue_observers; i++)
                 {
                     cl = &game.clients[sorted_blue_observers[i]];
                     cl_ent = g_edicts + 1 + sorted_blue_observers[i];
-                    //strcat(entry, cl->pers.netname);
-                    Show_String(x, y, string2, cl->pers.netname);
+                    els2_x[els2_n] = x; els2_y[els2_n] = y;
+                    Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "%s", cl->pers.netname);
+                    els2_n++;
                     y += 8;
                 }
 
-			j = (int)strlen(string2);
-                if (stringlength + j <= 1024)
+                sec_len = 0;
+                for (i = 0; i < els2_n; i++)
+                    sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
+                els2_len = sec_len;
+
+                if (legacy_len + els2_len <= 1024)
                 {
-                    strcpy(string + stringlength, string2);
-                    stringlength += j;
+                    for (i = 0; i < els2_n; i++)
+                    {
+                        elems[n].kind = UI_TEXT;
+                        elems[n].u.text.x = els2_x[i];
+                        elems[n].u.text.y = els2_y[i];
+                        elems[n].u.text.text = els2_text[i];
+                        elems[n].u.text.highlight = true;
+                        n++;
+                    }
+                    legacy_len += els2_len;
                 }
             }
 		}
@@ -980,58 +1187,87 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 
 		if(reg_observers)
 		{
-            if (red + blue + total_observers <= 16)
+            if (gate_ok)
             {
                 //give more space for the reg observers
                 if (red_observers == 0 && blue_observers == 0)
                 {
                     x = 80;
-                    Show_String(x, y, string2, "Observers:");
+                    els2_x[els2_n] = x; els2_y[els2_n] = y;
+                    Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "Observers:");
+                    els2_n++;
                     y += 8;
 
                     //Do 2 obs per line
 
                     for (i = 0; i < reg_observers; i++)
                     {
-                        //x = (i & 0x01) * 160;
                         x = (i % 3) * 130;
 
                         cl = &game.clients[sorted_reg_observers[i]];
                         cl_ent = g_edicts + 1 + sorted_reg_observers[i];
-                        Show_String(x, y, string2, cl->pers.netname);
+                        els2_x[els2_n] = x; els2_y[els2_n] = y;
+                        Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "%s", cl->pers.netname);
+                        els2_n++;
 
                         if ((i % 3) == 2)
                             y += 8;
                     }
 
-				j = (int)strlen(string2);
-                    if (stringlength + j <= 1024)
-                    {
-                        strcpy(string + stringlength, string2);
-                        stringlength += j;
-                    }
+                    sec_len = 0;
+                    for (i = 0; i < els2_n; i++)
+                        sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
+                    els2_len = sec_len;
 
+                    if (legacy_len + els2_len <= 1024)
+                    {
+                        for (i = 0; i < els2_n; i++)
+                        {
+                            elems[n].kind = UI_TEXT;
+                            elems[n].u.text.x = els2_x[i];
+                            elems[n].u.text.y = els2_y[i];
+                            elems[n].u.text.text = els2_text[i];
+                            elems[n].u.text.highlight = true;
+                            n++;
+                        }
+                        legacy_len += els2_len;
+                    }
                 }
                 else
                 {
                     x = 80;
-                    Show_String(x, y, string2, "Observers:");
+                    els2_x[els2_n] = x; els2_y[els2_n] = y;
+                    Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "Observers:");
+                    els2_n++;
                     y += 8;
 
                     for (i = 0; i < reg_observers; i++)
                     {
                         cl = &game.clients[sorted_reg_observers[i]];
                         cl_ent = g_edicts + 1 + sorted_reg_observers[i];
-                        //strcat(entry, cl->pers.netname);
-                        Show_String(x, y, string2, cl->pers.netname);
+                        els2_x[els2_n] = x; els2_y[els2_n] = y;
+                        Com_sprintf(els2_text[els2_n], sizeof(els2_text[els2_n]), "%s", cl->pers.netname);
+                        els2_n++;
                         y += 8;
                     }
 
-				j = (int)strlen(string2);
-                    if (stringlength + j <= 1024)
+                    sec_len = 0;
+                    for (i = 0; i < els2_n; i++)
+                        sec_len += Board_LineLen("xv %i yv %i string2 \"%s\" ", els2_x[i], els2_y[i], els2_text[i]);
+                    els2_len = sec_len;
+
+                    if (legacy_len + els2_len <= 1024)
                     {
-                        strcpy(string + stringlength, string2);
-                        stringlength += j;
+                        for (i = 0; i < els2_n; i++)
+                        {
+                            elems[n].kind = UI_TEXT;
+                            elems[n].u.text.x = els2_x[i];
+                            elems[n].u.text.y = els2_y[i];
+                            elems[n].u.text.text = els2_text[i];
+                            elems[n].u.text.highlight = true;
+                            n++;
+                        }
+                        legacy_len += els2_len;
                     }
                 }
             }
@@ -1039,38 +1275,6 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 	}
 
 
-
-#ifdef OLDOBSERVERCODE
-    if (observers)
-    {
-        strcpy(entry, "Observers: ");
-        for (i=0 ; i<observers ; i++)
-        {
-            cl = &game.clients[sorted[i]];
-            cl_ent = g_edicts + 1 + sorted[i];  
-
-            strcat(entry, cl->pers.netname);
-            if (i+1 < observers)
-                strcat(entry, ", ");
-        }
-
-        x = 0;
-        y = 32 + 32 * 7;
-
-        // send the layout
-        Com_sprintf (string2, sizeof(string2),
-            "xv %i yv %i string2 \"%s\" ",      // teamname
-            x, y, entry
-            );
-
-        j = (int)strlen(string2);
-        if (stringlength + j <= 1024)
-        {
-            strcpy (string + stringlength, string2);
-            stringlength += j;
-        }
-    }
-#endif
     // END PLAY -- LM JORM
 
 
@@ -1079,57 +1283,37 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 	//if (!((int)ctfflags->value & CTF_TEAM_NOTEAMS) ||
     //    !((int)ctfflags->value & CTF_FLAGS_NOFLAGS))
     {
-        Com_sprintf (string2, sizeof(string2),
-        "xv %i yv %i picn %s "
-        "xv %i yv %i picn %s "
-        "xv %i yv %i picn %s "
-        "xv %i yv %i picn %s "
+        foot_len = Board_LineLen("xv %i yv %i picn %s ", 0, 0, "redlion_i")
+            + Board_LineLen("xv %i yv %i picn %s ", 160, 0, "bluewolf_i")
+            + Board_LineLen("xv %i yv %i picn %s ", 32, 0, "redtag")
+            + Board_LineLen("xv %i yv %i picn %s ", 192, 0, "bluetag")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 36, 0, "FC:")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 36, 8, redfc)
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 36, 16, "Runes")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 36, 24, red_runes)
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 196, 0, "FC:")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 196, 8, bluefc)
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 196, 16, "Runes")
+            + Board_LineLen("xv %i yv %i string2 \"%s\" ", 196, 24, blue_runes);
 
-        //"xv %i yv %i string2 \"CAPS:%i\" "    // Captures // NOT NEEDED - IN v6.1 HUD
-        "xv %i yv %i string2 \"FC:\" "// BUZZKILL - FLAG CARRIER LABEL
-        "xv %i yv %i string2 \"%s\" "           // BUZZKILL - FLAG CARRIER NAME
-        "xv %i yv %i string2 \"Runes\" "       // BUZZKILL - RUNE LISTING
-        "xv %i yv %i string2 \"%s\" "           // BUZZKILL - RUNE LISTING
+        if (legacy_len + foot_len < 1024)
+        {
+            legacy_len += foot_len;
 
-        "xv %i yv %i string2 \"FC:\" "// BUZZKILL - FLAG CARRIER LABEL
-        "xv %i yv %i string2 \"%s\" "           // BUZZKILL - FLAG CARRIER NAME
-        "xv %i yv %i string2 \"Runes\" "           // BUZZKILL - RUNE LISTING
-        "xv %i yv %i string2 \"%s\" ",    // BUZZKILL - RUNE LISTING
+            elems[n].kind=UI_PIC; elems[n].u.pic.x=0;   elems[n].u.pic.y=0; elems[n].u.pic.stat_driven=false; elems[n].u.pic.image.name="redlion_i";   n++;
+            elems[n].kind=UI_PIC; elems[n].u.pic.x=160; elems[n].u.pic.y=0; elems[n].u.pic.stat_driven=false; elems[n].u.pic.image.name="bluewolf_i"; n++;
+            elems[n].kind=UI_PIC; elems[n].u.pic.x=32;  elems[n].u.pic.y=0; elems[n].u.pic.stat_driven=false; elems[n].u.pic.image.name="redtag";     n++;
+            elems[n].kind=UI_PIC; elems[n].u.pic.x=192; elems[n].u.pic.y=0; elems[n].u.pic.stat_driven=false; elems[n].u.pic.image.name="bluetag";    n++;
 
-        //"xv %i yv %i num 4 24 "               // BUZZKILL - BLUE CAPS     // NOT NEEDED - IN v6.1 HUD
-        //"xv %i yv %i num 4 25 "               // BUZZKILL - RED CAPS      // NOT NEEDED - IN v6.1 HUD
-            
-        //"xv %i yv %i num 4 19 "               // BUZZKILL - BLUE SCORE    // NOT NEEDED - IN v6.1 HUD
-        //"xv %i yv %i num 4 20 ",              // BUZZKILL - RED SCORE     // NOT NEEDED - IN v6.1 HUD
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=36;  elems[n].u.text.y=0;  elems[n].u.text.text="FC:";     elems[n].u.text.highlight=true; n++;
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=36;  elems[n].u.text.y=8;  elems[n].u.text.text=redfc;     elems[n].u.text.highlight=true; n++;
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=36;  elems[n].u.text.y=16; elems[n].u.text.text="Runes";   elems[n].u.text.highlight=true; n++;
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=36;  elems[n].u.text.y=24; elems[n].u.text.text=red_runes; elems[n].u.text.highlight=true; n++;
 
-        0, 0, "redlion_i",
-        160, 0, "bluewolf_i",
-        32, 0, "redtag",
-        192, 0, "bluetag",
-
-        36, 0,
-        36, 8, redfc,
-        36, 16,
-        36, 24, red_runes,
-
-        196, 0,
-        196, 8, bluefc,
-        196, 16,
-        196, 24, blue_runes
-
-        //90, 4,
-        //250, 4,
-
-        //90, -28,
-        //250, -28
-
-        );
-
-        j = (int)strlen(string2);
-        if (stringlength + j < 1024)
-        {       
-            strcpy (string + stringlength, string2);
-            stringlength += j;
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=196; elems[n].u.text.y=0;  elems[n].u.text.text="FC:";      elems[n].u.text.highlight=true; n++;
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=196; elems[n].u.text.y=8;  elems[n].u.text.text=bluefc;     elems[n].u.text.highlight=true; n++;
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=196; elems[n].u.text.y=16; elems[n].u.text.text="Runes";    elems[n].u.text.highlight=true; n++;
+            elems[n].kind=UI_TEXT; elems[n].u.text.x=196; elems[n].u.text.y=24; elems[n].u.text.text=blue_runes; elems[n].u.text.highlight=true; n++;
         }
     }
 
@@ -1145,7 +1329,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     //   itm  Q/S/A/M  = quad, power shield, red armor, mega health
     //   rne  S/H/G/R  = strength, haste, regen, resist
     {
-        int rows = (red > blue) ? red : blue;
+        rows = (red > blue) ? red : blue;
         // The footer sits BELOW the roster, and the roster's row height
         // depends on which scoreboard this is: the small layout packs
         // players at 8 pixels (y = 48 + 8i), the big portrait layout at
@@ -1153,39 +1337,52 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
         // players a side the footer landed at y=96, printed straight
         // over the third portrait row (reported live from the big
         // board).  Compute from the layout actually in effect.
-        int fy = showsmall ? (48 + 8 * rows + 8)
-                           : (32 + 32 * ((rows > 6 ? 6 : rows)) + 8);
+        fy = showsmall ? (48 + 8 * rows + 8)
+                       : (32 + 32 * ((rows > 6 ? 6 : rows)) + 8);
 
         // only draw it when the roster leaves vertical room for three rows
         if (fy + 16 <= 232)
         {
-            Com_sprintf(string2, sizeof(string2),
-                "xv 0 yv %i string2 \"RED %3i pts\" "
-                "xv 0 yv %i string2 \"itm Q%2i S%2i A%2i M%2i\" "
-                "xv 0 yv %i string2 \"rne S%2i H%2i G%2i R%2i\" "
-                "xv 160 yv %i string2 \"BLUE %3i pts\" "
-                "xv 160 yv %i string2 \"itm Q%2i S%2i A%2i M%2i\" "
-                "xv 160 yv %i string2 \"rne S%2i H%2i G%2i R%2i\" ",
+            pf_len = Board_LineLen("xv 0 yv %i string2 \"RED %3i pts\" ", fy, redscore)
+                + Board_LineLen("xv 0 yv %i string2 \"itm Q%2i S%2i A%2i M%2i\" ", fy + 8, red_item_quad, red_item_shield, red_item_armor, red_item_mega)
+                + Board_LineLen("xv 0 yv %i string2 \"rne S%2i H%2i G%2i R%2i\" ", fy + 16, red_rune_strength, red_rune_haste, red_rune_regen, red_rune_resist)
+                + Board_LineLen("xv 160 yv %i string2 \"BLUE %3i pts\" ", fy, bluescore)
+                + Board_LineLen("xv 160 yv %i string2 \"itm Q%2i S%2i A%2i M%2i\" ", fy + 8, blue_item_quad, blue_item_shield, blue_item_armor, blue_item_mega)
+                + Board_LineLen("xv 160 yv %i string2 \"rne S%2i H%2i G%2i R%2i\" ", fy + 16, blue_rune_strength, blue_rune_haste, blue_rune_regen, blue_rune_resist);
 
-                fy,      redscore,
-                fy + 8,  red_item_quad, red_item_shield, red_item_armor, red_item_mega,
-                fy + 16, red_rune_strength, red_rune_haste, red_rune_regen, red_rune_resist,
-
-                fy,      bluescore,
-                fy + 8,  blue_item_quad, blue_item_shield, blue_item_armor, blue_item_mega,
-                fy + 16, blue_rune_strength, blue_rune_haste, blue_rune_regen, blue_rune_resist);
-
-            j = (int)strlen(string2);
-            if (stringlength + j < 1024)
+            if (legacy_len + pf_len < 1024)
             {
-                strcpy(string + stringlength, string2);
-                stringlength += j;
+                legacy_len += pf_len;
+
+                Com_sprintf(pf_text[0], sizeof(pf_text[0]), "RED %3i pts", redscore);
+                Com_sprintf(pf_text[1], sizeof(pf_text[1]), "itm Q%2i S%2i A%2i M%2i", red_item_quad, red_item_shield, red_item_armor, red_item_mega);
+                Com_sprintf(pf_text[2], sizeof(pf_text[2]), "rne S%2i H%2i G%2i R%2i", red_rune_strength, red_rune_haste, red_rune_regen, red_rune_resist);
+                Com_sprintf(pf_text[3], sizeof(pf_text[3]), "BLUE %3i pts", bluescore);
+                Com_sprintf(pf_text[4], sizeof(pf_text[4]), "itm Q%2i S%2i A%2i M%2i", blue_item_quad, blue_item_shield, blue_item_armor, blue_item_mega);
+                Com_sprintf(pf_text[5], sizeof(pf_text[5]), "rne S%2i H%2i G%2i R%2i", blue_rune_strength, blue_rune_haste, blue_rune_regen, blue_rune_resist);
+
+                elems[n].kind=UI_TEXT; elems[n].u.text.x=0;   elems[n].u.text.y=fy;      elems[n].u.text.text=pf_text[0]; elems[n].u.text.highlight=true; n++;
+                elems[n].kind=UI_TEXT; elems[n].u.text.x=0;   elems[n].u.text.y=fy + 8;  elems[n].u.text.text=pf_text[1]; elems[n].u.text.highlight=true; n++;
+                elems[n].kind=UI_TEXT; elems[n].u.text.x=0;   elems[n].u.text.y=fy + 16; elems[n].u.text.text=pf_text[2]; elems[n].u.text.highlight=true; n++;
+                elems[n].kind=UI_TEXT; elems[n].u.text.x=160; elems[n].u.text.y=fy;      elems[n].u.text.text=pf_text[3]; elems[n].u.text.highlight=true; n++;
+                elems[n].kind=UI_TEXT; elems[n].u.text.x=160; elems[n].u.text.y=fy + 8;  elems[n].u.text.text=pf_text[4]; elems[n].u.text.highlight=true; n++;
+                elems[n].kind=UI_TEXT; elems[n].u.text.x=160; elems[n].u.text.y=fy + 16; elems[n].u.text.text=pf_text[5]; elems[n].u.text.highlight=true; n++;
             }
         }
     }
 
-	gi.WriteByte (svc_layout);
-	gi.WriteString (string);
+    screen.elems = elems;
+    screen.count = n;
+
+    ui_buf_init(&sb, storage, sizeof(storage));
+    dropped = ui_layout_compile(&screen, &sb);
+    if (dropped > 0)
+    {
+        gi.dprintf("DeathmatchScoreboard: %d element(s) dropped by the layout budget\n", dropped);
+    }
+
+    gi.WriteByte (svc_layout);
+    gi.WriteString (storage);
 
 }
 
@@ -1238,13 +1435,21 @@ void Squadboard (edict_t *ent)
 CTFSquadboardMessage
 ==================
 */
+// One squad-board row can draw a category header line (only when the
+// squad changes) plus the player's own status line -- up to 16 rows,
+// 2 lines each, plus the 3-element header (2 pics + title).
+#define CTFSQUADBOARD_MAX_ROWS	16
+
 void CTFSquadboardMessage (edict_t *ent, edict_t* killer) // ADC
 {
-	char	entry[MAX_MSGLEN];
-	char	string[MAX_MSGLEN];
+	char                storage[UI_LAYOUT_BUDGET];
+	ui_buf_t            sb;
+	ui_screen_t         screen;
+	ui_elem_t           elems[3 + 2 * CTFSQUADBOARD_MAX_ROWS];
+	char                status_text[CTFSQUADBOARD_MAX_ROWS][UI_CELL_LEN];
+
 	int		len, i, j, team, ready;
 	edict_t		*cl_ent;
-	int maxsize = 1000;
 
 	gclient_t* clients [MAX_CLIENTS];
 	int clientCount = 0;
@@ -1256,13 +1461,25 @@ void CTFSquadboardMessage (edict_t *ent, edict_t* killer) // ADC
 	char* squad = 0;
 	int numCategoryLines = 0;
 
-	char readyString [] = "string2"; // green string
-	char notReadyString [] = "string"; // white string
-
 	char statusStart [MAX_STATUS_LEN];
 	int greenStatusLen = (int)strlen (GREEN_STATUS_STR);
 
 	int widestName = 0; // in chars
+
+	int		row_count;			// rows actually walked (min(16, sortedCount))
+	qboolean	row_has_header[CTFSQUADBOARD_MAX_ROWS];
+	int		row_header_y[CTFSQUADBOARD_MAX_ROWS];
+	int		row_status_y[CTFSQUADBOARD_MAX_ROWS];
+	qboolean	row_ready[CTFSQUADBOARD_MAX_ROWS];
+	qboolean	row_admitted[CTFSQUADBOARD_MAX_ROWS];
+
+	int		header_actual_len;
+	int		legacy_len;
+	qboolean	legacy_admitted_once;
+	int		entry_len;
+	int		n;
+	int		dropped;
+	int		legacy_dropped;
 
 	for (i = 0; i< MAX_CLIENTS; i++)
 		clients [i] = sortedClients [i] = 0;
@@ -1324,67 +1541,145 @@ void CTFSquadboardMessage (edict_t *ent, edict_t* killer) // ADC
 		}
 	}
 
-	// print level name and exit rules
-	// add the clients in sorted order
-	*string = 0;
-	len = 0;
-
-	if (teamOfInterest == 0) // red
-		strcpy (string, "xv 0 yv 0 picn redlion_i xv 32 yv 0 picn redtag ");
-	else  // blue
-		strcpy (string, "xv 0 yv 0 picn bluewolf_i xv 32 yv 0 picn bluetag ");
-
-	strcat (string, "xv 48 yv 10 string \"Squad Board\" ");
+	// Header: two team pics plus the title, unconditional -- the
+	// original never guarded this against the 1000-byte cap (only the
+	// row loop below does), so neither does this.
+	header_actual_len = (int)strlen(teamOfInterest == 0 ?
+		"xv 0 yv 0 picn redlion_i xv 32 yv 0 picn redtag " :
+		"xv 0 yv 0 picn bluewolf_i xv 32 yv 0 picn bluetag ")
+		+ (int)strlen("xv 48 yv 10 string \"Squad Board\" ");
 
 	squad = 0;
 
-	for (i = 0; i< 16 ; i++)
+	// Legacy-cap admission pass (Board_LineLen / this file's other
+	// boards' banners): reproduces the original's per-row 1000-byte
+	// (maxsize) budget check instead of letting ui_layout_compile's
+	// bigger 1380-byte budget (UI_LAYOUT_BUDGET) admit rows the
+	// original wouldn't have -- deliberately unspent headroom, not a
+	// missed cap.
+	//
+	// Quirk carried over on purpose: the original's running length
+	// ("len") is reset to 0 right after the header is written but is
+	// never charged for the header's own bytes until the FIRST row
+	// admission recomputes it via strlen(string) -- so the very first
+	// row's admission check is tested against the full 1000-byte
+	// budget, not (1000 - header bytes). Every check after that first
+	// admission correctly includes the header. Reproduced exactly
+	// below (legacy_admitted_once) rather than "fixed", since a fix
+	// here would be a behavior change this pass does not make.
+	//
+	// numCategoryLines increments the moment a squad boundary is
+	// crossed, whether or not that row ends up admitted -- a dropped
+	// row's category header still consumes a line slot for every row
+	// after it. Reproduced via row_header_y/row_status_y below, walked
+	// once up front so admission and the resulting y coordinates use
+	// the same slot numbering the original did.
+	legacy_len = 0;
+	legacy_admitted_once = false;
+
+	row_count = (sortedCount < CTFSQUADBOARD_MAX_ROWS) ? sortedCount : CTFSQUADBOARD_MAX_ROWS;
+
+	for (i = 0; i < row_count; i++)
 	{
-		if (i >= sortedCount)
-			break; // we're done
+		row_has_header[i] = (!squad || Q_stricmp(squad, sortedClients[i]->pers.squad)) ? true : false;
 
-		*entry = 0;
-
-		if (!squad || Q_stricmp (squad, sortedClients[i]->pers.squad))
+		if (row_has_header[i])
 		{
 			squad = sortedClients[i]->pers.squad;
-
-			sprintf(entry+(int)strlen(entry),
-				"xv 0 yv %d string \"%s\" ",
-				42 + i * 8 + numCategoryLines * 8,
-				sortedClients[i]->pers.squad);
-
+			row_header_y[i] = 42 + i * 8 + numCategoryLines * 8;
 			numCategoryLines++;
 		}
+		else
+		{
+			row_header_y[i] = 0; // unused
+		}
 
-		// If the status starts with "Ready", then it should be shown
-		// in green.
+		row_status_y[i] = 42 + i * 8 + numCategoryLines * 8;
 
-		strncpy (statusStart, sortedClients[i]->pers.squadStatus, 
-			greenStatusLen);
+		strncpy(statusStart, sortedClients[i]->pers.squadStatus, greenStatusLen);
 		statusStart[greenStatusLen] = 0;
+		row_ready[i] = !Q_stricmp(statusStart, GREEN_STATUS_STR);
 
-		ready = !Q_stricmp (statusStart, GREEN_STATUS_STR);
-
-		// Note that the width %*s below is the widest chars
-		// for a netname. We want the names padded with spaces
-		// to make the status line up.
-
-		sprintf(entry+(int)strlen(entry),
-			"xv 0 yv %d %s \"   %-*s %s\" ",
-			42 + i * 8 + numCategoryLines * 8,
-			ready ? readyString : notReadyString,
+		Com_sprintf(status_text[i], UI_CELL_LEN, "   %-*s %s",
 			widestName, sortedClients[i]->pers.netname,
 			sortedClients[i]->pers.squadStatus);
 
-		if (maxsize - len > (int)strlen(entry)) {
-			strcat(string, entry);
-			len = (int)strlen(string);
+		entry_len = (row_has_header[i] ?
+				Board_LineLen("xv 0 yv %d string \"%s\" ", row_header_y[i], sortedClients[i]->pers.squad) : 0)
+			+ Board_LineLen("xv 0 yv %d %s \"%s\" ", row_status_y[i],
+				row_ready[i] ? "string2" : "string", status_text[i]);
+
+		row_admitted[i] = (legacy_len + entry_len < 1000);
+
+		if (row_admitted[i])
+		{
+			legacy_len = legacy_admitted_once ? (legacy_len + entry_len) : (header_actual_len + entry_len);
+			legacy_admitted_once = true;
 		}
 	}
 
+	legacy_dropped = 0;
+	for (i = 0; i < row_count; i++)
+		if (!row_admitted[i])
+			legacy_dropped++;
+
+	n = 0;
+
+	elems[n].kind = UI_PIC;
+	elems[n].u.pic.x = 0;
+	elems[n].u.pic.y = 0;
+	elems[n].u.pic.stat_driven = false;
+	elems[n].u.pic.image.name = (teamOfInterest == 0) ? "redlion_i" : "bluewolf_i";
+	n++;
+
+	elems[n].kind = UI_PIC;
+	elems[n].u.pic.x = 32;
+	elems[n].u.pic.y = 0;
+	elems[n].u.pic.stat_driven = false;
+	elems[n].u.pic.image.name = (teamOfInterest == 0) ? "redtag" : "bluetag";
+	n++;
+
+	elems[n].kind = UI_TEXT;
+	elems[n].u.text.x = 48;
+	elems[n].u.text.y = 10;
+	elems[n].u.text.text = "Squad Board";
+	elems[n].u.text.highlight = false;
+	n++;
+
+	for (i = 0; i < row_count; i++)
+	{
+		if (!row_admitted[i])
+			continue;
+
+		if (row_has_header[i])
+		{
+			elems[n].kind = UI_TEXT;
+			elems[n].u.text.x = 0;
+			elems[n].u.text.y = row_header_y[i];
+			elems[n].u.text.text = sortedClients[i]->pers.squad;
+			elems[n].u.text.highlight = false;
+			n++;
+		}
+
+		elems[n].kind = UI_TEXT;
+		elems[n].u.text.x = 0;
+		elems[n].u.text.y = row_status_y[i];
+		elems[n].u.text.text = status_text[i];
+		elems[n].u.text.highlight = row_ready[i];
+		n++;
+	}
+
+	screen.elems = elems;
+	screen.count = n;
+
+	ui_buf_init(&sb, storage, sizeof(storage));
+	dropped = ui_layout_compile(&screen, &sb);
+	if (dropped > 0 || legacy_dropped > 0)
+		gi.dprintf("CTFSquadboard: %d row(s) dropped by the legacy 1000-byte cap, %d element(s) by the layout budget\n",
+			legacy_dropped, dropped);
+
 	gi.WriteByte (svc_layout);
-	gi.WriteString (string);
+	gi.WriteString (storage);
 }
 
 /*
@@ -1429,15 +1724,46 @@ static int stats_pickup_total(edict_t* cl_ent)
                  stats_get(cl_ent, STATS_ITEM_MEGA));
 }
 
+// Row storage + row callback for StatboardMessage's two UI_TABLEs (red
+// and blue). Same shape as Railboard_FillRow: one packed column per
+// row, name plus four small integers plus the pickup total.
+typedef struct
+{
+    edict_t *sorted[MAX_CLIENTS];
+    int      count;
+} statboard_rows_t;
+
+static void Statboard_FillRow(void *userdata, int row, int num_columns,
+    char cells[UI_TABLE_MAX_COLUMNS][UI_CELL_LEN])
+{
+    const statboard_rows_t *rows = (const statboard_rows_t *)userdata;
+    edict_t     *cl_ent = rows->sorted[row];
+    gclient_t   *cl = cl_ent->client;
+
+    Com_sprintf(cells[0], UI_CELL_LEN, "%-15s %3i %2i %2i %2i %2i",
+        cl->pers.netname,
+        (int)stats_get(cl_ent, STATS_FRAGS),
+        (int)stats_get(cl_ent, STATS_OFFENSE_CARRIER),
+        (int)(stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE)),
+        (int)stats_get(cl_ent, STATS_RETURNS),
+        stats_pickup_total(cl_ent));
+
+    (void)num_columns; // always 1 for this board
+}
+
 void StatboardMessage(edict_t* ent, edict_t* killer)
 {
-    char    string[MAX_MSGLEN];
-    char    string2[MAX_MSGLEN];
+    char                storage[UI_LAYOUT_BUDGET];
+    ui_buf_t            sb;
+    ui_screen_t         screen;
+    ui_elem_t           elems[4];  // 2 header pics + red table + blue table
+    ui_table_col_t      column;
+    statboard_rows_t    red_rows, blue_rows;
+
     int     blue, red;
 
-    size_t  stringlength;
     int     i;
-    int     j;      // sort index and strlen result; int so the
+    int     j;      // sort index; int so the
                     // comparisons against red/blue/k stay signed
     int     k;
 
@@ -1448,19 +1774,26 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
     int     score;
 
-    int     x, y;
-
-    gclient_t*  cl;
     edict_t*    cl_ent;
+
+    int     n;
+    int     dropped;
+    int     legacy_len;        // mirrors the old stringlength accumulator, 1024 cap
+    int     legacy_dropped;
+    qboolean header_ok;
+    int     header_len;
+    int     line_len;
+    char    cells[UI_TABLE_MAX_COLUMNS][UI_CELL_LEN];  // scratch for legacy-cap admission
+    int     red_rows_shown;
+    int     blue_rows_shown;
 
     blue = 0;
     red = 0;
-    
-    // sort the clients by score
+
+    // sort the clients by score -- unchanged from the hand-written version
     for (i = 0; i < game.maxclients; i++)
     {
         cl_ent = g_edicts + 1 + i;
-        cl = &game.clients[i];
 
         if (!cl_ent->inuse)
             continue;
@@ -1506,96 +1839,119 @@ void StatboardMessage(edict_t* ent, edict_t* killer)
 
     }
 
-    string[0] = 0;
-    string2[0] = 0;
-    stringlength = 0;
-    y = 32 * 8;
+    red_rows.count = red;
+    for (i = 0; i < red; i++)
+        red_rows.sorted[i] = g_edicts + 1 + redsorted[i];
 
-    // DRAW STATBOARD AND ADD TEAM STATS
-    {
-        Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i picn %s "
-            "xv %i yv %i picn %s ",
+    blue_rows.count = blue;
+    for (i = 0; i < blue; i++)
+        blue_rows.sorted[i] = g_edicts + 1 + bluesorted[i];
 
-            -102, -35, "pb",
-            -102, -27, "pt"
+    // Legacy-cap admission pass (Board_LineLen, see its banner): decides
+    // how many rows survive the ORIGINAL 1024-byte cap before any of
+    // this is handed to ui_layout_compile, whose own budget is bigger
+    // (UI_LAYOUT_BUDGET, 1380) and would otherwise let more through.
+    legacy_len = 0;
 
-        );
-        
-        j = (int)strlen(string2);
-        if (stringlength + j < 1024)
-        {
-            strcpy(string + stringlength, string2);
-            stringlength += j;
-        }
-    }
+    // header: the two statboard pics were tested as ONE unit in the
+    // original (both tokens built into one Com_sprintf, one
+    // stringlength+j<1024 check) -- reproduce that all-or-nothing
+    // admission rather than treating each pic independently.
+    header_len = Board_LineLen("xv %i yv %i picn %s ", -102, -35, "pb")
+               + Board_LineLen("xv %i yv %i picn %s ", -102, -27, "pt");
+    header_ok = (legacy_len + header_len < 1024);
+    if (header_ok)
+        legacy_len += header_len;
 
+    red_rows_shown = 0;
     for (i = 0; i < red; i++)
     {
-        cl = &game.clients[redsorted[i]];
-        cl_ent = g_edicts + 1 + redsorted[i];
-
-        x = -91;
-        y = 34 + 8 * i;
-
-        // send the layout        
-        Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i %2i\" ",
-
-            x, y,
-            cl->pers.netname,
-            (int)stats_get(cl_ent, STATS_FRAGS),
-            (int)stats_get(cl_ent, STATS_OFFENSE_CARRIER),
-            (int)(stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE)),
-            (int)stats_get(cl_ent, STATS_RETURNS),
-            stats_pickup_total(cl_ent)
-
-        );
-
-        j = (int)strlen(string2);
-        if (stringlength + j > 1024)
+        Statboard_FillRow(&red_rows, i, 1, cells);
+        line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", -91, 34 + 8 * i, cells[0]);
+        if (legacy_len + line_len > 1024)
             break;
-        strcpy(string + stringlength, string2);
-        stringlength += j;
-
+        legacy_len += line_len;
+        red_rows_shown = i + 1;
     }
 
+    blue_rows_shown = 0;
     for (i = 0; i < blue; i++)
     {
-        cl = &game.clients[bluesorted[i]];
-        cl_ent = g_edicts + 1 + bluesorted[i];
-
-        x = 171;
-        y = 34 + 8 * i;
-
-        Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i string2 \"%-15s %3i %2i %2i %2i %2i\" ",
-
-            x, y,
-            cl->pers.netname,
-            // was STATS_SCORE / STATS_CAPTURES here while the red column showed
-            // frags / flag-carrier kills, so the two halves of the same board were
-            // labelled the same but showed different things. Unified on the red set.
-            (int)stats_get(cl_ent, STATS_FRAGS),
-            (int)stats_get(cl_ent, STATS_OFFENSE_CARRIER),
-            (int)(stats_get(cl_ent, STATS_DEFENSE_FLAG) + stats_get(cl_ent, STATS_DEFENSE_BASE)),
-            (int)stats_get(cl_ent, STATS_RETURNS),
-            stats_pickup_total(cl_ent)
-        
-        );
-
-
-
-        j = (int)strlen(string2);
-        if (stringlength + j > 1024)
+        Statboard_FillRow(&blue_rows, i, 1, cells);
+        line_len = Board_LineLen("xv %i yv %i string2 \"%s\" ", 171, 34 + 8 * i, cells[0]);
+        if (legacy_len + line_len > 1024)
             break;
-        strcpy(string + stringlength, string2);
-        stringlength += j;
-
+        legacy_len += line_len;
+        blue_rows_shown = i + 1;
     }
 
+    legacy_dropped = (red - red_rows_shown) + (blue - blue_rows_shown);
+
+    n = 0;
+
+    if (header_ok)
+    {
+        elems[n].kind = UI_PIC;
+        elems[n].u.pic.x = -102;
+        elems[n].u.pic.y = -35;
+        elems[n].u.pic.stat_driven = false;
+        elems[n].u.pic.image.name = "pb";
+        n++;
+
+        elems[n].kind = UI_PIC;
+        elems[n].u.pic.x = -102;
+        elems[n].u.pic.y = -27;
+        elems[n].u.pic.stat_driven = false;
+        elems[n].u.pic.image.name = "pt";
+        n++;
+    }
+
+    column.x_offset = 0;
+    column.priority = 0;
+
+    elems[n].kind = UI_TABLE;
+    elems[n].u.table.x = -91;
+    elems[n].u.table.y = 34;
+    elems[n].u.table.row_dy = 8;
+    elems[n].u.table.columns = &column;
+    elems[n].u.table.num_columns = 1;
+    elems[n].u.table.num_rows = red_rows_shown;
+    elems[n].u.table.fill_row = Statboard_FillRow;
+    elems[n].u.table.userdata = &red_rows;
+    elems[n].u.table.highlight = true;
+    elems[n].u.table.footer = NULL;
+    elems[n].u.table.footer_x = 0;
+    elems[n].u.table.footer_y = 0;
+    elems[n].u.table.footer_highlight = false;
+    n++;
+
+    elems[n].kind = UI_TABLE;
+    elems[n].u.table.x = 171;
+    elems[n].u.table.y = 34;
+    elems[n].u.table.row_dy = 8;
+    elems[n].u.table.columns = &column;
+    elems[n].u.table.num_columns = 1;
+    elems[n].u.table.num_rows = blue_rows_shown;
+    elems[n].u.table.fill_row = Statboard_FillRow;
+    elems[n].u.table.userdata = &blue_rows;
+    elems[n].u.table.highlight = true;
+    elems[n].u.table.footer = NULL;
+    elems[n].u.table.footer_x = 0;
+    elems[n].u.table.footer_y = 0;
+    elems[n].u.table.footer_highlight = false;
+    n++;
+
+    screen.elems = elems;
+    screen.count = n;
+
+    ui_buf_init(&sb, storage, sizeof(storage));
+    dropped = ui_layout_compile(&screen, &sb);
+    if (dropped > 0 || legacy_dropped > 0)
+        gi.dprintf("Statboard: %d row(s) dropped by the legacy 1024-byte cap, %d by the layout budget\n",
+            legacy_dropped, dropped);
+
     gi.WriteByte(svc_layout);
-    gi.WriteString(string);
+    gi.WriteString(storage);
 
 }
 
@@ -1621,8 +1977,14 @@ TeamStatboardMessage
 */
 void TeamStatboardMessage(edict_t* ent, edict_t* killer)
 {
-    char    string[MAX_MSGLEN];
-    char    string2[MAX_MSGLEN];
+    char                storage[UI_LAYOUT_BUDGET];
+    ui_buf_t            sb;
+    ui_screen_t         screen;
+    // 2 header pics + 16 numeric string2 fields -- see the single
+    // all-or-nothing admission block below.
+    ui_elem_t           elems[18];
+    char                numtext[16][16];
+
     int     blue, red;
 
     int     blue_rune_strength = 0;
@@ -1642,9 +2004,8 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
     int     red_item_armor = 0;
     int     red_item_shield = 0;
 
-    size_t  stringlength;
     int     i;
-    int     j;      // sort index and strlen result; int so the
+    int     j;      // sort index; int so the
                     // comparisons against red/blue/k stay signed
     int     k;
 
@@ -1664,6 +2025,10 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
     int     item_shield;
     int     item_quad;
 
+    int     n;
+    int     dropped;
+    int     block_len;
+    qboolean block_ok;
 
     edict_t* cl_ent;
 
@@ -1742,71 +2107,98 @@ void TeamStatboardMessage(edict_t* ent, edict_t* killer)
 
     }
 
-    string[0] = 0;
-    string2[0] = 0;
-    stringlength = 0;
-
     // DRAW TEAMSTATBOARD AND ADD TEAM STATS
+    //
+    // The original built all eighteen tokens (2 pics + 16 numbers) into
+    // one Com_sprintf and tested the WHOLE thing against the 1024-byte
+    // cap as a single unit -- there is no per-player table here, only
+    // team-wide sums, so it is one atomic block, not rows. Reproduced
+    // below as one all-or-nothing admission decision (Board_LineLen,
+    // see its banner) instead of letting ui_layout_compile's larger
+    // 1380-byte budget (UI_LAYOUT_BUDGET) admit it when the original
+    // wouldn't have -- that headroom is deliberately unspent this pass.
+    Com_sprintf(numtext[0],  sizeof(numtext[0]),  "%i", red_item_quad);
+    Com_sprintf(numtext[1],  sizeof(numtext[1]),  "%i", red_item_shield);
+    Com_sprintf(numtext[2],  sizeof(numtext[2]),  "%i", red_item_armor);
+    Com_sprintf(numtext[3],  sizeof(numtext[3]),  "%i", red_item_mega);
+    Com_sprintf(numtext[4],  sizeof(numtext[4]),  "%i", blue_item_quad);
+    Com_sprintf(numtext[5],  sizeof(numtext[5]),  "%i", blue_item_shield);
+    Com_sprintf(numtext[6],  sizeof(numtext[6]),  "%i", blue_item_armor);
+    Com_sprintf(numtext[7],  sizeof(numtext[7]),  "%i", blue_item_mega);
+    Com_sprintf(numtext[8],  sizeof(numtext[8]),  "%i", red_rune_strength);
+    Com_sprintf(numtext[9],  sizeof(numtext[9]),  "%i", red_rune_haste);
+    Com_sprintf(numtext[10], sizeof(numtext[10]), "%i", red_rune_resist);
+    Com_sprintf(numtext[11], sizeof(numtext[11]), "%i", red_rune_regen);
+    Com_sprintf(numtext[12], sizeof(numtext[12]), "%i", blue_rune_strength);
+    Com_sprintf(numtext[13], sizeof(numtext[13]), "%i", blue_rune_haste);
+    Com_sprintf(numtext[14], sizeof(numtext[14]), "%i", blue_rune_resist);
+    Com_sprintf(numtext[15], sizeof(numtext[15]), "%i", blue_rune_regen);
+
+    block_len = Board_LineLen("xv %i yv %i picn %s ", -102, -35, "tb")
+              + Board_LineLen("xv %i yv %i picn %s ", -102, -27, "tt")
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", -54, -19, numtext[0])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", -54, -10, numtext[1])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", -54, -1,  numtext[2])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", -54, 8,   numtext[3])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 209, -19, numtext[4])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 209, -10, numtext[5])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 209, -1,  numtext[6])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 209, 8,   numtext[7])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 10,  -19, numtext[8])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 10,  -10, numtext[9])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 10,  -1,  numtext[10])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 10,  8,   numtext[11])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 273, -19, numtext[12])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 273, -10, numtext[13])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 273, -1,  numtext[14])
+              + Board_LineLen("xv %i yv %i string2 \"%s\" ", 273, 8,   numtext[15]);
+    block_ok = (block_len < 1024);
+
+    n = 0;
+    if (block_ok)
     {
-        Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i picn %s "
-            "xv %i yv %i picn %s "
-
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM QUAD GRABS
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM SHIELD GRABS
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM RED ARMOR GRABS
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM MEGA HEALTH GRABS
-
-            "xv %i yv %i string2 \"%i\" "
-            "xv %i yv %i string2 \"%i\" "
-            "xv %i yv %i string2 \"%i\" "
-            "xv %i yv %i string2 \"%i\" "
-
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM STRENGTH RUNE GRABS
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM HASTE RUNE GRABS
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM RESIST RUNE GRABS
-            "xv %i yv %i string2 \"%i\" "   // BUZZKILL - RED TEAM REGEN RUNE GRABS
-
-            "xv %i yv %i string2 \"%i\" "
-            "xv %i yv %i string2 \"%i\" "
-            "xv %i yv %i string2 \"%i\" "
-            "xv %i yv %i string2 \"%i\" ",
-
-            -102, -35, "tb",
-            -102, -27, "tt",
-
-            -54, -19, red_item_quad,
-            -54, -10, red_item_shield,
-            -54, -1, red_item_armor,
-            -54, 8, red_item_mega,
-
-            209, -19, blue_item_quad,
-            209, -10, blue_item_shield,
-            209, -1, blue_item_armor,
-            209, 8, blue_item_mega,
-
-            10, -19, red_rune_strength,
-            10, -10, red_rune_haste,
-            10, -1, red_rune_resist,
-            10, 8, red_rune_regen,
-
-            273, -19, blue_rune_strength,
-            273, -10, blue_rune_haste,
-            273, -1, blue_rune_resist,
-            273, 8, blue_rune_regen
-
-        );
-
-        j = (int)strlen(string2);
-        if (stringlength + j < 1024)
+        static const struct { int x, y; } pic_pos[2]  = { { -102, -35 }, { -102, -27 } };
+        static const char * const pic_name[2]         = { "tb", "tt" };
+        static const struct { int x, y; } num_pos[16] =
         {
-            strcpy(string + stringlength, string2);
-            stringlength += j;
+            { -54, -19 }, { -54, -10 }, { -54, -1 }, { -54, 8 },
+            { 209, -19 }, { 209, -10 }, { 209, -1 }, { 209, 8 },
+            { 10,  -19 }, { 10,  -10 }, { 10,  -1 }, { 10,  8 },
+            { 273, -19 }, { 273, -10 }, { 273, -1 }, { 273, 8 },
+        };
+
+        for (i = 0; i < 2; i++)
+        {
+            elems[n].kind = UI_PIC;
+            elems[n].u.pic.x = pic_pos[i].x;
+            elems[n].u.pic.y = pic_pos[i].y;
+            elems[n].u.pic.stat_driven = false;
+            elems[n].u.pic.image.name = pic_name[i];
+            n++;
+        }
+
+        for (i = 0; i < 16; i++)
+        {
+            elems[n].kind = UI_TEXT;
+            elems[n].u.text.x = num_pos[i].x;
+            elems[n].u.text.y = num_pos[i].y;
+            elems[n].u.text.text = numtext[i];
+            elems[n].u.text.highlight = true;
+            n++;
         }
     }
 
+    screen.elems = elems;
+    screen.count = n;
+
+    ui_buf_init(&sb, storage, sizeof(storage));
+    dropped = ui_layout_compile(&screen, &sb);
+    if (dropped > 0 || !block_ok)
+        gi.dprintf("TeamStatboard: header block %sdropped by the legacy 1024-byte cap, layout budget dropped %d\n",
+            block_ok ? "not " : "", dropped);
+
     gi.WriteByte(svc_layout);
-    gi.WriteString(string);
+    gi.WriteString(storage);
 
 }
 

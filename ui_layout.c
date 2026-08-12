@@ -41,6 +41,15 @@ static qboolean UI_EmitStatstring (ui_buf_t *out, const ui_statstring_t *s)
 	return ui_appendf (out, "xv %i yv %i stat_string %i ", s->x, s->y, s->stat);
 }
 
+// UI_RAW -- see ui_layout.h: no wrapper, the caller already formatted
+// the complete token. Still one ui_appendf() call, so it is atomic
+// the same way the other atomic elements are (ui_text.c: the fit
+// check happens before any byte is copied).
+static qboolean UI_EmitRaw (ui_buf_t *out, const ui_raw_t *r)
+{
+	return ui_appendf (out, "%s", r->text);
+}
+
 // -- UI_IFSTAT -----------------------------------------------------------
 //
 // "if <stat> " + every child + "endif ". Children compile with
@@ -206,6 +215,9 @@ static int UI_CompileOne (const ui_elem_t *e, ui_buf_t *out, qboolean allow_ifst
 
 	case UI_TABLE:
 		return UI_CompileTable (e, out);
+
+	case UI_RAW:
+		return UI_EmitRaw (out, &e->u.raw) ? 0 : 1;
 
 	default:
 		gi.dprintf ("ui_layout: element with unknown kind %d dropped\n", (int)e->kind);

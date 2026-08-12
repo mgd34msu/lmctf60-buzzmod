@@ -64,7 +64,8 @@ typedef enum
 	UI_STATNUM,
 	UI_STATSTRING,
 	UI_IFSTAT,
-	UI_TABLE
+	UI_TABLE,
+	UI_RAW
 } ui_elem_kind_t;
 
 // UI_TEXT -- "string"/"string2": a literal line of text at (x,y).
@@ -121,6 +122,24 @@ typedef struct
 {
 	int	x, y, stat;
 } ui_statstring_t;
+
+// UI_RAW -- a wire token emitted exactly as given, with none of
+// UI_TEXT's "xv %i yv %i string \"...\" " wrapper added. The one
+// deliberate addition this codebase's DeathmatchScoreboardMessage
+// conversion made to the vocabulary: docs/layout-isa.md Sec 1's
+// `client` and `ctf` tokens carry their OWN x/y as their first two
+// positional arguments and are not quoted text to draw at a point --
+// wrapping either in UI_TEXT's template would make the client try to
+// draw the literal characters "client 0 32 ..." on screen instead of
+// executing the token. No existing element kind fits a raw multi-arg
+// positional token, so this one was added rather than forced through
+// UI_TEXT. text must already be the complete, correctly spaced token
+// (name, args, trailing space) -- the compiler treats it as opaque
+// and appends it verbatim.
+typedef struct
+{
+	const char	*text;
+} ui_raw_t;
 
 // UI_IFSTAT -- "if <statIndex> ... endif" wrapping a sub-range of
 // elements. The ISA's skip-scan for a false condition is not nesting-
@@ -203,6 +222,7 @@ struct ui_elem_s
 		ui_statstring_t	statstring;
 		ui_ifstat_t		ifstat;
 		ui_table_t		table;
+		ui_raw_t		raw;
 	} u;
 };
 
