@@ -7479,165 +7479,36 @@ static void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 }
 
 
-void SG_BotThink(sg_bot_t *bot)
+/*
+ * THE COMMAND (split from SG_BotThink, 2026-08-11 standards pass; body
+ * verbatim): the movement policy becomes a usercmd -- sub-stepping, the
+ * view slew, the weave, the duel hold, the plan beam and telemetry --
+ * and the frame ends in ClientThink.
+ */
+static void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
+                       int team, qboolean carrying,
+                       const sg_weights_t *live, const sg_weights_t *w,
+                       const int *goal_field, const int *route_field,
+                       qboolean route_pure, int bestlink,
+                       qboolean precision, qboolean hold_post,
+                       qboolean rally_hold, qboolean rail_hold,
+                       int rail_seed, int rail_client, float rail_dose,
+                       float post_yaw, float post_sight,
+                       qboolean duel, vec3_t duel_org, float duel_want,
+                       float duel_expo, vec3_t move_dir, float view_yaw,
+                       float view_pitch, qboolean have_move,
+                       qboolean open_ahead, qboolean run_link,
+                       int door_hold, edict_t *door_ent,
+                       qboolean drop_yaw_locked, float drop_yaw,
+                       qboolean hook_brake, usercmd_t *cmd)
 {
-	edict_t *e = bot->ent;
-	usercmd_t cmd;
-	const int *goal_field, *support = NULL, *intercept = NULL;
-	const int *route_field;
-	qboolean route_pure;
-	const sg_weights_t *w;
-	sg_role_t role;
-	int team, bestlink = -1;
-	float bestval;
-	float incumbent_v = 1e30f;
+	vec3_t basis_fwd, basis_right;
+	int sub_steps = 1, sub_msec = 0;
+	float slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
+	qboolean duel_hold = false;
+	short weave_side = 0;
 	vec3_t d;
-	qboolean carrying;
 
-	/* movement policy state for this frame */
-	vec3_t		basis_fwd, basis_right;     /* the basis pmove will build */
-	vec3_t		move_dir;                   /* heading the route wants */
-	float		view_yaw = 0.0f, view_pitch = 0.0f;
-	qboolean	have_move = false;          /* a direction to travel at all */
-	qboolean	open_ahead = false;         /* room in front to hop into */
-	qboolean	run_link = false;           /* chosen link is ground running */
-	qboolean	precision = false;          /* final approach: no tricks */
-	qboolean	hold_post = false;          /* defender at its stand: guard */
-	qboolean	rally_hold = false;         /* attacker waiting for a partner */
-	qboolean	think_over;                 /* a stage ended the frame */
-	qboolean	rail_hold = false;          /* waiting out a railer's reload */
-	int			rail_seed = -1;             /* where that railer is believed */
-	int			rail_client = -1;           /* and who he is */
-	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
-	float		post_yaw = 0.0f;            /* facing the likeliest approach */
-	float		post_sight = -1.0f;         /* clear distance down that facing;
-	                                         * WEAPONS.md 2.4-D3 picks the
-	                                         * pre-held weapon from it */
-	sg_weights_t	live;                   /* the role row, modulated by state */
-	int			door_hold = 0;              /* rotating door ahead: 1 stand,
-	                                         * 2 back out of its swing arc */
-	edict_t		*door_ent = NULL;           /* which door is being waited on */
-	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
-	float		drop_yaw = 0.0f;
-	qboolean	hook_brake = false;         /* slow to the proof's standing
-	                                         * start before firing a rope */
-	int			sub_steps = 1, sub_msec = 0;
-	float		slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
-
-	/* the duel terms, read once per frame and priced per candidate seed */
-	qboolean	duel = false;               /* combat has a live or fresh target */
-	vec3_t		duel_org;                   /* where it is believed to be */
-	float		duel_want = 0.0f;           /* range the weapon in hand wants */
-	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
-	qboolean	duel_hold = false;          /* the chosen step is short: weave */
-	short		weave_side = 0;             /* this frame's strafe sign */
-
-	memset(&cmd, 0, sizeof(cmd));
-	cmd.msec = 100;
-
-	if (Think_Dead(bot, e, &cmd))
-		return;
-	Think_RespawnEdge(bot, e);
-	bot->death_taught = false;
-
-	/* my eyes feed the team belief before I decide from it */
-	Caco_See(sg_rune, e);
-
-	team = e->client->ctf.teamnum;
-	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). Carrying is
-	 * the same inventory test ctf_flagtouch itself makes. */
-	{
-		static gitem_t *flagitem;
-		if (!flagitem)
-			flagitem = FindItem("Enemy Flag");
-		carrying = flagitem &&
-		           e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
-	}
-
-	role = SG_Role(bot, carrying);
-
-	Think_CarryBookends(bot, e, role, team, carrying);
-
-	Think_LiveWeights(bot, e, role, team, &live);
-	w = &live;
-
-	Think_Objective(bot, e, role, team, carrying, w, support, intercept,
-	                &goal_field, &route_field, &route_pure);
-
-
-	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
-
-	Think_InterceptField(role, team, &support, &intercept);
-
-	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
-	bot->terminal = false;
-
-	Think_TrackSeed(bot, e, team);
-	if (bot->seed < 0)
-	{
-		ClientThink(e, &cmd);
-		return;
-	}
-
-	/*
-	 * The precision case: no tricks on the final approach.
-	 *
-	 * A flag is a thirty-unit box and a hop chain covers eight hundred units a
-	 * second; the legacy bots arrived with a second of route left and sailed
-	 * straight over the top, lap after lap. The legacy adapter suppressed the
-	 * tricks within about 700 units of a must-touch goal (bl_main.c:451-464).
-	 * The SLIPGATE field is denominated in real milliseconds of traversal, so
-	 * the same idea is stated in time: inside a second and a half of the
-	 * objective, run plainly and be able to stop. Speed serves the objective.
-	 */
-	precision = (goal_field[bot->seed] < 1500);
-
-	/*
-	 * Ask combat whether there is a fight on, ONCE, before the fan is walked.
-	 * The answer is last frame's -- SG_CombatFrame runs after the movement is
-	 * decided, which is the order the constitution requires (combat modifies a
-	 * usercmd the body already built) -- and a tenth of a second of staleness
-	 * on a believed position that is already up to two seconds old changes
-	 * nothing. The carrier is excluded outright: 2.4-D2 is flee, not fight,
-	 * and its own repulsion term below already prices contact.
-	 */
-	if (role != SG_ROLE_CARRY)
-		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
-
-	/* descend the surface: my seed vs every seed one proven link away */
-	bestlink = Think_PickLink(bot, e, role, team, carrying, &live, w,
-	                          goal_field, route_field, route_pure,
-	                          support, intercept, precision, duel,
-	                          duel_org, duel_want, duel_expo, rally_hold,
-	                          &bestval, &incumbent_v, &rail_seed,
-	                          &rail_client, &rail_dose, &rail_hold);
-
-	think_over = false;
-	bestlink = Think_CommitLink(bot, e, role, team, carrying, &live, w,
-	                            goal_field, precision, duel, duel_org,
-	                            duel_want, duel_expo, bestval,
-	                            incumbent_v, rail_seed, rail_client,
-	                            rail_dose, bestlink, &cmd, &rally_hold,
-	                            &rail_hold, &think_over, &hold_post,
-	                            &post_yaw, &post_sight);
-	if (think_over)
-		return;
-	/*
-	 * The surface has a gradient EVERYWHERE. Where the rune is proven, the
-	 * gradient is the best outgoing link. Where it is not -- field infinite,
-	 * no improving link, graph hole -- the gradient degrades to the local
-	 * one: straight at the goal, deflected around whatever the feelers hit.
-	 * A player with no knowledge of the map still runs toward the enemy
-	 * base; a bot that stands still because its database has a hole is not
-	 * descending a surface, it is worshipping a graph.
-	 */
-	Think_Move(bot, e, role, team, carrying, &live, w, goal_field,
-	           route_field, route_pure, bestlink, precision, hold_post,
-	           rally_hold, rail_hold, post_yaw, post_sight, duel,
-	           duel_org, duel_want, duel_expo, &cmd, move_dir,
-	           &view_yaw, &view_pitch, &have_move, &open_ahead,
-	           &run_link, &door_hold, &door_ent, &drop_yaw_locked,
-	           &drop_yaw, &hook_brake);
 
 	/*
 	 * The basis the engine will actually use, not a convenient one.
@@ -7766,8 +7637,8 @@ void SG_BotThink(sg_bot_t *bot)
 			}
 			if (level.time < bot->breather_until)
 			{
-				cmd.forwardmove = (short)(cmd.forwardmove * 0.35f);
-				cmd.sidemove = (short)(cmd.sidemove * 0.35f);
+				cmd->forwardmove = (short)(cmd->forwardmove * 0.35f);
+				cmd->sidemove = (short)(cmd->sidemove * 0.35f);
 			}
 		}
 		else
@@ -7775,11 +7646,11 @@ void SG_BotThink(sg_bot_t *bot)
 	}
 
 	{
-		int		total = cmd.msec;
+		int		total = cmd->msec;
 		int		sub = (int)sg_cv.subframes->value;
 		int		base, rem, step;
-		short	plain_forward = cmd.forwardmove;
-		short	nav_jump = cmd.upmove;
+		short	plain_forward = cmd->forwardmove;
+		short	nav_jump = cmd->upmove;
 		/* combat's own answer to "is there a fight on RIGHT NOW", as opposed
 		 * to the up-to-two-seconds-old belief the surface terms were priced
 		 * from. The weave below needs the live one. */
@@ -7821,7 +7692,7 @@ void SG_BotThink(sg_bot_t *bot)
 		 */
 		if (bot->hook_phase != 1 && bot->hook_phase != 3 &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0)
-			SG_CombatFrame(e, &cmd, &engaged);
+			SG_CombatFrame(e, cmd, &engaged);
 
 		/*
 		 * The bomb sequence owns weapon, view, and trigger while it
@@ -7983,7 +7854,7 @@ void SG_BotThink(sg_bot_t *bot)
 				{
 					bot->nade_phase = 0;    /* abandon, cost-free */
 					bot->nade_next = level.time + 4.0f;
-					cmd.buttons &= ~BUTTON_ATTACK;
+					cmd->buttons &= ~BUTTON_ATTACK;
 				}
 			}
 			else
@@ -8003,9 +7874,9 @@ void SG_BotThink(sg_bot_t *bot)
 			    (nfly >= 0.0f && ntmr - 0.2f <= nfly + 0.15f) ||
 			    ntmr <= 0.75f)
 			{
-				cmd.angles[YAW] = ANGLE2SHORT(nyaw)
+				cmd->angles[YAW] = ANGLE2SHORT(nyaw)
 				                - e->client->ps.pmove.delta_angles[YAW];
-				cmd.angles[PITCH] = ANGLE2SHORT(npitch)
+				cmd->angles[PITCH] = ANGLE2SHORT(npitch)
 				                  - e->client->ps.pmove.delta_angles[PITCH];
 			}
 			/*
@@ -8030,10 +7901,10 @@ void SG_BotThink(sg_bot_t *bot)
 			 * the fuse, and a landed grenade is an announcement) */
 			if (ntmr > 0.6f &&
 			    (nfly < 0.0f || ntmr - 0.2f > nfly - 0.15f))
-				cmd.buttons |= BUTTON_ATTACK;
+				cmd->buttons |= BUTTON_ATTACK;
 			else
 			{
-				cmd.buttons &= ~BUTTON_ATTACK;   /* the release throws */
+				cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */
 				bot->nade_phase = 0;
 				bot->nade_next = level.time + 8.0f;
 				if (sg_cv.debug->value)
@@ -8113,11 +7984,11 @@ void SG_BotThink(sg_bot_t *bot)
 					    sqrtf(sd15[0]*sd15[0] + sd15[1]*sd15[1]))
 					             * 180.0f / (float)M_PI;
 
-					cmd.angles[YAW] = ANGLE2SHORT(sy15)
+					cmd->angles[YAW] = ANGLE2SHORT(sy15)
 					    - e->client->ps.pmove.delta_angles[YAW];
-					cmd.angles[PITCH] = ANGLE2SHORT(sp15)
+					cmd->angles[PITCH] = ANGLE2SHORT(sp15)
 					    - e->client->ps.pmove.delta_angles[PITCH];
-					cmd.buttons |= BUTTON_ATTACK;
+					cmd->buttons |= BUTTON_ATTACK;
 					bot->soundfire_next = level.time + 8.0f;
 					if (sg_cv.debug->value)
 						gi.dprintf("SNDFIRE %s rng=%.0f\n",
@@ -8141,9 +8012,9 @@ void SG_BotThink(sg_bot_t *bot)
 		{
 			vec3_t basis;
 
-			basis[YAW] = SHORT2ANGLE((short)(cmd.angles[YAW] +
+			basis[YAW] = SHORT2ANGLE((short)(cmd->angles[YAW] +
 			             e->client->ps.pmove.delta_angles[YAW]));
-			basis[PITCH] = SHORT2ANGLE((short)(cmd.angles[PITCH] +
+			basis[PITCH] = SHORT2ANGLE((short)(cmd->angles[PITCH] +
 			               e->client->ps.pmove.delta_angles[PITCH]));
 			if (basis[PITCH] > 180.0f)
 				basis[PITCH] -= 360.0f;
@@ -8183,12 +8054,12 @@ void SG_BotThink(sg_bot_t *bot)
 				float span = bot->beat_until - bot->beat_from;
 				float t = (span > 0.001f)
 				          ? (level.time - bot->beat_from) / span : 1.0f;
-				float yaw = SHORT2ANGLE((short)(cmd.angles[YAW] +
+				float yaw = SHORT2ANGLE((short)(cmd->angles[YAW] +
 				            e->client->ps.pmove.delta_angles[YAW]));
 
 				yaw += (float)bot->beat_sign * bot->beat_arc *
 				       sinf(t * 2.0f * (float)M_PI);
-				cmd.angles[YAW] = ANGLE2SHORT(yaw)
+				cmd->angles[YAW] = ANGLE2SHORT(yaw)
 				                - e->client->ps.pmove.delta_angles[YAW];
 			}
 		}
@@ -8321,10 +8192,10 @@ void SG_BotThink(sg_bot_t *bot)
 				if (lv < -SG_AS_VIEWMAX)
 					lv = -SG_AS_VIEWMAX;
 
-				yaw = SHORT2ANGLE((short)(cmd.angles[YAW] +
+				yaw = SHORT2ANGLE((short)(cmd->angles[YAW] +
 				      e->client->ps.pmove.delta_angles[YAW]));
 				yaw += lv;
-				cmd.angles[YAW] = ANGLE2SHORT(yaw)
+				cmd->angles[YAW] = ANGLE2SHORT(yaw)
 				                - e->client->ps.pmove.delta_angles[YAW];
 			}
 			else
@@ -8361,9 +8232,9 @@ void SG_BotThink(sg_bot_t *bot)
 		 * full 360). Zero restores the teleport.
 		 */
 		{
-			float want_y = SHORT2ANGLE((short)(cmd.angles[YAW] +
+			float want_y = SHORT2ANGLE((short)(cmd->angles[YAW] +
 			               e->client->ps.pmove.delta_angles[YAW]));
-			float want_p = SHORT2ANGLE((short)(cmd.angles[PITCH] +
+			float want_p = SHORT2ANGLE((short)(cmd->angles[PITCH] +
 			               e->client->ps.pmove.delta_angles[PITCH]));
 			float rate = sg_cv.turnrate->value;
 
@@ -8380,14 +8251,14 @@ void SG_BotThink(sg_bot_t *bot)
 
 		for (step = 0; step < sub; step++)
 		{
-			cmd.msec = (byte)(base + (step < rem ? 1 : 0));
-			if (!cmd.msec)
+			cmd->msec = (byte)(base + (step < rem ? 1 : 0));
+			if (!cmd->msec)
 				continue;
-			sub_msec = cmd.msec;
+			sub_msec = cmd->msec;
 
 			if (slew_rate > 0.0f)
 			{
-				float dt = (float)cmd.msec / 1000.0f;
+				float dt = (float)cmd->msec / 1000.0f;
 				float dy = slew_want_y - bot->vy_cur;
 				float dp = slew_want_p - bot->vp_cur;
 				float stepmax = slew_rate * dt;
@@ -8402,9 +8273,9 @@ void SG_BotThink(sg_bot_t *bot)
 				if (dp < -stepmax) dp = -stepmax;
 				bot->vy_cur += dy;
 				bot->vp_cur += dp;
-				cmd.angles[YAW] = ANGLE2SHORT(bot->vy_cur)
+				cmd->angles[YAW] = ANGLE2SHORT(bot->vy_cur)
 				                - e->client->ps.pmove.delta_angles[YAW];
-				cmd.angles[PITCH] = ANGLE2SHORT(bot->vp_cur)
+				cmd->angles[PITCH] = ANGLE2SHORT(bot->vp_cur)
 				                  - e->client->ps.pmove.delta_angles[PITCH];
 			}
 
@@ -8437,24 +8308,24 @@ void SG_BotThink(sg_bot_t *bot)
 				fl = sqrtf(vf[0] * vf[0] + vf[1] * vf[1]);
 				if (fl > 0.01f)
 				{
-					cmd.forwardmove = (short)(400.0f *
+					cmd->forwardmove = (short)(400.0f *
 					    (move_dir[0] * vf[0] + move_dir[1] * vf[1]) / fl);
-					cmd.sidemove = (short)(400.0f *
+					cmd->sidemove = (short)(400.0f *
 					    (move_dir[0] * vr[0] + move_dir[1] * vr[1]));
 				}
 				else
 				{
-					cmd.forwardmove = plain_forward;
-					cmd.sidemove = 0;
+					cmd->forwardmove = plain_forward;
+					cmd->sidemove = 0;
 				}
 			}
 			else
 			{
-				cmd.forwardmove = plain_forward;
-				cmd.sidemove = 0;
+				cmd->forwardmove = plain_forward;
+				cmd->sidemove = 0;
 			}
 			if (step == 0)
-				cmd.upmove = nav_jump;
+				cmd->upmove = nav_jump;
 
 			/*
 			 * No tricks while a rope is out -- the hook SETS velocity, so
@@ -8472,8 +8343,8 @@ void SG_BotThink(sg_bot_t *bot)
 			 */
 			if (duel_hold && engaged)
 			{
-				cmd.forwardmove = 0;
-				cmd.sidemove = weave_side;
+				cmd->forwardmove = 0;
+				cmd->sidemove = weave_side;
 			}
 			else if (have_move && !precision && bot->hook_phase == 0)
 			{
@@ -8522,9 +8393,9 @@ void SG_BotThink(sg_bot_t *bot)
 				 * exact aim, throttle on the brake, touch.
 				 */
 				if (!bot->terminal)
-				SG_MovePolicy(e, &cmd, mf, mr, move_dir,
+				SG_MovePolicy(e, cmd, mf, mr, move_dir,
 				              open_ahead, run_link,
-				              (float)cmd.msec / 1000.0f, airp);
+				              (float)cmd->msec / 1000.0f, airp);
 
 				/*
 				 * THE CARRIER'S JINK. The parity killer census (waves
@@ -8545,7 +8416,7 @@ void SG_BotThink(sg_bot_t *bot)
 				 * serpentine drifting bodies into corners the feelers
 				 * had already vetoed. No open room ahead, no jink: a
 				 * wall stops more rails than it starts. */
-				if (role == SG_ROLE_CARRY && cmd.forwardmove != 0 &&
+				if (role == SG_ROLE_CARRY && cmd->forwardmove != 0 &&
 				    open_ahead &&
 				    !sg_cv.noweave->value)
 				{
@@ -8564,10 +8435,10 @@ void SG_BotThink(sg_bot_t *bot)
 							short js = (fmodf(level.time, jp) < jp * 0.5f)
 							           ? 1 : -1;
 
-							cmd.sidemove = (short)(cmd.sidemove / 2
-							               + js * (cmd.forwardmove > 0
-							                       ? cmd.forwardmove
-							                       : -cmd.forwardmove) / 2);
+							cmd->sidemove = (short)(cmd->sidemove / 2
+							               + js * (cmd->forwardmove > 0
+							                       ? cmd->forwardmove
+							                       : -cmd->forwardmove) / 2);
 							break;
 						}
 					}
@@ -8584,8 +8455,8 @@ void SG_BotThink(sg_bot_t *bot)
 			 */
 			if (bot->beat_until > level.time)
 			{
-				cmd.forwardmove = (short)(cmd.forwardmove * 0.30f);
-				cmd.sidemove = (short)(cmd.sidemove * 0.30f);
+				cmd->forwardmove = (short)(cmd->forwardmove * 0.30f);
+				cmd->sidemove = (short)(cmd->sidemove * 0.30f);
 			}
 
 			/*
@@ -8606,19 +8477,19 @@ void SG_BotThink(sg_bot_t *bot)
 			{
 				float dp = sg_cv.depace->value;
 
-				cmd.forwardmove = (short)(cmd.forwardmove * dp);
-				cmd.sidemove = (short)(cmd.sidemove * dp);
+				cmd->forwardmove = (short)(cmd->forwardmove * dp);
+				cmd->sidemove = (short)(cmd->sidemove * dp);
 			}
 
 			/* the terminal brake: cornering throttle at the stands,
 			 * same final-word slot for the same reason */
 			if (bot->term_brake < 1.0f)
 			{
-				cmd.forwardmove = (short)(cmd.forwardmove * bot->term_brake);
-				cmd.sidemove = (short)(cmd.sidemove * bot->term_brake);
+				cmd->forwardmove = (short)(cmd->forwardmove * bot->term_brake);
+				cmd->sidemove = (short)(cmd->sidemove * bot->term_brake);
 			}
 
-			ClientThink(e, &cmd);
+			ClientThink(e, cmd);
 
 			/*
 			 * Let go of the jump. PM_CheckJump clears PMF_JUMP_HELD only when
@@ -8627,10 +8498,10 @@ void SG_BotThink(sg_bot_t *bot)
 			 * the next hop. The release lands inside the same tenth of a
 			 * second as the press.
 			 */
-			if (cmd.upmove >= 10)
-				cmd.upmove = 0;
+			if (cmd->upmove >= 10)
+				cmd->upmove = 0;
 		}
-		cmd.msec = (byte)sub_msec;
+		cmd->msec = (byte)sub_msec;
 	}
 
 	/*
@@ -8707,7 +8578,7 @@ void SG_BotThink(sg_bot_t *bot)
 			if (sg_cv.hopfire->value &&
 			    e->groundentity &&
 			    fabsf(ddy) < 8.0f && fabsf(ddp) < 8.0f)
-				cmd.upmove = 400;
+				cmd->upmove = 400;
 			if (slew_rate > 0.0f &&
 			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
 				goto hook_wait;
@@ -9028,9 +8899,9 @@ hook_wait:;
 		/* the last step of the frame: fwd/side/up are that step's command,
 		 * and msec x steps is how the frame's real time was spent */
 		gi.dprintf("CMD %s: fwd=%d side=%d up=%d btn=%d yaw=%d pitch=%d msec=%d x%d\n",
-		           e->client->pers.netname, cmd.forwardmove, cmd.sidemove,
-		           cmd.upmove, cmd.buttons, cmd.angles[YAW],
-		           cmd.angles[PITCH], cmd.msec, sub_steps);
+		           e->client->pers.netname, cmd->forwardmove, cmd->sidemove,
+		           cmd->upmove, cmd->buttons, cmd->angles[YAW],
+		           cmd->angles[PITCH], cmd->msec, sub_steps);
 	}
 
 	/* once a second, the full body state: enough to reconstruct any stall
@@ -9080,6 +8951,169 @@ hook_wait:;
 		bot->plan_next = level.time + 1.0f;
 		SG_DrawPlan(bot, team, bestlink, route_field);
 	}
+}
+
+
+void SG_BotThink(sg_bot_t *bot)
+{
+	edict_t *e = bot->ent;
+	usercmd_t cmd;
+	const int *goal_field, *support = NULL, *intercept = NULL;
+	const int *route_field;
+	qboolean route_pure;
+	const sg_weights_t *w;
+	sg_role_t role;
+	int team, bestlink = -1;
+	float bestval;
+	float incumbent_v = 1e30f;
+	qboolean carrying;
+
+	/* movement policy state for this frame */
+	vec3_t		move_dir;                   /* heading the route wants */
+	float		view_yaw = 0.0f, view_pitch = 0.0f;
+	qboolean	have_move = false;          /* a direction to travel at all */
+	qboolean	open_ahead = false;         /* room in front to hop into */
+	qboolean	run_link = false;           /* chosen link is ground running */
+	qboolean	precision = false;          /* final approach: no tricks */
+	qboolean	hold_post = false;          /* defender at its stand: guard */
+	qboolean	rally_hold = false;         /* attacker waiting for a partner */
+	qboolean	think_over;                 /* a stage ended the frame */
+	qboolean	rail_hold = false;          /* waiting out a railer's reload */
+	int			rail_seed = -1;             /* where that railer is believed */
+	int			rail_client = -1;           /* and who he is */
+	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
+	float		post_yaw = 0.0f;            /* facing the likeliest approach */
+	float		post_sight = -1.0f;         /* clear distance down that facing;
+	                                         * WEAPONS.md 2.4-D3 picks the
+	                                         * pre-held weapon from it */
+	sg_weights_t	live;                   /* the role row, modulated by state */
+	int			door_hold = 0;              /* rotating door ahead: 1 stand,
+	                                         * 2 back out of its swing arc */
+	edict_t		*door_ent = NULL;           /* which door is being waited on */
+	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
+	float		drop_yaw = 0.0f;
+	qboolean	hook_brake = false;         /* slow to the proof's standing
+	                                         * start before firing a rope */
+
+	/* the duel terms, read once per frame and priced per candidate seed */
+	qboolean	duel = false;               /* combat has a live or fresh target */
+	vec3_t		duel_org;                   /* where it is believed to be */
+	float		duel_want = 0.0f;           /* range the weapon in hand wants */
+	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = 100;
+
+	if (Think_Dead(bot, e, &cmd))
+		return;
+	Think_RespawnEdge(bot, e);
+	bot->death_taught = false;
+
+	/* my eyes feed the team belief before I decide from it */
+	Caco_See(sg_rune, e);
+
+	team = e->client->ctf.teamnum;
+	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). Carrying is
+	 * the same inventory test ctf_flagtouch itself makes. */
+	{
+		static gitem_t *flagitem;
+		if (!flagitem)
+			flagitem = FindItem("Enemy Flag");
+		carrying = flagitem &&
+		           e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
+	}
+
+	role = SG_Role(bot, carrying);
+
+	Think_CarryBookends(bot, e, role, team, carrying);
+
+	Think_LiveWeights(bot, e, role, team, &live);
+	w = &live;
+
+	Think_Objective(bot, e, role, team, carrying, w, support, intercept,
+	                &goal_field, &route_field, &route_pure);
+
+
+	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
+
+	Think_InterceptField(role, team, &support, &intercept);
+
+	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
+	bot->terminal = false;
+
+	Think_TrackSeed(bot, e, team);
+	if (bot->seed < 0)
+	{
+		ClientThink(e, &cmd);
+		return;
+	}
+
+	/*
+	 * The precision case: no tricks on the final approach.
+	 *
+	 * A flag is a thirty-unit box and a hop chain covers eight hundred units a
+	 * second; the legacy bots arrived with a second of route left and sailed
+	 * straight over the top, lap after lap. The legacy adapter suppressed the
+	 * tricks within about 700 units of a must-touch goal (bl_main.c:451-464).
+	 * The SLIPGATE field is denominated in real milliseconds of traversal, so
+	 * the same idea is stated in time: inside a second and a half of the
+	 * objective, run plainly and be able to stop. Speed serves the objective.
+	 */
+	precision = (goal_field[bot->seed] < 1500);
+
+	/*
+	 * Ask combat whether there is a fight on, ONCE, before the fan is walked.
+	 * The answer is last frame's -- SG_CombatFrame runs after the movement is
+	 * decided, which is the order the constitution requires (combat modifies a
+	 * usercmd the body already built) -- and a tenth of a second of staleness
+	 * on a believed position that is already up to two seconds old changes
+	 * nothing. The carrier is excluded outright: 2.4-D2 is flee, not fight,
+	 * and its own repulsion term below already prices contact.
+	 */
+	if (role != SG_ROLE_CARRY)
+		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
+
+	/* descend the surface: my seed vs every seed one proven link away */
+	bestlink = Think_PickLink(bot, e, role, team, carrying, &live, w,
+	                          goal_field, route_field, route_pure,
+	                          support, intercept, precision, duel,
+	                          duel_org, duel_want, duel_expo, rally_hold,
+	                          &bestval, &incumbent_v, &rail_seed,
+	                          &rail_client, &rail_dose, &rail_hold);
+
+	think_over = false;
+	bestlink = Think_CommitLink(bot, e, role, team, carrying, &live, w,
+	                            goal_field, precision, duel, duel_org,
+	                            duel_want, duel_expo, bestval,
+	                            incumbent_v, rail_seed, rail_client,
+	                            rail_dose, bestlink, &cmd, &rally_hold,
+	                            &rail_hold, &think_over, &hold_post,
+	                            &post_yaw, &post_sight);
+	if (think_over)
+		return;
+	/*
+	 * The surface has a gradient EVERYWHERE. Where the rune is proven, the
+	 * gradient is the best outgoing link. Where it is not -- field infinite,
+	 * no improving link, graph hole -- the gradient degrades to the local
+	 * one: straight at the goal, deflected around whatever the feelers hit.
+	 * A player with no knowledge of the map still runs toward the enemy
+	 * base; a bot that stands still because its database has a hole is not
+	 * descending a surface, it is worshipping a graph.
+	 */
+	Think_Move(bot, e, role, team, carrying, &live, w, goal_field,
+	           route_field, route_pure, bestlink, precision, hold_post,
+	           rally_hold, rail_hold, post_yaw, post_sight, duel,
+	           duel_org, duel_want, duel_expo, &cmd, move_dir,
+	           &view_yaw, &view_pitch, &have_move, &open_ahead,
+	           &run_link, &door_hold, &door_ent, &drop_yaw_locked,
+	           &drop_yaw, &hook_brake);
+	Think_Emit(bot, e, role, team, carrying, &live, w, goal_field,
+	           route_field, route_pure, bestlink, precision, hold_post,
+	           rally_hold, rail_hold, rail_seed, rail_client, rail_dose,
+	           post_yaw, post_sight, duel, duel_org, duel_want,
+	           duel_expo, move_dir, view_yaw, view_pitch, have_move,
+	           open_ahead, run_link, door_hold, door_ent,
+	           drop_yaw_locked, drop_yaw, hook_brake, &cmd);
 }
 
 
