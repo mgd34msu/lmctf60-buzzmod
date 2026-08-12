@@ -4,11 +4,11 @@ Written 2026-08-12, after the standards pass and the three-territory
 primitive audit (slipgate layer, buzzmod layer, cross-layer seams).
 This is how buzzmod + SLIPGATE would be built knowing what we know —
 and it is a COMPASS for converging the existing tree, not a demolition
-order. The one asset no rewrite can buy back is ~900 waves of
+order. The one asset no rewrite can buy back is hundreds of hours of
 film-verified behavior; every move below is film-gated like every
 feature ever was. Companion documents: `slipgate/STYLE.md` (the line
-law), `LEDGER.md` (the evidence), the three audit reports (2026-08-12,
-preserved in the session record and summarized here).
+law), `TOOLING.md` (the development environment), `LEDGER.md` (the
+internal development record, where project coordinates live).
 
 ## 1. The layering as it should be
 

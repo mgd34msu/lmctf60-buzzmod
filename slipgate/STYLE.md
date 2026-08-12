@@ -1,116 +1,122 @@
 # SLIPGATE C style guide
 
-Written 2026-08-12, at the close of the standards pass, by the author of
-most of the sins it corrects. Every rule below traces to a specific
-failure in this tree's history; none is imported taste. The test for
-adding a rule: name the commit or wave where its absence cost something.
+Every rule below was earned by a real failure in this codebase's
+development — none is imported taste. The failures are described in
+plain terms so the rules stand on their own; the project's internal
+development record (LEDGER.md, git history) holds the full forensics
+for anyone who wants them.
 
 ## 1. Files are modules
 
 One topic per translation unit. `static` file-scope symbols are the
 module's private state — that is C's encapsulation mechanism, use it.
-The header is the interface and says one thing: if a header accumulates
-externs from unrelated subsystems, it is a junk drawer and gets split
-(sg_bot.h earned this rule). A file's honest size is whatever its one
-topic needs — sg_chat.c at 4,300 lines of one emit pipeline is correct;
-sg_arach.c at 10,805 lines of nine topics was not.
+The header is the interface and says one thing: if a header
+accumulates externs from unrelated subsystems, it is a junk drawer and
+gets split. A file's honest size is whatever its one topic needs — a
+4,000-line chat module around one emit pipeline is correct; a
+10,000-line file mixing navigation, combat, roles, and telemetry is
+not, and this tree once had exactly that.
 
 ## 2. Functions are stages
 
 A function does one nameable job. Soft budget: ~150 lines. Over 300
 requires a banner justifying why the logic is irreducible (the combat
 aim model qualifies: one solve, twenty interlocking locals). Over 700
-is forbidden outright — SG_BotThink reached 6,800 and its size hid
-three shipped bugs from every disciplined reading.
+is forbidden outright — this tree's think function once reached 6,800
+lines, and its size hid three shipped bugs from every disciplined
+reading of it.
 
 ## 3. Pipelines pass a context
 
 When stages share frame state, they share ONE context struct built at
 the pipeline's top (`sg_think_t`), not twenty-parameter signatures and
-not file-scope mutable globals. A new stage costs a field, not eleven
+not file-scope mutable globals. A new stage costs a field, not a dozen
 signature edits.
 
 ## 4. A value lives in one place
 
 Cvar names and defaults exist only in the registry X-macro
 (sg_cvars.h). Two call sites restating a default is a fork waiting to
-ship — 222 sites restated defaults before the registry and survival was
-luck. Tuning constants are named defines with units in the comment;
-fitted values say what fitted them ("waves 63-67").
+ship — before the registry existed, this tree restated defaults at
+over two hundred sites and correctness was luck. Tuning constants are
+named defines with units in the comment; fitted values say what
+measurement fitted them.
 
 ## 5. The second copy is the last
 
 The moment a pattern appears twice, it becomes a helper with a name
-(SG_EnemyFlag, SG_CanSee, SG_DistXY). This applies to the tools with
-equal force: two analysis scripts copy-pasting one detector is how two
-instruments drift apart while reporting the same name.
+(SG_EnemyFlag, SG_CanSee, SG_DistXY). This applies to analysis tooling
+with equal force: two scripts copy-pasting one detector is how two
+instruments drift apart while reporting the same number's name.
 
 ## 6. Debug gates wrap output, never state
 
 `if (debug)` may print. It may never compute, assign, or advance a
-clock. bot->last_role's only write sat inside a debug gate and the
-rally silently read stale roles on every production wave for weeks.
-If a debug block needs a value, the value is computed outside the gate.
+clock. A role-tracking field in this tree once had its only write
+inside a debug gate — with diagnostics off, every consumer of that
+field silently read stale data in production for weeks. If a debug
+block needs a value, the value is computed outside the gate.
 
 ## 7. No hardcoded environment
 
 Paths derive from the gamedir cvar; ports, directories, and map lists
-come from configuration. Danger persistence hardcoded "lmctf-hooktest"
-and worked by coincidence until read closely.
+come from configuration. A persistence path in this tree once
+hardcoded a specific server's directory name and worked only by
+coincidence until read closely.
 
 ## 8. Comments carry constraints and self-contained evidence
 
 A banner states what the code must honor and the measured finding that
 proved it — in language a stranger inheriting this code can use
-without our project records. "Measured in live testing: hot-room grabs
-killed 51 of 54 carriers within seconds" carries everything; "waves
-111-113" carries nothing to anyone but us. Project-internal
-coordinates (wave numbers, rung labels, trial names, phase tags) stay
-in LEDGER.md and git history, which exist to hold them. Source line
+without our project records. "Trials determined that hot-room grabs
+got the carrier killed within seconds nearly every time" carries
+everything; a citation into our internal test numbering carries
+nothing to anyone but us. Project-internal coordinates stay in
+LEDGER.md and git history, which exist to hold them. Source line
 references to THIS tree remain welcome — they travel with the code.
 What comments never do: narrate the next line, address a reviewer, or
-require an archaeology session to decode. (Owner's refinement,
-2026-08-12; existing banners are retrofitted progressively as their
-files are touched — convergence list P3.)
+require an archaeology session to decode.
 
 ## 9. Restructuring and behavior never share a commit
 
 Moves are verbatim — a moved body that cannot see its old scope makes
 the compiler the verifier. Behavior changes are their own commits with
-their own bars, and deploy alone: one variable per trial is a code
-rule, not just a film rule.
+their own acceptance bars, and deploy alone: one variable at a time is
+a code rule, not just a testing rule.
 
 ## 10. The gates are not optional
 
-Every commit: full rebuild, RAW output read (a grep-filtered count
-declared a broken build clean once — the GitRevisionInfo race exits
-without the word "error"), zero warnings, per-job CI conclusions
-(`gh run view --json`, never aggregate exit codes — the aggregate lied
-twice). MSVC /W4 stays load-bearing: C4701 caught the infinite loop
-gcc shipped quietly, the one that wedged all ten servers.
+Every commit: full rebuild, RAW output read — a grep-filtered warning
+count once declared a broken build clean because the failure text
+didn't contain the word "error". Zero warnings on every compiler in
+CI, each CI job's conclusion verified individually, never through an
+aggregate exit code (the aggregate has lied). The strictest compiler
+stays load-bearing: MSVC's uninitialized-variable analysis caught an
+infinite loop that gcc shipped quietly — the one that once hung every
+test server simultaneously.
 
 ## 11. Naming
 
 Module prefix on internal families (Think_, Cbt_, Chat_, Lead_,
 Danger_); SG_ prefix on cross-module surface. A name says what the
 thing decides, not how ("Think_ApproachBand", not "Think_Helper2").
-Loop counters are unique within their function — a rename collision
-between nested scopes produced the wave-900 wedge.
+Loop counters are unique within their function — a careless rename
+collision between nested scopes is what produced the server hang in
+rule 10.
 
 ## 12. The client never sees development-speak
 
 Every string a player or admin can encounter — broadcasts, command
 output, menu text, chat lines, cvar names, release notes — speaks the
-game's language, never the workshop's. No waves, trials, arms, probes,
-censuses, canaries, rungs, or verdicts outside of code comments and
-the LEDGER. Diagnostics that must speak dev go behind the debug cvar
-(default off), which is the one sanctioned channel. Development tools
-may live in the repository; they are never part of what the client
-needs to see. Audited clean 2026-08-12; the audit greps are the
-enforcement.
+game's language, never the workshop's. Development vocabulary lives
+only in code comments (within rule 8's limits), the LEDGER, and behind
+the debug cvar (default off), which is the one sanctioned diagnostic
+channel. Development tools may live in the repository; they are never
+part of what the client needs to see.
 
 ## 13. Working beats beautiful; the ledger arbitrates
 
-When a cleanup risks behavior mid-trial, the cleanup waits for the
-window. When beauty and verified behavior conflict, behavior wins and
-the ugliness gets a LEDGER entry so it is a debt, not a secret.
+When a cleanup risks behavior during live evaluation, the cleanup
+waits for a safe window. When beauty and verified behavior conflict,
+behavior wins and the ugliness gets a LEDGER entry so it is a debt,
+not a secret.

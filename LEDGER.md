@@ -1,5 +1,8 @@
 # SLIPGATE LEDGER
 
+The internal development record — the one document where project
+coordinates (waves, rungs, trials, arms) are the native language; all
+inheritor-facing documents translate to self-contained findings.
 The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).

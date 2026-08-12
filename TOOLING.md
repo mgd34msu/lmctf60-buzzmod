@@ -1,5 +1,10 @@
 # The development environment
 
+*This document and LEDGER.md are the two places project-internal
+vocabulary is at home — waves, trials, arms, rungs live here freely.
+Everything client- or inheritor-facing (ARCHITECTURE.md, STYLE.md,
+release notes, code comments) speaks self-contained language instead.*
+
 Written 2026-08-12, split out of ARCHITECTURE.md at the owner's
 direction: release assets and development tooling are different worlds,
 and neither document may describe the other's structure. THIS is the
@@ -13,8 +18,9 @@ enumerated explicitly, nothing implied.
   driven by `tools/iterate2.sh` (per-wave configs, trial arming
   arrays with the ref-vs-def check), looped by `tools/waveloop.sh`
   (auto-deploys the newest repo-root .so between waves — which is why
-  local builds get deleted the moment they're verified, wave-900
-  lesson), watched by a systemd user timer (`wavewatch`).
+  local builds get deleted the moment they're verified: a stray
+  mid-edit build once auto-deployed and hung all ten servers),
+  watched by a systemd user timer (`wavewatch`).
 - **Film** — serverrecord demos landing in the Yamagi data dir, the
   human corpus (2020-2023 client demos) in the game dir, indexed by
   `tools/corpus-manifest.csv`.
