@@ -7980,9 +7980,35 @@ no_hold:;
 			if (!gf && role == SG_ROLE_ATTACK)
 			{
 				/* enemy stand position is common knowledge */
-				gf = G_Find(NULL, FOFS(classname),
+				edict_t *marker = G_Find(NULL, FOFS(classname),
 				            (team == CTF_TEAM_RED) ? "info_flag_blue"
 				                                   : "info_flag_red");
+				edict_t *enemy_item = (team == CTF_TEAM_RED) ? blueflag
+				                                             : redflag;
+
+				gf = marker;
+				/*
+				 * THE ROUTE GOES THROUGH THE FLAG (owner's order,
+				 * 2026-08-11 -- his third strike on this disease).
+				 * Wave 312 taught the CARRIER to aim at the live item
+				 * because droptofloor settles it off the marker far
+				 * enough to orbit; the grab side never got the fix, so
+				 * attackers still walked to the marker and circled a
+				 * flag a body-length away (conduct audit: stand-grind
+				 * cluster, 1.5% vs 3.3% conversion). Aim at the live
+				 * item -- but only while it sits at home: a dropped
+				 * flag elsewhere is Rule 19 intel the bot may not have.
+				 */
+				if (enemy_item && enemy_item->inuse &&
+				    !enemy_item->owner && marker)
+				{
+					vec3_t md9;
+
+					VectorSubtract(enemy_item->s.origin,
+					               marker->s.origin, md9);
+					if (VectorLength(md9) < 64.0f)
+						gf = enemy_item;
+				}
 			}
 			else if (!gf)
 			{
@@ -8012,7 +8038,15 @@ no_hold:;
 				 * Inside 160 the carrier aims PAST its flag along the
 				 * line it arrived on; the touch happens mid-stride.
 				 */
-				if (role == SG_ROLE_CARRY && bot->seed >= 0)
+				/*
+				 * ...and the GRAB gets the same stride (owner's order,
+				 * 2026-08-11): this block guarded on CARRY alone even
+				 * though its own comment promised the attacker's grab a
+				 * running start. The route now goes THROUGH the flag
+				 * for both touches -- grab and cap.
+				 */
+				if ((role == SG_ROLE_CARRY || role == SG_ROLE_ATTACK) &&
+				    bot->seed >= 0)
 				{
 					vec3_t fd7;
 					float fl7;
