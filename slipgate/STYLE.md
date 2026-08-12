@@ -58,12 +58,20 @@ Paths derive from the gamedir cvar; ports, directories, and map lists
 come from configuration. Danger persistence hardcoded "lmctf-hooktest"
 and worked by coincidence until read closely.
 
-## 8. Comments carry constraints and evidence
+## 8. Comments carry constraints and self-contained evidence
 
-A banner states what the code must honor and cites the film that
-proved it (wave numbers, trial verdicts, source line references).
-That evidence trail is this codebase's institutional memory — keep it.
-What comments never do: narrate the next line, or address a reviewer.
+A banner states what the code must honor and the measured finding that
+proved it — in language a stranger inheriting this code can use
+without our project records. "Measured in live testing: hot-room grabs
+killed 51 of 54 carriers within seconds" carries everything; "waves
+111-113" carries nothing to anyone but us. Project-internal
+coordinates (wave numbers, rung labels, trial names, phase tags) stay
+in LEDGER.md and git history, which exist to hold them. Source line
+references to THIS tree remain welcome — they travel with the code.
+What comments never do: narrate the next line, address a reviewer, or
+require an archaeology session to decode. (Owner's refinement,
+2026-08-12; existing banners are retrofitted progressively as their
+files are touched — convergence list P3.)
 
 ## 9. Restructuring and behavior never share a commit
 

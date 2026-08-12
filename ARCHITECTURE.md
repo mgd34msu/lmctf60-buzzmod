@@ -61,8 +61,9 @@ Two seams get formal surfaces:
 - **The film gate.** Instruments + blind judges + pre-registered bars.
   It caught what code review never would have. (The gate is
   development process, not release structure -- see TOOLING.md.)
-- **Evidence-carrying banners.** Wave numbers and verdicts in comments
-  are this codebase's institutional memory.
+- **Evidence-carrying banners.** Measured findings in comments are
+  this codebase's institutional memory — self-contained per the
+  refined rule 8, with project coordinates confined to LEDGER.md.
 - **The print shim.** All 164 bprintf/cprintf sites already funnel
   through one choke point in sg_net.c without either layer knowing —
   the seam pattern working as intended.
@@ -110,6 +111,10 @@ Counts are from the audits, not estimates.
     `safe_append` idiom named when its second copy appears.
 14. Control-flow simplification, one flow at a time, canary-gated —
     the relocated-not-reduced complexity from the standards pass.
+15. Banner-evidence translation — existing comments citing
+    project-internal coordinates (wave numbers, rung labels) are
+    rewritten as self-contained findings when their file is next
+    touched (STYLE.md rule 8 as refined 2026-08-12).
 
 **Fixed already during the audit** (2026-08-12): the three stale
 ERR_FATAL gi.error sites (NULL-format on the fatal path) and the two
