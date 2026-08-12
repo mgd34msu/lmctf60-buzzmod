@@ -51,8 +51,16 @@ at the stand -- strictgrab trial live; (2) wasted motion / grind --
 sg_patrol is the named fix, game code awaiting sign-off; (3) plateau
 revisit texture -- open, two mechanisms struck; (4) steal/cap volume
 -- downstream of (1); (5) lmctf44 navigation -- benched for rune
-diagnosis. Each deficiency stays on this list until measured at or
-above the human band.
+diagnosis. Amendment (owner, same day): the bar is a BAND, not a cliff --
+slightly-under-human is acceptable (data noise is real; humans make
+mistakes too). "Close enough" clears the list; improve it through
+trials when a cheap arm presents itself, but it blocks nothing. Only
+MATERIAL shortfalls are work items, and wildly-better-than-human needs
+no softening under any circumstances. Applied to the current list:
+items (1) grab conversion, (2) grind, (4) volume are material (3-10x
+gaps) and stay; item (3) plateau revisit (0.30 vs 0.20) is re-graded
+CLOSE ENOUGH -- improvable if a cheap mechanism appears, blocking
+nothing; item (5) lmctf44 stays (broken is not close).
 
 ## RULE 23 (owner, 2026-08-12 ~12:10): bots better than humans stay better
 
