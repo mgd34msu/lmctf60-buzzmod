@@ -8,7 +8,8 @@ waves are the fleet clock (~16 min each, 10 servers, never stops).
 through-the-flag grab fix (9900458 + d54c971 + the wall clamp) and the
 last_role debug-gate fix (30cbaa1) ride the standards-pass build to the
 fleet at the next wave boundary. **All three trial clocks (hookpong
-s03, dither-120 s06, teamskew s05) RESTART at the deploy wave** — 16
+s03, dither-120 s06, teamskew s05) RESTART at WAVE 924** (deployed
+01:19:43, all ten servers healthy) — 16
 fresh waves per arm under the new baseline; pre-deploy film is void for
 those trials. Pre-registered bars for the package itself: stand-area
 grind share collapses, steal conversion 1.5% → toward 3.3%, approach
