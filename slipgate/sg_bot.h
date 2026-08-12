@@ -308,6 +308,13 @@ qboolean Beat_HurtSince(edict_t *e, float since);
 
 extern const char *sg_role_names[];
 extern int *sg_airnext;   /* per-seed way to air (Air_Build) */
+extern float sg_grab_time[2];
+extern float sg_push_until[2];
+extern unsigned char *sg_human_use;
+extern unsigned char *sg_human_live;
+extern unsigned char *sg_human_escape;
+extern unsigned char *sg_def_post[2];
+extern unsigned char *sg_def_icept[2];
 extern int sg_cur_role;   /* pricing bot role, frame-scoped */
 
 #endif
