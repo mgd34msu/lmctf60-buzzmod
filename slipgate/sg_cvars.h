@@ -57,6 +57,7 @@
 	X(nakedcarry, "sg_nakedcarry", "0") \
 	X(nobacktrack, "sg_nobacktrack", "60") \
 	X(noweave, "sg_noweave", "0") \
+	X(patrol, "sg_patrol", "0") \
 	X(persona, "sg_persona", "1") \
 	X(press, "sg_press", "1") \
 	X(preturn, "sg_preturn", "1") \

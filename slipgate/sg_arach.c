@@ -969,6 +969,8 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd)
 	bot->view_on = false;   /* respawn snaps the view fresh */
 	bot->railhold_since = 0.0f;     /* a corpse is not waiting on a lane */
 	bot->railhold_enemy = -1;
+	bot->patrol_seed = -1;          /* the next life picks its own legs */
+	bot->patrol_until = 0.0f;
 	/* a chain that ended in a death ended; the frame that would have
 	 * closed it never ran, and a stale start would date the next one */
 	bot->as_since = 0.0f;

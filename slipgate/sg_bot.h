@@ -173,6 +173,8 @@ typedef struct sg_bot_s
 	int			lead_seed;      /* the pad's seed: where the errand goes */
 	float		lead_at;        /* T, this team's believed return time */
 	float		lead_since;     /* when this errand committed (miscall cap) */
+	int			patrol_seed;    /* current patrol leg target, -1 = holding */
+	float		patrol_until;   /* when the next leg may start */
 	float		lead_next;      /* attempt cadence while nothing is claimed */
 
 	/*

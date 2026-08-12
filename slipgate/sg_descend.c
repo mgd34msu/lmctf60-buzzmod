@@ -2361,6 +2361,64 @@ stag_done:
 			goto no_hold;   /* needy and unthreatened: run the errand */
 
 		hold_post = true;
+
+		/*
+		 * THE PATROL (sg_patrol). Measurement found posted defenders
+		 * covering their no-idle obligation by pacing in place --
+		 * high-effort movement going nowhere, a shuffle no human
+		 * produces. A human at post either stands or walks a
+		 * deliberate loop. When the post is quiet, walk one: pick a
+		 * neighbouring seed that stays inside the post band, ride the
+		 * proven link there, hold and face, and after a few unhurried
+		 * seconds walk another leg. Contact cancels the leg the frame
+		 * it appears -- the quiet test above already gates entry, and
+		 * combat owns the view the moment anyone shows.
+		 */
+		if (sg_cv.patrol->value > 0.0f)
+		{
+			if (bot->patrol_seed >= 0 && bot->seed != bot->patrol_seed)
+			{
+				/* mid-leg: ride the direct link if one exists */
+				int pli;
+
+				for (pli = SG_Rune()->first_link[bot->seed]; pli >= 0;
+				     pli = SG_Rune()->next_link[pli])
+					if (SG_Rune()->links[pli].to == bot->patrol_seed &&
+					    SG_Rune()->links[pli].action == RL_RUN)
+					{
+						bestlink = pli;
+						hold_post = false;
+						break;
+					}
+				if (hold_post)
+					bot->patrol_seed = -1;  /* leg unreachable: stand */
+			}
+			else if (level.time >= bot->patrol_until)
+			{
+				/* pick the next leg: a RUN neighbour still in the band */
+				int pli, cand[8], nc = 0;
+
+				for (pli = SG_Rune()->first_link[bot->seed]; pli >= 0;
+				     pli = SG_Rune()->next_link[pli])
+				{
+					rune_link_t *pl = &SG_Rune()->links[pli];
+
+					if (pl->action == RL_RUN && nc < 8 &&
+					    goal_field[pl->to] < SG_FIELD_INF &&
+					    goal_field[pl->to] <
+					        400.0f * SG_PersonaCampScale(e))
+						cand[nc++] = pl->to;
+				}
+				if (nc > 0)
+				{
+					bot->patrol_seed = cand[rand() % nc];
+					bot->patrol_until = level.time + 5.0f
+					                  + random() * 7.0f;
+				}
+				else
+					bot->patrol_until = level.time + 5.0f;
+			}
+		}
 	}
 
 	/*
