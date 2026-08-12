@@ -798,6 +798,8 @@ void Cmd_Inven_f (edict_t *ent)
 	ent->client->showrailboard = false; // BUZZKILL
 	ent->client->showseason = false;
 	ent->client->showrecords = false;
+	ent->client->showactivity = false;
+	ent->client->showmomentum = false;
 
 	if (cl->showinventory)
 	{
@@ -1039,6 +1041,8 @@ void Cmd_PutAway_f (edict_t *ent)
 	ent->client->showrailboard = false; // BUZZKILL
 	ent->client->showseason = false;
 	ent->client->showrecords = false;
+	ent->client->showactivity = false;
+	ent->client->showmomentum = false;
 
 	//ent->client->awayframe = level.framenum;
 	gi.WriteByte (svc_layout);
@@ -2677,6 +2681,16 @@ void ClientCommand(edict_t* ent)
 		Cmd_Records_f(ent);
 		return;
 	}
+	if (Q_stricmp(cmd, "activity") == 0)
+	{
+		Cmd_Activity_f(ent);
+		return;
+	}
+	if (Q_stricmp(cmd, "momentum") == 0)
+	{
+		Cmd_Momentum_f(ent);
+		return;
+	}
 	// BUZZKILL
 	if (Q_stricmp(cmd, "help") == 0)
 	{
@@ -2904,6 +2918,10 @@ void ClientCommand(edict_t* ent)
 		Cmd_Rank_f (ent);
 	else if (Q_stricmp(cmd, "lifetime") == 0)
 		Cmd_Lifetime_f (ent);
+	else if (Q_stricmp(cmd, "card") == 0)
+		Cmd_Card_f (ent);
+	else if (Q_stricmp(cmd, "vs") == 0)
+		Cmd_VS_f (ent);
 	else if (Q_stricmp(cmd, "statsall") == 0) // STATS - LM_Surt
 		Cmd_StatsAll_f(ent);            // STATS - LM_Surt
 #ifdef OLDOBSERVERCODE

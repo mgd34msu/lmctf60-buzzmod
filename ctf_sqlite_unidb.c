@@ -173,6 +173,13 @@ static sqlite3_stmt *stmt_rec_streak_game = NULL;
 static sqlite3_stmt *stmt_rec_returns_game = NULL;
 static sqlite3_stmt *stmt_rec_caps_life = NULL;
 static sqlite3_stmt *stmt_rec_playtime_life = NULL;
+static sqlite3_stmt *stmt_activity = NULL;
+static sqlite3_stmt *stmt_momentum = NULL;
+static sqlite3_stmt *stmt_resolve_nocase = NULL;
+static sqlite3_stmt *stmt_card_life = NULL;
+static sqlite3_stmt *stmt_card_games = NULL;
+static sqlite3_stmt *stmt_h2h_name = NULL;
+static sqlite3_stmt *stmt_h2h = NULL;
 
 // Finalizes every cache above. Called from every path that closes dbconn,
 // not just DB_Conn_Cleanup() -- a prepared statement still attached to a
@@ -214,6 +221,13 @@ static void db_stmt_close_all(void)
 	db_stmt_close(&stmt_rec_returns_game);
 	db_stmt_close(&stmt_rec_caps_life);
 	db_stmt_close(&stmt_rec_playtime_life);
+	db_stmt_close(&stmt_activity);
+	db_stmt_close(&stmt_momentum);
+	db_stmt_close(&stmt_resolve_nocase);
+	db_stmt_close(&stmt_card_life);
+	db_stmt_close(&stmt_card_games);
+	db_stmt_close(&stmt_h2h_name);
+	db_stmt_close(&stmt_h2h);
 }
 
 static void db_copy_text(char *dest, size_t destsize, const unsigned char *src)
@@ -1921,6 +1935,286 @@ qboolean DB_ServerRecords(db_server_records_t *out)
 		"SELECT playername, playtime_total FROM userdata "
 		"ORDER BY playtime_total DESC LIMIT 1");
 	db_record_one(res, &out->longest_played_lifetime);
+
+	return true;
+}
+
+// Busiest players over the rolling 7-day window (ui_boards.c's Activity
+// board). Same date-window reasoning as DB_SeasonTop above: matches.started
+// is localtime, so the window boundary is computed in localtime too.
+//
+// match_players.playtime is seconds (DB_MatchRecord: level.framenum delta
+// converted at 10 frames/second); SUM(...)/60 hands back whole minutes here
+// so the caller never has to know the stored unit, unlike
+// DB_ServerRecords' playtime_total (left as minutes there because that
+// column IS minutes on disk).
+int DB_Activity(db_activity_row_t *out, int max_rows)
+{
+	sqlite3_stmt *res;
+	int n = 0;
+
+	if (!out || max_rows < 1)
+		return 0;
+
+	if (!dbconn && !DB_Conn_Start())
+		return 0;
+
+	res = db_stmt(dbconn, &stmt_activity,
+		"SELECT u.playername, COUNT(*), SUM(mp.playtime) / 60 "
+		"FROM match_players mp "
+		"JOIN matches m ON m.match_id = mp.match_id "
+		"JOIN userdata u ON u.char_idx = mp.char_idx "
+		"WHERE m.started >= datetime('now','localtime','-7 days') "
+		"GROUP BY mp.char_idx "
+		"ORDER BY COUNT(*) DESC, SUM(mp.playtime) DESC "
+		"LIMIT ?");
+	if (!res)
+	{
+		db_error(dbconn, "DB_Activity");
+		return 0;
+	}
+
+	sqlite3_bind_int(res, 1, max_rows);
+
+	while (n < max_rows && sqlite3_step(res) == SQLITE_ROW)
+	{
+		db_copy_text(out[n].name, sizeof(out[n].name), sqlite3_column_text(res, 0));
+		out[n].games   = sqlite3_column_int(res, 1);
+		out[n].minutes = sqlite3_column_int(res, 2);
+		n++;
+	}
+
+	return n;
+}
+
+// Candidate rows for the Momentum board (ui_boards.c): per-player capture
+// counts and game counts, split at the 7-day mark within the same rolling
+// 30-day window DB_SeasonTop uses. The HAVING clause repeats the "last 7
+// days" CASE expression rather than referencing a SELECT-list alias --
+// SQLite accepts the alias form, but writing out the aggregate again is the
+// form every SQL dialect accepts, and this file otherwise binds parameters
+// instead of leaning on engine-specific leniency.
+//
+// No ORDER BY: turning (recent_caps, recent_games, older_caps, older_games)
+// into a rate DIFFERENCE is arithmetic ui_boards.c does once per candidate,
+// and doing it here would mean writing the same four-term expression a
+// second time just to sort by it. max_rows both bounds the LIMIT and the
+// caller's array -- generous against any realistic 30-day active roster on
+// a private server, so an unordered LIMIT here does not silently exclude a
+// real mover.
+int DB_Momentum(db_momentum_row_t *out, int max_rows, int min_recent_games)
+{
+	sqlite3_stmt *res;
+	int n = 0;
+
+	if (!out || max_rows < 1)
+		return 0;
+	if (min_recent_games < 1)
+		min_recent_games = 1;
+
+	if (!dbconn && !DB_Conn_Start())
+		return 0;
+
+	res = db_stmt(dbconn, &stmt_momentum,
+		"SELECT u.playername, "
+		"SUM(CASE WHEN m.started >= datetime('now','localtime','-7 days') "
+		"    THEN mp.flag_captures ELSE 0 END), "
+		"SUM(CASE WHEN m.started >= datetime('now','localtime','-7 days') "
+		"    THEN 1 ELSE 0 END), "
+		"SUM(CASE WHEN m.started < datetime('now','localtime','-7 days') "
+		"    THEN mp.flag_captures ELSE 0 END), "
+		"SUM(CASE WHEN m.started < datetime('now','localtime','-7 days') "
+		"    THEN 1 ELSE 0 END) "
+		"FROM match_players mp "
+		"JOIN matches m ON m.match_id = mp.match_id "
+		"JOIN userdata u ON u.char_idx = mp.char_idx "
+		"WHERE m.started >= datetime('now','localtime','-30 days') "
+		"GROUP BY mp.char_idx "
+		"HAVING SUM(CASE WHEN m.started >= datetime('now','localtime','-7 days') "
+		"    THEN 1 ELSE 0 END) >= ? "
+		"LIMIT ?");
+	if (!res)
+	{
+		db_error(dbconn, "DB_Momentum");
+		return 0;
+	}
+
+	sqlite3_bind_int(res, 1, min_recent_games);
+	sqlite3_bind_int(res, 2, max_rows);
+
+	while (n < max_rows && sqlite3_step(res) == SQLITE_ROW)
+	{
+		db_copy_text(out[n].name, sizeof(out[n].name), sqlite3_column_text(res, 0));
+		out[n].recent_caps  = sqlite3_column_int(res, 1);
+		out[n].recent_games = sqlite3_column_int(res, 2);
+		out[n].older_caps   = sqlite3_column_int(res, 3);
+		out[n].older_games  = sqlite3_column_int(res, 4);
+		n++;
+	}
+
+	return n;
+}
+
+/* ================================================================= *
+ * Name resolution and player-facing lookups (ctf_file_io.c's "cmd card"
+ * and "cmd vs").
+ * ================================================================= */
+
+// Exact match first (the common case: a name copy-pasted or typed exactly
+// as it shows on the scoreboard), then a case-insensitive fallback so
+// "cmd card buzzkill" still finds "BuzzKill" -- both bound, never pasted
+// into the query text. Returns -1 if neither matches or the backend is not
+// open.
+static int db_resolve_id(const char *name)
+{
+	sqlite3_stmt *res;
+	int id;
+
+	if (!dbconn || !name || !name[0])
+		return -1;
+
+	id = DB_GetID(name);
+	if (id >= 0)
+		return id;
+
+	res = db_stmt(dbconn, &stmt_resolve_nocase,
+		"SELECT char_idx FROM userdata WHERE playername = ? COLLATE NOCASE");
+	if (!res)
+	{
+		db_error(dbconn, "db_resolve_id");
+		return -1;
+	}
+
+	sqlite3_bind_text(res, 1, name, -1, SQLITE_TRANSIENT);
+
+	if (sqlite3_step(res) == SQLITE_ROW)
+		id = sqlite3_column_int(res, 0);
+	else
+		id = -1;
+
+	return id;
+}
+
+qboolean DB_PlayerCard(const char *name, db_card_t *out)
+{
+	sqlite3_stmt *res;
+	int id;
+
+	if (!out)
+		return false;
+
+	memset(out, 0, sizeof(*out));
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	id = db_resolve_id(name);
+	if (id < 0)
+		return false;
+
+	res = db_stmt(dbconn, &stmt_card_life,
+		"SELECT u.playername, u.member_since, u.last_played, "
+		"c.flag_captures, c.flag_pickups, c.flag_returns, "
+		"g.frags, g.shots, g.shots_hit "
+		"FROM userdata u "
+		"JOIN game_stats g ON g.char_idx = u.char_idx "
+		"JOIN ctf_stats c ON c.char_idx = u.char_idx "
+		"WHERE u.char_idx = ?");
+	if (!res)
+	{
+		db_error(dbconn, "DB_PlayerCard");
+		return false;
+	}
+
+	sqlite3_bind_int(res, 1, id);
+
+	if (sqlite3_step(res) != SQLITE_ROW)
+		return false;	// userdata row exists but game_stats/ctf_stats do not -- should not happen, DB_NewID inserts all three together
+
+	db_copy_text(out->playername, sizeof(out->playername), sqlite3_column_text(res, 0));
+	db_copy_text(out->member_since, sizeof(out->member_since), sqlite3_column_text(res, 1));
+	db_copy_text(out->last_played, sizeof(out->last_played), sqlite3_column_text(res, 2));
+	out->caps      = sqlite3_column_int(res, 3);
+	out->steals    = sqlite3_column_int(res, 4);
+	out->returns   = sqlite3_column_int(res, 5);
+	out->frags     = sqlite3_column_int(res, 6);
+	out->shots     = (long)sqlite3_column_int64(res, 7);
+	out->shots_hit = (long)sqlite3_column_int64(res, 8);
+
+	// lifetime totals have no match count of their own -- match_players is
+	// the only table with one row per game, so counting it is the only way
+	// to answer "how many games"
+	res = db_stmt(dbconn, &stmt_card_games,
+		"SELECT COUNT(*) FROM match_players WHERE char_idx = ?");
+	if (res)
+	{
+		sqlite3_bind_int(res, 1, id);
+		if (sqlite3_step(res) == SQLITE_ROW)
+			out->games = sqlite3_column_int(res, 0);
+	}
+
+	return true;
+}
+
+qboolean DB_HeadToHead(const char *my_name, const char *opponent_name, db_h2h_t *out)
+{
+	sqlite3_stmt *res;
+	int my_id, opp_id;
+
+	if (!out)
+		return false;
+
+	memset(out, 0, sizeof(*out));
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	my_id  = db_resolve_id(my_name);
+	opp_id = db_resolve_id(opponent_name);
+
+	if (my_id < 0 || opp_id < 0)
+		return false;
+
+	res = db_stmt(dbconn, &stmt_h2h_name, "SELECT playername FROM userdata WHERE char_idx = ?");
+	if (res)
+	{
+		sqlite3_bind_int(res, 1, opp_id);
+		if (sqlite3_step(res) == SQLITE_ROW)
+			db_copy_text(out->opponent_name, sizeof(out->opponent_name), sqlite3_column_text(res, 0));
+	}
+
+	// self-join on match_id: a "shared game" is any match_players row for
+	// me paired with a match_players row for them in the same match. Only
+	// the two resolved char_idx values (never raw player input) reach the
+	// SQL text; both are bound.
+	res = db_stmt(dbconn, &stmt_h2h,
+		"SELECT COUNT(*), "
+		"SUM(a.flag_captures), SUM(a.frags), "
+		"SUM(b.flag_captures), SUM(b.frags), "
+		"SUM(CASE WHEN a.flag_captures > b.flag_captures THEN 1 ELSE 0 END), "
+		"SUM(CASE WHEN b.flag_captures > a.flag_captures THEN 1 ELSE 0 END) "
+		"FROM match_players a "
+		"JOIN match_players b ON b.match_id = a.match_id "
+		"WHERE a.char_idx = ? AND b.char_idx = ?");
+	if (!res)
+	{
+		db_error(dbconn, "DB_HeadToHead");
+		return false;
+	}
+
+	sqlite3_bind_int(res, 1, my_id);
+	sqlite3_bind_int(res, 2, opp_id);
+
+	if (sqlite3_step(res) != SQLITE_ROW)
+		return false;
+
+	out->games          = sqlite3_column_int(res, 0);
+	out->my_caps        = sqlite3_column_int(res, 1);
+	out->my_frags       = sqlite3_column_int(res, 2);
+	out->their_caps     = sqlite3_column_int(res, 3);
+	out->their_frags    = sqlite3_column_int(res, 4);
+	out->my_cap_wins    = sqlite3_column_int(res, 5);
+	out->their_cap_wins = sqlite3_column_int(res, 6);
 
 	return true;
 }

@@ -589,6 +589,118 @@ void Cmd_Lifetime_f(edict_t *ent)
 	ctf_SafePrint(ent, PRINT_HIGH, buf);
 }
 
+/*
+==================
+Cmd_Card_f
+
+"cmd card [name]" -- one player's lifetime line, read straight from the
+unified database via DB_PlayerCard (name resolved exact then case-
+insensitive, ctf_sqlite_unidb.c's db_resolve_id). Unlike Cmd_Lifetime_f
+above, this works for anyone the database has ever recorded, not only
+someone currently connected -- there is no client-side substring match
+against the roster here, because there may be no matching client at all.
+==================
+*/
+void Cmd_Card_f(edict_t *ent)
+{
+	db_card_t	card;
+	char		buf[512];
+	char		accbuf[16];
+	const char	*name;
+
+	if (!ent || !ent->client)
+		return;
+
+	if (CTF_StatsDBMode() != CTF_STATSDB_UNIFIED)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH,
+			"Player cards need the unified stats database on this server.\n");
+		return;
+	}
+
+	name = gi.args();
+	if (!name || !name[0])
+		name = ent->client->pers.netname;
+
+	if (!DB_PlayerCard(name, &card))
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "No recorded games for that player.\n");
+		return;
+	}
+
+	if (card.shots > 0)
+		Com_sprintf(accbuf, sizeof(accbuf), "%ld%%", 100 * card.shots_hit / card.shots);
+	else
+		strcpy(accbuf, "n/a");
+
+	Com_sprintf(buf, sizeof(buf),
+		"\n--CARD: %s\n"
+		"Member since %s, last played %s\n"
+		"Games=%d Caps=%d Steals=%d Returns=%d Frags=%d\n"
+		"Accuracy=%s\n",
+		card.playername,
+		card.member_since[0] ? card.member_since : "(unknown)",
+		card.last_played[0] ? card.last_played : "(unknown)",
+		card.games, card.caps, card.steals, card.returns, card.frags,
+		accbuf);
+
+	ctf_SafePrint(ent, PRINT_HIGH, buf);
+}
+
+/*
+==================
+Cmd_VS_f
+
+"cmd vs <name>" -- the asker against one named opponent, scored only over
+the matches they both actually appeared in (DB_HeadToHead's match_players
+self-join). A name argument is required: there is no meaningful default
+opponent the way "cmd card" defaults to the asker.
+==================
+*/
+void Cmd_VS_f(edict_t *ent)
+{
+	db_h2h_t	h2h;
+	char		buf[512];
+	const char	*name;
+
+	if (!ent || !ent->client)
+		return;
+
+	if (CTF_StatsDBMode() != CTF_STATSDB_UNIFIED)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH,
+			"Head-to-head needs the unified stats database on this server.\n");
+		return;
+	}
+
+	name = gi.args();
+	if (!name || !name[0])
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "Usage: vs <name>\n");
+		return;
+	}
+
+	// Covers three cases the same way on purpose: either name failed to
+	// resolve, or they resolved but never share a recorded match -- either
+	// way there is no honest comparison to print, only whether one exists.
+	if (!DB_HeadToHead(ent->client->pers.netname, name, &h2h) || h2h.games == 0)
+	{
+		ctf_SafePrint(ent, PRINT_HIGH, "No recorded games together.\n");
+		return;
+	}
+
+	Com_sprintf(buf, sizeof(buf),
+		"\n--HEAD TO HEAD: %s vs %s\n"
+		"Shared games=%d\n"
+		"Caps: you %d, them %d (you out-capped them %d, they out-capped you %d)\n"
+		"Frags: you %d, them %d\n",
+		ent->client->pers.netname, h2h.opponent_name, h2h.games,
+		h2h.my_caps, h2h.their_caps, h2h.my_cap_wins, h2h.their_cap_wins,
+		h2h.my_frags, h2h.their_frags);
+
+	ctf_SafePrint(ent, PRINT_HIGH, buf);
+}
+
 qboolean ctf_safe_output_path(const char *name, char *out, size_t outsize)
 {
 	int written;

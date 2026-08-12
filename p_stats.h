@@ -119,4 +119,11 @@ stats_player_s* stats_new_player(char* name);
 void stats_cleanup(); // clean up stats before switching to next level
 void Cmd_StatsAll_f(edict_t* ent);
 
+// MILESTONE tier (docs/LAYOUT.md): a console print stream summarizing the
+// match that just ended -- final score, winner, top capper, top defender,
+// top killer, accuracy leader. Built entirely from this level's in-memory
+// stats_get() counters, no database round trip. Call once, from
+// BeginIntermission (p_hud.c) right after UI_Boards_MatchEnd().
+void CTF_MatchReport(void);
+
 #endif

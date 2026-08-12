@@ -4,6 +4,7 @@
 #include "time.h" // TEAM CODE -- LM_JORM
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "slipgate/sg_cvars.h"
+#include "ctf_sqlite_unidb.h"	// db_record_t -- ui_boards.h's UI_Records_FormatLine needs it declared first
 #include "ui_boards.h"		// UI_Tick_Dirty -- disconnects change the boards' roster
 
 void SG_NoteDeath(edict_t *victim);

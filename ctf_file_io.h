@@ -50,6 +50,16 @@ void Cmd_Lifetime_f(edict_t *ent);
 // "cmd rank [column] [n]" -- leaderboard for players, not just admins.
 void Cmd_Rank_f(edict_t *ent);
 
+// "cmd card [name]" -- one player's lifetime line, read straight from the
+// unified database (works for anyone it has ever recorded, not just
+// someone currently connected). Defaults to the asker when name is
+// omitted. Console print stream, request-driven (docs/LAYOUT.md).
+void Cmd_Card_f(edict_t *ent);
+
+// "cmd vs <name>" -- the asker against one named opponent, across only the
+// matches they both appeared in. Console print stream, request-driven.
+void Cmd_VS_f(edict_t *ent);
+
 // Front door used by the game code. Dispatches on ctf_statsdb.
 qboolean CTF_TrackStatsFor(edict_t *ent);
 qboolean CommitPlayerData(edict_t *ent);

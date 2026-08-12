@@ -5,6 +5,9 @@
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
 #include "ui_text.h" // bounded appender, replaces the hand-guarded strcat loop below
+#include "ctf_file_io.h" // CTF_StatsDBMode -- MOTD's records line is unified-backend only
+#include "ctf_sqlite_unidb.h" // DB_ServerRecords; db_record_t needed before ui_boards.h -- see that header's comment
+#include "ui_boards.h" // UI_Records_FormatLine -- up to 3 records appended to the MOTD
 
 int ClientShowMOD(edict_t *ent); // CTF CODE -- LM_JORM
 int ClientShowID(edict_t *ent, char * buf); // CTF CODE -- LM_JORM
@@ -1208,10 +1211,15 @@ int ClientShowMOD(edict_t *ent)
 
 		ui_appendf (&sb, "\" ");
 
+		// y cursor for the motd lines below and the records lines after
+		// them -- started here, not inside "if (motd[0])", so the records
+		// block still has a valid position even on a server with no motd
+		// text set at all.
+		i = 100;
+
 		if (motd[0]) // if we have a MOTD
 		{
 			strcpy(temp, motd);
-			i = 100;
 			line = strtok(temp, "\n");
 			while (line)
 			{
@@ -1225,6 +1233,46 @@ int ClientShowMOD(edict_t *ent)
 					break;
 				i+=8;
 				line = strtok(NULL, "\n");
+			}
+		}
+
+		// Up to 3 one-line server records (existing DB_ServerRecords data),
+		// appended after the motd's own lines and inside the same 1380-byte
+		// budget ui_appendf already enforces above. Unified-backend only;
+		// DB_ServerRecords leaves a record's holder[0] at 0 when nobody has
+		// set it yet, and UI_Records_FormatLine (ui_boards.c) is what turns
+		// that into "omit the line" here, same as it does for the Server
+		// Records board itself -- a record nobody has set never gets faked.
+		if (CTF_StatsDBMode() == CTF_STATSDB_UNIFIED)
+		{
+			db_server_records_t	records;
+			char					recline[80];
+			int						j;
+			struct
+			{
+				const char			*label;
+				const db_record_t	*rec;
+			}						candidates[3];
+
+			memset(&records, 0, sizeof(records));
+			DB_ServerRecords(&records);
+
+			candidates[0].label = "Most Caps, One Game";
+			candidates[0].rec   = &records.most_caps_game;
+			candidates[1].label = "Best Kill Streak, One Game";
+			candidates[1].rec   = &records.best_streak_game;
+			candidates[2].label = "Most Total Caps, Career";
+			candidates[2].rec   = &records.most_caps_lifetime;
+
+			for (j = 0; j < 3; j++)
+			{
+				if (!UI_Records_FormatLine(recline, sizeof(recline),
+						candidates[j].label, candidates[j].rec))
+					continue;
+
+				if (!ui_appendf (&sb, "xv 0 yv %d cstring \"%s\" ", i, recline))
+					break;
+				i += 8;
 			}
 		}
 

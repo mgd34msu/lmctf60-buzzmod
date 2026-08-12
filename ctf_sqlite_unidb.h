@@ -98,4 +98,81 @@ typedef struct
 
 qboolean DB_ServerRecords(db_server_records_t *out);
 
+// One row per player, summed over match_players/matches rows whose
+// matches.started falls in the rolling 7-day window -- the busiest
+// players lately, by games played and total time played. Sorted games
+// DESC (ties broken by minutes DESC), capped at max_rows. Returns rows
+// filled (0 if the backend is not open or nobody played in the window).
+typedef struct
+{
+	char	name[16];	// matches gclient_t.pers.netname's declared size
+	int	games;
+	int	minutes;	// match_players.playtime is seconds; converted on read
+} db_activity_row_t;
+
+int DB_Activity(db_activity_row_t *out, int max_rows);
+
+// One row per player: captures in the last 7 days against matches.started,
+// and captures in the 23 days before that (days 8-30 ago) -- the same
+// rolling 30-day season window DB_SeasonTop uses, split at the 7-day mark.
+// Both halves also carry the games played in that half, so the caller can
+// turn counts into a per-game rate without a second query. Only players
+// with at least min_recent_games games in the last 7 days qualify; up to
+// max_rows candidate rows are returned, in no particular order -- ranking
+// by "recent rate exceeds older rate" is the caller's job (ui_boards.c),
+// since that ranking is a derived quantity, not something ORDER BY can
+// safely express without repeating the whole CASE expression twice more.
+typedef struct
+{
+	char	name[16];
+	int	recent_caps;
+	int	recent_games;
+	int	older_caps;
+	int	older_games;
+} db_momentum_row_t;
+
+int DB_Momentum(db_momentum_row_t *out, int max_rows, int min_recent_games);
+
+// One player's lifetime line -- "cmd card [name]" (ctf_file_io.c). name is
+// resolved exact first, then case-insensitive (see db_resolve_id in
+// ctf_sqlite_unidb.c); holder[0] == 0 on the identity fields means no
+// matching player, same "no qualifying row" convention as db_record_t.
+// games is a COUNT(*) over match_players, which has no lifetime column of
+// its own -- ctf_stats/game_stats hold running totals, not a match count.
+typedef struct
+{
+	char	playername[16];
+	char	member_since[30];
+	char	last_played[30];
+	int	caps;
+	int	steals;		// ctf_stats.flag_pickups
+	int	returns;
+	int	frags;
+	long	shots;
+	long	shots_hit;
+	int	games;
+} db_card_t;
+
+qboolean DB_PlayerCard(const char *name, db_card_t *out);
+
+// Asker vs. one named opponent, across only the matches both of them
+// appear in (match_players self-joined on match_id) -- "cmd vs <name>"
+// (ctf_file_io.c). opponent_name is resolved the same exact-then-
+// case-insensitive way as DB_PlayerCard. games == 0 means they have never
+// shared a match (or one/both names do not resolve); the caller prints
+// "no recorded games together" rather than a zeroed comparison.
+typedef struct
+{
+	char	opponent_name[16];
+	int	games;
+	int	my_caps;
+	int	my_frags;
+	int	their_caps;
+	int	their_frags;
+	int	my_cap_wins;		// games where my_caps > their_caps
+	int	their_cap_wins;		// games where their_caps > my_caps
+} db_h2h_t;
+
+qboolean DB_HeadToHead(const char *my_name, const char *opponent_name, db_h2h_t *out);
+
 #endif

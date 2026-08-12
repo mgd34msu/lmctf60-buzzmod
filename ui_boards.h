@@ -14,6 +14,12 @@
 // q_shared.h, which has no include guard, so a second #include anywhere in
 // the chain redeclares every enum in it and fails the build. Include this
 // header after g_local.h.
+//
+// UI_Records_FormatLine also needs db_record_t (ctf_sqlite_unidb.h) --
+// include that header first too. This is the one function in this file
+// used outside ui_boards.c: p_view.c's MOTD screen (ClientShowMOD) borrows
+// it to print up to 3 server records without duplicating the "omit a
+// record nobody has set yet" formatting rule a second time.
 
 #ifndef UI_BOARDS_H
 #define UI_BOARDS_H
@@ -22,6 +28,8 @@ typedef enum
 {
 	UI_BOARD_SEASON_TOP,
 	UI_BOARD_SERVER_RECORDS,
+	UI_BOARD_ACTIVITY,
+	UI_BOARD_MOMENTUM,
 
 	UI_BOARD_COUNT
 } ui_board_id_t;
@@ -39,6 +47,11 @@ void UI_Boards_MatchEnd(void);
 // (server restart case: UI_Boards_MatchEnd has not fired yet). Does
 // nothing if board_id is out of range.
 void UI_Boards_Serve(edict_t *ent, int board_id);
+
+// Formats one server-record line as "<label>: <holder> - <value>". Returns
+// false (writing nothing) when rec->holder[0] == 0 -- no qualifying row --
+// so the caller omits the line rather than printing a fake one.
+qboolean UI_Records_FormatLine(char *out, size_t outsize, const char *label, const db_record_t *rec);
 
 // -- The ticked tier (docs/LAYOUT.md): in-match boards ---------------------
 //
