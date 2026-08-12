@@ -482,3 +482,10 @@ was struck. Nothing underneath rung 1 has moved.
 - s02 (5v0 smap05): no-opposition film must stay flawless.
 - s01 (2v2 lmctf03): fixed matchup must hold its band.
 - s09 (ctrl lmctf01): frozen legacy config, the only control arm.
+
+2026-08-12 spectator console spam (filed, unfixed): a live spectator sees
+S_RegisterSexedSound "non-player entity 0" repeated for bot jump/pain voice
+sounds. Server emission sites are correctly attributed (stock jump block,
+no world-entity voice sends anywhere in game or slipgate code) -- the
+misclassification is client-side for spectator-observed bots. Cosmetic;
+sounds play; needs an offline spectator-client trace.
