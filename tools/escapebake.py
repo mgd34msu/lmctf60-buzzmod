@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""humanbake.py -- bake escapee (carrier post-steal) traffic into per-map .hme sidecars.
+"""escapebake.py -- bake escapee (carrier post-steal) traffic into per-map .hme sidecars.
 
 Reads <map>.rune (link table order is the contract) and tools/human/
 <map>.escape.json (transition counts from demorune.py), writes

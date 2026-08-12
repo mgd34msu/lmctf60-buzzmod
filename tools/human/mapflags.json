@@ -1,80 +1,4 @@
 {
- "lmctf01": {
-  "map": "lmctf01",
-  "flags": {
-   "blue": [
-    -1088.0,
-    768.0,
-    -136.0
-   ],
-   "red": [
-    -1088.0,
-    -768.0,
-    -136.0
-   ]
-  },
-  "red_seed": 40,
-  "red_seed_dist": 8.0,
-  "blue_seed": 1,
-  "blue_seed_dist": 8.0
- },
- "lmctf02c": {
-  "map": "lmctf02c",
-  "flags": {
-   "red": [
-    256.0,
-    -2592.0,
-    -144.0
-   ],
-   "blue": [
-    256.0,
-    2528.0,
-    -144.0
-   ]
-  },
-  "red_seed": 27,
-  "red_seed_dist": 8.0,
-  "blue_seed": 28,
-  "blue_seed_dist": 8.0
- },
- "lmctf03": {
-  "map": "lmctf03",
-  "flags": {
-   "blue": [
-    1128.0,
-    254.0,
-    -312.0
-   ],
-   "red": [
-    -824.0,
-    -1470.0,
-    -312.0
-   ]
-  },
-  "red_seed": 77,
-  "red_seed_dist": 8.0,
-  "blue_seed": 73,
-  "blue_seed_dist": 8.0
- },
- "lmctf05": {
-  "map": "lmctf05",
-  "flags": {
-   "red": [
-    256.0,
-    -352.0,
-    112.0
-   ],
-   "blue": [
-    256.0,
-    352.0,
-    112.0
-   ]
-  },
-  "red_seed": 48,
-  "red_seed_dist": 8.0,
-  "blue_seed": 68,
-  "blue_seed_dist": 8.0
- },
  "lmctf09": {
   "map": "lmctf09",
   "flags": {
@@ -94,157 +18,20 @@
   "blue_seed": 153,
   "blue_seed_dist": 124.0
  },
- "lmctf16": {
-  "map": "lmctf16",
+ "lmctf57": {
+  "map": "lmctf57",
   "flags": {
    "blue": [
-    64.0,
-    -3136.0,
-    24.0
+    -1926.0,
+    233.0,
+    -309.0
    ],
    "red": [
-    0.0,
-    2944.0,
-    24.0
+    646.0,
+    679.0,
+    -309.0
    ]
-  },
-  "red_seed": 103,
-  "red_seed_dist": 8.0,
-  "blue_seed": 6,
-  "blue_seed_dist": 8.0
- },
- "lmctf22": {
-  "map": "lmctf22",
-  "flags": {
-   "red": [
-    208.0,
-    2864.0,
-    24.0
-   ],
-   "blue": [
-    2416.0,
-    -2864.0,
-    24.0
-   ]
-  },
-  "red_seed": 23,
-  "red_seed_dist": 6.0,
-  "blue_seed": 48,
-  "blue_seed_dist": 6.0
- },
- "lmctf26": {
-  "map": "lmctf26",
-  "flags": {
-   "red": [
-    -256.0,
-    -592.0,
-    24.0
-   ],
-   "blue": [
-    -3008.0,
-    624.0,
-    24.0
-   ]
-  },
-  "red_seed": 0,
-  "red_seed_dist": 8.0,
-  "blue_seed": 84,
-  "blue_seed_dist": 8.0
- },
- "lmctf41": {
-  "map": "lmctf41",
-  "flags": {
-   "red": [
-    -2235.84,
-    -106.08,
-    -10.88
-   ],
-   "blue": [
-    2955.84,
-    99.84,
-    -10.88
-   ]
-  },
-  "red_seed": 97,
-  "red_seed_dist": 8.0,
-  "blue_seed": 115,
-  "blue_seed_dist": 8.0
- },
- "lmctf44": {
-  "map": "lmctf44",
-  "flags": {
-   "red": [
-    -1662.96,
-    -7.36,
-    -229.52
-   ],
-   "blue": [
-    1656.4,
-    71.36,
-    -229.52
-   ]
-  },
-  "red_seed": 10,
-  "red_seed_dist": 8.0,
-  "blue_seed": 87,
-  "blue_seed_dist": 8.0
- },
- "lmctf58": {
-  "map": "lmctf58",
-  "flags": {
-   "red": [
-    -3254.0,
-    2996.0,
-    -113.0
-   ],
-   "blue": [
-    1650.0,
-    2096.0,
-    -113.0
-   ]
-  },
-  "red_seed": 0,
-  "red_seed_dist": 83.0,
-  "blue_seed": 52,
-  "blue_seed_dist": 83.0
- },
- "lmctf74": {
-  "map": "lmctf74",
-  "flags": {
-   "blue": [
-    0.0,
-    2528.0,
-    224.0
-   ],
-   "red": [
-    0.0,
-    -2496.0,
-    216.0
-   ]
-  },
-  "red_seed": 131,
-  "red_seed_dist": 0.1,
-  "blue_seed": 130,
-  "blue_seed_dist": 7.9
- },
- "mactf06": {
-  "map": "mactf06",
-  "flags": {
-   "blue": [
-    -200.0,
-    1702.0,
-    175.0
-   ],
-   "red": [
-    200.0,
-    -1698.0,
-    175.0
-   ]
-  },
-  "red_seed": 79,
-  "red_seed_dist": 7.1,
-  "blue_seed": 14,
-  "blue_seed_dist": 7.1
+  }
  },
  "smap05": {
   "map": "smap05",
@@ -265,23 +52,249 @@
   "blue_seed": 1,
   "blue_seed_dist": 8.0
  },
- "xmap15": {
-  "map": "xmap15",
+ "smap30": {
+  "map": "smap30",
+  "flags": {
+   "red": [
+    0.0,
+    2096.0,
+    40.0
+   ],
+   "blue": [
+    0.0,
+    -2096.0,
+    40.0
+   ]
+  }
+ },
+ "lmctf48": {
+  "map": "lmctf48",
+  "flags": {
+   "red": [
+    2232.0,
+    -1064.0,
+    -232.0
+   ],
+   "blue": [
+    -2152.0,
+    1464.0,
+    -232.0
+   ]
+  }
+ },
+ "smap33": {
+  "map": "smap33",
   "flags": {
    "blue": [
-    304.0,
-    -1240.0,
-    292.0
+    -760.0,
+    832.0,
+    -288.0
    ],
    "red": [
-    -304.0,
-    1240.0,
-    292.0
+    640.0,
+    832.0,
+    -288.0
+   ]
+  }
+ },
+ "lmctf32": {
+  "map": "lmctf32",
+  "flags": {
+   "red": [
+    0.0,
+    1728.0,
+    -8.0
+   ],
+   "blue": [
+    0.0,
+    -1728.0,
+    -8.0
+   ]
+  }
+ },
+ "lmctf22": {
+  "map": "lmctf22",
+  "flags": {
+   "red": [
+    208.0,
+    2864.0,
+    24.0
+   ],
+   "blue": [
+    2416.0,
+    -2864.0,
+    24.0
    ]
   },
-  "red_seed": 30,
-  "red_seed_dist": 35.9,
-  "blue_seed": 0,
-  "blue_seed_dist": 35.9
+  "red_seed": 23,
+  "red_seed_dist": 6.0,
+  "blue_seed": 48,
+  "blue_seed_dist": 6.0
+ },
+ "lmctf41": {
+  "map": "lmctf41",
+  "flags": {
+   "red": [
+    -2235.84,
+    -106.08,
+    -10.88
+   ],
+   "blue": [
+    2955.84,
+    99.84,
+    -10.88
+   ]
+  },
+  "red_seed": 97,
+  "red_seed_dist": 8.0,
+  "blue_seed": 115,
+  "blue_seed_dist": 8.0
+ },
+ "mactf06": {
+  "map": "mactf06",
+  "flags": {
+   "blue": [
+    -200.0,
+    1702.0,
+    175.0
+   ],
+   "red": [
+    200.0,
+    -1698.0,
+    175.0
+   ]
+  },
+  "red_seed": 79,
+  "red_seed_dist": 7.1,
+  "blue_seed": 14,
+  "blue_seed_dist": 7.1
+ },
+ "lmctf35": {
+  "map": "lmctf35",
+  "flags": {
+   "red": [
+    256.0,
+    2016.0,
+    280.0
+   ],
+   "blue": [
+    2272.0,
+    0.0,
+    280.0
+   ]
+  }
+ },
+ "xmap20": {
+  "map": "xmap20",
+  "flags": {
+   "red": [
+    -768.0,
+    -832.0,
+    -136.0
+   ],
+   "blue": [
+    768.0,
+    832.0,
+    -128.0
+   ]
+  }
+ },
+ "lmctf52": {
+  "map": "lmctf52",
+  "flags": {
+   "red": [
+    -3168.0,
+    1888.0,
+    72.0
+   ],
+   "blue": [
+    1184.0,
+    -2464.0,
+    72.0
+   ]
+  }
+ },
+ "lmctf58": {
+  "map": "lmctf58",
+  "flags": {
+   "red": [
+    -3254.0,
+    2996.0,
+    -113.0
+   ],
+   "blue": [
+    1650.0,
+    2096.0,
+    -113.0
+   ]
+  },
+  "red_seed": 0,
+  "red_seed_dist": 83.0,
+  "blue_seed": 52,
+  "blue_seed_dist": 83.0
+ },
+ "lmctf39": {
+  "map": "lmctf39",
+  "flags": {
+   "red": [
+    1536.0,
+    256.0,
+    208.0
+   ],
+   "blue": [
+    -1600.0,
+    -1920.0,
+    192.0
+   ]
+  }
+ },
+ "lmctf26": {
+  "map": "lmctf26",
+  "flags": {
+   "red": [
+    -256.0,
+    -592.0,
+    24.0
+   ],
+   "blue": [
+    -3008.0,
+    624.0,
+    24.0
+   ]
+  },
+  "red_seed": 0,
+  "red_seed_dist": 8.0,
+  "blue_seed": 84,
+  "blue_seed_dist": 8.0
+ },
+ "lmctf54": {
+  "map": "lmctf54",
+  "flags": {
+   "red": [
+    256.0,
+    -64.0,
+    -260.0
+   ],
+   "blue": [
+    256.0,
+    -1792.0,
+    -256.0
+   ]
+  }
+ },
+ "lmctf21": {
+  "map": "lmctf21",
+  "flags": {
+   "red": [
+    -1088.0,
+    1408.0,
+    -224.0
+   ],
+   "blue": [
+    1088.0,
+    -1408.0,
+    -224.0
+   ]
+  }
  }
 }
