@@ -349,6 +349,7 @@
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_cvars.c" />
     <ClCompile Include="slipgate\sg_util.c" />
+    <ClCompile Include="slipgate\sg_client.c" />
     <ClCompile Include="slipgate\sg_caco.c" />
     <ClCompile Include="slipgate\sg_chat.c" />
     <ClCompile Include="slipgate\sg_combat.c" />

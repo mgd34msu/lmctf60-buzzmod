@@ -205,6 +205,12 @@
     <ClCompile Include="slipgate\sg_cvars.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_util.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_client.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_caco.c">
       <Filter>Source Files</Filter>
     </ClCompile>
