@@ -41,6 +41,18 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## lmctf44 is broken for stealing; strictgrab trial re-pointed (2026-08-12 ~11:10)
+
+The strictgrab liveness peek: both arms IDENTICAL -- 43k stand-arrivals,
+ZERO grabs inside 3s, two carries per arm in seven waves (~one steal per
+50 minutes). The map never reaches the grab decision, so the trial as
+armed was inert-by-map (provenance rule: no verdict). Under the
+delegated format authority the s06/s07 pair moves to lmctf09 (stands on
+record) and the strictgrab clock restarts there. lmctf44 is filed for
+rune diagnosis -- its dither null is re-qualified as a bad map choice.
+lmctf44 stands were derived from carry windows and added to stands.json
+(2D, 5-window basis -- weak; re-derive before any judging use).
+
 ## THE CONVERSION GAP HAS A NAME (2026-08-12 ~09:00)
 
 The flag-home eye on post-deploy film: **98.1% of bot arrivals happen

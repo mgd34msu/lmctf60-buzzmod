@@ -61,7 +61,12 @@ LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-5v5
 # s05+s08 PAIRED 2026-08-07 (owner: everything concurrent that can be):
 # third trial pair, lmctf22 5v5 both, s08 the control arm. lmctf09 7v7
 # coverage was complete; three pairs beat one farm.
-MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf22  lmctf01  lmctf57)
+# s06/s07 moved off lmctf44 2026-08-12: the map produces ~one steal per
+# 50 minutes on BOTH arms (43k stand-arrivals, zero 3s-grabs, strictgrab
+# irrelevant) -- navigation never completes a steal there, so any trial
+# on the pair was inert-by-map (the dither null is re-qualified: bad map
+# choice, not just a dead mechanism). lmctf44 filed for rune diagnosis.
+MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf09  lmctf09   lmctf22  lmctf01  lmctf57)
 FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "5"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
