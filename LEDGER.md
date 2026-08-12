@@ -41,6 +41,19 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## RULE 24 (owner, 2026-08-12 ~12:15): humans are the MINIMUM bar
+
+"Humans should be the minimum bar, and bots should have very few areas
+where they are deficient." The program's standard, restated: at least
+human everywhere, better wherever Rule 23 already holds. The working
+deficiency ledger (below-human dimensions only): (1) grab conversion
+at the stand -- strictgrab trial live; (2) wasted motion / grind --
+sg_patrol is the named fix, game code awaiting sign-off; (3) plateau
+revisit texture -- open, two mechanisms struck; (4) steal/cap volume
+-- downstream of (1); (5) lmctf44 navigation -- benched for rune
+diagnosis. Each deficiency stays on this list until measured at or
+above the human band.
+
 ## RULE 23 (owner, 2026-08-12 ~12:10): bots better than humans stay better
 
 "If bots are better than humans, do not dumb them down." Standing law,
