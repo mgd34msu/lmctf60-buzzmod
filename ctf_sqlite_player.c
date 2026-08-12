@@ -16,6 +16,23 @@
 //   - every sqlite3_stmt is finalised and every handle closed on all paths.
 //   - writes run inside one transaction, so a crash mid-save cannot leave a
 //     player half-written.
+//
+// This file intentionally does NOT use ctf_sqlite_core.h's db_stmt()
+// prepared-statement cache, unlike ctf_sqlite_unidb.c. That cache is safe
+// only when the cache variable and the sqlite3 connection it was prepared
+// against live for the same span of time -- see the banner on db_stmt() in
+// ctf_sqlite_core.h. Here they don't: CTF_LoadPlayer and CTF_SavePlayer
+// each open their OWN sqlite3 handle at the top of the call (a different
+// player's file, or the same player's file reopened later) and close it
+// before returning. A `static sqlite3_stmt *` cached across calls would
+// hold a handle bound to whichever connection was open the first time
+// through -- every later call, for every other player, would hand back a
+// statement pointing at a database file sqlite3_close() already tore down.
+// Every sqlite3_stmt in this file is also used exactly once per call (one
+// row per table, no batch loop), so there is no reset-per-row loop for
+// caching to speed up within a single call either -- the only place this
+// pattern could possibly pay off is across calls, which is precisely the
+// case that is unsafe here. Plain prepare-then-finalize stays correct.
 
 #include <string.h>
 #include <stdio.h>

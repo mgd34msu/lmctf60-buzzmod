@@ -105,3 +105,33 @@ void db_ensure_column(sqlite3 *db, const char *table, const char *column, const 
 	if (sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK)
 		gi.dprintf("stats db: added %s.%s\n", table, column);
 }
+
+sqlite3_stmt *db_stmt(sqlite3 *db, sqlite3_stmt **cache, const char *sql)
+{
+	if (!db || !cache || !sql)
+		return NULL;
+
+	if (*cache)
+	{
+		sqlite3_reset(*cache);
+		sqlite3_clear_bindings(*cache);
+		return *cache;
+	}
+
+	if (sqlite3_prepare_v2(db, sql, -1, cache, NULL) != SQLITE_OK)
+	{
+		*cache = NULL;
+		return NULL;
+	}
+
+	return *cache;
+}
+
+void db_stmt_close(sqlite3_stmt **cache)
+{
+	if (!cache || !*cache)
+		return;
+
+	sqlite3_finalize(*cache);
+	*cache = NULL;
+}

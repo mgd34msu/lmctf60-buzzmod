@@ -66,4 +66,51 @@ qboolean db_open_tuned(const char *path, int flags, sqlite3 **out);
 // text because SQLite has no way to bind an identifier as a parameter.
 void db_ensure_column(sqlite3 *db, const char *table, const char *column, const char *coltype);
 
+// db_stmt() / db_stmt_close(): a per-statement prepare cache.
+//
+// DB_SessionRecord (ctf_sqlite_unidb.c) already proved the idiom this
+// generalizes: prepare a statement once, then for every row just
+// sqlite3_reset() + sqlite3_clear_bindings() it and bind the next row's
+// values, instead of paying sqlite3_prepare_v2's parse-and-plan cost again
+// for every row. db_stmt() takes that from "one caller's private loop
+// variable" to a helper any call site can use for a statement that gets
+// re-run many times against the SAME connection over the connection's
+// life: the caller keeps a file-scope `static sqlite3_stmt *` next to the
+// statement's SQL text -- one cache variable per distinct statement -- and
+// passes its address in every time it would otherwise have called
+// sqlite3_prepare_v2().
+//
+// First call for a given cache pointer prepares the statement and stores
+// the handle. Every later call resets and clears bindings on the cached
+// handle and hands it back ready for fresh sqlite3_bind_* calls -- callers
+// still do their own binding and sqlite3_step(), db_stmt() only owns
+// "prepare vs. reuse." Returns NULL (and leaves *cache untouched) if
+// prepare fails, so callers keep whatever "did this fail" check they had
+// with sqlite3_prepare_v2() directly. Callers must NOT sqlite3_finalize() a
+// handle db_stmt() gave them -- that would free the cached pointer while
+// *cache still points at it, so the next call would return a dangling
+// handle. Finalizing happens once, centrally, in db_stmt_close().
+//
+// A cached handle belongs to exactly one sqlite3 connection: the one it
+// was prepared against. This is safe for ctf_sqlite_unidb.c, where dbconn
+// is one connection held open for the life of the game module. It is NOT
+// safe for ctf_sqlite_player.c: that backend opens a fresh sqlite3 handle
+// per call (a different player's file, or the same player's file reopened
+// later) and closes it before returning, so a statement cached across
+// calls would outlive the connection it was prepared against -- the next
+// call would hand back a handle bound to an already-closed database.
+// ctf_sqlite_player.c deliberately keeps plain prepare-then-finalize per
+// call for that reason; see the comment near the top of that file.
+//
+// db_stmt_close() finalizes a cached handle and clears the pointer, so
+// nothing is left referencing a connection that is about to close. Every
+// db_stmt() cache tied to a connection must be closed before that
+// connection is -- see DB_Conn_Cleanup() in ctf_sqlite_unidb.c, which
+// closes every cache the unified backend fills. This matters because
+// DB_Conn_Start() can open a brand new connection after a prior
+// DB_Conn_Cleanup(): a cache still holding a handle from the OLD
+// connection would otherwise get reused against the new one.
+sqlite3_stmt *db_stmt(sqlite3 *db, sqlite3_stmt **cache, const char *sql);
+void db_stmt_close(sqlite3_stmt **cache);
+
 #endif

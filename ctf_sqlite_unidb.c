@@ -125,6 +125,83 @@ static sqlite3 *dbconn = NULL;
 static char     dbname[CTF_MAX_DBPATH];
 static int      db_last_match_id = -1;
 
+// db_stmt() caches for every statement in this file whose SQL text is fixed
+// at compile time -- see the banner in ctf_sqlite_core.h for what the
+// pattern is and why it is safe here specifically: dbconn is one
+// connection held open for the module's whole life, so a statement
+// prepared against it stays valid for as long as the cache variable does.
+// File-scope on purpose, not function-local static: DB_Conn_Cleanup()
+// below has to be able to reach every one of these to finalize it before
+// dbconn closes, and a function-local static is invisible outside its own
+// function. One variable per distinct statement, named for the function
+// and (where a function uses more than one) the table it targets.
+//
+// A few call sites in this file are deliberately NOT here -- db_count_rows(),
+// DB_Top() and DB_TopFormat() build their SQL text per call from a table or
+// field argument, so there is no single fixed statement to cache; and
+// DB_SessionRecord() is left on its own original prepare-per-call as the
+// origin of this pattern (see the comment on that function). Each of those
+// carries its own comment explaining the omission.
+static sqlite3_stmt *stmt_has_schema = NULL;
+static sqlite3_stmt *stmt_get_id = NULL;
+static sqlite3_stmt *stmt_newid_maxid = NULL;
+static sqlite3_stmt *stmt_newid_insert = NULL;
+static sqlite3_stmt *stmt_newid_game = NULL;
+static sqlite3_stmt *stmt_newid_ctf = NULL;
+static sqlite3_stmt *stmt_newid_char = NULL;
+static sqlite3_stmt *stmt_load_userdata = NULL;
+static sqlite3_stmt *stmt_load_gamestats = NULL;
+static sqlite3_stmt *stmt_load_ctfstats = NULL;
+static sqlite3_stmt *stmt_load_chardata = NULL;
+static sqlite3_stmt *stmt_save_userdata = NULL;
+static sqlite3_stmt *stmt_save_gamestats = NULL;
+static sqlite3_stmt *stmt_save_ctfstats = NULL;
+static sqlite3_stmt *stmt_save_chardata = NULL;
+static sqlite3_stmt *stmt_print_userdata = NULL;
+static sqlite3_stmt *stmt_print_gamestats = NULL;
+static sqlite3_stmt *stmt_print_ctfstats = NULL;
+static sqlite3_stmt *stmt_export = NULL;
+static sqlite3_stmt *stmt_rename = NULL;
+static sqlite3_stmt *stmt_prune_count = NULL;
+static sqlite3_stmt *stmt_match_begin = NULL;
+static sqlite3_stmt *stmt_match_record = NULL;
+static sqlite3_stmt *stmt_match_finish = NULL;
+
+// Finalizes every cache above. Called from every path that closes dbconn,
+// not just DB_Conn_Cleanup() -- a prepared statement still attached to a
+// connection makes sqlite3_close() refuse to actually free it (it returns
+// SQLITE_BUSY and leaves the connection running as a zombie instead), so
+// skipping this on, say, DB_Conn_Start()'s schema-build failure path would
+// leak the connection AND leave a cache pointing at it for nobody to ever
+// close.
+static void db_stmt_close_all(void)
+{
+	db_stmt_close(&stmt_has_schema);
+	db_stmt_close(&stmt_get_id);
+	db_stmt_close(&stmt_newid_maxid);
+	db_stmt_close(&stmt_newid_insert);
+	db_stmt_close(&stmt_newid_game);
+	db_stmt_close(&stmt_newid_ctf);
+	db_stmt_close(&stmt_newid_char);
+	db_stmt_close(&stmt_load_userdata);
+	db_stmt_close(&stmt_load_gamestats);
+	db_stmt_close(&stmt_load_ctfstats);
+	db_stmt_close(&stmt_load_chardata);
+	db_stmt_close(&stmt_save_userdata);
+	db_stmt_close(&stmt_save_gamestats);
+	db_stmt_close(&stmt_save_ctfstats);
+	db_stmt_close(&stmt_save_chardata);
+	db_stmt_close(&stmt_print_userdata);
+	db_stmt_close(&stmt_print_gamestats);
+	db_stmt_close(&stmt_print_ctfstats);
+	db_stmt_close(&stmt_export);
+	db_stmt_close(&stmt_rename);
+	db_stmt_close(&stmt_prune_count);
+	db_stmt_close(&stmt_match_begin);
+	db_stmt_close(&stmt_match_record);
+	db_stmt_close(&stmt_match_finish);
+}
+
 static void db_copy_text(char *dest, size_t destsize, const unsigned char *src)
 {
 	if (!dest || destsize == 0)
@@ -142,19 +219,18 @@ static void db_copy_text(char *dest, size_t destsize, const unsigned char *src)
 
 static qboolean db_has_schema(void)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	qboolean found;
 
-	if (sqlite3_prepare_v2(dbconn,
-			"SELECT name FROM sqlite_master WHERE type='table' AND name='userdata';",
-			-1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_has_schema,
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='userdata';");
+	if (!res)
 	{
 		db_error(dbconn, "schema probe");
 		return false;
 	}
 
 	found = (sqlite3_step(res) == SQLITE_ROW);
-	sqlite3_finalize(res);
 
 	return found;
 }
@@ -207,11 +283,15 @@ qboolean DB_Conn_Start(void)
 	// time is safe and repairs a database that lost a table -- the old code
 	// probed only for `userdata` and skipped the rest if that one existed.
 	{
+		// db_has_schema() below caches stmt_has_schema against this dbconn,
+		// so any failure path from here on has to close that cache before
+		// closing dbconn -- see db_stmt_close_all().
 		qboolean fresh = !db_has_schema();
 
 		if (!build_db())
 		{
 			db_error(dbconn, "creating schema");
+			db_stmt_close_all();
 			sqlite3_close(dbconn);
 			dbconn = NULL;
 			return false;
@@ -256,6 +336,10 @@ void DB_Conn_Cleanup(void)
 	if (!dbconn)
 		return;
 
+	// Every db_stmt() cache above is a handle prepared against THIS dbconn
+	// and has to be finalized before sqlite3_close() -- see db_stmt_close_all().
+	db_stmt_close_all();
+
 	sqlite3_close(dbconn);
 	dbconn = NULL;
 	dbname[0] = '\0';
@@ -263,15 +347,14 @@ void DB_Conn_Cleanup(void)
 
 int DB_GetID(const char *playername)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	int id = -1;
 
 	if (!dbconn || !playername || playername[0] == '\0')
 		return -1;
 
-	if (sqlite3_prepare_v2(dbconn,
-			"SELECT char_idx FROM userdata WHERE playername=?",
-			-1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_get_id, "SELECT char_idx FROM userdata WHERE playername=?");
+	if (!res)
 	{
 		db_error(dbconn, "DB_GetID");
 		return -1;
@@ -282,7 +365,6 @@ int DB_GetID(const char *playername)
 	if (sqlite3_step(res) == SQLITE_ROW)
 		id = sqlite3_column_int(res, 0);
 
-	sqlite3_finalize(res);
 	return id;
 }
 
@@ -291,11 +373,16 @@ int DB_GetID(const char *playername)
 // DB_NewID for game_stats, ctf_stats and character_data -- bound, not built
 // with va(), because va() hands back one rotating static buffer and the
 // caller was passing three live va() results to the same db_exec chain.
-static qboolean db_newid_base_row(sqlite3 *db, const char *sql, int id)
+//
+// `cache` is the caller's own file-scope statement cache: game_stats,
+// ctf_stats and character_data each need their own, since each call passes
+// different SQL text through the same helper and db_stmt() caches by cache
+// pointer, not by SQL text.
+static qboolean db_newid_base_row(sqlite3 *db, sqlite3_stmt **cache, const char *sql, int id)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res = db_stmt(db, cache, sql);
 
-	if (sqlite3_prepare_v2(db, sql, -1, &res, NULL) != SQLITE_OK)
+	if (!res)
 	{
 		db_error(db, "DB_NewID insert");
 		return false;
@@ -304,25 +391,22 @@ static qboolean db_newid_base_row(sqlite3 *db, const char *sql, int id)
 	if (sqlite3_step(res) != SQLITE_DONE)
 	{
 		db_error(db, "DB_NewID insert");
-		sqlite3_finalize(res);
 		return false;
 	}
-	sqlite3_finalize(res);
 	return true;
 }
 
 int DB_NewID(const char *playername)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	int id = -1;
 
 	if (!dbconn)
 		return -1;
 
 	// MAX+1, not COUNT(*): COUNT reissues a live id the moment a row is deleted
-	if (sqlite3_prepare_v2(dbconn,
-			"SELECT IFNULL(MAX(char_idx), -1) + 1 FROM userdata",
-			-1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_newid_maxid, "SELECT IFNULL(MAX(char_idx), -1) + 1 FROM userdata");
+	if (!res)
 	{
 		db_error(dbconn, "DB_NewID");
 		return -1;
@@ -330,9 +414,6 @@ int DB_NewID(const char *playername)
 
 	if (sqlite3_step(res) == SQLITE_ROW)
 		id = sqlite3_column_int(res, 0);
-
-	sqlite3_finalize(res);
-	res = NULL;
 
 	if (id < 0)
 		return -1;
@@ -342,9 +423,8 @@ int DB_NewID(const char *playername)
 	if (!db_begin(dbconn))
 		return -1;
 
-	if (sqlite3_prepare_v2(dbconn,
-			"INSERT INTO userdata VALUES (?,?,\"\",\"\",0,0)",
-			-1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_newid_insert, "INSERT INTO userdata VALUES (?,?,\"\",\"\",0,0)");
+	if (!res)
 	{
 		db_error(dbconn, "DB_NewID insert");
 		db_rollback(dbconn);
@@ -355,21 +435,18 @@ int DB_NewID(const char *playername)
 	if (sqlite3_step(res) != SQLITE_DONE)
 	{
 		db_error(dbconn, "DB_NewID insert");
-		sqlite3_finalize(res);
 		db_rollback(dbconn);
 		return -1;
 	}
-	sqlite3_finalize(res);
-	res = NULL;
 
 	// game_stats / ctf_stats / character_data: every column but char_idx is
 	// zero for a brand new player, so the only bound parameter each of these
 	// three needs is the id itself.
-	if (!db_newid_base_row(dbconn,
+	if (!db_newid_base_row(dbconn, &stmt_newid_game,
 			"INSERT INTO game_stats VALUES (?,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)", id) ||
-		!db_newid_base_row(dbconn,
+		!db_newid_base_row(dbconn, &stmt_newid_ctf,
 			"INSERT INTO ctf_stats VALUES (?,0,0,0,0,0,0,0,0,0,0,0,0,0)", id) ||
-		!db_newid_base_row(dbconn,
+		!db_newid_base_row(dbconn, &stmt_newid_char,
 			"INSERT INTO character_data VALUES (?,0)", id))
 	{
 		db_rollback(dbconn);
@@ -389,7 +466,7 @@ int DB_NewID(const char *playername)
 
 qboolean DB_LoadPlayer(edict_t *player)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	playerstats_t *ps;
 	int id;
 
@@ -409,8 +486,8 @@ qboolean DB_LoadPlayer(edict_t *player)
 		return false;
 	}
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM userdata WHERE char_idx=?",
-			-1, &res, NULL) == SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_load_userdata, "SELECT * FROM userdata WHERE char_idx=?");
+	if (res)
 	{
 		sqlite3_bind_int(res, 1, id);
 		if (sqlite3_step(res) == SQLITE_ROW)
@@ -422,10 +499,9 @@ qboolean DB_LoadPlayer(edict_t *player)
 			ps->playingtime    = sqlite3_column_int(res, 5);
 		}
 	}
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM game_stats WHERE char_idx=?",
-			-1, &res, NULL) == SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_load_gamestats, "SELECT * FROM game_stats WHERE char_idx=?");
+	if (res)
 	{
 		sqlite3_bind_int(res, 1, id);
 		if (sqlite3_step(res) == SQLITE_ROW)
@@ -456,10 +532,9 @@ qboolean DB_LoadPlayer(edict_t *player)
 			ps->rune_resist     = sqlite3_column_int(res, 24);
 		}
 	}
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM ctf_stats WHERE char_idx=?",
-			-1, &res, NULL) == SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_load_ctfstats, "SELECT * FROM ctf_stats WHERE char_idx=?");
+	if (res)
 	{
 		sqlite3_bind_int(res, 1, id);
 		if (sqlite3_step(res) == SQLITE_ROW)
@@ -479,23 +554,21 @@ qboolean DB_LoadPlayer(edict_t *player)
 			ps->defense_carrier = sqlite3_column_int(res, 13);
 		}
 	}
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM character_data WHERE char_idx=?",
-			-1, &res, NULL) == SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_load_chardata, "SELECT * FROM character_data WHERE char_idx=?");
+	if (res)
 	{
 		sqlite3_bind_int(res, 1, id);
 		if (sqlite3_step(res) == SQLITE_ROW)
 			ps->administrator = sqlite3_column_int(res, 1);
 	}
-	sqlite3_finalize(res);
 
 	return true;
 }
 
 qboolean DB_SavePlayer(edict_t *player)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	playerstats_t *ps;
 	const char *name;
 	int id;
@@ -523,7 +596,8 @@ qboolean DB_SavePlayer(edict_t *player)
 	if (!db_begin(dbconn))
 		return false;
 
-	if (sqlite3_prepare_v2(dbconn, DB_UPDATEUDATA, -1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_save_userdata, DB_UPDATEUDATA);
+	if (!res)
 		goto done;
 	sqlite3_bind_text(res, 1, name ? name : "", -1, SQLITE_TRANSIENT);
 	sqlite3_bind_text(res, 2, ps->member_since, -1, SQLITE_TRANSIENT);
@@ -532,9 +606,9 @@ qboolean DB_SavePlayer(edict_t *player)
 	sqlite3_bind_int(res, 5, ps->playingtime);
 	sqlite3_bind_int(res, 6, id);
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, DB_UPDATESTATS, -1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_save_gamestats, DB_UPDATESTATS);
+	if (!res)
 		goto done;
 	sqlite3_bind_int64(res, 1, (sqlite3_int64)ps->shots);
 	sqlite3_bind_int64(res, 2, (sqlite3_int64)ps->shots_hit);
@@ -562,9 +636,9 @@ qboolean DB_SavePlayer(edict_t *player)
 	sqlite3_bind_int(res, 24, ps->rune_resist);
 	sqlite3_bind_int(res, 25, id);
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, DB_UPDATECTFSTATS, -1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_save_ctfstats, DB_UPDATECTFSTATS);
+	if (!res)
 		goto done;
 	sqlite3_bind_int(res, 1, ps->flag_pickups);
 	sqlite3_bind_int(res, 2, ps->flag_captures);
@@ -581,14 +655,13 @@ qboolean DB_SavePlayer(edict_t *player)
 	sqlite3_bind_int(res, 13, ps->defense_carrier);
 	sqlite3_bind_int(res, 14, id);
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, DB_UPDATECDATA, -1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_save_chardata, DB_UPDATECDATA);
+	if (!res)
 		goto done;
 	sqlite3_bind_int(res, 1, ps->administrator);
 	sqlite3_bind_int(res, 2, id);
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
-	sqlite3_finalize(res); res = NULL;
 
 	ok = db_commit(dbconn);
 
@@ -598,8 +671,6 @@ done:
 		db_error(dbconn, "DB_SavePlayer");
 		db_rollback(dbconn);
 	}
-	if (res)
-		sqlite3_finalize(res);
 
 	return ok;
 }
@@ -656,6 +727,12 @@ static const char *db_table_for(const char *field)
 	return NULL;
 }
 
+// Not converted to db_stmt(): `sql` is built fresh from `table` on every
+// call, and this one function serves three different tables (see
+// DB_Status below), so a single cache pointer would hand back a statement
+// prepared against whichever table asked first, not the one this call
+// wants. db_stmt() caches by cache-pointer identity, not by SQL text, so
+// it only helps when a call site's SQL text is fixed at compile time.
 static int db_count_rows(const char *table)
 {
 	sqlite3_stmt *res = NULL;
@@ -721,6 +798,10 @@ qboolean DB_Reset(void)
 	return true;
 }
 
+// Not converted to db_stmt(): the query text is assembled per call from
+// `field` and `table` (see the whitelist above), so it varies with every
+// admin command invocation instead of being fixed at compile time -- the
+// same reason db_count_rows() above stays on plain prepare/finalize.
 void DB_Top(const char *field, int count)
 {
 	const char *table = db_table_for(field);
@@ -791,7 +872,7 @@ void DB_Top(const char *field, int count)
 
 qboolean DB_PrintPlayer(const char *playername)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	int id;
 
 	if (!dbconn && !DB_Conn_Start())
@@ -807,8 +888,8 @@ qboolean DB_PrintPlayer(const char *playername)
 
 	gi.cprintf(NULL, PRINT_HIGH, "statsdb: %s (char_idx %d)\n", playername, id);
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM userdata WHERE char_idx=?",
-			-1, &res, NULL) == SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_print_userdata, "SELECT * FROM userdata WHERE char_idx=?");
+	if (res)
 	{
 		sqlite3_bind_int(res, 1, id);
 		if (sqlite3_step(res) == SQLITE_ROW)
@@ -822,10 +903,9 @@ qboolean DB_PrintPlayer(const char *playername)
 				sqlite3_column_int(res, 4), sqlite3_column_int(res, 5));
 		}
 	}
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM game_stats WHERE char_idx=?",
-			-1, &res, NULL) == SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_print_gamestats, "SELECT * FROM game_stats WHERE char_idx=?");
+	if (res)
 	{
 		sqlite3_bind_int(res, 1, id);
 		if (sqlite3_step(res) == SQLITE_ROW)
@@ -839,10 +919,9 @@ qboolean DB_PrintPlayer(const char *playername)
 				sqlite3_column_int(res, 1), sqlite3_column_int(res, 2));
 		}
 	}
-	sqlite3_finalize(res); res = NULL;
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT * FROM ctf_stats WHERE char_idx=?",
-			-1, &res, NULL) == SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_print_ctfstats, "SELECT * FROM ctf_stats WHERE char_idx=?");
+	if (res)
 	{
 		sqlite3_bind_int(res, 1, id);
 		if (sqlite3_step(res) == SQLITE_ROW)
@@ -858,13 +937,15 @@ qboolean DB_PrintPlayer(const char *playername)
 				sqlite3_column_int(res, 8), sqlite3_column_int(res, 9));
 		}
 	}
-	sqlite3_finalize(res);
 
 	return true;
 }
 
 // Shared by "sv statsdb top" and the player-facing "cmd rank": same whitelist,
 // same query, one writes to the console and the other to a client.
+//
+// Not converted to db_stmt(): same reason as DB_Top() above -- the SQL text
+// depends on `field` and `table` and is rebuilt every call.
 qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize)
 {
 	const char *table = db_table_for(field);
@@ -944,7 +1025,7 @@ qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize)
 
 qboolean DB_Export(const char *path)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	FILE *f;
 	int rows = 0;
 
@@ -963,15 +1044,16 @@ qboolean DB_Export(const char *path)
 		"\tflag_pickups\tflag_captures\tflag_returns\tflag_kills"
 		"\toffense_kills\tdefense_kills\tassists\tmax_cap_streak\tsweeps\n");
 
-	if (sqlite3_prepare_v2(dbconn,
-			"SELECT u.playername, u.member_since, u.last_played, u.playtime_total,"
-			" g.shots, g.shots_hit, g.frags, g.fragged, g.num_sprees, g.max_streak, g.suicides,"
-			" c.flag_pickups, c.flag_captures, c.flag_returns, c.flag_kills,"
-			" c.offense_kills, c.defense_kills, c.assists, c.max_cap_streak, c.sweeps"
-			" FROM userdata u"
-			" JOIN game_stats g ON g.char_idx = u.char_idx"
-			" JOIN ctf_stats  c ON c.char_idx = u.char_idx"
-			" ORDER BY u.playername", -1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_export,
+		"SELECT u.playername, u.member_since, u.last_played, u.playtime_total,"
+		" g.shots, g.shots_hit, g.frags, g.fragged, g.num_sprees, g.max_streak, g.suicides,"
+		" c.flag_pickups, c.flag_captures, c.flag_returns, c.flag_kills,"
+		" c.offense_kills, c.defense_kills, c.assists, c.max_cap_streak, c.sweeps"
+		" FROM userdata u"
+		" JOIN game_stats g ON g.char_idx = u.char_idx"
+		" JOIN ctf_stats  c ON c.char_idx = u.char_idx"
+		" ORDER BY u.playername");
+	if (!res)
 	{
 		db_error(dbconn, "DB_Export");
 		fclose(f);
@@ -991,7 +1073,6 @@ qboolean DB_Export(const char *path)
 		rows++;
 	}
 
-	sqlite3_finalize(res);
 	fclose(f);
 
 	gi.cprintf(NULL, PRINT_HIGH, "statsdb: exported %d player(s) to %s\n", rows, path);
@@ -1040,7 +1121,7 @@ qboolean DB_Backup(const char *path)
 
 qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	int oldid, newid;
 
 	if (!dbconn && !DB_Conn_Start())
@@ -1058,9 +1139,8 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 	// Simple case: the new name is unused, so just relabel the row.
 	if (newid < 0)
 	{
-		if (sqlite3_prepare_v2(dbconn,
-				"UPDATE userdata SET playername=? WHERE char_idx=?",
-				-1, &res, NULL) != SQLITE_OK)
+		res = db_stmt(dbconn, &stmt_rename, "UPDATE userdata SET playername=? WHERE char_idx=?");
+		if (!res)
 		{
 			db_error(dbconn, "DB_RenamePlayer");
 			return false;
@@ -1071,10 +1151,8 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 		if (sqlite3_step(res) != SQLITE_DONE)
 		{
 			db_error(dbconn, "DB_RenamePlayer");
-			sqlite3_finalize(res);
 			return false;
 		}
-		sqlite3_finalize(res);
 
 		gi.cprintf(NULL, PRINT_HIGH, "statsdb: \"%s\" is now \"%s\"\n", oldname, newname);
 		return true;
@@ -1163,7 +1241,9 @@ qboolean DB_RenamePlayer(const char *oldname, const char *newname)
 
 int DB_Prune(int days)
 {
-	sqlite3_stmt *res = NULL;
+	// One cache for both the before- and after-count: same SQL text either
+	// time, so they are the same statement as far as db_stmt() is concerned.
+	sqlite3_stmt *res;
 	char cutoff[32];
 	time_t when;
 	struct tm *lt;
@@ -1184,10 +1264,9 @@ int DB_Prune(int days)
 	// sorts correctly as text
 	strftime(cutoff, sizeof(cutoff), "%Y-%m-%d %H:%M:%S", lt);
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT COUNT(*) FROM userdata", -1, &res, NULL) == SQLITE_OK &&
-		sqlite3_step(res) == SQLITE_ROW)
+	res = db_stmt(dbconn, &stmt_prune_count, "SELECT COUNT(*) FROM userdata");
+	if (res && sqlite3_step(res) == SQLITE_ROW)
 		before = sqlite3_column_int(res, 0);
-	sqlite3_finalize(res);
 
 	if (!db_begin(dbconn))
 		return -1;
@@ -1229,10 +1308,9 @@ int DB_Prune(int days)
 	if (!db_commit(dbconn))
 		return -1;
 
-	if (sqlite3_prepare_v2(dbconn, "SELECT COUNT(*) FROM userdata", -1, &res, NULL) == SQLITE_OK &&
-		sqlite3_step(res) == SQLITE_ROW)
+	res = db_stmt(dbconn, &stmt_prune_count, "SELECT COUNT(*) FROM userdata");
+	if (res && sqlite3_step(res) == SQLITE_ROW)
 		after = sqlite3_column_int(res, 0);
-	sqlite3_finalize(res);
 
 	return before - after;
 }
@@ -1260,7 +1338,7 @@ static void db_now(char *out, size_t outsize)
 
 int DB_MatchBegin(const char *mapname)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	char started[32];
 	int id = -1;
 
@@ -1269,10 +1347,11 @@ int DB_MatchBegin(const char *mapname)
 
 	db_now(started, sizeof(started));
 
-	if (sqlite3_prepare_v2(dbconn,
-			"INSERT INTO matches (mapname, started, ended, duration,"
-			" red_score, blue_score, red_caps, blue_caps, winner)"
-			" VALUES (?,?,'',0,0,0,0,0,0)", -1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_match_begin,
+		"INSERT INTO matches (mapname, started, ended, duration,"
+		" red_score, blue_score, red_caps, blue_caps, winner)"
+		" VALUES (?,?,'',0,0,0,0,0,0)");
+	if (!res)
 	{
 		db_error(dbconn, "DB_MatchBegin");
 		return -1;
@@ -1289,7 +1368,6 @@ int DB_MatchBegin(const char *mapname)
 	else
 		db_error(dbconn, "DB_MatchBegin");
 
-	sqlite3_finalize(res);
 	return id;
 }
 
@@ -1306,7 +1384,7 @@ int DB_MatchLastId(void)
 
 void DB_MatchRecord(edict_t *player, int match_id, int team)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	int id;
 	int i = 1;
 	long samples;
@@ -1325,20 +1403,20 @@ void DB_MatchRecord(edict_t *player, int match_id, int team)
 	if (id < 0)
 		return;
 
-	if (sqlite3_prepare_v2(dbconn,
-			"INSERT INTO match_players VALUES ("
-			"?,?,?,?,"                       // match, char, name, team
-			"?,?,?,?,?,?,?,"                 // score frags fragged deaths suicides shots hits
-			"?,?,?,"                         // rail shot hit kill
-			"?,?,"                           // damage given received
-			"?,?,"                           // max_streak sprees
-			"?,?,?,?,?,"                     // pickups caps returns fkills drops
-			"?,?,?,?,?,"                     // off_kills def_base def_flag def_carrier assists
-			"?,?,"                           // cap streak sweeps
-			"?,?,?,?,"                       // items
-			"?,?,?,?,"                       // runes
-			"?,?)",                          // ping_avg playtime
-			-1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_match_record,
+		"INSERT INTO match_players VALUES ("
+		"?,?,?,?,"                       // match, char, name, team
+		"?,?,?,?,?,?,?,"                 // score frags fragged deaths suicides shots hits
+		"?,?,?,"                         // rail shot hit kill
+		"?,?,"                           // damage given received
+		"?,?,"                           // max_streak sprees
+		"?,?,?,?,?,"                     // pickups caps returns fkills drops
+		"?,?,?,?,?,"                     // off_kills def_base def_flag def_carrier assists
+		"?,?,"                           // cap streak sweeps
+		"?,?,?,?,"                       // items
+		"?,?,?,?,"                       // runes
+		"?,?)");                         // ping_avg playtime
+	if (!res)
 	{
 		db_error(dbconn, "DB_MatchRecord");
 		return;
@@ -1403,14 +1481,12 @@ void DB_MatchRecord(edict_t *player, int match_id, int team)
 
 	if (sqlite3_step(res) != SQLITE_DONE)
 		db_error(dbconn, "DB_MatchRecord");
-
-	sqlite3_finalize(res);
 }
 
 qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
                         int red_caps, int blue_caps, int winner, int duration)
 {
-	sqlite3_stmt *res = NULL;
+	sqlite3_stmt *res;
 	char ended[32];
 	qboolean ok = false;
 
@@ -1421,10 +1497,10 @@ qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
 
 	db_now(ended, sizeof(ended));
 
-	if (sqlite3_prepare_v2(dbconn,
-			"UPDATE matches SET ended=?, duration=?, red_score=?, blue_score=?,"
-			" red_caps=?, blue_caps=?, winner=? WHERE match_id=?",
-			-1, &res, NULL) != SQLITE_OK)
+	res = db_stmt(dbconn, &stmt_match_finish,
+		"UPDATE matches SET ended=?, duration=?, red_score=?, blue_score=?,"
+		" red_caps=?, blue_caps=?, winner=? WHERE match_id=?");
+	if (!res)
 	{
 		db_error(dbconn, "DB_MatchFinish");
 		return false;
@@ -1443,7 +1519,6 @@ qboolean DB_MatchFinish(int match_id, int red_score, int blue_score,
 	if (!ok)
 		db_error(dbconn, "DB_MatchFinish");
 
-	sqlite3_finalize(res);
 	return ok;
 }
 
@@ -1568,6 +1643,18 @@ static int sess_major_items(edict_t *ent)
  * the server declined to track and no leaderboard reading match_players sees
  * a bot appear. A query over this table that wants humans only says
  * "WHERE is_bot = 0".
+ *
+ * Not converted to db_stmt(): this function is where the prepare-once,
+ * reset-and-rebind-per-row idiom that db_stmt() generalizes was proven in
+ * the first place (see the banner in ctf_sqlite_core.h). It already
+ * prepares INSERT INTO sg_session_events once per call and resets it for
+ * every client row in the loop below; the only difference between that and
+ * db_stmt() is that this prepare is scoped to one call (finalized at the
+ * end) rather than cached for the connection's whole life. Moving it onto
+ * db_stmt() would change when the statement gets finalized without
+ * changing anything about what gets written, which is exactly the kind of
+ * edit STYLE rule 9 says stays out of a behavior-neutral pass -- so this
+ * stays as the pattern's origin rather than becoming its 24th call site.
  *
  * Returns the number of rows written.
  */
