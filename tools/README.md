@@ -345,6 +345,40 @@ The shared parsing library and the mining/report/forensics scripts built on it. 
 
 ---
 
+## BRING YOUR OWN DEMOS
+
+The human demo corpus itself is NOT distributed with this repository —
+the `.dm2` files we mined are private recordings. Everything derived
+from them ships (priors, baked sidecars, the mined chat corpus, the
+manifest), and every one of those artifacts can be regenerated from
+YOUR own demo collection:
+
+1. **Drop your client-recorded `.dm2` files** into the fleet game
+   directory's `demos/` folder (default
+   `~/Games/Quake2/lmctf-hooktest/demos/`; `setup.sh` checks for it).
+   Any LMCTF protocol-34 demos work — your own recordings, ref-cam
+   captures, tournament archives.
+2. **Index them**: `corpus-manifest.csv` is six columns
+   (`filename, map, duration_s, players, shape, usable`); regenerate
+   it by running any walker over your set — `demoents.py <demos>`
+   prints per-demo map/track counts, and a demo is "usable" when it
+   has real players and enough duration for the instrument floors
+   (300s for judging sheets).
+3. **Re-mine the priors and traffic** for the maps you play:
+   `demorune.py` (route traffic) → `humanbake.py`; `escapee.py`
+   (carrier escapes) → `escapebake.py`; `demodefense.py` (defensive
+   posts) → `defbake.py`; `escapepriors.py` (exit-bearing priors) →
+   `escape-priors.json`; `chatmine.py` (chat voice) →
+   `chat-corpus.json`. Each tool's section above has the exact
+   command line.
+4. **Respect your recorders**: `pov-rules.txt` is the pattern for
+   excluding specific recorders' POV-derived kinematics while keeping
+   their entity-layer data — edit it for your own corpus.
+
+The shipped versions of these artifacts reflect OUR corpus (2020-2023
+LMCTF pub play, 268 demos); they work as-is, but the more your maps
+and community differ from that, the more regeneration pays.
+
 ## FIXTURES & DATA
 
 ### `stands.json`
@@ -400,7 +434,7 @@ Pinned film-venv dependencies (`contourpy`, `cycler`, `fonttools`, `kiwisolver`,
 
 - **`humanbake.py` and `escapebake.py` are near-duplicate implementations** (identical struct formats, identical log-scaling tier logic, differing only in which JSON field they read and which sidecar extension/magic they write). This is exactly the copy-paste-drift risk `TOOLING.md`'s tooling law #4 warns about ("a detector lives in one importable place"); the stale docstring above is plausibly a direct symptom of that copy-paste. Worth factoring into one parameterized baker if either file changes again.
 
-- **`tools/human/` contains three file families with no current producer**: `<map>.flaglive.json`, `carrywindows.json`, and the `ents/<map>.ents.json` + `ents/playersamples.json` files. Nothing in `tools/*.py` writes or reads any of these names (confirmed by grep for `flaglive`, `carrywindows`, and `.ents.json` across every `.py` file in this directory). They read as outputs of a removed, renamed, or not-yet-committed instrument — worth confirming with the owner before either relying on them or cleaning them up.
+- **(RESOLVED 2026-08-12)** `tools/human/`'s producer-less file families are kept as reference data from superseded one-off analyses — documented in FIXTURES & DATA; safe to ignore.
 
 - **(REMOVED 2026-08-12)** `tools/observer-stop` -- (empty file, tools/ root) is not referenced by any `.sh` or `.py` script in this directory (confirmed by grep). The fleet's actual stop file is `waveloop-stop` (checked by `waveloop.sh` and `wavewatch.sh`). `observer-stop` looks like either a dead-man's switch for a removed/unbuilt "observer" script, or a manual note file that never got wired to anything — currently inert either way.
 
