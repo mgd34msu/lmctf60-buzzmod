@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
+#include "slipgate/sg_cvars.h"
 
 
 /*
@@ -488,7 +489,7 @@ static void Grenade_Explode (edict_t *ent)
 	 * zero obituaries and nothing in the logs could say whether the miss
 	 * was flight (mid-air pop), placement (empty stand), or timing. */
 	if ((ent->spawnflags & 1) && ent->owner && ent->owner->client &&
-	    gi.cvar("sg_debug", "0", 0)->value)
+	    sg_cv.debug->value)
 	{
 		float best = 99999.0f;
 		int oteam = ent->owner->client->ctf.teamnum, k;

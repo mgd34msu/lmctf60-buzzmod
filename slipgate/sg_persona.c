@@ -9,6 +9,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_persona.h"
+#include "slipgate/sg_cvars.h"
 
 /* ------------------------------------------------------------------ table
  *
@@ -125,7 +126,7 @@ static cvar_t				*sg_persona;
 static qboolean Persona_Enabled(void)
 {
 	if (!sg_persona)
-		sg_persona = gi.cvar("sg_persona", "1", 0);
+		sg_persona = sg_cv.persona;
 	return (qboolean)(sg_persona && sg_persona->value != 0.0f);
 }
 
@@ -286,7 +287,7 @@ float SG_PersonaBanterFreq(edict_t *ent)
  */
 float SG_PersonaBanterFreqSlot(int cl)
 {
-	if (!gi.cvar("sg_persona", "1", 0)->value)
+	if (!sg_cv.persona->value)
 		return 0.0f;
 	/* cl is a CLIENT index; personas are bound per-client at join
 	 * (persona_of), and roster slot != client slot -- the spawn scan

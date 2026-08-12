@@ -37,6 +37,7 @@
 #include "slipgate/sg_net.h"                    /* SG_BotClientCommand -- the chat route */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
+#include "slipgate/sg_cvars.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
@@ -147,8 +148,8 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 	 * so they ship dark until the film says the honesty is worth it.
 	 */
 	{
-		float cone = gi.cvar("sg_beliefcone", "0", 0)->value;
-		float range = gi.cvar("sg_beliefrange", "0", 0)->value;
+		float cone = sg_cv.beliefcone->value;
+		float range = sg_cv.beliefrange->value;
 		vec3_t to;
 
 		VectorSubtract(mid, eye, to);
@@ -477,7 +478,7 @@ int					sg_caco_num_items;
  */
 qboolean SG_ItemComm(void)
 {
-	return (gi.cvar("sg_itemcomm", "1", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.itemcomm->value > 0.0f) ? true : false;
 }
 
 /* row index for a team number, and the "not on a team" case folded to red so
@@ -1510,7 +1511,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		/* sampled 1-in-32: wave 390 measured ~9k accepted events per
 		 * game on a busy server -- the ear works, the log need not
 		 * relive every footstep */
-		if (gi.cvar("sg_debug", "0", 0)->value && !(sg_ear_said++ & 31))
+		if (sg_cv.debug->value && !(sg_ear_said++ & 31))
 			gi.dprintf("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
 			           "err<=%.0f seed=%i\n",
 			           b->client->pers.netname,
@@ -1697,7 +1698,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 			}
 		}
 
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		if (sg_cv.debug->value)
 			gi.dprintf("HITFROM %s<%s dmg=%d mod=%d %s seed=%d dir=%.2f,%.2f,%.2f\n",
 			           victim->client->pers.netname,
 			           attacker->client->pers.netname, damage, mod,
@@ -1780,7 +1781,7 @@ static unsigned	sg_rail_said;       /* RAILSHOT print sampler */
 
 qboolean SG_RailRhythm(void)
 {
-	return (gi.cvar("sg_railrhythm", "0", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.railrhythm->value > 0.0f) ? true : false;
 }
 
 void SG_NoteRailShot(edict_t *shooter)
@@ -1823,7 +1824,7 @@ void SG_NoteRailShot(edict_t *shooter)
 
 		/* sampled 1-in-8: a two-railer server fires on the order of a
 		 * shot a second and the log is for reading */
-		if (gi.cvar("sg_debug", "0", 0)->value && !(sg_rail_said++ & 7))
+		if (sg_cv.debug->value && !(sg_rail_said++ & 7))
 			gi.dprintf("RAILSHOT %s heard %s reload=%.1f window=%.1f\n",
 			           b->client->pers.netname,
 			           shooter->client->pers.netname,

@@ -55,6 +55,7 @@
 #include "p_stats.h"                    /* stats_get -- the scoreboard's own count */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"
+#include "slipgate/sg_cvars.h"
 
 /* ------------------------------------------------------------- constants */
 
@@ -1656,7 +1657,7 @@ void SG_ChatSee(edict_t *viewer)
 
 static qboolean SG_Radio(void)
 {
-	return (gi.cvar("sg_radio", "1", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.radio->value > 0.0f) ? true : false;
 }
 
 /*
@@ -2054,7 +2055,7 @@ static const char *chat_arm_src[] = {
  */
 static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 {
-	qboolean	dbg = (gi.cvar("sg_debug", "0", 0)->value > 0.0f)
+	qboolean	dbg = (sg_cv.debug->value > 0.0f)
 	                ? true : false;
 	const char	*what, *src;
 
@@ -2102,7 +2103,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 	{
 		/* no clock -- the record IS the arm; see chat_mega_taker */
 		chat_mega_taker[ti] = q->arm_who;
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		if (sg_cv.debug->value)
 			gi.dprintf("SG itemcomm: mega taker recorded for team %d "
 			           "(client %d) -- clock waits on the obituary\n",
 			           ti + 1, q->arm_who);
@@ -2269,7 +2270,7 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src,
 	                   (kind == SG_ARM_MEGATAKE && taker && taker->client)
 	                       ? (int)(taker->client - game.clients) : -1) &&
 	    kind != SG_ARM_NONE &&
-	    gi.cvar("sg_debug", "0", 0)->value > 0.0f)
+	    sg_cv.debug->value > 0.0f)
 		gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
 		           "(topic busy) -- no clock armed\n",
 		           chat_arm_src[(src >= 0 && src < 3) ? src : 0], name, team);
@@ -2309,7 +2310,7 @@ void SG_ChatMegaDeath(edict_t *victim)
 			chat_watch[i].back_at[ti] = level.time + 21.0f +
 			    (float)(rand() % 20) / 10.0f;
 			chat_watch[i].soon_said[ti] = false;
-			if (gi.cvar("sg_debug", "0", 0)->value)
+			if (sg_cv.debug->value)
 				gi.dprintf("SG itemcomm: mega taker died -- team %d "
 				           "clock armed, back at %.1f\n",
 				           ti + 1, chat_watch[i].back_at[ti]);
@@ -2383,7 +2384,7 @@ static void Chat_SoonSay(int ti, edict_t *item, const char *name,
 		return;
 	secs = (int)(back_at - level.time + 0.5f);
 
-	if (gi.cvar("sg_timercall", "0", 0)->value > 0.0f)
+	if (sg_cv.timercall->value > 0.0f)
 		shortname = Chat_TimerShort(item);
 	if (shortname)
 	{
@@ -3802,7 +3803,7 @@ static void Chat_HearItemCall(edict_t *speaker,
 	}
 	back_at = level.time + respawn;
 
-	dbg = (gi.cvar("sg_debug", "0", 0)->value > 0.0f) ? true : false;
+	dbg = (sg_cv.debug->value > 0.0f) ? true : false;
 	what = Chat_ItemName(g_edicts + ent);
 	if (!what)
 		what = "item";

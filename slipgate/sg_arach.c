@@ -40,6 +40,7 @@ qboolean	ClientConnect(edict_t *ent, char *userinfo);
 void		ClientBegin(edict_t *ent);
 void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_net.h"
+#include "slipgate/sg_cvars.h"
 
 #define SG_MAXBOTS      16
 #define FIELD_INF       0x3fffffff
@@ -487,7 +488,7 @@ static void Clock_Frame(void)
 {
 	int t;
 
-	if (gi.cvar("sg_clockplay", "0", 0)->value <= 0.0f)
+	if (sg_cv.clockplay->value <= 0.0f)
 	{
 		/*
 		 * Off is OFF, immediately. A latched posture must not outlive
@@ -553,7 +554,7 @@ static void Clock_Frame(void)
 		 * calls, not restated here: a debug line that describes a
 		 * different lean than the one the bots take is worse than no
 		 * line at all */
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		if (sg_cv.debug->value)
 			gi.dprintf("CLOCKPLAY %s: %s, %+d defender (caps %d-%d, "
 			           "%.0f%% clock left)\n",
 			           t ? "blue" : "red", sg_clock_names[want],
@@ -1327,7 +1328,7 @@ static float Rune_RoleFactor(int role, int entnum)
 			float w2 = tab[i].w[role];
 
 			if (role == SG_ROLE_ESCORT && i >= 2 && i <= 3 &&
-			    gi.cvar("sg_runetoss", "2", 0)->value >= 2)
+			    sg_cv.runetoss->value >= 2)
 				w2 = 1.40f;
 			return w2;
 		}
@@ -1566,7 +1567,7 @@ static void Tilt_Note(edict_t *e, sg_bot_t *bot)
 	int		team = e->client->ctf.teamnum;
 	int		ci, k, killer = -1;
 
-	if (gi.cvar("sg_tilt", "0", 0)->value <= 0.0f)
+	if (sg_cv.tilt->value <= 0.0f)
 		return;
 
 	ci = (int)(e->client - game.clients);
@@ -1610,7 +1611,7 @@ static void Tilt_Note(edict_t *e, sg_bot_t *bot)
 	 * human runs on is "the first N seconds of the next life", and the
 	 * corpse's second and a half on the floor is not part of it */
 
-	if (gi.cvar("sg_debug", "0", 0)->value)
+	if (sg_cv.debug->value)
 		gi.dprintf("TILT %s died seed=%d lane=%d killer=%d kseed=%d "
 		           "window=%.0f%s\n",
 		           e->client->pers.netname, bot->tilt_seed,
@@ -1635,7 +1636,7 @@ float SG_TiltCaution(edict_t *ent)
 {
 	int i;
 
-	if (gi.cvar("sg_tilt", "0", 0)->value <= 0.0f)
+	if (sg_cv.tilt->value <= 0.0f)
 		return 1.0f;
 	for (i = 0; i < SG_MAXBOTS; i++)
 		if (sg_bots[i].active && sg_bots[i].ent == ent)
@@ -1940,7 +1941,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		 * decorrelate and wander the way two unrelated rosters do.
 		 * The existing states below still own the astray cases.
 		 */
-		if (gi.cvar("sg_teamskew", "0", 0)->value > 0.0f && size >= 4)
+		if (sg_cv.teamskew->value > 0.0f && size >= 4)
 		{
 			static float ts_until[2];
 			static int ts_skew[2];
@@ -1975,7 +1976,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			 * score while we hold theirs), ours-astray keeps the
 			 * watchman. Off, the old pin stands.
 			 */
-			if (gi.cvar("sg_duelroles", "0", 0)->value)
+			if (sg_cv.duelroles->value)
 				defenders_wanted = theirs_astray ? 0 : 1;
 			else
 				defenders_wanted = 1;
@@ -2016,7 +2017,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		/* role-flap diagnostic: two bots alternated DEFEND/ATTACK every
 		 * frame of it18 (600 flips/600 samples) -- print the decision
 		 * inputs on each change so the oscillating input names itself */
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		if (sg_cv.debug->value)
 		{
 			static int last_dw[SG_MAXBOTS], last_oc[SG_MAXBOTS];
 			int me = (int)(bot - sg_bots);
@@ -2111,7 +2112,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				{
 					esc_carrier[et] = cc;
 					esc_on[et] = ((rand() % 100) <
-					    (int)gi.cvar("sg_escortdose", "35", 0)->value);
+					    (int)sg_cv.escortdose->value);
 				}
 				if (esc_on[et])
 					return SG_ROLE_ESCORT;
@@ -2152,7 +2153,7 @@ static float Surface_At(int seed, const sg_weights_t *w,
 	v = w->objective * (float)goal_field[seed];
 	if (sg_cur_role == SG_ROLE_ATTACK)
 	{
-		float ao = gi.cvar("sg_atkobj", "125", 0)->value / 100.0f;
+		float ao = sg_cv.atkobj->value / 100.0f;
 
 		if (ao != 1.0f)
 			v = w->objective * ao * (float)goal_field[seed];
@@ -2166,13 +2167,13 @@ static float Surface_At(int seed, const sg_weights_t *w,
 	 * cannot cost caps. Zero everywhere on flat-stand maps.
 	 */
 	if (sg_cur_role == SG_ROLE_ATTACK &&
-	    gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
+	    sg_cv.shelfcost->value > 0.0f)
 	{
 		int ti9 = (sg_cur_team == CTF_TEAM_RED) ? 0 : 1;
 
 		if (sg_fields.shelf_cliff[ti9] &&
 		    sg_fields.shelf_cliff[ti9][seed] > 0)
-			v += gi.cvar("sg_shelfcost", "0", 0)->value *
+			v += sg_cv.shelfcost->value *
 			     (float)sg_fields.shelf_cliff[ti9][seed];
 	}
 
@@ -2196,7 +2197,7 @@ static float Surface_At(int seed, const sg_weights_t *w,
 	 * descent itself goes under the microscope.
 	 */
 	if (sg_cur_role == SG_ROLE_CARRY &&
-	    gi.cvar("sg_nakedcarry", "0", 0)->value)
+	    sg_cv.nakedcarry->value)
 		return v;
 
 	/* the danger dimension: learned, decayed, team-indexed (set by the
@@ -2211,7 +2212,7 @@ static float Surface_At(int seed, const sg_weights_t *w,
 			 * Hurt carriers keep the detour; health is worth a stop. */
 			v -= (sg_cur_push ||
 			      (sg_cur_role == SG_ROLE_CARRY && sg_cur_health > 60 &&
-			       gi.cvar("sg_legcarrier", "0", 0)->value >= 3.0f))
+			       sg_cv.legcarrier->value >= 3.0f))
 			     ? 0.0f :
 			     1500.0f * Detour_Value(seed, c, goal_field, w->item[c]);
 
@@ -2255,7 +2256,7 @@ static float Surface_At(int seed, const sg_weights_t *w,
 		 */
 		if (sg_cur_role != SG_ROLE_ESCORT)
 		{
-			cvar_t *lw = gi.cvar("sg_lonewolf", "1", 0);
+			cvar_t *lw = sg_cv.lonewolf;
 
 			if (lw && lw->value >= 0.0f)
 				csup *= lw->value;
@@ -2322,7 +2323,7 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 	 * (-0.8/100ms vs the pub human's +3.0). In air, derive from the
 	 * engine's real constant.
 	 */
-	if (accel < 5.0f && gi.cvar("sg_airgain", "0", 0)->value)
+	if (accel < 5.0f && sg_cv.airgain->value)
 		wishspeed = 30.0f;
 
 	accelspeed = accel * frametime * wishspeed;
@@ -2359,7 +2360,7 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 		th = -th;
 
 	if (accel < 5.0f &&
-	    gi.cvar("sg_airgain", "0", 0)->value >= 2 &&
+	    sg_cv.airgain->value >= 2 &&
 	    th > SG_AIRLEAN_CAP)
 		th = SG_AIRLEAN_CAP;
 
@@ -2831,7 +2832,7 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		 * hold is FOR (wave 289-290 read: relaunches +45% where armed) */
 		/* a chain holds the same jump for the same reason, without
 		 * needing sg_landtick set: the hold IS the chain */
-		if ((gi.cvar("sg_landtick", "0", 0)->value ||
+		if ((sg_cv.landtick->value ||
 		     (air && air->chain)) &&
 		    run_link && open_ahead &&
 		    e->velocity[2] < 0.0f && sp > 240.0f)
@@ -2950,7 +2951,7 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 	vec3_t	a, b, c;
 	int		dp, k, nx = -1;
 
-	dp = (int)gi.cvar("sg_drawplan", "0", 0)->value;
+	dp = (int)sg_cv.drawplan->value;
 	if (!dp || !sg_rune || !e || !e->client || !e->inuse)
 		return;
 	if (dp > 0 && dp - 1 != (int)(e->client - game.clients))
@@ -3094,7 +3095,7 @@ static qboolean Lead_On(void)
 	 * early for, and the two cvars are one feature in two halves */
 	if (!SG_ItemComm())
 		return false;
-	return (gi.cvar("sg_itemlead", "1", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.itemlead->value > 0.0f) ? true : false;
 }
 
 static void Lead_Abort(sg_bot_t *bot, const char *why)
@@ -3103,7 +3104,7 @@ static void Lead_Abort(sg_bot_t *bot, const char *why)
 
 	if (!bot->lead_ent)
 		return;
-	if (gi.cvar("sg_debug", "0", 0)->value)
+	if (sg_cv.debug->value)
 		gi.dprintf("ITEMLEAD %s abort (%s)\n", e->client->pers.netname, why);
 
 	/*
@@ -3352,7 +3353,7 @@ static const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	b->claimed_until = level.time + SG_LEAD_LEASE;
 	bot->tac_seed = -1;                 /* a new strategy retires the tactic */
 
-	if (gi.cvar("sg_debug", "0", 0)->value)
+	if (sg_cv.debug->value)
 		gi.dprintf("ITEMLEAD %s -> %s: T %.1f (in %.1fs) lead %.1fs "
 		           "travel %.1fs\n",
 		           e->client->pers.netname,
@@ -3527,7 +3528,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * tilt clocks belong. A window started on the corpse would spend a
 	 * second and a half of itself lying on the floor.
 	 */
-	if (bot->death_taught && gi.cvar("sg_tilt", "0", 0)->value > 0.0f)
+	if (bot->death_taught && sg_cv.tilt->value > 0.0f)
 	{
 		/* the caution runs shorter for the better shooter: the same
 		 * span the threat clock uses, and for the same reason -- the
@@ -3577,7 +3578,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->exitasym_n = (bot->inlinks_n < 16) ? bot->inlinks_n : 16;
 		memcpy(bot->exitasym_set, bot->inlinks, sizeof(bot->exitasym_set));
 		bot->exitasym_armed = (random() * 100.0f <
-		                       gi.cvar("sg_exitasym", "0", 0)->value);
+		                       sg_cv.exitasym->value);
 
 		/*
 		 * HUMAN ESCAPE PRIORS (sg_escapeprior, enhancement 6). The
@@ -3607,7 +3608,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->escprior_bucket = -1;
 		bot->escprior_until = 0.0f;
 		bot->escprior_dose = 0.0f;
-		if (sg_rune && gi.cvar("sg_escapeprior", "1", 0)->value > 0.0f)
+		if (sg_rune && sg_cv.escapeprior->value > 0.0f)
 		{
 			/* the flag this carrier now holds is the ENEMY flag, and
 			 * its stand is the one he just robbed */
@@ -3639,12 +3640,12 @@ static void SG_BotThink(sg_bot_t *bot)
 				bot->escprior_bucket = b;
 				bot->escprior_until = level.time + 3.0f;
 				bot->escprior_dose =
-				    gi.cvar("sg_escapeprior", "1", 0)->value / 100.0f *
+				    sg_cv.escapeprior->value / 100.0f *
 				    ((float)sg_escape_count[fk][b] /
 				     (float)sg_escape_total[fk]);
 				if (bot->escprior_dose > 0.9f)
 					bot->escprior_dose = 0.9f;
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("ESCPRIOR %s bucket=%d p=%d/%d dose=%.2f\n",
 					           e->client->pers.netname, b,
 					           sg_escape_count[fk][b],
@@ -3657,7 +3658,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		bot->exitasym_armed = false;
 		bot->escprior_bucket = -1;
 	}
-	if (gi.cvar("sg_debug", "0", 0)->value)
+	if (sg_cv.debug->value)
 	{
 		if (carrying && !bot->was_carrying)
 		{
@@ -3778,17 +3779,17 @@ static void SG_BotThink(sg_bot_t *bot)
 			    (sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY);
 
 			if (!astray && sg_fields.to_post[team - 1] &&
-			    gi.cvar("sg_defpost", "0", 0)->value >= 3)
+			    sg_cv.defpost->value >= 3)
 				goal_field = sg_fields.to_post[team - 1];
 			else if (!astray && !bot->def_stand &&
 			         sg_fields.to_lane[team - 1] &&
-			         gi.cvar("sg_raillane", "1", 0)->value)
+			         sg_cv.raillane->value)
 				/* the second defender holds the computed rail lane; the
 				 * watchman stays on the stand (the .dpo lesson: never
 				 * empty the stand for a post) */
 				goal_field = sg_fields.to_lane[team - 1];
 			else if (astray && sg_fields.to_icept[team - 1] &&
-			         gi.cvar("sg_defreact", "3", 0)->value >= 3)
+			         sg_cv.defreact->value >= 3)
 				goal_field = sg_fields.to_icept[team - 1];
 		}
 	}
@@ -3813,14 +3814,14 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * spot. First body to the flag wins the relay; ours is
 		 * closest by construction.
 		 */
-		if (gi.cvar("sg_scoop", "1", 0)->value &&
+		if (sg_cv.scoop->value &&
 		    sg_caco_team_belief.carrier[team - 1].client < 0 &&
 		    sg_caco_team_belief.flag[2 - team].state == SG_FLAG_ASTRAY)
 		{
 			goal_field = (team == CTF_TEAM_RED)
 			    ? sg_fields.to_blue_flag_now
 			    : sg_fields.to_red_flag_now;
-			if (gi.cvar("sg_debug", "0", 0)->value &&
+			if (sg_cv.debug->value &&
 			    level.time >= bot->next_report - 0.9f)
 				gi.dprintf("SCOOP %s\n", e->client->pers.netname);
 		}
@@ -3837,7 +3838,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		 * eats the escort, carrier keeps the flag. Falls through to
 		 * the ordinary screen when there is no named threat.
 		 */
-		if (gi.cvar("sg_interpose", "1", 0)->value)
+		if (sg_cv.interpose->value)
 		{
 			sg_belief_carrier_t *oc =
 			    &sg_caco_team_belief.carrier[team - 1];
@@ -3893,7 +3894,7 @@ static void SG_BotThink(sg_bot_t *bot)
 					 * slot parity: even leads at -1300ms, odd trails at
 					 * +900ms. Dose 2 (static exit seed) kept as history.
 					 */
-					if (gi.cvar("sg_interpose", "1", 0)->value >= 3)
+					if (sg_cv.interpose->value >= 3)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
@@ -3924,7 +3925,7 @@ static void SG_BotThink(sg_bot_t *bot)
 							}
 						}
 					}
-					else if (gi.cvar("sg_interpose", "1", 0)->value >= 2)
+					else if (sg_cv.interpose->value >= 2)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
@@ -3967,7 +3968,7 @@ static void SG_BotThink(sg_bot_t *bot)
 						Field_Flood(sg_rune, interpose_field,
 						            &ms, &mc, 1);
 						goal_field = interpose_field;
-						if (gi.cvar("sg_debug", "0", 0)->value &&
+						if (sg_cv.debug->value &&
 						    level.time >= bot->next_report - 0.9f)
 							gi.dprintf("INTERPOSE %s seed=%d\n",
 							           e->client->pers.netname, ms);
@@ -4006,7 +4007,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * seconds, closes, and the toss fires at 400. The rune rides to
 	 * the flag on the courier's legs, not on luck.
 	 */
-	if (gi.cvar("sg_runetoss", "2", 0)->value &&
+	if (sg_cv.runetoss->value &&
 	    role != SG_ROLE_CARRY && role != SG_ROLE_DEFEND &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
@@ -4093,13 +4094,13 @@ static void SG_BotThink(sg_bot_t *bot)
 		{
 			sg_cur_mega = 0.0f;
 			bot->mega_next = level.time + SG_MEGA_BACKOFF;
-			if (SG_MegaOn() && gi.cvar("sg_debug", "0", 0)->value)
+			if (SG_MegaOn() && sg_cv.debug->value)
 				gi.dprintf("MEGA %s give up: %.0fs on offer, no pickup\n",
 				           e->client->pers.netname, SG_MEGA_PATIENCE);
 		}
 	}
 
-	if (SG_MegaOn() && gi.cvar("sg_debug", "0", 0)->value)
+	if (SG_MegaOn() && sg_cv.debug->value)
 	{
 		/* the commit: the frame the offer turns on. The detour reported is
 		 * the best one standing from where the bot is now, in ms of extra
@@ -4153,7 +4154,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	 */
 	route_field = goal_field;
 	route_pure = false;
-	if (gi.cvar("sg_tactics", "1", 0)->value &&
+	if (sg_cv.tactics->value &&
 	    role != SG_ROLE_ESCORT &&
 	    /* CARRY excluded (trial-prep audit): route_pure suppresses the
 	     * danger and detour terms for 10s a commit -- the exact corridors
@@ -4252,7 +4253,7 @@ static void SG_BotThink(sg_bot_t *bot)
 				bot->tac_role = (int)role;
 				Field_Flood(sg_rune, tac_fields[bi],
 				            &bot->tac_seed, &cost10, 1);
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("TACTIC %s seed=%d strat=%d\n",
 					           e->client->pers.netname,
 					           best10, goal_field[best10]);
@@ -4300,7 +4301,7 @@ static void SG_BotThink(sg_bot_t *bot)
 	 * into the same respawn-wide window, detours pause only during the
 	 * eight seconds the window is actually open.
 	 */
-	if (gi.cvar("sg_wavepush", "0", 0)->value &&
+	if (sg_cv.wavepush->value &&
 	    role == SG_ROLE_ATTACK &&
 	    level.time >= sg_push_until[team - CTF_TEAM_RED])
 	{
@@ -4317,7 +4318,7 @@ static void SG_BotThink(sg_bot_t *bot)
 			if (VectorLength(dp9) < 1200.0f)
 			{
 				sg_push_until[team - CTF_TEAM_RED] = level.time + 8.0f;
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("PUSH team=%d surge\n", team);
 			}
 		}
@@ -4432,7 +4433,7 @@ static void SG_BotThink(sg_bot_t *bot)
 					}
 				}
 				bot->rally_cover = best_cover;
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("RALLY %s waits (%d coming, cover=%d)\n",
 					           e->client->pers.netname, mates_coming,
 					           best_cover);
@@ -4443,7 +4444,7 @@ static void SG_BotThink(sg_bot_t *bot)
 		else
 		{
 			if (bot->rally_since > 0.0f &&
-			    gi.cvar("sg_debug", "0", 0)->value)
+			    sg_cv.debug->value)
 				gi.dprintf("RALLY %s released after %.1fs (near=%d)\n",
 				           e->client->pers.netname,
 				           level.time - bot->rally_since, mates_near);
@@ -4460,7 +4461,7 @@ rally_done:;
 		 * the throw, failure costs nothing, and the successes
 		 * accrue -- sixty-five to five.
 		 */
-		if (gi.cvar("sg_flycook", "1", 0)->value &&
+		if (sg_cv.flycook->value &&
 		    bot->nade_phase == 0 && level.time >= bot->nade_next)
 		{
 			static gitem_t *nades9;
@@ -4557,7 +4558,7 @@ rally_done:;
 			 * descent steps nor the flag flood -- this line names the
 			 * actual carrier of the traffic.
 			 */
-			if (gi.cvar("sg_debug", "0", 0)->value && team >= 1 && team <= 2)
+			if (sg_cv.debug->value && team >= 1 && team <= 2)
 			{
 				int pti = (team == CTF_TEAM_RED) ? 0 : 1;
 
@@ -4635,7 +4636,7 @@ rally_done:;
 		 * beat_ready is what makes that test honest (see its field).
 		 */
 		{
-			float	mult = gi.cvar("sg_spawnbeat", "0", 0)->value;
+			float	mult = sg_cv.spawnbeat->value;
 
 			if (mult > 0.0f && bot->beat_ready)
 			{
@@ -4697,7 +4698,7 @@ rally_done:;
 		 * the carrier kill ledger, 2998 damage to rocket-direct's 2317.
 		 * The dose it pays for a lit step is half again the rest of the
 		 * team's. */
-		rail_dose = gi.cvar("sg_railrhythm", "0", 0)->value *
+		rail_dose = sg_cv.railrhythm->value *
 		            ((role == SG_ROLE_CARRY) ? 1.5f : 1.0f);
 	}
 	else
@@ -4768,8 +4769,8 @@ rally_done:;
 		qboolean linger_hot = false;
 		vec3_t car_org = { 0, 0, 0 };
 
-		if ((gi.cvar("sg_unlinger", "0", 0)->value > 0.0f ||
-		     gi.cvar("sg_depace", "0", 0)->value > 0.0f) &&
+		if ((sg_cv.unlinger->value > 0.0f ||
+		     sg_cv.depace->value > 0.0f) &&
 		    role != SG_ROLE_CARRY && role != SG_ROLE_ESCORT)
 		{
 			static gitem_t *lg_flag;
@@ -4828,7 +4829,7 @@ rally_done:;
 
 			VectorSubtract(sg_rune->seeds[l->to].origin, car_org, ld9);
 			if (VectorLength(ld9) < 400.0f)
-				v += gi.cvar("sg_unlinger", "0", 0)->value;
+				v += sg_cv.unlinger->value;
 		}
 
 		/*
@@ -4842,12 +4843,12 @@ rally_done:;
 		 * The salt rerolls on seed entry so the choice HOLDS within a
 		 * visit -- no flip-flop -- and varies across visits.
 		 */
-		if (gi.cvar("sg_routedither", "0", 0)->value > 0.0f)
+		if (sg_cv.routedither->value > 0.0f)
 		{
 			unsigned dh = bot->dither_salt ^ (unsigned)li * 2654435761u;
 
 			dh ^= dh >> 13; dh *= 2246822519u; dh ^= dh >> 16;
-			v += gi.cvar("sg_routedither", "0", 0)->value *
+			v += sg_cv.routedither->value *
 			     (float)(dh & 1023) / 1023.0f;
 		}
 
@@ -4976,7 +4977,7 @@ rally_done:;
 		 * already owns the drowning risk.
 		 */
 		if (role == SG_ROLE_CARRY && l->action == RL_SWIM &&
-		    gi.cvar("sg_watercarry", "0", 0)->value)
+		    sg_cv.watercarry->value)
 			v -= 800.0f;
 
 		/* the sink ban's teeth: 12000 exceeds the basin's worst gap
@@ -5012,7 +5013,7 @@ rally_done:;
 		 * flat; steps OUT of the pit still pay nothing -- a knocked-in
 		 * bot climbs like it means it.
 		 */
-		if (gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
+		if (sg_cv.shelfcost->value > 0.0f)
 		{
 			int shti = (team == CTF_TEAM_RED) ? 0 : 1;
 
@@ -5028,7 +5029,7 @@ rally_done:;
 				 * arithmetically COMPETITIVE with turning back -- the
 				 * two layers cancelled at the lip. The step charge must
 				 * dominate the field spread it created. */
-				v += gi.cvar("sg_shelfcost", "0", 0)->value * 60000.0f;
+				v += sg_cv.shelfcost->value * 60000.0f;
 		}
 
 		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
@@ -5083,7 +5084,7 @@ rally_done:;
 					 * priced at 500: the rope comes back to the run
 					 * home.
 					 */
-					v += gi.cvar("sg_fastcarry", "0", 0)->value
+					v += sg_cv.fastcarry->value
 					     ? 500.0f : 2000.0f;
 					break;
 				}
@@ -5130,7 +5131,7 @@ rally_done:;
 						bot->bl_until[b2] = 0.0f;
 				bot->carry_startcost = cc;
 				bot->carry_bestcost = cc;
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("CARRYLOST %s best=%d now=%d org=(%.0f %.0f %.0f)\n",
 					           e->client->pers.netname,
 					           was_best, cc,
@@ -5196,7 +5197,7 @@ rally_done:;
 		 */
 		else if (duel &&
 		         !(role == SG_ROLE_ATTACK &&
-		           gi.cvar("sg_press", "1", 0)->value) &&
+		           sg_cv.press->value) &&
 		         /* CARRIER PRESS (sg_carrypress, wave 280+). The carry
 		          * traces (274-279): 61%% of carrier frames make no
 		          * homeward progress at ~190 u/s, and 48 of 49 carries
@@ -5206,7 +5207,7 @@ rally_done:;
 		          * the only parity-cap A/B ever won. A fleeing carrier
 		          * has no business pricing weapon range: forward. */
 		         !(role == SG_ROLE_CARRY &&
-		           gi.cvar("sg_carrypress", "0", 0)->value))
+		           sg_cv.carrypress->value))
 		{
 			/*
 			 * THE PRESS (sg_press, A/B wave 169+). The travel
@@ -5242,7 +5243,7 @@ rally_done:;
 		 * the descent inherit that without a single scripted route.
 		 */
 		if (sg_human_use &&
-		    gi.cvar("sg_humanprior", "0", 0)->value)
+		    sg_cv.humanprior->value)
 			v -= 1.5f * (float)sg_human_use[li];
 
 		/*
@@ -5255,7 +5256,7 @@ rally_done:;
 		 * humans run when it matters.
 		 */
 		if (sg_human_live &&
-		    gi.cvar("sg_flagprior", "0", 0)->value &&
+		    sg_cv.flagprior->value &&
 		    sg_cur_role != SG_ROLE_CARRY &&
 		    (sg_caco_team_belief.flag[0].state == SG_FLAG_ASTRAY ||
 		     sg_caco_team_belief.flag[1].state == SG_FLAG_ASTRAY))
@@ -5265,7 +5266,7 @@ rally_done:;
 			 * The roads go to the roles they came from: hunters
 			 * inherit them, the carrier keeps its pure homeward
 			 * pricing. */
-			v -= 1.5f * gi.cvar("sg_flagprior", "0", 0)->value *
+			v -= 1.5f * sg_cv.flagprior->value *
 			     (float)sg_human_live[li];
 
 		/*
@@ -5278,8 +5279,8 @@ rally_done:;
 		 */
 		if (sg_cur_role == SG_ROLE_DEFEND &&
 		    sg_def_post[team - 1] &&
-		    gi.cvar("sg_defpost", "0", 0)->value > 0)
-			v -= 1.5f * gi.cvar("sg_defpost", "0", 0)->value *
+		    sg_cv.defpost->value > 0)
+			v -= 1.5f * sg_cv.defpost->value *
 			     (float)sg_def_post[team - 1][l->to];
 
 		/*
@@ -5295,8 +5296,8 @@ rally_done:;
 		if (sg_cur_role == SG_ROLE_DEFEND &&
 		    sg_def_icept[team - 1] &&
 		    sg_caco_team_belief.flag[team - 1].state == SG_FLAG_ASTRAY &&
-		    gi.cvar("sg_defreact", "3", 0)->value > 0)
-			v -= 1.5f * gi.cvar("sg_defreact", "3", 0)->value *
+		    sg_cv.defreact->value > 0)
+			v -= 1.5f * sg_cv.defreact->value *
 			     (float)sg_def_icept[team - 1][l->to];
 
 		/*
@@ -5310,8 +5311,8 @@ rally_done:;
 		 */
 		if (sg_human_escape &&
 		    sg_cur_role == SG_ROLE_CARRY &&
-		    gi.cvar("sg_escapeprior", "1", 0)->value > 0)
-			v -= 1.5f * gi.cvar("sg_escapeprior", "1", 0)->value *
+		    sg_cv.escapeprior->value > 0)
+			v -= 1.5f * sg_cv.escapeprior->value *
 			     (float)sg_human_escape[li];
 
 		/*
@@ -5326,7 +5327,7 @@ rally_done:;
 		 * every fresh eye sighting near the target stand.
 		 */
 		if (sg_cur_role == SG_ROLE_ATTACK &&
-		    gi.cvar("sg_approachcover", "200", 0)->value > 0)
+		    sg_cv.approachcover->value > 0)
 		{
 			int acs;
 
@@ -5351,7 +5352,7 @@ rally_done:;
 				actr = gi.trace(aeye, NULL, NULL, athr, e, MASK_SOLID);
 				if (actr.fraction >= 1.0f)
 				{
-					v += gi.cvar("sg_approachcover", "200", 0)->value;
+					v += sg_cv.approachcover->value;
 					break;  /* one exposure is enough to price */
 				}
 			}
@@ -5409,7 +5410,7 @@ rally_done:;
 		 * the one sighting that matters most.
 		 */
 		if (sg_cur_role == SG_ROLE_CARRY &&
-		    gi.cvar("sg_carrycover", "800", 0)->value > 0)
+		    sg_cv.carrycover->value > 0)
 		{
 			int			cs, best_cs = -1;
 			float		best_t = -1.0f;
@@ -5452,7 +5453,7 @@ rally_done:;
 						 * still alive at the horn scored nothing.
 						 * Exactly 1.0x -- the same float, the same
 						 * route -- with sg_clockplay off. */
-						v += gi.cvar("sg_carrycover", "800", 0)->value *
+						v += sg_cv.carrycover->value *
 						     Clock_CoverScale(team);
 				}
 			}
@@ -5485,7 +5486,7 @@ rally_done:;
 		 * different roads. Deterministic per life: no per-frame noise,
 		 * no flapping -- a LIFE rides one opinion of the map.
 		 */
-		if (gi.cvar("sg_routejitter", "8", 0)->value > 0.0f)
+		if (sg_cv.routejitter->value > 0.0f)
 		{
 			unsigned rj = ((unsigned)li * 2654435761u) ^
 			              ((unsigned)(e - g_edicts) * 40503u) ^
@@ -5493,7 +5494,7 @@ rally_done:;
 
 			rj = (rj >> 4) & 1023u;
 			v *= 1.0f + ((float)rj / 1023.0f - 0.5f) * 0.02f *
-			     gi.cvar("sg_routejitter", "8", 0)->value;
+			     sg_cv.routejitter->value;
 		}
 
 		/*
@@ -5509,7 +5510,7 @@ rally_done:;
 		 */
 		if (li >= 0 && sg_rune->links[li].to == bot->prev_seed &&
 		    level.time - bot->prev_seed_time < 3.0f)
-			v *= 1.0f + gi.cvar("sg_nobacktrack", "60", 0)->value / 100.0f;
+			v *= 1.0f + sg_cv.nobacktrack->value / 100.0f;
 
 		/*
 		 * NOT THROUGH THERE AGAIN (sg_tilt). The lane the last life
@@ -5526,7 +5527,7 @@ rally_done:;
 		 * lessons stay in the danger dimension where they belong.
 		 */
 		if (bot->tilt_lane_n > 0 && level.time < bot->tilt_until &&
-		    gi.cvar("sg_tilt", "0", 0)->value > 0.0f &&
+		    sg_cv.tilt->value > 0.0f &&
 		    Tilt_InLane(bot, l->to))
 		{
 			v *= SG_TILT_PRICE;
@@ -5534,7 +5535,7 @@ rally_done:;
 			/* one line in sixteen: a bot in a two-hop ball prices
 			 * every candidate it owns, every frame, and the log is
 			 * for reading */
-			if (gi.cvar("sg_debug", "0", 0)->value &&
+			if (sg_cv.debug->value &&
 			    !(bot->tilt_said++ & 15))
 				gi.dprintf("TILTAVOID %s link=%d to=%d dseed=%d "
 				           "left=%.1f%s\n",
@@ -5556,7 +5557,7 @@ rally_done:;
 		 * lives in sg_combat.c, through SG_TiltCaution.
 		 */
 		if (level.time < bot->tilt_caution_until &&
-		    gi.cvar("sg_tilt", "0", 0)->value > 0.0f)
+		    sg_cv.tilt->value > 0.0f)
 			v += SG_TILT_COVER * (float)sg_rune->seeds[l->to].area_hint;
 
 		/* EXIT-LANE ASYMMETRY (sg_exitasym). Humans tend to leave by a
@@ -5604,7 +5605,7 @@ rally_done:;
 		}
 
 		if (bot->sticky_link == li &&
-		    gi.cvar("sg_sticky", "0", 0)->value)
+		    sg_cv.sticky->value)
 			v *= 0.85f;
 
 		if (li == bot->sticky_link)
@@ -5628,7 +5629,7 @@ rally_done:;
 	 * from this seed) abdicates immediately. This is the re-decision
 	 * cadence matched to the information's own refresh rate.
 	 */
-	if (gi.cvar("sg_linklatch", "0", 0)->value > 0 &&
+	if (sg_cv.linklatch->value > 0 &&
 	    bestlink >= 0 && bot->sticky_link >= 0 &&
 	    bestlink != bot->sticky_link &&
 	    level.time < bot->latch_until &&
@@ -5640,7 +5641,7 @@ rally_done:;
 	else if (bestlink != bot->sticky_link)
 	{
 		bot->latch_until = level.time +
-		    gi.cvar("sg_linklatch", "0", 0)->value / 1000.0f;
+		    sg_cv.linklatch->value / 1000.0f;
 	}
 	if (bestlink >= 0 && bestlink != bot->ribbon_link)
 	{
@@ -5660,7 +5661,7 @@ rally_done:;
 		}
 		bot->ribbon_link = bestlink;
 		bot->ribbon_off = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
-		                  gi.cvar("sg_ribbon", "48", 0)->value;
+		                  sg_cv.ribbon->value;
 		bot->ribbon_goal = bot->ribbon_off;
 	}
 	/* v2 drift: the film judge's verdict on v1 -- a fixed per-leg lane
@@ -5669,7 +5670,7 @@ rally_done:;
 	if (level.time >= bot->ribbon_next)
 	{
 		bot->ribbon_goal = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
-		                   gi.cvar("sg_ribbon", "48", 0)->value;
+		                   sg_cv.ribbon->value;
 		bot->ribbon_next = level.time +
 		    1.0f + (float)(rand() % 100) / 100.0f;
 	}
@@ -5762,7 +5763,7 @@ rally_done:;
 				 * paranoia. */
 				if (en3->client < 0 || en3->seed < 0 ||
 				    level.time - en3->seen_time >=
-				        (gi.cvar("sg_strictgrab", "1", 0)->value
+				        (sg_cv.strictgrab->value
 				             ? 8.0f : 4.0f))
 					continue;
 				VectorSubtract(sg_rune->seeds[en3->seed].origin,
@@ -5782,7 +5783,7 @@ rally_done:;
 			 * exactly one of the missing is home. The 20s patience
 			 * valve still forces the grab eventually.
 			 */
-			if (gi.cvar("sg_strictgrab", "1", 0)->value)
+			if (sg_cv.strictgrab->value)
 			{
 				int s8, esz = 0, accounted = 0, i8;
 
@@ -5878,7 +5879,7 @@ rally_done:;
 				 * current; the steals-vs-caps trade decides.
 				 */
 				if (room >= 1 &&
-				    gi.cvar("sg_strictgrab", "1", 0)->value)
+				    sg_cv.strictgrab->value)
 				{
 					/*
 					 * THE CROWD VALVE (sg_crowdhold, wave 343). The 7v7
@@ -5891,8 +5892,8 @@ rally_done:;
 					 * at most the cvar's count; a fuller room re-arms the
 					 * clock -- no grab into a crowd, ever.
 					 */
-					if (gi.cvar("sg_crowdhold", "0", 0)->value > 0 &&
-					    room > (int)gi.cvar("sg_crowdhold", "0", 0)->value)
+					if (sg_cv.crowdhold->value > 0 &&
+					    room > (int)sg_cv.crowdhold->value)
 						bot->strict_since = level.time;
 					if (bot->strict_since <= 0.0f)
 						bot->strict_since = level.time;
@@ -6141,7 +6142,7 @@ rally_done:;
 			/* an honest traversal failure: 45s. The 120s figure is for
 			 * links proven to head into a dead door, nothing else. */
 			bot->bl_until[oldest] = level.time + 45.0f;
-			if (gi.cvar("sg_debug", "0", 0)->value)
+			if (sg_cv.debug->value)
 				gi.dprintf("SHELVE %s link=%d at seed=%d\n",
 				           e->client->pers.netname, bestlink, bot->seed);
 			bot->watch_link = -1;
@@ -6206,7 +6207,7 @@ rally_done:;
 			 * evidence trail -- wave 149 moved no census and nothing
 			 * could say whether the plug ever engaged at all */
 			if (bot->rally_since <= 0.0f &&
-			    gi.cvar("sg_debug", "0", 0)->value)
+			    sg_cv.debug->value)
 				gi.dprintf("PLUG %s role=%d cost=%d\n",
 				           e->client->pers.netname, (int)role,
 				           att[bot->seed]);
@@ -6242,7 +6243,7 @@ rally_done:;
 	 * nearer in a straight line through a wall, and the line of sight is
 	 * checked so the flag is not lobbed into a doorframe.
 	 */
-	if (gi.cvar("sg_handoff", "0", 0)->value &&
+	if (sg_cv.handoff->value &&
 	    role == SG_ROLE_CARRY && goal_field &&
 	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
 	    level.time >= bot->handoff_next &&
@@ -6349,14 +6350,14 @@ rally_done:;
 				bot->carry_lost_at = 0.0f;
 				bot->handoff_next = level.time + 10.0f;
 
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("HANDOFF %s -> %s %s dist=%.0f cost "
 					           "%d->%d hp=%d thr=%.0f\n",
 					           e->client->pers.netname,
 					           re->client->pers.netname, word, hdist,
 					           my_cost, best_cost, e->health, hp_thr);
 			}
-			else if (gi.cvar("sg_debug", "0", 0)->value &&
+			else if (sg_cv.debug->value &&
 			         level.time >= bot->next_report - 0.9f)
 				gi.dprintf("HANDOFF %s no receiver hp=%d thr=%.0f\n",
 				           e->client->pers.netname, e->health, hp_thr);
@@ -6372,7 +6373,7 @@ rally_done:;
 	 * pricing (SG_FC_RUNE) takes it from the floor. One toss per bot
 	 * per 20s; combat frames exempt -- a fight is not the moment.
 	 */
-	if (gi.cvar("sg_runetoss", "2", 0)->value &&
+	if (sg_cv.runetoss->value &&
 	    role != SG_ROLE_CARRY && !duel &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
@@ -6393,7 +6394,7 @@ rally_done:;
 				vec3_t rd14;
 
 				VectorSubtract(ce->s.origin, e->s.origin, rd14);
-				if (gi.cvar("sg_debug", "0", 0)->value &&
+				if (sg_cv.debug->value &&
 				    level.time >= bot->next_report - 0.9f)
 					gi.dprintf("RTCAND %s dist=%.0f\n",
 					           e->client->pers.netname,
@@ -6409,7 +6410,7 @@ rally_done:;
 					    - e->client->ps.pmove.delta_angles[YAW];
 					Drop_Rune(e, e->client->rune->item);
 					bot->runetoss_next = level.time + 20.0f;
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("RUNETOSS %s to %s\n",
 						           e->client->pers.netname,
 						           ce->client->pers.netname);
@@ -6434,7 +6435,7 @@ rally_done:;
 	    goal_field[bot->seed] < 2500)
 	{
 		rally_hold = true;
-		if (gi.cvar("sg_debug", "0", 0)->value &&
+		if (sg_cv.debug->value &&
 		    level.time >= bot->next_report - 0.9f)
 			gi.dprintf("CARRYHOLD %s cost=%d\n",
 			           e->client->pers.netname, goal_field[bot->seed]);
@@ -6517,7 +6518,7 @@ rally_done:;
 					    (role == SG_ROLE_CARRY)
 					        ? 1.5f
 					        : 0.8f + (1.5f - 0.8f) * (sk / 4.0f);
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("RAILHOLD %s at seed=%d waits on "
 						           "cl=%d seed=%d patience=%.1f%s\n",
 						           e->client->pers.netname, bot->seed,
@@ -6544,7 +6545,7 @@ rally_done:;
 		 * ended the wait: the rail going off (the window is open and the
 		 * crossing is timed) or the patience running out (humans do not
 		 * wait forever, and neither does this) */
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		if (sg_cv.debug->value)
 			gi.dprintf("RAILCROSS %s waited %.1fs on cl=%d (%s)\n",
 			           e->client->pers.netname,
 			           level.time - bot->railhold_since,
@@ -6644,7 +6645,7 @@ rally_done:;
 			bot->rail_link = bestlink;
 			bot->rail_stage = 1;
 			bot->rail_until = level.time + 4.0f;
-			if (gi.cvar("sg_debug", "0", 0)->value)
+			if (sg_cv.debug->value)
 				gi.dprintf("RAILTRY %s link=%d seed=%d\n",
 				           e->client->pers.netname, bestlink, bot->seed);
 			bot->stag_next = level.time + 2.0f;
@@ -6672,7 +6673,7 @@ rally_done:;
 		 * and an obstacle that beats one line beats it every time */
 		bot->escape_yaw = e->s.angles[YAW] + 180.0f + (float)(rand() % 81 - 40);
 		bot->escape_until = level.time + 1.0f + (float)(rand() % 9) * 0.1f;
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		if (sg_cv.debug->value)
 			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
 	}
@@ -6735,7 +6736,7 @@ stag_done:
 							oldest = b;
 					bot->bl_link[oldest] = bestlink;
 					bot->bl_until[oldest] = level.time + 45.0f;
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("CYCLE %s seed=%d link=%d\n",
 						           e->client->pers.netname, bot->seed,
 						           bestlink);
@@ -6768,7 +6769,7 @@ stag_done:
 		if (any)
 		{
 			memset(bot->bl_until, 0, sizeof(bot->bl_until));
-			if (gi.cvar("sg_debug", "0", 0)->value)
+			if (sg_cv.debug->value)
 				gi.dprintf("CLEARSHELF %s (carrying, stranded at %d)\n",
 				           e->client->pers.netname, bot->seed);
 		}
@@ -7072,7 +7073,7 @@ no_hold:;
 		 * at speed instead of standing to re-argue. Ballistics are
 		 * unchanged -- only the eyes and the landing basis pre-align.
 		 */
-		if (gi.cvar("sg_preturn", "1", 0)->value &&
+		if (sg_cv.preturn->value &&
 		    ((bot->hook_phase == 3 && bot->flow_release) ||
 		     bot->rj_phase == 3) &&
 		    !e->groundentity && sg_rune)
@@ -7130,15 +7131,15 @@ no_hold:;
 				bot->commit_link = -1;
 				/* ropetravel: a clean apex is a link in the chain --
 				 * the next rope is legal on the next beat */
-				if (gi.cvar("sg_ropetravel", "0", 0)->value > 0.0f)
+				if (sg_cv.ropetravel->value > 0.0f)
 					bot->speedhook_next = level.time + 0.25f;
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("HOOKEND %s apex\n",
 					           e->client->pers.netname);
 			}
 			else if (e->groundentity || level.time > bot->hook_deadline)
 			{
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 				{
 					if (e->groundentity)
 					{
@@ -7175,7 +7176,7 @@ no_hold:;
 				 * anchor: the pair stops flapping for 45s and the
 				 * surface argues a different road.
 				 */
-				if (gi.cvar("sg_hookpong", "0", 0)->value > 0.0f &&
+				if (sg_cv.hookpong->value > 0.0f &&
 				    bot->hp_prev_land > 0.0f &&
 				    level.time - bot->hp_prev_land < 8.0f &&
 				    bot->hook_link >= 0)
@@ -7193,7 +7194,7 @@ no_hold:;
 						bot->bl_link[old9] = bot->hook_link;
 						bot->bl_until[old9] = level.time + 45.0f;
 						SG_TeachLinkFutility(bot->hook_link);
-						if (gi.cvar("sg_debug", "0", 0)->value)
+						if (sg_cv.debug->value)
 							gi.dprintf("HOOKPONG %s link=%d\n",
 							           e->client->pers.netname,
 							           bot->hook_link);
@@ -7205,7 +7206,7 @@ no_hold:;
 				/* ropetravel: a grounded landing chains too -- the beat
 				 * is slightly longer than the apex's because the legs
 				 * carry a step before the next throw */
-				if (gi.cvar("sg_ropetravel", "0", 0)->value > 0.0f &&
+				if (sg_cv.ropetravel->value > 0.0f &&
 				    e->groundentity && bot->hookfail_streak == 0)
 					bot->speedhook_next = level.time + 0.35f;
 
@@ -7249,11 +7250,11 @@ no_hold:;
 						{
 							bot->hookban_until = level.time + 20.0f;
 							bot->hookfail_streak = 0;
-							if (gi.cvar("sg_debug", "0", 0)->value)
+							if (sg_cv.debug->value)
 								gi.dprintf("HOOKBAN %s 20s\n",
 								           e->client->pers.netname);
 						}
-						if (gi.cvar("sg_debug", "0", 0)->value)
+						if (sg_cv.debug->value)
 							gi.dprintf("HOOKFAIL %s link=%d\n",
 							           e->client->pers.netname,
 							           bot->hook_link);
@@ -7278,7 +7279,7 @@ no_hold:;
 			rune_link_t *l = &sg_rune->links[bestlink];
 
 			VectorCopy(sg_rune->seeds[l->to].origin, aim);
-			if (gi.cvar("sg_ribbon", "48", 0)->value > 0.0f &&
+			if (sg_cv.ribbon->value > 0.0f &&
 			    l->action == RL_RUN && bot->ribbon_off != 0.0f)
 			{
 				vec3_t rdir, roff, rprobe;
@@ -7320,8 +7321,8 @@ no_hold:;
 			 * runs chain -- hooks, jumps, drops keep exact aim, their
 			 * geometry is the point.
 			 */
-			if (gi.cvar("sg_lookahead", "0", 0)->value &&
-			    !gi.cvar("sg_pursuit", "0", 0)->value &&
+			if (sg_cv.lookahead->value &&
+			    !sg_cv.pursuit->value &&
 			    l->action == RL_RUN && !precision)
 			{
 				vec3_t nd0;
@@ -7389,13 +7390,13 @@ no_hold:;
 			 * 29-31%%. The seed centers are beads on a road; steer at
 			 * the road. The cvar value IS the arc distance.
 			 */
-			if (gi.cvar("sg_pursuit", "0", 0)->value > 0.0f &&
+			if (sg_cv.pursuit->value > 0.0f &&
 			    !aim_is_anchor && l->action == RL_RUN && !precision &&
 			    e->waterlevel < 2 && bot->hook_phase == 0 &&
 			    bot->rj_phase == 0)
 			{
 				vec3_t	chain[SG_PURSUIT_MAX];
-				float	look = gi.cvar("sg_pursuit", "0", 0)->value;
+				float	look = sg_cv.pursuit->value;
 				int		nchain = 0, cs = l->to, k;
 				float	acc = 0.0f;
 
@@ -7462,7 +7463,7 @@ no_hold:;
 					 * stair and ramp (311: guard collapsed the chord
 					 * to the seed center most ticks); 18 is STEPSIZE */
 					pend[2] = e->s.origin[2] +
-					          (gi.cvar("sg_pursuitz", "8", 0)->value);
+					          (sg_cv.pursuitz->value);
 					ptr = gi.trace(e->s.origin, e->mins, e->maxs, pend,
 					               e, MASK_PLAYERSOLID);
 					/* a teammate is not terrain, and a door is not a
@@ -7478,7 +7479,7 @@ no_hold:;
 						VectorCopy(pp, aim);
 						/* guard census: k==nchain is the full chord,
 						 * k==1 is a collapse to today's behavior */
-						if (gi.cvar("sg_debug", "0", 0)->value &&
+						if (sg_cv.debug->value &&
 						    level.time >= bot->next_report - 0.9f)
 							gi.dprintf("PURSUITK %s k=%d n=%d\n",
 							           e->client->pers.netname,
@@ -7501,7 +7502,7 @@ no_hold:;
 			 * -- feet ride AT the safety boundary, never past it.
 			 * Carrier exempt. Falls are the trial's kill switch.
 			 */
-			if (gi.cvar("sg_edgeride", "0", 0)->value > 0.0f &&
+			if (sg_cv.edgeride->value > 0.0f &&
 			    l->action == RL_RUN && !precision &&
 			    e->groundentity && bot->hook_phase == 0 &&
 			    sg_cur_role != SG_ROLE_CARRY &&
@@ -7516,10 +7517,10 @@ no_hold:;
 				el = VectorLength(edir);
 				if (el > 48.0f)
 				{
-					esc = gi.cvar("sg_edgeride", "0", 0)->value /
-					      ((gi.cvar("sg_ribbon", "48", 0)->value
+					esc = sg_cv.edgeride->value /
+					      ((sg_cv.ribbon->value
 					        > 0.0f)
-					       ? gi.cvar("sg_ribbon", "48", 0)->value
+					       ? sg_cv.ribbon->value
 					       : 48.0f);
 					eoff[0] = -edir[1] / el * bot->ribbon_off * esc;
 					eoff[1] = edir[0] / el * bot->ribbon_off * esc;
@@ -7584,8 +7585,8 @@ no_hold:;
 				    level.time >= bot->speedhook_next &&
 				    e->groundentity && e->waterlevel == 0 &&
 				    goal_field[bot->seed] >
-				        ((gi.cvar("sg_freeride", "0", 0)->value > 0.0f ||
-				          gi.cvar("sg_ropetravel", "0", 0)->value > 0.0f)
+				        ((sg_cv.freeride->value > 0.0f ||
+				          sg_cv.ropetravel->value > 0.0f)
 				             ? 2000 : 4000))
 				{
 					/*
@@ -7603,9 +7604,8 @@ no_hold:;
 					 */
 					float hsp2 = e->velocity[0] * e->velocity[0]
 					           + e->velocity[1] * e->velocity[1];
-					float hcap = (gi.cvar("sg_ropetravel", "0",
-					              0)->value > 0.0f) ? 700.0f :
-					             (gi.cvar("sg_freeride", "0", 0)->value
+					float hcap = (sg_cv.ropetravel->value > 0.0f) ? 700.0f :
+					             (sg_cv.freeride->value
 					              > 0.0f) ? 560.0f : 480.0f;
 
 					if (hsp2 > 220.0f * 220.0f && hsp2 < hcap * hcap)
@@ -7633,7 +7633,7 @@ no_hold:;
 						 * and takes the arc for its own sake.
 						 */
 						int hwander =
-						    (gi.cvar("sg_ropetravel", "0", 0)->value
+						    (sg_cv.ropetravel->value
 						     >= 2.0f && (rand() % 7) == 0);
 
 						for (hfan = 0; hfan < 3; hfan++)
@@ -7653,10 +7653,8 @@ no_hold:;
 						 * shorter reach, higher anchor, and the swing
 						 * itself is the off-graph flight.
 						 */
-						float hfar = (gi.cvar("sg_freeride", "0",
-						              0)->value >= 2.0f) ? 300.0f : 480.0f;
-						float hup  = (gi.cvar("sg_freeride", "0",
-						              0)->value >= 2.0f) ? 420.0f : 280.0f;
+						float hfar = (sg_cv.freeride->value >= 2.0f) ? 300.0f : 480.0f;
+						float hup  = (sg_cv.freeride->value >= 2.0f) ? 420.0f : 280.0f;
 
 						hend[0] = heye[0] + cosf(hy2) * hfar;
 						hend[1] = heye[1] + sinf(hy2) * hfar;
@@ -7682,10 +7680,9 @@ no_hold:;
 						{
 							/* the side probes exist only under
 							 * freeride; stock behavior is one look */
-							if (gi.cvar("sg_freeride", "0", 0)->value
+							if (sg_cv.freeride->value
 							    > 0.0f ||
-							    gi.cvar("sg_ropetravel", "0",
-							            0)->value > 0.0f)
+							    sg_cv.ropetravel->value > 0.0f)
 								continue;
 							break;
 						}
@@ -7695,8 +7692,7 @@ no_hold:;
 							 * speed legs already have. The carrier
 							 * keeps climb ropes and loses the
 							 * ceremony; everyone else bursts on. */
-							if (!(gi.cvar("sg_legcarrier", "0",
-							              0)->value &&
+							if (!(sg_cv.legcarrier->value &&
 							      sg_cur_role == SG_ROLE_CARRY))
 							{
 								VectorCopy(htr.endpos, bot->hook_anchor);
@@ -7707,10 +7703,8 @@ no_hold:;
 								bot->hook_deadline = level.time + 1.0f;
 								bot->speedhook = true;
 								bot->speedhook_next = level.time
-								    + ((gi.cvar("sg_ropetravel", "0",
-								        0)->value > 0.0f) ? 1.0f :
-								       (gi.cvar("sg_freeride", "0",
-								        0)->value > 0.0f) ? 2.0f : 4.0f)
+								    + ((sg_cv.ropetravel->value > 0.0f) ? 1.0f :
+								       (sg_cv.freeride->value > 0.0f) ? 2.0f : 4.0f)
 								      / SG_PersonaHookScale(e);
 							}
 						}
@@ -8130,7 +8124,7 @@ no_hold:;
 				 * standing instrument that has flagged this for 25 waves.
 				 */
 				if ((role == SG_ROLE_CARRY || role == SG_ROLE_ATTACK) &&
-				    gi.cvar("sg_termbrake", "1", 0)->value)
+				    sg_cv.termbrake->value)
 				{
 					vec3_t tb, tv;
 					float tbl, spd2;
@@ -8216,9 +8210,9 @@ no_hold:;
 			                                     60, -100, 100, -145, 145 };
 			static const float fan_base[9]   = { 0, -30, 30, -60, 60, -100,
 			                                     100, -145, 145 };
-			const float *fan = gi.cvar("sg_fandense", "0", 0)->value
+			const float *fan = sg_cv.fandense->value
 			                   ? fan_dense : fan_base;
-			int fan_n = gi.cvar("sg_fandense", "0", 0)->value ? 11 : 9;
+			int fan_n = sg_cv.fandense->value ? 11 : 9;
 
 			for (k = 0; k < fan_n; k++)
 			{
@@ -8229,7 +8223,7 @@ no_hold:;
 				/* dose 2: reach scales with speed -- a fixed 96u probe
 				 * at 400 u/s is 0.24s of warning, and the census's
 				 * full-speed wall bumps live exactly there */
-				if (gi.cvar("sg_fandense", "0", 0)->value >= 2)
+				if (sg_cv.fandense->value >= 2)
 				{
 					float fsp = sqrtf(e->velocity[0] * e->velocity[0] +
 					                  e->velocity[1] * e->velocity[1]);
@@ -8355,7 +8349,7 @@ no_hold:;
 			 * drop lip, in precision range, or in water, where the
 			 * snap IS the skill.
 			 */
-			if (gi.cvar("sg_smooth", "0", 0)->value &&
+			if (sg_cv.smooth->value &&
 			    !duel && !precision && bot->hook_phase == 0 &&
 			    e->waterlevel < 2)
 			{
@@ -8363,7 +8357,7 @@ no_hold:;
 				float sdy = chosen_yaw - bot->nav_yaw_cur;
 				/* the cvar IS the slew rate in deg/s (owner's blend,
 				 * wave 321): 1 keeps the legacy 300 */
-				float srate = gi.cvar("sg_smooth", "0", 0)->value;
+				float srate = sg_cv.smooth->value;
 
 				if (srate <= 1.0f)
 					srate = 300.0f;
@@ -8440,12 +8434,12 @@ no_hold:;
 						bot->bl_until[old2] = level.time + 45.0f;
 						bot->commit_link = -1;
 						SG_TeachLinkFutility(bestlink);
-						if (gi.cvar("sg_debug", "0", 0)->value)
+						if (sg_cv.debug->value)
 							gi.dprintf("RAILFAIL %s link=%d seed=%d\n",
 							           e->client->pers.netname,
 							           bestlink, bot->seed);
 					}
-					else if (gi.cvar("sg_debug", "0", 0)->value)
+					else if (sg_cv.debug->value)
 						gi.dprintf("RAILWIN %s link=%d\n",
 						           e->client->pers.netname, bestlink);
 					bot->rail_stage = 0;
@@ -8573,8 +8567,8 @@ no_hold:;
 			{
 				float hop_reach = 160.0f;
 				if (sg_cur_role == SG_ROLE_CARRY &&
-				    gi.cvar("sg_carryhop", "0", 0)->value > 0)
-					hop_reach = gi.cvar("sg_carryhop", "0", 0)->value;
+				    sg_cv.carryhop->value > 0)
+					hop_reach = sg_cv.carryhop->value;
 				VectorMA(e->s.origin, hop_reach, move_dir, probe);
 			}
 			probe[2] += 8.0f;
@@ -8612,7 +8606,7 @@ no_hold:;
 		 * with blood, and a landing run out beats a landing stood */
 		if (level.time < bot->hook_landbrake && e->groundentity &&
 		    !(sg_cur_role == SG_ROLE_CARRY &&
-		      gi.cvar("sg_legcarrier", "0", 0)->value >= 2.0f))
+		      sg_cv.legcarrier->value >= 2.0f))
 		{
 			cmd.forwardmove = 0;
 			cmd.sidemove = 0;
@@ -8653,7 +8647,7 @@ no_hold:;
 				 * field funnels the rest of the team in behind it unless
 				 * the corridor repricies globally. Same cure as the wall. */
 				SG_TeachFutility(bot->seed);
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("DEADDOOR %s at (%.0f %.0f %.0f)\n",
 					           e->client->pers.netname, e->s.origin[0],
 					           e->s.origin[1], e->s.origin[2]);
@@ -8843,7 +8837,7 @@ no_hold:;
 	 * by definition; this gate measures what the dodge layers cost. */
 	if (duel && role != SG_ROLE_CARRY && !precision &&
 	    bot->hook_phase == 0 &&
-	    !gi.cvar("sg_noweave", "0", 0)->value)
+	    !sg_cv.noweave->value)
 	{
 		if (bestlink < 0)
 			duel_hold = true;
@@ -8897,7 +8891,7 @@ no_hold:;
 	 * on cost is a fraction of a second of arrival time per leg.
 	 */
 	{
-		float dose = gi.cvar("sg_breather", "4", 0)->value;
+		float dose = sg_cv.breather->value;
 
 		if (dose > 0.0f && role != SG_ROLE_CARRY &&
 		    bot->hook_phase == 0 && !bot->engaged_last &&
@@ -8922,7 +8916,7 @@ no_hold:;
 
 	{
 		int		total = cmd.msec;
-		int		sub = (int)gi.cvar("sg_subframes", "8", 0)->value;
+		int		sub = (int)sg_cv.subframes->value;
 		int		base, rem, step;
 		short	plain_forward = cmd.forwardmove;
 		short	nav_jump = cmd.upmove;
@@ -8996,7 +8990,7 @@ no_hold:;
 				 * miss NADEPOP measured (medians 434 and 717, radius
 				 * 165, waves 140/142) */
 				bot->nade_until = level.time + 3.2f;
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("NADE %s cooking\n",
 					           e->client->pers.netname);
 			}
@@ -9019,7 +9013,7 @@ no_hold:;
 			 * post. Ground targets keep the book (a runner outlives
 			 * the fuse; the eight nulled mechanisms all chased them).
 			 */
-			if (gi.cvar("sg_nadelead", "1", 0)->value)
+			if (sg_cv.nadelead->value)
 			{
 				edict_t *len9 = SG_CombatLiveEnemy(e);
 
@@ -9145,7 +9139,7 @@ no_hold:;
 			 * command -- the flick. Attack stays held throughout;
 			 * cooking needs the trigger, not the eyes.
 			 */
-			if (!(gi.cvar("sg_flycook", "1", 0)->value) ||
+			if (!(sg_cv.flycook->value) ||
 			    (nfly >= 0.0f && ntmr - 0.2f <= nfly + 0.15f) ||
 			    ntmr <= 0.75f)
 			{
@@ -9182,7 +9176,7 @@ no_hold:;
 				cmd.buttons &= ~BUTTON_ATTACK;   /* the release throws */
 				bot->nade_phase = 0;
 				bot->nade_next = level.time + 8.0f;
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("NADE %s thrown fly=%.2f fuse=%.2f\n",
 					           e->client->pers.netname,
 					           nfly, ntmr - 0.2f);
@@ -9197,7 +9191,7 @@ no_hold:;
 		 * frame, zero route seconds. Free speculation; the splash
 		 * does the rest or nothing does.
 		 */
-		if (gi.cvar("sg_soundfire", "1", 0)->value &&
+		if (sg_cv.soundfire->value &&
 		    !duel && !engaged && role != SG_ROLE_CARRY &&
 		    bot->nade_phase == 0 && bot->hook_phase == 0 &&
 		    level.time >= bot->soundfire_next &&
@@ -9265,7 +9259,7 @@ no_hold:;
 					    - e->client->ps.pmove.delta_angles[PITCH];
 					cmd.buttons |= BUTTON_ATTACK;
 					bot->soundfire_next = level.time + 8.0f;
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("SNDFIRE %s rng=%.0f\n",
 						           e->client->pers.netname, sl15);
 				}
@@ -9378,7 +9372,7 @@ no_hold:;
 		 * consumer gets, and sixteen bots stop doing it identically.
 		 */
 		{
-			float dose = gi.cvar("sg_airstrafe", "0", 0)->value;
+			float dose = sg_cv.airstrafe->value;
 			float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 			                 e->velocity[1] * e->velocity[1]);
 
@@ -9483,7 +9477,7 @@ no_hold:;
 					 * would otherwise write a line a second per bot, and
 					 * the log is for reading */
 					if (dur >= SG_AS_MINCHAIN &&
-					    gi.cvar("sg_debug", "0", 0)->value &&
+					    sg_cv.debug->value &&
 					    !(bot->as_said++ & 7))
 						gi.dprintf("AIRCHAIN %s %.2fs entry=%.0f "
 						           "peak=%.0f\n",
@@ -9511,7 +9505,7 @@ no_hold:;
 			               e->client->ps.pmove.delta_angles[YAW]));
 			float want_p = SHORT2ANGLE((short)(cmd.angles[PITCH] +
 			               e->client->ps.pmove.delta_angles[PITCH]));
-			float rate = gi.cvar("sg_turnrate", "600", 0)->value;
+			float rate = sg_cv.turnrate->value;
 
 			if (!bot->view_on || rate <= 0.0f)
 			{
@@ -9693,7 +9687,7 @@ no_hold:;
 				 * wall stops more rails than it starts. */
 				if (role == SG_ROLE_CARRY && cmd.forwardmove != 0 &&
 				    open_ahead &&
-				    !gi.cvar("sg_noweave", "0", 0)->value)
+				    !sg_cv.noweave->value)
 				{
 					int s9;
 
@@ -9748,9 +9742,9 @@ no_hold:;
 			 * and in film it reads as pacing variation, not flight.
 			 */
 			if (bot->linger_hot &&
-			    gi.cvar("sg_depace", "0", 0)->value > 0.0f)
+			    sg_cv.depace->value > 0.0f)
 			{
-				float dp = gi.cvar("sg_depace", "0", 0)->value;
+				float dp = sg_cv.depace->value;
 
 				cmd.forwardmove = (short)(cmd.forwardmove * dp);
 				cmd.sidemove = (short)(cmd.sidemove * dp);
@@ -9850,7 +9844,7 @@ no_hold:;
 			 * grounded. Now the hop goes in as the aim closes (8
 			 * degrees); by the 3-degree fire gate the body is
 			 * already airborne and the pull never meets friction. */
-			if (gi.cvar("sg_hopfire", "0", 0)->value &&
+			if (sg_cv.hopfire->value &&
 			    e->groundentity &&
 			    fabsf(ddy) < 8.0f && fabsf(ddp) < 8.0f)
 				cmd.upmove = 400;
@@ -9885,7 +9879,7 @@ no_hold:;
 				if (str.surface &&
 				    (str.surface->flags & SURF_SKY))
 				{
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("HOOKSKYHOLD %s\n",
 						           e->client->pers.netname);
 					goto hook_wait;
@@ -9899,7 +9893,7 @@ no_hold:;
 				    str.ent->client->ctf.teamnum ==
 				    e->client->ctf.teamnum)
 				{
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("HOOKMATEHOLD %s\n",
 						           e->client->pers.netname);
 					goto hook_wait;
@@ -9907,7 +9901,7 @@ no_hold:;
 			}
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
-			if (gi.cvar("sg_debug", "0", 0)->value)
+			if (sg_cv.debug->value)
 				gi.dprintf("HOOKFIRE %s at (%.0f %.0f %.0f)\n",
 				           e->client->pers.netname, bot->hook_anchor[0],
 				           bot->hook_anchor[1], bot->hook_anchor[2]);
@@ -9936,7 +9930,7 @@ no_hold:;
 			 * at runtime that generation held open for the rope-line
 			 * proof. The attach entity's classname names the culprit.
 			 */
-			if (gi.cvar("sg_debug", "0", 0)->value &&
+			if (sg_cv.debug->value &&
 			    e->client->hook && e->client->hook->hook_target &&
 			    !bot->hook_bite_logged)
 			{
@@ -10083,7 +10077,7 @@ no_hold:;
 								}
 								if (!arc_clear)
 								{
-									if (gi.cvar("sg_debug", "0", 0)->value)
+									if (sg_cv.debug->value)
 										gi.dprintf("HOOKARCVETO %s\n",
 										           e->client->pers.netname);
 									goto hook_wait;
@@ -10131,7 +10125,7 @@ no_hold:;
 					 * (the SILENT SUCCESS that made the land-rate
 					 * denominator a lie), stalled to deadline, or
 					 * the rope never held */
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("HOOKEND %s %s\n",
 						           e->client->pers.netname,
 						           bs2 > 600.0f * 600.0f ? "burst"
@@ -10150,7 +10144,7 @@ no_hold:;
 					ctf_hook_abort(e);
 				/* a cut live rope hands off to the landing steer; a rope
 				 * that never attached does not */
-				if (!was_pulling && gi.cvar("sg_debug", "0", 0)->value)
+				if (!was_pulling && sg_cv.debug->value)
 					gi.dprintf("HOOKEND %s noattach\n",
 					           e->client->pers.netname);
 				bot->hook_phase = was_pulling ? 3 : 0;
@@ -10167,8 +10161,8 @@ no_hold:;
 
 hook_wait:;
 	/* the literal emission record: what this frame's usercmd contained */
-	if (gi.cvar("sg_debug", "0", 0)->value >= 2 || 
-	    (gi.cvar("sg_debug", "0", 0)->value && level.time >= bot->next_cmdlog))
+	if (sg_cv.debug->value >= 2 || 
+	    (sg_cv.debug->value && level.time >= bot->next_cmdlog))
 	{
 		bot->next_cmdlog = level.time + 1.0f;
 		/* the last step of the frame: fwd/side/up are that step's command,
@@ -10181,7 +10175,7 @@ hook_wait:;
 
 	/* once a second, the full body state: enough to reconstruct any stall
 	 * offline without another instrumented rerun */
-	if (gi.cvar("sg_debug", "0", 0)->value && level.time >= bot->next_report)
+	if (sg_cv.debug->value && level.time >= bot->next_report)
 	{
 		float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 		                 e->velocity[1] * e->velocity[1]);

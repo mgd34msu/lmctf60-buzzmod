@@ -26,6 +26,7 @@
 #include "sqlite3.h"
 #include "ctf_file_io.h"
 #include "ctf_sqlite_unidb.h"
+#include "slipgate/sg_cvars.h"
 
 #define DB_CREATEUDATA \
 	"CREATE TABLE IF NOT EXISTS [userdata] ([char_idx] INTEGER, [playername] CHAR(64), " \
@@ -1510,7 +1511,7 @@ static int sess_written_match = -1;
 static qboolean DB_SessionEnabled(void)
 {
 	if (!sg_sessiondb)
-		sg_sessiondb = gi.cvar("sg_sessiondb", "1", 0);
+		sg_sessiondb = sg_cv.sessiondb;
 	return sg_sessiondb->value != 0.0f;
 }
 

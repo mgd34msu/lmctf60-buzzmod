@@ -14,6 +14,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_cvars.h"
 
 sg_fields_t sg_fields;
 
@@ -100,7 +101,7 @@ static int sg_ropecost_ms = 1000;
 
 void SG_RopecostRefresh(void)
 {
-	sg_ropecost_ms = (int)gi.cvar("sg_ropecost", "1000", 0)->value;
+	sg_ropecost_ms = (int)sg_cv.ropecost->value;
 	if (sg_ropecost_ms < 0)
 		sg_ropecost_ms = 0;
 }
@@ -532,7 +533,7 @@ void Field_Flood(rune_t *r, int *dist,
 {
 	Field_FloodRun(r, dist, sources, source_cost, num_sources, SG_ENV_BUCKETS);
 
-	if (sg_floodcheck_armed && gi.cvar("sg_debug", "0", 0)->value)
+	if (sg_floodcheck_armed && sg_cv.debug->value)
 	{
 		int i, ns = r->hdr.num_seeds, flat = 0, env = 0;
 
@@ -637,7 +638,7 @@ static qboolean Class_PerItem(int cls)
  */
 qboolean SG_MegaOn(void)
 {
-	return (gi.cvar("sg_megaworth", "0", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.megaworth->value > 0.0f) ? true : false;
 }
 
 static void Mega_Build(rune_t *r)
@@ -766,7 +767,7 @@ qboolean Fields_Setup(rune_t *r)
 	 * lands on the platform (not sub-stand), so a knocked-in bot's escape
 	 * still prices clean.
 	 */
-	if (gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
+	if (sg_cv.shelfcost->value > 0.0f)
 	{
 		int t;
 
@@ -788,7 +789,7 @@ qboolean Fields_Setup(rune_t *r)
 				if (dx * dx + dy * dy <= 350.0f * 350.0f &&
 				    r->seeds[fi].origin[2] <= fo[2] - 96.0f)
 					sg_shelf_pen[fi] = (int)
-					    (gi.cvar("sg_shelfcost", "0", 0)->value * 12000.0f);
+					    (sg_cv.shelfcost->value * 12000.0f);
 			}
 			Field_FromOne(r, t ? sg_fields.to_blue_flag
 			                   : sg_fields.to_red_flag, fseed);
@@ -841,7 +842,7 @@ qboolean Fields_Setup(rune_t *r)
 			}
 			if (best_plat == 0x7fffffff)
 			{
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("SHELF t=%d: no platform-level seed in radius\n", t);
 				continue;
 			}
@@ -878,7 +879,7 @@ qboolean Fields_Setup(rune_t *r)
 						}
 					}
 				}
-				if (gi.cvar("sg_debug", "0", 0)->value)
+				if (sg_cv.debug->value)
 					gi.dprintf("SHELF t=%d: %d sub-stand seeds, %d cliffed, max %d, best_plat %d\n",
 					           t, sub, n, mx, best_plat);
 			}

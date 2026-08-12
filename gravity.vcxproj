@@ -347,6 +347,7 @@
     <ClCompile Include="p_weapon.c" />
     <ClCompile Include="q_shared.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
+    <ClCompile Include="slipgate\sg_cvars.c" />
     <ClCompile Include="slipgate\sg_caco.c" />
     <ClCompile Include="slipgate\sg_chat.c" />
     <ClCompile Include="slipgate\sg_combat.c" />

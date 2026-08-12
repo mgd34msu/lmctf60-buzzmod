@@ -8,6 +8,7 @@
 #include "g_skins.h"
 #include "g_ctffunc.h" //surt for log renaming
 #include "bat.h"
+#include "slipgate/sg_cvars.h"
 
 qboolean SG_OwnsBot(edict_t * ent);
 int SG_RemoveBots(void);
@@ -145,6 +146,8 @@ is loaded.
 */
 void InitGame(void)
 {
+	/* the SLIPGATE cvar registry, before anything reads sg_cv */
+	SG_CvarsInit();
 
 #ifdef	_WIN32
 	_CrtMemCheckpoint(&startup1);

@@ -2,6 +2,7 @@
 
 #include "g_local.h"
 #include "g_tourney.h"
+#include "slipgate/sg_cvars.h"
 
 void SG_CombatHit(edict_t *att, edict_t *victim);
 void SG_NoteDamage(edict_t *victim, edict_t *att, int dmg,
@@ -612,7 +613,7 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 		 * damage ledger at the one site where it lands -- attacker,
 		 * victim, amount, mod, carrier state, both airborne states,
 		 * and range. Observation only; the game plays identically. */
-		if (gi.cvar("sg_debug", "0", 0)->value && client &&
+		if (sg_cv.debug->value && client &&
 		    attacker && attacker->client)
 		{
 			vec3_t dgv;

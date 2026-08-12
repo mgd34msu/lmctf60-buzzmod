@@ -31,6 +31,7 @@
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
 
 #include <math.h>
+#include "slipgate/sg_cvars.h"
 
 /* ------------------------------------------------------------------- facts
  *
@@ -689,7 +690,7 @@ static cvar_t	*sg_wswitch;
 static qboolean Combat_WSwitch(void)
 {
 	if (!sg_wswitch)
-		sg_wswitch = gi.cvar("sg_wswitch", "0", 0);
+		sg_wswitch = sg_cv.wswitch;
 	return (qboolean)(sg_wswitch && sg_wswitch->value != 0.0f);
 }
 
@@ -707,7 +708,7 @@ static cvar_t	*sg_aimtexture;
 static qboolean Combat_TexOn(void)
 {
 	if (!sg_aimtexture)
-		sg_aimtexture = gi.cvar("sg_aimtexture", "1", 0);
+		sg_aimtexture = sg_cv.aimtexture;
 	return (qboolean)(sg_aimtexture && sg_aimtexture->value != 0.0f);
 }
 
@@ -1295,7 +1296,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 	 * switches because BandAllows already refuses it. Doctrine ladders
 	 * above (carrier, intercept) outrank commitment on purpose.
 	 */
-	if (gi.cvar("sg_wcommit", "1", 0)->value != 0.0f)
+	if (sg_cv.wcommit->value != 0.0f)
 	{
 		int held = Combat_Held(self);
 
@@ -1307,7 +1308,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 		 * commits to; mode 2 refuses it and lets the ladder walk pick a
 		 * real weapon the moment one is stocked.
 		 */
-		if (gi.cvar("sg_wcommit", "1", 0)->value >= 2.0f &&
+		if (sg_cv.wcommit->value >= 2.0f &&
 		    held == SG_W_BLASTER)
 			held = -1;
 
@@ -1580,7 +1581,7 @@ static void Combat_Request(edict_t *self, sg_combat_state_t *st, int w)
 		st->ws_gate = level.time + SG_WS_COOLDOWN;
 		st->ws_armed = level.time;
 
-		if (gi.cvar("sg_debug", "0", 0)->value)
+		if (sg_cv.debug->value)
 			gi.dprintf("WSWITCH mid %s w%d->w%d waited=%.0fms (%s)\n",
 			           self->client->pers.netname, held, w,
 			           waited * 1000.0f,
@@ -1738,7 +1739,7 @@ static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 		                         * for that range, not an argument for holding
 		                         * the worst weapon in the game while walking */
 
-	if (want != st->ws_pre && gi.cvar("sg_debug", "0", 0)->value)
+	if (want != st->ws_pre && sg_cv.debug->value)
 		gi.dprintf("WSWITCH pre %s w%d->w%d expect=%.0f hand-wants=%.0f "
 		           "miss=%.0f bar=%.0f belief=%.1fs\n",
 		           self->client->pers.netname, held, want, best, have,
@@ -2020,7 +2021,7 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	 * still binds afterwards, so a big dose widens the common case
 	 * without inventing physically absurd flicks.
 	 */
-	over *= gi.cvar("sg_aimtexture", "1", 0)->value;
+	over *= sg_cv.aimtexture->value;
 	if (over > SG_TEX_OVER_CAP)
 		over = SG_TEX_OVER_CAP;
 
@@ -2045,7 +2046,7 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	 */
 	st->tex_cyc = (style >= 0.5f) ? 2.0f : 1.0f;
 
-	if (gi.cvar("sg_debug", "0", 0)->value)
+	if (sg_cv.debug->value)
 		gi.dprintf("AIMTEX %s flick=%.1f over=%.2f settle=%dms cyc=%d "
 		           "style=%.2f\n",
 		           self->client->pers.netname, flick, over,
@@ -2205,7 +2206,7 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	 * splash forgives timing the way rule D1 promises.
 	 */
 	if (w == SG_W_ROCKETLAUNCHER && !enemy->groundentity &&
-	    gi.cvar("sg_landlead", "1", 0)->value)
+	    sg_cv.landlead->value)
 	{
 		vec3_t p0, p1;
 		trace_t ltr;
@@ -3368,7 +3369,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * don't know it. Hold the rail on swimmers if it's in the pack.
 	 */
 	if (enemy->waterlevel > 1 &&
-	    gi.cvar("sg_wetwork", "1", 0)->value)
+	    sg_cv.wetwork->value)
 	{
 		static const int wet_rg[] = { SG_W_RAILGUN, -1 };
 		int wr = Combat_WalkLadder(self, wet_rg, dist, false);
@@ -3773,7 +3774,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * bottom taps 0.2-0.7s late, the top 0.05-0.19s (pros with reload
 	 * cues ARE near-metronomic -- the spread stays honest to skill).
 	 */
-	if (gi.cvar("sg_tapvar", "0", 0)->value > 0.0f)
+	if (sg_cv.tapvar->value > 0.0f)
 	{
 		int hw = Combat_Held(self);
 
@@ -3800,10 +3801,10 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 					 * cycle's CV; 3 = 0.24-0.66s holds, the scale a
 					 * human's deliberate re-aim actually occupies */
 					st->tap_until = level.time +
-					    gi.cvar("sg_tapvar", "0", 0)->value *
+					    sg_cv.tapvar->value *
 					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
 					    (0.4f + 1.2f * random());
-					if (gi.cvar("sg_debug", "0", 0)->value)
+					if (sg_cv.debug->value)
 						gi.dprintf("TAPDBG %s w=%d delay=%.2f\n",
 						           self->client->pers.netname, hw,
 						           st->tap_until - level.time);
@@ -3829,7 +3830,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * stable ~0.18s; every strafe reversal restarts the clock. The
 	 * carrier is exempt (its flee trigger conduct is separately tuned).
 	 */
-	if (gi.cvar("sg_firedisc", "0", 0)->value > 0.0f &&
+	if (sg_cv.firedisc->value > 0.0f &&
 	    !Combat_Carrying(self))
 	{
 		float sp2 = self->velocity[0] * self->velocity[0]
@@ -3923,7 +3924,7 @@ void SG_CombatHit(edict_t *att, edict_t *victim)
 /* the tally, printed from SG_CombatFrame's caller cadence via any bot */
 void SG_CombatWhy(void)
 {
-	if (!gi.cvar("sg_debug", "0", 0)->value || level.time < sg_cbt_why_next)
+	if (!sg_cv.debug->value || level.time < sg_cbt_why_next)
 		return;
 	sg_cbt_why_next = level.time + 5.0f;
 	gi.dprintf("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d react=%d\n",
