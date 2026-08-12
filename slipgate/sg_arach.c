@@ -2035,6 +2035,84 @@ static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
 	return SG_WorthMega(e);
 }
 
+/*
+ * THE CORPSE FRAME (split from SG_BotThink, 2026-08-11 standards pass;
+ * body verbatim). Everything a dead bot owes the world: teach the danger
+ * and tilt ledgers once, drop every live claim, pulse the respawn
+ * button. Returns true when this frame belonged to a corpse and the
+ * think ends with it.
+ */
+static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd)
+{
+	if (!e->deadflag)
+		return false;
+
+	/* my own death, at my own seed: the most honest sighting there
+	 * is, and the danger dimension's only teacher */
+	if (bot->seed >= 0 && !bot->death_taught)
+	{
+		Danger_Learn(e->client->ctf.teamnum, bot->seed);
+		Tilt_Note(e, bot);      /* the same death, remembered personally */
+		bot->death_taught = true;
+	}
+	bot->seed = -1;
+	bot->view_on = false;   /* respawn snaps the view fresh */
+	bot->railhold_since = 0.0f;     /* a corpse is not waiting on a lane */
+	bot->railhold_enemy = -1;
+	/* a chain that ended in a death ended; the frame that would have
+	 * closed it never ran, and a stale start would date the next one */
+	bot->as_since = 0.0f;
+	bot->as_phase = 0.0f;
+	/* a corpse is not standing anybody's pad: release the lease early
+	 * rather than making the next claimant wait it out */
+	Lead_Abort(bot, "died");
+	/* no reading, so the respawn's jump to 100 is not a pickup; the
+	 * back-off dies with the life that earned it */
+	bot->mega_on = false;
+	bot->mega_hp = 0;
+	bot->mega_since = 0.0f;
+	bot->mega_next = 0.0f;
+	bot->beat_ready = true; /* dead HERE, on this level: the spawn beat
+	                         * has something to be the far side of */
+	/*
+	 * PULSE the trigger, never hold it. Respawn keys off
+	 * latched_buttons -- fresh presses only (p_client.c:3203) -- and
+	 * a button held from the first dead frame latches exactly once,
+	 * before respawn_time has elapsed, then never again: the corpse
+	 * waits forever for a press that cannot re-arrive. Observed live
+	 * the moment a human watched a body instead of a stat line.
+	 * Toggling at 5Hz lands a fresh latch every other frame.
+	 */
+	cmd->buttons = (((int)(level.time * 10.0f)) & 2)
+	              ? BUTTON_ATTACK : 0;
+	ClientThink(e, cmd);
+	return true;
+}
+
+/*
+ * THE RESPAWN EDGE (same split, body verbatim): the first live frame
+ * after a death, where the tilt clocks start -- a window started on the
+ * corpse would spend a second and a half of itself lying on the floor.
+ */
+static void Think_RespawnEdge(sg_bot_t *bot, edict_t *e)
+{
+	if (bot->death_taught && sg_cv.tilt->value > 0.0f)
+	{
+		/* the caution runs shorter for the better shooter: the same
+		 * span the threat clock uses, and for the same reason -- the
+		 * skill-4 bot gets his composure back first. Skill is read
+		 * through combat's own accessor (0..400) so there is exactly
+		 * one skill model in this tree. */
+		float sk = (float)SG_CombatSkill(e) / 400.0f;   /* 0..1 */
+
+		if (sk < 0.0f) sk = 0.0f;
+		if (sk > 1.0f) sk = 1.0f;
+		bot->tilt_until = level.time + bot->tilt_window;
+		bot->tilt_caution_until = level.time + SG_TILT_CAUTION +
+		    (SG_TILT_CAUTION4 - SG_TILT_CAUTION) * sk;
+	}
+}
+
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -2091,73 +2169,9 @@ void SG_BotThink(sg_bot_t *bot)
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 100;
 
-	if (e->deadflag)
-	{
-		/* my own death, at my own seed: the most honest sighting there
-		 * is, and the danger dimension's only teacher */
-		if (bot->seed >= 0 && !bot->death_taught)
-		{
-			Danger_Learn(e->client->ctf.teamnum, bot->seed);
-			Tilt_Note(e, bot);      /* the same death, remembered personally */
-			bot->death_taught = true;
-		}
-		bot->seed = -1;
-		bot->view_on = false;   /* respawn snaps the view fresh */
-		bot->railhold_since = 0.0f;     /* a corpse is not waiting on a lane */
-		bot->railhold_enemy = -1;
-		/* a chain that ended in a death ended; the frame that would have
-		 * closed it never ran, and a stale start would date the next one */
-		bot->as_since = 0.0f;
-		bot->as_phase = 0.0f;
-		/* a corpse is not standing anybody's pad: release the lease early
-		 * rather than making the next claimant wait it out */
-		Lead_Abort(bot, "died");
-		/* no reading, so the respawn's jump to 100 is not a pickup; the
-		 * back-off dies with the life that earned it */
-		bot->mega_on = false;
-		bot->mega_hp = 0;
-		bot->mega_since = 0.0f;
-		bot->mega_next = 0.0f;
-		bot->beat_ready = true; /* dead HERE, on this level: the spawn beat
-		                         * has something to be the far side of */
-		/*
-		 * PULSE the trigger, never hold it. Respawn keys off
-		 * latched_buttons -- fresh presses only (p_client.c:3203) -- and
-		 * a button held from the first dead frame latches exactly once,
-		 * before respawn_time has elapsed, then never again: the corpse
-		 * waits forever for a press that cannot re-arrive. Observed live
-		 * the moment a human watched a body instead of a stat line.
-		 * Toggling at 5Hz lands a fresh latch every other frame.
-		 */
-		cmd.buttons = (((int)(level.time * 10.0f)) & 2)
-		              ? BUTTON_ATTACK : 0;
-		ClientThink(e, &cmd);
+	if (Think_Dead(bot, e, &cmd))
 		return;
-	}
-	/*
-	 * The respawn edge, and the only one this file actually gets: the
-	 * lives ticker further down keys off health <= 0, which a body with
-	 * deadflag set never reaches because the block above returns first.
-	 * death_taught is still true on the first LIVE frame after a death,
-	 * so this is the frame the new life starts on -- which is where the
-	 * tilt clocks belong. A window started on the corpse would spend a
-	 * second and a half of itself lying on the floor.
-	 */
-	if (bot->death_taught && sg_cv.tilt->value > 0.0f)
-	{
-		/* the caution runs shorter for the better shooter: the same
-		 * span the threat clock uses, and for the same reason -- the
-		 * skill-4 bot gets his composure back first. Skill is read
-		 * through combat's own accessor (0..400) so there is exactly
-		 * one skill model in this tree. */
-		float sk = (float)SG_CombatSkill(e) / 400.0f;   /* 0..1 */
-
-		if (sk < 0.0f) sk = 0.0f;
-		if (sk > 1.0f) sk = 1.0f;
-		bot->tilt_until = level.time + bot->tilt_window;
-		bot->tilt_caution_until = level.time + SG_TILT_CAUTION +
-		    (SG_TILT_CAUTION4 - SG_TILT_CAUTION) * sk;
-	}
+	Think_RespawnEdge(bot, e);
 	bot->death_taught = false;
 
 	/* my eyes feed the team belief before I decide from it */
