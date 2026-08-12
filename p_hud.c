@@ -4,6 +4,8 @@
 #include "bat.h"
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
+#include "ui_text.h"                // bounded appender, needed by ui_layout.h below
+#include "ui_layout.h"              // declarative screen compiler; Railboard is its proof conversion
 
 int MvpDisp;
 
@@ -1822,6 +1824,44 @@ void Railboard(edict_t* ent)
     gi.unicast(ent, true);
 }
 
+// Row storage + row callback for Railboard's UI_TABLE (ui_layout.h).
+// The original board never positioned its four numbers as separate
+// xv-columns -- it packed name+kills+hits+shots+pct into one printf-
+// padded string and drew that as a single string2 token per row. That
+// is a one-column table (the row callback fills the whole packed
+// line into cells[0]); UI_TABLE's multi-column x-offset/priority
+// machinery exists for boards that need real per-column positioning,
+// which this one does not.
+typedef struct
+{
+    edict_t *sorted[MAX_CLIENTS];
+    int      count;
+} railboard_rows_t;
+
+static void Railboard_FillRow(void *userdata, int row, int num_columns,
+    char cells[UI_TABLE_MAX_COLUMNS][UI_CELL_LEN])
+{
+    const railboard_rows_t *rows = (const railboard_rows_t *)userdata;
+    edict_t     *cl_ent = rows->sorted[row];
+    gclient_t   *cl = cl_ent->client;
+    long        shot, hit, kill;
+
+    shot = stats_get(cl_ent, STATS_RAIL_SHOT);
+    hit  = stats_get(cl_ent, STATS_RAIL_HIT);
+    kill = stats_get(cl_ent, STATS_RAIL_KILL);
+
+    // went straight through p_stats_player, which is NULL for a client
+    // that has not finished connecting. stats_get guards it.
+    Com_sprintf(cells[0], UI_CELL_LEN, "%-15s %2i %2i %3i %3i",
+        cl->pers.netname,
+        (int)kill,
+        (int)hit,
+        (int)shot,
+        shot == 0 ? 0 : (int)(100 * hit / shot));
+
+    (void)num_columns; // always 1 for this board
+}
+
 /*
 ==================
 RailboardMessage
@@ -1830,29 +1870,30 @@ RailboardMessage
 */
 void RailboardMessage(edict_t* ent, edict_t* killer)
 {
-    char    string[MAX_MSGLEN];
-    char    string2[MAX_MSGLEN];
+    char                storage[UI_LAYOUT_BUDGET];
+    ui_buf_t            sb;
+    ui_screen_t         screen;
+    ui_elem_t           elems[3];
+    ui_table_col_t      column;
+    railboard_rows_t    rows;
 
-    size_t  stringlength;
     int     i;
-    int     j;      // sort index and strlen result; int so the
-                    // comparisons against red/blue/k stay signed
+    int     j;      // sort index; int so the
+                    // comparisons against k stay signed
     int     k;
     int     player = 0;
     int     rails = 0;
     int     playersorted[MAX_CLIENTS];
     int     playersortedrails[MAX_CLIENTS];
+    int     dropped;
 
-    int     x, y;
-
-    gclient_t* cl;
     edict_t* cl_ent;
 
-    // sort the clients by rail kills
+    // sort the clients by rail kills -- unchanged from the hand-written
+    // version: same insertion sort, same CTF-team-only filter.
     for (i = 0; i < game.maxclients; i++)
     {
         cl_ent = g_edicts + 1 + i;
-        cl = &game.clients[i];
 
         if (!cl_ent->inuse)
             continue;
@@ -1878,64 +1919,53 @@ void RailboardMessage(edict_t* ent, edict_t* killer)
 
     }
 
-    string[0] = 0;
-    string2[0] = 0;
-    stringlength = 0;
-    y = 32 * 8;
-
-    // DRAW STATBOARD AND ADD RAILS
-    {
-        Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i picn %s "
-            "xv %i yv %i picn %s ",
-
-            29, -35, "rb",
-            41, -26, "rt"
-
-        );
-
-        j = (int)strlen(string2);
-        if (stringlength + j < 1024)
-        {
-            strcpy(string + stringlength, string2);
-            stringlength += j;
-        }
-    }
-
+    rows.count = player;
     for (i = 0; i < player; i++)
-    {
-        cl = &game.clients[playersorted[i]];
-        cl_ent = g_edicts + 1 + playersorted[i];
+        rows.sorted[i] = g_edicts + 1 + playersorted[i];
 
-        x = 40;
-        y = -18 + 8 * i;
+    // header: the two rail-board pics, unconditional
+    elems[0].kind = UI_PIC;
+    elems[0].u.pic.x = 29;
+    elems[0].u.pic.y = -35;
+    elems[0].u.pic.stat_driven = false;
+    elems[0].u.pic.image.name = "rb";
 
-        // send the layout        
-        Com_sprintf(string2, sizeof(string2),
-            "xv %i yv %i string2 \"%-15s %2i %2i %3i %3i\" ",
+    elems[1].kind = UI_PIC;
+    elems[1].u.pic.x = 41;
+    elems[1].u.pic.y = -26;
+    elems[1].u.pic.stat_driven = false;
+    elems[1].u.pic.image.name = "rt";
 
-            x, y,
-            cl->pers.netname,
-            (int)stats_get(cl_ent, STATS_RAIL_KILL),
-            (int)stats_get(cl_ent, STATS_RAIL_HIT),
-            (int)stats_get(cl_ent, STATS_RAIL_SHOT),
-            // went straight through p_stats_player, which is NULL for a client
-            // that has not finished connecting. stats_get guards it.
-            stats_get(cl_ent, STATS_RAIL_SHOT) == 0 ? 0 :
-                (int)(100 * stats_get(cl_ent, STATS_RAIL_HIT) /
-                      stats_get(cl_ent, STATS_RAIL_SHOT))
-        );
+    // one highlighted row per sorted player, one packed column each --
+    // reproduces the original's single string2 token per row.
+    column.x_offset = 0;
+    column.priority = 0;
 
-        j = (int)strlen(string2);
-        if (stringlength + j > 1024)
-            break;
-        strcpy(string + stringlength, string2);
-        stringlength += j;
+    elems[2].kind = UI_TABLE;
+    elems[2].u.table.x = 40;
+    elems[2].u.table.y = -18;
+    elems[2].u.table.row_dy = 8;
+    elems[2].u.table.columns = &column;
+    elems[2].u.table.num_columns = 1;
+    elems[2].u.table.num_rows = rows.count;
+    elems[2].u.table.fill_row = Railboard_FillRow;
+    elems[2].u.table.userdata = &rows;
+    elems[2].u.table.highlight = true;
+    elems[2].u.table.footer = NULL;
+    elems[2].u.table.footer_x = 0;
+    elems[2].u.table.footer_y = 0;
+    elems[2].u.table.footer_highlight = false;
 
-    }
+    screen.elems = elems;
+    screen.count = 3;
+
+    ui_buf_init(&sb, storage, sizeof(storage));
+    dropped = ui_layout_compile(&screen, &sb);
+    if (dropped > 0)
+        gi.dprintf("Railboard: %d row(s) dropped by the layout budget\n", dropped);
 
     gi.WriteByte(svc_layout);
-    gi.WriteString(string);
+    gi.WriteString(storage);
 
 }
 
