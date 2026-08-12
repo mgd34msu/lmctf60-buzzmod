@@ -304,6 +304,7 @@ extern sg_bot_t sg_bots[SG_MAXBOTS];
 void SG_BotThink(sg_bot_t *bot);
 qboolean SG_LevelSetup(void);
 void Botfill_Frame(void);
+qboolean Beat_HurtSince(edict_t *e, float since);
 
 extern const char *sg_role_names[];
 
