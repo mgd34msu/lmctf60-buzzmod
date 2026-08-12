@@ -4266,137 +4266,37 @@ static int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 }
 
 
-void SG_BotThink(sg_bot_t *bot)
+/*
+ * THE COMMITMENT (split from SG_BotThink, 2026-08-11 standards pass;
+ * body verbatim): everything between the argmin and the aim -- the link
+ * latch, saddle commitment, dead-door shelving, the straight-line and
+ * see-the-flag terminal overrides, the clean grab, the defender post,
+ * and the rail hold. Returns the link the body will actually ride.
+ */
+static int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
+                            int team, qboolean carrying,
+                            const sg_weights_t *live,
+                            const sg_weights_t *w,
+                            const int *goal_field, qboolean precision,
+                            qboolean duel, vec3_t duel_org,
+                            float duel_want, float duel_expo,
+                            float bestval, float incumbent_v,
+                            int rail_seed, int rail_client,
+                            float rail_dose, int bestlink_in, usercmd_t *cmd,
+                            qboolean *rally_hold_io,
+                            qboolean *rail_hold_io,
+                            qboolean *think_over,
+                            qboolean *hold_post_out,
+                            float *post_yaw_io, float *post_sight_io)
 {
-	edict_t *e = bot->ent;
-	usercmd_t cmd;
-	const int *goal_field, *support = NULL, *intercept = NULL;
-	const int *route_field;
-	qboolean route_pure;
-	const sg_weights_t *w;
-	sg_role_t role;
-	int team, li, bestlink = -1;
-	float bestval;
-	float incumbent_v = 1e30f;
-	vec3_t want, d;
-	qboolean carrying;
-
-	/* movement policy state for this frame */
-	vec3_t		basis_fwd, basis_right;     /* the basis pmove will build */
-	vec3_t		move_dir;                   /* heading the route wants */
-	float		view_yaw = 0.0f, view_pitch = 0.0f;
-	qboolean	have_move = false;          /* a direction to travel at all */
-	qboolean	open_ahead = false;         /* room in front to hop into */
-	qboolean	run_link = false;           /* chosen link is ground running */
-	qboolean	precision = false;          /* final approach: no tricks */
-	qboolean	hold_post = false;          /* defender at its stand: guard */
-	qboolean	rally_hold = false;         /* attacker waiting for a partner */
-	qboolean	rail_hold = false;          /* waiting out a railer's reload */
-	int			rail_seed = -1;             /* where that railer is believed */
-	int			rail_client = -1;           /* and who he is */
-	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
-	float		post_yaw = 0.0f;            /* facing the likeliest approach */
-	float		post_sight = -1.0f;         /* clear distance down that facing;
-	                                         * WEAPONS.md 2.4-D3 picks the
-	                                         * pre-held weapon from it */
-	sg_weights_t	live;                   /* the role row, modulated by state */
-	int			door_hold = 0;              /* rotating door ahead: 1 stand,
-	                                         * 2 back out of its swing arc */
-	edict_t		*door_ent = NULL;           /* which door is being waited on */
-	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
-	float		drop_yaw = 0.0f;
-	qboolean	hook_brake = false;         /* slow to the proof's standing
-	                                         * start before firing a rope */
-	int			sub_steps = 1, sub_msec = 0;
-	float		slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
-
-	/* the duel terms, read once per frame and priced per candidate seed */
-	qboolean	duel = false;               /* combat has a live or fresh target */
-	vec3_t		duel_org;                   /* where it is believed to be */
-	float		duel_want = 0.0f;           /* range the weapon in hand wants */
-	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
-	qboolean	duel_hold = false;          /* the chosen step is short: weave */
-	short		weave_side = 0;             /* this frame's strafe sign */
-
-	memset(&cmd, 0, sizeof(cmd));
-	cmd.msec = 100;
-
-	if (Think_Dead(bot, e, &cmd))
-		return;
-	Think_RespawnEdge(bot, e);
-	bot->death_taught = false;
-
-	/* my eyes feed the team belief before I decide from it */
-	Caco_See(sg_rune, e);
-
-	team = e->client->ctf.teamnum;
-	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). Carrying is
-	 * the same inventory test ctf_flagtouch itself makes. */
-	{
-		static gitem_t *flagitem;
-		if (!flagitem)
-			flagitem = FindItem("Enemy Flag");
-		carrying = flagitem &&
-		           e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
-	}
-
-	role = SG_Role(bot, carrying);
-
-	Think_CarryBookends(bot, e, role, team, carrying);
-
-	Think_LiveWeights(bot, e, role, team, &live);
-	w = &live;
-
-	Think_Objective(bot, e, role, team, carrying, w, support, intercept,
-	                &goal_field, &route_field, &route_pure);
-
-
-	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
-
-	Think_InterceptField(role, team, &support, &intercept);
-
-	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
-	bot->terminal = false;
-
-	Think_TrackSeed(bot, e, team);
-	if (bot->seed < 0)
-	{
-		ClientThink(e, &cmd);
-		return;
-	}
-
-	/*
-	 * The precision case: no tricks on the final approach.
-	 *
-	 * A flag is a thirty-unit box and a hop chain covers eight hundred units a
-	 * second; the legacy bots arrived with a second of route left and sailed
-	 * straight over the top, lap after lap. The legacy adapter suppressed the
-	 * tricks within about 700 units of a must-touch goal (bl_main.c:451-464).
-	 * The SLIPGATE field is denominated in real milliseconds of traversal, so
-	 * the same idea is stated in time: inside a second and a half of the
-	 * objective, run plainly and be able to stop. Speed serves the objective.
-	 */
-	precision = (goal_field[bot->seed] < 1500);
-
-	/*
-	 * Ask combat whether there is a fight on, ONCE, before the fan is walked.
-	 * The answer is last frame's -- SG_CombatFrame runs after the movement is
-	 * decided, which is the order the constitution requires (combat modifies a
-	 * usercmd the body already built) -- and a tenth of a second of staleness
-	 * on a believed position that is already up to two seconds old changes
-	 * nothing. The carrier is excluded outright: 2.4-D2 is flee, not fight,
-	 * and its own repulsion term below already prices contact.
-	 */
-	if (role != SG_ROLE_CARRY)
-		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
-
-	/* descend the surface: my seed vs every seed one proven link away */
-	bestlink = Think_PickLink(bot, e, role, team, carrying, &live, w,
-	                          goal_field, route_field, route_pure,
-	                          support, intercept, precision, duel,
-	                          duel_org, duel_want, duel_expo, rally_hold,
-	                          &bestval, &incumbent_v, &rail_seed,
-	                          &rail_client, &rail_dose, &rail_hold);
+	int bestlink = bestlink_in;
+	int li;
+	qboolean rally_hold = *rally_hold_io;
+	qboolean rail_hold = *rail_hold_io;
+	qboolean hold_post = false;
+	float post_yaw = *post_yaw_io;
+	float post_sight = *post_sight_io;
+	vec3_t d;
 
 	/*
 	 * THE LINK LATCH (sg_linklatch, wave 289+). The demo census: 87
@@ -5086,7 +4986,7 @@ void SG_BotThink(sg_bot_t *bot)
 				/*
 				 * ctf_TossEnt aims the lob with client->v_angle, NOT with
 				 * the usercmd -- pmove has not run yet this frame, so
-				 * steering by cmd.angles alone would throw the flag along
+				 * steering by cmd->angles alone would throw the flag along
 				 * LAST frame's facing. Set the view angle the release
 				 * actually reads (pitch flat, so the arc clears the floor
 				 * instead of burying itself), and set the usercmd too so
@@ -5094,7 +4994,7 @@ void SG_BotThink(sg_bot_t *bot)
 				 */
 				e->client->v_angle[YAW] = hy;
 				e->client->v_angle[PITCH] = 0.0f;
-				cmd.angles[YAW] = ANGLE2SHORT(hy)
+				cmd->angles[YAW] = ANGLE2SHORT(hy)
 				    - e->client->ps.pmove.delta_angles[YAW];
 
 				/* the owner named both words: near enough to place it in
@@ -5170,7 +5070,7 @@ void SG_BotThink(sg_bot_t *bot)
 					float ry = atan2f(rd14[1], rd14[0])
 					           * 180.0f / (float)M_PI;
 
-					cmd.angles[YAW] = ANGLE2SHORT(ry)
+					cmd->angles[YAW] = ANGLE2SHORT(ry)
 					    - e->client->ps.pmove.delta_angles[YAW];
 					Drop_Rune(e, e->client->rune->item);
 					bot->runetoss_next = level.time + 20.0f;
@@ -5361,7 +5261,8 @@ void SG_BotThink(sg_bot_t *bot)
 		           e->s.origin[1], e->s.origin[2]);
 		Cmd_Kill_f(e);
 		bot->wedge_since = level.time;
-		return;
+		*think_over = true;
+		return bestlink;
 	}
 
 	VectorSubtract(e->s.origin, bot->stag_org, d);
@@ -5766,12 +5667,165 @@ no_hold:;
 				    level.time - en->seen_time < 3.0f &&
 				    goal_field[en->seed] < 1200)
 				{
-					cmd.buttons |= BUTTON_ATTACK;
+					cmd->buttons |= BUTTON_ATTACK;
 					break;
 				}
 			}
 	}
 
+
+	*rally_hold_io = rally_hold;
+	*rail_hold_io = rail_hold;
+	*hold_post_out = hold_post;
+	*post_yaw_io = post_yaw;
+	*post_sight_io = post_sight;
+	return bestlink;
+}
+
+
+void SG_BotThink(sg_bot_t *bot)
+{
+	edict_t *e = bot->ent;
+	usercmd_t cmd;
+	const int *goal_field, *support = NULL, *intercept = NULL;
+	const int *route_field;
+	qboolean route_pure;
+	const sg_weights_t *w;
+	sg_role_t role;
+	int team, bestlink = -1;
+	float bestval;
+	float incumbent_v = 1e30f;
+	vec3_t want, d;
+	qboolean carrying;
+
+	/* movement policy state for this frame */
+	vec3_t		basis_fwd, basis_right;     /* the basis pmove will build */
+	vec3_t		move_dir;                   /* heading the route wants */
+	float		view_yaw = 0.0f, view_pitch = 0.0f;
+	qboolean	have_move = false;          /* a direction to travel at all */
+	qboolean	open_ahead = false;         /* room in front to hop into */
+	qboolean	run_link = false;           /* chosen link is ground running */
+	qboolean	precision = false;          /* final approach: no tricks */
+	qboolean	hold_post = false;          /* defender at its stand: guard */
+	qboolean	rally_hold = false;         /* attacker waiting for a partner */
+	qboolean	think_over;                 /* a stage ended the frame */
+	qboolean	rail_hold = false;          /* waiting out a railer's reload */
+	int			rail_seed = -1;             /* where that railer is believed */
+	int			rail_client = -1;           /* and who he is */
+	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
+	float		post_yaw = 0.0f;            /* facing the likeliest approach */
+	float		post_sight = -1.0f;         /* clear distance down that facing;
+	                                         * WEAPONS.md 2.4-D3 picks the
+	                                         * pre-held weapon from it */
+	sg_weights_t	live;                   /* the role row, modulated by state */
+	int			door_hold = 0;              /* rotating door ahead: 1 stand,
+	                                         * 2 back out of its swing arc */
+	edict_t		*door_ent = NULL;           /* which door is being waited on */
+	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
+	float		drop_yaw = 0.0f;
+	qboolean	hook_brake = false;         /* slow to the proof's standing
+	                                         * start before firing a rope */
+	int			sub_steps = 1, sub_msec = 0;
+	float		slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
+
+	/* the duel terms, read once per frame and priced per candidate seed */
+	qboolean	duel = false;               /* combat has a live or fresh target */
+	vec3_t		duel_org;                   /* where it is believed to be */
+	float		duel_want = 0.0f;           /* range the weapon in hand wants */
+	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
+	qboolean	duel_hold = false;          /* the chosen step is short: weave */
+	short		weave_side = 0;             /* this frame's strafe sign */
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = 100;
+
+	if (Think_Dead(bot, e, &cmd))
+		return;
+	Think_RespawnEdge(bot, e);
+	bot->death_taught = false;
+
+	/* my eyes feed the team belief before I decide from it */
+	Caco_See(sg_rune, e);
+
+	team = e->client->ctf.teamnum;
+	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). Carrying is
+	 * the same inventory test ctf_flagtouch itself makes. */
+	{
+		static gitem_t *flagitem;
+		if (!flagitem)
+			flagitem = FindItem("Enemy Flag");
+		carrying = flagitem &&
+		           e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
+	}
+
+	role = SG_Role(bot, carrying);
+
+	Think_CarryBookends(bot, e, role, team, carrying);
+
+	Think_LiveWeights(bot, e, role, team, &live);
+	w = &live;
+
+	Think_Objective(bot, e, role, team, carrying, w, support, intercept,
+	                &goal_field, &route_field, &route_pure);
+
+
+	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
+
+	Think_InterceptField(role, team, &support, &intercept);
+
+	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
+	bot->terminal = false;
+
+	Think_TrackSeed(bot, e, team);
+	if (bot->seed < 0)
+	{
+		ClientThink(e, &cmd);
+		return;
+	}
+
+	/*
+	 * The precision case: no tricks on the final approach.
+	 *
+	 * A flag is a thirty-unit box and a hop chain covers eight hundred units a
+	 * second; the legacy bots arrived with a second of route left and sailed
+	 * straight over the top, lap after lap. The legacy adapter suppressed the
+	 * tricks within about 700 units of a must-touch goal (bl_main.c:451-464).
+	 * The SLIPGATE field is denominated in real milliseconds of traversal, so
+	 * the same idea is stated in time: inside a second and a half of the
+	 * objective, run plainly and be able to stop. Speed serves the objective.
+	 */
+	precision = (goal_field[bot->seed] < 1500);
+
+	/*
+	 * Ask combat whether there is a fight on, ONCE, before the fan is walked.
+	 * The answer is last frame's -- SG_CombatFrame runs after the movement is
+	 * decided, which is the order the constitution requires (combat modifies a
+	 * usercmd the body already built) -- and a tenth of a second of staleness
+	 * on a believed position that is already up to two seconds old changes
+	 * nothing. The carrier is excluded outright: 2.4-D2 is flee, not fight,
+	 * and its own repulsion term below already prices contact.
+	 */
+	if (role != SG_ROLE_CARRY)
+		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
+
+	/* descend the surface: my seed vs every seed one proven link away */
+	bestlink = Think_PickLink(bot, e, role, team, carrying, &live, w,
+	                          goal_field, route_field, route_pure,
+	                          support, intercept, precision, duel,
+	                          duel_org, duel_want, duel_expo, rally_hold,
+	                          &bestval, &incumbent_v, &rail_seed,
+	                          &rail_client, &rail_dose, &rail_hold);
+
+	think_over = false;
+	bestlink = Think_CommitLink(bot, e, role, team, carrying, &live, w,
+	                            goal_field, precision, duel, duel_org,
+	                            duel_want, duel_expo, bestval,
+	                            incumbent_v, rail_seed, rail_client,
+	                            rail_dose, bestlink, &cmd, &rally_hold,
+	                            &rail_hold, &think_over, &hold_post,
+	                            &post_yaw, &post_sight);
+	if (think_over)
+		return;
 	/*
 	 * The surface has a gradient EVERYWHERE. Where the rune is proven, the
 	 * gradient is the best outgoing link. Where it is not -- field infinite,
