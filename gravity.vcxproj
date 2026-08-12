@@ -353,6 +353,7 @@
     <ClCompile Include="slipgate\sg_clock.c" />
     <ClCompile Include="slipgate\sg_danger.c" />
     <ClCompile Include="slipgate\sg_weights.c" />
+    <ClCompile Include="slipgate\sg_tilt.c" />
     <ClCompile Include="slipgate\sg_caco.c" />
     <ClCompile Include="slipgate\sg_chat.c" />
     <ClCompile Include="slipgate\sg_combat.c" />

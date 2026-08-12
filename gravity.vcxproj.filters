@@ -220,6 +220,9 @@
     <ClCompile Include="slipgate\sg_weights.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_tilt.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_caco.c">
       <Filter>Source Files</Filter>
     </ClCompile>
