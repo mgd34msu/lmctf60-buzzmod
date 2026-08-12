@@ -142,7 +142,7 @@ static qboolean UI_Records_Line(char *out, size_t outsize,
 	if (!rec->holder[0])
 		return false;
 
-	Com_sprintf(out, outsize, "%s: %s - %d", label, rec->holder, rec->value);
+	Com_sprintf(out, (int)outsize, "%s: %s - %d", label, rec->holder, rec->value);
 	return true;
 }
 

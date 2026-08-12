@@ -703,7 +703,9 @@ leaderboard would mean opening every file in the directory.
 // A whitelist rather than pasting gi.argv straight into the SQL -- the column
 // name cannot be bound as a parameter, so it has to be checked against a
 // known set instead.
-static const struct { const char *field; const char *table; } db_sortable[] = {
+typedef struct { const char *field; const char *table; } db_sortable_t;
+
+static const db_sortable_t db_sortable[] = {
 	{ "frags",          "game_stats" },
 	{ "fragged",        "game_stats" },
 	{ "shots",          "game_stats" },
@@ -725,7 +727,10 @@ static const struct { const char *field; const char *table; } db_sortable[] = {
 	{ NULL, NULL }
 };
 
-static const char *db_table_for(const char *field)
+// Returns the whitelist ENTRY, not just the table: SQL text below is always
+// assembled from the entry's own strings, never from the caller's argument,
+// so no caller-supplied byte can reach the SQL even on a whitelist match.
+static const db_sortable_t *db_sortable_for(const char *field)
 {
 	int i;
 
@@ -735,7 +740,7 @@ static const char *db_table_for(const char *field)
 	for (i = 0; db_sortable[i].field; i++)
 	{
 		if (Q_stricmp(field, db_sortable[i].field) == 0)
-			return db_sortable[i].table;
+			return &db_sortable[i];
 	}
 
 	return NULL;
@@ -818,12 +823,12 @@ qboolean DB_Reset(void)
 // same reason db_count_rows() above stays on plain prepare/finalize.
 void DB_Top(const char *field, int count)
 {
-	const char *table = db_table_for(field);
+	const db_sortable_t *col = db_sortable_for(field);
 	sqlite3_stmt *res = NULL;
 	char sql[512];
 	int rank = 0;
 
-	if (!table)
+	if (!col)
 	{
 		int i;
 
@@ -845,18 +850,20 @@ void DB_Top(const char *field, int count)
 	if (count > 50)
 		count = 50;
 
-	// field and table came from the whitelist above; only the limit is bound
-	if (Q_stricmp(table, "userdata") == 0)
+	// SQL text is assembled from the whitelist entry's own strings, never
+	// the caller's argument; only the limit is bound
+	if (Q_stricmp(col->table, "userdata") == 0)
 	{
 		snprintf(sql, sizeof(sql),
-			"SELECT playername, %s FROM userdata ORDER BY %s DESC LIMIT ?", field, field);
+			"SELECT playername, %s FROM userdata ORDER BY %s DESC LIMIT ?",
+			col->field, col->field);
 	}
 	else
 	{
 		snprintf(sql, sizeof(sql),
 			"SELECT u.playername, t.%s FROM %s t "
 			"JOIN userdata u ON u.char_idx = t.char_idx "
-			"ORDER BY t.%s DESC LIMIT ?", field, table, field);
+			"ORDER BY t.%s DESC LIMIT ?", col->field, col->table, col->field);
 	}
 
 	if (sqlite3_prepare_v2(dbconn, sql, -1, &res, NULL) != SQLITE_OK)
@@ -962,7 +969,7 @@ qboolean DB_PrintPlayer(const char *playername)
 // depends on `field` and `table` and is rebuilt every call.
 qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize)
 {
-	const char *table = db_table_for(field);
+	const db_sortable_t *col = db_sortable_for(field);
 	sqlite3_stmt *res = NULL;
 	char sql[512];
 	char line[128];
@@ -974,7 +981,7 @@ qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize)
 
 	out[0] = '\0';
 
-	if (!table)
+	if (!col)
 		return false;
 
 	if (!dbconn && !DB_Conn_Start())
@@ -985,17 +992,18 @@ qboolean DB_TopFormat(const char *field, int count, char *out, size_t outsize)
 	if (count > 50)
 		count = 50;
 
-	if (Q_stricmp(table, "userdata") == 0)
+	if (Q_stricmp(col->table, "userdata") == 0)
 	{
 		snprintf(sql, sizeof(sql),
-			"SELECT playername, %s FROM userdata ORDER BY %s DESC LIMIT ?", field, field);
+			"SELECT playername, %s FROM userdata ORDER BY %s DESC LIMIT ?",
+			col->field, col->field);
 	}
 	else
 	{
 		snprintf(sql, sizeof(sql),
 			"SELECT u.playername, t.%s FROM %s t "
 			"JOIN userdata u ON u.char_idx = t.char_idx "
-			"ORDER BY t.%s DESC LIMIT ?", field, table, field);
+			"ORDER BY t.%s DESC LIMIT ?", col->field, col->table, col->field);
 	}
 
 	if (sqlite3_prepare_v2(dbconn, sql, -1, &res, NULL) != SQLITE_OK)
