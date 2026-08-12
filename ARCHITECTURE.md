@@ -131,7 +131,29 @@ cross-representation comparison exists), per-frame scans introduced by
 buzzmod (none), and g_ctffunc's zero SG_ hooks (deliberate: flag state
 is pollable).
 
-## 5. The rule for all of it
+## 5. The coming split (owner's direction, 2026-08-12)
+
+SLIPGATE is likely to become its own repository — the bot platform as
+a standalone project, with LMCTF as its first host game. That reorders
+nothing below but re-weights it: every seam item is now also a
+split-readiness item.
+
+- `sg_hooks.h` (P1 item 5) becomes the platform's public API in
+  waiting — after the split it is the surface a host game implements
+  against.
+- The coupling inventory that matters: slipgate/ currently includes
+  the host's `g_local.h` and `g_ctffunc.h` directly. Pre-split, new
+  code avoids deepening that reach; the split itself will interpose a
+  host-adapter header where those includes are today.
+- The instruments divide naturally: the demo-protocol layer
+  (dm2speed/demoents/demokin) is game-agnostic and travels with
+  SLIPGATE; the CTF-specific instruments (stands, carry windows, flag
+  logic) stay host-side or become the host's instrument pack.
+- Nothing splits until the film gate can run on both sides of the
+  boundary — the split is itself a convergence step, proven like any
+  other.
+
+## 6. The rule for all of it
 
 The fleet never stops, trials never share a window with refactors, and
 a convergence step that cannot prove behavior identity (build gates +
