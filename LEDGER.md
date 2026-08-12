@@ -45,6 +45,21 @@ denominators):
 - Caveat, standing: client-POV human film conditions stand observation
   toward busy moments — cross-population values are ratio evidence,
   same rule as escort_fraction_obs.
+- **Localization (same night): the grind is three behaviors.** (1)
+  lmctf22: ATTACKER grind at the enemy stand dominates (4293 vs 1076
+  s) — bots reach the flag room and circle without grabbing; same
+  defect as the 1.5%-vs-3.3% steal conversion, two instruments, one
+  behavior. Candidate mechanism `sg_grabcommit`: inside stand radius
+  with the flag home, commit to the grab vector. (2) mactf06:
+  DEFENDER grind at own post dominates (5315 vs 1169 s) — posting
+  satisfies Rule 20's no-idle by micro-pacing, which humans never do
+  (humans stand still; camping is low gross speed and does not
+  trigger the detector). Candidate mechanism `sg_patrol`: walk-pace
+  arcs between 2–3 raillane post seeds instead of oscillation. (3)
+  ~2/3 of grind on both maps is far-field navigation oscillation —
+  the plateau family; hookpong's verdict rules on it first. Both new
+  mechanisms queue for arms as trial pairs free up; grind_spm is
+  their pre-registered bar (bot 10.9 → toward human 3.2).
 
 ## The ladder
 
