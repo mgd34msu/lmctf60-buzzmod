@@ -5686,10 +5686,49 @@ rally_done:;
 	 * goal-entity fallback -- a straight walk, a touch, done. The
 	 * carrier gets the same grace at its own stand.
 	 */
-	if ((role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY) &&
-	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
-	    goal_field[bot->seed] < 400)
+	/*
+	 * SEE THE FLAG, GO THROUGH THE FLAG (owner's order, 2026-08-11,
+	 * sharpening wave 96): the 400ms cost gate still let a bot steer
+	 * at seed centers while the flag stood in plain sight across the
+	 * room. Cost is not the trigger anymore -- SIGHT is. An attacker
+	 * with line of sight to the standing flag inside 512 drops the
+	 * graph immediately and the aim falls through to the flag item
+	 * (and through-extension past it). Seeing it is earned perception,
+	 * so a visible dropped enemy flag qualifies the same (Rule 19).
+	 */
 	{
+		qboolean flag_los = false;
+
+		if (role == SG_ROLE_ATTACK)
+		{
+			edict_t *fent = (team == CTF_TEAM_RED) ? blueflag : redflag;
+
+			if (fent && fent->inuse && !fent->owner)
+			{
+				vec3_t fd12, fs12, ft12;
+
+				VectorSubtract(fent->s.origin, e->s.origin, fd12);
+				if (VectorLength(fd12) < 512.0f)
+				{
+					trace_t ftr;
+
+					VectorCopy(e->s.origin, fs12);
+					fs12[2] += e->viewheight;
+					VectorCopy(fent->s.origin, ft12);
+					ft12[2] += 16.0f;
+					ftr = gi.trace(fs12, NULL, NULL, ft12, e,
+					               MASK_OPAQUE);
+					if (ftr.fraction >= 1.0f)
+						flag_los = true;
+				}
+			}
+		}
+
+		if ((role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY) &&
+		    bot->seed >= 0 &&
+		    ((goal_field[bot->seed] < SG_FIELD_INF &&
+		      goal_field[bot->seed] < 400) || flag_los))
+		{
 		bestlink = -1;
 		bot->terminal = true;
 
@@ -5948,6 +5987,7 @@ rally_done:;
 				}
 			}
 		}
+	}
 	}
 
 	/*
@@ -8056,8 +8096,21 @@ no_hold:;
 					fl7 = VectorLength(fd7);
 					if (fl7 > 1.0f && fl7 < 160.0f)
 					{
+						trace_t wtr;
+						vec3_t wend;
+
 						VectorScale(fd7, (fl7 + 150.0f) / fl7, fd7);
-						VectorAdd(e->s.origin, fd7, aim);
+						VectorAdd(e->s.origin, fd7, wend);
+						wend[2] = gf->s.origin[2] + 16.0f;
+						/* flag against a wall (owner's edge case):
+						 * the exit line stops where the room does --
+						 * clamp the through-point at solid geometry,
+						 * never closer than the flag itself */
+						wtr = gi.trace(gf->s.origin, e->mins, e->maxs,
+						               wend, e, MASK_PLAYERSOLID);
+						if (wtr.fraction < 1.0f)
+							VectorCopy(wtr.endpos, wend);
+						VectorCopy(wend, aim);
 						aim[2] = gf->s.origin[2];
 					}
 				}
