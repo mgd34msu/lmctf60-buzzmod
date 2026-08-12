@@ -2405,6 +2405,57 @@ static void Think_InterceptField(sg_role_t role, int team,
 }
 
 
+/*
+ * WHERE AM I ON THE RUNE (split from SG_BotThink, 2026-08-11 standards
+ * pass; body verbatim): seed relocation on 48 units of travel, the
+ * previous-seed memory the dither reads, and the pit trace.
+ */
+static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
+{
+	vec3_t d;
+
+	/* where am I on the rune? */
+	VectorSubtract(e->s.origin, bot->last_origin, d);
+	if (bot->seed < 0 || VectorLength(d) > 48.0f)
+	{
+		int was = bot->seed;
+
+		bot->seed = Rune_NearestSeed(sg_rune, e->s.origin);
+		VectorCopy(e->s.origin, bot->last_origin);
+		if (was >= 0 && bot->seed != was)
+		{
+			bot->prev_seed = was;
+			bot->prev_seed_time = level.time;
+			bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
+
+			/*
+			 * PITTRACE (sg_debug): the moment a bot's seed enters the
+			 * masked sub-stand region, say who, from where, in what role,
+			 * chasing what tactical waypoint. Three flat nulls said the
+			 * pit traffic rides neither the waypoint surface nor the
+			 * descent steps nor the flag flood -- this line names the
+			 * actual carrier of the traffic.
+			 */
+			if (sg_cv.debug->value && team >= 1 && team <= 2)
+			{
+				int pti = (team == CTF_TEAM_RED) ? 0 : 1;
+
+				if (sg_fields.shelf_cliff[pti] &&
+				    sg_fields.shelf_cliff[pti][bot->seed] > 0 &&
+				    !(sg_fields.shelf_cliff[pti][was] > 0))
+					gi.dprintf("PITTRACE %s role=%s seed %d->%d z=%.0f "
+					           "tac_seed=%d tac_role=%d hook=%d\n",
+					           e->client->pers.netname,
+					           sg_role_names[bot->last_role],
+					           was, bot->seed, e->s.origin[2],
+					           bot->tac_seed, bot->tac_role,
+					           bot->hook_phase);
+			}
+		}
+	}
+}
+
+
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -3197,45 +3248,7 @@ void SG_BotThink(sg_bot_t *bot)
 	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
 	bot->terminal = false;
 
-	/* where am I on the rune? */
-	VectorSubtract(e->s.origin, bot->last_origin, d);
-	if (bot->seed < 0 || VectorLength(d) > 48.0f)
-	{
-		int was = bot->seed;
-
-		bot->seed = Rune_NearestSeed(sg_rune, e->s.origin);
-		VectorCopy(e->s.origin, bot->last_origin);
-		if (was >= 0 && bot->seed != was)
-		{
-			bot->prev_seed = was;
-			bot->prev_seed_time = level.time;
-			bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
-
-			/*
-			 * PITTRACE (sg_debug): the moment a bot's seed enters the
-			 * masked sub-stand region, say who, from where, in what role,
-			 * chasing what tactical waypoint. Three flat nulls said the
-			 * pit traffic rides neither the waypoint surface nor the
-			 * descent steps nor the flag flood -- this line names the
-			 * actual carrier of the traffic.
-			 */
-			if (sg_cv.debug->value && team >= 1 && team <= 2)
-			{
-				int pti = (team == CTF_TEAM_RED) ? 0 : 1;
-
-				if (sg_fields.shelf_cliff[pti] &&
-				    sg_fields.shelf_cliff[pti][bot->seed] > 0 &&
-				    !(sg_fields.shelf_cliff[pti][was] > 0))
-					gi.dprintf("PITTRACE %s role=%s seed %d->%d z=%.0f "
-					           "tac_seed=%d tac_role=%d hook=%d\n",
-					           e->client->pers.netname,
-					           sg_role_names[bot->last_role],
-					           was, bot->seed, e->s.origin[2],
-					           bot->tac_seed, bot->tac_role,
-					           bot->hook_phase);
-			}
-		}
-	}
+	Think_TrackSeed(bot, e, team);
 	if (bot->seed < 0)
 	{
 		ClientThink(e, &cmd);
