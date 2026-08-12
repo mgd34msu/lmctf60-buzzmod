@@ -392,6 +392,10 @@ STRICTGRAB=(1  1        1        1        1         0        1         1        
 # eye = fightsheet rail_window_exposure (0.896), 16-wave floor from the
 # arming wave. Prior hookpong (s03) struck null on revisit_spike2_mass.
 RAILRHYTHM=(0  0        0        0        0         0        0         0        0        0)
+# PATROL (armed 2026-08-12, owner's go): posted defenders walk legs
+# instead of pacing in place. s03=1 vs s04 control; bars: defender
+# grind share toward human, guard_frac held, caps guarded, 16 waves.
+PATROL=(0      0        1        0        0         0        0         0        0        0)
 
 # HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
 # three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).
@@ -582,6 +586,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_hookpong ${HOOKPONG[$i]}"
                 echo "set sg_railrhythm ${RAILRHYTHM[$i]}"
                 echo "set sg_strictgrab ${STRICTGRAB[$i]}"
+                echo "set sg_patrol ${PATROL[$i]}"
                 if [ "${ESCORTDOSE2[$i]}" != "0" ]; then
                     echo "set sg_escortdose ${ESCORTDOSE2[$i]}"
                 fi
