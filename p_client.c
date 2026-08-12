@@ -636,13 +636,21 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 						stats_record_frag(attacker);
 						attacker->client->resp.score++;
 
-						// the frag bell: a private reward sound for the
-						// fragger alone. Unlike the positional carrier-hit
-						// sound (g_combat.c), this is unicast with no entity
-						// or position flags, so the engine plays it as a
-						// full-volume local sound for this one client and
-						// nobody else hears it. Bots have no connection to
-						// deliver to.
+						// the frag bell, two deliveries. The world copy is
+						// emitted from the fallen player, so the sound rings
+						// where the kill landed and only players near the
+						// victim hear it -- nothing is emitted at the
+						// attacker's own position. The fragger additionally
+						// gets a private full-volume copy (svc_sound with no
+						// entity or position flags, unicast: a local sound
+						// for that one client), so confirmation never
+						// depends on how far away the kill was. When the
+						// fragger is close enough to hear the world copy,
+						// both arrive in the same client frame and mix as a
+						// single louder bell. Bots have no connection to
+						// deliver the private copy to.
+						gi.sound(self, CHAN_AUTO,
+							gi.soundindex("frag-bell.wav"), 1, ATTN_NORM, 0);
 						if (!(attacker->flags & FL_BOT))
 						{
 							gi.WriteByte(svc_sound);
