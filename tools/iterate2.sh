@@ -377,6 +377,11 @@ TEAMSKEW=(0    0        0        0        1         0        0         0        
 # adopted 35 on s08. Bar: escort_fraction_obs toward the human band,
 # caps guarded (the 35 adoption was a caps winner).
 ESCORTDOSE2=(0 0        0        0        20        0        0         0        0        0)
+# STRICTGRAB-OFF (armed 2026-08-12 ~09:00, the flag-home eye's finding:
+# 98.1% of arrivals have the flag home, 0.3% grab within 3s -- the
+# clean-grab hold IS the conversion gap). s06=0 vs s07=1 (adopted).
+# Bars: grab latency at home-arrival, steals/wave, caps guarded 16w.
+STRICTGRAB=(1  1        1        1        1         0        1         1        1        1)
 # RAILRHYTHM (low-dose retrial, armed 2026-08-12 post-deploy): the first
 # trial was ruled against an aggregate; dose 0.5 on s03 vs s04 control,
 # eye = fightsheet rail_window_exposure (0.896), 16-wave floor from the
@@ -571,6 +576,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_depace ${DEPACE[$i]}"
                 echo "set sg_hookpong ${HOOKPONG[$i]}"
                 echo "set sg_railrhythm ${RAILRHYTHM[$i]}"
+                echo "set sg_strictgrab ${STRICTGRAB[$i]}"
                 if [ "${ESCORTDOSE2[$i]}" != "0" ]; then
                     echo "set sg_escortdose ${ESCORTDOSE2[$i]}"
                 fi

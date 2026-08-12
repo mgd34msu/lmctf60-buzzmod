@@ -41,6 +41,18 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## THE CONVERSION GAP HAS A NAME (2026-08-12 ~09:00)
+
+The flag-home eye on post-deploy film: **98.1% of bot arrivals happen
+with the enemy flag home and grabbable; 0.3% grab within 3s.** Neither
+timing nor routing -- the clean-grab hold (sg_strictgrab, the
+unaccounted-man rule) parks attackers beside a takeable flag until the
+20s patience valve fires, because 5v5 belief coverage almost always
+leaves a man unaccounted. Humans grab in seconds. STRICTGRAB-OFF armed
+on s06 vs s07 (adopted 1 as control); bars: grab latency at
+home-arrival, steals/wave, caps guarded at 16 waves. If this converts,
+it is the single biggest stage-2 lever found to date.
+
 ## Trip census corrects the stage-2 map (2026-08-12 ~08:55)
 
 tools/tripcensus.py, both populations: bots make MORE approach trips
