@@ -88,12 +88,18 @@
 // Compile-time proof that this table agrees with q_shared.h: if
 // anyone edits a STAT_* value there without updating the matching row
 // here (or vice versa), the build fails right here instead of
-// shipping a HUD element pointed at the wrong slot.
+// shipping a HUD element pointed at the wrong slot. Spelled as the
+// negative-array-size typedef rather than _Static_assert because one
+// CI compiler builds this tree as legacy C (/TC with no C11 flag) and
+// rejects the C11 keyword outright -- the typedef form fails builds
+// identically on every compiler we have.
+#define UI_STAT_ASSERT(name, cond) \
+	typedef char ui_stat_assert_##name[(cond) ? 1 : -1]
 #define UI_STAT(slot, symbol, owner, meaning) \
-	_Static_assert((slot) == (symbol), #symbol " slot number in ui_stats.h no longer matches its q_shared.h #define");
+	UI_STAT_ASSERT(symbol, (slot) == (symbol));
 UI_STAT_TABLE
 #undef UI_STAT
 
-_Static_assert(MAX_STATS == 32, "ui_stats.h's registry covers slots 0-31; MAX_STATS changed out from under it");
+UI_STAT_ASSERT(max_stats, MAX_STATS == 32);
 
 #endif // UI_STATS_H
