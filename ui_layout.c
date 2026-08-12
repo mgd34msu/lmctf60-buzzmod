@@ -240,3 +240,45 @@ int ui_layout_compile (const ui_screen_t *screen, ui_buf_t *out)
 
 	return dropped;
 }
+
+// -- density variant ladder --------------------------------------------
+//
+// See ui_layout.h for the contract. out is re-bound to its own
+// storage/size before every attempt (ui_buf_init), so a rejected
+// attempt's partial bytes never leak into the next rung's compile.
+
+int ui_layout_compile_ladder (void *userdata, ui_board_build_fn build,
+	ui_buf_t *out, ui_board_variant_t *variant_used)
+{
+	ui_board_variant_t	variant;
+	ui_screen_t			screen;
+	int					pre_filtered;
+	int					dropped;
+	char				*storage;
+	int					capacity;
+
+	storage = out->buf;
+	capacity = out->size;
+
+	variant = UI_BOARD_FULL;
+	for (;;)
+	{
+		ui_buf_init (out, storage, capacity);
+
+		screen.elems = NULL;
+		screen.count = 0;
+		pre_filtered = build (userdata, variant, &screen);
+
+		dropped = pre_filtered + ui_layout_compile (&screen, out);
+
+		if (dropped == 0 || variant == UI_BOARD_MINIMAL)
+			break;
+
+		variant++;
+	}
+
+	if (variant_used)
+		*variant_used = variant;
+
+	return dropped;
+}

@@ -250,4 +250,58 @@ typedef struct
 // as every hand-written producer did today.
 int ui_layout_compile(const ui_screen_t *screen, ui_buf_t *out);
 
+// -- density variant ladder ------------------------------------------
+//
+// docs/LAYOUT.md point 2: boards never paginate -- when a screen does
+// not fit, the whole screen is rebuilt one rung shorter rather than
+// truncating the roster it already started drawing. UI_BOARD_FULL is
+// today's format; UI_BOARD_CONDENSED shortens names and drops
+// secondary columns; UI_BOARD_MINIMAL keeps only a name and the
+// board's single headline number. UI_BOARD_MINIMAL is the floor --
+// whatever it produces ships as-is, ui_layout_compile's own budget
+// enforcement (UI_LAYOUT_BUDGET) is what keeps that wire-safe even
+// when MINIMAL still can't show every row.
+typedef enum
+{
+	UI_BOARD_FULL,
+	UI_BOARD_CONDENSED,
+	UI_BOARD_MINIMAL
+} ui_board_variant_t;
+
+// Fills *screen for the given variant and returns how many rows/lines
+// this board already knows it left out BEFORE handing anything to
+// ui_layout_compile -- StatboardMessage, TeamStatboardMessage,
+// CTFSquadboardMessage and DeathmatchScoreboardMessage each still run
+// their own pre-existing legacy byte-cap admission pass (Board_LineLen
+// in p_hud.c) ahead of the compiler so UI_BOARD_FULL stays byte-
+// identical to the pre-ladder output; whatever that pass excludes
+// never reaches ui_layout_compile and so would otherwise be invisible
+// to the fit check below. Return 0 when the builder has no such pre-
+// filter (Railboard: every row it builds goes to the compiler, so the
+// compiler's own dropped count is already the whole story).
+//
+// The elements *screen ends up pointing at (and any text they
+// reference) must live in storage the caller of
+// ui_layout_compile_ladder owns (typically fields on userdata) --
+// they need to stay valid until ui_layout_compile_ladder compiles
+// this attempt, which happens immediately after build() returns,
+// before build() is ever called again for the next variant.
+typedef int (*ui_board_build_fn)(void *userdata, ui_board_variant_t variant, ui_screen_t *screen);
+
+// Fit-verified variant selection: calls build() for UI_BOARD_FULL,
+// compiles it into out, and stops there if nothing was dropped --
+// neither by build()'s own pre-filter nor by the compiler. Otherwise
+// rebuilds the WHOLE screen at the next rung down (never a partial
+// rebuild of just the part that didn't fit) and compiles again,
+// continuing until either a rung fits or UI_BOARD_MINIMAL has been
+// tried -- MINIMAL always ships, dropped or not. out must already be
+// bound (ui_buf_init) to caller-owned storage; each attempt re-binds
+// it to the same storage before compiling so a rejected attempt never
+// leaves partial bytes behind for the next one. Returns build()'s
+// pre-filter count plus the final ui_layout_compile dropped count; if
+// variant_used is non-NULL, the rung actually served is written there
+// for the caller's own logging.
+int ui_layout_compile_ladder(void *userdata, ui_board_build_fn build,
+	ui_buf_t *out, ui_board_variant_t *variant_used);
+
 #endif // UI_LAYOUT_H
