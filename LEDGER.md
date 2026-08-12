@@ -61,6 +61,28 @@ denominators):
   mechanisms queue for arms as trial pairs free up; grind_spm is
   their pre-registered bar (bot 10.9 → toward human 3.2).
 
+## Standards-pass findings (2026-08-11, code-quality overhaul)
+
+Three real defects surfaced by the refactor, none visible to any film
+instrument:
+
+1. **`last_role` never updated with `sg_debug` off** (fixed 30cbaa1).
+   Its only write sat inside the debug gate; the fleet's wave configs
+   do not set sg_debug. The rally partner census, escort head-count,
+   and wavepush attacker census read stale roles on every production
+   wave. **Every rally/wavepush/escort-census verdict measured on
+   debug-off film is suspect and gets re-read after this deploys.**
+2. **Danger persistence hardcoded `lmctf-hooktest`** (fixed a02f57d) —
+   wrong path on any other gamedir; follows the gamedir cvar now.
+3. **The attacker grab aimed at the spawn marker, not the flag item**
+   (fixed 9900458 + d54c971, the owner's through-the-flag order) —
+   see the conduct-audit section above.
+
+The overhaul itself: cvar registry (222 sites → one table), util layer,
+six subsystem extractions out of sg_arach.c (roster, clock, danger,
+weights, tilt, lead), think-function decomposition in progress. Every
+commit zero-warning, every CI job verified individually.
+
 ## The ladder
 
 | Rung | State | Evidence |
