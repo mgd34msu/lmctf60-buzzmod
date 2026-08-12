@@ -2664,86 +2664,23 @@ static void Think_LiveWeights(sg_bot_t *bot, edict_t *e, sg_role_t role,
 }
 
 
-void SG_BotThink(sg_bot_t *bot)
+/*
+ * THE OBJECTIVE (split from SG_BotThink, 2026-08-11 standards pass;
+ * body verbatim): the role-to-goal-field switch -- carrier/defender
+ * stands, the scoop, the interposition and formation stations, the
+ * courier, the early return, the mega offer, and the tactics waypoint.
+ * Emits the goal field, the route field, and its purity.
+ */
+static void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
+                            int team, qboolean carrying,
+                            const sg_weights_t *w,
+                            const int *support, const int *intercept,
+                            const int **goal_out, const int **route_out,
+                            qboolean *route_pure_out)
 {
-	edict_t *e = bot->ent;
-	usercmd_t cmd;
-	const int *goal_field, *support = NULL, *intercept = NULL;
+	const int *goal_field;
 	const int *route_field;
 	qboolean route_pure;
-	const sg_weights_t *w;
-	sg_role_t role;
-	int team, li, bestlink = -1;
-	float bestval;
-	float incumbent_v = 1e30f;
-	vec3_t want, d;
-	qboolean carrying;
-
-	/* movement policy state for this frame */
-	vec3_t		basis_fwd, basis_right;     /* the basis pmove will build */
-	vec3_t		move_dir;                   /* heading the route wants */
-	float		view_yaw = 0.0f, view_pitch = 0.0f;
-	qboolean	have_move = false;          /* a direction to travel at all */
-	qboolean	open_ahead = false;         /* room in front to hop into */
-	qboolean	run_link = false;           /* chosen link is ground running */
-	qboolean	precision = false;          /* final approach: no tricks */
-	qboolean	hold_post = false;          /* defender at its stand: guard */
-	qboolean	rally_hold = false;         /* attacker waiting for a partner */
-	qboolean	rail_hold = false;          /* waiting out a railer's reload */
-	int			rail_seed = -1;             /* where that railer is believed */
-	int			rail_client = -1;           /* and who he is */
-	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
-	float		post_yaw = 0.0f;            /* facing the likeliest approach */
-	float		post_sight = -1.0f;         /* clear distance down that facing;
-	                                         * WEAPONS.md 2.4-D3 picks the
-	                                         * pre-held weapon from it */
-	sg_weights_t	live;                   /* the role row, modulated by state */
-	int			door_hold = 0;              /* rotating door ahead: 1 stand,
-	                                         * 2 back out of its swing arc */
-	edict_t		*door_ent = NULL;           /* which door is being waited on */
-	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
-	float		drop_yaw = 0.0f;
-	qboolean	hook_brake = false;         /* slow to the proof's standing
-	                                         * start before firing a rope */
-	int			sub_steps = 1, sub_msec = 0;
-	float		slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
-
-	/* the duel terms, read once per frame and priced per candidate seed */
-	qboolean	duel = false;               /* combat has a live or fresh target */
-	vec3_t		duel_org;                   /* where it is believed to be */
-	float		duel_want = 0.0f;           /* range the weapon in hand wants */
-	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
-	qboolean	duel_hold = false;          /* the chosen step is short: weave */
-	short		weave_side = 0;             /* this frame's strafe sign */
-
-	memset(&cmd, 0, sizeof(cmd));
-	cmd.msec = 100;
-
-	if (Think_Dead(bot, e, &cmd))
-		return;
-	Think_RespawnEdge(bot, e);
-	bot->death_taught = false;
-
-	/* my eyes feed the team belief before I decide from it */
-	Caco_See(sg_rune, e);
-
-	team = e->client->ctf.teamnum;
-	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). Carrying is
-	 * the same inventory test ctf_flagtouch itself makes. */
-	{
-		static gitem_t *flagitem;
-		if (!flagitem)
-			flagitem = FindItem("Enemy Flag");
-		carrying = flagitem &&
-		           e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
-	}
-
-	role = SG_Role(bot, carrying);
-
-	Think_CarryBookends(bot, e, role, team, carrying);
-
-	Think_LiveWeights(bot, e, role, team, &live);
-	w = &live;
 
 	/*
 	 * The role's principal field:
@@ -3269,6 +3206,97 @@ void SG_BotThink(sg_bot_t *bot)
 			                         * the walk itself stays pure */
 		}
 	}
+
+	*goal_out = goal_field;
+	*route_out = route_field;
+	*route_pure_out = route_pure;
+}
+
+
+void SG_BotThink(sg_bot_t *bot)
+{
+	edict_t *e = bot->ent;
+	usercmd_t cmd;
+	const int *goal_field, *support = NULL, *intercept = NULL;
+	const int *route_field;
+	qboolean route_pure;
+	const sg_weights_t *w;
+	sg_role_t role;
+	int team, li, bestlink = -1;
+	float bestval;
+	float incumbent_v = 1e30f;
+	vec3_t want, d;
+	qboolean carrying;
+
+	/* movement policy state for this frame */
+	vec3_t		basis_fwd, basis_right;     /* the basis pmove will build */
+	vec3_t		move_dir;                   /* heading the route wants */
+	float		view_yaw = 0.0f, view_pitch = 0.0f;
+	qboolean	have_move = false;          /* a direction to travel at all */
+	qboolean	open_ahead = false;         /* room in front to hop into */
+	qboolean	run_link = false;           /* chosen link is ground running */
+	qboolean	precision = false;          /* final approach: no tricks */
+	qboolean	hold_post = false;          /* defender at its stand: guard */
+	qboolean	rally_hold = false;         /* attacker waiting for a partner */
+	qboolean	rail_hold = false;          /* waiting out a railer's reload */
+	int			rail_seed = -1;             /* where that railer is believed */
+	int			rail_client = -1;           /* and who he is */
+	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
+	float		post_yaw = 0.0f;            /* facing the likeliest approach */
+	float		post_sight = -1.0f;         /* clear distance down that facing;
+	                                         * WEAPONS.md 2.4-D3 picks the
+	                                         * pre-held weapon from it */
+	sg_weights_t	live;                   /* the role row, modulated by state */
+	int			door_hold = 0;              /* rotating door ahead: 1 stand,
+	                                         * 2 back out of its swing arc */
+	edict_t		*door_ent = NULL;           /* which door is being waited on */
+	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
+	float		drop_yaw = 0.0f;
+	qboolean	hook_brake = false;         /* slow to the proof's standing
+	                                         * start before firing a rope */
+	int			sub_steps = 1, sub_msec = 0;
+	float		slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
+
+	/* the duel terms, read once per frame and priced per candidate seed */
+	qboolean	duel = false;               /* combat has a live or fresh target */
+	vec3_t		duel_org;                   /* where it is believed to be */
+	float		duel_want = 0.0f;           /* range the weapon in hand wants */
+	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
+	qboolean	duel_hold = false;          /* the chosen step is short: weave */
+	short		weave_side = 0;             /* this frame's strafe sign */
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = 100;
+
+	if (Think_Dead(bot, e, &cmd))
+		return;
+	Think_RespawnEdge(bot, e);
+	bot->death_taught = false;
+
+	/* my eyes feed the team belief before I decide from it */
+	Caco_See(sg_rune, e);
+
+	team = e->client->ctf.teamnum;
+	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). Carrying is
+	 * the same inventory test ctf_flagtouch itself makes. */
+	{
+		static gitem_t *flagitem;
+		if (!flagitem)
+			flagitem = FindItem("Enemy Flag");
+		carrying = flagitem &&
+		           e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
+	}
+
+	role = SG_Role(bot, carrying);
+
+	Think_CarryBookends(bot, e, role, team, carrying);
+
+	Think_LiveWeights(bot, e, role, team, &live);
+	w = &live;
+
+	Think_Objective(bot, e, role, team, carrying, w, support, intercept,
+	                &goal_field, &route_field, &route_pure);
+
 
 	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
 
