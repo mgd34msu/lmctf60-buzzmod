@@ -100,6 +100,9 @@
     <ClCompile Include="g_weapon.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ui_text.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="gslog.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -367,6 +370,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="q_shared.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ui_stats.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ui_text.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="stdlog.h">

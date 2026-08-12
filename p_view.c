@@ -4,6 +4,7 @@
 #include "plasma.h" // SKWiD MOD
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
+#include "ui_text.h" // bounded appender, replaces the hand-guarded strcat loop below
 
 int ClientShowMOD(edict_t *ent); // CTF CODE -- LM_JORM
 int ClientShowID(edict_t *ent, char * buf); // CTF CODE -- LM_JORM
@@ -1193,8 +1194,9 @@ void Client_Show_High_Scores(edict_t *ent)
 
 int ClientShowMOD(edict_t *ent)
 {
-	char	string[5000];
-	char	temp[1000], temp2[MAX_INFO_STRING];
+	char		storage[1380];
+	ui_buf_t	sb;
+	char	temp[1000];
 	char	*line;
 	char    *color;
 	int		time, i;
@@ -1225,7 +1227,8 @@ int ClientShowMOD(edict_t *ent)
 			default: color = "Unassigned"; break;
 		}
 	
-		Com_sprintf(string, sizeof(string),
+		ui_buf_init (&sb, storage, sizeof(storage));
+		ui_appendf (&sb,
 			"xv %i yv %i cstring2 \""
 			"You are on the %s team!\n\n"
 			"Welcome to %s\nRunning %s\n"
@@ -1238,8 +1241,8 @@ int ClientShowMOD(edict_t *ent)
 			GAMEVERSION,
 			0,85,
 			mod_website->string);
-		
-		strcat(string, "\" ");
+
+		ui_appendf (&sb, "\" ");
 
 		if (motd[0]) // if we have a MOTD
 		{
@@ -1248,26 +1251,21 @@ int ClientShowMOD(edict_t *ent)
 			line = strtok(temp, "\n");
 			while (line)
 			{
-				Com_sprintf(temp2, sizeof(temp2),				
-					"xv 0 yv %d cstring \"%s\" ",
-					i, line);
-				i+=8;
 				/* 1400-byte wire ceiling, no fragmentation: an
 				 * over-long motd used to silently drop the whole
-				 * frame -- an invisible welcome screen. Truncate
-				 * the motd, keep the screen. */
-				if (strlen(string) + strlen(temp2) >= 1380)
+				 * frame -- an invisible welcome screen. ui_appendf
+				 * (ui_text.h) refuses an append that would cross
+				 * storage's 1380-byte cutoff instead of overflowing
+				 * it; truncate the motd, keep the screen. */
+				if (!ui_appendf (&sb, "xv 0 yv %d cstring \"%s\" ", i, line))
 					break;
-				strcat(string, temp2);
+				i+=8;
 				line = strtok(NULL, "\n");
 			}
 		}
 
-			
-
-			   	
 		gi.WriteByte (svc_layout);
-		gi.WriteString (string);
+		gi.WriteString (storage);
 		gi.unicast (ent, false);
 		
 	

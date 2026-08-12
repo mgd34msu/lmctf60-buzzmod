@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_menu.h"
+#include "ui_text.h" // bounded appender, replaces the hand-guarded strcat loop below
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h" // Needed for our referee menus
 #include "g_skins.h"
@@ -2038,11 +2039,12 @@ void Menu_Set (edict_t *ent, int item, char *text, void	(*func)(edict_t *ent))
 
 void Menu_Draw (edict_t *ent)
 {
-	char line[MAX_INFO_STRING], string[2000];
+	char		storage[1380];
+	ui_buf_t	sb;
 	int i;
 	menuitem *menu;
 	int size, ystart;
-	
+
 	int selected;
 
 	// Keep from updating the menu more than once per frame
@@ -2051,10 +2053,11 @@ void Menu_Draw (edict_t *ent)
 		return;
 
 	ent->client->menumovetime = level.framenum;
-	
+
 	gi.WriteByte (svc_layout);
-	strcpy(string, "xv 32 yv 8 picn inventory ");
-	
+	ui_buf_init (&sb, storage, sizeof(storage));
+	ui_appendf (&sb, "xv 32 yv 8 picn inventory ");
+
 	if (ent->client->menu == MENU_LOCAL) // Special case
 	{
 		menu = ent->client->localmenu;
@@ -2080,28 +2083,28 @@ void Menu_Draw (edict_t *ent)
 	{
 		if (!menu[i].text)
 			continue;
-		if (i == selected)
-		{
-			Com_sprintf(line, sizeof(line),
-				"xv %i yv %i string \"\x0d%s\" ",
-				55, ystart + (i * 8), menu[i].text );
-		}
-		else
-		{
-			Com_sprintf(line, sizeof(line),
-				"xv %i yv %i string2 \" %s\" ",
-				55, ystart + (i * 8), menu[i].text );
-		}
+
 		/* the wire ceiling is 1400 bytes with no fragmentation: an
 		 * oversized unicast silently drops the whole frame, and this
 		 * loop had no guard at all (every board in p_hud.c has one).
-		 * Stop appending before the menu becomes invisible. */
-		if (strlen(string) + strlen(line) >= 1380)
-			break;
-		strcat(string, line);
+		 * ui_appendf (ui_text.h) refuses an append that would cross
+		 * storage's 1380-byte cutoff instead of overflowing it; stop
+		 * appending menu lines once one doesn't fit. */
+		if (i == selected)
+		{
+			if (!ui_appendf (&sb, "xv %i yv %i string \"\x0d%s\" ",
+				55, ystart + (i * 8), menu[i].text))
+				break;
+		}
+		else
+		{
+			if (!ui_appendf (&sb, "xv %i yv %i string2 \" %s\" ",
+				55, ystart + (i * 8), menu[i].text))
+				break;
+		}
 	}
 
-	gi.WriteString (string);
+	gi.WriteString (storage);
 	// Paril
 	gi.unicast (ent, true);
 	// Paril

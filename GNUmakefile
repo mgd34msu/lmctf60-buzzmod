@@ -107,7 +107,7 @@ endif
 # Leave this empty if you just want to build id's default gamei386.so.
 ######################################################################
 C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
-         g_skins.o g_tourney.o plasma.o \
+         g_skins.o g_tourney.o plasma.o ui_text.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \

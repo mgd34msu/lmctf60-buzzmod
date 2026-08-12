@@ -65,6 +65,7 @@ extern _CrtMemState startup1;	// memory diagnostics
 #endif
 
 #include "q_shared.h"
+#include "ui_stats.h" // stat-slot registry: compile-time proof the STAT_* slots above agree with it
 
 // define GAME_INCLUDE so that game.h does not define the
 // short, server-visible gclient_t and edict_t structures,
