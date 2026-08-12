@@ -166,6 +166,13 @@ static sqlite3_stmt *stmt_prune_count = NULL;
 static sqlite3_stmt *stmt_match_begin = NULL;
 static sqlite3_stmt *stmt_match_record = NULL;
 static sqlite3_stmt *stmt_match_finish = NULL;
+static sqlite3_stmt *stmt_season_top = NULL;
+static sqlite3_stmt *stmt_rec_caps_game = NULL;
+static sqlite3_stmt *stmt_rec_rail_game = NULL;
+static sqlite3_stmt *stmt_rec_streak_game = NULL;
+static sqlite3_stmt *stmt_rec_returns_game = NULL;
+static sqlite3_stmt *stmt_rec_caps_life = NULL;
+static sqlite3_stmt *stmt_rec_playtime_life = NULL;
 
 // Finalizes every cache above. Called from every path that closes dbconn,
 // not just DB_Conn_Cleanup() -- a prepared statement still attached to a
@@ -200,6 +207,13 @@ static void db_stmt_close_all(void)
 	db_stmt_close(&stmt_match_begin);
 	db_stmt_close(&stmt_match_record);
 	db_stmt_close(&stmt_match_finish);
+	db_stmt_close(&stmt_season_top);
+	db_stmt_close(&stmt_rec_caps_game);
+	db_stmt_close(&stmt_rec_rail_game);
+	db_stmt_close(&stmt_rec_streak_game);
+	db_stmt_close(&stmt_rec_returns_game);
+	db_stmt_close(&stmt_rec_caps_life);
+	db_stmt_close(&stmt_rec_playtime_life);
 }
 
 static void db_copy_text(char *dest, size_t destsize, const unsigned char *src)
@@ -1767,4 +1781,138 @@ int DB_SessionRecord(void)
 		gi.dprintf("session db: match %i, %i client rows\n", match_id, rows);
 
 	return rows;
+}
+
+/* ================================================================= *
+ * Settled-board queries (ui_boards.c)
+ *
+ * Both functions read the per-game rows DB_MatchRecord/DB_MatchFinish
+ * already write (matches/match_players) plus the lifetime tables
+ * (ctf_stats/userdata) that DB_SavePlayer already keeps current -- no new
+ * table, no new write path. Called once per match, from the settled-tier
+ * rebuild that runs right after the stats commit (see UI_Boards_MatchEnd
+ * in ui_boards.c), so the per-call cost of a handful of GROUP BY/ORDER BY
+ * queries against a per-game table is a non-issue.
+ * ================================================================= */
+
+// Season = a rolling 30-day window against matches.started. matches.started
+// is stamped by db_stamp() with localtime() (see above), not UTC, so the
+// window boundary is computed the same way -- datetime('now','localtime',
+// '-30 days') -- rather than SQLite's default UTC 'now'. Using UTC 'now'
+// here would silently mis-window every match by the server's UTC offset.
+int DB_SeasonTop(db_season_row_t *out, int max_rows, int min_games)
+{
+	sqlite3_stmt *res;
+	int n = 0;
+
+	if (!out || max_rows < 1)
+		return 0;
+	if (min_games < 1)
+		min_games = 1;
+
+	if (!dbconn && !DB_Conn_Start())
+		return 0;
+
+	res = db_stmt(dbconn, &stmt_season_top,
+		"SELECT u.playername, SUM(mp.flag_captures), SUM(mp.flag_pickups), "
+		"SUM(mp.rail_kill), COUNT(*) "
+		"FROM match_players mp "
+		"JOIN matches m ON m.match_id = mp.match_id "
+		"JOIN userdata u ON u.char_idx = mp.char_idx "
+		"WHERE m.started >= datetime('now','localtime','-30 days') "
+		"GROUP BY mp.char_idx "
+		"HAVING COUNT(*) >= ? "
+		"ORDER BY SUM(mp.flag_captures) DESC "
+		"LIMIT ?");
+	if (!res)
+	{
+		db_error(dbconn, "DB_SeasonTop");
+		return 0;
+	}
+
+	sqlite3_bind_int(res, 1, min_games);
+	sqlite3_bind_int(res, 2, max_rows);
+
+	while (n < max_rows && sqlite3_step(res) == SQLITE_ROW)
+	{
+		db_copy_text(out[n].name, sizeof(out[n].name), sqlite3_column_text(res, 0));
+		out[n].caps      = sqlite3_column_int(res, 1);
+		out[n].steals    = sqlite3_column_int(res, 2);
+		out[n].railkills = sqlite3_column_int(res, 3);
+		out[n].games     = sqlite3_column_int(res, 4);
+		n++;
+	}
+
+	return n;
+}
+
+// One holder+value pair from a "SELECT name, value ... ORDER BY value DESC
+// LIMIT 1" statement. Leaves *rec zeroed (holder[0] == 0) if the query
+// fails or the table is empty -- both mean "no qualifying row", which the
+// caller (ui_boards.c) treats the same way: omit that record's line.
+static void db_record_one(sqlite3_stmt *res, db_record_t *rec)
+{
+	memset(rec, 0, sizeof(*rec));
+
+	if (!res)
+		return;
+
+	if (sqlite3_step(res) == SQLITE_ROW)
+	{
+		db_copy_text(rec->holder, sizeof(rec->holder), sqlite3_column_text(res, 0));
+		rec->value = sqlite3_column_int(res, 1);
+	}
+}
+
+qboolean DB_ServerRecords(db_server_records_t *out)
+{
+	sqlite3_stmt *res;
+
+	if (!out)
+		return false;
+
+	memset(out, 0, sizeof(*out));
+
+	if (!dbconn && !DB_Conn_Start())
+		return false;
+
+	// single-game records: match_players already carries the name the
+	// record was set under, so no userdata join is needed here.
+	res = db_stmt(dbconn, &stmt_rec_caps_game,
+		"SELECT playername, flag_captures FROM match_players "
+		"ORDER BY flag_captures DESC LIMIT 1");
+	db_record_one(res, &out->most_caps_game);
+
+	res = db_stmt(dbconn, &stmt_rec_rail_game,
+		"SELECT playername, rail_kill FROM match_players "
+		"ORDER BY rail_kill DESC LIMIT 1");
+	db_record_one(res, &out->most_railkills_game);
+
+	res = db_stmt(dbconn, &stmt_rec_streak_game,
+		"SELECT playername, max_streak FROM match_players "
+		"ORDER BY max_streak DESC LIMIT 1");
+	db_record_one(res, &out->best_streak_game);
+
+	res = db_stmt(dbconn, &stmt_rec_returns_game,
+		"SELECT playername, flag_returns FROM match_players "
+		"ORDER BY flag_returns DESC LIMIT 1");
+	db_record_one(res, &out->most_returns_game);
+
+	// lifetime records: ctf_stats/userdata carry the CURRENT cumulative
+	// total, keyed on char_idx, so these need the same join DB_Top() uses.
+	res = db_stmt(dbconn, &stmt_rec_caps_life,
+		"SELECT u.playername, c.flag_captures FROM ctf_stats c "
+		"JOIN userdata u ON u.char_idx = c.char_idx "
+		"ORDER BY c.flag_captures DESC LIMIT 1");
+	db_record_one(res, &out->most_caps_lifetime);
+
+	// userdata.playtime_total is minutes, not seconds (g_local.h: "Total
+	// playing time in minutes"; p_stats.c increments it by seconds/60) --
+	// ui_boards.c's formatter has to know that to print hours:minutes.
+	res = db_stmt(dbconn, &stmt_rec_playtime_life,
+		"SELECT playername, playtime_total FROM userdata "
+		"ORDER BY playtime_total DESC LIMIT 1");
+	db_record_one(res, &out->longest_played_lifetime);
+
+	return true;
 }

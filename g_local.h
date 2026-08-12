@@ -751,6 +751,8 @@ void Cmd_Squadboard_f (edict_t *ent); // ADC
 void Cmd_Statboard_f(edict_t* ent); // BUZZKILL
 void Cmd_TeamStatboard_f(edict_t* ent); // BUZZKILL
 void Cmd_Railboard_f(edict_t* ent); // BUZZKILL
+void Cmd_Season_f(edict_t* ent);
+void Cmd_Records_f(edict_t* ent);
 void Cmd_ToggleFastSwitch_f(edict_t *ent);
 
 //
@@ -1204,6 +1206,8 @@ struct gclient_s
 	qboolean	showstatboard; //BUZZKILL
 	qboolean	showteamstatboard; //BUZZKILL
 	qboolean	showrailboard; //BUZZKILL
+	qboolean	showseason;			// settled board: Season Top 10
+	qboolean	showrecords;		// settled board: Server Records
 
 
 	// BUZZKILL -- persistent stats, loaded/saved by the stats database.

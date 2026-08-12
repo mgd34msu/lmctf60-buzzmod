@@ -316,6 +316,7 @@
     <ClCompile Include="g_weapon.c" />
     <ClCompile Include="ui_text.c" />
     <ClCompile Include="ui_layout.c" />
+    <ClCompile Include="ui_boards.c" />
     <ClCompile Include="m_actor.c" />
     <ClCompile Include="m_berserk.c" />
     <ClCompile Include="m_boss2.c" />
@@ -416,6 +417,7 @@
     <ClInclude Include="ui_stats.h" />
     <ClInclude Include="ui_text.h" />
     <ClInclude Include="ui_layout.h" />
+    <ClInclude Include="ui_boards.h" />
     <ClInclude Include="stdlog.h" />
   </ItemGroup>
   <ItemGroup>

@@ -54,4 +54,48 @@ void     DB_SessionNewLevel(void);             // SpawnEntities: clear per-level
 void     DB_SessionNoteChat(edict_t *ent);     // Cmd_Say_f: one line spoken by this client
 int      DB_SessionRecord(void);               // BeginIntermission: write the rows
 
+/*
+ * Settled-board queries (ui_boards.c). Both read match_players/matches --
+ * the per-game rows DB_MatchRecord/DB_MatchFinish already write -- plus the
+ * lifetime tables, never inventing a table of their own. Unified backend
+ * only, same as everything else above the session recorder; a caller on
+ * the per-player backend gets zero rows back rather than a crash.
+ */
+
+// One row per player, summed over matches whose matches.started falls in
+// the rolling 30-day season window, players with fewer than min_games
+// dropped. Sorted caps DESC, capped at max_rows. Returns rows filled (0 if
+// the backend is not open, no match falls in the window, or nobody clears
+// min_games).
+typedef struct
+{
+	char	name[16];	// matches gclient_t.pers.netname's declared size
+	int	caps;
+	int	steals;		// flag pickups
+	int	railkills;
+	int	games;
+} db_season_row_t;
+
+int DB_SeasonTop(db_season_row_t *out, int max_rows, int min_games);
+
+// One all-time record: the holder's name as recorded on the row that set
+// it, and the value. holder[0] == 0 means no qualifying row exists yet.
+typedef struct
+{
+	char	holder[16];
+	int	value;
+} db_record_t;
+
+typedef struct
+{
+	db_record_t	most_caps_game;		// match_players.flag_captures
+	db_record_t	most_railkills_game;	// match_players.rail_kill
+	db_record_t	best_streak_game;	// match_players.max_streak
+	db_record_t	most_returns_game;	// match_players.flag_returns
+	db_record_t	most_caps_lifetime;	// ctf_stats.flag_captures
+	db_record_t	longest_played_lifetime;	// userdata.playtime_total, minutes
+} db_server_records_t;
+
+qboolean DB_ServerRecords(db_server_records_t *out);
+
 #endif

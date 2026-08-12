@@ -4,6 +4,7 @@
 #include "bat.h"
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
+#include "ui_boards.h"              // settled boards: UI_Boards_MatchEnd from BeginIntermission
 #include "ui_text.h"                // bounded appender, needed by ui_layout.h below
 #include "ui_layout.h"              // declarative screen compiler; Railboard is its proof conversion
 
@@ -109,6 +110,18 @@ void BeginIntermission (edict_t *targ)
 	 * backend is the one running (ctf_statsdb 2).
 	 */
 	DB_SessionRecord();
+
+	/*
+	 * The settled boards (Season Top, Server Records -- ui_boards.c), right
+	 * after the stats commit above: Victory() (already run, first thing in
+	 * this function) has written this match's matches/match_players rows,
+	 * and DB_SessionRecord() just wrote its own, so every table these boards
+	 * query is current. The intermissiontime guard at the top of this
+	 * function already makes this whole function run once per level, so
+	 * this rebuilds once per match, matching docs/LAYOUT.md's settled tier
+	 * ("rebuild exactly once per game at the match-end stats commit").
+	 */
+	UI_Boards_MatchEnd();
 
 	game.autosaved = false;
 
@@ -2334,6 +2347,8 @@ void Cmd_Score_f (edict_t *ent)
     ent->client->showstatboard = false; // BUZZKILL
     ent->client->showteamstatboard = false; // BUZZKILL
     ent->client->showrailboard = false; // BUZZKILL
+    ent->client->showseason = false;
+    ent->client->showrecords = false;
 
 	if (!deathmatch->value && !coop->value)
 		return;
@@ -2398,6 +2413,8 @@ void Cmd_Statboard_f(edict_t* ent)
     ent->client->showsquadboard = false;
     ent->client->showteamstatboard = false;
     ent->client->showrailboard = false;
+    ent->client->showseason = false;
+    ent->client->showrecords = false;
 
     if (!deathmatch->value && !coop->value)
         return;
@@ -2430,6 +2447,8 @@ void Cmd_TeamStatboard_f(edict_t* ent)
     ent->client->showstatboard = false; // BUZZKILL
     ent->client->showscores = false; // BUZZKILL
     ent->client->showrailboard = false; // BUZZKILL
+    ent->client->showseason = false;
+    ent->client->showrecords = false;
 
     if (!deathmatch->value && !coop->value)
         return;
@@ -2462,6 +2481,8 @@ void Cmd_Railboard_f(edict_t * ent)
     ent->client->showsquadboard = false;
     ent->client->showstatboard = false;
     ent->client->showteamstatboard = false;
+    ent->client->showseason = false;
+    ent->client->showrecords = false;
 
     if (!deathmatch->value && !coop->value)
         return;
@@ -2474,6 +2495,75 @@ void Cmd_Railboard_f(edict_t * ent)
 
     ent->client->showrailboard = true;
     Railboard(ent);
+}
+
+/*
+==================
+Cmd_Season_f
+
+Display the Season Top 10 board (settled tier -- ui_boards.c, rebuilt once
+at the last match's end, served instantly here from the cache).
+==================
+*/
+void Cmd_Season_f(edict_t *ent)
+{
+    ent->client->showhelp = false;
+    ent->client->showinventory = false;
+    ent->client->showctfhud = false;
+    ent->client->showmod = false;
+    ent->client->showmenu = false;
+    ent->client->showscores = false;
+    ent->client->showsquadboard = false;
+    ent->client->showstatboard = false;
+    ent->client->showteamstatboard = false;
+    ent->client->showrailboard = false;
+    ent->client->showrecords = false;
+
+    if (!deathmatch->value && !coop->value)
+        return;
+
+    if (ent->client->showseason)
+    {
+        ent->client->showseason = false;
+        return;
+    }
+
+    ent->client->showseason = true;
+    UI_Boards_Serve(ent, UI_BOARD_SEASON_TOP);
+}
+
+/*
+==================
+Cmd_Records_f
+
+Display the Server Records board (settled tier -- ui_boards.c).
+==================
+*/
+void Cmd_Records_f(edict_t *ent)
+{
+    ent->client->showhelp = false;
+    ent->client->showinventory = false;
+    ent->client->showctfhud = false;
+    ent->client->showmod = false;
+    ent->client->showmenu = false;
+    ent->client->showscores = false;
+    ent->client->showsquadboard = false;
+    ent->client->showstatboard = false;
+    ent->client->showteamstatboard = false;
+    ent->client->showrailboard = false;
+    ent->client->showseason = false;
+
+    if (!deathmatch->value && !coop->value)
+        return;
+
+    if (ent->client->showrecords)
+    {
+        ent->client->showrecords = false;
+        return;
+    }
+
+    ent->client->showrecords = true;
+    UI_Boards_Serve(ent, UI_BOARD_SERVER_RECORDS);
 }
 
 // BUZZKILL
@@ -2547,6 +2637,8 @@ void Cmd_Help_f (edict_t *ent)
     ent->client->showstatboard = false; // BUZZKILL
     ent->client->showteamstatboard = false; // BUZZKILL
     ent->client->showrailboard = false; // BUZZKILL
+    ent->client->showseason = false;
+    ent->client->showrecords = false;
 
 	if (ent->client->showhelp && (ent->client->pers.game_helpchanged == game.helpchanged))
 	{
@@ -2858,10 +2950,11 @@ edict_t     *cl_ent;
     if (deathmatch->value)
     {
         if (ent->client->pers.health <= 0 || level.intermissiontime
-            || ent->client->showscores || ent->client->showctfhud 
+            || ent->client->showscores || ent->client->showctfhud
             || ent->client->showmod || ent->client->showmenu
 			|| ent->client->showsquadboard || ent->client->showstatboard
-            || ent->client->showteamstatboard || ent->client->showrailboard) // ADC //BUZZKILL
+            || ent->client->showteamstatboard || ent->client->showrailboard // ADC //BUZZKILL
+            || ent->client->showseason || ent->client->showrecords)
             ent->client->ps.stats[STAT_LAYOUTS] |= 1;
         if (ent->client->showinventory && ent->client->pers.health > 0)
             ent->client->ps.stats[STAT_LAYOUTS] |= 2;
@@ -2871,7 +2964,8 @@ edict_t     *cl_ent;
         if (ent->client->showscores || ent->client->showhelp
             || ent->client->showctfhud || ent->client->showmod
 			|| ent->client->showsquadboard || ent->client->showstatboard
-            || ent->client->showteamstatboard || ent->client->showrailboard) // ADC // BUZZKILL
+            || ent->client->showteamstatboard || ent->client->showrailboard // ADC // BUZZKILL
+            || ent->client->showseason || ent->client->showrecords)
             ent->client->ps.stats[STAT_LAYOUTS] |= 1;
         if (ent->client->showinventory && ent->client->pers.health > 0)
             ent->client->ps.stats[STAT_LAYOUTS] |= 2;
@@ -2927,7 +3021,8 @@ void G_SetSpectatorStats (edict_t *ent)
 	
 	//bat - I think that cl->pers.health is only supposed to be checked in deathmatch
 	
-	if(level.intermissiontime || cl->showscores || cl->showmenu || cl->showrailboard || cl->showstatboard || cl->showteamstatboard)
+	if(level.intermissiontime || cl->showscores || cl->showmenu || cl->showrailboard || cl->showstatboard || cl->showteamstatboard
+		|| cl->showseason || cl->showrecords)
 		cl->ps.stats[STAT_LAYOUTS] |= 1;
 	if (cl->showinventory && cl->pers.health > 0)
 		cl->ps.stats[STAT_LAYOUTS] |= 2;

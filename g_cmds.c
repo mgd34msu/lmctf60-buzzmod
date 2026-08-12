@@ -796,6 +796,8 @@ void Cmd_Inven_f (edict_t *ent)
 	ent->client->showstatboard = false; // BUZZKILL
 	ent->client->showteamstatboard = false; // BUZZKILL
 	ent->client->showrailboard = false; // BUZZKILL
+	ent->client->showseason = false;
+	ent->client->showrecords = false;
 
 	if (cl->showinventory)
 	{
@@ -1035,6 +1037,8 @@ void Cmd_PutAway_f (edict_t *ent)
 	ent->client->showstatboard = false; // BUZZKILL
 	ent->client->showteamstatboard = false; // BUZZKILL
 	ent->client->showrailboard = false; // BUZZKILL
+	ent->client->showseason = false;
+	ent->client->showrecords = false;
 
 	//ent->client->awayframe = level.framenum;
 	gi.WriteByte (svc_layout);
@@ -2661,6 +2665,16 @@ void ClientCommand(edict_t* ent)
 	if (Q_stricmp(cmd, "railstats") == 0)
 	{
 		Cmd_Railboard_f(ent);
+		return;
+	}
+	if (Q_stricmp(cmd, "season") == 0)
+	{
+		Cmd_Season_f(ent);
+		return;
+	}
+	if (Q_stricmp(cmd, "records") == 0)
+	{
+		Cmd_Records_f(ent);
 		return;
 	}
 	// BUZZKILL
