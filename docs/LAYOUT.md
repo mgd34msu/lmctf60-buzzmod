@@ -57,9 +57,18 @@ is the same missing primitive.
    (e.g. ping columns) onto stats where refresh is free.
 2. **A layout compiler**: screens declared as tables/rows/cells with
    truncation priorities; the compiler emits tokens, enforces the
-   1380-byte wire budget (crash-proof by construction), assigns hot
-   data to stats/configstring indirection automatically, and
-   paginates when content exceeds one frame.
+   1380-byte wire budget (crash-proof by construction), and assigns
+   hot data to stats/configstring indirection. Boards NEVER paginate
+   (owner's ruling: page-flipping demands inputs a passive screen
+   does not own) -- density is absorbed by a variant ladder (full /
+   condensed / minimal formats, breakpoint-selected by roster size,
+   fit-verified by measurement, whole-screen downgrade never partial
+   truncation), and content too deep for any single screen belongs to
+   the console print stream, which composes across frames without
+   practical limit. Serving is push-on-change: stats events mark
+   boards dirty; a 1 Hz dirty-gated tick rebuilds and pushes to
+   current viewers; milestone events (captures, match end) push
+   immediately; caches serve all requests instantly.
 3. **Configstring-backed dynamic text**: 512 free slots is a huge
    untapped surface — team names, top-scorer lines, rotating info,
    per-client strings via stat_string, all updatable without layout
