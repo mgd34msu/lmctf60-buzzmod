@@ -2374,6 +2374,37 @@ rally_done:;
 }
 
 
+static int intercept_field[SG_MAX_SEEDS];
+
+/*
+ * THE INTERCEPT SURFACE (split from SG_BotThink, 2026-08-11 standards
+ * pass; body verbatim): everyone but the carrier supports the carrier,
+ * and when an enemy thief is believed live, floods the hold ground
+ * across its projected motion.
+ */
+static void Think_InterceptField(sg_role_t role, int team,
+                                 const int **support_out,
+                                 const int **intercept_out)
+{
+	if (role != SG_ROLE_CARRY)
+	{
+		sg_belief_carrier_t *ec = &sg_caco_team_belief.enemy_carrier[team - 1];
+
+		*support_out = sg_fields.our_carrier[team - 1];
+		if (ec->seed >= 0)
+		{
+			int cost = 0;
+			int hold = Intercept_HoldSeed(team, ec->seed);
+
+			/* the hold ground across the thief's projected motion --
+			 * or their believed position when the projection is thin */
+			Field_Flood(sg_rune, intercept_field, &hold, &cost, 1);
+			*intercept_out = intercept_field;
+		}
+	}
+}
+
+
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -2388,7 +2419,6 @@ void SG_BotThink(sg_bot_t *bot)
 	float incumbent_v = 1e30f;
 	vec3_t want, d;
 	qboolean carrying;
-	static int intercept_field[SG_MAX_SEEDS];
 
 	/* movement policy state for this frame */
 	vec3_t		basis_fwd, basis_right;     /* the basis pmove will build */
@@ -3162,22 +3192,7 @@ void SG_BotThink(sg_bot_t *bot)
 
 	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
 
-	if (role != SG_ROLE_CARRY)
-	{
-		sg_belief_carrier_t *ec = &sg_caco_team_belief.enemy_carrier[team - 1];
-
-		support = sg_fields.our_carrier[team - 1];
-		if (ec->seed >= 0)
-		{
-			int cost = 0;
-			int hold = Intercept_HoldSeed(team, ec->seed);
-
-			/* the hold ground across the thief's projected motion --
-			 * or their believed position when the projection is thin */
-			Field_Flood(sg_rune, intercept_field, &hold, &cost, 1);
-			intercept = intercept_field;
-		}
-	}
+	Think_InterceptField(role, team, &support, &intercept);
 
 	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
 	bot->terminal = false;
