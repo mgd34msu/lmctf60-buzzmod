@@ -12,8 +12,15 @@ packaging. The stale `slipgate-1.0` tag (cut on a red commit) was
 deleted. Standing lesson: CI is verified per job via
 `gh run view --json conclusion,jobs`, never via aggregate `gh run watch`
 exit codes — the aggregate lied twice. Development continues on
-`slipgate`; three trials armed (hookpong s03, dither-120 s06, teamskew
-s05) are past their 16-wave floors and awaiting ruling.*
+`slipgate`; three trials armed 17:07 (hookpong s03, dither-120 s06,
+teamskew s05) — armed film is waves 895–899 and 901+, floors land
+~wave 912 (~22:00). **Wave 900 is VOID**: a locally-built .so carrying
+the half-renamed sg_fields tree (the C4701 bug CI caught) auto-deployed
+mid-wave and pinned all ten servers in an infinite loop at map load;
+SIGTERM-immune, cleared by SIGKILL at 19:01, fixed build r662~ecbeaaf
+deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
+fleet auto-deploys the newest repo-root .so — never leave a local build
+lying around between edit and commit unless the tree is known-good.*
 
 ## The ladder
 
