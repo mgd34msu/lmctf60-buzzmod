@@ -1252,6 +1252,12 @@ int ClientShowMOD(edict_t *ent)
 					"xv 0 yv %d cstring \"%s\" ",
 					i, line);
 				i+=8;
+				/* 1400-byte wire ceiling, no fragmentation: an
+				 * over-long motd used to silently drop the whole
+				 * frame -- an invisible welcome screen. Truncate
+				 * the motd, keep the screen. */
+				if (strlen(string) + strlen(temp2) >= 1380)
+					break;
 				strcat(string, temp2);
 				line = strtok(NULL, "\n");
 			}

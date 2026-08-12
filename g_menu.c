@@ -2092,6 +2092,12 @@ void Menu_Draw (edict_t *ent)
 				"xv %i yv %i string2 \" %s\" ",
 				55, ystart + (i * 8), menu[i].text );
 		}
+		/* the wire ceiling is 1400 bytes with no fragmentation: an
+		 * oversized unicast silently drops the whole frame, and this
+		 * loop had no guard at all (every board in p_hud.c has one).
+		 * Stop appending before the menu becomes invisible. */
+		if (strlen(string) + strlen(line) >= 1380)
+			break;
 		strcat(string, line);
 	}
 

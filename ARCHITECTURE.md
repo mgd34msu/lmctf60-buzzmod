@@ -99,6 +99,12 @@ Counts are from the audits, not estimates.
    INSERTs become bound parameters.
 9. stdlog joins the gamedir path convention (the one Rule 7 violation
    in buzzmod); failed log open stops being server-fatal.
+9b. The presentation layer (docs/LAYOUT.md): a stat-slot registry and
+   a layout compiler replacing ten hand-assembled producers with five
+   different overflow-guard styles -- screens as declarative tables,
+   the 1400-byte wire budget enforced by construction, hot data on
+   the free stat/configstring channels. Two unguarded producers
+   (menus, MOTD) were interim-guarded 2026-08-12.
 
 **P3 — wiring and flow (in progress / opportunistic)**
 10. `sg_think_t` through the eleven stages (defined; wiring underway).
