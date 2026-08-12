@@ -15,7 +15,13 @@ those trials. Pre-registered bars for the package itself: stand-area
 grind share collapses, steal conversion 1.5% → toward 3.3%, approach
 rate up (the rally actually fires now), grind_spm 10.9 → toward 3.2.
 Caps read through a fresh A/A check, since the old s03/s04 arm-bias
-correction predates both fixes.*
+correction predates both fixes. CANARY (waves 924-925, 8 demos): the
+package functions -- attacker stand-grind share DOWN (0.145 vs 0.16),
+conversion UP (2.0% vs 1.5%), and the rally visibly holds (fewer,
+better entries). Total grind rose (13.3 vs 10.9) because guard presence
+jumped 0.237 -> 0.342: last_role working means defenders actually post,
+and posted defenders exercise the known micro-pacing defect. The grind
+lever is now sg_patrol, next in the trial queue.*
 
 *Last updated: 2026-08-11. **RELEASE 4 PUBLISHED** — tag `release-4` at
 main merge 1b7a5e2, all four CI jobs (Linux x86_64, Windows x86, Windows
