@@ -307,5 +307,7 @@ void Botfill_Frame(void);
 qboolean Beat_HurtSince(edict_t *e, float since);
 
 extern const char *sg_role_names[];
+extern int *sg_airnext;   /* per-seed way to air (Air_Build) */
+extern int sg_cur_role;   /* pricing bot role, frame-scoped */
 
 #endif
