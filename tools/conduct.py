@@ -99,6 +99,36 @@ def contiguous_segments(track):
     return [s for s in segs if (len(s) - 1) * DT >= MIN_SEG_S]
 
 
+def grind_windows(seg):
+    """Yield (start_idx, reversals) for every grind window in one
+    contiguous segment: gross path speed above GRIND_SPEED_UPS while net
+    displacement stays under GRIND_NET_UNITS.  THE single detector --
+    every analysis that measures going-nowhere movement imports this
+    rather than re-typing the loop (two scratch scripts once carried
+    private copies; that is how instruments drift)."""
+    n = len(seg)
+    win = max(2, int(round(GRIND_WIN_S / DT)))
+    dx = [(seg[i + 1][1] - seg[i][1], seg[i + 1][2] - seg[i][2])
+          for i in range(n - 1)]
+    step = [math.hypot(a, b) for a, b in dx]
+    i = 0
+    while i + win < n:
+        gross = sum(step[i:i + win])
+        net = math.hypot(seg[i + win][1] - seg[i][1],
+                         seg[i + win][2] - seg[i][2])
+        if gross / (win * DT) > GRIND_SPEED_UPS and net < GRIND_NET_UNITS:
+            rev = 0
+            for j in range(i + 1, i + win):
+                ax, ay = dx[j - 1]
+                bx, by = dx[j]
+                if ax * bx + ay * by < 0:
+                    rev += 1
+            yield i, rev
+            i += win              # windows do not overlap once triggered
+        else:
+            i += 1
+
+
 def conduct_track(track, yaw_by_frame):
     """(observed_s, grind_s, grind_reversals, spin_s) for one entity."""
     obs_s = grind_s = spin_s = 0.0
@@ -108,25 +138,11 @@ def conduct_track(track, yaw_by_frame):
     for seg in contiguous_segments(track):
         n = len(seg)
         obs_s += (n - 1) * DT
-        dx = [(seg[i + 1][1] - seg[i][1], seg[i + 1][2] - seg[i][2])
-              for i in range(n - 1)]
-        step = [math.hypot(a, b) for a, b in dx]
-        # -------- grind: gross speed high, net displacement low
-        i = 0
-        while i + win < n:
-            gross = sum(step[i:i + win])
-            net = math.hypot(seg[i + win][1] - seg[i][1],
-                             seg[i + win][2] - seg[i][2])
-            if gross / (win * DT) > GRIND_SPEED_UPS and net < GRIND_NET_UNITS:
-                grind_s += win * DT
-                for j in range(i + 1, i + win):
-                    ax, ay = dx[j - 1]
-                    bx, by = dx[j]
-                    if ax * bx + ay * by < 0:
-                        reversals += 1
-                i += win          # windows do not overlap once triggered
-            else:
-                i += 1
+        step = [math.hypot(seg[i + 1][1] - seg[i][1],
+                           seg[i + 1][2] - seg[i][2]) for i in range(n - 1)]
+        for _si, rev in grind_windows(seg):
+            grind_s += win * DT
+            reversals += rev
         # -------- spin: sustained yaw rate while near-stationary
         yaws = [yaw_by_frame.get(s[0]) for s in seg]
         run = 0

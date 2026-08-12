@@ -25,3 +25,12 @@ tools/campaign-*/
 tools/ab-*.log
 tools/iter-*/
 tools/__pycache__/
+
+# development-environment runtime debris (see TOOLING.md)
+tools/iter-*-launch.log
+tools/aux-*-launch.log
+tools/aux-[0-9]*/
+tools/campaign-*/
+tools/waveloop.log
+tools/*.log
+tools/runs-archive/
