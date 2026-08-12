@@ -4,6 +4,7 @@
 #include "time.h" // TEAM CODE -- LM_JORM
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "slipgate/sg_cvars.h"
+#include "ui_boards.h"		// UI_Tick_Dirty -- disconnects change the boards' roster
 
 void SG_NoteDeath(edict_t *victim);
 qboolean	SG_OwnsBot(edict_t *ent);
@@ -2617,6 +2618,8 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
+
+	UI_Tick_Dirty();	// a departing player is a roster change on every board
 
 	// flush this player's persistent stats before we tear anything down
 	CommitPlayerData(ent);

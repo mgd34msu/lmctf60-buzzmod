@@ -3,6 +3,7 @@
 #include "g_local.h"
 #include "g_tourney.h"
 #include "g_ctffunc.h"
+#include "ui_boards.h"		// UI_Tick_Dirty/Push -- stats events drive the ticked boards
 #include <time.h>
 
 stats_player_s* p_start_player = NULL;
@@ -114,6 +115,7 @@ void stats_set_name(edict_t* ent, char* name)
 			sizeof(ent->client->p_stats_player->info.name) - 1);
 		ent->client->p_stats_player->info.name[
 			sizeof(ent->client->p_stats_player->info.name) - 1] = 0;
+		UI_Tick_Dirty();
 	}
 	return;
 }
@@ -173,7 +175,10 @@ void stats_add(edict_t* ent, int stat, long amount)
 		return;
 
 	if (Match_CanScore() && ent->client->p_stats_player)
+	{
 		ent->client->p_stats_player->stats[stat] += amount;
+		UI_Tick_Dirty();
+	}
 }
 
 void stats_set(edict_t* ent, int stat, long amount)
@@ -184,7 +189,10 @@ void stats_set(edict_t* ent, int stat, long amount)
 		return;
 
 	if (Match_CanScore() && ent->client->p_stats_player)
+	{
 		ent->client->p_stats_player->stats[stat] = amount;
+		UI_Tick_Dirty();
+	}
 }
 
 long stats_get(edict_t* ent, int stat)
@@ -321,6 +329,10 @@ void stats_record_capture(edict_t* capper)
 
 		stats_set(other, STATS_CUR_CAPSTREAK, 0);
 	}
+
+	// a capture is a milestone event (docs/LAYOUT.md): open boards update
+	// now rather than on the next coalescing tick
+	UI_Tick_Push();
 }
 
 void stats_fold_session(edict_t* ent)
@@ -427,6 +439,7 @@ void stats_clear(edict_t* ent)
 
 	stats_init_player(ent->client->p_stats_player);
 	ent->client->resp.score = 0;
+	UI_Tick_Dirty();	// fires on spawn and team join -- a roster change
 }
 
 

@@ -40,4 +40,24 @@ void UI_Boards_MatchEnd(void);
 // nothing if board_id is out of range.
 void UI_Boards_Serve(edict_t *ent, int board_id);
 
+// -- The ticked tier (docs/LAYOUT.md): in-match boards ---------------------
+//
+// The five in-match boards (DM scoreboard, squad, stat, teamstat, rail) are
+// per-viewer screens whose data changes only when a stats event fires. They
+// are served push-on-change: any stats mutation calls UI_Tick_Dirty(), and
+// UI_Tick_Frame() -- called once per server frame after all client frames --
+// repaints every open board at most once per second while dirty. A quiet
+// server sends nothing; a firefight coalesces to 1 Hz. Milestone events
+// (captures, match end) call UI_Tick_Push() to skip the wait.
+
+// A stats event changed data shown on the in-match boards.
+void UI_Tick_Dirty(void);
+
+// Serve dirty boards NOW (milestone events; also re-arms the 1 Hz gate).
+void UI_Tick_Push(void);
+
+// Once per server frame, after every ClientEndServerFrame: serves open
+// boards if dirty and the 1 Hz gate allows.
+void UI_Tick_Frame(void);
+
 #endif // UI_BOARDS_H

@@ -1116,52 +1116,16 @@ void ClientEndServerFrame (edict_t *ent)
 	}
 	// Paril
 	
-	if (ent->client->showscores &&  deathmatch->value)
+	if (deathmatch->value &&
+		(ent->client->showscores || ent->client->showsquadboard ||
+		 ent->client->showstatboard || ent->client->showteamstatboard ||
+		 ent->client->showrailboard))
 	{
-		if (!(level.framenum & 31) )
-		{
-			DeathmatchScoreboardMessage (ent, ent->enemy);
-			gi.unicast (ent, false);
-		}
+		// open in-match boards are served push-on-change by UI_Tick_Frame
+		// (1 Hz while data is changing, immediate on milestones, silent
+		// when idle) -- this branch exists only to keep an open board from
+		// falling through to the ID/MOD painters below
 	}
-// ADC
-	else if (ent->client->showsquadboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31) )
-		{
-			SquadboardMessage (ent, ent->enemy);
-			gi.unicast (ent, false);
-		}
-	}
-// ADC
-
-// BUZZKILL
-	else if (ent->client->showstatboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31))
-		{
-			StatboardMessage(ent, ent->enemy);
-			gi.unicast(ent, false);
-		}
-	}
-	else if (ent->client->showteamstatboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31))
-		{
-			TeamStatboardMessage(ent, ent->enemy);
-			gi.unicast(ent, false);
-		}
-	}
-	else if (ent->client->showrailboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31))
-		{
-			RailboardMessage(ent, ent->enemy);
-			gi.unicast(ent, false);
-		}
-	}
-
-// BUZZKILL
 	else if (ent->client->showmod)
 	{
 		if (!(level.framenum & 7))

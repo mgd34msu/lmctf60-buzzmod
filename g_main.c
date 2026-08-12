@@ -4,6 +4,7 @@
 #include "ctf_file_io.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
+#include "ui_boards.h"		// UI_Tick_Frame -- the 1 Hz board tick runs after client frames
 
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
@@ -248,6 +249,9 @@ void ClientEndServerFrames (void)
 		ClientEndServerFrame (ent);
 	}
 
+	// the in-match boards' 1 Hz push-on-change tick, after every client's
+	// frame so a repaint never races the data it is painting
+	UI_Tick_Frame();
 }
 
 /*

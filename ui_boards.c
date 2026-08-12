@@ -345,3 +345,77 @@ void UI_Boards_Serve(edict_t *ent, int board_id)
 	gi.WriteString(b->storage);
 	gi.unicast(ent, true);
 }
+
+// -- The ticked tier -------------------------------------------------------
+//
+// One dirty flag covers all five in-match boards: their data overlaps
+// heavily (frags, captures, accuracy, roster), and the 1 Hz coalescing gate
+// already bounds the cost at one per-viewer repaint per second, so per-board
+// dirty tracking would complicate every stats call site to save almost
+// nothing. The boards are per-viewer screens (each highlights or ranks
+// relative to the asker), which is why the serve loop rebuilds per client
+// instead of caching one buffer the way the settled tier does.
+
+static qboolean ui_tick_dirty;
+static float    ui_tick_next;	// level.time gate for the next allowed serve
+
+void UI_Tick_Dirty(void)
+{
+	ui_tick_dirty = true;
+}
+
+static void UI_Tick_Serve(void)
+{
+	int i;
+
+	for (i = 1; i <= game.maxclients; i++)
+	{
+		edict_t *ent = g_edicts + i;
+
+		if (!ent->inuse || !ent->client)
+			continue;
+
+		if (ent->client->showscores)
+			DeathmatchScoreboardMessage(ent, ent->enemy);
+		else if (ent->client->showsquadboard)
+			SquadboardMessage(ent, ent->enemy);
+		else if (ent->client->showstatboard)
+			StatboardMessage(ent, ent->enemy);
+		else if (ent->client->showteamstatboard)
+			TeamStatboardMessage(ent, ent->enemy);
+		else if (ent->client->showrailboard)
+			RailboardMessage(ent, ent->enemy);
+		else
+			continue;
+
+		gi.unicast(ent, false);
+	}
+
+	ui_tick_dirty = false;
+}
+
+void UI_Tick_Frame(void)
+{
+	if (!deathmatch->value || !ui_tick_dirty)
+		return;
+
+	// level.time restarts at zero on a map change; a stale gate from the
+	// previous map would otherwise silence the boards for its remainder
+	if (ui_tick_next > level.time + 1.0f)
+		ui_tick_next = 0;
+
+	if (level.time < ui_tick_next)
+		return;
+
+	ui_tick_next = level.time + 1.0f;
+	UI_Tick_Serve();
+}
+
+void UI_Tick_Push(void)
+{
+	if (!ui_tick_dirty)
+		return;
+
+	ui_tick_next = level.time + 1.0f;
+	UI_Tick_Serve();
+}
