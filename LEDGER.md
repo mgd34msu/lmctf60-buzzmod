@@ -22,6 +22,30 @@ deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
 fleet auto-deploys the newest repo-root .so — never leave a local build
 lying around between edit and commit unless the tree is known-good.*
 
+## Conduct audit (2026-08-11, owner-ordered: "have you watched them?")
+
+Nobody had. `tools/conduct.py` now measures visible stupidity and
+defense regime directly from film; `conduct-baseline.json` holds the
+first pooled read (94 human demos / 28 bot demos, observed-time
+denominators):
+
+- **Grind (going-nowhere movement): bots 10.9 s/min vs human 3.2 —
+  3.5x.** Higher reversal rate inside windows (1.37 vs 0.71/s): the
+  signature is oscillation, not pinning. This was invisible to every
+  scalar instrument. Localization by map cell running; suspicion is it
+  co-locates with the plateau/HOOK revisit spike hookpong is in trial
+  against.
+- **Defense regime: the steal gap is NOT a strong-defense artifact.**
+  Guard presence at stands is equal (0.237 vs 0.247). Bot offense
+  generates HALF the approach pressure (4.7 vs 9.1 stand entries/min)
+  and converts entries at half the rate (1.5% vs 3.3%). Stage-2 bars
+  are hereby re-based: opportunity-conditioned rates (approach_pm,
+  steal_conv at measured guard_frac), not raw steals/min across
+  regimes.
+- Caveat, standing: client-POV human film conditions stand observation
+  toward busy moments — cross-population values are ratio evidence,
+  same rule as escort_fraction_obs.
+
 ## The ladder
 
 | Rung | State | Evidence |
