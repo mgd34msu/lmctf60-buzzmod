@@ -211,6 +211,12 @@
     <ClCompile Include="slipgate\sg_client.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_clock.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_danger.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_caco.c">
       <Filter>Source Files</Filter>
     </ClCompile>

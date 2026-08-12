@@ -376,7 +376,8 @@ void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
 
 rune_t		*Rune_Load(const char *mapname);
 int			Rune_NearestSeed(rune_t *r, vec3_t p);
-rune_t		*SG_Rune(void);         /* the loaded rune, NULL before setup --
+rune_t		*SG_Rune(void);
+const char	*SG_RuneMapName(void);         /* the loaded rune, NULL before setup --
                                      * combat reads reachability from it */
 
 /* ------------------------------------------------ caco: powerup and rune
