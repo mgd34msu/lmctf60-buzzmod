@@ -2650,13 +2650,17 @@ void SG_BotThink(sg_bot_t *bot)
 			gi.dprintf("CARRY %s ends after %.1fs\n",
 			           e->client->pers.netname,
 			           level.time - bot->carry_start);
-		if ((int)role != bot->last_role)
-		{
-			if (role == SG_ROLE_ESCORT)
-				gi.dprintf("ESCORT %s begins\n", e->client->pers.netname);
-			bot->last_role = (int)role;
-		}
+		if ((int)role != bot->last_role && role == SG_ROLE_ESCORT)
+			gi.dprintf("ESCORT %s begins\n", e->client->pers.netname);
 	}
+	/*
+	 * Unconditionally: last_role feeds the rally's partner census, the
+	 * escort head-count, and the wavepush attacker census. It sat inside
+	 * the debug gate above until the 2026-08-11 standards pass -- on any
+	 * server running sg_debug 0 (the fleet included) it never updated,
+	 * and every one of those censuses read a stale role forever.
+	 */
+	bot->last_role = (int)role;
 	bot->was_carrying = carrying;
 
 	/*
