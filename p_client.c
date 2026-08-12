@@ -6,6 +6,7 @@
 #include "slipgate/sg_cvars.h"
 
 void SG_NoteDeath(edict_t *victim);
+qboolean	SG_OwnsBot(edict_t *ent);
 void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
 void SpawnLoadout_Give(gclient_t *cl);
 void ClientOldSetSkin(edict_t *e2, char *sk);
@@ -3302,7 +3303,7 @@ void ClientSetSkin(edict_t *ent, char *skin)
 	// combine name and skin into a configstring
 	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, newskin) );
 
-	if ((ent->flags & FL_BOT) && sg_cv.debug->value)
+	if (SG_OwnsBot(ent) && sg_cv.debug->value)
 		gi.dprintf("SKINL %s team=%d wears %s\n",
 		           ent->client->pers.netname,
 		           ent->client->ctf.teamnum, newskin);
@@ -3435,7 +3436,7 @@ void ClientOldSetSkin(edict_t *ent, char *input)
 
 	/* the uniform on the record: two silent repaint failures cost two
 	 * live reports -- the third fix verifies itself from the wave logs */
-	if ((ent->flags & FL_BOT) && sg_cv.debug->value)
+	if (SG_OwnsBot(ent) && sg_cv.debug->value)
 		gi.dprintf("SKIN %s team=%d wears %s\n",
 		           ent->client->pers.netname,
 		           ent->client->ctf.teamnum, s);

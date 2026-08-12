@@ -84,7 +84,7 @@ stats_player_s* stats_new_player(char* name)
 
 	p_player = (stats_player_s*)gi.TagMalloc(sizeof(stats_player_s), TAG_GAME);
 	if (!p_player) {
-		gi.error(ERR_FATAL, "LMCTF: allocation failed in %s", __func__);
+		gi.error("LMCTF: allocation failed in %s", __func__);
 		return NULL;
 	}
 
