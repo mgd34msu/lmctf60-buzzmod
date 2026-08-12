@@ -5715,9 +5715,10 @@ static void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	qboolean drop_yaw_locked = false;
 	float drop_yaw = 0.0f;
 	qboolean hook_brake = false;
-	vec3_t d;
+	vec3_t want, d;
 
 	VectorClear(move_dir);
+	VectorClear(want);
 	VectorClear(d);
 
 		vec3_t aim;
@@ -7490,7 +7491,7 @@ void SG_BotThink(sg_bot_t *bot)
 	int team, bestlink = -1;
 	float bestval;
 	float incumbent_v = 1e30f;
-	vec3_t want, d;
+	vec3_t d;
 	qboolean carrying;
 
 	/* movement policy state for this frame */
