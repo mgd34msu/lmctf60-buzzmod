@@ -1277,13 +1277,29 @@ void SG_BotThink(sg_bot_t *bot)
 	 * base; a bot that stands still because its database has a hole is not
 	 * descending a surface, it is worshipping a graph.
 	 */
-	Think_Move(bot, e, role, team, carrying, &live, w, goal_field,
-	           route_field, route_pure, bestlink, precision, hold_post,
-	           rally_hold, rail_hold, post_yaw, post_sight, duel,
-	           duel_org, duel_want, duel_expo, &cmd, move_dir,
-	           &view_yaw, &view_pitch, &have_move, &open_ahead,
-	           &run_link, &door_hold, &door_ent, &drop_yaw_locked,
-	           &drop_yaw, &hook_brake);
+	/* the movement inputs the context does not yet hold at this point */
+	tc.bestlink = bestlink;
+	tc.hold_post = hold_post;
+	tc.rally_hold = rally_hold;
+	tc.rail_hold = rail_hold;
+	tc.post_yaw = post_yaw;
+	tc.post_sight = post_sight;
+	tc.view_yaw = view_yaw;
+	tc.view_pitch = view_pitch;
+
+	Think_Move(bot, &tc, &cmd);
+
+	VectorCopy(tc.move_dir, move_dir);
+	view_yaw = tc.view_yaw;
+	view_pitch = tc.view_pitch;
+	have_move = tc.have_move;
+	open_ahead = tc.open_ahead;
+	run_link = tc.run_link;
+	door_hold = tc.door_hold;
+	door_ent = tc.door_ent;
+	drop_yaw_locked = tc.drop_yaw_locked;
+	drop_yaw = tc.drop_yaw;
+	hook_brake = tc.hook_brake;
 	Think_Emit(bot, e, role, team, carrying, &live, w, goal_field,
 	           route_field, route_pure, bestlink, precision, hold_post,
 	           rally_hold, rail_hold, rail_seed, rail_client, rail_dose,

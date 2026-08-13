@@ -658,25 +658,29 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
  * lookahead and pursuit, doors, drops, and the hook brake. Emits the
  * movement policy the command stage executes.
  */
-void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                       int team, qboolean carrying,
-                       const sg_weights_t *live, const sg_weights_t *w,
-                       const int *goal_field, const int *route_field,
-                       qboolean route_pure, int bestlink,
-                       qboolean precision, qboolean hold_post,
-                       qboolean rally_hold, qboolean rail_hold,
-                       float post_yaw, float post_sight, qboolean duel,
-                       vec3_t duel_org, float duel_want, float duel_expo,
-                       usercmd_t *cmd,
-                       vec3_t move_dir_out, float *view_yaw_io,
-                       float *view_pitch_io, qboolean *have_move_out,
-                       qboolean *open_ahead_out, qboolean *run_link_out,
-                       int *door_hold_out, edict_t **door_ent_out,
-                       qboolean *drop_yaw_locked_out, float *drop_yaw_out,
-                       qboolean *hook_brake_out)
+void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 {
+	/* the former parameter list, unpacked from the think context so the
+	 * body below reads exactly as it did when these arrived as arguments;
+	 * cmd stays a real parameter until the whole frame speaks context.
+	 * Eight former parameters -- carrying, live, w, route_pure,
+	 * post_sight, duel_org, duel_want, duel_expo -- were never read by
+	 * this body and have no unpack. */
+	edict_t *e = tc->e;
+	sg_role_t role = tc->role;
+	int team = tc->team;
+	const int *goal_field = tc->goal_field;
+	const int *route_field = tc->route_field;
+	int bestlink = tc->bestlink;
+	qboolean precision = tc->precision;
+	qboolean hold_post = tc->hold_post;
+	qboolean rally_hold = tc->rally_hold;
+	qboolean rail_hold = tc->rail_hold;
+	float post_yaw = tc->post_yaw;
+	qboolean duel = tc->duel;
+
 	vec3_t move_dir;
-	float view_yaw = *view_yaw_io, view_pitch = *view_pitch_io;
+	float view_yaw = tc->view_yaw, view_pitch = tc->view_pitch;
 	qboolean have_move = false, open_ahead = false, run_link = false;
 	int door_hold = 0;
 	edict_t *door_ent = NULL;
@@ -2455,17 +2459,17 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 			bot->stuck_time = 0.0f;
 		}
 
-	VectorCopy(move_dir, move_dir_out);
-	*view_yaw_io = view_yaw;
-	*view_pitch_io = view_pitch;
-	*have_move_out = have_move;
-	*open_ahead_out = open_ahead;
-	*run_link_out = run_link;
-	*door_hold_out = door_hold;
-	*door_ent_out = door_ent;
-	*drop_yaw_locked_out = drop_yaw_locked;
-	*drop_yaw_out = drop_yaw;
-	*hook_brake_out = hook_brake;
+	VectorCopy(move_dir, tc->move_dir);
+	tc->view_yaw = view_yaw;
+	tc->view_pitch = view_pitch;
+	tc->have_move = have_move;
+	tc->open_ahead = open_ahead;
+	tc->run_link = run_link;
+	tc->door_hold = door_hold;
+	tc->door_ent = door_ent;
+	tc->drop_yaw_locked = drop_yaw_locked;
+	tc->drop_yaw = drop_yaw;
+	tc->hook_brake = hook_brake;
 }
 
 /*
