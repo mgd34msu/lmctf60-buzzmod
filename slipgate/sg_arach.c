@@ -1174,8 +1174,23 @@ void SG_BotThink(sg_bot_t *bot)
 	Think_LiveWeights(bot, e, role, team, &live);
 	w = &live;
 
-	Think_Objective(bot, e, role, team, carrying, w, support, intercept,
-	                &goal_field, &route_field, &route_pure);
+	/* the context carries the stage contract from here down; inputs are
+	 * loaded as they are born, results read back for unconverted stages */
+	tc.e = e;
+	tc.role = role;
+	tc.team = team;
+	tc.carrying = carrying;
+	tc.live = live;
+	tc.w = &tc.live;        /* w aliased &live here; the copy keeps the
+	                         * same aliasing inside the context */
+	tc.support = support;
+	tc.intercept = intercept;
+
+	Think_Objective(bot, &tc);
+
+	goal_field = tc.goal_field;
+	route_field = tc.route_field;
+	route_pure = tc.route_pure;
 
 
 	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
@@ -1221,18 +1236,6 @@ void SG_BotThink(sg_bot_t *bot)
 	 * PickLink reads the think context; these locals are migrating into
 	 * it stage by stage, so the context is loaded from them here and the
 	 * results read back below until every stage speaks context natively. */
-	tc.e = e;
-	tc.role = role;
-	tc.team = team;
-	tc.carrying = carrying;
-	tc.live = live;
-	tc.w = &tc.live;        /* w aliased &live at this site; the copy keeps
-	                         * the same aliasing inside the context */
-	tc.goal_field = goal_field;
-	tc.route_field = route_field;
-	tc.route_pure = route_pure;
-	tc.support = support;
-	tc.intercept = intercept;
 	tc.precision = precision;
 	tc.duel = duel;
 	VectorCopy(duel_org, tc.duel_org);

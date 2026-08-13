@@ -19,12 +19,8 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
                                 sg_role_t role, int team,
                                 qboolean carrying);
 
-void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                            int team, qboolean carrying,
-                            const sg_weights_t *w,
-                            const int *support, const int *intercept,
-                            const int **goal_out, const int **route_out,
-                            qboolean *route_pure_out);
+/* resolves the frame's objective fields; context in, context out */
+void Think_Objective(sg_bot_t *bot, sg_think_t *tc);
 
 void Think_InterceptField(sg_role_t role, int team,
                                  const int **support_out,

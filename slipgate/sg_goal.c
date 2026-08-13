@@ -646,13 +646,18 @@ void Think_LiveWeights(sg_bot_t *bot, edict_t *e, sg_role_t role,
  * courier, the early return, the mega offer, and the tactics waypoint.
  * Emits the goal field, the route field, and its purity.
  */
-void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                            int team, qboolean carrying,
-                            const sg_weights_t *w,
-                            const int *support, const int *intercept,
-                            const int **goal_out, const int **route_out,
-                            qboolean *route_pure_out)
+void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 {
+	/* the former parameter list, unpacked from the think context so the
+	 * body below reads exactly as it did when these arrived as arguments */
+	edict_t *e = tc->e;
+	sg_role_t role = tc->role;
+	int team = tc->team;
+	qboolean carrying = tc->carrying;
+	const sg_weights_t *w = tc->w;
+	const int *support = tc->support;
+	const int *intercept = tc->intercept;
+
 	const int *goal_field;
 	const int *route_field;
 	qboolean route_pure;
@@ -1183,7 +1188,7 @@ void Think_Objective(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		}
 	}
 
-	*goal_out = goal_field;
-	*route_out = route_field;
-	*route_pure_out = route_pure;
+	tc->goal_field = goal_field;
+	tc->route_field = route_field;
+	tc->route_pure = route_pure;
 }
