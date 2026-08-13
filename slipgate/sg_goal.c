@@ -994,7 +994,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * up to ten seconds off one Surface_At sweep, so a term that arrived after
 	 * it would not reach the route until the next commitment.
 	 */
-	sg_cur_mega = Mega_Worth(bot, e, role);
+	tc->mega = Mega_Worth(bot, e, role);
 
 	/*
 	 * NO CAMPING THE PAD, and no obsession either -- the offer is bounded in
@@ -1013,15 +1013,15 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * of standing offer without a pickup is a route that is not working; drop
 	 * it and refuse another for the pad's own respawn period.
 	 */
-	if (sg_cur_mega > 0.0f && SG_TimerPending(bot->mega_next))
-		sg_cur_mega = 0.0f;
-	if (sg_cur_mega > 0.0f)
+	if (tc->mega > 0.0f && SG_TimerPending(bot->mega_next))
+		tc->mega = 0.0f;
+	if (tc->mega > 0.0f)
 	{
 		if (!bot->mega_on)
 			SG_Mark(&bot->mega_since);
 		else if (SG_AgeOver(bot->mega_since, SG_MEGA_PATIENCE))
 		{
-			sg_cur_mega = 0.0f;
+			tc->mega = 0.0f;
 			SG_TimerArm(&bot->mega_next, SG_MEGA_BACKOFF);
 			if (SG_MegaOn() && sg_cv.debug->value)
 				gi.dprintf("MEGA %s give up: %.0fs on offer, no pickup\n",
@@ -1035,18 +1035,18 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		 * the best one standing from where the bot is now, in ms of extra
 		 * road -- back-solved from the value, which is what the surface
 		 * actually spends. */
-		if (sg_cur_mega > 0.0f && !bot->mega_on && bot->seed >= 0)
+		if (tc->mega > 0.0f && !bot->mega_on && bot->seed >= 0)
 		{
 			int		pad = -1;
 			float	val = Mega_Detour(tc, bot->seed, goal_field, &pad);
 			float	det = (val > 0.0f)
-			              ? 1500.0f * (sg_cur_mega / val - 1.0f) : -1.0f;
+			              ? 1500.0f * (tc->mega / val - 1.0f) : -1.0f;
 
 			if (val > 0.0f)
 				gi.dprintf("MEGA %s commit: pad %d hp %d worth %.2f "
 				           "detour %.0fms pull %.0f\n",
 				           e->client->pers.netname, pad, e->health,
-				           sg_cur_mega, det, 1500.0f * val);
+				           tc->mega, det, 1500.0f * val);
 		}
 		/*
 		 * The take. No pickup hook is needed and none is added: the mega is
@@ -1059,8 +1059,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			gi.dprintf("MEGA %s take: hp %d -> %d\n",
 			           e->client->pers.netname, bot->mega_hp, e->health);
 	}
-	bot->mega_on = (sg_cur_mega > 0.0f);
-	tc->mega = sg_cur_mega;   /* the settled worth rides the context */
+	bot->mega_on = (tc->mega > 0.0f);
 	bot->mega_hp = e->health;
 
 	bot->last_goalcost = (bot->seed >= 0 &&

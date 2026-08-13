@@ -175,24 +175,13 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->legs++;
 	}
 
-	sg_cur_role = role;             /* for the rune identity pricing */
-	sg_cur_team = team;
-	sg_cur_health = e->health;
-	sg_cur_danger = Danger_Field(team);    /* the danger dimension, ours */
+	/* the pricing terms, resolved once for the frame; the mega worth was
+	 * settled by the objective stage and already rides the context */
+	tc->health = e->health;
+	tc->danger = Danger_Field(team);       /* the danger dimension, ours */
 	/* downbeat live: attackers march, detours wait for the next bar */
-	sg_cur_push = (role == SG_ROLE_ATTACK &&
-	               SG_TimerPending(sg_push_until[SG_TeamIdx(team)]));
-	/* the same terms ride the think context; the globals above stay as
-	 * mirrors for consumers not yet handed it */
-	tc->danger = sg_cur_danger;
-	tc->push = sg_cur_push;
-	tc->health = sg_cur_health;
-	/* mega is the one pricing term this stage does not set: Mega_Worth
-	 * (sg_goal.c) writes sg_cur_mega earlier in the frame, before the
-	 * descent runs, so the context picks it up from the global here
-	 * rather than computing it -- the same read-once-per-frame shape as
-	 * the mirrors above, just sourced the other direction. */
-	tc->mega = sg_cur_mega;
+	tc->push = (role == SG_ROLE_ATTACK &&
+	            SG_TimerPending(sg_push_until[SG_TeamIdx(team)]));
 	sg_route_pure_now = route_pure;
 
 	/*

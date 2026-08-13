@@ -12,7 +12,6 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_util.h"
 
-int sg_cur_team;      /* for the shelf-cliff pricing */
 #define SG_MEGA_MAXDETOUR	4000    /* ms of extra road, hard refusal above */
 
 /*
@@ -65,13 +64,8 @@ float Rune_RoleFactor(int role, int entnum)
 	return 1.0f;
 }
 
-const int *sg_cur_danger;
 qboolean sg_route_pure_now;  /* tactics priced at selection: the
                                      * per-frame walk stays pure */
-qboolean sg_cur_push;        /* conductor's downbeat: march, no detours */
-int sg_cur_health;           /* pricing bot's health (dose gates) */
-float sg_cur_mega;           /* this bot's overheal worth this frame,
-                                     * 0 = no mega detour on offer */
 
 float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
                           float worth)
@@ -254,7 +248,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		return v;
 
 	/* the danger dimension: learned, decayed, team-indexed (set by the
-	 * caller alongside sg_cur_role); zero where nothing has died */
+	 * caller in the context); zero where nothing has died */
 	if (tc->danger && seed < SG_MAX_SEEDS)
 		v += (float)tc->danger[seed];
 
@@ -272,7 +266,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 	/*
 	 * THE MEGA (sg_megaworth). A separate term rather than a bend in the
 	 * health class, because the two say opposite things at 100 hp: the class
-	 * is worth 0.05 there and the mega is worth its whole budget. sg_cur_mega
+	 * is worth 0.05 there and the mega is worth its whole budget. The mega worth
 	 * is already zero unless the role, the belief, the headroom and the fight
 	 * all permit it (Mega_Worth), so this line is an OFFER and never a
 	 * requirement -- the objective term is untouched and a bot that finds

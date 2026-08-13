@@ -22,7 +22,7 @@
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
-#include "slipgate/sg_price.h"     /* sg_cur_role */
+#include "slipgate/sg_price.h"     /* tc->role */
 
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
@@ -1204,7 +1204,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 			if (sg_cv.edgeride->value > 0.0f &&
 			    l->action == RL_RUN && !precision &&
 			    e->groundentity && bot->hook_phase == 0 &&
-			    sg_cur_role != SG_ROLE_CARRY &&
+			    tc->role != SG_ROLE_CARRY &&
 			    bot->ribbon_off != 0.0f)
 			{
 				vec3_t edir, eoff, eprobe;
@@ -1392,7 +1392,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 							 * keeps climb ropes and loses the
 							 * ceremony; everyone else bursts on. */
 							if (!(sg_cv.legcarrier->value &&
-							      sg_cur_role == SG_ROLE_CARRY))
+							      tc->role == SG_ROLE_CARRY))
 							{
 								VectorCopy(htr.endpos, bot->hook_anchor);
 								VectorCopy(aim, bot->hook_dest);
@@ -2247,7 +2247,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 			 */
 			{
 				float hop_reach = 160.0f;
-				if (sg_cur_role == SG_ROLE_CARRY &&
+				if (tc->role == SG_ROLE_CARRY &&
 				    sg_cv.carryhop->value > 0)
 					hop_reach = sg_cv.carryhop->value;
 				VectorMA(e->s.origin, hop_reach, move_dir, probe);
@@ -2286,7 +2286,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 		 * (218-219: legs +59%% speed) says the flag pays for stillness
 		 * with blood, and a landing run out beats a landing stood */
 		if (SG_TimerPending(bot->hook_landbrake) && e->groundentity &&
-		    !(sg_cur_role == SG_ROLE_CARRY &&
+		    !(tc->role == SG_ROLE_CARRY &&
 		      sg_cv.legcarrier->value >= 2.0f))
 		{
 			cmd->forwardmove = 0;

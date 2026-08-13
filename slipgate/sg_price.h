@@ -5,13 +5,7 @@
 #ifndef SG_PRICE_H
 #define SG_PRICE_H
 
-extern const int	*sg_cur_danger;
-extern int			sg_cur_team;
 extern qboolean		sg_route_pure_now;
-extern qboolean		sg_cur_push;
-extern int			sg_cur_health;
-extern float		sg_cur_mega;
-extern int			sg_cur_role;   /* pricing bot role, frame-scoped */
 
 float	Rune_RoleFactor(int role, int entnum);
 float	Detour_Value(sg_think_t *tc, int seed, int fc,

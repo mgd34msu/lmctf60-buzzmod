@@ -501,7 +501,6 @@ qboolean SG_LevelSetup(void)
 /* the role whose surface is being evaluated this frame -- SLIPGATE runs
  * its bots strictly serially, so a file-static carries it into the
  * detour arithmetic without widening every signature on the path */
-int sg_cur_role;
 
 
 
