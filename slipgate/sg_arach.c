@@ -179,7 +179,7 @@ static void Escape_Load(const char *mapname)
 	char path[MAX_OSPATH];
 	char lower[64], key[80];
 	static char buf[32768];
-	cvar_t *gamedir = gi.cvar("gamedir", "", 0);
+	cvar_t *gamedir = sg_host.cvar("gamedir", "", 0);
 	size_t n;
 	FILE *f;
 	int c, i, k;
@@ -214,7 +214,7 @@ static void Escape_Load(const char *mapname)
 		sg_escape_total[k] = c;
 	}
 	if (sg_escape_total[0] > 0 || sg_escape_total[1] > 0)
-		gi.dprintf("rune: escape bearings loaded (%s: red n=%d, blue n=%d)\n",
+		sg_host.dprint("rune: escape bearings loaded (%s: red n=%d, blue n=%d)\n",
 		           path, sg_escape_total[0], sg_escape_total[1]);
 }
 
@@ -224,7 +224,7 @@ rune_t *Rune_Load(const char *mapname)
 	FILE *f;
 	rune_t *r;
 	int i;
-	cvar_t *gamedir = gi.cvar("gamedir", "", 0);
+	cvar_t *gamedir = sg_host.cvar("gamedir", "", 0);
 
 	Com_sprintf(path, sizeof(path), "%s/maps/%s.rune",
 	            gamedir->string[0] ? gamedir->string : ".", mapname);
@@ -232,15 +232,15 @@ rune_t *Rune_Load(const char *mapname)
 	if (!f)
 		return NULL;
 
-	r = gi.TagMalloc(sizeof(rune_t), TAG_LEVEL);
+	r = sg_host.level_alloc(sizeof(rune_t));
 	if (fread(&r->hdr, sizeof(r->hdr), 1, f) != 1 ||
 	    r->hdr.magic != RUNE_MAGIC || r->hdr.version != RUNE_VERSION)
 	{
 		fclose(f);
 		return NULL;
 	}
-	r->seeds = gi.TagMalloc(sizeof(rune_seed_t) * r->hdr.num_seeds, TAG_LEVEL);
-	r->links = gi.TagMalloc(sizeof(rune_link_t) * r->hdr.num_links, TAG_LEVEL);
+	r->seeds = sg_host.level_alloc(sizeof(rune_seed_t) * r->hdr.num_seeds);
+	r->links = sg_host.level_alloc(sizeof(rune_link_t) * r->hdr.num_links);
 	if (fread(r->seeds, sizeof(rune_seed_t), r->hdr.num_seeds, f) != (size_t)r->hdr.num_seeds ||
 	    fread(r->links, sizeof(rune_link_t), r->hdr.num_links, f) != (size_t)r->hdr.num_links)
 	{
@@ -250,8 +250,8 @@ rune_t *Rune_Load(const char *mapname)
 	fclose(f);
 
 	/* per-seed link chains */
-	r->first_link = gi.TagMalloc(sizeof(int) * r->hdr.num_seeds, TAG_LEVEL);
-	r->next_link = gi.TagMalloc(sizeof(int) * r->hdr.num_links, TAG_LEVEL);
+	r->first_link = sg_host.level_alloc(sizeof(int) * r->hdr.num_seeds);
+	r->next_link = sg_host.level_alloc(sizeof(int) * r->hdr.num_links);
 	for (i = 0; i < r->hdr.num_seeds; i++)
 		r->first_link[i] = -1;
 	for (i = r->hdr.num_links - 1; i >= 0; i--)
@@ -277,12 +277,12 @@ rune_t *Rune_Load(const char *mapname)
 		if (fread(hh, sizeof(int), 4, f) == 4 &&
 		    hh[0] == 0x484D4E31 && hh[2] == r->hdr.num_links)
 		{
-			sg_human_use = gi.TagMalloc(r->hdr.num_links, TAG_LEVEL);
+			sg_human_use = sg_host.level_alloc(r->hdr.num_links);
 			if (fread(sg_human_use, 1, r->hdr.num_links, f) !=
 			    (size_t)r->hdr.num_links)
 				sg_human_use = NULL;
 			else
-				gi.dprintf("rune: human prior loaded (%s)\n", path);
+				sg_host.dprint("rune: human prior loaded (%s)\n", path);
 		}
 		fclose(f);
 	}
@@ -297,12 +297,12 @@ rune_t *Rune_Load(const char *mapname)
 		if (fread(hh, sizeof(int), 4, f) == 4 &&
 		    hh[0] == 0x484D4C31 && hh[2] == r->hdr.num_links)
 		{
-			sg_human_live = gi.TagMalloc(r->hdr.num_links, TAG_LEVEL);
+			sg_human_live = sg_host.level_alloc(r->hdr.num_links);
 			if (fread(sg_human_live, 1, r->hdr.num_links, f) !=
 			    (size_t)r->hdr.num_links)
 				sg_human_live = NULL;
 			else
-				gi.dprintf("rune: flag-live prior loaded (%s)\n", path);
+				sg_host.dprint("rune: flag-live prior loaded (%s)\n", path);
 		}
 		fclose(f);
 	}
@@ -317,12 +317,12 @@ rune_t *Rune_Load(const char *mapname)
 		if (fread(hh, sizeof(int), 4, f) == 4 &&
 		    hh[0] == 0x484D4531 && hh[2] == r->hdr.num_links)
 		{
-			sg_human_escape = gi.TagMalloc(r->hdr.num_links, TAG_LEVEL);
+			sg_human_escape = sg_host.level_alloc(r->hdr.num_links);
 			if (fread(sg_human_escape, 1, r->hdr.num_links, f) !=
 			    (size_t)r->hdr.num_links)
 				sg_human_escape = NULL;
 			else
-				gi.dprintf("rune: escape prior loaded (%s)\n", path);
+				sg_host.dprint("rune: escape prior loaded (%s)\n", path);
 		}
 		fclose(f);
 	}
@@ -345,7 +345,7 @@ rune_t *Rune_Load(const char *mapname)
 
 			for (k = 0; k < 4; k++)
 			{
-				planes[k] = gi.TagMalloc(ns, TAG_LEVEL);
+				planes[k] = sg_host.level_alloc(ns);
 				if (fread(planes[k], 1, ns, f) != (size_t)ns)
 					ok = 0;
 			}
@@ -355,7 +355,7 @@ rune_t *Rune_Load(const char *mapname)
 				sg_def_post[1] = planes[1];
 				sg_def_icept[0] = planes[2];
 				sg_def_icept[1] = planes[3];
-				gi.dprintf("rune: defense prior loaded (%s)\n", path);
+				sg_host.dprint("rune: defense prior loaded (%s)\n", path);
 			}
 		}
 		fclose(f);
@@ -409,8 +409,8 @@ static void Air_Build(void)
 	int n = sg_rune->hdr.num_seeds;
 	int *dist;
 
-	sg_airnext = gi.TagMalloc(sizeof(int) * n, TAG_LEVEL);
-	dist = gi.TagMalloc(sizeof(int) * n, TAG_LEVEL);
+	sg_airnext = sg_host.level_alloc(sizeof(int) * n);
+	dist = sg_host.level_alloc(sizeof(int) * n);
 	for (i = 0; i < n; i++)
 	{
 		sg_airnext[i] = -1;
@@ -453,7 +453,7 @@ static void Air_Build(void)
 			}
 		}
 	} while (changed && ++passes < 64);
-	gi.TagFree(dist);
+	sg_host.level_free(dist);
 }
 
 qboolean SG_LevelSetup(void)
@@ -471,7 +471,7 @@ qboolean SG_LevelSetup(void)
 	sg_rune = Rune_Load(level.mapname);
 	if (!sg_rune)
 	{
-		gi.dprintf("slipgate: no rune for %s -- run 'sv rune' first\n",
+		sg_host.dprint("slipgate: no rune for %s -- run 'sv rune' first\n",
 		           level.mapname);
 		return false;
 	}
@@ -484,14 +484,14 @@ qboolean SG_LevelSetup(void)
 
 	if (!Fields_Setup(sg_rune))
 	{
-		gi.dprintf("slipgate: field setup failed (no flags?)\n");
+		sg_host.dprint("slipgate: field setup failed (no flags?)\n");
 		sg_rune = NULL;
 		sg_human_use = NULL;
 		return false;
 	}
 	Caco_Reset();
 
-	gi.dprintf("slipgate: rune %s, %d seeds, %d links, all fields up\n",
+	sg_host.dprint("slipgate: rune %s, %d seeds, %d links, all fields up\n",
 	           sg_rune->hdr.mapname, sg_rune->hdr.num_seeds,
 	           sg_rune->hdr.num_links);
 	return true;
@@ -713,7 +713,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			    (last_dw[me] != defenders_wanted ||
 			     last_oc[me] != own->client))
 			{
-				gi.dprintf("ROLEIN %s dw=%d rank=%d own=%d astray=%d size=%d\n",
+				sg_host.dprint("ROLEIN %s dw=%d rank=%d own=%d astray=%d size=%d\n",
 				           bot->ent->client->pers.netname,
 				           defenders_wanted, my_rank, own->client,
 				           (int)ours_astray, size);
@@ -1071,7 +1071,7 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 				if (sg_fields.shelf_cliff[pti] &&
 				    sg_fields.shelf_cliff[pti][bot->seed] > 0 &&
 				    !(sg_fields.shelf_cliff[pti][was] > 0))
-					gi.dprintf("PITTRACE %s role=%s seed %d->%d z=%.0f "
+					sg_host.dprint("PITTRACE %s role=%s seed %d->%d z=%.0f "
 					           "tac_seed=%d tac_role=%d hook=%d\n",
 					           e->client->pers.netname,
 					           sg_role_names[bot->last_role],

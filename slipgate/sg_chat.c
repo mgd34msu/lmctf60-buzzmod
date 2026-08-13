@@ -43,7 +43,7 @@
  * limits cannot keep a channel readable no matter how tight each one is.
  *
  * The chat route is the game's own: SG_BotClientCommand(client, "say_team",
- * line, NULL) fills the redirected gi.argv and runs ClientCommand ->
+ * line, NULL) fills the redirected sg_host.argv and runs ClientCommand ->
  * Cmd_Say_f for that client (slipgate/sg_net.c), so human teammates read it in
  * their own chat window. Same route bl_know.c and sg_caco.c use.
  */
@@ -57,6 +57,7 @@
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------- constants */
 
@@ -1495,9 +1496,9 @@ static qboolean Chat_Visible(edict_t *viewer, edict_t *target)
 	VectorAdd(target->absmin, target->absmax, mid);
 	VectorScale(mid, 0.5f, mid);
 
-	if (!gi.inPVS(eye, mid))
+	if (!sg_host.in_pvs(eye, mid))
 		return false;
-	tr = gi.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
+	tr = sg_host.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
 
@@ -2074,7 +2075,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		/* the line lost to the per-bot budget or the topic cooldown, so the
 		 * team was never told and does not get to count */
 		if (dbg)
-			gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
+			sg_host.dprint("SG itemcomm: %s for %s, team %d SUPPRESSED "
 			           "(line eaten) -- no clock armed\n",
 			           src, what, ti + 1);
 		return;
@@ -2105,7 +2106,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		/* no clock -- the record IS the arm; see chat_mega_taker */
 		chat_mega_taker[ti] = q->arm_who;
 		if (sg_cv.debug->value)
-			gi.dprintf("SG itemcomm: mega taker recorded for team %d "
+			sg_host.dprint("SG itemcomm: mega taker recorded for team %d "
 			           "(client %d) -- clock waits on the obituary\n",
 			           ti + 1, q->arm_who);
 		Chat_RadioTaken(ti, q);
@@ -2152,7 +2153,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 	Chat_RadioTaken(ti, q);
 
 	if (dbg)
-		gi.dprintf("SG itemcomm: %s armed %s for team %d -- back at %.1f "
+		sg_host.dprint("SG itemcomm: %s armed %s for team %d -- back at %.1f "
 		           "(in %.0fs)\n", src, what, ti + 1, q->arm_back_at,
 		           q->arm_back_at - level.time);
 }
@@ -2272,7 +2273,7 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src,
 	                       ? (int)(taker->client - game.clients) : -1) &&
 	    kind != SG_ARM_NONE &&
 	    sg_cv.debug->value > 0.0f)
-		gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
+		sg_host.dprint("SG itemcomm: %s for %s, team %d SUPPRESSED "
 		           "(topic busy) -- no clock armed\n",
 		           chat_arm_src[(src >= 0 && src < 3) ? src : 0], name, team);
 }
@@ -2312,7 +2313,7 @@ void SG_ChatMegaDeath(edict_t *victim)
 			    (float)(rand() % 20) / 10.0f;
 			chat_watch[i].soon_said[ti] = false;
 			if (sg_cv.debug->value)
-				gi.dprintf("SG itemcomm: mega taker died -- team %d "
+				sg_host.dprint("SG itemcomm: mega taker died -- team %d "
 				           "clock armed, back at %.1f\n",
 				           ti + 1, chat_watch[i].back_at[ti]);
 			break;
@@ -2943,7 +2944,7 @@ static void Chat_Bystander(edict_t *victim)
 
 		VectorCopy(e->s.origin, eye);
 		eye[2] += e->viewheight;
-		if (!Chat_Visible(e, victim) && !gi.inPHS(eye, victim->s.origin))
+		if (!Chat_Visible(e, victim) && !sg_host.in_phs(eye, victim->s.origin))
 			continue;               /* neither saw it nor heard it */
 		seer = e;
 	}
@@ -3828,7 +3829,7 @@ static void Chat_HearItemCall(edict_t *speaker,
 		static int skips = 0;
 
 		if (dbg && (skips++ % 8) == 0)
-			gi.dprintf("SG itemcomm: %s said %s, team %d -- clock already "
+			sg_host.dprint("SG itemcomm: %s said %s, team %d -- clock already "
 			           "within %.1fs (%.1f vs %.1f), parse skipped "
 			           "(1-in-8)\n", speaker->client->pers.netname, what,
 			           team, gap, held, back_at);
@@ -3860,7 +3861,7 @@ static void Chat_HearItemCall(edict_t *speaker,
 	}
 
 	if (dbg)
-		gi.dprintf("SG itemcomm: %s said %s (%s) -- parsed, armed team %d "
+		sg_host.dprint("SG itemcomm: %s said %s (%s) -- parsed, armed team %d "
 		           "for %.0fs, back at %.1f\n",
 		           speaker->client->pers.netname, what,
 		           take ? "take" : "timer", team, respawn, back_at);

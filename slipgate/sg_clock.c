@@ -9,6 +9,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_clock.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------- clockplay */
 
@@ -221,7 +222,7 @@ void Clock_Frame(void)
 		 * different lean than the one the bots take is worse than no
 		 * line at all */
 		if (sg_cv.debug->value)
-			gi.dprintf("CLOCKPLAY %s: %s, %+d defender (caps %d-%d, "
+			sg_host.dprint("CLOCKPLAY %s: %s, %+d defender (caps %d-%d, "
 			           "%.0f%% clock left)\n",
 			           t ? "blue" : "red", sg_clock_names[want],
 			           Clock_DefendShift(SG_TeamFromIdx(t)),

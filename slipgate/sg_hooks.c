@@ -106,6 +106,70 @@ static int Host_SoundIndex(const char *name)
 	return gi.soundindex((char *)name);
 }
 
+static void Host_PositionedSound(const vec3_t origin, edict_t *ent,
+                                 int channel, int soundindex, float volume,
+                                 float attenuation, float timeofs)
+{
+	gi.positioned_sound((float *)origin, ent, channel, soundindex,
+	                    volume, attenuation, timeofs);
+}
+
+static void *Host_GameAlloc(int size)
+{
+	return gi.TagMalloc(size, TAG_GAME);
+}
+
+static void Host_LinkEntity(edict_t *ent)
+{
+	gi.linkentity(ent);
+}
+
+static void Host_SetModel(edict_t *ent, const char *name)
+{
+	gi.setmodel(ent, (char *)name);
+}
+
+static void Host_CenterPrint(edict_t *ent, const char *fmt, ...)
+{
+	char	buf[1024];
+	va_list	ap;
+
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	gi.centerprintf(ent, "%s", buf);
+}
+
+static int Host_Argc(void)
+{
+	return gi.argc();
+}
+
+static char *Host_Args(void)
+{
+	return gi.args();
+}
+
+static void Host_WriteChar(int c)      { gi.WriteChar(c); }
+static void Host_WriteByte(int c)      { gi.WriteByte(c); }
+static void Host_WriteShort(int c)     { gi.WriteShort(c); }
+static void Host_WriteLong(int c)      { gi.WriteLong(c); }
+static void Host_WriteFloat(float f)   { gi.WriteFloat(f); }
+static void Host_WriteString(const char *s) { gi.WriteString((char *)s); }
+static void Host_WritePosition(const vec3_t pos) { gi.WritePosition((float *)pos); }
+static void Host_WriteDir(const vec3_t dir) { gi.WriteDir((float *)dir); }
+static void Host_WriteAngle(float f)   { gi.WriteAngle(f); }
+
+static void Host_Unicast(edict_t *ent, qboolean reliable)
+{
+	gi.unicast(ent, reliable);
+}
+
+static void Host_Multicast(const vec3_t origin, multicast_t to)
+{
+	gi.multicast((float *)origin, to);
+}
+
 void SG_HooksInit(void)
 {
 	if (sg_host.dprint)
@@ -124,5 +188,23 @@ void SG_HooksInit(void)
 	sg_host.cvar = Host_Cvar;
 	sg_host.argv = Host_Argv;
 	sg_host.sound = Host_Sound;
+	sg_host.positioned_sound = Host_PositionedSound;
 	sg_host.soundindex = Host_SoundIndex;
+	sg_host.game_alloc = Host_GameAlloc;
+	sg_host.linkentity = Host_LinkEntity;
+	sg_host.setmodel = Host_SetModel;
+	sg_host.centerprint = Host_CenterPrint;
+	sg_host.argc = Host_Argc;
+	sg_host.args = Host_Args;
+	sg_host.write_char = Host_WriteChar;
+	sg_host.write_byte = Host_WriteByte;
+	sg_host.write_short = Host_WriteShort;
+	sg_host.write_long = Host_WriteLong;
+	sg_host.write_float = Host_WriteFloat;
+	sg_host.write_string = Host_WriteString;
+	sg_host.write_position = Host_WritePosition;
+	sg_host.write_dir = Host_WriteDir;
+	sg_host.write_angle = Host_WriteAngle;
+	sg_host.unicast = Host_Unicast;
+	sg_host.multicast = Host_Multicast;
 }

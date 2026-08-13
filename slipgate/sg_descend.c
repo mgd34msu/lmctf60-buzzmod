@@ -21,6 +21,7 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
+#include "slipgate/sg_hooks.h"
 
 void		Cmd_Kill_f(edict_t *ent);
 
@@ -68,7 +69,7 @@ static float Duel_Price(edict_t *e, vec3_t seed_org, vec3_t enemy_org,
 
 		VectorCopy(seed_org, eyepoint);
 		eyepoint[2] += e->viewheight;
-		tr = gi.trace(eyepoint, NULL, NULL, enemy_org, e, MASK_OPAQUE);
+		tr = sg_host.trace(eyepoint, NULL, NULL, enemy_org, e, MASK_OPAQUE);
 		if (tr.fraction >= 1.0f)
 			v += expo * SG_DUEL_COVER_MS;
 	}
@@ -638,7 +639,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				bot->carry_startcost = cc;
 				bot->carry_bestcost = cc;
 				if (sg_cv.debug->value)
-					gi.dprintf("CARRYLOST %s best=%d now=%d org=(%.0f %.0f %.0f)\n",
+					sg_host.dprint("CARRYLOST %s best=%d now=%d org=(%.0f %.0f %.0f)\n",
 					           e->client->pers.netname,
 					           was_best, cc,
 					           e->s.origin[0], e->s.origin[1],
@@ -855,7 +856,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				VectorSubtract(athr, aeye, aspan);
 				if (VectorLength(aspan) > 900.0f)
 					continue;
-				actr = gi.trace(aeye, NULL, NULL, athr, e, MASK_SOLID);
+				actr = sg_host.trace(aeye, NULL, NULL, athr, e, MASK_SOLID);
 				if (actr.fraction >= 1.0f)
 				{
 					v += sg_cv.approachcover->value;
@@ -897,7 +898,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			VectorSubtract(rthr, reye, rspan);
 			if (VectorLength(rspan) < 900.0f)
 			{
-				rtr = gi.trace(reye, NULL, NULL, rthr, e, MASK_SOLID);
+				rtr = sg_host.trace(reye, NULL, NULL, rthr, e, MASK_SOLID);
 				if (rtr.fraction >= 1.0f)
 					v += rail_dose;
 			}
@@ -950,7 +951,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				VectorSubtract(thr, eye, span);
 				if (VectorLength(span) < 900.0f)
 				{
-					ctr = gi.trace(eye, NULL, NULL, thr, e, MASK_SOLID);
+					ctr = sg_host.trace(eye, NULL, NULL, thr, e, MASK_SOLID);
 					if (ctr.fraction >= 1.0f)
 						/* CLOCKPLAY scales the price, not the rule: a
 						 * late lead pays 1.3x for the corner because
@@ -1043,7 +1044,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			 * for reading */
 			if (sg_cv.debug->value &&
 			    !(bot->tilt_said++ & 15))
-				gi.dprintf("TILTAVOID %s link=%d to=%d dseed=%d "
+				sg_host.dprint("TILTAVOID %s link=%d to=%d dseed=%d "
 				           "left=%.1f%s\n",
 				           e->client->pers.netname, li, l->to,
 				           bot->tilt_seed,
@@ -1675,7 +1676,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			 * links proven to head into a dead door, nothing else. */
 			SG_TimerArm(&bot->bl_until[oldest], 45.0f);
 			if (sg_cv.debug->value)
-				gi.dprintf("SHELVE %s link=%d at seed=%d\n",
+				sg_host.dprint("SHELVE %s link=%d at seed=%d\n",
 				           e->client->pers.netname, bestlink, bot->seed);
 			bot->watch_link = -1;
 		}
@@ -1740,7 +1741,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			 * could say whether the plug ever engaged at all */
 			if (bot->rally_since <= 0.0f &&
 			    sg_cv.debug->value)
-				gi.dprintf("PLUG %s role=%d cost=%d\n",
+				sg_host.dprint("PLUG %s role=%d cost=%d\n",
 				           e->client->pers.netname, (int)role,
 				           att[bot->seed]);
 			if (bot->rally_since <= 0.0f)
@@ -1831,7 +1832,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				if (mc + 300 >= best_cost)
 					continue;
 
-				mtr = gi.trace(eye, NULL, NULL, me->s.origin, e,
+				mtr = sg_host.trace(eye, NULL, NULL, me->s.origin, e,
 				               MASK_SOLID);
 				if (mtr.fraction < 1.0f && mtr.ent != me)
 					continue;
@@ -1883,7 +1884,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				SG_TimerArm(&bot->handoff_next, 10.0f);
 
 				if (sg_cv.debug->value)
-					gi.dprintf("HANDOFF %s -> %s %s dist=%.0f cost "
+					sg_host.dprint("HANDOFF %s -> %s %s dist=%.0f cost "
 					           "%d->%d hp=%d thr=%.0f\n",
 					           e->client->pers.netname,
 					           re->client->pers.netname, word, hdist,
@@ -1891,7 +1892,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else if (sg_cv.debug->value &&
 			         SG_TimerReady(bot->next_report - 0.9f))
-				gi.dprintf("HANDOFF %s no receiver hp=%d thr=%.0f\n",
+				sg_host.dprint("HANDOFF %s no receiver hp=%d thr=%.0f\n",
 				           e->client->pers.netname, e->health, hp_thr);
 		}
 	}
@@ -1928,7 +1929,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				VectorSubtract(ce->s.origin, e->s.origin, rd14);
 				if (sg_cv.debug->value &&
 				    SG_TimerReady(bot->next_report - 0.9f))
-					gi.dprintf("RTCAND %s dist=%.0f\n",
+					sg_host.dprint("RTCAND %s dist=%.0f\n",
 					           e->client->pers.netname,
 					           VectorLength(rd14));
 				if (VectorLength(rd14) < 400.0f)
@@ -1943,7 +1944,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					Drop_Rune(e, e->client->rune->item);
 					SG_TimerArm(&bot->runetoss_next, 20.0f);
 					if (sg_cv.debug->value)
-						gi.dprintf("RUNETOSS %s to %s\n",
+						sg_host.dprint("RUNETOSS %s to %s\n",
 						           e->client->pers.netname,
 						           ce->client->pers.netname);
 				}
@@ -1969,7 +1970,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		rally_hold = true;
 		if (sg_cv.debug->value &&
 		    SG_TimerReady(bot->next_report - 0.9f))
-			gi.dprintf("CARRYHOLD %s cost=%d\n",
+			sg_host.dprint("CARRYHOLD %s cost=%d\n",
 			           e->client->pers.netname, goal_field[bot->seed]);
 	}
 
@@ -2032,13 +2033,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		rbody[2] += e->viewheight;
 
 		/* is the crossing imminent -- does the next step enter his lane? */
-		rtr = gi.trace(rstep, NULL, NULL, rthr, e, MASK_SOLID);
+		rtr = sg_host.trace(rstep, NULL, NULL, rthr, e, MASK_SOLID);
 		if (rtr.fraction >= 1.0f)
 		{
 			/* and is there cover to wait in, here, right now? A bot
 			 * already standing in his line gains nothing by stopping in
 			 * it: waiting in the open is the worst of both. */
-			rtr = gi.trace(rbody, NULL, NULL, rthr, e, MASK_SOLID);
+			rtr = sg_host.trace(rbody, NULL, NULL, rthr, e, MASK_SOLID);
 			if (rtr.fraction < 1.0f && !SG_RailCold(team, rail_client))
 			{
 				if (bot->railhold_since <= 0.0f)
@@ -2051,7 +2052,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					        ? 1.5f
 					        : 0.8f + (1.5f - 0.8f) * (sk / 4.0f);
 					if (sg_cv.debug->value)
-						gi.dprintf("RAILHOLD %s at seed=%d waits on "
+						sg_host.dprint("RAILHOLD %s at seed=%d waits on "
 						           "cl=%d seed=%d patience=%.1f%s\n",
 						           e->client->pers.netname, bot->seed,
 						           rail_client, rail_seed,
@@ -2078,7 +2079,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 * crossing is timed) or the patience running out (humans do not
 		 * wait forever, and neither does this) */
 		if (sg_cv.debug->value)
-			gi.dprintf("RAILCROSS %s waited %.1fs on cl=%d (%s)\n",
+			sg_host.dprint("RAILCROSS %s waited %.1fs on cl=%d (%s)\n",
 			           e->client->pers.netname,
 			           SG_Age(bot->railhold_since),
 			           bot->railhold_enemy,
@@ -2124,7 +2125,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	         bot->railhold_since <= 0.0f &&
 	         bot->rally_since <= 0.0f)
 	{
-		gi.dprintf("WEDGEKILL %s at (%.0f %.0f %.0f)\n",
+		sg_host.dprint("WEDGEKILL %s at (%.0f %.0f %.0f)\n",
 		           e->client->pers.netname, e->s.origin[0],
 		           e->s.origin[1], e->s.origin[2]);
 		Cmd_Kill_f(e);
@@ -2179,7 +2180,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->rail_stage = 1;
 			SG_TimerArm(&bot->rail_until, 4.0f);
 			if (sg_cv.debug->value)
-				gi.dprintf("RAILTRY %s link=%d seed=%d\n",
+				sg_host.dprint("RAILTRY %s link=%d seed=%d\n",
 				           e->client->pers.netname, bestlink, bot->seed);
 			SG_TimerArm(&bot->stag_next, 2.0f);
 			VectorCopy(e->s.origin, bot->stag_org);
@@ -2207,7 +2208,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->escape_yaw = e->s.angles[YAW] + 180.0f + (float)(rand() % 81 - 40);
 		SG_TimerArm(&bot->escape_until, 1.0f + (float)(rand() % 9) * 0.1f);
 		if (sg_cv.debug->value)
-			gi.dprintf("STAGSHELVE %s link=%d at seed=%d\n",
+			sg_host.dprint("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
 	}
 stag_done:
@@ -2270,7 +2271,7 @@ stag_done:
 					bot->bl_link[oldest] = bestlink;
 					SG_TimerArm(&bot->bl_until[oldest], 45.0f);
 					if (sg_cv.debug->value)
-						gi.dprintf("CYCLE %s seed=%d link=%d\n",
+						sg_host.dprint("CYCLE %s seed=%d link=%d\n",
 						           e->client->pers.netname, bot->seed,
 						           bestlink);
 					break;
@@ -2303,7 +2304,7 @@ stag_done:
 		{
 			memset(bot->bl_until, 0, sizeof(bot->bl_until));
 			if (sg_cv.debug->value)
-				gi.dprintf("CLEARSHELF %s (carrying, stranded at %d)\n",
+				sg_host.dprint("CLEARSHELF %s (carrying, stranded at %d)\n",
 				           e->client->pers.netname, bot->seed);
 		}
 	}
@@ -2473,7 +2474,7 @@ stag_done:
 			pdir[1] = sinf(post_yaw * (float)M_PI / 180.0f);
 			pdir[2] = 0.0f;
 			VectorMA(peye, 2000.0f, pdir, pend);
-			ptr = gi.trace(peye, NULL, NULL, pend, e, MASK_OPAQUE);
+			ptr = sg_host.trace(peye, NULL, NULL, pend, e, MASK_OPAQUE);
 			post_sight = 2000.0f * ptr.fraction;
 		}
 

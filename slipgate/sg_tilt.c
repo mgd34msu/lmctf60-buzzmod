@@ -9,6 +9,7 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------------- tilt
  *
@@ -82,7 +83,7 @@ void Tilt_Lane(sg_bot_t *bot, int seed)
 	if (!r || !r->links || seed < 0 || seed >= r->hdr.num_seeds)
 		return;
 	if (!sg_tilt_mark)
-		sg_tilt_mark = gi.TagMalloc(r->hdr.num_seeds, TAG_LEVEL);
+		sg_tilt_mark = sg_host.level_alloc(r->hdr.num_seeds);
 	if (!sg_tilt_mark)
 		return;
 
@@ -194,7 +195,7 @@ void Tilt_Note(edict_t *e, sg_bot_t *bot)
 	 * corpse's second and a half on the floor is not part of it */
 
 	if (sg_cv.debug->value)
-		gi.dprintf("TILT %s died seed=%d lane=%d killer=%d kseed=%d "
+		sg_host.dprint("TILT %s died seed=%d lane=%d killer=%d kseed=%d "
 		           "window=%.0f%s\n",
 		           e->client->pers.netname, bot->tilt_seed,
 		           bot->tilt_lane_n, killer, bot->tilt_killer_seed,

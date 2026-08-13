@@ -43,7 +43,36 @@ typedef struct sg_host_s
 	/* the world's voice */
 	void		(*sound)(edict_t *ent, int channel, int soundindex,
 		                 float volume, float attenuation, float timeofs);
+	void		(*positioned_sound)(const vec3_t origin, edict_t *ent,
+		                            int channel, int soundindex,
+		                            float volume, float attenuation,
+		                            float timeofs);
 	int			(*soundindex)(const char *name);
+
+	/* game-lifetime memory (rune generation) */
+	void		*(*game_alloc)(int size);
+
+	/* entity presentation */
+	void		(*linkentity)(edict_t *ent);
+	void		(*setmodel)(edict_t *ent, const char *name);
+	void		(*centerprint)(edict_t *ent, const char *fmt, ...);
+
+	/* the rest of the console line */
+	int			(*argc)(void);
+	char		*(*args)(void);
+
+	/* the outbound message channel */
+	void		(*write_char)(int c);
+	void		(*write_byte)(int c);
+	void		(*write_short)(int c);
+	void		(*write_long)(int c);
+	void		(*write_float)(float f);
+	void		(*write_string)(const char *s);
+	void		(*write_position)(const vec3_t pos);
+	void		(*write_dir)(const vec3_t dir);
+	void		(*write_angle)(float f);
+	void		(*unicast)(edict_t *ent, qboolean reliable);
+	void		(*multicast)(const vec3_t origin, multicast_t to);
 } sg_host_t;
 
 extern sg_host_t sg_host;

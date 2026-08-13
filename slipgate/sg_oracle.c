@@ -6,10 +6,10 @@
  * of the physics anywhere in the system -- there is only the physics, called
  * on phantom state that belongs to no client and touches no entity.
  *
- * gi.Pmove is the same function the server runs for every real player
+ * sg_host.pmove is the same function the server runs for every real player
  * (game.h:122, "player movement code common with client prediction"), with
  * the world queried through the trace and pointcontents callbacks we supply.
- * We pass the engine's own gi.trace against the live collision world, with a
+ * We pass the engine's own sg_host.trace against the live collision world, with a
  * null passent since a phantom occupies no slot and should collide with the
  * world exactly as a player-shaped body would.
  *
@@ -25,6 +25,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_hooks.h"
 
 /*
  * A phantom's trace must not pass through any entity: it models a player
@@ -35,12 +36,12 @@
  */
 static trace_t SG_PhantomTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 {
-	return gi.trace(start, mins, maxs, end, NULL, MASK_PLAYERSOLID);
+	return sg_host.trace(start, mins, maxs, end, NULL, MASK_PLAYERSOLID);
 }
 
 static int SG_PhantomContents(vec3_t point)
 {
-	return gi.pointcontents(point);
+	return sg_host.pointcontents(point);
 }
 
 /*
@@ -69,7 +70,7 @@ void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 		pm.trace = SG_PhantomTrace;
 		pm.pointcontents = SG_PhantomContents;
 
-		gi.Pmove(&pm);
+		sg_host.pmove(&pm);
 
 		ph->pms = pm.s;
 		ph->groundentity = pm.groundentity ? true : false;
@@ -223,7 +224,7 @@ qboolean SG_OracleRocketJumpAim(vec3_t origin, vec3_t aim,
 	           + (SG_RJ_VIEWHEIGHT - 8.0f);
 
 	VectorMA(start, 8192.0f, forward, end);
-	tr = gi.trace(start, NULL, NULL, end, NULL, MASK_SHOT);
+	tr = sg_host.trace(start, NULL, NULL, end, NULL, MASK_SHOT);
 	if (tr.startsolid || tr.allsolid || tr.fraction >= 1.0f)
 		return false;
 	if (tr.surface && (tr.surface->flags & SURF_SKY))
@@ -284,7 +285,7 @@ int SG_OracleRocketJumpStep(sg_phantom_t *ph, vec3_t boom)
 			VectorCopy(ph->origin, dest);
 			dest[0] += corners[c][0];
 			dest[1] += corners[c][1];
-			tr = gi.trace(boom, vec3_origin, vec3_origin, dest, NULL,
+			tr = sg_host.trace(boom, vec3_origin, vec3_origin, dest, NULL,
 			              MASK_SOLID);
 			if (tr.fraction == 1.0f)
 				seen = true;
@@ -349,7 +350,7 @@ int SG_OracleRocketJumpStep(sg_phantom_t *ph, vec3_t boom)
  * engine, not in this tree, so its 270 is the one constant here that cannot
  * carry a line number from these sources -- which is exactly why it is
  * confined to this filter and kept out of every proof: SG_OracleRun gets the
- * real number from gi.Pmove every time it steps.
+ * real number from sg_host.pmove every time it steps.
  *
  * Ballistic rise for the stacked launch speed, under the server's own
  * gravity: v^2 / 2g. At sv_gravity 800 that is (424+270)^2/1600 = 301 units.

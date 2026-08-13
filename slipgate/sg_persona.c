@@ -10,6 +10,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_persona.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------------ table
  *
@@ -117,7 +118,7 @@ static const sg_persona_t	*persona_of[SG_PERSONA_MAXCLIENTS];
 static cvar_t				*sg_persona;
 
 /*
- * The cvar POINTER is resolved once -- gi.cvar walks the engine's list on
+ * The cvar POINTER is resolved once -- sg_host.cvar walks the engine's list on
  * every call and this is read several times per engaged bot per frame --
  * while the VALUE is read fresh, so flipping sg_persona mid-match takes
  * effect on the next frame. Same treatment sg_bot_skill gets in
@@ -174,7 +175,7 @@ void SG_PersonaBind(edict_t *ent, int slot)
 	 */
 	if (ent->client->pers.netname[0] &&
 	    !strstr(ent->client->pers.netname, persona_of[ci]->name))
-		gi.dprintf("slipgate: PERSONA MISMATCH slot %d is \"%s\" but row "
+		sg_host.dprint("slipgate: PERSONA MISMATCH slot %d is \"%s\" but row "
 		           "%d is \"%s\" -- sg_personas[] and sg_names[] have "
 		           "come out of order\n",
 		           slot, ent->client->pers.netname,

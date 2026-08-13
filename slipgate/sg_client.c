@@ -14,6 +14,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_weights.h"    /* sg_role_names -- the roster print */
+#include "slipgate/sg_hooks.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -89,7 +90,7 @@ static qboolean Botfill_RemoveOne(int team)
 
 	if (worst < 0)
 		return false;
-	gi.bprintf(PRINT_HIGH, "%s yields its slot.\n",
+	sg_host.bprint(PRINT_HIGH, "%s yields its slot.\n",
 	           sg_bots[worst].ent->client->pers.netname);
 	Botfill_Drop(worst);
 	return true;
@@ -98,7 +99,7 @@ static qboolean Botfill_RemoveOne(int team)
 void Botfill_Frame(void)
 {
 	static float next_check;
-	cvar_t *fill = gi.cvar("sv_botfill", "0", 0);
+	cvar_t *fill = sg_host.cvar("sv_botfill", "0", 0);
 	int want[2];
 	int humans[2] = {0, 0}, bots[2] = {0, 0};
 	int i, t;
@@ -380,10 +381,10 @@ qboolean SG_AddBotTeam(int teamnum)
 		const char *pname = SG_PersonaName(ent);
 
 		if (pname)
-			gi.dprintf("slipgate: %s entered (persona %s)\n",
+			sg_host.dprint("slipgate: %s entered (persona %s)\n",
 			           Info_ValueForKey(userinfo, "name"), pname);
 		else
-			gi.dprintf("slipgate: %s entered\n",
+			sg_host.dprint("slipgate: %s entered\n",
 			           Info_ValueForKey(userinfo, "name"));
 	}
 	return true;
@@ -429,11 +430,11 @@ void SG_ListBots(void)
 		if (!sg_bots[i].active || !e || !e->inuse || !e->client)
 			continue;
 		if (!n)
-			gi.cprintf(NULL, PRINT_HIGH,
+			sg_host.cprint(NULL, PRINT_HIGH,
 			           "slot name                 team  score skill role     seed\n");
 		team = e->client->ctf.teamnum;
 		role = sg_bots[i].last_role;
-		gi.cprintf(NULL, PRINT_HIGH, "%3d  %-20s %-5s %5d %5.2f %-8s %4d\n",
+		sg_host.cprint(NULL, PRINT_HIGH, "%3d  %-20s %-5s %5d %5.2f %-8s %4d\n",
 		           i, e->client->pers.netname,
 		           team == CTF_TEAM_RED ? "red" :
 		           team == CTF_TEAM_BLUE ? "blue" : "-",
@@ -444,9 +445,9 @@ void SG_ListBots(void)
 		n++;
 	}
 	if (!n)
-		gi.cprintf(NULL, PRINT_HIGH, "slipgate: no bots\n");
+		sg_host.cprint(NULL, PRINT_HIGH, "slipgate: no bots\n");
 	else
-		gi.cprintf(NULL, PRINT_HIGH, "slipgate: %d bot%s\n",
+		sg_host.cprint(NULL, PRINT_HIGH, "slipgate: %d bot%s\n",
 		           n, n == 1 ? "" : "s");
 }
 
@@ -500,7 +501,7 @@ qboolean SG_RemoveBotNamed(const char *who)
 	    !sg_bots[slot].ent->inuse)
 		return false;
 
-	gi.bprintf(PRINT_HIGH, "%s was removed.\n",
+	sg_host.bprint(PRINT_HIGH, "%s was removed.\n",
 	           sg_bots[slot].ent->client->pers.netname);
 	Botfill_Drop(slot);
 	return true;
@@ -512,7 +513,7 @@ qboolean SG_KickWorst(void)
 
 	if (worst < 0)
 		return false;
-	gi.bprintf(PRINT_HIGH, "%s was cut, lowest score.\n",
+	sg_host.bprint(PRINT_HIGH, "%s was cut, lowest score.\n",
 	           sg_bots[worst].ent->client->pers.netname);
 	Botfill_Drop(worst);
 	return true;

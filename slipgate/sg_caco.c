@@ -39,6 +39,7 @@
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
@@ -134,7 +135,7 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 	VectorAdd(target->absmin, target->absmax, mid);
 	VectorScale(mid, 0.5f, mid);
 
-	if (!gi.inPVS(eye, mid))
+	if (!sg_host.in_pvs(eye, mid))
 		return false;
 
 	/*
@@ -169,7 +170,7 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 		}
 	}
 
-	tr = gi.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
+	tr = sg_host.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
 
@@ -221,7 +222,7 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 /*
  * Say the queued lines whose moment has come, through the game's real chat:
  * SG_BotClientCommand(client, "say_team", line, NULL) routes the arguments into
- * the redirected gi.argv and runs ClientCommand -> Cmd_Say_f for that client,
+ * the redirected sg_host.argv and runs ClientCommand -> Cmd_Say_f for that client,
  * exactly as bl_know.c's Know_Speak does. Teammates -- human ones included --
  * read it in their own chat.
  *
@@ -1420,12 +1421,12 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 
 /* ------------------------------------------------------------------- the ear
  *
- * Called from the sound wrappers in sg_net.c for every gi.sound and
- * gi.positioned_sound the mod issues, AFTER the engine has been handed the
+ * Called from the sound wrappers in sg_net.c for every sg_host.sound and
+ * sg_host.positioned_sound the mod issues, AFTER the engine has been handed the
  * call through unchanged. Nothing here touches the wire; this is a tap on a
  * real event, which is the whole difference from what it replaces.
  *
- * WHAT A BOT IS ALLOWED TO LEARN. Two engine facts and nothing else: gi.inPHS,
+ * WHAT A BOT IS ALLOWED TO LEARN. Two engine facts and nothing else: sg_host.in_phs,
  * which is precisely "could a sound made there be heard here", and the
  * attenuation the caller passed, which is what decides how far the sound
  * actually carries for a human client. No server-private player state is read.
@@ -1517,7 +1518,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 			radius = (SG_EAR_FULLVOL + SG_EAR_SPAN / attenuation) * volume;
 			if (dist > radius)
 				continue;           /* out of earshot */
-			if (!gi.inPHS(b->s.origin, sorg))
+			if (!sg_host.in_phs(b->s.origin, sorg))
 				continue;           /* no path for the sound to travel */
 		}
 		else
@@ -1543,13 +1544,13 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		 * played once at 3s remaining). Index resolved lazily -- precache
 		 * order is stable per map. */
 		if (!sg_quadsound_idx)
-			sg_quadsound_idx = gi.soundindex("items/damage2.wav");
+			sg_quadsound_idx = sg_host.soundindex("items/damage2.wav");
 		if (soundindex == sg_quadsound_idx)
 			sg_caco_quadheard[SG_TeamIdx(team)] = level.time;
 
 		/* the haste rune's firing voice: this client is hasted NOW */
 		if (!sg_hastesound_idx)
-			sg_hastesound_idx = gi.soundindex("player/lava1.wav");
+			sg_hastesound_idx = sg_host.soundindex("player/lava1.wav");
 		if (soundindex == sg_hastesound_idx && ecl >= 0 &&
 		    ecl < SG_DMG_CLIENTS)
 			sg_caco_hastefire[SG_TeamIdx(team)][ecl] = level.time;
@@ -1558,7 +1559,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		 * game on a busy server -- the ear works, the log need not
 		 * relive every footstep */
 		if (sg_cv.debug->value && !(sg_ear_said++ & 31))
-			gi.dprintf("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
+			sg_host.dprint("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
 			           "err<=%.0f seed=%i\n",
 			           b->client->pers.netname,
 			           emitter->client->pers.netname,
@@ -1717,7 +1718,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 			vec3_t	back;
 
 			VectorMA(eye, SG_DMG_BACKTRACK, from, back);
-			tr = gi.trace(eye, NULL, NULL, back, victim, MASK_OPAQUE);
+			tr = sg_host.trace(eye, NULL, NULL, back, victim, MASK_OPAQUE);
 			VectorCopy(tr.endpos, pos);
 			/* off whatever surface it stopped against, so the seed lookup
 			 * cannot snap to a node on the far side of that wall */
@@ -1745,7 +1746,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 		}
 
 		if (sg_cv.debug->value)
-			gi.dprintf("HITFROM %s<%s dmg=%d mod=%d %s seed=%d dir=%.2f,%.2f,%.2f\n",
+			sg_host.dprint("HITFROM %s<%s dmg=%d mod=%d %s seed=%d dir=%.2f,%.2f,%.2f\n",
 			           victim->client->pers.netname,
 			           attacker->client->pers.netname, damage, mod,
 			           hitscan ? "hitscan" : "flight", seed,
@@ -1793,9 +1794,9 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from)
  * gun was last empty. The numbers and the reasoning are in sg_local.h, over
  * SG_RAIL_RELOAD.
  *
- * WHAT A BOT IS ALLOWED TO LEARN, again. One engine fact: gi.inPHS. In
+ * WHAT A BOT IS ALLOWED TO LEARN, again. One engine fact: sg_host.in_phs. In
  * Quake II the railgun makes no server-side sound at all -- weapon_railgun_fire
- * calls no gi.sound, so the ear in this same file never hears one. What a
+ * calls no sg_host.sound, so the ear in this same file never hears one. What a
  * human client actually gets is two client-side sounds off two network
  * messages: railgf1a.wav on the MZ_RAILGUN muzzle flash (multicast PVS,
  * ATTN_NORM) and railgf1a.wav again on the TE_RAILTRAIL temp entity
@@ -1863,7 +1864,7 @@ void SG_NoteRailShot(edict_t *shooter)
 		if (team <= CTF_TEAM_UNDEFINED || team == steam)
 			continue;               /* a teammate's rail is not a lane to time */
 
-		if (!gi.inPHS(b->s.origin, shooter->s.origin))
+		if (!sg_host.in_phs(b->s.origin, shooter->s.origin))
 			continue;               /* the trail message never reached here */
 
 		sg_caco_railshot[SG_TeamIdx(team)][sc] = level.time;
@@ -1871,7 +1872,7 @@ void SG_NoteRailShot(edict_t *shooter)
 		/* sampled 1-in-8: a two-railer server fires on the order of a
 		 * shot a second and the log is for reading */
 		if (sg_cv.debug->value && !(sg_rail_said++ & 7))
-			gi.dprintf("RAILSHOT %s heard %s reload=%.1f window=%.1f\n",
+			sg_host.dprint("RAILSHOT %s heard %s reload=%.1f window=%.1f\n",
 			           b->client->pers.netname,
 			           shooter->client->pers.netname,
 			           SG_RAIL_RELOAD, SG_RAIL_WINDOW);

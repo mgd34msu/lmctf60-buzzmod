@@ -18,7 +18,7 @@
  * aim error, settle time, hysteresis windows -- are preferences, not facts,
  * and are named as such where they are defined.
  *
- * Perception is CACO's gate and nothing wider: gi.inPVS plus a trace from the
+ * Perception is CACO's gate and nothing wider: sg_host.in_pvs plus a trace from the
  * eyes to the target's centre against MASK_OPAQUE (sg_caco.c:100-114), plus a
  * forward-cone test so a bot does not shoot at something behind its head.
  * There is no g_edicts omniscience here; an enemy that fails the gate does not
@@ -33,6 +33,7 @@
 #include <math.h>
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------------- facts
  *
@@ -684,7 +685,7 @@ static cvar_t	*sg_wswitch;
  * in and never taken: no corridor pre-switch, no decision delay, no cooldown,
  * no panic exception, and the selection behaves exactly as it did before this
  * block existed. The POINTER is cached for the same reason bot_skill's is --
- * this is read per engaged bot per frame and gi.cvar walks the engine's list
+ * this is read per engaged bot per frame and sg_host.cvar walks the engine's list
  * -- while the VALUE is read fresh, so flipping it mid-match takes effect on
  * the next frame.
  */
@@ -699,7 +700,7 @@ static cvar_t	*sg_aimtexture;
 
 /*
  * Is the aim texture armed? Pointer resolved once, value read fresh, for the
- * same reason sg_bot_skill is: gi.cvar walks the engine's list and this is
+ * same reason sg_bot_skill is: sg_host.cvar walks the engine's list and this is
  * asked several times per engaged bot per frame, but flipping the cvar
  * mid-match has to take on the next one.
  *
@@ -716,7 +717,7 @@ static qboolean Combat_TexOn(void)
 /*
  * The bot's effective skill, a float in [0, 4]: the team level the cvar names,
  * plus this client's own fixed offset. The cvar POINTER is resolved once --
- * gi.cvar walks the engine's list on every call, and this is read several times
+ * sg_host.cvar walks the engine's list on every call, and this is read several times
  * per engaged bot per frame -- while the VALUE is read fresh every time, so
  * changing bot_skill mid-match takes effect on the next frame.
  *
@@ -733,7 +734,7 @@ static float Combat_Skill(edict_t *self)
 	int		ci, grade;
 
 	if (!sg_bot_skill)
-		sg_bot_skill = gi.cvar("bot_skill", "4", 0);
+		sg_bot_skill = sg_host.cvar("bot_skill", "4", 0);
 
 	team = sg_bot_skill ? sg_bot_skill->value : SG_SKILL_MAX;
 	if (team < 0.0f)
@@ -853,9 +854,9 @@ static qboolean Combat_Visible(edict_t *viewer, edict_t *target)
 	VectorAdd(target->absmin, target->absmax, mid);
 	VectorScale(mid, 0.5f, mid);
 
-	if (!gi.inPVS(eye, mid))
+	if (!sg_host.in_pvs(eye, mid))
 		return false;
-	tr = gi.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
+	tr = sg_host.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
 
@@ -1583,7 +1584,7 @@ static void Combat_Request(edict_t *self, sg_combat_state_t *st, int w)
 		st->ws_armed = level.time;
 
 		if (sg_cv.debug->value)
-			gi.dprintf("WSWITCH mid %s w%d->w%d waited=%.0fms (%s)\n",
+			sg_host.dprint("WSWITCH mid %s w%d->w%d waited=%.0fms (%s)\n",
 			           self->client->pers.netname, held, w,
 			           waited * 1000.0f,
 			           st->ws_panic ? "panic: gun cannot shoot at contact"
@@ -1741,7 +1742,7 @@ static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 		                         * the worst weapon in the game while walking */
 
 	if (want != st->ws_pre && sg_cv.debug->value)
-		gi.dprintf("WSWITCH pre %s w%d->w%d expect=%.0f hand-wants=%.0f "
+		sg_host.dprint("WSWITCH pre %s w%d->w%d expect=%.0f hand-wants=%.0f "
 		           "miss=%.0f bar=%.0f belief=%.1fs\n",
 		           self->client->pers.netname, held, want, best, have,
 		           miss, bar, age);
@@ -2048,7 +2049,7 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	st->tex_cyc = (style >= 0.5f) ? 2.0f : 1.0f;
 
 	if (sg_cv.debug->value)
-		gi.dprintf("AIMTEX %s flick=%.1f over=%.2f settle=%dms cyc=%d "
+		sg_host.dprint("AIMTEX %s flick=%.1f over=%.2f settle=%dms cyc=%d "
 		           "style=%.2f\n",
 		           self->client->pers.netname, flick, over,
 		           (int)(win * 1000.0f + 0.5f), (int)st->tex_cyc, style);
@@ -2222,7 +2223,7 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 			p1[1] = mid[1] + enemy->velocity[1] * tt;
 			p1[2] = mid[2] + enemy->velocity[2] * tt
 			      - 0.5f * grav * tt * tt;
-			ltr = gi.trace(p0, enemy->mins, enemy->maxs, p1,
+			ltr = sg_host.trace(p0, enemy->mins, enemy->maxs, p1,
 			               enemy, MASK_PLAYERSOLID);
 			if (ltr.fraction < 1.0f)
 			{
@@ -2288,7 +2289,7 @@ static qboolean Combat_GrenadeImpact(edict_t *self, vec3_t eye, float yaw,
 
 		vel[2] -= grav * FRAMETIME;
 		VectorMA(p, FRAMETIME, vel, next);
-		tr = gi.trace(p, NULL, NULL, next, self, MASK_SHOT);
+		tr = sg_host.trace(p, NULL, NULL, next, self, MASK_SHOT);
 		if (tr.fraction < 1.0f)
 		{
 			VectorCopy(tr.endpos, impact);
@@ -2992,7 +2993,7 @@ static void Combat_LostAim(edict_t *self, sg_combat_state_t *st, vec3_t eye)
 		 */
 		VectorCopy(r->seeds[s].origin, probe);
 		probe[2] += self->viewheight;
-		tr = gi.trace(eye, NULL, NULL, probe, self, MASK_OPAQUE);
+		tr = sg_host.trace(eye, NULL, NULL, probe, self, MASK_OPAQUE);
 		if (tr.fraction >= 1.0f)
 		{
 			float d;
@@ -3167,7 +3168,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
 					    (0.4f + 1.2f * random());
 					if (sg_cv.debug->value)
-						gi.dprintf("TAPDBG %s w=%d delay=%.2f\n",
+						sg_host.dprint("TAPDBG %s w=%d delay=%.2f\n",
 						           self->client->pers.netname, hw,
 						           st->tap_until - level.time);
 				}
@@ -3827,7 +3828,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		 * little inside its own bounding box.
 		 */
 		VectorMA(eye, len, aim, endp);
-		tr = gi.trace(eye, NULL, NULL, endp, self, MASK_SHOT);
+		tr = sg_host.trace(eye, NULL, NULL, endp, self, MASK_SHOT);
 		VectorCopy(tr.endpos, impact);
 
 		clear_shot = false;
@@ -3871,13 +3872,13 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 
 			VectorCopy(lead, down);
 			down[2] -= 512.0f;
-			fl = gi.trace(lead, NULL, NULL, down, enemy, MASK_SHOT);
+			fl = sg_host.trace(lead, NULL, NULL, down, enemy, MASK_SHOT);
 			if (fl.fraction < 1.0f)
 			{
 				trace_t path;
 				float	reach;
 
-				path = gi.trace(eye, NULL, NULL, fl.endpos, self, MASK_SHOT);
+				path = sg_host.trace(eye, NULL, NULL, fl.endpos, self, MASK_SHOT);
 				VectorSubtract(path.endpos, fl.endpos, v);
 				reach = VectorLength(v);
 				if (reach <= SG_HIT_SLOP)
@@ -4000,11 +4001,11 @@ void SG_CombatWhy(void)
 	if (!sg_cv.debug->value || level.time < sg_cbt_why_next)
 		return;
 	sg_cbt_why_next = level.time + 5.0f;
-	gi.dprintf("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d react=%d\n",
+	sg_host.dprint("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d react=%d\n",
 	           sg_cbt_why[7], sg_cbt_why[8],
 	           sg_cbt_why[0], sg_cbt_why[1], sg_cbt_why[2], sg_cbt_why[3],
 	           sg_cbt_why[4], sg_cbt_why[5], sg_cbt_why[6], sg_cbt_why[9]);
-	gi.dprintf("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d threat=%d\n",
+	sg_host.dprint("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d threat=%d\n",
 	           sg_cbt_scan[0], sg_cbt_scan[1], sg_cbt_scan[2],
 	           sg_cbt_scan[3], sg_cbt_scan[4], sg_cbt_scan[5],
 	           sg_cbt_scan[6]);
@@ -4013,7 +4014,7 @@ void SG_CombatWhy(void)
 
 		for (w = 0; w < SG_NUM_WEAPONS; w++)
 			if (sg_cbt_fire[w])
-				gi.dprintf("ACC w%d fires=%d hits=%d\n",
+				sg_host.dprint("ACC w%d fires=%d hits=%d\n",
 				           w, sg_cbt_fire[w], sg_cbt_hit[w]);
 	}
 }

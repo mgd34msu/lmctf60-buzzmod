@@ -5,6 +5,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_weights.h"
+#include "slipgate/sg_hooks.h"
 
 /*
  * The weight tables: the one fitted component. Rows are roles; every other
@@ -111,7 +112,7 @@ static float *Weights_Slot(int role, int fi)
  * (<gamedir>/slipgate-weights-<mapname>.cfg). */
 static void Weights_Path(char *buf, int size, const char *mapname)
 {
-	cvar_t		*gamedir = gi.cvar("gamedir", "", 0);
+	cvar_t		*gamedir = sg_host.cvar("gamedir", "", 0);
 	const char	*dir = gamedir->string[0] ? gamedir->string : ".";
 
 	if (mapname && mapname[0])
@@ -183,7 +184,7 @@ static qboolean Weights_ReadFile(const char *path)
 		val = strtok(NULL, " \t\r\n");
 		if (!val)
 		{
-			gi.dprintf("slipgate: weights: %s has no value\n", key);
+			sg_host.dprint("slipgate: weights: %s has no value\n", key);
 			bad++;
 			continue;
 		}
@@ -191,12 +192,12 @@ static qboolean Weights_ReadFile(const char *path)
 			n++;
 		else
 		{
-			gi.dprintf("slipgate: weights: unknown key %s\n", key);
+			sg_host.dprint("slipgate: weights: unknown key %s\n", key);
 			bad++;
 		}
 	}
 	fclose(f);
-	gi.dprintf("slipgate: weights: %d from %s%s\n", n, path,
+	sg_host.dprint("slipgate: weights: %d from %s%s\n", n, path,
 	           bad ? va(" (%d rejected)", bad) : "");
 	return true;
 }
@@ -265,15 +266,15 @@ void SG_WeightsPrint(void)
 	if (!sg_weights_ready)
 		Weights_Load();
 
-	gi.cprintf(NULL, PRINT_HIGH, "slipgate weights (%s):\n", path);
+	sg_host.cprint(NULL, PRINT_HIGH, "slipgate weights (%s):\n", path);
 	/* only when there IS one: a server running no map playbook prints
 	 * exactly what it always printed */
 	if (sg_weight_mappath[0])
-		gi.cprintf(NULL, PRINT_HIGH, "  over map file (%s):\n",
+		sg_host.cprint(NULL, PRINT_HIGH, "  over map file (%s):\n",
 		           sg_weight_mappath);
 	for (role = 0; role < SG_ROLES; role++)
 		for (fi = 0; fi < SG_WEIGHT_FIELDS; fi++)
-			gi.cprintf(NULL, PRINT_HIGH, "  %-8s %-16s %6.2f  %s\n",
+			sg_host.cprint(NULL, PRINT_HIGH, "  %-8s %-16s %6.2f  %s\n",
 			           sg_role_names[role], sg_weight_fields[fi],
 			           *Weights_Slot(role, fi),
 			           sg_weight_srcnames[sg_weight_src[role][fi]]);

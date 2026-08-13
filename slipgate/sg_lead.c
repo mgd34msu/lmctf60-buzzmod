@@ -13,6 +13,7 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 /* -------------------------------------------------- the early-return errand
  *
@@ -60,7 +61,7 @@ void Lead_Abort(sg_bot_t *bot, const char *why)
 	if (!bot->lead_ent)
 		return;
 	if (sg_cv.debug->value)
-		gi.dprintf("ITEMLEAD %s abort (%s)\n", e->client->pers.netname, why);
+		sg_host.dprint("ITEMLEAD %s abort (%s)\n", e->client->pers.netname, why);
 
 	/*
 	 * Hand the pad back instead of letting the lease run out on its own. The
@@ -323,7 +324,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	bot->tac_seed = -1;                 /* a new strategy retires the tactic */
 
 	if (sg_cv.debug->value)
-		gi.dprintf("ITEMLEAD %s -> %s: T %.1f (in %.1fs) lead %.1fs "
+		sg_host.dprint("ITEMLEAD %s -> %s: T %.1f (in %.1fs) lead %.1fs "
 		           "travel %.1fs\n",
 		           e->client->pers.netname,
 		           g_edicts[b->ent].classname ? g_edicts[b->ent].classname

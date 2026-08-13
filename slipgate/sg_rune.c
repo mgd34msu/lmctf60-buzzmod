@@ -24,6 +24,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_rune.h"
+#include "slipgate/sg_hooks.h"
 
 #define SEED_SPACING	64.0f
 #define SEED_MAX		32768
@@ -98,7 +99,7 @@ static qboolean Seed_Ground(vec3_t candidate, vec3_t out)
 		VectorCopy(start, down);
 		down[2] -= 128.0f + lifts[L];
 
-		tr = gi.trace(start, mins, maxs, down, NULL, MASK_PLAYERSOLID);
+		tr = sg_host.trace(start, mins, maxs, down, NULL, MASK_PLAYERSOLID);
 		if (!tr.startsolid && !tr.allsolid)
 			break;
 	}
@@ -181,7 +182,7 @@ static void Seed_Flood(void)
 				VectorCopy(ground, to);
 				from[2] += 26.0f;
 				to[2] += 26.0f;
-				wtr = gi.trace(from, pmins, pmaxs, to, NULL, MASK_PLAYERSOLID);
+				wtr = sg_host.trace(from, pmins, pmaxs, to, NULL, MASK_PLAYERSOLID);
 				if (wtr.fraction < 0.9f)
 					continue;
 			}
@@ -250,7 +251,7 @@ static qboolean Prove_Contact(vec3_t at, vec3_t target)
 	VectorCopy(target, t2);
 	a2[2] += 16.0f;
 	t2[2] += 16.0f;
-	tr = gi.trace(a2, NULL, NULL, t2, NULL, MASK_PLAYERSOLID);
+	tr = sg_host.trace(a2, NULL, NULL, t2, NULL, MASK_PLAYERSOLID);
 	return tr.fraction >= 1.0f;
 }
 
@@ -408,7 +409,7 @@ static qboolean Prove(int from, int to, qboolean jump,
 					ep[2] = ph.origin[2] + 8.0f;
 					VectorCopy(ep, edown);
 					edown[2] -= 80.0f;
-					etr = gi.trace(ep, NULL, NULL, edown, NULL, MASK_PLAYERSOLID);
+					etr = sg_host.trace(ep, NULL, NULL, edown, NULL, MASK_PLAYERSOLID);
 					if (etr.fraction >= 1.0f)
 					{
 						vec3_t dd2;
@@ -458,7 +459,7 @@ static qboolean Prove(int from, int to, qboolean jump,
 				fdir[0] = cosf(ty); fdir[1] = sinf(ty); fdir[2] = 0;
 				VectorMA(ph.origin, 80.0f, fdir, probe);
 				probe[2] += 8.0f;
-				ftr = gi.trace(ph.origin, mins, maxs, probe, NULL,
+				ftr = sg_host.trace(ph.origin, mins, maxs, probe, NULL,
 				               MASK_PLAYERSOLID);
 				score = ftr.fraction - 0.06f * k;
 				if (score > best_score)
@@ -548,7 +549,7 @@ static qboolean ProveHook(int from, int to, vec3_t anchor_out,
 			up[2] += 24.0f;
 			VectorCopy(up, anchor);
 			anchor[2] += 512.0f;
-			tr = gi.trace(up, NULL, NULL, anchor, NULL, MASK_PLAYERSOLID);
+			tr = sg_host.trace(up, NULL, NULL, anchor, NULL, MASK_PLAYERSOLID);
 			if (tr.fraction >= 1.0f || tr.startsolid)
 				continue;
 			VectorCopy(tr.endpos, anchor);
@@ -580,7 +581,7 @@ static qboolean ProveHook(int from, int to, vec3_t anchor_out,
 				VectorMA(muzzle, 8.0f, mfwd, muzzle);
 				VectorMA(muzzle, 8.0f, mright, muzzle);
 
-				tr = gi.trace(muzzle, NULL, NULL, anchor, NULL,
+				tr = sg_host.trace(muzzle, NULL, NULL, anchor, NULL,
 				              Q2_MASK_SHOT_GEN);
 				if (tr.fraction >= 0.98f)
 					got = true;
@@ -727,7 +728,7 @@ static qboolean ProveDrop(int from, int to, vec3_t lip_out,
 				probe[2] = src[2] + 8.0f;
 				VectorCopy(probe, down);
 				down[2] -= 80.0f;
-				tr = gi.trace(probe, NULL, NULL, down, NULL, MASK_PLAYERSOLID);
+				tr = sg_host.trace(probe, NULL, NULL, down, NULL, MASK_PLAYERSOLID);
 				if (tr.fraction >= 1.0f)
 				{
 					VectorCopy(probe, lip);
@@ -748,7 +749,7 @@ static qboolean ProveDrop(int from, int to, vec3_t lip_out,
 			probe[2] = src[2] + 8.0f;
 			VectorCopy(probe, down);
 			down[2] -= 80.0f;
-			tr = gi.trace(probe, NULL, NULL, down, NULL, MASK_PLAYERSOLID);
+			tr = sg_host.trace(probe, NULL, NULL, down, NULL, MASK_PLAYERSOLID);
 			if (tr.fraction >= 1.0f)
 			{
 				VectorCopy(probe, lip);
@@ -868,7 +869,7 @@ static qboolean ProveDrop(int from, int to, vec3_t lip_out,
 		vec3_t fin;
 
 		VectorSubtract(dst, ph.origin, fin);
-		gi.dprintf("geodrop FAIL %d->%d end=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) grounded=%d\n",
+		sg_host.dprint("geodrop FAIL %d->%d end=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) grounded=%d\n",
 		           from, to, ph.origin[0], ph.origin[1], ph.origin[2],
 		           fin[0], fin[1], fin[2], (int)ph.groundentity);
 	}
@@ -1019,13 +1020,13 @@ static qboolean Seed_WaterFree(vec3_t p)
 	vec3_t start, end;
 	trace_t tr;
 
-	if (!(gi.pointcontents(p) & MASK_WATER))
+	if (!(sg_host.pointcontents(p) & MASK_WATER))
 		return false;
 
 	VectorCopy(p, start);
 	VectorCopy(p, end);
 	end[2] -= 1.0f;
-	tr = gi.trace(start, mins, maxs, end, NULL, MASK_PLAYERSOLID);
+	tr = sg_host.trace(start, mins, maxs, end, NULL, MASK_PLAYERSOLID);
 	if (tr.startsolid || tr.allsolid)
 		return false;
 	return true;
@@ -1122,7 +1123,7 @@ static void Seed_Water(void)
 
 	if (gen_num_seeds == dry)
 	{
-		gi.dprintf("rune: no water adjacent to any seed\n");
+		sg_host.dprint("rune: no water adjacent to any seed\n");
 		return;
 	}
 
@@ -1138,7 +1139,7 @@ static void Seed_Water(void)
 	}
 
 	gen_num_water = gen_num_seeds - dry;
-	gi.dprintf("rune: %d water seeds (%d entered from dry land)\n",
+	sg_host.dprint("rune: %d water seeds (%d entered from dry land)\n",
 	           gen_num_water, entries);
 }
 
@@ -1154,10 +1155,8 @@ static void Link_Index_Build(void)
 {
 	int i;
 
-	sw_first = gi.TagMalloc(sizeof(int) * (gen_num_seeds > 0 ? gen_num_seeds : 1),
-	                        TAG_GAME);
-	sw_next = gi.TagMalloc(sizeof(int) * (gen_num_links > 0 ? gen_num_links : 1),
-	                       TAG_GAME);
+	sw_first = sg_host.game_alloc(sizeof(int) * (gen_num_seeds > 0 ? gen_num_seeds : 1));
+	sw_next = sg_host.game_alloc(sizeof(int) * (gen_num_links > 0 ? gen_num_links : 1));
 	for (i = 0; i < gen_num_seeds; i++)
 		sw_first[i] = -1;
 	for (i = 0; i < gen_num_links; i++)
@@ -1259,12 +1258,12 @@ static void Prove_Swims(void)
 		}
 	}
 
-	gi.TagFree(sw_first);
-	gi.TagFree(sw_next);
+	sg_host.level_free(sw_first);
+	sg_host.level_free(sw_next);
 	sw_first = NULL;
 	sw_next = NULL;
 
-	gi.dprintf("rune: %d swim links proven, %d submerged links relabelled swim\n",
+	sg_host.dprint("rune: %d swim links proven, %d submerged links relabelled swim\n",
 	           gen_swim_links, gen_swim_retag);
 }
 
@@ -1408,7 +1407,7 @@ static void Door_Sidedness(void)
 		gen_num_links = w2;
 	}
 
-	gi.dprintf("rune: door sidedness: %d doors, %d crossings kept, "
+	sg_host.dprint("rune: door sidedness: %d doors, %d crossings kept, "
 	           "%d dead faces dropped\n", doors_checked, kept, dropped);
 }
 
@@ -1543,7 +1542,7 @@ static short Plat_TravelMs(edict_t *e)
  * starts at the bottom (g_func.c:541-546), which is where it stands while the
  * rune is generated: the seeds on top of it are at its bottom height.
  *
- * A brush model's mins/maxs come from gi.setmodel and are relative to the
+ * A brush model's mins/maxs come from sg_host.setmodel and are relative to the
  * entity origin, so the standable face at either position is
  * (position + maxs[2]) with the model's own centre in x and y.
  *
@@ -1591,7 +1590,7 @@ static void Link_Plats(void)
 		{
 			/* worth saying out loud: a plat whose landing never seeded is a
 			 * hole the visual dump should be looked at for */
-			gi.dprintf("rune: plat at (%.0f %.0f %.0f) unlinked, no seed at %s\n",
+			sg_host.dprint("rune: plat at (%.0f %.0f %.0f) unlinked, no seed at %s\n",
 			           bottom[0], bottom[1], bottom[2],
 			           sb < 0 ? "the bottom" : "the top");
 			continue;
@@ -1658,7 +1657,7 @@ static void Link_Plats(void)
 			else
 			{
 				gen_lift_down_none++;
-				gi.dprintf("rune: plat at (%.0f %.0f %.0f) has no proven way "
+				sg_host.dprint("rune: plat at (%.0f %.0f %.0f) has no proven way "
 				           "down (no drop, and a top-parked plat does not "
 				           "descend on touch -- g_func.c:429)\n",
 				           bottom[0], bottom[1], bottom[2]);
@@ -1666,7 +1665,7 @@ static void Link_Plats(void)
 		}
 	}
 	if (gen_lift_links)
-		gi.dprintf("rune: %d lift links (%d matching drops down, %d with no way down)\n",
+		sg_host.dprint("rune: %d lift links (%d matching drops down, %d with no way down)\n",
 		           gen_lift_links, gen_lift_down_drop, gen_lift_down_none);
 }
 
@@ -1714,7 +1713,7 @@ static void Link_Teleporters(void)
 		sd = Gen_SeedNear(arrive, SG_PAD_REACH, SG_PAD_REACH);
 		if (sp < 0 || sd < 0 || sp == sd)
 		{
-			gi.dprintf("rune: teleporter at (%.0f %.0f %.0f) has no seed at %s\n",
+			sg_host.dprint("rune: teleporter at (%.0f %.0f %.0f) has no seed at %s\n",
 			           pad[0], pad[1], pad[2],
 			           sp < 0 ? "the pad" : "the destination");
 			continue;
@@ -1729,7 +1728,7 @@ static void Link_Teleporters(void)
 		}
 	}
 	if (gen_tele_links)
-		gi.dprintf("rune: %d teleport links\n", gen_tele_links);
+		sg_host.dprint("rune: %d teleport links\n", gen_tele_links);
 }
 
 /* ============================== end of the ADDITIVE BLOCK ============ */
@@ -2067,12 +2066,12 @@ static void Prove_RocketJumps(void)
 		return;
 
 	Link_Index_Build();
-	rj_dist = gi.TagMalloc(sizeof(int) * gen_num_seeds, TAG_GAME);
-	rj_stamp = gi.TagMalloc(sizeof(int) * gen_num_seeds, TAG_GAME);
+	rj_dist = sg_host.game_alloc(sizeof(int) * gen_num_seeds);
+	rj_stamp = sg_host.game_alloc(sizeof(int) * gen_num_seeds);
 	memset(rj_stamp, 0, sizeof(int) * gen_num_seeds);
 	rj_query = 0;
 
-	gi.dprintf("rune: rocket jumps -- window %.0f to %.0f units of rise\n",
+	sg_host.dprint("rune: rocket jumps -- window %.0f to %.0f units of rise\n",
 	           SG_RJ_MIN_RISE, ceiling);
 
 	for (i = 0; i < gen_num_seeds && rj_tries < SG_RJ_MAX_TRIES; i++)
@@ -2146,16 +2145,16 @@ static void Prove_RocketJumps(void)
 	if (rj_tries >= SG_RJ_MAX_TRIES)
 		rj_budget_out = 1;
 
-	gi.TagFree(sw_first);
-	gi.TagFree(sw_next);
+	sg_host.level_free(sw_first);
+	sg_host.level_free(sw_next);
 	sw_first = NULL;
 	sw_next = NULL;
-	gi.TagFree(rj_dist);
-	gi.TagFree(rj_stamp);
+	sg_host.level_free(rj_dist);
+	sg_host.level_free(rj_stamp);
 	rj_dist = NULL;
 	rj_stamp = NULL;
 
-	gi.dprintf("rune: rocketjump pairs=%d rolls=%d noboom=%d nolift=%d "
+	sg_host.dprint("rune: rocketjump pairs=%d rolls=%d noboom=%d nolift=%d "
 	           "arrived=%d redundant=%d links=%d%s\n",
 	           rj_pairs, rj_tries, rj_noboom, rj_nolift, rj_arrived,
 	           rj_redundant, rj_links,
@@ -2319,7 +2318,7 @@ static void Prove_All(void)
 			}
 		}
 		if ((i & 255) == 0)
-			gi.dprintf("rune: proving %d/%d seeds, %d links\n",
+			sg_host.dprint("rune: proving %d/%d seeds, %d links\n",
 			           i, gen_num_seeds, gen_num_links);
 	}
 
@@ -2387,7 +2386,7 @@ static int Doors_Open(heldopen_t *held, int max)
 		held[n].e = e;
 		held[n].solid = e->solid;
 		e->solid = SOLID_NOT;
-		gi.linkentity(e);
+		sg_host.linkentity(e);
 		n++;
 	}
 	return n;
@@ -2400,7 +2399,7 @@ static void Doors_Restore(heldopen_t *held, int n)
 	for (i = 0; i < n; i++)
 	{
 		held[i].e->solid = held[i].solid;
-		gi.linkentity(held[i].e);
+		sg_host.linkentity(held[i].e);
 	}
 }
 
@@ -2411,20 +2410,20 @@ qboolean Rune_Generate(const char *mapname)
 	FILE *f;
 	heldopen_t held[128];
 	int ndoors;
-	cvar_t *gamedir = gi.cvar("gamedir", "", 0);
+	cvar_t *gamedir = sg_host.cvar("gamedir", "", 0);
 
-	gen_seeds = gi.TagMalloc(sizeof(rune_seed_t) * SEED_MAX, TAG_GAME);
-	gen_links = gi.TagMalloc(sizeof(rune_link_t) * LINK_MAX, TAG_GAME);
+	gen_seeds = sg_host.game_alloc(sizeof(rune_seed_t) * SEED_MAX);
+	gen_links = sg_host.game_alloc(sizeof(rune_link_t) * LINK_MAX);
 	gen_num_seeds = 0;
 	gen_num_links = 0;
 	memset(hash_head, 0xff, sizeof(hash_head));
 
 	ndoors = Doors_Open(held, 128);
-	gi.dprintf("rune: %d doors held open for proving\n", ndoors);
+	sg_host.dprint("rune: %d doors held open for proving\n", ndoors);
 
-	gi.dprintf("rune: germinating from entities...\n");
+	sg_host.dprint("rune: germinating from entities...\n");
 	Seed_Germinate();
-	gi.dprintf("rune: %d germs; flooding...\n", gen_num_seeds);
+	sg_host.dprint("rune: %d germs; flooding...\n", gen_num_seeds);
 	Seed_Flood();
 	/* ADDITIVE BLOCK call site: the water volumes the dry passes cannot
 	 * reach into, seeded before anything is proven so the pair loop sees
@@ -2443,7 +2442,7 @@ qboolean Rune_Generate(const char *mapname)
 	{
 		int i, j, step, vis, sampled;
 
-		gi.dprintf("rune: measuring exposure...\n");
+		sg_host.dprint("rune: measuring exposure...\n");
 		for (i = 0; i < gen_num_seeds; i++)
 		{
 			vec3_t a;
@@ -2466,7 +2465,7 @@ qboolean Rune_Generate(const char *mapname)
 				sampled++;
 				VectorCopy(gen_seeds[j].origin, b);
 				b[2] += 22.0f;
-				etr = gi.trace(a, NULL, NULL, b, NULL, MASK_OPAQUE);
+				etr = sg_host.trace(a, NULL, NULL, b, NULL, MASK_OPAQUE);
 				if (etr.fraction >= 1.0f)
 					vis++;
 			}
@@ -2476,14 +2475,14 @@ qboolean Rune_Generate(const char *mapname)
 			    (vis * 255) / sampled : 0);
 		}
 	}
-	gi.dprintf("rune: %d seeds; proving links...\n", gen_num_seeds);
+	sg_host.dprint("rune: %d seeds; proving links...\n", gen_num_seeds);
 	Prove_All();
-	gi.dprintf("rune: %d links proven\n", gen_num_links);
-	gi.dprintf("rune: dropstats pairs=%d seek=%d noedge=%d fellsteps=%d arrived=%d nocontact=%d\n",
+	sg_host.dprint("rune: %d links proven\n", gen_num_links);
+	sg_host.dprint("rune: dropstats pairs=%d seek=%d noedge=%d fellsteps=%d arrived=%d nocontact=%d\n",
 	           dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact);
-	gi.dprintf("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
+	sg_host.dprint("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
 	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
-	gi.dprintf("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d); "
+	sg_host.dprint("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d); "
 	           "plat-down drop=%d unlinked=%d; momentum=%d waypoints=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
 	           gen_lift_links, gen_tele_links,
@@ -2496,9 +2495,9 @@ qboolean Rune_Generate(const char *mapname)
 	f = fopen(path, "wb");
 	if (!f)
 	{
-		gi.dprintf("rune: cannot write %s\n", path);
-		gi.TagFree(gen_seeds);
-		gi.TagFree(gen_links);
+		sg_host.dprint("rune: cannot write %s\n", path);
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
 		return false;
 	}
 
@@ -2514,10 +2513,10 @@ qboolean Rune_Generate(const char *mapname)
 	fwrite(gen_links, sizeof(rune_link_t), gen_num_links, f);
 	fclose(f);
 
-	gi.dprintf("rune: wrote %s (%d seeds, %d links)\n",
+	sg_host.dprint("rune: wrote %s (%d seeds, %d links)\n",
 	           path, gen_num_seeds, gen_num_links);
 
-	gi.TagFree(gen_seeds);
-	gi.TagFree(gen_links);
+	sg_host.level_free(gen_seeds);
+	sg_host.level_free(gen_links);
 	return true;
 }

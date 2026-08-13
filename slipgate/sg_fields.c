@@ -16,6 +16,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 sg_fields_t sg_fields;
 
@@ -401,13 +402,13 @@ static void Field_FloodRun(rune_t *r, int *dist,
 
 	if (ns > SG_MAX_SEEDS)
 	{
-		gi.dprintf("slipgate: rune has %d seeds, over the %d cap -- "
+		sg_host.dprint("slipgate: rune has %d seeds, over the %d cap -- "
 		           "flooding the first %d only\n", ns, SG_MAX_SEEDS, SG_MAX_SEEDS);
 		ns = SG_MAX_SEEDS;
 	}
 	if (nl > SG_ENV_MAX_LINKS)
 	{
-		gi.dprintf("slipgate: rune has %d links, over the %d cap -- "
+		sg_host.dprint("slipgate: rune has %d links, over the %d cap -- "
 		           "flooding the first %d only\n", nl, SG_ENV_MAX_LINKS,
 		           SG_ENV_MAX_LINKS);
 		nl = SG_ENV_MAX_LINKS;
@@ -549,14 +550,14 @@ void Field_Flood(rune_t *r, int *dist,
 			if (dist[i] < SG_FIELD_INF)
 				env++;
 		}
-		gi.dprintf("FLOODCHECK seeds=%d reachable_flat=%d reachable_env=%d%s\n",
+		sg_host.dprint("FLOODCHECK seeds=%d reachable_flat=%d reachable_env=%d%s\n",
 		           ns, flat, env, env > flat ? " BROKEN" : "");
 	}
 }
 
 static int *Field_Alloc(rune_t *r)
 {
-	return gi.TagMalloc(sizeof(int) * r->hdr.num_seeds, TAG_LEVEL);
+	return sg_host.level_alloc(sizeof(int) * r->hdr.num_seeds);
 }
 
 static void Field_FromOne(rune_t *r, int *dist, int seed)
@@ -844,7 +845,7 @@ qboolean Fields_Setup(rune_t *r)
 			if (best_plat == 0x7fffffff)
 			{
 				if (sg_cv.debug->value)
-					gi.dprintf("SHELF t=%d: no platform-level seed in radius\n", t);
+					sg_host.dprint("SHELF t=%d: no platform-level seed in radius\n", t);
 				continue;
 			}
 			for (si = 0; si < r->hdr.num_seeds; si++)
@@ -881,7 +882,7 @@ qboolean Fields_Setup(rune_t *r)
 					}
 				}
 				if (sg_cv.debug->value)
-					gi.dprintf("SHELF t=%d: %d sub-stand seeds, %d cliffed, max %d, best_plat %d\n",
+					sg_host.dprint("SHELF t=%d: %d sub-stand seeds, %d cliffed, max %d, best_plat %d\n",
 					           t, sub, n, mx, best_plat);
 			}
 		}
@@ -895,7 +896,7 @@ qboolean Fields_Setup(rune_t *r)
 			if (sg_fields.to_red_flag[si] < SG_FIELD_INF) nr++;
 			if (sg_fields.to_blue_flag[si] < SG_FIELD_INF) nb++;
 		}
-		gi.dprintf("slipgate: field coverage red %d/%d blue %d/%d (flag seeds %d, %d)\n",
+		sg_host.dprint("slipgate: field coverage red %d/%d blue %d/%d (flag seeds %d, %d)\n",
 		           nr, r->hdr.num_seeds, nb, r->hdr.num_seeds,
 		           sg_fields.red_flag_seed, sg_fields.blue_flag_seed);
 	}
@@ -986,7 +987,7 @@ qboolean Fields_Setup(rune_t *r)
 
 					VectorCopy(r->seeds[appr[j]].origin, thr);
 					thr[2] += 22.0f;
-					ltr = gi.trace(eye, NULL, NULL, thr, NULL,
+					ltr = sg_host.trace(eye, NULL, NULL, thr, NULL,
 					               MASK_SOLID);
 					if (ltr.fraction >= 1.0f)
 						score += 1.0f;
@@ -999,7 +1000,7 @@ qboolean Fields_Setup(rune_t *r)
 
 					VectorCopy(r->seeds[flag_seed].origin, fthr);
 					fthr[2] += 22.0f;
-					ftr = gi.trace(eye, NULL, NULL, fthr, NULL,
+					ftr = sg_host.trace(eye, NULL, NULL, fthr, NULL,
 					               MASK_SOLID);
 					if (ftr.fraction < 1.0f)
 						continue;
@@ -1021,7 +1022,7 @@ qboolean Fields_Setup(rune_t *r)
 			if (best >= 0)
 			{
 				Field_FromOne(r, sg_fields.to_lane[t], best);
-				gi.dprintf("slipgate: rail lane team%d seed=%d covers %.0f/%d approach seeds\n",
+				sg_host.dprint("slipgate: rail lane team%d seed=%d covers %.0f/%d approach seeds\n",
 				           t + 1, best, bestscore, na);
 			}
 			else

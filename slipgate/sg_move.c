@@ -23,6 +23,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_price.h"     /* tc->role */
+#include "slipgate/sg_hooks.h"
 
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
@@ -436,7 +437,7 @@ static qboolean SG_RunRoom(edict_t *e, int seed0, const int *route_field,
 	pend[0] = pp[0];
 	pend[1] = pp[1];
 	pend[2] = e->s.origin[2] + 18.0f;
-	tr = gi.trace(e->s.origin, e->mins, e->maxs, pend, e, MASK_PLAYERSOLID);
+	tr = sg_host.trace(e->s.origin, e->mins, e->maxs, pend, e, MASK_PLAYERSOLID);
 	/* a teammate is not terrain (the fan's exception, same reason) */
 	if (tr.fraction < 1.0f && tr.ent && tr.ent->client && !tr.ent->deadflag)
 		return true;
@@ -563,11 +564,11 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
  */
 static void SG_PlanBeam(vec3_t from, vec3_t to)
 {
-	gi.WriteByte(svc_temp_entity);
-	gi.WriteByte(TE_BFG_LASER);
-	gi.WritePosition(from);
-	gi.WritePosition(to);
-	gi.multicast(from, MULTICAST_ALL);
+	sg_host.write_byte(svc_temp_entity);
+	sg_host.write_byte(TE_BFG_LASER);
+	sg_host.write_position(from);
+	sg_host.write_position(to);
+	sg_host.multicast(from, MULTICAST_ALL);
 }
 
 static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
@@ -810,7 +811,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				if (sg_cv.ropetravel->value > 0.0f)
 					SG_TimerArm(&bot->speedhook_next, 0.25f);
 				if (sg_cv.debug->value)
-					gi.dprintf("HOOKEND %s apex\n",
+					sg_host.dprint("HOOKEND %s apex\n",
 					           e->client->pers.netname);
 			}
 			else if (e->groundentity || SG_TimerReadyStrict(bot->hook_deadline))
@@ -822,7 +823,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						vec3_t ld;
 
 						VectorSubtract(bot->hook_dest, e->s.origin, ld);
-						gi.dprintf("HOOKLAND %s dist=%.0f dz=%.0f\n",
+						sg_host.dprint("HOOKLAND %s dist=%.0f dz=%.0f\n",
 						           e->client->pers.netname,
 						           sqrtf(ld[0] * ld[0] + ld[1] * ld[1]),
 						           ld[2]);
@@ -830,7 +831,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					else
 						/* deadline hit still airborne: the throw
 						 * never came down anywhere useful */
-						gi.dprintf("HOOKEND %s drop\n",
+						sg_host.dprint("HOOKEND %s drop\n",
 						           e->client->pers.netname);
 				}
 				bot->hook_phase = 0;
@@ -871,7 +872,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						SG_TimerArm(&bot->bl_until[old9], 45.0f);
 						SG_TeachLinkFutility(bot->hook_link);
 						if (sg_cv.debug->value)
-							gi.dprintf("HOOKPONG %s link=%d\n",
+							sg_host.dprint("HOOKPONG %s link=%d\n",
 							           e->client->pers.netname,
 							           bot->hook_link);
 					}
@@ -951,11 +952,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 							        RL_HOOK)
 								bot->commit_link = -1;
 							if (sg_cv.debug->value)
-								gi.dprintf("HOOKBAN %s 20s\n",
+								sg_host.dprint("HOOKBAN %s 20s\n",
 								           e->client->pers.netname);
 						}
 						if (sg_cv.debug->value)
-							gi.dprintf("HOOKFAIL %s link=%d\n",
+							sg_host.dprint("HOOKFAIL %s link=%d\n",
 							           e->client->pers.netname,
 							           bot->hook_link);
 					}
@@ -995,7 +996,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					roff[1] = rdir[0] / rl * bot->ribbon_off;
 					roff[2] = 0.0f;
 					VectorAdd(aim, roff, rprobe);
-					rtr = gi.trace(e->s.origin, e->mins, e->maxs, rprobe,
+					rtr = sg_host.trace(e->s.origin, e->mins, e->maxs, rprobe,
 					               e, MASK_PLAYERSOLID);
 					/* the corridor decides: a blocked offset collapses to the
 					 * seed line -- the band is only as wide as the room */
@@ -1164,7 +1165,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					 * to the seed center most ticks); 18 is STEPSIZE */
 					pend[2] = e->s.origin[2] +
 					          (sg_cv.pursuitz->value);
-					ptr = gi.trace(e->s.origin, e->mins, e->maxs, pend,
+					ptr = sg_host.trace(e->s.origin, e->mins, e->maxs, pend,
 					               e, MASK_PLAYERSOLID);
 					/* a teammate is not terrain, and a door is not a
 					 * wall (the fan's two exceptions, same reasons) */
@@ -1181,7 +1182,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						 * k==1 is a collapse to today's behavior */
 						if (sg_cv.debug->value &&
 						    SG_TimerReady(bot->next_report - 0.9f))
-							gi.dprintf("PURSUITK %s k=%d n=%d\n",
+							sg_host.dprint("PURSUITK %s k=%d n=%d\n",
 							           e->client->pers.netname,
 							           k, nchain);
 						break;
@@ -1226,7 +1227,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					eoff[1] = edir[0] / el * bot->ribbon_off * esc;
 					eoff[2] = 0.0f;
 					VectorAdd(aim, eoff, eprobe);
-					etr = gi.trace(e->s.origin, e->mins, e->maxs,
+					etr = sg_host.trace(e->s.origin, e->mins, e->maxs,
 					               eprobe, e, MASK_PLAYERSOLID);
 					if (etr.fraction >= 1.0f)
 						VectorCopy(eprobe, aim);
@@ -1359,7 +1360,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						hend[0] = heye[0] + cosf(hy2) * hfar;
 						hend[1] = heye[1] + sinf(hy2) * hfar;
 						hend[2] = heye[2] + hup;    /* v1 ~30deg, v2 ~54deg */
-						htr = gi.trace(heye, NULL, NULL, hend, e,
+						htr = sg_host.trace(heye, NULL, NULL, hend, e,
 						               MASK_SOLID);
 						/*
 						 * The bar the optional rope has to clear, and the
@@ -1516,7 +1517,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 									ray[1] = sinf(az) * cosf(th);
 									ray[2] = sinf(th);
 									VectorMA(eye2, 700.0f, ray, hit);
-									btr = gi.trace(eye2, NULL, NULL, hit,
+									btr = sg_host.trace(eye2, NULL, NULL, hit,
 									               e, MASK_SOLID);
 									if (btr.fraction < 1.0f &&
 									    !btr.startsolid &&
@@ -1782,7 +1783,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						 * the exit line stops where the room does --
 						 * clamp the through-point at solid geometry,
 						 * never closer than the flag itself */
-						wtr = gi.trace(gf->s.origin, e->mins, e->maxs,
+						wtr = sg_host.trace(gf->s.origin, e->mins, e->maxs,
 						               wend, e, MASK_PLAYERSOLID);
 						if (wtr.fraction < 1.0f)
 							VectorCopy(wtr.endpos, wend);
@@ -1916,7 +1917,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				fwd[0] = cosf(try_yaw); fwd[1] = sinf(try_yaw); fwd[2] = 0;
 				VectorMA(e->s.origin, reach, fwd, probe);
 				probe[2] += 8.0f;
-				tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
+				tr = sg_host.trace(e->s.origin, e->mins, e->maxs, probe,
 				              e, MASK_PLAYERSOLID);
 				/*
 				 * A teammate is not terrain. Blocked by one on the goal
@@ -2117,12 +2118,12 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						bot->commit_link = -1;
 						SG_TeachLinkFutility(bestlink);
 						if (sg_cv.debug->value)
-							gi.dprintf("RAILFAIL %s link=%d seed=%d\n",
+							sg_host.dprint("RAILFAIL %s link=%d seed=%d\n",
 							           e->client->pers.netname,
 							           bestlink, bot->seed);
 					}
 					else if (sg_cv.debug->value)
-						gi.dprintf("RAILWIN %s link=%d\n",
+						sg_host.dprint("RAILWIN %s link=%d\n",
 						           e->client->pers.netname, bestlink);
 					bot->rail_stage = 0;
 				}
@@ -2254,7 +2255,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				VectorMA(e->s.origin, hop_reach, move_dir, probe);
 			}
 			probe[2] += 8.0f;
-			tr = gi.trace(e->s.origin, e->mins, e->maxs, probe,
+			tr = sg_host.trace(e->s.origin, e->mins, e->maxs, probe,
 			              e, MASK_PLAYERSOLID);
 			/* same rule as the feelers: a door ahead is not a wall, but
 			 * do NOT hop at one -- arrive on foot, inside its trigger */
@@ -2330,7 +2331,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * the corridor repricies globally. Same cure as the wall. */
 				SG_TeachFutility(bot->seed);
 				if (sg_cv.debug->value)
-					gi.dprintf("DEADDOOR %s at (%.0f %.0f %.0f)\n",
+					sg_host.dprint("DEADDOOR %s at (%.0f %.0f %.0f)\n",
 					           e->client->pers.netname, e->s.origin[0],
 					           e->s.origin[1], e->s.origin[2]);
 			}
@@ -2724,7 +2725,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * 165, waves 140/142) */
 				SG_TimerArm(&bot->nade_until, 3.2f);
 				if (sg_cv.debug->value)
-					gi.dprintf("NADE %s cooking\n",
+					sg_host.dprint("NADE %s cooking\n",
 					           e->client->pers.netname);
 			}
 			else if (SG_TimerReady(bot->nade_until + 1.2f))
@@ -2765,7 +2766,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						lp1[1] = len9->s.origin[1] + len9->velocity[1] * ltt;
 						lp1[2] = len9->s.origin[2] + len9->velocity[2] * ltt
 						       - 0.5f * lgrav * ltt * ltt;
-						lltr = gi.trace(lp0, len9->mins, len9->maxs, lp1,
+						lltr = sg_host.trace(lp0, len9->mins, len9->maxs, lp1,
 						                len9, MASK_PLAYERSOLID);
 						if (lltr.fraction < 1.0f)
 						{
@@ -2842,7 +2843,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						ap[1] = e->s.origin[1] + sy * hv2 * tt2;
 						ap[2] = e->s.origin[2] + e->viewheight
 						      + vv2 * tt2 - 0.5f * ng * tt2 * tt2;
-						atr = gi.trace(lp, NULL, NULL, ap, e,
+						atr = sg_host.trace(lp, NULL, NULL, ap, e,
 						               MASK_SOLID);
 						if (atr.fraction < 1.0f)
 						{
@@ -2910,7 +2911,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				bot->nade_phase = 0;
 				SG_TimerArm(&bot->nade_next, 8.0f);
 				if (sg_cv.debug->value)
-					gi.dprintf("NADE %s thrown fly=%.2f fuse=%.2f\n",
+					sg_host.dprint("NADE %s thrown fly=%.2f fuse=%.2f\n",
 					           e->client->pers.netname,
 					           nfly, ntmr - 0.2f);
 			}
@@ -2993,7 +2994,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					cmd->buttons |= BUTTON_ATTACK;
 					SG_TimerArm(&bot->soundfire_next, 8.0f);
 					if (sg_cv.debug->value)
-						gi.dprintf("SNDFIRE %s rng=%.0f\n",
+						sg_host.dprint("SNDFIRE %s rng=%.0f\n",
 						           e->client->pers.netname, sl15);
 				}
 				break;
@@ -3212,7 +3213,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					if (dur >= SG_AS_MINCHAIN &&
 					    sg_cv.debug->value &&
 					    !(bot->as_said++ & 7))
-						gi.dprintf("AIRCHAIN %s %.2fs entry=%.0f "
+						sg_host.dprint("AIRCHAIN %s %.2fs entry=%.0f "
 						           "peak=%.0f\n",
 						           e->client->pers.netname, dur,
 						           bot->as_entry, bot->as_peak);
@@ -3608,12 +3609,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				VectorCopy(e->s.origin, seye);
 				seye[2] += e->viewheight;
 				VectorMA(seye, 4096.0f, sdir, send);
-				str = gi.trace(seye, NULL, NULL, send, e, MASK_SOLID);
+				str = sg_host.trace(seye, NULL, NULL, send, e, MASK_SOLID);
 				if (str.surface &&
 				    (str.surface->flags & SURF_SKY))
 				{
 					if (sg_cv.debug->value)
-						gi.dprintf("HOOKSKYHOLD %s\n",
+						sg_host.dprint("HOOKSKYHOLD %s\n",
 						           e->client->pers.netname);
 					goto hook_wait;
 				}
@@ -3621,13 +3622,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * dies on their body (hook_touch rejects teammates) --
 				 * ~57 wasted fires a wave. MASK_SHOT sees bodies where
 				 * the sky trace's MASK_SOLID cannot. */
-				str = gi.trace(seye, NULL, NULL, send, e, MASK_SHOT);
+				str = sg_host.trace(seye, NULL, NULL, send, e, MASK_SHOT);
 				if (str.ent && str.ent->client &&
 				    str.ent->client->ctf.teamnum ==
 				    e->client->ctf.teamnum)
 				{
 					if (sg_cv.debug->value)
-						gi.dprintf("HOOKMATEHOLD %s\n",
+						sg_host.dprint("HOOKMATEHOLD %s\n",
 						           e->client->pers.netname);
 					goto hook_wait;
 				}
@@ -3635,7 +3636,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			Cmd_Hook_f(e);
 			bot->hook_phase = 2;
 			if (sg_cv.debug->value)
-				gi.dprintf("HOOKFIRE %s at (%.0f %.0f %.0f)\n",
+				sg_host.dprint("HOOKFIRE %s at (%.0f %.0f %.0f)\n",
 				           e->client->pers.netname, bot->hook_anchor[0],
 				           bot->hook_anchor[1], bot->hook_anchor[2]);
 		}
@@ -3673,7 +3674,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				VectorSubtract(e->client->hook->s.origin,
 				               bot->hook_anchor, ba);
 				if (VectorLength(ba) > 96.0f)
-					gi.dprintf("HOOKBITE %s off=%.0f into=%s org=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) got=(%.0f %.0f %.0f)\n",
+					sg_host.dprint("HOOKBITE %s off=%.0f into=%s org=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) got=(%.0f %.0f %.0f)\n",
 					           e->client->pers.netname, VectorLength(ba),
 					           ht->classname ? ht->classname :
 					           (ht == g_edicts ? "world" : "?"),
@@ -3771,7 +3772,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 									ap1[1] = e->s.origin[1] + e->velocity[1] * at;
 									ap1[2] = e->s.origin[2] + e->velocity[2] * at
 									       - 0.5f * grav * at * at;
-									atr = gi.trace(ap0, e->mins, e->maxs, ap1,
+									atr = sg_host.trace(ap0, e->mins, e->maxs, ap1,
 									               e, MASK_PLAYERSOLID);
 									/*
 									 * aseg 1 exempt: the box leaves from beside the
@@ -3811,7 +3812,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 								if (!arc_clear)
 								{
 									if (sg_cv.debug->value)
-										gi.dprintf("HOOKARCVETO %s\n",
+										sg_host.dprint("HOOKARCVETO %s\n",
 										           e->client->pers.netname);
 									goto hook_wait;
 								}
@@ -3859,7 +3860,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					 * denominator a lie), stalled to deadline, or
 					 * the rope never held */
 					if (sg_cv.debug->value)
-						gi.dprintf("HOOKEND %s %s\n",
+						sg_host.dprint("HOOKEND %s %s\n",
 						           e->client->pers.netname,
 						           bs2 > 600.0f * 600.0f ? "burst"
 						           : (e->client->hookstate == 0
@@ -3878,7 +3879,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				/* a cut live rope hands off to the landing steer; a rope
 				 * that never attached does not */
 				if (!was_pulling && sg_cv.debug->value)
-					gi.dprintf("HOOKEND %s noattach\n",
+					sg_host.dprint("HOOKEND %s noattach\n",
 					           e->client->pers.netname);
 				bot->hook_phase = was_pulling ? 3 : 0;
 				/* this phase-3 entry is a plain rope cut, never a flow
@@ -3900,7 +3901,7 @@ hook_wait:;
 		SG_TimerArm(&bot->next_cmdlog, 1.0f);
 		/* the last step of the frame: fwd/side/up are that step's command,
 		 * and msec x steps is how the frame's real time was spent */
-		gi.dprintf("CMD %s: fwd=%d side=%d up=%d btn=%d yaw=%d pitch=%d msec=%d x%d\n",
+		sg_host.dprint("CMD %s: fwd=%d side=%d up=%d btn=%d yaw=%d pitch=%d msec=%d x%d\n",
 		           e->client->pers.netname, cmd->forwardmove, cmd->sidemove,
 		           cmd->upmove, cmd->buttons, cmd->angles[YAW],
 		           cmd->angles[PITCH], cmd->msec, sub_steps);
@@ -3929,7 +3930,7 @@ hook_wait:;
 		if (bot->seed >= 0 && sfld && sfld[bot->seed] < SG_FIELD_INF)
 			sgoal = sfld[bot->seed];
 		SG_TimerArm(&bot->next_report, 1.0f);
-		gi.dprintf("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d "
+		sg_host.dprint("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d "
 		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d eng=%d\n",
 		           e->client->pers.netname, role, bot->seed,
 		           (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)

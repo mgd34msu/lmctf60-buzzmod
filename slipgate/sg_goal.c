@@ -19,6 +19,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_goal.h"
+#include "slipgate/sg_hooks.h"
 
 static int intercept_field[SG_MAX_SEEDS];
 
@@ -215,7 +216,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			{
 				SG_TimerArm(&sg_push_until[SG_TeamIdx(team)], 8.0f);
 				if (sg_cv.debug->value)
-					gi.dprintf("PUSH team=%d surge\n", team);
+					sg_host.dprint("PUSH team=%d surge\n", team);
 			}
 		}
 	}
@@ -328,7 +329,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 				}
 				bot->rally_cover = best_cover;
 				if (sg_cv.debug->value)
-					gi.dprintf("RALLY %s waits (%d coming, cover=%d)\n",
+					sg_host.dprint("RALLY %s waits (%d coming, cover=%d)\n",
 					           e->client->pers.netname, mates_coming,
 					           best_cover);
 			}
@@ -339,7 +340,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		{
 			if (bot->rally_since > 0.0f &&
 			    sg_cv.debug->value)
-				gi.dprintf("RALLY %s released after %.1fs (near=%d)\n",
+				sg_host.dprint("RALLY %s released after %.1fs (near=%d)\n",
 				           e->client->pers.netname,
 				           SG_Age(bot->rally_since), mates_near);
 			bot->rally_since = 0.0f;
@@ -532,7 +533,7 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 				if (bot->escprior_dose > 0.9f)
 					bot->escprior_dose = 0.9f;
 				if (sg_cv.debug->value)
-					gi.dprintf("ESCPRIOR %s bucket=%d p=%d/%d dose=%.2f\n",
+					sg_host.dprint("ESCPRIOR %s bucket=%d p=%d/%d dose=%.2f\n",
 					           e->client->pers.netname, b,
 					           sg_escape_count[fk][b],
 					           sg_escape_total[fk], bot->escprior_dose);
@@ -548,25 +549,25 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 	{
 		if (carrying && !bot->was_carrying)
 		{
-			gi.dprintf("CARRY %s begins\n", e->client->pers.netname);
+			sg_host.dprint("CARRY %s begins\n", e->client->pers.netname);
 			/* the grab's honesty, on the record: how many defenders
 			 * the last census believed present, and whether the
 			 * patience valve had already expired (a FORCED grab into
 			 * a room the hold never cleared). If parity grabs are
 			 * ~all forced, the strict hold never wins at parity and
 			 * the doctrine pivot is evidence, not taste. */
-			gi.dprintf("GRABMODE %s room=%d %s\n",
+			sg_host.dprint("GRABMODE %s room=%d %s\n",
 			           e->client->pers.netname, bot->last_room,
 			           (bot->strict_since > 0.0f &&
 			            SG_AgeAtLeast(bot->strict_since, 20.0f))
 			               ? "forced" : "clean");
 		}
 		else if (!carrying && bot->was_carrying)
-			gi.dprintf("CARRY %s ends after %.1fs\n",
+			sg_host.dprint("CARRY %s ends after %.1fs\n",
 			           e->client->pers.netname,
 			           SG_Age(bot->carry_start));
 		if ((int)role != bot->last_role && role == SG_ROLE_ESCORT)
-			gi.dprintf("ESCORT %s begins\n", e->client->pers.netname);
+			sg_host.dprint("ESCORT %s begins\n", e->client->pers.netname);
 	}
 	/*
 	 * Unconditionally: last_role feeds the rally's partner census, the
@@ -752,7 +753,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			    : sg_fields.to_red_flag_now;
 			if (sg_cv.debug->value &&
 			    SG_TimerReady(bot->next_report - 0.9f))
-				gi.dprintf("SCOOP %s\n", e->client->pers.netname);
+				sg_host.dprint("SCOOP %s\n", e->client->pers.netname);
 		}
 
 		/*
@@ -899,7 +900,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 						goal_field = interpose_field;
 						if (sg_cv.debug->value &&
 						    SG_TimerReady(bot->next_report - 0.9f))
-							gi.dprintf("INTERPOSE %s seed=%d\n",
+							sg_host.dprint("INTERPOSE %s seed=%d\n",
 							           e->client->pers.netname, ms);
 					}
 				}
@@ -1024,7 +1025,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			tc->mega = 0.0f;
 			SG_TimerArm(&bot->mega_next, SG_MEGA_BACKOFF);
 			if (SG_MegaOn() && sg_cv.debug->value)
-				gi.dprintf("MEGA %s give up: %.0fs on offer, no pickup\n",
+				sg_host.dprint("MEGA %s give up: %.0fs on offer, no pickup\n",
 				           e->client->pers.netname, SG_MEGA_PATIENCE);
 		}
 	}
@@ -1043,7 +1044,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			              ? 1500.0f * (tc->mega / val - 1.0f) : -1.0f;
 
 			if (val > 0.0f)
-				gi.dprintf("MEGA %s commit: pad %d hp %d worth %.2f "
+				sg_host.dprint("MEGA %s commit: pad %d hp %d worth %.2f "
 				           "detour %.0fms pull %.0f\n",
 				           e->client->pers.netname, pad, e->health,
 				           tc->mega, det, 1500.0f * val);
@@ -1056,7 +1057,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		 * mega_hp on the way through.
 		 */
 		if (bot->mega_hp > 0 && e->health - bot->mega_hp >= 90)
-			gi.dprintf("MEGA %s take: hp %d -> %d\n",
+			sg_host.dprint("MEGA %s take: hp %d -> %d\n",
 			           e->client->pers.netname, bot->mega_hp, e->health);
 	}
 	bot->mega_on = (tc->mega > 0.0f);
@@ -1183,7 +1184,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				Field_Flood(SG_Rune(), tac_fields[bi],
 				            &bot->tac_seed, &cost10, 1);
 				if (sg_cv.debug->value)
-					gi.dprintf("TACTIC %s seed=%d strat=%d\n",
+					sg_host.dprint("TACTIC %s seed=%d strat=%d\n",
 					           e->client->pers.netname,
 					           best10, goal_field[best10]);
 			}
