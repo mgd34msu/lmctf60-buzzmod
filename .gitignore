@@ -1,36 +1,12 @@
-﻿################################################################################
-# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
-################################################################################
-
-/.vs
-/Debug
-/gravity.vcxproj.user
-
-# build output
+# build artifacts: objects, the versioned game modules, and their archive
 *.o
-*.d
-*.so
+gamex86_64-*.so
+builds-archive/
 GitRevisionInfo.h
 .depend
-
-# built botlib
-bots/botlib/*.o
-bots/botlib/botlib.so
-
-# server logs and tool output that never belongs in history
 bspc.log
-.goodvibes/
-tools/rune-logs/
-tools/campaign-*/
-tools/ab-*.log
-tools/iter-*/
-tools/__pycache__/
 
-# development-environment runtime debris (see TOOLING.md)
-tools/iter-*-launch.log
-tools/aux-*-launch.log
-tools/aux-[0-9]*/
-tools/campaign-*/
-tools/waveloop.log
-tools/*.log
+# wave-run working state
+tools/iter-*/
 tools/runs-archive/
+.goodvibes/
