@@ -1,12 +1,40 @@
-# build artifacts: objects, the versioned game modules, and their archive
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs
+/Debug
+/gravity.vcxproj.user
+
+# build output
 *.o
-gamex86_64-*.so
-builds-archive/
+*.d
+*.so
 GitRevisionInfo.h
 .depend
-bspc.log
 
-# wave-run working state
-tools/iter-*/
-tools/runs-archive/
+# built botlib
+bots/botlib/*.o
+bots/botlib/botlib.so
+
+# server logs and tool output that never belongs in history
+bspc.log
 .goodvibes/
+tools/rune-logs/
+tools/campaign-*/
+tools/ab-*.log
+tools/iter-*/
+tools/__pycache__/
+
+# development-environment runtime debris (see TOOLING.md)
+tools/iter-*-launch.log
+tools/aux-*-launch.log
+tools/aux-[0-9]*/
+tools/campaign-*/
+tools/waveloop.log
+tools/*.log
+tools/runs-archive/
+
+# the versioned game modules: reproducible from any commit by hash, so
+# only the current deployable lives in the root and none are kept
+gamex86_64-*.so
