@@ -2478,23 +2478,30 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
  * view slew, the weave, the duel hold, the plan beam and telemetry --
  * and the frame ends in ClientThink.
  */
-void Think_Emit(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                       int team, qboolean carrying,
-                       const sg_weights_t *live, const sg_weights_t *w,
-                       const int *goal_field, const int *route_field,
-                       qboolean route_pure, int bestlink,
-                       qboolean precision, qboolean hold_post,
-                       qboolean rally_hold, qboolean rail_hold,
-                       int rail_seed, int rail_client, float rail_dose,
-                       float post_yaw, float post_sight,
-                       qboolean duel, vec3_t duel_org, float duel_want,
-                       float duel_expo, vec3_t move_dir, float view_yaw,
-                       float view_pitch, qboolean have_move,
-                       qboolean open_ahead, qboolean run_link,
-                       int door_hold, edict_t *door_ent,
-                       qboolean drop_yaw_locked, float drop_yaw,
-                       qboolean hook_brake, usercmd_t *cmd)
+void Think_Emit(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 {
+	/* the former parameter list, unpacked from the think context so the
+	 * body below reads exactly as it did when these arrived as arguments;
+	 * cmd stays a real parameter until the whole frame speaks context.
+	 * Seventeen former parameters -- half the interface -- were never
+	 * read by this body and have no unpack. */
+	edict_t *e = tc->e;
+	sg_role_t role = tc->role;
+	int team = tc->team;
+	const int *goal_field = tc->goal_field;
+	const int *route_field = tc->route_field;
+	int bestlink = tc->bestlink;
+	qboolean precision = tc->precision;
+	qboolean duel = tc->duel;
+	vec_t *move_dir = tc->move_dir;
+	float view_yaw = tc->view_yaw;
+	float view_pitch = tc->view_pitch;
+	qboolean have_move = tc->have_move;
+	qboolean open_ahead = tc->open_ahead;
+	qboolean run_link = tc->run_link;
+	int door_hold = tc->door_hold;
+	qboolean drop_yaw_locked = tc->drop_yaw_locked;
+
 	vec3_t basis_fwd, basis_right;
 	int sub_steps = 1, sub_msec = 0;
 	float slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;

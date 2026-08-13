@@ -1101,39 +1101,20 @@ void SG_BotThink(sg_bot_t *bot)
 	edict_t *e = bot->ent;
 	usercmd_t cmd;
 	const int *goal_field, *support = NULL, *intercept = NULL;
-	const int *route_field;
-	qboolean route_pure;
-	const sg_weights_t *w;
 	sg_role_t role;
 	int team, bestlink = -1;
 	qboolean carrying;
 
-	/* movement policy state for this frame */
-	vec3_t		move_dir;                   /* heading the route wants */
-	float		view_yaw = 0.0f, view_pitch = 0.0f;
-	qboolean	have_move = false;          /* a direction to travel at all */
-	qboolean	open_ahead = false;         /* room in front to hop into */
-	qboolean	run_link = false;           /* chosen link is ground running */
+	/* the few frame terms still born outside the context: the seeds the
+	 * stages take through it, and the one flow flag read here */
 	qboolean	precision = false;          /* final approach: no tricks */
 	qboolean	hold_post = false;          /* defender at its stand: guard */
 	qboolean	rally_hold = false;         /* attacker waiting for a partner */
 	qboolean	think_over;                 /* a stage ended the frame */
-	qboolean	rail_hold = false;          /* waiting out a railer's reload */
-	int			rail_seed = -1;             /* where that railer is believed */
-	int			rail_client = -1;           /* and who he is */
-	float		rail_dose = 0.0f;           /* the cover surcharge, role-scaled */
 	float		post_yaw = 0.0f;            /* facing the likeliest approach */
 	float		post_sight = -1.0f;         /* clear distance down that facing;
 	                                         * WEAPONS.md 2.4-D3 picks the
 	                                         * pre-held weapon from it */
-	sg_weights_t	live;                   /* the role row, modulated by state */
-	int			door_hold = 0;              /* rotating door ahead: 1 stand,
-	                                         * 2 back out of its swing arc */
-	edict_t		*door_ent = NULL;           /* which door is being waited on */
-	qboolean	drop_yaw_locked = false;    /* executing a drop: no fan */
-	float		drop_yaw = 0.0f;
-	qboolean	hook_brake = false;         /* slow to the proof's standing
-	                                         * start before firing a rope */
 
 	/* the duel terms, read once per frame and priced per candidate seed */
 	qboolean	duel = false;               /* combat has a live or fresh target */
@@ -1180,9 +1161,6 @@ void SG_BotThink(sg_bot_t *bot)
 
 	Think_LiveWeights(bot, &tc);    /* fills tc.live */
 	tc.w = &tc.live;
-	live = tc.live;                 /* local mirrors for stages not yet
-	                                 * speaking context */
-	w = &live;
 
 	tc.support = support;
 	tc.intercept = intercept;
@@ -1190,8 +1168,6 @@ void SG_BotThink(sg_bot_t *bot)
 	Think_Objective(bot, &tc);
 
 	goal_field = tc.goal_field;
-	route_field = tc.route_field;
-	route_pure = tc.route_pure;
 
 
 	rally_hold = Think_ApproachBand(bot, &tc);
@@ -1246,11 +1222,6 @@ void SG_BotThink(sg_bot_t *bot)
 
 	bestlink = Think_PickLink(bot, &tc);
 
-	rail_seed = tc.rail_seed;
-	rail_client = tc.rail_client;
-	rail_dose = tc.rail_dose;
-	rail_hold = tc.rail_hold;
-
 	/* the context already holds PickLink's results; seed the in/out terms
 	 * CommitLink owns and read every one back for the stages below */
 	tc.think_over = false;
@@ -1260,12 +1231,7 @@ void SG_BotThink(sg_bot_t *bot)
 
 	bestlink = Think_CommitLink(bot, &tc, &cmd);
 
-	rally_hold = tc.rally_hold;
-	rail_hold = tc.rail_hold;
 	think_over = tc.think_over;
-	hold_post = tc.hold_post;
-	post_yaw = tc.post_yaw;
-	post_sight = tc.post_sight;
 	if (think_over)
 		return;
 	/*
@@ -1277,36 +1243,15 @@ void SG_BotThink(sg_bot_t *bot)
 	 * base; a bot that stands still because its database has a hole is not
 	 * descending a surface, it is worshipping a graph.
 	 */
-	/* the movement inputs the context does not yet hold at this point */
+	/* the context already holds every movement input except the frame's
+	 * view seed; bestlink re-loads because CommitLink may have overridden
+	 * the picker's choice through its return value */
 	tc.bestlink = bestlink;
-	tc.hold_post = hold_post;
-	tc.rally_hold = rally_hold;
-	tc.rail_hold = rail_hold;
-	tc.post_yaw = post_yaw;
-	tc.post_sight = post_sight;
-	tc.view_yaw = view_yaw;
-	tc.view_pitch = view_pitch;
+	tc.view_yaw = 0.0f;
+	tc.view_pitch = 0.0f;
 
 	Think_Move(bot, &tc, &cmd);
-
-	VectorCopy(tc.move_dir, move_dir);
-	view_yaw = tc.view_yaw;
-	view_pitch = tc.view_pitch;
-	have_move = tc.have_move;
-	open_ahead = tc.open_ahead;
-	run_link = tc.run_link;
-	door_hold = tc.door_hold;
-	door_ent = tc.door_ent;
-	drop_yaw_locked = tc.drop_yaw_locked;
-	drop_yaw = tc.drop_yaw;
-	hook_brake = tc.hook_brake;
-	Think_Emit(bot, e, role, team, carrying, &live, w, goal_field,
-	           route_field, route_pure, bestlink, precision, hold_post,
-	           rally_hold, rail_hold, rail_seed, rail_client, rail_dose,
-	           post_yaw, post_sight, duel, duel_org, duel_want,
-	           duel_expo, move_dir, view_yaw, view_pitch, have_move,
-	           open_ahead, run_link, door_hold, door_ent,
-	           drop_yaw_locked, drop_yaw, hook_brake, &cmd);
+	Think_Emit(bot, &tc, &cmd);
 }
 
 
