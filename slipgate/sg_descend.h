@@ -15,18 +15,9 @@ extern unsigned char *sg_human_escape;  /* the ESCAPEE's cut: only the flag */
 extern unsigned char *sg_def_post[2];
 extern unsigned char *sg_def_icept[2];
 
-int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                          int team, qboolean carrying,
-                          const sg_weights_t *live,
-                          const sg_weights_t *w,
-                          const int *goal_field, const int *route_field,
-                          qboolean route_pure, const int *support,
-                          const int *intercept, qboolean precision,
-                          qboolean duel, vec3_t duel_org, float duel_want,
-                          float duel_expo, qboolean rally_hold,
-                          float *bestval_out, float *incumbent_out,
-                          int *rail_seed_out, int *rail_client_out,
-                          float *rail_dose_out, qboolean *rail_hold_out);
+/* prices the link fan and picks the leg; reads its inputs from the think
+ * context and writes bestval/incumbent/rail_* results back into it */
+int Think_PickLink(sg_bot_t *bot, sg_think_t *tc);
 
 int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
                             int team, qboolean carrying,

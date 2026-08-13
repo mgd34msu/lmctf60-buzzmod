@@ -322,6 +322,13 @@ typedef struct sg_think_s {
 	sg_role_t		role;
 	int				team, bestlink;
 	float			bestval, incumbent_v;
+	/* the pricing terms, resolved once per frame where the link fan is
+	 * priced; the sg_cur_* globals in sg_price.h mirror these for any
+	 * consumer not yet handed the context */
+	const int		*danger;
+	qboolean		push;
+	int				health;
+	float			mega;
 	qboolean		carrying;
 	vec3_t			move_dir;
 	float			view_yaw, view_pitch;

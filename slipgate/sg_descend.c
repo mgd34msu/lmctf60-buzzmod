@@ -83,19 +83,26 @@ static float Duel_Price(edict_t *e, vec3_t seed_org, vec3_t enemy_org,
  * the next commitment. Returns the chosen link; emits the values the
  * later stages read.
  */
-int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                          int team, qboolean carrying,
-                          const sg_weights_t *live,
-                          const sg_weights_t *w,
-                          const int *goal_field, const int *route_field,
-                          qboolean route_pure, const int *support,
-                          const int *intercept, qboolean precision,
-                          qboolean duel, vec3_t duel_org, float duel_want,
-                          float duel_expo, qboolean rally_hold,
-                          float *bestval_out, float *incumbent_out,
-                          int *rail_seed_out, int *rail_client_out,
-                          float *rail_dose_out, qboolean *rail_hold_out)
+int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 {
+	/* the former parameter list, unpacked from the think context so the
+	 * body below reads exactly as it did when these arrived as arguments.
+	 * Four of the old parameters -- carrying, live, precision, rally_hold
+	 * -- turned out never to be read by this body and have no unpack. */
+	edict_t *e = tc->e;
+	sg_role_t role = tc->role;
+	int team = tc->team;
+	const sg_weights_t *w = tc->w;
+	const int *goal_field = tc->goal_field;
+	const int *route_field = tc->route_field;
+	qboolean route_pure = tc->route_pure;
+	const int *support = tc->support;
+	const int *intercept = tc->intercept;
+	qboolean duel = tc->duel;
+	vec_t *duel_org = tc->duel_org;
+	float duel_want = tc->duel_want;
+	float duel_expo = tc->duel_expo;
+
 	int bestlink = -1;
 	int li;
 	vec3_t d;
@@ -175,6 +182,11 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	/* downbeat live: attackers march, detours wait for the next bar */
 	sg_cur_push = (role == SG_ROLE_ATTACK &&
 	               SG_TimerPending(sg_push_until[SG_TeamIdx(team)]));
+	/* the same terms ride the think context; the globals above stay as
+	 * mirrors for consumers not yet handed it */
+	tc->danger = sg_cur_danger;
+	tc->push = sg_cur_push;
+	tc->health = sg_cur_health;
 	sg_route_pure_now = route_pure;
 
 	/*
@@ -1118,12 +1130,13 @@ int Think_PickLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 	}
 	}       /* anti-linger scope */
 
-	*bestval_out = bestval;
-	*incumbent_out = incumbent_v;
-	*rail_seed_out = rail_seed;
-	*rail_client_out = rail_client;
-	*rail_dose_out = rail_dose;
-	*rail_hold_out = rail_hold;
+	tc->bestval = bestval;
+	tc->incumbent_v = incumbent_v;
+	tc->rail_seed = rail_seed;
+	tc->rail_client = rail_client;
+	tc->rail_dose = rail_dose;
+	tc->rail_hold = rail_hold;
+	tc->bestlink = bestlink;
 	return bestlink;
 }
 

@@ -1143,6 +1143,10 @@ void SG_BotThink(sg_bot_t *bot)
 	float		duel_want = 0.0f;           /* range the weapon in hand wants */
 	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
 
+	/* the think context: the container these frame locals are migrating
+	 * into, loaded before each converted stage and read back after */
+	sg_think_t	tc;
+
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 100;
 
@@ -1215,13 +1219,37 @@ void SG_BotThink(sg_bot_t *bot)
 	if (role != SG_ROLE_CARRY)
 		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
 
-	/* descend the surface: my seed vs every seed one proven link away */
-	bestlink = Think_PickLink(bot, e, role, team, carrying, &live, w,
-	                          goal_field, route_field, route_pure,
-	                          support, intercept, precision, duel,
-	                          duel_org, duel_want, duel_expo, rally_hold,
-	                          &bestval, &incumbent_v, &rail_seed,
-	                          &rail_client, &rail_dose, &rail_hold);
+	/* descend the surface: my seed vs every seed one proven link away.
+	 * PickLink reads the think context; these locals are migrating into
+	 * it stage by stage, so the context is loaded from them here and the
+	 * results read back below until every stage speaks context natively. */
+	tc.e = e;
+	tc.role = role;
+	tc.team = team;
+	tc.carrying = carrying;
+	tc.live = live;
+	tc.w = &tc.live;        /* w aliased &live at this site; the copy keeps
+	                         * the same aliasing inside the context */
+	tc.goal_field = goal_field;
+	tc.route_field = route_field;
+	tc.route_pure = route_pure;
+	tc.support = support;
+	tc.intercept = intercept;
+	tc.precision = precision;
+	tc.duel = duel;
+	VectorCopy(duel_org, tc.duel_org);
+	tc.duel_want = duel_want;
+	tc.duel_expo = duel_expo;
+	tc.rally_hold = rally_hold;
+
+	bestlink = Think_PickLink(bot, &tc);
+
+	bestval = tc.bestval;
+	incumbent_v = tc.incumbent_v;
+	rail_seed = tc.rail_seed;
+	rail_client = tc.rail_client;
+	rail_dose = tc.rail_dose;
+	rail_hold = tc.rail_hold;
 
 	think_over = false;
 	bestlink = Think_CommitLink(bot, e, role, team, carrying, &live, w,
