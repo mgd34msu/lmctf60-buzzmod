@@ -2,6 +2,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 int SG_TeamIdx(int team)
 {
@@ -56,7 +57,7 @@ qboolean SG_CanSee(edict_t *e, const vec3_t pt, float lift_z)
 	eye[2] += e->viewheight;
 	VectorCopy(pt, tgt);
 	tgt[2] += lift_z;
-	tr = gi.trace(eye, NULL, NULL, tgt, e, MASK_OPAQUE);
+	tr = sg_host.trace(eye, NULL, NULL, tgt, e, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
 

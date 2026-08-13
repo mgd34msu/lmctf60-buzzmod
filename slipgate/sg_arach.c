@@ -42,6 +42,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
@@ -457,6 +458,8 @@ static void Air_Build(void)
 
 qboolean SG_LevelSetup(void)
 {
+	SG_HooksInit();     /* the host table, before any module reaches out */
+
 	if (sg_rune && Q_stricmp(sg_rune_map, level.mapname) == 0)
 		return true;
 
