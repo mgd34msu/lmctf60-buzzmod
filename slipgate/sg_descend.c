@@ -187,6 +187,12 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	tc->danger = sg_cur_danger;
 	tc->push = sg_cur_push;
 	tc->health = sg_cur_health;
+	/* mega is the one pricing term this stage does not set: Mega_Worth
+	 * (sg_goal.c) writes sg_cur_mega earlier in the frame, before the
+	 * descent runs, so the context picks it up from the global here
+	 * rather than computing it -- the same read-once-per-frame shape as
+	 * the mirrors above, just sourced the other direction. */
+	tc->mega = sg_cur_mega;
 	sg_route_pure_now = route_pure;
 
 	/*
@@ -768,7 +774,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		if (sg_human_live &&
 		    sg_cv.flagprior->value &&
-		    sg_cur_role != SG_ROLE_CARRY &&
+		    tc->role != SG_ROLE_CARRY &&
 		    (sg_caco_team_belief.flag[0].state == SG_FLAG_ASTRAY ||
 		     sg_caco_team_belief.flag[1].state == SG_FLAG_ASTRAY))
 			/* the cvar IS the dose. Wave 214 (dose 2): carrier route
@@ -788,7 +794,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * sequencing: defenders price steps toward high-dwell seeds
 		 * cheaper (their team's plane), same idiom as every prior.
 		 */
-		if (sg_cur_role == SG_ROLE_DEFEND &&
+		if (tc->role == SG_ROLE_DEFEND &&
 		    sg_def_post[SG_TeamIdx(team)] &&
 		    sg_cv.defpost->value > 0)
 			v -= 1.5f * sg_cv.defpost->value *
@@ -804,7 +810,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * toward the corpus's learned cut-off seeds while our flag
 		 * is astray. Direct chase is 8% of human responses.
 		 */
-		if (sg_cur_role == SG_ROLE_DEFEND &&
+		if (tc->role == SG_ROLE_DEFEND &&
 		    sg_def_icept[SG_TeamIdx(team)] &&
 		    sg_caco_team_belief.flag[SG_TeamIdx(team)].state == SG_FLAG_ASTRAY &&
 		    sg_cv.defreact->value > 0)
@@ -821,7 +827,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * other priors (1.5ms per tier point per dose).
 		 */
 		if (sg_human_escape &&
-		    sg_cur_role == SG_ROLE_CARRY &&
+		    tc->role == SG_ROLE_CARRY &&
 		    sg_cv.escapeprior->value > 0)
 			v -= 1.5f * sg_cv.escapeprior->value *
 			     (float)sg_human_escape[li];
@@ -837,7 +843,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * same book as the carrier's, applied to the attacker against
 		 * every fresh eye sighting near the target stand.
 		 */
-		if (sg_cur_role == SG_ROLE_ATTACK &&
+		if (tc->role == SG_ROLE_ATTACK &&
 		    sg_cv.approachcover->value > 0)
 		{
 			int acs;
@@ -920,7 +926,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * cvar's value in ms extra. One trace per candidate, against
 		 * the one sighting that matters most.
 		 */
-		if (sg_cur_role == SG_ROLE_CARRY &&
+		if (tc->role == SG_ROLE_CARRY &&
 		    sg_cv.carrycover->value > 0)
 		{
 			int			cs, best_cs = -1;
