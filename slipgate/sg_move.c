@@ -658,7 +658,7 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
  * lookahead and pursuit, doors, drops, and the hook brake. Emits the
  * movement policy the command stage executes.
  */
-void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
+void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context so the
 	 * body below reads exactly as it did when these arrived as arguments;
@@ -666,6 +666,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 	 * Eight former parameters -- carrying, live, w, route_pure,
 	 * post_sight, duel_org, duel_want, duel_expo -- were never read by
 	 * this body and have no unpack. */
+	usercmd_t *cmd = &tc->cmd;
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
 	int team = tc->team;
@@ -2478,13 +2479,14 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
  * view slew, the weave, the duel hold, the plan beam and telemetry --
  * and the frame ends in ClientThink.
  */
-void Think_Emit(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
+void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context so the
 	 * body below reads exactly as it did when these arrived as arguments;
 	 * cmd stays a real parameter until the whole frame speaks context.
 	 * Seventeen former parameters -- half the interface -- were never
 	 * read by this body and have no unpack. */
+	usercmd_t *cmd = &tc->cmd;
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
 	int team = tc->team;

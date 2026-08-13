@@ -1142,11 +1142,12 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
  * see-the-flag terminal overrides, the clean grab, the defender post,
  * and the rail hold. Returns the link the body will actually ride.
  */
-int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
+int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context; cmd
 	 * stays a real parameter until the movement stage speaks context.
 	 * The six in/out pointers became direct context access in the body. */
+	usercmd_t *cmd = &tc->cmd;
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
 	int team = tc->team;

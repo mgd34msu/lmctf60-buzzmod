@@ -1098,7 +1098,6 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
-	usercmd_t cmd;
 	const int *goal_field, *support = NULL, *intercept = NULL;
 	sg_role_t role;
 	int team, bestlink = -1;
@@ -1125,10 +1124,10 @@ void SG_BotThink(sg_bot_t *bot)
 	 * into, loaded before each converted stage and read back after */
 	sg_think_t	tc;
 
-	memset(&cmd, 0, sizeof(cmd));
-	cmd.msec = 100;
+	memset(&tc.cmd, 0, sizeof(tc.cmd));
+	tc.cmd.msec = 100;
 
-	if (Think_Dead(bot, e, &cmd))
+	if (Think_Dead(bot, e, &tc.cmd))
 		return;
 	Think_RespawnEdge(bot, e);
 	bot->death_taught = false;
@@ -1179,7 +1178,7 @@ void SG_BotThink(sg_bot_t *bot)
 	Think_TrackSeed(bot, e, team);
 	if (bot->seed < 0)
 	{
-		ClientThink(e, &cmd);
+		ClientThink(e, &tc.cmd);
 		return;
 	}
 
@@ -1228,7 +1227,7 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.post_yaw = post_yaw;
 	tc.post_sight = post_sight;
 
-	bestlink = Think_CommitLink(bot, &tc, &cmd);
+	bestlink = Think_CommitLink(bot, &tc);
 
 	think_over = tc.think_over;
 	if (think_over)
@@ -1249,8 +1248,8 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.view_yaw = 0.0f;
 	tc.view_pitch = 0.0f;
 
-	Think_Move(bot, &tc, &cmd);
-	Think_Emit(bot, &tc, &cmd);
+	Think_Move(bot, &tc);
+	Think_Emit(bot, &tc);
 }
 
 

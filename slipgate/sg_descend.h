@@ -21,6 +21,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc);
 
 /* holds or releases the committed leg; context in, context out, cmd stays
  * a parameter until the movement stage speaks context */
-int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd);
+int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc);
 
 #endif /* SG_DESCEND_H */
