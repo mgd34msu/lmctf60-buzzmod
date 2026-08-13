@@ -157,10 +157,15 @@ static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
  * everything an attacker decides between two and five seconds out.
  * Returns whether the bot holds its ground waiting on a partner.
  */
-qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
-                                   sg_role_t role, int team,
-                                   const int *goal_field)
+qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 {
+	/* the former parameter list, unpacked from the think context so the
+	 * body below reads exactly as it did when these arrived as arguments */
+	edict_t *e = tc->e;
+	sg_role_t role = tc->role;
+	int team = tc->team;
+	const int *goal_field = tc->goal_field;
+
 	qboolean hold = false;
 
 	/*
@@ -579,9 +584,15 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
  * verbatim): the fitted role row modulated by this bot's state -- combat
  * worths, the rune-threat bump, the patrol appetite.
  */
-void Think_LiveWeights(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                              int team, sg_weights_t *live)
+void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 {
+	/* the former parameter list, unpacked from the think context; the
+	 * live row is written straight into the context's copy */
+	edict_t *e = tc->e;
+	sg_role_t role = tc->role;
+	int team = tc->team;
+	sg_weights_t *live = &tc->live;
+
 	/*
 	 * The role row is a BIAS, not an absolute. What an item is actually worth
 	 * to THIS bot right now -- health as its own health drops, armour by

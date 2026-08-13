@@ -12,8 +12,8 @@ extern float sg_push_until[2];     /* the conductor's window (sg_wavepush) */
 extern int sg_escape_count[2][SG_ESC_BUCKETS];  /* [0]=red flag stolen, [1]=blue */
 extern int sg_escape_total[2];                  /* 0 = no prior for that flag */
 
-void Think_LiveWeights(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                              int team, sg_weights_t *live);
+/* fills the frame's live weight row in the context */
+void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);
 
 void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
                                 sg_role_t role, int team,
@@ -26,8 +26,7 @@ void Think_InterceptField(sg_role_t role, int team,
                                  const int **support_out,
                                  const int **intercept_out);
 
-qboolean Think_ApproachBand(sg_bot_t *bot, edict_t *e,
-                                   sg_role_t role, int team,
-                                   const int *goal_field);
+/* decides whether the attacker waits for a partner; context in */
+qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc);
 
-#endif
+#endif /* SG_GOAL_H */

@@ -1171,18 +1171,19 @@ void SG_BotThink(sg_bot_t *bot)
 
 	Think_CarryBookends(bot, e, role, team, carrying);
 
-	Think_LiveWeights(bot, e, role, team, &live);
-	w = &live;
-
-	/* the context carries the stage contract from here down; inputs are
-	 * loaded as they are born, results read back for unconverted stages */
+	/* the context carries the stage contract from here down; the frame
+	 * identity loads first, each stage adds what it resolves */
 	tc.e = e;
 	tc.role = role;
 	tc.team = team;
 	tc.carrying = carrying;
-	tc.live = live;
-	tc.w = &tc.live;        /* w aliased &live here; the copy keeps the
-	                         * same aliasing inside the context */
+
+	Think_LiveWeights(bot, &tc);    /* fills tc.live */
+	tc.w = &tc.live;
+	live = tc.live;                 /* local mirrors for stages not yet
+	                                 * speaking context */
+	w = &live;
+
 	tc.support = support;
 	tc.intercept = intercept;
 
@@ -1193,7 +1194,7 @@ void SG_BotThink(sg_bot_t *bot)
 	route_pure = tc.route_pure;
 
 
-	rally_hold = Think_ApproachBand(bot, e, role, team, goal_field);
+	rally_hold = Think_ApproachBand(bot, &tc);
 
 	Think_InterceptField(role, team, &support, &intercept);
 
