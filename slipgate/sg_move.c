@@ -921,6 +921,30 @@ void Think_Move(sg_bot_t *bot, edict_t *e, sg_role_t role,
 						{
 							SG_TimerArm(&bot->hookban_until, 20.0f);
 							bot->hookfail_streak = 0;
+							/*
+							 * Arming the hook ban releases any committed
+							 * leg that needs the hook, so the pricing skip
+							 * can take effect at the next replan.
+							 * Think_CommitLink (sg_descend.c) holds a
+							 * chosen link across frames until it arrives,
+							 * overachieves, times out, or gets shelved --
+							 * none of which fires just because a rope got
+							 * banned this frame. Left holding a hook leg,
+							 * the router keeps re-affirming the same
+							 * banned link every think and the body has
+							 * nothing left it is allowed to execute: it
+							 * stands at the anchor point for the length of
+							 * the ban. Clearing the commitment through the
+							 * same field a finished ride clears (commit_link
+							 * = -1) forces a fresh pick next think, and the
+							 * RL_HOOK skip already in the pricing loop
+							 * steers that pick onto a walking route.
+							 */
+							if (bot->commit_link >= 0 &&
+							    bot->commit_link < SG_Rune()->hdr.num_links &&
+							    SG_Rune()->links[bot->commit_link].action ==
+							        RL_HOOK)
+								bot->commit_link = -1;
 							if (sg_cv.debug->value)
 								gi.dprintf("HOOKBAN %s 20s\n",
 								           e->client->pers.netname);
