@@ -8,6 +8,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
 #include "g_ctffunc.h"
+#include "slipgate/sg_bot.h"        /* sg_think_t -- the pricing context */
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_util.h"
 
@@ -72,7 +73,7 @@ int sg_cur_health;           /* pricing bot's health (dose gates) */
 float sg_cur_mega;           /* this bot's overheal worth this frame,
                                      * 0 = no mega detour on offer */
 
-float Detour_Value(int here, int cls, const int *goal_field,
+float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
                           float worth)
 {
 	int *ifld = sg_fields.item[cls];
@@ -116,7 +117,7 @@ float Detour_Value(int here, int cls, const int *goal_field,
 				detour = 0;      /* an item on the road is free, never a bonus */
 			v = worth / (1.0f + (float)detour / 1500.0f);
 			if (cls == SG_FC_RUNE)
-				v *= Rune_RoleFactor(sg_cur_role,
+				v *= Rune_RoleFactor(tc->role,
 				                     sg_fields.per_item_ent[cls][k]);
 			if (v > best)
 				best = v;
@@ -137,7 +138,7 @@ float Detour_Value(int here, int cls, const int *goal_field,
 	return worth / (1.0f + (float)to_item / 1500.0f);
 }
 
-float Mega_Detour(int here, const int *goal_field, int *out_ent)
+float Mega_Detour(sg_think_t *tc, int here, const int *goal_field, int *out_ent)
 {
 	float	best = 0.0f;
 	int		direct = goal_field[here];
@@ -167,7 +168,7 @@ float Mega_Detour(int here, const int *goal_field, int *out_ent)
 			detour = 0;         /* a pad on the road is free, never a bonus */
 		if (detour > SG_MEGA_MAXDETOUR)
 			continue;
-		v = sg_cur_mega / (1.0f + (float)detour / 1500.0f);
+		v = tc->mega / (1.0f + (float)detour / 1500.0f);
 		if (v > best)
 		{
 			best = v;
@@ -184,7 +185,7 @@ float Mega_Detour(int here, const int *goal_field, int *out_ent)
  * subtract because they add value. This is V(x | bot) from the design,
  * evaluated at the handful of seeds one step away.
  */
-float Surface_At(int seed, const sg_weights_t *w,
+float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
                         const int *goal_field, const int *support,
                         const int *intercept)
 {
@@ -203,7 +204,7 @@ float Surface_At(int seed, const sg_weights_t *w,
 	 * commitment, not routes. Trialed like everything else.
 	 */
 	v = w->objective * (float)goal_field[seed];
-	if (sg_cur_role == SG_ROLE_ATTACK)
+	if (tc->role == SG_ROLE_ATTACK)
 	{
 		float ao = sg_cv.atkobj->value / 100.0f;
 
@@ -218,10 +219,10 @@ float Surface_At(int seed, const sg_weights_t *w,
 	 * floor, 91% dead in 1.2s, zero steals -- removing a zero-yield room
 	 * cannot cost caps. Zero everywhere on flat-stand maps.
 	 */
-	if (sg_cur_role == SG_ROLE_ATTACK &&
+	if (tc->role == SG_ROLE_ATTACK &&
 	    sg_cv.shelfcost->value > 0.0f)
 	{
-		int ti9 = SG_TeamIdx(sg_cur_team);
+		int ti9 = SG_TeamIdx(tc->team);
 
 		if (sg_fields.shelf_cliff[ti9] &&
 		    sg_fields.shelf_cliff[ti9][seed] > 0)
@@ -248,25 +249,25 @@ float Surface_At(int seed, const sg_weights_t *w,
 	 * stands, the wall was the pricing; if they still wander, the
 	 * descent itself goes under the microscope.
 	 */
-	if (sg_cur_role == SG_ROLE_CARRY &&
+	if (tc->role == SG_ROLE_CARRY &&
 	    sg_cv.nakedcarry->value)
 		return v;
 
 	/* the danger dimension: learned, decayed, team-indexed (set by the
 	 * caller alongside sg_cur_role); zero where nothing has died */
-	if (sg_cur_danger && seed < SG_MAX_SEEDS)
-		v += (float)sg_cur_danger[seed];
+	if (tc->danger && seed < SG_MAX_SEEDS)
+		v += (float)tc->danger[seed];
 
 	for (c = 0; c < SG_FIELD_CLASSES; c++)
 		if (w->item[c] > 0.0f)
 			/* legcarrier dose 3: a healthy carrier does not shop --
 			 * humans never detour mid-carry (corpus: 310 u/s flat).
 			 * Hurt carriers keep the detour; health is worth a stop. */
-			v -= (sg_cur_push ||
-			      (sg_cur_role == SG_ROLE_CARRY && sg_cur_health > 60 &&
+			v -= (tc->push ||
+			      (tc->role == SG_ROLE_CARRY && tc->health > 60 &&
 			       sg_cv.legcarrier->value >= 3.0f))
 			     ? 0.0f :
-			     1500.0f * Detour_Value(seed, c, goal_field, w->item[c]);
+			     1500.0f * Detour_Value(tc, seed, c, goal_field, w->item[c]);
 
 	/*
 	 * THE MEGA (sg_megaworth). A separate term rather than a bend in the
@@ -281,8 +282,8 @@ float Surface_At(int seed, const sg_weights_t *w,
 	 * carrier does not shop, and a committed tactical waypoint was scored
 	 * with this term already in it.
 	 */
-	if (sg_cur_mega > 0.0f && sg_fields.mega_count > 0)
-		v -= 1500.0f * Mega_Detour(seed, goal_field, NULL);
+	if (tc->mega > 0.0f && sg_fields.mega_count > 0)
+		v -= 1500.0f * Mega_Detour(tc, seed, goal_field, NULL);
 
 	if (support && w->carrier_support > 0.0f && support[seed] < SG_FIELD_INF)
 	{
@@ -306,7 +307,7 @@ float Surface_At(int seed, const sg_weights_t *w,
 		 * role except the assigned escort, whose whole job it is.
 		 * 1.0 == today's behavior exactly.
 		 */
-		if (sg_cur_role != SG_ROLE_ESCORT)
+		if (tc->role != SG_ROLE_ESCORT)
 		{
 			cvar_t *lw = sg_cv.lonewolf;
 

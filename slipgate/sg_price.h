@@ -14,9 +14,11 @@ extern float		sg_cur_mega;
 extern int			sg_cur_role;   /* pricing bot role, frame-scoped */
 
 float	Rune_RoleFactor(int role, int entnum);
-float	Detour_Value(int seed, int fc, const int *goal_field, float wv);
-float	Mega_Detour(int seed, const int *goal_field, int *pad_out);
-float	Surface_At(int seed, const sg_weights_t *w, const int *goal,
-	           const int *support, const int *intercept);
+float	Detour_Value(sg_think_t *tc, int seed, int fc,
+	             const int *goal_field, float wv);
+float	Mega_Detour(sg_think_t *tc, int seed, const int *goal_field,
+	            int *pad_out);
+float	Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
+	           const int *goal, const int *support, const int *intercept);
 
 #endif

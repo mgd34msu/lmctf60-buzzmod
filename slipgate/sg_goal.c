@@ -1038,7 +1038,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		if (sg_cur_mega > 0.0f && !bot->mega_on && bot->seed >= 0)
 		{
 			int		pad = -1;
-			float	val = Mega_Detour(bot->seed, goal_field, &pad);
+			float	val = Mega_Detour(tc, bot->seed, goal_field, &pad);
 			float	det = (val > 0.0f)
 			              ? 1500.0f * (sg_cur_mega / val - 1.0f) : -1.0f;
 
@@ -1060,6 +1060,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			           e->client->pers.netname, bot->mega_hp, e->health);
 	}
 	bot->mega_on = (sg_cur_mega > 0.0f);
+	tc->mega = sg_cur_mega;   /* the settled worth rides the context */
 	bot->mega_hp = e->health;
 
 	bot->last_goalcost = (bot->seed >= 0 &&
@@ -1140,7 +1141,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				    goal_field[s10] > cur - 2500 ||
 				    goal_field[s10] < cur - 4500)
 					continue;
-				sv = Surface_At(s10, w, goal_field, support,
+				sv = Surface_At(tc, s10, w, goal_field, support,
 				                intercept);
 				if (sv < gv10)
 				{
@@ -1163,7 +1164,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				    goal_field[s10] > cur - 800 ||
 				    goal_field[s10] < cur - 2500)
 					continue;
-				sv = Surface_At(s10, w, goal_field, support,
+				sv = Surface_At(tc, s10, w, goal_field, support,
 				                intercept);
 				if (g2 >= 0 && g2_field[s10] < SG_FIELD_INF)
 					sv += 0.5f * (float)g2_field[s10];

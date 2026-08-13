@@ -224,7 +224,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		rail_client = -1;
 	}
 
-	bestval = Surface_At(bot->seed, w, route_field, support, intercept);
+	bestval = Surface_At(tc, bot->seed, w, route_field, support, intercept);
 	if (duel)
 		bestval += Duel_Price(e, SG_Rune()->seeds[bot->seed].origin, duel_org,
 		                      duel_want, duel_expo);
@@ -337,7 +337,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	for (li = SG_Rune()->first_link[bot->seed]; li >= 0; li = SG_Rune()->next_link[li])
 	{
 		rune_link_t *l = &SG_Rune()->links[li];
-		float v = Surface_At(l->to, w, route_field, support, intercept);
+		float v = Surface_At(tc, l->to, w, route_field, support, intercept);
 		int b;
 
 		if (linger_hot)
