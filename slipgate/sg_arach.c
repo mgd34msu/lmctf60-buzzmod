@@ -1106,8 +1106,6 @@ void SG_BotThink(sg_bot_t *bot)
 	const sg_weights_t *w;
 	sg_role_t role;
 	int team, bestlink = -1;
-	float bestval;
-	float incumbent_v = 1e30f;
 	qboolean carrying;
 
 	/* movement policy state for this frame */
@@ -1244,21 +1242,26 @@ void SG_BotThink(sg_bot_t *bot)
 
 	bestlink = Think_PickLink(bot, &tc);
 
-	bestval = tc.bestval;
-	incumbent_v = tc.incumbent_v;
 	rail_seed = tc.rail_seed;
 	rail_client = tc.rail_client;
 	rail_dose = tc.rail_dose;
 	rail_hold = tc.rail_hold;
 
-	think_over = false;
-	bestlink = Think_CommitLink(bot, e, role, team, carrying, &live, w,
-	                            goal_field, precision, duel, duel_org,
-	                            duel_want, duel_expo, bestval,
-	                            incumbent_v, rail_seed, rail_client,
-	                            rail_dose, bestlink, &cmd, &rally_hold,
-	                            &rail_hold, &think_over, &hold_post,
-	                            &post_yaw, &post_sight);
+	/* the context already holds PickLink's results; seed the in/out terms
+	 * CommitLink owns and read every one back for the stages below */
+	tc.think_over = false;
+	tc.hold_post = hold_post;
+	tc.post_yaw = post_yaw;
+	tc.post_sight = post_sight;
+
+	bestlink = Think_CommitLink(bot, &tc, &cmd);
+
+	rally_hold = tc.rally_hold;
+	rail_hold = tc.rail_hold;
+	think_over = tc.think_over;
+	hold_post = tc.hold_post;
+	post_yaw = tc.post_yaw;
+	post_sight = tc.post_sight;
 	if (think_over)
 		return;
 	/*

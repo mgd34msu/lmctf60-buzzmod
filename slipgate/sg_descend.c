@@ -1147,29 +1147,33 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
  * see-the-flag terminal overrides, the clean grab, the defender post,
  * and the rail hold. Returns the link the body will actually ride.
  */
-int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                            int team, qboolean carrying,
-                            const sg_weights_t *live,
-                            const sg_weights_t *w,
-                            const int *goal_field, qboolean precision,
-                            qboolean duel, vec3_t duel_org,
-                            float duel_want, float duel_expo,
-                            float bestval, float incumbent_v,
-                            int rail_seed, int rail_client,
-                            float rail_dose, int bestlink_in, usercmd_t *cmd,
-                            qboolean *rally_hold_io,
-                            qboolean *rail_hold_io,
-                            qboolean *think_over,
-                            qboolean *hold_post_out,
-                            float *post_yaw_io, float *post_sight_io)
+int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd)
 {
+	/* the former parameter list, unpacked from the think context; cmd
+	 * stays a real parameter until the movement stage speaks context.
+	 * The six in/out pointers became direct context access in the body. */
+	edict_t *e = tc->e;
+	sg_role_t role = tc->role;
+	int team = tc->team;
+	const sg_weights_t *w = tc->w;
+	const int *goal_field = tc->goal_field;
+	qboolean precision = tc->precision;
+	qboolean duel = tc->duel;
+	float bestval = tc->bestval;
+	float incumbent_v = tc->incumbent_v;
+	int rail_seed = tc->rail_seed;
+	int rail_client = tc->rail_client;
+	int bestlink_in = tc->bestlink;
+	/* six of the former parameters -- carrying, live, duel_org,
+	 * duel_want, duel_expo, rail_dose -- turned out never to be read by
+	 * this body and have no unpack */
 	int bestlink = bestlink_in;
 	int li;
-	qboolean rally_hold = *rally_hold_io;
-	qboolean rail_hold = *rail_hold_io;
+	qboolean rally_hold = tc->rally_hold;
+	qboolean rail_hold = tc->rail_hold;
 	qboolean hold_post = false;
-	float post_yaw = *post_yaw_io;
-	float post_sight = *post_sight_io;
+	float post_yaw = tc->post_yaw;
+	float post_sight = tc->post_sight;
 	vec3_t d;
 
 	/*
@@ -2129,7 +2133,7 @@ int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
 		           e->s.origin[1], e->s.origin[2]);
 		Cmd_Kill_f(e);
 		SG_Mark(&bot->wedge_since);
-		*think_over = true;
+		tc->think_over = true;
 		return bestlink;
 	}
 
@@ -2600,10 +2604,10 @@ no_hold:;
 	}
 
 
-	*rally_hold_io = rally_hold;
-	*rail_hold_io = rail_hold;
-	*hold_post_out = hold_post;
-	*post_yaw_io = post_yaw;
-	*post_sight_io = post_sight;
+	tc->rally_hold = rally_hold;
+	tc->rail_hold = rail_hold;
+	tc->hold_post = hold_post;
+	tc->post_yaw = post_yaw;
+	tc->post_sight = post_sight;
 	return bestlink;
 }

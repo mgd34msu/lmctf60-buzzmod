@@ -19,20 +19,8 @@ extern unsigned char *sg_def_icept[2];
  * context and writes bestval/incumbent/rail_* results back into it */
 int Think_PickLink(sg_bot_t *bot, sg_think_t *tc);
 
-int Think_CommitLink(sg_bot_t *bot, edict_t *e, sg_role_t role,
-                            int team, qboolean carrying,
-                            const sg_weights_t *live,
-                            const sg_weights_t *w,
-                            const int *goal_field, qboolean precision,
-                            qboolean duel, vec3_t duel_org,
-                            float duel_want, float duel_expo,
-                            float bestval, float incumbent_v,
-                            int rail_seed, int rail_client,
-                            float rail_dose, int bestlink_in, usercmd_t *cmd,
-                            qboolean *rally_hold_io,
-                            qboolean *rail_hold_io,
-                            qboolean *think_over,
-                            qboolean *hold_post_out,
-                            float *post_yaw_io, float *post_sight_io);
+/* holds or releases the committed leg; context in, context out, cmd stays
+ * a parameter until the movement stage speaks context */
+int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc, usercmd_t *cmd);
 
-#endif
+#endif /* SG_DESCEND_H */
