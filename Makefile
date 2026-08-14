@@ -31,6 +31,21 @@ RUNE_WIRE_TEST_OBJS := .sg_rune_wire_test.make.o \
 	.sg_rune_wire_under_test.make.o .sg_rune_wire_action_under_test.make.o \
 	.sg_rune_wire_crc_under_test.make.o
 RUNE_WIRE_TEST_DEPS := $(RUNE_WIRE_TEST_OBJS:.o=.d)
+RUNE_WRITER_TEST_BIN := sg_rune_writer_test.make
+RUNE_WRITER_TEST_OBJS := .sg_rune_writer_test.make.o \
+	.sg_rune_writer_under_test.make.o .sg_rune_wire_under_test.make.o \
+	.sg_rune_wire_action_under_test.make.o .sg_rune_wire_crc_under_test.make.o
+RUNE_WRITER_TEST_DEPS := $(RUNE_WRITER_TEST_OBJS:.o=.d)
+RUNE_INSTALL_TEST_BIN := sg_rune_install_test.make
+RUNE_INSTALL_TEST_OBJS := .sg_rune_install_test.make.o \
+	.sg_rune_install_under_test.make.o .sg_rune_writer_under_test.make.o \
+	.sg_rune_wire_under_test.make.o .sg_rune_wire_action_under_test.make.o \
+	.sg_rune_wire_crc_under_test.make.o
+RUNE_INSTALL_TEST_DEPS := $(RUNE_INSTALL_TEST_OBJS:.o=.d)
+RUNE_PROOF_TEST_BIN := sg_rune_proof_test.make
+RUNE_PROOF_TEST_OBJS := .sg_rune_proof_test.make.o \
+	.sg_rune_proof_under_test.make.o
+RUNE_PROOF_TEST_DEPS := $(RUNE_PROOF_TEST_OBJS:.o=.d)
 ENTFILE_TEST_BIN := g_entfile_path_test.make
 ENTFILE_TEST_OBJS := .g_entfile_path_test.make.o
 ENTFILE_TEST_DEPS := $(ENTFILE_TEST_OBJS:.o=.d)
@@ -65,6 +80,21 @@ HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_rune_wire_action_under_test.make.d \
 	.sg_rune_wire_crc_under_test.make.o \
 	.sg_rune_wire_crc_under_test.make.d \
+	sg_rune_writer_test.gnu sg_rune_writer_test.make \
+	.sg_rune_writer_test.gnu.o .sg_rune_writer_test.gnu.d \
+	.sg_rune_writer_under_test.gnu.o .sg_rune_writer_under_test.gnu.d \
+	.sg_rune_writer_test.make.o .sg_rune_writer_test.make.d \
+	.sg_rune_writer_under_test.make.o .sg_rune_writer_under_test.make.d \
+	sg_rune_install_test.gnu sg_rune_install_test.make \
+	.sg_rune_install_test.gnu.o .sg_rune_install_test.gnu.d \
+	.sg_rune_install_under_test.gnu.o .sg_rune_install_under_test.gnu.d \
+	.sg_rune_install_test.make.o .sg_rune_install_test.make.d \
+	.sg_rune_install_under_test.make.o .sg_rune_install_under_test.make.d \
+	sg_rune_proof_test.gnu sg_rune_proof_test.make \
+	.sg_rune_proof_test.gnu.o .sg_rune_proof_test.gnu.d \
+	.sg_rune_proof_under_test.gnu.o .sg_rune_proof_under_test.gnu.d \
+	.sg_rune_proof_test.make.o .sg_rune_proof_test.make.d \
+	.sg_rune_proof_under_test.make.o .sg_rune_proof_under_test.make.d \
 	g_entfile_path_test.gnu g_entfile_path_test.make \
 	.g_entfile_path_test.gnu.o .g_entfile_path_test.gnu.d \
 	.g_entfile_path_test.make.o .g_entfile_path_test.make.d
@@ -196,6 +226,9 @@ OBJS := \
 	sg_crc32.o \
 	sg_identity.o \
 	sg_rune_wire.o \
+	sg_rune_writer.o \
+	sg_rune_install.o \
+	sg_rune_proof.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
@@ -238,7 +271,8 @@ all: $(TARGET)
 
 default: all
 
-.PHONY: all default host-test action-test identity-test rune-wire-test entfile-test \
+.PHONY: all default host-test action-test identity-test rune-wire-test \
+	rune-writer-test rune-install-test rune-proof-test entfile-test \
 	snapshot-test clean strip FORCE
 
 FORCE:
@@ -278,6 +312,9 @@ $(OBJS): $(REVISION_HEADER)
 -include $(ACTION_TEST_DEPS)
 -include $(IDENTITY_TEST_DEPS)
 -include $(RUNE_WIRE_TEST_DEPS)
+-include $(RUNE_WRITER_TEST_DEPS)
+-include $(RUNE_INSTALL_TEST_DEPS)
+-include $(RUNE_PROOF_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
 
 %.o: %.c
@@ -317,6 +354,18 @@ $(IDENTITY_TEST_BIN): $(IDENTITY_TEST_OBJS)
 $(RUNE_WIRE_TEST_BIN): $(RUNE_WIRE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(RUNE_WIRE_TEST_OBJS) $(LIBS)
+
+$(RUNE_WRITER_TEST_BIN): $(RUNE_WRITER_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(RUNE_WRITER_TEST_OBJS) $(LIBS)
+
+$(RUNE_INSTALL_TEST_BIN): $(RUNE_INSTALL_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(RUNE_INSTALL_TEST_OBJS) $(LIBS)
+
+$(RUNE_PROOF_TEST_BIN): $(RUNE_PROOF_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(RUNE_PROOF_TEST_OBJS) $(LIBS)
 
 $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -371,6 +420,42 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_rune_writer_test.make.o: tests/sg_rune_writer_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_writer_under_test.make.o: slipgate/sg_rune_writer.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_install_test.make.o: tests/sg_rune_install_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_install_under_test.make.o: slipgate/sg_rune_install.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_proof_test.make.o: tests/sg_rune_proof_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_proof_under_test.make.o: slipgate/sg_rune_proof.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .g_entfile_path_test.make.o: tests/g_entfile_path_test.c g_entfile_path.h \
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -379,13 +464,17 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
-		$(RUNE_WIRE_TEST_BIN) \
+		$(RUNE_WIRE_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
+		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOST_TEST_BIN)
 	$(Q)./$(ACTION_TEST_BIN)
 	$(Q)./$(IDENTITY_TEST_BIN)
 	$(Q)./$(RUNE_WIRE_TEST_BIN)
+	$(Q)./$(RUNE_WRITER_TEST_BIN)
+	$(Q)./$(RUNE_INSTALL_TEST_BIN)
+	$(Q)./$(RUNE_PROOF_TEST_BIN)
 	$(Q)./$(ENTFILE_TEST_BIN)
 	$(Q)./$(ENGINE_SNAPSHOT_TEST)
 
@@ -400,6 +489,18 @@ identity-test: $(IDENTITY_TEST_BIN)
 rune-wire-test: $(RUNE_WIRE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(RUNE_WIRE_TEST_BIN)
+
+rune-writer-test: $(RUNE_WRITER_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(RUNE_WRITER_TEST_BIN)
+
+rune-install-test: $(RUNE_INSTALL_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(RUNE_INSTALL_TEST_BIN)
+
+rune-proof-test: $(RUNE_PROOF_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(RUNE_PROOF_TEST_BIN)
 
 entfile-test: $(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<

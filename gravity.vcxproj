@@ -354,6 +354,9 @@
     <ClCompile Include="slipgate\sg_crc32.c" />
     <ClCompile Include="slipgate\sg_identity.c" />
     <ClCompile Include="slipgate\sg_rune_wire.c" />
+    <ClCompile Include="slipgate\sg_rune_writer.c" />
+    <ClCompile Include="slipgate\sg_rune_install.c" />
+    <ClCompile Include="slipgate\sg_rune_proof.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_cvars.c" />
     <ClCompile Include="slipgate\sg_hooks.c" />
@@ -419,6 +422,9 @@
     <ClInclude Include="m_tank.h" />
     <ClInclude Include="p_stats.h" />
     <ClInclude Include="q_shared.h" />
+    <ClInclude Include="slipgate\sg_rune_writer.h" />
+    <ClInclude Include="slipgate\sg_rune_install.h" />
+    <ClInclude Include="slipgate\sg_rune_proof.h" />
     <ClInclude Include="ui_stats.h" />
     <ClInclude Include="ui_text.h" />
     <ClInclude Include="ui_layout.h" />

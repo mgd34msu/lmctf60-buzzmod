@@ -8,7 +8,7 @@ Integration target: `main` by fast-forward after the complete acceptance gate
 
 Git identity: `Mike Davis <mgd34msu@gmail.com>`
 
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 
 This is the working source of truth for correcting and extending SLIPGATE. It
 combines both approved scopes:
@@ -282,12 +282,28 @@ document is normative for implementation; this roadmap tracks its progress.
 - [ ] Version the new format explicitly; old loaders reject v3 and v3 loaders
       reject or deliberately regenerate incomplete v2 assets.
 - [ ] Bind a rune to map/BSP/entity identity rather than map name alone.
-- [ ] Store the actual proof law: gravity, air acceleration, maximum velocity,
+- [x] Store the actual proof law: gravity, air acceleration, maximum velocity,
       funky-gravity mode, cadence, and other action-relevant constants.
 - [ ] Generate under a map's actual supported physics and require runtime
       equality instead of globally hardcoding gravity 800.
 - [x] Use explicit little-endian field encoding or retain a compile-time
       compatibility guard with a documented migration path.
+
+Generator/writer status:
+
+- [x] Convert the pruned native graph to explicit v3 records without changing
+      seed or link order and reject every action without a complete supported
+      writer contract.
+- [x] Capture the authoritative BSP/entity identity and the map's active,
+      supported proof law before generation, use the captured gravity in every
+      nominal oracle placement, and revalidate both immediately before commit.
+- [x] Preflight the complete graph before opening a file, stream deterministic
+      header/seed/link fragments, verify the second-pass payload CRC, flush and
+      sync an exclusive same-directory temporary, and atomically rename only
+      after all fallible validation succeeds.
+- [ ] Cut the C loader and live runtime over to v3 identity/physics equality;
+      until then generated v3 files are inspection artifacts and the deployment
+      script remains deliberately on its v2 gate.
 
 ### Atomic compound mover actions
 
@@ -534,3 +550,17 @@ the commit, verification, corpus scope, and remaining blocker.
   legacy controller law and rejects registered-but-disabled actions. The
   generator and C loader remain deliberately on v2 until the next transactional
   writer/loader slices; compound controllers remain disabled.
+- 2026-08-14: The transactional v3 generator/writer slice is complete locally.
+  Generation now captures authoritative level identity and supported active
+  physics, scopes every nominal oracle placement to that exact gravity, adapts
+  the final graph to explicit 128/16/44-byte records, and installs through a
+  preflighted two-pass CRC stream plus exclusive temporary, file sync, final
+  authority recheck, and atomic rename. Both production builds, all integrated
+  host tests, strict/sanitizer failure matrices, contract/Python checks, and an
+  independent refutation pass are green. Exact patched-engine smokes produced a
+  clean gravity-650 `lmctf42` v3 rune (285 seeds, 7,619 links) and a clean
+  gravity-800 `lmctf03` v3 rune (980 seeds, 10,231 links); actual gravity-650
+  `lmctf07` completed proof before exposing its separate objective-core failure.
+  An unpatched engine refused twice without altering the existing destination
+  or leaving a temporary file. The C loader/runtime and sidecars remain the next
+  deliberately blocked v3 cutover.

@@ -223,6 +223,15 @@
     <ClCompile Include="slipgate\sg_rune_wire.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_writer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_install.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_proof.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_arach.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -388,6 +397,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="q_shared.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_writer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_install.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_proof.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ui_stats.h">

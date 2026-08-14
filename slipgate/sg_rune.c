@@ -25,12 +25,18 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_rune.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_identity.h"
+#include "slipgate/sg_rune_install.h"
+#include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_util.h"
-#include <errno.h>
 
 #define SEED_SPACING	64.0f
 #define SEED_MAX		RUNE_MAX_SEEDS
 #define LINK_MAX		RUNE_MAX_LINKS
+_Static_assert(SEED_MAX == SG_RUNE_V3_MAX_SEEDS,
+	"generator/v3 seed capacity drift");
+_Static_assert(LINK_MAX == SG_RUNE_V3_MAX_LINKS,
+	"generator/v3 link capacity drift");
 #define LINK_REACH		192.0f		/* run/jump pairs within this reach */
 #define HOOK_REACH		448.0f		/* hook pairs may span further */
 #define ARRIVE_RADIUS	40.0f
@@ -39,6 +45,9 @@
 #define DROP_APPROACH_LIMIT_MS 2500	/* reach the serialized lip on foot */
 #define DROP_TRAVEL_LIMIT_MS   2000	/* then complete the fall/landing */
 #define DROP_HANDOFF_RADIUS    8.0f	/* runtime's lip-to-walkoff handoff */
+
+_Static_assert(STEP_MSEC == SG_RUNE_PROOF_PMOVE_SUBSTEP_MS,
+	"generator/v3 pmove cadence drift");
 
 /* prover autopsy: where drop attempts actually die */
 static int dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact;
@@ -73,14 +82,179 @@ qboolean SG_RunePhysicsCompatible(void)
 	SG_HooksInit();
 	if (!airaccelerate)
 		airaccelerate = sg_host.cvar("sv_airaccelerate", "0", 0);
-	return sv_gravity && isfinite(sv_gravity->value) &&
-	       sv_gravity->value >= -32768.0f && sv_gravity->value <= 32767.0f &&
-	       (short)sv_gravity->value == (short)RUNE_PROOF_GRAVITY &&
+	return sv_gravity && SG_RuneV2GravityCompatible(sv_gravity->value) &&
 	       airaccelerate && isfinite(airaccelerate->value) &&
 	       airaccelerate->value == RUNE_PROOF_AIRACCELERATE &&
 	       sv_maxvelocity && isfinite(sv_maxvelocity->value) &&
 	       sv_maxvelocity->value >= RUNE_HOOK_BOLT_SPEED &&
 	       (!want_funky_gravity || want_funky_gravity->value == 0.0f);
+}
+
+typedef enum rune_v3_recheck_failure_e
+{
+	RUNE_V3_RECHECK_NONE = 0,
+	RUNE_V3_RECHECK_IDENTITY,
+	RUNE_V3_RECHECK_PROOF_LAW
+} rune_v3_recheck_failure_t;
+
+typedef struct rune_v3_authority_s
+{
+	sg_level_identity_t level;
+	sg_rune_v3_identity_t wire;
+	sg_identity_status_t identity_status;
+} rune_v3_authority_t;
+
+typedef struct rune_v3_recheck_s
+{
+	const char *mapname;
+	const rune_v3_authority_t *captured;
+	rune_v3_recheck_failure_t failure;
+	sg_identity_status_t identity_status;
+} rune_v3_recheck_t;
+
+typedef struct rune_v3_stream_s
+{
+	const sg_rune_v3_identity_t *identity;
+	const rune_seed_t *seeds;
+	uint32_t num_seeds;
+	const rune_link_t *links;
+	uint32_t num_links;
+	sg_rune_v3_workspace_t *workspace;
+} rune_v3_stream_t;
+
+static uint32_t Rune_V3FloatBits(float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
+
+static qboolean Rune_V3PhysicsCapture(const sg_level_identity_t *level_id,
+	sg_rune_v3_identity_t *wire_id)
+{
+	cvar_t *airaccelerate;
+	float gravity;
+
+	if (!level_id || !wire_id || !sg_host.cvar)
+		return false;
+	airaccelerate = sg_host.cvar("sv_airaccelerate", "0", 0);
+	gravity = sv_gravity ? sv_gravity->value : 0.0f;
+	if (!sv_gravity || !isfinite(gravity) ||
+	    gravity < (float)SG_RUNE_PROOF_GRAVITY_MIN ||
+	    gravity > (float)SG_RUNE_PROOF_GRAVITY_MAX ||
+	    (SG_RUNE_PROOF_GRAVITY_INTEGRAL_REQUIRED &&
+	     gravity != (float)(short)gravity) ||
+	    !airaccelerate || !isfinite(airaccelerate->value) ||
+	    (SG_RUNE_PROOF_AIRACCELERATE_ZERO_REQUIRED &&
+	     airaccelerate->value != 0.0f) ||
+	    !sv_maxvelocity || !isfinite(sv_maxvelocity->value) ||
+	    sv_maxvelocity->value < (float)SG_RUNE_PROOF_MAXVELOCITY_MIN ||
+	    !SG_RuneV3FunkyGravityCompatible(want_funky_gravity
+	        ? &want_funky_gravity->value : NULL) ||
+	    FRAMETIME !=
+	        (float)SG_RUNE_PROOF_SERVER_FRAME_MS / 1000.0f ||
+	    level_id->host_physics_id != SG_HOST_PHYSICS_EPOCH)
+		return false;
+
+	memset(wire_id, 0, sizeof(*wire_id));
+	memcpy(wire_id->map_name, level_id->mapname,
+		SG_RUNE_V3_MAP_NAME_BYTES);
+	wire_id->bsp_checksum = level_id->bsp_checksum;
+	wire_id->entity_crc32 = level_id->entity_crc32;
+	wire_id->physics_flags = SG_RUNE_PROOF_PHYSICS_FLAGS_SUPPORTED;
+	wire_id->gravity = gravity;
+	wire_id->airaccelerate = airaccelerate->value;
+	wire_id->maxvelocity = sv_maxvelocity->value;
+	wire_id->pmove_substep_ms = SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
+	wire_id->server_frame_ms = SG_RUNE_PROOF_SERVER_FRAME_MS;
+	wire_id->host_physics_id = level_id->host_physics_id;
+	return true;
+}
+
+static qboolean Rune_V3AuthorityCapture(const char *mapname,
+	rune_v3_authority_t *authority)
+{
+	if (!authority)
+		return false;
+	memset(authority, 0, sizeof(*authority));
+	authority->identity_status = SG_LevelIdentitySnapshot(mapname,
+		&authority->level);
+	if (authority->identity_status != SG_IDENTITY_OK)
+		return false;
+	return Rune_V3PhysicsCapture(&authority->level, &authority->wire);
+}
+
+static qboolean Rune_V3LevelIdentityEqual(const sg_level_identity_t *first,
+	const sg_level_identity_t *second)
+{
+	return first && second &&
+	       first->bsp_checksum == second->bsp_checksum &&
+	       first->entity_crc32 == second->entity_crc32 &&
+	       first->host_physics_id == second->host_physics_id &&
+	       memcmp(first->mapname, second->mapname,
+	           SG_LEVEL_IDENTITY_MAPNAME_BYTES) == 0;
+}
+
+static qboolean Rune_V3ProofLawEqual(const sg_rune_v3_identity_t *first,
+	const sg_rune_v3_identity_t *second)
+{
+	return first && second &&
+	       first->physics_flags == second->physics_flags &&
+	       Rune_V3FloatBits(first->gravity) ==
+	           Rune_V3FloatBits(second->gravity) &&
+	       Rune_V3FloatBits(first->airaccelerate) ==
+	           Rune_V3FloatBits(second->airaccelerate) &&
+	       Rune_V3FloatBits(first->maxvelocity) ==
+	           Rune_V3FloatBits(second->maxvelocity) &&
+	       first->pmove_substep_ms == second->pmove_substep_ms &&
+	       first->server_frame_ms == second->server_frame_ms;
+}
+
+static int Rune_V3Revalidate(void *context)
+{
+	rune_v3_recheck_t *recheck = context;
+	rune_v3_authority_t active;
+
+	if (!recheck || !recheck->captured)
+		return 0;
+	recheck->failure = RUNE_V3_RECHECK_NONE;
+	if (!SG_RuneProofScopeActive() ||
+	    (float)SG_RuneProofGravity() != recheck->captured->wire.gravity)
+	{
+		recheck->failure = RUNE_V3_RECHECK_PROOF_LAW;
+		return 0;
+	}
+	if (!Rune_V3AuthorityCapture(recheck->mapname, &active))
+	{
+		recheck->identity_status = active.identity_status;
+		recheck->failure = active.identity_status == SG_IDENTITY_OK
+			? RUNE_V3_RECHECK_PROOF_LAW : RUNE_V3_RECHECK_IDENTITY;
+		return 0;
+	}
+	if (!Rune_V3LevelIdentityEqual(&recheck->captured->level,
+	    &active.level))
+	{
+		recheck->failure = RUNE_V3_RECHECK_IDENTITY;
+		recheck->identity_status = SG_IDENTITY_UNAVAILABLE;
+		return 0;
+	}
+	if (!Rune_V3ProofLawEqual(&recheck->captured->wire, &active.wire))
+	{
+		recheck->failure = RUNE_V3_RECHECK_PROOF_LAW;
+		return 0;
+	}
+	return 1;
+}
+
+static sg_rune_write_result_t Rune_V3Stream(void *context,
+	sg_rune_write_sink_fn sink, void *sink_context)
+{
+	rune_v3_stream_t *stream = context;
+
+	return SG_RuneV3Write(stream->identity, stream->seeds,
+		stream->num_seeds, stream->links, stream->num_links,
+		stream->workspace, sink, sink_context);
 }
 
 static int Seed_HashKey(vec3_t p)
@@ -3545,13 +3719,13 @@ static void Prove_RocketJumps(void)
 	int i, j;
 	float ceiling = SG_OracleRocketJumpCeiling();
 
-	/* V2 has no serialized launch-state controller.  The old proof injected an
-	 * exact rest state and simultaneous rocket+jump, while live execution could
-	 * arm elsewhere in the seed cell and advance without confirming a shot.
+	/* No supported wire contract has a launch-state controller.  The old proof
+	 * injected an exact rest state and simultaneous rocket+jump, while live
+	 * execution could arm elsewhere in the seed cell and advance without
+	 * confirming a shot.
 	 * Keep the implementation available for a future versioned contract, but
 	 * write no RL_ROCKETJUMP records until generator and executor share one. */
-	sg_host.dprint("rune: rocket jumps disabled in v%d (unserialized launch state)\n",
-	               RUNE_VERSION);
+	sg_host.dprint("rune: rocket jumps disabled (unserialized launch state)\n");
 	return;
 
 	if (gen_num_seeds <= 0)
@@ -4081,26 +4255,74 @@ static void Doors_Restore(heldopen_t *held, int n)
 
 qboolean Rune_Generate(const char *mapname)
 {
-	rune_header_t hdr;
+	rune_v3_authority_t authority;
+	rune_v3_recheck_t recheck;
+	rune_v3_stream_t stream;
+	sg_rune_v3_workspace_t workspace;
+	sg_rune_install_result_t install_result;
+	const sg_rune_install_ops_t *install_ops;
+	uint64_t *link_keys = NULL;
+	uint8_t *source_marks = NULL;
+	char game_directory[MAX_OSPATH];
 	char path[MAX_OSPATH], tmp_path[MAX_OSPATH];
-	FILE *f = NULL;
 	heldopen_t held[128];
-	int ndoors;
-	qboolean write_ok;
-	unsigned int tmp_try;
-	cvar_t *gamedir = sg_host.cvar("gamedir", "", 0);
+	int ndoors = 0;
+	int directory_written;
+	qboolean scope_active = false;
+	qboolean generated = false;
+	cvar_t *game_directory_cvar;
+	const char *game_directory_source;
+	const char *canonical_mapname;
 
-	if (!SG_RunePhysicsCompatible())
+	SG_HooksInit();
+	if (!Rune_V3AuthorityCapture(mapname, &authority))
 	{
-		sg_host.dprint("rune: refusing generation: v%d proofs require "
-		               "sv_gravity %d, sv_airaccelerate 0, sv_maxvelocity >= 800, and "
-		               "want_funky_gravity 0\n",
-		               RUNE_VERSION, RUNE_PROOF_GRAVITY);
+		if (authority.identity_status != SG_IDENTITY_OK)
+			sg_host.dprint("rune: v3 generation refused stage=identity "
+			               "status=%d reason=%s\n",
+			               (int)authority.identity_status,
+			               SG_LevelIdentityReason(authority.identity_status));
+		else
+			sg_host.dprint("rune: v3 generation refused stage=proof-law "
+			               "reason=unsupported-active-law\n");
 		return false;
 	}
+	canonical_mapname = authority.level.mapname;
+	game_directory_cvar = sg_host.cvar("gamedir", "", 0);
+	game_directory_source = game_directory_cvar &&
+		game_directory_cvar->string && game_directory_cvar->string[0]
+		? game_directory_cvar->string : ".";
+	directory_written = snprintf(game_directory, sizeof(game_directory),
+		"%s", game_directory_source);
+	install_ops = SG_RuneInstallDefaultOps();
+	if (directory_written < 0 ||
+	    (size_t)directory_written >= sizeof(game_directory) ||
+	    !SG_RuneInstallDestinationPath(path, sizeof(path), game_directory,
+	        canonical_mapname) ||
+	    !SG_RuneInstallTemporaryPath(tmp_path, sizeof(tmp_path),
+	        game_directory, install_ops->process_id(install_ops->context), 0))
+	{
+		sg_host.dprint("rune: v3 generation refused stage=path "
+		               "reason=MAX_OSPATH\n");
+		return false;
+	}
+	if (!SG_RuneProofScopeBegin(authority.wire.gravity))
+	{
+		sg_host.dprint("rune: v3 generation refused stage=proof-scope "
+		               "reason=busy-or-invalid\n");
+		return false;
+	}
+	scope_active = true;
 
+	gen_seeds = NULL;
+	gen_links = NULL;
 	gen_seeds = sg_host.game_alloc(sizeof(rune_seed_t) * SEED_MAX);
 	gen_links = sg_host.game_alloc(sizeof(rune_link_t) * LINK_MAX);
+	if (!gen_seeds || !gen_links)
+	{
+		sg_host.dprint("rune: FAILED: generator allocation; graph was not written\n");
+		goto cleanup;
+	}
 	gen_num_seeds = 0;
 	gen_num_links = 0;
 	gen_seed_overflow = false;
@@ -4130,10 +4352,9 @@ qboolean Rune_Generate(const char *mapname)
 	if (ndoors < 0)
 	{
 		Doors_Restore(held, -ndoors);
+		ndoors = 0;
 		sg_host.dprint("rune: FAILED: more than 128 doors; graph was not written\n");
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
+		goto cleanup;
 	}
 	sg_host.dprint("rune: %d doors held open for proving\n", ndoors);
 
@@ -4148,10 +4369,9 @@ qboolean Rune_Generate(const char *mapname)
 	if (gen_num_seeds <= 0)
 	{
 		Doors_Restore(held, ndoors);
+		ndoors = 0;
 		sg_host.dprint("rune: FAILED: map produced no executable seeds\n");
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
+		goto cleanup;
 	}
 	/*
 	 * EXPOSURE, into the reserved field. area_hint has been written zero
@@ -4213,106 +4433,112 @@ qboolean Rune_Generate(const char *mapname)
 	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links,
 	           gen_waypoint_links);
 	Doors_Restore(held, ndoors);
+	ndoors = 0;
 	/* Objective ownership is resolved against the real, restored world.  Mark
 	 * every non-core geometry sample before writing so runtime localization and
 	 * the deployment linter share the same fail-closed topology contract. */
 	if (!Graph_PruneObjectiveCore())
-	{
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
-	}
-	if (gen_seed_overflow || gen_link_overflow || gen_water_overflow ||
-	    gen_num_seeds >= SEED_MAX || gen_num_links >= LINK_MAX)
+		goto cleanup;
+	/* SEED_MAX/LINK_MAX are inclusive v3 count limits.  Filling the final
+	 * allocated slot is legal; only an attempted insertion beyond it sets the
+	 * corresponding overflow flag and invalidates the graph. */
+	if (gen_seed_overflow || gen_link_overflow || gen_water_overflow)
 	{
 		sg_host.dprint("rune: FAILED: %s capacity exhausted; graph was not written\n",
-		               (gen_seed_overflow || gen_num_seeds >= SEED_MAX)
-		                   ? "seed" : "link");
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
+		               gen_seed_overflow ? "seed" :
+		               gen_water_overflow ? "water seed" : "link");
+		goto cleanup;
 	}
 	if (gen_num_links <= 0)
 	{
 		sg_host.dprint("rune: FAILED: no executable links were proven; graph was not written\n");
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
+		goto cleanup;
 	}
 
-	Com_sprintf(path, sizeof(path), "%s/maps/%s.rune",
-	            gamedir->string[0] ? gamedir->string : ".", mapname);
-	tmp_path[0] = '\0';
-	/* Never stream a new graph over the last known-good one.  A generator can
-	 * run for minutes; ENOSPC or a short write at the end must leave the old
-	 * asset intact and must not be reported as success.  The temporary lives
-	 * beside the destination so the final POSIX rename is atomic. */
-	for (tmp_try = 0; tmp_try < 64 && !f; tmp_try++)
+	if ((size_t)gen_num_links > (size_t)INT_MAX / sizeof(*link_keys) ||
+	    (size_t)gen_num_seeds > (size_t)INT_MAX / sizeof(*source_marks))
 	{
-		unsigned long pid;
-
-#ifdef _WIN32
-		pid = (unsigned long)GetCurrentProcessId();
-#else
-		pid = (unsigned long)getpid();
-#endif
-		Com_sprintf(tmp_path, sizeof(tmp_path), "%s/maps/.%s.rune.%lu.%u.tmp",
-		            gamedir->string[0] ? gamedir->string : ".", mapname,
-		            pid, tmp_try);
-		errno = 0;
-		f = fopen(tmp_path, "wbx");
-		if (!f && errno != EEXIST)
-			break;
+		sg_host.dprint("rune: FAILED: v3 writer workspace size overflow\n");
+		goto cleanup;
 	}
-	if (!f)
+	link_keys = sg_host.game_alloc((int)(sizeof(*link_keys) *
+		(size_t)gen_num_links));
+	source_marks = sg_host.game_alloc((int)(sizeof(*source_marks) *
+		(size_t)gen_num_seeds));
+	if (!link_keys || !source_marks)
 	{
-		sg_host.dprint("rune: cannot write temporary %s\n", tmp_path);
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
+		sg_host.dprint("rune: FAILED: v3 writer workspace allocation\n");
+		goto cleanup;
 	}
-
-	memset(&hdr, 0, sizeof(hdr));
-	hdr.magic = RUNE_MAGIC;
-	hdr.version = RUNE_VERSION;
-	hdr.num_seeds = gen_num_seeds;
-	hdr.num_links = gen_num_links;
-	strncpy(hdr.mapname, mapname, sizeof(hdr.mapname) - 1);
-
-	write_ok = fwrite(&hdr, sizeof(hdr), 1, f) == 1 &&
-	           fwrite(gen_seeds, sizeof(rune_seed_t), gen_num_seeds, f) ==
-	               (size_t)gen_num_seeds &&
-	           fwrite(gen_links, sizeof(rune_link_t), gen_num_links, f) ==
-	               (size_t)gen_num_links &&
-	           fflush(f) == 0;
-	if (fclose(f) != 0)
-		write_ok = false;
-	if (!write_ok)
+	memset(&workspace, 0, sizeof(workspace));
+	workspace.link_keys = link_keys;
+	workspace.link_key_capacity = (size_t)gen_num_links;
+	workspace.source_marks = source_marks;
+	workspace.source_mark_capacity = (size_t)gen_num_seeds;
+	memset(&stream, 0, sizeof(stream));
+	stream.identity = &authority.wire;
+	stream.seeds = gen_seeds;
+	stream.num_seeds = (uint32_t)gen_num_seeds;
+	stream.links = gen_links;
+	stream.num_links = (uint32_t)gen_num_links;
+	stream.workspace = &workspace;
+	memset(&recheck, 0, sizeof(recheck));
+	recheck.mapname = canonical_mapname;
+	recheck.captured = &authority;
+	recheck.identity_status = SG_IDENTITY_OK;
+	install_result = SG_RuneInstallV3(game_directory, canonical_mapname,
+		path, sizeof(path), tmp_path, sizeof(tmp_path), Rune_V3Stream,
+		&stream, Rune_V3Revalidate, &recheck, install_ops);
+	if (install_result.status != SG_RUNE_INSTALL_OK)
 	{
-		remove(tmp_path);
-		sg_host.dprint("rune: incomplete write; kept existing %s\n", path);
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
-	}
-#ifdef _WIN32
-	if (!MoveFileExA(tmp_path, path,
-	                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-#else
-	if (rename(tmp_path, path) != 0)
-#endif
-	{
-		remove(tmp_path);
-		sg_host.dprint("rune: cannot install temporary graph as %s\n", path);
-		sg_host.game_free(gen_seeds);
-		sg_host.game_free(gen_links);
-		return false;
+		if (install_result.status == SG_RUNE_INSTALL_REVALIDATE_FAILED)
+		{
+			if (recheck.failure == RUNE_V3_RECHECK_IDENTITY)
+				sg_host.dprint("rune: v3 revalidation failed "
+				               "kind=identity status=%d reason=%s\n",
+				               (int)recheck.identity_status,
+				               SG_LevelIdentityReason(recheck.identity_status));
+			else
+				sg_host.dprint("rune: v3 revalidation failed "
+				               "kind=proof-law\n");
+		}
+		sg_host.dprint("rune: v3 install failed status=%d reason=%s "
+		               "os_error=%d cleanup_error=%d diagnostic=%d "
+		               "reject_reason=%d writer_stage=%d writer_index=%u "
+		               "bytes=%lu; kept existing %s\n",
+		               (int)install_result.status,
+		               SG_RuneInstallReason(install_result.status),
+		               install_result.os_error,
+		               install_result.cleanup_error,
+		               (int)install_result.writer.diagnostic,
+		               (int)install_result.writer.reason,
+		               (int)install_result.writer.stage,
+		               (unsigned int)install_result.writer.index,
+		               (unsigned long)install_result.writer.bytes_written,
+		               path);
+		goto cleanup;
 	}
 
 	sg_host.dprint("rune: wrote %s (%d seeds, %d links)\n",
 	           path, gen_num_seeds, gen_num_links);
+	generated = true;
 
-	sg_host.game_free(gen_seeds);
-	sg_host.game_free(gen_links);
-	return true;
+cleanup:
+	if (ndoors > 0)
+		Doors_Restore(held, ndoors);
+	if (link_keys)
+		sg_host.game_free(link_keys);
+	if (source_marks)
+		sg_host.game_free(source_marks);
+	if (gen_seeds)
+		sg_host.game_free(gen_seeds);
+	if (gen_links)
+		sg_host.game_free(gen_links);
+	gen_seeds = NULL;
+	gen_links = NULL;
+	gen_num_seeds = 0;
+	gen_num_links = 0;
+	if (scope_active)
+		SG_RuneProofScopeEnd();
+	return generated;
 }

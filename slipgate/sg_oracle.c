@@ -21,6 +21,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_util.h"
 
@@ -2810,6 +2811,11 @@ void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin)
 	 * overwrites velocity wholesale. One uninitialized field, four failed
 	 * prover designs built on top of it.
 	 */
-	ph->pms.gravity = (short)RUNE_PROOF_GRAVITY;
+	/* Existing v2 loader/runtime replays retain their fixed 800 law exactly.
+	 * Only Rune_Generate owns the short-lived v3 proof scope, populated from
+	 * the exact integral law captured before generation and reset on every
+	 * exit.  This keeps a v2-compatible active value such as 800.5 on the old
+	 * short/800 behavior while allowing an honest v3 proof at gravity 650. */
+	ph->pms.gravity = SG_RuneProofGravity();
 	ph->old_pms = ph->pms;
 }
