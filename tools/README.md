@@ -254,7 +254,25 @@ Python producer consume the same golden fixture. At level setup the runtime
 loads `HMN3`, `HML3`, `HME3`, and `DPO3` independently into candidates; absent
 files are neutral, malformed or stale files are logged and ignored whole, and
 none becomes visible before the rune, fields, and fresh authority check publish
-together. `DNG3` persistence remains a separate lifecycle slice.
+together. `DNG3` uses the authenticated runtime lifecycle below.
+
+The runtime now owns that DNG3 lifecycle. It is opt-in: the shipped
+`sg_dangerpersistport 0` performs no DNG3 read or write. A nonzero selector must
+match the engine's canonical protected effective port and acquire the stable
+`<map>.rune.danger.lock` advisory lease before loading. Only that whole-level
+lease holder may load or save; contenders run an ephemeral neutral model.
+The game directory that names the lease is immutable for that level; drift
+refuses a save. Danger decays during compatible active play only, not across
+offline wall-clock or intermission time, and checkpoints only immediately
+before normal `ExitLevel` rotation and clean shutdown. Replacement uses a
+same-directory nonce-scoped exclusive temporary so crash remnants do not
+exhaust one fixed namespace. The final atomic replacement rechecks the live
+authority, policy, held lease, unchanged model revision, and exact installed
+rune header.
+A rejected existing DNG3 disables persistence for that level; an absent file
+may be created after new learning. Direct engine `map` and savegame restoration
+remain reset-only because neither boundary carries an authenticated outgoing
+v3 transaction.
 
 The old 20-byte native-v2-era formats remain forensic history and are never
 emitted by these bakers. Every baker fails nonzero on a missing or malformed

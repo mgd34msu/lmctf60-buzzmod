@@ -1,200 +1,380 @@
 /*
- * sg_danger.c -- deaths teach the map.  Moved verbatim from
- * sg_arach.c in the 2026-08-11 standards pass.
+ * sg_danger.c -- graph-bound, team-local learned danger.
+ *
+ * Persistence policy and filesystem I/O live above this model.  This module
+ * owns only the published runtime planes and the explicit-LE DNG3 payload.
  */
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_danger.h"
 #include "slipgate/sg_rune.h"
+#include "slipgate/sg_rune_wire.h"
 #include "slipgate/sg_util.h"
-#include <errno.h>
 
-#define DANGER_MAGIC		0x31474E44U /* "DNG1" */
-#define DANGER_VERSION		1U
+#include <limits.h>
+#include <stdint.h>
+#include <string.h>
 
-/*
- * The DANGER dimension: deaths teach the map. Team-indexed -- a corridor
- * lethal for red is safe for blue -- fed by each bot registering its own
- * death at its own seed (self-knowledge, the most honest sighting there
- * is), decayed a little every second, priced into the same descent as
- * every other dimension. B3 deliberately resets it at every level boundary:
- * the native v2 persistence codec below is dormant until B4 replaces it with
- * an explicit little-endian, identity-bound v3 sidecar. The rune is a
- * higher-order surface; this is one more dimension of it.
- */
-static int		sg_danger[2][SG_MAX_SEEDS];
+#define DANGER_TEAM_COUNT 2U
+#define DANGER_WIRE_VALUE_BYTES 4U
+#define DANGER_VALUE_MAX 8000
+#define DANGER_LEARN_INCREMENT 1200
+#define DANGER_RUNE_HEADER_CRC_OFFSET 60U
 
-static float	sg_danger_decay_next;
+_Static_assert(CHAR_BIT == 8, "DNG3 requires 8-bit bytes");
+_Static_assert(INT_MAX >= DANGER_VALUE_MAX,
+	"native danger cells cannot represent the DNG3 range");
+_Static_assert(SG_MAX_SEEDS == SG_RUNE_V3_MAX_SEEDS,
+	"danger and RUNE v3 seed limits must agree");
+_Static_assert(SG_RUNE_V3_HEADER_BYTES >=
+	DANGER_RUNE_HEADER_CRC_OFFSET + DANGER_WIRE_VALUE_BYTES,
+	"RUNE v3 header CRC offset drift");
+
+/* No publication escapes this file.  Danger_Field is a const pricing view. */
+static int sg_danger[DANGER_TEAM_COUNT][SG_MAX_SEEDS];
+static const rune_t *sg_danger_rune;
+static unsigned char sg_danger_rune_header[SG_RUNE_V3_HEADER_BYTES];
+static size_t sg_danger_num_seeds;
+static float sg_danger_decay_next;
+static qboolean sg_danger_active;
+static qboolean sg_danger_persistence_enabled;
+static qboolean sg_danger_dirty;
+static qboolean sg_danger_revision_exhausted;
+static uint64_t sg_danger_revision;
+
+static uint32_t Danger_GetU32(const unsigned char *in)
+{
+	return (uint32_t)in[0] |
+	       ((uint32_t)in[1] << 8) |
+	       ((uint32_t)in[2] << 16) |
+	       ((uint32_t)in[3] << 24);
+}
+
+static void Danger_PutU32(unsigned char *out, uint32_t value)
+{
+	out[0] = (unsigned char)(value & UINT32_C(0xff));
+	out[1] = (unsigned char)((value >> 8) & UINT32_C(0xff));
+	out[2] = (unsigned char)((value >> 16) & UINT32_C(0xff));
+	out[3] = (unsigned char)(value >> 24);
+}
+
+static qboolean Danger_RangesOverlap(const void *first, size_t first_size,
+	const void *second, size_t second_size)
+{
+	uintptr_t first_begin;
+	uintptr_t second_begin;
+
+	if (!first_size || !second_size)
+		return false;
+	if (!first || !second)
+		return true;
+	first_begin = (uintptr_t)first;
+	second_begin = (uintptr_t)second;
+	if (first_begin > UINTPTR_MAX - first_size ||
+	    second_begin > UINTPTR_MAX - second_size)
+		return true;
+	return first_begin < second_begin + second_size &&
+	       second_begin < first_begin + first_size;
+}
+
+static qboolean Danger_RuneShape(const rune_t *r,
+	unsigned char encoded_header[SG_RUNE_V3_HEADER_BYTES])
+{
+	unsigned char scratch[SG_RUNE_V3_HEADER_BYTES];
+	unsigned char *encoded = encoded_header ? encoded_header : scratch;
+
+	if (!r || !r->seeds || !r->linked_seed ||
+	    r->hdr.magic != (int)SG_RUNE_V3_MAGIC ||
+	    r->hdr.version != SG_RUNE_V3_VERSION ||
+	    r->hdr.num_seeds <= 0 || r->hdr.num_seeds > SG_MAX_SEEDS ||
+	    r->hdr.num_links < 0 ||
+	    (uint32_t)r->hdr.num_seeds != r->v3_header.num_seeds ||
+	    (uint32_t)r->hdr.num_links != r->v3_header.num_links ||
+	    memcmp(r->hdr.mapname, r->v3_header.map_name,
+	        sizeof(r->hdr.mapname)) != 0 ||
+	    SG_RuneV3EncodeHeader(&r->v3_header, encoded,
+	        SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
+	    Danger_GetU32(encoded + DANGER_RUNE_HEADER_CRC_OFFSET) !=
+	        r->v3_header.header_crc32)
+		return false;
+	return true;
+}
+
+static qboolean Danger_Compatible(void)
+{
+	unsigned char encoded[SG_RUNE_V3_HEADER_BYTES];
+	rune_t *current;
+
+	if (!sg_danger_active)
+		return false;
+	current = SG_Rune();
+	return current && current == sg_danger_rune &&
+	       (size_t)current->hdr.num_seeds == sg_danger_num_seeds &&
+	       Danger_RuneShape(current, encoded) &&
+	       memcmp(encoded, sg_danger_rune_header, sizeof(encoded)) == 0 &&
+	       SG_RunePhysicsCompatible(current);
+}
+
+static qboolean Danger_SeedMayOwnValue(const rune_t *r, size_t seed)
+{
+	return !(r->seeds[seed].flags & RSF_TOMBSTONE) &&
+	       r->linked_seed[seed] != 0;
+}
+
+static void Danger_AdvanceRevision(void)
+{
+	if (sg_danger_revision == UINT64_MAX)
+	{
+		/* Never wrap and never acknowledge a capture after uniqueness is lost. */
+		sg_danger_revision_exhausted = true;
+		return;
+	}
+	sg_danger_revision++;
+}
+
+size_t Danger_V3PayloadBytes(const rune_t *r)
+{
+	if (!Danger_RuneShape(r, NULL))
+		return 0;
+	return DANGER_TEAM_COUNT * (size_t)r->hdr.num_seeds *
+	       DANGER_WIRE_VALUE_BYTES;
+}
+
+qboolean Danger_DecodeV3Candidate(const rune_t *r,
+	const unsigned char *payload, size_t payload_size, int *red_out,
+	int *blue_out, size_t plane_capacity)
+{
+	size_t native_bytes;
+	size_t expected;
+	size_t seed;
+	uint32_t red;
+	uint32_t blue;
+
+	expected = Danger_V3PayloadBytes(r);
+	if (!expected || !payload || !red_out || !blue_out ||
+	    payload_size != expected ||
+	    plane_capacity < (size_t)r->hdr.num_seeds)
+		return false;
+	native_bytes = (size_t)r->hdr.num_seeds * sizeof(*red_out);
+	if (Danger_RangesOverlap(red_out, native_bytes, blue_out, native_bytes) ||
+	    Danger_RangesOverlap(payload, payload_size, red_out, native_bytes) ||
+	    Danger_RangesOverlap(payload, payload_size, blue_out, native_bytes))
+		return false;
+
+	/* Validate both complete planes before modifying either caller output. */
+	for (seed = 0; seed < (size_t)r->hdr.num_seeds; seed++)
+	{
+		red = Danger_GetU32(payload + seed * DANGER_WIRE_VALUE_BYTES);
+		blue = Danger_GetU32(payload +
+		    ((size_t)r->hdr.num_seeds + seed) * DANGER_WIRE_VALUE_BYTES);
+		if (red > DANGER_VALUE_MAX || blue > DANGER_VALUE_MAX ||
+		    (!Danger_SeedMayOwnValue(r, seed) && (red || blue)))
+			return false;
+	}
+	for (seed = 0; seed < (size_t)r->hdr.num_seeds; seed++)
+	{
+		red_out[seed] = (int)Danger_GetU32(payload +
+		    seed * DANGER_WIRE_VALUE_BYTES);
+		blue_out[seed] = (int)Danger_GetU32(payload +
+		    ((size_t)r->hdr.num_seeds + seed) * DANGER_WIRE_VALUE_BYTES);
+	}
+	return true;
+}
+
+qboolean Danger_Publish(const rune_t *r, const int *red, const int *blue,
+	size_t plane_count, qboolean persistence_enabled)
+{
+	unsigned char encoded[SG_RUNE_V3_HEADER_BYTES];
+	size_t native_bytes;
+	size_t seed;
+	qboolean neutral;
+
+	neutral = !red && !blue && plane_count == 0;
+	if (!r || r != SG_Rune() || !Danger_RuneShape(r, encoded) ||
+	    !SG_RunePhysicsCompatible(r) ||
+	    (!neutral && (!red || !blue ||
+	        plane_count != (size_t)r->hdr.num_seeds)))
+		return false;
+	native_bytes = (size_t)r->hdr.num_seeds * sizeof(*red);
+	if (!neutral &&
+	    (Danger_RangesOverlap(red, native_bytes, sg_danger,
+	         sizeof(sg_danger)) ||
+	     Danger_RangesOverlap(blue, native_bytes, sg_danger,
+	         sizeof(sg_danger))))
+		return false;
+	if (!neutral)
+	{
+		for (seed = 0; seed < (size_t)r->hdr.num_seeds; seed++)
+		{
+			if (red[seed] < 0 || red[seed] > DANGER_VALUE_MAX ||
+			    blue[seed] < 0 || blue[seed] > DANGER_VALUE_MAX ||
+			    (!Danger_SeedMayOwnValue(r, seed) &&
+			        (red[seed] || blue[seed])))
+				return false;
+		}
+	}
+
+	memset(sg_danger, 0, sizeof(sg_danger));
+	if (!neutral)
+	{
+		memcpy(sg_danger[0], red, native_bytes);
+		memcpy(sg_danger[1], blue, native_bytes);
+	}
+	sg_danger_rune = r;
+	memcpy(sg_danger_rune_header, encoded, sizeof(encoded));
+	sg_danger_num_seeds = (size_t)r->hdr.num_seeds;
+	sg_danger_active = true;
+	sg_danger_persistence_enabled = persistence_enabled ? true : false;
+	sg_danger_dirty = false;
+	SG_TimerArm(&sg_danger_decay_next, 1.0f);
+	Danger_AdvanceRevision();
+	return true;
+}
 
 void Danger_ResetLevel(void)
 {
 	memset(sg_danger, 0, sizeof(sg_danger));
-	/* This deadline is level-time state, not learned map state. A time rewind
-	 * must never freeze the freshly reset field for the old map's uptime. */
+	memset(sg_danger_rune_header, 0, sizeof(sg_danger_rune_header));
+	sg_danger_rune = NULL;
+	sg_danger_num_seeds = 0;
 	sg_danger_decay_next = 0.0f;
-}
-
-static unsigned int Danger_CRC32Update(unsigned int crc,
-	const void *block, size_t size)
-{
-	static unsigned int table[256];
-	static qboolean ready;
-	const unsigned char *p = (const unsigned char *)block;
-	unsigned int c;
-	int i, j;
-
-	if (!ready)
-	{
-		for (i = 0; i < 256; i++)
-		{
-			c = (unsigned int)i;
-			for (j = 0; j < 8; j++)
-				c = (c & 1U) ? (c >> 1) ^ 0xEDB88320U : c >> 1;
-			table[i] = c;
-		}
-		ready = true;
-	}
-	while (size--)
-		crc = table[(crc ^ (unsigned int)*p++) & 0xffU] ^ (crc >> 8);
-	return crc;
-}
-
-static unsigned int Danger_SeedCRC(const rune_t *r)
-{
-	unsigned int crc = 0xffffffffU;
-
-	if (!r || r->hdr.num_seeds <= 0)
-		return 0;
-	crc = Danger_CRC32Update(crc, r->seeds,
-	    sizeof(rune_seed_t) * (size_t)r->hdr.num_seeds);
-	return crc ^ 0xffffffffU;
+	sg_danger_active = false;
+	sg_danger_persistence_enabled = false;
+	sg_danger_dirty = false;
+	Danger_AdvanceRevision();
 }
 
 void Danger_Learn(int team, int seed)
 {
-	if (team < 1 || team > 2 || seed < 0 || seed >= SG_MAX_SEEDS)
+	int *cell;
+
+	if (!Danger_Compatible() || team < 1 || team > 2 || seed < 0 ||
+	    (size_t)seed >= sg_danger_num_seeds ||
+	    !Danger_SeedMayOwnValue(sg_danger_rune, (size_t)seed))
 		return;
-	sg_danger[SG_TeamIdx(team)][seed] += 1200;      /* fitted: ~a detour's worth */
-	if (sg_danger[SG_TeamIdx(team)][seed] > 8000)
-		sg_danger[SG_TeamIdx(team)][seed] = 8000;
+	cell = &sg_danger[SG_TeamIdx(team)][seed];
+	if (*cell >= DANGER_VALUE_MAX)
+		return;
+	if (*cell > DANGER_VALUE_MAX - DANGER_LEARN_INCREMENT)
+		*cell = DANGER_VALUE_MAX;
+	else
+		*cell += DANGER_LEARN_INCREMENT;
+	sg_danger_dirty = true;
+	Danger_AdvanceRevision();
 }
 
 void Danger_Decay(void)
 {
-	int t, i;
+	qboolean changed = false;
+	size_t team;
+	size_t seed;
 
+	if (!Danger_Compatible())
+	{
+		/* Incompatible time is not learned time.  A restored binding waits a
+		 * fresh second rather than consuming an already-expired deadline. */
+		if (sg_danger_active)
+			SG_TimerArm(&sg_danger_decay_next, 1.0f);
+		return;
+	}
 	if (SG_TimerPending(sg_danger_decay_next))
 		return;
 	SG_TimerArm(&sg_danger_decay_next, 1.0f);
-	for (t = 0; t < 2; t++)
-		for (i = 0; i < SG_MAX_SEEDS; i++)
-			if (sg_danger[t][i])
-				sg_danger[t][i] -= (sg_danger[t][i] >> 6) + 1;
-}
-
-static void Danger_Path(char *buf, int size)
-{
-	Com_sprintf(buf, size, "%s/maps/%s.rune.danger",
-	            gamedir->string[0] ? gamedir->string : ".",
-	            SG_RuneMapName());
-}
-
-void Danger_Save(void)
-{
-	char path[MAX_OSPATH], tmp_path[MAX_OSPATH];
-	FILE *f = NULL;
-	rune_t *r = SG_Rune();
-	unsigned int header[5], attempt;
-	qboolean ok;
-
-	if (!r || r->hdr.num_seeds <= 0 || r->hdr.num_seeds > SG_MAX_SEEDS)
-		return;
-	Danger_Path(path, sizeof(path));
-	tmp_path[0] = '\0';
-	for (attempt = 0; attempt < 64 && !f; attempt++)
+	for (team = 0; team < DANGER_TEAM_COUNT; team++)
 	{
-		unsigned long pid;
-
-#ifdef _WIN32
-		pid = (unsigned long)GetCurrentProcessId();
-#else
-		pid = (unsigned long)getpid();
-#endif
-		Com_sprintf(tmp_path, sizeof(tmp_path), "%s.%lu.%u.tmp",
-		            path, pid, attempt);
-		errno = 0;
-		f = fopen(tmp_path, "wbx");
-		if (!f && errno != EEXIST)
-			break;
+		for (seed = 0; seed < sg_danger_num_seeds; seed++)
+		{
+			if (sg_danger[team][seed] > 0)
+			{
+				sg_danger[team][seed] -=
+				    (sg_danger[team][seed] >> 6) + 1;
+				changed = true;
+			}
+		}
 	}
-	if (!f)
-		return;
-	header[0] = DANGER_MAGIC;
-	header[1] = DANGER_VERSION;
-	header[2] = (unsigned int)r->hdr.version;
-	header[3] = (unsigned int)r->hdr.num_seeds;
-	header[4] = Danger_SeedCRC(r);
-	ok = fwrite(header, sizeof(header), 1, f) == 1 &&
-	     fwrite(sg_danger[0], sizeof(int), r->hdr.num_seeds, f) ==
-	         (size_t)r->hdr.num_seeds &&
-	     fwrite(sg_danger[1], sizeof(int), r->hdr.num_seeds, f) ==
-	         (size_t)r->hdr.num_seeds &&
-	     fflush(f) == 0;
-	if (fclose(f) != 0)
-		ok = false;
-	if (!ok)
+	if (changed)
 	{
-		remove(tmp_path);
-		return;
+		sg_danger_dirty = true;
+		Danger_AdvanceRevision();
 	}
-#ifdef _WIN32
-	if (!MoveFileExA(tmp_path, path,
-	                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-#else
-	if (rename(tmp_path, path) != 0)
-#endif
-		remove(tmp_path);
 }
 
-void Danger_Load(void)
-{
-	char path[MAX_OSPATH];
-	FILE *f;
-	rune_t *r = SG_Rune();
-	unsigned int header[5];
-	long file_size;
-	size_t expected;
-	qboolean ok = false;
-
-	Danger_ResetLevel();
-	if (!r || r->hdr.num_seeds <= 0 || r->hdr.num_seeds > SG_MAX_SEEDS)
-		return;
-	Danger_Path(path, sizeof(path));
-	f = fopen(path, "rb");
-	if (!f)
-		return;
-	expected = sizeof(header) + 2U * (size_t)r->hdr.num_seeds * sizeof(int);
-	if (fread(header, sizeof(header), 1, f) == 1 &&
-	    header[0] == DANGER_MAGIC && header[1] == DANGER_VERSION &&
-	    header[2] == (unsigned int)r->hdr.version &&
-	    header[3] == (unsigned int)r->hdr.num_seeds &&
-	    header[4] == Danger_SeedCRC(r) &&
-	    fseek(f, 0, SEEK_END) == 0 &&
-	    (file_size = ftell(f)) >= 0 && (size_t)file_size == expected &&
-	    fseek(f, (long)sizeof(header), SEEK_SET) == 0 &&
-	    fread(sg_danger[0], sizeof(int), r->hdr.num_seeds, f) ==
-	        (size_t)r->hdr.num_seeds &&
-	    fread(sg_danger[1], sizeof(int), r->hdr.num_seeds, f) ==
-	        (size_t)r->hdr.num_seeds)
-		ok = true;
-	fclose(f);
-	if (!ok)
-		memset(sg_danger, 0, sizeof(sg_danger));
-}
-
-
-/* the read side: pricing borrows the team ledger, never writes it */
 const int *Danger_Field(int team)
 {
+	if (team < 1 || team > 2)
+		return NULL;
 	return sg_danger[SG_TeamIdx(team)];
+}
+
+qboolean Danger_IsActive(void)
+{
+	return sg_danger_active;
+}
+
+qboolean Danger_PersistenceEnabled(void)
+{
+	return sg_danger_persistence_enabled;
+}
+
+qboolean Danger_IsDirty(void)
+{
+	return sg_danger_dirty;
+}
+
+uint64_t Danger_Revision(void)
+{
+	return sg_danger_revision;
+}
+
+qboolean Danger_CheckpointPending(void)
+{
+	return sg_danger_active && sg_danger_persistence_enabled &&
+	       sg_danger_dirty && Danger_Compatible();
+}
+
+qboolean Danger_CaptureV3Payload(unsigned char *payload,
+	size_t payload_capacity, size_t *payload_size_out,
+	uint64_t *revision_out)
+{
+	size_t payload_size;
+	size_t seed;
+	uint64_t revision;
+
+	if (!payload || !payload_size_out || !revision_out ||
+	    !Danger_Compatible())
+		return false;
+	payload_size = DANGER_TEAM_COUNT * sg_danger_num_seeds *
+	    DANGER_WIRE_VALUE_BYTES;
+	if (payload_capacity < payload_size ||
+	    Danger_RangesOverlap(payload, payload_size, sg_danger,
+	        sizeof(sg_danger)) ||
+	    Danger_RangesOverlap(payload, payload_size, payload_size_out,
+	        sizeof(*payload_size_out)) ||
+	    Danger_RangesOverlap(payload, payload_size, revision_out,
+	        sizeof(*revision_out)) ||
+	    Danger_RangesOverlap(payload_size_out, sizeof(*payload_size_out),
+	        revision_out, sizeof(*revision_out)))
+		return false;
+	revision = sg_danger_revision;
+	for (seed = 0; seed < sg_danger_num_seeds; seed++)
+	{
+		Danger_PutU32(payload + seed * DANGER_WIRE_VALUE_BYTES,
+		    (uint32_t)sg_danger[0][seed]);
+		Danger_PutU32(payload +
+		    (sg_danger_num_seeds + seed) * DANGER_WIRE_VALUE_BYTES,
+		    (uint32_t)sg_danger[1][seed]);
+	}
+	*payload_size_out = payload_size;
+	*revision_out = revision;
+	return true;
+}
+
+qboolean Danger_MarkCommitted(uint64_t revision)
+{
+	if (!sg_danger_active || !sg_danger_persistence_enabled ||
+	    sg_danger_revision_exhausted || revision != sg_danger_revision ||
+	    !Danger_Compatible())
+		return false;
+	sg_danger_dirty = false;
+	return true;
 }

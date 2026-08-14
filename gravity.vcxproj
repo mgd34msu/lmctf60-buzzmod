@@ -356,6 +356,7 @@
     <ClCompile Include="slipgate\sg_rune_wire.c" />
     <ClCompile Include="slipgate\sg_sidecar_wire.c" />
     <ClCompile Include="slipgate\sg_sidecar_loader.c" />
+    <ClCompile Include="slipgate\sg_sidecar_store.c" />
     <ClCompile Include="slipgate\sg_rune_loader.c" />
     <ClCompile Include="slipgate\sg_rune_writer.c" />
     <ClCompile Include="slipgate\sg_rune_install.c" />
@@ -367,6 +368,8 @@
     <ClCompile Include="slipgate\sg_client.c" />
     <ClCompile Include="slipgate\sg_clock.c" />
     <ClCompile Include="slipgate\sg_danger.c" />
+    <ClCompile Include="slipgate\sg_danger_lease.c" />
+    <ClCompile Include="slipgate\sg_danger_policy.c" />
     <ClCompile Include="slipgate\sg_weights.c" />
     <ClCompile Include="slipgate\sg_tilt.c" />
     <ClCompile Include="slipgate\sg_lead.c" />
@@ -427,6 +430,9 @@
     <ClInclude Include="q_shared.h" />
     <ClInclude Include="slipgate\sg_sidecar_wire.h" />
     <ClInclude Include="slipgate\sg_sidecar_loader.h" />
+    <ClInclude Include="slipgate\sg_sidecar_store.h" />
+    <ClInclude Include="slipgate\sg_danger_lease.h" />
+    <ClInclude Include="slipgate\sg_danger_policy.h" />
     <ClInclude Include="slipgate\sg_rune_writer.h" />
     <ClInclude Include="slipgate\sg_rune_loader.h" />
     <ClInclude Include="slipgate\sg_rune_install.h" />

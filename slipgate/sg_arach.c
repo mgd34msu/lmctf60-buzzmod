@@ -48,7 +48,10 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_rune_install.h"
 #include "slipgate/sg_rune_loader.h"
 #include "slipgate/sg_rune_proof.h"
+#include "slipgate/sg_danger_lease.h"
+#include "slipgate/sg_danger_policy.h"
 #include "slipgate/sg_sidecar_loader.h"
+#include "slipgate/sg_sidecar_store.h"
 
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
@@ -74,6 +77,9 @@ static qboolean sg_role_escort_on[2] = { true, true };
 static rune_t	*sg_rune;
 static qboolean sg_physics_warned;
 static float sg_last_frame_time;
+static sg_danger_lease_t sg_danger_lease = SG_DANGER_LEASE_INITIALIZER;
+static uint16_t sg_danger_selected_port;
+static char sg_danger_game_directory[MAX_OSPATH];
 
 static void Role_LevelReset(void)
 {
@@ -842,10 +848,16 @@ typedef struct sg_sidecar_candidates_s
 	unsigned char *flag_live;
 	unsigned char *escape;
 	unsigned char *defense;
+	unsigned char *danger;
+	int *danger_red;
+	int *danger_blue;
 	size_t human_size;
 	size_t flag_live_size;
 	size_t escape_size;
 	size_t defense_size;
+	size_t danger_size;
+	qboolean danger_loaded;
+	qboolean danger_persistence;
 } sg_sidecar_candidates_t;
 
 static void *Sidecar_LevelAllocate(void *context, size_t size)
@@ -871,6 +883,9 @@ static void Sidecar_CandidatesRelease(sg_sidecar_candidates_t *candidates)
 	Sidecar_LevelDeallocate(NULL, candidates->flag_live);
 	Sidecar_LevelDeallocate(NULL, candidates->escape);
 	Sidecar_LevelDeallocate(NULL, candidates->defense);
+	Sidecar_LevelDeallocate(NULL, candidates->danger);
+	Sidecar_LevelDeallocate(NULL, candidates->danger_red);
+	Sidecar_LevelDeallocate(NULL, candidates->danger_blue);
 	memset(candidates, 0, sizeof(*candidates));
 }
 
@@ -930,7 +945,8 @@ static void Sidecar_LogPublished(const char *game_directory,
 		(unsigned int)payload_size);
 }
 
-static void Sidecar_LoadCandidate(const char *game_directory,
+static sg_sidecar_load_result_t Sidecar_LoadCandidate(
+	const char *game_directory,
 	sg_sidecar_kind_t kind, const rune_t *r, unsigned char **payload_out,
 	size_t *payload_size_out)
 {
@@ -938,8 +954,13 @@ static void Sidecar_LoadCandidate(const char *game_directory,
 	sg_sidecar_load_result_t result;
 	char path[MAX_OSPATH];
 
+	memset(&result, 0, sizeof(result));
+	result.diagnostic = SCD_INVALID_ARGUMENT;
+	result.stage = SCS_ARGUMENT;
+	result.plane = SG_SIDECAR_INDEX_NONE;
+	result.index = SG_SIDECAR_INDEX_NONE;
 	if (!r || !payload_out || !payload_size_out)
-		return;
+		return result;
 	*payload_out = NULL;
 	*payload_size_out = 0;
 	path[0] = '\0';
@@ -952,6 +973,353 @@ static void Sidecar_LoadCandidate(const char *game_directory,
 		r->linked_seed, (size_t)r->hdr.num_seeds, payload_out,
 		payload_size_out, &ops);
 	Sidecar_LogLoad(kind, path, &result);
+	return result;
+}
+
+static const char *Danger_GameDirectory(void)
+{
+	cvar_t *game_cvar = sg_host.cvar("gamedir", "", 0);
+
+	return game_cvar && game_cvar->string && game_cvar->string[0]
+		? game_cvar->string : ".";
+}
+
+static sg_danger_port_value_t Danger_PortValue(const char *name)
+{
+	cvar_t *value = sg_host.cvar(name, "0", 0);
+	sg_danger_port_value_t result;
+
+	result.string = value ? value->string : NULL;
+	result.flags = value ? value->flags : 0;
+	return result;
+}
+
+static sg_danger_policy_status_t Danger_CurrentPolicy(
+	uint16_t *selected_port_out)
+{
+	sg_danger_port_value_t port;
+	sg_danger_port_value_t ip_hostport;
+	sg_danger_port_value_t hostport;
+	const char *selector;
+	sg_danger_policy_status_t selector_status;
+
+	SG_CvarsInit();
+	selector = sg_cv.dangerpersistport ? sg_cv.dangerpersistport->string : NULL;
+	/* Parse the opt-in before looking up engine port cvars.  The default-off
+	 * path must be observationally inert: asking the engine for an absent cvar
+	 * creates it, which is needless state mutation when persistence is disabled
+	 * (and can hide a misspelled engine configuration). */
+	selector_status = SG_DangerPolicySelect(selector, NULL, NULL, NULL,
+		selected_port_out);
+	if (selector_status == SG_DANGER_POLICY_DISABLED ||
+	    selector_status == SG_DANGER_POLICY_BAD_SELECTOR)
+		return selector_status;
+	port = Danger_PortValue("port");
+	ip_hostport = Danger_PortValue("ip_hostport");
+	hostport = Danger_PortValue("hostport");
+	return SG_DangerPolicySelect(selector, &port, &ip_hostport, &hostport,
+		selected_port_out);
+}
+
+static void Danger_PersistenceRelease(void)
+{
+	sg_danger_lease_result_t result;
+
+	result = SG_DangerLeaseRelease(&sg_danger_lease);
+	if (result.status != SG_DANGER_LEASE_OK)
+	{
+		sg_host.dprint("slipgate: danger lease release failed status=%s "
+			"os=%d cleanup=%d\n", SG_DangerLeaseReason(result.status),
+			result.os_error, result.cleanup_error);
+	}
+	sg_danger_selected_port = 0;
+	sg_danger_game_directory[0] = '\0';
+}
+
+static qboolean Danger_PersistenceAcquire(const char *game_directory,
+	const rune_t *r)
+{
+	sg_danger_policy_status_t policy;
+	sg_danger_lease_result_t lease;
+	uint16_t selected_port = 0;
+	char danger_path[MAX_OSPATH];
+	char lock_path[MAX_OSPATH];
+	char leased_directory[MAX_OSPATH];
+	int written;
+
+	if (!game_directory || !r || SG_DangerLeaseHeld(&sg_danger_lease))
+		return false;
+	policy = Danger_CurrentPolicy(&selected_port);
+	if (policy == SG_DANGER_POLICY_DISABLED)
+		return false;
+	if (policy != SG_DANGER_POLICY_OK)
+	{
+		sg_host.dprint("slipgate: danger persistence disabled: %s\n",
+			SG_DangerPolicyReason(policy));
+		return false;
+	}
+	written = snprintf(leased_directory, sizeof(leased_directory), "%s",
+		game_directory);
+	if (written < 0 || (size_t)written >= sizeof(leased_directory))
+	{
+		sg_host.dprint("slipgate: danger persistence disabled: game "
+			"directory is too long\n");
+		return false;
+	}
+	if (SG_SidecarV3Path(danger_path, sizeof(danger_path), game_directory,
+		SG_SIDECAR_DANGER, &r->v3_header) != SCD_OK)
+	{
+		sg_host.dprint("slipgate: danger persistence disabled: invalid "
+			"authenticated sidecar path\n");
+		return false;
+	}
+	lock_path[0] = '\0';
+	lease = SG_DangerLeaseAcquire(&sg_danger_lease, danger_path, lock_path,
+		sizeof(lock_path), NULL);
+	if (lease.status != SG_DANGER_LEASE_OK)
+	{
+		sg_host.dprint("slipgate: danger persistence disabled: lease=%s "
+			"path=%s os=%d cleanup=%d\n",
+			SG_DangerLeaseReason(lease.status),
+			lock_path[0] ? lock_path : "<invalid>", lease.os_error,
+			lease.cleanup_error);
+		return false;
+	}
+	sg_danger_selected_port = selected_port;
+	memcpy(sg_danger_game_directory, leased_directory,
+		(size_t)written + 1U);
+	sg_host.dprint("slipgate: danger persistence selected port=%u "
+		"lock=%s\n", (unsigned int)selected_port, lock_path);
+	return true;
+}
+
+typedef struct danger_checkpoint_context_s
+{
+	const rune_t *rune;
+	uint64_t revision;
+	uint16_t selected_port;
+	char game_directory[MAX_OSPATH];
+} danger_checkpoint_context_t;
+
+static sg_sidecar_revalidate_t Danger_InstalledRuneMatches(
+	const danger_checkpoint_context_t *context, int *os_error_out)
+{
+	unsigned char header_bytes[SG_RUNE_V3_HEADER_BYTES];
+	unsigned char expected_bytes[SG_RUNE_V3_HEADER_BYTES];
+	sg_rune_v3_authority_t authority;
+	sg_rune_v3_header_t inspected;
+	sg_rune_load_result_t result;
+	char path[MAX_OSPATH];
+	FILE *file = NULL;
+	long file_length;
+	size_t read_size;
+	int close_status;
+
+	if (os_error_out)
+		*os_error_out = 0;
+	if (!context || !context->rune ||
+		!SG_RuneV3AuthorityCapture(context->rune->v3_header.map_name,
+			&authority) ||
+		!SG_RuneV3AuthorityMatchesHeader(&authority,
+			&context->rune->v3_header) ||
+		SG_RuneV3EncodeHeader(&context->rune->v3_header, expected_bytes,
+			SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
+		!SG_RuneInstallDestinationPath(path, sizeof(path),
+			context->game_directory,
+			context->rune->v3_header.map_name))
+		return SG_SIDECAR_REVALIDATE_DRIFT;
+
+	errno = 0;
+	file = fopen(path, "rb");
+	if (!file)
+	{
+		if (os_error_out)
+			*os_error_out = errno ? errno : EIO;
+		return SG_SIDECAR_REVALIDATE_ERROR;
+	}
+	read_size = fread(header_bytes, 1, sizeof(header_bytes), file);
+	if (read_size != sizeof(header_bytes) || ferror(file) ||
+		fseek(file, 0, SEEK_END) != 0 ||
+		(file_length = ftell(file)) < 0)
+	{
+		int saved_error = errno ? errno : EIO;
+
+		(void)fclose(file);
+		if (os_error_out)
+			*os_error_out = saved_error;
+		return SG_SIDECAR_REVALIDATE_ERROR;
+	}
+	errno = 0;
+	close_status = fclose(file);
+	if (close_status != 0)
+	{
+		if (os_error_out)
+			*os_error_out = errno ? errno : EIO;
+		return SG_SIDECAR_REVALIDATE_ERROR;
+	}
+	result = SG_RuneV3InspectHeader(header_bytes, sizeof(header_bytes),
+		&authority.wire, &inspected);
+	if (result.diagnostic != RLW_OK || result.reason != RLR_OK ||
+		result.stage != SG_RUNE_LOAD_STAGE_DONE ||
+		result.index != SG_RUNE_LOAD_INDEX_NONE ||
+		result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
+		(long)result.file_size != file_length ||
+		memcmp(header_bytes, expected_bytes, sizeof(header_bytes)) != 0)
+		return SG_SIDECAR_REVALIDATE_DRIFT;
+	return SG_SIDECAR_REVALIDATE_MATCH;
+}
+
+static sg_sidecar_revalidate_t Danger_CheckpointRevalidate(void *opaque,
+	const sg_rune_v3_header_t *rune_header, int *os_error_out)
+{
+	danger_checkpoint_context_t *context = opaque;
+	unsigned char current_header[SG_RUNE_V3_HEADER_BYTES];
+	unsigned char supplied_header[SG_RUNE_V3_HEADER_BYTES];
+	uint16_t selected_port = 0;
+	const char *game_directory;
+
+	if (os_error_out)
+		*os_error_out = 0;
+	if (!context || !context->rune || !rune_header ||
+		context->rune != SG_Rune() ||
+		!SG_DangerLeaseHeld(&sg_danger_lease) ||
+		sg_danger_game_directory[0] == '\0' ||
+		strcmp(context->game_directory, sg_danger_game_directory) != 0 ||
+		context->selected_port == 0 ||
+		context->selected_port != sg_danger_selected_port ||
+		Danger_Revision() != context->revision ||
+		!Danger_CheckpointPending() ||
+		!SG_RunePhysicsCompatible(context->rune) ||
+		Danger_CurrentPolicy(&selected_port) != SG_DANGER_POLICY_OK ||
+		selected_port != context->selected_port)
+		return SG_SIDECAR_REVALIDATE_DRIFT;
+	game_directory = Danger_GameDirectory();
+	if (strcmp(game_directory, context->game_directory) != 0 ||
+		SG_RuneV3EncodeHeader(&context->rune->v3_header, current_header,
+			SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
+		SG_RuneV3EncodeHeader(rune_header, supplied_header,
+			SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
+		memcmp(current_header, supplied_header, sizeof(current_header)) != 0)
+		return SG_SIDECAR_REVALIDATE_DRIFT;
+	return Danger_InstalledRuneMatches(context, os_error_out);
+}
+
+void SG_DangerCheckpoint(const char *event)
+{
+	danger_checkpoint_context_t context;
+	sg_sidecar_store_result_t result;
+	unsigned char *payload = NULL;
+	unsigned char *encoded = NULL;
+	const rune_t *r = SG_Rune();
+	const char *current_game_directory;
+	size_t payload_capacity;
+	size_t payload_size = 0;
+	size_t encoded_capacity = 0;
+	size_t encoded_size = 0;
+	uint64_t revision = 0;
+	int written;
+
+	SG_HooksInit();
+	if (!r || !Danger_IsActive() || !Danger_PersistenceEnabled() ||
+		!Danger_IsDirty() || !SG_DangerLeaseHeld(&sg_danger_lease))
+		return;
+	if (!Danger_CheckpointPending())
+	{
+		/* Dirty learned state is intentionally not serialized under a drifted
+		 * identity or movement law.  Say that it was retained only in memory so
+		 * an operator never mistakes a quiet shutdown for a durable checkpoint. */
+		sg_host.dprint("slipgate: danger checkpoint retained event=%s "
+			"revision=%llu reason=identity-or-physics-drift\n",
+			event ? event : "unknown",
+			(unsigned long long)Danger_Revision());
+		return;
+	}
+	current_game_directory = Danger_GameDirectory();
+	if (sg_danger_game_directory[0] == '\0' ||
+	    strcmp(current_game_directory, sg_danger_game_directory) != 0)
+	{
+		sg_host.dprint("slipgate: danger checkpoint retained event=%s "
+			"revision=%llu reason=game-directory-drift\n",
+			event ? event : "unknown",
+			(unsigned long long)Danger_Revision());
+		return;
+	}
+	payload_capacity = Danger_V3PayloadBytes(r);
+	if (!payload_capacity || payload_capacity > (size_t)INT_MAX ||
+		SG_SidecarV3FileSize(SG_SIDECAR_DANGER, &r->v3_header,
+			&encoded_capacity) != SCD_OK ||
+		encoded_capacity > (size_t)INT_MAX)
+	{
+		sg_host.dprint("slipgate: danger checkpoint skipped event=%s "
+			"reason=invalid-bound-size\n", event ? event : "unknown");
+		return;
+	}
+	payload = sg_host.game_alloc((int)payload_capacity);
+	encoded = sg_host.game_alloc((int)encoded_capacity);
+	if (!payload || !encoded)
+	{
+		sg_host.dprint("slipgate: danger checkpoint failed event=%s "
+			"stage=allocation\n", event ? event : "unknown");
+		goto cleanup;
+	}
+	if (!Danger_CaptureV3Payload(payload, payload_capacity, &payload_size,
+		&revision) || payload_size != payload_capacity ||
+		SG_SidecarV3Encode(SG_SIDECAR_DANGER, &r->v3_header,
+			r->linked_seed, (size_t)r->hdr.num_seeds, payload,
+			payload_size, encoded, encoded_capacity, &encoded_size) != SCD_OK ||
+		encoded_size != encoded_capacity)
+	{
+		sg_host.dprint("slipgate: danger checkpoint failed event=%s "
+			"stage=encode\n", event ? event : "unknown");
+		goto cleanup;
+	}
+	memset(&context, 0, sizeof(context));
+	context.rune = r;
+	context.revision = revision;
+	context.selected_port = sg_danger_selected_port;
+	written = snprintf(context.game_directory,
+		sizeof(context.game_directory), "%s", sg_danger_game_directory);
+	if (written < 0 || (size_t)written >= sizeof(context.game_directory))
+	{
+		sg_host.dprint("slipgate: danger checkpoint failed event=%s "
+			"stage=path\n", event ? event : "unknown");
+		goto cleanup;
+	}
+	result = SG_SidecarV3StoreFile(context.game_directory,
+		SG_SIDECAR_DANGER, &r->v3_header, r->linked_seed,
+		(size_t)r->hdr.num_seeds, encoded, encoded_size,
+		Danger_CheckpointRevalidate, &context, NULL);
+	if (result.diagnostic == SCD_OK && result.stage == SCS_DONE &&
+		result.replacement_complete && result.durability_complete &&
+		Danger_MarkCommitted(revision))
+	{
+		sg_host.dprint("slipgate: danger checkpoint committed event=%s "
+			"revision=%llu bytes=%u\n", event ? event : "unknown",
+			(unsigned long long)revision, (unsigned int)encoded_size);
+	}
+	else
+	{
+		sg_host.dprint("slipgate: danger checkpoint retained event=%s "
+			"revision=%llu stage=%s diagnostic=%s os=%d close=%d "
+			"cleanup=%d replaced=%d durable=%d\n",
+			event ? event : "unknown", (unsigned long long)revision,
+			SG_SidecarStageName(result.stage),
+			SG_SidecarDiagnosticName(result.diagnostic), result.os_error,
+			result.close_error, result.cleanup_error,
+			result.replacement_complete, result.durability_complete);
+	}
+
+cleanup:
+	if (encoded)
+		sg_host.game_free(encoded);
+	if (payload)
+		sg_host.game_free(payload);
+}
+
+void SG_DangerPersistenceReset(void)
+{
+	Danger_PersistenceRelease();
+	Danger_ResetLevel();
 }
 
 static int *Air_Build(const rune_t *r)
@@ -1049,6 +1417,7 @@ qboolean SG_LevelSetup(void)
 	int *candidate_air = NULL;
 	sg_sidecar_candidates_t sidecars;
 	sg_field_setup_inputs_t field_inputs;
+	sg_sidecar_load_result_t danger_load;
 	sg_rune_v3_authority_t active;
 	cvar_t *game_cvar;
 	const char *game_directory;
@@ -1056,6 +1425,8 @@ qboolean SG_LevelSetup(void)
 
 	memset(&sidecars, 0, sizeof(sidecars));
 	memset(&field_inputs, 0, sizeof(field_inputs));
+	memset(&danger_load, 0, sizeof(danger_load));
+	danger_load.diagnostic = SCD_ABSENT;
 	SG_HooksInit();     /* the host table, before any module reaches out */
 	if (sg_setup_failed)
 		return false;
@@ -1079,7 +1450,7 @@ qboolean SG_LevelSetup(void)
 	 * `sv sg weights`, and the admin editing the file between maps expects
 	 * the next map to be running it */
 	Weights_Load();
-	Danger_ResetLevel();
+	SG_DangerPersistenceReset();
 	/* Clear the prior level's published views before building this level's
 	 * authenticated sidecar candidates. */
 	sg_human_use = NULL;
@@ -1113,6 +1484,43 @@ qboolean SG_LevelSetup(void)
 		&sidecars.escape, &sidecars.escape_size);
 	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_DEFENSE, candidate,
 		&sidecars.defense, &sidecars.defense_size);
+	sidecars.danger_persistence = Danger_PersistenceAcquire(game_directory,
+		candidate);
+	if (sidecars.danger_persistence)
+	{
+		danger_load = Sidecar_LoadCandidate(game_directory,
+			SG_SIDECAR_DANGER, candidate, &sidecars.danger,
+			&sidecars.danger_size);
+		if (danger_load.diagnostic == SCD_OK)
+		{
+			size_t plane_bytes = (size_t)candidate->hdr.num_seeds *
+				sizeof(*sidecars.danger_red);
+
+			sidecars.danger_red = Sidecar_LevelAllocate(NULL, plane_bytes);
+			sidecars.danger_blue = Sidecar_LevelAllocate(NULL, plane_bytes);
+			if (!sidecars.danger_red || !sidecars.danger_blue ||
+				!Danger_DecodeV3Candidate(candidate, sidecars.danger,
+					sidecars.danger_size, sidecars.danger_red,
+					sidecars.danger_blue,
+					(size_t)candidate->hdr.num_seeds))
+			{
+				sg_host.dprint("slipgate: sidecar DNG ignored "
+					"stage=integration diagnostic=SCD_INTERNAL_ERROR; "
+					"persistence disabled for this level\n");
+				Danger_PersistenceRelease();
+				sidecars.danger_persistence = false;
+			}
+			else
+				sidecars.danger_loaded = true;
+		}
+		else if (danger_load.diagnostic != SCD_ABSENT)
+		{
+			/* A failed read is not permission to replace the existing file with
+			 * a fresh model later in the same level.  Keep gameplay ephemeral. */
+			Danger_PersistenceRelease();
+			sidecars.danger_persistence = false;
+		}
+	}
 	if (sidecars.defense)
 	{
 		size_t plane_size = (size_t)candidate->hdr.num_seeds;
@@ -1167,10 +1575,24 @@ qboolean SG_LevelSetup(void)
 		goto fail;
 	}
 
-	/* This is the sole publication point.  All graph, world replay, objective,
-	 * derived-field, and fresh-authority checks have succeeded. */
+	/* This is the sole synchronous publication transaction.  Danger_Publish
+	 * requires SG_Rune() identity, so expose the candidate only within this
+	 * call and roll it back before any frame can observe a failure. */
 	sg_rune = candidate;
 	candidate = NULL;
+	if (!Danger_Publish(sg_rune,
+		sidecars.danger_loaded ? sidecars.danger_red : NULL,
+		sidecars.danger_loaded ? sidecars.danger_blue : NULL,
+		sidecars.danger_loaded ? (size_t)sg_rune->hdr.num_seeds : 0,
+		sidecars.danger_persistence))
+	{
+		sg_host.dprint("slipgate: danger publication failed; disabled until "
+			"the next level\n");
+		candidate = sg_rune;
+		sg_rune = NULL;
+		sg_setup_failed = true;
+		goto fail;
+	}
 	sg_airnext = candidate_air;
 	candidate_air = NULL;
 	sg_human_use = sidecars.human;
@@ -1204,6 +1626,15 @@ qboolean SG_LevelSetup(void)
 	if (sg_defense_payload)
 		Sidecar_LogPublished(game_directory, SG_SIDECAR_DEFENSE, sg_rune,
 			sidecars.defense_size);
+	if (sidecars.danger_loaded)
+		Sidecar_LogPublished(game_directory, SG_SIDECAR_DANGER, sg_rune,
+			sidecars.danger_size);
+	Sidecar_LevelDeallocate(NULL, sidecars.danger);
+	Sidecar_LevelDeallocate(NULL, sidecars.danger_red);
+	Sidecar_LevelDeallocate(NULL, sidecars.danger_blue);
+	sidecars.danger = NULL;
+	sidecars.danger_red = NULL;
+	sidecars.danger_blue = NULL;
 	Escape_Load(sg_rune_map); /* map-keyed configuration, not a graph sidecar */
 	Caco_Reset();
 
@@ -1214,6 +1645,8 @@ qboolean SG_LevelSetup(void)
 	return true;
 
 fail:
+	Danger_PersistenceRelease();
+	Danger_ResetLevel();
 	Sidecar_CandidatesRelease(&sidecars);
 	if (candidate_air)
 		sg_host.level_free(candidate_air);
@@ -1870,7 +2303,10 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd)
 	 * is, and the danger dimension's only teacher */
 	if (!bot->death_taught)
 	{
-		if (bot->seed >= 0)
+		/* Intermission is scoreboard time, not active play.  A corpse that is
+		 * first observed there must not teach persisted danger from time in
+		 * which navigation and combat are frozen. */
+		if (!level.intermissiontime && bot->seed >= 0)
 		{
 			Danger_Learn(e->client->ctf.teamnum, bot->seed);
 			Tilt_Note(e, bot);  /* the same death, remembered personally */
@@ -2557,7 +2993,11 @@ void SG_RunFrame(void)
 		sg_physics_warned = false;
 	}
 	SG_CombatWhy();
-	Danger_Decay();
+	/* Persisted danger measures active play.  Intermission can last well past
+	 * the normal scoreboard delay (or indefinitely on an unattended server),
+	 * so aging here would erase learned evidence while every client is frozen. */
+	if (!level.intermissiontime)
+		Danger_Decay();
 
 	if (sg_rune)
 	{
@@ -2611,8 +3051,8 @@ void SG_LevelChange(void)
 	int i;
 
 	/* The fallback transition path must be as fail-closed as SpawnEntities. */
+	SG_DangerPersistenceReset();
 	SG_LevelIdentityReset();
-	Danger_ResetLevel(); /* B3 has no graph-bound danger persistence. */
 	/* SpawnEntities calls this before TAG_LEVEL/edict teardown. Remove fake
 	 * clients through the real disconnect path while their objective state is
 	 * still valid; otherwise the next map inherits invisible client slots. */
@@ -2656,8 +3096,7 @@ void SG_LevelChange(void)
 		sg_bots[i].ent = NULL;
 		/*
 		 * A grudge is about a PLACE, and seed 137 on the next map is a
-		 * different place. Tilt dies with the level.  B3 likewise resets the
-		 * danger dimension until B4 can bind it to an authenticated v3 graph.
+		 * different place. Tilt and graph-bound danger die with the level.
 		 */
 		sg_bots[i].tilt_lane_n = 0;
 		sg_bots[i].tilt_seed = -1;

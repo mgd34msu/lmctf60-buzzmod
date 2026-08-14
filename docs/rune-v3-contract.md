@@ -450,14 +450,46 @@ only its coarse fallback. The stable detailed order is `OK`, `ABSENT`,
 and `INTERNAL_ERROR`. Existing malformed files log this diagnostic and the
 stable processing stage once; an absent optional file does not log.
 
-Danger persistence uses a same-directory exclusive temporary, exact writes,
-file flush/sync/close, and atomic replacement. It snapshots only while the
+Danger persistence uses a same-directory exclusive temporary whose name carries
+a fresh per-process/per-transaction nonce, plus a bounded `O_EXCL` retry suffix.
+Crash remnants therefore cannot consume one global finite namespace. It uses
+exact writes, file flush/sync/close, and atomic replacement. It snapshots only while the
 outgoing authenticated rune is still live: normal rotation saves before
 `ExitLevel` queues the next map, and clean shutdown saves before identity reset
 and tag teardown. An external engine `map` command exposes no pre-switch game
 callback, so that transition deliberately skips persistence rather than binding
 old lessons to incoming engine identity. Read-level restoration remains
 reset-only until save files carry v3 identity.
+
+Persistence is opt-in and fail-closed. `sg_dangerpersistport` defaults to the
+canonical string `0`, which disables both DNG3 reads and writes. A nonzero value
+must exactly match the engine's canonical protected effective server port
+(`ip_hostport`, then `hostport`, then `port`); the game reads the cvar strings
+and never their lossy floating values. Matching the selector is necessary but
+not sufficient: before any DNG3 read, the process must acquire a nonblocking
+whole-level advisory lock on the stable sibling
+`<map>.rune.danger.lock`. The lock is held through the final save and level
+reset. A contending process stays ephemeral and performs no DNG3 I/O. The lock
+file is an empty regular single-link file, is never deleted, and is distinct
+from the atomically replaced DNG3 inode. This closes shared-gamedir same-map
+fleet races. The exact game directory used to derive the lock and DNG3 path is
+latched with the lease; directory drift refuses the checkpoint instead of
+writing through a lock held on another destination. Changing the selector
+during a level may revoke a save but can never grant a lease mid-level.
+
+DNG3 decay measures authenticated active play only. Offline wall-clock time,
+intermission/scoreboard time, time spent under a mismatched physics law, and
+direct-map transition time do not age the planes; the 48-byte DNG3 format
+intentionally has no timestamp.
+There is no periodic checkpoint in this slice. Dirty state is captured with a
+monotonic revision at the two final lifecycle boundaries above, and is marked
+clean only after durable replacement of the exact revision. Immediately before
+replacement the callback rechecks the live authority, held lease, owner policy,
+revision, and the installed rune's exact 128-byte header and file size. An
+absent DNG3 starts neutral and may be created after new learning; a stale,
+malformed, or unreadable existing DNG3 disables persistence for that level, so
+a failed read can never authorize overwriting the prior file. Save failure is
+reported and retains dirty state, but never blocks rotation or shutdown.
 
 Live in-process rune replacement is unsupported until all per-bot link indices,
 shelves, commitments, sticky/watch state, fields, and sidecars can be replaced

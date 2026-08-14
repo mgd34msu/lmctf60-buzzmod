@@ -229,6 +229,9 @@
     <ClCompile Include="slipgate\sg_sidecar_loader.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_sidecar_store.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_rune_loader.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -257,6 +260,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_danger.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_danger_lease.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_danger_policy.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_weights.c">
@@ -412,6 +421,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_sidecar_loader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_sidecar_store.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_danger_lease.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_danger_policy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune_writer.h">

@@ -23,6 +23,7 @@
 	X(carrypress, "sg_carrypress", "0") \
 	X(clockplay, "sg_clockplay", "0") \
 	X(crowdhold, "sg_crowdhold", "0") \
+	X(dangerpersistport, "sg_dangerpersistport", "0") \
 	X(debug, "sg_debug", "0") \
 	X(defpost, "sg_defpost", "0") \
 	X(defreact, "sg_defreact", "3") \

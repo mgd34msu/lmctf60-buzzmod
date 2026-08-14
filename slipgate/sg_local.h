@@ -503,6 +503,8 @@ float		SG_TiltCaution(edict_t *ent);
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
 void		Botfill_Reset(void);    /* clear level-time cadence and hysteresis */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
+void		SG_DangerCheckpoint(const char *event); /* final dirty DNG3 save */
+void		SG_DangerPersistenceReset(void); /* release lease, forget model */
 
 rune_t		*Rune_Load(const char *mapname);
 int			Rune_NearestSeed(rune_t *r, vec3_t p);

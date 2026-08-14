@@ -133,6 +133,8 @@ extern int Time_Left;
 
 void ShutdownGame (void)
 {
+	SG_DangerCheckpoint("shutdown");
+	SG_DangerPersistenceReset();
 	SG_LevelIdentityReset();
 	gi.dprintf ("==== ShutdownGame ====\n");
 
@@ -754,6 +756,10 @@ void ExitLevel (void)
 
 	Com_sprintf (command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
 
+	/* This is the final point where the current rune identity, graph, and
+	 * whole-level danger lease are all authoritative.  Failure is logged and
+	 * deliberately cannot block rotation. */
+	SG_DangerCheckpoint("exit-level");
 	gi.AddCommandString (command);
 	level.changemap = NULL;
 	level.exitintermission = 0;
