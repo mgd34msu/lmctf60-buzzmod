@@ -21,7 +21,7 @@ combines both approved scopes:
 The order is deliberate. Tactical variation must never be allowed to hide or
 compensate for an invalid movement graph.
 
-## Restart checkpoint — 2026-08-14 08:00 CDT
+## Restart checkpoint — 2026-08-14 10:55 CDT
 
 ### Project-level status
 
@@ -38,9 +38,10 @@ Current phase summary:
    identity bridge, explicit v3 wire codecs, transactional writer, strict
    loader/runtime, authenticated sidecars, leased danger persistence, and the
    isolated DROP/SWIM/HOOK replay reducers.
-2. **Replay integration and v3 acceptance: active, incomplete.** The pure
-   reducers are not yet the generator, loader-publication, or live-controller
-   execution path. A fresh 181-map v3 control corpus is still required.
+2. **Replay integration and v3 acceptance: active, partially complete.** The
+   offline generator/oracle proof paths now use the shared reducers without a
+   behavior change, and the durable 181-map v3 control corpus is accepted.
+   Loader-publication replay and live-controller adapters remain.
 3. **Compound movement: not started.** `DOOR_DROP`, `DOOR_SWIM`, `DOOR_HOOK`,
    restricted RIDE, compound leases/controllers, and enabling actions 9–11
    remain future work.
@@ -50,13 +51,20 @@ Current phase summary:
 ### Completed and fully proven
 
 - All implementation slices through commit
-  `ae82238f89c5acb06a79b6e9f03dfc7788065881` are committed and pushed to
+  `a72c834` are committed and pushed to
   `origin/slipgate` using the repository Git identity.
 - The final v2 baseline is 181/181 terminal: 135 PASS and 46 classified FAIL.
 - The v3 action/identity/wire/generator/loader/runtime/sidecar foundation is
   implemented, independently reviewed, and fail-closed.
 - S3a provides deterministic pure replay reducers for ordinary DROP, SWIM,
   and HOOK with strict compiler, analyzer, sanitizer, and focused-test proof.
+- S3b1 routes offline DROP, SWIM, and HOOK proofs through those reducers while
+  preserving command bytes, host-call cadence, proof results, and final
+  phantom state. Independent refutation and representative-map differentials
+  passed.
+- The restart-safe v3 control corpus completed 181/181 with 135 PASS,
+  36 classified map failures, 7 bounded timeouts, 3 invalid assets, and zero
+  terminal infrastructure failures.
 
 ### Completed core but not fully polished or final-accepted
 
@@ -65,20 +73,22 @@ Current phase summary:
   and full frame-capture/replay system.
 - Action metadata is centralized, but execution remains split among historical
   per-action switches rather than one common dispatcher.
-- S3a is isolated; oracle/generator, publication replay, and live adapters are
-  not migrated.
+- Publication replay and live adapters are not yet migrated.
 - DROP wet/dry contact policy and live-versus-proof yaw-byte convergence remain
   explicit unresolved S3b decisions.
 - There is no single unified local pre-push command or final integration gate.
-- The v3 foundation has not yet passed a durable full 181-map acceptance run.
+- Generator seed append order, exposure sampling, and tombstone placement can
+  vary with generation timing even when the normalized executable graph is
+  identical. This pre-existing determinism defect is under audit and raw rune
+  byte identity must not be claimed for affected maps.
 
-### In flight at this stopping point
+### Accepted reboot recovery
 
-The post-reboot corpus recovery is prepared under:
+The post-reboot corpus recovery is preserved under:
 
 `tools/runs-archive/runtime-v3-ae82238-control-01/`
 
-Prepared and verified:
+Frozen and verified:
 
 - Exact source archive for `ae82238`, SHA-256
   `cafd8b8cb484b090443a4d2128653cfcf15ea06b3fb27111ba6b6161f98d1827`.
@@ -89,47 +99,52 @@ Prepared and verified:
   `d106334aacaa77abcc9174728517235e678f097b0707c9ff7042c0b2b3866590`.
 - Runtime-v3 linter, SHA-256
   `3795d9d177c75d9af07495bd41f703e4c0ccc258ffb4deff2948d3c6689d62c6`.
+- Controller, SHA-256
+  `7477f78a4235255f927b8009b501d1bfe384c986ee999aba95f2d23ce5c38295`.
+- Controller self-test, SHA-256
+  `19e0227f97555d14448eea8ea0a4a8f3734e8bc5e3440d8b80cb2b4a3c5d35c8`.
+- Input manifest, SHA-256
+  `79f6864e01fc2e653465fd19fc28362025018cc1c29c632c186f7d0a8e088d31`.
+- Asset preflight, SHA-256
+  `2ff60267cef1a9f7a5ca3da7a1fd0616e7fa5c8b611b3d69a88962a1751c3d98`.
 - All 399 required assets, exact 181-map inventory, and the three expected bad
   assets (`lmctf02`, `lmctf05`, and `xmap22`).
 - Reserved recovery port range `61200–61380`, deliberately disjoint from the
   unrelated q2ded fleet on `28520–28529`.
 
-Current controller state:
+Accepted controller result:
 
-- The unsafe recovered legacy controller was rejected and must not be used.
-- A replacement controller draft exists at `corpus_runner.py`, SHA-256
-  `f24f338315da2bbee6cb0fccb1791017dbbf072110ec9abcd8b6036ec7ecdd7c`.
-- Its Python AST parses, but it has **not** passed self-tests, independent
-  refutation, a q2ded smoke test, or a live corpus run. **Do not launch it yet.**
-- `controller-config.json` SHA-256 is
-  `af0ddd37ce82ad5570aa55fd9d23df50babf535399ff783895c84ddb05f09772`.
-- The evidence module has not yet been copied to
-  `immutable/evidence/game.so`; input manifests and immutable permission freeze
-  have not yet been produced.
-- No recovery controller or recovery q2ded process is running. All subagents
-  are stopped.
+- Run root: `corpus/control-02`
+- Frozen fingerprint:
+  `a50bcfda29404e611dc906bf537b4adff6df61cf6fd0c6df961a7d1258120757`
+- Terminal results: 181/181
+- PASS: 135
+- MAP_FAIL: 36
+- TIMEOUT: 7
+- ASSET_FAIL: 3
+- INFRA: 0
+- Summary SHA-256:
+  `e31bc027262b6c993fbd9946a8907c457351d50faf5bdb25197a325792eb83c4`
+
+The only retry was `smap43`: attempt 1 ended before the command and was kept as
+nonterminal `HARNESS:PRECOMMAND_EXIT_0`; attempt 2 passed. All 181 final
+results, summary rows, and heartbeat counts agree under the frozen fingerprint.
+All referenced rune, log, and lint hashes verify; 179 spawned-child ownership
+records are exited; the controller exited 0; and ports `61200–61380` are free.
 
 The pre-reboot d36 corpus reached 179/181 only in `/tmp` and was destroyed by
 the reboot. Its observations may guide diagnosis but are not accepted evidence.
 
-### Exact resume order
+### Exact next order
 
-1. Inspect the current controller draft at the hashes above; do not resume from
-   the rejected legacy-review findings as though they reviewed this new hash.
-2. Copy the exact built module to `immutable/evidence/game.so`.
-3. Generate and verify the complete input manifest and asset-preflight ledger;
-   freeze immutable files/directories to read-only permissions.
-4. Add/run no-engine controller self-tests covering fingerprinted resume,
-   exclusive ownership, fsynced ledgers, bounded startup retry, exact process
-   identity, TCP+UDP preflight, and exact rune-write attribution.
-5. Obtain a fresh independent refutation of the exact controller hash and fix
-   any confirmed defects before launch.
-6. Run one private `lmctf42` runtime-v3 smoke test.
-7. Only after a clean smoke, detach the durable 181-map controller and record
-   its owner, heartbeat, immutable fingerprint, and exact child PIDs/ports.
-8. After the corpus is terminal and audited, resume S3b in this order:
-   offline oracle/generator adapter, loader-publication replay, live SWIM, live
-   DROP policy/yaw migration, then live HOOK.
+1. Resolve the newly exposed generator ordering/exposure reproducibility issue
+   or prove that it does not block the next differential gate.
+2. Add loader-publication replay and stable diagnostics for enabled ordinary
+   actions without widening runtime dispatch.
+3. Migrate live SWIM to the reducer.
+4. Migrate live DROP with an explicit wet-contact policy, canonical yaw bytes,
+   action-contract revision, and corpus regeneration.
+5. Migrate live HOOK, then begin the first compound PREOPEN/RIDE vertical slice.
 
 ### Protected/unrelated state
 
@@ -741,3 +756,16 @@ the commit, verification, corpus scope, and remaining blocker.
   double-promoted DROP yaw quantization as the v3 canonical command byte; the
   current live controller's one-short float-rounding difference is an explicit
   S3b migration, not a behavior-neutral refactor claim.
+- 2026-08-14: The reboot recovery completed under frozen fingerprint
+  `a50bcfda...`: the durable runtime-v3 control corpus reached 181/181 terminal
+  with 135 PASS, 36 map failures, 7 bounded timeouts, 3 invalid assets, and no
+  terminal infrastructure failure. All result/log/lint/rune hashes and summary
+  counts agree; the sole precommand-exit retry passed on attempt 2; every owned
+  child exited and the private port range was released.
+- 2026-08-14: Commit `a72c834` completed and pushed S3b1. Offline DROP, SWIM,
+  and HOOK proofs now drive the shared replay reducers with exact legacy
+  command, host-call, proof, and final-state parity. `lmctf42` and `lmctf08`
+  regenerated byte-for-byte; all timing variants of `lmctf10` have an identical
+  normalized 1,338-seed/50,994-link execution graph. Its seed order,
+  `area_hint`, and tombstone differences arise before the migrated proof seams
+  and are tracked as a separate pre-existing generator determinism issue.
