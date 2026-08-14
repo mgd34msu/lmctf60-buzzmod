@@ -330,7 +330,15 @@ static qboolean Seed_Ground(vec3_t candidate, vec3_t out)
 		down[2] -= 128.0f + lifts[L];
 
 		tr = sg_host.trace(start, mins, maxs, down, NULL, MASK_PLAYERSOLID);
-		if (!tr.startsolid && !tr.allsolid)
+		/* A hit on the rotator itself has already been clipped back by the
+		 * engine's collision epsilon, so it is never a standing floor.  For a
+		 * normal floor, however, test only the authoritative reached segment:
+		 * a rotator behind that opaque floor cannot make this seed disappear. */
+		if (!tr.startsolid && !tr.allsolid &&
+		    !(tr.ent && tr.ent->solid == SOLID_BSP && tr.ent->classname &&
+		      !strcmp(tr.ent->classname, "func_rotating")) &&
+		    !SG_OracleRotatorSweepBlocks(start, mins, maxs, tr.endpos,
+		                                 MASK_PLAYERSOLID))
 			break;
 	}
 	if (L == 4)
@@ -513,6 +521,9 @@ static void Seed_Flood(void)
 				 * sealed rail/wall pockets as large, internally connected islands.
 				 * The endpoint must be wholly reachable by this exact hull sweep. */
 				if (wtr.startsolid || wtr.allsolid || wtr.fraction < 1.0f)
+					continue;
+				if (SG_OracleRotatorSweepBlocks(from, pmins, pmaxs, to,
+				                                MASK_PLAYERSOLID))
 					continue;
 			}
 			Seed_Add(ground);
@@ -4018,7 +4029,9 @@ static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out)
 		from[2] += 16.0f;
 		to[2] += 16.0f;
 		tr = sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID);
-		if (tr.startsolid || tr.fraction < 1.0f)
+		if (tr.startsolid || tr.fraction < 1.0f ||
+		    SG_OracleRotatorSweepBlocks(from, NULL, NULL, to,
+		                                MASK_DEADSOLID))
 			continue;
 		bestd = dd;
 		best = i;
@@ -4370,7 +4383,9 @@ qboolean Rune_Generate(const char *mapname)
 				VectorCopy(gen_seeds[j].origin, b);
 				b[2] += 22.0f;
 				etr = sg_host.trace(a, NULL, NULL, b, NULL, MASK_OPAQUE);
-				if (etr.fraction >= 1.0f)
+				if (etr.fraction >= 1.0f &&
+				    !SG_OracleRotatorSweepBlocks(a, NULL, NULL, b,
+				                                 MASK_OPAQUE))
 					vis++;
 			}
 			/* scale to the byte-ish range; sampled can be < 24 in sparse

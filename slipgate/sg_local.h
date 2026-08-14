@@ -81,6 +81,13 @@ extern vec3_t sg_caco_death_org[2];
 extern float sg_caco_death_time[2];
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps);
+/* Phase-independent exclusion for topology and exposure traces.  It models
+ * the full swept volume of canonical func_rotating brushes, not their
+ * instantaneous phase.  It deliberately does not make Pmove/action proofs
+ * phase-independent. */
+qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
+	const vec3_t hull_mins, const vec3_t hull_maxs, const vec3_t end,
+	int contentmask);
 int SG_OracleHookStep(sg_phantom_t *ph, const vec3_t bite,
 	const vec3_t view_angles, int hand);
 qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,

@@ -168,6 +168,10 @@ SWIM_LIVE_TEST_BIN = sg_swim_live_test.gnu
 SWIM_LIVE_TEST_OBJS = .sg_swim_live_test.gnu.o \
 	.sg_swim_live_under_test.gnu.o .sg_swim_live_replay_under_test.gnu.o
 SWIM_LIVE_TEST_DEPS = $(SWIM_LIVE_TEST_OBJS:.o=.d)
+ROTATOR_SWEEP_TEST_BIN = sg_rotator_sweep_test.gnu
+ROTATOR_SWEEP_TEST_OBJS = .sg_rotator_sweep_test.gnu.o .sg_rotator_sweep_under_test.gnu.o \
+	.sg_rotator_sweep_q_shared_under_test.gnu.o
+ROTATOR_SWEEP_TEST_DEPS = $(ROTATOR_SWEEP_TEST_OBJS:.o=.d)
 ENTFILE_TEST_BIN = g_entfile_path_test.gnu
 ENTFILE_TEST_OBJS = .g_entfile_path_test.gnu.o
 ENTFILE_TEST_DEPS = $(ENTFILE_TEST_OBJS:.o=.d)
@@ -271,6 +275,13 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_swim_live_under_test.make.o .sg_swim_live_under_test.make.d \
 	.sg_swim_live_replay_under_test.make.o \
 	.sg_swim_live_replay_under_test.make.d \
+	sg_rotator_sweep_test.gnu sg_rotator_sweep_test.make \
+	.sg_rotator_sweep_test.gnu.o .sg_rotator_sweep_test.gnu.d \
+	.sg_rotator_sweep_under_test.gnu.o .sg_rotator_sweep_under_test.gnu.d \
+	.sg_rotator_sweep_q_shared_under_test.gnu.o .sg_rotator_sweep_q_shared_under_test.gnu.d \
+	.sg_rotator_sweep_test.make.o .sg_rotator_sweep_test.make.d \
+	.sg_rotator_sweep_under_test.make.o .sg_rotator_sweep_under_test.make.d \
+	.sg_rotator_sweep_q_shared_under_test.make.o .sg_rotator_sweep_q_shared_under_test.make.d \
 	g_entfile_path_test.gnu g_entfile_path_test.make \
 	.g_entfile_path_test.gnu.o .g_entfile_path_test.gnu.d \
 	.g_entfile_path_test.make.o .g_entfile_path_test.make.d
@@ -401,7 +412,7 @@ SHLIBLDFLAGS = -shared
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
 	rune-loader-test \
 	rune-writer-test rune-install-test rune-proof-test replay-test \
-	swim-live-test entfile-test \
+	swim-live-test rotator-sweep-test entfile-test \
 	snapshot-test stripcr clean distclean FORCE
 
 all: dep $(TARGET)
@@ -495,6 +506,9 @@ $(REPLAY_TEST_BIN): $(REPLAY_TEST_OBJS)
 
 $(SWIM_LIVE_TEST_BIN): $(SWIM_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(SWIM_LIVE_TEST_OBJS) $(LDFLAGS)
+
+$(ROTATOR_SWEEP_TEST_BIN): $(ROTATOR_SWEEP_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(ROTATOR_SWEEP_TEST_OBJS) $(LDFLAGS)
 
 $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) -o $@ $(ENTFILE_TEST_OBJS) $(LDFLAGS)
@@ -647,6 +661,21 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_rotator_sweep_test.gnu.o: tests/sg_rotator_sweep_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rotator_sweep_under_test.gnu.o: slipgate/sg_oracle.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rotator_sweep_q_shared_under_test.gnu.o: q_shared.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .g_entfile_path_test.gnu.o: tests/g_entfile_path_test.c g_entfile_path.h \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -660,6 +689,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
+		$(ROTATOR_SWEEP_TEST_BIN) \
 		$(ENTFILE_TEST_BIN)
 	./$(HOST_TEST_BIN)
 	./$(ACTION_TEST_BIN)
@@ -678,6 +708,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 	./$(RUNE_PROOF_TEST_BIN)
 	./$(REPLAY_TEST_BIN)
 	./$(SWIM_LIVE_TEST_BIN)
+	./$(ROTATOR_SWEEP_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
 	./$(ENGINE_SNAPSHOT_TEST)
 
@@ -728,6 +759,9 @@ replay-test: $(REPLAY_TEST_BIN)
 
 swim-live-test: $(SWIM_LIVE_TEST_BIN)
 	./$(SWIM_LIVE_TEST_BIN)
+
+rotator-sweep-test: $(ROTATOR_SWEEP_TEST_BIN)
+	./$(ROTATOR_SWEEP_TEST_BIN)
 
 entfile-test: $(ENTFILE_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
@@ -788,6 +822,7 @@ endif
 -include $(RUNE_PROOF_TEST_DEPS)
 -include $(REPLAY_TEST_DEPS)
 -include $(SWIM_LIVE_TEST_DEPS)
+-include $(ROTATOR_SWEEP_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
 endif
 
