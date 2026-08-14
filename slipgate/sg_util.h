@@ -71,9 +71,10 @@ qboolean SG_SwimArrived(const vec3_t origin, const vec3_t destination,
 qboolean SG_SupportedArrived(const vec3_t origin, const vec3_t destination,
 	qboolean grounded, int watertype, int waterlevel, edict_t *passent);
 
-/* Exact/declared actions own the command stream from staging through their
- * shared completion predicate. Tactical weapon cooks must not arm beside an
- * existing commitment and then deadlock both owners. */
+/* A runtime-supported outer action with the direct OWNS_CONTROL trait owns
+ * the command stream from staging through its completion predicate. Tactical
+ * weapon cooks must not arm beside an existing commitment and deadlock both
+ * owners. Effective suffixes never authorize ownership. */
 qboolean SG_ActionOwnsControl(int action);
 qboolean SG_DeclaredCommand(const vec3_t origin, const vec3_t target,
 	const pmove_state_t *pms, usercmd_t *cmd);

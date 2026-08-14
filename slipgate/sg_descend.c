@@ -7,6 +7,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_action.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_persona.h"
@@ -382,6 +383,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	{
 		rune_link_t *l = &SG_Rune()->links[li];
 		float v = Surface_At(tc, l->to, w, route_field, support, intercept);
+		/* Route policy inherits the suffix; hook_water and the readiness branch
+		 * below remain exact bare-HOOK controller checks. */
+		qboolean hook_policy = SG_ActionUsesHookPolicy(l->action);
 		qboolean hook_water = l->action == RL_HOOK &&
 		    (SG_Rune()->seeds[l->from].flags & RSF_WATER);
 		int b;
@@ -502,7 +506,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * the objective the legs beat any rope ritual; only a fleeing
 		 * carrier keeps the choice.
 		 */
-		if (l->action == RL_HOOK && role != SG_ROLE_CARRY &&
+		if (hook_policy && role != SG_ROLE_CARRY &&
 		    goal_field[bot->seed] < 600 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			continue;
@@ -568,7 +572,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		else if (role == SG_ROLE_CARRY)
 			v += 0.4f * (float)SG_Rune()->seeds[l->to].area_hint; /* was 2.0: same audit */
 
-		if (l->action == RL_HOOK && SG_TimerPending(bot->hookban_until))
+		if (hook_policy && SG_TimerPending(bot->hookban_until))
 			continue;           /* every v2 rope is offhand and exactly re-proved;
 			                     * a recent live failure shelves all rope attempts */
 
@@ -669,7 +673,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				v += sg_cv.shelfcost->value * 60000.0f;
 		}
 
-		if (role == SG_ROLE_CARRY && l->action == RL_HOOK)
+		if (role == SG_ROLE_CARRY && hook_policy)
 		{
 			/*
 			 * The carrier's ROPE is not everyone's rope: phase 1 is a

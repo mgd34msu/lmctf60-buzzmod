@@ -490,3 +490,10 @@ the commit, verification, corpus scope, and remaining blocker.
   the explicit 128/16/44-byte decoder lands. Focused boundary fixtures pass in
   every reader, all 135 hash-matched passing baseline runes were replayed
   successfully, and representative output stayed byte-for-byte unchanged.
+- 2026-08-13: Behavior-neutral C consumers now use the canonical registry for
+  command ownership, full-commit localization suppression, field-cost bias,
+  and tactical hook policy. Direct runtime traits never follow an effective
+  suffix, so dormant compound actions remain non-executable; suffix inheritance
+  is confined to pricing and route policy. Exhaustive legacy equivalence,
+  sanitizer, both-makefile test/build, linked-module, and symbol-resolution
+  checks passed without changing controller dispatch.

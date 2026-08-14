@@ -14,6 +14,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_action.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
@@ -111,21 +112,15 @@ void SG_RopecostRefresh(void)
 
 static int Link_EffCost(const rune_link_t *l)
 {
-	switch (l->action)
-	{
-	/*
-	 * 1000, not 400: the rope's REAL ritual is a standing aim frame (the
+	/* 1000, not 400: the rope's REAL ritual is a standing aim frame (the
 	 * body halts, phase 1 owns the view), the fire, and a landing brake --
 	 * wave 57's carrier trace shows ~2-3s of wall clock per rope against
 	 * cost_ms figures in the hundreds, and a carrier that chained ropes
 	 * covered 4s of field in 70s of flailing while a run would have flown.
 	 * Underpricing the ritual made the flood chain hooks where legs win.
-	 */
-	case RL_HOOK:       return l->cost_ms + sg_ropecost_ms;
-	case RL_DROP:       return l->cost_ms + 150;    /* align the lip line */
-	case RL_ROCKETJUMP: return l->cost_ms + 900;    /* raise RL + aim + pay */
-	default:            return l->cost_ms;
-	}
+	 * The registry preserves the other legacy doses: DROP +150 to align the
+	 * lip line and reserved RJ +900 to raise, aim, and pay. */
+	return l->cost_ms + SG_ActionFieldBiasMs(l->action, sg_ropecost_ms);
 }
 
 /* ------------------------------------------------------ envelope transitions

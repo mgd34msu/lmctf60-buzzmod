@@ -62,6 +62,13 @@ int SG_ActionTraitKnown(unsigned int trait);
 int SG_ActionHasTrait(int action, unsigned int trait);
 int SG_ActionEffectiveHasTrait(int action, unsigned int trait);
 int SG_ActionEffectiveSuffix(int action);
+/* Runtime traits belong to the outer action. This helper never follows the
+ * effective suffix and therefore cannot authorize an unimplemented compound
+ * controller. */
+int SG_ActionRuntimeHasTrait(int action, unsigned int trait);
+/* Policy-only inheritance. Neither helper authorizes execution or dispatch. */
+int SG_ActionUsesHookPolicy(int action);
+int SG_ActionFieldBiasMs(int action, int rope_bias_ms);
 int SG_EndpointPolicyKnown(int policy);
 int SG_ActionEndpointPolicy(int action);
 int SG_ActionEndpointAllowed(int action, int from_water, int to_water);

@@ -2,6 +2,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_action.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rune.h"
 
@@ -30,9 +31,7 @@ qboolean SG_ImmutableSupport(edict_t *ent)
 
 qboolean SG_ActionOwnsControl(int action)
 {
-	return action == RL_JUMP || action == RL_DROP || action == RL_HOOK ||
-	       action == RL_SWIM || action == RL_LIFT || action == RL_TELEPORT ||
-	       action == RL_DOOR;
+	return SG_ActionRuntimeHasTrait(action, SG_ACTF_OWNS_CONTROL);
 }
 
 /* Exact planar command used by both declared-mechanism generation and live

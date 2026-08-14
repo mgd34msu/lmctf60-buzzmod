@@ -88,6 +88,16 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 
 static void TestActions(void)
 {
+	/* Entries 0..8 are the literal pre-registry consumer behavior. Entries
+	 * 9..11 pin dormant compound metadata without granting runtime support. */
+	static const int runtime_owns_control[SG_ACTION_COUNT] =
+		{ 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0 };
+	static const int runtime_suppresses_localization[SG_ACTION_COUNT] =
+		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0 };
+	static const int uses_hook_policy[SG_ACTION_COUNT] =
+		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1 };
+	static const int field_bias_at_rope_1000[SG_ACTION_COUNT] =
+		{ 0, 0, 150, 1000, 0, 0, 0, 900, 0, 150, 0, 1000 };
 	static const unsigned int traits[] =
 	{
 		SG_ACTF_OWNS_CONTROL, SG_ACTF_BALLISTIC,
@@ -154,6 +164,14 @@ static void TestActions(void)
 		CHECK(SG_ActionEndpointPolicy(action) ==
 		      (int)desc->endpoint_policy);
 		CHECK(SG_ActionEffectiveSuffix(action) == expect->effective_suffix);
+		CHECK(SG_ActionRuntimeHasTrait(action, SG_ACTF_OWNS_CONTROL) ==
+		      runtime_owns_control[action]);
+		CHECK(SG_ActionRuntimeHasTrait(
+		          action, SG_ACTF_SUPPRESS_LOCALIZATION) ==
+		      runtime_suppresses_localization[action]);
+		CHECK(SG_ActionUsesHookPolicy(action) == uses_hook_policy[action]);
+		CHECK(SG_ActionFieldBiasMs(action, 1000) ==
+		      field_bias_at_rope_1000[action]);
 
 		for (provenance = 0; provenance < SG_PROVENANCE_COUNT; provenance++)
 			CHECK(SG_ActionAllowsProvenance(action, provenance) ==
@@ -175,6 +193,9 @@ static void TestActions(void)
 			CHECK(SG_ActionTraitKnown(traits[i]));
 			CHECK(SG_ActionHasTrait(action, traits[i]) ==
 			      ((desc->trait_mask & traits[i]) != 0));
+			CHECK(SG_ActionRuntimeHasTrait(action, traits[i]) ==
+			      (expect->runtime_supported != 0 &&
+			       (desc->trait_mask & traits[i]) != 0));
 			CHECK(suffix != NULL);
 			if (suffix)
 				CHECK(SG_ActionEffectiveHasTrait(action, traits[i]) ==
@@ -190,6 +211,14 @@ static void TestActions(void)
 	CHECK(SG_ActionEffectiveHasTrait(RL_DOOR_DROP, SG_ACTF_BALLISTIC));
 	CHECK(!SG_ActionRuntimeSupported(RL_DOOR_HOOK));
 	CHECK(SG_ActionRuntimeSupported(SG_ActionEffectiveSuffix(RL_DOOR_HOOK)));
+	CHECK(!SG_ActionRuntimeHasTrait(RL_DOOR_HOOK, SG_ACTF_OWNS_CONTROL));
+	CHECK(SG_ActionUsesHookPolicy(RL_DOOR_HOOK));
+	CHECK(SG_ActionFieldBiasMs(RL_ROCKETJUMP, 1000) == 900);
+	CHECK(SG_ActionFieldBiasMs(RL_DOOR_DROP, 1000) == 150);
+	CHECK(SG_ActionFieldBiasMs(RL_DOOR_HOOK, 1000) == 1000);
+	CHECK(SG_ActionFieldBiasMs(RL_HOOK, -1) == 0);
+	CHECK(SG_ActionFieldBiasMs(RL_DOOR_HOOK, INT_MIN) == 0);
+	CHECK(SG_ActionFieldBiasMs(RL_HOOK, INT_MAX) == INT_MAX);
 
 	CHECK(SG_ActionDescribe(-1) == NULL);
 	CHECK(SG_ActionDescribe(SG_ACTION_COUNT) == NULL);
@@ -201,6 +230,12 @@ static void TestActions(void)
 	CHECK(!SG_ActionKnown(INT_MAX));
 	CHECK(!SG_ActionRuntimeSupported(INT_MIN));
 	CHECK(!SG_ActionRuntimeSupported(INT_MAX));
+	CHECK(!SG_ActionRuntimeHasTrait(INT_MIN, SG_ACTF_OWNS_CONTROL));
+	CHECK(!SG_ActionRuntimeHasTrait(INT_MAX, SG_ACTF_OWNS_CONTROL));
+	CHECK(!SG_ActionUsesHookPolicy(INT_MIN));
+	CHECK(!SG_ActionUsesHookPolicy(INT_MAX));
+	CHECK(SG_ActionFieldBiasMs(INT_MIN, 1000) == 0);
+	CHECK(SG_ActionFieldBiasMs(INT_MAX, 1000) == 0);
 	CHECK(!SG_ActionAllowsProvenance(INT_MIN, RL_PROVEN));
 	CHECK(!SG_ActionAllowsProvenance(INT_MAX, RL_PROVEN));
 	CHECK(!SG_ActionAllowsMode(INT_MIN, RLCM_NONE));
@@ -218,6 +253,8 @@ static void TestActions(void)
 	CHECK(!SG_ActionTraitKnown(UINT_MAX));
 	CHECK(!SG_ActionHasTrait(RL_RUN, 0));
 	CHECK(!SG_ActionHasTrait(RL_RUN, UINT_MAX));
+	CHECK(!SG_ActionRuntimeHasTrait(RL_JUMP, 0));
+	CHECK(!SG_ActionRuntimeHasTrait(RL_JUMP, UINT_MAX));
 	CHECK(!SG_ActionHasTrait(INT_MIN, SG_ACTF_OWNS_CONTROL));
 	CHECK(!SG_ActionHasTrait(INT_MAX, SG_ACTF_OWNS_CONTROL));
 	CHECK(!SG_ActionEffectiveHasTrait(INT_MIN, SG_ACTF_OWNS_CONTROL));

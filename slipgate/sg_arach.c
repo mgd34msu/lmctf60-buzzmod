@@ -23,6 +23,7 @@
 #include "g_ctffunc.h"
 #include "g_tourney.h"              /* Match_Mode -- the clock read's one caveat */
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_action.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_chat.h"       /* human orders replace the role quota */
 #include "slipgate/sg_persona.h"    /* the roster's names, wired to behaviour */
@@ -1783,10 +1784,8 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 	 * lets combat/fields replace the command before its shared arrival predicate
 	 * is reached. Keep the departure identity for the bounded commitment, just
 	 * as an airborne ballistic keeps it through sparse vertical coverage. */
-	if (commit && (commit->action == RL_SWIM ||
-	               commit->action == RL_LIFT ||
-	               commit->action == RL_TELEPORT ||
-	               commit->action == RL_DOOR))
+	if (commit && SG_ActionRuntimeHasTrait(
+	        commit->action, SG_ACTF_SUPPRESS_LOCALIZATION))
 		return;
 	/* Once a ballistic has submitted its first proved command, its departure
 	 * identity belongs to that bounded action until CommitLink judges the first
@@ -2159,10 +2158,9 @@ void SG_BotThink(sg_bot_t *bot)
 	    !Think_SpeedhookOwnsSeed(bot) &&
 	    !(bot->seed >= 0 && bot->commit_link >= 0 &&
 	      bot->commit_link < sg_rune->hdr.num_links &&
-	      (sg_rune->links[bot->commit_link].action == RL_SWIM ||
-	       sg_rune->links[bot->commit_link].action == RL_LIFT ||
-	       sg_rune->links[bot->commit_link].action == RL_TELEPORT ||
-	       sg_rune->links[bot->commit_link].action == RL_DOOR)) &&
+	      SG_ActionRuntimeHasTrait(
+	          sg_rune->links[bot->commit_link].action,
+	          SG_ACTF_SUPPRESS_LOCALIZATION)) &&
 	    !(bot->seed >= 0 && !e->groundentity && e->waterlevel < 2 &&
 	      (bot->rj_phase == 3 ||
 	       (bot->commit_link >= 0 &&
