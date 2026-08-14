@@ -150,6 +150,33 @@ class RuneIoV3Tests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             decoded.header.map_name = "changed"
 
+    def test_v3_prefix_detection_survives_independent_field_corruption(self):
+        self.assertFalse(runeio.looks_like_v3_prefix(b""))
+        self.assertFalse(runeio.looks_like_v3_prefix(self.golden[:5]))
+        self.assertFalse(runeio.looks_like_v3_prefix(self.golden[:6]))
+        self.assertTrue(runeio.looks_like_v3_prefix(self.golden[:8]))
+
+        bad_version = bytearray(self.golden[:8])
+        struct.pack_into("<H", bad_version, 4, 2)
+        self.assertTrue(runeio.looks_like_v3_prefix(bad_version))
+
+        bad_size = bytearray(self.golden[:12])
+        struct.pack_into("<H", bad_size, 6, 0)
+        self.assertTrue(runeio.looks_like_v3_prefix(bad_size))
+
+        bad_version_and_size = bytearray(bad_size)
+        struct.pack_into("<H", bad_version_and_size, 4, 2)
+        self.assertTrue(runeio.looks_like_v3_prefix(bad_version_and_size))
+
+        bad_header_and_seed_size = bytearray(bad_size)
+        struct.pack_into("<H", bad_header_and_seed_size, 8, 15)
+        self.assertTrue(
+            runeio.looks_like_v3_prefix(bad_header_and_seed_size)
+        )
+
+        legacy_v3 = struct.pack("<4i", contract.RUNE_V3_MAGIC, 3, 2, 0)
+        self.assertFalse(runeio.looks_like_v3_prefix(legacy_v3))
+
     def test_wire_error_exposes_generated_diagnostic(self):
         error = runeio.RuneWireError(contract.RLW_BAD_MAGIC, "probe")
         self.assertEqual(contract.RLW_BAD_MAGIC, error.code)
@@ -331,13 +358,15 @@ class RuneIoV3Tests(unittest.TestCase):
         mutations = (
             (LINK0_OFFSET + 4, "<I", 0),
             (LINK0_OFFSET, "<I", 2),
+            (LINK0_OFFSET + 8, "<B", contract.RL_DOOR_HOOK + 1),
             (LINK0_OFFSET + 8, "<B", 255),
-            (LINK0_OFFSET + 9, "<B", 5),
+            (LINK0_OFFSET + 9, "<B", contract.RL_CONTRACTED + 1),
             (LINK0_OFFSET + 9, "<B", contract.RL_CONTRACTED),
             (LINK0_OFFSET + 14, "<h", 0),
             (LINK0_OFFSET + 16, "<f", float("nan")),
             (LINK0_OFFSET + 28, "<f", 1.0),
             (LINK0_OFFSET + 42, "<B", contract.RLCM_PREOPEN),
+            (LINK0_OFFSET + 42, "<B", contract.RLCM_RIDE + 1),
             (LINK0_OFFSET + 42, "<B", 255),
             (LINK0_OFFSET + 43, "<B", 1),
         )

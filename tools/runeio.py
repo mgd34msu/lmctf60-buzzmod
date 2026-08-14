@@ -623,6 +623,26 @@ def _validate_graph(
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD, f"link {index} is a self-link"
             )
+        # The v3 wire namespace is frozen independently of later registry
+        # growth.  Per-action masks refine these bounds; they must never make
+        # a future action, provenance, or mode byte legal in an old v3 file.
+        if not 0 <= link.action <= contract.RL_DOOR_HOOK:
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has action outside frozen v3 range "
+                f"{link.action}",
+            )
+        if not 0 <= link.provenance <= contract.RL_CONTRACTED:
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has provenance outside frozen v3 range "
+                f"{link.provenance}",
+            )
+        if not contract.RLCM_NONE <= link.mode <= contract.RLCM_RIDE:
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has mode outside frozen v3 range {link.mode}",
+            )
         try:
             action = contract.action_contract(link.action)
         except (TypeError, ValueError) as exc:
@@ -1041,6 +1061,34 @@ MAX_V3_FILE_BYTES = (
     contract.RUNE_V3_MAX_SEEDS * contract.RUNE_V3_SEED_BYTES +
     contract.RUNE_V3_MAX_LINKS * contract.RUNE_V3_LINK_BYTES
 )
+
+
+def looks_like_v3_prefix(data: bytes | bytearray | memoryview) -> bool:
+    """Recognize a v3-family prefix before any legacy-layout interpretation.
+
+    The legacy layout stores its version as a 32-bit integer, so the first six
+    bytes of a legacy ``version == 3`` file are indistinguishable from v3's
+    magic plus 16-bit version.  Require either v3's exact header size, or its
+    exact link size.  The latter cannot be an accepted legacy count: byte 44
+    occupies the high half of legacy ``num_seeds`` and therefore implies at
+    least 2,883,584 seeds, beyond the frozen 32,768 cap.
+    Those independent fixed
+    fields keep one-field-corrupt v3 files on the strict v3 diagnostic path
+    without stealing legacy forensic files from the legacy readers.
+    """
+
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        return False
+    prefix = bytes(data)
+    if (len(prefix) >= 8 and
+            struct.unpack_from("<H", prefix, 6)[0] ==
+            contract.RUNE_V3_HEADER_BYTES):
+        return True
+    return (
+        len(prefix) >= 12 and
+        struct.unpack_from("<H", prefix, 10)[0] ==
+        contract.RUNE_V3_LINK_BYTES
+    )
 
 
 def read_v3(

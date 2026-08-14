@@ -286,7 +286,7 @@ document is normative for implementation; this roadmap tracks its progress.
       funky-gravity mode, cadence, and other action-relevant constants.
 - [ ] Generate under a map's actual supported physics and require runtime
       equality instead of globally hardcoding gravity 800.
-- [ ] Use explicit little-endian field encoding or retain a compile-time
+- [x] Use explicit little-endian field encoding or retain a compile-time
       compatibility guard with a documented migration path.
 
 ### Atomic compound mover actions
@@ -412,7 +412,7 @@ Commit policy:
        dirty files.
 3. [x] Fix and test the host allocation/installation contract.
 4. [x] Add the first mock-host and deterministic primitive tests.
-5. [ ] Establish the canonical action interface and stable reason codes.
+5. [x] Establish the canonical action interface and stable reason codes.
 6. [ ] Implement the RUNE v3 header/schema and strict compatibility rejection.
 7. [ ] Implement one complete compound vertical slice (`DOOR_DROP`) with
        generator, loader, runtime, linter, replay, and `lmctf01` verification.
@@ -524,3 +524,13 @@ the commit, verification, corpus scope, and remaining blocker.
   with an explicit unavailable-identity record, and `.ent` override paths use
   one bounded formatter for both reads and writes. Durable process-name and
   maximum-path boundary tests run under both Makefiles.
+- 2026-08-14: The explicit RUNE v3 codec/tool slice is complete in this commit.
+  Allocation-free C and strict Python codecs agree byte-for-byte on the
+  128/16/44 little-endian format, CRCs, fixed bounds, identity, record laws,
+  and graph ownership; maximum-size, single-bit, CRC-repaired, sanitizer, and
+  cross-language differential tests pass. The three primary Python readers
+  now inspect v3 through one atomic file snapshot while preserving 135/135 v2
+  baseline results byte-for-byte. Runtime-v3 lint re-applies every supported
+  legacy controller law and rejects registered-but-disabled actions. The
+  generator and C loader remain deliberately on v2 until the next transactional
+  writer/loader slices; compound controllers remain disabled.

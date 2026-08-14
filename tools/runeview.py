@@ -6,11 +6,10 @@ Build order (slipgate/SLIPGATE.md, step 2) calls for walking a rune by eye
 before any bot reads it. This replaces the throwaway python that used to do
 that with a proper script.
 
-Reads a .rune file exactly as slipgate/sg_rune.c writes it: a rune_header_t,
-then num_seeds rune_seed_t records, then num_links rune_link_t records, flat
-binary, little-endian, native struct layout (no packing pragmas in the C
-source, confirmed by measuring the real header on-disk against a compiled
-struct probe). Struct layouts are documented in slipgate/sg_rune.h.
+Reads legacy v1/v2 native-layout files for forensic comparison and explicit
+little-endian v3 files through the shared strict codec.  V3 carries a 128-byte
+identity/physics-bound header, 16-byte seeds, and 44-byte links; the legacy
+80/16/28 layout remains isolated behind its frozen version gates.
 
 Produces a single self-contained HTML file: top-down component view, a
 directed-reachability view for a goal seed, an optional side-elevation slice,
@@ -33,6 +32,7 @@ try:
 except ModuleNotFoundError:  # also support `python -m tools.runeview`
     from tools.runelint import hook_control_errors
 try:
+    import rune_contracts_generated as contract
     from rune_contracts_generated import (
         ACTION_COLORS as CONTRACT_ACTION_COLORS,
         ACTION_NAMES as CONTRACT_ACTION_NAMES,
@@ -41,6 +41,7 @@ try:
         RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
     )
 except ModuleNotFoundError:  # also support `python -m tools.runeview`
+    from tools import rune_contracts_generated as contract
     from tools.rune_contracts_generated import (
         ACTION_COLORS as CONTRACT_ACTION_COLORS,
         ACTION_NAMES as CONTRACT_ACTION_NAMES,
@@ -48,6 +49,10 @@ except ModuleNotFoundError:  # also support `python -m tools.runeview`
         RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
         RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
     )
+try:
+    import runeio
+except ModuleNotFoundError:  # also support `python -m tools.runeview`
+    from tools import runeio
 
 # --------------------------------------------------------------------- I/O
 
@@ -97,6 +102,16 @@ PROVENANCE_NAMES = {
     for provenance in range(RL_DECLARED + 1)
 }
 
+
+def _action_names_for_version(version):
+    return (CONTRACT_ACTION_NAMES
+            if version == contract.RUNE_V3_VERSION else ACTION_NAMES)
+
+
+def _action_colors_for_version(version):
+    return (CONTRACT_ACTION_COLORS
+            if version == contract.RUNE_V3_VERSION else ACTION_COLORS)
+
 # Frozen flat-layout gates. An effective suffix is display/policy metadata and
 # must never make a compound outer action valid in a legacy record. V1/V2 have
 # no mode byte; their only implicit mode is NONE.
@@ -115,18 +130,19 @@ HOOK_CONTROL_MESSAGES = {
 
 class Rune:
     __slots__ = ('path', 'magic', 'version', 'num_seeds', 'num_links',
-                 'mapname', 'seeds', 'links')
+                 'mapname', 'seeds', 'links', 'header')
 
 
-def load_rune(path):
+def _load_legacy_rune(path, data=None):
     """Read one complete, loader-compatible .rune file.
 
     Final graphs are installed by atomic rename.  Treating an incomplete
     payload as a visualizable graph can reinterpret link bytes as fabricated
     seeds, so forensic partial viewing is intentionally not implicit here.
     """
-    with open(path, 'rb') as f:
-        data = f.read()
+    if data is None:
+        with open(path, 'rb') as stream:
+            data = stream.read(runeio.MAX_V3_FILE_BYTES + 1)
 
     if len(data) < HEADER_SIZE:
         raise ValueError(f"{path}: file is {len(data)} bytes, "
@@ -170,6 +186,7 @@ def load_rune(path):
     r.magic = magic
     r.version = version
     r.mapname = mapname
+    r.header = None
 
     off = HEADER_SIZE
     seeds = []
@@ -295,6 +312,61 @@ def load_rune(path):
     r.seeds = seeds
     r.links = links
     return r
+
+
+def _load_v3_rune(path, data=None):
+    decoded = (runeio.read_v3(path) if data is None else
+               runeio.decode_v3(data))
+    expected_mapname = os.path.splitext(os.path.basename(path))[0]
+    if decoded.header.map_name != expected_mapname:
+        raise runeio.RuneWireError(
+            contract.RLW_MAPNAME_MISMATCH,
+            f'header={decoded.header.map_name!r}, file={expected_mapname!r}',
+        )
+
+    r = Rune()
+    r.path = path
+    r.magic = decoded.header.magic
+    r.version = decoded.header.version
+    r.mapname = decoded.header.map_name
+    r.header = decoded.header
+    r.seeds = [
+        {'x': seed.origin[0], 'y': seed.origin[1], 'z': seed.origin[2],
+         'area_hint': seed.area_hint, 'flags': seed.flags}
+        for seed in decoded.seeds
+    ]
+    r.links = [
+        {'from': link.source, 'to': link.destination, 'action': link.action,
+         'provenance': link.provenance, 'min_speed': link.min_speed,
+         'heading': link.heading, 'heading_slack': link.heading_slack,
+         'exit_speed': link.exit_speed, 'cost_ms': link.cost_ms,
+         'anchor': link.suffix_anchor,
+         'suffix_anchor': link.suffix_anchor,
+         'mechanism_anchor': link.mechanism_anchor,
+         'sweep_clear_ms': link.sweep_clear_ms, 'mode': link.mode,
+         'reserved': link.reserved}
+        for link in decoded.links
+    ]
+    r.num_seeds = len(r.seeds)
+    r.num_links = len(r.links)
+    return r
+
+
+def load_rune(path):
+    """Read a complete legacy forensic or structurally valid v3 rune."""
+    # Probe and decode the same inode snapshot.  Generator installs use atomic
+    # rename, so a second pathname open could otherwise switch formats between
+    # classification and decode.
+    with open(path, 'rb') as stream:
+        data = stream.read(runeio.MAX_V3_FILE_BYTES + 1)
+    if runeio.looks_like_v3_prefix(data[:12]):
+        if len(data) > runeio.MAX_V3_FILE_BYTES:
+            raise runeio.RuneWireError(
+                contract.RLW_BAD_FILE_SIZE,
+                f'{len(data)} bytes exceeds {runeio.MAX_V3_FILE_BYTES}',
+            )
+        return _load_v3_rune(path, data)
+    return _load_legacy_rune(path, data)
 
 
 # ------------------------------------------------------------- graph work
@@ -431,7 +503,8 @@ def hook_visual_segments(rune):
                 continue
             start, end = segment
             pitch, yaw, distance = link['anchor']
-            label = (f'link {index}: v2 nominal right-hand muzzle ray; '
+            label = (f'link {index}: v{rune.version} nominal right-hand '
+                     'muzzle ray; '
                      f'pitch={pitch:.6f} yaw={yaw:.6f} distance={distance:.1f}; '
                      f'bite=({end[0]:.1f}, {end[1]:.1f}, {end[2]:.1f})')
         segments.append((link, start, end, label))
@@ -444,6 +517,18 @@ def graph_link_points(rune, link):
     end_seed = rune.seeds[link['to']]
     start = (start_seed['x'], start_seed['y'], start_seed['z'])
     end = (end_seed['x'], end_seed['y'], end_seed['z'])
+    if rune.version == contract.RUNE_V3_VERSION:
+        action = contract.action_contract(link['action'])
+        points = [start]
+        if action['trait_mask'] & contract.SG_ACTF_ATOMIC:
+            points.append(link['mechanism_anchor'])
+        if action['suffix_anchor_policy'] in (
+                contract.RLAP_RUN_WAYPOINT, contract.RLAP_DROP_LIP,
+                contract.RLAP_WORLD, contract.RLAP_TELEPORT_PAD,
+                contract.RLAP_DOOR_WAIT):
+            points.append(link['suffix_anchor'])
+        points.append(end)
+        return tuple(points)
     if link['action'] in (0, 5, 6, 8) and any(
             value != 0.0 for value in link['anchor']):
         return (start, link['anchor'], end)
@@ -619,6 +704,7 @@ def _bbox(points, pad_frac=0.06):
 
 
 def render_topdown_svg(rune, comp_of, comps_by_idx, largest_comp, one_way):
+    action_colors = _action_colors_for_version(rune.version)
     hook_segments = hook_visual_segments(rune)
     seed_pts = [(s['x'], -s['y']) for s in rune.seeds]
     link_paths = [graph_link_points(rune, link) for link in rune.links]
@@ -640,7 +726,7 @@ def render_topdown_svg(rune, comp_of, comps_by_idx, largest_comp, one_way):
     out.append(SVG_HEADER.format(minx=minx, miny=miny, w=w, h=h, pxw=1400, pxh=int(1400 * h / w) if w else 900))
     out.append('<rect x="{:.1f}" y="{:.1f}" width="{:.1f}" height="{:.1f}" class="rv-bg"/>'.format(minx, miny, w, h))
 
-    for action, color in ACTION_COLORS.items():
+    for action, color in action_colors.items():
         out.append(ARROW_MARKER.format(mid=action, msize=max(diag / 350.0, 4), color=color))
 
     out.append('<g class="rv-links">')
@@ -650,7 +736,7 @@ def render_topdown_svg(rune, comp_of, comps_by_idx, largest_comp, one_way):
             continue
         path = link_paths[i]
         points = ' '.join(f'{point[0]:.1f},{-point[1]:.1f}' for point in path)
-        color = ACTION_COLORS.get(link['action'], '#ffffff')
+        color = action_colors.get(link['action'], '#ffffff')
         marker = f' marker-end="url(#arrow-{link["action"]})"' if i in one_way else ''
         out.append(f'<polyline points="{points}" fill="none" stroke="{color}" '
                     f'stroke-width="{stroke:.2f}" opacity="0.55"{marker}/>')
@@ -730,6 +816,7 @@ def render_reach_svg(rune, goal, in_reach):
 
 
 def render_elevation_svg(rune, region):
+    action_colors = _action_colors_for_version(rune.version)
     x0, x1, y0, y1 = region
     idx = [i for i, s in enumerate(rune.seeds)
            if x0 <= s['x'] <= x1 and y0 <= s['y'] <= y1]
@@ -759,7 +846,7 @@ def render_elevation_svg(rune, region):
     out.append('<g class="rv-links">')
     for link, path in link_paths:
         points = ' '.join(f'{point[0]:.1f},{-point[2]:.1f}' for point in path)
-        color = ACTION_COLORS.get(link['action'], '#ffffff')
+        color = action_colors.get(link['action'], '#ffffff')
         out.append(f'<polyline points="{points}" fill="none" stroke="{color}" '
                     f'stroke-width="{stroke:.2f}" opacity="0.7"/>')
     out.append('</g>')
@@ -836,7 +923,8 @@ def frontier_analysis(rune, in_reach):
 
 
 def compute_stats(rune, comp_of, comps_by_idx, comp_order, goal, goal_reason, in_reach):
-    action_counts = {a: 0 for a in ACTION_NAMES}
+    action_names = _action_names_for_version(rune.version)
+    action_counts = {a: 0 for a in action_names}
     for link in rune.links:
         action_counts[link['action']] = action_counts.get(link['action'], 0) + 1
 
@@ -846,7 +934,7 @@ def compute_stats(rune, comp_of, comps_by_idx, comp_order, goal, goal_reason, in
 
     frontier_total, frontier_buckets = frontier_analysis(rune, in_reach)
 
-    return {
+    stats = {
         'version': rune.version,
         'seeds': rune.num_seeds,
         'links_total': rune.num_links,
@@ -860,19 +948,57 @@ def compute_stats(rune, comp_of, comps_by_idx, comp_order, goal, goal_reason, in
         'frontier_total': frontier_total,
         'frontier_buckets': frontier_buckets,
     }
+    if rune.header is not None:
+        stats['header'] = {
+            'map': rune.header.map_name,
+            'payload_crc32': rune.header.payload_crc32,
+            'bsp_checksum': rune.header.bsp_checksum,
+            'entity_crc32': rune.header.entity_crc32,
+            'action_contract_crc32': rune.header.action_contract_crc32,
+            'physics_flags': rune.header.physics_flags,
+            'gravity': rune.header.gravity,
+            'airaccelerate': rune.header.airaccelerate,
+            'maxvelocity': rune.header.maxvelocity,
+            'pmove_substep_ms': rune.header.pmove_substep_ms,
+            'server_frame_ms': rune.header.server_frame_ms,
+            'host_physics_id': rune.header.host_physics_id,
+        }
+    return stats
 
 
 def render_stats_html(stats):
+    action_names = _action_names_for_version(stats['version'])
+    action_colors = _action_colors_for_version(stats['version'])
     lines = []
     lines.append('<div class="rv-stats">')
     lines.append('<h2>Stats</h2>')
     lines.append('<table class="rv-table">')
     lines.append(f'<tr><td>rune version</td><td>{stats["version"]}</td></tr>')
+    header = stats.get('header')
+    if header is not None:
+        lines.append('<tr><td>map identity</td><td>' +
+                     html.escape(header['map']) + '</td></tr>')
+        lines.append('<tr><td>BSP checksum</td><td>'
+                     f'0x{header["bsp_checksum"]:08x}</td></tr>')
+        lines.append('<tr><td>entity CRC32</td><td>'
+                     f'0x{header["entity_crc32"]:08x}</td></tr>')
+        lines.append('<tr><td>payload CRC32</td><td>'
+                     f'0x{header["payload_crc32"]:08x}</td></tr>')
+        lines.append('<tr><td>action contract CRC32</td><td>'
+                     f'0x{header["action_contract_crc32"]:08x}</td></tr>')
+        physics = (f'flags=0x{header["physics_flags"]:08x}, '
+                   f'gravity={header["gravity"]:g}, '
+                   f'airaccelerate={header["airaccelerate"]:g}, '
+                   f'maxvelocity={header["maxvelocity"]:g}, '
+                   f'pmove={header["pmove_substep_ms"]} ms, '
+                   f'server={header["server_frame_ms"]} ms, '
+                   f'host ID={header["host_physics_id"]}')
+        lines.append(f'<tr><td>physics identity</td><td>{physics}</td></tr>')
     lines.append(f'<tr><td>seeds</td><td>{stats["seeds"]}</td></tr>')
     lines.append(f'<tr><td>links (total)</td><td>{stats["links_total"]}</td></tr>')
-    for a in sorted(ACTION_NAMES):
-        lines.append(f'<tr><td>&nbsp;&nbsp;links: {ACTION_NAMES[a]}</td>'
-                      f'<td><span class="swatch" style="background:{ACTION_COLORS[a]}"></span>'
+    for a in sorted(action_names):
+        lines.append(f'<tr><td>&nbsp;&nbsp;links: {action_names[a]}</td>'
+                      f'<td><span class="swatch" style="background:{action_colors[a]}"></span>'
                       f'{stats["action_counts"].get(a, 0)}</td></tr>')
     lines.append(f'<tr><td>components</td><td>{stats["component_count"]}</td></tr>')
     sizes = stats['component_sizes']
@@ -902,12 +1028,29 @@ def render_stats_html(stats):
 
 
 def stats_plaintext(stats):
+    action_names = _action_names_for_version(stats['version'])
     lines = []
     lines.append(f"rune version: {stats['version']}")
+    header = stats.get('header')
+    if header is not None:
+        lines.append(f"map identity: {header['map']}")
+        lines.append(f"BSP checksum: 0x{header['bsp_checksum']:08x}")
+        lines.append(f"entity CRC32: 0x{header['entity_crc32']:08x}")
+        lines.append(f"payload CRC32: 0x{header['payload_crc32']:08x}")
+        lines.append('action contract CRC32: '
+                     f"0x{header['action_contract_crc32']:08x}")
+        lines.append('physics identity: '
+                     f"flags=0x{header['physics_flags']:08x}, "
+                     f"gravity={header['gravity']:g}, "
+                     f"airaccelerate={header['airaccelerate']:g}, "
+                     f"maxvelocity={header['maxvelocity']:g}, "
+                     f"pmove={header['pmove_substep_ms']} ms, "
+                     f"server={header['server_frame_ms']} ms, "
+                     f"host ID={header['host_physics_id']}")
     lines.append(f"seeds: {stats['seeds']}")
     lines.append(f"links (total): {stats['links_total']}")
-    for a in sorted(ACTION_NAMES):
-        lines.append(f"  links: {ACTION_NAMES[a]}: {stats['action_counts'].get(a, 0)}")
+    for a in sorted(action_names):
+        lines.append(f"  links: {action_names[a]}: {stats['action_counts'].get(a, 0)}")
     lines.append(f"components: {stats['component_count']}")
     sizes = stats['component_sizes']
     shown = sizes[:20]
@@ -1077,9 +1220,13 @@ PAGE_JS = """
 
 def build_page(rune, stats_html, stats_text_html, topdown_svg, reach_svg,
                elevation_svg, diff_html, region):
+    action_names = _action_names_for_version(rune.version)
+    action_colors = _action_colors_for_version(rune.version)
     action_legend = ''.join(
-        f'<span><span class="swatch" style="background:{ACTION_COLORS[a]}"></span>{ACTION_NAMES[a]}</span>'
-        for a in sorted(ACTION_NAMES))
+        f'<span><span class="swatch" '
+        f'style="background:{action_colors[a]}"></span>'
+        f'{action_names[a]}</span>'
+        for a in sorted(action_names))
 
     elevation_section = ''
     if region is not None:

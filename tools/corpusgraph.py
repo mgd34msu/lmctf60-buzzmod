@@ -17,15 +17,21 @@ import tempfile
 import zlib
 
 try:
+    import rune_contracts_generated as contract
     from rune_contracts_generated import (
         RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
         RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
     )
 except ModuleNotFoundError:  # also support `python -m tools.corpusgraph`
+    from tools import rune_contracts_generated as contract
     from tools.rune_contracts_generated import (
         RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
         RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
     )
+try:
+    import runeio
+except ModuleNotFoundError:  # also support `python -m tools.corpusgraph`
+    from tools import runeio
 
 
 HEADER_FMT = '<4i64s'
@@ -245,10 +251,65 @@ def _validate_rune_records(path, data, version, num_seeds, num_links):
                     f'{path}: seed {index} violates route-core ownership')
 
 
+def _read_rune_v3(path, expected_map, stream, prefix, file_size):
+    if file_size > runeio.MAX_V3_FILE_BYTES:
+        raise runeio.RuneWireError(
+            contract.RLW_BAD_FILE_SIZE,
+            f'{file_size} bytes exceeds {runeio.MAX_V3_FILE_BYTES}',
+        )
+    data = prefix + stream.read(runeio.MAX_V3_FILE_BYTES + 1 - len(prefix))
+    decoded = runeio.decode_v3(data)
+    mapname = decoded.header.map_name
+    if expected_map is not None and mapname != expected_map:
+        raise runeio.RuneWireError(
+            contract.RLW_MAPNAME_MISMATCH,
+            f'header={mapname!r}, expected={expected_map!r}',
+        )
+    seed_end = decoded.header.num_seeds * runeio.SEED_STRUCT.size
+    physics = {
+        'flags': decoded.header.physics_flags,
+        'gravity': decoded.header.gravity,
+        'airaccelerate': decoded.header.airaccelerate,
+        'maxvelocity': decoded.header.maxvelocity,
+        'pmove_substep_ms': decoded.header.pmove_substep_ms,
+        'server_frame_ms': decoded.header.server_frame_ms,
+        'host_physics_id': decoded.header.host_physics_id,
+    }
+    return {
+        'map': mapname,
+        'version': decoded.header.version,
+        'num_seeds': decoded.header.num_seeds,
+        'num_links': decoded.header.num_links,
+        'data': data,
+        'graph_crc32': decoded.header.payload_crc32,
+        'seed_crc32': zlib.crc32(decoded.payload[:seed_end]) & 0xffffffff,
+        'header_bytes': decoded.header.header_bytes,
+        'seed_bytes': decoded.header.seed_bytes,
+        'link_bytes': decoded.header.link_bytes,
+        'payload_crc32': decoded.header.payload_crc32,
+        'bsp_checksum': decoded.header.bsp_checksum,
+        'entity_crc32': decoded.header.entity_crc32,
+        'action_contract_crc32': decoded.header.action_contract_crc32,
+        'physics': physics,
+        'seeds': decoded.seeds,
+        'links': decoded.links,
+    }
+
+
 def read_rune(path, expected_map=None, versions=(1, 2)):
     """Read one bounded, exact-size rune and return its decoded metadata."""
     with open(path, 'rb') as stream:
-        header = stream.read(HEADER_SIZE)
+        # Twelve bytes include all three fixed v3 size fields.  That is enough
+        # to retain v3 routing when header_bytes alone is corrupt without
+        # confusing a legacy int32-version-3 forensic file with wire v3.
+        prefix = stream.read(12)
+        file_size = os.fstat(stream.fileno()).st_size
+        if runeio.looks_like_v3_prefix(prefix):
+            if 3 not in versions:
+                raise ValueError(f'{path}: unsupported rune version 3')
+            return _read_rune_v3(
+                path, expected_map, stream, prefix, file_size)
+        header = prefix + stream.read(HEADER_SIZE - len(prefix))
         if len(header) < HEADER_SIZE:
             raise ValueError(
                 f'{path}: shorter than {HEADER_SIZE}-byte rune header')
@@ -294,12 +355,22 @@ def read_rune(path, expected_map=None, versions=(1, 2)):
 
 
 def rune_identity(path, expected_map=None):
-    rune = read_rune(path, expected_map)
-    return {
+    rune = read_rune(path, expected_map, versions=(1, 2, 3))
+    identity = {
         'map': rune['map'],
         'rune_num_seeds': rune['num_seeds'],
         'rune_seed_crc32': rune['seed_crc32'],
     }
+    if rune['version'] == 3:
+        identity.update({
+            'rune_version': 3,
+            'rune_payload_crc32': rune['payload_crc32'],
+            'rune_bsp_checksum': rune['bsp_checksum'],
+            'rune_entity_crc32': rune['entity_crc32'],
+            'rune_action_contract_crc32': rune['action_contract_crc32'],
+            'rune_physics': dict(rune['physics']),
+        })
+    return identity
 
 
 def require_corpus_identity(document, path, identity):

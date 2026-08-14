@@ -14,20 +14,27 @@ import sys
 
 from mapflags import flag_origins_with_source, nearest
 try:
+    import rune_contracts_generated as contract
     from rune_contracts_generated import (
         ACTION_SHORT_NAMES as CONTRACT_ACTION_SHORT_NAMES,
         RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
         RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
     )
 except ModuleNotFoundError:  # also support `python -m tools.runelint`
+    from tools import rune_contracts_generated as contract
     from tools.rune_contracts_generated import (
         ACTION_SHORT_NAMES as CONTRACT_ACTION_SHORT_NAMES,
         RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
         RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
     )
+try:
+    import runeio
+except ModuleNotFoundError:  # also support `python -m tools.runelint`
+    from tools import runeio
 
 RUNE_MAGIC = 0x454E5552
 RUNE_VERSION = 2
+RUNE_V3_VERSION = contract.RUNE_V3_VERSION
 READABLE_RUNE_VERSIONS = (1, RUNE_VERSION)
 RUNE_MAX_SEEDS = 32768
 RUNE_MAX_LINKS = 262144
@@ -98,64 +105,64 @@ def hook_control_errors(anchor):
     return tuple(errors)
 
 
-def load(path):
-    with open(path, 'rb') as f:
-        header = f.read(HEADER_SIZE)
-        if len(header) < HEADER_SIZE:
-            raise ValueError(f'file is {len(header)} bytes, shorter than '
-                             f'{HEADER_SIZE}-byte rune header')
-        actual_size = os.fstat(f.fileno()).st_size
+def _load_legacy(path, data=None):
+    if data is None:
+        with open(path, 'rb') as stream:
+            data = stream.read(runeio.MAX_V3_FILE_BYTES + 1)
+    if len(data) < HEADER_SIZE:
+        raise ValueError(f'file is {len(data)} bytes, shorter than '
+                         f'{HEADER_SIZE}-byte rune header')
+    actual_size = len(data)
+    header = data[:HEADER_SIZE]
 
-        magic, ver, ns, nl, raw_map = struct.unpack_from(HEADER_FMT, header, 0)
-        flaws = []
-        if magic != RUNE_MAGIC:
-            flaws.append(f'BAD MAGIC {magic:#x}')
-        if ver not in READABLE_RUNE_VERSIONS:
-            flaws.append(f'BAD VERSION {ver} (known: 1, {RUNE_VERSION})')
+    magic, ver, ns, nl, raw_map = struct.unpack_from(HEADER_FMT, header, 0)
+    flaws = []
+    if magic != RUNE_MAGIC:
+        flaws.append(f'BAD MAGIC {magic:#x}')
+    if ver not in READABLE_RUNE_VERSIONS:
+        flaws.append(f'BAD VERSION {ver} (known: 1, {RUNE_VERSION})')
 
-        counts_ok = (0 < ns <= RUNE_MAX_SEEDS and
-                     0 <= nl <= RUNE_MAX_LINKS)
-        if not counts_ok:
-            flaws.append(f'counts outside format limits: {ns} seeds, {nl} links')
+    counts_ok = (0 < ns <= RUNE_MAX_SEEDS and
+                 0 <= nl <= RUNE_MAX_LINKS)
+    if not counts_ok:
+        flaws.append(f'counts outside format limits: {ns} seeds, {nl} links')
 
-        if b'\0' not in raw_map:
-            mapname = raw_map.decode('ascii', 'replace')
-            flaws.append('unterminated map name')
-        else:
-            raw_name = raw_map.split(b'\0', 1)[0]
-            try:
-                mapname = raw_name.decode('ascii')
-            except UnicodeDecodeError:
-                mapname = raw_name.decode('ascii', 'replace')
-                flaws.append('non-ASCII map name')
-        expected_map = os.path.splitext(os.path.basename(path))[0]
-        if mapname.casefold() != expected_map.casefold():
-            flaws.append(f'map identity mismatch: header={mapname!r} '
-                         f'file={expected_map!r}')
+    if b'\0' not in raw_map:
+        mapname = raw_map.decode('ascii', 'replace')
+        flaws.append('unterminated map name')
+    else:
+        raw_name = raw_map.split(b'\0', 1)[0]
+        try:
+            mapname = raw_name.decode('ascii')
+        except UnicodeDecodeError:
+            mapname = raw_name.decode('ascii', 'replace')
+            flaws.append('non-ASCII map name')
+    expected_map = os.path.splitext(os.path.basename(path))[0]
+    if mapname.casefold() != expected_map.casefold():
+        flaws.append(f'map identity mismatch: header={mapname!r} '
+                     f'file={expected_map!r}')
 
-        size_ok = False
-        if counts_ok:
-            expected_size = HEADER_SIZE + ns * SEED_SIZE + nl * LINK_SIZE
-            size_ok = actual_size == expected_size
-            if not size_ok:
-                kind = ('truncated' if actual_size < expected_size
-                        else 'trailing data')
-                flaws.append(f'{kind}: {actual_size} bytes, '
-                             f'expected {expected_size}')
+    size_ok = False
+    if counts_ok:
+        expected_size = HEADER_SIZE + ns * SEED_SIZE + nl * LINK_SIZE
+        size_ok = actual_size == expected_size
+        if not size_ok:
+            kind = ('truncated' if actual_size < expected_size
+                    else 'trailing data')
+            flaws.append(f'{kind}: {actual_size} bytes, '
+                         f'expected {expected_size}')
 
-        # Unknown magic/version or an invalid payload boundary is not safe to
-        # reinterpret as this flat layout. Header flaws are still reported,
-        # but graph-level checks wait for a complete supported payload.
-        if (magic != RUNE_MAGIC or ver not in READABLE_RUNE_VERSIONS or
-                not counts_ok or not size_ok):
-            return magic, ver, mapname, ns, nl, None, None, flaws
+    # Unknown magic/version or an invalid payload boundary is not safe to
+    # reinterpret as this flat layout. Header flaws are still reported, but
+    # graph-level checks wait for a complete supported payload.
+    if (magic != RUNE_MAGIC or ver not in READABLE_RUNE_VERSIONS or
+            not counts_ok or not size_ok):
+        return magic, ver, mapname, ns, nl, None, None, flaws
 
-        payload = f.read(expected_size - HEADER_SIZE)
-        if len(payload) != expected_size - HEADER_SIZE:
-            flaws.append('short payload read after exact-size check')
-            return magic, ver, mapname, ns, nl, None, None, flaws
-
-    data = header + payload
+    payload = data[HEADER_SIZE:expected_size]
+    if len(payload) != expected_size - HEADER_SIZE:
+        flaws.append('short payload read after exact-size check')
+        return magic, ver, mapname, ns, nl, None, None, flaws
 
     off = HEADER_SIZE
     seeds = []
@@ -167,6 +174,69 @@ def load(path):
         links.append(struct.unpack_from(LINK_FMT, data, off))
         off += LINK_SIZE
     return magic, ver, mapname, ns, nl, seeds, links, flaws
+
+
+def _load_v3(path, data=None):
+    decoded = (runeio.read_v3(path) if data is None else
+               runeio.decode_v3(data))
+    expected_map = os.path.splitext(os.path.basename(path))[0]
+    if decoded.header.map_name != expected_map:
+        raise runeio.RuneWireError(
+            contract.RLW_MAPNAME_MISMATCH,
+            f'header={decoded.header.map_name!r}, file={expected_map!r}',
+        )
+    seeds = [(*seed.origin, seed.area_hint, seed.flags)
+             for seed in decoded.seeds]
+    links = [
+        (link.source, link.destination, link.action, link.provenance,
+         link.min_speed, link.heading, link.heading_slack, link.exit_speed,
+         link.cost_ms, *link.suffix_anchor)
+        for link in decoded.links
+    ]
+    metadata = {
+        'payload_crc32': decoded.header.payload_crc32,
+        'bsp_checksum': decoded.header.bsp_checksum,
+        'entity_crc32': decoded.header.entity_crc32,
+        'action_contract_crc32': decoded.header.action_contract_crc32,
+        'physics_flags': decoded.header.physics_flags,
+        'gravity': decoded.header.gravity,
+        'airaccelerate': decoded.header.airaccelerate,
+        'maxvelocity': decoded.header.maxvelocity,
+        'pmove_substep_ms': decoded.header.pmove_substep_ms,
+        'server_frame_ms': decoded.header.server_frame_ms,
+        'host_physics_id': decoded.header.host_physics_id,
+    }
+    result = (decoded.header.magic, decoded.header.version,
+              decoded.header.map_name, decoded.header.num_seeds,
+              decoded.header.num_links, seeds, links, [])
+    return result, metadata
+
+
+def _load_with_metadata(path):
+    # Route and decode one immutable byte snapshot.  Final runes are installed
+    # by atomic rename; reopening the pathname after probing can otherwise
+    # classify one inode and decode a different one.
+    with open(path, 'rb') as stream:
+        data = stream.read(runeio.MAX_V3_FILE_BYTES + 1)
+    if runeio.looks_like_v3_prefix(data[:12]):
+        if len(data) > runeio.MAX_V3_FILE_BYTES:
+            raise runeio.RuneWireError(
+                contract.RLW_BAD_FILE_SIZE,
+                f'{len(data)} bytes exceeds {runeio.MAX_V3_FILE_BYTES}',
+            )
+        return _load_v3(path, data)
+    return _load_legacy(path, data), None
+
+
+def load(path):
+    """Load a legacy forensic or structurally valid v3 graph.
+
+    The historical eight-item return shape is intentionally retained. Header
+    identity metadata is reported by :func:`lint` for v3 rather than widening
+    this API and breaking callers that unpack it.
+    """
+    result, _ = _load_with_metadata(path)
+    return result
 
 
 def _objective_roots(path, mapname, seeds, linked, gamedir=None):
@@ -190,10 +260,12 @@ def _objective_roots(path, mapname, seeds, linked, gamedir=None):
     return roots, source
 
 
-def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
+def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None,
+         runtime_v3=False):
     name = os.path.basename(path)
     try:
-        magic, ver, mapname, ns, nl, seeds, links, flaws = load(path)
+        loaded, header_metadata = _load_with_metadata(path)
+        magic, ver, mapname, ns, nl, seeds, links, flaws = loaded
     except (OSError, ValueError, struct.error) as e:
         flaw = f'unreadable rune: {e}'
         print(f'== {name}')
@@ -202,6 +274,11 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
 
     if runtime_v2 and ver != RUNE_VERSION:
         flaws.append(f'deployment requires runtime v{RUNE_VERSION}, got v{ver}')
+    if runtime_v3 and ver != RUNE_V3_VERSION:
+        flaws.append(f'deployment requires runtime v{RUNE_V3_VERSION}, got v{ver}')
+    if runtime_v2 and runtime_v3:
+        flaws.append('deployment cannot require runtime v2 and v3 together')
+    runtime_deployment = runtime_v2 or runtime_v3
 
     outdeg = collections.Counter()
     indeg = collections.Counter()
@@ -261,29 +338,45 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
         bad_swim = bad_momentum_jump = bad_unsupported_rj = 0
         bad_action_anchor = bad_tombstone_link = 0
         bad_hook_control = collections.Counter()
+        runtime_unsupported = collections.Counter()
         hook_anchor_low = 0
         for link in links:
             fr, to, act, prov, minsp, hdg, slack, exsp, cost = link[:9]
             anchor = link[9:12]
-            acts[ACTS[act] if act <= RL_DOOR else f'?{act}'] += 1
-            if act > LEGACY_ACTION_MAX[ver]:
+            if ver == RUNE_V3_VERSION:
+                action_label = CONTRACT_ACTION_SHORT_NAMES.get(act, f'?{act}')
+            else:
+                action_label = ACTS[act] if act <= RL_DOOR else f'?{act}'
+            acts[action_label] += 1
+            if (ver in LEGACY_ACTION_MAX and
+                    act > LEGACY_ACTION_MAX[ver]):
                 bad_action += 1
-            if prov > LEGACY_PROVENANCE_MAX[ver]:
+            if (ver in LEGACY_PROVENANCE_MAX and
+                    prov > LEGACY_PROVENANCE_MAX[ver]):
                 bad_prov += 1
+            if (runtime_v3 and ver == RUNE_V3_VERSION and
+                    not contract.is_runtime_supported(act)):
+                runtime_unsupported[action_label] += 1
+            enforce_controller_laws = (
+                ver == RUNE_VERSION or
+                (runtime_v3 and ver == RUNE_V3_VERSION and
+                 contract.is_runtime_supported(act))
+            )
             anchor_finite = all(math.isfinite(v) for v in anchor)
             if not anchor_finite and not (ver == RUNE_VERSION and
                                           act == RL_HOOK):
                 bad_anchor += 1
-            if (act == RL_ROCKETJUMP and anchor_finite and
+            if (ver in READABLE_RUNE_VERSIONS and
+                    act == RL_ROCKETJUMP and anchor_finite and
                     (anchor[0] * anchor[0] + anchor[1] * anchor[1] > 1.0 or
                      anchor[2] <= 0.0 or anchor[2] > 255.0)):
                 bad_rj += 1
-            if ver == RUNE_VERSION and act == RL_HOOK:
+            if enforce_controller_laws and act == RL_HOOK:
                 bad_hook_control.update(hook_control_errors(anchor))
             if not (0 <= fr < ns and 0 <= to < ns):
                 bad_idx += 1
                 continue
-            if ver == RUNE_VERSION and act == RL_DROP and anchor_finite:
+            if enforce_controller_laws and act == RL_DROP and anchor_finite:
                 dx = anchor[0] - seeds[fr][0]
                 dy = anchor[1] - seeds[fr][1]
                 dz = anchor[2] - seeds[fr][2]
@@ -297,13 +390,13 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
                         abs(dz - 8.0) > 0.25 or
                         abs(yaw_delta) > 360.0 / 256.0):
                     bad_drop += 1
-            if (ver == RUNE_VERSION and
+            if (enforce_controller_laws and
                     act in (RL_RUN, RL_JUMP, RL_DOOR) and
                     ((seeds[fr][4] | seeds[to][4]) & RSF_WATER)):
                 bad_water_dry_action += 1
             from_water = bool(seeds[fr][4] & RSF_WATER)
             to_water = bool(seeds[to][4] & RSF_WATER)
-            if (ver == RUNE_VERSION and act == RL_HOOK and
+            if (enforce_controller_laws and act == RL_HOOK and
                     (prov != RL_PROVEN or minsp != 0 or
                      (from_water and to_water) or
                      slack != (RUNE_WATER_HOOK_CONTROL_MARKER
@@ -312,14 +405,14 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
             if (ver == RUNE_VERSION and act == RL_ROCKETJUMP and
                     ((seeds[fr][4] | seeds[to][4]) & RSF_WATER)):
                 bad_water_special += 1
-            if (ver == RUNE_VERSION and act == RL_SWIM and
+            if (enforce_controller_laws and act == RL_SWIM and
                     (not ((seeds[fr][4] | seeds[to][4]) & RSF_WATER) or
                      minsp != 0 or hdg != 0 or slack != 0 or
                      prov not in (RL_PROVEN, RL_ADJUSTED) or
                      not anchor_finite or
                      any(v != 0.0 for v in anchor))):
                 bad_swim += 1
-            if ver == RUNE_VERSION and act == RL_JUMP and minsp != 0:
+            if enforce_controller_laws and act == RL_JUMP and minsp != 0:
                 bad_momentum_jump += 1
             if ver == RUNE_VERSION and act == RL_ROCKETJUMP:
                 bad_unsupported_rj += 1
@@ -332,7 +425,7 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
             door_to_dx = seeds[to][0] - anchor[0] if anchor_finite else 0.0
             door_to_dy = seeds[to][1] - anchor[1] if anchor_finite else 0.0
             door_to_dz = seeds[to][2] - anchor[2] if anchor_finite else 0.0
-            if ver == RUNE_VERSION and (
+            if enforce_controller_laws and (
                     (act == RL_RUN and not anchor_zero and not anchor_world) or
                     (act == RL_JUMP and not anchor_zero) or
                     # Trigger identity and mover-sweep proof need live map
@@ -373,12 +466,13 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
         dups = sum(1 for count in dup.values() if count > 1)
         tombstones = {
             i for i, seed in enumerate(seeds)
-            if ver == RUNE_VERSION and seed[4] & RSF_TOMBSTONE
+            if ver in (RUNE_VERSION, RUNE_V3_VERSION) and
+            seed[4] & RSF_TOMBSTONE
         }
         bad_ownership = sum(
             1 for i in range(ns)
             if ((i in tombstones) == bool(outdeg[i]))
-        ) if ver == RUNE_VERSION else 0
+        ) if ver in (RUNE_VERSION, RUNE_V3_VERSION) else 0
         if bad_ownership:
             flaws.append(f'seeds violating route-core ownership: '
                          f'{bad_ownership}')
@@ -437,7 +531,7 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
                 objective_error = '; '.join(errors)
             else:
                 objective_source = 'server post-spawn roots'
-        elif runtime_v2:
+        elif runtime_deployment:
             objective_error = (
                 'deployment requires --objective-roots RED BLUE from the '
                 'generating server log')
@@ -457,8 +551,9 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
                 # to both objectives.  The 5% tolerance is useful for
                 # exploratory inspection, but allowing it here would let
                 # runegen install small, fully stranded graph islands.
-                if ((runtime_v2 and unreachable) or
-                        (not runtime_v2 and unreachable > routable * 0.05)):
+                if ((runtime_deployment and unreachable) or
+                        (not runtime_deployment and
+                         unreachable > routable * 0.05)):
                     metric = (f', nearest metric {distance:.1f}'
                               if distance is not None else '')
                     flaws.append(
@@ -478,8 +573,14 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
                 flaws.append(
                     f'outside best sampled reverse component: {unreach} '
                     f'({100 * unreach // max(1, routable)}%)')
-        if runtime_v2 and objective_error:
+        if runtime_deployment and objective_error:
             flaws.append(f'cannot validate flag objectives: {objective_error}')
+
+        if runtime_unsupported:
+            detail = ', '.join(
+                f'{action}={count}'
+                for action, count in sorted(runtime_unsupported.items()))
+            flaws.append(f'runtime v3 unsupported actions: {detail}')
 
         if bad_idx:
             flaws.append(f'links with out-of-range seeds: {bad_idx}')
@@ -492,12 +593,17 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
             flaws.append(f'links with unknown provenance: {bad_prov}')
         if bad_anchor:
             flaws.append(f'links with non-finite anchor: {bad_anchor}')
+        version_label = f'v{ver}'
         hook_labels = (
-            ('nonfinite', 'v2 hook controls with non-finite values'),
-            ('pitch_lattice', 'v2 hook controls with non-canonical pitch'),
-            ('yaw_lattice', 'v2 hook controls with non-canonical yaw'),
-            ('pitch_reach', 'v2 hook controls with Pmove-unreachable pitch'),
-            ('distance', 'v2 hook controls with ray distance outside 1..8192'),
+            ('nonfinite', f'{version_label} hook controls with non-finite values'),
+            ('pitch_lattice',
+             f'{version_label} hook controls with non-canonical pitch'),
+            ('yaw_lattice',
+             f'{version_label} hook controls with non-canonical yaw'),
+            ('pitch_reach',
+             f'{version_label} hook controls with Pmove-unreachable pitch'),
+            ('distance',
+             f'{version_label} hook controls with ray distance outside 1..8192'),
         )
         for key, label in hook_labels:
             if bad_hook_control[key]:
@@ -505,26 +611,32 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
         if bad_rj:
             flaws.append(f'rocket jumps with invalid envelope: {bad_rj}')
         if bad_drop:
-            flaws.append(f'v2 drops with invalid lip control: {bad_drop}')
+            flaws.append(f'{version_label} drops with invalid lip control: '
+                         f'{bad_drop}')
         if bad_water_dry_action:
-            flaws.append(f'v2 RUN/JUMP/DOOR links with water endpoint: '
+            flaws.append(f'{version_label} RUN/JUMP/DOOR links with water '
+                         f'endpoint: '
                          f'{bad_water_dry_action}')
         if bad_water_special:
             flaws.append(f'v2 rocket jumps with invalid water endpoint: '
                          f'{bad_water_special}')
         if bad_hook_schema:
-            flaws.append(f'v2 hooks with invalid provenance, speed, marker, '
-                         f'or wet destination: {bad_hook_schema}')
+            flaws.append(f'{version_label} hooks with invalid provenance, '
+                         f'speed, marker, or wet destination: '
+                         f'{bad_hook_schema}')
         if bad_swim:
-            flaws.append(f'v2 swims with malformed exact control: {bad_swim}')
+            flaws.append(f'{version_label} swims with malformed exact '
+                         f'control: {bad_swim}')
         if bad_momentum_jump:
-            flaws.append(f'v2 jumps with unsupported momentum envelope: '
+            flaws.append(f'{version_label} jumps with unsupported momentum '
+                         f'envelope: '
                          f'{bad_momentum_jump}')
         if bad_unsupported_rj:
             flaws.append(f'v2 rocket jumps with unserialized launch state: '
                          f'{bad_unsupported_rj}')
         if bad_action_anchor:
-            flaws.append(f'v2 links with invalid action anchor/control: '
+            flaws.append(f'{version_label} links with invalid action '
+                         f'anchor/control: '
                          f'{bad_action_anchor}')
         if self_links:
             flaws.append(f'self-links (from==to): {self_links}')
@@ -554,6 +666,19 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
     print(f'== {name}: version={ver} seeds={ns} links={nl} ' +
           ' '.join(f'{key}={value}' for key, value in sorted(acts.items())) +
           objective_detail)
+    if header_metadata is not None:
+        print('   HEADER: '
+              f'bsp=0x{header_metadata["bsp_checksum"]:08x} '
+              f'entity=0x{header_metadata["entity_crc32"]:08x} '
+              f'payload=0x{header_metadata["payload_crc32"]:08x} '
+              f'action_contract=0x{header_metadata["action_contract_crc32"]:08x} '
+              f'physics_flags=0x{header_metadata["physics_flags"]:08x} '
+              f'gravity={header_metadata["gravity"]:g} '
+              f'airaccelerate={header_metadata["airaccelerate"]:g} '
+              f'maxvelocity={header_metadata["maxvelocity"]:g} '
+              f'pmove={header_metadata["pmove_substep_ms"]}ms '
+              f'server={header_metadata["server_frame_ms"]}ms '
+              f'host_physics_id={header_metadata["host_physics_id"]}')
     if ver == 1:
         print('   NOTE: legacy v1 layout is readable, but its hook proofs use '
               'the old 25 ms pull model; the current runtime requires v2')
@@ -567,11 +692,17 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Validate SLIPGATE rune format and graph invariants.')
-    parser.add_argument(
+    deployment = parser.add_mutually_exclusive_group()
+    deployment.add_argument(
         '--runtime-v2', '--deployment', action='store_true',
         dest='runtime_v2',
         help='deployment gate: require v2 plus resolvable red/blue flag '
              'objectives')
+    deployment.add_argument(
+        '--runtime-v3', action='store_true',
+        help='deployment gate: require structurally valid v3, reject actions '
+             'without a live controller, and require resolvable red/blue '
+             'flag objectives')
     parser.add_argument(
         '--gamedir',
         help='game directory used for approximate BSP/ENT objective lookup '
@@ -579,7 +710,7 @@ def main(argv=None):
     parser.add_argument(
         '--objective-roots', nargs=2, type=int, metavar=('RED', 'BLUE'),
         help='authoritative post-spawn red/blue seed indices printed by the '
-             'generating server; required by --runtime-v2')
+             'generating server; required by a runtime deployment gate')
     parser.add_argument('patterns', nargs='*', metavar='RUNE_OR_GLOB')
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     patterns = args.patterns or [
@@ -599,7 +730,8 @@ def main(argv=None):
         for path in paths:
             total += len(lint(path, runtime_v2=args.runtime_v2,
                               gamedir=args.gamedir,
-                              objective_root_indices=args.objective_roots))
+                              objective_root_indices=args.objective_roots,
+                              runtime_v3=args.runtime_v3))
     print(f'TOTAL FLAWS: {total}')
     return 1 if total else 0
 

@@ -220,6 +220,9 @@
     <ClCompile Include="slipgate\sg_identity.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_wire.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_arach.c">
       <Filter>Source Files</Filter>
     </ClCompile>
