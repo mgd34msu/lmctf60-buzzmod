@@ -21,6 +21,125 @@ combines both approved scopes:
 The order is deliberate. Tactical variation must never be allowed to hide or
 compensate for an invalid movement graph.
 
+## Restart checkpoint — 2026-08-14 08:00 CDT
+
+### Project-level status
+
+**The project is not complete and is not ready to merge to `main`.** The
+mechanical v3 foundation is complete through the isolated S3a action-replay
+core. The remaining project is the integration of that replay core, compound
+movement implementation, final v3 corpus repair/acceptance, and the later
+human-like tactical program.
+
+Current phase summary:
+
+1. **Foundation and fail-closed v3 mechanics: complete and pushed.** This
+   includes the v2 baseline, host/build foundations, action contract, engine
+   identity bridge, explicit v3 wire codecs, transactional writer, strict
+   loader/runtime, authenticated sidecars, leased danger persistence, and the
+   isolated DROP/SWIM/HOOK replay reducers.
+2. **Replay integration and v3 acceptance: active, incomplete.** The pure
+   reducers are not yet the generator, loader-publication, or live-controller
+   execution path. A fresh 181-map v3 control corpus is still required.
+3. **Compound movement: not started.** `DOOR_DROP`, `DOOR_SWIM`, `DOOR_HOOK`,
+   restricted RIDE, compound leases/controllers, and enabling actions 9–11
+   remain future work.
+4. **Human-like tactical improvement: not started.** This begins only after
+   mechanical correctness and full v3 acceptance.
+
+### Completed and fully proven
+
+- All implementation slices through commit
+  `ae82238f89c5acb06a79b6e9f03dfc7788065881` are committed and pushed to
+  `origin/slipgate` using the repository Git identity.
+- The final v2 baseline is 181/181 terminal: 135 PASS and 46 classified FAIL.
+- The v3 action/identity/wire/generator/loader/runtime/sidecar foundation is
+  implemented, independently reviewed, and fail-closed.
+- S3a provides deterministic pure replay reducers for ordinary DROP, SWIM,
+  and HOOK with strict compiler, analyzer, sanitizer, and focused-test proof.
+
+### Completed core but not fully polished or final-accepted
+
+- The host seam works but still has dynamic `va_list` and const-cast cleanup.
+- The deterministic host harness is not yet the complete scripted Quake host
+  and full frame-capture/replay system.
+- Action metadata is centralized, but execution remains split among historical
+  per-action switches rather than one common dispatcher.
+- S3a is isolated; oracle/generator, publication replay, and live adapters are
+  not migrated.
+- DROP wet/dry contact policy and live-versus-proof yaw-byte convergence remain
+  explicit unresolved S3b decisions.
+- There is no single unified local pre-push command or final integration gate.
+- The v3 foundation has not yet passed a durable full 181-map acceptance run.
+
+### In flight at this stopping point
+
+The post-reboot corpus recovery is prepared under:
+
+`tools/runs-archive/runtime-v3-ae82238-control-01/`
+
+Prepared and verified:
+
+- Exact source archive for `ae82238`, SHA-256
+  `cafd8b8cb484b090443a4d2128653cfcf15ea06b3fb27111ba6b6161f98d1827`.
+- Exact rebuilt module, SHA-256
+  `bea6e097551094040cf647db1853d547520fe3f302b0bfc465ce03f603c7a7c0`;
+  `ldd -r` passed.
+- Patched engine, SHA-256
+  `d106334aacaa77abcc9174728517235e678f097b0707c9ff7042c0b2b3866590`.
+- Runtime-v3 linter, SHA-256
+  `3795d9d177c75d9af07495bd41f703e4c0ccc258ffb4deff2948d3c6689d62c6`.
+- All 399 required assets, exact 181-map inventory, and the three expected bad
+  assets (`lmctf02`, `lmctf05`, and `xmap22`).
+- Reserved recovery port range `61200–61380`, deliberately disjoint from the
+  unrelated q2ded fleet on `28520–28529`.
+
+Current controller state:
+
+- The unsafe recovered legacy controller was rejected and must not be used.
+- A replacement controller draft exists at `corpus_runner.py`, SHA-256
+  `f24f338315da2bbee6cb0fccb1791017dbbf072110ec9abcd8b6036ec7ecdd7c`.
+- Its Python AST parses, but it has **not** passed self-tests, independent
+  refutation, a q2ded smoke test, or a live corpus run. **Do not launch it yet.**
+- `controller-config.json` SHA-256 is
+  `af0ddd37ce82ad5570aa55fd9d23df50babf535399ff783895c84ddb05f09772`.
+- The evidence module has not yet been copied to
+  `immutable/evidence/game.so`; input manifests and immutable permission freeze
+  have not yet been produced.
+- No recovery controller or recovery q2ded process is running. All subagents
+  are stopped.
+
+The pre-reboot d36 corpus reached 179/181 only in `/tmp` and was destroyed by
+the reboot. Its observations may guide diagnosis but are not accepted evidence.
+
+### Exact resume order
+
+1. Inspect the current controller draft at the hashes above; do not resume from
+   the rejected legacy-review findings as though they reviewed this new hash.
+2. Copy the exact built module to `immutable/evidence/game.so`.
+3. Generate and verify the complete input manifest and asset-preflight ledger;
+   freeze immutable files/directories to read-only permissions.
+4. Add/run no-engine controller self-tests covering fingerprinted resume,
+   exclusive ownership, fsynced ledgers, bounded startup retry, exact process
+   identity, TCP+UDP preflight, and exact rune-write attribution.
+5. Obtain a fresh independent refutation of the exact controller hash and fix
+   any confirmed defects before launch.
+6. Run one private `lmctf42` runtime-v3 smoke test.
+7. Only after a clean smoke, detach the durable 181-map controller and record
+   its owner, heartbeat, immutable fingerprint, and exact child PIDs/ports.
+8. After the corpus is terminal and audited, resume S3b in this order:
+   offline oracle/generator adapter, loader-publication replay, live SWIM, live
+   DROP policy/yaw migration, then live HOOK.
+
+### Protected/unrelated state
+
+- Do not signal or inspect-by-name-and-kill any pre-existing q2ded process.
+- Preserve and exclude from commits: `.goodvibes/**`, `NOT-YET-DONE.md`,
+  `SLIPGATE-RECOVERY-PLAN.md`, `aux-2-launch.log`, `docs-layout-isa.md`,
+  `tests/__pycache__/**`, `sg_replay_test.gnu`, and `sg_replay_test.make`.
+- This roadmap edit is the only new tracked workspace mutation made for this
+  restart checkpoint.
+
 ## Success criteria
 
 - [ ] Every supported movement link has one versioned, replayable contract.
@@ -28,7 +147,7 @@ compensate for an invalid movement graph.
       contract.
 - [ ] The loader rejects stale, malformed, incompatible, or disconnected runes
       before bots use them.
-- [x] All 181 installed maps have a terminal, classified corpus result.
+- [x] All 181 installed maps have a terminal, classified **v2 baseline** result.
 - [ ] Every applicable map generates, lints, loads, and admits a live bot.
 - [ ] Maps using different physics are either proved under their actual law or
       rejected with an explicit, actionable reason.
