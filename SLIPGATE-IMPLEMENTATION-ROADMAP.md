@@ -510,3 +510,11 @@ the commit, verification, corpus scope, and remaining blocker.
   engine all fail closed. CRC streaming, mock-host mutation tests, sanitizer
   and dual-build gates, patched-engine two-map replay, old-engine compatibility,
   and hash-bound campaign/AB engine snapshots passed independently.
+- 2026-08-14: The first explicit RUNE v3 codec is complete in Python. It
+  encodes and decodes fixed little-endian 128-byte headers, 16-byte seeds, and
+  44-byte links; validates header and payload CRCs, action-contract identity,
+  physics law, optional exact active identity, record laws, and graph ownership;
+  and keeps wire-known disabled actions distinct from runtime authorization. A
+  checked-in gravity-650 golden file round-trips exactly, every one-bit mutation
+  rejects, 40,000 CRC-repaired adversarial mutations produced no parser escape,
+  and all 37 contract/legacy/v3 tests plus independent refutation passed.

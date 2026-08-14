@@ -115,7 +115,10 @@ whitespace, newline, or case normalization is permitted. The map name uses the
 case-preserving grammar `[A-Za-z0-9_][A-Za-z0-9_-]{0,62}`; every comparison is
 exact and case-sensitive.
 
-The seed remains 16 little-endian bytes: `<fffhh>`.
+The seed remains 16 little-endian bytes: `<fffhh>`. `area_hint` is an unsigned
+value in the stored `i16` range `0..255`; the only initial flags are WATER and
+TOMBSTONE. A tombstone owns no outgoing link, every non-tombstone owns at least
+one outgoing link, and no link may name a tombstone endpoint.
 
 Initial v3 support permits finite positive integral `int16` gravity, including
 `lmctf07`'s gravity 650; zero air acceleration; finite sufficient maximum
@@ -157,6 +160,14 @@ identity committed` with exact `map`, `bsp`, `entity_crc`, and `physics` values.
 Failure emits `slipgate: v3 identity unavailable` and never publishes a partial
 record.
 
+The shared codec distinguishes structural decoding from runtime authentication.
+Structural decoding proves the explicit wire shape, CRCs, registry laws, and
+graph ownership without claiming that the file belongs to the active world.
+Every generation, deployment, or live-load path must also supply the committed
+level identity and require exact map, BSP, entity, host-physics, and proof-law
+equality. A structurally known action is likewise not execution authorization:
+runtime support and controller replay remain separate fail-closed gates.
+
 ## V3 link: 44 bytes
 
 Canonical format string: `<IIBBBBBBh3f3fHBB>`.
@@ -179,6 +190,8 @@ Canonical format string: `<IIBBBBBBh3f3fHBB>`.
 | 43 | `u8` | reserved; zero |
 
 For every noncompound action, bytes 28 through 43 are exactly zero.
+Two links are duplicates when `(source, destination, action)` is identical;
+cost, provenance, controls, or anchors do not create a second graph edge.
 
 Compound semantics:
 
