@@ -357,7 +357,14 @@ rally_done:;
 		 * accrue -- sixty-five to five.
 		 */
 		if (sg_cv.flycook->value &&
-		    bot->nade_phase == 0 && SG_TimerReady(bot->nade_next))
+		    !bot->jump_started && !bot->drop_started &&
+		    bot->hook_phase == 0 && bot->rj_phase == 0 &&
+		    bot->nade_phase == 0 &&
+		    !(SG_Rune() && bot->commit_link >= 0 &&
+		      bot->commit_link < SG_Rune()->hdr.num_links &&
+		      SG_ActionOwnsControl(
+		          SG_Rune()->links[bot->commit_link].action)) &&
+		    SG_TimerReady(bot->nade_next))
 		{
 			static gitem_t *nades9;
 			edict_t *nf9;
@@ -705,7 +712,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		if (role == SG_ROLE_DEFEND)
 		{
 			qboolean astray =
-			    (sg_caco_team_belief.flag[SG_TeamIdx(team)].state == SG_FLAG_ASTRAY);
+			    (sg_caco_team_belief.flag[SG_TeamIdx(team)]
+			         [SG_TeamIdx(team)].state == SG_FLAG_ASTRAY);
 
 			if (!astray && sg_fields.to_post[SG_TeamIdx(team)] &&
 			    sg_cv.defpost->value >= 3)
@@ -723,13 +731,19 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 	else if (role == SG_ROLE_RECOVER)
-		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag_now
-		                                    : sg_fields.to_blue_flag_now;
+		goal_field = sg_fields.to_flag_now[SG_TeamIdx(team)][SG_TeamIdx(team)];
 	else if (role == SG_ROLE_ESCORT)
 	{
 		edict_t *ht = SG_ChatEscortTarget(e);
 
-		goal_field = sg_fields.our_carrier[SG_TeamIdx(team)];
+		/* A human cover order may name a live teammate outside the rune or in
+		 * an unreachable component. Start from the team's ordinary attack
+		 * objective; replace it only when the target flood is reachable from
+		 * this bot, so a valid body is never misclassified as seedless. */
+		goal_field = ht
+		    ? sg_fields.to_flag_now[SG_TeamIdx(team)]
+		        [SG_TeamIdx(SG_EnemyTeam(team))]
+		    : sg_fields.our_carrier[SG_TeamIdx(team)];
 
 		/*
 		 * THE SCOOP (sg_scoop, A/B wave 183+). Sixty-two parity drops:
@@ -745,12 +759,12 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		if (sg_cv.scoop->value &&
 		    sg_caco_team_belief.carrier[SG_TeamIdx(team)].client < 0 &&
-		    sg_caco_team_belief.flag[SG_TeamIdx(SG_EnemyTeam(team))].state ==
+		    sg_caco_team_belief.flag[SG_TeamIdx(team)]
+		        [SG_TeamIdx(SG_EnemyTeam(team))].state ==
 		        SG_FLAG_ASTRAY)
 		{
-			goal_field = (team == CTF_TEAM_RED)
-			    ? sg_fields.to_blue_flag_now
-			    : sg_fields.to_red_flag_now;
+			goal_field = sg_fields.to_flag_now[SG_TeamIdx(team)]
+			    [SG_TeamIdx(SG_EnemyTeam(team))];
 			if (sg_cv.debug->value &&
 			    SG_TimerReady(bot->next_report - 0.9f))
 				sg_host.dprint("SCOOP %s\n", e->client->pers.netname);
@@ -920,13 +934,14 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			if (hs >= 0)
 			{
 				Field_Flood(SG_Rune(), escort_field, &hs, &hc, 1);
-				goal_field = escort_field;
+				if (bot->seed >= 0 && escort_field[bot->seed] < SG_FIELD_INF)
+					goal_field = escort_field;
 			}
 		}
 	}
 	else
-		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag_now
-		                                    : sg_fields.to_red_flag_now;
+		goal_field = sg_fields.to_flag_now[SG_TeamIdx(team)]
+		    [SG_TeamIdx(SG_EnemyTeam(team))];
 
 	/*
 	 * THE RUNE COURIER (wave 243). Candidacy is a lottery -- 107
@@ -957,7 +972,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			{
 				if (bot->runeconv_until <= 0.0f)
 					SG_TimerArm(&bot->runeconv_until, 8.0f);
-				if (SG_TimerPending(bot->runeconv_until))
+				if (SG_TimerPending(bot->runeconv_until) &&
+				    bot->seed >= 0 &&
+				    sg_fields.our_carrier[SG_TeamIdx(team)][bot->seed] <
+				        SG_FIELD_INF)
 					goal_field = sg_fields.our_carrier[SG_TeamIdx(team)];
 				else
 				{

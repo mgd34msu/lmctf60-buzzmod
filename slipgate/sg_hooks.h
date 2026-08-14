@@ -28,6 +28,8 @@ typedef struct sg_host_s
 		                 const vec3_t maxs, const vec3_t end,
 		                 edict_t *passent, int contentmask);
 	int			(*pointcontents)(const vec3_t point);
+	int			(*box_edicts)(const vec3_t mins, const vec3_t maxs,
+			                 edict_t **list, int maxcount, int areatype);
 	qboolean	(*in_pvs)(const vec3_t p1, const vec3_t p2);
 	qboolean	(*in_phs)(const vec3_t p1, const vec3_t p2);
 	void		(*pmove)(pmove_t *pmove);

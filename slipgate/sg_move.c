@@ -8,6 +8,7 @@
  */
 #include "g_local.h"
 #include "g_ctffunc.h"
+#include "g_tourney.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_chat.h"
@@ -28,6 +29,185 @@
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
 
+static int sg_hook_reproof_frame = -1;
+static int sg_hook_reproof_slot = 0;
+static int sg_swim_reproof_frame = -1;
+static int sg_swim_reproof_slot = 0;
+
+static qboolean DoorStep_OwnedByOther(const sg_bot_t *bot, edict_t *trigger)
+{
+	int i;
+
+	if (!bot || !trigger || !SG_Rune())
+		return true;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *other = &sg_bots[i];
+		rune_link_t *link;
+		edict_t *other_trigger;
+
+		if (other == bot || !other->active || !other->ent ||
+		    !other->ent->inuse || other->ent->health <= 0 ||
+		    !other->declared_activated || other->commit_link < 0 ||
+		    other->commit_link >= SG_Rune()->hdr.num_links)
+			continue;
+		link = &SG_Rune()->links[other->commit_link];
+		if (link->action != RL_DOOR)
+			continue;
+		other_trigger = SG_DeclaredDoorForLink(link->anchor,
+		    SG_Rune()->seeds[link->from].origin);
+		if (SG_DeclaredDoorSameSet(trigger, other_trigger))
+			return true;
+	}
+	return false;
+}
+
+static void DoorStep_AbortDeclared(sg_bot_t *bot, int link_index)
+{
+	int b, oldest = 0;
+
+	/* This is live interference, not evidence that the serialized link is
+	 * false.  Shelf it briefly so ordinary localization can settle without
+	 * teaching permanent futility from an opponent's knockback. */
+	for (b = 0; b < SG_BL_MAX; b++)
+		if (bot->bl_until[b] < bot->bl_until[oldest])
+			oldest = b;
+	bot->bl_link[oldest] = link_index;
+	SG_TimerArm(&bot->bl_until[oldest], 2.0f);
+	bot->commit_link = -1;
+	bot->commit_until = 0.0f;
+	bot->declared_activated = false;
+	bot->declared_started = false;
+	bot->declared_start_frame = -1;
+	bot->declared_touched = false;
+	bot->declared_touch_frame = -1;
+	bot->declared_triggered = false;
+	bot->declared_trigger_frame = -1;
+	bot->declared_egress_proof_frame = -1;
+	bot->declared_door_retreat = false;
+	bot->declared_door_suffix_ms = 0;
+}
+
+/* A failed preflight most commonly means projectile knockback would carry the
+ * next real Pmove into the door sweep.  Zero both copies ClientThink uses and
+ * make old_pmove describe that same authoritative fixed-point state; otherwise
+ * the supposedly safe tail would replay the rejected velocity (or introduce a
+ * spurious snapinitial disagreement) after the declaration was retired. */
+static void DoorStep_StopOutside(edict_t *e)
+{
+	int axis;
+
+	VectorClear(e->velocity);
+	for (axis = 0; axis < 3; axis++)
+	{
+		e->client->ps.pmove.origin[axis] =
+		    (short)(e->s.origin[axis] * 8.0f);
+		e->client->ps.pmove.velocity[axis] = 0;
+	}
+	e->client->old_pmove = e->client->ps.pmove;
+}
+
+/* Touch_Multi invokes this after its player/facing gates but before
+ * multi_trigger can return for cooldown.  The approach proof pauses after its
+ * first accepted contact regardless of whether that contact fires the target
+ * set, so keep this evidence distinct from SG_NoteDoorActivation below. */
+void SG_NoteDoorTriggerTouch(edict_t *source, edict_t *activator)
+{
+	rune_link_t *link;
+	edict_t *expected;
+	sg_bot_t *bot = NULL;
+	int i;
+
+	if (!source || !activator || !activator->inuse || !activator->client ||
+	    !SG_OwnsBot(activator) || activator->health <= 0 || activator->deadflag ||
+	    activator->movetype != MOVETYPE_WALK ||
+	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
+	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
+	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
+	    activator->waterlevel != 0)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == activator)
+		{
+			bot = &sg_bots[i];
+			break;
+		}
+	if (!bot || !SG_Rune() || bot->commit_link < 0 ||
+	    bot->commit_link >= SG_Rune()->hdr.num_links ||
+	    !bot->declared_started || bot->declared_touched ||
+	    bot->declared_activated)
+		return;
+	link = &SG_Rune()->links[bot->commit_link];
+	if (link->action != RL_DOOR)
+		return;
+	expected = SG_DeclaredDoorForLink(link->anchor,
+	    SG_Rune()->seeds[link->from].origin);
+	if (!SG_DeclaredDoorEquivalentTouch(expected, source,
+	        activator->s.origin))
+		return;
+	bot->declared_touched = true;
+	bot->declared_touch_frame = level.framenum;
+}
+
+/* G_UseTargets reaches door_use synchronously from Touch_Multi, inside the
+ * ClientThink that crossed the trigger.  This is the exact observation that
+ * our expected trigger fired, so latch only a fully re-resolved declaration;
+ * Think_Emit sees it before the next 25 ms command and makes the rest of this
+ * outer frame zero-input.  A set already held TOP by another activator may be
+ * accepted independently at the exact wait point, but only after live egress
+ * reproof and a sufficient remaining-open-window check. */
+void SG_NoteDoorActivation(edict_t *source, edict_t *door_master,
+	edict_t *activator)
+{
+	rune_link_t *link;
+	edict_t *expected;
+	sg_bot_t *bot = NULL;
+	int i;
+
+	if (!source || !door_master || !activator || !activator->inuse ||
+	    !activator->client || !SG_OwnsBot(activator) || activator->health <= 0 ||
+	    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
+	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
+	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
+	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
+	    activator->waterlevel != 0)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == activator)
+		{
+			bot = &sg_bots[i];
+			break;
+		}
+	if (!bot || !SG_Rune() || bot->commit_link < 0 ||
+	    bot->commit_link >= SG_Rune()->hdr.num_links ||
+	    !bot->declared_started || !bot->declared_touched ||
+	    bot->declared_touch_frame != level.framenum || bot->declared_triggered ||
+	    bot->declared_activated)
+		return;
+	link = &SG_Rune()->links[bot->commit_link];
+	if (link->action != RL_DOOR)
+		return;
+	expected = SG_DeclaredDoorForLink(link->anchor,
+	    SG_Rune()->seeds[link->from].origin);
+	if (!SG_DeclaredDoorEquivalentActivation(expected, source, door_master,
+	        activator->s.origin))
+		return;
+	bot->declared_triggered = true;
+	bot->declared_trigger_frame = level.framenum;
+}
+
+static qboolean Hook_LinkWaterSource(const sg_bot_t *bot)
+{
+	rune_link_t *link;
+
+	if (!bot || !SG_Rune() || bot->hook_link < 0 ||
+	    bot->hook_link >= SG_Rune()->hdr.num_links)
+		return false;
+	link = &SG_Rune()->links[bot->hook_link];
+	return link->action == RL_HOOK &&
+	       (SG_Rune()->seeds[link->from].flags & RSF_WATER) != 0;
+}
+
 #define SG_AS_PERIOD	1.35f
 #define SG_AS_VIEWSHARE	0.55f
 #define SG_AS_VIEWMAX	32.0f
@@ -46,6 +226,119 @@ void		Cmd_Hook_f(edict_t *ent);
 #define SG_WEAVE_BASE		0.4f
 #define SG_WEAVE_STEP		0.05f
 #define SG_WEAVE_HOLD		150.0f	/* a step this short is a stand, not a run */
+#define SG_DROP_HEALTH_RESERVE	15
+
+/*
+ * ClientThink does not take the next Pmove origin and velocity from the
+ * cached playerstate.  It rebuilds them from the authoritative entity after
+ * the world/projectile loop (p_client.c).  Proved actions must therefore test
+ * exactly those values: a rocket may have moved the body since its previous
+ * ClientThink while ps.pmove still describes the old, standing state.
+ */
+static void Ballistic_SourceFixed(const rune_link_t *l, vec3_t source,
+	short fixed[3])
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		fixed[i] = (short)(SG_Rune()->seeds[l->from].origin[i] * 8.0f);
+		source[i] = fixed[i] * 0.125f;
+	}
+}
+
+static qboolean Ballistic_SourceExact(edict_t *e, const short fixed[3])
+{
+	return (short)(e->s.origin[0] * 8.0f) == fixed[0] &&
+	       (short)(e->s.origin[1] * 8.0f) == fixed[1] &&
+	       (short)(e->s.origin[2] * 8.0f) == fixed[2];
+}
+
+static qboolean Ballistic_SourceRest(edict_t *e)
+{
+	return (short)(e->velocity[0] * 8.0f) == 0 &&
+	       (short)(e->velocity[1] * 8.0f) == 0 &&
+	       (short)(e->velocity[2] * 8.0f) == 0;
+}
+
+/*
+ * Low-speed 25 ms Pmove is quantized to eighth-unit positions.  A staging
+ * body can otherwise cross the exact source between 100 ms policy samples.
+ * Staging brakes inside a two-unit capture zone; once authoritative velocity
+ * is zero, canonicalize through a clear player-box sweep.  The following
+ * ClientThink then consumes precisely the state the generator placed.  This
+ * is a bounded controller snap inside one body's collision epsilon, not a
+ * broad source tolerance or a teleport over geometry.
+ */
+static qboolean Ballistic_CanonicalizeSource(edict_t *e, const vec3_t source,
+	const short fixed[3])
+{
+	short current[3];
+	trace_t tr;
+	int i;
+
+	if (!Ballistic_SourceRest(e))
+		return false;
+	for (i = 0; i < 3; i++)
+	{
+		current[i] = (short)(e->s.origin[i] * 8.0f);
+		if (abs((int)current[i] - (int)fixed[i]) > 16)
+			return false;
+	}
+	tr = sg_host.trace(e->s.origin, e->mins, e->maxs, source, e,
+	                   MASK_PLAYERSOLID);
+	if (tr.startsolid || tr.allsolid || tr.fraction < 1.0f)
+		return false;
+
+	VectorCopy(source, e->s.origin);
+	VectorClear(e->velocity);
+	for (i = 0; i < 3; i++)
+	{
+		e->client->ps.pmove.origin[i] = fixed[i];
+		e->client->ps.pmove.velocity[i] = 0;
+	}
+	e->client->old_pmove = e->client->ps.pmove;
+	sg_host.linkentity(e);
+	return true;
+}
+
+/* Mirror the candidate-time P_FallingDamage reserve at the final exact-source
+ * arm.  Combat can change health during the bounded staging walk. */
+qboolean SG_BallisticSurvivable(edict_t *e, const rune_link_t *l)
+{
+	float height, gravity, launch, delta;
+	int damage;
+
+	if (!e || !l || !SG_Rune() ||
+	    (l->action != RL_JUMP && l->action != RL_DROP) ||
+	    !SG_RunePhysicsCompatible())
+		return false;
+	if (SG_Rune()->seeds[l->to].flags & RSF_WATER)
+	{
+		int contents = sg_host.pointcontents(SG_Rune()->seeds[l->to].origin);
+
+		/* A fully submerged water landing cancels falling damage. Slime and
+		 * lava share MASK_WATER and movement semantics, but not survivability. */
+		return !(contents & (CONTENTS_SLIME | CONTENTS_LAVA));
+	}
+	if (deathmatch && deathmatch->value && dmflags &&
+	    ((int)dmflags->value & DF_NO_FALLING))
+		return true;
+	height = SG_Rune()->seeds[l->from].origin[2] -
+	         SG_Rune()->seeds[l->to].origin[2];
+	gravity = (float)RUNE_PROOF_GRAVITY;
+	launch = (l->action == RL_JUMP) ? 270.0f : 0.0f;
+	/* Arrival permits the body up to 72 units below the destination seed.
+	 * Include that full envelope and a jump's upward launch energy; this is a
+	 * survival gate, not a precise damage quote. */
+	delta = (launch * launch + 2.0f * gravity * (height + 72.0f)) * 0.0001f;
+	if (delta < 0.0f)
+		delta = 0.0f;
+	damage = delta > 30.0f ? (int)((delta - 30.0f) * 0.5f) : 0;
+	if (delta > 30.0f && damage < 1)
+		damage = 1;          /* P_FallingDamage's production minimum */
+	return e->health > damage + SG_DROP_HEALTH_RESERVE;
+}
 
 /*
  * ------------------------------------------------- the air-strafe chain
@@ -686,9 +979,17 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	qboolean have_move = false, open_ahead = false, run_link = false;
 	int door_hold = 0;
 	edict_t *door_ent = NULL;
+	edict_t *ordered_escort = (role == SG_ROLE_ESCORT)
+	    ? SG_ChatEscortTarget(e) : NULL;
+	qboolean escort_terminal_hold = ordered_escort &&
+	    SG_EscortTerminal(e, ordered_escort);
 	qboolean drop_yaw_locked = false;
 	float drop_yaw = 0.0f;
 	qboolean hook_brake = false;
+	qboolean jump_brake = false, jump_slow = false;
+	qboolean ballistic_abort = false;
+	qboolean declared_door_link = bestlink >= 0 && SG_Rune() &&
+	    SG_Rune()->links[bestlink].action == RL_DOOR;
 	vec3_t want, d;
 
 	VectorClear(move_dir);
@@ -1243,11 +1544,96 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * envelope claims (from-rest links claim zero and hop
 				 * as they always did).
 				 */
+				vec3_t js, source_fixed;
+				short source_pms[3];
+				qboolean source_exact, source_rest, source_snapped = false;
 				float jh = sqrtf(e->velocity[0] * e->velocity[0] +
 				                 e->velocity[1] * e->velocity[1]);
+				float jdist, jyaw, jdelta, jslack;
 
-				if (jh >= (float)(l->min_speed * 4) * 0.8f)
-					jump_now = true;
+				if (bot->jump_link != bestlink)
+				{
+					bot->jump_link = bestlink;
+					bot->jump_started = false;
+				}
+
+				Ballistic_SourceFixed(l, source_fixed, source_pms);
+				VectorSubtract(source_fixed, e->s.origin, js);
+				jdist = sqrtf(js[0] * js[0] + js[1] * js[1]);
+				source_exact = Ballistic_SourceExact(e, source_pms);
+				source_rest = Ballistic_SourceRest(e);
+				/* A body can be one quantized step across a water/support boundary
+				 * from the dry proof source. Capture first when the sweep is clear,
+				 * then spend one zero-input ClientThink to classify the snapped body;
+				 * launching against the pre-snap water/ground cache would be stale. */
+				if (!source_exact && source_rest && jdist <= 2.0f &&
+				    fabsf(js[2]) <= 2.0f &&
+				    Ballistic_CanonicalizeSource(e, source_fixed, source_pms))
+				{
+					source_exact = true;
+					source_snapped = true;
+				}
+				if (source_snapped || bot->hook_phase != 0 ||
+				    e->client->hookstate != 0 || e->client->hook != NULL ||
+				    bot->rj_phase != 0 ||
+				    bot->nade_phase != 0 ||
+				    e->client->ps.pmove.pm_time != 0 ||
+				    (e->client->ps.pmove.pm_flags &
+				     (PMF_JUMP_HELD | PMF_DUCKED)) ||
+				    e->movetype == MOVETYPE_NOCLIP || e->s.modelindex != 255 ||
+				    e->deadflag || e->waterlevel >= 2 ||
+				    (e->groundentity != g_edicts &&
+				     !SG_ImmutableSupport(e->groundentity)))
+				{
+					/* The proof's first command is a fresh tap. One zero-upmove
+					 * command releases a prior hop before this action may launch. */
+					jump_brake = true;
+				}
+				else if (l->min_speed == 0)
+				{
+					/* The common jump proof starts at the exact source and at rest.
+					 * Do not launch it with whatever 500-u/s cross-route momentum
+					 * happened to enter the seed cell. Center, brake, then tap. */
+					if (!source_exact)
+					{
+						VectorCopy(source_fixed, aim);
+						if (jdist <= 2.0f && fabsf(js[2]) <= 2.0f)
+							jump_brake = true;
+						else if (jdist < 32.0f && fabsf(js[2]) < 8.0f)
+							jump_slow = true;
+					}
+					else if (!source_rest)
+						jump_brake = true;
+					else if (!SG_BallisticSurvivable(e, l))
+					{
+						bot->commit_link = -1;
+						bot->jump_link = -1;
+						bot->jump_started = false;
+						ballistic_abort = true;
+					}
+					else
+						jump_now = true;
+				}
+				else if (jdist > 6.0f || fabsf(js[2]) > 4.0f)
+				{
+					/* Momentum proofs also start at the fixed source. Preserve the
+					 * incoming run while centering; do not tap from an arbitrary point
+					 * in the seed's Euclidean Voronoi cell. */
+					VectorCopy(SG_Rune()->seeds[l->from].origin, aim);
+				}
+				else if (jh >= (float)(l->min_speed * 4))
+				{
+					jyaw = atan2f(e->velocity[1], e->velocity[0]) *
+					       180.0f / (float)M_PI;
+					jdelta = jyaw - l->heading * (360.0f / 256.0f);
+					while (jdelta > 180.0f) jdelta -= 360.0f;
+					while (jdelta < -180.0f) jdelta += 360.0f;
+					jslack = l->heading_slack * (360.0f / 256.0f);
+					if (fabsf(jdelta) <= jslack)
+						jump_now = true;
+				}
+				if (jump_now)
+					tc->jump_launch = true;
 			}
 			/* the landing hop belongs on running ground, not on a link
 			 * whose traversal is itself a jump, a drop, a rope or a swim */
@@ -1339,30 +1725,30 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 						for (hfan = 0; hfan < 3; hfan++)
 						{
-						float hy2 = hyaw + (hwander
-						    ? ((hfan - 1) * 1.05f)
-						    : ((hfan == 1) ? 0.384f :
-						       (hfan == 2) ? -0.384f : 0.0f));
-						/*
-						 * FREERIDE v2 (sg_freeride 2, rung-2 set #2:
-						 * failed 16/18 on the same off-graph tell).
-						 * v1 doubled ride volume and moved NOTHING,
-						 * because a 30-degree rope skims the corridor
-						 * and its flight never leaves the node cloud;
-						 * human off-graph mass is HIGH arcs through
-						 * open room air. v2 probes ~54 degrees up:
-						 * shorter reach, higher anchor, and the swing
-						 * itself is the off-graph flight.
-						 */
-						float hfar = (sg_cv.freeride->value >= 2.0f) ? 300.0f : 480.0f;
-						float hup  = (sg_cv.freeride->value >= 2.0f) ? 420.0f : 280.0f;
+							float hy2 = hyaw + (hwander
+							    ? ((hfan - 1) * 1.05f)
+							    : ((hfan == 1) ? 0.384f :
+							       (hfan == 2) ? -0.384f : 0.0f));
+							/*
+							 * FREERIDE v2 (sg_freeride 2, rung-2 set #2:
+							 * failed 16/18 on the same off-graph tell).
+							 * v1 doubled ride volume and moved NOTHING,
+							 * because a 30-degree rope skims the corridor
+							 * and its flight never leaves the node cloud;
+							 * human off-graph mass is HIGH arcs through
+							 * open room air. v2 probes ~54 degrees up:
+							 * shorter reach, higher anchor, and the swing
+							 * itself is the off-graph flight.
+							 */
+							float hfar = (sg_cv.freeride->value >= 2.0f) ? 300.0f : 480.0f;
+							float hup  = (sg_cv.freeride->value >= 2.0f) ? 420.0f : 280.0f;
 
-						hend[0] = heye[0] + cosf(hy2) * hfar;
-						hend[1] = heye[1] + sinf(hy2) * hfar;
-						hend[2] = heye[2] + hup;    /* v1 ~30deg, v2 ~54deg */
-						htr = sg_host.trace(heye, NULL, NULL, hend, e,
-						               MASK_SOLID);
-						/*
+							hend[0] = heye[0] + cosf(hy2) * hfar;
+							hend[1] = heye[1] + sinf(hy2) * hfar;
+							hend[2] = heye[2] + hup;    /* v1 ~30deg, v2 ~54deg */
+							htr = sg_host.trace(heye, NULL, NULL, hend, e,
+							               MASK_SOLID);
+							/*
 						 * The bar the optional rope has to clear, and the
 						 * one number on this gate that is a PREFERENCE
 						 * rather than a fact -- the speed window and the
@@ -1374,42 +1760,41 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						 * it so an eager bot also comes back to it
 						 * sooner, and both are 1.0 with no persona.
 						 */
-						if (htr.fraction >= 1.0f || htr.startsolid ||
-						    htr.fraction * 560.0f <=
-						        170.0f / SG_PersonaHookScale(e) ||
-						    htr.plane.normal[2] >= 0.7f)
-						{
-							/* the side probes exist only under
-							 * freeride; stock behavior is one look */
-							if (sg_cv.freeride->value
-							    > 0.0f ||
-							    sg_cv.ropetravel->value > 0.0f)
-								continue;
-							break;
-						}
-						{
-							/* wave 218 (sg_legcarrier): the burst is
-							 * the OPTIONAL rope -- a standing aim for
-							 * speed legs already have. The carrier
-							 * keeps climb ropes and loses the
-							 * ceremony; everyone else bursts on. */
-							if (!(sg_cv.legcarrier->value &&
-							      tc->role == SG_ROLE_CARRY))
+							if (htr.fraction >= 1.0f || htr.startsolid ||
+							    htr.fraction * 560.0f <=
+							        170.0f / SG_PersonaHookScale(e) ||
+							    htr.plane.normal[2] >= 0.7f)
 							{
-								VectorCopy(htr.endpos, bot->hook_anchor);
-								VectorCopy(aim, bot->hook_dest);
-								VectorCopy(e->s.origin, bot->hp_cur_dep);
-								VectorCopy(e->s.origin, bot->hp_cur_dep);
-						bot->hook_phase = 1;
-								SG_TimerArm(&bot->hook_deadline, 1.0f);
-								bot->speedhook = true;
-								SG_TimerArm(&bot->speedhook_next,
-								    ((sg_cv.ropetravel->value > 0.0f) ? 1.0f :
-								     (sg_cv.freeride->value > 0.0f) ? 2.0f : 4.0f)
-								    / SG_PersonaHookScale(e));
+								/* the side probes exist only under
+								 * freeride; stock behavior is one look */
+								if (sg_cv.freeride->value
+								    > 0.0f ||
+								    sg_cv.ropetravel->value > 0.0f)
+									continue;
+								break;
 							}
-						}
-						break;
+							{
+								/* wave 218 (sg_legcarrier): the burst is
+								 * the OPTIONAL rope -- a standing aim for
+								 * speed legs already have. The carrier
+								 * keeps climb ropes and loses the
+								 * ceremony; everyone else bursts on. */
+								if (!(sg_cv.legcarrier->value &&
+								      tc->role == SG_ROLE_CARRY))
+								{
+									VectorCopy(htr.endpos, bot->hook_anchor);
+									VectorCopy(aim, bot->hook_dest);
+									VectorCopy(e->s.origin, bot->hp_cur_dep);
+									bot->hook_phase = 1;
+									SG_TimerArm(&bot->hook_deadline, 1.0f);
+									bot->speedhook = true;
+									SG_TimerArm(&bot->speedhook_next,
+									    ((sg_cv.ropetravel->value > 0.0f) ? 1.0f :
+									     (sg_cv.freeride->value > 0.0f) ? 2.0f : 4.0f)
+									    / SG_PersonaHookScale(e));
+								}
+							}
+							break;
 						}
 					}
 				}
@@ -1423,25 +1808,42 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * The view is the aim: LMCTF's Weapon_Hook_Fire fires along
 			 * v_angle.
 			 */
-			if (l->action == RL_HOOK && bot->hook_phase == 0)
+			if (l->action == RL_HOOK && bot->hook_phase == 0 &&
+			    bot->rj_phase == 0 && bot->nade_phase == 0 &&
+			    SG_HookOffhandReady(e))
 			{
-				vec3_t ad;
-				float alen;
+				qboolean source_water =
+				    (SG_Rune()->seeds[l->from].flags & RSF_WATER) != 0;
 				float hspd = sqrtf(e->velocity[0] * e->velocity[0] +
 				                   e->velocity[1] * e->velocity[1]);
 
 				vec3_t fsd;
-				float fsdist;
+				float fsdist, fsz;
+
+				if ((source_water &&
+				     ((SG_Rune()->seeds[l->to].flags & RSF_WATER) ||
+				      e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||
+				      (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+				      (e->waterlevel >= 3 &&
+				       SG_TimerRemaining(e->air_finished) <
+				           ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f)))) ||
+				    (!source_water &&
+				     (e->waterlevel != 0 ||
+				      (e->groundentity != g_edicts &&
+				       !SG_ImmutableSupport(e->groundentity)))))
+					goto hook_stage_done;
 
 				VectorSubtract(SG_Rune()->seeds[l->from].origin,
 				               e->s.origin, fsd);
+				fsz = fsd[2];
 				fsd[2] = 0.0f;
 				fsdist = VectorLength(fsd);
 
 				/*
-				 * The proof fired from THE SEED, at rest (ProveHook
-				 * places the phantom on the seed origin and stands it
-				 * still). Both halves matter: the rope-line clearance
+				 * A dry proof fired from THE SEED at rest. A water proof starts
+				 * from the seed's categorized state, then the online witness
+				 * replaces it with the live fixed-point position and velocity.
+				 * In both cases rope-line clearance
 				 * was traced from the seed's eye -- fired from 50 units
 				 * away the same ray clips different geometry and the
 				 * rope bites en route (smap05: 2552 attaches 150-650
@@ -1449,131 +1851,190 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * entry-sensitive. Walk to the seed, brake, THEN fire:
 				 * the shot the proof rolled is the shot the body takes.
 				 */
-				/* the walk-to-seed gate tried here was an over-fit to
-				 * smap05: on lmctf03 it turned 95%-converting hooks into
-				 * abort loops (it7: 547 misses on the healthy map). The
-				 * brake and the eye aim stay; the pilgrimage goes. */
-				(void)fsdist;
-				if (hspd > 160.0f)
+				/* Version 2 approaches the source cell and brakes before taking
+				 * ownership of the exact view. The final post-Pmove fire gate then
+				 * re-proves from the actual fixed-point source; it does not pretend
+				 * every position in this cell shares the nominal seed rollout. */
+				if (fsdist > 20.0f || fabsf(fsz) > 16.0f ||
+				    (!source_water && !e->groundentity) ||
+				    (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
+				    e->client->ps.pmove.pm_time != 0 ||
+				    fabsf(e->viewheight - 22.0f) > 0.1f)
+				{
+					VectorCopy(SG_Rune()->seeds[l->from].origin, aim);
+					have_aim = true;
+				}
+				else if (!source_water &&
+				         (hspd > 1.0f || fabsf(e->velocity[2]) > 1.0f))
 				{
 					hook_brake = true;      /* fire next frame, slower */
-					VectorCopy(l->anchor, aim);
+					VectorCopy(SG_Rune()->seeds[l->from].origin, aim);
+					have_aim = true;
 				}
 				else
 				{
-					VectorSubtract(l->anchor, e->s.origin, ad);
-					alen = VectorLength(ad);
-					if (alen > 1.0f)
+					vec3_t proof_source, proof_muzzle, proof_bite;
+
+					proof_source[0] = (short)(SG_Rune()->seeds[l->from].origin[0]
+					                  * 8.0f) * 0.125f;
+					proof_source[1] = (short)(SG_Rune()->seeds[l->from].origin[1]
+					                  * 8.0f) * 0.125f;
+					proof_source[2] = (short)(SG_Rune()->seeds[l->from].origin[2]
+					                  * 8.0f) * 0.125f;
+					if (SG_HookControlDecode(proof_source, 22.0f, RIGHT_HANDED,
+					                         l->anchor, bot->hook_view,
+					                         proof_muzzle, proof_bite))
 					{
-						VectorCopy(l->anchor, bot->hook_anchor);
+						VectorCopy(proof_source, bot->hook_source);
+						VectorCopy(proof_bite, bot->hook_anchor);
 						VectorCopy(SG_Rune()->seeds[l->to].origin,
 						           bot->hook_dest);
-
-						/*
-						 * THE BALLISTIC ANCHOR. The rope sets speed to a
-						 * flat 800 along itself, so a cut rope IS a
-						 * projectile launch at 800 -- and where to hook
-						 * for a fling that LANDS somewhere is therefore
-						 * closed-form: solve the projectile equation for
-						 * launch pitch to the destination at s=800, and
-						 * the anchor is wherever that ray bites the
-						 * world. Low solution first (flatter, faster),
-						 * high if the low ray finds no bite. When
-						 * neither ray bites within rope reach, the
-						 * proof's stored anchor and a full ride remain
-						 * -- physics first, terminus as the fallback.
-						 */
-						{
-							vec3_t bd, eye2;
-							float bx, by2, s2 = 800.0f * 800.0f;
-							float grav2 = e->client->ps.pmove.gravity
-							              ? (float)e->client->ps.pmove.gravity
-							              : 800.0f;
-							float disc;
-
-							VectorSubtract(SG_Rune()->seeds[l->to].origin,
-							               e->s.origin, bd);
-							by2 = bd[2];
-							bx = sqrtf(bd[0] * bd[0] + bd[1] * bd[1]);
-							disc = s2 * s2 - grav2 *
-							       (grav2 * bx * bx + 2.0f * by2 * s2);
-							if (bx > 64.0f && disc > 0.0f)
-							{
-								float az = atan2f(bd[1], bd[0]);
-								float root = sqrtf(disc);
-								int lohi;
-
-								VectorCopy(e->s.origin, eye2);
-								eye2[2] += e->viewheight;
-								for (lohi = 0; lohi < 2; lohi++)
-								{
-									float tanth = (s2 - (lohi ? -root : root))
-									              / (grav2 * bx);
-									float th = atanf(tanth);
-									vec3_t ray, hit;
-									trace_t btr;
-
-									ray[0] = cosf(az) * cosf(th);
-									ray[1] = sinf(az) * cosf(th);
-									ray[2] = sinf(th);
-									VectorMA(eye2, 700.0f, ray, hit);
-									btr = sg_host.trace(eye2, NULL, NULL, hit,
-									               e, MASK_SOLID);
-									if (btr.fraction < 1.0f &&
-									    !btr.startsolid &&
-									    btr.fraction * 700.0f > 150.0f)
-									{
-										VectorCopy(btr.endpos,
-										           bot->hook_anchor);
-										break;
-									}
-								}
-							}
-						}
 						bot->hook_link = bestlink;
 						bot->hook_bite_logged = false;
+						bot->hook_attached_validated = false;
 						bot->hook_phase = 1;
-						/* flight + climb budget: gravity fights the pull
-						 * on a tall rope, so the real ascent runs well
-						 * past the naive rope/800 figure -- a 1.5s margin
-						 * cut every z=348 tower climb loose 176 short of
-						 * its landing (A/B match, Slip, four identical
-						 * shortfalls) */
-						SG_TimerArm(&bot->hook_deadline,
-						    alen / 800.0f + 3.0f);
+						/* This is the aim deadline only. Successful fire replaces
+						 * it with a quantized bolt-flight deadline; attachment then
+						 * starts a fresh three-second pull budget. */
+						SG_TimerArm(&bot->hook_deadline, 3.0f);
 					}
 				}
+			hook_stage_done: ;
 			}
 
 			/* a drop link goes via its stored lip, not the far endpoint */
 			if (l->action == RL_DROP)
 			{
-				vec3_t lipd;
-				float liph;
+				vec3_t lipd, walk;
+				float liph, behind;
 
+				if (bot->drop_link != bestlink)
+				{
+					bot->drop_link = bestlink;
+					bot->drop_started = false;
+					bot->drop_walkoff = false;
+					bot->drop_airborne = false;
+					bot->drop_recover = false;
+				}
+				/* The body remains on safe ground during the proved lip approach.
+				 * Damage received after arming may revoke the descent until the
+				 * actual walkoff; abort while that choice is still recoverable. */
+				if (bot->drop_started && !bot->drop_walkoff && e->groundentity &&
+				    !SG_BallisticSurvivable(e, l))
+				{
+					bot->commit_link = -1;
+					bot->drop_link = -1;
+					bot->drop_started = false;
+					bot->drop_walkoff = false;
+					bot->drop_airborne = false;
+					bot->drop_recover = false;
+					ballistic_abort = true;
+				}
+				if (!bot->drop_started && !ballistic_abort)
+				{
+					vec3_t source_delta, source_fixed;
+					short source_pms[3];
+					float source_horiz;
+					qboolean source_exact, source_rest, source_snapped = false;
+
+					Ballistic_SourceFixed(l, source_fixed, source_pms);
+					VectorSubtract(source_fixed, e->s.origin, source_delta);
+					source_horiz = sqrtf(source_delta[0] * source_delta[0] +
+					                     source_delta[1] * source_delta[1]);
+					source_exact = Ballistic_SourceExact(e, source_pms);
+					source_rest = Ballistic_SourceRest(e);
+					if (!source_exact && source_rest && source_horiz <= 2.0f &&
+					    fabsf(source_delta[2]) <= 2.0f &&
+					    Ballistic_CanonicalizeSource(e, source_fixed, source_pms))
+					{
+						source_exact = true;
+						source_snapped = true;
+					}
+					drop_yaw_locked = true;
+					drop_yaw = atan2f(source_delta[1], source_delta[0]) *
+					           180.0f / M_PI;
+					if (source_snapped || bot->hook_phase != 0 ||
+					    e->client->hookstate != 0 || e->client->hook != NULL ||
+					    bot->rj_phase != 0 ||
+				    bot->nade_phase != 0 ||
+				    (e->groundentity != g_edicts &&
+				     !SG_ImmutableSupport(e->groundentity)) ||
+					    e->movetype == MOVETYPE_NOCLIP || e->s.modelindex != 255 ||
+					    e->deadflag || e->waterlevel >= 2 ||
+					    e->client->ps.pmove.pm_time != 0 ||
+					    (e->client->ps.pmove.pm_flags & PMF_DUCKED))
+						jump_brake = true;
+					else
+					{
+						if (!source_exact)
+						{
+							VectorCopy(source_fixed, aim);
+							if (source_horiz <= 2.0f &&
+							    fabsf(source_delta[2]) <= 2.0f)
+								jump_brake = true;
+							else if (source_horiz < 32.0f)
+								jump_slow = true;
+						}
+						else if (!source_rest)
+							jump_brake = true;
+						else if (!SG_BallisticSurvivable(e, l))
+						{
+							/* The edge was safe when selected, but damage during
+							 * staging changed that fact. Replan before walking off. */
+							bot->commit_link = -1;
+							bot->drop_link = -1;
+							bot->drop_started = false;
+							bot->drop_walkoff = false;
+							bot->drop_airborne = false;
+							bot->drop_recover = false;
+							ballistic_abort = true;
+						}
+						else
+						{
+							bot->drop_started = true;
+							SG_TimerArm(&bot->commit_until, 4.5f);
+						}
+					}
+				}
 				VectorSubtract(l->anchor, e->s.origin, lipd);
 				lipd[2] = 0.0f;
 				liph = VectorLength(lipd);
-				if (liph > 24.0f)
-					VectorCopy(l->anchor, aim);
+				walk[0] = cosf(l->heading * (2.0f * (float)M_PI / 256.0f));
+				walk[1] = sinf(l->heading * (2.0f * (float)M_PI / 256.0f));
+				walk[2] = 0.0f;
+				behind = DotProduct(lipd, walk);
+				/* Think_Move runs at 10 Hz while Pmove substeps at 25 ms. A fast
+				 * body can cross the eight-unit handoff entirely between Think calls;
+				 * signed progress (past the lip) and airborne state are authoritative
+				 * evidence that the handoff occurred. */
+				if (bot->drop_started && !bot->drop_walkoff &&
+				    (liph <= 8.0f || behind <= 0.0f || !e->groundentity))
+					bot->drop_walkoff = true;
 				/*
-				 * The whole drop executes the way the prover walked it:
-				 * straight at the lip, no fan (ProveDrop's approach walk
-				 * steers dead at the lip, SG_Rune().c), then off along the
+				 * The whole drop executes the way the continuous prover walked it:
+				 * aim at the lip until the <=8-unit handoff, then hold the
 				 * RECORDED heading (dd_last_heading, SG_Rune().c:734). The
 				 * fan, given a railing beside the gap, deflects off the
 				 * exact line the proof demonstrated -- Phase orbited a
 				 * balcony's proven drops 60-140 units from their lips,
 				 * with a 96-unit lock radius it never entered.
 				 */
-				drop_yaw_locked = true;
-				/* 8, not 24: the proof fell FROM the lip point, and at
-				 * 20 units of lateral offset the recorded heading runs
-				 * into the railing beside the gap (it13: attackers
-				 * jittering on the balcony lip at goal 4700, dl=1) */
-				drop_yaw = (liph > 8.0f)
-				               ? atan2f(lipd[1], lipd[0]) * 180.0f / M_PI
-				               : l->heading * (360.0f / 256.0f);
+				if (bot->drop_started)
+				{
+					drop_yaw_locked = true;
+					if (!bot->drop_walkoff)
+						drop_yaw = atan2f(lipd[1], lipd[0]) * 180.0f / M_PI;
+					else
+						drop_yaw = l->heading * (360.0f / 256.0f);
+				}
+			}
+			else
+			{
+				bot->drop_link = -1;
+				bot->drop_started = false;
+				bot->drop_walkoff = false;
+				bot->drop_airborne = false;
+				bot->drop_recover = false;
 			}
 
 			/*
@@ -1586,11 +2047,19 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (l->action == RL_ROCKETJUMP && bot->rj_phase == 0 &&
 			    e->groundentity)
 			{
+				float down_sq;
+
 				bot->rj_aim[0] = l->anchor[0];
 				bot->rj_aim[1] = l->anchor[1];
-				bot->rj_aim[2] = -sqrtf(1.0f -
-				    l->anchor[0] * l->anchor[0] -
-				    l->anchor[1] * l->anchor[1]);
+				down_sq = 1.0f - l->anchor[0] * l->anchor[0] -
+				          l->anchor[1] * l->anchor[1];
+				/* The loader rejects an actually out-of-unit vector.  Clamp the
+				 * last sub-ulp rounding edge too: a sum that rounds to exactly
+				 * one can still make the sequential subtraction slightly negative
+				 * and must never feed NaN into ANGLE2SHORT. */
+				if (down_sq < 0.0f)
+					down_sq = 0.0f;
+				bot->rj_aim[2] = -sqrtf(down_sq);
 				VectorCopy(SG_Rune()->seeds[l->to].origin, bot->rj_dest);
 				bot->rj_phase = 1;
 				SG_TimerArm(&bot->rj_deadline, 4.0f);
@@ -1627,23 +2096,19 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * this overrides the navigation view for exactly one frame */
 		if (bot->hook_phase == 1)
 		{
-			vec3_t ad, hook_eye;
-			float alen, ay, ap;
+			vec3_t shot;
+			float ay, ap;
 
-			/*
-			 * From the EYES, not the origin: the proof drew its rope line
-			 * from the phantom's eyes ("the rope line from the source's
-			 * eyes wins", SG_Rune().c), and 22 units of vertical aim bias
-			 * against a wall-face anchor bites a DIFFERENT surface --
-			 * every smap05 ride was landing exactly 143 under its ledge
-			 * because the rope was attaching under the proven point.
-			 */
-			VectorCopy(e->s.origin, hook_eye);
-			hook_eye[2] += e->viewheight;
-			VectorSubtract(bot->hook_anchor, hook_eye, ad);
-			alen = VectorLength(ad);
-			ay = atan2f(ad[1], ad[0]) * 180.0f / M_PI;
-			ap = -asinf(ad[2] / (alen > 1.0f ? alen : 1.0f)) * 180.0f / M_PI;
+			/* RL_HOOK stores the eye-space control, not the muzzle ray's
+			 * resulting bite. Reconstruct the same quantized command the v2
+			 * generator traced. */
+			if (!bot->speedhook && bot->hook_link >= 0)
+				VectorCopy(bot->hook_view, shot);
+			else if (!SG_HookAimAngles(e->s.origin, e->viewheight,
+			                               bot->hook_anchor, shot))
+				VectorClear(shot);
+			ay = shot[YAW];
+			ap = shot[PITCH];
 			cmd->angles[YAW] = ANGLE2SHORT(ay)
 			                - e->client->ps.pmove.delta_angles[YAW];
 			cmd->angles[PITCH] = ANGLE2SHORT(ap)
@@ -1702,10 +2167,18 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * wedge orbits, 12 of 19 parity arrivals). The engine's
 			 * own redflag/blueflag pointers name the real entity.
 			 */
-			if (role == SG_ROLE_CARRY)
+			if (ordered_escort)
+			{
+				VectorCopy(ordered_escort->s.origin, aim);
+				have_aim = true;
+				/* "Cover me" terminates at the named teammate, not at our
+				 * own flag stand. Hold a useful body-length away instead of
+				 * grinding into them; combat remains free to own view/fire. */
+			}
+			else if (role == SG_ROLE_CARRY)
 				gf = SG_OwnFlag(team);
 
-			if (!gf && role == SG_ROLE_ATTACK)
+			if (!have_aim && !gf && role == SG_ROLE_ATTACK)
 			{
 				/* enemy stand position is common knowledge */
 				edict_t *marker = SG_FlagStand(team, false);
@@ -1729,7 +2202,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				              marker->s.origin) < 64.0f)
 					gf = enemy_item;
 			}
-			else if (!gf)
+			else if (!have_aim && !gf)
 			{
 				gf = SG_FlagStand(team, true);
 			}
@@ -1869,7 +2342,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		{
 			vec3_t fwd, probe;
 			trace_t tr;
-			float best_open = -1.0f;
+			float best_open = -1.0e30f;
 			float try_yaw, base_yaw, chosen_yaw;
 			int k;
 
@@ -1899,7 +2372,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 			for (k = 0; k < fan_n; k++)
 			{
-				float score;
+				float score, clearance;
 
 				float reach = 96.0f;
 
@@ -1946,7 +2419,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * button opens will fail to yield and the progress watch
 				 * shelves that link -- the net below the honesty.
 				 */
-				if (tr.fraction < 1.0f && tr.ent && tr.ent->classname &&
+				if (!declared_door_link && tr.fraction < 1.0f && tr.ent &&
+				    tr.ent->classname &&
 				    strncmp(tr.ent->classname, "func_door", 9) == 0)
 				{
 					int dd;
@@ -1963,7 +2437,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						bot->deaddoor_ahead = true;
 						VectorCopy(tr.endpos, bot->deaddoor_spot);
 					}
-					if (!dead)
+					if (!dead &&
+					    tr.ent->moveinfo.state != SG_PLAT_STATE_TOP)
 					{
 						/*
 						 * A ROTATING door swings through the space in
@@ -1975,16 +2450,32 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						 * it. Sliding doors travel out of the path and
 						 * are safe to press.
 						 */
-						if (k == 0 && strcmp(tr.ent->classname,
-						                     "func_door_rotating") == 0)
+						if (k == 0)
 						{
-							door_hold = (tr.fraction * 96.0f < 64.0f) ? 2 : 1;
+							/* A closed door still needs the body to enter its
+							 * activator.  Once motion starts, stop feeding the
+							 * pusher a blocking body; rotating doors need an
+							 * actual retreat from their swept arc. */
+							if (tr.ent->moveinfo.state == SG_PLAT_STATE_BOTTOM)
+								door_hold = 3; /* drive the validated trigger */
+							else if (!strcmp(tr.ent->classname,
+							                 "func_door_rotating") &&
+							         tr.fraction * reach < 64.0f)
+								door_hold = 2; /* leave the swing envelope */
+							else
+								door_hold = 1; /* wait for the moving brush */
 							door_ent = tr.ent;
 						}
 						tr.fraction = 1.0f;
 					}
 				}
-				score = tr.fraction * (1.0f - 0.05f * (k > 0) * (k + 1));
+				/* Score physical clearance, then pay a symmetric turn cost.
+				 * Index-based decay made -30 and +30 unequal and could prefer a
+				 * 90%-blocked straight probe over a fully clear detour. At the
+				 * 96-unit base reach a clear 30-degree road now beats a straight
+				 * road blocked inside ~94%, while an actually open goal line wins. */
+				clearance = tr.fraction * reach;
+				score = clearance - fabsf(fan[k]) * 0.20f;
 				/*
 				 * Side latch. A pillar dead ahead leaves -30 and +30 both
 				 * open and equal; the winner then alternates as each
@@ -1997,7 +2488,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 */
 				if (bot->fan_side && SG_TimerPending(bot->fan_side_until) &&
 				    fan[k] * (float)bot->fan_side < 0.0f)
-					score *= 0.6f;
+					score -= reach * 0.35f;
 				if (score > best_open)
 				{
 					best_open = score;
@@ -2261,25 +2752,27 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * do NOT hop at one -- arrive on foot, inside its trigger */
 			open_ahead = (tr.fraction >= 1.0f);
 
-			VectorSubtract(e->s.origin, bot->last_origin, d);
-			if (VectorLength(d) < 4.0f)
-			{
-				bot->stuck_time += 0.1f;
-				if (bot->stuck_time > 1.0f && e->groundentity)
-					cmd->upmove = 400;   /* hop what the feelers missed */
-			}
-			else
-				bot->stuck_time = 0.0f;
 		}
 
 		/* braking for a rope: kill the run so the fire happens from the
 		 * standing start the proof used */
-		if (hook_brake)
+		if (hook_brake || jump_brake)
 		{
 			cmd->forwardmove = 0;
 			cmd->sidemove = 0;
 			cmd->upmove = 0;
+			have_move = false;
 			bot->nav_drove = false;
+		}
+		else if (jump_slow)
+		{
+			cmd->forwardmove = 40;
+			cmd->sidemove = 0;
+			cmd->upmove = 0;
+			/* Preserve the source-centering course in world space. Think_Emit
+			 * decomposes this exact 40 magnitude through the slewed view. */
+			have_move = true;
+			bot->nav_drove = true;
 		}
 
 		/* and braking OUT of a rope: hold the landing until the body is
@@ -2288,6 +2781,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * (218-219: legs +59%% speed) says the flag pays for stillness
 		 * with blood, and a landing run out beats a landing stood */
 		if (SG_TimerPending(bot->hook_landbrake) && e->groundentity &&
+		    !tc->jump_launch && !bot->jump_started && !bot->drop_started &&
 		    !(tc->role == SG_ROLE_CARRY &&
 		      sg_cv.legcarrier->value >= 2.0f))
 		{
@@ -2297,48 +2791,122 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			bot->nav_drove = false;
 		}
 
-		/* rotating door working its arc: hold ground (or yield the arc),
-		 * keep facing it, and let the trigger under our feet do the work.
-		 * A door still shut after 2.5 seconds is not going to open from
-		 * this side (no trigger reaches here): remember it as a wall for
-		 * thirty seconds and let the surface reroute. */
-		if (door_hold && have_move)
+		/* A feeler can lose a moving brush as soon as it leaves its closed
+		 * pose.  The attempt still owns the legs until the same door reaches
+		 * TOP (or the absolute budget expires); otherwise the next frame drives
+		 * into a pusher that the previous frame deliberately waited for. */
+			if (!declared_door_link && !door_hold && bot->door_hold_ent &&
+		    bot->door_hold_ent->inuse &&
+		    bestlink == bot->door_hold_link &&
+		    bot->door_hold_ent->moveinfo.state != SG_PLAT_STATE_TOP)
 		{
-			cmd->forwardmove = (door_hold == 2) ? -200 : 0;
+			door_ent = bot->door_hold_ent;
+			if (door_ent->moveinfo.state == SG_PLAT_STATE_BOTTOM)
+				door_hold = 3;
+			else if (door_ent->classname &&
+			         !strcmp(door_ent->classname, "func_door_rotating"))
+				door_hold = 2;
+			else
+				door_hold = 1;
+		}
+
+		/* Door activation/motion owns the route command: drive into a closed
+		 * activator, hold for a translating brush, or yield a rotating arc.
+		 * keep facing it, and let the trigger under our feet do the work.
+		 * The timeout includes the door's declared angular travel. Slow map
+		 * doors legitimately need much longer than the old fixed 2.5 seconds;
+		 * after the bounded travel budget expires, remember it as a wall for
+		 * thirty seconds and let the surface reroute. */
+			if (!declared_door_link && door_hold && have_move && e->groundentity &&
+		    !bot->jump_started &&
+		    (!bot->drop_started || !bot->drop_walkoff))
+		{
+			/* Doors were held open during generation. A closed rotating door is
+			 * a transient precondition failure, not permission to submit a proved
+			 * jump/drop with its first command erased. Defer the action while the
+			 * normal door trigger/timeout policy opens or reprices the route. */
+			tc->jump_launch = false;
+			if (bot->drop_started && !bot->drop_walkoff && e->groundentity)
+			{
+				bot->drop_started = false;
+				bot->drop_walkoff = false;
+				bot->drop_airborne = false;
+				bot->drop_recover = false;
+			}
+			cmd->forwardmove = (door_hold == 2) ? -200
+			                 : (door_hold == 3 ? 400 : 0);
+			cmd->sidemove = 0;
 			cmd->upmove = 0;
 			bot->door_held_last = true;
 			bot->nav_drove = false;
 
-			if (door_ent != bot->door_hold_ent)
 			{
-				bot->door_hold_ent = door_ent;
-				SG_Mark(&bot->door_hold_since);
-			}
-			else if (SG_AgeOver(bot->door_hold_since, 2.5f))
-			{
-				int dd, oldest = 0;
+				float door_wait = 2.5f;
 
-				for (dd = 0; dd < SG_DEAD_DOORS; dd++)
-					if (bot->dead_door_until[dd] < bot->dead_door_until[oldest])
-						oldest = dd;
-				bot->dead_door[oldest] = door_ent;
-				SG_TimerArm(&bot->dead_door_until[oldest], 30.0f);
-				bot->door_hold_ent = NULL;
-				/* a door with no trigger on this side is one-way by the
-				 * mapper's hand (lmctf03: both bd doors trigger only from
-				 * the base side). The 30s memory reroutes THIS bot; the
-				 * field funnels the rest of the team in behind it unless
-				 * the corridor repricies globally. Same cure as the wall. */
-				SG_TeachFutility(bot->seed);
-				if (sg_cv.debug->value)
-					sg_host.dprint("DEADDOOR %s at (%.0f %.0f %.0f)\n",
-					           e->client->pers.netname, e->s.origin[0],
-					           e->s.origin[1], e->s.origin[2]);
+				if (door_ent && isfinite(door_ent->moveinfo.distance) &&
+				    isfinite(door_ent->moveinfo.speed) &&
+				    door_ent->moveinfo.speed > 0.0f)
+					door_wait = fabsf(door_ent->moveinfo.distance) /
+					            door_ent->moveinfo.speed + 0.75f;
+				if (door_wait < 2.5f) door_wait = 2.5f;
+				if (door_wait > 12.0f) door_wait = 12.0f;
+				/* Key the budget to the physical door AND committed link. A
+				 * rotating brush can disappear from the next feeler while it
+				 * swings, but that must not buy the same attempt a fresh timeout. */
+				if (door_ent != bot->door_hold_ent ||
+				    bestlink != bot->door_hold_link)
+				{
+					bot->door_hold_ent = door_ent;
+					bot->door_hold_link = bestlink;
+					bot->door_hold_deadline = level.time + door_wait;
+				}
+				if (level.time >= bot->door_hold_deadline)
+				{
+					int dd, oldest = 0;
+
+					for (dd = 0; dd < SG_DEAD_DOORS; dd++)
+						if (bot->dead_door_until[dd] <
+						    bot->dead_door_until[oldest])
+							oldest = dd;
+					bot->dead_door[oldest] = door_ent;
+					SG_TimerArm(&bot->dead_door_until[oldest], 30.0f);
+					bot->door_hold_ent = NULL;
+					bot->door_hold_link = -1;
+					bot->door_hold_deadline = 0.0f;
+					door_hold = 1; /* fail closed for this final command */
+					/* a door with no trigger on this side is one-way by the
+					 * mapper's hand (lmctf03: both bd doors trigger only from
+					 * the base side). The 30s memory reroutes THIS bot; the
+					 * field funnels the rest of the team in behind it unless
+					 * the corridor repricies globally. Same cure as the wall. */
+					SG_TeachFutility(bot->seed);
+					if (sg_cv.debug->value)
+						sg_host.dprint("DEADDOOR %s at (%.0f %.0f %.0f)\n",
+							           e->client->pers.netname, e->s.origin[0],
+							           e->s.origin[1], e->s.origin[2]);
+				}
 			}
 		}
-		else
-		{
-			bot->door_hold_ent = NULL;
+			else
+			{
+				/* No door command owns this frame.  A completed/invalid attempt no
+				 * longer receives the progress-watch exemption. */
+				if (declared_door_link)
+				{
+					bot->door_hold_ent = NULL;
+					bot->door_hold_link = -1;
+					bot->door_hold_deadline = 0.0f;
+					door_hold = 0;
+				}
+				if (bot->door_hold_ent &&
+			    (!bot->door_hold_ent->inuse ||
+			     bestlink != bot->door_hold_link ||
+			     bot->door_hold_ent->moveinfo.state == SG_PLAT_STATE_TOP))
+			{
+				bot->door_hold_ent = NULL;
+				bot->door_hold_link = -1;
+				bot->door_hold_deadline = 0.0f;
+			}
 			bot->door_held_last = false;
 		}
 
@@ -2357,8 +2925,38 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		    SG_TimerRemaining(e->air_finished) <
 		        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f))
 		{
-			int an = (sg_airnext && bot->seed >= 0)
-			         ? sg_airnext[bot->seed] : -1;
+			int air_from = bot->seed;
+			int an;
+
+			/* A submerged body can still be localized to a dry shore seed. Use
+			 * the last water state owned by the exact SWIM controller, or a direct
+			 * water neighbor, before falling back to straight up. */
+			if (air_from < 0 ||
+			    !(SG_Rune()->seeds[air_from].flags & RSF_WATER))
+			{
+				if (bot->swim_air_seed >= 0 &&
+				    bot->swim_air_seed < SG_Rune()->hdr.num_seeds &&
+				    (SG_Rune()->seeds[bot->swim_air_seed].flags & RSF_WATER))
+					air_from = bot->swim_air_seed;
+				else if (bot->seed >= 0)
+				{
+					int ali;
+
+					for (ali = SG_Rune()->first_link[bot->seed]; ali >= 0;
+					     ali = SG_Rune()->next_link[ali])
+					{
+						rune_link_t *al = &SG_Rune()->links[ali];
+
+						if (al->action == RL_SWIM &&
+						    (SG_Rune()->seeds[al->to].flags & RSF_WATER))
+						{
+							air_from = al->to;
+							break;
+						}
+					}
+				}
+			}
+			an = (sg_airnext && air_from >= 0) ? sg_airnext[air_from] : -1;
 
 			if (an >= 0)
 			{
@@ -2403,7 +3001,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * measured speed. A hold dropped on top of that would strand the
 		 * bot mid-corner. The brake wins and the crossing goes ahead.
 		 */
-		if (rail_hold && have_move && bot->term_brake >= 1.0f)
+		if (rail_hold && have_move && bot->term_brake >= 1.0f &&
+		    !tc->jump_launch && !bot->jump_started && !bot->drop_started)
 		{
 			cmd->forwardmove = 0;
 			cmd->sidemove = 0;
@@ -2413,7 +3012,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/* rallying: get to cover first, stand there, face the push */
-		if (rally_hold && have_move)
+		if (rally_hold && have_move && !tc->jump_launch &&
+		    !bot->jump_started && !bot->drop_started)
 		{
 			vec3_t cvd;
 			qboolean at_cover = true;
@@ -2446,7 +3046,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/* on post: whatever the descent wanted, guard duty overrides it */
-		if (hold_post)
+		if (hold_post && !tc->jump_launch &&
+		    !bot->jump_started && !bot->drop_started)
 		{
 			cmd->forwardmove = 0;
 			cmd->sidemove = 0;
@@ -2461,6 +3062,61 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			bot->stuck_time = 0.0f;
 		}
 
+		if (ballistic_abort)
+		{
+			cmd->forwardmove = 0;
+			cmd->sidemove = 0;
+			cmd->upmove = 0;
+			have_move = false;
+			drop_yaw_locked = false;
+			bot->nav_drove = false;
+			bestlink = -1;
+			tc->bestlink = -1;
+		}
+		if (escort_terminal_hold && !tc->jump_launch &&
+		    !bot->jump_started && !bot->drop_started && bot->hook_phase == 0)
+		{
+			cmd->forwardmove = 0;
+			cmd->sidemove = 0;
+			cmd->upmove = 0;
+			bot->nav_drove = false;
+			bot->stuck_time = 0.0f;
+			have_move = false;
+		}
+
+		/*
+		 * Short-range progress has its own sample. last_origin is a 48-unit
+		 * seed-localization checkpoint; using it here meant a body wedged 5-47
+		 * units past that checkpoint could never satisfy the old <4 test. Sample
+		 * actual route progress instead, after every intentional hold and brake
+		 * has had the chance to clear nav_drove. A commanded hold resets both the
+		 * clock and its origin, so waiting for a door, rope, rally, lane or post
+		 * can never earn an unstick jump.
+		 */
+		if (!bot->nav_drove || bot->engaged_last)
+		{
+			bot->stuck_time = 0.0f;
+			VectorCopy(e->s.origin, bot->stuck_origin);
+		}
+		else
+		{
+			VectorSubtract(e->s.origin, bot->stuck_origin, d);
+			if (VectorLength(d) >= 4.0f)
+			{
+				bot->stuck_time = 0.0f;
+				VectorCopy(e->s.origin, bot->stuck_origin);
+			}
+			else
+			{
+				bot->stuck_time += (float)cmd->msec / 1000.0f;
+				if (bot->stuck_time > 1.0f && e->groundentity &&
+				    !(bestlink >= 0 && SG_Rune() &&
+				      (SG_Rune()->links[bestlink].action == RL_JUMP ||
+				       SG_Rune()->links[bestlink].action == RL_DROP)))
+					cmd->upmove = 400;   /* hop what the feelers missed */
+			}
+		}
+
 	VectorCopy(move_dir, tc->move_dir);
 	tc->view_yaw = view_yaw;
 	tc->view_pitch = view_pitch;
@@ -2472,6 +3128,793 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	tc->drop_yaw_locked = drop_yaw_locked;
 	tc->drop_yaw = drop_yaw;
 	tc->hook_brake = hook_brake;
+}
+
+static qboolean Hook_GraphReleaseReady(edict_t *e, const sg_bot_t *bot)
+{
+	vec3_t view, forward, right, muzzle, bite, velocity, dest_dir;
+	int rope;
+
+	if (!e || !e->client || e->client->hookstate != 2 ||
+	    !e->client->hook)
+		return false;
+	VectorCopy(bot->hook_view, view);
+	AngleVectors(view, forward, right, NULL);
+	CTF_HookMuzzle(e->s.origin, e->viewheight, e->client->pers.hand,
+	               forward, right, muzzle);
+	if (e->client->hook->hook_target)
+		VectorAdd(e->client->hook->hook_target->absmin,
+		          e->client->hook->hook_offset, bite);
+	else
+		VectorCopy(e->client->hook->s.origin, bite);
+	rope = CTF_HookPullVelocity(muzzle, bite, velocity);
+	VectorSubtract(bot->hook_dest, e->s.origin, dest_dir);
+	return ((dest_dir[0] * dest_dir[0] + dest_dir[1] * dest_dir[1] <
+	         80.0f * 80.0f && dest_dir[2] > -96.0f && dest_dir[2] < 96.0f) ||
+	        rope < 130.0f);
+}
+
+static void Hook_GraphRelease(edict_t *e, sg_bot_t *bot,
+	qboolean *cut_in_step)
+{
+	ctf_hook_abort(e);
+	bot->hook_phase = 3;
+	bot->flow_release = false;
+	bot->hook_settle_ms = 0;
+	*cut_in_step = true;
+}
+
+static void Hook_Shelve(sg_bot_t *bot, float seconds)
+{
+	int b, oldest = 0;
+
+	if (!SG_Rune() || bot->hook_link < 0 ||
+	    bot->hook_link >= SG_Rune()->hdr.num_links)
+		return;
+	for (b = 0; b < SG_BL_MAX; b++)
+		if (bot->bl_until[b] < bot->bl_until[oldest])
+			oldest = b;
+	bot->bl_link[oldest] = bot->hook_link;
+	SG_TimerArm(&bot->bl_until[oldest], seconds);
+}
+
+static void Hook_GraphFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
+{
+	if (e && e->client && e->client->hookstate != 0)
+		ctf_hook_abort(e);
+	Hook_Shelve(bot, shelf_seconds);
+	bot->commit_link = -1;
+	bot->hook_phase = 0;
+	bot->hook_link = -1;
+	bot->hook_attached_validated = false;
+	bot->hook_pull_ms = 0;
+	bot->hook_settle_ms = 0;
+}
+
+qboolean SG_HookOffhandReady(edict_t *e)
+{
+	static gitem_t *hook;
+
+	if (!hook)
+		hook = FindItem("Grappling Hook");
+	return (e && e->client && hook &&
+	        ((int)ctfflags->value & CTF_OFFHAND_HOOK) &&
+	        e->client->pers.hand == RIGHT_HANDED &&
+	        e->client->pers.inventory[ITEM_INDEX(hook)] > 0 &&
+	        e->client->pers.weapon != hook && e->client->newweapon != hook &&
+	        e->client->hookstate == 0 && e->client->hook == NULL);
+}
+
+static qboolean Hook_LiveWitnessOK(const edict_t *e, const sg_bot_t *bot)
+{
+	return e && e->client && bot && e->health > 0 && !e->deadflag &&
+	       e->health == bot->hook_source_health &&
+	       e->movetype == MOVETYPE_WALK &&
+	       e->client->ps.pmove.pm_type == PM_NORMAL &&
+	       e->client->pers.hand == RIGHT_HANDED &&
+	       !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
+	       e->client->ps.pmove.pm_time == 0 &&
+	       fabsf(e->viewheight - 22.0f) <= 0.1f &&
+	       !(e->waterlevel > 0 &&
+	         (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)));
+}
+
+static qboolean Hook_SourceStateOK(const edict_t *e, const sg_bot_t *bot)
+{
+	int i;
+
+	if (!Hook_LiveWitnessOK(e, bot) || bot->hook_source_water ||
+	    e->waterlevel != 0 || !e->groundentity ||
+	    (e->groundentity != g_edicts &&
+	     !SG_ImmutableSupport(e->groundentity)))
+		return false;
+	for (i = 0; i < 3; i++)
+		if ((short)(e->s.origin[i] * 8.0f) !=
+		    (short)(bot->hook_source[i] * 8.0f) ||
+		    (short)(e->velocity[i] * 8.0f) !=
+		    bot->hook_source_pms.velocity[i])
+			return false;
+	if (e->client->ps.pmove.pm_type != bot->hook_source_pms.pm_type ||
+	    e->client->ps.pmove.pm_flags != bot->hook_source_pms.pm_flags ||
+	    e->client->ps.pmove.pm_time != bot->hook_source_pms.pm_time ||
+	    e->client->ps.pmove.gravity != bot->hook_source_pms.gravity)
+		return false;
+	return true;
+}
+
+enum
+{
+	HOOK_PROOF_FAIL = 0,
+	HOOK_PROOF_OK = 1,
+	HOOK_PROOF_BUSY = 2
+};
+
+/* Passing the shooter to gi.trace correctly excludes its body, but Yamagi
+ * also excludes every entity owned by that passedict. A real hook bolt does
+ * NOT ignore its sibling rocket/grenade, so check those separately. Keep the
+ * check conservative and engine-portable: a stack fake-edict reproduces
+ * Yamagi's owner rule, but API-3 proxy engines require passedict to belong to
+ * the exported edict array. The linked abs bounds already include the
+ * engine's one-unit clip fringe. */
+static qboolean Hook_OwnedSolidBlocksShot(edict_t *owner,
+	const vec3_t start, const vec3_t end)
+{
+	edict_t *touch[MAX_EDICTS];
+	vec3_t query_min, query_max, delta;
+	int axis, i, num;
+
+	if (!owner || !sg_host.box_edicts)
+		return true;                 /* exact witness unavailable: fail closed */
+	for (axis = 0; axis < 3; axis++)
+	{
+		query_min[axis] = (start[axis] < end[axis] ? start[axis] : end[axis])
+		                - 1.0f;
+		query_max[axis] = (start[axis] > end[axis] ? start[axis] : end[axis])
+		                + 1.0f;
+		delta[axis] = end[axis] - start[axis];
+	}
+	num = sg_host.box_edicts(query_min, query_max, touch, MAX_EDICTS,
+	                          AREA_SOLID);
+	for (i = 0; i < num; i++)
+	{
+		edict_t *hit = touch[i];
+		float enter = 0.0f, leave = 1.0f;
+
+		if (!hit || !hit->inuse || hit == owner || hit->owner != owner ||
+		    hit->solid == SOLID_NOT)
+			continue;
+		for (axis = 0; axis < 3; axis++)
+		{
+			float a, b, inv;
+
+			if (fabsf(delta[axis]) < 0.0001f)
+			{
+				if (start[axis] < hit->absmin[axis] ||
+				    start[axis] > hit->absmax[axis])
+					break;
+				continue;
+			}
+			inv = 1.0f / delta[axis];
+			a = (hit->absmin[axis] - start[axis]) * inv;
+			b = (hit->absmax[axis] - start[axis]) * inv;
+			if (a > b)
+			{
+				float swap = a;
+				a = b;
+				b = swap;
+			}
+			if (a > enter) enter = a;
+			if (b < leave) leave = b;
+			if (enter > leave)
+				break;
+		}
+		if (axis == 3 && leave >= 0.0f && enter <= 1.0f)
+			return true;
+	}
+	return false;
+}
+
+/* Re-prove from the exact fixed-point state Cmd_Hook_f is about to consume.
+ * The rune control is a planning prior; this witness is the executable
+ * contract for the bot's actual position inside the source cell. */
+static int Hook_OnlineProof(edict_t *e, sg_bot_t *bot,
+	float nominal_distance, float *flight_distance)
+{
+	rune_link_t *link;
+	sg_phantom_t ph;
+	sg_hook_proof_t proof;
+	vec3_t forward, right, muzzle, shot_end, source_to_muzzle;
+	trace_t muzzle_tr, shot_tr;
+	float shot_len;
+	vec3_t source_delta;
+	qboolean source_water;
+	int i, flight_ms, proof_slot;
+
+	if (!e || !e->client || !bot || !flight_distance || !SG_Rune() ||
+	    bot->hook_link < 0 || bot->hook_link >= SG_Rune()->hdr.num_links ||
+	    level.intermissiontime || GamePaused() ||
+	    e->health <= 0 || e->deadflag || e->movetype != MOVETYPE_WALK ||
+	    e->client->ps.pmove.pm_type != PM_NORMAL ||
+	    (want_funky_gravity && want_funky_gravity->value != 0.0f) ||
+	    (e->client->ps.pmove.pm_flags & ~PMF_ON_GROUND) != 0 ||
+	    e->client->ps.pmove.pm_time != 0 ||
+	    fabsf(e->viewheight - 22.0f) > 0.1f || !SG_HookOffhandReady(e) ||
+	    bot->rj_phase != 0 || bot->nade_phase != 0)
+		return HOOK_PROOF_FAIL;
+	link = &SG_Rune()->links[bot->hook_link];
+	if (link->action != RL_HOOK || bot->commit_link != bot->hook_link)
+		return HOOK_PROOF_FAIL;
+	source_water =
+	    (SG_Rune()->seeds[link->from].flags & RSF_WATER) != 0;
+	if ((source_water &&
+	     ((SG_Rune()->seeds[link->to].flags & RSF_WATER) ||
+	      link->heading_slack != RUNE_WATER_HOOK_CONTROL_MARKER ||
+	      e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||
+	      (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))) ||
+	    (!source_water &&
+	     (link->heading_slack != RUNE_HOOK_CONTROL_SLACK ||
+	      !e->groundentity ||
+	      (e->groundentity != g_edicts &&
+	       !SG_ImmutableSupport(e->groundentity)) || e->waterlevel != 0)))
+		return HOOK_PROOF_FAIL;
+	VectorSubtract(SG_Rune()->seeds[link->from].origin, e->s.origin,
+	               source_delta);
+	if (source_delta[0] * source_delta[0] + source_delta[1] * source_delta[1] >
+	        20.0f * 20.0f || fabsf(source_delta[2]) > 16.0f)
+		return HOOK_PROOF_FAIL;
+	if (!source_water)
+		for (i = 0; i < 3; i++)
+			if ((short)(e->velocity[i] * 8.0f) != 0)
+				return HOOK_PROOF_FAIL;
+	if ((short)ANGLE2SHORT(e->client->v_angle[PITCH]) !=
+	        (short)ANGLE2SHORT(bot->hook_view[PITCH]) ||
+	    (short)ANGLE2SHORT(e->client->v_angle[YAW]) !=
+	        (short)ANGLE2SHORT(bot->hook_view[YAW]) ||
+	    fabsf(e->client->v_angle[ROLL]) > 0.001f)
+		return HOOK_PROOF_FAIL;
+	proof_slot = (int)(bot - sg_bots);
+	if (proof_slot < 0 || proof_slot >= SG_MAXBOTS)
+		return HOOK_PROOF_FAIL;
+	/* At most one expensive witness per server frame. Rotate the grant through
+	 * sg_bots slots, the exact ascending order SG_RunFrame visits. A low slot
+	 * that repeatedly finds bad local geometry
+	 * must not consume every frame ahead of later bots. If no waiter exists past
+	 * the last owner, one frame is left unused and the following frame wraps. */
+	if (level.framenum < sg_hook_reproof_frame)
+	{
+		sg_hook_reproof_frame = -1; /* level-time rewind */
+		sg_hook_reproof_slot = 0;
+	}
+	if (sg_hook_reproof_frame == level.framenum)
+		return HOOK_PROOF_BUSY;
+	if (sg_hook_reproof_frame == level.framenum - 1 &&
+	    proof_slot <= sg_hook_reproof_slot)
+		return HOOK_PROOF_BUSY;
+	sg_hook_reproof_frame = level.framenum;
+	sg_hook_reproof_slot = proof_slot;
+
+	AngleVectors(e->client->v_angle, forward, right, NULL);
+	CTF_HookMuzzle(e->s.origin, e->viewheight, e->client->pers.hand,
+	               forward, right, muzzle);
+	muzzle_tr = sg_host.trace(e->s.origin, NULL, NULL, muzzle, e, MASK_SHOT);
+	if (muzzle_tr.startsolid || muzzle_tr.fraction < 1.0f)
+		return HOOK_PROOF_FAIL;
+	VectorNormalize(forward);
+	shot_len = nominal_distance + 96.0f;
+	if (shot_len < 160.0f)
+		shot_len = 160.0f;
+	if (shot_len > RUNE_HOOK_MAX_RAY)
+		shot_len = RUNE_HOOK_MAX_RAY;
+	VectorMA(muzzle, shot_len, forward, shot_end);
+	shot_tr = sg_host.trace(muzzle, NULL, NULL, shot_end, e, MASK_SHOT);
+	if (shot_tr.startsolid || shot_tr.fraction >= 1.0f ||
+	    shot_tr.ent != g_edicts ||
+	    (shot_tr.surface && (shot_tr.surface->flags & SURF_SKY)))
+		return HOOK_PROOF_FAIL;
+	if (Hook_OwnedSolidBlocksShot(e, muzzle, shot_tr.endpos))
+		return HOOK_PROOF_FAIL;
+	VectorSubtract(shot_tr.endpos, muzzle, source_to_muzzle);
+	*flight_distance = DotProduct(source_to_muzzle, forward);
+	if (*flight_distance < 1.0f || *flight_distance > RUNE_HOOK_MAX_RAY)
+		return HOOK_PROOF_FAIL;
+	VectorMA(muzzle, *flight_distance, forward, bot->hook_anchor);
+	if (!SG_OracleHookFlightClear(muzzle, bot->hook_anchor))
+		return HOOK_PROOF_FAIL;
+	flight_ms = (int)ceilf(*flight_distance /
+	                          RUNE_HOOK_FRAME_DISTANCE) * 100;
+
+	memset(&ph, 0, sizeof(ph));
+	ph.pms = e->client->ps.pmove;
+	ph.old_pms = e->client->old_pmove;
+	for (i = 0; i < 3; i++)
+	{
+		ph.pms.origin[i] = (short)(e->s.origin[i] * 8.0f);
+		ph.pms.velocity[i] = (short)(e->velocity[i] * 8.0f);
+		ph.origin[i] = ph.pms.origin[i] * 0.125f;
+		ph.velocity[i] = ph.pms.velocity[i] * 0.125f;
+	}
+	ph.pms.gravity = (short)sv_gravity->value;
+	ph.groundentity = e->groundentity != NULL;
+	ph.watertype = e->watertype;
+	ph.waterlevel = e->waterlevel;
+	if (!SG_OracleHookTraverse(&ph, bot->hook_anchor, bot->hook_dest,
+	                           bot->hook_view, RIGHT_HANDED, flight_ms,
+	                           source_water ? RUNE_HOOK_WATER_SETTLE_MS
+	                                        : RUNE_HOOK_DRY_SETTLE_MS,
+	                           e->client->oldvelocity[2], &proof, e, true))
+		return HOOK_PROOF_FAIL;
+	if (source_water)
+	{
+		float available_air = e->waterlevel >= 3
+		    ? SG_TimerRemaining(e->air_finished) : 12.0f;
+		float action_seconds =
+		    (flight_ms + proof.pull_ms + proof.settle_ms) * 0.001f + 0.2f;
+
+		if (available_air <= action_seconds)
+			return HOOK_PROOF_FAIL;
+	}
+
+	VectorCopy(e->s.origin, bot->hook_source);
+	bot->hook_source[0] = (short)(bot->hook_source[0] * 8.0f) * 0.125f;
+	bot->hook_source[1] = (short)(bot->hook_source[1] * 8.0f) * 0.125f;
+	bot->hook_source[2] = (short)(bot->hook_source[2] * 8.0f) * 0.125f;
+	bot->hook_source_pms = e->client->ps.pmove;
+	for (i = 0; i < 3; i++)
+	{
+		bot->hook_source_pms.origin[i] = (short)(e->s.origin[i] * 8.0f);
+		bot->hook_source_pms.velocity[i] = (short)(e->velocity[i] * 8.0f);
+	}
+	bot->hook_attach_pms = proof.attach_pms;
+	bot->hook_source_water = source_water;
+	bot->hook_source_health = e->health;
+	bot->hook_attach_groundentity = proof.attach_groundentity;
+	bot->hook_attach_watertype = proof.attach_watertype;
+	bot->hook_attach_waterlevel = proof.attach_waterlevel;
+	bot->hook_proved_pull_ms = proof.pull_ms;
+	bot->hook_proved_release_ms = proof.release_ms;
+	bot->hook_proved_arrival_ms = proof.settle_arrival_ms;
+	bot->hook_proved_settle_ms = proof.settle_ms;
+	return HOOK_PROOF_OK;
+}
+
+static qboolean Hook_AttachmentOK(edict_t *e, sg_bot_t *bot)
+{
+	vec3_t miss;
+	int i;
+
+	if (!Hook_LiveWitnessOK(e, bot) || e->client->hookstate != 2 ||
+	    !e->client->hook || e->client->hook->hook_target != g_edicts ||
+	    (!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
+	    (!!e->groundentity != !!bot->hook_attach_groundentity) ||
+	    (e->groundentity && e->groundentity != g_edicts &&
+	     !SG_ImmutableSupport(e->groundentity)) ||
+	    e->watertype != bot->hook_attach_watertype ||
+	    e->waterlevel != bot->hook_attach_waterlevel)
+		return false;
+	VectorSubtract(e->client->hook->s.origin, bot->hook_anchor, miss);
+	if (VectorLength(miss) > 0.5f)
+		return false;
+	for (i = 0; i < 3; i++)
+		if ((short)(e->s.origin[i] * 8.0f) != bot->hook_attach_pms.origin[i] ||
+		    (short)(e->velocity[i] * 8.0f) != bot->hook_attach_pms.velocity[i])
+			return false;
+	if (e->client->ps.pmove.pm_type != bot->hook_attach_pms.pm_type ||
+	    e->client->ps.pmove.pm_flags != bot->hook_attach_pms.pm_flags ||
+	    e->client->ps.pmove.pm_time != bot->hook_attach_pms.pm_time ||
+	    e->client->ps.pmove.gravity != bot->hook_attach_pms.gravity ||
+	    memcmp(&e->client->old_pmove, &bot->hook_attach_pms,
+	           sizeof(bot->hook_attach_pms)) != 0)
+		return false;
+	/* Remove collision epsilon from the proved trajectory. The target is the
+	 * immutable world, so keeping the target-relative offset in sync is safe. */
+	VectorCopy(bot->hook_anchor, e->client->hook->s.origin);
+	VectorSubtract(bot->hook_anchor, g_edicts->absmin,
+	               e->client->hook->hook_offset);
+	return true;
+}
+
+static qboolean Hook_AttachmentMaintained(edict_t *e, sg_bot_t *bot)
+{
+	vec3_t miss;
+
+	if (!e || !e->client || e->client->hookstate != 2 ||
+	    !e->client->hook || e->client->hook->hook_target != g_edicts)
+		return false;
+	VectorSubtract(e->client->hook->s.origin, bot->hook_anchor, miss);
+	if (VectorLength(miss) > 0.5f)
+		return false;
+	VectorCopy(bot->hook_anchor, e->client->hook->s.origin);
+	VectorSubtract(bot->hook_anchor, g_edicts->absmin,
+	               e->client->hook->hook_offset);
+	return true;
+}
+
+static qboolean Hook_SettleArrived(const edict_t *e, const sg_bot_t *bot)
+{
+	return SG_SupportedArrived(e->s.origin, bot->hook_dest,
+	                           e->groundentity != NULL, e->watertype,
+	                           e->waterlevel, (edict_t *)e);
+}
+
+enum
+{
+	SWIM_PROOF_FAIL = 0,
+	SWIM_PROOF_OK = 1,
+	SWIM_PROOF_BUSY = 2
+};
+
+/* Re-prove an RL_SWIM from the exact authoritative state its first live
+ * ClientThink will consume. Localization identifies a useful nearby edge; it
+ * is not an entry envelope for arbitrary momentum or displacement. */
+static int Swim_OnlineProof(edict_t *e, sg_bot_t *bot, int link_index)
+{
+	rune_link_t *link;
+	sg_phantom_t ph;
+	sg_swim_proof_t proof;
+	int i, proof_slot;
+
+	if (!e || !e->client || !bot || !SG_Rune() || link_index < 0 ||
+	    link_index >= SG_Rune()->hdr.num_links || bot->commit_link != link_index ||
+	    level.intermissiontime || GamePaused() || e->health <= 0 || e->deadflag ||
+	    e->movetype != MOVETYPE_WALK ||
+	    e->client->ps.pmove.pm_type != PM_NORMAL ||
+	    e->client->hookstate != 0 || e->client->hook != NULL ||
+	    bot->hook_phase != 0 || bot->rj_phase != 0 || bot->nade_phase != 0)
+		return SWIM_PROOF_FAIL;
+	link = &SG_Rune()->links[link_index];
+	if (link->action != RL_SWIM)
+		return SWIM_PROOF_FAIL;
+
+	proof_slot = (int)(bot - sg_bots);
+	if (proof_slot < 0 || proof_slot >= SG_MAXBOTS)
+		return SWIM_PROOF_FAIL;
+	if (level.framenum < sg_swim_reproof_frame)
+	{
+		sg_swim_reproof_frame = -1;
+		sg_swim_reproof_slot = 0;
+	}
+	if (sg_swim_reproof_frame == level.framenum)
+		return SWIM_PROOF_BUSY;
+	if (sg_swim_reproof_frame == level.framenum - 1 &&
+	    proof_slot <= sg_swim_reproof_slot)
+		return SWIM_PROOF_BUSY;
+	sg_swim_reproof_frame = level.framenum;
+	sg_swim_reproof_slot = proof_slot;
+
+	memset(&ph, 0, sizeof(ph));
+	ph.pms = e->client->ps.pmove;
+	ph.old_pms = e->client->old_pmove;
+	for (i = 0; i < 3; i++)
+	{
+		ph.pms.origin[i] = (short)(e->s.origin[i] * 8.0f);
+		ph.pms.velocity[i] = (short)(e->velocity[i] * 8.0f);
+		ph.origin[i] = ph.pms.origin[i] * 0.125f;
+		ph.velocity[i] = ph.pms.velocity[i] * 0.125f;
+	}
+	ph.pms.gravity = (short)sv_gravity->value;
+	ph.groundentity = e->groundentity != NULL;
+	ph.waterlevel = e->waterlevel;
+	ph.watertype = e->watertype;
+	if (!SG_OracleSwimTraverse(&ph, SG_Rune()->seeds[link->to].origin,
+	        (SG_Rune()->seeds[link->to].flags & RSF_WATER) != 0,
+	        e->client->oldvelocity[2], &proof, e, true))
+		return SWIM_PROOF_FAIL;
+	bot->swim_validated = true;
+	bot->swim_proved_ms = proof.arrival_ms;
+	bot->swim_elapsed_ms = 0;
+	SG_TimerArm(&bot->commit_until, proof.arrival_ms * 0.001f + 0.5f);
+	return SWIM_PROOF_OK;
+}
+
+static int TeleportSwim_OnlineProof(edict_t *e, sg_bot_t *bot,
+	int link_index)
+{
+	rune_link_t *link;
+	edict_t *pad;
+	sg_phantom_t ph;
+	sg_swim_proof_t proof;
+	vec3_t approach;
+	int i, proof_slot;
+
+	if (!e || !e->client || !bot || !SG_Rune() || link_index < 0 ||
+	    link_index >= SG_Rune()->hdr.num_links || bot->commit_link != link_index ||
+	    level.intermissiontime || GamePaused() || e->health <= 0 || e->deadflag ||
+	    e->movetype != MOVETYPE_WALK ||
+	    e->client->ps.pmove.pm_type != PM_NORMAL ||
+	    e->client->hookstate != 0 || e->client->hook != NULL ||
+	    bot->hook_phase != 0 || bot->rj_phase != 0 || bot->nade_phase != 0)
+		return SWIM_PROOF_FAIL;
+	link = &SG_Rune()->links[link_index];
+	if (link->action != RL_TELEPORT ||
+	    !(SG_Rune()->seeds[link->from].flags & RSF_WATER))
+		return SWIM_PROOF_FAIL;
+	pad = SG_TeleportForAnchor(link->anchor);
+	if (!pad || !SG_TeleportApproachPoint(pad, approach))
+		return SWIM_PROOF_FAIL;
+	proof_slot = (int)(bot - sg_bots);
+	if (proof_slot < 0 || proof_slot >= SG_MAXBOTS)
+		return SWIM_PROOF_FAIL;
+	if (level.framenum < sg_swim_reproof_frame)
+	{
+		sg_swim_reproof_frame = -1;
+		sg_swim_reproof_slot = 0;
+	}
+	if (sg_swim_reproof_frame == level.framenum)
+		return SWIM_PROOF_BUSY;
+	if (sg_swim_reproof_frame == level.framenum - 1 &&
+	    proof_slot <= sg_swim_reproof_slot)
+		return SWIM_PROOF_BUSY;
+	sg_swim_reproof_frame = level.framenum;
+	sg_swim_reproof_slot = proof_slot;
+
+	memset(&ph, 0, sizeof(ph));
+	ph.pms = e->client->ps.pmove;
+	ph.old_pms = e->client->old_pmove;
+	for (i = 0; i < 3; i++)
+	{
+		ph.pms.origin[i] = (short)(e->s.origin[i] * 8.0f);
+		ph.pms.velocity[i] = (short)(e->velocity[i] * 8.0f);
+		ph.origin[i] = ph.pms.origin[i] * 0.125f;
+		ph.velocity[i] = ph.pms.velocity[i] * 0.125f;
+	}
+	ph.pms.gravity = (short)sv_gravity->value;
+	ph.groundentity = e->groundentity != NULL;
+	ph.waterlevel = e->waterlevel;
+	ph.watertype = e->watertype;
+	if (!SG_OracleTeleportSwimApproach(&ph, approach, pad,
+	        e->client->oldvelocity[2], &proof, e, true))
+		return SWIM_PROOF_FAIL;
+	bot->swim_validated = true;
+	bot->swim_proved_ms = proof.arrival_ms;
+	bot->swim_elapsed_ms = 0;
+	bot->declared_started = true;
+	SG_TimerArm(&bot->commit_until, proof.arrival_ms * 0.001f + 0.5f);
+	return SWIM_PROOF_OK;
+}
+
+static void Swim_ProofFail(edict_t *e, sg_bot_t *bot, int link_index,
+	float shelf_seconds)
+{
+	int b, oldest = 0;
+
+	if (link_index >= 0)
+	{
+		for (b = 0; b < SG_BL_MAX; b++)
+			if (bot->bl_until[b] < bot->bl_until[oldest])
+				oldest = b;
+		bot->bl_link[oldest] = link_index;
+		SG_TimerArm(&bot->bl_until[oldest], shelf_seconds);
+	}
+	bot->commit_link = -1;
+	bot->swim_validated = false;
+	bot->swim_proved_ms = 0;
+	bot->swim_elapsed_ms = 0;
+	if (sg_cv.debug->value)
+		sg_host.dprint("SWIMREPROOFF %s link=%d\n",
+		           e->client->pers.netname, link_index);
+}
+
+/* The proved graph-hook executor is intentionally outside the normal surface
+ * pipeline. A tall ride can have no nearby seed, and fan/combat/holds/scalers
+ * are not part of the oracle witness. */
+qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
+{
+	usercmd_t cmd;
+	int step;
+	qboolean cut = false;
+	qboolean failed = false;
+	qboolean arrived = false;
+
+	if (!bot || !e || !e->client || bot->speedhook || bot->hook_link < 0 ||
+	    (bot->hook_phase != 2 && bot->hook_phase != 3))
+		return false;
+	/* Online proof rejects harmful liquid on every 100 ms boundary. Dynamic
+	 * combat can still perturb the live body after proof; retire that diverged
+	 * witness before it deliberately continues through lava/slime. */
+	if (e->waterlevel > 0 &&
+	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+	{
+		Hook_GraphFail(e, bot, 30.0f);
+		return true;
+	}
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = 25;
+	if (bot->hook_phase == 2)
+	{
+		/* Outbound flight owns no body input. Dry bodies must remain at their
+		 * source; water bodies may take only the zero-input drift rolled by the
+		 * witness, whose complete state is checked when attachment occurs. */
+		if (e->client->hookstate == 1 && e->client->hook)
+		{
+			if ((!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
+			    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
+			    SG_TimerReadyStrict(bot->hook_deadline))
+			{
+				Hook_GraphFail(e, bot, 15.0f);
+				return true;
+			}
+			cmd.angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
+			                         e->client->ps.pmove.delta_angles[PITCH];
+			cmd.angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
+			                       e->client->ps.pmove.delta_angles[YAW];
+			cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+			for (step = 0; step < 4; step++)
+				ClientThink(e, &cmd);
+			if (e->waterlevel > 0 &&
+			    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+				Hook_GraphFail(e, bot, 30.0f);
+			return true;
+		}
+		if ((!bot->hook_attached_validated && !Hook_AttachmentOK(e, bot)) ||
+		    (bot->hook_attached_validated && !Hook_AttachmentMaintained(e, bot)))
+		{
+			Hook_GraphFail(e, bot, 15.0f);
+			return true;
+		}
+		if (!bot->hook_attached_validated)
+		{
+			bot->hook_attached_validated = true;
+			bot->hook_pull_ms = 0;
+			/* Attachment happened in the entity loop. Spend this frame's four
+			 * no-op commands at the exact source; the first pull is the normal
+			 * ClientEndServerFrame call that follows. */
+			cmd.angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
+			                         e->client->ps.pmove.delta_angles[PITCH];
+			cmd.angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
+			                       e->client->ps.pmove.delta_angles[YAW];
+			cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+			for (step = 0; step < 4; step++)
+				ClientThink(e, &cmd);
+			if (e->waterlevel > 0 &&
+			    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+				Hook_GraphFail(e, bot, 30.0f);
+			return true;
+		}
+
+		for (step = 0; step < 4; step++)
+		{
+			qboolean ready;
+
+			cmd.angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
+			                         e->client->ps.pmove.delta_angles[PITCH];
+			cmd.angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
+			                       e->client->ps.pmove.delta_angles[YAW];
+			cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
+			ClientThink(e, &cmd);
+			bot->hook_pull_ms += 25;
+			if (failed || cut)
+				continue;
+			ready = Hook_GraphReleaseReady(e, bot);
+			if (ready && bot->hook_pull_ms == bot->hook_proved_release_ms)
+				Hook_GraphRelease(e, bot, &cut);
+			else if (ready ||
+			         bot->hook_pull_ms >= bot->hook_proved_release_ms)
+			{
+				Hook_GraphFail(e, bot, 30.0f);
+				failed = true;
+			}
+		}
+		if (failed)
+			return true;
+		if (e->waterlevel > 0 &&
+		    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		{
+			Hook_GraphFail(e, bot, 30.0f);
+			return true;
+		}
+		if ((cut && bot->hook_pull_ms != bot->hook_proved_pull_ms) ||
+		    (!cut && bot->hook_pull_ms >= bot->hook_proved_pull_ms))
+		{
+			Hook_GraphFail(e, bot, 30.0f);
+		}
+		return true;
+	}
+
+	/* Literal oracle settlement: re-aim at the destination before every 25 ms
+	 * forward command. First arrival and the fully consumed 100 ms frame are
+	 * separate proof boundaries: after arrival, zero commands fill the frame,
+	 * and the body must still be in the destination envelope at its end. */
+	for (step = 0; step < 4; step++)
+	{
+		vec3_t d;
+		float yaw;
+
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = 25;
+		if (failed)
+		{
+			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
+			ClientThink(e, &cmd);
+			continue;
+		}
+		if (arrived)
+		{
+			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
+			ClientThink(e, &cmd);
+			bot->hook_settle_ms += 25;
+			continue;
+		}
+		if (Hook_SettleArrived(e, bot))
+		{
+			if (bot->hook_settle_ms == bot->hook_proved_arrival_ms)
+				arrived = true;
+			else
+			{
+				Hook_GraphFail(e, bot, 60.0f);
+				failed = true;
+			}
+			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
+			ClientThink(e, &cmd);
+			if (!failed)
+				bot->hook_settle_ms += 25;
+			continue;
+		}
+		if (bot->hook_settle_ms >= bot->hook_proved_arrival_ms ||
+		    bot->hook_settle_ms >= bot->hook_proved_settle_ms)
+		{
+			Hook_GraphFail(e, bot, 60.0f);
+			failed = true;
+			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
+			ClientThink(e, &cmd);
+			continue;
+		}
+		VectorSubtract(bot->hook_dest, e->s.origin, d);
+		yaw = atan2f(d[1], d[0]) * 180.0f / (float)M_PI;
+		cmd.angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
+		cmd.angles[YAW] = ANGLE2SHORT(yaw) -
+		                   e->client->ps.pmove.delta_angles[YAW];
+		cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+		cmd.forwardmove = 400;
+		cmd.sidemove = cmd.upmove = 0;
+		ClientThink(e, &cmd);
+		bot->hook_settle_ms += 25;
+		if (Hook_SettleArrived(e, bot))
+		{
+			if (bot->hook_settle_ms == bot->hook_proved_arrival_ms)
+				arrived = true;
+			else
+			{
+				Hook_GraphFail(e, bot, 60.0f);
+				failed = true;
+			}
+		}
+		else if (bot->hook_settle_ms >= bot->hook_proved_arrival_ms)
+		{
+			Hook_GraphFail(e, bot, 60.0f);
+			failed = true;
+		}
+	}
+	if (!failed && e->waterlevel > 0 &&
+	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+	{
+		Hook_GraphFail(e, bot, 60.0f);
+		failed = true;
+	}
+	if (!failed && bot->hook_settle_ms == bot->hook_proved_settle_ms)
+	{
+		if (arrived && Hook_SettleArrived(e, bot))
+			cut = true;
+		else
+		{
+			Hook_GraphFail(e, bot, 60.0f);
+			failed = true;
+		}
+	}
+	else if (!failed && bot->hook_settle_ms > bot->hook_proved_settle_ms)
+	{
+		Hook_GraphFail(e, bot, 60.0f);
+		failed = true;
+	}
+	if (!failed && cut)
+	{
+		bot->hookfail_streak = 0;
+		bot->commit_link = -1;
+		bot->hook_phase = 0;
+		bot->hook_link = -1;
+	}
+	return true;
 }
 
 /*
@@ -2504,14 +3947,162 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean run_link = tc->run_link;
 	int door_hold = tc->door_hold;
 	qboolean drop_yaw_locked = tc->drop_yaw_locked;
+	qboolean proved_ballistic = (bestlink >= 0 && SG_Rune() &&
+	    (SG_Rune()->links[bestlink].action == RL_DROP ||
+	     SG_Rune()->links[bestlink].action == RL_JUMP));
+	qboolean proved_drop = (bestlink >= 0 && SG_Rune() &&
+	    SG_Rune()->links[bestlink].action == RL_DROP);
+	qboolean proved_jump = (bestlink >= 0 && SG_Rune() &&
+	    SG_Rune()->links[bestlink].action == RL_JUMP);
+	qboolean proved_swim = (bestlink >= 0 && SG_Rune() &&
+	    SG_Rune()->links[bestlink].action == RL_SWIM);
+	qboolean declared_control = (bestlink >= 0 && SG_Rune() &&
+	    (SG_Rune()->links[bestlink].action == RL_LIFT ||
+	     SG_Rune()->links[bestlink].action == RL_TELEPORT ||
+	     SG_Rune()->links[bestlink].action == RL_DOOR));
+	qboolean proved_control = proved_ballistic || proved_swim || declared_control;
+	qboolean declared_door = declared_control &&
+	    SG_Rune()->links[bestlink].action == RL_DOOR;
+	qboolean water_tele = declared_control &&
+	    SG_Rune()->links[bestlink].action == RL_TELEPORT &&
+	    (SG_Rune()->seeds[SG_Rune()->links[bestlink].from].flags & RSF_WATER);
+	qboolean water_control = proved_swim ||
+	    (water_tele && !bot->declared_activated);
+	qboolean swim_hazard = water_control && e->waterlevel > 0 &&
+	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
+	qboolean swim_emergency = water_control && e->waterlevel >= 3 &&
+	    bot->hook_phase != 2 &&
+	    SG_TimerRemaining(e->air_finished) <
+	        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f);
 
 	vec3_t basis_fwd, basis_right;
 	int sub_steps = 1, sub_msec = 0;
 	float slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
 	qboolean duel_hold = false;
+	qboolean hook_cut_in_step = false;
+	qboolean door_suffix_grant = false;
 	short weave_side = 0;
 	vec3_t d;
 
+	/* The graph's nominal SWIM proves that the local action exists. Execution
+	 * begins only after the same oracle proves the actual fixed-point entry
+	 * state. One rotating grant bounds worst-case Pmove work per server frame. */
+	if (proved_swim && !bot->swim_validated &&
+	    !swim_emergency && !swim_hazard)
+	{
+		int online = Swim_OnlineProof(e, bot, bestlink);
+		usercmd_t wait_cmd;
+		int wait_step;
+
+		memset(&wait_cmd, 0, sizeof(wait_cmd));
+		wait_cmd.msec = SG_SWIM_STEP_MSEC;
+		if (online == SWIM_PROOF_BUSY)
+		{
+			SG_TimerArm(&bot->commit_until, 3.0f);
+			for (wait_step = 0; wait_step < 4; wait_step++)
+				ClientThink(e, &wait_cmd);
+			return;
+		}
+		if (online != SWIM_PROOF_OK)
+		{
+			Swim_ProofFail(e, bot, bestlink, 5.0f);
+			for (wait_step = 0; wait_step < 4; wait_step++)
+				ClientThink(e, &wait_cmd);
+			return;
+		}
+	}
+	if (water_tele && !bot->swim_validated &&
+	    !swim_emergency && !swim_hazard)
+	{
+		int online = TeleportSwim_OnlineProof(e, bot, bestlink);
+		usercmd_t wait_cmd;
+		int wait_step;
+
+		memset(&wait_cmd, 0, sizeof(wait_cmd));
+		wait_cmd.msec = SG_SWIM_STEP_MSEC;
+		if (online == SWIM_PROOF_BUSY)
+		{
+			SG_TimerArm(&bot->commit_until, 3.0f);
+			for (wait_step = 0; wait_step < 4; wait_step++)
+				ClientThink(e, &wait_cmd);
+			return;
+		}
+		if (online != SWIM_PROOF_OK)
+		{
+			Swim_ProofFail(e, bot, bestlink, 5.0f);
+			for (wait_step = 0; wait_step < 4; wait_step++)
+				ClientThink(e, &wait_cmd);
+			return;
+		}
+	}
+
+	/* Drowning and hazardous liquid are safety interrupts, not optional
+	 * modifiers. They invalidate this exact endpoint traversal before any
+	 * command is emitted. A hazard also shelves the demonstrated link because
+	 * the live world reached a state its proof explicitly rejected. */
+	if (swim_emergency || swim_hazard)
+		bot->commit_link = -1;
+	if (swim_hazard)
+	{
+		int b, oldest = 0;
+
+		for (b = 0; b < SG_BL_MAX; b++)
+			if (bot->bl_until[b] < bot->bl_until[oldest])
+				oldest = b;
+		bot->bl_link[oldest] = bestlink;
+		SG_TimerArm(&bot->bl_until[oldest], 60.0f);
+		SG_TeachLinkFutility(bestlink);
+	}
+	if (water_tele && (swim_emergency || swim_hazard))
+	{
+		vec3_t destination;
+		int air_from = SG_Rune()->links[bestlink].from;
+		int air_seed = (sg_airnext && air_from >= 0)
+		    ? sg_airnext[air_from] : -1;
+		usercmd_t escape_cmd;
+		int escape_step;
+
+		if (swim_emergency && !swim_hazard)
+		{
+			int b, oldest = 0;
+
+			for (b = 0; b < SG_BL_MAX; b++)
+				if (bot->bl_until[b] < bot->bl_until[oldest])
+					oldest = b;
+			bot->bl_link[oldest] = bestlink;
+			SG_TimerArm(&bot->bl_until[oldest], 5.0f);
+		}
+		bot->swim_validated = false;
+		bot->swim_proved_ms = 0;
+		bot->swim_elapsed_ms = 0;
+		bot->declared_activated = false;
+		bot->declared_started = false;
+		bot->declared_start_frame = -1;
+		bot->declared_touched = false;
+		bot->declared_touch_frame = -1;
+		bot->declared_triggered = false;
+		bot->declared_trigger_frame = -1;
+		bot->declared_egress_proof_frame = -1;
+		bot->declared_door_retreat = false;
+		bot->declared_door_suffix_ms = 0;
+
+		if (air_seed >= 0 && air_seed < SG_Rune()->hdr.num_seeds)
+			VectorCopy(SG_Rune()->seeds[air_seed].origin, destination);
+		else
+		{
+			VectorCopy(e->s.origin, destination);
+			destination[2] += 256.0f;
+		}
+		for (escape_step = 0; escape_step < 4; escape_step++)
+		{
+			memset(&escape_cmd, 0, sizeof(escape_cmd));
+			escape_cmd.msec = SG_SWIM_STEP_MSEC;
+			SG_SwimCommand(e->s.origin, destination,
+			               &e->client->ps.pmove, &escape_cmd);
+			ClientThink(e, &escape_cmd);
+		}
+		return;
+	}
 
 	/*
 	 * The basis the engine will actually use, not a convenient one.
@@ -2627,7 +4218,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	{
 		float dose = sg_cv.breather->value;
 
-		if (dose > 0.0f && role != SG_ROLE_CARRY &&
+		if (dose > 0.0f && role != SG_ROLE_CARRY && !proved_control &&
 		    bot->hook_phase == 0 && !bot->engaged_last &&
 		    e->groundentity != NULL)
 		{
@@ -2662,9 +4253,23 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		qboolean as_ok = false;         /* the chain is live this frame */
 		qboolean as_chain = false;      /* dose 2: hop chaining as well */
 		float    as_lean = 0.0f;        /* the sinusoid, -1..1 */
+		qboolean drop_recovery_failed = false;
 
 		if (sub < 1)
 			sub = 1;
+		/* A v2 graph hook is proved as four literal 25 ms client commands in
+		 * its water-source aim frame as well as every flight, pull, and settle
+		 * interval. Do not let sg_subframes turn those boundaries into 13/26/39
+		 * ms or make proof semantics configuration-dependent. Optional speed
+		 * hooks are not graph proofs and keep the general subdivision policy. */
+		if (bot->hook_link >= 0 && !bot->speedhook &&
+		    bot->hook_phase >= 1 && bot->hook_phase <= 3 && total == 100)
+			sub = 4;
+		/* RUN/JUMP/DROP proofs are also rolled as literal 25 ms commands.
+		 * Keep their acceleration, jump edge and lip crossing independent of
+		 * the administrator's general sg_subframes texture knob. */
+		if (proved_control && total == 100)
+			sub = 4;
 		if (sub > total)
 			sub = total;            /* a step cannot be shorter than 1ms */
 		base = total / sub;
@@ -2693,7 +4298,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * the bot is flying its own landing on forwardmove down the chosen yaw
 		 * (above), and a view stolen there is a landing missed.
 		 */
-		if (bot->hook_phase != 1 && bot->hook_phase != 3 &&
+		if (!proved_control && bot->hook_phase != 1 && bot->hook_phase != 3 &&
+		    !(bot->hook_phase == 2 && !bot->speedhook) &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0)
 			SG_CombatFrame(e, cmd, &engaged);
 
@@ -2704,7 +4310,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * grenade code throws on release. Combat resumes next frame
 		 * and the ladder takes the weapon back.
 		 */
-		if (bot->nade_phase == 1)
+		if (!proved_control && bot->nade_phase == 1)
 		{
 			/* cook only once the grenade is VERIFIABLY in hand -- the
 			 * switch runs through down/up animations, and holding the
@@ -2734,7 +4340,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				SG_TimerArm(&bot->nade_next, 4.0f);
 			}
 		}
-		if (bot->nade_phase == 2)
+		if (!proved_control && bot->nade_phase == 2)
 		{
 			/*
 			 * THE BOMB LEADS THE LANDING (sg_nadelead, wave 309+). The
@@ -2925,7 +4531,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * frame, zero route seconds. Free speculation; the splash
 		 * does the rest or nothing does.
 		 */
-		if (sg_cv.soundfire->value &&
+		if (!proved_control && sg_cv.soundfire->value &&
 		    !duel && !engaged && role != SG_ROLE_CARRY &&
 		    bot->nade_phase == 0 && bot->hook_phase == 0 &&
 		    SG_TimerReady(bot->soundfire_next) &&
@@ -3110,7 +4716,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 			                 e->velocity[1] * e->velocity[1]);
 
-			if (dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
+			if (!proved_control && dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
 			    run_link && open_ahead && bestlink >= 0 && SG_Rune() &&
 			    !precision && !engaged &&
 			    bot->hook_phase == 0 && bot->rj_phase == 0 &&
@@ -3223,6 +4829,22 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
+		/* A proved graph ride holds the exact quantized fire view. The hook
+		 * pull starts at the current-view muzzle every end frame, so letting
+		 * navigation or combat rotate the eyes would change both rope length and
+		 * velocity relative to the proof. */
+	if (bot->hook_phase == 2 && !bot->speedhook)
+	{
+			bot->vy_cur = bot->hook_view[YAW];
+			bot->vp_cur = bot->hook_view[PITCH];
+			bot->view_on = true;
+			cmd->angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW])
+			                - e->client->ps.pmove.delta_angles[YAW];
+		cmd->angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH])
+		                  - e->client->ps.pmove.delta_angles[PITCH];
+		cmd->angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+	}
+
 		/*
 		 * THE VIEW SLEWS; IT NO LONGER TELEPORTS. Every writer above --
 		 * navigation, combat, the rope aim, the swim pitch -- asks for a
@@ -3311,9 +4933,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				fl = sqrtf(vf[0] * vf[0] + vf[1] * vf[1]);
 				if (fl > 0.01f)
 				{
-					cmd->forwardmove = (short)(400.0f *
+					cmd->forwardmove = (short)((float)plain_forward *
 					    (move_dir[0] * vf[0] + move_dir[1] * vf[1]) / fl);
-					cmd->sidemove = (short)(400.0f *
+					cmd->sidemove = (short)((float)plain_forward *
 					    (move_dir[0] * vr[0] + move_dir[1] * vr[1]));
 				}
 				else
@@ -3327,8 +4949,102 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->forwardmove = plain_forward;
 				cmd->sidemove = 0;
 			}
-			if (step == 0)
+			/* The continuous DROP witness sends exactly forward=400 at its
+			 * serialized yaw. View slew and world-course decomposition are useful
+			 * for ordinary navigation, but would change this proved controller. */
+			if (proved_drop)
+			{
+				float pyaw = tc->drop_yaw;
+				short drop_forward = bot->drop_started ? 400 : plain_forward;
+				if (bot->drop_recover)
+				{
+					vec3_t recover_d;
+
+					VectorSubtract(SG_Rune()->seeds[
+					    SG_Rune()->links[bestlink].to].origin,
+					    e->s.origin, recover_d);
+					pyaw = atan2f(recover_d[1], recover_d[0]) *
+					       180.0f / (float)M_PI;
+				}
+
+				if (bot->drop_started && !bot->drop_walkoff &&
+				    !bot->drop_recover)
+				{
+					rune_link_t *dl = &SG_Rune()->links[bestlink];
+					vec3_t lipd, walk;
+					float liph, behind;
+
+					VectorSubtract(dl->anchor, e->s.origin, lipd);
+					lipd[2] = 0.0f;
+					liph = VectorLength(lipd);
+					walk[0] = cosf(dl->heading *
+					                  (2.0f * (float)M_PI / 256.0f));
+					walk[1] = sinf(dl->heading *
+					                  (2.0f * (float)M_PI / 256.0f));
+					walk[2] = 0.0f;
+					behind = DotProduct(lipd, walk);
+					if (liph <= 8.0f || behind <= 0.0f || !e->groundentity)
+						bot->drop_walkoff = true;
+					else
+						pyaw = atan2f(lipd[1], lipd[0]) * 180.0f / M_PI;
+				}
+				if (bot->drop_started && bot->drop_walkoff &&
+				    !bot->drop_recover)
+					pyaw = SG_Rune()->links[bestlink].heading *
+					       (360.0f / 256.0f);
+
+				cmd->angles[YAW] = ANGLE2SHORT(pyaw) -
+				                   e->client->ps.pmove.delta_angles[YAW];
+				cmd->angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
+				cmd->angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+				cmd->forwardmove = drop_forward;
+				cmd->sidemove = 0;
+				cmd->upmove = 0;
+				if (drop_recovery_failed)
+					cmd->forwardmove = 0;
+			}
+			/* A v2 jump is one direct arc. Once the launch tap is armed, mirror
+			 * the oracle at every literal 25 ms boundary: re-aim at the endpoint,
+			 * hold forward 400, and never manufacture a second jump on landing. */
+			if (proved_jump && (bot->jump_started || tc->jump_launch))
+			{
+				vec3_t jumpd;
+				float jyaw;
+
+				VectorSubtract(SG_Rune()->seeds[
+				    SG_Rune()->links[bestlink].to].origin,
+				    e->s.origin, jumpd);
+				jyaw = atan2f(jumpd[1], jumpd[0]) * 180.0f / M_PI;
+				cmd->angles[YAW] = ANGLE2SHORT(jyaw) -
+				                   e->client->ps.pmove.delta_angles[YAW];
+				cmd->angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
+				cmd->angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+				cmd->forwardmove = 400;
+				cmd->sidemove = 0;
+				cmd->upmove = (step == 0 && tc->jump_launch) ? 400 : 0;
+			}
+			if (step == 0 && !proved_drop && !proved_jump)
 				cmd->upmove = nav_jump;
+
+			/*
+			 * Hop-fire has to enter pmove before the rope is fired. The former
+			 * write lived after this entire ClientThink loop and was discarded
+			 * when the next frame rebuilt the command. Spend the jump on the first
+			 * sub-step whose slewed view is inside the eight-degree staging cone;
+			 * ClientThink clears groundentity, so this remains a single tap.
+			 */
+			if (bot->hook_phase == 1 && bot->speedhook &&
+			    !SG_TimerReadyStrict(bot->hook_deadline) &&
+			    sg_cv.hopfire->value && e->groundentity)
+			{
+				float hdy = slew_want_y - bot->vy_cur;
+				float hdp = slew_want_p - bot->vp_cur;
+
+				while (hdy > 180.0f) hdy -= 360.0f;
+				while (hdy < -180.0f) hdy += 360.0f;
+				if (fabsf(hdy) < 8.0f && fabsf(hdp) < 8.0f)
+					cmd->upmove = 400;
+			}
 
 			/*
 			 * No tricks while a rope is out -- the hook SETS velocity, so
@@ -3344,12 +5060,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * walked behind a wall two seconds ago is worth holding a range
 			 * against, and is not worth dodging.
 			 */
-			if (duel_hold && engaged)
+			if (!proved_control && duel_hold && engaged)
 			{
 				cmd->forwardmove = 0;
 				cmd->sidemove = weave_side;
 			}
-			else if (have_move && !precision && bot->hook_phase == 0)
+			else if (have_move && !precision && bot->hook_phase == 0 &&
+			         !proved_control)
 			{
 				sg_air_t		airs;
 				const sg_air_t	*airp = NULL;
@@ -3456,7 +5173,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * genuinely idling has to be the final word, and this is the
 			 * only place that exists.
 			 */
-			if (SG_TimerPending(bot->beat_until))
+			if (SG_TimerPending(bot->beat_until) && !proved_control)
 			{
 				cmd->forwardmove = (short)(cmd->forwardmove * 0.30f);
 				cmd->sidemove = (short)(cmd->sidemove * 0.30f);
@@ -3475,7 +5192,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * bubble; the carrier never slows, the convoy de-phases,
 			 * and in film it reads as pacing variation, not flight.
 			 */
-			if (bot->linger_hot &&
+			if (bot->linger_hot && !proved_control &&
 			    sg_cv.depace->value > 0.0f)
 			{
 				float dp = sg_cv.depace->value;
@@ -3486,13 +5203,615 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 			/* the terminal brake: cornering throttle at the stands,
 			 * same final-word slot for the same reason */
-			if (bot->term_brake < 1.0f)
+			if (bot->term_brake < 1.0f && !proved_control)
 			{
 				cmd->forwardmove = (short)(cmd->forwardmove * bot->term_brake);
 				cmd->sidemove = (short)(cmd->sidemove * bot->term_brake);
 			}
 
-			ClientThink(e, cmd);
+			/* A graph hook's proof spends zero movement input while the rope owns
+			 * velocity. Optional speed hooks remain an unproved live technique and
+			 * may keep their running command. */
+			if (bot->hook_phase == 2 && !bot->speedhook)
+			{
+				cmd->forwardmove = 0;
+				cmd->sidemove = 0;
+				cmd->upmove = 0;
+			}
+			if (step == 0 && bot->hook_phase == 2 && !bot->speedhook &&
+			    Hook_GraphReleaseReady(e, bot))
+				Hook_GraphRelease(e, bot, &hook_cut_in_step);
+
+			/* The sole pull happens later in ClientEndServerFrame, exactly where
+			 * humans receive it. These commands consume the previous end-frame
+			 * velocity; no bot-private pre-pmove overwrite is allowed. The oracle's
+			 * post-release rollout uses a zero command. Preserve
+			 * the velocity it earned instead of accelerating or jumping during
+			 * the remainder of this outer server frame; normal landing steering
+			 * begins with phase 3 on the next frame. */
+			if (hook_cut_in_step)
+			{
+				cmd->forwardmove = 0;
+				cmd->sidemove = 0;
+				cmd->upmove = 0;
+			}
+
+			/* The shared feedback command is the final writer for RL_SWIM.
+			 * It replaces view, movement, trigger and every optional modifier at
+			 * each literal 25 ms boundary, exactly as ProveSwim submitted it. */
+			if (proved_swim)
+			{
+				vec3_t destination;
+				qboolean escape = swim_emergency || swim_hazard;
+				int air_from = bot->seed;
+				int air_seed;
+
+				/* Think_TrackSeed preserves the departure identity while SWIM owns
+				 * the body. On a dry-to-water edge that preserved seed has no air
+				 * relaxation entry, even though the body is now submerged. The
+				 * proved water endpoint is at most one local stroke away and is the
+				 * correct graph state from which to escape. */
+				if (escape && air_from >= 0 &&
+				    !(SG_Rune()->seeds[air_from].flags & RSF_WATER) &&
+				    (SG_Rune()->seeds[SG_Rune()->links[bestlink].to].flags &
+				     RSF_WATER))
+					air_from = SG_Rune()->links[bestlink].to;
+				if (e->waterlevel >= 2 && air_from >= 0 &&
+				    (SG_Rune()->seeds[air_from].flags & RSF_WATER))
+					bot->swim_air_seed = air_from;
+				air_seed = (escape && sg_airnext && air_from >= 0)
+				         ? sg_airnext[air_from] : -1;
+
+				if (air_seed >= 0 && air_seed < SG_Rune()->hdr.num_seeds)
+					VectorCopy(SG_Rune()->seeds[air_seed].origin, destination);
+				else if (escape)
+				{
+					VectorCopy(e->s.origin, destination);
+					destination[2] += 256.0f;
+				}
+				else
+					VectorCopy(SG_Rune()->seeds[
+					    SG_Rune()->links[bestlink].to].origin, destination);
+				if (!SG_SwimCommand(e->s.origin, destination,
+				                    &e->client->ps.pmove, cmd) && escape)
+				{
+					VectorCopy(e->s.origin, destination);
+					destination[2] += 256.0f;
+					SG_SwimCommand(e->s.origin, destination,
+					               &e->client->ps.pmove, cmd);
+				}
+				bot->vy_cur = SHORT2ANGLE((short)(cmd->angles[YAW] +
+				              e->client->ps.pmove.delta_angles[YAW]));
+				bot->vp_cur = SHORT2ANGLE((short)(cmd->angles[PITCH] +
+				              e->client->ps.pmove.delta_angles[PITCH]));
+				bot->view_on = true;
+			}
+			/* Declared map mechanisms own their approach too. RL_TELEPORT walks
+			 * into the serialized 16x16 pad trigger; RL_LIFT walks to the exact
+			 * bottom ride point, then submits zero input while the matched plat
+			 * pushes the body. Generic endpoint aim never touches either mechanism. */
+			if (declared_control)
+			{
+				rune_link_t *decl = &SG_Rune()->links[bestlink];
+				vec3_t dd, target, source;
+				float yaw, horiz;
+				byte msec = cmd->msec;
+				qboolean hold = false;
+				short source_pms[3];
+				qboolean source_exact, source_rest, source_snapped = false;
+				edict_t *door_trigger = NULL;
+				qboolean door_wait_exact = false, door_wait_rest = false;
+				qboolean door_wait_snapped = false;
+
+				Ballistic_SourceFixed(decl, source, source_pms);
+				source_exact = Ballistic_SourceExact(e, source_pms);
+				source_rest = Ballistic_SourceRest(e);
+				if (!water_tele && !bot->declared_started &&
+				    !source_exact && source_rest)
+				{
+					qboolean capture = true;
+
+					if (declared_door)
+					{
+						vec3_t source_delta;
+
+						VectorSubtract(source, e->s.origin, source_delta);
+						capture = fabsf(source_delta[2]) <= 2.0f &&
+						    source_delta[0] * source_delta[0] +
+						    source_delta[1] * source_delta[1] <= 4.0f;
+					}
+					if (capture)
+						source_snapped = Ballistic_CanonicalizeSource(e, source,
+						    source_pms);
+				}
+				if (!water_tele && !bot->declared_started &&
+				    source_exact && source_rest &&
+				    (e->groundentity == g_edicts ||
+				     SG_ImmutableSupport(e->groundentity)) &&
+				    e->waterlevel == 0 &&
+				    e->client->ps.pmove.pm_type == PM_NORMAL &&
+				    !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
+				    !e->client->ps.pmove.pm_time && !source_snapped)
+				{
+					bot->declared_started = true;
+					if (declared_door)
+						bot->declared_start_frame = level.framenum;
+				}
+
+				if (declared_door)
+				{
+					short wait_fixed[3];
+					int axis;
+
+					door_trigger = SG_DeclaredDoorForLink(decl->anchor, source);
+					if (!door_trigger ||
+					    (!bot->declared_started &&
+					     (bot->declared_touched || bot->declared_triggered ||
+					      bot->declared_activated)))
+					{
+						bot->commit_link = -1;
+						hold = true;
+					}
+					else if (bot->declared_started && !bot->declared_activated)
+					{
+						/* Approach and motion wait are valid only on the dry,
+						 * immutable, full-sweep-clear trajectory the loader replayed.
+						 * A dynamic shove retires the declaration before it can become
+						 * permission to enter a moving brush envelope. */
+						if (!SG_DeclaredDoorOutsideSweep(door_trigger,
+						        e->s.origin) || !e->groundentity ||
+						    (e->groundentity != g_edicts &&
+						     !SG_ImmutableSupport(e->groundentity)) ||
+						    e->waterlevel != 0 ||
+						    e->client->ps.pmove.pm_type != PM_NORMAL ||
+						    (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
+						    e->client->ps.pmove.pm_time)
+						{
+							bot->commit_link = -1;
+							hold = true;
+						}
+						if (bot->commit_link >= 0)
+						{
+							vec3_t wait_delta;
+							for (axis = 0; axis < 3; axis++)
+								wait_fixed[axis] =
+								    (short)(decl->anchor[axis] * 8.0f);
+							door_wait_exact = Ballistic_SourceExact(e,
+							    wait_fixed);
+							door_wait_rest = Ballistic_SourceRest(e);
+							VectorSubtract(decl->anchor, e->s.origin, wait_delta);
+							if (bot->declared_touch_frame != level.framenum &&
+							    bot->declared_trigger_frame != level.framenum &&
+							    !door_wait_exact && door_wait_rest &&
+							    fabsf(wait_delta[2]) <= 2.0f &&
+							    wait_delta[0] * wait_delta[0] +
+							    wait_delta[1] * wait_delta[1] <= 4.0f)
+								door_wait_snapped = Ballistic_CanonicalizeSource(e,
+								    decl->anchor, wait_fixed);
+							if (door_wait_snapped)
+							{
+								door_wait_exact = true;
+								door_wait_rest = true;
+							}
+							/* When our trigger contact ran inside the preceding ClientThink,
+							 * stop every remaining 25 ms command in this outer frame,
+							 * then resume sweep-clear anchor capture next frame.  At an
+							 * exact/rest anchor, a door set already held TOP by another
+							 * activator is equally usable: the live egress reproof and
+							 * remaining-open-window check below are sufficient evidence. */
+							if (bot->declared_touch_frame == level.framenum ||
+							    bot->declared_trigger_frame == level.framenum ||
+							    door_wait_snapped ||
+							    (door_wait_exact && !door_wait_rest))
+								hold = true;
+							else if (door_wait_exact && door_wait_rest)
+							{
+								int egress_window_ms;
+
+								/* Reprove from the exact live TOP pose immediately
+								 * before handoff. This supplies both collision truth
+								 * and the controller's exact remaining duration; a
+								 * chord/distance estimate is not the serialized path.
+								 * The cheap TOP gate avoids a 200-step proof while the
+								 * mechanism is cooling/moving, and the frame latch caps
+								 * even a failed live proof to one attempt per frame. */
+								/* Egress proof, execution and CommitLink retirement must
+								 * share one 100 ms phase.  If anchor/rest becomes exact
+								 * later in this frame, hold and revalidate after movers on
+								 * the next outer-frame boundary. */
+								if (step != 0 || DoorStep_OwnedByOther(bot, door_trigger) ||
+								    !SG_DeclaredDoorAtTop(door_trigger) ||
+								    bot->declared_egress_proof_frame == level.framenum)
+									hold = true;
+								else
+								{
+									bot->declared_egress_proof_frame = level.framenum;
+									if (SG_OracleDeclaredDoorEgress(decl->anchor,
+									        SG_Rune()->seeds[decl->to].origin,
+									        door_trigger, e, &egress_window_ms) &&
+									    SG_DeclaredDoorAtTopFor(door_trigger,
+									        egress_window_ms + 100))
+										bot->declared_activated = true;
+									else
+										hold = true;
+								}
+							}
+							}
+						}
+						/* Activation can become true in the unactivated branch above on
+						 * this same step zero.  Deliberately use a second if, rather than
+						 * an else-if, so that nominal handoff is immediately covered by
+						 * the authoritative suffix proof and its four-command grant. */
+						if (bot->commit_link >= 0 && bot->declared_started &&
+						    bot->declared_activated)
+						{
+							qboolean outside = door_trigger &&
+							    SG_DeclaredDoorOutsideSweep(door_trigger, e->s.origin);
+
+							/* A failed forward suffix latches one recovery direction.  Do
+							 * not alternate across the mover on successive live snapshots;
+							 * once retreat owns the action it returns to the exact declared
+							 * anchor and shelves the interrupted attempt there. */
+							if (bot->declared_door_retreat && outside &&
+							    SG_SupportedArrived(e->s.origin, decl->anchor,
+							        e->groundentity != NULL, e->watertype, e->waterlevel, e))
+							{
+								DoorStep_StopOutside(e);
+								DoorStep_AbortDeclared(bot, bestlink);
+								return;
+							}
+
+							/* Movers and projectiles run before SG_RunFrame.  At the first
+							 * 25 ms boundary, re-prove the complete suffix from that exact
+							 * authoritative state and reserve enough TOP time for it.  The
+							 * following three commands consume the same grant because no
+							 * entity or mover loop interleaves this four-command frame. */
+							if (step == 0)
+							{
+								int suffix_ms = 0;
+								qboolean proved = false;
+
+								bot->declared_door_suffix_ms = 0;
+								/* Continue is a literal four-by-25 ms proof.  A malformed or
+								 * nonstandard outer command cannot consume any part of it. */
+								if (sub != 4 || base != 25 || rem != 0)
+								{
+									if (outside)
+									{
+										DoorStep_StopOutside(e);
+										DoorStep_AbortDeclared(bot, bestlink);
+									}
+									else
+									{
+										if (door_trigger)
+											SG_DeclaredDoorHoldOpen(door_trigger, 500);
+										SG_TimerArm(&bot->commit_until, 0.5f);
+									}
+									return;
+								}
+								if (door_trigger && !bot->declared_door_retreat &&
+								    SG_OracleDeclaredDoorContinue(e,
+								        SG_Rune()->seeds[decl->to].origin, door_trigger,
+								        &suffix_ms) &&
+								    SG_DeclaredDoorAtTopFor(door_trigger, suffix_ms + 100))
+									proved = true;
+								else if (!bot->declared_door_retreat)
+									bot->declared_door_retreat = true;
+
+								if (!proved && door_trigger && bot->declared_door_retreat &&
+								    SG_OracleDeclaredDoorContinue(e, decl->anchor,
+								        door_trigger, &suffix_ms) &&
+								    SG_DeclaredDoorAtTopFor(door_trigger, suffix_ms + 100))
+									proved = true;
+
+								if (proved)
+								{
+									bot->declared_egress_proof_frame = level.framenum;
+									bot->declared_door_suffix_ms = suffix_ms;
+									/* Keep ownership through the complete freshly-proved suffix.
+									 * In particular, a retreat may leave the sweep before it reaches
+									 * the anchor; the generic timeout must not steal that safe exit. */
+									if (bot->declared_door_retreat)
+										SG_TimerArm(&bot->commit_until,
+										    suffix_ms * 0.001f + 0.5f);
+									door_suffix_grant = true;
+								}
+								else if (outside)
+								{
+									/* No live controller reaches either safe endpoint, but the
+									 * body has not entered the mover envelope.  Stop the external
+									 * velocity and retire without submitting an unproved Pmove. */
+									DoorStep_StopOutside(e);
+									DoorStep_AbortDeclared(bot, bestlink);
+									return;
+								}
+								else
+								{
+									/* A live body can occupy both exits.  There is no safe
+									 * controller command in that state: lease the already-TOP
+									 * validated set, retain ownership, and retry next frame. */
+									if (door_trigger)
+										SG_DeclaredDoorHoldOpen(door_trigger, 500);
+									SG_TimerArm(&bot->commit_until, 0.5f);
+									return;
+								}
+							}
+							else if (bot->declared_egress_proof_frame == level.framenum &&
+							         bot->declared_door_suffix_ms > 0)
+								door_suffix_grant = true;
+
+							/* No activated egress movement exists without this frame's
+							 * authoritative suffix proof and remaining-open reservation. */
+							if (!door_suffix_grant)
+								return;
+						}
+					}
+
+					if (!bot->declared_started)
+						VectorCopy(source, target);
+					else if (bot->declared_activated)
+					{
+						if (declared_door && bot->declared_door_retreat)
+							VectorCopy(decl->anchor, target);
+						else
+							VectorCopy(SG_Rune()->seeds[decl->to].origin, target);
+					}
+				else
+					VectorCopy(decl->anchor, target);
+				if (water_tele && !bot->declared_activated)
+				{
+					edict_t *pad = SG_TeleportForAnchor(decl->anchor);
+
+					if (!pad || !SG_TeleportApproachPoint(pad, target))
+					{
+						bot->commit_link = -1;
+						hold = true;
+					}
+				}
+				if (!bot->declared_started &&
+				    (source_snapped || (source_exact && !source_rest)))
+					hold = true;
+				if (declared_door && bot->declared_started &&
+				    bot->declared_start_frame == level.framenum)
+					hold = true;
+				if (decl->action == RL_LIFT && bot->declared_started &&
+				    !bot->declared_activated)
+				{
+					edict_t *plat = SG_LiftForAnchor(decl->anchor);
+
+					if (!plat)
+					{
+						bot->commit_link = -1;
+						hold = true;
+					}
+					else if (SG_LiftRider(plat, e))
+					{
+						/* Boarding starts at the platform edge; the center trigger is
+						 * inset. Keep the exact planar controller aimed at the anchor
+						 * throughout the ride. At TOP, canonicalize the carried body to
+						 * the center/rest state the egress oracle injected. Descend will
+						 * observe that state next outer frame before advancing phase. */
+						if (plat->moveinfo.state == SG_PLAT_STATE_TOP)
+						{
+							vec3_t top_body;
+							short top_fixed[3];
+							int axis;
+
+							if (!SG_LiftTopRest(plat, e, top_body))
+							{
+								bot->commit_link = -1;
+								hold = true;
+							}
+							else for (axis = 0; axis < 3; axis++)
+							{
+								top_fixed[axis] = (short)(top_body[axis] * 8.0f);
+							}
+							if (bot->commit_link >= 0 &&
+							    !Ballistic_SourceExact(e, top_fixed) &&
+							    Ballistic_SourceRest(e) &&
+							    Ballistic_CanonicalizeSource(e, top_body, top_fixed))
+								hold = true;
+							else if (bot->commit_link >= 0 &&
+							         Ballistic_SourceExact(e, top_fixed) &&
+							         !Ballistic_SourceRest(e))
+								hold = true;
+						}
+					}
+					else if (plat->moveinfo.state != SG_PLAT_STATE_BOTTOM)
+					{
+						/* At TOP a center-trigger touch postpones the return by one
+						 * second forever.  While UP/DOWN the empty shaft is equally
+						 * unsafe.  Leave the expanded trigger footprint, then hold
+						 * outside until the exact platform is boardable again. */
+						hold = !SG_LiftWaitPoint(plat, e->s.origin, target);
+					}
+				}
+				VectorSubtract(target, e->s.origin, dd);
+				dd[2] = 0.0f;
+				horiz = VectorLength(dd);
+				yaw = horiz > 0.01f
+				    ? atan2f(dd[1], dd[0]) * 180.0f / (float)M_PI
+				    : e->client->v_angle[YAW];
+				cmd->msec = msec;
+				if (water_tele && !bot->declared_activated)
+					SG_SwimCommand(e->s.origin, target,
+					               &e->client->ps.pmove, cmd);
+				else
+					SG_DeclaredCommand(e->s.origin, target,
+					                   &e->client->ps.pmove, cmd);
+				/* Match the door oracle's final braking envelope before the first
+				 * accepted activator touch.  The later per-step preflight still owns
+				 * the complete mover sweep and can fail this command closed. */
+				if (declared_door && bot->declared_started &&
+				    !bot->declared_touched && horiz <= 64.0f &&
+				    cmd->forwardmove > 64)
+					cmd->forwardmove = 64;
+				/* Exact-source capture owns a two-unit sweep; do not let the
+				 * mechanism command's ordinary four-unit arrival deadband strand
+				 * staging just outside it. */
+				if (!bot->declared_started && !source_exact && horiz > 2.0f &&
+				    cmd->forwardmove == 0)
+					cmd->forwardmove = 40;
+				/* Thin door activators may begin only 0.125u before their exact
+				 * serialized wait point.  Until the accepted Touch_Multi callback
+				 * arrives, keep the same slow command used by the oracle instead of
+				 * entering the ordinary two-unit capture deadband just outside. */
+				if ((decl->action == RL_LIFT || declared_door) &&
+				    bot->declared_started && !bot->declared_activated &&
+				    (horiz > 2.0f ||
+				     (declared_door && !bot->declared_touched && horiz > 0.01f)) &&
+				    cmd->forwardmove == 0)
+					cmd->forwardmove = 40;
+				if (hold)
+				{
+					cmd->forwardmove = 0;
+					cmd->sidemove = 0;
+					cmd->upmove = 0;
+				}
+				bot->vy_cur = yaw;
+				bot->vp_cur = 0.0f;
+				bot->view_on = true;
+			}
+
+			/* Door motion is an explicit, bounded command owner.  Think_Move
+			 * decides whether this frame enters the activator, waits, or backs
+			 * out of a rotating sweep; combat aim, air-strafe, carrier jink, and
+			 * pacing all run later and must not silently replace that decision.
+			 * Decompose the requested signed speed into the final view frame so
+			 * looking at an enemy cannot turn a door approach sideways. */
+			if (door_hold && !declared_door)
+			{
+				short door_speed = door_hold == 2 ? -200
+				                 : (door_hold == 3 ? 400 : 0);
+
+				cmd->upmove = 0;
+				if (door_speed != 0 && e->waterlevel <= 1)
+				{
+					vec3_t door_view, door_fwd, door_right;
+					float flat;
+
+					VectorClear(door_view);
+					door_view[YAW] = SHORT2ANGLE((short)(cmd->angles[YAW] +
+					    e->client->ps.pmove.delta_angles[YAW]));
+					AngleVectors(door_view, door_fwd, door_right, NULL);
+					flat = sqrtf(door_fwd[0] * door_fwd[0] +
+					             door_fwd[1] * door_fwd[1]);
+					if (flat > 0.01f)
+					{
+						cmd->forwardmove = (short)((float)door_speed *
+						    (move_dir[0] * door_fwd[0] +
+						     move_dir[1] * door_fwd[1]) / flat);
+						cmd->sidemove = (short)((float)door_speed *
+						    (move_dir[0] * door_right[0] +
+						     move_dir[1] * door_right[1]));
+					}
+					else
+					{
+						cmd->forwardmove = door_speed;
+						cmd->sidemove = 0;
+					}
+				}
+				else
+				{
+					cmd->forwardmove = door_speed;
+					cmd->sidemove = 0;
+				}
+			}
+
+			{
+				edict_t *guard_trigger = NULL;
+				qboolean guard_door_step = false;
+
+				/* Projectiles have already applied any knockback this outer frame.
+				 * Preflight the exact authoritative Pmove before ClientThink can run
+				 * item, flag, weapon, or arbitrary-trigger side effects. */
+				if (declared_door && bot->commit_link == bestlink &&
+				    !bot->declared_activated)
+				{
+					rune_link_t *door_link = &SG_Rune()->links[bestlink];
+
+					guard_trigger = SG_DeclaredDoorForLink(door_link->anchor,
+					    SG_Rune()->seeds[door_link->from].origin);
+					guard_door_step = guard_trigger &&
+					    SG_OracleDeclaredDoorStepSafe(e, guard_trigger, cmd);
+					if (!guard_door_step)
+					{
+						usercmd_t safe_cmd;
+						int safe_step;
+
+						DoorStep_StopOutside(e);
+						DoorStep_AbortDeclared(bot, bestlink);
+						memset(&safe_cmd, 0, sizeof(safe_cmd));
+						for (safe_step = 0; safe_step < 3; safe_step++)
+							safe_cmd.angles[safe_step] =
+							    ANGLE2SHORT(e->client->v_angle[safe_step]) -
+							    e->client->ps.pmove.delta_angles[safe_step];
+						safe_cmd.lightlevel = cmd->lightlevel;
+						for (safe_step = step; safe_step < sub; safe_step++)
+						{
+							safe_cmd.msec =
+							    (byte)(base + (safe_step < rem ? 1 : 0));
+							if (!SG_OracleDeclaredDoorStepSafe(e, guard_trigger,
+							        &safe_cmd))
+								return;
+							ClientThink(e, &safe_cmd);
+						}
+						cmd->msec = (byte)sub_msec;
+						return;
+					}
+				}
+				ClientThink(e, cmd);
+			}
+			if (proved_drop && bot->drop_started && bot->drop_walkoff &&
+			    !e->groundentity)
+				bot->drop_airborne = true;
+			if (proved_drop && bot->drop_recover &&
+			    !drop_recovery_failed &&
+			    (!e->groundentity ||
+			     (e->groundentity != g_edicts &&
+			      !SG_ImmutableSupport(e->groundentity))))
+			{
+				int b, oldest = 0;
+
+				/* The proof rejects support loss at every 25 ms recovery step.
+				 * Stop the remaining commands in this frame, shelf the corrupted
+				 * witness, and re-localize from the resulting real body. */
+				for (b = 0; b < SG_BL_MAX; b++)
+					if (bot->bl_until[b] < bot->bl_until[oldest])
+						oldest = b;
+				bot->bl_link[oldest] = bestlink;
+				SG_TimerArm(&bot->bl_until[oldest], 10.0f);
+				SG_TeachLinkFutility(bestlink);
+				bot->commit_link = -1;
+				bot->drop_link = -1;
+				bot->drop_started = false;
+				bot->drop_walkoff = false;
+				bot->drop_airborne = false;
+				bot->drop_recover = false;
+				drop_recovery_failed = true;
+			}
+			if ((proved_swim || water_tele) && bot->swim_validated &&
+			    !swim_emergency && !swim_hazard &&
+			    bot->commit_link == bestlink)
+				bot->swim_elapsed_ms += SG_SWIM_STEP_MSEC;
+			if (step == 0 && proved_jump && tc->jump_launch)
+			{
+				/* State becomes true only after the tap was actually submitted to
+				 * Pmove. Late holds may rewrite the frame policy, but can no longer
+				 * leave an armed action whose launch command never existed. */
+				bot->jump_started = true;
+				SG_TimerArm(&bot->commit_until,
+				    SG_Rune()->links[bestlink].cost_ms * 0.001f + 0.5f);
+				tc->jump_launch = false;
+			}
+
+			/* The v2 proof permits release between its 25 ms usercmds, but
+			 * velocity is not overwritten again until the next 100 ms boundary. */
+			if (!hook_cut_in_step && bot->hook_phase == 2 && !bot->speedhook &&
+			    Hook_GraphReleaseReady(e, bot))
+			{
+				Hook_GraphRelease(e, bot, &hook_cut_in_step);
+			}
 
 			/*
 			 * Let go of the jump. PM_CheckJump clears PMF_JUMP_HELD only when
@@ -3516,6 +5835,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * is cut loose.
 	 */
 	{
+		qboolean wet_graph_aim = bot->hook_phase == 1 && !bot->speedhook &&
+		    Hook_LinkWaterSource(bot);
+		qboolean wet_aim_hazard = wet_graph_aim && e->waterlevel > 0 &&
+		    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
+		qboolean wet_aim_emergency = wet_graph_aim && e->waterlevel >= 3 &&
+		    SG_TimerRemaining(e->air_finished) <
+		        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f);
+
 		/*
 		 * A rope this bot does not think it owns is a rope it cannot ever
 		 * release: g_cmds.c's Cmd_Unhook_f, when the grapple happens to be
@@ -3543,98 +5870,178 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			SG_TimerArm(&bot->rj_use_next, 0.5f);
 		}
 
-		if (bot->hook_phase == 1 && SG_TimerReadyStrict(bot->hook_deadline))
+		if (wet_graph_aim &&
+		    (e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||
+		     wet_aim_hazard || wet_aim_emergency))
 		{
+			if (sg_cv.debug->value)
+				sg_host.dprint("HOOKWATERHOLD %s link=%d\n",
+				           e->client->pers.netname, bot->hook_link);
+			Hook_GraphFail(e, bot, wet_aim_hazard ? 30.0f : 1.0f);
+		}
+		else if (bot->hook_phase == 1 && SG_TimerReadyStrict(bot->hook_deadline))
+		{
+			qboolean failed_speedhook = bot->speedhook;
+			int failed_link = bot->hook_link;
+
 			/* the aim never arrived (blocked slew, moving anchor line,
-			 * whatever): stand down clean. Without this, a wedged phase
-			 * 1 gates out combat FOREVER -- wave 92's three silent
-			 * games. */
+			 * whatever): stand down clean and force a fresh route choice.
+			 * Merely clearing phase 1 leaves Think_CommitLink holding the
+			 * same hook, so the next frame walks straight back into the same
+			 * aim wedge. A graph hook drops its commitment and stale failure
+			 * streak, then gets a short local shelf; a speed hook keeps its RUN
+			 * commitment and is already protected by its own cooldown. */
+			if (failed_speedhook)
+			{
+				/* The first cooldown was armed when aiming began, so it can
+				 * already be expired by the time the strict aim deadline fires.
+				 * Start a fresh cooldown here or a permanently bad sky/muzzle
+				 * candidate re-enters phase 1 on the very next frame. */
+				float retry = (sg_cv.ropetravel->value > 0.0f) ? 1.0f :
+				              (sg_cv.freeride->value > 0.0f) ? 2.0f : 4.0f;
+
+				SG_TimerArm(&bot->speedhook_next,
+				            retry / SG_PersonaHookScale(e));
+			}
+			else
+			{
+				bot->commit_link = -1;
+				bot->hookfail_streak = 0;
+				if (SG_Rune() && failed_link >= 0 &&
+				    failed_link < SG_Rune()->hdr.num_links)
+				{
+					int b, oldest = 0;
+
+					for (b = 0; b < SG_BL_MAX; b++)
+						if (bot->bl_until[b] < bot->bl_until[oldest])
+							oldest = b;
+					bot->bl_link[oldest] = failed_link;
+					SG_TimerArm(&bot->bl_until[oldest], 5.0f);
+				}
+			}
+			if (sg_cv.debug->value)
+				sg_host.dprint("HOOKAIMFAIL %s link=%d\n",
+				           e->client->pers.netname,
+				           failed_speedhook ? -1 : failed_link);
 			bot->hook_phase = 0;
 			bot->speedhook = false;
+			bot->flow_release = false;
+			bot->hook_link = -1;
+			bot->hook_bite_logged = false;
+			bot->hook_deadline = 0.0f;
 		}
 		else if (bot->hook_phase == 1)
 		{
-			/* the rope fires along the ACTUAL view, which now slews:
-			 * hold phase 1 (a standing frame anyway) until the view has
-			 * arrived within 3 degrees of the anchor bearing */
-			vec3_t ad2;
-			float ay, ap, ddy, ddp;
+			/* The rope fires along the ACTUAL post-Pmove view. A graph proof
+			 * waits for exact quantized equality; optional speed hooks retain
+			 * their looser live-technique cone. */
+			vec3_t desired_view;
+			float ay, ap, ddy, ddp, graph_flight_dist = 0.0f;
 
-			VectorSubtract(bot->hook_anchor, e->s.origin, ad2);
-			ad2[2] -= e->viewheight;
-			ay = atan2f(ad2[1], ad2[0]) * 180.0f / (float)M_PI;
-			ap = -atan2f(ad2[2], sqrtf(ad2[0] * ad2[0] + ad2[1] * ad2[1]))
-			     * 180.0f / (float)M_PI;
+			if (!bot->speedhook && bot->hook_link >= 0)
+				VectorCopy(bot->hook_view, desired_view);
+			else if (!SG_HookAimAngles(e->s.origin, e->viewheight,
+			                               bot->hook_anchor, desired_view))
+				goto hook_wait;
+			ay = desired_view[YAW];
+			ap = desired_view[PITCH];
 			ddy = ay - bot->vy_cur;
 			ddp = ap - bot->vp_cur;
 			while (ddy > 180.0f) ddy -= 360.0f;
 			while (ddy < -180.0f) ddy += 360.0f;
+			while (ddp > 180.0f) ddp -= 360.0f;
+			while (ddp < -180.0f) ddp += 360.0f;
 			/* (quickrope's 10-degree carrier fire read NEGATIVE
 			 * pooled 216-217 -- sloppy ropes ride worse than the
 			 * ritual they save. The sniper's 3 stands for all.) */
-			/* THE HOP-FIRE, corrected (wave 223): the owner hops
-			 * BEFORE the hook, not with it -- wave 222 put jump and
-			 * fire on one command frame and the drag still started
-			 * grounded. Now the hop goes in as the aim closes (8
-			 * degrees); by the 3-degree fire gate the body is
-			 * already airborne and the pull never meets friction. */
-			if (sg_cv.hopfire->value &&
-			    e->groundentity &&
-			    fabsf(ddy) < 8.0f && fabsf(ddp) < 8.0f)
-				cmd->upmove = 400;
-			if (slew_rate > 0.0f &&
-			    (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
+			/* Hop-fire's eight-degree staging tap is submitted inside the
+			 * ClientThink loop above; this post-think block only gates fire. */
+			if (!bot->speedhook && bot->hook_link >= 0)
+			{
+				if ((short)ANGLE2SHORT(e->client->v_angle[PITCH]) !=
+				        (short)ANGLE2SHORT(bot->hook_view[PITCH]) ||
+				    (short)ANGLE2SHORT(e->client->v_angle[YAW]) !=
+				    (short)ANGLE2SHORT(bot->hook_view[YAW]) ||
+				    fabsf(e->client->v_angle[ROLL]) > 0.001f ||
+				    !SG_HookOffhandReady(e))
+					goto hook_wait;
+			}
+			else if (slew_rate > 0.0f &&
+			         (fabsf(ddy) > 3.0f || fabsf(ddp) > 3.0f))
 				goto hook_wait;
 
-			/* (The anchor-distance veto lived here for one wave --
-			 * 24,728 vetoes, land rate unmoved. Wrong test: bites
-			 * were never the failure.) The HOOKABORT census named
-			 * the real one: 2,403 bolts a wave die on the SKYBOX --
-			 * a lip anchor plus three degrees of slew slack at four
-			 * hundred units sails the bolt over the edge. This trace
-			 * tests the ACTUAL fire line for the ACTUAL failure: if
-			 * the view's own ray ends in sky, wait a frame for the
-			 * slew to settle instead of donating the rope to the
-			 * void. Cannot strobe a live rope; fires still happen the
-			 * moment the line lands on architecture. */
+			if (!bot->speedhook && bot->hook_link >= 0)
 			{
-				vec3_t sdir, seye, send;
-				trace_t str;
+				int online = Hook_OnlineProof(e, bot,
+				    SG_Rune()->links[bot->hook_link].anchor[ROLL],
+				    &graph_flight_dist);
 
-				sdir[0] = cosf(bot->vp_cur * (float)M_PI / 180.0f)
-				        * cosf(bot->vy_cur * (float)M_PI / 180.0f);
-				sdir[1] = cosf(bot->vp_cur * (float)M_PI / 180.0f)
-				        * sinf(bot->vy_cur * (float)M_PI / 180.0f);
-				sdir[2] = -sinf(bot->vp_cur * (float)M_PI / 180.0f);
-				VectorCopy(e->s.origin, seye);
-				seye[2] += e->viewheight;
-				VectorMA(seye, 4096.0f, sdir, send);
-				str = sg_host.trace(seye, NULL, NULL, send, e, MASK_SOLID);
-				if (str.surface &&
-				    (str.surface->flags & SURF_SKY))
+				if (online == HOOK_PROOF_BUSY)
 				{
-					if (sg_cv.debug->value)
-						sg_host.dprint("HOOKSKYHOLD %s\n",
-						           e->client->pers.netname);
+					/* Queueing is not an aim failure: keep the exact zero-input view
+					 * and give this bot a fresh window behind the one-proof budget. */
+					SG_TimerArm(&bot->hook_deadline, 3.0f);
 					goto hook_wait;
 				}
-				/* same hold for a teammate in the fire line: the bolt
-				 * dies on their body (hook_touch rejects teammates) --
-				 * ~57 wasted fires a wave. MASK_SHOT sees bodies where
-				 * the sky trace's MASK_SOLID cannot. */
-				str = sg_host.trace(seye, NULL, NULL, send, e, MASK_SHOT);
-				if (str.ent && str.ent->client &&
-				    str.ent->client->ctf.teamnum ==
-				    e->client->ctf.teamnum)
+				if (online != HOOK_PROOF_OK)
 				{
 					if (sg_cv.debug->value)
-						sg_host.dprint("HOOKMATEHOLD %s\n",
+						sg_host.dprint("HOOKREPROOFF %s link=%d\n",
+						           e->client->pers.netname, bot->hook_link);
+					Hook_GraphFail(e, bot, 5.0f);
+					goto hook_wait;
+				}
+			}
+			else
+			{
+				/* Optional speed hooks are not rune proofs; retain their live ray
+				 * safety gate without forcing static-world traversal verification. */
+				vec3_t sdir, sright, smuzzle, shot_end, to_anchor, miss;
+				trace_t str;
+				trace_t muzzle_tr;
+				float shot_len;
+
+				AngleVectors(e->client->v_angle, sdir, sright, NULL);
+				CTF_HookMuzzle(e->s.origin, e->viewheight,
+				               e->client->pers.hand, sdir, sright, smuzzle);
+				muzzle_tr = sg_host.trace(e->s.origin, NULL, NULL, smuzzle,
+				                             e, MASK_SHOT);
+				VectorNormalize(sdir);
+				VectorSubtract(bot->hook_anchor, smuzzle, to_anchor);
+				graph_flight_dist = VectorLength(to_anchor);
+				shot_len = graph_flight_dist + 8.0f;
+				VectorMA(smuzzle, shot_len, sdir, shot_end);
+				str = sg_host.trace(smuzzle, NULL, NULL, shot_end, e, MASK_SHOT);
+				VectorSubtract(str.endpos, bot->hook_anchor, miss);
+				if (muzzle_tr.startsolid || muzzle_tr.fraction < 1.0f ||
+				    str.startsolid || str.fraction >= 1.0f ||
+				    VectorLength(miss) > 48.0f ||
+				    (str.surface && (str.surface->flags & SURF_SKY)) ||
+				    (str.ent && str.ent->deadflag) ||
+				    (str.ent && str.ent->client &&
+				     str.ent->client->ctf.teamnum == e->client->ctf.teamnum))
+				{
+					if (sg_cv.debug->value)
+						sg_host.dprint("HOOKLINEHOLD %s\n",
 						           e->client->pers.netname);
 					goto hook_wait;
 				}
 			}
+			if (bot->speedhook || bot->hook_link < 0)
+				VectorCopy(e->client->v_angle, bot->hook_view);
 			Cmd_Hook_f(e);
+			if (e->client->hookstate != 1 || !e->client->hook)
+				goto hook_wait;
 			bot->hook_phase = 2;
+			if (!bot->speedhook)
+			{
+				/* Bolt flight is quantized in 80-unit entity frames. This clock
+				 * starts only after successful fire; aim time is not charged. */
+				SG_TimerArm(&bot->hook_deadline,
+				    ceilf(graph_flight_dist /
+				          RUNE_HOOK_FRAME_DISTANCE) * 0.1f + 0.2f);
+				bot->hook_attached_validated = false;
+			}
 			if (sg_cv.debug->value)
 				sg_host.dprint("HOOKFIRE %s at (%.0f %.0f %.0f)\n",
 				           e->client->pers.netname, bot->hook_anchor[0],
@@ -3642,9 +6049,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		}
 		else if (bot->hook_phase == 2)
 		{
-			vec3_t rd, td;
-			float rope;
-			qboolean arrived, was_pulling;
+			vec3_t td;
+			qboolean arrived, attached;
 
 			/*
 			 * NO attach-point verification, on evidence. Release
@@ -3688,8 +6094,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 			{
 
-			VectorSubtract(bot->hook_anchor, e->s.origin, rd);
-			rope = VectorLength(rd);
+			attached = (e->client->hookstate == 2 && e->client->hook != NULL);
 			/*
 			 * Release the way the prover released (SG_Rune().c:494-502):
 			 * horizontally near the DESTINATION with the height nearly
@@ -3715,7 +6120,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * unit of speed. flow_release skips the landing brake: the
 			 * whole point of the cut is what happens after it.
 			 */
-			if (!bot->speedhook && e->client->hookstate != 0)
+			if (bot->speedhook && attached)
 			{
 				float hd2 = sqrtf(td[0] * td[0] + td[1] * td[1]);
 				float hv2 = sqrtf(e->velocity[0] * e->velocity[0] +
@@ -3870,18 +6275,40 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					bot->commit_link = -1;
 				}
 			}
-			else if (arrived || rope < 130.0f ||
+			else if ((attached && Hook_GraphReleaseReady(e, bot)) ||
 			    SG_TimerReadyStrict(bot->hook_deadline) || e->client->hookstate == 0)
 			{
-				was_pulling = (e->client->hookstate != 0);
-				if (was_pulling)
+				qboolean completed = attached &&
+				    (arrived || Hook_GraphReleaseReady(e, bot));
+
+				if (e->client->hookstate != 0)
 					ctf_hook_abort(e);
 				/* a cut live rope hands off to the landing steer; a rope
 				 * that never attached does not */
-				if (!was_pulling && sg_cv.debug->value)
+				if (!completed && sg_cv.debug->value)
 					sg_host.dprint("HOOKEND %s noattach\n",
 					           e->client->pers.netname);
-				bot->hook_phase = was_pulling ? 3 : 0;
+				if (!completed)
+				{
+					int failed_link = bot->hook_link;
+
+					/* An aborted bolt must not inherit the graph commitment that
+					 * selected it, or the same sky/body/door shot re-arms at 10 Hz. */
+					bot->commit_link = -1;
+					if (SG_Rune() && failed_link >= 0 &&
+					    failed_link < SG_Rune()->hdr.num_links)
+					{
+						int b, oldest = 0;
+
+						for (b = 0; b < SG_BL_MAX; b++)
+							if (bot->bl_until[b] < bot->bl_until[oldest])
+								oldest = b;
+						bot->bl_link[oldest] = failed_link;
+						SG_TimerArm(&bot->bl_until[oldest], 15.0f);
+					}
+					bot->hook_link = -1;
+				}
+				bot->hook_phase = completed ? 3 : 0;
 				/* this phase-3 entry is a plain rope cut, never a flow
 				 * release -- the flag used to stay latched from an
 				 * earlier wiped release and made ~1,000 rides a wave
@@ -3890,6 +6317,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				SG_TimerArm(&bot->hook_deadline, 1.0f);
 			}
 			}
+		}
+		else if (hook_cut_in_step)
+		{
+			/* Phase 3 was entered inside the pmove loop at the oracle's release
+			 * boundary. The common phase-3 handler owns landing/failure checks on
+			 * the next frame; do not re-enter the phase-2 release machinery. */
+			bot->commit_link = -1;
 		}
 	}
 

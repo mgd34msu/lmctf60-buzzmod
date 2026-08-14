@@ -24,6 +24,62 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 sg_bot_t sg_bots[SG_MAXBOTS];
 
 /*
+ * A slot is process storage, not level storage.  Reusing it therefore has to
+ * be an initialization event in its own right: ClientConnect/ClientBegin
+ * replace the engine client, but they know nothing about SLIPGATE's sidecar.
+ * Keep every zero-sentinel at zero and spell out the indices for which zero
+ * is a real seed/link/client and -1 is the only honest "none" value.
+ */
+static void BotSlot_Reset(sg_bot_t *bot)
+{
+	int i;
+
+	memset(bot, 0, sizeof(*bot));
+	bot->seed = -1;
+	bot->hook_link = -1;
+	for (i = 0; i < SG_BL_MAX; i++)
+		bot->bl_link[i] = -1;
+	bot->last_role = -1;
+	for (i = 0; i < SG_VISIT_RING; i++)
+		bot->visit_seed[i] = -1;
+	bot->orbit_last_seed = -1;
+	bot->watch_link = -1;
+	bot->jump_link = -1;
+	bot->drop_link = -1;
+	bot->drop_airborne = false;
+	bot->drop_recover = false;
+	bot->swim_validated = false;
+	bot->swim_air_seed = -1;
+	bot->declared_start_frame = -1;
+	bot->declared_touch_frame = -1;
+	bot->declared_trigger_frame = -1;
+	bot->declared_egress_proof_frame = -1;
+	bot->declared_door_retreat = false;
+	bot->declared_door_suffix_ms = 0;
+	bot->commit_link = -1;
+	bot->last_goalcost = -1;
+	bot->sticky_link = -1;
+	bot->carry_startcost = -1;
+	bot->carry_bestcost = -1;
+	bot->last_role_for_legs = -1;
+	bot->ribbon_link = -1;
+	bot->lead_slot = -1;
+	bot->lead_seed = -1;
+	bot->patrol_seed = -1;
+	bot->tac_seed = -1;
+	bot->tac_role = -1;
+	bot->rally_cover = -1;
+	bot->rail_link = -1;
+	bot->railhold_enemy = -1;
+	bot->door_hold_link = -1;
+	bot->escprior_bucket = -1;
+	bot->prev_seed = -1;
+	bot->tilt_seed = -1;
+	bot->tilt_killer_seed = -1;
+	bot->tilt_death_time = -1000.0f;
+}
+
+/*
  * Sixteen names, because `slot & 7` on a ten-bot 5v5 fielded TWO Arachs
  * and TWO Cacos in every game since the format began -- and every
  * per-name analysis quietly merged two different bots (the it18 "role
@@ -35,6 +91,29 @@ static const char *sg_names[] = {
 	"Arach", "Caco", "Rune", "Slip", "Gate", "Phase", "Field", "Trace",
 	"Vore", "Fiend", "Scrag", "Ogre", "Knight", "Wizard", "Spawn", "Shal",
 };
+
+/* Scoped across SG_AddBotTeam's synchronous ClientConnect call only. Real
+ * engine connections, including a human replacing an SG slot, must still
+ * satisfy the server password; a server-owned fake client must not persist
+ * that secret in userinfo merely to pass through the common lifecycle. */
+static edict_t *sg_internal_connect_ent;
+
+qboolean SG_InternalClientConnect(edict_t *ent)
+{
+	return ent && ent == sg_internal_connect_ent;
+}
+
+/* Botfill's cadence and hysteresis are level-time state. */
+static float sg_botfill_next_check;
+static int sg_botfill_over_streak[2];
+static int sg_botfill_under_streak[2];
+
+void Botfill_Reset(void)
+{
+	sg_botfill_next_check = 0.0f;
+	memset(sg_botfill_over_streak, 0, sizeof(sg_botfill_over_streak));
+	memset(sg_botfill_under_streak, 0, sizeof(sg_botfill_under_streak));
+}
 
 /*
  * BOTFILL -- the roster keeps itself. sv_botfill names the players each
@@ -78,10 +157,11 @@ static int Botfill_WorstIndex(int team)
  * reusable until the edict is actually gone */
 static void Botfill_Drop(int slot)
 {
+	SG_ChatResetClient(sg_bots[slot].ent);
+	Caco_ResetClient(sg_bots[slot].ent);
 	ClientDisconnect(sg_bots[slot].ent);
 	SG_FreeClientEdict(sg_bots[slot].ent);
-	sg_bots[slot].active = false;
-	sg_bots[slot].ent = NULL;
+	BotSlot_Reset(&sg_bots[slot]);
 }
 
 static qboolean Botfill_RemoveOne(int team)
@@ -98,7 +178,6 @@ static qboolean Botfill_RemoveOne(int team)
 
 void Botfill_Frame(void)
 {
-	static float next_check;
 	cvar_t *fill = sg_host.cvar("sv_botfill", "0", 0);
 	int want[2];
 	int humans[2] = {0, 0}, bots[2] = {0, 0};
@@ -111,9 +190,10 @@ void Botfill_Frame(void)
 	if (sscanf(fill->string, "%d:%d", &want[0], &want[1]) < 2)
 		want[1] = want[0] = (int)fill->value;
 
-	if ((want[0] <= 0 && want[1] <= 0) || SG_TimerPending(next_check))
+	if ((want[0] <= 0 && want[1] <= 0) ||
+	    SG_TimerPending(sg_botfill_next_check))
 		return;
-	SG_TimerArm(&next_check, 1.0f);
+	SG_TimerArm(&sg_botfill_next_check, 1.0f);
 
 	for (i = 0; i < game.maxclients; i++)
 	{
@@ -134,22 +214,21 @@ void Botfill_Frame(void)
 	 * a roster decision is not an emergency, and patience ends every
 	 * oscillation a second controller could start */
 	{
-		static int over_streak[2], under_streak[2];
 		qboolean acted = false;
 
 		for (t = 0; t < 2 && !acted; t++)
 		{
 			if (humans[t] + bots[t] > want[t] && bots[t] > 0)
 			{
-				if (++over_streak[t] >= 3)
+				if (++sg_botfill_over_streak[t] >= 3)
 				{
 					Botfill_RemoveOne(SG_TeamFromIdx(t));
-					over_streak[t] = 0;
+					sg_botfill_over_streak[t] = 0;
 					acted = true;
 				}
 			}
 			else
-				over_streak[t] = 0;
+				sg_botfill_over_streak[t] = 0;
 		}
 		for (t = 0; t < 2; t++)
 		{
@@ -163,15 +242,15 @@ void Botfill_Frame(void)
 				 * human walking in stared at an empty arena for 45
 				 * seconds (the owner, wave 264, four times over) */
 				if (bots[0] + bots[1] == 0 ||
-				    ++under_streak[t] >= 3)
+				    ++sg_botfill_under_streak[t] >= 3)
 				{
 					SG_AddBotTeam(SG_TeamFromIdx(t));
-					under_streak[t] = 0;
+					sg_botfill_under_streak[t] = 0;
 					acted = true;
 				}
 			}
 			else
-				under_streak[t] = 0;
+				sg_botfill_under_streak[t] = 0;
 		}
 	}
 }
@@ -189,6 +268,47 @@ qboolean SG_OwnsBot(edict_t *ent)
 		if (sg_bots[i].active && sg_bots[i].ent == ent)
 			return true;
 	return false;
+}
+
+/* The engine allocates real clients without consulting edict->inuse. If it
+ * selects a fake-client slot, retire that exact SG owner before the incoming
+ * ClientConnect initializes the human. ClientDisconnect is essential here:
+ * it drops a carried flag/rune and frees a live hook instead of transferring
+ * those objects to the next occupant. The edict itself remains the engine's
+ * selected slot and is immediately reusable. */
+qboolean SG_RetireBotForClient(edict_t *ent)
+{
+	int i;
+
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		if (!sg_bots[i].active || sg_bots[i].ent != ent)
+			continue;
+		SG_ChatResetClient(ent);
+		Caco_ResetClient(ent);
+		Combat_ResetClient(ent);
+		if (ent->client && ent->inuse)
+			ClientDisconnect(ent);
+		SG_FreeClientEdict(ent);
+		BotSlot_Reset(&sg_bots[i]);
+		return true;
+	}
+	return false;
+}
+
+/* Defensive half of the ownership boundary. If an external lifecycle path
+ * has already replaced/cleared FL_BOT, forget only SG's slot; never disconnect
+ * the now-human occupant while trying to repair stale bookkeeping. */
+void SG_DisownBot(edict_t *ent)
+{
+	int i;
+
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == ent)
+		{
+			BotSlot_Reset(&sg_bots[i]);
+			return;
+		}
 }
 
 qboolean SG_AddBot(void)
@@ -246,6 +366,9 @@ qboolean SG_AddBotTeam(int teamnum)
 		}
 	if (slot < 0)
 		return false;
+	/* Do this before the engine lifecycle.  A post-ClientBegin memset would
+	 * erase any initialization a present or future begin hook writes here. */
+	BotSlot_Reset(&sg_bots[slot]);
 
 	memset(userinfo, 0, sizeof(userinfo));
 	/* tag FIRST -- owner's ruling 2026-08-05: "[SG]Arach", not "Arach[SG]".
@@ -270,13 +393,26 @@ qboolean SG_AddBotTeam(int teamnum)
 	ent = SG_SpawnClientEdict();
 	if (!ent)
 		return false;
+	/* SG_SpawnClientEdict deliberately reuses gclient storage.  CTF state is
+	 * not part of a new fake client's identity: retaining an observer value
+	 * here can create an active team -1/-2/-3 bot and feed that through the
+	 * raw team-1 array index used throughout SG.  Persistent career stats live
+	 * outside this sub-structure and remain intact. */
+	memset(&ent->client->ctf, 0, sizeof(ent->client->ctf));
+	/* Reset recyclable sidecars before either client lifecycle hook runs. */
+	Combat_ResetClient(ent);
+	Caco_ResetClient(ent);
+	SG_ChatResetClient(ent);
 	ent->flags &= ~FL_BOT;
 	ent->inuse = false;
+	sg_internal_connect_ent = ent;
 	if (!ClientConnect(ent, userinfo))
 	{
+		sg_internal_connect_ent = NULL;
 		SG_FreeClientEdict(ent);
 		return false;
 	}
+	sg_internal_connect_ent = NULL;
 	/* Same pattern as BotCTFAssignTeam: written while inuse is still
 	 * false, so ClientBegin sees a client already on a team and keeps
 	 * it, penalty-free -- the asymmetric fills (5v1) need bots landing
@@ -287,10 +423,30 @@ qboolean SG_AddBotTeam(int teamnum)
 		if (ent->client->p_stats_player)
 			ent->client->p_stats_player->info.teamnum = teamnum;
 	}
+	else
+	{
+		/* A bare add asks the live balancer, not the dropped-player record for
+		 * this recycled bot name. Preserve career totals but clear its old team
+		 * before ClientBegin decides whether TeamJoin is required. */
+		ent->client->ctf.teamnum = CTF_TEAM_UNDEFINED;
+		if (ent->client->p_stats_player)
+			ent->client->p_stats_player->info.teamnum = CTF_TEAM_UNDEFINED;
+	}
 	ent->inuse = true;
 	ent->flags |= FL_BOT;
 	ClientUserinfoChanged(ent, userinfo);
 	ClientBegin(ent);
+	/* TeamJoin normally assigns a bare add and an explicit fill was assigned
+	 * above.  Treat any other result as a lifecycle failure before the edict
+	 * becomes SG-owned; no team-indexed bot code may see it. */
+	if (ent->client->ctf.teamnum != CTF_TEAM_RED &&
+	    ent->client->ctf.teamnum != CTF_TEAM_BLUE)
+	{
+		ClientDisconnect(ent);
+		SG_FreeClientEdict(ent);
+		BotSlot_Reset(&sg_bots[slot]);
+		return false;
+	}
 	/*
 	 * Again, now that a TEAM exists. The skin force inside the first
 	 * userinfo pass ran while teamnum was still UNDEFINED, its red/blue
@@ -338,37 +494,19 @@ qboolean SG_AddBotTeam(int teamnum)
 
 	sg_bots[slot].ent = ent;
 	sg_bots[slot].active = true;
-	sg_bots[slot].seed = -1;
-	sg_bots[slot].tac_seed = -1;
-	sg_bots[slot].tac_role = -1;
-	sg_bots[slot].stuck_time = 0.0f;
-	sg_bots[slot].inlinks_n = 0;
-	sg_bots[slot].exitasym_n = 0;
-	sg_bots[slot].exitasym_armed = false;
-	sg_bots[slot].beat_ready = false;   /* a join is not a respawn */
-	sg_bots[slot].beat_until = 0.0f;
-	/* no errand, and no row: slot 0 is a real belief row, -1 is nobody's */
-	sg_bots[slot].lead_ent = 0;
-	sg_bots[slot].lead_slot = -1;
-	sg_bots[slot].lead_seed = -1;
-	sg_bots[slot].lead_at = 0.0f;
-	sg_bots[slot].lead_next = 0.0f;
-	sg_bots[slot].mega_on = false;
-	sg_bots[slot].mega_hp = 0;
-	sg_bots[slot].mega_since = 0.0f;
-	sg_bots[slot].mega_next = 0.0f;
-	sg_bots[slot].escprior_bucket = -1;
-	sg_bots[slot].escprior_until = 0.0f;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
-	/* a fresh joiner holds no grudge, and seed 0 is a real place: -1 is
-	 * the only value that means "nobody has died here yet" */
-	sg_bots[slot].tilt_seed = -1;
-	sg_bots[slot].tilt_killer_seed = -1;
-	sg_bots[slot].tilt_lane_n = 0;
-	sg_bots[slot].tilt_until = 0.0f;
-	sg_bots[slot].tilt_caution_until = 0.0f;
-	sg_bots[slot].tilt_death_time = -1000.0f;
-	sg_bots[slot].tilt_window = 0.0f;
+	/* A fresh late join has no respawn edge from which to seed the movement
+	 * watchdogs. Initialize every progress sample at the actual spawn now;
+	 * otherwise level.time can make zero-initialized clocks immediately ancient
+	 * and a spawn near world origin look wedged on its first live frame. */
+	VectorCopy(ent->s.origin, sg_bots[slot].stuck_origin);
+	VectorCopy(ent->s.origin, sg_bots[slot].last_origin);
+	VectorCopy(ent->s.origin, sg_bots[slot].watch_org);
+	VectorCopy(ent->s.origin, sg_bots[slot].stag_org);
+	VectorCopy(ent->s.origin, sg_bots[slot].wedge_org);
+	SG_Mark(&sg_bots[slot].watch_since);
+	SG_Mark(&sg_bots[slot].stag_since);
+	SG_Mark(&sg_bots[slot].wedge_since);
 	SG_PersonaBind(ent, slot);      /* the name now indexes a character */
 
 	/*
@@ -395,15 +533,22 @@ int SG_RemoveBots(void)
 	int i, n = 0;
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
+		edict_t *ent;
+
 		if (!sg_bots[i].active)
 			continue;
-		if (sg_bots[i].ent && sg_bots[i].ent->inuse)
+		ent = sg_bots[i].ent;
+		/* An engine kick can park the fake client before this bulk reset. The
+		 * ownership slot is still ours, so finish clearing FL_BOT/CTF state even
+		 * though ClientDisconnect must not be called twice. A live replacement
+		 * that has already lost FL_BOT belongs to the engine and is left alone. */
+		if (ent && ent->client && (ent->flags & FL_BOT))
 		{
-			ClientDisconnect(sg_bots[i].ent);
-			SG_FreeClientEdict(sg_bots[i].ent);
+			if (ent->inuse)
+				ClientDisconnect(ent);
+			SG_FreeClientEdict(ent);
 		}
-		sg_bots[i].active = false;
-		sg_bots[i].ent = NULL;
+		BotSlot_Reset(&sg_bots[i]);
 		n++;
 	}
 	return n;
@@ -518,4 +663,3 @@ qboolean SG_KickWorst(void)
 	Botfill_Drop(worst);
 	return true;
 }
-

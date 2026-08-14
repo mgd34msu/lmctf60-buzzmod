@@ -23,6 +23,7 @@ import struct, sys, os, math, json, re, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dm2speed import R, parse_entity_bits, parse_delta_entity, \
     parse_packetentities, parse_playerstate, parse_sound, parse_temp_entity
+from corpusgraph import rune_identity, stamp_corpus_identity
 
 HEADER_FMT = '<4i64s'
 SEED_FMT = '<3f2h'
@@ -141,6 +142,7 @@ def main():
     rune_dir, out_dir = sys.argv[1], sys.argv[2]
     agg = {}
     grids = {}
+    identities = {}
     for demo in sys.argv[3:]:
         frames, mapname, events = walk_demo(demo)
         if not mapname or len(frames) < 100:
@@ -159,6 +161,7 @@ def main():
             continue
         if mapname not in grids:
             grids[mapname] = SeedGrid(load_seeds(rp))
+            identities[mapname] = rune_identity(rp, mapname)
         g = grids[mapname]
         a = agg.setdefault(mapname, {
             'map': mapname, 'demos': 0, 'frames': 0,
@@ -180,6 +183,7 @@ def main():
               f"events={len(events)}")
     os.makedirs(out_dir, exist_ok=True)
     for mapname, a in agg.items():
+        stamp_corpus_identity(a, identities[mapname])
         a['transitions'] = dict(a['transitions'])
         a['seed_dwell'] = {str(k): v/10.0 for k, v in a['seed_dwell'].items()}
         out = f'{out_dir}/{mapname}.human.json'

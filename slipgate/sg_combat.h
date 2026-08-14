@@ -39,6 +39,16 @@
 #include "sg_local.h"
 
 /*
+ * Explicit lifecycle boundaries for process-resident combat state.  A level
+ * reset clears every client's beliefs, clocks and diagnostic counters without
+ * invalidating the one-time item cache; a client reset protects a recycled
+ * engine client index.  Public combat calls also initialize lazily, so call
+ * ordering during startup is safe.
+ */
+void Combat_ResetLevel(void);
+void Combat_ResetClient(edict_t *self);
+
+/*
  * Scan for a visible enemy; hold the right weapon for the range band; if a
  * target is held, aim at its firing solution and pull the trigger at a
  * human-ish cadence. *out_engaged is set true when a target is held this frame

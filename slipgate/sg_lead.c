@@ -153,7 +153,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		Lead_Abort(bot, "carrying");
 		return NULL;
 	}
-	if (sg_caco_team_belief.flag[ti].state == SG_FLAG_ASTRAY ||
+	if (sg_caco_team_belief.flag[ti][ti].state == SG_FLAG_ASTRAY ||
 	    role == SG_ROLE_RECOVER)
 	{
 		Lead_Abort(bot, "our flag out");
@@ -332,4 +332,3 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		           bot->lead_at, SG_TimerRemaining(bot->lead_at), lead, travel);
 	return lead_field;
 }
-

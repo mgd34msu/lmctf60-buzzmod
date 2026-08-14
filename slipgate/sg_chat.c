@@ -2853,13 +2853,13 @@ static void Chat_TeamEvents(void)
 	}
 
 	/*
-	 * The return pass. sg_caco_team_belief.flag[t] is team t+1's OWN flag
-	 * (sg_local.h: [0] red, [1] blue) and its state is read straight off
+	 * The return pass. flag[0][t] is team t+1's OWN flag; home state is
+	 * mirrored across both belief rows and is read straight off
 	 * ctf_flagathome by Caco_ScanFlags -- HUD knowledge, not a sighting.
 	 */
 	for (t = 0; t < 2; t++)
 	{
-		qboolean home = (sg_caco_team_belief.flag[t].state == SG_FLAG_HOME)
+		qboolean home = (sg_caco_team_belief.flag[0][t].state == SG_FLAG_HOME)
 		              ? true : false;
 
 		if (home && !chat_flaghome[t] &&
@@ -4166,7 +4166,8 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 static qboolean Chat_OrderLive(int cl)
 {
 	sg_chat_bot_t	*cb;
-	edict_t			*bot, *from;
+	edict_t			*bot, *from, *flag;
+	qboolean		carried;
 
 	if (cl < 0 || cl >= game.maxclients)
 		return false;
@@ -4182,6 +4183,31 @@ static qboolean Chat_OrderLive(int cl)
 	from = g_edicts + 1 + cb->order_from;
 	if (!from->inuse || !from->client)
 		return false;
+	/* "Cover me" names a live moving teammate. A corpse has no escort
+	 * position and no valid carrier field; keeping this one order alive can
+	 * turn the bot's objective into all-INF until the human respawns. */
+	if (cb->order_role == SG_CHAT_ROLE_ESCORT &&
+	    (from->deadflag || from->health <= 0))
+		return false;
+	/* RECOVER names a transient objective, not a place to camp.  End the
+	 * override as soon as the ordering team's flag is authoritative at home;
+	 * otherwise the bot grinds its own stand (and can wedge-kill/repeat) for
+	 * the remainder of the ninety-second chat-order lease. */
+	if (cb->order_role == SG_CHAT_ROLE_RECOVER)
+	{
+		flag = (cb->order_team == CTF_TEAM_RED) ? redflag : blueflag;
+		if (!flag || !flag->inuse)
+			return false;
+		carried = flag->owner && flag->owner->inuse && flag->owner->client &&
+		          flag->owner->client->ctf.teamnum ==
+		              SG_EnemyTeam(cb->order_team) &&
+		          ClientHasFlag(flag->owner) == flag;
+		/* A carried flag entity remains hidden at its take origin, which may
+		 * still satisfy ctf_flagathome().  Inventory/owner is authoritative for
+		 * that state; the position test is authoritative only when uncarried. */
+		if (!carried && ctf_flagathome(flag))
+			return false;
+	}
 	if (from->client->ctf.teamnum != cb->order_team)
 		return false;
 	if (!bot->inuse || !bot->client ||
@@ -4232,6 +4258,47 @@ edict_t *SG_ChatEscortTarget(edict_t *bot)
 	if (!from->inuse || !from->client)
 		return NULL;
 	return from;
+}
+
+/* Client slots are recycled without a level reset. Personal cooldowns,
+ * pending replies and human orders belong to the occupant, not the index. */
+void SG_ChatResetClient(edict_t *client)
+{
+	int cl, i, t, topic;
+
+	if (!client)
+		return;
+	cl = Chat_ClientNum(client);
+	if (cl < 0 || cl >= game.maxclients)
+		return;
+	memset(&chat_bot[cl], 0, sizeof(chat_bot[cl]));
+	chat_bot[cl].order_role = SG_CHAT_ROLE_NONE;
+	chat_bot[cl].order_from = -1;
+	chat_bot[cl].end_cat = -1;
+	/* A queued voice line or radio press cannot be inherited by the next bot
+	 * that happens to occupy the same client number. */
+	for (t = 0; t < 2; t++)
+	{
+		for (topic = 0; topic < SG_CHAT_TOPICS; topic++)
+			if (chat_q[t][topic].pending &&
+			    (chat_q[t][topic].speaker == cl ||
+			     (chat_q[t][topic].arm_kind == SG_ARM_MEGATAKE &&
+			      chat_q[t][topic].arm_who == cl)))
+				chat_q[t][topic].pending = false;
+		if (radio_q[t].pending && radio_q[t].speaker == cl)
+			radio_q[t].pending = false;
+		if (chat_mega_taker[t] == cl)
+			chat_mega_taker[t] = -1;
+	}
+	/* Orders are owned by the giver's live client generation too. Waiting
+	 * for the periodic liveness sweep leaves a same-frame recycled slot able
+	 * to command bots using the departed human's order. */
+	for (i = 0; i < game.maxclients; i++)
+		if (chat_bot[i].order_from == cl)
+		{
+			chat_bot[i].order_role = SG_CHAT_ROLE_NONE;
+			chat_bot[i].order_from = -1;
+		}
 }
 
 /* --------------------------------------------------------- frame, reset */

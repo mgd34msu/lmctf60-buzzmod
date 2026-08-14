@@ -21,16 +21,36 @@ No external resources: everything (SVG, CSS, JS for pan/zoom) is inlined.
 
 import argparse
 import html
+import math
 import os
 import re
 import struct
 import sys
 from collections import deque
 
+try:
+    from runelint import hook_control_errors
+except ModuleNotFoundError:  # also support `python -m tools.runeview`
+    from tools.runelint import hook_control_errors
+
 # --------------------------------------------------------------------- I/O
 
 RUNE_MAGIC = 0x454E5552
-RUNE_VERSION = 1
+RUNE_VERSION = 2
+RUNE_MAX_SEEDS = 32768
+RUNE_MAX_LINKS = 262144
+RUNE_DECLARED_CONTROL_MARKER = 254
+RUNE_DROP_CONTROL_MARKER = 254
+RUNE_HOOK_CONTROL_SLACK = 24
+RUNE_WATER_HOOK_CONTROL_MARKER = 253
+RSF_WATER = 1
+RSF_TOMBSTONE = 2
+PMOVE_COORD_MIN = -4096.0
+PMOVE_COORD_MAX = 4095.875
+# Version 2 changes hook-proof semantics, not the flat structs. Version 1
+# therefore remains readable for visual comparison even though the current
+# runtime correctly rejects it.
+READABLE_RUNE_VERSIONS = (1, RUNE_VERSION)
 
 # rune_header_t: int magic, version, num_seeds, num_links; char mapname[64]
 HEADER_FMT = '<4i64s'
@@ -51,9 +71,10 @@ assert LINK_SIZE == 28, LINK_SIZE
 
 # Appended, never renumbered, exactly as rune_action_t in sg_rune.h is:
 # 0-4 are the original five, 5-6 the declared world-moves-you pair, 7 the
-# rocket jump. A dump of an older rune still decodes because no value moved.
+# reserved rocket jump, and 8 the declared door traversal. A dump of an older
+# rune still decodes because no value moved.
 ACTION_NAMES = {0: 'RUN', 1: 'JUMP', 2: 'DROP', 3: 'HOOK', 4: 'SWIM',
-                5: 'LIFT', 6: 'TELEPORT', 7: 'ROCKETJUMP'}
+                5: 'LIFT', 6: 'TELEPORT', 7: 'ROCKETJUMP', 8: 'DOOR'}
 # grey, cyan, yellow, orange, blue -- per spec, do not change
 ACTION_COLORS = {
     0: '#9a9a9a',   # run
@@ -64,8 +85,18 @@ ACTION_COLORS = {
     5: '#8f5cff',   # lift      (appended; the five above are untouched)
     6: '#00d18a',   # teleport  (appended)
     7: '#ff3b30',   # rocketjump -- red: it is the only link paid for in health
+    8: '#ff66c4',   # door      (appended; declared trigger traversal)
 }
 PROVENANCE_NAMES = {0: 'PROVEN', 1: 'OBSERVED', 2: 'ADJUSTED', 3: 'DECLARED'}
+
+
+HOOK_CONTROL_MESSAGES = {
+    'nonfinite': 'non-finite pitch/yaw/distance',
+    'pitch_lattice': 'non-canonical pitch',
+    'yaw_lattice': 'non-canonical yaw',
+    'pitch_reach': 'Pmove-unreachable pitch',
+    'distance': 'ray distance outside 1..8192',
+}
 
 
 class Rune:
@@ -74,10 +105,12 @@ class Rune:
 
 
 def load_rune(path):
-    """Read a .rune file into a Rune object. Tolerant of a links/seeds
-    count that overruns the actual file size (reads as many full records
-    as are present and warns), since this tool exists to look at files
-    that may be mid-generation."""
+    """Read one complete, loader-compatible .rune file.
+
+    Final graphs are installed by atomic rename.  Treating an incomplete
+    payload as a visualizable graph can reinterpret link bytes as fabricated
+    seeds, so forensic partial viewing is intentionally not implicit here.
+    """
     with open(path, 'rb') as f:
         data = f.read()
 
@@ -91,11 +124,32 @@ def load_rune(path):
     if magic != RUNE_MAGIC:
         raise ValueError(f"{path}: bad magic 0x{magic:08x}, "
                           f"expected 0x{RUNE_MAGIC:08x}")
-    if version != RUNE_VERSION:
-        sys.stderr.write(f"warning: {path}: rune version {version}, "
-                          f"this tool knows version {RUNE_VERSION}\n")
+    if version not in READABLE_RUNE_VERSIONS:
+        raise ValueError(f"{path}: unsupported rune version {version}; "
+                         f"readable versions are 1 and {RUNE_VERSION}")
+    if version == 1:
+        sys.stderr.write(
+            f"warning: {path}: legacy rune version 1 is layout-compatible, "
+            "but its hook proofs use the old 25 ms pull model; the current "
+            f"runtime requires version {RUNE_VERSION}\n")
+
+    if not 0 < num_seeds <= RUNE_MAX_SEEDS:
+        raise ValueError(f'{path}: invalid seed count {num_seeds}')
+    if not 0 <= num_links <= RUNE_MAX_LINKS:
+        raise ValueError(f'{path}: invalid link count {num_links}')
+    if b'\x00' not in mapname_raw:
+        raise ValueError(f'{path}: unterminated map name')
+    expected_size = (HEADER_SIZE + num_seeds * SEED_SIZE +
+                     num_links * LINK_SIZE)
+    if len(data) != expected_size:
+        raise ValueError(f'{path}: size {len(data)} does not match header '
+                         f'size {expected_size}')
 
     mapname = mapname_raw.split(b'\x00', 1)[0].decode('ascii', 'replace')
+    expected_mapname = os.path.splitext(os.path.basename(path))[0]
+    if mapname.lower() != expected_mapname.lower():
+        raise ValueError(f'{path}: header map {mapname!r} does not match '
+                         f'filename map {expected_mapname!r}')
 
     r = Rune()
     r.path = path
@@ -105,30 +159,117 @@ def load_rune(path):
 
     off = HEADER_SIZE
     seeds = []
-    avail_seeds = min(num_seeds, (len(data) - off) // SEED_SIZE)
-    if avail_seeds < num_seeds:
-        sys.stderr.write(f"warning: {path}: header claims {num_seeds} seeds, "
-                          f"file only has room for {avail_seeds}\n")
-    for i in range(avail_seeds):
+    for i in range(num_seeds):
         x, y, z, area_hint, flags = struct.unpack_from(SEED_FMT, data, off)
+        if (not all(math.isfinite(value) for value in (x, y, z)) or
+                not all(PMOVE_COORD_MIN <= value <= PMOVE_COORD_MAX
+                        for value in (x, y, z)) or
+                not 0 <= area_hint <= 255 or
+                flags & ~(RSF_WATER | RSF_TOMBSTONE)):
+            raise ValueError(f'{path}: seed {i} violates runtime geometry, '
+                             'area_hint, or flags contract')
         seeds.append({'x': x, 'y': y, 'z': z,
                        'area_hint': area_hint, 'flags': flags})
         off += SEED_SIZE
 
     links = []
-    avail_links = min(num_links, (len(data) - off) // LINK_SIZE)
-    if avail_links < num_links:
-        sys.stderr.write(f"warning: {path}: header claims {num_links} links, "
-                          f"file only has room for {avail_links}\n")
-    for i in range(avail_links):
+    linked_sources = set()
+    for i in range(num_links):
         (frm, to, action, provenance, min_speed, heading, heading_slack,
          exit_speed, cost_ms, ax, ay, az) = struct.unpack_from(LINK_FMT, data, off)
+        anchor = (ax, ay, az)
+        if (not 0 <= frm < num_seeds or not 0 <= to < num_seeds or
+                frm == to or action not in ACTION_NAMES or provenance > 3 or
+                cost_ms <= 0 or not all(math.isfinite(value)
+                                        for value in anchor)):
+            raise ValueError(f'{path}: link {i} violates base runtime contract')
+        from_water = bool(seeds[frm]['flags'] & 1)
+        to_water = bool(seeds[to]['flags'] & 1)
+        if version == 2 and (
+                seeds[frm]['flags'] & RSF_TOMBSTONE or
+                seeds[to]['flags'] & RSF_TOMBSTONE):
+            raise ValueError(f'{path}: link {i} touches route-core tombstone')
+        if version == 2 and action in (0, 1, 8) and (from_water or to_water):
+            raise ValueError(f'{path}: link {i} uses dry action on water endpoint')
+        if version == 2 and action == 7:
+            raise ValueError(f'{path}: link {i} uses unsupported v2 rocket jump')
+        if version == 2 and action == 4 and (
+                not (from_water or to_water) or min_speed != 0 or
+                heading != 0 or heading_slack != 0 or provenance not in (0, 2) or
+                any(value != 0.0 for value in anchor)):
+            raise ValueError(f'{path}: link {i} has invalid v2 swim control')
+        if version == 2 and action == 3:
+            if (provenance != 0 or min_speed != 0 or
+                    (from_water and to_water) or
+                    heading_slack != (RUNE_WATER_HOOK_CONTROL_MARKER
+                                      if from_water else RUNE_HOOK_CONTROL_SLACK)):
+                raise ValueError(f'{path}: link {i} has invalid v2 hook schema')
+            control_errors = hook_control_errors(anchor)
+            if control_errors:
+                raise ValueError(f'{path}: link {i} has invalid v2 hook '
+                                 'control: ' + ', '.join(
+                                     HOOK_CONTROL_MESSAGES[error]
+                                     for error in control_errors))
+        anchor_zero = all(value == 0.0 for value in anchor)
+        anchor_world = all(PMOVE_COORD_MIN <= value <= PMOVE_COORD_MAX
+                           for value in anchor)
+        anchor_dx = ax - seeds[frm]['x']
+        anchor_dy = ay - seeds[frm]['y']
+        anchor_dz = az - seeds[frm]['z']
+        door_to_dx = seeds[to]['x'] - ax
+        door_to_dy = seeds[to]['y'] - ay
+        door_to_dz = seeds[to]['z'] - az
+        if version == 2 and (
+                (action == 0 and not anchor_zero and not anchor_world) or
+                (action == 1 and not anchor_zero) or
+                # Trigger identity and mover-sweep proof need live map
+                # entities; the viewer enforces serialized DOOR controls.
+                (action in (5, 6, 8) and
+                 (not anchor_world or provenance != 3 or min_speed != 0 or
+                  heading != 0 or
+                  heading_slack != RUNE_DECLARED_CONTROL_MARKER or
+                  exit_speed != 0)) or
+                (action == 6 and
+                 (math.hypot(anchor_dx, anchor_dy) > 128.0 or
+                  abs(anchor_dz) > 128.0)) or
+                (action == 8 and
+                 (any(value != int(value * 8.0) * 0.125
+                      for value in anchor) or
+                  math.hypot(anchor_dx, anchor_dy) > 320.0 or
+                  abs(anchor_dz) > 48.0 or
+                  math.hypot(door_to_dx, door_to_dy) > 768.0 or
+                  abs(door_to_dz) > 96.0))):
+            raise ValueError(f'{path}: link {i} has invalid action anchor/control')
+        if version == 2 and action == 2:
+            dx = ax - seeds[frm]['x']
+            dy = ay - seeds[frm]['y']
+            dz = az - seeds[frm]['z']
+            lip_horiz = math.hypot(dx, dy)
+            lip_yaw = math.degrees(math.atan2(dy, dx))
+            stored_yaw = heading * (360.0 / 256.0)
+            yaw_delta = (lip_yaw - stored_yaw + 180.0) % 360.0 - 180.0
+            if (from_water or min_speed != 0 or
+                    heading_slack != RUNE_DROP_CONTROL_MARKER or
+                    not 2.0 <= lip_horiz <= 256.0 or
+                    abs(dz - 8.0) > 0.25 or
+                    abs(yaw_delta) > 360.0 / 256.0):
+                raise ValueError(f'{path}: link {i} has invalid v2 drop control')
+        if version == 2 and action == 1 and min_speed != 0:
+            raise ValueError(f'{path}: link {i} has unsupported momentum jump')
         links.append({'from': frm, 'to': to, 'action': action,
                        'provenance': provenance, 'min_speed': min_speed,
                        'heading': heading, 'heading_slack': heading_slack,
                        'exit_speed': exit_speed, 'cost_ms': cost_ms,
-                       'anchor': (ax, ay, az)})
+                       'anchor': anchor})
+        linked_sources.add(frm)
         off += LINK_SIZE
+
+    if version == 2:
+        for i, seed in enumerate(seeds):
+            tombstone = bool(seed['flags'] & RSF_TOMBSTONE)
+            if tombstone == (i in linked_sources):
+                raise ValueError(
+                    f'{path}: seed {i} violates route-core ownership')
 
     r.num_seeds = len(seeds)
     r.num_links = len(links)
@@ -215,6 +356,79 @@ def one_way_set(rune):
         if (link['to'], link['from']) not in pairs:
             one_way.append(i)
     return set(one_way)
+
+
+# --------------------------------------------------------- hook geometry
+
+def _pmove_coord(value):
+    """Round a seed coordinate through pmove's signed 1/8-unit origin."""
+    encoded = int(value * 8.0) & 0xffff
+    signed = encoded - 0x10000 if encoded & 0x8000 else encoded
+    return signed * 0.125
+
+
+def _v2_hook_segment(rune, link):
+    """Reconstruct the proof-state right-hand muzzle ray and nominal bite."""
+    if hook_control_errors(link['anchor']):
+        return None
+    source_seed = rune.seeds[link['from']]
+    source = tuple(_pmove_coord(source_seed[key]) for key in ('x', 'y', 'z'))
+    pitch, yaw, distance = link['anchor']
+    pitch_radians = math.radians(pitch)
+    yaw_radians = math.radians(yaw)
+    cp, sp = math.cos(pitch_radians), math.sin(pitch_radians)
+    cy, sy = math.cos(yaw_radians), math.sin(yaw_radians)
+    forward = (cp * cy, cp * sy, -sp)
+    right = (sy, -cy, 0.0)  # AngleVectors with roll zero
+    length = math.sqrt(sum(value * value for value in forward))
+    forward = tuple(value / length for value in forward)
+    muzzle = (
+        source[0] + forward[0] * 8.0 + right[0] * 8.0,
+        source[1] + forward[1] * 8.0 + right[1] * 8.0,
+        source[2] + forward[2] * 8.0 + 14.0,
+    )
+    bite = tuple(muzzle[i] + forward[i] * distance for i in range(3))
+    return muzzle, bite
+
+
+def hook_visual_segments(rune):
+    """Yield graph-hook proof rays without reinterpreting legacy anchors."""
+    segments = []
+    for index, link in enumerate(rune.links):
+        if link['action'] != 3 or not (0 <= link['from'] < rune.num_seeds):
+            continue
+        if rune.version == 1:
+            anchor = link['anchor']
+            if not all(math.isfinite(value) for value in anchor):
+                continue
+            seed = rune.seeds[link['from']]
+            start = (seed['x'], seed['y'], seed['z'])
+            end = anchor
+            label = (f'link {index}: v1 stored world anchor '
+                     f'({end[0]:.1f}, {end[1]:.1f}, {end[2]:.1f})')
+        else:
+            segment = _v2_hook_segment(rune, link)
+            if segment is None:
+                continue
+            start, end = segment
+            pitch, yaw, distance = link['anchor']
+            label = (f'link {index}: v2 nominal right-hand muzzle ray; '
+                     f'pitch={pitch:.6f} yaw={yaw:.6f} distance={distance:.1f}; '
+                     f'bite=({end[0]:.1f}, {end[1]:.1f}, {end[2]:.1f})')
+        segments.append((link, start, end, label))
+    return segments
+
+
+def graph_link_points(rune, link):
+    """Return the actual controller path, including serialized waypoints."""
+    start_seed = rune.seeds[link['from']]
+    end_seed = rune.seeds[link['to']]
+    start = (start_seed['x'], start_seed['y'], start_seed['z'])
+    end = (end_seed['x'], end_seed['y'], end_seed['z'])
+    if link['action'] in (0, 5, 6, 8) and any(
+            value != 0.0 for value in link['anchor']):
+        return (start, link['anchor'], end)
+    return (start, end)
 
 
 # ------------------------------------------------------------ flag lookup
@@ -386,7 +600,13 @@ def _bbox(points, pad_frac=0.06):
 
 
 def render_topdown_svg(rune, comp_of, comps_by_idx, largest_comp, one_way):
-    pts = [(s['x'], -s['y']) for s in rune.seeds]
+    hook_segments = hook_visual_segments(rune)
+    seed_pts = [(s['x'], -s['y']) for s in rune.seeds]
+    link_paths = [graph_link_points(rune, link) for link in rune.links]
+    pts = (seed_pts +
+           [(point[0], -point[1]) for path in link_paths for point in path[1:-1]] +
+           [(point[0], -point[1]) for _, start, end, _ in hook_segments
+            for point in (start, end)])
     if not pts:
         return '<p>(no seeds)</p>'
     minx, miny, w, h = _bbox(pts)
@@ -409,17 +629,30 @@ def render_topdown_svg(rune, comp_of, comps_by_idx, largest_comp, one_way):
         a, b = link['from'], link['to']
         if not (0 <= a < rune.num_seeds and 0 <= b < rune.num_seeds):
             continue
-        x1, y1 = pts[a]
-        x2, y2 = pts[b]
+        path = link_paths[i]
+        points = ' '.join(f'{point[0]:.1f},{-point[1]:.1f}' for point in path)
         color = ACTION_COLORS.get(link['action'], '#ffffff')
         marker = f' marker-end="url(#arrow-{link["action"]})"' if i in one_way else ''
-        out.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-                    f'stroke="{color}" stroke-width="{stroke:.2f}" opacity="0.55"{marker}/>')
+        out.append(f'<polyline points="{points}" fill="none" stroke="{color}" '
+                    f'stroke-width="{stroke:.2f}" opacity="0.55"{marker}/>')
+    out.append('</g>')
+
+    out.append('<g class="rv-hook-rays">')
+    for link, start, end, label in hook_segments:
+        out.append(f'<line x1="{start[0]:.1f}" y1="{-start[1]:.1f}" '
+                   f'x2="{end[0]:.1f}" y2="{-end[1]:.1f}" '
+                   f'stroke="#ffb35c" stroke-width="{stroke*1.2:.2f}" '
+                   f'stroke-dasharray="{stroke*4:.2f} {stroke*3:.2f}" '
+                   f'opacity="0.85"><title>{html.escape(label)}</title></line>')
+        out.append(f'<circle cx="{end[0]:.1f}" cy="{-end[1]:.1f}" '
+                   f'r="{radius*1.15:.2f}" fill="none" stroke="#ffd39a" '
+                   f'stroke-width="{stroke:.2f}"><title>'
+                   f'{html.escape(label)}</title></circle>')
     out.append('</g>')
 
     out.append('<g class="rv-seeds">')
     for i, s in enumerate(rune.seeds):
-        x, y = pts[i]
+        x, y = seed_pts[i]
         c = comp_of[i]
         if c == largest_comp:
             color = height_shade(s['z'], zmin, zmax)
@@ -485,8 +718,17 @@ def render_elevation_svg(rune, region):
         return '<p>(no seeds fall inside the given --region)</p>'
     idx_set = set(idx)
     pts = {i: (rune.seeds[i]['x'], -rune.seeds[i]['z']) for i in idx}
+    hook_segments = [segment for segment in hook_visual_segments(rune)
+                     if segment[0]['from'] in idx_set]
+    link_paths = [(link, graph_link_points(rune, link)) for link in rune.links
+                  if link['from'] in idx_set and link['to'] in idx_set]
 
-    minx, miny, w, h = _bbox(list(pts.values()))
+    bounds = (list(pts.values()) +
+              [(point[0], -point[2]) for _, path in link_paths
+               for point in path[1:-1]] +
+              [(point[0], -point[2]) for _, start, end, _ in hook_segments
+               for point in (start, end)])
+    minx, miny, w, h = _bbox(bounds)
     diag = (w ** 2 + h ** 2) ** 0.5
     radius = max(diag / 250.0, 3.0)
     stroke = max(diag / 900.0, 0.8)
@@ -496,15 +738,24 @@ def render_elevation_svg(rune, region):
     out.append('<rect x="{:.1f}" y="{:.1f}" width="{:.1f}" height="{:.1f}" class="rv-bg"/>'.format(minx, miny, w, h))
 
     out.append('<g class="rv-links">')
-    for link in rune.links:
-        a, b = link['from'], link['to']
-        if a not in idx_set or b not in idx_set:
-            continue
-        x1p, y1p = pts[a]
-        x2p, y2p = pts[b]
+    for link, path in link_paths:
+        points = ' '.join(f'{point[0]:.1f},{-point[2]:.1f}' for point in path)
         color = ACTION_COLORS.get(link['action'], '#ffffff')
-        out.append(f'<line x1="{x1p:.1f}" y1="{y1p:.1f}" x2="{x2p:.1f}" y2="{y2p:.1f}" '
-                    f'stroke="{color}" stroke-width="{stroke:.2f}" opacity="0.7"/>')
+        out.append(f'<polyline points="{points}" fill="none" stroke="{color}" '
+                    f'stroke-width="{stroke:.2f}" opacity="0.7"/>')
+    out.append('</g>')
+
+    out.append('<g class="rv-hook-rays">')
+    for link, start, end, label in hook_segments:
+        out.append(f'<line x1="{start[0]:.1f}" y1="{-start[2]:.1f}" '
+                   f'x2="{end[0]:.1f}" y2="{-end[2]:.1f}" '
+                   f'stroke="#ffb35c" stroke-width="{stroke*1.2:.2f}" '
+                   f'stroke-dasharray="{stroke*4:.2f} {stroke*3:.2f}" '
+                   f'opacity="0.85"><title>{html.escape(label)}</title></line>')
+        out.append(f'<circle cx="{end[0]:.1f}" cy="{-end[2]:.1f}" '
+                   f'r="{radius*1.15:.2f}" fill="none" stroke="#ffd39a" '
+                   f'stroke-width="{stroke:.2f}"><title>'
+                   f'{html.escape(label)}</title></circle>')
     out.append('</g>')
 
     out.append('<g class="rv-seeds">')
@@ -577,6 +828,7 @@ def compute_stats(rune, comp_of, comps_by_idx, comp_order, goal, goal_reason, in
     frontier_total, frontier_buckets = frontier_analysis(rune, in_reach)
 
     return {
+        'version': rune.version,
         'seeds': rune.num_seeds,
         'links_total': rune.num_links,
         'action_counts': action_counts,
@@ -596,6 +848,7 @@ def render_stats_html(stats):
     lines.append('<div class="rv-stats">')
     lines.append('<h2>Stats</h2>')
     lines.append('<table class="rv-table">')
+    lines.append(f'<tr><td>rune version</td><td>{stats["version"]}</td></tr>')
     lines.append(f'<tr><td>seeds</td><td>{stats["seeds"]}</td></tr>')
     lines.append(f'<tr><td>links (total)</td><td>{stats["links_total"]}</td></tr>')
     for a in sorted(ACTION_NAMES):
@@ -631,6 +884,7 @@ def render_stats_html(stats):
 
 def stats_plaintext(stats):
     lines = []
+    lines.append(f"rune version: {stats['version']}")
     lines.append(f"seeds: {stats['seeds']}")
     lines.append(f"links (total): {stats['links_total']}")
     for a in sorted(ACTION_NAMES):
@@ -700,6 +954,8 @@ def compute_diff(new_rune, old_rune, new_goal, new_in_reach):
 
     return {
         'old_path': old_rune.path,
+        'old_version': old_rune.version,
+        'new_version': new_rune.version,
         'old_seeds': old_rune.num_seeds,
         'old_links': old_rune.num_links,
         'seeds_added': len(added_seeds),
@@ -718,6 +974,8 @@ def render_diff_html(diff):
     lines.append('<div class="rv-diff">')
     lines.append('<h2>Diff vs ' + html.escape(diff['old_path']) + '</h2>')
     lines.append('<table class="rv-table">')
+    lines.append(f'<tr><td>rune versions</td><td>v{diff["old_version"]} '
+                 f'&rarr; v{diff["new_version"]}</td></tr>')
     lines.append(f'<tr><td>old seeds</td><td>{diff["old_seeds"]}</td></tr>')
     lines.append(f'<tr><td>old links</td><td>{diff["old_links"]}</td></tr>')
     lines.append(f'<tr><td>seeds added</td><td>+{diff["seeds_added"]}</td></tr>')
@@ -824,13 +1082,16 @@ def build_page(rune, stats_html, stats_text_html, topdown_svg, reach_svg,
 </head>
 <body>
 <h1>runeview -- {html.escape(rune.mapname or '(no mapname)')}</h1>
-<p class="dim">{html.escape(rune.path)} -- {rune.num_seeds} seeds, {rune.num_links} links</p>
+<p class="dim">{html.escape(rune.path)} -- version {rune.version},
+{rune.num_seeds} seeds, {rune.num_links} links</p>
 
 <div class="rv-section">
 <h2>Top-down: components &amp; links</h2>
 <p class="dim">Largest connected component shaded green by height (dark = low, bright = high).
 Other components get a distinct bright color each. Links colored by action; arrowheads mark
-one-way links (no return link exists).</p>
+one-way links (no return link exists). Dashed orange rays show legacy v1 stored world anchors
+or v2 nominal right-hand proof muzzle-to-bite geometry reconstructed from the serialized
+pitch, yaw, and distance.</p>
 <div class="legend">{action_legend}</div>
 <div class="rv-svg-wrap">{topdown_svg}</div>
 </div>

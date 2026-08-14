@@ -16,9 +16,15 @@ typedef struct sg_bot_s
 	qboolean	active;
 	int			seed;           /* seed we believe we are at/near */
 	float		stuck_time;     /* accumulated time without progress */
+	vec3_t		stuck_origin;   /* dedicated short-range progress sample;
+	                             * last_origin belongs to seed localization */
 	float		next_report;
 	float		next_cmdlog;
 	vec3_t		last_origin;
+	qboolean	seedless_active; /* bounded recovery after topology is lost */
+	float		seedless_since;
+	float		seedless_turn_until;
+	float		seedless_yaw;
 
 	/* hook execution, two-phase: aim this frame (ClientThink turns the cmd
 	 * angles into v_angle), fire immediately after, since Weapon_Hook_Fire
@@ -38,14 +44,32 @@ typedef struct sg_bot_s
 	                             * 3 released mid-air, steering to land */
 	int			hook_link;      /* which link this ride is executing */
 	qboolean	hook_bite_logged;   /* one HOOKBITE line per ride */
+	qboolean	hook_attached_validated; /* static bite/source checked once */
 	float		hook_landbrake; /* stand the landing like the proof did:
 	                             * the phantom ARRIVED at a stop; a body
 	                             * at 343 skids off the narrow step and
 	                             * falls back into the basin it climbed
 	                             * out of (iter-19 lmctf03, Gate) */
 	vec3_t		hook_anchor;
+	vec3_t		hook_view;      /* quantized fire view held for the proved ride;
+	                             * production pull starts at this view's muzzle */
+	vec3_t		hook_source;    /* exact fixed-point proof source; graph hooks fire
+	                             * only when the live body still matches it */
+	pmove_state_t	hook_source_pms; /* post-aim state the online witness cloned */
+	pmove_state_t	hook_attach_pms; /* expected state when the bolt becomes taut */
+	qboolean	hook_source_water; /* water witness permits proved outbound drift */
+	int			hook_source_health; /* damage invalidates the cloned launch witness */
+	qboolean	hook_attach_groundentity;
+	int			hook_attach_watertype;
+	int			hook_attach_waterlevel;
 	vec3_t		hook_dest;      /* the link's destination seed origin */
 	float		hook_deadline;
+	int			hook_pull_ms;   /* exact 25 ms attached traversal clock */
+	int			hook_settle_ms; /* literal 25 ms post-release proof clock */
+	int			hook_proved_pull_ms;   /* online witness boundary, not level.time */
+	int			hook_proved_release_ms;
+	int			hook_proved_arrival_ms;
+	int			hook_proved_settle_ms;
 
 	/* a link chosen for seconds while the bot goes nowhere is a link the
 	 * body cannot execute, whatever the rune thinks -- shelve it awhile.
@@ -63,7 +87,9 @@ typedef struct sg_bot_s
 	edict_t		*dead_door[SG_DEAD_DOORS];
 	float		dead_door_until[SG_DEAD_DOORS];
 	edict_t		*door_hold_ent;     /* the door currently being waited on */
-	float		door_hold_since;
+	int			door_hold_link;    /* attempt identity; a lost feeler must not
+	                                 * restart the bounded wait */
+	float		door_hold_deadline;
 	qboolean	deaddoor_ahead;     /* last frame's goal line hit a door
 	                                 * already known dead: shelve fast */
 	vec3_t		deaddoor_spot;      /* where that dead door was struck */
@@ -88,6 +114,8 @@ typedef struct sg_bot_s
 	int			visit_min[SG_VISIT_RING];   /* best goal reached SINCE */
 	float		visit_time[SG_VISIT_RING];
 	int			visit_head;
+	int			orbit_last_seed; /* last seed consumed by the wide-orbit edge;
+		                             * belongs to this bot/life, not the process */
 
 	/* rocket-jump execution: the proof stored the aim (anchor[0/1], z
 	 * recoverable) and the worst-case health price (anchor[2]); the body
@@ -102,6 +130,36 @@ typedef struct sg_bot_s
 	int			watch_link;     /* the link under progress-watch */
 	float		watch_since;
 	vec3_t		watch_org;
+	int			jump_link;      /* one-hop RL_JUMP controller owner */
+	qboolean	jump_started;   /* launch tap was submitted; never re-tap */
+	int			drop_link;      /* RL_DROP controller owner, -1 = unlatched */
+	qboolean	drop_started;   /* exact source/rest gate passed */
+	qboolean	drop_walkoff;   /* crossed the <=8u lip handoff this action */
+	qboolean	drop_airborne;  /* at least one proved 25 ms step lost support */
+	qboolean	drop_recover;   /* first proved landing made; walk to exact `to` */
+	qboolean	swim_validated; /* online witness from actual fixed-point entry */
+	int			swim_proved_ms; /* exact shared 100 ms arrival boundary */
+	int			swim_elapsed_ms;
+	int			swim_air_seed;  /* last submerged graph state for breath escape */
+	qboolean	declared_activated; /* lift reached TOP / teleporter fired;
+	                                 * controller now owns the egress to `to` */
+	qboolean	declared_started; /* exact graph source was reached before the
+	                              * mechanism approach took command */
+	int			declared_start_frame; /* RL_DOOR starts its proved approach on
+		                                      * the next outer-frame boundary */
+	qboolean	declared_touched; /* expected RL_DOOR Touch_Multi accepted the
+		                           * live player contact, even while cooling */
+	int			declared_touch_frame; /* first-contact outer frame; remaining
+		                                  * 25 ms commands reproduce the proof's pause */
+	qboolean	declared_triggered; /* this RL_DOOR's validated Touch_Multi
+		                                * actually fired for this bot */
+	int			declared_trigger_frame; /* outer frame of that synchronous touch;
+		                                       * remaining 25 ms commands stop */
+	int			declared_egress_proof_frame; /* cap live TOP rollout to once per
+		                                           * outer frame */
+	qboolean	declared_door_retreat; /* live suffix to `to` failed; own a
+		                                  * separately proved return to anchor */
+	int			declared_door_suffix_ms; /* current live forward/retreat proof */
 	int			commit_link;    /* the gradient step being held */
 	float		commit_until;
 	vec3_t		stag_org;       /* stagnation ball on the BODY, not the
@@ -266,11 +324,8 @@ typedef struct sg_bot_s
 	float		beat_arc;           /* half-width of the look sweep, degrees */
 	int			beat_sign;          /* which shoulder it checks first */
 	qboolean	beat_ready;         /* this bot has run dead frames on THIS
-	                                 * level: the slot is not memset on
-	                                 * SG_AddBotTeam, so was_dead can arrive
-	                                 * from the previous map and the first
-	                                 * spawn of a level would otherwise wear
-	                                 * a beat it never earned */
+		                                 * level; the first spawn must not wear a
+		                                 * beat it never earned */
 	float		plan_next;          /* sg_drawplan: next in-world plan draw */
 
 	/*
@@ -340,6 +395,7 @@ typedef struct sg_think_s {
 	qboolean		drop_yaw_locked;
 	float			drop_yaw;
 	qboolean		hook_brake;
+	qboolean		jump_launch;    /* this frame owns the one proved launch tap */
 	qboolean		duel, duel_hold;
 	vec3_t			duel_org;
 	float			duel_want, duel_expo;

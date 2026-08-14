@@ -17,7 +17,7 @@
 	X(atkobj, "sg_atkobj", "125") \
 	X(beliefcone, "sg_beliefcone", "0") \
 	X(beliefrange, "sg_beliefrange", "0") \
-	X(breather, "sg_breather", "4") \
+	X(breather, "sg_breather", "0") \
 	X(carrycover, "sg_carrycover", "800") \
 	X(carryhop, "sg_carryhop", "0") \
 	X(carrypress, "sg_carrypress", "0") \
@@ -28,12 +28,12 @@
 	X(defreact, "sg_defreact", "3") \
 	X(depace, "sg_depace", "0") \
 	X(drawplan, "sg_drawplan", "0") \
-	X(duelroles, "sg_duelroles", "0") \
+	X(duelroles, "sg_duelroles", "1") \
 	X(edgeride, "sg_edgeride", "0") \
 	X(escapeprior, "sg_escapeprior", "1") \
 	X(escortdose, "sg_escortdose", "35") \
 	X(exitasym, "sg_exitasym", "0") \
-	X(fandense, "sg_fandense", "0") \
+	X(fandense, "sg_fandense", "2") \
 	X(fastcarry, "sg_fastcarry", "0") \
 	X(firedisc, "sg_firedisc", "0") \
 	X(flagprior, "sg_flagprior", "0") \
@@ -57,7 +57,7 @@
 	X(nakedcarry, "sg_nakedcarry", "0") \
 	X(nobacktrack, "sg_nobacktrack", "60") \
 	X(noweave, "sg_noweave", "0") \
-	X(patrol, "sg_patrol", "0") \
+	X(patrol, "sg_patrol", "1") \
 	X(persona, "sg_persona", "1") \
 	X(press, "sg_press", "1") \
 	X(preturn, "sg_preturn", "1") \
@@ -83,7 +83,7 @@
 	X(subframes, "sg_subframes", "8") \
 	X(tactics, "sg_tactics", "1") \
 	X(tapvar, "sg_tapvar", "0") \
-	X(teamskew, "sg_teamskew", "1") \
+	X(teamskew, "sg_teamskew", "0") \
 	X(termbrake, "sg_termbrake", "1") \
 	X(tilt, "sg_tilt", "0") \
 	X(timercall, "sg_timercall", "0") \

@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
-"""escapebake.py -- bake escapee (carrier post-steal) traffic into per-map .hme sidecars.
+"""flaglivebake.py -- bake flag-live human traffic into .hml sidecars.
 
-Reads <map>.rune (link table order is the contract) and tools/human/
-<map>.escape.json (transition counts from demorune.py), writes
-maps/<map>.hme: 20-byte header then one uint8 per link -- the link's
-human-traffic tier, log-scaled to 0..255 with 0 = no human ever ran it.
-The sidecar header carries the validated v2 input rune version. Its CRC32 binds the
-sidecar to the exact ordered seed-and-link payload from which it was baked.
+Reads <map>.rune (link table order is the contract) and
+<map>.flaglive.json (transition counts recorded while either flag was out),
+then writes <map>.hml beside the rune: a 20-byte header followed by one
+log-scaled uint8 traffic tier per link. The sidecar header carries the
+validated v2 input rune version.
+Its CRC32 binds it to the exact ordered rune seed-and-link payload. The
+retained legacy corpus is not a valid v2 input: this tool is reserved for a
+future spatial migration or a producer that stamps the current rune identity.
 
-A transition a>b credits every rune link a->b (all actions: if a human
-moved seam-to-seam, the road is real regardless of gait). The game loads
-the sidecar beside the rune and prices carrier escape routes cheaper under
-sg_escapeprior.
-
-Usage: escapebake.py <rune_dir> <human_json_dir> <map> [<map> ...]
+Usage: flaglivebake.py <rune_dir> <human_json_dir> <map> [<map> ...]
 """
 import math
 import os
 import struct
 import sys
 
-from corpusgraph import (HEADER_SIZE, LINK_FMT, LINK_SIZE, SEED_SIZE,
-                         atomic_write_bytes, load_corpus, read_rune,
+from humanbake import HEADER_SIZE, LINK_FMT, LINK_SIZE, SEED_SIZE
+from corpusgraph import (atomic_write_bytes, load_corpus, read_rune,
                          require_corpus_identity, require_safe_mapname,
                          validate_transition_counts)
 
-HME_MAGIC = 0x484D4531  # "1EMH"
+HML_MAGIC = 0x484D4C31  # "1LMH"
 
 
 def bake_map(rune_dir, human_dir, mapname):
@@ -36,7 +33,7 @@ def bake_map(rune_dir, human_dir, mapname):
         if os.path.exists(candidate):
             rune_path = candidate
             break
-    json_path = os.path.join(human_dir, f'{mapname}.escape.json')
+    json_path = os.path.join(human_dir, f'{mapname}.flaglive.json')
     if not rune_path or not os.path.exists(json_path):
         raise FileNotFoundError(f'{mapname}: rune={bool(rune_path)} '
                                 f'json={os.path.exists(json_path)}')
@@ -48,6 +45,7 @@ def bake_map(rune_dir, human_dir, mapname):
     num_links = rune['num_links']
     graph_crc = rune['graph_crc32']
     seed_crc = rune['seed_crc32']
+
     link_offset = HEADER_SIZE + num_seeds * SEED_SIZE
     pairs = []
     for i in range(num_links):
@@ -59,28 +57,30 @@ def bake_map(rune_dir, human_dir, mapname):
     identity = {'map': mapname, 'rune_num_seeds': num_seeds,
                 'rune_seed_crc32': seed_crc}
     require_corpus_identity(document, json_path, identity)
-    transitions = validate_transition_counts(document, json_path, num_seeds)
+    transitions = validate_transition_counts(
+        document, json_path, num_seeds)
     counts = [transitions.get(f'{source}>{destination}', 0)
               for source, destination in pairs]
+
     top = max(counts) if counts else 0
     tiers = bytes(
         0 if count == 0 else
         max(1, min(255, int(255 * math.log1p(count) / math.log1p(top))))
         for count in counts)
 
-    output = os.path.join(os.path.dirname(rune_path), f'{mapname}.hme')
-    payload = struct.pack('<5I', HME_MAGIC, version, num_links, 0,
+    output = os.path.join(os.path.dirname(rune_path), f'{mapname}.hml')
+    payload = struct.pack('<5I', HML_MAGIC, version, num_links, 0,
                           graph_crc) + tiers
     atomic_write_bytes(output, payload)
     used = sum(1 for tier in tiers if tier)
-    print(f'{mapname}: links={num_links} human-used={used} '
+    print(f'{mapname}: links={num_links} flag-live-used={used} '
           f'({100 * used // max(num_links, 1)}%) top_count={top} -> {output}')
 
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     if len(args) < 3:
-        print('usage: escapebake.py <rune_dir> <human_json_dir> '
+        print('usage: flaglivebake.py <rune_dir> <human_json_dir> '
               '<map> [<map> ...]', file=sys.stderr)
         return 2
 
@@ -90,8 +90,8 @@ def main(argv=None):
         try:
             bake_map(rune_dir, human_dir, mapname)
         except (OSError, ValueError, KeyError, OverflowError,
-                struct.error) as error:
-            print(f'escapebake: {error}', file=sys.stderr)
+                struct.error) as e:
+            print(f'flaglivebake: {e}', file=sys.stderr)
             failed = True
     return 1 if failed else 0
 

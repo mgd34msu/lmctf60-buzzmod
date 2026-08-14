@@ -14,18 +14,28 @@ Entity-layer data is used from every demo, including ref-cam recordings:
 the owner's ruling is that game info from any camera is fair game (only
 POV kinematics are restricted to player-body recordings).
 
-Output: tools/human/<map>.escape.json =
-    {"map": <name>, "windows": N, "transitions": {"a>b": count, ...}}
+Output: tools/human/<map>.escape.json = an identity-stamped corpus containing
+the map, rune seed count/CRC, window count, and transition counts.
 
-Usage: escapee.py <demo.dm2> [<demo.dm2> ...]
+Usage: escapee.py [--rune-dir DIR] [--out DIR] [--replace]
+                  <demo.dm2> [<demo.dm2> ...]
 """
-import struct, sys, os, re, json, collections
+import argparse
+import collections
+import os
+import re
+import struct
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dm2speed as D
 import demoents as DE
 from demokin import parse_playerstate_full
-from demorune import load_seeds, SeedGrid
+from demorune import SeedGrid
+from corpusgraph import (HEADER_SIZE, MAX_CORPUS_COUNT, SEED_FMT, SEED_SIZE,
+                         atomic_write_json, load_corpus, read_rune,
+                         require_corpus_identity, stamp_corpus_identity,
+                         validate_transition_counts)
 
 RUNE_DIR = '/home/buzzkill/Games/Quake2/lmctf-hooktest/maps'
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'human')
@@ -46,24 +56,26 @@ def clean_name(s):
     return s.strip()
 
 
-def rune_path_for(mapname):
-    for cand in (f'{RUNE_DIR}/{mapname}.rune',
-                 f'{RUNE_DIR}/maps/{mapname}.rune',
-                 f'{RUNE_DIR}/runes/{mapname}.rune'):
+def rune_path_for(mapname, rune_dir):
+    for cand in (f'{rune_dir}/{mapname}.rune',
+                 f'{rune_dir}/maps/{mapname}.rune',
+                 f'{rune_dir}/runes/{mapname}.rune'):
         if os.path.exists(cand):
             return cand
     return None
 
 
-def walk_demo(path, grids, agg):
+def walk_demo(path, grids, agg, rune_dir):
     """Returns (mapname, steals_found, windows_cut)."""
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as stream:
+        data = stream.read()
     off = 0
     mapname = None
     skins = {}          # 0-based client index -> raw "name\model/skin"
     ents = {}           # entnum -> [x, y, z] live state
     frame_idx = 0
     active = []          # list of {entity, name, positions, frames_elapsed}
+    grid_errors = {}
     steals_found = 0
     windows_cut = 0
 
@@ -71,9 +83,32 @@ def walk_demo(path, grids, agg):
         if mapname is None:
             return None
         if mapname not in grids:
-            rp = rune_path_for(mapname)
-            grids[mapname] = SeedGrid(load_seeds(rp)) if rp else False
+            rp = rune_path_for(mapname, rune_dir)
+            if rp:
+                try:
+                    rune = read_rune(rp, mapname)
+                    seeds = []
+                    offset = HEADER_SIZE
+                    for _ in range(rune['num_seeds']):
+                        seed = struct.unpack_from(SEED_FMT, rune['data'],
+                                                  offset)
+                        seeds.append(seed[:3])
+                        offset += SEED_SIZE
+                    grids[mapname] = SeedGrid(seeds)
+                    grids[mapname].rune_identity = {
+                        'map': rune['map'],
+                        'rune_num_seeds': rune['num_seeds'],
+                        'rune_seed_crc32': rune['seed_crc32'],
+                    }
+                except (OSError, ValueError, struct.error) as error:
+                    grids[mapname] = False
+                    grid_errors[mapname] = str(error)
+            else:
+                grids[mapname] = False
+                grid_errors[mapname] = f'no rune under {rune_dir}'
         g = grids[mapname]
+        if not g:
+            grid_errors.setdefault(mapname, 'rune unavailable or invalid')
         return g if g else None
 
     def resolve_entity(name_clean):
@@ -90,8 +125,11 @@ def walk_demo(path, grids, agg):
         g = get_grid()
         if g is None or mapname is None:
             return
-        a = agg.setdefault(mapname, {'map': mapname, 'windows': 0,
-                                      'transitions': collections.Counter()})
+        if mapname not in agg:
+            agg[mapname] = stamp_corpus_identity(
+                {'map': mapname, 'windows': 0,
+                 'transitions': collections.Counter()}, g.rune_identity)
+        a = agg[mapname]
         a['windows'] += 1
         prev = -1
         for (fi, x, y, z) in w['positions']:
@@ -107,6 +145,8 @@ def walk_demo(path, grids, agg):
         off += 4
         if mlen == -1:
             break
+        if mlen < 0 or mlen > len(data) - off:
+            raise ValueError(f'{path}: invalid demo message length {mlen}')
         r = D.R(data[off:off+mlen])
         off += mlen
         try:
@@ -120,7 +160,9 @@ def walk_demo(path, grids, agg):
                     if 1312 <= idx < 1312 + 256:
                         skins[idx - 1312] = sstr
                     elif idx == 33:
-                        m = re.match(r'maps/(\w+)\.bsp', sstr)
+                        m = re.fullmatch(
+                            r'maps/([A-Za-z0-9_]'
+                            r'[A-Za-z0-9_-]{0,62})\.bsp', sstr)
                         if m:
                             mapname = m.group(1)
                 elif svc == 14:
@@ -203,49 +245,91 @@ def walk_demo(path, grids, agg):
     for w in active:
         close_window(w)
 
+    if mapname is not None and windows_cut and mapname in grid_errors:
+        raise ValueError(f'{mapname}: {grid_errors[mapname]}; '
+                         'no windows were written')
     return mapname, steals_found, windows_cut
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Mine post-steal carrier routes into rune-seed traffic.')
+    parser.add_argument('--rune-dir', default=RUNE_DIR,
+                        help=f'rune directory (default: {RUNE_DIR})')
+    parser.add_argument('--out', default=OUT_DIR, metavar='DIR',
+                        help=f'output directory (default: {OUT_DIR})')
+    parser.add_argument(
+        '--replace', action='store_true',
+        help='replace each output corpus instead of merging prior counts')
+    parser.add_argument('demos', nargs='+', metavar='DEMO')
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if not os.path.isdir(args.rune_dir):
+        print(f'escapee: rune directory does not exist: {args.rune_dir}',
+              file=sys.stderr)
+        return 2
+
     grids = {}
     agg = {}
     failed = []
-    for path in sys.argv[1:]:
+    for path in args.demos:
         base = os.path.basename(path)
         try:
-            mapname, steals_found, windows_cut = walk_demo(path, grids, agg)
+            mapname, steals_found, windows_cut = walk_demo(
+                path, grids, agg, args.rune_dir)
             print(f"{base}: map={mapname} steals={steals_found} windows={windows_cut}")
         except Exception as e:
             failed.append((base, str(e)))
             print(f"{base}: FAILED ({e})")
 
-    os.makedirs(OUT_DIR, exist_ok=True)
+    try:
+        os.makedirs(args.out, exist_ok=True)
+    except OSError as error:
+        print(f'escapee: cannot create output directory {args.out}: {error}',
+              file=sys.stderr)
+        return 1
     print()
     for mapname, a in sorted(agg.items()):
-        outpath = os.path.join(OUT_DIR, f'{mapname}.escape.json')
-        windows = a['windows']
-        transitions = collections.Counter(a['transitions'])
-        # merge with any prior run's output -- lets the corpus be processed
-        # in timeout-bounded chunks without losing earlier chunks' counts.
-        if os.path.exists(outpath):
-            try:
-                prev = json.load(open(outpath))
-                windows += prev.get('windows', 0)
-                for k, v in prev.get('transitions', {}).items():
-                    transitions[k] += v
-            except Exception:
-                pass
-        out = {'map': mapname, 'windows': windows,
-               'transitions': dict(transitions)}
-        json.dump(out, open(outpath, 'w'))
-        print(f"WROTE {outpath}: windows={windows} "
-              f"transitions={len(transitions)}")
+        outpath = os.path.join(args.out, f'{mapname}.escape.json')
+        try:
+            windows = a['windows']
+            transitions = collections.Counter(a['transitions'])
+            # Merge by default so timeout-bounded chunks retain prior work.
+            # --replace is the explicit opt-in to discard the prior corpus.
+            if not args.replace and os.path.exists(outpath):
+                previous = load_corpus(outpath)
+                require_corpus_identity(previous, outpath, a)
+                previous_windows = previous.get('windows')
+                if (isinstance(previous_windows, bool) or
+                        not isinstance(previous_windows, int) or
+                        previous_windows < 0):
+                    raise ValueError(f'{outpath}: windows must be a '
+                                     'non-negative integer')
+                windows += previous_windows
+                previous_transitions = validate_transition_counts(
+                    previous, outpath, a['rune_num_seeds'])
+                for key, count in previous_transitions.items():
+                    transitions[key] += count
+            if (isinstance(windows, bool) or not isinstance(windows, int) or
+                    windows < 0 or windows > MAX_CORPUS_COUNT):
+                raise ValueError(f'{outpath}: merged windows count is invalid')
+            output = stamp_corpus_identity(
+                {'map': mapname, 'windows': windows,
+                 'transitions': dict(transitions)}, a)
+            validate_transition_counts(
+                output, outpath, a['rune_num_seeds'])
+            atomic_write_json(outpath, output)
+            print(f'WROTE {outpath}: windows={windows} '
+                  f'transitions={len(transitions)}')
+        except (OSError, ValueError, KeyError, OverflowError) as error:
+            failed.append((mapname, str(error)))
+            print(f'{mapname}: FAILED TO WRITE ({error})')
 
     if failed:
-        print(f"\n{len(failed)} demos failed to parse:")
+        print(f"\n{len(failed)} demo or output operations failed:")
         for base, err in failed:
             print(f"  {base}: {err}")
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

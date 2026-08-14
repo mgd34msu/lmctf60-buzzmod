@@ -1395,6 +1395,11 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	char message[MAX_INFO_STRING];
 //	int Old_Team;
 
+	/* This path is called before classname initialization in a few lifecycle
+	 * flows, but it may never dereference a missing client. */
+	if (!ent || !ent->inuse || !ent->client)
+		return;
+
 
 	//Old_Team = ent->client->ctf.teamnum;
 	//
@@ -1402,28 +1407,6 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	//{
 	//	ForceCommand(ent, "spectator 0");
 	//	//ent->client->ctf.teamnum = whatteam;
-
-	/*
-	 * UNIFORM DOCTRINE: color is the team's, always, automatically --
-	 * model and gender are the player's. Every path that changes a
-	 * team lands here, so the repaint lands here too; without it, a
-	 * client keeps whatever color its last force painted (bots joined
-	 * before their balancer verdict spent whole matches in enemy
-	 * colors).
-	 */
-	if (whatteam == CTF_TEAM_RED || whatteam == CTF_TEAM_BLUE)
-	{
-		/* ClientOldSetSkin is the one path that FORCES color from the
-		 * team unconditionally -- ClientSetSkin's list validation waves
-		 * through any existing skin (male/grunt included, which is why
-		 * the first repaint changed nothing: neutral brown reads as red
-		 * from ten feet). */
-		ClientOldSetSkin(ent,
-		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
-	}
-	//	return;
-	//}
-
 
 	red = blue = 0;
 	player = ctf_findplayer(NULL, ent, CTF_TEAM_ANYTEAM);
@@ -1449,9 +1432,14 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	if (ent->client->p_stats_player)
 		ent->client->p_stats_player->info.teamnum = whatteam;
 
-	if (!ent || !ent->inuse || !ent->client)
-		return; //can't use validate player because this gets called
-	//before the ent's classname is set to player.
+	/*
+	 * UNIFORM DOCTRINE: color is the team's, always, automatically --
+	 * model and gender are the player's. Repaint only after installing the new
+	 * team; ClientOldSetSkin reads ctf.teamnum to choose red versus blue.
+	 */
+	if (whatteam == CTF_TEAM_RED || whatteam == CTF_TEAM_BLUE)
+		ClientOldSetSkin(ent,
+		    Info_ValueForKey(ent->client->pers.userinfo, "skin"));
 	
 	// STDLog Team Change - Surt
 	strcpy(buf,"");

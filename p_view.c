@@ -490,6 +490,34 @@ void SV_CalcBlend (edict_t *ent)
 P_FallingDamage
 =================
 */
+float P_FallDelta (float old_velocity_z, float velocity_z,
+	qboolean grounded, int waterlevel)
+{
+	float delta;
+
+	/* This is the production end-frame impulse test, kept pure so the rune
+	 * oracle can judge the same 100 ms boundary without manufacturing a player
+	 * entity or duplicating a subtly different falling model. */
+	if (old_velocity_z < 0 && velocity_z > old_velocity_z && !grounded)
+		delta = old_velocity_z;
+	else
+	{
+		if (!grounded)
+			return 0.0f;
+		delta = velocity_z - old_velocity_z;
+	}
+	delta = delta * delta * 0.0001;
+
+	/* Water attenuation precedes every sound/damage threshold in production. */
+	if (waterlevel == 3)
+		return 0.0f;
+	if (waterlevel == 2)
+		delta *= 0.25;
+	if (waterlevel == 1)
+		delta *= 0.5;
+	return delta;
+}
+
 void P_FallingDamage (edict_t *ent)
 {
 	float	delta;
@@ -502,25 +530,8 @@ void P_FallingDamage (edict_t *ent)
 	if (ent->movetype == MOVETYPE_NOCLIP)
 		return;
 
-	if ((ent->client->oldvelocity[2] < 0) && (ent->velocity[2] > ent->client->oldvelocity[2]) && (!ent->groundentity))
-	{
-		delta = ent->client->oldvelocity[2];
-	}
-	else
-	{
-		if (!ent->groundentity)
-			return;
-		delta = ent->velocity[2] - ent->client->oldvelocity[2];
-	}
-	delta = delta*delta * 0.0001;
-
-	// never take falling damage if completely underwater
-	if (ent->waterlevel == 3)
-		return;
-	if (ent->waterlevel == 2)
-		delta *= 0.25;
-	if (ent->waterlevel == 1)
-		delta *= 0.5;
+	delta = P_FallDelta(ent->client->oldvelocity[2], ent->velocity[2],
+	                   ent->groundentity != NULL, ent->waterlevel);
 
 	if (delta < 1)
 		return;

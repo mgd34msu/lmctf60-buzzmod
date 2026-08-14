@@ -11,7 +11,7 @@
  *
  * Proving: for every pair of seeds within reach of each other, the oracle
  * rolls the real physics: stand a phantom on the source, aim it at the
- * target, feed it honest usercmds (run first; run-and-jump if plain running
+ * target, feed it honest usercmds (run first; one direct jump if plain running
  * failed), and watch. Arrival within tolerance writes a link with the real
  * elapsed time as its cost and the arrival speed as its exit state. No
  * arrival, no link -- there is no third outcome and no guessing.
@@ -25,50 +25,108 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_rune.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_util.h"
+#include <errno.h>
 
 #define SEED_SPACING	64.0f
-#define SEED_MAX		32768
-#define LINK_MAX		262144
+#define SEED_MAX		RUNE_MAX_SEEDS
+#define LINK_MAX		RUNE_MAX_LINKS
 #define LINK_REACH		192.0f		/* run/jump pairs within this reach */
 #define HOOK_REACH		448.0f		/* hook pairs may span further */
 #define ARRIVE_RADIUS	40.0f
 #define STEP_MSEC		25			/* honest client-rate steps, 4 per frame */
 #define TRY_LIMIT_MS	3000		/* a link longer than this is not local */
+#define DROP_APPROACH_LIMIT_MS 2500	/* reach the serialized lip on foot */
+#define DROP_TRAVEL_LIMIT_MS   2000	/* then complete the fall/landing */
+#define DROP_HANDOFF_RADIUS    8.0f	/* runtime's lip-to-walkoff handoff */
 
 /* prover autopsy: where drop attempts actually die */
 static int dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact;
 
 static rune_seed_t	*gen_seeds;
 static int			gen_num_seeds;
+static qboolean		gen_seed_overflow;
 static rune_link_t	*gen_links;
 static int			gen_num_links;
+static qboolean		gen_link_overflow;
+static qboolean		gen_water_overflow;
 
 /* spatial hash so the lattice dedupes at SEED_SPACING */
 #define HASH_SIZE 4096
 static int hash_head[HASH_SIZE];
 static int hash_next[SEED_MAX];
+static byte gen_source_stable[SEED_MAX];
+static byte gen_source_waterlevel[SEED_MAX];
+
+static qboolean Seed_Representable(const vec3_t origin)
+{
+	return isfinite(origin[0]) && isfinite(origin[1]) && isfinite(origin[2]) &&
+	       origin[0] >= -4096.0f && origin[0] <= 4095.875f &&
+	       origin[1] >= -4096.0f && origin[1] <= 4095.875f &&
+	       origin[2] >= -4096.0f && origin[2] <= 4095.875f;
+}
+
+qboolean SG_RunePhysicsCompatible(void)
+{
+	static cvar_t *airaccelerate;
+
+	SG_HooksInit();
+	if (!airaccelerate)
+		airaccelerate = sg_host.cvar("sv_airaccelerate", "0", 0);
+	return sv_gravity && isfinite(sv_gravity->value) &&
+	       sv_gravity->value >= -32768.0f && sv_gravity->value <= 32767.0f &&
+	       (short)sv_gravity->value == (short)RUNE_PROOF_GRAVITY &&
+	       airaccelerate && isfinite(airaccelerate->value) &&
+	       airaccelerate->value == RUNE_PROOF_AIRACCELERATE &&
+	       sv_maxvelocity && isfinite(sv_maxvelocity->value) &&
+	       sv_maxvelocity->value >= RUNE_HOOK_BOLT_SPEED &&
+	       (!want_funky_gravity || want_funky_gravity->value == 0.0f);
+}
 
 static int Seed_HashKey(vec3_t p)
 {
 	int x = (int)floorf(p[0] / SEED_SPACING);
 	int y = (int)floorf(p[1] / SEED_SPACING);
 	int z = (int)floorf(p[2] / (SEED_SPACING * 2.0f));
-	return ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) & (HASH_SIZE - 1);
+	unsigned int h = (unsigned int)x * 73856093u ^
+	                 (unsigned int)y * 19349663u ^
+	                 (unsigned int)z * 83492791u;
+
+	return (int)(h & (HASH_SIZE - 1));
 }
 
 static qboolean Seed_Nearby(vec3_t p)
 {
-	int key = Seed_HashKey(p);
-	int i;
+	int dx, dy, dz, i;
 	vec3_t d;
 
-	for (i = hash_head[key]; i >= 0; i = hash_next[i])
-	{
-		VectorSubtract(gen_seeds[i].origin, p, d);
-		if (d[2] > -48.0f && d[2] < 48.0f &&
-		    d[0] * d[0] + d[1] * d[1] < SEED_SPACING * SEED_SPACING * 0.81f)
-			return true;
-	}
+	if (!Seed_Representable(p))
+		return true; /* invalid candidates are never insertion opportunities */
+	/* The acceptance radius crosses hash-cell boundaries in all three axes.
+	 * Searching only p's own cell admitted duplicate/near-duplicate seeds on
+	 * opposite sides of a boundary, inflating the O(n^2) proof and making
+	 * localization ambiguous. Probe every neighboring logical cell; hash
+	 * collisions merely rescan a chain and cannot create a false match. */
+	for (dz = -1; dz <= 1; dz++)
+		for (dy = -1; dy <= 1; dy++)
+			for (dx = -1; dx <= 1; dx++)
+			{
+				vec3_t probe;
+				int key;
+
+				probe[0] = p[0] + dx * SEED_SPACING;
+				probe[1] = p[1] + dy * SEED_SPACING;
+				probe[2] = p[2] + dz * SEED_SPACING * 2.0f;
+				key = Seed_HashKey(probe);
+				for (i = hash_head[key]; i >= 0; i = hash_next[i])
+				{
+					VectorSubtract(gen_seeds[i].origin, p, d);
+					if (d[2] > -48.0f && d[2] < 48.0f &&
+					    d[0] * d[0] + d[1] * d[1] <
+					        SEED_SPACING * SEED_SPACING * 0.81f)
+						return true;
+				}
+			}
 	return false;
 }
 
@@ -113,15 +171,109 @@ static qboolean Seed_Ground(vec3_t candidate, vec3_t out)
 	return true;
 }
 
+/* Flags describe executable source semantics, not which seeding pass happened
+ * to discover the point. A floor seed with water over the player's waist is
+ * a swim source even when the ordinary ground flood found it first. Classify
+ * the placed player box through one zero command so generic JUMP/DROP never
+ * serializes an action whose live source gate must reject. */
+static int Seed_SourceWaterlevel(vec3_t origin, int *watertype)
+{
+	sg_phantom_t ph;
+	usercmd_t cmd;
+
+	SG_OraclePlace(&ph, origin);
+	memset(&cmd, 0, sizeof(cmd));
+	/* Zero elapsed time asks Pmove to categorize the exact fixed-point body
+	 * without first drifting it across a surface boundary. */
+	cmd.msec = 0;
+	SG_OracleRun(&ph, &cmd, 1);
+	if (watertype)
+		*watertype = ph.watertype;
+	return ph.waterlevel;
+}
+
+/* Injected rest is not a realizable live staging state on slick ground:
+ * zero-input Pmove deliberately applies no ground friction there. Keep the
+ * seed for ordinary navigation, but never prove a standstill ballistic
+ * action from it. */
+static qboolean Seed_SourceUnstable(vec3_t origin)
+{
+	vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
+	vec3_t start, end;
+	sg_phantom_t ph;
+	usercmd_t cmd;
+	short fixed[3];
+	trace_t tr;
+	int i, step;
+
+	VectorCopy(origin, start);
+	VectorCopy(origin, end);
+	start[2] += 1.0f;
+	end[2] -= 4.0f;
+	/* Use the same standing hull that accepted the source. A centre point ray
+	 * misses slick support at ledges and seams even while the player's feet are
+	 * resting on that face. */
+	tr = sg_host.trace(start, mins, maxs, end, NULL, MASK_PLAYERSOLID);
+	if (tr.fraction >= 1.0f || !tr.surface ||
+	    (tr.surface->flags & SURF_SLICK) || (tr.contents & MASK_CURRENT))
+		return true;
+
+	/* The stronger invariant is realizability, not a texture name. Roll the
+	 * exact zero-input 4x25 ms state that staging must hold. Conveyors and
+	 * current-bearing shallows accelerate a body even when their floor is not
+	 * SURF_SLICK; a source that moves under this command can never become the
+	 * injected-rest state used by JUMP/DROP/HOOK proofs. */
+	SG_OraclePlace(&ph, origin);
+	for (i = 0; i < 3; i++)
+		fixed[i] = ph.pms.origin[i];
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = STEP_MSEC;
+	for (step = 0; step < 4; step++)
+		if (!SG_OracleRunWorld(&ph, &cmd, 1))
+			return true;
+	if (!ph.groundentity || ph.waterlevel >= 2 ||
+	    (ph.watertype & (MASK_CURRENT | CONTENTS_LAVA | CONTENTS_SLIME)))
+		return true;
+	for (i = 0; i < 3; i++)
+		if (ph.pms.origin[i] != fixed[i] || ph.pms.velocity[i] != 0)
+			return true;
+	return false;
+}
+
 static void Seed_Add(vec3_t origin)
 {
-	int key;
+	int key, watertype = 0, waterlevel;
+	qboolean submerged;
 
+	/* Pmove stores origin as signed eighth units. Reject before hashing or
+	 * SG_OraclePlace casts, so an oversized/malformed map cannot invoke an
+	 * undefined float-to-short conversion and later write a self-rejected rune. */
+	if (!Seed_Representable(origin))
+		return;
 	if (gen_num_seeds >= SEED_MAX)
+	{
+		gen_seed_overflow = true;
+		return;
+	}
+	/* The entity germ pass tests mapper origin before grounding, and every
+	 * caller can converge on the same floor point. The final grounded point is
+	 * the identity that matters, so dedupe again at the only insertion gate. */
+	if (Seed_Nearby(origin))
+		return;
+	waterlevel = Seed_SourceWaterlevel(origin, &watertype);
+	submerged = waterlevel >= 2;
+	/* Lava and slime use water movement, but are not navigation volume: a
+	 * generated route cannot promise the inventory/health needed to survive
+	 * them. Do not spend either the ground or water graph budget on such a
+	 * source. */
+	if (submerged && (watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
 		return;
 	VectorCopy(origin, gen_seeds[gen_num_seeds].origin);
 	gen_seeds[gen_num_seeds].area_hint = 0;
-	gen_seeds[gen_num_seeds].flags = 0;
+	gen_seeds[gen_num_seeds].flags = submerged ? RSF_WATER : 0;
+	gen_source_stable[gen_num_seeds] =
+	    Seed_SourceUnstable(origin) ? 0 : 1;
+	gen_source_waterlevel[gen_num_seeds] = (byte)waterlevel;
 
 	key = Seed_HashKey(origin);
 	hash_next[gen_num_seeds] = hash_head[key];
@@ -183,7 +335,12 @@ static void Seed_Flood(void)
 				from[2] += 26.0f;
 				to[2] += 26.0f;
 				wtr = sg_host.trace(from, pmins, pmaxs, to, NULL, MASK_PLAYERSOLID);
-				if (wtr.fraction < 0.9f)
+				/* A fraction is not a walk.  At 64-unit lattice spacing the old
+				 * 0.9 tolerance admitted a body whose hull stopped as much as 6.4
+				 * units before the candidate; repeated flood steps then populated
+				 * sealed rail/wall pockets as large, internally connected islands.
+				 * The endpoint must be wholly reachable by this exact hull sweep. */
+				if (wtr.startsolid || wtr.allsolid || wtr.fraction < 1.0f)
 					continue;
 			}
 			Seed_Add(ground);
@@ -197,6 +354,93 @@ static void Seed_Germinate(void)
 	edict_t *e;
 	int i;
 
+	/* Declared mechanisms need STATIC approach/egress seeds.  Their exact
+	 * centres are the wrong graph nodes: a teleporter pad is inside the trigger
+	 * whose side effect ordinary Pmove deliberately refuses to prove, and a
+	 * plat centre is supported by a moving BSP.  Germinate just outside those
+	 * footprints instead.  The declared controller owns the final touch/ride.
+	 *
+	 * A teleporter destination is different.  It is immutable solid geometry,
+	 * the engine authoritatively places the body on it, and the oracle admits
+	 * that pedestal just like a flag stand.  Preserve its exact arrival germ so
+	 * the declared endpoint and the ordinary egress graph share one state. */
+	for (i = 0; i < globals.num_edicts; i++)
+	{
+		static const float dirs[4][2] = {
+			{ 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }
+		};
+		vec3_t center;
+		int d;
+
+		e = &g_edicts[i];
+		if (!e->inuse || !e->classname)
+			continue;
+		if (!strcmp(e->classname, "misc_teleporter_dest"))
+		{
+			vec3_t ground;
+
+			VectorCopy(e->s.origin, center);
+			center[2] += 10.0f; /* teleporter_touch's authoritative arrival */
+			if (Seed_Ground(center, ground))
+				Seed_Add(ground);
+			continue;
+		}
+		if (!strcmp(e->classname, "misc_teleporter"))
+		{
+			VectorCopy(e->s.origin, center);
+			for (d = 0; d < 4; d++)
+			{
+				vec3_t candidate, ground;
+
+				VectorCopy(center, candidate);
+				/* The pad model is 32 units from centre and the player hull is
+				 * another 16; linkentity's clip fringe makes 48 still overlap.
+				 * Seventy-two leaves a real static staging body. */
+				candidate[0] += dirs[d][0] * 72.0f;
+				candidate[1] += dirs[d][1] * 72.0f;
+				candidate[2] += 40.0f;
+				if (Seed_Ground(candidate, ground))
+					Seed_Add(ground);
+			}
+			continue;
+		}
+		if (strcmp(e->classname, "func_plat") != 0 || e->targetname)
+			continue;
+		{
+			float halfx = (e->maxs[0] - e->mins[0]) * 0.5f;
+			float halfy = (e->maxs[1] - e->mins[1]) * 0.5f;
+			int end;
+
+			/* Seed both the bottom queue and the top landing perimeter. */
+			for (end = 0; end < 2; end++)
+			{
+				vec3_t position;
+
+				if (end)
+					VectorCopy(e->pos1, position);
+				else
+					VectorCopy(e->pos2, position);
+				center[0] = position[0] +
+				    (e->mins[0] + e->maxs[0]) * 0.5f;
+				center[1] = position[1] +
+				    (e->mins[1] + e->maxs[1]) * 0.5f;
+				center[2] = position[2] + e->maxs[2] + 40.0f;
+				for (d = 0; d < 4; d++)
+				{
+					vec3_t candidate, ground;
+					float outside =
+					    ((d < 2) ? halfx : halfy) + 24.0f;
+
+					VectorCopy(center, candidate);
+					candidate[0] += dirs[d][0] * outside;
+					candidate[1] += dirs[d][1] * outside;
+					if (Seed_Ground(candidate, ground))
+						Seed_Add(ground);
+				}
+			}
+		}
+	}
+
 	for (i = 0; i < globals.num_edicts; i++)
 	{
 		vec3_t ground;
@@ -204,23 +448,18 @@ static void Seed_Germinate(void)
 		e = &g_edicts[i];
 		if (!e->inuse || !e->classname)
 			continue;
-		/* things players stand at: spawns, items, flags -- and teleporter
-		 * pads and destinations, which SIT where the lattice never grows
-		 * (a pit at z=-444, a perch at +276 on lmctf03): without a
-		 * germinated seed there, the declared-link pass finds nothing
-		 * within reach and the map's one-way shortcuts never enter the
-		 * graph. The generator said so in every log; nobody listened. */
+		/* Things players stand at: spawns, items, flags, and position hints.
+		 * Mechanism germs were handled above with action-specific geometry;
+		 * adding their raw entity origins here would recreate the impossible
+		 * pad/plat-centre graph islands this pass is designed to avoid. */
 		if (strncmp(e->classname, "info_player", 11) != 0 &&
 		    strncmp(e->classname, "item_", 5) != 0 &&
 		    strncmp(e->classname, "weapon_", 7) != 0 &&
 		    strncmp(e->classname, "ammo_", 5) != 0 &&
 		    strncmp(e->classname, "info_flag", 9) != 0 &&
-		    strncmp(e->classname, "info_position", 13) != 0 &&
-		    strncmp(e->classname, "misc_teleporter", 15) != 0)
+		    strncmp(e->classname, "info_position", 13) != 0)
 			continue;
 
-		if (Seed_Nearby(e->s.origin))
-			continue;
 		if (Seed_Ground(e->s.origin, ground))
 			Seed_Add(ground);
 	}
@@ -255,7 +494,7 @@ static qboolean Prove_Contact(vec3_t at, vec3_t target)
 	return tr.fraction >= 1.0f;
 }
 
-static int gen_momentum_links, gen_momentum_tries;
+static int gen_momentum_links;
 static int gen_waypoint_links;
 
 /*
@@ -278,8 +517,6 @@ static qboolean gen_prove_has_wp;
  * which is the case min_speed on the envelope was designed to record and
  * never had a writer for.
  */
-static float gen_entry_speed = 0.0f;
-
 static qboolean Prove(int from, int to, qboolean jump,
                       short *cost_ms, byte *exit_speed)
 {
@@ -288,29 +525,36 @@ static qboolean Prove(int from, int to, qboolean jump,
 	int elapsed;
 	vec3_t want, d;
 	float yaw;
+	float old_frame_z = 0.0f;
 	float edge_yaw = 0.0f;
 	int edge_hold_steps = 0;
+	qboolean jump_tapped = false;
+	qboolean jump_airborne = false;
 
 	vec3_t wp_path[128];
 	int wp_n = 0;
 
 	SG_OraclePlace(&ph, gen_seeds[from].origin);
-
-	if (gen_entry_speed > 0.0f)
-	{
-		vec3_t ev;
-
-		VectorSubtract(gen_seeds[to].origin, gen_seeds[from].origin, ev);
-		ev[2] = 0.0f;
-		VectorNormalize(ev);
-		ph.velocity[0] = ev[0] * gen_entry_speed;
-		ph.velocity[1] = ev[1] * gen_entry_speed;
-		ph.pms.velocity[0] = (short)(ph.velocity[0] * 8.0f);
-		ph.pms.velocity[1] = (short)(ph.velocity[1] * 8.0f);
-	}
+	/* Seed_Ground established this as a standing source, and the live bot's
+	 * launch gate likewise knows groundentity before command zero. Pmove will
+	 * replace the sentinel on the first step; setting it here prevents the
+	 * prover from taking an unmodelled 25 ms acceleration step before its one
+	 * jump tap merely because SG_OraclePlace has not run Pmove yet. */
+	ph.groundentity = true;
+	/* Water-source motion is generated by the dedicated swim pass. Generic
+	 * JUMP's dry standing/tap contract is not executable by a submerged body. */
+	if (jump && ((gen_seeds[from].flags & RSF_WATER) ||
+	             !gen_source_stable[from]))
+		return false;
+	if (jump && (gen_seeds[to].flags & RSF_WATER) &&
+	    (sg_host.pointcontents(gen_seeds[to].origin) &
+	     (CONTENTS_SLIME | CONTENTS_LAVA)))
+		return false;
 
 	for (elapsed = 0; elapsed < TRY_LIMIT_MS; elapsed += STEP_MSEC)
 	{
+		qboolean arrived = false;
+
 		if (wp_n < 128 && (elapsed / STEP_MSEC) % 2 == 0)
 		{
 			VectorCopy(ph.origin, wp_path[wp_n]);
@@ -318,12 +562,48 @@ static qboolean Prove(int from, int to, qboolean jump,
 		}
 		VectorSubtract(gen_seeds[to].origin, ph.origin, want);
 		d[0] = want[0]; d[1] = want[1]; d[2] = 0.0f;
+		/* P_WorldEffects runs once per server frame after the four 25 ms
+		 * commands. A geometry proof cannot promise survival through lava or
+		 * slime without encoding health/enviro state, so reject that boundary. */
+		if ((elapsed % 100) == 0)
+		{
+			if (ph.waterlevel > 0 &&
+			    (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+				return false;
+			if (d[0] * d[0] + d[1] * d[1] <
+			        ARRIVE_RADIUS * ARRIVE_RADIUS &&
+			    want[2] > -72.0f && want[2] < 72.0f &&
+			    ((jump && (gen_seeds[to].flags & RSF_WATER)) ?
+			         ph.waterlevel == 3 :
+			         (ph.groundentity || ph.waterlevel >= 2)) &&
+			    (!jump || jump_airborne))
+			{
+				if (Prove_Contact(ph.origin, gen_seeds[to].origin))
+				{
+					dg_arrived++;
+					arrived = true;
+				}
+				else
+					dg_nocontact++;
+			}
+			/* P_FallingDamage runs once per production frame. RUN has no
+			 * health contract, and a JUMP may spend damage only on its aligned
+			 * terminal landing where SG_BallisticSurvivable prices it. */
+			if (P_FallDelta(old_frame_z, ph.velocity[2], ph.groundentity,
+			                ph.waterlevel) > 30.0f && (!jump || !arrived))
+				return false;
+			old_frame_z = ph.velocity[2];
+		}
 
-		if (d[0] * d[0] + d[1] * d[1] < ARRIVE_RADIUS * ARRIVE_RADIUS &&
-		    want[2] > -72.0f && want[2] < 72.0f &&
-		    (ph.groundentity || ph.waterlevel >= 2) &&
-		    (Prove_Contact(ph.origin, gen_seeds[to].origin)
-		         ? (dg_arrived++, true) : (dg_nocontact++, false)))
+		/* Arrival is judged before the landing guard below: the one legitimate
+		 * return to ground is the jump landing at its destination. A dry JUMP
+		 * cannot succeed before its one tap actually made the body airborne;
+		 * submerged movement keeps Prove's existing swim semantics. */
+		/* Runtime owns four 25 ms commands per server frame and can retire a
+		 * link only at the next 100 ms think boundary. Judge success/failure at
+		 * those same boundaries; accepting a transient 25 ms landing would prove
+		 * a state the live controller necessarily runs past. */
+		if (arrived)
 		{
 			float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
 			                 ph.velocity[1] * ph.velocity[1]);
@@ -355,10 +635,28 @@ static qboolean Prove(int from, int to, qboolean jump,
 				if (bestdev > 48.0f)
 					gen_prove_has_wp = true;
 			}
-			*cost_ms = (short)elapsed;
+			/* Runtime detects the same closed brush and waits before resuming this
+			 * RUN. Charge a conservative open budget here so fields do not price an
+			 * asynchronous door as if it vanished on trigger contact. */
+			if (ph.door_passed && ph.door_open_ms < elapsed + 200)
+				return false;
+			if (elapsed + (ph.door_passed ? ph.door_wait_ms : 0) > 32767)
+				return false;
+			*cost_ms = (short)(elapsed +
+			    (ph.door_passed ? ph.door_wait_ms : 0));
+			/* A zero-millisecond edge is free in every field flood and fails the
+			 * on-disk contract. Arrival at command zero means no traversal was
+			 * demonstrated; do not serialize the pair as a movement edge. */
+			if (*cost_ms <= 0)
+				return false;
 			*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
 			return true;
 		}
+		if (jump && jump_airborne && ph.groundentity && (elapsed % 100) == 0)
+			return false;       /* landed somewhere else: no second hop */
+		if (jump && jump_airborne && ph.waterlevel >= 2 &&
+		    (elapsed % 100) == 0)
+			return false;       /* splashed short: runtime retires at this boundary */
 
 		yaw = atan2f(want[1], want[0]);
 
@@ -371,7 +669,7 @@ static qboolean Prove(int from, int to, qboolean jump,
 		 * and walk there; gravity does the rest, and the arrival test
 		 * still judges the landing.
 		 */
-		if (want[2] < -100.0f &&
+		if (!jump && want[2] < -100.0f &&
 		    d[0] * d[0] + d[1] * d[1] < 160.0f * 160.0f && ph.groundentity)
 		{
 			/*
@@ -442,7 +740,12 @@ static qboolean Prove(int from, int to, qboolean jump,
 		 * That asymmetry, 118 flat one-way cuts on lmctf03, is what severed
 		 * the map. Feelers: take the openest heading nearest the target
 		 * line, the same fan the live bot walks with.
+		 *
+		 * This is the RUN controller only. A JUMP is a replayable direct arc:
+		 * every 25 ms command aims at the destination itself, with no fan-selected
+		 * detour that would need additional serialized state at runtime.
 		 */
+		if (!jump)
 		{
 			static const float fan[5] = { 0, -35, 35, -75, 75 };
 			vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
@@ -477,17 +780,38 @@ static qboolean Prove(int from, int to, qboolean jump,
 		cmd.msec = STEP_MSEC;
 		cmd.angles[YAW] = ANGLE2SHORT(yaw * 180.0f / M_PI);
 		cmd.forwardmove = 400;
-		/* jump from the ground when the traversal calls for it; tapped,
-		 * not held -- PM_CheckJump refuses a held key */
-		if (jump && ph.groundentity && (elapsed / STEP_MSEC) % 2 == 0)
-			cmd.upmove = 400;
 		/* submerged: swim toward the target height -- PM_WaterMove reads
-		 * upmove directly, no jump semantics under water */
-		if (ph.waterlevel >= 2)
+		 * upmove directly, no jump semantics under water. A water-origin
+		 * jump fallback therefore remains a swim proof, as before. */
+		if (!jump && ph.waterlevel >= 2)
+		{
 			cmd.upmove = (want[2] > 24.0f) ? 300
 			           : (want[2] < -24.0f ? -300 : 0);
+		}
+		/* A dry seed is generated from a player-box ground trace, so its initial
+		 * state is eligible even though SG_OraclePlace has not yet copied a
+		 * pmove groundentity result back into the phantom. This makes the tap the
+		 * first 25 ms command, matching runtime launch from the centered source.
+		 * Later eligibility uses pmove's actual ground result. PM_CheckJump
+		 * refuses a held key; never issuing a second tap also prevents a failed
+		 * arc from proving via bunny hops. */
+		else if (jump && !jump_tapped &&
+		         (ph.groundentity ||
+		          (elapsed == 0 && !(gen_seeds[from].flags & RSF_WATER))))
+		{
+			cmd.upmove = 400;
+			jump_tapped = true;
+		}
 
-		SG_OracleRun(&ph, &cmd, 1);
+		if (!SG_OracleRunWorld(&ph, &cmd, 1))
+			return false;
+		/* Only ordinary RUN has a runtime wait/resume policy for a validated
+		 * door precondition. A jump cannot pause after its tap without changing
+		 * the proved launch state. */
+		if (jump && ph.door_passed)
+			return false;
+		if (jump && jump_tapped && !ph.groundentity)
+			jump_airborne = true;
 
 		/* fell out of the world or into somewhere unrecoverable */
 		if (ph.origin[2] < gen_seeds[from].origin[2] - 900.0f &&
@@ -500,27 +824,105 @@ static qboolean Prove(int from, int to, qboolean jump,
 /*
  * Prove a hook traversal: the way LMCTF players climb and cross.
  *
- * Anchor: the ceiling or high wall above the target -- trace up from the
- * target seed, take the surface the trace strikes. The rope must have a
- * clear line from the source's eyes to that anchor (MASK_SHOT, the bolt's
- * own clipmask, p_weapon.c fire_hook). Then the pull is rolled exactly as
- * the game applies it: SG_OracleHookStep overwrites velocity per
- * p_weapon.c's ladder each step, SG_OracleRun integrates it, release when
- * the phantom is near the target or the rope is short, and the landing has
- * to arrive like any other link. Flight time is charged at the bolt's 800
- * (GRAPPLE_FIRE_HOOK_SPEED) on top of the pull.
+ * The serialized anchor is a control tuple: exact usercmd-quantized pitch/yaw
+ * plus distance along the normalized handed muzzle ray. Generation proves the
+ * reconstructed static-world bite. Runtime repeats the view and re-proves the
+ * actual source/bite snapshot immediately before firing.
  */
 #define Q2_MASK_SHOT_GEN 0x6000003
 
-static qboolean ProveHook(int from, int to, vec3_t anchor_out,
+/* Open-sky lips have no usable overhead trace. Try a deliberately small,
+ * symmetric ray fan around the source-eye -> destination-upper-body line.
+ * This helper preserves the ordinary hook contract: exact quantized view,
+ * handed muzzle clearance, first static-world bite, idempotent reconstructed
+ * ray, clear bolt flight, and the complete production-cadence traversal. */
+static qboolean ProveHookLateralCandidate(int from, int to,
+                                          float pitch, float yaw,
+                                          vec3_t control_out,
+                                          short *cost_ms, byte *exit_speed)
+{
+	sg_phantom_t ph;
+	vec3_t source, view_angles, forward, right, muzzle, shot_end, bite, want;
+	sg_hook_proof_t proof;
+	trace_t tr;
+	int flight_ms;
+
+	source[0] = (short)(gen_seeds[from].origin[0] * 8.0f) * 0.125f;
+	source[1] = (short)(gen_seeds[from].origin[1] * 8.0f) * 0.125f;
+	source[2] = (short)(gen_seeds[from].origin[2] * 8.0f) * 0.125f;
+	view_angles[PITCH] = SHORT2ANGLE((short)ANGLE2SHORT(pitch));
+	view_angles[YAW] = SHORT2ANGLE((short)ANGLE2SHORT(yaw));
+	view_angles[ROLL] = 0.0f;
+	if (view_angles[PITCH] < -89.0f || view_angles[PITCH] > 89.0f)
+		return false;
+
+	SG_OraclePlace(&ph, gen_seeds[from].origin);
+	AngleVectors(view_angles, forward, right, NULL);
+	CTF_HookMuzzle(source, 22.0f, RIGHT_HANDED, forward, right, muzzle);
+	VectorNormalize(forward);
+	tr = sg_host.trace(source, NULL, NULL, muzzle, NULL, Q2_MASK_SHOT_GEN);
+	if (tr.fraction < 1.0f || tr.startsolid)
+		return false;
+	VectorMA(muzzle, HOOK_REACH, forward, shot_end);
+	tr = sg_host.trace(muzzle, NULL, NULL, shot_end, NULL,
+	                   Q2_MASK_SHOT_GEN);
+	if (tr.startsolid || tr.fraction >= 1.0f || tr.ent != g_edicts ||
+	    (tr.surface && (tr.surface->flags & SURF_SKY)))
+		return false;
+
+	VectorCopy(tr.endpos, bite);
+	VectorSubtract(bite, muzzle, want);
+	control_out[PITCH] = view_angles[PITCH];
+	control_out[YAW] = view_angles[YAW];
+	control_out[ROLL] = DotProduct(want, forward);
+	if (control_out[ROLL] < 1.0f ||
+	    control_out[ROLL] > RUNE_HOOK_MAX_RAY)
+		return false;
+	VectorMA(muzzle, control_out[ROLL], forward, shot_end);
+	VectorSubtract(bite, shot_end, want);
+	if (VectorLength(want) > 0.25f)
+		return false;
+	VectorCopy(shot_end, bite);
+	if (CTF_HookPullVelocity(muzzle, bite, want) < 150 ||
+	    !SG_OracleHookFlightClear(muzzle, bite))
+		return false;
+
+	flight_ms = (int)ceilf(control_out[ROLL] /
+	                          RUNE_HOOK_FRAME_DISTANCE) * 100;
+	if (!SG_OracleHookTraverse(&ph, bite, gen_seeds[to].origin,
+	        view_angles, RIGHT_HANDED, flight_ms, RUNE_HOOK_DRY_SETTLE_MS,
+	        0.0f, &proof, NULL, true))
+		return false;
+	if (flight_ms + proof.pull_ms + proof.settle_ms > 32767)
+		return false;
+	*cost_ms = (short)(flight_ms + proof.pull_ms + proof.settle_ms);
+	*exit_speed = proof.exit_speed;
+	return true;
+}
+
+static qboolean ProveHook(int from, int to, vec3_t control_out,
                           short *cost_ms, byte *exit_speed)
 {
 	sg_phantom_t ph;
-	usercmd_t cmd;
-	vec3_t up, anchor, eye, d, want;
+	usercmd_t source_cmd;
+	vec3_t source, fire_source, up, aim, bite, view_angles, forward, right,
+	       muzzle, want;
+	sg_hook_proof_t proof;
 	trace_t tr;
-	int elapsed;
-	float rope, flight_ms;
+	int flight_ms, source_step, open_overhead = 0;
+	qboolean source_water = (gen_seeds[from].flags & RSF_WATER) != 0;
+
+	/* Dry hooks launch from the exact maintainable rest state. A submerged
+	 * source has no such fixed point: zero input sinks and currents may move it.
+	 * Its offline rollout is therefore only a nominal route witness; runtime
+	 * re-proves the actual fixed-point body immediately before firing. Keep this
+	 * special case to upward water-to-dry exits, where swimming alone cannot
+	 * restore the objective route. */
+	if ((!source_water && (gen_source_waterlevel[from] != 0 ||
+	                       !gen_source_stable[from])) ||
+	    (source_water && (gen_source_waterlevel[from] < 2 ||
+	                      (gen_seeds[to].flags & RSF_WATER))))
+		return false;
 
 	/*
 	 * Anchor candidates. Straight above the target fails the commonest
@@ -531,15 +933,25 @@ static qboolean ProveHook(int from, int to, vec3_t anchor_out,
 	 * the source. First one with both a surface overhead and a clear
 	 * rope line from the source's eyes wins.
 	 */
-	VectorCopy(gen_seeds[from].origin, eye);
-	eye[2] += 22.0f;
+	source[0] = (short)(gen_seeds[from].origin[0] * 8.0f) * 0.125f;
+	source[1] = (short)(gen_seeds[from].origin[1] * 8.0f) * 0.125f;
+	source[2] = (short)(gen_seeds[from].origin[2] * 8.0f) * 0.125f;
 	{
 		static const float backs[4] = { 0.0f, 0.35f, 0.6f, 0.85f };
 		int bi;
-		qboolean got = false;
 
-		for (bi = 0; bi < 4 && !got; bi++)
+		/* A clear ceiling ray is only a candidate, not a traversal proof. The
+		 * former loop stopped at the first clear bite and returned failure if
+		 * that rope missed the destination, never trying the other three valid
+		 * approach ceilings. That turned whole balconies into one-way graph
+		 * islands. Run the complete shared traversal for every candidate and
+		 * commit the first one that actually arrives. */
+		for (bi = 0; bi < 4; bi++)
 		{
+			vec3_t shot_end, miss, to_aim;
+			trace_t muzzle_tr;
+			float shot_len;
+
 			VectorCopy(gen_seeds[to].origin, up);
 			up[0] += (gen_seeds[from].origin[0] - up[0]) * backs[bi];
 			up[1] += (gen_seeds[from].origin[1] - up[1]) * backs[bi];
@@ -547,101 +959,149 @@ static qboolean ProveHook(int from, int to, vec3_t anchor_out,
 			         gen_seeds[from].origin[2] < gen_seeds[to].origin[2])
 			            ? gen_seeds[to].origin[2] : up[2];
 			up[2] += 24.0f;
-			VectorCopy(up, anchor);
-			anchor[2] += 512.0f;
-			tr = sg_host.trace(up, NULL, NULL, anchor, NULL, MASK_PLAYERSOLID);
+			VectorCopy(up, aim);
+			aim[2] += 512.0f;
+			tr = sg_host.trace(up, NULL, NULL, aim, NULL, MASK_PLAYERSOLID);
 			if (tr.fraction >= 1.0f || tr.startsolid)
+			{
+				if (tr.fraction >= 1.0f && !tr.startsolid)
+					open_overhead++;
 				continue;
-			VectorCopy(tr.endpos, anchor);
-			anchor[2] -= 4.0f;
-
-			/*
-			 * The rope line is proved from the MUZZLE, not the eye: the
-			 * real bolt spawns at P_ProjectSource's {8, 8, viewheight-8}
-			 * offset (p_weapon.c:2021-2023), eight units below and beside
-			 * the eye line. An eye-proved line that cleared a lip by five
-			 * units put 1618 real ropes into worldspawn short of their
-			 * anchors (iteration 21's bite census). Fire direction first,
-			 * then the offset along it, then the trace the bolt will fly.
-			 */
+			}
+			if (tr.surface && (tr.surface->flags & SURF_SKY))
 			{
-				vec3_t md, mfwd, mright, muzzle;
-				float mlen;
-
-				VectorSubtract(anchor, eye, md);
-				mlen = VectorLength(md);
-				if (mlen < 1.0f)
+				open_overhead++;
+				continue;
+			}
+			VectorCopy(tr.endpos, aim);
+			aim[2] -= 4.0f;
+			if (!SG_HookAimAngles(source, 22.0f, aim, view_angles))
+				continue;
+			/* Pmove clamps the view before Weapon_Hook_Fire observes it. A
+			 * serialized control must already be in that reachable domain. */
+			if (view_angles[PITCH] < -89.0f || view_angles[PITCH] > 89.0f)
+				continue;
+			SG_OraclePlace(&ph, gen_seeds[from].origin);
+			if (source_water)
+			{
+				/* Runtime arms the view, then spends one complete zero-input aim
+				 * frame before its exact online proof and fire. Water is not a rest
+				 * state, so the nominal witness must consume that same drift first. */
+				memset(&source_cmd, 0, sizeof(source_cmd));
+				source_cmd.msec = 0;
+				if (!SG_OracleRunWorld(&ph, &source_cmd, 1))
 					continue;
-				VectorScale(md, 1.0f / mlen, mfwd);
-				/* horizontal right of the fire direction, roll zero */
-				mright[0] = mfwd[1]; mright[1] = -mfwd[0]; mright[2] = 0.0f;
-				VectorNormalize(mright);
-				VectorCopy(gen_seeds[from].origin, muzzle);
-				muzzle[2] += 22.0f - 8.0f;      /* viewheight - 8 */
-				VectorMA(muzzle, 8.0f, mfwd, muzzle);
-				VectorMA(muzzle, 8.0f, mright, muzzle);
-
-				tr = sg_host.trace(muzzle, NULL, NULL, anchor, NULL,
-				              Q2_MASK_SHOT_GEN);
-				if (tr.fraction >= 0.98f)
-					got = true;
+				for (source_step = 0; source_step < 4; source_step++)
+				{
+					memset(&source_cmd, 0, sizeof(source_cmd));
+					source_cmd.msec = 25;
+					source_cmd.angles[PITCH] = ANGLE2SHORT(view_angles[PITCH]) -
+					                                 ph.pms.delta_angles[PITCH];
+					source_cmd.angles[YAW] = ANGLE2SHORT(view_angles[YAW]) -
+					                               ph.pms.delta_angles[YAW];
+					source_cmd.angles[ROLL] = -ph.pms.delta_angles[ROLL];
+					if (!SG_OracleRunWorld(&ph, &source_cmd, 1))
+						break;
+				}
+				if (source_step != 4 || ph.waterlevel < 2 ||
+				    !(ph.watertype & CONTENTS_WATER) ||
+				    (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+					continue;
+				/* Runtime re-proves only while the post-aim body still belongs to
+				 * this source cell. Apply that same ownership gate to the nominal
+				 * witness so objective connectivity cannot depend on a current that
+				 * drifts outside the executable launch envelope in the aim frame. */
+				VectorSubtract(ph.origin, gen_seeds[from].origin, miss);
+				if (miss[0] * miss[0] + miss[1] * miss[1] > 20.0f * 20.0f ||
+				    fabsf(miss[2]) > 16.0f)
+					continue;
+				VectorCopy(ph.origin, fire_source);
 			}
+			else
+				VectorCopy(source, fire_source);
+			AngleVectors(view_angles, forward, right, NULL);
+			CTF_HookMuzzle(fire_source, 22.0f, RIGHT_HANDED,
+			               forward, right, muzzle);
+			VectorNormalize(forward); /* fire_hook's actual bolt direction */
+			muzzle_tr = sg_host.trace(fire_source, NULL, NULL, muzzle, NULL,
+			                             Q2_MASK_SHOT_GEN);
+			if (muzzle_tr.fraction < 1.0f || muzzle_tr.startsolid)
+				continue;
+			VectorSubtract(aim, muzzle, to_aim);
+			shot_len = VectorLength(to_aim) + 96.0f;
+			VectorMA(muzzle, shot_len, forward, shot_end);
+			tr = sg_host.trace(muzzle, NULL, NULL, shot_end, NULL,
+			                   Q2_MASK_SHOT_GEN);
+			VectorSubtract(tr.endpos, aim, miss);
+			if (tr.startsolid || tr.fraction >= 1.0f || tr.ent != g_edicts ||
+			    (tr.surface && (tr.surface->flags & SURF_SKY)) ||
+			    VectorLength(miss) > 48.0f)
+				continue;
+			VectorCopy(tr.endpos, bite);
+			VectorSubtract(bite, muzzle, want);
+			control_out[PITCH] = view_angles[PITCH];
+			control_out[YAW] = view_angles[YAW];
+			/* Store the signed ray parameter, then prove the point the file can
+			 * reproduce rather than an unencoded perpendicular residue. */
+			control_out[ROLL] = DotProduct(want, forward);
+			if (control_out[ROLL] < 1.0f ||
+			    control_out[ROLL] > RUNE_HOOK_MAX_RAY)
+				continue;
+			VectorMA(muzzle, control_out[ROLL], forward, aim);
+			VectorSubtract(bite, aim, want);
+			if (VectorLength(want) > 0.25f)
+				continue;
+			VectorCopy(aim, bite);
+			if (CTF_HookPullVelocity(muzzle, bite, want) < 150 ||
+			    !SG_OracleHookFlightClear(muzzle, bite))
+				continue;
+			/* Bolt movement is quantized in later 80-unit server frames. */
+			flight_ms = (int)ceilf(control_out[ROLL] /
+			                          RUNE_HOOK_FRAME_DISTANCE) * 100;
+			if (!SG_OracleHookTraverse(&ph, bite, gen_seeds[to].origin,
+			        view_angles, RIGHT_HANDED, flight_ms,
+			        source_water ? RUNE_HOOK_WATER_SETTLE_MS
+			                     : RUNE_HOOK_DRY_SETTLE_MS,
+			        0.0f, &proof, NULL, true))
+				continue;
+			if (flight_ms + proof.pull_ms + proof.settle_ms > 32767)
+				continue;
+			*cost_ms = (short)(flight_ms + proof.pull_ms + proof.settle_ms);
+			*exit_speed = proof.exit_speed;
+			return true;
 		}
-		if (!got)
+	}
+
+	/* Only the all-open-sky, upward dry case gets the lateral fan. Its aim
+	 * baseline is geometrical: source eye to 24 units over the destination
+	 * seed. Ten degrees shallower exposes a vertical lip; the two yaw
+	 * magnitudes are paired +/- so map orientation and handed side cannot
+	 * select a privileged direction. */
+	if (!source_water && open_overhead == 4 &&
+	    gen_seeds[to].origin[2] > gen_seeds[from].origin[2])
+	{
+		static const float yaw_offsets[4] = {
+			15.0f, -15.0f, 60.0f, -60.0f
+		};
+		vec3_t d;
+		float horiz, base_yaw, base_pitch;
+		int yi;
+
+		VectorSubtract(gen_seeds[to].origin, gen_seeds[from].origin, d);
+		horiz = sqrtf(d[0] * d[0] + d[1] * d[1]);
+		/* This is a lip-climb fallback, not a second general hook prover.
+		 * Keep it inside one compact lattice neighbourhood and below one
+		 * ordinary player-height rise. */
+		if (horiz > 2.0f * SEED_SPACING || d[2] < 32.0f || d[2] > 96.0f)
 			return false;
-	}
-	VectorSubtract(anchor, eye, d);
-	rope = VectorLength(d);
-	if (rope < 150.0f)
-		return false;                       /* p_weapon: short rope is a brake */
-	flight_ms = rope / 800.0f * 1000.0f;
-
-	/* roll the pull: alternate the game's velocity overwrite with pmove */
-	SG_OraclePlace(&ph, gen_seeds[from].origin);
-	for (elapsed = 0; elapsed < TRY_LIMIT_MS; elapsed += STEP_MSEC)
-	{
-		VectorSubtract(gen_seeds[to].origin, ph.origin, want);
-		if (want[0] * want[0] + want[1] * want[1] <
-		        ARRIVE_RADIUS * ARRIVE_RADIUS * 4.0f &&
-		    want[2] > -96.0f && want[2] < 96.0f)
-			break;                          /* close enough: release */
-
-		VectorSubtract(anchor, ph.origin, d);
-		if (VectorLength(d) < 130.0f)
-			break;                          /* rope short: the brake band */
-
-		SG_OracleHookStep(&ph, anchor);
-		memset(&cmd, 0, sizeof(cmd));
-		cmd.msec = STEP_MSEC;
-		SG_OracleRun(&ph, &cmd, 1);
-	}
-
-	/* released: fall/settle up to a second, then the arrival test */
-	{
-		int settle;
-
-		for (settle = 0; settle < 1000; settle += STEP_MSEC)
-		{
-			VectorSubtract(gen_seeds[to].origin, ph.origin, want);
-			if (want[0] * want[0] + want[1] * want[1] <
-			        ARRIVE_RADIUS * ARRIVE_RADIUS &&
-			    want[2] > -72.0f && want[2] < 72.0f &&
-			    (ph.groundentity || ph.waterlevel >= 2))
-			{
-				float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
-				                 ph.velocity[1] * ph.velocity[1]);
-				*cost_ms = (short)(flight_ms + elapsed + settle);
-				*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
-				VectorCopy(anchor, anchor_out);
+		base_yaw = atan2f(d[1], d[0]) * 180.0f / (float)M_PI;
+		base_pitch = -atan2f(d[2] + 2.0f, horiz) *
+		             180.0f / (float)M_PI;
+		for (yi = 0; yi < 4; yi++)
+			if (ProveHookLateralCandidate(from, to,
+			        base_pitch + 10.0f, base_yaw + yaw_offsets[yi],
+			        control_out, cost_ms, exit_speed))
 				return true;
-			}
-			memset(&cmd, 0, sizeof(cmd));
-			cmd.msec = STEP_MSEC;
-			VectorSubtract(gen_seeds[to].origin, ph.origin, want);
-			cmd.angles[YAW] = ANGLE2SHORT(atan2f(want[1], want[0]) * 180.0f / M_PI);
-			cmd.forwardmove = 400;
-			SG_OracleRun(&ph, &cmd, 1);
-		}
 	}
 	return false;
 }
@@ -671,218 +1131,351 @@ static byte Heading_Quantize(float dx, float dy)
 }
 
 /*
- * The drop prover's entry state, published for the call site that writes the
- * link. ProveDrop walks off a lip in a definite direction at a definite
- * speed; those two numbers are the honest envelope for the link it proves,
- * and they are known here and nowhere else.
+ * The drop prover publishes the walkoff heading for the runtime controller.
+ * That heading is not an entry condition: ProveDrop starts at rest on the
+ * source seed and builds all of its own approach speed. Momentum jumps still
+ * carry a real source-entry cone.
  */
-#define SG_DROP_WALKOFF_SPEED	180.0f	/* conservative floor: the roll used 220 */
-#define SG_DROP_SLACK			32		/* +/- 45 degrees */
-#define SG_HOOK_SLACK			24		/* +/- ~34 degrees toward the anchor */
-
 static byte dd_last_heading;            /* lip direction of the last proven drop */
 
+typedef struct sg_drop_trial_s
+{
+	qboolean	ran;
+	qboolean	fenced;
+	qboolean	crossed;
+	int		landed;
+	sg_phantom_t	end;
+} sg_drop_trial_t;
+
+/* The point probe only proposes a lip. The player-sized rollout below is the
+ * authority on whether that proposal is executable. */
+static qboolean Drop_FindLip(vec3_t src, vec3_t dir, float limit, vec3_t lip)
+{
+	vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
+	vec3_t probe, down, last;
+	trace_t tr;
+	float walked;
+	qboolean have_last = false;
+
+	/* Walk player-centre positions in small fixed increments. The former point
+	 * ray could nominate a lip beyond a railing/edge that a 32-unit hull never
+	 * reached, then the exact rollout stalled forever a hull radius short. */
+	/* Do not serialize a lip exactly on the loader's 2-unit lower bound.
+	 * The normalized heading and world coordinates are floats, so a nominal
+	 * two-unit probe can round to 1.99998 after subtraction and make the
+	 * generator write a rune its own loader rejects. Four units still samples
+	 * well inside one 25 ms approach step and leaves a real format margin. */
+	for (walked = 4.0f; walked <= limit; walked += 2.0f)
+	{
+		probe[0] = src[0] + dir[0] * walked;
+		probe[1] = src[1] + dir[1] * walked;
+		probe[2] = src[2] + 1.0f;
+		tr = sg_host.trace(src, mins, maxs, probe, NULL, MASK_PLAYERSOLID);
+		if (tr.startsolid || tr.allsolid || tr.fraction < 1.0f)
+			break;
+		VectorCopy(probe, down);
+		down[2] -= 80.0f;
+		tr = sg_host.trace(probe, mins, maxs, down, NULL, MASK_PLAYERSOLID);
+		if (tr.fraction >= 1.0f)
+		{
+			if (!have_last)
+				return false;
+			VectorCopy(last, lip);
+			lip[2] = src[2] + 8.0f;
+			return true;
+		}
+		VectorCopy(probe, last);
+		have_last = true;
+	}
+	return false;
+}
+
+/* One exact source-to-lip-to-destination attempt. All bookkeeping is local:
+ * ProveDrop commits only the candidate that wins, or one final failure record
+ * when none wins, so an earlier compass miss cannot leak into a later link. */
+static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
+                             qboolean require_deep_water,
+                             short *cost_ms, byte *exit_speed,
+                             sg_drop_trial_t *trial)
+{
+	sg_phantom_t ph;
+	usercmd_t cmd;
+	float walkoff_yaw = heading * (360.0f / 256.0f);
+	float old_frame_z = 0.0f;
+	int elapsed, walkoff_at = -1;
+	qboolean walkoff = false;
+	qboolean airborne = false;
+	qboolean recovery = false;
+
+	memset(trial, 0, sizeof(*trial));
+	trial->ran = true;
+	SG_OraclePlace(&ph, src);
+
+	for (elapsed = 0;
+	     elapsed < DROP_APPROACH_LIMIT_MS + DROP_TRAVEL_LIMIT_MS;
+	     elapsed += STEP_MSEC)
+	{
+		vec3_t want, lipd;
+		float want2, lipd2;
+		qboolean arrived = false;
+		qboolean recovery_start = false;
+
+		VectorSubtract(dst, ph.origin, want);
+		want2 = want[0] * want[0] + want[1] * want[1];
+		if ((elapsed % 100) == 0)
+		{
+			if (ph.waterlevel > 0 &&
+			    (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+			{
+				trial->end = ph;
+				return false;
+			}
+			arrived = walkoff && want2 < ARRIVE_RADIUS * ARRIVE_RADIUS &&
+			    want[2] > -72.0f && want[2] < 72.0f &&
+			    (require_deep_water ? ph.waterlevel == 3 :
+			                          (ph.groundentity || ph.waterlevel >= 2)) &&
+			    Prove_Contact(ph.origin, dst);
+			/* A dry drop may land between lattice seeds. Permit exactly one
+			 * production-aligned impact to hand off to a short, directly visible
+			 * ground recovery. The live controller health-gates this same first
+			 * impact; any later loss of support is rejected below. */
+			recovery_start = !arrived && !recovery && walkoff && airborne &&
+			    !require_deep_water && ph.groundentity && ph.waterlevel == 0 &&
+			    want2 < RUNE_DROP_RECOVERY_RADIUS * RUNE_DROP_RECOVERY_RADIUS &&
+			    want[2] > -RUNE_DROP_RECOVERY_Z &&
+			    want[2] < RUNE_DROP_RECOVERY_Z &&
+			    Prove_Contact(ph.origin, dst);
+			/* This is the first production-visible dry landing. It either owns
+			 * the bounded handoff above or terminates the proof; waiting for the
+			 * fixed walkoff command to coast nearer would hide an unmodelled
+			 * landing/restart inside the action. */
+			if (!arrived && !recovery && walkoff && airborne &&
+			    !require_deep_water && ph.groundentity && !recovery_start)
+			{
+				trial->end = ph;
+				return false;
+			}
+			if (P_FallDelta(old_frame_z, ph.velocity[2], ph.groundentity,
+			                ph.waterlevel) > 30.0f && !arrived && !recovery_start)
+			{
+				trial->end = ph;
+				return false;
+			}
+			old_frame_z = ph.velocity[2];
+			if (recovery_start)
+				recovery = true;
+		}
+		if (arrived)
+		{
+			float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
+			                 ph.velocity[1] * ph.velocity[1]);
+
+			*cost_ms = (short)elapsed;
+			*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
+			trial->end = ph;
+			return true;
+		}
+
+		lipd[0] = lip[0] - ph.origin[0];
+		lipd[1] = lip[1] - ph.origin[1];
+		lipd[2] = 0.0f;
+		lipd2 = lipd[0] * lipd[0] + lipd[1] * lipd[1];
+		/* Runtime chooses once per 100 ms outer frame, so a fast approach can
+		 * cross the eight-unit circle between decisions. Signed projection and
+		 * becoming airborne are the shared crossing witnesses. elapsed > 0 keeps
+		 * SG_OraclePlace's not-yet-stepped groundentity from latching at source. */
+		if (!walkoff &&
+		    (lipd2 <= DROP_HANDOFF_RADIUS * DROP_HANDOFF_RADIUS ||
+		     lipd[0] * cosf(walkoff_yaw * (float)M_PI / 180.0f) +
+		     lipd[1] * sinf(walkoff_yaw * (float)M_PI / 180.0f) <= 0.0f ||
+		     (elapsed > 0 && !ph.groundentity)))
+		{
+			walkoff = true;
+			walkoff_at = elapsed;
+			trial->crossed = true;
+		}
+		if (!walkoff && elapsed >= DROP_APPROACH_LIMIT_MS)
+		{
+			trial->fenced = true;
+			trial->end = ph;
+			return false;
+		}
+		if (walkoff && elapsed - walkoff_at >= DROP_TRAVEL_LIMIT_MS)
+			break;
+
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = STEP_MSEC;
+		if (recovery)
+			cmd.angles[YAW] = ANGLE2SHORT(
+			    atan2f(want[1], want[0]) * 180.0f / M_PI);
+		else if (walkoff)
+			cmd.angles[YAW] = ANGLE2SHORT(walkoff_yaw);
+		else
+			cmd.angles[YAW] = ANGLE2SHORT(
+			    atan2f(lipd[1], lipd[0]) * 180.0f / M_PI);
+		cmd.forwardmove = 400;
+		if (!SG_OracleRunWorld(&ph, &cmd, 1))
+		{
+			trial->end = ph;
+			return false;
+		}
+		/* DROP owns a fixed source/lip/flight controller and has no door-wait
+		 * phase. A validated trigger does not make an instant-open rollout a
+		 * proof of that action. */
+		if (ph.door_passed)
+		{
+			trial->end = ph;
+			return false;
+		}
+		/* Recovery is deliberately ground-only. A second ledge, jump, or
+		 * transient loss of support is a different action and needs its own
+		 * graph link rather than being hidden inside this DROP. */
+		if (recovery && !ph.groundentity)
+		{
+			trial->end = ph;
+			return false;
+		}
+		if (walkoff && !ph.groundentity)
+			airborne = true;
+		/* A deep-water proof is health-safe only when the first production
+		 * end-frame water contact is already fully submerged.  At level 1/2,
+		 * P_FallingDamage still applies one-half/one-quarter of the impact;
+		 * the final level-3 destination cannot retroactively make that earlier
+		 * boundary safe.  Ignore transient 25 ms crossings between end frames,
+		 * because production evaluates falling damage on the 100 ms boundary. */
+		if (require_deep_water && airborne &&
+		    ((elapsed + STEP_MSEC) % 100) == 0 &&
+		    ph.waterlevel > 0 && ph.waterlevel < 3)
+		{
+			trial->end = ph;
+			return false;
+		}
+		/* Do not judge a 25 ms contact as a separate landing. Production sends
+		 * all four commands before ClientEndServerFrame evaluates falling damage
+		 * or navigation gets another decision. A contact on substep 1--3 may
+		 * legitimately settle inside the destination envelope after the remaining
+		 * commands. The aligned boundary above is the authority: it applies the
+		 * exact P_FallDelta recovery test, liquid-depth rule, support predicate,
+		 * and contact trace to the state production actually observes. */
+
+		if (ph.origin[2] < dst[2] - 512.0f)
+		{
+			trial->end = ph;
+			return false;
+		}
+		if (ph.groundentity)
+			trial->landed++;
+	}
+	trial->end = ph;
+	return false;
+}
+
 /*
- * Prove a drop without asking a phantom to find the edge on foot -- four
- * designs of edge-walking died between the seek timer and the budget. The
- * lip is geometry: sample down-probes along the source-to-target line until
- * the floor ends. Stand the phantom a step past the lip at a conservative
- * walk-off speed, and let the real pmove integrate the fall; the landing
- * is judged by the same arrival-and-contact test as every other link. The
- * lip is stored in the link's anchor so the body knows exactly where to
- * step off.
+ * Prove the whole drop, not just the ballistic suffix. The lip is discovered
+ * geometrically, but one phantom then owns the complete state history: it is
+ * placed once at rest on the source seed, walks toward the lip until the
+ * runtime's eight-unit handoff, and holds the serialized walkoff heading until
+ * it lands. No teleport and no injected velocity may bridge those phases.
+ * The landing is judged by the same arrival-and-contact test as every other
+ * link, and the elapsed Pmove time is the link's cost.
  */
 static int dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won;
 
 static qboolean ProveDrop(int from, int to, vec3_t lip_out,
                           short *cost_ms, byte *exit_speed)
 {
-	vec3_t src, dst, dir, lip, probe, down;
-	trace_t tr;
-	sg_phantom_t ph;
-	usercmd_t cmd;
-	float horiz, walked = 0.0f;
-	int elapsed;
-	qboolean found_lip = false;
+	vec3_t src, dst, dir, lip;
+	float horiz, limit;
+	int e8, tries, candidates = 0;
+	short trial_cost = 0;
+	byte trial_exit = 0, trial_heading = 0;
+	qboolean direct;
+	sg_drop_trial_t trial, last_trial;
 
 	VectorCopy(gen_seeds[from].origin, src);
 	VectorCopy(gen_seeds[to].origin, dst);
+	if ((gen_seeds[from].flags & RSF_WATER) || !gen_source_stable[from])
+		return false;       /* water exits belong to the dedicated swim pass */
+	if ((gen_seeds[to].flags & RSF_WATER) &&
+	    (sg_host.pointcontents(dst) & (CONTENTS_SLIME | CONTENTS_LAVA)))
+		return false;       /* liquid movement is shared; survival is not */
 	dir[0] = dst[0] - src[0];
 	dir[1] = dst[1] - src[1];
 	dir[2] = 0.0f;
 	horiz = sqrtf(dir[0] * dir[0] + dir[1] * dir[1]);
-	if (horiz < 1.0f)
+	direct = (horiz < 1.0f);
+	tries = direct ? 8 : 1;
+	if (!direct)
 	{
-		/* directly below: any compass direction can hold the lip; walk
-		 * the eight and take the first that ends */
-		int e8;
+		dir[0] /= horiz;
+		dir[1] /= horiz;
+	}
+	memset(&last_trial, 0, sizeof(last_trial));
 
-		for (e8 = 0; e8 < 8 && !found_lip; e8++)
+	for (e8 = 0; e8 < tries; e8++)
+	{
+		/* A directly-below destination has no preferred edge. Every compass
+		 * direction with a geometrically visible lip earns its own complete
+		 * rollout; the first proof, not the first point trace, wins. */
+		if (direct)
 		{
 			dir[0] = cosf(e8 * (float)(M_PI / 4.0));
 			dir[1] = sinf(e8 * (float)(M_PI / 4.0));
-			for (walked = 16.0f; walked <= 192.0f; walked += 16.0f)
-			{
-				probe[0] = src[0] + dir[0] * walked;
-				probe[1] = src[1] + dir[1] * walked;
-				probe[2] = src[2] + 8.0f;
-				VectorCopy(probe, down);
-				down[2] -= 80.0f;
-				tr = sg_host.trace(probe, NULL, NULL, down, NULL, MASK_PLAYERSOLID);
-				if (tr.fraction >= 1.0f)
-				{
-					VectorCopy(probe, lip);
-					found_lip = true;
-					break;
-				}
-			}
+			limit = 192.0f;
 		}
-	}
-	else
-	{
-		dir[0] /= horiz; dir[1] /= horiz;
-		for (walked = 16.0f; walked <= horiz + 64.0f && walked <= 256.0f;
-		     walked += 16.0f)
+		else
 		{
-			probe[0] = src[0] + dir[0] * walked;
-			probe[1] = src[1] + dir[1] * walked;
-			probe[2] = src[2] + 8.0f;
-			VectorCopy(probe, down);
-			down[2] -= 80.0f;
-			tr = sg_host.trace(probe, NULL, NULL, down, NULL, MASK_PLAYERSOLID);
-			if (tr.fraction >= 1.0f)
-			{
-				VectorCopy(probe, lip);
-				found_lip = true;
-				break;
-			}
+			limit = horiz + 64.0f;
+			if (limit > 256.0f)
+				limit = 256.0f;
 		}
+		if (!Drop_FindLip(src, dir, limit, lip))
+			continue;
+
+		candidates++;
+		trial_heading = Heading_Quantize(dir[0], dir[1]);
+		if (Drop_Rollout(src, dst, lip, trial_heading,
+		                 (gen_seeds[to].flags & RSF_WATER) ? true : false,
+		                 &trial_cost, &trial_exit, &trial))
+		{
+			dd_last_heading = trial_heading;
+			dd_flew += trial.crossed ? 1 : 0;
+			dd_landed += trial.landed;
+			dd_won++;
+			*cost_ms = trial_cost;
+			*exit_speed = trial_exit;
+			VectorCopy(lip, lip_out);
+			return true;
+		}
+		last_trial = trial;
 	}
-	if (!found_lip)
+
+	if (candidates == 0)
 	{
 		dd_nolip++;
 		return false;
 	}
 
-	/*
-	 * The lip was found by geometry; the APPROACH must be walked. The
-	 * down-probe is a POINT trace -- a point slides past a railing that a
-	 * player box cannot (lmctf03 link 11580: lip behind a rail; the body
-	 * orbited it for a full match, cited in PLAN.md). Roll the phantom
-	 * from the seed straight at the lip with the real physics: if it
-	 * cannot get within 24 horizontal units, the lip is scenery seen
-	 * through a fence, not a walk-off, and recording it would lie about
-	 * what a player can do here.
-	 */
-	{
-		float d2 = 1e30f;
-		int step;
-
-		SG_OraclePlace(&ph, src);
-		for (step = 0; step < 2500; step += STEP_MSEC)
-		{
-			vec3_t w;
-
-			w[0] = lip[0] - ph.origin[0];
-			w[1] = lip[1] - ph.origin[1];
-			d2 = w[0] * w[0] + w[1] * w[1];
-			if (d2 < 24.0f * 24.0f)
-				break;
-			memset(&cmd, 0, sizeof(cmd));
-			cmd.msec = STEP_MSEC;
-			cmd.angles[YAW] = ANGLE2SHORT(atan2f(w[1], w[0]) * 180.0f / M_PI);
-			cmd.forwardmove = 400;
-			SG_OracleRun(&ph, &cmd, 1);
-		}
-		if (d2 >= 24.0f * 24.0f)
-		{
-			dd_fenced++;
-			return false;
-		}
-	}
-	dd_flew++;
-
-	/*
-	 * The lip is where a POINT stops finding floor -- but the player box is
-	 * 32 wide, and placed at that point its near half still catches the rim:
-	 * pmove grounds it on the edge and it hovers over the target forever
-	 * (sampled: every failure ended grounded at source height, want z -300,
-	 * horizontal want near zero). Place the box fully past the rim, moving.
-	 */
-	{
-		vec3_t start;
-
-		VectorCopy(lip, start);
-		start[0] += dir[0] * 24.0f;
-		start[1] += dir[1] * 24.0f;
-		start[2] += 4.0f;
-		SG_OraclePlace(&ph, start);
-	}
-	ph.pms.velocity[0] = (short)(dir[0] * 220.0f * 8.0f);
-	ph.pms.velocity[1] = (short)(dir[1] * 220.0f * 8.0f);
-
-	for (elapsed = 0; elapsed < 2000; elapsed += STEP_MSEC)
-	{
-		vec3_t want;
-
-		VectorSubtract(dst, ph.origin, want);
-		if (want[0] * want[0] + want[1] * want[1] <
-		        ARRIVE_RADIUS * ARRIVE_RADIUS &&
-		    want[2] > -72.0f && want[2] < 72.0f &&
-		    (ph.groundentity || ph.waterlevel >= 2) &&
-		    Prove_Contact(ph.origin, dst))
-		{
-			float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
-			                 ph.velocity[1] * ph.velocity[1]);
-			dd_won++;
-			*cost_ms = (short)(elapsed + (int)(walked / 200.0f * 1000.0f));
-			*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
-			VectorCopy(lip, lip_out);
-			/* the direction the phantom walked off the lip: this proof holds
-			 * for a body arriving on that heading, not for any heading */
-			dd_last_heading = Heading_Quantize(dir[0], dir[1]);
-			return true;
-		}
-
-		memset(&cmd, 0, sizeof(cmd));
-		cmd.msec = STEP_MSEC;
-		/* converged above the target but still high: aiming at a point
-		 * under your feet is a jitter, not a walk -- keep going the lip
-		 * direction until gravity has actually taken us down */
-		if (want[2] < -100.0f &&
-		    want[0] * want[0] + want[1] * want[1] < 64.0f * 64.0f &&
-		    ph.groundentity)
-			cmd.angles[YAW] = ANGLE2SHORT(atan2f(dir[1], dir[0]) * 180.0f / M_PI);
-		else
-			cmd.angles[YAW] = ANGLE2SHORT(atan2f(want[1], want[0]) * 180.0f / M_PI);
-		cmd.forwardmove = 400;
-		SG_OracleRun(&ph, &cmd, 1);
-
-		if (ph.origin[2] < dst[2] - 512.0f)
-			return false;
-		if (ph.groundentity)
-			dd_landed++;
-	}
-	/* sample the corpse: where did the first few timeouts actually end? */
-	if (dd_nolip + dd_flew < 40)
-	{
-		vec3_t fin;
-
-		VectorSubtract(dst, ph.origin, fin);
-		sg_host.dprint("geodrop FAIL %d->%d end=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) grounded=%d\n",
-		           from, to, ph.origin[0], ph.origin[1], ph.origin[2],
-		           fin[0], fin[1], fin[2], (int)ph.groundentity);
-	}
+	/* No candidate won. Preserve one pair-level failure record, just as the
+	 * old single-candidate prover did; earlier compass misses remain private. */
+	dd_fenced += last_trial.fenced ? 1 : 0;
+	dd_flew += last_trial.crossed ? 1 : 0;
+	dd_landed += last_trial.landed;
 	return false;
 }
 
-static void Link_Add(int from, int to, rune_action_t act,
-                     short cost_ms, byte exit_speed)
+static qboolean Link_Add(int from, int to, rune_action_t act,
+                         short cost_ms, byte exit_speed)
 {
 	rune_link_t *l;
 
+	if (cost_ms <= 0)
+		return false;
 	if (gen_num_links >= LINK_MAX)
-		return;
+	{
+		gen_link_overflow = true;
+		return false;
+	}
 	l = &gen_links[gen_num_links++];
 	memset(l, 0, sizeof(*l));
 	l->from = from;
@@ -892,6 +1485,7 @@ static void Link_Add(int from, int to, rune_action_t act,
 	l->cost_ms = cost_ms;
 	l->exit_speed = exit_speed;
 	l->heading_slack = 255;     /* run links: any approach heading works */
+	return true;
 }
 
 /* ===================================================================
@@ -923,11 +1517,11 @@ static void Link_Add(int from, int to, rune_action_t act,
 #define SG_WATER_SPACING	64.0f		/* the water lattice, 3D */
 #define SG_WATER_MAX		8192		/* cap: a big ocean must not eat SEED_MAX */
 #define SG_SWIM_REACH		192.0f		/* swim pairs proven within this, 3D */
-#define SG_PAD_REACH		128.0f		/* teleporter pad/dest to seed */
+#define SG_PAD_REACH		RUNE_TELEPORT_SEED_REACH
 
 static int gen_first_water = -1;        /* index of the first water seed, -1 none */
 static int gen_num_water;
-static int gen_lift_links, gen_tele_links, gen_swim_links, gen_swim_retag;
+static int gen_lift_links, gen_tele_links, gen_door_links, gen_swim_links;
 static int gen_env_drop, gen_env_hook, gen_declared_links;
 static int gen_lift_down_drop, gen_lift_down_none;
 
@@ -942,27 +1536,28 @@ static int gen_lift_down_drop, gen_lift_down_none;
 static void Link_Env_Drop(rune_link_t *l, byte heading)
 {
 	l->heading = heading;
-	l->heading_slack = SG_DROP_SLACK;
 	/*
-	 * The walk-off was rolled at 220 units/second (ProveDrop seeds the
-	 * phantom's velocity there). 180 is recorded instead -- a floor the proof
-	 * comfortably covers rather than the exact number it happened to use, so
-	 * a body arriving a little slower is not turned away from a link it can
-	 * make. Stored as speed/4, the field's unit.
+	 * The action heading is the controller's serialized walkoff direction, not
+	 * a condition on entry to the source seed. The continuous proof begins at
+	 * rest and builds its own speed while approaching the lip, so it requires
+	 * neither incoming speed nor a particular incoming heading.
 	 */
-	l->min_speed = (byte)(SG_DROP_WALKOFF_SPEED / 4.0f);
+	l->heading_slack = RUNE_DROP_CONTROL_MARKER;
+	l->min_speed = 0;
 	gen_env_drop++;
 }
 
-static void Link_Env_Hook(rune_link_t *l, vec3_t from_origin, vec3_t anchor)
+static void Link_Env_Hook(rune_link_t *l, const vec3_t control)
 {
-	l->heading = Heading_Quantize(anchor[0] - from_origin[0],
-	                              anchor[1] - from_origin[1]);
-	l->heading_slack = SG_HOOK_SLACK;
+	l->heading = Heading_Quantize(cosf(control[YAW] * (float)M_PI / 180.0f),
+	                              sinf(control[YAW] * (float)M_PI / 180.0f));
+	l->heading_slack = (gen_seeds[l->from].flags & RSF_WATER)
+	                   ? RUNE_WATER_HOOK_CONTROL_MARKER
+	                   : RUNE_HOOK_CONTROL_SLACK;
 	/*
-	 * ProveHook stands the phantom still and fires; the rope SETS velocity
-	 * (p_weapon.c), it does not add to it, so no entry speed was required and
-	 * none is claimed.
+	 * A dry proof stands still. A water proof includes nominal zero-input drift
+	 * and is re-proved from the actual live entry state before firing. The rope
+	 * SETS velocity (p_weapon.c), so neither record claims a minimum entry speed.
 	 */
 	l->min_speed = 0;
 	gen_env_hook++;
@@ -984,18 +1579,17 @@ static void Link_Declare_Tail(int mark)
 	for (i = gen_num_links - 1; i >= mark; i--)
 	{
 		if (gen_links[i].action != RL_LIFT &&
-		    gen_links[i].action != RL_TELEPORT)
+		    gen_links[i].action != RL_TELEPORT &&
+		    gen_links[i].action != RL_DOOR)
 			continue;               /* a drop proven by the lift pass stays PROVEN */
 		gen_links[i].provenance = RL_DECLARED;
+		gen_links[i].heading_slack = RUNE_DECLARED_CONTROL_MARKER;
 		gen_declared_links++;
 	}
 }
 
-/*
- * Add a seed that lives inside water. Seed_Add is left exactly as it was;
- * the flag is set on the seed it just appended, and the "did it append"
- * test covers Seed_Add's silent refusal at SEED_MAX.
- */
+/* Add a seed that lives inside water. RSF_WATER is an authoritative player-
+ * body classification made by Seed_Add, never a label this caller may force. */
 static int Seed_AddWater(vec3_t origin)
 {
 	int before = gen_num_seeds;
@@ -1003,8 +1597,19 @@ static int Seed_AddWater(vec3_t origin)
 	Seed_Add(origin);
 	if (gen_num_seeds == before)
 		return -1;
-	gen_seeds[gen_num_seeds - 1].flags |= RSF_WATER;
-	return gen_num_seeds - 1;
+	if (!(gen_seeds[before].flags & RSF_WATER))
+	{
+		int key = Seed_HashKey(origin);
+
+		/* Seed_Add inserts at the head. Roll back the whole append if the
+		 * exact body categorization disagrees with the water-volume proposal. */
+		if (hash_head[key] == before)
+			hash_head[key] = hash_next[before];
+		gen_num_seeds = before;
+		return -1;
+	}
+	gen_num_water++;
+	return before;
 }
 
 /*
@@ -1018,9 +1623,17 @@ static qboolean Seed_WaterFree(vec3_t p)
 {
 	vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
 	vec3_t start, end;
+	sg_phantom_t ph;
+	usercmd_t cmd;
 	trace_t tr;
+	int contents;
 
-	if (!(sg_host.pointcontents(p) & MASK_WATER))
+	if (!Seed_Representable(p))
+		return false;
+	contents = sg_host.pointcontents(p);
+
+	if (!(contents & CONTENTS_WATER) ||
+	    (contents & (CONTENTS_LAVA | CONTENTS_SLIME)))
 		return false;
 
 	VectorCopy(p, start);
@@ -1029,7 +1642,18 @@ static qboolean Seed_WaterFree(vec3_t p)
 	tr = sg_host.trace(start, mins, maxs, end, NULL, MASK_PLAYERSOLID);
 	if (tr.startsolid || tr.allsolid)
 		return false;
-	return true;
+
+	/* A center point being wet is not enough: just below the surface a
+	 * standing player can still be waterlevel 1 and Pmove will use dry motion.
+	 * Categorize the exact player body and admit only a real swimming state in
+	 * ordinary water. */
+	SG_OraclePlace(&ph, p);
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = 0;
+	if (!SG_OracleRunWorld(&ph, &cmd, 1))
+		return false;
+	return ph.waterlevel >= 2 && (ph.watertype & CONTENTS_WATER) &&
+	       !(ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
 }
 
 /*
@@ -1093,11 +1717,16 @@ static void Seed_Water(void)
 	 */
 	static const float drops[3] = { 0.0f, -64.0f, -128.0f };
 	int dry = gen_num_seeds;
-	int i, k, z, entries = 0;
+	int i, k, z, entries = 0, existing = 0;
+
+	for (i = 0; i < dry; i++)
+		if (gen_seeds[i].flags & RSF_WATER)
+			existing++;
+	gen_num_water = existing;
 
 	for (i = 0; i < dry; i++)
 	{
-		if (gen_num_seeds - dry >= SG_WATER_MAX)
+		if (gen_num_water >= SG_WATER_MAX)
 			break;
 		for (k = 0; k < 4; k++)
 		{
@@ -1121,24 +1750,32 @@ static void Seed_Water(void)
 		}
 	}
 
-	if (gen_num_seeds == dry)
+	if (gen_num_seeds == dry && existing == 0)
 	{
 		sg_host.dprint("rune: no water adjacent to any seed\n");
 		return;
 	}
 
-	gen_first_water = dry;
-	for (i = dry; i < gen_num_seeds; i++)
+	/* Some ordinary ground seeds may already be physically submerged. They
+	 * are water-flood frontiers too, not merely labels: otherwise a narrow or
+	 * deep pool can retain one incoming-only floor seed and no swim volume. */
+	gen_first_water = 0;
+	for (i = 0; i < gen_num_seeds && gen_num_water < SG_WATER_MAX; i++)
 	{
 		vec3_t here;
 
-		if (gen_num_seeds - dry >= SG_WATER_MAX)
-			break;
+		if (!(gen_seeds[i].flags & RSF_WATER))
+			continue;
 		VectorCopy(gen_seeds[i].origin, here);
 		Seed_WaterNeighbours(here);
 	}
+	if (gen_num_water >= SG_WATER_MAX)
+	{
+		gen_water_overflow = true;
+		sg_host.dprint("rune: water seed cap %d reached; graph will not be written\n",
+		               SG_WATER_MAX);
+	}
 
-	gen_num_water = gen_num_seeds - dry;
 	sg_host.dprint("rune: %d water seeds (%d entered from dry land)\n",
 	           gen_num_water, entries);
 }
@@ -1178,44 +1815,60 @@ static int Link_Index_Find(int from, int to)
 	return -1;
 }
 
-/*
- * One direction of one water pair. Either the pair loop already linked it --
- * in which case the only thing wrong is the label, because a body with water
- * over its head does not run, jump or fall between two points inside that
- * water, it swims -- or it was never linked, and the oracle gets one attempt
- * at it now. Only a link with BOTH ends submerged is relabelled: wading in
- * from the shore really is a run, and jumping off a ledge into a pool really
- * is a drop.
- *
- * Prove() needs no change to do this: it already reads ph.waterlevel and
- * drives upmove directly when the phantom is submerged (no jump semantics
- * under water), and its arrival test already accepts a swimming arrival
- * (ph.groundentity || ph.waterlevel >= 2). What it did not have was
- * anywhere in the water to arrive AT.
- */
+/* One controller owns every ordinary shore/water traversal.  It feeds the
+ * same exact, quantized 25 ms feedback command used by Think_Emit and judges
+ * arrival only at the 100 ms boundary where runtime can retire a commitment.
+ * This is deliberately separate from Prove(): a RUN feeler, a vertical
+ * upmove heuristic, or an action-byte relabel is not evidence for RL_SWIM. */
+static qboolean ProveSwim(int from, int to, short *cost_ms, byte *exit_speed)
+{
+	sg_phantom_t ph;
+	sg_swim_proof_t proof;
+	qboolean target_water = (gen_seeds[to].flags & RSF_WATER) != 0;
+
+	if (!((gen_seeds[from].flags | gen_seeds[to].flags) & RSF_WATER))
+		return false;
+	SG_OraclePlace(&ph, gen_seeds[from].origin);
+	/* Categorize the exact placed body without advancing it. */
+	{
+		usercmd_t cmd;
+
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = 0;
+		SG_OracleRun(&ph, &cmd, 1);
+	}
+	if ((gen_seeds[from].flags & RSF_WATER) ? ph.waterlevel < 2
+	                                      : ph.waterlevel >= 2)
+		return false;
+	if (!SG_OracleSwimTraverse(&ph, gen_seeds[to].origin, target_water,
+	                           0.0f, &proof, NULL, true))
+		return false;
+	*cost_ms = (short)proof.arrival_ms;
+	*exit_speed = proof.exit_speed;
+	return true;
+}
+
 static void Prove_Swim_Pair(int from, int to)
 {
 	short cost;
 	byte espeed;
 	int have = Link_Index_Find(from, to);
 
+	/* DROP and HOOK have their own complete proofs and controllers.  Ordinary
+	 * direct pairs are absent from the dry pass and must earn a SWIM record
+	 * here; no existing record is ever converted by changing its action byte. */
 	if (have >= 0)
-	{
-		if ((gen_seeds[from].flags & RSF_WATER) &&
-		    (gen_seeds[to].flags & RSF_WATER) &&
-		    (gen_links[have].action == RL_RUN ||
-		     gen_links[have].action == RL_JUMP ||
-		     gen_links[have].action == RL_DROP))
-		{
-			gen_links[have].action = RL_SWIM;
-			gen_swim_retag++;
-		}
 		return;
-	}
-	if (Prove(from, to, false, &cost, &espeed))
+	if (ProveSwim(from, to, &cost, &espeed))
 	{
-		Link_Add(from, to, RL_SWIM, cost, espeed);
-		gen_swim_links++;
+		if (Link_Add(from, to, RL_SWIM, cost, espeed))
+		{
+			/* Zero is the v2 exact-controller marker in this otherwise unused
+			 * field. Old RUN/JUMP records relabelled SWIM retain 255 and are
+			 * rejected by both Rune_Load and runelint. */
+			gen_links[gen_num_links - 1].heading_slack = 0;
+			gen_swim_links++;
+		}
 	}
 }
 
@@ -1236,7 +1889,7 @@ static void Prove_Swims(void)
 
 	Link_Index_Build();
 
-	for (i = gen_first_water; i < gen_num_seeds; i++)
+	for (i = 0; i < gen_num_seeds; i++)
 	{
 		if (!(gen_seeds[i].flags & RSF_WATER))
 			continue;
@@ -1263,152 +1916,7 @@ static void Prove_Swims(void)
 	sw_first = NULL;
 	sw_next = NULL;
 
-	sg_host.dprint("rune: %d swim links proven, %d submerged links relabelled swim\n",
-	           gen_swim_links, gen_swim_retag);
-}
-
-
-/* ------------------------------------------------------- door sidedness
- *
- * A door with a targetname opens only when something else fires it, and
- * the something is usually a trigger volume the mapper placed on ONE
- * side: lmctf03's bd sally-ports trigger only from the base side, and
- * the runtime learned each dead face by walking into it, thirty seconds
- * of memory at a time, forever (DEADDOOR + futility, iters 44-64). The
- * graph should never have offered those crossings. After all provers
- * run, every link whose straight line crosses a triggered door's box is
- * audited: no activator volume on the from-seed's side of the crossing,
- * no link. A door with no targetname opens on touch and is no one's
- * business here; a door whose only activator is a button dies from both
- * sides, honestly, until the body learns to press buttons.
- */
-static qboolean Seg_HitsBox(vec3_t a, vec3_t b, vec3_t mins, vec3_t maxs)
-{
-	float tmin = 0.0f, tmax = 1.0f;
-	int i;
-
-	for (i = 0; i < 3; i++)
-	{
-		float d = b[i] - a[i];
-
-		if (fabsf(d) < 0.001f)
-		{
-			if (a[i] < mins[i] || a[i] > maxs[i])
-				return false;
-		}
-		else
-		{
-			float t1 = (mins[i] - a[i]) / d;
-			float t2 = (maxs[i] - a[i]) / d;
-
-			if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
-			if (t1 > tmin) tmin = t1;
-			if (t2 < tmax) tmax = t2;
-			if (tmin > tmax)
-				return false;
-		}
-	}
-	return true;
-}
-
-static void Door_Sidedness(void)
-{
-	int di, li, kept = 0, dropped = 0, doors_checked = 0;
-
-	for (di = 1; di < globals.num_edicts; di++)
-	{
-		edict_t *door = &g_edicts[di];
-		vec3_t dmins, dmaxs;
-		edict_t *acts[16];
-		int num_acts = 0, ai;
-		int w;
-
-		if (!door->inuse || !door->classname || !door->targetname)
-			continue;
-		if (strncmp(door->classname, "func_door", 9) != 0)
-			continue;
-
-		for (ai = 1; ai < globals.num_edicts && num_acts < 16; ai++)
-		{
-			edict_t *tr = &g_edicts[ai];
-
-			if (!tr->inuse || !tr->classname || !tr->target)
-				continue;
-			if (Q_stricmp(tr->target, door->targetname) != 0)
-				continue;
-			if (strncmp(tr->classname, "trigger_", 8) != 0)
-				continue;
-			acts[num_acts++] = tr;
-		}
-		doors_checked++;
-
-		VectorCopy(door->absmin, dmins);
-		VectorCopy(door->absmax, dmaxs);
-		for (w = 0; w < 3; w++)
-		{
-			dmins[w] -= 16.0f;
-			dmaxs[w] += 16.0f;
-		}
-
-		for (li = 0; li < gen_num_links; li++)
-		{
-			rune_link_t *l = &gen_links[li];
-			vec3_t from, to;
-			qboolean armed = false;
-
-			if (l->cost_ms < 0)
-				continue;           /* already condemned */
-			VectorCopy(gen_seeds[l->from].origin, from);
-			VectorCopy(gen_seeds[l->to].origin, to);
-			from[2] += 24.0f;
-			to[2] += 24.0f;
-			if (!Seg_HitsBox(from, to, dmins, dmaxs))
-				continue;
-
-			/*
-			 * The crossing is real. Armed iff an activator volume sits
-			 * on the FROM side: the from seed inside a volume (grown
-			 * 64), or the walk from the seed to the door passing
-			 * through one -- the trigger fires before the body arrives.
-			 */
-			for (ai = 0; ai < num_acts && !armed; ai++)
-			{
-				vec3_t tmins, tmaxs;
-
-				VectorCopy(acts[ai]->absmin, tmins);
-				VectorCopy(acts[ai]->absmax, tmaxs);
-				for (w = 0; w < 3; w++)
-				{
-					tmins[w] -= 64.0f;
-					tmaxs[w] += 64.0f;
-				}
-				if (Seg_HitsBox(from, from, tmins, tmaxs) ||
-				    Seg_HitsBox(from, to, tmins, tmaxs))
-					armed = true;
-			}
-			if (armed)
-				kept++;
-			else
-			{
-				l->cost_ms = -1;    /* condemned: swept below */
-				dropped++;
-			}
-		}
-	}
-
-	/* sweep the condemned */
-	if (dropped)
-	{
-		int w2 = 0;
-
-		for (li = 0; li < gen_num_links; li++)
-			if (gen_links[li].cost_ms >= 0)
-				gen_links[w2++] = gen_links[li];
-		gen_num_links = w2;
-	}
-
-	sg_host.dprint("rune: door sidedness: %d doors, %d crossings kept, "
-	           "%d dead faces dropped\n", doors_checked, kept, dropped);
+	sg_host.dprint("rune: %d exact swim links proven\n", gen_swim_links);
 }
 
 /*
@@ -1449,6 +1957,179 @@ static int Gen_SeedNear(vec3_t p, float horiz, float vert)
 		{
 			bestd = d3;
 			best = i;
+		}
+	}
+	return best;
+}
+
+static qboolean Gen_SeedHasIncoming(int seed)
+{
+	int i;
+
+	for (i = 0; i < gen_num_links; i++)
+		if (gen_links[i].cost_ms > 0 && gen_links[i].to == seed)
+			return true;
+	return false;
+}
+
+static qboolean Gen_SeedHasOutgoing(int seed)
+{
+	int i;
+
+	for (i = 0; i < gen_num_links; i++)
+		if (gen_links[i].cost_ms > 0 && gen_links[i].from == seed)
+			return true;
+	return false;
+}
+
+/* Select a graph-connected static endpoint for a declared mechanism.  A
+ * Euclidean nearest seed is insufficient: it can be on the far side of a
+ * wall, on the mover itself, or an isolated germ.  Trace the complete player
+ * hull from the candidate to the authoritative body point and accept an early
+ * hit only when it is the expected pad/platform -- the declared controller
+ * owns that final contact.  Connectivity requirements are evaluated against
+ * the already-proven ordinary/swim graph. */
+static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
+	edict_t *expected, qboolean require_stable, qboolean require_dry,
+	qboolean require_incoming, qboolean require_outgoing, int action,
+	int *approach_ms)
+{
+	vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
+	int i, best = -1;
+	float bestd = 1e30f;
+
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		vec3_t d;
+		vec3_t start, end;
+		float h2, d3;
+		trace_t tr;
+
+		int trial_ms = 0;
+
+		if ((require_stable && !gen_source_stable[i]) ||
+		    (require_dry && gen_source_waterlevel[i] != 0) ||
+		    (require_incoming && !Gen_SeedHasIncoming(i)) ||
+		    (require_outgoing && !Gen_SeedHasOutgoing(i)))
+			continue;
+		VectorSubtract(gen_seeds[i].origin, body, d);
+		/* The declared runtime controller is intentionally planar: it walks into
+		 * a pad/plat or off the top, but it neither jumps nor swims vertically.
+		 * Restrict endpoints to one Pmove step-height band so the swept hull is not
+		 * mistaken for proof that a body 64--128 units above/below can reach it. */
+		if (fabsf(d[2]) > 16.0f)
+			continue;
+		if (fabsf(d[2]) > vert)
+			continue;
+		h2 = d[0] * d[0] + d[1] * d[1];
+		if (h2 > horiz * horiz)
+			continue;
+		VectorCopy(gen_seeds[i].origin, start);
+		VectorCopy(body, end);
+		/* Clear resting-plane epsilon without changing the XY route. */
+		start[2] += 1.0f;
+		end[2] += 1.0f;
+		tr = sg_host.trace(start, mins, maxs, end,
+		                   NULL, MASK_PLAYERSOLID);
+		if (tr.startsolid || tr.allsolid ||
+		    (tr.fraction < 1.0f && tr.ent != expected))
+			continue;
+		if (approach_ms && !SG_OracleDeclaredApproach(
+		        gen_seeds[i].origin, body, expected, action, &trial_ms))
+			continue;
+		d3 = h2 + d[2] * d[2];
+		if (d3 < bestd)
+		{
+			bestd = d3;
+			best = i;
+			if (approach_ms)
+				*approach_ms = trial_ms;
+		}
+	}
+	return best;
+}
+
+/* A water source cannot be staged at rest. Prove the nominal affordance with
+ * the same swim controller runtime will re-prove from its actual state, and
+ * choose only a graph-reachable submerged seed. */
+static int Gen_TeleportWaterSeed(vec3_t pad_body, edict_t *pad,
+	int *approach_ms)
+{
+	int i, best = -1;
+	float bestd = 1e30f;
+
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		sg_phantom_t ph;
+		sg_swim_proof_t proof;
+		vec3_t d;
+		vec3_t anchor_delta;
+		float d2;
+
+		if (!(gen_seeds[i].flags & RSF_WATER) ||
+		    !Gen_SeedHasIncoming(i))
+			continue;
+		VectorSubtract(gen_seeds[i].origin, pad_body, d);
+		d2 = DotProduct(d, d);
+		if (d2 > RUNE_TELEPORT_SEED_REACH * RUNE_TELEPORT_SEED_REACH)
+			continue;
+		/* The record identifies the raw pad origin, so remain inside the
+		 * loader's serialized-anchor envelope as well as the full-3D approach
+		 * sphere. The top-body offset can otherwise admit a source that this
+		 * generator writes successfully and its own runtime rejects. */
+		VectorSubtract(gen_seeds[i].origin, pad->s.origin, anchor_delta);
+		if (sqrtf(anchor_delta[0] * anchor_delta[0] +
+		          anchor_delta[1] * anchor_delta[1]) >
+		        RUNE_TELEPORT_SEED_REACH ||
+		    fabsf(anchor_delta[2]) > RUNE_TELEPORT_SEED_REACH)
+			continue;
+		SG_OraclePlace(&ph, gen_seeds[i].origin);
+		if (!SG_OracleTeleportSwimApproach(&ph, pad_body, pad, 0.0f,
+		                                     &proof, NULL, true))
+			continue;
+		if (d2 < bestd)
+		{
+			bestd = d2;
+			best = i;
+			*approach_ms = proof.arrival_ms;
+		}
+	}
+	return best;
+}
+
+/* Select a static top egress by replaying the same planar controller from the
+ * actual raised platform. The caller has synchronously linked `plat` at pos1;
+ * every candidate must already own an ordinary outgoing continuation. */
+static int Gen_LiftEgressSeed(vec3_t top_body, float horiz, edict_t *plat,
+	int *egress_ms)
+{
+	int i, best = -1;
+	float bestd = 1e30f;
+
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		vec3_t d;
+		float h2, d3;
+		int trial_ms;
+
+		if (!gen_source_stable[i] || gen_source_waterlevel[i] != 0 ||
+		    !Gen_SeedHasOutgoing(i))
+			continue;
+		VectorSubtract(gen_seeds[i].origin, top_body, d);
+		if (fabsf(d[2]) > 16.0f)
+			continue;
+		h2 = d[0] * d[0] + d[1] * d[1];
+		if (h2 > horiz * horiz)
+			continue;
+		if (!SG_OracleDeclaredEgress(top_body, gen_seeds[i].origin,
+		                              plat, &trial_ms))
+			continue;
+		d3 = h2 + d[2] * d[2];
+		if (d3 < bestd)
+		{
+			bestd = d3;
+			best = i;
+			*egress_ms = trial_ms;
 		}
 	}
 	return best;
@@ -1560,9 +2241,12 @@ static void Link_Plats(void)
 
 	for (i = 0; i < globals.num_edicts; i++)
 	{
-		vec3_t bottom, top;
+		vec3_t bottom, bottom_body, top_body;
+		vec3_t saved_origin, saved_old_origin, saved_velocity;
 		float halfx, halfy, horiz;
-		int sb, st_top, before;
+		int st_top, before, approach = -1;
+		int approach_ms = 0, egress_ms = 0, saved_state, saved_linkcount;
+		int total_cost;
 		short cost;
 
 		e = &g_edicts[i];
@@ -1570,40 +2254,77 @@ static void Link_Plats(void)
 			continue;
 		if (strcmp(e->classname, "func_plat") != 0)
 			continue;
+		/* A targetnamed plat starts disabled at the top. Its center trigger
+		 * cannot activate STATE_UP; an unrelated button/relay must call use.
+		 * That external prerequisite is not serialized, so no executable
+		 * declared link may claim this lift. */
+		if (e->targetname)
+			continue;
 		if (e->pos1[2] - e->pos2[2] < 8.0f)
 			continue;                       /* travels nowhere worth a link */
 
 		bottom[0] = e->pos2[0] + (e->mins[0] + e->maxs[0]) * 0.5f;
 		bottom[1] = e->pos2[1] + (e->mins[1] + e->maxs[1]) * 0.5f;
 		bottom[2] = e->pos2[2] + e->maxs[2];
-		top[0] = e->pos1[0] + (e->mins[0] + e->maxs[0]) * 0.5f;
-		top[1] = e->pos1[1] + (e->mins[1] + e->maxs[1]) * 0.5f;
-		top[2] = e->pos1[2] + e->maxs[2];
-
 		halfx = (e->maxs[0] - e->mins[0]) * 0.5f;
 		halfy = (e->maxs[1] - e->mins[1]) * 0.5f;
 		horiz = sqrtf(halfx * halfx + halfy * halfy) + SEED_SPACING;
 
-		sb = Gen_SeedNear(bottom, horiz, 48.0f);
-		st_top = Gen_SeedNear(top, horiz, 64.0f);
-		if (sb < 0 || st_top < 0 || sb == st_top)
+		if (!Seed_Ground(bottom, bottom_body))
+			continue;
+		approach = Gen_MechanismSeedNear(bottom_body, horiz, 64.0f, e,
+		    true, true, true, false, RL_LIFT, &approach_ms);
+		if (approach < 0)
 		{
-			/* worth saying out loud: a plat whose landing never seeded is a
-			 * hole the visual dump should be looked at for */
-			sg_host.dprint("rune: plat at (%.0f %.0f %.0f) unlinked, no seed at %s\n",
-			           bottom[0], bottom[1], bottom[2],
-			           sb < 0 ? "the bottom" : "the top");
+			sg_host.dprint("rune: plat at (%.0f %.0f %.0f) unlinked, "
+			               "no static-world staging seed\n",
+			               bottom[0], bottom[1], bottom[2]);
+			continue;
+		}
+
+		/* Egress is part of the declaration. Raise only this platform for the
+		 * synchronous oracle scope, then restore every authoritative field before
+		 * generation continues; no server frame runs inside this command. */
+		VectorCopy(e->s.origin, saved_origin);
+		VectorCopy(e->s.old_origin, saved_old_origin);
+		VectorCopy(e->velocity, saved_velocity);
+		saved_state = e->moveinfo.state;
+		saved_linkcount = e->linkcount;
+		VectorCopy(e->pos1, e->s.origin);
+		VectorCopy(e->pos1, e->s.old_origin);
+		VectorClear(e->velocity);
+		e->moveinfo.state = SG_PLAT_STATE_TOP;
+		sg_host.linkentity(e);
+		st_top = SG_LiftTopRest(e, NULL, top_body)
+		    ? Gen_LiftEgressSeed(top_body, horiz, e, &egress_ms) : -1;
+		VectorCopy(saved_origin, e->s.origin);
+		VectorCopy(saved_old_origin, e->s.old_origin);
+		VectorCopy(saved_velocity, e->velocity);
+		e->moveinfo.state = saved_state;
+		sg_host.linkentity(e);
+		/* Linkentity necessarily increments this generation counter. No server
+		 * frame ran during the synchronous relocation, so restore the original
+		 * value too; otherwise live riders are spuriously detached after `sv rune`. */
+		e->linkcount = saved_linkcount;
+		if (st_top < 0 || approach == st_top)
+		{
+			sg_host.dprint("rune: plat at (%.0f %.0f %.0f) unlinked, "
+			               "no proved static-world top egress\n",
+			               bottom[0], bottom[1], bottom[2]);
 			continue;
 		}
 		/* both ends can only be honest if the pair actually spans the
 		 * travel -- otherwise two seeds on the same level got picked */
-		if (gen_seeds[st_top].origin[2] - gen_seeds[sb].origin[2] <
+		if (gen_seeds[st_top].origin[2] - bottom_body[2] <
 		        (e->pos1[2] - e->pos2[2]) * 0.5f)
 			continue;
 
 		cost = Plat_TravelMs(e);
+		total_cost = (int)cost + approach_ms + egress_ms;
+		if (total_cost <= 0 || total_cost > 30000)
+			continue;
 		before = gen_num_links;
-		Link_Add(sb, st_top, RL_LIFT, cost, 0);
+		Link_Add(approach, st_top, RL_LIFT, (short)total_cost, 0);
 		if (gen_num_links > before)
 		{
 			VectorCopy(bottom, gen_links[gen_num_links - 1].anchor);
@@ -1633,18 +2354,18 @@ static void Link_Plats(void)
 		 * named out loud rather than papered over with a link no body could
 		 * follow.
 		 */
-		if (Link_Exists(st_top, sb))
+		if (Link_Exists(st_top, approach))
 			continue;               /* the pair loop already got down there */
 		{
 			vec3_t lip;
 			short dcost;
 			byte despeed;
 
-			if (ProveDrop(st_top, sb, lip, &dcost, &despeed))
+			if (ProveDrop(st_top, approach, lip, &dcost, &despeed))
 			{
 				int dbefore = gen_num_links;
 
-				Link_Add(st_top, sb, RL_DROP, dcost, despeed);
+				Link_Add(st_top, approach, RL_DROP, dcost, despeed);
 				if (gen_num_links > dbefore)
 				{
 					rune_link_t *dl = &gen_links[gen_num_links - 1];
@@ -1690,8 +2411,8 @@ static void Link_Teleporters(void)
 
 	for (i = 0; i < globals.num_edicts; i++)
 	{
-		vec3_t pad, arrive;
-		int sp, sd, before;
+		vec3_t pad, pad_body, arrive, arrive_body;
+		int sd, before, approach = -1, approach_ms = 0;
 
 		e = &g_edicts[i];
 		if (!e->inuse || !e->classname)
@@ -1709,18 +2430,45 @@ static void Link_Teleporters(void)
 		VectorCopy(dest->s.origin, arrive);
 		arrive[2] += 10.0f;                 /* g_misc.c:1895 */
 
-		sp = Gen_SeedNear(pad, SG_PAD_REACH, SG_PAD_REACH);
-		sd = Gen_SeedNear(arrive, SG_PAD_REACH, SG_PAD_REACH);
-		if (sp < 0 || sd < 0 || sp == sd)
+		if (!SG_TeleportApproachPoint(e, pad_body) ||
+		    !Seed_Ground(arrive, arrive_body))
+			continue;
+		/* The exact destination state was inserted before ordinary germs.  The
+		 * pad itself intentionally was not: it is trigger-owned, so only the
+		 * declared approach may enter it. */
+		sd = Gen_SeedNear(arrive_body, 2.0f, 2.0f);
+		if (sd < 0)
 		{
-			sg_host.dprint("rune: teleporter at (%.0f %.0f %.0f) has no seed at %s\n",
-			           pad[0], pad[1], pad[2],
-			           sp < 0 ? "the pad" : "the destination");
+			sg_host.dprint("rune: teleporter at (%.0f %.0f %.0f) has no "
+			               "destination seed\n", pad[0], pad[1], pad[2]);
+			continue;
+		}
+		/* The source must already be reachable by the ordinary/swim graph, and
+		 * the destination must itself own an outgoing continuation. Otherwise a
+		 * declared shortcut merely joins two graph islands. Underwater pads are
+		 * valid; Seed_Add already rejects damaging liquid. */
+		if (!Gen_SeedHasOutgoing(sd))
+			continue;
+		approach = Gen_MechanismSeedNear(pad_body,
+		    RUNE_TELEPORT_SEED_REACH, RUNE_TELEPORT_SEED_REACH, e,
+		    true, true, true, false, RL_TELEPORT, &approach_ms);
+		if (approach < 0)
+			approach = Gen_TeleportWaterSeed(pad_body, e, &approach_ms);
+		if (approach == sd)
+			approach = -1;
+		if (approach < 0)
+		{
+			sg_host.dprint("rune: teleporter at (%.0f %.0f %.0f) has no "
+			               "static-world staging seed\n",
+			               pad[0], pad[1], pad[2]);
 			continue;
 		}
 
 		before = gen_num_links;
-		Link_Add(sp, sd, RL_TELEPORT, 500, 0);
+		/* Walk proof plus the engine's 160 ms PMF_TIME_TELEPORT hold and one
+		 * outer-frame observation margin. */
+		Link_Add(approach, sd, RL_TELEPORT,
+		         (short)(approach_ms + 300), 0);
 		if (gen_num_links > before)
 		{
 			VectorCopy(pad, gen_links[gen_num_links - 1].anchor);
@@ -1730,6 +2478,738 @@ static void Link_Teleporters(void)
 	if (gen_tele_links)
 		sg_host.dprint("rune: %d teleport links\n", gen_tele_links);
 }
+
+typedef struct
+{
+	edict_t *ent;
+	vec3_t origin, old_origin, angles, velocity, avelocity;
+	int state, linkcount;
+	solid_t solid;
+} door_pose_t;
+
+/* Link one canonical door team at its exact STATE_TOP pose for a synchronous
+ * egress proof. Rune generation already made the team SOLID_NOT; restoring
+ * every authoritative field (including linkcount) makes `sv rune` invisible
+ * to a live server once this scope ends. */
+static int DoorTrigger_Targets(edict_t *trigger, edict_t **doors, int capacity)
+{
+	return SG_DeclaredDoorMembers(trigger, doors, capacity);
+}
+
+static int DoorTrigger_Open(edict_t *trigger, door_pose_t *saved, int capacity)
+{
+	edict_t *doors[16];
+	int i, n;
+
+	n = DoorTrigger_Targets(trigger, doors, 16);
+	if (n <= 0 || n > capacity)
+		return -1;
+	for (i = 0; i < n; i++)
+	{
+		edict_t *member = doors[i];
+
+		saved[i].ent = member;
+		VectorCopy(member->s.origin, saved[i].origin);
+		VectorCopy(member->s.old_origin, saved[i].old_origin);
+		VectorCopy(member->s.angles, saved[i].angles);
+		VectorCopy(member->velocity, saved[i].velocity);
+		VectorCopy(member->avelocity, saved[i].avelocity);
+		saved[i].state = member->moveinfo.state;
+		saved[i].solid = member->solid;
+		saved[i].linkcount = member->linkcount;
+		if (!strcmp(member->classname, "func_door_rotating"))
+		{
+			/* Rotators keep their immutable world pivot and change only angles.
+			 * moveinfo.start_origin may be zero on valid maps and is not a pivot. */
+			VectorCopy(member->moveinfo.end_angles, member->s.angles);
+		}
+		else
+		{
+			VectorCopy(member->moveinfo.end_origin, member->s.origin);
+			VectorCopy(member->moveinfo.end_origin, member->s.old_origin);
+			VectorCopy(member->moveinfo.end_angles, member->s.angles);
+		}
+		VectorClear(member->velocity);
+		VectorClear(member->avelocity);
+		member->moveinfo.state = SG_PLAT_STATE_TOP;
+		member->solid = SOLID_BSP;
+		sg_host.linkentity(member);
+	}
+	return n;
+}
+
+static void DoorPose_Restore(door_pose_t *saved, int count)
+{
+	int i;
+
+	for (i = 0; i < count; i++)
+	{
+		edict_t *member = saved[i].ent;
+
+		VectorCopy(saved[i].origin, member->s.origin);
+		VectorCopy(saved[i].old_origin, member->s.old_origin);
+		VectorCopy(saved[i].angles, member->s.angles);
+		VectorCopy(saved[i].velocity, member->velocity);
+		VectorCopy(saved[i].avelocity, member->avelocity);
+		member->moveinfo.state = saved[i].state;
+		member->solid = saved[i].solid;
+		sg_host.linkentity(member);
+		member->linkcount = saved[i].linkcount;
+	}
+}
+
+static int Door_TravelMs(edict_t *trigger)
+{
+	edict_t *doors[16];
+	int i, count;
+	int longest = 0;
+
+	if (!trigger)
+		return 0;
+	count = DoorTrigger_Targets(trigger, doors, 16);
+	if (count <= 0)
+		return 0;
+	for (i = 0; i < count; i++)
+	{
+		edict_t *member = doors[i];
+		int ms;
+
+		if (!isfinite(member->moveinfo.distance) ||
+		    !isfinite(member->moveinfo.speed) || member->moveinfo.speed <= 0.0f)
+			return 0;
+		ms = (int)ceilf(fabsf(member->moveinfo.distance) /
+		                member->moveinfo.speed * 1000.0f) + 200;
+		if (ms > longest)
+			longest = ms;
+	}
+	return longest;
+}
+
+/* Touch_Multi's cooldown starts with the opening request. Runtime can consume
+ * an already-TOP set without owning that request, so the only extra dead time
+ * is the interval after the slowest returning member reaches BOTTOM and before
+ * the trigger can fire again. Charge that gap; charging the full trigger wait
+ * would reject legitimate long-cooldown maps even though their doors remain
+ * open for the entire proved egress window. */
+static int Door_CooldownGapMs(edict_t *trigger)
+{
+	edict_t *doors[16];
+	int count, i, longest_cycle = 0, cyclic = 0;
+	int trigger_ms;
+
+	if (!trigger)
+		return -1;
+	count = DoorTrigger_Targets(trigger, doors, 16);
+	if (count <= 0)
+		return -1;
+	trigger_ms = SG_DeclaredDoorTriggerWaitMs(trigger);
+	if (trigger_ms <= 0)
+		return -1;
+	for (i = 0; i < count; i++)
+	{
+		edict_t *member = doors[i];
+		int travel, hold, cycle;
+
+		if (!isfinite(member->moveinfo.distance) ||
+		    !isfinite(member->moveinfo.speed) || member->moveinfo.speed <= 0.0f ||
+		    !isfinite(member->moveinfo.wait))
+			return -1;
+		if (member->moveinfo.wait < 0.0f)
+			continue;
+		cyclic++;
+		travel = (int)ceilf(fabsf(member->moveinfo.distance) /
+		                       member->moveinfo.speed * 1000.0f) + 200;
+		hold = (int)ceilf(member->moveinfo.wait * 1000.0f);
+		cycle = 2 * travel + hold;
+		if (cycle > longest_cycle)
+			longest_cycle = cycle;
+	}
+	if (!cyclic)
+		return 0;
+	return trigger_ms > longest_cycle ? trigger_ms - longest_cycle : 0;
+}
+
+/* Keep a bounded nearest-first candidate fan. Declared door proof is much
+ * more expensive than a point trace (it rolls up to five seconds of Pmove),
+ * and an unrestricted wait x source x destination cube made lmctf03 spend
+ * minutes re-proving the same open-pose egress for every approach source. */
+static void Door_CandidateInsert(int seed, float score, int *seeds,
+	float *scores, int capacity)
+{
+	int i, j;
+
+	for (i = 0; i < capacity; i++)
+		if (seed == seeds[i])
+			return;
+	for (i = 0; i < capacity; i++)
+		if (score < scores[i])
+		{
+			for (j = capacity - 1; j > i; j--)
+			{
+				seeds[j] = seeds[j - 1];
+				scores[j] = scores[j - 1];
+			}
+			seeds[i] = seed;
+			scores[i] = score;
+			return;
+	}
+}
+
+/* Several exact wait points for one mechanism can prove the same graph edge.
+ * The runtime needs only one controller for a (from,to,action) triple and the
+ * deployment linter deliberately rejects ambiguous duplicates.  Keep the
+ * cheapest proved declaration; replacing its cost and anchor is safe because
+ * both candidates have independently passed the complete approach, TOP-pose
+ * egress, sweep, and open-window contract. */
+static qboolean Door_LinkInsert(int from, int to, short cost_ms,
+	const vec3_t wait_point)
+{
+	int i;
+
+	/* A wait point can legitimately select its source seed as the locally
+	 * cheapest open-pose destination.  That proves a controller, but it does
+	 * not prove a traversal and the v2 loader/linter reject self-links. */
+	if (from == to)
+		return false;
+
+	for (i = 0; i < gen_num_links; i++)
+	{
+		rune_link_t *link = &gen_links[i];
+
+		if (link->from != from || link->to != to || link->action != RL_DOOR)
+			continue;
+		if (cost_ms < link->cost_ms)
+		{
+			link->cost_ms = cost_ms;
+			VectorCopy(wait_point, link->anchor);
+		}
+		return false;
+	}
+	if (!Link_Add(from, to, RL_DOOR, cost_ms, 0))
+		return false;
+	VectorCopy(wait_point, gen_links[gen_num_links - 1].anchor);
+	return true;
+}
+
+/* Link_Doors runs before objective pruning, when the ordinary, swim, lift,
+ * and teleport graph is complete but contains no declared door edges.  Keep a
+ * frozen view of that topology so a wait point does not collapse every source
+ * onto one locally cheap, same-component egress while discarding an already
+ * proved route into a flag component. */
+typedef struct
+{
+	int *component;
+	byte *objective_mask;
+} door_topology_t;
+
+static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out);
+
+static void Door_TopologyFree(door_topology_t *topology)
+{
+	if (!topology)
+		return;
+	if (topology->component)
+		sg_host.level_free(topology->component);
+	if (topology->objective_mask)
+		sg_host.level_free(topology->objective_mask);
+	topology->component = NULL;
+	topology->objective_mask = NULL;
+}
+
+static qboolean Door_TopologyBuild(door_topology_t *topology)
+{
+	int *first_out = NULL, *next_out = NULL;
+	int *first_in = NULL, *next_in = NULL;
+	int *order = NULL, *stack = NULL, *stack_edge = NULL, *queue = NULL;
+	byte *seen = NULL, *has_out = NULL;
+	int order_count = 0, component_count = 0;
+	int i, start;
+	qboolean ok = false;
+
+	if (!topology || gen_num_seeds <= 0)
+		return false;
+	memset(topology, 0, sizeof(*topology));
+	topology->component = sg_host.level_alloc(sizeof(int) *
+	    (size_t)gen_num_seeds);
+	topology->objective_mask = sg_host.level_alloc((size_t)gen_num_seeds);
+	first_out = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	first_in = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	next_out = sg_host.level_alloc(sizeof(int) *
+	    (size_t)(gen_num_links ? gen_num_links : 1));
+	next_in = sg_host.level_alloc(sizeof(int) *
+	    (size_t)(gen_num_links ? gen_num_links : 1));
+	order = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	stack = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	stack_edge = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	queue = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	seen = sg_host.level_alloc((size_t)gen_num_seeds);
+	has_out = sg_host.level_alloc((size_t)gen_num_seeds);
+	if (!topology->component || !topology->objective_mask || !first_out ||
+	    !first_in || !next_out || !next_in || !order || !stack ||
+	    !stack_edge || !queue || !seen || !has_out)
+		goto done;
+
+	memset(topology->objective_mask, 0, (size_t)gen_num_seeds);
+	memset(seen, 0, (size_t)gen_num_seeds);
+	memset(has_out, 0, (size_t)gen_num_seeds);
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		topology->component[i] = -1;
+		first_out[i] = -1;
+		first_in[i] = -1;
+	}
+	for (i = 0; i < gen_num_links; i++)
+	{
+		int from = gen_links[i].from;
+		int to = gen_links[i].to;
+
+		has_out[from] = 1;
+		next_out[i] = first_out[from];
+		first_out[from] = i;
+		next_in[i] = first_in[to];
+		first_in[to] = i;
+	}
+
+	/* Iterative Kosaraju first pass.  The format permits 32768 seeds, so avoid
+	 * a recursive DFS whose stack depth would depend on map topology. */
+	for (start = 0; start < gen_num_seeds; start++)
+	{
+		int depth;
+
+		if (seen[start])
+			continue;
+		depth = 1;
+		stack[0] = start;
+		stack_edge[0] = first_out[start];
+		seen[start] = 1;
+		while (depth > 0)
+		{
+			int edge = stack_edge[depth - 1];
+
+			while (edge >= 0 && seen[gen_links[edge].to])
+				edge = next_out[edge];
+			if (edge < 0)
+			{
+				order[order_count++] = stack[--depth];
+				continue;
+			}
+			stack_edge[depth - 1] = next_out[edge];
+			stack[depth] = gen_links[edge].to;
+			stack_edge[depth] = first_out[stack[depth]];
+			seen[stack[depth]] = 1;
+			depth++;
+		}
+	}
+
+	for (i = order_count - 1; i >= 0; i--)
+	{
+		int head = 0, tail = 0;
+
+		start = order[i];
+		if (topology->component[start] >= 0)
+			continue;
+		topology->component[start] = component_count;
+		queue[tail++] = start;
+		while (head < tail)
+		{
+			int at = queue[head++];
+			int edge;
+
+			for (edge = first_in[at]; edge >= 0; edge = next_in[edge])
+			{
+				int from = gen_links[edge].from;
+
+				if (topology->component[from] >= 0)
+					continue;
+				topology->component[from] = component_count;
+				queue[tail++] = from;
+			}
+		}
+		component_count++;
+	}
+
+	/* A bit means this pre-door seed already has a directed path to that
+	 * objective.  Per-source destination selection can then add only missing
+	 * reachability, while the final greatest-fixed-point prune remains the
+	 * authority on whether the combined declarations actually close the map. */
+	if (redflag && blueflag && redflag->inuse && blueflag->inuse)
+	{
+		int roots[2];
+		int which;
+
+		roots[0] = Graph_ObjectiveRoot(redflag->homeposition, has_out);
+		roots[1] = Graph_ObjectiveRoot(blueflag->homeposition, has_out);
+		for (which = 0; which < 2; which++)
+		{
+			int head = 0, tail = 0;
+
+			if (roots[which] < 0)
+				continue;
+			memset(seen, 0, (size_t)gen_num_seeds);
+			seen[roots[which]] = 1;
+			queue[tail++] = roots[which];
+			while (head < tail)
+			{
+				int at = queue[head++];
+				int edge;
+
+				topology->objective_mask[at] |= (byte)(1 << which);
+				for (edge = first_in[at]; edge >= 0;
+				     edge = next_in[edge])
+				{
+					int from = gen_links[edge].from;
+
+					if (seen[from])
+						continue;
+					seen[from] = 1;
+					queue[tail++] = from;
+				}
+			}
+		}
+	}
+	ok = true;
+
+done:
+	if (first_out) sg_host.level_free(first_out);
+	if (next_out) sg_host.level_free(next_out);
+	if (first_in) sg_host.level_free(first_in);
+	if (next_in) sg_host.level_free(next_in);
+	if (order) sg_host.level_free(order);
+	if (stack) sg_host.level_free(stack);
+	if (stack_edge) sg_host.level_free(stack_edge);
+	if (queue) sg_host.level_free(queue);
+	if (seen) sg_host.level_free(seen);
+	if (has_out) sg_host.level_free(has_out);
+	if (!ok)
+		Door_TopologyFree(topology);
+	return ok;
+}
+
+#define DOOR_WAIT_MAX 64
+
+static void Door_WaitInsert(edict_t *trigger, const vec3_t point,
+	vec3_t *points, int *count)
+{
+	edict_t *resolved;
+	vec3_t fixed;
+	int i, axis;
+
+	if (!trigger || !point || !points || !count || *count >= DOOR_WAIT_MAX ||
+	    !Seed_Representable((vec_t *)point))
+		return;
+	for (axis = 0; axis < 3; axis++)
+		fixed[axis] = (float)(short)(point[axis] * 8.0f) * 0.125f;
+	/* Equivalent triggers identify one mover set, but their volumes can sit on
+	 * opposite sides of the door.  A wait sampled for this trigger must touch
+	 * this exact brush; otherwise the thin-side pass can reuse a broad-side
+	 * anchor, emit the already-known direction, and never prove the reverse
+	 * crossing. */
+	if (!SG_DeclaredDoorTouchMatches(trigger, fixed))
+		return;
+	resolved = SG_DeclaredDoorForLink(fixed, fixed);
+	if (!SG_DeclaredDoorSameSet(resolved, trigger))
+		return;
+	for (i = 0; i < *count; i++)
+	{
+		vec3_t delta;
+
+		VectorSubtract(points[i], fixed, delta);
+		if (fabsf(delta[2]) <= 2.0f &&
+		    delta[0] * delta[0] + delta[1] * delta[1] <= 4.0f)
+			return;
+	}
+	VectorCopy(fixed, points[*count]);
+	(*count)++;
+}
+
+/* Flood seeds deliberately coalesce points within almost one lattice cell.
+ * A thin door trigger can be touched only from a precise body centre flush
+ * with the closed leaf, so it may contain no seed even though a real player
+ * can stand there. These points are controller anchors, not localization
+ * seeds: sample the trigger's player-overlap rectangle, ground each candidate
+ * on static geometry, and retain only exact, unambiguous, full-sweep-clear
+ * trigger contacts. The approach oracle must still connect an ordinary seed
+ * to the point before any link is emitted. */
+static int Door_WaitPoints(edict_t *trigger, vec3_t *points)
+{
+	static const float fractions[5] = {
+		0.0f, 0.25f, 0.5f, 0.75f, 1.0f
+	};
+	float xlo, xhi, ylo, yhi;
+	float zprobe[3];
+	int count = 0, i, xi, yi, zi;
+
+	if (!trigger || !points)
+		return 0;
+	for (i = 0; i < gen_num_seeds; i++)
+		if (gen_source_waterlevel[i] == 0)
+			Door_WaitInsert(trigger, gen_seeds[i].origin, points, &count);
+
+	/* SG_OracleDeclaredTriggerContains uses the linked-player +/-1 fringe.
+	 * Remain one fixed-point unit inside that open overlap interval. */
+	xlo = trigger->absmin[0] - 17.0f + 0.125f;
+	xhi = trigger->absmax[0] + 17.0f - 0.125f;
+	ylo = trigger->absmin[1] - 17.0f + 0.125f;
+	yhi = trigger->absmax[1] + 17.0f - 0.125f;
+	zprobe[0] = trigger->absmin[2] + 25.0f;
+	zprobe[1] = 0.5f * (trigger->absmin[2] + trigger->absmax[2]);
+	zprobe[2] = trigger->absmax[2] - 33.0f;
+	for (zi = 0; zi < 3 && count < DOOR_WAIT_MAX; zi++)
+		for (xi = 0; xi < 5 && count < DOOR_WAIT_MAX; xi++)
+			for (yi = 0; yi < 5 && count < DOOR_WAIT_MAX; yi++)
+			{
+				vec3_t candidate, ground;
+
+				candidate[0] = xlo + fractions[xi] * (xhi - xlo);
+				candidate[1] = ylo + fractions[yi] * (yhi - ylo);
+				candidate[2] = zprobe[zi];
+				if (Seed_Ground(candidate, ground))
+					Door_WaitInsert(trigger, ground, points, &count);
+			}
+	return count;
+}
+
+/* A door link is deliberately longer than an ordinary local graph edge. Its
+ * exact source already overlaps one validated repeatable player trigger and
+ * lies outside every pose the whole team can occupy. Runtime touches from
+ * rest, waits at that safe point, then runs this same direct controller while
+ * the real team is STATE_TOP. The destination must be dry, graph-connected,
+ * and outside the complete sweep so ordinary navigation can safely resume. */
+static void Link_Doors(void)
+{
+	door_topology_t topology = { NULL, NULL };
+	qboolean have_topology;
+	int di;
+	int wait_points = 0, approach_trials = 0, egress_trials = 0;
+
+	have_topology = Door_TopologyBuild(&topology);
+	if (!have_topology)
+		sg_host.dprint("rune: door topology snapshot unavailable; "
+		               "using nearest-only egress selection\n");
+
+	for (di = 1; di < globals.num_edicts; di++)
+	{
+		edict_t *door = &g_edicts[di];
+		door_pose_t saved[16];
+		vec3_t door_wait[DOOR_WAIT_MAX];
+		int wi, num_wait, pose_count, travel_ms, cooldown_gap_ms;
+
+		if (!SG_DeclaredDoorActivatorSafe(door))
+			continue;
+		travel_ms = Door_TravelMs(door);
+		if (travel_ms <= 0 || travel_ms > 12500)
+			continue;
+		cooldown_gap_ms = Door_CooldownGapMs(door);
+		if (cooldown_gap_ms < 0)
+			continue;
+		pose_count = DoorTrigger_Open(door, saved, 16);
+		if (pose_count <= 0)
+			continue;
+		num_wait = Door_WaitPoints(door, door_wait);
+
+		/* Wait points are geometry samples, not graph sources: ordinary proof
+		 * correctly rejects their scripted touch. Prove a continuous approach
+		 * from a connected pre-trigger seed and an open-pose egress to a connected
+		 * post-door seed. */
+		for (wi = 0; wi < num_wait; wi++)
+		{
+			#define DOOR_SOURCE_FAN 24
+			#define DOOR_DEST_FAN 48
+			int source, dest, ci;
+			int sources[DOOR_SOURCE_FAN], dests[DOOR_DEST_FAN];
+			int egress_ms[DOOR_DEST_FAN];
+			float source_scores[DOOR_SOURCE_FAN], dest_scores[DOOR_DEST_FAN];
+			float egress_scores[DOOR_DEST_FAN];
+			byte egress_proved[DOOR_DEST_FAN];
+			int best = -1, best_slot = -1;
+			float best_score = 1.0e30f;
+			vec_t *wait_point = door_wait[wi];
+
+			if (!SG_DeclaredDoorTouchMatches(door, wait_point) ||
+			    !SG_DeclaredDoorSameSet(
+			        SG_DeclaredDoorForLink(wait_point, wait_point), door))
+				continue;
+			wait_points++;
+			for (ci = 0; ci < DOOR_SOURCE_FAN; ci++)
+			{
+				sources[ci] = -1;
+				source_scores[ci] = 1.0e30f;
+			}
+			for (ci = 0; ci < DOOR_DEST_FAN; ci++)
+			{
+				dests[ci] = -1;
+				dest_scores[ci] = 1.0e30f;
+				egress_ms[ci] = 0;
+				egress_scores[ci] = 1.0e30f;
+				egress_proved[ci] = 0;
+			}
+			for (dest = 0; dest < gen_num_seeds; dest++)
+			{
+				vec3_t delta;
+				float h2, score;
+
+				if (!gen_source_stable[dest] ||
+				    gen_source_waterlevel[dest] != 0 ||
+				    !Gen_SeedHasOutgoing(dest) ||
+				    !SG_DeclaredDoorOutsideSweep(door,
+				        gen_seeds[dest].origin))
+					continue;
+				VectorSubtract(gen_seeds[dest].origin, wait_point, delta);
+				h2 = delta[0] * delta[0] + delta[1] * delta[1];
+				if (h2 > 768.0f * 768.0f || fabsf(delta[2]) > 96.0f ||
+				    !SG_DeclaredDoorCrossesSweep(door, wait_point,
+				        gen_seeds[dest].origin))
+					continue;
+				score = h2 + delta[2] * delta[2];
+				Door_CandidateInsert(dest, score, dests, dest_scores,
+				                     DOOR_DEST_FAN);
+			}
+			for (ci = 0; ci < DOOR_DEST_FAN && dests[ci] >= 0; ci++)
+			{
+				vec3_t delta;
+				float h2, score;
+				int trial_ms;
+
+				dest = dests[ci];
+				egress_trials++;
+				if (!SG_OracleDeclaredDoorEgress(wait_point,
+				        gen_seeds[dest].origin, door, NULL, &trial_ms))
+					continue;
+				VectorSubtract(gen_seeds[dest].origin, wait_point, delta);
+				h2 = delta[0] * delta[0] + delta[1] * delta[1];
+				score = (float)trial_ms + sqrtf(h2) + fabsf(delta[2]);
+				egress_ms[ci] = trial_ms;
+				egress_scores[ci] = score;
+				egress_proved[ci] = 1;
+				if (score < best_score)
+				{
+					best_score = score;
+					best = dest;
+					best_slot = ci;
+				}
+			}
+			if (best < 0)
+				continue;
+			for (source = 0; source < gen_num_seeds; source++)
+			{
+				vec3_t approach_delta;
+				float approach_h2, score;
+
+				if (!gen_source_stable[source] ||
+				    gen_source_waterlevel[source] != 0 ||
+				    !Gen_SeedHasIncoming(source) ||
+				    !SG_DeclaredDoorApproachSourceClear(door,
+				        gen_seeds[source].origin))
+					continue;
+				VectorSubtract(wait_point, gen_seeds[source].origin,
+				               approach_delta);
+				approach_h2 = approach_delta[0] * approach_delta[0] +
+				              approach_delta[1] * approach_delta[1];
+				if (approach_h2 > 320.0f * 320.0f ||
+				    fabsf(approach_delta[2]) > 48.0f)
+					continue;
+				score = approach_h2 + approach_delta[2] * approach_delta[2];
+				Door_CandidateInsert(source, score, sources, source_scores,
+				                     DOOR_SOURCE_FAN);
+			}
+			for (ci = 0; ci < DOOR_SOURCE_FAN && sources[ci] >= 0; ci++)
+			{
+				int approach_ms, touch_ms;
+				int picked[4], picked_count = 0, pi;
+
+				source = sources[ci];
+				approach_trials++;
+				if (!SG_OracleDeclaredDoorApproach(gen_seeds[source].origin,
+				        wait_point, door, &approach_ms, &touch_ms))
+					continue;
+
+				/* Preserve the locally cheapest proved controller as a movement
+				 * shortcut, then add only bounded topology-improving witnesses. */
+				picked[picked_count++] = best_slot;
+				if (have_topology)
+				{
+					int missing = 3 & ~topology.objective_mask[source];
+					int bit;
+
+					for (bit = 1; bit <= 2; bit <<= 1)
+					{
+						int choice = -1;
+						float choice_score = 1.0e30f;
+
+						if (!(missing & bit))
+							continue;
+						for (pi = 0; pi < DOOR_DEST_FAN; pi++)
+							if (egress_proved[pi] &&
+							    (topology.objective_mask[dests[pi]] & bit) &&
+							    egress_scores[pi] < choice_score)
+							{
+								choice = pi;
+								choice_score = egress_scores[pi];
+							}
+						if (choice >= 0)
+						{
+							for (pi = 0; pi < picked_count; pi++)
+								if (picked[pi] == choice)
+									break;
+							if (pi == picked_count)
+								picked[picked_count++] = choice;
+						}
+					}
+
+					/* If objective masks offer no new bit, still retain one proved
+					 * cross-component mechanism. This is what preserves a base-to-main
+					 * half whose source already reaches its own flag. */
+					for (pi = 0; pi < picked_count; pi++)
+						if (topology.component[dests[picked[pi]]] !=
+						    topology.component[source])
+							break;
+					if (pi == picked_count)
+					{
+						int choice = -1;
+						float choice_score = 1.0e30f;
+
+						for (pi = 0; pi < DOOR_DEST_FAN; pi++)
+							if (egress_proved[pi] &&
+							    topology.component[dests[pi]] !=
+							        topology.component[source] &&
+							    egress_scores[pi] < choice_score)
+							{
+								choice = pi;
+								choice_score = egress_scores[pi];
+							}
+						if (choice >= 0 && picked_count < 4)
+							picked[picked_count++] = choice;
+					}
+				}
+				/* If selected during DOWN, the trigger cooldown and the close
+				 * motion expire together on supported maps. Budget that remaining
+				 * close, the subsequent open, and one second of observation margin;
+				 * never serialize the mapper's minutes-long TOP hold as travel. */
+				for (pi = 0; pi < picked_count; pi++)
+				{
+					int slot = picked[pi];
+					int contract_cost = SG_DeclaredDoorContractCost(door,
+					    approach_ms, touch_ms, egress_ms[slot]);
+
+					if (contract_cost > 0 && Door_LinkInsert(source,
+					        dests[slot], (short)contract_cost, wait_point))
+						gen_door_links++;
+				}
+			}
+			#undef DOOR_SOURCE_FAN
+			#undef DOOR_DEST_FAN
+		}
+		DoorPose_Restore(saved, pose_count);
+	}
+	Door_TopologyFree(&topology);
+	if (gen_door_links || wait_points)
+		sg_host.dprint("rune: %d declared door links (%d wait points, "
+		               "%d approach/%d egress trials)\n",
+		               gen_door_links, wait_points, approach_trials,
+		               egress_trials);
+}
+
+#undef DOOR_WAIT_MAX
 
 /* ============================== end of the ADDITIVE BLOCK ============ */
 
@@ -1898,6 +3378,9 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
 	int ai;
 	static const float tilts[3] = { 0.0f, 15.0f, 30.0f };
 
+	if (gen_source_waterlevel[from] != 0 || !gen_source_stable[from])
+		return false;
+
 	VectorCopy(gen_seeds[from].origin, src);
 	VectorCopy(gen_seeds[to].origin, dst);
 
@@ -2062,6 +3545,15 @@ static void Prove_RocketJumps(void)
 	int i, j;
 	float ceiling = SG_OracleRocketJumpCeiling();
 
+	/* V2 has no serialized launch-state controller.  The old proof injected an
+	 * exact rest state and simultaneous rocket+jump, while live execution could
+	 * arm elsewhere in the seed cell and advance without confirming a shot.
+	 * Keep the implementation available for a future versioned contract, but
+	 * write no RL_ROCKETJUMP records until generator and executor share one. */
+	sg_host.dprint("rune: rocket jumps disabled in v%d (unserialized launch state)\n",
+	               RUNE_VERSION);
+	return;
+
 	if (gen_num_seeds <= 0)
 		return;
 
@@ -2076,8 +3568,8 @@ static void Prove_RocketJumps(void)
 
 	for (i = 0; i < gen_num_seeds && rj_tries < SG_RJ_MAX_TRIES; i++)
 	{
-		if (gen_seeds[i].flags & RSF_WATER)
-			continue;                   /* no rocket jumps out of a pool */
+		if (gen_source_waterlevel[i] != 0 || !gen_source_stable[i])
+			continue;                   /* exact dry rest is the launch state */
 
 		for (j = 0; j < gen_num_seeds && rj_tries < SG_RJ_MAX_TRIES; j++)
 		{
@@ -2174,26 +3666,32 @@ static void Prove_All(void)
 			vec3_t d;
 			short cost;
 			byte espeed;
+			qboolean water_pair;
 
 			if (i == j)
 				continue;
+			water_pair = ((gen_seeds[i].flags | gen_seeds[j].flags) &
+			              RSF_WATER) != 0;
 			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d);
 			if (d[0] * d[0] + d[1] * d[1] > HOOK_REACH * HOOK_REACH)
 				continue;
 			/* beyond running reach only the hook applies */
-			if (d[0] * d[0] + d[1] * d[1] > LINK_REACH * LINK_REACH &&
+			if (!(gen_seeds[i].flags & RSF_WATER) &&
+			    d[0] * d[0] + d[1] * d[1] > LINK_REACH * LINK_REACH &&
 			    d[2] <= 128.0f && d[2] >= -256.0f)
 			{
 				vec3_t anchor;
 
-				if (ProveHook(i, j, anchor, &cost, &espeed))
+				if (!(gen_seeds[i].flags & RSF_WATER) &&
+				    ProveHook(i, j, anchor, &cost, &espeed))
 				{
 					rune_link_t *l;
 
-					Link_Add(i, j, RL_HOOK, cost, espeed);
+					if (!Link_Add(i, j, RL_HOOK, cost, espeed))
+						continue;
 					l = &gen_links[gen_num_links - 1];
 					VectorCopy(anchor, l->anchor);
-					Link_Env_Hook(l, gen_seeds[i].origin, anchor);
+					Link_Env_Hook(l, anchor);
 				}
 				continue;
 			}
@@ -2231,21 +3729,28 @@ static void Prove_All(void)
 				{
 					rune_link_t *l;
 
+					if (!Link_Add(i, j, RL_DROP, cost, espeed))
+						continue;
 					dg_arrived++;
-					Link_Add(i, j, RL_DROP, cost, espeed);
 					l = &gen_links[gen_num_links - 1];
 					VectorCopy(lip, l->anchor);
 					Link_Env_Drop(l, dd_last_heading);
 					continue;
 				}
 			}
-			if (d[2] <= 128.0f && d[2] >= -600.0f &&
+			/* Deep traversals have exactly one walking prover: ProveDrop.
+			 * Generic Prove can fall and arrive, but it does not publish the lip
+			 * or the controller that produced that fall; labelling its result
+			 * RL_DROP creates an anchorless edge the runtime cannot execute. */
+			/* Ordinary direct motion touching a water seed belongs exclusively
+			 * to ProveSwim below. DROP and HOOK above/below remain separate only
+			 * because each has its own complete proof and runtime controller. */
+			if (!water_pair && d[2] <= 128.0f && d[2] >= -160.0f &&
 			    Prove(i, j, false, &cost, &espeed))
 			{
 				int before_wp = gen_num_links;
 
-				Link_Add(i, j, (d[2] < -160.0f) ? RL_DROP : RL_RUN,
-				         cost, espeed);
+				Link_Add(i, j, RL_RUN, cost, espeed);
 				if (gen_num_links != before_wp && gen_prove_has_wp &&
 				    gen_links[gen_num_links - 1].action == RL_RUN)
 				{
@@ -2254,67 +3759,56 @@ static void Prove_All(void)
 					gen_waypoint_links++;
 				}
 			}
-			else if (d[2] <= 128.0f && d[2] >= -600.0f &&
+			else if (!water_pair && d[2] <= 128.0f && d[2] >= -160.0f &&
 			         Prove(i, j, true, &cost, &espeed))
-				Link_Add(i, j, (d[2] < -160.0f) ? RL_DROP : RL_JUMP,
-				         cost, espeed);
+				Link_Add(i, j, RL_JUMP, cost, espeed);
 			else
 			{
 				vec3_t anchor;
 
-				if (ProveHook(i, j, anchor, &cost, &espeed))
+				/* A short ledge may be too low for the deep-drop partition but
+				 * still defeat both ordinary controllers: RUN brakes at the edge
+				 * and JUMP lands back on the upper shelf. Only after both exact
+				 * proofs fail, give the serialized lip controller the downward
+				 * pair. ProveDrop remains the authority on whether a real walkoff,
+				 * landing, and bounded ground recovery reaches the destination. */
+				if (!water_pair && d[2] < 0.0f && d[2] >= -160.0f)
+				{
+					vec3_t lip;
+
+					dg_pairs++;
+					if (ProveDrop(i, j, lip, &cost, &espeed))
+					{
+						rune_link_t *l;
+
+						if (!Link_Add(i, j, RL_DROP, cost, espeed))
+							continue;
+						dg_arrived++;
+						l = &gen_links[gen_num_links - 1];
+						VectorCopy(lip, l->anchor);
+						Link_Env_Drop(l, dd_last_heading);
+						continue;
+					}
+				}
+
+				if ((!(gen_seeds[i].flags & RSF_WATER) ||
+				     (!(gen_seeds[j].flags & RSF_WATER) && d[2] > 128.0f)) &&
+				    ProveHook(i, j, anchor, &cost, &espeed))
 				{
 					rune_link_t *l;
 
-					Link_Add(i, j, RL_HOOK, cost, espeed);
+					if (!Link_Add(i, j, RL_HOOK, cost, espeed))
+						continue;
 					l = &gen_links[gen_num_links - 1];
 					VectorCopy(anchor, l->anchor);
-					Link_Env_Hook(l, gen_seeds[i].origin, anchor);
+						Link_Env_Hook(l, anchor);
 				}
-				else if (d[2] <= 128.0f && d[2] >= -600.0f)
-				{
-					/*
-					 * Both from-rest rolls and the rope failed. One card
-					 * left: arrive at speed. The phantom enters at 320
-					 * u/s on the target line and jumps off that momentum;
-					 * what it proves, the envelope records -- min_speed
-					 * 280 (a floor the 320 proof comfortably covers, the
-					 * same honesty Link_Env_Drop keeps), heading the
-					 * target line, the drop cone's slack. The flood
-					 * charges arrival speed via Env_AccelCost; the body
-					 * gates its hop on carrying the speed for real.
-					 */
-					int before = gen_num_links;
-
-					/*
-					 * Budgeted like the rocket-jump pass: every pair that
-					 * failed three provers gets one more full pmove roll,
-					 * and on a 3000-seed map that unbounded doubled the
-					 * generation past its harness timeout. Six thousand
-					 * rolls cover the gap-shaped candidates that matter.
-					 */
-					if (gen_momentum_tries >= 6000)
-						continue;
-					gen_momentum_tries++;
-
-					gen_entry_speed = 320.0f;
-					if (Prove(i, j, true, &cost, &espeed))
-					{
-						Link_Add(i, j,
-						         (d[2] < -160.0f) ? RL_DROP : RL_JUMP,
-						         cost, espeed);
-						if (gen_num_links != before)
-						{
-							rune_link_t *l = &gen_links[gen_num_links - 1];
-
-							l->heading = Heading_Quantize(d[0], d[1]);
-							l->heading_slack = SG_DROP_SLACK;
-							l->min_speed = (byte)(280.0f / 4.0f);
-							gen_momentum_links++;
-						}
-					}
-					gen_entry_speed = 0.0f;
-				}
+				/* Momentum-entry jumps used to be proved from one exact 320-u/s
+				 * vector but serialized as a broad minimum-speed/cone envelope. No
+				 * finite gate could make that claim true for every faster or angled
+				 * live entry. Until the format carries a complete entry state (or the
+				 * prover covers the envelope), fail closed and keep only from-rest
+				 * one-jump proofs. */
 			}
 		}
 		if ((i & 255) == 0)
@@ -2323,10 +3817,9 @@ static void Prove_All(void)
 	}
 
 	/*
-	 * ADDITIVE BLOCK call sites -- appended after the pair loop, which is
-	 * untouched. Each pass reads the seeds and links the loop produced and
-	 * only adds to them; Prove_Swims also relabels a run/jump link whose
-	 * two ends are both underwater, because that is what it always was.
+	 * ADDITIVE BLOCK call sites -- appended after the pair loop. Each pass
+	 * reads the seeds and specialized links the loop produced and only adds
+	 * to them; ordinary pairs touching water were reserved for Prove_Swims.
 	 */
 	Prove_Swims();          /* swim links: water to water, water to shore */
 	{
@@ -2341,10 +3834,8 @@ static void Prove_All(void)
 
 		Link_Plats();           /* func_plat: bottom seed -> top seed */
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
+		Link_Doors();           /* repeatable trigger: wait, open, full egress */
 		Link_Declare_Tail(declared_mark);
-	}
-	Door_Sidedness();       /* one-way doors leave the graph entirely */
-	{
 	}
 
 	/*
@@ -2357,6 +3848,188 @@ static void Prove_All(void)
 	Prove_RocketJumps();
 }
 
+/* A field is useful only on the greatest part of the directed graph from
+ * which BOTH flag objectives remain reachable.  Keeping one-way sink seeds
+ * lets an otherwise sound route deliberately strand a bot; keeping unlinked
+ * germs bloats localization with places the runtime already refuses to use.
+ *
+ * Compute the greatest fixed point, not merely the intersection of two
+ * reverse floods: a node can initially reach red through blue-dead nodes and
+ * blue through red-dead nodes.  Removing those intermediates must trigger a
+ * second pass.  Once stable, retain rejected seed coordinates as geometry
+ * tombstones but remove every incident link. Localization can then identify
+ * the nearest visible sample as non-routable instead of searching past it to
+ * a farther live seed on the wrong side of a one-way boundary. */
+static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out)
+{
+	const float max_horiz2 = 128.0f * 128.0f;
+	int i, best = -1;
+	float bestd = 1e30f;
+
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		vec3_t d, from, to;
+		float dd;
+		trace_t tr;
+
+		VectorSubtract(gen_seeds[i].origin, objective, d);
+		if (d[2] > 96.0f || d[2] < -96.0f ||
+		    d[0] * d[0] + d[1] * d[1] > max_horiz2)
+			continue;
+		dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] * 0.25f;
+		if (dd >= bestd)
+			continue;
+		VectorCopy(objective, from);
+		VectorCopy(gen_seeds[i].origin, to);
+		from[2] += 16.0f;
+		to[2] += 16.0f;
+		tr = sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID);
+		if (tr.startsolid || tr.fraction < 1.0f)
+			continue;
+		bestd = dd;
+		best = i;
+	}
+	return (best >= 0 && has_out[best]) ? best : -1;
+}
+
+static void Graph_ReverseReach(int root, const byte *allowed,
+	const int *first_in, const int *next_in, int *queue, byte *reached)
+{
+	int head = 0, tail = 0;
+
+	memset(reached, 0, (size_t)gen_num_seeds);
+	if (root < 0 || root >= gen_num_seeds || !allowed[root])
+		return;
+	reached[root] = 1;
+	queue[tail++] = root;
+	while (head < tail)
+	{
+		int at = queue[head++];
+		int li;
+
+		for (li = first_in[at]; li >= 0; li = next_in[li])
+		{
+			int from = gen_links[li].from;
+
+			if (!allowed[from] || reached[from])
+				continue;
+			reached[from] = 1;
+			queue[tail++] = from;
+		}
+	}
+}
+
+static qboolean Graph_PruneObjectiveCore(void)
+{
+	int *first_in = NULL, *next_in = NULL, *queue = NULL;
+	byte *has_out = NULL, *keep = NULL, *red_reach = NULL, *blue_reach = NULL;
+	int red_root, blue_root, i, old_links, changed;
+	int kept_seeds = 0, new_links = 0;
+
+	if (!redflag || !blueflag || !redflag->inuse || !blueflag->inuse)
+	{
+		sg_host.dprint("rune: FAILED: objective flags are unavailable\n");
+		return false;
+	}
+	first_in = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	next_in = sg_host.level_alloc(sizeof(int) *
+	    (size_t)(gen_num_links ? gen_num_links : 1));
+	queue = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
+	has_out = sg_host.level_alloc((size_t)gen_num_seeds);
+	keep = sg_host.level_alloc((size_t)gen_num_seeds);
+	red_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	blue_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	if (!first_in || !next_in || !queue || !has_out || !keep ||
+	    !red_reach || !blue_reach)
+	{
+		sg_host.dprint("rune: FAILED: objective-core allocation\n");
+		goto fail;
+	}
+
+	memset(has_out, 0, (size_t)gen_num_seeds);
+	memset(keep, 1, (size_t)gen_num_seeds);
+	for (i = 0; i < gen_num_seeds; i++)
+		first_in[i] = -1;
+	for (i = 0; i < gen_num_links; i++)
+	{
+		has_out[gen_links[i].from] = 1;
+		next_in[i] = first_in[gen_links[i].to];
+		first_in[gen_links[i].to] = i;
+	}
+	red_root = Graph_ObjectiveRoot(redflag->homeposition, has_out);
+	blue_root = Graph_ObjectiveRoot(blueflag->homeposition, has_out);
+	if (red_root < 0 || blue_root < 0)
+	{
+		sg_host.dprint("rune: FAILED: cannot bind both flag objectives to graph\n");
+		goto fail;
+	}
+
+	do
+	{
+		changed = 0;
+		Graph_ReverseReach(red_root, keep, first_in, next_in, queue, red_reach);
+		Graph_ReverseReach(blue_root, keep, first_in, next_in, queue, blue_reach);
+		for (i = 0; i < gen_num_seeds; i++)
+			if (keep[i] && (!red_reach[i] || !blue_reach[i]))
+			{
+				keep[i] = 0;
+				changed = 1;
+			}
+	} while (changed);
+	if (!keep[red_root] || !keep[blue_root])
+	{
+		sg_host.dprint("rune: FAILED: flag objectives share no closed route core\n");
+		goto fail;
+	}
+	/* The generating server is the only authority that has the final spawned
+	 * flag entities, including engine entity overrides and put-on-floor
+	 * settling. Publish those exact seed identities for runegen's deployment
+	 * lint; an offline BSP/ENT parser cannot reproduce that world state. */
+	sg_host.dprint("rune: objective roots red=%d blue=%d\n",
+	               red_root, blue_root);
+
+	old_links = gen_num_links;
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		if (keep[i])
+			kept_seeds++;
+		else
+			gen_seeds[i].flags |= RSF_TOMBSTONE;
+	}
+	for (i = 0; i < old_links; i++)
+	{
+		rune_link_t link = gen_links[i];
+
+		if (!keep[link.from] || !keep[link.to])
+			continue;
+		gen_links[new_links++] = link;
+	}
+	gen_num_links = new_links;
+	sg_host.dprint("rune: objective core retained %d/%d routable seeds, "
+	               "%d/%d links; %d geometry tombstones\n",
+	               kept_seeds, gen_num_seeds, new_links, old_links,
+	               gen_num_seeds - kept_seeds);
+
+	sg_host.level_free(first_in);
+	sg_host.level_free(next_in);
+	sg_host.level_free(queue);
+	sg_host.level_free(has_out);
+	sg_host.level_free(keep);
+	sg_host.level_free(red_reach);
+	sg_host.level_free(blue_reach);
+	return true;
+
+fail:
+	if (first_in) sg_host.level_free(first_in);
+	if (next_in) sg_host.level_free(next_in);
+	if (queue) sg_host.level_free(queue);
+	if (has_out) sg_host.level_free(has_out);
+	if (keep) sg_host.level_free(keep);
+	if (red_reach) sg_host.level_free(red_reach);
+	if (blue_reach) sg_host.level_free(blue_reach);
+	return false;
+}
+
 /* ------------------------------------------------------------------- IO */
 
 /*
@@ -2365,9 +4038,10 @@ static void Prove_All(void)
  * of 1562 seeds could reach the red flag on lmctf03, the flag room and
  * nothing beyond it. For the duration of generation the doors are unsolid,
  * the same assumption bspc made, and every one is restored before the
- * command returns. Links that cross a door's volume are the runtime's
- * business to re-validate against the door's actual state; first the link
- * has to exist.
+ * command returns. The oracle still treats each door's complete swept volume
+ * as blocked until that exact phantom touches a validated repeatable player
+ * activator, so making the brush nonsolid is not permission to prove through
+ * buttons, one-shot scripts, disabled triggers, or the wrong side of a door.
  */
 typedef struct { edict_t *e; solid_t solid; } heldopen_t;
 
@@ -2376,13 +4050,15 @@ static int Doors_Open(heldopen_t *held, int max)
 	edict_t *e;
 	int i, n = 0;
 
-	for (i = 0; i < globals.num_edicts && n < max; i++)
+	for (i = 0; i < globals.num_edicts; i++)
 	{
 		e = &g_edicts[i];
 		if (!e->inuse || !e->classname)
 			continue;
 		if (strncmp(e->classname, "func_door", 9) != 0)
 			continue;
+		if (n >= max)
+			return -n;
 		held[n].e = e;
 		held[n].solid = e->solid;
 		e->solid = SOLID_NOT;
@@ -2406,19 +4082,59 @@ static void Doors_Restore(heldopen_t *held, int n)
 qboolean Rune_Generate(const char *mapname)
 {
 	rune_header_t hdr;
-	char path[MAX_OSPATH];
-	FILE *f;
+	char path[MAX_OSPATH], tmp_path[MAX_OSPATH];
+	FILE *f = NULL;
 	heldopen_t held[128];
 	int ndoors;
+	qboolean write_ok;
+	unsigned int tmp_try;
 	cvar_t *gamedir = sg_host.cvar("gamedir", "", 0);
+
+	if (!SG_RunePhysicsCompatible())
+	{
+		sg_host.dprint("rune: refusing generation: v%d proofs require "
+		               "sv_gravity %d, sv_airaccelerate 0, sv_maxvelocity >= 800, and "
+		               "want_funky_gravity 0\n",
+		               RUNE_VERSION, RUNE_PROOF_GRAVITY);
+		return false;
+	}
 
 	gen_seeds = sg_host.game_alloc(sizeof(rune_seed_t) * SEED_MAX);
 	gen_links = sg_host.game_alloc(sizeof(rune_link_t) * LINK_MAX);
 	gen_num_seeds = 0;
 	gen_num_links = 0;
+	gen_seed_overflow = false;
+	gen_link_overflow = false;
+	gen_water_overflow = false;
 	memset(hash_head, 0xff, sizeof(hash_head));
+	/* Every generator budget and diagnostic belongs to this invocation.  These
+	 * used to be process statics without a reset, so a second `sv rune` inherited
+	 * exhausted momentum/RJ budgets and silently generated a weaker graph. */
+	dg_pairs = dg_seek = dg_noedge = dg_fell = dg_arrived = dg_nocontact = 0;
+	dd_last_heading = 0;
+	dd_nolip = dd_fenced = dd_flew = dd_landed = dd_won = 0;
+	gen_momentum_links = gen_waypoint_links = 0;
+	gen_prove_has_wp = false;
+	VectorClear(gen_prove_wp);
+	gen_first_water = -1;
+	gen_num_water = 0;
+	gen_lift_links = gen_tele_links = gen_door_links = 0;
+	gen_swim_links = 0;
+	gen_env_drop = gen_env_hook = gen_declared_links = 0;
+	gen_lift_down_drop = gen_lift_down_none = 0;
+	rj_pairs = rj_tries = rj_noboom = rj_nolift = rj_arrived = 0;
+	rj_redundant = rj_links = rj_budget_out = 0;
+	rj_query = 0;
 
 	ndoors = Doors_Open(held, 128);
+	if (ndoors < 0)
+	{
+		Doors_Restore(held, -ndoors);
+		sg_host.dprint("rune: FAILED: more than 128 doors; graph was not written\n");
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
+		return false;
+	}
 	sg_host.dprint("rune: %d doors held open for proving\n", ndoors);
 
 	sg_host.dprint("rune: germinating from entities...\n");
@@ -2429,6 +4145,14 @@ qboolean Rune_Generate(const char *mapname)
 	 * reach into, seeded before anything is proven so the pair loop sees
 	 * them like any other seed */
 	Seed_Water();
+	if (gen_num_seeds <= 0)
+	{
+		Doors_Restore(held, ndoors);
+		sg_host.dprint("rune: FAILED: map produced no executable seeds\n");
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
+		return false;
+	}
 	/*
 	 * EXPOSURE, into the reserved field. area_hint has been written zero
 	 * since the format was born; it becomes the seed's exposure count --
@@ -2482,20 +4206,67 @@ qboolean Rune_Generate(const char *mapname)
 	           dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact);
 	sg_host.dprint("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
 	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
-	sg_host.dprint("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d); "
+	sg_host.dprint("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d door=%d); "
 	           "plat-down drop=%d unlinked=%d; momentum=%d waypoints=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
-	           gen_lift_links, gen_tele_links,
+	           gen_lift_links, gen_tele_links, gen_door_links,
 	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links,
 	           gen_waypoint_links);
 	Doors_Restore(held, ndoors);
+	/* Objective ownership is resolved against the real, restored world.  Mark
+	 * every non-core geometry sample before writing so runtime localization and
+	 * the deployment linter share the same fail-closed topology contract. */
+	if (!Graph_PruneObjectiveCore())
+	{
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
+		return false;
+	}
+	if (gen_seed_overflow || gen_link_overflow || gen_water_overflow ||
+	    gen_num_seeds >= SEED_MAX || gen_num_links >= LINK_MAX)
+	{
+		sg_host.dprint("rune: FAILED: %s capacity exhausted; graph was not written\n",
+		               (gen_seed_overflow || gen_num_seeds >= SEED_MAX)
+		                   ? "seed" : "link");
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
+		return false;
+	}
+	if (gen_num_links <= 0)
+	{
+		sg_host.dprint("rune: FAILED: no executable links were proven; graph was not written\n");
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
+		return false;
+	}
 
 	Com_sprintf(path, sizeof(path), "%s/maps/%s.rune",
 	            gamedir->string[0] ? gamedir->string : ".", mapname);
-	f = fopen(path, "wb");
+	tmp_path[0] = '\0';
+	/* Never stream a new graph over the last known-good one.  A generator can
+	 * run for minutes; ENOSPC or a short write at the end must leave the old
+	 * asset intact and must not be reported as success.  The temporary lives
+	 * beside the destination so the final POSIX rename is atomic. */
+	for (tmp_try = 0; tmp_try < 64 && !f; tmp_try++)
+	{
+		unsigned long pid;
+
+#ifdef _WIN32
+		pid = (unsigned long)GetCurrentProcessId();
+#else
+		pid = (unsigned long)getpid();
+#endif
+		Com_sprintf(tmp_path, sizeof(tmp_path), "%s/maps/.%s.rune.%lu.%u.tmp",
+		            gamedir->string[0] ? gamedir->string : ".", mapname,
+		            pid, tmp_try);
+		errno = 0;
+		f = fopen(tmp_path, "wbx");
+		if (!f && errno != EEXIST)
+			break;
+	}
 	if (!f)
 	{
-		sg_host.dprint("rune: cannot write %s\n", path);
+		sg_host.dprint("rune: cannot write temporary %s\n", tmp_path);
 		sg_host.level_free(gen_seeds);
 		sg_host.level_free(gen_links);
 		return false;
@@ -2508,10 +4279,35 @@ qboolean Rune_Generate(const char *mapname)
 	hdr.num_links = gen_num_links;
 	strncpy(hdr.mapname, mapname, sizeof(hdr.mapname) - 1);
 
-	fwrite(&hdr, sizeof(hdr), 1, f);
-	fwrite(gen_seeds, sizeof(rune_seed_t), gen_num_seeds, f);
-	fwrite(gen_links, sizeof(rune_link_t), gen_num_links, f);
-	fclose(f);
+	write_ok = fwrite(&hdr, sizeof(hdr), 1, f) == 1 &&
+	           fwrite(gen_seeds, sizeof(rune_seed_t), gen_num_seeds, f) ==
+	               (size_t)gen_num_seeds &&
+	           fwrite(gen_links, sizeof(rune_link_t), gen_num_links, f) ==
+	               (size_t)gen_num_links &&
+	           fflush(f) == 0;
+	if (fclose(f) != 0)
+		write_ok = false;
+	if (!write_ok)
+	{
+		remove(tmp_path);
+		sg_host.dprint("rune: incomplete write; kept existing %s\n", path);
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
+		return false;
+	}
+#ifdef _WIN32
+	if (!MoveFileExA(tmp_path, path,
+	                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+#else
+	if (rename(tmp_path, path) != 0)
+#endif
+	{
+		remove(tmp_path);
+		sg_host.dprint("rune: cannot install temporary graph as %s\n", path);
+		sg_host.level_free(gen_seeds);
+		sg_host.level_free(gen_links);
+		return false;
+	}
 
 	sg_host.dprint("rune: wrote %s (%d seeds, %d links)\n",
 	           path, gen_num_seeds, gen_num_links);

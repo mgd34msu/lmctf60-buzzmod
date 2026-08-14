@@ -10,6 +10,8 @@
 #include "g_vote.h"
 #include "slipgate/sg_net.h"        // SG_ClearBotArgs
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
+#include "slipgate/sg_local.h"
+#include "slipgate/sg_combat.h"
 
 void Observer_Start(edict_t *e);
 
@@ -1967,7 +1969,13 @@ void Cmd_Fobserve_f (edict_t *ent)
 	ctf_BSafePrint(PRINT_HIGH, message);
 	// clear the kicked player's stats
 	stats_clear(target);
-	ForceCommand(target, "observe\n");
+	/* Fake clients have no network endpoint to execute stufftext. Retiring an
+	 * SG-owned body is the local, authoritative force-observe semantics; the
+	 * next botfill pass may add a fresh balanced replacement. */
+	if (SG_OwnsBot(target))
+		SG_RetireBotForClient(target);
+	else
+		ForceCommand(target, "observe\n");
 }
 
 void Cmd_QuadTime_f (edict_t *ent) {
@@ -2052,7 +2060,10 @@ void Cmd_Kick_f (edict_t *ent)
 	ctf_BSafePrint(PRINT_HIGH, message);
 	// clear the kicked player's stats
 	stats_clear(target);
-	ForceCommand(target, "disconnect\n");
+	if (SG_OwnsBot(target))
+		SG_RetireBotForClient(target);
+	else
+		ForceCommand(target, "disconnect\n");
 }
 
 
@@ -2352,6 +2363,11 @@ int numspec;
 		//gi.bprintf (PRINT_HIGH, "%s has moved to the sidelines\n", ent->client->pers.netname);
 
 
+	/* Observer conversion keeps the gclient allocation but ends the combatant
+	 * generation every SG sensor/chat table describes. */
+	SG_ChatResetClient(ent);
+	Caco_ResetClient(ent);
+	Combat_ResetClient(ent);
 	Drop_All(ent);
 	ent->client->ctf.teamnum = Observer_Type;
 	ent->client->chase_target = NULL;
@@ -2963,4 +2979,3 @@ void ClientCommand(edict_t* ent)
 
 	SG_ClearBotArgs();
 }
-

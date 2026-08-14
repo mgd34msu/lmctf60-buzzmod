@@ -32,6 +32,7 @@ import dm2speed as D
 from demokin import parse_playerstate_full
 from demoents import parse_delta_entity_track
 from mapflags import load_seeds, flag_origins
+from corpusgraph import rune_identity, stamp_corpus_identity
 
 U_REMOVE = 1 << 6
 CS_MODELS = 32
@@ -577,6 +578,7 @@ def main():
         rs.sort(key=lambda r: r['demo'])
         rune = os.path.join(cfg.gamedir, 'maps', f'{mapname}.rune')
         seeds = load_seeds(rune)
+        identity = rune_identity(rune, mapname)
         flags = flag_origins(cfg.gamedir, mapname)
         dwell_def = {t: collections.Counter() for t in ('red', 'blue')}
         dwell_any = {t: collections.Counter() for t in ('red', 'blue')}
@@ -719,6 +721,7 @@ def main():
             'responses': [{k: v for k, v in x.items() if k != 'seeds'}
                           for x in resp],
         }
+        stamp_corpus_identity(doc, identity)
         if len(rs) < cfg.mindemos or not flat:
             print(f'{mapname}: thin ({len(rs)} demos, {len(flat)} posts) '
                   f'-- writing anyway')

@@ -656,6 +656,7 @@ typedef struct
 } sg_combat_state_t;
 
 static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
+static qboolean sg_combat_initialized[SG_COMBAT_MAXCLIENTS];
 
 /* why the trigger stayed off, tallied per enemy-frame and printed on the
  * debug channel every few seconds: [0] fired, [1] no clear shot,
@@ -674,6 +675,76 @@ static float	sg_cbt_why_next;
 /* [9] is the reaction gate: a target held, a shot cleared, and the bot has not
  * finished noticing yet. Kept apart from [5] so a slow bot does not read as a
  * bot with a broken fire window. */
+
+/*
+ * Combat state is process storage indexed by a recyclable client number.
+ * Its reset is deliberately separate from Combat_CacheItems: itemlist lives
+ * for the game DLL's lifetime, while these clocks and beliefs live for one
+ * client on one level.  A caller may arrive before the level hook, so every
+ * state-bearing public entry goes through Combat_ClientState as well.
+ */
+static void Combat_ResetState(sg_combat_state_t *st)
+{
+	memset(st, 0, sizeof(*st));
+	st->band = -1;
+	st->want = -1;
+	st->post_sight = -1.0f;
+	st->alert_range = -1.0f;
+	st->enemy_weapon = -1;
+	st->ws_pre = -1;
+}
+
+static int Combat_ClientIndex(edict_t *self)
+{
+	int ci;
+
+	if (!self || !self->client)
+		return -1;
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+		return -1;
+	return ci;
+}
+
+static sg_combat_state_t *Combat_ClientState(edict_t *self)
+{
+	int ci = Combat_ClientIndex(self);
+
+	if (ci < 0)
+		return NULL;
+	if (!sg_combat_initialized[ci])
+	{
+		Combat_ResetState(&sg_combat[ci]);
+		sg_combat_initialized[ci] = true;
+	}
+	return &sg_combat[ci];
+}
+
+void Combat_ResetClient(edict_t *self)
+{
+	int ci = Combat_ClientIndex(self);
+
+	if (ci < 0)
+		return;
+	Combat_ResetState(&sg_combat[ci]);
+	sg_combat_initialized[ci] = true;
+}
+
+void Combat_ResetLevel(void)
+{
+	int i;
+
+	for (i = 0; i < SG_COMBAT_MAXCLIENTS; i++)
+	{
+		Combat_ResetState(&sg_combat[i]);
+		sg_combat_initialized[i] = true;
+	}
+	memset(sg_cbt_why, 0, sizeof(sg_cbt_why));
+	memset(sg_cbt_scan, 0, sizeof(sg_cbt_scan));
+	memset(sg_cbt_fire, 0, sizeof(sg_cbt_fire));
+	memset(sg_cbt_hit, 0, sizeof(sg_cbt_hit));
+	sg_cbt_why_next = 0.0f;
+}
 
 /* ------------------------------------------------------------------- skill */
 
@@ -812,16 +883,6 @@ static void Combat_CacheItems(void)
 	/* g_items.c:2491-2511. Rule S3: this one is looked up so it can be
 	 * recognised and refused, never so it can be selected. */
 	sg_hookitem = FindItem("Grappling Hook");
-
-	/* the two state members whose "unset" value is not zero */
-	for (i = 0; i < SG_COMBAT_MAXCLIENTS; i++)
-	{
-		sg_combat[i].post_sight = -1.0f;
-		sg_combat[i].alert_range = -1.0f;
-		sg_combat[i].alert_until = 0.0f;
-		sg_combat[i].band = -1;			/* no band committed yet */
-		sg_combat[i].ws_pre = -1;		/* nothing pre-switched to yet */
-	}
 
 	/* LMCTF has ONE flag item (g_items.c:2478), the same test ctf_flagtouch
 	 * makes and the body already makes at sg_arach.c:600-607 */
@@ -2464,12 +2525,10 @@ static float Worth_Mega(edict_t *e)
 
 float SG_WorthMega(edict_t *self)
 {
-	int ci;
+	sg_combat_state_t *st;
 
-	if (!self || !self->client)
-		return 0.0f;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+	st = Combat_ClientState(self);
+	if (!st)
 		return 0.0f;
 
 	/*
@@ -2484,7 +2543,7 @@ float SG_WorthMega(edict_t *self)
 	 */
 	if (self->health >= SG_MEGA_HEADROOM)
 		return 0.0f;
-	return sg_combat[ci].worth_mega;
+	return st->worth_mega;
 }
 
 /*
@@ -2724,17 +2783,16 @@ void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
                       sg_weights_t *out)
 {
 	sg_combat_state_t	*st;
-	int					ci, c;
+	int					c;
 
 	if (!self || !self->client || !role || !out)
 		return;
 
 	*out = *role;
 
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+	st = Combat_ClientState(self);
+	if (!st)
 		return;
-	st = &sg_combat[ci];
 	Combat_CacheItems();
 
 	/*
@@ -2765,14 +2823,11 @@ void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
 
 void SG_CombatPost(edict_t *self, float sightline)
 {
-	int ci;
+	sg_combat_state_t *st = Combat_ClientState(self);
 
-	if (!self || !self->client)
+	if (!st)
 		return;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	sg_combat[ci].post_sight = sightline;
+	st->post_sight = sightline;
 }
 
 /*
@@ -2785,15 +2840,12 @@ void SG_CombatPost(edict_t *self, float sightline)
  */
 void SG_CombatAlert(edict_t *self, float expect_range)
 {
-	int ci;
+	sg_combat_state_t *st = Combat_ClientState(self);
 
-	if (!self || !self->client)
+	if (!st)
 		return;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	sg_combat[ci].alert_range = expect_range;
-	sg_combat[ci].alert_until = level.time + 3.0f;
+	st->alert_range = expect_range;
+	st->alert_until = level.time + 3.0f;
 }
 
 /* ------------------------------------------------------------- duel terms */
@@ -2805,13 +2857,11 @@ void SG_CombatAlert(edict_t *self, float expect_range)
  */
 edict_t *SG_CombatLiveEnemy(edict_t *self)
 {
-	sg_combat_state_t *st;
-	int idx = (int)(self->client - game.clients);
+	sg_combat_state_t *st = Combat_ClientState(self);
 	edict_t *en;
 
-	if (idx < 0 || idx >= SG_COMBAT_MAXCLIENTS)
+	if (!st)
 		return NULL;
-	st = &sg_combat[idx];
 	if (st->enemy <= 0)
 		return NULL;
 	en = g_edicts + st->enemy;
@@ -2823,16 +2873,13 @@ edict_t *SG_CombatLiveEnemy(edict_t *self)
 
 void SG_CombatPursuit(edict_t *self, qboolean allowed)
 {
-	int ci;
+	sg_combat_state_t *st = Combat_ClientState(self);
 
-	if (!self || !self->client)
+	if (!st)
 		return;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	sg_combat[ci].pursue = allowed;
+	st->pursue = allowed;
 	if (!allowed)
-		sg_combat[ci].lost_until = 0.0f;	/* a role change ends the camp */
+		st->lost_until = 0.0f;	/* a role change ends the camp */
 }
 
 qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
@@ -2842,7 +2889,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	edict_t				*foe;
 	vec3_t				org, eye, d;
 	float				dist, want;
-	int					ci, held, team, s;
+	int					held, team, s;
 
 	if (want_range)
 		*want_range = 0.0f;
@@ -2853,10 +2900,9 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 		return false;
 	if (self->deadflag == DEAD_DEAD || self->health <= 0)
 		return false;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+	st = Combat_ClientState(self);
+	if (!st)
 		return false;
-	st = &sg_combat[ci];
 
 	if (st->enemy_last <= 0 || level.time - st->enemy_time > SG_DUEL_FRESH)
 		return false;
@@ -3561,7 +3607,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	float				yaw, pitch, skill, settle;
 	float				residual, span, shape;
 	trace_t				tr;
-	int					ci, band, inhand;
+	int					band, inhand;
 	qboolean			clear_shot, carrier, ballistic, vel_stable;
 	qboolean			rattled, textured;
 
@@ -3575,10 +3621,9 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	if (self->movetype == MOVETYPE_NOCLIP)
 		return;
 
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+	st = Combat_ClientState(self);
+	if (!st)
 		return;
-	st = &sg_combat[ci];
 	Combat_CacheItems();
 	skill = Combat_Skill(self);		/* team level less this bot's own handicap */
 

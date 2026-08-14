@@ -2020,12 +2020,109 @@ void Draw_Hook (edict_t *ent, vec3_t start, vec3_t end)
 }
 
 
+/* The hook's actual shot/pull origin.  Keep this public and pure enough for
+ * the SLIPGATE oracle: a proof and the live weapon must not acquire separate
+ * versions of the handed {8,8,viewheight-8} muzzle transform. */
+void CTF_HookMuzzle (const vec3_t origin, float viewheight, int hand,
+	const vec3_t forward, const vec3_t right, vec3_t start)
+{
+	vec3_t offset;
+
+	VectorSet (offset, 8, 8, viewheight - 8);
+	if (hand == LEFT_HANDED)
+		offset[1] *= -1;
+	else if (hand == CENTER_HANDED)
+		offset[1] = 0;
+	start[0] = origin[0] + forward[0] * offset[0] + right[0] * offset[1];
+	start[1] = origin[1] + forward[1] * offset[0] + right[1] * offset[1];
+	start[2] = origin[2] + forward[2] * offset[0] + right[2] * offset[1]
+	         + offset[2];
+}
+
+/*
+ * The one grapple-pull law used by both the weapon and the rune oracle.
+ * Return the same integer-truncated rope length the production weapon uses
+ * and emit the exact velocity ladder.  SV_AddGravity in the historical
+ * weapon path ran immediately before this velocity replaced ent->velocity,
+ * so it had no observable effect and is intentionally absent here.
+ */
+int CTF_HookPullVelocity (const vec3_t start, const vec3_t bite,
+	vec3_t velocity)
+{
+	int speed;
+
+	VectorSubtract (bite, start, velocity);
+	speed = (int)VectorLength (velocity);
+	VectorNormalize (velocity);
+
+	if (speed > 120)
+	{
+#ifdef WEAP_BALANCE_OK
+		if ((int)ctfflags->value & CTF_WEAP_BALANCE)
+			VectorScale (velocity, GRAPPLE_PULL_BALANCED_SPEED, velocity);
+		else
+			VectorScale (velocity, GRAPPLE_PULL_SPEED, velocity);
+#else
+		VectorScale (velocity, GRAPPLE_PULL_SPEED, velocity);
+#endif
+	}
+	else if (speed > 100)
+		VectorScale (velocity, speed * 5, velocity);
+	else if (speed > 80)
+		VectorScale (velocity, speed * 4, velocity);
+	else if (speed > 40)
+		VectorScale (velocity, speed * 3, velocity);
+	else if (speed > 20)
+		VectorScale (velocity, speed * 2, velocity);
+	else if (speed > 10)
+		VectorScale (velocity, speed, velocity);
+
+	return speed;
+}
+
+/* Apply one production grapple update. Graph bots use the offhand path and
+ * reach this once through ClientEndServerFrame; weapon-held human grapples
+ * retain their historical Weapon_Generic calls as well. Bot-private pre-pmove
+ * pulls execute a different chronology and are deliberately forbidden. */
+void CTF_HookPullStep (edict_t *ent, qboolean draw_cable)
+{
+	vec3_t start, forward, right, velocity, dest;
+	int speed;
+
+	if (!ent || !ent->client || ent->client->hookstate != 2 ||
+	    !ent->client->hook)
+		return;
+
+	AngleVectors (ent->client->v_angle, forward, right, NULL);
+	CTF_HookMuzzle (ent->s.origin, ent->viewheight, ent->client->pers.hand,
+	                forward, right, start);
+
+	if (ent->client->hook->hook_target)
+	{
+		VectorAdd (ent->client->hook->hook_target->absmin,
+		           ent->client->hook->hook_offset, dest);
+		VectorCopy (dest, ent->client->hook->s.origin);
+	}
+
+	if (draw_cable)
+		Draw_Hook (ent, start, ent->client->hook->s.origin);
+
+	speed = CTF_HookPullVelocity (start, ent->client->hook->s.origin,
+	                              velocity);
+
+	if (!ent->client->hooklength)
+		ent->client->hooklength = speed;
+	ent->client->hooklength = speed;
+
+	VectorCopy (velocity, ent->velocity);
+	VectorCopy (ent->velocity, ent->client->oldvelocity);
+}
+
+
 void Weapon_Hook_Fire (edict_t *ent)
 {
-	vec3_t	offset, mins, maxs, start, forward, right, dir;
+	vec3_t	mins, maxs, start, forward, right;
 	float		*v;
-	int speed;
-	vec3_t	dest;
 
 	v = tv(-15,-15,-15);
 	_VectorCopy (v, mins);
@@ -2041,8 +2138,8 @@ void Weapon_Hook_Fire (edict_t *ent)
 
 	// Set out ending point to our starting point
 	AngleVectors (ent->client->v_angle, forward, right, NULL);
-	VectorSet(offset, 8, 8, ent->viewheight-8);
-	P_ProjectSource (ent->client, ent->s.origin, offset, forward, right, start);
+	CTF_HookMuzzle (ent->s.origin, ent->viewheight, ent->client->pers.hand,
+	                forward, right, start);
 	
 	switch (ent->client->hookstate)
 	{
@@ -2063,71 +2160,7 @@ void Weapon_Hook_Fire (edict_t *ent)
 		break;
 	case 2: // Pulling us to the hook
 		if (ent->client->hook)
-		{
-			if (ent->client->hook->hook_target)
-			{
-//				if ( 
-//					(!ent->client->hook->hook_target->s.origin[0] == 0) && 
-//					(!ent->client->hook->hook_target->s.origin[1] == 0) && 
-//					(!ent->client->hook->hook_target->s.origin[2] == 0)
-//					)
-//						VectorCopy(ent->client->hook->hook_target->s.origin, ent->client->hook->s.origin);
-				//surt test code
-				VectorAdd(ent->client->hook->hook_target->absmin, ent->client->hook->hook_offset, dest);
-				VectorCopy(dest, ent->client->hook->s.origin);
-
-			}
-			Draw_Hook(ent, start, ent->client->hook->s.origin);
-			VectorSubtract(ent->client->hook->s.origin, start, dir);
-			speed = VectorLength(dir);
-
-			if (!ent->client->hooklength)
-				ent->client->hooklength = speed;
-
-			//sprintf(message, "Speed %i, length %i\n", speed, ent->client->hooklength);
-			//ctf_SafePrint(ent, PRINT_HIGH, message);
-
-			ent->client->hooklength = speed;
-			VectorNormalize(dir);
-
-			if (speed > 120)
-			{
-#ifdef WEAP_BALANCE_OK	
-				if ((int)ctfflags->value & CTF_WEAP_BALANCE)
-					VectorScale(dir, GRAPPLE_PULL_BALANCED_SPEED, dir);
-				else
-					VectorScale(dir, GRAPPLE_PULL_SPEED, dir);
-#else
-	   			VectorScale(dir, GRAPPLE_PULL_SPEED, dir);
-#endif
-				SV_AddGravity (ent); // Add gravity
-			}
-			else if (speed > 100)
-			{
-				VectorScale(dir, speed*5, dir);
-			}
-			else if (speed > 80)
-			{
-				VectorScale(dir, speed*4, dir);
-			}
-			else if (speed > 40)
-			{
-				VectorScale(dir, speed*3, dir);
-			}
-			else if (speed > 20)
-			{
-				VectorScale(dir, speed*2, dir);
-			}
-			else if (speed > 10)
-			{
-				VectorScale(dir, speed*1, dir);
-			}
-
-			VectorCopy (dir, ent->velocity);
-			VectorCopy (ent->velocity, ent->client->oldvelocity); // This prevents falling damage
-
-			//ctf_SafePrint(ent, PRINT_HIGH, "Hook in state 2\n");
-		}
+			CTF_HookPullStep (ent, true);
 		else
 			ent->client->hookstate = 0;
 		break;

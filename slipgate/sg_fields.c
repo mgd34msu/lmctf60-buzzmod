@@ -58,11 +58,11 @@ sg_fields_t sg_fields;
  * (200ms/s) retries the corridor eventually; re-sticking re-teaches.
  */
 static int sg_futile[SG_MAX_SEEDS];
+static int sg_futile_last_seed = -1;
+static int sg_futile_streak;
 
 void SG_TeachFutility(int seed)
 {
-	static int last_seed = -1;
-	static int streak;
 	int amount;
 
 	if (seed < 0 || seed >= SG_MAX_SEEDS)
@@ -77,12 +77,13 @@ void SG_TeachFutility(int seed)
 	 * but the decay itself, which heals a 45s lesson in under four
 	 * minutes. A seed that stops biting resets the streak.
 	 */
-	if (seed == last_seed)
-		streak = (streak < 5) ? streak + 1 : 5;
+	if (seed == sg_futile_last_seed)
+		sg_futile_streak = (sg_futile_streak < 5) ?
+		                     sg_futile_streak + 1 : 5;
 	else
-		streak = 1;
-	last_seed = seed;
-	amount = 3000 * streak;
+		sg_futile_streak = 1;
+	sg_futile_last_seed = seed;
+	amount = 3000 * sg_futile_streak;
 	sg_futile[seed] += amount;
 	if (sg_futile[seed] > 60000)
 		sg_futile[seed] = 60000;
@@ -1031,13 +1032,16 @@ qboolean Fields_Setup(rune_t *r)
 		}
 	}
 
-	/* dropped-flag fields start as copies of the home fields */
-	sg_fields.to_red_flag_now = Field_Alloc(r);
-	sg_fields.to_blue_flag_now = Field_Alloc(r);
-	memcpy(sg_fields.to_red_flag_now, sg_fields.to_red_flag,
-	       sizeof(int) * r->hdr.num_seeds);
-	memcpy(sg_fields.to_blue_flag_now, sg_fields.to_blue_flag,
-	       sizeof(int) * r->hdr.num_seeds);
+	/* Dynamic flag position is a belief, so each team owns a separate row. */
+	for (i = 0; i < 2; i++)
+	{
+		sg_fields.to_flag_now[i][0] = Field_Alloc(r);
+		sg_fields.to_flag_now[i][1] = Field_Alloc(r);
+		memcpy(sg_fields.to_flag_now[i][0], sg_fields.to_red_flag,
+		       sizeof(int) * r->hdr.num_seeds);
+		memcpy(sg_fields.to_flag_now[i][1], sg_fields.to_blue_flag,
+		       sizeof(int) * r->hdr.num_seeds);
+	}
 
 	/*
 	 * Every pointer in sg_fields was TAG_LEVEL and is dangling by now, so all
@@ -1083,6 +1087,8 @@ qboolean Fields_Setup(rune_t *r)
 
 	memset(sg_futile, 0, sizeof(sg_futile));
 	memset(sg_link_futile, 0, sizeof(sg_link_futile));
+	sg_futile_last_seed = -1;
+	sg_futile_streak = 0;
 	sg_fields.next_refresh = 0.0f;
 	return true;
 }
@@ -1127,29 +1133,24 @@ void Fields_Refresh(rune_t *r)
 	/* flag positions per CACO: seed the "now" field wherever belief puts it */
 	for (i = 0; i < 2; i++)
 	{
-		sg_belief_flag_t *bf = &sg_caco_team_belief.flag[i];
-		int *fld = i ? sg_fields.to_blue_flag_now : sg_fields.to_red_flag_now;
-		int home = i ? sg_fields.blue_flag_seed : sg_fields.red_flag_seed;
-		int seed, cost = 0;
+		int fi;
 
-		if (bf->state == SG_FLAG_HOME)
-			seed = home;
-		else if (bf->where_seed >= 0)
-			seed = bf->where_seed;
-		else
-			/*
-			 * Astray and never sighted. The old fallback said "home" --
-			 * which sent every RECOVER bot to squat its own EMPTY stand
-			 * while the thief ran the flag the other way (campaign 1,
-			 * lmctf01 g1: role=3 parked at the vacant base all game;
-			 * both teams did it; the standoff never broke and no game
-			 * has ever seen a capture). The game broadcast WHO took it
-			 * the moment it happened; a taken flag is travelling to the
-			 * thief's stand, so that is where the hunt begins -- the
-			 * route there sweeps the drop case on the way.
-			 */
-			seed = i ? sg_fields.red_flag_seed : sg_fields.blue_flag_seed;
-		Field_Flood(r, fld, &seed, &cost, 1);
+		for (fi = 0; fi < 2; fi++)
+		{
+			sg_belief_flag_t *bf = &sg_caco_team_belief.flag[i][fi];
+			int *fld = sg_fields.to_flag_now[i][fi];
+			int home = fi ? sg_fields.blue_flag_seed : sg_fields.red_flag_seed;
+			int seed, cost = 0;
+
+			if (bf->state == SG_FLAG_HOME)
+				seed = home;
+			else if (bf->where_seed >= 0)
+				seed = bf->where_seed;
+			else
+				/* Astray and unseen: sweep toward the thief's home stand. */
+				seed = fi ? sg_fields.red_flag_seed : sg_fields.blue_flag_seed;
+			Field_Flood(r, fld, &seed, &cost, 1);
+		}
 	}
 
 	/* our-carrier support fields, one per team -- flooded from a point
@@ -1165,7 +1166,8 @@ void Fields_Refresh(rune_t *r)
 		sg_belief_carrier_t *c = &sg_caco_team_belief.carrier[i];
 		int cost = 0;
 
-		if (c->client >= 0 && c->seed >= 0)
+		if (c->client >= 0 && c->seed >= 0 &&
+		    c->seed < r->hdr.num_seeds)
 		{
 			int *home = i ? sg_fields.to_blue_flag
 			              : sg_fields.to_red_flag;
@@ -1192,6 +1194,14 @@ void Fields_Refresh(rune_t *r)
 			}
 			Field_Flood(r, sg_fields.our_carrier[i], &seed, &cost, 1);
 			sg_fields.our_carrier_valid[i] = true;
+		}
+		else
+		{
+			int seed;
+
+			for (seed = 0; seed < r->hdr.num_seeds; seed++)
+				sg_fields.our_carrier[i][seed] = SG_FIELD_INF;
+			sg_fields.our_carrier_valid[i] = false;
 		}
 	}
 }

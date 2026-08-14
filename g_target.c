@@ -529,7 +529,10 @@ void target_laser_think (edict_t *self)
 				gi.WriteByte (count);
 				gi.WritePosition (tr.endpos);
 				gi.WriteDir (tr.plane.normal);
-				gi.WriteByte (self->s.skinnum);
+				/* s.skinnum packs four beam colors; the temp-entity field is one
+				 * byte and intentionally carries the low color, as the stock engine
+				 * writer truncates it. Make that protocol conversion explicit. */
+				gi.WriteByte ((byte)self->s.skinnum);
 				gi.multicast (tr.endpos, MULTICAST_PVS);
 			}
 			break;

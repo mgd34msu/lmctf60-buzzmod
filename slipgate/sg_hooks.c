@@ -60,6 +60,13 @@ static int Host_PointContents(const vec3_t point)
 	return gi.pointcontents((float *)point);
 }
 
+static int Host_BoxEdicts(const vec3_t mins, const vec3_t maxs,
+	edict_t **list, int maxcount, int areatype)
+{
+	return gi.BoxEdicts((float *)mins, (float *)maxs, list, maxcount,
+	                    areatype);
+}
+
 static qboolean Host_InPVS(const vec3_t p1, const vec3_t p2)
 {
 	return gi.inPVS((float *)p1, (float *)p2);
@@ -180,6 +187,7 @@ void SG_HooksInit(void)
 	sg_host.bprint = Host_Bprint;
 	sg_host.trace = Host_Trace;
 	sg_host.pointcontents = Host_PointContents;
+	sg_host.box_edicts = Host_BoxEdicts;
 	sg_host.in_pvs = Host_InPVS;
 	sg_host.in_phs = Host_InPHS;
 	sg_host.pmove = Host_Pmove;

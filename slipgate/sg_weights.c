@@ -6,6 +6,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_weights.h"
 #include "slipgate/sg_hooks.h"
+#include <errno.h>
 
 /*
  * The weight tables: the one fitted component. Rows are roles; every other
@@ -73,6 +74,11 @@ static const char *sg_weight_fields[] = {
 };
 #define SG_WEIGHT_FIELDS ((int)(sizeof(sg_weight_fields) / \
                                 sizeof(sg_weight_fields[0])))
+/* Weights multiply millisecond route fields and item prices. Fitted values
+ * orbit 1.0 (the shipped maximum is 1.2); a generous finite ceiling still
+ * permits deliberate tuning while preventing a syntactically valid 1e38 from
+ * overflowing Surface_At into +/-Inf and destroying the route ordering. */
+#define SG_WEIGHT_MAX 1000.0f
 
 /*
  * Who set what, so `sv sg weights` can say. Three layers, applied in this
@@ -173,7 +179,8 @@ static qboolean Weights_ReadFile(const char *path)
 
 	while (fgets(line, sizeof(line), f))
 	{
-		char *hash, *key, *val;
+		char *hash, *key, *val, *end;
+		float parsed;
 
 		hash = strchr(line, '#');
 		if (hash)
@@ -188,7 +195,18 @@ static qboolean Weights_ReadFile(const char *path)
 			bad++;
 			continue;
 		}
-		if (Weights_Set(key, (float)atof(val)))
+		errno = 0;
+		end = NULL;
+		parsed = strtof(val, &end);
+		if (errno || end == val || (end && *end) || !isfinite(parsed) ||
+		    parsed < 0.0f || parsed > SG_WEIGHT_MAX)
+		{
+			sg_host.dprint("slipgate: weights: invalid value %s for %s\n",
+			               val, key);
+			bad++;
+			continue;
+		}
+		if (Weights_Set(key, parsed))
 			n++;
 		else
 		{

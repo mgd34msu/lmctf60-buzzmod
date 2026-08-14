@@ -41,7 +41,8 @@ escape runs, escorts that screen the carrier, and defense that guards
 sightlines instead of standing on the flag.
 
 The bots navigate on a per-map graph proven by actual physics runs (runs,
-jumps, drops, grapple swings, rocket jumps), price their decisions on a live
+jumps, drops, swimming, grapple swings, lifts, teleports, and declared door
+traversals), price their decisions on a live
 cost surface (items, danger, duel range, cover, teammate support), and share
 one team-wide belief of where enemies and flags are. Movement doctrine and
 combat habits are mined from a large corpus of demos from the game's

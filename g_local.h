@@ -941,6 +941,11 @@ void TeamJoin (edict_t *ent);
 
 // WEAPONS
 void Weapon_Hook_Fire (edict_t *ent);
+void CTF_HookMuzzle (const vec3_t origin, float viewheight, int hand,
+	const vec3_t forward, const vec3_t right, vec3_t start);
+int CTF_HookPullVelocity (const vec3_t start, const vec3_t bite,
+	vec3_t velocity);
+void CTF_HookPullStep (edict_t *ent, qboolean draw_cable);
 
 // ITEMS
 
@@ -984,6 +989,8 @@ qboolean SV_FilterPacket (char *from);
 //
 // p_view.c
 //
+float P_FallDelta (float old_velocity_z, float velocity_z,
+	qboolean grounded, int waterlevel);
 void ClientEndServerFrame (edict_t *ent);
 
 //

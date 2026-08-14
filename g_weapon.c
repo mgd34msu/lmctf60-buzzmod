@@ -982,7 +982,9 @@ void bfg_think (edict_t *self)
 				gi.WriteByte (4);
 				gi.WritePosition (tr.endpos);
 				gi.WriteDir (tr.plane.normal);
-				gi.WriteByte (self->s.skinnum);
+				/* Beam skinnum is a packed 32-bit palette; sparks carry its low
+				 * byte on the wire. */
+				gi.WriteByte ((byte)self->s.skinnum);
 				gi.multicast (tr.endpos, MULTICAST_PVS);
 				break;
 			}

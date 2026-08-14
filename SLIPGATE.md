@@ -19,8 +19,8 @@ in `LEDGER.md` and the git history.
 ## How the bots work (short version)
 
 - **Navigation** rides a per-map "rune" graph of proven movement links
-  (runs, jumps, drops, grapple swings, lifts, teleports, rocket
-  jumps), flooded into cost fields that price every seed on the map
+  (runs, jumps, drops, swimming, grapple swings, lifts, and teleports),
+  flooded into cost fields that price every seed on the map
   against every objective. Movement between commitments descends those
   fields; a feeler fan and safety layers (terminal braking, sink ban,
   edge guards) keep the body honest on the geometry.

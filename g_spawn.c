@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
 #include "g_ctffunc.h"
@@ -928,6 +929,12 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	SaveClientData ();
 
+	/* TAG_LEVEL is about to invalidate every SLIPGATE graph/field pointer.
+	 * Reset synchronously, while the outgoing map name and bot edicts still
+	 * exist, so an rcon `sv sg add` between spawn and the first game frame
+	 * cannot create a client that the deferred time-rewind detector orphans. */
+	SG_LevelChange ();
+
 	SG_NetNewLevel ();
 
 	// BUZZKILL - the session recorder's per-level state: chat counts, the
@@ -1490,4 +1497,3 @@ void SP_worldspawn (edict_t *ent)
 	// 63 testing
 	gi.configstring(CS_LIGHTS+63, "a");
 }
-
