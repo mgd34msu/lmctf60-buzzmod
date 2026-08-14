@@ -3,10 +3,10 @@
 
 Reads <map>.rune (link table order is the contract) and tools/human/
 <map>.escape.json (transition counts from demorune.py), writes
-maps/<map>.hme: 20-byte header then one uint8 per link -- the link's
+maps/<map>.hme: explicit v3 header then one uint8 per link -- the link's
 human-traffic tier, log-scaled to 0..255 with 0 = no human ever ran it.
-The sidecar header carries the validated v2 input rune version. Its CRC32 binds the
-sidecar to the exact ordered seed-and-link payload from which it was baked.
+The sidecar binds both graph counts and the exact validated v3 rune payload,
+action contract, and header from which it was baked.
 
 A transition a>b credits every rune link a->b (all actions: if a human
 moved seam-to-seam, the road is real regardless of gait). The game loads
@@ -20,12 +20,12 @@ import os
 import struct
 import sys
 
-from corpusgraph import (HEADER_SIZE, LINK_FMT, LINK_SIZE, SEED_SIZE,
-                         atomic_write_bytes, load_corpus, read_rune,
+from corpusgraph import (atomic_write_bytes, load_corpus, read_rune,
+                         require_current_rune_binding,
                          require_corpus_identity, require_safe_mapname,
+                         rune_identity_from_rune, rune_link_pairs,
                          validate_transition_counts)
-
-HME_MAGIC = 0x484D4531  # "1EMH"
+import sidecario
 
 
 def bake_map(rune_dir, human_dir, mapname):
@@ -41,23 +41,13 @@ def bake_map(rune_dir, human_dir, mapname):
         raise FileNotFoundError(f'{mapname}: rune={bool(rune_path)} '
                                 f'json={os.path.exists(json_path)}')
 
-    rune = read_rune(rune_path, mapname, versions=(2,))
-    data = rune['data']
-    version = rune['version']
+    rune = read_rune(rune_path, mapname, versions=(3,))
     num_seeds = rune['num_seeds']
     num_links = rune['num_links']
-    graph_crc = rune['graph_crc32']
-    seed_crc = rune['seed_crc32']
-    link_offset = HEADER_SIZE + num_seeds * SEED_SIZE
-    pairs = []
-    for i in range(num_links):
-        link = struct.unpack_from(LINK_FMT, data,
-                                  link_offset + i * LINK_SIZE)
-        pairs.append((link[0], link[1]))
+    pairs = rune_link_pairs(rune)
 
     document = load_corpus(json_path)
-    identity = {'map': mapname, 'rune_num_seeds': num_seeds,
-                'rune_seed_crc32': seed_crc}
+    identity = rune_identity_from_rune(rune)
     require_corpus_identity(document, json_path, identity)
     transitions = validate_transition_counts(document, json_path, num_seeds)
     counts = [transitions.get(f'{source}>{destination}', 0)
@@ -69,9 +59,13 @@ def bake_map(rune_dir, human_dir, mapname):
         for count in counts)
 
     output = os.path.join(os.path.dirname(rune_path), f'{mapname}.hme')
-    payload = struct.pack('<5I', HME_MAGIC, version, num_links, 0,
-                          graph_crc) + tiers
-    atomic_write_bytes(output, payload)
+    binding = sidecario.binding_from_rune(rune)
+    payload = sidecario.encode_v3(sidecario.HME, binding, tiers)
+    atomic_write_bytes(
+        output, payload,
+        precommit=lambda: require_current_rune_binding(
+            rune_path, mapname, binding),
+    )
     used = sum(1 for tier in tiers if tier)
     print(f'{mapname}: links={num_links} human-used={used} '
           f'({100 * used // max(num_links, 1)}%) top_count={top} -> {output}')

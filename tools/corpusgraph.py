@@ -287,6 +287,7 @@ def _read_rune_v3(path, expected_map, stream, prefix, file_size):
         'seed_bytes': decoded.header.seed_bytes,
         'link_bytes': decoded.header.link_bytes,
         'payload_crc32': decoded.header.payload_crc32,
+        'header_crc32': decoded.header.header_crc32,
         'bsp_checksum': decoded.header.bsp_checksum,
         'entity_crc32': decoded.header.entity_crc32,
         'action_contract_crc32': decoded.header.action_contract_crc32,
@@ -354,8 +355,8 @@ def read_rune(path, expected_map=None, versions=(1, 2)):
     }
 
 
-def rune_identity(path, expected_map=None):
-    rune = read_rune(path, expected_map, versions=(1, 2, 3))
+def rune_identity_from_rune(rune):
+    """Return the corpus stamp for one already-decoded rune snapshot."""
     identity = {
         'map': rune['map'],
         'rune_num_seeds': rune['num_seeds'],
@@ -373,31 +374,128 @@ def rune_identity(path, expected_map=None):
     return identity
 
 
+def rune_identity(path, expected_map=None):
+    rune = read_rune(path, expected_map, versions=(1, 2, 3))
+    return rune_identity_from_rune(rune)
+
+
+def rune_seed_origins(rune):
+    """Return ordered seed origins without assuming a native wire layout."""
+    if rune['version'] == 3:
+        return tuple(tuple(seed.origin) for seed in rune['seeds'])
+    data = rune['data']
+    return tuple(
+        struct.unpack_from(SEED_FMT, data, HEADER_SIZE + index * SEED_SIZE)[:3]
+        for index in range(rune['num_seeds'])
+    )
+
+
+def rune_link_pairs(rune):
+    """Return ordered (source, destination) pairs for every encoded link."""
+    if rune['version'] == 3:
+        return tuple((link.source, link.destination) for link in rune['links'])
+    offset = HEADER_SIZE + rune['num_seeds'] * SEED_SIZE
+    return tuple(
+        struct.unpack_from(LINK_FMT, rune['data'],
+                           offset + index * LINK_SIZE)[:2]
+        for index in range(rune['num_links'])
+    )
+
+
+def rune_tombstone_indices(rune):
+    """Return encoded seed indices that are intentionally not route owners."""
+    if rune['version'] == 3:
+        return tuple(
+            index for index, seed in enumerate(rune['seeds'])
+            if seed.flags & RSF_TOMBSTONE
+        )
+    data = rune['data']
+    return tuple(
+        index for index in range(rune['num_seeds'])
+        if struct.unpack_from(
+            SEED_FMT, data, HEADER_SIZE + index * SEED_SIZE
+        )[4] & RSF_TOMBSTONE
+    )
+
+
+def rune_live_seed_indices(rune):
+    """Return stable original indices while excluding route tombstones."""
+    tombstones = frozenset(rune_tombstone_indices(rune))
+    return tuple(
+        index for index in range(rune['num_seeds'])
+        if index not in tombstones
+    )
+
+
+def require_current_rune_binding(path, expected_map, expected_binding):
+    """Fail a sidecar precommit if its decoded rune snapshot went stale."""
+    try:
+        import sidecario
+    except ModuleNotFoundError:
+        from tools import sidecario
+    try:
+        current = read_rune(path, expected_map, versions=(3,))
+        actual_binding = sidecario.binding_from_rune(current)
+    except (OSError, ValueError, KeyError) as exc:
+        raise sidecario.SidecarError(
+            sidecario.SCD_STATE_DRIFT,
+            f'{path}: target rune is no longer the decoded v3 snapshot',
+        ) from exc
+    if actual_binding != expected_binding:
+        raise sidecario.SidecarError(
+            sidecario.SCD_STATE_DRIFT,
+            f'{path}: target rune binding changed before sidecar commit',
+        )
+
+
+_V3_CORPUS_IDENTITY_KEYS = (
+    'rune_version',
+    'rune_num_seeds',
+    'rune_seed_crc32',
+    'rune_bsp_checksum',
+    'rune_entity_crc32',
+    'rune_physics',
+)
+
+
 def require_corpus_identity(document, path, identity):
     if not isinstance(document, dict):
         raise ValueError(f'{path}: top level must be an object')
     corpus_map = document.get('map')
-    if (not isinstance(corpus_map, str) or
-            corpus_map.casefold() != identity['map'].casefold()):
+    exact_map = identity.get('rune_version') == 3
+    map_matches = (corpus_map == identity['map'] if exact_map else
+                   isinstance(corpus_map, str) and
+                   corpus_map.casefold() == identity['map'].casefold())
+    if not isinstance(corpus_map, str) or not map_matches:
         raise ValueError(f'{path}: map identity {corpus_map!r} does not match '
                          f"{identity['map']!r}")
-    for key in ('rune_num_seeds', 'rune_seed_crc32'):
+    keys = (_V3_CORPUS_IDENTITY_KEYS if exact_map else
+            ('rune_num_seeds', 'rune_seed_crc32'))
+    for key in keys:
         value = document.get(key)
-        if isinstance(value, bool) or not isinstance(value, int):
+        expected = identity[key]
+        if key == 'rune_physics':
+            valid = isinstance(value, dict)
+        else:
+            valid = not isinstance(value, bool) and isinstance(value, int)
+        if not valid:
             raise ValueError(f'{path}: missing or invalid {key}; re-mine this '
                              'corpus against the target rune')
-        if value != identity[key]:
+        if value != expected:
             if key == 'rune_seed_crc32':
                 got = f'0x{value:08x}'
-                wanted = f"0x{identity[key]:08x}"
+                wanted = f"0x{expected:08x}"
             else:
-                got, wanted = value, identity[key]
+                got, wanted = value, expected
             raise ValueError(f'{path}: {key} {got} does not match target '
                              f'{wanted}; re-mine instead of reindexing')
 
 
 def stamp_corpus_identity(document, identity):
-    for key in ('rune_num_seeds', 'rune_seed_crc32'):
+    keys = (_V3_CORPUS_IDENTITY_KEYS
+            if identity.get('rune_version') == 3 else
+            ('rune_num_seeds', 'rune_seed_crc32'))
+    for key in keys:
         document[key] = identity[key]
     return document
 
@@ -444,7 +542,7 @@ def validate_seed_weights(weights, path, label, num_seeds):
     return normalized
 
 
-def _atomic_write(path, payload):
+def _atomic_write(path, payload, precommit=None):
     """Durably replace path from a same-directory temporary file."""
     directory = os.path.dirname(os.path.abspath(path))
     if not os.path.isdir(directory):
@@ -470,6 +568,10 @@ def _atomic_write(path, payload):
                               f'({written}/{len(payload)})')
             stream.flush()
             os.fsync(stream.fileno())
+        if precommit is not None:
+            if not callable(precommit):
+                raise TypeError('precommit must be callable')
+            precommit()
         os.replace(temporary, path)
         temporary = None
         try:
@@ -497,10 +599,10 @@ def _atomic_write(path, payload):
                 pass
 
 
-def atomic_write_bytes(path, payload):
+def atomic_write_bytes(path, payload, *, precommit=None):
     if not isinstance(payload, bytes):
         raise TypeError('atomic_write_bytes payload must be bytes')
-    _atomic_write(path, payload)
+    _atomic_write(path, payload, precommit)
 
 
 def atomic_write_json(path, document):

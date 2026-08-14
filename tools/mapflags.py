@@ -21,8 +21,9 @@ import struct
 import sys
 from functools import lru_cache
 
-from corpusgraph import (HEADER_SIZE, LINK_SIZE, SEED_FMT, SEED_SIZE,
-                         atomic_write_json, read_rune, require_safe_mapname)
+from corpusgraph import (atomic_write_json, read_rune, require_safe_mapname,
+                         rune_link_pairs,
+                         rune_live_seed_indices, rune_seed_origins)
 
 MAX_PAK_DIRECTORY = 64 * 1024 * 1024
 MAX_GAME_FILE_BYTES = 512 * 1024 * 1024
@@ -162,25 +163,23 @@ def flag_origins(gamedir, mapname):
     return flag_origins_with_source(gamedir, mapname)[0]
 
 
+def read_graph_metadata(path, expected_map=None):
+    rune = read_rune(path, expected_map, versions=(1, 2, 3))
+    seeds = rune_seed_origins(rune)
+    live = frozenset(rune_live_seed_indices(rune))
+    linked = frozenset(source for source, _ in rune_link_pairs(rune))
+    return rune, seeds, live & linked
+
+
+@lru_cache(maxsize=64)
+def load_graph_metadata(path, expected_map=None):
+    return read_graph_metadata(path, expected_map)
+
+
 @lru_cache(maxsize=64)
 def load_graph(path):
-    rune = read_rune(path)
-    data = rune['data']
-    num_seeds = rune['num_seeds']
-    num_links = rune['num_links']
-    off = HEADER_SIZE
-    seeds = []
-    for _ in range(num_seeds):
-        x, y, z, ah, fl = struct.unpack_from(SEED_FMT, data, off)
-        off += SEED_SIZE
-        seeds.append((x, y, z))
-    linked = set()
-    for _ in range(num_links):
-        source = struct.unpack_from('<i', data, off)[0]
-        if 0 <= source < num_seeds:
-            linked.add(source)
-        off += LINK_SIZE
-    return seeds, frozenset(linked)
+    _, seeds, eligible = load_graph_metadata(path)
+    return seeds, eligible
 
 
 @lru_cache(maxsize=64)
@@ -208,10 +207,9 @@ def nearest(seeds, p, linked=None):
         d = dx * dx + dy * dy + dz**2 * 0.25
         if d < bd:
             bd, best = d, i
-    # Runtime chooses the nearest visible geometry owner first and only then
-    # asks whether that owner participates in routing. Searching past an
-    # unlinked/tombstone owner can assign a body across a one-way boundary to
-    # a farther seed it cannot reach.
+    # Runtime first chooses the nearest geometry owner. If that exact owner is
+    # a tombstone/unlinked seed, fail closed instead of substituting a farther
+    # seed that the observed body may be unable to reach across a boundary.
     if best >= 0 and linked is not None and best not in linked:
         return -1, float('inf')
     return best, bd ** 0.5 if best >= 0 else float('inf')
@@ -243,7 +241,7 @@ def main(argv=None):
         rp = os.path.join(gamedir, 'maps', f'{m}.rune')
         rec = {'map': m, 'flags': fo}
         if os.path.exists(rp) and fo:
-            seeds, linked = load_graph(rp)
+            _, seeds, linked = load_graph_metadata(rp, m)
             for team in ('red', 'blue'):
                 if team in fo:
                     si, dist = nearest(seeds, fo[team], linked)

@@ -193,15 +193,15 @@ The shared parsing library and the mining/report/forensics scripts built on it. 
 - **Purpose:** maps human POV routing onto a map's rune seed graph — per demo, compresses the position trace to a seed-visit sequence and aggregates seed-to-seed transition counts plus flag-event timestamps.
 - **Usage:** `demorune.py <rune_dir> <out_dir> <demo> [<demo> ...]`.
 - **Inputs:** `.dm2` demos (map read from configstring 33), `<rune_dir>/<map>.rune`.
-- **Outputs:** `<out_dir>/<map>.human.json` (`{map, demos, frames, transitions, seed_dwell, events}`), merged across maps present in the input set.
+- **Outputs:** atomically written `<out_dir>/<map>.human.json` (`{map, v3 rune identity, demos, frames, transitions, seed_dwell, events}`), merged across maps present in the input set. Tombstones retain their encoded indices but are excluded from localization.
 - **Dependencies:** `dm2speed.py`. Feeds `humanbake.py` and `defreport.py` (via the `human/` fixture directory).
 
 ### `escapee.py`
 - **Purpose:** cuts flag-carrier escape trajectories (20s window per steal, from the print-stream steal event to a capture/return/death print or window timeout) and maps them onto rune seeds. Entity-layer data, so ref-cam demos are fair game (only POV kinematics are POV-restricted, per the owner's ruling in `pov-rules.txt`).
 - **Usage:** `escapee.py [--rune-dir DIR] [--out DIR] [--replace] <demo.dm2> [<demo.dm2> ...]`.
 - **Inputs:** `.dm2` demos and rune files under `--rune-dir` (default `/home/buzzkill/Games/Quake2/lmctf-hooktest/maps`).
-- **Outputs:** `<out>/<map>.escape.json`, identity-stamped with the rune's seed count/CRC. The default is an identity-checked merge so timeout-bounded chunks retain earlier work; `--replace` explicitly discards the previous output. Writes are atomic.
-- **Dependencies:** `dm2speed.py`, `demoents.py` (`parse_delta_entity_track`, `U_REMOVE`), `demokin.parse_playerstate_full`, `demorune.load_seeds`/`SeedGrid`. Feeds `escapebake.py`.
+- **Outputs:** `<out>/<map>.escape.json`, identity-stamped from the same decoded rune snapshot used for localization. The default is an identity-checked merge so timeout-bounded chunks retain earlier work; `--replace` explicitly discards the previous output. Writes are atomic.
+- **Dependencies:** `dm2speed.py`, `demoents.py` (`parse_delta_entity_track`, `U_REMOVE`), `demokin.parse_playerstate_full`, `demorune.load_seed_graph`/`SeedGrid`. Feeds `escapebake.py`.
 
 ### `escapepriors.py`
 - **Purpose:** mines which direction humans leave the flag stand after a steal, as a per-map compass-bucket **distribution** (not a single argmin route) — "mine the best behavior from EACH human, never conform to one." Uses the effects-bit carry state machine (`film.py`'s `carry_windows`), not print text, so it reads the same on either demo shape (though only client demos are counted — a serverrecord win here would poison the prior with a bot's own habit).
@@ -211,52 +211,64 @@ The shared parsing library and the mining/report/forensics scripts built on it. 
 - **Dependencies:** imports `film.py` for its walker only, with an inert stand-in `numpy`/`matplotlib` loader so the plotting deps aren't required just to mine priors.
 
 ### `humanbake.py`
-- **Purpose:** legacy/offline baker for human demo traffic (`demorune.py`'s per-map transition counts), producing one log-scaled byte per rune link. The strict v3 B3 runtime deliberately does not open `.hmn`; do not deploy this native v2 format. B4 will restore the feature through an explicit v3 identity-bound sidecar.
+- **Purpose:** v3 baker for human demo traffic (`demorune.py`'s per-map transition counts), producing one log-scaled byte per ordered rune link. It accepts only a decoded v3 rune and a current identity-stamped corpus.
 - **Usage:** `humanbake.py <rune_dir> <human_json_dir> <map> [<map> ...]`.
 - **Inputs:** `<rune_dir>/<map>.rune`, `<human_json_dir>/<map>.human.json` (from `demorune.py`).
-- **Outputs:** `<rune_dir>/<map>.hmn` (magic `0x484D4E31`).
-- **Dependencies:** none beyond the stdlib.
+- **Outputs:** `<rune_dir>/<map>.hmn` (wire magic `HMN3`).
+- **Dependencies:** `corpusgraph.py`, `sidecario.py`; otherwise stdlib.
 
 ### `flaglivebake.py`
-- **Purpose:** reserved legacy `.hml` baker for a future migrated flag-live corpus. **HML is not deployable today:** the retained JSON contains seed indices from an older graph and has no current producer or spatial migration, and the strict v3 B3 runtime opens no graph sidecars.
+- **Purpose:** v3 `.hml` baker for flag-live traffic. **The retained HML corpus is still not deployable:** its seed indices came from an older graph and it has neither a current producer nor a spatial migration.
 - **Usage:** `flaglivebake.py <rune_dir> <human_json_dir> <map> [<map> ...]`.
-- **Inputs:** only a newly mined or spatially migrated `<map>.flaglive.json` carrying the exact target rune's seed count and seed CRC. The retained legacy JSON is reference data, not a bake input.
-- **Outputs:** no production `.hml` until a spatial migration or producer exists. When such an identity-stamped corpus exists, the tool can write `<map>.hml` (magic `0x484D4C31`) beside the rune.
-- **Dependencies:** `humanbake.py` for the shared rune-format validator; otherwise stdlib only.
+- **Inputs:** only a newly mined or spatially migrated `<map>.flaglive.json` carrying the rune version, exact-case map, seed count/CRC, BSP/entity identity, and proof physics from the current v3 rune. The retained legacy JSON is reference data, not a bake input.
+- **Outputs:** no production `.hml` until a spatial migration or producer exists. Given a valid current corpus, writes `<map>.hml` (wire magic `HML3`) beside the rune.
+- **Dependencies:** `corpusgraph.py`, `sidecario.py`; otherwise stdlib.
 
 ### `escapebake.py`
-- **Purpose:** legacy/offline baker for escapee (post-steal carrier) traffic, using the same byte-per-link shape as `humanbake.py`. The strict v3 B3 runtime does not open `.hme`; B4 must replace its native v2 graph binding before deployment.
+- **Purpose:** v3 baker for escapee (post-steal carrier) traffic, using the same byte-per-ordered-link shape as `humanbake.py`.
 - **Usage:** `escapebake.py <rune_dir> <human_json_dir> <map> [<map> ...]`.
 - **Inputs:** `<rune_dir>/<map>.rune`, `<human_json_dir>/<map>.escape.json` (from `escapee.py`).
-- **Outputs:** `<rune_dir>/<map>.hme` (magic `0x484D4531`).
-- **Dependencies:** none beyond the stdlib.
+- **Outputs:** `<rune_dir>/<map>.hme` (wire magic `HME3`).
+- **Dependencies:** `corpusgraph.py`, `sidecario.py`; otherwise stdlib.
 
 ### `defbake.py`
-- **Purpose:** legacy/offline baker for human defensive occupancy (`demodefense.py`'s dwell/intercept-seed weights), producing post/intercept tiers per team. The strict v3 B3 runtime does not open `.dpo`; B4 must replace its native v2 graph binding before deployment.
+- **Purpose:** v3 baker for human defensive occupancy (`demodefense.py`'s dwell/intercept-seed weights), producing four seed-indexed post/intercept planes. Any nonzero tier assigned to a v3 tombstone is rejected.
 - **Usage:** `defbake.py <rune_dir> <defense_json_dir> [<map> ...]` (defaults to every map with a `.defense.json` present).
 - **Inputs:** `<rune_dir>/<map>.rune`, `<defense_json_dir>/<map>.defense.json` (from `demodefense.py`).
 - **Outputs:** `<map>.dpo` beside the rune by default, or under `$DPO_OUT` if set (used to validate the format without touching a live game directory).
-- **Dependencies:** none beyond the stdlib.
+- **Dependencies:** `corpusgraph.py`, `sidecario.py`; otherwise stdlib.
 
-The four historical binary sidecar formats use a 20-byte native-v2-era header:
-magic, rune version, record count, shape/reserved word, then IEEE CRC32 of the
-ordered native rune payload. They are retained only for forensic/offline work.
-The strict v3 B3 game runtime opens none of `.hmn`, `.hml`, `.hme`, or `.dpo`,
-and none should be installed beside a v3 rune. B4 will introduce explicit
-little-endian sidecar records bound to the full v3 payload CRC and action
-contract before re-enabling any consumer. Every legacy baker still fails
-nonzero on a missing or malformed requested corpus and uses a same-directory
-atomic replacement, so a failed offline bake preserves the old file.
-Seed-indexed JSON must carry `rune_num_seeds` and `rune_seed_crc32` from the
-exact rune used while mining. Legacy unstamped JSON is reference data only:
-re-mine or spatially migrate it against the eventual v3 sidecar contract rather
-than manually adding a stamp or trying to reinterpret old seed numbers.
+`sidecario.py` defines the common 48-byte explicit-little-endian v3 header
+(`struct <I6H8I`). Fields in order are: kind magic; format version `1`; header
+bytes `48`; bound rune version; element bytes; plane count; zero reserved;
+`num_seeds`; `num_links`; exact rune payload CRC; action-contract CRC; exact
+rune header CRC; payload bytes; payload CRC; and header CRC. The header CRC is
+computed with its own four bytes zero. `HMN3`, `HML3`, and `HME3` are one
+`u8[num_links]` plane; `DPO3` is four `u8[num_seeds]` planes; `DNG3` is two
+explicit-LE `i32[num_seeds]` planes. Unknown magic/version/shape, nonzero
+reserved data, count or exact-size mismatch, trailing bytes, any CRC mismatch,
+or any rune binding mismatch fails closed under the stable `SCD_*` diagnostic
+domain. Every `DNG3` value must be in `0..8000`, and both `DNG3` and `DPO3`
+require zero in every plane at a rune tombstone. A C runtime loader and producer
+must consume the same golden fixture before a generated sidecar is deployed.
+
+The old 20-byte native-v2-era formats remain forensic history and are never
+emitted by these bakers. Every baker fails nonzero on a missing or malformed
+requested corpus and uses same-directory atomic replacement, so a failed bake
+preserves the old file. The atomic precommit rereads the rune binding and
+reports `SCD_STATE_DRIFT` rather than replacing a current sidecar with output
+derived from a concurrently regenerated rune. V3 seed-indexed JSON carries the
+exact-case map,
+`rune_version`, seed count/CRC, BSP/entity identity, and proof physics from the
+single decoded rune snapshot used for localization. Legacy unstamped JSON is
+reference data only: re-mine or spatially migrate it rather than manually
+adding a stamp or trying to reinterpret old seed numbers.
 
 ### `demodefense.py`
 - **Purpose:** what human defenders actually do, per map — who is defending (frame-share inside `--defradius` of their own home flag), where they dwell (rune seeds, thinned to posts by `--postsep`), and how they react to a steal (10s window: chase / cut-off / hold, gap-close and drift-off-post metrics).
 - **Usage:** `demodefense.py --gamedir DIR --out DIR [--jobs N] [--map NAME] <demo> ...` (also: `--defradius`, `--defshare`, `--minframes`, `--dwellwin`, `--dwellspan`, `--postsep`, `--postlimit`, `--minpostshare`, `--window`, `--minresp`, `--teleport`, `--mindemos`, all with defaults).
 - **Inputs:** `.dm2` demos under `--gamedir`; the entity layer (same all-visible-players approach as `demoents.py`); pins players to teams from the `CS_PLAYERSKINS` table.
-- **Outputs:** `<out>/<map>.defense.json` (`flags`, `flag_seed`, `defenders`, `posts_by_team`, `dwell_seed`, `dwell_secs`, `response`) — consumed by `defbake.py` and `defreport.py`.
+- **Outputs:** atomically written, v3-identity-stamped `<out>/<map>.defense.json` (`flags`, `flag_seed`, `defenders`, `posts_by_team`, `dwell_seed`, `dwell_secs`, `response`) — consumed by `defbake.py` and `defreport.py`. A fresh rollup read rejects graph drift across workers, and tombstones are excluded from localization.
 - **Dependencies:** `multiprocessing.Pool` (`--jobs`).
 
 ### `defreport.py`
@@ -411,7 +423,7 @@ YOUR own demo collection:
    `chat-corpus.json`. Do **not** bake the retained
    `<map>.flaglive.json` into `.hml`: seed numbers cannot be reindexed across
    rune generations, and the original miner is absent. HML remains retired
-   until a producer re-mines against v2 or a spatial migration maps the old
+   until a producer re-mines against v3 or a spatial migration maps the old
    observations onto the new seed geometry. Each active tool's section above
    has the exact command line.
 4. **Respect your recorders**: `pov-rules.txt` is the pattern for
@@ -420,7 +432,7 @@ YOUR own demo collection:
 
 The shipped versions reflect OUR corpus (2020-2023 LMCTF pub play, 268
 demos). Non-seed-indexed priors and reports work as reference artifacts, but
-legacy unstamped seed-indexed JSON cannot be baked against a regenerated v2
+legacy unstamped seed-indexed JSON cannot be baked against a regenerated v3
 rune; it must be re-mined. For regenerable artifacts, the more your maps and
 community differ from ours, the more regeneration pays.
 
@@ -441,8 +453,13 @@ POV kinematics exclusion list (owner ruling, 2026-08-03) — substring match on 
 ### `topmaps.txt`
 Priority map list (one mapname per line, `#`-comments allowed), ranked by demo popularity analysis. Consumed by `runegen.sh`'s usage example (`tools/runegen.sh $(grep -v '^#' tools/topmaps.txt)`).
 
+### `../tests/fixtures/sidecar_v3_hmn_golden.hex`
+Shared Python/C 50-byte HMN3 wire vector. It binds the two-seed/two-link
+`rune_v3_wire_golden.hex` header and carries link tiers `[7, 200]`; both codecs
+must reproduce it byte-for-byte.
+
 ### `human/`
-Output directory for the demo-mining pipeline — per-map `<map>.human.json` (`demorune.py`), `<map>.escape.json` (`escapee.py`), `<map>.defense.json` (`demodefense.py`); 6.8MB as of writing. Consumed by `humanbake.py`, `escapebake.py`, `defbake.py`, and `defreport.py`. It also retains legacy `<map>.flaglive.json` reference data, but those seed-indexed files have no current producer or spatial migration and are explicitly **not v2 bake inputs**; no `.hml` should be deployed from them. The directory also contains `carrywindows.json` and an `ents/` subdirectory of `<map>.ents.json`/`playersamples.json` reference files — see FLAGS.
+Output directory for the demo-mining pipeline — per-map `<map>.human.json` (`demorune.py`), `<map>.escape.json` (`escapee.py`), `<map>.defense.json` (`demodefense.py`); 6.8MB as of writing. Consumed by `humanbake.py`, `escapebake.py`, `defbake.py`, and `defreport.py`. It also retains legacy `<map>.flaglive.json` reference data, but those seed-indexed files have no current producer or spatial migration and are explicitly **not v3 bake inputs**; no `.hml` should be deployed from them. The directory also contains `carrywindows.json` and an `ents/` subdirectory of `<map>.ents.json`/`playersamples.json` reference files — see FLAGS.
 
 ### `botkin_raw.json`, `botledger.csv`, `chat-corpus.json`
 Data files produced by (respectively) `botkin.py`, `botledger.py`, `chatmine.py` — see those entries above for shape and producer detail. `botkin_raw.json` has no consumer script in `tools/` (write-only side effect); `botledger.csv` is the appended longitudinal ledger read only by ad hoc analysis outside this tree; `chat-corpus.json` is likewise a terminal artifact (meant for human/manual review, per `chatmine.py`'s own usage text).

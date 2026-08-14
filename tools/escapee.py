@@ -15,7 +15,7 @@ the owner's ruling is that game info from any camera is fair game (only
 POV kinematics are restricted to player-body recordings).
 
 Output: tools/human/<map>.escape.json = an identity-stamped corpus containing
-the map, rune seed count/CRC, window count, and transition counts.
+the map and v3 world/physics/seed identity, window count, and transition counts.
 
 Usage: escapee.py [--rune-dir DIR] [--out DIR] [--replace]
                   <demo.dm2> [<demo.dm2> ...]
@@ -31,9 +31,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dm2speed as D
 import demoents as DE
 from demokin import parse_playerstate_full
-from demorune import SeedGrid
-from corpusgraph import (HEADER_SIZE, MAX_CORPUS_COUNT, SEED_FMT, SEED_SIZE,
-                         atomic_write_json, load_corpus, read_rune,
+from demorune import SeedGrid, load_seed_graph
+from corpusgraph import (MAX_CORPUS_COUNT, atomic_write_json, load_corpus,
                          require_corpus_identity, stamp_corpus_identity,
                          validate_transition_counts)
 
@@ -86,20 +85,9 @@ def walk_demo(path, grids, agg, rune_dir):
             rp = rune_path_for(mapname, rune_dir)
             if rp:
                 try:
-                    rune = read_rune(rp, mapname)
-                    seeds = []
-                    offset = HEADER_SIZE
-                    for _ in range(rune['num_seeds']):
-                        seed = struct.unpack_from(SEED_FMT, rune['data'],
-                                                  offset)
-                        seeds.append(seed[:3])
-                        offset += SEED_SIZE
-                    grids[mapname] = SeedGrid(seeds)
-                    grids[mapname].rune_identity = {
-                        'map': rune['map'],
-                        'rune_num_seeds': rune['num_seeds'],
-                        'rune_seed_crc32': rune['seed_crc32'],
-                    }
+                    seeds, eligible, identity = load_seed_graph(rp, mapname)
+                    grids[mapname] = SeedGrid(seeds, eligible)
+                    grids[mapname].rune_identity = identity
                 except (OSError, ValueError, struct.error) as error:
                     grids[mapname] = False
                     grid_errors[mapname] = str(error)

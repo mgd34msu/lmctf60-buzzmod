@@ -393,6 +393,72 @@ sidecar format must bind to the exact v3 payload CRC, counts, and action-contrac
 CRC before allocation or publication. A stale v2 sidecar or a sidecar from a
 different v3 numbering rejects; length equality is insufficient.
 
+### Authenticated sidecar wire image
+
+Graph-indexed sidecars use one 48-byte explicit-little-endian header. Native C
+struct layout is never a file format. The header fields are:
+
+| Offset | Type | Field |
+|---:|---:|---|
+| 0 | u32 | kind magic |
+| 4 | u16 | sidecar format version, exactly 1 |
+| 6 | u16 | header bytes, exactly 48 |
+| 8 | u16 | bound rune version, exactly 3 |
+| 10 | u16 | element bytes |
+| 12 | u16 | plane count |
+| 14 | u16 | reserved, zero |
+| 16 | u32 | exact rune seed count |
+| 20 | u32 | exact rune link count |
+| 24 | u32 | exact rune payload CRC32 |
+| 28 | u32 | exact action-contract CRC32 |
+| 32 | u32 | exact rune header CRC32 |
+| 36 | u32 | exact sidecar payload bytes |
+| 40 | u32 | sidecar payload CRC32 |
+| 44 | u32 | sidecar header CRC32 |
+
+The sidecar header CRC covers all 48 header bytes with bytes 44–47 treated as
+zero. The rune header CRC is the compact full-identity token: because it covers
+the canonical case-sensitive map name, BSP checksum, entity CRC, graph counts
+and CRC, action contract, and complete physics law, an exact comparison binds
+the sidecar to all of them without duplicating the 64-byte map name. A sidecar
+path is formed only from the already-validated map name in that rune header.
+
+Kind magics are the little-endian byte strings `HMN3`, `HML3`, `HME3`, `DPO3`,
+and `DNG3`. `HMN3`, `HML3`, and `HME3` are one u8 plane indexed by link.
+`DPO3` is four u8 planes indexed by seed (red/blue defensive post followed by
+red/blue intercept). `DNG3` is two explicit little-endian i32 planes indexed by
+seed. Danger values must be in 0–8000. A defense or danger plane must be zero at
+every tombstone seed; a tombstone can never become a learned field root.
+
+The loader authenticates the fixed header and exact file size before allocating
+the bounded payload, then verifies the payload CRC and kind-specific values into
+a candidate. Missing optional sidecars are neutral. A malformed, stale, or
+wrong-kind sidecar is diagnosed and ignored as a whole; it never rejects the
+already-valid rune and never partially publishes a plane. Defense candidates
+are available to field construction, but the rune, fields, and all sidecars
+become visible only after the final fresh authority check.
+
+Sidecar diagnostics use their own append-only `SCD_*` namespace; `RLW_*`
+continues to classify the containing rune operation, and `RLW_BAD_SIDECAR` is
+only its coarse fallback. The stable detailed order is `OK`, `ABSENT`,
+`INVALID_ARGUMENT`, `PATH_TOO_LONG`, `IO_ERROR`, `BAD_MAGIC`,
+`UNSUPPORTED_VERSION`, `BAD_HEADER_SIZE`, `BAD_RUNE_VERSION`,
+`BAD_HEADER_CRC`, `NONZERO_RESERVED`, `BAD_SHAPE`, `BAD_COUNTS`,
+`BAD_PAYLOAD_SIZE`, `BAD_FILE_SIZE`, `RUNE_PAYLOAD_MISMATCH`,
+`ACTION_CONTRACT_MISMATCH`, `RUNE_HEADER_MISMATCH`, `BAD_PAYLOAD_CRC`,
+`BAD_PAYLOAD_VALUE`, `ALLOCATION_FAILED`, `TEMP_EXHAUSTED`, `STATE_DRIFT`,
+and `INTERNAL_ERROR`. Existing malformed files log this diagnostic and the
+stable processing stage once; an absent optional file does not log.
+
+Danger persistence uses a same-directory exclusive temporary, exact writes,
+file flush/sync/close, and atomic replacement. It snapshots only while the
+outgoing authenticated rune is still live: normal rotation saves before
+`ExitLevel` queues the next map, and clean shutdown saves before identity reset
+and tag teardown. An external engine `map` command exposes no pre-switch game
+callback, so that transition deliberately skips persistence rather than binding
+old lessons to incoming engine identity. Read-level restoration remains
+reset-only until save files carry v3 identity.
+
 Live in-process rune replacement is unsupported until all per-bot link indices,
 shelves, commitments, sticky/watch state, fields, and sidecars can be replaced
 transactionally. Normal map-level loading resets them before publication.
@@ -404,6 +470,7 @@ transactionally. Normal map-level loading resets them before publication.
 | E0 | Engine checksum and physics-ID bridge | Protected values exist before `SpawnEntities`, change with map/host law, and cannot be changed by console |
 | S1 | Canonical JSON, generator, generated C/Python metadata, action descriptor adapters | IDs 0–8 unchanged; IDs 9–11 and provenance 4 appended; C/Python metadata match; `--check` clean; legacy pricing/classification unchanged |
 | S2 | Explicit v3 I/O, identity binding, shared Python parser, strict compatibility | Golden 128/16/44 vectors round-trip in C/Python; corruptions reject; v2/v3 incompatibility is actionable; gravity-650 fixture loads |
+| B4 | Authenticated graph sidecars | Shared 48-byte C/Python vectors round-trip; bakers consume decoded v3 records; stale/corrupt/tombstone data stays neutral; danger survives normal rotation and clean shutdown atomically |
 | S3 | Shared pose-based DROP/SWIM/HOOK replay | Generator, loader, runtime use the same commands and terminal predicates; `lmctf09` exact hooks remain |
 | S4 | `RL_DOOR_DROP` | PREOPEN/RIDE generate, validate, load, and execute; ambiguous support rejects; `lmctf01` root-to-center appears |
 | S5 | `RL_DOOR_SWIM` | Submerged side-door class generates, validates, loads, and executes without weakening ordinary water actions |

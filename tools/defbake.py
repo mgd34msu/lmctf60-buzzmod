@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 """defbake.py -- bake human defensive occupancy into per-map .dpo sidecars.
 
-The game loads this optional sidecar beside the rune.  Its layout mirrors
-the .hmn/.hml/.hme sidecars, except that those are indexed by LINK and this
-one is indexed by SEED, so the header validates against num_seeds:
-
-    offset 0   int  magic     0x314F5044   ('DPO1')
-    offset 4   int  version   matches the validated v2 input rune
-    offset 8   int  num_seeds must equal rune->hdr.num_seeds
-    offset 12  int  planes    4
-    offset 16  int  graph_crc IEEE CRC32 of ordered rune seeds + links
-    offset 20  u8[num_seeds]  post tier, red team
-               u8[num_seeds]  post tier, blue team
-               u8[num_seeds]  intercept tier, red team
-               u8[num_seeds]  intercept tier, blue team
+The game loads this optional sidecar beside the rune. Its explicit v3 header
+binds both graph counts plus the rune payload, action contract, and header.
+The payload has four consecutive ``u8[num_seeds]`` planes: post red/blue,
+then intercept red/blue.
 
 A tier is log-scaled 0..255 exactly as humanbake.py scales link traffic,
 with 0 meaning "no human ever held this seed".  Post tiers come from
@@ -30,10 +21,11 @@ import struct
 import sys
 
 from corpusgraph import (atomic_write_bytes, load_corpus, read_rune,
+                         require_current_rune_binding,
                          require_corpus_identity, require_safe_mapname,
+                         rune_identity_from_rune, rune_tombstone_indices,
                          validate_seed_weights)
-
-DPO_MAGIC = 0x314F5044
+import sidecario
 
 
 def tiers(weights, ns):
@@ -73,13 +65,9 @@ def bake_map(rune_dir, json_dir, mapname):
                                 f'json={os.path.exists(json_path)}')
 
     document = load_corpus(json_path)
-    rune = read_rune(rune_path, mapname, versions=(2,))
-    version = rune['version']
+    rune = read_rune(rune_path, mapname, versions=(3,))
     num_seeds = rune['num_seeds']
-    graph_crc = rune['graph_crc32']
-    seed_crc = rune['seed_crc32']
-    identity = {'map': mapname, 'rune_num_seeds': num_seeds,
-                'rune_seed_crc32': seed_crc}
+    identity = rune_identity_from_rune(rune)
     require_corpus_identity(document, json_path, identity)
     planes = [
         tiers(_weights(document, json_path, 'dwell_seed', 'red',
@@ -91,15 +79,22 @@ def bake_map(rune_dir, json_dir, mapname):
         tiers(_weights(document, json_path, 'intercept_seed', 'blue',
                        num_seeds), num_seeds),
     ]
+    binding = sidecario.binding_from_rune(rune)
+    payload = sidecario.encode_v3(
+        sidecario.DPO, binding, b''.join(planes),
+        tombstone_indices=rune_tombstone_indices(rune),
+    )
     # Beside the rune, like every other sidecar -- unless DPO_OUT names
     # a staging directory (used to validate the format without dropping
     # files into a live game directory).
     output_dir = os.environ.get('DPO_OUT') or os.path.dirname(rune_path)
     os.makedirs(output_dir, exist_ok=True)
     output = os.path.join(output_dir, f'{mapname}.dpo')
-    payload = struct.pack('<5I', DPO_MAGIC, version, num_seeds,
-                          len(planes), graph_crc) + b''.join(planes)
-    atomic_write_bytes(output, payload)
+    atomic_write_bytes(
+        output, payload,
+        precommit=lambda: require_current_rune_binding(
+            rune_path, mapname, binding),
+    )
     used = [sum(1 for value in plane if value) for plane in planes]
     print(f'{mapname}: seeds={num_seeds} held red/blue={used[0]}/{used[1]} '
           f'intercept red/blue={used[2]}/{used[3]} -> {output}')
