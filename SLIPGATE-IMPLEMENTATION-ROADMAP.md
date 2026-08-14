@@ -28,7 +28,7 @@ compensate for an invalid movement graph.
       contract.
 - [ ] The loader rejects stale, malformed, incompatible, or disconnected runes
       before bots use them.
-- [ ] All 181 installed maps have a terminal, classified corpus result.
+- [x] All 181 installed maps have a terminal, classified corpus result.
 - [ ] Every applicable map generates, lints, loads, and admits a live bot.
 - [ ] Maps using different physics are either proved under their actual law or
       rejected with an explicit, actionable reason.
@@ -60,7 +60,9 @@ compensate for an invalid movement graph.
 7. **Preserve user work.** Existing dirty/untracked files are not overwritten
    or folded into implementation commits without explicit scope.
 
-## Baseline snapshot
+## Baseline snapshots
+
+### Initial rolling snapshot
 
 Snapshot taken 2026-08-13 while the corpus was still running:
 
@@ -82,6 +84,33 @@ Snapshot taken 2026-08-13 while the corpus was still running:
 
 This is a moving baseline. Final counts and hashes must be recorded when the
 181-map pass terminates.
+
+### Final v2 baseline
+
+The current-snapshot corpus terminated and was reconciled on 2026-08-13:
+
+- Complete: 181/181
+- Pass: 135
+- Fail: 46
+- Failure clusters:
+  - 33 objective-core failures
+  - 6 truthful 900-second timeouts
+  - 2 flag-objective binding failures
+  - 2 physics-contract refusals
+  - 3 invalid map assets
+- Module SHA-256:
+  `1029840dd583df7aca085196386a0b8cb89af512789d1cac61b09ffd71e5a6b3`
+- Durable manifest:
+  `tools/baselines/2026-08-13-rune-v2-corpus.json`
+- Original reconciled manifest SHA-256:
+  `1d96eb88cf6551de8df0c75e2d528987959d6cc1f8ebf906fe0ccb0a7dee24ea`
+- Summary SHA-256:
+  `603ca63b4a3fa1ffddf073b7212c34623ed33f1ced062e0743206c8f097e0361`
+
+All 135 passing artifacts were re-linted clean. The three invalid assets are
+`lmctf02`, `lmctf05`, and `xmap22`; they are not bot-code failures. The baseline
+manifest records the one terminal-classification repair and the exact harness
+and source hashes.
 
 ## Completed or proven in the current local checkpoint
 
@@ -115,13 +144,16 @@ These are implemented locally but still belong to the final push/merge gate.
 
 ## Workstream A: Finish and freeze the corpus baseline
 
-- [ ] Let all 181 current-snapshot runs reach terminal state.
-- [ ] Reconcile stale/fast-exit result records from the final logs.
-- [ ] Save a stable summary with module hash, source hashes, map counts, action
+- [x] Let all 181 current-snapshot runs reach terminal state.
+- [x] Reconcile stale/fast-exit result records from the final logs.
+- [x] Save a stable summary with module hash, source hashes, map counts, action
       counts, failure signature, log path, and rune hash.
-- [ ] Cluster failures by mechanism and contract, not merely by map name.
-- [ ] Select one minimal representative plus one adversarial map per cluster.
-- [ ] Preserve the baseline before changing the rune format.
+- [x] Cluster failures by mechanism and contract, not merely by map name.
+- [x] Select initial representatives: `lmctf01` for compound/core, `lmctf04`
+      for flag binding, `lmctf07` for alternate physics, `xmap26` for timeout,
+      and `xmap22` for asset rejection. Adversarial partners are selected when
+      each cluster enters implementation.
+- [x] Preserve the baseline before changing the rune format.
 - [x] Commit and push the currently proven checkpoint independently of later v3
       work once the checkpoint gate is recorded.
 
@@ -364,8 +396,8 @@ Commit policy:
 
 ## Immediate execution order
 
-1. [ ] Finish and freeze the currently running 181-map baseline.
-2. [ ] Review, commit, and push the current proven checkpoint without unrelated
+1. [x] Finish and freeze the currently running 181-map baseline.
+2. [x] Review, commit, and push the current proven checkpoint without unrelated
        dirty files.
 3. [ ] Fix and test the host allocation/installation contract.
 4. [ ] Add the first mock-host and deterministic primitive tests.
@@ -391,3 +423,7 @@ the commit, verification, corpus scope, and remaining blocker.
   migrated all generator cleanup paths, and added complete 34-slot host-table
   validation. Clean rebuild, `ldd -r`, syntax checks, diff check, runtime smoke,
   and independent refutation passed.
+- 2026-08-13: Initial 181-map v2 baseline completed: 135 PASS / 46 FAIL. All
+  passing runes re-linted clean; failures were reconciled into 33 core, 6
+  timeout, 2 flag-bind, 2 physics-refusal, and 3 invalid-asset results. Durable
+  manifest added under `tools/baselines/`.
