@@ -17,6 +17,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
 #include "slipgate/sg_weights.h"
@@ -3536,6 +3537,27 @@ static qboolean Hook_SettleArrived(const edict_t *e, const sg_bot_t *bot)
 	                           e->waterlevel, (edict_t *)e);
 }
 
+static void Swim_LivePose(const edict_t *e, sg_replay_pose_t *pose)
+{
+	SG_SwimLivePose(pose, e && e->client ? &e->client->ps.pmove : NULL,
+	    e ? e->s.origin : NULL, e ? e->velocity : NULL,
+	    e && e->groundentity != NULL, e ? e->watertype : 0,
+	    e ? e->waterlevel : 0);
+}
+
+static void Swim_LiveFallbackLog(const edict_t *e, int link_index,
+	const char *phase, const sg_swim_live_result_t *result)
+{
+	if (!result || result->outcome != SG_SWIM_LIVE_FALLBACK ||
+	    !sg_cv.debug->value)
+		return;
+	sg_host.dprint("SWIMREPLAYFALLBACK %s link=%d phase=%s adapter=%s "
+	               "replay=%s\n",
+	    e && e->client ? e->client->pers.netname : "?", link_index,
+	    phase ? phase : "?", SG_SwimLiveFailureName(result->failure),
+	    SG_ReplayReasonName(result->replay_reason));
+}
+
 enum
 {
 	SWIM_PROOF_FAIL = 0,
@@ -3551,6 +3573,8 @@ static int Swim_OnlineProof(edict_t *e, sg_bot_t *bot, int link_index)
 	rune_link_t *link;
 	sg_phantom_t ph;
 	sg_swim_proof_t proof;
+	sg_replay_pose_t live_pose;
+	sg_swim_live_result_t live_result;
 	int i, proof_slot;
 
 	if (!e || !e->client || !bot || !SG_Rune() || link_index < 0 ||
@@ -3602,6 +3626,13 @@ static int Swim_OnlineProof(edict_t *e, sg_bot_t *bot, int link_index)
 	bot->swim_validated = true;
 	bot->swim_proved_ms = proof.arrival_ms;
 	bot->swim_elapsed_ms = 0;
+	Swim_LivePose(e, &live_pose);
+	live_result = SG_SwimLiveBegin(&bot->swim_replay,
+	    &bot->swim_replay_active, &bot->swim_replay_link, link_index,
+	    SG_Rune()->seeds[link->to].origin,
+	    (SG_Rune()->seeds[link->to].flags & RSF_WATER) != 0,
+	    proof.arrival_ms, &live_pose, e->client->oldvelocity[2]);
+	Swim_LiveFallbackLog(e, link_index, "begin", &live_result);
 	SG_TimerArm(&bot->commit_until, proof.arrival_ms * 0.001f + 0.5f);
 	return SWIM_PROOF_OK;
 }
@@ -3686,9 +3717,9 @@ static void Swim_ProofFail(edict_t *e, sg_bot_t *bot, int link_index,
 		SG_TimerArm(&bot->bl_until[oldest], shelf_seconds);
 	}
 	bot->commit_link = -1;
-	bot->swim_validated = false;
-	bot->swim_proved_ms = 0;
-	bot->swim_elapsed_ms = 0;
+	SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
+	    &bot->swim_replay_link, &bot->swim_validated,
+	    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
 	if (sg_cv.debug->value)
 		sg_host.dprint("SWIMREPROOFF %s link=%d\n",
 		           e->client->pers.netname, link_index);
@@ -3991,23 +4022,24 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	    !swim_emergency && !swim_hazard)
 	{
 		int online = Swim_OnlineProof(e, bot, bestlink);
-		usercmd_t wait_cmd;
+		usercmd_t wait_cmd[SG_SWIM_LIVE_FRAME_STEPS];
 		int wait_step;
 
-		memset(&wait_cmd, 0, sizeof(wait_cmd));
-		wait_cmd.msec = SG_SWIM_STEP_MSEC;
+		SG_SwimLiveZeroFrame(wait_cmd);
 		if (online == SWIM_PROOF_BUSY)
 		{
 			SG_TimerArm(&bot->commit_until, 3.0f);
-			for (wait_step = 0; wait_step < 4; wait_step++)
-				ClientThink(e, &wait_cmd);
+			for (wait_step = 0; wait_step < SG_SWIM_LIVE_FRAME_STEPS;
+			     wait_step++)
+				ClientThink(e, &wait_cmd[wait_step]);
 			return;
 		}
 		if (online != SWIM_PROOF_OK)
 		{
 			Swim_ProofFail(e, bot, bestlink, 5.0f);
-			for (wait_step = 0; wait_step < 4; wait_step++)
-				ClientThink(e, &wait_cmd);
+			for (wait_step = 0; wait_step < SG_SWIM_LIVE_FRAME_STEPS;
+			     wait_step++)
+				ClientThink(e, &wait_cmd[wait_step]);
 			return;
 		}
 	}
@@ -4041,7 +4073,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * command is emitted. A hazard also shelves the demonstrated link because
 	 * the live world reached a state its proof explicitly rejected. */
 	if (swim_emergency || swim_hazard)
+	{
 		bot->commit_link = -1;
+		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
+		    &bot->swim_replay_link, &bot->swim_validated,
+		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
+	}
 	if (swim_hazard)
 	{
 		int b, oldest = 0;
@@ -4050,7 +4087,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			if (bot->bl_until[b] < bot->bl_until[oldest])
 				oldest = b;
 		bot->bl_link[oldest] = bestlink;
-		SG_TimerArm(&bot->bl_until[oldest], 60.0f);
+		SG_TimerArm(&bot->bl_until[oldest],
+		    SG_SWIM_LIVE_EARLY_HAZARD_SHELF_SECONDS);
 		SG_TeachLinkFutility(bestlink);
 	}
 	if (water_tele && (swim_emergency || swim_hazard))
@@ -4072,9 +4110,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			bot->bl_link[oldest] = bestlink;
 			SG_TimerArm(&bot->bl_until[oldest], 5.0f);
 		}
-		bot->swim_validated = false;
-		bot->swim_proved_ms = 0;
-		bot->swim_elapsed_ms = 0;
 		bot->declared_activated = false;
 		bot->declared_started = false;
 		bot->declared_start_frame = -1;
@@ -5275,8 +5310,19 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				else
 					VectorCopy(SG_Rune()->seeds[
 					    SG_Rune()->links[bestlink].to].origin, destination);
-				if (!SG_SwimCommand(e->s.origin, destination,
-				                    &e->client->ps.pmove, cmd) && escape)
+				if (!escape && bot->swim_replay_active)
+				{
+					sg_replay_pose_t live_pose;
+					sg_swim_live_result_t live_result;
+
+					Swim_LivePose(e, &live_pose);
+					live_result = SG_SwimLivePreStep(&bot->swim_replay,
+					    &bot->swim_replay_active, &bot->swim_replay_link,
+					    bestlink, &live_pose, destination, SG_SwimCommand, cmd);
+					Swim_LiveFallbackLog(e, bestlink, "prestep", &live_result);
+				}
+				else if (!SG_SwimCommand(e->s.origin, destination,
+				                         &e->client->ps.pmove, cmd) && escape)
 				{
 					VectorCopy(e->s.origin, destination);
 					destination[2] += 256.0f;
@@ -5764,6 +5810,19 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 				ClientThink(e, cmd);
+			}
+			if (proved_swim && bot->swim_replay_active &&
+			    bot->commit_link == bestlink && step < sub - 1)
+			{
+				sg_replay_pose_t live_pose;
+				sg_swim_live_result_t live_result;
+
+				Swim_LivePose(e, &live_pose);
+				live_result = SG_SwimLivePostStep(&bot->swim_replay,
+				    &bot->swim_replay_active, &bot->swim_replay_link,
+				    bestlink, &live_pose);
+				Swim_LiveFallbackLog(e, bestlink, "poststep",
+				                     &live_result);
 			}
 			if (proved_drop && bot->drop_started && bot->drop_walkoff &&
 			    !e->groundentity)

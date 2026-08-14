@@ -15,6 +15,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
 #include "slipgate/sg_tilt.h"
@@ -30,6 +31,39 @@ void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 
 #define SG_DUEL_RANGE_MS	1.5f
 #define SG_DUEL_COVER_MS	900.0f
+
+static void Swim_LivePose(const edict_t *e, sg_replay_pose_t *pose)
+{
+	SG_SwimLivePose(pose, e && e->client ? &e->client->ps.pmove : NULL,
+	    e ? e->s.origin : NULL, e ? e->velocity : NULL,
+	    e && e->groundentity != NULL, e ? e->watertype : 0,
+	    e ? e->waterlevel : 0);
+}
+
+static qboolean Swim_LiveArrival(const sg_swim_replay_spec_t *spec,
+	const sg_replay_pose_t *pose, void *context)
+{
+	edict_t *e = (edict_t *)context;
+
+	if (!spec || !pose || !e)
+		return false;
+	return SG_SwimArrived(pose->origin, spec->destination,
+	    spec->destination_water, pose->grounded, pose->watertype,
+	    pose->waterlevel, e);
+}
+
+static void Swim_LiveFallbackLog(const edict_t *e, int link_index,
+	const sg_swim_live_result_t *result)
+{
+	if (!result || result->outcome != SG_SWIM_LIVE_FALLBACK ||
+	    !sg_cv.debug->value)
+		return;
+	sg_host.dprint("SWIMREPLAYFALLBACK %s link=%d phase=boundary adapter=%s "
+	               "replay=%s\n",
+	    e && e->client ? e->client->pers.netname : "?", link_index,
+	    SG_SwimLiveFailureName(result->failure),
+	    SG_ReplayReasonName(result->replay_reason));
+}
 
 /*
  * The compass bucket of a planar direction: 45 degrees per bucket, bucket
@@ -1744,23 +1778,56 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else if (proved_swim)
 			{
-				/* This call is the runtime half of ProveSwim's sole arrival
-				 * contract. Seed identity and field overachievement cannot retire
-				 * an exact controller on the wrong side of a wall or shoreline. */
-				if (bot->swim_validated && SG_SwimArrived(e->s.origin,
-				        SG_Rune()->seeds[cl->to].origin,
-				        (SG_Rune()->seeds[cl->to].flags & RSF_WATER) != 0,
-				        e->groundentity != NULL, e->watertype, e->waterlevel, e))
+				qboolean run_legacy_terminal = bot->swim_validated;
+				qboolean legacy_arrived = false;
+				qboolean arrival_sampled = false;
+
+				/* The fourth 25 ms command remains pending across the entity/pusher
+				 * pass.  This is the one production boundary where the legacy arrival
+				 * predicate is sampled; reducer fallback reuses that result. */
+				if (bot->swim_validated && bot->swim_replay_active)
 				{
-					drop_commit = true;
-					if (bot->swim_elapsed_ms != bot->swim_proved_ms)
-						swim_failed = true;
+					sg_replay_pose_t live_pose;
+					sg_swim_live_result_t live_result;
+
+					Swim_LivePose(e, &live_pose);
+					live_result = SG_SwimLiveBoundary(&bot->swim_replay,
+					    &bot->swim_replay_active, &bot->swim_replay_link,
+					    bot->commit_link, bot->swim_elapsed_ms, &live_pose,
+					    Swim_LiveArrival, e);
+					Swim_LiveFallbackLog(e, bot->commit_link, &live_result);
+					arrival_sampled = live_result.arrival_sampled;
+					legacy_arrived = live_result.legacy_arrived;
+					if (live_result.outcome == SG_SWIM_LIVE_ARRIVED)
+					{
+						drop_commit = true;
+						run_legacy_terminal = false;
+					}
+					else if (live_result.outcome == SG_SWIM_LIVE_RUNNING)
+						run_legacy_terminal = false;
 				}
-				else if (bot->swim_validated &&
-				         bot->swim_elapsed_ms >= bot->swim_proved_ms)
+				if (run_legacy_terminal)
 				{
-					drop_commit = true;
-					swim_failed = true;
+					/* A reducer that fell back before sampling must still execute the
+					 * one legacy call this site owned.  A boundary fallback never traces
+					 * twice: its cached result is consumed here. */
+					if (!arrival_sampled)
+						legacy_arrived = SG_SwimArrived(e->s.origin,
+						    SG_Rune()->seeds[cl->to].origin,
+						    (SG_Rune()->seeds[cl->to].flags & RSF_WATER) != 0,
+						    e->groundentity != NULL, e->watertype,
+						    e->waterlevel, e);
+					if (legacy_arrived)
+					{
+						drop_commit = true;
+						if (bot->swim_elapsed_ms != bot->swim_proved_ms)
+							swim_failed = true;
+					}
+					else if (bot->swim_elapsed_ms >= bot->swim_proved_ms)
+					{
+						drop_commit = true;
+						swim_failed = true;
+					}
 				}
 			}
 			else if (declared)
@@ -1931,7 +1998,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					if (bot->bl_until[b] < bot->bl_until[oldest])
 						oldest = b;
 				bot->bl_link[oldest] = bot->commit_link;
-				SG_TimerArm(&bot->bl_until[oldest], 10.0f);
+				SG_TimerArm(&bot->bl_until[oldest],
+				    SG_SWIM_LIVE_TIMING_SHELF_SECONDS);
 				SG_TeachLinkFutility(bot->commit_link);
 			}
 			if (ballistic_failed)
@@ -1957,9 +2025,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->drop_walkoff = false;
 			bot->drop_airborne = false;
 			bot->drop_recover = false;
-			bot->swim_validated = false;
-			bot->swim_proved_ms = 0;
-			bot->swim_elapsed_ms = 0;
+			SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
+			    &bot->swim_replay_link, &bot->swim_validated,
+			    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
 			bot->declared_activated = false;
 			bot->declared_started = false;
 			bot->declared_start_frame = -1;
@@ -1982,9 +2050,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->commit_link = bestlink;
 		bot->jump_link = (new_link->action == RL_JUMP) ? bestlink : -1;
 		bot->jump_started = false;
-		bot->swim_validated = false;
-		bot->swim_proved_ms = 0;
-		bot->swim_elapsed_ms = 0;
+		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
+		    &bot->swim_replay_link, &bot->swim_validated,
+		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
 		bot->declared_activated = false;
 		bot->declared_started = false;
 		bot->declared_start_frame = -1;

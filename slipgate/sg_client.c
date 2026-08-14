@@ -13,6 +13,7 @@
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_weights.h"    /* sg_role_names -- the roster print */
 #include "slipgate/sg_hooks.h"
 
@@ -48,7 +49,9 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->drop_link = -1;
 	bot->drop_airborne = false;
 	bot->drop_recover = false;
-	bot->swim_validated = false;
+	SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
+	    &bot->swim_replay_link, &bot->swim_validated,
+	    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
 	bot->swim_air_seed = -1;
 	bot->declared_start_frame = -1;
 	bot->declared_touch_frame = -1;

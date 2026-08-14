@@ -8,6 +8,8 @@
 #ifndef SG_BOT_H
 #define SG_BOT_H
 
+#include "sg_replay.h"
+
 #define SG_MAXBOTS      16
 
 typedef struct sg_bot_s
@@ -140,6 +142,9 @@ typedef struct sg_bot_s
 	qboolean	swim_validated; /* online witness from actual fixed-point entry */
 	int			swim_proved_ms; /* exact shared 100 ms arrival boundary */
 	int			swim_elapsed_ms;
+	sg_swim_replay_state_t swim_replay; /* ordinary RL_SWIM reducer only */
+	qboolean	swim_replay_active;
+	int			swim_replay_link; /* identity guard, -1 outside reducer ownership */
 	int			swim_air_seed;  /* last submerged graph state for breath escape */
 	qboolean	declared_activated; /* lift reached TOP / teleporter fired;
 	                                 * controller now owns the egress to `to` */
