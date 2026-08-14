@@ -729,7 +729,37 @@ static void Class_Build(rune_t *r, int cls)
 	sg_fields.per_item_count[cls] = n;
 }
 
-qboolean Fields_Setup(rune_t *r)
+#ifdef SG_FIELDS_TEST
+#define SG_FIELDS_PRIVATE
+#else
+#define SG_FIELDS_PRIVATE static
+#endif
+
+SG_FIELDS_PRIVATE int Fields_DefensiveRoot(const rune_t *r,
+	const unsigned char *plane)
+{
+	int best = -1;
+	int si;
+
+	if (!plane)
+		return -1;
+	for (si = 0; si < r->hdr.num_seeds; si++)
+	{
+		/* Sidecar validation already requires tombstone cells to be zero.
+		 * Keep the field boundary defensive as well: a future caller must not
+		 * be able to turn retained dead geometry into a learned field root. */
+		if ((r->seeds[si].flags & RSF_TOMBSTONE) ||
+		    (r->linked_seed && !r->linked_seed[si]) || plane[si] == 0)
+			continue;
+		if (best < 0 || plane[si] > plane[best])
+			best = si;
+	}
+	return best;
+}
+
+#undef SG_FIELDS_PRIVATE
+
+qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 {
 	edict_t *rf, *bf;
 	int i;
@@ -899,37 +929,34 @@ qboolean Fields_Setup(rune_t *r)
 
 	/*
 	 * Learned defensive fields (.dpo planes, wave 307+): flood from the
-	 * corpus's top post seed and top intercept seed per team. Missing
-	 * plane -> the team's own flag field, i.e. exactly today's behavior.
+	 * corpus's top post seed and top intercept seed per team. The candidate
+	 * planes arrive explicitly in v3 wire order; this setup never reads or
+	 * publishes the live sidecar globals. Missing plane -> the team's own flag
+	 * field, i.e. exactly today's behavior.
 	 */
 	{
-		int t, si;
+		int t;
 
 		for (t = 0; t < 2; t++)
 		{
 			int *own = t == 0 ? sg_fields.to_red_flag
 			                  : sg_fields.to_blue_flag;
-			unsigned char *pp = SG_DefPlane(1, t);
-			unsigned char *ip = SG_DefPlane(0, t);
-			int best;
+			const unsigned char *pp = inputs ?
+			    inputs->dpo[SG_DPO_POST_RED + t] : NULL;
+			const unsigned char *ip = inputs ?
+			    inputs->dpo[SG_DPO_INTERCEPT_RED + t] : NULL;
+			int best = Fields_DefensiveRoot(r, pp);
 
 			sg_fields.to_post[t] = Field_Alloc(r);
-			best = -1;
-			if (pp)
-				for (si = 0; si < r->hdr.num_seeds; si++)
-					if (best < 0 || pp[si] > pp[best]) best = si;
-			if (best >= 0 && pp[best] > 0)
+			if (best >= 0)
 				Field_FromOne(r, sg_fields.to_post[t], best);
 			else
 				memcpy(sg_fields.to_post[t], own,
 				       sizeof(int) * r->hdr.num_seeds);
 
 			sg_fields.to_icept[t] = Field_Alloc(r);
-			best = -1;
-			if (ip)
-				for (si = 0; si < r->hdr.num_seeds; si++)
-					if (best < 0 || ip[si] > ip[best]) best = si;
-			if (best >= 0 && ip[best] > 0)
+			best = Fields_DefensiveRoot(r, ip);
+			if (best >= 0)
 				Field_FromOne(r, sg_fields.to_icept[t], best);
 			else
 				memcpy(sg_fields.to_icept[t], own,

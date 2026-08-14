@@ -414,7 +414,30 @@ typedef struct
 
 extern sg_fields_t sg_fields;
 
-qboolean	Fields_Setup(rune_t *r);
+/*
+ * Candidate-only inputs consumed while the graph fields are constructed.
+ * The DPO order is the v3 wire order and is deliberately named here so the
+ * loader cannot silently transpose teams or post/intercept semantics:
+ * post red, post blue, intercept red, intercept blue.
+ *
+ * A NULL setup object or NULL plane is neutral.  The pointed-to storage only
+ * has to remain alive for Fields_Setup; this structure does not publish it.
+ */
+typedef enum sg_dpo_plane_e
+{
+	SG_DPO_POST_RED = 0,
+	SG_DPO_POST_BLUE,
+	SG_DPO_INTERCEPT_RED,
+	SG_DPO_INTERCEPT_BLUE,
+	SG_DPO_PLANE_COUNT
+} sg_dpo_plane_t;
+
+typedef struct sg_field_setup_inputs_s
+{
+	const unsigned char	*dpo[SG_DPO_PLANE_COUNT];
+} sg_field_setup_inputs_t;
+
+qboolean	Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs);
 void		Fields_Refresh(rune_t *r);
 /* the one place the sg_megaworth cvar is read, so pricing, flooding and the
  * debug line can never disagree about whether the feature is on */
@@ -607,4 +630,3 @@ typedef struct
 } sg_proj_t;
 
 extern sg_proj_t sg_caco_proj[2];
-unsigned char *SG_DefPlane(int post, int team1);

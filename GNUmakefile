@@ -112,6 +112,16 @@ SIDECAR_WIRE_TEST_OBJS = .sg_sidecar_wire_test.gnu.o \
 	.sg_sidecar_wire_under_test.gnu.o .sg_rune_wire_under_test.gnu.o \
 	.sg_rune_wire_action_under_test.gnu.o .sg_rune_wire_crc_under_test.gnu.o
 SIDECAR_WIRE_TEST_DEPS = $(SIDECAR_WIRE_TEST_OBJS:.o=.d)
+SIDECAR_LOADER_TEST_BIN = sg_sidecar_loader_test.gnu
+SIDECAR_LOADER_TEST_OBJS = .sg_sidecar_loader_test.gnu.o \
+	.sg_sidecar_loader_under_test.gnu.o .sg_sidecar_wire_under_test.gnu.o \
+	.sg_rune_wire_under_test.gnu.o .sg_rune_wire_action_under_test.gnu.o \
+	.sg_rune_wire_crc_under_test.gnu.o
+SIDECAR_LOADER_TEST_DEPS = $(SIDECAR_LOADER_TEST_OBJS:.o=.d)
+FIELDS_CANDIDATE_TEST_BIN = sg_fields_candidate_test.gnu
+FIELDS_CANDIDATE_TEST_OBJS = .sg_fields_candidate_test.gnu.o \
+	.sg_fields_candidate_under_test.gnu.o
+FIELDS_CANDIDATE_TEST_DEPS = $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
 RUNE_LOADER_TEST_BIN = sg_rune_loader_test.gnu
 RUNE_LOADER_TEST_OBJS = .sg_rune_loader_test.gnu.o \
 	.sg_rune_loader_under_test.gnu.o .sg_rune_wire_under_test.gnu.o \
@@ -171,6 +181,16 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_sidecar_wire_under_test.gnu.o .sg_sidecar_wire_under_test.gnu.d \
 	.sg_sidecar_wire_test.make.o .sg_sidecar_wire_test.make.d \
 	.sg_sidecar_wire_under_test.make.o .sg_sidecar_wire_under_test.make.d \
+	sg_sidecar_loader_test.gnu sg_sidecar_loader_test.make \
+	.sg_sidecar_loader_test.gnu.o .sg_sidecar_loader_test.gnu.d \
+	.sg_sidecar_loader_under_test.gnu.o .sg_sidecar_loader_under_test.gnu.d \
+	.sg_sidecar_loader_test.make.o .sg_sidecar_loader_test.make.d \
+	.sg_sidecar_loader_under_test.make.o .sg_sidecar_loader_under_test.make.d \
+	sg_fields_candidate_test.gnu sg_fields_candidate_test.make \
+	.sg_fields_candidate_test.gnu.o .sg_fields_candidate_test.gnu.d \
+	.sg_fields_candidate_under_test.gnu.o .sg_fields_candidate_under_test.gnu.d \
+	.sg_fields_candidate_test.make.o .sg_fields_candidate_test.make.d \
+	.sg_fields_candidate_under_test.make.o .sg_fields_candidate_under_test.make.d \
 	sg_rune_loader_test.gnu sg_rune_loader_test.make \
 	.sg_rune_loader_test.gnu.o .sg_rune_loader_test.gnu.d \
 	.sg_rune_loader_under_test.gnu.o .sg_rune_loader_under_test.gnu.d \
@@ -217,7 +237,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -317,7 +337,7 @@ SHLIBLDFLAGS = -shared
 ######################################################################
 
 .PHONY: all dep host-test action-test identity-test rune-wire-test \
-	sidecar-wire-test \
+	sidecar-wire-test sidecar-loader-test fields-candidate-test \
 	rune-loader-test \
 	rune-writer-test rune-install-test rune-proof-test entfile-test \
 	snapshot-test stripcr clean distclean FORCE
@@ -378,6 +398,12 @@ $(RUNE_WIRE_TEST_BIN): $(RUNE_WIRE_TEST_OBJS)
 $(SIDECAR_WIRE_TEST_BIN): $(SIDECAR_WIRE_TEST_OBJS)
 	$(CC) -o $@ $(SIDECAR_WIRE_TEST_OBJS) $(LDFLAGS)
 
+$(SIDECAR_LOADER_TEST_BIN): $(SIDECAR_LOADER_TEST_OBJS)
+	$(CC) -o $@ $(SIDECAR_LOADER_TEST_OBJS) $(LDFLAGS)
+
+$(FIELDS_CANDIDATE_TEST_BIN): $(FIELDS_CANDIDATE_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(FIELDS_CANDIDATE_TEST_OBJS) $(LDFLAGS)
+
 $(RUNE_LOADER_TEST_BIN): $(RUNE_LOADER_TEST_OBJS)
 	$(CC) -o $@ $(RUNE_LOADER_TEST_OBJS) $(LDFLAGS)
 
@@ -437,6 +463,24 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_sidecar_loader_test.gnu.o: tests/sg_sidecar_loader_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_sidecar_loader_under_test.gnu.o: slipgate/sg_sidecar_loader.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_fields_candidate_test.gnu.o: tests/sg_fields_candidate_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_fields_candidate_under_test.gnu.o: slipgate/sg_fields.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -DSG_FIELDS_TEST -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_rune_loader_test.gnu.o: tests/sg_rune_loader_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -476,6 +520,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 		$(RUNE_WIRE_TEST_BIN) $(SIDECAR_WIRE_TEST_BIN) \
+		$(SIDECAR_LOADER_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
 		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(ENTFILE_TEST_BIN)
@@ -484,6 +529,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 	./$(IDENTITY_TEST_BIN)
 	./$(RUNE_WIRE_TEST_BIN)
 	./$(SIDECAR_WIRE_TEST_BIN)
+	./$(SIDECAR_LOADER_TEST_BIN)
+	./$(FIELDS_CANDIDATE_TEST_BIN)
 	./$(RUNE_LOADER_TEST_BIN)
 	./$(RUNE_WRITER_TEST_BIN)
 	./$(RUNE_INSTALL_TEST_BIN)
@@ -502,6 +549,12 @@ rune-wire-test: $(RUNE_WIRE_TEST_BIN)
 
 sidecar-wire-test: $(SIDECAR_WIRE_TEST_BIN)
 	./$(SIDECAR_WIRE_TEST_BIN)
+
+sidecar-loader-test: $(SIDECAR_LOADER_TEST_BIN)
+	./$(SIDECAR_LOADER_TEST_BIN)
+
+fields-candidate-test: $(FIELDS_CANDIDATE_TEST_BIN)
+	./$(FIELDS_CANDIDATE_TEST_BIN)
 
 rune-loader-test: $(RUNE_LOADER_TEST_BIN)
 	./$(RUNE_LOADER_TEST_BIN)
@@ -562,6 +615,8 @@ endif
 -include $(IDENTITY_TEST_DEPS)
 -include $(RUNE_WIRE_TEST_DEPS)
 -include $(SIDECAR_WIRE_TEST_DEPS)
+-include $(SIDECAR_LOADER_TEST_DEPS)
+-include $(FIELDS_CANDIDATE_TEST_DEPS)
 -include $(RUNE_LOADER_TEST_DEPS)
 -include $(RUNE_WRITER_TEST_DEPS)
 -include $(RUNE_INSTALL_TEST_DEPS)

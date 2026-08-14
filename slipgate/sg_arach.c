@@ -48,6 +48,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_rune_install.h"
 #include "slipgate/sg_rune_loader.h"
 #include "slipgate/sg_rune_proof.h"
+#include "slipgate/sg_sidecar_loader.h"
 
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
@@ -122,13 +123,9 @@ unsigned char *sg_def_icept[2]; /* per-seed steal-response END
                                         * spots humans run to when the
                                         * flag leaves, aimed at the
                                         * carrier's future, not his now */
-/* .dpo plane accessor for sg_fields (the arrays are file-static here) */
-unsigned char *SG_DefPlane(int post, int team1)
-{
-	if (team1 < 0 || team1 > 1)
-		return NULL;
-	return post ? sg_def_post[team1] : sg_def_icept[team1];
-}
+/* The four public DPO views share this one TAG_LEVEL allocation. */
+static unsigned char *sg_defense_payload;
+static unsigned int sg_sidecar_log_mask;
 
 unsigned char *sg_human_escape; /* the ESCAPEE's cut: only the flag
                                         * carrier's own entity trajectory in
@@ -839,6 +836,124 @@ int Rune_NearestSeed(rune_t *r, vec3_t p)
  */
 int	*sg_airnext;
 
+typedef struct sg_sidecar_candidates_s
+{
+	unsigned char *human;
+	unsigned char *flag_live;
+	unsigned char *escape;
+	unsigned char *defense;
+	size_t human_size;
+	size_t flag_live_size;
+	size_t escape_size;
+	size_t defense_size;
+} sg_sidecar_candidates_t;
+
+static void *Sidecar_LevelAllocate(void *context, size_t size)
+{
+	(void)context;
+	if (size == 0 || size > (size_t)INT_MAX)
+		return NULL;
+	return sg_host.level_alloc((int)size);
+}
+
+static void Sidecar_LevelDeallocate(void *context, void *allocation)
+{
+	(void)context;
+	if (allocation)
+		sg_host.level_free(allocation);
+}
+
+static void Sidecar_CandidatesRelease(sg_sidecar_candidates_t *candidates)
+{
+	if (!candidates)
+		return;
+	Sidecar_LevelDeallocate(NULL, candidates->human);
+	Sidecar_LevelDeallocate(NULL, candidates->flag_live);
+	Sidecar_LevelDeallocate(NULL, candidates->escape);
+	Sidecar_LevelDeallocate(NULL, candidates->defense);
+	memset(candidates, 0, sizeof(*candidates));
+}
+
+static void Sidecar_LogLoad(sg_sidecar_kind_t kind, const char *path,
+	const sg_sidecar_load_result_t *result)
+{
+	unsigned int bit;
+
+	if (!result || kind < 0 || kind >= SG_SIDECAR_KIND_COUNT ||
+	    result->diagnostic == SCD_ABSENT)
+		return;
+	bit = 1U << (unsigned int)kind;
+	if (sg_sidecar_log_mask & bit)
+		return;
+	if (result->diagnostic == SCD_OK)
+		return;
+	sg_sidecar_log_mask |= bit;
+	if (result->plane != SG_SIDECAR_INDEX_NONE ||
+	    result->index != SG_SIDECAR_INDEX_NONE)
+	{
+		sg_host.dprint("slipgate: sidecar %s ignored path=%s stage=%s "
+			"diagnostic=%s plane=%u index=%u os=%d\n",
+			SG_SidecarKindName(kind), path && path[0] ? path : "<invalid>",
+			SG_SidecarStageName(result->stage),
+			SG_SidecarDiagnosticName(result->diagnostic),
+			(unsigned int)result->plane, (unsigned int)result->index,
+			result->os_error);
+	}
+	else
+	{
+		sg_host.dprint("slipgate: sidecar %s ignored path=%s stage=%s "
+			"diagnostic=%s os=%d\n", SG_SidecarKindName(kind),
+			path && path[0] ? path : "<invalid>",
+			SG_SidecarStageName(result->stage),
+			SG_SidecarDiagnosticName(result->diagnostic),
+			result->os_error);
+	}
+}
+
+static void Sidecar_LogPublished(const char *game_directory,
+	sg_sidecar_kind_t kind, const rune_t *r, size_t payload_size)
+{
+	char path[MAX_OSPATH];
+	unsigned int bit;
+
+	if (!r || kind < 0 || kind >= SG_SIDECAR_KIND_COUNT)
+		return;
+	bit = 1U << (unsigned int)kind;
+	if (sg_sidecar_log_mask & bit)
+		return;
+	path[0] = '\0';
+	(void)SG_SidecarV3Path(path, sizeof(path), game_directory, kind,
+		&r->v3_header);
+	sg_sidecar_log_mask |= bit;
+	sg_host.dprint("slipgate: sidecar %s loaded path=%s bytes=%u\n",
+		SG_SidecarKindName(kind), path[0] ? path : "<invalid>",
+		(unsigned int)payload_size);
+}
+
+static void Sidecar_LoadCandidate(const char *game_directory,
+	sg_sidecar_kind_t kind, const rune_t *r, unsigned char **payload_out,
+	size_t *payload_size_out)
+{
+	sg_sidecar_load_ops_t ops;
+	sg_sidecar_load_result_t result;
+	char path[MAX_OSPATH];
+
+	if (!r || !payload_out || !payload_size_out)
+		return;
+	*payload_out = NULL;
+	*payload_size_out = 0;
+	path[0] = '\0';
+	(void)SG_SidecarV3Path(path, sizeof(path), game_directory, kind,
+		&r->v3_header);
+	SG_SidecarV3DefaultLoadOps(&ops);
+	ops.allocate = Sidecar_LevelAllocate;
+	ops.deallocate = Sidecar_LevelDeallocate;
+	result = SG_SidecarV3LoadFile(game_directory, kind, &r->v3_header,
+		r->linked_seed, (size_t)r->hdr.num_seeds, payload_out,
+		payload_size_out, &ops);
+	Sidecar_LogLoad(kind, path, &result);
+}
+
 static int *Air_Build(const rune_t *r)
 {
 	int i, li, qhead = 0, qtail = 0;
@@ -932,9 +1047,15 @@ qboolean SG_LevelSetup(void)
 {
 	rune_t *candidate = NULL;
 	int *candidate_air = NULL;
+	sg_sidecar_candidates_t sidecars;
+	sg_field_setup_inputs_t field_inputs;
 	sg_rune_v3_authority_t active;
+	cvar_t *game_cvar;
+	const char *game_directory;
 	qboolean fields_ready = false;
 
+	memset(&sidecars, 0, sizeof(sidecars));
+	memset(&field_inputs, 0, sizeof(field_inputs));
 	SG_HooksInit();     /* the host table, before any module reaches out */
 	if (sg_setup_failed)
 		return false;
@@ -959,13 +1080,14 @@ qboolean SG_LevelSetup(void)
 	 * the next map to be running it */
 	Weights_Load();
 	Danger_ResetLevel();
-	/* B4 owns graph-bound sidecars.  B3 never opens or publishes any of the
-	 * legacy native-indexed planes. */
+	/* Clear the prior level's published views before building this level's
+	 * authenticated sidecar candidates. */
 	sg_human_use = NULL;
 	sg_human_live = NULL;
 	sg_human_escape = NULL;
 	sg_def_post[0] = sg_def_post[1] = NULL;
 	sg_def_icept[0] = sg_def_icept[1] = NULL;
+	sg_defense_payload = NULL;
 	sg_airnext = NULL;
 	memset(&sg_fields, 0, sizeof(sg_fields));
 
@@ -980,6 +1102,43 @@ qboolean SG_LevelSetup(void)
 			               "see rune diagnostic above\n", level.mapname);
 		return false;
 	}
+	game_cvar = sg_host.cvar("gamedir", "", 0);
+	game_directory = game_cvar && game_cvar->string && game_cvar->string[0]
+	    ? game_cvar->string : ".";
+	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_HUMAN, candidate,
+		&sidecars.human, &sidecars.human_size);
+	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_FLAG_LIVE, candidate,
+		&sidecars.flag_live, &sidecars.flag_live_size);
+	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_ESCAPE, candidate,
+		&sidecars.escape, &sidecars.escape_size);
+	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_DEFENSE, candidate,
+		&sidecars.defense, &sidecars.defense_size);
+	if (sidecars.defense)
+	{
+		size_t plane_size = (size_t)candidate->hdr.num_seeds;
+
+		/* Decode already proves the exact DPO shape. Keep this boundary
+		 * defensive so no future loader can hand field construction a partial
+		 * or transposed candidate. */
+		if (sidecars.defense_size != plane_size * SG_DPO_PLANE_COUNT)
+		{
+			sg_host.dprint("slipgate: sidecar DPO ignored stage=integration "
+			               "diagnostic=SCD_INTERNAL_ERROR\n");
+			Sidecar_LevelDeallocate(NULL, sidecars.defense);
+			sidecars.defense = NULL;
+			sidecars.defense_size = 0;
+		}
+		else
+		{
+			field_inputs.dpo[SG_DPO_POST_RED] = sidecars.defense;
+			field_inputs.dpo[SG_DPO_POST_BLUE] =
+				sidecars.defense + plane_size;
+			field_inputs.dpo[SG_DPO_INTERCEPT_RED] =
+				sidecars.defense + plane_size * 2U;
+			field_inputs.dpo[SG_DPO_INTERCEPT_BLUE] =
+				sidecars.defense + plane_size * 3U;
+		}
+	}
 	candidate_air = Air_Build(candidate);
 	if (!candidate_air)
 	{
@@ -991,7 +1150,7 @@ qboolean SG_LevelSetup(void)
 	/* Fields_Setup writes sg_fields while consuming only the local candidate.
 	 * Those fields are not usable until sg_rune is published below; every
 	 * failure path zeros the structure before releasing the candidate. */
-	if (!Fields_Setup(candidate))
+	if (!Fields_Setup(candidate, &field_inputs))
 	{
 		sg_host.dprint("slipgate: field setup failed (no flags?); "
 		               "disabled until the next level\n");
@@ -1014,8 +1173,37 @@ qboolean SG_LevelSetup(void)
 	candidate = NULL;
 	sg_airnext = candidate_air;
 	candidate_air = NULL;
+	sg_human_use = sidecars.human;
+	sidecars.human = NULL;
+	sg_human_live = sidecars.flag_live;
+	sidecars.flag_live = NULL;
+	sg_human_escape = sidecars.escape;
+	sidecars.escape = NULL;
+	sg_defense_payload = sidecars.defense;
+	sidecars.defense = NULL;
+	if (sg_defense_payload)
+	{
+		size_t plane_size = (size_t)sg_rune->hdr.num_seeds;
+
+		sg_def_post[0] = sg_defense_payload;
+		sg_def_post[1] = sg_defense_payload + plane_size;
+		sg_def_icept[0] = sg_defense_payload + plane_size * 2U;
+		sg_def_icept[1] = sg_defense_payload + plane_size * 3U;
+	}
 	memcpy(sg_rune_map, sg_rune->v3_header.map_name,
 	    sizeof(sg_rune_map));
+	if (sg_human_use)
+		Sidecar_LogPublished(game_directory, SG_SIDECAR_HUMAN, sg_rune,
+			sidecars.human_size);
+	if (sg_human_live)
+		Sidecar_LogPublished(game_directory, SG_SIDECAR_FLAG_LIVE, sg_rune,
+			sidecars.flag_live_size);
+	if (sg_human_escape)
+		Sidecar_LogPublished(game_directory, SG_SIDECAR_ESCAPE, sg_rune,
+			sidecars.escape_size);
+	if (sg_defense_payload)
+		Sidecar_LogPublished(game_directory, SG_SIDECAR_DEFENSE, sg_rune,
+			sidecars.defense_size);
 	Escape_Load(sg_rune_map); /* map-keyed configuration, not a graph sidecar */
 	Caco_Reset();
 
@@ -1026,6 +1214,7 @@ qboolean SG_LevelSetup(void)
 	return true;
 
 fail:
+	Sidecar_CandidatesRelease(&sidecars);
 	if (candidate_air)
 		sg_host.level_free(candidate_air);
 	Rune_Free(candidate);
@@ -2442,6 +2631,8 @@ void SG_LevelChange(void)
 	sg_human_escape = NULL;
 	sg_def_post[0] = sg_def_post[1] = NULL;
 	sg_def_icept[0] = sg_def_icept[1] = NULL;
+	sg_defense_payload = NULL;
+	sg_sidecar_log_mask = 0;
 	sg_airnext = NULL;
 	memset(&sg_fields, 0, sizeof(sg_fields));
 	sg_field_red = sg_field_blue = NULL;

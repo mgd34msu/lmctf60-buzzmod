@@ -249,8 +249,12 @@ explicit-LE `i32[num_seeds]` planes. Unknown magic/version/shape, nonzero
 reserved data, count or exact-size mismatch, trailing bytes, any CRC mismatch,
 or any rune binding mismatch fails closed under the stable `SCD_*` diagnostic
 domain. Every `DNG3` value must be in `0..8000`, and both `DNG3` and `DPO3`
-require zero in every plane at a rune tombstone. A C runtime loader and producer
-must consume the same golden fixture before a generated sidecar is deployed.
+require zero in every plane at a rune tombstone. The C runtime loader and
+Python producer consume the same golden fixture. At level setup the runtime
+loads `HMN3`, `HML3`, `HME3`, and `DPO3` independently into candidates; absent
+files are neutral, malformed or stale files are logged and ignored whole, and
+none becomes visible before the rune, fields, and fresh authority check publish
+together. `DNG3` persistence remains a separate lifecycle slice.
 
 The old 20-byte native-v2-era formats remain forensic history and are never
 emitted by these bakers. Every baker fails nonzero on a missing or malformed

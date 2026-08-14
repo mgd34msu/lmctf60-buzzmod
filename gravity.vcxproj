@@ -355,6 +355,7 @@
     <ClCompile Include="slipgate\sg_identity.c" />
     <ClCompile Include="slipgate\sg_rune_wire.c" />
     <ClCompile Include="slipgate\sg_sidecar_wire.c" />
+    <ClCompile Include="slipgate\sg_sidecar_loader.c" />
     <ClCompile Include="slipgate\sg_rune_loader.c" />
     <ClCompile Include="slipgate\sg_rune_writer.c" />
     <ClCompile Include="slipgate\sg_rune_install.c" />
@@ -425,6 +426,7 @@
     <ClInclude Include="p_stats.h" />
     <ClInclude Include="q_shared.h" />
     <ClInclude Include="slipgate\sg_sidecar_wire.h" />
+    <ClInclude Include="slipgate\sg_sidecar_loader.h" />
     <ClInclude Include="slipgate\sg_rune_writer.h" />
     <ClInclude Include="slipgate\sg_rune_loader.h" />
     <ClInclude Include="slipgate\sg_rune_install.h" />
