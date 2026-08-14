@@ -15,6 +15,8 @@
 
 #include <limits.h>
 
+#include "sg_action.h"
+
 /* The flat v2 structs and sidecar CRC are canonical little-endian bytes.
  * This game module currently serializes those structs directly, so fail at
  * compile time instead of silently producing/accepting incompatible assets on
@@ -52,55 +54,10 @@
 #define RUNE_DROP_RECOVERY_RADIUS 96.0f
 #define RUNE_DROP_RECOVERY_Z 72.0f
 
-/* how a link is traversed */
-typedef enum
-{
-	RL_RUN = 0,         /* ground movement, no jump required */
-	RL_JUMP,            /* requires a jump during the traversal */
-	RL_DROP,            /* a fall the mover survives */
-	RL_HOOK,            /* grapple at the anchor stored in the link */
-	RL_SWIM,            /* through water */
-	/*
-	 * Appended, never inserted: every value above keeps the number it had, so
-	 * a rune written before these existed still reads correctly. These are
-	 * actions the mover cannot prove by
-	 * rolling physics -- the world moves it, not the other way round.
-	 */
-	RL_LIFT,            /* ride a func_plat from its bottom to its top */
-	RL_TELEPORT,        /* step on a misc_teleporter; the game does the rest */
-	/* Reserved numeric value. V2 cannot serialize the exact live launch state,
-	 * so generation emits none and loading rejects it fail-closed. A future
-	 * format may give the action a complete controller contract. */
-	RL_ROCKETJUMP,
-	/* A repeatable player trigger opens one validated func_door target set. The
-	 * body starts at a connected dry rest seed, follows the exact sweep-clear
-	 * controller to anchor, waits there for every member to reach STATE_TOP,
-	 * then follows a proved open-pose egress to a dry static destination outside
-	 * the sweep. Appended after the reserved RJ value so every earlier on-disk
-	 * action number remains unchanged. */
-	RL_DOOR,
-} rune_action_t;
-
-/* how the link came to be believed */
-typedef enum
-{
-	RL_PROVEN = 0,      /* the oracle rolled it */
-	RL_OBSERVED,        /* a player demonstrated it in play */
-	RL_ADJUSTED,        /* proven, but cost corrected by experience */
-	/*
-	 * Appended, never inserted -- the same rule the action enum above keeps,
-	 * for the same reason: RL_PROVEN/OBSERVED/ADJUSTED hold the numbers they
-	 * have always held, so a rune written before this value existed still
-	 * reads correctly. RL_DECLARED marks a link that
-	 * was READ OFF the map rather than simulated: the lift and teleport links
-	 * come from a func_plat's spawn positions and a misc_teleporter's target,
-	 * with the cost computed from g_func.c's own move maths. Calling those
-	 * PROVEN would be a lie about how they were established, and the runtime
-	 * has a real interest in the difference -- a declared link's cost has
-	 * never been measured against a clock.
-	 */
-	RL_DECLARED,        /* read off the map's spawn data, not simulated */
-} rune_provenance_t;
+/* Action and provenance IDs are generated from rune_actions.json through the
+ * canonical descriptor layer included above. V2 readers still enforce their
+ * historical maxima (RL_DOOR and RL_DECLARED); the appended V3 identifiers do
+ * not widen the active V2 wire contract. */
 
 /* seed flags: bits in rune_seed_t.flags, a field that has always been there
  * and has always been written as 0 -- so setting a bit needs no new version */

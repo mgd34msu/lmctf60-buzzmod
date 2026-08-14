@@ -24,6 +24,11 @@ _Static_assert(RL_PROVEN == 0 && RL_DECLARED == 3 && RL_CONTRACTED == 4,
                "provenance IDs drift");
 _Static_assert(RLCM_NONE == 0 && RLCM_PREOPEN == 1 && RLCM_RIDE == 2,
                "compound mode IDs drift");
+_Static_assert(SG_ACTION_TRAIT_COUNT == 7 &&
+               SG_ACTION_TRAIT_ALL_MASK == 0x007fU,
+               "action trait inventory drift");
+_Static_assert(SG_ENDPOINT_POLICY_COUNT == 7,
+               "endpoint policy inventory drift");
 _Static_assert(RLAP_DOOR_WAIT == 6 && RLAP_DOOR_PREOPEN_CONTACT == 8 &&
                RLAP_DOOR_RIDE_INGRESS_LIP == 9,
                "door anchor policy IDs drift");

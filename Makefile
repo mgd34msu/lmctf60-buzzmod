@@ -19,11 +19,19 @@ REVISION_TEMPLATE := GitRevisionInfo.tmpl
 HOST_TEST_BIN := sg_hooks_test.make
 HOST_TEST_OBJS := .sg_hooks_test.make.o .sg_hooks_under_test.make.o
 HOST_TEST_DEPS := $(HOST_TEST_OBJS:.o=.d)
+ACTION_TEST_BIN := sg_action_test.make
+ACTION_TEST_OBJS := .sg_action_test.make.o .sg_action_under_test.make.o
+ACTION_TEST_DEPS := $(ACTION_TEST_OBJS:.o=.d)
 HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
 	.sg_hooks_under_test.gnu.o .sg_hooks_under_test.gnu.d \
 	.sg_hooks_test.make.o .sg_hooks_test.make.d \
-	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d
+	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d \
+	sg_action_test sg_action_test.gnu sg_action_test.make \
+	.sg_action_test.gnu.o .sg_action_test.gnu.d \
+	.sg_action_under_test.gnu.o .sg_action_under_test.gnu.d \
+	.sg_action_test.make.o .sg_action_test.make.d \
+	.sg_action_under_test.make.o .sg_action_under_test.make.d
 
 CC ?= gcc
 WINDRES ?= windres
@@ -148,6 +156,7 @@ OBJS := \
 	p_view.o \
 	p_weapon.o \
 	q_shared.o \
+	sg_action.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
@@ -190,7 +199,7 @@ all: $(TARGET)
 
 default: all
 
-.PHONY: all default host-test clean strip FORCE
+.PHONY: all default host-test action-test clean strip FORCE
 
 FORCE:
 
@@ -226,6 +235,7 @@ $(OBJS): $(REVISION_HEADER)
 
 -include $(OBJS:.o=.d)
 -include $(HOST_TEST_DEPS)
+-include $(ACTION_TEST_DEPS)
 
 %.o: %.c
 	$(E) [CC] $@
@@ -253,9 +263,28 @@ $(HOST_TEST_BIN): $(HOST_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(HOST_TEST_OBJS) $(LIBS)
 
-host-test: $(HOST_TEST_BIN)
+$(ACTION_TEST_BIN): $(ACTION_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(ACTION_TEST_OBJS) $(LIBS)
+
+.sg_action_test.make.o: tests/sg_action_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_action_under_test.make.o: slipgate/sg_action.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOST_TEST_BIN)
+	$(Q)./$(ACTION_TEST_BIN)
+
+action-test: $(ACTION_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(ACTION_TEST_BIN)
 
 clean:
 	$(E) [CLEAN]

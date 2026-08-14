@@ -251,6 +251,9 @@ class RuneContractTests(unittest.TestCase):
         self.assertEqual(12, GENERATED.ACTION_COUNT)
         self.assertEqual(5, GENERATED.PROVENANCE_COUNT)
         self.assertEqual(3, GENERATED.COMPOUND_MODE_COUNT)
+        self.assertEqual(7, GENERATED.ACTION_TRAIT_COUNT)
+        self.assertEqual(0x7f, GENERATED.ACTION_TRAIT_ALL_MASK)
+        self.assertEqual(7, GENERATED.ENDPOINT_POLICY_COUNT)
 
         self.assertEqual(GENERATED.RL_DROP, GENERATED.effective_suffix(GENERATED.RL_DOOR_DROP))
         self.assertEqual(GENERATED.RL_SWIM, GENERATED.effective_suffix(GENERATED.RL_DOOR_SWIM))

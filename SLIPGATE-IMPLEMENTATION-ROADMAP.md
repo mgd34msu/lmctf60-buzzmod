@@ -173,7 +173,7 @@ belongs to a named, reproducible class.
 - [ ] Replace fixed 1024-byte double-formatting print wrappers with a safe
       `va_list`/dynamic formatting contract.
 - [ ] Audit const-casting shims and document or eliminate each mutability escape.
-- [ ] Test distinct game- and level-lifetime allocators so cross-arena frees are
+- [x] Test distinct game- and level-lifetime allocators so cross-arena frees are
       detectable.
 
 ### Team and clock primitives
@@ -397,8 +397,9 @@ Each vertical slice must pass, as applicable:
 Commit policy:
 
 - [x] Preserve `Mike Davis <mgd34msu@gmail.com>` as author and committer.
-- [ ] Do not mix generated artifacts, GoodVibes state, or unrelated user files
-      into implementation commits.
+- [ ] Commit canonical generated products with their source and freshness
+      tests, but never mix rebuild detritus, GoodVibes state, or unrelated user
+      files into implementation commits.
 - [ ] Commit only a coherent, proven vertical slice.
 - [ ] Push `slipgate` promptly after each accepted slice.
 - [ ] Fast-forward `main` only after the complete acceptance gate.
@@ -467,3 +468,19 @@ the commit, verification, corpus scope, and remaining blocker.
   tests, Python syntax/tab checks, a C11 compile probe, and independent
   refutation passed. Compound actions remain deliberately runtime-disabled
   until their complete v3 generator/loader/controller slices land.
+- 2026-08-13: Engine prerequisite E0 completed in the separate Yamagi engine
+  repository as commit `25a7d3f`, pushed to
+  `mgd34msu/yquake2:rune-host-identity`: the server now publishes protected
+  authoritative BSP-checksum and coordinated physics-epoch strings before
+  `SpawnEntities`, and the console can no longer strip `CVAR_NOSET` through
+  flagged `set` syntax. Focused mutation, sanitizer, warnings-as-errors build,
+  and live map-switch tests passed. The LMCTF consumer remains intentionally
+  fail-closed work for the v3 I/O slice; engine and game DLL must deploy
+  together.
+- 2026-08-13: The S1b C registry adapter is ready in this commit: generated
+  action/provenance enums replace the duplicate manual definitions, while
+  known identity, runtime support, and wire validity remain three independent
+  gates. V1 is frozen at actions 0-7, v2 at 0-8, and v3 at 0-11; compounds are
+  still runtime-disabled. A standalone exhaustive descriptor test, both native
+  test targets, full module build, `ldd -r`, sanitizer runs, and independent
+  review gate the slice. No movement execution dispatch changed.

@@ -580,6 +580,7 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
     if crc32_value is None or sha256_value is None:
         crc32_value, sha256_value = contract_digests(document)
     contract = document["contract"]
+    trait_all_mask = sum(entry["bit"] for entry in contract["traits"])
     display = {entry["id"]: entry for entry in document["display"]["actions"]}
     reason_display = {entry["id"]: entry for entry in document["display"]["reasons"]}
     lines = [
@@ -593,6 +594,9 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
         f"#define SG_ACTION_COUNT {len(contract['actions'])}",
         f"#define SG_PROVENANCE_COUNT {len(contract['provenances'])}",
         f"#define SG_COMPOUND_MODE_COUNT {len(contract['modes'])}",
+        f"#define SG_ACTION_TRAIT_COUNT {len(contract['traits'])}",
+        f"#define SG_ACTION_TRAIT_ALL_MASK 0x{trait_all_mask:04x}U",
+        f"#define SG_ENDPOINT_POLICY_COUNT {len(contract['endpoint_policies'])}",
         "",
     ]
     for key, value in contract["wire"].items():
@@ -668,6 +672,7 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
     if crc32_value is None or sha256_value is None:
         crc32_value, sha256_value = contract_digests(document)
     contract = document["contract"]
+    trait_all_mask = sum(entry["bit"] for entry in contract["traits"])
     display = {entry["id"]: entry for entry in document["display"]["actions"]}
     reason_display = {entry["id"]: entry for entry in document["display"]["reasons"]}
     lines = [
@@ -679,6 +684,9 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
         f"ACTION_COUNT = {len(contract['actions'])}",
         f"PROVENANCE_COUNT = {len(contract['provenances'])}",
         f"COMPOUND_MODE_COUNT = {len(contract['modes'])}",
+        f"ACTION_TRAIT_COUNT = {len(contract['traits'])}",
+        f"ACTION_TRAIT_ALL_MASK = {trait_all_mask}",
+        f"ENDPOINT_POLICY_COUNT = {len(contract['endpoint_policies'])}",
         "",
     ]
     for key, value in contract["wire"].items():
@@ -760,7 +768,7 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
         "",
         "def has_trait(action, trait):",
         "    if (type(trait) is not int or trait <= 0 or",
-        "            trait & (trait - 1) or trait > SG_ACTF_EFFECTIVE_SUFFIX):",
+        "            trait & (trait - 1) or trait & ~ACTION_TRAIT_ALL_MASK):",
         "        raise ValueError(f'unknown action trait: {trait!r}')",
         "    return bool(action_contract(action)['trait_mask'] & trait)",
         "",

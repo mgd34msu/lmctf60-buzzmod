@@ -95,11 +95,19 @@ DEPEND_FILE = .depend
 HOST_TEST_BIN = sg_hooks_test.gnu
 HOST_TEST_OBJS = .sg_hooks_test.gnu.o .sg_hooks_under_test.gnu.o
 HOST_TEST_DEPS = $(HOST_TEST_OBJS:.o=.d)
+ACTION_TEST_BIN = sg_action_test.gnu
+ACTION_TEST_OBJS = .sg_action_test.gnu.o .sg_action_under_test.gnu.o
+ACTION_TEST_DEPS = $(ACTION_TEST_OBJS:.o=.d)
 HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
 	.sg_hooks_under_test.gnu.o .sg_hooks_under_test.gnu.d \
 	.sg_hooks_test.make.o .sg_hooks_test.make.d \
-	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d
+	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d \
+	sg_action_test sg_action_test.gnu sg_action_test.make \
+	.sg_action_test.gnu.o .sg_action_test.gnu.d \
+	.sg_action_under_test.gnu.o .sg_action_under_test.gnu.d \
+	.sg_action_test.make.o .sg_action_test.make.d \
+	.sg_action_under_test.make.o .sg_action_under_test.make.d
 
 # This is for native build
 CFLAGS=-O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
@@ -123,7 +131,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -222,7 +230,7 @@ SHLIBLDFLAGS = -shared
 # Targets
 ######################################################################
 
-.PHONY: all dep host-test stripcr clean distclean FORCE
+.PHONY: all dep host-test action-test stripcr clean distclean FORCE
 
 all: dep $(TARGET)
 
@@ -268,8 +276,23 @@ $(TARGET):	$(OBJS) $(L_OBJS)
 $(HOST_TEST_BIN): $(HOST_TEST_OBJS)
 	$(CC) -o $@ $(HOST_TEST_OBJS) $(LDFLAGS)
 
-host-test: $(HOST_TEST_BIN)
+$(ACTION_TEST_BIN): $(ACTION_TEST_OBJS)
+	$(CC) -o $@ $(ACTION_TEST_OBJS) $(LDFLAGS)
+
+.sg_action_test.gnu.o: tests/sg_action_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_action_under_test.gnu.o: slipgate/sg_action.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN)
 	./$(HOST_TEST_BIN)
+	./$(ACTION_TEST_BIN)
+
+action-test: $(ACTION_TEST_BIN)
+	./$(ACTION_TEST_BIN)
 
 dep: $(DEPEND_FILE)
 
@@ -308,6 +331,7 @@ ifeq ($(DEPEND_FILE),$(wildcard $(DEPEND_FILE)))
 include $(DEPEND_FILE)
 endif
 -include $(HOST_TEST_DEPS)
+-include $(ACTION_TEST_DEPS)
 endif
 
 # The SQLite amalgamation is third-party and does not build clean under our

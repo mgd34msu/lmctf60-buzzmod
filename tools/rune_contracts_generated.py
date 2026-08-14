@@ -6,6 +6,9 @@ CONTRACT_SHA256 = '0790272cf0a34b7ba26dd318629150e3bc66b21dedb5ac448578aa8c3fdc4
 ACTION_COUNT = 12
 PROVENANCE_COUNT = 5
 COMPOUND_MODE_COUNT = 3
+ACTION_TRAIT_COUNT = 7
+ACTION_TRAIT_ALL_MASK = 127
+ENDPOINT_POLICY_COUNT = 7
 
 RUNE_V3_MAGIC = 1162761554
 RUNE_V3_VERSION = 3
@@ -213,7 +216,7 @@ def action_contract(action):
 
 def has_trait(action, trait):
     if (type(trait) is not int or trait <= 0 or
-            trait & (trait - 1) or trait > SG_ACTF_EFFECTIVE_SUFFIX):
+            trait & (trait - 1) or trait & ~ACTION_TRAIT_ALL_MASK):
         raise ValueError(f'unknown action trait: {trait!r}')
     return bool(action_contract(action)['trait_mask'] & trait)
 
