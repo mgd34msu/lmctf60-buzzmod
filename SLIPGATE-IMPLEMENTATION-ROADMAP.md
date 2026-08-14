@@ -271,6 +271,10 @@ cannot evolve independently.
 
 ## Workstream E: RUNE v3
 
+The exact wire, registry, ownership, migration, fixture, and slice contract is
+maintained in [`docs/rune-v3-contract.md`](docs/rune-v3-contract.md). That
+document is normative for implementation; this roadmap tracks its progress.
+
 ### Header and compatibility
 
 - [ ] Version the new format explicitly; old loaders reject v3 and v3 loaders
@@ -437,3 +441,8 @@ the commit, verification, corpus scope, and remaining blocker.
   fresh `-j64`/`-j96` stress runs. Independent refutation found and drove fixes
   for stale header-include discovery and compiler-dependent cleanup; the final
   diff passed re-review with no remaining medium/high finding.
+- 2026-08-13: The reviewed RUNE v3/action-contract architecture was frozen in
+  `docs/rune-v3-contract.md`: explicit 128/16/44-byte little-endian records,
+  append-only compound action IDs, generated action metadata, atomic mover
+  ownership, strict identity/physics binding, migration rules, replay fixtures,
+  and E0/S1-S7 done conditions.
