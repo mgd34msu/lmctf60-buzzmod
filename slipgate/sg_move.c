@@ -306,16 +306,17 @@ static qboolean Ballistic_CanonicalizeSource(edict_t *e, const vec3_t source,
  * arm.  Combat can change health during the bounded staging walk. */
 qboolean SG_BallisticSurvivable(edict_t *e, const rune_link_t *l)
 {
+	rune_t *r = SG_Rune();
 	float height, gravity, launch, delta;
 	int damage;
 
-	if (!e || !l || !SG_Rune() ||
+	if (!e || !l || !r ||
 	    (l->action != RL_JUMP && l->action != RL_DROP) ||
-	    !SG_RunePhysicsCompatible())
+	    !SG_RunePhysicsCompatible(r))
 		return false;
-	if (SG_Rune()->seeds[l->to].flags & RSF_WATER)
+	if (r->seeds[l->to].flags & RSF_WATER)
 	{
-		int contents = sg_host.pointcontents(SG_Rune()->seeds[l->to].origin);
+		int contents = sg_host.pointcontents(r->seeds[l->to].origin);
 
 		/* A fully submerged water landing cancels falling damage. Slime and
 		 * lava share MASK_WATER and movement semantics, but not survivability. */
@@ -324,9 +325,8 @@ qboolean SG_BallisticSurvivable(edict_t *e, const rune_link_t *l)
 	if (deathmatch && deathmatch->value && dmflags &&
 	    ((int)dmflags->value & DF_NO_FALLING))
 		return true;
-	height = SG_Rune()->seeds[l->from].origin[2] -
-	         SG_Rune()->seeds[l->to].origin[2];
-	gravity = (float)RUNE_PROOF_GRAVITY;
+	height = r->seeds[l->from].origin[2] - r->seeds[l->to].origin[2];
+	gravity = r->v3_header.gravity;
 	launch = (l->action == RL_JUMP) ? 270.0f : 0.0f;
 	/* Arrival permits the body up to 72 units below the destination seed.
 	 * Include that full envelope and a jump's upward launch energy; this is a
@@ -4361,7 +4361,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				{
 					vec3_t lp0, lp1;
 					trace_t lltr;
-					float ltt, lgrav = 800.0f;
+					/* The v3 runtime may be bound to a supported non-800 law.
+					 * Lead the same authoritative parabola ClientThink applies. */
+					float ltt, lgrav = sv_gravity
+					    ? sv_gravity->value : 800.0f;
 					int lseg;
 
 					VectorCopy(len9->s.origin, lp0);

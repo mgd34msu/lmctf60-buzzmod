@@ -45,6 +45,9 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_rune_install.h"
+#include "slipgate/sg_rune_loader.h"
+#include "slipgate/sg_rune_proof.h"
 
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
@@ -57,6 +60,8 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
+
+#include <errno.h>
 
 
 float	sg_grab_time[2] = { -1000.0f, -1000.0f };  /* per team */
@@ -242,45 +247,37 @@ static void Escape_Load(const char *mapname)
 		           path, sg_escape_total[0], sg_escape_total[1]);
 }
 
-static rune_t *Rune_LoadReject(FILE *f, rune_t *r,
-                               const char *path, const char *why)
+typedef enum rune_load_attempt_e
 {
-	if (f)
-		fclose(f);
-	if (r)
-	{
-		if (r->linked_seed)
-			sg_host.level_free(r->linked_seed);
-		if (r->next_link)
-			sg_host.level_free(r->next_link);
-		if (r->first_link)
-			sg_host.level_free(r->first_link);
-		if (r->links)
-			sg_host.level_free(r->links);
-		if (r->seeds)
-			sg_host.level_free(r->seeds);
-		sg_host.level_free(r);
-	}
-	sg_host.dprint("rune: rejected %s (%s)\n", path, why);
-	return NULL;
+	RUNE_LOAD_MISSING = 0,
+	RUNE_LOAD_REJECTED,
+	RUNE_LOAD_READY
+} rune_load_attempt_t;
+
+static rune_load_attempt_t sg_last_rune_load;
+
+void Rune_Free(rune_t *r)
+{
+	if (!r)
+		return;
+	if (r->linked_seed)
+		sg_host.level_free(r->linked_seed);
+	if (r->next_link)
+		sg_host.level_free(r->next_link);
+	if (r->first_link)
+		sg_host.level_free(r->first_link);
+	if (r->links)
+		sg_host.level_free(r->links);
+	if (r->seeds)
+		sg_host.level_free(r->seeds);
+	sg_host.level_free(r);
 }
 
-static int Rune_LinkKeyCompare(const void *left, const void *right)
+/* Wire validation owns duplicates and route ownership.  This final component
+ * is intentionally world-dependent: both live flag stands must localize, and
+ * every non-tombstone seed must reach each objective in the preserved graph. */
+static const char *Rune_ValidateObjectiveCore(rune_t *r)
 {
-	unsigned long long a = *(const unsigned long long *)left;
-	unsigned long long b = *(const unsigned long long *)right;
-
-	return (a > b) - (a < b);
-}
-
-/* The deployment linter rejects two graph shapes that the flat records alone
- * do not make safe: ambiguous duplicate controllers and live islands outside
- * either flag's reverse component. Keep the ordered link array untouched --
- * every human sidecar is indexed by that order -- and validate with temporary
- * indexes whose worst-case work remains bounded at the format maxima. */
-static const char *Rune_ValidateGraphContract(rune_t *r)
-{
-	unsigned long long *keys = NULL;
 	int *first_in = NULL, *next_in = NULL, *queue = NULL;
 	byte *seen = NULL;
 	edict_t *stands[2];
@@ -288,36 +285,6 @@ static const char *Rune_ValidateGraphContract(rune_t *r)
 	int ns = r->hdr.num_seeds, nl = r->hdr.num_links;
 	int i, which;
 	const char *failure = NULL;
-
-	/* Seed indices occupy 15 bits and every accepted action fits in four.
-	 * Packing (from,to,action) into 34 bits makes adjacent equality after qsort
-	 * exact, without reordering the serialized links themselves. */
-	if (nl > 1)
-	{
-		keys = sg_host.level_alloc(sizeof(*keys) * (size_t)nl);
-		if (!keys)
-		{
-			failure = "graph-contract allocation failure";
-			goto done;
-		}
-		for (i = 0; i < nl; i++)
-		{
-			rune_link_t *l = &r->links[i];
-
-			keys[i] = ((unsigned long long)(unsigned int)l->from << 19) |
-			          ((unsigned long long)(unsigned int)l->to << 4) |
-			          (unsigned long long)l->action;
-		}
-		qsort(keys, (size_t)nl, sizeof(*keys), Rune_LinkKeyCompare);
-		for (i = 1; i < nl; i++)
-			if (keys[i] == keys[i - 1])
-			{
-				failure = "duplicate (from,to,action) link triple";
-				goto done;
-			}
-		sg_host.level_free(keys);
-		keys = NULL;
-	}
 
 	/* The stand markers are stable even while a live flag is carried, and are
 	 * the same objective positions Fields_Setup localizes immediately after the
@@ -390,8 +357,6 @@ static const char *Rune_ValidateGraphContract(rune_t *r)
 	}
 
 done:
-	if (keys)
-		sg_host.level_free(keys);
 	if (first_in)
 		sg_host.level_free(first_in);
 	if (next_in)
@@ -403,429 +368,408 @@ done:
 	return failure;
 }
 
-/* Standard reflected IEEE CRC32. The rune file is already the canonical byte
- * representation: one ordered seed array followed by one ordered link array.
- * Hashing those still-unmodified arrays binds every sidecar to that graph. */
-static unsigned int Sidecar_CRC32Update(unsigned int crc,
-	const void *block, size_t size)
+static const char *Rune_BuildOutboundIndexes(rune_t *r)
 {
-	static unsigned int table[256];
-	static qboolean ready;
-	const unsigned char *p = (const unsigned char *)block;
-	unsigned int c;
-	int i, j;
-
-	if (!ready)
-	{
-		for (i = 0; i < 256; i++)
-		{
-			c = (unsigned int)i;
-			for (j = 0; j < 8; j++)
-				c = (c & 1U) ? (c >> 1) ^ 0xEDB88320U : c >> 1;
-			table[i] = c;
-		}
-		ready = true;
-	}
-	while (size--)
-		crc = table[(crc ^ (unsigned int)*p++) & 0xffU] ^ (crc >> 8);
-	return crc;
-}
-
-static unsigned int Rune_PayloadCRC(const rune_t *r)
-{
-	unsigned int crc = 0xffffffffU;
-
-	crc = Sidecar_CRC32Update(crc, r->seeds,
-	        sizeof(rune_seed_t) * (size_t)r->hdr.num_seeds);
-	crc = Sidecar_CRC32Update(crc, r->links,
-	        sizeof(rune_link_t) * (size_t)r->hdr.num_links);
-	return crc ^ 0xffffffffU;
-}
-
-/* Sidecars have no embedded map name: their maps/<mapname> suffix is the map
- * binding. The five-word header must otherwise match exactly, including the
- * graph CRC, and the file must contain exactly the indexed payload. Rewinding
- * to the payload here keeps every caller from maintaining a partial contract. */
-static qboolean Sidecar_HeaderOK(FILE *f, const unsigned int header[5],
-	unsigned int magic, int version, int count, int shape,
-	unsigned int graph_crc, size_t payload_size)
-{
-	long file_size;
-	size_t expected_size = sizeof(unsigned int) * 5 + payload_size;
-
-	if (sizeof(unsigned int) != 4 || header[0] != magic ||
-	    header[1] != (unsigned int)version ||
-	    header[2] != (unsigned int)count ||
-	    header[3] != (unsigned int)shape || header[4] != graph_crc)
-		return false;
-	if (fseek(f, 0, SEEK_END) != 0 || (file_size = ftell(f)) < 0 ||
-	    (size_t)file_size != expected_size ||
-	    fseek(f, (long)(sizeof(unsigned int) * 5), SEEK_SET) != 0)
-		return false;
-	return true;
-}
-
-rune_t *Rune_Load(const char *mapname)
-{
-	char path[MAX_OSPATH];
-	FILE *f;
-	rune_t *r;
-	size_t expected_size;
-	long file_size;
-	unsigned int rune_crc;
 	int i;
-	cvar_t *gamedir = sg_host.cvar("gamedir", "", 0);
 
-	Com_sprintf(path, sizeof(path), "%s/maps/%s.rune",
-	            gamedir->string[0] ? gamedir->string : ".", mapname);
-	f = fopen(path, "rb");
-	if (!f)
-		return NULL;
-
-	r = sg_host.level_alloc(sizeof(rune_t));
-	if (!r)
-	{
-		fclose(f);
-		return NULL;
-	}
-	memset(r, 0, sizeof(*r));
-	if (fread(&r->hdr, sizeof(r->hdr), 1, f) != 1 ||
-	    r->hdr.magic != RUNE_MAGIC || r->hdr.version != RUNE_VERSION)
-		return Rune_LoadReject(f, r, path, "bad header or version");
-	if (r->hdr.num_seeds <= 0 || r->hdr.num_seeds > RUNE_MAX_SEEDS ||
-	    r->hdr.num_links < 0 || r->hdr.num_links > RUNE_MAX_LINKS)
-		return Rune_LoadReject(f, r, path, "count outside format limits");
-	if (!memchr(r->hdr.mapname, '\0', sizeof(r->hdr.mapname)) ||
-	    Q_stricmp(r->hdr.mapname, mapname))
-		return Rune_LoadReject(f, r, path, "map identity mismatch");
-
-	expected_size = sizeof(rune_header_t) +
-	                sizeof(rune_seed_t) * (size_t)r->hdr.num_seeds +
-	                sizeof(rune_link_t) * (size_t)r->hdr.num_links;
-	if (fseek(f, 0, SEEK_END) != 0 || (file_size = ftell(f)) < 0 ||
-	    (size_t)file_size != expected_size ||
-	    fseek(f, (long)sizeof(rune_header_t), SEEK_SET) != 0)
-		return Rune_LoadReject(f, r, path, "truncated or trailing data");
-
-	r->seeds = sg_host.level_alloc(sizeof(rune_seed_t) * r->hdr.num_seeds);
-	r->links = sg_host.level_alloc(sizeof(rune_link_t) *
-	                              (r->hdr.num_links ? r->hdr.num_links : 1));
-	if (!r->seeds || !r->links)
-		return Rune_LoadReject(f, r, path, "allocation failure");
-	if (fread(r->seeds, sizeof(rune_seed_t), r->hdr.num_seeds, f) != (size_t)r->hdr.num_seeds ||
-	    fread(r->links, sizeof(rune_link_t), r->hdr.num_links, f) != (size_t)r->hdr.num_links)
-		return Rune_LoadReject(f, r, path, "short payload read");
-	fclose(f);
-	f = NULL;
-
-	for (i = 0; i < r->hdr.num_seeds; i++)
-	{
-		rune_seed_t *s = &r->seeds[i];
-
-		if (!isfinite(s->origin[0]) || !isfinite(s->origin[1]) ||
-		    !isfinite(s->origin[2]) ||
-		    s->origin[0] < -4096.0f || s->origin[0] > 4095.875f ||
-		    s->origin[1] < -4096.0f || s->origin[1] > 4095.875f ||
-		    s->origin[2] < -4096.0f || s->origin[2] > 4095.875f ||
-		    s->area_hint < 0 || s->area_hint > 255 ||
-		    ((unsigned short)s->flags &
-		     ~(unsigned short)(RSF_WATER | RSF_TOMBSTONE)))
-			return Rune_LoadReject(NULL, r, path, "invalid seed geometry or flags");
-	}
-	for (i = 0; i < r->hdr.num_links; i++)
-	{
-		rune_link_t *l = &r->links[i];
-		qboolean from_water, to_water;
-
-		if (l->from < 0 || l->from >= r->hdr.num_seeds ||
-		    l->to < 0 || l->to >= r->hdr.num_seeds || l->from == l->to ||
-		    (r->seeds[l->from].flags & RSF_TOMBSTONE) ||
-		    (r->seeds[l->to].flags & RSF_TOMBSTONE) ||
-		    l->action > RL_DOOR || l->provenance > RL_DECLARED ||
-		    l->cost_ms <= 0 ||
-		    !isfinite(l->anchor[0]) || !isfinite(l->anchor[1]) ||
-		    !isfinite(l->anchor[2]))
-			return Rune_LoadReject(NULL, r, path, "invalid link record");
-		from_water = (r->seeds[l->from].flags & RSF_WATER) != 0;
-		to_water = (r->seeds[l->to].flags & RSF_WATER) != 0;
-		{
-			qboolean anchor_zero = l->anchor[0] == 0.0f &&
-			                           l->anchor[1] == 0.0f &&
-			                           l->anchor[2] == 0.0f;
-			qboolean anchor_world =
-			    l->anchor[0] >= -4096.0f && l->anchor[0] <= 4095.875f &&
-			    l->anchor[1] >= -4096.0f && l->anchor[1] <= 4095.875f &&
-			    l->anchor[2] >= -4096.0f && l->anchor[2] <= 4095.875f;
-
-			vec3_t anchor_delta;
-			float anchor_horiz;
-
-			VectorSubtract(l->anchor, r->seeds[l->from].origin, anchor_delta);
-			anchor_horiz = sqrtf(anchor_delta[0] * anchor_delta[0] +
-			                     anchor_delta[1] * anchor_delta[1]);
-			if ((l->action == RL_RUN && !anchor_zero && !anchor_world) ||
-			    (l->action == RL_JUMP && !anchor_zero) ||
-			    ((l->action == RL_LIFT || l->action == RL_TELEPORT ||
-			      l->action == RL_DOOR) &&
-			     (!anchor_world || l->provenance != RL_DECLARED ||
-			      l->min_speed != 0 || l->heading != 0 ||
-			      l->heading_slack != RUNE_DECLARED_CONTROL_MARKER ||
-			      l->exit_speed != 0)) ||
-			    (l->action == RL_TELEPORT &&
-			     (anchor_horiz > RUNE_TELEPORT_SEED_REACH ||
-			      fabsf(anchor_delta[2]) > RUNE_TELEPORT_SEED_REACH)))
-				return Rune_LoadReject(NULL, r, path,
-				                       "invalid action anchor/control");
-		}
-		/* V2 gives water movement one exact controller. Legacy generators
-		 * proved a RUN/JUMP and changed its action byte later; accepting either
-		 * form would reintroduce that unproved contract at load time. */
-		if ((l->action == RL_RUN || l->action == RL_JUMP) &&
-		    (from_water || to_water))
-			return Rune_LoadReject(NULL, r, path,
-			                       "water endpoint on dry controller");
-		if (l->action == RL_ROCKETJUMP && (from_water || to_water))
-			return Rune_LoadReject(NULL, r, path,
-			                       "water endpoint on dry special controller");
-		if (l->action == RL_SWIM &&
-		    (!(from_water || to_water) || l->min_speed != 0 ||
-		     l->heading != 0 || l->heading_slack != 0 ||
-		     (l->provenance != RL_PROVEN && l->provenance != RL_ADJUSTED) ||
-		     l->anchor[0] != 0.0f || l->anchor[1] != 0.0f ||
-		     l->anchor[2] != 0.0f))
-			return Rune_LoadReject(NULL, r, path,
-			                       "invalid swim control");
-		if (l->action == RL_ROCKETJUMP)
-			return Rune_LoadReject(NULL, r, path,
-			                       "rocket-jump action unsupported in rune v2");
-		if (l->action == RL_DOOR)
-		{
-			edict_t *trigger;
-			vec3_t approach_delta, egress_delta;
-			float approach_h2, egress_h2;
-			int axis;
-
-			VectorSubtract(l->anchor, r->seeds[l->from].origin,
-			               approach_delta);
-			VectorSubtract(r->seeds[l->to].origin, l->anchor,
-			               egress_delta);
-			approach_h2 = approach_delta[0] * approach_delta[0] +
-			              approach_delta[1] * approach_delta[1];
-			egress_h2 = egress_delta[0] * egress_delta[0] +
-			            egress_delta[1] * egress_delta[1];
-
-			for (axis = 0; axis < 3; axis++)
-				if (l->anchor[axis] !=
-				    (float)(short)(l->anchor[axis] * 8.0f) * 0.125f)
-					return Rune_LoadReject(NULL, r, path,
-					                       "noncanonical door wait point");
-			if (from_water || to_water ||
-			    approach_h2 > 320.0f * 320.0f ||
-			    fabsf(approach_delta[2]) > 48.0f ||
-			    egress_h2 > 768.0f * 768.0f ||
-			    fabsf(egress_delta[2]) > 96.0f ||
-			    !(trigger = SG_DeclaredDoorForLink(l->anchor,
-			        r->seeds[l->from].origin)) ||
-			    !SG_OracleValidateDeclaredDoorLink(
-			        r->seeds[l->from].origin, l->anchor,
-			        r->seeds[l->to].origin, trigger, l->cost_ms))
-				return Rune_LoadReject(NULL, r, path,
-				                       "invalid declared door contract");
-		}
-		if (l->action == RL_HOOK &&
-		    (l->provenance != RL_PROVEN || l->min_speed != 0 ||
-		     (from_water && to_water) ||
-		     l->heading_slack != (from_water
-		         ? RUNE_WATER_HOOK_CONTROL_MARKER
-		         : RUNE_HOOK_CONTROL_SLACK) ||
-		     l->anchor[PITCH] < -180.0f || l->anchor[PITCH] >= 180.0f ||
-		     l->anchor[YAW] < -180.0f || l->anchor[YAW] >= 180.0f ||
-		     l->anchor[PITCH] != SHORT2ANGLE((short)ANGLE2SHORT(l->anchor[PITCH])) ||
-		     l->anchor[YAW] != SHORT2ANGLE((short)ANGLE2SHORT(l->anchor[YAW])) ||
-		     l->anchor[PITCH] < -89.0f || l->anchor[PITCH] > 89.0f ||
-		     l->anchor[ROLL] < 1.0f ||
-		     l->anchor[ROLL] > RUNE_HOOK_MAX_RAY))
-			return Rune_LoadReject(NULL, r, path,
-			                       "invalid hook control");
-		if (l->action == RL_DROP)
-		{
-			vec3_t lip_delta;
-			float lip_horiz, lip_yaw, stored_yaw, yaw_delta;
-
-			VectorSubtract(l->anchor, r->seeds[l->from].origin,
-			               lip_delta);
-			lip_horiz = sqrtf(lip_delta[0] * lip_delta[0] +
-			                  lip_delta[1] * lip_delta[1]);
-			lip_yaw = atan2f(lip_delta[1], lip_delta[0]) *
-			          180.0f / (float)M_PI;
-			stored_yaw = l->heading * (360.0f / 256.0f);
-			yaw_delta = lip_yaw - stored_yaw;
-			while (yaw_delta > 180.0f) yaw_delta -= 360.0f;
-			while (yaw_delta < -180.0f) yaw_delta += 360.0f;
-			/* A v2 drop owns a real nearby lip and a recorded walk-off cone.
-			 * Legacy generic fallthroughs stamped RL_DROP onto ordinary
-			 * run/jump proofs, leaving anchor zero and slack 255; executing
-			 * those records sends the bot toward world origin. */
-			if ((r->seeds[l->from].flags & RSF_WATER) ||
-			    l->min_speed != 0 ||
-			    l->heading_slack != RUNE_DROP_CONTROL_MARKER ||
-			    lip_horiz < 2.0f ||
-			    lip_horiz > 256.0f || fabsf(lip_delta[2] - 8.0f) > 0.25f ||
-			    fabsf(yaw_delta) > 360.0f / 256.0f)
-				return Rune_LoadReject(NULL, r, path,
-				                       "invalid drop control");
-		}
-		if (l->action == RL_JUMP && l->min_speed != 0)
-			return Rune_LoadReject(NULL, r, path,
-			                       "unsupported momentum-jump envelope");
-	}
-	rune_crc = Rune_PayloadCRC(r);
-
-	/* per-seed link chains */
-	r->first_link = sg_host.level_alloc(sizeof(int) * r->hdr.num_seeds);
-	r->next_link = sg_host.level_alloc(sizeof(int) *
-	                                  (r->hdr.num_links ? r->hdr.num_links : 1));
+	if (!r || r->hdr.num_seeds <= 0 || r->hdr.num_links < 0)
+		return "invalid native graph counts";
+	r->first_link = sg_host.level_alloc(sizeof(*r->first_link) *
+	    (size_t)r->hdr.num_seeds);
+	r->next_link = sg_host.level_alloc(sizeof(*r->next_link) *
+	    (size_t)(r->hdr.num_links ? r->hdr.num_links : 1));
 	r->linked_seed = sg_host.level_alloc((size_t)r->hdr.num_seeds);
 	if (!r->first_link || !r->next_link || !r->linked_seed)
-		return Rune_LoadReject(NULL, r, path, "index allocation failure");
+		return "outbound-index allocation failure";
 	memset(r->linked_seed, 0, (size_t)r->hdr.num_seeds);
 	for (i = 0; i < r->hdr.num_seeds; i++)
 		r->first_link[i] = -1;
+	/* Reverse construction makes each source chain enumerate the original
+	 * wire order, preserving equal-cost controller tie behavior exactly. */
 	for (i = r->hdr.num_links - 1; i >= 0; i--)
 	{
-		r->next_link[i] = r->first_link[r->links[i].from];
-		r->first_link[r->links[i].from] = i;
-		r->linked_seed[r->links[i].from] = 1;
+		int source = r->links[i].from;
+
+		r->next_link[i] = r->first_link[source];
+		r->first_link[source] = i;
+		r->linked_seed[source] = 1;
 	}
 	for (i = 0; i < r->hdr.num_seeds; i++)
 	{
 		qboolean tombstone =
 		    (r->seeds[i].flags & RSF_TOMBSTONE) != 0;
 
-		/* V2 localization chooses the nearest visible geometry owner first.
-		 * Every routable owner must therefore have an outgoing route, and every
-		 * tombstone must remain link-free; malformed files cannot manufacture a
-		 * search-past-the-barrier fallback. */
 		if (tombstone == (r->linked_seed[i] != 0))
-			return Rune_LoadReject(NULL, r, path,
-			                       "invalid route-core seed ownership");
+			return "invalid route-core seed ownership";
 	}
+	return NULL;
+}
+
+static const char *Rune_ReplayOrdinaryDoors(rune_t *r, uint32_t *index_out)
+{
+	int i;
+
+	for (i = 0; i < r->hdr.num_links; i++)
 	{
-		const char *graph_failure = Rune_ValidateGraphContract(r);
+		rune_link_t *link = &r->links[i];
+		edict_t *trigger;
 
-		if (graph_failure)
-			return Rune_LoadReject(NULL, r, path, graph_failure);
+		if (link->action != RL_DOOR)
+			continue;
+		trigger = SG_DeclaredDoorForLink(link->anchor,
+		    r->seeds[link->from].origin);
+		if (!trigger || !SG_OracleValidateDeclaredDoorLink(
+		    r->seeds[link->from].origin, link->anchor,
+		    r->seeds[link->to].origin, trigger, link->cost_ms))
+		{
+			if (index_out)
+				*index_out = (uint32_t)i;
+			return "invalid live declared-door replay";
+		}
+	}
+	return NULL;
+}
+
+static const char *Rune_LoadStageName(sg_rune_load_stage_t stage)
+{
+	switch (stage)
+	{
+	case SG_RUNE_LOAD_STAGE_ARGUMENT: return "argument";
+	case SG_RUNE_LOAD_STAGE_HEADER: return "header";
+	case SG_RUNE_LOAD_STAGE_FILE_SIZE: return "file-size";
+	case SG_RUNE_LOAD_STAGE_PAYLOAD_CRC: return "payload-crc";
+	case SG_RUNE_LOAD_STAGE_IDENTITY: return "identity";
+	case SG_RUNE_LOAD_STAGE_CAPACITY: return "capacity";
+	case SG_RUNE_LOAD_STAGE_DECODE: return "decode";
+	case SG_RUNE_LOAD_STAGE_SEED: return "seed";
+	case SG_RUNE_LOAD_STAGE_LINK: return "link";
+	case SG_RUNE_LOAD_STAGE_ACTION: return "action";
+	case SG_RUNE_LOAD_STAGE_CONTROL: return "control";
+	case SG_RUNE_LOAD_STAGE_DONE: return "done";
+	default: return "unknown";
+	}
+}
+
+static const char *Rune_WireDiagnosticText(rune_wire_diagnostic_t diagnostic)
+{
+	switch (diagnostic)
+	{
+#define RUNE_WIRE_DIAGNOSTIC_CASE(symbol, id, message) \
+	case symbol: return #symbol ": " message;
+	SG_RUNE_WIRE_DIAGNOSTIC_ROWS(RUNE_WIRE_DIAGNOSTIC_CASE)
+#undef RUNE_WIRE_DIAGNOSTIC_CASE
+	default: return "RLW_UNKNOWN: unknown wire diagnostic";
+	}
+}
+
+static const char *Rune_RejectionReasonText(rune_reject_reason_t reason)
+{
+	switch (reason)
+	{
+#define RUNE_REJECTION_REASON_CASE(symbol, id, message) \
+	case symbol: return #symbol ": " message;
+	SG_RUNE_REJECTION_REASON_ROWS(RUNE_REJECTION_REASON_CASE)
+#undef RUNE_REJECTION_REASON_CASE
+	default: return "RLR_UNKNOWN: unknown rejection reason";
+	}
+}
+
+rune_t *Rune_Load(const char *mapname)
+{
+	char path[MAX_OSPATH];
+	unsigned char encoded_header[SG_RUNE_V3_HEADER_BYTES];
+	FILE *f = NULL;
+	unsigned char *snapshot = NULL;
+	rune_t *r = NULL;
+	sg_rune_v3_seed_t *wire_seeds = NULL;
+	sg_rune_v3_link_t *wire_links = NULL;
+	uint64_t *link_keys = NULL;
+	uint8_t *source_marks = NULL;
+	sg_rune_v3_loader_workspace_t workspace;
+	sg_rune_v3_header_t inspected_header, loaded_header;
+	sg_rune_v3_authority_t captured, active;
+	sg_rune_load_result_t load_result;
+	sg_rune_snapshot_kind_t snapshot_kind;
+	const char *failure = NULL;
+	const char *failure_stage = "snapshot";
+	size_t file_size = 0, header_size;
+	long file_length;
+	uint32_t failure_index = SG_RUNE_LOAD_INDEX_NONE;
+	qboolean core_rejection = false;
+	qboolean proof_scope_active = false;
+	qboolean accepted = false;
+	qboolean missing = false;
+	qboolean failure_prelogged = false;
+	cvar_t *gamedir;
+	const char *game_directory;
+
+	memset(&workspace, 0, sizeof(workspace));
+	memset(&load_result, 0, sizeof(load_result));
+	path[0] = '\0';
+	load_result.index = SG_RUNE_LOAD_INDEX_NONE;
+	sg_last_rune_load = RUNE_LOAD_MISSING;
+	SG_HooksInit();
+	gamedir = sg_host.cvar("gamedir", "", 0);
+	game_directory = gamedir && gamedir->string && gamedir->string[0]
+	    ? gamedir->string : ".";
+	if (!SG_RuneV3AuthorityCapture(mapname, &captured))
+	{
+		if (captured.identity_status != SG_IDENTITY_OK)
+			sg_host.dprint("rune: v3 load refused stage=identity status=%d "
+			               "reason=%s\n", (int)captured.identity_status,
+			               SG_LevelIdentityReason(captured.identity_status));
+		else
+			sg_host.dprint("rune: v3 load refused stage=proof-law "
+			               "reason=unsupported-active-law\n");
+		failure_stage = captured.identity_status == SG_IDENTITY_OK
+		    ? "proof-law" : "identity";
+		failure = "active authority unavailable";
+		failure_prelogged = true;
+		goto cleanup;
+	}
+	if (!SG_RuneInstallDestinationPath(path, sizeof(path), game_directory,
+	        captured.level.mapname))
+	{
+		failure_stage = "path";
+		failure = "path exceeds MAX_OSPATH or has invalid map identity";
+		goto cleanup;
+	}
+	errno = 0;
+	f = fopen(path, "rb");
+	if (!f)
+	{
+		if (errno == ENOENT)
+			missing = true;
+		else
+		{
+			failure_stage = "open";
+			failure = "snapshot open failure";
+		}
+		goto cleanup;
+	}
+	sg_last_rune_load = RUNE_LOAD_REJECTED;
+	header_size = fread(encoded_header, 1, sizeof(encoded_header), f);
+	if (ferror(f))
+	{
+		failure_stage = "header-read";
+		failure = "failed header read";
+		goto cleanup;
+	}
+	snapshot_kind = SG_RuneV3Probe(encoded_header, header_size);
+	if (snapshot_kind == SG_RUNE_SNAPSHOT_V2)
+	{
+		failure_stage = "version";
+		failure = "runtime requires rune v3; regenerate with 'sv rune'";
+		goto cleanup;
+	}
+	load_result = SG_RuneV3InspectHeader(encoded_header, header_size,
+	    &captured.wire, &inspected_header);
+	if (load_result.diagnostic != RLW_OK ||
+	    load_result.reason != RLR_OK ||
+	    load_result.stage != SG_RUNE_LOAD_STAGE_DONE ||
+	    load_result.index != SG_RUNE_LOAD_INDEX_NONE ||
+	    load_result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
+	    load_result.file_size < SG_RUNE_V3_HEADER_BYTES)
+	{
+		core_rejection = true;
+		goto cleanup;
+	}
+	file_size = load_result.file_size;
+	if (file_size > (size_t)INT_MAX)
+	{
+		failure_stage = "file-size";
+		failure = "snapshot exceeds host allocator range";
+		goto cleanup;
+	}
+	if (fseek(f, 0, SEEK_END) != 0 || (file_length = ftell(f)) < 0 ||
+	    (size_t)file_length != file_size || fseek(f, 0, SEEK_SET) != 0)
+	{
+		failure_stage = "file-size";
+		failure = "snapshot size differs from authenticated header";
+		goto cleanup;
+	}
+	snapshot = sg_host.level_alloc((int)file_size);
+	if (!snapshot)
+	{
+		failure_stage = "allocation";
+		failure = "snapshot allocation failure";
+		goto cleanup;
+	}
+	if (fread(snapshot, 1, file_size, f) != file_size ||
+	    fgetc(f) != EOF || ferror(f))
+	{
+		failure_stage = "read";
+		failure = "short, trailing, or failed snapshot read";
+		goto cleanup;
+	}
+	if (fclose(f) != 0)
+	{
+		f = NULL;
+		failure_stage = "close";
+		failure = "snapshot close failure";
+		goto cleanup;
+	}
+	f = NULL;
+	load_result = SG_RuneV3Inspect(snapshot, file_size, &captured.wire,
+	    &inspected_header);
+	if (load_result.diagnostic != RLW_OK ||
+	    load_result.reason != RLR_OK ||
+	    load_result.stage != SG_RUNE_LOAD_STAGE_DONE ||
+	    load_result.index != SG_RUNE_LOAD_INDEX_NONE ||
+	    load_result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
+	    load_result.file_size != file_size)
+	{
+		core_rejection = true;
+		goto cleanup;
 	}
 
-	/*
-	 * The human sidecar (<map>.hmn, humanbake.py): one traffic tier per
-	 * link, log-scaled 0-255, cut from 59 hours of recorded human play.
-	 * Optional -- a missing or mismatched sidecar leaves the array NULL
-	 * and every consumer prices as before.
-	 */
-	sg_human_use = NULL;
-	Com_sprintf(path, sizeof(path), "%s/maps/%s.hmn",
-	            gamedir->string[0] ? gamedir->string : ".", mapname);
-	f = fopen(path, "rb");
+	r = sg_host.level_alloc(sizeof(*r));
+	if (r)
+		memset(r, 0, sizeof(*r));
+	if (!r)
+	{
+		failure_stage = "allocation";
+		failure = "rune allocation failure";
+		goto cleanup;
+	}
+	r->seeds = sg_host.level_alloc(sizeof(*r->seeds) *
+	    (size_t)inspected_header.num_seeds);
+	if (inspected_header.num_links != 0)
+		r->links = sg_host.level_alloc(sizeof(*r->links) *
+		    (size_t)inspected_header.num_links);
+	wire_seeds = sg_host.level_alloc(sizeof(*wire_seeds) *
+	    (size_t)inspected_header.num_seeds);
+	if (inspected_header.num_links != 0)
+	{
+		wire_links = sg_host.level_alloc(sizeof(*wire_links) *
+		    (size_t)inspected_header.num_links);
+		link_keys = sg_host.level_alloc(sizeof(*link_keys) *
+		    (size_t)inspected_header.num_links);
+	}
+	source_marks = sg_host.level_alloc((size_t)inspected_header.num_seeds);
+	if (!r->seeds || (inspected_header.num_links != 0 && !r->links) ||
+	    !wire_seeds || (inspected_header.num_links != 0 &&
+	    (!wire_links || !link_keys)) || !source_marks)
+	{
+		failure_stage = "allocation";
+		failure = "decode-workspace allocation failure";
+		goto cleanup;
+	}
+	workspace.wire_seeds = wire_seeds;
+	workspace.wire_seed_capacity = (size_t)inspected_header.num_seeds;
+	workspace.wire_links = wire_links;
+	workspace.wire_link_capacity = (size_t)inspected_header.num_links;
+	workspace.graph.link_keys = link_keys;
+	workspace.graph.link_key_capacity = (size_t)inspected_header.num_links;
+	workspace.graph.source_marks = source_marks;
+	workspace.graph.source_mark_capacity = (size_t)inspected_header.num_seeds;
+	load_result = SG_RuneV3Load(snapshot, file_size, &captured.wire,
+	    &loaded_header, r->seeds, (size_t)inspected_header.num_seeds,
+	    r->links, (size_t)inspected_header.num_links, &workspace);
+	if (load_result.diagnostic != RLW_OK ||
+	    load_result.reason != RLR_OK ||
+	    load_result.stage != SG_RUNE_LOAD_STAGE_DONE ||
+	    load_result.index != SG_RUNE_LOAD_INDEX_NONE ||
+	    load_result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
+	    load_result.file_size != file_size)
+	{
+		core_rejection = true;
+		goto cleanup;
+	}
+
+	r->v3_header = loaded_header;
+	r->hdr.magic = (int)SG_RUNE_V3_MAGIC;
+	r->hdr.version = SG_RUNE_V3_VERSION;
+	r->hdr.num_seeds = (int)loaded_header.num_seeds;
+	r->hdr.num_links = (int)loaded_header.num_links;
+	memcpy(r->hdr.mapname, loaded_header.map_name, sizeof(r->hdr.mapname));
+	if (!SG_RuneProofScopeBegin(loaded_header.gravity))
+	{
+		failure_stage = "proof-scope";
+		failure = "proof scope busy or invalid";
+		goto cleanup;
+	}
+	proof_scope_active = true;
+	failure_stage = "door-replay";
+	failure = Rune_ReplayOrdinaryDoors(r, &failure_index);
+	SG_RuneProofScopeEnd();
+	proof_scope_active = false;
+	if (failure)
+		goto cleanup;
+	failure_stage = "outbound-index";
+	failure = Rune_BuildOutboundIndexes(r);
+	if (failure)
+		goto cleanup;
+	failure_stage = "objective-core";
+	failure = Rune_ValidateObjectiveCore(r);
+	if (failure)
+		goto cleanup;
+	if (!SG_RuneV3AuthorityCapture(loaded_header.map_name, &active) ||
+	    !SG_RuneV3AuthorityMatchesHeader(&active, &loaded_header))
+	{
+		failure_stage = "authority-recheck";
+		failure = "active identity or proof law drifted during load";
+		goto cleanup;
+	}
+	accepted = true;
+
+cleanup:
+	if (proof_scope_active)
+		SG_RuneProofScopeEnd();
 	if (f)
 	{
-		unsigned int hh[5];
-
-		if (fread(hh, sizeof(unsigned int), 5, f) == 5 &&
-		    Sidecar_HeaderOK(f, hh, 0x484D4E31, r->hdr.version,
-		                     r->hdr.num_links, 0, rune_crc,
-		                     (size_t)r->hdr.num_links))
-		{
-			sg_human_use = sg_host.level_alloc(r->hdr.num_links);
-			if (fread(sg_human_use, 1, r->hdr.num_links, f) !=
-			    (size_t)r->hdr.num_links)
-				sg_human_use = NULL;
-			else
-				sg_host.dprint("rune: human prior loaded (%s)\n", path);
-		}
-		fclose(f);
+		if (fclose(f) != 0 && !failure)
+			failure = "snapshot close failure";
+		f = NULL;
 	}
-	sg_human_live = NULL;
-	Com_sprintf(path, sizeof(path), "%s/maps/%s.hml",
-	            gamedir->string[0] ? gamedir->string : ".", mapname);
-	f = fopen(path, "rb");
-	if (f)
+	if (link_keys)
+		sg_host.level_free(link_keys);
+	if (source_marks)
+		sg_host.level_free(source_marks);
+	if (wire_links)
+		sg_host.level_free(wire_links);
+	if (wire_seeds)
+		sg_host.level_free(wire_seeds);
+	if (snapshot)
+		sg_host.level_free(snapshot);
+	if (missing)
 	{
-		unsigned int hh[5];
-
-		if (fread(hh, sizeof(unsigned int), 5, f) == 5 &&
-		    Sidecar_HeaderOK(f, hh, 0x484D4C31, r->hdr.version,
-		                     r->hdr.num_links, 0, rune_crc,
-		                     (size_t)r->hdr.num_links))
-		{
-			sg_human_live = sg_host.level_alloc(r->hdr.num_links);
-			if (fread(sg_human_live, 1, r->hdr.num_links, f) !=
-			    (size_t)r->hdr.num_links)
-				sg_human_live = NULL;
-			else
-				sg_host.dprint("rune: flag-live prior loaded (%s)\n", path);
-		}
-		fclose(f);
+		sg_last_rune_load = RUNE_LOAD_MISSING;
+		return NULL;
 	}
-	sg_human_escape = NULL;
-	Com_sprintf(path, sizeof(path), "%s/maps/%s.hme",
-	            gamedir->string[0] ? gamedir->string : ".", mapname);
-	f = fopen(path, "rb");
-	if (f)
+	if (!accepted)
 	{
-		unsigned int hh[5];
-
-		if (fread(hh, sizeof(unsigned int), 5, f) == 5 &&
-		    Sidecar_HeaderOK(f, hh, 0x484D4531, r->hdr.version,
-		                     r->hdr.num_links, 0, rune_crc,
-		                     (size_t)r->hdr.num_links))
-		{
-			sg_human_escape = sg_host.level_alloc(r->hdr.num_links);
-			if (fread(sg_human_escape, 1, r->hdr.num_links, f) !=
-			    (size_t)r->hdr.num_links)
-				sg_human_escape = NULL;
-			else
-				sg_host.dprint("rune: escape prior loaded (%s)\n", path);
-		}
-		fclose(f);
+		sg_last_rune_load = RUNE_LOAD_REJECTED;
+		Rune_Free(r);
+		if (failure_prelogged)
+			return NULL;
+		if (core_rejection &&
+		    load_result.index == SG_RUNE_LOAD_INDEX_NONE)
+			sg_host.dprint("rune: rejected %s stage=%s diagnostic=%s "
+			               "reason=%s index=none\n", path,
+			               Rune_LoadStageName(load_result.stage),
+			               Rune_WireDiagnosticText(load_result.diagnostic),
+			               Rune_RejectionReasonText(load_result.reason));
+		else if (core_rejection)
+			sg_host.dprint("rune: rejected %s stage=%s diagnostic=%s "
+			               "reason=%s index=%u\n", path,
+			               Rune_LoadStageName(load_result.stage),
+			               Rune_WireDiagnosticText(load_result.diagnostic),
+			               Rune_RejectionReasonText(load_result.reason),
+			               (unsigned int)load_result.index);
+		else if (failure_index == SG_RUNE_LOAD_INDEX_NONE)
+			sg_host.dprint("rune: rejected %s stage=%s reason=%s\n",
+			               path, failure_stage,
+			               failure ? failure : "unknown");
+		else
+			sg_host.dprint("rune: rejected %s stage=%s reason=%s "
+			               "index=%u\n", path,
+			               failure_stage,
+			               failure ? failure : "unknown",
+			               (unsigned int)failure_index);
+		return NULL;
 	}
-	sg_def_post[0] = sg_def_post[1] = NULL;
-	sg_def_icept[0] = sg_def_icept[1] = NULL;
-	Com_sprintf(path, sizeof(path), "%s/maps/%s.dpo",
-	            gamedir->string[0] ? gamedir->string : ".", mapname);
-	f = fopen(path, "rb");
-	if (f)
-	{
-		unsigned int hh[5];
-
-		/* four per-seed planes: post tier red/blue, intercept tier
-		 * red/blue; validates on seed count, not links */
-		if (fread(hh, sizeof(unsigned int), 5, f) == 5 &&
-		    Sidecar_HeaderOK(f, hh, 0x314F5044, r->hdr.version,
-		                     r->hdr.num_seeds, 4, rune_crc,
-		                     (size_t)r->hdr.num_seeds * 4))
-		{
-			int ns = r->hdr.num_seeds, k, ok = 1;
-			unsigned char *planes[4];
-
-			for (k = 0; k < 4; k++)
-			{
-				planes[k] = sg_host.level_alloc(ns);
-				if (fread(planes[k], 1, ns, f) != (size_t)ns)
-					ok = 0;
-			}
-			if (ok)
-			{
-				sg_def_post[0] = planes[0];
-				sg_def_post[1] = planes[1];
-				sg_def_icept[0] = planes[2];
-				sg_def_icept[1] = planes[3];
-				sg_host.dprint("rune: defense prior loaded (%s)\n", path);
-			}
-		}
-		fclose(f);
-	}
-	Escape_Load(mapname);
+	sg_last_rune_load = RUNE_LOAD_READY;
 	return r;
 }
 
@@ -895,24 +839,31 @@ int Rune_NearestSeed(rune_t *r, vec3_t p)
  */
 int	*sg_airnext;
 
-static void Air_Build(void)
+static int *Air_Build(const rune_t *r)
 {
 	int i, li, qhead = 0, qtail = 0;
-	int n = sg_rune->hdr.num_seeds;
-	int *dist, *incoming, *next_incoming, *queue;
+	int n;
+	int *airnext = NULL, *dist = NULL, *incoming = NULL;
+	int *next_incoming = NULL, *queue = NULL;
+	qboolean complete;
 
-	sg_airnext = sg_host.level_alloc(sizeof(int) * n);
+	if (!r || r->hdr.num_seeds <= 0)
+		return NULL;
+	n = r->hdr.num_seeds;
+	airnext = sg_host.level_alloc(sizeof(int) * (size_t)n);
 	dist = sg_host.level_alloc(sizeof(int) * n);
 	incoming = sg_host.level_alloc(sizeof(int) * n);
 	next_incoming = sg_host.level_alloc(sizeof(int) *
-	    (sg_rune->hdr.num_links > 0 ? sg_rune->hdr.num_links : 1));
+	    (r->hdr.num_links > 0 ? r->hdr.num_links : 1));
 	queue = sg_host.level_alloc(sizeof(int) * n);
+	if (!airnext || !dist || !incoming || !next_incoming || !queue)
+		goto cleanup;
 	for (i = 0; i < n; i++)
 	{
-		sg_airnext[i] = -1;
+		airnext[i] = -1;
 		incoming[i] = -1;
-		if ((sg_rune->seeds[i].flags & RSF_WATER) &&
-		    !(sg_rune->seeds[i].flags & RSF_TOMBSTONE))
+		if ((r->seeds[i].flags & RSF_WATER) &&
+		    !(r->seeds[i].flags & RSF_TOMBSTONE))
 			dist[i] = 0x7fffff;
 		else
 		{
@@ -929,15 +880,15 @@ static void Air_Build(void)
 	/* Index every incoming water-origin SWIM once, then run a reverse
 	 * multi-source BFS from all dry seeds. The old 64 whole-graph relaxation
 	 * silently truncated valid long pools and depended on link order; this is
-	 * O(seeds+links), converges for the full v2 bounds, and chooses a shortest
+	 * O(seeds+links), converges for the full format bounds, and chooses a shortest
 	 * number-of-strokes escape. */
-	for (li = 0; li < sg_rune->hdr.num_links; li++)
+	for (li = 0; li < r->hdr.num_links; li++)
 	{
-		rune_link_t *l = &sg_rune->links[li];
+		const rune_link_t *l = &r->links[li];
 
 		next_incoming[li] = -1;
 		if (l->action != RL_SWIM ||
-		    !(sg_rune->seeds[l->from].flags & RSF_WATER))
+		    !(r->seeds[l->from].flags & RSF_WATER))
 			continue;
 		next_incoming[li] = incoming[l->to];
 		incoming[l->to] = li;
@@ -948,78 +899,143 @@ static void Air_Build(void)
 
 		for (li = incoming[to]; li >= 0; li = next_incoming[li])
 		{
-			rune_link_t *l = &sg_rune->links[li];
+			const rune_link_t *l = &r->links[li];
 
 			if (dist[l->from] != 0x7fffff)
 				continue;
 			dist[l->from] = dist[to] + 1;
-			sg_airnext[l->from] = to;
+			airnext[l->from] = to;
 			queue[qtail++] = l->from;
 		}
 	}
-	sg_host.level_free(dist);
-	sg_host.level_free(incoming);
-	sg_host.level_free(next_incoming);
-	sg_host.level_free(queue);
+
+cleanup:
+	complete = airnext && dist && incoming && next_incoming && queue;
+	if (dist)
+		sg_host.level_free(dist);
+	if (incoming)
+		sg_host.level_free(incoming);
+	if (next_incoming)
+		sg_host.level_free(next_incoming);
+	if (queue)
+		sg_host.level_free(queue);
+	if (!complete)
+	{
+		if (airnext)
+			sg_host.level_free(airnext);
+		return NULL;
+	}
+	return airnext;
 }
 
 qboolean SG_LevelSetup(void)
 {
+	rune_t *candidate = NULL;
+	int *candidate_air = NULL;
+	sg_rune_v3_authority_t active;
+	qboolean fields_ready = false;
+
 	SG_HooksInit();     /* the host table, before any module reaches out */
-	if (!SG_RunePhysicsCompatible())
-	{
-		sg_host.dprint("slipgate: disabled: rune v%d requires sv_gravity %d, "
-		               "sv_airaccelerate 0, sv_maxvelocity >= 800, and want_funky_gravity 0\n",
-		               RUNE_VERSION, RUNE_PROOF_GRAVITY);
-		return false;
-	}
 	if (sg_setup_failed)
 		return false;
 
-	if (sg_rune && Q_stricmp(sg_rune_map, level.mapname) == 0)
-		return true;
+	if (sg_rune)
+	{
+		if (strcmp(sg_rune_map, level.mapname) == 0)
+		{
+			if (SG_RunePhysicsCompatible(sg_rune))
+				return true;
+			sg_host.dprint("slipgate: setup held: active identity or "
+			               "physics law differs from loaded rune v3 header\n");
+			return false;
+		}
+		sg_host.dprint("slipgate: disabled: loaded rune identity differs "
+		               "from active map case\n");
+		return false;
+	}
 
 	/* once per map, ahead of the rune: a map with no rune still answers
 	 * `sv sg weights`, and the admin editing the file between maps expects
 	 * the next map to be running it */
 	Weights_Load();
+	Danger_ResetLevel();
+	/* B4 owns graph-bound sidecars.  B3 never opens or publishes any of the
+	 * legacy native-indexed planes. */
+	sg_human_use = NULL;
+	sg_human_live = NULL;
+	sg_human_escape = NULL;
+	sg_def_post[0] = sg_def_post[1] = NULL;
+	sg_def_icept[0] = sg_def_icept[1] = NULL;
+	sg_airnext = NULL;
+	memset(&sg_fields, 0, sizeof(sg_fields));
 
-	sg_rune = Rune_Load(level.mapname);
-	if (!sg_rune)
+	candidate = Rune_Load(level.mapname);
+	if (!candidate)
 	{
-		sg_host.dprint("slipgate: no rune for %s -- run 'sv rune' first\n",
-		           level.mapname);
+		if (sg_last_rune_load == RUNE_LOAD_MISSING)
+			sg_host.dprint("slipgate: no rune for %s -- run 'sv rune' first\n",
+			               level.mapname);
+		else
+			sg_host.dprint("slipgate: disabled: rejected rune for %s; "
+			               "see rune diagnostic above\n", level.mapname);
 		return false;
 	}
-	/* Danger_Load names its file through SG_RuneMapName; publish the new map
-	 * before asking it to read, never after. */
-	Com_sprintf(sg_rune_map, sizeof(sg_rune_map), "%s", level.mapname);
-	Air_Build();        /* every water seed learns its way to air */
-	Danger_Load();      /* what past matches taught about this map */
-	/* Com_sprintf is the tree's own bounded copy (q_shared.c) and always
-	 * terminates; strncpy at sizeof-1 does not, which is what -Wall's
-	 * stringop-truncation was reporting here. Same call Rune_Load uses. */
-	if (!Fields_Setup(sg_rune))
+	candidate_air = Air_Build(candidate);
+	if (!candidate_air)
+	{
+		sg_host.dprint("slipgate: air-index setup failed; disabled until "
+		               "the next level\n");
+		sg_setup_failed = true;
+		goto fail;
+	}
+	/* Fields_Setup writes sg_fields while consuming only the local candidate.
+	 * Those fields are not usable until sg_rune is published below; every
+	 * failure path zeros the structure before releasing the candidate. */
+	if (!Fields_Setup(candidate))
 	{
 		sg_host.dprint("slipgate: field setup failed (no flags?); "
 		               "disabled until the next level\n");
 		sg_setup_failed = true;
-		sg_rune = NULL;
-		sg_human_use = NULL;
-		sg_human_live = NULL;
-		sg_human_escape = NULL;
-		sg_def_post[0] = sg_def_post[1] = NULL;
-		sg_def_icept[0] = sg_def_icept[1] = NULL;
-		sg_airnext = NULL;
-		memset(&sg_fields, 0, sizeof(sg_fields));
-		return false;
+		goto fail;
 	}
+	fields_ready = true;
+	if (!SG_RuneV3AuthorityCapture(candidate->v3_header.map_name, &active) ||
+	    !SG_RuneV3AuthorityMatchesHeader(&active, &candidate->v3_header))
+	{
+		sg_host.dprint("slipgate: field setup discarded: active identity or "
+		               "proof law drifted before publication\n");
+		sg_setup_failed = true;
+		goto fail;
+	}
+
+	/* This is the sole publication point.  All graph, world replay, objective,
+	 * derived-field, and fresh-authority checks have succeeded. */
+	sg_rune = candidate;
+	candidate = NULL;
+	sg_airnext = candidate_air;
+	candidate_air = NULL;
+	memcpy(sg_rune_map, sg_rune->v3_header.map_name,
+	    sizeof(sg_rune_map));
+	Escape_Load(sg_rune_map); /* map-keyed configuration, not a graph sidecar */
 	Caco_Reset();
 
-	sg_host.dprint("slipgate: rune %s, %d seeds, %d links, all fields up\n",
-	           sg_rune->hdr.mapname, sg_rune->hdr.num_seeds,
-	           sg_rune->hdr.num_links);
+	sg_host.dprint("slipgate: rune v3 %s, %d seeds, %d links, gravity %.0f, "
+	               "all fields up\n", sg_rune->v3_header.map_name,
+	               sg_rune->hdr.num_seeds, sg_rune->hdr.num_links,
+	               sg_rune->v3_header.gravity);
 	return true;
+
+fail:
+	if (candidate_air)
+		sg_host.level_free(candidate_air);
+	Rune_Free(candidate);
+	/* Fields allocations are TAG_LEVEL and remain owned by the level allocator;
+	 * clearing every published pointer makes the failed attempt unusable and the
+	 * setup-failure latch prevents repeated allocation until teardown. */
+	if (fields_ready || sg_setup_failed)
+		memset(&sg_fields, 0, sizeof(sg_fields));
+	sg_airnext = NULL;
+	return false;
 }
 
 /* ----------------------------------------------------------------- body */
@@ -1986,6 +2002,7 @@ void SG_BotThink(sg_bot_t *bot)
 	sg_role_t role;
 	int team, bestlink = -1;
 	qboolean carrying;
+	qboolean rune_compatible;
 
 	/* the few frame terms still born outside the context: the seeds the
 	 * stages take through it, and the one flow flag read here */
@@ -2016,9 +2033,17 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.cmd.msec = 100;
 	VectorClear(duel_org);
 
+	rune_compatible = SG_RunePhysicsCompatible(sg_rune);
+	/* Motion produced while the active law is not the loaded proof law cannot
+	 * preserve graph localization. Clear it before the corpse path can teach a
+	 * stale danger/tilt sample, including when this hold's ClientThink kills an
+	 * initially live bot and authority is restored before the next bot frame.
+	 * A surviving body localizes afresh after exact restoration. */
+	if (!rune_compatible)
+		bot->seed = -1;
 	if (Think_Dead(bot, e, &tc.cmd))
 		return;
-	if (!SG_RunePhysicsCompatible())
+	if (!rune_compatible)
 	{
 		/* A runtime cvar change invalidates every stored ballistic witness.
 		 * Leave the body in real physics, but submit no navigation and retire
@@ -2027,8 +2052,61 @@ void SG_BotThink(sg_bot_t *bot)
 			ctf_hook_abort(e);
 		bot->hook_phase = 0;
 		bot->hook_link = -1;
+		bot->hook_bite_logged = false;
+		bot->hook_attached_validated = false;
+		bot->hook_landbrake = 0.0f;
+		bot->speedhook = false;
+		bot->flow_release = false;
 		bot->rj_phase = 0;
+		bot->rj_deadline = 0.0f;
+		bot->rj_fire_until = 0.0f;
+		bot->rj_use_next = 0.0f;
 		bot->nade_phase = 0;
+		bot->nade_until = 0.0f;
+		/* Progress and retry clocks are action state too. Letting their wall
+		 * time accrue during an authority hold can force or shelf a link the
+		 * instant the old law returns, even though no proved controller ran. */
+		bot->watch_link = -1;
+		bot->watch_since = 0.0f;
+		VectorClear(bot->watch_org);
+		bot->rail_link = -1;
+		bot->rail_stage = 0;
+		bot->rail_until = 0.0f;
+		bot->railhold_since = 0.0f;
+		bot->railhold_next = 0.0f;
+		bot->railhold_patience = 0.0f;
+		bot->railhold_enemy = -1;
+		bot->seedless_active = false;
+		bot->seedless_since = 0.0f;
+		bot->seedless_turn_until = 0.0f;
+		bot->seedless_yaw = 0.0f;
+		VectorCopy(e->s.origin, bot->stag_org);
+		SG_Mark(&bot->stag_since);
+		bot->stag_next = 0.0f;
+		VectorCopy(e->s.origin, bot->wedge_org);
+		SG_Mark(&bot->wedge_since);
+		bot->nav_drove = false;
+		bot->stuck_time = 0.0f;
+		VectorCopy(e->s.origin, bot->stuck_origin);
+		bot->fan_side = 0;
+		bot->fan_side_until = 0.0f;
+		bot->escape_until = 0.0f;
+		bot->escape_yaw = 0.0f;
+		bot->deaddoor_ahead = false;
+		VectorClear(bot->deaddoor_spot);
+		{
+			int visit;
+
+			for (visit = 0; visit < SG_VISIT_RING; visit++)
+			{
+				bot->visit_seed[visit] = -1;
+				bot->visit_goal[visit] = 0;
+				bot->visit_min[visit] = 0;
+				bot->visit_time[visit] = 0.0f;
+			}
+			bot->visit_head = 0;
+			bot->orbit_last_seed = -1;
+		}
 		bot->jump_link = -1;
 		bot->jump_started = false;
 		bot->drop_link = -1;
@@ -2036,6 +2114,10 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->drop_walkoff = false;
 		bot->drop_airborne = false;
 		bot->drop_recover = false;
+		bot->swim_validated = false;
+		bot->swim_proved_ms = 0;
+		bot->swim_elapsed_ms = 0;
+		bot->swim_air_seed = -1;
 		bot->declared_activated = false;
 		bot->declared_started = false;
 		bot->declared_start_frame = -1;
@@ -2047,6 +2129,12 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_door_retreat = false;
 		bot->declared_door_suffix_ms = 0;
 		bot->commit_link = -1;
+		bot->commit_until = 0.0f;
+		bot->sticky_link = -1;
+		bot->latch_until = 0.0f;
+		bot->door_hold_ent = NULL;
+		bot->door_hold_link = -1;
+		bot->door_hold_deadline = 0.0f;
 		ClientThink(e, &tc.cmd);
 		return;
 	}
@@ -2263,21 +2351,20 @@ void SG_RunFrame(void)
 	 * every pointer we held is stale the moment this trips.
 	 */
 	if (SG_TimerPending(sg_last_frame_time) ||
-	    (sg_rune && Q_stricmp(sg_rune_map, level.mapname) != 0))
+	    (sg_rune && strcmp(sg_rune_map, level.mapname) != 0))
 		SG_LevelChange();
 	SG_Mark(&sg_last_frame_time);
-	if (!SG_RunePhysicsCompatible())
+	if (sg_rune && !SG_RunePhysicsCompatible(sg_rune))
 	{
 		if (!sg_physics_warned)
-			sg_host.dprint("slipgate: movement held: rune v%d requires "
-			               "sv_gravity %d, sv_airaccelerate 0, sv_maxvelocity >= 800, and "
-			               "want_funky_gravity 0\n",
-			               RUNE_VERSION, RUNE_PROOF_GRAVITY);
+			sg_host.dprint("slipgate: movement held: active level identity or "
+			               "physics law differs from loaded rune v3 header\n");
 		sg_physics_warned = true;
 	}
-	else if (sg_physics_warned)
+	else if (sg_rune && sg_physics_warned)
 	{
-		sg_host.dprint("slipgate: proof physics restored; movement resumed\n");
+		sg_host.dprint("slipgate: rune identity and proof law restored; "
+		               "movement resumed\n");
 		sg_physics_warned = false;
 	}
 	SG_CombatWhy();
@@ -2336,7 +2423,7 @@ void SG_LevelChange(void)
 
 	/* The fallback transition path must be as fail-closed as SpawnEntities. */
 	SG_LevelIdentityReset();
-	Danger_Save();      /* the map's lessons outlive the level */
+	Danger_ResetLevel(); /* B3 has no graph-bound danger persistence. */
 	/* SpawnEntities calls this before TAG_LEVEL/edict teardown. Remove fake
 	 * clients through the real disconnect path while their objective state is
 	 * still valid; otherwise the next map inherits invisible client slots. */
@@ -2349,6 +2436,7 @@ void SG_LevelChange(void)
 	/* rune and fields were TAG_LEVEL -- the engine freed them */
 	sg_rune = NULL;
 	sg_setup_failed = false;
+	sg_physics_warned = false;
 	sg_human_use = NULL;    /* TAG_LEVEL too: freed with its rune */
 	sg_human_live = NULL;
 	sg_human_escape = NULL;
@@ -2377,9 +2465,8 @@ void SG_LevelChange(void)
 		sg_bots[i].ent = NULL;
 		/*
 		 * A grudge is about a PLACE, and seed 137 on the next map is a
-		 * different place. Tilt dies with the level -- what survives a
-		 * map change is the danger dimension, which is saved above and
-		 * is the only thing here that has earned it.
+		 * different place. Tilt dies with the level.  B3 likewise resets the
+		 * danger dimension until B4 can bind it to an authenticated v3 graph.
 		 */
 		sg_bots[i].tilt_lane_n = 0;
 		sg_bots[i].tilt_seed = -1;

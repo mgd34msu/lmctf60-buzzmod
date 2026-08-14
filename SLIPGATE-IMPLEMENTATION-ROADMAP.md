@@ -230,8 +230,9 @@ zero or stale values.
       checkout: atomically generate the revision header and dependencies,
       require them before every object, propagate generator/compiler failures,
       and keep the 91-object manifests identical.
-- [ ] Generate malformed rune headers, records, controls, topology, and sidecars
-      and require deterministic loader rejection.
+- [x] Generate malformed rune headers, records, controls, and topology and
+      require deterministic codec/loader rejection. Authenticated sidecar
+      corruption remains part of the B4 sidecar slice.
 - [ ] Exercise action boundaries: exact timer edge, trigger cooldown, mover TOP
       window, collision contamination, death, disconnect, map change, and
       external impulse.
@@ -261,9 +262,9 @@ recover_or_abort
       interface incrementally.
 - [ ] Use one command generator and one terminal predicate per action across
       oracle and runtime.
-- [ ] Give every failure a stable reason code suitable for logs and corpus
+- [x] Give every action and wire failure a stable reason code suitable for logs and corpus
       clustering.
-- [ ] Generate or mechanically verify C loader, Python linter, viewer, and graph
+- [x] Generate or mechanically verify C loader, Python linter, viewer, and graph
       interpretations from one schema.
 - [ ] Remove duplicated switch logic only after each migrated action passes
       replay and corpus equivalence.
@@ -279,12 +280,12 @@ document is normative for implementation; this roadmap tracks its progress.
 
 ### Header and compatibility
 
-- [ ] Version the new format explicitly; old loaders reject v3 and v3 loaders
+- [x] Version the new format explicitly; old loaders reject v3 and v3 loaders
       reject or deliberately regenerate incomplete v2 assets.
-- [ ] Bind a rune to map/BSP/entity identity rather than map name alone.
+- [x] Bind a rune to map/BSP/entity identity rather than map name alone.
 - [x] Store the actual proof law: gravity, air acceleration, maximum velocity,
       funky-gravity mode, cadence, and other action-relevant constants.
-- [ ] Generate under a map's actual supported physics and require runtime
+- [x] Generate under a map's actual supported physics and require runtime
       equality instead of globally hardcoding gravity 800.
 - [x] Use explicit little-endian field encoding or retain a compile-time
       compatibility guard with a documented migration path.
@@ -301,9 +302,11 @@ Generator/writer status:
       header/seed/link fragments, verify the second-pass payload CRC, flush and
       sync an exclusive same-directory temporary, and atomically rename only
       after all fallible validation succeeds.
-- [ ] Cut the C loader and live runtime over to v3 identity/physics equality;
-      until then generated v3 files are inspection artifacts and the deployment
-      script remains deliberately on its v2 gate.
+- [x] Cut the C loader and live runtime over to v3 identity/physics equality.
+      Runtime rejects v2 with an actionable regeneration diagnostic, validates
+      one immutable v3 snapshot before publication, and holds bots across
+      identity/physics drift until exact restoration. Deployment now requires
+      runtime-v3 lint and installs through a same-directory durable rename.
 
 ### Atomic compound mover actions
 
@@ -429,7 +432,7 @@ Commit policy:
 3. [x] Fix and test the host allocation/installation contract.
 4. [x] Add the first mock-host and deterministic primitive tests.
 5. [x] Establish the canonical action interface and stable reason codes.
-6. [ ] Implement the RUNE v3 header/schema and strict compatibility rejection.
+6. [x] Implement the RUNE v3 header/schema and strict compatibility rejection.
 7. [ ] Implement one complete compound vertical slice (`DOOR_DROP`) with
        generator, loader, runtime, linter, replay, and `lmctf01` verification.
 8. [ ] Add `DOOR_SWIM` and `DOOR_HOOK` through the same contract.
@@ -564,3 +567,15 @@ the commit, verification, corpus scope, and remaining blocker.
   An unpatched engine refused twice without altering the existing destination
   or leaving a temporary file. The C loader/runtime and sidecars remain the next
   deliberately blocked v3 cutover.
+- 2026-08-14: The strict B3 v3 loader/runtime cutover is complete in this
+  commit. Header-first bounded inspection, exact immutable-snapshot CRC and
+  identity validation, literal action/controller checks, live declared-door
+  replay, outbound ownership, two-objective reachability, and post-field
+  authority revalidation all precede the sole graph publication point. Runtime
+  rejects v2 and corrupt or mismatched v3 files with stable symbolic
+  diagnostics, accepts a corrected rune on retry, and holds existing bots plus
+  blocks new setup during identity/physics drift. Both native build systems,
+  all integrated C tests, strict compiler/link checks, 44 Python tests, live
+  gravity-800 and gravity-650 bot traversal, drift/resume, and sidecar no-I/O
+  sentinels passed. Persisted graph sidecars remain deliberately disabled until
+  the authenticated explicit-little-endian B4 slice.

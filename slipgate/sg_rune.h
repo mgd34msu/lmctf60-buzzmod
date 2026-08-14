@@ -6,9 +6,9 @@
  * a concrete entry state -- before it was recorded. Nothing is inferred from
  * geometry heuristics; a link exists because a phantom traversed it.
  *
- * File: maps/<mapname>.rune, flat binary, little-endian, versioned. The
- * generator writes it once per map; the runtime maps it read-only; learning
- * appends OBSERVED links and adjusts costs in place.
+ * File: maps/<mapname>.rune, explicit little-endian v3 records. The generator
+ * installs one atomically; the runtime snapshots and validates the exact file
+ * before adapting it into the native controller view below.
  */
 
 #pragma once
@@ -16,24 +16,13 @@
 #include <limits.h>
 
 #include "sg_action.h"
-
-/* The flat v2 structs and sidecar CRC are canonical little-endian bytes.
- * This game module currently serializes those structs directly, so fail at
- * compile time instead of silently producing/accepting incompatible assets on
- * a big-endian target. A future portable writer may replace this guard with
- * explicit field encoding. */
-#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
-    __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
-#error "SLIPGATE rune v2 requires a little-endian target"
-#endif
+#include "sg_identity.h"
+#include "sg_rune_wire.h"
 
 #define RUNE_MAGIC      0x454E5552      /* "RUNE" */
-/* Version 2 changes proof semantics without changing the flat structs:
- * grapple links use the production 100 ms pull cadence and serialize the
- * exact quantized shot control plus its static-world ray distance. Version 1
- * hook links used a private 25 ms pull model and must never be treated as
- * equivalent. Every v2 physics proof is also bound to the movement constants below;
- * generation and execution fail closed when the server uses another law. */
+/* Legacy identifiers remain only for actionable v2 detection and the default
+ * inactive proof scope.  Active generation/loading uses SG_RUNE_V3_VERSION and
+ * the authenticated law in sg_rune_v3_header_t. */
 #define RUNE_VERSION    2
 #define RUNE_PROOF_GRAVITY 800
 #define RUNE_PROOF_AIRACCELERATE 0.0f
@@ -55,12 +44,10 @@
 #define RUNE_DROP_RECOVERY_Z 72.0f
 
 /* Action and provenance IDs are generated from rune_actions.json through the
- * canonical descriptor layer included above. V2 readers still enforce their
- * historical maxima (RL_DOOR and RL_DECLARED); the appended V3 identifiers do
- * not widen the active V2 wire contract. */
+ * canonical descriptor layer included above.  The v3 loader admits only the
+ * literal controllers representable by rune_link_t. */
 
-/* seed flags: bits in rune_seed_t.flags, a field that has always been there
- * and has always been written as 0 -- so setting a bit needs no new version */
+/* Native seed flags mirror their explicit v3 wire identifiers. */
 #define RSF_WATER	1       /* the seed is a point INSIDE a water volume, not
                              * a floor point: reached and left by swimming */
 #define RSF_TOMBSTONE	2   /* retained geometry owner outside the closed
@@ -68,15 +55,8 @@
                              * makes localization fail closed instead of
                              * snapping through it to a farther live seed */
 
-/* V2 declared controllers were redesigned after early experimental files
- * had already used the ordinary 255 heading-slack byte. This otherwise-unused
- * byte is the fail-closed contract marker for exact source/approach/egress
- * records; stale declarations are rejected without perturbing the disk layout. */
+/* Fail-closed native controller markers retained by the v3 literal adapter. */
 #define RUNE_DECLARED_CONTROL_MARKER 254
-/* DROP gained a proved, ground-only first-impact recovery after early v2
- * experimental graphs existed. Mark the complete controller contract in its
- * otherwise-unbounded entry-heading byte so stale v2 records cannot silently
- * acquire movement that their proof never executed. */
 #define RUNE_DROP_CONTROL_MARKER 254
 
 typedef struct rune_seed_s
@@ -120,13 +100,15 @@ typedef struct rune_link_s
 	 *                 independent door teams; `from` begins the proved approach
 	 *                 and `to` ends the proved open-pose egress.
 	 *   RL_JUMP/RL_SWIM  unused, written as zero.
-	 *   RL_ROCKETJUMP    reserved/unsupported in v2; no record is valid.
+	 *   RL_ROCKETJUMP    registered but unsupported by the native runtime.
 	 */
 	vec3_t	anchor;
 } rune_link_t;
 
 typedef struct rune_header_s
 {
+	/* Checked convenience metadata for existing graph consumers.  This is not
+	 * and must never again become a serialized header. */
 	int		magic;
 	int		version;
 	int		num_seeds;
@@ -134,20 +116,22 @@ typedef struct rune_header_s
 	char	mapname[64];
 } rune_header_t;
 
-/* Python tooling and sidecar CRCs consume the canonical flat records below,
- * not a compiler-specific approximation of them.  Little-endian alone is not
- * enough: fail the build on an ABI whose scalar widths or padding differ from
- * the v2 disk contract. */
-_Static_assert(CHAR_BIT == 8, "rune v2 requires 8-bit bytes");
-_Static_assert(sizeof(int) == 4, "rune v2 requires 32-bit int");
-_Static_assert(sizeof(float) == 4, "rune v2 requires 32-bit float");
-_Static_assert(sizeof(rune_header_t) == 80, "rune_header_t disk layout changed");
-_Static_assert(sizeof(rune_seed_t) == 16, "rune_seed_t disk layout changed");
-_Static_assert(sizeof(rune_link_t) == 28, "rune_link_t disk layout changed");
+/* The explicit wire codec owns byte order and binary32 requirements.  These
+ * assertions are only the capacity contract of the native runtime adapter. */
+_Static_assert(INT_MAX >= (long long)SG_RUNE_V3_MAGIC,
+	"native rune header cannot represent v3 magic");
+_Static_assert(INT_MAX >= SG_RUNE_V3_MAX_LINKS,
+	"native rune indices cannot represent v3 limits");
+_Static_assert(SHRT_MAX >= SG_RUNE_V3_MAX_COST_MS,
+	"native rune cost cannot represent v3 limits");
 
 /* in-memory form */
 typedef struct rune_s
 {
+	/* The explicit v3 header is the authority for runtime identity and proof
+	 * law.  hdr remains a checked native convenience view for the existing
+	 * graph consumers; it is never a wire image. */
+	sg_rune_v3_header_t v3_header;
 	rune_header_t	hdr;
 	rune_seed_t		*seeds;
 	rune_link_t		*links;
@@ -157,6 +141,16 @@ typedef struct rune_s
 	byte			*linked_seed; /* owns at least one outgoing link; incoming-only
 	                             * dead ends and true orphans are not routes */
 } rune_t;
+
+/* One immutable snapshot of the active level identity and movement law.
+ * Generation and loading use the same capture boundary so neither can bless
+ * a graph under a weaker or differently interpreted authority. */
+typedef struct sg_rune_v3_authority_s
+{
+	sg_level_identity_t level;
+	sg_rune_v3_identity_t wire;
+	sg_identity_status_t identity_status;
+} sg_rune_v3_authority_t;
 
 /*
  * sg_oracle.c -- the rocket-jump force and the ceiling it implies.
@@ -178,4 +172,9 @@ qboolean	Rune_Generate(const char *mapname);     /* seeds + proves + writes */
 rune_t		*Rune_Load(const char *mapname);
 void		Rune_Free(rune_t *rune);
 void		Rune_DumpVisual(const rune_t *rune, const char *path);  /* html */
-qboolean	SG_RunePhysicsCompatible(void);
+qboolean	SG_RuneV3AuthorityCapture(const char *mapname,
+						 sg_rune_v3_authority_t *authority);
+qboolean	SG_RuneV3AuthorityMatchesHeader(
+						 const sg_rune_v3_authority_t *authority,
+						 const sg_rune_v3_header_t *header);
+qboolean	SG_RunePhysicsCompatible(const rune_t *rune);

@@ -75,21 +75,6 @@ static qboolean Seed_Representable(const vec3_t origin)
 	       origin[2] >= -4096.0f && origin[2] <= 4095.875f;
 }
 
-qboolean SG_RunePhysicsCompatible(void)
-{
-	static cvar_t *airaccelerate;
-
-	SG_HooksInit();
-	if (!airaccelerate)
-		airaccelerate = sg_host.cvar("sv_airaccelerate", "0", 0);
-	return sv_gravity && SG_RuneV2GravityCompatible(sv_gravity->value) &&
-	       airaccelerate && isfinite(airaccelerate->value) &&
-	       airaccelerate->value == RUNE_PROOF_AIRACCELERATE &&
-	       sv_maxvelocity && isfinite(sv_maxvelocity->value) &&
-	       sv_maxvelocity->value >= RUNE_HOOK_BOLT_SPEED &&
-	       (!want_funky_gravity || want_funky_gravity->value == 0.0f);
-}
-
 typedef enum rune_v3_recheck_failure_e
 {
 	RUNE_V3_RECHECK_NONE = 0,
@@ -97,17 +82,10 @@ typedef enum rune_v3_recheck_failure_e
 	RUNE_V3_RECHECK_PROOF_LAW
 } rune_v3_recheck_failure_t;
 
-typedef struct rune_v3_authority_s
-{
-	sg_level_identity_t level;
-	sg_rune_v3_identity_t wire;
-	sg_identity_status_t identity_status;
-} rune_v3_authority_t;
-
 typedef struct rune_v3_recheck_s
 {
 	const char *mapname;
-	const rune_v3_authority_t *captured;
+	const sg_rune_v3_authority_t *captured;
 	rune_v3_recheck_failure_t failure;
 	sg_identity_status_t identity_status;
 } rune_v3_recheck_t;
@@ -172,8 +150,8 @@ static qboolean Rune_V3PhysicsCapture(const sg_level_identity_t *level_id,
 	return true;
 }
 
-static qboolean Rune_V3AuthorityCapture(const char *mapname,
-	rune_v3_authority_t *authority)
+qboolean SG_RuneV3AuthorityCapture(const char *mapname,
+	sg_rune_v3_authority_t *authority)
 {
 	if (!authority)
 		return false;
@@ -183,6 +161,25 @@ static qboolean Rune_V3AuthorityCapture(const char *mapname,
 	if (authority->identity_status != SG_IDENTITY_OK)
 		return false;
 	return Rune_V3PhysicsCapture(&authority->level, &authority->wire);
+}
+
+qboolean SG_RuneV3AuthorityMatchesHeader(
+	const sg_rune_v3_authority_t *authority,
+	const sg_rune_v3_header_t *header)
+{
+	return authority && authority->identity_status == SG_IDENTITY_OK &&
+	       header &&
+	       SG_RuneV3MatchIdentity(header, &authority->wire) == RLW_OK;
+}
+
+qboolean SG_RunePhysicsCompatible(const rune_t *rune)
+{
+	sg_rune_v3_authority_t active;
+
+	if (!rune ||
+	    !SG_RuneV3AuthorityCapture(rune->v3_header.map_name, &active))
+		return false;
+	return SG_RuneV3AuthorityMatchesHeader(&active, &rune->v3_header);
 }
 
 static qboolean Rune_V3LevelIdentityEqual(const sg_level_identity_t *first,
@@ -214,7 +211,7 @@ static qboolean Rune_V3ProofLawEqual(const sg_rune_v3_identity_t *first,
 static int Rune_V3Revalidate(void *context)
 {
 	rune_v3_recheck_t *recheck = context;
-	rune_v3_authority_t active;
+	sg_rune_v3_authority_t active;
 
 	if (!recheck || !recheck->captured)
 		return 0;
@@ -225,7 +222,7 @@ static int Rune_V3Revalidate(void *context)
 		recheck->failure = RUNE_V3_RECHECK_PROOF_LAW;
 		return 0;
 	}
-	if (!Rune_V3AuthorityCapture(recheck->mapname, &active))
+	if (!SG_RuneV3AuthorityCapture(recheck->mapname, &active))
 	{
 		recheck->identity_status = active.identity_status;
 		recheck->failure = active.identity_status == SG_IDENTITY_OK
@@ -4255,7 +4252,7 @@ static void Doors_Restore(heldopen_t *held, int n)
 
 qboolean Rune_Generate(const char *mapname)
 {
-	rune_v3_authority_t authority;
+	sg_rune_v3_authority_t authority;
 	rune_v3_recheck_t recheck;
 	rune_v3_stream_t stream;
 	sg_rune_v3_workspace_t workspace;
@@ -4275,7 +4272,7 @@ qboolean Rune_Generate(const char *mapname)
 	const char *canonical_mapname;
 
 	SG_HooksInit();
-	if (!Rune_V3AuthorityCapture(mapname, &authority))
+	if (!SG_RuneV3AuthorityCapture(mapname, &authority))
 	{
 		if (authority.identity_status != SG_IDENTITY_OK)
 			sg_host.dprint("rune: v3 generation refused stage=identity "

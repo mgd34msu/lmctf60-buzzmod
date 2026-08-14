@@ -6,7 +6,7 @@
 # a unique port, let it boot, issue the console command "sv rune" (which
 # generates the rune for whatever map is CURRENTLY loaded). The server boots
 # in a temporary, portable game-directory mirror, so Rune_Generate writes to
-# staging rather than over the deployed graph. runelint's runtime-v2 gate then
+# staging rather than over the deployed graph. runelint's runtime-v3 gate then
 # validates the exact format and both flag-objective reverse components. Only
 # a clean graph is backed up and atomically renamed into the live maps/ tree.
 # Generation, lint, backup, or install failure leaves the old rune untouched.
@@ -177,20 +177,79 @@ prepare_stage() {
         [ -e "$entry" ] || [ -L "$entry" ] || continue
         base="${entry##*/}"
         if [ "$base" = "$map.rune" ]; then
-            # The map can boot against the old graph, but even a regressed
-            # direct-writing generator would only overwrite this private copy.
-            cp -p -- "$entry" "$stage_dir/maps/$base" || return 1
-        else
-            ln -s -- "$entry" "$stage_dir/maps/$base" || return 1
+            # Generation must create this exact file from absence. Carrying the
+            # old target into staging lets a failed or wrong-map `sv rune`
+            # masquerade as fresh output merely because a generic write banner
+            # appeared elsewhere in the log.
+            continue
         fi
+        ln -s -- "$entry" "$stage_dir/maps/$base" || return 1
     done
+}
+
+install_rune_atomic() {
+    local source="$1" destination="$2"
+
+    # The generation directory may be a different filesystem from a symlinked
+    # or mounted live maps directory. Copy into an exclusive temporary created
+    # beside the destination, sync it, and make rename the sole commit point.
+    # A failure before os.replace leaves the deployed file byte-for-byte intact.
+    python3 - "$source" "$destination" <<'PY'
+import os
+import shutil
+import stat
+import sys
+import tempfile
+
+source, destination = sys.argv[1:]
+directory = os.path.dirname(destination) or "."
+prefix = ".runegen-install."
+fd = -1
+temporary = None
+committed = False
+try:
+    fd, temporary = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=directory)
+    source_mode = stat.S_IMODE(os.stat(source, follow_symlinks=False).st_mode)
+    with os.fdopen(fd, "wb", closefd=True) as output:
+        fd = -1
+        with open(source, "rb") as input_file:
+            shutil.copyfileobj(input_file, output, length=1024 * 1024)
+        output.flush()
+        os.fchmod(output.fileno(), source_mode)
+        os.fsync(output.fileno())
+    os.replace(temporary, destination)
+    committed = True
+    temporary = None
+    try:
+        directory_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as error:
+        # Rename is already the atomic commit point. A directory-sync failure
+        # affects crash durability, not which complete file readers can see.
+        print(f"runegen: warning -- directory sync after install failed: {error}",
+              file=sys.stderr)
+except Exception as error:
+    print(f"runegen: atomic install failed: {error}", file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    if fd >= 0:
+        os.close(fd)
+    if not committed and temporary is not None:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+PY
 }
 
 run_one() {
     local map="$1" port="$2" logfile="$3"
     local t0 t1 elapsed pid status detail seeds links runefile status_code
-    local stage_dir stage_game staged_rune lintfile wrote_line roots_line
-    local red_root blue_root backup_file
+    local stage_dir stage_game staged_rune lintfile wrote_line wrote_payload
+    local expected_banner_prefix roots_line red_root blue_root backup_file
 
     runefile="$LIVE_GAME_DIR/maps/$map.rune"
     stage_dir="$(mktemp -d "$GAMEDIR_ROOT/.runegen-stage.XXXXXX")" || {
@@ -232,13 +291,14 @@ run_one() {
     t1=$(date +%s)
     elapsed=$(( t1 - t0 ))
 
+    expected_banner_prefix="rune: wrote $stage_game/maps/$map.rune ("
+    wrote_line="$(grep -F "$expected_banner_prefix" "$logfile" 2>/dev/null | tail -n1)"
+    wrote_payload="${wrote_line#"$expected_banner_prefix"}"
     if [ -f "$staged_rune" ] && [ ! -L "$staged_rune" ] && \
-            grep -q "rune: wrote" "$logfile" 2>/dev/null; then
-        wrote_line="$(grep "rune: wrote" "$logfile" | tail -n1)"
-        seeds="$(printf '%s\n' "$wrote_line" | sed -n 's/.*(\([0-9]\+\) seeds, \([0-9]\+\) links).*/\1/p')"
-        links="$(printf '%s\n' "$wrote_line" | sed -n 's/.*(\([0-9]\+\) seeds, \([0-9]\+\) links).*/\2/p')"
-        seeds="${seeds:-?}"
-        links="${links:-?}"
+            [ "$wrote_payload" != "$wrote_line" ] && \
+            [[ "$wrote_payload" =~ ^([0-9]+)\ seeds,\ ([0-9]+)\ links\)$ ]]; then
+        seeds="${BASH_REMATCH[1]}"
+        links="${BASH_REMATCH[2]}"
         roots_line="$(grep -E 'rune: objective roots red=[0-9]+ blue=[0-9]+' \
             "$logfile" | tail -n1)"
         red_root="$(printf '%s\n' "$roots_line" | \
@@ -253,11 +313,11 @@ run_one() {
             RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
             return
         fi
-        if ! python3 "$RUNE_LINT" --runtime-v2 \
+        if ! python3 "$RUNE_LINT" --runtime-v3 \
                 --objective-roots "$red_root" "$blue_root" \
                 "$staged_rune" > "$lintfile" 2>&1; then
             status="FAIL"
-            detail="runtime-v2 quality gate failed (see $lintfile)"
+            detail="runtime-v3 quality gate failed (see $lintfile)"
             echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
             sed 's/^/  /' "$lintfile"
             cleanup_stage "$stage_dir"
@@ -285,7 +345,7 @@ run_one() {
                 return
             fi
         fi
-        if ! mv -f -- "$staged_rune" "$runefile"; then
+        if ! install_rune_atomic "$staged_rune" "$runefile"; then
             status="FAIL"
             detail="atomic install failed; old rune remains (backup=$backup_file)"
             cleanup_stage "$stage_dir"
@@ -294,7 +354,7 @@ run_one() {
             return
         fi
         status="ok"
-        detail="runtime-v2 gate clean; backup=$backup_file"
+        detail="runtime-v3 gate clean; backup=$backup_file"
         cleanup_stage "$stage_dir"
         echo "rune: installed $runefile ($seeds seeds, $links links) -- ${elapsed}s, map=$map port=$port"
     else
@@ -331,9 +391,9 @@ for map in "${MAPS[@]}"; do
              "( cd \"$GAMEDIR_ROOT\" && stdbuf -oL timeout $TIMEOUT_SECS \"$Q2DED\"" \
              "-portable +set game <temporary-stage> +set dedicated 1 +set port $port +exec $CFG +map $map ) > \"$logfile\" 2>&1"
         echo "[dry-run]   parse authoritative red/blue roots from the server log"
-        echo "[dry-run]   python3 \"$RUNE_LINT\" --runtime-v2 --objective-roots RED BLUE <staged>/$map.rune"
+        echo "[dry-run]   python3 \"$RUNE_LINT\" --runtime-v3 --objective-roots RED BLUE <staged>/$map.rune"
         echo "[dry-run]   preserve old rune under $RUNE_BACKUP_DIR, then atomically install into $LIVE_GAME_DIR/maps/$map.rune"
-        RESULT_LINES+=("$map|-|-|-|DRY-RUN|stage -> runtime-v2 gate -> backup -> atomic install")
+        RESULT_LINES+=("$map|-|-|-|DRY-RUN|stage -> runtime-v3 gate -> backup -> atomic install")
     else
         echo "=== runegen: $map (port $port) ==="
         run_one "$map" "$port" "$logfile"

@@ -2273,7 +2273,10 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	{
 		vec3_t p0, p1;
 		trace_t ltr;
-		float tt, grav = 800.0f;
+		/* v3 admits any authenticated integral gravity. Predict against the
+		 * active law whose exact bits gate this loaded graph, not the old v2
+		 * default, or low-gravity maps aim splash below the real touchdown. */
+		float tt, grav = sv_gravity ? sv_gravity->value : 800.0f;
 		int seg;
 
 		VectorCopy(mid, p0);

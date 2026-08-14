@@ -17,13 +17,22 @@
  * lethal for red is safe for blue -- fed by each bot registering its own
  * death at its own seed (self-knowledge, the most honest sighting there
  * is), decayed a little every second, priced into the same descent as
- * every other dimension, and persisted beside the rune so the next match
- * on this map starts educated. The rune is a higher-order surface; this
- * is one more dimension of it.
+ * every other dimension. B3 deliberately resets it at every level boundary:
+ * the native v2 persistence codec below is dormant until B4 replaces it with
+ * an explicit little-endian, identity-bound v3 sidecar. The rune is a
+ * higher-order surface; this is one more dimension of it.
  */
 static int		sg_danger[2][SG_MAX_SEEDS];
 
 static float	sg_danger_decay_next;
+
+void Danger_ResetLevel(void)
+{
+	memset(sg_danger, 0, sizeof(sg_danger));
+	/* This deadline is level-time state, not learned map state. A time rewind
+	 * must never freeze the freshly reset field for the old map's uptime. */
+	sg_danger_decay_next = 0.0f;
+}
 
 static unsigned int Danger_CRC32Update(unsigned int crc,
 	const void *block, size_t size)
@@ -157,10 +166,7 @@ void Danger_Load(void)
 	size_t expected;
 	qboolean ok = false;
 
-	memset(sg_danger, 0, sizeof(sg_danger));
-	/* This deadline is level-time state, not learned map state. A time rewind
-	 * must never freeze the freshly loaded field for the old map's uptime. */
-	sg_danger_decay_next = 0.0f;
+	Danger_ResetLevel();
 	if (!r || r->hdr.num_seeds <= 0 || r->hdr.num_seeds > SG_MAX_SEEDS)
 		return;
 	Danger_Path(path, sizeof(path));
