@@ -11,6 +11,7 @@
 #define SG_ACTION_TRAIT_COUNT 7
 #define SG_ACTION_TRAIT_ALL_MASK 0x007fU
 #define SG_ENDPOINT_POLICY_COUNT 7
+#define SG_RUNE_WIRE_DIAGNOSTIC_COUNT 27
 
 #define SG_RUNE_V3_MAGIC 0x454e5552U
 #define SG_RUNE_V3_VERSION 3
@@ -213,6 +214,37 @@ typedef enum
 	RLR_ACTION_TIMEOUT = 103,
 } rune_reject_reason_t;
 
+typedef enum
+{
+	RLW_OK = 0,
+	RLW_INVALID_ARGUMENT = 1,
+	RLW_IO_ERROR = 2,
+	RLW_BAD_MAGIC = 3,
+	RLW_UNSUPPORTED_VERSION = 4,
+	RLW_BAD_HEADER_SIZE = 5,
+	RLW_BAD_SEED_SIZE = 6,
+	RLW_BAD_LINK_SIZE = 7,
+	RLW_BAD_COUNTS = 8,
+	RLW_BAD_FILE_SIZE = 9,
+	RLW_BAD_HEADER_CRC = 10,
+	RLW_BAD_PAYLOAD_CRC = 11,
+	RLW_BAD_MAPNAME = 12,
+	RLW_MAPNAME_MISMATCH = 13,
+	RLW_BAD_ACTION_CONTRACT = 14,
+	RLW_BAD_PHYSICS_LAW = 15,
+	RLW_IDENTITY_UNAVAILABLE = 16,
+	RLW_BSP_CHECKSUM_MISMATCH = 17,
+	RLW_ENTITY_CRC_MISMATCH = 18,
+	RLW_PHYSICS_ID_MISMATCH = 19,
+	RLW_BAD_SEED_RECORD = 20,
+	RLW_BAD_LINK_RECORD = 21,
+	RLW_DUPLICATE_LINK = 22,
+	RLW_BAD_ROUTE_OWNERSHIP = 23,
+	RLW_BAD_OBJECTIVE_CORE = 24,
+	RLW_ALLOCATION_FAILED = 25,
+	RLW_BAD_SIDECAR = 26,
+} rune_wire_diagnostic_t;
+
 /* X(symbol, id, runtime_supported, default_provenance, provenance_mask,
  *   mode_mask, trait_mask, endpoint_policy, suffix_anchor_policy,
  *   preopen_mechanism_anchor_policy, ride_mechanism_anchor_policy,
@@ -280,5 +312,35 @@ typedef enum
 	X(RLR_LIVE_PERTURBED, 101, "live action perturbed") \
 	X(RLR_RECOVERY_UNSAFE, 102, "recovery unsafe") \
 	X(RLR_ACTION_TIMEOUT, 103, "action timeout")
+
+/* X(symbol, id, message) */
+#define SG_RUNE_WIRE_DIAGNOSTIC_ROWS(X) \
+	X(RLW_OK, 0, "ok") \
+	X(RLW_INVALID_ARGUMENT, 1, "invalid argument") \
+	X(RLW_IO_ERROR, 2, "I/O error") \
+	X(RLW_BAD_MAGIC, 3, "bad magic") \
+	X(RLW_UNSUPPORTED_VERSION, 4, "unsupported version") \
+	X(RLW_BAD_HEADER_SIZE, 5, "bad header size") \
+	X(RLW_BAD_SEED_SIZE, 6, "bad seed size") \
+	X(RLW_BAD_LINK_SIZE, 7, "bad link size") \
+	X(RLW_BAD_COUNTS, 8, "bad counts") \
+	X(RLW_BAD_FILE_SIZE, 9, "bad file size") \
+	X(RLW_BAD_HEADER_CRC, 10, "bad header CRC") \
+	X(RLW_BAD_PAYLOAD_CRC, 11, "bad payload CRC") \
+	X(RLW_BAD_MAPNAME, 12, "bad map name") \
+	X(RLW_MAPNAME_MISMATCH, 13, "map name mismatch") \
+	X(RLW_BAD_ACTION_CONTRACT, 14, "bad action contract") \
+	X(RLW_BAD_PHYSICS_LAW, 15, "bad physics law") \
+	X(RLW_IDENTITY_UNAVAILABLE, 16, "identity unavailable") \
+	X(RLW_BSP_CHECKSUM_MISMATCH, 17, "BSP checksum mismatch") \
+	X(RLW_ENTITY_CRC_MISMATCH, 18, "entity CRC mismatch") \
+	X(RLW_PHYSICS_ID_MISMATCH, 19, "physics ID mismatch") \
+	X(RLW_BAD_SEED_RECORD, 20, "bad seed record") \
+	X(RLW_BAD_LINK_RECORD, 21, "bad link record") \
+	X(RLW_DUPLICATE_LINK, 22, "duplicate link") \
+	X(RLW_BAD_ROUTE_OWNERSHIP, 23, "bad route ownership") \
+	X(RLW_BAD_OBJECTIVE_CORE, 24, "bad objective core") \
+	X(RLW_ALLOCATION_FAILED, 25, "allocation failed") \
+	X(RLW_BAD_SIDECAR, 26, "bad sidecar")
 
 #endif /* SG_ACTION_CONTRACT_GENERATED_H */

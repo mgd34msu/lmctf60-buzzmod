@@ -120,6 +120,7 @@ class RuneContractTests(unittest.TestCase):
     def test_canonicalization_ignores_whitespace_and_object_key_order(self):
         reordered = {
             "display": copy.deepcopy(self.document["display"]),
+            "wire_diagnostics": copy.deepcopy(self.document["wire_diagnostics"]),
             "contract": dict(reversed(list(self.document["contract"].items()))),
             "schema_version": self.document["schema_version"],
         }
@@ -133,13 +134,28 @@ class RuneContractTests(unittest.TestCase):
             GENERATOR.contract_digests(pretty),
         )
 
-    def test_display_is_outside_crc_but_semantic_change_is_not(self):
+    def test_display_and_wire_diagnostic_messages_are_outside_action_crc(self):
         display_change = copy.deepcopy(self.document)
         display_change["display"]["actions"][0]["color"] = "#010203"
         display_change["display"]["reasons"][0]["message"] = "success"
         self.assertEqual(
             GENERATOR.contract_digests(self.document),
             GENERATOR.contract_digests(display_change),
+        )
+
+        diagnostic_change = copy.deepcopy(self.document)
+        diagnostic_change["wire_diagnostics"][2]["message"] = "read failed"
+        self.assertEqual(
+            GENERATOR.contract_digests(self.document),
+            GENERATOR.contract_digests(diagnostic_change),
+        )
+        self.assertNotEqual(
+            GENERATOR.render_c(self.document),
+            GENERATOR.render_c(diagnostic_change),
+        )
+        self.assertNotEqual(
+            GENERATOR.render_python(self.document),
+            GENERATOR.render_python(diagnostic_change),
         )
 
         semantic_change = copy.deepcopy(self.document)
@@ -150,6 +166,40 @@ class RuneContractTests(unittest.TestCase):
         after = GENERATOR._canonical_semantic_bytes(semantic_change)
         self.assertNotEqual(zlib.crc32(before), zlib.crc32(after))
         self.assertNotEqual(hashlib.sha256(before).digest(), hashlib.sha256(after).digest())
+
+    def test_wire_diagnostic_ids_and_symbols_are_append_only_pins(self):
+        expected = self.pins["wire_diagnostics"]
+        self.assertEqual(
+            expected,
+            [
+                [entry["id"], entry["symbol"], entry["message"]]
+                for entry in self.document["wire_diagnostics"]
+            ],
+        )
+
+        reordered = copy.deepcopy(self.document)
+        reordered["wire_diagnostics"][0:2] = reversed(
+            reordered["wire_diagnostics"][0:2]
+        )
+        with self.assertRaises(GENERATOR.ContractError):
+            GENERATOR.validate_document(reordered)
+
+        swapped_symbols = copy.deepcopy(self.document)
+        swapped_symbols["wire_diagnostics"][0]["symbol"], swapped_symbols[
+            "wire_diagnostics"
+        ][1]["symbol"] = (
+            swapped_symbols["wire_diagnostics"][1]["symbol"],
+            swapped_symbols["wire_diagnostics"][0]["symbol"],
+        )
+        with self.assertRaises(GENERATOR.ContractError):
+            GENERATOR.validate_document(swapped_symbols)
+
+        appended_without_reviewed_pin = copy.deepcopy(self.document)
+        appended_without_reviewed_pin["wire_diagnostics"].append(
+            {"id": 27, "symbol": "RLW_UNREVIEWED", "message": "unreviewed"}
+        )
+        with self.assertRaises(GENERATOR.ContractError):
+            GENERATOR.validate_document(appended_without_reviewed_pin)
 
     def test_strict_json_rejects_duplicate_keys_floats_and_bad_utf8(self):
         malformed = (
@@ -246,6 +296,8 @@ class RuneContractTests(unittest.TestCase):
 
     def test_generated_metadata_and_effective_suffix_policies(self):
         crc32_value, sha256_value = GENERATOR.contract_digests(self.document)
+        self.assertEqual(self.pins["contract_crc32"], f"{crc32_value:08x}")
+        self.assertEqual(self.pins["contract_sha256"], sha256_value)
         self.assertEqual(crc32_value, GENERATED.CONTRACT_CRC32)
         self.assertEqual(sha256_value, GENERATED.CONTRACT_SHA256)
         self.assertEqual(12, GENERATED.ACTION_COUNT)
@@ -254,6 +306,7 @@ class RuneContractTests(unittest.TestCase):
         self.assertEqual(7, GENERATED.ACTION_TRAIT_COUNT)
         self.assertEqual(0x7f, GENERATED.ACTION_TRAIT_ALL_MASK)
         self.assertEqual(7, GENERATED.ENDPOINT_POLICY_COUNT)
+        self.assertEqual(27, GENERATED.WIRE_DIAGNOSTIC_COUNT)
 
         self.assertEqual(GENERATED.RL_DROP, GENERATED.effective_suffix(GENERATED.RL_DOOR_DROP))
         self.assertEqual(GENERATED.RL_SWIM, GENERATED.effective_suffix(GENERATED.RL_DOOR_SWIM))
@@ -313,6 +366,38 @@ class RuneContractTests(unittest.TestCase):
             self.assertEqual(python_row["short_name"], json.loads(parts[18]))
             self.assertEqual(python_row["color"], json.loads(parts[19]))
         self.assertEqual(self.pins["descriptor_rows"], rows)
+
+    def test_generated_wire_diagnostic_c_and_python_maps_match(self):
+        expected = self.pins["wire_diagnostics"]
+        header = (ROOT / "slipgate" / "sg_action_contract.generated.h").read_text(
+            encoding="utf-8"
+        )
+        c_rows = []
+        for line in header.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("X(RLW_"):
+                continue
+            if stripped.endswith("\\"):
+                stripped = stripped[:-1].rstrip()
+            symbol, diagnostic_id, message = stripped[2:-1].split(", ", 2)
+            c_rows.append([int(diagnostic_id), symbol, json.loads(message)])
+        self.assertEqual(expected, c_rows)
+
+        python_rows = [
+            [entry["id"], entry["symbol"], entry["message"]]
+            for entry in GENERATED.WIRE_DIAGNOSTICS
+        ]
+        self.assertEqual(expected, python_rows)
+        self.assertEqual(
+            {entry[0]: entry[1] for entry in expected},
+            GENERATED.WIRE_DIAGNOSTIC_SYMBOLS,
+        )
+        self.assertEqual(
+            {entry[0]: entry[2] for entry in expected},
+            GENERATED.WIRE_DIAGNOSTIC_MESSAGES,
+        )
+        for diagnostic_id, symbol, _ in expected:
+            self.assertEqual(diagnostic_id, getattr(GENERATED, symbol))
 
     def test_provenance_modes_and_runtime_support_are_outer_action_policies(self):
         self.assertTrue(GENERATED.allows_provenance(GENERATED.RL_RUN, GENERATED.RL_DECLARED))

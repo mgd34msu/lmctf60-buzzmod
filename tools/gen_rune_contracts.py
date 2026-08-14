@@ -90,6 +90,35 @@ _PINNED_ENUMS = {
         102: "RLR_RECOVERY_UNSAFE", 103: "RLR_ACTION_TIMEOUT",
     },
 }
+_PINNED_WIRE_DIAGNOSTICS = {
+    0: "RLW_OK",
+    1: "RLW_INVALID_ARGUMENT",
+    2: "RLW_IO_ERROR",
+    3: "RLW_BAD_MAGIC",
+    4: "RLW_UNSUPPORTED_VERSION",
+    5: "RLW_BAD_HEADER_SIZE",
+    6: "RLW_BAD_SEED_SIZE",
+    7: "RLW_BAD_LINK_SIZE",
+    8: "RLW_BAD_COUNTS",
+    9: "RLW_BAD_FILE_SIZE",
+    10: "RLW_BAD_HEADER_CRC",
+    11: "RLW_BAD_PAYLOAD_CRC",
+    12: "RLW_BAD_MAPNAME",
+    13: "RLW_MAPNAME_MISMATCH",
+    14: "RLW_BAD_ACTION_CONTRACT",
+    15: "RLW_BAD_PHYSICS_LAW",
+    16: "RLW_IDENTITY_UNAVAILABLE",
+    17: "RLW_BSP_CHECKSUM_MISMATCH",
+    18: "RLW_ENTITY_CRC_MISMATCH",
+    19: "RLW_PHYSICS_ID_MISMATCH",
+    20: "RLW_BAD_SEED_RECORD",
+    21: "RLW_BAD_LINK_RECORD",
+    22: "RLW_DUPLICATE_LINK",
+    23: "RLW_BAD_ROUTE_OWNERSHIP",
+    24: "RLW_BAD_OBJECTIVE_CORE",
+    25: "RLW_ALLOCATION_FAILED",
+    26: "RLW_BAD_SIDECAR",
+}
 _PINNED_WIRE = {
     "magic": 0x454E5552, "version": 3, "little_endian_required": 1,
     "header_bytes": 128,
@@ -300,6 +329,42 @@ def _validate_pinned_enum(entries, category: str, key="id"):
         )
 
 
+def _validate_wire_diagnostics(entries):
+    entries = _require_list(entries, "wire_diagnostics")
+    values = []
+    symbols = []
+    for index, entry in enumerate(entries):
+        where = f"wire_diagnostics[{index}]"
+        _require_keys(entry, ("id", "symbol", "message"), where)
+        values.append(_require_int(entry["id"], f"{where}.id", 0, 255))
+        symbol = _validate_symbol(entry["symbol"], f"{where}.symbol")
+        if not symbol.startswith("RLW_"):
+            _fail(f"{where}.symbol", "must use the RLW_ namespace")
+        symbols.append(symbol)
+        message = _require_string(entry["message"], f"{where}.message")
+        if not message or "\x00" in message:
+            _fail(f"{where}.message", "must be nonempty and contain no NUL")
+    if values != sorted(values):
+        _fail("wire_diagnostics", "must be sorted by explicit id")
+    if len(values) != len(set(values)):
+        _fail("wire_diagnostics", "contains duplicate id values")
+    if len(symbols) != len(set(symbols)):
+        _fail("wire_diagnostics", "contains duplicate symbols")
+    if values != list(range(len(values))):
+        _fail(
+            "wire_diagnostics",
+            f"must contain every id from 0 through {len(values)-1}",
+        )
+    actual = {entry["id"]: entry["symbol"] for entry in entries}
+    if actual != _PINNED_WIRE_DIAGNOSTICS:
+        _fail(
+            "wire_diagnostics",
+            "symbol/ID pins differ "
+            f"(expected={_PINNED_WIRE_DIAGNOSTICS}, actual={actual})",
+        )
+    return values, symbols
+
+
 def _validate_pinned_integer_object(value, expected, where: str):
     _require_keys(value, expected, where)
     for key, pinned in expected.items():
@@ -327,7 +392,11 @@ def _validate_action_cycles(actions):
 def validate_document(document):
     """Validate the complete schema; return None or raise ContractError."""
     _reject_floats_and_surrogates(document)
-    _require_keys(document, ("schema_version", "contract", "display"), "root")
+    _require_keys(
+        document,
+        ("schema_version", "contract", "wire_diagnostics", "display"),
+        "root",
+    )
     schema_version = _require_int(document["schema_version"], "schema_version", 1)
     if schema_version != _PINNED_SCHEMA_VERSION:
         _fail("schema_version", f"unsupported schema version {schema_version}")
@@ -503,6 +572,14 @@ def validate_document(document):
         if action["suffix_anchor_policy"] != suffix["suffix_anchor_policy"]:
             _fail(f"contract.actions[{action['id']}]", "does not inherit suffix anchor policy")
 
+    _, wire_diagnostic_symbols = _validate_wire_diagnostics(
+        document["wire_diagnostics"]
+    )
+    for symbol in wire_diagnostic_symbols:
+        if symbol in all_symbols:
+            _fail("wire_diagnostics", f"globally duplicate symbol {symbol}")
+        all_symbols.add(symbol)
+
     display = _require_keys(document["display"], ("actions", "reasons"),
                             "display")
     display_actions = _require_list(display["actions"], "display.actions")
@@ -544,7 +621,7 @@ def _canonical_semantic_bytes(document) -> bytes:
 
 
 def canonical_contract_bytes(document) -> bytes:
-    """Validated canonical semantic payload; display metadata is absent."""
+    """Validated action payload; display and wire diagnostics are absent."""
     validate_document(document)
     return _canonical_semantic_bytes(document)
 
@@ -580,6 +657,7 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
     if crc32_value is None or sha256_value is None:
         crc32_value, sha256_value = contract_digests(document)
     contract = document["contract"]
+    wire_diagnostics = document["wire_diagnostics"]
     trait_all_mask = sum(entry["bit"] for entry in contract["traits"])
     display = {entry["id"]: entry for entry in document["display"]["actions"]}
     reason_display = {entry["id"]: entry for entry in document["display"]["reasons"]}
@@ -597,6 +675,7 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
         f"#define SG_ACTION_TRAIT_COUNT {len(contract['traits'])}",
         f"#define SG_ACTION_TRAIT_ALL_MASK 0x{trait_all_mask:04x}U",
         f"#define SG_ENDPOINT_POLICY_COUNT {len(contract['endpoint_policies'])}",
+        f"#define SG_RUNE_WIRE_DIAGNOSTIC_COUNT {len(wire_diagnostics)}",
         "",
     ]
     for key, value in contract["wire"].items():
@@ -619,6 +698,7 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
         ("rune_mechanism_policy_t", contract["mechanism_policies"], "id"),
         ("rune_field_bias_policy_t", contract["field_bias_policies"], "id"),
         ("rune_reject_reason_t", contract["reasons"], "id"),
+        ("rune_wire_diagnostic_t", wire_diagnostics, "id"),
     )
     for type_name, entries, key in enum_specs:
         lines.extend(_enum_lines(type_name, entries, key))
@@ -663,6 +743,14 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
     ]
     lines.extend(("/* X(symbol, id, message) */",))
     lines.extend(_macro_lines("SG_RUNE_REJECTION_REASON_ROWS", reason_rows))
+    wire_diagnostic_rows = [
+        f"{entry['symbol']}, {entry['id']}, {_c_string(entry['message'])}"
+        for entry in wire_diagnostics
+    ]
+    lines.extend(("/* X(symbol, id, message) */",))
+    lines.extend(
+        _macro_lines("SG_RUNE_WIRE_DIAGNOSTIC_ROWS", wire_diagnostic_rows)
+    )
     lines.extend(("#endif /* SG_ACTION_CONTRACT_GENERATED_H */", ""))
     return "\n".join(lines).encode("utf-8")
 
@@ -672,11 +760,12 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
     if crc32_value is None or sha256_value is None:
         crc32_value, sha256_value = contract_digests(document)
     contract = document["contract"]
+    wire_diagnostics = document["wire_diagnostics"]
     trait_all_mask = sum(entry["bit"] for entry in contract["traits"])
     display = {entry["id"]: entry for entry in document["display"]["actions"]}
     reason_display = {entry["id"]: entry for entry in document["display"]["reasons"]}
     lines = [
-        '"""Generated rune action metadata. DO NOT EDIT."""',
+        '"""Generated rune contract metadata. DO NOT EDIT."""',
         "",
         f"CONTRACT_SCHEMA_VERSION = {document['schema_version']}",
         f"CONTRACT_CRC32 = 0x{crc32_value:08x}",
@@ -687,6 +776,7 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
         f"ACTION_TRAIT_COUNT = {len(contract['traits'])}",
         f"ACTION_TRAIT_ALL_MASK = {trait_all_mask}",
         f"ENDPOINT_POLICY_COUNT = {len(contract['endpoint_policies'])}",
+        f"WIRE_DIAGNOSTIC_COUNT = {len(wire_diagnostics)}",
         "",
     ]
     for key, value in contract["wire"].items():
@@ -704,6 +794,10 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
         for entry in contract[category]:
             lines.append(f"{entry['symbol']} = {entry[key]}")
         lines.append("")
+
+    for entry in wire_diagnostics:
+        lines.append(f"{entry['symbol']} = {entry['id']}")
+    lines.append("")
 
     lines.append("ACTIONS = (")
     for action in contract["actions"]:
@@ -756,6 +850,19 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
     lines.extend((
         f"REASON_SYMBOLS = {{{reason_symbols}}}",
         f"REASON_MESSAGES = {{{reason_messages}}}",
+        "",
+        "WIRE_DIAGNOSTICS = (",
+    ))
+    for entry in wire_diagnostics:
+        body = ", ".join(
+            f"{key!r}: {entry[key]!r}" for key in ("id", "symbol", "message")
+        )
+        lines.append(f"    {{{body}}},")
+    lines.extend((
+        ")",
+        "WIRE_DIAGNOSTIC_BY_ID = {entry['id']: entry for entry in WIRE_DIAGNOSTICS}",
+        "WIRE_DIAGNOSTIC_SYMBOLS = {entry['id']: entry['symbol'] for entry in WIRE_DIAGNOSTICS}",
+        "WIRE_DIAGNOSTIC_MESSAGES = {entry['id']: entry['message'] for entry in WIRE_DIAGNOSTICS}",
         "",
         "def action_contract(action):",
         "    if type(action) is not int:",

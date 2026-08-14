@@ -54,3 +54,21 @@ SG_ACTION_CONTRACT_ROWS(ASSERT_ACTION_ROW)
 _Static_assert(RLR_OK == 0, "success reason drift");
 _Static_assert(RLR_UNSUPPORTED_ACTIVATOR == 74, "activator reason drift");
 _Static_assert(RLR_ACTION_TIMEOUT == 103, "timeout reason drift");
+
+_Static_assert(RLW_OK == 0, "wire diagnostic success drift");
+_Static_assert(RLW_BAD_HEADER_CRC == 10, "header CRC diagnostic drift");
+_Static_assert(RLW_BAD_SIDECAR == 26, "sidecar diagnostic drift");
+
+#define COUNT_WIRE_DIAGNOSTIC_ROW(...) + 1
+enum {
+    PROBED_WIRE_DIAGNOSTIC_ROWS =
+        0 SG_RUNE_WIRE_DIAGNOSTIC_ROWS(COUNT_WIRE_DIAGNOSTIC_ROW)
+};
+#undef COUNT_WIRE_DIAGNOSTIC_ROW
+_Static_assert(PROBED_WIRE_DIAGNOSTIC_ROWS == SG_RUNE_WIRE_DIAGNOSTIC_COUNT,
+               "missing wire diagnostic row");
+
+#define ASSERT_WIRE_DIAGNOSTIC_ROW(symbol, id, message) \
+    _Static_assert(symbol == id, "wire diagnostic row ID drift");
+SG_RUNE_WIRE_DIAGNOSTIC_ROWS(ASSERT_WIRE_DIAGNOSTIC_ROW)
+#undef ASSERT_WIRE_DIAGNOSTIC_ROW

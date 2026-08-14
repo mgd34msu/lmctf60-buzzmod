@@ -1,5 +1,7 @@
 {
   "schema_version": 1,
+  "contract_crc32": "769a7b8e",
+  "contract_sha256": "0790272cf0a34b7ba26dd318629150e3bc66b21dedb5ac448578aa8c3fdc4d59",
   "action_symbols": [
     "RL_RUN", "RL_JUMP", "RL_DROP", "RL_HOOK", "RL_SWIM", "RL_LIFT",
     "RL_TELEPORT", "RL_ROCKETJUMP", "RL_DOOR", "RL_DOOR_DROP",
@@ -65,6 +67,35 @@
     "hook_max_ray": 8192,
     "hook_max_abs_pitch_degrees": 89
   },
+  "wire_diagnostics": [
+    [0, "RLW_OK", "ok"],
+    [1, "RLW_INVALID_ARGUMENT", "invalid argument"],
+    [2, "RLW_IO_ERROR", "I/O error"],
+    [3, "RLW_BAD_MAGIC", "bad magic"],
+    [4, "RLW_UNSUPPORTED_VERSION", "unsupported version"],
+    [5, "RLW_BAD_HEADER_SIZE", "bad header size"],
+    [6, "RLW_BAD_SEED_SIZE", "bad seed size"],
+    [7, "RLW_BAD_LINK_SIZE", "bad link size"],
+    [8, "RLW_BAD_COUNTS", "bad counts"],
+    [9, "RLW_BAD_FILE_SIZE", "bad file size"],
+    [10, "RLW_BAD_HEADER_CRC", "bad header CRC"],
+    [11, "RLW_BAD_PAYLOAD_CRC", "bad payload CRC"],
+    [12, "RLW_BAD_MAPNAME", "bad map name"],
+    [13, "RLW_MAPNAME_MISMATCH", "map name mismatch"],
+    [14, "RLW_BAD_ACTION_CONTRACT", "bad action contract"],
+    [15, "RLW_BAD_PHYSICS_LAW", "bad physics law"],
+    [16, "RLW_IDENTITY_UNAVAILABLE", "identity unavailable"],
+    [17, "RLW_BSP_CHECKSUM_MISMATCH", "BSP checksum mismatch"],
+    [18, "RLW_ENTITY_CRC_MISMATCH", "entity CRC mismatch"],
+    [19, "RLW_PHYSICS_ID_MISMATCH", "physics ID mismatch"],
+    [20, "RLW_BAD_SEED_RECORD", "bad seed record"],
+    [21, "RLW_BAD_LINK_RECORD", "bad link record"],
+    [22, "RLW_DUPLICATE_LINK", "duplicate link"],
+    [23, "RLW_BAD_ROUTE_OWNERSHIP", "bad route ownership"],
+    [24, "RLW_BAD_OBJECTIVE_CORE", "bad objective core"],
+    [25, "RLW_ALLOCATION_FAILED", "allocation failed"],
+    [26, "RLW_BAD_SIDECAR", "bad sidecar"]
+  ],
   "reason_pins": [
     [0, "RLR_OK"],
     [2, "RLR_ACTION_DISABLED"],

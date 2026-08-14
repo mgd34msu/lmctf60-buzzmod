@@ -1,4 +1,4 @@
-"""Generated rune action metadata. DO NOT EDIT."""
+"""Generated rune contract metadata. DO NOT EDIT."""
 
 CONTRACT_SCHEMA_VERSION = 1
 CONTRACT_CRC32 = 0x769a7b8e
@@ -9,6 +9,7 @@ COMPOUND_MODE_COUNT = 3
 ACTION_TRAIT_COUNT = 7
 ACTION_TRAIT_ALL_MASK = 127
 ENDPOINT_POLICY_COUNT = 7
+WIRE_DIAGNOSTIC_COUNT = 27
 
 RUNE_V3_MAGIC = 1162761554
 RUNE_V3_VERSION = 3
@@ -181,6 +182,34 @@ RLR_LIVE_PERTURBED = 101
 RLR_RECOVERY_UNSAFE = 102
 RLR_ACTION_TIMEOUT = 103
 
+RLW_OK = 0
+RLW_INVALID_ARGUMENT = 1
+RLW_IO_ERROR = 2
+RLW_BAD_MAGIC = 3
+RLW_UNSUPPORTED_VERSION = 4
+RLW_BAD_HEADER_SIZE = 5
+RLW_BAD_SEED_SIZE = 6
+RLW_BAD_LINK_SIZE = 7
+RLW_BAD_COUNTS = 8
+RLW_BAD_FILE_SIZE = 9
+RLW_BAD_HEADER_CRC = 10
+RLW_BAD_PAYLOAD_CRC = 11
+RLW_BAD_MAPNAME = 12
+RLW_MAPNAME_MISMATCH = 13
+RLW_BAD_ACTION_CONTRACT = 14
+RLW_BAD_PHYSICS_LAW = 15
+RLW_IDENTITY_UNAVAILABLE = 16
+RLW_BSP_CHECKSUM_MISMATCH = 17
+RLW_ENTITY_CRC_MISMATCH = 18
+RLW_PHYSICS_ID_MISMATCH = 19
+RLW_BAD_SEED_RECORD = 20
+RLW_BAD_LINK_RECORD = 21
+RLW_DUPLICATE_LINK = 22
+RLW_BAD_ROUTE_OWNERSHIP = 23
+RLW_BAD_OBJECTIVE_CORE = 24
+RLW_ALLOCATION_FAILED = 25
+RLW_BAD_SIDECAR = 26
+
 ACTIONS = (
     {'id': 0, 'symbol': 'RL_RUN', 'name': 'RUN', 'short_name': 'RUN', 'color': '#9a9a9a', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 15, 'mode_mask': 1, 'trait_mask': 0, 'endpoint_policy': 1, 'suffix_anchor_policy': 1, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 0, 'mechanism_policy': 0, 'effective_suffix': 0, 'field_bias_policy': 0, 'field_bias_ms': 0, 'controller_revision': 1},
     {'id': 1, 'symbol': 'RL_JUMP', 'name': 'JUMP', 'short_name': 'JUMP', 'color': '#00c8d7', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 15, 'mode_mask': 1, 'trait_mask': 3, 'endpoint_policy': 1, 'suffix_anchor_policy': 0, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 1, 'mechanism_policy': 0, 'effective_suffix': 1, 'field_bias_policy': 0, 'field_bias_ms': 0, 'controller_revision': 1},
@@ -204,6 +233,39 @@ PROVENANCE_NAMES = {0: 'PROVEN', 1: 'OBSERVED', 2: 'ADJUSTED', 3: 'DECLARED', 4:
 MODE_NAMES = {0: 'NONE', 1: 'PREOPEN', 2: 'RIDE'}
 REASON_SYMBOLS = {0: 'RLR_OK', 1: 'RLR_UNKNOWN_ACTION', 2: 'RLR_ACTION_DISABLED', 3: 'RLR_UNKNOWN_PROVENANCE', 4: 'RLR_PROVENANCE_FORBIDDEN', 5: 'RLR_BAD_INDEX', 6: 'RLR_SELF_LINK', 7: 'RLR_TOMBSTONE_ENDPOINT', 8: 'RLR_BAD_COST', 9: 'RLR_BAD_ENDPOINT_POLICY', 10: 'RLR_NONFINITE_ANCHOR', 11: 'RLR_BAD_ANCHOR_POLICY', 12: 'RLR_BAD_CONTROL_POLICY', 13: 'RLR_BAD_MODE', 14: 'RLR_NONZERO_TAIL', 15: 'RLR_NONZERO_RESERVED', 32: 'RLR_BAD_RUN_CONTROL', 33: 'RLR_BAD_JUMP_CONTROL', 34: 'RLR_BAD_DROP_CONTROL', 35: 'RLR_BAD_HOOK_CONTROL', 36: 'RLR_BAD_SWIM_CONTROL', 37: 'RLR_BAD_DECLARED_CONTROL', 38: 'RLR_BAD_TELEPORT_REACH', 39: 'RLR_BAD_DOOR_REACH', 40: 'RLR_BAD_MECHANISM_ANCHOR', 41: 'RLR_BAD_SWEEP_CLEAR', 64: 'RLR_MECHANISM_UNRESOLVED', 65: 'RLR_MECHANISM_AMBIGUOUS', 66: 'RLR_DOOR_TEAM_UNSAFE', 67: 'RLR_APPROACH_REPLAY_FAILED', 68: 'RLR_RIDE_REPLAY_FAILED', 69: 'RLR_SUFFIX_REPLAY_FAILED', 70: 'RLR_COST_MISMATCH', 71: 'RLR_CLEAR_MISMATCH', 72: 'RLR_TOP_WINDOW_SHORT', 73: 'RLR_SUPPORT_MISMATCH', 74: 'RLR_UNSUPPORTED_ACTIVATOR', 96: 'RLR_LIVE_SOURCE_MISMATCH', 97: 'RLR_LIVE_TOUCH_MISMATCH', 98: 'RLR_LIVE_DOOR_SET_MISMATCH', 99: 'RLR_LIVE_SUPPORT_MISMATCH', 100: 'RLR_LIVE_TIMING_MISMATCH', 101: 'RLR_LIVE_PERTURBED', 102: 'RLR_RECOVERY_UNSAFE', 103: 'RLR_ACTION_TIMEOUT'}
 REASON_MESSAGES = {0: 'ok', 1: 'unknown action', 2: 'action disabled', 3: 'unknown provenance', 4: 'provenance forbidden', 5: 'bad seed index', 6: 'self link', 7: 'tombstone endpoint', 8: 'bad cost', 9: 'bad endpoint policy', 10: 'non-finite anchor', 11: 'bad anchor policy', 12: 'bad control policy', 13: 'bad compound mode', 14: 'nonzero legacy tail', 15: 'nonzero reserved field', 32: 'bad run control', 33: 'bad jump control', 34: 'bad drop control', 35: 'bad hook control', 36: 'bad swim control', 37: 'bad declared control', 38: 'bad teleport reach', 39: 'bad door reach', 40: 'bad mechanism anchor', 41: 'bad sweep-clear time', 64: 'mechanism unresolved', 65: 'mechanism ambiguous', 66: 'door team unsafe', 67: 'approach replay failed', 68: 'ride replay failed', 69: 'suffix replay failed', 70: 'cost mismatch', 71: 'sweep-clear mismatch', 72: 'TOP window too short', 73: 'support mismatch', 74: 'unsupported activator', 96: 'live source mismatch', 97: 'live trigger touch mismatch', 98: 'live door set mismatch', 99: 'live support mismatch', 100: 'live timing mismatch', 101: 'live action perturbed', 102: 'recovery unsafe', 103: 'action timeout'}
+
+WIRE_DIAGNOSTICS = (
+    {'id': 0, 'symbol': 'RLW_OK', 'message': 'ok'},
+    {'id': 1, 'symbol': 'RLW_INVALID_ARGUMENT', 'message': 'invalid argument'},
+    {'id': 2, 'symbol': 'RLW_IO_ERROR', 'message': 'I/O error'},
+    {'id': 3, 'symbol': 'RLW_BAD_MAGIC', 'message': 'bad magic'},
+    {'id': 4, 'symbol': 'RLW_UNSUPPORTED_VERSION', 'message': 'unsupported version'},
+    {'id': 5, 'symbol': 'RLW_BAD_HEADER_SIZE', 'message': 'bad header size'},
+    {'id': 6, 'symbol': 'RLW_BAD_SEED_SIZE', 'message': 'bad seed size'},
+    {'id': 7, 'symbol': 'RLW_BAD_LINK_SIZE', 'message': 'bad link size'},
+    {'id': 8, 'symbol': 'RLW_BAD_COUNTS', 'message': 'bad counts'},
+    {'id': 9, 'symbol': 'RLW_BAD_FILE_SIZE', 'message': 'bad file size'},
+    {'id': 10, 'symbol': 'RLW_BAD_HEADER_CRC', 'message': 'bad header CRC'},
+    {'id': 11, 'symbol': 'RLW_BAD_PAYLOAD_CRC', 'message': 'bad payload CRC'},
+    {'id': 12, 'symbol': 'RLW_BAD_MAPNAME', 'message': 'bad map name'},
+    {'id': 13, 'symbol': 'RLW_MAPNAME_MISMATCH', 'message': 'map name mismatch'},
+    {'id': 14, 'symbol': 'RLW_BAD_ACTION_CONTRACT', 'message': 'bad action contract'},
+    {'id': 15, 'symbol': 'RLW_BAD_PHYSICS_LAW', 'message': 'bad physics law'},
+    {'id': 16, 'symbol': 'RLW_IDENTITY_UNAVAILABLE', 'message': 'identity unavailable'},
+    {'id': 17, 'symbol': 'RLW_BSP_CHECKSUM_MISMATCH', 'message': 'BSP checksum mismatch'},
+    {'id': 18, 'symbol': 'RLW_ENTITY_CRC_MISMATCH', 'message': 'entity CRC mismatch'},
+    {'id': 19, 'symbol': 'RLW_PHYSICS_ID_MISMATCH', 'message': 'physics ID mismatch'},
+    {'id': 20, 'symbol': 'RLW_BAD_SEED_RECORD', 'message': 'bad seed record'},
+    {'id': 21, 'symbol': 'RLW_BAD_LINK_RECORD', 'message': 'bad link record'},
+    {'id': 22, 'symbol': 'RLW_DUPLICATE_LINK', 'message': 'duplicate link'},
+    {'id': 23, 'symbol': 'RLW_BAD_ROUTE_OWNERSHIP', 'message': 'bad route ownership'},
+    {'id': 24, 'symbol': 'RLW_BAD_OBJECTIVE_CORE', 'message': 'bad objective core'},
+    {'id': 25, 'symbol': 'RLW_ALLOCATION_FAILED', 'message': 'allocation failed'},
+    {'id': 26, 'symbol': 'RLW_BAD_SIDECAR', 'message': 'bad sidecar'},
+)
+WIRE_DIAGNOSTIC_BY_ID = {entry['id']: entry for entry in WIRE_DIAGNOSTICS}
+WIRE_DIAGNOSTIC_SYMBOLS = {entry['id']: entry['symbol'] for entry in WIRE_DIAGNOSTICS}
+WIRE_DIAGNOSTIC_MESSAGES = {entry['id']: entry['message'] for entry in WIRE_DIAGNOSTICS}
 
 def action_contract(action):
     if type(action) is not int:

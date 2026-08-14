@@ -497,3 +497,8 @@ the commit, verification, corpus scope, and remaining blocker.
   is confined to pricing and route policy. Exhaustive legacy equivalence,
   sanitizer, both-makefile test/build, linked-module, and symbol-resolution
   checks passed without changing controller dispatch.
+- 2026-08-13: A separate generated `RLW_*` wire-diagnostic namespace now keeps
+  C and Python header/I/O/CRC/identity/graph errors aligned without changing
+  the action-contract digest or making diagnostics part of executable action
+  semantics. IDs 0-26 are pinned append-only; generated-product parity,
+  message-outside-digest, mutation, Python, and strict C compile tests pass.

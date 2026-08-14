@@ -185,6 +185,35 @@
       {"id": 103, "symbol": "RLR_ACTION_TIMEOUT"}
     ]
   },
+  "wire_diagnostics": [
+    {"id": 0, "symbol": "RLW_OK", "message": "ok"},
+    {"id": 1, "symbol": "RLW_INVALID_ARGUMENT", "message": "invalid argument"},
+    {"id": 2, "symbol": "RLW_IO_ERROR", "message": "I/O error"},
+    {"id": 3, "symbol": "RLW_BAD_MAGIC", "message": "bad magic"},
+    {"id": 4, "symbol": "RLW_UNSUPPORTED_VERSION", "message": "unsupported version"},
+    {"id": 5, "symbol": "RLW_BAD_HEADER_SIZE", "message": "bad header size"},
+    {"id": 6, "symbol": "RLW_BAD_SEED_SIZE", "message": "bad seed size"},
+    {"id": 7, "symbol": "RLW_BAD_LINK_SIZE", "message": "bad link size"},
+    {"id": 8, "symbol": "RLW_BAD_COUNTS", "message": "bad counts"},
+    {"id": 9, "symbol": "RLW_BAD_FILE_SIZE", "message": "bad file size"},
+    {"id": 10, "symbol": "RLW_BAD_HEADER_CRC", "message": "bad header CRC"},
+    {"id": 11, "symbol": "RLW_BAD_PAYLOAD_CRC", "message": "bad payload CRC"},
+    {"id": 12, "symbol": "RLW_BAD_MAPNAME", "message": "bad map name"},
+    {"id": 13, "symbol": "RLW_MAPNAME_MISMATCH", "message": "map name mismatch"},
+    {"id": 14, "symbol": "RLW_BAD_ACTION_CONTRACT", "message": "bad action contract"},
+    {"id": 15, "symbol": "RLW_BAD_PHYSICS_LAW", "message": "bad physics law"},
+    {"id": 16, "symbol": "RLW_IDENTITY_UNAVAILABLE", "message": "identity unavailable"},
+    {"id": 17, "symbol": "RLW_BSP_CHECKSUM_MISMATCH", "message": "BSP checksum mismatch"},
+    {"id": 18, "symbol": "RLW_ENTITY_CRC_MISMATCH", "message": "entity CRC mismatch"},
+    {"id": 19, "symbol": "RLW_PHYSICS_ID_MISMATCH", "message": "physics ID mismatch"},
+    {"id": 20, "symbol": "RLW_BAD_SEED_RECORD", "message": "bad seed record"},
+    {"id": 21, "symbol": "RLW_BAD_LINK_RECORD", "message": "bad link record"},
+    {"id": 22, "symbol": "RLW_DUPLICATE_LINK", "message": "duplicate link"},
+    {"id": 23, "symbol": "RLW_BAD_ROUTE_OWNERSHIP", "message": "bad route ownership"},
+    {"id": 24, "symbol": "RLW_BAD_OBJECTIVE_CORE", "message": "bad objective core"},
+    {"id": 25, "symbol": "RLW_ALLOCATION_FAILED", "message": "allocation failed"},
+    {"id": 26, "symbol": "RLW_BAD_SIDECAR", "message": "bad sidecar"}
+  ],
   "display": {
     "actions": [
       {"id": 0, "name": "RUN", "short_name": "RUN", "color": "#9a9a9a"},
