@@ -484,3 +484,9 @@ the commit, verification, corpus scope, and remaining blocker.
   still runtime-disabled. A standalone exhaustive descriptor test, both native
   test targets, full module build, `ldd -r`, sanitizer runs, and independent
   review gate the slice. No movement execution dispatch changed.
+- 2026-08-13: Legacy Python readers now consume the generated action metadata
+  without widening their wire contracts: v1 remains actions 0-7, v2 remains
+  actions 0-8, provenance remains 0-3, and all three readers reject v3 until
+  the explicit 128/16/44-byte decoder lands. Focused boundary fixtures pass in
+  every reader, all 135 hash-matched passing baseline runes were replayed
+  successfully, and representative output stayed byte-for-byte unchanged.

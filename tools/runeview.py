@@ -32,6 +32,22 @@ try:
     from runelint import hook_control_errors
 except ModuleNotFoundError:  # also support `python -m tools.runeview`
     from tools.runelint import hook_control_errors
+try:
+    from rune_contracts_generated import (
+        ACTION_COLORS as CONTRACT_ACTION_COLORS,
+        ACTION_NAMES as CONTRACT_ACTION_NAMES,
+        PROVENANCE_NAMES as CONTRACT_PROVENANCE_NAMES,
+        RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
+        RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
+    )
+except ModuleNotFoundError:  # also support `python -m tools.runeview`
+    from tools.rune_contracts_generated import (
+        ACTION_COLORS as CONTRACT_ACTION_COLORS,
+        ACTION_NAMES as CONTRACT_ACTION_NAMES,
+        PROVENANCE_NAMES as CONTRACT_PROVENANCE_NAMES,
+        RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
+        RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
+    )
 
 # --------------------------------------------------------------------- I/O
 
@@ -69,25 +85,23 @@ assert HEADER_SIZE == 80, HEADER_SIZE
 assert SEED_SIZE == 16, SEED_SIZE
 assert LINK_SIZE == 28, LINK_SIZE
 
-# Appended, never renumbered, exactly as rune_action_t in sg_rune.h is:
-# 0-4 are the original five, 5-6 the declared world-moves-you pair, 7 the
-# reserved rocket jump, and 8 the declared door traversal. A dump of an older
-# rune still decodes because no value moved.
-ACTION_NAMES = {0: 'RUN', 1: 'JUMP', 2: 'DROP', 3: 'HOOK', 4: 'SWIM',
-                5: 'LIFT', 6: 'TELEPORT', 7: 'ROCKETJUMP', 8: 'DOOR'}
-# grey, cyan, yellow, orange, blue -- per spec, do not change
-ACTION_COLORS = {
-    0: '#9a9a9a',   # run
-    1: '#00c8d7',   # jump
-    2: '#e0c000',   # drop
-    3: '#ff8c1a',   # hook
-    4: '#3d7dff',   # swim
-    5: '#8f5cff',   # lift      (appended; the five above are untouched)
-    6: '#00d18a',   # teleport  (appended)
-    7: '#ff3b30',   # rocketjump -- red: it is the only link paid for in health
-    8: '#ff66c4',   # door      (appended; declared trigger traversal)
+# Preserve the historical V1/V2 legend exactly while sourcing its reviewed
+# labels and colors from the registry. V3 rows stay out of legacy output until
+# the V3 decoder exists.
+ACTION_NAMES = {action: CONTRACT_ACTION_NAMES[action]
+                for action in range(RL_DOOR + 1)}
+ACTION_COLORS = {action: CONTRACT_ACTION_COLORS[action]
+                 for action in range(RL_DOOR + 1)}
+PROVENANCE_NAMES = {
+    provenance: CONTRACT_PROVENANCE_NAMES[provenance]
+    for provenance in range(RL_DECLARED + 1)
 }
-PROVENANCE_NAMES = {0: 'PROVEN', 1: 'OBSERVED', 2: 'ADJUSTED', 3: 'DECLARED'}
+
+# Frozen flat-layout gates. An effective suffix is display/policy metadata and
+# must never make a compound outer action valid in a legacy record. V1/V2 have
+# no mode byte; their only implicit mode is NONE.
+LEGACY_ACTION_MAX = {1: RL_ROCKETJUMP, RUNE_VERSION: RL_DOOR}
+LEGACY_PROVENANCE_MAX = {1: RL_DECLARED, RUNE_VERSION: RL_DECLARED}
 
 
 HOOK_CONTROL_MESSAGES = {
@@ -179,27 +193,31 @@ def load_rune(path):
          exit_speed, cost_ms, ax, ay, az) = struct.unpack_from(LINK_FMT, data, off)
         anchor = (ax, ay, az)
         if (not 0 <= frm < num_seeds or not 0 <= to < num_seeds or
-                frm == to or action not in ACTION_NAMES or provenance > 3 or
+                frm == to or action > LEGACY_ACTION_MAX[version] or
+                provenance > LEGACY_PROVENANCE_MAX[version] or
                 cost_ms <= 0 or not all(math.isfinite(value)
                                         for value in anchor)):
             raise ValueError(f'{path}: link {i} violates base runtime contract')
-        from_water = bool(seeds[frm]['flags'] & 1)
-        to_water = bool(seeds[to]['flags'] & 1)
-        if version == 2 and (
+        from_water = bool(seeds[frm]['flags'] & RSF_WATER)
+        to_water = bool(seeds[to]['flags'] & RSF_WATER)
+        if version == RUNE_VERSION and (
                 seeds[frm]['flags'] & RSF_TOMBSTONE or
                 seeds[to]['flags'] & RSF_TOMBSTONE):
             raise ValueError(f'{path}: link {i} touches route-core tombstone')
-        if version == 2 and action in (0, 1, 8) and (from_water or to_water):
+        if (version == RUNE_VERSION and
+                action in (RL_RUN, RL_JUMP, RL_DOOR) and
+                (from_water or to_water)):
             raise ValueError(f'{path}: link {i} uses dry action on water endpoint')
-        if version == 2 and action == 7:
+        if version == RUNE_VERSION and action == RL_ROCKETJUMP:
             raise ValueError(f'{path}: link {i} uses unsupported v2 rocket jump')
-        if version == 2 and action == 4 and (
+        if version == RUNE_VERSION and action == RL_SWIM and (
                 not (from_water or to_water) or min_speed != 0 or
-                heading != 0 or heading_slack != 0 or provenance not in (0, 2) or
+                heading != 0 or heading_slack != 0 or
+                provenance not in (RL_PROVEN, RL_ADJUSTED) or
                 any(value != 0.0 for value in anchor)):
             raise ValueError(f'{path}: link {i} has invalid v2 swim control')
-        if version == 2 and action == 3:
-            if (provenance != 0 or min_speed != 0 or
+        if version == RUNE_VERSION and action == RL_HOOK:
+            if (provenance != RL_PROVEN or min_speed != 0 or
                     (from_water and to_water) or
                     heading_slack != (RUNE_WATER_HOOK_CONTROL_MARKER
                                       if from_water else RUNE_HOOK_CONTROL_SLACK)):
@@ -219,20 +237,21 @@ def load_rune(path):
         door_to_dx = seeds[to]['x'] - ax
         door_to_dy = seeds[to]['y'] - ay
         door_to_dz = seeds[to]['z'] - az
-        if version == 2 and (
-                (action == 0 and not anchor_zero and not anchor_world) or
-                (action == 1 and not anchor_zero) or
+        if version == RUNE_VERSION and (
+                (action == RL_RUN and not anchor_zero and not anchor_world) or
+                (action == RL_JUMP and not anchor_zero) or
                 # Trigger identity and mover-sweep proof need live map
                 # entities; the viewer enforces serialized DOOR controls.
-                (action in (5, 6, 8) and
-                 (not anchor_world or provenance != 3 or min_speed != 0 or
+                (action in (RL_LIFT, RL_TELEPORT, RL_DOOR) and
+                 (not anchor_world or provenance != RL_DECLARED or
+                  min_speed != 0 or
                   heading != 0 or
                   heading_slack != RUNE_DECLARED_CONTROL_MARKER or
                   exit_speed != 0)) or
-                (action == 6 and
+                (action == RL_TELEPORT and
                  (math.hypot(anchor_dx, anchor_dy) > 128.0 or
                   abs(anchor_dz) > 128.0)) or
-                (action == 8 and
+                (action == RL_DOOR and
                  (any(value != int(value * 8.0) * 0.125
                       for value in anchor) or
                   math.hypot(anchor_dx, anchor_dy) > 320.0 or
@@ -240,7 +259,7 @@ def load_rune(path):
                   math.hypot(door_to_dx, door_to_dy) > 768.0 or
                   abs(door_to_dz) > 96.0))):
             raise ValueError(f'{path}: link {i} has invalid action anchor/control')
-        if version == 2 and action == 2:
+        if version == RUNE_VERSION and action == RL_DROP:
             dx = ax - seeds[frm]['x']
             dy = ay - seeds[frm]['y']
             dz = az - seeds[frm]['z']
@@ -254,7 +273,7 @@ def load_rune(path):
                     abs(dz - 8.0) > 0.25 or
                     abs(yaw_delta) > 360.0 / 256.0):
                 raise ValueError(f'{path}: link {i} has invalid v2 drop control')
-        if version == 2 and action == 1 and min_speed != 0:
+        if version == RUNE_VERSION and action == RL_JUMP and min_speed != 0:
             raise ValueError(f'{path}: link {i} has unsupported momentum jump')
         links.append({'from': frm, 'to': to, 'action': action,
                        'provenance': provenance, 'min_speed': min_speed,
@@ -264,7 +283,7 @@ def load_rune(path):
         linked_sources.add(frm)
         off += LINK_SIZE
 
-    if version == 2:
+    if version == RUNE_VERSION:
         for i, seed in enumerate(seeds):
             tombstone = bool(seed['flags'] & RSF_TOMBSTONE)
             if tombstone == (i in linked_sources):

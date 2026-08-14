@@ -13,6 +13,18 @@ import struct
 import sys
 
 from mapflags import flag_origins_with_source, nearest
+try:
+    from rune_contracts_generated import (
+        ACTION_SHORT_NAMES as CONTRACT_ACTION_SHORT_NAMES,
+        RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
+        RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
+    )
+except ModuleNotFoundError:  # also support `python -m tools.runelint`
+    from tools.rune_contracts_generated import (
+        ACTION_SHORT_NAMES as CONTRACT_ACTION_SHORT_NAMES,
+        RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
+        RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
+    )
 
 RUNE_MAGIC = 0x454E5552
 RUNE_VERSION = 2
@@ -36,8 +48,18 @@ HEADER_SIZE = struct.calcsize(HEADER_FMT)
 SEED_SIZE = struct.calcsize(SEED_FMT)
 LINK_SIZE = struct.calcsize(LINK_FMT)
 
-ACTS = ['RUN', 'JUMP', 'DROP', 'HOOK', 'SWIM', 'LIFT', 'TELE', 'RJ',
-        'DOOR']
+# Keep the historical CLI labels and inventory (0..8) while sourcing their
+# spelling from the reviewed registry. Registered V3 actions must not appear in
+# legacy output or become accepted by virtue of having display metadata.
+ACTS = [CONTRACT_ACTION_SHORT_NAMES[action]
+        for action in range(RL_DOOR + 1)]
+
+# Frozen layout-specific gates. V3 is intentionally absent until S2 provides
+# its 128/16/44-byte decoder; neither registry growth nor effective suffixes may
+# widen an older flat record. V1/V2 encode no mode byte and therefore admit
+# only their implicit NONE mode.
+LEGACY_ACTION_MAX = {1: RL_ROCKETJUMP, RUNE_VERSION: RL_DOOR}
+LEGACY_PROVENANCE_MAX = {1: RL_DECLARED, RUNE_VERSION: RL_DECLARED}
 
 
 def _signed_short(value):
@@ -243,24 +265,25 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
         for link in links:
             fr, to, act, prov, minsp, hdg, slack, exsp, cost = link[:9]
             anchor = link[9:12]
-            acts[ACTS[act] if act < len(ACTS) else f'?{act}'] += 1
-            if act >= len(ACTS):
+            acts[ACTS[act] if act <= RL_DOOR else f'?{act}'] += 1
+            if act > LEGACY_ACTION_MAX[ver]:
                 bad_action += 1
-            if prov > 3:
+            if prov > LEGACY_PROVENANCE_MAX[ver]:
                 bad_prov += 1
             anchor_finite = all(math.isfinite(v) for v in anchor)
-            if not anchor_finite and not (ver == 2 and act == 3):
+            if not anchor_finite and not (ver == RUNE_VERSION and
+                                          act == RL_HOOK):
                 bad_anchor += 1
-            if (act == 7 and anchor_finite and
+            if (act == RL_ROCKETJUMP and anchor_finite and
                     (anchor[0] * anchor[0] + anchor[1] * anchor[1] > 1.0 or
                      anchor[2] <= 0.0 or anchor[2] > 255.0)):
                 bad_rj += 1
-            if ver == 2 and act == 3:
+            if ver == RUNE_VERSION and act == RL_HOOK:
                 bad_hook_control.update(hook_control_errors(anchor))
             if not (0 <= fr < ns and 0 <= to < ns):
                 bad_idx += 1
                 continue
-            if ver == 2 and act == 2 and anchor_finite:
+            if ver == RUNE_VERSION and act == RL_DROP and anchor_finite:
                 dx = anchor[0] - seeds[fr][0]
                 dy = anchor[1] - seeds[fr][1]
                 dz = anchor[2] - seeds[fr][2]
@@ -270,33 +293,35 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
                 yaw_delta = (lip_yaw - stored_yaw + 180.0) % 360.0 - 180.0
                 if (minsp != 0 or slack != RUNE_DROP_CONTROL_MARKER or
                         not 2.0 <= lip_horiz <= 256.0 or
-                        (seeds[fr][4] & 1) or
+                        (seeds[fr][4] & RSF_WATER) or
                         abs(dz - 8.0) > 0.25 or
                         abs(yaw_delta) > 360.0 / 256.0):
                     bad_drop += 1
-            if (ver == 2 and act in (0, 1, 8) and
-                    ((seeds[fr][4] | seeds[to][4]) & 1)):
+            if (ver == RUNE_VERSION and
+                    act in (RL_RUN, RL_JUMP, RL_DOOR) and
+                    ((seeds[fr][4] | seeds[to][4]) & RSF_WATER)):
                 bad_water_dry_action += 1
             from_water = bool(seeds[fr][4] & RSF_WATER)
             to_water = bool(seeds[to][4] & RSF_WATER)
-            if (ver == 2 and act == 3 and
-                    (prov != 0 or minsp != 0 or
+            if (ver == RUNE_VERSION and act == RL_HOOK and
+                    (prov != RL_PROVEN or minsp != 0 or
                      (from_water and to_water) or
                      slack != (RUNE_WATER_HOOK_CONTROL_MARKER
                                if from_water else RUNE_HOOK_CONTROL_SLACK))):
                 bad_hook_schema += 1
-            if (ver == 2 and act == 7 and
+            if (ver == RUNE_VERSION and act == RL_ROCKETJUMP and
                     ((seeds[fr][4] | seeds[to][4]) & RSF_WATER)):
                 bad_water_special += 1
-            if (ver == 2 and act == 4 and
-                    (not ((seeds[fr][4] | seeds[to][4]) & 1) or
+            if (ver == RUNE_VERSION and act == RL_SWIM and
+                    (not ((seeds[fr][4] | seeds[to][4]) & RSF_WATER) or
                      minsp != 0 or hdg != 0 or slack != 0 or
-                     prov not in (0, 2) or not anchor_finite or
+                     prov not in (RL_PROVEN, RL_ADJUSTED) or
+                     not anchor_finite or
                      any(v != 0.0 for v in anchor))):
                 bad_swim += 1
-            if ver == 2 and act == 1 and minsp != 0:
+            if ver == RUNE_VERSION and act == RL_JUMP and minsp != 0:
                 bad_momentum_jump += 1
-            if ver == 2 and act == 7:
+            if ver == RUNE_VERSION and act == RL_ROCKETJUMP:
                 bad_unsupported_rj += 1
             anchor_zero = anchor_finite and all(v == 0.0 for v in anchor)
             anchor_world = anchor_finite and all(
@@ -307,22 +332,22 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
             door_to_dx = seeds[to][0] - anchor[0] if anchor_finite else 0.0
             door_to_dy = seeds[to][1] - anchor[1] if anchor_finite else 0.0
             door_to_dz = seeds[to][2] - anchor[2] if anchor_finite else 0.0
-            if ver == 2 and (
-                    (act == 0 and not anchor_zero and not anchor_world) or
-                    (act == 1 and not anchor_zero) or
+            if ver == RUNE_VERSION and (
+                    (act == RL_RUN and not anchor_zero and not anchor_world) or
+                    (act == RL_JUMP and not anchor_zero) or
                     # Trigger identity and mover-sweep proof need live map
                     # entities; lint enforces the serialized DOOR controls.
-                    (act in (5, 6, 8) and
-                     (not anchor_world or prov != 3 or minsp != 0 or
+                    (act in (RL_LIFT, RL_TELEPORT, RL_DOOR) and
+                     (not anchor_world or prov != RL_DECLARED or minsp != 0 or
                       hdg != 0 or slack != RUNE_DECLARED_CONTROL_MARKER or
                       exsp != 0)) or
-                    (act == 8 and anchor_finite and
+                    (act == RL_DOOR and anchor_finite and
                      (any(v != int(v * 8.0) * 0.125 for v in anchor) or
                       math.hypot(anchor_dx, anchor_dy) > 320.0 or
                       abs(anchor_dz) > 48.0 or
                       math.hypot(door_to_dx, door_to_dy) > 768.0 or
                       abs(door_to_dz) > 96.0)) or
-                    (act == 6 and anchor_finite and
+                    (act == RL_TELEPORT and anchor_finite and
                      (math.hypot(anchor_dx, anchor_dy) > 128.0 or
                       abs(anchor_dz) > 128.0))):
                 bad_action_anchor += 1
@@ -338,7 +363,8 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None):
                 zero_cost += 1
             if cost > 30000:
                 huge_cost += 1
-            if (ver == 1 and act == 3 and anchor[2] < seeds[fr][2] and
+            if (ver == 1 and act == RL_HOOK and
+                    anchor[2] < seeds[fr][2] and
                     seeds[to][2] > seeds[fr][2] + 40):
                 # A CLIMB whose anchor is under the floor. Descending rides
                 # naturally anchor low (lmctf16: 191 of 191 legitimate).

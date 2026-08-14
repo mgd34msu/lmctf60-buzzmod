@@ -16,6 +16,17 @@ import struct
 import tempfile
 import zlib
 
+try:
+    from rune_contracts_generated import (
+        RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
+        RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
+    )
+except ModuleNotFoundError:  # also support `python -m tools.corpusgraph`
+    from tools.rune_contracts_generated import (
+        RL_ADJUSTED, RL_DECLARED, RL_DOOR, RL_DROP, RL_HOOK, RL_JUMP,
+        RL_LIFT, RL_PROVEN, RL_ROCKETJUMP, RL_RUN, RL_SWIM, RL_TELEPORT,
+    )
+
 
 HEADER_FMT = '<4i64s'
 SEED_FMT = '<3f2h'
@@ -40,19 +51,15 @@ TRANSITION_KEY = re.compile(r'(0|[1-9][0-9]*)>(0|[1-9][0-9]*)\Z')
 SEED_KEY = re.compile(r'(0|[1-9][0-9]*)\Z')
 MAP_NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z')
 
-RL_RUN = 0
-RL_JUMP = 1
-RL_DROP = 2
-RL_HOOK = 3
-RL_SWIM = 4
-RL_LIFT = 5
-RL_TELEPORT = 6
-RL_ROCKETJUMP = 7
-RL_DOOR = 8
-RL_PROVEN = 0
-RL_DECLARED = 3
 RSF_WATER = 1
 RSF_TOMBSTONE = 2
+
+# These are frozen legacy wire boundaries, not registry-size aliases. V3 has
+# a different layout and remains unreadable here until its decoder lands. The
+# 28-byte V1/V2 link has no mode field, so its only implicit mode is NONE.
+_LEGACY_ACTION_MAX = {1: RL_ROCKETJUMP, 2: RL_DOOR}
+_LEGACY_PROVENANCE_MAX = {1: RL_DECLARED, 2: RL_DECLARED}
+READABLE_RUNE_VERSIONS = tuple(_LEGACY_ACTION_MAX)
 
 assert HEADER_SIZE == 80, HEADER_SIZE
 assert SEED_SIZE == 16, SEED_SIZE
@@ -135,7 +142,8 @@ def _validate_rune_records(path, data, version, num_seeds, num_links):
         anchor = (ax, ay, az)
         if (not 0 <= source < num_seeds or
                 not 0 <= destination < num_seeds or source == destination or
-                action > RL_DOOR or provenance > RL_DECLARED or
+                action > _LEGACY_ACTION_MAX[version] or
+                provenance > _LEGACY_PROVENANCE_MAX[version] or
                 cost_ms <= 0 or
                 not all(math.isfinite(value) for value in anchor)):
             raise ValueError(f'{path}: link {index} violates runtime record contract')
@@ -199,7 +207,7 @@ def _validate_rune_records(path, data, version, num_seeds, num_links):
         if (action == RL_SWIM and
                 (not (from_water or to_water) or min_speed != 0 or
                  heading != 0 or heading_slack != 0 or
-                 provenance not in (0, 2) or not anchor_zero)):
+                 provenance not in (RL_PROVEN, RL_ADJUSTED) or not anchor_zero)):
             raise ValueError(f'{path}: link {index} has invalid swim control')
         if action == RL_ROCKETJUMP:
             raise ValueError(
@@ -248,7 +256,8 @@ def read_rune(path, expected_map=None, versions=(1, 2)):
             HEADER_FMT, header, 0)
         if magic != RUNE_MAGIC:
             raise ValueError(f'{path}: bad rune magic 0x{magic:08x}')
-        if version not in versions:
+        if (version not in READABLE_RUNE_VERSIONS or
+                version not in versions):
             raise ValueError(f'{path}: unsupported rune version {version}')
         if not 0 < num_seeds <= RUNE_MAX_SEEDS:
             raise ValueError(f'{path}: invalid seed count {num_seeds}')
