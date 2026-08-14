@@ -89,6 +89,10 @@ ifndef VER
     VER := r$(REV)~$(shell git rev-parse --short HEAD)
 endif
 
+REVISION_HEADER = GitRevisionInfo.h
+REVISION_TEMPLATE = GitRevisionInfo.tmpl
+DEPEND_FILE = .depend
+
 # This is for native build
 CFLAGS=-O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
 # This is for 32-bit build on 64-bit host
@@ -210,10 +214,33 @@ SHLIBLDFLAGS = -shared
 # Targets
 ######################################################################
 
-all: GitRevisionInfo dep $(TARGET)
+.PHONY: all dep stripcr clean distclean FORCE
 
-GitRevisionInfo:
-	sed -e 's/\$$//g' GitRevisionInfo.tmpl | sed -e "s/WCLOGCOUNT+2/${REV}/g" | sed -e "s/WCREV=7/${VER}/g"  | sed -e "s/WCNOW=%Y/$(shell date +%Y)/g" > GitRevisionInfo.h
+all: dep $(TARGET)
+
+FORCE:
+
+$(REVISION_HEADER): $(REVISION_TEMPLATE) FORCE
+	@echo "Generating $@..."
+	@set -e; \
+	tmp="$@.tmp.$$$$"; \
+	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
+	sed -e 's/\$$//g' \
+	    -e 's/WCLOGCOUNT+2/$(REV)/g' \
+	    -e 's/WCREV=7/$(VER)/g' \
+	    -e 's/WCNOW=%Y/$(shell date +%Y)/g' \
+	    "$<" > "$$tmp"; \
+	if test -r "$@" && cmp -s "$$tmp" "$@"; then \
+		rm -f "$$tmp"; \
+	else \
+		mv -f "$$tmp" "$@"; \
+	fi; \
+	trap - EXIT HUP INT TERM
+
+# Dependency files do not exist in a fresh checkout.  This explicit edge is
+# therefore the synchronization contract: no object compile may start until
+# the complete generated header has been atomically installed.
+$(OBJS): $(REVISION_HEADER)
 
 .c.o:
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -o $@ -c $<
@@ -222,9 +249,20 @@ $(TARGET):	$(OBJS) $(L_OBJS)
 		$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(OBJS) $(L_OBJS) $(LDFLAGS)
 		$(LIBTOOL) $@
 
-dep:
+dep: $(DEPEND_FILE)
+
+$(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
 	@echo "Updating dependencies..."
-	@$(CC) -MM $(OBJS:.o=.c) > .depend
+	@set -e; \
+	tmp="$@.tmp.$$$$"; \
+	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
+	$(CC) -MM $(OBJS:.o=.c) > "$$tmp"; \
+	if test -r "$@" && cmp -s "$$tmp" "$@"; then \
+		rm -f "$$tmp"; \
+	else \
+		mv -f "$$tmp" "$@"; \
+	fi; \
+	trap - EXIT HUP INT TERM
 
 stripcr:	.
 		@echo "Stripping carriage returns from source files..."
@@ -236,14 +274,17 @@ stripcr:	.
 
 clean:
 		@echo "Deleting temporary files..."
-		@rm -f $(OBJS) GitRevisionInfo.h *.orig ~* core
+		@rm -f $(OBJS) $(REVISION_HEADER) $(REVISION_HEADER).tmp.* \
+			$(DEPEND_FILE).tmp.* *.orig ~* core
 
 distclean:	clean
 		@echo "Deleting everything that can be rebuilt..."
-		@rm -f $(TARGET) .depend
+		@rm -f $(TARGET) $(DEPEND_FILE)
 
-ifeq (.depend,$(wildcard .depend))
-include .depend
+ifeq (,$(filter clean distclean,$(MAKECMDGOALS)))
+ifeq ($(DEPEND_FILE),$(wildcard $(DEPEND_FILE)))
+include $(DEPEND_FILE)
+endif
 endif
 
 # The SQLite amalgamation is third-party and does not build clean under our

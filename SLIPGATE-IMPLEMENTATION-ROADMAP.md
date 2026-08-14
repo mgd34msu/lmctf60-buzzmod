@@ -224,6 +224,10 @@ zero or stale values.
 
 ### Negative and property testing
 
+- [x] Make both native build descriptions race-free from an artifact-free
+      checkout: atomically generate the revision header and dependencies,
+      require them before every object, propagate generator/compiler failures,
+      and keep the 91-object manifests identical.
 - [ ] Generate malformed rune headers, records, controls, topology, and sidecars
       and require deterministic loader rejection.
 - [ ] Exercise action boundaries: exact timer edge, trigger cooldown, mover TOP
@@ -427,3 +431,9 @@ the commit, verification, corpus scope, and remaining blocker.
   passing runes re-linted clean; failures were reconciled into 33 core, 6
   timeout, 2 flag-bind, 2 physics-refusal, and 3 invalid-asset results. Durable
   manifest added under `tools/baselines/`.
+- 2026-08-13: Native build dependency race fixed in both `GNUmakefile` and
+  `Makefile`: atomic revision/dependency generation, complete and identical
+  91-object manifests, failure propagation, and no-op rebuild stability passed
+  fresh `-j64`/`-j96` stress runs. Independent refutation found and drove fixes
+  for stale header-include discovery and compiler-dependent cleanup; the final
+  diff passed re-review with no remaining medium/high finding.

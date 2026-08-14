@@ -14,6 +14,9 @@ ifndef VER
     VER := r$(REV)~$(shell git rev-parse --short HEAD)
 endif
 
+REVISION_HEADER := GitRevisionInfo.h
+REVISION_TEMPLATE := GitRevisionInfo.tmpl
+
 CC ?= gcc
 WINDRES ?= windres
 STRIP ?= strip
@@ -74,6 +77,7 @@ HEADERS := \
 OBJS := \
 	bat.o \
 	ctf_file_io.o \
+	ctf_sqlite_core.o \
 	ctf_sqlite_player.o \
 	ctf_sqlite_unidb.o \
 	sqlite3.o \
@@ -136,7 +140,32 @@ OBJS := \
 	p_view.o \
 	p_weapon.o \
 	q_shared.o \
-	stdlog.o
+	sg_oracle.o \
+	sg_rune.o \
+	sg_arach.o \
+	sg_fields.o \
+	sg_caco.o \
+	sg_combat.o \
+	sg_cvars.o \
+	sg_hooks.o \
+	sg_util.o \
+	sg_client.o \
+	sg_clock.o \
+	sg_danger.o \
+	sg_weights.o \
+	sg_tilt.o \
+	sg_lead.o \
+	sg_move.o \
+	sg_price.o \
+	sg_descend.o \
+	sg_goal.o \
+	sg_chat.o \
+	sg_net.o \
+	sg_persona.o \
+	stdlog.o \
+	ui_text.o \
+	ui_layout.o \
+	ui_boards.o
 
 ifdef CONFIG_VARIABLE_SERVER_FPS
     CFLAGS += -DUSE_FPS=1
@@ -153,7 +182,9 @@ all: $(TARGET)
 
 default: all
 
-.PHONY: all default clean strip
+.PHONY: all default clean strip FORCE
+
+FORCE:
 
 # Define V=1 to show command line.
 ifdef V
@@ -163,6 +194,27 @@ else
     Q := @
     E := @echo
 endif
+
+$(REVISION_HEADER): $(REVISION_TEMPLATE) FORCE
+	$(E) [GEN] $@
+	$(Q)set -e; \
+	tmp="$@.tmp.$$$$"; \
+	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
+	sed -e 's/\$$//g' \
+	    -e 's/WCLOGCOUNT+2/$(REV)/g' \
+	    -e 's/WCREV=7/$(VER)/g' \
+	    -e 's/WCNOW=%Y/$(shell date +%Y)/g' \
+	    "$<" > "$$tmp"; \
+	if test -r "$@" && cmp -s "$$tmp" "$@"; then \
+		$(RM) "$$tmp"; \
+	else \
+		mv -f "$$tmp" "$@"; \
+	fi; \
+	trap - EXIT HUP INT TERM
+
+# The generated dependency files are absent on the first build, so retain an
+# explicit prerequisite for the generated header on every object.
+$(OBJS): $(REVISION_HEADER)
 
 -include $(OBJS:.o=.d)
 
@@ -180,7 +232,8 @@ $(TARGET): $(OBJS)
 
 clean:
 	$(E) [CLEAN]
-	$(Q)$(RM) *.o *.d $(TARGET)
+	$(Q)$(RM) *.o *.d $(TARGET) $(REVISION_HEADER) \
+		$(REVISION_HEADER).tmp.*
 
 strip: $(TARGET)
 	$(E) [STRIP]
