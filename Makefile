@@ -22,6 +22,10 @@ HOST_TEST_DEPS := $(HOST_TEST_OBJS:.o=.d)
 ACTION_TEST_BIN := sg_action_test.make
 ACTION_TEST_OBJS := .sg_action_test.make.o .sg_action_under_test.make.o
 ACTION_TEST_DEPS := $(ACTION_TEST_OBJS:.o=.d)
+IDENTITY_TEST_BIN := sg_identity_test.make
+IDENTITY_TEST_OBJS := .sg_identity_test.make.o .sg_identity_under_test.make.o \
+	.sg_crc32_under_test.make.o
+IDENTITY_TEST_DEPS := $(IDENTITY_TEST_OBJS:.o=.d)
 HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
 	.sg_hooks_under_test.gnu.o .sg_hooks_under_test.gnu.d \
@@ -31,7 +35,14 @@ HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_action_test.gnu.o .sg_action_test.gnu.d \
 	.sg_action_under_test.gnu.o .sg_action_under_test.gnu.d \
 	.sg_action_test.make.o .sg_action_test.make.d \
-	.sg_action_under_test.make.o .sg_action_under_test.make.d
+	.sg_action_under_test.make.o .sg_action_under_test.make.d \
+	sg_identity_test sg_identity_test.gnu sg_identity_test.make \
+	.sg_identity_test.gnu.o .sg_identity_test.gnu.d \
+	.sg_identity_under_test.gnu.o .sg_identity_under_test.gnu.d \
+	.sg_crc32_under_test.gnu.o .sg_crc32_under_test.gnu.d \
+	.sg_identity_test.make.o .sg_identity_test.make.d \
+	.sg_identity_under_test.make.o .sg_identity_under_test.make.d \
+	.sg_crc32_under_test.make.o .sg_crc32_under_test.make.d
 
 CC ?= gcc
 WINDRES ?= windres
@@ -157,6 +168,8 @@ OBJS := \
 	p_weapon.o \
 	q_shared.o \
 	sg_action.o \
+	sg_crc32.o \
+	sg_identity.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
@@ -199,7 +212,7 @@ all: $(TARGET)
 
 default: all
 
-.PHONY: all default host-test action-test clean strip FORCE
+.PHONY: all default host-test action-test identity-test clean strip FORCE
 
 FORCE:
 
@@ -236,6 +249,7 @@ $(OBJS): $(REVISION_HEADER)
 -include $(OBJS:.o=.d)
 -include $(HOST_TEST_DEPS)
 -include $(ACTION_TEST_DEPS)
+-include $(IDENTITY_TEST_DEPS)
 
 %.o: %.c
 	$(E) [CC] $@
@@ -267,6 +281,10 @@ $(ACTION_TEST_BIN): $(ACTION_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(ACTION_TEST_OBJS) $(LIBS)
 
+$(IDENTITY_TEST_BIN): $(IDENTITY_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(IDENTITY_TEST_OBJS) $(LIBS)
+
 .sg_action_test.make.o: tests/sg_action_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -277,14 +295,34 @@ $(ACTION_TEST_BIN): $(ACTION_TEST_OBJS)
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN)
+.sg_identity_test.make.o: tests/sg_identity_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_identity_under_test.make.o: slipgate/sg_identity.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_crc32_under_test.make.o: slipgate/sg_crc32.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOST_TEST_BIN)
 	$(Q)./$(ACTION_TEST_BIN)
+	$(Q)./$(IDENTITY_TEST_BIN)
 
 action-test: $(ACTION_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(ACTION_TEST_BIN)
+
+identity-test: $(IDENTITY_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(IDENTITY_TEST_BIN)
 
 clean:
 	$(E) [CLEAN]

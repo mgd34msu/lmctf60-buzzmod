@@ -9,6 +9,7 @@
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
+#include "slipgate/sg_identity.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
 
@@ -132,6 +133,7 @@ extern int Time_Left;
 
 void ShutdownGame (void)
 {
+	SG_LevelIdentityReset();
 	gi.dprintf ("==== ShutdownGame ====\n");
 
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
@@ -905,4 +907,3 @@ void G_RunFrame (void)
 	// build the playerstate_t structures for all players
 	ClientEndServerFrames ();
 }
-

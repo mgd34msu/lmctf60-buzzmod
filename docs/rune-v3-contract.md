@@ -107,6 +107,14 @@ classification. Byte 43 remains reserved instead.
 | 60 | `u32` | header CRC32 with this field zero |
 | 64 | `char[64]` | exact NUL-terminated map name with zero tail |
 
+Every CRC32 field uses the standard reflected IEEE algorithm (polynomial
+`0xedb88320`, initial and final XOR `0xffffffff`), matching `zlib.crc32`. The
+entity CRC covers the exact in-memory bytes returned by the last entity-override
+stage, before parsing mutates the pointer, and excludes the terminating NUL. No
+whitespace, newline, or case normalization is permitted. The map name uses the
+case-preserving grammar `[A-Za-z0-9_][A-Za-z0-9_-]{0,62}`; every comparison is
+exact and case-sensitive.
+
 The seed remains 16 little-endian bytes: `<fffhh>`.
 
 Initial v3 support permits finite positive integral `int16` gravity, including
@@ -128,6 +136,26 @@ These must be engine-provided and console-immutable. Map name, entity CRC,
 disk-side metadata, or an operator-supplied checksum is not a safe substitute.
 Until the bridge is present, v3 generation and loading fail with an actionable
 identity-prerequisite error rather than silently weakening the binding.
+
+The game DLL retrieves both variables with an empty default and flags `0`; asking
+for `CVAR_NOSET` would grant the consumer authority to bless a pre-existing
+operator value. It requires the returned object to carry `CVAR_NOSET`, parses the
+canonical decimal string directly into `uint32_t` without consulting the lossy
+`cvar_t.value` float, and initially accepts exactly physics epoch `1`. Additional
+epochs require an explicit game-DLL whitelist change, never a range check.
+
+Identity publication is transactional. A level transition first invalidates the
+old identity, captures the two protected engine strings during `SpawnEntities`,
+hashes effective post-override entity text immediately before parsing, and
+commits only after spawning completes. A map error, save-level restore, missing
+bridge, malformed value, unsupported epoch, or map mismatch leaves v3 identity
+unavailable; generator, loader, and runtime consumers receive only a copy of a
+committed per-level record.
+
+A successful publication emits one stable evidence line beginning `slipgate: v3
+identity committed` with exact `map`, `bsp`, `entity_crc`, and `physics` values.
+Failure emits `slipgate: v3 identity unavailable` and never publishes a partial
+record.
 
 ## V3 link: 44 bytes
 
@@ -197,6 +225,15 @@ object is deliberately excluded: changing labels or colors cannot invalidate a
 RUNE file. For schema version 1, the canonical semantic payload has CRC32
 `769a7b8e` and SHA-256
 `0790272cf0a34b7ba26dd318629150e3bc66b21dedb5ac448578aa8c3fdc4d59`.
+
+The top-level `wire_diagnostics` table is also outside that artifact digest.
+It is an append-only, generated C/Python API for reporting header, I/O, CRC,
+identity, graph, allocation, and sidecar failures; those diagnostics are not
+serialized into a RUNE record and cannot authorize an action. IDs and symbols
+are pinned by fixtures, while wording may improve without invalidating an
+otherwise identical movement contract or deployed artifact. Per-action proof,
+record, live-controller, and recovery failures remain in the separate `RLR_*`
+namespace inside the semantic contract.
 
 The generator checks in two generated products:
 
@@ -321,10 +358,13 @@ Recovery rules:
 
 ### Compatibility consumers
 
-The registry's `effective_suffix` trait is required wherever behavior currently
-tests an action ID directly. In particular, `RL_DOOR_HOOK` must inherit HOOK
-pricing, hook-ban route exclusion, hook-ban commit release, rope ownership, and
-weapon/controller dispatch. The same rule applies to DROP and SWIM policies.
+The registry's `effective_suffix` trait is a policy/classification adapter only.
+It lets a compound inherit suffix pricing, tactical selection or exclusion
+(including hook-ban route policy), field bias, and other explicitly classified
+suffix traits. It must never choose generic execution dispatch, weapon or rope
+ownership, commit release, or controller ownership. The compound outer action
+retains one atomic lease and controller throughout the transaction and invokes
+its DROP, SWIM, or HOOK suffix phase explicitly.
 
 Field propagation continues to consume the declared minimum speed, heading,
 heading slack, and exit-speed buckets. Each compound stores the suffix's honest

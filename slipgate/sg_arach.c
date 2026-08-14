@@ -26,6 +26,7 @@
 #include "slipgate/sg_action.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_chat.h"       /* human orders replace the role quota */
+#include "slipgate/sg_identity.h"
 #include "slipgate/sg_persona.h"    /* the roster's names, wired to behaviour */
 
 /*
@@ -2333,6 +2334,8 @@ void SG_LevelChange(void)
 {
 	int i;
 
+	/* The fallback transition path must be as fail-closed as SpawnEntities. */
+	SG_LevelIdentityReset();
 	Danger_Save();      /* the map's lessons outlive the level */
 	/* SpawnEntities calls this before TAG_LEVEL/edict teardown. Remove fake
 	 * clients through the real disconnect path while their objective state is

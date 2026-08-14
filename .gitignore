@@ -23,6 +23,7 @@ bspc.log
 tools/rune-logs/
 tools/campaign-*/
 tools/ab-*.log
+tools/ab-*.engine/
 tools/iter-*/
 tools/__pycache__/
 

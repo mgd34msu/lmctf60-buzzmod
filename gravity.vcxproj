@@ -351,6 +351,8 @@
     <ClCompile Include="p_weapon.c" />
     <ClCompile Include="q_shared.c" />
     <ClCompile Include="slipgate\sg_action.c" />
+    <ClCompile Include="slipgate\sg_crc32.c" />
+    <ClCompile Include="slipgate\sg_identity.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_cvars.c" />
     <ClCompile Include="slipgate\sg_hooks.c" />

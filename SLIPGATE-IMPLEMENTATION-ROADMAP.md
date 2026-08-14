@@ -502,3 +502,11 @@ the commit, verification, corpus scope, and remaining blocker.
   the action-contract digest or making diagnostics part of executable action
   semantics. IDs 0-26 are pinned append-only; generated-product parity,
   message-outside-digest, mutation, Python, and strict C compile tests pass.
+- 2026-08-14: The game-side authoritative level-identity boundary is complete.
+  A staged authority captures the protected engine BSP checksum, exact
+  post-override entity-text CRC, canonical map name, and coordinated physics
+  epoch, then publishes only after a successful spawn. Save restore, map
+  transition, shutdown, malformed or spoofable host values, and an unpatched
+  engine all fail closed. CRC streaming, mock-host mutation tests, sanitizer
+  and dual-build gates, patched-engine two-map replay, old-engine compatibility,
+  and hash-bound campaign/AB engine snapshots passed independently.
