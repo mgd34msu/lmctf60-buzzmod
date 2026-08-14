@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "g_entfile_path.h"
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
@@ -299,17 +300,32 @@ spawn_t	spawns[] = {
 };
 
 
+static qboolean BuildEntFilePath(char *path, size_t path_size,
+	const char *mapname)
+{
+	if (!G_EntFilePath(path, path_size,
+	                   gamedir ? gamedir->string : NULL, mapname))
+	{
+		gi.dprintf("Error: ent file path rejected, exceeds game path limits.\n");
+		return false;
+	}
+	return true;
+}
+
 void WriteEntFile (char *mapname, char *entities)
 {
 	FILE	*fp;
-	char	name[MAX_INFO_STRING];
+	char	name[MAX_OSPATH];
 
-	strcpy (name, gamedir->string);
-	strcat (name, "/ent/");
-	strcat (name, mapname);
-	strcat (name, ".ent");
+	if (!BuildEntFilePath(name, sizeof(name), mapname))
+		return;
 
 	fp = fopen (name, "wt");
+	if (!fp)
+	{
+		gi.dprintf("Error: unable to open ent file %s for writing.\n", name);
+		return;
+	}
 	fwrite(entities, 1, strlen(entities), fp);
 	fclose(fp);
 }
@@ -318,7 +334,7 @@ char* ReadEntFile(char* mapname, char* entities)
 {
 	FILE* fp;
 
-	char	name[MAX_QPATH];
+	char	name[MAX_OSPATH];
 	size_t	size;
 	char* tempbuf = NULL;
 	int count, ch;
@@ -342,10 +358,8 @@ char* ReadEntFile(char* mapname, char* entities)
 		return entities;  //Must use q2pro's internal entity management.
 	}
 
-	strcpy(name, gamedir->string);
-	strcat(name, "/ent/");
-	strcat(name, mapname);
-	strcat(name, ".ent");
+	if (!BuildEntFilePath(name, sizeof(name), mapname))
+		return entities;
 
 	fp = fopen(name, "rt");
 	if (!fp)

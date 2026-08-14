@@ -67,7 +67,7 @@ if ! mkdir -m 700 -- "$LOG_DIR"; then
     echo "campaign: cannot create private run directory: $LOG_DIR" >&2
     exit 1
 fi
-Q2DED_SNAPSHOT="$LOG_DIR/q2ded-$Q2DED_SHA256"
+Q2DED_SNAPSHOT="$LOG_DIR/q2ded"
 if ! cp -- "$Q2DED_RESOLVED" "$Q2DED_SNAPSHOT" ||
         ! chmod 0500 -- "$Q2DED_SNAPSHOT"; then
     echo "campaign: cannot snapshot q2ded binary in $LOG_DIR" >&2

@@ -26,6 +26,10 @@ IDENTITY_TEST_BIN := sg_identity_test.make
 IDENTITY_TEST_OBJS := .sg_identity_test.make.o .sg_identity_under_test.make.o \
 	.sg_crc32_under_test.make.o
 IDENTITY_TEST_DEPS := $(IDENTITY_TEST_OBJS:.o=.d)
+ENTFILE_TEST_BIN := g_entfile_path_test.make
+ENTFILE_TEST_OBJS := .g_entfile_path_test.make.o
+ENTFILE_TEST_DEPS := $(ENTFILE_TEST_OBJS:.o=.d)
+ENGINE_SNAPSHOT_TEST := tests/test_engine_snapshot_name.sh
 HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
 	.sg_hooks_under_test.gnu.o .sg_hooks_under_test.gnu.d \
@@ -42,7 +46,10 @@ HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_crc32_under_test.gnu.o .sg_crc32_under_test.gnu.d \
 	.sg_identity_test.make.o .sg_identity_test.make.d \
 	.sg_identity_under_test.make.o .sg_identity_under_test.make.d \
-	.sg_crc32_under_test.make.o .sg_crc32_under_test.make.d
+	.sg_crc32_under_test.make.o .sg_crc32_under_test.make.d \
+	g_entfile_path_test.gnu g_entfile_path_test.make \
+	.g_entfile_path_test.gnu.o .g_entfile_path_test.gnu.d \
+	.g_entfile_path_test.make.o .g_entfile_path_test.make.d
 
 CC ?= gcc
 WINDRES ?= windres
@@ -212,7 +219,8 @@ all: $(TARGET)
 
 default: all
 
-.PHONY: all default host-test action-test identity-test clean strip FORCE
+.PHONY: all default host-test action-test identity-test entfile-test \
+	snapshot-test clean strip FORCE
 
 FORCE:
 
@@ -250,6 +258,7 @@ $(OBJS): $(REVISION_HEADER)
 -include $(HOST_TEST_DEPS)
 -include $(ACTION_TEST_DEPS)
 -include $(IDENTITY_TEST_DEPS)
+-include $(ENTFILE_TEST_DEPS)
 
 %.o: %.c
 	$(E) [CC] $@
@@ -285,6 +294,10 @@ $(IDENTITY_TEST_BIN): $(IDENTITY_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(IDENTITY_TEST_OBJS) $(LIBS)
 
+$(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(ENTFILE_TEST_OBJS) $(LIBS)
+
 .sg_action_test.make.o: tests/sg_action_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -310,11 +323,21 @@ $(IDENTITY_TEST_BIN): $(IDENTITY_TEST_OBJS)
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN)
+.g_entfile_path_test.make.o: tests/g_entfile_path_test.c g_entfile_path.h \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -pedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
+		$(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOST_TEST_BIN)
 	$(Q)./$(ACTION_TEST_BIN)
 	$(Q)./$(IDENTITY_TEST_BIN)
+	$(Q)./$(ENTFILE_TEST_BIN)
+	$(Q)./$(ENGINE_SNAPSHOT_TEST)
 
 action-test: $(ACTION_TEST_BIN)
 	$(E) [TEST] $<
@@ -323,6 +346,14 @@ action-test: $(ACTION_TEST_BIN)
 identity-test: $(IDENTITY_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(IDENTITY_TEST_BIN)
+
+entfile-test: $(ENTFILE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(ENTFILE_TEST_BIN)
+
+snapshot-test:
+	$(E) [TEST] $(ENGINE_SNAPSHOT_TEST)
+	$(Q)./$(ENGINE_SNAPSHOT_TEST)
 
 clean:
 	$(E) [CLEAN]

@@ -111,7 +111,7 @@ if ! mkdir -m 700 -- "$ENGINE_DIR"; then
     echo "abmatch: cannot create private engine directory: $ENGINE_DIR" >&2
     exit 1
 fi
-Q2DED_SNAPSHOT="$ENGINE_DIR/q2ded-$Q2DED_SHA256"
+Q2DED_SNAPSHOT="$ENGINE_DIR/q2ded"
 if ! cp -- "$Q2DED_RESOLVED" "$Q2DED_SNAPSHOT" ||
         ! chmod 0500 -- "$Q2DED_SNAPSHOT"; then
     echo "abmatch: cannot snapshot q2ded binary in $ENGINE_DIR" >&2

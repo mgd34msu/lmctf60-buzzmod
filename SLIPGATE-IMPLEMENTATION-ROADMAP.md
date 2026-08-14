@@ -518,3 +518,9 @@ the commit, verification, corpus scope, and remaining blocker.
   checked-in gravity-650 golden file round-trips exactly, every one-bit mutation
   rejects, 40,000 CRC-repaired adversarial mutations produced no parser escape,
   and all 37 contract/legacy/v3 tests plus independent refutation passed.
+- 2026-08-14: Post-commit identity refutation closed three deployment and
+  lifecycle gaps immediately: attested engine snapshots retain the exact
+  `q2ded` process name required by fleet/deploy guards, save restore now ends
+  with an explicit unavailable-identity record, and `.ent` override paths use
+  one bounded formatter for both reads and writes. Durable process-name and
+  maximum-path boundary tests run under both Makefiles.
