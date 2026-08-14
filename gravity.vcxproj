@@ -361,6 +361,7 @@
     <ClCompile Include="slipgate\sg_rune_writer.c" />
     <ClCompile Include="slipgate\sg_rune_install.c" />
     <ClCompile Include="slipgate\sg_rune_proof.c" />
+    <ClCompile Include="slipgate\sg_replay.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_cvars.c" />
     <ClCompile Include="slipgate\sg_hooks.c" />
@@ -437,6 +438,7 @@
     <ClInclude Include="slipgate\sg_rune_loader.h" />
     <ClInclude Include="slipgate\sg_rune_install.h" />
     <ClInclude Include="slipgate\sg_rune_proof.h" />
+    <ClInclude Include="slipgate\sg_replay.h" />
     <ClInclude Include="ui_stats.h" />
     <ClInclude Include="ui_text.h" />
     <ClInclude Include="ui_layout.h" />

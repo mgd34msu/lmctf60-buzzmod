@@ -244,6 +244,9 @@
     <ClCompile Include="slipgate\sg_rune_proof.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_replay.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_arach.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -442,6 +445,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune_proof.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_replay.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ui_stats.h">

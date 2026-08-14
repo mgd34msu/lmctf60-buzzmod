@@ -161,6 +161,9 @@ RUNE_PROOF_TEST_BIN = sg_rune_proof_test.gnu
 RUNE_PROOF_TEST_OBJS = .sg_rune_proof_test.gnu.o \
 	.sg_rune_proof_under_test.gnu.o
 RUNE_PROOF_TEST_DEPS = $(RUNE_PROOF_TEST_OBJS:.o=.d)
+REPLAY_TEST_BIN = sg_replay_test.gnu
+REPLAY_TEST_OBJS = .sg_replay_test.gnu.o .sg_replay_under_test.gnu.o
+REPLAY_TEST_DEPS = $(REPLAY_TEST_OBJS:.o=.d)
 ENTFILE_TEST_BIN = g_entfile_path_test.gnu
 ENTFILE_TEST_OBJS = .g_entfile_path_test.gnu.o
 ENTFILE_TEST_DEPS = $(ENTFILE_TEST_OBJS:.o=.d)
@@ -250,6 +253,11 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_rune_proof_under_test.gnu.o .sg_rune_proof_under_test.gnu.d \
 	.sg_rune_proof_test.make.o .sg_rune_proof_test.make.d \
 	.sg_rune_proof_under_test.make.o .sg_rune_proof_under_test.make.d \
+	sg_replay_test.gnu sg_replay_test.make \
+	.sg_replay_test.gnu.o .sg_replay_test.gnu.d \
+	.sg_replay_under_test.gnu.o .sg_replay_under_test.gnu.d \
+	.sg_replay_test.make.o .sg_replay_test.make.d \
+	.sg_replay_under_test.make.o .sg_replay_under_test.make.d \
 	g_entfile_path_test.gnu g_entfile_path_test.make \
 	.g_entfile_path_test.gnu.o .g_entfile_path_test.gnu.d \
 	.g_entfile_path_test.make.o .g_entfile_path_test.make.d
@@ -276,7 +284,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -379,7 +387,7 @@ SHLIBLDFLAGS = -shared
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
 	rune-loader-test \
-	rune-writer-test rune-install-test rune-proof-test entfile-test \
+	rune-writer-test rune-install-test rune-proof-test replay-test entfile-test \
 	snapshot-test stripcr clean distclean FORCE
 
 all: dep $(TARGET)
@@ -467,6 +475,9 @@ $(RUNE_INSTALL_TEST_BIN): $(RUNE_INSTALL_TEST_OBJS)
 
 $(RUNE_PROOF_TEST_BIN): $(RUNE_PROOF_TEST_OBJS)
 	$(CC) -o $@ $(RUNE_PROOF_TEST_OBJS) $(LDFLAGS)
+
+$(REPLAY_TEST_BIN): $(REPLAY_TEST_OBJS)
+	$(CC) -o $@ $(REPLAY_TEST_OBJS) $(LDFLAGS)
 
 $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) -o $@ $(ENTFILE_TEST_OBJS) $(LDFLAGS)
@@ -599,6 +610,14 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_replay_test.gnu.o: tests/sg_replay_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_replay_under_test.gnu.o: slipgate/sg_replay.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .g_entfile_path_test.gnu.o: tests/g_entfile_path_test.c g_entfile_path.h \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -611,6 +630,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 		$(DANGER_V3_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
 		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
+		$(REPLAY_TEST_BIN) \
 		$(ENTFILE_TEST_BIN)
 	./$(HOST_TEST_BIN)
 	./$(ACTION_TEST_BIN)
@@ -627,6 +647,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 	./$(RUNE_WRITER_TEST_BIN)
 	./$(RUNE_INSTALL_TEST_BIN)
 	./$(RUNE_PROOF_TEST_BIN)
+	./$(REPLAY_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
 	./$(ENGINE_SNAPSHOT_TEST)
 
@@ -671,6 +692,9 @@ rune-install-test: $(RUNE_INSTALL_TEST_BIN)
 
 rune-proof-test: $(RUNE_PROOF_TEST_BIN)
 	./$(RUNE_PROOF_TEST_BIN)
+
+replay-test: $(REPLAY_TEST_BIN)
+	./$(REPLAY_TEST_BIN)
 
 entfile-test: $(ENTFILE_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
@@ -729,6 +753,7 @@ endif
 -include $(RUNE_WRITER_TEST_DEPS)
 -include $(RUNE_INSTALL_TEST_DEPS)
 -include $(RUNE_PROOF_TEST_DEPS)
+-include $(REPLAY_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
 endif
 

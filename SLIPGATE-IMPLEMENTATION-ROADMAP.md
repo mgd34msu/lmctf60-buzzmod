@@ -579,3 +579,46 @@ the commit, verification, corpus scope, and remaining blocker.
   gravity-800 and gravity-650 bot traversal, drift/resume, and sidecar no-I/O
   sentinels passed. Persisted graph sidecars remain deliberately disabled until
   the authenticated explicit-little-endian B4 slice.
+- 2026-08-14: Commit `e14213a` added the authenticated RUNE v3 sidecar wire and
+  Python pipeline. HMN, HML, HME, DPO, and DNG use one explicit little-endian
+  48-byte header bound to the exact rune payload, action contract, and rune
+  header CRC. The bakers consume decoded v3 records, reject stale state before
+  atomic replacement, and keep tombstone/non-owner cells neutral. Shared golden
+  vectors, corruption/drift tests, and independent refutation passed.
+- 2026-08-14: Commit `d1e38b7` loaded authenticated HMN/HML/HME/DPO candidates
+  transactionally. Each sidecar is independently optional; malformed or stale
+  data is ignored once with a stable diagnostic, while valid candidates remain
+  private until fields and a fresh level-authority check succeed. Loader,
+  field-candidate, dual-build, sanitizer, private-runtime missing/stale-sidecar,
+  and live-bot gates passed.
+- 2026-08-14: Commit `d36ccaa` completed authenticated DNG3 persistence.
+  Danger learning is active-play-only, persistence is opt-in and default-off,
+  one exact selected server holds a whole-level advisory lease, and every
+  checkpoint revalidates the immutable leased directory, installed rune,
+  authority, revision, and policy immediately before atomic replacement.
+  Default-off, malformed-file, intermission-freeze, competing-server,
+  installed-rune-drift, strict/sanitizer, dual-build, and independent review
+  gates passed; the commit is pushed to `origin/slipgate`.
+- 2026-08-14: S3-S6 compound work entered implementation. Read-only architecture
+  froze the dependency order: pure pose/command/status reducers first; oracle,
+  generator, loader-publication, and runtime adapters second; then a dormant
+  full-tail native carrier; finally PREOPEN/RIDE plus one compound support-bit
+  flip at a time. The 44-byte record is accepted for PREOPEN and only for a
+  uniqueness-proved restricted RIDE; ambiguous trigger, support, contact, or
+  carried-TOP state must reject rather than overload the format. A fresh
+  181-map runtime-v3 control corpus is running from exact commit `d36ccaa` in
+  parallel so subsequent behavior-neutral claims have a format-correct baseline.
+- 2026-08-14: S3a froze a host-free shared replay law for DROP, SWIM, and HOOK.
+  The reducer owns literal 25 ms commands, 100 ms production boundaries,
+  action phases, terminal decisions, timing witnesses, and fall-damage checks;
+  adapters continue to own Pmove/ClientThink, collision and trigger queries,
+  hook entities, and outer compound dispatch. The harness covers boundary and
+  failure timelines under strict GCC/Clang and both sanitizer stacks. The
+  two historical DROP disagreements are represented as explicit adapter
+  observations: proof-versus-runtime handling of a dry shelf on a wet-destination
+  route, and grounded-only versus depth-two-water nonterminal landing. S3b must
+  resolve both with differential/corpus evidence rather than silently choosing
+  either historical behavior. S3a also selects the generator/proof's exact
+  double-promoted DROP yaw quantization as the v3 canonical command byte; the
+  current live controller's one-short float-rounding difference is an explicit
+  S3b migration, not a behavior-neutral refactor claim.
