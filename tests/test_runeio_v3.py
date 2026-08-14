@@ -112,7 +112,7 @@ class RuneIoV3Tests(unittest.TestCase):
         self.assertEqual(44, runeio.LINK_STRUCT.size)
         self.assertEqual(248, len(self.golden))
         self.assertEqual(
-            "33eb936509585d92c0799b491cea97575758785455b99a85ff159bf59813d7a5",
+            "b4b6847db0b76286058839510572cbba5adb89903a2e6c0367a098efeef856b0",
             hashlib.sha256(self.golden).hexdigest(),
         )
         self.assertEqual(

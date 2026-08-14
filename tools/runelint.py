@@ -384,7 +384,9 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None,
                 lip_yaw = math.degrees(math.atan2(dy, dx))
                 stored_yaw = hdg * (360.0 / 256.0)
                 yaw_delta = (lip_yaw - stored_yaw + 180.0) % 360.0 - 180.0
-                if (minsp != 0 or slack != RUNE_DROP_CONTROL_MARKER or
+                if ((ver == RUNE_V3_VERSION and prov != RL_PROVEN) or
+                        minsp != 0 or
+                        slack != RUNE_DROP_CONTROL_MARKER or
                         not 2.0 <= lip_horiz <= 256.0 or
                         (seeds[fr][4] & RSF_WATER) or
                         abs(dz - 8.0) > 0.25 or
@@ -408,7 +410,9 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None,
             if (enforce_controller_laws and act == RL_SWIM and
                     (not ((seeds[fr][4] | seeds[to][4]) & RSF_WATER) or
                      minsp != 0 or hdg != 0 or slack != 0 or
-                     prov not in (RL_PROVEN, RL_ADJUSTED) or
+                     ((ver == RUNE_V3_VERSION and prov != RL_PROVEN) or
+                      (ver == RUNE_VERSION and
+                       prov not in (RL_PROVEN, RL_ADJUSTED))) or
                      not anchor_finite or
                      any(v != 0.0 for v in anchor))):
                 bad_swim += 1

@@ -402,7 +402,11 @@ class RuneContractTests(unittest.TestCase):
     def test_provenance_modes_and_runtime_support_are_outer_action_policies(self):
         self.assertTrue(GENERATED.allows_provenance(GENERATED.RL_RUN, GENERATED.RL_DECLARED))
         self.assertFalse(GENERATED.allows_provenance(GENERATED.RL_HOOK, GENERATED.RL_DECLARED))
-        self.assertTrue(GENERATED.allows_provenance(GENERATED.RL_SWIM, GENERATED.RL_ADJUSTED))
+        for action in (GENERATED.RL_DROP, GENERATED.RL_HOOK, GENERATED.RL_SWIM):
+            self.assertTrue(GENERATED.allows_provenance(action, GENERATED.RL_PROVEN))
+            for provenance in (GENERATED.RL_OBSERVED, GENERATED.RL_ADJUSTED,
+                               GENERATED.RL_DECLARED):
+                self.assertFalse(GENERATED.allows_provenance(action, provenance))
         self.assertTrue(
             GENERATED.allows_provenance(GENERATED.RL_DOOR_HOOK, GENERATED.RL_CONTRACTED)
         )

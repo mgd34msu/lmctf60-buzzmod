@@ -189,7 +189,7 @@ static void AllActionsGraph(sg_rune_v3_seed_t seeds[TEST_SEEDS],
 	links[4].source = 4;
 	links[4].destination = 5;
 	links[4].action = RL_SWIM;
-	links[4].provenance = RL_ADJUSTED;
+	links[4].provenance = RL_PROVEN;
 	links[4].cost_ms = 400;
 
 	DeclaredLink(&links[5], RL_LIFT, 5, 6, 352.0f);
@@ -537,6 +537,16 @@ static void TestLiteralControlLaws(void)
 	changed.heading = 64;
 	CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS, &changed) ==
 		RLR_BAD_DROP_CONTROL);
+	changed = links[2];
+	changed.provenance = RL_OBSERVED;
+	CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS, &changed) ==
+		RLR_PROVENANCE_FORBIDDEN);
+	changed.provenance = RL_ADJUSTED;
+	CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS, &changed) ==
+		RLR_PROVENANCE_FORBIDDEN);
+	changed.provenance = RL_DECLARED;
+	CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS, &changed) ==
+		RLR_PROVENANCE_FORBIDDEN);
 
 	changed = links[3];
 	changed.min_speed = 1;
@@ -575,6 +585,10 @@ static void TestLiteralControlLaws(void)
 	changed.suffix_anchor[0] = 1.0f;
 	CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS, &changed) ==
 		RLR_BAD_SWIM_CONTROL);
+	changed = links[4];
+	changed.provenance = RL_ADJUSTED;
+	CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS, &changed) ==
+		RLR_PROVENANCE_FORBIDDEN);
 
 	changed = links[5];
 	changed.min_speed = 1;
@@ -720,6 +734,33 @@ static void TestActionAndStructuralFailures(void)
 	FixPayloadCRC(changed, sizeof(changed));
 	ExpectPatchedFailure(changed, &identity, RLW_BAD_LINK_RECORD,
 		RLR_ACTION_DISABLED, SG_RUNE_LOAD_STAGE_ACTION, 0);
+
+	/* Dense generated actions admit generation-time proof only. */
+	{
+		static const uint8_t drop_unproved[] =
+		{
+			RL_OBSERVED, RL_ADJUSTED, RL_DECLARED
+		};
+		size_t provenance_index;
+
+		for (provenance_index = 0;
+		     provenance_index < sizeof(drop_unproved) /
+		         sizeof(drop_unproved[0]); provenance_index++)
+		{
+			memcpy(changed, base, sizeof(changed));
+			changed[LINK_OFFSET(2) + 9U] =
+				drop_unproved[provenance_index];
+			FixPayloadCRC(changed, sizeof(changed));
+			ExpectPatchedFailure(changed, &identity,
+				RLW_BAD_LINK_RECORD, RLR_PROVENANCE_FORBIDDEN,
+				SG_RUNE_LOAD_STAGE_LINK, 2);
+		}
+		memcpy(changed, base, sizeof(changed));
+		changed[LINK_OFFSET(4) + 9U] = RL_ADJUSTED;
+		FixPayloadCRC(changed, sizeof(changed));
+		ExpectPatchedFailure(changed, &identity, RLW_BAD_LINK_RECORD,
+			RLR_PROVENANCE_FORBIDDEN, SG_RUNE_LOAD_STAGE_LINK, 4);
+	}
 
 	/* Structurally valid compound records must still fail the literal gate. */
 	{

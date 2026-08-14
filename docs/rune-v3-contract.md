@@ -45,7 +45,9 @@ needs a new atomic contract; neither existing action should be weakened.
 2. Action, provenance, and mode identifiers are append-only.
 3. The canonical registry is generated from one declarative source.
 4. A compound transaction is one graph edge and one runtime owner.
-5. Generator and loader replay the same witness and physics law.
+5. Generator and live execution use the same action reducer. Loader replay is
+   reserved for sparse map-mechanism transactions; ordinary dense actions use
+   the exact-artifact generation proof defined below.
 6. Runtime acquires exclusive mover ownership before mechanism entry, then
    re-proves the authoritative suffix at TOP while retaining that lease.
 7. Unknown versions, identifiers, flags, reserved bytes, physics laws, or
@@ -236,8 +238,8 @@ The projection is encoded as canonical compact JSON with sorted keys,
 ASCII-only escapes, and no insignificant whitespace. The top-level `display`
 object is deliberately excluded: changing labels or colors cannot invalidate a
 RUNE file. For schema version 1, the canonical semantic payload has CRC32
-`769a7b8e` and SHA-256
-`0790272cf0a34b7ba26dd318629150e3bc66b21dedb5ac448578aa8c3fdc4d59`.
+`e9545af7` and SHA-256
+`bce304d641442fed0d7563536cb371830d85bbb91788b7bcaae3f2c439385a76`.
 
 The top-level `wire_diagnostics` table is also outside that artifact digest.
 It is an append-only, generated C/Python API for reporting header, I/O, CRC,
@@ -277,6 +279,56 @@ fixtures.
 `tools/runeio.py` becomes the only Python wire parser. `runelint`, `runeview`,
 `corpusgraph`, bake tools, `film`, `demorune`, `seedservo`, `mapflags`, and
 `escapee` consume it or the generated metadata.
+
+## Dense-action generation proof and loader admission
+
+Ordinary `RL_DROP`, `RL_HOOK`, and `RL_SWIM` are dense generated actions. The
+generator runs their shared reducer under the exact map, entity, host-physics,
+proof-law, and per-action controller revision recorded by the v3 artifact. It
+may emit a link only after that replay succeeds, and it stamps the link
+`RL_PROVEN`. For all three actions, `RL_PROVEN` is the sole accepted v3
+provenance (`provenance_mask = 0x0001`). The writer, loader, and runtime-v3
+linter retain explicit action-level `provenance == RL_PROVEN` checks in
+addition to the generated registry mask so a future metadata edit cannot
+silently widen the controller contract.
+
+At publication, the loader verifies the exact immutable payload, action
+contract, structural/controller fields, map name, BSP checksum, effective
+entity CRC, host-physics epoch, and complete proof law before admitting the
+already-proved dense link. This is an exact-artifact generation proof, not an
+instruction to replay every dense link synchronously during level load.
+
+The accepted 135-rune control corpus contains 105,191 DROP, 1,875,703 HOOK,
+and 639,934 SWIM links, all stamped `RL_PROVEN`. Replaying all 2,620,828 links
+at publication would require at least the 141,561,036 25 ms traversal quanta
+represented by their stored costs. The per-map stored-cost median is 919,488
+quanta, the linearly interpolated p90 is 1,891,050 quanta (nearest-rank p90
+1,896,824), and `xmap08` is worst at 3,494,440 quanta. Faithful replay also
+requires four 25 ms aim-frame commands for each wet-source HOOK, raising the
+actual 25 ms Pmove-command totals to 141,803,912 corpus-wide and 3,509,492 for
+`xmap08`; including zero-millisecond categorization calls raises total Pmove
+invocations to 142,504,565 and 3,562,067 respectively. That work is not a
+bounded synchronous loader operation and is therefore forbidden.
+
+Sparse `RL_DOOR` validation and future compound mechanism actions still replay
+synchronously against the live map before publication, because their mover
+identity and temporal witness require authoritative entities and their link
+counts are sparse. This decision does not widen live dispatch or enable dormant
+compound actions.
+
+No one-byte RPF proof sidecar is added. Such a byte would merely duplicate
+`RL_PROVEN` outside the payload while remaining replaceable at the same trust
+boundary. The existing CRCs detect corruption and bind exact bytes to an exact
+world/contract identity; they are not keyed signatures, do not identify a
+signer, and do not authenticate artifacts against an adversary who can replace
+local game files. The deployment trust boundary must supply locally trusted
+artifacts.
+
+Changing the DROP and SWIM provenance masks changes the action-contract CRC.
+Every v3 rune and graph-indexed sidecar carrying the prior contract CRC is
+stale and must be regenerated. The accepted corpus proves that its dense-link
+provenance semantics are compatible, but its old bytes are not loadable under
+this contract.
 
 ## Compound proof contract
 
@@ -503,7 +555,7 @@ transactionally. Normal map-level loading resets them before publication.
 | S1 | Canonical JSON, generator, generated C/Python metadata, action descriptor adapters | IDs 0–8 unchanged; IDs 9–11 and provenance 4 appended; C/Python metadata match; `--check` clean; legacy pricing/classification unchanged |
 | S2 | Explicit v3 I/O, identity binding, shared Python parser, strict compatibility | Golden 128/16/44 vectors round-trip in C/Python; corruptions reject; v2/v3 incompatibility is actionable; gravity-650 fixture loads |
 | B4 | Authenticated graph sidecars | Shared 48-byte C/Python vectors round-trip; bakers consume decoded v3 records; stale/corrupt/tombstone data stays neutral; danger survives normal rotation and clean shutdown atomically |
-| S3 | Shared pose-based DROP/SWIM/HOOK replay | Generator, loader, runtime use the same commands and terminal predicates; `lmctf09` exact hooks remain |
+| S3 | Shared pose-based DROP/SWIM/HOOK replay | Generator and runtime use the same commands and terminal predicates; loader admits only exact-artifact `RL_PROVEN` dense links and synchronously replays sparse mechanism transactions; `lmctf09` exact hooks remain |
 | S4 | `RL_DOOR_DROP` | PREOPEN/RIDE generate, validate, load, and execute; ambiguous support rejects; `lmctf01` root-to-center appears |
 | S5 | `RL_DOOR_SWIM` | Submerged side-door class generates, validates, loads, and executes without weakening ordinary water actions |
 | S6 | `RL_DOOR_HOOK` | Water-origin hook and body/bolt sweep clearance pass; `lmctf01` reverse cut closes; `lmctf09` remains exact |

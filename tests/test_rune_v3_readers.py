@@ -256,7 +256,7 @@ class RuneV3ReaderTests(unittest.TestCase):
             self.assertIn("D_DROP=1", output)
             self.assertIn("bsp=0x12345678", output)
             self.assertIn("entity=0x9abcdef0", output)
-            self.assertIn("action_contract=0x769a7b8e", output)
+            self.assertIn("action_contract=0xe9545af7", output)
             self.assertIn("gravity=650", output)
 
     def test_format_probe_and_decode_use_one_atomic_snapshot(self):
@@ -393,6 +393,71 @@ class RuneV3ReaderTests(unittest.TestCase):
                 with self.subTest(malformed_action=action):
                     self.assertEqual([], inspection_flaws, inspection_output)
                     self.assertEqual([expected], flaws, output)
+
+    def test_dense_actions_require_generation_proof_in_codec_and_lint(self):
+        cases = (
+            (contract.RL_DROP, contract.RL_OBSERVED,
+             "v3 drops with invalid lip control: 1"),
+            (contract.RL_DROP, contract.RL_ADJUSTED,
+             "v3 drops with invalid lip control: 1"),
+            (contract.RL_DROP, contract.RL_DECLARED,
+             "v3 drops with invalid lip control: 1"),
+            (contract.RL_SWIM, contract.RL_ADJUSTED,
+             "v3 swims with malformed exact control: 1"),
+        )
+        for index, (action, provenance, expected) in enumerate(cases):
+            water = action == contract.RL_SWIM
+            seeds = (
+                runeio.RuneSeedV3(
+                    (0.0, 0.0, 0.0),
+                    flags=runeio.RSF_WATER if water else 0,
+                ),
+                runeio.RuneSeedV3((128.0, 0.0, 0.0)),
+            )
+            suffix_anchor = ((0.0, 0.0, 0.0) if water
+                             else (64.0, 0.0, 8.0))
+            marker = (0 if water else runelint.RUNE_DROP_CONTROL_MARKER)
+            first = runeio.RuneLinkV3(
+                0, 1, action, provenance, 0, 0, marker, 0, 100,
+                suffix_anchor,
+            )
+            reverse_action = contract.RL_SWIM if water else contract.RL_RUN
+            reverse = runeio.RuneLinkV3(
+                1, 0, reverse_action, contract.RL_PROVEN,
+                0, 0, 0, 0, 100,
+            )
+            map_name = f"denseproof{index}"
+            with self.subTest(action=action, provenance=provenance):
+                with self.assertRaisesRegex(
+                        runeio.RuneWireError, "forbids provenance"):
+                    runeio.encode_v3(
+                        _identity(map_name), seeds, (first, reverse)
+                    )
+
+                lint_seeds = [(*seed.origin, seed.area_hint, seed.flags)
+                              for seed in seeds]
+                lint_links = [
+                    (first.source, first.destination, first.action,
+                     first.provenance, first.min_speed, first.heading,
+                     first.heading_slack, first.exit_speed, first.cost_ms,
+                     *first.suffix_anchor),
+                    (reverse.source, reverse.destination, reverse.action,
+                     reverse.provenance, reverse.min_speed, reverse.heading,
+                     reverse.heading_slack, reverse.exit_speed,
+                     reverse.cost_ms, *reverse.suffix_anchor),
+                ]
+                loaded = (
+                    runelint.RUNE_MAGIC, contract.RUNE_V3_VERSION,
+                    map_name, 2, 2, lint_seeds, lint_links, [],
+                )
+                with mock.patch.object(
+                        runelint, "_load_with_metadata",
+                        return_value=(loaded, None)):
+                    flaws, output = _lint(
+                        f"{map_name}.rune", runtime_v3=True,
+                        objective_root_indices=(0, 1),
+                    )
+                self.assertEqual([expected], flaws, output)
 
     def test_runtime_v3_rechecks_dry_controller_endpoints(self):
         seeds = [

@@ -250,7 +250,7 @@ static void TestGolden(const unsigned char golden[GOLDEN_BYTES])
 	CHECK(memcmp(encoded, golden, GOLDEN_BYTES) == 0);
 	CHECK(GetU32(golden + 20) == UINT32_C(0xe3d0ac5f));
 	CHECK(GetU32(golden + SG_RUNE_V3_HEADER_CRC_OFFSET) ==
-		UINT32_C(0xf245b06a));
+		UINT32_C(0xddc378d1));
 
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3Decode(golden, GOLDEN_BYTES,
 		&identity, &header, decoded_seeds, 2, decoded_links, 2,
@@ -285,7 +285,7 @@ static void TestGolden(const unsigned char golden[GOLDEN_BYTES])
 
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3HeaderCRC32(golden,
 		SG_RUNE_V3_HEADER_BYTES, &crc));
-	CHECK(crc == UINT32_C(0xf245b06a));
+	CHECK(crc == UINT32_C(0xddc378d1));
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3PayloadCRCInit(&crc_state));
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3PayloadCRCUpdate(&crc_state,
 		golden + SEED0_OFFSET, SG_RUNE_V3_SEED_BYTES));

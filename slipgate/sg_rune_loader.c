@@ -162,7 +162,8 @@ static rune_reject_reason_t Loader_ValidateDrop(
 		yaw_delta -= 360.0f;
 	while (yaw_delta < -180.0f)
 		yaw_delta += 360.0f;
-	if (!Loader_VectorInWorld(link->suffix_anchor) ||
+	if (link->provenance != RL_PROVEN ||
+	    !Loader_VectorInWorld(link->suffix_anchor) ||
 	    ((uint16_t)from->flags & SG_RUNE_V3_SEED_WATER) != 0 ||
 	    link->min_speed != 0 ||
 	    link->heading_slack != SG_RUNE_PROOF_DROP_CONTROL_MARKER ||
@@ -326,10 +327,9 @@ rune_reject_reason_t SG_RuneV3ValidateLiteralLink(
 	case RL_HOOK:
 		return Loader_ValidateHook(from, to, link);
 	case RL_SWIM:
-		return link->min_speed == 0 && link->heading == 0 &&
+		return link->provenance == RL_PROVEN &&
+		       link->min_speed == 0 && link->heading == 0 &&
 		       link->heading_slack == 0 &&
-		       (link->provenance == RL_PROVEN ||
-		        link->provenance == RL_ADJUSTED) &&
 		       Loader_VectorPositiveZero(link->suffix_anchor)
 			? RLR_OK : RLR_BAD_SWIM_CONTROL;
 	case RL_LIFT:

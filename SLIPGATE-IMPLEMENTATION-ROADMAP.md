@@ -26,10 +26,10 @@ compensate for an invalid movement graph.
 ### Project-level status
 
 **The project is not complete and is not ready to merge to `main`.** The
-mechanical v3 foundation is complete through the isolated S3a action-replay
-core. The remaining project is the integration of that replay core, compound
-movement implementation, final v3 corpus repair/acceptance, and the later
-human-like tactical program.
+mechanical v3 foundation is complete through S3b1 offline replay integration
+and dense-action generation-proof admission. The remaining project is live
+integration of that replay core, compound movement implementation, final v3
+corpus repair/acceptance, and the later human-like tactical program.
 
 Current phase summary:
 
@@ -41,7 +41,8 @@ Current phase summary:
 2. **Replay integration and v3 acceptance: active, partially complete.** The
    offline generator/oracle proof paths now use the shared reducers without a
    behavior change, and the durable 181-map v3 control corpus is accepted.
-   Loader-publication replay and live-controller adapters remain.
+   Dense loader publication now admits only exact-artifact `RL_PROVEN` links;
+   replay-all was rejected as unbounded. Live-controller adapters remain.
 3. **Compound movement: not started.** `DOOR_DROP`, `DOOR_SWIM`, `DOOR_HOOK`,
    restricted RIDE, compound leases/controllers, and enabling actions 9–11
    remain future work.
@@ -62,6 +63,11 @@ Current phase summary:
   preserving command bytes, host-call cadence, proof results, and final
   phantom state. Independent refutation and representative-map differentials
   passed.
+- Dense DROP, HOOK, and SWIM publication is fail-closed on `RL_PROVEN` under
+  the exact payload, map/entity/physics identity, proof law, and action
+  contract. The loader does not synchronously replay millions of ordinary
+  links; sparse `RL_DOOR` and future compound transactions retain loader
+  replay.
 - The restart-safe v3 control corpus completed 181/181 with 135 PASS,
   36 classified map failures, 7 bounded timeouts, 3 invalid assets, and zero
   terminal infrastructure failures.
@@ -73,7 +79,7 @@ Current phase summary:
   and full frame-capture/replay system.
 - Action metadata is centralized, but execution remains split among historical
   per-action switches rather than one common dispatcher.
-- Publication replay and live adapters are not yet migrated.
+- Live adapters are not yet migrated.
 - DROP wet/dry contact policy and live-versus-proof yaw-byte convergence remain
   explicit unresolved S3b decisions.
 - There is no single unified local pre-push command or final integration gate.
@@ -139,8 +145,8 @@ the reboot. Its observations may guide diagnosis but are not accepted evidence.
 
 1. Resolve the newly exposed generator ordering/exposure reproducibility issue
    or prove that it does not block the next differential gate.
-2. Add loader-publication replay and stable diagnostics for enabled ordinary
-   actions without widening runtime dispatch.
+2. Regenerate v3 artifacts under action contract `e9545af7`; prior runes and
+   graph-indexed sidecars are deliberately stale after provenance tightening.
 3. Migrate live SWIM to the reducer.
 4. Migrate live DROP with an explicit wet-contact policy, canonical yaw bytes,
    action-contract revision, and corpus regeneration.
@@ -769,3 +775,16 @@ the commit, verification, corpus scope, and remaining blocker.
   normalized 1,338-seed/50,994-link execution graph. Its seed order,
   `area_hint`, and tombstone differences arise before the migrated proof seams
   and are tracked as a separate pre-existing generator determinism issue.
+- 2026-08-14: Dense-action loader admission was frozen without a redundant RPF
+  sidecar. DROP, HOOK, and SWIM require `RL_PROVEN` under the exact v3 payload,
+  world/physics identity, proof law, and action contract. The 135 accepted
+  runes encode 141,561,036 25 ms traversal quanta (per-map median 919,488;
+  linearly interpolated p90 1,891,050; worst 3,494,440). Wet-source HOOK aim
+  frames raise faithful replay to 141,803,912 actual 25 ms Pmove commands
+  corpus-wide and 3,509,492 for worst-case `xmap08`; including zero-millisecond
+  categorization calls raises total Pmove invocations to 142,504,565 and
+  3,562,067 respectively. Replay-all is therefore forbidden. Sparse
+  declared-door and future compound replay remains synchronous. CRC and
+  identity provide integrity/world binding, not signer authentication. The
+  mask change advances the semantic contract to `e9545af7` and intentionally
+  stales prior v3 runes and indexed sidecars.

@@ -143,7 +143,8 @@ static rune_reject_reason_t Writer_ValidateDrop(const rune_seed_t *from,
 		yaw_delta -= 360.0f;
 	while (yaw_delta < -180.0f)
 		yaw_delta += 360.0f;
-	if (!Writer_VectorInWorld(source->anchor) ||
+	if (source->provenance != RL_PROVEN ||
+	    !Writer_VectorInWorld(source->anchor) ||
 	    ((uint16_t)from->flags & SG_RUNE_V3_SEED_WATER) != 0 ||
 	    source->min_speed != 0 ||
 	    source->heading_slack != SG_RUNE_PROOF_DROP_CONTROL_MARKER ||
@@ -253,10 +254,9 @@ static rune_reject_reason_t Writer_ValidateControl(
 	case RL_HOOK:
 		return Writer_ValidateHook(from, to, source);
 	case RL_SWIM:
-		return source->min_speed == 0 && source->heading == 0 &&
+		return source->provenance == RL_PROVEN &&
+		       source->min_speed == 0 && source->heading == 0 &&
 		       source->heading_slack == 0 &&
-		       (source->provenance == RL_PROVEN ||
-		        source->provenance == RL_ADJUSTED) &&
 		       Writer_VectorPositiveZero(source->anchor)
 			? RLR_OK : RLR_BAD_SWIM_CONTROL;
 	case RL_LIFT:

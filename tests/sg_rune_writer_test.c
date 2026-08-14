@@ -166,7 +166,7 @@ static void PrepareAction(int action, rune_seed_t seeds[SMALL_SEEDS],
 		break;
 	case RL_SWIM:
 		seeds[0].flags = RSF_WATER;
-		links[0].provenance = RL_ADJUSTED;
+		links[0].provenance = RL_PROVEN;
 		links[1].action = RL_SWIM;
 		links[1].heading = 0;
 		links[1].heading_slack = 0;
@@ -252,7 +252,7 @@ static void AllActionsGraph(rune_seed_t seeds[8], rune_link_t links[8])
 	links[3].exit_speed = 60;
 	SetVector(links[3].anchor, 22.5f, -45.0f, 256.0f);
 	links[4].action = RL_SWIM;
-	links[4].provenance = RL_ADJUSTED;
+	links[4].provenance = RL_PROVEN;
 	links[4].exit_speed = 20;
 	links[5].action = RL_LIFT;
 	links[5].provenance = RL_DECLARED;
@@ -502,6 +502,12 @@ static void TestControllerFailures(void)
 		RLW_BAD_LINK_RECORD, RLR_BAD_DROP_CONTROL);
 	EXPECT_ACTION_FAILURE(RL_DROP, links[0].heading = 64,
 		RLW_BAD_LINK_RECORD, RLR_BAD_DROP_CONTROL);
+	EXPECT_ACTION_FAILURE(RL_DROP, links[0].provenance = RL_OBSERVED,
+		RLW_BAD_LINK_RECORD, RLR_PROVENANCE_FORBIDDEN);
+	EXPECT_ACTION_FAILURE(RL_DROP, links[0].provenance = RL_ADJUSTED,
+		RLW_BAD_LINK_RECORD, RLR_PROVENANCE_FORBIDDEN);
+	EXPECT_ACTION_FAILURE(RL_DROP, links[0].provenance = RL_DECLARED,
+		RLW_BAD_LINK_RECORD, RLR_PROVENANCE_FORBIDDEN);
 	EXPECT_ACTION_FAILURE(RL_HOOK, links[0].min_speed = 1,
 		RLW_BAD_LINK_RECORD, RLR_BAD_HOOK_CONTROL);
 	EXPECT_ACTION_FAILURE(RL_HOOK, links[0].heading_slack = 23,
@@ -539,6 +545,8 @@ static void TestControllerFailures(void)
 		RLW_BAD_LINK_RECORD, RLR_BAD_SWIM_CONTROL);
 	EXPECT_ACTION_FAILURE(RL_SWIM, links[0].anchor[2] = -0.0f,
 		RLW_BAD_LINK_RECORD, RLR_BAD_SWIM_CONTROL);
+	EXPECT_ACTION_FAILURE(RL_SWIM, links[0].provenance = RL_ADJUSTED,
+		RLW_BAD_LINK_RECORD, RLR_PROVENANCE_FORBIDDEN);
 	EXPECT_ACTION_FAILURE(RL_SWIM,
 		seeds[0].flags = 0; InitRun(&links[1], 1, 0),
 		RLW_BAD_LINK_RECORD, RLR_BAD_ENDPOINT_POLICY);
