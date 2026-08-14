@@ -184,14 +184,27 @@ unrelated bytes are never overloaded.
 - per-action proof revision;
 - wire sizes and proof-law constants.
 
-`tools/gen_rune_contracts.py` consumes canonical UTF-8 JSON encoded with sorted
-keys and compact separators. It checks in two generated products:
+`tools/gen_rune_contracts.py` consumes strict UTF-8 JSON. For the wire contract
+digest it serializes exactly this semantic projection:
+
+```json
+{"contract": <the contract object>, "schema_version": <the schema version>}
+```
+
+The projection is encoded as canonical compact JSON with sorted keys,
+ASCII-only escapes, and no insignificant whitespace. The top-level `display`
+object is deliberately excluded: changing labels or colors cannot invalidate a
+RUNE file. For schema version 1, the canonical semantic payload has CRC32
+`769a7b8e` and SHA-256
+`0790272cf0a34b7ba26dd318629150e3bc66b21dedb5ac448578aa8c3fdc4d59`.
+
+The generator checks in two generated products:
 
 - `slipgate/sg_action_contract.generated.h`;
 - `tools/rune_contracts_generated.py`.
 
-`--check` fails if either product differs. The CRC32 of the canonical JSON is
-stored in every v3 header.
+`--check` fails if either product differs. The semantic CRC32 described above
+is stored in every v3 header.
 
 `slipgate/sg_action.h` and `slipgate/sg_action.c` provide the behavioral
 descriptor/dispatch layer:

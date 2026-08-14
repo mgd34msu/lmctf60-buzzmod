@@ -410,7 +410,7 @@ Commit policy:
 2. [x] Review, commit, and push the current proven checkpoint without unrelated
        dirty files.
 3. [x] Fix and test the host allocation/installation contract.
-4. [ ] Add the first mock-host and deterministic primitive tests.
+4. [x] Add the first mock-host and deterministic primitive tests.
 5. [ ] Establish the canonical action interface and stable reason codes.
 6. [ ] Implement the RUNE v3 header/schema and strict compatibility rejection.
 7. [ ] Implement one complete compound vertical slice (`DOOR_DROP`) with
@@ -458,3 +458,12 @@ the commit, verification, corpus scope, and remaining blocker.
   explicit makefiles use distinct test objects/binaries with transitive
   depfiles; clean parallel production+test builds and independent refutation
   passed.
+- 2026-08-13: The S1a canonical RUNE action-registry slice completed in this
+  commit: append-only action IDs 0-11, provenance IDs 0-4, mode-specific
+  compound anchors, stable rejection reasons, wire/proof constants, and
+  policy-only effective-suffix metadata now generate byte-exact C and Python
+  products from strict JSON. The semantic contract is pinned at CRC32
+  `769a7b8e` / SHA-256 `0790272c...`; generator freshness, 13 mutation/parity
+  tests, Python syntax/tab checks, a C11 compile probe, and independent
+  refutation passed. Compound actions remain deliberately runtime-disabled
+  until their complete v3 generator/loader/controller slices land.
