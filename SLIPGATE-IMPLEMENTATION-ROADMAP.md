@@ -122,7 +122,7 @@ These are implemented locally but still belong to the final push/merge gate.
 - [ ] Cluster failures by mechanism and contract, not merely by map name.
 - [ ] Select one minimal representative plus one adversarial map per cluster.
 - [ ] Preserve the baseline before changing the rune format.
-- [ ] Commit and push the currently proven checkpoint independently of later v3
+- [x] Commit and push the currently proven checkpoint independently of later v3
       work once the checkpoint gate is recorded.
 
 Done condition: all 181 maps have a truthful PASS/FAIL record and every failure
@@ -132,9 +132,9 @@ belongs to a named, reproducible class.
 
 ### Host boundary
 
-- [ ] Add `game_free` paired with `game_alloc`; stop freeing game-lifetime
+- [x] Add `game_free` paired with `game_alloc`; stop freeing game-lifetime
       allocations through `level_free`.
-- [ ] Validate the complete required host table instead of using `dprint` as the
+- [x] Validate the complete required host table instead of using `dprint` as the
       sole initialization sentinel.
 - [ ] Add an explicit host install/reset seam for isolated tests.
 - [ ] Replace fixed 1024-byte double-formatting print wrappers with a safe
@@ -354,7 +354,7 @@ Each vertical slice must pass, as applicable:
 
 Commit policy:
 
-- [ ] Preserve `Mike Davis <mgd34msu@gmail.com>` as author and committer.
+- [x] Preserve `Mike Davis <mgd34msu@gmail.com>` as author and committer.
 - [ ] Do not mix generated artifacts, GoodVibes state, or unrelated user files
       into implementation commits.
 - [ ] Commit only a coherent, proven vertical slice.
@@ -387,3 +387,7 @@ the commit, verification, corpus scope, and remaining blocker.
   `Mike Davis <mgd34msu@gmail.com>`; 181-map baseline remains active in 12
   isolated lanes.
 - 2026-08-13: Roadmap created and adopted as the implementation source of truth.
+- 2026-08-13: Host allocator slice completed: paired `game_alloc`/`game_free`,
+  migrated all generator cleanup paths, and added complete 34-slot host-table
+  validation. Clean rebuild, `ldd -r`, syntax checks, diff check, runtime smoke,
+  and independent refutation passed.

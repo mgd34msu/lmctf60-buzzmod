@@ -126,6 +126,11 @@ static void *Host_GameAlloc(int size)
 	return gi.TagMalloc(size, TAG_GAME);
 }
 
+static void Host_GameFree(void *block)
+{
+	gi.TagFree(block);
+}
+
 static void Host_LinkEntity(edict_t *ent)
 {
 	gi.linkentity(ent);
@@ -177,10 +182,36 @@ static void Host_Multicast(const vec3_t origin, multicast_t to)
 	gi.multicast((float *)origin, to);
 }
 
+static qboolean Host_TableComplete(void)
+{
+	return sg_host.dprint && sg_host.cprint && sg_host.bprint &&
+	       sg_host.trace && sg_host.pointcontents && sg_host.box_edicts &&
+	       sg_host.in_pvs && sg_host.in_phs && sg_host.pmove &&
+	       sg_host.level_alloc && sg_host.level_free &&
+	       sg_host.cvar && sg_host.argv &&
+	       sg_host.sound && sg_host.positioned_sound && sg_host.soundindex &&
+	       sg_host.game_alloc && sg_host.game_free &&
+	       sg_host.linkentity && sg_host.setmodel && sg_host.centerprint &&
+	       sg_host.argc && sg_host.args &&
+	       sg_host.write_char && sg_host.write_byte && sg_host.write_short &&
+	       sg_host.write_long && sg_host.write_float && sg_host.write_string &&
+	       sg_host.write_position && sg_host.write_dir && sg_host.write_angle &&
+	       sg_host.unicast && sg_host.multicast;
+}
+
+static void Host_RequireComplete(void)
+{
+	if (!Host_TableComplete())
+		gi.error("slipgate: incomplete host service table");
+}
+
 void SG_HooksInit(void)
 {
 	if (sg_host.dprint)
+	{
+		Host_RequireComplete();
 		return;
+	}
 
 	sg_host.dprint = Host_Dprint;
 	sg_host.cprint = Host_Cprint;
@@ -199,6 +230,7 @@ void SG_HooksInit(void)
 	sg_host.positioned_sound = Host_PositionedSound;
 	sg_host.soundindex = Host_SoundIndex;
 	sg_host.game_alloc = Host_GameAlloc;
+	sg_host.game_free = Host_GameFree;
 	sg_host.linkentity = Host_LinkEntity;
 	sg_host.setmodel = Host_SetModel;
 	sg_host.centerprint = Host_CenterPrint;
@@ -215,4 +247,6 @@ void SG_HooksInit(void)
 	sg_host.write_angle = Host_WriteAngle;
 	sg_host.unicast = Host_Unicast;
 	sg_host.multicast = Host_Multicast;
+
+	Host_RequireComplete();
 }

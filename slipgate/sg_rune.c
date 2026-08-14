@@ -1911,8 +1911,8 @@ static void Prove_Swims(void)
 		}
 	}
 
-	sg_host.level_free(sw_first);
-	sg_host.level_free(sw_next);
+	sg_host.game_free(sw_first);
+	sg_host.game_free(sw_next);
 	sw_first = NULL;
 	sw_next = NULL;
 
@@ -3637,12 +3637,12 @@ static void Prove_RocketJumps(void)
 	if (rj_tries >= SG_RJ_MAX_TRIES)
 		rj_budget_out = 1;
 
-	sg_host.level_free(sw_first);
-	sg_host.level_free(sw_next);
+	sg_host.game_free(sw_first);
+	sg_host.game_free(sw_next);
 	sw_first = NULL;
 	sw_next = NULL;
-	sg_host.level_free(rj_dist);
-	sg_host.level_free(rj_stamp);
+	sg_host.game_free(rj_dist);
+	sg_host.game_free(rj_stamp);
 	rj_dist = NULL;
 	rj_stamp = NULL;
 
@@ -4131,8 +4131,8 @@ qboolean Rune_Generate(const char *mapname)
 	{
 		Doors_Restore(held, -ndoors);
 		sg_host.dprint("rune: FAILED: more than 128 doors; graph was not written\n");
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 	sg_host.dprint("rune: %d doors held open for proving\n", ndoors);
@@ -4149,8 +4149,8 @@ qboolean Rune_Generate(const char *mapname)
 	{
 		Doors_Restore(held, ndoors);
 		sg_host.dprint("rune: FAILED: map produced no executable seeds\n");
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 	/*
@@ -4218,8 +4218,8 @@ qboolean Rune_Generate(const char *mapname)
 	 * the deployment linter share the same fail-closed topology contract. */
 	if (!Graph_PruneObjectiveCore())
 	{
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 	if (gen_seed_overflow || gen_link_overflow || gen_water_overflow ||
@@ -4228,15 +4228,15 @@ qboolean Rune_Generate(const char *mapname)
 		sg_host.dprint("rune: FAILED: %s capacity exhausted; graph was not written\n",
 		               (gen_seed_overflow || gen_num_seeds >= SEED_MAX)
 		                   ? "seed" : "link");
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 	if (gen_num_links <= 0)
 	{
 		sg_host.dprint("rune: FAILED: no executable links were proven; graph was not written\n");
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 
@@ -4267,8 +4267,8 @@ qboolean Rune_Generate(const char *mapname)
 	if (!f)
 	{
 		sg_host.dprint("rune: cannot write temporary %s\n", tmp_path);
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 
@@ -4291,8 +4291,8 @@ qboolean Rune_Generate(const char *mapname)
 	{
 		remove(tmp_path);
 		sg_host.dprint("rune: incomplete write; kept existing %s\n", path);
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 #ifdef _WIN32
@@ -4304,15 +4304,15 @@ qboolean Rune_Generate(const char *mapname)
 	{
 		remove(tmp_path);
 		sg_host.dprint("rune: cannot install temporary graph as %s\n", path);
-		sg_host.level_free(gen_seeds);
-		sg_host.level_free(gen_links);
+		sg_host.game_free(gen_seeds);
+		sg_host.game_free(gen_links);
 		return false;
 	}
 
 	sg_host.dprint("rune: wrote %s (%d seeds, %d links)\n",
 	           path, gen_num_seeds, gen_num_links);
 
-	sg_host.level_free(gen_seeds);
-	sg_host.level_free(gen_links);
+	sg_host.game_free(gen_seeds);
+	sg_host.game_free(gen_links);
 	return true;
 }

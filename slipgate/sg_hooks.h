@@ -53,6 +53,7 @@ typedef struct sg_host_s
 
 	/* game-lifetime memory (rune generation) */
 	void		*(*game_alloc)(int size);
+	void		(*game_free)(void *block);
 
 	/* entity presentation */
 	void		(*linkentity)(edict_t *ent);
