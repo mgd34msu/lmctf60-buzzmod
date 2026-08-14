@@ -16,6 +16,14 @@ endif
 
 REVISION_HEADER := GitRevisionInfo.h
 REVISION_TEMPLATE := GitRevisionInfo.tmpl
+HOST_TEST_BIN := sg_hooks_test.make
+HOST_TEST_OBJS := .sg_hooks_test.make.o .sg_hooks_under_test.make.o
+HOST_TEST_DEPS := $(HOST_TEST_OBJS:.o=.d)
+HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
+	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
+	.sg_hooks_under_test.gnu.o .sg_hooks_under_test.gnu.d \
+	.sg_hooks_test.make.o .sg_hooks_test.make.d \
+	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d
 
 CC ?= gcc
 WINDRES ?= windres
@@ -182,7 +190,7 @@ all: $(TARGET)
 
 default: all
 
-.PHONY: all default clean strip FORCE
+.PHONY: all default host-test clean strip FORCE
 
 FORCE:
 
@@ -217,6 +225,7 @@ $(REVISION_HEADER): $(REVISION_TEMPLATE) FORCE
 $(OBJS): $(REVISION_HEADER)
 
 -include $(OBJS:.o=.d)
+-include $(HOST_TEST_DEPS)
 
 %.o: %.c
 	$(E) [CC] $@
@@ -230,10 +239,28 @@ $(TARGET): $(OBJS)
 	$(E) [LD] $@
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
 
+.sg_hooks_test.make.o: slipgate/sg_hooks_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-DSG_HOST_TEST -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hooks_under_test.make.o: slipgate/sg_hooks.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-DSG_HOST_TEST -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+$(HOST_TEST_BIN): $(HOST_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(HOST_TEST_OBJS) $(LIBS)
+
+host-test: $(HOST_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(HOST_TEST_BIN)
+
 clean:
 	$(E) [CLEAN]
 	$(Q)$(RM) *.o *.d $(TARGET) $(REVISION_HEADER) \
-		$(REVISION_HEADER).tmp.*
+		$(REVISION_HEADER).tmp.* $(HOST_TEST_ALL_ARTIFACTS)
 
 strip: $(TARGET)
 	$(E) [STRIP]

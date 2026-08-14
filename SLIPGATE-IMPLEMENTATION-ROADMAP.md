@@ -168,7 +168,8 @@ belongs to a named, reproducible class.
       allocations through `level_free`.
 - [x] Validate the complete required host table instead of using `dprint` as the
       sole initialization sentinel.
-- [ ] Add an explicit host install/reset seam for isolated tests.
+- [x] Add an explicit complete-table host install seam and a process-isolated,
+      test-build-only reset seam with zero-live-allocation preconditions.
 - [ ] Replace fixed 1024-byte double-formatting print wrappers with a safe
       `va_list`/dynamic formatting contract.
 - [ ] Audit const-casting shims and document or eliminate each mutability escape.
@@ -210,7 +211,8 @@ zero or stale values.
 - [ ] Run SLIPGATE logic without a live Quake server using an injected host.
 - [ ] Provide scripted trace, contents, BoxEdicts, Pmove, entity-link, clock,
       cvar, allocation, and output behavior.
-- [ ] Support distinct allocation arenas and leak/cross-free detection.
+- [x] Support distinct allocation arenas and leak/cross-free detection in the
+      first executable host-boundary harness.
 
 ### Frame and action replay
 
@@ -407,7 +409,7 @@ Commit policy:
 1. [x] Finish and freeze the currently running 181-map baseline.
 2. [x] Review, commit, and push the current proven checkpoint without unrelated
        dirty files.
-3. [ ] Fix and test the host allocation/installation contract.
+3. [x] Fix and test the host allocation/installation contract.
 4. [ ] Add the first mock-host and deterministic primitive tests.
 5. [ ] Establish the canonical action interface and stable reason codes.
 6. [ ] Implement the RUNE v3 header/schema and strict compatibility rejection.
@@ -435,14 +437,24 @@ the commit, verification, corpus scope, and remaining blocker.
   passing runes re-linted clean; failures were reconciled into 33 core, 6
   timeout, 2 flag-bind, 2 physics-refusal, and 3 invalid-asset results. Durable
   manifest added under `tools/baselines/`.
-- 2026-08-13: Native build dependency race fixed in both `GNUmakefile` and
-  `Makefile`: atomic revision/dependency generation, complete and identical
+- 2026-08-13: Commit `e0366a2` fixed the native build dependency race in
+  `GNUmakefile` and `Makefile`: atomic revision/dependency generation, complete
+  and identical
   91-object manifests, failure propagation, and no-op rebuild stability passed
   fresh `-j64`/`-j96` stress runs. Independent refutation found and drove fixes
   for stale header-include discovery and compiler-dependent cleanup; the final
   diff passed re-review with no remaining medium/high finding.
-- 2026-08-13: The reviewed RUNE v3/action-contract architecture was frozen in
-  `docs/rune-v3-contract.md`: explicit 128/16/44-byte little-endian records,
+- 2026-08-13: Commit `055e974` froze the reviewed RUNE v3/action-contract
+  architecture in `docs/rune-v3-contract.md`: explicit 128/16/44-byte
+  little-endian records,
   append-only compound action IDs, generated action metadata, atomic mover
   ownership, strict identity/physics binding, migration rules, replay fixtures,
   and E0/S1-S7 done conditions.
+- 2026-08-13: Host installation and isolated testing completed: the 34-slot
+  inventory is structurally checked, incomplete/replacement tables fail without
+  mutation, reset is absent from production, and the deterministic harness
+  proves install/reset/reinstall, dynamic `gi` lookup, distinct game/level
+  arenas, cross/double/unknown free detection, and bulk teardown. GNU and
+  explicit makefiles use distinct test objects/binaries with transitive
+  depfiles; clean parallel production+test builds and independent refutation
+  passed.

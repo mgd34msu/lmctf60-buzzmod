@@ -8,6 +8,7 @@
  */
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "g_local.h"
 #include "slipgate/sg_hooks.h"
@@ -182,71 +183,88 @@ static void Host_Multicast(const vec3_t origin, multicast_t to)
 	gi.multicast((float *)origin, to);
 }
 
-static qboolean Host_TableComplete(void)
+static qboolean Host_TableComplete(const sg_host_t *host)
 {
-	return sg_host.dprint && sg_host.cprint && sg_host.bprint &&
-	       sg_host.trace && sg_host.pointcontents && sg_host.box_edicts &&
-	       sg_host.in_pvs && sg_host.in_phs && sg_host.pmove &&
-	       sg_host.level_alloc && sg_host.level_free &&
-	       sg_host.cvar && sg_host.argv &&
-	       sg_host.sound && sg_host.positioned_sound && sg_host.soundindex &&
-	       sg_host.game_alloc && sg_host.game_free &&
-	       sg_host.linkentity && sg_host.setmodel && sg_host.centerprint &&
-	       sg_host.argc && sg_host.args &&
-	       sg_host.write_char && sg_host.write_byte && sg_host.write_short &&
-	       sg_host.write_long && sg_host.write_float && sg_host.write_string &&
-	       sg_host.write_position && sg_host.write_dir && sg_host.write_angle &&
-	       sg_host.unicast && sg_host.multicast;
+#define HOST_REQUIRE_SERVICE(name) if (!host->name) return false;
+	SG_HOST_REQUIRED_SERVICES(HOST_REQUIRE_SERVICE)
+#undef HOST_REQUIRE_SERVICE
+	return true;
+}
+
+static qboolean Host_TableHasAny(const sg_host_t *host)
+{
+#define HOST_HAS_SERVICE(name) || host->name
+	return false SG_HOST_REQUIRED_SERVICES(HOST_HAS_SERVICE);
+#undef HOST_HAS_SERVICE
+}
+
+qboolean SG_HostInstall(const sg_host_t *host)
+{
+	if (!host || !Host_TableComplete(host) || Host_TableHasAny(&sg_host))
+		return false;
+
+	sg_host = *host;
+	return true;
 }
 
 static void Host_RequireComplete(void)
 {
-	if (!Host_TableComplete())
+	if (!Host_TableComplete(&sg_host))
 		gi.error("slipgate: incomplete host service table");
 }
 
 void SG_HooksInit(void)
 {
-	if (sg_host.dprint)
+	static const sg_host_t lmctf_host = {
+		.dprint = Host_Dprint,
+		.cprint = Host_Cprint,
+		.bprint = Host_Bprint,
+		.trace = Host_Trace,
+		.pointcontents = Host_PointContents,
+		.box_edicts = Host_BoxEdicts,
+		.in_pvs = Host_InPVS,
+		.in_phs = Host_InPHS,
+		.pmove = Host_Pmove,
+		.level_alloc = Host_LevelAlloc,
+		.level_free = Host_LevelFree,
+		.cvar = Host_Cvar,
+		.argv = Host_Argv,
+		.sound = Host_Sound,
+		.positioned_sound = Host_PositionedSound,
+		.soundindex = Host_SoundIndex,
+		.game_alloc = Host_GameAlloc,
+		.game_free = Host_GameFree,
+		.linkentity = Host_LinkEntity,
+		.setmodel = Host_SetModel,
+		.centerprint = Host_CenterPrint,
+		.argc = Host_Argc,
+		.args = Host_Args,
+		.write_char = Host_WriteChar,
+		.write_byte = Host_WriteByte,
+		.write_short = Host_WriteShort,
+		.write_long = Host_WriteLong,
+		.write_float = Host_WriteFloat,
+		.write_string = Host_WriteString,
+		.write_position = Host_WritePosition,
+		.write_dir = Host_WriteDir,
+		.write_angle = Host_WriteAngle,
+		.unicast = Host_Unicast,
+		.multicast = Host_Multicast
+	};
+
+	if (Host_TableHasAny(&sg_host))
 	{
 		Host_RequireComplete();
 		return;
 	}
 
-	sg_host.dprint = Host_Dprint;
-	sg_host.cprint = Host_Cprint;
-	sg_host.bprint = Host_Bprint;
-	sg_host.trace = Host_Trace;
-	sg_host.pointcontents = Host_PointContents;
-	sg_host.box_edicts = Host_BoxEdicts;
-	sg_host.in_pvs = Host_InPVS;
-	sg_host.in_phs = Host_InPHS;
-	sg_host.pmove = Host_Pmove;
-	sg_host.level_alloc = Host_LevelAlloc;
-	sg_host.level_free = Host_LevelFree;
-	sg_host.cvar = Host_Cvar;
-	sg_host.argv = Host_Argv;
-	sg_host.sound = Host_Sound;
-	sg_host.positioned_sound = Host_PositionedSound;
-	sg_host.soundindex = Host_SoundIndex;
-	sg_host.game_alloc = Host_GameAlloc;
-	sg_host.game_free = Host_GameFree;
-	sg_host.linkentity = Host_LinkEntity;
-	sg_host.setmodel = Host_SetModel;
-	sg_host.centerprint = Host_CenterPrint;
-	sg_host.argc = Host_Argc;
-	sg_host.args = Host_Args;
-	sg_host.write_char = Host_WriteChar;
-	sg_host.write_byte = Host_WriteByte;
-	sg_host.write_short = Host_WriteShort;
-	sg_host.write_long = Host_WriteLong;
-	sg_host.write_float = Host_WriteFloat;
-	sg_host.write_string = Host_WriteString;
-	sg_host.write_position = Host_WritePosition;
-	sg_host.write_dir = Host_WriteDir;
-	sg_host.write_angle = Host_WriteAngle;
-	sg_host.unicast = Host_Unicast;
-	sg_host.multicast = Host_Multicast;
-
-	Host_RequireComplete();
+	if (!SG_HostInstall(&lmctf_host))
+		gi.error("slipgate: could not install LMCTF host service table");
 }
+
+#ifdef SG_HOST_TEST
+void SG_HostResetForTest(void)
+{
+	memset(&sg_host, 0, sizeof(sg_host));
+}
+#endif

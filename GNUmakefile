@@ -92,6 +92,14 @@ endif
 REVISION_HEADER = GitRevisionInfo.h
 REVISION_TEMPLATE = GitRevisionInfo.tmpl
 DEPEND_FILE = .depend
+HOST_TEST_BIN = sg_hooks_test.gnu
+HOST_TEST_OBJS = .sg_hooks_test.gnu.o .sg_hooks_under_test.gnu.o
+HOST_TEST_DEPS = $(HOST_TEST_OBJS:.o=.d)
+HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
+	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
+	.sg_hooks_under_test.gnu.o .sg_hooks_under_test.gnu.d \
+	.sg_hooks_test.make.o .sg_hooks_test.make.d \
+	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d
 
 # This is for native build
 CFLAGS=-O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
@@ -214,7 +222,7 @@ SHLIBLDFLAGS = -shared
 # Targets
 ######################################################################
 
-.PHONY: all dep stripcr clean distclean FORCE
+.PHONY: all dep host-test stripcr clean distclean FORCE
 
 all: dep $(TARGET)
 
@@ -249,6 +257,20 @@ $(TARGET):	$(OBJS) $(L_OBJS)
 		$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(OBJS) $(L_OBJS) $(LDFLAGS)
 		$(LIBTOOL) $@
 
+.sg_hooks_test.gnu.o: slipgate/sg_hooks_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-DSG_HOST_TEST -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hooks_under_test.gnu.o: slipgate/sg_hooks.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-DSG_HOST_TEST -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+$(HOST_TEST_BIN): $(HOST_TEST_OBJS)
+	$(CC) -o $@ $(HOST_TEST_OBJS) $(LDFLAGS)
+
+host-test: $(HOST_TEST_BIN)
+	./$(HOST_TEST_BIN)
+
 dep: $(DEPEND_FILE)
 
 $(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
@@ -275,7 +297,7 @@ stripcr:	.
 clean:
 		@echo "Deleting temporary files..."
 		@rm -f $(OBJS) $(REVISION_HEADER) $(REVISION_HEADER).tmp.* \
-			$(DEPEND_FILE).tmp.* *.orig ~* core
+			$(DEPEND_FILE).tmp.* $(HOST_TEST_ALL_ARTIFACTS) *.orig ~* core
 
 distclean:	clean
 		@echo "Deleting everything that can be rebuilt..."
@@ -285,6 +307,7 @@ ifeq (,$(filter clean distclean,$(MAKECMDGOALS)))
 ifeq ($(DEPEND_FILE),$(wildcard $(DEPEND_FILE)))
 include $(DEPEND_FILE)
 endif
+-include $(HOST_TEST_DEPS)
 endif
 
 # The SQLite amalgamation is third-party and does not build clean under our
