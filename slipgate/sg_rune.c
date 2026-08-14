@@ -26,6 +26,7 @@
 #include "slipgate/sg_rune.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_replay.h"
 #include "slipgate/sg_rune_install.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_util.h"
@@ -652,7 +653,7 @@ static void Seed_Germinate(void)
  * south boundary "arrived" at seeds behind it, writing links no mover can
  * follow. A clear line settles which side of the world the phantom is on.
  */
-static qboolean Prove_Contact(vec3_t at, vec3_t target)
+static qboolean Prove_Contact(const vec3_t at, const vec3_t target)
 {
 	vec3_t a2, t2;
 	trace_t tr;
@@ -1361,6 +1362,90 @@ static qboolean Drop_FindLip(vec3_t src, vec3_t dir, float limit, vec3_t lip)
 	return false;
 }
 
+static void Drop_ReplayPose(const sg_phantom_t *ph, sg_replay_pose_t *pose)
+{
+	memset(pose, 0, sizeof(*pose));
+	pose->pms = ph->pms;
+	VectorCopy(ph->origin, pose->origin);
+	VectorCopy(ph->velocity, pose->velocity);
+	pose->grounded = ph->groundentity;
+	pose->watertype = ph->watertype;
+	pose->waterlevel = ph->waterlevel;
+}
+
+static qboolean Drop_ReplayHarmfulLiquid(const sg_phantom_t *ph)
+{
+	return ph->waterlevel > 0 &&
+	       (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
+}
+
+/* Resolve only the contact traces that legacy Drop_Rollout would reach at
+ * this production boundary.  Arrival and recovery intentionally may issue
+ * two identical traces when the first contact result is false; preserving
+ * that short-circuit cadence is part of a behavior-neutral adapter. */
+static qboolean Drop_ReplayContact(const sg_drop_replay_state_t *state,
+	const sg_phantom_t *ph, vec3_t destination)
+{
+	vec3_t delta;
+	float horizontal2;
+	int next_ms;
+	qboolean airborne_after, arrival_gate, recovery_gate;
+	qboolean contact = true;
+
+	next_ms = state->progress.elapsed_ms + SG_REPLAY_STEP_MS;
+	airborne_after = state->airborne ||
+		(state->walkoff && !ph->groundentity);
+	if (ph->door_passed ||
+	    (state->recovery && !ph->groundentity) ||
+	    (state->spec.destination_water && airborne_after &&
+	     (next_ms % SG_REPLAY_FRAME_MS) == 0 &&
+	     ph->waterlevel > 0 && ph->waterlevel < 3) ||
+	    ph->origin[2] < destination[2] - SG_REPLAY_DROP_BELOW_Z ||
+	    next_ms >= SG_REPLAY_DROP_TOTAL_MS ||
+	    (next_ms % SG_REPLAY_FRAME_MS) != 0 ||
+	    Drop_ReplayHarmfulLiquid(ph))
+		return true;
+
+	VectorSubtract(destination, ph->origin, delta);
+	horizontal2 = delta[0] * delta[0] + delta[1] * delta[1];
+	arrival_gate = state->walkoff &&
+		horizontal2 < SG_REPLAY_ARRIVE_RADIUS * SG_REPLAY_ARRIVE_RADIUS &&
+		delta[2] > -SG_REPLAY_ARRIVE_Z &&
+		delta[2] < SG_REPLAY_ARRIVE_Z &&
+		(state->spec.destination_water ? ph->waterlevel == 3 :
+		 (ph->groundentity || ph->waterlevel >= 2));
+	if (arrival_gate)
+	{
+		contact = Prove_Contact(ph->origin, destination);
+		if (contact)
+			return true;
+	}
+	recovery_gate = !state->recovery && state->walkoff && airborne_after &&
+		!state->spec.destination_water && ph->groundentity &&
+		ph->waterlevel == 0 &&
+		horizontal2 < SG_RUNE_PROOF_DROP_RECOVERY_RADIUS *
+		                  SG_RUNE_PROOF_DROP_RECOVERY_RADIUS &&
+		delta[2] > -SG_RUNE_PROOF_DROP_RECOVERY_Z &&
+		delta[2] < SG_RUNE_PROOF_DROP_RECOVERY_Z;
+	if (recovery_gate)
+		contact = Prove_Contact(ph->origin, destination);
+	return contact;
+}
+
+static void Drop_ReplayObservation(const sg_phantom_t *ph,
+	qboolean destination_water, qboolean contact_clear,
+	sg_replay_observation_t *observation)
+{
+	memset(observation, 0, sizeof(*observation));
+	observation->contact_clear = contact_clear;
+	/* SG_OracleRunWorld already rejects non-world support. */
+	observation->ground_support_valid = true;
+	observation->drop_recovery_admitted = !destination_water;
+	observation->drop_landing_observed =
+		!destination_water && ph->groundentity;
+	observation->door_passed = ph->door_passed;
+}
+
 /* One exact source-to-lip-to-destination attempt. All bookkeeping is local:
  * ProveDrop commits only the candidate that wins, or one final failure record
  * when none wins, so an earlier compass miss cannot leak into a later link. */
@@ -1370,175 +1455,53 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
                              sg_drop_trial_t *trial)
 {
 	sg_phantom_t ph;
+	sg_drop_replay_spec_t spec;
+	sg_drop_replay_state_t state;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	sg_replay_status_t status;
 	usercmd_t cmd;
-	float walkoff_yaw = heading * (360.0f / 256.0f);
-	float old_frame_z = 0.0f;
-	int elapsed, walkoff_at = -1;
-	qboolean walkoff = false;
-	qboolean airborne = false;
-	qboolean recovery = false;
 
 	memset(trial, 0, sizeof(*trial));
 	trial->ran = true;
 	SG_OraclePlace(&ph, src);
-
-	for (elapsed = 0;
-	     elapsed < DROP_APPROACH_LIMIT_MS + DROP_TRAVEL_LIMIT_MS;
-	     elapsed += STEP_MSEC)
+	memset(&spec, 0, sizeof(spec));
+	VectorCopy(dst, spec.destination);
+	VectorCopy(lip, spec.lip);
+	spec.heading = heading;
+	spec.destination_water = require_deep_water;
+	spec.expected_arrival_ms = SG_REPLAY_TIME_DISCOVER;
+	Drop_ReplayPose(&ph, &pose);
+	Drop_ReplayObservation(&ph, require_deep_water, true, &observation);
+	status = SG_DropReplayBegin(&state, &spec, &pose, &observation, 0.0f);
+	while (status == SG_REPLAY_RUNNING)
 	{
-		vec3_t want, lipd;
-		float want2, lipd2;
-		qboolean arrived = false;
-		qboolean recovery_start = false;
-
-		VectorSubtract(dst, ph.origin, want);
-		want2 = want[0] * want[0] + want[1] * want[1];
-		if ((elapsed % 100) == 0)
-		{
-			if (ph.waterlevel > 0 &&
-			    (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-			{
-				trial->end = ph;
-				return false;
-			}
-			arrived = walkoff && want2 < ARRIVE_RADIUS * ARRIVE_RADIUS &&
-			    want[2] > -72.0f && want[2] < 72.0f &&
-			    (require_deep_water ? ph.waterlevel == 3 :
-			                          (ph.groundentity || ph.waterlevel >= 2)) &&
-			    Prove_Contact(ph.origin, dst);
-			/* A dry drop may land between lattice seeds. Permit exactly one
-			 * production-aligned impact to hand off to a short, directly visible
-			 * ground recovery. The live controller health-gates this same first
-			 * impact; any later loss of support is rejected below. */
-			recovery_start = !arrived && !recovery && walkoff && airborne &&
-			    !require_deep_water && ph.groundentity && ph.waterlevel == 0 &&
-			    want2 < RUNE_DROP_RECOVERY_RADIUS * RUNE_DROP_RECOVERY_RADIUS &&
-			    want[2] > -RUNE_DROP_RECOVERY_Z &&
-			    want[2] < RUNE_DROP_RECOVERY_Z &&
-			    Prove_Contact(ph.origin, dst);
-			/* This is the first production-visible dry landing. It either owns
-			 * the bounded handoff above or terminates the proof; waiting for the
-			 * fixed walkoff command to coast nearer would hide an unmodelled
-			 * landing/restart inside the action. */
-			if (!arrived && !recovery && walkoff && airborne &&
-			    !require_deep_water && ph.groundentity && !recovery_start)
-			{
-				trial->end = ph;
-				return false;
-			}
-			if (P_FallDelta(old_frame_z, ph.velocity[2], ph.groundentity,
-			                ph.waterlevel) > 30.0f && !arrived && !recovery_start)
-			{
-				trial->end = ph;
-				return false;
-			}
-			old_frame_z = ph.velocity[2];
-			if (recovery_start)
-				recovery = true;
-		}
-		if (arrived)
-		{
-			float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
-			                 ph.velocity[1] * ph.velocity[1]);
-
-			*cost_ms = (short)elapsed;
-			*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
-			trial->end = ph;
-			return true;
-		}
-
-		lipd[0] = lip[0] - ph.origin[0];
-		lipd[1] = lip[1] - ph.origin[1];
-		lipd[2] = 0.0f;
-		lipd2 = lipd[0] * lipd[0] + lipd[1] * lipd[1];
-		/* Runtime chooses once per 100 ms outer frame, so a fast approach can
-		 * cross the eight-unit circle between decisions. Signed projection and
-		 * becoming airborne are the shared crossing witnesses. elapsed > 0 keeps
-		 * SG_OraclePlace's not-yet-stepped groundentity from latching at source. */
-		if (!walkoff &&
-		    (lipd2 <= DROP_HANDOFF_RADIUS * DROP_HANDOFF_RADIUS ||
-		     lipd[0] * cosf(walkoff_yaw * (float)M_PI / 180.0f) +
-		     lipd[1] * sinf(walkoff_yaw * (float)M_PI / 180.0f) <= 0.0f ||
-		     (elapsed > 0 && !ph.groundentity)))
-		{
-			walkoff = true;
-			walkoff_at = elapsed;
+		status = SG_DropReplayPreStep(&state, &pose, &cmd);
+		if (state.walkoff)
 			trial->crossed = true;
-		}
-		if (!walkoff && elapsed >= DROP_APPROACH_LIMIT_MS)
-		{
-			trial->fenced = true;
-			trial->end = ph;
-			return false;
-		}
-		if (walkoff && elapsed - walkoff_at >= DROP_TRAVEL_LIMIT_MS)
+		if (status != SG_REPLAY_RUNNING)
 			break;
-
-		memset(&cmd, 0, sizeof(cmd));
-		cmd.msec = STEP_MSEC;
-		if (recovery)
-			cmd.angles[YAW] = ANGLE2SHORT(
-			    atan2f(want[1], want[0]) * 180.0f / M_PI);
-		else if (walkoff)
-			cmd.angles[YAW] = ANGLE2SHORT(walkoff_yaw);
-		else
-			cmd.angles[YAW] = ANGLE2SHORT(
-			    atan2f(lipd[1], lipd[0]) * 180.0f / M_PI);
-		cmd.forwardmove = 400;
 		if (!SG_OracleRunWorld(&ph, &cmd, 1))
-		{
-			trial->end = ph;
-			return false;
-		}
-		/* DROP owns a fixed source/lip/flight controller and has no door-wait
-		 * phase. A validated trigger does not make an instant-open rollout a
-		 * proof of that action. */
-		if (ph.door_passed)
-		{
-			trial->end = ph;
-			return false;
-		}
-		/* Recovery is deliberately ground-only. A second ledge, jump, or
-		 * transient loss of support is a different action and needs its own
-		 * graph link rather than being hidden inside this DROP. */
-		if (recovery && !ph.groundentity)
-		{
-			trial->end = ph;
-			return false;
-		}
-		if (walkoff && !ph.groundentity)
-			airborne = true;
-		/* A deep-water proof is health-safe only when the first production
-		 * end-frame water contact is already fully submerged.  At level 1/2,
-		 * P_FallingDamage still applies one-half/one-quarter of the impact;
-		 * the final level-3 destination cannot retroactively make that earlier
-		 * boundary safe.  Ignore transient 25 ms crossings between end frames,
-		 * because production evaluates falling damage on the 100 ms boundary. */
-		if (require_deep_water && airborne &&
-		    ((elapsed + STEP_MSEC) % 100) == 0 &&
-		    ph.waterlevel > 0 && ph.waterlevel < 3)
-		{
-			trial->end = ph;
-			return false;
-		}
-		/* Do not judge a 25 ms contact as a separate landing. Production sends
-		 * all four commands before ClientEndServerFrame evaluates falling damage
-		 * or navigation gets another decision. A contact on substep 1--3 may
-		 * legitimately settle inside the destination envelope after the remaining
-		 * commands. The aligned boundary above is the authority: it applies the
-		 * exact P_FallDelta recovery test, liquid-depth rule, support predicate,
-		 * and contact trace to the state production actually observes. */
-
-		if (ph.origin[2] < dst[2] - 512.0f)
-		{
-			trial->end = ph;
-			return false;
-		}
-		if (ph.groundentity)
+			break;
+		Drop_ReplayPose(&ph, &pose);
+		Drop_ReplayObservation(&ph, require_deep_water,
+			Drop_ReplayContact(&state, &ph, dst), &observation);
+		status = SG_DropReplayPostStep(&state, &pose, &observation);
+		if (ph.groundentity &&
+		    state.progress.reason != SG_REPLAY_REASON_DOOR_PASSED &&
+		    state.progress.reason != SG_REPLAY_REASON_RECOVERY_LOST &&
+		    state.progress.reason != SG_REPLAY_REASON_SHALLOW_WATER_CONTACT &&
+		    state.progress.reason != SG_REPLAY_REASON_BELOW_DESTINATION)
 			trial->landed++;
 	}
+	if (state.progress.reason == SG_REPLAY_REASON_APPROACH_TIMEOUT)
+		trial->fenced = true;
 	trial->end = ph;
-	return false;
+	if (status != SG_REPLAY_ARRIVED)
+		return false;
+	*cost_ms = (short)state.progress.arrival_ms;
+	*exit_speed = state.progress.exit_speed;
+	return true;
 }
 
 /*

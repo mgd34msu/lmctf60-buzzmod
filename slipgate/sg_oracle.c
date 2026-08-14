@@ -21,6 +21,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_replay.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_util.h"
@@ -1579,6 +1580,77 @@ qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite)
 	return true;
 }
 
+static void SG_OracleReplayPose(const sg_phantom_t *ph, sg_replay_pose_t *pose)
+{
+	if (!pose)
+		return;
+	memset(pose, 0, sizeof(*pose));
+	if (!ph)
+		return;
+	pose->pms = ph->pms;
+	VectorCopy(ph->origin, pose->origin);
+	VectorCopy(ph->velocity, pose->velocity);
+	pose->grounded = ph->groundentity;
+	pose->watertype = ph->watertype;
+	pose->waterlevel = ph->waterlevel;
+}
+
+static qboolean SG_OracleReplayContactClear(const vec3_t origin,
+	const vec3_t destination, edict_t *passent)
+{
+	vec3_t from, to;
+	trace_t tr;
+
+	VectorCopy(origin, from);
+	VectorCopy(destination, to);
+	from[2] += 16.0f;
+	to[2] += 16.0f;
+	tr = sg_host.trace(from, NULL, NULL, to, passent, MASK_PLAYERSOLID);
+	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+}
+
+static qboolean SG_OracleSwimArrivalMayTrace(const sg_phantom_t *ph,
+	const vec3_t destination, qboolean destination_water)
+{
+	vec3_t delta;
+
+	if (!ph)
+		return false;
+	VectorSubtract(destination, ph->origin, delta);
+	if (delta[0] * delta[0] + delta[1] * delta[1] >=
+	        SG_REPLAY_ARRIVE_RADIUS * SG_REPLAY_ARRIVE_RADIUS ||
+	    delta[2] <= -SG_REPLAY_ARRIVE_Z ||
+	    delta[2] >= SG_REPLAY_ARRIVE_Z ||
+	    (ph->waterlevel > 0 &&
+	     (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
+		return false;
+	if (destination_water)
+		return ph->waterlevel >= 2 && (ph->watertype & CONTENTS_WATER);
+	return ph->groundentity && ph->waterlevel < 2;
+}
+
+static void SG_OracleSwimObservation(const sg_phantom_t *ph,
+	const vec3_t destination, qboolean destination_water,
+	qboolean check_arrival, edict_t *passent,
+	sg_replay_observation_t *observation)
+{
+	if (!observation)
+		return;
+	memset(observation, 0, sizeof(*observation));
+	if (!ph)
+		return;
+	/* Legacy SG_SwimArrived reaches its trace only at a production boundary
+	 * and only after proximity, liquid, and support all pass.  Preserve that
+	 * host-call cadence; contact is irrelevant at every other reducer step. */
+	observation->contaminated = sg_oracle_contaminated;
+	observation->door_passed = ph->door_passed;
+	observation->contact_clear = true;
+	if (!observation->contaminated && check_arrival &&
+	    SG_OracleSwimArrivalMayTrace(ph, destination, destination_water))
+		observation->contact_clear = SG_OracleReplayContactClear(ph->origin,
+			destination, passent);
+}
+
 /* One exact SWIM witness from an already initialized fixed-point state.
  * Offline generation supplies the seed-at-rest state; live execution supplies
  * the authoritative post-world state that its first ClientThink will consume.
@@ -1588,11 +1660,15 @@ qboolean SG_OracleSwimTraverse(sg_phantom_t *ph, const vec3_t destination,
 	qboolean destination_water, float old_frame_z, sg_swim_proof_t *proof,
 	edict_t *passent, qboolean world_only)
 {
+	sg_swim_replay_spec_t spec;
+	sg_swim_replay_state_t state;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	sg_replay_status_t status;
 	usercmd_t cmd;
 	edict_t *previous_passent;
 	qboolean previous_world_only, previous_contaminated;
 	qboolean result = false;
-	int elapsed;
 
 	if (!ph || !proof)
 		return false;
@@ -1606,51 +1682,38 @@ qboolean SG_OracleSwimTraverse(sg_phantom_t *ph, const vec3_t destination,
 	if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph))
 		goto done;
 
-	for (elapsed = 0; elapsed < 3000; elapsed += SG_SWIM_STEP_MSEC)
+	memset(&spec, 0, sizeof(spec));
+	VectorCopy(destination, spec.destination);
+	spec.destination_water = destination_water;
+	spec.expected_arrival_ms = SG_REPLAY_TIME_DISCOVER;
+	SG_OracleReplayPose(ph, &pose);
+	SG_OracleSwimObservation(ph, destination, destination_water, true,
+		passent, &observation);
+	status = SG_SwimReplayBegin(&state, &spec, &pose, &observation,
+		old_frame_z);
+	while (status == SG_REPLAY_RUNNING)
 	{
-		if ((elapsed % 100) == 0)
-		{
-			qboolean arrived;
-			float speed;
-
-			if (ph->waterlevel > 0 &&
-			    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-				goto done;
-			arrived = SG_SwimArrived(ph->origin, destination,
-			    destination_water, ph->groundentity, ph->watertype,
-			    ph->waterlevel, passent);
-			/* elapsed zero is the pre-command state. Production's first fall
-			 * boundary compares the caller's prior end-frame oldvelocity directly
-			 * with the state after all four 25 ms commands; do not split that
-			 * comparison by advancing old_frame_z here. */
-			if (elapsed > 0)
-			{
-				if (P_FallDelta(old_frame_z, ph->velocity[2], ph->groundentity,
-				                ph->waterlevel) > 30.0f)
-					goto done;
-				old_frame_z = ph->velocity[2];
-			}
-			if (arrived)
-			{
-				if (elapsed <= 0)
-					goto done;
-				speed = sqrtf(ph->velocity[0] * ph->velocity[0] +
-				              ph->velocity[1] * ph->velocity[1]);
-				proof->arrival_ms = elapsed;
-				proof->exit_speed = (byte)(speed / 4.0f > 255.0f ?
-				                           255 : speed / 4.0f);
-				result = true;
-				goto done;
-			}
-		}
-
-		memset(&cmd, 0, sizeof(cmd));
-		cmd.msec = SG_SWIM_STEP_MSEC;
-		if (!SG_SwimCommand(ph->origin, destination, &ph->pms, &cmd))
-			goto done;
+		status = SG_SwimReplayPreStep(&state, &pose, &cmd);
+		if (status != SG_REPLAY_RUNNING)
+			break;
 		SG_OracleRun(ph, &cmd, 1);
-		if (sg_oracle_contaminated)
-			goto done;
+		SG_OracleReplayPose(ph, &pose);
+		SG_OracleSwimObservation(ph, destination, destination_water,
+			state.progress.elapsed_ms + SG_REPLAY_STEP_MS <
+			    SG_REPLAY_SWIM_LIMIT_MS &&
+			((state.progress.elapsed_ms + SG_REPLAY_STEP_MS) %
+			 SG_REPLAY_FRAME_MS) == 0,
+			passent, &observation);
+		status = SG_SwimReplayPostStep(&state, &pose, &observation);
+	}
+	if (status == SG_REPLAY_ARRIVED ||
+	    (status == SG_REPLAY_FAILED &&
+	     state.progress.reason == SG_REPLAY_REASON_DOOR_PASSED &&
+	     state.progress.arrival_ms != SG_REPLAY_TIME_DISCOVER))
+	{
+		proof->arrival_ms = state.progress.arrival_ms;
+		proof->exit_speed = state.progress.exit_speed;
+		result = status == SG_REPLAY_ARRIVED;
 	}
 done:
 	if (ph->door_passed)
@@ -2301,16 +2364,24 @@ restore:
  * the same handed muzzle start the live weapon will use. Return the integer
  * rope length so the prover can make release decisions in the same units.
  */
-int SG_OracleHookStep(sg_phantom_t *ph, const vec3_t bite,
-	const vec3_t view_angles, int hand)
+static int SG_OracleHookPullVelocity(const sg_phantom_t *ph,
+	const vec3_t bite, const vec3_t view_angles, int hand, vec3_t velocity)
 {
 	vec3_t angles, forward, right, muzzle;
-	int rope;
 
 	VectorCopy(view_angles, angles);
 	AngleVectors(angles, forward, right, NULL);
 	CTF_HookMuzzle(ph->origin, 22.0f, hand, forward, right, muzzle);
-	rope = CTF_HookPullVelocity(muzzle, bite, ph->velocity);
+	return CTF_HookPullVelocity(muzzle, bite, velocity);
+}
+
+int SG_OracleHookStep(sg_phantom_t *ph, const vec3_t bite,
+	const vec3_t view_angles, int hand)
+{
+	int rope;
+
+	rope = SG_OracleHookPullVelocity(ph, bite, view_angles, hand,
+		ph->velocity);
 
 	/* write back into the fixed-point state Pmove will read */
 	ph->pms.velocity[0] = (short)(ph->velocity[0] * 8.0f);
@@ -2319,23 +2390,49 @@ int SG_OracleHookStep(sg_phantom_t *ph, const vec3_t bite,
 	return rope;
 }
 
-static qboolean SG_OracleHookReleaseReady(const sg_phantom_t *ph,
-	const vec3_t bite, const vec3_t destination, const vec3_t view_angles,
-	int hand)
+static qboolean SG_OracleSupportedArrivalMayTrace(const sg_phantom_t *ph,
+	const vec3_t destination)
 {
-	vec3_t angles, forward, right, muzzle, velocity, d;
-	int rope;
+	vec3_t delta;
 
-	VectorCopy(view_angles, angles);
-	AngleVectors(angles, forward, right, NULL);
-	CTF_HookMuzzle(ph->origin, 22.0f, hand, forward, right, muzzle);
-	rope = CTF_HookPullVelocity(muzzle, bite, velocity);
-	VectorSubtract(destination, ph->origin, d);
-	return ((d[0] * d[0] + d[1] * d[1] < 80.0f * 80.0f &&
-	         d[2] > -96.0f && d[2] < 96.0f) || rope < 130);
+	if (!ph)
+		return false;
+	VectorSubtract(destination, ph->origin, delta);
+	return delta[0] * delta[0] + delta[1] * delta[1] <
+	           SG_REPLAY_ARRIVE_RADIUS * SG_REPLAY_ARRIVE_RADIUS &&
+	       delta[2] > -SG_REPLAY_ARRIVE_Z &&
+	       delta[2] < SG_REPLAY_ARRIVE_Z &&
+	       (ph->groundentity || ph->waterlevel >= 2) &&
+	       !(ph->waterlevel > 0 &&
+	         (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)));
 }
 
-/* Shared v2 graph-hook witness. The caller supplies a fully initialized
+static void SG_OracleHookObservation(const sg_phantom_t *ph,
+	const vec3_t bite, const vec3_t destination, const vec3_t view_angles,
+	int hand, qboolean check_rope, qboolean check_contact, edict_t *passent,
+	sg_replay_observation_t *observation)
+{
+	vec3_t pull_velocity;
+
+	if (!observation)
+		return;
+	memset(observation, 0, sizeof(*observation));
+	if (!ph)
+		return;
+	observation->contaminated = sg_oracle_contaminated;
+	observation->door_passed = ph->door_passed;
+	observation->contact_clear = true;
+	if (!observation->contaminated && check_contact &&
+	    SG_OracleSupportedArrivalMayTrace(ph, destination))
+		observation->contact_clear = SG_OracleReplayContactClear(ph->origin,
+			destination, passent);
+	observation->hook_rope_valid = check_rope;
+	if (check_rope)
+		observation->hook_rope_length = SG_OracleHookPullVelocity(ph, bite,
+			view_angles, hand, pull_velocity);
+}
+
+/* Shared graph-hook witness. The caller supplies a fully initialized
  * fixed-point phantom. One production pull owns each 100 ms interval; four
  * literal 25 ms zero commands consume it, then release hands off to the same
  * direct-yaw settlement controller runtime executes. */
@@ -2344,15 +2441,19 @@ qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
 	int flight_ms, int settle_limit_ms, float old_frame_z,
 	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only)
 {
+	sg_hook_replay_spec_t spec;
+	sg_hook_replay_state_t state;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	sg_replay_status_t status;
 	usercmd_t cmd;
-	int elapsed, frame_step, settle, flight, release_at = -1;
-	qboolean released = false;
 	qboolean result = false;
 	edict_t *previous_passent;
 	qboolean previous_world_only, previous_contaminated;
-	vec3_t d;
 
-	if (!ph || !proof || flight_ms < 0 || (flight_ms % 100) != 0 ||
+	if (!ph || !proof || flight_ms < SG_REPLAY_FRAME_MS ||
+	    flight_ms > SG_REPLAY_HOOK_FLIGHT_MAX_MS ||
+	    (flight_ms % SG_REPLAY_FRAME_MS) != 0 ||
 	    settle_limit_ms < RUNE_HOOK_DRY_SETTLE_MS ||
 	    settle_limit_ms > RUNE_HOOK_WATER_SETTLE_MS)
 		return false;
@@ -2367,179 +2468,115 @@ qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
 	sg_oracle_contaminated = false;
 	if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph))
 		goto done;
-	/* Online proof runs after this frame's ClientThink but before its end-frame
-	 * falling-damage check. Judge that pending boundary from the caller's real
-	 * oldvelocity, then carry the resulting prior velocity through each later
-	 * hookstate-1 flight frame. Attachment itself is different: the first pull
-	 * overwrites oldvelocity before P_FallingDamage, exactly as below. */
-	if (P_FallDelta(old_frame_z, ph->velocity[2], ph->groundentity,
-	                ph->waterlevel) > 30.0f)
-		goto done;
-	old_frame_z = ph->velocity[2];
-	/* A fired bolt moves only in later 100 ms entity frames. The body submits
-	 * four literal zero 25 ms commands during every outbound frame, including
-	 * the frame in whose entity loop the bolt attaches. */
-	for (flight = 100; flight < flight_ms; flight += 100)
+	memset(&spec, 0, sizeof(spec));
+	VectorCopy(bite, spec.bite);
+	VectorCopy(destination, spec.destination);
+	VectorCopy(view_angles, spec.view_angles);
+	spec.flight_ms = flight_ms;
+	spec.settle_limit_ms = settle_limit_ms;
+	spec.expected_release_ms = SG_REPLAY_TIME_DISCOVER;
+	spec.expected_pull_ms = SG_REPLAY_TIME_DISCOVER;
+	spec.expected_settle_arrival_ms = SG_REPLAY_TIME_DISCOVER;
+	spec.expected_settle_ms = SG_REPLAY_TIME_DISCOVER;
+	SG_OracleReplayPose(ph, &pose);
+	SG_OracleHookObservation(ph, bite, destination, view_angles, hand,
+		false, false, passent, &observation);
+	status = SG_HookReplayBegin(&state, &spec, &pose, &observation,
+		old_frame_z);
+	while (status == SG_REPLAY_RUNNING)
 	{
-		for (frame_step = 0; frame_step < 100; frame_step += 25)
+		qboolean check_contact;
+
+		if (state.phase == SG_HOOK_REPLAY_WAIT_ATTACH)
 		{
-			memset(&cmd, 0, sizeof(cmd));
-			cmd.msec = 25;
-			cmd.angles[PITCH] = ANGLE2SHORT(view_angles[PITCH]) -
-			                         ph->pms.delta_angles[PITCH];
-			cmd.angles[YAW] = ANGLE2SHORT(view_angles[YAW]) -
-			                       ph->pms.delta_angles[YAW];
-			cmd.angles[ROLL] = -ph->pms.delta_angles[ROLL];
-			SG_OracleRun(ph, &cmd, 1);
-			if (sg_oracle_contaminated)
-				goto done;
+			status = SG_HookReplayAttached(&state, &pose);
+			if (status == SG_REPLAY_RUNNING)
+			{
+				proof->attach_pms = state.attach_pms;
+				proof->attach_groundentity = state.attach_grounded;
+				proof->attach_watertype = state.attach_watertype;
+				proof->attach_waterlevel = state.attach_waterlevel;
+			}
+			continue;
 		}
-		if (ph->waterlevel > 0 &&
-		    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-			goto done;
-		if (P_FallDelta(old_frame_z, ph->velocity[2], ph->groundentity,
-		                ph->waterlevel) > 30.0f)
-			goto done;
-		old_frame_z = ph->velocity[2];
-	}
-	proof->attach_pms = ph->pms;
-	proof->attach_groundentity = ph->groundentity;
-	proof->attach_watertype = ph->watertype;
-	proof->attach_waterlevel = ph->waterlevel;
-	/* The entity loop attaches at flight_ms; SG then consumes that frame's
-	 * four zero commands before ClientEndServerFrame applies the first pull. */
-	for (frame_step = 0; frame_step < 100; frame_step += 25)
-	{
-		memset(&cmd, 0, sizeof(cmd));
-		cmd.msec = 25;
-		cmd.angles[PITCH] = ANGLE2SHORT(view_angles[PITCH]) -
-		                         ph->pms.delta_angles[PITCH];
-		cmd.angles[YAW] = ANGLE2SHORT(view_angles[YAW]) -
-		                       ph->pms.delta_angles[YAW];
-		cmd.angles[ROLL] = -ph->pms.delta_angles[ROLL];
+		if (state.phase == SG_HOOK_REPLAY_WAIT_PULL)
+		{
+			SG_OracleHookStep(ph, bite, view_angles, hand);
+			SG_OracleReplayPose(ph, &pose);
+			status = SG_HookReplayPullApplied(&state, &pose);
+			continue;
+		}
+		/* Legacy settlement checks once at each frame start.  Reuse a
+		 * post-command observation within the frame so a failed contact trace
+		 * is not repeated before the next command. */
+		if (state.phase == SG_HOOK_REPLAY_SETTLE &&
+		    state.phase_step == 0 && !state.arrived_in_frame)
+			SG_OracleHookObservation(ph, bite, destination, view_angles, hand,
+				false, true, passent, &observation);
+		status = SG_HookReplayPreStep(&state, &pose, &observation, &cmd);
+		if (status != SG_REPLAY_RUNNING)
+			break;
 		SG_OracleRun(ph, &cmd, 1);
-		if (sg_oracle_contaminated)
-			goto done;
-	}
-	if (ph->waterlevel > 0 &&
-	    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-		goto done;
-	/* A rope already in its release envelope before its first pull is not a
-	 * useful graph traversal and has ambiguous attach-frame semantics. */
-	if (SG_OracleHookReleaseReady(ph, bite, destination, view_angles, hand))
-		goto done;
-	for (elapsed = 0; elapsed < 3000 && !released; )
-	{
-		SG_OracleHookStep(ph, bite, view_angles, hand);
-		old_frame_z = ph->velocity[2];
-		for (frame_step = 0; frame_step < 100; frame_step += 25)
+		SG_OracleReplayPose(ph, &pose);
+		check_contact = state.phase == SG_HOOK_REPLAY_SETTLE &&
+			(!state.arrived_in_frame ||
+			 (state.phase_step + 1 ==
+			      SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS &&
+			  SG_ReplayFallDelta(state.progress.old_frame_z,
+			      pose.velocity[2], pose.grounded, pose.waterlevel) <=
+			      SG_RUNE_PROOF_DAMAGING_FALL_DELTA));
+		SG_OracleHookObservation(ph, bite, destination, view_angles, hand,
+			!sg_oracle_contaminated &&
+			    ((state.phase == SG_HOOK_REPLAY_ATTACH_FRAME &&
+			      state.phase_step + 1 ==
+			          SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS) ||
+			     (state.phase == SG_HOOK_REPLAY_PULL_FRAME &&
+			      !state.release_requested)),
+			check_contact, passent, &observation);
+		/* If substep four first discovers settlement, legacy immediately
+		 * performs a second same-pose trace for terminal persistence after its
+		 * boundary hazard checks.  Preserve that call only when those checks
+		 * can pass; an already-latched arrival used the single trace above as
+		 * its persistence check. */
+		if (!observation.contaminated &&
+		    state.phase == SG_HOOK_REPLAY_SETTLE &&
+		    !state.arrived_in_frame &&
+		    state.phase_step + 1 ==
+		        SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS &&
+		    SG_OracleSupportedArrivalMayTrace(ph, destination) &&
+		    observation.contact_clear &&
+		    SG_ReplayFallDelta(state.progress.old_frame_z,
+		        pose.velocity[2], pose.grounded, pose.waterlevel) <=
+		        SG_RUNE_PROOF_DAMAGING_FALL_DELTA)
+			observation.contact_clear = SG_OracleReplayContactClear(
+				ph->origin, destination, passent);
+		status = SG_HookReplayPostStep(&state, &pose, &observation);
+		if (status == SG_REPLAY_RUNNING && state.release_requested &&
+		    !state.release_applied)
 		{
-			memset(&cmd, 0, sizeof(cmd));
-			cmd.msec = 25;
-			cmd.angles[PITCH] = ANGLE2SHORT(view_angles[PITCH]) -
-			                         ph->pms.delta_angles[PITCH];
-			cmd.angles[YAW] = ANGLE2SHORT(view_angles[YAW]) -
-			                       ph->pms.delta_angles[YAW];
-			cmd.angles[ROLL] = -ph->pms.delta_angles[ROLL];
-			SG_OracleRun(ph, &cmd, 1);
-			elapsed += 25;
-			if (sg_oracle_contaminated)
-				goto done;
-			if (!released && SG_OracleHookReleaseReady(
-			        ph, bite, destination, view_angles, hand))
+			/* ctf_hook_abort clears vertical velocity and oldvelocity Z on
+			 * support.  The pure reducer owns the history; this adapter owns
+			 * the exact external phantom write. */
+			if (ph->groundentity)
 			{
-				released = true;
-				release_at = elapsed;
-				/* ctf_hook_abort clears vertical velocity on ground. This is an
-				 * external state write, so old_pms deliberately remains unchanged. */
-				if (ph->groundentity)
-				{
-					ph->velocity[2] = 0.0f;
-					ph->pms.velocity[2] = 0;
-					old_frame_z = 0.0f; /* ctf_hook_abort also clears oldvelocity z */
-				}
+				ph->velocity[2] = 0.0f;
+				ph->pms.velocity[2] = 0;
 			}
-		}
-		/* P_WorldEffects runs at every production end frame, including while
-		 * attached. Pull velocity suppresses falling damage until release, but
-		 * it cannot make lava/slime harmless. */
-		if (ph->waterlevel > 0 &&
-		    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-			goto done;
-		if (released)
-		{
-			if (P_FallDelta(old_frame_z, ph->velocity[2], ph->groundentity,
-			                ph->waterlevel) > 30.0f)
-				goto done;
-			old_frame_z = ph->velocity[2];
+			SG_OracleReplayPose(ph, &pose);
+			status = SG_HookReplayReleaseApplied(&state, &pose);
 		}
 	}
-	if (!released)
-		goto done;
-
-	for (settle = 0; settle < settle_limit_ms; )
+	if (status == SG_REPLAY_ARRIVED ||
+	    (status == SG_REPLAY_FAILED &&
+	     state.progress.reason == SG_REPLAY_REASON_DOOR_PASSED &&
+	     state.progress.arrival_ms != SG_REPLAY_TIME_DISCOVER))
 	{
-		int arrived_at = -1;
-
-		VectorSubtract(destination, ph->origin, d);
-		if (SG_SupportedArrived(ph->origin, destination, ph->groundentity,
-		                        ph->watertype, ph->waterlevel, passent))
-			arrived_at = settle;
-		for (frame_step = 0; frame_step < 100; frame_step += 25)
-		{
-			memset(&cmd, 0, sizeof(cmd));
-			cmd.msec = 25;
-			if (arrived_at < 0)
-			{
-				VectorSubtract(destination, ph->origin, d);
-				cmd.angles[PITCH] = -ph->pms.delta_angles[PITCH];
-				cmd.angles[YAW] = ANGLE2SHORT(
-				    atan2f(d[1], d[0]) * 180.0f / (float)M_PI) -
-				    ph->pms.delta_angles[YAW];
-				cmd.angles[ROLL] = -ph->pms.delta_angles[ROLL];
-				cmd.forwardmove = 400;
-			}
-			SG_OracleRun(ph, &cmd, 1);
-			settle += 25;
-			if (sg_oracle_contaminated)
-				goto done;
-			if (arrived_at < 0)
-			{
-				VectorSubtract(destination, ph->origin, d);
-				if (SG_SupportedArrived(ph->origin, destination,
-				        ph->groundentity, ph->watertype, ph->waterlevel, passent))
-					arrived_at = settle;
-			}
-		}
-		if (ph->waterlevel > 0 &&
-		    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-			goto done;
-		if (P_FallDelta(old_frame_z, ph->velocity[2], ph->groundentity,
-		                ph->waterlevel) > 30.0f)
-			goto done;
-		old_frame_z = ph->velocity[2];
-		if (arrived_at >= 0)
-		{
-			float speed = sqrtf(ph->velocity[0] * ph->velocity[0] +
-			                    ph->velocity[1] * ph->velocity[1]);
-
-			/* Arrival can retain horizontal speed. The live executor fills the
-			 * remainder of this server frame with zero commands, so the witness
-			 * must still be arrived after those commands rather than merely pass
-			 * through the destination envelope. */
-			VectorSubtract(destination, ph->origin, d);
-			if (!SG_SupportedArrived(ph->origin, destination,
-			        ph->groundentity, ph->watertype, ph->waterlevel, passent))
-				goto done;
-			proof->pull_ms = elapsed;
-			proof->release_ms = release_at;
-			proof->settle_arrival_ms = arrived_at;
-			proof->settle_ms = settle;
-			proof->exit_speed = (byte)(speed / 4.0f > 255.0f ?
-			                           255 : speed / 4.0f);
-			result = true;
-			goto done;
-		}
+		proof->pull_ms = state.pull_ms;
+		proof->release_ms = state.release_ms;
+		proof->settle_arrival_ms = state.settle_arrival_ms;
+		proof->settle_ms = state.settle_ms;
+		proof->exit_speed = state.progress.exit_speed;
+		result = status == SG_REPLAY_ARRIVED;
 	}
 done:
 	if (ph->door_passed)
