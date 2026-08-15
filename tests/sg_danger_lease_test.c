@@ -20,6 +20,9 @@
 
 #define TEST_PATH_BYTES 512U
 
+_Static_assert(sizeof(sg_danger_lease_t) == SG_DANGER_LEASE_OPAQUE_BYTES,
+	"danger lease ABI storage size drift");
+
 static int failures;
 
 #define CHECK(expression) do { \

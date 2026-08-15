@@ -3693,17 +3693,9 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
  */
 static void Prove_RocketJumps(void)
 {
+#if 0
 	int i, j;
 	float ceiling = SG_OracleRocketJumpCeiling();
-
-	/* No supported wire contract has a launch-state controller.  The old proof
-	 * injected an exact rest state and simultaneous rocket+jump, while live
-	 * execution could arm elsewhere in the seed cell and advance without
-	 * confirming a shot.
-	 * Keep the implementation available for a future versioned contract, but
-	 * write no RL_ROCKETJUMP records until generator and executor share one. */
-	sg_host.dprint("rune: rocket jumps disabled (unserialized launch state)\n");
-	return;
 
 	if (gen_num_seeds <= 0)
 		return;
@@ -3802,6 +3794,17 @@ static void Prove_RocketJumps(void)
 	           rj_pairs, rj_tries, rj_noboom, rj_nolift, rj_arrived,
 	           rj_redundant, rj_links,
 	           rj_budget_out ? " (BUDGET EXHAUSTED, pass stopped early)" : "");
+#else
+	/* No supported wire contract has a launch-state controller.  The old proof
+	 * injected an exact rest state and simultaneous rocket+jump, while live
+	 * execution could arm elsewhere in the seed cell and advance without
+	 * confirming a shot.  Keep the implementation above available for a future
+	 * versioned contract, but write no RL_ROCKETJUMP records until generator
+	 * and executor share one. */
+	(void)Reach_Within;
+	(void)ProveRocketJump;
+	sg_host.dprint("rune: rocket jumps disabled (unserialized launch state)\n");
+#endif
 }
 
 /* ======================= end of the ROCKET JUMP BLOCK ================ */
