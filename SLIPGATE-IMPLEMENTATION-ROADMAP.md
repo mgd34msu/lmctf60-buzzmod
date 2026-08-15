@@ -79,8 +79,13 @@ Current phase summary:
   and full frame-capture/replay system.
 - Action metadata is centralized, but execution remains split among historical
   per-action switches rather than one common dispatcher.
-- Live SWIM is migrated to the reducer at `73a2049`; DROP and HOOK live
-  adapters remain to be migrated.
+- Live SWIM is migrated to the reducer at `73a2049`; ordinary live HOOK is
+  migrated and privately accepted at
+  `/var/tmp/lmctf6-hook-live-accept.czK6jN/PRIVATE_LIVE_ACCEPTANCE_FINAL_MANIFEST.txt`
+  (private bot run plus source-free attach/pull/release probes). This is not
+  181-map acceptance, and compound `DOOR_HOOK` remains pending; DROP's live
+  adapter also remains to be migrated. The separately accepted DROP candidate
+  predates this overlapping HOOK migration and must be recomposed and rerun.
 - DROP controller revision 2 freezes the wet/dry contact policy and canonical
   double-yaw byte. Its live-adapter implementation and later 181-map
   acceptance remain pending.
@@ -150,7 +155,9 @@ the reboot. Its observations may guide diagnosis but are not accepted evidence.
 2. Complete the in-implementation live DROP revision-2 adapter under frozen
    action contract `5c64bc3b`, then regenerate v3 artifacts and run the
    181-map acceptance gate; runtime acceptance is not claimed before that.
-3. Migrate live HOOK, then begin the first compound PREOPEN/RIDE vertical slice.
+3. Keep the ordinary live-HOOK migration frozen, then begin the first compound
+   PREOPEN/RIDE vertical slice; `DOOR_HOOK` and the full 181-map gate remain
+   pending.
 
 ### Protected/unrelated state
 

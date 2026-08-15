@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Private integration contract checks for ordinary RL_HOOK.
+
+The engine-only portions of sg_move.c cannot be linked into the host-free
+adapter test.  These checks pin the boundary facts that must remain true when
+the adapter is connected to the live controller: independent legacy command
+ownership, settlement-only contact sampling, legacy gates, tail cadence, and
+the three shelf classes.
+"""
+from pathlib import Path
+
+
+SOURCE = Path(__file__).resolve().parents[1] / "slipgate" / "sg_move.c"
+text = SOURCE.read_text(encoding="utf-8")
+P_VIEW = (Path(__file__).resolve().parents[1] / "p_view.c").read_text(
+    encoding="utf-8"
+)
+ADAPTER = (Path(__file__).resolve().parents[1] / "slipgate" / "sg_hook_live.c").read_text(
+    encoding="utf-8"
+)
+REPLAY = (Path(__file__).resolve().parents[1] / "slipgate" / "sg_replay.c").read_text(
+    encoding="utf-8"
+)
+BOT = (Path(__file__).resolve().parents[1] / "slipgate" / "sg_bot.h").read_text(
+    encoding="utf-8"
+)
+CLIENT = (Path(__file__).resolve().parents[1] / "slipgate" / "sg_client.c").read_text(
+    encoding="utf-8"
+)
+ARACH = (Path(__file__).resolve().parents[1] / "slipgate" / "sg_arach.c").read_text(
+    encoding="utf-8"
+)
+ADAPTER_TEST = (Path(__file__).resolve().parents[1] / "tests" /
+                "sg_hook_live_test.c").read_text(encoding="utf-8")
+
+
+def body(start: str, end: str) -> str:
+    begin = text.index(start)
+    finish = text.index(end, begin)
+    return text[begin:finish]
+
+
+legacy = body("static qboolean Hook_LiveLegacyCommand", "static void Hook_LiveResultLog")
+assert "hook_legacy_command_bot" in legacy
+assert "bot->hook_legacy_settle" in legacy
+assert "bot->hook_legacy_arrived" in legacy
+assert "bot->hook_dest" in legacy
+assert "bot->hook_view" in legacy
+assert "state->" not in legacy
+assert "SG_HookReplaySettled" not in legacy
+assert "bot->hook_replay" not in legacy
+
+observation = body("static void Hook_LiveObservation", "static const sg_bot_t *hook_legacy_command_bot")
+assert "sample_settlement_contact && bot->hook_legacy_settle" in observation
+assert "observation->contact_clear = Hook_SettleArrived(e, bot);" in observation
+assert observation.count("Hook_SettleArrived(e, bot)") == 1
+
+shelves = body("static float Hook_LiveShelfSeconds", "static void Hook_LiveSync")
+assert "SG_HOOK_REPLAY_SETTLE" in shelves and "return 60.0f;" in shelves
+assert "SG_HOOK_REPLAY_WAIT_PULL" in shelves
+assert "SG_HOOK_REPLAY_PULL_FRAME" in shelves
+assert "return 30.0f;" in shelves
+assert "SG_REPLAY_REASON_HAZARDOUS_LIQUID ? 30.0f : 15.0f" in shelves
+
+active = body("static qboolean Hook_LiveActiveFrame", "void SG_HookLiveEndFrame")
+assert "Hook_SourceStateOK(e, bot)" in active
+assert "Hook_LiveWitnessOK(e, bot)" in active
+assert "Hook_AttachmentMaintained(e, bot)" in active
+assert "Hook_LiveTailCommand(bot, frame_settlement" in active
+assert "Hook_LiveTailAdvance(bot, frame_pull_clock);" in active
+assert "if (failed)" in active and "ClientThink(e, &command);" in active
+assert "for (step = 0; step < SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS; step++)" in active
+assert active.count("Hook_LiveTailCommand(bot, frame_settlement") >= 3
+assert "hook_legacy_command_bot = bot;" in active
+assert "hook_legacy_command_bot = NULL;" in active
+assert "release_seen = true;" in active
+assert "bot->hook_legacy_settle = true;" in active
+assert "post_arrival_contact = observation.contact_clear;" in active
+assert "if (frame_settlement && post_arrival_contact)" in active
+assert "(bot->hook_legacy_arrived || post_arrival_contact)" in active
+assert "SG_HookLivePreStep" in active
+assert "SG_HookLiveValidateStoredFinalCommand" in active
+assert "&bot->hook_final_guard" in active
+assert "usercmd_t expected" not in active
+assert "expected = command" not in active
+active_guard = active.index("SG_HookLiveValidateStoredFinalCommand")
+assert active_guard < active.index("ClientThink(e, &command);", active_guard)
+preflight = active[:active.index("if (replay_phase == SG_HOOK_REPLAY_FLIGHT)")]
+assert "Hook_GraphFail(e, bot, 30.0f);" in preflight
+identity = active[:active.index("if (replay_phase == SG_HOOK_REPLAY_FLIGHT)")]
+assert identity.index("Hook_GraphFail(e, bot, 30.0f);") < identity.index(
+    "if (!Hook_LiveIdentityCurrent(e, bot))"
+)
+assert "replay_phase == SG_HOOK_REPLAY_PULL_FRAME" in identity
+assert "Hook_GraphFail(e, bot, 15.0f);" in identity
+
+retire = body("static qboolean Hook_LiveRetireNonRunning", "static qboolean Hook_LiveWaitAttachFrame")
+assert "Hook_LiveSync(bot);" in retire
+
+wait_attach = body("static qboolean Hook_LiveWaitAttachFrame", "static qboolean Hook_LiveActiveFrame")
+assert "entry_pms = e->client->ps.pmove;" in wait_attach
+assert "entry_pose.pms = entry_pms;" in wait_attach
+assert "SG_HookLiveWaitAttachStep" in wait_attach
+assert "SG_HookLiveValidateStoredFinalCommand" in wait_attach
+assert "SG_HookLiveValidateFinalCommand" not in wait_attach
+assert "&bot->hook_final_guard" in wait_attach
+assert "usercmd_t expected" not in wait_attach
+assert "expected = command" not in wait_attach
+wait_guard = wait_attach.index("SG_HookLiveValidateStoredFinalCommand")
+assert wait_guard < wait_attach.index("ClientThink(e, &command);", wait_guard)
+assert "SG_HookLivePostStep" not in wait_attach
+assert "Hook_LiveTailCommand(bot, false, &entry_pms" in wait_attach
+assert "for (step = 0; step < SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS; step++)" in wait_attach
+assert "if (!failed && e->waterlevel > 0" in wait_attach
+assert "Hook_GraphFail(e, bot, 30.0f);" in wait_attach
+assert "Hook_AttachmentOK" not in wait_attach
+
+late_wait = "if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH &&"
+attach_gate = "if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH)"
+late_begin = active.index(late_wait)
+attach_begin = active.index(attach_gate, late_begin + len(late_wait))
+late_branch = active[late_begin:attach_begin]
+attach_branch = active[attach_begin:]
+assert "e->client->hookstate == 1 && e->client->hook" in late_branch
+assert "Hook_SourceStateOK(e, bot)" in late_branch
+assert "Hook_LiveWitnessOK(e, bot)" in late_branch
+assert "SG_TimerReadyStrict(bot->hook_deadline)" in late_branch
+assert "Hook_GraphFail(e, bot, 15.0f);" in late_branch
+assert "return Hook_LiveWaitAttachFrame(bot, e, link_index);" in late_branch
+assert "if (!Hook_AttachmentOK(e, bot))" in attach_branch
+assert "Hook_GraphFail(e, bot, 15.0f);" in attach_branch
+assert active.count("SG_HookLiveAttached(") == 1
+
+bridge = ADAPTER[ADAPTER.index("sg_hook_live_result_t SG_HookLiveWaitAttachStep"):ADAPTER.index("sg_hook_live_result_t SG_HookLiveValidateFinalCommand")]
+assert "replay->phase != SG_HOOK_REPLAY_WAIT_ATTACH" in bridge
+assert "replay->progress.step_pending" in bridge
+assert "SG_HookReplayFixedViewCommand" in bridge
+assert "HookLiveCommandEqual(&shadow, &legacy)" in bridge
+assert "SG_HookReplayPreStep" not in bridge
+assert "SG_HookReplayPostStep" not in bridge
+assert "SG_HookLiveDeactivate" not in bridge
+assert "SG_HookLiveCommandGuardClear(guard);" in bridge
+assert "HookLiveCommandGuardStore(guard, action_link, &shadow);" in bridge
+assert "qboolean SG_HookReplayFixedViewCommand" in REPLAY
+
+prestep_adapter = ADAPTER[
+    ADAPTER.index("sg_hook_live_result_t SG_HookLivePreStep"):
+    ADAPTER.index("sg_hook_live_result_t SG_HookLiveWaitAttachStep")
+]
+assert "SG_HookLiveCommandGuardClear(guard);" in prestep_adapter
+assert "HookLiveCommandGuardStore(guard, action_link, &reducer_command);" in prestep_adapter
+
+reset_adapter = ADAPTER[
+    ADAPTER.index("void SG_HookLiveReset"):
+    ADAPTER.index("void SG_HookLiveDeactivate")
+]
+assert "sg_hook_live_command_guard_t *guard" in reset_adapter
+assert "SG_HookLiveCommandGuardClear(guard);" in reset_adapter
+
+begin_adapter = ADAPTER[
+    ADAPTER.index("sg_hook_live_result_t SG_HookLiveBegin"):
+    ADAPTER.index("sg_hook_live_result_t SG_HookLivePreStep")
+]
+assert "sg_hook_live_command_guard_t *guard" in begin_adapter
+assert "SG_HookLiveCommandGuardClear(guard);" in begin_adapter
+assert "!guard || !HookLiveOwnerValid" in begin_adapter
+
+stored_final = ADAPTER[
+    ADAPTER.index("sg_hook_live_result_t SG_HookLiveValidateStoredFinalCommand"):
+    ADAPTER.index("sg_hook_live_result_t SG_HookLivePostStep")
+]
+assert "!guard || !guard->pending || guard->action_link != action_link" in stored_final
+assert "&guard->expected" in stored_final
+assert stored_final.index("SG_HookLiveValidateFinalCommand") < stored_final.rindex(
+    "SG_HookLiveCommandGuardClear(guard);"
+)
+
+assert "sg_hook_live_command_guard_t hook_final_guard;" in BOT
+assert CLIENT.count("&bot->hook_final_guard);") == 1
+assert ARACH.count("&bot->hook_final_guard);") == 2
+assert "SG_HookLiveCommandGuardClear(&bot->hook_final_guard);" not in CLIENT
+assert "SG_HookLiveCommandGuardClear(&bot->hook_final_guard);" not in ARACH
+assert text.count("Hook_LiveClearFinalGuard(bot);") == 3
+assert ADAPTER_TEST.count("command.buttons = BUTTON_USE;") >= 2
+assert ADAPTER_TEST.count("SG_HookLiveValidateStoredFinalCommand") >= 5
+assert "Reset itself must discard an unconsumed bridge approval" in ADAPTER_TEST
+assert "Begin is also a lifecycle boundary" in ADAPTER_TEST
+
+endframe = body("void SG_HookLiveEndFrame", "static qboolean Hook_LiveBeginAfterFire")
+assert "SG_HookLivePullApplied" in endframe
+assert "Hook_LiveSync(bot)" in endframe
+assert "bot->hook_replay.phase != SG_HOOK_REPLAY_WAIT_PULL" in endframe
+
+pull = P_VIEW.index("Weapon_Hook_Fire(ent);")
+observe = P_VIEW.index("SG_HookLiveEndFrame(ent);", pull)
+assert pull < observe
+
+print("hook_live_integration_contract: ok")

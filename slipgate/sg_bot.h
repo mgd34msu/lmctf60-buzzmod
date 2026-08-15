@@ -9,6 +9,7 @@
 #define SG_BOT_H
 
 #include "sg_drop_live.h"
+#include "sg_hook_live.h"
 
 #define SG_MAXBOTS      16
 
@@ -72,6 +73,23 @@ typedef struct sg_bot_s
 	int			hook_proved_release_ms;
 	int			hook_proved_arrival_ms;
 	int			hook_proved_settle_ms;
+
+	/* Ordinary RL_HOOK is reducer-owned from successful fire through the
+	 * terminal settlement frame.  Keep the live bolt identity separately from
+	 * the graph link: a recycled or externally-aborted hook must not inherit
+	 * this witness. */
+	sg_hook_replay_state_t hook_replay;
+	qboolean	hook_replay_active;
+	int		hook_replay_link;
+	/* Adapter-approved command held across all later host writers until the
+	 * final comparison immediately before ClientThink. */
+	sg_hook_live_command_guard_t hook_final_guard;
+	edict_t		*hook_entity;
+	/* Host-owned command history for the independent legacy differential.
+	 * It deliberately does not mirror reducer phase: release completes the
+	 * current fixed-view 100 ms frame before this switches to settlement. */
+	qboolean	hook_legacy_settle;
+	qboolean	hook_legacy_arrived;
 
 	/* a link chosen for seconds while the bot goes nowhere is a link the
 	 * body cannot execute, whatever the rune thinks -- shelve it awhile.
