@@ -4,11 +4,13 @@ Status: active
 
 Working branch: `slipgate`
 
-Integration target: `main` by fast-forward after the complete acceptance gate
+Integration policy: merge proven milestones to `main` only after green CI, then
+publish and independently verify a GitHub release; final project completion
+remains a later milestone.
 
 Git identity: `Mike Davis <mgd34msu@gmail.com>`
 
-Last updated: 2026-08-14
+Last updated: 2026-08-15
 
 This is the working source of truth for correcting and extending SLIPGATE. It
 combines both approved scopes:
@@ -21,7 +23,45 @@ combines both approved scopes:
 The order is deliberate. Tactical variation must never be allowed to hide or
 compensate for an invalid movement graph.
 
-## Restart checkpoint — 2026-08-14 10:55 CDT
+## Current checkpoint — Release 6, 2026-08-15
+
+The project remains active, but the completed milestones are no longer held
+only on the long-running development branch:
+
+- Release 5 and Release 6 were each merged to `main` only after their exact
+  branch and merge commits passed Linux, Windows x86, and Windows x64 CI.
+- `release-6` points to main merge commit
+  `ae0e44795d84bf071f700ae89a12f9842a30e602`. Its tag workflow, including the
+  release-publication job, passed; the public release is non-draft and
+  non-prerelease; and all downloaded assets verified against `SHA256SUMS`.
+- Ordinary live HOOK is committed at `75188dd` and included in Release 6. Its
+  isolated reducer tests, full GCC/Clang builds, link checks, private bot run,
+  and source-free attach/pull/release probes passed. Compound HOOK actions are
+  still pending.
+- DROP revision 2 is committed, but its focused live acceptance harness was
+  built before the overlapping HOOK migration. Live refutation also exposed
+  and corrected private acceptance-oracle modeling for normal frame-end
+  `oldvelocity`, PMove body, and next-frame `old_origin` rollover. That proof
+  is explicitly PRE-HOOK until it is recomposed on the Release-6 source tree.
+
+The active order is therefore:
+
+1. Finish independent review of the corrected PRE-HOOK DROP oracle.
+2. Recompose DROP acceptance on the exact Release-6 source, preserving both
+   controllers' ownership and final-command guards; rerun the complete
+   compiler, sanitizer, link, and refutation matrix.
+3. Run the six focused live A/B DROP cases from that one composite freeze.
+4. Build a fresh source/module/fingerprint closure and run all 181 maps. The
+   accepted `ae82238` control archive remains evidence, not a resumable current
+   corpus.
+5. Only after mechanical acceptance, proceed to PREOPEN/RIDE and compound
+   `DOOR_DROP`, `DOOR_SWIM`, and `DOOR_HOOK`, then the human-like tactical
+   program.
+
+No focused private acceptance artifact, old link ID, or old corpus fingerprint
+is promoted merely because it passed against an earlier source snapshot.
+
+## Historical restart checkpoint — 2026-08-14 10:55 CDT
 
 ### Project-level status
 
