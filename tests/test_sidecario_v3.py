@@ -96,7 +96,7 @@ class SidecarCodecTests(unittest.TestCase):
             num_links=2,
             rune_payload_crc32=0xE3D0AC5F,
             action_contract_crc32=contract.CONTRACT_CRC32,
-            rune_header_crc32=0xDDC378D1,
+            rune_header_crc32=0x887334B9,
         )
 
     def assert_symbol(self, symbol, operation):
@@ -123,7 +123,7 @@ class SidecarCodecTests(unittest.TestCase):
         self.assertEqual(48, sidecario.HEADER_STRUCT.size)
         self.assertEqual(50, len(self.golden_hmn))
         self.assertEqual(
-            "d1fea1818e96c0e75ddf6f722abab22c4d2ea5523dcb5f09fe1faa20259faf81",
+            "9be29afd2eae1cc26d6c18f1caf9ea81559c6d830aa233f6633d27fac8b893a7",
             hashlib.sha256(self.golden_hmn).hexdigest(),
         )
         self.assertEqual(b"HMN3", self.golden_hmn[:4])
@@ -131,8 +131,8 @@ class SidecarCodecTests(unittest.TestCase):
         self.assertEqual(
             (
                 0x334E4D48, 1, 48, 3, 1, 1, 0, 2, 2,
-                0xE3D0AC5F, contract.CONTRACT_CRC32, 0xDDC378D1,
-                2, 0x9B27CEBA, 0xD29491BD,
+                0xE3D0AC5F, 0x5C64BC3B, 0x887334B9,
+                2, 0x9B27CEBA, 0xCE8382BD,
             ),
             sidecario.HEADER_STRUCT.unpack_from(self.golden_hmn),
         )
@@ -275,7 +275,7 @@ class SidecarCodecTests(unittest.TestCase):
 
     def test_expected_binding_mismatch_is_rejected(self):
         other = sidecario.RuneBindingV3(
-            3, 2, 2, 0x11111111, contract.CONTRACT_CRC32, 0xDDC378D1
+            3, 2, 2, 0x11111111, contract.CONTRACT_CRC32, 0x887334B9
         )
         self.assert_symbol(
             "SCD_RUNE_PAYLOAD_MISMATCH",

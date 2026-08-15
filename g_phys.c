@@ -1,6 +1,7 @@
 // g_phys.c
 
 #include "g_local.h"
+#include "slipgate/sg_local.h"
 
 /*
 
@@ -465,6 +466,11 @@ qboolean SV_Push (edict_t *pusher, vec3_t move, vec3_t amove)
 			if (!SV_TestEntityPosition (check))
 				continue;
 		}
+		/* This is the authoritative contact point: riders necessarily touch the
+		 * pusher, and other candidates survived the final-position collision
+		 * test.  Latch before displacement so both successful and rolled-back
+		 * pushes are observed exactly once. */
+		SG_NoteDropSolidContact(pusher, check);
 
 		if ((pusher->movetype == MOVETYPE_PUSH) || (check->groundentity == pusher))
 		{

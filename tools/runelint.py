@@ -334,6 +334,7 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None,
 
         self_links = zero_cost = huge_cost = bad_idx = 0
         bad_action = bad_prov = bad_anchor = bad_rj = bad_drop = 0
+        bad_drop_cost = 0
         bad_water_dry_action = bad_water_special = bad_hook_schema = 0
         bad_swim = bad_momentum_jump = bad_unsupported_rj = 0
         bad_action_anchor = bad_tombstone_link = 0
@@ -392,6 +393,11 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None,
                         abs(dz - 8.0) > 0.25 or
                         abs(yaw_delta) > 360.0 / 256.0):
                     bad_drop += 1
+            if (runtime_v3 and ver == RUNE_V3_VERSION and act == RL_DROP and
+                    (cost < contract.RUNE_PROOF_SERVER_FRAME_MS or
+                     cost >= contract.RUNE_PROOF_DROP_TOTAL_MS or
+                     cost % contract.RUNE_PROOF_SERVER_FRAME_MS != 0)):
+                bad_drop_cost += 1
             if (enforce_controller_laws and
                     act in (RL_RUN, RL_JUMP, RL_DOOR) and
                     ((seeds[fr][4] | seeds[to][4]) & RSF_WATER)):
@@ -617,6 +623,8 @@ def lint(path, runtime_v2=False, gamedir=None, objective_root_indices=None,
         if bad_drop:
             flaws.append(f'{version_label} drops with invalid lip control: '
                          f'{bad_drop}')
+        if bad_drop_cost:
+            flaws.append(f'v3 drops with invalid replay cost: {bad_drop_cost}')
         if bad_water_dry_action:
             flaws.append(f'{version_label} RUN/JUMP/DOOR links with water '
                          f'endpoint: '

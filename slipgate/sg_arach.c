@@ -55,6 +55,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
@@ -2190,6 +2191,8 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->drop_walkoff = false;
 	bot->drop_airborne = false;
 	bot->drop_recover = false;
+	SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+	    &bot->drop_replay_link, &bot->drop_live_events);
 	SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
 	    &bot->swim_replay_link, &bot->swim_validated,
 	    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
@@ -2740,6 +2743,8 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->drop_walkoff = false;
 		bot->drop_airborne = false;
 		bot->drop_recover = false;
+		SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+		    &bot->drop_replay_link, &bot->drop_live_events);
 		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
 		    &bot->swim_replay_link, &bot->swim_validated,
 		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
@@ -2793,6 +2798,8 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->drop_walkoff = false;
 		bot->drop_airborne = false;
 		bot->drop_recover = false;
+		SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+		    &bot->drop_replay_link, &bot->drop_live_events);
 		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
 		    &bot->swim_replay_link, &bot->swim_validated,
 		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);

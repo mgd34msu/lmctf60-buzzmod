@@ -3023,6 +3023,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 					break;
 			if (j != i)
 				continue;	// duplicated
+			SG_NoteDropSolidContact(other, ent);
 			if (!other->touch)
 				continue;
 			other->touch (other, ent, NULL, NULL);

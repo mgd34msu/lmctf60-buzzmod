@@ -134,6 +134,8 @@ _PINNED_PROOF_LAW = {
     "gravity_integral_required": 1, "airaccelerate_zero_required": 1,
     "maxvelocity_min": 800, "funky_gravity_required": 0,
     "pmove_substep_ms": 25, "server_frame_ms": 100,
+    "drop_approach_ms": 2500, "drop_travel_ms": 2000,
+    "drop_total_ms": 4500,
     "top_window_margin_ms": 100, "door_anchor_scale": 8,
     "world_fixed_scale": 8, "world_fixed_min": -32768,
     "world_fixed_max": 32767, "angle_short_units": 65536,
@@ -167,7 +169,7 @@ _PINNED_ACTION_FIELDS = (
 _PINNED_ACTION_ROWS = (
     (1, 0, 15, 1, 0,   1, 1, 0, 0, 0, 0, 0, 0, 0,   1),
     (1, 0, 15, 1, 3,   1, 0, 0, 0, 1, 0, 1, 0, 0,   1),
-    (1, 0, 1,  1, 3,   2, 2, 0, 0, 2, 0, 2, 1, 150, 1),
+    (1, 0, 1,  1, 3,   2, 2, 0, 0, 2, 0, 2, 1, 150, 2),
     (1, 0, 1,  1, 1,   4, 3, 0, 0, 3, 0, 3, 2, 0,   1),
     (1, 0, 1,  1, 33,  3, 0, 0, 0, 4, 0, 4, 0, 0,   1),
     (1, 3, 8,  1, 37,  0, 4, 0, 0, 5, 0, 5, 0, 0,   1),
@@ -373,6 +375,29 @@ def _validate_pinned_integer_object(value, expected, where: str):
             _fail(f"{where}.{key}", f"must be pinned to {pinned}")
 
 
+def _validate_drop_timing_law(proof_law):
+    where = "contract.proof_law"
+    server_frame_ms = _require_int(
+        proof_law["server_frame_ms"], f"{where}.server_frame_ms", 1
+    )
+    timings = {}
+    for key in ("drop_approach_ms", "drop_travel_ms", "drop_total_ms"):
+        value = _require_int(proof_law[key], f"{where}.{key}", 1)
+        if value % server_frame_ms != 0:
+            _fail(
+                f"{where}.{key}",
+                f"must be a multiple of server_frame_ms ({server_frame_ms})",
+            )
+        timings[key] = value
+    if timings["drop_approach_ms"] + timings["drop_travel_ms"] != timings[
+        "drop_total_ms"
+    ]:
+        _fail(
+            where,
+            "drop_approach_ms + drop_travel_ms must equal drop_total_ms",
+        )
+
+
 def _validate_action_cycles(actions):
     by_id = {action["id"]: action for action in actions}
     for action in actions:
@@ -414,6 +439,7 @@ def validate_document(document):
                                     "contract.wire")
     _validate_pinned_integer_object(contract["proof_law"], _PINNED_PROOF_LAW,
                                     "contract.proof_law")
+    _validate_drop_timing_law(contract["proof_law"])
     enum_names = (
         "provenances", "modes", "endpoint_policies", "anchor_policies",
         "control_policies", "mechanism_policies", "field_bias_policies",

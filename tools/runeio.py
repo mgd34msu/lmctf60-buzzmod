@@ -685,6 +685,15 @@ def _validate_graph(
                 contract.RLW_BAD_LINK_RECORD,
                 f"link {index} has cost {link.cost_ms}",
             )
+        if link.action == contract.RL_DROP and (
+            link.cost_ms < contract.RUNE_PROOF_SERVER_FRAME_MS or
+            link.cost_ms >= contract.RUNE_PROOF_DROP_TOTAL_MS or
+            link.cost_ms % contract.RUNE_PROOF_SERVER_FRAME_MS != 0
+        ):
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has noncanonical DROP cost {link.cost_ms}",
+            )
         if link.reserved != 0:
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD,

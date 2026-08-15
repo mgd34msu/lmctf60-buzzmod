@@ -905,7 +905,8 @@ static qboolean SG_OracleSoundOnlyTargets(edict_t *source, int depth)
 	    (source->killtarget && source->killtarget[0]) ||
 	    !source->target || !source->target[0])
 		return false;
-	while ((target = G_Find(target, FOFS(targetname), source->target)) != NULL)
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        source->target)) != NULL)
 	{
 		if (!target->inuse || !target->classname)
 			return false;
@@ -1064,7 +1065,8 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 	    (trigger->killtarget && trigger->killtarget[0]) ||
 	    !trigger->target || !trigger->target[0])
 		return false;
-	while ((target = G_Find(target, FOFS(targetname), trigger->target)) != NULL)
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        trigger->target)) != NULL)
 	{
 		if (!target->inuse || !target->classname)
 			return false;
@@ -1092,6 +1094,105 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 qboolean SG_DeclaredDoorActivatorSafe(edict_t *trigger)
 {
 	return SG_OracleDeclaredActivatorSafe(trigger);
+}
+
+/* Classify the exact trigger selected by the real host's G_TouchTriggers.
+ * This is observation only: it invokes no touch/use chain and performs no
+ * trace.  Keep the exemptions identical to the ordinary world-only oracle so
+ * live replay does not invent a stricter trigger policy. */
+qboolean SG_OracleReplayTriggerEvents(edict_t *trigger,
+	qboolean *contaminated, qboolean *door_passed)
+{
+	if (!trigger || !contaminated || !door_passed)
+		return false;
+	*contaminated = false;
+	*door_passed = false;
+	if (!trigger->inuse || !trigger->touch)
+		return false;
+	if (trigger->touch == Touch_Item)
+		return true;
+	if (SG_OracleDeclaredActivatorSafe(trigger))
+		return true;
+	if (trigger->touch == Touch_Multi &&
+	    SG_OracleSoundOnlyTargets(trigger, 0))
+		return true;
+	*contaminated = true;
+	return true;
+}
+
+/* Observe an actual live 25 ms body segment against the same complete door
+ * sweeps used by the offline oracle.  This is analytic geometry only: it does
+ * not trace, arm, move, touch, or use any entity.  A safe activator overlap is
+ * clean until the body genuinely enters one of its door sweeps. */
+qboolean SG_OracleReplayDoorPassage(const vec3_t from, const vec3_t to)
+{
+	int i;
+
+	if (!from || !to)
+		return false;
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		edict_t *trigger = &g_edicts[i];
+
+		if (SG_OracleDeclaredActivatorSafe(trigger) &&
+		    SG_DeclaredDoorCrossesSweep(trigger, from, to))
+			return true;
+	}
+	return false;
+}
+
+/* Snapshot the real linked source pose before DROP can submit its first
+ * command.  This mirrors G_TouchTriggers and the world-only oracle's solid
+ * overlap query, but invokes no touch, use, trace, or entity side effect. */
+qboolean SG_OracleReplaySourceEvents(edict_t *ent,
+	qboolean *contaminated, qboolean *door_passed)
+{
+	edict_t *touch[MAX_EDICTS];
+	int i, num;
+
+	if (!ent || !contaminated || !door_passed || !sg_host.box_edicts)
+		return false;
+	*contaminated = false;
+	*door_passed = false;
+	num = sg_host.box_edicts(ent->absmin, ent->absmax, touch,
+	                          MAX_EDICTS, AREA_TRIGGERS);
+	if (num < 0 || num > MAX_EDICTS)
+		return false;
+	for (i = 0; i < num; i++)
+	{
+		qboolean trigger_contaminated, trigger_door;
+		edict_t *hit = touch[i];
+
+		if (!hit || !hit->inuse || !hit->touch)
+			continue;
+		if (!SG_OracleReplayTriggerEvents(hit, &trigger_contaminated,
+		        &trigger_door))
+			return false;
+		if (trigger_contaminated)
+			*contaminated = true;
+		if (trigger_door)
+			*door_passed = true;
+	}
+	num = sg_host.box_edicts(ent->absmin, ent->absmax, touch,
+	                          MAX_EDICTS, AREA_SOLID);
+	if (num < 0 || num > MAX_EDICTS)
+		return false;
+	for (i = 0; i < num; i++)
+	{
+		edict_t *hit = touch[i];
+
+		if (!hit || !hit->inuse || hit == ent || hit == g_edicts ||
+		    SG_ImmutableSupport(hit))
+			continue;
+		if (hit->classname &&
+		    strncmp(hit->classname, "func_door", 9) == 0)
+			*door_passed = true;
+		else
+			*contaminated = true;
+	}
+	if (SG_OracleReplayDoorPassage(ent->s.origin, ent->s.origin))
+		*door_passed = true;
+	return true;
 }
 
 int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger)

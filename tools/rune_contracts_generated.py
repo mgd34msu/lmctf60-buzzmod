@@ -1,8 +1,8 @@
 """Generated rune contract metadata. DO NOT EDIT."""
 
 CONTRACT_SCHEMA_VERSION = 1
-CONTRACT_CRC32 = 0xe9545af7
-CONTRACT_SHA256 = 'bce304d641442fed0d7563536cb371830d85bbb91788b7bcaae3f2c439385a76'
+CONTRACT_CRC32 = 0x5c64bc3b
+CONTRACT_SHA256 = 'fd7b4c2288845f9c3448aa82aeabfd8921feb5c943a6ac2f4b8abacd49f36ece'
 ACTION_COUNT = 12
 PROVENANCE_COUNT = 5
 COMPOUND_MODE_COUNT = 3
@@ -37,6 +37,9 @@ RUNE_PROOF_MAXVELOCITY_MIN = 800
 RUNE_PROOF_FUNKY_GRAVITY_REQUIRED = 0
 RUNE_PROOF_PMOVE_SUBSTEP_MS = 25
 RUNE_PROOF_SERVER_FRAME_MS = 100
+RUNE_PROOF_DROP_APPROACH_MS = 2500
+RUNE_PROOF_DROP_TRAVEL_MS = 2000
+RUNE_PROOF_DROP_TOTAL_MS = 4500
 RUNE_PROOF_TOP_WINDOW_MARGIN_MS = 100
 RUNE_PROOF_DOOR_ANCHOR_SCALE = 8
 RUNE_PROOF_WORLD_FIXED_SCALE = 8
@@ -213,7 +216,7 @@ RLW_BAD_SIDECAR = 26
 ACTIONS = (
     {'id': 0, 'symbol': 'RL_RUN', 'name': 'RUN', 'short_name': 'RUN', 'color': '#9a9a9a', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 15, 'mode_mask': 1, 'trait_mask': 0, 'endpoint_policy': 1, 'suffix_anchor_policy': 1, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 0, 'mechanism_policy': 0, 'effective_suffix': 0, 'field_bias_policy': 0, 'field_bias_ms': 0, 'controller_revision': 1},
     {'id': 1, 'symbol': 'RL_JUMP', 'name': 'JUMP', 'short_name': 'JUMP', 'color': '#00c8d7', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 15, 'mode_mask': 1, 'trait_mask': 3, 'endpoint_policy': 1, 'suffix_anchor_policy': 0, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 1, 'mechanism_policy': 0, 'effective_suffix': 1, 'field_bias_policy': 0, 'field_bias_ms': 0, 'controller_revision': 1},
-    {'id': 2, 'symbol': 'RL_DROP', 'name': 'DROP', 'short_name': 'DROP', 'color': '#e0c000', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 1, 'mode_mask': 1, 'trait_mask': 3, 'endpoint_policy': 2, 'suffix_anchor_policy': 2, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 2, 'mechanism_policy': 0, 'effective_suffix': 2, 'field_bias_policy': 1, 'field_bias_ms': 150, 'controller_revision': 1},
+    {'id': 2, 'symbol': 'RL_DROP', 'name': 'DROP', 'short_name': 'DROP', 'color': '#e0c000', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 1, 'mode_mask': 1, 'trait_mask': 3, 'endpoint_policy': 2, 'suffix_anchor_policy': 2, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 2, 'mechanism_policy': 0, 'effective_suffix': 2, 'field_bias_policy': 1, 'field_bias_ms': 150, 'controller_revision': 2},
     {'id': 3, 'symbol': 'RL_HOOK', 'name': 'HOOK', 'short_name': 'HOOK', 'color': '#ff8c1a', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 1, 'mode_mask': 1, 'trait_mask': 1, 'endpoint_policy': 4, 'suffix_anchor_policy': 3, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 3, 'mechanism_policy': 0, 'effective_suffix': 3, 'field_bias_policy': 2, 'field_bias_ms': 0, 'controller_revision': 1},
     {'id': 4, 'symbol': 'RL_SWIM', 'name': 'SWIM', 'short_name': 'SWIM', 'color': '#3d7dff', 'runtime_supported': 1, 'default_provenance': 0, 'provenance_mask': 1, 'mode_mask': 1, 'trait_mask': 33, 'endpoint_policy': 3, 'suffix_anchor_policy': 0, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 4, 'mechanism_policy': 0, 'effective_suffix': 4, 'field_bias_policy': 0, 'field_bias_ms': 0, 'controller_revision': 1},
     {'id': 5, 'symbol': 'RL_LIFT', 'name': 'LIFT', 'short_name': 'LIFT', 'color': '#8f5cff', 'runtime_supported': 1, 'default_provenance': 3, 'provenance_mask': 8, 'mode_mask': 1, 'trait_mask': 37, 'endpoint_policy': 0, 'suffix_anchor_policy': 4, 'preopen_mechanism_anchor_policy': 0, 'ride_mechanism_anchor_policy': 0, 'control_policy': 5, 'mechanism_policy': 0, 'effective_suffix': 5, 'field_bias_policy': 0, 'field_bias_ms': 0, 'controller_revision': 1},

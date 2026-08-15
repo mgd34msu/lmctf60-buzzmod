@@ -2,6 +2,7 @@
 
 #include "g_local.h"
 #include "g_ctffunc.h"
+#include "slipgate/sg_local.h"
 
 
 void G_ProjectSource (vec3_t point, vec3_t distance, vec3_t forward, vec3_t right, vec3_t result)
@@ -518,6 +519,9 @@ void	G_TouchTriggers (edict_t *ent)
 			continue;
 		if (!hit->touch)
 			continue;
+		/* Observation only: DROP consumes this exact host-selected overlap at
+		 * its next 25 ms reducer boundary; the real touch still runs once below. */
+		SG_NoteDropTriggerContact(hit, ent);
 		hit->touch (hit, ent, NULL, NULL);
 	}
 }

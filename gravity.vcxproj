@@ -362,6 +362,7 @@
     <ClCompile Include="slipgate\sg_rune_install.c" />
     <ClCompile Include="slipgate\sg_rune_proof.c" />
     <ClCompile Include="slipgate\sg_replay.c" />
+    <ClCompile Include="slipgate\sg_drop_live.c" />
     <ClCompile Include="slipgate\sg_swim_live.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_cvars.c" />
@@ -440,6 +441,7 @@
     <ClInclude Include="slipgate\sg_rune_install.h" />
     <ClInclude Include="slipgate\sg_rune_proof.h" />
     <ClInclude Include="slipgate\sg_replay.h" />
+    <ClInclude Include="slipgate\sg_drop_live.h" />
     <ClInclude Include="slipgate\sg_swim_live.h" />
     <ClInclude Include="ui_stats.h" />
     <ClInclude Include="ui_text.h" />

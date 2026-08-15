@@ -175,7 +175,7 @@ static void AllActionsGraph(sg_rune_v3_seed_t seeds[TEST_SEEDS],
 	links[2].heading = 0;
 	links[2].heading_slack = SG_RUNE_PROOF_DROP_CONTROL_MARKER;
 	links[2].exit_speed = 20;
-	links[2].cost_ms = 250;
+	links[2].cost_ms = 300;
 	SetVector(links[2].suffix_anchor, 192.0f, 0.0f, 8.0f);
 
 	links[3].source = 3;
@@ -547,6 +547,28 @@ static void TestLiteralControlLaws(void)
 	changed.provenance = RL_DECLARED;
 	CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS, &changed) ==
 		RLR_PROVENANCE_FORBIDDEN);
+	{
+		static const int16_t rejected[] = { 99, 101, 125, 4500 };
+		static const int16_t accepted[] = { 100, 4400 };
+		size_t cost_index;
+
+		for (cost_index = 0;
+		     cost_index < sizeof(rejected) / sizeof(rejected[0]); cost_index++)
+		{
+			changed = links[2];
+			changed.cost_ms = rejected[cost_index];
+			CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS,
+				&changed) == RLR_BAD_COST);
+		}
+		for (cost_index = 0;
+		     cost_index < sizeof(accepted) / sizeof(accepted[0]); cost_index++)
+		{
+			changed = links[2];
+			changed.cost_ms = accepted[cost_index];
+			CHECK(SG_RuneV3ValidateLiteralLink(seeds, TEST_SEEDS,
+				&changed) == RLR_OK);
+		}
+	}
 
 	changed = links[3];
 	changed.min_speed = 1;
@@ -760,6 +782,25 @@ static void TestActionAndStructuralFailures(void)
 		FixPayloadCRC(changed, sizeof(changed));
 		ExpectPatchedFailure(changed, &identity, RLW_BAD_LINK_RECORD,
 			RLR_PROVENANCE_FORBIDDEN, SG_RUNE_LOAD_STAGE_LINK, 4);
+	}
+	{
+		static const uint16_t rejected_drop_costs[] =
+		{
+			99, 101, 125, 4500
+		};
+		size_t cost_index;
+
+		for (cost_index = 0;
+		     cost_index < sizeof(rejected_drop_costs) /
+		         sizeof(rejected_drop_costs[0]); cost_index++)
+		{
+			memcpy(changed, base, sizeof(changed));
+			PutU16(changed + LINK_OFFSET(2) + 14U,
+				rejected_drop_costs[cost_index]);
+			FixPayloadCRC(changed, sizeof(changed));
+			ExpectPatchedFailure(changed, &identity, RLW_BAD_LINK_RECORD,
+				RLR_BAD_COST, SG_RUNE_LOAD_STAGE_LINK, 2);
+		}
 	}
 
 	/* Structurally valid compound records must still fail the literal gate. */

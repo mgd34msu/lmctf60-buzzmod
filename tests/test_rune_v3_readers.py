@@ -231,6 +231,7 @@ class RuneV3ReaderTests(unittest.TestCase):
             self.assertEqual(3, graph["version"])
             self.assertEqual(0x12345678, graph["bsp_checksum"])
             self.assertEqual(0x9ABCDEF0, graph["entity_crc32"])
+            self.assertEqual(0x5C64BC3B, graph["action_contract_crc32"])
             self.assertEqual(contract.CONTRACT_CRC32,
                              graph["action_contract_crc32"])
             self.assertEqual(650.0, graph["physics"]["gravity"])
@@ -256,7 +257,7 @@ class RuneV3ReaderTests(unittest.TestCase):
             self.assertIn("D_DROP=1", output)
             self.assertIn("bsp=0x12345678", output)
             self.assertIn("entity=0x9abcdef0", output)
-            self.assertIn("action_contract=0xe9545af7", output)
+            self.assertIn("action_contract=0x5c64bc3b", output)
             self.assertIn("gravity=650", output)
 
     def test_format_probe_and_decode_use_one_atomic_snapshot(self):
@@ -494,6 +495,57 @@ class RuneV3ReaderTests(unittest.TestCase):
                     flaws,
                     output,
                 )
+
+    def test_runtime_v3_drop_cost_law_does_not_change_legacy_v2(self):
+        seeds = [
+            (0.0, 0.0, 0.0, 0, 0),
+            (128.0, 0.0, 0.0, 0, 0),
+        ]
+
+        def loaded(version, cost_ms):
+            links = [
+                (0, 1, contract.RL_DROP, contract.RL_PROVEN,
+                 0, 0, runelint.RUNE_DROP_CONTROL_MARKER, 0, cost_ms,
+                 64.0, 0.0, 8.0),
+                (1, 0, contract.RL_RUN, contract.RL_PROVEN,
+                 0, 0, 0, 0, 100, 0.0, 0.0, 0.0),
+            ]
+            return (
+                runelint.RUNE_MAGIC, version, "dropcost", 2, 2,
+                seeds, links, [],
+            )
+
+        for cost_ms in (99, 101, 125, 4500):
+            with self.subTest(runtime_v3_cost=cost_ms), mock.patch.object(
+                    runelint, "_load_with_metadata",
+                    return_value=(loaded(contract.RUNE_V3_VERSION, cost_ms), None)):
+                inspection, inspection_output = _lint("dropcost.rune")
+                self.assertEqual([], inspection, inspection_output)
+                flaws, output = _lint(
+                    "dropcost.rune", runtime_v3=True,
+                    objective_root_indices=(0, 1),
+                )
+                self.assertEqual(
+                    ["v3 drops with invalid replay cost: 1"], flaws, output
+                )
+        for cost_ms in (100, 4400):
+            with self.subTest(runtime_v3_accepted=cost_ms), mock.patch.object(
+                    runelint, "_load_with_metadata",
+                    return_value=(loaded(contract.RUNE_V3_VERSION, cost_ms), None)):
+                flaws, output = _lint(
+                    "dropcost.rune", runtime_v3=True,
+                    objective_root_indices=(0, 1),
+                )
+                self.assertEqual([], flaws, output)
+
+        with mock.patch.object(
+                runelint, "_load_with_metadata",
+                return_value=(loaded(runelint.RUNE_VERSION, 125), None)):
+            flaws, output = _lint(
+                "dropcost.rune", runtime_v2=True,
+                objective_root_indices=(0, 1),
+            )
+        self.assertEqual([], flaws, output)
 
     def test_corruption_and_exact_map_identity_fail_in_all_readers(self):
         with tempfile.TemporaryDirectory() as temporary:

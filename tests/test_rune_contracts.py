@@ -116,6 +116,30 @@ class RuneContractTests(unittest.TestCase):
         for key, value in self.pins["proof_law"].items():
             self.assertEqual(value, proof[key])
             self.assertEqual(value, getattr(GENERATED, f"RUNE_PROOF_{key.upper()}"))
+        self.assertEqual(
+            proof["drop_total_ms"],
+            proof["drop_approach_ms"] + proof["drop_travel_ms"],
+        )
+        for key in ("drop_approach_ms", "drop_travel_ms", "drop_total_ms"):
+            self.assertGreater(proof[key], 0)
+            self.assertEqual(0, proof[key] % proof["server_frame_ms"])
+
+    def test_drop_timing_law_rejects_nonpositive_nonframe_and_bad_sum(self):
+        proof = self.document["contract"]["proof_law"]
+        mutations = []
+        for key, value in (
+            ("drop_approach_ms", 0),
+            ("drop_travel_ms", 2001),
+            ("drop_total_ms", 4400),
+        ):
+            mutation = copy.deepcopy(proof)
+            mutation[key] = value
+            mutations.append(mutation)
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(
+                GENERATOR.ContractError
+            ):
+                GENERATOR._validate_drop_timing_law(mutation)
 
     def test_canonicalization_ignores_whitespace_and_object_key_order(self):
         reordered = {

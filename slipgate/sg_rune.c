@@ -43,8 +43,6 @@ _Static_assert(LINK_MAX == SG_RUNE_V3_MAX_LINKS,
 #define ARRIVE_RADIUS	40.0f
 #define STEP_MSEC		25			/* honest client-rate steps, 4 per frame */
 #define TRY_LIMIT_MS	3000		/* a link longer than this is not local */
-#define DROP_APPROACH_LIMIT_MS 2500	/* reach the serialized lip on foot */
-#define DROP_TRAVEL_LIMIT_MS   2000	/* then complete the fall/landing */
 #define DROP_HANDOFF_RADIUS    8.0f	/* runtime's lip-to-walkoff handoff */
 
 _Static_assert(STEP_MSEC == SG_RUNE_PROOF_PMOVE_SUBSTEP_MS,
@@ -1394,20 +1392,22 @@ static qboolean Drop_ReplayHarmfulLiquid(const sg_phantom_t *ph)
  * this production boundary.  Arrival and recovery intentionally may issue
  * two identical traces when the first contact result is false; preserving
  * that short-circuit cadence is part of a behavior-neutral adapter. */
-static qboolean Drop_ReplayContact(const sg_drop_replay_state_t *state,
-	const sg_phantom_t *ph, vec3_t destination)
+static void Drop_ReplayContacts(const sg_drop_replay_state_t *state,
+	const sg_phantom_t *ph, vec3_t destination,
+	qboolean *arrival_contact, qboolean *recovery_contact)
 {
 	vec3_t delta;
 	float horizontal2;
 	int next_ms;
 	qboolean airborne_after, arrival_gate, recovery_gate;
-	qboolean contact = true;
+
+	*arrival_contact = false;
+	*recovery_contact = false;
 
 	next_ms = state->progress.elapsed_ms + SG_REPLAY_STEP_MS;
 	airborne_after = state->airborne ||
 		(state->walkoff && !ph->groundentity);
 	if (ph->door_passed ||
-	    (state->recovery && !ph->groundentity) ||
 	    (state->spec.destination_water && airborne_after &&
 	     (next_ms % SG_REPLAY_FRAME_MS) == 0 &&
 	     ph->waterlevel > 0 && ph->waterlevel < 3) ||
@@ -1415,11 +1415,11 @@ static qboolean Drop_ReplayContact(const sg_drop_replay_state_t *state,
 	    next_ms >= SG_REPLAY_DROP_TOTAL_MS ||
 	    (next_ms % SG_REPLAY_FRAME_MS) != 0 ||
 	    Drop_ReplayHarmfulLiquid(ph))
-		return true;
+		return;
 
 	VectorSubtract(destination, ph->origin, delta);
 	horizontal2 = delta[0] * delta[0] + delta[1] * delta[1];
-	arrival_gate = state->walkoff &&
+	arrival_gate = state->walkoff && airborne_after &&
 		horizontal2 < SG_REPLAY_ARRIVE_RADIUS * SG_REPLAY_ARRIVE_RADIUS &&
 		delta[2] > -SG_REPLAY_ARRIVE_Z &&
 		delta[2] < SG_REPLAY_ARRIVE_Z &&
@@ -1427,11 +1427,11 @@ static qboolean Drop_ReplayContact(const sg_drop_replay_state_t *state,
 		 (ph->groundentity || ph->waterlevel >= 2));
 	if (arrival_gate)
 	{
-		contact = Prove_Contact(ph->origin, destination);
-		if (contact)
-			return true;
+		*arrival_contact = Prove_Contact(ph->origin, destination);
+		if (*arrival_contact)
+			return;
 	}
-	recovery_gate = !state->recovery && state->walkoff && airborne_after &&
+	recovery_gate = state->walkoff && airborne_after &&
 		!state->spec.destination_water && ph->groundentity &&
 		ph->waterlevel == 0 &&
 		horizontal2 < SG_RUNE_PROOF_DROP_RECOVERY_RADIUS *
@@ -1439,21 +1439,23 @@ static qboolean Drop_ReplayContact(const sg_drop_replay_state_t *state,
 		delta[2] > -SG_RUNE_PROOF_DROP_RECOVERY_Z &&
 		delta[2] < SG_RUNE_PROOF_DROP_RECOVERY_Z;
 	if (recovery_gate)
-		contact = Prove_Contact(ph->origin, destination);
-	return contact;
+		*recovery_contact = Prove_Contact(ph->origin, destination);
 }
 
 static void Drop_ReplayObservation(const sg_phantom_t *ph,
-	qboolean destination_water, qboolean contact_clear,
+	qboolean destination_water, qboolean arrival_contact,
+	qboolean recovery_contact,
 	sg_replay_observation_t *observation)
 {
 	memset(observation, 0, sizeof(*observation));
-	observation->contact_clear = contact_clear;
+	observation->contact_clear = arrival_contact;
 	/* SG_OracleRunWorld already rejects non-world support. */
 	observation->ground_support_valid = true;
+	observation->drop_arrival_contact_clear = arrival_contact;
+	observation->drop_recovery_contact_clear = recovery_contact;
 	observation->drop_recovery_admitted = !destination_water;
 	observation->drop_landing_observed =
-		!destination_water && ph->groundentity;
+		ph->groundentity || ph->waterlevel >= 2;
 	observation->door_passed = ph->door_passed;
 }
 
@@ -1472,6 +1474,7 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
 	sg_replay_observation_t observation;
 	sg_replay_status_t status;
 	usercmd_t cmd;
+	qboolean arrival_contact, recovery_contact;
 
 	memset(trial, 0, sizeof(*trial));
 	trial->ran = true;
@@ -1483,7 +1486,8 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
 	spec.destination_water = require_deep_water;
 	spec.expected_arrival_ms = SG_REPLAY_TIME_DISCOVER;
 	Drop_ReplayPose(&ph, &pose);
-	Drop_ReplayObservation(&ph, require_deep_water, true, &observation);
+	Drop_ReplayObservation(&ph, require_deep_water, false, false,
+	                       &observation);
 	status = SG_DropReplayBegin(&state, &spec, &pose, &observation, 0.0f);
 	while (status == SG_REPLAY_RUNNING)
 	{
@@ -1495,8 +1499,10 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
 		if (!SG_OracleRunWorld(&ph, &cmd, 1))
 			break;
 		Drop_ReplayPose(&ph, &pose);
-		Drop_ReplayObservation(&ph, require_deep_water,
-			Drop_ReplayContact(&state, &ph, dst), &observation);
+		Drop_ReplayContacts(&state, &ph, dst, &arrival_contact,
+		                    &recovery_contact);
+		Drop_ReplayObservation(&ph, require_deep_water, arrival_contact,
+		                       recovery_contact, &observation);
 		status = SG_DropReplayPostStep(&state, &pose, &observation);
 		if (ph.groundentity &&
 		    state.progress.reason != SG_REPLAY_REASON_DOOR_PASSED &&

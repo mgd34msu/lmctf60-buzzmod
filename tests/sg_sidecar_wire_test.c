@@ -159,6 +159,8 @@ static void TestGolden(const sg_rune_v3_header_t *rune)
 	CHECK(memcmp(encoded, expected, sizeof(encoded)) == 0);
 	CHECK(memcmp(encoded, "HMN3", 4) == 0);
 	CHECK(GetU32(encoded + 24) == rune->payload_crc32);
+	CHECK(rune->action_contract_crc32 == UINT32_C(0x5c64bc3b));
+	CHECK(rune->header_crc32 == UINT32_C(0x887334b9));
 	CHECK(GetU32(encoded + 28) == rune->action_contract_crc32);
 	CHECK(GetU32(encoded + 32) == rune->header_crc32);
 	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3Inspect(encoded,

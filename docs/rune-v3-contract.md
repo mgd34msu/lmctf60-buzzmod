@@ -195,6 +195,14 @@ For every noncompound action, bytes 28 through 43 are exactly zero.
 Two links are duplicates when `(source, destination, action)` is identical;
 cost, provenance, controls, or anchors do not create a second graph edge.
 
+Ordinary `RL_DROP` has the narrower generated revision-2 timing law. Its
+serialized `cost_ms` is at least one 100 ms server frame, strictly less than
+4500 ms, and divisible by 100 ms. The proof law separately pins a 2500 ms
+approach budget and 2000 ms post-walkoff travel budget; both are positive
+server-frame multiples and their sum is the 4500 ms total bound. This rule does
+not widen or reinterpret legacy v2, and compound `RL_DOOR_DROP` retains the
+separate exact compound replay contract below.
+
 Compound semantics:
 
 - `RL_DOOR_DROP` retains ordinary DROP control bytes and lip in the suffix
@@ -238,8 +246,8 @@ The projection is encoded as canonical compact JSON with sorted keys,
 ASCII-only escapes, and no insignificant whitespace. The top-level `display`
 object is deliberately excluded: changing labels or colors cannot invalidate a
 RUNE file. For schema version 1, the canonical semantic payload has CRC32
-`e9545af7` and SHA-256
-`bce304d641442fed0d7563536cb371830d85bbb91788b7bcaae3f2c439385a76`.
+`5c64bc3b` and SHA-256
+`fd7b4c2288845f9c3448aa82aeabfd8921feb5c943a6ac2f4b8abacd49f36ece`.
 
 The top-level `wire_diagnostics` table is also outside that artifact digest.
 It is an append-only, generated C/Python API for reporting header, I/O, CRC,
@@ -256,7 +264,11 @@ The generator checks in two generated products:
 - `tools/rune_contracts_generated.py`.
 
 `--check` fails if either product differs. The semantic CRC32 described above
-is stored in every v3 header.
+is stored in every v3 header. The shared 248-byte RUNE golden has header CRC32
+`887334b9` and SHA-256
+`a34d0f1721d6bbbe89828a76c3b477e80743b1473e9103f81a41d8b26cbf36a5`;
+the bound 50-byte `HMN3` golden has header CRC32 `ce8382bd` and SHA-256
+`9be29afd2eae1cc26d6c18f1caf9ea81559c6d830aa233f6633d27fac8b893a7`.
 
 `slipgate/sg_action.h` and `slipgate/sg_action.c` provide the behavioral
 descriptor/dispatch layer:
@@ -275,6 +287,24 @@ Legacy actions enter through adapters first. Hard-coded classification lists
 are replaced incrementally only after equivalence fixtures pass. Metadata does
 not itself prove behavior; each controller retains a proof revision and replay
 fixtures.
+
+### `RL_DROP` controller revision 2
+
+`RL_DROP` is at controller revision 2. Its canonical reducer policy is:
+
+- a supported handoff before airborne continues the DROP;
+- once airborne, terminal status is evaluated before recovery or handoff;
+- exactly one dry grounded recovery is permitted; and
+- a later grounded contact or water depth of two or more rejects.
+
+The serialized command uses the canonical double-promoted DROP yaw byte, not
+the legacy float-to-short intermediate. Its generated 2500/2000/4500 ms proof
+budgets also make the reducer's admission envelope part of the semantic
+contract. Revision 2 is semantic, so it
+invalidates every prior global v3 RUNE and all five graph-indexed sidecars:
+`HMN3`, `HML3`, `HME3`, `DPO3`, and `DNG3`. Focused contract, wire, and
+sidecar golden acceptance establishes this boundary only. The separate 181-map
+gate remains required after live DROP migration and corpus regeneration.
 
 `tools/runeio.py` becomes the only Python wire parser. `runelint`, `runeview`,
 `corpusgraph`, bake tools, `film`, `demorune`, `seedservo`, `mapflags`, and
@@ -324,11 +354,11 @@ signer, and do not authenticate artifacts against an adversary who can replace
 local game files. The deployment trust boundary must supply locally trusted
 artifacts.
 
-Changing the DROP and SWIM provenance masks changes the action-contract CRC.
-Every v3 rune and graph-indexed sidecar carrying the prior contract CRC is
-stale and must be regenerated. The accepted corpus proves that its dense-link
-provenance semantics are compatible, but its old bytes are not loadable under
-this contract.
+Changing a semantic action field, including a dense-action provenance mask or
+the DROP controller revision, changes the action-contract CRC. Every v3 RUNE
+and graph-indexed sidecar carrying a prior contract CRC is stale and must be
+regenerated. The accepted corpus can establish behavior compatibility, but old
+bytes are not loadable under the new contract.
 
 ## Compound proof contract
 

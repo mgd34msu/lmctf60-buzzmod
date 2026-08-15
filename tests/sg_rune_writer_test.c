@@ -243,6 +243,7 @@ static void AllActionsGraph(rune_seed_t seeds[8], rune_link_t links[8])
 	links[1].heading_slack = 255;
 	links[1].exit_speed = 44;
 	links[2].action = RL_DROP;
+	links[2].cost_ms = 200;
 	links[2].heading_slack = SG_RUNE_PROOF_DROP_CONTROL_MARKER;
 	links[2].exit_speed = 30;
 	SetVector(links[2].anchor, 132.0f, 0.0f, 8.0f);
@@ -480,6 +481,8 @@ static void TestSeedAndGeneralFailures(void)
 
 static void TestControllerFailures(void)
 {
+	static const short rejected_drop_costs[] = { 99, 101, 125, 4500 };
+	static const short accepted_drop_costs[] = { 100, 4400 };
 	sg_rune_v3_identity_t identity = Identity();
 	rune_seed_t seeds[SMALL_SEEDS];
 	rune_link_t links[SMALL_LINKS];
@@ -508,6 +511,28 @@ static void TestControllerFailures(void)
 		RLW_BAD_LINK_RECORD, RLR_PROVENANCE_FORBIDDEN);
 	EXPECT_ACTION_FAILURE(RL_DROP, links[0].provenance = RL_DECLARED,
 		RLW_BAD_LINK_RECORD, RLR_PROVENANCE_FORBIDDEN);
+	{
+		size_t index;
+
+		for (index = 0; index < sizeof(rejected_drop_costs) /
+		    sizeof(rejected_drop_costs[0]); index++)
+		{
+			PrepareAction(RL_DROP, seeds, links);
+			links[0].cost_ms = rejected_drop_costs[index];
+			ExpectLinkFailure(&identity, seeds, links, RLW_BAD_LINK_RECORD,
+				RLR_BAD_COST);
+		}
+		for (index = 0; index < sizeof(accepted_drop_costs) /
+		    sizeof(accepted_drop_costs[0]); index++)
+		{
+			PrepareAction(RL_DROP, seeds, links);
+			links[0].cost_ms = accepted_drop_costs[index];
+			sink = MakeSink(NULL, SIZE_MAX);
+			result = WriteSmall(&identity, seeds, links, &sink);
+			CHECK_RESULT(result, RLW_OK, RLR_OK, SG_RUNE_WRITE_STAGE_DONE,
+				SG_RUNE_WRITE_INDEX_NONE);
+		}
+	}
 	EXPECT_ACTION_FAILURE(RL_HOOK, links[0].min_speed = 1,
 		RLW_BAD_LINK_RECORD, RLR_BAD_HOOK_CONTROL);
 	EXPECT_ACTION_FAILURE(RL_HOOK, links[0].heading_slack = 23,

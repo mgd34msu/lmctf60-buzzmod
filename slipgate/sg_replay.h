@@ -26,9 +26,9 @@
 #define SG_REPLAY_ARRIVE_RADIUS         40.0f
 #define SG_REPLAY_ARRIVE_Z              72.0f
 #define SG_REPLAY_DROP_HANDOFF_RADIUS   8.0f
-#define SG_REPLAY_DROP_APPROACH_MS      2500
-#define SG_REPLAY_DROP_TRAVEL_MS        2000
-#define SG_REPLAY_DROP_TOTAL_MS         4500
+#define SG_REPLAY_DROP_APPROACH_MS      SG_RUNE_PROOF_DROP_APPROACH_MS
+#define SG_REPLAY_DROP_TRAVEL_MS        SG_RUNE_PROOF_DROP_TRAVEL_MS
+#define SG_REPLAY_DROP_TOTAL_MS         SG_RUNE_PROOF_DROP_TOTAL_MS
 #define SG_REPLAY_DROP_BELOW_Z          512.0f
 #define SG_REPLAY_SWIM_LIMIT_MS         3000
 #define SG_REPLAY_HOOK_DEST_RADIUS      80.0f
@@ -92,15 +92,16 @@ typedef struct sg_replay_pose_s
 
 /* World-dependent answers are data, never hidden calls from the reducer.
  *
- * contact_clear: the caller's chest-height player-solid trace policy.
+ * contact_clear: the caller's chest-height player-solid trace policy for
+ *   SWIM/HOOK.
  * ground_support_valid: DROP's caller-specific world/immutable support law.
- * drop_recovery_admitted: whether this adapter admits the one bounded dry,
- *   grounded recovery at this boundary.  Legacy wet proof says no; legacy
- *   runtime says yes when the same geometry is reached on a dry shelf.
- * drop_landing_observed: the caller's production-visible nonterminal contact;
- *   legacy proof uses grounded, while legacy runtime also stops in depth-two
- *   water.  Keeping that existing discrepancy explicit avoids silently
- *   changing either adapter before corpus equivalence chooses one law.
+ * drop_arrival_contact_clear/drop_recovery_contact_clear: the two ordered
+ *   DROP chest traces.  They are separate because a failed terminal trace is
+ *   followed by the conditional recovery trace at the same 100 ms boundary.
+ * drop_recovery_admitted/drop_landing_observed are retained as initialized
+ *   adapter diagnostics.  Revision 2 derives admission and landing directly
+ *   from the serialized destination policy and authoritative pose instead of
+ *   permitting either field to select a different controller law.
  * contaminated: a disallowed trigger, solid overlap, or non-world oracle hit.
  * door_passed: a door transition hidden inside an ordinary action.
  * hook_rope_valid/hook_rope_length: the host hook law evaluated at this pose.
@@ -109,6 +110,8 @@ typedef struct sg_replay_observation_s
 {
 	qboolean contact_clear;
 	qboolean ground_support_valid;
+	qboolean drop_arrival_contact_clear;
+	qboolean drop_recovery_contact_clear;
 	qboolean drop_recovery_admitted;
 	qboolean drop_landing_observed;
 	qboolean contaminated;
@@ -139,8 +142,8 @@ typedef struct sg_drop_replay_spec_s
 	byte heading;
 	qboolean destination_water;
 	/* Approach/recovery yaw uses the v3 generator/proof's selected double-M_PI
-	 * byte. The current live DROP path still divides by float M_PI; S3b must
-	 * migrate it intentionally under differential and full-corpus gates. */
+	 * byte.  Revision-2 live DROP independently rebuilds and differentially
+	 * checks that same logical command before executing the reducer result. */
 	/* -1 records the witnessed arrival.  A nonnegative value additionally
 	 * makes a live adapter require that exact production boundary. */
 	int expected_arrival_ms;
@@ -213,6 +216,12 @@ typedef struct sg_hook_replay_state_s
 } sg_hook_replay_state_t;
 
 const char *SG_ReplayReasonName(sg_replay_reason_t reason);
+
+/* The serialized DROP yaw byte is shared by reducer, live writer and shadow.
+ * atan2f's float result is intentionally promoted for the double-M_PI divide
+ * before ANGLE2SHORT; callers must not narrow the intermediate. */
+qboolean SG_DropReplayPlanarYawCommand(float dx, float dy,
+	short delta_yaw, short *command_yaw);
 float SG_ReplayFallDelta(float old_velocity_z, float velocity_z,
 	qboolean grounded, int waterlevel);
 

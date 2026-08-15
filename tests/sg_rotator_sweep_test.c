@@ -6,9 +6,103 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_hooks.h"
 
 game_export_t globals;
 edict_t *g_edicts;
+sg_host_t sg_host;
+
+static edict_t *test_trigger_hits[MAX_EDICTS];
+static edict_t *test_solid_hits[MAX_EDICTS];
+static int test_trigger_count;
+static int test_solid_count;
+
+static int TestBoxEdicts(const vec3_t mins, const vec3_t maxs,
+	edict_t **list, int maxcount, int areatype)
+{
+	edict_t **source = areatype == AREA_TRIGGERS ? test_trigger_hits :
+	                                                   test_solid_hits;
+	int count = areatype == AREA_TRIGGERS ? test_trigger_count :
+	                                             test_solid_count;
+	int i;
+
+	(void)mins;
+	(void)maxs;
+	if (!list || maxcount < count)
+		return -1;
+	for (i = 0; i < count; i++)
+		list[i] = source[i];
+	return count;
+}
+
+qboolean SG_ImmutableSupport(const edict_t *ent)
+{
+	return ent && ent->classname &&
+	       strcmp(ent->classname, "immutable-test-support") == 0;
+}
+
+void Touch_DoorTrigger(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self; (void)other; (void)plane; (void)surf;
+}
+
+void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self; (void)other; (void)plane; (void)surf;
+}
+
+void Touch_Item(edict_t *ent, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)ent; (void)other; (void)plane; (void)surf;
+}
+
+void door_use(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
+void door_secret_use(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
+void Use_Target_Speaker(edict_t *self, edict_t *other,
+	edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
+void trigger_relay_use(edict_t *self, edict_t *other,
+	edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
+static void DummyTouch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self; (void)other; (void)plane; (void)surf;
+}
+
+edict_t *G_Find(edict_t *from, int fieldofs, char *match)
+{
+	edict_t *candidate = from ? from + 1 : g_edicts;
+
+	for (; candidate < &g_edicts[globals.num_edicts]; candidate++)
+	{
+		char *value;
+
+		if (!candidate->inuse)
+			continue;
+		value = *(char **)((byte *)candidate + fieldofs);
+		if (value && !Q_stricmp(value, match))
+			return candidate;
+	}
+	return NULL;
+}
 
 static int failures;
 
@@ -45,6 +139,133 @@ static qboolean Blocks(const vec3_t start, const vec3_t mins,
 	return SG_OracleRotatorSweepBlocks(start, mins, maxs, end, mask);
 }
 
+static void TestReplayTriggerClassifier(void)
+{
+	edict_t ents[10];
+	edict_t *world_ent = &ents[0], *door = &ents[1];
+	edict_t *door_trigger = &ents[2], *sound_trigger = &ents[3];
+	edict_t *speaker = &ents[4], *arbitrary = &ents[5];
+	edict_t *source = &ents[6], *player = &ents[7];
+	edict_t *support = &ents[8], *item = &ents[9];
+	vec3_t from, to;
+	qboolean contaminated, door_passed;
+
+	memset(ents, 0, sizeof(ents));
+	g_edicts = ents;
+	globals.num_edicts = 10;
+	world_ent->inuse = true;
+
+	door->inuse = true;
+	door->classname = "func_door";
+	door->use = door_use;
+	door->moveinfo.distance = 64.0f;
+	door->moveinfo.speed = 100.0f;
+	door->moveinfo.accel = 100.0f;
+	door->moveinfo.decel = 100.0f;
+	door->moveinfo.wait = 1.0f;
+	Set3(door->mins, -8.0f, -8.0f, -8.0f);
+	Set3(door->maxs, 8.0f, 8.0f, 8.0f);
+	Set3(door->absmin, -8.0f, -8.0f, -8.0f);
+	Set3(door->absmax, 8.0f, 8.0f, 8.0f);
+	door_trigger->inuse = true;
+	door_trigger->solid = SOLID_TRIGGER;
+	door_trigger->movetype = MOVETYPE_NONE;
+	door_trigger->touch = Touch_DoorTrigger;
+	door_trigger->owner = door;
+	CHECK(SG_OracleReplayTriggerEvents(door_trigger, &contaminated,
+	                                  &door_passed));
+	CHECK(!contaminated && !door_passed);
+	Set3(from, 100.0f, 100.0f, 0.0f);
+	Set3(to, 120.0f, 100.0f, 0.0f);
+	CHECK(!SG_OracleReplayDoorPassage(from, to));
+	Set3(from, -100.0f, 0.0f, 0.0f);
+	Set3(to, 100.0f, 0.0f, 0.0f);
+	CHECK(SG_OracleReplayDoorPassage(from, to));
+	/* Each actual leg clears the sweep although their combined chord crosses
+	 * it.  Live command-four sampling advances the stored origin after the
+	 * first leg, so Boundary tests only the second (pusher) leg. */
+	Set3(from, -100.0f, 100.0f, 0.0f);
+	Set3(to, 100.0f, 100.0f, 0.0f);
+	CHECK(!SG_OracleReplayDoorPassage(from, to));
+	Set3(from, 100.0f, 100.0f, 0.0f);
+	Set3(to, 100.0f, -100.0f, 0.0f);
+	CHECK(!SG_OracleReplayDoorPassage(from, to));
+	Set3(from, -100.0f, 100.0f, 0.0f);
+	CHECK(SG_OracleReplayDoorPassage(from, to));
+
+	sound_trigger->inuse = true;
+	sound_trigger->solid = SOLID_TRIGGER;
+	sound_trigger->classname = "trigger_multiple";
+	sound_trigger->touch = Touch_Multi;
+	sound_trigger->target = "sound-only";
+	sound_trigger->wait = 0.2f;
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->targetname = "sound-only";
+	speaker->use = Use_Target_Speaker;
+	CHECK(SG_OracleReplayTriggerEvents(sound_trigger, &contaminated,
+	                                  &door_passed));
+	CHECK(!contaminated && !door_passed);
+
+	sound_trigger->touch = Touch_Item;
+	CHECK(SG_OracleReplayTriggerEvents(sound_trigger, &contaminated,
+	                                  &door_passed));
+	CHECK(!contaminated && !door_passed);
+
+	arbitrary->inuse = true;
+	arbitrary->solid = SOLID_TRIGGER;
+	arbitrary->touch = DummyTouch;
+	CHECK(SG_OracleReplayTriggerEvents(arbitrary, &contaminated,
+	                                  &door_passed));
+	CHECK(contaminated && !door_passed);
+
+	/* The Begin source observer consumes only BoxEdicts snapshots.  Allowed
+	 * item, sound-only and safe-door triggers plus world/immutable support are
+	 * clean, while an arbitrary trigger or dynamic actor contaminates. */
+	source->inuse = true;
+	Set3(source->s.origin, 100.0f, 100.0f, 0.0f);
+	Set3(source->absmin, 84.0f, 84.0f, -24.0f);
+	Set3(source->absmax, 116.0f, 116.0f, 32.0f);
+	player->inuse = true;
+	player->client = (gclient_t *)player;
+	support->inuse = true;
+	support->classname = "immutable-test-support";
+	item->inuse = true;
+	item->solid = SOLID_TRIGGER;
+	item->touch = Touch_Item;
+	sg_host.box_edicts = NULL;
+	CHECK(!SG_OracleReplaySourceEvents(source, &contaminated, &door_passed));
+	sg_host.box_edicts = TestBoxEdicts;
+	test_trigger_hits[0] = item;
+	test_trigger_hits[1] = sound_trigger;
+	test_trigger_hits[2] = door_trigger;
+	test_trigger_count = 3;
+	test_solid_hits[0] = world_ent;
+	test_solid_hits[1] = source;
+	test_solid_hits[2] = support;
+	test_solid_count = 3;
+	CHECK(SG_OracleReplaySourceEvents(source, &contaminated, &door_passed));
+	CHECK(!contaminated && !door_passed);
+
+	test_trigger_hits[3] = arbitrary;
+	test_trigger_count = 4;
+	CHECK(SG_OracleReplaySourceEvents(source, &contaminated, &door_passed));
+	CHECK(contaminated && !door_passed);
+	test_trigger_count = 3;
+	test_solid_hits[3] = player;
+	test_solid_count = 4;
+	CHECK(SG_OracleReplaySourceEvents(source, &contaminated, &door_passed));
+	CHECK(contaminated && !door_passed);
+
+	test_solid_hits[3] = door;
+	CHECK(SG_OracleReplaySourceEvents(source, &contaminated, &door_passed));
+	CHECK(!contaminated && door_passed);
+	test_solid_count = 3;
+	VectorClear(source->s.origin);
+	CHECK(SG_OracleReplaySourceEvents(source, &contaminated, &door_passed));
+	CHECK(!contaminated && door_passed);
+}
+
 /* Match the engine's transformed-brush basis exactly.  The float results are
  * intentionally retained: these regressions protect the conservative helper
  * from treating ideal double geometry as a tighter boundary than collision. */
@@ -76,6 +297,8 @@ int main(void)
 	vec3_t hull_maxs = { 16, 16, 32 };
 	double expected_radius2;
 	float large;
+
+	TestReplayTriggerClassifier();
 
 	memset(ents, 0, sizeof(ents));
 	g_edicts = ents;

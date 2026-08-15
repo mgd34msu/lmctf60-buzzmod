@@ -111,6 +111,11 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
  * links the whole set at STATE_TOP before replaying the live direct egress. */
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source);
 qboolean SG_DeclaredDoorActivatorSafe(edict_t *trigger);
+qboolean SG_OracleReplayTriggerEvents(edict_t *trigger,
+	qboolean *contaminated, qboolean *door_passed);
+qboolean SG_OracleReplayDoorPassage(const vec3_t from, const vec3_t to);
+qboolean SG_OracleReplaySourceEvents(edict_t *ent,
+	qboolean *contaminated, qboolean *door_passed);
 int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
 	int capacity);
 int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger);
@@ -487,6 +492,8 @@ qboolean	SG_OwnsBot(edict_t *ent);
 void		SG_NoteDoorTriggerTouch(edict_t *source, edict_t *activator);
 void		SG_NoteDoorActivation(edict_t *source, edict_t *door_master,
 							  edict_t *activator);
+void		SG_NoteDropTriggerContact(edict_t *source, edict_t *activator);
+void		SG_NoteDropSolidContact(edict_t *source, edict_t *activator);
 qboolean	SG_RetireBotForClient(edict_t *ent);
 void		SG_DisownBot(edict_t *ent);
 qboolean	SG_AddBot(void);

@@ -17,6 +17,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
@@ -197,6 +198,51 @@ void SG_NoteDoorActivation(edict_t *source, edict_t *door_master,
 	bot->declared_trigger_frame = level.framenum;
 }
 
+static sg_bot_t *Drop_LiveEventOwner(edict_t *activator)
+{
+	int i;
+
+	if (!activator || !activator->inuse || !activator->client ||
+	    !SG_OwnsBot(activator))
+		return NULL;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == activator &&
+		    sg_bots[i].drop_started && sg_bots[i].drop_replay_active)
+			return &sg_bots[i];
+	return NULL;
+}
+
+/* These taps observe events the host has already selected for the real body.
+ * They never replay a trace, touch, use, or pusher side effect. */
+void SG_NoteDropTriggerContact(edict_t *source, edict_t *activator)
+{
+	sg_bot_t *bot = Drop_LiveEventOwner(activator);
+	qboolean contaminated, door_passed;
+
+	if (!bot)
+		return;
+	if (!SG_OracleReplayTriggerEvents(source, &contaminated, &door_passed))
+	{
+		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, true, false);
+		return;
+	}
+	(void)SG_DropLiveEventsLatch(&bot->drop_live_events, contaminated,
+	                            door_passed);
+}
+
+void SG_NoteDropSolidContact(edict_t *source, edict_t *activator)
+{
+	sg_bot_t *bot = Drop_LiveEventOwner(activator);
+
+	if (!bot || !source || source == g_edicts || SG_ImmutableSupport(source))
+		return;
+	if (source->classname &&
+	    strncmp(source->classname, "func_door", 9) == 0)
+		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, false, true);
+	else
+		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, true, false);
+}
+
 static qboolean Hook_LinkWaterSource(const sg_bot_t *bot)
 {
 	rune_link_t *link;
@@ -339,6 +385,180 @@ qboolean SG_BallisticSurvivable(edict_t *e, const rune_link_t *l)
 	if (delta > 30.0f && damage < 1)
 		damage = 1;          /* P_FallingDamage's production minimum */
 	return e->health > damage + SG_DROP_HEALTH_RESERVE;
+}
+
+static qboolean Drop_LiveSupportValid(const edict_t *e)
+{
+	return e && e->groundentity &&
+	       (e->groundentity == g_edicts ||
+	        SG_ImmutableSupport(e->groundentity));
+}
+
+static void Drop_LivePose(const edict_t *e, sg_replay_pose_t *pose)
+{
+	SG_DropLivePose(pose, e && e->client ? &e->client->ps.pmove : NULL,
+	    e ? e->s.origin : NULL, e ? e->velocity : NULL,
+	    e && e->groundentity != NULL, e ? e->watertype : 0,
+	    e ? e->waterlevel : 0);
+}
+
+static void Drop_LiveEventsClear(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	memset(&bot->drop_live_events, 0, sizeof(bot->drop_live_events));
+}
+
+static sg_drop_live_events_t Drop_LiveEventsTake(sg_bot_t *bot)
+{
+	sg_drop_live_events_t events;
+
+	memset(&events, 0, sizeof(events));
+	if (bot)
+	{
+		events = bot->drop_live_events;
+		Drop_LiveEventsClear(bot);
+	}
+	return events;
+}
+
+static void Drop_LiveObserveDoorPassage(sg_bot_t *bot, const edict_t *e)
+{
+	if (!bot || !e || !bot->drop_replay_active)
+		return;
+	if (SG_OracleReplayDoorPassage(bot->drop_live_step_origin, e->s.origin))
+		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, false, true);
+	/* Preserve segmented history.  Boundary owns only the later pusher motion,
+	 * never a chord that combines command four with that motion. */
+	VectorCopy(e->s.origin, bot->drop_live_step_origin);
+}
+
+/* Independent revision-2 shadow of the final live writer.  The callback is
+ * intentionally expressed from reducer state after its handoff latch so a
+ * one-field drift in either implementation is visible before ClientThink. */
+static qboolean Drop_LiveShadowCommand(
+	const sg_drop_replay_state_t *state, const sg_replay_pose_t *pose,
+	usercmd_t *command)
+{
+	vec3_t direction;
+	short yaw_command;
+	byte msec;
+
+	if (!state || !pose || !command)
+		return false;
+	msec = command->msec;
+	memset(command, 0, sizeof(*command));
+	command->msec = msec;
+	if (msec != SG_REPLAY_STEP_MS)
+		return false;
+	if (state->recovery)
+	{
+		VectorSubtract(state->spec.destination, pose->origin, direction);
+		if (!SG_DropReplayPlanarYawCommand(direction[0], direction[1],
+		        pose->pms.delta_angles[YAW], &yaw_command))
+			return false;
+	}
+	else if (state->walkoff)
+		yaw_command = ANGLE2SHORT(
+		    state->spec.heading * (360.0f / 256.0f)) -
+		    pose->pms.delta_angles[YAW];
+	else
+	{
+		VectorSubtract(state->spec.lip, pose->origin, direction);
+		if (!SG_DropReplayPlanarYawCommand(direction[0], direction[1],
+		        pose->pms.delta_angles[YAW], &yaw_command))
+			return false;
+	}
+	command->angles[PITCH] = -pose->pms.delta_angles[PITCH];
+	command->angles[YAW] = yaw_command;
+	command->angles[ROLL] = -pose->pms.delta_angles[ROLL];
+	command->forwardmove = 400;
+	return true;
+}
+
+static void Drop_LiveSync(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->drop_walkoff = bot->drop_replay.walkoff;
+	bot->drop_airborne = bot->drop_replay.airborne;
+	bot->drop_recover = bot->drop_replay.recovery;
+}
+
+static void Drop_LiveResultLog(const edict_t *e, int link_index,
+	const char *phase, const sg_drop_live_result_t *result)
+{
+	if (!result || result->outcome == SG_DROP_LIVE_RUNNING ||
+	    result->outcome == SG_DROP_LIVE_ARRIVED || !sg_cv.debug->value)
+		return;
+	sg_host.dprint("DROPREPLAY%s %s link=%d phase=%s adapter=%s replay=%s\n",
+	    result->outcome == SG_DROP_LIVE_FAILED ? "FAIL" : "FALLBACK",
+	    e && e->client ? e->client->pers.netname : "?", link_index,
+	    phase ? phase : "?", SG_DropLiveFailureName(result->failure),
+	    SG_ReplayReasonName(result->replay_reason));
+}
+
+static void Drop_LiveResetAction(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->drop_link = -1;
+	bot->drop_started = false;
+	bot->drop_walkoff = false;
+	bot->drop_airborne = false;
+	bot->drop_recover = false;
+	Drop_LiveEventsClear(bot);
+	SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+	    &bot->drop_replay_link, &bot->drop_live_events);
+}
+
+static void Drop_LiveCanonicalFail(edict_t *e, sg_bot_t *bot,
+	int link_index, const char *phase, sg_replay_reason_t reason)
+{
+	int b, oldest = 0;
+
+	if (!bot)
+		return;
+	if (link_index >= 0)
+	{
+		for (b = 0; b < SG_BL_MAX; b++)
+			if (bot->bl_until[b] < bot->bl_until[oldest])
+				oldest = b;
+		bot->bl_link[oldest] = link_index;
+		SG_TimerArm(&bot->bl_until[oldest],
+		    SG_DROP_LIVE_FAILURE_SHELF_SECONDS);
+		if (reason == SG_REPLAY_REASON_RECOVERY_LOST)
+			SG_TeachLinkFutility(link_index);
+	}
+	bot->commit_link = -1;
+	Drop_LiveResetAction(bot);
+	if (sg_cv.debug->value)
+		sg_host.dprint("DROPREPLAYFAIL %s link=%d phase=%s "
+		               "adapter=canonical replay=%s\n",
+		    e && e->client ? e->client->pers.netname : "?", link_index,
+		    phase ? phase : "?", SG_ReplayReasonName(reason));
+}
+
+/* Adapter/identity/cadence drift is not evidence against the serialized link.
+ * Retire its command ownership without poisoning graph policy. */
+static void Drop_LiveIntegrationAbort(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->commit_link = -1;
+	Drop_LiveResetAction(bot);
+}
+
+static void Drop_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
+	int link_index, const char *phase, const sg_drop_live_result_t *result)
+{
+	if (!result || result->outcome == SG_DROP_LIVE_RUNNING)
+		return;
+	if (result->outcome == SG_DROP_LIVE_FAILED)
+		Drop_LiveCanonicalFail(e, bot, link_index, phase,
+		                       result->replay_reason);
+	else
+		Drop_LiveIntegrationAbort(bot);
 }
 
 /*
@@ -985,7 +1205,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	qboolean escort_terminal_hold = ordered_escort &&
 	    SG_EscortTerminal(e, ordered_escort);
 	qboolean drop_yaw_locked = false;
-	float drop_yaw = 0.0f;
+	double drop_yaw = 0.0;
 	qboolean hook_brake = false;
 	qboolean jump_brake = false, jump_slow = false;
 	qboolean ballistic_abort = false;
@@ -1916,6 +2136,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					bot->drop_walkoff = false;
 					bot->drop_airborne = false;
 					bot->drop_recover = false;
+					SG_DropLiveReset(&bot->drop_replay,
+					    &bot->drop_replay_active, &bot->drop_replay_link,
+					    &bot->drop_live_events);
 				}
 				/* The body remains on safe ground during the proved lip approach.
 				 * Damage received after arming may revoke the descent until the
@@ -1929,6 +2152,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					bot->drop_walkoff = false;
 					bot->drop_airborne = false;
 					bot->drop_recover = false;
+					SG_DropLiveReset(&bot->drop_replay,
+					    &bot->drop_replay_active, &bot->drop_replay_link,
+					    &bot->drop_live_events);
 					ballistic_abort = true;
 				}
 				if (!bot->drop_started && !ballistic_abort)
@@ -1988,12 +2214,56 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 							bot->drop_walkoff = false;
 							bot->drop_airborne = false;
 							bot->drop_recover = false;
+							SG_DropLiveReset(&bot->drop_replay,
+							    &bot->drop_replay_active,
+							    &bot->drop_replay_link, &bot->drop_live_events);
 							ballistic_abort = true;
 						}
 						else
 						{
-							bot->drop_started = true;
-							SG_TimerArm(&bot->commit_until, 4.5f);
+							sg_drop_live_events_t live_events;
+							sg_replay_pose_t live_pose;
+							sg_drop_live_result_t live_result;
+							qboolean source_contaminated = false;
+							qboolean source_door = false;
+
+							Drop_LivePose(e, &live_pose);
+							Drop_LiveEventsClear(bot);
+							if (!SG_OracleReplaySourceEvents(e, &source_contaminated,
+							        &source_door))
+								(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
+								    true, false);
+							else
+								(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
+								    source_contaminated, source_door);
+							live_events = Drop_LiveEventsTake(bot);
+							live_result = SG_DropLiveBegin(&bot->drop_replay,
+							    &bot->drop_replay_active, &bot->drop_replay_link,
+							    bestlink, SG_Rune()->seeds[l->to].origin, l->anchor,
+							    l->heading,
+							    (SG_Rune()->seeds[l->to].flags & RSF_WATER) != 0,
+							    l->cost_ms, &live_pose, Drop_LiveSupportValid(e),
+							    e->client->oldvelocity[2], &live_events);
+							Drop_LiveResultLog(e, bestlink, "begin", &live_result);
+							if (live_result.outcome == SG_DROP_LIVE_RUNNING)
+							{
+								/* Begin rejects contamination only.  The frame context carries
+								 * source door evidence across the first command-event clear. */
+								tc->drop_source_door_pending = source_door;
+								bot->drop_started = true;
+								SG_TimerArm(&bot->commit_until,
+								    SG_REPLAY_DROP_TOTAL_MS * 0.001f);
+							}
+							else
+							{
+								Drop_LiveRetireNonRunning(e, bot, bestlink, "begin",
+								                          &live_result);
+								/* No legacy command may consume a reducer rejection or
+								 * adapter drift in the same frame. Think_Emit spends the
+								 * complete production frame as four zero commands. */
+								ballistic_abort = true;
+								tc->think_over = true;
+							}
 						}
 					}
 				}
@@ -2036,6 +2306,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				bot->drop_walkoff = false;
 				bot->drop_airborne = false;
 				bot->drop_recover = false;
+				SG_DropLiveReset(&bot->drop_replay,
+				    &bot->drop_replay_active, &bot->drop_replay_link,
+				    &bot->drop_live_events);
 			}
 
 			/*
@@ -2833,6 +3106,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				bot->drop_walkoff = false;
 				bot->drop_airborne = false;
 				bot->drop_recover = false;
+				SG_DropLiveReset(&bot->drop_replay,
+				    &bot->drop_replay_active, &bot->drop_replay_link,
+				    &bot->drop_live_events);
 			}
 			cmd->forwardmove = (door_hold == 2) ? -200
 			                 : (door_hold == 3 ? 400 : 0);
@@ -4015,6 +4291,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	short weave_side = 0;
 	vec3_t d;
 
+	/* Think_Move uses this one-frame latch only when live DROP Begin could not
+	 * acquire canonical ownership.  Return before any ClientThink: even a zero
+	 * command can execute trigger or solid-touch side effects at a contaminated
+	 * source.  Generic and legacy movement remain excluded for this frame. */
+	if (tc->think_over)
+		return;
+
 	/* The graph's nominal SWIM proves that the local action exists. Execution
 	 * begins only after the same oracle proves the actual fixed-point entry
 	 * state. One rotating grant bounds worst-case Pmove work per server frame. */
@@ -4289,6 +4572,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		qboolean as_chain = false;      /* dose 2: hop chaining as well */
 		float    as_lean = 0.0f;        /* the sinusoid, -1..1 */
 		qboolean drop_recovery_failed = false;
+		qboolean drop_replay_failed = false;
 
 		if (sub < 1)
 			sub = 1;
@@ -4914,6 +5198,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 		for (step = 0; step < sub; step++)
 		{
+			qboolean drop_command_owned = false;
+			usercmd_t drop_expected_command;
+
+			memset(&drop_expected_command, 0, sizeof(drop_expected_command));
 			cmd->msec = (byte)(base + (step < rem ? 1 : 0));
 			if (!cmd->msec)
 				continue;
@@ -4992,7 +5280,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * for ordinary navigation, but would change this proved controller. */
 			if (proved_drop)
 			{
-				float pyaw = tc->drop_yaw;
+				double pyaw = tc->drop_yaw;
+				short pyaw_command = 0;
+				qboolean pyaw_command_valid = false;
 				short drop_forward = bot->drop_started ? 400 : plain_forward;
 				if (bot->drop_recover)
 				{
@@ -5001,8 +5291,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					VectorSubtract(SG_Rune()->seeds[
 					    SG_Rune()->links[bestlink].to].origin,
 					    e->s.origin, recover_d);
-					pyaw = atan2f(recover_d[1], recover_d[0]) *
-					       180.0f / (float)M_PI;
+					pyaw_command_valid = SG_DropReplayPlanarYawCommand(
+					    recover_d[0], recover_d[1],
+					    e->client->ps.pmove.delta_angles[YAW], &pyaw_command);
 				}
 
 				if (bot->drop_started && !bot->drop_walkoff &&
@@ -5024,15 +5315,21 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					if (liph <= 8.0f || behind <= 0.0f || !e->groundentity)
 						bot->drop_walkoff = true;
 					else
-						pyaw = atan2f(lipd[1], lipd[0]) * 180.0f / M_PI;
+						pyaw_command_valid = SG_DropReplayPlanarYawCommand(
+						    lipd[0], lipd[1],
+						    e->client->ps.pmove.delta_angles[YAW], &pyaw_command);
 				}
 				if (bot->drop_started && bot->drop_walkoff &&
 				    !bot->drop_recover)
+				{
 					pyaw = SG_Rune()->links[bestlink].heading *
 					       (360.0f / 256.0f);
+					pyaw_command_valid = false;
+				}
 
-				cmd->angles[YAW] = ANGLE2SHORT(pyaw) -
-				                   e->client->ps.pmove.delta_angles[YAW];
+				cmd->angles[YAW] = pyaw_command_valid ? pyaw_command :
+				    ANGLE2SHORT(pyaw) -
+				    e->client->ps.pmove.delta_angles[YAW];
 				cmd->angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
 				cmd->angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
 				cmd->forwardmove = drop_forward;
@@ -5040,6 +5337,31 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->upmove = 0;
 				if (drop_recovery_failed)
 					cmd->forwardmove = 0;
+				if (bot->drop_started && bot->drop_replay_active &&
+				    bot->commit_link == bestlink)
+				{
+					sg_replay_pose_t live_pose;
+					sg_drop_live_result_t live_result;
+
+					Drop_LivePose(e, &live_pose);
+					live_result = SG_DropLivePreStep(&bot->drop_replay,
+					    &bot->drop_replay_active, &bot->drop_replay_link,
+					    bestlink, &live_pose, Drop_LiveShadowCommand, cmd);
+					Drop_LiveSync(bot);
+					Drop_LiveResultLog(e, bestlink, "prestep", &live_result);
+					if (live_result.outcome != SG_DROP_LIVE_RUNNING)
+					{
+						Drop_LiveRetireNonRunning(e, bot, bestlink, "prestep",
+						                          &live_result);
+						drop_replay_failed = true;
+						SG_DropLiveZeroCommand(cmd);
+					}
+					else
+					{
+						drop_expected_command = *cmd;
+						drop_command_owned = true;
+					}
+				}
 			}
 			/* A v2 jump is one direct arc. Once the launch tap is armed, mirror
 			 * the oracle at every literal 25 ms boundary: re-aim at the endpoint,
@@ -5728,7 +6050,21 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * pacing all run later and must not silently replace that decision.
 			 * Decompose the requested signed speed into the final view frame so
 			 * looking at an enemy cannot turn a door approach sideways. */
-			if (door_hold && !declared_door)
+			/* A generic moving door cannot reinterpret a reducer-owned DROP.
+			 * Staging handles it before walkoff; after ownership begins, retire
+			 * this transient integration conflict and spend zero input. */
+			if (door_hold && !declared_door && drop_command_owned)
+			{
+				if (sg_cv.debug->value)
+					sg_host.dprint("DROPREPLAYFALLBACK %s link=%d phase=final-command "
+					               "adapter=door-owner replay=invalid-control\n",
+					    e && e->client ? e->client->pers.netname : "?", bestlink);
+				Drop_LiveIntegrationAbort(bot);
+				drop_replay_failed = true;
+				drop_command_owned = false;
+				SG_DropLiveZeroCommand(cmd);
+			}
+			if (door_hold && !declared_door && !drop_replay_failed)
 			{
 				short door_speed = door_hold == 2 ? -200
 				                 : (door_hold == 3 ? 400 : 0);
@@ -5767,6 +6103,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 
+			if (drop_replay_failed)
+				SG_DropLiveZeroCommand(cmd);
 			{
 				edict_t *guard_trigger = NULL;
 				qboolean guard_door_step = false;
@@ -5809,7 +6147,37 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						return;
 					}
 				}
+				/* No command writer is permitted after this point.  Authenticate
+				 * the actual logical fields, not merely the canonical shadow used
+				 * by PreStep, immediately before the engine consumes them. */
+				if (drop_command_owned)
+				{
+					sg_drop_live_result_t live_result;
+
+					live_result = SG_DropLiveValidateFinalCommand(
+					    &bot->drop_replay, &bot->drop_replay_active,
+					    &bot->drop_replay_link, bestlink,
+					    &drop_expected_command, cmd);
+					Drop_LiveResultLog(e, bestlink, "final-command", &live_result);
+					if (live_result.outcome != SG_DROP_LIVE_RUNNING)
+					{
+						Drop_LiveRetireNonRunning(e, bot, bestlink,
+						                          "final-command", &live_result);
+						drop_replay_failed = true;
+						SG_DropLiveZeroCommand(cmd);
+					}
+				}
+				if (drop_command_owned)
+				{
+					if (!SG_DropLiveEventsBeginCommand(&bot->drop_live_events,
+					        &tc->drop_source_door_pending))
+						(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
+						    true, false);
+					VectorCopy(e->s.origin, bot->drop_live_step_origin);
+				}
 				ClientThink(e, cmd);
+				if (drop_command_owned)
+					Drop_LiveObserveDoorPassage(bot, e);
 			}
 			if (proved_swim && bot->swim_replay_active &&
 			    bot->commit_link == bestlink && step < sub - 1)
@@ -5824,10 +6192,33 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				Swim_LiveFallbackLog(e, bestlink, "poststep",
 				                     &live_result);
 			}
+			if (proved_drop && bot->drop_replay_active &&
+			    bot->commit_link == bestlink && step < sub - 1)
+			{
+				sg_drop_live_events_t live_events;
+				sg_replay_pose_t live_pose;
+				sg_drop_live_result_t live_result;
+
+				Drop_LivePose(e, &live_pose);
+				live_events = Drop_LiveEventsTake(bot);
+				live_result = SG_DropLivePostStep(&bot->drop_replay,
+				    &bot->drop_replay_active, &bot->drop_replay_link,
+				    bestlink, &live_pose, Drop_LiveSupportValid(e),
+				    &live_events);
+				Drop_LiveSync(bot);
+				Drop_LiveResultLog(e, bestlink, "poststep", &live_result);
+				if (live_result.outcome != SG_DROP_LIVE_RUNNING)
+				{
+					Drop_LiveRetireNonRunning(e, bot, bestlink, "poststep",
+					                          &live_result);
+					drop_replay_failed = true;
+				}
+			}
 			if (proved_drop && bot->drop_started && bot->drop_walkoff &&
 			    !e->groundentity)
 				bot->drop_airborne = true;
 			if (proved_drop && bot->drop_recover &&
+			    !bot->drop_replay_active && !drop_replay_failed &&
 			    !drop_recovery_failed &&
 			    (!e->groundentity ||
 			     (e->groundentity != g_edicts &&
@@ -5835,7 +6226,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			{
 				int b, oldest = 0;
 
-				/* The proof rejects support loss at every 25 ms recovery step.
+				/* Legacy DROP rejects support loss at each submitted command.
+				 * Revision 2 owns 25/50/75 ms in PostStep and deliberately leaves
+				 * command four pending for terminal-first Boundary evaluation.
 				 * Stop the remaining commands in this frame, shelf the corrupted
 				 * witness, and re-localize from the resulting real body. */
 				for (b = 0; b < SG_BL_MAX; b++)
@@ -5850,7 +6243,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				bot->drop_walkoff = false;
 				bot->drop_airborne = false;
 				bot->drop_recover = false;
+				SG_DropLiveReset(&bot->drop_replay,
+				    &bot->drop_replay_active, &bot->drop_replay_link,
+				    &bot->drop_live_events);
 				drop_recovery_failed = true;
+				drop_replay_failed = true;
 			}
 			if ((proved_swim || water_tele) && bot->swim_validated &&
 			    !swim_emergency && !swim_hazard &&
