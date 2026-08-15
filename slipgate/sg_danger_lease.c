@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include "q_shared.h"
 #include "slipgate/sg_danger_lease.h"
 
 #include <errno.h>

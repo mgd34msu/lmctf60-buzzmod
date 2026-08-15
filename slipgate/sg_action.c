@@ -1,4 +1,6 @@
 /* sg_action.c -- generated metadata exposed through fail-closed queries. */
+#include "q_shared.h"
+
 #include <stddef.h>
 
 #include "slipgate/sg_action.h"

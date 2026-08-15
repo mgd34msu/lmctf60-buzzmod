@@ -1,4 +1,5 @@
 /* sg_rune_wire.c -- allocation-free, explicit little-endian RUNE v3 codec. */
+#include "q_shared.h"
 #include "slipgate/sg_rune_wire.h"
 
 #include "slipgate/sg_action.h"
