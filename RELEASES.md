@@ -4,7 +4,73 @@ Releases are numbered and dated. There is no version number tracking upstream; g
 release number.
 
 Tag a release as `release-1`, `release-2` and so on. Pushing that tag builds all three
-libraries and opens a draft release with them attached.
+libraries and publishes a release with them attached.
+
+## Release 5 — August 2026
+
+Release 5 is a visibility-and-compatibility release. For players and admins it
+adds richer stats reporting and steadier in-game boards. Under the hood it
+replaces the old implicit RUNE assumptions with an explicit fail-closed v3
+contract and starts moving live movement execution onto the same deterministic
+replay law used to prove routes offline.
+
+### What ships
+
+Installation is unchanged from Release 4:
+
+| File | |
+|-|-|
+| `gamex86_64.so` | Linux 64-bit game module |
+| `gamex86_64.dll` | Windows 64-bit game module |
+| `gamex86.dll` | Windows 32-bit game module |
+| `lmctf6-buzzmod.pak` | scoreboard art and sound assets |
+
+There is still no separate bot library or prebuilt navigation pack. Server-side
+RUNE data is generated locally and reused on later loads.
+
+### New for players and admins
+
+Shared-database stats gain four new reports: `activity` (busiest players over
+the last 7 days), `momentum` (recent capture-rate movers), `card` (one player's
+career card), and `vs` (head-to-head results only from games both players
+actually played). Every match now also ends with an automatic console summary:
+final score, top capper, top defender, top killer, and accuracy leader.
+
+The live boards are also better behaved. Instead of repainting continuously,
+they now update on change and coalesce to at most once per second while busy,
+with captures pushed immediately. When a full layout will not fit the wire
+budget, boards now step down cleanly through condensed and minimal variants
+instead of truncating awkwardly.
+
+### RUNE v3 and movement compatibility
+
+SLIPGATE's movement graph now has an explicit RUNE v3 contract shared across the
+game code and Python tools: canonical action IDs, generated wire contracts,
+little-endian codecs, authoritative map/entity/physics identity binding,
+transactional writers, strict loaders, and authenticated sidecars.
+
+That contract is intentionally strict. Dense v3 DROP, SWIM, and HOOK links are
+accepted only when they carry proved provenance under the exact payload, world
+identity, proof law, and action contract. Mismatched or stale artifacts fail
+closed instead of being silently tolerated.
+
+This release also introduces a deterministic shared replay core for RUNE
+actions. Offline DROP, SWIM, and HOOK proofs now run through that common law,
+live SWIM is routed through it, and live DROP now uses the revision-2 controller
+on the same shared contract. Rotating topology proofs were hardened too: routes
+around rotating geometry are no longer tied to whatever phase happened to be
+sampled during proof.
+
+### Known limits
+
+This is not the end of the SLIPGATE movement program yet. Live HOOK has not been
+migrated to the shared replay law, and compound `DOOR_DROP`, `DOOR_SWIM`, and
+`DOOR_HOOK` actions are still future work. The project also keeps an honest
+181-map control corpus with explicit PASS, map failure, timeout, and
+invalid-asset outcomes; it is evidence for the v3 rollout, not a claim that
+every map/action combination is already finished. Old v3 artifacts can also be
+invalidated on purpose when the action contract changes: strict rejection is
+the compatibility policy.
 
 ## Release 4 — August 2026
 
