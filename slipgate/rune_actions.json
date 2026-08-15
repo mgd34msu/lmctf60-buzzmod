@@ -29,6 +29,9 @@
       "funky_gravity_required": 0,
       "pmove_substep_ms": 25,
       "server_frame_ms": 100,
+      "drop_approach_ms": 2500,
+      "drop_travel_ms": 2000,
+      "drop_total_ms": 4500,
       "top_window_margin_ms": 100,
       "door_anchor_scale": 8,
       "world_fixed_scale": 8,
@@ -126,7 +129,7 @@
     "actions": [
       {"id": 0, "symbol": "RL_RUN", "runtime_supported": 1, "default_provenance": 0, "provenance_mask": 15, "mode_mask": 1, "trait_mask": 0, "endpoint_policy": 1, "suffix_anchor_policy": 1, "preopen_mechanism_anchor_policy": 0, "ride_mechanism_anchor_policy": 0, "control_policy": 0, "mechanism_policy": 0, "effective_suffix": 0, "field_bias_policy": 0, "field_bias_ms": 0, "controller_revision": 1},
       {"id": 1, "symbol": "RL_JUMP", "runtime_supported": 1, "default_provenance": 0, "provenance_mask": 15, "mode_mask": 1, "trait_mask": 3, "endpoint_policy": 1, "suffix_anchor_policy": 0, "preopen_mechanism_anchor_policy": 0, "ride_mechanism_anchor_policy": 0, "control_policy": 1, "mechanism_policy": 0, "effective_suffix": 1, "field_bias_policy": 0, "field_bias_ms": 0, "controller_revision": 1},
-      {"id": 2, "symbol": "RL_DROP", "runtime_supported": 1, "default_provenance": 0, "provenance_mask": 1, "mode_mask": 1, "trait_mask": 3, "endpoint_policy": 2, "suffix_anchor_policy": 2, "preopen_mechanism_anchor_policy": 0, "ride_mechanism_anchor_policy": 0, "control_policy": 2, "mechanism_policy": 0, "effective_suffix": 2, "field_bias_policy": 1, "field_bias_ms": 150, "controller_revision": 1},
+      {"id": 2, "symbol": "RL_DROP", "runtime_supported": 1, "default_provenance": 0, "provenance_mask": 1, "mode_mask": 1, "trait_mask": 3, "endpoint_policy": 2, "suffix_anchor_policy": 2, "preopen_mechanism_anchor_policy": 0, "ride_mechanism_anchor_policy": 0, "control_policy": 2, "mechanism_policy": 0, "effective_suffix": 2, "field_bias_policy": 1, "field_bias_ms": 150, "controller_revision": 2},
       {"id": 3, "symbol": "RL_HOOK", "runtime_supported": 1, "default_provenance": 0, "provenance_mask": 1, "mode_mask": 1, "trait_mask": 1, "endpoint_policy": 4, "suffix_anchor_policy": 3, "preopen_mechanism_anchor_policy": 0, "ride_mechanism_anchor_policy": 0, "control_policy": 3, "mechanism_policy": 0, "effective_suffix": 3, "field_bias_policy": 2, "field_bias_ms": 0, "controller_revision": 1},
       {"id": 4, "symbol": "RL_SWIM", "runtime_supported": 1, "default_provenance": 0, "provenance_mask": 1, "mode_mask": 1, "trait_mask": 33, "endpoint_policy": 3, "suffix_anchor_policy": 0, "preopen_mechanism_anchor_policy": 0, "ride_mechanism_anchor_policy": 0, "control_policy": 4, "mechanism_policy": 0, "effective_suffix": 4, "field_bias_policy": 0, "field_bias_ms": 0, "controller_revision": 1},
       {"id": 5, "symbol": "RL_LIFT", "runtime_supported": 1, "default_provenance": 3, "provenance_mask": 8, "mode_mask": 1, "trait_mask": 37, "endpoint_policy": 0, "suffix_anchor_policy": 4, "preopen_mechanism_anchor_policy": 0, "ride_mechanism_anchor_policy": 0, "control_policy": 5, "mechanism_policy": 0, "effective_suffix": 5, "field_bias_policy": 0, "field_bias_ms": 0, "controller_revision": 1},

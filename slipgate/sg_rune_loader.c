@@ -295,7 +295,11 @@ rune_reject_reason_t SG_RuneV3ValidateLiteralLink(
 	    ((uint16_t)to->flags & SG_RUNE_V3_SEED_TOMBSTONE) != 0)
 		return RLR_TOMBSTONE_ENDPOINT;
 	if (link->cost_ms < SG_RUNE_V3_MIN_COST_MS ||
-	    link->cost_ms > SG_RUNE_V3_MAX_COST_MS)
+	    link->cost_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    (link->action == RL_DROP &&
+	     (link->cost_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
+	      link->cost_ms >= SG_RUNE_PROOF_DROP_TOTAL_MS ||
+	      link->cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0)))
 		return RLR_BAD_COST;
 	if (!Loader_VectorFinite(link->suffix_anchor) ||
 	    !Loader_VectorFinite(link->mechanism_anchor))
@@ -559,7 +563,11 @@ static rune_reject_reason_t Loader_ClassifyRawLink(
 	if (source == destination)
 		return RLR_SELF_LINK;
 	if (cost_ms < SG_RUNE_V3_MIN_COST_MS ||
-	    cost_ms > SG_RUNE_V3_MAX_COST_MS)
+	    cost_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    (action == RL_DROP &&
+	     (cost_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
+	      cost_ms >= SG_RUNE_PROOF_DROP_TOTAL_MS ||
+	      cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0)))
 		return RLR_BAD_COST;
 	if (record[43] != 0)
 		return RLR_NONZERO_RESERVED;

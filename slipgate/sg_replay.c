@@ -118,27 +118,40 @@ static qboolean ReplayFixedViewCommand(const sg_replay_pose_t *pose,
 
 /* DROP's v3 generator/proof byte is canonical: M_PI remains a double, so the
  * atan2f product is rounded as float and the division plus ANGLE2SHORT continue
- * in double precision. Current live DROP still uses float M_PI; S3b must move
- * it to this selected byte intentionally under differential and corpus gates. */
+ * in double precision.  The revision-2 live shadow uses this same expression
+ * and compares the complete logical usercmd before production executes it. */
 static qboolean ReplayDropPlanarCommand(const sg_replay_pose_t *pose,
 	const vec3_t target, usercmd_t *command)
 {
 	float dx, dy;
-	double yaw;
+	short yaw_command;
 
 	if (!ReplayPoseValid(pose) || !ReplayFiniteVec(target) || !command)
 		return false;
 	dx = target[0] - pose->origin[0];
 	dy = target[1] - pose->origin[1];
-	yaw = atan2f(dy, dx) * 180.0f / M_PI;
-	if (!isfinite(yaw))
+	if (!SG_DropReplayPlanarYawCommand(dx, dy,
+	        pose->pms.delta_angles[YAW], &yaw_command))
 		return false;
 	ReplayCommandClear(command);
 	command->angles[PITCH] = -pose->pms.delta_angles[PITCH];
-	command->angles[YAW] = ANGLE2SHORT(yaw) -
-	                       pose->pms.delta_angles[YAW];
+	command->angles[YAW] = yaw_command;
 	command->angles[ROLL] = -pose->pms.delta_angles[ROLL];
 	command->forwardmove = 400;
+	return true;
+}
+
+qboolean SG_DropReplayPlanarYawCommand(float dx, float dy,
+	short delta_yaw, short *command_yaw)
+{
+	double yaw;
+
+	if (!command_yaw || !isfinite(dx) || !isfinite(dy))
+		return false;
+	yaw = atan2f(dy, dx) * 180.0f / M_PI;
+	if (!isfinite(yaw))
+		return false;
+	*command_yaw = ANGLE2SHORT(yaw) - delta_yaw;
 	return true;
 }
 
@@ -201,6 +214,8 @@ static qboolean ReplayObservationValid(const sg_replay_observation_t *observatio
 {
 	return observation && ReplayBoolValid(observation->contact_clear) &&
 	       ReplayBoolValid(observation->ground_support_valid) &&
+	       ReplayBoolValid(observation->drop_arrival_contact_clear) &&
+	       ReplayBoolValid(observation->drop_recovery_contact_clear) &&
 	       ReplayBoolValid(observation->drop_recovery_admitted) &&
 	       ReplayBoolValid(observation->drop_landing_observed) &&
 	       ReplayBoolValid(observation->contaminated) &&
@@ -304,7 +319,8 @@ qboolean SG_DropReplayArrived(const sg_drop_replay_spec_t *spec,
 	if (!spec || !ReplayBoolValid(spec->destination_water) ||
 	    !ReplayPoseValid(pose) ||
 	    !ReplayObservationValid(observation) ||
-	    ReplayHarmfulLiquid(pose) || !observation->contact_clear ||
+	    ReplayHarmfulLiquid(pose) ||
+	    !observation->drop_arrival_contact_clear ||
 	    !ReplayWithin(pose->origin, spec->destination,
 	                  SG_REPLAY_ARRIVE_RADIUS, SG_REPLAY_ARRIVE_Z))
 		return false;
@@ -323,9 +339,10 @@ qboolean SG_DropReplayRecoveryReady(const sg_drop_replay_spec_t *spec,
 	if (!spec || !ReplayBoolValid(spec->destination_water) ||
 	    !ReplayPoseValid(pose) ||
 	    !ReplayObservationValid(observation) ||
+	    spec->destination_water ||
 	    !pose->grounded || !observation->ground_support_valid ||
 	    pose->waterlevel != 0 || ReplayHarmfulLiquid(pose) ||
-	    !observation->contact_clear)
+	    !observation->drop_recovery_contact_clear)
 		return false;
 	return ReplayWithin(pose->origin, spec->destination,
 	                    SG_RUNE_PROOF_DROP_RECOVERY_RADIUS,
@@ -399,8 +416,9 @@ sg_replay_status_t SG_DropReplayBegin(sg_drop_replay_state_t *state,
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_NONFINITE_POSE);
 	state->spec = *spec;
 	state->progress.old_frame_z = old_frame_z;
-	/* Source overlap contamination is known before the first command.  A door
-	 * bit is not: DROP preserves its post-command door rejection semantics. */
+	/* Source contamination is known before the first command.  Door evidence
+	 * intentionally retains DROP's post-command rejection policy: the live
+	 * adapter carries a source door bit into its first 25 ms observation. */
 	if (observation->contaminated)
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_CONTAMINATED);
 	/* Drop_Rollout judges harmful source liquid at its elapsed-zero boundary. */
@@ -484,6 +502,7 @@ sg_replay_status_t SG_DropReplayPostStep(sg_drop_replay_state_t *state,
 	const sg_replay_observation_t *observation)
 {
 	qboolean arrived, recovery_start;
+	qboolean airborne_after, aligned_contact;
 
 	if (!state || !pose || !ReplayObservationValid(observation))
 		return state ? ReplayFail(&state->progress,
@@ -501,16 +520,16 @@ sg_replay_status_t SG_DropReplayPostStep(sg_drop_replay_state_t *state,
 	    SG_REPLAY_FAILED)
 		return state->progress.status;
 
+	/* Recovery support loss is immediate at 25/50/75 ms.  At an aligned
+	 * production boundary, terminal gets first refusal before the complete
+	 * recovery envelope is revalidated below. */
 	if (state->recovery &&
+	    (state->progress.elapsed_ms % SG_REPLAY_FRAME_MS) != 0 &&
 	    (!pose->grounded || !observation->ground_support_valid))
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_RECOVERY_LOST);
-	if (state->walkoff && !pose->grounded)
-		state->airborne = true;
-	if (state->spec.destination_water && state->airborne &&
-	    (state->progress.elapsed_ms % SG_REPLAY_FRAME_MS) == 0 &&
-	    pose->waterlevel > 0 && pose->waterlevel < 3)
-		return ReplayFail(&state->progress,
-		                  SG_REPLAY_REASON_SHALLOW_WATER_CONTACT);
+	airborne_after = state->airborne ||
+	    (state->walkoff && !pose->grounded);
+	state->airborne = airborne_after;
 	if (pose->origin[2] <
 	    state->spec.destination[2] - SG_REPLAY_DROP_BELOW_Z)
 		return ReplayFail(&state->progress,
@@ -524,14 +543,25 @@ sg_replay_status_t SG_DropReplayPostStep(sg_drop_replay_state_t *state,
 		return ReplayFail(&state->progress,
 		                  SG_REPLAY_REASON_HAZARDOUS_LIQUID);
 
-	arrived = state->walkoff &&
+	arrived = state->walkoff && airborne_after &&
 	          SG_DropReplayArrived(&state->spec, pose, observation);
+	/* Revision 2 gives the terminal its first and only chance before contact
+	 * policy.  A wet destination can never splice a dry shelf recovery, while
+	 * a dry destination may admit exactly one supported, clear, dry recovery. */
 	recovery_start = !arrived && !state->recovery && state->walkoff &&
-	                 state->airborne && observation->drop_recovery_admitted &&
+	                 airborne_after && !state->spec.destination_water &&
 	                 SG_DropReplayRecoveryReady(&state->spec, pose,
 	                                            observation);
-	if (!arrived && !state->recovery && state->walkoff && state->airborne &&
-	    observation->drop_landing_observed && !recovery_start)
+	if (!arrived && state->recovery &&
+	    !SG_DropReplayRecoveryReady(&state->spec, pose, observation))
+		return ReplayFail(&state->progress, SG_REPLAY_REASON_RECOVERY_LOST);
+	if (!arrived && state->spec.destination_water && airborne_after &&
+	    pose->waterlevel > 0 && pose->waterlevel < 3)
+		return ReplayFail(&state->progress,
+		                  SG_REPLAY_REASON_SHALLOW_WATER_CONTACT);
+	aligned_contact = pose->grounded || pose->waterlevel >= 2;
+	if (!arrived && !state->recovery && state->walkoff && airborne_after &&
+	    aligned_contact && !recovery_start)
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_SHORT_LANDING);
 	if (SG_ReplayFallDelta(state->progress.old_frame_z, pose->velocity[2],
 	                       pose->grounded, pose->waterlevel) >

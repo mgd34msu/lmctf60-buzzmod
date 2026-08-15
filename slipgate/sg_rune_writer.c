@@ -338,7 +338,11 @@ static rune_wire_diagnostic_t Writer_EncodeLink(
 		return RLW_BAD_ROUTE_OWNERSHIP;
 	}
 	if (source->cost_ms < SG_RUNE_V3_MIN_COST_MS ||
-	    source->cost_ms > SG_RUNE_V3_MAX_COST_MS)
+	    source->cost_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    (source->action == RL_DROP &&
+	     (source->cost_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
+	      source->cost_ms >= SG_RUNE_PROOF_DROP_TOTAL_MS ||
+	      source->cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0)))
 	{
 		*reason_out = RLR_BAD_COST;
 		return RLW_BAD_LINK_RECORD;

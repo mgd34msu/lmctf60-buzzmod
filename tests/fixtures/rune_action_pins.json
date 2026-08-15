@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_crc32": "e9545af7",
-  "contract_sha256": "bce304d641442fed0d7563536cb371830d85bbb91788b7bcaae3f2c439385a76",
+  "contract_crc32": "5c64bc3b",
+  "contract_sha256": "fd7b4c2288845f9c3448aa82aeabfd8921feb5c943a6ac2f4b8abacd49f36ece",
   "action_symbols": [
     "RL_RUN", "RL_JUMP", "RL_DROP", "RL_HOOK", "RL_SWIM", "RL_LIFT",
     "RL_TELEPORT", "RL_ROCKETJUMP", "RL_DOOR", "RL_DOOR_DROP",
@@ -13,7 +13,7 @@
   ],
   "mode_symbols": ["RLCM_NONE", "RLCM_PREOPEN", "RLCM_RIDE"],
   "runtime_supported": [1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0],
-  "controller_revisions": [1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0],
+  "controller_revisions": [1, 1, 2, 1, 1, 1, 1, 0, 1, 0, 0, 0],
   "effective_suffixes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 2, 4, 3],
   "provenance_masks": [15, 15, 1, 1, 1, 8, 8, 15, 8, 16, 16, 16],
   "mode_masks": [1, 1, 1, 1, 1, 1, 1, 1, 1, 6, 2, 2],
@@ -31,7 +31,7 @@
   "descriptor_rows": [
     [1, 0, 15, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1],
     [1, 0, 15, 1, 3, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1],
-    [1, 0, 1, 1, 3, 2, 2, 0, 0, 2, 0, 2, 1, 150, 1],
+    [1, 0, 1, 1, 3, 2, 2, 0, 0, 2, 0, 2, 1, 150, 2],
     [1, 0, 1, 1, 1, 4, 3, 0, 0, 3, 0, 3, 2, 0, 1],
     [1, 0, 1, 1, 33, 3, 0, 0, 0, 4, 0, 4, 0, 0, 1],
     [1, 3, 8, 1, 37, 0, 4, 0, 0, 5, 0, 5, 0, 0, 1],
@@ -59,6 +59,9 @@
     "angle_short_units": 65536,
     "angle_byte_units": 256,
     "full_turn_degrees": 360,
+    "drop_approach_ms": 2500,
+    "drop_travel_ms": 2000,
+    "drop_total_ms": 4500,
     "drop_lip_horizontal_min": 2,
     "drop_lip_horizontal_max": 256,
     "drop_lip_z_fixed": 64,

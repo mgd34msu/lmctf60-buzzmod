@@ -112,7 +112,7 @@ class RuneIoV3Tests(unittest.TestCase):
         self.assertEqual(44, runeio.LINK_STRUCT.size)
         self.assertEqual(248, len(self.golden))
         self.assertEqual(
-            "b4b6847db0b76286058839510572cbba5adb89903a2e6c0367a098efeef856b0",
+            "a34d0f1721d6bbbe89828a76c3b477e80743b1473e9103f81a41d8b26cbf36a5",
             hashlib.sha256(self.golden).hexdigest(),
         )
         self.assertEqual(
@@ -143,7 +143,9 @@ class RuneIoV3Tests(unittest.TestCase):
         self.assertEqual(self.links, decoded.links)
         self.assertEqual(self.golden[HEADER_BYTES:], decoded.payload)
         self.assertEqual(0xE3D0AC5F, decoded.payload_crc32)
+        self.assertEqual(0x5C64BC3B, decoded.header.action_contract_crc32)
         self.assertEqual(contract.CONTRACT_CRC32, decoded.header.action_contract_crc32)
+        self.assertEqual(0x887334B9, decoded.header.header_crc32)
         self.assertEqual(self.golden, runeio.encode_v3(
             decoded.identity, decoded.seeds, decoded.links
         ))
@@ -377,6 +379,52 @@ class RuneIoV3Tests(unittest.TestCase):
                     contract.RLW_BAD_LINK_RECORD,
                     lambda data=data: runeio.decode_v3(data),
                 )
+
+    def test_ordinary_drop_cost_uses_generated_server_frame_law(self):
+        seeds = (
+            runeio.RuneSeedV3((0.0, 0.0, 0.0)),
+            runeio.RuneSeedV3((128.0, 0.0, 0.0)),
+        )
+
+        def links(cost_ms):
+            return (
+                runeio.RuneLinkV3(
+                    0, 1, contract.RL_DROP, contract.RL_PROVEN,
+                    0, 0, contract.RUNE_PROOF_DROP_CONTROL_MARKER, 0,
+                    cost_ms, (64.0, 0.0, 8.0),
+                ),
+                runeio.RuneLinkV3(
+                    1, 0, contract.RL_RUN, contract.RL_PROVEN,
+                    0, 0, 0, 0, 100,
+                ),
+            )
+
+        for cost_ms in (99, 101, 125, 4500):
+            with self.subTest(encode_cost=cost_ms):
+                self.assert_wire_code(
+                    contract.RLW_BAD_LINK_RECORD,
+                    lambda cost_ms=cost_ms: runeio.encode_v3(
+                        self.identity, seeds, links(cost_ms)
+                    ),
+                )
+        for cost_ms in (100, 4400):
+            with self.subTest(accepted_cost=cost_ms):
+                encoded = runeio.encode_v3(
+                    self.identity, seeds, links(cost_ms)
+                )
+                self.assertEqual(
+                    cost_ms, runeio.decode_v3(encoded).links[0].cost_ms
+                )
+
+        crc_correct = bytearray(runeio.encode_v3(
+            self.identity, seeds, links(100)
+        ))
+        struct.pack_into("<h", crc_correct, LINK0_OFFSET + 14, 125)
+        _fix_payload_crc(crc_correct)
+        self.assert_wire_code(
+            contract.RLW_BAD_LINK_RECORD,
+            lambda: runeio.decode_v3(crc_correct),
+        )
 
     def test_endpoint_compound_sweep_and_mechanism_lattice_reject(self):
         mutations = []

@@ -88,6 +88,10 @@ RUNE_PROOF_TEST_DEPS := $(RUNE_PROOF_TEST_OBJS:.o=.d)
 REPLAY_TEST_BIN := sg_replay_test.make
 REPLAY_TEST_OBJS := .sg_replay_test.make.o .sg_replay_under_test.make.o
 REPLAY_TEST_DEPS := $(REPLAY_TEST_OBJS:.o=.d)
+DROP_LIVE_TEST_BIN := sg_drop_live_test.make
+DROP_LIVE_TEST_OBJS := .sg_drop_live_test.make.o \
+	.sg_drop_live_under_test.make.o .sg_drop_live_replay_under_test.make.o
+DROP_LIVE_TEST_DEPS := $(DROP_LIVE_TEST_OBJS:.o=.d)
 SWIM_LIVE_TEST_BIN := sg_swim_live_test.make
 SWIM_LIVE_TEST_OBJS := .sg_swim_live_test.make.o \
 	.sg_swim_live_under_test.make.o .sg_swim_live_replay_under_test.make.o
@@ -190,6 +194,15 @@ HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_replay_under_test.gnu.o .sg_replay_under_test.gnu.d \
 	.sg_replay_test.make.o .sg_replay_test.make.d \
 	.sg_replay_under_test.make.o .sg_replay_under_test.make.d \
+	sg_drop_live_test.gnu sg_drop_live_test.make \
+	.sg_drop_live_test.gnu.o .sg_drop_live_test.gnu.d \
+	.sg_drop_live_under_test.gnu.o .sg_drop_live_under_test.gnu.d \
+	.sg_drop_live_replay_under_test.gnu.o \
+	.sg_drop_live_replay_under_test.gnu.d \
+	.sg_drop_live_test.make.o .sg_drop_live_test.make.d \
+	.sg_drop_live_under_test.make.o .sg_drop_live_under_test.make.d \
+	.sg_drop_live_replay_under_test.make.o \
+	.sg_drop_live_replay_under_test.make.d \
 	sg_swim_live_test.gnu sg_swim_live_test.make \
 	.sg_swim_live_test.gnu.o .sg_swim_live_test.gnu.d \
 	.sg_swim_live_under_test.gnu.o .sg_swim_live_under_test.gnu.d \
@@ -345,6 +358,7 @@ OBJS := \
 	sg_rune_install.o \
 	sg_rune_proof.o \
 	sg_replay.o \
+	sg_drop_live.o \
 	sg_swim_live.o \
 	sg_oracle.o \
 	sg_rune.o \
@@ -395,7 +409,7 @@ default: all
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
 	rune-loader-test \
 	rune-writer-test rune-install-test rune-proof-test replay-test \
-	swim-live-test rotator-sweep-test entfile-test \
+	drop-live-test swim-live-test rotator-sweep-test entfile-test \
 	snapshot-test clean strip FORCE
 
 FORCE:
@@ -447,6 +461,7 @@ $(OBJS): $(REVISION_HEADER)
 -include $(RUNE_INSTALL_TEST_DEPS)
 -include $(RUNE_PROOF_TEST_DEPS)
 -include $(REPLAY_TEST_DEPS)
+-include $(DROP_LIVE_TEST_DEPS)
 -include $(SWIM_LIVE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
@@ -536,6 +551,10 @@ $(RUNE_PROOF_TEST_BIN): $(RUNE_PROOF_TEST_OBJS)
 $(REPLAY_TEST_BIN): $(REPLAY_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(REPLAY_TEST_OBJS) $(LIBS)
+
+$(DROP_LIVE_TEST_BIN): $(DROP_LIVE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(DROP_LIVE_TEST_OBJS) $(LIBS)
 
 $(SWIM_LIVE_TEST_BIN): $(SWIM_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -743,6 +762,24 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_drop_live_test.make.o: tests/sg_drop_live_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_drop_live_under_test.make.o: slipgate/sg_drop_live.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_drop_live_replay_under_test.make.o: slipgate/sg_replay.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_swim_live_test.make.o: tests/sg_swim_live_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -793,7 +830,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 		$(DANGER_V3_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
 		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
-		$(REPLAY_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
+		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
 		$(ROTATOR_SWEEP_TEST_BIN) \
 		$(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
@@ -813,6 +850,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 	$(Q)./$(RUNE_INSTALL_TEST_BIN)
 	$(Q)./$(RUNE_PROOF_TEST_BIN)
 	$(Q)./$(REPLAY_TEST_BIN)
+	$(Q)./$(DROP_LIVE_TEST_BIN)
+	$(Q)sh tests/sg_drop_begin_wiring_test.sh
 	$(Q)./$(SWIM_LIVE_TEST_BIN)
 	$(Q)./$(ROTATOR_SWEEP_TEST_BIN)
 	$(Q)./$(ENTFILE_TEST_BIN)
@@ -877,6 +916,11 @@ rune-proof-test: $(RUNE_PROOF_TEST_BIN)
 replay-test: $(REPLAY_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(REPLAY_TEST_BIN)
+
+drop-live-test: $(DROP_LIVE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(DROP_LIVE_TEST_BIN)
+	$(Q)sh tests/sg_drop_begin_wiring_test.sh
 
 swim-live-test: $(SWIM_LIVE_TEST_BIN)
 	$(E) [TEST] $<

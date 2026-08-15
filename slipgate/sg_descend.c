@@ -15,6 +15,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
@@ -167,6 +168,74 @@ static qboolean Drop_RecoveryReady(edict_t *e, const rune_link_t *l)
 	to[2] += 16.0f;
 	tr = sg_host.trace(from, NULL, NULL, to, e, MASK_PLAYERSOLID);
 	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+}
+
+typedef struct drop_live_contact_context_s
+{
+	edict_t *ent;
+	const rune_link_t *link;
+} drop_live_contact_context_t;
+
+static qboolean Drop_LiveSupportValid(const edict_t *e)
+{
+	return e && e->groundentity &&
+	       (e->groundentity == g_edicts ||
+	        SG_ImmutableSupport(e->groundentity));
+}
+
+static void Drop_LivePose(const edict_t *e, sg_replay_pose_t *pose)
+{
+	SG_DropLivePose(pose, e && e->client ? &e->client->ps.pmove : NULL,
+	    e ? e->s.origin : NULL, e ? e->velocity : NULL,
+	    e && e->groundentity != NULL, e ? e->watertype : 0,
+	    e ? e->waterlevel : 0);
+}
+
+static qboolean Drop_LiveArrival(const sg_drop_replay_spec_t *spec,
+	const sg_replay_pose_t *pose, void *context)
+{
+	drop_live_contact_context_t *contact =
+	    (drop_live_contact_context_t *)context;
+
+	(void)spec;
+	(void)pose;
+	return contact && contact->ent && contact->link &&
+	       Ballistic_Arrived(contact->ent, contact->link);
+}
+
+static qboolean Drop_LiveRecovery(const sg_drop_replay_spec_t *spec,
+	const sg_replay_pose_t *pose, void *context)
+{
+	drop_live_contact_context_t *contact =
+	    (drop_live_contact_context_t *)context;
+
+	(void)spec;
+	(void)pose;
+	return contact && contact->ent && contact->link &&
+	       Drop_RecoveryReady(contact->ent, contact->link);
+}
+
+static void Drop_LiveSync(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->drop_walkoff = bot->drop_replay.walkoff;
+	bot->drop_airborne = bot->drop_replay.airborne;
+	bot->drop_recover = bot->drop_replay.recovery;
+}
+
+static void Drop_LiveBoundaryLog(const edict_t *e, int link_index,
+	const sg_drop_live_result_t *result)
+{
+	if (!result || result->outcome == SG_DROP_LIVE_RUNNING ||
+	    result->outcome == SG_DROP_LIVE_ARRIVED || !sg_cv.debug->value)
+		return;
+	sg_host.dprint("DROPREPLAY%s %s link=%d phase=boundary adapter=%s "
+	               "replay=%s\n",
+	    result->outcome == SG_DROP_LIVE_FAILED ? "FAIL" : "FALLBACK",
+	    e && e->client ? e->client->pers.netname : "?", link_index,
+	    SG_DropLiveFailureName(result->failure),
+	    SG_ReplayReasonName(result->replay_reason));
 }
 
 /*
@@ -1723,17 +1792,88 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		                     cl->action == RL_DOOR);
 		qboolean swim_failed = false;
 		qboolean staging_timed_out = false;
+		qboolean drop_boundary_owned = false;
+		qboolean drop_boundary_failed = false;
+		qboolean drop_boundary_recovery_lost = false;
+		sg_replay_reason_t drop_boundary_reason = SG_REPLAY_REASON_NONE;
 		qboolean ballistic = (!e->groundentity && e->waterlevel < 2 &&
 		    (cl->action == RL_JUMP || cl->action == RL_DROP ||
 		     (cl->action == RL_ROCKETJUMP && bot->rj_phase == 3)));
 		int b;
+
+		/* The fourth literal command is completed here, after the intervening
+		 * entity/pusher pass.  Resolve every production boundary, including an
+		 * airborne one: exact cost and reducer caps are authoritative and cannot
+		 * wait for legacy's first supported contact. */
+		if (cl->action == RL_DROP && bot->drop_started &&
+		    bot->drop_replay_active)
+		{
+			drop_live_contact_context_t contact;
+			sg_drop_live_events_t live_events;
+			sg_replay_pose_t live_pose;
+			sg_drop_live_result_t live_result;
+
+			contact.ent = e;
+			contact.link = cl;
+			if (SG_OracleReplayDoorPassage(bot->drop_live_step_origin,
+			        e->s.origin))
+				(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
+				    false, true);
+			live_events = bot->drop_live_events;
+			memset(&bot->drop_live_events, 0,
+			       sizeof(bot->drop_live_events));
+			Drop_LivePose(e, &live_pose);
+			live_result = SG_DropLiveBoundary(&bot->drop_replay,
+			    &bot->drop_replay_active, &bot->drop_replay_link,
+			    bot->commit_link, &live_pose, Drop_LiveSupportValid(e),
+			    &live_events,
+			    Drop_LiveArrival, Drop_LiveRecovery, &contact);
+			Drop_LiveSync(bot);
+			Drop_LiveBoundaryLog(e, bot->commit_link, &live_result);
+			if (live_result.outcome == SG_DROP_LIVE_RUNNING)
+				drop_boundary_owned = true;
+			else if (live_result.outcome == SG_DROP_LIVE_ARRIVED)
+			{
+				drop_boundary_owned = true;
+				drop_commit = true;
+				bestlink = -1;
+			}
+			else if (live_result.outcome == SG_DROP_LIVE_FAILED)
+			{
+				drop_boundary_owned = true;
+				drop_boundary_failed = true;
+				drop_boundary_reason = live_result.replay_reason;
+				drop_boundary_recovery_lost =
+				    live_result.replay_reason == SG_REPLAY_REASON_RECOVERY_LOST;
+				drop_commit = true;
+				ballistic_failed = true;
+				bestlink = -1;
+			}
+			else
+			{
+				/* Every adapter fallback retires the owned DROP. Re-entering legacy
+				 * would either replay an ordered trace or execute a controller whose
+				 * identity/cadence already failed. It is integration evidence, so it
+				 * neither shelves nor teaches the serialized link. */
+				drop_boundary_owned = true;
+				drop_boundary_failed = true;
+				drop_commit = true;
+				bestlink = -1;
+			}
+		}
 
 		if (!ballistic)
 		{
 			VectorSubtract(SG_Rune()->seeds[cl->to].origin, e->s.origin, d);
 			if (proved_ballistic)
 			{
-				qboolean action_started =
+				/* A live DROP boundary owns all terminal decisions while its
+				 * reducer is running. Keep the entire proved-ballistic family out
+				 * of the ordinary-action fallthrough; JUMP and an unowned DROP
+				 * retain this legacy terminal path verbatim. */
+				if (!(cl->action == RL_DROP && drop_boundary_owned))
+				{
+					qboolean action_started =
 				    (cl->action == RL_JUMP && bot->jump_started) ||
 				    (cl->action == RL_DROP && bot->drop_started &&
 				     bot->drop_walkoff);
@@ -1774,6 +1914,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					 * shallow splash is not permission to splice on a second move. */
 					drop_commit = true;
 					ballistic_failed = true;
+				}
 				}
 			}
 			else if (proved_swim)
@@ -1916,7 +2057,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				if (goal_field[bot->seed] <= goal_field[cl->to])
 					drop_commit = true;
 			}
-			if ((!proved_swim || bot->swim_validated) &&
+			if (!drop_boundary_owned &&
+			    (!proved_swim || bot->swim_validated) &&
 			    SG_TimerReadyStrict(bot->commit_until))
 			{
 				qboolean retain_door = false;
@@ -1953,7 +2095,17 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 * forever while airborne. Retire/shelf at the exact deadline and spend
 		 * this frame as four zero-input production commands: gravity continues,
 		 * but no unproved navigation suffix is appended to the failed action. */
-		if (proved_ballistic && ballistic &&
+		if (drop_boundary_failed && ballistic)
+		{
+			usercmd_t coast;
+
+			memset(&coast, 0, sizeof(coast));
+			coast.msec = SG_REPLAY_STEP_MS;
+			for (b = 0; b < SG_DROP_LIVE_FRAME_STEPS; b++)
+				ClientThink(e, &coast);
+			tc->think_over = true;
+		}
+		if (proved_ballistic && ballistic && !drop_boundary_owned &&
 		    SG_TimerReadyStrict(bot->commit_until))
 		{
 			usercmd_t coast;
@@ -2011,11 +2163,16 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 						oldest = b;
 				bot->bl_link[oldest] = bot->commit_link;
 				SG_TimerArm(&bot->bl_until[oldest], 10.0f);
+				if (drop_boundary_recovery_lost)
+					SG_TeachLinkFutility(bot->commit_link);
 				bestlink = -1;
 				if (sg_cv.debug->value)
-					sg_host.dprint("BALLISTICFAIL %s link=%d action=%d contact short\n",
+					sg_host.dprint("BALLISTICFAIL %s link=%d action=%d %s\n",
 					           e->client->pers.netname, bot->commit_link,
-					           (int)cl->action);
+					           (int)cl->action,
+					           drop_boundary_reason != SG_REPLAY_REASON_NONE ?
+					               SG_ReplayReasonName(drop_boundary_reason) :
+					               "contact short");
 			}
 			bot->commit_link = -1;
 			bot->jump_link = -1;
@@ -2025,6 +2182,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->drop_walkoff = false;
 			bot->drop_airborne = false;
 			bot->drop_recover = false;
+			SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+			    &bot->drop_replay_link, &bot->drop_live_events);
 			SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
 			    &bot->swim_replay_link, &bot->swim_validated,
 			    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
@@ -2050,6 +2209,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->commit_link = bestlink;
 		bot->jump_link = (new_link->action == RL_JUMP) ? bestlink : -1;
 		bot->jump_started = false;
+		SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+		    &bot->drop_replay_link, &bot->drop_live_events);
 		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
 		    &bot->swim_replay_link, &bot->swim_validated,
 		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);

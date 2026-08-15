@@ -249,8 +249,9 @@ static void TestGolden(const unsigned char golden[GOLDEN_BYTES])
 	CHECK(encoded_size == GOLDEN_BYTES);
 	CHECK(memcmp(encoded, golden, GOLDEN_BYTES) == 0);
 	CHECK(GetU32(golden + 20) == UINT32_C(0xe3d0ac5f));
+	CHECK(GetU32(golden + 32) == UINT32_C(0x5c64bc3b));
 	CHECK(GetU32(golden + SG_RUNE_V3_HEADER_CRC_OFFSET) ==
-		UINT32_C(0xddc378d1));
+		UINT32_C(0x887334b9));
 
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3Decode(golden, GOLDEN_BYTES,
 		&identity, &header, decoded_seeds, 2, decoded_links, 2,
@@ -260,6 +261,8 @@ static void TestGolden(const unsigned char golden[GOLDEN_BYTES])
 	CHECK(header.num_seeds == 2 && header.num_links == 2);
 	CHECK(header.gravity == 650.0f);
 	CHECK(header.payload_crc32 == UINT32_C(0xe3d0ac5f));
+	CHECK(header.action_contract_crc32 == UINT32_C(0x5c64bc3b));
+	CHECK(header.header_crc32 == UINT32_C(0x887334b9));
 	CHECK(memcmp(header.map_name, identity.map_name,
 		SG_RUNE_V3_MAP_NAME_BYTES) == 0);
 	CHECK(decoded_seeds[0].area_hint == 7);
@@ -285,7 +288,7 @@ static void TestGolden(const unsigned char golden[GOLDEN_BYTES])
 
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3HeaderCRC32(golden,
 		SG_RUNE_V3_HEADER_BYTES, &crc));
-	CHECK(crc == UINT32_C(0xddc378d1));
+	CHECK(crc == UINT32_C(0x887334b9));
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3PayloadCRCInit(&crc_state));
 	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3PayloadCRCUpdate(&crc_state,
 		golden + SEED0_OFFSET, SG_RUNE_V3_SEED_BYTES));
@@ -499,6 +502,48 @@ static void TestPayloadRecords(const unsigned char golden[GOLDEN_BYTES])
 		&encoded_size));
 }
 
+static void TestDropCostLaw(void)
+{
+	static const int16_t rejected[] = { 99, 101, 125, 4500 };
+	static const int16_t accepted[] = { 100, 4400 };
+	sg_rune_v3_link_t link;
+	sg_rune_v3_link_t decoded;
+	unsigned char encoded[SG_RUNE_V3_LINK_BYTES];
+	size_t index;
+
+	memset(&link, 0, sizeof(link));
+	link.source = 0;
+	link.destination = 1;
+	link.action = RL_DROP;
+	link.provenance = RL_PROVEN;
+	link.heading_slack = SG_RUNE_PROOF_DROP_CONTROL_MARKER;
+	SetVector(link.suffix_anchor, 64.0f, 0.0f, 8.0f);
+	for (index = 0; index < sizeof(rejected) / sizeof(rejected[0]); index++)
+	{
+		link.cost_ms = rejected[index];
+		CHECK_DIAGNOSTIC(RLW_BAD_LINK_RECORD, SG_RuneV3EncodeLink(&link,
+			encoded, sizeof(encoded)));
+	}
+	for (index = 0; index < sizeof(accepted) / sizeof(accepted[0]); index++)
+	{
+		link.cost_ms = accepted[index];
+		CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3EncodeLink(&link, encoded,
+			sizeof(encoded)));
+		CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3DecodeLink(encoded,
+			sizeof(encoded), &decoded));
+		CHECK(decoded.cost_ms == accepted[index]);
+	}
+	link.cost_ms = 100;
+	CHECK_DIAGNOSTIC(RLW_OK, SG_RuneV3EncodeLink(&link, encoded,
+		sizeof(encoded)));
+	for (index = 0; index < sizeof(rejected) / sizeof(rejected[0]); index++)
+	{
+		PutU16(encoded + 14, (uint16_t)rejected[index]);
+		CHECK_DIAGNOSTIC(RLW_BAD_LINK_RECORD, SG_RuneV3DecodeLink(encoded,
+			sizeof(encoded), &decoded));
+	}
+}
+
 static void TestOwnershipCapacityAndArguments(
 	const unsigned char golden[GOLDEN_BYTES])
 {
@@ -602,6 +647,7 @@ int main(void)
 	TestGolden(golden);
 	TestHeaderAndIdentity(golden);
 	TestPayloadRecords(golden);
+	TestDropCostLaw();
 	TestOwnershipCapacityAndArguments(golden);
 	TestEverySingleBitRejects(golden);
 	if (failures)

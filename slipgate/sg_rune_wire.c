@@ -564,6 +564,11 @@ static rune_wire_diagnostic_t Wire_ValidateLinkFields(
 	    link->cost_ms < SG_RUNE_V3_MIN_COST_MS ||
 	    link->cost_ms > SG_RUNE_V3_MAX_COST_MS || link->reserved != 0)
 		return RLW_BAD_LINK_RECORD;
+	if (link->action == RL_DROP &&
+	    (link->cost_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
+	     link->cost_ms >= SG_RUNE_PROOF_DROP_TOTAL_MS ||
+	     link->cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0))
+		return RLW_BAD_LINK_RECORD;
 	diagnostic = Wire_ValidateAnchor(link->suffix_anchor,
 		(int)action->suffix_anchor_policy);
 	if (diagnostic != RLW_OK)

@@ -79,9 +79,11 @@ Current phase summary:
   and full frame-capture/replay system.
 - Action metadata is centralized, but execution remains split among historical
   per-action switches rather than one common dispatcher.
-- Live adapters are not yet migrated.
-- DROP wet/dry contact policy and live-versus-proof yaw-byte convergence remain
-  explicit unresolved S3b decisions.
+- Live SWIM is migrated to the reducer at `73a2049`; DROP and HOOK live
+  adapters remain to be migrated.
+- DROP controller revision 2 freezes the wet/dry contact policy and canonical
+  double-yaw byte. Its live-adapter implementation and later 181-map
+  acceptance remain pending.
 - There is no single unified local pre-push command or final integration gate.
 - Generator seed append order, exposure sampling, and tombstone placement can
   vary with generation timing even when the normalized executable graph is
@@ -145,12 +147,10 @@ the reboot. Its observations may guide diagnosis but are not accepted evidence.
 
 1. Resolve the newly exposed generator ordering/exposure reproducibility issue
    or prove that it does not block the next differential gate.
-2. Regenerate v3 artifacts under action contract `e9545af7`; prior runes and
-   graph-indexed sidecars are deliberately stale after provenance tightening.
-3. Migrate live SWIM to the reducer.
-4. Migrate live DROP with an explicit wet-contact policy, canonical yaw bytes,
-   action-contract revision, and corpus regeneration.
-5. Migrate live HOOK, then begin the first compound PREOPEN/RIDE vertical slice.
+2. Complete the in-implementation live DROP revision-2 adapter under frozen
+   action contract `5c64bc3b`, then regenerate v3 artifacts and run the
+   181-map acceptance gate; runtime acceptance is not claimed before that.
+3. Migrate live HOOK, then begin the first compound PREOPEN/RIDE vertical slice.
 
 ### Protected/unrelated state
 
@@ -786,5 +786,17 @@ the commit, verification, corpus scope, and remaining blocker.
   3,562,067 respectively. Replay-all is therefore forbidden. Sparse
   declared-door and future compound replay remains synchronous. CRC and
   identity provide integrity/world binding, not signer authentication. The
-  mask change advances the semantic contract to `e9545af7` and intentionally
-  stales prior v3 runes and indexed sidecars.
+  subsequent DROP controller-revision-2 timing contract advances the semantic
+  contract to `5c64bc3b` and intentionally stales prior v3 runes and indexed
+  sidecars.
+- 2026-08-14: S3b4 freezes the DROP revision-2 contract before live migration:
+  pre-airborne supported handoff continues; post-airborne terminal status wins;
+  one dry grounded recovery is allowed; later ground contact or water depth two
+  or more rejects; and the command stores the canonical double-promoted yaw
+  byte. The generated proof law pins 2500 ms approach, 2000 ms post-walkoff
+  travel, and a 4500 ms total bound. Ordinary v3 DROP cost is a positive 100 ms
+  frame multiple below that bound; writer, wire codec, loader, Python codec,
+  and runtime-v3 lint reject any other value without changing v2. The focused
+  contract/golden acceptance proves stale-artifact rejection and cross-language
+  encoding only. A new 181-map result remains a later live-adapter and
+  corpus-regeneration gate.

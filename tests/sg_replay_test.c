@@ -46,6 +46,8 @@ static sg_replay_observation_t TestObservation(void)
 	memset(&observation, 0, sizeof(observation));
 	observation.contact_clear = true;
 	observation.ground_support_valid = true;
+	observation.drop_arrival_contact_clear = true;
+	observation.drop_recovery_contact_clear = true;
 	observation.drop_recovery_admitted = true;
 	observation.hook_rope_valid = true;
 	observation.hook_rope_length = 1000;
@@ -157,8 +159,10 @@ static void TestFallAndTerminalBoundaries(void)
 	CHECK(!SG_DropReplayArrived(&drop, &pose, &observation));
 	pose.origin[2] = 0.0f;
 	observation.contact_clear = false;
+	observation.drop_arrival_contact_clear = false;
 	CHECK(!SG_DropReplayArrived(&drop, &pose, &observation));
 	observation.contact_clear = true;
+	observation.drop_arrival_contact_clear = true;
 	observation.ground_support_valid = false;
 	CHECK(!SG_DropReplayArrived(&drop, &pose, &observation));
 	pose.grounded = false;
@@ -178,12 +182,11 @@ static void TestFallAndTerminalBoundaries(void)
 	pose.origin[0] = 0.0f;
 	pose.origin[2] = 72.0f;
 	CHECK(!SG_DropReplayRecoveryReady(&drop, &pose, &observation));
-	/* RecoveryReady is bounded dry-shelf geometry, not destination policy.
-	 * Whether a wet link admits it is an explicit adapter decision. */
+	/* Revision 2 binds recovery admission to a dry serialized destination. */
 	drop.destination_water = true;
 	pose = TestPose(95.999f, 0.0f, 71.999f);
 	observation.drop_recovery_admitted = false;
-	CHECK(SG_DropReplayRecoveryReady(&drop, &pose, &observation));
+	CHECK(!SG_DropReplayRecoveryReady(&drop, &pose, &observation));
 
 	VectorClear(swim.destination);
 	pose = TestPose(39.999f, 0.0f, 71.999f);
@@ -309,6 +312,39 @@ static void TestDropWalkoffCommandsAndRecovery(void)
 	CHECK_STATUS(SG_DropReplayPostStep(&state, &pose, &observation),
 	             SG_REPLAY_FAILED);
 	CHECK(state.progress.reason == SG_REPLAY_REASON_RECOVERY_LOST);
+
+	/* On an aligned boundary, an already-recovering DROP evaluates terminal
+	 * before recovery support.  A dry destination admits its canonical depth-2
+	 * terminal even though the same pose is not a valid grounded recovery. */
+	spec = TestDropSpec();
+	VectorClear(spec.lip);
+	VectorSet(spec.destination, 200.0f, 0.0f, 0.0f);
+	pose = TestPose(0.0f, 0.0f, 0.0f);
+	observation = TestObservation();
+	CHECK_STATUS(SG_DropReplayBegin(&state, &spec, &pose, &observation, 0.0f),
+	             SG_REPLAY_RUNNING);
+	for (int step = 0; step < 3; step++)
+	{
+		pose.grounded = false;
+		CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+		             SG_REPLAY_RUNNING);
+	}
+	pose = TestPose(120.0f, 0.0f, 0.0f);
+	CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+	             SG_REPLAY_RUNNING);
+	CHECK(state.recovery && state.progress.elapsed_ms == 100);
+	for (int step = 0; step < 3; step++)
+		CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+		             SG_REPLAY_RUNNING);
+	pose = TestPose(200.0f, 0.0f, 0.0f);
+	pose.grounded = false;
+	pose.waterlevel = 2;
+	pose.watertype = CONTENTS_WATER;
+	observation.ground_support_valid = false;
+	observation.drop_recovery_contact_clear = false;
+	CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+	             SG_REPLAY_ARRIVED);
+	CHECK(state.progress.arrival_ms == 200);
 }
 
 static void TestDropTerminalFailuresAndCaps(void)
@@ -337,6 +373,35 @@ static void TestDropTerminalFailuresAndCaps(void)
 	CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
 	             SG_REPLAY_ARRIVED);
 	CHECK(state.progress.arrival_ms == 100 && state.progress.exit_speed == 200);
+
+	/* A close supported handoff is not a terminal contact.  It remains running
+	 * through the first boundary, then the identical supported pose may arrive
+	 * only after an intervening authoritative airborne step. */
+	spec = TestDropSpec();
+	VectorClear(spec.lip);
+	VectorSet(spec.destination, 16.0f, 0.0f, 0.0f);
+	spec.expected_arrival_ms = 200;
+	pose = TestPose(0.0f, 0.0f, 0.0f);
+	observation = TestObservation();
+	CHECK_STATUS(SG_DropReplayBegin(&state, &spec, &pose, &observation, 0.0f),
+	             SG_REPLAY_RUNNING);
+	for (step = 0; step < 4; step++)
+	{
+		pose = TestPose(16.0f, 0.0f, 0.0f);
+		CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+		             SG_REPLAY_RUNNING);
+	}
+	CHECK(!state.airborne && state.progress.elapsed_ms == 100);
+	for (step = 0; step < 3; step++)
+	{
+		pose.grounded = false;
+		CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+		             SG_REPLAY_RUNNING);
+	}
+	pose = TestPose(16.0f, 0.0f, 0.0f);
+	CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+	             SG_REPLAY_ARRIVED);
+	CHECK(state.airborne && state.progress.arrival_ms == 200);
 
 	/* A dry first landing outside recovery is terminal, not a new walk. */
 	spec = TestDropSpec();
@@ -461,38 +526,30 @@ static void TestDropWetShelfPolicies(void)
 	sg_replay_pose_t pose;
 	sg_replay_observation_t observation;
 	usercmd_t command;
-	int policy, step;
+	int step;
 
 	VectorClear(spec.lip);
 	VectorSet(spec.destination, 200.0f, 0.0f, 0.0f);
 	spec.destination_water = true;
-	/* policy 0 mirrors proof: a wet destination admits neither dry recovery
-	 * nor a dry shelf as terminal. Policies 1/2 mirror runtime: the bounded
-	 * shelf starts recovery, while an out-of-envelope shelf fails immediately. */
-	for (policy = 0; policy < 3; policy++)
+	/* Adapter policy bits cannot reopen recovery for a wet destination.  Its
+	 * first post-airborne dry contact fails even inside the recovery envelope. */
+	pose = TestPose(0.0f, 0.0f, 0.0f);
+	observation = TestObservation();
+	observation.drop_recovery_admitted = true;
+	observation.drop_landing_observed = false;
+	CHECK_STATUS(SG_DropReplayBegin(&state, &spec, &pose, &observation,
+	                                0.0f), SG_REPLAY_RUNNING);
+	for (step = 0; step < 3; step++)
 	{
-		pose = TestPose(0.0f, 0.0f, 0.0f);
-		observation = TestObservation();
-		observation.drop_recovery_admitted = policy != 0;
-		observation.drop_landing_observed = policy != 0;
-		CHECK_STATUS(SG_DropReplayBegin(&state, &spec, &pose, &observation,
-		                                0.0f), SG_REPLAY_RUNNING);
-		for (step = 0; step < 3; step++)
-		{
-			pose.grounded = false;
-			CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
-			             SG_REPLAY_RUNNING);
-		}
-		pose = TestPose(policy == 2 ? 0.0f : 120.0f, 0.0f, 0.0f);
 		CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
-		             policy == 2 ? SG_REPLAY_FAILED : SG_REPLAY_RUNNING);
-		if (policy == 0)
-			CHECK(!state.recovery);
-		else if (policy == 1)
-			CHECK(state.recovery);
-		else
-			CHECK(state.progress.reason == SG_REPLAY_REASON_SHORT_LANDING);
+		             SG_REPLAY_RUNNING);
+		pose.grounded = false;
 	}
+	pose = TestPose(120.0f, 0.0f, 0.0f);
+	CHECK_STATUS(DropStep(&state, &pose, &observation, &command),
+	             SG_REPLAY_FAILED);
+	CHECK(!state.recovery &&
+	      state.progress.reason == SG_REPLAY_REASON_SHORT_LANDING);
 }
 
 static void TestSwimControllerAndCadence(void)
@@ -683,10 +740,10 @@ static void TestPlanarAnglePrecision(void)
 	sg_replay_observation_t observation = TestObservation();
 	usercmd_t command;
 
-	/* This exact delta straddles one usercmd-short boundary. The v3 DROP
-	 * generator/proof's selected byte is -32684; current live DROP still emits
-	 * the float-M_PI byte and S3b must migrate it under differential/corpus
-	 * gates. Hook settlement intentionally retains its float byte here. */
+	/* This exact delta straddles one usercmd-short boundary. Revision-2 live
+	 * DROP independently reconstructs and checks the v3 generator/proof's
+	 * selected -32684 byte. Hook settlement intentionally retains its float
+	 * byte here. */
 	VectorSet(drop.lip, -94.25f, -0.75f, 0.0f);
 	drop.heading = 128;
 	CHECK_STATUS(SG_DropReplayBegin(&drop_state, &drop, &pose, &observation,

@@ -8,7 +8,7 @@
 #ifndef SG_BOT_H
 #define SG_BOT_H
 
-#include "sg_replay.h"
+#include "sg_drop_live.h"
 
 #define SG_MAXBOTS      16
 
@@ -139,6 +139,11 @@ typedef struct sg_bot_s
 	qboolean	drop_walkoff;   /* crossed the <=8u lip handoff this action */
 	qboolean	drop_airborne;  /* at least one proved 25 ms step lost support */
 	qboolean	drop_recover;   /* first proved landing made; walk to exact `to` */
+	sg_drop_replay_state_t drop_replay; /* ordinary revision-2 RL_DROP only */
+	qboolean	drop_replay_active;
+	int			drop_replay_link; /* identity guard, -1 outside reducer ownership */
+	sg_drop_live_events_t drop_live_events; /* host events since last 25 ms read */
+	vec3_t		drop_live_step_origin; /* real origin before pending ClientThink */
 	qboolean	swim_validated; /* online witness from actual fixed-point entry */
 	int			swim_proved_ms; /* exact shared 100 ms arrival boundary */
 	int			swim_elapsed_ms;
@@ -398,7 +403,8 @@ typedef struct sg_think_s {
 	int				door_hold;
 	edict_t			*door_ent;
 	qboolean		drop_yaw_locked;
-	float			drop_yaw;
+	double			drop_yaw; /* preserve DROP's double-M_PI command atom */
+	qboolean		drop_source_door_pending; /* first 25 ms observation only */
 	qboolean		hook_brake;
 	qboolean		jump_launch;    /* this frame owns the one proved launch tap */
 	qboolean		duel, duel_hold;
