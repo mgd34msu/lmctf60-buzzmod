@@ -7,6 +7,19 @@
 #pragma warning(disable : 4100)    //unreferenced formal parameter lots in id code
 #endif
 
+/* MSVC's legacy C mode, which the Windows project still uses, does not
+ * recognize C11's _Static_assert.  q_shared.h is intentionally included
+ * without a file guard, so keep this compatibility definition guarded too. */
+#if defined(_MSC_VER) && !defined(__clang__) && \
+	!defined(SG_MSVC_STATIC_ASSERT_COMPAT)
+#define SG_MSVC_STATIC_ASSERT_COMPAT
+#define SG_STATIC_ASSERT_JOIN_INNER(a, b) a##b
+#define SG_STATIC_ASSERT_JOIN(a, b) SG_STATIC_ASSERT_JOIN_INNER(a, b)
+#define _Static_assert(condition, message) \
+	typedef char SG_STATIC_ASSERT_JOIN(sg_static_assert_, __COUNTER__) \
+		[(condition) ? 1 : -1]
+#endif
+
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>

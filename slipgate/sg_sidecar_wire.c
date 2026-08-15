@@ -1,4 +1,6 @@
 /* sg_sidecar_wire.c -- allocation-free authenticated RUNE v3 sidecars. */
+#include "q_shared.h"
+
 #include <limits.h>
 #include <string.h>
 
