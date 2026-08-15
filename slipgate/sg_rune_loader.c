@@ -431,7 +431,7 @@ sg_rune_load_result_t SG_RuneV3Inspect(const unsigned char *snapshot,
 		SG_RUNE_LOAD_STAGE_ARGUMENT, SG_RUNE_LOAD_INDEX_NONE, kind);
 	sg_rune_v3_header_t header;
 	uint32_t crc_state;
-	uint32_t payload_crc;
+	uint32_t payload_crc = 0;
 	rune_wire_diagnostic_t diagnostic;
 
 	if (!snapshot || !expected || !header_out)
