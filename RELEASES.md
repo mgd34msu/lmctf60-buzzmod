@@ -1,10 +1,14 @@
 # LMCTF BuzzMod — Releases
 
-Releases are numbered and dated. There is no version number tracking upstream; go by the
-release number.
+Buzzmod uses [Semantic Versioning](https://semver.org/) beginning with `v0.5.0`.
+Milestone releases increment the `0.x` series while the remaining SLIPGATE and
+behavioral work is completed. `v1.0.0` is reserved for the fully completed
+project.
 
-Tag a release as `release-1`, `release-2` and so on. Pushing that tag builds all three
-libraries and publishes a release with them attached.
+The source version lives in `BuzzmodVersion.h`. A release tag must be exactly
+`v<version>`; CI rejects a mismatched tag, builds all three libraries, and
+publishes the release with its version, checksums, and runtime assets. The old
+`release-1` through `release-6` tags remain the historical pre-SemVer releases.
 
 ## Release 6 — August 2026
 

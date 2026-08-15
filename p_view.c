@@ -1216,7 +1216,7 @@ int ClientShowMOD(edict_t *ent)
 		ui_appendf (&sb,
 			"xv %i yv %i cstring2 \""
 			"You are on the %s team!\n\n"
-			"Welcome to %s\nRunning %s\n"
+			"Welcome to %s\nRunning %s v%s\n"
 			"Pak File is available at:\n\" "
 			"xv %i yv %i cstring2 \""
 			"%s\n\n",
@@ -1224,6 +1224,7 @@ int ClientShowMOD(edict_t *ent)
 			color,
 			hostname->string,
 			GAMEVERSION,
+			BUZZMOD_VERSION,
 			0,85,
 			mod_website->string);
 

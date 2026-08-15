@@ -3,13 +3,38 @@ name: build
 on:
   push:
     branches: [ "**" ]
-    tags: [ "release-*" ]
+    tags: [ "v*.*.*" ]
   pull_request:
   workflow_dispatch:
 
 jobs:
+  version:
+    name: Buzzmod version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate semantic version
+        id: version
+        shell: bash
+        run: |
+          tag=""
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ -n "$tag" ]]; then
+            version=$(tests/check_buzzmod_version.sh "$tag")
+          else
+            version=$(tests/check_buzzmod_version.sh)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Buzzmod v$version"
+
   linux:
     name: Linux x86_64
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +70,7 @@ jobs:
 
   windows:
     name: Windows ${{ matrix.arch }}
+    needs: version
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -129,8 +155,8 @@ jobs:
 
   release:
     name: Publish release
-    needs: [ linux, windows ]
-    if: startsWith(github.ref, 'refs/tags/release-')
+    needs: [ version, linux, windows ]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -148,6 +174,7 @@ jobs:
           cp artifacts/lmctf-buzzmod-windows-x64/gamex86_64.dll  release/
           cp artifacts/lmctf-buzzmod-windows-x86/gamex86.dll     release/
           cp assets/lmctf6-buzzmod.pak                           release/
+          printf '%s\n' "${{ needs.version.outputs.version }}" > release/VERSION
           # SLIPGATE bots are compiled into the game modules; no separate
           # bot library or data download exists anymore (runes are generated
           # server-side with `sv rune`).
@@ -159,4 +186,4 @@ jobs:
           files: release/*
           body_path: RELEASES.md
           draft: false
-          name: LMCTF BuzzMod ${{ github.ref_name }}
+          name: Buzzmod ${{ github.ref_name }}

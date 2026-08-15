@@ -79,6 +79,7 @@ extern _CrtMemState startup1;	// memory diagnostics
 #include "game.h"
 
 #include "GitRevisionInfo.h" // Derived from template via GitWCRev
+#include "BuzzmodVersion.h" // Source-controlled Buzzmod semantic version
 
 
 #define ISREF(ent) (ent->client->ctf.extra_flags & CTF_EXTRAFLAGS_REFEREE)

@@ -163,7 +163,8 @@ void InitGame(void)
 
 	// END CTF CODE -- LM_JORM
 
-	gi.dprintf("==== InitGame %s %d-%s %s ====\n", GAMEVERSION, LMCTF_REVISION, LMCTF_VERSION, __DATE__);
+	gi.dprintf("==== InitGame %s v%s %d-%s %s ====\n", GAMEVERSION,
+		BUZZMOD_VERSION, LMCTF_REVISION, LMCTF_VERSION, __DATE__);
 
 	// seed the random number generator
 	srand((unsigned)time(NULL));
@@ -183,6 +184,8 @@ void InitGame(void)
 
 	gi.cvar("revision", va("%d", LMCTF_REVISION), CVAR_SERVERINFO);
 	gi.cvar_set("revision", va("%d-%s", LMCTF_REVISION, LMCTF_VERSION));
+	gi.cvar("buzzmod_version", BUZZMOD_VERSION, CVAR_SERVERINFO);
+	gi.cvar_set("buzzmod_version", BUZZMOD_VERSION);
 
 	// latched vars
 	sv_cheats = gi.cvar("cheats", "0", CVAR_SERVERINFO | CVAR_LATCH);

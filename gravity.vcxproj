@@ -393,6 +393,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="bat.h" />
+    <ClInclude Include="BuzzmodVersion.h" />
     <ClInclude Include="ctf_file_io.h" />
     <ClInclude Include="ctf_sqlite_core.h" />
     <ClInclude Include="ctf_sqlite_player.h" />
