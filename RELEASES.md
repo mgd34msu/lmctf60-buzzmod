@@ -6,6 +6,36 @@ release number.
 Tag a release as `release-1`, `release-2` and so on. Pushing that tag builds all three
 libraries and publishes a release with them attached.
 
+## Release 6 — August 2026
+
+Release 6 completes the next ordinary-action migration in SLIPGATE: live HOOK
+execution now uses the same deterministic replay law that proves HOOK routes
+offline. The adapter owns the full attach, pull, settle, and release lifecycle;
+checks the final command immediately before each `ClientThink`; and fails closed
+when the bolt identity, source witness, attachment, liquid state, or command
+differential no longer matches the proved link.
+
+Late physical attachment retains the legacy tolerance without advancing the
+replay clock: the bot emits four independently checked fixed-view commands and
+acknowledges attachment on the first real attached frame. Lost or replaced
+bolts keep the legacy 15-second shelf priority, while liquid failures retain
+their 30-second shelf. Reset and same-link reuse cannot consume a stale command
+approval.
+
+The migration passed strict GCC and Clang tests, ASan/UBSan, both build-system
+dialects, full shared-object builds, Linux and Windows warning-clean CI, and a
+private live server run. That run directly observed the reducer's attach, pull,
+and release entry points while two bots used generated HOOK routes, with no
+HOOK replay failure.
+
+### Known limits
+
+This release covers ordinary `RL_HOOK`, not compound `RL_DOOR_HOOK` or the
+other PREOPEN/RIDE compound actions. The focused DROP acceptance harness also
+predates this overlapping HOOK integration and is being recomposed and rerun;
+the full 181-map runtime-v3 acceptance gate remains pending. Those limits are
+recorded explicitly rather than implied complete by this release.
+
 ## Release 5 — August 2026
 
 Release 5 is a visibility-and-compatibility release. For players and admins it
