@@ -8,6 +8,9 @@
 #include "g_skins.h"
 #include "g_ctffunc.h" //surt for log renaming
 #include "bat.h"
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_identity.h"
+#include "slipgate/sg_local.h"
 
 qboolean SG_OwnsBot(edict_t * ent);
 int SG_RemoveBots(void);
@@ -145,6 +148,9 @@ is loaded.
 */
 void InitGame(void)
 {
+	/* the SLIPGATE cvar registry, before anything reads sg_cv */
+	SG_CvarsInit();
+	SG_LevelIdentityReset();
 
 #ifdef	_WIN32
 	_CrtMemCheckpoint(&startup1);
@@ -959,6 +965,14 @@ void ReadLevel(char* filename)
 	edict_t* ent;
 	size_t	count;
 
+	/* Saved edicts are not bound to the freshly spawned entity-text identity.
+	 * Until the save format carries that identity, restored worlds fail closed.
+	 * Tear down every other TAG_LEVEL-backed SLIPGATE pointer at the same boundary:
+	 * ReadLevel frees that tag immediately below just as SpawnEntities does. */
+	SG_LevelChange();
+	gi.dprintf("slipgate: v3 identity unavailable for %s: "
+	           "save-level restore\n",
+	           level.mapname[0] ? level.mapname : "<unknown>");
 	f = fopen(filename, "rb");
 	if (!f)
 		gi.error("Couldn't open %s", filename);

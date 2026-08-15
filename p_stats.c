@@ -3,6 +3,8 @@
 #include "g_local.h"
 #include "g_tourney.h"
 #include "g_ctffunc.h"
+#include "ctf_sqlite_unidb.h"	// db_record_t -- ui_boards.h's UI_Records_FormatLine needs it declared first
+#include "ui_boards.h"		// UI_Tick_Dirty/Push -- stats events drive the ticked boards
 #include <time.h>
 
 stats_player_s* p_start_player = NULL;
@@ -16,6 +18,11 @@ stats_player_s* p_start_player = NULL;
 //
 // ctf_SafePrint only queues 2000 bytes per call, so that is the real ceiling.
 #define STATS_OUTBUF_SIZE	2048
+
+// CTF_MatchReport's accuracy leader needs a minimum sample so a player who
+// fired one shot and hit it does not outrank someone who actually played
+// the match at 40% over two hundred shots.
+#define MATCH_REPORT_MIN_SHOTS	10
 
 static void stats_appendbuf(char* dest, size_t destsize, const char* src)
 {
@@ -84,7 +91,7 @@ stats_player_s* stats_new_player(char* name)
 
 	p_player = (stats_player_s*)gi.TagMalloc(sizeof(stats_player_s), TAG_GAME);
 	if (!p_player) {
-		gi.error(ERR_FATAL, "LMCTF: allocation failed in %s", __func__);
+		gi.error("LMCTF: allocation failed in %s", __func__);
 		return NULL;
 	}
 
@@ -114,6 +121,7 @@ void stats_set_name(edict_t* ent, char* name)
 			sizeof(ent->client->p_stats_player->info.name) - 1);
 		ent->client->p_stats_player->info.name[
 			sizeof(ent->client->p_stats_player->info.name) - 1] = 0;
+		UI_Tick_Dirty();
 	}
 	return;
 }
@@ -173,7 +181,10 @@ void stats_add(edict_t* ent, int stat, long amount)
 		return;
 
 	if (Match_CanScore() && ent->client->p_stats_player)
+	{
 		ent->client->p_stats_player->stats[stat] += amount;
+		UI_Tick_Dirty();
+	}
 }
 
 void stats_set(edict_t* ent, int stat, long amount)
@@ -184,7 +195,10 @@ void stats_set(edict_t* ent, int stat, long amount)
 		return;
 
 	if (Match_CanScore() && ent->client->p_stats_player)
+	{
 		ent->client->p_stats_player->stats[stat] = amount;
+		UI_Tick_Dirty();
+	}
 }
 
 long stats_get(edict_t* ent, int stat)
@@ -321,6 +335,10 @@ void stats_record_capture(edict_t* capper)
 
 		stats_set(other, STATS_CUR_CAPSTREAK, 0);
 	}
+
+	// a capture is a milestone event (docs/LAYOUT.md): open boards update
+	// now rather than on the next coalescing tick
+	UI_Tick_Push();
 }
 
 void stats_fold_session(edict_t* ent)
@@ -427,6 +445,7 @@ void stats_clear(edict_t* ent)
 
 	stats_init_player(ent->client->p_stats_player);
 	ent->client->resp.score = 0;
+	UI_Tick_Dirty();	// fires on spawn and team join -- a roster change
 }
 
 
@@ -594,4 +613,124 @@ void Cmd_StatsAll_f(edict_t* ent)
 		stats_output(ent, p_player);
 		p_player = p_player->pNext;
 	}
+}
+
+/*
+==================
+CTF_MatchReport
+
+MILESTONE tier (docs/LAYOUT.md): a console print stream pushed to every
+client right after the settled boards rebuild (BeginIntermission, p_hud.c,
+right after UI_Boards_MatchEnd()). Built entirely from this level's
+in-memory per-client counters (stats_get) -- the match that just ended is
+already sitting in memory, and a database round trip is what
+DB_SeasonTop/DB_ServerRecords exist for when the question is about PAST
+matches, not this one.
+
+A per-capture timeline was considered and left out: stats_get's counters
+are running totals for the level, not a sequence of dated events, and this
+tree keeps no such log (sg_eventlog writes network events to a file, gated
+off by default, and does not cover captures). Adding one would mean new
+bookkeeping on the capture hot path for a nice-to-have print, so the
+timeline stays a gap rather than being faked from totals.
+==================
+*/
+void CTF_MatchReport(void)
+{
+	edict_t*	ent;
+	edict_t*	top_capper = NULL;
+	edict_t*	top_defender = NULL;
+	edict_t*	top_killer = NULL;
+	edict_t*	top_accuracy = NULL;
+	long		redscore = 0, bluescore = 0;
+	long		best_caps = 0, best_returns = 0, best_frags = 0;
+	long		best_acc_pct = -1;
+	char		outbuf[1024];
+	char		line[MAX_INFO_STRING];
+	int			i;
+
+	for (i = 0; i < game.maxclients; i++)
+	{
+		long acc_shots, acc_hits, acc_pct;
+
+		ent = g_edicts + 1 + i;
+
+		if (!ent->inuse || !ent->client || !ent->client->pers.connected)
+			continue;
+
+		if (ent->client->ctf.teamnum == CTF_TEAM_RED)
+			redscore += stats_get(ent, STATS_SCORE);
+		else if (ent->client->ctf.teamnum == CTF_TEAM_BLUE)
+			bluescore += stats_get(ent, STATS_SCORE);
+
+		if (stats_get(ent, STATS_CAPTURES) > best_caps)
+		{
+			best_caps = stats_get(ent, STATS_CAPTURES);
+			top_capper = ent;
+		}
+
+		if (stats_get(ent, STATS_RETURNS) > best_returns)
+		{
+			best_returns = stats_get(ent, STATS_RETURNS);
+			top_defender = ent;
+		}
+
+		if (stats_get(ent, STATS_FRAGS) > best_frags)
+		{
+			best_frags = stats_get(ent, STATS_FRAGS);
+			top_killer = ent;
+		}
+
+		acc_shots = stats_get(ent, STATS_SHOTS);
+		acc_hits  = stats_get(ent, STATS_SHOTS_HIT);
+		if (acc_shots >= MATCH_REPORT_MIN_SHOTS)
+		{
+			acc_pct = 100 * acc_hits / acc_shots;
+			if (acc_pct > best_acc_pct)
+			{
+				best_acc_pct = acc_pct;
+				top_accuracy = ent;
+			}
+		}
+	}
+
+	Com_sprintf(outbuf, sizeof(outbuf), "\n--MATCH REPORT---------------------------------\n");
+
+	if (bluescore > redscore)
+		Com_sprintf(line, sizeof(line), "Blue wins, %ld to %ld\n", bluescore, redscore);
+	else if (redscore > bluescore)
+		Com_sprintf(line, sizeof(line), "Red wins, %ld to %ld\n", redscore, bluescore);
+	else
+		Com_sprintf(line, sizeof(line), "Tie game, %ld to %ld\n", redscore, bluescore);
+	stats_appendbuf(outbuf, sizeof(outbuf), line);
+
+	if (top_capper && best_caps > 0)
+	{
+		Com_sprintf(line, sizeof(line), "Top Capper: %s (%ld)\n",
+			top_capper->client->pers.netname, best_caps);
+		stats_appendbuf(outbuf, sizeof(outbuf), line);
+	}
+
+	if (top_defender && best_returns > 0)
+	{
+		Com_sprintf(line, sizeof(line), "Top Defender: %s (%ld returns)\n",
+			top_defender->client->pers.netname, best_returns);
+		stats_appendbuf(outbuf, sizeof(outbuf), line);
+	}
+
+	if (top_killer && best_frags > 0)
+	{
+		Com_sprintf(line, sizeof(line), "Top Killer: %s (%ld frags)\n",
+			top_killer->client->pers.netname, best_frags);
+		stats_appendbuf(outbuf, sizeof(outbuf), line);
+	}
+
+	if (top_accuracy && best_acc_pct >= 0)
+	{
+		Com_sprintf(line, sizeof(line), "Accuracy Leader: %s (%ld%%)\n",
+			top_accuracy->client->pers.netname, best_acc_pct);
+		stats_appendbuf(outbuf, sizeof(outbuf), line);
+	}
+
+	ctf_BSafePrint(PRINT_HIGH, outbuf);
 }

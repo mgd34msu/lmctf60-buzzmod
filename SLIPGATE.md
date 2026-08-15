@@ -19,8 +19,8 @@ in `LEDGER.md` and the git history.
 ## How the bots work (short version)
 
 - **Navigation** rides a per-map "rune" graph of proven movement links
-  (runs, jumps, drops, grapple swings, lifts, teleports, rocket
-  jumps), flooded into cost fields that price every seed on the map
+  (runs, jumps, drops, swimming, grapple swings, lifts, and teleports),
+  flooded into cost fields that price every seed on the map
   against every objective. Movement between commitments descends those
   fields; a feeler fan and safety layers (terminal braking, sink ban,
   edge guards) keep the body honest on the geometry.
@@ -44,15 +44,16 @@ in `LEDGER.md` and the git history.
 
 ## This release
 
-**Judgment status:** the blind-judgment ladder has five rungs — raw
-movement, routes, fights, team decisions, match outcomes. **Rung 1
-(raw movement) and rung 3 (fights) have passed**: three independent
-fresh judges per set could not beat chance telling bot film from human
-film — on the fights set, the bots were called "human" more often than
-the actual humans were. Rung 2 (routes) is closed under an accepted,
-documented residual (bots never fall off ledges; humans do — we
-declined to teach them). Rungs 4 and 5 are in active iteration and are
-the heart of the next release.
+**Judgment status:** bot play is tested blind at five levels — raw
+movement, route choice, gunfights, team decisions, and match outcomes.
+**Raw movement, gunfights, and team decisions have all passed**: for
+each, three independent fresh judges could not beat chance telling bot
+film from human film — on the gunfight and team sets, the bots were
+called "human" more often than the actual humans were. Route choice is
+closed under an accepted, documented difference (bots never fall off
+ledges; humans do — we declined to teach them). Match outcomes remain
+under active work, tied to raising steal and capture volume to human
+levels.
 
 **Adopted and shipping as defaults** (each with trial evidence in the
 ledger):
@@ -63,7 +64,7 @@ ledger):
   four-layer pit-safety chain (80% hazard-conversion, zero drownings
   on census).
 - *Combat*: weapon commitment (keep the held gun anywhere it is
-  legitimate — the single biggest fights-rung win), aim texture
+  legitimate — the single biggest gunfight-test win), aim texture
   (human overshoot/settle, +cadence raggedness), honest switch
   discipline, full weapon doctrine from the WEAPONS.md audit.
 - *Carrier*: breather pause beats (tripled steal→cap conversion in
@@ -87,8 +88,8 @@ routesheet.py (routes), fightsheet.py (fights, with honest
 hit-attribution), teamsheet.py (team play, coverage-honest escort
 scalar), outcomecard.py (match outcomes), plus the corpus manifest,
 map fixtures for 18 blind-set-capable maps, the set-composition rule,
-and the fleet tooling (waveloop, watchdog, atomic deploy) that ran
-~900 unattended waves during development.
+and the fleet tooling (server loop, watchdog, atomic deploy) that
+ran hundreds of hours of unattended evaluation during development.
 
 ## Planned for the next release
 

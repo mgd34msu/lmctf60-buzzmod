@@ -4,10 +4,12 @@
 #include "ctf_file_io.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
+#include "ui_boards.h"		// UI_Tick_Frame -- the 1 Hz board tick runs after client frames
 
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
+#include "slipgate/sg_identity.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
 
@@ -131,6 +133,9 @@ extern int Time_Left;
 
 void ShutdownGame (void)
 {
+	SG_DangerCheckpoint("shutdown");
+	SG_DangerPersistenceReset();
+	SG_LevelIdentityReset();
 	gi.dprintf ("==== ShutdownGame ====\n");
 
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
@@ -208,7 +213,7 @@ void Sys_Error (char *error, ...)
 	vsprintf (text, error, argptr);
 	va_end (argptr);
 
-	gi.error (ERR_FATAL, "%s", text);
+	gi.error ("%s", text);
 }
 
 void Com_Printf (char *msg, ...)
@@ -248,6 +253,9 @@ void ClientEndServerFrames (void)
 		ClientEndServerFrame (ent);
 	}
 
+	// the in-match boards' 1 Hz push-on-change tick, after every client's
+	// frame so a repaint never races the data it is painting
+	UI_Tick_Frame();
 }
 
 /*
@@ -748,6 +756,10 @@ void ExitLevel (void)
 
 	Com_sprintf (command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
 
+	/* This is the final point where the current rune identity, graph, and
+	 * whole-level danger lease are all authoritative.  Failure is logged and
+	 * deliberately cannot block rotation. */
+	SG_DangerCheckpoint("exit-level");
 	gi.AddCommandString (command);
 	level.changemap = NULL;
 	level.exitintermission = 0;
@@ -901,4 +913,3 @@ void G_RunFrame (void)
 	// build the playerstate_t structures for all players
 	ClientEndServerFrames ();
 }
-

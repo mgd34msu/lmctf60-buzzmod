@@ -1,0 +1,6 @@
+[Unit]
+Description=SLIPGATE fleet watchdog
+[Service]
+Type=oneshot
+KillMode=process
+ExecStart=/home/buzzkill/Projects/lmctf6-stats/tools/wavewatch.sh

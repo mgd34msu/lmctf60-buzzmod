@@ -41,7 +41,7 @@
 
 set -u
 
-Q2DED="${Q2DED:-/tmp/claude-1000/-home-buzzkill-Projects-lmctf60/efcdc762-1fa3-4536-ae59-d172d832eebc/scratchpad/yquake2/release/q2ded}"
+Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
 GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
@@ -84,6 +84,49 @@ if [ ! -x "$Q2DED" ]; then
     echo "abmatch: q2ded binary not found or not executable: $Q2DED" >&2
     exit 1
 fi
+if ! command -v readlink >/dev/null 2>&1; then
+    echo "abmatch: readlink is required to attest the engine binary" >&2
+    exit 1
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "abmatch: sha256sum is required to attest the engine binary" >&2
+    exit 1
+fi
+if ! Q2DED_RESOLVED="$(readlink -f -- "$Q2DED")" ||
+        [ -z "$Q2DED_RESOLVED" ] || [ ! -x "$Q2DED_RESOLVED" ]; then
+    echo "abmatch: cannot resolve executable q2ded path: $Q2DED" >&2
+    exit 1
+fi
+if ! Q2DED_SHA256_LINE="$(sha256sum -- "$Q2DED_RESOLVED")"; then
+    echo "abmatch: cannot hash q2ded binary: $Q2DED_RESOLVED" >&2
+    exit 1
+fi
+Q2DED_SHA256="${Q2DED_SHA256_LINE%% *}"
+if [[ ! "$Q2DED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "abmatch: invalid q2ded SHA-256 result: $Q2DED_SHA256_LINE" >&2
+    exit 1
+fi
+ENGINE_DIR="$SCRIPT_DIR/ab-${MAP}-${TS}.engine"
+if ! mkdir -m 700 -- "$ENGINE_DIR"; then
+    echo "abmatch: cannot create private engine directory: $ENGINE_DIR" >&2
+    exit 1
+fi
+Q2DED_SNAPSHOT="$ENGINE_DIR/q2ded"
+if ! cp -- "$Q2DED_RESOLVED" "$Q2DED_SNAPSHOT" ||
+        ! chmod 0500 -- "$Q2DED_SNAPSHOT"; then
+    echo "abmatch: cannot snapshot q2ded binary in $ENGINE_DIR" >&2
+    exit 1
+fi
+if ! Q2DED_SNAPSHOT_LINE="$(sha256sum -- "$Q2DED_SNAPSHOT")"; then
+    echo "abmatch: cannot verify q2ded snapshot: $Q2DED_SNAPSHOT" >&2
+    exit 1
+fi
+Q2DED_SNAPSHOT_SHA256="${Q2DED_SNAPSHOT_LINE%% *}"
+if [ "$Q2DED_SNAPSHOT_SHA256" != "$Q2DED_SHA256" ]; then
+    echo "abmatch: q2ded changed while it was being snapshotted" >&2
+    exit 1
+fi
+Q2DED="$Q2DED_SNAPSHOT"
 
 # Read-only heads-up, exact-binary match only -- never used to kill. See
 # tools/runegen.sh for why -f patterns are forbidden here.
@@ -97,6 +140,13 @@ fi
 
 echo "=== abmatch: $MAP -- 4 legacy vs 4 SLIPGATE, ${SECS}s, port $AB_PORT ==="
 echo "log: $LOGFILE"
+echo "engine: $Q2DED sha256=$Q2DED_SHA256"
+if ! printf 'source_path=%s\nsource_sha256=%s\nexecution_path=%s\nexecution_sha256=%s\n' \
+        "$Q2DED_RESOLVED" "$Q2DED_SHA256" "$Q2DED" "$Q2DED_SNAPSHOT_SHA256" \
+        > "$LOGFILE"; then
+    echo "abmatch: cannot write engine attestation to $LOGFILE" >&2
+    exit 1
+fi
 
 (
     sleep "$STARTUP_SLEEP"
@@ -114,7 +164,7 @@ echo "log: $LOGFILE"
     cd "$GAMEDIR_ROOT" && exec stdbuf -oL timeout "$TIMEOUT_SECS" "$Q2DED" \
         +set game "$GAME" +set dedicated 1 +set port "$AB_PORT" \
         +exec "$CFG" +map "$MAP"
-) > "$LOGFILE" 2>&1 &
+) >> "$LOGFILE" 2>&1 &
 pid=$!
 
 wait "$pid"

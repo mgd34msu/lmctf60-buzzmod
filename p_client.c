@@ -3,8 +3,17 @@
 #include "m_player.h"
 #include "time.h" // TEAM CODE -- LM_JORM
 #include "g_ctffunc.h" //surt for some nice wrapper functions
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_local.h"
+#include "slipgate/sg_chat.h"
+#include "slipgate/sg_combat.h"
+#include "ctf_sqlite_unidb.h"	// db_record_t -- ui_boards.h's UI_Records_FormatLine needs it declared first
+#include "ui_boards.h"		// UI_Tick_Dirty -- disconnects change the boards' roster
 
 void SG_NoteDeath(edict_t *victim);
+qboolean	SG_OwnsBot(edict_t *ent);
+qboolean	SG_RetireBotForClient(edict_t *ent);
+qboolean	SG_InternalClientConnect(edict_t *ent);
 void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
 void SpawnLoadout_Give(gclient_t *cl);
 void ClientOldSetSkin(edict_t *e2, char *sk);
@@ -631,6 +640,22 @@ void ClientObituary (edict_t *self, edict_t *inflictor, edict_t *attacker)
 						stats_add(attacker, STATS_SCORE, 1);
 						stats_record_frag(attacker);
 						attacker->client->resp.score++;
+
+						// the frag bell (G_KillSound, g_combat.c: world copy
+						// from the fallen player, private copy to the
+						// fragger, ctf_killsound scope). Gated on !ff so a
+						// team kill never rings it -- this score branch is
+						// also reachable by friendly fire outside railgun
+						// play. The carrier check works here because the
+						// obituary runs before the flag is tossed.
+						if (!ff)
+						{
+							qboolean carrier =
+								((redflag  && redflag->owner  == self) ||
+								 (blueflag && blueflag->owner == self));
+
+							G_KillSound(self, attacker, carrier);
+						}
 					}
 
 					// STATS_DEATHS is deliberately not touched here. In stock
@@ -758,6 +783,10 @@ player_die
 */
 void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_t point)
 {
+	/* Corpses remain damageable until gibbed and player_die may be re-entered
+	 * for every splash hit. The public death event, bot life reset and chatter
+	 * happen once per life, just like obituary/stats below. */
+	if (!self->deadflag)
 	{
 		extern int meansOfDeath;
 
@@ -1757,7 +1786,8 @@ int i, numspec;
 		// he was a spectator and wants to join the game
 		// he must have the right password
 		char *value = Info_ValueForKey (ent->client->pers.userinfo, "password");
-		if (*password->string && strcmp(password->string, "none") && 
+		if (!SG_InternalClientConnect(ent) &&
+			*password->string && strcmp(password->string, "none") &&
 			strcmp(password->string, value)) {
 			gi.cprintf(ent, PRINT_HIGH, "Password incorrect.\n");
 			ent->client->pers.spectator = true;
@@ -1768,6 +1798,22 @@ int i, numspec;
 		}
 
 	}
+
+	/* PutClientInServer rebuilds pers and clears inventory. Drop carried world
+	 * objects first, while ClientHasFlag/Drop_Rune can still identify them;
+	 * otherwise a direct userinfo spectator transition can leave a hidden flag
+	 * owned by a body whose inventory was already erased. */
+	if (ent->client->pers.spectator)
+		Drop_All(ent);
+
+	/* A successful spectator transition ends the current client generation even
+	 * when it came directly through the userinfo `spectator` key instead of the
+	 * Cmd_Observe_f wrapper. Retire every SG fact before PutClientInServer wipes
+	 * and rebuilds the body; failed password/limit changes returned above and do
+	 * not disturb the still-live generation. */
+	SG_ChatResetClient(ent);
+	Caco_ResetClient(ent);
+	Combat_ResetClient(ent);
 
 	// clear client on respawn
 	ent->client->resp.score = ent->client->pers.score = 0;
@@ -1793,8 +1839,6 @@ int i, numspec;
 
 	if (ent->client->pers.spectator) 
 	{
-		//I added this -bat
-		Drop_All(ent);
 		if(ent->client->ctf.teamnum == CTF_TEAM_OBSERVER_RED)
 			gi.bprintf(PRINT_HIGH, "%s is observing the red team\n", ent->client->pers.netname);
 		else if(ent->client->ctf.teamnum == CTF_TEAM_OBSERVER_BLUE)
@@ -2475,10 +2519,16 @@ loadgames will.
 qboolean ClientConnect (edict_t *ent, char *userinfo)
 {
 	char	*value;
+	qboolean replaced_sg;
+	qboolean fresh_generation;
 
 	// check to see if they are on the banned IP list
 	value = Info_ValueForKey (userinfo, "ip");
-	if (SV_FilterPacket(value)) {
+	/* SG's server-owned fake client has no network address.  Apply the packet
+	 * filter to every engine client, but do not reinterpret that intentionally
+	 * empty synthetic field as 0.0.0.0 in filterban=0 allowlist mode.  The
+	 * internal predicate is scoped to SG_AddBotTeam's synchronous call only. */
+	if (!SG_InternalClientConnect(ent) && SV_FilterPacket(value)) {
 		Info_SetValueForKey(userinfo, "rejmsg", "Banned.");
 		return false;
 	}
@@ -2510,7 +2560,8 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 	{
 		// check for a password
 		value = Info_ValueForKey (userinfo, "password");
-		if (*password->string && strcmp(password->string, "none") && 
+		if (!SG_InternalClientConnect(ent) &&
+			*password->string && strcmp(password->string, "none") &&
 			strcmp(password->string, value)) {
 			Info_SetValueForKey(userinfo, "rejmsg", "Password required or incorrect.");
 			return false;
@@ -2525,9 +2576,23 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 		Info_SetValueForKey(userinfo, "rejmsg", "You must have a name.");
 		return false;
 	}
+
+	/* Engine client allocation does not honor game-side inuse. A human may
+	 * therefore land on an engineless SG fake client; retire its ownership and
+	 * objectives before this connection reuses the slot. SG's own connect call
+	 * is not active/owned yet, so this is a no-op for bot creation. */
+	replaced_sg = SG_RetireBotForClient(ent);
+	fresh_generation = !ent->inuse;
 	
 	// they can connect
 	ent->client = game.clients + (ent - g_edicts - 1);
+	/* gclient storage outlives every disconnected edict. A fresh occupant must
+	 * not inherit the former human/bot's team, radio, observer, or ping state;
+	 * genuine reconnect identity is restored later from the named stats record.
+	 * replaced_sg documents the engine-collision path and is otherwise subsumed
+	 * by the same fresh-generation rule. */
+	if (fresh_generation || replaced_sg)
+		memset(&ent->client->ctf, 0, sizeof(ent->client->ctf));
 	
 	if (ent->client->p_stats_player)
 	{
@@ -2615,6 +2680,15 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
+	/* A client index is recycled process storage. Retire every private and
+	 * shared sensor/chat fact before the edict can be reused by a different
+	 * human or fake client; SG-specific callers may already have done this,
+	 * and each reset is deliberately idempotent. */
+	SG_ChatResetClient(ent);
+	Caco_ResetClient(ent);
+	Combat_ResetClient(ent);
+
+	UI_Tick_Dirty();	// a departing player is a roster change on every board
 
 	// flush this player's persistent stats before we tear anything down
 	CommitPlayerData(ent);
@@ -3301,7 +3375,7 @@ void ClientSetSkin(edict_t *ent, char *skin)
 	// combine name and skin into a configstring
 	gi.configstring (CS_PLAYERSKINS+playernum, va("%s\\%s", ent->client->pers.netname, newskin) );
 
-	if ((ent->flags & FL_BOT) && gi.cvar("sg_debug", "0", 0)->value)
+	if (SG_OwnsBot(ent) && sg_cv.debug->value)
 		gi.dprintf("SKINL %s team=%d wears %s\n",
 		           ent->client->pers.netname,
 		           ent->client->ctf.teamnum, newskin);
@@ -3434,7 +3508,7 @@ void ClientOldSetSkin(edict_t *ent, char *input)
 
 	/* the uniform on the record: two silent repaint failures cost two
 	 * live reports -- the third fix verifies itself from the wave logs */
-	if ((ent->flags & FL_BOT) && gi.cvar("sg_debug", "0", 0)->value)
+	if (SG_OwnsBot(ent) && sg_cv.debug->value)
 		gi.dprintf("SKIN %s team=%d wears %s\n",
 		           ent->client->pers.netname,
 		           ent->client->ctf.teamnum, s);
@@ -3548,4 +3622,3 @@ int New_Team;
 	}	
 }
 // END TEAM CODE
-

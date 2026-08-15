@@ -61,7 +61,12 @@ LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-5v5
 # s05+s08 PAIRED 2026-08-07 (owner: everything concurrent that can be):
 # third trial pair, lmctf22 5v5 both, s08 the control arm. lmctf09 7v7
 # coverage was complete; three pairs beat one farm.
-MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf44  lmctf44   lmctf22  lmctf01  lmctf57)
+# s06/s07 moved off lmctf44 2026-08-12: the map produces ~one steal per
+# 50 minutes on BOTH arms (43k stand-arrivals, zero 3s-grabs, strictgrab
+# irrelevant) -- navigation never completes a steal there, so any trial
+# on the pair was inert-by-map (the dither null is re-qualified: bad map
+# choice, not just a dead mechanism). lmctf44 filed for rune diagnosis.
+MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf09  lmctf09   lmctf22  lmctf01  lmctf57)
 FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "5"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
@@ -371,7 +376,38 @@ TAPVAR=(0     0        0        0        0         0        0         0        0
 # (this is a judge-visible texture, not a single-scalar target) plus
 # escort/defense panel asymmetry between teams; caps at the 16-wave
 # floor.
-TEAMSKEW=(0    0        0        0        1         0        0         0        0        0)
+TEAMSKEW=(1    1        1        1        1         1        1         1        1        1)
+# ESCORTDOSE dose-down DISARMED 2026-08-12 (Rule 23, the owner's order:
+# bots better than humans do not get dumbed down). The dose-down chased
+# a judge tell by degrading escort consistency below the caps-optimal
+# 35; rung 4 passed with the gap intact. Accepted bots-better residual.
+ESCORTDOSE2=(0 0        0        0        0         0        0         0        0        0)
+# STRICTGRAB ruled 2026-08-12 at the 16-wave floor and ADOPTED OFF:
+# equal approach volume, 3x steal conversion with the hold released
+# (0.003 vs 0.001), caps dead even (20 v 21), guard held. The clean-
+# grab hold WAS the conversion gap.
+STRICTGRAB=(0  0        0        0        0         0        0         0        0        0)
+# RAILRHYTHM (low-dose retrial, armed 2026-08-12 post-deploy): the first
+# trial was ruled against an aggregate; dose 0.5 on s03 vs s04 control,
+# eye = fightsheet rail_window_exposure (0.896), 16-wave floor from the
+# arming wave. Prior hookpong (s03) struck null on revisit_spike2_mass.
+RAILRHYTHM=(0  0        0        0        0         0        0         0        0        0)
+# PATROL struck 2026-08-12 at the 16-wave floor: null on every
+# defensive metric (grind 16.35 v 16.36, guard 0.48 v 0.49, approach
+# 3.50 v 3.49). Walking legs neither helped nor hurt; the grind gap
+# needs a different lever.
+PATROL=(0      0        0        0        0         0        0         0        0        0)
+
+# Grind lever search 2026-08-12: patrol struck null, and defpost is
+# already permanently parked above (posts concede more). No third guess
+# without forensics -- the mactf06 pair holds as a clean control while
+# the stand-split decomposition produces the next real lever.
+
+# FASTCARRY (armed 2026-08-12, the conversion chain's next link: with
+# the clean-grab hold released steals tripled, so steal->cap survival
+# is the live bottleneck). s06=1 vs s07 control on lmctf09; bars:
+# carry survival fraction, caps/wave up, steals held, 16 waves.
+FASTCARRY=(0   0        0        0        0         1        0         0        0        0)
 
 # HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
 # three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).
@@ -381,7 +417,7 @@ TEAMSKEW=(0    0        0        0        1         0        0         0        
 # with the MEASURED ARM BIAS correction (A/A: s03 converts 0.076 lower
 # than s04 with nothing armed -- the raw caps comparison is invalid on
 # this pair; compare against the A/A baseline delta).
-HOOKPONG=(0    0        1        0        0         0        0         0        0        0)
+HOOKPONG=(0    0        0        0        0         0        0         0        0        0)
 
 # DITHER RETRY 2026-08-11 on its NEW eye (max_transition_mass, sep
 # 0.901 -- the cell-level scalar whose absence voided the first trial's
@@ -392,7 +428,7 @@ HOOKPONG=(0    0        1        0        0         0        0         0        
 # (wrong direction on the proxy), off/caps flat. The aggregate scalar
 # cannot see cell-level determinism; a max-transition-mass eye is the
 # prerequisite for any retry. Dark.
-ROUTEDITHER=(0 0        0        0        0         120      0         0        0        0)
+ROUTEDITHER=(0 0        0        0        0         0        0         0        0        0)
 
 # NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
 # dead flat): the flood layer is exonerated -- a 90% rope-price cut
@@ -514,7 +550,6 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 else
                     echo "set sv_botfill \"${FILLS[$i]}\""
                 fi
-                echo "set sg_strictgrab $A"
                 echo "set sg_press $A"
                 if [ "${INTERDOSE[$i]}" != "0" ]; then
                     echo "set sg_interpose ${INTERDOSE[$i]}"
@@ -560,6 +595,13 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_unlinger ${UNLINGER[$i]}"
                 echo "set sg_depace ${DEPACE[$i]}"
                 echo "set sg_hookpong ${HOOKPONG[$i]}"
+                echo "set sg_railrhythm ${RAILRHYTHM[$i]}"
+                echo "set sg_strictgrab ${STRICTGRAB[$i]}"
+                echo "set sg_patrol ${PATROL[$i]}"
+                echo "set sg_fastcarry ${FASTCARRY[$i]}"
+                if [ "${ESCORTDOSE2[$i]}" != "0" ]; then
+                    echo "set sg_escortdose ${ESCORTDOSE2[$i]}"
+                fi
                 echo "set sg_teamskew ${TEAMSKEW[$i]}"
                 echo "set sg_aimtexture ${AIMTEX[$i]}"
                 echo "set sg_shelfcost ${SHELFCOST[$i]}"

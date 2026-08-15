@@ -22,6 +22,9 @@
     <ClCompile Include="bat.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ctf_sqlite_core.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="g_ai.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -95,6 +98,15 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="g_weapon.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ui_text.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ui_layout.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ui_boards.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="gslog.c">
@@ -199,7 +211,88 @@
     <ClCompile Include="q_shared.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_action.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_crc32.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_identity.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_wire.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_sidecar_wire.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_sidecar_loader.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_sidecar_store.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_loader.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_writer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_install.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_proof.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_replay.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_swim_live.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_arach.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_cvars.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_util.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_client.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_clock.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_danger.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_danger_lease.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_danger_policy.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_weights.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_tilt.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_lead.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_move.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_price.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_descend.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_goal.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_caco.c">
@@ -328,6 +421,51 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="q_shared.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_sidecar_wire.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_sidecar_loader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_sidecar_store.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_danger_lease.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_danger_policy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_writer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_loader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_install.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_proof.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_replay.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_swim_live.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ui_stats.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ui_text.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ui_layout.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ui_boards.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="stdlog.h">

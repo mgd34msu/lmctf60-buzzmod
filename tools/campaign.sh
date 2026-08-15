@@ -22,7 +22,7 @@
 
 set -u
 
-Q2DED="${Q2DED:-/tmp/claude-1000/-home-buzzkill-Projects-lmctf60/efcdc762-1fa3-4536-ae59-d172d832eebc/scratchpad/yquake2/release/q2ded}"
+Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
 GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
@@ -33,10 +33,62 @@ BOTS="${BOTS:-10}"              # 5v5
 PORT_BASE="${PORT_BASE:-28800}" # server i uses PORT_BASE+i for every game
 STAGGER=7                       # seconds between server lane launches
 
+if [ ! -x "$Q2DED" ]; then
+    echo "campaign: q2ded binary not found or not executable: $Q2DED" >&2
+    exit 1
+fi
+if ! command -v readlink >/dev/null 2>&1; then
+    echo "campaign: readlink is required to attest the engine binary" >&2
+    exit 1
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "campaign: sha256sum is required to attest the engine binary" >&2
+    exit 1
+fi
+if ! Q2DED_RESOLVED="$(readlink -f -- "$Q2DED")" ||
+        [ -z "$Q2DED_RESOLVED" ] || [ ! -x "$Q2DED_RESOLVED" ]; then
+    echo "campaign: cannot resolve executable q2ded path: $Q2DED" >&2
+    exit 1
+fi
+if ! Q2DED_SHA256_LINE="$(sha256sum -- "$Q2DED_RESOLVED")"; then
+    echo "campaign: cannot hash q2ded binary: $Q2DED_RESOLVED" >&2
+    exit 1
+fi
+Q2DED_SHA256="${Q2DED_SHA256_LINE%% *}"
+if [[ ! "$Q2DED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "campaign: invalid q2ded SHA-256 result: $Q2DED_SHA256_LINE" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_DIR="$SCRIPT_DIR/campaign-$STAMP"
-mkdir -p "$LOG_DIR"
+if ! mkdir -m 700 -- "$LOG_DIR"; then
+    echo "campaign: cannot create private run directory: $LOG_DIR" >&2
+    exit 1
+fi
+Q2DED_SNAPSHOT="$LOG_DIR/q2ded"
+if ! cp -- "$Q2DED_RESOLVED" "$Q2DED_SNAPSHOT" ||
+        ! chmod 0500 -- "$Q2DED_SNAPSHOT"; then
+    echo "campaign: cannot snapshot q2ded binary in $LOG_DIR" >&2
+    exit 1
+fi
+if ! Q2DED_SNAPSHOT_LINE="$(sha256sum -- "$Q2DED_SNAPSHOT")"; then
+    echo "campaign: cannot verify q2ded snapshot: $Q2DED_SNAPSHOT" >&2
+    exit 1
+fi
+Q2DED_SNAPSHOT_SHA256="${Q2DED_SNAPSHOT_LINE%% *}"
+if [ "$Q2DED_SNAPSHOT_SHA256" != "$Q2DED_SHA256" ]; then
+    echo "campaign: q2ded changed while it was being snapshotted" >&2
+    exit 1
+fi
+Q2DED="$Q2DED_SNAPSHOT"
+if ! printf 'source_path=%s\nsource_sha256=%s\nexecution_path=%s\nexecution_sha256=%s\n' \
+        "$Q2DED_RESOLVED" "$Q2DED_SHA256" "$Q2DED" "$Q2DED_SNAPSHOT_SHA256" \
+        > "$LOG_DIR/engine-attestation.txt"; then
+    echo "campaign: cannot write engine attestation in $LOG_DIR" >&2
+    exit 1
+fi
 
 MAPS=("$@")
 [ ${#MAPS[@]} -eq 0 ] && MAPS=(lmctf01 lmctf03 lmctf09 smap05 mactf06)
@@ -75,6 +127,7 @@ wait
 # ---------------------------------------------------------------- report
 echo ""
 echo "=== CAMPAIGN $STAMP: ${#MAPS[@]} maps x $GAMES games x ${GAME_SECS}s 5v5 ==="
+echo "engine: $Q2DED sha256=$Q2DED_SHA256"
 printf "%-10s %-4s %7s %9s %6s %8s %6s %6s %6s %7s\n" \
        map game steals captures kills shelves swim lift rj chatln
 TS=0; TC=0; TK=0

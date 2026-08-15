@@ -18,7 +18,7 @@
  * aim error, settle time, hysteresis windows -- are preferences, not facts,
  * and are named as such where they are defined.
  *
- * Perception is CACO's gate and nothing wider: gi.inPVS plus a trace from the
+ * Perception is CACO's gate and nothing wider: sg_host.in_pvs plus a trace from the
  * eyes to the target's centre against MASK_OPAQUE (sg_caco.c:100-114), plus a
  * forward-cone test so a bot does not shoot at something behind its head.
  * There is no g_edicts omniscience here; an enemy that fails the gate does not
@@ -31,6 +31,9 @@
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
 
 #include <math.h>
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------------- facts
  *
@@ -653,6 +656,7 @@ typedef struct
 } sg_combat_state_t;
 
 static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
+static qboolean sg_combat_initialized[SG_COMBAT_MAXCLIENTS];
 
 /* why the trigger stayed off, tallied per enemy-frame and printed on the
  * debug channel every few seconds: [0] fired, [1] no clear shot,
@@ -672,6 +676,76 @@ static float	sg_cbt_why_next;
  * finished noticing yet. Kept apart from [5] so a slow bot does not read as a
  * bot with a broken fire window. */
 
+/*
+ * Combat state is process storage indexed by a recyclable client number.
+ * Its reset is deliberately separate from Combat_CacheItems: itemlist lives
+ * for the game DLL's lifetime, while these clocks and beliefs live for one
+ * client on one level.  A caller may arrive before the level hook, so every
+ * state-bearing public entry goes through Combat_ClientState as well.
+ */
+static void Combat_ResetState(sg_combat_state_t *st)
+{
+	memset(st, 0, sizeof(*st));
+	st->band = -1;
+	st->want = -1;
+	st->post_sight = -1.0f;
+	st->alert_range = -1.0f;
+	st->enemy_weapon = -1;
+	st->ws_pre = -1;
+}
+
+static int Combat_ClientIndex(edict_t *self)
+{
+	int ci;
+
+	if (!self || !self->client)
+		return -1;
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+		return -1;
+	return ci;
+}
+
+static sg_combat_state_t *Combat_ClientState(edict_t *self)
+{
+	int ci = Combat_ClientIndex(self);
+
+	if (ci < 0)
+		return NULL;
+	if (!sg_combat_initialized[ci])
+	{
+		Combat_ResetState(&sg_combat[ci]);
+		sg_combat_initialized[ci] = true;
+	}
+	return &sg_combat[ci];
+}
+
+void Combat_ResetClient(edict_t *self)
+{
+	int ci = Combat_ClientIndex(self);
+
+	if (ci < 0)
+		return;
+	Combat_ResetState(&sg_combat[ci]);
+	sg_combat_initialized[ci] = true;
+}
+
+void Combat_ResetLevel(void)
+{
+	int i;
+
+	for (i = 0; i < SG_COMBAT_MAXCLIENTS; i++)
+	{
+		Combat_ResetState(&sg_combat[i]);
+		sg_combat_initialized[i] = true;
+	}
+	memset(sg_cbt_why, 0, sizeof(sg_cbt_why));
+	memset(sg_cbt_scan, 0, sizeof(sg_cbt_scan));
+	memset(sg_cbt_fire, 0, sizeof(sg_cbt_fire));
+	memset(sg_cbt_hit, 0, sizeof(sg_cbt_hit));
+	sg_cbt_why_next = 0.0f;
+}
+
 /* ------------------------------------------------------------------- skill */
 
 static cvar_t	*sg_bot_skill;
@@ -682,14 +756,14 @@ static cvar_t	*sg_wswitch;
  * in and never taken: no corridor pre-switch, no decision delay, no cooldown,
  * no panic exception, and the selection behaves exactly as it did before this
  * block existed. The POINTER is cached for the same reason bot_skill's is --
- * this is read per engaged bot per frame and gi.cvar walks the engine's list
+ * this is read per engaged bot per frame and sg_host.cvar walks the engine's list
  * -- while the VALUE is read fresh, so flipping it mid-match takes effect on
  * the next frame.
  */
 static qboolean Combat_WSwitch(void)
 {
 	if (!sg_wswitch)
-		sg_wswitch = gi.cvar("sg_wswitch", "0", 0);
+		sg_wswitch = sg_cv.wswitch;
 	return (qboolean)(sg_wswitch && sg_wswitch->value != 0.0f);
 }
 
@@ -697,7 +771,7 @@ static cvar_t	*sg_aimtexture;
 
 /*
  * Is the aim texture armed? Pointer resolved once, value read fresh, for the
- * same reason sg_bot_skill is: gi.cvar walks the engine's list and this is
+ * same reason sg_bot_skill is: sg_host.cvar walks the engine's list and this is
  * asked several times per engaged bot per frame, but flipping the cvar
  * mid-match has to take on the next one.
  *
@@ -707,14 +781,14 @@ static cvar_t	*sg_aimtexture;
 static qboolean Combat_TexOn(void)
 {
 	if (!sg_aimtexture)
-		sg_aimtexture = gi.cvar("sg_aimtexture", "1", 0);
+		sg_aimtexture = sg_cv.aimtexture;
 	return (qboolean)(sg_aimtexture && sg_aimtexture->value != 0.0f);
 }
 
 /*
  * The bot's effective skill, a float in [0, 4]: the team level the cvar names,
  * plus this client's own fixed offset. The cvar POINTER is resolved once --
- * gi.cvar walks the engine's list on every call, and this is read several times
+ * sg_host.cvar walks the engine's list on every call, and this is read several times
  * per engaged bot per frame -- while the VALUE is read fresh every time, so
  * changing bot_skill mid-match takes effect on the next frame.
  *
@@ -731,7 +805,7 @@ static float Combat_Skill(edict_t *self)
 	int		ci, grade;
 
 	if (!sg_bot_skill)
-		sg_bot_skill = gi.cvar("bot_skill", "4", 0);
+		sg_bot_skill = sg_host.cvar("bot_skill", "4", 0);
 
 	team = sg_bot_skill ? sg_bot_skill->value : SG_SKILL_MAX;
 	if (team < 0.0f)
@@ -810,16 +884,6 @@ static void Combat_CacheItems(void)
 	 * recognised and refused, never so it can be selected. */
 	sg_hookitem = FindItem("Grappling Hook");
 
-	/* the two state members whose "unset" value is not zero */
-	for (i = 0; i < SG_COMBAT_MAXCLIENTS; i++)
-	{
-		sg_combat[i].post_sight = -1.0f;
-		sg_combat[i].alert_range = -1.0f;
-		sg_combat[i].alert_until = 0.0f;
-		sg_combat[i].band = -1;			/* no band committed yet */
-		sg_combat[i].ws_pre = -1;		/* nothing pre-switched to yet */
-	}
-
 	/* LMCTF has ONE flag item (g_items.c:2478), the same test ctf_flagtouch
 	 * makes and the body already makes at sg_arach.c:600-607 */
 	sg_flagitem = FindItem("Enemy Flag");
@@ -851,9 +915,9 @@ static qboolean Combat_Visible(edict_t *viewer, edict_t *target)
 	VectorAdd(target->absmin, target->absmax, mid);
 	VectorScale(mid, 0.5f, mid);
 
-	if (!gi.inPVS(eye, mid))
+	if (!sg_host.in_pvs(eye, mid))
 		return false;
-	tr = gi.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
+	tr = sg_host.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
 
@@ -1295,7 +1359,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 	 * switches because BandAllows already refuses it. Doctrine ladders
 	 * above (carrier, intercept) outrank commitment on purpose.
 	 */
-	if (gi.cvar("sg_wcommit", "1", 0)->value != 0.0f)
+	if (sg_cv.wcommit->value != 0.0f)
 	{
 		int held = Combat_Held(self);
 
@@ -1307,7 +1371,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 		 * commits to; mode 2 refuses it and lets the ladder walk pick a
 		 * real weapon the moment one is stocked.
 		 */
-		if (gi.cvar("sg_wcommit", "1", 0)->value >= 2.0f &&
+		if (sg_cv.wcommit->value >= 2.0f &&
 		    held == SG_W_BLASTER)
 			held = -1;
 
@@ -1580,8 +1644,8 @@ static void Combat_Request(edict_t *self, sg_combat_state_t *st, int w)
 		st->ws_gate = level.time + SG_WS_COOLDOWN;
 		st->ws_armed = level.time;
 
-		if (gi.cvar("sg_debug", "0", 0)->value)
-			gi.dprintf("WSWITCH mid %s w%d->w%d waited=%.0fms (%s)\n",
+		if (sg_cv.debug->value)
+			sg_host.dprint("WSWITCH mid %s w%d->w%d waited=%.0fms (%s)\n",
 			           self->client->pers.netname, held, w,
 			           waited * 1000.0f,
 			           st->ws_panic ? "panic: gun cannot shoot at contact"
@@ -1682,7 +1746,7 @@ static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 
 	for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 	{
-		sg_belief_enemy_t	*en = &sg_caco_enemies[team - 1][s];
+		sg_belief_enemy_t	*en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 		vec3_t				d;
 		float				dist;
 
@@ -1738,8 +1802,8 @@ static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 		                         * for that range, not an argument for holding
 		                         * the worst weapon in the game while walking */
 
-	if (want != st->ws_pre && gi.cvar("sg_debug", "0", 0)->value)
-		gi.dprintf("WSWITCH pre %s w%d->w%d expect=%.0f hand-wants=%.0f "
+	if (want != st->ws_pre && sg_cv.debug->value)
+		sg_host.dprint("WSWITCH pre %s w%d->w%d expect=%.0f hand-wants=%.0f "
 		           "miss=%.0f bar=%.0f belief=%.1fs\n",
 		           self->client->pers.netname, held, want, best, have,
 		           miss, bar, age);
@@ -2020,7 +2084,7 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	 * still binds afterwards, so a big dose widens the common case
 	 * without inventing physically absurd flicks.
 	 */
-	over *= gi.cvar("sg_aimtexture", "1", 0)->value;
+	over *= sg_cv.aimtexture->value;
 	if (over > SG_TEX_OVER_CAP)
 		over = SG_TEX_OVER_CAP;
 
@@ -2045,8 +2109,8 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	 */
 	st->tex_cyc = (style >= 0.5f) ? 2.0f : 1.0f;
 
-	if (gi.cvar("sg_debug", "0", 0)->value)
-		gi.dprintf("AIMTEX %s flick=%.1f over=%.2f settle=%dms cyc=%d "
+	if (sg_cv.debug->value)
+		sg_host.dprint("AIMTEX %s flick=%.1f over=%.2f settle=%dms cyc=%d "
 		           "style=%.2f\n",
 		           self->client->pers.netname, flick, over,
 		           (int)(win * 1000.0f + 0.5f), (int)st->tex_cyc, style);
@@ -2205,11 +2269,14 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	 * splash forgives timing the way rule D1 promises.
 	 */
 	if (w == SG_W_ROCKETLAUNCHER && !enemy->groundentity &&
-	    gi.cvar("sg_landlead", "1", 0)->value)
+	    sg_cv.landlead->value)
 	{
 		vec3_t p0, p1;
 		trace_t ltr;
-		float tt, grav = 800.0f;
+		/* v3 admits any authenticated integral gravity. Predict against the
+		 * active law whose exact bits gate this loaded graph, not the old v2
+		 * default, or low-gravity maps aim splash below the real touchdown. */
+		float tt, grav = sv_gravity ? sv_gravity->value : 800.0f;
 		int seg;
 
 		VectorCopy(mid, p0);
@@ -2220,7 +2287,7 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 			p1[1] = mid[1] + enemy->velocity[1] * tt;
 			p1[2] = mid[2] + enemy->velocity[2] * tt
 			      - 0.5f * grav * tt * tt;
-			ltr = gi.trace(p0, enemy->mins, enemy->maxs, p1,
+			ltr = sg_host.trace(p0, enemy->mins, enemy->maxs, p1,
 			               enemy, MASK_PLAYERSOLID);
 			if (ltr.fraction < 1.0f)
 			{
@@ -2286,7 +2353,7 @@ static qboolean Combat_GrenadeImpact(edict_t *self, vec3_t eye, float yaw,
 
 		vel[2] -= grav * FRAMETIME;
 		VectorMA(p, FRAMETIME, vel, next);
-		tr = gi.trace(p, NULL, NULL, next, self, MASK_SHOT);
+		tr = sg_host.trace(p, NULL, NULL, next, self, MASK_SHOT);
 		if (tr.fraction < 1.0f)
 		{
 			VectorCopy(tr.endpos, impact);
@@ -2359,11 +2426,12 @@ static float Worth_Health(edict_t *e)
 	 */
 	if (!SG_MegaOn())
 	{
-		int i;
+		const int *ents;
+		int i, n = SG_MegaEntities(&ents);
 
-		for (i = 0; i < globals.num_edicts; i++)
+		for (i = 0; i < n; i++)
 		{
-			edict_t *it = &g_edicts[i];
+			edict_t *it = &g_edicts[ents[i]];
 
 			if (!it->inuse || !it->classname)
 				continue;
@@ -2409,9 +2477,10 @@ static float Worth_Health(edict_t *e)
 
 static float Worth_Mega(edict_t *e)
 {
-	float	worth;
-	int		h = e->health;
-	int		i, team;
+	float		worth;
+	int			h = e->health;
+	int			i, n, team;
+	const int	*ents;
 
 	if (!SG_MegaOn())
 		return 0.0f;
@@ -2441,9 +2510,10 @@ static float Worth_Mega(edict_t *e)
 	 * thing the belief table exists to stop.
 	 */
 	team = e->client->ctf.teamnum;
-	for (i = 0; i < globals.num_edicts; i++)
+	n = SG_MegaEntities(&ents);
+	for (i = 0; i < n; i++)
 	{
-		edict_t *it = &g_edicts[i];
+		edict_t *it = &g_edicts[ents[i]];
 
 		if (!it->inuse || !it->classname)
 			continue;
@@ -2458,12 +2528,10 @@ static float Worth_Mega(edict_t *e)
 
 float SG_WorthMega(edict_t *self)
 {
-	int ci;
+	sg_combat_state_t *st;
 
-	if (!self || !self->client)
-		return 0.0f;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+	st = Combat_ClientState(self);
+	if (!st)
 		return 0.0f;
 
 	/*
@@ -2478,7 +2546,7 @@ float SG_WorthMega(edict_t *self)
 	 */
 	if (self->health >= SG_MEGA_HEADROOM)
 		return 0.0f;
-	return sg_combat[ci].worth_mega;
+	return st->worth_mega;
 }
 
 /*
@@ -2667,7 +2735,7 @@ static float Worth_Rune(edict_t *e)
 	 * it to fall back on -- so reading the wrong team's row here would be the
 	 * purest form of the leak the ruling names.
 	 */
-	ti = (e->client->ctf.teamnum == CTF_TEAM_BLUE) ? 1 : 0;
+	ti = SG_TeamIdx(e->client->ctf.teamnum);
 
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
@@ -2718,17 +2786,16 @@ void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
                       sg_weights_t *out)
 {
 	sg_combat_state_t	*st;
-	int					ci, c;
+	int					c;
 
 	if (!self || !self->client || !role || !out)
 		return;
 
 	*out = *role;
 
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+	st = Combat_ClientState(self);
+	if (!st)
 		return;
-	st = &sg_combat[ci];
 	Combat_CacheItems();
 
 	/*
@@ -2759,14 +2826,11 @@ void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
 
 void SG_CombatPost(edict_t *self, float sightline)
 {
-	int ci;
+	sg_combat_state_t *st = Combat_ClientState(self);
 
-	if (!self || !self->client)
+	if (!st)
 		return;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	sg_combat[ci].post_sight = sightline;
+	st->post_sight = sightline;
 }
 
 /*
@@ -2779,15 +2843,12 @@ void SG_CombatPost(edict_t *self, float sightline)
  */
 void SG_CombatAlert(edict_t *self, float expect_range)
 {
-	int ci;
+	sg_combat_state_t *st = Combat_ClientState(self);
 
-	if (!self || !self->client)
+	if (!st)
 		return;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	sg_combat[ci].alert_range = expect_range;
-	sg_combat[ci].alert_until = level.time + 3.0f;
+	st->alert_range = expect_range;
+	st->alert_until = level.time + 3.0f;
 }
 
 /* ------------------------------------------------------------- duel terms */
@@ -2799,13 +2860,11 @@ void SG_CombatAlert(edict_t *self, float expect_range)
  */
 edict_t *SG_CombatLiveEnemy(edict_t *self)
 {
-	sg_combat_state_t *st;
-	int idx = (int)(self->client - game.clients);
+	sg_combat_state_t *st = Combat_ClientState(self);
 	edict_t *en;
 
-	if (idx < 0 || idx >= SG_COMBAT_MAXCLIENTS)
+	if (!st)
 		return NULL;
-	st = &sg_combat[idx];
 	if (st->enemy <= 0)
 		return NULL;
 	en = g_edicts + st->enemy;
@@ -2817,16 +2876,13 @@ edict_t *SG_CombatLiveEnemy(edict_t *self)
 
 void SG_CombatPursuit(edict_t *self, qboolean allowed)
 {
-	int ci;
+	sg_combat_state_t *st = Combat_ClientState(self);
 
-	if (!self || !self->client)
+	if (!st)
 		return;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	sg_combat[ci].pursue = allowed;
+	st->pursue = allowed;
 	if (!allowed)
-		sg_combat[ci].lost_until = 0.0f;	/* a role change ends the camp */
+		st->lost_until = 0.0f;	/* a role change ends the camp */
 }
 
 qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
@@ -2836,7 +2892,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	edict_t				*foe;
 	vec3_t				org, eye, d;
 	float				dist, want;
-	int					ci, held, team, s;
+	int					held, team, s;
 
 	if (want_range)
 		*want_range = 0.0f;
@@ -2847,10 +2903,9 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 		return false;
 	if (self->deadflag == DEAD_DEAD || self->health <= 0)
 		return false;
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
+	st = Combat_ClientState(self);
+	if (!st)
 		return false;
-	st = &sg_combat[ci];
 
 	if (st->enemy_last <= 0 || level.time - st->enemy_time > SG_DUEL_FRESH)
 		return false;
@@ -2869,7 +2924,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 
 		for (s = 0; r && s < SG_MAX_ENEMY_TRACK; s++)
 		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][s];
+			sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
 
 			if (en->client < 0 || en->heard_only)
 				continue;
@@ -2987,7 +3042,7 @@ static void Combat_LostAim(edict_t *self, sg_combat_state_t *st, vec3_t eye)
 		 */
 		VectorCopy(r->seeds[s].origin, probe);
 		probe[2] += self->viewheight;
-		tr = gi.trace(eye, NULL, NULL, probe, self, MASK_OPAQUE);
+		tr = sg_host.trace(eye, NULL, NULL, probe, self, MASK_OPAQUE);
 		if (tr.fraction >= 1.0f)
 		{
 			float d;
@@ -3110,159 +3165,282 @@ static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
 
 /* ------------------------------------------------------------------ frame */
 
-void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
+/*
+ * THE TRIGGER (split from SG_CombatFrame, 2026-08-12 standards pass;
+ * body verbatim): everything between a firing solution and the button
+ * -- tap variance, fire discipline, the ON/OFF windows, and the rule-S3
+ * invariant. Ends the combat frame either way.
+ */
+static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
+                        sg_combat_state_t *st, float skill, int inhand)
 {
-	sg_combat_state_t	*st;
-	edict_t				*enemy;
-	vec3_t				eye, forward, mid, lead, aim, endp, impact;
-	vec3_t				threat;
-	float				dist, held, frac, mag, len, flight;
-	float				yaw, pitch, skill, settle;
-	float				residual, span, shape;
-	trace_t				tr;
-	int					ci, band, want, inhand;
-	qboolean			clear_shot, carrier, ballistic, vel_stable;
-	qboolean			rattled, textured;
+	/*
+	 * TAP VARIANCE (sg_tapvar, rung-3 set #1 ranked tell #2). Every
+	 * judge read the rail cadence as "a single razor spike at ~1.7s,
+	 * zero spread": a held button refires a slow weapon the frame its
+	 * cycle completes, and the ON/OFF windows below never gate it
+	 * because the cycle outlasts the window rhythm. A human re-aims
+	 * between deliberate shots -- pub rail cadence is ragged. Each time
+	 * a slow weapon finishes firing and comes ready again, the next
+	 * press waits a skill-scaled beat drawn fresh per shot: the ladder's
+	 * bottom taps 0.2-0.7s late, the top 0.05-0.19s (pros with reload
+	 * cues ARE near-metronomic -- the spread stays honest to skill).
+	 */
+	if (sg_cv.tapvar->value > 0.0f)
+	{
+		int hw = Combat_Held(self);
 
-	if (out_engaged)
-		*out_engaged = false;
+		if (hw == SG_W_RAILGUN || hw == SG_W_SSHOTGUN ||
+		    hw == SG_W_ROCKETLAUNCHER || hw == SG_W_GRENADELAUNCHER ||
+		    hw == SG_W_SHOTGUN || hw == SG_W_BFG)
+		{
+			/*
+			 * Shot detection by AMMO DECREMENT, not weaponstate: under
+			 * a held trigger the gun re-enters FIRING inside the same
+			 * server frame and a 10Hz think never observes READY -- the
+			 * first cut of this feature was inert for exactly that
+			 * reason (probe: 0 taps in 400s of 5v5). Ammo cannot lie.
+			 */
+			{
+				int ta = (self->client->ammo_index > 0)
+				    ? self->client->pers.inventory[self->client->ammo_index]
+				    : 0;
 
-	if (!self || !self->inuse || !self->client || !cmd)
-		return;
-	if (self->deadflag == DEAD_DEAD || self->health <= 0)
-		return;
-	if (self->movetype == MOVETYPE_NOCLIP)
-		return;
-
-	ci = (int)(self->client - game.clients);
-	if (ci < 0 || ci >= SG_COMBAT_MAXCLIENTS)
-		return;
-	st = &sg_combat[ci];
-	Combat_CacheItems();
-	skill = Combat_Skill(self);		/* team level less this bot's own handicap */
-
-	/* eyes and current facing. v_angle is the view the last cmd produced. */
-	VectorCopy(self->s.origin, eye);
-	eye[2] += self->viewheight;
-	AngleVectors(self->client->v_angle, forward, NULL, NULL);
+				if (ta < st->tap_ammo)
+				{
+					/* the cvar is a DOSE: 1 = the 0.08-0.22s jitter
+					 * that provably fires but cannot widen a 1.7s
+					 * cycle's CV; 3 = 0.24-0.66s holds, the scale a
+					 * human's deliberate re-aim actually occupies */
+					st->tap_until = level.time +
+					    sg_cv.tapvar->value *
+					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
+					    (0.4f + 1.2f * random());
+					if (sg_cv.debug->value)
+						sg_host.dprint("TAPDBG %s w=%d delay=%.2f\n",
+						           self->client->pers.netname, hw,
+						           st->tap_until - level.time);
+				}
+				st->tap_ammo = ta;
+			}
+			if (level.time < st->tap_until)
+			{
+				sg_cbt_why[5]++;
+				return;
+			}
+		}
+	}
 
 	/*
-	 * Anything shoot us lately from somewhere we were not looking? The
-	 * window is the fluster clock: about 1.2 s at the top of the ladder,
-	 * twice that at the bottom.
+	 * FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell -- the answer
+	 * the tapvar family could not be). The judges read bot cadence as
+	 * needles on the refire line because the trigger is independent of
+	 * the legs: a bot mid-jink fires the frame the gun cycles. A human
+	 * holds through the jockeying and shoots from a planted beat --
+	 * the ragged inter-shot spread IS the movement showing through the
+	 * trigger. Suppress fire until the body's own heading has been
+	 * stable ~0.18s; every strafe reversal restarts the clock. The
+	 * carrier is exempt (its flee trigger conduct is separately tuned).
 	 */
-	rattled = SG_RecentUnseenHit(self,
-	                             Combat_SkillLerp(skill, SG_THREAT_S0,
-	                                              SG_THREAT_S4), threat);
-
-	sg_cbt_why[7]++;                        /* frames that got this far */
-	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL);
-	if (enemy)
-		sg_cbt_why[8]++;                    /* frames with a target */
-	if (!enemy)
+	if (sg_cv.firedisc->value > 0.0f &&
+	    !Combat_Carrying(self))
 	{
-		/*
-		 * Just lost one. Record where belief last put it, as a SEED rather
-		 * than a point: the emergence set is a walk over rune links, so its
-		 * root has to be a node of that graph. Rune_NearestSeed of the last
-		 * believed origin is the honest answer; the enemy table's own seed is
-		 * the fallback for the frame where a teammate's sighting is all there
-		 * is. Nothing is recorded when neither exists -- a hold rooted at a
-		 * guess is a bot staring at a wall.
-		 */
-		if (st->enemy > 0)
+		float sp2 = self->velocity[0] * self->velocity[0]
+		          + self->velocity[1] * self->velocity[1];
+
+		if (sp2 > 150.0f * 150.0f)
 		{
-			rune_t *r = SG_Rune();
-			int seed = r ? Rune_NearestSeed(r, st->enemy_org) : -1;
+			vec3_t nd;
 
-			if (seed < 0 && r)
+			nd[0] = self->velocity[0]; nd[1] = self->velocity[1];
+			nd[2] = 0.0f;
+			VectorNormalize(nd);
+			if (DotProduct(nd, st->self_dir) < 0.86f)
+				st->self_stable = level.time;
+			VectorCopy(nd, st->self_dir);
+			if (level.time < st->self_stable + 0.18f)
 			{
-				int team = self->client->ctf.teamnum;
-				int s;
-
-				if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
-					for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-					{
-						sg_belief_enemy_t *en =
-						    &sg_caco_enemies[team - 1][s];
-
-						if (en->client >= 0 && 1 + en->client == st->enemy &&
-						    en->seed >= 0 && en->seed < r->hdr.num_seeds)
-						{
-							seed = en->seed;
-							break;
-						}
-					}
-			}
-
-			if (seed >= 0)
-			{
-				st->lost_client = st->enemy - 1;
-				st->lost_seed = seed;
-				st->lost_time = level.time;
-				st->lost_until = level.time + SG_LOST_HOLD;
-				st->lost_next = 0.0f;
-				st->lost_have = false;
+				sg_cbt_why[5]++;
+				return;
 			}
 		}
+	}
 
-		st->enemy = 0;
-		st->ws_panic = false;	/* the exception belongs to a fight in
-		                         * progress; it does not outlive one */
+	if (level.time >= st->win_end)
+	{
+		float base;
 
-		/*
-		 * Idle. Rule D3b: pre-SELECT, do not pre-fire. A posted defender holds
-		 * the weapon its sightline calls for; a carrier holds the flee
-		 * doctrine's weapon (D2 point 2); anyone else only acts when what they
-		 * are holding cannot shoot -- the grapple, hand grenades, a dry
-		 * weapon -- or when they are still on the spawn blaster with something
-		 * better in the pack. Holding a weapon costs nothing; raising one
-		 * mid-contact costs a full weapon cycle.
-		 */
-		if (st->post_sight >= 0.0f)
-			Combat_Arbitrate(self, st, Combat_PostWeapon(self, st->post_sight));
-		else if (Combat_Carrying(self))
-			Combat_Arbitrate(self, st,
-			                 Combat_Choose(self, SG_BAND_MID, SG_R_MID, false));
-		else if (st->alert_range >= 0.0f && level.time < st->alert_until)
-		{
-			/* belief says contact is coming at roughly this range */
-			int ab = (st->alert_range < SG_R_CLOSE) ? SG_BAND_CONTACT
-			       : (st->alert_range < SG_R_MID)   ? SG_BAND_CLOSE
-			       : (st->alert_range < SG_R_LONG)  ? SG_BAND_MID
-			                                        : SG_BAND_LONG;
+		st->win_fire = !st->win_fire;
+		base = st->win_fire ? SG_FIRE_ON
+		                    : Combat_SkillLerp(skill, SG_FIRE_OFF_S0,
+		                                       SG_FIRE_OFF_S4);
+		st->win_end = level.time + base * (1.0f + SG_FIRE_JITTER * crandom());
+	}
 
-			Combat_Arbitrate(self, st,
-			                 Combat_Choose(self, ab, st->alert_range, false));
-		}
-		else
-		{
-			int h = Combat_Held(self);
-
-			if (h < 0 || !Combat_Avail(self, h) ||
-			    (h == SG_W_BLASTER && Weapon_Tier(self) > 1))
-				Combat_Arbitrate(self, st,
-				                 Combat_Choose(self, SG_BAND_MID, SG_R_MID,
-				                               false));
-			else if (Combat_WSwitch())
-			{
-				/* the gun is loaded and is not the spawn blaster, so the old
-				 * code was finished here. Ready the room ahead instead. */
-				Combat_PreSwitch(self, st, h);
-			}
-		}
-
-		/*
-		 * The corner. Last thing in the idle path, so the weapon choice above
-		 * is already made when the emergence set is asked which height to aim
-		 * at, and so a bot with no hold to keep leaves the view exactly where
-		 * navigation put it. The trigger is untouched: this branch has no
-		 * target, so no pre-fire trace ran, and no shot is ever authorised
-		 * without one.
-		 */
-		Combat_LostHold(self, st, cmd, eye);
+	if (!st->win_fire)
+	{
+		sg_cbt_why[5]++;
 		return;
 	}
+
+	/*
+	 * The invariant, last thing before the button.
+	 *
+	 * BUTTON_ATTACK is the ROPE whenever the grapple is pers.weapon: Cmd_Hook_f
+	 * degenerates to ForceCommand("+attack") (g_cmds.c:1405-1412) and
+	 * Weapon_Hook aborts the rope the moment the button is not held
+	 * (p_weapon.c:2139-2144). Combat_Held returns -1 for the grapple and for
+	 * anything else it cannot name, so this single test is the whole of rule
+	 * S3's enforcement at the trigger. Rule S2 is the second half: while
+	 * newweapon is non-NULL a switch is in flight (p_weapon.c:376) and the
+	 * trigger stays off until ChangeWeapon lands it.
+	 *
+	 * Note what is NOT tested: hookstate. An OFFHAND rope is sustained every
+	 * server frame by ClientEndServerFrame with no button input at all
+	 * (p_view.c:988-990), which is what makes WEAPONS.md 2.4-D2 possible --
+	 * a bot can grapple and shoot at the same time, provided the grapple is
+	 * never pers.weapon.
+	 */
+	if (Combat_Held(self) < 0 || self->client->newweapon)
+	{
+		sg_cbt_why[6]++;
+		return;
+	}
+
+	sg_cbt_why[0]++;
+	if (inhand >= 0 && inhand < SG_NUM_WEAPONS)
+		sg_cbt_fire[inhand]++;
+	cmd->buttons |= BUTTON_ATTACK;
+}
+
+
+/*
+ * NO TARGET (split from SG_CombatFrame, 2026-08-12 standards pass; body
+ * verbatim, one indent shallower): record where the lost enemy was
+ * believed to be, run the pre-select doctrine, and hold the corner.
+ * The combat frame ends here whenever the scan comes back empty.
+ */
+static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
+                     vec3_t eye)
+{
+	/*
+	 * Just lost one. Record where belief last put it, as a SEED rather
+	 * than a point: the emergence set is a walk over rune links, so its
+	 * root has to be a node of that graph. Rune_NearestSeed of the last
+	 * believed origin is the honest answer; the enemy table's own seed is
+	 * the fallback for the frame where a teammate's sighting is all there
+	 * is. Nothing is recorded when neither exists -- a hold rooted at a
+	 * guess is a bot staring at a wall.
+	 */
+	if (st->enemy > 0)
+	{
+		rune_t *r = SG_Rune();
+		int seed = r ? Rune_NearestSeed(r, st->enemy_org) : -1;
+
+		if (seed < 0 && r)
+		{
+			int team = self->client->ctf.teamnum;
+			int s;
+
+			if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
+				for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+				{
+					sg_belief_enemy_t *en =
+					    &sg_caco_enemies[SG_TeamIdx(team)][s];
+
+					if (en->client >= 0 && 1 + en->client == st->enemy &&
+					    en->seed >= 0 && en->seed < r->hdr.num_seeds)
+					{
+						seed = en->seed;
+						break;
+					}
+				}
+		}
+
+		if (seed >= 0)
+		{
+			st->lost_client = st->enemy - 1;
+			st->lost_seed = seed;
+			st->lost_time = level.time;
+			st->lost_until = level.time + SG_LOST_HOLD;
+			st->lost_next = 0.0f;
+			st->lost_have = false;
+		}
+	}
+
+	st->enemy = 0;
+	st->ws_panic = false;	/* the exception belongs to a fight in
+	                         * progress; it does not outlive one */
+
+	/*
+	 * Idle. Rule D3b: pre-SELECT, do not pre-fire. A posted defender holds
+	 * the weapon its sightline calls for; a carrier holds the flee
+	 * doctrine's weapon (D2 point 2); anyone else only acts when what they
+	 * are holding cannot shoot -- the grapple, hand grenades, a dry
+	 * weapon -- or when they are still on the spawn blaster with something
+	 * better in the pack. Holding a weapon costs nothing; raising one
+	 * mid-contact costs a full weapon cycle.
+	 */
+	if (st->post_sight >= 0.0f)
+		Combat_Arbitrate(self, st, Combat_PostWeapon(self, st->post_sight));
+	else if (Combat_Carrying(self))
+		Combat_Arbitrate(self, st,
+		                 Combat_Choose(self, SG_BAND_MID, SG_R_MID, false));
+	else if (st->alert_range >= 0.0f && level.time < st->alert_until)
+	{
+		/* belief says contact is coming at roughly this range */
+		int ab = (st->alert_range < SG_R_CLOSE) ? SG_BAND_CONTACT
+		       : (st->alert_range < SG_R_MID)   ? SG_BAND_CLOSE
+		       : (st->alert_range < SG_R_LONG)  ? SG_BAND_MID
+		                                        : SG_BAND_LONG;
+
+		Combat_Arbitrate(self, st,
+		                 Combat_Choose(self, ab, st->alert_range, false));
+	}
+	else
+	{
+		int h = Combat_Held(self);
+
+		if (h < 0 || !Combat_Avail(self, h) ||
+		    (h == SG_W_BLASTER && Weapon_Tier(self) > 1))
+			Combat_Arbitrate(self, st,
+			                 Combat_Choose(self, SG_BAND_MID, SG_R_MID,
+			                               false));
+		else if (Combat_WSwitch())
+		{
+			/* the gun is loaded and is not the spawn blaster, so the old
+			 * code was finished here. Ready the room ahead instead. */
+			Combat_PreSwitch(self, st, h);
+		}
+	}
+
+	/*
+	 * The corner. Last thing in the idle path, so the weapon choice above
+	 * is already made when the emergence set is asked which height to aim
+	 * at, and so a bot with no hold to keep leaves the view exactly where
+	 * navigation put it. The trigger is untouched: this branch has no
+	 * target, so no pre-fire trace ran, and no shot is ever authorised
+	 * without one.
+	 */
+	Combat_LostHold(self, st, cmd, eye);
+	return;
+}
+
+
+/*
+ * TARGET HELD (split from SG_CombatFrame, 2026-08-12 standards pass;
+ * body verbatim): continuity and the settle clock, the engaged flag,
+ * the corner-hold clear, and rule F1's stability clock. Emits the
+ * range and the projectile-stability verdict the aim model reads.
+ */
+static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
+                      edict_t *enemy, float skill, vec3_t eye,
+                      vec3_t forward, vec3_t mid, vec3_t aim,
+                      float *dist_out, qboolean *vel_stable_out,
+                      qboolean *out_engaged)
+{
+	float dist;
+	qboolean vel_stable;
 
 	Combat_Center(enemy, mid);
 	VectorSubtract(mid, eye, aim);
@@ -3353,6 +3531,23 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * is being read never reaches its threshold */
 	vel_stable = Combat_VelStable(st, enemy);
 
+	*dist_out = dist;
+	*vel_stable_out = vel_stable;
+}
+
+
+/*
+ * THE WEAPON CHOICE (split from SG_CombatFrame, 2026-08-12 standards
+ * pass; body verbatim): band, doctrine choice, the wetwork override,
+ * the panic test, and the arbitrated request.
+ */
+static void Cbt_ChooseWeapon(edict_t *self, sg_combat_state_t *st,
+                             edict_t *enemy, float dist,
+                             qboolean *carrier_out, int *band_out)
+{
+	qboolean carrier;
+	int band, want;
+
 	/* ------------------------------------------------------ the weapon */
 
 	carrier = Combat_IsEnemyCarrier(self, enemy);
@@ -3368,7 +3563,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * don't know it. Hold the rail on swimmers if it's in the pack.
 	 */
 	if (enemy->waterlevel > 1 &&
-	    gi.cvar("sg_wetwork", "1", 0)->value)
+	    sg_cv.wetwork->value)
 	{
 		static const int wet_rg[] = { SG_W_RAILGUN, -1 };
 		int wr = Combat_WalkLadder(self, wet_rg, dist, false);
@@ -3399,6 +3594,70 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		st->ws_panic = false;
 
 	Combat_Arbitrate(self, st, want);
+
+	*carrier_out = carrier;
+	*band_out = band;
+}
+
+
+void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
+{
+	sg_combat_state_t	*st;
+	edict_t				*enemy;
+	vec3_t				eye, forward, mid, lead, aim, endp, impact;
+	vec3_t				threat;
+	float				dist, held, frac, mag, len, flight;
+	float				yaw, pitch, skill, settle;
+	float				residual, span, shape;
+	trace_t				tr;
+	int					band, inhand;
+	qboolean			clear_shot, carrier, ballistic, vel_stable;
+	qboolean			rattled, textured;
+
+	if (out_engaged)
+		*out_engaged = false;
+
+	if (!self || !self->inuse || !self->client || !cmd)
+		return;
+	if (self->deadflag == DEAD_DEAD || self->health <= 0)
+		return;
+	if (self->movetype == MOVETYPE_NOCLIP)
+		return;
+
+	st = Combat_ClientState(self);
+	if (!st)
+		return;
+	Combat_CacheItems();
+	skill = Combat_Skill(self);		/* team level less this bot's own handicap */
+
+	/* eyes and current facing. v_angle is the view the last cmd produced. */
+	VectorCopy(self->s.origin, eye);
+	eye[2] += self->viewheight;
+	AngleVectors(self->client->v_angle, forward, NULL, NULL);
+
+	/*
+	 * Anything shoot us lately from somewhere we were not looking? The
+	 * window is the fluster clock: about 1.2 s at the top of the ladder,
+	 * twice that at the bottom.
+	 */
+	rattled = SG_RecentUnseenHit(self,
+	                             Combat_SkillLerp(skill, SG_THREAT_S0,
+	                                              SG_THREAT_S4), threat);
+
+	sg_cbt_why[7]++;                        /* frames that got this far */
+	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL);
+	if (enemy)
+		sg_cbt_why[8]++;                    /* frames with a target */
+	if (!enemy)
+	{
+		Cbt_Idle(self, st, cmd, eye);
+		return;
+	}
+
+	Cbt_Track(self, st, enemy, skill, eye, forward, mid, aim,
+	          &dist, &vel_stable, out_engaged);
+
+	Cbt_ChooseWeapon(self, st, enemy, dist, &carrier, &band);
 
 	/*
 	 * The firing solution is built for the weapon in HAND, not the one wanted:
@@ -3617,7 +3876,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		 * little inside its own bounding box.
 		 */
 		VectorMA(eye, len, aim, endp);
-		tr = gi.trace(eye, NULL, NULL, endp, self, MASK_SHOT);
+		tr = sg_host.trace(eye, NULL, NULL, endp, self, MASK_SHOT);
 		VectorCopy(tr.endpos, impact);
 
 		clear_shot = false;
@@ -3661,13 +3920,13 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 
 			VectorCopy(lead, down);
 			down[2] -= 512.0f;
-			fl = gi.trace(lead, NULL, NULL, down, enemy, MASK_SHOT);
+			fl = sg_host.trace(lead, NULL, NULL, down, enemy, MASK_SHOT);
 			if (fl.fraction < 1.0f)
 			{
 				trace_t path;
 				float	reach;
 
-				path = gi.trace(eye, NULL, NULL, fl.endpos, self, MASK_SHOT);
+				path = sg_host.trace(eye, NULL, NULL, fl.endpos, self, MASK_SHOT);
 				VectorSubtract(path.endpos, fl.endpos, v);
 				reach = VectorLength(v);
 				if (reach <= SG_HIT_SLOP)
@@ -3761,143 +4020,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		return;
 	}
 
-	/*
-	 * TAP VARIANCE (sg_tapvar, rung-3 set #1 ranked tell #2). Every
-	 * judge read the rail cadence as "a single razor spike at ~1.7s,
-	 * zero spread": a held button refires a slow weapon the frame its
-	 * cycle completes, and the ON/OFF windows below never gate it
-	 * because the cycle outlasts the window rhythm. A human re-aims
-	 * between deliberate shots -- pub rail cadence is ragged. Each time
-	 * a slow weapon finishes firing and comes ready again, the next
-	 * press waits a skill-scaled beat drawn fresh per shot: the ladder's
-	 * bottom taps 0.2-0.7s late, the top 0.05-0.19s (pros with reload
-	 * cues ARE near-metronomic -- the spread stays honest to skill).
-	 */
-	if (gi.cvar("sg_tapvar", "0", 0)->value > 0.0f)
-	{
-		int hw = Combat_Held(self);
-
-		if (hw == SG_W_RAILGUN || hw == SG_W_SSHOTGUN ||
-		    hw == SG_W_ROCKETLAUNCHER || hw == SG_W_GRENADELAUNCHER ||
-		    hw == SG_W_SHOTGUN || hw == SG_W_BFG)
-		{
-			/*
-			 * Shot detection by AMMO DECREMENT, not weaponstate: under
-			 * a held trigger the gun re-enters FIRING inside the same
-			 * server frame and a 10Hz think never observes READY -- the
-			 * first cut of this feature was inert for exactly that
-			 * reason (probe: 0 taps in 400s of 5v5). Ammo cannot lie.
-			 */
-			{
-				int ta = (self->client->ammo_index > 0)
-				    ? self->client->pers.inventory[self->client->ammo_index]
-				    : 0;
-
-				if (ta < st->tap_ammo)
-				{
-					/* the cvar is a DOSE: 1 = the 0.08-0.22s jitter
-					 * that provably fires but cannot widen a 1.7s
-					 * cycle's CV; 3 = 0.24-0.66s holds, the scale a
-					 * human's deliberate re-aim actually occupies */
-					st->tap_until = level.time +
-					    gi.cvar("sg_tapvar", "0", 0)->value *
-					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
-					    (0.4f + 1.2f * random());
-					if (gi.cvar("sg_debug", "0", 0)->value)
-						gi.dprintf("TAPDBG %s w=%d delay=%.2f\n",
-						           self->client->pers.netname, hw,
-						           st->tap_until - level.time);
-				}
-				st->tap_ammo = ta;
-			}
-			if (level.time < st->tap_until)
-			{
-				sg_cbt_why[5]++;
-				return;
-			}
-		}
-	}
-
-	/*
-	 * FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell -- the answer
-	 * the tapvar family could not be). The judges read bot cadence as
-	 * needles on the refire line because the trigger is independent of
-	 * the legs: a bot mid-jink fires the frame the gun cycles. A human
-	 * holds through the jockeying and shoots from a planted beat --
-	 * the ragged inter-shot spread IS the movement showing through the
-	 * trigger. Suppress fire until the body's own heading has been
-	 * stable ~0.18s; every strafe reversal restarts the clock. The
-	 * carrier is exempt (its flee trigger conduct is separately tuned).
-	 */
-	if (gi.cvar("sg_firedisc", "0", 0)->value > 0.0f &&
-	    !Combat_Carrying(self))
-	{
-		float sp2 = self->velocity[0] * self->velocity[0]
-		          + self->velocity[1] * self->velocity[1];
-
-		if (sp2 > 150.0f * 150.0f)
-		{
-			vec3_t nd;
-
-			nd[0] = self->velocity[0]; nd[1] = self->velocity[1];
-			nd[2] = 0.0f;
-			VectorNormalize(nd);
-			if (DotProduct(nd, st->self_dir) < 0.86f)
-				st->self_stable = level.time;
-			VectorCopy(nd, st->self_dir);
-			if (level.time < st->self_stable + 0.18f)
-			{
-				sg_cbt_why[5]++;
-				return;
-			}
-		}
-	}
-
-	if (level.time >= st->win_end)
-	{
-		float base;
-
-		st->win_fire = !st->win_fire;
-		base = st->win_fire ? SG_FIRE_ON
-		                    : Combat_SkillLerp(skill, SG_FIRE_OFF_S0,
-		                                       SG_FIRE_OFF_S4);
-		st->win_end = level.time + base * (1.0f + SG_FIRE_JITTER * crandom());
-	}
-
-	if (!st->win_fire)
-	{
-		sg_cbt_why[5]++;
-		return;
-	}
-
-	/*
-	 * The invariant, last thing before the button.
-	 *
-	 * BUTTON_ATTACK is the ROPE whenever the grapple is pers.weapon: Cmd_Hook_f
-	 * degenerates to ForceCommand("+attack") (g_cmds.c:1405-1412) and
-	 * Weapon_Hook aborts the rope the moment the button is not held
-	 * (p_weapon.c:2139-2144). Combat_Held returns -1 for the grapple and for
-	 * anything else it cannot name, so this single test is the whole of rule
-	 * S3's enforcement at the trigger. Rule S2 is the second half: while
-	 * newweapon is non-NULL a switch is in flight (p_weapon.c:376) and the
-	 * trigger stays off until ChangeWeapon lands it.
-	 *
-	 * Note what is NOT tested: hookstate. An OFFHAND rope is sustained every
-	 * server frame by ClientEndServerFrame with no button input at all
-	 * (p_view.c:988-990), which is what makes WEAPONS.md 2.4-D2 possible --
-	 * a bot can grapple and shoot at the same time, provided the grapple is
-	 * never pers.weapon.
-	 */
-	if (Combat_Held(self) < 0 || self->client->newweapon)
-	{
-		sg_cbt_why[6]++;
-		return;
-	}
-
-	sg_cbt_why[0]++;
-	if (inhand >= 0 && inhand < SG_NUM_WEAPONS)
-		sg_cbt_fire[inhand]++;
-	cmd->buttons |= BUTTON_ATTACK;
+	Cbt_Trigger(self, cmd, st, skill, inhand);
 }
 
 /*
@@ -3923,14 +4046,14 @@ void SG_CombatHit(edict_t *att, edict_t *victim)
 /* the tally, printed from SG_CombatFrame's caller cadence via any bot */
 void SG_CombatWhy(void)
 {
-	if (!gi.cvar("sg_debug", "0", 0)->value || level.time < sg_cbt_why_next)
+	if (!sg_cv.debug->value || level.time < sg_cbt_why_next)
 		return;
 	sg_cbt_why_next = level.time + 5.0f;
-	gi.dprintf("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d react=%d\n",
+	sg_host.dprint("CBTWHY frames=%d seen=%d fire=%d noclear=%d splash=%d cap=%d lead=%d win=%d held=%d react=%d\n",
 	           sg_cbt_why[7], sg_cbt_why[8],
 	           sg_cbt_why[0], sg_cbt_why[1], sg_cbt_why[2], sg_cbt_why[3],
 	           sg_cbt_why[4], sg_cbt_why[5], sg_cbt_why[6], sg_cbt_why[9]);
-	gi.dprintf("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d threat=%d\n",
+	sg_host.dprint("CBTSCAN unteamed=%d same=%d far=%d fov=%d blocked=%d acquired=%d threat=%d\n",
 	           sg_cbt_scan[0], sg_cbt_scan[1], sg_cbt_scan[2],
 	           sg_cbt_scan[3], sg_cbt_scan[4], sg_cbt_scan[5],
 	           sg_cbt_scan[6]);
@@ -3939,7 +4062,7 @@ void SG_CombatWhy(void)
 
 		for (w = 0; w < SG_NUM_WEAPONS; w++)
 			if (sg_cbt_fire[w])
-				gi.dprintf("ACC w%d fires=%d hits=%d\n",
+				sg_host.dprint("ACC w%d fires=%d hits=%d\n",
 				           w, sg_cbt_fire[w], sg_cbt_hit[w]);
 	}
 }

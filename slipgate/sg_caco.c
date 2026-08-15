@@ -37,6 +37,9 @@
 #include "slipgate/sg_net.h"                    /* SG_BotClientCommand -- the chat route */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
@@ -60,13 +63,28 @@ void SG_NoteDeath(edict_t *victim)
 	t = victim->client->ctf.teamnum;
 	if (t != CTF_TEAM_RED && t != CTF_TEAM_BLUE)
 		return;
-	VectorCopy(victim->s.origin, sg_caco_death_org[t - CTF_TEAM_RED]);
-	sg_caco_death_time[t - CTF_TEAM_RED] = level.time;
+	VectorCopy(victim->s.origin, sg_caco_death_org[SG_TeamIdx(t)]);
+	sg_caco_death_time[SG_TeamIdx(t)] = level.time;
+	/* The obituary is public, so no team may keep pricing this body as a live
+	 * sighting through the respawn window.  Preserve the death marker above,
+	 * then retire every client-indexed sensor fact from the old life. */
+	Caco_ResetClient(victim);
 }
 
 static float caco_next_scan;
 static float caco_next_human;
 static float caco_next_advect;
+
+static void Caco_InvalidateOurCarrierField(rune_t *r, int team)
+{
+	int seed;
+
+	sg_fields.our_carrier_valid[team] = false;
+	if (!r || !sg_fields.our_carrier[team])
+		return;
+	for (seed = 0; seed < r->hdr.num_seeds; seed++)
+		sg_fields.our_carrier[team][seed] = SG_FIELD_INF;
+}
 
 /* ------------------------------------------------------------- callouts */
 
@@ -132,7 +150,7 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 	VectorAdd(target->absmin, target->absmax, mid);
 	VectorScale(mid, 0.5f, mid);
 
-	if (!gi.inPVS(eye, mid))
+	if (!sg_host.in_pvs(eye, mid))
 		return false;
 
 	/*
@@ -147,8 +165,8 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 	 * so they ship dark until the film says the honesty is worth it.
 	 */
 	{
-		float cone = gi.cvar("sg_beliefcone", "0", 0)->value;
-		float range = gi.cvar("sg_beliefrange", "0", 0)->value;
+		float cone = sg_cv.beliefcone->value;
+		float range = sg_cv.beliefrange->value;
 		vec3_t to;
 
 		VectorSubtract(mid, eye, to);
@@ -167,7 +185,7 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 		}
 	}
 
-	tr = gi.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
+	tr = sg_host.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
 
@@ -202,10 +220,10 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 	if (topic < 0 || topic >= SG_CALL_TOPICS)
 		return;
 
-	c = &caco_callout[team - 1][topic];
+	c = &caco_callout[SG_TeamIdx(team)][topic];
 	if (c->pending)
 		return;                     /* someone is already about to say it */
-	if (level.time < caco_teamsaid[team - 1][topic])
+	if (level.time < caco_teamsaid[SG_TeamIdx(team)][topic])
 		return;                     /* the team heard this a moment ago */
 
 	Caco_Where(origin, place, sizeof(place));
@@ -219,7 +237,7 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 /*
  * Say the queued lines whose moment has come, through the game's real chat:
  * SG_BotClientCommand(client, "say_team", line, NULL) routes the arguments into
- * the redirected gi.argv and runs ClientCommand -> Cmd_Say_f for that client,
+ * the redirected sg_host.argv and runs ClientCommand -> Cmd_Say_f for that client,
  * exactly as bl_know.c's Know_Speak does. Teammates -- human ones included --
  * read it in their own chat.
  *
@@ -253,7 +271,7 @@ static void Caco_Speak(void)
 			sp = g_edicts + 1 + c->speaker;
 			if (!sp->inuse || !sp->client)
 				continue;
-			if (sp->client->ctf.teamnum != t + 1)
+			if (sp->client->ctf.teamnum != SG_TeamFromIdx(t))
 				continue;
 			if (sp->deadflag == DEAD_DEAD || sp->health <= 0)
 				continue;           /* the dead do not call it out */
@@ -275,26 +293,42 @@ static void Caco_ScanFlags(rune_t *r, edict_t *viewer, int viewer_team)
 
 	while ((e = G_Find(e, FOFS(classname), "flag")) != NULL)
 	{
-		int fi = (e->flagteam == CTF_TEAM_RED) ? 0 : 1;
-		sg_belief_flag_t *b = &sg_caco_team_belief.flag[fi];
+		int fi = SG_TeamIdx(e->flagteam);
+		int bt;
+		sg_belief_flag_t *b = NULL;
 		edict_t *look;
-		qboolean was_unknown;
+		qboolean was_unknown, carried;
+
+		/* LMCTF hides a carried flag but leaves its entity at the take
+		 * position, which is normally the stand.  Geometry alone therefore
+		 * reports HOME throughout an ordinary carry; the owner/inventory pair
+		 * is the authoritative HUD-level fact. */
+		carried = e->owner && e->owner->inuse && e->owner->client &&
+		          ClientHasFlag(e->owner) == e;
 
 		/* common knowledge: home or not (HUD) */
-		if (ctf_flagathome(e))
+		if (!carried && ctf_flagathome(e))
 		{
-			b->state = SG_FLAG_HOME;
-			b->where_seed = -1;
+			for (bt = 0; bt < 2; bt++)
+			{
+				sg_caco_team_belief.flag[bt][fi].state = SG_FLAG_HOME;
+				sg_caco_team_belief.flag[bt][fi].where_seed = -1;
+			}
 			continue;
 		}
 
 		/* not home. carried or dropped is also HUD-level in LMCTF
 		 * (the score line shows taken flags), but WHERE requires sight. */
-		if (b->state == SG_FLAG_HOME)
+		for (bt = 0; bt < 2; bt++)
 		{
-			b->state = SG_FLAG_ASTRAY;
-			b->where_seed = -1;         /* until someone sees it */
-			b->seen_time = 0.0f;
+			sg_belief_flag_t *row = &sg_caco_team_belief.flag[bt][fi];
+
+			if (row->state == SG_FLAG_HOME)
+			{
+				row->state = SG_FLAG_ASTRAY;
+				row->where_seed = -1;     /* until this team sees it */
+				row->seen_time = 0.0f;
+			}
 		}
 
 		/*
@@ -305,11 +339,14 @@ static void Caco_ScanFlags(rune_t *r, edict_t *viewer, int viewer_team)
 		 * believing, is the carrier -- not the invisible flag edict, which
 		 * would hand us a spot nobody is standing in.
 		 */
-		look = (e->owner && e->owner->inuse && e->owner->client) ? e->owner : e;
+		look = carried ? e->owner : e;
+		if (viewer && (viewer_team == CTF_TEAM_RED ||
+		               viewer_team == CTF_TEAM_BLUE))
+			b = &sg_caco_team_belief.flag[SG_TeamIdx(viewer_team)][fi];
 
-		was_unknown = (b->where_seed < 0) ? true : false;
+		was_unknown = (!b || b->where_seed < 0) ? true : false;
 
-		if (viewer && Caco_Visible(viewer, look))
+		if (viewer && b && Caco_Visible(viewer, look))
 		{
 			b->where_seed = Rune_NearestSeed(r, look->s.origin);
 			b->seen_time = level.time;
@@ -318,7 +355,7 @@ static void Caco_ScanFlags(rune_t *r, edict_t *viewer, int viewer_team)
 			 * Our own flag, astray and until now unlocated, is the one the
 			 * team most needs to hear about.
 			 */
-			if (was_unknown && b->where_seed >= 0 && fi == viewer_team - 1)
+			if (was_unknown && b->where_seed >= 0 && fi == SG_TeamIdx(viewer_team))
 				Caco_Queue(viewer, viewer_team, SG_CALL_OURFLAG,
 				           (look == e) ? "our flag is down"
 				                       : "our flag is moving,",
@@ -335,19 +372,31 @@ static void Caco_ScanFlags(rune_t *r, edict_t *viewer, int viewer_team)
 static void Caco_ScanCarriers(rune_t *r, edict_t *viewer, int viewer_team)
 {
 	int i;
+	int ti = SG_TeamIdx(viewer_team);
+	qboolean have_ours = false;
 
 	for (i = 0; i < game.maxclients; i++)
 	{
 		edict_t *p = g_edicts + 1 + i;
+		edict_t *held;
 		int carried, enemy_of;
 
 		if (!p->inuse || !p->client)
 			continue;
-		if (!(p->s.effects & (EF_FLAG1 | EF_FLAG2)))
+		held = ClientHasFlag(p);
+		if (!held)
 			continue;
 
-		/* which team's flag does this player carry? EF_FLAG1 is red's */
-		carried = (p->s.effects & EF_FLAG1) ? 0 : 1;
+		/* Inventory is carrier truth. A dropped flag deliberately retains its
+		 * former owner for one second to prevent immediate self-repickup, and
+		 * G_SetClientEffects mirrors that owner into EF_FLAGx. Neither means the
+		 * player still carries it. */
+		if (held == redflag)
+			carried = 0;
+		else if (held == blueflag)
+			carried = 1;
+		else
+			continue;
 		/* the team whose flag is carried wants to know the carrier */
 		enemy_of = carried;
 
@@ -356,9 +405,19 @@ static void Caco_ScanCarriers(rune_t *r, edict_t *viewer, int viewer_team)
 			/* our own carrier: identity is team knowledge, position from
 			 * sighting (including the carrier seeing themself) */
 			sg_belief_carrier_t *c =
-				&sg_caco_team_belief.carrier[viewer_team - 1];
+				&sg_caco_team_belief.carrier[ti];
 
-			c->client = i;
+			have_ours = true;
+
+			/* A position belongs to one carrier, not to the team slot.  Until
+			 * the replacement is actually seen, its location is unknown. */
+			if (c->client != i)
+			{
+				c->client = i;
+				c->seed = -1;
+				c->seen_time = 0.0f;
+				Caco_InvalidateOurCarrierField(r, ti);
+			}
 			if (viewer && (viewer == p || Caco_Visible(viewer, p)))
 			{
 				c->seed = Rune_NearestSeed(r, p->s.origin);
@@ -404,6 +463,21 @@ static void Caco_ScanCarriers(rune_t *r, edict_t *viewer, int viewer_team)
 				if (material)
 					SG_ChatCarrierSeen(viewer, enemy_of + 1, p);
 			}
+		}
+	}
+
+	/* Losing the HUD carrier identity is knowledge too.  Do not let the
+	 * departed carrier's last position survive until the aging cadence. */
+	if (!have_ours)
+	{
+		sg_belief_carrier_t *c = &sg_caco_team_belief.carrier[ti];
+
+		if (c->client >= 0 || c->seed >= 0 || sg_fields.our_carrier_valid[ti])
+		{
+			c->client = -1;
+			c->seed = -1;
+			c->seen_time = 0.0f;
+			Caco_InvalidateOurCarrierField(r, ti);
 		}
 	}
 }
@@ -477,7 +551,7 @@ int					sg_caco_num_items;
  */
 qboolean SG_ItemComm(void)
 {
-	return (gi.cvar("sg_itemcomm", "1", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.itemcomm->value > 0.0f) ? true : false;
 }
 
 /* row index for a team number, and the "not on a team" case folded to red so
@@ -595,6 +669,51 @@ static void Caco_ScanItemSpawns(void)
 			}
 		}
 	}
+}
+
+/*
+ * THE MEGA ENTITY CACHE. sg_combat.c's worth pricing used to walk every
+ * entity in the map looking for classname item_health_mega, twice a bot per
+ * second (the H1 bump and Worth_Mega both did it independently) -- exactly
+ * the globals.num_edicts scan Caco_ScanItemSpawns exists to avoid for the
+ * powerup and rune classes. Mega is not itself a belief class (its own worth
+ * model reads the entity directly, per Worth_Mega's header), so it gets its
+ * own equally small cache built the same way and on the same clock: once, at
+ * setup, because a mega's SPAWN LOCATION is exactly as constant as a quad's.
+ */
+static int	sg_mega_ents[SG_MAX_MEGA];
+static int	sg_mega_ent_count;
+
+static void Caco_ScanMegaSpawns(void)
+{
+	int i;
+
+	sg_mega_ent_count = 0;
+	for (i = 0; i < globals.num_edicts && sg_mega_ent_count < SG_MAX_MEGA; i++)
+	{
+		edict_t *e = &g_edicts[i];
+
+		if (!e->inuse || !e->classname)
+			continue;
+		if (strcmp(e->classname, "item_health_mega") != 0)
+			continue;
+		sg_mega_ents[sg_mega_ent_count++] = i;
+	}
+}
+
+/*
+ * The read side, for sg_combat.c: the entity NUMBERS found at setup, in the
+ * order the setup scan found them (ascending, the same order a live
+ * globals.num_edicts walk would visit them in). Up/down state is not baked
+ * in here -- a mega toggles SOLID_NOT while held and comes back on its own
+ * clock, so the caller still checks inuse and belief the way it always did;
+ * this only replaces the WALK that used to find the entity in the first
+ * place.
+ */
+int SG_MegaEntities(const int **out_ents)
+{
+	*out_ents = sg_mega_ents;
+	return sg_mega_ent_count;
 }
 
 /*
@@ -878,7 +997,7 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 
 	for (t = 0; t < 2; t++)
 	{
-		int		team = t + 1;
+		int		team = SG_TeamFromIdx(t);
 		int		src;
 		edict_t	*speaker;
 
@@ -904,19 +1023,24 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 
 static void Caco_Age(rune_t *r)
 {
-	int i;
+	int i, bt;
 
 	Caco_AgeItems(r);
 
 	for (i = 0; i < 2; i++)
 	{
-		if (sg_caco_team_belief.flag[i].where_seed >= 0 &&
-		    level.time - sg_caco_team_belief.flag[i].seen_time > SG_BELIEF_STALE)
-			sg_caco_team_belief.flag[i].where_seed = -1;
+		for (bt = 0; bt < 2; bt++)
+			if (sg_caco_team_belief.flag[bt][i].where_seed >= 0 &&
+			    level.time - sg_caco_team_belief.flag[bt][i].seen_time >
+			        SG_BELIEF_STALE)
+				sg_caco_team_belief.flag[bt][i].where_seed = -1;
 
 		if (sg_caco_team_belief.carrier[i].seed >= 0 &&
 		    level.time - sg_caco_team_belief.carrier[i].seen_time > SG_BELIEF_STALE)
+		{
 			sg_caco_team_belief.carrier[i].seed = -1;
+			Caco_InvalidateOurCarrierField(r, i);
+		}
 
 		if (sg_caco_team_belief.enemy_carrier[i].seed >= 0 &&
 		    level.time - sg_caco_team_belief.enemy_carrier[i].seen_time > SG_BELIEF_STALE)
@@ -927,9 +1051,13 @@ static void Caco_Age(rune_t *r)
 		{
 			edict_t *p = g_edicts + 1 + sg_caco_team_belief.carrier[i].client;
 
-			if (!p->inuse || !p->client ||
-			    !(p->s.effects & (EF_FLAG1 | EF_FLAG2)))
+				if (!p->inuse || !p->client || !ClientHasFlag(p))
+			{
 				sg_caco_team_belief.carrier[i].client = -1;
+				sg_caco_team_belief.carrier[i].seed = -1;
+				sg_caco_team_belief.carrier[i].seen_time = 0.0f;
+				Caco_InvalidateOurCarrierField(r, i);
+			}
 		}
 
 		/*
@@ -943,8 +1071,7 @@ static void Caco_Age(rune_t *r)
 			edict_t *p =
 				g_edicts + 1 + sg_caco_team_belief.enemy_carrier[i].client;
 
-			if (!p->inuse || !p->client ||
-			    !(p->s.effects & (EF_FLAG1 | EF_FLAG2)))
+				if (!p->inuse || !p->client || !ClientHasFlag(p))
 			{
 				sg_caco_team_belief.enemy_carrier[i].client = -1;
 				sg_caco_team_belief.enemy_carrier[i].seed = -1;
@@ -1207,10 +1334,10 @@ void Caco_HumanEyes(rune_t *r, int team)
 			{
 				/* our own carrier, or this human IS the carrier */
 				if (p == h || Caco_Visible(h, p))
-					Caco_Relay(SG_RELAY_OURS, team - 1, j,
+					Caco_Relay(SG_RELAY_OURS, SG_TeamIdx(team), j,
 					           Rune_NearestSeed(r, p->s.origin));
 			}
-			else if (carried == team - 1)
+			else if (carried == SG_TeamIdx(team))
 			{
 				/* an enemy running with OUR flag */
 				if (Caco_Visible(h, p))
@@ -1225,7 +1352,7 @@ void Caco_HumanEyes(rune_t *r, int team)
  * The delayed word arrives. It loses to anything a bot saw later -- a
  * teammate's shout does not overwrite what you are looking at.
  */
-static void Caco_RelayFlush(void)
+static void Caco_RelayFlush(rune_t *r)
 {
 	int k, i;
 
@@ -1243,9 +1370,32 @@ static void Caco_RelayFlush(void)
 			if (rl->client < 0 || rl->client >= game.maxclients)
 				continue;
 			p = g_edicts + 1 + rl->client;
-			if (!p->inuse || !p->client ||
-			    !(p->s.effects & (EF_FLAG1 | EF_FLAG2)))
-				continue;           /* not carrying any more: nothing to tell */
+			if (!p->inuse || !p->client)
+				continue;
+			/*
+			 * Validate the fact that was relayed, not the cosmetic effect bit.
+			 * A voluntary toss clears the flag owner immediately but EF_FLAGx is
+			 * rebuilt only in ClientEndServerFrame; accepting that stale bit can
+			 * briefly resurrect a carrier field.  Owner identity also prevents a
+			 * relay about one flag/team from being satisfied by carrying the other.
+			 */
+			if (k == SG_RELAY_OURS)
+			{
+				edict_t *flag = (i == 0) ? blueflag : redflag;
+
+					if (p->client->ctf.teamnum != SG_TeamFromIdx(i) ||
+					    !flag || !flag->inuse || ClientHasFlag(p) != flag)
+					continue;
+			}
+			else
+			{
+				edict_t *flag = (i == 0) ? redflag : blueflag;
+
+				if (p->client->ctf.teamnum !=
+				        SG_EnemyTeam(SG_TeamFromIdx(i)) ||
+					    !flag || !flag->inuse || ClientHasFlag(p) != flag)
+					continue;
+			}
 
 			c = (k == SG_RELAY_THEIRS)
 				? &sg_caco_team_belief.enemy_carrier[i]
@@ -1254,6 +1404,8 @@ static void Caco_RelayFlush(void)
 			if (rl->at <= c->seen_time)
 				continue;           /* the team already knows something newer */
 
+			if (k == SG_RELAY_OURS && c->client != rl->client)
+				Caco_InvalidateOurCarrierField(r, i);
 			c->client = rl->client;
 			c->seed = rl->seed;
 			c->seen_time = rl->at;
@@ -1366,19 +1518,19 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 		if (!Caco_Visible(viewer, p))
 			continue;
 
-		Caco_EnemyPlace(viewer_team - 1, i, Rune_NearestSeed(r, p->s.origin),
+		Caco_EnemyPlace(SG_TeamIdx(viewer_team), i, Rune_NearestSeed(r, p->s.origin),
 		                true, (p->s.renderfx & RF_GLOW) != 0);
 	}
 }
 
 /* ------------------------------------------------------------------- the ear
  *
- * Called from the sound wrappers in sg_net.c for every gi.sound and
- * gi.positioned_sound the mod issues, AFTER the engine has been handed the
+ * Called from the sound wrappers in sg_net.c for every sg_host.sound and
+ * sg_host.positioned_sound the mod issues, AFTER the engine has been handed the
  * call through unchanged. Nothing here touches the wire; this is a tap on a
  * real event, which is the whole difference from what it replaces.
  *
- * WHAT A BOT IS ALLOWED TO LEARN. Two engine facts and nothing else: gi.inPHS,
+ * WHAT A BOT IS ALLOWED TO LEARN. Two engine facts and nothing else: sg_host.in_phs,
  * which is precisely "could a sound made there be heard here", and the
  * attenuation the caller passed, which is what decides how far the sound
  * actually carries for a human client. No server-private player state is read.
@@ -1426,6 +1578,11 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		return;                     /* no rune loaded: nowhere to place onto */
 	if (!emitter || !emitter->inuse || !emitter->client)
 		return;                     /* world noise names nobody */
+	/* player_die emits gib/death audio after the public obituary purges this
+	 * subject but before deadflag is assigned. Do not immediately resurrect the
+	 * corpse as a fresh heard-only live enemy. */
+	if (emitter->deadflag || emitter->health <= 0)
+		return;
 
 	eteam = emitter->client->ctf.teamnum;
 	if (eteam <= CTF_TEAM_UNDEFINED)
@@ -1470,7 +1627,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 			radius = (SG_EAR_FULLVOL + SG_EAR_SPAN / attenuation) * volume;
 			if (dist > radius)
 				continue;           /* out of earshot */
-			if (!gi.inPHS(b->s.origin, sorg))
+			if (!sg_host.in_phs(b->s.origin, sorg))
 				continue;           /* no path for the sound to travel */
 		}
 		else
@@ -1490,28 +1647,28 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		if (seed < 0)
 			continue;
 
-		Caco_EnemyPlace(team - 1, ecl, seed, false, false);
+		Caco_EnemyPlace(SG_TeamIdx(team), ecl, seed, false, false);
 
 		/* the quad announcing its own ending (damage2 = the fade warning,
 		 * played once at 3s remaining). Index resolved lazily -- precache
 		 * order is stable per map. */
 		if (!sg_quadsound_idx)
-			sg_quadsound_idx = gi.soundindex("items/damage2.wav");
+			sg_quadsound_idx = sg_host.soundindex("items/damage2.wav");
 		if (soundindex == sg_quadsound_idx)
-			sg_caco_quadheard[team - 1] = level.time;
+			sg_caco_quadheard[SG_TeamIdx(team)] = level.time;
 
 		/* the haste rune's firing voice: this client is hasted NOW */
 		if (!sg_hastesound_idx)
-			sg_hastesound_idx = gi.soundindex("player/lava1.wav");
+			sg_hastesound_idx = sg_host.soundindex("player/lava1.wav");
 		if (soundindex == sg_hastesound_idx && ecl >= 0 &&
 		    ecl < SG_DMG_CLIENTS)
-			sg_caco_hastefire[team - 1][ecl] = level.time;
+			sg_caco_hastefire[SG_TeamIdx(team)][ecl] = level.time;
 
 		/* sampled 1-in-32: wave 390 measured ~9k accepted events per
 		 * game on a busy server -- the ear works, the log need not
 		 * relive every footstep */
-		if (gi.cvar("sg_debug", "0", 0)->value && !(sg_ear_said++ & 31))
-			gi.dprintf("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
+		if (sg_cv.debug->value && !(sg_ear_said++ & 31))
+			sg_host.dprint("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
 			           "err<=%.0f seed=%i\n",
 			           b->client->pers.netname,
 			           emitter->client->pers.netname,
@@ -1587,7 +1744,10 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 
 	if (!victim || !victim->inuse || !victim->client)
 		return;
-	if (!(victim->flags & FL_BOT))
+	/* Team-shared CACO knowledge belongs only to clients this subsystem owns.
+	 * Other bot implementations may also set FL_BOT, but their private damage
+	 * is not an SG sighting or callout and must not leak across that boundary. */
+	if (!SG_OwnsBot(victim))
 		return;
 	if (!attacker || !attacker->inuse || !attacker->client ||
 	    attacker == victim)
@@ -1615,7 +1775,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 	 * one call site in a game file and the pain is the bot's own body.
 	 */
 	if (mod == MOD_RAILGUN && ac < SG_DMG_CLIENTS && SG_RailRhythm())
-		sg_caco_railshot[team - 1][ac] = level.time;
+		sg_caco_railshot[SG_TeamIdx(team)][ac] = level.time;
 
 	VectorCopy(victim->s.origin, eye);
 	eye[2] += victim->viewheight;
@@ -1670,7 +1830,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 			vec3_t	back;
 
 			VectorMA(eye, SG_DMG_BACKTRACK, from, back);
-			tr = gi.trace(eye, NULL, NULL, back, victim, MASK_OPAQUE);
+			tr = sg_host.trace(eye, NULL, NULL, back, victim, MASK_OPAQUE);
 			VectorCopy(tr.endpos, pos);
 			/* off whatever surface it stopped against, so the seed lookup
 			 * cannot snap to a node on the far side of that wall */
@@ -1680,7 +1840,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 		seed = Rune_NearestSeed(r, pos);
 		if (seed >= 0)
 		{
-			sg_belief_enemy_t	*tab = sg_caco_enemies[team - 1];
+			sg_belief_enemy_t	*tab = sg_caco_enemies[SG_TeamIdx(team)];
 			int					s = Caco_EnemySlot(tab, ac);
 
 			/* a fresh eye entry outranks a hit, the same way it outranks
@@ -1697,8 +1857,8 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 			}
 		}
 
-		if (gi.cvar("sg_debug", "0", 0)->value)
-			gi.dprintf("HITFROM %s<%s dmg=%d mod=%d %s seed=%d dir=%.2f,%.2f,%.2f\n",
+		if (sg_cv.debug->value)
+			sg_host.dprint("HITFROM %s<%s dmg=%d mod=%d %s seed=%d dir=%.2f,%.2f,%.2f\n",
 			           victim->client->pers.netname,
 			           attacker->client->pers.netname, damage, mod,
 			           hitscan ? "hitscan" : "flight", seed,
@@ -1740,15 +1900,67 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from)
 	return true;
 }
 
+/* Every client-indexed sensor fact describes one concrete body generation.
+ * Client slots survive deaths, team changes, disconnects and fake-client
+ * reuse; keeping these rows across any of those boundaries turns a corpse or
+ * a new teammate into an enemy for several seconds. */
+void Caco_ResetClient(edict_t *client)
+{
+	int ci, k, t, s;
+
+	if (!client)
+		return;
+	ci = (int)(client - g_edicts) - 1;
+	if (ci < 0 || ci >= SG_DMG_CLIENTS)
+		return;
+	memset(sg_caco_damage[ci], 0, sizeof(sg_caco_damage[ci]));
+	for (k = 0; k < SG_DMG_RING; k++)
+		sg_caco_damage[ci][k].attacker = -1;
+	for (t = 0; t < 2; t++)
+	{
+		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
+			if (sg_caco_enemies[t][s].client == ci)
+			{
+				memset(&sg_caco_enemies[t][s], 0,
+				       sizeof(sg_caco_enemies[t][s]));
+				sg_caco_enemies[t][s].client = -1;
+				sg_caco_enemies[t][s].seed = -1;
+			}
+		sg_caco_railshot[t][ci] = 0.0f;
+		sg_caco_hastefire[t][ci] = 0.0f;
+		if (sg_caco_team_belief.carrier[t].client == ci)
+		{
+			sg_caco_team_belief.carrier[t].client = -1;
+			sg_caco_team_belief.carrier[t].seed = -1;
+			sg_caco_team_belief.carrier[t].seen_time = 0.0f;
+			Caco_InvalidateOurCarrierField(SG_Rune(), t);
+		}
+		if (sg_caco_team_belief.enemy_carrier[t].client == ci)
+		{
+			sg_caco_team_belief.enemy_carrier[t].client = -1;
+			sg_caco_team_belief.enemy_carrier[t].seed = -1;
+			sg_caco_team_belief.enemy_carrier[t].seen_time = 0.0f;
+			sg_caco_proj[t].client = -1;
+			sg_caco_proj[t].n = 0;
+			sg_caco_proj[t].from_time = -1.0f;
+		}
+	}
+	for (k = 0; k < 2; k++)
+		for (t = 0; t < 2; t++)
+			if (caco_relay[k][t].client == ci)
+				memset(&caco_relay[k][t], 0,
+				       sizeof(caco_relay[k][t]));
+}
+
 /* ---------------------------------------------------------- the rail rhythm
  *
  * The fourth sense, and the narrowest: not WHERE an enemy is but WHEN his
  * gun was last empty. The numbers and the reasoning are in sg_local.h, over
  * SG_RAIL_RELOAD.
  *
- * WHAT A BOT IS ALLOWED TO LEARN, again. One engine fact: gi.inPHS. In
+ * WHAT A BOT IS ALLOWED TO LEARN, again. One engine fact: sg_host.in_phs. In
  * Quake II the railgun makes no server-side sound at all -- weapon_railgun_fire
- * calls no gi.sound, so the ear in this same file never hears one. What a
+ * calls no sg_host.sound, so the ear in this same file never hears one. What a
  * human client actually gets is two client-side sounds off two network
  * messages: railgf1a.wav on the MZ_RAILGUN muzzle flash (multicast PVS,
  * ATTN_NORM) and railgf1a.wav again on the TE_RAILTRAIL temp entity
@@ -1780,7 +1992,7 @@ static unsigned	sg_rail_said;       /* RAILSHOT print sampler */
 
 qboolean SG_RailRhythm(void)
 {
-	return (gi.cvar("sg_railrhythm", "0", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.railrhythm->value > 0.0f) ? true : false;
 }
 
 void SG_NoteRailShot(edict_t *shooter)
@@ -1816,15 +2028,15 @@ void SG_NoteRailShot(edict_t *shooter)
 		if (team <= CTF_TEAM_UNDEFINED || team == steam)
 			continue;               /* a teammate's rail is not a lane to time */
 
-		if (!gi.inPHS(b->s.origin, shooter->s.origin))
+		if (!sg_host.in_phs(b->s.origin, shooter->s.origin))
 			continue;               /* the trail message never reached here */
 
-		sg_caco_railshot[team - 1][sc] = level.time;
+		sg_caco_railshot[SG_TeamIdx(team)][sc] = level.time;
 
 		/* sampled 1-in-8: a two-railer server fires on the order of a
 		 * shot a second and the log is for reading */
-		if (gi.cvar("sg_debug", "0", 0)->value && !(sg_rail_said++ & 7))
-			gi.dprintf("RAILSHOT %s heard %s reload=%.1f window=%.1f\n",
+		if (sg_cv.debug->value && !(sg_rail_said++ & 7))
+			sg_host.dprint("RAILSHOT %s heard %s reload=%.1f window=%.1f\n",
 			           b->client->pers.netname,
 			           shooter->client->pers.netname,
 			           SG_RAIL_RELOAD, SG_RAIL_WINDOW);
@@ -1842,7 +2054,7 @@ qboolean SG_RailThreat(int team, float fresh, int *out_client, int *out_seed)
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return false;
 
-	tab = sg_caco_enemies[team - 1];
+	tab = sg_caco_enemies[SG_TeamIdx(team)];
 	for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 	{
 		sg_belief_enemy_t *en = &tab[s];
@@ -1853,8 +2065,8 @@ qboolean SG_RailThreat(int team, float fresh, int *out_client, int *out_seed)
 			continue;
 		/* the belief says where; the rail table says whether he is the
 		 * kind of enemy this feature is about at all */
-		if (sg_caco_railshot[team - 1][en->client] <= 0.0f ||
-		    level.time - sg_caco_railshot[team - 1][en->client] >
+		if (sg_caco_railshot[SG_TeamIdx(team)][en->client] <= 0.0f ||
+		    level.time - sg_caco_railshot[SG_TeamIdx(team)][en->client] >
 		        SG_RAIL_MEMORY)
 			continue;
 		if (en->seen_time > bt)
@@ -1882,13 +2094,13 @@ qboolean SG_RailCold(int team, int client)
 	if (client < 0 || client >= SG_DMG_CLIENTS)
 		return false;
 
-	t = sg_caco_railshot[team - 1][client];
+	t = sg_caco_railshot[SG_TeamIdx(team)][client];
 	if (t <= 0.0f)
 		return false;               /* never heard him fire: assume loaded */
 	/* a hasted railer cycles at half the reload (double weaponthink,
 	 * g_runes.c:812-813) -- heard hasted fire lately, halve the window */
-	if (sg_caco_hastefire[team - 1][client] > 0.0f &&
-	    level.time - sg_caco_hastefire[team - 1][client] < 10.0f)
+	if (sg_caco_hastefire[SG_TeamIdx(team)][client] > 0.0f &&
+	    level.time - sg_caco_hastefire[SG_TeamIdx(team)][client] < 10.0f)
 		return (level.time - t < SG_RAIL_WINDOW * 0.5f) ? true : false;
 	return (level.time - t < SG_RAIL_WINDOW) ? true : false;
 }
@@ -1936,7 +2148,7 @@ qboolean Caco_EnemyHasDamageRune(int team)
 
 	for (i = 0; i < SG_MAX_ENEMY_TRACK; i++)
 	{
-		sg_belief_enemy_t *en = &sg_caco_enemies[team - 1][i];
+		sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][i];
 
 		if (en->client >= 0 && en->runed &&
 		    level.time - en->seen_time < 20.0f)
@@ -1973,7 +2185,7 @@ void Caco_Frame(rune_t *r)
 	}
 
 	/* these two are per frame: a delay measured in tenths needs the clock */
-	Caco_RelayFlush();
+	Caco_RelayFlush(r);
 	Caco_Project(r);
 	Caco_Speak();
 	SG_ChatFrame();
@@ -2011,7 +2223,11 @@ void Caco_Reset(void)
 	memset(sg_caco_proj, 0, sizeof(sg_caco_proj));
 	for (i = 0; i < 2; i++)
 	{
-		sg_caco_team_belief.flag[i].where_seed = -1;
+		VectorClear(sg_caco_death_org[i]);
+		sg_caco_death_time[i] = -1000.0f;
+		sg_caco_quadheard[i] = 0.0f;
+		sg_caco_team_belief.flag[0][i].where_seed = -1;
+		sg_caco_team_belief.flag[1][i].where_seed = -1;
 		sg_caco_team_belief.carrier[i].client = -1;
 		sg_caco_team_belief.carrier[i].seed = -1;
 		sg_caco_team_belief.enemy_carrier[i].client = -1;
@@ -2020,11 +2236,17 @@ void Caco_Reset(void)
 		sg_caco_proj[i].n = 0;
 		sg_caco_proj[i].from_time = -1.0f;
 	}
+	/* Sound indices are level-local configstrings, even though this module's
+	 * cache has process lifetime.  Earn them again in the new level. */
+	sg_quadsound_idx = 0;
+	sg_hastesound_idx = 0;
+	sg_ear_said = 0;
 
 	/* spawn locations are constant, so they are read exactly once -- and
 	 * runes, which are not constant, get nothing from this scan but their
 	 * entity numbers (see the commentary above Caco_ScanItemSpawns) */
 	Caco_ScanItemSpawns();
+	Caco_ScanMegaSpawns();
 
 	/* after the item scan: sg_chat.c seeds its told-state from it */
 	SG_ChatReset();

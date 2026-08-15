@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dm2speed as D
 from demokin import parse_playerstate_full
 from demoents import parse_delta_entity_track
-from mapflags import load_seeds, flag_origins
+from mapflags import flag_origins, load_graph_metadata, read_graph_metadata
+from corpusgraph import (atomic_write_json, rune_identity_from_rune,
+                         stamp_corpus_identity)
 
 U_REMOVE = 1 << 6
 CS_MODELS = 32
@@ -45,9 +47,19 @@ class SeedGrid:
     """spatial hash: nearest seed without an O(n) scan per frame"""
     CELL = 256.0
 
-    def __init__(self, seeds):
+    def __init__(self, seeds, eligible=None):
         self.seeds = seeds
         self.cells = collections.defaultdict(list)
+        if eligible is None:
+            self.eligible = None
+        else:
+            checked = set()
+            for i in eligible:
+                if (isinstance(i, bool) or not isinstance(i, int) or
+                        not 0 <= i < len(seeds) or i in checked):
+                    raise ValueError(f'invalid eligible seed {i!r}')
+                checked.add(i)
+            self.eligible = frozenset(checked)
         for i, s in enumerate(seeds):
             self.cells[self.key(s)].append(i)
 
@@ -66,6 +78,9 @@ class SeedGrid:
                         d = ((s[0]-p[0])**2 + (s[1]-p[1])**2 + (s[2]-p[2])**2)
                         if d < bd:
                             bd, best = d, i
+        if (best >= 0 and self.eligible is not None and
+                best not in self.eligible):
+            return -1
         return best
 
 
@@ -294,8 +309,8 @@ def analyse_demo(path, gamedir, cfg):
     flags = flag_origins(gamedir, mapname)
     if 'red' not in flags or 'blue' not in flags:
         return None
-    seeds = load_seeds(rune)
-    grid = SeedGrid(seeds)
+    rune_graph, seeds, eligible = load_graph_metadata(rune, mapname)
+    grid = SeedGrid(seeds, eligible)
 
     roster = Roster(d['skin_hist'])
     pov_name, pov_team = roster.at(d['pov'], d['frames']) if d['pov'] is not None \
@@ -307,6 +322,7 @@ def analyse_demo(path, gamedir, cfg):
     R = collections.Counter          # shorthand
     res = {
         'map': mapname, 'demo': os.path.basename(path), 'frames': d['frames'],
+        '_rune_identity': rune_identity_from_rune(rune_graph),
         'desyncs': d['desyncs'],
         'pov': pov_name, 'pov_team': pov_team,
         'defenders': [],
@@ -576,7 +592,13 @@ def main():
         # runs over the same corpus produce byte-identical JSON
         rs.sort(key=lambda r: r['demo'])
         rune = os.path.join(cfg.gamedir, 'maps', f'{mapname}.rune')
-        seeds = load_seeds(rune)
+        rune_graph, seeds, eligible = read_graph_metadata(rune, mapname)
+        identity = rune_identity_from_rune(rune_graph)
+        for result in rs:
+            if result.get('_rune_identity') != identity:
+                raise ValueError(
+                    f'{rune}: rune identity changed while mining; rerun this '
+                    'map instead of mixing seed indices')
         flags = flag_origins(cfg.gamedir, mapname)
         dwell_def = {t: collections.Counter() for t in ('red', 'blue')}
         dwell_any = {t: collections.Counter() for t in ('red', 'blue')}
@@ -682,7 +704,7 @@ def main():
             'demo_files': sorted(r['demo'] for r in rs),
             'desyncs': sum(r.get('desyncs', 0) for r in rs),
             'flags': {t: [round(v) for v in flags[t]] for t in flags},
-            'flag_seed': {t: SeedGrid(seeds).nearest(flags[t], 500.0)
+            'flag_seed': {t: SeedGrid(seeds, eligible).nearest(flags[t], 500.0)
                           for t in flags},
             'defenders': sorted(
                 ({'name': d0['name'], 'team': d0['team'],
@@ -719,11 +741,12 @@ def main():
             'responses': [{k: v for k, v in x.items() if k != 'seeds'}
                           for x in resp],
         }
+        stamp_corpus_identity(doc, identity)
         if len(rs) < cfg.mindemos or not flat:
             print(f'{mapname}: thin ({len(rs)} demos, {len(flat)} posts) '
                   f'-- writing anyway')
         path = os.path.join(cfg.out, f'{mapname}.defense.json')
-        json.dump(doc, open(path, 'w'), indent=1)
+        atomic_write_json(path, doc)
         summary[mapname] = {'demos': len(rs), 'defenders': len(defs),
                             'posts': len(flat), 'responses': len(resp)}
         print(f'WROTE {path}: demos={len(rs)} defenders={len(defs)} '

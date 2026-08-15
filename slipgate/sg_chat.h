@@ -104,6 +104,7 @@
  */
 int			SG_ChatOrderedRole(edict_t *bot);
 edict_t		*SG_ChatEscortTarget(edict_t *bot);
+void		SG_ChatResetClient(edict_t *client);
 
 #define SG_CHAT_ORDER_TTL	90.0f   /* an unrepeated order stops binding */
 

@@ -43,7 +43,7 @@
  * limits cannot keep a channel readable no matter how tight each one is.
  *
  * The chat route is the game's own: SG_BotClientCommand(client, "say_team",
- * line, NULL) fills the redirected gi.argv and runs ClientCommand ->
+ * line, NULL) fills the redirected sg_host.argv and runs ClientCommand ->
  * Cmd_Say_f for that client (slipgate/sg_net.c), so human teammates read it in
  * their own chat window. Same route bl_know.c and sg_caco.c use.
  */
@@ -55,6 +55,9 @@
 #include "p_stats.h"                    /* stats_get -- the scoreboard's own count */
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------- constants */
 
@@ -922,7 +925,7 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	{
 		if (level.time < chat_bot[cl].next_team)
 			return false;
-		if (level.time < chat_teamsaid[team - 1][topic])
+		if (level.time < chat_teamsaid[SG_TeamIdx(team)][topic])
 			return false;
 	}
 
@@ -931,12 +934,12 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 
 	/* stamped for every topic, acknowledgements included: idle banter reads
 	 * this to stay off a channel that is carrying something */
-	chat_team_last[team - 1] = level.time;
+	chat_team_last[SG_TeamIdx(team)] = level.time;
 
 	if (topic != SG_CHAT_TOPIC_ORDER)
 	{
 		chat_bot[cl].next_team = level.time + SG_CHAT_BOT_GAP;
-		chat_teamsaid[team - 1][topic] =
+		chat_teamsaid[SG_TeamIdx(team)][topic] =
 			level.time + chat_topic_gap[topic];
 	}
 	return true;
@@ -1026,10 +1029,10 @@ static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
 	if (topic < 0 || topic >= SG_CHAT_TOPICS)
 		return false;
 
-	q = &chat_q[team - 1][topic];
+	q = &chat_q[SG_TeamIdx(team)][topic];
 	if (q->pending)
 		return false;
-	if (level.time < chat_teamsaid[team - 1][topic])
+	if (level.time < chat_teamsaid[SG_TeamIdx(team)][topic])
 		return false;
 
 	Chat_Copy(q->line, line, sizeof(q->line));
@@ -1083,7 +1086,7 @@ static void Chat_Flush(void)
 				sp = g_edicts + 1 + held.speaker;
 				/* not "he switched sides mid-thought" -- then the line is his
 				 * old team's news said by somebody who is no longer on it */
-				if (!sp->client || sp->client->ctf.teamnum == t + 1)
+				if (!sp->client || sp->client->ctf.teamnum == SG_TeamFromIdx(t))
 					said = SG_ChatSayTeam(sp, held.line, k);
 			}
 
@@ -1142,13 +1145,13 @@ static void Chat_ScanLandmarks(void)
 			}
 	}
 
-	e = G_Find(NULL, FOFS(classname), "info_flag_red");
+	e = SG_FlagStand(CTF_TEAM_RED, true);
 	if (e)
 	{
 		VectorCopy(e->s.origin, chat_flagpos[0]);
 		chat_flagpos_ok[0] = true;
 	}
-	e = G_Find(NULL, FOFS(classname), "info_flag_blue");
+	e = SG_FlagStand(CTF_TEAM_BLUE, true);
 	if (e)
 	{
 		VectorCopy(e->s.origin, chat_flagpos[1]);
@@ -1299,7 +1302,7 @@ static qboolean Chat_EnemySeenNear(int team, vec3_t org)
 
 	for (i = 0; i < SG_MAX_ENEMY_TRACK; i++)
 	{
-		sg_belief_enemy_t	*en = &sg_caco_enemies[team - 1][i];
+		sg_belief_enemy_t	*en = &sg_caco_enemies[SG_TeamIdx(team)][i];
 		vec3_t				d;
 
 		if (en->client < 0 || en->heard_only)
@@ -1420,7 +1423,7 @@ void SG_ChatItemSeen(edict_t *viewer, int index, qboolean up)
 	team = viewer->client->ctf.teamnum;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return;
-	ti = team - 1;
+	ti = SG_TeamIdx(team);
 
 	b = &sg_caco_items[ti][index];      /* this viewer's team's row */
 	c = &chat_item[index];
@@ -1493,9 +1496,9 @@ static qboolean Chat_Visible(edict_t *viewer, edict_t *target)
 	VectorAdd(target->absmin, target->absmax, mid);
 	VectorScale(mid, 0.5f, mid);
 
-	if (!gi.inPVS(eye, mid))
+	if (!sg_host.in_pvs(eye, mid))
 		return false;
-	tr = gi.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
+	tr = sg_host.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
 }
 
@@ -1568,7 +1571,7 @@ void SG_ChatSee(edict_t *viewer)
 	if (!Chat_OurBot(viewer) || !Chat_Playing(viewer))
 		return;
 	team = viewer->client->ctf.teamnum;
-	ti = team - 1;
+	ti = SG_TeamIdx(team);
 
 	for (i = 0; i < chat_num_watch; i++)
 	{
@@ -1656,7 +1659,7 @@ void SG_ChatSee(edict_t *viewer)
 
 static qboolean SG_Radio(void)
 {
-	return (gi.cvar("sg_radio", "1", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.radio->value > 0.0f) ? true : false;
 }
 
 /*
@@ -1768,7 +1771,7 @@ static void Chat_RadioQueue(edict_t *speaker, int team, const char *sound)
 	if (cl < 0 || cl >= game.maxclients)
 		return;
 
-	q = &radio_q[team - 1];
+	q = &radio_q[SG_TeamIdx(team)];
 	if (q->pending)
 		return;                     /* one hand on the key at a time */
 
@@ -1797,7 +1800,7 @@ static void Chat_RadioSay(int t)
 	sp = g_edicts + 1 + q->speaker;
 	if (!Chat_OurBot(sp) || !Chat_Playing(sp))
 		return;                     /* died or left while the hand was moving */
-	if (sp->client->ctf.teamnum != t + 1)
+	if (sp->client->ctf.teamnum != SG_TeamFromIdx(t))
 		return;                     /* switched sides: not his team's news */
 	if (!Chat_RadioSpamClear(sp))
 		return;                     /* humans get spam-limited too */
@@ -1880,7 +1883,7 @@ static void Chat_RadioFrame(void)
 		    level.time > radio_q30[t].quiet_fired_at + 20.0f &&
 		    level.time > radio_q30[t].called_until)
 		{
-			edict_t *sp = Chat_Speaker(t + 1);
+			edict_t *sp = Chat_Speaker(SG_TeamFromIdx(t));
 
 			radio_q30[t].quiet_fired_at = level.time;
 			if (sp)
@@ -1895,11 +1898,11 @@ static void Chat_RadioFrame(void)
 				/* the fade fires at 3.0s remaining, so the pad is back
 				 * at heard + 3 + 30; the half-second of jitter is the
 				 * hand, not the ear */
-				Chat_QueueArm(sp, t + 1, SG_CHAT_TOPIC_MAJOR, line,
+				Chat_QueueArm(sp, SG_TeamFromIdx(t), SG_CHAT_TOPIC_MAJOR, line,
 				              SG_ARM_QUIET, -1, 0, SG_ITEMCALL_MATE,
 				              heard + 33.0f +
 				              ((float)(rand() % 10) / 10.0f - 0.5f), -1);
-				Chat_RadioQueue(sp, t + 1, "_quad30");
+				Chat_RadioQueue(sp, SG_TeamFromIdx(t), "_quad30");
 			}
 		}
 
@@ -2054,7 +2057,7 @@ static const char *chat_arm_src[] = {
  */
 static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 {
-	qboolean	dbg = (gi.cvar("sg_debug", "0", 0)->value > 0.0f)
+	qboolean	dbg = (sg_cv.debug->value > 0.0f)
 	                ? true : false;
 	const char	*what, *src;
 
@@ -2072,7 +2075,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		/* the line lost to the per-bot budget or the topic cooldown, so the
 		 * team was never told and does not get to count */
 		if (dbg)
-			gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
+			sg_host.dprint("SG itemcomm: %s for %s, team %d SUPPRESSED "
 			           "(line eaten) -- no clock armed\n",
 			           src, what, ti + 1);
 		return;
@@ -2102,8 +2105,8 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 	{
 		/* no clock -- the record IS the arm; see chat_mega_taker */
 		chat_mega_taker[ti] = q->arm_who;
-		if (gi.cvar("sg_debug", "0", 0)->value)
-			gi.dprintf("SG itemcomm: mega taker recorded for team %d "
+		if (sg_cv.debug->value)
+			sg_host.dprint("SG itemcomm: mega taker recorded for team %d "
 			           "(client %d) -- clock waits on the obituary\n",
 			           ti + 1, q->arm_who);
 		Chat_RadioTaken(ti, q);
@@ -2150,7 +2153,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 	Chat_RadioTaken(ti, q);
 
 	if (dbg)
-		gi.dprintf("SG itemcomm: %s armed %s for team %d -- back at %.1f "
+		sg_host.dprint("SG itemcomm: %s armed %s for team %d -- back at %.1f "
 		           "(in %.0fs)\n", src, what, ti + 1, q->arm_back_at,
 		           q->arm_back_at - level.time);
 }
@@ -2179,7 +2182,7 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src,
 	name = Chat_ItemName(item);
 	if (!name)
 		return;
-	ti = team - 1;
+	ti = SG_TeamIdx(team);
 
 	bslot = Chat_BeliefSlot(item);
 	wslot = Chat_WatchSlot(item);
@@ -2269,8 +2272,8 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src,
 	                   (kind == SG_ARM_MEGATAKE && taker && taker->client)
 	                       ? (int)(taker->client - game.clients) : -1) &&
 	    kind != SG_ARM_NONE &&
-	    gi.cvar("sg_debug", "0", 0)->value > 0.0f)
-		gi.dprintf("SG itemcomm: %s for %s, team %d SUPPRESSED "
+	    sg_cv.debug->value > 0.0f)
+		sg_host.dprint("SG itemcomm: %s for %s, team %d SUPPRESSED "
 		           "(topic busy) -- no clock armed\n",
 		           chat_arm_src[(src >= 0 && src < 3) ? src : 0], name, team);
 }
@@ -2309,8 +2312,8 @@ void SG_ChatMegaDeath(edict_t *victim)
 			chat_watch[i].back_at[ti] = level.time + 21.0f +
 			    (float)(rand() % 20) / 10.0f;
 			chat_watch[i].soon_said[ti] = false;
-			if (gi.cvar("sg_debug", "0", 0)->value)
-				gi.dprintf("SG itemcomm: mega taker died -- team %d "
+			if (sg_cv.debug->value)
+				sg_host.dprint("SG itemcomm: mega taker died -- team %d "
 				           "clock armed, back at %.1f\n",
 				           ti + 1, chat_watch[i].back_at[ti]);
 			break;
@@ -2383,7 +2386,7 @@ static void Chat_SoonSay(int ti, edict_t *item, const char *name,
 		return;
 	secs = (int)(back_at - level.time + 0.5f);
 
-	if (gi.cvar("sg_timercall", "0", 0)->value > 0.0f)
+	if (sg_cv.timercall->value > 0.0f)
 		shortname = Chat_TimerShort(item);
 	if (shortname)
 	{
@@ -2528,7 +2531,7 @@ static void Chat_SelfPickups(void)
 		{
 			for (k = 0; k < sg_caco_num_items; k++)
 			{
-				sg_belief_item_t	*b = &sg_caco_items[team - 1][k];
+				sg_belief_item_t	*b = &sg_caco_items[SG_TeamIdx(team)][k];
 				edict_t				*ie = g_edicts + b->ent;
 				qboolean			mine = false;
 
@@ -2545,9 +2548,9 @@ static void Chat_SelfPickups(void)
 				if (!mine)
 					continue;
 
-				chat_item[k].up[team - 1] = false;
-				chat_item[k].soon_said[team - 1] = false;
-				chat_item[k].back_at[team - 1] = (b->respawn_delay > 0.0f)
+				chat_item[k].up[SG_TeamIdx(team)] = false;
+				chat_item[k].soon_said[SG_TeamIdx(team)] = false;
+				chat_item[k].back_at[SG_TeamIdx(team)] = (b->respawn_delay > 0.0f)
 				                               ? level.time + b->respawn_delay
 				                               : 0.0f;
 			}
@@ -2817,7 +2820,7 @@ static void Chat_TeamEvents(void)
 
 		if (score[t] > chat_lastscore[t])
 		{
-			sp = Chat_Speaker(t + 1);
+			sp = Chat_Speaker(SG_TeamFromIdx(t));
 			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_CAP) : NULL;
 			if (sp && line)
 				Chat_SayPooled(sp, line, 0);
@@ -2831,7 +2834,7 @@ static void Chat_TeamEvents(void)
 		carrier = sg_caco_team_belief.carrier[t].client;
 		if (carrier >= 0 && chat_lastcarrier[t] < 0)
 		{
-			sp = Chat_Speaker(t + 1);
+			sp = Chat_Speaker(SG_TeamFromIdx(t));
 			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_STEAL) : NULL;
 			if (sp && line)
 			{
@@ -2842,7 +2845,7 @@ static void Chat_TeamEvents(void)
 				 * anyway -- the slot is taken and no second steal callout
 				 * will be queued behind it.
 				 */
-				Chat_Queue(sp, t + 1, SG_CHAT_TOPIC_STEAL, line);
+				Chat_Queue(sp, SG_TeamFromIdx(t), SG_CHAT_TOPIC_STEAL, line);
 				Chat_Note(line);
 			}
 		}
@@ -2850,18 +2853,18 @@ static void Chat_TeamEvents(void)
 	}
 
 	/*
-	 * The return pass. sg_caco_team_belief.flag[t] is team t+1's OWN flag
-	 * (sg_local.h: [0] red, [1] blue) and its state is read straight off
+	 * The return pass. flag[0][t] is team t+1's OWN flag; home state is
+	 * mirrored across both belief rows and is read straight off
 	 * ctf_flagathome by Caco_ScanFlags -- HUD knowledge, not a sighting.
 	 */
 	for (t = 0; t < 2; t++)
 	{
-		qboolean home = (sg_caco_team_belief.flag[t].state == SG_FLAG_HOME)
+		qboolean home = (sg_caco_team_belief.flag[0][t].state == SG_FLAG_HOME)
 		              ? true : false;
 
 		if (home && !chat_flaghome[t] &&
 		    level.time - chat_conceded_at[t] > SG_CHAT_RETURN_CAPWIN)
-			Chat_Returned(t + 1);
+			Chat_Returned(SG_TeamFromIdx(t));
 		chat_flaghome[t] = home;
 	}
 }
@@ -2941,7 +2944,7 @@ static void Chat_Bystander(edict_t *victim)
 
 		VectorCopy(e->s.origin, eye);
 		eye[2] += e->viewheight;
-		if (!Chat_Visible(e, victim) && !gi.inPHS(eye, victim->s.origin))
+		if (!Chat_Visible(e, victim) && !sg_host.in_phs(eye, victim->s.origin))
 			continue;               /* neither saw it nor heard it */
 		seer = e;
 	}
@@ -3146,7 +3149,7 @@ void SG_ChatLevelEnd(void)
 		if (random() >= SG_CHAT_END_ODDS * Chat_Chatty(i))
 			continue;
 
-		diff = score[team - 1] - score[2 - team];
+		diff = score[SG_TeamIdx(team)] - score[SG_TeamIdx(SG_EnemyTeam(team))];
 		if (diff > SG_CHAT_CLOSE_MARGIN)
 			cb->end_cat = SG_LINE_WIN;
 		else if (diff < -SG_CHAT_CLOSE_MARGIN)
@@ -3256,7 +3259,7 @@ static void Chat_Idle(void)
 
 		if (level.time - cb->combat_at < SG_CHAT_IDLE_CALM)
 			continue;
-		if (level.time - chat_team_last[team - 1] < SG_CHAT_IDLE_QUIET)
+		if (level.time - chat_team_last[SG_TeamIdx(team)] < SG_CHAT_IDLE_QUIET)
 			continue;
 		if (random() >= SG_CHAT_IDLE_ODDS * Chat_Chatty(i))
 			continue;
@@ -3691,7 +3694,7 @@ static void Chat_HearItemCall(edict_t *speaker,
                               int n, int team)
 {
 	const char	*cls = NULL, *what;
-	int			i, used = 0, secs = 0, ti = team - 1;
+	int			i, used = 0, secs = 0, ti = SG_TeamIdx(team);
 	int			kind = SG_ARM_NONE, slot = -1, ent = 0;
 	qboolean	take = false, timed = false, dbg;
 	float		respawn, back_at, held, gap;
@@ -3802,7 +3805,7 @@ static void Chat_HearItemCall(edict_t *speaker,
 	}
 	back_at = level.time + respawn;
 
-	dbg = (gi.cvar("sg_debug", "0", 0)->value > 0.0f) ? true : false;
+	dbg = (sg_cv.debug->value > 0.0f) ? true : false;
 	what = Chat_ItemName(g_edicts + ent);
 	if (!what)
 		what = "item";
@@ -3826,7 +3829,7 @@ static void Chat_HearItemCall(edict_t *speaker,
 		static int skips = 0;
 
 		if (dbg && (skips++ % 8) == 0)
-			gi.dprintf("SG itemcomm: %s said %s, team %d -- clock already "
+			sg_host.dprint("SG itemcomm: %s said %s, team %d -- clock already "
 			           "within %.1fs (%.1f vs %.1f), parse skipped "
 			           "(1-in-8)\n", speaker->client->pers.netname, what,
 			           team, gap, held, back_at);
@@ -3858,7 +3861,7 @@ static void Chat_HearItemCall(edict_t *speaker,
 	}
 
 	if (dbg)
-		gi.dprintf("SG itemcomm: %s said %s (%s) -- parsed, armed team %d "
+		sg_host.dprint("SG itemcomm: %s said %s (%s) -- parsed, armed team %d "
 		           "for %.0fs, back at %.1f\n",
 		           speaker->client->pers.netname, what,
 		           take ? "take" : "timer", team, respawn, back_at);
@@ -4163,7 +4166,8 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 static qboolean Chat_OrderLive(int cl)
 {
 	sg_chat_bot_t	*cb;
-	edict_t			*bot, *from;
+	edict_t			*bot, *from, *flag;
+	qboolean		carried;
 
 	if (cl < 0 || cl >= game.maxclients)
 		return false;
@@ -4179,6 +4183,31 @@ static qboolean Chat_OrderLive(int cl)
 	from = g_edicts + 1 + cb->order_from;
 	if (!from->inuse || !from->client)
 		return false;
+	/* "Cover me" names a live moving teammate. A corpse has no escort
+	 * position and no valid carrier field; keeping this one order alive can
+	 * turn the bot's objective into all-INF until the human respawns. */
+	if (cb->order_role == SG_CHAT_ROLE_ESCORT &&
+	    (from->deadflag || from->health <= 0))
+		return false;
+	/* RECOVER names a transient objective, not a place to camp.  End the
+	 * override as soon as the ordering team's flag is authoritative at home;
+	 * otherwise the bot grinds its own stand (and can wedge-kill/repeat) for
+	 * the remainder of the ninety-second chat-order lease. */
+	if (cb->order_role == SG_CHAT_ROLE_RECOVER)
+	{
+		flag = (cb->order_team == CTF_TEAM_RED) ? redflag : blueflag;
+		if (!flag || !flag->inuse)
+			return false;
+		carried = flag->owner && flag->owner->inuse && flag->owner->client &&
+		          flag->owner->client->ctf.teamnum ==
+		              SG_EnemyTeam(cb->order_team) &&
+		          ClientHasFlag(flag->owner) == flag;
+		/* A carried flag entity remains hidden at its take origin, which may
+		 * still satisfy ctf_flagathome().  Inventory/owner is authoritative for
+		 * that state; the position test is authoritative only when uncarried. */
+		if (!carried && ctf_flagathome(flag))
+			return false;
+	}
 	if (from->client->ctf.teamnum != cb->order_team)
 		return false;
 	if (!bot->inuse || !bot->client ||
@@ -4229,6 +4258,47 @@ edict_t *SG_ChatEscortTarget(edict_t *bot)
 	if (!from->inuse || !from->client)
 		return NULL;
 	return from;
+}
+
+/* Client slots are recycled without a level reset. Personal cooldowns,
+ * pending replies and human orders belong to the occupant, not the index. */
+void SG_ChatResetClient(edict_t *client)
+{
+	int cl, i, t, topic;
+
+	if (!client)
+		return;
+	cl = Chat_ClientNum(client);
+	if (cl < 0 || cl >= game.maxclients)
+		return;
+	memset(&chat_bot[cl], 0, sizeof(chat_bot[cl]));
+	chat_bot[cl].order_role = SG_CHAT_ROLE_NONE;
+	chat_bot[cl].order_from = -1;
+	chat_bot[cl].end_cat = -1;
+	/* A queued voice line or radio press cannot be inherited by the next bot
+	 * that happens to occupy the same client number. */
+	for (t = 0; t < 2; t++)
+	{
+		for (topic = 0; topic < SG_CHAT_TOPICS; topic++)
+			if (chat_q[t][topic].pending &&
+			    (chat_q[t][topic].speaker == cl ||
+			     (chat_q[t][topic].arm_kind == SG_ARM_MEGATAKE &&
+			      chat_q[t][topic].arm_who == cl)))
+				chat_q[t][topic].pending = false;
+		if (radio_q[t].pending && radio_q[t].speaker == cl)
+			radio_q[t].pending = false;
+		if (chat_mega_taker[t] == cl)
+			chat_mega_taker[t] = -1;
+	}
+	/* Orders are owned by the giver's live client generation too. Waiting
+	 * for the periodic liveness sweep leaves a same-frame recycled slot able
+	 * to command bots using the departed human's order. */
+	for (i = 0; i < game.maxclients; i++)
+		if (chat_bot[i].order_from == cl)
+		{
+			chat_bot[i].order_role = SG_CHAT_ROLE_NONE;
+			chat_bot[i].order_from = -1;
+		}
 }
 
 /* --------------------------------------------------------- frame, reset */

@@ -14,6 +14,10 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_action.h"
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_util.h"
+#include "slipgate/sg_hooks.h"
 
 sg_fields_t sg_fields;
 
@@ -55,11 +59,11 @@ sg_fields_t sg_fields;
  * (200ms/s) retries the corridor eventually; re-sticking re-teaches.
  */
 static int sg_futile[SG_MAX_SEEDS];
+static int sg_futile_last_seed = -1;
+static int sg_futile_streak;
 
 void SG_TeachFutility(int seed)
 {
-	static int last_seed = -1;
-	static int streak;
 	int amount;
 
 	if (seed < 0 || seed >= SG_MAX_SEEDS)
@@ -74,12 +78,13 @@ void SG_TeachFutility(int seed)
 	 * but the decay itself, which heals a 45s lesson in under four
 	 * minutes. A seed that stops biting resets the streak.
 	 */
-	if (seed == last_seed)
-		streak = (streak < 5) ? streak + 1 : 5;
+	if (seed == sg_futile_last_seed)
+		sg_futile_streak = (sg_futile_streak < 5) ?
+		                     sg_futile_streak + 1 : 5;
 	else
-		streak = 1;
-	last_seed = seed;
-	amount = 3000 * streak;
+		sg_futile_streak = 1;
+	sg_futile_last_seed = seed;
+	amount = 3000 * sg_futile_streak;
 	sg_futile[seed] += amount;
 	if (sg_futile[seed] > 60000)
 		sg_futile[seed] = 60000;
@@ -100,28 +105,22 @@ static int sg_ropecost_ms = 1000;
 
 void SG_RopecostRefresh(void)
 {
-	sg_ropecost_ms = (int)gi.cvar("sg_ropecost", "1000", 0)->value;
+	sg_ropecost_ms = (int)sg_cv.ropecost->value;
 	if (sg_ropecost_ms < 0)
 		sg_ropecost_ms = 0;
 }
 
 static int Link_EffCost(const rune_link_t *l)
 {
-	switch (l->action)
-	{
-	/*
-	 * 1000, not 400: the rope's REAL ritual is a standing aim frame (the
+	/* 1000, not 400: the rope's REAL ritual is a standing aim frame (the
 	 * body halts, phase 1 owns the view), the fire, and a landing brake --
 	 * wave 57's carrier trace shows ~2-3s of wall clock per rope against
 	 * cost_ms figures in the hundreds, and a carrier that chained ropes
 	 * covered 4s of field in 70s of flailing while a run would have flown.
 	 * Underpricing the ritual made the flood chain hooks where legs win.
-	 */
-	case RL_HOOK:       return l->cost_ms + sg_ropecost_ms;
-	case RL_DROP:       return l->cost_ms + 150;    /* align the lip line */
-	case RL_ROCKETJUMP: return l->cost_ms + 900;    /* raise RL + aim + pay */
-	default:            return l->cost_ms;
-	}
+	 * The registry preserves the other legacy doses: DROP +150 to align the
+	 * lip line and reserved RJ +900 to raise, aim, and pay. */
+	return l->cost_ms + SG_ActionFieldBiasMs(l->action, sg_ropecost_ms);
 }
 
 /* ------------------------------------------------------ envelope transitions
@@ -399,13 +398,13 @@ static void Field_FloodRun(rune_t *r, int *dist,
 
 	if (ns > SG_MAX_SEEDS)
 	{
-		gi.dprintf("slipgate: rune has %d seeds, over the %d cap -- "
+		sg_host.dprint("slipgate: rune has %d seeds, over the %d cap -- "
 		           "flooding the first %d only\n", ns, SG_MAX_SEEDS, SG_MAX_SEEDS);
 		ns = SG_MAX_SEEDS;
 	}
 	if (nl > SG_ENV_MAX_LINKS)
 	{
-		gi.dprintf("slipgate: rune has %d links, over the %d cap -- "
+		sg_host.dprint("slipgate: rune has %d links, over the %d cap -- "
 		           "flooding the first %d only\n", nl, SG_ENV_MAX_LINKS,
 		           SG_ENV_MAX_LINKS);
 		nl = SG_ENV_MAX_LINKS;
@@ -532,7 +531,7 @@ void Field_Flood(rune_t *r, int *dist,
 {
 	Field_FloodRun(r, dist, sources, source_cost, num_sources, SG_ENV_BUCKETS);
 
-	if (sg_floodcheck_armed && gi.cvar("sg_debug", "0", 0)->value)
+	if (sg_floodcheck_armed && sg_cv.debug->value)
 	{
 		int i, ns = r->hdr.num_seeds, flat = 0, env = 0;
 
@@ -547,14 +546,14 @@ void Field_Flood(rune_t *r, int *dist,
 			if (dist[i] < SG_FIELD_INF)
 				env++;
 		}
-		gi.dprintf("FLOODCHECK seeds=%d reachable_flat=%d reachable_env=%d%s\n",
+		sg_host.dprint("FLOODCHECK seeds=%d reachable_flat=%d reachable_env=%d%s\n",
 		           ns, flat, env, env > flat ? " BROKEN" : "");
 	}
 }
 
 static int *Field_Alloc(rune_t *r)
 {
-	return gi.TagMalloc(sizeof(int) * r->hdr.num_seeds, TAG_LEVEL);
+	return sg_host.level_alloc(sizeof(int) * r->hdr.num_seeds);
 }
 
 static void Field_FromOne(rune_t *r, int *dist, int seed)
@@ -637,7 +636,7 @@ static qboolean Class_PerItem(int cls)
  */
 qboolean SG_MegaOn(void)
 {
-	return (gi.cvar("sg_megaworth", "0", 0)->value > 0.0f) ? true : false;
+	return (sg_cv.megaworth->value > 0.0f) ? true : false;
 }
 
 static void Mega_Build(rune_t *r)
@@ -730,7 +729,37 @@ static void Class_Build(rune_t *r, int cls)
 	sg_fields.per_item_count[cls] = n;
 }
 
-qboolean Fields_Setup(rune_t *r)
+#ifdef SG_FIELDS_TEST
+#define SG_FIELDS_PRIVATE
+#else
+#define SG_FIELDS_PRIVATE static
+#endif
+
+SG_FIELDS_PRIVATE int Fields_DefensiveRoot(const rune_t *r,
+	const unsigned char *plane)
+{
+	int best = -1;
+	int si;
+
+	if (!plane)
+		return -1;
+	for (si = 0; si < r->hdr.num_seeds; si++)
+	{
+		/* Sidecar validation already requires tombstone cells to be zero.
+		 * Keep the field boundary defensive as well: a future caller must not
+		 * be able to turn retained dead geometry into a learned field root. */
+		if ((r->seeds[si].flags & RSF_TOMBSTONE) ||
+		    (r->linked_seed && !r->linked_seed[si]) || plane[si] == 0)
+			continue;
+		if (best < 0 || plane[si] > plane[best])
+			best = si;
+	}
+	return best;
+}
+
+#undef SG_FIELDS_PRIVATE
+
+qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 {
 	edict_t *rf, *bf;
 	int i;
@@ -739,8 +768,8 @@ qboolean Fields_Setup(rune_t *r)
 	sg_floodcheck_armed = true;
 	SG_RopecostRefresh();
 
-	rf = G_Find(NULL, FOFS(classname), "info_flag_red");
-	bf = G_Find(NULL, FOFS(classname), "info_flag_blue");
+	rf = SG_FlagStand(CTF_TEAM_RED, true);
+	bf = SG_FlagStand(CTF_TEAM_BLUE, true);
 	if (!rf || !bf)
 		return false;
 
@@ -766,7 +795,7 @@ qboolean Fields_Setup(rune_t *r)
 	 * lands on the platform (not sub-stand), so a knocked-in bot's escape
 	 * still prices clean.
 	 */
-	if (gi.cvar("sg_shelfcost", "0", 0)->value > 0.0f)
+	if (sg_cv.shelfcost->value > 0.0f)
 	{
 		int t;
 
@@ -788,7 +817,7 @@ qboolean Fields_Setup(rune_t *r)
 				if (dx * dx + dy * dy <= 350.0f * 350.0f &&
 				    r->seeds[fi].origin[2] <= fo[2] - 96.0f)
 					sg_shelf_pen[fi] = (int)
-					    (gi.cvar("sg_shelfcost", "0", 0)->value * 12000.0f);
+					    (sg_cv.shelfcost->value * 12000.0f);
 			}
 			Field_FromOne(r, t ? sg_fields.to_blue_flag
 			                   : sg_fields.to_red_flag, fseed);
@@ -841,8 +870,8 @@ qboolean Fields_Setup(rune_t *r)
 			}
 			if (best_plat == 0x7fffffff)
 			{
-				if (gi.cvar("sg_debug", "0", 0)->value)
-					gi.dprintf("SHELF t=%d: no platform-level seed in radius\n", t);
+				if (sg_cv.debug->value)
+					sg_host.dprint("SHELF t=%d: no platform-level seed in radius\n", t);
 				continue;
 			}
 			for (si = 0; si < r->hdr.num_seeds; si++)
@@ -878,8 +907,8 @@ qboolean Fields_Setup(rune_t *r)
 						}
 					}
 				}
-				if (gi.cvar("sg_debug", "0", 0)->value)
-					gi.dprintf("SHELF t=%d: %d sub-stand seeds, %d cliffed, max %d, best_plat %d\n",
+				if (sg_cv.debug->value)
+					sg_host.dprint("SHELF t=%d: %d sub-stand seeds, %d cliffed, max %d, best_plat %d\n",
 					           t, sub, n, mx, best_plat);
 			}
 		}
@@ -893,44 +922,41 @@ qboolean Fields_Setup(rune_t *r)
 			if (sg_fields.to_red_flag[si] < SG_FIELD_INF) nr++;
 			if (sg_fields.to_blue_flag[si] < SG_FIELD_INF) nb++;
 		}
-		gi.dprintf("slipgate: field coverage red %d/%d blue %d/%d (flag seeds %d, %d)\n",
+		sg_host.dprint("slipgate: field coverage red %d/%d blue %d/%d (flag seeds %d, %d)\n",
 		           nr, r->hdr.num_seeds, nb, r->hdr.num_seeds,
 		           sg_fields.red_flag_seed, sg_fields.blue_flag_seed);
 	}
 
 	/*
 	 * Learned defensive fields (.dpo planes, wave 307+): flood from the
-	 * corpus's top post seed and top intercept seed per team. Missing
-	 * plane -> the team's own flag field, i.e. exactly today's behavior.
+	 * corpus's top post seed and top intercept seed per team. The candidate
+	 * planes arrive explicitly in v3 wire order; this setup never reads or
+	 * publishes the live sidecar globals. Missing plane -> the team's own flag
+	 * field, i.e. exactly today's behavior.
 	 */
 	{
-		int t, si;
+		int t;
 
 		for (t = 0; t < 2; t++)
 		{
 			int *own = t == 0 ? sg_fields.to_red_flag
 			                  : sg_fields.to_blue_flag;
-			unsigned char *pp = SG_DefPlane(1, t);
-			unsigned char *ip = SG_DefPlane(0, t);
-			int best;
+			const unsigned char *pp = inputs ?
+			    inputs->dpo[SG_DPO_POST_RED + t] : NULL;
+			const unsigned char *ip = inputs ?
+			    inputs->dpo[SG_DPO_INTERCEPT_RED + t] : NULL;
+			int best = Fields_DefensiveRoot(r, pp);
 
 			sg_fields.to_post[t] = Field_Alloc(r);
-			best = -1;
-			if (pp)
-				for (si = 0; si < r->hdr.num_seeds; si++)
-					if (best < 0 || pp[si] > pp[best]) best = si;
-			if (best >= 0 && pp[best] > 0)
+			if (best >= 0)
 				Field_FromOne(r, sg_fields.to_post[t], best);
 			else
 				memcpy(sg_fields.to_post[t], own,
 				       sizeof(int) * r->hdr.num_seeds);
 
 			sg_fields.to_icept[t] = Field_Alloc(r);
-			best = -1;
-			if (ip)
-				for (si = 0; si < r->hdr.num_seeds; si++)
-					if (best < 0 || ip[si] > ip[best]) best = si;
-			if (best >= 0 && ip[best] > 0)
+			best = Fields_DefensiveRoot(r, ip);
+			if (best >= 0)
 				Field_FromOne(r, sg_fields.to_icept[t], best);
 			else
 				memcpy(sg_fields.to_icept[t], own,
@@ -984,7 +1010,7 @@ qboolean Fields_Setup(rune_t *r)
 
 					VectorCopy(r->seeds[appr[j]].origin, thr);
 					thr[2] += 22.0f;
-					ltr = gi.trace(eye, NULL, NULL, thr, NULL,
+					ltr = sg_host.trace(eye, NULL, NULL, thr, NULL,
 					               MASK_SOLID);
 					if (ltr.fraction >= 1.0f)
 						score += 1.0f;
@@ -997,7 +1023,7 @@ qboolean Fields_Setup(rune_t *r)
 
 					VectorCopy(r->seeds[flag_seed].origin, fthr);
 					fthr[2] += 22.0f;
-					ftr = gi.trace(eye, NULL, NULL, fthr, NULL,
+					ftr = sg_host.trace(eye, NULL, NULL, fthr, NULL,
 					               MASK_SOLID);
 					if (ftr.fraction < 1.0f)
 						continue;
@@ -1019,7 +1045,7 @@ qboolean Fields_Setup(rune_t *r)
 			if (best >= 0)
 			{
 				Field_FromOne(r, sg_fields.to_lane[t], best);
-				gi.dprintf("slipgate: rail lane team%d seed=%d covers %.0f/%d approach seeds\n",
+				sg_host.dprint("slipgate: rail lane team%d seed=%d covers %.0f/%d approach seeds\n",
 				           t + 1, best, bestscore, na);
 			}
 			else
@@ -1028,13 +1054,16 @@ qboolean Fields_Setup(rune_t *r)
 		}
 	}
 
-	/* dropped-flag fields start as copies of the home fields */
-	sg_fields.to_red_flag_now = Field_Alloc(r);
-	sg_fields.to_blue_flag_now = Field_Alloc(r);
-	memcpy(sg_fields.to_red_flag_now, sg_fields.to_red_flag,
-	       sizeof(int) * r->hdr.num_seeds);
-	memcpy(sg_fields.to_blue_flag_now, sg_fields.to_blue_flag,
-	       sizeof(int) * r->hdr.num_seeds);
+	/* Dynamic flag position is a belief, so each team owns a separate row. */
+	for (i = 0; i < 2; i++)
+	{
+		sg_fields.to_flag_now[i][0] = Field_Alloc(r);
+		sg_fields.to_flag_now[i][1] = Field_Alloc(r);
+		memcpy(sg_fields.to_flag_now[i][0], sg_fields.to_red_flag,
+		       sizeof(int) * r->hdr.num_seeds);
+		memcpy(sg_fields.to_flag_now[i][1], sg_fields.to_blue_flag,
+		       sizeof(int) * r->hdr.num_seeds);
+	}
 
 	/*
 	 * Every pointer in sg_fields was TAG_LEVEL and is dangling by now, so all
@@ -1080,6 +1109,8 @@ qboolean Fields_Setup(rune_t *r)
 
 	memset(sg_futile, 0, sizeof(sg_futile));
 	memset(sg_link_futile, 0, sizeof(sg_link_futile));
+	sg_futile_last_seed = -1;
+	sg_futile_streak = 0;
 	sg_fields.next_refresh = 0.0f;
 	return true;
 }
@@ -1124,29 +1155,24 @@ void Fields_Refresh(rune_t *r)
 	/* flag positions per CACO: seed the "now" field wherever belief puts it */
 	for (i = 0; i < 2; i++)
 	{
-		sg_belief_flag_t *bf = &sg_caco_team_belief.flag[i];
-		int *fld = i ? sg_fields.to_blue_flag_now : sg_fields.to_red_flag_now;
-		int home = i ? sg_fields.blue_flag_seed : sg_fields.red_flag_seed;
-		int seed, cost = 0;
+		int fi;
 
-		if (bf->state == SG_FLAG_HOME)
-			seed = home;
-		else if (bf->where_seed >= 0)
-			seed = bf->where_seed;
-		else
-			/*
-			 * Astray and never sighted. The old fallback said "home" --
-			 * which sent every RECOVER bot to squat its own EMPTY stand
-			 * while the thief ran the flag the other way (campaign 1,
-			 * lmctf01 g1: role=3 parked at the vacant base all game;
-			 * both teams did it; the standoff never broke and no game
-			 * has ever seen a capture). The game broadcast WHO took it
-			 * the moment it happened; a taken flag is travelling to the
-			 * thief's stand, so that is where the hunt begins -- the
-			 * route there sweeps the drop case on the way.
-			 */
-			seed = i ? sg_fields.red_flag_seed : sg_fields.blue_flag_seed;
-		Field_Flood(r, fld, &seed, &cost, 1);
+		for (fi = 0; fi < 2; fi++)
+		{
+			sg_belief_flag_t *bf = &sg_caco_team_belief.flag[i][fi];
+			int *fld = sg_fields.to_flag_now[i][fi];
+			int home = fi ? sg_fields.blue_flag_seed : sg_fields.red_flag_seed;
+			int seed, cost = 0;
+
+			if (bf->state == SG_FLAG_HOME)
+				seed = home;
+			else if (bf->where_seed >= 0)
+				seed = bf->where_seed;
+			else
+				/* Astray and unseen: sweep toward the thief's home stand. */
+				seed = fi ? sg_fields.red_flag_seed : sg_fields.blue_flag_seed;
+			Field_Flood(r, fld, &seed, &cost, 1);
+		}
 	}
 
 	/* our-carrier support fields, one per team -- flooded from a point
@@ -1162,7 +1188,8 @@ void Fields_Refresh(rune_t *r)
 		sg_belief_carrier_t *c = &sg_caco_team_belief.carrier[i];
 		int cost = 0;
 
-		if (c->client >= 0 && c->seed >= 0)
+		if (c->client >= 0 && c->seed >= 0 &&
+		    c->seed < r->hdr.num_seeds)
 		{
 			int *home = i ? sg_fields.to_blue_flag
 			              : sg_fields.to_red_flag;
@@ -1189,6 +1216,14 @@ void Fields_Refresh(rune_t *r)
 			}
 			Field_Flood(r, sg_fields.our_carrier[i], &seed, &cost, 1);
 			sg_fields.our_carrier_valid[i] = true;
+		}
+		else
+		{
+			int seed;
+
+			for (seed = 0; seed < r->hdr.num_seeds; seed++)
+				sg_fields.our_carrier[i][seed] = SG_FIELD_INF;
+			sg_fields.our_carrier_valid[i] = false;
 		}
 	}
 }

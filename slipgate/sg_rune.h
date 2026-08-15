@@ -6,73 +6,58 @@
  * a concrete entry state -- before it was recorded. Nothing is inferred from
  * geometry heuristics; a link exists because a phantom traversed it.
  *
- * File: maps/<mapname>.rune, flat binary, little-endian, versioned. The
- * generator writes it once per map; the runtime maps it read-only; learning
- * appends OBSERVED links and adjusts costs in place.
+ * File: maps/<mapname>.rune, explicit little-endian v3 records. The generator
+ * installs one atomically; the runtime snapshots and validates the exact file
+ * before adapting it into the native controller view below.
  */
 
 #pragma once
 
+#include <limits.h>
+
+#include "sg_action.h"
+#include "sg_identity.h"
+#include "sg_rune_wire.h"
+
 #define RUNE_MAGIC      0x454E5552      /* "RUNE" */
-#define RUNE_VERSION    1
+/* Legacy identifiers remain only for actionable v2 detection and the default
+ * inactive proof scope.  Active generation/loading uses SG_RUNE_V3_VERSION and
+ * the authenticated law in sg_rune_v3_header_t. */
+#define RUNE_VERSION    2
+#define RUNE_PROOF_GRAVITY 800
+#define RUNE_PROOF_AIRACCELERATE 0.0f
+#define RUNE_HOOK_BOLT_SPEED 800.0f
+#define RUNE_HOOK_FRAME_DISTANCE 80.0f
+#define RUNE_MAX_SEEDS  32768
+#define RUNE_MAX_LINKS  262144
+#define RUNE_HOOK_MAX_RAY 8192.0f
+/* Dry graph hooks retain their proved entry-heading slack. Water-origin hooks
+ * use an otherwise-invalid marker because their controller is a different
+ * contract: actual-state online reproof, zero-input outbound drift, exact
+ * attachment state, air reserve, and a dry destination. */
+#define RUNE_HOOK_CONTROL_SLACK 24
+#define RUNE_WATER_HOOK_CONTROL_MARKER 253
+#define RUNE_HOOK_DRY_SETTLE_MS 1000
+#define RUNE_HOOK_WATER_SETTLE_MS 1250
+#define RUNE_TELEPORT_SEED_REACH 128.0f
+#define RUNE_DROP_RECOVERY_RADIUS 96.0f
+#define RUNE_DROP_RECOVERY_Z 72.0f
 
-/* how a link is traversed */
-typedef enum
-{
-	RL_RUN = 0,         /* ground movement, no jump required */
-	RL_JUMP,            /* requires a jump during the traversal */
-	RL_DROP,            /* a fall the mover survives */
-	RL_HOOK,            /* grapple at the anchor stored in the link */
-	RL_SWIM,            /* through water */
-	/*
-	 * Appended, never inserted: every value above keeps the number it had, so
-	 * a rune written before these existed still reads correctly and
-	 * RUNE_VERSION stays 1. These are actions the mover cannot prove by
-	 * rolling physics -- the world moves it, not the other way round.
-	 */
-	RL_LIFT,            /* ride a func_plat from its bottom to its top */
-	RL_TELEPORT,        /* step on a misc_teleporter; the game does the rest */
-	/*
-	 * Appended under the same rule again -- RL_LIFT is still 5 and
-	 * RL_TELEPORT is still 6, so every rune ever written still reads and
-	 * RUNE_VERSION stays 1.
-	 *
-	 * A rocket jump is proven like a hook and priced like nothing else in the
-	 * graph: it is the only action whose traversal costs the mover HEALTH.
-	 * The prover rolls it with the real physics -- pmove's own jump, then the
-	 * splash of the mover's own rocket applied exactly as T_RadiusDamage and
-	 * T_Damage apply it -- so the link is PROVEN like any other; what makes it
-	 * special is that the runtime must weigh the health in the anchor field
-	 * before it spends the link. See the anchor commentary below.
-	 */
-	RL_ROCKETJUMP,      /* rocket at the feet: the splash lifts the jumper */
-} rune_action_t;
+/* Action and provenance IDs are generated from rune_actions.json through the
+ * canonical descriptor layer included above.  The v3 loader admits only the
+ * literal controllers representable by rune_link_t. */
 
-/* how the link came to be believed */
-typedef enum
-{
-	RL_PROVEN = 0,      /* the oracle rolled it */
-	RL_OBSERVED,        /* a player demonstrated it in play */
-	RL_ADJUSTED,        /* proven, but cost corrected by experience */
-	/*
-	 * Appended, never inserted -- the same rule the action enum above keeps,
-	 * for the same reason: RL_PROVEN/OBSERVED/ADJUSTED hold the numbers they
-	 * have always held, so a rune written before this value existed still
-	 * reads correctly and RUNE_VERSION stays 1. RL_DECLARED marks a link that
-	 * was READ OFF the map rather than simulated: the lift and teleport links
-	 * come from a func_plat's spawn positions and a misc_teleporter's target,
-	 * with the cost computed from g_func.c's own move maths. Calling those
-	 * PROVEN would be a lie about how they were established, and the runtime
-	 * has a real interest in the difference -- a declared link's cost has
-	 * never been measured against a clock.
-	 */
-	RL_DECLARED,        /* read off the map's spawn data, not simulated */
-} rune_provenance_t;
-
-/* seed flags: bits in rune_seed_t.flags, a field that has always been there
- * and has always been written as 0 -- so setting a bit needs no new version */
+/* Native seed flags mirror their explicit v3 wire identifiers. */
 #define RSF_WATER	1       /* the seed is a point INSIDE a water volume, not
                              * a floor point: reached and left by swimming */
+#define RSF_TOMBSTONE	2   /* retained geometry owner outside the closed
+                             * two-objective route core; has no links and
+                             * makes localization fail closed instead of
+                             * snapping through it to a farther live seed */
+
+/* Fail-closed native controller markers retained by the v3 literal adapter. */
+#define RUNE_DECLARED_CONTROL_MARKER 254
+#define RUNE_DROP_CONTROL_MARKER 254
 
 typedef struct rune_seed_s
 {
@@ -97,36 +82,33 @@ typedef struct rune_link_s
 	 * the actions were added and never shared. A reader that does not know an
 	 * action must not read its anchor.
 	 *
-	 *   RL_HOOK       a world point: where the rope bites.
+	 *   RL_HOOK       NOT a point. anchor[PITCH] and anchor[YAW] are the exact
+	 *                 SHORT-quantized view angles used by the proof;
+	 *                 anchor[ROLL] is the distance from the handed muzzle to the
+	 *                 static-world bite along that ray. Together they reproduce
+	 *                 both the shot control and expected bite without an inverse
+	 *                 floating-point solve.
 	 *   RL_DROP       a world point: the lip the mover steps off, found by
 	 *                 ProveDrop and walked to before the fall was rolled.
-	 *   RL_ROCKETJUMP NOT a point. The link format has no field for the price
-	 *                 of a traversal in health and gets no new one (the file
-	 *                 stays version 1), so the rocket jump keeps its two
-	 *                 numbers here:
-	 *
-	 *                   anchor[0], anchor[1]  the horizontal part of the UNIT
-	 *                       aim vector the proof fired on. It points AWAY from
-	 *                       the destination -- the shot goes down and BEHIND,
-	 *                       which is what throws the mover forward. The
-	 *                       vertical part is not stored because it is not
-	 *                       free: the vector is a unit vector and it points
-	 *                       down, so aim[2] = -sqrt(1 - x*x - y*y). Straight
-	 *                       down is (0,0), and the body may then use any yaw.
-	 *                   anchor[2]  the health the jumper pays, as the proof
-	 *                       measured it: (int)points from T_RadiusDamage with
-	 *                       NO armour, no power armour and no Resist rune.
-	 *                       Every one of those only reduces it, so this is the
-	 *                       worst case and the runtime may treat it as a
-	 *                       ceiling on the price, never a floor.
-	 *
-	 *   everything else  unused, written as zero.
+	 *   RL_RUN        zero for a direct proof, otherwise the world-space
+	 *                 detour apex the proved controller walked through.
+	 *   RL_LIFT       the world-space bottom ride point that owns the plat's
+	 *                 center trigger.
+	 *   RL_TELEPORT   the world-space teleporter pad/trigger point.
+	 *   RL_DOOR       the exact dry, sweep-clear wait point inside one unique
+	 *                 validated repeatable trigger. That trigger may own several
+	 *                 independent door teams; `from` begins the proved approach
+	 *                 and `to` ends the proved open-pose egress.
+	 *   RL_JUMP/RL_SWIM  unused, written as zero.
+	 *   RL_ROCKETJUMP    registered but unsupported by the native runtime.
 	 */
 	vec3_t	anchor;
 } rune_link_t;
 
 typedef struct rune_header_s
 {
+	/* Checked convenience metadata for existing graph consumers.  This is not
+	 * and must never again become a serialized header. */
 	int		magic;
 	int		version;
 	int		num_seeds;
@@ -134,16 +116,41 @@ typedef struct rune_header_s
 	char	mapname[64];
 } rune_header_t;
 
+/* The explicit wire codec owns byte order and binary32 requirements.  These
+ * assertions are only the capacity contract of the native runtime adapter. */
+_Static_assert(INT_MAX >= (long long)SG_RUNE_V3_MAGIC,
+	"native rune header cannot represent v3 magic");
+_Static_assert(INT_MAX >= SG_RUNE_V3_MAX_LINKS,
+	"native rune indices cannot represent v3 limits");
+_Static_assert(SHRT_MAX >= SG_RUNE_V3_MAX_COST_MS,
+	"native rune cost cannot represent v3 limits");
+
 /* in-memory form */
 typedef struct rune_s
 {
+	/* The explicit v3 header is the authority for runtime identity and proof
+	 * law.  hdr remains a checked native convenience view for the existing
+	 * graph consumers; it is never a wire image. */
+	sg_rune_v3_header_t v3_header;
 	rune_header_t	hdr;
 	rune_seed_t		*seeds;
 	rune_link_t		*links;
 	/* first-link index per seed, built at load; -1 = none */
 	int				*first_link;
 	int				*next_link;
+	byte			*linked_seed; /* owns at least one outgoing link; incoming-only
+	                             * dead ends and true orphans are not routes */
 } rune_t;
+
+/* One immutable snapshot of the active level identity and movement law.
+ * Generation and loading use the same capture boundary so neither can bless
+ * a graph under a weaker or differently interpreted authority. */
+typedef struct sg_rune_v3_authority_s
+{
+	sg_level_identity_t level;
+	sg_rune_v3_identity_t wire;
+	sg_identity_status_t identity_status;
+} sg_rune_v3_authority_t;
 
 /*
  * sg_oracle.c -- the rocket-jump force and the ceiling it implies.
@@ -165,3 +172,9 @@ qboolean	Rune_Generate(const char *mapname);     /* seeds + proves + writes */
 rune_t		*Rune_Load(const char *mapname);
 void		Rune_Free(rune_t *rune);
 void		Rune_DumpVisual(const rune_t *rune, const char *path);  /* html */
+qboolean	SG_RuneV3AuthorityCapture(const char *mapname,
+						 sg_rune_v3_authority_t *authority);
+qboolean	SG_RuneV3AuthorityMatchesHeader(
+						 const sg_rune_v3_authority_t *authority,
+						 const sg_rune_v3_header_t *header);
+qboolean	SG_RunePhysicsCompatible(const rune_t *rune);

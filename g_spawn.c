@@ -1,5 +1,8 @@
 
 #include "g_local.h"
+#include "g_entfile_path.h"
+#include "slipgate/sg_identity.h"
+#include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
 #include "g_ctffunc.h"
@@ -297,17 +300,32 @@ spawn_t	spawns[] = {
 };
 
 
+static qboolean BuildEntFilePath(char *path, size_t path_size,
+	const char *mapname)
+{
+	if (!G_EntFilePath(path, path_size,
+	                   gamedir ? gamedir->string : NULL, mapname))
+	{
+		gi.dprintf("Error: ent file path rejected, exceeds game path limits.\n");
+		return false;
+	}
+	return true;
+}
+
 void WriteEntFile (char *mapname, char *entities)
 {
 	FILE	*fp;
-	char	name[MAX_INFO_STRING];
+	char	name[MAX_OSPATH];
 
-	strcpy (name, gamedir->string);
-	strcat (name, "/ent/");
-	strcat (name, mapname);
-	strcat (name, ".ent");
+	if (!BuildEntFilePath(name, sizeof(name), mapname))
+		return;
 
 	fp = fopen (name, "wt");
+	if (!fp)
+	{
+		gi.dprintf("Error: unable to open ent file %s for writing.\n", name);
+		return;
+	}
 	fwrite(entities, 1, strlen(entities), fp);
 	fclose(fp);
 }
@@ -316,10 +334,12 @@ char* ReadEntFile(char* mapname, char* entities)
 {
 	FILE* fp;
 
-	char	name[MAX_QPATH];
+	char	name[MAX_OSPATH];
 	size_t	size;
 	char* tempbuf = NULL;
 	int count, ch;
+	size_t entity_size;
+	size_t append_size;
 	cvar_t* vs;
 	cvar_t* mop;
 
@@ -338,10 +358,8 @@ char* ReadEntFile(char* mapname, char* entities)
 		return entities;  //Must use q2pro's internal entity management.
 	}
 
-	strcpy(name, gamedir->string);
-	strcat(name, "/ent/");
-	strcat(name, mapname);
-	strcat(name, ".ent");
+	if (!BuildEntFilePath(name, sizeof(name), mapname))
+		return entities;
 
 	fp = fopen(name, "rt");
 	if (!fp)
@@ -354,21 +372,33 @@ char* ReadEntFile(char* mapname, char* entities)
 	if (count >= 0x40000)	//QW// This constant comes from MAX_MAP_ENTSTRING
 	{
 		gi.dprintf("Error: ent file %s rejected, entity string exceeds game limits.\n", name);
+		fclose(fp);
 		return entities;
 	}
 
 	tempbuf = (char*)gi.TagMalloc(count + 2, TAG_LEVEL);
 
 	if (tempbuf) {
-		size = (int)fread(tempbuf, 1, count, fp);
+		size = fread(tempbuf, 1, count, fp);
 		fclose(fp);
+		tempbuf[size] = '\0';
 
 		if (size)
 		{
-			if ((strncmp(tempbuf, ":append", 7) == 0) && strlen(entities) + count < 0x40000)
+			if (size >= 8 && strncmp(tempbuf, ":append", 7) == 0)
 			{
-				gi.dprintf("Using .ent file for added ents.\n");
-				strcat(entities, &tempbuf[8]);
+				for (entity_size = 0; entity_size < 0x40000 &&
+				     entities[entity_size] != '\0'; entity_size++)
+					;
+				append_size = size - 8;
+				if (entity_size == 0x40000 ||
+				    append_size >= (size_t)0x40000 - entity_size)
+					gi.dprintf("Error: appended entity text exceeds game limits.\n");
+				else
+				{
+					gi.dprintf("Using .ent file for added ents.\n");
+					strcat(entities, &tempbuf[8]);
+				}
 			}
 			else
 			{
@@ -384,6 +414,7 @@ char* ReadEntFile(char* mapname, char* entities)
 	}
 	else
 	{
+		fclose(fp);
 		gi.dprintf("Error: unable to allocate memory for entities.\n");
 	}
 
@@ -925,8 +956,18 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	char		*com_token;
 	int			i;
+	sg_identity_status_t identity_status;
+	sg_level_identity_t identity;
 
+	/* No transition failure may leave the outgoing map's authority visible. */
+	SG_LevelIdentityReset();
 	SaveClientData ();
+
+	/* TAG_LEVEL is about to invalidate every SLIPGATE graph/field pointer.
+	 * Reset synchronously, while the outgoing map name and bot edicts still
+	 * exist, so an rcon `sv sg add` between spawn and the first game frame
+	 * cannot create a client that the deferred time-rewind detector orphans. */
+	SG_LevelChange ();
 
 	SG_NetNewLevel ();
 
@@ -942,6 +983,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	strncpy (level.mapname, mapname, sizeof(level.mapname)-1);
 	strncpy (game.spawnpoint, spawnpoint, sizeof(game.spawnpoint)-1);
+	SG_LevelIdentityBegin(mapname);
 
 	// set client fields on player ents
 	for (i=0 ; i<game.maxclients ; i++)
@@ -955,6 +997,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	// LM_JORM
 	//  Write Entities out to a file
 	entities = ReadEntFile(mapname, entities);
+	SG_LevelIdentityCaptureEntities(mapname, entities);
 	
 	total_ents = 0; //surt
 	// END LM_JORM
@@ -1052,6 +1095,22 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	PlayerTrail_Init ();
 
 	sl_GameStart( &gi, level );	//	StdLog - Mark Davies
+
+	/* Publication is the last operation: every earlier gi.error leaves the
+	 * pending identity unavailable to generator, loader, and runtime readers. */
+	identity_status = SG_LevelIdentityCommit(mapname);
+	if (identity_status == SG_IDENTITY_OK)
+		identity_status = SG_LevelIdentitySnapshot(mapname, &identity);
+	if (identity_status == SG_IDENTITY_OK)
+		gi.dprintf("slipgate: v3 identity committed map=%s bsp=%u "
+		           "entity_crc=%u physics=%u\n",
+		           identity.mapname, (unsigned int)identity.bsp_checksum,
+		           (unsigned int)identity.entity_crc32,
+		           (unsigned int)identity.host_physics_id);
+	else
+		gi.dprintf("slipgate: v3 identity unavailable for %s: %s\n",
+		           mapname ? mapname : "<null>",
+		           SG_LevelIdentityReason(identity_status));
 }
 
 
@@ -1490,4 +1549,3 @@ void SP_worldspawn (edict_t *ent)
 	// 63 testing
 	gi.configstring(CS_LIGHTS+63, "a");
 }
-

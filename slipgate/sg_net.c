@@ -894,6 +894,9 @@ void SG_FreeClientEdict(edict_t *ent)
 	ent->inuse = false;
 	ent->classname = "disconnected";
 	ent->client->pers.connected = false;
+	/* Fake-client CTF identity is not a reconnectable human identity. game.clients
+	 * survives map changes, so leave no team/radio state for the next occupant. */
+	memset(&ent->client->ctf, 0, sizeof(ent->client->ctf));
 	ent->flags &= ~FL_BOT;
 }
 

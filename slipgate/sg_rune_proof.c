@@ -1,0 +1,53 @@
+/* sg_rune_proof.c -- scoped nominal gravity for RUNE generation. */
+#include <math.h>
+
+/* q_shared.h intentionally has no include guard and must precede sg_rune.h. */
+#include "q_shared.h"
+#include "slipgate/sg_rune.h"
+#include "slipgate/sg_rune_proof.h"
+
+static short sg_rune_scoped_gravity = (short)RUNE_PROOF_GRAVITY;
+static int sg_rune_proof_scope_active;
+
+int SG_RuneV2GravityCompatible(float gravity)
+{
+	return isfinite(gravity) && gravity >= -32768.0f &&
+	       gravity <= 32767.0f &&
+	       (short)gravity == (short)RUNE_PROOF_GRAVITY;
+}
+
+int SG_RuneV3FunkyGravityCompatible(const float *value)
+{
+	return value && isfinite(*value) &&
+	       *value == (float)SG_RUNE_PROOF_FUNKY_GRAVITY_REQUIRED;
+}
+
+int SG_RuneProofScopeBegin(float gravity)
+{
+	if (sg_rune_proof_scope_active || !isfinite(gravity) ||
+	    gravity < (float)SG_RUNE_PROOF_GRAVITY_MIN ||
+	    gravity > (float)SG_RUNE_PROOF_GRAVITY_MAX ||
+	    (SG_RUNE_PROOF_GRAVITY_INTEGRAL_REQUIRED &&
+	     gravity != (float)(short)gravity))
+		return 0;
+	sg_rune_scoped_gravity = (short)gravity;
+	sg_rune_proof_scope_active = 1;
+	return 1;
+}
+
+void SG_RuneProofScopeEnd(void)
+{
+	sg_rune_scoped_gravity = (short)RUNE_PROOF_GRAVITY;
+	sg_rune_proof_scope_active = 0;
+}
+
+short SG_RuneProofGravity(void)
+{
+	return sg_rune_proof_scope_active
+		? sg_rune_scoped_gravity : (short)RUNE_PROOF_GRAVITY;
+}
+
+int SG_RuneProofScopeActive(void)
+{
+	return sg_rune_proof_scope_active;
+}

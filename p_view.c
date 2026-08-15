@@ -4,6 +4,10 @@
 #include "plasma.h" // SKWiD MOD
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
+#include "ui_text.h" // bounded appender, replaces the hand-guarded strcat loop below
+#include "ctf_file_io.h" // CTF_StatsDBMode -- MOTD's records line is unified-backend only
+#include "ctf_sqlite_unidb.h" // DB_ServerRecords; db_record_t needed before ui_boards.h -- see that header's comment
+#include "ui_boards.h" // UI_Records_FormatLine -- up to 3 records appended to the MOTD
 
 int ClientShowMOD(edict_t *ent); // CTF CODE -- LM_JORM
 int ClientShowID(edict_t *ent, char * buf); // CTF CODE -- LM_JORM
@@ -486,6 +490,34 @@ void SV_CalcBlend (edict_t *ent)
 P_FallingDamage
 =================
 */
+float P_FallDelta (float old_velocity_z, float velocity_z,
+	qboolean grounded, int waterlevel)
+{
+	float delta;
+
+	/* This is the production end-frame impulse test, kept pure so the rune
+	 * oracle can judge the same 100 ms boundary without manufacturing a player
+	 * entity or duplicating a subtly different falling model. */
+	if (old_velocity_z < 0 && velocity_z > old_velocity_z && !grounded)
+		delta = old_velocity_z;
+	else
+	{
+		if (!grounded)
+			return 0.0f;
+		delta = velocity_z - old_velocity_z;
+	}
+	delta = delta * delta * 0.0001;
+
+	/* Water attenuation precedes every sound/damage threshold in production. */
+	if (waterlevel == 3)
+		return 0.0f;
+	if (waterlevel == 2)
+		delta *= 0.25;
+	if (waterlevel == 1)
+		delta *= 0.5;
+	return delta;
+}
+
 void P_FallingDamage (edict_t *ent)
 {
 	float	delta;
@@ -498,25 +530,8 @@ void P_FallingDamage (edict_t *ent)
 	if (ent->movetype == MOVETYPE_NOCLIP)
 		return;
 
-	if ((ent->client->oldvelocity[2] < 0) && (ent->velocity[2] > ent->client->oldvelocity[2]) && (!ent->groundentity))
-	{
-		delta = ent->client->oldvelocity[2];
-	}
-	else
-	{
-		if (!ent->groundentity)
-			return;
-		delta = ent->velocity[2] - ent->client->oldvelocity[2];
-	}
-	delta = delta*delta * 0.0001;
-
-	// never take falling damage if completely underwater
-	if (ent->waterlevel == 3)
-		return;
-	if (ent->waterlevel == 2)
-		delta *= 0.25;
-	if (ent->waterlevel == 1)
-		delta *= 0.5;
+	delta = P_FallDelta(ent->client->oldvelocity[2], ent->velocity[2],
+	                   ent->groundentity != NULL, ent->waterlevel);
 
 	if (delta < 1)
 		return;
@@ -1115,52 +1130,16 @@ void ClientEndServerFrame (edict_t *ent)
 	}
 	// Paril
 	
-	if (ent->client->showscores &&  deathmatch->value)
+	if (deathmatch->value &&
+		(ent->client->showscores || ent->client->showsquadboard ||
+		 ent->client->showstatboard || ent->client->showteamstatboard ||
+		 ent->client->showrailboard))
 	{
-		if (!(level.framenum & 31) )
-		{
-			DeathmatchScoreboardMessage (ent, ent->enemy);
-			gi.unicast (ent, false);
-		}
+		// open in-match boards are served push-on-change by UI_Tick_Frame
+		// (1 Hz while data is changing, immediate on milestones, silent
+		// when idle) -- this branch exists only to keep an open board from
+		// falling through to the ID/MOD painters below
 	}
-// ADC
-	else if (ent->client->showsquadboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31) )
-		{
-			SquadboardMessage (ent, ent->enemy);
-			gi.unicast (ent, false);
-		}
-	}
-// ADC
-
-// BUZZKILL
-	else if (ent->client->showstatboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31))
-		{
-			StatboardMessage(ent, ent->enemy);
-			gi.unicast(ent, false);
-		}
-	}
-	else if (ent->client->showteamstatboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31))
-		{
-			TeamStatboardMessage(ent, ent->enemy);
-			gi.unicast(ent, false);
-		}
-	}
-	else if (ent->client->showrailboard && deathmatch->value)
-	{
-		if (!(level.framenum & 31))
-		{
-			RailboardMessage(ent, ent->enemy);
-			gi.unicast(ent, false);
-		}
-	}
-
-// BUZZKILL
 	else if (ent->client->showmod)
 	{
 		if (!(level.framenum & 7))
@@ -1193,8 +1172,9 @@ void Client_Show_High_Scores(edict_t *ent)
 
 int ClientShowMOD(edict_t *ent)
 {
-	char	string[5000];
-	char	temp[1000], temp2[MAX_INFO_STRING];
+	char		storage[1380];
+	ui_buf_t	sb;
+	char	temp[1000];
 	char	*line;
 	char    *color;
 	int		time, i;
@@ -1225,7 +1205,8 @@ int ClientShowMOD(edict_t *ent)
 			default: color = "Unassigned"; break;
 		}
 	
-		Com_sprintf(string, sizeof(string),
+		ui_buf_init (&sb, storage, sizeof(storage));
+		ui_appendf (&sb,
 			"xv %i yv %i cstring2 \""
 			"You are on the %s team!\n\n"
 			"Welcome to %s\nRunning %s\n"
@@ -1238,30 +1219,76 @@ int ClientShowMOD(edict_t *ent)
 			GAMEVERSION,
 			0,85,
 			mod_website->string);
-		
-		strcat(string, "\" ");
+
+		ui_appendf (&sb, "\" ");
+
+		// y cursor for the motd lines below and the records lines after
+		// them -- started here, not inside "if (motd[0])", so the records
+		// block still has a valid position even on a server with no motd
+		// text set at all.
+		i = 100;
 
 		if (motd[0]) // if we have a MOTD
 		{
 			strcpy(temp, motd);
-			i = 100;
 			line = strtok(temp, "\n");
 			while (line)
 			{
-				Com_sprintf(temp2, sizeof(temp2),				
-					"xv 0 yv %d cstring \"%s\" ",
-					i, line);
+				/* 1400-byte wire ceiling, no fragmentation: an
+				 * over-long motd used to silently drop the whole
+				 * frame -- an invisible welcome screen. ui_appendf
+				 * (ui_text.h) refuses an append that would cross
+				 * storage's 1380-byte cutoff instead of overflowing
+				 * it; truncate the motd, keep the screen. */
+				if (!ui_appendf (&sb, "xv 0 yv %d cstring \"%s\" ", i, line))
+					break;
 				i+=8;
-				strcat(string, temp2);
 				line = strtok(NULL, "\n");
 			}
 		}
 
-			
+		// Up to 3 one-line server records (existing DB_ServerRecords data),
+		// appended after the motd's own lines and inside the same 1380-byte
+		// budget ui_appendf already enforces above. Unified-backend only;
+		// DB_ServerRecords leaves a record's holder[0] at 0 when nobody has
+		// set it yet, and UI_Records_FormatLine (ui_boards.c) is what turns
+		// that into "omit the line" here, same as it does for the Server
+		// Records board itself -- a record nobody has set never gets faked.
+		if (CTF_StatsDBMode() == CTF_STATSDB_UNIFIED)
+		{
+			db_server_records_t	records;
+			char					recline[80];
+			int						j;
+			struct
+			{
+				const char			*label;
+				const db_record_t	*rec;
+			}						candidates[3];
 
-			   	
+			memset(&records, 0, sizeof(records));
+			DB_ServerRecords(&records);
+
+			candidates[0].label = "Most Caps, One Game";
+			candidates[0].rec   = &records.most_caps_game;
+			candidates[1].label = "Best Kill Streak, One Game";
+			candidates[1].rec   = &records.best_streak_game;
+			candidates[2].label = "Most Total Caps, Career";
+			candidates[2].rec   = &records.most_caps_lifetime;
+
+			for (j = 0; j < 3; j++)
+			{
+				if (!UI_Records_FormatLine(recline, sizeof(recline),
+						candidates[j].label, candidates[j].rec))
+					continue;
+
+				if (!ui_appendf (&sb, "xv 0 yv %d cstring \"%s\" ", i, recline))
+					break;
+				i += 8;
+			}
+		}
+
 		gi.WriteByte (svc_layout);
-		gi.WriteString (string);
+		gi.WriteString (storage);
 		gi.unicast (ent, false);
 		
 	

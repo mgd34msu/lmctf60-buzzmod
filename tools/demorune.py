@@ -18,36 +18,45 @@ Usage: demorune.py <rune_dir> <out_dir> <demo> [<demo> ...]
 The map is read from configstring 33 ("maps/<name>.bsp"); demos whose map
 has no rune in <rune_dir> are skipped with a note.
 """
-import struct, sys, os, math, json, re, collections
+import struct, sys, os, re, collections
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dm2speed import R, parse_entity_bits, parse_delta_entity, \
     parse_packetentities, parse_playerstate, parse_sound, parse_temp_entity
-
-HEADER_FMT = '<4i64s'
-SEED_FMT = '<3f2h'
+from corpusgraph import (atomic_write_json, read_rune,
+                         rune_identity_from_rune, rune_live_seed_indices,
+                         rune_seed_origins, stamp_corpus_identity)
 
 
 def load_seeds(path):
-    data = open(path, 'rb').read()
-    magic, ver, ns, nl, name = struct.unpack_from(HEADER_FMT, data, 0)
-    off = struct.calcsize(HEADER_FMT)
-    ssz = struct.calcsize(SEED_FMT)
-    seeds = []
-    for i in range(ns):
-        x, y, z, ah, fl = struct.unpack_from(SEED_FMT, data, off)
-        off += ssz
-        seeds.append((x, y, z))
-    return seeds
+    rune = read_rune(path, versions=(1, 2, 3))
+    return rune_seed_origins(rune)
+
+
+def load_seed_graph(path, expected_map=None):
+    """Decode one snapshot for localization and its matching corpus stamp."""
+    rune = read_rune(path, expected_map, versions=(1, 2, 3))
+    return (rune_seed_origins(rune), rune_live_seed_indices(rune),
+            rune_identity_from_rune(rune))
 
 
 class SeedGrid:
     """spatial hash: nearest seed without an O(n) scan per frame"""
     CELL = 256.0
 
-    def __init__(self, seeds):
+    def __init__(self, seeds, eligible=None):
         self.seeds = seeds
         self.cells = collections.defaultdict(list)
+        if eligible is None:
+            self.eligible = None
+        else:
+            checked = set()
+            for i in eligible:
+                if (isinstance(i, bool) or not isinstance(i, int) or
+                        not 0 <= i < len(seeds) or i in checked):
+                    raise ValueError(f'invalid eligible seed {i!r}')
+                checked.add(i)
+            self.eligible = frozenset(checked)
         for i, s in enumerate(seeds):
             self.cells[self.key(s)].append(i)
 
@@ -67,6 +76,9 @@ class SeedGrid:
                              (s[2]-p[2])**2)
                         if d < bd:
                             bd, best = d, i
+        if (best >= 0 and self.eligible is not None and
+                best not in self.eligible):
+            return -1
         return best
 
 
@@ -141,6 +153,7 @@ def main():
     rune_dir, out_dir = sys.argv[1], sys.argv[2]
     agg = {}
     grids = {}
+    identities = {}
     for demo in sys.argv[3:]:
         frames, mapname, events = walk_demo(demo)
         if not mapname or len(frames) < 100:
@@ -158,7 +171,9 @@ def main():
             print(f"skip {os.path.basename(demo)}: no rune for {mapname}")
             continue
         if mapname not in grids:
-            grids[mapname] = SeedGrid(load_seeds(rp))
+            seeds, eligible, identity = load_seed_graph(rp, mapname)
+            grids[mapname] = SeedGrid(seeds, eligible)
+            identities[mapname] = identity
         g = grids[mapname]
         a = agg.setdefault(mapname, {
             'map': mapname, 'demos': 0, 'frames': 0,
@@ -180,10 +195,11 @@ def main():
               f"events={len(events)}")
     os.makedirs(out_dir, exist_ok=True)
     for mapname, a in agg.items():
+        stamp_corpus_identity(a, identities[mapname])
         a['transitions'] = dict(a['transitions'])
         a['seed_dwell'] = {str(k): v/10.0 for k, v in a['seed_dwell'].items()}
         out = f'{out_dir}/{mapname}.human.json'
-        json.dump(a, open(out, 'w'))
+        atomic_write_json(out, a)
         print(f"WROTE {out}: demos={a['demos']} frames={a['frames']} "
               f"transitions={len(a['transitions'])}")
 

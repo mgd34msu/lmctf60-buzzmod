@@ -65,6 +65,7 @@ extern _CrtMemState startup1;	// memory diagnostics
 #endif
 
 #include "q_shared.h"
+#include "ui_stats.h" // stat-slot registry: compile-time proof the STAT_* slots above agree with it
 
 // define GAME_INCLUDE so that game.h does not define the
 // short, server-visible gclient_t and edict_t structures,
@@ -99,6 +100,9 @@ extern _CrtMemState startup1;	// memory diagnostics
 #define	svc_temp_entity		3
 #define	svc_layout			4
 #define	svc_inventory		5
+#define	svc_sound			9	// engine sound message; with no flag bits it plays
+								// as a full-volume local sound for the one client
+								// it is unicast to -- private feedback delivery
 #define	svc_stufftext		11
 
 //==================================================================
@@ -675,6 +679,12 @@ typedef struct MapInfo {
 } MapInfo;
 
 extern  edict_t *redflag; // CTF CODE -- LM_JORM
+
+// feedback sounds (g_combat.c): world copy from the player the event
+// happened to, private copy to the attacker; scope cvars ctf_hitsound /
+// ctf_killsound (0 off, 1 flag-carrier events only, 2 all player events)
+void G_HitSound(edict_t *targ, edict_t *attacker, qboolean carrier);
+void G_KillSound(edict_t *victim, edict_t *attacker, qboolean carrier);
 extern  edict_t *blueflag; // CTF CODE -- LM_JORM
 
 extern  char    motd[1000]; // CTF CODE -- LM_JORM
@@ -750,6 +760,10 @@ void Cmd_Squadboard_f (edict_t *ent); // ADC
 void Cmd_Statboard_f(edict_t* ent); // BUZZKILL
 void Cmd_TeamStatboard_f(edict_t* ent); // BUZZKILL
 void Cmd_Railboard_f(edict_t* ent); // BUZZKILL
+void Cmd_Season_f(edict_t* ent);
+void Cmd_Records_f(edict_t* ent);
+void Cmd_Activity_f(edict_t* ent);
+void Cmd_Momentum_f(edict_t* ent);
 void Cmd_ToggleFastSwitch_f(edict_t *ent);
 
 //
@@ -927,6 +941,11 @@ void TeamJoin (edict_t *ent);
 
 // WEAPONS
 void Weapon_Hook_Fire (edict_t *ent);
+void CTF_HookMuzzle (const vec3_t origin, float viewheight, int hand,
+	const vec3_t forward, const vec3_t right, vec3_t start);
+int CTF_HookPullVelocity (const vec3_t start, const vec3_t bite,
+	vec3_t velocity);
+void CTF_HookPullStep (edict_t *ent, qboolean draw_cable);
 
 // ITEMS
 
@@ -970,6 +989,8 @@ qboolean SV_FilterPacket (char *from);
 //
 // p_view.c
 //
+float P_FallDelta (float old_velocity_z, float velocity_z,
+	qboolean grounded, int waterlevel);
 void ClientEndServerFrame (edict_t *ent);
 
 //
@@ -1203,6 +1224,10 @@ struct gclient_s
 	qboolean	showstatboard; //BUZZKILL
 	qboolean	showteamstatboard; //BUZZKILL
 	qboolean	showrailboard; //BUZZKILL
+	qboolean	showseason;			// settled board: Season Top 10
+	qboolean	showrecords;		// settled board: Server Records
+	qboolean	showactivity;		// settled board: Activity (last 7 days)
+	qboolean	showmomentum;		// settled board: Momentum (biggest 7-day movers)
 
 
 	// BUZZKILL -- persistent stats, loaded/saved by the stats database.

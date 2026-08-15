@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "slipgate/sg_local.h"
 
 
 void InitTrigger (edict_t *self)
@@ -74,6 +75,10 @@ void Touch_Multi (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *su
 			return;
 	}
 
+	/* Record the accepted player contact before multi_trigger's cooldown can
+	 * return. RL_DOOR uses this exact first-touch frame to reproduce its proved
+	 * remainder-of-frame zero-input pause; all other entities are a no-op. */
+	SG_NoteDoorTriggerTouch(self, other);
 	self->activator = other;
 	multi_trigger (self);
 }
@@ -576,4 +581,3 @@ void SP_trigger_monsterjump (edict_t *self)
 	self->touch = trigger_monsterjump_touch;
 	self->movedir[2] = st.height;
 }
-

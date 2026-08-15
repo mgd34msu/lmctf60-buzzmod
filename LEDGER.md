@@ -1,12 +1,247 @@
 # SLIPGATE LEDGER
 
+The internal development record — the one document where project
+coordinates (waves, rungs, trials, arms) are the native language; all
+inheritor-facing documents translate to self-contained findings.
 The page the goal demands: ladder, trials, morgue, polish state — two
 minutes, cold. Updated at every verdict and every arm. Times are local;
 waves are the fleet clock (~16 min each, 10 servers, never stops).
 
-*Last updated: 2026-08-09 ~03:45, wave ~670. **Rungs 1 and 3 PASSED**;
-rung 2 residual-capped by owner ruling; rung 4 has its first verdict and
-its named tells. Fleet steady on the adopted stack, no armed variables.*
+*Updated 2026-08-12 ~01:20: **THE DEPLOY PACKAGE GOES OUT** — the
+through-the-flag grab fix (9900458 + d54c971 + the wall clamp) and the
+last_role debug-gate fix (30cbaa1) ride the standards-pass build to the
+fleet at the next wave boundary. **All three trial clocks (hookpong
+s03, dither-120 s06, teamskew s05) RESTART at WAVE 924** (deployed
+01:19:43, all ten servers healthy) — 16
+fresh waves per arm under the new baseline; pre-deploy film is void for
+those trials. Pre-registered bars for the package itself: stand-area
+grind share collapses, steal conversion 1.5% → toward 3.3%, approach
+rate up (the rally actually fires now), grind_spm 10.9 → toward 3.2.
+Caps read through a fresh A/A check, since the old s03/s04 arm-bias
+correction predates both fixes. CANARY (waves 924-925, 8 demos): the
+package functions -- attacker stand-grind share DOWN (0.145 vs 0.16),
+conversion UP (2.0% vs 1.5%), and the rally visibly holds (fewer,
+better entries). Total grind rose (13.3 vs 10.9) because guard presence
+jumped 0.237 -> 0.342: last_role working means defenders actually post,
+and posted defenders exercise the known micro-pacing defect. The grind
+lever is now sg_patrol, next in the trial queue.*
+
+*Last updated: 2026-08-11. **RELEASE 4 PUBLISHED** — tag `release-4` at
+main merge 1b7a5e2, all four CI jobs (Linux x86_64, Windows x86, Windows
+x64, Publish release) verified **individually** green; release carries
+the three game modules + pak, with the dead botlib bundle dropped from
+packaging. The stale `slipgate-1.0` tag (cut on a red commit) was
+deleted. Standing lesson: CI is verified per job via
+`gh run view --json conclusion,jobs`, never via aggregate `gh run watch`
+exit codes — the aggregate lied twice. Development continues on
+`slipgate`; three trials armed 17:07 (hookpong s03, dither-120 s06,
+teamskew s05) — armed film is waves 895–899 and 901+, floors land
+~wave 912 (~22:00). **Wave 900 is VOID**: a locally-built .so carrying
+the half-renamed sg_fields tree (the C4701 bug CI caught) auto-deployed
+mid-wave and pinned all ten servers in an infinite loop at map load;
+SIGTERM-immune, cleared by SIGKILL at 19:01, fixed build r662~ecbeaaf
+deployed and verified (10 servers, ~5% CPU, film flowing). Lesson: the
+fleet auto-deploys the newest repo-root .so — never leave a local build
+lying around between edit and commit unless the tree is known-good.*
+
+## Railrhythm STRUCK, final (2026-08-12 ~13:20)
+
+Dose 0.5, 18 waves/arm on its purpose-built eye: rail_window_exposure
+0.0819 vs 0.0848 control -- the delta is ~15% of one arm sd. Second
+strike (the first, at full dose, was ruled on a bad aggregate; this
+retrial had the right instrument and an honest dose). The mechanism is
+dead. s03/s04 pair returns to adopted-steady canary duty -- nothing
+arms until a mechanism worth arming exists (patrol and itemlead-dose
+await owner sign-off).
+
+## RULE 24 (owner, 2026-08-12 ~12:15): humans are the MINIMUM bar
+
+"Humans should be the minimum bar, and bots should have very few areas
+where they are deficient." The program's standard, restated: at least
+human everywhere, better wherever Rule 23 already holds. The working
+deficiency ledger (below-human dimensions only): (1) grab conversion
+at the stand -- strictgrab trial live; (2) wasted motion / grind --
+sg_patrol is the named fix, game code awaiting sign-off; (3) plateau
+revisit texture -- open, two mechanisms struck; (4) steal/cap volume
+-- downstream of (1); (5) lmctf44 navigation -- benched for rune
+diagnosis. Amendment (owner, same day): the bar is a BAND, not a cliff --
+slightly-under-human is acceptable (data noise is real; humans make
+mistakes too). "Close enough" clears the list; improve it through
+trials when a cheap arm presents itself, but it blocks nothing. Only
+MATERIAL shortfalls are work items, and wildly-better-than-human needs
+no softening under any circumstances. Applied to the current list:
+items (1) grab conversion, (2) grind, (4) volume are material (3-10x
+gaps) and stay; item (3) plateau revisit (0.30 vs 0.20) is re-graded
+CLOSE ENOUGH -- improvable if a cheap mechanism appears, blocking
+nothing; item (5) lmctf44 stays (broken is not close).
+
+## RULE 23 (owner, 2026-08-12 ~12:10): bots better than humans stay better
+
+"If bots are better than humans, do not dumb them down." Standing law,
+alongside Rule 21 (caps > cosmetics). Immediate effect: the escortdose
+20-vs-35 dose-down is DISARMED -- it degraded caps-optimal escort
+consistency to chase a judge tell rung 4 passed despite. The
+escort-magnitude separation (bot 0.4-0.8 vs human 0.03-0.32) is now an
+ACCEPTED bots-better residual, like rung 2's never-falling. Forward
+consequence: humanization mechanisms are legitimate only where they do
+not reduce play quality (texture, cadence, voice -- yes; degrading
+escorts, aim, or grabs -- no). Stage 2 IS this rule's spirit: beat the
+humans' numbers while passing.
+
+## lmctf44 is broken for stealing; strictgrab trial re-pointed (2026-08-12 ~11:10)
+
+The strictgrab liveness peek: both arms IDENTICAL -- 43k stand-arrivals,
+ZERO grabs inside 3s, two carries per arm in seven waves (~one steal per
+50 minutes). The map never reaches the grab decision, so the trial as
+armed was inert-by-map (provenance rule: no verdict). Under the
+delegated format authority the s06/s07 pair moves to lmctf09 (stands on
+record) and the strictgrab clock restarts there. lmctf44 is filed for
+rune diagnosis -- its dither null is re-qualified as a bad map choice.
+lmctf44 stands were derived from carry windows and added to stands.json
+(2D, 5-window basis -- weak; re-derive before any judging use).
+
+## THE CONVERSION GAP HAS A NAME (2026-08-12 ~09:00)
+
+The flag-home eye on post-deploy film: **98.1% of bot arrivals happen
+with the enemy flag home and grabbable; 0.3% grab within 3s.** Neither
+timing nor routing -- the clean-grab hold (sg_strictgrab, the
+unaccounted-man rule) parks attackers beside a takeable flag until the
+20s patience valve fires, because 5v5 belief coverage almost always
+leaves a man unaccounted. Humans grab in seconds. STRICTGRAB-OFF armed
+on s06 vs s07 (adopted 1 as control); bars: grab latency at
+home-arrival, steals/wave, caps guarded at 16 waves. If this converts,
+it is the single biggest stage-2 lever found to date.
+
+## Trip census corrects the stage-2 map (2026-08-12 ~08:55)
+
+tools/tripcensus.py, both populations: bots make MORE approach trips
+per player-minute (40.8 vs 25.7) and arrive at 94.7% vs 69.9% -- and
+the human numbers are bounds contaminated by client-PVS loss (their
+died-en-route 21% includes coverage loss; real human arrival is
+higher). The defense card's 'half the approach pressure' finding was
+the coverage artifact its own caveat named: human stand-minutes only
+count busy moments. CORRECTED STAGE-2 MAP: pressure is not the gap;
+conversion at the stand is (bots arrive constantly, convert at ~2%).
+Next eye: fraction of bot arrivals with the enemy flag HOME -- if bots
+arrive into empty stands, the gap is timing, not routing.
+
+## RUNG 4 SET #2: PASSED (2026-08-12 ~07:50)
+
+Pooled 6/18 against the pre-registered chance-or-worse bar (precedents:
+3/18 rung 1, 5/18 rung 3). Two of three judges FULLY INVERTED (0/6
+each) -- the same shape as rung 3's pass: both read the bots'
+consistent escort coverage as human deliberateness and the humans'
+ragged solo carries as machine behavior. The third judge guessed the
+opposite polarity and scored 6/6 with it. Set: 3 post-deploy teamskew
+bot games (waves 924/934/945, s05) vs the 3 protocol human lmctf22
+demos, sealed captions, per rung4-protocol.md verbatim.
+
+**Actionable residual, logged per the tell-ranking procedure**: all 18
+sheet-sorts were CORRECT -- escort_fraction separates the populations
+completely (bot 0.4-0.8 vs human 0.03-0.32 on this set). The disguise
+holds on polarity ignorance alone. The lever is escortdose (adopted at
+35): a dose-down trial arms on the freed s05/s08 pair -- escortdose 20
+vs 35, bar escort_fraction_obs toward the human 0.03-0.32 band, caps
+guarded at the 16-wave floor (the 35 adoption was a caps winner; going
+lower must not give the caps back).
+
+## Verdicts, first post-deploy floor (2026-08-12 ~06:40, waves 924-940)
+
+- **hookpong STRUCK (null)**: revisit_spike2_mass 0.307 (on) vs 0.299
+  (off), max_transition_mass flat -- the hook A-B-A shelf does not
+  touch the spike. The plateau tell needs a different tie-break.
+- **dither-120 STRUCK (null)**: max_transition_mass 0.5412 vs 0.5413,
+  identical to four decimals on its own purpose-built eye.
+- **teamskew PASSES ITS GATE**: attacker-count variance +68% (sd 0.27
+  -> 0.45), defense variance up, means flat, escort_fraction_obs
+  unmoved (0.400 vs 0.402). The mechanism expresses without film
+  regression; the mirror-symmetry tell itself goes to the rung-4 set
+  #2 blind judgment. s05 stays armed for the set cut.
+- **Armed next**: railrhythm dose 0.5 on the freed s03/s04 pair (eye:
+  rail_window_exposure, 16 waves from arming). **itemlead dose is
+  BLOCKED honestly**: sg_itemlead is a boolean gate in code (magnitude
+  unused) -- a dose arm would be inert and its verdict void; giving it
+  a real dose knob is a game-code change awaiting owner sign-off.
+
+## Conduct audit (2026-08-11, owner-ordered: "have you watched them?")
+
+Nobody had. `tools/conduct.py` now measures visible stupidity and
+defense regime directly from film; `conduct-baseline.json` holds the
+first pooled read (94 human demos / 28 bot demos, observed-time
+denominators):
+
+- **Grind (going-nowhere movement): bots 10.9 s/min vs human 3.2 —
+  3.5x.** Higher reversal rate inside windows (1.37 vs 0.71/s): the
+  signature is oscillation, not pinning. This was invisible to every
+  scalar instrument. Localization by map cell running; suspicion is it
+  co-locates with the plateau/HOOK revisit spike hookpong is in trial
+  against.
+- **Defense regime: the steal gap is NOT a strong-defense artifact.**
+  Guard presence at stands is equal (0.237 vs 0.247). Bot offense
+  generates HALF the approach pressure (4.7 vs 9.1 stand entries/min)
+  and converts entries at half the rate (1.5% vs 3.3%). Stage-2 bars
+  are hereby re-based: opportunity-conditioned rates (approach_pm,
+  steal_conv at measured guard_frac), not raw steals/min across
+  regimes.
+- Caveat, standing: client-POV human film conditions stand observation
+  toward busy moments — cross-population values are ratio evidence,
+  same rule as escort_fraction_obs.
+- **Localization (same night): the grind is three behaviors.** (1)
+  lmctf22: ATTACKER grind at the enemy stand dominates (4293 vs 1076
+  s) — bots reach the flag room and circle without grabbing; same
+  defect as the 1.5%-vs-3.3% steal conversion, two instruments, one
+  behavior. Candidate mechanism `sg_grabcommit`: inside stand radius
+  with the flag home, commit to the grab vector. (2) mactf06:
+  DEFENDER grind at own post dominates (5315 vs 1169 s) — posting
+  satisfies Rule 20's no-idle by micro-pacing, which humans never do
+  (humans stand still; camping is low gross speed and does not
+  trigger the detector). Candidate mechanism `sg_patrol`: walk-pace
+  arcs between 2–3 raillane post seeds instead of oscillation. (3)
+  ~2/3 of grind on both maps is far-field navigation oscillation —
+  the plateau family; hookpong's verdict rules on it first. Both new
+  mechanisms queue for arms as trial pairs free up; grind_spm is
+  their pre-registered bar (bot 10.9 → toward human 3.2).
+
+## The apology, on the record (2026-08-12, ordered by the owner)
+
+I trashed this codebase and I apologize for it. The specifics, so the
+apology means something: I grew sg_arach.c to 10,805 lines with a
+6,800-line function at its heart by appending every mechanism to the
+same file for four hundred waves instead of building modules; I
+duplicated 222 cvar lookups with their defaults restated at every site;
+I shipped an attacker grab aimed at a spawn marker the flag does not
+sit on after the owner had already fixed that disease twice on other
+touches; I left last_role's only write inside a debug gate, which
+silently killed the rally on every production wave; I hardcoded the
+fleet's directory name into danger persistence; and I wedged all ten
+servers with a poisoned local build my own rename bug produced. The
+owner ordered the cleanup, named the standards, and caught the grab
+bug from film I never watched. The 2026-08-11/12 standards pass — the
+registry, the modules, the decomposition, the three bug fixes — is the
+repair, and per-job CI plus full-rebuild gates are the standing
+protection against my doing it again.
+
+## Standards-pass findings (2026-08-11, code-quality overhaul)
+
+Three real defects surfaced by the refactor, none visible to any film
+instrument:
+
+1. **`last_role` never updated with `sg_debug` off** (fixed 30cbaa1).
+   Its only write sat inside the debug gate; the fleet's wave configs
+   do not set sg_debug. The rally partner census, escort head-count,
+   and wavepush attacker census read stale roles on every production
+   wave. **Every rally/wavepush/escort-census verdict measured on
+   debug-off film is suspect and gets re-read after this deploys.**
+2. **Danger persistence hardcoded `lmctf-hooktest`** (fixed a02f57d) —
+   wrong path on any other gamedir; follows the gamedir cvar now.
+3. **The attacker grab aimed at the spawn marker, not the flag item**
+   (fixed 9900458 + d54c971, the owner's through-the-flag order) —
+   see the conduct-audit section above.
+
+The overhaul itself: cvar registry (222 sites → one table), util layer,
+six subsystem extractions out of sg_arach.c (roster, clock, danger,
+weights, tilt, lead), think-function decomposition in progress. Every
+commit zero-warning, every CI job verified individually.
 
 ## The ladder
 
@@ -15,7 +250,7 @@ its named tells. Fleet steady on the adopted stack, no armed variables.*
 | 1. Raw movement | **PASSED** | Set #5: bot sheets passed 7/9, judges 3/18 overall |
 | 2. Routes | residual-capped (owner ruling); baseline 18/18 | off-graph = accepted residual (9 mechanisms + forensics + measured fall cost). Second tell open: interval-2 revisit spike 0.28 vs human 0.20 — nobacktrack dose struck; it is plateau oscillation between legs, needs tie-break diagnosis |
 | 3. Fights | **PASSED** — set #3: judges 5/18 | two of three judges fully inverted; bots read human 6/9 vs humans 2/9; same standard as rung-1's 3/18 pass. Residual: a real ~2x hits/shot edge (0.58 vs 0.29) — measured after the marker artifact was fixed, so the pass was earned against inflated evidence, not because of it |
-| 4. Team decisions | four mechanisms down; routejitter-25 is cut #5 | escort_fraction_obs passes every radius and leave-one-out (0.918–0.986 both maps) but is MORE parity-sensitive than the old scalar — separation survives the coverage knob rather than being freed from it. **Measure rung-4 fixes as between-arm deltas at fixed parity; never as distance-to-human-band.** Two mechanisms down; breather ablation live |
+| 4. Team decisions | **PASSED** -- set #2: 6/18, two judges inverted | escort_fraction_obs passes every radius and leave-one-out (0.918–0.986 both maps) but is MORE parity-sensitive than the old scalar — separation survives the coverage knob rather than being freed from it. **Measure rung-4 fixes as between-arm deltas at fixed parity; never as distance-to-human-band.** Two mechanisms down; breather ablation live |
 | 5. Match outcomes | protocol written; judging deferred by design | its only eye (steals_total, 0.964) measures the steal-volume gap stage 2 exists to close — so rung-5's blocker and stage-2's first number are THE SAME WORK. Judging waits; the work does not |
 | 6. Live vs owner | **STRUCK** | Rule 22: the recorded corpus is the complete bar |
 
@@ -247,3 +482,10 @@ was struck. Nothing underneath rung 1 has moved.
 - s02 (5v0 smap05): no-opposition film must stay flawless.
 - s01 (2v2 lmctf03): fixed matchup must hold its band.
 - s09 (ctrl lmctf01): frozen legacy config, the only control arm.
+
+2026-08-12 spectator console spam (filed, unfixed): a live spectator sees
+S_RegisterSexedSound "non-player entity 0" repeated for bot jump/pain voice
+sounds. Server emission sites are correctly attributed (stock jump block,
+no world-entity voice sends anywhere in game or slipgate code) -- the
+misclassification is client-side for spectator-observed bots. Cosmetic;
+sounds play; needs an offline spectator-client trace.

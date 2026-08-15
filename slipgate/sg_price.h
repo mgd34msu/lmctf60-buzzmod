@@ -1,0 +1,18 @@
+/*
+ * sg_price.h -- the pricing core's face, and the frame state the think
+ * loop arms before every descent.
+ */
+#ifndef SG_PRICE_H
+#define SG_PRICE_H
+
+extern qboolean		sg_route_pure_now;
+
+float	Rune_RoleFactor(int role, int entnum);
+float	Detour_Value(sg_think_t *tc, int seed, int fc,
+	             const int *goal_field, float wv);
+float	Mega_Detour(sg_think_t *tc, int seed, const int *goal_field,
+	            int *pad_out);
+float	Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
+	           const int *goal, const int *support, const int *intercept);
+
+#endif

@@ -9,6 +9,8 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_persona.h"
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_hooks.h"
 
 /* ------------------------------------------------------------------ table
  *
@@ -116,7 +118,7 @@ static const sg_persona_t	*persona_of[SG_PERSONA_MAXCLIENTS];
 static cvar_t				*sg_persona;
 
 /*
- * The cvar POINTER is resolved once -- gi.cvar walks the engine's list on
+ * The cvar POINTER is resolved once -- sg_host.cvar walks the engine's list on
  * every call and this is read several times per engaged bot per frame --
  * while the VALUE is read fresh, so flipping sg_persona mid-match takes
  * effect on the next frame. Same treatment sg_bot_skill gets in
@@ -125,7 +127,7 @@ static cvar_t				*sg_persona;
 static qboolean Persona_Enabled(void)
 {
 	if (!sg_persona)
-		sg_persona = gi.cvar("sg_persona", "1", 0);
+		sg_persona = sg_cv.persona;
 	return (qboolean)(sg_persona && sg_persona->value != 0.0f);
 }
 
@@ -173,7 +175,7 @@ void SG_PersonaBind(edict_t *ent, int slot)
 	 */
 	if (ent->client->pers.netname[0] &&
 	    !strstr(ent->client->pers.netname, persona_of[ci]->name))
-		gi.dprintf("slipgate: PERSONA MISMATCH slot %d is \"%s\" but row "
+		sg_host.dprint("slipgate: PERSONA MISMATCH slot %d is \"%s\" but row "
 		           "%d is \"%s\" -- sg_personas[] and sg_names[] have "
 		           "come out of order\n",
 		           slot, ent->client->pers.netname,
@@ -286,7 +288,7 @@ float SG_PersonaBanterFreq(edict_t *ent)
  */
 float SG_PersonaBanterFreqSlot(int cl)
 {
-	if (!gi.cvar("sg_persona", "1", 0)->value)
+	if (!sg_cv.persona->value)
 		return 0.0f;
 	/* cl is a CLIENT index; personas are bound per-client at join
 	 * (persona_of), and roster slot != client slot -- the spawn scan

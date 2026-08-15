@@ -16,6 +16,23 @@
 //   - every sqlite3_stmt is finalised and every handle closed on all paths.
 //   - writes run inside one transaction, so a crash mid-save cannot leave a
 //     player half-written.
+//
+// This file intentionally does NOT use ctf_sqlite_core.h's db_stmt()
+// prepared-statement cache, unlike ctf_sqlite_unidb.c. That cache is safe
+// only when the cache variable and the sqlite3 connection it was prepared
+// against live for the same span of time -- see the banner on db_stmt() in
+// ctf_sqlite_core.h. Here they don't: CTF_LoadPlayer and CTF_SavePlayer
+// each open their OWN sqlite3 handle at the top of the call (a different
+// player's file, or the same player's file reopened later) and close it
+// before returning. A `static sqlite3_stmt *` cached across calls would
+// hold a handle bound to whichever connection was open the first time
+// through -- every later call, for every other player, would hand back a
+// statement pointing at a database file sqlite3_close() already tore down.
+// Every sqlite3_stmt in this file is also used exactly once per call (one
+// row per table, no batch loop), so there is no reset-per-row loop for
+// caching to speed up within a single call either -- the only place this
+// pattern could possibly pay off is across calls, which is precisely the
+// case that is unsafe here. Plain prepare-then-finalize stays correct.
 
 #include <string.h>
 #include <stdio.h>
@@ -23,6 +40,7 @@
 #include "g_local.h"
 #include "sqlite3.h"
 #include "ctf_file_io.h"
+#include "ctf_sqlite_core.h"
 #include "ctf_sqlite_player.h"
 
 #define SQL_CREATE_USERDATA \
@@ -57,39 +75,6 @@
 #define SQL_UPDATE_CDATA \
 	"UPDATE character_data SET adminlevel=?;"
 
-static void ctf_sql_error(sqlite3 *db, const char *what)
-{
-	gi.dprintf("sqlite error %d: %s (%s)\n",
-		db ? sqlite3_errcode(db) : -1,
-		db ? sqlite3_errmsg(db) : "no handle",
-		what);
-}
-
-// Runs a statement that returns no rows. Returns true on success.
-static qboolean ctf_sql_exec(sqlite3 *db, const char *sql)
-{
-	char *err = NULL;
-
-	if (sqlite3_exec(db, sql, NULL, NULL, &err) != SQLITE_OK)
-	{
-		gi.dprintf("sqlite error: %s (%s)\n", err ? err : "unknown", sql);
-		sqlite3_free(err);
-		return false;
-	}
-
-	return true;
-}
-
-static qboolean BeginTransaction(sqlite3 *db)
-{
-	return ctf_sql_exec(db, "BEGIN TRANSACTION;");
-}
-
-static qboolean CommitTransaction(sqlite3 *db)
-{
-	return ctf_sql_exec(db, "COMMIT;");
-}
-
 // Copies a text column into a fixed field without ever running past its end.
 static void ctf_copy_text(char *dest, size_t destsize, const unsigned char *src)
 {
@@ -123,7 +108,7 @@ static qboolean ctf_create_tables(sqlite3 *db)
 
 	for (i = 0; schema[i]; i++)
 	{
-		if (!ctf_sql_exec(db, schema[i]))
+		if (!db_exec(db, schema[i]))
 			return false;
 	}
 
@@ -148,7 +133,7 @@ static qboolean ctf_ensure_base_rows(sqlite3 *db)
 
 	if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM userdata", -1, &res, NULL) != SQLITE_OK)
 	{
-		ctf_sql_error(db, "base row probe");
+		db_error(db, "base row probe");
 		return false;
 	}
 	if (sqlite3_step(res) == SQLITE_ROW)
@@ -162,7 +147,7 @@ static qboolean ctf_ensure_base_rows(sqlite3 *db)
 
 	for (i = 0; bases[i]; i++)
 	{
-		if (!ctf_sql_exec(db, bases[i]))
+		if (!db_exec(db, bases[i]))
 			return false;
 	}
 
@@ -171,42 +156,6 @@ static qboolean ctf_ensure_base_rows(sqlite3 *db)
 }
 
 // True when the database already carries our schema.
-// Adds a column if the table does not already have it, so a per-player file
-// written by an older build keeps working. Names here are compile-time
-// constants, never player input.
-static void ctf_ensure_column(sqlite3* db, const char* table, const char* column)
-{
-	sqlite3_stmt* res = NULL;
-	char sql[256];
-	qboolean found = false;
-
-	if (!db)
-		return;
-
-	snprintf(sql, sizeof(sql), "PRAGMA table_info(%s);", table);
-	if (sqlite3_prepare_v2(db, sql, -1, &res, NULL) != SQLITE_OK)
-		return;
-
-	while (sqlite3_step(res) == SQLITE_ROW)
-	{
-		const unsigned char* name = sqlite3_column_text(res, 1);
-
-		if (name && strcmp((const char*)name, column) == 0)
-		{
-			found = true;
-			break;
-		}
-	}
-	sqlite3_finalize(res);
-
-	if (found)
-		return;
-
-	snprintf(sql, sizeof(sql),
-		"ALTER TABLE %s ADD COLUMN %s INTEGER DEFAULT 0;", table, column);
-	sqlite3_exec(db, sql, NULL, NULL, NULL);
-}
-
 static qboolean ctf_db_has_schema(sqlite3 *db)
 {
 	sqlite3_stmt *res = NULL;
@@ -216,7 +165,7 @@ static qboolean ctf_db_has_schema(sqlite3 *db)
 			"SELECT name FROM sqlite_master WHERE type='table' AND name='userdata';",
 			-1, &res, NULL) != SQLITE_OK)
 	{
-		ctf_sql_error(db, "schema probe");
+		db_error(db, "schema probe");
 		return false;
 	}
 
@@ -239,7 +188,7 @@ qboolean CTF_LoadPlayer(edict_t *player, const char *path)
 
 	// SQLITE_OPEN_READWRITE without _CREATE: a missing file is not an error
 	// here, it just means we have never seen this player before.
-	if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK)
+	if (!db_open_tuned(path, SQLITE_OPEN_READWRITE, &db))
 	{
 		gi.dprintf("INFO: Player %s does not exist in the database.\n",
 			player->client->pers.netname);
@@ -256,30 +205,30 @@ qboolean CTF_LoadPlayer(edict_t *player, const char *path)
 	}
 
 	// files written before capture streaks and sweeps existed
-	ctf_ensure_column(db, "ctf_stats", "max_cap_streak");
-	ctf_ensure_column(db, "ctf_stats", "sweeps");
+	db_ensure_column(db, "ctf_stats", "max_cap_streak", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "sweeps", "INTEGER");
 
-	ctf_ensure_column(db, "game_stats", "score");
-	ctf_ensure_column(db, "game_stats", "deaths");
-	ctf_ensure_column(db, "game_stats", "damage_given");
-	ctf_ensure_column(db, "game_stats", "damage_received");
-	ctf_ensure_column(db, "game_stats", "rail_shot");
-	ctf_ensure_column(db, "game_stats", "rail_hit");
-	ctf_ensure_column(db, "game_stats", "rail_kill");
-	ctf_ensure_column(db, "game_stats", "ping_total");
-	ctf_ensure_column(db, "game_stats", "ping_samples");
-	ctf_ensure_column(db, "game_stats", "item_quad");
-	ctf_ensure_column(db, "game_stats", "item_shield");
-	ctf_ensure_column(db, "game_stats", "item_armor");
-	ctf_ensure_column(db, "game_stats", "item_mega");
-	ctf_ensure_column(db, "game_stats", "rune_strength");
-	ctf_ensure_column(db, "game_stats", "rune_haste");
-	ctf_ensure_column(db, "game_stats", "rune_regen");
-	ctf_ensure_column(db, "game_stats", "rune_resist");
-	ctf_ensure_column(db, "ctf_stats", "flag_drops");
-	ctf_ensure_column(db, "ctf_stats", "defense_base");
-	ctf_ensure_column(db, "ctf_stats", "defense_flag");
-	ctf_ensure_column(db, "ctf_stats", "defense_carrier");
+	db_ensure_column(db, "game_stats", "score", "INTEGER");
+	db_ensure_column(db, "game_stats", "deaths", "INTEGER");
+	db_ensure_column(db, "game_stats", "damage_given", "INTEGER");
+	db_ensure_column(db, "game_stats", "damage_received", "INTEGER");
+	db_ensure_column(db, "game_stats", "rail_shot", "INTEGER");
+	db_ensure_column(db, "game_stats", "rail_hit", "INTEGER");
+	db_ensure_column(db, "game_stats", "rail_kill", "INTEGER");
+	db_ensure_column(db, "game_stats", "ping_total", "INTEGER");
+	db_ensure_column(db, "game_stats", "ping_samples", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_quad", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_shield", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_armor", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_mega", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_strength", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_haste", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_regen", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_resist", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "flag_drops", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "defense_base", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "defense_flag", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "defense_carrier", "INTEGER");
 
 	if (sqlite3_prepare_v2(db, "SELECT * FROM userdata", -1, &res, NULL) == SQLITE_OK &&
 		sqlite3_step(res) == SQLITE_ROW)
@@ -367,10 +316,9 @@ qboolean CTF_SavePlayer(edict_t *player, const char *path, const char *playernam
 
 	ps = &player->client->ctfstats;
 
-	if (sqlite3_open_v2(path, &db,
-			SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL) != SQLITE_OK)
+	if (!db_open_tuned(path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, &db))
 	{
-		ctf_sql_error(db, path);
+		db_error(db, path);
 		sqlite3_close(db);
 		return false;
 	}
@@ -381,32 +329,32 @@ qboolean CTF_SavePlayer(edict_t *player, const char *path, const char *playernam
 		return false;
 	}
 
-	ctf_ensure_column(db, "ctf_stats", "max_cap_streak");
-	ctf_ensure_column(db, "ctf_stats", "sweeps");
+	db_ensure_column(db, "ctf_stats", "max_cap_streak", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "sweeps", "INTEGER");
 
-	ctf_ensure_column(db, "game_stats", "score");
-	ctf_ensure_column(db, "game_stats", "deaths");
-	ctf_ensure_column(db, "game_stats", "damage_given");
-	ctf_ensure_column(db, "game_stats", "damage_received");
-	ctf_ensure_column(db, "game_stats", "rail_shot");
-	ctf_ensure_column(db, "game_stats", "rail_hit");
-	ctf_ensure_column(db, "game_stats", "rail_kill");
-	ctf_ensure_column(db, "game_stats", "ping_total");
-	ctf_ensure_column(db, "game_stats", "ping_samples");
-	ctf_ensure_column(db, "game_stats", "item_quad");
-	ctf_ensure_column(db, "game_stats", "item_shield");
-	ctf_ensure_column(db, "game_stats", "item_armor");
-	ctf_ensure_column(db, "game_stats", "item_mega");
-	ctf_ensure_column(db, "game_stats", "rune_strength");
-	ctf_ensure_column(db, "game_stats", "rune_haste");
-	ctf_ensure_column(db, "game_stats", "rune_regen");
-	ctf_ensure_column(db, "game_stats", "rune_resist");
-	ctf_ensure_column(db, "ctf_stats", "flag_drops");
-	ctf_ensure_column(db, "ctf_stats", "defense_base");
-	ctf_ensure_column(db, "ctf_stats", "defense_flag");
-	ctf_ensure_column(db, "ctf_stats", "defense_carrier");
+	db_ensure_column(db, "game_stats", "score", "INTEGER");
+	db_ensure_column(db, "game_stats", "deaths", "INTEGER");
+	db_ensure_column(db, "game_stats", "damage_given", "INTEGER");
+	db_ensure_column(db, "game_stats", "damage_received", "INTEGER");
+	db_ensure_column(db, "game_stats", "rail_shot", "INTEGER");
+	db_ensure_column(db, "game_stats", "rail_hit", "INTEGER");
+	db_ensure_column(db, "game_stats", "rail_kill", "INTEGER");
+	db_ensure_column(db, "game_stats", "ping_total", "INTEGER");
+	db_ensure_column(db, "game_stats", "ping_samples", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_quad", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_shield", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_armor", "INTEGER");
+	db_ensure_column(db, "game_stats", "item_mega", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_strength", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_haste", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_regen", "INTEGER");
+	db_ensure_column(db, "game_stats", "rune_resist", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "flag_drops", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "defense_base", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "defense_flag", "INTEGER");
+	db_ensure_column(db, "ctf_stats", "defense_carrier", "INTEGER");
 
-	if (!BeginTransaction(db))
+	if (!db_begin(db))
 	{
 		sqlite3_close(db);
 		return false;
@@ -479,13 +427,13 @@ qboolean CTF_SavePlayer(edict_t *player, const char *path, const char *playernam
 	if (sqlite3_step(res) != SQLITE_DONE) goto done;
 	sqlite3_finalize(res); res = NULL;
 
-	ok = CommitTransaction(db);
+	ok = db_commit(db);
 
 done:
 	if (!ok)
 	{
-		ctf_sql_error(db, path);
-		ctf_sql_exec(db, "ROLLBACK;");
+		db_error(db, path);
+		db_rollback(db);
 	}
 	if (res)
 		sqlite3_finalize(res);

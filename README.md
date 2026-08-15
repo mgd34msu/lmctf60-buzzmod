@@ -41,7 +41,8 @@ escape runs, escorts that screen the carrier, and defense that guards
 sightlines instead of standing on the flag.
 
 The bots navigate on a per-map graph proven by actual physics runs (runs,
-jumps, drops, grapple swings, rocket jumps), price their decisions on a live
+jumps, drops, swimming, grapple swings, lifts, teleports, and declared door
+traversals), price their decisions on a live
 cost surface (items, danger, duel range, cover, teammate support), and share
 one team-wide belief of where enemies and flags are. Movement doctrine and
 combat habits are mined from a large corpus of demos from the game's
@@ -88,6 +89,15 @@ Players:
 | `lifetime [name]` | career totals |
 | `rank [stat] [n]` | leaderboard |
 | `statsall` | everyone, this level |
+| `season` | top 10 of the last 30 days (shared database only) |
+| `records` | all-time server records (shared database only) |
+| `activity` | busiest players of the last 7 days (shared database only) |
+| `momentum` | biggest recent movers in capture rate (shared database only) |
+| `card [name]` | one player's career card (shared database only) |
+| `vs <name>` | you against them, only counting games you both played (shared database only) |
+
+A match summary — final score, top capper, top defender, top killer, accuracy
+leader — prints to everyone at the end of each game.
 
 Admin, `sv statsdb`:
 
@@ -118,6 +128,11 @@ New:
 |-|-|-|
 | `ctf_statsdb` | 0 | 0 off, 1 per-player files, 2 shared database |
 | `ctf_switch_penalty` | 0 | 1 clears your score for joining the bigger winning team |
+| `ctf_hitsound` | 1 | hit confirmation: 0 off, 1 flag-carrier hits only, 2 all hits |
+| `ctf_killsound` | 2 | frag bell: 0 off, 1 flag-carrier frags only, 2 all frags |
+
+Both sounds ring from the player the event happened to, and the attacker
+always hears a private confirmation copy no matter the distance.
 
 Upstream cvars are unchanged: `dmflags` `maxclients` `ctfflags` `refset`
 

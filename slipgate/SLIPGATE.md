@@ -19,7 +19,9 @@ demonstrated by simulation before it was written down.
 - Links: (entry envelope: position, speed band, heading cone) + action
   (run / jump / hook-at-anchor / drop / swim) -> (exit state) + cost in real
   seconds + provenance tag: PROVEN (simulated), OBSERVED (a player did it),
-  ADJUSTED (cost corrected by experience).
+  ADJUSTED (cost corrected by experience). Dense DROP, HOOK, and SWIM links
+  are generated and admitted only as PROVEN; observation or cost learning
+  cannot mint one of those controllers.
 - The rune is the map's memory. Learned routes append; observed costs
   overwrite; deaths accumulate into a persisted danger layer.
 
@@ -66,8 +68,9 @@ Every layer above reads only what CACO grants. No g_edicts omniscience.
   descends their route-home field). Interception is our reachable set meeting
   their likely set — ambush where our arrival state beats theirs.
 - Learning: completed traversals adjust rune link costs (measurement);
-  demonstrated new links append as OBSERVED (memorisation); deaths shade the
-  danger layer (statistics); match outcomes nudge the global weight tables
+  demonstrated non-dense links may append as OBSERVED (memorisation), never
+  creating a DROP, HOOK, or SWIM proof; deaths shade the danger layer
+  (statistics); match outcomes nudge the global weight tables
   (the one genuinely fitted component, dozens of named floats, shared across
   all maps).
 

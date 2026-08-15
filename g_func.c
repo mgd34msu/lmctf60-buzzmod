@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "slipgate/sg_local.h"
 
 /*
 =========================================================
@@ -959,6 +960,11 @@ void door_use (edict_t *self, edict_t *other, edict_t *activator)
 		ent->touch = NULL;
 		door_go_up (ent, activator);
 	}
+	/* Preserve the accepted trigger identity through the synchronous use
+	 * chain.  RL_DOOR consumes this only after revalidating source, activator,
+	 * full-sweep clearance and direct target membership; every ordinary door
+	 * use is therefore a cheap no-op here. */
+	SG_NoteDoorActivation(other, self, activator);
 }
 
 void Touch_DoorTrigger (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *surf)
@@ -972,11 +978,17 @@ void Touch_DoorTrigger (edict_t *self, edict_t *other, cplane_t *plane, csurface
 	if ((self->owner->spawnflags & DOOR_NOMONSTER) && (other->svflags & SVF_MONSTER))
 		return;
 
+	/* Match Touch_Multi's declared-controller observation point: contact is
+	 * evidence even while this one-second auto-trigger debounce is active. */
+	SG_NoteDoorTriggerTouch(self, other);
 	if (level.time < self->touch_debounce_time)
 		return;
 	self->touch_debounce_time = level.time + 1.0;
 
-	door_use (self->owner, other, other);
+	/* Preserve the physical trigger identity through door_use.  Its ordinary
+	 * behavior ignores `other`; RL_DOOR revalidates this pointer, the owner
+	 * team, and the activator before treating the callback as proof. */
+	door_use (self->owner, self, other);
 }
 
 void Think_CalcMoveSpeed (edict_t *self)
@@ -2030,4 +2042,3 @@ void SP_func_killbox (edict_t *ent)
 	ent->use = use_killbox;
 	ent->svflags = SVF_NOCLIENT;
 }
-

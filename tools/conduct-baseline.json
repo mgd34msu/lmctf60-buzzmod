@@ -1,0 +1,30 @@
+{
+  "human": {
+    "demos": 94,
+    "observed_min": 2591.8,
+    "grind_spm": 3.156,
+    "revrate": 0.705,
+    "spin_spm": 0.0,
+    "defense": {
+      "stand_obs_min": 635.4,
+      "approach_pm": 9.129,
+      "steal_conv": 0.033,
+      "guard_frac": 0.247,
+      "guard2_frac": 0.048
+    }
+  },
+  "bot": {
+    "demos": 28,
+    "observed_min": 3100.0,
+    "grind_spm": 10.892,
+    "revrate": 1.368,
+    "spin_spm": 0.0102,
+    "defense": {
+      "stand_obs_min": 733.8,
+      "approach_pm": 4.684,
+      "steal_conv": 0.015,
+      "guard_frac": 0.237,
+      "guard2_frac": 0.033
+    }
+  }
+}

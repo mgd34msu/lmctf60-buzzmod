@@ -34,11 +34,44 @@
 typedef struct sg_phantom_s
 {
 	pmove_state_t	pms;
+	pmove_state_t	old_pms;       /* production snapinitial comparison state */
 	vec3_t			origin;
 	vec3_t			velocity;
 	qboolean		groundentity;
+	int				watertype;
 	int				waterlevel;
+	/* Doors are made nonsolid while a rune is generated. A proof may enter a
+	 * door's swept volume only after this exact phantom has touched a validated,
+	 * repeatable player activator. Keeping that evidence in the phantom makes it
+	 * survive the many one-command SG_OracleRunWorld calls in a rollout without
+	 * leaking between candidate links. */
+#define SG_PHANTOM_ARMED_DOORS 16
+	short			armed_door[SG_PHANTOM_ARMED_DOORS];
+	byte			armed_door_count;
+	qboolean		door_arm_overflow;
+	qboolean		door_passed;
+	int				door_wait_ms;
+	int				door_open_ms;
 } sg_phantom_t;
+
+typedef struct sg_hook_proof_s
+{
+	int		pull_ms;
+	int		release_ms;       /* first 25 ms boundary satisfying release */
+	int		settle_arrival_ms;/* first 25 ms boundary inside destination */
+	int		settle_ms;
+	byte	exit_speed;
+	pmove_state_t attach_pms; /* state after quantized outbound zero commands */
+	qboolean attach_groundentity;
+	int		attach_watertype;
+	int		attach_waterlevel;
+} sg_hook_proof_t;
+
+typedef struct sg_swim_proof_s
+{
+	int		arrival_ms;      /* shared 100 ms completion boundary */
+	byte	exit_speed;
+} sg_swim_proof_t;
 
 void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin);
 void SG_TeachFutility(int seed);
@@ -47,7 +80,73 @@ void SG_NoteDeath(edict_t *victim);
 extern vec3_t sg_caco_death_org[2];
 extern float sg_caco_death_time[2];
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
-void SG_OracleHookStep(sg_phantom_t *ph, vec3_t anchor);
+qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps);
+/* Phase-independent exclusion for topology and exposure traces.  It models
+ * the full swept volume of canonical func_rotating brushes, not their
+ * instantaneous phase.  It deliberately does not make Pmove/action proofs
+ * phase-independent. */
+qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
+	const vec3_t hull_mins, const vec3_t hull_maxs, const vec3_t end,
+	int contentmask);
+int SG_OracleHookStep(sg_phantom_t *ph, const vec3_t bite,
+	const vec3_t view_angles, int hand);
+qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
+	const vec3_t destination, const vec3_t view_angles, int hand,
+	int flight_ms, int settle_limit_ms, float old_frame_z,
+	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only);
+qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite);
+qboolean SG_OracleSwimTraverse(sg_phantom_t *ph, const vec3_t destination,
+	qboolean destination_water, float old_frame_z, sg_swim_proof_t *proof,
+	edict_t *passent, qboolean world_only);
+qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
+	const vec3_t anchor, edict_t *pad, float old_frame_z,
+	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
+qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
+	edict_t *expected, int action, int *arrival_ms);
+qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
+	edict_t *support, int *arrival_ms);
+/* Exact repeatable-door declaration. The resolver accepts only a unique,
+ * safe trigger whose anchor/source still match the generated contract. One
+ * trigger may own several independent door teams; generation temporarily
+ * links the whole set at STATE_TOP before replaying the live direct egress. */
+edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source);
+qboolean SG_DeclaredDoorActivatorSafe(edict_t *trigger);
+int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
+	int capacity);
+int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger);
+qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin);
+qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
+	const vec3_t to);
+qboolean SG_DeclaredDoorAtTop(edict_t *trigger);
+qboolean SG_DeclaredDoorAtTopFor(edict_t *trigger, int window_ms);
+qboolean SG_DeclaredDoorHoldOpen(edict_t *trigger, int lease_ms);
+int SG_DeclaredDoorContractCost(edict_t *trigger, int approach_ms,
+	int touch_ms, int egress_ms);
+qboolean SG_DeclaredDoorTouchMatches(edict_t *trigger,
+	const vec3_t activator_origin);
+qboolean SG_DeclaredDoorActivationMatches(edict_t *trigger,
+	edict_t *door_master, const vec3_t activator_origin);
+qboolean SG_DeclaredDoorEquivalentTouch(edict_t *expected,
+	edict_t *actual, const vec3_t activator_origin);
+qboolean SG_DeclaredDoorEquivalentActivation(edict_t *expected,
+	edict_t *actual, edict_t *door_master,
+	const vec3_t activator_origin);
+qboolean SG_DeclaredDoorSameSet(edict_t *first, edict_t *second);
+qboolean SG_DeclaredDoorApproachSourceClear(edict_t *trigger,
+	const vec3_t origin);
+qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
+	const usercmd_t *cmd);
+qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
+	edict_t *trigger, int *arrival_ms);
+qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
+	const vec3_t wait_point, edict_t *trigger, int *arrival_ms,
+	int *touch_ms);
+qboolean SG_OracleDeclaredDoorEgress(const vec3_t source,
+	const vec3_t target, edict_t *trigger, edict_t *passent,
+	int *arrival_ms);
+qboolean SG_OracleValidateDeclaredDoorLink(const vec3_t source,
+	const vec3_t anchor, const vec3_t target, edict_t *trigger,
+	int stored_cost_ms);
 
 /* -------------------------------------------------------------------- caco */
 
@@ -71,7 +170,10 @@ typedef struct
 
 typedef struct
 {
-	sg_belief_flag_t	flag[2];            /* [0] red flag, [1] blue flag */
+	/* [believing team][flag colour]. Home/astray is HUD knowledge and is
+	 * mirrored into both rows; where_seed/seen_time are earned by that team's
+	 * own eyes. A red sighting must never seed blue's recovery field. */
+	sg_belief_flag_t	flag[2][2];
 	sg_belief_carrier_t	carrier[2];         /* our carrier, per team-1 */
 	sg_belief_carrier_t	enemy_carrier[2];   /* who has team N+1's flag */
 } sg_team_belief_t;
@@ -106,6 +208,7 @@ void Caco_See(rune_t *r, edict_t *viewer);      /* one bot's eyes, per frame */
 void Caco_HumanEyes(rune_t *r, int team);       /* what human teammates see */
 void Caco_Frame(rune_t *r);                     /* shared HUD scan + aging */
 void Caco_Reset(void);
+void Caco_ResetClient(edict_t *client);
 
 /*
  * The damage ring: the third sense, after the eye and the ear.
@@ -151,6 +254,11 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
  * `window` seconds. Fills a unit vector pointing back down the incoming line.
  * False leaves out_from untouched. */
 qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from);
+
+/* has anything landed on this body since `since`? Reads the same damage
+ * ring: the spawn beat and the early-return errand both need "did the
+ * world just object" and neither needs a sense of its own. */
+qboolean Beat_HurtSince(edict_t *e, float since);
 
 /* ------------------------------------------------------------ the rail rhythm
  *
@@ -273,7 +381,7 @@ typedef struct
 	int		red_flag_seed, blue_flag_seed;
 
 	int		*to_red_flag, *to_blue_flag;        /* stands (capture points) */
-	int		*to_red_flag_now, *to_blue_flag_now;/* where the flag IS, per belief */
+	int		*to_flag_now[2][2];                 /* [believing team][flag colour] */
 	int		*item[SG_FIELD_CLASSES];
 	unsigned item_sig[SG_FIELD_CLASSES];
 	int		*our_carrier[2];                    /* support field, per team-1 */
@@ -313,7 +421,30 @@ typedef struct
 
 extern sg_fields_t sg_fields;
 
-qboolean	Fields_Setup(rune_t *r);
+/*
+ * Candidate-only inputs consumed while the graph fields are constructed.
+ * The DPO order is the v3 wire order and is deliberately named here so the
+ * loader cannot silently transpose teams or post/intercept semantics:
+ * post red, post blue, intercept red, intercept blue.
+ *
+ * A NULL setup object or NULL plane is neutral.  The pointed-to storage only
+ * has to remain alive for Fields_Setup; this structure does not publish it.
+ */
+typedef enum sg_dpo_plane_e
+{
+	SG_DPO_POST_RED = 0,
+	SG_DPO_POST_BLUE,
+	SG_DPO_INTERCEPT_RED,
+	SG_DPO_INTERCEPT_BLUE,
+	SG_DPO_PLANE_COUNT
+} sg_dpo_plane_t;
+
+typedef struct sg_field_setup_inputs_s
+{
+	const unsigned char	*dpo[SG_DPO_PLANE_COUNT];
+} sg_field_setup_inputs_t;
+
+qboolean	Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs);
 void		Fields_Refresh(rune_t *r);
 /* the one place the sg_megaworth cvar is read, so pricing, flooding and the
  * debug line can never disagree about whether the feature is on */
@@ -353,6 +484,11 @@ typedef struct
 } sg_weights_t;
 
 qboolean	SG_OwnsBot(edict_t *ent);
+void		SG_NoteDoorTriggerTouch(edict_t *source, edict_t *activator);
+void		SG_NoteDoorActivation(edict_t *source, edict_t *door_master,
+							  edict_t *activator);
+qboolean	SG_RetireBotForClient(edict_t *ent);
+void		SG_DisownBot(edict_t *ent);
 qboolean	SG_AddBot(void);
 qboolean	SG_AddBotTeam(int teamnum);
 int			SG_RemoveBots(void);
@@ -372,11 +508,15 @@ void		SG_WeightsReload(void);             /* re-read the global weights file and
  */
 float		SG_TiltCaution(edict_t *ent);
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
+void		Botfill_Reset(void);    /* clear level-time cadence and hysteresis */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
+void		SG_DangerCheckpoint(const char *event); /* final dirty DNG3 save */
+void		SG_DangerPersistenceReset(void); /* release lease, forget model */
 
 rune_t		*Rune_Load(const char *mapname);
 int			Rune_NearestSeed(rune_t *r, vec3_t p);
-rune_t		*SG_Rune(void);         /* the loaded rune, NULL before setup --
+rune_t		*SG_Rune(void);
+const char	*SG_RuneMapName(void);         /* the loaded rune, NULL before setup --
                                      * combat reads reachability from it */
 
 /* ------------------------------------------------ caco: powerup and rune
@@ -471,6 +611,13 @@ qboolean	Caco_ItemBelievedUpFor(int team, edict_t *e);
 int			Caco_ItemBeliefSeed(rune_t *r, edict_t *e);
 unsigned	Caco_ItemBeliefSig(void);   /* mix into the class rebuild test */
 
+/* the mega entity cache (sg_caco.c): entity numbers for every
+ * item_health_mega on the map, found once at level setup instead of on
+ * every call. Returns the count and points *out_ents at the array; the
+ * caller still applies its own inuse/belief filtering per entity, exactly
+ * as it did when it found them by walking globals.num_edicts itself. */
+int			SG_MegaEntities(const int **out_ents);
+
 /* ---------------------------------------------- caco: carrier projection
  *
  * An aged belief about an enemy carrier is not a point, it is a set: every
@@ -492,4 +639,3 @@ typedef struct
 } sg_proj_t;
 
 extern sg_proj_t sg_caco_proj[2];
-unsigned char *SG_DefPlane(int post, int team1);
