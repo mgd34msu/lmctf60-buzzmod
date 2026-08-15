@@ -13,7 +13,9 @@
 typedef union sg_danger_lease_u
 {
 	unsigned char opaque[SG_DANGER_LEASE_OPAQUE_BYTES];
-	max_align_t alignment;
+	/* long double keeps this caller-owned storage aligned for the private
+	 * lease state without requiring C11's max_align_t on legacy MSVC. */
+	long double alignment;
 } sg_danger_lease_t;
 
 #define SG_DANGER_LEASE_INITIALIZER { { 0 } }

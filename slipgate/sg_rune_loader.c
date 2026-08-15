@@ -475,10 +475,15 @@ sg_rune_load_result_t SG_RuneV3Inspect(const unsigned char *snapshot,
 			snapshot_size - SG_RUNE_V3_HEADER_BYTES);
 	if (diagnostic == RLW_OK)
 		diagnostic = SG_RuneV3PayloadCRCFinish(crc_state, &payload_crc);
-	if (diagnostic != RLW_OK || payload_crc != header.payload_crc32)
+	if (diagnostic != RLW_OK)
 	{
-		result.diagnostic = diagnostic != RLW_OK
-			? diagnostic : RLW_BAD_PAYLOAD_CRC;
+		result.diagnostic = diagnostic;
+		result.stage = SG_RUNE_LOAD_STAGE_PAYLOAD_CRC;
+		return result;
+	}
+	if (payload_crc != header.payload_crc32)
+	{
+		result.diagnostic = RLW_BAD_PAYLOAD_CRC;
 		result.stage = SG_RUNE_LOAD_STAGE_PAYLOAD_CRC;
 		return result;
 	}

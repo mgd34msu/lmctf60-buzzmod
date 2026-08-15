@@ -957,7 +957,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	char		*com_token;
 	int			i;
 	sg_identity_status_t identity_status;
-	sg_level_identity_t identity;
+	sg_level_identity_t identity = { 0 };
 
 	/* No transition failure may leave the outgoing map's authority visible. */
 	SG_LevelIdentityReset();
