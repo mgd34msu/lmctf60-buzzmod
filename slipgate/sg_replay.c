@@ -102,7 +102,7 @@ static void ReplayCommandClear(usercmd_t *command)
 	command->msec = SG_REPLAY_STEP_MS;
 }
 
-static qboolean ReplayFixedViewCommand(const sg_replay_pose_t *pose,
+qboolean SG_HookReplayFixedViewCommand(const sg_replay_pose_t *pose,
 	const vec3_t view_angles, usercmd_t *command)
 {
 	if (!ReplayPoseValid(pose) || !ReplayHookViewValid(view_angles) || !command)
@@ -892,7 +892,8 @@ sg_replay_status_t SG_HookReplayPreStep(sg_hook_replay_state_t *state,
 	{
 	case SG_HOOK_REPLAY_FLIGHT:
 	case SG_HOOK_REPLAY_ATTACH_FRAME:
-		if (!ReplayFixedViewCommand(pose, state->spec.view_angles, command))
+		if (!SG_HookReplayFixedViewCommand(pose, state->spec.view_angles,
+		    command))
 			return ReplayFail(&state->progress,
 			                  SG_REPLAY_REASON_INVALID_CONTROL);
 		break;
@@ -906,7 +907,8 @@ sg_replay_status_t SG_HookReplayPreStep(sg_hook_replay_state_t *state,
 		if (state->release_requested && !state->release_applied)
 			return ReplayFail(&state->progress,
 			                  SG_REPLAY_REASON_HOOK_EVENT_ORDER);
-		if (!ReplayFixedViewCommand(pose, state->spec.view_angles, command))
+		if (!SG_HookReplayFixedViewCommand(pose, state->spec.view_angles,
+		    command))
 			return ReplayFail(&state->progress,
 			                  SG_REPLAY_REASON_INVALID_CONTROL);
 		break;

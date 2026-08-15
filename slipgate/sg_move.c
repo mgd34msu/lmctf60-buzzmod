@@ -18,6 +18,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_drop_live.h"
+#include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
@@ -3455,6 +3456,12 @@ static void Hook_Shelve(sg_bot_t *bot, float seconds)
 	SG_TimerArm(&bot->bl_until[oldest], seconds);
 }
 
+static void Hook_LiveClearFinalGuard(sg_bot_t *bot)
+{
+	if (bot)
+		SG_HookLiveCommandGuardClear(&bot->hook_final_guard);
+}
+
 static void Hook_GraphFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
 {
 	if (e && e->client && e->client->hookstate != 0)
@@ -3463,6 +3470,12 @@ static void Hook_GraphFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
 	bot->commit_link = -1;
 	bot->hook_phase = 0;
 	bot->hook_link = -1;
+	SG_HookLiveDeactivate(&bot->hook_replay, &bot->hook_replay_active,
+	    &bot->hook_replay_link);
+	Hook_LiveClearFinalGuard(bot);
+	bot->hook_entity = NULL;
+	bot->hook_legacy_settle = false;
+	bot->hook_legacy_arrived = false;
 	bot->hook_attached_validated = false;
 	bot->hook_pull_ms = 0;
 	bot->hook_settle_ms = 0;
@@ -4001,6 +4014,586 @@ static void Swim_ProofFail(edict_t *e, sg_bot_t *bot, int link_index,
 		           e->client->pers.netname, link_index);
 }
 
+static void Hook_LivePose(const edict_t *e, sg_replay_pose_t *pose)
+{
+	SG_DropLivePose(pose, e && e->client ? &e->client->ps.pmove : NULL,
+	    e ? e->s.origin : NULL, e ? e->velocity : NULL,
+	    e && e->groundentity != NULL, e ? e->watertype : 0,
+	    e ? e->waterlevel : 0);
+}
+
+/* A live graph-hook owner is the graph link plus the exact bolt created by
+ * Cmd_Hook_f.  Once release has aborted the bolt, phase 3 deliberately owns
+ * the no-bolt settlement; no recycled client hook may substitute for it. */
+static qboolean Hook_LiveIdentityCurrent(const edict_t *e,
+	const sg_bot_t *bot)
+{
+	if (!e || !e->client || !bot || !SG_Rune() || !bot->hook_replay_active ||
+	    bot->hook_replay_link < 0 || bot->hook_link != bot->hook_replay_link ||
+	    bot->commit_link != bot->hook_replay_link ||
+	    bot->hook_replay_link >= SG_Rune()->hdr.num_links ||
+	    SG_Rune()->links[bot->hook_replay_link].action != RL_HOOK)
+		return false;
+	if (bot->hook_phase == 2)
+		return bot->hook_entity != NULL && e->client->hook == bot->hook_entity;
+	return bot->hook_phase == 3 && e->client->hookstate == 0 &&
+	       e->client->hook == NULL && bot->hook_entity != NULL;
+}
+
+static void Hook_LiveObservation(const edict_t *e, const sg_bot_t *bot,
+	qboolean sample_settlement_contact, sg_replay_observation_t *observation)
+{
+	vec3_t view, forward, right, muzzle, bite, velocity;
+
+	memset(observation, 0, sizeof(*observation));
+	if (!e || !e->client || !bot)
+		return;
+	/* The old graph controller sampled its supported-destination predicate only
+	 * at its settlement decision points.  The caller also suppresses it after
+	 * its historical arrival latch, except for the final terminal check.  Do
+	 * not introduce that contact (and its support trace) during bolt flight,
+	 * attach, pull, or zero-fill substeps. */
+	if (sample_settlement_contact && bot->hook_legacy_settle)
+		observation->contact_clear = Hook_SettleArrived(e, bot);
+	if (e->client->hookstate != 2 || !e->client->hook)
+		return;
+	VectorCopy(bot->hook_view, view);
+	AngleVectors(view, forward, right, NULL);
+	CTF_HookMuzzle(e->s.origin, e->viewheight, e->client->pers.hand,
+	               forward, right, muzzle);
+	if (e->client->hook->hook_target)
+		VectorAdd(e->client->hook->hook_target->absmin,
+		          e->client->hook->hook_offset, bite);
+	else
+		VectorCopy(e->client->hook->s.origin, bite);
+	observation->hook_rope_length = CTF_HookPullVelocity(muzzle, bite, velocity);
+	observation->hook_rope_valid = observation->hook_rope_length >= 0;
+}
+
+/* The adapter callback intentionally receives no host context.  The game is
+ * single-threaded and this scoped pointer exists only around PreStep, so the
+ * independent historical controller can use the body-owned destination,
+ * fixed view, and release latch without consulting reducer phase or arrival.
+ */
+static const sg_bot_t *hook_legacy_command_bot;
+
+static qboolean Hook_LiveLegacyCommand(const sg_hook_replay_state_t *state,
+	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation,
+	usercmd_t *command)
+{
+	float dx, dy, dz, yaw;
+	const sg_bot_t *bot = hook_legacy_command_bot;
+
+	(void)state;
+	if (!bot || !pose || !observation || !command)
+		return false;
+	memset(command, 0, sizeof(*command));
+	command->msec = SG_REPLAY_STEP_MS;
+	if (bot->hook_legacy_settle &&
+	    (bot->hook_legacy_arrived || observation->contact_clear))
+		return true; /* literal post-arrival zero fill */
+	if (bot->hook_legacy_settle)
+	{
+		dx = bot->hook_dest[0] - pose->origin[0];
+		dy = bot->hook_dest[1] - pose->origin[1];
+		dz = bot->hook_dest[2] - pose->origin[2];
+		if (!isfinite(dx) || !isfinite(dy) || !isfinite(dz))
+			return false;
+		yaw = atan2f(dy, dx) * 180.0f / (float)M_PI;
+		command->angles[PITCH] = -pose->pms.delta_angles[PITCH];
+		command->angles[YAW] = ANGLE2SHORT(yaw) - pose->pms.delta_angles[YAW];
+		command->angles[ROLL] = -pose->pms.delta_angles[ROLL];
+		command->forwardmove = 400;
+		return true;
+	}
+	command->angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
+	                         pose->pms.delta_angles[PITCH];
+	command->angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
+	                       pose->pms.delta_angles[YAW];
+	command->angles[ROLL] = -pose->pms.delta_angles[ROLL];
+	return true;
+}
+
+static void Hook_LiveResultLog(const edict_t *e, int link_index,
+	const char *phase, const sg_hook_live_result_t *result)
+{
+	if (!result || result->outcome == SG_HOOK_LIVE_RUNNING ||
+	    result->outcome == SG_HOOK_LIVE_ARRIVED || !sg_cv.debug->value)
+		return;
+	sg_host.dprint("HOOKREPLAY %s link=%d phase=%s adapter=%s replay=%s\n",
+	    e && e->client ? e->client->pers.netname : "?", link_index,
+	    phase ? phase : "?", SG_HookLiveFailureName(result->failure),
+	    SG_ReplayReasonName(result->replay_reason));
+}
+
+static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
+	sg_replay_reason_t reason)
+{
+	/* Preserve the legacy executor's three ownership shelves.  The reducer
+	 * reports a reason, but the historical controller chose its retry period
+	 * at the point that owned the body: launch/attach (15), pull/release (30),
+	 * or settlement (60).  A boundary liquid report is the only exception
+	 * while the bolt is still out: the old post-frame liquid interrupt was 30.
+	 * The caller handles the old *pre-frame* liquid interrupt explicitly,
+	 * because that was 30 even while phase 3 was about to settle. */
+	switch (replay_phase)
+	{
+	case SG_HOOK_REPLAY_SETTLE:
+		return 60.0f;
+	case SG_HOOK_REPLAY_WAIT_PULL:
+	case SG_HOOK_REPLAY_PULL_FRAME:
+		return 30.0f;
+	case SG_HOOK_REPLAY_FLIGHT:
+	case SG_HOOK_REPLAY_WAIT_ATTACH:
+	case SG_HOOK_REPLAY_ATTACH_FRAME:
+	default:
+		return reason == SG_REPLAY_REASON_HAZARDOUS_LIQUID ? 30.0f : 15.0f;
+	}
+}
+
+static void Hook_LiveSync(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->hook_pull_ms = bot->hook_replay.pull_ms;
+	bot->hook_settle_ms = bot->hook_replay.settle_ms;
+}
+
+static void Hook_LiveTailCommand(const sg_bot_t *bot, qboolean settlement,
+	const pmove_state_t *pms, usercmd_t *command)
+{
+	if (!command)
+		return;
+	SG_HookLiveZeroCommand(command);
+	/* A legacy pull failure still consumed the remaining substeps with zero
+	 * movement and its immutable rope view.  Settlement failures consumed
+	 * literal zero commands. */
+	if (!settlement && bot && pms)
+	{
+		command->angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
+		                         pms->delta_angles[PITCH];
+		command->angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
+		                       pms->delta_angles[YAW];
+		command->angles[ROLL] = -pms->delta_angles[ROLL];
+	}
+}
+
+/* Hook_GraphFail deliberately zeros the public clocks.  The legacy pull loop
+ * nevertheless incremented hook_pull_ms after every remaining zero-input
+ * ClientThink in that same outer frame; preserve that observable fixed-step
+ * history without giving settlement failures a clock they never had. */
+static void Hook_LiveTailAdvance(sg_bot_t *bot, qboolean pull_clock)
+{
+	if (bot && pull_clock)
+		bot->hook_pull_ms += SG_REPLAY_STEP_MS;
+}
+
+static qboolean Hook_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
+	int link_index, const char *phase, sg_hook_replay_phase_t replay_phase,
+	const sg_hook_live_result_t *result)
+{
+	Hook_LiveResultLog(e, link_index, phase, result);
+	if (!result || result->outcome == SG_HOOK_LIVE_RUNNING)
+		return false;
+	if (result->outcome == SG_HOOK_LIVE_ARRIVED)
+	{
+		/* The fourth settlement ClientThink has already completed; retain the
+		 * exact terminal 100 ms clock the legacy body left behind. */
+		Hook_LiveSync(bot);
+		bot->hookfail_streak = 0;
+		bot->commit_link = -1;
+		bot->hook_phase = 0;
+		bot->hook_link = -1;
+		Hook_LiveClearFinalGuard(bot);
+		bot->hook_entity = NULL;
+		bot->hook_legacy_settle = false;
+		bot->hook_legacy_arrived = false;
+		return true;
+	}
+	Hook_GraphFail(e, bot,
+	    Hook_LiveShelfSeconds(replay_phase, result->replay_reason));
+	return true;
+}
+
+/* The 100 ms predictor deliberately ends at an attachment acknowledgement,
+ * not at a promise that the engine has already changed hookstate.  The old
+ * graph body kept its one entry command unchanged for all four ClientThink
+ * calls while that exact outgoing bolt remained in flight.  Snapshot pose and
+ * PMove input at frame entry; the outer identity gate deliberately remains
+ * authoritative for this full frame.  An attach or lost bolt during a substep
+ * is observed at the next outer-frame gate, just as it was before the adapter
+ * existed. */
+static qboolean Hook_LiveWaitAttachFrame(sg_bot_t *bot, edict_t *e,
+	int link_index)
+{
+	int step;
+	qboolean failed = false;
+	pmove_state_t entry_pms;
+	sg_replay_pose_t entry_pose;
+	sg_replay_observation_t observation;
+
+	entry_pms = e->client->ps.pmove;
+	Hook_LivePose(e, &entry_pose);
+	entry_pose.pms = entry_pms;
+	Hook_LiveObservation(e, bot, false, &observation);
+	for (step = 0; step < SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS; step++)
+	{
+		sg_hook_live_result_t result;
+		usercmd_t command;
+
+		if (failed)
+		{
+			Hook_LiveTailCommand(bot, false, &entry_pms, &command);
+			ClientThink(e, &command);
+			continue;
+		}
+		memset(&command, 0, sizeof(command));
+		command.msec = SG_REPLAY_STEP_MS;
+		hook_legacy_command_bot = bot;
+		result = SG_HookLiveWaitAttachStep(&bot->hook_replay,
+		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+		    true, &entry_pose, &observation, Hook_LiveLegacyCommand, &command,
+		    &bot->hook_final_guard);
+		hook_legacy_command_bot = NULL;
+		if (Hook_LiveRetireNonRunning(e, bot, link_index, "wait-attach",
+		    SG_HOOK_REPLAY_WAIT_ATTACH, &result))
+		{
+			if (result.outcome == SG_HOOK_LIVE_ARRIVED)
+				return true;
+			Hook_LiveTailCommand(bot, false, &entry_pms, &command);
+			ClientThink(e, &command);
+			failed = true;
+			continue;
+		}
+		/* The adapter saved the canonical command before any later host writer;
+		 * consume that one-shot approval immediately before ClientThink. */
+		result = SG_HookLiveValidateStoredFinalCommand(&bot->hook_replay,
+		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+		    true, &bot->hook_final_guard, &command);
+		if (Hook_LiveRetireNonRunning(e, bot, link_index,
+		    "wait-attach-final-command", SG_HOOK_REPLAY_WAIT_ATTACH, &result))
+		{
+			Hook_LiveTailCommand(bot, false, &entry_pms, &command);
+			ClientThink(e, &command);
+			failed = true;
+			continue;
+		}
+		ClientThink(e, &command);
+	}
+	/* The pre-frame liquid gate is above.  This is the old post-flight gate,
+	 * which observes all four frozen commands before applying its 30 s shelf. */
+	if (!failed && e->waterlevel > 0 &&
+	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		Hook_GraphFail(e, bot, 30.0f);
+	return true;
+}
+
+static qboolean Hook_LiveActiveFrame(sg_bot_t *bot, edict_t *e)
+{
+	int step, link_index;
+	sg_hook_replay_phase_t replay_phase;
+	qboolean failed = false;
+	qboolean release_seen = false;
+	qboolean frame_settlement;
+	qboolean frame_pull_clock;
+
+	link_index = bot ? bot->hook_link : -1;
+	replay_phase = bot ? bot->hook_replay.phase : SG_HOOK_REPLAY_FLIGHT;
+	/* Match the legacy pre-command liquid interrupt.  It was a 30 s retry in
+	 * both rope and phase-3 settlement; only a liquid divergence observed
+	 * after settlement's four historical commands took its 60 s shelf. */
+	if (e->waterlevel > 0 &&
+	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+	{
+		Hook_GraphFail(e, bot, 30.0f);
+		return true;
+	}
+	/* In rope ownership phases, the historical maintenance gate preceded any
+	 * abstract identity law: a vanished/replaced bolt is the old 15 s
+	 * attachment failure, not a 30 s pull-timing failure.  A live bolt that
+	 * still satisfies that gate may then expose a link/owner identity drift to
+	 * the adapter below. */
+	if (!Hook_LiveIdentityCurrent(e, bot))
+	{
+		if ((replay_phase == SG_HOOK_REPLAY_ATTACH_FRAME ||
+		     replay_phase == SG_HOOK_REPLAY_WAIT_PULL ||
+		     replay_phase == SG_HOOK_REPLAY_PULL_FRAME) &&
+		    !Hook_AttachmentMaintained(e, bot))
+		{
+			Hook_GraphFail(e, bot, 15.0f);
+			return true;
+		}
+		else
+		{
+			sg_hook_live_result_t result = SG_HookLivePostStep(
+			    &bot->hook_replay, &bot->hook_replay_active,
+			    &bot->hook_replay_link, bot->hook_link, false, NULL, NULL);
+
+			Hook_LiveRetireNonRunning(e, bot, link_index, "identity",
+			                         replay_phase, &result);
+			return true;
+		}
+	}
+	/* Outbound bolt flight retains the old witness gate before it submits its
+	 * four fixed-view commands. */
+	if (replay_phase == SG_HOOK_REPLAY_FLIGHT)
+	{
+		if (e->client->hookstate != 1 || !e->client->hook ||
+		    (!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
+		    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
+		    SG_TimerReadyStrict(bot->hook_deadline))
+		{
+			Hook_GraphFail(e, bot, 15.0f);
+			return true;
+		}
+	}
+	/* WAIT_ATTACH is a reducer event barrier, not an engine attachment
+	 * predicate.  Preserve the old late-bolt tolerance: while the original
+	 * bolt is still outward-bound, retain its source/witness/deadline gate and
+	 * spend one whole fixed-view frame before inspecting attachment again. */
+	if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH &&
+	    e->client->hookstate == 1 && e->client->hook)
+	{
+		if ((!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
+		    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
+		    SG_TimerReadyStrict(bot->hook_deadline))
+		{
+			Hook_GraphFail(e, bot, 15.0f);
+			return true;
+		}
+		return Hook_LiveWaitAttachFrame(bot, e, link_index);
+	}
+	if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH)
+	{
+		sg_replay_pose_t pose;
+		sg_hook_live_result_t result;
+
+		if (!Hook_AttachmentOK(e, bot))
+		{
+			Hook_GraphFail(e, bot, 15.0f);
+			return true;
+		}
+		bot->hook_attached_validated = true;
+		Hook_LivePose(e, &pose);
+		result = SG_HookLiveAttached(&bot->hook_replay,
+		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+		    true, &pose);
+		if (Hook_LiveRetireNonRunning(e, bot, link_index, "attached",
+		                             SG_HOOK_REPLAY_WAIT_ATTACH, &result))
+			return true;
+		Hook_LiveSync(bot);
+		replay_phase = bot->hook_replay.phase;
+	}
+	/* AttachmentOK owns the first attached frame.  Every later attached and
+	 * pull frame retains the legacy immutable-bite maintenance check. */
+	if ((replay_phase == SG_HOOK_REPLAY_ATTACH_FRAME ||
+	     replay_phase == SG_HOOK_REPLAY_WAIT_PULL ||
+	     replay_phase == SG_HOOK_REPLAY_PULL_FRAME) &&
+	    !Hook_AttachmentMaintained(e, bot))
+	{
+		Hook_GraphFail(e, bot, 15.0f);
+		return true;
+	}
+	if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_PULL)
+	{
+		/* The one production pull is acknowledged by SG_HookLiveEndFrame,
+		 * immediately after Weapon_Hook_Fire in ClientEndServerFrame. */
+		Hook_GraphFail(e, bot, 30.0f);
+		return true;
+	}
+	frame_settlement = bot->hook_legacy_settle;
+	frame_pull_clock = !frame_settlement &&
+	                   bot->hook_replay.phase == SG_HOOK_REPLAY_PULL_FRAME;
+	for (step = 0; step < SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS; step++)
+	{
+		sg_replay_pose_t pose;
+		sg_replay_observation_t observation;
+		sg_hook_live_result_t result;
+		usercmd_t command;
+		sg_hook_replay_phase_t step_phase;
+		qboolean post_arrival_contact;
+
+		if (failed)
+		{
+			Hook_LiveTailCommand(bot, frame_settlement,
+			    &e->client->ps.pmove, &command);
+			ClientThink(e, &command);
+			Hook_LiveTailAdvance(bot, frame_pull_clock);
+			continue;
+		}
+
+		Hook_LivePose(e, &pose);
+		Hook_LiveObservation(e, bot,
+		    frame_settlement && !bot->hook_legacy_arrived, &observation);
+		memset(&command, 0, sizeof(command));
+		command.msec = SG_REPLAY_STEP_MS;
+		step_phase = bot->hook_replay.phase;
+		hook_legacy_command_bot = bot;
+		result = SG_HookLivePreStep(&bot->hook_replay,
+		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+		    true, &pose, &observation, Hook_LiveLegacyCommand, &command,
+		    &bot->hook_final_guard);
+		hook_legacy_command_bot = NULL;
+		if (Hook_LiveRetireNonRunning(e, bot, link_index, "prestep",
+		                             step_phase, &result))
+		{
+			if (result.outcome == SG_HOOK_LIVE_ARRIVED)
+				return true;
+			Hook_LiveTailCommand(bot, frame_settlement,
+			    &e->client->ps.pmove, &command);
+			ClientThink(e, &command);
+			Hook_LiveTailAdvance(bot, frame_pull_clock);
+			failed = true;
+			continue;
+		}
+		if (frame_settlement && observation.contact_clear)
+			bot->hook_legacy_arrived = true;
+		/* Do not recopy command here: the adapter owns the earlier immutable
+		 * approval so a downstream writer remains visible at this boundary. */
+		result = SG_HookLiveValidateStoredFinalCommand(&bot->hook_replay,
+		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+		    true, &bot->hook_final_guard, &command);
+		if (Hook_LiveRetireNonRunning(e, bot, link_index, "final-command",
+		                             step_phase, &result))
+		{
+			Hook_LiveTailCommand(bot, frame_settlement,
+			    &e->client->ps.pmove, &command);
+			ClientThink(e, &command);
+			Hook_LiveTailAdvance(bot, frame_pull_clock);
+			failed = true;
+			continue;
+		}
+		ClientThink(e, &command);
+		Hook_LivePose(e, &pose);
+		/* A non-arrived legacy settlement checked contact once after its
+		 * submitted command.  Once arrival latched, it issued literal zeros
+		 * without more contact traces until the one terminal check at substep 4.
+		 * Keep both samples explicit so the host differential is historical,
+		 * rather than a mirror of the reducer's arrival bit. */
+		Hook_LiveObservation(e, bot,
+		    frame_settlement && !bot->hook_legacy_arrived, &observation);
+		post_arrival_contact = observation.contact_clear;
+		if (frame_settlement &&
+		    step == SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS - 1 &&
+		    (bot->hook_legacy_arrived || post_arrival_contact))
+			Hook_LiveObservation(e, bot, true, &observation);
+		step_phase = bot->hook_replay.phase;
+		result = SG_HookLivePostStep(&bot->hook_replay,
+		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+		    Hook_LiveIdentityCurrent(e, bot), &pose, &observation);
+		if (Hook_LiveRetireNonRunning(e, bot, link_index, "poststep",
+		                             step_phase, &result))
+		{
+			if (result.outcome == SG_HOOK_LIVE_ARRIVED)
+				return true;
+			failed = true;
+			continue;
+		}
+		if (frame_settlement && post_arrival_contact)
+			bot->hook_legacy_arrived = true;
+		Hook_LiveSync(bot);
+		if (bot->hook_replay.release_requested &&
+		    !bot->hook_replay.release_applied)
+		{
+			/* Exact order: reducer requests release, production abort mutates the
+			 * hook/body, then the adapter records that resulting authoritative pose. */
+			ctf_hook_abort(e);
+			bot->hook_phase = 3;
+			bot->flow_release = false;
+			bot->hook_settle_ms = 0;
+			Hook_LivePose(e, &pose);
+			result = SG_HookLiveReleaseApplied(&bot->hook_replay,
+			    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+			    Hook_LiveIdentityCurrent(e, bot), &pose);
+			if (Hook_LiveRetireNonRunning(e, bot, link_index, "release",
+			                             SG_HOOK_REPLAY_PULL_FRAME, &result))
+			{
+				failed = true;
+				continue;
+			}
+			Hook_LiveSync(bot);
+			release_seen = true;
+		}
+	}
+	/* A release in substep 1/2/3 still finishes this outer fixed-view frame.
+	 * The following frame is the first independent legacy settlement frame. */
+	if (!failed && release_seen)
+	{
+		bot->hook_legacy_settle = true;
+		bot->hook_legacy_arrived = false;
+	}
+	return true;
+}
+
+void SG_HookLiveEndFrame(edict_t *e)
+{
+	sg_bot_t *bot = NULL;
+	sg_replay_pose_t pose;
+	sg_hook_live_result_t result;
+	int i;
+
+	if (!e || !e->client)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == e)
+		{
+			bot = &sg_bots[i];
+			break;
+		}
+	if (!bot || !bot->hook_replay_active ||
+	    bot->hook_replay.phase != SG_HOOK_REPLAY_WAIT_PULL)
+		return;
+	Hook_LivePose(e, &pose);
+	result = SG_HookLivePullApplied(&bot->hook_replay,
+	    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
+	    Hook_LiveIdentityCurrent(e, bot), &pose);
+	if (!Hook_LiveRetireNonRunning(e, bot, bot->hook_link, "pull",
+	    SG_HOOK_REPLAY_WAIT_PULL, &result))
+		Hook_LiveSync(bot);
+}
+
+static qboolean Hook_LiveBeginAfterFire(edict_t *e, sg_bot_t *bot,
+	int link_index, float flight_distance)
+{
+	sg_hook_replay_spec_t spec;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	sg_hook_live_result_t result;
+
+	if (!e || !e->client || !bot || !SG_Rune() || link_index < 0 ||
+	    link_index >= SG_Rune()->hdr.num_links ||
+	    SG_Rune()->links[link_index].action != RL_HOOK ||
+	    bot->hook_link != link_index || bot->commit_link != link_index ||
+	    e->client->hookstate != 1 || !e->client->hook)
+		return false;
+	memset(&spec, 0, sizeof(spec));
+	VectorCopy(bot->hook_anchor, spec.bite);
+	VectorCopy(bot->hook_dest, spec.destination);
+	VectorCopy(bot->hook_view, spec.view_angles);
+	spec.flight_ms = (int)ceilf(flight_distance /
+	                             RUNE_HOOK_FRAME_DISTANCE) * SG_REPLAY_FRAME_MS;
+	spec.settle_limit_ms = bot->hook_source_water ? RUNE_HOOK_WATER_SETTLE_MS :
+	                                                RUNE_HOOK_DRY_SETTLE_MS;
+	spec.expected_release_ms = bot->hook_proved_release_ms;
+	spec.expected_pull_ms = bot->hook_proved_pull_ms;
+	spec.expected_settle_arrival_ms = bot->hook_proved_arrival_ms;
+	spec.expected_settle_ms = bot->hook_proved_settle_ms;
+	Hook_LiveClearFinalGuard(bot);
+	bot->hook_legacy_settle = false;
+	bot->hook_legacy_arrived = false;
+	bot->hook_entity = e->client->hook;
+	Hook_LivePose(e, &pose);
+	Hook_LiveObservation(e, bot, false, &observation);
+	result = SG_HookLiveBegin(&bot->hook_replay, &bot->hook_replay_active,
+	    &bot->hook_replay_link, link_index, true, &spec, &pose, &observation,
+	    e->client->oldvelocity[2], &bot->hook_final_guard);
+	if (result.outcome == SG_HOOK_LIVE_RUNNING)
+		return true;
+	Hook_LiveResultLog(e, link_index, "begin", &result);
+	bot->hook_entity = NULL;
+	return false;
+}
+
 /* The proved graph-hook executor is intentionally outside the normal surface
  * pipeline. A tall ride can have no nearby seed, and fan/combat/holds/scalers
  * are not part of the oracle witness. */
@@ -4015,6 +4608,8 @@ qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
 	if (!bot || !e || !e->client || bot->speedhook || bot->hook_link < 0 ||
 	    (bot->hook_phase != 2 && bot->hook_phase != 3))
 		return false;
+	if (bot->hook_replay_active)
+		return Hook_LiveActiveFrame(bot, e);
 	/* Online proof rejects harmful liquid on every 100 ms boundary. Dynamic
 	 * combat can still perturb the live body after proof; retire that diverged
 	 * witness before it deliberately continues through lava/slime. */
@@ -6494,6 +7089,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			bot->hook_phase = 2;
 			if (!bot->speedhook)
 			{
+				if (!Hook_LiveBeginAfterFire(e, bot, bot->hook_link,
+				                             graph_flight_dist))
+				{
+					Hook_GraphFail(e, bot, 15.0f);
+					goto hook_wait;
+				}
 				/* Bolt flight is quantized in 80-unit entity frames. This clock
 				 * starts only after successful fire; aim time is not charged. */
 				SG_TimerArm(&bot->hook_deadline,

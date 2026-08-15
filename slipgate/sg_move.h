@@ -18,6 +18,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc);
  * localization. Returns true when it consumed this server frame. */
 qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e);
 
+/* Called immediately after Weapon_Hook_Fire performs the one production
+ * end-frame pull.  It only observes an ordinary graph hook that is already
+ * reducer-owned; all other clients retain the historical engine path. */
+void SG_HookLiveEndFrame(edict_t *e);
+
 /* Capability contract shared by link selection and execution. */
 qboolean SG_HookOffhandReady(edict_t *e);
 

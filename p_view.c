@@ -1,5 +1,9 @@
 
 #include "g_local.h"
+
+/* Narrow end-frame observer; keep p_view independent of the bot-only
+ * sg_move types. */
+void SG_HookLiveEndFrame(edict_t *e);
 #include "m_player.h"
 #include "plasma.h" // SKWiD MOD
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -1003,6 +1007,9 @@ void ClientEndServerFrame (edict_t *ent)
 	if (ent->client->hookstate) // We are still grappled
 	{
 		Weapon_Hook_Fire(ent);
+		/* Ordinary graph hooks acknowledge this only after the historical
+		 * end-frame production pull has changed the authoritative body. */
+		SG_HookLiveEndFrame(ent);
 	}
 
 	//

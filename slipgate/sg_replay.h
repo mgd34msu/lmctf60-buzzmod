@@ -235,6 +235,10 @@ qboolean SG_HookReplaySettled(const sg_hook_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
 qboolean SG_HookReplayReleaseReady(const sg_hook_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
+/* Pure fixed-view command renderer used by the live adapter's immutable
+ * WAIT_ATTACH shadow.  It neither reads nor mutates replay state. */
+qboolean SG_HookReplayFixedViewCommand(const sg_replay_pose_t *pose,
+	const vec3_t view_angles, usercmd_t *command);
 
 sg_replay_status_t SG_DropReplayBegin(sg_drop_replay_state_t *state,
 	const sg_drop_replay_spec_t *spec, const sg_replay_pose_t *pose,

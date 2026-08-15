@@ -96,6 +96,11 @@ SWIM_LIVE_TEST_BIN := sg_swim_live_test.make
 SWIM_LIVE_TEST_OBJS := .sg_swim_live_test.make.o \
 	.sg_swim_live_under_test.make.o .sg_swim_live_replay_under_test.make.o
 SWIM_LIVE_TEST_DEPS := $(SWIM_LIVE_TEST_OBJS:.o=.d)
+HOOK_LIVE_TEST_BIN := sg_hook_live_test.make
+HOOK_LIVE_TEST_OBJS := .sg_hook_live_test.make.o \
+	.sg_hook_live_under_test.make.o .sg_hook_live_replay_under_test.make.o
+HOOK_LIVE_TEST_DEPS := $(HOOK_LIVE_TEST_OBJS:.o=.d)
+HOOK_INTEGRATION_TEST := tests/test_hook_live_integration.py
 ROTATOR_SWEEP_TEST_BIN := sg_rotator_sweep_test.make
 ROTATOR_SWEEP_TEST_OBJS := .sg_rotator_sweep_test.make.o .sg_rotator_sweep_under_test.make.o \
 	.sg_rotator_sweep_q_shared_under_test.make.o
@@ -360,6 +365,7 @@ OBJS := \
 	sg_replay.o \
 	sg_drop_live.o \
 	sg_swim_live.o \
+	sg_hook_live.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
@@ -463,6 +469,7 @@ $(OBJS): $(REVISION_HEADER)
 -include $(REPLAY_TEST_DEPS)
 -include $(DROP_LIVE_TEST_DEPS)
 -include $(SWIM_LIVE_TEST_DEPS)
+-include $(HOOK_LIVE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
 
@@ -559,6 +566,10 @@ $(DROP_LIVE_TEST_BIN): $(DROP_LIVE_TEST_OBJS)
 $(SWIM_LIVE_TEST_BIN): $(SWIM_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(SWIM_LIVE_TEST_OBJS) $(LIBS)
+
+$(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(HOOK_LIVE_TEST_OBJS) $(LIBS)
 
 $(ROTATOR_SWEEP_TEST_BIN): $(ROTATOR_SWEEP_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -798,6 +809,24 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_hook_live_test.make.o: tests/sg_hook_live_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hook_live_under_test.make.o: slipgate/sg_hook_live.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hook_live_replay_under_test.make.o: slipgate/sg_replay.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_rotator_sweep_test.make.o: tests/sg_rotator_sweep_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -831,6 +860,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
+		$(HOOK_LIVE_TEST_BIN) $(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) \
 		$(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
@@ -853,6 +883,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 	$(Q)./$(DROP_LIVE_TEST_BIN)
 	$(Q)sh tests/sg_drop_begin_wiring_test.sh
 	$(Q)./$(SWIM_LIVE_TEST_BIN)
+	$(Q)./$(HOOK_LIVE_TEST_BIN)
+	$(Q)python3 $(HOOK_INTEGRATION_TEST)
 	$(Q)./$(ROTATOR_SWEEP_TEST_BIN)
 	$(Q)./$(ENTFILE_TEST_BIN)
 	$(Q)./$(ENGINE_SNAPSHOT_TEST)
@@ -925,6 +957,14 @@ drop-live-test: $(DROP_LIVE_TEST_BIN)
 swim-live-test: $(SWIM_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(SWIM_LIVE_TEST_BIN)
+
+hook-live-test: $(HOOK_LIVE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(HOOK_LIVE_TEST_BIN)
+
+hook-integration-test:
+	$(E) [TEST] $(HOOK_INTEGRATION_TEST)
+	$(Q)python3 $(HOOK_INTEGRATION_TEST)
 
 rotator-sweep-test: $(ROTATOR_SWEEP_TEST_BIN)
 	$(E) [TEST] $<

@@ -55,6 +55,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
@@ -2165,6 +2166,11 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->hook_proved_release_ms = 0;
 	bot->hook_proved_arrival_ms = 0;
 	bot->hook_proved_settle_ms = 0;
+	SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,
+	    &bot->hook_replay_link, &bot->hook_final_guard);
+	bot->hook_entity = NULL;
+	bot->hook_legacy_settle = false;
+	bot->hook_legacy_arrived = false;
 	bot->flow_release = false;
 	bot->speedhook = false;
 	VectorClear(bot->hp_cur_dep);
@@ -2684,6 +2690,11 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->hook_bite_logged = false;
 		bot->hook_attached_validated = false;
 		bot->hook_landbrake = 0.0f;
+		SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,
+		    &bot->hook_replay_link, &bot->hook_final_guard);
+		bot->hook_entity = NULL;
+		bot->hook_legacy_settle = false;
+		bot->hook_legacy_arrived = false;
 		bot->speedhook = false;
 		bot->flow_release = false;
 		bot->rj_phase = 0;

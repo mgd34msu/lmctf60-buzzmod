@@ -172,6 +172,11 @@ SWIM_LIVE_TEST_BIN = sg_swim_live_test.gnu
 SWIM_LIVE_TEST_OBJS = .sg_swim_live_test.gnu.o \
 	.sg_swim_live_under_test.gnu.o .sg_swim_live_replay_under_test.gnu.o
 SWIM_LIVE_TEST_DEPS = $(SWIM_LIVE_TEST_OBJS:.o=.d)
+HOOK_LIVE_TEST_BIN = sg_hook_live_test.gnu
+HOOK_LIVE_TEST_OBJS = .sg_hook_live_test.gnu.o \
+	.sg_hook_live_under_test.gnu.o .sg_hook_live_replay_under_test.gnu.o
+HOOK_LIVE_TEST_DEPS = $(HOOK_LIVE_TEST_OBJS:.o=.d)
+HOOK_INTEGRATION_TEST = tests/test_hook_live_integration.py
 ROTATOR_SWEEP_TEST_BIN = sg_rotator_sweep_test.gnu
 ROTATOR_SWEEP_TEST_OBJS = .sg_rotator_sweep_test.gnu.o .sg_rotator_sweep_under_test.gnu.o \
 	.sg_rotator_sweep_q_shared_under_test.gnu.o
@@ -321,7 +326,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_drop_live.o sg_swim_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_drop_live.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -523,6 +528,9 @@ $(DROP_LIVE_TEST_BIN): $(DROP_LIVE_TEST_OBJS)
 $(SWIM_LIVE_TEST_BIN): $(SWIM_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(SWIM_LIVE_TEST_OBJS) $(LDFLAGS)
 
+$(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
+	$(CC) -o $@ $(HOOK_LIVE_TEST_OBJS) $(LDFLAGS)
+
 $(ROTATOR_SWEEP_TEST_BIN): $(ROTATOR_SWEEP_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(ROTATOR_SWEEP_TEST_OBJS) $(LDFLAGS)
 
@@ -689,6 +697,18 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_hook_live_test.gnu.o: tests/sg_hook_live_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hook_live_under_test.gnu.o: slipgate/sg_hook_live.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hook_live_replay_under_test.gnu.o: slipgate/sg_replay.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_rotator_sweep_test.gnu.o: tests/sg_rotator_sweep_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
@@ -717,6 +737,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
+		$(HOOK_LIVE_TEST_BIN) $(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) \
 		$(ENTFILE_TEST_BIN)
 	./$(HOST_TEST_BIN)
@@ -738,6 +759,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 	./$(DROP_LIVE_TEST_BIN)
 	sh tests/sg_drop_begin_wiring_test.sh
 	./$(SWIM_LIVE_TEST_BIN)
+	./$(HOOK_LIVE_TEST_BIN)
+	python3 $(HOOK_INTEGRATION_TEST)
 	./$(ROTATOR_SWEEP_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
 	./$(ENGINE_SNAPSHOT_TEST)
@@ -793,6 +816,12 @@ drop-live-test: $(DROP_LIVE_TEST_BIN)
 
 swim-live-test: $(SWIM_LIVE_TEST_BIN)
 	./$(SWIM_LIVE_TEST_BIN)
+
+hook-live-test: $(HOOK_LIVE_TEST_BIN)
+	./$(HOOK_LIVE_TEST_BIN)
+
+hook-integration-test:
+	python3 $(HOOK_INTEGRATION_TEST)
 
 rotator-sweep-test: $(ROTATOR_SWEEP_TEST_BIN)
 	./$(ROTATOR_SWEEP_TEST_BIN)
@@ -857,6 +886,7 @@ endif
 -include $(REPLAY_TEST_DEPS)
 -include $(DROP_LIVE_TEST_DEPS)
 -include $(SWIM_LIVE_TEST_DEPS)
+-include $(HOOK_LIVE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
 endif

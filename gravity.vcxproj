@@ -364,6 +364,7 @@
     <ClCompile Include="slipgate\sg_replay.c" />
     <ClCompile Include="slipgate\sg_drop_live.c" />
     <ClCompile Include="slipgate\sg_swim_live.c" />
+    <ClCompile Include="slipgate\sg_hook_live.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_cvars.c" />
     <ClCompile Include="slipgate\sg_hooks.c" />
@@ -443,6 +444,7 @@
     <ClInclude Include="slipgate\sg_replay.h" />
     <ClInclude Include="slipgate\sg_drop_live.h" />
     <ClInclude Include="slipgate\sg_swim_live.h" />
+    <ClInclude Include="slipgate\sg_hook_live.h" />
     <ClInclude Include="ui_stats.h" />
     <ClInclude Include="ui_text.h" />
     <ClInclude Include="ui_layout.h" />

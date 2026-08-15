@@ -14,6 +14,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_drop_live.h"
+#include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_weights.h"    /* sg_role_names -- the roster print */
 #include "slipgate/sg_hooks.h"
@@ -39,6 +40,11 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	memset(bot, 0, sizeof(*bot));
 	bot->seed = -1;
 	bot->hook_link = -1;
+	SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,
+	    &bot->hook_replay_link, &bot->hook_final_guard);
+	bot->hook_entity = NULL;
+	bot->hook_legacy_settle = false;
+	bot->hook_legacy_arrived = false;
 	for (i = 0; i < SG_BL_MAX; i++)
 		bot->bl_link[i] = -1;
 	bot->last_role = -1;
