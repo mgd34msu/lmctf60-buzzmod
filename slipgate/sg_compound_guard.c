@@ -42,14 +42,41 @@ typedef struct sg_compound_guard_reuse_s
 static sg_compound_guard_singleton_t guard;
 static sg_compound_guard_reuse_t body_reuse;
 
-_Static_assert((int)SG_COMPOUND_GUARD_QUARANTINE_LOCKED ==
-	(int)SG_MOVER_LEASE_QUARANTINE_LOCKED,
-	"guard and lease result prefixes must remain identical");
-
 static sg_compound_guard_result_t GuardResult(
 	sg_mover_lease_result_t result)
 {
-	return (sg_compound_guard_result_t)result;
+	switch (result) {
+	case SG_MOVER_LEASE_OK:
+		return SG_COMPOUND_GUARD_OK;
+	case SG_MOVER_LEASE_INVALID_ARGUMENT:
+		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	case SG_MOVER_LEASE_INVALID_OWNER:
+		return SG_COMPOUND_GUARD_INVALID_OWNER;
+	case SG_MOVER_LEASE_INVALID_SUBJECT:
+		return SG_COMPOUND_GUARD_INVALID_SUBJECT;
+	case SG_MOVER_LEASE_INVALID_KEYS:
+		return SG_COMPOUND_GUARD_INVALID_KEYS;
+	case SG_MOVER_LEASE_CONFLICT:
+		return SG_COMPOUND_GUARD_CONFLICT;
+	case SG_MOVER_LEASE_OWNER_BUSY:
+		return SG_COMPOUND_GUARD_OWNER_BUSY;
+	case SG_MOVER_LEASE_FULL:
+		return SG_COMPOUND_GUARD_FULL;
+	case SG_MOVER_LEASE_EXHAUSTED:
+		return SG_COMPOUND_GUARD_EXHAUSTED;
+	case SG_MOVER_LEASE_STALE_TICKET:
+		return SG_COMPOUND_GUARD_STALE_TICKET;
+	case SG_MOVER_LEASE_OWNER_MISMATCH:
+		return SG_COMPOUND_GUARD_OWNER_MISMATCH;
+	case SG_MOVER_LEASE_SUBJECT_MISMATCH:
+		return SG_COMPOUND_GUARD_SUBJECT_MISMATCH;
+	case SG_MOVER_LEASE_INVALID_TRANSITION:
+		return SG_COMPOUND_GUARD_INVALID_TRANSITION;
+	case SG_MOVER_LEASE_QUARANTINE_LOCKED:
+		return SG_COMPOUND_GUARD_QUARANTINE_LOCKED;
+	default:
+		return SG_COMPOUND_GUARD_HOST_ERROR;
+	}
 }
 
 static int HostValid(const sg_compound_guard_host_t *host)
