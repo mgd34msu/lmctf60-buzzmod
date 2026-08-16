@@ -363,6 +363,7 @@
     <ClCompile Include="slipgate\sg_rune_proof.c" />
     <ClCompile Include="slipgate\sg_replay.c" />
     <ClCompile Include="slipgate\sg_compound.c" />
+    <ClCompile Include="slipgate\sg_compound_world.c" />
     <ClCompile Include="slipgate\sg_drop_live.c" />
     <ClCompile Include="slipgate\sg_swim_live.c" />
     <ClCompile Include="slipgate\sg_hook_live.c" />
@@ -445,6 +446,7 @@
     <ClInclude Include="slipgate\sg_rune_proof.h" />
     <ClInclude Include="slipgate\sg_replay.h" />
     <ClInclude Include="slipgate\sg_compound.h" />
+    <ClInclude Include="slipgate\sg_compound_world.h" />
     <ClInclude Include="slipgate\sg_drop_live.h" />
     <ClInclude Include="slipgate\sg_swim_live.h" />
     <ClInclude Include="slipgate\sg_hook_live.h" />
