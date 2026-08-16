@@ -108,6 +108,135 @@ static void TestOwnershipAndDispatch(void)
 	CHECK(!SG_CompoundLeaseHeld(&a));
 }
 
+static void CheckTranslateStep(const sg_compound_translate_step_t *step,
+	float delta_x, float origin_x, int elapsed_ms, int at_top)
+{
+	CHECK(step->delta[0] == delta_x);
+	CHECK(step->delta[1] == 0.0f && step->delta[2] == 0.0f);
+	CHECK(step->origin[0] == origin_x);
+	CHECK(step->origin[1] == 0.0f && step->origin[2] == 0.0f);
+	CHECK(step->elapsed_ms == elapsed_ms);
+	CHECK(step->at_top == at_top);
+}
+
+static void TestTranslateExactFullFrames(void)
+{
+	static const float expected_delta[] =
+		{ 0.0f, 20.0f, 20.0f, 20.0f, 20.0f };
+	static const float expected_origin[] =
+		{ 0.0f, 20.0f, 40.0f, 60.0f, 80.0f };
+	const float start[3] = { 0.0f, 0.0f, 0.0f };
+	const float end[3] = { 80.0f, 0.0f, 0.0f };
+	sg_compound_translate_t state;
+	sg_compound_translate_step_t step;
+	int frame;
+
+	CHECK(SG_CompoundTranslateBegin(&state, start, end, 200.0f));
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_SCHEDULED);
+	for (frame = 0; frame < 5; frame++)
+	{
+		CHECK(SG_CompoundTranslateFrame(&state, &step));
+		CheckTranslateStep(&step, expected_delta[frame],
+			expected_origin[frame], (frame + 1) * 100,
+			frame == 4);
+	}
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_TOP);
+	CHECK(state.origin[0] == 80.0f && state.elapsed_ms == 500);
+	CHECK(!SG_CompoundTranslateFrame(&state, &step));
+	CHECK(step.elapsed_ms == 0 && !step.at_top);
+}
+
+static void TestTranslateFractionalFinal(void)
+{
+	static const float expected_delta[] =
+		{ 0.0f, 20.0f, 20.0f, 20.0f, 20.0f, 20.0f, 20.0f, 8.0f };
+	static const float expected_origin[] =
+		{ 0.0f, 20.0f, 40.0f, 60.0f, 80.0f, 100.0f, 120.0f,
+		  128.0f };
+	const float start[3] = { 0.0f, 0.0f, 0.0f };
+	const float end[3] = { 128.0f, 0.0f, 0.0f };
+	sg_compound_translate_t state;
+	sg_compound_translate_step_t step;
+	int frame;
+
+	CHECK(SG_CompoundTranslateBegin(&state, start, end, 200.0f));
+	for (frame = 0; frame < 8; frame++)
+	{
+		CHECK(SG_CompoundTranslateFrame(&state, &step));
+		CheckTranslateStep(&step, expected_delta[frame],
+			expected_origin[frame], (frame + 1) * 100,
+			frame == 7);
+		if (frame == 6)
+			CHECK(state.phase == SG_COMPOUND_TRANSLATE_FINAL);
+	}
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_TOP);
+	CHECK(state.origin[0] == 128.0f && state.elapsed_ms == 800);
+}
+
+static void TestTranslateFloatFrameLaw(void)
+{
+	const float start[3] = { 0.0f, 0.0f, 0.0f };
+	const float end[3] = { 80.0f, 0.0f, 0.0f };
+	sg_compound_translate_t state;
+	sg_compound_translate_step_t step;
+	int frame;
+
+	/* Move_Begin evaluates the division in float before floor().  This case
+	 * distinguishes that law from a widened double calculation. */
+	CHECK(SG_CompoundTranslateBegin(&state, start, end, 160.0f));
+	for (frame = 0; frame < 6; frame++)
+	{
+		CHECK(SG_CompoundTranslateFrame(&state, &step));
+		CheckTranslateStep(&step, frame ? 16.0f : 0.0f,
+			frame * 16.0f, (frame + 1) * 100, frame == 5);
+	}
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_TOP);
+	CHECK(state.remaining_distance == 0.0f);
+}
+
+static void TestTranslateNumericBounds(void)
+{
+	const float zero[3] = { 0.0f, 0.0f, 0.0f };
+	const float huge_quantized[3] = { 1.0e10f, 0.0f, 0.0f };
+	const float huge_elapsed[3] = { 214748364.8f, 0.0f, 0.0f };
+	sg_compound_translate_t state;
+	sg_compound_translate_step_t step;
+
+	CHECK(!SG_CompoundTranslateBegin(&state, zero, huge_quantized, 1.0e11f));
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_NONE);
+	CHECK(!SG_CompoundTranslateBegin(&state, zero, huge_elapsed, 1.0f));
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_NONE);
+	CHECK(!SG_CompoundTranslateBegin(&state, zero, zero, 200.0f));
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_NONE);
+	CHECK(SG_CompoundTranslateBegin(&state,
+		(const float[3]){ 0.0f, 0.0f, 0.0f },
+		(const float[3]){ 80.0f, 0.0f, 0.0f }, 200.0f));
+	state.phase = SG_COMPOUND_TRANSLATE_FULL;
+	state.full_frames_remaining = 0;
+	CHECK(!SG_CompoundTranslateFrame(&state, &step));
+	CHECK(state.elapsed_ms == 0);
+}
+
+static void TestTranslateFinalFloatLaw(void)
+{
+	const float start[3] = { 0.0f, 0.0f, 0.0f };
+	const float end[3] = {
+		-0x1.8c5f14p+11f, -0x1.ae8c9cp+11f, -0x1.6fd8p+2f
+	};
+	sg_compound_translate_t state;
+	sg_compound_translate_step_t step;
+
+	CHECK(SG_CompoundTranslateBegin(&state, start, end, 0x1.93431p+11f));
+	CHECK(SG_CompoundTranslateFrame(&state, &step));
+	while (state.phase == SG_COMPOUND_TRANSLATE_FULL)
+		CHECK(SG_CompoundTranslateFrame(&state, &step));
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_FINAL);
+	CHECK(SG_CompoundTranslateFrame(&state, &step));
+	/* Move_Final rounds through velocity before SV_Push rounds the move. */
+	CHECK(step.delta[1] == -0x1.e68p+6f);
+	CHECK(state.phase == SG_COMPOUND_TRANSLATE_TOP);
+}
+
 static void ValidLink(sg_rune_v3_seed_t seeds[2], sg_rune_v3_link_t *link,
 	int action)
 {
@@ -180,6 +309,11 @@ int main(void)
 	TestPreopen();
 	TestRideAndCleanup();
 	TestOwnershipAndDispatch();
+	TestTranslateExactFullFrames();
+	TestTranslateFractionalFinal();
+	TestTranslateFloatFrameLaw();
+	TestTranslateNumericBounds();
+	TestTranslateFinalFloatLaw();
 	TestValidationAndMalformedInput();
 	if (failures)
 	{

@@ -1,6 +1,7 @@
 /* sg_compound.c -- allocation-free compound RUNE transaction reducer. */
 #include "q_shared.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -47,6 +48,51 @@ static int CompoundHookAngleCanonical(float angle)
 		return 0;
 	encoded = ANGLE2SHORT(angle);
 	return SHORT2ANGLE(encoded) == angle;
+}
+
+static int CompoundQuantizePusherMove(float move, float *quantized)
+{
+	float scaled;
+	double integral;
+
+	if (!quantized || !isfinite(move))
+		return 0;
+	scaled = move * 8.0f;
+	if (!isfinite(scaled))
+		return 0;
+	if (scaled > 0.0f)
+		scaled += 0.5f;
+	else
+		scaled -= 0.5f;
+	if (!isfinite(scaled))
+		return 0;
+	integral = trunc((double)scaled);
+	if (!isfinite(integral) || integral < (double)INT_MIN ||
+	    integral > (double)INT_MAX)
+		return 0;
+	*quantized = 0.125f * (float)(int)integral;
+	return 1;
+}
+
+static void CompoundTranslateStepReset(sg_compound_translate_step_t *step)
+{
+	if (step)
+		memset(step, 0, sizeof(*step));
+}
+
+static void CompoundTranslateStepFinish(
+	const sg_compound_translate_t *state,
+	sg_compound_translate_step_t *step, const float delta[3])
+{
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		step->delta[axis] = delta[axis];
+		step->origin[axis] = state->origin[axis];
+	}
+	step->elapsed_ms = state->elapsed_ms;
+	step->at_top = state->phase == SG_COMPOUND_TRANSLATE_TOP;
 }
 
 int SG_CompoundAction(int action)
@@ -195,6 +241,172 @@ int SG_CompoundDelegateSuffix(sg_compound_state_t *state, int link_index,
 	if (!begin(context, link_index, state->suffix_action))
 		return 0;
 	return SG_CompoundAdvance(state, SG_COMPOUND_EVENT_SUFFIX_BEGIN);
+}
+
+int SG_CompoundTranslateBegin(sg_compound_translate_t *state,
+	const float start[3], const float end[3], float speed)
+{
+	const double frame_seconds =
+		(double)SG_RUNE_PROOF_SERVER_FRAME_MS / 1000.0;
+	double motion_frames;
+	double frame_distance;
+	float distance;
+	float inverse_distance;
+	float ignored;
+	int axis;
+
+	if (!state)
+		return 0;
+	memset(state, 0, sizeof(*state));
+	if (!CompoundVectorFinite(start) || !CompoundVectorFinite(end) ||
+	    !isfinite(speed) || speed <= 0.0f)
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		state->start[axis] = start[axis];
+		state->end[axis] = end[axis];
+		state->origin[axis] = start[axis];
+		state->direction[axis] = end[axis] - start[axis];
+	}
+	distance = state->direction[0] * state->direction[0] +
+		state->direction[1] * state->direction[1] +
+		state->direction[2] * state->direction[2];
+	distance = (float)sqrt(distance);
+	if (!isfinite(distance) || distance <= 0.0f)
+	{
+		memset(state, 0, sizeof(*state));
+		return 0;
+	}
+	inverse_distance = 1.0f / distance;
+	for (axis = 0; axis < 3; axis++)
+		state->direction[axis] *= inverse_distance;
+	frame_distance = fmin((double)distance, (double)speed * frame_seconds);
+	motion_frames = ceil((double)distance /
+		((double)speed * frame_seconds));
+	if (!isfinite(frame_distance) || frame_distance <= 0.0 ||
+	    !isfinite(motion_frames) || motion_frames < 1.0 ||
+	    motion_frames + 1.0 >
+	        (double)(INT_MAX / SG_RUNE_PROOF_SERVER_FRAME_MS))
+	{
+		memset(state, 0, sizeof(*state));
+		return 0;
+	}
+	for (axis = 0; axis < 3; axis++)
+		if (!CompoundQuantizePusherMove(
+		        state->direction[axis] * (float)frame_distance, &ignored))
+		{
+			memset(state, 0, sizeof(*state));
+			return 0;
+		}
+	state->speed = speed;
+	state->remaining_distance = distance;
+	state->phase = SG_COMPOUND_TRANSLATE_SCHEDULED;
+	return 1;
+}
+
+int SG_CompoundTranslateFrame(sg_compound_translate_t *state,
+	sg_compound_translate_step_t *step)
+{
+	const float frame_seconds =
+		(float)SG_RUNE_PROOF_SERVER_FRAME_MS / 1000.0f;
+	float delta[3] = { 0.0f, 0.0f, 0.0f };
+	int axis;
+
+	CompoundTranslateStepReset(step);
+	if (!state || !step ||
+	    state->phase <= SG_COMPOUND_TRANSLATE_NONE ||
+	    state->phase >= SG_COMPOUND_TRANSLATE_TOP ||
+	    !CompoundVectorFinite(state->origin) ||
+	    !CompoundVectorFinite(state->direction) ||
+	    !isfinite(state->speed) || state->speed <= 0.0f ||
+	    !isfinite(state->remaining_distance) ||
+	    state->remaining_distance < 0.0f)
+		return 0;
+	if (state->elapsed_ms < 0 ||
+	    state->elapsed_ms > INT_MAX - SG_RUNE_PROOF_SERVER_FRAME_MS)
+		return 0;
+
+	if (state->phase == SG_COMPOUND_TRANSLATE_SCHEDULED)
+	{
+		if (state->speed * frame_seconds >=
+		    state->remaining_distance)
+		{
+			state->phase = SG_COMPOUND_TRANSLATE_FINAL;
+		}
+		else
+		{
+			float frames = (float)floor(
+				(state->remaining_distance / state->speed) /
+				frame_seconds);
+			float next_remaining;
+			int frame_count;
+
+			if (!isfinite(frames) || frames < 1.0f ||
+			    frames > (float)(INT_MAX /
+			        SG_RUNE_PROOF_SERVER_FRAME_MS))
+				return 0;
+			frame_count = (int)frames;
+			if (frame_count >
+			    INT_MAX / SG_RUNE_PROOF_SERVER_FRAME_MS - 1)
+				return 0;
+			next_remaining = state->remaining_distance -
+				frames * state->speed * frame_seconds;
+			if (!isfinite(next_remaining) || next_remaining < 0.0f)
+				return 0;
+			state->full_frames_remaining = frame_count;
+			state->remaining_distance = next_remaining;
+			state->phase = SG_COMPOUND_TRANSLATE_FULL;
+		}
+		state->elapsed_ms += SG_RUNE_PROOF_SERVER_FRAME_MS;
+		CompoundTranslateStepFinish(state, step, delta);
+		return 1;
+	}
+
+	if (state->phase == SG_COMPOUND_TRANSLATE_FULL)
+	{
+		if (state->full_frames_remaining <= 0)
+			return 0;
+		for (axis = 0; axis < 3; axis++)
+			if (!CompoundQuantizePusherMove(
+			        state->direction[axis] * state->speed *
+			            frame_seconds,
+			        &delta[axis]))
+				return 0;
+		state->full_frames_remaining--;
+		if (state->full_frames_remaining == 0)
+		{
+			if (state->remaining_distance == 0.0f)
+				state->phase = SG_COMPOUND_TRANSLATE_TOP;
+			else
+				state->phase = SG_COMPOUND_TRANSLATE_FINAL;
+		}
+	}
+	else if (state->phase == SG_COMPOUND_TRANSLATE_FINAL)
+	{
+		if (state->remaining_distance <= 0.0f)
+			return 0;
+		for (axis = 0; axis < 3; axis++)
+		{
+			float velocity = state->direction[axis] *
+				(state->remaining_distance / frame_seconds);
+			float move = velocity * frame_seconds;
+
+			if (!CompoundQuantizePusherMove(
+			        move, &delta[axis]))
+				return 0;
+		}
+		state->remaining_distance = 0.0f;
+		state->phase = SG_COMPOUND_TRANSLATE_TOP;
+	}
+	else
+	{
+		return 0;
+	}
+	for (axis = 0; axis < 3; axis++)
+		state->origin[axis] += delta[axis];
+	state->elapsed_ms += SG_RUNE_PROOF_SERVER_FRAME_MS;
+	CompoundTranslateStepFinish(state, step, delta);
+	return 1;
 }
 
 rune_reject_reason_t SG_CompoundValidateLink(
