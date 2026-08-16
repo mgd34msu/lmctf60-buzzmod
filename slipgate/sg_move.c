@@ -5845,7 +5845,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		{
 			qboolean drop_command_owned = false;
 			usercmd_t drop_expected_command;
+#ifdef SG_ACCEPT_DROP
 			qboolean accept_drop_step_owned = false;
+#endif
 
 			memset(&drop_expected_command, 0, sizeof(drop_expected_command));
 			cmd->msec = (byte)(base + (step < rem ? 1 : 0));
