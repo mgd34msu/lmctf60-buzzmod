@@ -357,7 +357,7 @@ sg_compound_guard_result_t SG_CompoundGuardBotRespawn(
 	sg_compound_guard_bot_t *bot, int32_t client_edict_key)
 {
 	sg_mover_subject_t client;
-	sg_mover_lease_record_t record;
+	sg_mover_lease_record_t record = {0};
 	sg_compound_guard_result_t result;
 	sg_compound_guard_result_t lease_status = SG_COMPOUND_GUARD_NO_LEASE;
 
