@@ -189,3 +189,4 @@ qboolean	SG_RuneV3AuthorityMatchesHeader(
 						 const sg_rune_v3_authority_t *authority,
 						 const sg_rune_v3_header_t *header);
 qboolean	SG_RunePhysicsCompatible(const rune_t *rune);
+qboolean	SG_RunePublishedShapeValid(const rune_t *rune);

@@ -21,6 +21,12 @@ typedef struct fake_entity_s
 typedef struct fake_host_s
 {
 	fake_entity_t entities[HOST_ENTITY_COUNT];
+	int all_outside;
+	int all_error;
+	int hold_ok;
+	int hold_calls;
+	int terminal_ok;
+	int terminal_calls;
 } fake_host_t;
 
 static fake_host_t fake;
@@ -114,16 +120,59 @@ static sg_compound_guard_observation_t FakeOutside(void *context,
 	                       : SG_COMPOUND_GUARD_NO;
 }
 
+static sg_compound_guard_observation_t FakeAllOutside(void *context,
+	const sg_mover_key_t *keys, size_t key_count)
+{
+	fake_host_t *host = (fake_host_t *)context;
+
+	if (!host || !keys || key_count == 0U || host->all_error)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	return host->all_outside ? SG_COMPOUND_GUARD_YES
+	                         : SG_COMPOUND_GUARD_NO;
+}
+
+static sg_compound_guard_observation_t FakeHoldOpen(void *context,
+	sg_mover_lease_law_t law, const sg_mover_key_t *keys,
+	size_t key_count, int lease_ms)
+{
+	fake_host_t *host = (fake_host_t *)context;
+
+	if (!host || law == SG_MOVER_LAW_NONE || !keys || key_count == 0U ||
+	    lease_ms <= 0)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	host->hold_calls++;
+	return host->hold_ok ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+}
+
+static sg_compound_guard_observation_t FakeSetTerminal(void *context,
+	sg_mover_lease_law_t law, const sg_mover_key_t *keys,
+	size_t key_count)
+{
+	fake_host_t *host = (fake_host_t *)context;
+
+	if (!host || law == SG_MOVER_LAW_NONE || !keys || key_count == 0U)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	host->terminal_calls++;
+	return host->terminal_ok ? SG_COMPOUND_GUARD_YES
+	                         : SG_COMPOUND_GUARD_NO;
+}
+
 static void ResetGuard(void)
 {
 	sg_compound_guard_host_t host;
 
 	memset(&fake, 0, sizeof(fake));
+	fake.all_outside = 1;
+	fake.hold_ok = 1;
+	fake.terminal_ok = 1;
 	memset(&host, 0, sizeof(host));
 	host.context = &fake;
 	host.identity = FakeIdentity;
 	host.solid = FakeSolid;
 	host.outside_sweep = FakeOutside;
+	host.all_subjects_outside = FakeAllOutside;
+	host.hold_open = FakeHoldOpen;
+	host.set_terminal = FakeSetTerminal;
 	CHECK(SG_CompoundGuardInit(&host) == SG_COMPOUND_GUARD_OK);
 }
 
@@ -229,6 +278,21 @@ static void TestSharedAcquirePauseAndClear(void)
 	CHECK(SG_CompoundGuardReleaseProvedClear(&door_bot) ==
 	      SG_COMPOUND_GUARD_OK);
 	CHECK(!SG_MoverTicketValid(&door_bot.ticket));
+	CHECK(SG_CompoundGuardAcquireDeclaredDoorBound(&door_bot, door_keys,
+	      2U, 19, 0U) == SG_COMPOUND_GUARD_INVALID_ARGUMENT);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoorBound(&door_bot, door_keys,
+	      2U, 19, 77U) == SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardValidate(&door_bot, &record) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(record.law == SG_MOVER_LAW_DECLARED_DOOR &&
+	      record.link_index == 19 && record.mechanism_index == 77U);
+	CHECK(SG_CompoundGuardAuthorize(&door_bot, SG_MOVER_LAW_DECLARED_DOOR,
+	      door_keys, 2U, 19, 77U) == SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardAuthorize(&door_bot, SG_MOVER_LAW_DECLARED_DOOR,
+	      door_keys, 2U, 19, 0U) ==
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
+	CHECK(SG_CompoundGuardReleaseProvedClear(&door_bot) ==
+	      SG_COMPOUND_GUARD_OK);
 	Entity(2)->solid = 0;
 	CHECK(SG_CompoundGuardReleaseProvedClear(&compound_bot) ==
 	      SG_COMPOUND_GUARD_OK);
@@ -550,7 +614,8 @@ static void TestBodyReuseTransaction(void)
 	MakeBodyOrphan(&old_bot, 5, 6, 100, 110, 90U);
 	old_owner = old_bot.owner;
 	Attach(&new_bot, 6, 7);
-	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&new_bot, &new_key, 1U, 18) ==
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&new_bot, &new_key, 1U,
+	      18, 1U) ==
 	      SG_COMPOUND_GUARD_OK);
 	new_owner = new_bot.owner;
 	Entity(7)->outside = 0;
@@ -574,7 +639,8 @@ static void TestBodyReuseTransaction(void)
 	MakeBodyOrphan(&old_bot, 5, 6, 100, 0, 90U);
 	old_owner = old_bot.owner;
 	Attach(&new_bot, 6, 7);
-	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&new_bot, &new_key, 1U, 18) ==
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&new_bot, &new_key, 1U,
+	      18, 1U) ==
 	      SG_COMPOUND_GUARD_OK);
 	new_owner = new_bot.owner;
 	Entity(7)->outside = 0;
@@ -701,6 +767,86 @@ static void TestLevelResetAndReasons(void)
 	CHECK(record.state == SG_MOVER_LEASE_QUARANTINED);
 }
 
+static void TestRecordWideAcquireReleaseAndFrameMaintenance(void)
+{
+	sg_compound_guard_bot_t bot, other;
+	sg_mover_key_t key = 140U;
+	sg_mover_owner_t owner;
+	sg_mover_lease_record_t record;
+	sg_mover_ticket_t ticket;
+	sg_compound_guard_frame_stats_t stats;
+
+	ResetGuard();
+	Attach(&bot, 8, 9);
+	fake.all_outside = 0;
+	/* The acquiring body itself is clear, so a foreign/global blocker is a
+	 * conflict wait rather than the owner's NOT_CLEAR terminal path. */
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&bot, &key, 1U, 22) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(!SG_MoverTicketValid(&bot.ticket));
+	fake.all_outside = 1;
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&bot, &key, 1U, 22) ==
+	      SG_COMPOUND_GUARD_OK);
+	owner = bot.owner;
+	Attach(&other, 9, 10);
+	CHECK(SG_CompoundGuardBotRunState(&bot) ==
+	      SG_COMPOUND_GUARD_RUN_READY);
+	CHECK(SG_CompoundGuardBotRunState(&other) ==
+	      SG_COMPOUND_GUARD_RUN_WAIT);
+	Entity(10)->outside = 0;
+	CHECK(SG_CompoundGuardBotRunState(&other) ==
+	      SG_COMPOUND_GUARD_RUN_TERMINAL);
+	Entity(10)->outside = 1;
+	fake.all_outside = 0;
+	CHECK(SG_CompoundGuardReleaseProvedClear(&bot) ==
+	      SG_COMPOUND_GUARD_NOT_CLEAR);
+	CHECK(FindOwner(&owner, &record, &ticket));
+	CHECK(SG_CompoundGuardOrphan(&bot, 0) == SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardBotRunState(&other) ==
+	      SG_COMPOUND_GUARD_RUN_WAIT);
+	Entity(9)->present = 0;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(stats.inspected == 1U && stats.released == 0U);
+	CHECK(fake.hold_calls == 1);
+	CHECK(FindOwner(&owner, &record, &ticket));
+	CHECK(record.state == SG_MOVER_LEASE_ORPHAN &&
+	      record.body.kind == SG_MOVER_SUBJECT_NONE);
+	fake.all_outside = 1;
+	fake.terminal_ok = 0;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(stats.released == 1U);
+	CHECK(!FindOwner(&owner, &record, &ticket));
+	CHECK(SG_CompoundGuardAnyRetirement());
+	CHECK(SG_CompoundGuardRetirementOverlaps(&key, 1U));
+	{
+		sg_mover_key_t disjoint_key = 141U;
+
+		CHECK(!SG_CompoundGuardRetirementOverlaps(&disjoint_key, 1U));
+	}
+	CHECK(SG_CompoundGuardRetirementOverlaps(NULL, 0U));
+	CHECK(SG_CompoundGuardBotRunState(&other) ==
+	      SG_COMPOUND_GUARD_RUN_WAIT);
+	SG_CompoundGuardFrame(&stats);
+	CHECK(fake.terminal_calls == 1);
+	CHECK(SG_CompoundGuardBotRunState(&other) ==
+	      SG_COMPOUND_GUARD_RUN_WAIT);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&other, &key, 1U, 23) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(fake.terminal_calls == 2);
+	fake.terminal_ok = 1;
+	fake.all_outside = 0;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(fake.terminal_calls == 3);
+	CHECK(SG_CompoundGuardAnyRetirement());
+	fake.all_outside = 1;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(fake.terminal_calls == 4);
+	CHECK(!SG_CompoundGuardAnyRetirement());
+	CHECK(!SG_CompoundGuardRetirementOverlaps(&key, 1U));
+	CHECK(SG_CompoundGuardBotRunState(&other) ==
+	      SG_COMPOUND_GUARD_RUN_READY);
+}
+
 int main(void)
 {
 	TestSharedAcquirePauseAndClear();
@@ -709,6 +855,7 @@ int main(void)
 	TestDetachedOrphanAndStaleFailClosed();
 	TestBodyReuseTransaction();
 	TestLevelResetAndReasons();
+	TestRecordWideAcquireReleaseAndFrameMaintenance();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_guard_test: %d failure(s)\n", failures);

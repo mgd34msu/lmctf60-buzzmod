@@ -62,6 +62,22 @@ COMPOUND_GUARD_GAME_TEST_ALL_ARTIFACTS := \
 	.sg_compound_guard_game_under_test.gnu.d \
 	$(COMPOUND_GUARD_GAME_TEST_OBJS) \
 	$(COMPOUND_GUARD_GAME_TEST_DEPS)
+DECLARED_DOOR_GUARD_TEST_BIN := sg_declared_door_guard_test.make
+DECLARED_DOOR_GUARD_TEST_OBJS := .sg_declared_door_guard_test.make.o \
+	.sg_declared_door_guard_under_test.make.o
+DECLARED_DOOR_GUARD_TEST_DEPS := $(DECLARED_DOOR_GUARD_TEST_OBJS:.o=.d)
+DECLARED_DOOR_GUARD_INTEGRATION_TESTS := \
+	tests/test_declared_door_guard_integration.py \
+	tests/test_declared_door_guard_runtime_integration.py \
+	tests/test_declared_door_guard_arach_integration.py
+DECLARED_DOOR_GUARD_TEST_ALL_ARTIFACTS := \
+	sg_declared_door_guard_test.gnu sg_declared_door_guard_test.make \
+	.sg_declared_door_guard_test.gnu.o \
+	.sg_declared_door_guard_test.gnu.d \
+	.sg_declared_door_guard_under_test.gnu.o \
+	.sg_declared_door_guard_under_test.gnu.d \
+	$(DECLARED_DOOR_GUARD_TEST_OBJS) \
+	$(DECLARED_DOOR_GUARD_TEST_DEPS)
 COMPOUND_WORLD_TEST_BIN := sg_compound_world_test.make
 COMPOUND_WORLD_TEST_OBJS := .sg_compound_world_test.make.o \
 	.sg_compound_world_under_test.make.o \
@@ -515,6 +531,7 @@ OBJS := \
 	slipgate/sg_mover_lease.o \
 	slipgate/sg_compound_guard.o \
 	slipgate/sg_compound_guard_game.o \
+	slipgate/sg_declared_door_guard.o \
 	slipgate/sg_compound_world.o \
 	slipgate/sg_compound_gen.o \
 	slipgate/sg_compound_publication.o \
@@ -568,7 +585,7 @@ all: $(TARGET)
 default: all
 
 .PHONY: all default host-test action-test compound-test mover-lease-test \
-	compound-guard-test compound-guard-game-test \
+	compound-guard-test compound-guard-game-test declared-door-guard-test \
 	compound-world-test \
 	compound-gen-test compound-publication-test \
 	identity-test rune-wire-test \
@@ -623,6 +640,10 @@ slipgate/sg_compound_guard_game.o: slipgate/sg_compound_guard_game.c \
 		slipgate/sg_compound_guard_game.h slipgate/sg_compound_guard.h \
 		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
 		g_local.h
+slipgate/sg_declared_door_guard.o: slipgate/sg_declared_door_guard.c \
+		slipgate/sg_declared_door_guard.h slipgate/sg_compound_guard.h \
+		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
+		g_local.h
 slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
@@ -638,6 +659,7 @@ slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 -include $(MOVER_LEASE_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)
+-include $(DECLARED_DOOR_GUARD_TEST_DEPS)
 -include $(COMPOUND_WORLD_TEST_DEPS)
 -include $(COMPOUND_GEN_TEST_DEPS)
 -include $(COMPOUND_PUBLICATION_TEST_DEPS)
@@ -745,6 +767,10 @@ $(COMPOUND_GUARD_TEST_BIN): $(COMPOUND_GUARD_TEST_OBJS)
 $(COMPOUND_GUARD_GAME_TEST_BIN): $(COMPOUND_GUARD_GAME_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(COMPOUND_GUARD_GAME_TEST_OBJS) $(LIBS)
+
+$(DECLARED_DOOR_GUARD_TEST_BIN): $(DECLARED_DOOR_GUARD_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(DECLARED_DOOR_GUARD_TEST_OBJS) $(LIBS)
 
 $(COMPOUND_WORLD_TEST_BIN): $(COMPOUND_WORLD_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -895,6 +921,24 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -DSG_COMPOUND_GUARD_GAME_TEST -I. \
 		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_declared_door_guard_test.make.o: \
+		tests/sg_declared_door_guard_test.c \
+		slipgate/sg_declared_door_guard.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_declared_door_guard_under_test.make.o: \
+		slipgate/sg_declared_door_guard.c \
+		slipgate/sg_declared_door_guard.h slipgate/sg_compound_guard.h \
+		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
+		g_local.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_compound_world_test.make.o: tests/sg_compound_world_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -1297,6 +1341,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(MOVER_LEASE_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
+		$(DECLARED_DOOR_GUARD_TEST_BIN) \
+		$(DECLARED_DOOR_GUARD_INTEGRATION_TESTS) \
 		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
@@ -1320,6 +1366,9 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_GUARD_TEST_BIN)
 	$(Q)./$(COMPOUND_GUARD_GAME_TEST_BIN)
 	$(Q)python3 $(COMPOUND_GUARD_GAME_INTEGRATION_TEST)
+	$(Q)./$(DECLARED_DOOR_GUARD_TEST_BIN)
+	$(Q)set -e; for test in $(DECLARED_DOOR_GUARD_INTEGRATION_TESTS); do \
+		python3 "$$test"; done
 	$(Q)./$(COMPOUND_WORLD_TEST_BIN)
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
 	$(Q)./$(COMPOUND_PUBLICATION_TEST_BIN)
@@ -1371,6 +1420,13 @@ compound-guard-game-test: $(COMPOUND_GUARD_GAME_TEST_BIN) \
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_GUARD_GAME_TEST_BIN)
 	$(Q)python3 $(COMPOUND_GUARD_GAME_INTEGRATION_TEST)
+
+declared-door-guard-test: $(DECLARED_DOOR_GUARD_TEST_BIN) \
+		$(DECLARED_DOOR_GUARD_INTEGRATION_TESTS)
+	$(E) [TEST] $<
+	$(Q)./$(DECLARED_DOOR_GUARD_TEST_BIN)
+	$(Q)set -e; for test in $(DECLARED_DOOR_GUARD_INTEGRATION_TESTS); do \
+		python3 "$$test"; done
 
 compound-world-test: $(COMPOUND_WORLD_TEST_BIN)
 	$(E) [TEST] $<
@@ -1493,6 +1549,7 @@ clean:
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_GUARD_GAME_TEST_ALL_ARTIFACTS) \
+		$(DECLARED_DOOR_GUARD_TEST_ALL_ARTIFACTS) \
 		$(MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS) \
 		$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS)
 

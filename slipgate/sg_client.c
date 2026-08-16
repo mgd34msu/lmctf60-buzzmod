@@ -38,6 +38,10 @@ static void BotSlot_Reset(sg_bot_t *bot)
 {
 	int i;
 
+	/* Defensive for non-ClientDisconnect retirement paths: no delayed target
+	 * chain may outlive the SG owner identity stored in this process slot. */
+	if (bot && bot->active && bot->ent)
+		SG_CancelBotDelayedUses(bot->ent);
 	(void)SG_CompoundGuardGameBotSlotReset(&bot->compound_guard);
 	memset(bot, 0, sizeof(*bot));
 	bot->seed = -1;

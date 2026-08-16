@@ -1,6 +1,7 @@
 /* sg_rune_wire.c -- allocation-free, explicit little-endian RUNE v3 codec. */
 #include "q_shared.h"
 #include "slipgate/sg_rune_wire.h"
+#include "slipgate/sg_rune.h"
 
 #include "slipgate/sg_action.h"
 #include "slipgate/sg_crc32.h"
@@ -23,6 +24,34 @@ _Static_assert(SG_RUNE_V3_LINK_BYTES == 44,
 
 #define SG_RUNE_V3_PAYLOAD_CRC_OFFSET 20U
 #define SG_RUNE_V3_MAP_OFFSET 64U
+
+/* Runtime consumers index native seed/link arrays, while the authenticated
+ * v3 header is what fixed their allocation sizes.  Reconcile both views and
+ * reauthenticate the canonical header CRC before any callback-time index.
+ * This detects a torn or drifted published header; no count cap alone can
+ * prove that a still-in-range native count matches its allocation. */
+qboolean SG_RunePublishedShapeValid(const rune_t *rune)
+{
+	unsigned char encoded[SG_RUNE_V3_HEADER_BYTES];
+	sg_rune_v3_header_t decoded;
+
+	if (!rune || !rune->seeds || !rune->first_link ||
+	    !rune->linked_seed || rune->hdr.magic != (int)SG_RUNE_V3_MAGIC ||
+	    rune->hdr.version != SG_RUNE_V3_VERSION ||
+	    rune->hdr.num_seeds <= 0 || rune->hdr.num_seeds > RUNE_MAX_SEEDS ||
+	    rune->hdr.num_links < 0 || rune->hdr.num_links > RUNE_MAX_LINKS ||
+	    (rune->hdr.num_links > 0 && (!rune->links || !rune->next_link)) ||
+	    (uint32_t)rune->hdr.num_seeds != rune->v3_header.num_seeds ||
+	    (uint32_t)rune->hdr.num_links != rune->v3_header.num_links ||
+	    memcmp(rune->hdr.mapname, rune->v3_header.map_name,
+	        sizeof(rune->hdr.mapname)) != 0 ||
+	    SG_RuneV3EncodeHeader(&rune->v3_header, encoded,
+	        sizeof(encoded)) != RLW_OK ||
+	    SG_RuneV3DecodeHeader(encoded, sizeof(encoded), &decoded) != RLW_OK ||
+	    decoded.header_crc32 != rune->v3_header.header_crc32)
+		return false;
+	return true;
+}
 
 static void Wire_PutU16(unsigned char *out, uint16_t value)
 {

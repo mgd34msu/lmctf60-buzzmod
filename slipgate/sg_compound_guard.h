@@ -36,6 +36,26 @@ typedef struct sg_compound_guard_host_s
 	sg_compound_guard_observation_t (*outside_sweep)(void *context,
 		const sg_mover_subject_t *subject, const sg_mover_key_t *keys,
 		size_t key_count);
+	/* YES proves every generation-tracked physical subject in the host outside
+	 * the complete captured set.  This record-wide proof is required before
+	 * acquisition and every release, including ownerless ORPHAN cleanup.  The
+	 * game adapter may terminalize only a generation-matched, SG-provenance
+	 * BODY_QUEUE corpse that is inside, and must re-observe it nonsolid before
+	 * returning YES; CLIENT and HOOK_BOLT observations remain read-only. */
+	sg_compound_guard_observation_t (*all_subjects_outside)(void *context,
+		const sg_mover_key_t *keys, size_t key_count);
+	/* Renew an already-open captured set without consulting mutable route or
+	 * trigger metadata.  Frame uses this only while an ORPHAN/QUARANTINED
+	 * record cannot yet be proved globally clear. */
+	sg_compound_guard_observation_t (*hold_open)(void *context,
+		sg_mover_lease_law_t law, const sg_mover_key_t *keys,
+		size_t key_count, int lease_ms);
+	/* YES proves a released captured set reached a stationary physical
+	 * terminal: canonical closed pose, or a permanent-open terminal with no
+	 * scheduled close.  A timer boundary or one bot loop is not a terminal. */
+	sg_compound_guard_observation_t (*set_terminal)(void *context,
+		sg_mover_lease_law_t law, const sg_mover_key_t *keys,
+		size_t key_count);
 } sg_compound_guard_host_t;
 
 /* Embed this pointer-free handle in sg_bot_t.  It is process storage and must
@@ -119,12 +139,34 @@ sg_compound_guard_result_t SG_CompoundGuardBotReset(
 sg_compound_guard_result_t SG_CompoundGuardAcquireDeclaredDoor(
 	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
 	size_t key_count, int link_index);
+/* Ordinary runtime may bind the durable record to its exact activator edict
+ * key so protective maintenance remains possible if rune metadata vanishes. */
+sg_compound_guard_result_t SG_CompoundGuardAcquireDeclaredDoorBound(
+	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
+	size_t key_count, int link_index, uint32_t mechanism_index);
 sg_compound_guard_result_t SG_CompoundGuardAcquireCompoundPreopen(
 	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
 	size_t key_count, int link_index, uint32_t mechanism_index);
 
 sg_compound_guard_result_t SG_CompoundGuardValidate(
 	sg_compound_guard_bot_t *bot, sg_mover_lease_record_t *record_out);
+typedef enum sg_compound_guard_run_e
+{
+	SG_COMPOUND_GUARD_RUN_READY = 0,
+	SG_COMPOUND_GUARD_RUN_WAIT,
+	SG_COMPOUND_GUARD_RUN_TERMINAL
+} sg_compound_guard_run_t;
+/* Scheduling barrier.  Exact ACTIVE/PAUSED owners may run; a non-owner proved
+ * outside waits, while one already inside must take the ordinary nonsolid
+ * death path so it cannot be crushed or deadlock release.  After release, all
+ * bot commands remain fenced until the captured physical set proves closed. */
+sg_compound_guard_run_t SG_CompoundGuardBotRunState(
+	const sg_compound_guard_bot_t *bot);
+/* Revalidate the exact record, then prove every host-tracked physical subject
+ * outside its captured set.  Intended for the first mover mutation boundary;
+ * later owner egress legitimately occupies the sweep. */
+sg_compound_guard_result_t SG_CompoundGuardAllSubjectsOutside(
+	sg_compound_guard_bot_t *bot);
 /* Mover/trigger callbacks authorize only an exact ACTIVE claim.  Generic
  * Validate remains inspection and must not be used as callback authority. */
 sg_compound_guard_result_t SG_CompoundGuardAuthorize(
@@ -169,6 +211,14 @@ sg_compound_guard_result_t SG_CompoundGuardQuarantine(
  * is quarantined before the sweep. */
 void SG_CompoundGuardFrame(sg_compound_guard_frame_stats_t *stats_out);
 
+/* Read-only physical-fence queries for callback admission.  A retirement is
+ * the captured mover set between logical release and positive host proof of a
+ * stationary terminal pose with every tracked subject clear in the same
+ * frame.  Invalid/uninitialized input is reported as occupied so callers fail
+ * closed at mutation boundaries. */
+int SG_CompoundGuardAnyRetirement(void);
+int SG_CompoundGuardRetirementOverlaps(const sg_mover_key_t *keys,
+	size_t key_count);
 int SG_CompoundGuardRecordAt(size_t slot,
 	sg_mover_lease_record_t *record_out, sg_mover_ticket_t *ticket_out);
 const char *SG_CompoundGuardReason(sg_compound_guard_result_t result);

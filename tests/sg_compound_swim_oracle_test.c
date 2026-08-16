@@ -12,6 +12,7 @@
 #include "slipgate/sg_util.h"
 
 game_export_t globals;
+game_locals_t game;
 edict_t *g_edicts;
 level_locals_t level;
 sg_host_t sg_host;
@@ -76,7 +77,14 @@ typedef struct fixture_observation_s
 	int pretop_contact_traces;
 } fixture_observation_t;
 
-static edict_t fixture_edicts[8];
+#define FIXTURE_EDICTS 16
+#define GUARD_MASTER_KEY 10
+#define GUARD_MEMBER_KEY 11
+#define GUARD_TRIGGER_KEY 12
+#define GUARD_SOURCE_KEY 13
+#define GUARD_EXTRA_KEY 14
+
+static edict_t fixture_edicts[FIXTURE_EDICTS];
 static gclient_t fixture_clients[1];
 static cvar_t fixture_gravity;
 static fixture_config_t fixture_config;
@@ -148,6 +156,9 @@ void door_go_down(edict_t *self)
 	(void)self;
 	fixture_observation.callback_calls++;
 }
+
+void door_hit_top(edict_t *self) { (void)self; }
+void door_hit_bottom(edict_t *self) { (void)self; }
 
 void trigger_relay_use(edict_t *self, edict_t *other, edict_t *activator)
 {
@@ -252,6 +263,9 @@ static int HostBoxEdicts(const vec3_t mins, const vec3_t maxs,
 static void HostLinkEntity(edict_t *entity)
 {
 	int index = fixture_observation.link_calls;
+	float radius = 0.0f;
+	qboolean rotated_bsp;
+	int axis;
 
 	if (index < (int)(sizeof(fixture_observation.link_origins) /
 	                  sizeof(fixture_observation.link_origins[0])))
@@ -261,12 +275,25 @@ static void HostLinkEntity(edict_t *entity)
 	if (entity->s.origin[0] == 80.0f)
 		fixture_observation.top_staged = true;
 	entity->linkcount++;
-	Set3(entity->absmin, entity->s.origin[0] + entity->mins[0] - 1.0f,
-	     entity->s.origin[1] + entity->mins[1] - 1.0f,
-	     entity->s.origin[2] + entity->mins[2] - 1.0f);
-	Set3(entity->absmax, entity->s.origin[0] + entity->maxs[0] + 1.0f,
-	     entity->s.origin[1] + entity->maxs[1] + 1.0f,
-	     entity->s.origin[2] + entity->maxs[2] + 1.0f);
+	rotated_bsp = entity->solid == SOLID_BSP &&
+	    (entity->s.angles[0] != 0.0f || entity->s.angles[1] != 0.0f ||
+	     entity->s.angles[2] != 0.0f);
+	if (rotated_bsp)
+		for (axis = 0; axis < 3; axis++)
+		{
+			float lo = fabsf(entity->mins[axis]);
+			float hi = fabsf(entity->maxs[axis]);
+
+			if (lo > radius) radius = lo;
+			if (hi > radius) radius = hi;
+		}
+	for (axis = 0; axis < 3; axis++)
+	{
+		entity->absmin[axis] = entity->s.origin[axis] +
+		    (rotated_bsp ? -radius : entity->mins[axis]) - 1.0f;
+		entity->absmax[axis] = entity->s.origin[axis] +
+		    (rotated_bsp ? radius : entity->maxs[axis]) + 1.0f;
+	}
 	VectorSubtract(entity->maxs, entity->mins, entity->size);
 }
 
@@ -465,6 +492,23 @@ static void Trigger(edict_t *trigger, edict_t *door, float mechanism_x)
 	Set3(trigger->absmax, mechanism_x + 1.0f, 24.0f, 40.0f);
 }
 
+static edict_t *GuardDoor(int key)
+{
+	edict_t *door = &fixture_edicts[key];
+
+	Door(door);
+	door->s.number = key;
+	door->area.prev = &fixture_edicts[0].area;
+	door->area.next = &fixture_edicts[0].area;
+	Set3(door->size, 16.0f, 32.0f, 56.0f);
+	Set3(door->absmin, -9.0f, -17.0f, -25.0f);
+	Set3(door->absmax, 9.0f, 17.0f, 33.0f);
+	door->moveinfo.state = SG_PLAT_STATE_TOP;
+	door->think = door_go_down;
+	door->nextthink = level.time + 0.1f;
+	return door;
+}
+
 static fixture_config_t DefaultConfig(int touch, fixture_suffix_t suffix)
 {
 	fixture_config_t config;
@@ -509,6 +553,44 @@ static void ResetFixture(const fixture_config_t *config)
 	sg_host.box_edicts = HostBoxEdicts;
 	sg_host.pmove = HostPmove;
 	sg_host.linkentity = HostLinkEntity;
+}
+
+static void ResetGuardFixture(void)
+{
+	fixture_config_t config =
+	    DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	int key;
+
+	ResetFixture(&config);
+	memset(&globals, 0, sizeof(globals));
+	memset(&game, 0, sizeof(game));
+	g_edicts = fixture_edicts;
+	globals.edicts = fixture_edicts;
+	globals.edict_size = sizeof(edict_t);
+	globals.num_edicts = FIXTURE_EDICTS;
+	globals.max_edicts = FIXTURE_EDICTS;
+	game.maxentities = FIXTURE_EDICTS;
+	game.maxclients = 1;
+	game.clients = fixture_clients;
+	level.time = 10.0f;
+	for (key = 0; key < FIXTURE_EDICTS; key++)
+		fixture_edicts[key].s.number = key;
+}
+
+static void GuardDoorPair(edict_t **master_out, edict_t **member_out)
+{
+	edict_t *master;
+	edict_t *member;
+
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	master->teamchain = member;
+	member->teammaster = master;
+	if (master_out)
+		*master_out = master;
+	if (member_out)
+		*member_out = member;
 }
 
 static void InitPhantom(sg_phantom_t *phantom, qboolean damaging_fall)
@@ -1347,6 +1429,247 @@ static void TestRecoveryRejectsTopAuthorityDrift(void)
 	}
 }
 
+static void TestDeclaredActivatorRejectsCaseFoldedKilltargets(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *source;
+	edict_t *members[2] = { NULL, NULL };
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == 1);
+	CHECK(members[0] == door);
+
+	source = &fixture_edicts[GUARD_SOURCE_KEY];
+	source->inuse = true;
+	source->classname = "trigger_relay";
+	trigger->targetname = "GateTrigger";
+	source->killtarget = "gatetrigger";
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	source = &fixture_edicts[GUARD_SOURCE_KEY];
+	source->inuse = true;
+	source->classname = "trigger_relay";
+	door->targetname = "GateDoor";
+	source->killtarget = "gatedoor";
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+}
+
+static void TestDeclaredActivatorRejectsMalformedWorldBounds(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *members[2] = { NULL, NULL };
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->targetname = "bounded-trigger";
+	globals.num_edicts = MAX_EDICTS;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->targetname = "bounded-trigger";
+	globals.max_edicts = FIXTURE_EDICTS - 1;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->targetname = "bounded-trigger";
+	game.maxentities = MAX_EDICTS + 1;
+	globals.max_edicts = game.maxentities;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+}
+
+static void TestDeclaredDoorHoldMembersIsAtomic(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *members[2];
+	float master_before;
+	float member_before;
+
+	GuardDoorPair(&master, &member);
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	member->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+
+	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	CHECK(SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == level.time + 0.5f);
+	CHECK(member->nextthink == level.time + 0.5f);
+}
+
+static void TestDeclaredDoorHoldMembersRequiresClosedTeam(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *extra;
+	edict_t *members[2];
+	float master_before;
+	float member_before;
+
+	GuardDoorPair(&master, &member);
+	members[0] = master;
+	master_before = master->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 1, 500));
+	CHECK(master->nextthink == master_before);
+
+	GuardDoorPair(&master, &member);
+	extra = GuardDoor(GUARD_EXTRA_KEY);
+	member->teamchain = extra;
+	extra->teammaster = master;
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+
+	GuardDoorPair(&master, &member);
+	member->teamchain = master;
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+}
+
+static void TestDeclaredDoorHoldMembersRejectsForeignPointers(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *members[2];
+	edict_t *foreign = fixture_edicts + FIXTURE_EDICTS;
+	float master_before;
+	float member_before;
+
+	GuardDoorPair(&master, &member);
+	members[0] = foreign;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 1, 500));
+
+	GuardDoorPair(&master, &member);
+	master->teammaster = foreign;
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+
+	GuardDoorPair(&master, &member);
+	master->teamchain = foreign;
+	members[0] = master;
+	master_before = master->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 1, 500));
+	CHECK(master->nextthink == master_before);
+}
+
+static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *members[2];
+
+	GuardDoorPair(&master, &member);
+	members[0] = master;
+	members[1] = member;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+
+	/* A state-label mutation at the open pose is not physical closure. */
+	master->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	VectorCopy(master->moveinfo.end_origin, master->s.origin);
+	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+
+	VectorCopy(master->moveinfo.start_origin, master->s.origin);
+	HostLinkEntity(master);
+	member->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	master->nextthink = 0.0f;
+	member->nextthink = 0.0f;
+	/* An untouched door has no movement completion callback yet. */
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
+
+	/* SV_Push independently rounds every linear delta to one eighth.  Stock
+	 * completion evidence remains authoritative even when a diagonal door's
+	 * final linked pose is not bit-equal to its unquantized endpoint. */
+	Set3(master->s.origin, 0.125f, 0.125f, 0.0f);
+	master->moveinfo.endfunc = door_hit_bottom;
+	member->moveinfo.endfunc = door_hit_bottom;
+	HostLinkEntity(master);
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
+	master->moveinfo.endfunc = door_hit_top;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	master->moveinfo.endfunc = door_hit_bottom;
+
+	/* Independent teams in one trigger may mix a cyclic closed member with a
+	 * permanent-open member; each must independently prove its stock terminal. */
+	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	member->moveinfo.wait = -1.0f;
+	VectorCopy(member->moveinfo.end_origin, member->s.origin);
+	VectorCopy(member->moveinfo.end_angles, member->s.angles);
+	member->moveinfo.endfunc = door_hit_top;
+	HostLinkEntity(member);
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
+	member->nextthink = level.time + 1.0f;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	member->nextthink = 0.0f;
+	member->velocity[0] = 1.0f;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+
+	/* AngleMove_Final divides and the pusher multiplies by 0.1f.  The stock
+	 * terminal can therefore land just beyond the nominal endpoint. */
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	members[0] = master;
+	master->classname = "func_door_rotating";
+	master->teamchain = NULL;
+	master->teammaster = master;
+	Set3(master->moveinfo.start_angles, 0.0f, -167.3114776611328f, 0.0f);
+	Set3(master->moveinfo.end_angles, 0.0f, 5.26661491394043f, 0.0f);
+	Set3(master->s.angles, 0.0f, 5.266632080078125f, 0.0f);
+	master->moveinfo.distance = 172.57809448242188f;
+	master->moveinfo.state = SG_PLAT_STATE_TOP;
+	master->moveinfo.wait = -1.0f;
+	master->nextthink = 0.0f;
+	master->moveinfo.endfunc = door_hit_top;
+	VectorClear(master->velocity);
+	VectorClear(master->avelocity);
+	HostLinkEntity(master);
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 1));
+	CHECK(SG_DeclaredDoorHoldMembers(members, 1, 500));
+	master->s.angles[1] = master->moveinfo.end_angles[1] + 0.01f;
+	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 1));
+}
+
 int main(void)
 {
 	TestTouchSubsteps();
@@ -1364,6 +1687,12 @@ int main(void)
 	TestRecoverySweepChordBoundaries();
 	TestRecoveryRejectsUnauthenticatedLiveState();
 	TestRecoveryRejectsTopAuthorityDrift();
+	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
+	TestDeclaredActivatorRejectsMalformedWorldBounds();
+	TestDeclaredDoorHoldMembersIsAtomic();
+	TestDeclaredDoorHoldMembersRequiresClosedTeam();
+	TestDeclaredDoorHoldMembersRejectsForeignPointers();
+	TestDeclaredDoorMembersTerminalRequiresPhysicalPose();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_swim_oracle_test: %d failure(s)\n",

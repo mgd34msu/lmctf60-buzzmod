@@ -192,6 +192,13 @@ typedef struct sg_bot_s
 	qboolean	declared_door_retreat; /* live suffix to `to` failed; own a
 		                                  * separately proved return to anchor */
 	int			declared_door_suffix_ms; /* current live forward/retreat proof */
+	qboolean	declared_guard_paused; /* RL_DOOR is locally held while proof-law
+		                                  * authority is absent; the durable guard
+		                                  * may be ACTIVE or PAUSED */
+	float		declared_guard_pause_started; /* wall time excluded from the
+		                                           * retained action deadline */
+	float		declared_door_recovery_since; /* compatible-law physical failure
+		                                           * budget; zero while making progress */
 	int			commit_link;    /* the gradient step being held */
 	float		commit_until;
 	vec3_t		stag_org;       /* stagnation ball on the BODY, not the

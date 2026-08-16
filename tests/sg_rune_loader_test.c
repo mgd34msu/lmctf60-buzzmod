@@ -356,6 +356,59 @@ static void TestGoldenAndMapping(void)
 	}
 }
 
+static void TestPublishedNativeShape(void)
+{
+	unsigned char encoded[TEST_BYTES];
+	sg_rune_v3_identity_t identity;
+	sg_rune_v3_header_t header;
+	rune_seed_t native_seeds[TEST_SEEDS];
+	rune_link_t native_links[TEST_LINKS];
+	int first_link[TEST_SEEDS];
+	int next_link[TEST_LINKS];
+	byte linked_seed[TEST_SEEDS];
+	rune_t rune;
+	sg_rune_load_result_t result;
+	uint32_t saved_crc;
+
+	CHECK(EncodeBase(800.0f, encoded, &identity));
+	result = LoadSmall(encoded, sizeof(encoded), &identity, &header,
+		native_seeds, native_links);
+	CHECK_RESULT(result, RLW_OK, RLR_OK, SG_RUNE_LOAD_STAGE_DONE,
+		SG_RUNE_LOAD_INDEX_NONE);
+	memset(&rune, 0, sizeof(rune));
+	memset(first_link, 0, sizeof(first_link));
+	memset(next_link, 0, sizeof(next_link));
+	memset(linked_seed, 0, sizeof(linked_seed));
+	rune.v3_header = header;
+	rune.hdr.magic = (int)SG_RUNE_V3_MAGIC;
+	rune.hdr.version = SG_RUNE_V3_VERSION;
+	rune.hdr.num_seeds = (int)header.num_seeds;
+	rune.hdr.num_links = (int)header.num_links;
+	memcpy(rune.hdr.mapname, header.map_name, sizeof(rune.hdr.mapname));
+	rune.seeds = native_seeds;
+	rune.links = native_links;
+	rune.first_link = first_link;
+	rune.next_link = next_link;
+	rune.linked_seed = linked_seed;
+	CHECK(SG_RunePublishedShapeValid(&rune));
+
+	rune.hdr.num_links++;
+	CHECK(!SG_RunePublishedShapeValid(&rune));
+	rune.hdr.num_links--;
+	rune.hdr.mapname[0] ^= 1;
+	CHECK(!SG_RunePublishedShapeValid(&rune));
+	rune.hdr.mapname[0] ^= 1;
+	saved_crc = rune.v3_header.header_crc32;
+	rune.v3_header.header_crc32 ^= UINT32_C(1);
+	CHECK(!SG_RunePublishedShapeValid(&rune));
+	rune.v3_header.header_crc32 = saved_crc;
+	rune.next_link = NULL;
+	CHECK(!SG_RunePublishedShapeValid(&rune));
+	rune.next_link = next_link;
+	rune.first_link = NULL;
+	CHECK(!SG_RunePublishedShapeValid(&rune));
+}
+
 static void TestProbeInspectIdentity(void)
 {
 	unsigned char encoded[TEST_BYTES];
@@ -1076,6 +1129,7 @@ done:
 int main(void)
 {
 	TestGoldenAndMapping();
+	TestPublishedNativeShape();
 	TestProbeInspectIdentity();
 	TestLiteralControlLaws();
 	TestEncodedControlFailures();

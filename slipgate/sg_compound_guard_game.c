@@ -16,6 +16,7 @@ typedef struct sg_compound_guard_game_identity_s
 	uint64_t next_generation;
 	uint8_t kind[MAX_EDICTS];
 	uint8_t present[MAX_EDICTS];
+	uint8_t protected_subject[MAX_EDICTS];
 	uint8_t initialized;
 	uint8_t initialization_failed;
 	uint8_t generation_exhausted;
@@ -26,6 +27,8 @@ static sg_compound_guard_game_identity_t game_guard;
 void hook_touch(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf);
 void hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
+	int damage, vec3_t point);
+void body_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
 	int damage, vec3_t point);
 
 static int GameWorldValid(void)
@@ -243,6 +246,148 @@ static sg_compound_guard_observation_t GameOutsideSweep(void *context,
 	return SG_COMPOUND_GUARD_YES;
 }
 
+static sg_compound_guard_observation_t GameAllSubjectsOutside(void *context,
+	const sg_mover_key_t *keys, size_t key_count)
+{
+	sg_mover_subject_t subject;
+	sg_compound_guard_observation_t observation;
+	int body_keys[BODY_QUEUE_SIZE];
+	uint64_t body_generations[BODY_QUEUE_SIZE];
+	int body_count = 0;
+	uint64_t generation;
+	int key, body_index;
+
+	if (context != &game_guard || !keys || key_count == 0U ||
+	    key_count > SG_MOVER_LEASE_MAX_KEYS || !GameWorldValid() ||
+	    game_guard.generation_exhausted)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	for (key = 1; key < globals.num_edicts; key++)
+	{
+		if (!game_guard.present[key] || !game_guard.protected_subject[key])
+			continue;
+		observation = GameIdentity(context, key, &generation);
+		if (observation == SG_COMPOUND_GUARD_NO)
+			continue;
+		if (observation != SG_COMPOUND_GUARD_YES || generation == 0U ||
+		    game_guard.kind[key] < SG_MOVER_SUBJECT_CLIENT ||
+		    game_guard.kind[key] > SG_MOVER_SUBJECT_HOOK_BOLT)
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		memset(&subject, 0, sizeof(subject));
+		subject.kind = game_guard.kind[key];
+		subject.edict_key = key;
+		subject.generation = generation;
+		observation = GameSolid(context, &subject);
+		if (observation == SG_COMPOUND_GUARD_NO)
+			continue;
+		if (observation != SG_COMPOUND_GUARD_YES)
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		observation = GameOutsideSweep(context, &subject, keys, key_count);
+		if (observation == SG_COMPOUND_GUARD_NO &&
+		    subject.kind == SG_MOVER_SUBJECT_BODY_QUEUE)
+		{
+			edict_t *body = &g_edicts[key];
+
+			/* Preflight the entire protected population before changing a corpse.
+			 * A later client/hook blocker or malformed incarnation must leave every
+			 * earlier body untouched. */
+			if (body->solid != SOLID_BBOX || body->movetype != MOVETYPE_TOSS ||
+			    body->client || body->die != body_die ||
+			    body->takedamage != DAMAGE_YES ||
+			    body_count >= BODY_QUEUE_SIZE)
+				return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+			body_keys[body_count] = key;
+			body_generations[body_count] = generation;
+			body_count++;
+			continue;
+		}
+		if (observation != SG_COMPOUND_GUARD_YES)
+			return observation == SG_COMPOUND_GUARD_NO
+			    ? SG_COMPOUND_GUARD_NO
+			    : SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	}
+	/* No bot think owns a body-queue edict, so a knocked SG corpse could
+	 * otherwise retain an ownerless TOP lease forever.  Only after the complete
+	 * read-only pass succeeded, finish the stock gib path for each exact
+	 * SG-derived corpse and positively re-observe the same incarnation nonsolid. */
+	for (body_index = 0; body_index < body_count; body_index++)
+	{
+		edict_t *body = &g_edicts[body_keys[body_index]];
+		uint64_t after_generation = 0U;
+		vec3_t point = { 0.0f, 0.0f, 0.0f };
+
+		if (GameIdentity(context, body_keys[body_index],
+		        &after_generation) != SG_COMPOUND_GUARD_YES ||
+		    after_generation != body_generations[body_index] ||
+		    game_guard.kind[body_keys[body_index]] !=
+		        SG_MOVER_SUBJECT_BODY_QUEUE ||
+		    body->solid != SOLID_BBOX || body->movetype != MOVETYPE_TOSS ||
+		    body->client || body->die != body_die ||
+		    body->takedamage != DAMAGE_YES)
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		body->health = -100;
+		body_die(body, body, body, 100000, point);
+		if (GameIdentity(context, body_keys[body_index],
+		        &after_generation) != SG_COMPOUND_GUARD_YES ||
+		    after_generation != body_generations[body_index] ||
+		    game_guard.kind[body_keys[body_index]] !=
+		        SG_MOVER_SUBJECT_BODY_QUEUE)
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		memset(&subject, 0, sizeof(subject));
+		subject.kind = SG_MOVER_SUBJECT_BODY_QUEUE;
+		subject.edict_key = body_keys[body_index];
+		subject.generation = body_generations[body_index];
+		if (GameSolid(context, &subject) != SG_COMPOUND_GUARD_NO)
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	}
+	return SG_COMPOUND_GUARD_YES;
+}
+
+static sg_compound_guard_observation_t GameHoldOpen(void *context,
+	sg_mover_lease_law_t law, const sg_mover_key_t *keys,
+	size_t key_count, int lease_ms)
+{
+	edict_t *members[SG_MOVER_LEASE_MAX_KEYS];
+	size_t index;
+
+	if (context != &game_guard || law != SG_MOVER_LAW_DECLARED_DOOR ||
+	    !keys || key_count == 0U ||
+	    key_count > SG_MOVER_LEASE_MAX_KEYS || !GameWorldValid())
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	for (index = 0U; index < key_count; index++)
+	{
+		if (keys[index] == 0U ||
+		    keys[index] >= (sg_mover_key_t)globals.num_edicts ||
+		    (index > 0U && keys[index - 1U] >= keys[index]))
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		members[index] = &g_edicts[keys[index]];
+	}
+	return SG_DeclaredDoorHoldMembers(members, (int)key_count, lease_ms)
+	    ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+}
+
+static sg_compound_guard_observation_t GameSetTerminal(void *context,
+	sg_mover_lease_law_t law, const sg_mover_key_t *keys,
+	size_t key_count)
+{
+	edict_t *members[SG_MOVER_LEASE_MAX_KEYS];
+	size_t index;
+
+	if (context != &game_guard || law != SG_MOVER_LAW_DECLARED_DOOR ||
+	    !keys || key_count == 0U ||
+	    key_count > SG_MOVER_LEASE_MAX_KEYS || !GameWorldValid())
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	for (index = 0U; index < key_count; index++)
+	{
+		if (keys[index] == 0U ||
+		    keys[index] >= (sg_mover_key_t)globals.num_edicts ||
+		    (index > 0U && keys[index - 1U] >= keys[index]))
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		members[index] = &g_edicts[keys[index]];
+	}
+	return SG_DeclaredDoorMembersTerminal(members, (int)key_count)
+	    ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+}
+
 static sg_compound_guard_result_t GameEnsureInitialized(void)
 {
 	sg_compound_guard_host_t host;
@@ -257,6 +402,9 @@ static sg_compound_guard_result_t GameEnsureInitialized(void)
 	host.identity = GameIdentity;
 	host.solid = GameSolid;
 	host.outside_sweep = GameOutsideSweep;
+	host.all_subjects_outside = GameAllSubjectsOutside;
+	host.hold_open = GameHoldOpen;
+	host.set_terminal = GameSetTerminal;
 	result = SG_CompoundGuardInit(&host);
 	if (result != SG_COMPOUND_GUARD_OK)
 	{
@@ -292,6 +440,7 @@ static sg_compound_guard_result_t GameMint(edict_t *entity,
 	game_guard.generation[key] = game_guard.next_generation;
 	game_guard.kind[key] = (uint8_t)kind;
 	game_guard.present[key] = 1U;
+	game_guard.protected_subject[key] = 0U;
 	if (key_out)
 		*key_out = key;
 	return SG_COMPOUND_GUARD_OK;
@@ -308,6 +457,8 @@ sg_compound_guard_result_t SG_CompoundGuardGameLevelReset(void)
 	/* Generations are process-unique and retained.  Presence is level-owned:
 	 * the engine is about to discard every old incarnation synchronously. */
 	memset(game_guard.present, 0, sizeof(game_guard.present));
+	memset(game_guard.protected_subject, 0,
+	       sizeof(game_guard.protected_subject));
 	return result;
 }
 
@@ -319,6 +470,8 @@ void SG_CompoundGuardGameStorageWillFree(void)
 		return;
 	(void)SG_CompoundGuardLevelReset();
 	memset(game_guard.present, 0, sizeof(game_guard.present));
+	memset(game_guard.protected_subject, 0,
+	       sizeof(game_guard.protected_subject));
 	for (slot = 0; slot < SG_MAXBOTS; slot++)
 		(void)SG_CompoundGuardBotReset(&sg_bots[slot].compound_guard);
 }
@@ -350,12 +503,21 @@ sg_compound_guard_result_t SG_CompoundGuardGameBotAttach(
 	    !game_guard.present[key] ||
 	    game_guard.kind[key] != SG_MOVER_SUBJECT_CLIENT)
 		return SG_COMPOUND_GUARD_HOST_ERROR;
-	return SG_CompoundGuardBotAttach(guard_bot, bot_slot, key);
+	result = SG_CompoundGuardBotAttach(guard_bot, bot_slot, key);
+	if (result == SG_COMPOUND_GUARD_OK)
+		game_guard.protected_subject[key] = 1U;
+	return result;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardGameBodyQueueInit(edict_t *body)
 {
-	return GameMint(body, SG_MOVER_SUBJECT_BODY_QUEUE, NULL);
+	int key = 0;
+	sg_compound_guard_result_t result;
+
+	result = GameMint(body, SG_MOVER_SUBJECT_BODY_QUEUE, &key);
+	if (result == SG_COMPOUND_GUARD_OK)
+		game_guard.protected_subject[key] = 0U;
+	return result;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardGameBodyWillReplace(edict_t *body)
@@ -374,15 +536,21 @@ sg_compound_guard_result_t SG_CompoundGuardGameBodyWillReplace(edict_t *body)
 sg_compound_guard_result_t SG_CompoundGuardGameBodyDidCopy(edict_t *client,
 	edict_t *body)
 {
-	int key = 0, resolved_key = 0;
+	int client_key = 0, key = 0, resolved_key = 0;
+	int protected_subject = 0;
 	sg_bot_t *bot;
 	sg_compound_guard_result_t mint_result, copy_result;
 
+	if (client && GameEdictKey(client, &client_key) &&
+	    game_guard.protected_subject[client_key])
+		protected_subject = 1;
 	if (GameEdictKey(body, &resolved_key))
 		mint_result = GameMint(body, SG_MOVER_SUBJECT_BODY_QUEUE, &key);
 	else
 		mint_result = SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	bot = GameBotForClient(client);
+	if (mint_result == SG_COMPOUND_GUARD_OK)
+		game_guard.protected_subject[key] = protected_subject ? 1U : 0U;
 	copy_result = SG_CompoundGuardBodyDidCopy(
 	    bot && bot->compound_guard.attached ? &bot->compound_guard : NULL,
 	    key > 0 ? key : resolved_key);
@@ -406,6 +574,7 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientSpawned(edict_t *client)
 			(void)SG_CompoundGuardQuarantine(&bot->compound_guard);
 		return result;
 	}
+	game_guard.protected_subject[key] = bot ? 1U : 0U;
 	if (!bot || !bot->compound_guard.attached)
 		return SG_COMPOUND_GUARD_OK;
 	respawn_result = SG_CompoundGuardBotRespawn(&bot->compound_guard, key);
@@ -429,9 +598,42 @@ sg_compound_guard_result_t SG_CompoundGuardGameHookLinked(edict_t *client,
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	}
 	result = GameMint(bolt, SG_MOVER_SUBJECT_HOOK_BOLT, &key);
+	if (result == SG_COMPOUND_GUARD_OK)
+		game_guard.protected_subject[key] =
+		    game_guard.protected_subject[client_key] ? 1U : 0U;
 	if (result != SG_COMPOUND_GUARD_OK)
 		GameQuarantineBot(bot);
 	return result;
+}
+
+static int GameClientBlocksAnyClaim(edict_t *client, int client_key)
+{
+	sg_mover_lease_record_t record;
+	sg_mover_ticket_t ticket;
+	sg_mover_subject_t subject;
+	sg_compound_guard_observation_t observation;
+	size_t slot;
+
+	if (!client || client_key <= 0 || !game_guard.present[client_key] ||
+	    !game_guard.protected_subject[client_key] ||
+	    game_guard.generation[client_key] == 0U)
+		return 0;
+	memset(&subject, 0, sizeof(subject));
+	subject.kind = SG_MOVER_SUBJECT_CLIENT;
+	subject.edict_key = client_key;
+	subject.generation = game_guard.generation[client_key];
+	if (GameSolid(&game_guard, &subject) == SG_COMPOUND_GUARD_NO)
+		return 0;
+	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
+	{
+		if (!SG_CompoundGuardRecordAt(slot, &record, &ticket))
+			continue;
+		observation = GameOutsideSweep(&game_guard, &subject, record.keys,
+			record.key_count);
+		if (observation != SG_COMPOUND_GUARD_YES)
+			return 1;
+	}
+	return 0;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
@@ -439,7 +641,10 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 	int bolt_key = 0;
 	int client_key;
 	sg_bot_t *bot;
+	sg_mover_lease_record_t record;
 	sg_compound_guard_result_t result;
+	qboolean claimed = false;
+	qboolean already_orphan = false;
 
 	bot = GameBotForClient(client);
 	if (!GameEdictKey(client, &client_key) ||
@@ -452,10 +657,37 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 	}
 	if (!bot || !bot->compound_guard.attached)
 		return SG_COMPOUND_GUARD_OK;
+	memset(&record, 0, sizeof(record));
+	(void)SG_CompoundGuardValidate(&bot->compound_guard, &record);
+	claimed = (record.law == SG_MOVER_LAW_DECLARED_DOOR ||
+	           record.law == SG_MOVER_LAW_COMPOUND_PREOPEN) &&
+	          (record.state == SG_MOVER_LEASE_ACTIVE ||
+	           record.state == SG_MOVER_LEASE_PAUSED ||
+	           record.state == SG_MOVER_LEASE_QUARANTINED);
+	already_orphan = (record.law == SG_MOVER_LAW_DECLARED_DOOR ||
+	                  record.law == SG_MOVER_LAW_COMPOUND_PREOPEN) &&
+	                 record.state == SG_MOVER_LEASE_ORPHAN;
+	if (GameClientBlocksAnyClaim(client, client_key))
+		claimed = true;
+	if (SG_CompoundGuardBotRunState(&bot->compound_guard) ==
+	    SG_COMPOUND_GUARD_RUN_TERMINAL)
+		claimed = true;
 	bolt_key = GameResolveHook(client);
-	result = SG_CompoundGuardOrphan(&bot->compound_guard, bolt_key);
-	if (result != SG_COMPOUND_GUARD_OK)
-		GameQuarantineBot(bot);
+	if (already_orphan)
+		result = SG_COMPOUND_GUARD_OK;
+	else
+	{
+		result = SG_CompoundGuardOrphan(&bot->compound_guard, bolt_key);
+		if (result != SG_COMPOUND_GUARD_OK)
+			GameQuarantineBot(bot);
+	}
+	/* A normal player corpse remains SOLID_BBOX longer than the guard's short
+	 * physical TOP lease.  Once an exact mover claim is orphaned (or terminally
+	 * quarantined), force the ordinary player_die path into its stock gib branch:
+	 * the death/obituary/respawn lifecycle is unchanged, but ThrowClientHead
+	 * makes this client SOLID_NOT before a scheduled door can close onto it. */
+	if (claimed && client->health > -100)
+		client->health = -100;
 	return result;
 }
 
@@ -466,6 +698,7 @@ void SG_CompoundGuardGameEntityFreed(edict_t *entity)
 	if (!game_guard.initialized || !GameEdictKey(entity, &key))
 		return;
 	game_guard.present[key] = 0U;
+	game_guard.protected_subject[key] = 0U;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardGameBoltEvicted(edict_t *client,
@@ -510,6 +743,7 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientDisconnected(
 	if (bot && bot->compound_guard.attached)
 		result = SG_CompoundGuardBotDisconnected(&bot->compound_guard);
 	game_guard.present[key] = 0U;
+	game_guard.protected_subject[key] = 0U;
 	if (result != SG_COMPOUND_GUARD_OK)
 		GameQuarantineBot(bot);
 	return result;

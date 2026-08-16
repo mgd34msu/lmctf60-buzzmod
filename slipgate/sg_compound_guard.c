@@ -4,10 +4,23 @@
 #include <limits.h>
 #include <string.h>
 
+#define SG_COMPOUND_GUARD_MAX_RETIREMENTS 1024U
+
+typedef struct sg_compound_guard_retirement_s
+{
+	sg_mover_key_t keys[SG_MOVER_LEASE_MAX_KEYS];
+	size_t key_count;
+	sg_mover_lease_law_t law;
+	uint8_t active;
+} sg_compound_guard_retirement_t;
+
 typedef struct sg_compound_guard_singleton_s
 {
 	sg_mover_lease_registry_t leases;
 	sg_compound_guard_host_t host;
+	sg_compound_guard_retirement_t
+		retirements[SG_COMPOUND_GUARD_MAX_RETIREMENTS];
+	size_t retirement_count;
 	uint64_t next_owner_generation;
 	uint8_t initialized;
 	uint8_t owner_generation_exhausted;
@@ -81,7 +94,8 @@ static sg_compound_guard_result_t GuardResult(
 
 static int HostValid(const sg_compound_guard_host_t *host)
 {
-	return host && host->identity && host->solid && host->outside_sweep;
+	return host && host->identity && host->solid && host->outside_sweep &&
+	       host->all_subjects_outside && host->hold_open && host->set_terminal;
 }
 
 static int ReservedZero(const uint8_t *reserved, size_t count)
@@ -132,6 +146,156 @@ static int KeysValid(const sg_mover_key_t *keys, size_t key_count)
 		if (keys[index] == 0U || keys[index - 1U] >= keys[index])
 			return 0;
 	return 1;
+}
+
+static int KeysOverlap(const sg_mover_key_t *first, size_t first_count,
+	const sg_mover_key_t *second, size_t second_count)
+{
+	size_t first_index = 0U, second_index = 0U;
+
+	if (!KeysValid(first, first_count) || !KeysValid(second, second_count))
+		return 1;
+	while (first_index < first_count && second_index < second_count)
+	{
+		if (first[first_index] == second[second_index])
+			return 1;
+		if (first[first_index] < second[second_index])
+			first_index++;
+		else
+			second_index++;
+	}
+	return 0;
+}
+
+static int RetirementsOverlap(const sg_mover_key_t *keys, size_t key_count)
+{
+	size_t slot;
+
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+		if (guard.retirements[slot].active &&
+		    KeysOverlap(keys, key_count, guard.retirements[slot].keys,
+		        guard.retirements[slot].key_count))
+			return 1;
+	return 0;
+}
+
+static int DeclaredDoorLeasePresent(void)
+{
+	size_t slot;
+	sg_mover_lease_record_t record;
+	sg_mover_ticket_t ticket;
+
+	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
+		if (SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket) &&
+		    record.law == SG_MOVER_LAW_DECLARED_DOOR)
+			return 1;
+	return 0;
+}
+
+static int DeclaredDoorRetirementPresent(void)
+{
+	size_t slot;
+
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+		if (guard.retirements[slot].active &&
+		    guard.retirements[slot].law == SG_MOVER_LAW_DECLARED_DOOR)
+			return 1;
+	return 0;
+}
+
+static sg_compound_guard_result_t ReserveRetirement(
+	const sg_mover_lease_record_t *record, size_t *slot_out, int *created_out)
+{
+	size_t slot, free_slot = SG_COMPOUND_GUARD_MAX_RETIREMENTS;
+
+	if (slot_out)
+		*slot_out = SG_COMPOUND_GUARD_MAX_RETIREMENTS;
+	if (created_out)
+		*created_out = 0;
+	if (!record || !slot_out || !created_out ||
+	    !KeysValid(record->keys, record->key_count) ||
+	    record->law <= SG_MOVER_LAW_NONE ||
+	    record->law > SG_MOVER_LAW_COMPOUND_PREOPEN)
+		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+	{
+		sg_compound_guard_retirement_t *retirement =
+		    &guard.retirements[slot];
+
+		if (!retirement->active)
+		{
+			if (free_slot == SG_COMPOUND_GUARD_MAX_RETIREMENTS)
+				free_slot = slot;
+			continue;
+		}
+		if (retirement->law == (sg_mover_lease_law_t)record->law &&
+		    retirement->key_count == record->key_count &&
+		    memcmp(retirement->keys, record->keys,
+		        record->key_count * sizeof(record->keys[0])) == 0)
+		{
+			*slot_out = slot;
+			return SG_COMPOUND_GUARD_OK;
+		}
+		/* A live lease registry forbids overlapping records.  Overlap with a
+		 * retirement means a caller bypassed the acquisition fence; preserve the
+		 * older physical fence and fail closed instead of merging unequal sets. */
+		if (KeysOverlap(retirement->keys, retirement->key_count,
+		    record->keys, record->key_count))
+			return SG_COMPOUND_GUARD_CONFLICT;
+	}
+	if (free_slot == SG_COMPOUND_GUARD_MAX_RETIREMENTS)
+		return SG_COMPOUND_GUARD_FULL;
+	guard.retirements[free_slot].law =
+	    (sg_mover_lease_law_t)record->law;
+	guard.retirements[free_slot].key_count = record->key_count;
+	memcpy(guard.retirements[free_slot].keys, record->keys,
+	    record->key_count * sizeof(record->keys[0]));
+	guard.retirements[free_slot].active = 1U;
+	guard.retirement_count++;
+	*slot_out = free_slot;
+	*created_out = 1;
+	return SG_COMPOUND_GUARD_OK;
+}
+
+static void CancelRetirement(size_t slot, int created)
+{
+	if (!created || slot >= SG_COMPOUND_GUARD_MAX_RETIREMENTS ||
+	    !guard.retirements[slot].active)
+		return;
+	memset(&guard.retirements[slot], 0,
+	    sizeof(guard.retirements[slot]));
+	if (guard.retirement_count > 0U)
+		guard.retirement_count--;
+}
+
+static void RefreshRetirements(void)
+{
+	size_t slot;
+
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+	{
+		sg_compound_guard_retirement_t *retirement =
+		    &guard.retirements[slot];
+		sg_compound_guard_observation_t observation;
+
+		if (!retirement->active)
+			continue;
+		observation = guard.host.set_terminal(guard.host.context,
+		    retirement->law, retirement->keys, retirement->key_count);
+		if (observation != SG_COMPOUND_GUARD_YES)
+			continue;
+		/* Entity physics precedes this frame hook.  A later pusher/projectile in
+		 * that same entity pass may have put a tracked body or bolt into a set
+		 * whose mover already reached its terminal pose.  Retire only when both
+		 * observations are positive in this one guard frame. */
+		observation = guard.host.all_subjects_outside(guard.host.context,
+		    retirement->keys, retirement->key_count);
+		if (observation != SG_COMPOUND_GUARD_YES)
+			continue;
+		memset(retirement, 0, sizeof(*retirement));
+		if (guard.retirement_count > 0U)
+			guard.retirement_count--;
+	}
 }
 
 static sg_compound_guard_result_t SnapshotSubject(
@@ -211,6 +375,60 @@ static subject_observation_t ObserveSubject(
 	if (observation == SG_COMPOUND_GUARD_NO)
 		return SUBJECT_OBSERVATION_HELD;
 	return SUBJECT_OBSERVATION_ERROR;
+}
+
+static sg_compound_guard_result_t AllSubjectsOutside(
+	const sg_mover_key_t *keys, size_t key_count)
+{
+	sg_compound_guard_observation_t observation;
+
+	if (!KeysValid(keys, key_count))
+		return SG_COMPOUND_GUARD_INVALID_KEYS;
+	observation = guard.host.all_subjects_outside(guard.host.context,
+		keys, key_count);
+	if (observation == SG_COMPOUND_GUARD_YES)
+		return SG_COMPOUND_GUARD_OK;
+	if (observation == SG_COMPOUND_GUARD_NO)
+		return SG_COMPOUND_GUARD_NOT_CLEAR;
+	return SG_COMPOUND_GUARD_HOST_ERROR;
+}
+
+static sg_compound_guard_result_t MaintainRecord(
+	const sg_mover_lease_record_t *record)
+{
+	sg_compound_guard_observation_t observation;
+
+	if (!record || !KeysValid(record->keys, record->key_count))
+		return SG_COMPOUND_GUARD_INVALID_KEYS;
+	observation = guard.host.hold_open(guard.host.context,
+		(sg_mover_lease_law_t)record->law, record->keys,
+		record->key_count, 500);
+	return observation == SG_COMPOUND_GUARD_YES
+	    ? SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_HOST_ERROR;
+}
+
+static sg_compound_guard_result_t ReleaseRecord(
+	const sg_mover_lease_record_t *record, sg_mover_ticket_t *ticket,
+	const sg_mover_owner_t *owner)
+{
+	sg_mover_lease_result_t lease_result;
+	sg_compound_guard_result_t result;
+	size_t retirement_slot;
+	int retirement_created;
+
+	result = ReserveRetirement(record, &retirement_slot,
+	    &retirement_created);
+	if (result != SG_COMPOUND_GUARD_OK)
+		return result;
+	lease_result = SG_MoverLeaseReleaseProvedClear(&guard.leases, ticket,
+	    owner);
+	if (lease_result != SG_MOVER_LEASE_OK)
+	{
+		CancelRetirement(retirement_slot, retirement_created);
+		return GuardResult(lease_result);
+	}
+	SG_MoverTicketClear(ticket);
+	return SG_COMPOUND_GUARD_OK;
 }
 
 static sg_compound_guard_result_t QuarantineTicket(
@@ -308,6 +526,8 @@ sg_compound_guard_result_t SG_CompoundGuardInit(
 		SG_MoverLeaseLevelReset(&guard.leases);
 	}
 	memset(&body_reuse, 0, sizeof(body_reuse));
+	memset(guard.retirements, 0, sizeof(guard.retirements));
+	guard.retirement_count = 0U;
 	guard.host = *host;
 	return SG_COMPOUND_GUARD_OK;
 }
@@ -318,6 +538,8 @@ sg_compound_guard_result_t SG_CompoundGuardLevelReset(void)
 		return SG_COMPOUND_GUARD_NOT_INITIALIZED;
 	memset(&body_reuse, 0, sizeof(body_reuse));
 	SG_MoverLeaseLevelReset(&guard.leases);
+	memset(guard.retirements, 0, sizeof(guard.retirements));
+	guard.retirement_count = 0U;
 	return SG_COMPOUND_GUARD_OK;
 }
 
@@ -474,13 +696,26 @@ sg_compound_guard_result_t SG_CompoundGuardBotDisconnected(
 		(void)QuarantineTicket(&bot->ticket, &bot->owner);
 		return SG_COMPOUND_GUARD_NOT_CLEAR;
 	}
+	result = AllSubjectsOutside(record.keys, record.key_count);
+	if (result == SG_COMPOUND_GUARD_NOT_CLEAR)
+	{
+		/* The disconnecting client is already absent/nonsolid, but another
+		 * generation-tracked subject still occupies the captured set.  Hand the
+		 * claim to Frame as a releasable ORPHAN instead of terminal quarantine. */
+		lease_result = SG_MoverLeaseOrphan(&guard.leases, &bot->ticket,
+			&bot->owner, &bot->client, NULL, &bot->ticket);
+		if (lease_result != SG_MOVER_LEASE_OK)
+			(void)QuarantineTicket(&bot->ticket, &bot->owner);
+		return GuardResult(lease_result);
+	}
+	if (result != SG_COMPOUND_GUARD_OK)
+	{
+		(void)QuarantineTicket(&bot->ticket, &bot->owner);
+		return result;
+	}
 	/* ABSENT is expected after a correctly ordered disconnect.  The captured
 	 * generation is still protected: a replacement reports STALE above. */
-	lease_result = SG_MoverLeaseReleaseProvedClear(&guard.leases,
-		&bot->ticket, &bot->owner);
-	if (lease_result == SG_MOVER_LEASE_OK)
-		SG_MoverTicketClear(&bot->ticket);
-	return GuardResult(lease_result);
+	return ReleaseRecord(&record, &bot->ticket, &bot->owner);
 }
 
 static sg_compound_guard_result_t Acquire(
@@ -501,6 +736,9 @@ static sg_compound_guard_result_t Acquire(
 		return SG_COMPOUND_GUARD_INVALID_KEYS;
 	if (link_index < 0)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	RefreshRetirements();
+	if (RetirementsOverlap(keys, key_count))
+		return SG_COMPOUND_GUARD_CONFLICT;
 	if (SG_MoverTicketValid(&bot->ticket))
 	{
 		result = SyncTicket(bot, &record);
@@ -509,6 +747,13 @@ static sg_compound_guard_result_t Acquire(
 		if (result != SG_COMPOUND_GUARD_NO_LEASE)
 			return result;
 	}
+	/* Ordinary declared-door controllers are globally serialized.  Their host
+	 * callbacks can prove one exact set and owner, but generic Pmove has no
+	 * cross-set command transaction.  Compound-preopen remains key-disjoint and
+	 * dormant under its own controller revision. */
+	if (law == SG_MOVER_LAW_DECLARED_DOOR &&
+	    (DeclaredDoorLeasePresent() || DeclaredDoorRetirementPresent()))
+		return SG_COMPOUND_GUARD_CONFLICT;
 	result = SubjectIdentityCurrent(&bot->client);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
@@ -523,6 +768,14 @@ static sg_compound_guard_result_t Acquire(
 		return observation == SG_COMPOUND_GUARD_NO
 		    ? SG_COMPOUND_GUARD_NOT_CLEAR
 		    : SG_COMPOUND_GUARD_HOST_ERROR;
+	result = AllSubjectsOutside(keys, key_count);
+	/* The owner-specific check above gives NOT_CLEAR its narrow runtime meaning:
+	 * this acquiring body is already in the sweep.  A record-wide blocker is a
+	 * safe contender/conflict wait, never evidence to kill this owner. */
+	if (result == SG_COMPOUND_GUARD_NOT_CLEAR)
+		return SG_COMPOUND_GUARD_CONFLICT;
+	if (result != SG_COMPOUND_GUARD_OK)
+		return result;
 	/* Solid/outside callbacks are host code.  Recheck the exact generation so
 	 * an edict recycled during observation cannot inherit the acquisition. */
 	result = SubjectIdentityCurrent(&bot->client);
@@ -541,6 +794,16 @@ sg_compound_guard_result_t SG_CompoundGuardAcquireDeclaredDoor(
 		link_index, 0U);
 }
 
+sg_compound_guard_result_t SG_CompoundGuardAcquireDeclaredDoorBound(
+	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
+	size_t key_count, int link_index, uint32_t mechanism_index)
+{
+	if (mechanism_index == 0U)
+		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	return Acquire(bot, keys, key_count, SG_MOVER_LAW_DECLARED_DOOR,
+		link_index, mechanism_index);
+}
+
 sg_compound_guard_result_t SG_CompoundGuardAcquireCompoundPreopen(
 	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
 	size_t key_count, int link_index, uint32_t mechanism_index)
@@ -555,6 +818,101 @@ sg_compound_guard_result_t SG_CompoundGuardValidate(
 	if (record_out)
 		memset(record_out, 0, sizeof(*record_out));
 	return ValidateCurrentBot(bot, record_out);
+}
+
+sg_compound_guard_run_t SG_CompoundGuardBotRunState(
+	const sg_compound_guard_bot_t *bot)
+{
+	size_t slot;
+	sg_mover_lease_record_t record;
+	sg_mover_ticket_t ticket;
+	subject_observation_t observation;
+	int owns_active = 0;
+	int wait = 0;
+
+	if (!guard.initialized)
+		return SG_COMPOUND_GUARD_RUN_WAIT;
+	if (!BotAttached(bot))
+		return SG_COMPOUND_GUARD_RUN_WAIT;
+	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
+	{
+		if (!SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket))
+			continue;
+		if ((record.state == SG_MOVER_LEASE_ACTIVE ||
+		     record.state == SG_MOVER_LEASE_PAUSED) &&
+		    memcmp(&record.owner, &bot->owner, sizeof(record.owner)) == 0 &&
+		    memcmp(&ticket, &bot->ticket, sizeof(ticket)) == 0)
+		{
+			owns_active = 1;
+			break;
+		}
+	}
+	/* A released set remains a no-entry region until the host proves the real
+	 * brushes stationary and closed.  A direct/external shove into that region
+	 * is terminal; an outside bot waits.  Existing owners remain runnable so a
+	 * disjoint in-flight lease can finish rather than lose its TOP maintenance. */
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+	{
+		if (!guard.retirements[slot].active)
+			continue;
+		memset(&record, 0, sizeof(record));
+		record.key_count = guard.retirements[slot].key_count;
+		memcpy(record.keys, guard.retirements[slot].keys,
+		    record.key_count * sizeof(record.keys[0]));
+		observation = ObserveSubject(&record, &bot->client);
+		if (observation == SUBJECT_OBSERVATION_HELD)
+			return SG_COMPOUND_GUARD_RUN_TERMINAL;
+		if (observation != SUBJECT_OBSERVATION_CLEAR)
+			wait = 1;
+		else if (!owns_active)
+			wait = 1;
+	}
+	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
+	{
+		if (!SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket))
+			continue;
+		if (BotAttached(bot) &&
+		    (record.state == SG_MOVER_LEASE_ACTIVE ||
+		     record.state == SG_MOVER_LEASE_PAUSED) &&
+		    memcmp(&record.owner, &bot->owner, sizeof(record.owner)) == 0 &&
+		    memcmp(&ticket, &bot->ticket, sizeof(ticket)) == 0)
+			continue;
+		observation = ObserveSubject(&record, &bot->client);
+		if (observation == SUBJECT_OBSERVATION_HELD)
+			return SG_COMPOUND_GUARD_RUN_TERMINAL;
+		if (observation == SUBJECT_OBSERVATION_STALE ||
+		    observation == SUBJECT_OBSERVATION_ERROR ||
+		    observation == SUBJECT_OBSERVATION_ABSENT)
+		{
+			wait = 1;
+			continue;
+		}
+		/* ACTIVE/PAUSED and ORPHAN sets remain a no-entry region.  A terminal
+		 * quarantine is physically renewed by Frame and has no runnable owner;
+		 * an outside bot may continue ordinary play without deadlocking the map. */
+		if (!owns_active &&
+		    (record.state == SG_MOVER_LEASE_ACTIVE ||
+		     record.state == SG_MOVER_LEASE_PAUSED ||
+		     record.state == SG_MOVER_LEASE_ORPHAN))
+			wait = 1;
+	}
+	return wait ? SG_COMPOUND_GUARD_RUN_WAIT
+	            : SG_COMPOUND_GUARD_RUN_READY;
+}
+
+sg_compound_guard_result_t SG_CompoundGuardAllSubjectsOutside(
+	sg_compound_guard_bot_t *bot)
+{
+	sg_mover_lease_record_t record;
+	sg_compound_guard_result_t result;
+
+	result = ValidateCurrentBot(bot, &record);
+	if (result != SG_COMPOUND_GUARD_OK)
+		return result;
+	if (record.state != SG_MOVER_LEASE_ACTIVE &&
+	    record.state != SG_MOVER_LEASE_PAUSED)
+		return SG_COMPOUND_GUARD_INVALID_TRANSITION;
+	return AllSubjectsOutside(record.keys, record.key_count);
 }
 
 sg_compound_guard_result_t SG_CompoundGuardAuthorize(
@@ -810,12 +1168,36 @@ static sg_compound_guard_result_t FinishBodyReuse(
 			 * replacement transaction itself completed successfully. */
 			continue;
 		}
-		lease_result = SG_MoverLeaseReleaseProvedClear(&guard.leases,
-			&entry->ticket, &entry->owner);
-		if (lease_result != SG_MOVER_LEASE_OK)
 		{
-			(void)QuarantineTicket(&entry->ticket, &entry->owner);
-			final_result = GuardResult(lease_result);
+			sg_compound_guard_result_t clear_result;
+
+			clear_result = AllSubjectsOutside(current.keys,
+				current.key_count);
+			if (clear_result != SG_COMPOUND_GUARD_OK)
+			{
+				if (clear_result != SG_COMPOUND_GUARD_NOT_CLEAR)
+					(void)QuarantineTicket(&entry->ticket,
+						&entry->owner);
+				final_result = clear_result;
+				continue;
+			}
+		}
+		{
+			sg_compound_guard_result_t release_result;
+
+			release_result = ReleaseRecord(&current, &entry->ticket,
+			    &entry->owner);
+			if (release_result != SG_COMPOUND_GUARD_OK)
+			{
+				(void)QuarantineTicket(&entry->ticket, &entry->owner);
+				final_result = release_result;
+			}
+		}
+		if (final_result != SG_COMPOUND_GUARD_OK)
+		{
+			/* The cleanup loop continues so every captured old claim reaches a
+			 * terminal state even when one retirement cannot be reserved. */
+			continue;
 		}
 	}
 	return final_result;
@@ -1002,15 +1384,39 @@ static sg_compound_guard_result_t SweepOrphan(sg_mover_ticket_t *ticket,
 			stats->held++;
 		return SG_COMPOUND_GUARD_NOT_CLEAR;
 	}
-	lease_result = SG_MoverLeaseReleaseProvedClear(&guard.leases, ticket,
-		owner);
-	if (lease_result == SG_MOVER_LEASE_OK)
 	{
-		SG_MoverTicketClear(ticket);
-		if (stats)
-			stats->released++;
+		sg_compound_guard_result_t clear_result;
+
+		clear_result = AllSubjectsOutside(record.keys, record.key_count);
+		if (clear_result != SG_COMPOUND_GUARD_OK)
+		{
+			if (stats)
+			{
+				if (clear_result == SG_COMPOUND_GUARD_NOT_CLEAR)
+					stats->held++;
+				else
+					stats->host_errors++;
+			}
+			if (clear_result != SG_COMPOUND_GUARD_NOT_CLEAR)
+			{
+				(void)QuarantineTicket(ticket, owner);
+				if (stats)
+					stats->quarantined++;
+			}
+			return clear_result;
+		}
 	}
-	return GuardResult(lease_result);
+	{
+		sg_compound_guard_result_t release_result;
+
+		release_result = ReleaseRecord(&record, ticket, owner);
+		if (release_result == SG_COMPOUND_GUARD_OK)
+		{
+			if (stats)
+				stats->released++;
+		}
+		return release_result;
+	}
 }
 
 sg_compound_guard_result_t SG_CompoundGuardReleaseProvedClear(
@@ -1018,7 +1424,6 @@ sg_compound_guard_result_t SG_CompoundGuardReleaseProvedClear(
 {
 	sg_mover_lease_record_t record;
 	subject_observation_t observation;
-	sg_mover_lease_result_t lease_result;
 	sg_compound_guard_result_t result;
 
 	result = ValidateCurrentBot(bot, &record);
@@ -1042,11 +1447,15 @@ sg_compound_guard_result_t SG_CompoundGuardReleaseProvedClear(
 			observation == SUBJECT_OBSERVATION_STALE
 			    ? SUBJECT_OBSERVATION_STALE
 			    : SUBJECT_OBSERVATION_ERROR);
-	lease_result = SG_MoverLeaseReleaseProvedClear(&guard.leases,
-		&bot->ticket, &bot->owner);
-	if (lease_result == SG_MOVER_LEASE_OK)
-		SG_MoverTicketClear(&bot->ticket);
-	return GuardResult(lease_result);
+	result = AllSubjectsOutside(record.keys, record.key_count);
+	if (result == SG_COMPOUND_GUARD_NOT_CLEAR)
+		return result;
+	if (result != SG_COMPOUND_GUARD_OK)
+	{
+		(void)QuarantineTicket(&bot->ticket, &bot->owner);
+		return result;
+	}
+	return ReleaseRecord(&record, &bot->ticket, &bot->owner);
 }
 
 sg_compound_guard_result_t SG_CompoundGuardQuarantine(
@@ -1076,6 +1485,10 @@ void SG_CompoundGuardFrame(sg_compound_guard_frame_stats_t *stats_out)
 			*stats_out = stats;
 		return;
 	}
+	/* Movers already ran for this server frame.  Retire a release fence only
+	 * after the host proves the captured physical set actually closed; elapsed
+	 * frames and expired TOP timers are not closure evidence. */
+	RefreshRetirements();
 	/* CopyToBodyQue is synchronous.  Reaching the next SG frame with an open
 	 * transaction proves DidCopy was missed; park every captured claim in its
 	 * terminal fail-closed state before inspecting ordinary orphans. */
@@ -1086,14 +1499,54 @@ void SG_CompoundGuardFrame(sg_compound_guard_frame_stats_t *stats_out)
 	}
 	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
 	{
+		sg_compound_guard_result_t result;
+
 		if (!SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket) ||
-		    record.state != SG_MOVER_LEASE_ORPHAN)
+		    (record.state != SG_MOVER_LEASE_ORPHAN &&
+		     record.state != SG_MOVER_LEASE_QUARANTINED))
 			continue;
 		stats.inspected++;
-		(void)SweepOrphan(&ticket, &record.owner, &stats);
+		if (record.state == SG_MOVER_LEASE_ORPHAN)
+			result = SweepOrphan(&ticket, &record.owner, &stats);
+		else
+			result = SG_COMPOUND_GUARD_QUARANTINE_LOCKED;
+		if (result == SG_COMPOUND_GUARD_OK)
+			continue;
+		/* The route/trigger owner may already be dead or detached.  The captured
+		 * physical set remains sufficient to renew an exact TOP lease while any
+		 * tracked client, corpse, or bolt prevents safe retirement. */
+		if (MaintainRecord(&record) == SG_COMPOUND_GUARD_OK)
+		{
+			if (record.state == SG_MOVER_LEASE_QUARANTINED)
+				stats.held++;
+		}
+		else
+			stats.host_errors++;
 	}
 	if (stats_out)
 		*stats_out = stats;
+}
+
+int SG_CompoundGuardAnyRetirement(void)
+{
+	size_t slot;
+
+	if (!guard.initialized ||
+	    guard.retirement_count > SG_COMPOUND_GUARD_MAX_RETIREMENTS)
+		return 1;
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+		if (guard.retirements[slot].active)
+			return 1;
+	return 0;
+}
+
+int SG_CompoundGuardRetirementOverlaps(const sg_mover_key_t *keys,
+	size_t key_count)
+{
+	if (!guard.initialized || !KeysValid(keys, key_count) ||
+	    guard.retirement_count > SG_COMPOUND_GUARD_MAX_RETIREMENTS)
+		return 1;
+	return RetirementsOverlap(keys, key_count);
 }
 
 int SG_CompoundGuardRecordAt(size_t slot,

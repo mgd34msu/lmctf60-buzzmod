@@ -2689,6 +2689,8 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
+	if (SG_OwnsBot(ent))
+		SG_CancelBotDelayedUses(ent);
 	/* A client index is recycled process storage. Retire every private and
 	 * shared sensor/chat fact before the edict can be reused by a different
 	 * human or fake client; SG-specific callers may already have done this,

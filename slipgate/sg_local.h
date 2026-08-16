@@ -201,6 +201,12 @@ qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 	const vec3_t to);
 qboolean SG_DeclaredDoorAtTop(edict_t *trigger);
 qboolean SG_DeclaredDoorAtTopFor(edict_t *trigger, int window_ms);
+/* Protective maintenance for an exact already-authorized physical member
+ * set.  This exists for the lifecycle edge where the activator disappears
+ * after acquisition; it validates the entire set before changing any timer. */
+qboolean SG_DeclaredDoorHoldMembers(edict_t *const *members, int count,
+	int lease_ms);
+qboolean SG_DeclaredDoorMembersTerminal(edict_t *const *members, int count);
 qboolean SG_DeclaredDoorHoldOpen(edict_t *trigger, int lease_ms);
 int SG_DeclaredDoorContractCost(edict_t *trigger, int approach_ms,
 	int touch_ms, int egress_ms);
@@ -566,9 +572,19 @@ typedef struct
 } sg_weights_t;
 
 qboolean	SG_OwnsBot(edict_t *ent);
-void		SG_NoteDoorTriggerTouch(edict_t *source, edict_t *activator);
-void		SG_NoteDoorActivation(edict_t *source, edict_t *door_master,
-							  edict_t *activator);
+/* G_UseTargets marks only transient DelayedUse edicts with this bit.  It
+ * preserves SG provenance across the delay without changing mapper entities
+ * or treating human activators as guarded bots. */
+#define SG_DELAYED_USE_BOT_ACTIVATOR 0x40000000
+void		SG_CancelBotDelayedUses(edict_t *activator);
+qboolean	SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeDoorTriggerUse(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
+								   edict_t *activator);
+struct sg_bot_s;
+/* Last-resort safety terminal: normal player_die lifecycle, deliberately
+ * gibbed nonsolid so an unmaintainable mover cannot close onto a corpse. */
+void		SG_DeclaredDoorTerminalDeath(struct sg_bot_s *bot);
 void		SG_NoteDropTriggerContact(edict_t *source, edict_t *activator);
 void		SG_NoteDropSolidContact(edict_t *source, edict_t *activator);
 qboolean	SG_RetireBotForClient(edict_t *ent);

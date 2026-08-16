@@ -351,6 +351,33 @@ static void TestRotatingBoundsRoundOutward(void)
 		SetLinkedBounds(hook);
 		CHECK(!SG_MoverSubjectOutsideSweep(mover, hook));
 	}
+
+	/* Pose validation admits the bounded stock AngleMove final-roundoff past
+	 * an endpoint.  At a large leaf radius that tiny angular sliver spans more
+	 * than the generic numeric padding, so the sweep must explicitly include
+	 * the authenticated current pose rather than stopping at the nominal end. */
+	{
+		edict_t *mover, *hook;
+		vec3_t local;
+
+		ResetWorld();
+		mover = TranslationMover();
+		mover->classname = "func_door_rotating";
+		VectorClear(mover->mins);
+		Set3(mover->maxs, 100000.0f, 0.0f, 0.0f);
+		VectorClear(mover->moveinfo.start_origin);
+		VectorClear(mover->moveinfo.end_origin);
+		VectorClear(mover->moveinfo.start_angles);
+		Set3(mover->moveinfo.end_angles, 0.0f, 200.0f, 0.0f);
+		Set3(mover->s.angles, 0.0f, 200.0015f, 0.0f);
+		SetLinkedBounds(mover);
+		hook = HookSubject(0.0f, 0.0f, 0.0f, SOLID_BBOX);
+		Set3(local, 100000.0f, 0.0f, 0.0f);
+		RotatingPoint(mover, local, YAW, mover->s.angles[YAW],
+		              hook->s.origin);
+		SetLinkedBounds(hook);
+		CHECK(!SG_MoverSubjectOutsideSweep(mover, hook));
+	}
 }
 
 static void TestInvalidIdentitiesFailClosed(void)

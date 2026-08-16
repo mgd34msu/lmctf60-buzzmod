@@ -167,8 +167,45 @@ edict_t *G_PickTarget (char *targetname)
 
 void Think_Delay (edict_t *ent)
 {
+	/* A delayed target chain must not inherit a recycled client slot.  Live SG
+	 * activators still reach the ordinary callback authorization; disconnected
+	 * or replaced SG origins are cancelled instead of being reclassified as
+	 * human input. */
+	if ((ent->spawnflags & SG_DELAYED_USE_BOT_ACTIVATOR) &&
+	    (!ent->activator || !ent->activator->inuse ||
+	     !ent->activator->client || !SG_OwnsBot(ent->activator)))
+	{
+		G_FreeEdict (ent);
+		return;
+	}
 	G_UseTargets (ent, ent->activator);
 	G_FreeEdict (ent);
+}
+
+void SG_CancelBotDelayedUses(edict_t *activator)
+{
+	int index;
+
+	if (!activator || !g_edicts || globals.edicts != g_edicts ||
+	    globals.edict_size != (int)sizeof(edict_t) ||
+	    globals.num_edicts <= 0 || globals.num_edicts > game.maxentities ||
+	    globals.max_edicts != game.maxentities ||
+	    game.maxentities <= BODY_QUEUE_SIZE || game.maxentities > MAX_EDICTS ||
+	    game.maxclients <= 0 ||
+	    game.maxclients >= game.maxentities - BODY_QUEUE_SIZE)
+		return;
+	for (index = game.maxclients + BODY_QUEUE_SIZE + 1;
+	     index < globals.num_edicts; index++)
+	{
+		edict_t *delayed = &g_edicts[index];
+
+		if (!delayed->inuse || !delayed->classname ||
+		    strcmp(delayed->classname, "DelayedUse") != 0 ||
+		    !(delayed->spawnflags & SG_DELAYED_USE_BOT_ACTIVATOR) ||
+		    delayed->activator != activator)
+			continue;
+		G_FreeEdict (delayed);
+	}
 }
 
 /*
@@ -202,6 +239,11 @@ void G_UseTargets (edict_t *ent, edict_t *activator)
 		t->nextthink = level.time + ent->delay;
 		t->think = Think_Delay;
 		t->activator = activator;
+		if ((ent->classname &&
+		     strcmp(ent->classname, "DelayedUse") == 0 &&
+		     (ent->spawnflags & SG_DELAYED_USE_BOT_ACTIVATOR)) ||
+		    (activator && SG_OwnsBot(activator)))
+			t->spawnflags |= SG_DELAYED_USE_BOT_ACTIVATOR;
 		if (!activator)
 			gi.dprintf ("Think_Delay with no activator\n");
 		t->message = ent->message;

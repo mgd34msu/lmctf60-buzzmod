@@ -61,11 +61,26 @@ def test_death_body_respawn_and_disconnect_order() -> None:
     ) < spawn.index("ChangeWeapon (ent);", 0, spawned) < spawned
 
     disconnect = between(client, "void ClientDisconnect", "//==============================================================")
+    cancelled = disconnect.index("SG_CancelBotDelayedUses")
     retired = disconnect.index("SG_CompoundGuardGameClientDisconnected")
+    assert cancelled < disconnect.index("gi.unlinkentity (ent);")
     assert disconnect.index("gi.unlinkentity (ent);") < disconnect.index(
         "ent->solid = SOLID_NOT;"
     ) < disconnect.index("ent->inuse = false;") < retired
     assert "SG_CompoundGuardGameBoltEvicted" not in disconnect
+
+    utils = source("g_utils.c")
+    delayed = between(
+        utils, "void Think_Delay", "/*\n==============================\nG_UseTargets"
+    )
+    assert delayed.index("SG_DELAYED_USE_BOT_ACTIVATOR") < delayed.index(
+        "G_UseTargets (ent, ent->activator);"
+    )
+    use_targets = between(utils, "void G_UseTargets", "/*\n=============\nTempVector")
+    assert 'strcmp(ent->classname, "DelayedUse") == 0' in use_targets
+    assert use_targets.index("SG_OwnsBot(activator)") < use_targets.index(
+        "t->spawnflags |= SG_DELAYED_USE_BOT_ACTIVATOR;"
+    )
 
 
 def test_frame_level_hook_and_free_order() -> None:

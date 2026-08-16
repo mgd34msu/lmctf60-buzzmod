@@ -176,7 +176,7 @@ qboolean SG_RunePhysicsCompatible(const rune_t *rune)
 {
 	sg_rune_v3_authority_t active;
 
-	if (!rune ||
+	if (!SG_RunePublishedShapeValid(rune) ||
 	    !SG_RuneV3AuthorityCapture(rune->v3_header.map_name, &active))
 		return false;
 	return SG_RuneV3AuthorityMatchesHeader(&active, &rune->v3_header);

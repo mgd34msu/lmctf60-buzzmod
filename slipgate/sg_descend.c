@@ -15,6 +15,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
@@ -2183,6 +2184,19 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			if (bot->bl_link[b] == bot->commit_link &&
 			    SG_TimerPending(bot->bl_until[b]))
 				drop_commit = true;
+		/* A declared door commitment may retire only after the shared guard
+		 * positively proves the current body outside every physical member's
+		 * complete sweep.  NOT_CLEAR and every observation/identity failure
+		 * retain the exact action and ticket; no timeout or shelf is allowed to
+		 * turn uncertainty into mover reuse. */
+		if (drop_commit && cl->action == RL_DOOR && bot->declared_started &&
+		    SG_DeclaredDoorGuardReleaseProvedClear(bot) !=
+		        SG_COMPOUND_GUARD_OK)
+		{
+			drop_commit = false;
+			staging_timed_out = false;
+			bestlink = bot->commit_link;
+		}
 		if (drop_commit)
 		{
 			/* Think_TrackSeed deliberately preserves the departure seed while
@@ -2267,6 +2281,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->declared_egress_proof_frame = -1;
 			bot->declared_door_retreat = false;
 			bot->declared_door_suffix_ms = 0;
+			bot->declared_guard_paused = false;
+			bot->declared_guard_pause_started = 0.0f;
+			bot->declared_door_recovery_since = 0.0f;
 		}
 		else
 			bestlink = bot->commit_link;
@@ -2294,6 +2311,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->declared_egress_proof_frame = -1;
 		bot->declared_door_retreat = false;
 		bot->declared_door_suffix_ms = 0;
+		bot->declared_guard_paused = false;
+		bot->declared_guard_pause_started = 0.0f;
+		bot->declared_door_recovery_since = 0.0f;
 		/* Before a proved ballistic action starts, this is a bounded source-
 		 * staging deadline. Six seconds lets a fast body brake and center; the
 		 * actual JUMP/DROP rollout receives its own deadline only when it starts. */

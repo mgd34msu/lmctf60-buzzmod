@@ -58,6 +58,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_compound_guard_game.h"
+#include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
@@ -74,6 +75,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #endif
 
 #include <errno.h>
+#include <math.h>
 
 
 float	sg_grab_time[2] = { -1000.0f, -1000.0f };  /* per team */
@@ -2244,6 +2246,9 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->declared_egress_proof_frame = -1;
 	bot->declared_door_retreat = false;
 	bot->declared_door_suffix_ms = 0;
+	bot->declared_guard_paused = false;
+	bot->declared_guard_pause_started = 0.0f;
+	bot->declared_door_recovery_since = 0.0f;
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
 	bot->sticky_link = -1;
@@ -2342,7 +2347,8 @@ void SG_AcceptDropResetLifeActions(sg_bot_t *bot)
  * once, drop every live claim, pulse the respawn button. Returns true when
  * this frame belonged to a corpse and the think ends with it.
  */
-static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd)
+static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
+	qboolean allow_command)
 {
 	if (!e->deadflag)
 		return false;
@@ -2392,7 +2398,8 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd)
 	 */
 	cmd->buttons = (((int)(level.time * 10.0f)) & 2)
 	              ? BUTTON_ATTACK : 0;
-	ClientThink(e, cmd);
+	if (allow_command)
+		ClientThink(e, cmd);
 	return true;
 }
 
@@ -2657,16 +2664,205 @@ static void Think_Seedless(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 
 
 
+/* An ordinary declared door owns more than the movement fields below: its
+ * singleton mover record may still protect this client body.  The local pause
+ * latch also covers a failed transition attempt, so restoration cannot mistake
+ * uncertain guard state for permission to resume generic navigation. */
+static qboolean Bot_DeclaredDoorGuardAction(sg_bot_t *bot)
+{
+	sg_mover_lease_record_t record;
+	qboolean local_door;
 
+	if (!bot)
+		return false;
+	local_door = bot->declared_started && sg_rune && sg_rune->links &&
+	    bot->commit_link >= 0 &&
+	    bot->commit_link < sg_rune->hdr.num_links &&
+	    sg_rune->links[bot->commit_link].action == RL_DOOR;
+	if (bot->declared_guard_paused)
+		return true;
+	/* The process claim is the durable authority identity.  The loaded rune
+	 * and commit link can disappear on the very authority-loss edge this
+	 * helper guards, so inspect the existing record before consulting either.
+	 * Validate clears record on NO_LEASE; on identity/host/quarantine errors it
+	 * still returns the located record, which must remain held fail-closed. */
+	(void)SG_CompoundGuardValidate(&bot->compound_guard, &record);
+	if (record.law == SG_MOVER_LAW_DECLARED_DOOR)
+	{
+		if (record.state == SG_MOVER_LEASE_ACTIVE ||
+		    record.state == SG_MOVER_LEASE_PAUSED)
+			return true;
+		/* ORPHAN belongs solely to the corpse/frame lifecycle after death and
+		 * must not immobilize the respawned occupant.  QUARANTINED remains a
+		 * local fail-closed hold only while this same action is still retained. */
+		if (record.state == SG_MOVER_LEASE_QUARANTINED &&
+		    local_door)
+			return true;
+	}
+	return local_door;
+}
 
+static qboolean Bot_DeclaredDoorGuardRecord(sg_bot_t *bot,
+	sg_mover_lease_record_t *record)
+{
+	sg_compound_guard_result_t result;
 
+	if (!bot || !record)
+		return false;
+	result = SG_CompoundGuardValidate(&bot->compound_guard, record);
+	(void)result;
+	/* Validate can return an identity/host error after copying the located
+	 * ACTIVE record and quarantining it.  That durable tuple still owns this
+	 * frame fail-closed; an observation error cannot erase command ownership. */
+	return record->law == SG_MOVER_LAW_DECLARED_DOOR &&
+	       record->mechanism_index != 0U && record->link_index >= 0 &&
+	       (record->state == SG_MOVER_LEASE_ACTIVE ||
+	        record->state == SG_MOVER_LEASE_PAUSED);
+}
 
+static void Bot_DeclaredDoorGuardClearAction(sg_bot_t *bot)
+{
+	bot->declared_activated = false;
+	bot->declared_started = false;
+	bot->declared_start_frame = -1;
+	bot->declared_touched = false;
+	bot->declared_touch_frame = -1;
+	bot->declared_triggered = false;
+	bot->declared_trigger_frame = -1;
+	bot->declared_egress_proof_frame = -1;
+	bot->declared_door_retreat = false;
+	bot->declared_door_suffix_ms = 0;
+	bot->declared_guard_paused = false;
+	bot->declared_guard_pause_started = 0.0f;
+	bot->declared_door_recovery_since = 0.0f;
+	bot->commit_link = -1;
+	bot->commit_until = 0.0f;
+}
 
+/* Return true while the action must remain held.  Only the guard's positive
+ * current-subject clearance proof returns false and permits the caller to
+ * retire ordinary movement state. */
+static qboolean Bot_DeclaredDoorGuardRetainOrRelease(sg_bot_t *bot)
+{
+	sg_mover_lease_record_t record;
+	sg_compound_guard_result_t result;
 
+	result = SG_DeclaredDoorGuardReleaseProvedClear(bot);
+	if (result == SG_COMPOUND_GUARD_OK)
+	{
+		bot->declared_guard_paused = false;
+		bot->declared_guard_pause_started = 0.0f;
+		bot->declared_door_recovery_since = 0.0f;
+		return false;
+	}
+	if (!bot->declared_guard_paused)
+	{
+		bot->declared_guard_paused = true;
+		bot->declared_guard_pause_started = level.time;
+	}
+	/* Pause only an exact ACTIVE record.  A failed resolution/transition keeps
+	 * the local hold but does not pretend the registry is PAUSED; restoration
+	 * re-inspects the durable state and can safely re-authorize ACTIVE later. */
+	if (SG_DeclaredDoorGuardHoldOpen(bot, 500) !=
+	    SG_COMPOUND_GUARD_OK)
+	{
+		SG_DeclaredDoorTerminalDeath(bot);
+		return true;
+	}
+	if (result == SG_COMPOUND_GUARD_NOT_CLEAR)
+	{
+		/* Entity/pusher frames continue while proof-law authority is absent.
+		 * Renew the exact already-TOP set every held frame so it cannot close
+		 * onto the deliberately frozen body.  PAUSED grants only this bounded
+		 * protective timer extension. */
+		if (Bot_DeclaredDoorGuardRecord(bot, &record) &&
+		    record.state == SG_MOVER_LEASE_ACTIVE)
+			(void)SG_DeclaredDoorGuardPause(bot);
+	}
+	return true;
+}
 
+static qboolean Bot_DeclaredDoorRecoveryBudget(sg_bot_t *bot)
+{
+	if (bot->declared_door_recovery_since == 0.0f)
+	{
+		SG_Mark(&bot->declared_door_recovery_since);
+		return true;
+	}
+	if (!SG_AgeAtLeast(bot->declared_door_recovery_since, 5.0f))
+		return true;
+	SG_DeclaredDoorTerminalDeath(bot);
+	return false;
+}
 
+/* Restore only an exact PAUSED claim.  Clearance retires the action instead;
+ * a held client shifts the absolute deadline by precisely the authority gap
+ * and discards every outer-frame proof grant before movement can run. */
+static qboolean Bot_DeclaredDoorGuardRestore(sg_bot_t *bot)
+{
+	float paused_for, shifted_deadline;
+	sg_mover_lease_record_t record;
+	sg_compound_guard_result_t result;
 
-
+	result = SG_DeclaredDoorGuardReleaseProvedClear(bot);
+	if (result == SG_COMPOUND_GUARD_OK)
+	{
+		Bot_DeclaredDoorGuardClearAction(bot);
+		bot->seed = -1;
+		return true;
+	}
+	if (result != SG_COMPOUND_GUARD_NOT_CLEAR)
+	{
+		if (SG_DeclaredDoorGuardHoldOpen(bot, 500) !=
+		    SG_COMPOUND_GUARD_OK)
+			SG_DeclaredDoorTerminalDeath(bot);
+		else
+			(void)Bot_DeclaredDoorRecoveryBudget(bot);
+		return false;
+	}
+	/* Compatibility restoration does not end the physical maintenance duty.
+	 * Renew before current-link authorization: the bound activator may have
+	 * vanished while the durable captured mover set remains safely holdable. */
+	if (SG_DeclaredDoorGuardHoldOpen(bot, 500) !=
+	    SG_COMPOUND_GUARD_OK)
+	{
+		SG_DeclaredDoorTerminalDeath(bot);
+		return false;
+	}
+	if (!Bot_DeclaredDoorRecoveryBudget(bot))
+		return false;
+	if (!Bot_DeclaredDoorGuardRecord(bot, &record) ||
+	    bot->commit_link != record.link_index)
+		return false;
+	paused_for = level.time - bot->declared_guard_pause_started;
+	if (!isfinite(level.time) ||
+	    !isfinite(bot->declared_guard_pause_started) ||
+	    !isfinite(bot->commit_until) || !isfinite(paused_for) ||
+	    paused_for < 0.0f)
+		return false;
+	shifted_deadline = bot->commit_until;
+	if (shifted_deadline != 0.0f)
+	{
+		shifted_deadline += paused_for;
+		if (!isfinite(shifted_deadline))
+			return false;
+	}
+	if (record.state == SG_MOVER_LEASE_PAUSED)
+		result = SG_DeclaredDoorGuardResume(bot, record.link_index);
+	else
+		result = SG_DeclaredDoorGuardAuthorize(bot, record.link_index);
+	if (result != SG_COMPOUND_GUARD_OK)
+		return false;
+	bot->commit_until = shifted_deadline;
+	bot->declared_guard_paused = false;
+	bot->declared_guard_pause_started = 0.0f;
+	bot->declared_start_frame = -1;
+	bot->declared_touch_frame = -1;
+	bot->declared_trigger_frame = -1;
+	bot->declared_egress_proof_frame = -1;
+	bot->declared_door_suffix_ms = 0;
+	return true;
+}
 
 void SG_BotThink(sg_bot_t *bot)
 {
@@ -2676,6 +2872,7 @@ void SG_BotThink(sg_bot_t *bot)
 	int team, bestlink = -1;
 	qboolean carrying;
 	qboolean rune_compatible;
+	qboolean declared_door_guarded;
 
 	/* the few frame terms still born outside the context: the seeds the
 	 * stages take through it, and the one flow flag read here */
@@ -2707,14 +2904,44 @@ void SG_BotThink(sg_bot_t *bot)
 	VectorClear(duel_org);
 
 	rune_compatible = SG_RunePhysicsCompatible(sg_rune);
+	declared_door_guarded = Bot_DeclaredDoorGuardAction(bot);
 	/* Motion produced while the active law is not the loaded proof law cannot
 	 * preserve graph localization. Clear it before the corpse path can teach a
 	 * stale danger/tilt sample, including when this hold's ClientThink kills an
 	 * initially live bot and authority is restored before the next bot frame.
 	 * A surviving body localizes afresh after exact restoration. */
-	if (!rune_compatible)
+	if (!rune_compatible && !declared_door_guarded)
 		bot->seed = -1;
-	if (Think_Dead(bot, e, &tc.cmd))
+	{
+		sg_compound_guard_run_t run_state;
+
+		run_state = SG_DeclaredDoorGuardRunState(bot);
+		if (run_state == SG_COMPOUND_GUARD_RUN_TERMINAL)
+		{
+			SG_DeclaredDoorTerminalDeath(bot);
+			return;
+		}
+		if (e->deadflag)
+		{
+			(void)Think_Dead(bot, e, &tc.cmd,
+			    run_state == SG_COMPOUND_GUARD_RUN_READY);
+			return;
+		}
+		if (run_state != SG_COMPOUND_GUARD_RUN_READY)
+		{
+			/* A later bot slot must not enter a newly claimed/released set.  Its
+			 * already-linked hook is independent entity physics, so retire that
+			 * projectile before suppressing the body command. */
+			if (e->client->hookstate || e->client->hook)
+				ctf_hook_abort(e);
+			bot->hook_phase = 0;
+			bot->hook_link = -1;
+			bot->hook_entity = NULL;
+			bot->speedhook = false;
+			return;
+		}
+	}
+	if (Think_Dead(bot, e, &tc.cmd, true))
 		return;
 	if (!rune_compatible)
 	{
@@ -2735,6 +2962,13 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->hook_legacy_arrived = false;
 		bot->speedhook = false;
 		bot->flow_release = false;
+		if (declared_door_guarded)
+			bot->declared_door_recovery_since = 0.0f;
+		if (declared_door_guarded &&
+		    Bot_DeclaredDoorGuardRetainOrRelease(bot))
+			return;
+		if (declared_door_guarded)
+			bot->seed = -1;
 		bot->rj_phase = 0;
 		bot->rj_deadline = 0.0f;
 		bot->rj_fire_until = 0.0f;
@@ -2808,6 +3042,9 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_egress_proof_frame = -1;
 		bot->declared_door_retreat = false;
 		bot->declared_door_suffix_ms = 0;
+		bot->declared_guard_paused = false;
+		bot->declared_guard_pause_started = 0.0f;
+		bot->declared_door_recovery_since = 0.0f;
 		bot->commit_link = -1;
 		bot->commit_until = 0.0f;
 		bot->sticky_link = -1;
@@ -2815,8 +3052,18 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->door_hold_ent = NULL;
 		bot->door_hold_link = -1;
 		bot->door_hold_deadline = 0.0f;
+		if (SG_DeclaredDoorGuardRunState(bot) !=
+		    SG_COMPOUND_GUARD_RUN_READY)
+			return;
 		ClientThink(e, &tc.cmd);
 		return;
+	}
+	if (bot->declared_guard_paused)
+	{
+		if (!Bot_DeclaredDoorGuardRestore(bot) ||
+		    SG_DeclaredDoorGuardRunState(bot) !=
+		        SG_COMPOUND_GUARD_RUN_READY)
+			return;
 	}
 	/* A rope not represented by the bot action state is stale host state, not
 	 * permission to start another proved move. In particular, ClientThink sets
@@ -2831,6 +3078,12 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->hook_link = -1;
 		bot->speedhook = false;
 		bot->flow_release = false;
+		declared_door_guarded = Bot_DeclaredDoorGuardAction(bot);
+		if (declared_door_guarded &&
+		    Bot_DeclaredDoorGuardRetainOrRelease(bot))
+			return;
+		if (declared_door_guarded)
+			bot->seed = -1;
 		/* This zero-input cleanup frame is outside every serialized action
 		 * witness.  If stale host rope state surfaced after a JUMP/DROP/RJ had
 		 * already started, resuming that action on the next frame would splice an
@@ -2862,8 +3115,14 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_egress_proof_frame = -1;
 		bot->declared_door_retreat = false;
 		bot->declared_door_suffix_ms = 0;
+		bot->declared_guard_paused = false;
+		bot->declared_guard_pause_started = 0.0f;
+		bot->declared_door_recovery_since = 0.0f;
 		bot->rj_phase = 0;
 		bot->nade_phase = 0;
+		if (SG_DeclaredDoorGuardRunState(bot) !=
+		    SG_COMPOUND_GUARD_RUN_READY)
+			return;
 		ClientThink(e, &tc.cmd);
 		return;
 	}
@@ -3002,6 +3261,32 @@ void SG_BotThink(sg_bot_t *bot)
 
 	think_over = tc.think_over;
 	if (think_over)
+		return;
+	{
+		sg_mover_lease_record_t record;
+
+		/* CommitLink contains legacy rail/patrol/watchdog overrides after it
+		 * restores a retained commitment.  A process-wide mover claim is the
+		 * command owner, so normalize the candidate before Think_Move can write
+		 * any body or usercmd state. */
+		if (Bot_DeclaredDoorGuardRecord(bot, &record))
+		{
+			if (!sg_rune || !sg_rune->links || record.link_index < 0 ||
+			    record.link_index >= sg_rune->hdr.num_links ||
+			    sg_rune->links[record.link_index].action != RL_DOOR ||
+			    bot->commit_link != record.link_index)
+			{
+				SG_DeclaredDoorTerminalDeath(bot);
+				return;
+			}
+			bestlink = record.link_index;
+		}
+	}
+	/* CommitLink may have positively released a declared claim in this same
+	 * think.  Re-sample the physical retirement fence before Think_Move can
+	 * write a body or Think_Emit can submit any command. */
+	if (SG_DeclaredDoorGuardRunState(bot) !=
+	    SG_COMPOUND_GUARD_RUN_READY)
 		return;
 	/*
 	 * The surface has a gradient EVERYWHERE. Where the rune is proven, the

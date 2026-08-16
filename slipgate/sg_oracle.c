@@ -37,6 +37,8 @@ void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 void door_secret_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_go_down(edict_t *self);
+void door_hit_top(edict_t *self);
+void door_hit_bottom(edict_t *self);
 void hook_touch(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf);
 void hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
@@ -542,7 +544,7 @@ static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
 	const float rad = (float)(M_PI * 2.0 / 360.0);
 	const float deg = (float)(360.0 / (M_PI * 2.0));
 	int angle_axis = -1, changed = 0;
-	float start, end, low, high;
+	float start, end, current, low, high;
 	int corner, coord;
 
 	for (coord = 0; coord < 3; coord++)
@@ -559,10 +561,16 @@ static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
 		return false;
 	start = door->moveinfo.start_angles[angle_axis] * rad;
 	end = door->moveinfo.end_angles[angle_axis] * rad;
-	if (!isfinite(start) || !isfinite(end) || fabsf(end - start) > 8.0f * M_PI)
+	current = door->s.angles[angle_axis] * rad;
+	if (!isfinite(start) || !isfinite(end) || !isfinite(current) ||
+	    fabsf(end - start) > 8.0f * M_PI)
 		return false;
 	low = start < end ? start : end;
 	high = start > end ? start : end;
+	if (current < low) low = current;
+	if (current > high) high = current;
+	if (high - low > 8.0f * M_PI)
+		return false;
 	VectorSet(dmins, 1.0e30f, 1.0e30f, 1.0e30f);
 	VectorSet(dmaxs, -1.0e30f, -1.0e30f, -1.0e30f);
 	for (corner = 0; corner < 8; corner++)
@@ -577,6 +585,13 @@ static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
 		SG_OracleBoundsAdd(point, dmins, dmaxs);
 		SG_OracleRotatingPoint(door, local, angle_axis,
 		                           door->moveinfo.end_angles[angle_axis], point);
+		SG_OracleBoundsAdd(point, dmins, dmaxs);
+		/* AngleMove's final divide/multiply can leave the linked leaf a few
+		 * float steps beyond the serialized endpoint.  Pose validation admits
+		 * only that bounded stock overshoot, so make the spatial proof cover the
+		 * same current pose and the complete sliver between it and the endpoint. */
+		SG_OracleRotatingPoint(door, local, angle_axis,
+		                           door->s.angles[angle_axis], point);
 		SG_OracleBoundsAdd(point, dmins, dmaxs);
 
 		/* Recover the sinusoid coefficients in the same AngleVectors transform
@@ -976,8 +991,7 @@ static qboolean SG_OracleSoundOnlyTargets(edict_t *source, int depth)
 	edict_t *target = NULL;
 	qboolean found = false;
 
-	if (!source || depth > 4 ||
-	    (source->killtarget && source->killtarget[0]) ||
+	if (!source || depth > 4 || source->killtarget ||
 	    !source->target || !source->target[0])
 		return false;
 	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
@@ -1003,11 +1017,12 @@ static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 	edict_t *target = NULL;
 	qboolean found = false;
 
-	if (!door || (door->killtarget && door->killtarget[0]) ||
-	    door->delay != 0.0f)
+	if (!door || door->killtarget || door->delay != 0.0f)
 		return false;
-	if (!door->target || !door->target[0])
+	if (!door->target)
 		return true;
+	if (!door->target[0])
+		return false;
 	while ((target = G_Find(target, FOFS(targetname), door->target)) != NULL)
 	{
 		if (!target->inuse || !target->classname)
@@ -1029,6 +1044,36 @@ static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 	return found;
 }
 
+/* Static declared mechanisms must remain the same edict incarnations for the
+ * life of their lease.  The stock game frees mapper entities only through
+ * G_UseTargets killtarget (repeatable declared triggers do not self-free), so
+ * reject every trigger or door that any live map entity can kill.  This makes
+ * integer mover/activator keys ABA-safe without pretending linkcount is an
+ * incarnation token. */
+static qboolean SG_OracleEntityKilltargetable(edict_t *entity)
+{
+	int index;
+
+	if (!entity || !entity->targetname)
+		return false;
+	if (!g_edicts || globals.edicts != g_edicts ||
+	    globals.edict_size != (int)sizeof(edict_t) ||
+	    globals.num_edicts <= 1 || globals.num_edicts > MAX_EDICTS ||
+	    game.maxentities <= 1 || game.maxentities > MAX_EDICTS ||
+	    globals.max_edicts != game.maxentities ||
+	    globals.num_edicts > game.maxentities)
+		return true;
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		edict_t *source = &g_edicts[index];
+
+		if (source->inuse && source->killtarget &&
+		    !Q_stricmp(source->killtarget, entity->targetname))
+			return true;
+	}
+	return false;
+}
+
 /* The declared controller can reproduce a canonical rotating or translating
  * door, including CRUSHER/REVERSE geometry, because its body waits entirely
  * outside the complete sweep until STATE_TOP. Scripted/shot/toggle/start-open
@@ -1038,6 +1083,7 @@ static qboolean SG_OracleDeclaredDoorTeamSafe(edict_t *door)
 	edict_t *master, *member;
 
 	if (!door || !door->inuse || !door->classname ||
+	    SG_OracleEntityKilltargetable(door) ||
 	    strncmp(door->classname, "func_door", 9) != 0)
 		return false;
 	master = door->teammaster ? door->teammaster : door;
@@ -1049,6 +1095,7 @@ static qboolean SG_OracleDeclaredDoorTeamSafe(edict_t *door)
 		float travel;
 
 		if (!member->inuse || !member->classname ||
+		    SG_OracleEntityKilltargetable(member) ||
 		    (strcmp(member->classname, "func_door") != 0 &&
 		     strcmp(member->classname, "func_door_rotating") != 0) ||
 		    member->use != door_use || member->health > 0 ||
@@ -1116,7 +1163,8 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 	edict_t *master;
 	qboolean found = false;
 
-	if (!trigger || !trigger->inuse || trigger->solid != SOLID_TRIGGER)
+	if (!trigger || !trigger->inuse || trigger->solid != SOLID_TRIGGER ||
+	    SG_OracleEntityKilltargetable(trigger))
 		return false;
 	/* Canonical automatic door triggers have no mapper-controlled target
 	 * closure: Think_SpawnDoorTrigger owns them directly from one safe master.
@@ -1136,8 +1184,7 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 	    (trigger->spawnflags & (2 | 4)) || !isfinite(trigger->wait) ||
 	    trigger->wait <= 0.0f ||
 	    !VectorCompare(trigger->movedir, vec3_origin) ||
-	    trigger->delay != 0.0f ||
-	    (trigger->killtarget && trigger->killtarget[0]) ||
+	    trigger->delay != 0.0f || trigger->killtarget ||
 	    !trigger->target || !trigger->target[0])
 		return false;
 	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
@@ -1378,8 +1425,11 @@ static qboolean SG_OracleRotatingPoseValid(edict_t *member)
 		float start = member->moveinfo.start_angles[axis];
 		float end = member->moveinfo.end_angles[axis];
 		float current = member->s.angles[axis];
-		float low = start < end ? start : end;
-		float high = start > end ? start : end;
+		double low = start < end ? (double)start : (double)end;
+		double high = start > end ? (double)start : (double)end;
+		double delta = (double)end - (double)start;
+		double scale;
+		double envelope;
 
 		if (start == end)
 		{
@@ -1388,7 +1438,17 @@ static qboolean SG_OracleRotatingPoseValid(edict_t *member)
 			continue;
 		}
 		changed++;
-		if (fabsf(end - start) > 1440.0f || current < low || current > high)
+		/* AngleMove_Final forms (end-current)/FRAMETIME and the pusher then
+		 * multiplies by FRAMETIME again.  Those two float roundings can put the
+		 * stock terminal a few ULPs beyond the serialized endpoint.  Bound that
+		 * exact operation chain conservatively without admitting a meaningful
+		 * out-of-sweep pose. */
+		scale = fmax(fabs((double)start), fabs((double)end));
+		scale = fmax(scale, fabs(delta));
+		scale = fmax(scale, 1.0);
+		envelope = 64.0 * (double)FLT_EPSILON * scale;
+		if (fabs(delta) > 1440.0 || (double)current < low - envelope ||
+		    (double)current > high + envelope)
 			return false;
 	}
 	return changed == 1;
@@ -1858,8 +1918,13 @@ qboolean SG_DeclaredDoorAtTopFor(edict_t *trigger, int window_ms)
 {
 	edict_t *members[SG_PHANTOM_ARMED_DOORS];
 	int count, i;
+	float until;
 
-	if (!SG_OracleDeclaredActivatorSafe(trigger) || window_ms < 0)
+	if (!SG_OracleDeclaredActivatorSafe(trigger) || window_ms < 0 ||
+	    !isfinite(level.time))
+		return false;
+	until = level.time + (float)window_ms * 0.001f + FRAMETIME;
+	if (!isfinite(until))
 		return false;
 	count = SG_DeclaredDoorMembers(trigger, members,
 	    SG_PHANTOM_ARMED_DOORS);
@@ -1873,8 +1938,7 @@ qboolean SG_DeclaredDoorAtTopFor(edict_t *trigger, int window_ms)
 			return false;
 		if (member->moveinfo.wait >= 0.0f &&
 		    (member->think != door_go_down ||
-		     member->nextthink <= level.time +
-		         (float)window_ms * 0.001f + FRAMETIME))
+		     !isfinite(member->nextthink) || member->nextthink <= until))
 			return false;
 	}
 	return true;
@@ -1891,35 +1955,131 @@ qboolean SG_DeclaredDoorAtTop(edict_t *trigger)
  * in short leases until a fresh suffix or retreat proof succeeds. This changes
  * no pose and never opens a door; it only postpones an already scheduled close
  * while a declared client is inside its occupied volume. */
-qboolean SG_DeclaredDoorHoldOpen(edict_t *trigger, int lease_ms)
+static qboolean SG_DeclaredDoorMembersExact(edict_t *const *members,
+	int count)
 {
-	edict_t *members[SG_PHANTOM_ARMED_DOORS];
-	int count, i;
+	int i, j;
+
+	if (!members || count <= 0 || count > SG_PHANTOM_ARMED_DOORS)
+		return false;
+	for (i = 0; i < count; i++)
+	{
+		edict_t *member = members[i];
+		edict_t *master, *team_member;
+		int team_count = 0;
+
+		if (!member || !SG_OracleMoverSweepIdentity(member))
+			return false;
+		for (j = 0; j < i; j++)
+			if (members[j] == member)
+				return false;
+		/* The captured-key fallback may outlive its activator.  Prove that the
+		 * supplied union is still closed over every current teamchain before
+		 * validating or renewing any member; otherwise a newly appended teammate
+		 * would receive a split timer mutation. */
+		master = member->teammaster ? member->teammaster : member;
+		for (team_member = master; team_member && team_count <= count;
+		     team_member = team_member->teamchain, team_count++)
+		{
+			/* Prove array membership and linked mover shape before reading this
+			 * possibly drifted team pointer or its next link. */
+			if (!SG_OracleMoverSweepIdentity(team_member))
+				return false;
+			for (j = 0; j < count; j++)
+				if (members[j] == team_member)
+					break;
+			if (j == count)
+				return false;
+		}
+		if (team_member || team_count <= 0 || team_count > count ||
+		    !SG_OracleDeclaredDoorTeamSafe(member))
+			return false;
+	}
+	return true;
+}
+
+qboolean SG_DeclaredDoorHoldMembers(edict_t *const *members, int count,
+	int lease_ms)
+{
+	int i;
 	float until;
 
-	if (!SG_OracleDeclaredActivatorSafe(trigger) || lease_ms < 100 ||
-	    lease_ms > 1000)
-		return false;
-	count = SG_DeclaredDoorMembers(trigger, members,
-	    SG_PHANTOM_ARMED_DOORS);
-	if (count <= 0)
+	if (!SG_DeclaredDoorMembersExact(members, count) || lease_ms < 100 ||
+	    lease_ms > 1000 || !isfinite(level.time))
 		return false;
 	until = level.time + lease_ms * 0.001f;
+	if (!isfinite(until))
+		return false;
+	/* Validate the complete set before changing any timer.  A partial lease on
+	 * a drifted multi-door mechanism is itself a world mutation and can split
+	 * members that the declared record treats as one atomic set. */
 	for (i = 0; i < count; i++)
 	{
 		edict_t *member = members[i];
 
-		if (!member->inuse || member->moveinfo.state != SG_PLAT_STATE_TOP)
+		if (member->moveinfo.state != SG_PLAT_STATE_TOP)
 			return false;
-		if (member->moveinfo.wait >= 0.0f)
-		{
-			if (member->think != door_go_down)
-				return false;
-			if (member->nextthink < until)
-				member->nextthink = until;
-		}
+		if (member->moveinfo.wait >= 0.0f &&
+		    (member->think != door_go_down ||
+		     !isfinite(member->nextthink)))
+			return false;
+	}
+	for (i = 0; i < count; i++)
+		if (members[i]->moveinfo.wait >= 0.0f &&
+		    members[i]->nextthink < until)
+			members[i]->nextthink = until;
+	return true;
+}
+
+/* A release fence outlives its logical owner.  SV_Push rounds every linear
+ * delta to one eighth, so a stock diagonal door does not necessarily finish
+ * at the unquantized moveinfo endpoint.  The completion transaction leaves a
+ * stronger witness: zero motion, no scheduled think, and the exact
+ * door_hit_bottom/door_hit_top end callback installed by Move_Calc.  An
+ * untouched initial BOTTOM has no end callback yet, so admit that one case
+ * only at its exact declared start pose. */
+qboolean SG_DeclaredDoorMembersTerminal(edict_t *const *members, int count)
+{
+	int i;
+
+	if (!SG_DeclaredDoorMembersExact(members, count))
+		return false;
+	for (i = 0; i < count; i++)
+	{
+		edict_t *member = members[i];
+		qboolean at_bottom;
+		qboolean at_permanent_top;
+
+		if (!VectorCompare(member->velocity, vec3_origin) ||
+		    !VectorCompare(member->avelocity, vec3_origin) ||
+		    member->nextthink != 0.0f)
+			return false;
+		at_bottom = member->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
+		    (member->moveinfo.endfunc == door_hit_bottom ||
+		     (!member->moveinfo.endfunc &&
+		      VectorCompare(member->s.origin,
+		          member->moveinfo.start_origin) &&
+		      VectorCompare(member->s.angles,
+		          member->moveinfo.start_angles)));
+		at_permanent_top = member->moveinfo.state == SG_PLAT_STATE_TOP &&
+		    member->moveinfo.wait < 0.0f &&
+		    member->moveinfo.endfunc == door_hit_top;
+		if (!at_bottom && !at_permanent_top)
+			return false;
 	}
 	return true;
+}
+
+qboolean SG_DeclaredDoorHoldOpen(edict_t *trigger, int lease_ms)
+{
+	edict_t *members[SG_PHANTOM_ARMED_DOORS];
+	int count;
+
+	if (!SG_OracleDeclaredActivatorSafe(trigger))
+		return false;
+	count = SG_DeclaredDoorMembers(trigger, members,
+	    SG_PHANTOM_ARMED_DOORS);
+	return SG_DeclaredDoorHoldMembers(members, count, lease_ms);
 }
 
 /* Expand one declared activator to the exact unique member list used by the

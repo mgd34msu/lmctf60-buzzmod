@@ -9,6 +9,7 @@
 #include "slipgate/sg_hooks.h"
 
 game_export_t globals;
+game_locals_t game;
 edict_t *g_edicts;
 sg_host_t sg_host;
 

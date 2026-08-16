@@ -47,6 +47,11 @@ void multi_trigger (edict_t *ent)
 
 void Use_Multi (edict_t *ent, edict_t *other, edict_t *activator)
 {
+	/* Targeted activation is distinct from the physical touch admitted by the
+	 * declared controller.  Authorize before publishing activator or mutating
+	 * debounce state through multi_trigger. */
+	if (!SG_AuthorizeDoorTriggerUse(ent, activator))
+		return;
 	ent->activator = activator;
 	multi_trigger (ent);
 }
@@ -75,10 +80,10 @@ void Touch_Multi (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *su
 			return;
 	}
 
-	/* Record the accepted player contact before multi_trigger's cooldown can
-	 * return. RL_DOOR uses this exact first-touch frame to reproduce its proved
-	 * remainder-of-frame zero-input pause; all other entities are a no-op. */
-	SG_NoteDoorTriggerTouch(self, other);
+	/* Give the declared door controller its last fail-closed boundary before
+	 * Touch_Multi publishes the activator or fires any targets. */
+	if (!SG_AuthorizeDoorTriggerTouch(self, other))
+		return;
 	self->activator = other;
 	multi_trigger (self);
 }

@@ -17,6 +17,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_swim_live.h"
@@ -40,37 +41,32 @@ static int sg_hook_reproof_slot = 0;
 static int sg_swim_reproof_frame = -1;
 static int sg_swim_reproof_slot = 0;
 
-static qboolean DoorStep_OwnedByOther(const sg_bot_t *bot, edict_t *trigger)
+void SG_DeclaredDoorTerminalDeath(sg_bot_t *bot)
 {
-	int i;
+	edict_t *ent;
+	extern int meansOfDeath;
 
-	if (!bot || !trigger || !SG_Rune())
-		return true;
-	for (i = 0; i < SG_MAXBOTS; i++)
-	{
-		sg_bot_t *other = &sg_bots[i];
-		rune_link_t *link;
-		edict_t *other_trigger;
-
-		if (other == bot || !other->active || !other->ent ||
-		    !other->ent->inuse || other->ent->health <= 0 ||
-		    !other->declared_activated || other->commit_link < 0 ||
-		    other->commit_link >= SG_Rune()->hdr.num_links)
-			continue;
-		link = &SG_Rune()->links[other->commit_link];
-		if (link->action != RL_DOOR)
-			continue;
-		other_trigger = SG_DeclaredDoorForLink(link->anchor,
-		    SG_Rune()->seeds[link->from].origin);
-		if (SG_DeclaredDoorSameSet(trigger, other_trigger))
-			return true;
-	}
-	return false;
+	if (!bot || !(ent = bot->ent) || !ent->inuse || !ent->client ||
+	    (ent->deadflag && ent->solid == SOLID_NOT))
+		return;
+	/* On a first death, player_die begins by transferring the live mover claim
+	 * into the guarded corpse lifecycle.  It is also intentionally re-entrant
+	 * for damage to an existing corpse: if later entity physics moved that
+	 * SOLID_BBOX corpse into a live claim/retirement, the same stock gib branch
+	 * makes it nonsolid before the next mover activation. */
+	ent->flags &= ~FL_GODMODE;
+	ent->health = -100;
+	meansOfDeath = MOD_SUICIDE;
+	player_die(ent, ent, ent, 100000, vec3_origin);
 }
 
-static void DoorStep_AbortDeclared(sg_bot_t *bot, int link_index)
+static qboolean DoorStep_AbortDeclared(sg_bot_t *bot, int link_index)
 {
 	int b, oldest = 0;
+
+	if (!bot || SG_DeclaredDoorGuardReleaseProvedClear(bot) !=
+	    SG_COMPOUND_GUARD_OK)
+		return false;
 
 	/* This is live interference, not evidence that the serialized link is
 	 * false.  Shelf it briefly so ordinary localization can settle without
@@ -92,6 +88,54 @@ static void DoorStep_AbortDeclared(sg_bot_t *bot, int link_index)
 	bot->declared_egress_proof_frame = -1;
 	bot->declared_door_retreat = false;
 	bot->declared_door_suffix_ms = 0;
+	bot->declared_guard_paused = false;
+	bot->declared_guard_pause_started = 0.0f;
+	bot->declared_door_recovery_since = 0.0f;
+	return true;
+}
+
+/* Release can fail because this body or another live SG body still occupies
+ * the captured sweep, or because current declaration authority drifted.  In
+ * every case retain the logical claim, renew only an exactly captured TOP set,
+ * and bound compatible recovery before taking the normal guarded death path. */
+static void DoorStep_RetainDeclared(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	if (bot->declared_door_recovery_since == 0.0f)
+		SG_Mark(&bot->declared_door_recovery_since);
+	else if (SG_AgeAtLeast(bot->declared_door_recovery_since, 5.0f))
+	{
+		SG_DeclaredDoorTerminalDeath(bot);
+		return;
+	}
+	if (!bot->declared_guard_paused)
+	{
+		bot->declared_guard_paused = true;
+		bot->declared_guard_pause_started = level.time;
+	}
+	if (SG_DeclaredDoorGuardHoldOpen(bot, 500) ==
+	    SG_COMPOUND_GUARD_OK)
+		(void)SG_DeclaredDoorGuardPause(bot);
+	else
+		SG_DeclaredDoorTerminalDeath(bot);
+}
+
+static qboolean DoorStep_AbortOrRetain(sg_bot_t *bot, int link_index)
+{
+	if (DoorStep_AbortDeclared(bot, link_index))
+		return true;
+	DoorStep_RetainDeclared(bot);
+	return false;
+}
+
+/* Reauthorization can fail precisely because rune or activator identity
+ * drifted.  Release only after the guard positively proves every live SG body
+ * clear; otherwise the same physical retention law applies as any failed
+ * action retirement. */
+static void DoorStep_RetainFailedAuthority(sg_bot_t *bot, int link_index)
+{
+	(void)DoorStep_AbortOrRetain(bot, link_index);
 }
 
 /* A failed preflight most commonly means projectile knockback would carry the
@@ -113,46 +157,139 @@ static void DoorStep_StopOutside(edict_t *e)
 	e->client->old_pmove = e->client->ps.pmove;
 }
 
-/* Touch_Multi invokes this after its player/facing gates but before
- * multi_trigger can return for cooldown.  The approach proof pauses after its
- * first accepted contact regardless of whether that contact fires the target
- * set, so keep this evidence distinct from SG_NoteDoorActivation below. */
-void SG_NoteDoorTriggerTouch(edict_t *source, edict_t *activator)
+static sg_bot_t *DoorStep_EventBot(edict_t *activator)
 {
-	rune_link_t *link;
-	edict_t *expected;
-	sg_bot_t *bot = NULL;
 	int i;
 
-	if (!source || !activator || !activator->inuse || !activator->client ||
-	    !SG_OwnsBot(activator) || activator->health <= 0 || activator->deadflag ||
+	if (!activator || !activator->inuse || !activator->client ||
+	    !SG_OwnsBot(activator))
+		return NULL;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == activator)
+			return &sg_bots[i];
+	return NULL;
+}
+
+static qboolean DoorStep_SupportedActivator(edict_t *source)
+{
+	edict_t *members[SG_PHANTOM_ARMED_DOORS];
+
+	return source && SG_DeclaredDoorMembers(source, members,
+	    SG_PHANTOM_ARMED_DOORS) > 0;
+}
+
+/* Runtime callbacks can arrive before the next SG compatibility pass.  Treat
+ * the published rune as untrusted at this boundary: validate both arrays,
+ * header bounds, link endpoints, and finite geometry before copying anything
+ * used to identify the expected activator. */
+static qboolean DoorStep_DeclaredLinkSnapshot(const sg_bot_t *bot,
+	vec3_t anchor_out, vec3_t source_out)
+{
+	rune_t *rune;
+	rune_link_t *link;
+
+	if (!bot || !anchor_out || !source_out || bot->commit_link < 0 ||
+	    !(rune = SG_Rune()) || !SG_RunePublishedShapeValid(rune) ||
+	    !SG_RunePhysicsCompatible(rune) ||
+	    !rune->links || !rune->seeds ||
+	    rune->hdr.num_links <= 0 || rune->hdr.num_links > RUNE_MAX_LINKS ||
+	    rune->hdr.num_seeds <= 0 || rune->hdr.num_seeds > SG_MAX_SEEDS ||
+	    bot->commit_link >= rune->hdr.num_links)
+		return false;
+	link = &rune->links[bot->commit_link];
+	if (link->action != RL_DOOR || link->from < 0 ||
+	    link->from >= rune->hdr.num_seeds || link->to < 0 ||
+	    link->to >= rune->hdr.num_seeds ||
+	    !isfinite(link->anchor[0]) || !isfinite(link->anchor[1]) ||
+	    !isfinite(link->anchor[2]) ||
+	    !isfinite(rune->seeds[link->from].origin[0]) ||
+	    !isfinite(rune->seeds[link->from].origin[1]) ||
+	    !isfinite(rune->seeds[link->from].origin[2]))
+		return false;
+	VectorCopy(link->anchor, anchor_out);
+	VectorCopy(rune->seeds[link->from].origin, source_out);
+	return true;
+}
+
+static qboolean DoorStep_DeclaredClaimHeld(sg_bot_t *bot)
+{
+	sg_mover_lease_record_t record;
+	qboolean local_door;
+	vec3_t anchor, source;
+
+	if (!bot)
+		return false;
+	local_door = bot->declared_started &&
+	    DoorStep_DeclaredLinkSnapshot(bot, anchor, source);
+	if (bot->declared_guard_paused || local_door)
+		return true;
+	/* A malformed live source can be the very drift that made the ordinary
+	 * resolver fail.  Preserve unsupported passthrough only when no durable
+	 * active/paused transaction exists here; every unsupported callback also
+	 * applies the process-wide claim/retirement gate below. */
+	(void)SG_CompoundGuardValidate(&bot->compound_guard, &record);
+	return record.law == SG_MOVER_LAW_DECLARED_DOOR &&
+	       (record.state == SG_MOVER_LEASE_ACTIVE ||
+	        record.state == SG_MOVER_LEASE_PAUSED);
+}
+
+/* Touch_Multi and Touch_DoorTrigger call this after their ordinary player
+ * gates but before debounce, activator publication, targets, or door motion.
+ * Humans and mechanisms outside the strict declared-door contract keep their
+ * original behavior.  A supported activator touched by an SG body requires
+ * the exact ACTIVE shared-mover claim before the callback may mutate world
+ * state. */
+qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
+{
+	edict_t *expected;
+	sg_bot_t *bot;
+	vec3_t anchor, source_origin;
+
+	bot = DoorStep_EventBot(activator);
+	if (!bot)
+		return true;
+	if (!DoorStep_SupportedActivator(source))
+		return !DoorStep_DeclaredClaimHeld(bot) &&
+		       !SG_DeclaredDoorGuardAnyClaim();
+	if (activator->health <= 0 || activator->deadflag ||
 	    activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
 	    activator->waterlevel != 0)
-		return;
-	for (i = 0; i < SG_MAXBOTS; i++)
-		if (sg_bots[i].active && sg_bots[i].ent == activator)
-		{
-			bot = &sg_bots[i];
-			break;
-		}
-	if (!bot || !SG_Rune() || bot->commit_link < 0 ||
-	    bot->commit_link >= SG_Rune()->hdr.num_links ||
-	    !bot->declared_started || bot->declared_touched ||
-	    bot->declared_activated)
-		return;
-	link = &SG_Rune()->links[bot->commit_link];
-	if (link->action != RL_DOOR)
-		return;
-	expected = SG_DeclaredDoorForLink(link->anchor,
-	    SG_Rune()->seeds[link->from].origin);
+		return false;
+	if (!bot || !bot->declared_started || bot->declared_guard_paused)
+		return false;
+	if (SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) !=
+	        SG_COMPOUND_GUARD_OK ||
+	    !DoorStep_DeclaredLinkSnapshot(bot, anchor, source_origin))
+		return false;
+	expected = SG_DeclaredDoorForLink(anchor, source_origin);
 	if (!SG_DeclaredDoorEquivalentTouch(expected, source,
 	        activator->s.origin))
-		return;
-	bot->declared_touched = true;
-	bot->declared_touch_frame = level.framenum;
+		return false;
+	if (!bot->declared_triggered && !bot->declared_activated)
+	{
+		bot->declared_touched = true;
+		bot->declared_touch_frame = level.framenum;
+	}
+	return true;
+}
+
+/* A declared trigger_multiple is admitted for a physical Touch_Multi event,
+ * never a targeted Use_Multi callback.  Deny remote SG activation before it
+ * publishes activator or consumes the trigger cooldown; unowned humans and
+ * mechanisms outside the strict declaration retain stock behavior. */
+qboolean SG_AuthorizeDoorTriggerUse(edict_t *source, edict_t *activator)
+{
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+
+	if (!bot)
+		return true;
+	if (DoorStep_SupportedActivator(source))
+		return false;
+	return !DoorStep_DeclaredClaimHeld(bot) &&
+	       !SG_DeclaredDoorGuardAnyClaim();
 }
 
 /* G_UseTargets reaches door_use synchronously from Touch_Multi, inside the
@@ -162,44 +299,45 @@ void SG_NoteDoorTriggerTouch(edict_t *source, edict_t *activator)
  * outer frame zero-input.  A set already held TOP by another activator may be
  * accepted independently at the exact wait point, but only after live egress
  * reproof and a sufficient remaining-open-window check. */
-void SG_NoteDoorActivation(edict_t *source, edict_t *door_master,
+qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	edict_t *activator)
 {
-	rune_link_t *link;
 	edict_t *expected;
-	sg_bot_t *bot = NULL;
-	int i;
+	sg_bot_t *bot;
+	vec3_t anchor, source_origin;
 
-	if (!source || !door_master || !activator || !activator->inuse ||
-	    !activator->client || !SG_OwnsBot(activator) || activator->health <= 0 ||
+	bot = DoorStep_EventBot(activator);
+	if (!bot)
+		return true;
+	if (!DoorStep_SupportedActivator(source))
+		return !DoorStep_DeclaredClaimHeld(bot) &&
+		       !SG_DeclaredDoorGuardAnyClaim() &&
+		       SG_DeclaredDoorGuardActivationAvailable(door_master);
+	if (!door_master || activator->health <= 0 ||
 	    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
 	    activator->waterlevel != 0)
-		return;
-	for (i = 0; i < SG_MAXBOTS; i++)
-		if (sg_bots[i].active && sg_bots[i].ent == activator)
-		{
-			bot = &sg_bots[i];
-			break;
-		}
-	if (!bot || !SG_Rune() || bot->commit_link < 0 ||
-	    bot->commit_link >= SG_Rune()->hdr.num_links ||
-	    !bot->declared_started || !bot->declared_touched ||
-	    bot->declared_touch_frame != level.framenum || bot->declared_triggered ||
-	    bot->declared_activated)
-		return;
-	link = &SG_Rune()->links[bot->commit_link];
-	if (link->action != RL_DOOR)
-		return;
-	expected = SG_DeclaredDoorForLink(link->anchor,
-	    SG_Rune()->seeds[link->from].origin);
+		return false;
+	if (!bot || !bot->declared_started || bot->declared_guard_paused)
+		return false;
+	if (SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) !=
+	        SG_COMPOUND_GUARD_OK ||
+	    !DoorStep_DeclaredLinkSnapshot(bot, anchor, source_origin))
+		return false;
+	expected = SG_DeclaredDoorForLink(anchor, source_origin);
 	if (!SG_DeclaredDoorEquivalentActivation(expected, source, door_master,
 	        activator->s.origin))
-		return;
+		return false;
+	if (bot->declared_triggered || bot->declared_activated)
+		return true;
+	if (!bot->declared_touched ||
+	    bot->declared_touch_frame != level.framenum)
+		return false;
 	bot->declared_triggered = true;
 	bot->declared_trigger_frame = level.framenum;
+	return true;
 }
 
 static sg_bot_t *Drop_LiveEventOwner(edict_t *activator)
@@ -4895,17 +5033,55 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean open_ahead = tc->open_ahead;
 	qboolean run_link = tc->run_link;
 	int door_hold = tc->door_hold;
+	{
+		sg_mover_lease_record_t record;
+		sg_compound_guard_result_t guard_result;
+		rune_t *rune = SG_Rune();
+
+		guard_result = SG_CompoundGuardValidate(&bot->compound_guard, &record);
+		if (record.law == SG_MOVER_LAW_DECLARED_DOOR &&
+		    (record.state == SG_MOVER_LEASE_ACTIVE ||
+		     record.state == SG_MOVER_LEASE_PAUSED))
+		{
+			/* The durable claim dominates rail, patrol, and watchdog rewrites.
+			 * They may choose a candidate, but cannot replace the command owner
+			 * between CommitLink and the mutation boundary. */
+			if (guard_result != SG_COMPOUND_GUARD_OK ||
+			    !rune || !rune->links || record.link_index < 0 ||
+			    record.link_index >= rune->hdr.num_links ||
+			    rune->links[record.link_index].action != RL_DOOR ||
+			    bot->commit_link != record.link_index)
+			{
+				SG_DeclaredDoorTerminalDeath(bot);
+				return;
+			}
+			bestlink = record.link_index;
+			tc->bestlink = bestlink;
+		}
+		else if (record.law == SG_MOVER_LAW_DECLARED_DOOR &&
+		         record.state == SG_MOVER_LEASE_QUARANTINED &&
+		         bot->declared_started)
+		{
+			SG_DeclaredDoorTerminalDeath(bot);
+			return;
+		}
+	}
 	qboolean drop_yaw_locked = tc->drop_yaw_locked;
 	qboolean proved_ballistic = (bestlink >= 0 && SG_Rune() &&
+	    SG_Rune()->links && bestlink < SG_Rune()->hdr.num_links &&
 	    (SG_Rune()->links[bestlink].action == RL_DROP ||
 	     SG_Rune()->links[bestlink].action == RL_JUMP));
-	qboolean proved_drop = (bestlink >= 0 && SG_Rune() &&
+	qboolean proved_drop = (bestlink >= 0 && SG_Rune() && SG_Rune()->links &&
+	    bestlink < SG_Rune()->hdr.num_links &&
 	    SG_Rune()->links[bestlink].action == RL_DROP);
-	qboolean proved_jump = (bestlink >= 0 && SG_Rune() &&
+	qboolean proved_jump = (bestlink >= 0 && SG_Rune() && SG_Rune()->links &&
+	    bestlink < SG_Rune()->hdr.num_links &&
 	    SG_Rune()->links[bestlink].action == RL_JUMP);
-	qboolean proved_swim = (bestlink >= 0 && SG_Rune() &&
+	qboolean proved_swim = (bestlink >= 0 && SG_Rune() && SG_Rune()->links &&
+	    bestlink < SG_Rune()->hdr.num_links &&
 	    SG_Rune()->links[bestlink].action == RL_SWIM);
 	qboolean declared_control = (bestlink >= 0 && SG_Rune() &&
+	    SG_Rune()->links && bestlink < SG_Rune()->hdr.num_links &&
 	    (SG_Rune()->links[bestlink].action == RL_LIFT ||
 	     SG_Rune()->links[bestlink].action == RL_TELEPORT ||
 	     SG_Rune()->links[bestlink].action == RL_DOOR));
@@ -4939,6 +5115,19 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * source.  Generic and legacy movement remain excluded for this frame. */
 	if (tc->think_over)
 		return;
+
+	/* Think_Move may retire a previous action after Think_CommitLink selected
+	 * this frame's edge (for example, the grounded tail of a rocket jump).  The
+	 * context then still names that edge, but it is no longer the bot's durable
+	 * commitment.  Never acquire or execute a door from that stale snapshot.
+	 * If an older declared-door transaction already exists, retire it only
+	 * through the same positive whole-sweep clearance gate. */
+	if (declared_door && bot->commit_link != bestlink)
+	{
+		if (bot->declared_started && !DoorStep_AbortOrRetain(bot, bestlink))
+			return;
+		return;
+	}
 
 	/* The graph's nominal SWIM proves that the local action exists. Execution
 	 * begins only after the same oracle proves the actual fixed-point entry
@@ -6359,9 +6548,44 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
 				    !e->client->ps.pmove.pm_time && !source_snapped)
 				{
-					bot->declared_started = true;
-					if (declared_door)
-						bot->declared_start_frame = level.framenum;
+					if (declared_door &&
+					    (bot->hook_phase != 0 || bot->rj_phase != 0 ||
+					     bot->nade_phase != 0 || e->client->hookstate != 0 ||
+					     e->client->hook != NULL))
+					{
+						/* Another controller still owns the body.  No mover claim
+						 * exists yet, so retire this candidate without submitting a
+						 * mixed-law command or firing a rope after acquisition. */
+						bot->commit_link = -1;
+						bot->commit_until = 0.0f;
+						return;
+					}
+					if (!declared_door)
+						bot->declared_started = true;
+					else
+					{
+						sg_compound_guard_result_t acquire_result =
+						    SG_DeclaredDoorGuardAcquire(bot, bestlink);
+
+						if (acquire_result == SG_COMPOUND_GUARD_OK)
+						{
+							bot->declared_started = true;
+							bot->declared_start_frame = level.framenum;
+							bot->declared_guard_paused = false;
+							bot->declared_guard_pause_started = 0.0f;
+							bot->declared_door_recovery_since = 0.0f;
+						}
+						else
+						{
+							/* NOT_CLEAR proves this unleased contender is already
+							 * in the complete sweep.  Make it nonsolid through the
+							 * normal death lifecycle before the current owner can
+							 * ever release and allow the set to close. */
+							if (acquire_result == SG_COMPOUND_GUARD_NOT_CLEAR)
+								SG_DeclaredDoorTerminalDeath(bot);
+							return;
+						}
+					}
 				}
 
 				if (declared_door)
@@ -6370,10 +6594,31 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					int axis;
 
 					door_trigger = SG_DeclaredDoorForLink(decl->anchor, source);
-					if (!door_trigger ||
-					    (!bot->declared_started &&
-					     (bot->declared_touched || bot->declared_triggered ||
-					      bot->declared_activated)))
+					/* Reauthenticate the durable claim before this frame can snap,
+					 * relink, arm, hold, or otherwise mutate the live body/action.
+					 * Later checks deliberately remain at their immediate mutation
+					 * boundaries as defense against intra-frame world drift. */
+					if (bot->declared_started &&
+					    SG_DeclaredDoorGuardAuthorize(bot, bestlink) !=
+					        SG_COMPOUND_GUARD_OK)
+					{
+						DoorStep_RetainFailedAuthority(bot, bestlink);
+						return;
+					}
+					if (!door_trigger)
+					{
+						if (bot->declared_started)
+						{
+							(void)DoorStep_AbortOrRetain(bot, bestlink);
+							return;
+						}
+						else
+							bot->commit_link = -1;
+						hold = true;
+					}
+					else if (!bot->declared_started &&
+					         (bot->declared_touched || bot->declared_triggered ||
+					          bot->declared_activated))
 					{
 						bot->commit_link = -1;
 						hold = true;
@@ -6393,8 +6638,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						    (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 						    e->client->ps.pmove.pm_time)
 						{
-							bot->commit_link = -1;
-							hold = true;
+							DoorStep_RetainFailedAuthority(bot, bestlink);
+							return;
 						}
 						if (bot->commit_link >= 0)
 						{
@@ -6445,7 +6690,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 								 * share one 100 ms phase.  If anchor/rest becomes exact
 								 * later in this frame, hold and revalidate after movers on
 								 * the next outer-frame boundary. */
-								if (step != 0 || DoorStep_OwnedByOther(bot, door_trigger) ||
+								if (step != 0 ||
+								    SG_DeclaredDoorGuardAuthorize(bot, bestlink) !=
+								        SG_COMPOUND_GUARD_OK ||
 								    !SG_DeclaredDoorAtTop(door_trigger) ||
 								    bot->declared_egress_proof_frame == level.framenum)
 									hold = true;
@@ -6483,7 +6730,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							        e->groundentity != NULL, e->watertype, e->waterlevel, e))
 							{
 								DoorStep_StopOutside(e);
-								DoorStep_AbortDeclared(bot, bestlink);
+								if (!DoorStep_AbortOrRetain(bot, bestlink))
+									return;
 								return;
 							}
 
@@ -6505,13 +6753,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 									if (outside)
 									{
 										DoorStep_StopOutside(e);
-										DoorStep_AbortDeclared(bot, bestlink);
+										if (!DoorStep_AbortOrRetain(bot, bestlink))
+											return;
 									}
 									else
 									{
-										if (door_trigger)
-											SG_DeclaredDoorHoldOpen(door_trigger, 500);
-										SG_TimerArm(&bot->commit_until, 0.5f);
+										DoorStep_RetainFailedAuthority(bot, bestlink);
 									}
 									return;
 								}
@@ -6534,6 +6781,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 								{
 									bot->declared_egress_proof_frame = level.framenum;
 									bot->declared_door_suffix_ms = suffix_ms;
+									bot->declared_door_recovery_since = 0.0f;
 									/* Keep ownership through the complete freshly-proved suffix.
 									 * In particular, a retreat may leave the sweep before it reaches
 									 * the anchor; the generic timeout must not steal that safe exit. */
@@ -6548,7 +6796,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 									 * body has not entered the mover envelope.  Stop the external
 									 * velocity and retire without submitting an unproved Pmove. */
 									DoorStep_StopOutside(e);
-									DoorStep_AbortDeclared(bot, bestlink);
+									if (!DoorStep_AbortOrRetain(bot, bestlink))
+										return;
 									return;
 								}
 								else
@@ -6556,9 +6805,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 									/* A live body can occupy both exits.  There is no safe
 									 * controller command in that state: lease the already-TOP
 									 * validated set, retain ownership, and retry next frame. */
-									if (door_trigger)
-										SG_DeclaredDoorHoldOpen(door_trigger, 500);
-									SG_TimerArm(&bot->commit_until, 0.5f);
+									DoorStep_RetainFailedAuthority(bot, bestlink);
 									return;
 								}
 							}
@@ -6778,27 +7025,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					    SG_OracleDeclaredDoorStepSafe(e, guard_trigger, cmd);
 					if (!guard_door_step)
 					{
-						usercmd_t safe_cmd;
-						int safe_step;
-
 						DoorStep_StopOutside(e);
-						DoorStep_AbortDeclared(bot, bestlink);
-						memset(&safe_cmd, 0, sizeof(safe_cmd));
-						for (safe_step = 0; safe_step < 3; safe_step++)
-							safe_cmd.angles[safe_step] =
-							    ANGLE2SHORT(e->client->v_angle[safe_step]) -
-							    e->client->ps.pmove.delta_angles[safe_step];
-						safe_cmd.lightlevel = cmd->lightlevel;
-						for (safe_step = step; safe_step < sub; safe_step++)
-						{
-							safe_cmd.msec =
-							    (byte)(base + (safe_step < rem ? 1 : 0));
-							if (!SG_OracleDeclaredDoorStepSafe(e, guard_trigger,
-							        &safe_cmd))
-								return;
-							ClientThink(e, &safe_cmd);
-						}
-						cmd->msec = (byte)sub_msec;
+						(void)DoorStep_AbortOrRetain(bot, bestlink);
 						return;
 					}
 				}
@@ -6844,6 +7072,20 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (proved_drop && accept_drop_step_owned)
 					SG_AcceptDropCommand(bot, bestlink, step, cmd);
 #endif
+				/* Physics preflight and mover authority are independent.  Re-resolve
+				 * and authorize the exact physical member set immediately before
+				 * every ClientThink owned by a declared door. */
+				if (declared_door && bot->declared_started &&
+				    bot->commit_link == bestlink &&
+				    SG_DeclaredDoorGuardAuthorize(bot, bestlink) !=
+				        SG_COMPOUND_GUARD_OK)
+				{
+					DoorStep_RetainFailedAuthority(bot, bestlink);
+					return;
+				}
+				if (declared_door && bot->declared_started &&
+				    bot->commit_link == bestlink)
+					bot->declared_door_recovery_since = 0.0f;
 				ClientThink(e, cmd);
 				if (drop_command_owned
 #ifdef SG_ACCEPT_DROP

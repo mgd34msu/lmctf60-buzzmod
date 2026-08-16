@@ -259,6 +259,9 @@
     <ClCompile Include="slipgate\sg_compound_guard_game.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_declared_door_guard.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_compound_world.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -493,6 +496,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_compound_guard_game.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_declared_door_guard.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_compound_world.h">

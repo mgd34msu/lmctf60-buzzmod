@@ -938,6 +938,11 @@ void door_use (edict_t *self, edict_t *other, edict_t *activator)
 	if (self->flags & FL_TEAMSLAVE)
 		return;
 
+	/* Authorization must precede every door-team mutation, including toggle
+	 * descent, message/touch clearing, movement and target publication. */
+	if (!SG_AuthorizeDoorActivation(other, self, activator))
+		return;
+
 	if (self->spawnflags & DOOR_TOGGLE)
 	{
 		if (self->moveinfo.state == STATE_UP || self->moveinfo.state == STATE_TOP)
@@ -960,11 +965,6 @@ void door_use (edict_t *self, edict_t *other, edict_t *activator)
 		ent->touch = NULL;
 		door_go_up (ent, activator);
 	}
-	/* Preserve the accepted trigger identity through the synchronous use
-	 * chain.  RL_DOOR consumes this only after revalidating source, activator,
-	 * full-sweep clearance and direct target membership; every ordinary door
-	 * use is therefore a cheap no-op here. */
-	SG_NoteDoorActivation(other, self, activator);
 }
 
 void Touch_DoorTrigger (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *surf)
@@ -978,16 +978,16 @@ void Touch_DoorTrigger (edict_t *self, edict_t *other, cplane_t *plane, csurface
 	if ((self->owner->spawnflags & DOOR_NOMONSTER) && (other->svflags & SVF_MONSTER))
 		return;
 
-	/* Match Touch_Multi's declared-controller observation point: contact is
-	 * evidence even while this one-second auto-trigger debounce is active. */
-	SG_NoteDoorTriggerTouch(self, other);
+	/* Keep the declared controller's decision ahead of debounce state and the
+	 * synchronous door_use mutation chain. */
+	if (!SG_AuthorizeDoorTriggerTouch(self, other))
+		return;
+
 	if (level.time < self->touch_debounce_time)
 		return;
 	self->touch_debounce_time = level.time + 1.0;
 
-	/* Preserve the physical trigger identity through door_use.  Its ordinary
-	 * behavior ignores `other`; RL_DOOR revalidates this pointer, the owner
-	 * team, and the activator before treating the callback as proof. */
+	/* Preserve the physical trigger identity through door_use. */
 	door_use (self->owner, self, other);
 }
 
@@ -1110,6 +1110,12 @@ void door_killed (edict_t *self, edict_t *inflictor, edict_t *attacker, int dama
 {
 	edict_t	*ent;
 
+	/* A projectile-driven door activation has already reached pain/die, but the
+	 * team reset below is still a world mutation.  Apply the same SG authority
+	 * boundary before changing health/takedamage; door_use rechecks immediately
+	 * before motion so both halves fail closed under intervening drift. */
+	if (!SG_AuthorizeDoorActivation(attacker, self->teammaster, attacker))
+		return;
 	for (ent = self->teammaster ; ent ; ent = ent->teamchain)
 	{
 		ent->health = ent->max_health;

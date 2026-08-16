@@ -32,7 +32,20 @@ static int bot_reset_calls;
 static int last_respawn_key;
 static uint64_t last_respawn_generation;
 static int sweep_outside = 1;
+static int sweep_inside_key;
+static int hold_member_calls;
+static int hold_member_ok = 1;
+static int terminal_member_calls;
+static int terminal_member_ok = 1;
+static int body_die_calls;
+static int body_die_clears = 1;
 static sg_compound_guard_result_t respawn_result = SG_COMPOUND_GUARD_OK;
+static sg_compound_guard_result_t validate_result =
+    SG_COMPOUND_GUARD_NO_LEASE;
+static sg_mover_lease_record_t validate_record;
+static sg_compound_guard_run_t run_state = SG_COMPOUND_GUARD_RUN_READY;
+static int global_record_present;
+static sg_mover_lease_record_t global_record;
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -61,6 +74,21 @@ void hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
 	(void)point;
 }
 
+void body_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
+	int damage, vec3_t point)
+{
+	(void)inflictor;
+	(void)attacker;
+	(void)damage;
+	(void)point;
+	body_die_calls++;
+	if (self && self->health < -40 && body_die_clears)
+	{
+		self->solid = SOLID_NOT;
+		self->takedamage = DAMAGE_NO;
+	}
+}
+
 int SG_MoverSubjectValid(const sg_mover_subject_t *subject)
 {
 	return subject && subject->kind >= SG_MOVER_SUBJECT_CLIENT &&
@@ -71,7 +99,34 @@ int SG_MoverSubjectValid(const sg_mover_subject_t *subject)
 qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject)
 {
 	return member && subject && member->inuse && subject->inuse &&
-	       sweep_outside;
+	       sweep_outside && subject->s.number != sweep_inside_key;
+}
+
+qboolean SG_DeclaredDoorHoldMembers(edict_t *const *members, int count,
+	int lease_ms)
+{
+	int index;
+
+	hold_member_calls++;
+	if (!members || count <= 0 || lease_ms <= 0 || !hold_member_ok)
+		return false;
+	for (index = 0; index < count; index++)
+		if (!members[index] || !members[index]->inuse)
+			return false;
+	return true;
+}
+
+qboolean SG_DeclaredDoorMembersTerminal(edict_t *const *members, int count)
+{
+	int index;
+
+	terminal_member_calls++;
+	if (!members || count <= 0 || !terminal_member_ok)
+		return false;
+	for (index = 0; index < count; index++)
+		if (!members[index] || !members[index]->inuse)
+			return false;
+	return true;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardInit(
@@ -138,6 +193,20 @@ sg_compound_guard_result_t SG_CompoundGuardBotRespawn(
 	return respawn_result;
 }
 
+int SG_CompoundGuardRecordAt(size_t slot,
+	sg_mover_lease_record_t *record_out, sg_mover_ticket_t *ticket_out)
+{
+	if (record_out)
+		memset(record_out, 0, sizeof(*record_out));
+	if (ticket_out)
+		memset(ticket_out, 0, sizeof(*ticket_out));
+	if (slot != 0U || !global_record_present)
+		return 0;
+	if (record_out)
+		*record_out = global_record;
+	return 1;
+}
+
 sg_compound_guard_result_t SG_CompoundGuardBodyWillReplace(int32_t body_key)
 {
 	body_will_key = body_key;
@@ -160,6 +229,22 @@ sg_compound_guard_result_t SG_CompoundGuardOrphan(
 	orphan_bolt_key = bolt_key;
 	return bolt_key < 0 ? SG_COMPOUND_GUARD_INVALID_ARGUMENT
 	                    : SG_COMPOUND_GUARD_OK;
+}
+
+sg_compound_guard_result_t SG_CompoundGuardValidate(
+	sg_compound_guard_bot_t *bot, sg_mover_lease_record_t *record_out)
+{
+	(void)bot;
+	if (record_out)
+		*record_out = validate_record;
+	return validate_result;
+}
+
+sg_compound_guard_run_t SG_CompoundGuardBotRunState(
+	const sg_compound_guard_bot_t *bot)
+{
+	(void)bot;
+	return run_state;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardBoltEvicted(
@@ -210,6 +295,18 @@ static void ResetWorld(void)
 	memset(&globals, 0, sizeof(globals));
 	memset(&game, 0, sizeof(game));
 	memset(&captured_host, 0, sizeof(captured_host));
+	memset(&validate_record, 0, sizeof(validate_record));
+	memset(&global_record, 0, sizeof(global_record));
+	global_record_present = 0;
+	hold_member_calls = 0;
+	hold_member_ok = 1;
+	terminal_member_calls = 0;
+	terminal_member_ok = 1;
+	body_die_calls = 0;
+	body_die_clears = 1;
+	validate_result = SG_COMPOUND_GUARD_NO_LEASE;
+	run_state = SG_COMPOUND_GUARD_RUN_READY;
+	sweep_inside_key = 0;
 	g_edicts = entities;
 	game.maxentities = TEST_EDICTS;
 	game.maxclients = 2;
@@ -294,6 +391,8 @@ static void TestBodyAndHookIncarnations(void)
 {
 	edict_t foreign_body;
 	int quarantines_before;
+	int body_calls_before;
+	sg_mover_key_t mover_key = 10U;
 	sg_mover_subject_t subject;
 	uint64_t body_first, body_second, hook_generation;
 
@@ -305,8 +404,11 @@ static void TestBodyAndHookIncarnations(void)
 	CHECK(SG_CompoundGuardGameBodyWillReplace(&entities[3]) ==
 	      SG_COMPOUND_GUARD_OK);
 	CHECK(body_will_key == 3);
-	CHECK(SG_CompoundGuardGameBodyDidCopy(NULL, &entities[3]) ==
+	CHECK(SG_CompoundGuardGameBodyDidCopy(&entities[1], &entities[3]) ==
 	      SG_COMPOUND_GUARD_OK);
+	entities[3].movetype = MOVETYPE_TOSS;
+	entities[3].die = body_die;
+	entities[3].takedamage = DAMAGE_YES;
 	CHECK(body_did_key == 3);
 	body_second = CurrentGeneration(3);
 	CHECK(body_second > body_first);
@@ -330,6 +432,97 @@ static void TestBodyAndHookIncarnations(void)
 	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11]) ==
 	      SG_COMPOUND_GUARD_OK);
 	hook_generation = CurrentGeneration(11);
+	LiveEntity(10, "func_door");
+	/* Record-wide clearance covers each bot-derived physical kind in isolation,
+	 * not only the lease owner's current client edict. */
+	sweep_outside = 1;
+	sweep_inside_key = 1;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_NO);
+	/* A later non-body blocker makes the whole preflight negative without
+	 * partially terminalizing an earlier body-queue candidate. */
+	entities[1].solid = SOLID_NOT;
+	sweep_outside = 0;
+	sweep_inside_key = 0;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_NO);
+	CHECK(body_die_calls == 0 && entities[3].solid == SOLID_BBOX);
+	entities[1].solid = SOLID_BBOX;
+	sweep_outside = 1;
+	sweep_inside_key = 3;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_YES);
+	CHECK(body_die_calls == 1 && entities[3].solid == SOLID_NOT &&
+	      entities[3].takedamage == DAMAGE_NO);
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_YES);
+	CHECK(body_die_calls == 1);
+	/* A malformed or ineffective corpse terminal callback cannot turn an
+	 * occupied sweep into a positive proof. */
+	entities[3].solid = SOLID_BBOX;
+	entities[3].takedamage = DAMAGE_YES;
+	entities[3].die = NULL;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(body_die_calls == 1);
+	entities[3].die = body_die;
+	body_die_clears = 0;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(body_die_calls == 2 && entities[3].solid == SOLID_BBOX);
+	body_die_clears = 1;
+	entities[3].solid = SOLID_NOT;
+	entities[3].takedamage = DAMAGE_NO;
+	sweep_inside_key = 11;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_NO);
+	/* Human client/body/hook generations are observable but intentionally do
+	 * not become SG-protected subjects. */
+	LiveEntity(2, "player");
+	entities[2].client = &clients[1];
+	entities[2].solid = SOLID_BBOX;
+	CHECK(SG_CompoundGuardGameClientSpawned(&entities[2]) ==
+	      SG_COMPOUND_GUARD_OK);
+	LiveEntity(4, "bodyque");
+	entities[4].solid = SOLID_BBOX;
+	CHECK(SG_CompoundGuardGameBodyQueueInit(&entities[4]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardGameBodyWillReplace(&entities[4]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardGameBodyDidCopy(&entities[2], &entities[4]) ==
+	      SG_COMPOUND_GUARD_OK);
+	entities[4].movetype = MOVETYPE_TOSS;
+	entities[4].die = body_die;
+	entities[4].takedamage = DAMAGE_YES;
+	LiveEntity(14, "noclass");
+	entities[14].owner = &entities[2];
+	entities[14].movetype = MOVETYPE_FLYMISSILE;
+	entities[14].solid = SOLID_BBOX;
+	entities[14].touch = hook_touch;
+	entities[14].die = hook_die;
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[2], &entities[14]) ==
+	      SG_COMPOUND_GUARD_OK);
+	sweep_inside_key = 2;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_YES);
+	sweep_inside_key = 4;
+	body_calls_before = body_die_calls;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_YES);
+	CHECK(body_die_calls == body_calls_before &&
+	      entities[4].solid == SOLID_BBOX);
+	sweep_inside_key = 14;
+	CHECK(captured_host.all_subjects_outside(captured_host.context,
+	      &mover_key, 1U) == SG_COMPOUND_GUARD_YES);
+	sweep_inside_key = 0;
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_DECLARED_DOOR, &mover_key, 1U, 500) ==
+	      SG_COMPOUND_GUARD_YES);
+	CHECK(hold_member_calls == 1);
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_DECLARED_DOOR, &mover_key, 1U) ==
+	      SG_COMPOUND_GUARD_YES);
+	CHECK(terminal_member_calls == 1);
 	memset(&subject, 0, sizeof(subject));
 	subject.kind = SG_MOVER_SUBJECT_HOOK_BOLT;
 	subject.edict_key = 11;
@@ -348,9 +541,48 @@ static void TestBodyAndHookIncarnations(void)
 	respawn_result = SG_COMPOUND_GUARD_OK;
 	entities[1].client->hook = &entities[11];
 	entities[1].client->hookstate = 1;
+	entities[1].health = 25;
+	validate_result = SG_COMPOUND_GUARD_OK;
+	validate_record.law = SG_MOVER_LAW_DECLARED_DOOR;
+	validate_record.state = SG_MOVER_LEASE_ACTIVE;
 	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
 	      SG_COMPOUND_GUARD_OK);
 	CHECK(orphan_calls == 1 && orphan_bolt_key == 11);
+	CHECK(entities[1].health == -100);
+	/* A later life can still carry the parked owner while its earlier corpse is
+	 * an ORPHAN.  Re-entering the death hook must not attempt ORPHAN->ORPHAN or
+	 * quarantine the valid record.  A retirement/foreign-set terminal result
+	 * still forces this new body through the nonsolid stock gib path. */
+	validate_record.state = SG_MOVER_LEASE_ORPHAN;
+	entities[1].health = 25;
+	run_state = SG_COMPOUND_GUARD_RUN_READY;
+	quarantines_before = quarantine_calls;
+	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(orphan_calls == 1 && quarantine_calls == quarantines_before);
+	CHECK(entities[1].health == 25);
+	run_state = SG_COMPOUND_GUARD_RUN_TERMINAL;
+	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(orphan_calls == 1 && quarantine_calls == quarantines_before);
+	CHECK(entities[1].health == -100);
+	run_state = SG_COMPOUND_GUARD_RUN_READY;
+	validate_result = SG_COMPOUND_GUARD_NO_LEASE;
+	memset(&validate_record, 0, sizeof(validate_record));
+	/* A bot with no claim of its own is still made nonsolid when its dying
+	 * body occupies another live captured set. */
+	global_record_present = 1;
+	global_record.state = SG_MOVER_LEASE_ACTIVE;
+	global_record.law = SG_MOVER_LAW_DECLARED_DOOR;
+	global_record.key_count = 1U;
+	global_record.keys[0] = 10U;
+	sweep_outside = 0;
+	entities[1].health = 25;
+	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(entities[1].health == -100);
+	global_record_present = 0;
+	sweep_outside = 1;
 
 	LiveEntity(12, "noclass");
 	entities[12].owner = &entities[1];
@@ -360,11 +592,13 @@ static void TestBodyAndHookIncarnations(void)
 	entities[12].die = hook_die;
 	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[12]) ==
 	      SG_COMPOUND_GUARD_OK);
+	entities[1].health = 25;
 	quarantines_before = quarantine_calls;
 	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
 	      SG_COMPOUND_GUARD_INVALID_ARGUMENT);
-	CHECK(orphan_calls == 2 && orphan_bolt_key == -1);
+	CHECK(orphan_calls == 3 && orphan_bolt_key == -1);
 	CHECK(quarantine_calls == quarantines_before + 1);
+	CHECK(entities[1].health == 25);
 
 	LiveEntity(4, "noclass");
 	entities[4].owner = &entities[1];
@@ -469,7 +703,10 @@ int main(void)
 	CHECK(SG_CompoundGuardGameLevelReset() == SG_COMPOUND_GUARD_OK);
 	CHECK(level_resets == 1);
 	CHECK(captured_host.identity != NULL && captured_host.solid != NULL &&
-	      captured_host.outside_sweep != NULL);
+	      captured_host.outside_sweep != NULL &&
+	      captured_host.all_subjects_outside != NULL &&
+	      captured_host.hold_open != NULL &&
+	      captured_host.set_terminal != NULL);
 	TestIdentityABAAndBounds();
 	TestBodyAndHookIncarnations();
 	TestDisconnectAndExhaustion();
