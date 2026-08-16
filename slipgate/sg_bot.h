@@ -10,6 +10,7 @@
 
 #include "sg_drop_live.h"
 #include "sg_hook_live.h"
+#include "sg_compound_guard.h"
 
 #define SG_MAXBOTS      16
 
@@ -17,6 +18,9 @@ typedef struct sg_bot_s
 {
 	edict_t		*ent;
 	qboolean	active;
+	/* Shared mover ownership survives death/respawn and is retired before the
+	 * containing process-storage slot is erased. */
+	sg_compound_guard_bot_t compound_guard;
 	int			seed;           /* seed we believe we are at/near */
 	float		stuck_time;     /* accumulated time without progress */
 	vec3_t		stuck_origin;   /* dedicated short-range progress sample;

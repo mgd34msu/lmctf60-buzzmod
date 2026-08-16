@@ -1,6 +1,7 @@
 // g_utils.c -- misc utility functions for game module
 
 #include "g_local.h"
+#include "slipgate/sg_compound_guard_game.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 
@@ -489,6 +490,7 @@ void G_FreeEdict (edict_t *ed)
 	ed->classname = "freed";
 	ed->freetime = level.time;
 	ed->inuse = false;
+	SG_CompoundGuardGameEntityFreed(ed);
 }
 
 

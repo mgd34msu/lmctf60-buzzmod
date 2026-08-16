@@ -37,6 +37,10 @@ void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 void door_secret_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_go_down(edict_t *self);
+void hook_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf);
+void hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
+	int damage, vec3_t point);
 void trigger_relay_use(edict_t *self, edict_t *other, edict_t *activator);
 void Use_Target_Speaker(edict_t *self, edict_t *other, edict_t *activator);
 
@@ -606,6 +610,62 @@ static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
 	return true;
 }
 
+/* The partial-arc extrema above and the engine-visible corner transform take
+ * different floating-point paths: the former recovers sinusoid coefficients,
+ * while the latter evaluates AngleVectors directly.  A single nextafter is
+ * not a sufficient enclosure when coefficient recovery loses low bits against
+ * a large world origin.  Keep a full 1/8-unit server-physics lattice margin,
+ * then add a 128-operation relative roundoff envelope over every magnitude
+ * participating in the transform.  This remains narrow on normal doors while
+ * making an inclusive guard conservative across both evaluation paths. */
+static void SG_OracleRotatingBoundsOutward(edict_t *door,
+	const vec3_t local_mins, const vec3_t local_maxs,
+	vec3_t dmins, vec3_t dmaxs)
+{
+	double scale = 1.0;
+	double pad;
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		scale += fabs((double)door->s.origin[axis]);
+		scale += fabs((double)local_mins[axis]);
+		scale += fabs((double)local_maxs[axis]);
+	}
+	pad = 0.125 + 128.0 * (double)FLT_EPSILON * scale;
+	for (axis = 0; axis < 3; axis++)
+	{
+		double low, high;
+		float rounded;
+
+		if (!isfinite(dmins[axis]) || !isfinite(dmaxs[axis]) ||
+		    !isfinite(pad) || pad >= (double)FLT_MAX)
+		{
+			dmins[axis] = -FLT_MAX;
+			dmaxs[axis] = FLT_MAX;
+			continue;
+		}
+		low = (double)dmins[axis] - pad;
+		high = (double)dmaxs[axis] + pad;
+		if (low <= -(double)FLT_MAX)
+			dmins[axis] = -FLT_MAX;
+		else
+		{
+			rounded = (float)low;
+			dmins[axis] = rounded <= -FLT_MAX
+			    ? -FLT_MAX : nextafterf(rounded, -INFINITY);
+		}
+		if (high >= (double)FLT_MAX)
+			dmaxs[axis] = FLT_MAX;
+		else
+		{
+			rounded = (float)high;
+			dmaxs[axis] = rounded >= FLT_MAX
+			    ? FLT_MAX : nextafterf(rounded, INFINITY);
+		}
+	}
+}
+
 /* CM_TransformedBoxTrace rotates a trace origin into a rotating brush's local
  * frame but leaves the trace mins/maxs unchanged.  The occupied player-origin
  * volume is therefore the angular sweep of the local Minkowski box, not the
@@ -630,23 +690,26 @@ static void SG_OracleDoorBounds(edict_t *door,
 			local_maxs[axis] = door->maxs[axis] - hmin;
 		}
 
-		if (SG_OracleRotatingDoorBounds(door, local_mins, local_maxs,
-		                                      dmins, dmaxs))
-			return;
-		for (axis = 0; axis < 3; axis++)
+		if (!SG_OracleRotatingDoorBounds(door, local_mins, local_maxs,
+		                                       dmins, dmaxs))
 		{
-			float lo = fabsf(local_mins[axis]);
-			float hi = fabsf(local_maxs[axis]);
+			for (axis = 0; axis < 3; axis++)
+			{
+				float lo = fabsf(local_mins[axis]);
+				float hi = fabsf(local_maxs[axis]);
 
-			ext[axis] = lo > hi ? lo : hi;
+				ext[axis] = lo > hi ? lo : hi;
+			}
+			radius = sqrtf(ext[0] * ext[0] + ext[1] * ext[1] +
+			               ext[2] * ext[2]);
+			for (axis = 0; axis < 3; axis++)
+			{
+				dmins[axis] = door->s.origin[axis] - radius;
+				dmaxs[axis] = door->s.origin[axis] + radius;
+			}
 		}
-		radius = sqrtf(ext[0] * ext[0] + ext[1] * ext[1] +
-		               ext[2] * ext[2]);
-		for (axis = 0; axis < 3; axis++)
-		{
-			dmins[axis] = door->s.origin[axis] - radius;
-			dmaxs[axis] = door->s.origin[axis] + radius;
-		}
+		SG_OracleRotatingBoundsOutward(door, local_mins, local_maxs,
+		                                     dmins, dmaxs);
 		return;
 	}
 
@@ -1236,6 +1299,206 @@ static qboolean SG_OracleDeclaredTriggerContains(edict_t *trigger,
 	return maxs[0] > trigger->absmin[0] && mins[0] < trigger->absmax[0] &&
 	       maxs[1] > trigger->absmin[1] && mins[1] < trigger->absmax[1] &&
 	       maxs[2] > trigger->absmin[2] && mins[2] < trigger->absmax[2];
+}
+
+/* Pointer subtraction and relational comparison are undefined for a stale
+ * pointer that is not part of g_edicts.  The bounded identity scan is cheap
+ * (MAX_EDICTS is 1024) and gives the guard a fail-closed exact-live test. */
+static int SG_OracleLiveEdictIndex(const edict_t *ent)
+{
+	int i;
+
+	if (!ent || !g_edicts || globals.edicts != g_edicts ||
+	    globals.edict_size != (int)sizeof(edict_t) ||
+	    globals.num_edicts <= 1 || globals.num_edicts > MAX_EDICTS ||
+	    game.maxentities <= 1 || game.maxentities > MAX_EDICTS ||
+	    globals.max_edicts != game.maxentities ||
+	    globals.num_edicts > game.maxentities || !game.clients ||
+	    game.maxclients <= 0 || game.maxentities <= BODY_QUEUE_SIZE ||
+	    game.maxclients >= game.maxentities - BODY_QUEUE_SIZE)
+		return -1;
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		if (ent != &g_edicts[i])
+			continue;
+		return ent->s.number == i ? i : -1;
+	}
+	return -1;
+}
+
+/* SV_LinkEdict owns these fields as one transaction.  A positive linkcount
+ * alone only proves that an entity was linked sometime in the past: unlinking
+ * deliberately leaves it positive.  Recompute the engine-visible bounds so a
+ * stale or partially mutated edict cannot be used to release a mover guard. */
+static qboolean SG_OracleLinkedBoundsValid(edict_t *ent)
+{
+	float radius = 0.0f;
+	qboolean rotated_bsp;
+	int axis;
+
+	if (!ent || !ent->area.prev || !ent->area.next ||
+	    ent->area.prev == &ent->area || ent->area.next == &ent->area ||
+	    !SG_OracleFinite3(ent->size))
+		return false;
+	rotated_bsp = ent->solid == SOLID_BSP &&
+	              (ent->s.angles[0] != 0.0f || ent->s.angles[1] != 0.0f ||
+	               ent->s.angles[2] != 0.0f);
+	if (rotated_bsp)
+	{
+		for (axis = 0; axis < 3; axis++)
+		{
+			float lo = fabsf(ent->mins[axis]);
+			float hi = fabsf(ent->maxs[axis]);
+
+			if (lo > radius) radius = lo;
+			if (hi > radius) radius = hi;
+		}
+	}
+	for (axis = 0; axis < 3; axis++)
+	{
+		float size = ent->maxs[axis] - ent->mins[axis];
+		float absmin = ent->s.origin[axis] +
+		               (rotated_bsp ? -radius : ent->mins[axis]) - 1.0f;
+		float absmax = ent->s.origin[axis] +
+		               (rotated_bsp ? radius : ent->maxs[axis]) + 1.0f;
+
+		if (ent->size[axis] != size || ent->absmin[axis] != absmin ||
+		    ent->absmax[axis] != absmax)
+			return false;
+	}
+	return true;
+}
+
+static qboolean SG_OracleRotatingPoseValid(edict_t *member)
+{
+	int axis, changed = 0;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		float start = member->moveinfo.start_angles[axis];
+		float end = member->moveinfo.end_angles[axis];
+		float current = member->s.angles[axis];
+		float low = start < end ? start : end;
+		float high = start > end ? start : end;
+
+		if (start == end)
+		{
+			if (current != start)
+				return false;
+			continue;
+		}
+		changed++;
+		if (fabsf(end - start) > 1440.0f || current < low || current > high)
+			return false;
+	}
+	return changed == 1;
+}
+
+static qboolean SG_OracleMoverSweepIdentity(edict_t *member)
+{
+	int axis, member_index;
+	qboolean rotating, secret;
+
+	member_index = SG_OracleLiveEdictIndex(member);
+	if (member_index <= game.maxclients + BODY_QUEUE_SIZE || !member->inuse ||
+	    member->linkcount <= 0 || member->solid != SOLID_BSP ||
+	    member->movetype != MOVETYPE_PUSH || !member->classname)
+		return false;
+	rotating = strcmp(member->classname, "func_door_rotating") == 0;
+	secret = strcmp(member->classname, "func_door") == 0 &&
+	         member->use == door_secret_use;
+	if ((!rotating && strcmp(member->classname, "func_door") != 0) ||
+	    (rotating && member->use != door_use) ||
+	    (!rotating && !secret && member->use != door_use) ||
+	    !SG_OracleFinite3(member->s.origin) ||
+	    !SG_OracleFinite3(member->mins) ||
+	    !SG_OracleFinite3(member->maxs) ||
+	    !SG_OracleFinite3(member->absmin) ||
+	    !SG_OracleFinite3(member->absmax) ||
+	    !SG_OracleFinite3(member->moveinfo.start_origin) ||
+	    !SG_OracleFinite3(member->moveinfo.end_origin) ||
+	    !SG_OracleFinite3(member->moveinfo.start_angles) ||
+	    !SG_OracleFinite3(member->moveinfo.end_angles) ||
+	    !SG_OracleFinite3(member->s.angles) ||
+	    (secret && (!SG_OracleFinite3(member->pos1) ||
+	                !SG_OracleFinite3(member->pos2))))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		if (member->mins[axis] > member->maxs[axis] ||
+		    member->absmin[axis] > member->absmax[axis])
+			return false;
+	}
+	if (!SG_OracleLinkedBoundsValid(member))
+		return false;
+	if (rotating)
+		return SG_OracleRotatingPoseValid(member);
+	return member->s.angles[0] == 0.0f && member->s.angles[1] == 0.0f &&
+	       member->s.angles[2] == 0.0f;
+}
+
+static qboolean SG_OracleMoverSubjectIdentity(edict_t *subject)
+{
+	edict_t *owner;
+	int owner_index, subject_index;
+
+	subject_index = SG_OracleLiveEdictIndex(subject);
+	if (subject_index < 0 || !subject->inuse ||
+	    subject->linkcount <= 0 || !subject->classname ||
+	    !SG_OracleFinite3(subject->s.origin) ||
+	    !SG_OracleFinite3(subject->mins) ||
+	    !SG_OracleFinite3(subject->maxs) ||
+	    subject->mins[0] > subject->maxs[0] ||
+	    subject->mins[1] > subject->maxs[1] ||
+	    subject->mins[2] > subject->maxs[2] ||
+	    !SG_OracleLinkedBoundsValid(subject))
+		return false;
+
+	/* A live/dead client and its copied body are axis-aligned solid boxes.
+	 * The grapple is a point box in flight and becomes a trigger on attach. */
+	if (subject->client)
+		return subject_index > 0 && subject_index <= game.maxclients &&
+		       subject->client == &game.clients[subject_index - 1] &&
+		       !strcmp(subject->classname, "player") &&
+		       subject->solid == SOLID_BBOX &&
+		       (subject->movetype == MOVETYPE_WALK ||
+		        subject->movetype == MOVETYPE_TOSS);
+	if (!strcmp(subject->classname, "bodyque"))
+		return subject_index > game.maxclients &&
+		       subject_index <= game.maxclients + BODY_QUEUE_SIZE &&
+		       subject->solid == SOLID_BBOX &&
+		       subject->movetype == MOVETYPE_TOSS;
+	if (subject_index <= game.maxclients + BODY_QUEUE_SIZE ||
+	    strcmp(subject->classname, "noclass") ||
+	    (subject->solid != SOLID_BBOX && subject->solid != SOLID_TRIGGER) ||
+	    subject->movetype != MOVETYPE_FLYMISSILE ||
+	    subject->touch != hook_touch || subject->die != hook_die)
+		return false;
+	owner = subject->owner;
+	owner_index = SG_OracleLiveEdictIndex(owner);
+	return owner_index > 0 && owner_index <= game.maxclients && owner->inuse &&
+	       owner->client == &game.clients[owner_index - 1] &&
+	       owner->classname && !strcmp(owner->classname, "player") &&
+	       owner->client->hook == subject;
+}
+
+qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject)
+{
+	vec3_t mins, maxs;
+	int axis;
+
+	if (member == subject || !SG_OracleMoverSweepIdentity(member) ||
+	    !SG_OracleMoverSubjectIdentity(subject))
+		return false;
+	SG_OracleDoorBounds(member, subject->mins, subject->maxs, mins, maxs);
+	if (!SG_OracleFinite3(mins) || !SG_OracleFinite3(maxs))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (mins[axis] > maxs[axis])
+			return false;
+	/* SegmentBox is inclusive: exact boundary contact remains occupied. */
+	return !SG_OracleSegmentBox(subject->s.origin, subject->s.origin,
+	                           mins, maxs);
 }
 
 qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin)

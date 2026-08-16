@@ -15,6 +15,7 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
+#include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_weights.h"    /* sg_role_names -- the roster print */
 #include "slipgate/sg_hooks.h"
@@ -37,6 +38,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 {
 	int i;
 
+	(void)SG_CompoundGuardGameBotSlotReset(&bot->compound_guard);
 	memset(bot, 0, sizeof(*bot));
 	bot->seed = -1;
 	bot->hook_link = -1;
@@ -507,6 +509,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].ent = ent;
 	sg_bots[slot].active = true;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
+	(void)SG_CompoundGuardGameBotAttach(&sg_bots[slot].compound_guard,
+	    slot, ent);
 	/* A fresh late join has no respawn edge from which to seed the movement
 	 * watchdogs. Initialize every progress sample at the actual spawn now;
 	 * otherwise level.time can make zero-initialized clocks immediately ancient
@@ -564,6 +568,18 @@ int SG_RemoveBots(void)
 		n++;
 	}
 	return n;
+}
+
+/* TAG_GAME owns both edicts and clients.  Retire live fake clients through
+ * their real lifecycle, then erase every process-storage roster slot before
+ * either backing array can disappear. */
+void SG_RosterStorageReset(void)
+{
+	int i;
+
+	(void)SG_RemoveBots();
+	for (i = 0; i < SG_MAXBOTS; i++)
+		BotSlot_Reset(&sg_bots[i]);
 }
 
 /*

@@ -11,6 +11,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_compound_guard_game.h"
 
 qboolean SG_OwnsBot(edict_t * ent);
 int SG_RemoveBots(void);
@@ -717,6 +718,7 @@ void ReadGame(char* filename)
 	char	str[MAX_INFO_STRING] = { 0 };
 	size_t	count;
 
+	SG_RosterStorageReset();
 	// Every stats_player_s node lives in TAG_GAME and is about to be freed.
 	// Drop the list head and the shared database handle first, otherwise
 	// p_start_player and each client's p_stats_player are left dangling and
@@ -724,6 +726,7 @@ void ReadGame(char* filename)
 	DB_Conn_Cleanup();
 	stats_log_init();
 
+	SG_CompoundGuardGameStorageWillFree();
 	gi.FreeTags(TAG_GAME);
 
 	f = fopen(filename, "rb");

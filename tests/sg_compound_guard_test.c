@@ -331,6 +331,21 @@ static void TestIdentityDisconnectAndReset(void)
 	CHECK(SG_CompoundGuardBotReset(&bot) == SG_COMPOUND_GUARD_OK);
 	CHECK(!bot.attached && !SG_MoverTicketValid(&bot.ticket));
 
+	/* A live hook freed by an ordinary disconnect was never an ORPHAN subject.
+	 * Retiring the absent client releases ACTIVE ownership directly; treating
+	 * that unrelated bolt as an eviction would quarantine this clean exit. */
+	ResetGuard();
+	Attach(&bot, 2, 3);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&bot, &key, 1U, 4) ==
+	      SG_COMPOUND_GUARD_OK);
+	owner = bot.owner;
+	SpawnEntity(80, 1, 0); /* live hook incarnation, deliberately not captured */
+	Entity(80)->present = 0; /* G_FreeEdict retirement */
+	Entity(3)->present = 0;  /* client unlink/SOLID_NOT/inuse=false */
+	CHECK(SG_CompoundGuardBotDisconnected(&bot) == SG_COMPOUND_GUARD_OK);
+	CHECK(!FindOwner(&owner, &record, &ticket));
+	CHECK(RecordCount() == 0U);
+
 	ResetGuard();
 	Attach(&bot, 2, 3);
 	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&bot, &key, 1U, 4) ==

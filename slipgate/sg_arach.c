@@ -57,6 +57,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_hook_live.h"
+#include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
@@ -3041,6 +3042,7 @@ void SG_RunFrame(void)
 	if (SG_TimerPending(sg_last_frame_time) ||
 	    (sg_rune && strcmp(sg_rune_map, level.mapname) != 0))
 		SG_LevelChange();
+	SG_CompoundGuardGameFrame();
 	SG_Mark(&sg_last_frame_time);
 	if (sg_rune && !SG_RunePhysicsCompatible(sg_rune))
 	{
@@ -3119,6 +3121,7 @@ void SG_RunFrame(void)
 void SG_LevelChange(void)
 {
 	int i;
+	(void)SG_CompoundGuardGameLevelReset();
 
 #ifdef SG_ACCEPT_DROP
 	SG_AcceptDropLevelReset();

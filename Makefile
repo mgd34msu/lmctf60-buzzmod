@@ -48,6 +48,20 @@ COMPOUND_GUARD_TEST_ALL_ARTIFACTS := \
 	.sg_compound_guard_mover_lease_under_test.gnu.o \
 	.sg_compound_guard_mover_lease_under_test.gnu.d \
 	$(COMPOUND_GUARD_TEST_OBJS) $(COMPOUND_GUARD_TEST_DEPS)
+COMPOUND_GUARD_GAME_TEST_BIN := sg_compound_guard_game_test.make
+COMPOUND_GUARD_GAME_TEST_OBJS := .sg_compound_guard_game_test.make.o \
+	.sg_compound_guard_game_under_test.make.o
+COMPOUND_GUARD_GAME_TEST_DEPS := $(COMPOUND_GUARD_GAME_TEST_OBJS:.o=.d)
+COMPOUND_GUARD_GAME_INTEGRATION_TEST := \
+	tests/test_compound_guard_game_integration.py
+COMPOUND_GUARD_GAME_TEST_ALL_ARTIFACTS := \
+	sg_compound_guard_game_test.gnu sg_compound_guard_game_test.make \
+	.sg_compound_guard_game_test.gnu.o \
+	.sg_compound_guard_game_test.gnu.d \
+	.sg_compound_guard_game_under_test.gnu.o \
+	.sg_compound_guard_game_under_test.gnu.d \
+	$(COMPOUND_GUARD_GAME_TEST_OBJS) \
+	$(COMPOUND_GUARD_GAME_TEST_DEPS)
 COMPOUND_WORLD_TEST_BIN := sg_compound_world_test.make
 COMPOUND_WORLD_TEST_OBJS := .sg_compound_world_test.make.o \
 	.sg_compound_world_under_test.make.o \
@@ -162,6 +176,23 @@ ROTATOR_SWEEP_TEST_BIN := sg_rotator_sweep_test.make
 ROTATOR_SWEEP_TEST_OBJS := .sg_rotator_sweep_test.make.o .sg_rotator_sweep_under_test.make.o \
 	.sg_rotator_sweep_q_shared_under_test.make.o
 ROTATOR_SWEEP_TEST_DEPS := $(ROTATOR_SWEEP_TEST_OBJS:.o=.d)
+MOVER_SUBJECT_SWEEP_TEST_BIN := sg_mover_subject_sweep_test.make
+MOVER_SUBJECT_SWEEP_TEST_OBJS := \
+	.sg_mover_subject_sweep_test.make.o \
+	.sg_mover_subject_sweep_oracle_under_test.make.o \
+	.sg_mover_subject_sweep_q_shared_under_test.make.o
+MOVER_SUBJECT_SWEEP_TEST_DEPS := \
+	$(MOVER_SUBJECT_SWEEP_TEST_OBJS:.o=.d)
+MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS := \
+	sg_mover_subject_sweep_test.gnu sg_mover_subject_sweep_test.make \
+	.sg_mover_subject_sweep_test.gnu.o \
+	.sg_mover_subject_sweep_test.gnu.d \
+	.sg_mover_subject_sweep_oracle_under_test.gnu.o \
+	.sg_mover_subject_sweep_oracle_under_test.gnu.d \
+	.sg_mover_subject_sweep_q_shared_under_test.gnu.o \
+	.sg_mover_subject_sweep_q_shared_under_test.gnu.d \
+	$(MOVER_SUBJECT_SWEEP_TEST_OBJS) \
+	$(MOVER_SUBJECT_SWEEP_TEST_DEPS)
 COMPOUND_SWIM_ORACLE_TEST_BIN := sg_compound_swim_oracle_test.make
 COMPOUND_SWIM_ORACLE_TEST_OBJS := \
 	.sg_compound_swim_oracle_test.make.o \
@@ -483,6 +514,7 @@ OBJS := \
 	sg_compound.o \
 	slipgate/sg_mover_lease.o \
 	slipgate/sg_compound_guard.o \
+	slipgate/sg_compound_guard_game.o \
 	slipgate/sg_compound_world.o \
 	slipgate/sg_compound_gen.o \
 	slipgate/sg_compound_publication.o \
@@ -536,7 +568,7 @@ all: $(TARGET)
 default: all
 
 .PHONY: all default host-test action-test compound-test mover-lease-test \
-	compound-guard-test \
+	compound-guard-test compound-guard-game-test \
 	compound-world-test \
 	compound-gen-test compound-publication-test \
 	identity-test rune-wire-test \
@@ -544,7 +576,8 @@ default: all
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
 	rune-loader-test \
 	rune-writer-test rune-install-test rune-proof-test replay-test \
-	drop-live-test swim-live-test rotator-sweep-test entfile-test \
+	drop-live-test swim-live-test rotator-sweep-test \
+	mover-subject-sweep-test entfile-test \
 	compound-swim-oracle-test rune-door-scope-test \
 	snapshot-test clean strip FORCE
 
@@ -586,6 +619,10 @@ slipgate/sg_mover_lease.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h
 slipgate/sg_compound_guard.o: slipgate/sg_compound_guard.c \
 		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h
+slipgate/sg_compound_guard_game.o: slipgate/sg_compound_guard_game.c \
+		slipgate/sg_compound_guard_game.h slipgate/sg_compound_guard.h \
+		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
+		g_local.h
 slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
@@ -600,6 +637,7 @@ slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
+-include $(COMPOUND_GUARD_GAME_TEST_DEPS)
 -include $(COMPOUND_WORLD_TEST_DEPS)
 -include $(COMPOUND_GEN_TEST_DEPS)
 -include $(COMPOUND_PUBLICATION_TEST_DEPS)
@@ -621,6 +659,7 @@ slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 -include $(SWIM_LIVE_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
+-include $(MOVER_SUBJECT_SWEEP_TEST_DEPS)
 -include $(COMPOUND_SWIM_ORACLE_TEST_DEPS)
 -include $(RUNE_DOOR_SCOPE_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
@@ -703,6 +742,10 @@ $(COMPOUND_GUARD_TEST_BIN): $(COMPOUND_GUARD_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(COMPOUND_GUARD_TEST_OBJS) $(LIBS)
 
+$(COMPOUND_GUARD_GAME_TEST_BIN): $(COMPOUND_GUARD_GAME_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(COMPOUND_GUARD_GAME_TEST_OBJS) $(LIBS)
+
 $(COMPOUND_WORLD_TEST_BIN): $(COMPOUND_WORLD_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(COMPOUND_WORLD_TEST_OBJS) $(LIBS)
@@ -750,6 +793,11 @@ $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 $(ROTATOR_SWEEP_TEST_BIN): $(ROTATOR_SWEEP_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(ROTATOR_SWEEP_TEST_OBJS) $(LIBS)
+
+$(MOVER_SUBJECT_SWEEP_TEST_BIN): $(MOVER_SUBJECT_SWEEP_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -Wl,--gc-sections -o $@ \
+		$(MOVER_SUBJECT_SWEEP_TEST_OBJS) $(LIBS)
 
 $(COMPOUND_SWIM_ORACLE_TEST_BIN): $(COMPOUND_SWIM_ORACLE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -829,6 +877,24 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_game_test.make.o: \
+		tests/sg_compound_guard_game_test.c \
+		slipgate/sg_compound_guard_game.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -DSG_COMPOUND_GUARD_GAME_TEST -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_game_under_test.make.o: \
+		slipgate/sg_compound_guard_game.c \
+		slipgate/sg_compound_guard_game.h slipgate/sg_compound_guard.h \
+		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
+		g_local.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -DSG_COMPOUND_GUARD_GAME_TEST -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_compound_world_test.make.o: tests/sg_compound_world_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -1135,6 +1201,30 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_mover_subject_sweep_test.make.o: \
+		tests/sg_mover_subject_sweep_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_mover_subject_sweep_oracle_under_test.make.o: \
+		slipgate/sg_oracle.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_mover_subject_sweep_q_shared_under_test.make.o: \
+		q_shared.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_compound_swim_oracle_test.make.o: \
 		tests/sg_compound_swim_oracle_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -1205,6 +1295,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(MOVER_LEASE_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
+		$(COMPOUND_GUARD_GAME_TEST_BIN) \
+		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
 		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
@@ -1217,7 +1309,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_INTEGRATION_TEST) \
-		$(ROTATOR_SWEEP_TEST_BIN) $(COMPOUND_SWIM_ORACLE_TEST_BIN) \
+		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
+		$(COMPOUND_SWIM_ORACLE_TEST_BIN) \
 		$(RUNE_DOOR_SCOPE_TEST_BIN) $(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOST_TEST_BIN)
@@ -1225,6 +1318,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_TEST_BIN)
 	$(Q)./$(MOVER_LEASE_TEST_BIN)
 	$(Q)./$(COMPOUND_GUARD_TEST_BIN)
+	$(Q)./$(COMPOUND_GUARD_GAME_TEST_BIN)
+	$(Q)python3 $(COMPOUND_GUARD_GAME_INTEGRATION_TEST)
 	$(Q)./$(COMPOUND_WORLD_TEST_BIN)
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
 	$(Q)./$(COMPOUND_PUBLICATION_TEST_BIN)
@@ -1249,6 +1344,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
 	$(Q)python3 $(HOOK_INTEGRATION_TEST)
 	$(Q)./$(ROTATOR_SWEEP_TEST_BIN)
+	$(Q)./$(MOVER_SUBJECT_SWEEP_TEST_BIN)
 	$(Q)./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
 	$(Q)./$(RUNE_DOOR_SCOPE_TEST_BIN)
 	$(Q)./$(ENTFILE_TEST_BIN)
@@ -1269,6 +1365,12 @@ mover-lease-test: $(MOVER_LEASE_TEST_BIN)
 compound-guard-test: $(COMPOUND_GUARD_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_GUARD_TEST_BIN)
+
+compound-guard-game-test: $(COMPOUND_GUARD_GAME_TEST_BIN) \
+		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_GUARD_GAME_TEST_BIN)
+	$(Q)python3 $(COMPOUND_GUARD_GAME_INTEGRATION_TEST)
 
 compound-world-test: $(COMPOUND_WORLD_TEST_BIN)
 	$(E) [TEST] $<
@@ -1361,6 +1463,10 @@ rotator-sweep-test: $(ROTATOR_SWEEP_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(ROTATOR_SWEEP_TEST_BIN)
 
+mover-subject-sweep-test: $(MOVER_SUBJECT_SWEEP_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(MOVER_SUBJECT_SWEEP_TEST_BIN)
+
 compound-swim-oracle-test: $(COMPOUND_SWIM_ORACLE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
@@ -1386,6 +1492,8 @@ clean:
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_GUARD_GAME_TEST_ALL_ARTIFACTS) \
+		$(MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS) \
 		$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS)
 
 strip: $(TARGET)

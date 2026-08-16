@@ -191,6 +191,11 @@ qboolean SG_OracleReplaySourceEvents(edict_t *ent,
 int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
 	int capacity);
 int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger);
+/* Game-side mover ownership must not retire while any retained player,
+ * corpse, or grapple bolt still intersects a physical member's complete
+ * sweep.  Both arguments must be exact, currently linked g_edicts entries;
+ * malformed, stale, non-solid, or unsupported identities fail closed. */
+qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject);
 qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin);
 qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 	const vec3_t to);

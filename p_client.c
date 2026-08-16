@@ -7,6 +7,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_compound_guard_game.h"
 #include "ctf_sqlite_unidb.h"	// db_record_t -- ui_boards.h's UI_Records_FormatLine needs it declared first
 #include "ui_boards.h"		// UI_Tick_Dirty -- disconnects change the boards' roster
 
@@ -790,6 +791,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 	{
 		extern int meansOfDeath;
 
+		(void)SG_CompoundGuardGamePlayerDie(self);
 		SG_NoteDeath(self);     /* the obituary is common knowledge */
 		/* the mouth that was always wired shut: taunt/grumble lines were
 		 * written waves ago and called from nowhere (capability census,
@@ -1043,8 +1045,11 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 	 
 	if (self->client->hook)
 	{
-		G_FreeEdict (self->client->hook);
+		edict_t *dead_hook = self->client->hook;
+
+		G_FreeEdict (dead_hook);
 		self->client->hook = NULL;
+		(void)SG_CompoundGuardGameBoltEvicted(self, dead_hook);
 	}
 	if (self->client->rune && self->client->rune->item)
 	{
@@ -1636,6 +1641,7 @@ void InitBodyQue (void)
 	{
 		ent = G_Spawn();
 		ent->classname = "bodyque";
+		(void)SG_CompoundGuardGameBodyQueueInit(ent);
 	}
 }
 
@@ -1661,6 +1667,7 @@ void CopyToBodyQue (edict_t *ent)
 	// grab a body que and cycle to the next one
 	body = &g_edicts[(int)maxclients->value + level.body_que + 1];
 	level.body_que = (level.body_que + 1) % BODY_QUEUE_SIZE;
+	(void)SG_CompoundGuardGameBodyWillReplace(body);
 
 	// FIXME: send an effect on the removed body
 
@@ -1685,6 +1692,7 @@ void CopyToBodyQue (edict_t *ent)
 	body->takedamage = DAMAGE_YES;
 
 	gi.linkentity (body);
+	(void)SG_CompoundGuardGameBodyDidCopy(ent, body);
 }
 
 
@@ -2116,6 +2124,7 @@ void PutClientInServer (edict_t *ent)
 	// force the current weapon up
 	client->newweapon = client->pers.weapon;
 	ChangeWeapon (ent);
+	(void)SG_CompoundGuardGameClientSpawned(ent);
 
 	//sprintf(DBuffer, "pcis-z t %d p %d r %d", ent->client->ctf.teamnum,
 	//	ent->client->pers.spectator, ent->client->resp.spectator);
@@ -2721,7 +2730,9 @@ void ClientDisconnect (edict_t *ent)
 	
 	if (ent->client->hook)
 	{
-		G_FreeEdict (ent->client->hook);
+		edict_t *dead_hook = ent->client->hook;
+
+		G_FreeEdict (dead_hook);
 		ent->client->hook = NULL;
 	}
 	
@@ -2743,6 +2754,7 @@ void ClientDisconnect (edict_t *ent)
 	ent->s.modelindex = 0;
 	ent->solid = SOLID_NOT;
 	ent->inuse = false;
+	(void)SG_CompoundGuardGameClientDisconnected(ent);
 	ent->classname = "disconnected";
 	ent->client->p_stats_player = NULL; // LM_Hati
 	ent->client->pers.connected = false;

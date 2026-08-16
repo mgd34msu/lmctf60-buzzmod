@@ -12,6 +12,7 @@
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_compound_guard_game.h"
 #ifdef SG_ACCEPT_DROP
 #include "slipgate/sg_accept_drop.h"
 #endif
@@ -143,9 +144,11 @@ void ShutdownGame (void)
 
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
 
+	SG_RosterStorageReset();
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
 	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 
+	SG_CompoundGuardGameStorageWillFree();
 	gi.FreeTags (TAG_LEVEL);
 	gi.FreeTags (TAG_GAME);
 
