@@ -1,10 +1,12 @@
 /* Focused game-boundary contract for retained subjects versus full movers. */
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_util.h"
 
 #define TEST_EDICTS 16
 #define MOVER_INDEX 11
@@ -32,6 +34,24 @@ void door_secret_use(edict_t *self, edict_t *other, edict_t *activator)
 	(void)activator;
 }
 
+void door_blocked(edict_t *self, edict_t *other)
+{
+	(void)self;
+	(void)other;
+}
+
+void Move_Begin(edict_t *self) { (void)self; }
+void Move_Final(edict_t *self) { (void)self; }
+void Move_Done(edict_t *self) { (void)self; }
+void AngleMove_Begin(edict_t *self) { (void)self; }
+void AngleMove_Final(edict_t *self) { (void)self; }
+void AngleMove_Done(edict_t *self) { (void)self; }
+void Think_CalcMoveSpeed(edict_t *self) { (void)self; }
+void Think_SpawnDoorTrigger(edict_t *self) { (void)self; }
+void door_go_down(edict_t *self) { (void)self; }
+void door_hit_top(edict_t *self) { (void)self; }
+void door_hit_bottom(edict_t *self) { (void)self; }
+
 void hook_touch(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf)
 {
@@ -49,6 +69,22 @@ void hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
 	(void)attacker;
 	(void)damage;
 	(void)point;
+}
+
+static void TestPrethink(edict_t *self)
+{
+	(void)self;
+}
+
+static void TestThink(edict_t *self)
+{
+	(void)self;
+}
+
+static void TestBlocked(edict_t *self, edict_t *other)
+{
+	(void)self;
+	(void)other;
 }
 
 #define CHECK(expression) do { \
@@ -132,11 +168,18 @@ static edict_t *TranslationMover(void)
 	mover->solid = SOLID_BSP;
 	mover->movetype = MOVETYPE_PUSH;
 	mover->use = door_use;
+	mover->blocked = door_blocked;
 	Set3(mover->mins, -8.0f, -8.0f, 0.0f);
 	Set3(mover->maxs, 8.0f, 8.0f, 8.0f);
 	VectorClear(mover->s.origin);
 	VectorClear(mover->moveinfo.start_origin);
 	Set3(mover->moveinfo.end_origin, 64.0f, 0.0f, 0.0f);
+	mover->moveinfo.speed = 100.0f;
+	mover->moveinfo.accel = 100.0f;
+	mover->moveinfo.decel = 100.0f;
+	mover->moveinfo.distance = 64.0f;
+	mover->moveinfo.wait = 3.0f;
+	mover->moveinfo.state = SG_PLAT_STATE_BOTTOM;
 	VectorClear(mover->moveinfo.start_angles);
 	VectorClear(mover->moveinfo.end_angles);
 	SetLinkedBounds(mover);
@@ -279,6 +322,157 @@ static void TestRotatingAndSecretSweeps(void)
 	Set3(hook->s.origin, 100.0f, 100.0f, 4.0f);
 	SetLinkedBounds(hook);
 	CHECK(SG_MoverSubjectOutsideSweep(mover, hook));
+}
+
+static void TestProspectivePushSweep(void)
+{
+	edict_t *mover, *player, *hook;
+	vec3_t local;
+
+	/* At large level.time, Move_Final can leave a translating door one stock
+	 * pusher step past its serialized end.  The complete nominal sweep says this
+	 * player is clear; the exact next 10-unit quantized push does not. */
+	ResetWorld();
+	mover = TranslationMover();
+	Set3(mover->moveinfo.end_origin, 15.0f, 0.0f, 0.0f);
+	Set3(mover->s.origin, 15.0f, 0.0f, 0.0f);
+	Set3(mover->velocity, 100.0f, 0.0f, 0.0f);
+	mover->moveinfo.state = SG_PLAT_STATE_UP;
+	mover->moveinfo.endfunc = door_hit_top;
+	mover->think = Move_Final;
+	mover->nextthink = 10.0f;
+	SetLinkedBounds(mover);
+	player = PlayerSubject(45.0f, 0.0f, 0.0f, MOVETYPE_WALK, 32.0f);
+	CHECK(SG_MoverSubjectOutsideSweep(mover, player));
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	player->s.origin[0] = 49.0f;
+	SetLinkedBounds(player);
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	player->s.origin[0] = 49.125f;
+	SetLinkedBounds(player);
+	CHECK(SG_MoverSubjectOutsideProspectivePush(mover, player));
+	VectorClear(mover->velocity);
+	CHECK(SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(SG_MoverProspectivePusherValid(mover));
+	/* A successful push runs due think, and a rollback runs blocked.  Neither
+	 * arbitrary callback may survive the same positive geometric proof. */
+	mover->think = TestThink;
+	mover->nextthink = 10.0f;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	mover->think = NULL;
+	mover->nextthink = 0.0f;
+	mover->blocked = TestBlocked;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	mover->blocked = door_blocked;
+	mover->nextthink = NAN;
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	mover->nextthink = 0.0f;
+	mover->moveinfo.endfunc = TestThink;
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	mover->moveinfo.endfunc = NULL;
+	/* A canonical scheduled stock movement callback remains live. */
+	mover->moveinfo.state = SG_PLAT_STATE_UP;
+	mover->moveinfo.endfunc = door_hit_top;
+	mover->think = Move_Final;
+	mover->nextthink = 10.0f;
+	CHECK(SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(SG_MoverProspectivePusherValid(mover));
+	mover->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	mover->moveinfo.endfunc = NULL;
+	mover->think = NULL;
+	mover->nextthink = 0.0f;
+	/* SV_Push moves riders without a broadphase/final-position rejection.  A
+	 * stale but exact rider pointer therefore blocks even when geometry alone
+	 * puts the subject far outside this step. */
+	player->groundentity = mover;
+	player->groundentity_linkcount = mover->linkcount;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	player->groundentity = NULL;
+	player = BodySubject(100.0f, 100.0f, 100.0f);
+	player->groundentity = mover;
+	player->groundentity_linkcount = mover->linkcount;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	player->groundentity = NULL;
+	player = PlayerSubject(49.125f, 0.0f, 0.0f, MOVETYPE_WALK, 32.0f);
+	mover->prethink = TestPrethink;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	mover->prethink = NULL;
+	mover->avelocity[YAW] = 1.0f;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	VectorClear(mover->avelocity);
+	mover->velocity[0] = NAN;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	mover->velocity[0] = FLT_MAX;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(!SG_MoverProspectivePusherValid(mover));
+	/* An earlier team leaf can push a human into the automatic trigger.  Stock
+	 * human authority then reverses a DOWN team before a later leaf's SV_Push.
+	 * Even though this later leaf is currently stopped, its one-frame reopen
+	 * step must already cover the protected player. */
+	VectorClear(mover->velocity);
+	mover->moveinfo.state = SG_PLAT_STATE_DOWN;
+	mover->moveinfo.endfunc = door_hit_bottom;
+	mover->think = Move_Begin;
+	mover->nextthink = 10.0f;
+	mover->moveinfo.end_origin[0] = 64.0f;
+	player->s.origin[0] = 45.0f;
+	SetLinkedBounds(player);
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, player));
+	CHECK(SG_MoverProspectivePusherValid(mover));
+	player->s.origin[1] = 24.125f;
+	SetLinkedBounds(player);
+	CHECK(SG_MoverSubjectOutsideProspectivePush(mover, player));
+
+	/* A rotating guard covers only this frame's angular interval.  A point on
+	 * the immediate arc blocks, while a point on a later part of the legal full
+	 * door sweep does not deadlock the current push. */
+	ResetWorld();
+	mover = TranslationMover();
+	mover->classname = "func_door_rotating";
+	Set3(mover->mins, 32.0f, -8.0f, -8.0f);
+	Set3(mover->maxs, 64.0f, 8.0f, 8.0f);
+	VectorClear(mover->moveinfo.start_origin);
+	VectorClear(mover->moveinfo.end_origin);
+	VectorClear(mover->moveinfo.start_angles);
+	Set3(mover->moveinfo.end_angles, 0.0f, 90.0f, 0.0f);
+	VectorClear(mover->s.angles);
+	Set3(mover->avelocity, 0.0f, 100.0f, 0.0f);
+	mover->moveinfo.state = SG_PLAT_STATE_UP;
+	mover->moveinfo.endfunc = door_hit_top;
+	mover->think = AngleMove_Final;
+	mover->nextthink = 10.0f;
+	SetLinkedBounds(mover);
+	CHECK(SG_MoverProspectivePusherValid(mover));
+	hook = HookSubject(0.0f, 0.0f, 0.0f, SOLID_BBOX);
+	Set3(local, 48.0f, 0.0f, 0.0f);
+	RotatingPoint(mover, local, YAW, 5.0f, hook->s.origin);
+	SetLinkedBounds(hook);
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, hook));
+	RotatingPoint(mover, local, YAW, 45.0f, hook->s.origin);
+	SetLinkedBounds(hook);
+	CHECK(!SG_MoverSubjectOutsideSweep(mover, hook));
+	CHECK(SG_MoverSubjectOutsideProspectivePush(mover, hook));
+	mover->avelocity[PITCH] = 1.0f;
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, hook));
+	/* The same inter-member reopen is bounded on the legal rotating axis. */
+	VectorClear(mover->avelocity);
+	mover->mins[1] = -1.0f;
+	mover->maxs[1] = 1.0f;
+	mover->s.angles[YAW] = 10.0f;
+	mover->moveinfo.state = SG_PLAT_STATE_DOWN;
+	mover->moveinfo.endfunc = door_hit_bottom;
+	mover->think = AngleMove_Begin;
+	mover->nextthink = 10.0f;
+	SetLinkedBounds(mover);
+	RotatingPoint(mover, local, YAW, 15.0f, hook->s.origin);
+	SetLinkedBounds(hook);
+	CHECK(!SG_MoverSubjectOutsideProspectivePush(mover, hook));
+	CHECK(SG_MoverProspectivePusherValid(mover));
 }
 
 static void TestRotatingBoundsRoundOutward(void)
@@ -507,6 +701,7 @@ int main(void)
 {
 	TestTranslationAndBoundary();
 	TestRotatingAndSecretSweeps();
+	TestProspectivePushSweep();
 	TestRotatingBoundsRoundOutward();
 	TestInvalidIdentitiesFailClosed();
 	if (failures)

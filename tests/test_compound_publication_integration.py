@@ -57,7 +57,10 @@ def test_compound_admission_order_and_inert_runtime_metadata() -> None:
     actions = (
         ROOT / "slipgate/sg_action_contract.generated.h"
     ).read_text(encoding="utf-8")
-    assert "#define SG_COMPOUND_LIVE_CONTROLLER_REVISION 0" in compound
+    assert "#define SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION 0" in compound
+    assert "#define SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION 0" in compound
+    assert "#define SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION 0" in compound
+    assert "SG_COMPOUND_LIVE_CONTROLLER_REVISION" not in compound
     assert "X(RL_DOOR_SWIM, 10, 0," in actions
 
 

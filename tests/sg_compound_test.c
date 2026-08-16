@@ -49,6 +49,10 @@ static void TestPreopen(void)
 	CHECK(SG_CompoundAdvance(&state, SG_COMPOUND_EVENT_ARRIVED));
 	CHECK(SG_CompoundLeaseHeld(&state));
 	CHECK(SG_CompoundAdvance(&state, SG_COMPOUND_EVENT_SWEEP_CLEAR));
+	CHECK(SG_CompoundReleaseReady(&state));
+	CHECK(SG_CompoundLeaseHeld(&state));
+	CHECK(!SG_CompoundAdvance(&state, SG_COMPOUND_EVENT_ARRIVED));
+	CHECK(SG_CompoundAdvance(&state, SG_COMPOUND_EVENT_RELEASED));
 	CHECK(!SG_CompoundLeaseHeld(&state));
 }
 
@@ -69,6 +73,9 @@ static void TestRideAndCleanup(void)
 	CHECK(SG_CompoundLeaseHeld(&state));
 	CHECK(!SG_CompoundAdvance(&state, SG_COMPOUND_EVENT_ARRIVED));
 	CHECK(SG_CompoundAdvance(&state, SG_COMPOUND_EVENT_RECOVERED));
+	CHECK(SG_CompoundReleaseReady(&state));
+	CHECK(SG_CompoundLeaseHeld(&state));
+	CHECK(SG_CompoundAdvance(&state, SG_COMPOUND_EVENT_RELEASED));
 	CHECK(!SG_CompoundLeaseHeld(&state));
 }
 
@@ -80,7 +87,9 @@ static void TestOwnershipAndDispatch(void)
 
 	SG_CompoundReset(&a);
 	SG_CompoundReset(&b);
-	CHECK(SG_COMPOUND_LIVE_CONTROLLER_REVISION == 0);
+	CHECK(SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION == 0);
+	CHECK(SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION == 0);
+	CHECK(SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION == 0);
 	for (action = RL_DOOR_DROP; action <= RL_DOOR_HOOK; action++)
 		CHECK(!SG_CompoundRuntimeReady(action));
 	CHECK(!SG_CompoundRuntimeReady(RL_DOOR));

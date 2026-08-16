@@ -170,6 +170,14 @@ rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
 	const vec3_t destination, qboolean destination_water,
 	float old_frame_z, sg_compound_swim_recovery_proof_t *proof,
 	edict_t *passent);
+/* Re-prove the nominal suffix from the exact live TOP checkpoint.  Unlike
+ * Recover, Continue requires the subject to begin outside the complete mover
+ * sweep; both paths keep the member at canonical TOP throughout replay. */
+rune_reject_reason_t SG_OracleCompoundSwimContinue(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t destination, qboolean destination_water,
+	float old_frame_z, sg_compound_swim_recovery_proof_t *proof,
+	edict_t *passent);
 qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	const vec3_t anchor, edict_t *pad, float old_frame_z,
 	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
@@ -196,6 +204,13 @@ int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger);
  * sweep.  Both arguments must be exact, currently linked g_edicts entries;
  * malformed, stale, non-solid, or unsupported identities fail closed. */
 qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject);
+/* Population-independent validation for one immediate pusher dispatch. */
+qboolean SG_MoverProspectivePusherValid(edict_t *member);
+/* Immediate engine-pusher fence: prove a retained physical subject outside
+ * the brush volume swept by the member's next quantized 100 ms push.  This is
+ * intentionally narrower than the complete route sweep above. */
+qboolean SG_MoverSubjectOutsideProspectivePush(edict_t *member,
+	edict_t *subject);
 qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin);
 qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 	const vec3_t to);

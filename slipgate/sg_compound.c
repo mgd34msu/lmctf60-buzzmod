@@ -102,9 +102,26 @@ int SG_CompoundAction(int action)
 
 int SG_CompoundRuntimeReady(int action)
 {
-	return SG_CompoundAction(action) &&
-	       SG_COMPOUND_LIVE_CONTROLLER_REVISION >=
-	           SG_COMPOUND_REQUIRED_CONTROLLER_REVISION;
+	const sg_action_desc_t *desc = SG_ActionDescribe(action);
+	int compiled_revision;
+
+	switch (action)
+	{
+	case RL_DOOR_DROP:
+		compiled_revision = SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION;
+		break;
+	case RL_DOOR_SWIM:
+		compiled_revision = SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION;
+		break;
+	case RL_DOOR_HOOK:
+		compiled_revision = SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION;
+		break;
+	default:
+		return 0;
+	}
+	return desc && desc->runtime_supported &&
+	       desc->controller_revision == compiled_revision &&
+	       compiled_revision >= SG_COMPOUND_REQUIRED_CONTROLLER_REVISION;
 }
 
 int SG_CompoundSuffixAction(int action)
@@ -161,6 +178,13 @@ int SG_CompoundAdvance(sg_compound_state_t *state,
 	{
 		if (state->phase != SG_COMPOUND_RECOVER)
 			return 0;
+		state->phase = SG_COMPOUND_RELEASE_READY;
+		return 1;
+	}
+	if (event == SG_COMPOUND_EVENT_RELEASED)
+	{
+		if (state->phase != SG_COMPOUND_RELEASE_READY)
+			return 0;
 		SG_CompoundReset(state);
 		return 1;
 	}
@@ -208,11 +232,12 @@ int SG_CompoundAdvance(sg_compound_state_t *state,
 		state->sweep_clear = 1;
 		state->phase = SG_COMPOUND_SUFFIX_CLEAR;
 		if (state->arrived)
-			SG_CompoundReset(state);
+			state->phase = SG_COMPOUND_RELEASE_READY;
 		return 1;
 	case SG_COMPOUND_SUFFIX_CLEAR:
 		if (event != SG_COMPOUND_EVENT_ARRIVED) return 0;
-		SG_CompoundReset(state);
+		state->arrived = 1;
+		state->phase = SG_COMPOUND_RELEASE_READY;
 		return 1;
 	default:
 		return 0;
@@ -229,6 +254,11 @@ int SG_CompoundOwns(const sg_compound_state_t *state, int link_index,
 int SG_CompoundLeaseHeld(const sg_compound_state_t *state)
 {
 	return state && state->phase != SG_COMPOUND_NONE;
+}
+
+int SG_CompoundReleaseReady(const sg_compound_state_t *state)
+{
+	return state && state->phase == SG_COMPOUND_RELEASE_READY;
 }
 
 int SG_CompoundSuffixNeedsHold(int elapsed_ms, int clear_ms)

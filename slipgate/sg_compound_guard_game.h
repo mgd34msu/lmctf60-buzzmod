@@ -12,6 +12,19 @@ sg_compound_guard_result_t SG_CompoundGuardGameLevelReset(void);
 void SG_RosterStorageReset(void);
 void SG_CompoundGuardGameStorageWillFree(void);
 void SG_CompoundGuardGameFrame(void);
+/* Called by G_RunEntity before any non-client edict callback or physics.
+ * Exact unowned edicts retain stock behavior.  An owned door member (or a
+ * current teammate of one) dispatches only after its complete pusher team and
+ * every generation-tracked SG client, corpse, and hook bolt are positively
+ * validated against the immediate quantized push sweep. */
+int SG_CompoundGuardGameEntityMayDispatch(struct edict_s *entity);
+/* Called when the gate denies an entity.  A valid guarded captain defers the
+ * complete team's stock absolute think schedule by one server frame, matching
+ * SV_Physics_Pusher's blocked rollback.  Malformed teams instead lose any
+ * completion arm and remain fail-closed. */
+void SG_CompoundGuardGameEntityDeferred(struct edict_s *entity);
+/* Direct captain entry retained for focused callers/tests. */
+int SG_CompoundGuardGamePusherMayAdvance(struct edict_s *captain);
 
 sg_compound_guard_result_t SG_CompoundGuardGameBotSlotReset(
 	sg_compound_guard_bot_t *guard_bot);

@@ -1,8 +1,10 @@
 /* sg_compound_world.c -- strict world adapter for PREOPEN compound replay. */
 #include "../g_local.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "sg_compound.h"
@@ -15,6 +17,8 @@ void Use_Target_Speaker(edict_t *self, edict_t *other,
 	edict_t *activator);
 void door_blocked(edict_t *self, edict_t *other);
 void door_go_down(edict_t *self);
+void door_hit_bottom(edict_t *self);
+void door_hit_top(edict_t *self);
 void door_use(edict_t *self, edict_t *other, edict_t *activator);
 void trigger_relay_use(edict_t *self, edict_t *other,
 	edict_t *activator);
@@ -134,12 +138,411 @@ static int CompoundWorldEntityIndex(const edict_t *entity)
 {
 	int index;
 
-	if (!entity || !g_edicts || globals.num_edicts <= 0)
+	if (!entity || !g_edicts || globals.num_edicts <= 0 ||
+	    globals.num_edicts > MAX_EDICTS)
 		return -1;
 	for (index = 0; index < globals.num_edicts; index++)
 		if (&g_edicts[index] == entity)
 			return index;
 	return -1;
+}
+
+typedef enum compound_world_completion_phase_e
+{
+	COMPOUND_WORLD_COMPLETION_EMPTY = 0,
+	COMPOUND_WORLD_COMPLETION_MOVING,
+	COMPOUND_WORLD_COMPLETION_TOP,
+	COMPOUND_WORLD_COMPLETION_BOTTOM
+} compound_world_completion_phase_t;
+
+typedef struct compound_world_completion_s
+{
+	edict_t *member;
+	edict_t *teammaster;
+	edict_t *teamchain;
+	const char *classname;
+	float origin[3];
+	float angles[3];
+	float absmin[3];
+	float absmax[3];
+	float size[3];
+	float mins[3];
+	float maxs[3];
+	float start_origin[3];
+	float end_origin[3];
+	float start_angles[3];
+	float end_angles[3];
+	float direction[3];
+	float remaining_distance;
+	float speed;
+	float accel;
+	float decel;
+	float distance;
+	float wait;
+	void (*endfunc)(edict_t *);
+	void (*armed_endfunc)(edict_t *);
+	int key;
+	int entity_number;
+	int linkcount;
+	solid_t solid;
+	int movetype;
+	int flags;
+	int spawnflags;
+	uint8_t phase;
+} compound_world_completion_t;
+
+static compound_world_completion_t
+	compound_world_completions[MAX_EDICTS];
+
+typedef struct compound_world_completion_scope_s
+{
+	edict_t *member;
+	void (*endfunc)(edict_t *);
+	int key;
+	uint8_t active;
+	uint8_t consumed;
+	uint8_t poisoned;
+} compound_world_completion_scope_t;
+
+static compound_world_completion_scope_t compound_world_completion_scope;
+
+/* A separate numeric mover generation would duplicate the lifecycle without
+ * strengthening it: map doors retain one edict incarnation, G_FreeEdict calls
+ * Forget before that key can be reused, and every level/storage reset clears
+ * the table before old TAG_LEVEL pointers disappear.  Key + exact pointer +
+ * s.number therefore bind the record to that one live incarnation. */
+
+/* Match the exact transaction produced by SV_LinkEdict.  Area-list neighbor
+ * pointers legitimately change when unrelated entities link, so they prove
+ * current linkage but are not frozen into the completion witness. */
+static int CompoundWorldLinkedPoseValid(const edict_t *member)
+{
+	float radius = 0.0f;
+	int rotated;
+	int axis;
+
+	if (!member || member->linkcount <= 0 || !member->area.prev ||
+	    !member->area.next || member->area.prev == &member->area ||
+	    member->area.next == &member->area ||
+	    !CompoundWorldFinite3(member->s.origin) ||
+	    !CompoundWorldFinite3(member->s.angles) ||
+	    !CompoundWorldFinite3(member->mins) ||
+	    !CompoundWorldFinite3(member->maxs) ||
+	    !CompoundWorldFinite3(member->size) ||
+	    !CompoundWorldFinite3(member->absmin) ||
+	    !CompoundWorldFinite3(member->absmax))
+		return 0;
+	rotated = member->solid == SOLID_BSP &&
+	          (member->s.angles[0] != 0.0f ||
+	           member->s.angles[1] != 0.0f ||
+	           member->s.angles[2] != 0.0f);
+	if (rotated)
+		for (axis = 0; axis < 3; axis++)
+		{
+			float low = fabsf(member->mins[axis]);
+			float high = fabsf(member->maxs[axis]);
+
+			if (low > radius)
+				radius = low;
+			if (high > radius)
+				radius = high;
+		}
+	for (axis = 0; axis < 3; axis++)
+	{
+		float size = member->maxs[axis] - member->mins[axis];
+		float absmin = member->s.origin[axis] +
+		               (rotated ? -radius : member->mins[axis]) - 1.0f;
+		float absmax = member->s.origin[axis] +
+		               (rotated ? radius : member->maxs[axis]) + 1.0f;
+
+		if (!isfinite(size) || !isfinite(absmin) || !isfinite(absmax) ||
+		    member->size[axis] != size ||
+		    member->absmin[axis] != absmin ||
+		    member->absmax[axis] != absmax)
+			return 0;
+	}
+	return 1;
+}
+
+static compound_world_completion_phase_t CompoundWorldCompletionPhase(
+	sg_mover_completion_kind_t kind)
+{
+	if (kind == SG_MOVER_COMPLETION_TOP)
+		return COMPOUND_WORLD_COMPLETION_TOP;
+	if (kind == SG_MOVER_COMPLETION_BOTTOM)
+		return COMPOUND_WORLD_COMPLETION_BOTTOM;
+	return COMPOUND_WORLD_COMPLETION_EMPTY;
+}
+
+void SG_MoverCompletionTransition(edict_t *member)
+{
+	compound_world_completion_t *completion;
+	int key = CompoundWorldEntityIndex(member);
+
+	if (key <= 0 || key >= MAX_EDICTS)
+		return;
+	completion = &compound_world_completions[key];
+	memset(completion, 0, sizeof(*completion));
+	completion->member = member;
+	completion->key = key;
+	completion->phase = COMPOUND_WORLD_COMPLETION_MOVING;
+}
+
+void SG_MoverCompletionArm(edict_t *member)
+{
+	compound_world_completion_t *completion;
+	int key = CompoundWorldEntityIndex(member);
+
+	if (key <= 0 || key >= MAX_EDICTS || !member || !member->inuse)
+		return;
+	completion = &compound_world_completions[key];
+	completion->armed_endfunc = NULL;
+	if (completion->phase != COMPOUND_WORLD_COMPLETION_MOVING ||
+	    completion->member != member || completion->key != key ||
+	    (member->moveinfo.endfunc != door_hit_top &&
+	     member->moveinfo.endfunc != door_hit_bottom))
+		return;
+	completion->armed_endfunc = member->moveinfo.endfunc;
+}
+
+void SG_MoverCompletionDispatch(edict_t *member)
+{
+	compound_world_completion_t *completion;
+	void (*endfunc)(edict_t *);
+	int key = CompoundWorldEntityIndex(member);
+
+	if (!member || !member->moveinfo.endfunc)
+		return;
+	endfunc = member->moveinfo.endfunc;
+	if (compound_world_completion_scope.active)
+	{
+		/* A nested completion is not a stock mover transition.  Preserve the
+		 * callback behavior but poison the outer scope so neither callback can
+		 * mint physical authority. */
+		compound_world_completion_scope.poisoned = 1;
+		endfunc(member);
+		return;
+	}
+	if (key <= 0 || key >= MAX_EDICTS)
+	{
+		endfunc(member);
+		return;
+	}
+	completion = &compound_world_completions[key];
+	if (completion->phase != COMPOUND_WORLD_COMPLETION_MOVING ||
+	    completion->member != member || completion->key != key ||
+	    completion->armed_endfunc != endfunc)
+	{
+		endfunc(member);
+		return;
+	}
+
+	/* Consume the movement arm before invoking the callback.  Publish is a
+	 * one-shot capability valid only during this exact stock completion call. */
+	completion->armed_endfunc = NULL;
+	memset(&compound_world_completion_scope, 0,
+	       sizeof(compound_world_completion_scope));
+	compound_world_completion_scope.member = member;
+	compound_world_completion_scope.endfunc = endfunc;
+	compound_world_completion_scope.key = key;
+	compound_world_completion_scope.active = 1;
+	endfunc(member);
+	memset(&compound_world_completion_scope, 0,
+	       sizeof(compound_world_completion_scope));
+}
+
+void SG_MoverCompletionPublish(edict_t *member,
+	sg_mover_completion_kind_t kind)
+{
+	compound_world_completion_t *completion;
+	compound_world_completion_phase_t phase =
+		CompoundWorldCompletionPhase(kind);
+	edict_t *captain;
+	int key;
+
+	/* A malformed completion must retire any older authority for this slot. */
+	SG_MoverCompletionTransition(member);
+	key = CompoundWorldEntityIndex(member);
+	if (phase == COMPOUND_WORLD_COMPLETION_EMPTY || key <= 0 ||
+	    key >= MAX_EDICTS || !member->inuse || member->s.number != key ||
+	    !member->classname ||
+	    (strcmp(member->classname, "func_door") != 0 &&
+	     strcmp(member->classname, "func_door_rotating") != 0) ||
+	    member->solid != SOLID_BSP || member->movetype != MOVETYPE_PUSH ||
+	    !CompoundWorldVectorZero(member->velocity) ||
+	    !CompoundWorldVectorZero(member->avelocity) ||
+	    !CompoundWorldFinite3(member->moveinfo.start_origin) ||
+	    !CompoundWorldFinite3(member->moveinfo.end_origin) ||
+	    !CompoundWorldFinite3(member->moveinfo.start_angles) ||
+	    !CompoundWorldFinite3(member->moveinfo.end_angles) ||
+	    !CompoundWorldFinite3(member->moveinfo.dir) ||
+	    !isfinite(member->moveinfo.remaining_distance) ||
+	    !isfinite(member->moveinfo.speed) ||
+	    !isfinite(member->moveinfo.accel) ||
+	    !isfinite(member->moveinfo.decel) ||
+	    !isfinite(member->moveinfo.distance) ||
+	    !isfinite(member->moveinfo.wait) ||
+	    !CompoundWorldLinkedPoseValid(member))
+		return;
+	if (!compound_world_completion_scope.active ||
+	    compound_world_completion_scope.consumed ||
+	    compound_world_completion_scope.poisoned ||
+	    compound_world_completion_scope.member != member ||
+	    compound_world_completion_scope.key != key ||
+	    compound_world_completion_scope.endfunc !=
+	        member->moveinfo.endfunc)
+		return;
+	compound_world_completion_scope.consumed = 1;
+	captain = (member->flags & FL_TEAMSLAVE) ? member->teammaster : member;
+	/* Completion callbacks reached through the real pusher pass run under the
+	 * exact captain selected by G_RunFrame.  Oracle/staging calls do not mint
+	 * physical authority merely by invoking the same C function. */
+	if (!captain || level.current_entity != captain)
+		return;
+	if ((phase == COMPOUND_WORLD_COMPLETION_TOP &&
+	     (member->moveinfo.state != SG_PLAT_STATE_TOP ||
+	      member->moveinfo.endfunc != door_hit_top)) ||
+	    (phase == COMPOUND_WORLD_COMPLETION_BOTTOM &&
+	     (member->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+	      member->moveinfo.endfunc != door_hit_bottom)))
+		return;
+
+	completion = &compound_world_completions[key];
+	completion->member = member;
+	completion->teammaster = member->teammaster;
+	completion->teamchain = member->teamchain;
+	completion->classname = member->classname;
+	memcpy(completion->origin, member->s.origin,
+	       sizeof(completion->origin));
+	memcpy(completion->angles, member->s.angles,
+	       sizeof(completion->angles));
+	memcpy(completion->absmin, member->absmin,
+	       sizeof(completion->absmin));
+	memcpy(completion->absmax, member->absmax,
+	       sizeof(completion->absmax));
+	memcpy(completion->size, member->size, sizeof(completion->size));
+	memcpy(completion->mins, member->mins, sizeof(completion->mins));
+	memcpy(completion->maxs, member->maxs, sizeof(completion->maxs));
+	memcpy(completion->start_origin, member->moveinfo.start_origin,
+	       sizeof(completion->start_origin));
+	memcpy(completion->end_origin, member->moveinfo.end_origin,
+	       sizeof(completion->end_origin));
+	memcpy(completion->start_angles, member->moveinfo.start_angles,
+	       sizeof(completion->start_angles));
+	memcpy(completion->end_angles, member->moveinfo.end_angles,
+	       sizeof(completion->end_angles));
+	memcpy(completion->direction, member->moveinfo.dir,
+	       sizeof(completion->direction));
+	completion->remaining_distance = member->moveinfo.remaining_distance;
+	completion->speed = member->moveinfo.speed;
+	completion->accel = member->moveinfo.accel;
+	completion->decel = member->moveinfo.decel;
+	completion->distance = member->moveinfo.distance;
+	completion->wait = member->moveinfo.wait;
+	completion->endfunc = member->moveinfo.endfunc;
+	completion->key = key;
+	completion->entity_number = member->s.number;
+	completion->linkcount = member->linkcount;
+	completion->solid = member->solid;
+	completion->movetype = member->movetype;
+	completion->flags = member->flags;
+	completion->spawnflags = member->spawnflags;
+	completion->phase = (uint8_t)phase;
+}
+
+int SG_MoverCompletionMatches(const edict_t *member,
+	sg_mover_completion_kind_t kind)
+{
+	const compound_world_completion_t *completion;
+	compound_world_completion_phase_t phase =
+		CompoundWorldCompletionPhase(kind);
+	int key = CompoundWorldEntityIndex(member);
+
+	if (phase == COMPOUND_WORLD_COMPLETION_EMPTY || key <= 0 ||
+	    key >= MAX_EDICTS || !member || !member->inuse ||
+	    !CompoundWorldLinkedPoseValid(member))
+		return 0;
+	completion = &compound_world_completions[key];
+	return completion->phase == (uint8_t)phase &&
+	       completion->member == member && completion->key == key &&
+	       completion->entity_number == member->s.number &&
+	       completion->linkcount == member->linkcount &&
+	       completion->solid == member->solid &&
+	       completion->movetype == member->movetype &&
+	       completion->flags == member->flags &&
+	       completion->spawnflags == member->spawnflags &&
+	       completion->teammaster == member->teammaster &&
+	       completion->teamchain == member->teamchain &&
+	       completion->classname == member->classname &&
+	       completion->endfunc == member->moveinfo.endfunc &&
+	       memcmp(completion->origin, member->s.origin,
+	              sizeof(completion->origin)) == 0 &&
+	       memcmp(completion->angles, member->s.angles,
+	              sizeof(completion->angles)) == 0 &&
+	       memcmp(completion->absmin, member->absmin,
+	              sizeof(completion->absmin)) == 0 &&
+	       memcmp(completion->absmax, member->absmax,
+	              sizeof(completion->absmax)) == 0 &&
+	       memcmp(completion->size, member->size,
+	              sizeof(completion->size)) == 0 &&
+	       memcmp(completion->mins, member->mins,
+	              sizeof(completion->mins)) == 0 &&
+	       memcmp(completion->maxs, member->maxs,
+	              sizeof(completion->maxs)) == 0 &&
+	       memcmp(completion->start_origin,
+	              member->moveinfo.start_origin,
+	              sizeof(completion->start_origin)) == 0 &&
+	       memcmp(completion->end_origin, member->moveinfo.end_origin,
+	              sizeof(completion->end_origin)) == 0 &&
+	       memcmp(completion->start_angles,
+	              member->moveinfo.start_angles,
+	              sizeof(completion->start_angles)) == 0 &&
+	       memcmp(completion->end_angles, member->moveinfo.end_angles,
+	              sizeof(completion->end_angles)) == 0 &&
+	       memcmp(completion->direction, member->moveinfo.dir,
+	              sizeof(completion->direction)) == 0 &&
+	       memcmp(&completion->remaining_distance,
+	              &member->moveinfo.remaining_distance,
+	              sizeof(completion->remaining_distance)) == 0 &&
+	       memcmp(&completion->speed, &member->moveinfo.speed,
+	              sizeof(completion->speed)) == 0 &&
+	       memcmp(&completion->accel, &member->moveinfo.accel,
+	              sizeof(completion->accel)) == 0 &&
+	       memcmp(&completion->decel, &member->moveinfo.decel,
+	              sizeof(completion->decel)) == 0 &&
+	       memcmp(&completion->distance, &member->moveinfo.distance,
+	              sizeof(completion->distance)) == 0 &&
+	       memcmp(&completion->wait, &member->moveinfo.wait,
+	              sizeof(completion->wait)) == 0;
+}
+
+int SG_MoverCompletionUntouched(const edict_t *member)
+{
+	int key = CompoundWorldEntityIndex(member);
+
+	return key > 0 && key < MAX_EDICTS && member && member->inuse &&
+	       compound_world_completions[key].phase ==
+	           COMPOUND_WORLD_COMPLETION_EMPTY;
+}
+
+void SG_MoverCompletionForget(edict_t *member)
+{
+	int key = CompoundWorldEntityIndex(member);
+
+	if (compound_world_completion_scope.member == member)
+		memset(&compound_world_completion_scope, 0,
+		       sizeof(compound_world_completion_scope));
+	if (key > 0 && key < MAX_EDICTS)
+		memset(&compound_world_completions[key], 0,
+		       sizeof(compound_world_completions[key]));
+}
+
+void SG_MoverCompletionReset(void)
+{
+	memset(&compound_world_completion_scope, 0,
+	       sizeof(compound_world_completion_scope));
+	memset(compound_world_completions, 0,
+	       sizeof(compound_world_completions));
 }
 
 static int CompoundWorldTriggerContains(const edict_t *trigger,
@@ -216,9 +619,12 @@ static int CompoundWorldBoundsSafe(const edict_t *door)
 	return 1;
 }
 
+static int CompoundWorldQuantizedMove(float velocity, float *move_out);
+
 static int CompoundWorldDoorStaticSafe(edict_t *door, int *axis_out)
 {
 	float delta;
+	float full_move;
 	int axis;
 	int mover_index;
 
@@ -259,6 +665,7 @@ static int CompoundWorldDoorStaticSafe(edict_t *door, int *axis_out)
 	    door->moveinfo.speed <= 0.0f ||
 	    door->moveinfo.accel != door->moveinfo.speed ||
 	    door->moveinfo.decel != door->moveinfo.speed ||
+	    !CompoundWorldQuantizedMove(door->moveinfo.speed, &full_move) ||
 	    !isfinite(door->moveinfo.wait) || door->moveinfo.wait <= 0.0f ||
 	    door->wait != door->moveinfo.wait ||
 	    !SG_CompoundWorldDoorEffectsSafe(door))
@@ -269,6 +676,38 @@ static int CompoundWorldDoorStaticSafe(edict_t *door, int *axis_out)
 		return 0;
 	*axis_out = axis;
 	return 1;
+}
+
+/* Reproduce the stock constant-speed Move_Calc/SV_Push path exactly.  The
+ * pusher quantizes every 100 ms displacement independently, so multiplying a
+ * nominal endpoint error by a frame count is neither exact nor sufficient:
+ * the closing Move_Calc starts at the already-quantized physical TOP. */
+static int CompoundWorldQuantizedMove(float velocity, float *move_out)
+{
+	float move, scaled;
+	double integral;
+
+	if (!move_out || !isfinite(velocity))
+		return 0;
+	move = velocity * FRAMETIME;
+	scaled = move * 8.0f;
+	if (!isfinite(move) || !isfinite(scaled))
+		return 0;
+	if (scaled > 0.0f)
+		scaled += 0.5f;
+	else
+		scaled -= 0.5f;
+	if (!isfinite(scaled))
+		return 0;
+	/* Converting INT_MAX to float rounds it up to 2^31 on binary32.  Compare
+	 * the truncated value in double before the integer conversion, matching
+	 * the stock-pusher quantizer used by the compound proof reducer. */
+	integral = trunc((double)scaled);
+	if (!isfinite(integral) || integral < (double)INT_MIN ||
+	    integral > (double)INT_MAX)
+		return 0;
+	*move_out = 0.125f * (float)(int)integral;
+	return isfinite(*move_out);
 }
 
 static int CompoundWorldDoorBottomSafe(edict_t *door, int *axis_out)
@@ -610,6 +1049,8 @@ static int CompoundWorldSweepBounds(
 	(void)member;
 	for (axis = 0; axis < 3; axis++)
 	{
+		float next_move;
+		float next_origin;
 		float start_min = resolved->bottom_origin[axis] +
 		                  resolved->member_mins[axis];
 		float start_max = resolved->bottom_origin[axis] +
@@ -618,14 +1059,40 @@ static int CompoundWorldSweepBounds(
 		                resolved->member_mins[axis];
 		float end_max = resolved->top_origin[axis] +
 		                resolved->member_maxs[axis];
+		float current_min = member->s.origin[axis] +
+		                    resolved->member_mins[axis];
+		float current_max = member->s.origin[axis] +
+		                    resolved->member_maxs[axis];
+		float next_min;
+		float next_max;
 
+		/* The pusher moves before its think callback.  Include the one
+		 * quantized displacement that can occur in the next entity pass, so
+		 * a late Move_Final timer cannot outrun the prior frame's subject
+		 * clearance proof.  A blocked push only makes this conservative. */
+		if (!CompoundWorldQuantizedMove(member->velocity[axis], &next_move))
+			return 0;
+		next_origin = member->s.origin[axis] + next_move;
+		next_min = next_origin + resolved->member_mins[axis];
+		next_max = next_origin + resolved->member_maxs[axis];
 		if (!isfinite(start_min) || !isfinite(start_max) ||
-		    !isfinite(end_min) || !isfinite(end_max))
+		    !isfinite(end_min) || !isfinite(end_max) ||
+		    !isfinite(current_min) || !isfinite(current_max) ||
+		    !isfinite(next_origin) || !isfinite(next_min) ||
+		    !isfinite(next_max))
 			return 0;
 		mins[axis] = (start_min < end_min ? start_min : end_min) -
 		             hull_maxs[axis];
 		maxs[axis] = (start_max > end_max ? start_max : end_max) -
 		             hull_mins[axis];
+		if (current_min - hull_maxs[axis] < mins[axis])
+			mins[axis] = current_min - hull_maxs[axis];
+		if (current_max - hull_mins[axis] > maxs[axis])
+			maxs[axis] = current_max - hull_mins[axis];
+		if (next_min - hull_maxs[axis] < mins[axis])
+			mins[axis] = next_min - hull_maxs[axis];
+		if (next_max - hull_mins[axis] > maxs[axis])
+			maxs[axis] = next_max - hull_mins[axis];
 		if (!isfinite(mins[axis]) || !isfinite(maxs[axis]) ||
 		    mins[axis] > maxs[axis])
 			return 0;
@@ -693,21 +1160,33 @@ int SG_CompoundWorldCrossesSweep(
 	return 1;
 }
 
+static int CompoundWorldTopPhysicalMember(edict_t *member)
+{
+	int axis;
+
+	return member && CompoundWorldDoorStaticSafe(member, &axis) &&
+	       member->solid == SOLID_BSP &&
+	       member->moveinfo.state == SG_PLAT_STATE_TOP &&
+	       SG_MoverCompletionMatches(member, SG_MOVER_COMPLETION_TOP) &&
+	       CompoundWorldFinite3(member->s.origin) &&
+	       member->s.origin[(axis + 1) % 3] ==
+	           member->moveinfo.end_origin[(axis + 1) % 3] &&
+	       member->s.origin[(axis + 2) % 3] ==
+	           member->moveinfo.end_origin[(axis + 2) % 3] &&
+	       CompoundWorldVectorZero(member->velocity) &&
+	       CompoundWorldVectorZero(member->avelocity) &&
+	       member->moveinfo.endfunc == door_hit_top &&
+	       member->think == door_go_down && isfinite(member->nextthink) &&
+	       isfinite(level.time) && member->nextthink > level.time;
+}
+
 static int CompoundWorldTopMember(
 	const sg_compound_world_preopen_t *resolved, edict_t **member_out)
 {
 	edict_t *member;
 
 	if (!SG_CompoundWorldResolvedMember(resolved, &member) ||
-	    member->solid != SOLID_BSP ||
-	    member->moveinfo.state != SG_PLAT_STATE_TOP ||
-	    !CompoundWorldFinite3(member->s.origin) ||
-	    !CompoundWorldVectorEqual(member->s.origin,
-	                              resolved->top_origin) ||
-	    !CompoundWorldVectorZero(member->velocity) ||
-	    !CompoundWorldVectorZero(member->avelocity) ||
-	    member->think != door_go_down || !isfinite(member->nextthink) ||
-	    !isfinite(level.time) || member->nextthink <= level.time)
+	    !CompoundWorldTopPhysicalMember(member))
 		return 0;
 	*member_out = member;
 	return 1;
@@ -735,10 +1214,19 @@ int SG_CompoundWorldHoldOpen(
 	const sg_compound_world_preopen_t *resolved, int lease_ms)
 {
 	edict_t *member;
-	float until;
 
 	if (lease_ms != SG_COMPOUND_HOLD_LEASE_MS ||
 	    !CompoundWorldTopMember(resolved, &member))
+		return 0;
+	return SG_CompoundWorldHoldMember(member, lease_ms);
+}
+
+int SG_CompoundWorldHoldMember(edict_t *member, int lease_ms)
+{
+	float until;
+
+	if (lease_ms != SG_COMPOUND_HOLD_LEASE_MS ||
+	    !CompoundWorldTopPhysicalMember(member))
 		return 0;
 	until = level.time + (float)lease_ms * 0.001f;
 	if (!isfinite(until))
@@ -746,4 +1234,35 @@ int SG_CompoundWorldHoldOpen(
 	if (member->nextthink < until)
 		member->nextthink = until;
 	return 1;
+}
+
+int SG_CompoundWorldMemberTerminal(edict_t *member)
+{
+	int axis;
+
+	if (!member || !CompoundWorldDoorStaticSafe(member, &axis) ||
+	    !CompoundWorldLinkedPoseValid(member) ||
+	    !CompoundWorldVectorZero(member->velocity) ||
+	    !CompoundWorldVectorZero(member->avelocity) ||
+	    member->nextthink != 0.0f ||
+	    member->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+	    !CompoundWorldFinite3(member->s.origin) ||
+	    member->s.origin[(axis + 1) % 3] !=
+	        member->moveinfo.start_origin[(axis + 1) % 3] ||
+	    member->s.origin[(axis + 2) % 3] !=
+	        member->moveinfo.start_origin[(axis + 2) % 3])
+		return 0;
+	/* Quantized residuals can diverge across repeated cycles, so callback fields
+	 * alone are not physical authority.  A completed BOTTOM must match the
+	 * out-of-edict snapshot minted by the real callback.  The only exception is
+	 * an exact initial BOTTOM before any observed transition. */
+	return (member->moveinfo.endfunc == door_hit_bottom &&
+	        SG_MoverCompletionMatches(member,
+	                                  SG_MOVER_COMPLETION_BOTTOM)) ||
+	       (!member->moveinfo.endfunc &&
+	        SG_MoverCompletionUntouched(member) &&
+	        CompoundWorldVectorEqual(member->s.origin,
+	                                 member->moveinfo.start_origin) &&
+	        CompoundWorldVectorEqual(member->s.angles,
+	                                 member->moveinfo.start_angles));
 }

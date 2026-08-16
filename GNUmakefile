@@ -270,6 +270,37 @@ SWIM_LIVE_TEST_BIN = sg_swim_live_test.gnu
 SWIM_LIVE_TEST_OBJS = .sg_swim_live_test.gnu.o \
 	.sg_swim_live_under_test.gnu.o .sg_swim_live_replay_under_test.gnu.o
 SWIM_LIVE_TEST_DEPS = $(SWIM_LIVE_TEST_OBJS:.o=.d)
+COMPOUND_SWIM_LIVE_TEST_BIN = sg_compound_swim_live_test.gnu
+COMPOUND_SWIM_LIVE_TEST_OBJS = .sg_compound_swim_live_test.gnu.o \
+	.sg_compound_swim_live_under_test.gnu.o \
+	.sg_compound_swim_live_compound_under_test.gnu.o \
+	.sg_compound_swim_live_action_under_test.gnu.o \
+	.sg_compound_swim_live_replay_under_test.gnu.o
+COMPOUND_SWIM_LIVE_TEST_DEPS = $(COMPOUND_SWIM_LIVE_TEST_OBJS:.o=.d)
+COMPOUND_SWIM_LIVE_INTEGRATION_TEST = \
+	tests/test_compound_swim_live_integration.py
+COMPOUND_SWIM_LIVE_TEST_ALL_ARTIFACTS = \
+	sg_compound_swim_live_test.gnu sg_compound_swim_live_test.make \
+	.sg_compound_swim_live_test.gnu.o \
+	.sg_compound_swim_live_test.gnu.d \
+	.sg_compound_swim_live_under_test.gnu.o \
+	.sg_compound_swim_live_under_test.gnu.d \
+	.sg_compound_swim_live_compound_under_test.gnu.o \
+	.sg_compound_swim_live_compound_under_test.gnu.d \
+	.sg_compound_swim_live_action_under_test.gnu.o \
+	.sg_compound_swim_live_action_under_test.gnu.d \
+	.sg_compound_swim_live_replay_under_test.gnu.o \
+	.sg_compound_swim_live_replay_under_test.gnu.d \
+	.sg_compound_swim_live_test.make.o \
+	.sg_compound_swim_live_test.make.d \
+	.sg_compound_swim_live_under_test.make.o \
+	.sg_compound_swim_live_under_test.make.d \
+	.sg_compound_swim_live_compound_under_test.make.o \
+	.sg_compound_swim_live_compound_under_test.make.d \
+	.sg_compound_swim_live_action_under_test.make.o \
+	.sg_compound_swim_live_action_under_test.make.d \
+	.sg_compound_swim_live_replay_under_test.make.o \
+	.sg_compound_swim_live_replay_under_test.make.d
 HOOK_LIVE_TEST_BIN = sg_hook_live_test.gnu
 HOOK_LIVE_TEST_OBJS = .sg_hook_live_test.gnu.o \
 	.sg_hook_live_under_test.gnu.o .sg_hook_live_replay_under_test.gnu.o
@@ -625,7 +656,7 @@ SHLIBLDFLAGS = -shared
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
 	rune-loader-test \
 	rune-writer-test rune-install-test rune-proof-test replay-test \
-	drop-live-test swim-live-test rotator-sweep-test \
+	drop-live-test swim-live-test compound-swim-live-test rotator-sweep-test \
 	mover-subject-sweep-test entfile-test \
 	compound-swim-oracle-test rune-door-scope-test \
 	snapshot-test stripcr clean distclean FORCE
@@ -770,6 +801,9 @@ $(DROP_LIVE_TEST_BIN): $(DROP_LIVE_TEST_OBJS)
 
 $(SWIM_LIVE_TEST_BIN): $(SWIM_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(SWIM_LIVE_TEST_OBJS) $(LDFLAGS)
+
+$(COMPOUND_SWIM_LIVE_TEST_BIN): $(COMPOUND_SWIM_LIVE_TEST_OBJS)
+	$(CC) -o $@ $(COMPOUND_SWIM_LIVE_TEST_OBJS) $(LDFLAGS)
 
 $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(HOOK_LIVE_TEST_OBJS) $(LDFLAGS)
@@ -1073,6 +1107,33 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_swim_live_test.gnu.o: \
+		tests/sg_compound_swim_live_test.c \
+		slipgate/sg_compound_swim_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_live_under_test.gnu.o: \
+		slipgate/sg_compound_swim_live.c \
+		slipgate/sg_compound_swim_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_live_compound_under_test.gnu.o: \
+		slipgate/sg_compound.c slipgate/sg_compound.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_live_action_under_test.gnu.o: \
+		slipgate/sg_action.c slipgate/sg_action.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_live_replay_under_test.gnu.o: \
+		slipgate/sg_replay.c slipgate/sg_replay.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_hook_live_test.gnu.o: tests/sg_hook_live_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -1196,6 +1257,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
+		$(COMPOUND_SWIM_LIVE_TEST_BIN) \
+		$(COMPOUND_SWIM_LIVE_INTEGRATION_TEST) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
 		$(COMPOUND_SWIM_ORACLE_TEST_BIN) \
@@ -1231,6 +1294,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(DROP_LIVE_TEST_BIN)
 	sh tests/sg_drop_begin_wiring_test.sh
 	./$(SWIM_LIVE_TEST_BIN)
+	./$(COMPOUND_SWIM_LIVE_TEST_BIN)
+	python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
 	./$(HOOK_LIVE_TEST_BIN)
 	python3 $(HOOK_INTEGRATION_TEST)
 	./$(ROTATOR_SWEEP_TEST_BIN)
@@ -1323,6 +1388,11 @@ drop-live-test: $(DROP_LIVE_TEST_BIN)
 swim-live-test: $(SWIM_LIVE_TEST_BIN)
 	./$(SWIM_LIVE_TEST_BIN)
 
+compound-swim-live-test: $(COMPOUND_SWIM_LIVE_TEST_BIN) \
+		$(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
+	./$(COMPOUND_SWIM_LIVE_TEST_BIN)
+	python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
+
 hook-live-test: $(HOOK_LIVE_TEST_BIN)
 	./$(HOOK_LIVE_TEST_BIN)
 
@@ -1401,6 +1471,7 @@ clean:
 			$(DEPEND_FILE).tmp.* $(HOST_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_GEN_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS) \
+			$(COMPOUND_SWIM_LIVE_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 			$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
@@ -1443,6 +1514,7 @@ endif
 -include $(REPLAY_TEST_DEPS)
 -include $(DROP_LIVE_TEST_DEPS)
 -include $(SWIM_LIVE_TEST_DEPS)
+-include $(COMPOUND_SWIM_LIVE_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
 -include $(MOVER_SUBJECT_SWEEP_TEST_DEPS)

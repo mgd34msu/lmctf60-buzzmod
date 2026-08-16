@@ -2,12 +2,14 @@
 #include "../g_local.h"
 
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "sg_local.h"
 #include "sg_bot.h"
+#include "sg_compound_world.h"
 #include "sg_compound_guard_game.h"
 
 typedef struct sg_compound_guard_game_identity_s
@@ -213,9 +215,20 @@ static sg_compound_guard_observation_t GameSolid(void *context,
 	    ? SG_COMPOUND_GUARD_NO : SG_COMPOUND_GUARD_YES;
 }
 
-static sg_compound_guard_observation_t GameOutsideSweep(void *context,
+/* SV_Push does not inspect `solid`.  A nonsolid incarnation is physically
+ * irrelevant only when the pusher loop itself will skip it. */
+static int GamePusherSkipsSubject(const edict_t *subject)
+{
+	return subject &&
+	       (subject->movetype == MOVETYPE_PUSH ||
+	        subject->movetype == MOVETYPE_STOP ||
+	        subject->movetype == MOVETYPE_NONE ||
+	        subject->movetype == MOVETYPE_NOCLIP || !subject->area.prev);
+}
+
+static sg_compound_guard_observation_t GameOutsideSweepMode(void *context,
 	const sg_mover_subject_t *subject, const sg_mover_key_t *keys,
-	size_t key_count)
+	size_t key_count, int prospective_push)
 {
 	edict_t *subject_entity;
 	uint64_t generation;
@@ -239,15 +252,25 @@ static sg_compound_guard_observation_t GameOutsideSweep(void *context,
 			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 		if (index > 0U && keys[index - 1U] >= keys[index])
 			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
-		if (!SG_MoverSubjectOutsideSweep(&g_edicts[keys[index]],
-		    subject_entity))
+		if (!(prospective_push
+		      ? SG_MoverSubjectOutsideProspectivePush(
+		            &g_edicts[keys[index]], subject_entity)
+		      : SG_MoverSubjectOutsideSweep(&g_edicts[keys[index]],
+		            subject_entity)))
 			return SG_COMPOUND_GUARD_NO;
 	}
 	return SG_COMPOUND_GUARD_YES;
 }
 
-static sg_compound_guard_observation_t GameAllSubjectsOutside(void *context,
-	const sg_mover_key_t *keys, size_t key_count)
+static sg_compound_guard_observation_t GameOutsideSweep(void *context,
+	const sg_mover_subject_t *subject, const sg_mover_key_t *keys,
+	size_t key_count)
+{
+	return GameOutsideSweepMode(context, subject, keys, key_count, 0);
+}
+
+static sg_compound_guard_observation_t GameAllSubjectsOutsideMode(void *context,
+	const sg_mover_key_t *keys, size_t key_count, int prospective_push)
 {
 	sg_mover_subject_t subject;
 	sg_compound_guard_observation_t observation;
@@ -278,10 +301,19 @@ static sg_compound_guard_observation_t GameAllSubjectsOutside(void *context,
 		subject.generation = generation;
 		observation = GameSolid(context, &subject);
 		if (observation == SG_COMPOUND_GUARD_NO)
-			continue;
+		{
+			if (!prospective_push ||
+			    GamePusherSkipsSubject(&g_edicts[key]))
+				continue;
+			/* A stale-linked SOLID_NOT WALK/TOSS/FLYMISSILE entity is still
+			 * eligible for stock SV_Push and therefore cannot be erased from
+			 * the physical population by the higher-level solid abstraction. */
+			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		}
 		if (observation != SG_COMPOUND_GUARD_YES)
 			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
-		observation = GameOutsideSweep(context, &subject, keys, key_count);
+		observation = GameOutsideSweepMode(context, &subject, keys, key_count,
+		    prospective_push);
 		if (observation == SG_COMPOUND_GUARD_NO &&
 		    subject.kind == SG_MOVER_SUBJECT_BODY_QUEUE)
 		{
@@ -342,6 +374,12 @@ static sg_compound_guard_observation_t GameAllSubjectsOutside(void *context,
 	return SG_COMPOUND_GUARD_YES;
 }
 
+static sg_compound_guard_observation_t GameAllSubjectsOutside(void *context,
+	const sg_mover_key_t *keys, size_t key_count)
+{
+	return GameAllSubjectsOutsideMode(context, keys, key_count, 0);
+}
+
 static sg_compound_guard_observation_t GameHoldOpen(void *context,
 	sg_mover_lease_law_t law, const sg_mover_key_t *keys,
 	size_t key_count, int lease_ms)
@@ -349,8 +387,7 @@ static sg_compound_guard_observation_t GameHoldOpen(void *context,
 	edict_t *members[SG_MOVER_LEASE_MAX_KEYS];
 	size_t index;
 
-	if (context != &game_guard || law != SG_MOVER_LAW_DECLARED_DOOR ||
-	    !keys || key_count == 0U ||
+	if (context != &game_guard || !keys || key_count == 0U ||
 	    key_count > SG_MOVER_LEASE_MAX_KEYS || !GameWorldValid())
 		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 	for (index = 0U; index < key_count; index++)
@@ -361,6 +398,12 @@ static sg_compound_guard_observation_t GameHoldOpen(void *context,
 			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 		members[index] = &g_edicts[keys[index]];
 	}
+	if (law == SG_MOVER_LAW_COMPOUND_PREOPEN)
+		return key_count == 1U &&
+		    SG_CompoundWorldHoldMember(members[0], lease_ms)
+		        ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+	if (law != SG_MOVER_LAW_DECLARED_DOOR)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 	return SG_DeclaredDoorHoldMembers(members, (int)key_count, lease_ms)
 	    ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
 }
@@ -372,8 +415,7 @@ static sg_compound_guard_observation_t GameSetTerminal(void *context,
 	edict_t *members[SG_MOVER_LEASE_MAX_KEYS];
 	size_t index;
 
-	if (context != &game_guard || law != SG_MOVER_LAW_DECLARED_DOOR ||
-	    !keys || key_count == 0U ||
+	if (context != &game_guard || !keys || key_count == 0U ||
 	    key_count > SG_MOVER_LEASE_MAX_KEYS || !GameWorldValid())
 		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 	for (index = 0U; index < key_count; index++)
@@ -384,6 +426,12 @@ static sg_compound_guard_observation_t GameSetTerminal(void *context,
 			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 		members[index] = &g_edicts[keys[index]];
 	}
+	if (law == SG_MOVER_LAW_COMPOUND_PREOPEN)
+		return key_count == 1U &&
+		    SG_CompoundWorldMemberTerminal(members[0])
+		        ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+	if (law != SG_MOVER_LAW_DECLARED_DOOR)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 	return SG_DeclaredDoorMembersTerminal(members, (int)key_count)
 	    ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
 }
@@ -413,6 +461,251 @@ static sg_compound_guard_result_t GameEnsureInitialized(void)
 	}
 	game_guard.initialized = 1U;
 	return SG_COMPOUND_GUARD_OK;
+}
+
+static void GameSortKeys(sg_mover_key_t *keys, size_t key_count)
+{
+	size_t index;
+
+	for (index = 1U; index < key_count; index++)
+	{
+		sg_mover_key_t value = keys[index];
+		size_t at = index;
+
+		while (at > 0U && keys[at - 1U] > value)
+		{
+			keys[at] = keys[at - 1U];
+			at--;
+		}
+		keys[at] = value;
+	}
+}
+
+/* Walk the exact forward chain SV_Physics_Pusher would consume.  Continue
+ * beyond the 16-key lease bound (up to the finite edict population) so reverse
+ * lookup can still classify a hidden appended member as malformed. */
+static int GameForwardPusherTeam(edict_t *captain, edict_t *wanted,
+	sg_mover_key_t keys[SG_MOVER_LEASE_MAX_KEYS], size_t *key_count_out,
+	int *contains_out, int *complete_out, int *door_shape_out)
+{
+	sg_mover_key_t observed[MAX_EDICTS];
+	edict_t *part;
+	size_t count = 0U;
+
+	if (key_count_out)
+		*key_count_out = 0U;
+	if (contains_out)
+		*contains_out = 0;
+	if (complete_out)
+		*complete_out = 0;
+	if (door_shape_out)
+		*door_shape_out = 0;
+	if (!captain || !wanted || !keys || !key_count_out || !contains_out ||
+	    !complete_out || !door_shape_out ||
+	    (captain->flags & FL_TEAMSLAVE))
+		return 0;
+	*door_shape_out = 1;
+	for (part = captain; part; part = part->teamchain)
+	{
+		int key;
+		size_t prior;
+
+		if (count >= MAX_EDICTS || !GameEdictKey(part, &key))
+			return 1;
+		if (part == wanted)
+			*contains_out = 1;
+		if (!part->inuse)
+			return 1;
+		/* door_blocked walks back through self->teammaster and then consumes
+		 * that captain's entire forward chain.  Record the exact G_FindTeams
+		 * shape separately: standalone trains/plats legitimately omit it and
+		 * retain stock behavior after a positive NO_LEASE query, while a
+		 * protected door must authenticate it before SV_Push. */
+		if ((count == 0U &&
+		     (part != captain || part->teammaster != captain ||
+		      (part->flags & FL_TEAMSLAVE))) ||
+		    (count > 0U &&
+		     (part->teammaster != captain ||
+		      !(part->flags & FL_TEAMSLAVE))))
+			*door_shape_out = 0;
+		for (prior = 0U; prior < count; prior++)
+			if (observed[prior] == (sg_mover_key_t)key)
+				return 1;
+		observed[count++] = (sg_mover_key_t)key;
+	}
+	if (count == 0U || count > SG_MOVER_LEASE_MAX_KEYS)
+		return 1;
+	memcpy(keys, observed, count * sizeof(keys[0]));
+	GameSortKeys(keys, count);
+	*key_count_out = count;
+	*complete_out = 1;
+	return 1;
+}
+
+static int GamePusherTeamForEntity(edict_t *entity,
+	sg_mover_key_t keys[SG_MOVER_LEASE_MAX_KEYS], size_t *key_count_out,
+	int *door_shape_out)
+{
+	sg_mover_key_t candidate_keys[SG_MOVER_LEASE_MAX_KEYS];
+	edict_t *candidate;
+	size_t candidate_count, matches = 0U;
+	int matched_door_shape = 0;
+	int index;
+
+	if (key_count_out)
+		*key_count_out = 0U;
+	if (door_shape_out)
+		*door_shape_out = 0;
+	if (!entity || !keys || !key_count_out || !door_shape_out ||
+	    !GameWorldValid())
+		return 0;
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		int contains = 0, complete = 0, door_shape = 0;
+
+		candidate = &g_edicts[index];
+		if (!candidate->inuse || (candidate->flags & FL_TEAMSLAVE) ||
+		    (candidate != entity && !candidate->teamchain))
+			continue;
+		memset(candidate_keys, 0, sizeof(candidate_keys));
+		candidate_count = 0U;
+		if (!GameForwardPusherTeam(candidate, entity, candidate_keys,
+		        &candidate_count, &contains, &complete, &door_shape))
+			return 0;
+		if (!contains)
+			continue;
+		/* Membership in an invalid/oversized chain is itself ambiguous. */
+		if (!complete || matches > 0U)
+			return 0;
+		memcpy(keys, candidate_keys,
+		    candidate_count * sizeof(keys[0]));
+		*key_count_out = candidate_count;
+		matched_door_shape = door_shape;
+		matches++;
+	}
+	if (matches != 1U)
+		return 0;
+	*door_shape_out = matched_door_shape;
+	return 1;
+}
+
+int SG_CompoundGuardGameEntityMayDispatch(edict_t *entity)
+{
+	sg_mover_key_t keys[SG_MOVER_LEASE_MAX_KEYS];
+	sg_mover_key_t entity_key;
+	sg_compound_guard_result_t entity_fence, team_fence;
+	size_t key_count = 0U;
+	int door_shape = 0, resolved_key;
+	size_t index;
+
+	memset(keys, 0, sizeof(keys));
+	if (!GameEdictKey(entity, &resolved_key) || resolved_key <= 0 ||
+	    (uintmax_t)resolved_key > (uintmax_t)UINT16_MAX)
+		return 0;
+	entity_key = (sg_mover_key_t)resolved_key;
+	entity_fence = SG_CompoundGuardDoorPusherFence(&entity_key, 1U);
+	if (entity_fence == SG_COMPOUND_GUARD_NOT_INITIALIZED)
+		return 1;
+	if (entity_fence != SG_COMPOUND_GUARD_OK &&
+	    entity_fence != SG_COMPOUND_GUARD_NO_LEASE)
+		return 0;
+	/* Most entities are neither captured keys nor possible pusher teammates.
+	 * Their single validated NO_LEASE result is the exact stock fast path. */
+	if (entity_fence == SG_COMPOUND_GUARD_NO_LEASE &&
+	    entity->movetype != MOVETYPE_PUSH &&
+	    entity->movetype != MOVETYPE_STOP &&
+	    !(entity->flags & FL_TEAMSLAVE) && !entity->teammaster &&
+	    !entity->teamchain)
+		return 1;
+	if (!GamePusherTeamForEntity(entity, keys, &key_count, &door_shape))
+	{
+		/* An invalid/overlong/cyclic team can hide a captured suffix.  It keeps
+		 * stock behavior only after a global proof that no transaction exists. */
+		team_fence = SG_CompoundGuardAnyDoorTransaction();
+		return entity_fence == SG_COMPOUND_GUARD_NO_LEASE &&
+		       (team_fence == SG_COMPOUND_GUARD_NO_LEASE ||
+		        team_fence == SG_COMPOUND_GUARD_NOT_INITIALIZED);
+	}
+	team_fence = SG_CompoundGuardDoorPusherFence(keys, key_count);
+	if (team_fence == SG_COMPOUND_GUARD_NOT_INITIALIZED)
+		return entity_fence != SG_COMPOUND_GUARD_OK;
+	if (team_fence == SG_COMPOUND_GUARD_NO_LEASE)
+		return entity_fence == SG_COMPOUND_GUARD_NO_LEASE;
+	if (team_fence != SG_COMPOUND_GUARD_OK)
+		return 0;
+	/* This stricter metadata is needed only for a protected door: ordinary
+	 * standalone trains, plats, and rotators commonly have no teammaster and
+	 * keep their exact stock dispatch after NO_LEASE above. */
+	if (!door_shape)
+		return 0;
+	/* Validate the pusher independently of population: an empty retirement
+	 * must not admit NaN clamp input, unsupported angles, stale linkage, or an
+	 * arbitrary prethink callback. */
+	for (index = 0U; index < key_count; index++)
+		if (!SG_MoverProspectivePusherValid(&g_edicts[keys[index]]))
+			return 0;
+	return GameAllSubjectsOutsideMode(&game_guard, keys, key_count, 1) ==
+	       SG_COMPOUND_GUARD_YES;
+}
+
+void SG_CompoundGuardGameEntityDeferred(edict_t *entity)
+{
+	sg_mover_key_t keys[SG_MOVER_LEASE_MAX_KEYS];
+	size_t key_count = 0U;
+	int door_shape = 0, entity_key, valid = 1;
+	size_t index;
+
+	memset(keys, 0, sizeof(keys));
+	if (!GameEdictKey(entity, &entity_key) || entity_key <= 0)
+		return;
+	if (!GamePusherTeamForEntity(entity, keys, &key_count, &door_shape) ||
+	    !door_shape)
+	{
+		/* We cannot safely walk or delay an ambiguous chain.  Consume this
+		 * member's movement arm so an overdue callback cannot publish a
+		 * completion witness after the malformed state is repaired. */
+		SG_MoverCompletionTransition(entity);
+		return;
+	}
+	/* The captain is encountered first and owns the team's pusher dispatch.
+	 * Its one deferral covers every slave; do not add FRAMETIME again when the
+	 * entity loop later reaches a denied slave. */
+	if (entity->flags & FL_TEAMSLAVE)
+		return;
+	for (index = 0U; index < key_count; index++)
+		if (!SG_MoverProspectivePusherValid(&g_edicts[keys[index]]))
+		{
+			valid = 0;
+			break;
+		}
+	if (!valid)
+	{
+		for (index = 0U; index < key_count; index++)
+			SG_MoverCompletionTransition(&g_edicts[keys[index]]);
+		return;
+	}
+	for (index = 0U; index < key_count; index++)
+		if (g_edicts[keys[index]].nextthink > 0.0f &&
+		    (!isfinite(g_edicts[keys[index]].nextthink + FRAMETIME) ||
+		     g_edicts[keys[index]].nextthink + FRAMETIME <=
+		         g_edicts[keys[index]].nextthink))
+		{
+			for (index = 0U; index < key_count; index++)
+				SG_MoverCompletionTransition(&g_edicts[keys[index]]);
+			return;
+		}
+	/* Move_Begin stores an absolute completion time after pre-subtracting all
+	 * full pushes.  A guard freeze must advance that schedule exactly as stock
+	 * blocked-pusher rollback does or Move_Final can complete at an intermediate
+	 * pose and mint false endpoint authority. */
+	for (index = 0U; index < key_count; index++)
+		if (g_edicts[keys[index]].nextthink > 0.0f)
+			g_edicts[keys[index]].nextthink += FRAMETIME;
+}
+
+int SG_CompoundGuardGamePusherMayAdvance(edict_t *captain)
+{
+	return SG_CompoundGuardGameEntityMayDispatch(captain);
 }
 
 static sg_compound_guard_result_t GameMint(edict_t *entity,
@@ -450,6 +743,7 @@ sg_compound_guard_result_t SG_CompoundGuardGameLevelReset(void)
 {
 	sg_compound_guard_result_t result;
 
+	SG_MoverCompletionReset();
 	result = GameEnsureInitialized();
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
@@ -466,6 +760,7 @@ void SG_CompoundGuardGameStorageWillFree(void)
 {
 	int slot;
 
+	SG_MoverCompletionReset();
 	if (!game_guard.initialized)
 		return;
 	(void)SG_CompoundGuardLevelReset();
@@ -695,6 +990,7 @@ void SG_CompoundGuardGameEntityFreed(edict_t *entity)
 {
 	int key;
 
+	SG_MoverCompletionForget(entity);
 	if (!game_guard.initialized || !GameEdictKey(entity, &key))
 		return;
 	game_guard.present[key] = 0U;

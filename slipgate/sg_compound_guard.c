@@ -179,26 +179,72 @@ static int RetirementsOverlap(const sg_mover_key_t *keys, size_t key_count)
 	return 0;
 }
 
-static int DeclaredDoorLeasePresent(void)
+static int DoorTransactionLaw(sg_mover_lease_law_t law)
+{
+	return law == SG_MOVER_LAW_DECLARED_DOOR ||
+	       law == SG_MOVER_LAW_COMPOUND_PREOPEN;
+}
+
+static int LeaseRecordCanonical(const sg_mover_lease_record_t *record,
+	const sg_mover_ticket_t *ticket, size_t slot)
+{
+	size_t index;
+	int body_empty, bolt_empty;
+
+	if (!record || !ticket || slot >= SG_MOVER_LEASE_MAX_RECORDS ||
+	    !SG_MoverTicketValid(ticket) || ticket->slot != slot ||
+	    ticket->epoch != guard.leases.epoch ||
+	    ticket->serial != record->serial ||
+	    !SG_MoverOwnerValid(&record->owner) ||
+	    record->state < SG_MOVER_LEASE_ACTIVE ||
+	    record->state > SG_MOVER_LEASE_QUARANTINED ||
+	    !DoorTransactionLaw((sg_mover_lease_law_t)record->law) ||
+	    record->link_index < 0 || record->reserved != 0U ||
+	    !KeysValid(record->keys, record->key_count))
+		return 0;
+	for (index = record->key_count; index < SG_MOVER_LEASE_MAX_KEYS; index++)
+		if (record->keys[index] != 0U)
+			return 0;
+	body_empty = SubjectEmpty(&record->body);
+	bolt_empty = SubjectEmpty(&record->bolt);
+	if ((!body_empty && (!SG_MoverSubjectValid(&record->body) ||
+	     (record->body.kind != SG_MOVER_SUBJECT_CLIENT &&
+	      record->body.kind != SG_MOVER_SUBJECT_BODY_QUEUE))) ||
+	    (!bolt_empty && (!SG_MoverSubjectValid(&record->bolt) ||
+	     record->bolt.kind != SG_MOVER_SUBJECT_HOOK_BOLT)) ||
+	    (!body_empty && !bolt_empty &&
+	     record->body.edict_key == record->bolt.edict_key &&
+	     record->body.generation == record->bolt.generation) ||
+	    ((record->state == SG_MOVER_LEASE_ACTIVE ||
+	      record->state == SG_MOVER_LEASE_PAUSED) &&
+	     (!body_empty || !bolt_empty)))
+		return 0;
+	return 1;
+}
+
+static int DoorTransactionLeasePresent(void)
 {
 	size_t slot;
 	sg_mover_lease_record_t record;
 	sg_mover_ticket_t ticket;
 
 	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
-		if (SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket) &&
-		    record.law == SG_MOVER_LAW_DECLARED_DOOR)
+	{
+		if (!SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket))
+			continue;
+		if (DoorTransactionLaw((sg_mover_lease_law_t)record.law))
 			return 1;
+	}
 	return 0;
 }
 
-static int DeclaredDoorRetirementPresent(void)
+static int DoorTransactionRetirementPresent(void)
 {
 	size_t slot;
 
 	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
 		if (guard.retirements[slot].active &&
-		    guard.retirements[slot].law == SG_MOVER_LAW_DECLARED_DOOR)
+		    DoorTransactionLaw(guard.retirements[slot].law))
 			return 1;
 	return 0;
 }
@@ -739,6 +785,16 @@ static sg_compound_guard_result_t Acquire(
 	RefreshRetirements();
 	if (RetirementsOverlap(keys, key_count))
 		return SG_COMPOUND_GUARD_CONFLICT;
+	/* The first live compound revision has one process-wide door transaction.
+	 * Neither controller can safely interleave trigger/Pmove callbacks with a
+	 * disjoint declared or PREOPEN set, and a logically released set remains in
+	 * that transaction until its physical retirement clears.  Keep this policy
+	 * explicit to these two laws so future unrelated mover laws retain the
+	 * registry's ordinary key-overlap semantics. */
+	if (DoorTransactionLaw(law) &&
+	    (DoorTransactionLeasePresent() ||
+	     DoorTransactionRetirementPresent()))
+		return SG_COMPOUND_GUARD_CONFLICT;
 	if (SG_MoverTicketValid(&bot->ticket))
 	{
 		result = SyncTicket(bot, &record);
@@ -747,13 +803,6 @@ static sg_compound_guard_result_t Acquire(
 		if (result != SG_COMPOUND_GUARD_NO_LEASE)
 			return result;
 	}
-	/* Ordinary declared-door controllers are globally serialized.  Their host
-	 * callbacks can prove one exact set and owner, but generic Pmove has no
-	 * cross-set command transaction.  Compound-preopen remains key-disjoint and
-	 * dormant under its own controller revision. */
-	if (law == SG_MOVER_LAW_DECLARED_DOOR &&
-	    (DeclaredDoorLeasePresent() || DeclaredDoorRetirementPresent()))
-		return SG_COMPOUND_GUARD_CONFLICT;
 	result = SubjectIdentityCurrent(&bot->client);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
@@ -973,6 +1022,39 @@ sg_compound_guard_result_t SG_CompoundGuardResume(
 	sg_compound_guard_bot_t *bot)
 {
 	return SetState(bot, SG_MOVER_LEASE_ACTIVE);
+}
+
+sg_compound_guard_result_t SG_CompoundGuardMaintain(
+	sg_compound_guard_bot_t *bot)
+{
+	sg_mover_lease_record_t record;
+	sg_compound_guard_result_t result;
+
+	if (!guard.initialized)
+		return SG_COMPOUND_GUARD_NOT_INITIALIZED;
+	result = SyncTicket(bot, &record);
+	if (result != SG_COMPOUND_GUARD_OK)
+		return result;
+	if (!LeaseRecordCanonical(&record, &bot->ticket,
+	        (size_t)bot->ticket.slot))
+		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
+	if (record.state == SG_MOVER_LEASE_ORPHAN)
+		return SG_COMPOUND_GUARD_INVALID_TRANSITION;
+	if (record.state != SG_MOVER_LEASE_ACTIVE &&
+	    record.state != SG_MOVER_LEASE_PAUSED &&
+	    record.state != SG_MOVER_LEASE_QUARANTINED)
+		return SG_COMPOUND_GUARD_INVALID_TRANSITION;
+	result = MaintainRecord(&record);
+	if (result != SG_COMPOUND_GUARD_OK &&
+	    record.state != SG_MOVER_LEASE_QUARANTINED)
+	{
+		sg_compound_guard_result_t quarantine_result =
+		    QuarantineTicket(&bot->ticket, &bot->owner);
+
+		if (quarantine_result != SG_COMPOUND_GUARD_OK)
+			return quarantine_result;
+	}
+	return result;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardOrphan(
@@ -1554,6 +1636,161 @@ int SG_CompoundGuardRetirementOverlaps(const sg_mover_key_t *keys,
 	    guard.retirement_count > SG_COMPOUND_GUARD_MAX_RETIREMENTS)
 		return 1;
 	return RetirementsOverlap(keys, key_count);
+}
+
+static sg_compound_guard_result_t DoorPusherFenceScan(
+	const sg_mover_key_t *keys, size_t key_count, int match_any)
+{
+	size_t slot, active_retirements = 0U;
+	sg_mover_lease_record_t record;
+	sg_mover_lease_record_t empty_record;
+	sg_mover_ticket_t ticket;
+	int protected = 0;
+
+	/* No lease can predate initialization.  This exception is what keeps the
+	 * guard interlock invisible to ordinary human-driven pushers. */
+	if (!guard.initialized)
+		return SG_COMPOUND_GUARD_NOT_INITIALIZED;
+	if (!match_any && !KeysValid(keys, key_count))
+		return SG_COMPOUND_GUARD_INVALID_KEYS;
+	if (guard.initialized != 1U || guard.leases.initialized != 1U ||
+	    guard.leases.epoch == 0U || !HostValid(&guard.host) ||
+	    guard.leases.epoch_exhausted > 1U ||
+	    guard.leases.serial_exhausted > 1U ||
+	    !ReservedZero(guard.leases.reserved,
+	        sizeof(guard.leases.reserved)) ||
+	    guard.retirement_count > SG_COMPOUND_GUARD_MAX_RETIREMENTS)
+		return SG_COMPOUND_GUARD_HOST_ERROR;
+	memset(&empty_record, 0, sizeof(empty_record));
+	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
+	{
+		const sg_mover_lease_record_t *stored =
+		    &guard.leases.records[slot];
+
+		if (stored->state == SG_MOVER_LEASE_FREE)
+		{
+			if (memcmp(stored, &empty_record, sizeof(*stored)) != 0)
+				return SG_COMPOUND_GUARD_HOST_ERROR;
+			continue;
+		}
+		if (!SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket) ||
+		    !LeaseRecordCanonical(&record, &ticket, slot))
+			return SG_COMPOUND_GUARD_HOST_ERROR;
+		if (match_any ||
+		    KeysOverlap(keys, key_count, record.keys, record.key_count))
+			protected = 1;
+	}
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+	{
+		const sg_compound_guard_retirement_t *retirement =
+		    &guard.retirements[slot];
+
+		if (retirement->active > 1U)
+			return SG_COMPOUND_GUARD_HOST_ERROR;
+		if (!retirement->active)
+		{
+			size_t key_index;
+
+			if (retirement->key_count != 0U ||
+			    retirement->law != SG_MOVER_LAW_NONE)
+				return SG_COMPOUND_GUARD_HOST_ERROR;
+			for (key_index = 0U;
+			     key_index < SG_MOVER_LEASE_MAX_KEYS; key_index++)
+				if (retirement->keys[key_index] != 0U)
+					return SG_COMPOUND_GUARD_HOST_ERROR;
+			continue;
+		}
+		active_retirements++;
+		if (!DoorTransactionLaw(retirement->law) ||
+		    !KeysValid(retirement->keys, retirement->key_count))
+			return SG_COMPOUND_GUARD_HOST_ERROR;
+		if (match_any || KeysOverlap(keys, key_count, retirement->keys,
+		    retirement->key_count))
+			protected = 1;
+	}
+	if (active_retirements != guard.retirement_count)
+		return SG_COMPOUND_GUARD_HOST_ERROR;
+	return protected ? SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_NO_LEASE;
+}
+
+sg_compound_guard_result_t SG_CompoundGuardDoorPusherFence(
+	const sg_mover_key_t *keys, size_t key_count)
+{
+	return DoorPusherFenceScan(keys, key_count, 0);
+}
+
+sg_compound_guard_result_t SG_CompoundGuardAnyDoorTransaction(void)
+{
+	return DoorPusherFenceScan(NULL, 0U, 1);
+}
+
+int SG_CompoundGuardCompoundOverlaps(const sg_mover_key_t *keys,
+	size_t key_count)
+{
+	size_t slot, active_retirements = 0U;
+	sg_mover_lease_record_t record;
+	sg_mover_lease_record_t empty_record;
+	sg_mover_ticket_t ticket;
+
+	if (guard.initialized != 1U || guard.leases.initialized != 1U ||
+	    guard.leases.epoch == 0U || !HostValid(&guard.host) ||
+	    guard.leases.epoch_exhausted > 1U ||
+	    guard.leases.serial_exhausted > 1U ||
+	    !ReservedZero(guard.leases.reserved,
+	        sizeof(guard.leases.reserved)) ||
+	    !KeysValid(keys, key_count) ||
+	    guard.retirement_count > SG_COMPOUND_GUARD_MAX_RETIREMENTS)
+		return 1;
+	memset(&empty_record, 0, sizeof(empty_record));
+	for (slot = 0U; slot < SG_MOVER_LEASE_MAX_RECORDS; slot++)
+	{
+		const sg_mover_lease_record_t *stored =
+		    &guard.leases.records[slot];
+
+		if (stored->state == SG_MOVER_LEASE_FREE)
+		{
+			if (memcmp(stored, &empty_record, sizeof(*stored)) != 0)
+				return 1;
+			continue;
+		}
+		if (!SG_MoverLeaseRecordAt(&guard.leases, slot, &record, &ticket))
+			return 1;
+		if (!LeaseRecordCanonical(&record, &ticket, slot))
+			return 1;
+		if (record.law == SG_MOVER_LAW_COMPOUND_PREOPEN &&
+		    KeysOverlap(keys, key_count, record.keys, record.key_count))
+			return 1;
+	}
+	for (slot = 0U; slot < SG_COMPOUND_GUARD_MAX_RETIREMENTS; slot++)
+	{
+		const sg_compound_guard_retirement_t *retirement =
+		    &guard.retirements[slot];
+
+		if (retirement->active > 1U)
+			return 1;
+		if (!retirement->active)
+		{
+			size_t key_index;
+
+			if (retirement->key_count != 0U ||
+			    retirement->law != SG_MOVER_LAW_NONE)
+				return 1;
+			for (key_index = 0U;
+			     key_index < SG_MOVER_LEASE_MAX_KEYS; key_index++)
+				if (retirement->keys[key_index] != 0U)
+					return 1;
+			continue;
+		}
+		active_retirements++;
+		if (!DoorTransactionLaw(retirement->law) ||
+		    !KeysValid(retirement->keys, retirement->key_count))
+			return 1;
+		if (retirement->law == SG_MOVER_LAW_COMPOUND_PREOPEN &&
+		    KeysOverlap(keys, key_count, retirement->keys,
+		        retirement->key_count))
+			return 1;
+	}
+	return active_retirements != guard.retirement_count;
 }
 
 int SG_CompoundGuardRecordAt(size_t slot,

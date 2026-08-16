@@ -20,6 +20,7 @@
  */
 
 #include <float.h>
+#include <limits.h>
 
 #include "g_local.h"
 #include "slipgate/sg_compound.h"
@@ -39,6 +40,15 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_go_down(edict_t *self);
 void door_hit_top(edict_t *self);
 void door_hit_bottom(edict_t *self);
+void door_blocked(edict_t *self, edict_t *other);
+void Move_Begin(edict_t *self);
+void Move_Final(edict_t *self);
+void Move_Done(edict_t *self);
+void AngleMove_Begin(edict_t *self);
+void AngleMove_Final(edict_t *self);
+void AngleMove_Done(edict_t *self);
+void Think_CalcMoveSpeed(edict_t *self);
+void Think_SpawnDoorTrigger(edict_t *self);
 void hook_touch(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf);
 void hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
@@ -537,14 +547,17 @@ static void SG_OracleBoundsAdd(const vec3_t point, vec3_t mins, vec3_t maxs)
  * conservative for the brush while preserving which side of a partial arc is
  * genuinely clear.  Canonical func_door_rotating changes exactly one angle;
  * malformed multi-axis or excessive rotations fall back to the radius cube. */
-static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
+static qboolean SG_OracleRotatingDoorIntervalBounds(edict_t *door,
 	const vec3_t local_mins, const vec3_t local_maxs,
+	float interval_first_degrees, float interval_second_degrees,
+	float sample_first_degrees, float sample_second_degrees,
+	float sample_third_degrees,
 	vec3_t dmins, vec3_t dmaxs)
 {
 	const float rad = (float)(M_PI * 2.0 / 360.0);
 	const float deg = (float)(360.0 / (M_PI * 2.0));
 	int angle_axis = -1, changed = 0;
-	float start, end, current, low, high;
+	float first_angle, second_angle, low, high;
 	int corner, coord;
 
 	for (coord = 0; coord < 3; coord++)
@@ -559,18 +572,16 @@ static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
 	}
 	if (changed != 1)
 		return false;
-	start = door->moveinfo.start_angles[angle_axis] * rad;
-	end = door->moveinfo.end_angles[angle_axis] * rad;
-	current = door->s.angles[angle_axis] * rad;
-	if (!isfinite(start) || !isfinite(end) || !isfinite(current) ||
-	    fabsf(end - start) > 8.0f * M_PI)
+	first_angle = interval_first_degrees * rad;
+	second_angle = interval_second_degrees * rad;
+	if (!isfinite(first_angle) || !isfinite(second_angle) ||
+	    !isfinite(sample_first_degrees) ||
+	    !isfinite(sample_second_degrees) ||
+	    !isfinite(sample_third_degrees) ||
+	    fabsf(second_angle - first_angle) > 8.0f * M_PI)
 		return false;
-	low = start < end ? start : end;
-	high = start > end ? start : end;
-	if (current < low) low = current;
-	if (current > high) high = current;
-	if (high - low > 8.0f * M_PI)
-		return false;
+	low = first_angle < second_angle ? first_angle : second_angle;
+	high = first_angle > second_angle ? first_angle : second_angle;
 	VectorSet(dmins, 1.0e30f, 1.0e30f, 1.0e30f);
 	VectorSet(dmaxs, -1.0e30f, -1.0e30f, -1.0e30f);
 	for (corner = 0; corner < 8; corner++)
@@ -581,17 +592,16 @@ static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
 		local[1] = (corner & 2) ? local_maxs[1] : local_mins[1];
 		local[2] = (corner & 4) ? local_maxs[2] : local_mins[2];
 		SG_OracleRotatingPoint(door, local, angle_axis,
-		                           door->moveinfo.start_angles[angle_axis], point);
+		                           sample_first_degrees, point);
 		SG_OracleBoundsAdd(point, dmins, dmaxs);
 		SG_OracleRotatingPoint(door, local, angle_axis,
-		                           door->moveinfo.end_angles[angle_axis], point);
+		                           sample_second_degrees, point);
 		SG_OracleBoundsAdd(point, dmins, dmaxs);
-		/* AngleMove's final divide/multiply can leave the linked leaf a few
-		 * float steps beyond the serialized endpoint.  Pose validation admits
-		 * only that bounded stock overshoot, so make the spatial proof cover the
-		 * same current pose and the complete sliver between it and the endpoint. */
+		/* Preserve every direct engine-visible endpoint/current transform:
+		 * coefficient recovery follows a different float path and can otherwise
+		 * miss a low bit at large world origins. */
 		SG_OracleRotatingPoint(door, local, angle_axis,
-		                           door->s.angles[angle_axis], point);
+		                           sample_third_degrees, point);
 		SG_OracleBoundsAdd(point, dmins, dmaxs);
 
 		/* Recover the sinusoid coefficients in the same AngleVectors transform
@@ -605,24 +615,77 @@ static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
 			float a = p0[coord] - c;
 			float b = p90[coord] - c;
 			float base;
+			float first_value, last_value;
 			int first, last, k;
 
 			if (fabsf(a) + fabsf(b) <= 0.0001f)
 				continue;
 			base = atan2f(b, a);
-			first = (int)ceilf((low - base) / (float)M_PI);
-			last = (int)floorf((high - base) / (float)M_PI);
-			for (k = first; k <= last; k++)
+			first_value = ceilf((low - base) / (float)M_PI);
+			last_value = floorf((high - base) / (float)M_PI);
+			if (!isfinite(first_value) || !isfinite(last_value) ||
+			    (double)first_value < (double)INT_MIN ||
+			    (double)first_value > (double)INT_MAX ||
+			    (double)last_value < (double)INT_MIN ||
+			    (double)last_value > (double)INT_MAX)
+				return false;
+			first = (int)first_value;
+			last = (int)last_value;
+			for (k = first; k <= last; )
 			{
 				float at = base + (float)k * (float)M_PI;
 
 				SG_OracleRotatingPoint(door, local, angle_axis,
 				                           at * deg, point);
 				SG_OracleBoundsAdd(point, dmins, dmaxs);
+				if (k == last)
+					break;
+				k++;
 			}
 		}
 	}
 	return true;
+}
+
+static qboolean SG_OracleRotatingDoorBounds(edict_t *door,
+	const vec3_t local_mins, const vec3_t local_maxs,
+	vec3_t dmins, vec3_t dmaxs)
+{
+	float low, high;
+	int angle_axis = -1, changed = 0;
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		if (fabsf(door->moveinfo.end_angles[axis] -
+		          door->moveinfo.start_angles[axis]) <= 0.001f)
+			continue;
+		angle_axis = axis;
+		changed++;
+	}
+	if (changed != 1)
+		return false;
+	low = door->moveinfo.start_angles[angle_axis] <
+	          door->moveinfo.end_angles[angle_axis]
+	    ? door->moveinfo.start_angles[angle_axis]
+	    : door->moveinfo.end_angles[angle_axis];
+	high = door->moveinfo.start_angles[angle_axis] >
+	           door->moveinfo.end_angles[angle_axis]
+	    ? door->moveinfo.start_angles[angle_axis]
+	    : door->moveinfo.end_angles[angle_axis];
+	/* AngleMove's final divide/multiply can leave the linked leaf a few float
+	 * steps past the serialized endpoint.  Include that authenticated current
+	 * pose and the complete sliver leading to it. */
+	if (door->s.angles[angle_axis] < low)
+		low = door->s.angles[angle_axis];
+	if (door->s.angles[angle_axis] > high)
+		high = door->s.angles[angle_axis];
+	return SG_OracleRotatingDoorIntervalBounds(door, local_mins, local_maxs,
+	                                           low, high,
+	                                           door->moveinfo.start_angles[angle_axis],
+	                                           door->moveinfo.end_angles[angle_axis],
+	                                           door->s.angles[angle_axis],
+	                                           dmins, dmaxs);
 }
 
 /* The partial-arc extrema above and the engine-visible corner transform take
@@ -765,6 +828,252 @@ static void SG_OracleDoorBounds(edict_t *door,
 		dmins[axis] -= hmax;
 		dmaxs[axis] -= hmin;
 	}
+}
+
+/* Match the staging and 1/8-unit clamp in SV_Physics_Pusher/SV_Push without
+ * performing an undefined float-to-int conversion on malformed velocity. */
+static qboolean SG_OracleProspectivePusherStep(const edict_t *door,
+	vec3_t move, vec3_t amove)
+{
+	int axis;
+
+	if (!door || !SG_OracleFinite3(door->velocity) ||
+	    !SG_OracleFinite3(door->avelocity))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled;
+
+		move[axis] = door->velocity[axis] * FRAMETIME;
+		scaled = move[axis] * 8.0f;
+		if (!isfinite(scaled))
+			return false;
+		if (scaled > 0.0f)
+			scaled += 0.5f;
+		else
+			scaled -= 0.5f;
+		if (!isfinite(scaled) || (double)scaled < (double)INT_MIN ||
+		    (double)scaled > (double)INT_MAX)
+			return false;
+		move[axis] = 0.125f * (float)(int)scaled;
+		amove[axis] = door->avelocity[axis] * FRAMETIME;
+		if (!isfinite(move[axis]) || !isfinite(amove[axis]))
+			return false;
+	}
+	return true;
+}
+
+/* A human touched by an earlier team leaf can synchronously run door_go_up on
+ * a later DOWN/BOTTOM translating leaf.  Reproduce the velocity which stock
+ * Move_Calc/Move_Begin (or its one-frame Move_Final branch) would stage, then
+ * apply the same SV_Push clamp. */
+static qboolean SG_OracleProspectiveReopenMove(edict_t *door, vec3_t move)
+{
+	vec3_t direction, velocity;
+	float distance, one_frame;
+	int axis;
+
+	if (!door || !move || !isfinite(door->moveinfo.speed) ||
+	    door->moveinfo.speed <= 0.0f)
+		return false;
+	VectorSubtract(door->moveinfo.end_origin, door->s.origin, direction);
+	if (!SG_OracleFinite3(direction))
+		return false;
+	distance = VectorNormalize(direction);
+	one_frame = door->moveinfo.speed * FRAMETIME;
+	if (!isfinite(distance) || distance < 0.0f || !isfinite(one_frame))
+		return false;
+	if (distance == 0.0f)
+		VectorClear(velocity);
+	else if (one_frame >= distance)
+		VectorScale(direction, distance / FRAMETIME, velocity);
+	else
+		VectorScale(direction, door->moveinfo.speed, velocity);
+	if (!SG_OracleFinite3(velocity))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled;
+
+		move[axis] = velocity[axis] * FRAMETIME;
+		scaled = move[axis] * 8.0f;
+		if (!isfinite(move[axis]) || !isfinite(scaled))
+			return false;
+		if (scaled > 0.0f)
+			scaled += 0.5f;
+		else
+			scaled -= 0.5f;
+		if (!isfinite(scaled) || (double)scaled < (double)INT_MIN ||
+		    (double)scaled > (double)INT_MAX)
+			return false;
+		move[axis] = 0.125f * (float)(int)scaled;
+		if (!isfinite(move[axis]))
+			return false;
+	}
+	return true;
+}
+
+/* The interlock needs only the movement that can happen in this one pusher
+ * dispatch.  A full endpoint sweep would deadlock the legitimate owner while
+ * it traverses an open doorway. */
+static qboolean SG_OracleProspectiveDoorBounds(edict_t *door,
+	const vec3_t hull_mins, const vec3_t hull_maxs,
+	vec3_t dmins, vec3_t dmaxs)
+{
+	vec3_t move, amove;
+	int axis;
+
+	if (!SG_OracleProspectivePusherStep(door, move, amove))
+		return false;
+	if (!strcmp(door->classname, "func_door_rotating"))
+	{
+		vec3_t alternate_mins, alternate_maxs, local_mins, local_maxs;
+		float current, next;
+		int angle_axis = -1, changed = 0;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			float hmin = hull_mins ? hull_mins[axis] : 0.0f;
+			float hmax = hull_maxs ? hull_maxs[axis] : 0.0f;
+
+			local_mins[axis] = door->mins[axis] - hmax;
+			local_maxs[axis] = door->maxs[axis] - hmin;
+			if (fabsf(door->moveinfo.end_angles[axis] -
+			          door->moveinfo.start_angles[axis]) > 0.001f)
+			{
+				angle_axis = axis;
+				changed++;
+			}
+		}
+		if (changed != 1)
+			return false;
+		for (axis = 0; axis < 3; axis++)
+			if (axis != angle_axis && amove[axis] != 0.0f)
+				return false;
+		current = door->s.angles[angle_axis];
+		next = current + amove[angle_axis];
+		if (!isfinite(next) ||
+		    !SG_OracleRotatingDoorIntervalBounds(door, local_mins,
+		        local_maxs, current, next, current, next, current,
+		        dmins, dmaxs))
+			return false;
+		/* SV_Push touches triggers before SV_Physics_Pusher advances the next
+		 * team member.  A human pushed by an earlier leaf keeps stock authority
+		 * to reopen a closing door, so a later rotating slave can reverse after
+		 * this observation but before its own push.  Enclose that one stock
+		 * AngleMove_Begin step as well as the currently staged angular step. */
+		if (door->moveinfo.state == SG_PLAT_STATE_DOWN ||
+		    door->moveinfo.state == SG_PLAT_STATE_BOTTOM)
+		{
+			float alternate_amove, alternate_next, alternate_velocity;
+			float delta = door->moveinfo.end_angles[angle_axis] - current;
+			float travel;
+
+			if (!isfinite(delta) || !isfinite(door->moveinfo.speed) ||
+			    door->moveinfo.speed <= 0.0f)
+				return false;
+			travel = fabsf(delta) / door->moveinfo.speed;
+			if (!isfinite(travel))
+				return false;
+			if (delta == 0.0f)
+				alternate_amove = 0.0f;
+			else
+			{
+				alternate_velocity = travel < FRAMETIME
+				    ? delta / FRAMETIME : delta / travel;
+				alternate_amove = alternate_velocity * FRAMETIME;
+			}
+			alternate_next = current + alternate_amove;
+			if (!isfinite(alternate_next) ||
+			    !SG_OracleRotatingDoorIntervalBounds(door, local_mins,
+			        local_maxs, current, alternate_next, current,
+			        alternate_next, current, alternate_mins,
+			        alternate_maxs))
+				return false;
+			for (axis = 0; axis < 3; axis++)
+			{
+				if (alternate_mins[axis] < dmins[axis])
+					dmins[axis] = alternate_mins[axis];
+				if (alternate_maxs[axis] > dmaxs[axis])
+					dmaxs[axis] = alternate_maxs[axis];
+			}
+		}
+		SG_OracleRotatingBoundsOutward(door, local_mins, local_maxs,
+		                                     dmins, dmaxs);
+		/* A malformed-but-finite translated rotator is still enclosed: every
+		 * angular pose above may additionally occupy any point on the linear
+		 * pusher chord. */
+		for (axis = 0; axis < 3; axis++)
+		{
+			if (move[axis] < 0.0f)
+				dmins[axis] = nextafterf(dmins[axis] + move[axis],
+				                            -INFINITY);
+			else if (move[axis] > 0.0f)
+				dmaxs[axis] = nextafterf(dmaxs[axis] + move[axis],
+				                            INFINITY);
+		}
+		return SG_OracleFinite3(dmins) && SG_OracleFinite3(dmaxs);
+	}
+	for (axis = 0; axis < 3; axis++)
+		if (amove[axis] != 0.0f)
+			return false;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		double current_min = (double)door->s.origin[axis] +
+		                     (double)door->mins[axis];
+		double current_max = (double)door->s.origin[axis] +
+		                     (double)door->maxs[axis];
+		double moved_min = current_min + (double)move[axis];
+		double moved_max = current_max + (double)move[axis];
+		double hmin = hull_mins ? (double)hull_mins[axis] : 0.0;
+		double hmax = hull_maxs ? (double)hull_maxs[axis] : 0.0;
+		double low = (current_min < moved_min ? current_min : moved_min) -
+		             hmax;
+		double high = (current_max > moved_max ? current_max : moved_max) -
+		              hmin;
+
+		if (!isfinite(low) || !isfinite(high) ||
+		    low <= -(double)FLT_MAX || high >= (double)FLT_MAX)
+			return false;
+		dmins[axis] = nextafterf((float)low, -INFINITY);
+		dmaxs[axis] = nextafterf((float)high, INFINITY);
+	}
+	/* The same inter-member trigger ordering can run door_go_up on a later
+	 * translating leaf.  Union the exact stock reopen step from the observed
+	 * pose with the step staged when the fence began. */
+	if (door->moveinfo.state == SG_PLAT_STATE_DOWN ||
+	    door->moveinfo.state == SG_PLAT_STATE_BOTTOM)
+	{
+		vec3_t reopen_move;
+
+		if (!SG_OracleProspectiveReopenMove(door, reopen_move))
+			return false;
+		for (axis = 0; axis < 3; axis++)
+		{
+			double current_min = (double)door->s.origin[axis] +
+			                     (double)door->mins[axis];
+			double current_max = (double)door->s.origin[axis] +
+			                     (double)door->maxs[axis];
+			double moved_min = current_min + (double)reopen_move[axis];
+			double moved_max = current_max + (double)reopen_move[axis];
+			double hmin = hull_mins ? (double)hull_mins[axis] : 0.0;
+			double hmax = hull_maxs ? (double)hull_maxs[axis] : 0.0;
+			double low = (current_min < moved_min
+			              ? current_min : moved_min) - hmax;
+			double high = (current_max > moved_max
+			               ? current_max : moved_max) - hmin;
+
+			if (!isfinite(low) || !isfinite(high) ||
+			    low <= -(double)FLT_MAX || high >= (double)FLT_MAX)
+				return false;
+			if (low < (double)dmins[axis])
+				dmins[axis] = nextafterf((float)low, -INFINITY);
+			if (high > (double)dmaxs[axis])
+				dmaxs[axis] = nextafterf((float)high, INFINITY);
+		}
+	}
+	return true;
 }
 
 static qboolean SG_OracleSegmentBox(const vec3_t start, const vec3_t end,
@@ -1462,7 +1771,8 @@ static qboolean SG_OracleMoverSweepIdentity(edict_t *member)
 	member_index = SG_OracleLiveEdictIndex(member);
 	if (member_index <= game.maxclients + BODY_QUEUE_SIZE || !member->inuse ||
 	    member->linkcount <= 0 || member->solid != SOLID_BSP ||
-	    member->movetype != MOVETYPE_PUSH || !member->classname)
+	    member->movetype != MOVETYPE_PUSH || member->prethink ||
+	    !member->classname)
 		return false;
 	rotating = strcmp(member->classname, "func_door_rotating") == 0;
 	secret = strcmp(member->classname, "func_door") == 0 &&
@@ -1480,6 +1790,8 @@ static qboolean SG_OracleMoverSweepIdentity(edict_t *member)
 	    !SG_OracleFinite3(member->moveinfo.start_angles) ||
 	    !SG_OracleFinite3(member->moveinfo.end_angles) ||
 	    !SG_OracleFinite3(member->s.angles) ||
+	    !SG_OracleFinite3(member->velocity) ||
+	    !SG_OracleFinite3(member->avelocity) ||
 	    (secret && (!SG_OracleFinite3(member->pos1) ||
 	                !SG_OracleFinite3(member->pos2))))
 		return false;
@@ -1495,6 +1807,101 @@ static qboolean SG_OracleMoverSweepIdentity(edict_t *member)
 		return SG_OracleRotatingPoseValid(member);
 	return member->s.angles[0] == 0.0f && member->s.angles[1] == 0.0f &&
 	       member->s.angles[2] == 0.0f;
+}
+
+/* SV_Physics_Pusher calls a failed part's blocked callback after rollback and
+ * calls every part's due think after a successful move.  Geometry alone is
+ * therefore not an interlock: a drifted function pointer could mutate a
+ * protected subject after a positive sweep result.  Admit only callback/state
+ * combinations produced by the stock constant-speed door state machine. */
+static qboolean SG_OracleMoverCallbackStateValid(edict_t *member)
+{
+	void (*think)(edict_t *);
+	qboolean rotating, stopped, terminal;
+	int axis;
+
+	if (!member || member->use != door_use ||
+	    member->blocked != door_blocked ||
+	    (member->spawnflags & (SG_DOOR_START_OPEN | SG_DOOR_TOGGLE)) ||
+	    !isfinite(member->nextthink) || member->nextthink < 0.0f ||
+	    !isfinite(member->moveinfo.speed) ||
+	    member->moveinfo.speed <= 0.0f ||
+	    !isfinite(member->moveinfo.accel) ||
+	    !isfinite(member->moveinfo.decel) ||
+	    !isfinite(member->moveinfo.distance) ||
+	    member->moveinfo.distance == 0.0f ||
+	    !isfinite(member->moveinfo.wait) ||
+	    !isfinite(member->moveinfo.remaining_distance) ||
+	    !SG_OracleFinite3(member->moveinfo.dir))
+		return false;
+	rotating = strcmp(member->classname, "func_door_rotating") == 0;
+	/* Think_AccelMove has a larger mutable numeric state than the prospective
+	 * step can authenticate.  Canonical translating doors use the exact
+	 * constant-speed branch in Move_Calc. */
+	if (!rotating &&
+	    (member->moveinfo.accel != member->moveinfo.speed ||
+	     member->moveinfo.decel != member->moveinfo.speed))
+		return false;
+	if (member->moveinfo.endfunc != NULL &&
+	    member->moveinfo.endfunc != door_hit_top &&
+	    member->moveinfo.endfunc != door_hit_bottom)
+		return false;
+	switch (member->moveinfo.state)
+	{
+	case SG_PLAT_STATE_TOP:
+		if (member->moveinfo.endfunc != door_hit_top)
+			return false;
+		break;
+	case SG_PLAT_STATE_BOTTOM:
+		if (member->moveinfo.endfunc != NULL &&
+		    member->moveinfo.endfunc != door_hit_bottom)
+			return false;
+		break;
+	case SG_PLAT_STATE_UP:
+		if (member->moveinfo.endfunc != door_hit_top)
+			return false;
+		break;
+	case SG_PLAT_STATE_DOWN:
+		if (member->moveinfo.endfunc != door_hit_bottom)
+			return false;
+		break;
+	default:
+		return false;
+	}
+	stopped = true;
+	for (axis = 0; axis < 3; axis++)
+		if (member->velocity[axis] != 0.0f ||
+		    member->avelocity[axis] != 0.0f)
+			stopped = false;
+	terminal = member->moveinfo.state == SG_PLAT_STATE_TOP ||
+	           member->moveinfo.state == SG_PLAT_STATE_BOTTOM;
+	think = member->think;
+	if (!think)
+		return member->nextthink == 0.0f && terminal && stopped;
+	if (think == Think_CalcMoveSpeed || think == Think_SpawnDoorTrigger)
+		return member->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
+		       member->moveinfo.endfunc == NULL && stopped;
+	if (think == door_go_down)
+		return member->nextthink > 0.0f && stopped &&
+		       member->moveinfo.state == SG_PLAT_STATE_TOP;
+	if (!rotating &&
+	    (think == Move_Begin || think == Move_Final || think == Move_Done))
+	{
+		if (member->nextthink > 0.0f)
+			return !terminal;
+		/* SV_RunThink clears nextthink before the terminal callback.  The
+		 * callback pointer then remains installed on an idle stock door. */
+		return terminal && stopped;
+	}
+	if (rotating && (think == AngleMove_Begin ||
+	                 think == AngleMove_Final ||
+	                 think == AngleMove_Done))
+	{
+		if (member->nextthink > 0.0f)
+			return !terminal;
+		return terminal && stopped;
+	}
+	return false;
 }
 
 static qboolean SG_OracleMoverSubjectIdentity(edict_t *subject)
@@ -1557,6 +1964,43 @@ qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject)
 		if (mins[axis] > maxs[axis])
 			return false;
 	/* SegmentBox is inclusive: exact boundary contact remains occupied. */
+	return !SG_OracleSegmentBox(subject->s.origin, subject->s.origin,
+	                           mins, maxs);
+}
+
+qboolean SG_MoverProspectivePusherValid(edict_t *member)
+{
+	vec3_t mins, maxs;
+	int axis;
+
+	if (!SG_OracleMoverSweepIdentity(member) ||
+	    !SG_OracleMoverCallbackStateValid(member) ||
+	    !SG_OracleProspectiveDoorBounds(member, NULL, NULL, mins, maxs) ||
+	    !SG_OracleFinite3(mins) || !SG_OracleFinite3(maxs))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (mins[axis] > maxs[axis])
+			return false;
+	return true;
+}
+
+qboolean SG_MoverSubjectOutsideProspectivePush(edict_t *member,
+	edict_t *subject)
+{
+	vec3_t mins, maxs;
+	int axis;
+
+	if (member == subject || !SG_OracleMoverSweepIdentity(member) ||
+	    !SG_OracleMoverCallbackStateValid(member) ||
+	    !SG_OracleMoverSubjectIdentity(subject) ||
+	    subject->groundentity == member ||
+	    !SG_OracleProspectiveDoorBounds(member, subject->mins, subject->maxs,
+	        mins, maxs) || !SG_OracleFinite3(mins) ||
+	    !SG_OracleFinite3(maxs))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (mins[axis] > maxs[axis])
+			return false;
 	return !SG_OracleSegmentBox(subject->s.origin, subject->s.origin,
 	                           mins, maxs);
 }
@@ -1934,7 +2378,8 @@ qboolean SG_DeclaredDoorAtTopFor(edict_t *trigger, int window_ms)
 	{
 		edict_t *member = members[i];
 
-		if (!member->inuse || member->moveinfo.state != SG_PLAT_STATE_TOP)
+		if (!member->inuse || member->moveinfo.state != SG_PLAT_STATE_TOP ||
+		    !SG_MoverCompletionMatches(member, SG_MOVER_COMPLETION_TOP))
 			return false;
 		if (member->moveinfo.wait >= 0.0f &&
 		    (member->think != door_go_down ||
@@ -2017,7 +2462,9 @@ qboolean SG_DeclaredDoorHoldMembers(edict_t *const *members, int count,
 	{
 		edict_t *member = members[i];
 
-		if (member->moveinfo.state != SG_PLAT_STATE_TOP)
+		if (member->moveinfo.state != SG_PLAT_STATE_TOP ||
+		    !SG_MoverCompletionMatches(member,
+		                               SG_MOVER_COMPLETION_TOP))
 			return false;
 		if (member->moveinfo.wait >= 0.0f &&
 		    (member->think != door_go_down ||
@@ -2031,13 +2478,12 @@ qboolean SG_DeclaredDoorHoldMembers(edict_t *const *members, int count,
 	return true;
 }
 
-/* A release fence outlives its logical owner.  SV_Push rounds every linear
- * delta to one eighth, so a stock diagonal door does not necessarily finish
- * at the unquantized moveinfo endpoint.  The completion transaction leaves a
- * stronger witness: zero motion, no scheduled think, and the exact
- * door_hit_bottom/door_hit_top end callback installed by Move_Calc.  An
- * untouched initial BOTTOM has no end callback yet, so admit that one case
- * only at its exact declared start pose. */
+/* A release fence outlives its logical owner.  Quantized translating doors can
+ * accumulate an unbounded nominal-endpoint residual across repeated cycles;
+ * mutable callback/state fields therefore cannot prove physical completion.
+ * Require the out-of-edict snapshot published by the real stock callback.
+ * An exact initial BOTTOM is the sole no-witness exception, and only before
+ * any observed movement transition. */
 qboolean SG_DeclaredDoorMembersTerminal(edict_t *const *members, int count)
 {
 	int i;
@@ -2055,15 +2501,19 @@ qboolean SG_DeclaredDoorMembersTerminal(edict_t *const *members, int count)
 		    member->nextthink != 0.0f)
 			return false;
 		at_bottom = member->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
-		    (member->moveinfo.endfunc == door_hit_bottom ||
+		    ((member->moveinfo.endfunc == door_hit_bottom &&
+		      SG_MoverCompletionMatches(member,
+		                                SG_MOVER_COMPLETION_BOTTOM)) ||
 		     (!member->moveinfo.endfunc &&
+		      SG_MoverCompletionUntouched(member) &&
 		      VectorCompare(member->s.origin,
 		          member->moveinfo.start_origin) &&
 		      VectorCompare(member->s.angles,
 		          member->moveinfo.start_angles)));
 		at_permanent_top = member->moveinfo.state == SG_PLAT_STATE_TOP &&
 		    member->moveinfo.wait < 0.0f &&
-		    member->moveinfo.endfunc == door_hit_top;
+		    member->moveinfo.endfunc == door_hit_top &&
+		    SG_MoverCompletionMatches(member, SG_MOVER_COMPLETION_TOP);
 		if (!at_bottom && !at_permanent_top)
 			return false;
 	}
@@ -3432,10 +3882,11 @@ done:
 	return reason;
 }
 
-rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
+static rune_reject_reason_t SG_OracleCompoundSwimLiveSuffix(sg_phantom_t *ph,
 	const sg_compound_world_preopen_t *resolved, const vec3_t destination,
 	qboolean destination_water, float old_frame_z,
-	sg_compound_swim_recovery_proof_t *proof, edict_t *passent)
+	sg_compound_swim_recovery_proof_t *proof, edict_t *passent,
+	sg_oracle_compound_suffix_start_t start)
 {
 	sg_oracle_compound_scope_t scope;
 	sg_compound_swim_recovery_proof_t candidate;
@@ -3457,7 +3908,10 @@ rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
 	    !SG_CompoundWorldResolvedMember(resolved, &member) ||
 	    !SG_CompoundWorldAtTopFor(resolved, 0))
 		return RLR_MECHANISM_UNRESOLVED;
-	if (SG_CompoundWorldOutsideSweep(resolved, ph->origin))
+	if ((start == SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE &&
+	     !SG_CompoundWorldOutsideSweep(resolved, ph->origin)) ||
+	    (start == SG_ORACLE_COMPOUND_SUFFIX_INSIDE &&
+	     SG_CompoundWorldOutsideSweep(resolved, ph->origin)))
 		return RLR_SUFFIX_REPLAY_FAILED;
 
 	SG_OracleCompoundScopeEnter(&scope, resolved->trigger, member, passent,
@@ -3471,7 +3925,7 @@ rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
 	}
 	reason = SG_OracleCompoundSwimSuffix(ph, resolved, member, destination,
 		destination_water, old_frame_z, passent,
-		SG_ORACLE_COMPOUND_SUFFIX_INSIDE, true, &candidate);
+		start, true, &candidate);
 	if (reason == RLR_OK)
 		*proof = candidate;
 
@@ -3479,6 +3933,26 @@ done:
 	if (scope_entered)
 		SG_OracleCompoundScopeRestore(&scope);
 	return reason;
+}
+
+rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_recovery_proof_t *proof, edict_t *passent)
+{
+	return SG_OracleCompoundSwimLiveSuffix(ph, resolved, destination,
+		destination_water, old_frame_z, proof, passent,
+		SG_ORACLE_COMPOUND_SUFFIX_INSIDE);
+}
+
+rune_reject_reason_t SG_OracleCompoundSwimContinue(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_recovery_proof_t *proof, edict_t *passent)
+{
+	return SG_OracleCompoundSwimLiveSuffix(ph, resolved, destination,
+		destination_water, old_frame_z, proof, passent,
+		SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE);
 }
 
 /* A submerged teleporter has no stable rest state and cannot use the planar

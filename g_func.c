@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_compound_world.h"
 
 /*
 =========================================================
@@ -58,7 +59,12 @@
 void Move_Done (edict_t *ent)
 {
 	VectorClear (ent->velocity);
-	ent->moveinfo.endfunc (ent);
+	/* Move_Calc can complete synchronously during a blocked reversal while an
+	 * older Move_Final is still scheduled.  Consume that stale callback before
+	 * publishing the new endpoint; the endpoint callback may install its own
+	 * deliberate schedule (for example door_go_down at TOP). */
+	ent->nextthink = 0;
+	SG_MoverCompletionDispatch (ent);
 }
 
 void Move_Final (edict_t *ent)
@@ -99,6 +105,7 @@ void Move_Calc (edict_t *ent, vec3_t dest, void(*func)(edict_t*))
 	VectorSubtract (dest, ent->s.origin, ent->moveinfo.dir);
 	ent->moveinfo.remaining_distance = VectorNormalize (ent->moveinfo.dir);
 	ent->moveinfo.endfunc = func;
+	SG_MoverCompletionArm (ent);
 
 	if (ent->moveinfo.speed == ent->moveinfo.accel && ent->moveinfo.speed == ent->moveinfo.decel)
 	{
@@ -129,7 +136,8 @@ void Move_Calc (edict_t *ent, vec3_t dest, void(*func)(edict_t*))
 void AngleMove_Done (edict_t *ent)
 {
 	VectorClear (ent->avelocity);
-	ent->moveinfo.endfunc (ent);
+	ent->nextthink = 0;
+	SG_MoverCompletionDispatch (ent);
 }
 
 void AngleMove_Final (edict_t *ent)
@@ -192,6 +200,7 @@ void AngleMove_Calc (edict_t *ent, void(*func)(edict_t*))
 {
 	VectorClear (ent->avelocity);
 	ent->moveinfo.endfunc = func;
+	SG_MoverCompletionArm (ent);
 	if (level.current_entity == ((ent->flags & FL_TEAMSLAVE) ? ent->teammaster : ent))
 	{
 		AngleMove_Begin (ent);
@@ -861,13 +870,12 @@ void door_hit_top (edict_t *self)
 		self->s.sound = 0;
 	}
 	self->moveinfo.state = STATE_TOP;
-	if (self->spawnflags & DOOR_TOGGLE)
-		return;
-	if (self->moveinfo.wait >= 0)
+	if (!(self->spawnflags & DOOR_TOGGLE) && self->moveinfo.wait >= 0)
 	{
 		self->think = door_go_down;
 		self->nextthink = level.time + self->moveinfo.wait;
 	}
+	SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_TOP);
 }
 
 void door_hit_bottom (edict_t *self)
@@ -880,10 +888,12 @@ void door_hit_bottom (edict_t *self)
 	}
 	self->moveinfo.state = STATE_BOTTOM;
 	door_use_areaportals (self, false);
+	SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_BOTTOM);
 }
 
 void door_go_down (edict_t *self)
 {
+	SG_MoverCompletionTransition(self);
 	if (!(self->flags & FL_TEAMSLAVE))
 	{
 		if (self->moveinfo.sound_start)
@@ -914,6 +924,7 @@ void door_go_up (edict_t *self, edict_t *activator)
 			self->nextthink = level.time + self->moveinfo.wait;
 		return;
 	}
+	SG_MoverCompletionTransition(self);
 	
 	if (!(self->flags & FL_TEAMSLAVE))
 	{

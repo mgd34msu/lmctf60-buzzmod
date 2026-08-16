@@ -1,4 +1,5 @@
 /* Host fixture for adapter-owned edict incarnations and fail-closed seams. */
+#include <float.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -6,9 +7,10 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_compound_guard_game.h"
 
-#define TEST_EDICTS 16
+#define TEST_EDICTS 24
 
 game_export_t globals;
 game_locals_t game;
@@ -33,12 +35,38 @@ static int last_respawn_key;
 static uint64_t last_respawn_generation;
 static int sweep_outside = 1;
 static int sweep_inside_key;
+static int prospective_outside = 1;
+static int prospective_inside_key;
+static int prospective_calls;
+static int prospective_pusher_valid = 1;
+static int prospective_pusher_valid_calls;
+static sg_compound_guard_result_t pusher_fence_result =
+    SG_COMPOUND_GUARD_NO_LEASE;
+static sg_mover_key_t pusher_fence_overlap_key;
+static int pusher_fence_calls;
+static sg_mover_key_t pusher_fence_keys[SG_MOVER_LEASE_MAX_KEYS];
+static size_t pusher_fence_key_count;
+static sg_compound_guard_result_t any_door_result =
+    SG_COMPOUND_GUARD_NO_LEASE;
+static int any_door_calls;
 static int hold_member_calls;
 static int hold_member_ok = 1;
 static int terminal_member_calls;
 static int terminal_member_ok = 1;
+static int compound_hold_calls;
+static int compound_hold_ok = 1;
+static edict_t *compound_hold_member;
+static int compound_hold_lease_ms;
+static int compound_terminal_calls;
+static int compound_terminal_ok = 1;
+static edict_t *compound_terminal_member;
+static edict_t *compound_expected_member;
 static int body_die_calls;
 static int body_die_clears = 1;
+static int completion_reset_calls;
+static int completion_forget_calls;
+static int completion_transition_calls;
+static edict_t *completion_forgot;
 static sg_compound_guard_result_t respawn_result = SG_COMPOUND_GUARD_OK;
 static sg_compound_guard_result_t validate_result =
     SG_COMPOUND_GUARD_NO_LEASE;
@@ -102,6 +130,21 @@ qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject)
 	       sweep_outside && subject->s.number != sweep_inside_key;
 }
 
+qboolean SG_MoverSubjectOutsideProspectivePush(edict_t *member,
+	edict_t *subject)
+{
+	prospective_calls++;
+	return member && subject && member->inuse && subject->inuse &&
+	       prospective_outside && subject->s.number != prospective_inside_key;
+}
+
+qboolean SG_MoverProspectivePusherValid(edict_t *member)
+{
+	prospective_pusher_valid_calls++;
+	return prospective_pusher_valid && member && member->inuse &&
+	       !member->prethink;
+}
+
 qboolean SG_DeclaredDoorHoldMembers(edict_t *const *members, int count,
 	int lease_ms)
 {
@@ -127,6 +170,40 @@ qboolean SG_DeclaredDoorMembersTerminal(edict_t *const *members, int count)
 		if (!members[index] || !members[index]->inuse)
 			return false;
 	return true;
+}
+
+int SG_CompoundWorldHoldMember(edict_t *member, int lease_ms)
+{
+	compound_hold_calls++;
+	compound_hold_member = member;
+	compound_hold_lease_ms = lease_ms;
+	return compound_hold_ok && lease_ms == 500 && member && member->inuse &&
+	       (!compound_expected_member || member == compound_expected_member);
+}
+
+int SG_CompoundWorldMemberTerminal(edict_t *member)
+{
+	compound_terminal_calls++;
+	compound_terminal_member = member;
+	return compound_terminal_ok && member && member->inuse &&
+	       (!compound_expected_member || member == compound_expected_member);
+}
+
+void SG_MoverCompletionReset(void)
+{
+	completion_reset_calls++;
+}
+
+void SG_MoverCompletionForget(edict_t *member)
+{
+	completion_forget_calls++;
+	completion_forgot = member;
+}
+
+void SG_MoverCompletionTransition(edict_t *member)
+{
+	CHECK(member != NULL);
+	completion_transition_calls++;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardInit(
@@ -205,6 +282,32 @@ int SG_CompoundGuardRecordAt(size_t slot,
 	if (record_out)
 		*record_out = global_record;
 	return 1;
+}
+
+sg_compound_guard_result_t SG_CompoundGuardDoorPusherFence(
+	const sg_mover_key_t *keys, size_t key_count)
+{
+	size_t index;
+	int overlaps = pusher_fence_overlap_key == 0U;
+
+	pusher_fence_calls++;
+	pusher_fence_key_count = key_count;
+	memset(pusher_fence_keys, 0, sizeof(pusher_fence_keys));
+	if (keys && key_count <= SG_MOVER_LEASE_MAX_KEYS)
+		memcpy(pusher_fence_keys, keys,
+		    key_count * sizeof(pusher_fence_keys[0]));
+	for (index = 0U; keys && index < key_count; index++)
+		if (keys[index] == pusher_fence_overlap_key)
+			overlaps = 1;
+	if (pusher_fence_result == SG_COMPOUND_GUARD_OK && !overlaps)
+		return SG_COMPOUND_GUARD_NO_LEASE;
+	return pusher_fence_result;
+}
+
+sg_compound_guard_result_t SG_CompoundGuardAnyDoorTransaction(void)
+{
+	any_door_calls++;
+	return any_door_result;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardBodyWillReplace(int32_t body_key)
@@ -302,11 +405,35 @@ static void ResetWorld(void)
 	hold_member_ok = 1;
 	terminal_member_calls = 0;
 	terminal_member_ok = 1;
+	compound_hold_calls = 0;
+	compound_hold_ok = 1;
+	compound_hold_member = NULL;
+	compound_hold_lease_ms = 0;
+	compound_terminal_calls = 0;
+	compound_terminal_ok = 1;
+	compound_terminal_member = NULL;
+	compound_expected_member = NULL;
 	body_die_calls = 0;
 	body_die_clears = 1;
+	completion_reset_calls = 0;
+	completion_forget_calls = 0;
+	completion_transition_calls = 0;
+	completion_forgot = NULL;
 	validate_result = SG_COMPOUND_GUARD_NO_LEASE;
 	run_state = SG_COMPOUND_GUARD_RUN_READY;
 	sweep_inside_key = 0;
+	prospective_outside = 1;
+	prospective_inside_key = 0;
+	prospective_calls = 0;
+	prospective_pusher_valid = 1;
+	prospective_pusher_valid_calls = 0;
+	pusher_fence_result = SG_COMPOUND_GUARD_NO_LEASE;
+	pusher_fence_overlap_key = 0U;
+	pusher_fence_calls = 0;
+	pusher_fence_key_count = 0U;
+	memset(pusher_fence_keys, 0, sizeof(pusher_fence_keys));
+	any_door_result = SG_COMPOUND_GUARD_NO_LEASE;
+	any_door_calls = 0;
 	g_edicts = entities;
 	game.maxentities = TEST_EDICTS;
 	game.maxclients = 2;
@@ -315,6 +442,118 @@ static void ResetWorld(void)
 	globals.edict_size = sizeof(edict_t);
 	globals.num_edicts = TEST_EDICTS;
 	globals.max_edicts = TEST_EDICTS;
+}
+
+static void CheckCompoundMalformedKeys(const sg_mover_key_t *keys,
+	size_t key_count)
+{
+	int hold_before = compound_hold_calls;
+	int terminal_before = compound_terminal_calls;
+
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, keys, key_count, 500) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, keys, key_count) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(compound_hold_calls == hold_before);
+	CHECK(compound_terminal_calls == terminal_before);
+}
+
+static void TestCompoundLifecycleDispatch(void)
+{
+	sg_mover_key_t singleton[] = { 10U };
+	sg_mover_key_t wrong[] = { 11U };
+	sg_mover_key_t multiple[] = { 10U, 12U };
+	sg_mover_key_t zero[] = { 0U };
+	sg_mover_key_t out_of_range[] = { TEST_EDICTS };
+	sg_mover_key_t duplicate[] = { 10U, 10U };
+	sg_mover_key_t reversed[] = { 12U, 10U };
+	int hold_before;
+	int terminal_before;
+
+	LiveEntity(10, "func_door");
+	LiveEntity(11, "not-a-door");
+	LiveEntity(12, "func_door");
+	compound_expected_member = &entities[10];
+
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, singleton, 1U, 500) ==
+	      SG_COMPOUND_GUARD_YES);
+	CHECK(compound_hold_calls == 1 &&
+	      compound_hold_member == &entities[10] &&
+	      compound_hold_lease_ms == 500);
+	CHECK(hold_member_calls == 0);
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, singleton, 1U) ==
+	      SG_COMPOUND_GUARD_YES);
+	CHECK(compound_terminal_calls == 1 &&
+	      compound_terminal_member == &entities[10]);
+	CHECK(terminal_member_calls == 0);
+
+	/* The adapter preserves the world helper's negative observation. */
+	compound_hold_ok = 0;
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, singleton, 1U, 500) ==
+	      SG_COMPOUND_GUARD_NO);
+	compound_hold_ok = 1;
+	compound_terminal_ok = 0;
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, singleton, 1U) ==
+	      SG_COMPOUND_GUARD_NO);
+	compound_terminal_ok = 1;
+
+	/* A valid but wrong physical member is dispatched exactly and rejected by
+	 * the member-level revalidation, never redirected to ordinary-door code. */
+	hold_before = compound_hold_calls;
+	terminal_before = compound_terminal_calls;
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, wrong, 1U, 500) ==
+	      SG_COMPOUND_GUARD_NO);
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, wrong, 1U) ==
+	      SG_COMPOUND_GUARD_NO);
+	CHECK(compound_hold_calls == hold_before + 1 &&
+	      compound_hold_member == &entities[11]);
+	CHECK(compound_terminal_calls == terminal_before + 1 &&
+	      compound_terminal_member == &entities[11]);
+	CHECK(hold_member_calls == 0 && terminal_member_calls == 0);
+
+	/* COMPOUND_PREOPEN owns exactly one leaf.  A well-formed multi-key set is
+	 * a negative observation and must not partially dispatch either member. */
+	hold_before = compound_hold_calls;
+	terminal_before = compound_terminal_calls;
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, multiple, 2U, 500) ==
+	      SG_COMPOUND_GUARD_NO);
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, multiple, 2U) ==
+	      SG_COMPOUND_GUARD_NO);
+	CHECK(compound_hold_calls == hold_before);
+	CHECK(compound_terminal_calls == terminal_before);
+
+	CheckCompoundMalformedKeys(NULL, 1U);
+	CheckCompoundMalformedKeys(singleton, 0U);
+	CheckCompoundMalformedKeys(zero, 1U);
+	CheckCompoundMalformedKeys(out_of_range, 1U);
+	CheckCompoundMalformedKeys(duplicate, 2U);
+	CheckCompoundMalformedKeys(reversed, 2U);
+	CheckCompoundMalformedKeys(singleton,
+	    (size_t)SG_MOVER_LEASE_MAX_KEYS + 1U);
+
+	/* An unknown law cannot fall through into either lifecycle backend. */
+	hold_before = compound_hold_calls;
+	terminal_before = compound_terminal_calls;
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_NONE, singleton, 1U, 500) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_NONE, singleton, 1U) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(compound_hold_calls == hold_before &&
+	      compound_terminal_calls == terminal_before);
+	CHECK(hold_member_calls == 0 && terminal_member_calls == 0);
+	compound_expected_member = NULL;
 }
 
 static uint64_t CurrentGeneration(int key)
@@ -357,6 +596,7 @@ static void TestIdentityABAAndBounds(void)
 	CHECK(SG_CompoundGuardGameClientSpawned((edict_t *)(uintptr_t)1U) ==
 	      SG_COMPOUND_GUARD_INVALID_ARGUMENT);
 	SG_CompoundGuardGameEntityFreed(&foreign);
+	CHECK(completion_forgot == &foreign);
 	CHECK(CurrentGeneration(1) == first_generation);
 	entities[1].s.number = 7;
 	CHECK(captured_host.identity(captured_host.context, 1, &ignored) ==
@@ -373,6 +613,7 @@ static void TestIdentityABAAndBounds(void)
 
 	entities[1].inuse = false;
 	SG_CompoundGuardGameEntityFreed(&entities[1]);
+	CHECK(completion_forgot == &entities[1]);
 	CHECK(captured_host.identity(captured_host.context, 1, &ignored) ==
 	      SG_COMPOUND_GUARD_NO);
 	LiveEntity(1, "player");
@@ -433,6 +674,7 @@ static void TestBodyAndHookIncarnations(void)
 	      SG_COMPOUND_GUARD_OK);
 	hook_generation = CurrentGeneration(11);
 	LiveEntity(10, "func_door");
+	entities[10].teammaster = &entities[10];
 	/* Record-wide clearance covers each bot-derived physical kind in isolation,
 	 * not only the lease owner's current client edict. */
 	sweep_outside = 1;
@@ -471,6 +713,32 @@ static void TestBodyAndHookIncarnations(void)
 	      &mover_key, 1U) == SG_COMPOUND_GUARD_OBSERVATION_ERROR);
 	CHECK(body_die_calls == 2 && entities[3].solid == SOLID_BBOX);
 	body_die_clears = 1;
+	/* The pre-pusher path reuses the same typed, two-phase cleanup, but asks
+	 * only about the next exact engine push. */
+	pusher_fence_result = SG_COMPOUND_GUARD_OK;
+	entities[1].solid = SOLID_NOT;
+	entities[1].movetype = MOVETYPE_WALK;
+	entities[1].area.prev = &entities[0].area;
+	prospective_outside = 1;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(&entities[10]));
+	entities[1].area.prev = NULL;
+	CHECK(SG_CompoundGuardGamePusherMayAdvance(&entities[10]));
+	entities[1].movetype = MOVETYPE_NONE;
+	prospective_outside = 0;
+	body_calls_before = body_die_calls;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(&entities[10]));
+	CHECK(body_die_calls == body_calls_before &&
+	      entities[3].solid == SOLID_BBOX);
+	entities[1].solid = SOLID_BBOX;
+	prospective_outside = 1;
+	prospective_inside_key = 3;
+	CHECK(SG_CompoundGuardGamePusherMayAdvance(&entities[10]));
+	CHECK(body_die_calls == 3 && entities[3].solid == SOLID_NOT &&
+	      entities[3].takedamage == DAMAGE_NO);
+	prospective_inside_key = 11;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(&entities[10]));
+	prospective_inside_key = 0;
+	pusher_fence_result = SG_COMPOUND_GUARD_NO_LEASE;
 	entities[3].solid = SOLID_NOT;
 	entities[3].takedamage = DAMAGE_NO;
 	sweep_inside_key = 11;
@@ -656,9 +924,171 @@ static void TestBodyAndHookIncarnations(void)
 	      SG_COMPOUND_GUARD_NO);
 }
 
+static void TestPusherFenceBasics(void)
+{
+	edict_t *captain = &entities[15];
+	edict_t *slave = &entities[12];
+	edict_t *parts[17];
+	int index;
+	int calls_before;
+	int transitions_before;
+	int valid_before;
+
+	LiveEntity(15, "func_door");
+	LiveEntity(12, "func_door");
+	captain->teamchain = slave;
+	captain->teammaster = captain;
+	slave->teammaster = captain;
+	slave->flags |= FL_TEAMSLAVE;
+	prospective_inside_key = 1;
+	pusher_fence_result = SG_COMPOUND_GUARD_NO_LEASE;
+	calls_before = prospective_calls;
+	CHECK(SG_CompoundGuardGamePusherMayAdvance(captain));
+	CHECK(prospective_calls == calls_before);
+	CHECK(pusher_fence_key_count == 2U && pusher_fence_keys[0] == 12U &&
+	      pusher_fence_keys[1] == 15U);
+	/* A denied captain defers the complete team's absolute mover schedule once,
+	 * exactly like stock blocked-pusher rollback.  Visiting the slave later in
+	 * the entity loop must not add a second frame. */
+	captain->nextthink = 10.0f;
+	slave->nextthink = 20.0f;
+	SG_CompoundGuardGameEntityDeferred(captain);
+	CHECK(captain->nextthink == 10.0f + FRAMETIME);
+	CHECK(slave->nextthink == 20.0f + FRAMETIME);
+	SG_CompoundGuardGameEntityDeferred(slave);
+	CHECK(captain->nextthink == 10.0f + FRAMETIME);
+	CHECK(slave->nextthink == 20.0f + FRAMETIME);
+	/* Malformed pusher state cannot be advanced or delayed as if canonical;
+	 * all observed movement arms are invalidated instead. */
+	prospective_pusher_valid = 0;
+	transitions_before = completion_transition_calls;
+	SG_CompoundGuardGameEntityDeferred(captain);
+	CHECK(completion_transition_calls == transitions_before + 2);
+	prospective_pusher_valid = 1;
+	captain->nextthink = FLT_MAX;
+	slave->nextthink = 0.0f;
+	transitions_before = completion_transition_calls;
+	SG_CompoundGuardGameEntityDeferred(captain);
+	CHECK(captain->nextthink == FLT_MAX);
+	CHECK(completion_transition_calls == transitions_before + 2);
+	captain->nextthink = 0.0f;
+	slave->nextthink = 0.0f;
+	pusher_fence_result = SG_COMPOUND_GUARD_NOT_INITIALIZED;
+	CHECK(SG_CompoundGuardGamePusherMayAdvance(captain));
+	pusher_fence_result = SG_COMPOUND_GUARD_HOST_ERROR;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(captain));
+	CHECK(prospective_calls == calls_before);
+	pusher_fence_result = SG_COMPOUND_GUARD_OK;
+	prospective_inside_key = 0;
+	valid_before = prospective_pusher_valid_calls;
+	CHECK(SG_CompoundGuardGamePusherMayAdvance(captain));
+	CHECK(prospective_pusher_valid_calls == valid_before + 2);
+	CHECK(prospective_calls == calls_before + 2);
+	prospective_inside_key = 1;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(captain));
+	/* The same transaction-aware gate protects a slave prethink dispatch. */
+	CHECK(!SG_CompoundGuardGameEntityMayDispatch(slave));
+	pusher_fence_result = SG_COMPOUND_GUARD_NO_LEASE;
+	CHECK(SG_CompoundGuardGameEntityMayDispatch(slave));
+
+	/* Member validation is population-independent: with the protected client
+	 * physically skipped, malformed prospective pusher state still freezes. */
+	entities[1].solid = SOLID_NOT;
+	entities[1].movetype = MOVETYPE_NOCLIP;
+	pusher_fence_result = SG_COMPOUND_GUARD_OK;
+	prospective_pusher_valid = 0;
+	CHECK(!SG_CompoundGuardGameEntityMayDispatch(captain));
+	prospective_pusher_valid = 1;
+	entities[1].solid = SOLID_BBOX;
+	entities[1].movetype = MOVETYPE_WALK;
+
+	/* A forward-appended leaf with standalone metadata would otherwise run a
+	 * second pusher dispatch later in the entity loop.  Its non-stock backlink
+	 * now freezes both the captain's first dispatch and the leaf's later one. */
+	slave->flags &= ~FL_TEAMSLAVE;
+	slave->teammaster = slave;
+	pusher_fence_result = SG_COMPOUND_GUARD_OK;
+	pusher_fence_overlap_key = 15U;
+	any_door_result = SG_COMPOUND_GUARD_OK;
+	prospective_inside_key = 0;
+	CHECK(!SG_CompoundGuardGameEntityMayDispatch(captain));
+	CHECK(!SG_CompoundGuardGameEntityMayDispatch(slave));
+	pusher_fence_overlap_key = 0U;
+	any_door_result = SG_COMPOUND_GUARD_NO_LEASE;
+	slave->flags |= FL_TEAMSLAVE;
+	slave->teammaster = captain;
+
+	/* The canonical blocked callback dereferences teammaster on rollback.
+	 * A captured singleton with a foreign or merely wrong master is therefore
+	 * denied before prospective geometry can authorize SV_Push. */
+	captain->teamchain = NULL;
+	captain->teammaster = (edict_t *)(uintptr_t)1U;
+	pusher_fence_result = SG_COMPOUND_GUARD_OK;
+	pusher_fence_overlap_key = 15U;
+	any_door_result = SG_COMPOUND_GUARD_OK;
+	CHECK(!SG_CompoundGuardGameEntityMayDispatch(captain));
+	captain->teammaster = slave;
+	CHECK(!SG_CompoundGuardGameEntityMayDispatch(captain));
+	captain->teammaster = captain;
+	captain->teamchain = slave;
+	pusher_fence_overlap_key = 0U;
+	any_door_result = SG_COMPOUND_GUARD_NO_LEASE;
+
+	/* Stock singleton trains/plats do not install a self teammaster.  Even
+	 * while another door transaction exists, exact NO_LEASE keeps them live. */
+	LiveEntity(14, "func_train");
+	entities[14].movetype = MOVETYPE_PUSH;
+	pusher_fence_result = SG_COMPOUND_GUARD_OK;
+	pusher_fence_overlap_key = 15U;
+	any_door_result = SG_COMPOUND_GUARD_OK;
+	CHECK(SG_CompoundGuardGameEntityMayDispatch(&entities[14]));
+	pusher_fence_overlap_key = 0U;
+	any_door_result = SG_COMPOUND_GUARD_NO_LEASE;
+
+	/* A corrupt cycle is irrelevant to an unguarded mapper pusher, but a
+	 * guarded captain freezes without trying a partial prospective proof. */
+	slave->teamchain = captain;
+	pusher_fence_result = SG_COMPOUND_GUARD_NO_LEASE;
+	calls_before = any_door_calls;
+	CHECK(SG_CompoundGuardGamePusherMayAdvance(captain));
+	CHECK(pusher_fence_key_count == 1U && pusher_fence_keys[0] == 15U &&
+	      any_door_calls == calls_before + 1);
+	calls_before = prospective_calls;
+	pusher_fence_result = SG_COMPOUND_GUARD_OK;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(captain));
+	CHECK(prospective_calls == calls_before);
+	slave->teamchain = NULL;
+	prospective_inside_key = 0;
+	pusher_fence_result = SG_COMPOUND_GUARD_NO_LEASE;
+
+	/* A seventeenth member is beyond the captured-key bound.  The malformed
+	 * chain may run only after a global proof that its hidden suffix cannot be
+	 * protected; an unrelated/hidden transaction makes it freeze closed. */
+	for (index = 0; index < 17; index++)
+	{
+		parts[index] = &entities[index + 3];
+		LiveEntity(index + 3, "func_door");
+		if (index > 0)
+			parts[index]->flags |= FL_TEAMSLAVE;
+		if (index > 0)
+			parts[index - 1]->teamchain = parts[index];
+	}
+	pusher_fence_result = SG_COMPOUND_GUARD_NO_LEASE;
+	any_door_result = SG_COMPOUND_GUARD_NO_LEASE;
+	calls_before = any_door_calls;
+	CHECK(SG_CompoundGuardGamePusherMayAdvance(parts[0]));
+	CHECK(pusher_fence_key_count == 1U && pusher_fence_keys[0] == 3U &&
+	      any_door_calls == calls_before + 1);
+	any_door_result = SG_COMPOUND_GUARD_OK;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(parts[0]));
+	any_door_result = SG_COMPOUND_GUARD_HOST_ERROR;
+	CHECK(!SG_CompoundGuardGamePusherMayAdvance(parts[0]));
+	any_door_result = SG_COMPOUND_GUARD_NO_LEASE;
+}
+
 static void TestDisconnectAndExhaustion(void)
 {
-	int resets_before, level_resets_before;
+	int bot_resets_before, completion_resets_before, level_resets_before;
 	int slot;
 	uint64_t generation = 0U;
 
@@ -672,11 +1102,13 @@ static void TestDisconnectAndExhaustion(void)
 
 	for (slot = 0; slot < SG_MAXBOTS; slot++)
 		sg_bots[slot].compound_guard.attached = 1U;
-	resets_before = bot_reset_calls;
+	bot_resets_before = bot_reset_calls;
 	level_resets_before = level_resets;
+	completion_resets_before = completion_reset_calls;
 	SG_CompoundGuardGameStorageWillFree();
 	CHECK(level_resets == level_resets_before + 1);
-	CHECK(bot_reset_calls == resets_before + SG_MAXBOTS);
+	CHECK(completion_reset_calls == completion_resets_before + 1);
+	CHECK(bot_reset_calls == bot_resets_before + SG_MAXBOTS);
 	for (slot = 0; slot < SG_MAXBOTS; slot++)
 		CHECK(sg_bots[slot].compound_guard.attached == 0U);
 	CHECK(captured_host.identity(captured_host.context, 3, &generation) ==
@@ -702,12 +1134,15 @@ int main(void)
 	ResetWorld();
 	CHECK(SG_CompoundGuardGameLevelReset() == SG_COMPOUND_GUARD_OK);
 	CHECK(level_resets == 1);
+	CHECK(completion_reset_calls == 1);
 	CHECK(captured_host.identity != NULL && captured_host.solid != NULL &&
 	      captured_host.outside_sweep != NULL &&
 	      captured_host.all_subjects_outside != NULL &&
 	      captured_host.hold_open != NULL &&
 	      captured_host.set_terminal != NULL);
+	TestCompoundLifecycleDispatch();
 	TestIdentityABAAndBounds();
+	TestPusherFenceBasics();
 	TestBodyAndHookIncarnations();
 	TestDisconnectAndExhaustion();
 	if (failures)

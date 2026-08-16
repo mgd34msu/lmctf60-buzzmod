@@ -2,6 +2,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_compound_guard_game.h"
 #ifdef SG_ACCEPT_DROP
 #include "slipgate/sg_accept_drop.h"
 #endif
@@ -940,6 +941,14 @@ G_RunEntity
 */
 void G_RunEntity (edict_t *ent)
 {
+	/* The world cannot own a door lease.  Every other non-client edict is
+	 * fenced by captured key before prethink or physics, so a drifted captain,
+	 * team slave, or retirement cannot escape through mutable movetype/flags. */
+	if (ent != g_edicts && !SG_CompoundGuardGameEntityMayDispatch(ent))
+	{
+		SG_CompoundGuardGameEntityDeferred(ent);
+		return;
+	}
 	if (ent->prethink)
 		ent->prethink (ent);
 

@@ -221,6 +221,84 @@ static void Attach(sg_compound_guard_bot_t *bot, int slot, int client_key)
 	      SG_COMPOUND_GUARD_OK);
 }
 
+static void TestCompoundOverlapQuery(void)
+{
+	sg_compound_guard_bot_t bot;
+	sg_mover_key_t keys[] = {33U, 44U};
+	sg_mover_key_t overlap[] = {44U, 55U};
+	sg_mover_key_t disjoint[] = {45U, 55U};
+	sg_mover_key_t invalid[] = {55U, 44U};
+	sg_compound_guard_frame_stats_t stats;
+
+	/* The callback boundary cannot distinguish unavailable state from an owned
+	 * compound mover, so the pre-initialization and malformed-input cases are
+	 * deliberately occupied. */
+	CHECK(SG_CompoundGuardCompoundOverlaps(keys, 2U));
+	CHECK(SG_CompoundGuardDoorPusherFence(keys, 2U) ==
+	      SG_COMPOUND_GUARD_NOT_INITIALIZED);
+	CHECK(SG_CompoundGuardAnyDoorTransaction() ==
+	      SG_COMPOUND_GUARD_NOT_INITIALIZED);
+	ResetGuard();
+	CHECK(SG_CompoundGuardCompoundOverlaps(NULL, 0U));
+	CHECK(SG_CompoundGuardCompoundOverlaps(invalid, 2U));
+	CHECK(!SG_CompoundGuardCompoundOverlaps(keys, 2U));
+	CHECK(SG_CompoundGuardDoorPusherFence(NULL, 0U) ==
+	      SG_COMPOUND_GUARD_INVALID_KEYS);
+	CHECK(SG_CompoundGuardDoorPusherFence(invalid, 2U) ==
+	      SG_COMPOUND_GUARD_INVALID_KEYS);
+	CHECK(SG_CompoundGuardDoorPusherFence(keys, 2U) ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+	CHECK(SG_CompoundGuardAnyDoorTransaction() ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+	Attach(&bot, 12, 13);
+
+	/* A valid declared record is not an exact compound callback fence. */
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&bot, keys, 2U, 29) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(!SG_CompoundGuardCompoundOverlaps(keys, 2U));
+	CHECK(SG_CompoundGuardDoorPusherFence(overlap, 2U) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardDoorPusherFence(disjoint, 2U) ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+	CHECK(SG_CompoundGuardAnyDoorTransaction() == SG_COMPOUND_GUARD_OK);
+	fake.terminal_ok = 0;
+	CHECK(SG_CompoundGuardReleaseProvedClear(&bot) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(!SG_CompoundGuardCompoundOverlaps(keys, 2U));
+	CHECK(SG_CompoundGuardDoorPusherFence(overlap, 2U) ==
+	      SG_COMPOUND_GUARD_OK);
+	fake.terminal_ok = 1;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(SG_CompoundGuardDoorPusherFence(overlap, 2U) ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+	CHECK(SG_CompoundGuardAnyDoorTransaction() ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&bot, keys, 2U, 30, 4U) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardCompoundOverlaps(overlap, 2U));
+	CHECK(!SG_CompoundGuardCompoundOverlaps(disjoint, 2U));
+	CHECK(SG_CompoundGuardDoorPusherFence(overlap, 2U) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardDoorPusherFence(disjoint, 2U) ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+	CHECK(SG_CompoundGuardAnyDoorTransaction() == SG_COMPOUND_GUARD_OK);
+	fake.terminal_ok = 0;
+	CHECK(SG_CompoundGuardReleaseProvedClear(&bot) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardCompoundOverlaps(overlap, 2U));
+	CHECK(!SG_CompoundGuardCompoundOverlaps(disjoint, 2U));
+	CHECK(SG_CompoundGuardDoorPusherFence(overlap, 2U) ==
+	      SG_COMPOUND_GUARD_OK);
+	fake.terminal_ok = 1;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(!SG_CompoundGuardCompoundOverlaps(overlap, 2U));
+	CHECK(SG_CompoundGuardDoorPusherFence(overlap, 2U) ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+	CHECK(SG_CompoundGuardAnyDoorTransaction() ==
+	      SG_COMPOUND_GUARD_NO_LEASE);
+}
+
 static void TestSharedAcquirePauseAndClear(void)
 {
 	sg_compound_guard_bot_t door_bot, compound_bot;
@@ -248,7 +326,7 @@ static void TestSharedAcquirePauseAndClear(void)
 	      overlap_keys, 2U, 18, 3U) == SG_COMPOUND_GUARD_CONFLICT);
 	CHECK(action_revision_gate == 0U);
 	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&compound_bot,
-	      clear_keys, 2U, 18, 3U) == SG_COMPOUND_GUARD_OK);
+	      clear_keys, 2U, 18, 3U) == SG_COMPOUND_GUARD_CONFLICT);
 	CHECK(SG_CompoundGuardValidate(&door_bot, &record) ==
 	      SG_COMPOUND_GUARD_OK);
 	CHECK(record.law == SG_MOVER_LAW_DECLARED_DOOR &&
@@ -278,8 +356,25 @@ static void TestSharedAcquirePauseAndClear(void)
 	CHECK(SG_CompoundGuardReleaseProvedClear(&door_bot) ==
 	      SG_COMPOUND_GUARD_OK);
 	CHECK(!SG_MoverTicketValid(&door_bot.ticket));
+	/* Acquisition refreshes the now-terminal declared retirement, then admits
+	 * the compound transaction.  While it is live, the reverse disjoint
+	 * compound-to-declared direction is serialized too. */
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&compound_bot,
+	      clear_keys, 2U, 18, 3U) == SG_COMPOUND_GUARD_OK);
 	CHECK(SG_CompoundGuardAcquireDeclaredDoorBound(&door_bot, door_keys,
 	      2U, 19, 0U) == SG_COMPOUND_GUARD_INVALID_ARGUMENT);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoorBound(&door_bot, door_keys,
+	      2U, 19, 77U) == SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardValidate(&compound_bot, &record) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(record.law == SG_MOVER_LAW_COMPOUND_PREOPEN &&
+	      record.link_index == 18 && record.mechanism_index == 3U);
+	CHECK(SG_CompoundGuardAuthorize(&compound_bot,
+	      SG_MOVER_LAW_COMPOUND_PREOPEN, clear_keys, 2U, 18, 3U) ==
+	      SG_COMPOUND_GUARD_OK);
+	Entity(2)->solid = 0;
+	CHECK(SG_CompoundGuardReleaseProvedClear(&compound_bot) ==
+	      SG_COMPOUND_GUARD_OK);
 	CHECK(SG_CompoundGuardAcquireDeclaredDoorBound(&door_bot, door_keys,
 	      2U, 19, 77U) == SG_COMPOUND_GUARD_OK);
 	CHECK(SG_CompoundGuardValidate(&door_bot, &record) ==
@@ -293,10 +388,133 @@ static void TestSharedAcquirePauseAndClear(void)
 	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
 	CHECK(SG_CompoundGuardReleaseProvedClear(&door_bot) ==
 	      SG_COMPOUND_GUARD_OK);
-	Entity(2)->solid = 0;
-	CHECK(SG_CompoundGuardReleaseProvedClear(&compound_bot) ==
-	      SG_COMPOUND_GUARD_OK);
 	CHECK(RecordCount() == 0U);
+}
+
+static void TestDoorTransactionProcessSerialization(void)
+{
+	sg_compound_guard_bot_t first, second;
+	sg_mover_key_t first_key = 31U;
+	sg_mover_key_t second_key = 32U;
+	sg_compound_guard_frame_stats_t stats;
+
+	ResetGuard();
+	Attach(&first, 10, 11);
+	Attach(&second, 11, 12);
+
+	/* A declared transaction excludes both laws process-wide, including a
+	 * completely disjoint physical set. */
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&first, &first_key, 1U, 30) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&first, &first_key, 1U, 30) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&first, &first_key, 1U,
+	      30, 1U) == SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&second, &second_key, 1U, 31) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&second, &second_key, 1U,
+	      31, 1U) == SG_COMPOUND_GUARD_CONFLICT);
+
+	/* Logical release does not reopen either direction until the declared
+	 * physical retirement is positively terminal and clear. */
+	fake.terminal_ok = 0;
+	CHECK(SG_CompoundGuardReleaseProvedClear(&first) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardAnyRetirement());
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&second, &second_key, 1U, 31) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&second, &second_key, 1U,
+	      31, 1U) == SG_COMPOUND_GUARD_CONFLICT);
+	fake.terminal_ok = 1;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(!SG_CompoundGuardAnyRetirement());
+
+	/* The inverse holder law has the same two-way exclusion. */
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&second, &second_key, 1U,
+	      31, 1U) == SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&second, &second_key, 1U,
+	      31, 1U) == SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&second, &second_key, 1U, 31) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&first, &first_key, 1U, 30) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&first, &first_key, 1U,
+	      30, 2U) == SG_COMPOUND_GUARD_CONFLICT);
+
+	/* A compound retirement also excludes both contender laws on disjoint keys. */
+	fake.terminal_ok = 0;
+	CHECK(SG_CompoundGuardReleaseProvedClear(&second) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardAnyRetirement());
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&first, &first_key, 1U, 30) ==
+	      SG_COMPOUND_GUARD_CONFLICT);
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&first, &first_key, 1U,
+	      30, 2U) == SG_COMPOUND_GUARD_CONFLICT);
+	fake.terminal_ok = 1;
+	SG_CompoundGuardFrame(&stats);
+	CHECK(!SG_CompoundGuardAnyRetirement());
+}
+
+static void TestCapturedRecordMaintenance(void)
+{
+	sg_compound_guard_bot_t bot, wrong;
+	sg_mover_key_t key = 34U;
+	sg_mover_lease_record_t record;
+	int calls;
+
+	ResetGuard();
+	Attach(&bot, 13, 14);
+	Attach(&wrong, 14, 15);
+	CHECK(SG_CompoundGuardMaintain(&bot) == SG_COMPOUND_GUARD_NO_LEASE);
+	CHECK(fake.hold_calls == 0);
+	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&bot, &key, 1U, 32, 5U) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardDoorPusherFence(&key, 1U) ==
+	      SG_COMPOUND_GUARD_OK);
+	wrong.ticket = bot.ticket;
+	CHECK(SG_CompoundGuardMaintain(&wrong) ==
+	      SG_COMPOUND_GUARD_OWNER_MISMATCH);
+	CHECK(fake.hold_calls == 0);
+
+	CHECK(SG_CompoundGuardMaintain(&bot) == SG_COMPOUND_GUARD_OK);
+	CHECK(fake.hold_calls == 1);
+	CHECK(SG_CompoundGuardValidate(&bot, &record) == SG_COMPOUND_GUARD_OK &&
+	      record.state == SG_MOVER_LEASE_ACTIVE);
+	CHECK(SG_CompoundGuardPause(&bot) == SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardMaintain(&bot) == SG_COMPOUND_GUARD_OK);
+	CHECK(fake.hold_calls == 2);
+	CHECK(SG_CompoundGuardValidate(&bot, &record) == SG_COMPOUND_GUARD_OK &&
+	      record.state == SG_MOVER_LEASE_PAUSED);
+	CHECK(SG_CompoundGuardDoorPusherFence(&key, 1U) ==
+	      SG_COMPOUND_GUARD_OK);
+
+	/* Failed protection is terminal for command ownership, but the exact
+	 * captured record remains renewable after quarantine. */
+	fake.hold_ok = 0;
+	CHECK(SG_CompoundGuardMaintain(&bot) == SG_COMPOUND_GUARD_HOST_ERROR);
+	CHECK(SG_CompoundGuardValidate(&bot, &record) ==
+	      SG_COMPOUND_GUARD_QUARANTINE_LOCKED);
+	CHECK(record.state == SG_MOVER_LEASE_QUARANTINED);
+	CHECK(SG_CompoundGuardDoorPusherFence(&key, 1U) ==
+	      SG_COMPOUND_GUARD_OK);
+	fake.hold_ok = 1;
+	CHECK(SG_CompoundGuardMaintain(&bot) == SG_COMPOUND_GUARD_OK);
+	CHECK(fake.hold_calls == 4);
+
+	/* Death transfers renewal ownership to GuardFrame; a live caller cannot
+	 * race that orphan maintenance path. */
+	ResetGuard();
+	Attach(&bot, 13, 14);
+	CHECK(SG_CompoundGuardAcquireDeclaredDoor(&bot, &key, 1U, 33) ==
+	      SG_COMPOUND_GUARD_OK);
+	Entity(14)->outside = 0;
+	CHECK(SG_CompoundGuardOrphan(&bot, 0) == SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardDoorPusherFence(&key, 1U) ==
+	      SG_COMPOUND_GUARD_OK);
+	calls = fake.hold_calls;
+	CHECK(SG_CompoundGuardMaintain(&bot) ==
+	      SG_COMPOUND_GUARD_INVALID_TRANSITION);
+	CHECK(fake.hold_calls == calls);
 }
 
 static void TestIdentityDisconnectAndReset(void)
@@ -608,11 +826,10 @@ static void TestBodyReuseTransaction(void)
 	SG_CompoundGuardFrame(&stats);
 	CHECK(stats.released == 1U && !FindOwner(&old_owner, &record, &ticket));
 
-	/* The same held-old-bolt cleanup is a successful transaction when a newly
-	 * dead bot is simultaneously transferred into the replacement body. */
+	/* A current compound owner still transfers into a replacement body when no
+	 * second door transaction exists.  Process-wide serialization deliberately
+	 * makes the former simultaneous-old/new fixture unreachable through Acquire. */
 	ResetGuard();
-	MakeBodyOrphan(&old_bot, 5, 6, 100, 110, 90U);
-	old_owner = old_bot.owner;
 	Attach(&new_bot, 6, 7);
 	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&new_bot, &new_key, 1U,
 	      18, 1U) ==
@@ -620,37 +837,11 @@ static void TestBodyReuseTransaction(void)
 	new_owner = new_bot.owner;
 	Entity(7)->outside = 0;
 	CHECK(SG_CompoundGuardOrphan(&new_bot, 0) == SG_COMPOUND_GUARD_OK);
-	CHECK(SG_CompoundGuardBodyWillReplace(100) == SG_COMPOUND_GUARD_OK);
-	SpawnEntity(100, 1, 1);
-	CHECK(SG_CompoundGuardBodyDidCopy(&new_bot, 100) ==
-	      SG_COMPOUND_GUARD_OK);
-	CHECK(FindOwner(&old_owner, &record, &ticket));
-	CHECK(record.state == SG_MOVER_LEASE_ORPHAN &&
-	      record.body.kind == SG_MOVER_SUBJECT_NONE &&
-	      record.bolt.kind == SG_MOVER_SUBJECT_HOOK_BOLT);
-	CHECK(FindOwner(&new_owner, &record, &ticket));
-	CHECK(record.state == SG_MOVER_LEASE_ORPHAN &&
-	      record.body.kind == SG_MOVER_SUBJECT_BODY_QUEUE);
-
-	/* Old cleanup failure and current transfer have separate outcomes.  The new
-	 * corpse is inside the old sweep, so that owner terminalizes, while the
-	 * nonoverlapping current claim commits and the one-shot hook returns OK. */
-	ResetGuard();
-	MakeBodyOrphan(&old_bot, 5, 6, 100, 0, 90U);
-	old_owner = old_bot.owner;
-	Attach(&new_bot, 6, 7);
-	CHECK(SG_CompoundGuardAcquireCompoundPreopen(&new_bot, &new_key, 1U,
-	      18, 1U) ==
-	      SG_COMPOUND_GUARD_OK);
-	new_owner = new_bot.owner;
-	Entity(7)->outside = 0;
-	CHECK(SG_CompoundGuardOrphan(&new_bot, 0) == SG_COMPOUND_GUARD_OK);
+	SpawnEntity(100, 0, 1);
 	CHECK(SG_CompoundGuardBodyWillReplace(100) == SG_COMPOUND_GUARD_OK);
 	SpawnEntity(100, 1, 0);
 	CHECK(SG_CompoundGuardBodyDidCopy(&new_bot, 100) ==
 	      SG_COMPOUND_GUARD_OK);
-	CHECK(FindOwner(&old_owner, &record, &ticket));
-	CHECK(record.state == SG_MOVER_LEASE_QUARANTINED);
 	CHECK(FindOwner(&new_owner, &record, &ticket));
 	CHECK(record.state == SG_MOVER_LEASE_ORPHAN &&
 	      record.body.kind == SG_MOVER_SUBJECT_BODY_QUEUE);
@@ -849,7 +1040,10 @@ static void TestRecordWideAcquireReleaseAndFrameMaintenance(void)
 
 int main(void)
 {
+	TestCompoundOverlapQuery();
 	TestSharedAcquirePauseAndClear();
+	TestDoorTransactionProcessSerialization();
+	TestCapturedRecordMaintenance();
 	TestIdentityDisconnectAndReset();
 	TestOrphanBodyBoltRespawnAndFrame();
 	TestDetachedOrphanAndStaleFailClosed();

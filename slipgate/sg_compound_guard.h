@@ -45,8 +45,8 @@ typedef struct sg_compound_guard_host_s
 	sg_compound_guard_observation_t (*all_subjects_outside)(void *context,
 		const sg_mover_key_t *keys, size_t key_count);
 	/* Renew an already-open captured set without consulting mutable route or
-	 * trigger metadata.  Frame uses this only while an ORPHAN/QUARANTINED
-	 * record cannot yet be proved globally clear. */
+	 * trigger metadata.  GuardFrame owns ORPHAN renewal; an owning controller
+	 * may renew its synchronized ACTIVE/PAUSED/QUARANTINED record. */
 	sg_compound_guard_observation_t (*hold_open)(void *context,
 		sg_mover_lease_law_t law, const sg_mover_key_t *keys,
 		size_t key_count, int lease_ms);
@@ -135,7 +135,9 @@ sg_compound_guard_result_t SG_CompoundGuardBotReset(
 
 /* These calls do not change any RUNE action/revision gate.  In particular,
  * CompoundPreopen only reserves already-authorized execution; it cannot make
- * a dormant compound action live. */
+ * a dormant compound action live.  DECLARED_DOOR and COMPOUND_PREOPEN share
+ * one process-wide transaction: either acquire conflicts while any lease or
+ * physical retirement under either law remains, even for disjoint key sets. */
 sg_compound_guard_result_t SG_CompoundGuardAcquireDeclaredDoor(
 	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
 	size_t key_count, int link_index);
@@ -176,6 +178,12 @@ sg_compound_guard_result_t SG_CompoundGuardAuthorize(
 sg_compound_guard_result_t SG_CompoundGuardPause(
 	sg_compound_guard_bot_t *bot);
 sg_compound_guard_result_t SG_CompoundGuardResume(
+	sg_compound_guard_bot_t *bot);
+/* Renew protective TOP maintenance from the synchronized record's captured
+ * law and mover keys only.  ACTIVE, PAUSED, and QUARANTINED owners may renew;
+ * ORPHAN maintenance remains exclusively owned by GuardFrame.  Host failure
+ * quarantines a nonterminal live record before returning. */
+sg_compound_guard_result_t SG_CompoundGuardMaintain(
 	sg_compound_guard_bot_t *bot);
 
 /* First-death hook: captures the client corpse and optional live hook bolt.
@@ -218,6 +226,22 @@ void SG_CompoundGuardFrame(sg_compound_guard_frame_stats_t *stats_out);
  * closed at mutation boundaries. */
 int SG_CompoundGuardAnyRetirement(void);
 int SG_CompoundGuardRetirementOverlaps(const sg_mover_key_t *keys,
+	size_t key_count);
+/* Engine-pusher fence.  OK means this team overlaps either door law (including
+ * physical retirement), NO_LEASE means it is unprotected, and all other
+ * results are fail-closed.  NOT_INITIALIZED cannot hide a claim and therefore
+ * leaves the stock path enabled. */
+sg_compound_guard_result_t SG_CompoundGuardDoorPusherFence(
+	const sg_mover_key_t *keys, size_t key_count);
+/* Same fully validated registry observation without a mover-key filter.  This
+ * lets a malformed/unbounded pusher team preserve stock behavior only when no
+ * protected door transaction or physical retirement exists anywhere. */
+sg_compound_guard_result_t SG_CompoundGuardAnyDoorTransaction(void);
+/* Exact callback fence for the restricted compound mover class.  This query
+ * is observation-only and ignores valid declared-door records, but reports
+ * occupied for invalid input, unavailable/corrupt state, or overlap with any
+ * live COMPOUND_PREOPEN record or physical retirement. */
+int SG_CompoundGuardCompoundOverlaps(const sg_mover_key_t *keys,
 	size_t key_count);
 int SG_CompoundGuardRecordAt(size_t slot,
 	sg_mover_lease_record_t *record_out, sg_mover_ticket_t *ticket_out);

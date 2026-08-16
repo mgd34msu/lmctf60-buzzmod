@@ -11,7 +11,12 @@
  * from generated action metadata so a registry-only change cannot authorize
  * structurally valid but unreplayed compound records. */
 #define SG_COMPOUND_REQUIRED_CONTROLLER_REVISION 1
-#define SG_COMPOUND_LIVE_CONTROLLER_REVISION 0
+/* Compile-time controller ownership is action-specific.  A single aggregate
+ * switch would make enabling one vertical slice accidentally authorize every
+ * registered compound action through SG_CompoundRuntimeReady. */
+#define SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION 0
+#define SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION 0
+#define SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION 0
 
 /* Runtime renews the TOP close timer in one bounded lease.  The final renewal
  * happens one server frame before sweep clearance; a 500 ms lease therefore
@@ -30,6 +35,7 @@ typedef enum sg_compound_phase_e
 	SG_COMPOUND_TOP,
 	SG_COMPOUND_SUFFIX_LEASED,
 	SG_COMPOUND_SUFFIX_CLEAR,
+	SG_COMPOUND_RELEASE_READY,
 	SG_COMPOUND_RECOVER
 } sg_compound_phase_t;
 
@@ -44,7 +50,8 @@ typedef enum sg_compound_event_e
 	SG_COMPOUND_EVENT_SWEEP_CLEAR,
 	SG_COMPOUND_EVENT_ARRIVED,
 	SG_COMPOUND_EVENT_ABORT,
-	SG_COMPOUND_EVENT_RECOVERED
+	SG_COMPOUND_EVENT_RECOVERED,
+	SG_COMPOUND_EVENT_RELEASED
 } sg_compound_event_t;
 
 typedef struct sg_compound_state_s
@@ -111,6 +118,7 @@ int SG_CompoundAdvance(sg_compound_state_t *state,
 int SG_CompoundOwns(const sg_compound_state_t *state, int link_index,
 	int mover_key);
 int SG_CompoundLeaseHeld(const sg_compound_state_t *state);
+int SG_CompoundReleaseReady(const sg_compound_state_t *state);
 /* Invalid timing requests hold fail-closed.  For valid 100 ms boundaries the
  * last renewal is at clear_ms - 100, so elapsed_ms == clear_ms is release. */
 int SG_CompoundSuffixNeedsHold(int elapsed_ms, int clear_ms);

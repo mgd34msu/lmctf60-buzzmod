@@ -157,8 +157,14 @@ void door_go_down(edict_t *self)
 	fixture_observation.callback_calls++;
 }
 
-void door_hit_top(edict_t *self) { (void)self; }
-void door_hit_bottom(edict_t *self) { (void)self; }
+void door_hit_top(edict_t *self)
+{
+	SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_TOP);
+}
+void door_hit_bottom(edict_t *self)
+{
+	SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_BOTTOM);
+}
 
 void trigger_relay_use(edict_t *self, edict_t *other, edict_t *activator)
 {
@@ -272,6 +278,8 @@ static void HostLinkEntity(edict_t *entity)
 		fixture_observation.link_origins[index] = entity->s.origin[0];
 	fixture_observation.link_calls++;
 	fixture_observation.stage_started = true;
+	entity->area.prev = &fixture_edicts[0].area;
+	entity->area.next = &fixture_edicts[0].area;
 	if (entity->s.origin[0] == 80.0f)
 		fixture_observation.top_staged = true;
 	entity->linkcount++;
@@ -295,6 +303,18 @@ static void HostLinkEntity(edict_t *entity)
 		    (rotated_bsp ? radius : entity->maxs[axis]) + 1.0f;
 	}
 	VectorSubtract(entity->maxs, entity->mins, entity->size);
+}
+
+static void PublishDoorCompletion(edict_t *door,
+	sg_mover_completion_kind_t kind)
+{
+	level.current_entity = (door->flags & FL_TEAMSLAVE)
+	    ? door->teammaster : door;
+	SG_MoverCompletionTransition(door);
+	door->moveinfo.endfunc = kind == SG_MOVER_COMPLETION_TOP
+	    ? door_hit_top : door_hit_bottom;
+	SG_MoverCompletionArm(door);
+	SG_MoverCompletionDispatch(door);
 }
 
 static int SuffixX(void)
@@ -531,10 +551,12 @@ static void ResetFixture(const fixture_config_t *config)
 	fixture_config = *config;
 	g_edicts = fixture_edicts;
 	globals.num_edicts = 6;
+	SG_MoverCompletionReset();
 	fixture_gravity.value = 777.0f;
 	sv_gravity = &fixture_gravity;
 	fixture_edicts[0].inuse = true;
 	Door(&fixture_edicts[1]);
+	fixture_edicts[1].s.number = 1;
 	Trigger(&fixture_edicts[2], &fixture_edicts[1], config->mechanism_x);
 	fixture_edicts[3].inuse = true;
 	fixture_edicts[3].classname = "trigger_hurt";
@@ -639,10 +661,12 @@ static edict_t *InitRecoveryState(sg_phantom_t *phantom,
 	VectorClear(member->velocity);
 	VectorClear(member->avelocity);
 	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	member->moveinfo.endfunc = door_hit_top;
 	member->think = door_go_down;
 	level.time = 10.0f;
 	member->nextthink = 11.0f;
 	HostLinkEntity(member);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_TOP);
 
 	InitPhantom(phantom, false);
 	fixture_observation.suffix_commands = suffix_commands;
@@ -1209,6 +1233,77 @@ static void TestRecoveryFromLiveTop(void)
 	}
 }
 
+static void TestRecoveryAcceptsStockTopAxialResidual(void)
+{
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_recovery_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t member_before;
+	edict_t *member;
+	edict_t *passent;
+
+	ResetFixture(&config);
+	member = &fixture_edicts[1];
+	/* At the binary32 server-time boundary, a stock 10 u/s pusher can run one
+	 * extra 1-unit frame before Move_Final.  The direction-specific completion
+	 * callback authenticates that live motion-axis terminal; the fixed axes and
+	 * every copied static identity field must still match exactly. */
+	member->moveinfo.speed = 10.0f;
+	member->moveinfo.accel = 10.0f;
+	member->moveinfo.decel = 10.0f;
+	CHECK(Resolve(&resolved) == RLR_OK);
+	passent = InitRecoveryState(&phantom, &resolved, 4);
+	member->s.origin[resolved.axis] =
+		resolved.top_origin[resolved.axis] + 1.0f;
+	HostLinkEntity(member);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_TOP);
+	member_before = *member;
+	memset(&proof, 0, sizeof(proof));
+	CHECK(SG_OracleCompoundSwimRecover(&phantom, &resolved, destination,
+	      true, 0.0f, &proof, passent) == RLR_OK);
+	CHECK(proof.sweep_clear_ms == 100);
+	CHECK(proof.arrival_ms == 200);
+	CHECK(proof.exit_speed == 2);
+	CHECK(fixture_observation.pmove_calls == 8);
+	CHECK(memcmp(member, &member_before, sizeof(member_before)) == 0);
+	CHECK(fixture_observation.callback_calls == 0);
+	CheckStaticContextRestored();
+}
+
+static void TestContinueFromLiveTop(void)
+{
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_recovery_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t member_before;
+	edict_t *passent;
+
+	ResetFixture(&config);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	passent = InitRecoveryState(&phantom, &resolved, 0);
+	phantom.pms.origin[0] = (short)(160 * 8);
+	phantom.origin[0] = 160.0f;
+	phantom.old_pms = phantom.pms;
+	phantom.old_pms.origin[0] += 8;
+	SyncRecoveryPassent(&phantom, passent);
+	member_before = fixture_edicts[1];
+	CHECK(SG_OracleCompoundSwimContinue(&phantom, &resolved, destination,
+	      true, 0.0f, &proof, passent) == RLR_OK);
+	CHECK(proof.sweep_clear_ms > 0);
+	CHECK(proof.sweep_clear_ms <= proof.arrival_ms);
+	CHECK(fixture_observation.first_snapinitial);
+	CHECK(fixture_observation.normal_pmove_masks > 0);
+	CHECK(fixture_observation.loader_pmove_masks == 0);
+	CHECK(memcmp(&fixture_edicts[1], &member_before,
+	             sizeof(member_before)) == 0);
+	CHECK(fixture_observation.callback_calls == 0);
+	CheckStaticContextRestored();
+}
+
 static void RunRecoveryFailure(const fixture_config_t *config,
 	int suffix_commands, const vec3_t destination,
 	rune_reject_reason_t expected)
@@ -1406,7 +1501,7 @@ static void TestRecoveryRejectsTopAuthorityDrift(void)
 		{
 		case 0: resolved.mover_key = 4; break;
 		case 1: fixture_edicts[1].moveinfo.state = SG_PLAT_STATE_BOTTOM; break;
-		case 2: fixture_edicts[1].s.origin[0] += 0.125f; break;
+		case 2: fixture_edicts[1].s.origin[1] += 1.0f; break;
 		case 3: fixture_edicts[1].velocity[0] = 1.0f; break;
 		case 4: fixture_edicts[1].think = NULL; break;
 		case 5:
@@ -1518,6 +1613,10 @@ static void TestDeclaredDoorHoldMembersIsAtomic(void)
 	CHECK(member->nextthink == member_before);
 
 	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	master->moveinfo.endfunc = door_hit_top;
+	member->moveinfo.endfunc = door_hit_top;
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_TOP);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_TOP);
 	CHECK(SG_DeclaredDoorHoldMembers(members, 2, 500));
 	CHECK(master->nextthink == level.time + 0.5f);
 	CHECK(member->nextthink == level.time + 0.5f);
@@ -1624,7 +1723,16 @@ static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
 	master->moveinfo.endfunc = door_hit_bottom;
 	member->moveinfo.endfunc = door_hit_bottom;
 	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_BOTTOM);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_BOTTOM);
 	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
+	master->s.origin[0] += 100000.0f;
+	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	Set3(master->s.origin, 0.125f, 0.125f, 0.0f);
+	HostLinkEntity(master);
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_BOTTOM);
 	master->moveinfo.endfunc = door_hit_top;
 	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
 	master->moveinfo.endfunc = door_hit_bottom;
@@ -1637,6 +1745,7 @@ static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
 	VectorCopy(member->moveinfo.end_angles, member->s.angles);
 	member->moveinfo.endfunc = door_hit_top;
 	HostLinkEntity(member);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_TOP);
 	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
 	member->nextthink = level.time + 1.0f;
 	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
@@ -1663,6 +1772,7 @@ static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
 	VectorClear(master->velocity);
 	VectorClear(master->avelocity);
 	HostLinkEntity(master);
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_TOP);
 	CHECK(SG_DeclaredDoorMembersTerminal(members, 1));
 	CHECK(SG_DeclaredDoorHoldMembers(members, 1, 500));
 	master->s.angles[1] = master->moveinfo.end_angles[1] + 0.01f;
@@ -1683,6 +1793,8 @@ int main(void)
 	TestLoaderReplayModeAndRestoration();
 	TestPublicSwimTraverseRegression();
 	TestRecoveryFromLiveTop();
+	TestRecoveryAcceptsStockTopAxialResidual();
+	TestContinueFromLiveTop();
 	TestRecoveryTrajectoryFailures();
 	TestRecoverySweepChordBoundaries();
 	TestRecoveryRejectsUnauthenticatedLiveState();

@@ -131,6 +131,115 @@ def test_frame_level_hook_and_free_order() -> None:
     ) < roster.index("BotSlot_Reset(&sg_bots[i]);")
 
 
+def test_guarded_pusher_fence_precedes_move_and_think() -> None:
+    physics = source("g_phys.c")
+    pusher = between(physics, "void SV_Physics_Pusher", "//==================================================================")
+    run_entity = physics[physics.index("void G_RunEntity"):]
+    fence = run_entity.index("SG_CompoundGuardGameEntityMayDispatch")
+    assert fence < run_entity.index("ent->prethink (ent)")
+    assert fence < run_entity.index("SV_Physics_Pusher (ent)")
+    assert "SG_CompoundGuardGameEntityMayDispatch" not in pusher
+    denied = between(
+        run_entity,
+        "if (ent != g_edicts && !SG_CompoundGuardGameEntityMayDispatch(ent))",
+        "if (ent->prethink)",
+    )
+    assert "return;" in denied
+    assert denied.index("SG_CompoundGuardGameEntityDeferred(ent)") < denied.index(
+        "return;"
+    )
+    assert "prethink" not in denied and "nextthink" not in denied
+
+    adapter = source("slipgate/sg_compound_guard_game.c")
+    interlock = between(
+        adapter,
+        "int SG_CompoundGuardGameEntityMayDispatch",
+        "static sg_compound_guard_result_t GameMint",
+    )
+    assert "SG_CompoundGuardDoorPusherFence" in interlock
+    assert "SG_MoverProspectivePusherValid" in interlock
+    assert "GameAllSubjectsOutsideMode(&game_guard, keys, key_count, 1)" in interlock
+    assert "ctf_hook_abort" not in interlock
+
+
+def test_door_completion_witness_order_and_lifecycle() -> None:
+    func = source("g_func.c")
+    move_done = between(func, "void Move_Done", "void Move_Final")
+    assert move_done.index("VectorClear (ent->velocity)") < move_done.index(
+        "SG_MoverCompletionDispatch (ent)"
+    )
+    assert move_done.index("ent->nextthink = 0") < move_done.index(
+        "SG_MoverCompletionDispatch (ent)"
+    )
+    assert "moveinfo.endfunc (" not in move_done
+    move_calc = between(func, "void Move_Calc", "//\n// Support routines for angular")
+    assert move_calc.index("ent->moveinfo.endfunc = func;") < move_calc.index(
+        "SG_MoverCompletionArm (ent)"
+    )
+    angle_done = between(func, "void AngleMove_Done", "void AngleMove_Final")
+    assert angle_done.index("VectorClear (ent->avelocity)") < angle_done.index(
+        "SG_MoverCompletionDispatch (ent)"
+    )
+    assert angle_done.index("ent->nextthink = 0") < angle_done.index(
+        "SG_MoverCompletionDispatch (ent)"
+    )
+    assert "moveinfo.endfunc (" not in angle_done
+    angle_calc = between(func, "void AngleMove_Calc", "/*\n==============\nThink_AccelMove")
+    assert angle_calc.index("ent->moveinfo.endfunc = func;") < angle_calc.index(
+        "SG_MoverCompletionArm (ent)"
+    )
+
+    hit_top = between(func, "void door_hit_top", "void door_hit_bottom")
+    assert hit_top.index("self->moveinfo.state = STATE_TOP;") < hit_top.index(
+        "SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_TOP)"
+    )
+    assert hit_top.index("self->nextthink = level.time + self->moveinfo.wait;") < (
+        hit_top.index("SG_MoverCompletionPublish")
+    )
+
+    hit_bottom = between(func, "void door_hit_bottom", "void door_go_down")
+    assert hit_bottom.index("self->moveinfo.state = STATE_BOTTOM;") < (
+        hit_bottom.index("door_use_areaportals")
+    ) < hit_bottom.index(
+        "SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_BOTTOM)"
+    )
+
+    go_down = between(func, "void door_go_down", "void door_go_up")
+    assert go_down.index("SG_MoverCompletionTransition(self)") < go_down.index(
+        "self->moveinfo.state = STATE_DOWN;"
+    ) < go_down.index("Move_Calc")
+    go_up = between(func, "void door_go_up", "void door_use")
+    assert go_up.index("if (self->moveinfo.state == STATE_TOP)") < go_up.index(
+        "SG_MoverCompletionTransition(self)"
+    ) < go_up.index("self->moveinfo.state = STATE_UP;") < go_up.index("Move_Calc")
+
+    adapter = source("slipgate/sg_compound_guard_game.c")
+    level_reset = between(
+        adapter,
+        "sg_compound_guard_result_t SG_CompoundGuardGameLevelReset",
+        "void SG_CompoundGuardGameStorageWillFree",
+    )
+    assert level_reset.index("SG_MoverCompletionReset") < level_reset.index(
+        "GameEnsureInitialized"
+    )
+    storage_free = between(
+        adapter,
+        "void SG_CompoundGuardGameStorageWillFree",
+        "void SG_CompoundGuardGameFrame",
+    )
+    assert storage_free.index("SG_MoverCompletionReset") < storage_free.index(
+        "if (!game_guard.initialized)"
+    )
+    entity_free = between(
+        adapter,
+        "void SG_CompoundGuardGameEntityFreed",
+        "sg_compound_guard_result_t SG_CompoundGuardGameBoltEvicted",
+    )
+    assert entity_free.index("SG_MoverCompletionForget") < entity_free.index(
+        "if (!game_guard.initialized"
+    )
+
+
 def test_adapter_is_inert_and_owns_generations() -> None:
     adapter = source("slipgate/sg_compound_guard_game.c")
     assert "SG_CompoundGuardAcquire" not in adapter
@@ -148,5 +257,7 @@ if __name__ == "__main__":
     test_bot_slot_reset_and_attach_order()
     test_death_body_respawn_and_disconnect_order()
     test_frame_level_hook_and_free_order()
+    test_guarded_pusher_fence_precedes_move_and_think()
+    test_door_completion_witness_order_and_lifecycle()
     test_adapter_is_inert_and_owns_generations()
     print("compound_guard_game_integration: ok")

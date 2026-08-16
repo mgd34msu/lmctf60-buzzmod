@@ -9,6 +9,29 @@
 
 struct edict_s;
 
+/* Door terminal authority is causal, not geometric.  SV_Push quantization can
+ * leave a genuine completion arbitrarily far from the nominal endpoint after
+ * enough cycles, so no finite static epsilon can distinguish it from forged
+ * edict state.  The game publishes this out-of-edict witness only from the
+ * stock completion callbacks and marks it nonterminal before every movement
+ * transition. */
+typedef enum sg_mover_completion_kind_e
+{
+	SG_MOVER_COMPLETION_TOP = 1,
+	SG_MOVER_COMPLETION_BOTTOM = 2
+} sg_mover_completion_kind_t;
+
+void SG_MoverCompletionTransition(struct edict_s *member);
+void SG_MoverCompletionArm(struct edict_s *member);
+void SG_MoverCompletionDispatch(struct edict_s *member);
+void SG_MoverCompletionPublish(struct edict_s *member,
+	sg_mover_completion_kind_t kind);
+int SG_MoverCompletionMatches(const struct edict_s *member,
+	sg_mover_completion_kind_t kind);
+int SG_MoverCompletionUntouched(const struct edict_s *member);
+void SG_MoverCompletionForget(struct edict_s *member);
+void SG_MoverCompletionReset(void);
+
 /* A resolved PREOPEN mechanism is deliberately one physical leaf.  The
  * scheduler consumes bottom_origin, top_origin and speed without retaining a
  * live edict dependency; trigger/member and mover_key bind later world proof
@@ -89,5 +112,13 @@ int SG_CompoundWorldAtTopFor(
  * already scheduled canonical TOP close by the shared compound lease. */
 int SG_CompoundWorldHoldOpen(
 	const sg_compound_world_preopen_t *resolved, int lease_ms);
+
+/* Pointer-free lifecycle maintenance for the exact captured mover key.  The
+ * shared guard can outlive its route publication and trigger owner, so orphan,
+ * quarantine, and release-retirement paths revalidate the physical member
+ * itself instead of depending on mutable RUNE state.  The first compound class
+ * owns exactly one translating leaf. */
+int SG_CompoundWorldHoldMember(struct edict_s *member, int lease_ms);
+int SG_CompoundWorldMemberTerminal(struct edict_s *member);
 
 #endif /* SG_COMPOUND_WORLD_H */
