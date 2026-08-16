@@ -41,6 +41,20 @@ COMPOUND_GEN_TEST_ALL_ARTIFACTS := \
 	.sg_compound_gen_under_test.gnu.o .sg_compound_gen_under_test.gnu.d \
 	.sg_compound_gen_test.make.o .sg_compound_gen_test.make.d \
 	.sg_compound_gen_under_test.make.o .sg_compound_gen_under_test.make.d
+COMPOUND_PUBLICATION_TEST_BIN := sg_compound_publication_test.make
+COMPOUND_PUBLICATION_TEST_OBJS := .sg_compound_publication_test.make.o \
+	.sg_compound_publication_under_test.make.o
+COMPOUND_PUBLICATION_TEST_DEPS := $(COMPOUND_PUBLICATION_TEST_OBJS:.o=.d)
+COMPOUND_PUBLICATION_INTEGRATION_TEST := \
+	tests/test_compound_publication_integration.py
+COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS := \
+	sg_compound_publication_test.gnu sg_compound_publication_test.make \
+	.sg_compound_publication_test.gnu.o \
+	.sg_compound_publication_test.gnu.d \
+	.sg_compound_publication_under_test.gnu.o \
+	.sg_compound_publication_under_test.gnu.d \
+	$(COMPOUND_PUBLICATION_TEST_OBJS) \
+	$(COMPOUND_PUBLICATION_TEST_DEPS)
 IDENTITY_TEST_BIN := sg_identity_test.make
 IDENTITY_TEST_OBJS := .sg_identity_test.make.o .sg_identity_under_test.make.o \
 	.sg_crc32_under_test.make.o
@@ -447,6 +461,7 @@ OBJS := \
 	sg_compound.o \
 	slipgate/sg_compound_world.o \
 	slipgate/sg_compound_gen.o \
+	slipgate/sg_compound_publication.o \
 	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
 	sg_accept_drop.o \
@@ -497,7 +512,7 @@ all: $(TARGET)
 default: all
 
 .PHONY: all default host-test action-test compound-test compound-world-test \
-	compound-gen-test \
+	compound-gen-test compound-publication-test \
 	identity-test rune-wire-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
@@ -543,6 +558,9 @@ slipgate/sg_compound_world.o: slipgate/sg_compound_world.c \
 		slipgate/sg_compound_world.h slipgate/sg_util.h g_local.h
 slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
+slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
+		slipgate/sg_compound_publication.h slipgate/sg_compound_world.h \
+		slipgate/sg_local.h slipgate/sg_rune.h g_local.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 
@@ -552,6 +570,7 @@ slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 -include $(COMPOUND_TEST_DEPS)
 -include $(COMPOUND_WORLD_TEST_DEPS)
 -include $(COMPOUND_GEN_TEST_DEPS)
+-include $(COMPOUND_PUBLICATION_TEST_DEPS)
 -include $(IDENTITY_TEST_DEPS)
 -include $(RUNE_WIRE_TEST_DEPS)
 -include $(SIDECAR_WIRE_TEST_DEPS)
@@ -651,6 +670,10 @@ $(COMPOUND_WORLD_TEST_BIN): $(COMPOUND_WORLD_TEST_OBJS)
 $(COMPOUND_GEN_TEST_BIN): $(COMPOUND_GEN_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(COMPOUND_GEN_TEST_OBJS) $(LIBS)
+
+$(COMPOUND_PUBLICATION_TEST_BIN): $(COMPOUND_PUBLICATION_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(COMPOUND_PUBLICATION_TEST_OBJS) $(LIBS)
 
 $(RUNE_LOADER_TEST_BIN): $(RUNE_LOADER_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -760,6 +783,22 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_publication_test.make.o: \
+		tests/sg_compound_publication_test.c \
+		slipgate/sg_compound_publication.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_publication_under_test.make.o: \
+		slipgate/sg_compound_publication.c \
+		slipgate/sg_compound_publication.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_identity_test.make.o: tests/sg_identity_test.c $(REVISION_HEADER)
@@ -1088,6 +1127,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
+		$(COMPOUND_PUBLICATION_TEST_BIN) \
+		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
 		$(IDENTITY_TEST_BIN) \
 		$(RUNE_WIRE_TEST_BIN) $(SIDECAR_WIRE_TEST_BIN) \
 		$(SIDECAR_LOADER_TEST_BIN) $(SIDECAR_STORE_TEST_BIN) \
@@ -1105,6 +1146,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_TEST_BIN)
 	$(Q)./$(COMPOUND_WORLD_TEST_BIN)
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
+	$(Q)./$(COMPOUND_PUBLICATION_TEST_BIN)
+	$(Q)python3 $(COMPOUND_PUBLICATION_INTEGRATION_TEST)
 	$(Q)./$(IDENTITY_TEST_BIN)
 	$(Q)./$(RUNE_WIRE_TEST_BIN)
 	$(Q)./$(SIDECAR_WIRE_TEST_BIN)
@@ -1145,6 +1188,12 @@ compound-world-test: $(COMPOUND_WORLD_TEST_BIN)
 compound-gen-test: $(COMPOUND_GEN_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
+
+compound-publication-test: $(COMPOUND_PUBLICATION_TEST_BIN) \
+		$(COMPOUND_PUBLICATION_INTEGRATION_TEST)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_PUBLICATION_TEST_BIN)
+	$(Q)python3 $(COMPOUND_PUBLICATION_INTEGRATION_TEST)
 
 identity-test: $(IDENTITY_TEST_BIN)
 	$(E) [TEST] $<
@@ -1244,6 +1293,7 @@ clean:
 	$(Q)$(RM) *.o *.d $(OBJS) $(OBJS:.o=.d) $(TARGET) $(REVISION_HEADER) \
 		$(REVISION_HEADER).tmp.* $(HOST_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_GEN_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS)
 

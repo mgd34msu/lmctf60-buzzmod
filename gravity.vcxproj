@@ -365,6 +365,7 @@
     <ClCompile Include="slipgate\sg_compound.c" />
     <ClCompile Include="slipgate\sg_compound_world.c" />
     <ClCompile Include="slipgate\sg_compound_gen.c" />
+    <ClCompile Include="slipgate\sg_compound_publication.c" />
     <ClCompile Include="slipgate\sg_rune_door_scope.c" />
     <ClCompile Include="slipgate\sg_drop_live.c" />
     <ClCompile Include="slipgate\sg_swim_live.c" />
@@ -450,6 +451,7 @@
     <ClInclude Include="slipgate\sg_compound.h" />
     <ClInclude Include="slipgate\sg_compound_world.h" />
     <ClInclude Include="slipgate\sg_compound_gen.h" />
+    <ClInclude Include="slipgate\sg_compound_publication.h" />
     <ClInclude Include="slipgate\sg_rune_door_scope.h" />
     <ClInclude Include="slipgate\sg_drop_live.h" />
     <ClInclude Include="slipgate\sg_swim_live.h" />

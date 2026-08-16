@@ -122,6 +122,8 @@ typedef struct rune_header_s
 	char	mapname[64];
 } rune_header_t;
 
+struct sg_compound_publication_s;
+
 /* The explicit wire codec owns byte order and binary32 requirements.  These
  * assertions are only the capacity contract of the native runtime adapter. */
 _Static_assert(INT_MAX >= (long long)SG_RUNE_V3_MAGIC,
@@ -146,6 +148,9 @@ typedef struct rune_s
 	int				*next_link;
 	byte			*linked_seed; /* owns at least one outgoing link; incoming-only
 	                             * dead ends and true orphans are not routes */
+	/* Sparse loader-replayed state for D_SWIM only.  The table is built while
+	 * this rune is still an unpublished candidate and is destroyed with it. */
+	struct sg_compound_publication_s *compound_publication;
 } rune_t;
 
 /* One immutable snapshot of the active level identity and movement law.

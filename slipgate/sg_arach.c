@@ -48,6 +48,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_rune_install.h"
 #include "slipgate/sg_rune_loader.h"
 #include "slipgate/sg_rune_proof.h"
+#include "slipgate/sg_compound_publication.h"
 #include "slipgate/sg_danger_lease.h"
 #include "slipgate/sg_danger_policy.h"
 #include "slipgate/sg_sidecar_loader.h"
@@ -269,6 +270,7 @@ void Rune_Free(rune_t *r)
 {
 	if (!r)
 		return;
+	SG_CompoundPublicationDestroy(r->compound_publication);
 	if (r->linked_seed)
 		sg_host.level_free(r->linked_seed);
 	if (r->next_link)
@@ -498,6 +500,7 @@ rune_t *Rune_Load(const char *mapname)
 	sg_rune_v3_header_t inspected_header, loaded_header;
 	sg_rune_v3_authority_t captured, active;
 	sg_rune_load_result_t load_result;
+	sg_compound_publication_result_t compound_result;
 	sg_rune_snapshot_kind_t snapshot_kind;
 	const char *failure = NULL;
 	const char *failure_stage = "snapshot";
@@ -699,6 +702,15 @@ rune_t *Rune_Load(const char *mapname)
 		goto cleanup;
 	}
 	proof_scope_active = true;
+	failure_stage = "compound-replay";
+	compound_result = SG_CompoundPublicationBuild(r, sg_host.level_alloc,
+	    sg_host.level_free, &r->compound_publication);
+	if (compound_result.status != SG_COMPOUND_PUBLICATION_OK)
+	{
+		failure = SG_CompoundPublicationStatusName(compound_result.status);
+		failure_index = compound_result.link_index;
+		goto cleanup;
+	}
 	failure_stage = "door-replay";
 	failure = Rune_ReplayOrdinaryDoors(r, &failure_index);
 	SG_RuneProofScopeEnd();
@@ -1579,6 +1591,21 @@ qboolean SG_LevelSetup(void)
 		               "proof law drifted before publication\n");
 		sg_setup_failed = true;
 		goto fail;
+	}
+	{
+		sg_compound_publication_result_t compound_result =
+			SG_CompoundPublicationRevalidate(candidate);
+
+		if (compound_result.status != SG_COMPOUND_PUBLICATION_OK)
+		{
+			sg_host.dprint("slipgate: compound publication discarded: "
+			               "status=%s index=%u\n",
+			               SG_CompoundPublicationStatusName(
+			                   compound_result.status),
+			               (unsigned int)compound_result.link_index);
+			sg_setup_failed = true;
+			goto fail;
+		}
 	}
 
 	/* This is the sole synchronous publication transaction.  Danger_Publish
