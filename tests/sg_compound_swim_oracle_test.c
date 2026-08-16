@@ -15,6 +15,7 @@ game_export_t globals;
 edict_t *g_edicts;
 level_locals_t level;
 sg_host_t sg_host;
+cvar_t *sv_gravity;
 
 short SG_RuneProofGravity(void)
 {
@@ -28,7 +29,9 @@ typedef enum fixture_suffix_e
 	FIXTURE_SUFFIX_REENTRY,
 	FIXTURE_SUFFIX_ARRIVE_BEFORE_CLEAR,
 	FIXTURE_SUFFIX_ALWAYS_OUTSIDE,
-	FIXTURE_SUFFIX_BETWEEN_RECROSS
+	FIXTURE_SUFFIX_BETWEEN_RECROSS,
+	FIXTURE_SUFFIX_PRECLEAR_CHORD,
+	FIXTURE_SUFFIX_POSTCLEAR_CHORD
 } fixture_suffix_t;
 
 typedef struct fixture_config_s
@@ -44,6 +47,8 @@ typedef struct fixture_config_s
 	qboolean opening_drift;
 	qboolean source_hazard;
 	qboolean source_dry;
+	qboolean force_foreign_trigger;
+	qboolean suffix_hazard;
 	float mechanism_x;
 	float source_x;
 } fixture_config_t;
@@ -72,6 +77,8 @@ typedef struct fixture_observation_s
 } fixture_observation_t;
 
 static edict_t fixture_edicts[8];
+static gclient_t fixture_clients[1];
+static cvar_t fixture_gravity;
 static fixture_config_t fixture_config;
 static fixture_observation_t fixture_observation;
 static int failures;
@@ -230,6 +237,9 @@ static int HostBoxEdicts(const vec3_t mins, const vec3_t maxs,
 		if (fixture_config.contaminate_trigger && count < max_count)
 			list[count++] = &fixture_edicts[3];
 	}
+	if (area_type == AREA_TRIGGERS && fixture_config.force_foreign_trigger &&
+	    count < max_count)
+		list[count++] = &fixture_edicts[3];
 	if (area_type == AREA_SOLID)
 	{
 		list[count++] = &fixture_edicts[1];
@@ -298,6 +308,18 @@ static int SuffixX(void)
 		if (command == 8)
 			return -40;
 		return 120;
+	case FIXTURE_SUFFIX_PRECLEAR_CHORD:
+		if (command == 0)
+			return 80;
+		if (command <= 3)
+			return 120;
+		return -80;
+	case FIXTURE_SUFFIX_POSTCLEAR_CHORD:
+		if (command <= 1)
+			return 80;
+		if (command <= 7)
+			return 120;
+		return -80;
 	default:
 		return 60;
 	}
@@ -334,6 +356,11 @@ static void HostPmove(pmove_t *pmove)
 		fixture_observation.suffix_commands++;
 		x = SuffixX();
 		pmove->s.velocity[0] = 64;
+		if (fixture_config.suffix_hazard)
+		{
+			pmove->watertype = CONTENTS_LAVA;
+			pmove->waterlevel = 2;
+		}
 	}
 	else if (!CommandZero(&pmove->cmd))
 	{
@@ -453,11 +480,15 @@ static fixture_config_t DefaultConfig(int touch, fixture_suffix_t suffix)
 static void ResetFixture(const fixture_config_t *config)
 {
 	memset(fixture_edicts, 0, sizeof(fixture_edicts));
+	memset(fixture_clients, 0, sizeof(fixture_clients));
+	memset(&fixture_gravity, 0, sizeof(fixture_gravity));
 	memset(&fixture_observation, 0, sizeof(fixture_observation));
 	memset(&level, 0, sizeof(level));
 	fixture_config = *config;
 	g_edicts = fixture_edicts;
-	globals.num_edicts = 5;
+	globals.num_edicts = 6;
+	fixture_gravity.value = 777.0f;
+	sv_gravity = &fixture_gravity;
 	fixture_edicts[0].inuse = true;
 	Door(&fixture_edicts[1]);
 	Trigger(&fixture_edicts[2], &fixture_edicts[1], config->mechanism_x);
@@ -497,6 +528,59 @@ static void InitPhantom(sg_phantom_t *phantom, qboolean damaging_fall)
 	phantom->velocity[2] = damaging_fall ? -1000.0f : 0.0f;
 	phantom->watertype = CONTENTS_WATER;
 	phantom->waterlevel = 3;
+}
+
+static void SyncRecoveryPassent(const sg_phantom_t *phantom,
+	edict_t *passent)
+{
+	gclient_t *client = passent->client;
+
+	VectorCopy(phantom->origin, passent->s.origin);
+	VectorCopy(phantom->velocity, passent->velocity);
+	passent->groundentity = phantom->groundentity ? &fixture_edicts[0] : NULL;
+	passent->watertype = phantom->watertype;
+	passent->waterlevel = phantom->waterlevel;
+	client->ps.pmove = phantom->pms;
+	client->old_pmove = phantom->old_pms;
+}
+
+static edict_t *InitRecoveryState(sg_phantom_t *phantom,
+	const sg_compound_world_preopen_t *resolved, int suffix_commands)
+{
+	edict_t *member = &fixture_edicts[1];
+	edict_t *passent = &fixture_edicts[5];
+	gclient_t *client = &fixture_clients[0];
+	int x;
+
+	VectorCopy(resolved->top_origin, member->s.origin);
+	VectorCopy(resolved->top_origin, member->s.old_origin);
+	VectorClear(member->velocity);
+	VectorClear(member->avelocity);
+	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	member->think = door_go_down;
+	level.time = 10.0f;
+	member->nextthink = 11.0f;
+	HostLinkEntity(member);
+
+	InitPhantom(phantom, false);
+	fixture_observation.suffix_commands = suffix_commands;
+	x = SuffixX();
+	phantom->pms.origin[0] = (short)(x * 8);
+	phantom->pms.velocity[0] = 64;
+	phantom->origin[0] = (float)x;
+	phantom->velocity[0] = 8.0f;
+	phantom->old_pms = phantom->pms;
+	phantom->old_pms.origin[0] += 8; /* valid live snapinitial mismatch */
+
+	memset(passent, 0, sizeof(*passent));
+	passent->inuse = true;
+	passent->client = client;
+	passent->health = 100;
+	passent->movetype = MOVETYPE_WALK;
+	passent->s.modelindex = 255;
+	client->oldvelocity[2] = 0.0f;
+	SyncRecoveryPassent(phantom, passent);
+	return passent;
 }
 
 static rune_reject_reason_t Resolve(
@@ -550,6 +634,9 @@ static void CheckStaticContextRestored(void)
 	fixture_observation.top_staged = false;
 	fixture_observation.approach_commands = 0;
 	fixture_config.touch_substep = 99;
+	fixture_config.contaminate_trigger = false;
+	fixture_config.contaminate_solid = false;
+	fixture_config.force_foreign_trigger = false;
 	calls = fixture_observation.pmove_calls;
 	/* The exact compound member must no longer be admitted by an ordinary
 	 * world-only traversal after either success or failure. */
@@ -660,7 +747,7 @@ static void RunFailure(const fixture_config_t *config,
 static void TestFailureTable(void)
 {
 	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
-	const vec3_t inside_destination = { 80.0f, 0.0f, 0.0f };
+	const vec3_t inside_destination = { 60.0f, 0.0f, 0.0f };
 	const vec3_t outside_destination = { 240.0f, 0.0f, 0.0f };
 	fixture_config_t no_sweep =
 		DefaultConfig(2, FIXTURE_SUFFIX_NO_SWEEP);
@@ -719,6 +806,34 @@ static void TestFailureTable(void)
 	           destination, false);
 	RunFailure(&opening_drift, RLR_RIDE_REPLAY_FAILED,
 	           destination, false);
+}
+
+static void TestPreopenSweepChordBoundaries(void)
+{
+	const vec3_t mechanism = { 160.0f, 0.0f, 0.0f };
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	fixture_config_t preclear =
+		DefaultConfig(2, FIXTURE_SUFFIX_PRECLEAR_CHORD);
+	fixture_config_t postclear =
+		DefaultConfig(2, FIXTURE_SUFFIX_POSTCLEAR_CHORD);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t member_before;
+
+	ResetFixture(&preclear);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	member_before = fixture_edicts[1];
+	InitPhantom(&phantom, false);
+	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
+	      destination, true, 0.0f, &proof, NULL, true, false) == RLR_OK);
+	CHECK(proof.sweep_clear_ms == 100);
+	CHECK(proof.arrival_ms == 100);
+	CHECK(proof.total_cost_ms == 600);
+	CHECK(MemberRestored(&fixture_edicts[1], &member_before));
+	CheckStaticContextRestored();
+
+	RunFailure(&postclear, RLR_CLEAR_MISMATCH, destination, false);
 }
 
 static void TestResolvedIdentityFailsClosed(void)
@@ -966,10 +1081,277 @@ static void TestPublicSwimTraverseRegression(void)
 	CHECK(fixture_observation.later_snapinitial == 0);
 }
 
+static qboolean RecoveryProofZero(
+	const sg_compound_swim_recovery_proof_t *proof)
+{
+	sg_compound_swim_recovery_proof_t zero;
+
+	memset(&zero, 0, sizeof(zero));
+	return memcmp(proof, &zero, sizeof(zero)) == 0;
+}
+
+static void TestRecoveryFromLiveTop(void)
+{
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	static const int suffix_steps[] = { 1, 4, 5 };
+	static const int expected_clear[] = { 200, 100, 100 };
+	static const int expected_arrival[] = { 200, 200, 100 };
+	int index;
+
+	for (index = 0; index < 3; index++)
+	{
+		fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+		sg_compound_world_preopen_t resolved;
+		sg_compound_swim_recovery_proof_t proof;
+		sg_phantom_t phantom;
+		edict_t member_before;
+		edict_t *passent;
+
+		ResetFixture(&config);
+		CHECK(Resolve(&resolved) == RLR_OK);
+		passent = InitRecoveryState(&phantom, &resolved,
+		                            suffix_steps[index]);
+		member_before = fixture_edicts[1];
+		CHECK(SG_OracleCompoundSwimRecover(&phantom, &resolved, destination,
+		      true, 0.0f, &proof, passent) == RLR_OK);
+		CHECK(proof.sweep_clear_ms == expected_clear[index]);
+		CHECK(proof.arrival_ms == expected_arrival[index]);
+		CHECK(proof.sweep_clear_ms <= proof.arrival_ms);
+		CHECK(fixture_observation.first_snapinitial);
+		CHECK(fixture_observation.normal_pmove_masks > 0);
+		CHECK(fixture_observation.loader_pmove_masks == 0);
+		CHECK(memcmp(&fixture_edicts[1], &member_before,
+		             sizeof(member_before)) == 0);
+		CHECK(fixture_observation.callback_calls == 0);
+		CheckStaticContextRestored();
+	}
+}
+
+static void RunRecoveryFailure(const fixture_config_t *config,
+	int suffix_commands, const vec3_t destination,
+	rune_reject_reason_t expected)
+{
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_recovery_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t member_before;
+	edict_t *passent;
+	rune_reject_reason_t result;
+
+	ResetFixture(config);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	passent = InitRecoveryState(&phantom, &resolved, suffix_commands);
+	member_before = fixture_edicts[1];
+	memset(&proof, 0xa5, sizeof(proof));
+	result = SG_OracleCompoundSwimRecover(&phantom, &resolved, destination,
+	                                    true, 0.0f, &proof, passent);
+	if (result != expected)
+		fprintf(stderr, "recovery failure suffix=%d mode=%d got=%d want=%d\n",
+		        suffix_commands, (int)config->suffix, result, expected);
+	CHECK(result == expected);
+	CHECK(RecoveryProofZero(&proof));
+	CHECK(memcmp(&fixture_edicts[1], &member_before,
+	             sizeof(member_before)) == 0);
+	CHECK(fixture_observation.callback_calls == 0);
+	CheckStaticContextRestored();
+}
+
+static void TestRecoveryTrajectoryFailures(void)
+{
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	const vec3_t inside_destination = { 0.0f, 0.0f, 0.0f };
+	fixture_config_t foreign_trigger =
+		DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	fixture_config_t foreign_solid =
+		DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	fixture_config_t hazard = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	fixture_config_t arrival_before =
+		DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	fixture_config_t reentry = DefaultConfig(2, FIXTURE_SUFFIX_REENTRY);
+	fixture_config_t no_clear =
+		DefaultConfig(2, FIXTURE_SUFFIX_ARRIVE_BEFORE_CLEAR);
+	fixture_config_t outside = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_recovery_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t *passent;
+
+	foreign_trigger.force_foreign_trigger = true;
+	foreign_solid.contaminate_solid = true;
+	hazard.suffix_hazard = true;
+	RunRecoveryFailure(&foreign_trigger, 4, destination,
+	                   RLR_SUFFIX_REPLAY_FAILED);
+	RunRecoveryFailure(&foreign_solid, 4, destination,
+	                   RLR_SUFFIX_REPLAY_FAILED);
+	RunRecoveryFailure(&hazard, 4, destination, RLR_SUFFIX_REPLAY_FAILED);
+	RunRecoveryFailure(&arrival_before, 1, inside_destination,
+	                   RLR_CLEAR_MISMATCH);
+	RunRecoveryFailure(&reentry, 4, destination, RLR_CLEAR_MISMATCH);
+	RunRecoveryFailure(&no_clear, 1, destination, RLR_SUFFIX_REPLAY_FAILED);
+
+	ResetFixture(&outside);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	passent = InitRecoveryState(&phantom, &resolved, 4);
+	phantom.pms.origin[0] = 160 * 8;
+	phantom.origin[0] = 160.0f;
+	phantom.old_pms = phantom.pms;
+	phantom.old_pms.origin[0] += 8;
+	SyncRecoveryPassent(&phantom, passent);
+	memset(&proof, 0xa5, sizeof(proof));
+	CHECK(SG_OracleCompoundSwimRecover(&phantom, &resolved, destination,
+	      true, 0.0f, &proof, passent) == RLR_SUFFIX_REPLAY_FAILED);
+	CHECK(RecoveryProofZero(&proof));
+	CHECK(fixture_observation.pmove_calls == 0);
+	CheckStaticContextRestored();
+}
+
+static void TestRecoverySweepChordBoundaries(void)
+{
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	fixture_config_t preclear =
+		DefaultConfig(2, FIXTURE_SUFFIX_PRECLEAR_CHORD);
+	fixture_config_t postclear =
+		DefaultConfig(2, FIXTURE_SUFFIX_POSTCLEAR_CHORD);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_recovery_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t member_before;
+	edict_t *passent;
+
+	/* The 25, 50, and 75 ms endpoints are outside.  The 75..100 ms
+	 * outside-to-outside chord contacts the complete sweep, so 100 ms is
+	 * the conservative last-contact boundary and is valid clear. */
+	ResetFixture(&preclear);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	passent = InitRecoveryState(&phantom, &resolved, 0);
+	member_before = fixture_edicts[1];
+	CHECK(SG_OracleCompoundSwimRecover(&phantom, &resolved, destination,
+	      true, 0.0f, &proof, passent) == RLR_OK);
+	CHECK(proof.sweep_clear_ms == 100);
+	CHECK(proof.arrival_ms == 100);
+	CHECK(memcmp(&fixture_edicts[1], &member_before,
+	             sizeof(member_before)) == 0);
+	CheckStaticContextRestored();
+
+	/* The same outside-to-outside chord is forbidden after clear. */
+	RunRecoveryFailure(&postclear, 0, destination, RLR_CLEAR_MISMATCH);
+}
+
+static void TestRecoveryRejectsUnauthenticatedLiveState(void)
+{
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	int mutation;
+
+	for (mutation = 0; mutation < 30; mutation++)
+	{
+		fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+		sg_compound_world_preopen_t resolved;
+		sg_compound_swim_recovery_proof_t proof;
+		sg_phantom_t phantom;
+		edict_t member_before;
+		edict_t *passent;
+		edict_t *argument;
+		float old_frame_z = 0.0f;
+
+		ResetFixture(&config);
+		CHECK(Resolve(&resolved) == RLR_OK);
+		passent = InitRecoveryState(&phantom, &resolved, 4);
+		argument = passent;
+		switch (mutation)
+		{
+		case 0: argument = NULL; break;
+		case 1: passent->inuse = false; break;
+		case 2: passent->health = 0; break;
+		case 3: passent->deadflag = 1; break;
+		case 4: passent->movetype = MOVETYPE_TOSS; break;
+		case 5: passent->s.modelindex = 0; break;
+		case 6: passent->client->chase_target = &fixture_edicts[0]; break;
+		case 7: passent->client->hookstate = 1; break;
+		case 8: passent->client->hook = &fixture_edicts[4]; break;
+		case 9: passent->client->ps.pmove.pm_type = PM_DEAD; break;
+		case 10: fixture_gravity.value = 778.0f; break;
+		case 11: passent->s.origin[0] += 0.125f; break;
+		case 12: passent->velocity[0] += 0.125f; break;
+		case 13: passent->client->old_pmove.origin[0]++; break;
+		case 14: phantom.origin[0] += 0.125f; break;
+		case 15: phantom.velocity[0] += 0.125f; break;
+		case 16: passent->groundentity = &fixture_edicts[0]; break;
+		case 17: passent->watertype = CONTENTS_LAVA; break;
+		case 18: old_frame_z = 1.0f; break;
+		case 19: sv_gravity = NULL; break;
+		case 20: passent->s.origin[0] = NAN; break;
+		case 21: passent->velocity[0] = INFINITY; break;
+		case 22: passent->s.origin[0] = 4096.0f; break;
+		case 23: fixture_gravity.value = NAN; break;
+		case 24: passent->waterlevel = 2; break;
+		case 25: phantom.armed_door_count = 1; break;
+		case 26: passent->s.origin[1] = 0.124f; break;
+		case 27: passent->s.origin[1] = -0.124f; break;
+		case 28: passent->velocity[2] = 0.124f; break;
+		case 29: passent->velocity[2] = -0.124f; break;
+		default: break;
+		}
+		member_before = fixture_edicts[1];
+		memset(&proof, 0xa5, sizeof(proof));
+		CHECK(SG_OracleCompoundSwimRecover(&phantom, &resolved, destination,
+		      true, old_frame_z, &proof, argument) == RLR_BAD_CONTROL_POLICY);
+		CHECK(RecoveryProofZero(&proof));
+		CHECK(fixture_observation.pmove_calls == 0);
+		CHECK(memcmp(&fixture_edicts[1], &member_before,
+		             sizeof(member_before)) == 0);
+		CheckStaticContextRestored();
+	}
+}
+
+static void TestRecoveryRejectsTopAuthorityDrift(void)
+{
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	int mutation;
+
+	for (mutation = 0; mutation < 8; mutation++)
+	{
+		fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+		sg_compound_world_preopen_t resolved;
+		sg_compound_swim_recovery_proof_t proof;
+		sg_phantom_t phantom;
+		edict_t member_before;
+		edict_t *passent;
+
+		ResetFixture(&config);
+		CHECK(Resolve(&resolved) == RLR_OK);
+		passent = InitRecoveryState(&phantom, &resolved, 4);
+		switch (mutation)
+		{
+		case 0: resolved.mover_key = 4; break;
+		case 1: fixture_edicts[1].moveinfo.state = SG_PLAT_STATE_BOTTOM; break;
+		case 2: fixture_edicts[1].s.origin[0] += 0.125f; break;
+		case 3: fixture_edicts[1].velocity[0] = 1.0f; break;
+		case 4: fixture_edicts[1].think = NULL; break;
+		case 5:
+			fixture_edicts[1].nextthink = level.time + FRAMETIME;
+			fixture_edicts[1].nextthink += 0.001f;
+			break;
+		case 6: resolved.trigger = &fixture_edicts[3]; break;
+		case 7: resolved.member = &fixture_edicts[4]; break;
+		default: break;
+		}
+		member_before = fixture_edicts[1];
+		memset(&proof, 0xa5, sizeof(proof));
+		CHECK(SG_OracleCompoundSwimRecover(&phantom, &resolved, destination,
+		      true, 0.0f, &proof, passent) == RLR_MECHANISM_UNRESOLVED);
+		CHECK(RecoveryProofZero(&proof));
+		CHECK(fixture_observation.pmove_calls == 0);
+		CHECK(memcmp(&fixture_edicts[1], &member_before,
+		             sizeof(member_before)) == 0);
+		CheckStaticContextRestored();
+	}
+}
+
 int main(void)
 {
 	TestTouchSubsteps();
 	TestFailureTable();
+	TestPreopenSweepChordBoundaries();
 	TestResolvedIdentityFailsClosed();
 	TestApproachArrivalSuppressedUntilTouch();
 	TestPrepareSource();
@@ -977,6 +1359,11 @@ int main(void)
 	TestContactDiscoveryRejectsNonFixedReplay();
 	TestLoaderReplayModeAndRestoration();
 	TestPublicSwimTraverseRegression();
+	TestRecoveryFromLiveTop();
+	TestRecoveryTrajectoryFailures();
+	TestRecoverySweepChordBoundaries();
+	TestRecoveryRejectsUnauthenticatedLiveState();
+	TestRecoveryRejectsTopAuthorityDrift();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_swim_oracle_test: %d failure(s)\n",

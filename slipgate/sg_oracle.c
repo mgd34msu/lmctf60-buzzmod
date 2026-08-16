@@ -2539,6 +2539,135 @@ static qboolean SG_OracleCompoundPreparedSourceValid(
 	return true;
 }
 
+typedef enum sg_oracle_compound_suffix_start_e
+{
+	SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE = 0,
+	SG_ORACLE_COMPOUND_SUFFIX_INSIDE
+} sg_oracle_compound_suffix_start_t;
+
+static qboolean SG_OracleCompoundLivePhantomValid(const sg_phantom_t *ph,
+	edict_t *passent, float old_frame_z)
+{
+	pmove_state_t expected;
+	double scaled;
+	int axis;
+
+	if (!ph || !passent || !passent->inuse || !passent->client ||
+	    passent->health <= 0 || passent->deadflag ||
+	    passent->movetype != MOVETYPE_WALK || passent->s.modelindex != 255 ||
+	    passent->client->chase_target || passent->client->hookstate ||
+	    passent->client->hook ||
+	    passent->client->ps.pmove.pm_type != PM_NORMAL ||
+	    !sv_gravity || !isfinite(sv_gravity->value) ||
+	    sv_gravity->value < -32768.0f || sv_gravity->value > 32767.0f ||
+	    !isfinite(old_frame_z) ||
+	    old_frame_z != passent->client->oldvelocity[2] ||
+	    ph->armed_door_count != 0 || ph->door_arm_overflow ||
+	    ph->door_passed || ph->door_wait_ms != 0 || ph->door_open_ms != 0)
+		return false;
+	expected = passent->client->ps.pmove;
+	expected.gravity = (short)sv_gravity->value;
+	for (axis = 0; axis < 3; axis++)
+	{
+		scaled = (double)passent->s.origin[axis] * 8.0;
+		if (!isfinite(scaled) || scaled < -32768.0 || scaled > 32767.0)
+			return false;
+		expected.origin[axis] = (short)scaled;
+		if (passent->s.origin[axis] != expected.origin[axis] * 0.125f)
+			return false;
+		scaled = (double)passent->velocity[axis] * 8.0;
+		if (!isfinite(scaled) || scaled < -32768.0 || scaled > 32767.0)
+			return false;
+		expected.velocity[axis] = (short)scaled;
+		if (passent->velocity[axis] != expected.velocity[axis] * 0.125f)
+			return false;
+	}
+	if (memcmp(&ph->pms, &expected, sizeof(expected)) != 0 ||
+	    memcmp(&ph->old_pms, &passent->client->old_pmove,
+	           sizeof(ph->old_pms)) != 0 ||
+	    ph->groundentity != (passent->groundentity != NULL) ||
+	    ph->watertype != passent->watertype ||
+	    ph->waterlevel != passent->waterlevel)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (ph->origin[axis] != ph->pms.origin[axis] * 0.125f ||
+		    ph->velocity[axis] != ph->pms.velocity[axis] * 0.125f)
+			return false;
+	return true;
+}
+
+static rune_reject_reason_t SG_OracleCompoundSwimSuffix(
+	sg_phantom_t *ph, const sg_compound_world_preopen_t *resolved,
+	edict_t *member, const vec3_t destination, qboolean destination_water,
+	float old_frame_z, edict_t *passent,
+	sg_oracle_compound_suffix_start_t start,
+	qboolean require_live_top, sg_compound_swim_recovery_proof_t *proof)
+{
+	sg_oracle_swim_cursor_t cursor;
+	sg_compound_swim_recovery_proof_t candidate;
+	sg_replay_status_t status;
+	qboolean outside_before;
+	int last_sweep_contact_ms = 0;
+
+	if (!proof)
+		return RLR_BAD_CONTROL_POLICY;
+	memset(proof, 0, sizeof(*proof));
+	memset(&candidate, 0, sizeof(candidate));
+	outside_before = SG_CompoundWorldOutsideSweep(resolved, ph->origin);
+	if ((start == SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE && !outside_before) ||
+	    (start == SG_ORACLE_COMPOUND_SUFFIX_INSIDE && outside_before))
+		return RLR_SUFFIX_REPLAY_FAILED;
+	status = SG_OracleSwimCursorBegin(&cursor, ph, destination,
+	                                  destination_water, old_frame_z,
+	                                  passent, false);
+	while (status == SG_REPLAY_RUNNING)
+	{
+		edict_t *current = NULL;
+		vec3_t before;
+		qboolean crossed, outside;
+
+		if (!SG_CompoundWorldResolvedMember(resolved, &current) ||
+		    current != member ||
+		    (require_live_top && !SG_CompoundWorldAtTopFor(resolved, 0)))
+			return RLR_SUFFIX_REPLAY_FAILED;
+		VectorCopy(ph->origin, before);
+		status = SG_OracleSwimCursorStep(&cursor, ph);
+		if (!SG_CompoundWorldResolvedMember(resolved, &current) ||
+		    current != member ||
+		    (require_live_top && !SG_CompoundWorldAtTopFor(resolved, 0)))
+			return RLR_SUFFIX_REPLAY_FAILED;
+		crossed = SG_CompoundWorldCrossesSweep(resolved, before, ph->origin);
+		outside = SG_CompoundWorldOutsideSweep(resolved, ph->origin);
+		if (candidate.sweep_clear_ms)
+		{
+			if (crossed || !outside)
+				return RLR_CLEAR_MISMATCH;
+		}
+		else
+		{
+			/* Contact in any 25 ms segment conservatively lasts through
+			 * that segment's endpoint.  A chord may start and end outside;
+			 * the aligned endpoint can still be the first clear boundary. */
+			if (crossed || !outside_before || !outside)
+				last_sweep_contact_ms =
+					cursor.state.progress.elapsed_ms;
+			if ((cursor.state.progress.elapsed_ms % SG_REPLAY_FRAME_MS) == 0 &&
+			    last_sweep_contact_ms > 0 && outside)
+				candidate.sweep_clear_ms = cursor.state.progress.elapsed_ms;
+		}
+		outside_before = outside;
+	}
+	if (status != SG_REPLAY_ARRIVED)
+		return RLR_SUFFIX_REPLAY_FAILED;
+	if (!candidate.sweep_clear_ms ||
+	    candidate.sweep_clear_ms > cursor.state.progress.arrival_ms)
+		return RLR_CLEAR_MISMATCH;
+	candidate.arrival_ms = cursor.state.progress.arrival_ms;
+	candidate.exit_speed = cursor.state.progress.exit_speed;
+	*proof = candidate;
+	return RLR_OK;
+}
+
 rune_reject_reason_t SG_OracleCompoundSwimPrepareSource(
 	const vec3_t source, const sg_compound_world_preopen_t *resolved,
 	float old_frame_z, sg_compound_swim_source_t *prepared,
@@ -2731,14 +2860,12 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	sg_compound_translate_step_t mover_step;
 	sg_oracle_swim_cursor_t cursor;
 	sg_compound_swim_proof_t candidate;
+	sg_compound_swim_recovery_proof_t suffix;
 	sg_replay_status_t status;
 	rune_reject_reason_t reason = RLR_BAD_CONTROL_POLICY;
 	edict_t *member = NULL;
 	qboolean scope_entered = false;
 	qboolean member_staged = false;
-	qboolean sweep_witness = false;
-	qboolean outside_continuous = false;
-	qboolean outside_before;
 	int remainder_commands;
 
 	if (!proof)
@@ -2852,67 +2979,13 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 		goto done;
 	}
 	SG_OracleCompoundCaptureSuffix(ph, old_frame_z, &candidate);
-	outside_before = SG_CompoundWorldOutsideSweep(resolved, ph->origin);
-	if (!outside_before)
-	{
-		reason = RLR_SUFFIX_REPLAY_FAILED;
+	reason = SG_OracleCompoundSwimSuffix(ph, resolved, member, destination,
+		destination_water, old_frame_z, passent,
+		SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE, false, &suffix);
+	if (reason != RLR_OK)
 		goto done;
-	}
-	status = SG_OracleSwimCursorBegin(&cursor, ph, destination,
-		destination_water, old_frame_z, passent, false);
-	while (status == SG_REPLAY_RUNNING)
-	{
-		edict_t *current = NULL;
-		vec3_t before;
-		qboolean crossed, outside;
-
-		VectorCopy(ph->origin, before);
-		status = SG_OracleSwimCursorStep(&cursor, ph);
-		if (!SG_CompoundWorldResolvedMember(resolved, &current) ||
-		    current != member)
-		{
-			reason = RLR_SUFFIX_REPLAY_FAILED;
-			goto done;
-		}
-		crossed = SG_CompoundWorldCrossesSweep(resolved, before,
-		                                            ph->origin);
-		outside = SG_CompoundWorldOutsideSweep(resolved, ph->origin);
-		if (candidate.sweep_clear_ms)
-		{
-			if (crossed || !outside)
-			{
-				reason = RLR_CLEAR_MISMATCH;
-				goto done;
-			}
-		}
-		else
-		{
-			if (crossed || !outside_before)
-				sweep_witness = true;
-			if (!outside)
-				outside_continuous = false;
-			else if (crossed || !outside_before)
-				outside_continuous = true;
-			if ((cursor.state.progress.elapsed_ms %
-			     SG_REPLAY_FRAME_MS) == 0 && sweep_witness &&
-			    outside_continuous && outside)
-				candidate.sweep_clear_ms =
-					cursor.state.progress.elapsed_ms;
-		}
-		outside_before = outside;
-	}
-	if (status != SG_REPLAY_ARRIVED)
-	{
-		reason = RLR_SUFFIX_REPLAY_FAILED;
-		goto done;
-	}
-	if (!candidate.sweep_clear_ms ||
-	    candidate.sweep_clear_ms > cursor.state.progress.arrival_ms)
-	{
-		reason = RLR_CLEAR_MISMATCH;
-		goto done;
-	}
-	candidate.arrival_ms = cursor.state.progress.arrival_ms;
+	candidate.arrival_ms = suffix.arrival_ms;
+	candidate.sweep_clear_ms = suffix.sweep_clear_ms;
 	if (candidate.touch_frame_end_ms >
 	    SG_RUNE_V3_MAX_COST_MS - candidate.suffix_start_ms ||
 	    candidate.arrival_ms >
@@ -2924,13 +2997,62 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	}
 	candidate.total_cost_ms = candidate.touch_frame_end_ms +
 		candidate.suffix_start_ms + candidate.arrival_ms;
-	candidate.exit_speed = cursor.state.progress.exit_speed;
+	candidate.exit_speed = suffix.exit_speed;
 	*proof = candidate;
 	reason = RLR_OK;
 
 done:
 	if (member_staged)
 		SG_OracleMemberRestore(member, &member_snapshot);
+	if (scope_entered)
+		SG_OracleCompoundScopeRestore(&scope);
+	return reason;
+}
+
+rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_recovery_proof_t *proof, edict_t *passent)
+{
+	sg_oracle_compound_scope_t scope;
+	sg_compound_swim_recovery_proof_t candidate;
+	edict_t *member = NULL;
+	rune_reject_reason_t reason = RLR_BAD_CONTROL_POLICY;
+	qboolean scope_entered = false;
+
+	if (!proof)
+		return RLR_BAD_CONTROL_POLICY;
+	memset(proof, 0, sizeof(*proof));
+	memset(&candidate, 0, sizeof(candidate));
+	if (!ph || !resolved || !destination || !SG_OracleFinite3(destination) ||
+	    (destination_water != false && destination_water != true) ||
+	    !sg_host.pmove || !sg_host.trace || !sg_host.pointcontents ||
+	    !sg_host.box_edicts || sg_oracle_active_phantom ||
+	    !SG_OracleCompoundLivePhantomValid(ph, passent, old_frame_z))
+		return RLR_BAD_CONTROL_POLICY;
+	if (!resolved->trigger ||
+	    !SG_CompoundWorldResolvedMember(resolved, &member) ||
+	    !SG_CompoundWorldAtTopFor(resolved, 0))
+		return RLR_MECHANISM_UNRESOLVED;
+	if (SG_CompoundWorldOutsideSweep(resolved, ph->origin))
+		return RLR_SUFFIX_REPLAY_FAILED;
+
+	SG_OracleCompoundScopeEnter(&scope, resolved->trigger, member, passent,
+	                            true, false);
+	scope_entered = true;
+	if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph) ||
+	    !SG_OracleCompoundPhantomClean(ph))
+	{
+		reason = RLR_SUFFIX_REPLAY_FAILED;
+		goto done;
+	}
+	reason = SG_OracleCompoundSwimSuffix(ph, resolved, member, destination,
+		destination_water, old_frame_z, passent,
+		SG_ORACLE_COMPOUND_SUFFIX_INSIDE, true, &candidate);
+	if (reason == RLR_OK)
+		*proof = candidate;
+
+done:
 	if (scope_entered)
 		SG_OracleCompoundScopeRestore(&scope);
 	return reason;

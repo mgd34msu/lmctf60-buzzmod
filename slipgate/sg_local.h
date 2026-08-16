@@ -97,6 +97,16 @@ typedef struct sg_compound_swim_proof_s
 	float		suffix_old_frame_z;
 } sg_compound_swim_proof_t;
 
+/* Live-only escape witness from an authoritative body state already inside a
+ * PREOPEN member's complete sweep while that exact member is held at TOP.
+ * Both times are relative to the first recovery command. */
+typedef struct sg_compound_swim_recovery_proof_s
+{
+	int		arrival_ms;
+	int		sweep_clear_ms;
+	byte		exit_speed;
+} sg_compound_swim_recovery_proof_t;
+
 /* Canonical source state owned by the compound oracle.  Keep the complete
  * phantom, and in particular pms and old_pms as distinct values: snapinitial
  * is part of the next real Pmove even when a freshly prepared offline source
@@ -150,6 +160,16 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	qboolean destination_water, float old_frame_z,
 	sg_compound_swim_proof_t *proof, edict_t *passent,
 	qboolean world_only, qboolean loader_replay);
+/* Re-prove a bounded SWIM from the exact state the live client's next Pmove
+ * would consume.  The caller owns rune/physics authority and must renew the
+ * TOP lease before calling; this observation-only oracle never touches the
+ * member timer.  Recovery starts inside the sweep.  A caller already outside
+ * is safe to release and is deliberately rejected here. */
+rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t destination, qboolean destination_water,
+	float old_frame_z, sg_compound_swim_recovery_proof_t *proof,
+	edict_t *passent);
 qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	const vec3_t anchor, edict_t *pad, float old_frame_z,
 	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
