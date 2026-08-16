@@ -367,7 +367,7 @@ rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	return RLR_OK;
 }
 
-static int CompoundWorldResolvedMember(
+int SG_CompoundWorldResolvedMember(
 	const sg_compound_world_preopen_t *resolved, edict_t **member_out)
 {
 	edict_t *member;
@@ -416,7 +416,7 @@ static int CompoundWorldSweepBounds(
 	int axis;
 
 	if (!mins || !maxs ||
-	    !CompoundWorldResolvedMember(resolved, &member))
+	    !SG_CompoundWorldResolvedMember(resolved, &member))
 		return 0;
 	(void)member;
 	for (axis = 0; axis < 3; axis++)
@@ -509,7 +509,7 @@ static int CompoundWorldTopMember(
 {
 	edict_t *member;
 
-	if (!CompoundWorldResolvedMember(resolved, &member) ||
+	if (!SG_CompoundWorldResolvedMember(resolved, &member) ||
 	    member->solid != SOLID_BSP ||
 	    member->moveinfo.state != SG_PLAT_STATE_TOP ||
 	    !CompoundWorldFinite3(member->s.origin) ||

@@ -42,6 +42,13 @@ rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	const float mechanism_anchor[3],
 	sg_compound_world_preopen_t *resolved);
 
+/* Revalidate every copied identity field and return the exact physical leaf.
+ * Offline replay uses this seam before temporarily staging that leaf; it must
+ * not duplicate or weaken the resolver's pointer/key/static-world contract. */
+int SG_CompoundWorldResolvedMember(
+	const sg_compound_world_preopen_t *resolved,
+	struct edict_s **member_out);
+
 /* Compound-only observation against the exact resolved translating member.
  * These helpers deliberately do not inherit ordinary declared-door policy.
  * Every call revalidates the live pointer/key and copied static identity. */

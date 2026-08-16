@@ -253,6 +253,9 @@
     <ClCompile Include="slipgate\sg_compound_world.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_door_scope.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_drop_live.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -469,6 +472,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_compound_world.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_door_scope.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_drop_live.h">

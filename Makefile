@@ -116,6 +116,42 @@ ROTATOR_SWEEP_TEST_BIN := sg_rotator_sweep_test.make
 ROTATOR_SWEEP_TEST_OBJS := .sg_rotator_sweep_test.make.o .sg_rotator_sweep_under_test.make.o \
 	.sg_rotator_sweep_q_shared_under_test.make.o
 ROTATOR_SWEEP_TEST_DEPS := $(ROTATOR_SWEEP_TEST_OBJS:.o=.d)
+COMPOUND_SWIM_ORACLE_TEST_BIN := sg_compound_swim_oracle_test.make
+COMPOUND_SWIM_ORACLE_TEST_OBJS := \
+	.sg_compound_swim_oracle_test.make.o \
+	.sg_compound_swim_oracle_oracle_under_test.make.o \
+	.sg_compound_swim_oracle_replay_under_test.make.o \
+	.sg_compound_swim_oracle_compound_under_test.make.o \
+	.sg_compound_swim_oracle_world_under_test.make.o \
+	.sg_compound_swim_oracle_q_shared_under_test.make.o
+COMPOUND_SWIM_ORACLE_TEST_DEPS := \
+	$(COMPOUND_SWIM_ORACLE_TEST_OBJS:.o=.d)
+COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS := \
+	sg_compound_swim_oracle_test.gnu sg_compound_swim_oracle_test.make \
+	.sg_compound_swim_oracle_test.gnu.o \
+	.sg_compound_swim_oracle_test.gnu.d \
+	.sg_compound_swim_oracle_oracle_under_test.gnu.o \
+	.sg_compound_swim_oracle_oracle_under_test.gnu.d \
+	.sg_compound_swim_oracle_replay_under_test.gnu.o \
+	.sg_compound_swim_oracle_replay_under_test.gnu.d \
+	.sg_compound_swim_oracle_compound_under_test.gnu.o \
+	.sg_compound_swim_oracle_compound_under_test.gnu.d \
+	.sg_compound_swim_oracle_world_under_test.gnu.o \
+	.sg_compound_swim_oracle_world_under_test.gnu.d \
+	.sg_compound_swim_oracle_q_shared_under_test.gnu.o \
+	.sg_compound_swim_oracle_q_shared_under_test.gnu.d \
+	$(COMPOUND_SWIM_ORACLE_TEST_OBJS) \
+	$(COMPOUND_SWIM_ORACLE_TEST_DEPS)
+RUNE_DOOR_SCOPE_TEST_BIN := sg_rune_door_scope_test.make
+RUNE_DOOR_SCOPE_TEST_OBJS := .sg_rune_door_scope_test.make.o \
+	.sg_rune_door_scope_under_test.make.o
+RUNE_DOOR_SCOPE_TEST_DEPS := $(RUNE_DOOR_SCOPE_TEST_OBJS:.o=.d)
+RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS := \
+	sg_rune_door_scope_test.gnu sg_rune_door_scope_test.make \
+	.sg_rune_door_scope_test.gnu.o .sg_rune_door_scope_test.gnu.d \
+	.sg_rune_door_scope_under_test.gnu.o \
+	.sg_rune_door_scope_under_test.gnu.d \
+	$(RUNE_DOOR_SCOPE_TEST_OBJS) $(RUNE_DOOR_SCOPE_TEST_DEPS)
 ENTFILE_TEST_BIN := g_entfile_path_test.make
 ENTFILE_TEST_OBJS := .g_entfile_path_test.make.o
 ENTFILE_TEST_DEPS := $(ENTFILE_TEST_OBJS:.o=.d)
@@ -400,6 +436,7 @@ OBJS := \
 	sg_replay.o \
 	sg_compound.o \
 	slipgate/sg_compound_world.o \
+	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
 	sg_accept_drop.o \
 	sg_swim_live.o \
@@ -455,6 +492,7 @@ default: all
 	rune-loader-test \
 	rune-writer-test rune-install-test rune-proof-test replay-test \
 	drop-live-test swim-live-test rotator-sweep-test entfile-test \
+	compound-swim-oracle-test rune-door-scope-test \
 	snapshot-test clean strip FORCE
 
 FORCE:
@@ -491,6 +529,8 @@ $(OBJS): $(REVISION_HEADER)
 
 slipgate/sg_compound_world.o: slipgate/sg_compound_world.c \
 		slipgate/sg_compound_world.h slipgate/sg_util.h g_local.h
+slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
+		slipgate/sg_rune_door_scope.h
 
 -include $(OBJS:.o=.d)
 -include $(HOST_TEST_DEPS)
@@ -515,6 +555,8 @@ slipgate/sg_compound_world.o: slipgate/sg_compound_world.c \
 -include $(SWIM_LIVE_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
+-include $(COMPOUND_SWIM_ORACLE_TEST_DEPS)
+-include $(RUNE_DOOR_SCOPE_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
 
 %.o: %.c
@@ -626,6 +668,15 @@ $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 $(ROTATOR_SWEEP_TEST_BIN): $(ROTATOR_SWEEP_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(ROTATOR_SWEEP_TEST_OBJS) $(LIBS)
+
+$(COMPOUND_SWIM_ORACLE_TEST_BIN): $(COMPOUND_SWIM_ORACLE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -Wl,--gc-sections -o $@ \
+		$(COMPOUND_SWIM_ORACLE_TEST_OBJS) $(LIBS)
+
+$(RUNE_DOOR_SCOPE_TEST_BIN): $(RUNE_DOOR_SCOPE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(RUNE_DOOR_SCOPE_TEST_OBJS) $(LIBS)
 
 $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -934,6 +985,67 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_swim_oracle_test.make.o: \
+		tests/sg_compound_swim_oracle_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_oracle_oracle_under_test.make.o: \
+		slipgate/sg_oracle.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_oracle_replay_under_test.make.o: \
+		slipgate/sg_replay.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_oracle_compound_under_test.make.o: \
+		slipgate/sg_compound.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_oracle_world_under_test.make.o: \
+		slipgate/sg_compound_world.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_oracle_q_shared_under_test.make.o: \
+		q_shared.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_door_scope_test.make.o: \
+		tests/sg_rune_door_scope_test.c slipgate/sg_rune_door_scope.h \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_door_scope_under_test.make.o: \
+		slipgate/sg_rune_door_scope.c slipgate/sg_rune_door_scope.h \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .g_entfile_path_test.make.o: tests/g_entfile_path_test.c g_entfile_path.h \
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -951,8 +1063,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_INTEGRATION_TEST) \
-		$(ROTATOR_SWEEP_TEST_BIN) \
-		$(ENTFILE_TEST_BIN)
+		$(ROTATOR_SWEEP_TEST_BIN) $(COMPOUND_SWIM_ORACLE_TEST_BIN) \
+		$(RUNE_DOOR_SCOPE_TEST_BIN) $(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOST_TEST_BIN)
 	$(Q)./$(ACTION_TEST_BIN)
@@ -978,6 +1090,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
 	$(Q)python3 $(HOOK_INTEGRATION_TEST)
 	$(Q)./$(ROTATOR_SWEEP_TEST_BIN)
+	$(Q)./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
+	$(Q)./$(RUNE_DOOR_SCOPE_TEST_BIN)
 	$(Q)./$(ENTFILE_TEST_BIN)
 	$(Q)./$(ENGINE_SNAPSHOT_TEST)
 
@@ -1070,6 +1184,14 @@ rotator-sweep-test: $(ROTATOR_SWEEP_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(ROTATOR_SWEEP_TEST_BIN)
 
+compound-swim-oracle-test: $(COMPOUND_SWIM_ORACLE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
+
+rune-door-scope-test: $(RUNE_DOOR_SCOPE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(RUNE_DOOR_SCOPE_TEST_BIN)
+
 entfile-test: $(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(ENTFILE_TEST_BIN)
@@ -1081,7 +1203,9 @@ snapshot-test:
 clean:
 	$(E) [CLEAN]
 	$(Q)$(RM) *.o *.d $(OBJS) $(TARGET) $(REVISION_HEADER) \
-		$(REVISION_HEADER).tmp.* $(HOST_TEST_ALL_ARTIFACTS)
+		$(REVISION_HEADER).tmp.* $(HOST_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
+		$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS)
 
 strip: $(TARGET)
 	$(E) [STRIP]

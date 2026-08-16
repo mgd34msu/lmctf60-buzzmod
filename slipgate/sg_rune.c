@@ -29,6 +29,7 @@
 #include "slipgate/sg_replay.h"
 #include "slipgate/sg_rune_install.h"
 #include "slipgate/sg_rune_proof.h"
+#include "slipgate/sg_rune_door_scope.h"
 #include "slipgate/sg_util.h"
 
 #define SEED_SPACING	64.0f
@@ -1647,7 +1648,7 @@ static qboolean Link_Add(int from, int to, rune_action_t act,
  * changes nothing above. Two call sites are appended elsewhere, each
  * marked with the same banner word: one line in Rune_Generate (the water
  * seeding pass, after Seed_Flood) and three lines at the very end of
- * Prove_All (the three link passes).
+ * Prove_BaseLinks (the three link passes).
  *
  * Why these three cannot come out of the pair loop above:
  *
@@ -3370,7 +3371,7 @@ static void Link_Doors(void)
  * Everything between this banner and the one that closes it is new. It adds
  * functions, reads the seeds and the links the earlier passes produced, and
  * changes nothing above; one call site is appended at the very end of
- * Prove_All.
+ * Prove_BaseLinks.
  *
  * A rocket jump is the only traversal in the graph that costs the mover
  * HEALTH, and that single fact shapes the whole pass:
@@ -3809,7 +3810,7 @@ static void Prove_RocketJumps(void)
 
 /* ======================= end of the ROCKET JUMP BLOCK ================ */
 
-static void Prove_All(void)
+static void Prove_BaseLinks(void)
 {
 	int i, j;
 
@@ -3992,14 +3993,6 @@ static void Prove_All(void)
 		Link_Declare_Tail(declared_mark);
 	}
 
-	/*
-	 * ROCKET JUMP BLOCK call site. Last of all, on purpose: the pass asks
-	 * whether the rest of the graph already reaches a place, and it can only
-	 * ask that once the rest of the graph exists. It runs after
-	 * Link_Declare_Tail as well, so the links it writes keep the RL_PROVEN
-	 * stamp Link_Add gives them -- they were rolled, every one of them.
-	 */
-	Prove_RocketJumps();
 }
 
 /* A field is useful only on the greatest part of the directed graph from
@@ -4199,40 +4192,89 @@ fail:
  * activator, so making the brush nonsolid is not permission to prove through
  * buttons, one-shot scripts, disabled triggers, or the wrong side of a door.
  */
-typedef struct { edict_t *e; solid_t solid; } heldopen_t;
-
-static int Doors_Open(heldopen_t *held, int max)
+static int Doors_TargetIdentity(void *context, void *opaque, int key)
 {
-	edict_t *e;
-	int i, n = 0;
+	edict_t *entity = opaque;
 
-	for (i = 0; i < globals.num_edicts; i++)
-	{
-		e = &g_edicts[i];
-		if (!e->inuse || !e->classname)
-			continue;
-		if (strncmp(e->classname, "func_door", 9) != 0)
-			continue;
-		if (n >= max)
-			return -n;
-		held[n].e = e;
-		held[n].solid = e->solid;
-		e->solid = SOLID_NOT;
-		sg_host.linkentity(e);
-		n++;
-	}
-	return n;
+	(void)context;
+	return entity && g_edicts && key >= 0 && key < globals.num_edicts &&
+	       entity == &g_edicts[key] && entity->inuse && entity->classname &&
+	       strncmp(entity->classname, "func_door", 9) == 0;
 }
 
-static void Doors_Restore(heldopen_t *held, int n)
+static int Doors_GetSolid(void *context, void *opaque)
 {
-	int i;
+	(void)context;
+	return (int)((edict_t *)opaque)->solid;
+}
 
-	for (i = 0; i < n; i++)
+static int Doors_GetLinkcount(void *context, void *opaque)
+{
+	(void)context;
+	return ((edict_t *)opaque)->linkcount;
+}
+
+static void Doors_SetSolid(void *context, void *opaque, int solid)
+{
+	(void)context;
+	((edict_t *)opaque)->solid = (solid_t)solid;
+}
+
+static void Doors_SetLinkcount(void *context, void *opaque, int linkcount)
+{
+	(void)context;
+	((edict_t *)opaque)->linkcount = linkcount;
+}
+
+static void Doors_LinkEntity(void *context, void *opaque)
+{
+	(void)context;
+	sg_host.linkentity((edict_t *)opaque);
+}
+
+static const sg_rune_door_scope_ops_t doors_scope_ops = {
+	Doors_TargetIdentity,
+	Doors_GetSolid,
+	Doors_GetLinkcount,
+	Doors_SetSolid,
+	Doors_SetLinkcount,
+	Doors_LinkEntity
+};
+
+/* Collect the complete target set before SG_RuneDoorScopeOpen changes the
+ * first solid.  The former negative-count convention discovered overflow only
+ * after opening 128 doors and made every caller responsible for partial
+ * rollback. */
+static sg_rune_door_scope_status_t Doors_Open(
+	sg_rune_door_scope_t *scope)
+{
+	sg_rune_door_scope_target_t targets[SG_RUNE_DOOR_SCOPE_MAX];
+	size_t count = 0;
+	int index;
+
+	if (!scope || !g_edicts || globals.num_edicts < 0)
+		return SG_RUNE_DOOR_SCOPE_INVALID_ARGUMENT;
+	for (index = 0; index < globals.num_edicts; index++)
 	{
-		held[i].e->solid = held[i].solid;
-		sg_host.linkentity(held[i].e);
+		edict_t *entity = &g_edicts[index];
+
+		if (!entity->inuse || !entity->classname ||
+		    strncmp(entity->classname, "func_door", 9) != 0)
+			continue;
+		if (count >= SG_RUNE_DOOR_SCOPE_MAX)
+			return SG_RUNE_DOOR_SCOPE_CAPACITY;
+		targets[count].entity = entity;
+		targets[count].key = index;
+		count++;
 	}
+	return SG_RuneDoorScopeOpen(scope, targets, count, (int)SOLID_NOT,
+		&doors_scope_ops, NULL);
+}
+
+static sg_rune_door_scope_status_t Doors_Restore(
+	sg_rune_door_scope_t *scope)
+{
+	return SG_RuneDoorScopeRestore(scope, &doors_scope_ops, NULL);
 }
 
 qboolean Rune_Generate(const char *mapname)
@@ -4247,15 +4289,18 @@ qboolean Rune_Generate(const char *mapname)
 	uint8_t *source_marks = NULL;
 	char game_directory[MAX_OSPATH];
 	char path[MAX_OSPATH], tmp_path[MAX_OSPATH];
-	heldopen_t held[128];
-	int ndoors = 0;
+	sg_rune_door_scope_t doors;
+	sg_rune_door_scope_status_t door_status;
+	int door_count = 0;
 	int directory_written;
 	qboolean scope_active = false;
 	qboolean generated = false;
+	qboolean door_restore_failed = false;
 	cvar_t *game_directory_cvar;
 	const char *game_directory_source;
 	const char *canonical_mapname;
 
+	SG_RuneDoorScopeInit(&doors);
 	SG_HooksInit();
 	if (!SG_RuneV3AuthorityCapture(mapname, &authority))
 	{
@@ -4330,15 +4375,21 @@ qboolean Rune_Generate(const char *mapname)
 	rj_redundant = rj_links = rj_budget_out = 0;
 	rj_query = 0;
 
-	ndoors = Doors_Open(held, 128);
-	if (ndoors < 0)
+	door_status = Doors_Open(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
 	{
-		Doors_Restore(held, -ndoors);
-		ndoors = 0;
-		sg_host.dprint("rune: FAILED: more than 128 doors; graph was not written\n");
+		if (door_status == SG_RUNE_DOOR_SCOPE_RESTORE_FAILED)
+			door_restore_failed = true;
+		if (door_status == SG_RUNE_DOOR_SCOPE_CAPACITY)
+			sg_host.dprint("rune: FAILED: more than 128 doors; graph was not written\n");
+		else
+			sg_host.dprint("rune: FAILED: door-open scope reason=%s; "
+			               "graph was not written\n",
+			               SG_RuneDoorScopeStatusName(door_status));
 		goto cleanup;
 	}
-	sg_host.dprint("rune: %d doors held open for proving\n", ndoors);
+	door_count = (int)doors.count;
+	sg_host.dprint("rune: %d doors held open for proving\n", door_count);
 
 	sg_host.dprint("rune: germinating from entities...\n");
 	Seed_Germinate();
@@ -4350,8 +4401,15 @@ qboolean Rune_Generate(const char *mapname)
 	Seed_Water();
 	if (gen_num_seeds <= 0)
 	{
-		Doors_Restore(held, ndoors);
-		ndoors = 0;
+		door_status = Doors_Restore(&doors);
+		if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+		{
+			door_restore_failed = true;
+			sg_host.dprint("rune: FAILED: base door restore reason=%s; "
+			               "graph was not written\n",
+			               SG_RuneDoorScopeStatusName(door_status));
+			goto cleanup;
+		}
 		sg_host.dprint("rune: FAILED: map produced no executable seeds\n");
 		goto cleanup;
 	}
@@ -4404,7 +4462,42 @@ qboolean Rune_Generate(const char *mapname)
 		}
 	}
 	sg_host.dprint("rune: %d seeds; proving links...\n", gen_num_seeds);
-	Prove_All();
+	Prove_BaseLinks();
+	door_status = Doors_Restore(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+	{
+		door_restore_failed = true;
+		sg_host.dprint("rune: FAILED: base door restore reason=%s; "
+		               "graph was not written\n",
+		               SG_RuneDoorScopeStatusName(door_status));
+		goto cleanup;
+	}
+	/* Compound proof seam: the base graph is complete and every real door is
+	 * once again linked SOLID_BSP. A later Link_Compounds pass belongs here,
+	 * before the logically-last rocket-jump pass and objective pruning. */
+	door_status = Doors_Open(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+	{
+		if (door_status == SG_RUNE_DOOR_SCOPE_RESTORE_FAILED)
+			door_restore_failed = true;
+		sg_host.dprint("rune: FAILED: rocket-jump door scope reason=%s; "
+		               "graph was not written\n",
+		               SG_RuneDoorScopeStatusName(door_status));
+		goto cleanup;
+	}
+	/* Last of all, as before: RJ asks whether every cheaper prover already
+	 * reaches the destination. The action is dormant today, but retaining this
+	 * call and its open-door world preserves its exact current order. */
+	Prove_RocketJumps();
+	door_status = Doors_Restore(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+	{
+		door_restore_failed = true;
+		sg_host.dprint("rune: FAILED: rocket-jump door restore reason=%s; "
+		               "graph was not written\n",
+		               SG_RuneDoorScopeStatusName(door_status));
+		goto cleanup;
+	}
 	sg_host.dprint("rune: %d links proven\n", gen_num_links);
 	sg_host.dprint("rune: dropstats pairs=%d seek=%d noedge=%d fellsteps=%d arrived=%d nocontact=%d\n",
 	           dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact);
@@ -4416,8 +4509,6 @@ qboolean Rune_Generate(const char *mapname)
 	           gen_lift_links, gen_tele_links, gen_door_links,
 	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links,
 	           gen_waypoint_links);
-	Doors_Restore(held, ndoors);
-	ndoors = 0;
 	/* Objective ownership is resolved against the real, restored world.  Mark
 	 * every non-core geometry sample before writing so runtime localization and
 	 * the deployment linter share the same fail-closed topology contract. */
@@ -4508,8 +4599,22 @@ qboolean Rune_Generate(const char *mapname)
 	generated = true;
 
 cleanup:
-	if (ndoors > 0)
-		Doors_Restore(held, ndoors);
+	if (SG_RuneDoorScopeActive(&doors))
+	{
+		door_status = Doors_Restore(&doors);
+		if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+		{
+			sg_host.dprint("rune: FAILED: cleanup door restore reason=%s; "
+			               "graph was not written\n",
+			               SG_RuneDoorScopeStatusName(door_status));
+			generated = false;
+		}
+		else if (door_restore_failed)
+			sg_host.dprint("rune: cleanup restored pending door scope; "
+			               "graph remains unwritten\n");
+	}
+	if (door_restore_failed)
+		generated = false;
 	if (link_keys)
 		sg_host.game_free(link_keys);
 	if (source_marks)

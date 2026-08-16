@@ -73,6 +73,32 @@ typedef struct sg_swim_proof_s
 	byte	exit_speed;
 } sg_swim_proof_t;
 
+/* Dormant PREOPEN D_SWIM witness.  Touch and its containing frame end are
+ * source-relative; TOP is mover-schedule-relative; arrival and sweep clearance
+ * are suffix-relative.  The final TOP mover pass and first suffix frame are
+ * the same 100 ms, so total cost uses suffix_start_ms rather than mover_top_ms. */
+typedef struct sg_compound_swim_proof_s
+{
+	int		touch_ms;
+	int		touch_frame_end_ms; /* ceil(touch_ms / 100) * 100 */
+	int		mover_top_ms;    /* raw Stage1 TOP tag (80@200 is 500) */
+	int		suffix_start_ms; /* TOP-frame start (raw tag minus 100) */
+	int		arrival_ms;
+	int		sweep_clear_ms;
+	int		total_cost_ms;   /* frame end + suffix start + arrival */
+	byte	exit_speed;
+	pmove_state_t suffix_pms;
+	pmove_state_t suffix_old_pms;
+	vec3_t		suffix_origin;
+	vec3_t		suffix_velocity;
+	qboolean	suffix_groundentity;
+	int		suffix_watertype;
+	int		suffix_waterlevel;
+	float		suffix_old_frame_z;
+} sg_compound_swim_proof_t;
+
+struct sg_compound_world_preopen_s;
+
 void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin);
 void SG_TeachFutility(int seed);
 void SG_TeachLinkFutility(int link);
@@ -98,6 +124,12 @@ qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite);
 qboolean SG_OracleSwimTraverse(sg_phantom_t *ph, const vec3_t destination,
 	qboolean destination_water, float old_frame_z, sg_swim_proof_t *proof,
 	edict_t *passent, qboolean world_only);
+rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t mechanism_anchor, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_proof_t *proof, edict_t *passent,
+	qboolean world_only, qboolean loader_replay);
 qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	const vec3_t anchor, edict_t *pad, float old_frame_z,
 	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
