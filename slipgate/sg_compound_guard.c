@@ -855,8 +855,15 @@ sg_compound_guard_run_t SG_CompoundGuardBotRunState(
 	{
 		if (!guard.retirements[slot].active)
 			continue;
+		if (!KeysValid(guard.retirements[slot].keys,
+		    guard.retirements[slot].key_count))
+		{
+			wait = 1;
+			continue;
+		}
 		memset(&record, 0, sizeof(record));
-		record.key_count = guard.retirements[slot].key_count;
+		record.key_count =
+		    (uint8_t)guard.retirements[slot].key_count;
 		memcpy(record.keys, guard.retirements[slot].keys,
 		    record.key_count * sizeof(record.keys[0]));
 		observation = ObserveSubject(&record, &bot->client);
