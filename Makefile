@@ -35,6 +35,19 @@ MOVER_LEASE_TEST_ALL_ARTIFACTS := \
 	.sg_mover_lease_test.gnu.o .sg_mover_lease_test.gnu.d \
 	.sg_mover_lease_under_test.gnu.o .sg_mover_lease_under_test.gnu.d \
 	$(MOVER_LEASE_TEST_OBJS) $(MOVER_LEASE_TEST_DEPS)
+COMPOUND_GUARD_TEST_BIN := sg_compound_guard_test.make
+COMPOUND_GUARD_TEST_OBJS := .sg_compound_guard_test.make.o \
+	.sg_compound_guard_under_test.make.o \
+	.sg_compound_guard_mover_lease_under_test.make.o
+COMPOUND_GUARD_TEST_DEPS := $(COMPOUND_GUARD_TEST_OBJS:.o=.d)
+COMPOUND_GUARD_TEST_ALL_ARTIFACTS := \
+	sg_compound_guard_test.gnu sg_compound_guard_test.make \
+	.sg_compound_guard_test.gnu.o .sg_compound_guard_test.gnu.d \
+	.sg_compound_guard_under_test.gnu.o \
+	.sg_compound_guard_under_test.gnu.d \
+	.sg_compound_guard_mover_lease_under_test.gnu.o \
+	.sg_compound_guard_mover_lease_under_test.gnu.d \
+	$(COMPOUND_GUARD_TEST_OBJS) $(COMPOUND_GUARD_TEST_DEPS)
 COMPOUND_WORLD_TEST_BIN := sg_compound_world_test.make
 COMPOUND_WORLD_TEST_OBJS := .sg_compound_world_test.make.o \
 	.sg_compound_world_under_test.make.o \
@@ -469,6 +482,7 @@ OBJS := \
 	sg_replay.o \
 	sg_compound.o \
 	slipgate/sg_mover_lease.o \
+	slipgate/sg_compound_guard.o \
 	slipgate/sg_compound_world.o \
 	slipgate/sg_compound_gen.o \
 	slipgate/sg_compound_publication.o \
@@ -522,6 +536,7 @@ all: $(TARGET)
 default: all
 
 .PHONY: all default host-test action-test compound-test mover-lease-test \
+	compound-guard-test \
 	compound-world-test \
 	compound-gen-test compound-publication-test \
 	identity-test rune-wire-test \
@@ -569,6 +584,8 @@ slipgate/sg_compound_world.o: slipgate/sg_compound_world.c \
 		slipgate/sg_compound_world.h slipgate/sg_util.h g_local.h
 slipgate/sg_mover_lease.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h
+slipgate/sg_compound_guard.o: slipgate/sg_compound_guard.c \
+		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h
 slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
@@ -582,6 +599,7 @@ slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 -include $(ACTION_TEST_DEPS)
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
+-include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_WORLD_TEST_DEPS)
 -include $(COMPOUND_GEN_TEST_DEPS)
 -include $(COMPOUND_PUBLICATION_TEST_DEPS)
@@ -681,6 +699,10 @@ $(MOVER_LEASE_TEST_BIN): $(MOVER_LEASE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(MOVER_LEASE_TEST_OBJS) $(LIBS)
 
+$(COMPOUND_GUARD_TEST_BIN): $(COMPOUND_GUARD_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(COMPOUND_GUARD_TEST_OBJS) $(LIBS)
+
 $(COMPOUND_WORLD_TEST_BIN): $(COMPOUND_WORLD_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(COMPOUND_WORLD_TEST_OBJS) $(LIBS)
@@ -779,6 +801,30 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_mover_lease_under_test.make.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_test.make.o: tests/sg_compound_guard_test.c \
+		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_under_test.make.o: slipgate/sg_compound_guard.c \
+		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_mover_lease_under_test.make.o: \
+		slipgate/sg_mover_lease.c slipgate/sg_mover_lease.h \
+		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -1158,7 +1204,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
-		$(MOVER_LEASE_TEST_BIN) \
+		$(MOVER_LEASE_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
@@ -1178,6 +1224,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(ACTION_TEST_BIN)
 	$(Q)./$(COMPOUND_TEST_BIN)
 	$(Q)./$(MOVER_LEASE_TEST_BIN)
+	$(Q)./$(COMPOUND_GUARD_TEST_BIN)
 	$(Q)./$(COMPOUND_WORLD_TEST_BIN)
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
 	$(Q)./$(COMPOUND_PUBLICATION_TEST_BIN)
@@ -1218,6 +1265,10 @@ compound-test: $(COMPOUND_TEST_BIN)
 mover-lease-test: $(MOVER_LEASE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(MOVER_LEASE_TEST_BIN)
+
+compound-guard-test: $(COMPOUND_GUARD_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_GUARD_TEST_BIN)
 
 compound-world-test: $(COMPOUND_WORLD_TEST_BIN)
 	$(E) [TEST] $<
@@ -1334,6 +1385,7 @@ clean:
 		$(COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
 		$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS)
 
 strip: $(TARGET)

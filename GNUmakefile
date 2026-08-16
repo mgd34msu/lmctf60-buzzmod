@@ -112,6 +112,23 @@ MOVER_LEASE_TEST_ALL_ARTIFACTS = \
 	.sg_mover_lease_under_test.gnu.o .sg_mover_lease_under_test.gnu.d \
 	.sg_mover_lease_test.make.o .sg_mover_lease_test.make.d \
 	.sg_mover_lease_under_test.make.o .sg_mover_lease_under_test.make.d
+COMPOUND_GUARD_TEST_BIN = sg_compound_guard_test.gnu
+COMPOUND_GUARD_TEST_OBJS = .sg_compound_guard_test.gnu.o \
+	.sg_compound_guard_under_test.gnu.o \
+	.sg_compound_guard_mover_lease_under_test.gnu.o
+COMPOUND_GUARD_TEST_DEPS = $(COMPOUND_GUARD_TEST_OBJS:.o=.d)
+COMPOUND_GUARD_TEST_ALL_ARTIFACTS = \
+	sg_compound_guard_test.gnu sg_compound_guard_test.make \
+	.sg_compound_guard_test.gnu.o .sg_compound_guard_test.gnu.d \
+	.sg_compound_guard_under_test.gnu.o \
+	.sg_compound_guard_under_test.gnu.d \
+	.sg_compound_guard_mover_lease_under_test.gnu.o \
+	.sg_compound_guard_mover_lease_under_test.gnu.d \
+	.sg_compound_guard_test.make.o .sg_compound_guard_test.make.d \
+	.sg_compound_guard_under_test.make.o \
+	.sg_compound_guard_under_test.make.d \
+	.sg_compound_guard_mover_lease_under_test.make.o \
+	.sg_compound_guard_mover_lease_under_test.make.d
 COMPOUND_WORLD_TEST_BIN = sg_compound_world_test.gnu
 COMPOUND_WORLD_TEST_OBJS = .sg_compound_world_test.gnu.o \
 	.sg_compound_world_under_test.gnu.o \
@@ -441,7 +458,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_publication.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_accept_drop.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_compound_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_publication.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_accept_drop.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -545,6 +562,7 @@ SHLIBLDFLAGS = -shared
 ######################################################################
 
 .PHONY: all dep host-test action-test compound-test mover-lease-test \
+	compound-guard-test \
 	compound-world-test \
 	compound-gen-test compound-publication-test \
 	identity-test rune-wire-test \
@@ -586,6 +604,8 @@ slipgate/sg_compound_world.o: slipgate/sg_compound_world.c \
 		slipgate/sg_compound_world.h slipgate/sg_util.h g_local.h
 slipgate/sg_mover_lease.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h
+slipgate/sg_compound_guard.o: slipgate/sg_compound_guard.c \
+		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h
 slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
@@ -647,6 +667,9 @@ $(COMPOUND_TEST_BIN): $(COMPOUND_TEST_OBJS)
 
 $(MOVER_LEASE_TEST_BIN): $(MOVER_LEASE_TEST_OBJS)
 	$(CC) -o $@ $(MOVER_LEASE_TEST_OBJS) $(LDFLAGS)
+
+$(COMPOUND_GUARD_TEST_BIN): $(COMPOUND_GUARD_TEST_OBJS)
+	$(CC) -o $@ $(COMPOUND_GUARD_TEST_OBJS) $(LDFLAGS)
 
 $(COMPOUND_WORLD_TEST_BIN): $(COMPOUND_WORLD_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(COMPOUND_WORLD_TEST_OBJS) $(LDFLAGS)
@@ -725,6 +748,27 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_mover_lease_under_test.gnu.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_test.gnu.o: tests/sg_compound_guard_test.c \
+		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_under_test.gnu.o: slipgate/sg_compound_guard.c \
+		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_guard_mover_lease_under_test.gnu.o: \
+		slipgate/sg_mover_lease.c slipgate/sg_mover_lease.h \
+		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -1009,7 +1053,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-pedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
-		$(MOVER_LEASE_TEST_BIN) \
+		$(MOVER_LEASE_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
@@ -1028,6 +1072,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
 	./$(MOVER_LEASE_TEST_BIN)
+	./$(COMPOUND_GUARD_TEST_BIN)
 	./$(COMPOUND_WORLD_TEST_BIN)
 	./$(COMPOUND_GEN_TEST_BIN)
 	./$(COMPOUND_PUBLICATION_TEST_BIN)
@@ -1065,6 +1110,9 @@ compound-test: $(COMPOUND_TEST_BIN)
 
 mover-lease-test: $(MOVER_LEASE_TEST_BIN)
 	./$(MOVER_LEASE_TEST_BIN)
+
+compound-guard-test: $(COMPOUND_GUARD_TEST_BIN)
+	./$(COMPOUND_GUARD_TEST_BIN)
 
 compound-world-test: $(COMPOUND_WORLD_TEST_BIN)
 	./$(COMPOUND_WORLD_TEST_BIN)
@@ -1156,6 +1204,7 @@ $(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
 	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
 	$(CC) -MM $(filter-out slipgate/sg_compound_world.c \
 		slipgate/sg_mover_lease.c \
+		slipgate/sg_compound_guard.c \
 		slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_publication.c \
 		slipgate/sg_rune_door_scope.c, \
@@ -1164,6 +1213,8 @@ $(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
 		slipgate/sg_compound_world.c >> "$$tmp"; \
 	$(CC) -MM -MT slipgate/sg_mover_lease.o \
 		slipgate/sg_mover_lease.c >> "$$tmp"; \
+	$(CC) -MM -MT slipgate/sg_compound_guard.o \
+		slipgate/sg_compound_guard.c >> "$$tmp"; \
 	$(CC) -MM -MT slipgate/sg_compound_gen.o \
 		slipgate/sg_compound_gen.c >> "$$tmp"; \
 	$(CC) -MM -MT slipgate/sg_compound_publication.o \
@@ -1194,6 +1245,7 @@ clean:
 			$(COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 			$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
+			$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
 			$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS) *.orig ~* core
 
 distclean:	clean
@@ -1208,6 +1260,7 @@ endif
 -include $(ACTION_TEST_DEPS)
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
+-include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_WORLD_TEST_DEPS)
 -include $(COMPOUND_GEN_TEST_DEPS)
 -include $(COMPOUND_PUBLICATION_TEST_DEPS)

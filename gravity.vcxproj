@@ -364,6 +364,7 @@
     <ClCompile Include="slipgate\sg_replay.c" />
     <ClCompile Include="slipgate\sg_compound.c" />
     <ClCompile Include="slipgate\sg_mover_lease.c" />
+    <ClCompile Include="slipgate\sg_compound_guard.c" />
     <ClCompile Include="slipgate\sg_compound_world.c" />
     <ClCompile Include="slipgate\sg_compound_gen.c" />
     <ClCompile Include="slipgate\sg_compound_publication.c" />
@@ -451,6 +452,7 @@
     <ClInclude Include="slipgate\sg_replay.h" />
     <ClInclude Include="slipgate\sg_compound.h" />
     <ClInclude Include="slipgate\sg_mover_lease.h" />
+    <ClInclude Include="slipgate\sg_compound_guard.h" />
     <ClInclude Include="slipgate\sg_compound_world.h" />
     <ClInclude Include="slipgate\sg_compound_gen.h" />
     <ClInclude Include="slipgate\sg_compound_publication.h" />

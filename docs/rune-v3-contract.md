@@ -435,9 +435,16 @@ Recovery rules:
   a RIDE ingress lip is never assumed safe merely because it was serialized.
 - If no safe bounded return exists, finish through the normal death/respawn
   lifecycle. Never teleport or release to nearest-seed navigation.
-- Death, disconnect, replacement, and map change clear state and lease.
+- Authority loss pauses the controller clock and emits no movement command.
+  The mover guard remains owned until authority returns for a fresh online
+  proof or every guarded body and bolt is freshly observed outside the sweep.
+- Death clears per-bot movement state but transfers the lease to a pointer-free
+  orphan guard while the corpse or hook bolt is still solid in the sweep.
+  Respawn, disconnect, and client replacement release only after each captured
+  subject is absent, nonsolid, or freshly proved outside the complete sweep.
+  Map teardown clears the registry synchronously before edict storage is freed.
 - A second bot cannot enter the same canonical mover set until its owner clears,
-  safely aborts, or dies.
+  safely aborts, or every orphaned subject is proved clear.
 
 ## Migration and strict rejection
 
