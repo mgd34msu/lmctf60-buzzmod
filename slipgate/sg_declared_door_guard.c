@@ -1,8 +1,7 @@
-/* sg_declared_door_guard.c -- ordinary RL_DOOR shared-mover authority. */
+/* sg_declared_door_guard.c -- authenticated door-plan shared-mover authority. */
 #include "../g_local.h"
 
 #include <limits.h>
-#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -10,29 +9,10 @@
 #include "sg_local.h"
 #include "sg_bot.h"
 #include "sg_declared_door_guard.h"
+#include "sg_rune_binding.h"
+#include "sg_rune_mechanism_catalog.h"
 
 void door_use(edict_t *self, edict_t *other, edict_t *activator);
-
-typedef struct sg_declared_door_snapshot_s
-{
-	rune_t *rune;
-	rune_link_t *links;
-	rune_seed_t *seeds;
-	int num_links;
-	int num_seeds;
-	int link_index;
-	int from;
-	int to;
-	byte action;
-	vec3_t anchor;
-	vec3_t source;
-} sg_declared_door_snapshot_t;
-
-static int DeclaredDoorFinite3(const vec3_t value)
-{
-	return value && isfinite(value[0]) && isfinite(value[1]) &&
-	       isfinite(value[2]);
-}
 
 static int DeclaredDoorWorldValid(void)
 {
@@ -77,68 +57,6 @@ static int DeclaredDoorEdictKey(const edict_t *entity, int *key_out)
 	return 0;
 }
 
-static int DeclaredDoorSnapshot(int link_index,
-	sg_declared_door_snapshot_t *snapshot)
-{
-	rune_t *rune;
-	rune_link_t *link;
-
-	if (!snapshot || link_index < 0)
-		return 0;
-	memset(snapshot, 0, sizeof(*snapshot));
-	rune = SG_Rune();
-	if (!rune || !SG_RunePublishedShapeValid(rune) ||
-	    !SG_RunePhysicsCompatible(rune) ||
-	    !rune->links || !rune->seeds ||
-	    rune->hdr.num_links <= 0 || rune->hdr.num_links > RUNE_MAX_LINKS ||
-	    rune->hdr.num_seeds <= 0 || rune->hdr.num_seeds > SG_MAX_SEEDS ||
-	    link_index >= rune->hdr.num_links)
-		return 0;
-	link = &rune->links[link_index];
-	if (link->action != RL_DOOR || link->from < 0 ||
-	    link->from >= rune->hdr.num_seeds || link->to < 0 ||
-	    link->to >= rune->hdr.num_seeds ||
-	    !DeclaredDoorFinite3(link->anchor) ||
-	    !DeclaredDoorFinite3(rune->seeds[link->from].origin))
-		return 0;
-	snapshot->rune = rune;
-	snapshot->links = rune->links;
-	snapshot->seeds = rune->seeds;
-	snapshot->num_links = rune->hdr.num_links;
-	snapshot->num_seeds = rune->hdr.num_seeds;
-	snapshot->link_index = link_index;
-	snapshot->from = link->from;
-	snapshot->to = link->to;
-	snapshot->action = link->action;
-	memcpy(snapshot->anchor, link->anchor, sizeof(snapshot->anchor));
-	memcpy(snapshot->source, rune->seeds[link->from].origin,
-	       sizeof(snapshot->source));
-	return 1;
-}
-
-static int DeclaredDoorSnapshotCurrent(
-	const sg_declared_door_snapshot_t *snapshot)
-{
-	rune_t *rune;
-	rune_link_t *link;
-
-	if (!snapshot || !(rune = SG_Rune()) || rune != snapshot->rune ||
-	    rune->links != snapshot->links || rune->seeds != snapshot->seeds ||
-	    rune->hdr.num_links != snapshot->num_links ||
-	    rune->hdr.num_seeds != snapshot->num_seeds ||
-	    snapshot->link_index < 0 ||
-	    snapshot->link_index >= rune->hdr.num_links)
-		return 0;
-	link = &rune->links[snapshot->link_index];
-	return link->action == snapshot->action && link->action == RL_DOOR &&
-	       link->from == snapshot->from && link->to == snapshot->to &&
-	       link->from >= 0 && link->from < rune->hdr.num_seeds &&
-	       memcmp(link->anchor, snapshot->anchor,
-	              sizeof(snapshot->anchor)) == 0 &&
-	       memcmp(rune->seeds[link->from].origin, snapshot->source,
-	              sizeof(snapshot->source)) == 0;
-}
-
 static void DeclaredDoorSortKeys(sg_mover_key_t *keys, size_t count)
 {
 	size_t index;
@@ -157,69 +75,16 @@ static void DeclaredDoorSortKeys(sg_mover_key_t *keys, size_t count)
 	}
 }
 
-static sg_compound_guard_result_t DeclaredDoorResolveTrigger(
-	edict_t *trigger, sg_mover_key_t *keys_out, size_t *key_count_out,
-	int *trigger_key_out)
-{
-	edict_t *members[SG_MOVER_LEASE_MAX_KEYS];
-	size_t unique_count = 0U;
-	int count;
-	int index;
-	int trigger_key;
-
-	if (key_count_out)
-		*key_count_out = 0U;
-	if (trigger_key_out)
-		*trigger_key_out = 0;
-	if (!keys_out || !key_count_out)
-		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
-	if (!DeclaredDoorWorldValid())
-		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
-	if (!DeclaredDoorEdictKey(trigger, &trigger_key) ||
-	    !DeclaredDoorPhysicalKey(trigger_key))
-		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
-	memset(members, 0, sizeof(members));
-	count = SG_DeclaredDoorMembers(trigger, members,
-	    (int)SG_MOVER_LEASE_MAX_KEYS);
-	if (count <= 0 || count > (int)SG_MOVER_LEASE_MAX_KEYS)
-		return SG_COMPOUND_GUARD_INVALID_KEYS;
-	for (index = 0; index < count; index++)
-	{
-		int key;
-
-		if (!DeclaredDoorEdictKey(members[index], &key) ||
-		    !DeclaredDoorPhysicalKey(key) ||
-		    key <= 0 || (uintmax_t)key > (uintmax_t)UINT16_MAX)
-			return SG_COMPOUND_GUARD_INVALID_KEYS;
-		keys_out[unique_count++] = (sg_mover_key_t)key;
-	}
-	DeclaredDoorSortKeys(keys_out, unique_count);
-	if (unique_count > 1U)
-	{
-		size_t source;
-		size_t destination = 1U;
-
-		for (source = 1U; source < unique_count; source++)
-			if (keys_out[source] != keys_out[destination - 1U])
-				keys_out[destination++] = keys_out[source];
-		unique_count = destination;
-	}
-	if (unique_count == 0U ||
-	    unique_count > SG_MOVER_LEASE_MAX_KEYS)
-		return SG_COMPOUND_GUARD_INVALID_KEYS;
-	*key_count_out = unique_count;
-	if (trigger_key_out)
-		*trigger_key_out = trigger_key;
-	return SG_COMPOUND_GUARD_OK;
-}
-
 static sg_compound_guard_result_t DeclaredDoorResolve(
 	int link_index, sg_mover_key_t *keys_out, size_t *key_count_out,
-	edict_t **trigger_out, int *trigger_key_out)
+	edict_t **trigger_out, int *trigger_key_out, int owned_execution)
 {
-	sg_declared_door_snapshot_t snapshot;
-	edict_t *trigger;
-	sg_compound_guard_result_t result;
+	sg_rune_mechanism_binding_t binding;
+	uint32_t mover_keys[SG_RUNE_BINDING_MAX_MOVERS];
+	rune_t *rune;
+	size_t key_count;
+	size_t index;
+	int trigger_key;
 
 	if (key_count_out)
 		*key_count_out = 0U;
@@ -229,24 +94,48 @@ static sg_compound_guard_result_t DeclaredDoorResolve(
 		*trigger_key_out = 0;
 	if (!keys_out || !key_count_out || link_index < 0)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
-	if (!DeclaredDoorSnapshot(link_index, &snapshot))
+	rune = SG_Rune();
+	if (!DeclaredDoorWorldValid() || !rune ||
+	    !SG_RunePhysicsCompatible(rune) ||
+	    !(owned_execution
+	        ? SG_RuneMechanismBindingCaptureOwned(rune,
+	              (uint32_t)link_index, &binding)
+	        : SG_RuneMechanismBindingCapture(rune,
+	              (uint32_t)link_index, &binding)) ||
+	    !SG_RuneMechanismBindingDoorAction(&binding) ||
+	    !SG_RuneMechanismBindingMoverKeys(&binding, mover_keys,
+	        &key_count) || key_count == 0U ||
+	    key_count > SG_MOVER_LEASE_MAX_KEYS ||
+	    !DeclaredDoorEdictKey(binding.entry_entity, &trigger_key) ||
+	    trigger_key <= 0 || (uint32_t)trigger_key != binding.entry_node->key ||
+	    !DeclaredDoorPhysicalKey(trigger_key))
 		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
-	trigger = SG_DeclaredDoorForLink(snapshot.anchor, snapshot.source);
-	result = DeclaredDoorResolveTrigger(trigger, keys_out, key_count_out,
-	    trigger_key_out);
-	if (result != SG_COMPOUND_GUARD_OK)
-		return result;
-	/* The resolver and enumeration are host/world calls.  Refuse their result
-	 * if the current rune, link, anchor, or source changed underneath them. */
-	if (!DeclaredDoorSnapshotCurrent(&snapshot))
+	for (index = 0U; index < key_count; index++)
+	{
+		edict_t *member;
+		int actual_key;
+
+		if (mover_keys[index] == 0U || mover_keys[index] > UINT16_MAX ||
+		    !DeclaredDoorPhysicalKey((int)mover_keys[index]) ||
+		    !(member = SG_RuneMechanismBindingResolveNode(&binding,
+		        mover_keys[index])) ||
+		    !DeclaredDoorEdictKey(member, &actual_key) ||
+		    actual_key <= 0 || (uint32_t)actual_key != mover_keys[index])
+			return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
+		keys_out[index] = (sg_mover_key_t)mover_keys[index];
+	}
+	if (!SG_RuneMechanismBindingCurrent(&binding))
 		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
+	*key_count_out = key_count;
 	if (trigger_out)
-		*trigger_out = trigger;
+		*trigger_out = binding.entry_entity;
+	if (trigger_key_out)
+		*trigger_key_out = trigger_key;
 	return SG_COMPOUND_GUARD_OK;
 }
 
 static sg_compound_guard_result_t DeclaredDoorResolveBound(
-	uint32_t mechanism_index, sg_mover_key_t *keys_out,
+	uint32_t mechanism_index, int link_index, sg_mover_key_t *keys_out,
 	size_t *key_count_out, edict_t **trigger_out)
 {
 	edict_t *trigger;
@@ -256,12 +145,11 @@ static sg_compound_guard_result_t DeclaredDoorResolveBound(
 	if (trigger_out)
 		*trigger_out = NULL;
 	if (mechanism_index == 0U || mechanism_index > (uint32_t)INT_MAX ||
-	    !DeclaredDoorWorldValid() ||
+	    link_index < 0 || !DeclaredDoorWorldValid() ||
 	    !DeclaredDoorPhysicalKey((int)mechanism_index))
 		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
-	trigger = &g_edicts[(int)mechanism_index];
-	result = DeclaredDoorResolveTrigger(trigger, keys_out, key_count_out,
-	    &trigger_key);
+	result = DeclaredDoorResolve(link_index, keys_out, key_count_out,
+	    &trigger, &trigger_key, 1);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
 	if ((uint32_t)trigger_key != mechanism_index)
@@ -271,30 +159,54 @@ static sg_compound_guard_result_t DeclaredDoorResolveBound(
 	return SG_COMPOUND_GUARD_OK;
 }
 
-static int DeclaredDoorBoundTriggerAbsent(uint32_t mechanism_index)
+static int DeclaredDoorBoundTriggerAbsent(uint32_t mechanism_index,
+	int link_index)
 {
-	return mechanism_index > 0U && mechanism_index <= (uint32_t)INT_MAX &&
-	       DeclaredDoorWorldValid() &&
-	       DeclaredDoorPhysicalKey((int)mechanism_index) &&
-	       !g_edicts[(int)mechanism_index].inuse;
+	rune_t *rune;
+	const rune_mechanism_plan_t *plan;
+	const rune_mechanism_node_t *entry;
+
+	rune = SG_Rune();
+	if (mechanism_index == 0U || mechanism_index > (uint32_t)INT_MAX ||
+	    link_index < 0 || !DeclaredDoorWorldValid() || !rune ||
+	    !SG_RunePublishedShapeValid(rune) ||
+	    !(plan = SG_RuneMechanismPlanForLink(rune,
+	        (uint32_t)link_index)) || plan->entry_key != mechanism_index ||
+	    !(entry = SG_RuneMechanismNodeByKey(rune, mechanism_index)))
+		return 0;
+	return SG_MechCatalogEntityRetired(mechanism_index, entry);
 }
 
 static sg_compound_guard_result_t DeclaredDoorMembersFromKeys(
 	const sg_mover_key_t *keys, size_t key_count, edict_t **members_out)
 {
+	rune_t *rune;
 	size_t index;
 
 	if (!keys || !members_out || key_count == 0U ||
 	    key_count > SG_MOVER_LEASE_MAX_KEYS || !DeclaredDoorWorldValid())
 		return SG_COMPOUND_GUARD_INVALID_KEYS;
+	rune = SG_Rune();
+	if (!rune || !SG_RunePublishedShapeValid(rune))
+		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
 	for (index = 0U; index < key_count; index++)
 	{
+		const rune_mechanism_node_t *node;
+		edict_t *member;
 		int key = (int)keys[index];
+		int actual_key;
 
 		if (!DeclaredDoorPhysicalKey(key) ||
 		    (index > 0U && keys[index - 1U] >= keys[index]))
 			return SG_COMPOUND_GUARD_INVALID_KEYS;
-		members_out[index] = &g_edicts[key];
+		node = SG_RuneMechanismNodeByKey(rune, (uint32_t)key);
+		member = node ? SG_MechCatalogResolveEntity((uint32_t)key, node) : NULL;
+		if (!member || !SG_MechCatalogEntityExecutionMatches((uint32_t)key,
+		        node, SG_MECHANISM_CONTROLLER_AUTO_DOOR) ||
+		    !DeclaredDoorEdictKey(member, &actual_key) ||
+		    actual_key != key)
+			return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
+		members_out[index] = member;
 	}
 	return SG_COMPOUND_GUARD_OK;
 }
@@ -446,7 +358,7 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAcquire(sg_bot_t *bot,
 	if (!bot)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	result = DeclaredDoorResolve(link_index, keys, &key_count, NULL,
-	    &trigger_key);
+	    &trigger_key, 0);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
 	return SG_CompoundGuardAcquireDeclaredDoorBound(&bot->compound_guard,
@@ -464,7 +376,7 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorize(sg_bot_t *bot,
 	if (!bot)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	result = DeclaredDoorResolve(link_index, keys, &key_count, NULL,
-	    &trigger_key);
+	    &trigger_key, 1);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
 	return SG_CompoundGuardAuthorize(&bot->compound_guard,
@@ -495,14 +407,16 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardPause(sg_bot_t *bot)
 	result = SG_CompoundGuardValidate(&bot->compound_guard, &record);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
-	result = DeclaredDoorResolveBound(record.mechanism_index, keys,
+	result = DeclaredDoorResolveBound(record.mechanism_index,
+	    record.link_index, keys,
 	    &key_count, NULL);
 	if (result != SG_COMPOUND_GUARD_OK)
 	{
 		/* Losing an admitted, non-killtargetable activator is corruption, but
 		 * reducing an exact ACTIVE claim to PAUSED remains safe and is required
 		 * for bounded physical maintenance while fail-closed. */
-		if (!DeclaredDoorBoundTriggerAbsent(record.mechanism_index) ||
+		if (!DeclaredDoorBoundTriggerAbsent(record.mechanism_index,
+		        record.link_index) ||
 		    record.key_count == 0U ||
 		    record.key_count > SG_MOVER_LEASE_MAX_KEYS)
 			return result;
@@ -537,7 +451,7 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardResume(sg_bot_t *bot,
 	if (!bot)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	result = DeclaredDoorResolve(link_index, keys, &key_count, NULL,
-	    &trigger_key);
+	    &trigger_key, 1);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
 	result = SG_CompoundGuardValidate(&bot->compound_guard, &record);
@@ -584,14 +498,16 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardHoldOpen(sg_bot_t *bot,
 	    record.link_index >= 0 && record.mechanism_index != 0U;
 	if (result != SG_COMPOUND_GUARD_OK && !quarantined)
 		return result;
-	result = DeclaredDoorResolveBound(record.mechanism_index, keys,
+	result = DeclaredDoorResolveBound(record.mechanism_index,
+	    record.link_index, keys,
 	    &key_count, NULL);
 	if (result != SG_COMPOUND_GUARD_OK)
 	{
 		/* The activator may be killtargeted after acquisition.  The durable
 		 * record still owns its exact physical keys, so protective TOP renewal
 		 * remains possible without granting touch/use authority. */
-		if (!DeclaredDoorBoundTriggerAbsent(record.mechanism_index) ||
+		if (!DeclaredDoorBoundTriggerAbsent(record.mechanism_index,
+		        record.link_index) ||
 		    record.key_count == 0U ||
 		    record.key_count > SG_MOVER_LEASE_MAX_KEYS)
 			return result;
@@ -660,7 +576,8 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardReleaseProvedClear(
 	    (record.state != SG_MOVER_LEASE_ACTIVE &&
 	     record.state != SG_MOVER_LEASE_PAUSED))
 		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
-	result = DeclaredDoorResolveBound(record.mechanism_index, keys,
+	result = DeclaredDoorResolveBound(record.mechanism_index,
+	    record.link_index, keys,
 	    &key_count, NULL);
 	if (result != SG_COMPOUND_GUARD_OK)
 	{
@@ -668,7 +585,8 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardReleaseProvedClear(
 		 * exact edict absent, the core's captured-key subject proof is the only
 		 * remaining authority and may safely release once every old mover sweep
 		 * is clear.  A live-but-drifted/reused trigger remains fail-closed. */
-		if (DeclaredDoorBoundTriggerAbsent(record.mechanism_index))
+		if (DeclaredDoorBoundTriggerAbsent(record.mechanism_index,
+		        record.link_index))
 		{
 			result = DeclaredDoorAllBotsOutside(record.keys,
 			    record.key_count);

@@ -1,4 +1,4 @@
-/* sg_declared_door_guard.h -- ordinary RL_DOOR shared-mover authority. */
+/* sg_declared_door_guard.h -- authenticated door-plan shared-mover authority. */
 #ifndef SG_DECLARED_DOOR_GUARD_H
 #define SG_DECLARED_DOOR_GUARD_H
 
@@ -7,9 +7,8 @@
 struct sg_bot_s;
 struct edict_s;
 
-/* These entry points only adapt an already-live ordinary RL_DOOR declaration
- * to the process-wide mover guard.  They do not enable any dormant action or
- * revise the RUNE action contract. */
+/* These entry points adapt an already-live authenticated door declaration to
+ * the process-wide mover guard. */
 sg_compound_guard_result_t SG_DeclaredDoorGuardAcquire(
 	struct sg_bot_s *bot, int link_index);
 sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorize(

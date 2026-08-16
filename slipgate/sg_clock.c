@@ -41,8 +41,8 @@
  *
  * The posture latches on a 15-second tick. Evaluated per frame it would
  * chatter across the 25% line and across every cap that ties the game, and
- * the defensive quota is the exact input the wave-285 flap census convicted
- * for doing that (600 flips in 600 samples on it18). A strategy that
+ * the defensive quota is the exact input observed doing that (600 flips in
+ * 600 samples on it18). A strategy that
  * changes its mind four times a second is not a strategy.
  *
  * WHERE THE SCORE COMES FROM. The team capture total is summed per player
@@ -242,4 +242,3 @@ void Clock_LevelReset(void)
 	sg_clock_known = false;
 	sg_clock_left = 0.0f;
 }
-

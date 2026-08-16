@@ -4,6 +4,7 @@
 #include "slipgate/sg_compound_guard_game.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 
 
 void G_ProjectSource (vec3_t point, vec3_t distance, vec3_t forward, vec3_t right, vec3_t result)
@@ -227,6 +228,12 @@ match (string)self.target and call their .use function
 void G_UseTargets (edict_t *ent, edict_t *activator)
 {
 	edict_t		*t;
+
+	/* A guarded bot may execute only the exact target fanout copied into its
+	 * authenticated mechanism plan.  Validate before delay allocation,
+	 * messages, killtargets, or the first callback. */
+	if (SG_HandleMechanismTargets(ent, activator))
+		return;
 
 //
 // check for a delay
@@ -463,6 +470,7 @@ void G_InitEdict (edict_t *e)
 	e->classname = "noclass";
 	e->gravity = 1.0;
 	e->s.number = e - g_edicts;
+	SG_MechCatalogEntityInitialized(e);
 }
 
 /*
@@ -510,7 +518,9 @@ Marks the edict as free
 */
 void G_FreeEdict (edict_t *ed)
 {
+	SG_ButtonExecutionEntityFreed(ed);
 	gi.unlinkentity (ed);		// unlink from world
+	SG_MechCatalogInvalidate(ed);
 
 	// LM_JORM -- REMOVE later
 /*	

@@ -2,13 +2,12 @@
  * sg_danger.c -- graph-bound, team-local learned danger.
  *
  * Persistence policy and filesystem I/O live above this model.  This module
- * owns only the published runtime planes and the explicit-LE DNG3 payload.
+ * owns only the published runtime planes and the explicit-LE payload.
  */
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_danger.h"
 #include "slipgate/sg_rune.h"
-#include "slipgate/sg_rune_wire.h"
 #include "slipgate/sg_util.h"
 
 #include <limits.h>
@@ -19,21 +18,16 @@
 #define DANGER_WIRE_VALUE_BYTES 4U
 #define DANGER_VALUE_MAX 8000
 #define DANGER_LEARN_INCREMENT 1200
-#define DANGER_RUNE_HEADER_CRC_OFFSET 60U
-
-_Static_assert(CHAR_BIT == 8, "DNG3 requires 8-bit bytes");
+_Static_assert(CHAR_BIT == 8, "danger payload requires 8-bit bytes");
 _Static_assert(INT_MAX >= DANGER_VALUE_MAX,
-	"native danger cells cannot represent the DNG3 range");
-_Static_assert(SG_MAX_SEEDS == SG_RUNE_V3_MAX_SEEDS,
-	"danger and RUNE v3 seed limits must agree");
-_Static_assert(SG_RUNE_V3_HEADER_BYTES >=
-	DANGER_RUNE_HEADER_CRC_OFFSET + DANGER_WIRE_VALUE_BYTES,
-	"RUNE v3 header CRC offset drift");
+	"native danger cells cannot represent the payload range");
+_Static_assert(SG_MAX_SEEDS == RUNE_MAX_SEEDS,
+	"danger and rune seed limits must agree");
 
 /* No publication escapes this file.  Danger_Field is a const pricing view. */
 static int sg_danger[DANGER_TEAM_COUNT][SG_MAX_SEEDS];
 static const rune_t *sg_danger_rune;
-static unsigned char sg_danger_rune_header[SG_RUNE_V3_HEADER_BYTES];
+static rune_artifact_t sg_danger_artifact;
 static size_t sg_danger_num_seeds;
 static float sg_danger_decay_next;
 static qboolean sg_danger_active;
@@ -77,32 +71,14 @@ static qboolean Danger_RangesOverlap(const void *first, size_t first_size,
 	       second_begin < first_begin + first_size;
 }
 
-static qboolean Danger_RuneShape(const rune_t *r,
-	unsigned char encoded_header[SG_RUNE_V3_HEADER_BYTES])
+static qboolean Danger_RuneShape(const rune_t *r)
 {
-	unsigned char scratch[SG_RUNE_V3_HEADER_BYTES];
-	unsigned char *encoded = encoded_header ? encoded_header : scratch;
-
-	if (!r || !r->seeds || !r->linked_seed ||
-	    r->hdr.magic != (int)SG_RUNE_V3_MAGIC ||
-	    r->hdr.version != SG_RUNE_V3_VERSION ||
-	    r->hdr.num_seeds <= 0 || r->hdr.num_seeds > SG_MAX_SEEDS ||
-	    r->hdr.num_links < 0 ||
-	    (uint32_t)r->hdr.num_seeds != r->v3_header.num_seeds ||
-	    (uint32_t)r->hdr.num_links != r->v3_header.num_links ||
-	    memcmp(r->hdr.mapname, r->v3_header.map_name,
-	        sizeof(r->hdr.mapname)) != 0 ||
-	    SG_RuneV3EncodeHeader(&r->v3_header, encoded,
-	        SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
-	    Danger_GetU32(encoded + DANGER_RUNE_HEADER_CRC_OFFSET) !=
-	        r->v3_header.header_crc32)
-		return false;
-	return true;
+	return r && r->seeds && r->linked_seed &&
+	       SG_RunePublishedShapeValid(r);
 }
 
 static qboolean Danger_Compatible(void)
 {
-	unsigned char encoded[SG_RUNE_V3_HEADER_BYTES];
 	rune_t *current;
 
 	if (!sg_danger_active)
@@ -110,8 +86,8 @@ static qboolean Danger_Compatible(void)
 	current = SG_Rune();
 	return current && current == sg_danger_rune &&
 	       (size_t)current->hdr.num_seeds == sg_danger_num_seeds &&
-	       Danger_RuneShape(current, encoded) &&
-	       memcmp(encoded, sg_danger_rune_header, sizeof(encoded)) == 0 &&
+	       Danger_RuneShape(current) &&
+	       SG_RuneArtifactsEqual(&current->artifact, &sg_danger_artifact) &&
 	       SG_RunePhysicsCompatible(current);
 }
 
@@ -132,15 +108,15 @@ static void Danger_AdvanceRevision(void)
 	sg_danger_revision++;
 }
 
-size_t Danger_V3PayloadBytes(const rune_t *r)
+size_t Danger_PayloadBytes(const rune_t *r)
 {
-	if (!Danger_RuneShape(r, NULL))
+	if (!Danger_RuneShape(r))
 		return 0;
 	return DANGER_TEAM_COUNT * (size_t)r->hdr.num_seeds *
 	       DANGER_WIRE_VALUE_BYTES;
 }
 
-qboolean Danger_DecodeV3Candidate(const rune_t *r,
+qboolean Danger_DecodeCandidate(const rune_t *r,
 	const unsigned char *payload, size_t payload_size, int *red_out,
 	int *blue_out, size_t plane_capacity)
 {
@@ -150,7 +126,7 @@ qboolean Danger_DecodeV3Candidate(const rune_t *r,
 	uint32_t red;
 	uint32_t blue;
 
-	expected = Danger_V3PayloadBytes(r);
+	expected = Danger_PayloadBytes(r);
 	if (!expected || !payload || !red_out || !blue_out ||
 	    payload_size != expected ||
 	    plane_capacity < (size_t)r->hdr.num_seeds)
@@ -184,13 +160,12 @@ qboolean Danger_DecodeV3Candidate(const rune_t *r,
 qboolean Danger_Publish(const rune_t *r, const int *red, const int *blue,
 	size_t plane_count, qboolean persistence_enabled)
 {
-	unsigned char encoded[SG_RUNE_V3_HEADER_BYTES];
 	size_t native_bytes;
 	size_t seed;
 	qboolean neutral;
 
 	neutral = !red && !blue && plane_count == 0;
-	if (!r || r != SG_Rune() || !Danger_RuneShape(r, encoded) ||
+	if (!r || r != SG_Rune() || !Danger_RuneShape(r) ||
 	    !SG_RunePhysicsCompatible(r) ||
 	    (!neutral && (!red || !blue ||
 	        plane_count != (size_t)r->hdr.num_seeds)))
@@ -221,7 +196,7 @@ qboolean Danger_Publish(const rune_t *r, const int *red, const int *blue,
 		memcpy(sg_danger[1], blue, native_bytes);
 	}
 	sg_danger_rune = r;
-	memcpy(sg_danger_rune_header, encoded, sizeof(encoded));
+	sg_danger_artifact = r->artifact;
 	sg_danger_num_seeds = (size_t)r->hdr.num_seeds;
 	sg_danger_active = true;
 	sg_danger_persistence_enabled = persistence_enabled ? true : false;
@@ -234,7 +209,7 @@ qboolean Danger_Publish(const rune_t *r, const int *red, const int *blue,
 void Danger_ResetLevel(void)
 {
 	memset(sg_danger, 0, sizeof(sg_danger));
-	memset(sg_danger_rune_header, 0, sizeof(sg_danger_rune_header));
+	memset(&sg_danger_artifact, 0, sizeof(sg_danger_artifact));
 	sg_danger_rune = NULL;
 	sg_danger_num_seeds = 0;
 	sg_danger_decay_next = 0.0f;
@@ -332,7 +307,7 @@ qboolean Danger_CheckpointPending(void)
 	       sg_danger_dirty && Danger_Compatible();
 }
 
-qboolean Danger_CaptureV3Payload(unsigned char *payload,
+qboolean Danger_CapturePayload(unsigned char *payload,
 	size_t payload_capacity, size_t *payload_size_out,
 	uint64_t *revision_out)
 {

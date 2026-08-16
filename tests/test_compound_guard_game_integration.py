@@ -90,9 +90,7 @@ def test_frame_level_hook_and_free_order() -> None:
         "SG_CompoundGuardGameFrame();"
     ) < frame.index("Botfill_Frame();")
     level = arach[arach.index("void SG_LevelChange(void)") :]
-    assert level.index("SG_CompoundGuardGameLevelReset") < level.index(
-        "SG_AcceptDropLevelReset"
-    ) < level.index("SG_RemoveBots();")
+    assert level.index("SG_CompoundGuardGameLevelReset") < level.index("SG_RemoveBots();")
 
     weapon = source("p_weapon.c")
     fire = between(weapon, "edict_t *fire_hook", "// Ent is the owner")

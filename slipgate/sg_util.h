@@ -87,13 +87,10 @@ qboolean SG_EscortTerminal(edict_t *bot, edict_t *target);
 #define SG_PLAT_STATE_BOTTOM 1
 #define SG_PLAT_STATE_UP     2
 #define SG_PLAT_STATE_DOWN   3
-edict_t *SG_LiftForAnchor(const vec3_t anchor);
 qboolean SG_LiftWaitPoint(edict_t *plat, const vec3_t origin, vec3_t wait);
 qboolean SG_LiftRider(edict_t *plat, edict_t *body);
 qboolean SG_LiftTopRest(edict_t *plat, edict_t *passent, vec3_t rest);
-edict_t *SG_TeleportForAnchor(const vec3_t anchor);
 qboolean SG_TeleportApproachPoint(edict_t *pad, vec3_t approach);
-qboolean SG_TeleportDestinationForAnchor(const vec3_t anchor, vec3_t destination);
 
 /* Timer/cooldown primitives -- the two hand-rolled patterns against
  * level.time (a float, seconds, restarts at zero on changelevel) that

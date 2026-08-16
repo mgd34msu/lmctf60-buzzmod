@@ -1198,7 +1198,7 @@ int SG_CompoundWorldAtTopFor(
 	edict_t *member;
 	float until;
 
-	if (window_ms < 0 || window_ms > SG_RUNE_V3_MAX_COST_MS ||
+	if (window_ms < 0 || window_ms > RUNE_MAX_COST_MS ||
 	    window_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    !CompoundWorldTopMember(resolved, &member))
 		return 0;

@@ -3,9 +3,6 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_guard_game.h"
-#ifdef SG_ACCEPT_DROP
-#include "slipgate/sg_accept_drop.h"
-#endif
 
 /*
 
@@ -566,9 +563,6 @@ void SV_Physics_Pusher (edict_t *ent)
 	// if not a team captain, so movement will be handled elsewhere
 	if ( ent->flags & FL_TEAMSLAVE)
 		return;
-#ifdef SG_ACCEPT_DROP
-	SG_AcceptDropPusher(ent, "begin");
-#endif
 
 	// make sure all team slaves can move before commiting
 	// any moves or calling any think functions
@@ -618,9 +612,6 @@ void SV_Physics_Pusher (edict_t *ent)
 			SV_RunThink (part);
 		}
 	}
-#ifdef SG_ACCEPT_DROP
-	SG_AcceptDropPusher(ent, "end");
-#endif
 }
 
 //==================================================================

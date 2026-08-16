@@ -140,9 +140,9 @@ static int CompoundPublicationWorldLattice3(const float value[3])
 static int CompoundPublicationRuneShapeValid(const rune_t *rune)
 {
 	return rune && rune->hdr.num_seeds > 0 &&
-	       rune->hdr.num_seeds <= SG_RUNE_V3_MAX_SEEDS &&
+	       rune->hdr.num_seeds <= RUNE_MAX_SEEDS &&
 	       rune->hdr.num_links >= 0 &&
-	       rune->hdr.num_links <= SG_RUNE_V3_MAX_LINKS && rune->seeds &&
+	       rune->hdr.num_links <= RUNE_MAX_LINKS && rune->seeds &&
 	       (rune->hdr.num_links == 0 || rune->links);
 }
 
@@ -164,8 +164,8 @@ static int CompoundPublicationNativeLinkValid(const rune_t *rune,
 	       link->mode == RLCM_PREOPEN &&
 	       link->min_speed == 0 && link->heading == 0 &&
 	       link->heading_slack == 0 &&
-	       link->cost_ms >= SG_RUNE_V3_MIN_COST_MS &&
-	       link->cost_ms <= SG_RUNE_V3_MAX_COST_MS &&
+	       link->cost_ms >= RUNE_MIN_COST_MS &&
+	       link->cost_ms <= RUNE_MAX_COST_MS &&
 	       link->cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS == 0 &&
 	       link->sweep_clear_ms > 0 &&
 	       link->sweep_clear_ms % SG_RUNE_PROOF_SERVER_FRAME_MS == 0 &&
@@ -349,27 +349,27 @@ static int CompoundPublicationProofValid(const rune_link_t *link,
 	long long total;
 
 	if (!link || !proof || proof->touch_ms <= 0 ||
-	    proof->touch_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->touch_ms > RUNE_MAX_COST_MS ||
 	    proof->touch_ms % SG_RUNE_PROOF_PMOVE_SUBSTEP_MS != 0 ||
 	    proof->touch_frame_end_ms <= 0 ||
-	    proof->touch_frame_end_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->touch_frame_end_ms > RUNE_MAX_COST_MS ||
 	    proof->touch_frame_end_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    proof->mover_top_ms < 2 * SG_RUNE_PROOF_SERVER_FRAME_MS ||
-	    proof->mover_top_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->mover_top_ms > RUNE_MAX_COST_MS ||
 	    proof->mover_top_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    proof->suffix_start_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
-	    proof->suffix_start_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->suffix_start_ms > RUNE_MAX_COST_MS ||
 	    proof->suffix_start_ms !=
 	        proof->mover_top_ms - SG_RUNE_PROOF_SERVER_FRAME_MS ||
 	    proof->arrival_ms <= 0 ||
-	    proof->arrival_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->arrival_ms > RUNE_MAX_COST_MS ||
 	    proof->arrival_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    proof->sweep_clear_ms <= 0 ||
-	    proof->sweep_clear_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->sweep_clear_ms > RUNE_MAX_COST_MS ||
 	    proof->sweep_clear_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    proof->sweep_clear_ms > proof->arrival_ms ||
-	    proof->total_cost_ms < SG_RUNE_V3_MIN_COST_MS ||
-	    proof->total_cost_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->total_cost_ms < RUNE_MIN_COST_MS ||
+	    proof->total_cost_ms > RUNE_MAX_COST_MS ||
 	    proof->total_cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0)
 		return 0;
 	touch_frame_end =

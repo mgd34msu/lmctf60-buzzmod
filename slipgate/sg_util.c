@@ -153,7 +153,7 @@ qboolean SG_HookAimAngles(const vec3_t origin, float viewheight,
 	return true;
 }
 
-/* Version-2 graph-hook control.  The link stores the exact quantized view
+/* Graph-hook control.  The link stores the exact quantized view
  * angles that were proved and the distance travelled by the corresponding
  * handed muzzle ray to its static-world bite.  Reconstructing both from those
  * three scalars is idempotent; unlike solving angles back from a bite, it
@@ -268,56 +268,6 @@ qboolean SG_SupportedArrived(const vec3_t origin, const vec3_t destination,
 	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
 }
 
-/* Resolve a declared RL_LIFT's serialized bottom ride point back to the
- * func_plat that owns it. This is the exact transform Link_Plats used; map
- * identity plus the anchor makes the declaration fail closed if the entity
- * is absent or has changed geometry. */
-edict_t *SG_LiftForAnchor(const vec3_t anchor)
-{
-	int i;
-
-	for (i = 0; i < globals.num_edicts; i++)
-	{
-		edict_t *plat = &g_edicts[i];
-		vec3_t bottom, delta;
-
-		if (!plat->inuse || !plat->classname ||
-		    strcmp(plat->classname, "func_plat") != 0)
-			continue;
-		bottom[0] = plat->pos2[0] + (plat->mins[0] + plat->maxs[0]) * 0.5f;
-		bottom[1] = plat->pos2[1] + (plat->mins[1] + plat->maxs[1]) * 0.5f;
-		bottom[2] = plat->pos2[2] + plat->maxs[2];
-		VectorSubtract(bottom, anchor, delta);
-		if (VectorLength(delta) <= 0.5f)
-			return plat;
-	}
-	return NULL;
-}
-
-/* Resolve a declared teleporter anchor through the same target relation as
- * teleporter_touch. PMF_TIME_TELEPORT is also used by spawn/login, so it is
- * not evidence that this particular pad fired; callers correlate the flag
- * with this authoritative destination before advancing the declaration. */
-edict_t *SG_TeleportForAnchor(const vec3_t anchor)
-{
-	int i;
-
-	for (i = 0; i < globals.num_edicts; i++)
-	{
-		edict_t *pad = &g_edicts[i];
-		vec3_t delta;
-
-		if (!pad->inuse || !pad->classname ||
-		    strcmp(pad->classname, "misc_teleporter") != 0 || !pad->target)
-			continue;
-		VectorSubtract(pad->s.origin, anchor, delta);
-		if (VectorLength(delta) > 0.5f)
-			continue;
-		return pad;
-	}
-	return NULL;
-}
-
 /* A misc_teleporter's solid model sits below its origin while the trigger is
  * above it. Dry movement is planar, but submerged movement aims in full 3-D;
  * every nominal proof, online proof and live command must therefore use the
@@ -339,21 +289,6 @@ qboolean SG_TeleportApproachPoint(edict_t *pad, vec3_t approach)
 			return false;
 		approach[axis] = (short)(approach[axis] * 8.0f) * 0.125f;
 	}
-	return true;
-}
-
-qboolean SG_TeleportDestinationForAnchor(const vec3_t anchor, vec3_t destination)
-{
-	edict_t *pad = SG_TeleportForAnchor(anchor);
-	edict_t *dest;
-
-	if (!pad)
-		return false;
-	dest = G_Find(NULL, FOFS(targetname), pad->target);
-	if (!dest)
-		return false;
-	VectorCopy(dest->s.origin, destination);
-	destination[2] += 10.0f;
 	return true;
 }
 

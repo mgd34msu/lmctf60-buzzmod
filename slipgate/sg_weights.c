@@ -225,7 +225,7 @@ static qboolean Weights_ReadFile(const char *path)
  * playbook. A reload that DROPS a key has to put the shipped value back;
  * leaving the previous file's number standing would make the live table
  * depend on the order the admin edited things in, which is the kind of state
- * nobody can reason about at 2am mid-wave. The same argument is why the map
+ * nobody can reason about during a live match. The same argument is why the map
  * layer is re-applied from scratch here rather than patched on a map change:
  * the only way the table can say what q2dm1 means is to be rebuilt for it.
  *

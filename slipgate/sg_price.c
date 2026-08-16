@@ -190,12 +190,13 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		return 1e30f;
 
 	/*
-	 * sg_atkobj (stage-2 volume lever 3): a per-server multiplier on the
+	 * sg_atkobj: a per-server multiplier on the
 	 * ATTACK role's objective pull, because the shared-gamedir weights
-	 * file cannot A/B across a pair. 1.0 (default) is byte-identical;
+	 * file cannot vary across a paired comparison. 1.0 (default) is
+	 * byte-identical;
 	 * >1 makes attackers price the flag harder relative to items/cover,
 	 * the hypothesis being that human-level steal VOLUME comes from
-	 * commitment, not routes. Trialed like everything else.
+	 * commitment, not routes. It remains configurable for comparison.
 	 */
 	v = w->objective * (float)goal_field[seed];
 	if (tc->role == SG_ROLE_ATTACK)
@@ -231,7 +232,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		return v;
 
 	/*
-	 * THE NAKED CARRY (sg_nakedcarry, A/B wave 166+). Every navigation
+	 * THE NAKED CARRY (sg_nakedcarry). Every navigation
 	 * link from map file to field flood verified sound tonight, yet
 	 * parity carriers drift away from a correct destination -- and one
 	 * price term is self-reinforcing: the learned danger field records
@@ -284,7 +285,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		float csup = w->carrier_support;
 
 		/*
-		 * LONE WOLF (sg_lonewolf, rung-4 set #1 tell #1). All three
+		 * LONE WOLF (sg_lonewolf). All three
 		 * judges read the same thing off every bot sheet: our carries
 		 * run escorted 0.33-0.75 of their length while pub humans run
 		 * flags alone at 0.02-0.32. sg_escortdose gated the ESCORT

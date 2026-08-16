@@ -2,6 +2,7 @@
 #include "g_local.h"
 #include "g_entfile_path.h"
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
@@ -984,6 +985,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	strncpy (level.mapname, mapname, sizeof(level.mapname)-1);
 	strncpy (game.spawnpoint, spawnpoint, sizeof(game.spawnpoint)-1);
 	SG_LevelIdentityBegin(mapname);
+	SG_MechCatalogBegin();
 
 	// set client fields on player ents
 	for (i=0 ; i<game.maxclients ; i++)
@@ -1019,6 +1021,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 		entities = ED_ParseEdict (entities, ent);
 
 		total_ents++;
+		SG_MechCatalogDeclared(ent, (uint32_t)total_ents, ent->classname);
 
 		// yet another map hack
 		if (!Q_stricmp(level.mapname, "command") && !Q_stricmp(ent->classname, "trigger_once") && !Q_stricmp(ent->model, "*27"))
@@ -1102,13 +1105,13 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	if (identity_status == SG_IDENTITY_OK)
 		identity_status = SG_LevelIdentitySnapshot(mapname, &identity);
 	if (identity_status == SG_IDENTITY_OK)
-		gi.dprintf("slipgate: v3 identity committed map=%s bsp=%u "
+		gi.dprintf("slipgate: rune identity committed map=%s bsp=%u "
 		           "entity_crc=%u physics=%u\n",
 		           identity.mapname, (unsigned int)identity.bsp_checksum,
 		           (unsigned int)identity.entity_crc32,
 		           (unsigned int)identity.host_physics_id);
 	else
-		gi.dprintf("slipgate: v3 identity unavailable for %s: %s\n",
+		gi.dprintf("slipgate: rune identity unavailable for %s: %s\n",
 		           mapname ? mapname : "<null>",
 		           SG_LevelIdentityReason(identity_status));
 }

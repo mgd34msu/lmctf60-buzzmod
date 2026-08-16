@@ -268,7 +268,7 @@ const char *SG_LevelIdentityReason(sg_identity_status_t status)
 		"level identity is valid",
 		"level identity is unavailable",
 		"invalid identity API argument",
-		"map name is not canonical v3 syntax",
+		"map name is not canonical artifact syntax",
 		"invalid level-identity lifecycle transition",
 		"level identity is already committed",
 		"level identity was not committed by a successful spawn",

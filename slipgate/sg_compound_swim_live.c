@@ -120,13 +120,13 @@ static qboolean CompoundSwimLivePlanValid(
 	    (binding->source_seed.flags & ~RSF_WATER) != 0 ||
 	    (binding->destination_seed.flags & ~(RSF_WATER)) != 0 ||
 	    binding->touch_ms <= 0 ||
-	    binding->touch_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    binding->touch_ms > RUNE_MAX_COST_MS ||
 	    binding->touch_ms % SG_REPLAY_STEP_MS != 0 ||
 	    binding->touch_frame_end_ms <= 0 ||
-	    binding->touch_frame_end_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    binding->touch_frame_end_ms > RUNE_MAX_COST_MS ||
 	    binding->touch_frame_end_ms % SG_REPLAY_FRAME_MS != 0 ||
 	    binding->mover_top_ms < 2 * SG_REPLAY_FRAME_MS ||
-	    binding->mover_top_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    binding->mover_top_ms > RUNE_MAX_COST_MS ||
 	    binding->mover_top_ms % SG_REPLAY_FRAME_MS != 0 ||
 	    binding->suffix_start_ms < SG_REPLAY_FRAME_MS ||
 	    binding->suffix_start_ms !=
@@ -137,8 +137,8 @@ static qboolean CompoundSwimLivePlanValid(
 	    binding->sweep_clear_ms <= 0 ||
 	    binding->sweep_clear_ms > binding->arrival_ms ||
 	    binding->sweep_clear_ms % SG_REPLAY_FRAME_MS != 0 ||
-	    binding->total_cost_ms < SG_RUNE_V3_MIN_COST_MS ||
-	    binding->total_cost_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    binding->total_cost_ms < RUNE_MIN_COST_MS ||
+	    binding->total_cost_ms > RUNE_MAX_COST_MS ||
 	    binding->total_cost_ms % SG_REPLAY_FRAME_MS != 0)
 		return false;
 	touch_frame_end = ((long long)binding->touch_ms +

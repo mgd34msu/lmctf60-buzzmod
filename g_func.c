@@ -1,6 +1,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_world.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 
 /*
 =========================================================
@@ -418,6 +419,8 @@ void plat_blocked (edict_t *self, edict_t *other)
 
 void Use_Plat (edict_t *ent, edict_t *other, edict_t *activator)
 { 
+	if (!SG_AuthorizeLiftUse(ent, activator))
+		return;
 	if (ent->think)
 		return;		// already down
 	plat_go_down (ent);
@@ -430,6 +433,8 @@ void Touch_Plat_Center (edict_t *ent, edict_t *other, cplane_t *plane, csurface_
 		return;
 		
 	if (other->health <= 0)
+		return;
+	if (!SG_AuthorizeLiftTouch(ent, ent->enemy, other))
 		return;
 
 	ent = ent->enemy;	// now point at the plat, not the trigger
@@ -448,6 +453,7 @@ void plat_spawn_inside_trigger (edict_t *ent)
 // middle trigger
 //	
 	trigger = G_Spawn();
+	SG_MechCatalogSynthetic(trigger, ent, SG_MECH_SYNTHETIC_PLATFORM);
 	trigger->touch = Touch_Plat_Center;
 	trigger->movetype = MOVETYPE_NONE;
 	trigger->solid = SOLID_TRIGGER;
@@ -705,7 +711,11 @@ void button_wait (edict_t *self)
 	self->s.effects &= ~EF_ANIM01;
 	self->s.effects |= EF_ANIM23;
 
-	G_UseTargets (self, self->activator);
+	/* The button has already moved, but its target fanout is the first callback
+	 * mutation outside the switch itself.  Reauthenticate the exact sealed plan
+	 * before killtargets, relays, speakers, or doors can run. */
+	if (SG_AuthorizeButtonTargets(self, self->activator))
+		G_UseTargets (self, self->activator);
 	self->s.frame = 1;
 	if (self->moveinfo.wait >= 0)
 	{
@@ -727,6 +737,8 @@ void button_fire (edict_t *self)
 
 void button_use (edict_t *self, edict_t *other, edict_t *activator)
 {
+	if (!SG_AuthorizeButtonUse(self, activator))
+		return;
 	self->activator = activator;
 	button_fire (self);
 }
@@ -738,6 +750,8 @@ void button_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *s
 
 	if (other->health <= 0)
 		return;
+	if (!SG_AuthorizeButtonTouch(self, other))
+		return;
 
 	self->activator = other;
 	button_fire (self);
@@ -745,6 +759,8 @@ void button_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *s
 
 void button_killed (edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_t point)
 {
+	if (!SG_AuthorizeButtonUse(self, attacker))
+		return;
 	self->activator = attacker;
 	self->health = self->max_health;
 	self->takedamage = DAMAGE_NO;
@@ -1066,6 +1082,7 @@ void Think_SpawnDoorTrigger (edict_t *ent)
 	maxs[1] += 60;
 
 	other = G_Spawn ();
+	SG_MechCatalogSynthetic(other, ent, SG_MECH_SYNTHETIC_AUTO_DOOR);
 	VectorCopy (mins, other->mins);
 	VectorCopy (maxs, other->maxs);
 	other->owner = ent;

@@ -20,7 +20,7 @@ def between(text: str, start: str, end: str) -> str:
 def test_header_and_life_reset() -> None:
     arach = source("slipgate/sg_arach.c")
     assert '#include "slipgate/sg_declared_door_guard.h"' in arach
-    reset = between(arach, "static void Bot_ResetLifeActions", "#ifdef SG_ACCEPT_DROP")
+    reset = between(arach, "static void Bot_ResetLifeActions", "/*\n * THE CORPSE FRAME.")
     orphan_comment = source("p_client.c")
     assert reset.index("bot->declared_guard_paused = false;") < reset.index(
         "bot->commit_link = -1;"

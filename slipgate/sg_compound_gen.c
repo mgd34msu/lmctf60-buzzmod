@@ -103,16 +103,16 @@ static int CompoundGenProofValid(const sg_compound_gen_proof_t *proof)
 	long long touch_frame_end;
 
 	if (!proof || proof->touch_ms <= 0 ||
-	    proof->touch_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->touch_ms > RUNE_MAX_COST_MS ||
 	    proof->touch_ms % SG_RUNE_PROOF_PMOVE_SUBSTEP_MS != 0 ||
 	    proof->touch_frame_end_ms <= 0 ||
-	    proof->touch_frame_end_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->touch_frame_end_ms > RUNE_MAX_COST_MS ||
 	    proof->touch_frame_end_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    proof->mover_top_ms < 2 * SG_RUNE_PROOF_SERVER_FRAME_MS ||
-	    proof->mover_top_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->mover_top_ms > RUNE_MAX_COST_MS ||
 	    proof->mover_top_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    proof->suffix_start_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
-	    proof->suffix_start_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    proof->suffix_start_ms > RUNE_MAX_COST_MS ||
 	    proof->suffix_start_ms !=
 	        proof->mover_top_ms - SG_RUNE_PROOF_SERVER_FRAME_MS)
 		return 0;
@@ -126,8 +126,8 @@ static int CompoundGenProofValid(const sg_compound_gen_proof_t *proof)
 	composed = (long long)proof->touch_frame_end_ms +
 	           (long long)proof->suffix_start_ms +
 	           (long long)proof->arrival_ms;
-	return proof->total_cost_ms >= SG_RUNE_V3_MIN_COST_MS &&
-	       proof->total_cost_ms <= SG_RUNE_V3_MAX_COST_MS &&
+	return proof->total_cost_ms >= RUNE_MIN_COST_MS &&
+	       proof->total_cost_ms <= RUNE_MAX_COST_MS &&
 	       proof->total_cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS == 0 &&
 	       composed == (long long)proof->total_cost_ms &&
 	       proof->arrival_ms > 0 &&
@@ -260,8 +260,8 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 		return result;
 	if (request->candidate_count > SG_COMPOUND_GEN_MAX_CANDIDATES)
 		return CompoundGenResult(SG_COMPOUND_GEN_BUDGET);
-	if (request->seed_count > SG_RUNE_V3_MAX_SEEDS ||
-	    request->output_capacity > SG_RUNE_V3_MAX_LINKS)
+	if (request->seed_count > RUNE_MAX_SEEDS ||
+	    request->output_capacity > RUNE_MAX_LINKS)
 		return result;
 	{
 		size_t seed_index;

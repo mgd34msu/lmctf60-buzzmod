@@ -6,6 +6,8 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_declared_door_guard.h"
+#include "slipgate/sg_rune_binding.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 
 #define TEST_EDICTS 32
 #define TEST_LINK 0
@@ -19,18 +21,25 @@ static edict_t entities[TEST_EDICTS];
 static edict_t foreign_entity;
 static rune_seed_t seeds[2];
 static rune_link_t links[1];
+static rune_mechanism_node_t mechanism_nodes[TEST_EDICTS];
+static rune_mechanism_plan_t mechanism_plan;
 static rune_t primary_rune;
 static rune_seed_t alternate_seeds[2];
 static rune_link_t alternate_links[1];
 static rune_t alternate_rune;
 static rune_t *current_rune;
 static edict_t *resolved_trigger;
+static edict_t *legacy_resolved_trigger;
 static edict_t *declared_members[SG_MOVER_LEASE_MAX_KEYS];
 static int declared_member_count;
 static int declared_count_override;
 static int swap_rune_on_members;
 static int rune_compatible;
 static int rune_shape_valid;
+static int binding_capture_valid;
+static int binding_current_valid;
+static int catalog_topology_valid;
+static int legacy_resolver_calls;
 static int failures;
 
 static int acquire_calls;
@@ -123,6 +132,8 @@ static void ResetFixture(void)
 	memset(&foreign_entity, 0, sizeof(foreign_entity));
 	memset(seeds, 0, sizeof(seeds));
 	memset(links, 0, sizeof(links));
+	memset(mechanism_nodes, 0, sizeof(mechanism_nodes));
+	memset(&mechanism_plan, 0, sizeof(mechanism_plan));
 	memset(&primary_rune, 0, sizeof(primary_rune));
 	memset(alternate_seeds, 0, sizeof(alternate_seeds));
 	memset(alternate_links, 0, sizeof(alternate_links));
@@ -143,7 +154,12 @@ static void ResetFixture(void)
 	game.maxclients = 1;
 	game.clients = clients;
 	for (key = 0; key < TEST_EDICTS; key++)
+	{
 		LiveEdict(key, key == 0 ? "worldspawn" : "fixture");
+		mechanism_nodes[key].key = (uint32_t)key;
+		if (key >= 10 && key <= 25)
+			mechanism_nodes[key].flags = SG_MECH_NODEF_MOVER;
+	}
 	Set3(seeds[0].origin, 8.0f, 16.0f, 24.0f);
 	Set3(seeds[1].origin, 96.0f, 16.0f, 24.0f);
 	links[0].from = 0;
@@ -154,6 +170,16 @@ static void ResetFixture(void)
 	primary_rune.hdr.num_links = 1;
 	primary_rune.seeds = seeds;
 	primary_rune.links = links;
+	primary_rune.artifact.num_seeds = 2U;
+	primary_rune.artifact.num_links = 1U;
+	primary_rune.artifact.num_mechanism_nodes = TEST_EDICTS;
+	primary_rune.artifact.num_mechanism_plans = 1U;
+	primary_rune.mechanism_nodes = mechanism_nodes;
+	primary_rune.mechanism_plans = &mechanism_plan;
+	links[0].mechanism_plan = 0U;
+	mechanism_plan.entry_key = 29U;
+	mechanism_plan.mover_key = 12U;
+	mechanism_plan.expected_members = 3U;
 	memcpy(alternate_seeds, seeds, sizeof(seeds));
 	memcpy(alternate_links, links, sizeof(links));
 	alternate_rune.hdr.num_seeds = 2;
@@ -162,6 +188,7 @@ static void ResetFixture(void)
 	alternate_rune.links = alternate_links;
 	current_rune = &primary_rune;
 	resolved_trigger = &entities[29];
+	legacy_resolved_trigger = resolved_trigger;
 	declared_members[0] = &entities[12];
 	declared_members[1] = &entities[10];
 	declared_members[2] = &entities[12];
@@ -171,6 +198,10 @@ static void ResetFixture(void)
 	swap_rune_on_members = 0;
 	rune_compatible = 1;
 	rune_shape_valid = 1;
+	binding_capture_valid = 1;
+	binding_current_valid = 1;
+	catalog_topology_valid = 1;
+	legacy_resolver_calls = 0;
 	acquire_calls = 0;
 	authorize_calls = 0;
 	validate_calls = 0;
@@ -220,8 +251,172 @@ qboolean SG_RunePublishedShapeValid(const rune_t *rune)
 	return rune && rune == current_rune && rune_shape_valid;
 }
 
+const rune_mechanism_plan_t *SG_RuneMechanismPlanForLink(
+	const rune_t *rune, uint32_t link_index)
+{
+	if (!rune || rune != current_rune || !rune_shape_valid ||
+	    link_index != TEST_LINK || rune->links[link_index].action != RL_DOOR)
+		return NULL;
+	return &mechanism_plan;
+}
+
+const rune_mechanism_node_t *SG_RuneMechanismNodeByKey(
+	const rune_t *rune, uint32_t key)
+{
+	if (!rune || rune != current_rune || !rune_shape_valid ||
+	    key >= TEST_EDICTS || mechanism_nodes[key].key != key)
+		return NULL;
+	return &mechanism_nodes[key];
+}
+
+int SG_MechCatalogEntityTopologyMatches(uint32_t key,
+	const rune_mechanism_node_t *node)
+{
+	return catalog_topology_valid && key < TEST_EDICTS && node &&
+	       node == &mechanism_nodes[key] && node->key == key;
+}
+
+int SG_MechCatalogEntityExecutionMatches(uint32_t key,
+	const rune_mechanism_node_t *node, uint16_t controller_kind)
+{
+	return controller_kind != SG_MECHANISM_CONTROLLER_NONE &&
+	       SG_MechCatalogEntityTopologyMatches(key, node);
+}
+
+edict_t *SG_MechCatalogResolveEntity(uint32_t key,
+	const rune_mechanism_node_t *node)
+{
+	if (!SG_MechCatalogEntityTopologyMatches(key, node) ||
+	    !entities[key].inuse || entities[key].s.number != (int)key)
+		return NULL;
+	return &entities[key];
+}
+
+int SG_MechCatalogEntityRetired(uint32_t key,
+	const rune_mechanism_node_t *node)
+{
+	return key < TEST_EDICTS && node == &mechanism_nodes[key] &&
+	       node->key == key && !entities[key].inuse;
+}
+
+int SG_RuneMechanismBindingCapture(const rune_t *rune, uint32_t link_index,
+	sg_rune_mechanism_binding_t *binding_out)
+{
+	const rune_mechanism_plan_t *plan;
+	const rune_mechanism_node_t *entry;
+	const rune_mechanism_node_t *mover;
+	edict_t *entry_entity;
+	edict_t *mover_entity;
+
+	if (binding_out)
+		memset(binding_out, 0, sizeof(*binding_out));
+	plan = SG_RuneMechanismPlanForLink(rune, link_index);
+	entry = plan ? SG_RuneMechanismNodeByKey(rune, plan->entry_key) : NULL;
+	mover = plan ? SG_RuneMechanismNodeByKey(rune, plan->mover_key) : NULL;
+	entry_entity = entry ? SG_MechCatalogResolveEntity(entry->key, entry) : NULL;
+	mover_entity = mover ? SG_MechCatalogResolveEntity(mover->key, mover) : NULL;
+	if (!binding_out || !binding_capture_valid || !plan || !entry || !mover ||
+	    !entry_entity || resolved_trigger != entry_entity || !mover_entity)
+		return 0;
+	binding_out->rune = rune;
+	binding_out->link = &rune->links[link_index];
+	binding_out->plan = plan;
+	binding_out->entry_node = entry;
+	binding_out->mover_node = mover;
+	binding_out->entry_entity = entry_entity;
+	binding_out->mover_entity = mover_entity;
+	binding_out->link_index = link_index;
+	return 1;
+}
+
+int SG_RuneMechanismBindingCaptureOwned(const rune_t *rune,
+	uint32_t link_index, sg_rune_mechanism_binding_t *binding_out)
+{
+	return SG_RuneMechanismBindingCapture(rune, link_index, binding_out);
+}
+
+int SG_RuneMechanismBindingCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	return binding_current_valid && binding && binding->rune == current_rune &&
+	       binding->link == &current_rune->links[TEST_LINK] &&
+	       binding->plan == &mechanism_plan &&
+	       binding->entry_entity ==
+	           SG_MechCatalogResolveEntity(29U, &mechanism_nodes[29]) &&
+	       binding->mover_entity ==
+	           SG_MechCatalogResolveEntity(12U, &mechanism_nodes[12]);
+}
+
+int SG_RuneMechanismBindingDoorAction(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	return binding && binding->link &&
+	       (binding->link->action == RL_DOOR ||
+	        binding->link->action == RL_BUTTON_DOOR) &&
+	       SG_RuneMechanismBindingCurrent(binding);
+}
+
+edict_t *SG_RuneMechanismBindingResolveNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	const rune_mechanism_node_t *node;
+
+	if (!binding || binding->rune != current_rune)
+		return NULL;
+	node = SG_RuneMechanismNodeByKey(binding->rune, key);
+	return node ? SG_MechCatalogResolveEntity(key, node) : NULL;
+}
+
+int SG_RuneMechanismBindingMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	int count = declared_count_override ? declared_count_override
+	                                   : declared_member_count;
+	size_t unique_count = 0U;
+	int index;
+
+	if (key_count_out)
+		*key_count_out = 0U;
+	if (!binding || !keys_out || !key_count_out ||
+	    !SG_RuneMechanismBindingCurrent(binding) || count <= 0 ||
+	    count > (int)SG_RUNE_BINDING_MAX_MOVERS)
+		return 0;
+	for (index = 0; index < count; index++)
+	{
+		int key;
+		size_t cursor;
+
+		for (key = 1; key < TEST_EDICTS; key++)
+			if (declared_members[index] == &entities[key])
+				break;
+		if (key >= TEST_EDICTS || !entities[key].inuse ||
+		    entities[key].s.number != key ||
+		    (mechanism_nodes[key].flags & SG_MECH_NODEF_MOVER) == 0U)
+			return 0;
+		for (cursor = 0U; cursor < unique_count; cursor++)
+			if (keys_out[cursor] == (uint32_t)key)
+				break;
+		if (cursor < unique_count)
+			continue;
+		cursor = unique_count;
+		while (cursor > 0U && keys_out[cursor - 1U] > (uint32_t)key)
+		{
+			keys_out[cursor] = keys_out[cursor - 1U];
+			cursor--;
+		}
+		keys_out[cursor] = (uint32_t)key;
+		unique_count++;
+	}
+	if (swap_rune_on_members)
+		current_rune = &alternate_rune;
+	*key_count_out = unique_count;
+	return unique_count > 0U;
+}
+
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source)
 {
+	legacy_resolver_calls++;
 	CHECK(anchor != NULL);
 	CHECK(source != NULL);
 	if (!anchor || !source || !current_rune)
@@ -231,7 +426,7 @@ edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source)
 	CHECK(memcmp(source,
 	             current_rune->seeds[current_rune->links[TEST_LINK].from].origin,
 	             sizeof(vec3_t)) == 0);
-	return resolved_trigger;
+	return legacy_resolved_trigger;
 }
 
 int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members, int capacity)
@@ -481,6 +676,34 @@ static void TestAcquireCanonicalizes(void)
 	CHECK(guard_record.keys[0] == 10U);
 	CHECK(guard_record.keys[1] == 11U);
 	CHECK(guard_record.keys[2] == 12U);
+	CHECK(legacy_resolver_calls == 0);
+}
+
+static void TestPlanBindingRejectsRediscoveryDrift(void)
+{
+	sg_bot_t bot;
+
+	ResetFixture();
+	memset(&bot, 0, sizeof(bot));
+	/* A live anchor/target-name scan could now select an unrelated trigger.
+	 * Rune authority must never call it: the authenticated plan still binds
+	 * exactly to entry key 29 and its complete mover union. */
+	legacy_resolved_trigger = &entities[28];
+	CHECK(SG_DeclaredDoorGuardAcquire(&bot, TEST_LINK) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(legacy_resolver_calls == 0);
+	CHECK(last_mechanism == 29U);
+
+	/* If the sealed entry or any closure endpoint drifts, plan binding denies
+	 * authority instead of falling back to the plausible rediscovered door. */
+	ResetFixture();
+	memset(&bot, 0, sizeof(bot));
+	legacy_resolved_trigger = &entities[28];
+	catalog_topology_valid = 0;
+	CHECK(SG_DeclaredDoorGuardAcquire(&bot, TEST_LINK) ==
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
+	CHECK(legacy_resolver_calls == 0);
+	CHECK(acquire_calls == 0);
 }
 
 static void TestMalformedAndStaleDeclarations(void)
@@ -513,19 +736,19 @@ static void TestMalformedAndStaleDeclarations(void)
 
 	declared_member_count = 0;
 	CHECK(SG_DeclaredDoorGuardAcquire(&bot, TEST_LINK) ==
-	      SG_COMPOUND_GUARD_INVALID_KEYS);
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
 	declared_count_override = (int)SG_MOVER_LEASE_MAX_KEYS + 1;
 	CHECK(SG_DeclaredDoorGuardAcquire(&bot, TEST_LINK) ==
-	      SG_COMPOUND_GUARD_INVALID_KEYS);
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
 	declared_count_override = 0;
 	declared_member_count = 1;
 	declared_members[0] = &foreign_entity;
 	CHECK(SG_DeclaredDoorGuardAcquire(&bot, TEST_LINK) ==
-	      SG_COMPOUND_GUARD_INVALID_KEYS);
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
 	declared_members[0] = &entities[12];
 	entities[12].s.number = 13;
 	CHECK(SG_DeclaredDoorGuardAcquire(&bot, TEST_LINK) ==
-	      SG_COMPOUND_GUARD_INVALID_KEYS);
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
 	entities[12].s.number = 12;
 	resolved_trigger = &foreign_entity;
 	CHECK(SG_DeclaredDoorGuardAcquire(&bot, TEST_LINK) ==
@@ -764,7 +987,7 @@ static void TestProtectiveHoldAndBoundRelease(void)
 	resolved_trigger->inuse = true;
 	declared_count_override = -1;
 	CHECK(SG_DeclaredDoorGuardHoldOpen(&bot, 500) ==
-	      SG_COMPOUND_GUARD_INVALID_KEYS);
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
 	CHECK(hold_calls == 2);
 }
 
@@ -828,6 +1051,7 @@ static void TestUnsupportedActivationRespectsGlobalLease(void)
 int main(void)
 {
 	TestAcquireCanonicalizes();
+	TestPlanBindingRejectsRediscoveryDrift();
 	TestMalformedAndStaleDeclarations();
 	TestCoreFailuresPassThrough();
 	TestExactAuthorizationAndState();

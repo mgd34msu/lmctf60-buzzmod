@@ -29,13 +29,13 @@ from corpusgraph import (atomic_write_json, read_rune,
 
 
 def load_seeds(path):
-    rune = read_rune(path, versions=(1, 2, 3))
+    rune = read_rune(path)
     return rune_seed_origins(rune)
 
 
 def load_seed_graph(path, expected_map=None):
     """Decode one snapshot for localization and its matching corpus stamp."""
-    rune = read_rune(path, expected_map, versions=(1, 2, 3))
+    rune = read_rune(path, expected_map)
     return (rune_seed_origins(rune), rune_live_seed_indices(rune),
             rune_identity_from_rune(rune))
 

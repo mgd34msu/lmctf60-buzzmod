@@ -976,7 +976,7 @@ void ReadLevel(char* filename)
 	 * Tear down every other TAG_LEVEL-backed SLIPGATE pointer at the same boundary:
 	 * ReadLevel frees that tag immediately below just as SpawnEntities does. */
 	SG_LevelChange();
-	gi.dprintf("slipgate: v3 identity unavailable for %s: "
+	gi.dprintf("slipgate: rune identity unavailable for %s: "
 	           "save-level restore\n",
 	           level.mapname[0] ? level.mapname : "<unknown>");
 	f = fopen(filename, "rb");
