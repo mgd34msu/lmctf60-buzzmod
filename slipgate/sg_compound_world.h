@@ -1,4 +1,4 @@
-/* sg_compound_world.h -- read-only live-world resolution for compound RUNE. */
+/* sg_compound_world.h -- compound live-world proof and bounded TOP lease. */
 #ifndef SG_COMPOUND_WORLD_H
 #define SG_COMPOUND_WORLD_H
 
@@ -18,8 +18,13 @@ typedef struct sg_compound_world_preopen_s
 	struct edict_s *member;
 	float bottom_origin[3];
 	float top_origin[3];
+	float member_mins[3];
+	float member_maxs[3];
+	float fixed_angles[3];
 	float speed;
+	float wait;
 	float inert_effect_delay;
+	int trigger_key;
 	int mover_key;
 	int axis;
 } sg_compound_world_preopen_t;
@@ -36,5 +41,21 @@ int SG_CompoundWorldDoorEffectsSafe(const struct edict_s *door);
 rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	const float mechanism_anchor[3],
 	sg_compound_world_preopen_t *resolved);
+
+/* Compound-only observation against the exact resolved translating member.
+ * These helpers deliberately do not inherit ordinary declared-door policy.
+ * Every call revalidates the live pointer/key and copied static identity. */
+int SG_CompoundWorldOutsideSweep(
+	const sg_compound_world_preopen_t *resolved, const float origin[3]);
+int SG_CompoundWorldCrossesSweep(
+	const sg_compound_world_preopen_t *resolved, const float from[3],
+	const float to[3]);
+int SG_CompoundWorldAtTopFor(
+	const sg_compound_world_preopen_t *resolved, int window_ms);
+
+/* Runtime-only.  This invokes no entity callback and can only extend an
+ * already scheduled canonical TOP close by the shared compound lease. */
+int SG_CompoundWorldHoldOpen(
+	const sg_compound_world_preopen_t *resolved, int lease_ms);
 
 #endif /* SG_COMPOUND_WORLD_H */

@@ -231,6 +231,19 @@ int SG_CompoundLeaseHeld(const sg_compound_state_t *state)
 	return state && state->phase != SG_COMPOUND_NONE;
 }
 
+int SG_CompoundSuffixNeedsHold(int elapsed_ms, int clear_ms)
+{
+	/* A false result authorizes the controller to stop renewing TOP.  Keep
+	 * malformed or out-of-contract timing on the conservative side. */
+	if (elapsed_ms < 0 || elapsed_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    clear_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
+	    clear_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    elapsed_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
+	    clear_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0)
+		return 1;
+	return elapsed_ms < clear_ms;
+}
+
 int SG_CompoundDelegateSuffix(sg_compound_state_t *state, int link_index,
 	int mover_key, sg_compound_suffix_begin_fn begin, void *context)
 {

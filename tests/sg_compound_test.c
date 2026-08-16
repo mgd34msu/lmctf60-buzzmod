@@ -1,6 +1,7 @@
 /* Focused pure tests for compound phase ownership and suffix delegation. */
 #include "q_shared.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -106,6 +107,60 @@ static void TestOwnershipAndDispatch(void)
 	CHECK(a.phase == SG_COMPOUND_SUFFIX_LEASED);
 	SG_CompoundReset(&a);
 	CHECK(!SG_CompoundLeaseHeld(&a));
+}
+
+static void TestSuffixHoldSchedule(void)
+{
+	static const int invalid_elapsed[] = {
+		INT_MIN, -100, -1, 1, 99, 101,
+		SG_RUNE_V3_MAX_COST_MS + 1, INT_MAX
+	};
+	static const int invalid_clear[] = {
+		INT_MIN, -100, -1, 0, 1, 99, 101,
+		SG_RUNE_V3_MAX_COST_MS - 1,
+		SG_RUNE_V3_MAX_COST_MS + 100, INT_MAX
+	};
+	int clear_ms;
+	int elapsed_ms;
+	int index;
+
+	CHECK(SG_COMPOUND_HOLD_LEASE_MS == 500);
+	CHECK(SG_COMPOUND_POST_CLEAR_MARGIN_MS == 100);
+	CHECK(SG_COMPOUND_POST_CLEAR_MARGIN_MS ==
+	      SG_RUNE_PROOF_SERVER_FRAME_MS);
+	CHECK(SG_COMPOUND_HOLD_LEASE_MS %
+	      SG_RUNE_PROOF_SERVER_FRAME_MS == 0);
+	CHECK(SG_COMPOUND_HOLD_LEASE_MS -
+	      SG_RUNE_PROOF_SERVER_FRAME_MS >=
+	      SG_COMPOUND_POST_CLEAR_MARGIN_MS);
+
+	/* Exhaust every valid pair in the v3 cost domain, not just examples:
+	 * renewal ends exactly on the serialized clear boundary. */
+	for (clear_ms = SG_RUNE_PROOF_SERVER_FRAME_MS;
+	     clear_ms <= SG_RUNE_V3_MAX_COST_MS;
+	     clear_ms += SG_RUNE_PROOF_SERVER_FRAME_MS)
+		for (elapsed_ms = 0;
+		     elapsed_ms <= SG_RUNE_V3_MAX_COST_MS;
+		     elapsed_ms += SG_RUNE_PROOF_SERVER_FRAME_MS)
+			CHECK(SG_CompoundSuffixNeedsHold(elapsed_ms, clear_ms) ==
+			      (elapsed_ms < clear_ms));
+
+	for (index = 0;
+	     index < (int)(sizeof(invalid_elapsed) /
+	                   sizeof(invalid_elapsed[0]));
+	     index++)
+		CHECK(SG_CompoundSuffixNeedsHold(invalid_elapsed[index], 100));
+	for (index = 0;
+	     index < (int)(sizeof(invalid_clear) /
+	                   sizeof(invalid_clear[0]));
+	     index++)
+		CHECK(SG_CompoundSuffixNeedsHold(300, invalid_clear[index]));
+
+	CHECK(SG_CompoundSuffixNeedsHold(0, 100));
+	CHECK(!SG_CompoundSuffixNeedsHold(100, 100));
+	CHECK(!SG_CompoundSuffixNeedsHold(200, 100));
+	CHECK(SG_CompoundSuffixNeedsHold(400, 500));
+	CHECK(!SG_CompoundSuffixNeedsHold(500, 500));
 }
 
 static void CheckTranslateStep(const sg_compound_translate_step_t *step,
@@ -309,6 +364,7 @@ int main(void)
 	TestPreopen();
 	TestRideAndCleanup();
 	TestOwnershipAndDispatch();
+	TestSuffixHoldSchedule();
 	TestTranslateExactFullFrames();
 	TestTranslateFractionalFinal();
 	TestTranslateFloatFrameLaw();

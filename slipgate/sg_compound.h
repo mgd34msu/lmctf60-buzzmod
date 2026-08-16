@@ -13,6 +13,12 @@
 #define SG_COMPOUND_REQUIRED_CONTROLLER_REVISION 1
 #define SG_COMPOUND_LIVE_CONTROLLER_REVISION 0
 
+/* Runtime renews the TOP close timer in one bounded lease.  The final renewal
+ * happens one server frame before sweep clearance; a 500 ms lease therefore
+ * leaves 400 ms after clearance, including the required 100 ms margin. */
+#define SG_COMPOUND_HOLD_LEASE_MS 500
+#define SG_COMPOUND_POST_CLEAR_MARGIN_MS 100
+
 typedef enum sg_compound_phase_e
 {
 	SG_COMPOUND_NONE = 0,
@@ -105,6 +111,9 @@ int SG_CompoundAdvance(sg_compound_state_t *state,
 int SG_CompoundOwns(const sg_compound_state_t *state, int link_index,
 	int mover_key);
 int SG_CompoundLeaseHeld(const sg_compound_state_t *state);
+/* Invalid timing requests hold fail-closed.  For valid 100 ms boundaries the
+ * last renewal is at clear_ms - 100, so elapsed_ms == clear_ms is release. */
+int SG_CompoundSuffixNeedsHold(int elapsed_ms, int clear_ms);
 int SG_CompoundDelegateSuffix(sg_compound_state_t *state, int link_index,
 	int mover_key, sg_compound_suffix_begin_fn begin, void *context);
 

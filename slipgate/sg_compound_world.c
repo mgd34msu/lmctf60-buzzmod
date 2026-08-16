@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "sg_compound.h"
 #include "sg_compound_world.h"
 #include "sg_util.h"
 
@@ -13,6 +14,7 @@ void Touch_DoorTrigger(edict_t *self, edict_t *other, cplane_t *plane,
 void Use_Target_Speaker(edict_t *self, edict_t *other,
 	edict_t *activator);
 void door_blocked(edict_t *self, edict_t *other);
+void door_go_down(edict_t *self);
 void door_use(edict_t *self, edict_t *other, edict_t *activator);
 void trigger_relay_use(edict_t *self, edict_t *other,
 	edict_t *activator);
@@ -201,7 +203,20 @@ static int CompoundWorldDoorAxis(const edict_t *door)
 	return motion_axis;
 }
 
-static int CompoundWorldDoorSafe(edict_t *door, int *axis_out)
+static int CompoundWorldBoundsSafe(const edict_t *door)
+{
+	int axis;
+
+	if (!door || !CompoundWorldFinite3(door->mins) ||
+	    !CompoundWorldFinite3(door->maxs))
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+		if (door->mins[axis] > door->maxs[axis])
+			return 0;
+	return 1;
+}
+
+static int CompoundWorldDoorStaticSafe(edict_t *door, int *axis_out)
 {
 	float delta;
 	int axis;
@@ -223,18 +238,13 @@ static int CompoundWorldDoorSafe(edict_t *door, int *axis_out)
 	    (door->spawnflags & (SG_COMPOUND_DOOR_START_OPEN |
 	                         SG_COMPOUND_DOOR_CRUSHER |
 	                         SG_COMPOUND_DOOR_TOGGLE)) ||
-	    door->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
-	    door->nextthink != 0.0f ||
-	    !CompoundWorldVectorZero(door->velocity) ||
-	    !CompoundWorldVectorZero(door->avelocity) ||
-	    !CompoundWorldFinite3(door->s.origin) ||
+	    !CompoundWorldBoundsSafe(door) ||
 	    !CompoundWorldFinite3(door->s.angles) ||
+	    !CompoundWorldVectorZero(door->s.angles) ||
 	    !CompoundWorldFinite3(door->moveinfo.start_angles) ||
 	    !CompoundWorldFinite3(door->moveinfo.end_angles) ||
 	    !CompoundWorldFinite3(door->pos1) ||
 	    !CompoundWorldFinite3(door->pos2) ||
-	    !CompoundWorldVectorEqual(door->s.origin,
-	                              door->moveinfo.start_origin) ||
 	    !CompoundWorldVectorEqual(door->pos1,
 	                              door->moveinfo.start_origin) ||
 	    !CompoundWorldVectorEqual(door->pos2,
@@ -261,6 +271,18 @@ static int CompoundWorldDoorSafe(edict_t *door, int *axis_out)
 	return 1;
 }
 
+static int CompoundWorldDoorBottomSafe(edict_t *door, int *axis_out)
+{
+	return CompoundWorldDoorStaticSafe(door, axis_out) &&
+	       door->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
+	       door->nextthink == 0.0f &&
+	       CompoundWorldVectorZero(door->velocity) &&
+	       CompoundWorldVectorZero(door->avelocity) &&
+	       CompoundWorldFinite3(door->s.origin) &&
+	       CompoundWorldVectorEqual(door->s.origin,
+	                                door->moveinfo.start_origin);
+}
+
 rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	const float mechanism_anchor[3],
 	sg_compound_world_preopen_t *resolved)
@@ -276,6 +298,7 @@ rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	if (!resolved)
 		return RLR_BAD_CONTROL_POLICY;
 	memset(resolved, 0, sizeof(*resolved));
+	resolved->trigger_key = -1;
 	resolved->mover_key = -1;
 	resolved->axis = -1;
 	if (!CompoundWorldFinite3(mechanism_anchor))
@@ -298,7 +321,7 @@ rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 			continue;
 		}
 		member = trigger->owner;
-		if (!CompoundWorldDoorSafe(member, &axis))
+		if (!CompoundWorldDoorBottomSafe(member, &axis))
 		{
 			saw_unsafe = 1;
 			continue;
@@ -329,9 +352,209 @@ rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	       sizeof(resolved->bottom_origin));
 	memcpy(resolved->top_origin, matched_member->moveinfo.end_origin,
 	       sizeof(resolved->top_origin));
+	memcpy(resolved->member_mins, matched_member->mins,
+	       sizeof(resolved->member_mins));
+	memcpy(resolved->member_maxs, matched_member->maxs,
+	       sizeof(resolved->member_maxs));
+	memcpy(resolved->fixed_angles, matched_member->s.angles,
+	       sizeof(resolved->fixed_angles));
 	resolved->speed = matched_member->moveinfo.speed;
+	resolved->wait = matched_member->moveinfo.wait;
 	resolved->inert_effect_delay = matched_member->delay;
+	resolved->trigger_key = CompoundWorldEntityIndex(matched_trigger);
 	resolved->mover_key = CompoundWorldEntityIndex(matched_member);
 	resolved->axis = matched_axis;
 	return RLR_OK;
+}
+
+static int CompoundWorldResolvedMember(
+	const sg_compound_world_preopen_t *resolved, edict_t **member_out)
+{
+	edict_t *member;
+	edict_t *trigger;
+	int axis;
+
+	if (member_out)
+		*member_out = NULL;
+	if (!resolved || !member_out || !g_edicts ||
+	    resolved->trigger_key <= 0 ||
+	    resolved->trigger_key >= globals.num_edicts ||
+	    resolved->mover_key <= 0 ||
+	    resolved->mover_key >= globals.num_edicts ||
+	    resolved->trigger_key == resolved->mover_key)
+		return 0;
+	trigger = &g_edicts[resolved->trigger_key];
+	member = &g_edicts[resolved->mover_key];
+	if (resolved->trigger != trigger || resolved->member != member ||
+	    !CompoundWorldAutomaticTriggerSafe(trigger) ||
+	    trigger->owner != member ||
+	    !CompoundWorldDoorStaticSafe(member, &axis) ||
+	    resolved->axis != axis ||
+	    !CompoundWorldVectorEqual(resolved->bottom_origin,
+	                              member->moveinfo.start_origin) ||
+	    !CompoundWorldVectorEqual(resolved->top_origin,
+	                              member->moveinfo.end_origin) ||
+	    !CompoundWorldVectorEqual(resolved->member_mins, member->mins) ||
+	    !CompoundWorldVectorEqual(resolved->member_maxs, member->maxs) ||
+	    !CompoundWorldVectorEqual(resolved->fixed_angles,
+	                              member->s.angles) ||
+	    resolved->speed != member->moveinfo.speed ||
+	    resolved->wait != member->moveinfo.wait ||
+	    resolved->inert_effect_delay != member->delay)
+		return 0;
+	*member_out = member;
+	return 1;
+}
+
+static int CompoundWorldSweepBounds(
+	const sg_compound_world_preopen_t *resolved,
+	float mins[3], float maxs[3])
+{
+	static const float hull_mins[3] = { -16.0f, -16.0f, -24.0f };
+	static const float hull_maxs[3] = { 16.0f, 16.0f, 32.0f };
+	edict_t *member;
+	int axis;
+
+	if (!mins || !maxs ||
+	    !CompoundWorldResolvedMember(resolved, &member))
+		return 0;
+	(void)member;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float start_min = resolved->bottom_origin[axis] +
+		                  resolved->member_mins[axis];
+		float start_max = resolved->bottom_origin[axis] +
+		                  resolved->member_maxs[axis];
+		float end_min = resolved->top_origin[axis] +
+		                resolved->member_mins[axis];
+		float end_max = resolved->top_origin[axis] +
+		                resolved->member_maxs[axis];
+
+		if (!isfinite(start_min) || !isfinite(start_max) ||
+		    !isfinite(end_min) || !isfinite(end_max))
+			return 0;
+		mins[axis] = (start_min < end_min ? start_min : end_min) -
+		             hull_maxs[axis];
+		maxs[axis] = (start_max > end_max ? start_max : end_max) -
+		             hull_mins[axis];
+		if (!isfinite(mins[axis]) || !isfinite(maxs[axis]) ||
+		    mins[axis] > maxs[axis])
+			return 0;
+	}
+	return 1;
+}
+
+int SG_CompoundWorldOutsideSweep(
+	const sg_compound_world_preopen_t *resolved, const float origin[3])
+{
+	float mins[3], maxs[3];
+	int axis;
+
+	if (!CompoundWorldFinite3(origin) ||
+	    !CompoundWorldSweepBounds(resolved, mins, maxs))
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+		if (origin[axis] < mins[axis] || origin[axis] > maxs[axis])
+			return 1;
+	return 0;
+}
+
+int SG_CompoundWorldCrossesSweep(
+	const sg_compound_world_preopen_t *resolved, const float from[3],
+	const float to[3])
+{
+	float mins[3], maxs[3];
+	double low = 0.0;
+	double high = 1.0;
+	int axis;
+
+	if (!CompoundWorldFinite3(from) || !CompoundWorldFinite3(to) ||
+	    !CompoundWorldSweepBounds(resolved, mins, maxs))
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		double start = (double)from[axis];
+		double delta = (double)to[axis] - start;
+
+		if (delta == 0.0)
+		{
+			if (start < (double)mins[axis] ||
+			    start > (double)maxs[axis])
+				return 0;
+		}
+		else
+		{
+			double first = ((double)mins[axis] - start) / delta;
+			double last = ((double)maxs[axis] - start) / delta;
+
+			if (first > last)
+			{
+				double swap = first;
+				first = last;
+				last = swap;
+			}
+			if (first > low)
+				low = first;
+			if (last < high)
+				high = last;
+			if (low > high)
+				return 0;
+		}
+	}
+	return 1;
+}
+
+static int CompoundWorldTopMember(
+	const sg_compound_world_preopen_t *resolved, edict_t **member_out)
+{
+	edict_t *member;
+
+	if (!CompoundWorldResolvedMember(resolved, &member) ||
+	    member->solid != SOLID_BSP ||
+	    member->moveinfo.state != SG_PLAT_STATE_TOP ||
+	    !CompoundWorldFinite3(member->s.origin) ||
+	    !CompoundWorldVectorEqual(member->s.origin,
+	                              resolved->top_origin) ||
+	    !CompoundWorldVectorZero(member->velocity) ||
+	    !CompoundWorldVectorZero(member->avelocity) ||
+	    member->think != door_go_down || !isfinite(member->nextthink) ||
+	    !isfinite(level.time) || member->nextthink <= level.time)
+		return 0;
+	*member_out = member;
+	return 1;
+}
+
+int SG_CompoundWorldAtTopFor(
+	const sg_compound_world_preopen_t *resolved, int window_ms)
+{
+	edict_t *member;
+	float until;
+
+	if (window_ms < 0 || window_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    window_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
+	    !CompoundWorldTopMember(resolved, &member))
+		return 0;
+	/* SV_RunThink executes an entity whose nextthink is at most the current
+	 * frame time plus 1 ms.  Include that exact engine tolerance after the
+	 * safety frame; equality is not proof that TOP survives the boundary. */
+	until = level.time + (float)window_ms * 0.001f + FRAMETIME;
+	until += 0.001f;
+	return isfinite(until) && member->nextthink > until;
+}
+
+int SG_CompoundWorldHoldOpen(
+	const sg_compound_world_preopen_t *resolved, int lease_ms)
+{
+	edict_t *member;
+	float until;
+
+	if (lease_ms != SG_COMPOUND_HOLD_LEASE_MS ||
+	    !CompoundWorldTopMember(resolved, &member))
+		return 0;
+	until = level.time + (float)lease_ms * 0.001f;
+	if (!isfinite(until))
+		return 0;
+	if (member->nextthink < until)
+		member->nextthink = until;
+	return 1;
 }
