@@ -165,6 +165,13 @@ static void Trigger(edict_t *trigger, edict_t *door)
 	Set3(trigger->absmax, 8.0f, 8.0f, 8.0f);
 }
 
+static void TriggerAt(edict_t *trigger, edict_t *door, float x)
+{
+	Trigger(trigger, door);
+	trigger->absmin[0] += x;
+	trigger->absmax[0] += x;
+}
+
 static void World(edict_t ents[8])
 {
 	memset(ents, 0, sizeof(*ents) * 8U);
@@ -370,6 +377,154 @@ static void TestMoverSetAmbiguity(void)
 	Trigger(&ents[4], &ents[1]);
 	CHECK(Resolve(&resolved) == RLR_OK);
 	CHECK(resolved.member == &ents[1] && resolved.trigger == &ents[2]);
+}
+
+static void CheckCandidateHints(
+	const sg_compound_world_candidate_t *candidate)
+{
+	int hint_index;
+
+	CHECK(candidate->hint_count > 0);
+	CHECK(candidate->hint_count <= SG_COMPOUND_WORLD_PREOPEN_HINT_MAX);
+	for (hint_index = 0; hint_index < candidate->hint_count; hint_index++)
+	{
+		sg_compound_world_preopen_t exact;
+		int axis;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			float scaled = candidate->hints[hint_index][axis] * 8.0f;
+
+			CHECK(isfinite(candidate->hints[hint_index][axis]));
+			CHECK(scaled == floorf(scaled));
+			if (candidate->hints[hint_index][axis] == 0.0f)
+				CHECK(!signbit(candidate->hints[hint_index][axis]));
+		}
+		CHECK(SG_CompoundWorldOutsideSweep(&candidate->resolved,
+		      candidate->hints[hint_index]));
+		CHECK(SG_CompoundWorldPreopenHintMatches(&candidate->resolved,
+		      candidate->hints[hint_index]));
+		CHECK(SG_CompoundWorldResolvePreopen(
+		      candidate->hints[hint_index], &exact) == RLR_OK);
+		CHECK(exact.trigger_key == candidate->resolved.trigger_key);
+		CHECK(exact.mover_key == candidate->resolved.mover_key);
+	}
+}
+
+static void TestDeterministicEnumeration(void)
+{
+	edict_t ents[8];
+	sg_compound_world_candidate_t candidates[2];
+	sg_compound_world_candidate_t untouched[1];
+	sg_compound_world_candidate_t before[1];
+	int count = -1;
+
+	World(ents);
+	globals.num_edicts = 7;
+	Door(&ents[3], 256.0f, 336.0f);
+	TriggerAt(&ents[4], &ents[3], 400.0f);
+	/* A later safe BOTTOM leaf whose complete trigger-contact domain remains
+	 * inside its sweep has no PREOPEN hint and must neither count nor write one
+	 * element past an exactly sized output. */
+	Door(&ents[5], 600.0f, 680.0f);
+	TriggerAt(&ents[6], &ents[5], 640.0f);
+	CHECK(SG_CompoundWorldEnumeratePreopen(NULL, 0, &count) == RLR_OK);
+	CHECK(count == 2);
+	memset(untouched, 0xa5, sizeof(untouched));
+	memcpy(before, untouched, sizeof(before));
+	CHECK(SG_CompoundWorldEnumeratePreopen(untouched, 1, &count) ==
+	      RLR_BAD_CONTROL_POLICY);
+	CHECK(count == 2);
+	CHECK(memcmp(untouched, before, sizeof(untouched)) == 0);
+	memset(candidates, 0, sizeof(candidates));
+	CHECK(SG_CompoundWorldEnumeratePreopen(candidates, 2, &count) ==
+	      RLR_OK);
+	CHECK(count == 2);
+	CHECK(candidates[0].resolved.trigger_key == 2);
+	CHECK(candidates[0].resolved.mover_key == 1);
+	CHECK(candidates[1].resolved.trigger_key == 4);
+	CHECK(candidates[1].resolved.mover_key == 3);
+	CHECK(candidates[0].hints[0][0] == -24.875f);
+	CHECK(candidates[1].hints[0][0] == 375.125f);
+	CheckCandidateHints(&candidates[0]);
+	CheckCandidateHints(&candidates[1]);
+	{
+		vec3_t noncanonical;
+
+		VectorCopy(candidates[0].hints[0], noncanonical);
+		noncanonical[0] += 0.125f;
+		CHECK(!SG_CompoundWorldPreopenHintMatches(
+		      &candidates[0].resolved, noncanonical));
+		VectorCopy(candidates[0].hints[0], noncanonical);
+		noncanonical[1] = -0.0f;
+		CHECK(!SG_CompoundWorldPreopenHintMatches(
+		      &candidates[0].resolved, noncanonical));
+	}
+	CHECK(CallbackCalls() == 0);
+}
+
+static void TestEnumerationExclusionAndDedup(void)
+{
+	edict_t ents[8];
+	sg_compound_world_candidate_t candidate;
+	int count = -1;
+
+	World(ents);
+	globals.num_edicts = 5;
+	Door(&ents[3], 256.0f, 336.0f);
+	TriggerAt(&ents[4], &ents[3], 400.0f);
+	ents[3].moveinfo.state = SG_PLAT_STATE_TOP;
+	Set3(ents[3].s.origin, 336.0f, 0.0f, 0.0f);
+	CHECK(SG_CompoundWorldEnumeratePreopen(&candidate, 1, &count) ==
+	      RLR_OK);
+	CHECK(count == 1);
+	CHECK(candidate.resolved.trigger_key == 2);
+
+	/* Two safe automatic triggers owning one physical leaf are not silently
+	 * deduplicated by edict order. */
+	World(ents);
+	globals.num_edicts = 4;
+	TriggerAt(&ents[3], &ents[1], 160.0f);
+	memset(&candidate, 0x6b, sizeof(candidate));
+	CHECK(SG_CompoundWorldEnumeratePreopen(&candidate, 1, &count) ==
+	      RLR_MECHANISM_AMBIGUOUS);
+	CHECK(count == 0);
+	CHECK(CallbackCalls() == 0);
+
+	CHECK(SG_CompoundWorldEnumeratePreopen(NULL, 1, &count) ==
+	      RLR_BAD_CONTROL_POLICY);
+	CHECK(SG_CompoundWorldEnumeratePreopen(&candidate, -1, &count) ==
+	      RLR_BAD_CONTROL_POLICY);
+	CHECK(SG_CompoundWorldEnumeratePreopen(&candidate, 1, NULL) ==
+	      RLR_BAD_CONTROL_POLICY);
+}
+
+static void TestEnumerationClampsRepresentableContactDomain(void)
+{
+	edict_t ents[8];
+	sg_compound_world_candidate_t candidate;
+	sg_compound_world_preopen_t exact;
+	vec3_t high_contact = { 4095.875f, 0.0f, 0.0f };
+	int count = -1;
+	int hint_index;
+	int saw_high_contact = 0;
+
+	World(ents);
+	Door(&ents[1], 4040.0f, 4000.0f);
+	Trigger(&ents[2], &ents[1]);
+	ents[2].absmin[0] = 3972.0f;
+	ents[2].absmax[0] = 4108.0f;
+	CHECK(SG_CompoundWorldResolvePreopen(high_contact, &exact) == RLR_OK);
+	CHECK(SG_CompoundWorldOutsideSweep(&exact, high_contact));
+	CHECK(SG_CompoundWorldEnumeratePreopen(&candidate, 1, &count) ==
+	      RLR_OK);
+	CHECK(count == 1);
+	CheckCandidateHints(&candidate);
+	for (hint_index = 0; hint_index < candidate.hint_count; hint_index++)
+		if (candidate.hints[hint_index][0] == high_contact[0])
+			saw_high_contact = 1;
+	CHECK(saw_high_contact);
+	CHECK(CallbackCalls() == 0);
 }
 
 static void Lmctf01LikeWorld(edict_t ents[8],
@@ -620,6 +775,9 @@ int main(void)
 	TestExplicitResolutionReasons();
 	TestUnsafeDoorClasses();
 	TestMoverSetAmbiguity();
+	TestDeterministicEnumeration();
+	TestEnumerationExclusionAndDedup();
+	TestEnumerationClampsRepresentableContactDomain();
 	TestExactSweepGeometry();
 	TestSweepRejectsStaleIdentity();
 	TestExactTopWindow();

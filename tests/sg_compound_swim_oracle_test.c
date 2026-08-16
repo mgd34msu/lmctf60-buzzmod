@@ -16,6 +16,11 @@ edict_t *g_edicts;
 level_locals_t level;
 sg_host_t sg_host;
 
+short SG_RuneProofGravity(void)
+{
+	return 800;
+}
+
 typedef enum fixture_suffix_e
 {
 	FIXTURE_SUFFIX_SUCCESS = 0,
@@ -35,7 +40,10 @@ typedef struct fixture_config_s
 	qboolean hazard_ride;
 	qboolean fall_ride;
 	qboolean wrong_contact;
+	qboolean unstable_contact;
 	qboolean opening_drift;
+	qboolean source_hazard;
+	qboolean source_dry;
 	float mechanism_x;
 	float source_x;
 } fixture_config_t;
@@ -211,8 +219,12 @@ static int HostBoxEdicts(const vec3_t mins, const vec3_t maxs,
 	if (max_count <= 0)
 		return 0;
 	if (area_type == AREA_TRIGGERS && !fixture_observation.top_staged &&
-	    fixture_observation.approach_commands >=
-	        fixture_config.touch_substep)
+	    maxs[0] > fixture_edicts[2].absmin[0] &&
+	    mins[0] < fixture_edicts[2].absmax[0] &&
+	    maxs[1] > fixture_edicts[2].absmin[1] &&
+	    mins[1] < fixture_edicts[2].absmax[1] &&
+	    maxs[2] > fixture_edicts[2].absmin[2] &&
+	    mins[2] < fixture_edicts[2].absmax[2])
 	{
 		list[count++] = &fixture_edicts[2];
 		if (fixture_config.contaminate_trigger && count < max_count)
@@ -325,11 +337,19 @@ static void HostPmove(pmove_t *pmove)
 	}
 	else if (!CommandZero(&pmove->cmd))
 	{
+		int contact_cycle;
+
 		fixture_observation.approach_commands++;
-		if (fixture_observation.approach_commands >=
-		    fixture_config.touch_substep)
+		contact_cycle = fixture_config.touch_substep > 0 ?
+			(fixture_observation.approach_commands /
+			 fixture_config.touch_substep) : 0;
+		if (fixture_config.touch_substep > 0 &&
+		    (fixture_observation.approach_commands %
+		     fixture_config.touch_substep) == 0)
 			x = (int)fixture_config.mechanism_x -
-			    (fixture_config.wrong_contact ? 8 : 0);
+			    ((fixture_config.wrong_contact ||
+			      (fixture_config.unstable_contact &&
+			       (contact_cycle % 2) == 0)) ? 8 : 0);
 		else
 			x = fixture_config.source_x < -24.0f ?
 			    (int)fixture_config.mechanism_x : 180;
@@ -358,6 +378,16 @@ static void HostPmove(pmove_t *pmove)
 				pmove->waterlevel = 0;
 				pmove->groundentity = &fixture_edicts[0];
 			}
+		}
+		else if (fixture_config.source_hazard)
+		{
+			pmove->watertype = CONTENTS_LAVA;
+			pmove->waterlevel = 2;
+		}
+		else if (fixture_config.source_dry)
+		{
+			pmove->watertype = 0;
+			pmove->waterlevel = 0;
 		}
 	}
 	pmove->s.origin[0] = (short)(x * 8);
@@ -476,6 +506,20 @@ static rune_reject_reason_t Resolve(
 
 	Set3(anchor, fixture_config.mechanism_x, 0.0f, 0.0f);
 	return SG_CompoundWorldResolvePreopen(anchor, resolved);
+}
+
+static qboolean CanonicalHint(sg_compound_world_preopen_t *resolved,
+	vec3_t hint)
+{
+	sg_compound_world_candidate_t candidate;
+	int count = 0;
+
+	if (SG_CompoundWorldEnumeratePreopen(&candidate, 1, &count) != RLR_OK ||
+	    count != 1 || candidate.hint_count <= 0)
+		return false;
+	*resolved = candidate.resolved;
+	VectorCopy(candidate.hints[0], hint);
+	return true;
 }
 
 static qboolean MemberRestored(const edict_t *member,
@@ -733,6 +777,148 @@ static void TestApproachArrivalSuppressedUntilTouch(void)
 	}
 }
 
+static void TestPrepareSource(void)
+{
+	fixture_config_t config =
+		DefaultConfig(5, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_source_t prepared;
+	sg_compound_swim_source_t zero;
+	vec3_t source;
+
+	memset(&zero, 0, sizeof(zero));
+	ResetFixture(&config);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	Set3(source, config.source_x, 0.0f, 0.0f);
+	CHECK(SG_OracleCompoundSwimPrepareSource(source, &resolved, -17.0f,
+	      &prepared, NULL, true, false) == RLR_OK);
+	CHECK(prepared.old_frame_z == -17.0f);
+	CHECK(prepared.phantom.pms.origin[0] == (short)(source[0] * 8.0f));
+	CHECK(prepared.phantom.old_pms.origin[0] ==
+	      prepared.phantom.pms.origin[0]);
+	CHECK(prepared.phantom.origin[0] == source[0]);
+	CHECK(prepared.phantom.waterlevel == 3);
+	CHECK(prepared.phantom.watertype == CONTENTS_WATER);
+	CHECK(fixture_observation.pmove_calls == 1);
+	CHECK(fixture_observation.zero_commands == 1);
+	CHECK(fixture_observation.callback_calls == 0);
+
+	config.source_hazard = true;
+	ResetFixture(&config);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	CHECK(SG_OracleCompoundSwimPrepareSource(source, &resolved, 0.0f,
+	      &prepared, NULL, true, false) == RLR_APPROACH_REPLAY_FAILED);
+	CHECK(memcmp(&prepared, &zero, sizeof(prepared)) == 0);
+	config.source_hazard = false;
+	config.source_dry = true;
+	ResetFixture(&config);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	CHECK(SG_OracleCompoundSwimPrepareSource(source, &resolved, 0.0f,
+	      &prepared, NULL, true, false) == RLR_APPROACH_REPLAY_FAILED);
+	CHECK(memcmp(&prepared, &zero, sizeof(prepared)) == 0);
+}
+
+static void RunContactDiscovery(float source_x, int touch_substep,
+	int expected_commands)
+{
+	fixture_config_t config =
+		DefaultConfig(touch_substep, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_source_t prepared;
+	sg_compound_swim_source_t before;
+	vec3_t source, hint, anchor;
+	short original_pms_x;
+	rune_reject_reason_t result;
+
+	config.source_x = source_x;
+	ResetFixture(&config);
+	CHECK(CanonicalHint(&resolved, hint));
+	Set3(source, source_x, 0.0f, 0.0f);
+	CHECK(SG_OracleCompoundSwimPrepareSource(source, &resolved, -17.0f,
+	      &prepared, NULL, true, false) == RLR_OK);
+	/* The discovery seam must not collapse old_pms into pms.  Give each cloned
+	 * replay a real snapinitial mismatch and prove the caller's two states are
+	 * left byte-for-byte intact. */
+	original_pms_x = prepared.phantom.pms.origin[0];
+	prepared.phantom.old_pms.origin[0] += 8;
+	CHECK(prepared.phantom.pms.origin[0] == original_pms_x);
+	before = prepared;
+	memset(&fixture_observation, 0, sizeof(fixture_observation));
+	result = SG_OracleCompoundSwimDiscoverContact(&prepared, &resolved, hint,
+	      anchor, NULL, true, false);
+	if (result != RLR_OK)
+		fprintf(stderr, "discovery source %.1f touch %d result %d calls %d approach %d hint %.3f\n",
+		        source_x, touch_substep, result,
+		        fixture_observation.pmove_calls,
+		        fixture_observation.approach_commands, hint[0]);
+	CHECK(result == RLR_OK);
+	CHECK(anchor[0] == config.mechanism_x);
+	CHECK(anchor[1] == 0.0f && !signbit(anchor[1]));
+	CHECK(anchor[2] == 0.0f && !signbit(anchor[2]));
+	CHECK(anchor[0] * 8.0f == floorf(anchor[0] * 8.0f));
+	CHECK(memcmp(&prepared, &before, sizeof(prepared)) == 0);
+	CHECK(fixture_observation.approach_commands == expected_commands);
+	CHECK(fixture_observation.pmove_calls == expected_commands);
+	CHECK(fixture_observation.first_snapinitial);
+	CHECK(fixture_observation.later_snapinitial == 1);
+	CHECK(fixture_observation.pretop_contact_traces == 0);
+	CHECK(fixture_observation.callback_calls == 0);
+	CheckStaticContextRestored();
+}
+
+static void TestContactDiscovery(void)
+{
+	/* The first case crosses a normal 100 ms completion boundary before its
+	 * first contact; the second starts inside the ordinary SWIM arrival radius.
+	 * Suppress-arrival discovery must continue in both cases. */
+	RunContactDiscovery(200.0f, 5, 10);
+	RunContactDiscovery(123.0f, 1, 2);
+}
+
+static void TestContactDiscoveryRejectsNonFixedReplay(void)
+{
+	fixture_config_t config =
+		DefaultConfig(5, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_source_t prepared;
+	vec3_t source, hint, anchor, bad_hint;
+	byte zero[sizeof(anchor)];
+
+	memset(zero, 0, sizeof(zero));
+	config.unstable_contact = true;
+	ResetFixture(&config);
+	CHECK(CanonicalHint(&resolved, hint));
+	Set3(source, config.source_x, 0.0f, 0.0f);
+	CHECK(SG_OracleCompoundSwimPrepareSource(source, &resolved, 0.0f,
+	      &prepared, NULL, true, false) == RLR_OK);
+	memset(&fixture_observation, 0, sizeof(fixture_observation));
+	CHECK(SG_OracleCompoundSwimDiscoverContact(&prepared, &resolved, hint,
+	      anchor, NULL, true, false) == RLR_APPROACH_REPLAY_FAILED);
+	CHECK(memcmp(anchor, zero, sizeof(anchor)) == 0);
+	CHECK(fixture_observation.approach_commands == 10);
+
+	config.unstable_contact = false;
+	ResetFixture(&config);
+	CHECK(CanonicalHint(&resolved, hint));
+	CHECK(SG_OracleCompoundSwimPrepareSource(source, &resolved, 0.0f,
+	      &prepared, NULL, true, false) == RLR_OK);
+	VectorCopy(hint, bad_hint);
+	bad_hint[0] += 0.125f;
+	memset(&fixture_observation, 0, sizeof(fixture_observation));
+	CHECK(SG_OracleCompoundSwimDiscoverContact(&prepared, &resolved,
+	      bad_hint, anchor, NULL, true, false) ==
+	      RLR_BAD_MECHANISM_ANCHOR);
+	CHECK(memcmp(anchor, zero, sizeof(anchor)) == 0);
+	CHECK(fixture_observation.pmove_calls == 0);
+
+	prepared.phantom.armed_door_count = 1;
+	memset(&fixture_observation, 0, sizeof(fixture_observation));
+	CHECK(SG_OracleCompoundSwimDiscoverContact(&prepared, &resolved, hint,
+	      anchor, NULL, true, false) == RLR_APPROACH_REPLAY_FAILED);
+	CHECK(memcmp(anchor, zero, sizeof(anchor)) == 0);
+	CHECK(fixture_observation.pmove_calls == 0);
+}
+
 static void TestLoaderReplayModeAndRestoration(void)
 {
 	const vec3_t mechanism = { 160.0f, 0.0f, 0.0f };
@@ -786,6 +972,9 @@ int main(void)
 	TestFailureTable();
 	TestResolvedIdentityFailsClosed();
 	TestApproachArrivalSuppressedUntilTouch();
+	TestPrepareSource();
+	TestContactDiscovery();
+	TestContactDiscoveryRejectsNonFixedReplay();
 	TestLoaderReplayModeAndRestoration();
 	TestPublicSwimTraverseRegression();
 	if (failures)

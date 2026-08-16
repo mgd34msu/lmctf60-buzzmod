@@ -283,6 +283,30 @@ static int CompoundWorldDoorBottomSafe(edict_t *door, int *axis_out)
 	                                door->moveinfo.start_origin);
 }
 
+static void CompoundWorldResolvedFrom(edict_t *trigger, edict_t *member,
+	int axis, sg_compound_world_preopen_t *resolved)
+{
+	memset(resolved, 0, sizeof(*resolved));
+	resolved->trigger = trigger;
+	resolved->member = member;
+	memcpy(resolved->bottom_origin, member->moveinfo.start_origin,
+	       sizeof(resolved->bottom_origin));
+	memcpy(resolved->top_origin, member->moveinfo.end_origin,
+	       sizeof(resolved->top_origin));
+	memcpy(resolved->member_mins, member->mins,
+	       sizeof(resolved->member_mins));
+	memcpy(resolved->member_maxs, member->maxs,
+	       sizeof(resolved->member_maxs));
+	memcpy(resolved->fixed_angles, member->s.angles,
+	       sizeof(resolved->fixed_angles));
+	resolved->speed = member->moveinfo.speed;
+	resolved->wait = member->moveinfo.wait;
+	resolved->inert_effect_delay = member->delay;
+	resolved->trigger_key = CompoundWorldEntityIndex(trigger);
+	resolved->mover_key = CompoundWorldEntityIndex(member);
+	resolved->axis = axis;
+}
+
 rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	const float mechanism_anchor[3],
 	sg_compound_world_preopen_t *resolved)
@@ -346,25 +370,190 @@ rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 		return RLR_MECHANISM_AMBIGUOUS;
 	if (!matched_member)
 		return RLR_MECHANISM_UNRESOLVED;
-	resolved->trigger = matched_trigger;
-	resolved->member = matched_member;
-	memcpy(resolved->bottom_origin, matched_member->moveinfo.start_origin,
-	       sizeof(resolved->bottom_origin));
-	memcpy(resolved->top_origin, matched_member->moveinfo.end_origin,
-	       sizeof(resolved->top_origin));
-	memcpy(resolved->member_mins, matched_member->mins,
-	       sizeof(resolved->member_mins));
-	memcpy(resolved->member_maxs, matched_member->maxs,
-	       sizeof(resolved->member_maxs));
-	memcpy(resolved->fixed_angles, matched_member->s.angles,
-	       sizeof(resolved->fixed_angles));
-	resolved->speed = matched_member->moveinfo.speed;
-	resolved->wait = matched_member->moveinfo.wait;
-	resolved->inert_effect_delay = matched_member->delay;
-	resolved->trigger_key = CompoundWorldEntityIndex(matched_trigger);
-	resolved->mover_key = CompoundWorldEntityIndex(matched_member);
-	resolved->axis = matched_axis;
+	CompoundWorldResolvedFrom(matched_trigger, matched_member, matched_axis,
+	                          resolved);
 	return RLR_OK;
+}
+
+static int CompoundWorldTriggerCentreUnits(const edict_t *trigger,
+	int low_units[3], int high_units[3])
+{
+	static const float player_mins[3] = { -17.0f, -17.0f, -25.0f };
+	static const float player_maxs[3] = { 17.0f, 17.0f, 33.0f };
+	int axis;
+
+	if (!trigger || !low_units || !high_units ||
+	    !CompoundWorldFinite3(trigger->absmin) ||
+	    !CompoundWorldFinite3(trigger->absmax))
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		double lower = ((double)trigger->absmin[axis] -
+		                (double)player_maxs[axis]) * 8.0;
+		double upper = ((double)trigger->absmax[axis] -
+		                (double)player_mins[axis]) * 8.0;
+		double first = floor(lower) + 1.0;
+		double last = ceil(upper) - 1.0;
+
+		if (!isfinite(lower) || !isfinite(upper) || first > last ||
+		    last < -32768.0 || first > 32767.0)
+			return 0;
+		if (first < -32768.0)
+			first = -32768.0;
+		if (last > 32767.0)
+			last = 32767.0;
+		low_units[axis] = (int)first;
+		high_units[axis] = (int)last;
+	}
+	return 1;
+}
+
+static int CompoundWorldBuildCandidate(edict_t *trigger, edict_t *member,
+	int axis, sg_compound_world_candidate_t *candidate)
+{
+	sg_compound_world_preopen_t exact;
+	int low_units[3], high_units[3], middle_units[3];
+	int face, coordinate;
+
+	if (!candidate ||
+	    !CompoundWorldTriggerCentreUnits(trigger, low_units, high_units))
+		return 0;
+	memset(candidate, 0, sizeof(*candidate));
+	CompoundWorldResolvedFrom(trigger, member, axis, &candidate->resolved);
+	for (coordinate = 0; coordinate < 3; coordinate++)
+		middle_units[coordinate] = low_units[coordinate] +
+			(high_units[coordinate] - low_units[coordinate]) / 2;
+	/* Stable face order: X-low, X-high, Y-low, Y-high, Z-low,
+	 * Z-high.  Each face uses the first/last representable player centre
+	 * strictly overlapping the trigger on that axis. */
+	for (face = 0; face < SG_COMPOUND_WORLD_PREOPEN_HINT_MAX; face++)
+	{
+		float hint[3];
+		int hint_axis = face / 2;
+		int duplicate = 0;
+		int hint_index;
+
+		for (coordinate = 0; coordinate < 3; coordinate++)
+		{
+			int units = middle_units[coordinate];
+
+			if (coordinate == hint_axis)
+				units = (face & 1) ? high_units[coordinate] :
+				        low_units[coordinate];
+			hint[coordinate] = (float)units * 0.125f;
+			if (hint[coordinate] == 0.0f)
+				hint[coordinate] = 0.0f;
+		}
+		if (!CompoundWorldTriggerContains(trigger, hint) ||
+		    !SG_CompoundWorldOutsideSweep(&candidate->resolved, hint) ||
+		    SG_CompoundWorldResolvePreopen(hint, &exact) != RLR_OK ||
+		    exact.trigger_key != candidate->resolved.trigger_key ||
+		    exact.mover_key != candidate->resolved.mover_key)
+			continue;
+		for (hint_index = 0; hint_index < candidate->hint_count;
+		     hint_index++)
+			if (CompoundWorldVectorEqual(candidate->hints[hint_index],
+			                             hint))
+				duplicate = 1;
+		if (duplicate)
+			continue;
+		memcpy(candidate->hints[candidate->hint_count], hint,
+		       sizeof(hint));
+		candidate->hint_count++;
+	}
+	return candidate->hint_count > 0;
+}
+
+rune_reject_reason_t SG_CompoundWorldEnumeratePreopen(
+	sg_compound_world_candidate_t *candidates, int capacity,
+	int *count_out)
+{
+	int count = 0;
+	int index;
+
+	if (count_out)
+		*count_out = 0;
+	if (!count_out || capacity < 0 || (!candidates && capacity != 0))
+		return RLR_BAD_CONTROL_POLICY;
+	if (!g_edicts || globals.num_edicts <= 1)
+		return RLR_OK;
+	/* More than one admitted automatic trigger for the same physical member
+	 * has no unique stable mechanism identity.  Reject the complete snapshot
+	 * rather than choosing one by incidental discovery geometry. */
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		edict_t *trigger = &g_edicts[index];
+		int axis;
+		int prior;
+
+		if (!CompoundWorldAutomaticTriggerSafe(trigger) ||
+		    !CompoundWorldDoorBottomSafe(trigger->owner, &axis))
+			continue;
+		for (prior = 1; prior < index; prior++)
+		{
+			edict_t *other = &g_edicts[prior];
+			int other_axis;
+
+			if (other->owner == trigger->owner &&
+			    CompoundWorldAutomaticTriggerSafe(other) &&
+			    CompoundWorldDoorBottomSafe(other->owner, &other_axis))
+				return RLR_MECHANISM_AMBIGUOUS;
+		}
+	}
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		edict_t *trigger = &g_edicts[index];
+		sg_compound_world_candidate_t candidate;
+		int axis;
+
+		if (CompoundWorldAutomaticTriggerSafe(trigger) &&
+		    CompoundWorldDoorBottomSafe(trigger->owner, &axis) &&
+		    CompoundWorldBuildCandidate(trigger, trigger->owner, axis,
+		                                &candidate))
+			count++;
+	}
+	*count_out = count;
+	if (!candidates)
+		return RLR_OK;
+	if (capacity < count)
+		return RLR_BAD_CONTROL_POLICY;
+	count = 0;
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		edict_t *trigger = &g_edicts[index];
+		sg_compound_world_candidate_t candidate;
+		int axis;
+
+		if (CompoundWorldAutomaticTriggerSafe(trigger) &&
+		    CompoundWorldDoorBottomSafe(trigger->owner, &axis) &&
+		    CompoundWorldBuildCandidate(trigger, trigger->owner, axis,
+		                                &candidate))
+			candidates[count++] = candidate;
+	}
+	return RLR_OK;
+}
+
+int SG_CompoundWorldPreopenHintMatches(
+	const sg_compound_world_preopen_t *resolved, const float hint[3])
+{
+	sg_compound_world_candidate_t candidate;
+	edict_t *member = NULL;
+	int axis;
+	int hint_index;
+
+	if (!resolved || !hint ||
+	    !SG_CompoundWorldResolvedMember(resolved, &member) ||
+	    member != resolved->member ||
+	    !CompoundWorldDoorBottomSafe(member, &axis) ||
+	    axis != resolved->axis ||
+	    !CompoundWorldBuildCandidate(resolved->trigger, member, axis,
+	                                &candidate))
+		return 0;
+	for (hint_index = 0; hint_index < candidate.hint_count; hint_index++)
+		if (memcmp(candidate.hints[hint_index], hint,
+		           sizeof(candidate.hints[hint_index])) == 0)
+			return 1;
+	return 0;
 }
 
 int SG_CompoundWorldResolvedMember(

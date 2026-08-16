@@ -97,6 +97,16 @@ typedef struct sg_compound_swim_proof_s
 	float		suffix_old_frame_z;
 } sg_compound_swim_proof_t;
 
+/* Canonical source state owned by the compound oracle.  Keep the complete
+ * phantom, and in particular pms and old_pms as distinct values: snapinitial
+ * is part of the next real Pmove even when a freshly prepared offline source
+ * happens to make those states equal. */
+typedef struct sg_compound_swim_source_s
+{
+	sg_phantom_t	phantom;
+	float		old_frame_z;
+} sg_compound_swim_source_t;
+
 struct sg_compound_world_preopen_s;
 
 void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin);
@@ -124,6 +134,16 @@ qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite);
 qboolean SG_OracleSwimTraverse(sg_phantom_t *ph, const vec3_t destination,
 	qboolean destination_water, float old_frame_z, sg_swim_proof_t *proof,
 	edict_t *passent, qboolean world_only);
+rune_reject_reason_t SG_OracleCompoundSwimPrepareSource(
+	const vec3_t source,
+	const struct sg_compound_world_preopen_s *resolved,
+	float old_frame_z, sg_compound_swim_source_t *prepared,
+	edict_t *passent, qboolean world_only, qboolean loader_replay);
+rune_reject_reason_t SG_OracleCompoundSwimDiscoverContact(
+	const sg_compound_swim_source_t *prepared,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t canonical_hint, vec3_t mechanism_anchor,
+	edict_t *passent, qboolean world_only, qboolean loader_replay);
 rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	const struct sg_compound_world_preopen_s *resolved,
 	const vec3_t mechanism_anchor, const vec3_t destination,

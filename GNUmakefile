@@ -107,6 +107,16 @@ COMPOUND_WORLD_TEST_OBJS = .sg_compound_world_test.gnu.o \
 	.sg_compound_world_under_test.gnu.o \
 	.sg_compound_world_q_shared_under_test.gnu.o
 COMPOUND_WORLD_TEST_DEPS = $(COMPOUND_WORLD_TEST_OBJS:.o=.d)
+COMPOUND_GEN_TEST_BIN = sg_compound_gen_test.gnu
+COMPOUND_GEN_TEST_OBJS = .sg_compound_gen_test.gnu.o \
+	.sg_compound_gen_under_test.gnu.o
+COMPOUND_GEN_TEST_DEPS = $(COMPOUND_GEN_TEST_OBJS:.o=.d)
+COMPOUND_GEN_TEST_ALL_ARTIFACTS = \
+	sg_compound_gen_test sg_compound_gen_test.gnu sg_compound_gen_test.make \
+	.sg_compound_gen_test.gnu.o .sg_compound_gen_test.gnu.d \
+	.sg_compound_gen_under_test.gnu.o .sg_compound_gen_under_test.gnu.d \
+	.sg_compound_gen_test.make.o .sg_compound_gen_test.make.d \
+	.sg_compound_gen_under_test.make.o .sg_compound_gen_under_test.make.d
 IDENTITY_TEST_BIN = sg_identity_test.gnu
 IDENTITY_TEST_OBJS = .sg_identity_test.gnu.o .sg_identity_under_test.gnu.o \
 	.sg_crc32_under_test.gnu.o
@@ -405,7 +415,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_compound_world.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_accept_drop.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_accept_drop.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -509,6 +519,7 @@ SHLIBLDFLAGS = -shared
 ######################################################################
 
 .PHONY: all dep host-test action-test compound-test compound-world-test \
+	compound-gen-test \
 	identity-test rune-wire-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
@@ -546,6 +557,8 @@ $(OBJS): $(REVISION_HEADER)
 
 slipgate/sg_compound_world.o: slipgate/sg_compound_world.c \
 		slipgate/sg_compound_world.h slipgate/sg_util.h g_local.h
+slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
+		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 
@@ -602,6 +615,9 @@ $(COMPOUND_TEST_BIN): $(COMPOUND_TEST_OBJS)
 
 $(COMPOUND_WORLD_TEST_BIN): $(COMPOUND_WORLD_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(COMPOUND_WORLD_TEST_OBJS) $(LDFLAGS)
+
+$(COMPOUND_GEN_TEST_BIN): $(COMPOUND_GEN_TEST_OBJS)
+	$(CC) -o $@ $(COMPOUND_GEN_TEST_OBJS) $(LDFLAGS)
 
 $(RUNE_LOADER_TEST_BIN): $(RUNE_LOADER_TEST_OBJS)
 	$(CC) -o $@ $(RUNE_LOADER_TEST_OBJS) $(LDFLAGS)
@@ -678,6 +694,18 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -Wno-strict-prototypes \
 		-ffunction-sections -fdata-sections \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_gen_test.gnu.o: tests/sg_compound_gen_test.c \
+		slipgate/sg_compound_gen.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_gen_under_test.gnu.o: slipgate/sg_compound_gen.c \
+		slipgate/sg_compound_gen.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_identity_test.gnu.o: tests/sg_identity_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
@@ -917,7 +945,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-pedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
-		$(COMPOUND_WORLD_TEST_BIN) $(IDENTITY_TEST_BIN) \
+		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
+		$(IDENTITY_TEST_BIN) \
 		$(RUNE_WIRE_TEST_BIN) $(SIDECAR_WIRE_TEST_BIN) \
 		$(SIDECAR_LOADER_TEST_BIN) $(SIDECAR_STORE_TEST_BIN) \
 		$(DANGER_LEASE_TEST_BIN) $(DANGER_POLICY_TEST_BIN) \
@@ -932,6 +961,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
 	./$(COMPOUND_WORLD_TEST_BIN)
+	./$(COMPOUND_GEN_TEST_BIN)
 	./$(IDENTITY_TEST_BIN)
 	./$(RUNE_WIRE_TEST_BIN)
 	./$(SIDECAR_WIRE_TEST_BIN)
@@ -965,6 +995,9 @@ compound-test: $(COMPOUND_TEST_BIN)
 
 compound-world-test: $(COMPOUND_WORLD_TEST_BIN)
 	./$(COMPOUND_WORLD_TEST_BIN)
+
+compound-gen-test: $(COMPOUND_GEN_TEST_BIN)
+	./$(COMPOUND_GEN_TEST_BIN)
 
 identity-test: $(IDENTITY_TEST_BIN)
 	./$(IDENTITY_TEST_BIN)
@@ -1044,10 +1077,13 @@ $(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
 	tmp="$@.tmp.$$$$"; \
 	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
 	$(CC) -MM $(filter-out slipgate/sg_compound_world.c \
+		slipgate/sg_compound_gen.c \
 		slipgate/sg_rune_door_scope.c, \
 		$(OBJS:.o=.c)) > "$$tmp"; \
 	$(CC) -MM -MT slipgate/sg_compound_world.o \
 		slipgate/sg_compound_world.c >> "$$tmp"; \
+	$(CC) -MM -MT slipgate/sg_compound_gen.o \
+		slipgate/sg_compound_gen.c >> "$$tmp"; \
 	$(CC) -MM -MT slipgate/sg_rune_door_scope.o \
 		slipgate/sg_rune_door_scope.c >> "$$tmp"; \
 	if test -r "$@" && cmp -s "$$tmp" "$@"; then \
@@ -1067,8 +1103,10 @@ stripcr:	.
 
 clean:
 		@echo "Deleting temporary files..."
-		@rm -f $(OBJS) $(REVISION_HEADER) $(REVISION_HEADER).tmp.* \
+		@rm -f $(OBJS) $(OBJS:.o=.d) $(REVISION_HEADER) \
+			$(REVISION_HEADER).tmp.* \
 			$(DEPEND_FILE).tmp.* $(HOST_TEST_ALL_ARTIFACTS) \
+			$(COMPOUND_GEN_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 			$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS) *.orig ~* core
 
@@ -1084,6 +1122,7 @@ endif
 -include $(ACTION_TEST_DEPS)
 -include $(COMPOUND_TEST_DEPS)
 -include $(COMPOUND_WORLD_TEST_DEPS)
+-include $(COMPOUND_GEN_TEST_DEPS)
 -include $(IDENTITY_TEST_DEPS)
 -include $(RUNE_WIRE_TEST_DEPS)
 -include $(SIDECAR_WIRE_TEST_DEPS)

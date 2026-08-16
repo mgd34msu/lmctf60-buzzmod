@@ -5,6 +5,7 @@
 #include "sg_action_contract.generated.h"
 
 #define SG_COMPOUND_WORLD_MAX_INERT_DELAY_SECONDS 5.0f
+#define SG_COMPOUND_WORLD_PREOPEN_HINT_MAX 6
 
 struct edict_s;
 
@@ -29,6 +30,18 @@ typedef struct sg_compound_world_preopen_s
 	int axis;
 } sg_compound_world_preopen_t;
 
+/* Generator/loader discovery never reimplements trigger geometry.  Each
+ * entry binds one exact safe BOTTOM member to its automatic trigger and
+ * carries a bounded, deterministic set of player-centre targets.  Hints are
+ * positive-zero eighth-unit coordinates which overlap that trigger while
+ * remaining outside the member's complete swept volume. */
+typedef struct sg_compound_world_candidate_s
+{
+	sg_compound_world_preopen_t resolved;
+	float hints[SG_COMPOUND_WORLD_PREOPEN_HINT_MAX][3];
+	int hint_count;
+} sg_compound_world_candidate_t;
+
 /* This policy is intentionally distinct from ordinary declared-door policy.
  * With no delay it admits the same sound/areaportal-only effects.  A positive
  * delay is compound-safe only when its allocated DelayedUse has no observable
@@ -41,6 +54,18 @@ int SG_CompoundWorldDoorEffectsSafe(const struct edict_s *door);
 rune_reject_reason_t SG_CompoundWorldResolvePreopen(
 	const float mechanism_anchor[3],
 	sg_compound_world_preopen_t *resolved);
+
+/* Enumerate every usable safe PREOPEN mechanism once, ordered by
+ * (trigger_key, mover_key).  A NULL candidates/zero-capacity call is a count
+ * query.  Insufficient capacity and duplicate physical ownership fail before
+ * writing any candidate. */
+rune_reject_reason_t SG_CompoundWorldEnumeratePreopen(
+	sg_compound_world_candidate_t *candidates, int capacity,
+	int *count_out);
+
+/* Exact membership in the current candidate's canonical hint set. */
+int SG_CompoundWorldPreopenHintMatches(
+	const sg_compound_world_preopen_t *resolved, const float hint[3]);
 
 /* Revalidate every copied identity field and return the exact physical leaf.
  * Offline replay uses this seam before temporarily staging that leaf; it must

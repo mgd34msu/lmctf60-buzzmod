@@ -2497,6 +2497,223 @@ static void SG_OracleCompoundCaptureSuffix(const sg_phantom_t *ph,
 	proof->suffix_old_frame_z = old_frame_z;
 }
 
+static qboolean SG_OracleCompoundFixedVector(const vec3_t value)
+{
+	int axis;
+
+	if (!value)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled = value[axis] * 8.0f;
+
+		if (!isfinite(scaled) || scaled < -32768.0f ||
+		    scaled > 32767.0f || scaled != (float)(short)scaled)
+			return false;
+	}
+	return true;
+}
+
+static qboolean SG_OracleCompoundPreparedSourceValid(
+	const sg_compound_swim_source_t *prepared)
+{
+	const sg_phantom_t *ph;
+	int axis;
+
+	if (!prepared || !isfinite(prepared->old_frame_z))
+		return false;
+	ph = &prepared->phantom;
+	if (!SG_OracleCompoundAnchorMatches(ph, ph->origin) ||
+	    (ph->groundentity != false && ph->groundentity != true) ||
+	    ph->armed_door_count != 0 || ph->door_arm_overflow ||
+	    ph->door_passed || ph->door_wait_ms != 0 ||
+	    ph->door_open_ms != 0 ||
+	    ph->waterlevel < 2 || ph->waterlevel > 3 ||
+	    !(ph->watertype & CONTENTS_WATER) ||
+	    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (!isfinite(ph->velocity[axis]) ||
+		    ph->velocity[axis] != ph->pms.velocity[axis] * 0.125f)
+			return false;
+	return true;
+}
+
+rune_reject_reason_t SG_OracleCompoundSwimPrepareSource(
+	const vec3_t source, const sg_compound_world_preopen_t *resolved,
+	float old_frame_z, sg_compound_swim_source_t *prepared,
+	edict_t *passent, qboolean world_only, qboolean loader_replay)
+{
+	sg_oracle_compound_scope_t scope;
+	sg_compound_swim_source_t candidate;
+	usercmd_t command;
+	edict_t *member = NULL;
+	rune_reject_reason_t reason = RLR_APPROACH_REPLAY_FAILED;
+	qboolean scope_entered = false;
+
+	if (!prepared)
+		return RLR_BAD_CONTROL_POLICY;
+	memset(prepared, 0, sizeof(*prepared));
+	memset(&candidate, 0, sizeof(candidate));
+	if (!source || !resolved || !SG_OracleFinite3(source) ||
+	    !SG_OracleCompoundFixedVector(source) || !isfinite(old_frame_z) ||
+	    (world_only != false && world_only != true) ||
+	    (loader_replay != false && loader_replay != true) ||
+	    !sg_host.pmove || !sg_host.trace || !sg_host.pointcontents ||
+	    !sg_host.box_edicts || sg_oracle_active_phantom)
+		return source && SG_OracleFinite3(source) &&
+		       !SG_OracleCompoundFixedVector(source)
+		           ? RLR_BAD_MECHANISM_ANCHOR : RLR_BAD_CONTROL_POLICY;
+	if (!SG_CompoundWorldResolvedMember(resolved, &member) ||
+	    !resolved->trigger ||
+	    !SG_OracleCompoundMemberAtBottom(member, resolved))
+		return RLR_MECHANISM_UNRESOLVED;
+
+	SG_OraclePlace(&candidate.phantom, (vec_t *)source);
+	candidate.old_frame_z = old_frame_z;
+	SG_OracleCompoundScopeEnter(&scope, resolved->trigger, member, passent,
+	                            world_only, loader_replay);
+	scope_entered = true;
+	if (!SG_OracleCompoundAnchorMatches(&candidate.phantom, source) ||
+	    !SG_CompoundWorldOutsideSweep(resolved,
+	                                  candidate.phantom.origin) ||
+	    SG_OracleTriggerOverlap(&candidate.phantom) ||
+	    sg_oracle_compound_touched ||
+	    SG_OracleSolidOverlap(&candidate.phantom) ||
+	    !SG_OracleCompoundPhantomClean(&candidate.phantom))
+		goto done;
+	memset(&command, 0, sizeof(command));
+	command.msec = 0;
+	SG_OracleRun(&candidate.phantom, &command, 1);
+	if (!SG_OracleCompoundAnchorMatches(&candidate.phantom, source) ||
+	    !SG_CompoundWorldOutsideSweep(resolved,
+	                                  candidate.phantom.origin) ||
+	    SG_OracleTriggerOverlap(&candidate.phantom) ||
+	    sg_oracle_compound_touched ||
+	    SG_OracleSolidOverlap(&candidate.phantom) ||
+	    !SG_OracleCompoundPhantomClean(&candidate.phantom) ||
+	    candidate.phantom.waterlevel < 2 ||
+	    !(candidate.phantom.watertype & CONTENTS_WATER) ||
+	    (candidate.phantom.watertype &
+	     (CONTENTS_LAVA | CONTENTS_SLIME)))
+		goto done;
+	*prepared = candidate;
+	reason = RLR_OK;
+
+done:
+	if (scope_entered)
+		SG_OracleCompoundScopeRestore(&scope);
+	return reason;
+}
+
+static rune_reject_reason_t SG_OracleCompoundSwimFirstContact(
+	const sg_compound_swim_source_t *prepared,
+	const sg_compound_world_preopen_t *resolved, const vec3_t target,
+	vec3_t contact_anchor, edict_t *passent, qboolean world_only,
+	qboolean loader_replay)
+{
+	sg_oracle_compound_scope_t scope;
+	sg_oracle_swim_cursor_t cursor;
+	sg_compound_world_preopen_t exact;
+	sg_phantom_t ph;
+	sg_replay_status_t status;
+	edict_t *member = NULL;
+	rune_reject_reason_t reason = RLR_APPROACH_REPLAY_FAILED;
+	qboolean scope_entered = false;
+	int axis;
+
+	memset(contact_anchor, 0, sizeof(vec3_t));
+	if (!SG_CompoundWorldResolvedMember(resolved, &member) ||
+	    !resolved->trigger ||
+	    !SG_OracleCompoundMemberAtBottom(member, resolved))
+		return RLR_MECHANISM_UNRESOLVED;
+	ph = prepared->phantom;
+	SG_OracleCompoundScopeEnter(&scope, resolved->trigger, member, passent,
+	                            world_only, loader_replay);
+	scope_entered = true;
+	if (!SG_OracleCompoundPreparedSourceValid(prepared) ||
+	    !SG_CompoundWorldOutsideSweep(resolved, ph.origin) ||
+	    SG_OracleTriggerOverlap(&ph) || sg_oracle_compound_touched ||
+	    SG_OracleSolidOverlap(&ph) || !SG_OracleCompoundPhantomClean(&ph))
+		goto done;
+	status = SG_OracleSwimCursorBegin(&cursor, &ph, target, true,
+	                                  prepared->old_frame_z, passent, true);
+	while (status == SG_REPLAY_RUNNING)
+	{
+		vec3_t before;
+
+		VectorCopy(ph.origin, before);
+		status = SG_OracleSwimCursorStep(&cursor, &ph);
+		if (!SG_OracleCompoundOutsideSegment(resolved, before, ph.origin))
+			goto done;
+		if (sg_oracle_compound_touched)
+			break;
+	}
+	if (!sg_oracle_compound_touched || status == SG_REPLAY_FAILED ||
+	    !SG_OracleCompoundPhantomClean(&ph))
+		goto done;
+	for (axis = 0; axis < 3; axis++)
+	{
+		contact_anchor[axis] = ph.pms.origin[axis] * 0.125f;
+		if (contact_anchor[axis] == 0.0f)
+			contact_anchor[axis] = 0.0f;
+	}
+	if (!SG_OracleCompoundAnchorMatches(&ph, contact_anchor) ||
+	    SG_CompoundWorldResolvePreopen(contact_anchor, &exact) != RLR_OK ||
+	    exact.trigger_key != resolved->trigger_key ||
+	    exact.mover_key != resolved->mover_key)
+	{
+		memset(contact_anchor, 0, sizeof(vec3_t));
+		goto done;
+	}
+	reason = RLR_OK;
+
+done:
+	if (scope_entered)
+		SG_OracleCompoundScopeRestore(&scope);
+	return reason;
+}
+
+rune_reject_reason_t SG_OracleCompoundSwimDiscoverContact(
+	const sg_compound_swim_source_t *prepared,
+	const sg_compound_world_preopen_t *resolved,
+	const vec3_t canonical_hint, vec3_t mechanism_anchor,
+	edict_t *passent, qboolean world_only, qboolean loader_replay)
+{
+	vec3_t discovered, replayed;
+	rune_reject_reason_t reason;
+
+	if (!mechanism_anchor)
+		return RLR_BAD_CONTROL_POLICY;
+	memset(mechanism_anchor, 0, sizeof(vec3_t));
+	if (!prepared || !resolved || !canonical_hint ||
+	    !SG_OracleFinite3(canonical_hint) ||
+	    !SG_OracleCompoundFixedVector(canonical_hint) ||
+	    (world_only != false && world_only != true) ||
+	    (loader_replay != false && loader_replay != true) ||
+	    !sg_host.pmove || !sg_host.trace || !sg_host.pointcontents ||
+	    !sg_host.box_edicts || sg_oracle_active_phantom)
+		return RLR_BAD_CONTROL_POLICY;
+	if (!SG_CompoundWorldPreopenHintMatches(resolved, canonical_hint))
+		return RLR_BAD_MECHANISM_ANCHOR;
+	reason = SG_OracleCompoundSwimFirstContact(prepared, resolved,
+	                                          canonical_hint, discovered,
+	                                          passent, world_only,
+	                                          loader_replay);
+	if (reason != RLR_OK)
+		return reason;
+	reason = SG_OracleCompoundSwimFirstContact(prepared, resolved,
+	                                          discovered, replayed,
+	                                          passent, world_only,
+	                                          loader_replay);
+	if (reason != RLR_OK)
+		return reason;
+	if (memcmp(discovered, replayed, sizeof(discovered)) != 0)
+		return RLR_APPROACH_REPLAY_FAILED;
+	memcpy(mechanism_anchor, discovered, sizeof(discovered));
+	return RLR_OK;
+}
+
 /* Dormant joint witness for PREOPEN D_SWIM.  It observes the resolved trigger,
  * stages (but never activates) the one physical member, and starts the suffix
  * from the same phantom only after TOP is linked.  No runtime action dispatch
