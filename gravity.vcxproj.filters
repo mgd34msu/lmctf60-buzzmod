@@ -247,6 +247,9 @@
     <ClCompile Include="slipgate\sg_replay.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_compound.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_drop_live.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -457,6 +460,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_replay.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_drop_live.h">
