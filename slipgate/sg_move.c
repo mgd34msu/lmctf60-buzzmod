@@ -28,6 +28,9 @@
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
+#ifdef SG_ACCEPT_DROP
+#include "slipgate/sg_accept_drop.h"
+#endif
 
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
@@ -207,9 +210,19 @@ static sg_bot_t *Drop_LiveEventOwner(edict_t *activator)
 	    !SG_OwnsBot(activator))
 		return NULL;
 	for (i = 0; i < SG_MAXBOTS; i++)
-		if (sg_bots[i].active && sg_bots[i].ent == activator &&
-		    sg_bots[i].drop_started && sg_bots[i].drop_replay_active)
-			return &sg_bots[i];
+		if (sg_bots[i].active && sg_bots[i].ent == activator)
+		{
+			/* Production remains strictly reducer-owned.  The acceptance-only
+			 * legacy A observer is allowed to receive this already-real host
+			 * event through its separate private feed; it never gains reducer
+			 * ownership or executes a new tap. */
+			if (sg_bots[i].drop_started && sg_bots[i].drop_replay_active)
+				return &sg_bots[i];
+#ifdef SG_ACCEPT_DROP
+			if (SG_AcceptDropObserverEventOwner(&sg_bots[i]))
+				return &sg_bots[i];
+#endif
+		}
 	return NULL;
 }
 
@@ -425,7 +438,13 @@ static sg_drop_live_events_t Drop_LiveEventsTake(sg_bot_t *bot)
 
 static void Drop_LiveObserveDoorPassage(sg_bot_t *bot, const edict_t *e)
 {
-	if (!bot || !e || !bot->drop_replay_active)
+	if (!bot || !e)
+		return;
+	if (!bot->drop_replay_active
+#ifdef SG_ACCEPT_DROP
+	    && !SG_AcceptDropObserverEventOwner(bot)
+#endif
+	   )
 		return;
 	if (SG_OracleReplayDoorPassage(bot->drop_live_step_origin, e->s.origin))
 		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, false, true);
@@ -528,8 +547,17 @@ static void Drop_LiveCanonicalFail(edict_t *e, sg_bot_t *bot,
 		bot->bl_link[oldest] = link_index;
 		SG_TimerArm(&bot->bl_until[oldest],
 		    SG_DROP_LIVE_FAILURE_SHELF_SECONDS);
+
+#ifdef SG_ACCEPT_DROP
+		SG_AcceptDropShelf(bot, link_index, SG_ReplayReasonName(reason));
+#endif
 		if (reason == SG_REPLAY_REASON_RECOVERY_LOST)
+		{
+#ifdef SG_ACCEPT_DROP
+			SG_AcceptDropTeach(link_index, "recovery-lost");
+#endif
 			SG_TeachLinkFutility(link_index);
+		}
 	}
 	bot->commit_link = -1;
 	Drop_LiveResetAction(bot);
@@ -2238,6 +2266,21 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
 								    source_contaminated, source_door);
 							live_events = Drop_LiveEventsTake(bot);
+#ifdef SG_ACCEPT_DROP
+							/* The shared source-preflight latch above is authoritative.
+							 * Legacy A may take its private authority only after it
+							 * proves the same source is uncontaminated. */
+							if (SG_AcceptDropLegacyAuthority(bot, bestlink) &&
+							    !live_events.contaminated)
+							{
+								tc->drop_source_door_pending = source_door;
+								bot->drop_started = true;
+								SG_TimerArm(&bot->commit_until, 4.5f);
+								SG_AcceptDropActionBegin(bot, bestlink, "legacy");
+							}
+							else
+#endif
+							{
 							live_result = SG_DropLiveBegin(&bot->drop_replay,
 							    &bot->drop_replay_active, &bot->drop_replay_link,
 							    bestlink, SG_Rune()->seeds[l->to].origin, l->anchor,
@@ -2254,6 +2297,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								bot->drop_started = true;
 								SG_TimerArm(&bot->commit_until,
 								    SG_REPLAY_DROP_TOTAL_MS * 0.001f);
+#ifdef SG_ACCEPT_DROP
+								SG_AcceptDropActionBegin(bot, bestlink, "rev2");
+#endif
 							}
 							else
 							{
@@ -2264,6 +2310,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								 * complete production frame as four zero commands. */
 								ballistic_abort = true;
 								tc->think_over = true;
+							}
 							}
 						}
 					}
@@ -5189,6 +5236,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		base = total / sub;
 		rem = total % sub;
 		sub_steps = sub;
+#ifdef SG_ACCEPT_DROP
+		SG_AcceptDropGenericHandoffBegin(bot, bestlink, cmd, sub);
+#endif
 
 		/*
 		 * Combat rides the frame's command: view and trigger only, movement
@@ -5795,12 +5845,16 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		{
 			qboolean drop_command_owned = false;
 			usercmd_t drop_expected_command;
+			qboolean accept_drop_step_owned = false;
 
 			memset(&drop_expected_command, 0, sizeof(drop_expected_command));
 			cmd->msec = (byte)(base + (step < rem ? 1 : 0));
 			if (!cmd->msec)
 				continue;
 			sub_msec = cmd->msec;
+#ifdef SG_ACCEPT_DROP
+			accept_drop_step_owned = SG_AcceptDropOwnsStep(bot, bestlink);
+#endif
 
 			if (slew_rate > 0.0f)
 			{
@@ -5932,6 +5986,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->upmove = 0;
 				if (drop_recovery_failed)
 					cmd->forwardmove = 0;
+#ifdef SG_ACCEPT_DROP
+				if (bot->drop_started && bot->commit_link == bestlink)
+					SG_AcceptDropCommandHistorical(bot, bestlink, step, cmd);
+#endif
 				if (bot->drop_started && bot->drop_replay_active &&
 				    bot->commit_link == bestlink)
 				{
@@ -6770,9 +6828,36 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						    true, false);
 					VectorCopy(e->s.origin, bot->drop_live_step_origin);
 				}
+
+#ifdef SG_ACCEPT_DROP
+				else if (proved_drop && accept_drop_step_owned)
+				{
+					if (!SG_AcceptDropObserverBeginCommand(bot, bestlink,
+					        &bot->drop_live_events,
+					        &tc->drop_source_door_pending))
+						(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
+						    true, false);
+					VectorCopy(e->s.origin, bot->drop_live_step_origin);
+				}
+				if (proved_drop && accept_drop_step_owned)
+					SG_AcceptDropCommand(bot, bestlink, step, cmd);
+#endif
 				ClientThink(e, cmd);
-				if (drop_command_owned)
+				if (drop_command_owned
+#ifdef SG_ACCEPT_DROP
+				    || (proved_drop && accept_drop_step_owned &&
+				        SG_AcceptDropObserverEventOwner(bot))
+#endif
+				   )
 					Drop_LiveObserveDoorPassage(bot, e);
+
+#ifdef SG_ACCEPT_DROP
+				if (proved_drop && accept_drop_step_owned)
+					SG_AcceptDropObserverTakeEvents(bot, bestlink, step,
+					    &bot->drop_live_events);
+				if (proved_drop && accept_drop_step_owned)
+					SG_AcceptDropPose(bot, bestlink, step, e);
+#endif
 			}
 			if (proved_swim && bot->swim_replay_active &&
 			    bot->commit_link == bestlink && step < sub - 1)
@@ -6831,6 +6916,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						oldest = b;
 				bot->bl_link[oldest] = bestlink;
 				SG_TimerArm(&bot->bl_until[oldest], 10.0f);
+#ifdef SG_ACCEPT_DROP
+				SG_AcceptDropShelf(bot, bestlink, "command-recovery-lost");
+				SG_AcceptDropTeach(bestlink, "command-recovery-lost");
+#endif
 				SG_TeachLinkFutility(bestlink);
 				bot->commit_link = -1;
 				bot->drop_link = -1;
@@ -6844,6 +6933,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				drop_recovery_failed = true;
 				drop_replay_failed = true;
 			}
+#ifdef SG_ACCEPT_DROP
+			if (proved_drop && accept_drop_step_owned &&
+			    SG_AcceptDropAfterStep(bot, bestlink, step, e))
+				return;
+#endif
 			if ((proved_swim || water_tele) && bot->swim_validated &&
 			    !swim_emergency && !swim_hazard &&
 			    bot->commit_link == bestlink)
@@ -6877,6 +6971,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			if (cmd->upmove >= 10)
 				cmd->upmove = 0;
 		}
+#ifdef SG_ACCEPT_DROP
+		SG_AcceptDropGenericHandoffEnd(bot, bestlink, sub, total);
+#endif
 		cmd->msec = (byte)sub_msec;
 	}
 

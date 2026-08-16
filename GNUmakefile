@@ -326,7 +326,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_drop_live.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_drop_live.o sg_accept_drop.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -378,6 +378,10 @@ SHELL = /bin/sh
 #for Windows or when we don't know the OS.
 LIBTOOL = ldd
 CFLAGS += -g -Wall
+CFLAGS += -DSG_ACCEPT_DROP
+ifneq ($(SG_ACCEPT_DROP_LEGACY_A),)
+CFLAGS += -DSG_ACCEPT_DROP_LEGACY_A=$(SG_ACCEPT_DROP_LEGACY_A)
+endif
 
 # Windows / MinGW (incl. MSYS2 MinGW)
 ifeq ($(PLATFORM),Windows)

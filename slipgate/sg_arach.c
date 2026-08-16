@@ -67,6 +67,9 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
+#ifdef SG_ACCEPT_DROP
+#include "slipgate/sg_accept_drop.h"
+#endif
 
 #include <errno.h>
 
@@ -2298,6 +2301,13 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->was_dead = 1;
 }
 
+#ifdef SG_ACCEPT_DROP
+void SG_AcceptDropResetLifeActions(sg_bot_t *bot)
+{
+	Bot_ResetLifeActions(bot);
+}
+#endif
+
 /*
  * THE CORPSE FRAME (split from SG_BotThink, 2026-08-11 standards pass).
  * Everything a dead bot owes the world: teach the danger and tilt ledgers
@@ -2991,6 +3001,10 @@ void SG_RunFrame(void)
 {
 	int i;
 
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropFrameBegin();
+#endif
+
 	/*
 	 * Level changes are detected here rather than by a hook in the spawn
 	 * code: the rune and fields were TAG_LEVEL so the engine already freed
@@ -3030,6 +3044,10 @@ void SG_RunFrame(void)
 	/* the scoreline and the clock, before anybody decides a role from them */
 	Clock_Frame();
 
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropArm();
+#endif
+
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent;
@@ -3062,6 +3080,9 @@ void SG_RunFrame(void)
 			continue;
 		}
 		SG_BotThink(&sg_bots[i]);
+#ifdef SG_ACCEPT_DROP
+		SG_AcceptDropAfterBot(&sg_bots[i]);
+#endif
 	}
 }
 
@@ -3071,6 +3092,10 @@ void SG_RunFrame(void)
 void SG_LevelChange(void)
 {
 	int i;
+
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropLevelReset();
+#endif
 
 	/* The fallback transition path must be as fail-closed as SpawnEntities. */
 	SG_DangerPersistenceReset();

@@ -245,6 +245,10 @@ else
 endif
 
 CFLAGS += -O3 -g -Wall
+CFLAGS += -DSG_ACCEPT_DROP
+ifneq ($(SG_ACCEPT_DROP_LEGACY_A),)
+CFLAGS += -DSG_ACCEPT_DROP_LEGACY_A=$(SG_ACCEPT_DROP_LEGACY_A)
+endif
 LDFLAGS +=
 
 HEADERS := \
@@ -364,6 +368,7 @@ OBJS := \
 	sg_rune_proof.o \
 	sg_replay.o \
 	sg_drop_live.o \
+	sg_accept_drop.o \
 	sg_swim_live.o \
 	sg_hook_live.o \
 	sg_oracle.o \

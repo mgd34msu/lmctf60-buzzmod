@@ -2,6 +2,9 @@
 #include "g_ctffunc.h"          /* CTF_TEAM_RED/BLUE for `sv sg add red|blue` */
 #include "slipgate/sg_local.h"  /* the SLIPGATE admin surface behind `sv sg` */
 #include "ctf_file_io.h"
+#ifdef SG_ACCEPT_DROP
+#include "slipgate/sg_accept_drop.h"
+#endif
 
 void SpawnLoadout_ListItems(void);
 
@@ -309,6 +312,18 @@ static void SVCmd_SG_f (void)
 	char *sub = gi.argv(2);
 	char *arg = gi.argv(3);
 
+#ifdef SG_ACCEPT_DROP
+	if (Q_stricmp(sub, "accept_drop") == 0)
+	{
+		if (Q_stricmp(arg, "arm") != 0 || gi.argc() != 7 ||
+		    !SG_AcceptDropQueue(gi.argv(4), gi.argv(5), gi.argv(6)))
+			gi.cprintf(NULL, PRINT_HIGH,
+			    "usage: sv sg accept_drop arm "
+			    "<direct|recovery|supported-preair|wet-target-dry-shelf|"
+			    "dry-target-depth2> <slot> <link>\n");
+		return;
+	}
+#endif
 	if (Q_stricmp(sub, "add") == 0)
 	{
 		int team = 0;   /* 0: let the balancer place it, as it always has */

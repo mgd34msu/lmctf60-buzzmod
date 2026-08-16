@@ -12,6 +12,9 @@
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
+#ifdef SG_ACCEPT_DROP
+#include "slipgate/sg_accept_drop.h"
+#endif
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -899,6 +902,10 @@ void G_RunFrame (void)
 
 		G_RunEntity (ent);
 	}
+
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropEntityPass();
+#endif
 
 	/*
 	 * SLIPGATE bots think here, after the entity loop rather than inside it:

@@ -23,6 +23,9 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_descend.h"
+#ifdef SG_ACCEPT_DROP
+#include "slipgate/sg_accept_drop.h"
+#endif
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_move.h"
@@ -122,6 +125,10 @@ static qboolean Ballistic_Arrived(edict_t *e, const rune_link_t *l)
 {
 	vec3_t d, from, to;
 	trace_t tr;
+	qboolean accepted = false;
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropPredicate("arrival", e, l);
+#endif
 
 	VectorSubtract(SG_Rune()->seeds[l->to].origin, e->s.origin, d);
 	if (d[0] * d[0] + d[1] * d[1] >= 40.0f * 40.0f ||
@@ -133,13 +140,21 @@ static qboolean Ballistic_Arrived(edict_t *e, const rune_link_t *l)
 	         ((!e->groundentity && e->waterlevel < 2) ||
 	          (e->groundentity && e->groundentity != g_edicts &&
 	           !SG_ImmutableSupport(e->groundentity)))))
-		return false;
+		goto result;
 	VectorCopy(e->s.origin, from);
 	VectorCopy(SG_Rune()->seeds[l->to].origin, to);
 	from[2] += 16.0f;
 	to[2] += 16.0f;
 	tr = sg_host.trace(from, NULL, NULL, to, e, MASK_PLAYERSOLID);
-	return !tr.startsolid && tr.fraction >= 1.0f;
+	accepted = !tr.startsolid && tr.fraction >= 1.0f;
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropTrace("arrival", e, l, &tr, accepted);
+#endif
+result:
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropPredicateResult("arrival", e, l, accepted);
+#endif
+	return accepted;
 }
 
 /* A DROP may touch down between 64-unit lattice seeds. The proof permits one
@@ -150,24 +165,36 @@ static qboolean Drop_RecoveryReady(edict_t *e, const rune_link_t *l)
 {
 	vec3_t d, from, to;
 	trace_t tr;
+	qboolean accepted = false;
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropPredicate("recovery", e, l);
+#endif
 
 	if (!e || !l || !e->groundentity ||
 	    (e->groundentity != g_edicts &&
 	     !SG_ImmutableSupport(e->groundentity)) ||
 	    e->waterlevel != 0 ||
 	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-		return false;
+		goto result;
 	VectorSubtract(SG_Rune()->seeds[l->to].origin, e->s.origin, d);
 	if (d[0] * d[0] + d[1] * d[1] >=
 	        RUNE_DROP_RECOVERY_RADIUS * RUNE_DROP_RECOVERY_RADIUS ||
 	    d[2] <= -RUNE_DROP_RECOVERY_Z || d[2] >= RUNE_DROP_RECOVERY_Z)
-		return false;
+		goto result;
 	VectorCopy(e->s.origin, from);
 	VectorCopy(SG_Rune()->seeds[l->to].origin, to);
 	from[2] += 16.0f;
 	to[2] += 16.0f;
 	tr = sg_host.trace(from, NULL, NULL, to, e, MASK_PLAYERSOLID);
-	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+	accepted = !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropTrace("recovery", e, l, &tr, accepted);
+#endif
+result:
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropPredicateResult("recovery", e, l, accepted);
+#endif
+	return accepted;
 }
 
 typedef struct drop_live_contact_context_s
@@ -199,6 +226,10 @@ static qboolean Drop_LiveArrival(const sg_drop_replay_spec_t *spec,
 
 	(void)spec;
 	(void)pose;
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropCallback("arrival", contact ? contact->ent : NULL,
+	    contact ? contact->link : NULL);
+#endif
 	return contact && contact->ent && contact->link &&
 	       Ballistic_Arrived(contact->ent, contact->link);
 }
@@ -211,6 +242,10 @@ static qboolean Drop_LiveRecovery(const sg_drop_replay_spec_t *spec,
 
 	(void)spec;
 	(void)pose;
+#ifdef SG_ACCEPT_DROP
+	SG_AcceptDropCallback("recovery", contact ? contact->ent : NULL,
+	    contact ? contact->link : NULL);
+#endif
 	return contact && contact->ent && contact->link &&
 	       Drop_RecoveryReady(contact->ent, contact->link);
 }
@@ -1805,6 +1840,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 * entity/pusher pass.  Resolve every production boundary, including an
 		 * airborne one: exact cost and reducer caps are authoritative and cannot
 		 * wait for legacy's first supported contact. */
+#ifdef SG_ACCEPT_DROP
+		if (cl->action == RL_DROP && bot->drop_started)
+			SG_AcceptDropBoundary(bot, bot->commit_link,
+			    bot->drop_replay_active ? "boundary-enter-rev2" :
+		    "boundary-enter-legacy", NULL, NULL);
+#endif
 		if (cl->action == RL_DROP && bot->drop_started &&
 		    bot->drop_replay_active)
 		{
@@ -1828,6 +1869,10 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			    bot->commit_link, &live_pose, Drop_LiveSupportValid(e),
 			    &live_events,
 			    Drop_LiveArrival, Drop_LiveRecovery, &contact);
+#ifdef SG_ACCEPT_DROP
+			SG_AcceptDropBoundary(bot, bot->commit_link,
+			    "boundary-exit-rev2", &live_result, &live_events);
+#endif
 			Drop_LiveSync(bot);
 			Drop_LiveBoundaryLog(e, bot->commit_link, &live_result);
 			if (live_result.outcome == SG_DROP_LIVE_RUNNING)
@@ -2090,6 +2135,21 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 		}
+#ifdef SG_ACCEPT_DROP
+		/* Revision-2 consumes command four only after this entity/pusher pass.
+		 * Pure legacy A keeps the identical host-event timing in its private
+		 * observer without acquiring the production reducer. */
+		if (cl->action == RL_DROP && bot->drop_started &&
+		    SG_AcceptDropObserverEventOwner(bot) &&
+		    SG_OracleReplayDoorPassage(bot->drop_live_step_origin,
+		        e->s.origin))
+			(void)SG_DropLiveEventsLatch(&bot->drop_live_events, false, true);
+		if (cl->action == RL_DROP && bot->drop_started)
+			SG_AcceptDropLegacyObserverBoundary(bot, bot->commit_link, e);
+		if (cl->action == RL_DROP && bot->drop_started &&
+		    SG_AcceptDropStopBeforeEmit(bot, bot->commit_link))
+			tc->think_over = true;
+#endif
 		/* A launched witness owns a bounded flight too. Previously its expiry
 		 * lived inside !ballistic, so a miss could drive the serialized heading
 		 * forever while airborne. Retire/shelf at the exact deadline and spend
@@ -2163,8 +2223,18 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 						oldest = b;
 				bot->bl_link[oldest] = bot->commit_link;
 				SG_TimerArm(&bot->bl_until[oldest], 10.0f);
+#ifdef SG_ACCEPT_DROP
+				SG_AcceptDropShelf(bot, bot->commit_link,
+				    drop_boundary_reason != SG_REPLAY_REASON_NONE ?
+				        SG_ReplayReasonName(drop_boundary_reason) : "contact-short");
+#endif
 				if (drop_boundary_recovery_lost)
+				{
+#ifdef SG_ACCEPT_DROP
+					SG_AcceptDropTeach(bot->commit_link, "recovery-lost");
+#endif
 					SG_TeachLinkFutility(bot->commit_link);
+				}
 				bestlink = -1;
 				if (sg_cv.debug->value)
 					sg_host.dprint("BALLISTICFAIL %s link=%d action=%d %s\n",
