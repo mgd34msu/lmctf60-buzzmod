@@ -3,6 +3,7 @@
 #include "slipgate/sg_rune_writer.h"
 
 #include "slipgate/sg_action.h"
+#include "slipgate/sg_compound.h"
 
 #include <math.h>
 #include <string.h>
@@ -291,16 +292,14 @@ static rune_wire_diagnostic_t Writer_EncodeLink(
 		*reason_out = RLR_OK;
 	if (!seeds || !source || !adapted || !encoded || !reason_out)
 		return RLW_INVALID_ARGUMENT;
-	if (source->action > RL_DOOR)
+	if (source->action > RL_DOOR_HOOK)
 	{
-		*reason_out = source->action <= RL_DOOR_HOOK
-			? RLR_ACTION_DISABLED : RLR_UNKNOWN_ACTION;
+		*reason_out = RLR_UNKNOWN_ACTION;
 		return RLW_BAD_LINK_RECORD;
 	}
-	/* The native 28-byte adapter is a frozen literal allowlist.  Registry
-	 * runtime support may grow later, but that cannot manufacture fields the
-	 * native record never carried. */
-	if (source->action == RL_ROCKETJUMP)
+	if (!SG_ActionRuntimeSupported((int)source->action) ||
+	    (SG_CompoundAction(source->action) &&
+	     !SG_CompoundRuntimeReady(source->action)))
 	{
 		*reason_out = RLR_ACTION_DISABLED;
 		return RLW_BAD_LINK_RECORD;
@@ -347,7 +346,8 @@ static rune_wire_diagnostic_t Writer_EncodeLink(
 		*reason_out = RLR_BAD_COST;
 		return RLW_BAD_LINK_RECORD;
 	}
-	if (!Writer_VectorFinite(source->anchor))
+	if (!Writer_VectorFinite(source->anchor) ||
+	    !Writer_VectorFinite(source->mechanism_anchor))
 	{
 		*reason_out = RLR_NONFINITE_ANCHOR;
 		return RLW_BAD_LINK_RECORD;
@@ -360,13 +360,6 @@ static rune_wire_diagnostic_t Writer_EncodeLink(
 		*reason_out = RLR_BAD_ENDPOINT_POLICY;
 		return RLW_BAD_LINK_RECORD;
 	}
-	reason = Writer_ValidateControl(from, to, source);
-	if (reason != RLR_OK)
-	{
-		*reason_out = reason;
-		return RLW_BAD_LINK_RECORD;
-	}
-
 	memset(adapted, 0, sizeof(*adapted));
 	adapted->source = (uint32_t)source->from;
 	adapted->destination = (uint32_t)source->to;
@@ -380,6 +373,40 @@ static rune_wire_diagnostic_t Writer_EncodeLink(
 	adapted->suffix_anchor[0] = source->anchor[0];
 	adapted->suffix_anchor[1] = source->anchor[1];
 	adapted->suffix_anchor[2] = source->anchor[2];
+	adapted->mechanism_anchor[0] = source->mechanism_anchor[0];
+	adapted->mechanism_anchor[1] = source->mechanism_anchor[1];
+	adapted->mechanism_anchor[2] = source->mechanism_anchor[2];
+	adapted->sweep_clear_ms = source->sweep_clear_ms;
+	adapted->mode = source->mode;
+	if (SG_CompoundAction(source->action))
+	{
+		sg_rune_v3_seed_t compound_seeds[2];
+		sg_rune_v3_link_t compound_link = *adapted;
+
+		memset(compound_seeds, 0, sizeof(compound_seeds));
+		memcpy(compound_seeds[0].origin, from->origin,
+			sizeof(compound_seeds[0].origin));
+		compound_seeds[0].flags = from->flags;
+		memcpy(compound_seeds[1].origin, to->origin,
+			sizeof(compound_seeds[1].origin));
+		compound_seeds[1].flags = to->flags;
+		compound_link.source = 0;
+		compound_link.destination = 1;
+		reason = SG_CompoundValidateLink(compound_seeds, 2,
+			&compound_link);
+	}
+	else if (!Writer_VectorPositiveZero(source->mechanism_anchor) ||
+	         source->sweep_clear_ms != 0)
+		reason = RLR_NONZERO_TAIL;
+	else if (source->mode != RLCM_NONE)
+		reason = RLR_BAD_MODE;
+	else
+		reason = Writer_ValidateControl(from, to, source);
+	if (reason != RLR_OK)
+	{
+		*reason_out = reason;
+		return RLW_BAD_LINK_RECORD;
+	}
 	diagnostic = SG_RuneV3EncodeLink(adapted, encoded,
 		SG_RUNE_V3_LINK_BYTES);
 	if (diagnostic != RLW_OK)

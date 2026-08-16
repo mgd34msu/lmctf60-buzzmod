@@ -3,6 +3,7 @@
 #include "slipgate/sg_rune_loader.h"
 
 #include "slipgate/sg_action.h"
+#include "slipgate/sg_compound.h"
 
 #include <limits.h>
 #include <math.h>
@@ -273,10 +274,16 @@ rune_reject_reason_t SG_RuneV3ValidateLiteralLink(
 	case RL_LIFT:
 	case RL_TELEPORT:
 	case RL_DOOR:
+	case RL_DOOR_DROP:
+	case RL_DOOR_SWIM:
+	case RL_DOOR_HOOK:
 		break;
 	default:
 		return RLR_ACTION_DISABLED;
 	}
+	if (SG_CompoundAction(link->action) &&
+	    !SG_CompoundRuntimeReady(link->action))
+		return RLR_ACTION_DISABLED;
 	if (!SG_RuneV3ActionRuntimeSupported(link->action))
 		return RLR_ACTION_DISABLED;
 	if (!SG_ProvenanceWireValid(SG_RUNE_WIRE_V3,
@@ -306,6 +313,8 @@ rune_reject_reason_t SG_RuneV3ValidateLiteralLink(
 		return RLR_NONFINITE_ANCHOR;
 	if (link->reserved != 0)
 		return RLR_NONZERO_RESERVED;
+	if (SG_CompoundAction(link->action))
+		return SG_CompoundValidateLink(seeds, num_seeds, link);
 	if (link->mode != RLCM_NONE)
 		return RLR_BAD_MODE;
 	if (!Loader_VectorPositiveZero(link->mechanism_anchor) ||
@@ -557,7 +566,8 @@ static rune_reject_reason_t Loader_ClassifyRawLink(
 
 	if (!SG_RuneV3ActionWireKnown(action))
 		return RLR_UNKNOWN_ACTION;
-	if (action == RL_ROCKETJUMP || action >= RL_DOOR_DROP)
+	if (action == RL_ROCKETJUMP ||
+	    (SG_CompoundAction(action) && !SG_CompoundRuntimeReady(action)))
 		return RLR_ACTION_DISABLED;
 	if (!SG_ProvenanceWireValid(SG_RUNE_WIRE_V3, (int)provenance))
 		return RLR_UNKNOWN_PROVENANCE;
@@ -821,6 +831,10 @@ sg_rune_load_result_t SG_RuneV3Load(const unsigned char *snapshot,
 		destination->cost_ms = (short)source->cost_ms;
 		memcpy(destination->anchor, source->suffix_anchor,
 			sizeof(destination->anchor));
+		memcpy(destination->mechanism_anchor, source->mechanism_anchor,
+			sizeof(destination->mechanism_anchor));
+		destination->sweep_clear_ms = source->sweep_clear_ms;
+		destination->mode = source->mode;
 	}
 	*header_out = header;
 	result.diagnostic = RLW_OK;

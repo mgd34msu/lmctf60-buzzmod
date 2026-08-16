@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "slipgate/sg_compound.h"
 #include "slipgate/sg_rune_writer.h"
 
 #define SMALL_SEEDS 2U
@@ -177,6 +178,37 @@ static void PrepareAction(int action, rune_seed_t seeds[SMALL_SEEDS],
 		links[0].provenance = RL_DECLARED;
 		links[0].heading_slack = SG_RUNE_PROOF_DECLARED_CONTROL_MARKER;
 		SetVector(links[0].anchor, 16.0f, 0.0f, 0.0f);
+		break;
+	case RL_DOOR_DROP:
+		links[0].provenance = RL_CONTRACTED;
+		links[0].mode = RLCM_PREOPEN;
+		links[0].sweep_clear_ms = 100;
+		links[0].heading_slack = SG_RUNE_PROOF_DROP_CONTROL_MARKER;
+		SetVector(links[0].anchor, 32.0f, 0.0f, 8.0f);
+		SetVector(links[0].mechanism_anchor, 16.0f, 0.0f, 0.0f);
+		break;
+	case RL_DOOR_SWIM:
+		seeds[0].flags = RSF_WATER;
+		links[0].provenance = RL_CONTRACTED;
+		links[0].mode = RLCM_PREOPEN;
+		links[0].sweep_clear_ms = 100;
+		links[1].action = RL_SWIM;
+		links[1].provenance = RL_PROVEN;
+		links[1].heading_slack = 0;
+		SetVector(links[0].mechanism_anchor, 16.0f, 0.0f, 0.0f);
+		break;
+	case RL_DOOR_HOOK:
+		seeds[0].flags = RSF_WATER;
+		links[0].provenance = RL_CONTRACTED;
+		links[0].mode = RLCM_PREOPEN;
+		links[0].sweep_clear_ms = 100;
+		links[0].heading_slack =
+			SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER;
+		SetVector(links[0].anchor, 0.0f, 0.0f, 64.0f);
+		SetVector(links[0].mechanism_anchor, 16.0f, 0.0f, 0.0f);
+		links[1].action = RL_SWIM;
+		links[1].provenance = RL_PROVEN;
+		links[1].heading_slack = 0;
 		break;
 	default:
 		break;
@@ -447,12 +479,6 @@ static void TestSeedAndGeneralFailures(void)
 
 	EXPECT_ACTION_FAILURE(RL_RUN, links[0].action = RL_ROCKETJUMP,
 		RLW_BAD_LINK_RECORD, RLR_ACTION_DISABLED);
-	EXPECT_ACTION_FAILURE(RL_RUN, links[0].action = RL_DOOR_DROP,
-		RLW_BAD_LINK_RECORD, RLR_ACTION_DISABLED);
-	EXPECT_ACTION_FAILURE(RL_RUN, links[0].action = RL_DOOR_SWIM,
-		RLW_BAD_LINK_RECORD, RLR_ACTION_DISABLED);
-	EXPECT_ACTION_FAILURE(RL_RUN, links[0].action = RL_DOOR_HOOK,
-		RLW_BAD_LINK_RECORD, RLR_ACTION_DISABLED);
 	EXPECT_ACTION_FAILURE(RL_RUN, links[0].action = UINT8_MAX,
 		RLW_BAD_LINK_RECORD, RLR_UNKNOWN_ACTION);
 	EXPECT_ACTION_FAILURE(RL_RUN, links[0].provenance = UINT8_MAX,
@@ -477,6 +503,28 @@ static void TestSeedAndGeneralFailures(void)
 		RLW_BAD_LINK_RECORD, RLR_BAD_RUN_CONTROL);
 	EXPECT_ACTION_FAILURE(RL_RUN, seeds[1].flags = RSF_WATER,
 		RLW_BAD_LINK_RECORD, RLR_BAD_ENDPOINT_POLICY);
+}
+
+static void TestCompoundActionsDisabled(void)
+{
+	sg_rune_v3_identity_t identity = Identity();
+	rune_seed_t seeds[SMALL_SEEDS];
+	rune_link_t links[SMALL_LINKS];
+	memory_sink_t sink;
+	sg_rune_write_result_t result;
+	int action;
+
+	for (action = RL_DOOR_DROP; action <= RL_DOOR_HOOK; action++)
+	{
+		CHECK(!SG_ActionRuntimeSupported(action));
+		CHECK(!SG_CompoundRuntimeReady(action));
+		PrepareAction(action, seeds, links);
+		sink = MakeSink(NULL, SIZE_MAX);
+		result = WriteSmall(&identity, seeds, links, &sink);
+		CHECK_RESULT(result, RLW_BAD_LINK_RECORD, RLR_ACTION_DISABLED,
+			SG_RUNE_WRITE_STAGE_ADAPT_LINK, 0);
+		CHECK(sink.calls == 0 && sink.size == 0);
+	}
 }
 
 static void TestControllerFailures(void)
@@ -879,6 +927,7 @@ int main(void)
 	TestAllActionParity();
 	TestGoldenRecordParity();
 	TestSeedAndGeneralFailures();
+	TestCompoundActionsDisabled();
 	TestControllerFailures();
 	TestDeclaredFailures();
 	TestGraphAndArguments();

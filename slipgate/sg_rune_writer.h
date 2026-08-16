@@ -52,9 +52,9 @@ typedef struct sg_rune_write_result_s
  * source-ownership laws, and computes the encoded payload CRC.  The sink is
  * not called unless that complete preflight and final header encoding pass.
  * Pass two emits exactly one 128-byte header, each 16-byte seed in input
- * order, then each 44-byte link in input order.  Native action 7 and every
- * action above 8 reject because the native 28-byte record cannot carry an
- * executable v3 contract for them. */
+ * order, then each 44-byte link in input order.  Native action 7 and compound
+ * actions 9..11 remain disabled until their independent live-controller
+ * revision and generated runtime metadata both authorize them. */
 sg_rune_write_result_t SG_RuneV3Write(
 	const sg_rune_v3_identity_t *identity,
 	const rune_seed_t *seeds, uint32_t num_seeds,

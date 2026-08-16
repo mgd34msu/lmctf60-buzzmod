@@ -80,9 +80,9 @@ sg_rune_load_result_t SG_RuneV3Inspect(const unsigned char *snapshot,
 	sg_rune_v3_header_t *header_out);
 
 /* Complete executor-facing law for the frozen native literal record.  This is
- * intentionally stricter than structural wire validation.  It admits only
- * actions 0..6 and 8, requires runtime support, and rejects every nonzero v3
- * compound-tail field before the native mapping can discard those fields. */
+ * intentionally stricter than structural wire validation.  It requires
+ * runtime support, validates every compound field before native adaptation,
+ * and rejects a noncompound record with any compound-tail state. */
 rune_reject_reason_t SG_RuneV3ValidateLiteralLink(
 	const sg_rune_v3_seed_t *seeds, uint32_t num_seeds,
 	const sg_rune_v3_link_t *link);

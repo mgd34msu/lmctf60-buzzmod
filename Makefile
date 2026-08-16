@@ -22,6 +22,10 @@ HOST_TEST_DEPS := $(HOST_TEST_OBJS:.o=.d)
 ACTION_TEST_BIN := sg_action_test.make
 ACTION_TEST_OBJS := .sg_action_test.make.o .sg_action_under_test.make.o
 ACTION_TEST_DEPS := $(ACTION_TEST_OBJS:.o=.d)
+COMPOUND_TEST_BIN := sg_compound_test.make
+COMPOUND_TEST_OBJS := .sg_compound_test.make.o \
+	.sg_compound_under_test.make.o .sg_compound_action_under_test.make.o
+COMPOUND_TEST_DEPS := $(COMPOUND_TEST_OBJS:.o=.d)
 IDENTITY_TEST_BIN := sg_identity_test.make
 IDENTITY_TEST_OBJS := .sg_identity_test.make.o .sg_identity_under_test.make.o \
 	.sg_crc32_under_test.make.o
@@ -68,18 +72,20 @@ FIELDS_CANDIDATE_TEST_DEPS := $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
 RUNE_LOADER_TEST_BIN := sg_rune_loader_test.make
 RUNE_LOADER_TEST_OBJS := .sg_rune_loader_test.make.o \
 	.sg_rune_loader_under_test.make.o .sg_rune_wire_under_test.make.o \
-	.sg_rune_wire_action_under_test.make.o .sg_rune_wire_crc_under_test.make.o
+	.sg_rune_wire_action_under_test.make.o .sg_rune_wire_crc_under_test.make.o \
+	.sg_compound_under_test.make.o
 RUNE_LOADER_TEST_DEPS := $(RUNE_LOADER_TEST_OBJS:.o=.d)
 RUNE_WRITER_TEST_BIN := sg_rune_writer_test.make
 RUNE_WRITER_TEST_OBJS := .sg_rune_writer_test.make.o \
 	.sg_rune_writer_under_test.make.o .sg_rune_wire_under_test.make.o \
-	.sg_rune_wire_action_under_test.make.o .sg_rune_wire_crc_under_test.make.o
+	.sg_rune_wire_action_under_test.make.o .sg_rune_wire_crc_under_test.make.o \
+	.sg_compound_under_test.make.o
 RUNE_WRITER_TEST_DEPS := $(RUNE_WRITER_TEST_OBJS:.o=.d)
 RUNE_INSTALL_TEST_BIN := sg_rune_install_test.make
 RUNE_INSTALL_TEST_OBJS := .sg_rune_install_test.make.o \
 	.sg_rune_install_under_test.make.o .sg_rune_writer_under_test.make.o \
 	.sg_rune_wire_under_test.make.o .sg_rune_wire_action_under_test.make.o \
-	.sg_rune_wire_crc_under_test.make.o
+	.sg_rune_wire_crc_under_test.make.o .sg_compound_under_test.make.o
 RUNE_INSTALL_TEST_DEPS := $(RUNE_INSTALL_TEST_OBJS:.o=.d)
 RUNE_PROOF_TEST_BIN := sg_rune_proof_test.make
 RUNE_PROOF_TEST_OBJS := .sg_rune_proof_test.make.o \
@@ -119,6 +125,15 @@ HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_action_under_test.gnu.o .sg_action_under_test.gnu.d \
 	.sg_action_test.make.o .sg_action_test.make.d \
 	.sg_action_under_test.make.o .sg_action_under_test.make.d \
+	sg_compound_test.gnu sg_compound_test.make \
+	.sg_compound_test.gnu.o .sg_compound_test.gnu.d \
+	.sg_compound_under_test.gnu.o .sg_compound_under_test.gnu.d \
+	.sg_compound_action_under_test.gnu.o \
+	.sg_compound_action_under_test.gnu.d \
+	.sg_compound_test.make.o .sg_compound_test.make.d \
+	.sg_compound_under_test.make.o .sg_compound_under_test.make.d \
+	.sg_compound_action_under_test.make.o \
+	.sg_compound_action_under_test.make.d \
 	sg_identity_test sg_identity_test.gnu sg_identity_test.make \
 	.sg_identity_test.gnu.o .sg_identity_test.gnu.d \
 	.sg_identity_under_test.gnu.o .sg_identity_under_test.gnu.d \
@@ -367,6 +382,7 @@ OBJS := \
 	sg_rune_install.o \
 	sg_rune_proof.o \
 	sg_replay.o \
+	sg_compound.o \
 	sg_drop_live.o \
 	sg_accept_drop.o \
 	sg_swim_live.o \
@@ -415,7 +431,7 @@ all: $(TARGET)
 
 default: all
 
-.PHONY: all default host-test action-test identity-test rune-wire-test \
+.PHONY: all default host-test action-test compound-test identity-test rune-wire-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
 	rune-loader-test \
@@ -458,6 +474,7 @@ $(OBJS): $(REVISION_HEADER)
 -include $(OBJS:.o=.d)
 -include $(HOST_TEST_DEPS)
 -include $(ACTION_TEST_DEPS)
+-include $(COMPOUND_TEST_DEPS)
 -include $(IDENTITY_TEST_DEPS)
 -include $(RUNE_WIRE_TEST_DEPS)
 -include $(SIDECAR_WIRE_TEST_DEPS)
@@ -544,6 +561,10 @@ $(FIELDS_CANDIDATE_TEST_BIN): $(FIELDS_CANDIDATE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(FIELDS_CANDIDATE_TEST_OBJS) $(LIBS)
 
+$(COMPOUND_TEST_BIN): $(COMPOUND_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(COMPOUND_TEST_OBJS) $(LIBS)
+
 $(RUNE_LOADER_TEST_BIN): $(RUNE_LOADER_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(RUNE_LOADER_TEST_OBJS) $(LIBS)
@@ -593,6 +614,24 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_test.make.o: tests/sg_compound_test.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_under_test.make.o: slipgate/sg_compound.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_action_under_test.make.o: slipgate/sg_action.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_identity_test.make.o: tests/sg_identity_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -857,7 +896,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -pedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
+host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) $(IDENTITY_TEST_BIN) \
 		$(RUNE_WIRE_TEST_BIN) $(SIDECAR_WIRE_TEST_BIN) \
 		$(SIDECAR_LOADER_TEST_BIN) $(SIDECAR_STORE_TEST_BIN) \
 		$(DANGER_LEASE_TEST_BIN) $(DANGER_POLICY_TEST_BIN) \
@@ -871,6 +910,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 	$(E) [TEST] $<
 	$(Q)./$(HOST_TEST_BIN)
 	$(Q)./$(ACTION_TEST_BIN)
+	$(Q)./$(COMPOUND_TEST_BIN)
 	$(Q)./$(IDENTITY_TEST_BIN)
 	$(Q)./$(RUNE_WIRE_TEST_BIN)
 	$(Q)./$(SIDECAR_WIRE_TEST_BIN)
@@ -897,6 +937,10 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(IDENTITY_TEST_BIN) \
 action-test: $(ACTION_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(ACTION_TEST_BIN)
+
+compound-test: $(COMPOUND_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_TEST_BIN)
 
 identity-test: $(IDENTITY_TEST_BIN)
 	$(E) [TEST] $<

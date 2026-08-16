@@ -103,6 +103,12 @@ typedef struct rune_link_s
 	 *   RL_ROCKETJUMP    registered but unsupported by the native runtime.
 	 */
 	vec3_t	anchor;
+	/* Compound v3 records retain their independent mechanism witness and
+	 * temporal boundary in the native graph.  Noncompound records keep these
+	 * fields exactly zero with mode RLCM_NONE. */
+	vec3_t	mechanism_anchor;
+	unsigned short sweep_clear_ms;
+	byte	mode;
 } rune_link_t;
 
 typedef struct rune_header_s
