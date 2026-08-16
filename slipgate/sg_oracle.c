@@ -87,6 +87,7 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger);
 static qboolean SG_OracleDeclaredSameDoorSet(edict_t *a, edict_t *b);
 static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph);
 static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph);
+static int SG_OracleLiveEdictIndex(const edict_t *ent);
 
 /* func_rotating uses these private g_func.c spawnflag values. */
 #define SG_ROTATOR_X_AXIS 4
@@ -1383,6 +1384,70 @@ static qboolean SG_OracleEntityKilltargetable(edict_t *entity)
 	return false;
 }
 
+/* G_FindTeams publishes one exact captain-first linked list.  A declared
+ * controller must move the same set that stock door_use will traverse from
+ * the callback target: accepting only a plausible teammaster pointer is not
+ * enough, because a missing slave bit, foreign backlink, omitted member, or
+ * cycle changes door_use from a team-wide command into a suffix/no-op. */
+static qboolean SG_OracleDeclaredDoorTeamCanonical(edict_t *door,
+	edict_t **master_out)
+{
+	edict_t *master, *previous = NULL;
+	qboolean found = false;
+	int index;
+
+	if (master_out)
+		*master_out = NULL;
+	if (SG_OracleLiveEdictIndex(door) < 0)
+		return false;
+	master = door->teammaster ? door->teammaster : door;
+	if (SG_OracleLiveEdictIndex(master) < 0 ||
+	    (master->flags & FL_TEAMSLAVE) ||
+	    master->teammaster != master)
+		return false;
+	/* SP_func_door makes an unteamed door a one-member team before
+	 * G_FindTeams.  Nothing else can legitimately appear in its chain. */
+	if (!master->team)
+	{
+		if (door != master || master->teamchain)
+			return false;
+		if (master_out)
+			*master_out = master;
+		return true;
+	}
+	/* Reconstruct G_FindTeams' exact ascending-edict chain.  This proves the
+	 * selected captain is the first same-team entity and that no live peer was
+	 * omitted, reordered, or attached to a different captain. */
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		edict_t *member = &g_edicts[index];
+
+		if (!member->inuse || !member->team ||
+		    strcmp(member->team, master->team) != 0)
+			continue;
+		if (SG_OracleLiveEdictIndex(member) != index)
+			return false;
+		if (!previous)
+		{
+			if (member != master || (member->flags & FL_TEAMSLAVE) ||
+			    member->teammaster != master)
+				return false;
+		}
+		else if (previous->teamchain != member ||
+		         !(member->flags & FL_TEAMSLAVE) ||
+		         member->teammaster != master)
+			return false;
+		if (member == door)
+			found = true;
+		previous = member;
+	}
+	if (!found || !previous || previous->teamchain)
+		return false;
+	if (master_out)
+		*master_out = master;
+	return true;
+}
+
 /* The declared controller can reproduce a canonical rotating or translating
  * door, including CRUSHER/REVERSE geometry, because its body waits entirely
  * outside the complete sweep until STATE_TOP. Scripted/shot/toggle/start-open
@@ -1392,10 +1457,10 @@ static qboolean SG_OracleDeclaredDoorTeamSafe(edict_t *door)
 	edict_t *master, *member;
 
 	if (!door || !door->inuse || !door->classname ||
+	    !SG_OracleDeclaredDoorTeamCanonical(door, &master) ||
 	    SG_OracleEntityKilltargetable(door) ||
 	    strncmp(door->classname, "func_door", 9) != 0)
 		return false;
-	master = door->teammaster ? door->teammaster : door;
 	if (!master->inuse || (master->flags & FL_TEAMSLAVE) ||
 	    master->use != door_use)
 		return false;
@@ -1466,6 +1531,29 @@ static qboolean SG_OracleDoorTeamSafe(edict_t *door)
 	return true;
 }
 
+/* G_UseTargets enumerates matching targetnames in edict order.  G_FindTeams
+ * chooses the first team member as captain, so a mapper fanout may legally
+ * reach that captain and then one or more same-name slaves.  door_use opens
+ * the complete team at the captain and later slave calls are stock no-ops.
+ * A slave without its captain earlier in this exact fanout remains unsafe. */
+static qboolean SG_OracleDeclaredMasterReachedBefore(edict_t *trigger,
+	edict_t *slave, edict_t *master)
+{
+	edict_t *target = NULL;
+
+	if (!trigger || !trigger->target || !slave || !master || slave == master)
+		return false;
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        trigger->target)) != NULL)
+	{
+		if (target == master)
+			return true;
+		if (target == slave)
+			return false;
+	}
+	return false;
+}
+
 static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 {
 	edict_t *target = NULL;
@@ -1480,10 +1568,10 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 	 * Their fixed one-second debounce is accounted by the shared cost helper. */
 	if (trigger->touch == Touch_DoorTrigger)
 	{
-		master = trigger->owner;
-		if (!master || !master->inuse || (master->flags & FL_TEAMSLAVE))
+		if (!trigger->owner ||
+		    !SG_OracleDeclaredDoorTeamCanonical(trigger->owner, &master) ||
+		    trigger->owner != master)
 			return false;
-		master = master->teammaster ? master->teammaster : master;
 		return trigger->movetype == MOVETYPE_NONE &&
 		       SG_OracleDeclaredDoorTeamSafe(master);
 	}
@@ -1503,11 +1591,13 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 			return false;
 		if (strncmp(target->classname, "func_door", 9) == 0)
 		{
-			master = target->teammaster ? target->teammaster : target;
-			if ((target->flags & FL_TEAMSLAVE) ||
-			    !SG_OracleDeclaredDoorTeamSafe(master))
+			if (!SG_OracleDeclaredDoorTeamCanonical(target, &master) ||
+			    !SG_OracleDeclaredDoorTeamSafe(target) ||
+			    ((target->flags & FL_TEAMSLAVE) &&
+			     !SG_OracleDeclaredMasterReachedBefore(trigger, target, master)))
 				return false;
-			found = true;
+			if (!(target->flags & FL_TEAMSLAVE))
+				found = true;
 			continue;
 		}
 		if (!Q_stricmp(target->classname, "target_speaker") &&

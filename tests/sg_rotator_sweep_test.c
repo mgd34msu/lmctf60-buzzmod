@@ -15,6 +15,7 @@ sg_host_t sg_host;
 
 static edict_t *test_trigger_hits[MAX_EDICTS];
 static edict_t *test_solid_hits[MAX_EDICTS];
+static gclient_t test_clients[1];
 static int test_trigger_count;
 static int test_solid_count;
 
@@ -150,15 +151,28 @@ static void TestReplayTriggerClassifier(void)
 	edict_t *support = &ents[8], *item = &ents[9];
 	vec3_t from, to;
 	qboolean contaminated, door_passed;
+	int i;
 
 	memset(ents, 0, sizeof(ents));
+	memset(&globals, 0, sizeof(globals));
+	memset(&game, 0, sizeof(game));
+	memset(test_clients, 0, sizeof(test_clients));
 	g_edicts = ents;
+	globals.edicts = ents;
+	globals.edict_size = sizeof(edict_t);
 	globals.num_edicts = 10;
+	globals.max_edicts = 10;
+	game.maxentities = 10;
+	game.maxclients = 1;
+	game.clients = test_clients;
+	for (i = 0; i < 10; i++)
+		ents[i].s.number = i;
 	world_ent->inuse = true;
 
 	door->inuse = true;
 	door->classname = "func_door";
 	door->use = door_use;
+	door->teammaster = door;
 	door->moveinfo.distance = 64.0f;
 	door->moveinfo.speed = 100.0f;
 	door->moveinfo.accel = 100.0f;

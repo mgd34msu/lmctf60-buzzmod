@@ -607,8 +607,11 @@ static void GuardDoorPair(edict_t **master_out, edict_t **member_out)
 	ResetGuardFixture();
 	master = GuardDoor(GUARD_MASTER_KEY);
 	member = GuardDoor(GUARD_MEMBER_KEY);
+	master->team = "guard-pair";
+	member->team = "guard-pair";
 	master->teamchain = member;
 	member->teammaster = master;
+	member->flags |= FL_TEAMSLAVE;
 	if (master_out)
 		*master_out = master;
 	if (member_out)
@@ -1559,6 +1562,152 @@ static void TestDeclaredActivatorRejectsCaseFoldedKilltargets(void)
 	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
 }
 
+static void TestDeclaredActivatorAcceptsMasterThenSlaveFanout(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *trigger;
+	edict_t *members[2] = { NULL, NULL };
+
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	master->team = "paired-gate";
+	member->team = "paired-gate";
+	master->teamchain = member;
+	member->teammaster = master;
+	member->flags |= FL_TEAMSLAVE;
+	master->targetname = "SharedGate";
+	member->targetname = "sharedgate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "SHAREDGATE";
+
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == 2);
+	CHECK(members[0] == master);
+	CHECK(members[1] == member);
+
+	/* A slave-only target remains unrepresentable: direct door_use on it is a
+	 * no-op and cannot establish controller authority for the team. */
+	master->targetname = "other";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+}
+
+static void TestDeclaredActivatorRejectsTeamAuthorityDrift(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *trigger;
+	edict_t *foreign;
+
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	foreign = GuardDoor(GUARD_EXTRA_KEY);
+	master->team = "paired-gate";
+	member->team = "paired-gate";
+	master->teamchain = member;
+	member->teammaster = master;
+	member->flags |= FL_TEAMSLAVE;
+	master->targetname = "SharedGate";
+	member->targetname = "sharedgate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "SHAREDGATE";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+
+	member->flags &= ~FL_TEAMSLAVE;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->flags |= FL_TEAMSLAVE;
+	master->teammaster = foreign;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	master->teammaster = master;
+	member->teammaster = foreign;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->teammaster = master;
+	member->team = "other-team";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->team = "paired-gate";
+	member->teamchain = master;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->teamchain = NULL;
+	master->teamchain = NULL;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+
+	/* The synthesized trigger calls door_use(owner), not owner->teammaster.
+	 * Only the exact canonical captain may own it. */
+	master->teamchain = member;
+	Trigger(trigger, master, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	member->flags &= ~FL_TEAMSLAVE;
+	trigger->owner = member;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+
+	/* A coherent-looking singleton is not canonical when an earlier live edict
+	 * has the same team: G_FindTeams would make the earlier edict captain. */
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	master->team = "same-team";
+	member->team = "same-team";
+	member->targetname = "LaterGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "latergate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+
+	/* Every same-team member must occur in ascending edict order. */
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	foreign = GuardDoor(GUARD_EXTRA_KEY);
+	master->team = "ordered-team";
+	member->team = "ordered-team";
+	foreign->team = "ordered-team";
+	master->teamchain = foreign;
+	foreign->teamchain = member;
+	foreign->teammaster = master;
+	member->teammaster = master;
+	foreign->flags |= FL_TEAMSLAVE;
+	member->flags |= FL_TEAMSLAVE;
+	master->targetname = "OrderedGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "orderedgate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+}
+
 static void TestDeclaredActivatorRejectsMalformedWorldBounds(void)
 {
 	edict_t *door;
@@ -1800,6 +1949,8 @@ int main(void)
 	TestRecoveryRejectsUnauthenticatedLiveState();
 	TestRecoveryRejectsTopAuthorityDrift();
 	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
+	TestDeclaredActivatorAcceptsMasterThenSlaveFanout();
+	TestDeclaredActivatorRejectsTeamAuthorityDrift();
 	TestDeclaredActivatorRejectsMalformedWorldBounds();
 	TestDeclaredDoorHoldMembersIsAtomic();
 	TestDeclaredDoorHoldMembersRequiresClosedTeam();
