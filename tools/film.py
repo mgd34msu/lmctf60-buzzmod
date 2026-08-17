@@ -12,8 +12,8 @@ Reuses the low-level machinery already proven in this toolbox:
   * demoents.py    -- the auto-detect skeleton for client vs serverrecord
                        .dm2 shape (see its docstring for why svc_frame is
                        parsed two different ways).
-  * demorune.py    -- the rune seed-cloud loader (HEADER_FMT/SEED_FMT) used
-                       to draw the map silhouette.
+  * runeio.py      -- the authenticated RUNE reader used to draw the map
+                       silhouette.
 
 What's new here (nothing else in tools/ captures it): the player entity's
 `effects` field. This mod's flag-carry visual (p_view.c G_SetClientEffects:
@@ -78,6 +78,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+
+try:
+    import runeio
+except ModuleNotFoundError:
+    from tools import runeio
 from matplotlib.lines import Line2D
 
 # --------------------------------------------------------------- bit tables
@@ -965,21 +970,9 @@ def carry_route_dissimilarity(windows, n_resample=FRECHET_RESAMPLE_N,
 
 
 # ------------------------------------------------------------------- rune
-HEADER_FMT = '<4i64s'
-SEED_FMT = '<3f2h'
-
-
 def load_rune_seeds(rune_path):
-    data = open(rune_path, 'rb').read()
-    magic, ver, ns, nl, name = struct.unpack_from(HEADER_FMT, data, 0)
-    off = struct.calcsize(HEADER_FMT)
-    ssz = struct.calcsize(SEED_FMT)
-    seeds = []
-    for i in range(ns):
-        x, y, z, ah, fl = struct.unpack_from(SEED_FMT, data, off)
-        off += ssz
-        seeds.append((x, y))
-    return seeds
+    artifact = runeio.read(rune_path)
+    return [(seed.origin[0], seed.origin[1]) for seed in artifact.seeds]
 
 
 def find_rune(rune_dir, mapname):

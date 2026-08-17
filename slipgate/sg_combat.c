@@ -50,11 +50,12 @@
 
 /*
  * The muzzle is not the eye. Every fire function projects from its own offset
- * through P_ProjectSource (p_weapon.c:26-36), which is static to p_weapon.c;
- * the offsets are tabulated in WEAPONS.md 2.2-F3 and every one of them is
- * forward of and below the eye. The pre-fire trace below runs from the eye
- * instead, which is the conservative choice rule F3 prescribes: the eye is
- * behind and above every muzzle, so an eye-clear shot is a muzzle-clear shot.
+ * through P_ProjectSource (p_weapon.c:30-40), which is static to p_weapon.c.
+ * The non-ballistic path below repeats only its handedness adjustment, then
+ * calls G_ProjectSource with the weapon's literal firing offset. The envelope
+ * and the pre-fire trace therefore use the same final packed view, origin and
+ * direction as the physical weapon instead of treating an eye-clear line as a
+ * muzzle-clear one.
  */
 
 /*
@@ -267,8 +268,6 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 #define SG_SETTLE			0.5f	/* seconds for the aim error to converge */
 #define SG_AIM_ERROR_DEG	9.0f	/* error cone half-angle at acquisition */
 #define SG_AIM_RESIDUAL_DEG	0.8f	/* never becomes perfect; this is the floor */
-
-#define SG_HIT_SLOP			40.0f	/* pre-fire trace endpoint tolerance */
 
 /*
  * Switch hysteresis. Rule S1 says a switch costs 700-1100 ms of not-shooting
@@ -519,6 +518,22 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
                                      * have substantially wandered */
 
 /*
+ * Aim texture is presentation only insofar as its consequences are concerned:
+ * the view is the weapon ray, so the textured ray must remain a viable hit.
+ * Keep it inside a target-box envelope that closes to its residual size in two
+ * server ticks.  Hitscan gets the tighter centre-biased envelope; direct
+ * projectiles retain a little more room for their lead without becoming wall
+ * or clear-shot noise.  Grenades are excluded below because their arc has a
+ * separately validated impact point.
+ */
+#define SG_AIM_ENVELOPE_SETTLE	0.20f
+#define SG_AIM_HITSCAN_START	0.45f
+#define SG_AIM_HITSCAN_RESIDUAL	0.18f
+#define SG_AIM_PROJECTILE_START	0.70f
+#define SG_AIM_PROJECTILE_RESIDUAL 0.40f
+#define SG_AIM_MUZZLE_ITERATIONS	3
+
+/*
  * Mean square of the correction shape (1-x)cos(2*pi*n*x) over x in [0,1]:
  *
  *     1/6 + 1/(16*pi^2*n^2)  ==  0.173 (n=1), 0.169 (n=2)
@@ -607,6 +622,7 @@ typedef struct
 	float		vel_stable;		/* since when it has pointed that way */
 
 	float		post_sight;		/* posted defender sightline, <0 not posted */
+	qboolean	post_defender;	/* permits the defender-only stocked fallback */
 	float		alert_range;	/* expected contact range from belief (an
 	                             * ear or a teammate's eye), <0 none */
 	float		alert_until;	/* the expectation's shelf life */
@@ -950,7 +966,7 @@ static void Combat_Center(edict_t *e, vec3_t out)
  * not how well it shoots.
  */
 static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
-                            const float *threat)
+	const float *threat, qboolean count_diagnostics)
 {
 	edict_t	*best = NULL;
 	/*
@@ -984,6 +1000,8 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		vec3_t	mid, delta;
 		float	dist, dot;
 		int		theirteam;
+		sg_combat_preview_candidate_t candidate;
+		qboolean rear_cone = false;
 
 		if (p == self)
 			continue;
@@ -996,15 +1014,26 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 
 		theirteam = p->client->ctf.teamnum;
 		if (theirteam != CTF_TEAM_RED && theirteam != CTF_TEAM_BLUE)
-			{ sg_cbt_scan[0]++; continue; }
+		{
+			if (count_diagnostics)
+				sg_cbt_scan[0]++;
+			continue;
+		}
 		if (theirteam == myteam)
-			{ sg_cbt_scan[1]++; continue; }
-
+		{
+			if (count_diagnostics)
+				sg_cbt_scan[1]++;
+			continue;
+		}
 		Combat_Center(p, mid);
 		VectorSubtract(mid, eye, delta);
 		dist = VectorLength(delta);
 		if (dist < 1.0f || dist >= bestdist)
-			{ sg_cbt_scan[2]++; continue; }
+		{
+			if (count_diagnostics)
+				sg_cbt_scan[2]++;
+			continue;
+		}
 
 		/* forward cone: do not shoot backwards. The basis is the CURRENT
 		 * v_angle, which is what the previous frame's cmd angles produced. */
@@ -1013,19 +1042,63 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		if (dot < SG_FOV_COS)
 		{
 			if (!threat || DotProduct(delta, threat) < SG_FOV_COS)
-				{ sg_cbt_scan[3]++; continue; }
-			sg_cbt_scan[6]++;
+			{
+				if (count_diagnostics)
+					sg_cbt_scan[3]++;
+				continue;
+			}
+			rear_cone = true;
 		}
 
-		if (!Combat_Visible(self, p))
-			{ sg_cbt_scan[4]++; continue; }
-		sg_cbt_scan[5]++;
+		candidate.self_team_valid = true;
+		candidate.target_team_valid = true;
+		candidate.same_team = false;
+		candidate.same_entity = false;
+		candidate.target_inuse = p->inuse;
+		candidate.target_client = p->client != NULL;
+		candidate.target_dead = p->deadflag == DEAD_DEAD;
+		candidate.target_health = p->health;
+		candidate.target_noclip = p->movetype == MOVETYPE_NOCLIP;
+		candidate.distance = dist;
+		candidate.range_limit = bestdist;
+		candidate.forward_dot = rear_cone ? SG_FOV_COS : dot;
+		candidate.visibility_known = false;
+		candidate.visible = false;
+		if (!SG_CombatPreviewCandidateEligible(&candidate))
+			continue;
+		if (rear_cone && count_diagnostics)
+			sg_cbt_scan[6]++;
+
+		candidate.visibility_known = true;
+		candidate.visible = Combat_Visible(self, p);
+		if (!SG_CombatPreviewCandidateEligible(&candidate))
+		{
+			if (count_diagnostics)
+				sg_cbt_scan[4]++;
+			continue;
+		}
+		if (count_diagnostics)
+			sg_cbt_scan[5]++;
 
 		best = p;
 		bestdist = dist;
 	}
 
 	return best;
+}
+
+qboolean SG_CombatWouldEngage(edict_t *self)
+{
+	vec3_t eye, forward;
+
+	if (!self || !self->inuse || !self->client ||
+	    self->deadflag == DEAD_DEAD || self->health <= 0 ||
+	    self->movetype == MOVETYPE_NOCLIP)
+		return false;
+	VectorCopy(self->s.origin, eye);
+	eye[2] += self->viewheight;
+	AngleVectors(self->client->v_angle, forward, NULL, NULL);
+	return Combat_Scan(self, eye, forward, NULL, false) != NULL;
 }
 
 /*
@@ -1210,8 +1283,8 @@ static const int sg_ladder_close[] = {
 };
 
 /*
- * Mid ranks the rocket over the rail as of the wave-42..47 accuracy
- * tables: this body rails at 12-14% under the skill scatter and lands
+ * Mid ranks the rocket over the rail based on measured accuracy: this body
+ * rails at 12-14% under the skill scatter and lands
  * rockets at 23%, and 12% of 100 loses to 23% of a rocket plus its
  * splash at every mid distance. The dossier's rail-first order was
  * written for a hand steadier than the one the skill model gives us --
@@ -1345,7 +1418,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 	ladder = Combat_Ladder(band);
 
 	/*
-	 * WEAPON COMMITMENT (sg_wcommit). The rung-3 gate's strongest tell
+	 * WEAPON COMMITMENT (sg_wcommit). The strongest observed tell
 	 * (separability 1.000): consecutive human shots stay on ONE gun --
 	 * switch_diagonal_mass 0.90 against this body's 0.68 -- because a
 	 * human carries a main weapon across bands and switches only when
@@ -1364,7 +1437,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 		int held = Combat_Held(self);
 
 		/*
-		 * Mode 2 (rung-3 set #1, 18/18): commitment as shipped kept the
+		 * Mode 2: all 18 reviews found that commitment as shipped kept the
 		 * SPAWN BLASTER all game -- every judge named blaster-dominated
 		 * timelines with machine accuracy on every bot sheet, a conduct
 		 * no human sustains. The last-resort gun is not a gun a human
@@ -1402,14 +1475,41 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
  * is a wide room" needs a room-width model the rune does not carry, so the
  * railgun is taken -- the conservative half, since it never degrades.
  */
-static int Combat_PostWeapon(edict_t *self, float sightline)
+static int Combat_PostWeapon(edict_t *self, float sightline,
+                             qboolean stocked_fallback)
 {
 	static const int ladder_ssg[] = { SG_W_SSHOTGUN, -1 };
 	static const int ladder_rl[] = { SG_W_ROCKETLAUNCHER, -1 };
 	static const int ladder_cg[] = { SG_W_CHAINGUN, -1 };
 	static const int ladder_rg[] = { SG_W_RAILGUN, -1 };
+	static const int stocked_contact[] = {
+		SG_W_SSHOTGUN, SG_W_CHAINGUN, SG_W_HYPERBLASTER,
+		SG_W_SHOTGUN, SG_W_MACHINEGUN, SG_W_RAILGUN,
+		SG_W_PLASMA, SG_W_ROCKETLAUNCHER, SG_W_GRENADELAUNCHER,
+		SG_W_BFG, -1
+	};
+	static const int stocked_close[] = {
+		SG_W_ROCKETLAUNCHER, SG_W_CHAINGUN, SG_W_HYPERBLASTER,
+		SG_W_SSHOTGUN, SG_W_SHOTGUN, SG_W_RAILGUN,
+		SG_W_MACHINEGUN, SG_W_GRENADELAUNCHER, SG_W_PLASMA,
+		SG_W_BFG, -1
+	};
+	static const int stocked_mid[] = {
+		SG_W_ROCKETLAUNCHER, SG_W_RAILGUN, SG_W_HYPERBLASTER,
+		SG_W_CHAINGUN, SG_W_MACHINEGUN, SG_W_SHOTGUN,
+		SG_W_BFG, SG_W_GRENADELAUNCHER, SG_W_PLASMA,
+		SG_W_SSHOTGUN, -1
+	};
+	static const int stocked_long[] = {
+		SG_W_RAILGUN, SG_W_HYPERBLASTER, SG_W_ROCKETLAUNCHER,
+		SG_W_CHAINGUN, SG_W_MACHINEGUN, SG_W_SHOTGUN,
+		SG_W_BFG, SG_W_GRENADELAUNCHER, SG_W_PLASMA,
+		SG_W_SSHOTGUN, -1
+	};
 	const int	*want;
+	const int	*stocked;
 	int			w;
+	int			owned;
 
 	if (sightline < SG_POST_SSG)
 		want = ladder_ssg;
@@ -1418,7 +1518,18 @@ static int Combat_PostWeapon(edict_t *self, float sightline)
 	else if (sightline < SG_POST_CHAINGUN)
 		want = ladder_cg;
 	else
+	{
 		want = ladder_rg;
+	}
+
+	if (sightline < SG_R_CLOSE)
+		stocked = stocked_contact;
+	else if (sightline < SG_R_MID)
+		stocked = stocked_close;
+	else if (sightline < SG_R_LONG)
+		stocked = stocked_mid;
+	else
+		stocked = stocked_long;
 
 	w = Combat_WalkLadder(self, want, sightline, true);
 	if (w >= 0)
@@ -1427,12 +1538,35 @@ static int Combat_PostWeapon(edict_t *self, float sightline)
 	/* the doctrine weapon is not in the pack: hold the band ladder's answer
 	 * for the sightline instead of standing there with a blaster */
 	if (sightline < SG_R_CLOSE)
-		return Combat_Choose(self, SG_BAND_CONTACT, sightline, false);
-	if (sightline < SG_R_MID)
-		return Combat_Choose(self, SG_BAND_CLOSE, sightline, false);
-	if (sightline < SG_R_LONG)
-		return Combat_Choose(self, SG_BAND_MID, sightline, false);
-	return Combat_Choose(self, SG_BAND_LONG, sightline, false);
+		w = Combat_Choose(self, SG_BAND_CONTACT, sightline, false);
+	else if (sightline < SG_R_MID)
+		w = Combat_Choose(self, SG_BAND_CLOSE, sightline, false);
+	else if (sightline < SG_R_LONG)
+		w = Combat_Choose(self, SG_BAND_MID, sightline, false);
+	else
+		w = Combat_Choose(self, SG_BAND_LONG, sightline, false);
+
+	if (!stocked_fallback)
+		return w;
+
+	/* Combat_Choose only sees the weapons named by the range band's ordinary
+	 * ladder.  A stocked rail/RL outside that ladder is still a real owned
+	 * gun, however, and a posted bot must not regress to the spawn blaster
+	 * merely because the doctrine row was absent.  Prefer this exact-band
+	 * stocked read only when the ordinary answer is unstocked; the doctrine
+	 * answer remains authoritative when it already has a stocked gun. */
+	owned = Combat_WalkLadder(self, stocked, sightline, true);
+	if (owned >= 0 && (w == SG_W_BLASTER || !Combat_Stocked(self, w)))
+		w = owned;
+	return w;
+}
+
+int SG_CombatBestPostWeapon(edict_t *self, float sightline)
+{
+	if (!self || !self->client)
+		return -1;
+	Combat_CacheItems();
+	return Combat_PostWeapon(self, sightline, true);
 }
 
 /* -------------------------------------------------------------- the duel
@@ -2207,6 +2341,371 @@ static void Combat_TexWander(sg_combat_state_t *st, vec3_t dir)
 }
 
 /*
+ * Project a composed aim ray back into the target's inner box.  `lead` is the
+ * point the firing solution intends to hit (the centre for hitscan, predicted
+ * centre for a projectile); the ray's lateral displacement at that range is
+ * therefore bounded by the smallest target half-extent.  This runs after all
+ * synthetic error has been composed, so persona, tremor and texture can vary
+ * the hand-like path only inside a ray that can still plausibly land.
+ */
+static void Combat_ConstrainAim(edict_t *enemy, int weapon, vec3_t origin,
+                                vec3_t lead, sg_combat_state_t *st,
+                                vec3_t aim, float source_pad)
+{
+	vec3_t	clean, lateral;
+	float	range, dot, lateral_len, half, start, residual, fraction;
+	float	allowed, tangent;
+
+	VectorSubtract(lead, origin, clean);
+	range = VectorLength(clean);
+	if (range < 1.0f)
+		return;
+	VectorScale(clean, 1.0f / range, clean);
+
+	/* A ray inside this sphere is inside every axis of the target box. */
+	half = 0.5f * (enemy->maxs[0] - enemy->mins[0]);
+	if (0.5f * (enemy->maxs[1] - enemy->mins[1]) < half)
+		half = 0.5f * (enemy->maxs[1] - enemy->mins[1]);
+	if (0.5f * (enemy->maxs[2] - enemy->mins[2]) < half)
+		half = 0.5f * (enemy->maxs[2] - enemy->mins[2]);
+	/* Chaingun_Fire can move its source anywhere inside the conservative
+	 * +/- source_pad cube below.  Keep the nominal endpoint seven units inside
+	 * the inscribed sphere, so every possible source ray remains in the live
+	 * target box rather than merely the centre muzzle ray. */
+	if (source_pad > 0.0f)
+		half -= source_pad * 1.75f;
+	if (half < 1.0f)
+		return;
+
+	if (sg_weapons[weapon].speed <= 0.0f)
+	{
+		start = SG_AIM_HITSCAN_START;
+		residual = SG_AIM_HITSCAN_RESIDUAL;
+	}
+	else
+	{
+		start = SG_AIM_PROJECTILE_START;
+		residual = SG_AIM_PROJECTILE_RESIDUAL;
+	}
+	fraction = (level.time - st->since) / SG_AIM_ENVELOPE_SETTLE;
+	if (fraction < 0.0f)
+		fraction = 0.0f;
+	if (fraction > 1.0f)
+		fraction = 1.0f;
+	allowed = half * (start + (residual - start) * fraction);
+
+	dot = DotProduct(aim, clean);
+	if (dot <= 0.0f)
+	{
+		VectorCopy(clean, aim);
+		return;
+	}
+	VectorMA(aim, -dot, clean, lateral);
+	lateral_len = VectorLength(lateral);
+	if (lateral_len < 0.0001f)
+		return;
+
+	/* At `range`, tan(theta) is exactly the lateral endpoint displacement. */
+	tangent = lateral_len / dot;
+	if (tangent <= allowed / range)
+		return;
+	VectorScale(lateral, (allowed / range) / lateral_len, lateral);
+	VectorAdd(clean, lateral, aim);
+	VectorNormalize(aim);
+}
+
+/*
+ * Return whether the forward ray crosses the target box whose live dimensions
+ * have been translated so its centre is `centre`.  For hitscan `centre` is the
+ * live absmin/absmax centre; for a direct projectile it is its predicted
+ * centre.  Keeping the asymmetric mins/maxs is important for a crouched
+ * player: its centre is not the entity origin.
+ */
+static qboolean Combat_RayHitsTargetBox(vec3_t origin, vec3_t dir,
+                                        edict_t *enemy, vec3_t centre)
+{
+	float	enter = 0.0f, leave = 1000000.0f;
+	int		i;
+
+	for (i = 0; i < 3; i++)
+	{
+		float	boxcentre = 0.5f * (enemy->mins[i] + enemy->maxs[i]);
+		float	lo = centre[i] + enemy->mins[i] - boxcentre;
+		float	hi = centre[i] + enemy->maxs[i] - boxcentre;
+		float	t0, t1;
+
+		if ((float)fabs((double)dir[i]) < 0.000001f)
+		{
+			if (origin[i] < lo || origin[i] > hi)
+				return false;
+			continue;
+		}
+
+		t0 = (lo - origin[i]) / dir[i];
+		t1 = (hi - origin[i]) / dir[i];
+		if (t0 > t1)
+		{
+			float	tmp = t0;
+
+			t0 = t1;
+			t1 = tmp;
+		}
+		if (t0 > enter)
+			enter = t0;
+		if (t1 < leave)
+			leave = t1;
+		if (leave < enter)
+			return false;
+	}
+
+	return leave >= 0.0f;
+}
+
+/*
+ * A chaingun's source is chosen after the decision.  Its actual set is inside
+ * the +/- four unit source cube, so require all eight cube corners to cross
+ * the target box.  The feasible-source set is convex and the target box is
+ * convex, making this a conservative proof for every source between them.
+ */
+static qboolean Combat_RayHitsMuzzleEnvelope(vec3_t muzzle, vec3_t dir,
+                                             edict_t *enemy, vec3_t centre,
+                                             float source_pad)
+{
+	int		x, y, z;
+
+	if (source_pad <= 0.0f)
+		return Combat_RayHitsTargetBox(muzzle, dir, enemy, centre);
+
+	for (x = -1; x <= 1; x += 2)
+		for (y = -1; y <= 1; y += 2)
+			for (z = -1; z <= 1; z += 2)
+			{
+				vec3_t source;
+
+				source[0] = muzzle[0] + (float)x * source_pad;
+				source[1] = muzzle[1] + (float)y * source_pad;
+				source[2] = muzzle[2] + (float)z * source_pad;
+				if (!Combat_RayHitsTargetBox(source, dir, enemy, centre))
+					return false;
+			}
+	return true;
+}
+
+/*
+ * Pmove consumes a short command plus delta_angles, clamps pitch, then writes
+ * v_angle.  Reconstruct that exact view here instead of trusting the float
+ * aim that was packed into the command.  The weapon and pre-fire trace must
+ * agree on this quantised direction.
+ */
+static void Combat_CmdView(edict_t *self, usercmd_t *cmd, vec3_t angles)
+{
+	short	packed;
+	int		i;
+
+	if (self->client->ps.pmove.pm_flags & PMF_TIME_TELEPORT)
+	{
+		packed = (short)(cmd->angles[YAW]
+		                 + self->client->ps.pmove.delta_angles[YAW]);
+		VectorClear(angles);
+		angles[YAW] = SHORT2ANGLE(packed);
+		return;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		packed = (short)(cmd->angles[i]
+		                 + self->client->ps.pmove.delta_angles[i]);
+		angles[i] = SHORT2ANGLE(packed);
+	}
+	if (angles[PITCH] > 89.0f && angles[PITCH] < 180.0f)
+		angles[PITCH] = 89.0f;
+	else if (angles[PITCH] < 271.0f && angles[PITCH] >= 180.0f)
+		angles[PITCH] = 271.0f;
+}
+
+/*
+ * Machinegun_Fire overwrites kick_angles[PITCH] with this deterministic
+ * recoil before it builds its firing forward (p_weapon.c:1136-1156).  The
+ * random yaw/roll and fire_lead spread are physical dispersion, not a second
+ * view ray; compensate the deterministic pitch here so the nominal fire ray
+ * and this trace share the target bearing.
+ */
+static float Combat_MachinegunPitchKick(edict_t *self, int weapon)
+{
+	if (weapon != SG_W_MACHINEGUN || !self || !self->client)
+		return 0.0f;
+	return (float)self->client->machinegun_shots * -1.5f;
+}
+
+/* Pack a desired physical shot direction into the command that produces it. */
+static void Combat_WriteShotCmd(edict_t *self, int weapon, vec3_t shot,
+                                usercmd_t *cmd)
+{
+	float	yaw, pitch;
+
+	yaw = (float)(atan2(shot[1], shot[0]) * 180.0 / M_PI);
+	pitch = (float)(-asin(shot[2]) * 180.0 / M_PI);
+	pitch -= Combat_MachinegunPitchKick(self, weapon);
+
+	cmd->angles[YAW] = (short)(ANGLE2SHORT(yaw)
+	                          - self->client->ps.pmove.delta_angles[YAW]);
+	cmd->angles[PITCH] = (short)(ANGLE2SHORT(pitch)
+	                            - self->client->ps.pmove.delta_angles[PITCH]);
+	cmd->angles[ROLL] = (short)(ANGLE2SHORT(0.0f)
+	                           - self->client->ps.pmove.delta_angles[ROLL]);
+}
+
+/*
+ * Mirror P_ProjectSource's handedness and every combat weapon's literal
+ * firing offset.  HyperBlaster_Fire adds its current rotating g_offset after
+ * the (24, 8, viewheight-8) base.  Chaingun_Fire picks
+ * r=7+crandom()*4 and u=crandom()*4; trace its nominal (7, 0) source and
+ * report a four-unit hull pad that covers every possible source position
+ * before its independent bullet spread.
+ */
+static qboolean Combat_WeaponRay(edict_t *self, int weapon, usercmd_t *cmd,
+                                 vec3_t muzzle, vec3_t dir,
+                                 float *source_pad)
+{
+	vec3_t	angles, forward, right, offset;
+
+	if (!self || !self->client || weapon < 0 || weapon >= SG_NUM_WEAPONS)
+		return false;
+
+	Combat_CmdView(self, cmd, angles);
+	angles[PITCH] += Combat_MachinegunPitchKick(self, weapon);
+	AngleVectors(angles, forward, right, NULL);
+
+	VectorSet(offset, 0.0f, 0.0f, self->viewheight - 8.0f);
+	if (source_pad)
+		*source_pad = 0.0f;
+	switch (weapon)
+	{
+	case SG_W_BLASTER:
+		offset[0] = 24.0f;
+		offset[1] = 8.0f;
+		break;
+	case SG_W_HYPERBLASTER:
+	{
+		float rotation = (self->client->ps.gunframe - 5.0f)
+		                 * 2.0f * (float)M_PI / 6.0f;
+
+		offset[0] = 24.0f - 4.0f * (float)sin((double)rotation);
+		offset[1] = 8.0f;
+		offset[2] += 4.0f * (float)cos((double)rotation);
+		break;
+	}
+	case SG_W_ROCKETLAUNCHER:
+	case SG_W_BFG:
+	case SG_W_PLASMA:
+		offset[0] = 8.0f;
+		offset[1] = 8.0f;
+		break;
+	case SG_W_RAILGUN:
+		offset[1] = 7.0f;
+		break;
+	case SG_W_SHOTGUN:
+	case SG_W_SSHOTGUN:
+	case SG_W_MACHINEGUN:
+		offset[1] = 8.0f;
+		break;
+	case SG_W_CHAINGUN:
+		offset[1] = 7.0f;
+		if (source_pad)
+			*source_pad = 4.0f;
+		break;
+	default:
+		return false;	/* grenade launcher stays on its ballistic path */
+	}
+
+	if (self->client->pers.hand == LEFT_HANDED)
+		offset[1] *= -1.0f;
+	else if (self->client->pers.hand == CENTER_HANDED)
+		offset[1] = 0.0f;
+	G_ProjectSource(self->s.origin, offset, forward, right, muzzle);
+	VectorCopy(forward, dir);
+	return true;
+}
+
+/*
+ * The muzzle moves with the packed view.  Three constraint/repack passes plus
+ * a bounded final correction close that small fixed point, then the caller
+ * receives the actual ray it will trace and fire.
+ */
+static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
+                                         int weapon, vec3_t lead,
+                                         sg_combat_state_t *st, vec3_t aim,
+                                         usercmd_t *cmd, vec3_t muzzle,
+                                         vec3_t shotdir, float *source_pad)
+{
+	int	pass;
+	qboolean final_hit;
+
+	for (pass = 0; pass < SG_AIM_MUZZLE_ITERATIONS; pass++)
+	{
+		Combat_WriteShotCmd(self, weapon, aim, cmd);
+		if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
+			return false;
+		Combat_ConstrainAim(enemy, weapon, muzzle, lead, st, shotdir,
+		                    *source_pad);
+		VectorCopy(shotdir, aim);
+	}
+
+	Combat_WriteShotCmd(self, weapon, aim, cmd);
+	if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
+		return false;
+	final_hit = Combat_RayHitsMuzzleEnvelope(muzzle, shotdir, enemy, lead,
+	                                         *source_pad);
+	if (final_hit)
+		return true;
+
+	/* Quantisation can move an edge ray by one short.  Spend one final bounded
+	 * correction rather than accepting a view ray that the physical shot misses. */
+	Combat_ConstrainAim(enemy, weapon, muzzle, lead, st, shotdir,
+	                    *source_pad);
+	VectorCopy(shotdir, aim);
+	Combat_WriteShotCmd(self, weapon, aim, cmd);
+	if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
+		return false;
+	return Combat_RayHitsMuzzleEnvelope(muzzle, shotdir, enemy, lead,
+	                                    *source_pad);
+}
+
+/* Aim a physical non-ballistic ray at an intentional point (carrier splash). */
+static qboolean Combat_FinalizePointRay(edict_t *self, int weapon,
+                                        vec3_t point, vec3_t aim,
+                                        usercmd_t *cmd, vec3_t muzzle,
+                                        vec3_t shotdir, float *source_pad)
+{
+	int	pass;
+
+	for (pass = 0; pass < SG_AIM_MUZZLE_ITERATIONS; pass++)
+	{
+		Combat_WriteShotCmd(self, weapon, aim, cmd);
+		if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
+			return false;
+		VectorSubtract(point, muzzle, aim);
+		if (VectorNormalize(aim) < 1.0f)
+			return false;
+	}
+
+	Combat_WriteShotCmd(self, weapon, aim, cmd);
+	return Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad);
+}
+
+/* The pre-fire decision is deliberately independent of endpoint proximity. */
+static qboolean Combat_TraceClears(int weapon, qboolean enemy_hit,
+                                   qboolean unobstructed,
+                                   qboolean teammate_hit)
+{
+	if (teammate_hit)
+		return false;
+	if (sg_weapons[weapon].speed <= 0.0f)
+		return enemy_hit;
+	return enemy_hit || unobstructed;
+}
+
+/*
  * Rule F1's second clause: has the target's velocity pointed the same way for
  * long enough that the lead is a prediction rather than a guess? Direction
  * only -- a target accelerating along one axis is still predictable.
@@ -2260,7 +2759,7 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 		return 0.0f;			/* hitscan: aim at the centre, rule F2 */
 
 	/*
-	 * THE LANDING-POINT LEAD (sg_landlead, wave 247). The owner:
+	 * THE LANDING-POINT LEAD (sg_landlead):
 	 * airborne players are on a committed arc -- judge where they
 	 * land and put the rocket there. Linear lead extends velocity
 	 * into the sky gravity will never let them reach; this branch
@@ -2273,9 +2772,10 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	{
 		vec3_t p0, p1;
 		trace_t ltr;
-		/* v3 admits any authenticated integral gravity. Predict against the
-		 * active law whose exact bits gate this loaded graph, not the old v2
-		 * default, or low-gravity maps aim splash below the real touchdown. */
+		/* The RUNE artifact admits any authenticated integral gravity.
+		 * Predict against the exact law whose bits gate this loaded graph,
+		 * rather than a historical default, or low-gravity maps aim splash
+		 * below the real touchdown. */
 		float tt, grav = sv_gravity ? sv_gravity->value : 800.0f;
 		int seg;
 
@@ -2451,8 +2951,8 @@ static float Worth_Health(edict_t *e)
 }
 
 /*
- * THE MEGA, priced as OVERHEAL (sg_megaworth). The census at wave 404 is the
- * whole argument: zero megas taken by bots in 850 s on a map that has one,
+ * THE MEGA, priced as OVERHEAL (sg_megaworth). The measurement is the whole
+ * argument: zero megas taken by bots in 850 s on a map that has one,
  * while the humans on the same map take it AT FULL HEALTH -- because +100 over
  * max is not health, it is a second life's worth of margin that lets an
  * attacker push deeper and survive the steal. Pickup_Health takes the mega at
@@ -2611,6 +3111,46 @@ static int Weapon_Tier(edict_t *e)
 	return 1;
 }
 
+static int Weapon_StockedTier(edict_t *e)
+{
+	if (Combat_Stocked(e, SG_W_ROCKETLAUNCHER) ||
+	    Combat_Stocked(e, SG_W_CHAINGUN))
+		return 5;
+	if (Combat_Stocked(e, SG_W_SSHOTGUN) ||
+	    Combat_Stocked(e, SG_W_RAILGUN) ||
+	    Combat_Stocked(e, SG_W_HYPERBLASTER))
+		return 4;
+	if (Combat_Stocked(e, SG_W_MACHINEGUN) ||
+	    Combat_Stocked(e, SG_W_GRENADELAUNCHER) ||
+	    Combat_Stocked(e, SG_W_PLASMA))
+		return 3;
+	if (Combat_Stocked(e, SG_W_SHOTGUN))
+		return 2;
+	return 1;
+}
+
+qboolean SG_CombatWeaponState(edict_t *self,
+                              sg_combat_weapon_state_t *out)
+{
+	int w;
+
+	if (!self || !self->client || !out)
+		return false;
+	Combat_CacheItems();
+	memset(out, 0, sizeof(*out));
+	out->available_tier = Weapon_Tier(self);
+	out->stocked_tier = Weapon_StockedTier(self);
+	out->held_weapon = Combat_Held(self);
+	for (w = SG_W_SHOTGUN; w < SG_NUM_WEAPONS; w++)
+	{
+		if (Combat_Avail(self, w))
+			out->nonblaster_available = true;
+		if (Combat_Stocked(self, w))
+			out->nonblaster_stocked = true;
+	}
+	return true;
+}
+
 /* 2.3: tier 1 -> 1057 ms of detour, tier 5 -> 199 ms */
 static const float sg_worth_weapon[6] = {
 	0.0f, 1.20f, 0.80f, 0.50f, 0.30f, 0.15f
@@ -2674,7 +3214,7 @@ static float Worth_Quad(edict_t *e)
 		return 0.0f;			/* already carrying it */
 
 	/*
-	 * THIS bot's team's row (owner's ruling, 2026-08-05). The pricing is where
+	 * THIS bot's team's row. The pricing is where
 	 * the per-team split actually bites: a team that has not been told the quad
 	 * is coming back prices an empty pedestal at zero and walks past it, while
 	 * the side whose bot called the take arrives four seconds early to camp it.
@@ -2729,8 +3269,8 @@ static float Worth_Rune(edict_t *e)
 	tier = Weapon_Tier(e);
 
 	/*
-	 * "BOTS ON THE OTHER TEAM WILL ONLY KNOW WHERE RUNES ARE IF THEY SEE THEM,
-	 * NOT FROM THE DIFFERENT TEAM'S KNOWLEDGE" (owner's ruling, 2026-08-05).
+	 * Bots on the other team know where runes are only when they see them,
+	 * never from the opposing team's knowledge.
 	 * A rune belief is a sighting and nothing else -- there is no clock behind
 	 * it to fall back on -- so reading the wrong team's row here would be the
 	 * purest form of the leak the ruling names.
@@ -2824,13 +3364,15 @@ void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
 
 /* ------------------------------------------------------------ the post */
 
-void SG_CombatPost(edict_t *self, float sightline)
+void SG_CombatPost(edict_t *self, float sightline,
+                   qboolean defender_stand)
 {
 	sg_combat_state_t *st = Combat_ClientState(self);
 
 	if (!st)
 		return;
 	st->post_sight = sightline;
+	st->post_defender = defender_stand;
 }
 
 /*
@@ -3175,7 +3717,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
                         sg_combat_state_t *st, float skill, int inhand)
 {
 	/*
-	 * TAP VARIANCE (sg_tapvar, rung-3 set #1 ranked tell #2). Every
+	 * TAP VARIANCE (sg_tapvar). Every
 	 * judge read the rail cadence as "a single razor spike at ~1.7s,
 	 * zero spread": a held button refires a slow weapon the frame its
 	 * cycle completes, and the ON/OFF windows below never gate it
@@ -3232,7 +3774,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 	}
 
 	/*
-	 * FIRE DISCIPLINE (sg_firedisc, rung-3 cadence tell -- the answer
+	 * FIRE DISCIPLINE (sg_firedisc), the answer
 	 * the tapvar family could not be). The judges read bot cadence as
 	 * needles on the refire line because the trigger is independent of
 	 * the legs: a bot mid-jink fires the frame the gun cycles. A human
@@ -3382,7 +3924,9 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 	 * mid-contact costs a full weapon cycle.
 	 */
 	if (st->post_sight >= 0.0f)
-		Combat_Arbitrate(self, st, Combat_PostWeapon(self, st->post_sight));
+		Combat_Arbitrate(self, st, st->post_defender
+		                 ? SG_CombatBestPostWeapon(self, st->post_sight)
+		                 : Combat_PostWeapon(self, st->post_sight, false));
 	else if (Combat_Carrying(self))
 		Combat_Arbitrate(self, st,
 		                 Combat_Choose(self, SG_BAND_MID, SG_R_MID, false));
@@ -3555,7 +4099,7 @@ static void Cbt_ChooseWeapon(edict_t *self, sg_combat_state_t *st,
 	want = Combat_Choose(self, band, dist, carrier);
 
 	/*
-	 * WETWORK (sg_wetwork, wave 300+). The owner's physics check that
+	 * WETWORK (sg_wetwork). The physics check that
 	 * killed the wet route cuts the other way here: a swimmer moves at
 	 * HALF wishspeed (pmove.c) and fire_rail's mask has no
 	 * CONTENTS_WATER -- rails reach into water undegraded. A swimming
@@ -3605,13 +4149,15 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	sg_combat_state_t	*st;
 	edict_t				*enemy;
 	vec3_t				eye, forward, mid, lead, aim, endp, impact;
+	vec3_t				muzzle, shotdir;
 	vec3_t				threat;
-	float				dist, held, frac, mag, len, flight;
+	float				dist, held, frac, mag, len, flight, trace_len;
+	float				source_pad;
 	float				yaw, pitch, skill, settle;
 	float				residual, span, shape;
 	trace_t				tr;
 	int					band, inhand;
-	qboolean			clear_shot, carrier, ballistic, vel_stable;
+	qboolean			clear_shot, carrier, ballistic, vel_stable, ray_hits;
 	qboolean			rattled, textured;
 
 	if (out_engaged)
@@ -3645,7 +4191,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	                                              SG_THREAT_S4), threat);
 
 	sg_cbt_why[7]++;                        /* frames that got this far */
-	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL);
+	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL, true);
 	if (enemy)
 		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)
@@ -3694,10 +4240,9 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * zero and the solve is untouched.
 	 *
 	 * It displaces the lead POINT and re-derives the aim from it, rather than
-	 * bending the aim ray on its own. That keeps the wall check below tracing
-	 * where the shot really goes and keeps the SG_HIT_SLOP test measuring
-	 * against the point actually aimed at -- so a lead error comes out as a
-	 * MISS, which is what it is, instead of a refusal to fire.
+	 * bending the aim ray on its own. That keeps the muzzle-ray wall check below
+	 * tracing the same predicted bearing the physical shot takes, so a lead
+	 * error comes out as a MISS rather than a false clear.
 	 *
 	 * Hitscan is skipped: flight is 0, there is no lead to get wrong. So is
 	 * the grenade launcher, whose aim rule F4 replaces outright below.
@@ -3724,9 +4269,9 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * replaces the aim outright, and rule F5 restricts the weapon to targets
 	 * that are not really moving -- past first contact a bouncing grenade with
 	 * a 2.5 s fuse has no predictable impact point to aim at. The arc is
-	 * solved on the clean aim and the tremor is applied after it, exactly as
-	 * for every other weapon: the predicted impact is the one the bot INTENDED,
-	 * which is what rules R1 and F5 are asking about.
+	 * solved on the clean aim.  Unlike direct fire, no synthetic error is
+	 * applied after that solve: the checked arc and the visible weapon aim must
+	 * remain the same trajectory for splash safety to mean anything.
 	 */
 	if (inhand == SG_W_GRENADELAUNCHER)
 	{
@@ -3771,15 +4316,17 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * jumping. Off, this is the code that shipped and the three tex_ lines
 	 * below are no-ops.
 	 */
-	textured = Combat_TexOn();
-
-	if (textured)
-		Combat_TexWander(st, aim);
-	else if (level.time >= st->err_next)
+	if (!ballistic)
 	{
-		Combat_SampleError(st, aim);
-		st->err_next = level.time + 0.25f + 0.25f * random();
-	}
+		textured = Combat_TexOn();
+
+		if (textured)
+			Combat_TexWander(st, aim);
+		else if (level.time >= st->err_next)
+		{
+			Combat_SampleError(st, aim);
+			st->err_next = level.time + 0.25f + 0.25f * random();
+		}
 
 	/*
 	 * The correction shape is read off the CLEAN aim, before the tremor and
@@ -3788,7 +4335,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * against a ray that already has one of them in it would fold a little of
 	 * the tremor into the correction's direction.
 	 */
-	shape = textured ? Combat_TexShape(st, aim) : 0.0f;
+		shape = textured ? Combat_TexShape(st, aim) : 0.0f;
 
 	/*
 	 * Both ends of the ramp are skill terms now. A low-skill bot starts wider,
@@ -3796,9 +4343,9 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * through; a skill-4 bot gets the exact three numbers this file shipped
 	 * with (the S4 endpoints are those constants, textually).
 	 */
-	settle = Combat_SkillLerp(skill, SG_SETTLE_S0, SG_SETTLE_S4);
-	residual = Combat_SkillLerp(skill, SG_RESIDUAL_S0, SG_RESIDUAL_S4);
-	span = Combat_SkillLerp(skill, SG_ACQUIRE_S0, SG_ACQUIRE_S4) - residual;
+		settle = Combat_SkillLerp(skill, SG_SETTLE_S0, SG_SETTLE_S4);
+		residual = Combat_SkillLerp(skill, SG_RESIDUAL_S0, SG_RESIDUAL_S4);
+		span = Combat_SkillLerp(skill, SG_ACQUIRE_S0, SG_ACQUIRE_S4) - residual;
 
 	/*
 	 * Textured, the window is this acquisition's -- the skill span above,
@@ -3807,38 +4354,47 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * tex_win is zero, tex_over is zero, and both lines below are the
 	 * arithmetic that shipped.
 	 */
-	if (textured && st->tex_win > 0.0f)
-		settle = st->tex_win;
-	if (textured)
-		span = Combat_TexSpan(span, residual, st->tex_over);
+		if (textured && st->tex_win > 0.0f)
+			settle = st->tex_win;
+		if (textured)
+			span = Combat_TexSpan(span, residual, st->tex_over);
 
-	held = level.time - st->since;
-	frac = (held >= settle) ? 0.0f : (1.0f - held / settle);
-	mag = (float)tan((residual + span * frac) * M_PI / 180.0);
+		held = level.time - st->since;
+		frac = (held >= settle) ? 0.0f : (1.0f - held / settle);
+		mag = (float)tan((residual + span * frac) * M_PI / 180.0);
 
-	VectorMA(aim, mag, st->err, aim);
-	if (shape != 0.0f)
-		VectorMA(aim, (float)tan((double)(st->tex_over * shape)
-		                         * M_PI / 180.0), st->tex_dir, aim);
-	VectorNormalize(aim);
+		VectorMA(aim, mag, st->err, aim);
+		if (shape != 0.0f)
+			VectorMA(aim, (float)tan((double)(st->tex_over * shape)
+			                         * M_PI / 180.0), st->tex_dir, aim);
+		VectorNormalize(aim);
+	}
 
 	/* ------------------------------------------------------------- the view
 	 *
-	 * Same convention the Body uses to steer (sg_arach.c:612-617): yaw from
-	 * atan2 of the ground components, pitch negated because Quake pitch is
-	 * positive downward, both converted with ANGLE2SHORT and biased by the
-	 * client's delta_angles so the server resolves to the angle we asked for.
+	 * A grenade owns its existing ballistic pitch solve unchanged.  Every other
+	 * weapon is packed, unpacked and constrained from its real muzzle until the
+	 * final physical ray is inside the target's live-size box.
 	 */
-	yaw = (float)(atan2(aim[1], aim[0]) * 180.0 / M_PI);
-	pitch = (float)(-asin(aim[2]) * 180.0 / M_PI);
-
-	cmd->angles[YAW] = ANGLE2SHORT(yaw)
-	                 - self->client->ps.pmove.delta_angles[YAW];
-	cmd->angles[PITCH] = ANGLE2SHORT(pitch)
-	                   - self->client->ps.pmove.delta_angles[PITCH];
-
-	if (inhand < 0)
-		return;					/* aim is written; there is no shot to take */
+	ray_hits = false;
+	source_pad = 0.0f;
+	if (inhand < 0 || ballistic)
+	{
+		yaw = (float)(atan2(aim[1], aim[0]) * 180.0 / M_PI);
+		pitch = (float)(-asin(aim[2]) * 180.0 / M_PI);
+		cmd->angles[YAW] = (short)(ANGLE2SHORT(yaw)
+		                         - self->client->ps.pmove.delta_angles[YAW]);
+		cmd->angles[PITCH] = (short)(ANGLE2SHORT(pitch)
+		                           - self->client->ps.pmove.delta_angles[PITCH]);
+		if (inhand < 0)
+			return;				/* aim is written; there is no shot to take */
+	}
+	else
+	{
+		ray_hits = Combat_FinalizeMuzzleAim(self, enemy, inhand, lead, st,
+		                                     aim, cmd, muzzle, shotdir,
+		                                     &source_pad);
+	}
 
 	/*
 	 * The ballistic case never runs the straight-line wall check: the shot
@@ -3863,48 +4419,46 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	{
 		/* --------------------------------------------------- the wall check
 		 *
-		 * Legacy bots declined to fire 37-43% of the time because they shot
-		 * into geometry. The fix is not a heuristic: trace the projectile's own
-		 * path with its own clipmask (MASK_SHOT, g_weapon.c:360) and only pull
-		 * the trigger if it arrives. `self` is the pass entity, so we do not
-		 * trace against ourselves, exactly as a bolt does not collide with its
-		 * owner.
-		 *
-		 * Accepted if the trace lands ON the enemy, or if it stops within
-		 * SG_HIT_SLOP of the aim point -- the second case covers a shot that
-		 * passes close enough to still connect on a target that has moved a
-		 * little inside its own bounding box.
+		 * This starts at the exact final muzzle, not the eye.  Hitscan needs a
+		 * real target hit.  A direct projectile may either hit the current enemy
+		 * or have an unobstructed line through its predicted lead point; a wall
+		 * or teammate is never promoted to a clear shot by endpoint proximity.
 		 */
-		VectorMA(eye, len, aim, endp);
-		tr = sg_host.trace(eye, NULL, NULL, endp, self, MASK_SHOT);
-		VectorCopy(tr.endpos, impact);
-
-		clear_shot = false;
+		VectorSubtract(lead, muzzle, endp);
+		trace_len = VectorLength(endp) + 64.0f;
+		VectorMA(muzzle, trace_len, shotdir, endp);
+		tr = sg_host.trace(muzzle, NULL, NULL, endp, self, MASK_SHOT);
 		if (tr.ent == enemy)
-		{
-			clear_shot = true;
-		}
+			VectorCopy(tr.endpos, impact);
 		else
+			VectorCopy(lead, impact);
+
+		clear_shot = ray_hits && Combat_TraceClears(inhand,
+		                                             tr.ent == enemy,
+		                                             tr.fraction >= 1.0f,
+		                                             tr.ent && tr.ent->client &&
+		                                             tr.ent != enemy &&
+		                                             OnSameTeam(self, tr.ent));
+
+		/* Chaingun_Fire randomises its source by four units in both lateral
+		 * axes.  Keep the nominal ray for its target test, then sweep that whole
+		 * source box as a guard: any possible muzzle that would meet a wall or a
+		 * teammate vetoes the trigger. */
+		if (clear_shot && source_pad > 0.0f)
 		{
-			vec3_t miss;
+			vec3_t padmins, padmaxs;
+			trace_t guard;
 
-			VectorSubtract(tr.endpos, lead, miss);
-			if (VectorLength(miss) <= SG_HIT_SLOP)
-				clear_shot = true;
+			VectorSet(padmins, -source_pad, -source_pad, -source_pad);
+			VectorSet(padmaxs, source_pad, source_pad, source_pad);
+			guard = sg_host.trace(muzzle, padmins, padmaxs, endp, self,
+			                      MASK_SHOT);
+			if (guard.fraction < 1.0f && guard.ent != enemy)
+				clear_shot = false;
+			if (guard.ent && guard.ent->client && guard.ent != enemy &&
+			    OnSameTeam(self, guard.ent))
+				clear_shot = false;
 		}
-
-		/*
-		 * Rule F7's teammate clause, generalised. The railgun pierces every
-		 * client it hits (g_weapon.c:764-767), so a teammate in the line is
-		 * still hit even when the enemy behind is reached; every other weapon
-		 * simply stops on him. Either way the shot is refused unless friendly
-		 * fire is off (DF_NO_FRIENDLY_FIRE, q_shared.h:1004, tested at
-		 * g_combat.c:438).
-		 */
-		if (tr.ent && tr.ent->client && tr.ent != enemy &&
-		    OnSameTeam(self, tr.ent) &&
-		    !(((int)dmflags->value) & DF_NO_FRIENDLY_FIRE))
-			clear_shot = false;
 
 		/*
 		 * WEAPONS.md 2.4-D1's one case where deliberately missing is correct:
@@ -3924,23 +4478,22 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 			if (fl.fraction < 1.0f)
 			{
 				trace_t path;
-				float	reach;
 
-				path = sg_host.trace(eye, NULL, NULL, fl.endpos, self, MASK_SHOT);
-				VectorSubtract(path.endpos, fl.endpos, v);
-				reach = VectorLength(v);
-				if (reach <= SG_HIT_SLOP)
+				VectorSubtract(fl.endpos, muzzle, aim);
+				if (VectorNormalize(aim) >= 1.0f &&
+				    Combat_FinalizePointRay(self, inhand, fl.endpos, aim, cmd,
+				                            muzzle, shotdir, &source_pad))
 				{
-					VectorCopy(path.endpos, impact);
-					VectorSubtract(fl.endpos, eye, aim);
-					len = VectorNormalize(aim);
-					yaw = (float)(atan2(aim[1], aim[0]) * 180.0 / M_PI);
-					pitch = (float)(-asin(aim[2]) * 180.0 / M_PI);
-					cmd->angles[YAW] = ANGLE2SHORT(yaw)
-					                 - self->client->ps.pmove.delta_angles[YAW];
-					cmd->angles[PITCH] = ANGLE2SHORT(pitch)
-					                   - self->client->ps.pmove.delta_angles[PITCH];
-					clear_shot = true;
+					path = sg_host.trace(muzzle, NULL, NULL, fl.endpos, self,
+					                     MASK_SHOT);
+					VectorSubtract(path.endpos, fl.endpos, v);
+					if (VectorLength(v) <= 1.0f &&
+					    !(path.ent && path.ent->client &&
+					      path.ent != enemy && OnSameTeam(self, path.ent)))
+					{
+						VectorCopy(fl.endpos, impact);
+						clear_shot = true;
+					}
 				}
 			}
 		}
@@ -4066,3 +4619,87 @@ void SG_CombatWhy(void)
 				           w, sg_cbt_fire[w], sg_cbt_hit[w]);
 	}
 }
+
+#ifdef SG_COMBAT_AIM_TEST
+/*
+ * A deliberately narrow compiled seam for tests.  It exposes the production
+ * pack -> muzzle -> constrain loop without adding a runtime API or depending
+ * on a fake trace host.  The test supplies a centre plus live mins/maxs and
+ * independently checks the returned physical ray against that box.
+ */
+int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
+                             int gunframe, float viewheight,
+                             const vec3_t origin,
+                             const vec3_t lead, const vec3_t mins,
+                             const vec3_t maxs, const vec3_t requested,
+                             float elapsed, vec3_t muzzle_out,
+                             vec3_t dir_out, float *source_pad_out)
+{
+	edict_t		self, enemy;
+	gclient_t	client;
+	sg_combat_state_t st;
+	usercmd_t	cmd;
+	vec3_t		aim, lead_copy;
+	float		saved_time = level.time;
+	qboolean	ok;
+
+	memset(&self, 0, sizeof(self));
+	memset(&enemy, 0, sizeof(enemy));
+	memset(&client, 0, sizeof(client));
+	memset(&st, 0, sizeof(st));
+	memset(&cmd, 0, sizeof(cmd));
+	self.client = &client;
+	self.viewheight = viewheight;
+	VectorCopy(origin, self.s.origin);
+	client.pers.hand = hand;
+	client.machinegun_shots = machinegun_shots;
+	client.ps.gunframe = gunframe;
+	VectorCopy(mins, enemy.mins);
+	VectorCopy(maxs, enemy.maxs);
+	VectorCopy(requested, aim);
+	if (VectorNormalize(aim) <= 0.0001f)
+		return 0;
+	VectorCopy(lead, lead_copy);
+	st.since = 0.0f;
+	level.time = elapsed;
+	ok = Combat_FinalizeMuzzleAim(&self, &enemy, weapon, lead_copy, &st, aim,
+	                              &cmd, muzzle_out, dir_out, source_pad_out);
+	level.time = saved_time;
+	return ok ? 1 : 0;
+}
+
+int SG_CombatAimTestWeaponRay(int weapon, int hand, int machinegun_shots,
+                              int gunframe, float viewheight,
+                              const vec3_t origin,
+                              const vec3_t shot, vec3_t muzzle_out,
+                              vec3_t dir_out, float *source_pad_out)
+{
+	edict_t		self;
+	gclient_t	client;
+	usercmd_t	cmd;
+	vec3_t		shot_copy;
+
+	memset(&self, 0, sizeof(self));
+	memset(&client, 0, sizeof(client));
+	memset(&cmd, 0, sizeof(cmd));
+	self.client = &client;
+	self.viewheight = viewheight;
+	VectorCopy(origin, self.s.origin);
+	client.pers.hand = hand;
+	client.machinegun_shots = machinegun_shots;
+	client.ps.gunframe = gunframe;
+	VectorCopy(shot, shot_copy);
+	if (VectorNormalize(shot_copy) <= 0.0001f)
+		return 0;
+	Combat_WriteShotCmd(&self, weapon, shot_copy, &cmd);
+	return Combat_WeaponRay(&self, weapon, &cmd, muzzle_out, dir_out,
+	                        source_pad_out) ? 1 : 0;
+}
+
+int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
+                               int teammate_hit)
+{
+	return Combat_TraceClears(weapon, enemy_hit != 0, unobstructed != 0,
+	                          teammate_hit != 0) ? 1 : 0;
+}
+#endif

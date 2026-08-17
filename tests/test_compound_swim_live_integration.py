@@ -29,12 +29,7 @@ def test_all_compound_metadata_stays_dormant() -> None:
     assert set(actions) >= {9, 10, 11}
     for action_id in (9, 10, 11):
         assert actions[action_id]["runtime_supported"] == 0
-        assert actions[action_id]["controller_revision"] == 0
 
-    assert "#define SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION 0" in HEADER
-    assert "#define SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION 0" in HEADER
-    assert "#define SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION 0" in HEADER
-    assert "SG_COMPOUND_CONTROLLER_REVISION" not in HEADER
     assert "X(RL_DOOR_DROP, 9, 0," in CONTRACT
     assert "X(RL_DOOR_SWIM, 10, 0," in CONTRACT
     assert "X(RL_DOOR_HOOK, 11, 0," in CONTRACT

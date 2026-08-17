@@ -1,18 +1,27 @@
-# SLIPGATE priority map list -- from demo popularity analysis.
+# SLIPGATE top-20 map rotation -- from the usable human-demo corpus.
+# Ranked by total usable client-demo duration after case-folding map names.
 # One mapname per line, in priority order. Lines starting with # are
-# comments. Consumed by tools/runegen.sh, e.g.:
+# comments. Consumed by iterate2.sh and tools/runegen.sh, e.g.:
 #
 #   tools/runegen.sh $(grep -v '^#' tools/topmaps.txt)
 #
-lmctf01
 lmctf09
+lmctf57
+smap05
+smap30
+lmctf48
+smap33
+lmctf32
 lmctf22
 lmctf41
-lmctf44
 mactf06
-lmctf26
+xmap20
+lmctf44
+lmctf35
+lmctf52
 lmctf58
-lmctf74
-smap05
-lmctf03
-lmctf05
+lmctf39
+lmctf26
+smap26
+lmctf54
+lmctf31

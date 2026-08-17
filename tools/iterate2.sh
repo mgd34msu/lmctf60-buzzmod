@@ -13,6 +13,26 @@
 # duplicate Q2's RNG), flags travel by per-server cfg (argv ceiling),
 # maplist_file defused (the deferred-gamemap join bomb), overlap guard.
 
+# POV authority begins only for the exact opt-in value.  Re-open this source
+# before any POV path access and run the already-open bytes in a sterile Bash.
+if [[ ${POV_ENABLE-} == 1 && ! ${BASH_SOURCE[0]} =~ ^/proc/self/fd/[0-9]+$ ]]; then
+    ITERATE_SOURCE_DIR=${BASH_SOURCE[0]%/*}
+    [[ $ITERATE_SOURCE_DIR != "${BASH_SOURCE[0]}" ]] || ITERATE_SOURCE_DIR=.
+    ITERATE_TRUSTED_SCRIPT_DIR=$(builtin cd -P -- "$ITERATE_SOURCE_DIR" && builtin pwd) || exit 2
+    exec {ITERATE_SOURCE_FD}<"${BASH_SOURCE[0]}" || exit 2
+    CLEAN_ENV=(POV_ENABLE=1 "ITERATE_TRUSTED_SCRIPT_DIR=$ITERATE_TRUSTED_SCRIPT_DIR")
+    for clean_name in HOME USER LANG Q2DED GAMEDIR_ROOT GAME CFG PORT_BASE \
+        YAMAGI_CLIENT POV_FINALIZE_DELAY DISPLAY WAYLAND_DISPLAY XAUTHORITY \
+        XDG_RUNTIME_DIR PULSE_SERVER; do
+        if [[ -v $clean_name ]]; then
+            CLEAN_ENV+=("$clean_name=${!clean_name}")
+        fi
+    done
+    LD_PRELOAD= LD_LIBRARY_PATH= LD_AUDIT= GLIBC_TUNABLES= \
+        exec /usr/bin/env -i "${CLEAN_ENV[@]}" /bin/bash --noprofile --norc \
+        "/proc/self/fd/$ITERATE_SOURCE_FD" "$@"
+fi
+
 set -u
 
 Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
@@ -20,13 +40,32 @@ GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
 PORT_BASE="${PORT_BASE:-28520}"
+POV_ENABLED=0
+if [[ ${POV_ENABLE-} == 1 ]]; then
+    POV_ENABLED=1
+    YAMAGI_CLIENT="${YAMAGI_CLIENT:-$HOME/Games/Quake2/engines/yquake2/release/quake2}"
+    POV_FINALIZE_DELAY="${POV_FINALIZE_DELAY:-3}"
+    [[ $POV_FINALIZE_DELAY =~ ^[1-9][0-9]*$ ]] || {
+        echo "POV_FINALIZE_DELAY must be positive" >&2
+        exit 2
+    }
+fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ((POV_ENABLED)); then
+    SCRIPT_DIR=$ITERATE_TRUSTED_SCRIPT_DIR
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 NAME="$1"
 LOG_DIR="$SCRIPT_DIR/iter-$NAME"
-mkdir -p "$LOG_DIR"
+if ((POV_ENABLED)); then
+    /usr/bin/mkdir -p "$LOG_DIR"
+else
+    mkdir -p "$LOG_DIR"
+fi
 
-if pgrep -x q2ded >/dev/null 2>&1; then
+if { ((POV_ENABLED)) && /usr/bin/pgrep -x q2ded >/dev/null 2>&1; } ||
+   { ((!POV_ENABLED)) && pgrep -x q2ded >/dev/null 2>&1; }; then
     echo "q2ded already running; refusing to overlap fleets" >&2
     exit 3
 fi
@@ -44,30 +83,41 @@ fi
 # 301: defense A/B moves to the farms (they concede 1-7/wave -- the
 # sensitive instrument; mactf06 concedes nothing to anyone). s08 back
 # to 7v7 density coverage.
-# v4 canaries: s02 = the PERMANENT no-opposition canary (5v0 smap05 --
-# flawless execution on film or the build is broken); s10 = the fixed-
-# matchup canary (5v1 smap05, must hold its band).
-LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-5v5  s09-ctrl s10-5v5)
-# lane A/B moved to mactf06 (coverage 29/48 -- THE lane map; lmctf22
-# reads 12/48, too weak to show the doctrine). lmctf22 keeps coverage
-# on s05.
-# s06/s07 on lmctf44 for the MEGAWORTH A/B (2 megas, no quad -- the
-# clean mega environment; the comm stack is adopted fleet-wide so the
-# quad-map duty is done). BSP census is the map-picker's law now.
-# s10 -> lmctf57 (corpus manifest 2026-08-07): 69 usable human minutes
-# there and zero bot film; 18 maps are blind-set capable and we have
-# judged on two. s10 farms fight/team/outcome film on the widest-corpus
-# map we never play. Route sheets still need node fixtures -- unchanged.
-# s05+s08 PAIRED 2026-08-07 (owner: everything concurrent that can be):
-# third trial pair, lmctf22 5v5 both, s08 the control arm. lmctf09 7v7
-# coverage was complete; three pairs beat one farm.
-# s06/s07 moved off lmctf44 2026-08-12: the map produces ~one steal per
-# 50 minutes on BOTH arms (43k stand-arrivals, zero 3s-grabs, strictgrab
-# irrelevant) -- navigation never completes a steal there, so any trial
-# on the pair was inert-by-map (the dither null is re-qualified: bad map
-# choice, not just a dead mechanism). lmctf44 filed for rune diagnosis.
-MAPS=(  lmctf03  smap05   mactf06  mactf06  lmctf22   lmctf09  lmctf09   lmctf22  lmctf01  lmctf57)
-FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "5"      "5"      "5")
+# RUNE canaries: s02 is the permanent no-opposition lane and s10 is the
+# fixed-matchup lane.  Their roster shapes stay fixed while their maps rotate.
+LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v5)
+# Map identity rotates independently of roster shape.  topmaps.txt is the
+# ranked 20-map human-demo corpus.  Even offsets spread ten servers across
+# half the pool each wave; advancing the wave by one covers the other half,
+# so two consecutive waves cover all 20 maps and every lane visits all 20.
+MAP_POOL=()
+while IFS= read -r map || [[ -n $map ]]; do
+    [[ -z $map || $map == \#* ]] && continue
+    if [[ ! $map =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$ ]]; then
+        echo "invalid map in $SCRIPT_DIR/topmaps.txt: $map" >&2
+        exit 2
+    fi
+    for existing_map in "${MAP_POOL[@]}"; do
+        if [[ $existing_map == "$map" ]]; then
+            echo "duplicate map in $SCRIPT_DIR/topmaps.txt: $map" >&2
+            exit 2
+        fi
+    done
+    MAP_POOL+=("$map")
+done < "$SCRIPT_DIR/topmaps.txt"
+if ((${#MAP_POOL[@]} != 20)); then
+    echo "expected exactly 20 maps in $SCRIPT_DIR/topmaps.txt" >&2
+    exit 2
+fi
+WAVE_NUMBER=${NAME//[!0-9]/}
+[[ -n $WAVE_NUMBER ]] || WAVE_NUMBER=0
+WAVE_NUMBER=$((10#$WAVE_NUMBER))
+MAP_OFFSETS=(0 2 4 6 8 10 12 14 16 18)
+MAPS=()
+for map_slot in 0 1 2 3 4 5 6 7 8 9; do
+    MAPS[$map_slot]=${MAP_POOL[$(( (WAVE_NUMBER + MAP_OFFSETS[map_slot]) % 20 ))]}
+done
+FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
 # 295 relayout: ONE variable per pair (284-294 stacked escape+movement
 # trials on shared servers -- reads were cross-contaminated).
@@ -220,11 +270,11 @@ RAILLANE=(1      1        1        1        1         1        1         1      
 # "rope vs brush": every bot traversal lands on the same polyline.
 # Per-leg persistent lateral offset (value = max units). A/B s03 ON
 # vs s04 OFF; the verdict is the NEXT FILM, not a number.
-# ribbon NULL, both versions and doses (351-357 pooled 32.8v34.1u):
+# ribbon NULL, both variants and doses (351-357 pooled 32.8v34.1u):
 # aim offsets are re-centered by the steering stack. Ledger. The band
 # is ROUTE diversity -- see ROUTEJITTER.
 # ribbon RESURRECTED (376+): its "null" was measured on the morgue'd
-# corridor-std metric -- but the v1 film showed railroad lanes, i.e.
+# corridor-std metric -- but the RUNE film showed railroad lanes, i.e.
 # the mechanism DOES move the body. The fair judges' last tell is the
 # needle-over-empty-base, exactly what a drifting per-traversal offset
 # fills. A/B s03 ON (48u drift) vs s04 control; verdict on parity film
@@ -339,7 +389,7 @@ AIMTEX=(1     1        1        1        1         1        1         1        0
 # dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
 # into the human band on the next route sheets; caps must not fall; the
 # 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-# FREERIDE v2 struck 2026-08-08: off-graph 0.024 vs 0.027 -- and the
+# FREERIDE follow-up struck 2026-08-08: off-graph 0.024 vs 0.027 -- and the
 # arithmetic seals the family: doubled ride volume is ~0.3% of player
 # time against a 3-18% human band. The tell is LOCOMOTION IDENTITY --
 # humans travel by rope. Rope-primary travel is the named rung-2
@@ -396,7 +446,7 @@ RAILRHYTHM=(0  0        0        0        0         0        0         0        
 # defensive metric (grind 16.35 v 16.36, guard 0.48 v 0.49, approach
 # 3.50 v 3.49). Walking legs neither helped nor hurt; the grind gap
 # needs a different lever.
-PATROL=(0      0        0        0        0         0        0         0        0        0)
+PATROL=(1      1        1        1        1         1        1         1        1        1)
 
 # Grind lever search 2026-08-12: patrol struck null, and defpost is
 # already permanently parked above (posts concede more). No third guess
@@ -522,20 +572,43 @@ COVER=(  800 800 800 800 800 800 800 800 0 0 )
 # the ramp is scenery, not a variable.
 STAGGER=(0       0        1        1        0         0        0         0        0        1)
 
+declare -a FLEET_PIDS
+iterate_delay() {
+    if ((POV_ENABLED)); then
+        /usr/bin/sleep "$1"
+    else
+        sleep "$1"
+    fi
+}
+if ((POV_ENABLED)); then
+    ITERATE_SOURCE_IMAGE_FD=${BASH_SOURCE[0]##*/}
+    [[ $ITERATE_SOURCE_IMAGE_FD =~ ^[0-9]+$ ]] || exit 2
+    exec {POV_SUPERVISOR_FD}<"$SCRIPT_DIR/pov-supervisor" || exit 2
+fi
 for i in 0 1 2 3 4 5 6 7 8 9; do
+    NORMAL_LOG="$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
+    CHILD_LOG="$NORMAL_LOG"
+    POV_SELECTED=0
+    if ((POV_ENABLED)) && [[ $i == 2 ]]; then
+        POV_SELECTED=1
+        CHILD_LOG="$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.pov-launch.log"
+    fi
     (
         (
-            sleep 20
+            if ((POV_SELECTED)); then
+                exit 0
+            fi
+            iterate_delay 20
             echo "serverrecord wave$NAME-${LABELS[$i]}"
             if [ "${STAGGER[$i]}" = "1" ]; then
-                sleep 65;  echo "set sv_botfill \"3:3\""
-                sleep 70;  echo "set sv_botfill \"4:4\""
-                sleep 75;  echo "set sv_botfill \"5:5\""
-                sleep 240; echo "set sv_botfill \"5:4\""
-                sleep 65;  echo "set sv_botfill \"5:5\""
-                sleep $(( ${SECS[$i]} - 515 ))
+                iterate_delay 65;  echo "set sv_botfill \"3:3\""
+                iterate_delay 70;  echo "set sv_botfill \"4:4\""
+                iterate_delay 75;  echo "set sv_botfill \"5:5\""
+                iterate_delay 240; echo "set sv_botfill \"5:4\""
+                iterate_delay 65;  echo "set sv_botfill \"5:5\""
+                iterate_delay $(( ${SECS[$i]} - 515 ))
             else
-                sleep "${SECS[$i]}"
+                iterate_delay "${SECS[$i]}"
             fi
             echo "quit"
         ) | (
@@ -624,19 +697,76 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 fi
                 echo "set sg_approachcover ${APPCOVER[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
-            cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
-                timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \
-                "$Q2DED" +set game "$GAME" +set dedicated 1 \
-                +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
-                +exec "$WCFG" +map "${MAPS[$i]}"
-        ) > "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log" 2>&1
+            if ((POV_SELECTED)); then
+                # This shell execs the supervisor, so pin the generation of
+                # its real Linux parent (the pipeline's waiting shell). Bash's
+                # PPID/$$ values are not the OS parent in a backgrounded
+                # pipeline; field 4 of this shell's /proc stat is authoritative.
+                IFS= read -r parent_stat < "/proc/$BASHPID/stat" || exit 2
+                parent_tail=${parent_stat##*) }
+                read -r -a parent_fields <<< "$parent_tail"
+                (( ${#parent_fields[@]} > 19 )) || exit 2
+                [[ ${parent_fields[1]} =~ ^[1-9][0-9]*$ ]] || exit 2
+                [[ ${parent_fields[19]} =~ ^[1-9][0-9]*$ ]] || exit 2
+                parent_pid=${parent_fields[1]}
+                parent_start=${parent_fields[19]}
+                exec "/proc/self/fd/$POV_SUPERVISOR_FD" \
+                    --q2ded "$Q2DED" \
+                    --client "$YAMAGI_CLIENT" --gamedir-root "$GAMEDIR_ROOT" \
+                    --game "$GAME" --config "$GAMEDIR_ROOT/$GAME/$WCFG" --normal-log "$NORMAL_LOG" \
+                    --lane-root "$LOG_DIR" --wave "$NAME" --server s03 \
+                    --map "${MAPS[$i]}" --port "$((PORT_BASE + i))" \
+                    --spectator pov_s03 --target '[SG]Arach' \
+                    --duration "${SECS[$i]}" --stagger "${STAGGER[$i]}" \
+                    --finalize-delay "$POV_FINALIZE_DELAY" \
+                    --supervisor-fd "$POV_SUPERVISOR_FD" \
+                    --iterate-fd "$ITERATE_SOURCE_IMAGE_FD" \
+                    --parent-pid "$parent_pid" --parent-start "$parent_start"
+            else
+                if ((POV_ENABLED)); then
+                    cd "$GAMEDIR_ROOT" && /usr/bin/stdbuf -oL -eL \
+                        /usr/bin/timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \
+                        "$Q2DED" +set game "$GAME" +set dedicated 1 \
+                        +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
+                        +exec "$WCFG" +map "${MAPS[$i]}"
+                else
+                    cd "$GAMEDIR_ROOT" && stdbuf -oL -eL \
+                        timeout $(( 8 + 20 + ${SECS[$i]} + 8 )) \
+                        "$Q2DED" +set game "$GAME" +set dedicated 1 \
+                        +set port $(( PORT_BASE + i )) +set net_port $(( PORT_BASE + i )) +set maxclients 16 \
+                        +exec "$WCFG" +map "${MAPS[$i]}"
+                fi
+            fi
+        ) > "$CHILD_LOG" 2>&1
     ) &
-    sleep 7
+    FLEET_PIDS[$i]=$!
+    if ((POV_ENABLED)); then
+        /usr/bin/sleep 7
+    else
+        sleep 7
+    fi
 done
-wait
+if ((!POV_ENABLED)); then
+    wait
+    echo "=== WAVE $NAME (free layout) ==="
+    for i in 0 1 2 3 4 5 6 7 8 9; do
+        echo "---- ${LABELS[$i]} ${MAPS[$i]} fill=${FILLS[$i]} ${SECS[$i]}s ----"
+        "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
+    done
+    exit $?
+fi
+POV_STATUS=0
+for i in 0 1 2 3 4 5 6 7 8 9; do
+    if ! wait "${FLEET_PIDS[$i]}"; then
+        if [[ $i == 2 ]]; then
+            POV_STATUS=1
+        fi
+    fi
+done
 
 echo "=== WAVE $NAME (free layout) ==="
 for i in 0 1 2 3 4 5 6 7 8 9; do
     echo "---- ${LABELS[$i]} ${MAPS[$i]} fill=${FILLS[$i]} ${SECS[$i]}s ----"
-    "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
+    /bin/bash --noprofile --norc "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
 done
+exit "$POV_STATUS"

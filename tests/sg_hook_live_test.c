@@ -1,4 +1,4 @@
-/* Direct host-free tests for the ordinary revision-2 RL_HOOK adapter. */
+/* Direct host-free tests for the ordinary RL_HOOK adapter. */
 #include "q_shared.h"
 
 #include <math.h>

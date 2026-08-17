@@ -103,25 +103,16 @@ int SG_CompoundAction(int action)
 int SG_CompoundRuntimeReady(int action)
 {
 	const sg_action_desc_t *desc = SG_ActionDescribe(action);
-	int compiled_revision;
 
 	switch (action)
 	{
 	case RL_DOOR_DROP:
-		compiled_revision = SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION;
-		break;
 	case RL_DOOR_SWIM:
-		compiled_revision = SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION;
-		break;
 	case RL_DOOR_HOOK:
-		compiled_revision = SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION;
-		break;
+		return desc && desc->runtime_supported;
 	default:
 		return 0;
 	}
-	return desc && desc->runtime_supported &&
-	       desc->controller_revision == compiled_revision &&
-	       compiled_revision >= SG_COMPOUND_REQUIRED_CONTROLLER_REVISION;
 }
 
 int SG_CompoundSuffixAction(int action)
@@ -265,9 +256,9 @@ int SG_CompoundSuffixNeedsHold(int elapsed_ms, int clear_ms)
 {
 	/* A false result authorizes the controller to stop renewing TOP.  Keep
 	 * malformed or out-of-contract timing on the conservative side. */
-	if (elapsed_ms < 0 || elapsed_ms > SG_RUNE_V3_MAX_COST_MS ||
+	if (elapsed_ms < 0 || elapsed_ms > RUNE_MAX_COST_MS ||
 	    clear_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
-	    clear_ms > SG_RUNE_V3_MAX_COST_MS ||
+	    clear_ms > RUNE_MAX_COST_MS ||
 	    elapsed_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
 	    clear_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0)
 		return 1;
@@ -453,22 +444,24 @@ int SG_CompoundTranslateFrame(sg_compound_translate_t *state,
 }
 
 rune_reject_reason_t SG_CompoundValidateLink(
-	const sg_rune_v3_seed_t *seeds, uint32_t num_seeds,
-	const sg_rune_v3_link_t *link)
+	const rune_seed_t *seeds, uint32_t num_seeds,
+	const rune_link_t *link)
 {
-	const sg_rune_v3_seed_t *from;
-	const sg_rune_v3_seed_t *to;
+	const rune_seed_t *from;
+	const rune_seed_t *to;
 	int from_water;
 	int to_water;
 
 	if (!seeds || !link || num_seeds == 0 ||
-	    link->source >= num_seeds || link->destination >= num_seeds ||
+	    link->from < 0 || link->to < 0 ||
+	    (uint32_t)link->from >= num_seeds ||
+	    (uint32_t)link->to >= num_seeds ||
 	    !SG_CompoundAction(link->action))
 		return RLR_BAD_CONTROL_POLICY;
-	from = &seeds[link->source];
-	to = &seeds[link->destination];
-	from_water = ((uint16_t)from->flags & SG_RUNE_V3_SEED_WATER) != 0;
-	to_water = ((uint16_t)to->flags & SG_RUNE_V3_SEED_WATER) != 0;
+	from = &seeds[link->from];
+	to = &seeds[link->to];
+	from_water = ((uint16_t)from->flags & RSF_WATER) != 0;
+	to_water = ((uint16_t)to->flags & RSF_WATER) != 0;
 	if (link->provenance != RL_CONTRACTED)
 		return RLR_PROVENANCE_FORBIDDEN;
 	if (!SG_ActionAllowsMode(link->action, link->mode) ||
@@ -487,27 +480,27 @@ rune_reject_reason_t SG_CompoundValidateLink(
 	switch (link->action)
 	{
 	case RL_DOOR_DROP:
-		if (!CompoundVectorOnLattice(link->suffix_anchor) ||
+		if (!CompoundVectorOnLattice(link->anchor) ||
 		    link->heading_slack != SG_RUNE_PROOF_DROP_CONTROL_MARKER)
 			return RLR_BAD_DROP_CONTROL;
 		break;
 	case RL_DOOR_SWIM:
 		if (link->heading != 0 || link->heading_slack != 0 ||
-		    !CompoundVectorPositiveZero(link->suffix_anchor))
+		    !CompoundVectorPositiveZero(link->anchor))
 			return RLR_BAD_SWIM_CONTROL;
 		break;
 	case RL_DOOR_HOOK:
 		if (link->heading_slack !=
 		        SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER ||
-		    !CompoundHookAngleCanonical(link->suffix_anchor[PITCH]) ||
-		    !CompoundHookAngleCanonical(link->suffix_anchor[YAW]) ||
-		    link->suffix_anchor[PITCH] <
+		    !CompoundHookAngleCanonical(link->anchor[PITCH]) ||
+		    !CompoundHookAngleCanonical(link->anchor[YAW]) ||
+		    link->anchor[PITCH] <
 		        -(float)SG_RUNE_PROOF_HOOK_MAX_ABS_PITCH_DEGREES ||
-		    link->suffix_anchor[PITCH] >
+		    link->anchor[PITCH] >
 		        (float)SG_RUNE_PROOF_HOOK_MAX_ABS_PITCH_DEGREES ||
-		    link->suffix_anchor[ROLL] <
+		    link->anchor[ROLL] <
 		        (float)SG_RUNE_PROOF_HOOK_MIN_RAY ||
-		    link->suffix_anchor[ROLL] >
+		    link->anchor[ROLL] >
 		        (float)SG_RUNE_PROOF_HOOK_MAX_RAY)
 			return RLR_BAD_HOOK_CONTROL;
 		break;

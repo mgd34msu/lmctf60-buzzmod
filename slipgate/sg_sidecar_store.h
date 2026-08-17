@@ -20,7 +20,7 @@ typedef enum sg_sidecar_revalidate_e
  * immediately following atomic replacement; DRIFT is a clean state mismatch;
  * ERROR is an I/O or authority-capture failure and reports its OS error. */
 typedef sg_sidecar_revalidate_t (*sg_sidecar_store_revalidate_fn)(
-	void *context, const sg_rune_v3_header_t *rune, int *os_error_out);
+	void *context, const rune_artifact_t *artifact, int *os_error_out);
 
 /* All scalar callbacks return zero on success and nonzero on failure.  A zero
  * reported OS error on failure is normalized to EIO.  open_exclusive must use
@@ -73,19 +73,11 @@ typedef struct sg_sidecar_store_result_s
 	int durability_complete;
 } sg_sidecar_store_result_t;
 
-void SG_SidecarV3DefaultStoreOps(sg_sidecar_store_ops_t *ops_out);
+void SG_SidecarDefaultStoreOps(sg_sidecar_store_ops_t *ops_out);
 
-/* Persist one already-encoded sidecar only after independently authenticating
- * its exact header binding, payload CRC, and payload values.  Seed-indexed
- * kinds require the bound rune's live-owner marks; link-indexed kinds ignore
- * them.  Every pre-replacement failure leaves the old destination intact and
- * attempts to remove only the temporary file created by this call.  A failure
- * at SCS_DIRECTORY_SYNC is post-commit: replacement_complete is true while
- * durability_complete is false.  This function never mutates caller dirty
- * state; only the caller may retire or retry that state from the result. */
-sg_sidecar_store_result_t SG_SidecarV3StoreFile(
+sg_sidecar_store_result_t SG_SidecarStoreFile(
 	const char *game_directory, sg_sidecar_kind_t kind,
-	const sg_rune_v3_header_t *rune,
+	const rune_artifact_t *artifact,
 	const uint8_t *live_seed_marks, size_t live_seed_capacity,
 	const unsigned char *encoded, size_t encoded_size,
 	sg_sidecar_store_revalidate_fn revalidate, void *revalidate_context,

@@ -791,6 +791,9 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 	{
 		extern int meansOfDeath;
 
+		/* Railgun elimination is known at this first death edge. It has no
+		 * PutClientInServer successor, so close before any follower can WAIT. */
+		(void)POVLock_HandleRespawnTerminal(self);
 		(void)SG_CompoundGuardGamePlayerDie(self);
 		SG_NoteDeath(self);     /* the obituary is common knowledge */
 		/* the mouth that was always wired shut: taunt/grumble lines were
@@ -1696,10 +1699,18 @@ void CopyToBodyQue (edict_t *ent)
 }
 
 
+qboolean POVLock_HandleRespawnTerminal(edict_t *target)
+{
+	if (matchstate != MATCH_RAILGUN_INPLAY)
+		return false;
+	POVLock_TargetWillNotRespawn(target);
+	return true;
+}
+
 void respawn (edict_t *self)
 {
 
-	if(matchstate == MATCH_RAILGUN_INPLAY)
+	if (POVLock_HandleRespawnTerminal(self))
 	{
 		//Drop_All(self);
 		self->movetype = MOVETYPE_NOCLIP;
@@ -1822,6 +1833,7 @@ int i, numspec;
 	SG_ChatResetClient(ent);
 	Caco_ResetClient(ent);
 	Combat_ResetClient(ent);
+	POVLock_Clear(ent);
 
 	// clear client on respawn
 	ent->client->resp.score = ent->client->pers.score = 0;
@@ -1933,6 +1945,8 @@ void PutClientInServer (edict_t *ent)
 
 	index = ent-g_edicts-1;
 	client = ent->client;
+	POVLock_TargetRespawning(ent);
+	POVLock_Clear(ent);
 
 	// deathmatch wipes most client data every spawn
 	if (deathmatch->value)
@@ -2125,6 +2139,9 @@ void PutClientInServer (edict_t *ent)
 	client->newweapon = client->pers.weapon;
 	ChangeWeapon (ent);
 	(void)SG_CompoundGuardGameClientSpawned(ent);
+	/* The new ctfid and the complete target body now exist. Only this exact
+	 * SG instance may reattach recording sessions held across respawn. */
+	POVLock_TargetSpawned(ent);
 
 	//sprintf(DBuffer, "pcis-z t %d p %d r %d", ent->client->ctf.teamnum,
 	//	ent->client->pers.spectator, ent->client->resp.spectator);
@@ -2592,6 +2609,8 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 	 * is not active/owned yet, so this is a no-op for bot creation. */
 	replaced_sg = SG_RetireBotForClient(ent);
 	fresh_generation = !ent->inuse;
+	POVLock_ClearTarget(ent);
+	POVLock_Clear(ent);
 	
 	// they can connect
 	ent->client = game.clients + (ent - g_edicts - 1);
@@ -2689,6 +2708,9 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
+	POVLock_ClearTarget(ent);
+	/* The dropping viewer is no longer a usable network endpoint. */
+	POVLock_ViewerDisconnected(ent);
 	if (SG_OwnsBot(ent))
 		SG_CancelBotDelayedUses(ent);
 	/* A client index is recycled process storage. Retire every private and
@@ -2817,6 +2839,8 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	gclient_t	*client;
 	edict_t	*other;
 	int		i, j;
+	qboolean	povlock_frame;
+	qboolean	povrecord_frame;
 	pmove_t	pm;
 	edict_t		*flag;  // CTF CODE -- LM_JORM
 	vec3_t 	offset; // CTF CODE -- LM_JORM
@@ -2847,6 +2871,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	
 	level.current_entity = ent;
 	client = ent->client;
+	SG_HumanSpeedClientThinkBegin(ent);
 	
 	// CTF CODE -- LM_JORM
 	//surt spam control
@@ -2915,8 +2940,20 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	}
 
 	pm_passent = ent;
+	povlock_frame = client->povlock_active;
+	/* An ordinary in-eyes SG chase uses the same state copier as a
+	 * povrecord session, but it must retain the spectator controls.  Only a
+	 * deliberately armed recording owns input and freezes selection. */
+	povrecord_frame = client->pov_record_active;
 
-	if (ent->client->chase_target) {
+	if (povlock_frame) {
+
+		client->resp.cmd_angles[0] = SHORT2ANGLE(ucmd->angles[0]);
+		client->resp.cmd_angles[1] = SHORT2ANGLE(ucmd->angles[1]);
+		client->resp.cmd_angles[2] = SHORT2ANGLE(ucmd->angles[2]);
+		(void)POVLock_Update(ent);
+
+	} else if (ent->client->chase_target) {
 
 		client->resp.cmd_angles[0] = SHORT2ANGLE(ucmd->angles[0]);
 		client->resp.cmd_angles[1] = SHORT2ANGLE(ucmd->angles[1]);
@@ -2979,7 +3016,9 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 		// END CTF CODE -- LM_JORM
 
 		// perform a pmove
+		SG_HumanSpeedPmoveBegin(ent, &pm.s, pm.cmd.msec);
 		gi.Pmove (&pm);
+		SG_HumanSpeedPmoveEnd(ent, &pm.s, pm.cmd.msec);
 
 		// save results of pmove
 		client->ps.pmove = pm.s;
@@ -3058,7 +3097,9 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	//if(client->ctf.teamnum != CTF_TEAM_OBSERVER_RED &&
 	//	client->ctf.teamnum != CTF_TEAM_OBSERVER_BLUE)
 	// Paril
-	if (!GamePaused())
+	if (povrecord_frame)
+		POVLock_SuppressInput(client);
+	else if (!GamePaused())
 	// Paril
 	{
 		if (client->latched_buttons & BUTTON_ATTACK)
@@ -3071,6 +3112,8 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 				if (client->chase_target) 
 				{
 					client->chase_target = NULL;
+					if (client->povlock_active)
+						POVLock_Clear(ent);
 					client->ps.pmove.pm_flags &= ~PMF_NO_PREDICTION;
 				} 
 				else
@@ -3085,7 +3128,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 		}
 	}
 
-	if (client->resp.spectator) 
+	if (client->resp.spectator && !povrecord_frame)
 	{
 		if(client->ctf.teamnum == CTF_TEAM_OBSERVER_RED &&
 			!Team_Observer_OK(CTF_TEAM_RED, ent))
@@ -3186,7 +3229,12 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	for (i = 1; i <= maxclients->value; i++) 
 	{
 		other = g_edicts + i;
-		if (other->inuse && other->client->chase_target == ent)
+		if (!other->inuse || !other->client)
+			continue;
+		if (other->client->povlock_active &&
+			other->client->povlock_target_index == ent - g_edicts)
+			(void)POVLock_Update(other);
+		else if (other->client->chase_target == ent)
 			UpdateChaseCam(other);
 	}
 }

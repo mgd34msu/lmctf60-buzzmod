@@ -1,4 +1,4 @@
-/* sg_hook_live.h -- host-free live adapter for ordinary revision-2 RL_HOOK.
+/* sg_hook_live.h -- host-free live adapter for ordinary RL_HOOK.
  *
  * This interface deliberately contains no edicts, trace calls, ClientThink,
  * or hook-entity mutation.  The integration layer supplies fresh ownership

@@ -1,15 +1,15 @@
-/* Golden-vector and fail-closed tests for authenticated RUNE v3 sidecars. */
+/* Artifact-bound sidecar codec tests. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* q_shared.h has no include guard; include it once before sidecar headers. */
+#include "q_shared.h"
 #include "slipgate/sg_crc32.h"
-#include "slipgate/sg_rune_wire.h"
 #include "slipgate/sg_sidecar_wire.h"
 
-#define RUNE_GOLDEN_BYTES 248U
-#define SIDECAR_GOLDEN_BYTES 50U
+#define SIDECAR_IMAGE_BYTES (SG_SIDECAR_HEADER_BYTES + 2U)
 
 static int failures;
 
@@ -30,51 +30,6 @@ static int failures;
 		failures++; \
 	} \
 } while (0)
-
-static int HexDigit(int c)
-{
-	if (c >= '0' && c <= '9')
-		return c - '0';
-	if (c >= 'a' && c <= 'f')
-		return c - 'a' + 10;
-	if (c >= 'A' && c <= 'F')
-		return c - 'A' + 10;
-	return -1;
-}
-
-static int LoadHex(const char *path, unsigned char *bytes, size_t size)
-{
-	FILE *file = fopen(path, "rb");
-	size_t count = 0;
-	int high = -1;
-	int c;
-
-	if (!file)
-	{
-		perror(path);
-		return 0;
-	}
-	while ((c = fgetc(file)) != EOF)
-	{
-		int digit = HexDigit(c);
-
-		if (digit < 0)
-			continue;
-		if (high < 0)
-			high = digit;
-		else
-		{
-			if (count >= size)
-			{
-				fclose(file);
-				return 0;
-			}
-			bytes[count++] = (unsigned char)((high << 4) | digit);
-			high = -1;
-		}
-	}
-	return fclose(file) == 0 && count == size && high < 0;
-}
 
 static void PutU16(unsigned char *out, uint16_t value)
 {
@@ -98,73 +53,77 @@ static uint32_t GetU32(const unsigned char *in)
 
 static void FixSidecarHeaderCRC(unsigned char *bytes)
 {
-	unsigned char copy[SG_SIDECAR_V3_HEADER_BYTES];
+	unsigned char copy[SG_SIDECAR_HEADER_BYTES];
 	uint32_t crc;
 
 	memcpy(copy, bytes, sizeof(copy));
-	memset(copy + SG_SIDECAR_V3_HEADER_CRC_OFFSET, 0, 4);
+	memset(copy + SG_SIDECAR_HEADER_CRC_OFFSET, 0, 4);
 	CHECK(SG_CRC32Buffer(copy, sizeof(copy), &crc));
-	PutU32(bytes + SG_SIDECAR_V3_HEADER_CRC_OFFSET, crc);
+	PutU32(bytes + SG_SIDECAR_HEADER_CRC_OFFSET, crc);
 }
 
-static int RuneHeaderFromGolden(sg_rune_v3_header_t *header)
+static void InitArtifact(rune_artifact_t *artifact)
 {
-	unsigned char rune[RUNE_GOLDEN_BYTES];
-
-	if (!LoadHex("tests/fixtures/rune_v3_wire_golden.hex", rune,
-	    sizeof(rune)))
-		return 0;
-	return SG_RuneV3DecodeHeader(rune, SG_RUNE_V3_HEADER_BYTES,
-		header) == RLW_OK;
+	memset(artifact, 0, sizeof(*artifact));
+	artifact->magic = RUNE_ARTIFACT_MAGIC;
+	artifact->payload_crc32 = UINT32_C(0x11223344);
+	artifact->header_crc32 = UINT32_C(0x55667788);
+	artifact->action_contract_crc32 = SG_RUNE_ACTION_CONTRACT_CRC32;
+	artifact->mechanism_contract_crc32 =
+		SG_RUNE_MECHANISM_CONTRACT_CRC32;
+	artifact->num_seeds = 2U;
+	artifact->num_links = 2U;
+	artifact->num_mechanism_nodes = 2U;
+	artifact->num_mechanism_edges = 2U;
+	artifact->num_inventory_edges = 1U;
+	artifact->num_mechanism_plans = 1U;
+	artifact->string_bytes = 8U;
+	memcpy(artifact->identity.map_name, "sidecar", sizeof("sidecar"));
 }
 
 static sg_sidecar_diagnostic_t EncodeHuman(
-	const sg_rune_v3_header_t *rune, const unsigned char *payload,
+	const rune_artifact_t *rune, const unsigned char *payload,
 	size_t payload_size, unsigned char *encoded, size_t encoded_capacity,
 	size_t *encoded_size_out)
 {
-	return SG_SidecarV3Encode(SG_SIDECAR_HUMAN, rune, NULL, 0,
+	return SG_SidecarEncode(SG_SIDECAR_HUMAN, rune, NULL, 0,
 		payload, payload_size, encoded, encoded_capacity,
 		encoded_size_out);
 }
 
 static sg_sidecar_diagnostic_t DecodeHuman(const unsigned char *encoded,
-	size_t encoded_size, const sg_rune_v3_header_t *rune,
+	size_t encoded_size, const rune_artifact_t *rune,
 	unsigned char *payload_out, size_t payload_capacity,
 	size_t *payload_size_out)
 {
-	return SG_SidecarV3Decode(encoded, encoded_size, SG_SIDECAR_HUMAN,
+	return SG_SidecarDecode(encoded, encoded_size, SG_SIDECAR_HUMAN,
 		rune, NULL, 0, payload_out, payload_capacity, payload_size_out);
 }
 
-static void TestGolden(const sg_rune_v3_header_t *rune)
+static void TestRoundTrip(const rune_artifact_t *rune)
 {
 	static const unsigned char payload[] = { 7, 200 };
-	unsigned char expected[SIDECAR_GOLDEN_BYTES];
-	unsigned char encoded[SIDECAR_GOLDEN_BYTES];
+	unsigned char encoded[SIDECAR_IMAGE_BYTES];
 	unsigned char decoded[sizeof(payload)] = { 0, 0 };
 	size_t encoded_size = 0;
 	size_t decoded_size = 0;
 	size_t file_size = 0;
-	sg_sidecar_v3_header_t header;
+	sg_sidecar_header_t header;
 
-	CHECK(LoadHex("tests/fixtures/sidecar_v3_hmn_golden.hex", expected,
-		sizeof(expected)));
-	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3FileSize(SG_SIDECAR_HUMAN,
+	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarFileSize(SG_SIDECAR_HUMAN,
 		rune, &file_size));
 	CHECK(file_size == sizeof(encoded));
 	CHECK_DIAGNOSTIC(SCD_OK, EncodeHuman(rune, payload, sizeof(payload),
 		encoded, sizeof(encoded), &encoded_size));
 	CHECK(encoded_size == sizeof(encoded));
-	CHECK(memcmp(encoded, expected, sizeof(encoded)) == 0);
-	CHECK(memcmp(encoded, "HMN3", 4) == 0);
+	CHECK(memcmp(encoded, "HMNR", 4) == 0);
+	CHECK(encoded[4] == 0U && encoded[5] == 0U);
+	CHECK(encoded[8] == 0U && encoded[9] == 0U);
 	CHECK(GetU32(encoded + 24) == rune->payload_crc32);
-	CHECK(rune->action_contract_crc32 == UINT32_C(0x5c64bc3b));
-	CHECK(rune->header_crc32 == UINT32_C(0x887334b9));
 	CHECK(GetU32(encoded + 28) == rune->action_contract_crc32);
 	CHECK(GetU32(encoded + 32) == rune->header_crc32);
-	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3Inspect(encoded,
-		SG_SIDECAR_V3_HEADER_BYTES, sizeof(encoded),
+	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarInspect(encoded,
+		SG_SIDECAR_HEADER_BYTES, sizeof(encoded),
 		SG_SIDECAR_HUMAN, rune, &header));
 	CHECK(header.payload_bytes == sizeof(payload));
 	CHECK_DIAGNOSTIC(SCD_OK, DecodeHuman(encoded, sizeof(encoded), rune,
@@ -173,22 +132,22 @@ static void TestGolden(const sg_rune_v3_header_t *rune)
 	CHECK(memcmp(decoded, payload, sizeof(payload)) == 0);
 }
 
-static void TestHeaderFailures(const sg_rune_v3_header_t *rune)
+static void TestHeaderFailures(const rune_artifact_t *rune)
 {
 	static const unsigned char payload[] = { 7, 200 };
-	unsigned char good[SIDECAR_GOLDEN_BYTES];
-	unsigned char bad[SIDECAR_GOLDEN_BYTES];
+	unsigned char good[SIDECAR_IMAGE_BYTES];
+	unsigned char bad[SIDECAR_IMAGE_BYTES];
 	unsigned char output[2] = { 0xaa, 0xbb };
 	size_t size = 0;
-	sg_sidecar_v3_header_t header;
-	sg_sidecar_v3_header_t sentinel;
+	sg_sidecar_header_t header;
+	sg_sidecar_header_t sentinel;
 
 	CHECK_DIAGNOSTIC(SCD_OK, EncodeHuman(rune, payload, sizeof(payload),
 		good, sizeof(good), &size));
 	memset(&sentinel, 0xa5, sizeof(sentinel));
 	header = sentinel;
-	CHECK_DIAGNOSTIC(SCD_BAD_HEADER_SIZE, SG_SidecarV3Inspect(good,
-		SG_SIDECAR_V3_HEADER_BYTES - 1, sizeof(good),
+	CHECK_DIAGNOSTIC(SCD_BAD_HEADER_SIZE, SG_SidecarInspect(good,
+		SG_SIDECAR_HEADER_BYTES - 1, sizeof(good),
 		SG_SIDECAR_HUMAN, rune, &header));
 	CHECK(memcmp(&header, &sentinel, sizeof(header)) == 0);
 
@@ -197,16 +156,18 @@ static void TestHeaderFailures(const sg_rune_v3_header_t *rune)
 	CHECK_DIAGNOSTIC(SCD_BAD_MAGIC, DecodeHuman(bad, sizeof(bad), rune,
 		output, sizeof(output), &size));
 	memcpy(bad, good, sizeof(bad));
-	PutU16(bad + 4, 2);
-	CHECK_DIAGNOSTIC(SCD_UNSUPPORTED_VERSION, DecodeHuman(bad,
+	PutU16(bad + 4, 1U);
+	FixSidecarHeaderCRC(bad);
+	CHECK_DIAGNOSTIC(SCD_NONZERO_RESERVED, DecodeHuman(bad,
 		sizeof(bad), rune, output, sizeof(output), &size));
 	memcpy(bad, good, sizeof(bad));
 	PutU16(bad + 6, 47);
 	CHECK_DIAGNOSTIC(SCD_BAD_HEADER_SIZE, DecodeHuman(bad, sizeof(bad),
 		rune, output, sizeof(output), &size));
 	memcpy(bad, good, sizeof(bad));
-	PutU16(bad + 8, 2);
-	CHECK_DIAGNOSTIC(SCD_BAD_RUNE_VERSION, DecodeHuman(bad, sizeof(bad),
+	PutU16(bad + 8, 1U);
+	FixSidecarHeaderCRC(bad);
+	CHECK_DIAGNOSTIC(SCD_NONZERO_RESERVED, DecodeHuman(bad, sizeof(bad),
 		rune, output, sizeof(output), &size));
 	memcpy(bad, good, sizeof(bad));
 	bad[15] = 1;
@@ -248,17 +209,17 @@ static void TestHeaderFailures(const sg_rune_v3_header_t *rune)
 	CHECK_DIAGNOSTIC(SCD_BAD_FILE_SIZE, DecodeHuman(good,
 		sizeof(good) - 1, rune, output, sizeof(output), &size));
 	memcpy(bad, good, sizeof(bad));
-	bad[SG_SIDECAR_V3_HEADER_BYTES] ^= 1;
+	bad[SG_SIDECAR_HEADER_BYTES] ^= 1;
 	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_CRC, DecodeHuman(bad, sizeof(bad),
 		rune, output, sizeof(output), &size));
 	CHECK(output[0] == 0xaa && output[1] == 0xbb);
 }
 
-static void TestKindsAndDanger(sg_rune_v3_header_t rune)
+static void TestKindsAndDanger(rune_artifact_t rune)
 {
 	unsigned char danger[16];
 	unsigned char defense[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
-	unsigned char encoded[SG_SIDECAR_V3_HEADER_BYTES + sizeof(danger)];
+	unsigned char encoded[SG_SIDECAR_HEADER_BYTES + sizeof(danger)];
 	unsigned char decoded[sizeof(danger)];
 	unsigned char too_small[1];
 	uint8_t live_marks[2] = { 1, 1 };
@@ -285,86 +246,72 @@ static void TestKindsAndDanger(sg_rune_v3_header_t rune)
 	for (stage = SCS_ARGUMENT; stage < SCS_STAGE_COUNT; stage++)
 		CHECK(strcmp(SG_SidecarStageName((sg_sidecar_stage_t)stage),
 			"unknown") != 0);
-	CHECK(SG_SidecarDiagnosticWire(SCD_BAD_PAYLOAD_CRC) ==
-		RLW_BAD_PAYLOAD_CRC);
-	CHECK(SG_SidecarDiagnosticWire(SCD_RUNE_HEADER_MISMATCH) ==
-		RLW_BAD_SIDECAR);
 	for (i = 0; i < SG_SIDECAR_KIND_COUNT; i++)
-		CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3FileSize(
+		CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarFileSize(
 			(sg_sidecar_kind_t)i, &rune, &size));
 
 	/* Two planes times two seeds, encoded as signed little-endian int32. */
 	PutU32(danger + 0, 0);
-	PutU32(danger + 4, SG_SIDECAR_V3_DANGER_MAX);
+	PutU32(danger + 4, SG_SIDECAR_DANGER_MAX);
 	PutU32(danger + 8, 1200);
 	PutU32(danger + 12, 1);
-	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3Encode(SG_SIDECAR_DANGER,
+	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarEncode(SG_SIDECAR_DANGER,
 		&rune, live_marks, 2, danger, sizeof(danger), encoded,
 		sizeof(encoded), &size));
-	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3Decode(encoded, size,
+	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarDecode(encoded, size,
 		SG_SIDECAR_DANGER, &rune, live_marks, 2, decoded,
 		sizeof(decoded), &size));
 	CHECK(memcmp(decoded, danger, sizeof(danger)) == 0);
-	PutU32(danger + 4, SG_SIDECAR_V3_DANGER_MAX + 1);
-	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_VALUE, SG_SidecarV3Encode(
+	PutU32(danger + 4, SG_SIDECAR_DANGER_MAX + 1);
+	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_VALUE, SG_SidecarEncode(
 		SG_SIDECAR_DANGER, &rune, live_marks, 2, danger, sizeof(danger),
 		encoded, sizeof(encoded), &size));
 	PutU32(danger + 4, UINT32_MAX);
-	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_VALUE, SG_SidecarV3Encode(
+	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_VALUE, SG_SidecarEncode(
 		SG_SIDECAR_DANGER, &rune, live_marks, 2, danger, sizeof(danger),
 		encoded, sizeof(encoded), &size));
 
 	/* Every seed-indexed plane retains its slot but tombstones stay zero. */
 	live_marks[1] = 0;
 	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_VALUE,
-		SG_SidecarV3ValidatePayload(SG_SIDECAR_DEFENSE, &rune,
+		SG_SidecarValidatePayload(SG_SIDECAR_DEFENSE, &rune,
 			live_marks, 2, defense, sizeof(defense), &plane, &index));
 	CHECK(plane == 0 && index == 1);
 	defense[1] = defense[3] = defense[5] = defense[7] = 0;
 	CHECK_DIAGNOSTIC(SCD_OK,
-		SG_SidecarV3ValidatePayload(SG_SIDECAR_DEFENSE, &rune,
+		SG_SidecarValidatePayload(SG_SIDECAR_DEFENSE, &rune,
 			live_marks, 2, defense, sizeof(defense), &plane, &index));
 	CHECK(plane == SG_SIDECAR_INDEX_NONE &&
 		index == SG_SIDECAR_INDEX_NONE);
 	PutU32(danger + 4, 1);
 	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_VALUE,
-		SG_SidecarV3ValidatePayload(SG_SIDECAR_DANGER, &rune,
+		SG_SidecarValidatePayload(SG_SIDECAR_DANGER, &rune,
 			live_marks, 2, danger, sizeof(danger), &plane, &index));
 	CHECK(plane == 0 && index == 1);
 
 	CHECK_DIAGNOSTIC(SCD_BAD_PAYLOAD_SIZE, EncodeHuman(&rune, too_small,
 		sizeof(too_small), encoded, sizeof(encoded), &size));
-	CHECK_DIAGNOSTIC(SCD_INVALID_ARGUMENT, SG_SidecarV3FileSize(
+	CHECK_DIAGNOSTIC(SCD_INVALID_ARGUMENT, SG_SidecarFileSize(
 		SG_SIDECAR_KIND_COUNT, &rune, &size));
 
 	/* Exact maxima remain representable for every fixed kind. */
-	rune.num_seeds = SG_RUNE_V3_MAX_SEEDS;
-	rune.num_links = SG_RUNE_V3_MAX_LINKS;
-	{
-		unsigned char raw[SG_RUNE_V3_HEADER_BYTES];
-
-		CHECK(SG_RuneV3EncodeHeader(&rune, raw, sizeof(raw)) == RLW_OK);
-		rune.header_crc32 = GetU32(raw + SG_RUNE_V3_HEADER_CRC_OFFSET);
-	}
-	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3FileSize(SG_SIDECAR_HUMAN,
+	rune.num_seeds = RUNE_MAX_SEEDS;
+	rune.num_links = RUNE_MAX_LINKS;
+	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarFileSize(SG_SIDECAR_HUMAN,
 		&rune, &size));
-	CHECK(size == SG_SIDECAR_V3_HEADER_BYTES + SG_RUNE_V3_MAX_LINKS);
-	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarV3FileSize(SG_SIDECAR_DANGER,
+	CHECK(size == SG_SIDECAR_HEADER_BYTES + RUNE_MAX_LINKS);
+	CHECK_DIAGNOSTIC(SCD_OK, SG_SidecarFileSize(SG_SIDECAR_DANGER,
 		&rune, &size));
-	CHECK(size == SG_SIDECAR_V3_HEADER_BYTES +
-		(size_t)SG_RUNE_V3_MAX_SEEDS * 8U);
+	CHECK(size == SG_SIDECAR_HEADER_BYTES +
+		(size_t)RUNE_MAX_SEEDS * 8U);
 }
 
 int main(void)
 {
-	sg_rune_v3_header_t rune;
+	rune_artifact_t rune;
 
-	if (!RuneHeaderFromGolden(&rune))
-	{
-		fprintf(stderr, "could not decode the shared RUNE v3 golden\n");
-		return 1;
-	}
-	TestGolden(&rune);
+	InitArtifact(&rune);
+	TestRoundTrip(&rune);
 	TestHeaderFailures(&rune);
 	TestKindsAndDanger(rune);
 	if (failures)

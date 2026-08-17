@@ -99,7 +99,7 @@ typedef struct sg_replay_pose_s
  *   DROP chest traces.  They are separate because a failed terminal trace is
  *   followed by the conditional recovery trace at the same 100 ms boundary.
  * drop_recovery_admitted/drop_landing_observed are retained as initialized
- *   adapter diagnostics.  Revision 2 derives admission and landing directly
+ *   adapter diagnostics.  Admission and landing are derived directly
  *   from the serialized destination policy and authoritative pose instead of
  *   permitting either field to select a different controller law.
  * contaminated: a disallowed trigger, solid overlap, or non-world oracle hit.
@@ -141,8 +141,8 @@ typedef struct sg_drop_replay_spec_s
 	vec3_t lip;
 	byte heading;
 	qboolean destination_water;
-	/* Approach/recovery yaw uses the v3 generator/proof's selected double-M_PI
-	 * byte.  Revision-2 live DROP independently rebuilds and differentially
+	/* Approach/recovery yaw uses the generator/proof's selected double-M_PI
+	 * byte.  Live DROP independently rebuilds and differentially
 	 * checks that same logical command before executing the reducer result. */
 	/* -1 records the witnessed arrival.  A nonnegative value additionally
 	 * makes a live adapter require that exact production boundary. */

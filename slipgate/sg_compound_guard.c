@@ -785,7 +785,7 @@ static sg_compound_guard_result_t Acquire(
 	RefreshRetirements();
 	if (RetirementsOverlap(keys, key_count))
 		return SG_COMPOUND_GUARD_CONFLICT;
-	/* The first live compound revision has one process-wide door transaction.
+	/* The live compound controller has one process-wide door transaction.
 	 * Neither controller can safely interleave trigger/Pmove callbacks with a
 	 * disjoint declared or PREOPEN set, and a logically released set remains in
 	 * that transaction until its physical retirement clears.  Keep this policy

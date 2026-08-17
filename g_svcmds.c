@@ -2,9 +2,6 @@
 #include "g_ctffunc.h"          /* CTF_TEAM_RED/BLUE for `sv sg add red|blue` */
 #include "slipgate/sg_local.h"  /* the SLIPGATE admin surface behind `sv sg` */
 #include "ctf_file_io.h"
-#ifdef SG_ACCEPT_DROP
-#include "slipgate/sg_accept_drop.h"
-#endif
 
 void SpawnLoadout_ListItems(void);
 
@@ -216,7 +213,8 @@ SV_ListIP_f
 */
 void SVCmd_ListIP_f(void)
 {
-	int		i, j;
+	int		i;
+	size_t		j;
 	byte	b[4];
 
 	gi.cprintf(NULL, PRINT_HIGH, "Filter list:\n");
@@ -240,7 +238,8 @@ void SVCmd_WriteIP_f (void)
 	FILE* f;
 	char	name[MAX_OSPATH];
 	byte	b[4];
-	int		i, j;
+	int		i;
+	size_t		j;
 
 	if (gamedir->string && gamedir->string[0])
 		sprintf(name, "./%s/listip.cfg", gamedir->string);
@@ -311,19 +310,6 @@ static void SVCmd_SG_f (void)
 {
 	char *sub = gi.argv(2);
 	char *arg = gi.argv(3);
-
-#ifdef SG_ACCEPT_DROP
-	if (Q_stricmp(sub, "accept_drop") == 0)
-	{
-		if (Q_stricmp(arg, "arm") != 0 || gi.argc() != 7 ||
-		    !SG_AcceptDropQueue(gi.argv(4), gi.argv(5), gi.argv(6)))
-			gi.cprintf(NULL, PRINT_HIGH,
-			    "usage: sv sg accept_drop arm "
-			    "<direct|recovery|supported-preair|wet-target-dry-shelf|"
-			    "dry-target-depth2> <slot> <link>\n");
-		return;
-	}
-#endif
 	if (Q_stricmp(sub, "add") == 0)
 	{
 		int team = 0;   /* 0: let the balancer place it, as it always has */
@@ -369,6 +355,26 @@ static void SVCmd_SG_f (void)
 		           "| kick worst | weights [reload]>\n");
 }
 
+static void SVCmd_POVRecord_f(void)
+{
+	qboolean stop;
+	const char *spectator;
+	const char *target;
+
+	if (gi.argc() != 4)
+	{
+		gi.cprintf(NULL, PRINT_HIGH,
+			"usage: sv povrecord <spectator> <target> | "
+			"sv povrecord off <spectator>\n");
+		return;
+	}
+	stop = strcmp(gi.argv(2), "off") == 0;
+	spectator = stop ? gi.argv(3) : gi.argv(2);
+	target = stop ? NULL : gi.argv(3);
+	if (!POVRecord_AdminDirective(spectator, target, stop))
+		gi.cprintf(NULL, PRINT_HIGH, "povrecord: directive rejected\n");
+}
+
 /*
 =================
 ServerCommand
@@ -408,6 +414,8 @@ void	ServerCommand (void)
 		Svcmd_NextLevel_f ();
 	else if (Q_stricmp (cmd, "sg") == 0)
 		SVCmd_SG_f ();
+	else if (Q_stricmp (cmd, "povrecord") == 0)
+		SVCmd_POVRecord_f ();
 	else if (Q_stricmp (cmd, "rune") == 0)
 	{
 		/* SLIPGATE: generate the rune for the loaded map. */
@@ -416,4 +424,3 @@ void	ServerCommand (void)
 	else
 		gi.cprintf (NULL, PRINT_HIGH, "Unknown server command \"%s\"\n", cmd);
 }
-

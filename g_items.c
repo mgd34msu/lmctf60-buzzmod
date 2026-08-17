@@ -988,6 +988,13 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 		{
 			gi.sound(other, CHAN_ITEM, gi.soundindex(ent->item->pickup_sound), 1, ATTN_NORM, 0);
 		}
+
+		// BUZZKILL - SLIPGATE: notify the commitment owner while `ent` is
+		// still the exact live item that accepted this touch. G_UseTargets below
+		// is allowed to free its caller through a self-matching killtarget, so a
+		// later notification can silently lose a successful quad/invuln pickup.
+		// Every decision about whether it matters remains in sg_caco.c.
+		SG_NoteItemTaken(other, ent);
 	}
 
 	if (!(ent->spawnflags & ITEM_TARGETS_USED))
@@ -998,19 +1005,6 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 
 	if (!taken)
 		return;
-
-	// BUZZKILL - SLIPGATE: the item-communication hook (owner's ruling
-	// 2026-08-05). A team learns when a major is coming back only if one of
-	// its own bots says so out loud, so the take itself has to be witnessed
-	// somewhere -- and this is the one place every successful pickup by
-	// anybody, bot or human, passes through. Every decision about whether
-	// this pickup is worth a word, who may say it, and what clock the word
-	// earns is made in slipgate/sg_caco.c; nothing is decided here. Placed
-	// after `taken` is settled and before the entity is freed or respawned,
-	// so ent->item and ent's position are still the item that was taken.
-	// Inert unless sg_itemcomm is on.
-	SG_NoteItemTaken(other, ent);
-	// BUZZKILL - SLIPGATE - END
 
 	if (!((coop->value) && (ent->item->flags & IT_STAY_COOP)) || (ent->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)))
 	{

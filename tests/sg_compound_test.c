@@ -87,9 +87,6 @@ static void TestOwnershipAndDispatch(void)
 
 	SG_CompoundReset(&a);
 	SG_CompoundReset(&b);
-	CHECK(SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION == 0);
-	CHECK(SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION == 0);
-	CHECK(SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION == 0);
 	for (action = RL_DOOR_DROP; action <= RL_DOOR_HOOK; action++)
 		CHECK(!SG_CompoundRuntimeReady(action));
 	CHECK(!SG_CompoundRuntimeReady(RL_DOOR));
@@ -122,12 +119,12 @@ static void TestSuffixHoldSchedule(void)
 {
 	static const int invalid_elapsed[] = {
 		INT_MIN, -100, -1, 1, 99, 101,
-		SG_RUNE_V3_MAX_COST_MS + 1, INT_MAX
+		RUNE_MAX_COST_MS + 1, INT_MAX
 	};
 	static const int invalid_clear[] = {
 		INT_MIN, -100, -1, 0, 1, 99, 101,
-		SG_RUNE_V3_MAX_COST_MS - 1,
-		SG_RUNE_V3_MAX_COST_MS + 100, INT_MAX
+		RUNE_MAX_COST_MS - 1,
+		RUNE_MAX_COST_MS + 100, INT_MAX
 	};
 	int clear_ms;
 	int elapsed_ms;
@@ -143,13 +140,13 @@ static void TestSuffixHoldSchedule(void)
 	      SG_RUNE_PROOF_SERVER_FRAME_MS >=
 	      SG_COMPOUND_POST_CLEAR_MARGIN_MS);
 
-	/* Exhaust every valid pair in the v3 cost domain, not just examples:
+	/* Exhaust every valid pair in the active cost domain, not just examples:
 	 * renewal ends exactly on the serialized clear boundary. */
 	for (clear_ms = SG_RUNE_PROOF_SERVER_FRAME_MS;
-	     clear_ms <= SG_RUNE_V3_MAX_COST_MS;
+	     clear_ms <= RUNE_MAX_COST_MS;
 	     clear_ms += SG_RUNE_PROOF_SERVER_FRAME_MS)
 		for (elapsed_ms = 0;
-		     elapsed_ms <= SG_RUNE_V3_MAX_COST_MS;
+		     elapsed_ms <= RUNE_MAX_COST_MS;
 		     elapsed_ms += SG_RUNE_PROOF_SERVER_FRAME_MS)
 			CHECK(SG_CompoundSuffixNeedsHold(elapsed_ms, clear_ms) ==
 			      (elapsed_ms < clear_ms));
@@ -301,14 +298,14 @@ static void TestTranslateFinalFloatLaw(void)
 	CHECK(state.phase == SG_COMPOUND_TRANSLATE_TOP);
 }
 
-static void ValidLink(sg_rune_v3_seed_t seeds[2], sg_rune_v3_link_t *link,
+static void ValidLink(rune_seed_t seeds[2], rune_link_t *link,
 	int action)
 {
 	memset(seeds, 0, sizeof(*seeds) * 2U);
 	memset(link, 0, sizeof(*link));
 	seeds[1].origin[0] = 64.0f;
-	link->source = 0;
-	link->destination = 1;
+	link->from = 0;
+	link->to = 1;
 	link->action = (uint8_t)action;
 	link->provenance = RL_CONTRACTED;
 	link->cost_ms = 500;
@@ -317,15 +314,15 @@ static void ValidLink(sg_rune_v3_seed_t seeds[2], sg_rune_v3_link_t *link,
 	link->mechanism_anchor[0] = 16.0f;
 	if (action == RL_DOOR_DROP)
 	{
-		link->suffix_anchor[0] = 32.0f;
+		link->anchor[0] = 32.0f;
 		link->heading_slack = SG_RUNE_PROOF_DROP_CONTROL_MARKER;
 	}
 	else
 	{
-		seeds[0].flags = SG_RUNE_V3_SEED_WATER;
+		seeds[0].flags = RSF_WATER;
 		if (action == RL_DOOR_HOOK)
 		{
-			link->suffix_anchor[2] = 64.0f;
+			link->anchor[2] = 64.0f;
 			link->heading_slack =
 				SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER;
 		}
@@ -334,8 +331,8 @@ static void ValidLink(sg_rune_v3_seed_t seeds[2], sg_rune_v3_link_t *link,
 
 static void TestValidationAndMalformedInput(void)
 {
-	sg_rune_v3_seed_t seeds[2];
-	sg_rune_v3_link_t link;
+	rune_seed_t seeds[2];
+	rune_link_t link;
 	int action;
 
 	for (action = RL_DOOR_DROP; action <= RL_DOOR_HOOK; action++)
@@ -359,11 +356,11 @@ static void TestValidationAndMalformedInput(void)
 	CHECK(SG_CompoundValidateLink(seeds, 2, &link) ==
 		RLR_BAD_SWEEP_CLEAR);
 	ValidLink(seeds, &link, RL_DOOR_SWIM);
-	link.suffix_anchor[0] = 1.0f;
+	link.anchor[0] = 1.0f;
 	CHECK(SG_CompoundValidateLink(seeds, 2, &link) ==
 		RLR_BAD_SWIM_CONTROL);
 	ValidLink(seeds, &link, RL_DOOR_HOOK);
-	link.suffix_anchor[2] = 0.0f;
+	link.anchor[2] = 0.0f;
 	CHECK(SG_CompoundValidateLink(seeds, 2, &link) ==
 		RLR_BAD_HOOK_CONTROL);
 }

@@ -18,6 +18,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_snag_repair.h"
 
 sg_fields_t sg_fields;
 
@@ -91,14 +92,14 @@ void SG_TeachFutility(int seed)
 }
 
 /*
- * THE ROPE'S PRICE AS A DOSE (sg_ropecost, rung-2 set #1). Three blind
+ * THE ROPE'S PRICE AS A DOSE (sg_ropecost). Three blind
  * judges named the same tell on every caught route sheet: off-graph
  * fraction -- humans spend 3-18% of samples >96u from any nav node
  * (grapple flight through open air), bots pin near zero. The +1000
  * ritual surcharge below is why: it prices legs over ropes nearly
- * everywhere. It was fitted from a CARRIER's flail (wave 57); the rest
+ * everywhere. It was fitted from a carrier's observed flailing; the rest
  * of the roster inherited it. Default 1000 keeps today's flood
- * exactly; the trial lowers it on one film arm. Read once per field
+	* exactly; configuration may lower it for comparison. Read once per field
  * build (Fields_Setup), not per relaxation.
  */
 static int sg_ropecost_ms = 1000;
@@ -113,14 +114,45 @@ void SG_RopecostRefresh(void)
 static int Link_EffCost(const rune_link_t *l)
 {
 	/* 1000, not 400: the rope's REAL ritual is a standing aim frame (the
-	 * body halts, phase 1 owns the view), the fire, and a landing brake --
-	 * wave 57's carrier trace shows ~2-3s of wall clock per rope against
+	 * body halts, the aiming state owns the view), the fire, and a landing
+	 * brake. Carrier traces show ~2-3s of wall clock per rope against
 	 * cost_ms figures in the hundreds, and a carrier that chained ropes
 	 * covered 4s of field in 70s of flailing while a run would have flown.
 	 * Underpricing the ritual made the flood chain hooks where legs win.
 	 * The registry preserves the other legacy doses: DROP +150 to align the
 	 * lip line and reserved RJ +900 to raise, aim, and pay. */
 	return l->cost_ms + SG_ActionFieldBiasMs(l->action, sg_ropecost_ms);
+}
+
+/*
+ * Static fields may depend only on actions the loaded server configuration
+ * can ever execute.  Transient readiness (inventory, hook phase, a per-bot
+ * ban) belongs to live link selection, but a map loaded without the offhand
+ * hook can never execute RL_HOOK at all.  Leaving those edges in the flood
+ * builds gradients whose cheapest exit the body is permanently forbidden to
+ * take.  A missing host cvar is not authority to publish hook reachability.
+ */
+static qboolean Field_HookCapability(void)
+{
+	return ctfflags &&
+	       (((int)ctfflags->value & CTF_OFFHAND_HOOK) != 0);
+}
+
+static qboolean Field_LinkAdmitted(const rune_link_t *link)
+{
+	if (!link)
+		return false;
+	return Fields_ActionAdmitted(link->action);
+}
+
+qboolean Fields_ActionAdmitted(int action)
+{
+	return action != RL_HOOK || sg_fields.hook_admitted;
+}
+
+qboolean Fields_ActionTopologyCurrent(unsigned epoch)
+{
+	return epoch != 0 && epoch == sg_fields.action_topology_epoch;
 }
 
 /* ------------------------------------------------------ envelope transitions
@@ -346,8 +378,8 @@ static int Heap_Pop(void)
  * moat transitions poisoned lmctf01's whole tunnel: a stall at the water's
  * edge repriced every route through that ground, the argmin fell back to
  * land links that grind, which taught more futility -- a loop that turned
- * the map's only corridor radioactive (waves 52-53, chokes at 1470 then
- * 3168/1923, the east and west moat entries in turn). A failed WALK is
+ * the map's only corridor radioactive (observed chokes at 1470 then
+ * 3168/1923, the east and west moat entries). A failed WALK is
  * evidence about one link, not about the ground it starts from; only a
  * dead DOOR still teaches the seed, because a door blocks the body no
  * matter which link approaches it.
@@ -436,7 +468,8 @@ static void Field_FloodRun(rune_t *r, int *dist,
 		int t = r->links[i].to, f = r->links[i].from;
 
 		env_rev_next[i] = -1;
-		if (t < 0 || t >= ns || f < 0 || f >= ns)
+		if (t < 0 || t >= ns || f < 0 || f >= ns ||
+		    !Field_LinkAdmitted(&r->links[i]))
 			continue;
 		env_rev_next[i] = env_rev_first[t];
 		env_rev_first[t] = i;
@@ -493,7 +526,9 @@ static void Field_FloodRun(rune_t *r, int *dist,
 				continue;
 
 			base = env_dist[id] + Link_EffCost(b) + sg_futile[x]
-			     + sg_link_futile[li] + sg_shelf_pen[u];
+			     + sg_link_futile[li] + sg_shelf_pen[u]
+			     + SG_SnagRepairSeedSurcharge(x)
+			     + SG_SnagRepairLinkSurcharge(li);
 			if (nb > 1)
 				base += Env_TurnCost(b->heading, env_head[id], env_slack[id]);
 
@@ -551,6 +586,14 @@ void Field_Flood(rune_t *r, int *dist,
 	}
 }
 
+#ifdef SG_FIELDS_TEST
+void Fields_TestFloodFlat(rune_t *r, int *dist,
+	const int *sources, const int *source_cost, int num_sources)
+{
+	Field_FloodRun(r, dist, sources, source_cost, num_sources, 1);
+}
+#endif
+
 static int *Field_Alloc(rune_t *r)
 {
 	return sg_host.level_alloc(sizeof(int) * r->hdr.num_seeds);
@@ -561,6 +604,111 @@ static void Field_FromOne(rune_t *r, int *dist, int seed)
 	int cost = 0;
 
 	Field_Flood(r, dist, &seed, &cost, 1);
+}
+
+/* Rebuild the two static stand fields and every value derived directly from
+ * them.  All storage is allocated by Fields_Setup; this routine is also used
+ * on an action-capability edge and must never allocate. */
+static void FlagFields_Build(rune_t *r)
+{
+	int t;
+
+	if (sg_cv.shelfcost->value > 0.0f)
+	{
+		for (t = 0; t < 2; t++)
+		{
+			int fseed = t ? sg_fields.blue_flag_seed
+			              : sg_fields.red_flag_seed;
+			float *fo = r->seeds[fseed].origin;
+			int fi, ns = r->hdr.num_seeds;
+
+			if (ns > SG_MAX_SEEDS)
+				ns = SG_MAX_SEEDS;
+			for (fi = 0; fi < ns; fi++)
+			{
+				float dx = r->seeds[fi].origin[0] - fo[0];
+				float dy = r->seeds[fi].origin[1] - fo[1];
+
+				sg_shelf_pen[fi] = 0;
+				if (dx * dx + dy * dy <= 350.0f * 350.0f &&
+				    r->seeds[fi].origin[2] <= fo[2] - 96.0f)
+					sg_shelf_pen[fi] = (int)
+					    (sg_cv.shelfcost->value * 12000.0f);
+			}
+			Field_FromOne(r, t ? sg_fields.to_blue_flag
+			                   : sg_fields.to_red_flag, fseed);
+		}
+		memset(sg_shelf_pen, 0, sizeof(sg_shelf_pen));
+	}
+	else
+	{
+		Field_FromOne(r, sg_fields.to_red_flag, sg_fields.red_flag_seed);
+		Field_FromOne(r, sg_fields.to_blue_flag, sg_fields.blue_flag_seed);
+	}
+
+	/* Recompute the sub-stand cliff from the rebuilt home fields. */
+	for (t = 0; t < 2; t++)
+	{
+		int enemy_seed = t ? sg_fields.red_flag_seed
+		                   : sg_fields.blue_flag_seed;
+		int *sf = t ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
+		float *fo = r->seeds[enemy_seed].origin;
+		int si, best_plat = 0x7fffffff;
+
+		for (si = 0; si < r->hdr.num_seeds; si++)
+			sg_fields.shelf_cliff[t][si] = 0;
+		for (si = 0; si < r->hdr.num_seeds; si++)
+		{
+			float dx = r->seeds[si].origin[0] - fo[0];
+			float dy = r->seeds[si].origin[1] - fo[1];
+
+			if (dx * dx + dy * dy > 350.0f * 350.0f)
+				continue;
+			if (r->seeds[si].origin[2] > fo[2] - 48.0f &&
+			    sf[si] < best_plat)
+				best_plat = sf[si];
+		}
+		if (best_plat == 0x7fffffff)
+		{
+			if (sg_cv.debug->value)
+				sg_host.dprint("SHELF t=%d: no platform-level seed in radius\n", t);
+			continue;
+		}
+		for (si = 0; si < r->hdr.num_seeds; si++)
+		{
+			float dx = r->seeds[si].origin[0] - fo[0];
+			float dy = r->seeds[si].origin[1] - fo[1];
+
+			if (dx * dx + dy * dy > 350.0f * 350.0f ||
+			    r->seeds[si].origin[2] > fo[2] - 96.0f)
+				continue;
+			if (sf[si] > best_plat)
+				sg_fields.shelf_cliff[t][si] = sf[si] - best_plat;
+		}
+		if (sg_cv.debug->value)
+		{
+			int n = 0, mx = 0, sub = 0;
+
+			for (si = 0; si < r->hdr.num_seeds; si++)
+			{
+				float dx = r->seeds[si].origin[0] - fo[0];
+				float dy = r->seeds[si].origin[1] - fo[1];
+
+				if (dx * dx + dy * dy > 350.0f * 350.0f ||
+				    r->seeds[si].origin[2] > fo[2] - 96.0f)
+					continue;
+				sub++;
+				if (sg_fields.shelf_cliff[t][si] > 0)
+				{
+					n++;
+					if (sg_fields.shelf_cliff[t][si] > mx)
+						mx = sg_fields.shelf_cliff[t][si];
+				}
+			}
+			sg_host.dprint("SHELF t=%d: %d sub-stand seeds, %d cliffed, max %d, best_plat %d\n",
+			           t, sub, n, mx, best_plat);
+		}
+	}
 }
 
 /*
@@ -671,6 +819,7 @@ static void Mega_Build(rune_t *r)
 /* the on/off edge, so flipping the cvar mid-level does not wait for the next
  * health item to change state before the fields exist (or stop existing) */
 static qboolean sg_mega_was;
+static unsigned sg_field_belief_sig;
 
 static void Class_Build(rune_t *r, int cls)
 {
@@ -759,14 +908,163 @@ SG_FIELDS_PRIVATE int Fields_DefensiveRoot(const rune_t *r,
 
 #undef SG_FIELDS_PRIVATE
 
+static void DefensiveFields_Build(rune_t *r)
+{
+	int t;
+
+	for (t = 0; t < 2; t++)
+	{
+		int *own = t == 0 ? sg_fields.to_red_flag
+		                  : sg_fields.to_blue_flag;
+
+		if (sg_fields.post_seed[t] >= 0)
+			Field_FromOne(r, sg_fields.to_post[t], sg_fields.post_seed[t]);
+		else
+			memcpy(sg_fields.to_post[t], own,
+			       sizeof(int) * r->hdr.num_seeds);
+		if (sg_fields.icept_seed[t] >= 0)
+			Field_FromOne(r, sg_fields.to_icept[t], sg_fields.icept_seed[t]);
+		else
+			memcpy(sg_fields.to_icept[t], own,
+			       sizeof(int) * r->hdr.num_seeds);
+	}
+}
+
+/* Re-select the lane against the rebuilt home field.  Merely re-flooding the
+ * previous lane seed is insufficient: the 1.5--4 second approach band itself
+ * changes when a permanent action enters or leaves the topology. */
+static void LaneFields_Build(rune_t *r)
+{
+	int t, li, j;
+
+	for (t = 0; t < 2; t++)
+	{
+		int *own = t == 0 ? sg_fields.to_red_flag
+		                  : sg_fields.to_blue_flag;
+		int flag_seed = t == 0 ? sg_fields.red_flag_seed
+		                       : sg_fields.blue_flag_seed;
+		int appr[48], na = 0;
+		int best = -1;
+		float bestscore = -1.0f;
+
+		for (li = 0; li < r->hdr.num_seeds && na < 48; li += 7)
+			if (own[li] < SG_FIELD_INF &&
+			    own[li] >= 1500 && own[li] <= 4000)
+				appr[na++] = li;
+
+		for (li = 0; li < r->hdr.num_seeds; li++)
+		{
+			float score = 0.0f;
+			vec3_t eye;
+
+			if (own[li] >= SG_FIELD_INF || own[li] > 2000)
+				continue;
+			VectorCopy(r->seeds[li].origin, eye);
+			eye[2] += 22.0f;
+			for (j = 0; j < na; j++)
+			{
+				vec3_t thr;
+				trace_t ltr;
+
+				VectorCopy(r->seeds[appr[j]].origin, thr);
+				thr[2] += 22.0f;
+				ltr = sg_host.trace(eye, NULL, NULL, thr, NULL,
+				                   MASK_SOLID);
+				if (ltr.fraction >= 1.0f)
+					score += 1.0f;
+			}
+			{
+				vec3_t fthr;
+				trace_t ftr;
+
+				VectorCopy(r->seeds[flag_seed].origin, fthr);
+				fthr[2] += 22.0f;
+				ftr = sg_host.trace(eye, NULL, NULL, fthr, NULL,
+				                   MASK_SOLID);
+				if (ftr.fraction < 1.0f)
+					continue;
+			}
+			if (score > bestscore)
+			{
+				bestscore = score;
+				best = li;
+			}
+		}
+		if (best >= 0 && na > 0 &&
+		    bestscore / (float)na < 0.40f)
+			best = -1;
+		sg_fields.lane_seed[t] = best;
+		if (best >= 0)
+		{
+			Field_FromOne(r, sg_fields.to_lane[t], best);
+			sg_host.dprint("slipgate: rail lane team%d seed=%d covers %.0f/%d approach seeds\n",
+			           t + 1, best, bestscore, na);
+		}
+		else
+			memcpy(sg_fields.to_lane[t], own,
+			       sizeof(int) * r->hdr.num_seeds);
+	}
+}
+
+qboolean Fields_ActionTopologyRefresh(rune_t *r)
+{
+	qboolean hook_now = Field_HookCapability();
+	int i;
+
+	if (!r || hook_now == sg_fields.hook_admitted)
+		return false;
+	sg_fields.hook_admitted = hook_now;
+	sg_fields.action_topology_epoch++;
+	if (sg_fields.action_topology_epoch == 0)
+		sg_fields.action_topology_epoch = 1;
+
+	/* Static/cache roots cross the edge before any belief projection can use
+	 * them.  Dynamic belief fields are rebuilt by the normal Fields_Refresh
+	 * later in the same SG frame; pending prevents its cadence guard from
+	 * returning early. */
+	FlagFields_Build(r);
+	DefensiveFields_Build(r);
+	LaneFields_Build(r);
+	for (i = 0; i < SG_FIELD_CLASSES; i++)
+		Class_Build(r, i);
+	sg_field_belief_sig = Caco_ItemBeliefSig();
+	sg_fields.action_topology_pending = true;
+	if (sg_cv.debug->value)
+		sg_host.dprint("slipgate: field action topology epoch=%u hook=%d\n",
+		           sg_fields.action_topology_epoch,
+		           sg_fields.hook_admitted ? 1 : 0);
+	return true;
+}
+
 qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 {
 	edict_t *rf, *bf;
+	cvar_t *gamedir;
+	const char *game_directory;
 	int i;
 
 	/* the next flood is this level's first: it carries the self-check */
 	sg_floodcheck_armed = true;
 	SG_RopecostRefresh();
+	sg_fields.hook_admitted = Field_HookCapability();
+	sg_fields.action_topology_pending = false;
+	sg_fields.action_topology_epoch++;
+	if (sg_fields.action_topology_epoch == 0)
+		 sg_fields.action_topology_epoch = 1;
+	/* A missing repair is neutral.  Once an artifact identity is present, a
+	 * present repair must bind exactly to this committed level before any field
+	 * is published.  Unit fixtures that construct only an in-memory graph have
+	 * no artifact identity and therefore retain the historic neutral path. */
+	if (r->artifact.identity.map_name[0])
+	{
+		gamedir = sg_host.cvar ? sg_host.cvar("gamedir", "", 0) : NULL;
+		game_directory = gamedir && gamedir->string && gamedir->string[0]
+			? gamedir->string : ".";
+		if (!SG_SnagRepairLoadForLevel(r, game_directory))
+			return false;
+	}
+	else
+		SG_SnagRepairClear();
 
 	rf = SG_FlagStand(CTF_TEAM_RED, true);
 	bf = SG_FlagStand(CTF_TEAM_BLUE, true);
@@ -783,7 +1081,7 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 
 	/*
 	 * THE LOW ROAD PAYS AT THE FIELD (sg_shelfcost, third cut). Entry
-	 * forensics on the first two nulls: 238 of 345 pit entries WALKED IN
+	 * measurements on the first two nulls: 238 of 345 pit entries WALKED IN
 	 * LATERALLY at pit-floor height (median entry drop 0u) -- the floor
 	 * under the enemy stand is the terminus of a whole low approach
 	 * corridor the flag field genuinely prefers, because one cheap hook
@@ -928,9 +1226,10 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 	}
 
 	/*
-	 * Learned defensive fields (.dpo planes, wave 307+): flood from the
+	 * Learned defensive fields (.dpo planes): flood from the
 	 * corpus's top post seed and top intercept seed per team. The candidate
-	 * planes arrive explicitly in v3 wire order; this setup never reads or
+	 * planes arrive explicitly in authenticated artifact order; this setup
+	 * never reads or
 	 * publishes the live sidecar globals. Missing plane -> the team's own flag
 	 * field, i.e. exactly today's behavior.
 	 */
@@ -947,6 +1246,7 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 			    inputs->dpo[SG_DPO_INTERCEPT_RED + t] : NULL;
 			int best = Fields_DefensiveRoot(r, pp);
 
+			sg_fields.post_seed[t] = best;
 			sg_fields.to_post[t] = Field_Alloc(r);
 			if (best >= 0)
 				Field_FromOne(r, sg_fields.to_post[t], best);
@@ -956,6 +1256,7 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 
 			sg_fields.to_icept[t] = Field_Alloc(r);
 			best = Fields_DefensiveRoot(r, ip);
+			sg_fields.icept_seed[t] = best;
 			if (best >= 0)
 				Field_FromOne(r, sg_fields.to_icept[t], best);
 			else
@@ -965,7 +1266,7 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 	}
 
 	/*
-	 * THE RAIL LANE (sg_raillane, wave 345 -- the owner's craft: "rails
+	 * THE RAIL LANE (sg_raillane): "rails
 	 * guard sight lines; I held them so well the enemy couldn't reach
 	 * our base"). Per team, once per level: among candidate posts near
 	 * the stand, pick the seed that SEES the most of the approach
@@ -1035,13 +1336,13 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 				}
 			}
 			sg_fields.to_lane[t] = Field_Alloc(r);
-			/* the owner's map gate: a lane that cannot see 40% of the
-			 * corridor is not a lane -- idle the doctrine there (the
-			 * 347-349 A/B won on 60%-coverage mactf06; 25% lmctf22
-			 * read null in the earlier pair) */
+			/* A lane that cannot see 40% of the corridor is not a lane.
+			 * Sixty-percent coverage was effective on mactf06, while 25%
+			 * coverage on lmctf22 produced no useful effect. */
 			if (best >= 0 && na > 0 &&
 			    bestscore / (float)na < 0.40f)
 				best = -1;
+			sg_fields.lane_seed[t] = best;
 			if (best >= 0)
 			{
 				Field_FromOne(r, sg_fields.to_lane[t], best);
@@ -1122,25 +1423,32 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
  */
 void Fields_Refresh(rune_t *r)
 {
+	qboolean topology_changed;
+	qboolean cadence_due;
 	int i;
 
-	if (level.time < sg_fields.next_refresh)
+	(void)Fields_ActionTopologyRefresh(r);
+	topology_changed = sg_fields.action_topology_pending;
+	cadence_due = (level.time >= sg_fields.next_refresh);
+	if (!topology_changed && !cadence_due)
 		return;
-	sg_fields.next_refresh = level.time + 1.0f;
-	Futility_Decay();
+	if (cadence_due)
+	{
+		sg_fields.next_refresh = level.time + 1.0f;
+		Futility_Decay();
+	}
 
 	{
 		/* the entity walk sees an item going up or down, but a rune moves
 		 * WHILE up every 30s (Rune_Think, g_runes.c:338) -- the belief
 		 * signature is what notices that */
-		static unsigned belief_sig;
 		unsigned bsig = Caco_ItemBeliefSig();
 
 		for (i = 0; i < SG_FIELD_CLASSES; i++)
 			if (Class_Signature(&field_classes[i]) != sg_fields.item_sig[i]
-			    || (Class_PerItem(i) && bsig != belief_sig))
+			    || (Class_PerItem(i) && bsig != sg_field_belief_sig))
 				Class_Build(r, i);
-		belief_sig = bsig;
+		sg_field_belief_sig = bsig;
 	}
 
 	/* the cvar's own edge: turning sg_megaworth on mid-level must not wait
@@ -1178,8 +1486,8 @@ void Fields_Refresh(rune_t *r)
 	/* our-carrier support fields, one per team -- flooded from a point
 	 * AHEAD of the carrier, not from its heels. The field refreshes once
 	 * a second and a rope-speed carrier outruns its own past: escorts
-	 * routed to the believed position screened nothing (waves 111-112:
-	 * 0-11% of carry seconds with an escort inside 700). The flood seed
+	 * routed to the believed position screened nothing (0-11% of carry
+	 * seconds with an escort inside 700). The flood seed
 	 * now walks three hops down the carrier's homeward gradient first,
 	 * so the escort converges on where the carrier is GOING and the
 	 * screen forms on the path, not the wake. */
@@ -1204,7 +1512,8 @@ void Fields_Refresh(rune_t *r)
 				{
 					rune_link_t *l2 = &r->links[li2];
 
-					if (home[l2->to] < bv)
+					if (Field_LinkAdmitted(l2) &&
+					    home[l2->to] < bv)
 					{
 						bv = home[l2->to];
 						best = l2->to;
@@ -1226,4 +1535,5 @@ void Fields_Refresh(rune_t *r)
 			sg_fields.our_carrier_valid[i] = false;
 		}
 	}
+	sg_fields.action_topology_pending = false;
 }

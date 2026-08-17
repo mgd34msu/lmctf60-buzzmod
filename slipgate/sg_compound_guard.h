@@ -133,7 +133,7 @@ sg_compound_guard_result_t SG_CompoundGuardBotDisconnected(
 sg_compound_guard_result_t SG_CompoundGuardBotReset(
 	sg_compound_guard_bot_t *bot);
 
-/* These calls do not change any RUNE action/revision gate.  In particular,
+/* These calls do not change any RUNE action gate. In particular,
  * CompoundPreopen only reserves already-authorized execution; it cannot make
  * a dormant compound action live.  DECLARED_DOOR and COMPOUND_PREOPEN share
  * one process-wide transaction: either acquire conflicts while any lease or

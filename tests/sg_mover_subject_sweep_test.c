@@ -5,20 +5,298 @@
 #include <string.h>
 
 #include "g_local.h"
+#include "slipgate/sg_hooks.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_rune_binding.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_util.h"
 
 #define TEST_EDICTS 16
 #define MOVER_INDEX 11
 #define HOOK_INDEX 12
+#define BUTTON_INDEX 5
+#define DOOR_INDEX 6
 
 game_export_t globals;
 game_locals_t game;
+level_locals_t level;
 edict_t *g_edicts;
+sg_host_t sg_host;
 
 static edict_t ents[TEST_EDICTS];
 static gclient_t clients[2];
 static int failures;
+static cvar_t replay_gravity;
+cvar_t *sv_gravity;
+static edict_t *contact_button;
+static int contact_axis;
+static int binding_current;
+static const sg_rune_mechanism_binding_t *sibling_binding;
+static uint32_t sibling_mover_keys[SG_RUNE_BINDING_MAX_MOVERS];
+static size_t sibling_mover_count;
+static edict_t *sibling_trigger_a;
+static edict_t *sibling_trigger_b;
+static edict_t *sibling_trigger_hits[4];
+static int sibling_trigger_hit_count;
+static float sibling_pmove_x;
+static qboolean ground_test_active;
+static qboolean ground_test_blocked;
+static qboolean ground_test_drift;
+static qboolean ground_test_classification_drift;
+static float ground_test_boundary;
+static int ground_test_snap_axis;
+static int ground_test_waterlevel;
+static int ground_test_watertype;
+static qboolean carry_test_blocked;
+static qboolean carry_test_passent_ok;
+static qboolean carry_test_coords_ok;
+static int carry_test_mask;
+static int contact_test_mask;
+static edict_t *immutable_test_support;
+static trace_t population_trace_result;
+static int population_trace_calls;
+static int population_trace_mask;
+static int population_direct_index;
+static int population_owned_index;
+static int population_foreign_index;
+static int population_immutable_index;
+static solid_t population_direct_seen;
+static solid_t population_owned_seen;
+static solid_t population_foreign_seen;
+static solid_t population_immutable_seen;
+static qboolean population_reenter;
+static qboolean population_reenter_independent;
+static qboolean population_nested_result;
+static qboolean population_mutate_identity;
+static qboolean population_mutate_owner;
+static qboolean population_mutate_area;
+static qboolean population_mutate_base;
+
+short SG_RuneProofGravity(void)
+{
+	return 800;
+}
+
+qboolean SG_ImmutableSupport(edict_t *ent)
+{
+	return ent == &ents[0] || ent == immutable_test_support;
+}
+
+void Touch_Item(edict_t *ent, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)ent;
+	(void)other;
+	(void)plane;
+	(void)surf;
+}
+
+static int GroundPointContents(const vec3_t point)
+{
+	(void)point;
+	return ground_test_watertype;
+}
+
+static trace_t StableGroundTrace(const vec3_t start, const vec3_t mins,
+	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
+{
+	trace_t trace;
+
+	(void)maxs;
+	(void)passent;
+	(void)contentmask;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = 1.0f;
+	VectorCopy(end, trace.endpos);
+	trace.ent = &ents[0];
+	if (!ground_test_active || !mins)
+		return trace;
+	if (ground_test_blocked ||
+	    (start[0] == end[0] && start[1] == end[1] &&
+	     start[2] == end[2] &&
+	     start[ground_test_snap_axis] <= ground_test_boundary))
+	{
+		trace.startsolid = true;
+		trace.allsolid = true;
+		trace.fraction = 0.0f;
+	}
+	return trace;
+}
+
+static void StableGroundPmove(pmove_t *pmove)
+{
+	vec3_t position, mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+	trace_t trace;
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+		position[axis] = pmove->s.origin[axis] * 0.125f;
+	if (pmove->snapinitial)
+	{
+		trace = pmove->trace(position, mins, maxs, position);
+		if (trace.allsolid)
+		{
+			pmove->s.origin[ground_test_snap_axis]++;
+			position[ground_test_snap_axis] =
+				pmove->s.origin[ground_test_snap_axis] * 0.125f;
+			trace = pmove->trace(position, mins, maxs, position);
+			if (trace.allsolid)
+				pmove->s.origin[ground_test_snap_axis]--;
+		}
+	}
+	if (pmove->cmd.msec != 0 && ground_test_drift)
+		pmove->s.origin[0]++;
+	pmove->s.velocity[0] = pmove->s.velocity[1] =
+		pmove->s.velocity[2] = 0;
+	pmove->s.pm_flags |= PMF_ON_GROUND;
+	pmove->groundentity = &ents[0];
+	pmove->waterlevel = ground_test_waterlevel;
+	pmove->watertype = ground_test_watertype;
+	if (pmove->cmd.msec != 0 && ground_test_classification_drift)
+		pmove->waterlevel = ground_test_waterlevel == 2 ? 1 : 2;
+}
+
+edict_t *G_Find(edict_t *from, int fieldofs, char *match)
+{
+	int index = from ? (int)(from - g_edicts) + 1 : 0;
+
+	for (; index < globals.num_edicts; index++)
+	{
+		char *value;
+
+		if (!g_edicts[index].inuse)
+			continue;
+		value = *(char **)((byte *)&g_edicts[index] + fieldofs);
+		if (value && !Q_stricmp(value, match))
+			return &g_edicts[index];
+	}
+	return NULL;
+}
+
+static trace_t ButtonContactTrace(const vec3_t start, const vec3_t mins,
+	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
+{
+	trace_t trace;
+	float boundary;
+
+	(void)mins;
+	(void)passent;
+	contact_test_mask = contentmask;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = 1.0f;
+	VectorCopy(end, trace.endpos);
+	if (!contact_button)
+		return trace;
+	if (contact_axis == 4)
+	{
+		trace.fraction = 0.0f;
+		trace.ent = contact_button;
+	}
+	else if (contact_axis == 3)
+	{
+		if (fabsf(start[0] + 32.125f) < 0.01f &&
+		    fabsf(start[1] - 495.875f) < 0.01f &&
+		    fabsf(start[2] - 44.125f) < 0.01f)
+		{
+			trace.fraction = 0.5f;
+			trace.ent = contact_button;
+		}
+	}
+	else if (contact_axis == 2)
+	{
+		boundary = contact_button->absmax[2] - mins[2];
+		if (start[2] <= boundary)
+		{
+			trace.startsolid = true;
+			trace.fraction = 0.0f;
+			trace.ent = contact_button;
+		}
+		else if (end[2] <= boundary)
+		{
+			trace.fraction = (start[2] - boundary) /
+			                 (start[2] - end[2]);
+			trace.ent = contact_button;
+		}
+	}
+	else
+	{
+		boundary = contact_button->absmin[0] - maxs[0];
+		if (start[0] >= boundary)
+		{
+			trace.startsolid = true;
+			trace.fraction = 0.0f;
+			trace.ent = contact_button;
+		}
+		else if (end[0] >= boundary)
+		{
+			trace.fraction = (boundary - start[0]) /
+			                 (end[0] - start[0]);
+			trace.ent = contact_button;
+		}
+	}
+	if (trace.fraction < 1.0f)
+	{
+		int axis;
+
+		for (axis = 0; axis < 3; axis++)
+			trace.endpos[axis] = start[axis] +
+			    trace.fraction * (end[axis] - start[axis]);
+	}
+	return trace;
+}
+
+static trace_t ButtonCarryTrace(const vec3_t start, const vec3_t mins,
+	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
+{
+	trace_t trace;
+
+	(void)mins;
+	(void)maxs;
+	carry_test_mask = contentmask;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = carry_test_blocked ? 0.5f : 1.0f;
+	VectorCopy(end, trace.endpos);
+	trace.ent = &ents[0];
+	if (carry_test_blocked)
+		trace.ent = &ents[DOOR_INDEX + 1];
+	carry_test_passent_ok = passent == contact_button;
+	carry_test_coords_ok = start[2] == 44.125f && end[2] == 42.125f;
+	return trace;
+}
+
+static trace_t PopulationNativeTrace(const vec3_t start, const vec3_t mins,
+	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
+{
+	trace_t nested;
+
+	population_trace_calls++;
+	population_trace_mask = contentmask;
+	population_direct_seen = population_direct_index > 0
+	    ? ents[population_direct_index].solid : SOLID_NOT;
+	population_owned_seen = population_owned_index > 0
+	    ? ents[population_owned_index].solid : SOLID_NOT;
+	population_foreign_seen = population_foreign_index > 0
+	    ? ents[population_foreign_index].solid : SOLID_NOT;
+	population_immutable_seen = population_immutable_index > 0
+	    ? ents[population_immutable_index].solid : SOLID_NOT;
+	if (population_reenter)
+	{
+		population_reenter = false;
+		population_nested_result = SG_OracleStablePopulationTrace(start,
+		    mins, maxs, end, passent, population_reenter_independent,
+		    &nested);
+	}
+	if (population_mutate_identity && population_direct_index > 0)
+		ents[population_direct_index].s.number++;
+	if (population_mutate_owner && population_direct_index > 0)
+		ents[population_direct_index].owner = &ents[DOOR_INDEX + 1];
+	if (population_mutate_area && population_direct_index > 0)
+		ents[population_direct_index].area.prev = NULL;
+	if (population_mutate_base)
+		g_edicts = &ents[1];
+	return population_trace_result;
+}
 
 void door_use(edict_t *self, edict_t *other, edict_t *activator)
 {
@@ -38,6 +316,124 @@ void door_blocked(edict_t *self, edict_t *other)
 {
 	(void)self;
 	(void)other;
+}
+
+void button_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self;
+	(void)other;
+	(void)plane;
+	(void)surf;
+}
+
+void button_use(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self;
+	(void)other;
+	(void)activator;
+}
+
+void Touch_DoorTrigger(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self; (void)other; (void)plane; (void)surf;
+}
+
+void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self; (void)other; (void)plane; (void)surf;
+}
+
+void Use_Target_Speaker(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
+void trigger_relay_use(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
+int SG_RuneMechanismBindingCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	(void)binding;
+	return binding_current;
+}
+
+int SG_RuneMechanismBindingTopologyCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	(void)binding;
+	return binding_current;
+}
+
+int SG_MechCatalogButtonEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	int axis;
+
+	(void)node;
+	if (!endpoints_out || key != BUTTON_INDEX ||
+	    entity != &ents[BUTTON_INDEX])
+		return 0;
+	memset(endpoints_out, 0, sizeof(*endpoints_out));
+	for (axis = 0; axis < 3; axis++)
+	{
+		float start = entity->moveinfo.start_origin[axis] * 8.0f;
+		float end = entity->moveinfo.end_origin[axis] * 8.0f;
+
+		if (start != (float)(short)start || end != (float)(short)end)
+			return 0;
+		endpoints_out->start_q8[axis] = (short)start;
+		endpoints_out->end_q8[axis] = (short)end;
+	}
+	return 1;
+}
+
+int SG_MechCatalogButtonBottomEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	return entity && entity->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
+	       SG_MechCatalogButtonEndpoints(key, node, entity, endpoints_out);
+}
+
+edict_t *SG_RuneMechanismBindingResolveNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	if (binding != sibling_binding || key >= TEST_EDICTS)
+		return NULL;
+	return &ents[key];
+}
+
+edict_t *SG_RuneMechanismBindingResolveTopologyNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	return SG_RuneMechanismBindingResolveNode(binding, key);
+}
+
+int SG_RuneMechanismBindingMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	if (binding != sibling_binding || !keys_out || !key_count_out ||
+	    sibling_mover_count == 0U)
+		return 0;
+	memcpy(keys_out, sibling_mover_keys,
+	       sibling_mover_count * sizeof(sibling_mover_keys[0]));
+	*key_count_out = sibling_mover_count;
+	return 1;
+}
+
+int SG_RuneMechanismBindingTopologyMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	return SG_RuneMechanismBindingMoverKeys(binding, keys_out, key_count_out);
 }
 
 void Move_Begin(edict_t *self) { (void)self; }
@@ -149,6 +545,34 @@ static void ResetWorld(void)
 	memset(clients, 0, sizeof(clients));
 	memset(&globals, 0, sizeof(globals));
 	memset(&game, 0, sizeof(game));
+	immutable_test_support = NULL;
+	memset(&population_trace_result, 0, sizeof(population_trace_result));
+	population_trace_result.fraction = 1.0f;
+	population_trace_calls = 0;
+	population_trace_mask = 0;
+	population_direct_index = 0;
+	population_owned_index = 0;
+	population_foreign_index = 0;
+	population_immutable_index = 0;
+	population_direct_seen = SOLID_NOT;
+	population_owned_seen = SOLID_NOT;
+	population_foreign_seen = SOLID_NOT;
+	population_immutable_seen = SOLID_NOT;
+	population_reenter = false;
+	population_reenter_independent = true;
+	population_nested_result = false;
+	population_mutate_identity = false;
+	population_mutate_owner = false;
+	population_mutate_area = false;
+	population_mutate_base = false;
+	binding_current = 0;
+	sibling_binding = NULL;
+	sibling_mover_count = 0U;
+	sibling_trigger_a = NULL;
+	sibling_trigger_b = NULL;
+	sibling_trigger_hit_count = 0;
+	sibling_pmove_x = 0.0f;
+	sv_gravity = NULL;
 	g_edicts = ents;
 	game.maxentities = TEST_EDICTS;
 	game.maxclients = 2;
@@ -158,6 +582,49 @@ static void ResetWorld(void)
 	globals.num_edicts = HOOK_INDEX + 1;
 	globals.max_edicts = TEST_EDICTS;
 	LiveEdict(&ents[0], 0, "worldspawn");
+}
+
+static int SiblingBoxEdicts(const vec3_t mins, const vec3_t maxs,
+	edict_t **list, int maxcount, int areatype)
+{
+	edict_t *triggers[2] = { sibling_trigger_a, sibling_trigger_b };
+	int count = 0;
+	int index;
+
+	if (areatype != AREA_TRIGGERS)
+		return 0;
+	for (index = 0; index < 2; index++)
+	{
+		edict_t *trigger = triggers[index];
+
+		if (!trigger || maxs[0] <= trigger->absmin[0] ||
+		    mins[0] >= trigger->absmax[0] ||
+		    maxs[1] <= trigger->absmin[1] ||
+		    mins[1] >= trigger->absmax[1] ||
+		    maxs[2] <= trigger->absmin[2] ||
+		    mins[2] >= trigger->absmax[2])
+			continue;
+		if (count < maxcount)
+			list[count] = trigger;
+		if (sibling_trigger_hit_count <
+		    (int)(sizeof(sibling_trigger_hits) /
+		          sizeof(sibling_trigger_hits[0])))
+			sibling_trigger_hits[sibling_trigger_hit_count++] = trigger;
+		count++;
+	}
+	return count;
+}
+
+static void SiblingEgressPmove(pmove_t *pmove)
+{
+	pmove->s.pm_type = PM_NORMAL;
+	pmove->s.origin[0] = (short)(sibling_pmove_x * 8.0f);
+	pmove->s.velocity[0] = 0;
+	pmove->s.velocity[1] = 0;
+	pmove->s.velocity[2] = 0;
+	pmove->groundentity = &ents[0];
+	pmove->waterlevel = 0;
+	pmove->watertype = 0;
 }
 
 static edict_t *TranslationMover(void)
@@ -184,6 +651,219 @@ static edict_t *TranslationMover(void)
 	VectorClear(mover->moveinfo.end_angles);
 	SetLinkedBounds(mover);
 	return mover;
+}
+
+static edict_t *PlayerSubject(float x, float y, float z, int movetype,
+	float max_z);
+
+static edict_t *AliasDoor(int index, float y)
+{
+	edict_t *door = &ents[index];
+
+	LiveEdict(door, index, "func_door");
+	door->solid = SOLID_BSP;
+	door->movetype = MOVETYPE_PUSH;
+	door->use = door_use;
+	door->blocked = door_blocked;
+	Set3(door->mins, -8.0f, -8.0f, 0.0f);
+	Set3(door->maxs, 8.0f, 8.0f, 8.0f);
+	Set3(door->s.origin, 0.0f, y, 0.0f);
+	VectorCopy(door->s.origin, door->moveinfo.start_origin);
+	Set3(door->moveinfo.end_origin, 64.0f, y, 0.0f);
+	door->moveinfo.speed = 100.0f;
+	door->moveinfo.accel = 100.0f;
+	door->moveinfo.decel = 100.0f;
+	door->moveinfo.distance = 64.0f;
+	door->moveinfo.wait = 3.0f;
+	door->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	SetLinkedBounds(door);
+	return door;
+}
+
+static edict_t *AliasTrigger(int index, float x, const char *target)
+{
+	edict_t *trigger = &ents[index];
+
+	LiveEdict(trigger, index, "trigger_multiple");
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = (char *)target;
+	Set3(trigger->mins, -8.0f, -32.0f, -32.0f);
+	Set3(trigger->maxs, 8.0f, 32.0f, 32.0f);
+	Set3(trigger->s.origin, x, 0.0f, 0.0f);
+	SetLinkedBounds(trigger);
+	return trigger;
+}
+
+static void TestBoundDoorSiblingAliasReplay(void)
+{
+	static char alias_target[] = "alias_target";
+	static char other_target[] = "other_target";
+	static char alias_team[] = "alias_team";
+	rune_link_t link;
+	rune_mechanism_plan_t plan;
+	rune_mechanism_node_t mover_node;
+	sg_rune_mechanism_binding_t binding;
+	edict_t *master;
+	edict_t *member;
+	edict_t *other;
+	edict_t *button;
+	edict_t *entry_trigger;
+	edict_t *player;
+	usercmd_t cmd;
+
+	ResetWorld();
+	master = AliasDoor(MOVER_INDEX, 0.0f);
+	member = AliasDoor(HOOK_INDEX, 64.0f);
+	other = AliasDoor(10, 128.0f);
+	master->targetname = alias_target;
+	member->targetname = alias_target;
+	other->targetname = other_target;
+	master->team = alias_team;
+	member->team = alias_team;
+	master->teammaster = master;
+	master->teamchain = member;
+	member->teammaster = master;
+	member->flags = FL_TEAMSLAVE;
+	sibling_trigger_a = AliasTrigger(3, -40.0f, alias_target);
+	sibling_trigger_b = AliasTrigger(4, 96.0f, alias_target);
+	player = PlayerSubject(-40.0f, 0.0f, 0.0f, MOVETYPE_WALK, 32.0f);
+	memset(&link, 0, sizeof(link));
+	memset(&plan, 0, sizeof(plan));
+	memset(&mover_node, 0, sizeof(mover_node));
+	memset(&binding, 0, sizeof(binding));
+	link.action = RL_DOOR;
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	mover_node.key = MOVER_INDEX;
+	binding.link = &link;
+	binding.plan = &plan;
+	binding.entry_entity = sibling_trigger_a;
+	binding.mover_entity = master;
+	binding.mover_node = &mover_node;
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = 25;
+
+	/* Generation remains allowed to treat the opposite-side activator as the
+	 * same complete physical mechanism before a sealed binding exists. */
+	CHECK(SG_DeclaredDoorEquivalentActivation(sibling_trigger_a,
+	    sibling_trigger_b, master, sibling_trigger_b->s.origin));
+
+	sibling_binding = &binding;
+	sibling_mover_keys[0] = MOVER_INDEX;
+	sibling_mover_keys[1] = HOOK_INDEX;
+	sibling_mover_count = 2U;
+	binding_current = 1;
+	replay_gravity.value = 800.0f;
+	sv_gravity = &replay_gravity;
+	sg_host.box_edicts = SiblingBoxEdicts;
+	sg_host.pmove = SiblingEgressPmove;
+
+	/* The exact bound trigger remains valid.  The two overlap samples are the
+	 * initial entry into A and its unchanged physical replay position. */
+	sibling_pmove_x = -40.0f;
+	sibling_trigger_hit_count = 0;
+	CHECK(SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(sibling_trigger_hit_count == 2 &&
+	      sibling_trigger_hits[0] == sibling_trigger_a &&
+	      sibling_trigger_hits[1] == sibling_trigger_a);
+
+	/* This is the sealed-loader ordering that failed in the corpus: the link
+	 * enters A, then the egress Pmove reaches only B.  Both boxes are real
+	 * physical overlaps and B owns the identical two-member mover closure. */
+	sibling_pmove_x = 96.0f;
+	sibling_trigger_hit_count = 0;
+	CHECK(SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(sibling_trigger_hit_count == 2 &&
+	      sibling_trigger_hits[0] == sibling_trigger_a &&
+	      sibling_trigger_hits[1] == sibling_trigger_b);
+
+	/* General generation equivalence can legitimately normalize a canonical
+	 * automatic door trigger.  A sealed direct-trigger replay must not borrow
+	 * that broader law: B is physically overlapped and owns the same team, but
+	 * only a direct Touch_Multi sibling has replay authority. */
+	sibling_trigger_b->touch = Touch_DoorTrigger;
+	sibling_trigger_b->owner = master;
+	CHECK(SG_DeclaredDoorEquivalentActivation(sibling_trigger_a,
+	    sibling_trigger_b, master, sibling_trigger_b->s.origin));
+	sibling_trigger_hit_count = 0;
+	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(sibling_trigger_hit_count == 2 &&
+	      sibling_trigger_hits[0] == sibling_trigger_a &&
+	      sibling_trigger_hits[1] == sibling_trigger_b);
+	sibling_trigger_b->touch = Touch_Multi;
+	sibling_trigger_b->owner = NULL;
+
+	/* B may not retarget an independently safe but different fanout/set. */
+	sibling_trigger_b->target = other_target;
+	sibling_trigger_hit_count = 0;
+	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(sibling_trigger_hit_count == 2 &&
+	      sibling_trigger_hits[1] == sibling_trigger_b);
+	sibling_trigger_b->target = alias_target;
+
+	/* The binding's sealed mover keys remain authority even when B's visible
+	 * target closure is unchanged.  Dropping the master key rejects the alias. */
+	sibling_mover_keys[0] = HOOK_INDEX;
+	sibling_mover_count = 1U;
+	sibling_trigger_hit_count = 0;
+	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(sibling_trigger_hit_count == 2 &&
+	      sibling_trigger_hits[1] == sibling_trigger_b);
+	sibling_mover_keys[0] = MOVER_INDEX;
+	sibling_mover_keys[1] = HOOK_INDEX;
+	sibling_mover_count = 2U;
+
+	/* The sibling exception is exclusively DIRECT_TRIGGER_DOOR.  A valid stock
+	 * button controller facing the same direct B trigger retains the normal
+	 * rejection. */
+	button = &ents[BUTTON_INDEX];
+	LiveEdict(button, BUTTON_INDEX, "func_button");
+	button->target = alias_target;
+	button->movetype = MOVETYPE_STOP;
+	button->solid = SOLID_BSP;
+	button->touch = button_touch;
+	button->use = button_use;
+	button->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	button->moveinfo.speed = 40.0f;
+	button->moveinfo.accel = 40.0f;
+	button->moveinfo.decel = 40.0f;
+	button->moveinfo.wait = 3.0f;
+	Set3(button->mins, -8.0f, -8.0f, -4.0f);
+	Set3(button->maxs, 8.0f, 8.0f, 4.0f);
+	VectorClear(button->moveinfo.start_origin);
+	Set3(button->moveinfo.end_origin, 0.0f, 0.0f, -2.0f);
+	SetLinkedBounds(button);
+	entry_trigger = sibling_trigger_a;
+	link.action = RL_BUTTON_DOOR;
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	binding.entry_entity = button;
+	sibling_trigger_a = NULL;
+	sibling_trigger_hit_count = 0;
+	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(sibling_trigger_hit_count == 1 &&
+	      sibling_trigger_hits[0] == sibling_trigger_b);
+	sibling_trigger_a = entry_trigger;
+	binding.entry_entity = entry_trigger;
+	link.action = RL_DOOR;
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+
+	/* The same proof applies to a one-member direct door set; the multi-member
+	 * coverage above guards complete team fanout rather than just one leaf. */
+	member->inuse = false;
+	master->team = NULL;
+	master->teamchain = NULL;
+	sibling_mover_count = 1U;
+	sibling_mover_keys[0] = MOVER_INDEX;
+	sibling_trigger_hit_count = 0;
+	CHECK(SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(sibling_trigger_hit_count == 2 &&
+	      sibling_trigger_hits[0] == sibling_trigger_a &&
+	      sibling_trigger_hits[1] == sibling_trigger_b);
+
+	memset(&sg_host, 0, sizeof(sg_host));
+	sv_gravity = NULL;
 }
 
 static edict_t *PlayerSubject(float x, float y, float z, int movetype,
@@ -234,6 +914,404 @@ static edict_t *HookSubject(float x, float y, float z, int solid)
 	SetLinkedBounds(hook);
 	owner->client->hook = hook;
 	return hook;
+}
+
+static edict_t *ButtonDoorFixture(void)
+{
+	edict_t *button = &ents[BUTTON_INDEX];
+	edict_t *door = &ents[DOOR_INDEX];
+
+	LiveEdict(door, DOOR_INDEX, "func_door");
+	door->targetname = "button_target";
+	door->teammaster = door;
+	door->movetype = MOVETYPE_PUSH;
+	door->solid = SOLID_BSP;
+	door->use = door_use;
+	door->blocked = door_blocked;
+	door->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	door->moveinfo.distance = 10.0f;
+	door->moveinfo.speed = 100.0f;
+	door->moveinfo.accel = 100.0f;
+	door->moveinfo.decel = 100.0f;
+	door->moveinfo.wait = 3.0f;
+	Set3(door->mins, -8.0f, -8.0f, 0.0f);
+	Set3(door->maxs, 8.0f, 8.0f, 64.0f);
+	Set3(door->moveinfo.start_origin, 256.0f, 256.0f, 0.0f);
+	Set3(door->moveinfo.end_origin, 266.0f, 256.0f, 0.0f);
+	VectorCopy(door->moveinfo.start_origin, door->s.origin);
+	SetLinkedBounds(door);
+
+	LiveEdict(button, BUTTON_INDEX, "func_button");
+	button->target = "button_target";
+	button->movetype = MOVETYPE_STOP;
+	button->solid = SOLID_BSP;
+	button->touch = button_touch;
+	button->use = button_use;
+	button->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	/* Stock SP_func_button leaves distance zero and publishes only endpoints. */
+	button->moveinfo.distance = 0.0f;
+	button->moveinfo.speed = 40.0f;
+	button->moveinfo.accel = 40.0f;
+	button->moveinfo.decel = 40.0f;
+	button->moveinfo.wait = 3.0f;
+	VectorClear(button->moveinfo.start_origin);
+	Set3(button->moveinfo.end_origin, 0.0f, 0.0f, -2.0f);
+	Set3(button->mins, -34.0f, -58.0f, -4.0f);
+	Set3(button->maxs, 34.0f, 58.0f, 4.0f);
+	SetLinkedBounds(button);
+	return button;
+}
+
+static void TestButtonContactAndEndpointTiming(void)
+{
+	edict_t *button;
+	rune_link_t link;
+	rune_mechanism_plan_t plan;
+	sg_rune_mechanism_binding_t binding;
+	vec3_t boundary, outward, source, early, anchor;
+	vec3_t trace_end, trace_mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t trace_maxs = { 16.0f, 16.0f, 32.0f };
+	trace_t stable_trace;
+	trace_t expected_trace;
+	csurface_t expected_surface;
+
+	ResetWorld();
+	button = ButtonDoorFixture();
+	contact_button = button;
+	sg_host.trace = ButtonContactTrace;
+
+	/* Thin floor plate: the q8 point exactly on the inclusive brush boundary
+	 * is startsolid, while one q8 unit outward has a clear inward first hit. */
+	Set3(button->absmin, -98.0f, 454.0f, 14.0f);
+	Set3(button->absmax, -30.0f, 570.0f, 22.0f);
+	contact_axis = 2;
+	Set3(boundary, -64.0f, 512.0f, 46.0f);
+	Set3(outward, -64.0f, 512.0f, 46.125f);
+	CHECK(SG_DeclaredButtonDoorContactStatus(button, boundary) ==
+	      SG_BUTTON_CONTACT_STARTSOLID);
+	CHECK(SG_DeclaredButtonDoorContactStatus(button, outward) ==
+	      SG_BUTTON_CONTACT_OK);
+
+	/* The first generated xmap28 button link starts well left of its wide floor
+	 * plate.  An expanded-AABB approximation reported contact at X=-114 and
+	 * paused replay roughly 82 units before the exact recorded anchor.  Bound
+	 * replay must use the same first-hit trace as generation. */
+	memset(&link, 0, sizeof(link));
+	memset(&plan, 0, sizeof(plan));
+	memset(&binding, 0, sizeof(binding));
+	link.action = RL_BUTTON_DOOR;
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	binding.link = &link;
+	binding.plan = &plan;
+	binding.entry_entity = button;
+	Set3(button->absmin, -98.0f, 454.0f, 14.0f);
+	Set3(button->absmax, -30.0f, 570.0f, 22.0f);
+	Set3(source, -160.0f, 560.0f, 40.03125f);
+	Set3(early, -114.0f, 560.0f, 40.03125f);
+	Set3(anchor, -32.125f, 495.875f, 44.125f);
+	contact_axis = 3;
+	binding_current = 1;
+	CHECK(!SG_BoundDoorEntryContactMatches(&binding, source));
+	CHECK(!SG_BoundDoorEntryContactMatches(&binding, early));
+	CHECK(SG_BoundDoorEntryContactMatches(&binding, anchor));
+	/* Bound replay's inward contact probe is anchor authentication, not a
+	 * synthetic button callback.  A lookahead-only match must keep walking
+	 * until Pmove reports the physical solid touch; ordinary trigger volumes
+	 * retain their bound containment fallback. */
+	CHECK(!SG_OracleDoorApproachContactObserved(true, false, true));
+	CHECK(!SG_OracleDoorApproachContactObserved(true, false, false));
+	CHECK(SG_OracleDoorApproachContactObserved(true, true, true));
+	CHECK(SG_OracleDoorApproachContactObserved(true, true, false));
+	CHECK(SG_OracleDoorApproachContactObserved(false, false, true));
+	CHECK(SG_OracleDoorApproachContactObserved(false, true, true));
+	CHECK(SG_OracleDoorApproachContactObserved(false, true, false));
+	CHECK(!SG_OracleDoorApproachContactObserved(false, false, false));
+	binding_current = 0;
+
+	/* The same inclusive-boundary law applies to a vertical button face. */
+	Set3(button->absmin, 30.0f, -32.0f, 0.0f);
+	Set3(button->absmax, 38.0f, 32.0f, 64.0f);
+	contact_axis = 0;
+	Set3(boundary, 14.0f, 0.0f, 32.0f);
+	Set3(outward, 13.875f, 0.0f, 32.0f);
+	CHECK(SG_DeclaredButtonDoorContactStatus(button, boundary) ==
+	      SG_BUTTON_CONTACT_STARTSOLID);
+	CHECK(SG_DeclaredButtonDoorContactStatus(button, outward) ==
+	      SG_BUTTON_CONTACT_OK);
+
+	/* 2 units at 40 u/s plus the stock completion margin is 250 ms.  The
+	 * complete serialized cost therefore remains valid even though the unused
+	 * moveinfo.distance field is zero. */
+	CHECK(SG_DeclaredDoorContractCost(button, 500, 250, 500) == 2850);
+	button->moveinfo.wait = 0.5f;
+	CHECK(SG_DeclaredDoorContractCost(button, 500, 250, 500) < 0);
+	button->moveinfo.wait = 3.0f;
+
+	/* A RIDER witness is a continuous player-hull carry, not two clear
+	 * teleported endpoints.  Ignore only the authenticated button pusher and
+	 * reject any world/foreign obstruction in the middle. */
+	Set3(source, -32.125f, 495.875f, 44.125f);
+	Set3(anchor, -32.125f, 495.875f, 42.125f);
+	contact_button = button;
+	carry_test_blocked = false;
+	carry_test_passent_ok = false;
+	carry_test_coords_ok = false;
+	sg_host.trace = ButtonCarryTrace;
+	CHECK(SG_OracleButtonCarryClear(button, source, anchor, false));
+	CHECK(carry_test_passent_ok && carry_test_coords_ok);
+	CHECK(carry_test_mask == MASK_PLAYERSOLID);
+	CHECK(SG_OracleButtonCarryClear(button, source, anchor, true));
+	CHECK(carry_test_mask == MASK_PLAYERSOLID);
+	carry_test_blocked = true;
+	CHECK(!SG_OracleButtonCarryClear(button, source, anchor, true));
+	carry_test_blocked = false;
+
+	/* Loader replay keeps the native full collision trace authoritative while
+	 * hiding only linked client and client-owned BBOXes for that synchronous
+	 * call.  Deterministic BBOX/BSP order and every native trace field remain
+	 * untouched; a foreign deterministic BBOX winner fails closed. */
+	LiveEdict(&ents[1], 1, "player");
+	ents[1].client = &clients[0];
+	ents[1].solid = SOLID_BBOX;
+	SetLinkedBounds(&ents[1]);
+	LiveEdict(&ents[2], 2, "player");
+	ents[2].client = &clients[1];
+	LiveEdict(&ents[DOOR_INDEX + 1], DOOR_INDEX + 1, "foreign_box");
+	ents[DOOR_INDEX + 1].solid = SOLID_BBOX;
+	SetLinkedBounds(&ents[DOOR_INDEX + 1]);
+	LiveEdict(&ents[DOOR_INDEX + 2], DOOR_INDEX + 2, "client_owned");
+	ents[DOOR_INDEX + 2].solid = SOLID_BBOX;
+	ents[DOOR_INDEX + 2].owner = &ents[2];
+	SetLinkedBounds(&ents[DOOR_INDEX + 2]);
+	LiveEdict(&ents[DOOR_INDEX + 3], DOOR_INDEX + 3,
+	    "misc_teleporter_dest");
+	ents[DOOR_INDEX + 3].solid = SOLID_BBOX;
+	SetLinkedBounds(&ents[DOOR_INDEX + 3]);
+	immutable_test_support = &ents[DOOR_INDEX + 3];
+	population_direct_index = 1;
+	population_owned_index = DOOR_INDEX + 2;
+	population_foreign_index = DOOR_INDEX + 1;
+	population_immutable_index = DOOR_INDEX + 3;
+	sg_host.trace = PopulationNativeTrace;
+	Set3(source, -32.125f, 495.875f, 44.125f);
+	Set3(trace_end, 40.0f, 495.875f, 44.125f);
+	memset(&expected_surface, 0, sizeof(expected_surface));
+	expected_surface.flags = SURF_SLICK;
+	memset(&expected_trace, 0, sizeof(expected_trace));
+	expected_trace.fraction = 0.375f;
+	expected_trace.ent = immutable_test_support;
+	expected_trace.surface = &expected_surface;
+	expected_trace.contents = CONTENTS_MONSTER;
+	expected_trace.plane.normal[2] = 1.0f;
+	expected_trace.plane.dist = 17.25f;
+	Set3(expected_trace.endpos, -5.078125f, 495.875f, 44.125f);
+	population_trace_result = expected_trace;
+	CHECK(SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(population_trace_calls == 1 &&
+	      population_trace_mask == MASK_PLAYERSOLID);
+	CHECK(population_direct_seen == SOLID_NOT &&
+	      population_owned_seen == SOLID_NOT);
+	CHECK(population_foreign_seen == SOLID_BBOX &&
+	      population_immutable_seen == SOLID_BBOX);
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	CHECK(memcmp(&stable_trace, &expected_trace,
+	             sizeof(stable_trace)) == 0);
+
+	/* A native foreign winner is deterministic contamination, while a foreign
+	 * BBOX behind the native immutable/BSP winner needs no reconstruction and
+	 * cannot override that engine result. */
+	population_trace_result.ent = &ents[DOOR_INDEX + 1];
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	population_trace_result = expected_trace;
+	CHECK(SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+
+	/* A malicious host cannot smuggle a masked client winner back after the
+	 * restore.  Ordinary generation/live traces perform no masking and retain
+	 * the native foreign collision for their caller to handle normally. */
+	population_trace_result.ent = &ents[1];
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	population_trace_result.ent = &ents[DOOR_INDEX + 1];
+	CHECK(SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, false, &stable_trace));
+	CHECK(population_direct_seen == SOLID_BBOX &&
+	      population_owned_seen == SOLID_BBOX);
+
+	/* Native trace recursion is forbidden while the temporary publication is
+	 * visible.  The outer trace still restores both solids exactly. */
+	memset(&population_trace_result, 0, sizeof(population_trace_result));
+	population_trace_result.fraction = 1.0f;
+	VectorCopy(trace_end, population_trace_result.endpos);
+	population_trace_calls = 0;
+	population_reenter = true;
+	population_reenter_independent = true;
+	CHECK(SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(population_trace_calls == 1 && !population_nested_result);
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	population_trace_calls = 0;
+	population_reenter = true;
+	population_reenter_independent = false;
+	CHECK(SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(population_trace_calls == 1 && !population_nested_result);
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+
+	/* Malformed pre-trace identity publishes nothing.  If an adversarial trace
+	 * mutates identity while the scope is active, the owned solid field is
+	 * nevertheless restored before the call fails closed. */
+	population_trace_calls = 0;
+	ents[1].s.number = 13;
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(population_trace_calls == 0 && ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	ents[1].s.number = 1;
+	population_mutate_identity = true;
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	population_mutate_identity = false;
+	ents[1].s.number = 1;
+	population_mutate_owner = true;
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	population_mutate_owner = false;
+	ents[1].owner = NULL;
+	population_mutate_area = true;
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	population_mutate_area = false;
+	ents[1].area.prev = &ents[0].area;
+	population_mutate_base = true;
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	population_mutate_base = false;
+	g_edicts = ents;
+	ents[1].client = &clients[1];
+	population_trace_calls = 0;
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(population_trace_calls == 0 && ents[1].solid == SOLID_BBOX);
+	ents[1].client = &clients[0];
+	ents[DOOR_INDEX + 2].owner = &ents[TEST_EDICTS - 1];
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	CHECK(ents[1].solid == SOLID_BBOX &&
+	      ents[DOOR_INDEX + 2].solid == SOLID_BBOX);
+	ents[DOOR_INDEX + 2].owner = &ents[2];
+	/* Provenance is rejected before solid kind: a malformed client-shaped BSP
+	 * returned by a hostile trace cannot bypass the transient-winner gate. */
+	ents[1].solid = SOLID_BSP;
+	population_trace_result.ent = &ents[1];
+	population_trace_result.fraction = 0.5f;
+	CHECK(!SG_OracleStablePopulationTrace(source, trace_mins, trace_maxs,
+	    trace_end, NULL, true, &stable_trace));
+	ents[1].solid = SOLID_BBOX;
+	globals.num_edicts = MAX_EDICTS + 1;
+	CHECK(!SG_OracleButtonCarryClear(button, source, anchor, true));
+	globals.num_edicts = HOOK_INDEX + 1;
+	contact_button = NULL;
+	memset(&sg_host, 0, sizeof(sg_host));
+}
+
+static void TestStableGroundSource(void)
+{
+	vec3_t raw, stable;
+
+	ResetWorld();
+	ground_test_active = true;
+	ground_test_blocked = false;
+	ground_test_drift = false;
+	ground_test_classification_drift = false;
+	ground_test_waterlevel = 0;
+	ground_test_watertype = 0;
+	ground_test_snap_axis = 2;
+	sg_host.trace = StableGroundTrace;
+	sg_host.pmove = StableGroundPmove;
+	sg_host.pointcontents = GroundPointContents;
+
+	/* Positive floor epsilon truncates onto the solid boundary.  Initial snap
+	 * must run before the post-snap overlap gate and choose the +1 q8 shell. */
+	ground_test_boundary = 40.0f;
+	Set3(raw, 0.0f, 0.0f, 40.03125f);
+	CHECK(SG_OracleCanonicalGroundSource(raw, stable));
+	CHECK(stable[0] == 0.0f && stable[1] == 0.0f && stable[2] == 40.125f);
+
+	/* Signed truncation already puts a negative floor endpoint on the legal
+	 * outward shell; it remains exact rather than being positive-ceiled. */
+	ground_test_boundary = -168.0f;
+	Set3(raw, -8.0f, 16.0f, -167.96875f);
+	CHECK(SG_OracleCanonicalGroundSource(raw, stable));
+	CHECK(stable[0] == -8.0f && stable[1] == 16.0f &&
+	      stable[2] == -167.875f);
+
+	ground_test_boundary = 12.0f;
+	Set3(raw, 1.25f, -2.5f, 12.125f);
+	CHECK(SG_OracleCanonicalGroundSource(raw, stable));
+	CHECK(stable[0] == raw[0] && stable[1] == raw[1] &&
+	      stable[2] == raw[2]);
+
+	/* A slope/seam may need the engine's horizontal signed-q8 jitter rather
+	 * than a positive-only Z ceiling. */
+	ground_test_snap_axis = 0;
+	ground_test_boundary = 3.0f;
+	Set3(raw, 3.03125f, 4.0f, 12.125f);
+	CHECK(SG_OracleCanonicalGroundSource(raw, stable));
+	CHECK(stable[0] == 3.125f && stable[1] == 4.0f &&
+	      stable[2] == 12.125f);
+	ground_test_snap_axis = 2;
+	ground_test_boundary = 12.0f;
+
+	/* No clear initial-snap candidate models a floor/ceiling gap too tight for
+	 * the standing hull and must fail closed. */
+	ground_test_blocked = true;
+	CHECK(!SG_OracleCanonicalGroundSource(raw, stable));
+	ground_test_blocked = false;
+	/* Canonicalization must not delete slick/conveyor/current sources.  Their
+	 * subsequent zero-command drift and classification changes are recorded by
+	 * Seed_SourceUnstable and gate only standstill actions. */
+	ground_test_drift = true;
+	CHECK(SG_OracleCanonicalGroundSource(raw, stable));
+	ground_test_drift = false;
+	ground_test_waterlevel = 2;
+	ground_test_watertype = CONTENTS_WATER;
+	CHECK(SG_OracleCanonicalGroundSource(raw, stable));
+	ground_test_classification_drift = true;
+	CHECK(SG_OracleCanonicalGroundSource(raw, stable));
+	Set3(raw, -4096.0f, 0.0f, 12.125f);
+	CHECK(!SG_OracleCanonicalGroundSource(raw, stable));
+	Set3(raw, 4095.875f, 0.0f, 12.125f);
+	CHECK(!SG_OracleCanonicalGroundSource(raw, stable));
+	Set3(raw, 0.0f, 0.0f, 12.125f);
+	sg_host.pmove = NULL;
+	CHECK(!SG_OracleCanonicalGroundSource(raw, stable));
+	sg_host.pmove = StableGroundPmove;
+	sg_host.trace = NULL;
+	CHECK(!SG_OracleCanonicalGroundSource(raw, stable));
+	sg_host.trace = StableGroundTrace;
+	sg_host.pointcontents = NULL;
+	CHECK(!SG_OracleCanonicalGroundSource(raw, stable));
+	sg_host.pointcontents = GroundPointContents;
+	CHECK(!SG_OracleCanonicalGroundSource(NULL, stable));
+	CHECK(!SG_OracleCanonicalGroundSource(raw, NULL));
+
+	ground_test_active = false;
+	ground_test_classification_drift = false;
+	memset(&sg_host, 0, sizeof(sg_host));
 }
 
 static void RotatingPoint(edict_t *mover, const vec3_t local,
@@ -699,6 +1777,9 @@ static void TestInvalidIdentitiesFailClosed(void)
 
 int main(void)
 {
+	TestStableGroundSource();
+	TestButtonContactAndEndpointTiming();
+	TestBoundDoorSiblingAliasReplay();
 	TestTranslationAndBoundary();
 	TestRotatingAndSecretSweeps();
 	TestProspectivePushSweep();

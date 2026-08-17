@@ -92,7 +92,7 @@ def test_hold_and_clientthink_have_exact_authorization() -> None:
     emit = between(
         move,
         "/* Physics preflight and mover authority are independent.",
-        "if (drop_command_owned\n#ifdef SG_ACCEPT_DROP",
+        "if (proved_swim && bot->swim_replay_active",
     )
     assert emit.index("SG_DeclaredDoorGuardAuthorize") < emit.index(
         "ClientThink(e, cmd);"
@@ -106,12 +106,14 @@ def test_started_frame_authorizes_before_body_canonicalization() -> None:
     move = source("slipgate/sg_move.c")
     started = between(
         move,
-        "door_trigger = SG_DeclaredDoorForLink(decl->anchor, source);",
+        "if (declared_door)\n\t\t\t\t{\n\t\t\t\t\tshort wait_fixed[3];",
         "/* Activation can become true in the unactivated branch above",
     )
+    binding = started.index("DoorStep_DeclaredBindingForLink(bestlink,")
     authorize = started.index("SG_DeclaredDoorGuardAuthorize(bot, bestlink)")
     canonicalize = started.index("Ballistic_CanonicalizeSource")
-    assert authorize < canonicalize
+    assert binding < authorize < canonicalize
+    assert "SG_DeclaredDoorForLink" not in started
 
 
 def test_commit_retirement_requires_positive_clear() -> None:
@@ -145,7 +147,6 @@ def test_compound_admission_remains_dormant() -> None:
         row = registry[registry.index(f'"symbol": "{action}"') :]
         row = row[: row.index("}")]
         assert '"runtime_supported": 0' in row
-        assert '"controller_revision": 0' in row
 
 
 if __name__ == "__main__":

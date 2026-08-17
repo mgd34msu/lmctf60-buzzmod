@@ -8,10 +8,10 @@
 #define SG_ACTION_DESC_ROW(symbol_, id_, runtime_supported_, default_prov_, \
 	provenance_mask_, mode_mask_, trait_mask_, endpoint_, suffix_anchor_, \
 	preopen_anchor_, ride_anchor_, control_, mechanism_, effective_suffix_, \
-	bias_policy_, bias_ms_, revision_, name_, short_name_, color_) \
+	bias_policy_, bias_ms_, name_, short_name_, color_) \
 	{ symbol_, runtime_supported_, default_prov_, provenance_mask_, mode_mask_, \
 	  trait_mask_, endpoint_, suffix_anchor_, preopen_anchor_, ride_anchor_, \
-	  control_, mechanism_, effective_suffix_, bias_policy_, bias_ms_, revision_, \
+	  control_, mechanism_, effective_suffix_, bias_policy_, bias_ms_, \
 	  #symbol_, name_, short_name_, color_ },
 
 static const sg_action_desc_t sg_action_descs[SG_ACTION_COUNT] =
@@ -46,21 +46,11 @@ int SG_ActionRuntimeSupported(int action)
 	return desc != NULL && desc->runtime_supported != 0;
 }
 
-int SG_ActionWireValid(int version, int action)
+int SG_ActionWireValid(int action)
 {
-	if (!SG_ActionKnown(action))
-		return 0;
-	switch (version)
-	{
-	case SG_RUNE_WIRE_V1:
-		return action <= RL_ROCKETJUMP;
-	case SG_RUNE_WIRE_V2:
-		return action <= RL_DOOR;
-	case SG_RUNE_WIRE_V3:
-		return action <= RL_DOOR_HOOK;
-	default:
-		return 0;
-	}
+	return SG_ActionKnown(action) &&
+	       action >= SG_RUNE_WIRE_ACTION_FIRST &&
+	       action <= SG_RUNE_WIRE_ACTION_MAX;
 }
 
 int SG_ProvenanceKnown(int provenance)
@@ -68,20 +58,10 @@ int SG_ProvenanceKnown(int provenance)
 	return provenance >= RL_PROVEN && provenance < SG_PROVENANCE_COUNT;
 }
 
-int SG_ProvenanceWireValid(int version, int provenance)
+int SG_ProvenanceWireValid(int provenance)
 {
-	if (!SG_ProvenanceKnown(provenance))
-		return 0;
-	switch (version)
-	{
-	case SG_RUNE_WIRE_V1:
-	case SG_RUNE_WIRE_V2:
-		return provenance <= RL_DECLARED;
-	case SG_RUNE_WIRE_V3:
-		return provenance <= RL_CONTRACTED;
-	default:
-		return 0;
-	}
+	return SG_ProvenanceKnown(provenance) &&
+	       provenance <= RL_CONTRACTED;
 }
 
 int SG_ModeKnown(int mode)
@@ -89,20 +69,9 @@ int SG_ModeKnown(int mode)
 	return mode >= RLCM_NONE && mode < SG_COMPOUND_MODE_COUNT;
 }
 
-int SG_ModeWireValid(int version, int mode)
+int SG_ModeWireValid(int mode)
 {
-	if (!SG_ModeKnown(mode))
-		return 0;
-	switch (version)
-	{
-	case SG_RUNE_WIRE_V1:
-	case SG_RUNE_WIRE_V2:
-		return mode == RLCM_NONE;
-	case SG_RUNE_WIRE_V3:
-		return mode <= RLCM_RIDE;
-	default:
-		return 0;
-	}
+	return SG_ModeKnown(mode) && mode <= RLCM_RIDE;
 }
 
 int SG_ActionAllowsProvenance(int action, int provenance)

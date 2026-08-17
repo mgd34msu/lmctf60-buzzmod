@@ -15,20 +15,19 @@ import zlib
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_SCHEMA = ROOT / "slipgate" / "rune_actions.json"
+DEFAULT_CONTRACT = ROOT / "slipgate" / "rune_actions.json"
 DEFAULT_C_OUTPUT = ROOT / "slipgate" / "sg_action_contract.generated.h"
 DEFAULT_PY_OUTPUT = ROOT / "tools" / "rune_contracts_generated.py"
-
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-_PINNED_SCHEMA_VERSION = 1
 _PINNED_ENUMS = {
     "actions": {
         0: "RL_RUN", 1: "RL_JUMP", 2: "RL_DROP", 3: "RL_HOOK",
         4: "RL_SWIM", 5: "RL_LIFT", 6: "RL_TELEPORT",
         7: "RL_ROCKETJUMP", 8: "RL_DOOR", 9: "RL_DOOR_DROP",
         10: "RL_DOOR_SWIM", 11: "RL_DOOR_HOOK",
+        12: "RL_BUTTON_DOOR",
     },
     "provenances": {
         0: "RL_PROVEN", 1: "RL_OBSERVED", 2: "RL_ADJUSTED",
@@ -95,7 +94,6 @@ _PINNED_WIRE_DIAGNOSTICS = {
     1: "RLW_INVALID_ARGUMENT",
     2: "RLW_IO_ERROR",
     3: "RLW_BAD_MAGIC",
-    4: "RLW_UNSUPPORTED_VERSION",
     5: "RLW_BAD_HEADER_SIZE",
     6: "RLW_BAD_SEED_SIZE",
     7: "RLW_BAD_LINK_SIZE",
@@ -120,11 +118,12 @@ _PINNED_WIRE_DIAGNOSTICS = {
     26: "RLW_BAD_SIDECAR",
 }
 _PINNED_WIRE = {
-    "magic": 0x454E5552, "version": 3, "little_endian_required": 1,
-    "header_bytes": 128,
-    "seed_bytes": 16, "link_bytes": 44, "map_name_bytes": 64,
-    "header_crc_offset": 60, "noncompound_tail_offset": 28,
-    "noncompound_tail_bytes": 16, "link_reserved_offset": 43,
+    "magic": 0x454E5552, "little_endian_required": 1,
+    "header_bytes": 160,
+    "seed_bytes": 16, "link_bytes": 48, "map_name_bytes": 64,
+    "header_crc_offset": 60, "header_reserved_offset": 4,
+    "noncompound_tail_offset": 28, "noncompound_tail_bytes": 16,
+    "link_reserved_offset": 43,
     "max_seeds": 32768, "max_links": 262144, "min_cost_ms": 1,
     "max_cost_ms": 30000,
 }
@@ -157,29 +156,33 @@ _PINNED_PROOF_LAW = {
 }
 _PINNED_RUNTIME_SUPPORT = {
     0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 0,
-    8: 1, 9: 0, 10: 0, 11: 0,
+    8: 1, 9: 0, 10: 0, 11: 0, 12: 1,
 }
-_PINNED_ACTION_FIELDS = (
-    "runtime_supported", "default_provenance", "provenance_mask", "mode_mask",
-    "trait_mask", "endpoint_policy", "suffix_anchor_policy",
-    "preopen_mechanism_anchor_policy", "ride_mechanism_anchor_policy",
-    "control_policy", "mechanism_policy", "effective_suffix",
-    "field_bias_policy", "field_bias_ms", "controller_revision",
-)
-_PINNED_ACTION_ROWS = (
-    (1, 0, 15, 1, 0,   1, 1, 0, 0, 0, 0, 0, 0, 0,   1),
-    (1, 0, 15, 1, 3,   1, 0, 0, 0, 1, 0, 1, 0, 0,   1),
-    (1, 0, 1,  1, 3,   2, 2, 0, 0, 2, 0, 2, 1, 150, 2),
-    (1, 0, 1,  1, 1,   4, 3, 0, 0, 3, 0, 3, 2, 0,   1),
-    (1, 0, 1,  1, 33,  3, 0, 0, 0, 4, 0, 4, 0, 0,   1),
-    (1, 3, 8,  1, 37,  0, 4, 0, 0, 5, 0, 5, 0, 0,   1),
-    (1, 3, 8,  1, 37,  0, 5, 0, 0, 5, 0, 6, 0, 0,   1),
-    (0, 0, 15, 1, 3,   1, 7, 0, 0, 6, 0, 7, 1, 900, 0),
-    (1, 3, 8,  1, 37,  1, 6, 0, 0, 5, 0, 8, 0, 0,   1),
-    (0, 4, 16, 6, 125, 2, 2, 8, 9, 2, 1, 2, 3, 0,   0),
-    (0, 4, 16, 2, 125, 5, 0, 8, 0, 4, 1, 4, 3, 0,   0),
-    (0, 4, 16, 2, 125, 6, 3, 8, 0, 3, 1, 3, 3, 0,   0),
-)
+_FROZEN_BASE_ACTION_COUNT = 12
+_PINNED_MECHANISM_CONTROLLERS = {
+    0: ("SG_MECHANISM_CONTROLLER_NONE", 0),
+    1: ("SG_MECHANISM_CONTROLLER_AUTO_DOOR", 0xD),
+    2: ("SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR", 0xD),
+    3: ("SG_MECHANISM_CONTROLLER_BUTTON_DOOR", 0xD),
+    4: ("SG_MECHANISM_CONTROLLER_RELAY_DOOR", 0),
+    5: ("SG_MECHANISM_CONTROLLER_PLATFORM", 0xD),
+    6: ("SG_MECHANISM_CONTROLLER_TELEPORT", 0x5),
+}
+_PINNED_ACTION_MECHANISM_REQUIREMENTS = {
+    0: (1, 0, 0, ()),
+    1: (1, 0, 1, ()),
+    2: (1, 0, 2, ()),
+    3: (1, 0, 3, ()),
+    4: (1, 0, 4, ()),
+    5: (1, 1, 5, ((5, 1),)),
+    6: (1, 1, 6, ((6, 1),)),
+    7: (0, 0, 7, ()),
+    8: (1, 1, 8, ((1, 1), (2, 1))),
+    9: (0, 0, 9, ()),
+    10: (0, 0, 10, ()),
+    11: (0, 0, 11, ()),
+    12: (1, 1, 12, ((3, 2),)),
+}
 
 
 class ContractError(ValueError):
@@ -352,11 +355,6 @@ def _validate_wire_diagnostics(entries):
         _fail("wire_diagnostics", "contains duplicate id values")
     if len(symbols) != len(set(symbols)):
         _fail("wire_diagnostics", "contains duplicate symbols")
-    if values != list(range(len(values))):
-        _fail(
-            "wire_diagnostics",
-            f"must contain every id from 0 through {len(values)-1}",
-        )
     actual = {entry["id"]: entry["symbol"] for entry in entries}
     if actual != _PINNED_WIRE_DIAGNOSTICS:
         _fail(
@@ -367,12 +365,155 @@ def _validate_wire_diagnostics(entries):
     return values, symbols
 
 
+def _validate_action_range(action_range, actions):
+    where = "contract.action_range"
+    action_range = _require_dict(action_range, where)
+    _require_keys(action_range, ("first_action", "last_action", "descriptor"), where)
+    first = _require_int(action_range["first_action"], f"{where}.first_action", 0, 255)
+    last = _require_int(action_range["last_action"], f"{where}.last_action", 0, 255)
+    descriptor = _require_string(action_range["descriptor"], f"{where}.descriptor")
+    if first > last or not actions or (first, last) != (actions[0]["id"], actions[-1]["id"]):
+        _fail(where, "must cover the complete action registry")
+    try:
+        encoded = descriptor.encode("ascii", "strict")
+    except UnicodeEncodeError as exc:
+        raise ContractError(f"{where}.descriptor: must be ASCII") from exc
+    if not encoded or b"\x00" in encoded:
+        _fail(f"{where}.descriptor", "must be nonempty and contain no NUL")
+    return action_range
+
+
 def _validate_pinned_integer_object(value, expected, where: str):
     _require_keys(value, expected, where)
     for key, pinned in expected.items():
         actual = _require_int(value[key], f"{where}.{key}")
         if actual != pinned:
             _fail(f"{where}.{key}", f"must be pinned to {pinned}")
+
+
+def _mechanism_descriptor(mechanism_contract) -> str:
+    """Join the registry-owned fragments into the exact wire descriptor."""
+
+    fragments = _require_list(
+        mechanism_contract["descriptor_fragments"],
+        "contract.mechanism_contract.descriptor_fragments",
+    )
+    if not fragments:
+        _fail(
+            "contract.mechanism_contract.descriptor_fragments",
+            "must not be empty",
+        )
+    checked = []
+    for index, fragment in enumerate(fragments):
+        where = f"contract.mechanism_contract.descriptor_fragments[{index}]"
+        fragment = _require_string(fragment, where)
+        try:
+            fragment.encode("ascii", "strict")
+        except UnicodeEncodeError as exc:
+            raise ContractError(f"{where}: must be ASCII") from exc
+        if not fragment or "\x00" in fragment:
+            _fail(where, "must be nonempty and contain no NUL")
+        checked.append(fragment)
+    return "".join(checked)
+
+
+def _validate_mechanism_contract(value, actions):
+    """Validate the mechanism descriptor and action-plan registry."""
+
+    where = "contract.mechanism_contract"
+    value = _require_keys(
+        value,
+        ("descriptor_fragments", "controllers",
+         "action_requirements"),
+        where,
+    )
+
+    descriptor = _mechanism_descriptor(value)
+    descriptor_crc = zlib.crc32(descriptor.encode("ascii")) & 0xFFFFFFFF
+
+    controllers = _require_list(value["controllers"], f"{where}.controllers")
+    actual_controllers = {}
+    for index, entry in enumerate(controllers):
+        entry_where = f"{where}.controllers[{index}]"
+        _require_keys(entry, ("id", "symbol", "plan_flags"), entry_where)
+        controller = _require_int(
+            entry["id"], f"{entry_where}.id", 0, 0xFFFF
+        )
+        symbol = _validate_symbol(entry["symbol"], f"{entry_where}.symbol")
+        flags = _require_int(
+            entry["plan_flags"], f"{entry_where}.plan_flags", 0, 0xFFFF
+        )
+        if controller in actual_controllers:
+            _fail(entry_where, "duplicate controller id")
+        actual_controllers[controller] = (symbol, flags)
+    if list(actual_controllers) != list(range(len(actual_controllers))):
+        _fail(f"{where}.controllers", "ids must be sorted and dense from zero")
+    if actual_controllers != _PINNED_MECHANISM_CONTROLLERS:
+        _fail(
+            f"{where}.controllers",
+            "controller IDs, symbols, or plan flags differ from reviewed pins",
+        )
+
+    requirements = _require_list(
+        value["action_requirements"], f"{where}.action_requirements"
+    )
+    actual_requirements = {}
+    for index, entry in enumerate(requirements):
+        entry_where = f"{where}.action_requirements[{index}]"
+        _require_keys(
+            entry,
+            ("action", "admitted", "plan_required", "link_policy_action",
+             "plans"),
+            entry_where,
+        )
+        action = _require_int(entry["action"], f"{entry_where}.action", 0, 255)
+        admitted = _require_int(
+            entry["admitted"], f"{entry_where}.admitted", 0, 1
+        )
+        required = _require_int(
+            entry["plan_required"], f"{entry_where}.plan_required", 0, 1
+        )
+        policy_action = _require_int(
+            entry["link_policy_action"],
+            f"{entry_where}.link_policy_action", 0, 255,
+        )
+        plans = _require_list(entry["plans"], f"{entry_where}.plans")
+        pairs = []
+        for plan_index, plan in enumerate(plans):
+            plan_where = f"{entry_where}.plans[{plan_index}]"
+            _require_keys(plan, ("controller",), plan_where)
+            controller = _require_int(
+                plan["controller"], f"{plan_where}.controller", 1, 0xFFFF
+            )
+            if (controller not in actual_controllers or
+                    actual_controllers[controller][1] == 0):
+                _fail(plan_where, "controller is not executable")
+            pairs.append(controller)
+        if pairs != sorted(set(pairs)):
+            _fail(f"{entry_where}.plans", "pairs must be sorted and unique")
+        if required != bool(pairs):
+            _fail(entry_where, "plan_required must match whether plans exist")
+        if not admitted and (required or pairs):
+            _fail(entry_where, "unadmitted action cannot own a plan")
+        if action in actual_requirements:
+            _fail(entry_where, "duplicate action")
+        actual_requirements[action] = (
+            admitted, required, policy_action, tuple(pairs)
+        )
+
+    if list(actual_requirements) != list(range(len(actions))):
+        _fail(
+            f"{where}.action_requirements",
+            "must be sorted and cover every action exactly once",
+        )
+    for action in actions:
+        admitted = actual_requirements[action["id"]][0]
+        if admitted != action["runtime_supported"]:
+            _fail(
+                f"{where}.action_requirements[{action['id']}].admitted",
+                "must match the action runtime-supported gate",
+            )
+    return descriptor
 
 
 def _validate_drop_timing_law(proof_law):
@@ -415,21 +556,18 @@ def _validate_action_cycles(actions):
 
 
 def validate_document(document):
-    """Validate the complete schema; return None or raise ContractError."""
+    """Validate the complete contract document; return None or raise ContractError."""
     _reject_floats_and_surrogates(document)
     _require_keys(
         document,
-        ("schema_version", "contract", "wire_diagnostics", "display"),
+        ("contract", "wire_diagnostics", "display"),
         "root",
     )
-    schema_version = _require_int(document["schema_version"], "schema_version", 1)
-    if schema_version != _PINNED_SCHEMA_VERSION:
-        _fail("schema_version", f"unsupported schema version {schema_version}")
 
     contract = _require_keys(
         document["contract"],
         (
-            "wire", "proof_law", "provenances", "modes", "traits", "endpoint_policies",
+            "action_range", "mechanism_contract", "wire", "proof_law", "provenances", "modes", "traits", "endpoint_policies",
             "anchor_policies", "control_policies", "mechanism_policies",
             "field_bias_policies", "actions", "reasons",
         ),
@@ -487,7 +625,6 @@ def validate_document(document):
         "suffix_anchor_policy", "preopen_mechanism_anchor_policy",
         "ride_mechanism_anchor_policy", "control_policy", "mechanism_policy",
         "effective_suffix", "field_bias_policy", "field_bias_ms",
-        "controller_revision",
     )
     action_ids = []
     for index, action in enumerate(actions):
@@ -511,13 +648,6 @@ def validate_document(document):
     if action_ids != list(range(len(action_ids))):
         _fail("contract.actions", "must contain every id from 0 through max")
     _validate_pinned_enum(actions, "actions")
-    for action, expected in zip(actions, _PINNED_ACTION_ROWS):
-        actual = tuple(action[field] for field in _PINNED_ACTION_FIELDS)
-        if actual != expected:
-            _fail(
-                f"contract.actions[{action['id']}]",
-                f"descriptor differs from reviewed pin (expected={expected}, actual={actual})",
-            )
 
     action_id_set = set(action_ids)
     prov_mask = sum(1 << value for value in enum_values["provenances"])
@@ -552,12 +682,8 @@ def validate_document(document):
             _fail(where, "unknown effective suffix")
         if action["field_bias_ms"] < 0 or action["field_bias_ms"] > 32767:
             _fail(where, "field bias is outside signed-short range")
-        if action["controller_revision"] < 0 or action["controller_revision"] > 255:
-            _fail(where, "controller revision is outside byte range")
-        if bool(action["runtime_supported"]) != (action["controller_revision"] > 0):
-            _fail(where, "runtime support and controller revision disagree")
         if action["runtime_supported"] != _PINNED_RUNTIME_SUPPORT[action["id"]]:
-            _fail(where, "runtime support differs from the schema-version gate")
+            _fail(where, "runtime support differs from the contract gate")
 
         bias = action["field_bias_policy"]
         if bias == 1 and action["field_bias_ms"] <= 0:
@@ -598,6 +724,9 @@ def validate_document(document):
         if action["suffix_anchor_policy"] != suffix["suffix_anchor_policy"]:
             _fail(f"contract.actions[{action['id']}]", "does not inherit suffix anchor policy")
 
+    _validate_action_range(contract["action_range"], actions)
+    _validate_mechanism_contract(contract["mechanism_contract"], actions)
+
     _, wire_diagnostic_symbols = _validate_wire_diagnostics(
         document["wire_diagnostics"]
     )
@@ -633,21 +762,12 @@ def validate_document(document):
 
 
 def _canonical_semantic_bytes(document) -> bytes:
-    payload = {
-        "contract": document["contract"],
-        "schema_version": document["schema_version"],
-    }
-    return json.dumps(
-        payload,
-        ensure_ascii=True,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("ascii")
+    payload = {"contract": document["contract"]}
+    return json.dumps(payload, ensure_ascii=True, allow_nan=False, sort_keys=True,
+                      separators=(",", ":")).encode("ascii")
 
 
 def canonical_contract_bytes(document) -> bytes:
-    """Validated action payload; display and wire diagnostics are absent."""
     validate_document(document)
     return _canonical_semantic_bytes(document)
 
@@ -655,6 +775,38 @@ def canonical_contract_bytes(document) -> bytes:
 def contract_digests(document):
     canonical = canonical_contract_bytes(document)
     return zlib.crc32(canonical) & 0xFFFFFFFF, hashlib.sha256(canonical).hexdigest()
+
+
+def rune_action_contract_bytes(document) -> bytes:
+    validate_document(document)
+    contract = document["contract"]
+    payload = {
+        "actions": contract["actions"],
+        "action_range": contract["action_range"],
+        "mechanism_requirements": contract["mechanism_contract"]["action_requirements"],
+    }
+    return json.dumps(payload, ensure_ascii=True, allow_nan=False, sort_keys=True,
+                      separators=(",", ":")).encode("ascii")
+
+
+def rune_action_contract_digests(document):
+    canonical = rune_action_contract_bytes(document)
+    return zlib.crc32(canonical) & 0xFFFFFFFF, hashlib.sha256(canonical).hexdigest()
+
+
+def mechanism_contract_descriptor(document) -> str:
+    """Return the validated exact mechanism descriptor."""
+
+    validate_document(document)
+    return _mechanism_descriptor(document["contract"]["mechanism_contract"])
+
+
+def mechanism_contract_digests(document):
+    descriptor = mechanism_contract_descriptor(document).encode("ascii")
+    return (
+        zlib.crc32(descriptor) & 0xFFFFFFFF,
+        hashlib.sha256(descriptor).hexdigest(),
+    )
 
 
 def _c_string(value: str) -> str:
@@ -678,11 +830,67 @@ def _macro_lines(name, rows):
     return lines
 
 
+def _c_mechanism_policy_lines(mechanism_contract, actions):
+    controllers = mechanism_contract["controllers"]
+    requirements = mechanism_contract["action_requirements"]
+    controller_by_id = {entry["id"]: entry for entry in controllers}
+    action_by_id = {entry["id"]: entry for entry in actions}
+    lines = _enum_lines("sg_mechanism_controller_t", controllers, "id")
+    requirement_rows = []
+    plan_rows = []
+    for requirement in requirements:
+        action_symbol = action_by_id[requirement["action"]]["symbol"]
+        policy_symbol = action_by_id[requirement["link_policy_action"]]["symbol"]
+        requirement_rows.append(f"{action_symbol}, {requirement['admitted']}, {requirement['plan_required']}, {policy_symbol}")
+        for plan in requirement["plans"]:
+            plan_rows.append(f"{action_symbol}, {controller_by_id[plan['controller']]['symbol']}")
+    lines.extend(("/* X(action, admitted, plan_required, link_policy_action) */",))
+    lines.extend(_macro_lines("SG_ACTION_MECHANISM_REQUIREMENT_ROWS", requirement_rows))
+    lines.extend(("/* X(action, controller) */",))
+    lines.extend(_macro_lines("SG_ACTION_MECHANISM_PLAN_ROWS", plan_rows))
+    admitted = " ".join(f"case {action_by_id[x['action']]['symbol']}:" for x in requirements if x['admitted'])
+    required = " ".join(f"case {action_by_id[x['action']]['symbol']}:" for x in requirements if x['plan_required'])
+    lines.extend(("static inline int SG_ActionMechanismAdmitted(int action)", "{", "\tswitch (action)", "\t{", f"\t{admitted} return 1;", "\tdefault: return 0;", "\t}", "}", "", "static inline int SG_ActionMechanismPlanRequired(int action)", "{", "\tswitch (action)", "\t{", f"\t{required} return 1;", "\tdefault: return 0;", "\t}", "}", "", "static inline int SG_ActionMechanismLinkPolicyAction(int action)", "{", "\tswitch (action)", "\t{"))
+    for req in requirements:
+        lines.append(f"\tcase {action_by_id[req['action']]['symbol']}: return {action_by_id[req['link_policy_action']]['symbol']};")
+    lines.extend(("\tdefault: return -1;", "\t}", "}", "", "static inline int SG_MechanismControllerPlanFlags(uint16_t controller)", "{", "\tswitch (controller)", "\t{"))
+    for controller in controllers:
+        lines.append(f"\tcase {controller['symbol']}: return {controller['plan_flags']};")
+    lines.extend(("\tdefault: return 0;", "\t}", "}", "", "static inline int SG_ActionMechanismPlanAllowed(int action, uint16_t controller)", "{", "\tswitch (action)", "\t{"))
+    for req in requirements:
+        if req['plans']:
+            clauses = [f"controller == {controller_by_id[p['controller']]['symbol']}" for p in req['plans']]
+            lines.append(f"\tcase {action_by_id[req['action']]['symbol']}: return " + " || ".join(clauses) + ";")
+    lines.extend(("\tdefault: return 0;", "\t}", "}", ""))
+    return lines
+
+
+def _python_mechanism_policy_lines(mechanism_contract):
+    controllers = mechanism_contract["controllers"]
+    requirements = mechanism_contract["action_requirements"]
+    lines = [f"{item['symbol']} = {item['id']}" for item in controllers]
+    lines.extend(("", "MECHANISM_CONTROLLERS = ("))
+    for item in controllers:
+        lines.append(f"    {{'id': {item['id']}, 'symbol': {item['symbol']!r}, 'plan_flags': {item['plan_flags']}}},")
+    lines.extend((")", "MECHANISM_CONTROLLER_BY_ID = {entry['id']: entry for entry in MECHANISM_CONTROLLERS}", "", "ACTION_MECHANISM_REQUIREMENTS = ("))
+    for req in requirements:
+        plans = tuple(plan['controller'] for plan in req['plans'])
+        lines.append(f"    {{'action': {req['action']}, 'admitted': {req['admitted']}, 'plan_required': {req['plan_required']}, 'link_policy_action': {req['link_policy_action']}, 'plans': {plans!r}}},")
+    lines.extend((")", "ACTION_MECHANISM_REQUIREMENT_BY_ID = {entry['action']: entry for entry in ACTION_MECHANISM_REQUIREMENTS}", "", "def action_mechanism_admitted(action):", "    entry = ACTION_MECHANISM_REQUIREMENT_BY_ID.get(action) if type(action) is int else None", "    return bool(entry and entry['admitted'])", "", "def action_mechanism_plan_required(action):", "    entry = ACTION_MECHANISM_REQUIREMENT_BY_ID.get(action) if type(action) is int else None", "    return bool(entry and entry['plan_required'])", "", "def action_mechanism_link_policy_action(action):", "    entry = ACTION_MECHANISM_REQUIREMENT_BY_ID.get(action) if type(action) is int else None", "    return None if entry is None else entry['link_policy_action']", "", "def mechanism_controller_plan_flags(controller):", "    entry = MECHANISM_CONTROLLER_BY_ID.get(controller) if type(controller) is int else None", "    return None if entry is None else entry['plan_flags']", "", "def action_mechanism_plan_allowed(action, controller):", "    if type(action) is not int or type(controller) is not int:", "        return False", "    entry = ACTION_MECHANISM_REQUIREMENT_BY_ID.get(action)", "    return bool(entry and controller in entry['plans'])", ""))
+    return lines
+
+
 def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
     validate_document(document)
     if crc32_value is None or sha256_value is None:
         crc32_value, sha256_value = contract_digests(document)
+    rune_crc32_value, rune_sha256_value = (
+        rune_action_contract_digests(document)
+    )
+    mechanism_crc32, mechanism_sha256 = mechanism_contract_digests(document)
     contract = document["contract"]
+    mechanism_contract = contract["mechanism_contract"]
+    mechanism_descriptor = _mechanism_descriptor(mechanism_contract)
     wire_diagnostics = document["wire_diagnostics"]
     trait_all_mask = sum(entry["bit"] for entry in contract["traits"])
     display = {entry["id"]: entry for entry in document["display"]["actions"]}
@@ -692,9 +900,23 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
         "#ifndef SG_ACTION_CONTRACT_GENERATED_H",
         "#define SG_ACTION_CONTRACT_GENERATED_H",
         "",
-        f"#define SG_ACTION_CONTRACT_SCHEMA_VERSION {document['schema_version']}",
-        f"#define SG_ACTION_CONTRACT_CRC32 0x{crc32_value:08x}U",
-        f"#define SG_ACTION_CONTRACT_SHA256 {_c_string(sha256_value)}",
+        "#include <stdint.h>",
+        "",
+        f"#define SG_RUNE_ACTION_CONTRACT_CRC32 0x{rune_crc32_value:08x}U",
+        f"#define SG_RUNE_ACTION_CONTRACT_SHA256 "
+        f"{_c_string(rune_sha256_value)}",
+        "#define SG_RUNE_ACTION_CONTRACT_DESCRIPTOR "
+        f"{_c_string(contract['action_range']['descriptor'])}",
+                f"#define SG_MECHANISM_CONTRACT_CRC32 0x{mechanism_crc32:08x}U",
+        f"#define SG_MECHANISM_CONTRACT_SHA256 {_c_string(mechanism_sha256)}",
+        "#define SG_MECHANISM_CONTRACT_DESCRIPTOR "
+        f"{_c_string(mechanism_descriptor)}",
+        "#define SG_RUNE_MECHANISM_CONTRACT_CRC32 "
+        "SG_MECHANISM_CONTRACT_CRC32",
+        "#define SG_RUNE_MECHANISM_CONTRACT_SHA256 "
+        "SG_MECHANISM_CONTRACT_SHA256",
+        "#define SG_RUNE_MECHANISM_CONTRACT_DESCRIPTOR "
+        "SG_MECHANISM_CONTRACT_DESCRIPTOR",
         f"#define SG_ACTION_COUNT {len(contract['actions'])}",
         f"#define SG_PROVENANCE_COUNT {len(contract['provenances'])}",
         f"#define SG_COMPOUND_MODE_COUNT {len(contract['modes'])}",
@@ -704,12 +926,16 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
         f"#define SG_RUNE_WIRE_DIAGNOSTIC_COUNT {len(wire_diagnostics)}",
         "",
     ]
-    for key, value in contract["wire"].items():
-        if key == "magic":
-            lines.append(f"#define SG_RUNE_V3_{key.upper()} 0x{value:08x}U")
-        else:
-            lines.append(f"#define SG_RUNE_V3_{key.upper()} {value}")
-    lines.append("")
+    rune_range = contract["action_range"]
+    rune_last = contract["actions"][rune_range["last_action"]]["symbol"]
+    lines.extend((
+        "#define SG_RUNE_HEADER_RESERVED_OFFSET 4U",
+        f"#define SG_RUNE_WIRE_ACTION_FIRST {rune_range['first_action']}",
+        f"#define SG_RUNE_WIRE_ACTION_MAX {rune_last}",
+        f"#define SG_RUNE_WIRE_ACTION_COUNT "
+        f"{rune_range['last_action'] - rune_range['first_action'] + 1}",
+        "",
+    ))
     for key, value in contract["proof_law"].items():
         lines.append(f"#define SG_RUNE_PROOF_{key.upper()} {value}")
     lines.append("")
@@ -729,13 +955,17 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
     for type_name, entries, key in enum_specs:
         lines.extend(_enum_lines(type_name, entries, key))
 
+    lines.extend(_c_mechanism_policy_lines(
+        mechanism_contract, contract["actions"]
+    ))
+
     lines.extend((
         "/* X(symbol, id, runtime_supported, default_provenance, provenance_mask,",
         " *   mode_mask, trait_mask, endpoint_policy, suffix_anchor_policy,",
         " *   preopen_mechanism_anchor_policy, ride_mechanism_anchor_policy,",
         " *   control_policy, mechanism_policy,",
         " *   effective_suffix, field_bias_policy, field_bias_ms,",
-        " *   controller_revision, name, short_name, color) */",
+        " *   name, short_name, color) */",
     ))
     action_rows = []
     for action in contract["actions"]:
@@ -756,7 +986,7 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
                 contract["mechanism_policies"][action["mechanism_policy"]]["symbol"],
                 suffix,
                 contract["field_bias_policies"][action["field_bias_policy"]]["symbol"],
-                str(action["field_bias_ms"]), str(action["controller_revision"]),
+                str(action["field_bias_ms"]),
                 _c_string(shown["name"]), _c_string(shown["short_name"]),
                 _c_string(shown["color"]),
             ))
@@ -785,7 +1015,13 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
     validate_document(document)
     if crc32_value is None or sha256_value is None:
         crc32_value, sha256_value = contract_digests(document)
+    rune_crc32_value, rune_sha256_value = rune_action_contract_digests(
+        document
+    )
+    mechanism_crc32, mechanism_sha256 = mechanism_contract_digests(document)
     contract = document["contract"]
+    mechanism_contract = contract["mechanism_contract"]
+    mechanism_descriptor = _mechanism_descriptor(mechanism_contract)
     wire_diagnostics = document["wire_diagnostics"]
     trait_all_mask = sum(entry["bit"] for entry in contract["traits"])
     display = {entry["id"]: entry for entry in document["display"]["actions"]}
@@ -793,9 +1029,15 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
     lines = [
         '"""Generated rune contract metadata. DO NOT EDIT."""',
         "",
-        f"CONTRACT_SCHEMA_VERSION = {document['schema_version']}",
-        f"CONTRACT_CRC32 = 0x{crc32_value:08x}",
-        f"CONTRACT_SHA256 = {sha256_value!r}",
+        f"RUNE_ACTION_CONTRACT_CRC32 = 0x{rune_crc32_value:08x}",
+        f"RUNE_ACTION_CONTRACT_SHA256 = {rune_sha256_value!r}",
+        "RUNE_ACTION_CONTRACT_CANONICAL = "
+        f"{rune_action_contract_bytes(document).decode('ascii')!r}",
+        "RUNE_ACTION_CONTRACT_DESCRIPTOR = "
+        f"{contract['action_range']['descriptor']!r}",
+        f"RUNE_MECHANISM_CONTRACT_CRC32 = 0x{mechanism_crc32:08x}",
+        f"RUNE_MECHANISM_CONTRACT_SHA256 = {mechanism_sha256!r}",
+        f"RUNE_MECHANISM_CONTRACT_DESCRIPTOR = {mechanism_descriptor!r}",
         f"ACTION_COUNT = {len(contract['actions'])}",
         f"PROVENANCE_COUNT = {len(contract['provenances'])}",
         f"COMPOUND_MODE_COUNT = {len(contract['modes'])}",
@@ -805,9 +1047,13 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
         f"WIRE_DIAGNOSTIC_COUNT = {len(wire_diagnostics)}",
         "",
     ]
-    for key, value in contract["wire"].items():
-        lines.append(f"RUNE_V3_{key.upper()} = {value}")
-    lines.append("")
+    rune_range = contract["action_range"]
+    lines.extend((
+        "RUNE_HEADER_RESERVED_OFFSET = 4",
+        "RUNE_WIRE_ACTION_RANGE = "
+        f"({rune_range['first_action']}, {rune_range['last_action']})",
+        "",
+    ))
     for key, value in contract["proof_law"].items():
         lines.append(f"RUNE_PROOF_{key.upper()} = {value}")
     lines.append("")
@@ -824,6 +1070,8 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
     for entry in wire_diagnostics:
         lines.append(f"{entry['symbol']} = {entry['id']}")
     lines.append("")
+
+    lines.extend(_python_mechanism_policy_lines(mechanism_contract))
 
     lines.append("ACTIONS = (")
     for action in contract["actions"]:
@@ -848,8 +1096,7 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
             ("effective_suffix", action["effective_suffix"]),
             ("field_bias_policy", action["field_bias_policy"]),
             ("field_bias_ms", action["field_bias_ms"]),
-            ("controller_revision", action["controller_revision"]),
-        ]
+                    ]
         body = ", ".join(f"{key!r}: {value!r}" for key, value in fields)
         lines.append(f"    {{{body}}},")
     lines.extend((")", "ACTION_BY_ID = {entry['id']: entry for entry in ACTIONS}",
@@ -889,6 +1136,12 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
         "WIRE_DIAGNOSTIC_BY_ID = {entry['id']: entry for entry in WIRE_DIAGNOSTICS}",
         "WIRE_DIAGNOSTIC_SYMBOLS = {entry['id']: entry['symbol'] for entry in WIRE_DIAGNOSTICS}",
         "WIRE_DIAGNOSTIC_MESSAGES = {entry['id']: entry['message'] for entry in WIRE_DIAGNOSTICS}",
+        "",
+        "def action_valid(action):",
+        "    if type(action) is not int:",
+        "        return False",
+        "    return RUNE_WIRE_ACTION_RANGE[0] <= action <= RUNE_WIRE_ACTION_RANGE[1]",
+        "",
         "",
         "def action_contract(action):",
         "    if type(action) is not int:",
@@ -1018,27 +1271,25 @@ def check_outputs(document, c_output: Path, python_output: Path):
 
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
+    parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--c-output", type=Path, default=DEFAULT_C_OUTPUT)
     parser.add_argument("--python-output", type=Path, default=DEFAULT_PY_OUTPUT)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--write", action="store_true", help="atomically replace generated files")
-    mode.add_argument("--check", action="store_true", help="byte-compare generated files")
+    mode.add_argument("--write", action="store_true")
+    mode.add_argument("--check", action="store_true")
     return parser
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
     try:
-        document = load_document(args.schema)
+        document = load_document(args.contract)
         if args.write:
             crc32_value, sha256_value = write_outputs(
-                document, args.c_output, args.python_output
-            )
+                document, args.c_output, args.python_output)
         else:
             stale, crc32_value, sha256_value = check_outputs(
-                document, args.c_output, args.python_output
-            )
+                document, args.c_output, args.python_output)
             if stale:
                 for path in stale:
                     print(f"stale generated file: {path}", file=sys.stderr)

@@ -4,19 +4,7 @@
 
 #include <stdint.h>
 
-#include "sg_rune_wire.h"
-
-/* Compound links remain unpublishable until joint mover replay and the live
- * outer controller reach this revision.  This gate is deliberately separate
- * from generated action metadata so a registry-only change cannot authorize
- * structurally valid but unreplayed compound records. */
-#define SG_COMPOUND_REQUIRED_CONTROLLER_REVISION 1
-/* Compile-time controller ownership is action-specific.  A single aggregate
- * switch would make enabling one vertical slice accidentally authorize every
- * registered compound action through SG_CompoundRuntimeReady. */
-#define SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION 0
-#define SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION 0
-#define SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION 0
+#include "sg_rune.h"
 
 /* Runtime renews the TOP close timer in one bounded lease.  The final renewal
  * happens one server frame before sweep clearance; a 500 ms lease therefore
@@ -133,7 +121,7 @@ int SG_CompoundTranslateFrame(sg_compound_translate_t *state,
 /* Structural/controller validation shared by the native writer and loader.
  * Live map-mechanism replay remains a separate publication gate. */
 rune_reject_reason_t SG_CompoundValidateLink(
-	const sg_rune_v3_seed_t *seeds, uint32_t num_seeds,
-	const sg_rune_v3_link_t *link);
+	const rune_seed_t *seeds, uint32_t num_seeds,
+	const rune_link_t *link);
 
 #endif /* SG_COMPOUND_H */

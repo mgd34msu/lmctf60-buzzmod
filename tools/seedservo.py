@@ -25,35 +25,24 @@ plus the map's .rune:
 Usage: seedservo.py <rune_dir> <demo.dm2> [<demo.dm2> ...]
        env SS_LOOK=250  pure-pursuit arc distance in units (default 250)
 """
-import sys, os, math, struct, collections
+import sys, os, math, collections
 import statistics as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import botkin
 from demorune import SeedGrid
 
-HEADER_FMT = '<4i64s'
-SEED_FMT = '<3f2h'
-LINK_FMT = '<2i6Bh3f'
+try:
+    import runeio
+except ModuleNotFoundError:
+    from tools import runeio
+
 LOOK = float(os.environ.get('SS_LOOK', '250'))
 
 
 def load_rune(path):
-    data = open(path, 'rb').read()
-    magic, ver, ns, nl, name = struct.unpack_from(HEADER_FMT, data, 0)
-    off = struct.calcsize(HEADER_FMT)
-    ssz = struct.calcsize(SEED_FMT)
-    seeds = []
-    for i in range(ns):
-        x, y, z, ah, fl = struct.unpack_from(SEED_FMT, data, off)
-        off += ssz
-        seeds.append((x, y, z))
-    lsz = struct.calcsize(LINK_FMT)
-    links = []
-    for i in range(nl):
-        links.append(struct.unpack_from(LINK_FMT, data, off))
-        off += lsz
-    return seeds, links
+    artifact = runeio.read(path)
+    return [seed.origin for seed in artifact.seeds], artifact.links
 
 
 def ang_diff(a, b):

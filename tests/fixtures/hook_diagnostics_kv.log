@@ -1,0 +1,34 @@
+SG Arach: role=3 seed=1 goal=2 sgoal=2 spd=100 org=(0 0 0) link=12 act=1 hp=100 x gnd=1
+HOOKFIRE Arach at (10 20 30)
+HOOKEND Arach noattach
+HOOKFIRE id=i100.0.1 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKFIRE id=i100.0.2 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.1 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=superseded detail=reentrant-fire
+HOOKEND id=i100.0.2 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240 reason=burst detail=speed-terminal
+HOOKFIRE id=i100.0.3 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.3 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=graph-fail detail=begin-failed
+HOOKFIRE id=i100.0.4 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.4 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=arrived detail=reducer
+HOOKFIRE id=i100.0.5 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.5 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240 reason=apex detail=flow-release
+HOOKFIRE id=i100.0.6 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.6 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240 reason=landed detail=phase3
+HOOKFIRE id=i100.0.7 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.7 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240 reason=landing_timeout detail=phase3
+HOOKFIRE id=i100.0.8 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.8 bot=Arach kind=speed link=-1 role=3 map=lmctf6 anchor_q8=80,160,240 reason=burststall detail=speed-terminal
+HOOKFIRE id=i100.0.9 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.9 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=noattach detail=legacy-graph
+HOOKFIRE id=i100.0.10 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.10 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=death detail=lifecycle
+HOOKFIRE id=i100.0.11 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.11 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=physics-incompatible detail=cvar-hold
+HOOKFIRE id=i100.0.12 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.12 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=declared-door-interrupt detail=guard-hold
+HOOKFIRE id=i100.0.13 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.13 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=stale-host-rope detail=cleanup
+HOOKFIRE id=i100.0.14 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=i100.0.14 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=slot-retirement detail=lifecycle
+HOOKFIRE id=z0.1.0.1 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240
+HOOKEND id=z0.1.0.1 bot=Arach kind=graph link=12 role=3 map=lmctf6 anchor_q8=80,160,240 reason=map-transition detail=level-change
+SG Arach: role=3 seed=1 goal=2 sgoal=2 spd=800 org=(80 160 240) link=12 act=1 hp=100 x gnd=1

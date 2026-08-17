@@ -111,12 +111,12 @@ void stats_record_death(edict_t* victim, qboolean self_inflicted);
 void stats_record_fragged(edict_t* victim);
 void stats_record_capture(edict_t* capper);
 void Cmd_PlayerStats_f(edict_t* ent);
-void stats_log_init();
-void stats_log_reset();
+void stats_log_init(void);
+void stats_log_reset(void);
 // returns pointer to lmctf_player_s struct of a dropped player given playername
 stats_player_s* stats_find_dropped_player(char* name);
 stats_player_s* stats_new_player(char* name);
-void stats_cleanup(); // clean up stats before switching to next level
+void stats_cleanup(void); // clean up stats before switching to next level
 void Cmd_StatsAll_f(edict_t* ent);
 
 // MILESTONE tier (docs/LAYOUT.md): a console print stream summarizing the

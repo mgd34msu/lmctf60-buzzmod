@@ -7,6 +7,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 
 game_export_t globals;
 game_locals_t game;
@@ -61,6 +62,17 @@ void Touch_Item(edict_t *ent, edict_t *other, cplane_t *plane,
 	(void)ent; (void)other; (void)plane; (void)surf;
 }
 
+void button_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self; (void)other; (void)plane; (void)surf;
+}
+
+void button_use(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
 void door_use(edict_t *self, edict_t *other, edict_t *activator)
 {
 	(void)self; (void)other; (void)activator;
@@ -81,6 +93,24 @@ void trigger_relay_use(edict_t *self, edict_t *other,
 	edict_t *activator)
 {
 	(void)self; (void)other; (void)activator;
+}
+
+int SG_MechCatalogButtonEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	(void)key;
+	(void)node;
+	(void)entity;
+	(void)endpoints_out;
+	return 0;
+}
+
+int SG_MechCatalogButtonBottomEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	return SG_MechCatalogButtonEndpoints(key, node, entity, endpoints_out);
 }
 
 static void DummyTouch(edict_t *self, edict_t *other, cplane_t *plane,

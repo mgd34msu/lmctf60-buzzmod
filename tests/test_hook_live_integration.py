@@ -32,6 +32,8 @@ ARACH = (Path(__file__).resolve().parents[1] / "slipgate" / "sg_arach.c").read_t
 )
 ADAPTER_TEST = (Path(__file__).resolve().parents[1] / "tests" /
                 "sg_hook_live_test.c").read_text(encoding="utf-8")
+DISCIPLINE = (Path(__file__).resolve().parents[1] / "slipgate" /
+              "sg_hook_discipline.h").read_text(encoding="utf-8")
 
 
 def body(start: str, end: str) -> str:
@@ -180,7 +182,7 @@ assert CLIENT.count("&bot->hook_final_guard);") == 1
 assert ARACH.count("&bot->hook_final_guard);") == 2
 assert "SG_HookLiveCommandGuardClear(&bot->hook_final_guard);" not in CLIENT
 assert "SG_HookLiveCommandGuardClear(&bot->hook_final_guard);" not in ARACH
-assert text.count("Hook_LiveClearFinalGuard(bot);") == 3
+assert text.count("Hook_LiveClearFinalGuard(bot);") == 4
 assert ADAPTER_TEST.count("command.buttons = BUTTON_USE;") >= 2
 assert ADAPTER_TEST.count("SG_HookLiveValidateStoredFinalCommand") >= 5
 assert "Reset itself must discard an unconsumed bridge approval" in ADAPTER_TEST
@@ -194,5 +196,60 @@ assert "bot->hook_replay.phase != SG_HOOK_REPLAY_WAIT_PULL" in endframe
 pull = P_VIEW.index("Weapon_Hook_Fire(ent);")
 observe = P_VIEW.index("SG_HookLiveEndFrame(ent);", pull)
 assert pull < observe
+
+# Rope discipline is a graph-hook admission/retirement seam, not a replay or
+# optional speedhook rewrite. It decides at the exact proved source before
+# control decode, and malformed control plus a graph aim timeout share the
+# same bounded retirement path.
+hook_stage = body("if (l->action == RL_HOOK", "hook_stage_done: ;")
+worth = hook_stage.index("SG_HookExpectedRideWorth")
+decode = hook_stage.index("SG_HookControlDecode")
+assert worth < decode
+assert "worth == SG_HOOK_RIDE_REJECT" in hook_stage
+assert '"value-skip"' in hook_stage
+assert 'Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,' in hook_stage
+assert '"decode-retire"' in hook_stage
+assert hook_stage.index('"decode-retire"') > decode
+assert "SG_HOOK_RIDE_UNASSESSED" in DISCIPLINE
+assert "from_goal > to_goal + SG_HOOK_DISCIPLINE_SERVED_FIELD_MS" in DISCIPLINE
+
+discipline_retire = body("static void Hook_DisciplineRetire",
+                         "qboolean SG_HookOffhandReady")
+assert "Hook_ShelveLink(bot, link_index, shelf_seconds);" in discipline_retire
+assert "bot->commit_link = -1;" in discipline_retire
+assert "bot->hook_phase = 0;" in discipline_retire
+assert "bot->hook_link = -1;" in discipline_retire
+assert "SG_Rune()->links[link_index].action != RL_HOOK" in discipline_retire
+assert "if (failure)" in discipline_retire
+assert "SG_HookFailureStreakAdvance" in discipline_retire
+assert "SG_TimerArm(&bot->hookban_until" in discipline_retire
+assert "HOOKDISC" in discipline_retire
+
+graph_fail = body("static void Hook_GraphFail", "static void Hook_DisciplineRetire")
+assert "SG_HookFailureStreakAdvance" not in graph_fail
+
+aim_start = text.index("else if (bot->hook_phase == 1 && SG_TimerReadyStrict(")
+aim_end = text.index("else if (bot->hook_phase == 1)", aim_start + 1)
+aim = text[aim_start:aim_end]
+assert 'Hook_DisciplineRetire(e, bot, failed_link, 5.0f, true,' in aim
+assert '"aim-retire"' in aim
+assert "bot->hookfail_streak = 0;" not in aim
+assert "if (failed_speedhook)" in aim
+speedhook_timeout = aim[aim.index("if (failed_speedhook)"):aim.index("else", aim.index("if (failed_speedhook)"))]
+assert "Hook_DisciplineRetire" not in speedhook_timeout
+
+fire_end = text.index("else if (bot->hook_phase == 2)", aim_end)
+fire = text[aim_end:fire_end]
+fire_worth = fire.index("SG_HookExpectedRideWorth")
+fire_retire = fire.index('"value-fire-skip"')
+fire_proof = fire.index("Hook_OnlineProof")
+fire_command = fire.index("Cmd_Hook_f(e);")
+assert fire_worth < fire_retire < fire_proof < fire_command
+assert "goal_field[hook_link->from]" in fire
+assert "goal_field[hook_link->to]" in fire
+assert "worth == SG_HOOK_RIDE_REJECT" in fire
+assert 'Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
+assert "goto hook_wait;" in fire[fire_retire:fire_proof]
+assert "Hook_LiveBeginAfterFire" in fire
 
 print("hook_live_integration_contract: ok")

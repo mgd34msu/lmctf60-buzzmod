@@ -13,9 +13,7 @@
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_guard_game.h"
-#ifdef SG_ACCEPT_DROP
-#include "slipgate/sg_accept_drop.h"
-#endif
+#include "slipgate/sg_rune_mechanism_catalog.h"
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -760,6 +758,9 @@ void ExitLevel (void)
 		level.framenum, level.time,
 		level.changemap ? level.changemap : "(null)");
 
+	/* A demo is map-local. Close every viewer authority before the engine can
+	 * observe the gamemap command; no session may survive level storage. */
+	POVLock_StopAll();
 	Com_sprintf (command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
 
 	/* This is the final point where the current rune identity, graph, and
@@ -865,10 +866,6 @@ void G_RunFrame (void)
 		return;
 	}
 
-	/* TEMPORARY DIAGNOSTIC (bot_developer 1) -- flag reachability tracing,
-	 * defined at the bottom of g_ctffunc.c. Remove with that function. */
-	BotFlagDiag();
-
 	//
 	// treat each object in turn
 	// even the world gets a chance to think
@@ -905,11 +902,10 @@ void G_RunFrame (void)
 
 		G_RunEntity (ent);
 	}
-
-#ifdef SG_ACCEPT_DROP
-	SG_AcceptDropEntityPass();
-#endif
-
+	/* The first complete entity pass materializes delayed stock mechanisms
+	 * (notably automatic door triggers).  Seal before bot/runtime publication
+	 * sees the frame, and before `sv rune` may temporarily open movers. */
+	SG_MechCatalogSeal();
 	/*
 	 * SLIPGATE bots think here, after the entity loop rather than inside it:
 	 * they see a fully updated world that way and never act on a half-stepped

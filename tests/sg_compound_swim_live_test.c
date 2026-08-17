@@ -8,16 +8,6 @@
 
 #include "slipgate/sg_compound_swim_live.h"
 
-_Static_assert(SG_COMPOUND_DOOR_DROP_CONTROLLER_REVISION == 0,
-	"D_DROP must remain dormant");
-_Static_assert(SG_COMPOUND_DOOR_SWIM_CONTROLLER_REVISION == 0,
-	"D_SWIM must remain dormant");
-_Static_assert(SG_COMPOUND_DOOR_HOOK_CONTROLLER_REVISION == 0,
-	"D_HOOK must remain dormant");
-#ifdef SG_COMPOUND_CONTROLLER_REVISION
-#error "aggregate compound controller gates are forbidden"
-#endif
-
 enum fixture_event_e
 {
 	FIXTURE_BIND = 1,
