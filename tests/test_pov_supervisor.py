@@ -81,7 +81,12 @@ int main(int ac,char**av){
 #ifdef ZERO_DEMO
   int fd=open(demo,O_WRONLY|O_CREAT|O_EXCL,0600);
 #else
-  int fd=open(demo,O_WRONLY|O_CREAT|O_EXCL,0600);if(fd>=0)write(fd,"demo",4);
+  int fd=open(demo,O_WRONLY|O_CREAT|O_EXCL,0600);
+  if(fd>=0){
+    ssize_t wrote;
+    do{wrote=write(fd,"demo",4);}while(wrote<0&&errno==EINTR);
+    if(wrote!=4){close(fd);return 7;}
+  }
 #endif
   if(fd>=0)close(fd);
 #ifdef DISCONNECT
