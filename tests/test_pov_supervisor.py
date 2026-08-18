@@ -319,6 +319,7 @@ class SupervisorTest(unittest.TestCase):
         )
         script.write_text(source)
         script.chmod(0o700)
+        shutil.copy2(REPO / "tools/topmaps.txt", tools / "topmaps.txt")
         shutil.copy2(self.supervisor, tools / "pov-supervisor")
         (tools / "gamestat.sh").write_text("#!/bin/bash\nexit 0\n")
         (tools / "gamestat.sh").chmod(0o700)

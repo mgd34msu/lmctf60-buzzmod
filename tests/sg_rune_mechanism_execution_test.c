@@ -81,10 +81,16 @@ edict_t *g_edicts;
 sg_host_t sg_host;
 sg_bot_t sg_bots[SG_MAXBOTS];
 cvar_t *maxclients;
+cvar_t *sv_gravity;
+int meansOfDeath;
 
 static edict_t test_edicts[TEST_EDICTS];
 static gclient_t bot_client;
 static cvar_t maxclients_value;
+static cvar_t gravity_value;
+static int player_die_calls;
+static int guard_hold_calls;
+static int guard_pause_calls;
 static rune_t *active_rune;
 static int failures;
 static int relay_g_use_targets[CHAIN_COUNT];
@@ -189,6 +195,8 @@ static int DoorChain(const edict_t *source)
 		return CHAIN_FRONT;
 	if (source == &test_edicts[KEY_CELLAR_DOOR])
 		return CHAIN_CELLAR;
+	if (source == &test_edicts[KEY_SPARE])
+		return CHAIN_CELLAR;
 	if (source == &test_edicts[KEY_GATE_DOOR])
 		return CHAIN_GATE;
 	return -1;
@@ -223,6 +231,7 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator)
 
 	CHECK(self == &test_edicts[KEY_DIRECT_DOOR] ||
 	      self == &test_edicts[KEY_CELLAR_DOOR] ||
+	      self == &test_edicts[KEY_SPARE] ||
 	      self == &test_edicts[KEY_GATE_DOOR] ||
 	      self == &test_edicts[KEY_AUTO_DOOR] ||
 	      self == &test_edicts[KEY_BUTTON_DOOR]);
@@ -236,6 +245,8 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator)
 		expected_trigger = &test_edicts[KEY_GATE_TRIGGER];
 	CHECK(other == expected_trigger);
 	CHECK(activator == &test_edicts[KEY_BOT]);
+	if (!SG_AuthorizeDoorActivation(other, self, activator))
+		return;
 	door_uses[chain]++;
 	NoteCallback(chain, 'D');
 	VectorClear(self->velocity);
@@ -245,6 +256,18 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator)
 	self->think = Move_Final;
 	self->nextthink = 1.0f;
 	G_UseTargets(self, activator);
+}
+
+void player_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
+	int damage, vec3_t point)
+{
+	(void)inflictor;
+	(void)attacker;
+	(void)damage;
+	(void)point;
+	player_die_calls++;
+	self->deadflag = DEAD_DEAD;
+	self->solid = SOLID_NOT;
 }
 
 void Use_Target_Speaker(edict_t *self, edict_t *other,
@@ -327,12 +350,40 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorizeActivation(
 	    ? SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 }
 
+sg_compound_guard_result_t SG_DeclaredDoorGuardHoldOpen(sg_bot_t *bot,
+	int lease_ms)
+{
+	CHECK(bot == &sg_bots[0]);
+	CHECK(lease_ms == 500);
+	guard_hold_calls++;
+	return SG_COMPOUND_GUARD_OK;
+}
+
+sg_compound_guard_result_t SG_DeclaredDoorGuardPause(sg_bot_t *bot)
+{
+	CHECK(bot == &sg_bots[0]);
+	guard_pause_calls++;
+	return SG_COMPOUND_GUARD_OK;
+}
+
 int SG_DeclaredDoorGuardAnyClaim(void)
 {
 	return 0;
 }
 
+int SG_DeclaredDoorGuardActivationAvailable(edict_t *door_master)
+{
+	return door_master != NULL;
+}
+
 qboolean SG_BoundDoorTouchMatches(
+	const sg_rune_mechanism_binding_t *binding, const vec3_t origin)
+{
+	(void)origin;
+	return binding != NULL;
+}
+
+qboolean SG_BoundDoorOutsideSweep(
 	const sg_rune_mechanism_binding_t *binding, const vec3_t origin)
 {
 	(void)origin;
@@ -375,6 +426,7 @@ typedef struct execution_fixture_s
 	byte linked_seed[2];
 	sg_mech_catalog_view_t catalog;
 	uint32_t edge_count;
+	qboolean multi_cellar;
 } execution_fixture_t;
 
 static void PutU16(unsigned char *output, uint16_t value)
@@ -508,10 +560,16 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	memset(test_edicts, 0, sizeof(test_edicts));
 	memset(&bot_client, 0, sizeof(bot_client));
 	memset(&maxclients_value, 0, sizeof(maxclients_value));
+	memset(&gravity_value, 0, sizeof(gravity_value));
 	memset(sg_bots, 0, sizeof(sg_bots));
 	memset(&sg_host, 0, sizeof(sg_host));
 	g_edicts = test_edicts;
 	maxclients = &maxclients_value;
+	gravity_value.value = 800.0f;
+	sv_gravity = &gravity_value;
+	player_die_calls = 0;
+	guard_hold_calls = 0;
+	guard_pause_calls = 0;
 	game.maxentities = TEST_EDICTS;
 	globals.edicts = test_edicts;
 	globals.edict_size = (int)sizeof(test_edicts[0]);
@@ -616,6 +674,12 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	InitializeEntity(KEY_CELLAR_CLOSE_SPEAKER, "target_speaker");
 	test_edicts[KEY_CELLAR_CLOSE_SPEAKER].targetname = "cellar-close";
 	test_edicts[KEY_CELLAR_CLOSE_SPEAKER].use = Use_Target_Speaker;
+	if (fixture->multi_cellar)
+	{
+		DoorEntity(KEY_SPARE, "cellar-targets");
+		test_edicts[KEY_SPARE].spawnflags = 2 | 4;
+		test_edicts[KEY_SPARE].moveinfo.wait = 60.0f;
+	}
 
 	/* lmctf58 gate shape: the entry targets only the door; the door itself
 	 * fans out to an immediate open speaker followed by a delayed close relay. */
@@ -731,6 +795,12 @@ static void BuildRune(execution_fixture_t *fixture)
 	    SG_MECH_EDGE_TARGET, 0U);
 	AddPlanEdge(fixture, KEY_CELLAR_TRIGGER, KEY_CELLAR_RELAY,
 	    SG_MECH_EDGE_TARGET, 1U);
+	if (fixture->multi_cellar)
+	{
+		AddPlanEdge(fixture, KEY_CELLAR_TRIGGER, KEY_SPARE,
+		    SG_MECH_EDGE_TARGET, 2U);
+		fixture->plans[LINK_CELLAR_DOOR].expected_members = 2U;
+	}
 	FinishPlan(fixture, LINK_CELLAR_DOOR);
 
 	ConfigureLink(fixture, LINK_GATE_DOOR, RL_DOOR);
@@ -781,6 +851,15 @@ static void BuildRune(execution_fixture_t *fixture)
 static void FixtureBuild(execution_fixture_t *fixture)
 {
 	memset(fixture, 0, sizeof(*fixture));
+	BuildLiveCatalog(fixture);
+	BuildRune(fixture);
+	active_rune = &fixture->rune;
+}
+
+static void FixtureBuildMultiMaster(execution_fixture_t *fixture)
+{
+	memset(fixture, 0, sizeof(*fixture));
+	fixture->multi_cellar = true;
 	BuildLiveCatalog(fixture);
 	BuildRune(fixture);
 	active_rune = &fixture->rune;
@@ -976,15 +1055,21 @@ static void TestDirectDoor(execution_fixture_t *fixture)
 	CHECK(!SG_RuneMechanismBindingCurrent(&binding));
 }
 
+static void DirectBotPose(const short origin_q8[3],
+	const short velocity_q8[3]);
+
 static void TestProductionDelayedRelayDispatch(execution_fixture_t *fixture,
 	int chain, int link_index, uint32_t trigger_key,
 	const char *expected_order, int expected_open_speakers)
 {
+	static const short origin_q8[3] = { 0, 0, 0 };
+	static const short velocity_q8[3] = { 0, 0, 0 };
 	sg_rune_mechanism_binding_t binding;
 	sg_bot_t *bot = &sg_bots[0];
 	int initial_num_edicts = globals.num_edicts;
 	size_t expected_count = strlen(expected_order);
 
+	DirectBotPose(origin_q8, velocity_q8);
 	memset(bot, 0, sizeof(*bot));
 	bot->active = true;
 	bot->ent = &test_edicts[KEY_BOT];
@@ -1044,6 +1129,525 @@ static void TestButtonDoor(execution_fixture_t *fixture)
 	CHECK(!SG_RuneMechanismBindingCurrent(&binding));
 }
 
+static void DirectBotPose(const short origin_q8[3],
+	const short velocity_q8[3])
+{
+	edict_t *entity = &test_edicts[KEY_BOT];
+	int axis;
+
+	entity->inuse = true;
+	entity->client = &bot_client;
+	entity->health = 100;
+	entity->deadflag = 0;
+	entity->movetype = MOVETYPE_WALK;
+	entity->solid = SOLID_BBOX;
+	entity->groundentity = &test_edicts[0];
+	entity->waterlevel = 0;
+	entity->watertype = 0;
+	VectorSet(entity->mins, -16.0f, -16.0f, -24.0f);
+	VectorSet(entity->maxs, 16.0f, 16.0f, 32.0f);
+	memset(&bot_client.ps.pmove, 0, sizeof(bot_client.ps.pmove));
+	bot_client.ps.pmove.pm_type = PM_NORMAL;
+	bot_client.ps.pmove.gravity = 800;
+	for (axis = 0; axis < 3; axis++)
+	{
+		bot_client.ps.pmove.origin[axis] = origin_q8[axis];
+		bot_client.ps.pmove.velocity[axis] = velocity_q8[axis];
+		entity->s.origin[axis] = origin_q8[axis] * 0.125f;
+		entity->velocity[axis] = velocity_q8[axis] * 0.125f;
+	}
+	bot_client.old_pmove = bot_client.ps.pmove;
+}
+
+static void DirectBotOwner(sg_bot_t *bot, int link_index)
+{
+	memset(bot, 0, sizeof(*bot));
+	bot->active = true;
+	bot->ent = &test_edicts[KEY_BOT];
+	bot->instance_token = UINT64_C(0x12345678);
+	bot->commit_link = link_index;
+	bot->declared_started = true;
+	bot->compound_guard.owner.generation = UINT64_C(17);
+	bot->compound_guard.owner.id = 0;
+	bot->compound_guard.owner.kind = SG_MOVER_OWNER_BOT;
+	bot->compound_guard.ticket.epoch = UINT64_C(19);
+	bot->compound_guard.ticket.serial = UINT64_C(23);
+	bot->compound_guard.ticket.slot = 1U;
+}
+
+static void DirectPredictionObserved(sg_bot_t *bot,
+	const short post_origin[3], const short post_velocity[3],
+	qboolean physical_touch, sg_door_approach_prediction_t *prediction)
+{
+	sg_door_approach_observation_t observation;
+	sg_door_approach_result_t result;
+	int axis;
+
+	memset(prediction, 0, sizeof(*prediction));
+	prediction->state = bot->declared_door_approach;
+	memset(&observation, 0, sizeof(observation));
+	observation.pms = bot->ent->client->ps.pmove;
+	for (axis = 0; axis < 3; axis++)
+	{
+		observation.pms.origin[axis] = post_origin[axis];
+		observation.pms.velocity[axis] = post_velocity[axis];
+	}
+	observation.grounded = 1;
+	observation.static_support = 1;
+	observation.population_stable = 1;
+	observation.sweep_clear = 1;
+	observation.physical_touch = physical_touch ? 1 : 0;
+	observation.fall_sampled =
+	    ((bot->declared_door_approach.elapsed_ms +
+	      SG_DOOR_APPROACH_STEP_MS) % SG_DOOR_APPROACH_FRAME_MS) == 0;
+	observation.fall_delta = 0.0f;
+	result = SG_DoorApproachPostStep(&prediction->state, &observation,
+	    SG_DOOR_APPROACH_STEP_MS);
+	CHECK(result.reason == SG_DOOR_APPROACH_REASON_NONE);
+	prediction->pms = observation.pms;
+	VectorCopy(bot->ent->mins, prediction->mins);
+	VectorCopy(bot->ent->maxs, prediction->maxs);
+	prediction->groundentity = &test_edicts[0];
+	prediction->expected_touch = physical_touch;
+}
+
+static void DirectPrediction(sg_bot_t *bot, const short post_origin[3],
+	const short post_velocity[3], sg_door_approach_prediction_t *prediction)
+{
+	DirectPredictionObserved(bot, post_origin, post_velocity, true,
+	    prediction);
+}
+
+static void PublishPrediction(const sg_door_approach_prediction_t *prediction)
+{
+	edict_t *entity = &test_edicts[KEY_BOT];
+	int axis;
+
+	entity->client->ps.pmove = prediction->pms;
+	entity->client->old_pmove = prediction->pms;
+	for (axis = 0; axis < 3; axis++)
+	{
+		entity->s.origin[axis] = prediction->pms.origin[axis] * 0.125f;
+		entity->velocity[axis] = prediction->pms.velocity[axis] * 0.125f;
+	}
+	VectorCopy(prediction->mins, entity->mins);
+	VectorCopy(prediction->maxs, entity->maxs);
+	entity->groundentity = prediction->groundentity;
+	entity->watertype = prediction->watertype;
+	entity->waterlevel = prediction->waterlevel;
+}
+
+static void DirectArmFixture(execution_fixture_t *fixture,
+	const short source_q8[3], const short anchor_q8[3],
+	const short touch_q8[3], const short touch_velocity_q8[3], int substep,
+	sg_rune_mechanism_binding_t *binding,
+	sg_door_approach_prediction_t *prediction)
+{
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	sg_bot_t *bot = &sg_bots[0];
+
+	DirectBotPose(source_q8, zero_velocity);
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, binding,
+	    source_q8, anchor_q8));
+	DirectPrediction(bot, touch_q8, touch_velocity_q8, prediction);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, binding,
+	    prediction, substep));
+	PublishPrediction(prediction);
+}
+
+static void DirectConsumed(const sg_rune_mechanism_binding_t *binding)
+{
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity = &test_edicts[KEY_BOT];
+
+	CHECK(!bot->declared_door_ticket.armed);
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED);
+	CHECK(!SG_DeclaredDoorApproachExecutionFinish(bot, binding, entity));
+	CHECK(!bot->declared_door_ticket.armed);
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED);
+}
+
+static void TestDirectApproachTicket(execution_fixture_t *fixture,
+	const short source_q8[3], const short anchor_q8[3],
+	const short touch_q8[3], const short touch_velocity_q8[3])
+{
+	sg_rune_mechanism_binding_t binding;
+	sg_door_approach_prediction_t prediction;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity;
+	int saved_frame;
+	int door_count;
+	int fanout_count;
+	uint32_t saved_payload_crc;
+	rune_t alternate_rune;
+	static const short zero_velocity[3] = { 0, 0, 0 };
+
+	/* The live frame has exactly four authoritative 25 ms ordinals.  Invalid
+	 * ordinals mint nothing; a second Arm cannot replace active authority. */
+	FixtureBuild(fixture);
+	DirectBotPose(source_q8, zero_velocity);
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    source_q8, anchor_q8));
+	DirectPrediction(bot, touch_q8, touch_velocity_q8, &prediction);
+	CHECK(!SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, -1));
+	CHECK(!bot->declared_door_ticket.armed);
+	CHECK(!SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 4));
+	CHECK(!bot->declared_door_ticket.armed);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 0));
+	CHECK(!SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, -1));
+	DirectConsumed(&binding);
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	CHECK(!SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 1));
+	DirectConsumed(&binding);
+
+	/* Every mismatch starts from a freshly minted command and must consume it;
+	 * no rejected callback may be repaired and replayed. */
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	bot->declared_door_ticket.substep = 1;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	DirectConsumed(&binding);
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	saved_frame = level.framenum;
+	level.framenum++;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	level.framenum = saved_frame;
+	DirectConsumed(&binding);
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	entity->mins[0] += 0.125f;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	DirectConsumed(&binding);
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = NULL;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	DirectConsumed(&binding);
+
+	/* Publication identity is stronger than topology shape.  A different rune
+	 * object with the same arrays and link keys, and same-pointer publication
+	 * reuse with a different payload CRC, both consume the command. */
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	alternate_rune = fixture->rune;
+	alternate_rune.artifact.payload_crc32 ^= UINT32_C(1);
+	active_rune = &alternate_rune;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	active_rune = &fixture->rune;
+	DirectConsumed(&binding);
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	saved_payload_crc = fixture->rune.artifact.payload_crc32;
+	fixture->rune.artifact.payload_crc32 ^= UINT32_C(1);
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	fixture->rune.artifact.payload_crc32 = saved_payload_crc;
+	DirectConsumed(&binding);
+
+	/* The mutable ticket cannot rewrite its sealed reducer transition after
+	 * Arm.  Exercise both endpoint identity and time/phase history bytes. */
+#define EXPECT_PREDICTED_DRIFT(field_) do { \
+	FixtureBuild(fixture); \
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8, \
+	    touch_velocity_q8, 0, &binding, &prediction); \
+	entity = &test_edicts[KEY_BOT]; \
+	bot->declared_door_ticket.predicted_state.field_; \
+	CHECK(!SG_AuthorizeDoorTriggerTouch( \
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity)); \
+	DirectConsumed(&binding); \
+} while (0)
+	EXPECT_PREDICTED_DRIFT(source_q8[0]++);
+	EXPECT_PREDICTED_DRIFT(anchor_q8[0]++);
+	EXPECT_PREDICTED_DRIFT(elapsed_ms++);
+	EXPECT_PREDICTED_DRIFT(phase = SG_DOOR_APPROACH_FINALIZE);
+	EXPECT_PREDICTED_DRIFT(consecutive_air_ms += 25);
+	EXPECT_PREDICTED_DRIFT(finalize_ms += 100);
+#undef EXPECT_PREDICTED_DRIFT
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	bot->declared_door_approach.anchor_q8[0]++;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	DirectConsumed(&binding);
+
+	/* An activation mismatch after the authenticated touch consumes the same
+	 * command before any mover mutation. */
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	CHECK(SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	CHECK(!SG_AuthorizeDoorActivation(
+	    &test_edicts[KEY_CELLAR_TRIGGER],
+	    &test_edicts[KEY_DIRECT_DOOR], entity));
+	CHECK(door_uses[CHAIN_CELLAR] == 0);
+	DirectConsumed(&binding);
+
+	/* Duplicate Touch_Multi and duplicate door_use are separate fail-closed
+	 * replay cases.  Each leaves fanout and mover mutation at exactly one. */
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	door_count = door_uses[CHAIN_CELLAR];
+	fanout_count = door_g_use_targets[CHAIN_CELLAR];
+	CHECK(door_count == 1 && fanout_count == 1);
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	CHECK(door_uses[CHAIN_CELLAR] == door_count);
+	CHECK(door_g_use_targets[CHAIN_CELLAR] == fanout_count);
+	DirectConsumed(&binding);
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	door_count = door_uses[CHAIN_CELLAR];
+	fanout_count = door_g_use_targets[CHAIN_CELLAR];
+	door_use(&test_edicts[KEY_CELLAR_DOOR],
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity);
+	CHECK(door_uses[CHAIN_CELLAR] == door_count);
+	CHECK(door_g_use_targets[CHAIN_CELLAR] == fanout_count);
+	DirectConsumed(&binding);
+
+	/* The positive composition executes real Touch_Multi -> G_UseTargets ->
+	 * relay/door callbacks exactly once, then accepts another cooling touch at
+	 * substep one in the same server frame without a second fanout. */
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source_q8, anchor_q8, touch_q8,
+	    touch_velocity_q8, 0, &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	CHECK(bot->declared_door_ticket.touch_seen);
+	CHECK(bot->declared_door_ticket.activation_seen);
+	CHECK(bot->declared_touched);
+	CHECK(bot->declared_triggered);
+	CHECK(door_uses[CHAIN_CELLAR] == 1);
+	CHECK(callback_order_count[CHAIN_CELLAR] == 2U);
+	CHECK(memcmp(callback_order[CHAIN_CELLAR], "DR", 2U) == 0);
+	CHECK(SG_DeclaredDoorApproachExecutionFinish(bot, &binding, entity));
+	CHECK(bot->declared_door_approach.elapsed_ms == 25);
+	CHECK(bot->declared_door_approach.touched);
+
+	DirectPrediction(bot, touch_q8, touch_velocity_q8, &prediction);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 1));
+	PublishPrediction(&prediction);
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	CHECK(bot->declared_door_ticket.touch_seen);
+	CHECK(!bot->declared_door_ticket.activation_seen);
+	CHECK(door_uses[CHAIN_CELLAR] == 1);
+	CHECK(door_g_use_targets[CHAIN_CELLAR] == 1);
+	CHECK(SG_DeclaredDoorApproachExecutionFinish(bot, &binding, entity));
+	CHECK(bot->declared_door_approach.elapsed_ms == 50);
+
+	/* A fresh later-command ticket is not fresh activation authority.  The
+	 * transaction-wide trigger latch denies and consumes direct door_use even
+	 * though this substep has not yet seen its own activation callback. */
+	DirectPrediction(bot, touch_q8, touch_velocity_q8, &prediction);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 2));
+	PublishPrediction(&prediction);
+	CHECK(SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	door_count = door_uses[CHAIN_CELLAR];
+	fanout_count = door_g_use_targets[CHAIN_CELLAR];
+	door_use(&test_edicts[KEY_CELLAR_DOOR],
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity);
+	CHECK(door_uses[CHAIN_CELLAR] == door_count);
+	CHECK(door_g_use_targets[CHAIN_CELLAR] == fanout_count);
+	DirectConsumed(&binding);
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+}
+
+static void TestDirectApproachMultiMaster(execution_fixture_t *fixture)
+{
+	static const short source[3] = { -23640, 17312, -2719 };
+	static const short anchor[3] = { -24152, 17312, -2888 };
+	static const short touch[3] = { -23919, 17312, -2812 };
+	static const short velocity[3] = { -512, 0, -320 };
+	sg_rune_mechanism_binding_t binding;
+	sg_door_approach_prediction_t prediction;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity;
+	int door_count;
+	int fanout_count;
+
+	/* One real Touch_Multi dispatch opens every independently sealed master
+	 * exactly once before Finish accepts the command. */
+	FixtureBuildMultiMaster(fixture);
+	DirectArmFixture(fixture, source, anchor, touch, velocity, 0,
+	    &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	CHECK(bot->declared_door_ticket.activation_master_count == 2U);
+	CHECK(bot->declared_door_ticket.activation_master_seen_mask ==
+	    UINT32_C(3));
+	CHECK(door_uses[CHAIN_CELLAR] == 2);
+	CHECK(door_g_use_targets[CHAIN_CELLAR] == 2);
+	CHECK(relay_g_use_targets[CHAIN_CELLAR] == 1);
+	CHECK(callback_order_count[CHAIN_CELLAR] == 3U);
+	CHECK(memcmp(callback_order[CHAIN_CELLAR], "DRD", 3U) == 0);
+	CHECK(SG_DeclaredDoorApproachExecutionFinish(bot, &binding, entity));
+
+	/* A callback chain that stops after only one sealed master is not a
+	 * successful command even though that first master was authorized. */
+	FixtureBuildMultiMaster(fixture);
+	DirectArmFixture(fixture, source, anchor, touch, velocity, 0,
+	    &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	CHECK(SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	door_use(&test_edicts[KEY_CELLAR_DOOR],
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity);
+	CHECK(door_uses[CHAIN_CELLAR] == 1);
+	CHECK(bot->declared_door_ticket.activation_master_seen_mask ==
+	    UINT32_C(1));
+	CHECK(!SG_DeclaredDoorApproachExecutionFinish(bot, &binding, entity));
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED);
+
+	/* Replaying either already-consumed master in the same command cannot
+	 * mutate it or publish its fanout a second time and poisons the reducer. */
+	FixtureBuildMultiMaster(fixture);
+	DirectArmFixture(fixture, source, anchor, touch, velocity, 0,
+	    &binding, &prediction);
+	entity = &test_edicts[KEY_BOT];
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	door_count = door_uses[CHAIN_CELLAR];
+	fanout_count = door_g_use_targets[CHAIN_CELLAR];
+	CHECK(door_count == 2 && fanout_count == 2);
+	door_use(&test_edicts[KEY_SPARE],
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity);
+	CHECK(door_uses[CHAIN_CELLAR] == door_count);
+	CHECK(door_g_use_targets[CHAIN_CELLAR] == fanout_count);
+	DirectConsumed(&binding);
+}
+
+static void TestDirectApproachLifecycle(execution_fixture_t *fixture)
+{
+	static const short source[3] = { -23640, 17312, -2719 };
+	static const short anchor[3] = { -24152, 17312, -2888 };
+	static const short touch[3] = { -23919, 17312, -2812 };
+	static const short touch_velocity[3] = { -512, 0, -320 };
+	sg_rune_mechanism_binding_t binding;
+	sg_door_approach_prediction_t prediction;
+	sg_bot_t *bot = &sg_bots[0];
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	uint32_t saved_payload_crc;
+	int deaths;
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source, anchor, touch, touch_velocity, 2,
+	    &binding, &prediction);
+	bot->declared_door_approach.consecutive_air_ms = 275;
+	SG_DeclaredDoorApproachExecutionRetain(bot);
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_WALK);
+	CHECK(bot->declared_door_approach.consecutive_air_ms == 275);
+	CHECK(bot->declared_door_approach_identity.active);
+	CHECK(!bot->declared_door_ticket.armed);
+	CHECK(bot->declared_guard_paused);
+	CHECK(guard_hold_calls == 1);
+	CHECK(guard_pause_calls == 1);
+
+	/* A finalizer command is deliberately zero-input and leaves the exact
+	 * anchor pose unchanged.  A post-command publication mismatch must still
+	 * poison the persistent reducer; clearing only its ticket would allow the
+	 * same pose to re-arm on the next frame. */
+	FixtureBuild(fixture);
+	DirectBotPose(source, zero_velocity);
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    source, anchor));
+	DirectBotPose(anchor, zero_velocity);
+	bot->declared_door_approach.expected_pms = bot_client.ps.pmove;
+	bot->declared_door_approach.phase = SG_DOOR_APPROACH_FINALIZE;
+	bot->declared_door_approach.elapsed_ms = 75;
+	bot->declared_door_approach.finalize_ms = 100;
+	bot->declared_door_approach.touched = 1U;
+	DirectPredictionObserved(bot, anchor, zero_velocity, false, &prediction);
+	CHECK(prediction.state.phase == SG_DOOR_APPROACH_COMPLETE);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 3));
+	PublishPrediction(&prediction);
+	saved_payload_crc = fixture->rune.artifact.payload_crc32;
+	fixture->rune.artifact.payload_crc32 ^= UINT32_C(1);
+	CHECK(!SG_DeclaredDoorApproachExecutionFinish(bot, &binding,
+	    &test_edicts[KEY_BOT]));
+	fixture->rune.artifact.payload_crc32 = saved_payload_crc;
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED);
+	CHECK(bot->declared_door_approach_identity.active);
+	CHECK(!bot->declared_door_ticket.armed);
+	CHECK(!SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 0));
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED);
+
+	FixtureBuild(fixture);
+	DirectArmFixture(fixture, source, anchor, touch, touch_velocity, 3,
+	    &binding, &prediction);
+	deaths = player_die_calls;
+	SG_DeclaredDoorTerminalDeath(bot);
+	CHECK(player_die_calls == deaths + 1);
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_IDLE);
+	CHECK(!bot->declared_door_approach_identity.active);
+	CHECK(!bot->declared_door_ticket.armed);
+
+	/* Reentrant death on an already nonsolid corpse still erases any stale
+	 * persistent reducer before returning without another player_die call. */
+	bot->declared_door_approach.phase = SG_DOOR_APPROACH_WALK;
+	bot->declared_door_approach_identity.active = true;
+	bot->declared_door_ticket.armed = true;
+	deaths = player_die_calls;
+	SG_DeclaredDoorTerminalDeath(bot);
+	CHECK(player_die_calls == deaths);
+	CHECK(bot->declared_door_approach.phase == SG_DOOR_APPROACH_IDLE);
+	CHECK(!bot->declared_door_approach_identity.active);
+	CHECK(!bot->declared_door_ticket.armed);
+}
+
 int main(void)
 {
 	execution_fixture_t fixture;
@@ -1065,6 +1669,32 @@ int main(void)
 	    LINK_CELLAR_DOOR, KEY_CELLAR_TRIGGER, "DR", 0);
 	TestProductionDelayedRelayDispatch(&fixture, CHAIN_GATE,
 	    LINK_GATE_DOOR, KEY_GATE_TRIGGER, "DSR", 1);
+	/* Exact mirrored lmctf58 CellarDoor2 approach coordinates captured from
+	 * the real BSP trace.  Both run the same production binding/ticket/touch/
+	 * relay/door composition with opposite X velocity. */
+	FixtureBuild(&fixture);
+	{
+		static const short red_source[3] = { -23640, 17312, -2719 };
+		static const short red_anchor[3] = { -24152, 17312, -2888 };
+		static const short red_touch[3] = { -23919, 17312, -2812 };
+		static const short red_velocity[3] = { -512, 0, -320 };
+
+		TestDirectApproachTicket(&fixture, red_source, red_anchor,
+		    red_touch, red_velocity);
+	}
+	FixtureBuild(&fixture);
+	{
+		static const short blue_source[3] = { 10808, 23424, -2719 };
+		static const short blue_anchor[3] = { 11320, 23424, -2888 };
+		static const short blue_touch[3] = { 11087, 23424, -2812 };
+		static const short blue_velocity[3] = { 512, 0, -320 };
+
+		TestDirectApproachTicket(&fixture, blue_source, blue_anchor,
+		    blue_touch, blue_velocity);
+	}
+	FixtureBuild(&fixture);
+	TestDirectApproachLifecycle(&fixture);
+	TestDirectApproachMultiMaster(&fixture);
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d mechanism execution test(s) failed\n", failures);

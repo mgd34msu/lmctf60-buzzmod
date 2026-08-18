@@ -19,6 +19,7 @@
 #pragma once
 
 #include "sg_rune.h"
+#include "sg_door_approach.h"
 
 #define SG_MAX_SEEDS	32768
 #define SG_FIELD_INF	0x3fffffff
@@ -37,6 +38,8 @@ typedef struct sg_phantom_s
 	pmove_state_t	old_pms;       /* production snapinitial comparison state */
 	vec3_t			origin;
 	vec3_t			velocity;
+	vec3_t			mins;          /* exact player hull published by Pmove */
+	vec3_t			maxs;
 	qboolean		groundentity;
 	edict_t			*groundentity_entity; /* exact Pmove support identity for
 		                                      * mechanism approach admission */
@@ -55,6 +58,21 @@ typedef struct sg_phantom_s
 	int				door_wait_ms;
 	int				door_open_ms;
 } sg_phantom_t;
+
+/* One side-effect-free prediction for the next real DIRECT_TRIGGER_DOOR
+ * ClientThink.  The live adapter separately authenticates the support
+ * incarnation before arming callback authority. */
+typedef struct sg_door_approach_prediction_s
+{
+	sg_door_approach_state_t state;
+	pmove_state_t pms;
+	vec3_t mins;
+	vec3_t maxs;
+	edict_t *groundentity;
+	int watertype;
+	int waterlevel;
+	qboolean expected_touch;
+} sg_door_approach_prediction_t;
 
 typedef struct sg_hook_proof_s
 {
@@ -199,6 +217,7 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
  * links the whole set at STATE_TOP before replaying the live direct egress. */
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source);
 qboolean SG_DeclaredDoorActivatorSafe(edict_t *trigger);
+qboolean SG_DeclaredDoorDirectActivatorSafe(edict_t *trigger);
 qboolean SG_DeclaredButtonDoorSafe(edict_t *button);
 qboolean SG_OracleStablePopulationTrace(const vec3_t start,
 	const vec3_t mins, const vec3_t maxs, const vec3_t end,
@@ -297,12 +316,20 @@ qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
 qboolean SG_OracleBoundDoorStepSafe(edict_t *ent,
 	const struct sg_rune_mechanism_binding_s *binding,
 	const usercmd_t *cmd);
+qboolean SG_OracleBoundDoorApproachStep(edict_t *ent,
+	const struct sg_rune_mechanism_binding_s *binding,
+	const usercmd_t *cmd, const sg_door_approach_state_t *state,
+	sg_door_approach_prediction_t *prediction,
+	sg_door_approach_reason_t *reason_out);
 qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
 	edict_t *trigger, int *arrival_ms);
 qboolean SG_OracleBoundDoorContinue(edict_t *ent, const vec3_t target,
 	const struct sg_rune_mechanism_binding_s *binding, int *arrival_ms);
 qboolean SG_OracleDoorApproachContactObserved(qboolean button_controller,
 	qboolean physical_touch, qboolean bound_contact);
+qboolean SG_OracleDoorShallowWadeSafe(int waterlevel, int watertype);
+qboolean SG_OracleDoorEgressWaterSafe(int controller_kind, int waterlevel,
+	int watertype);
 qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
 	const vec3_t wait_point, edict_t *trigger, int *arrival_ms,
 	int *touch_ms);

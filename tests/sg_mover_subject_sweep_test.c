@@ -7,6 +7,7 @@
 #include "g_local.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_util.h"
@@ -39,6 +40,8 @@ static edict_t *sibling_trigger_b;
 static edict_t *sibling_trigger_hits[4];
 static int sibling_trigger_hit_count;
 static float sibling_pmove_x;
+static qboolean sibling_pmove_preserve_zero;
+static qboolean sibling_pmove_airborne;
 static qboolean ground_test_active;
 static qboolean ground_test_blocked;
 static qboolean ground_test_drift;
@@ -71,6 +74,21 @@ static qboolean population_mutate_identity;
 static qboolean population_mutate_owner;
 static qboolean population_mutate_area;
 static qboolean population_mutate_base;
+static vec3_t cellar_wade_start;
+static vec3_t cellar_wade_target;
+static int cellar_wade_step;
+static int cellar_wade_steps;
+static int cellar_wade_water_step;
+static int cellar_wade_initial_water;
+static int cellar_wade_mode;
+
+enum cellar_wade_mode_e
+{
+	CELLAR_WADE_SAFE = 0,
+	CELLAR_WADE_WATER2,
+	CELLAR_WADE_LAVA,
+	CELLAR_WADE_SLIME
+};
 
 short SG_RuneProofGravity(void)
 {
@@ -436,6 +454,13 @@ int SG_RuneMechanismBindingTopologyMoverKeys(
 	return SG_RuneMechanismBindingMoverKeys(binding, keys_out, key_count_out);
 }
 
+int SG_MoverCompletionMatches(const edict_t *member,
+	sg_mover_completion_kind_t kind)
+{
+	return member == &ents[MOVER_INDEX] &&
+	       kind == SG_MOVER_COMPLETION_TOP;
+}
+
 void Move_Begin(edict_t *self) { (void)self; }
 void Move_Final(edict_t *self) { (void)self; }
 void Move_Done(edict_t *self) { (void)self; }
@@ -572,6 +597,8 @@ static void ResetWorld(void)
 	sibling_trigger_b = NULL;
 	sibling_trigger_hit_count = 0;
 	sibling_pmove_x = 0.0f;
+	sibling_pmove_preserve_zero = false;
+	sibling_pmove_airborne = false;
 	sv_gravity = NULL;
 	g_edicts = ents;
 	game.maxentities = TEST_EDICTS;
@@ -618,13 +645,66 @@ static int SiblingBoxEdicts(const vec3_t mins, const vec3_t maxs,
 static void SiblingEgressPmove(pmove_t *pmove)
 {
 	pmove->s.pm_type = PM_NORMAL;
-	pmove->s.origin[0] = (short)(sibling_pmove_x * 8.0f);
+	if (!sibling_pmove_preserve_zero || pmove->cmd.msec != 0)
+		pmove->s.origin[0] = (short)(sibling_pmove_x * 8.0f);
 	pmove->s.velocity[0] = 0;
 	pmove->s.velocity[1] = 0;
 	pmove->s.velocity[2] = 0;
-	pmove->groundentity = &ents[0];
+	pmove->groundentity = sibling_pmove_airborne && pmove->cmd.msec != 0
+	    ? NULL : &ents[0];
 	pmove->waterlevel = 0;
 	pmove->watertype = 0;
+}
+
+static void CellarWadePmove(pmove_t *pmove)
+{
+	float fraction;
+	float horizontal_distance;
+	float travel_fraction;
+	int axis;
+	int wet;
+
+	if (pmove->cmd.msec != 0 && cellar_wade_step < cellar_wade_steps)
+		cellar_wade_step++;
+	horizontal_distance = hypotf(cellar_wade_target[0] - cellar_wade_start[0],
+	    cellar_wade_target[1] - cellar_wade_start[1]);
+	/* The captured CellarDoor3 routes settle inside the shared 40-unit
+	 * supported-arrival envelope at exactly 1800/1100 ms.  Preserve that
+	 * endpoint instead of linearly reaching the seed early. */
+	travel_fraction = horizontal_distance > 39.0f
+	    ? (horizontal_distance - 39.0f) / horizontal_distance : 1.0f;
+	fraction = cellar_wade_steps > 0
+	    ? ((float)cellar_wade_step / (float)cellar_wade_steps) *
+	        travel_fraction : 0.0f;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float coordinate = cellar_wade_start[axis] +
+		    (cellar_wade_target[axis] - cellar_wade_start[axis]) * fraction;
+		float speed = cellar_wade_steps > 0
+		    ? (cellar_wade_target[axis] - cellar_wade_start[axis]) *
+		        travel_fraction *
+		        (1000.0f / (25.0f * cellar_wade_steps)) : 0.0f;
+
+		pmove->s.origin[axis] = (short)lroundf(coordinate * 8.0f);
+		pmove->s.velocity[axis] = cellar_wade_step == cellar_wade_steps
+		    ? 0 : (short)lroundf(speed * 8.0f);
+	}
+	pmove->s.pm_type = PM_NORMAL;
+	VectorSet(pmove->mins, -16.0f, -16.0f, -24.0f);
+	VectorSet(pmove->maxs, 16.0f, 16.0f, 32.0f);
+	pmove->groundentity =
+	    (cellar_wade_steps == 72 && cellar_wade_step >= 13 &&
+	     cellar_wade_step <= 25) ? NULL : &ents[0];
+	wet = cellar_wade_initial_water ||
+	    (cellar_wade_water_step > 0 &&
+	     cellar_wade_step >= cellar_wade_water_step);
+	pmove->waterlevel = wet
+	    ? (cellar_wade_mode == CELLAR_WADE_WATER2 ? 2 : 1) : 0;
+	pmove->watertype = wet ? CONTENTS_WATER : 0;
+	if (wet && cellar_wade_mode == CELLAR_WADE_LAVA)
+		pmove->watertype |= CONTENTS_LAVA;
+	if (wet && cellar_wade_mode == CELLAR_WADE_SLIME)
+		pmove->watertype |= CONTENTS_SLIME;
 }
 
 static edict_t *TranslationMover(void)
@@ -697,6 +777,259 @@ static edict_t *AliasTrigger(int index, float x, const char *target)
 	return trigger;
 }
 
+static void ConfigureCellarWade(const vec3_t start, const vec3_t target,
+	int steps, int water_step, int initial_water, int mode)
+{
+	VectorCopy(start, cellar_wade_start);
+	VectorCopy(target, cellar_wade_target);
+	cellar_wade_step = 0;
+	cellar_wade_steps = steps;
+	cellar_wade_water_step = water_step;
+	cellar_wade_initial_water = initial_water;
+	cellar_wade_mode = mode;
+}
+
+static edict_t *CellarDoor3Binding(qboolean red,
+	rune_link_t *link, rune_mechanism_plan_t *plan,
+	rune_mechanism_node_t *entry_node, rune_mechanism_node_t *mover_node,
+	sg_rune_mechanism_binding_t *binding)
+{
+	edict_t *trigger = &ents[3];
+	edict_t *mover = &ents[MOVER_INDEX];
+
+	ResetWorld();
+	LiveEdict(trigger, 3, "trigger_multiple");
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 63.0f;
+	if (red)
+	{
+		Set3(trigger->absmin, -2690.0f, 2663.0f, -513.0f);
+		Set3(trigger->absmax, -2066.0f, 2852.0f, -391.0f);
+	}
+	else
+	{
+		Set3(trigger->absmin, 462.0f, 2240.0f, -513.0f);
+		Set3(trigger->absmax, 1086.0f, 2429.0f, -391.0f);
+	}
+	LiveEdict(mover, MOVER_INDEX, "func_door_rotating");
+	mover->solid = SOLID_BSP;
+	mover->movetype = MOVETYPE_PUSH;
+	mover->use = door_use;
+	mover->blocked = door_blocked;
+	mover->spawnflags = 4;
+	if (red)
+	{
+		Set3(mover->s.origin, -2512.0f, 2794.0f, -452.0f);
+		Set3(mover->mins, -4.0f, -76.0f, -60.0f);
+		Set3(mover->maxs, 4.0f, 4.0f, 60.0f);
+	}
+	else
+	{
+		Set3(mover->s.origin, 908.0f, 2298.0f, -452.0f);
+		Set3(mover->mins, -4.0f, -4.0f, -60.0f);
+		Set3(mover->maxs, 4.0f, 76.0f, 60.0f);
+	}
+	VectorCopy(mover->s.origin, mover->moveinfo.start_origin);
+	VectorCopy(mover->s.origin, mover->moveinfo.end_origin);
+	VectorClear(mover->moveinfo.start_angles);
+	Set3(mover->moveinfo.end_angles, 0.0f, 90.0f, 0.0f);
+	VectorCopy(mover->moveinfo.end_angles, mover->s.angles);
+	mover->moveinfo.speed = 100.0f;
+	mover->moveinfo.accel = 100.0f;
+	mover->moveinfo.decel = 100.0f;
+	mover->moveinfo.distance = 90.0f;
+	mover->moveinfo.wait = 60.0f;
+	mover->moveinfo.state = SG_PLAT_STATE_TOP;
+	mover->moveinfo.endfunc = door_hit_top;
+	mover->think = door_go_down;
+	mover->nextthink = 100.0f;
+	SetLinkedBounds(mover);
+
+	memset(link, 0, sizeof(*link));
+	memset(plan, 0, sizeof(*plan));
+	memset(entry_node, 0, sizeof(*entry_node));
+	memset(mover_node, 0, sizeof(*mover_node));
+	memset(binding, 0, sizeof(*binding));
+	link->action = RL_DOOR;
+	plan->controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	entry_node->key = 3U;
+	mover_node->key = MOVER_INDEX;
+	binding->link = link;
+	binding->plan = plan;
+	binding->entry_node = entry_node;
+	binding->mover_node = mover_node;
+	binding->entry_entity = trigger;
+	binding->mover_entity = mover;
+	sibling_binding = binding;
+	sibling_mover_keys[0] = MOVER_INDEX;
+	sibling_mover_count = 1U;
+	binding_current = 1;
+	replay_gravity.value = 800.0f;
+	sv_gravity = &replay_gravity;
+	level.time = 1.0f;
+	ground_test_active = false;
+	ground_test_watertype = 0;
+	sg_host.trace = StableGroundTrace;
+	sg_host.pointcontents = GroundPointContents;
+	sg_host.pmove = CellarWadePmove;
+	return trigger;
+}
+
+static void CellarContinueSubject(const vec3_t origin, int waterlevel,
+	int watertype)
+{
+	edict_t *player = PlayerSubject(origin[0], origin[1], origin[2],
+	    MOVETYPE_WALK, 32.0f);
+	int axis;
+
+	player->health = 100;
+	player->s.modelindex = 255;
+	player->groundentity = &ents[0];
+	player->waterlevel = waterlevel;
+	player->watertype = watertype;
+	memset(&player->client->ps.pmove, 0, sizeof(player->client->ps.pmove));
+	player->client->ps.pmove.pm_type = PM_NORMAL;
+	player->client->ps.pmove.gravity = 800;
+	for (axis = 0; axis < 3; axis++)
+		player->client->ps.pmove.origin[axis] =
+		    (short)lroundf(origin[axis] * 8.0f);
+	player->client->old_pmove = player->client->ps.pmove;
+	VectorClear(player->client->oldvelocity);
+}
+
+static void TestDirectDoorShallowWadeParity(void)
+{
+	static const vec3_t red_source = { -2213.5f, 2757.5f, -443.875f };
+	static const vec3_t red_mid = { -2408.5f, 2757.5f, -486.875f };
+	static const vec3_t red_target = { -2752.0f, 2758.0f, -486.875f };
+	static const vec3_t blue_source = { 609.5f, 2334.5f, -443.875f };
+	static const vec3_t blue_mid = { 804.5f, 2334.0f, -486.875f };
+	static const vec3_t blue_target = { 1148.0f, 2334.0f, -486.875f };
+	const vec3_t *sources[2] = { &red_source, &blue_source };
+	const vec3_t *middles[2] = { &red_mid, &blue_mid };
+	const vec3_t *targets[2] = { &red_target, &blue_target };
+	rune_link_t link;
+	rune_mechanism_plan_t plan;
+	rune_mechanism_node_t entry_node, mover_node;
+	sg_rune_mechanism_binding_t binding;
+	edict_t *player;
+	int arrival;
+	int side;
+
+	CHECK(SG_OracleDoorShallowWadeSafe(0, 0));
+	CHECK(SG_OracleDoorShallowWadeSafe(1, CONTENTS_WATER));
+	CHECK(!SG_OracleDoorShallowWadeSafe(2, CONTENTS_WATER));
+	CHECK(!SG_OracleDoorShallowWadeSafe(1,
+	    CONTENTS_WATER | CONTENTS_LAVA));
+	CHECK(!SG_OracleDoorShallowWadeSafe(1,
+	    CONTENTS_WATER | CONTENTS_SLIME));
+	CHECK(SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 1, CONTENTS_WATER));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_AUTO_DOOR, 1, CONTENTS_WATER));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR, 1, CONTENTS_WATER));
+
+	for (side = 0; side < 2; side++)
+	{
+		CellarDoor3Binding(side == 0, &link, &plan, &entry_node,
+		    &mover_node, &binding);
+		CHECK(SG_BoundDoorOutsideSweep(&binding, *sources[side]));
+		CHECK(SG_BoundDoorOutsideSweep(&binding, *targets[side]));
+		CHECK(SG_BoundDoorCrossesSweep(&binding, *sources[side],
+		    *targets[side]));
+		CHECK(SG_BoundDoorAtTop(&binding));
+
+		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 0,
+		    CELLAR_WADE_SAFE);
+		arrival = -1;
+		CHECK(SG_OracleBoundDoorEgress(*sources[side], *targets[side],
+		    &binding, NULL, &arrival));
+		CHECK(arrival == 1800 && cellar_wade_step == 72);
+
+		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 0,
+		    CELLAR_WADE_WATER2);
+		arrival = -1;
+		CHECK(!SG_OracleBoundDoorEgress(*sources[side], *targets[side],
+		    &binding, NULL, &arrival));
+		CHECK(cellar_wade_step == 23);
+		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 0,
+		    CELLAR_WADE_LAVA);
+		CHECK(!SG_OracleBoundDoorEgress(*sources[side], *targets[side],
+		    &binding, NULL, &arrival));
+		CHECK(cellar_wade_step == 23);
+		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 0,
+		    CELLAR_WADE_SLIME);
+		CHECK(!SG_OracleBoundDoorEgress(*sources[side], *targets[side],
+		    &binding, NULL, &arrival));
+		CHECK(cellar_wade_step == 23);
+
+		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 1,
+		    CELLAR_WADE_WATER2);
+		CHECK(!SG_OracleBoundDoorEgress(*sources[side], *targets[side],
+		    &binding, NULL, &arrival));
+		CHECK(cellar_wade_step == 0);
+
+		CellarContinueSubject(*middles[side], 1, CONTENTS_WATER);
+		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
+		    CELLAR_WADE_SAFE);
+		arrival = -1;
+		player = &ents[1];
+		CHECK(SG_OracleBoundDoorContinue(player, *targets[side], &binding,
+		    &arrival));
+		CHECK(arrival == 1100 && cellar_wade_step == 44);
+
+		CellarContinueSubject(*middles[side], 2, CONTENTS_WATER);
+		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
+		    CELLAR_WADE_WATER2);
+		CHECK(!SG_OracleBoundDoorContinue(player, *targets[side], &binding,
+		    &arrival));
+		CHECK(cellar_wade_step == 0);
+		CellarContinueSubject(*middles[side], 1,
+		    CONTENTS_WATER | CONTENTS_LAVA);
+		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
+		    CELLAR_WADE_LAVA);
+		CHECK(!SG_OracleBoundDoorContinue(player, *targets[side], &binding,
+		    &arrival));
+		CHECK(cellar_wade_step == 0);
+
+		/* AUTO_DOOR and BUTTON_DOOR retain the legacy dry-only law. */
+		plan.controller_kind = SG_MECHANISM_CONTROLLER_AUTO_DOOR;
+		link.action = RL_DOOR;
+		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 0,
+		    CELLAR_WADE_SAFE);
+		CHECK(!SG_OracleBoundDoorEgress(*sources[side], *targets[side],
+		    &binding, NULL, &arrival));
+		CHECK(cellar_wade_step == 23);
+		CellarContinueSubject(*middles[side], 1, CONTENTS_WATER);
+		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
+		    CELLAR_WADE_SAFE);
+		CHECK(!SG_OracleBoundDoorContinue(player, *targets[side], &binding,
+		    &arrival));
+		CHECK(cellar_wade_step == 0);
+
+		plan.controller_kind = SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+		link.action = RL_BUTTON_DOOR;
+		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 0,
+		    CELLAR_WADE_SAFE);
+		CHECK(!SG_OracleBoundButtonDoorEgress(*sources[side],
+		    *targets[side], &binding, NULL, &arrival,
+		    SG_BUTTON_SUPPORT_STATIC));
+		CHECK(cellar_wade_step == 23);
+		CellarContinueSubject(*middles[side], 1, CONTENTS_WATER);
+		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
+		    CELLAR_WADE_SAFE);
+		CHECK(!SG_OracleBoundDoorContinue(player, *targets[side], &binding,
+		    &arrival));
+		CHECK(cellar_wade_step == 0);
+	}
+
+	memset(&sg_host, 0, sizeof(sg_host));
+	sv_gravity = NULL;
+}
+
 static void TestBoundDoorSiblingAliasReplay(void)
 {
 	static char alias_target[] = "alias_target";
@@ -745,9 +1078,8 @@ static void TestBoundDoorSiblingAliasReplay(void)
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 25;
 
-	/* Generation remains allowed to treat the opposite-side activator as the
-	 * same complete physical mechanism before a sealed binding exists. */
-	CHECK(SG_DeclaredDoorEquivalentActivation(sibling_trigger_a,
+	/* A complete mover-set sibling is not the serialized controller. */
+	CHECK(!SG_DeclaredDoorEquivalentActivation(sibling_trigger_a,
 	    sibling_trigger_b, master, sibling_trigger_b->s.origin));
 
 	sibling_binding = &binding;
@@ -760,6 +1092,17 @@ static void TestBoundDoorSiblingAliasReplay(void)
 	sg_host.box_edicts = SiblingBoxEdicts;
 	sg_host.pmove = SiblingEgressPmove;
 
+	/* Generation and bound replay both authenticate the exact entry. */
+	sibling_pmove_x = -40.0f;
+	sibling_trigger_hit_count = 0;
+	CHECK(SG_OracleDeclaredDoorStepSafe(player, sibling_trigger_a, &cmd));
+	sibling_pmove_x = 96.0f;
+	sibling_trigger_hit_count = 0;
+	CHECK(!SG_OracleDeclaredDoorStepSafe(player, sibling_trigger_a, &cmd));
+	CHECK(sibling_trigger_hit_count == 2 &&
+	      sibling_trigger_hits[0] == sibling_trigger_a &&
+	      sibling_trigger_hits[1] == sibling_trigger_b);
+
 	/* The exact bound trigger remains valid.  The two overlap samples are the
 	 * initial entry into A and its unchanged physical replay position. */
 	sibling_pmove_x = -40.0f;
@@ -769,23 +1112,20 @@ static void TestBoundDoorSiblingAliasReplay(void)
 	      sibling_trigger_hits[0] == sibling_trigger_a &&
 	      sibling_trigger_hits[1] == sibling_trigger_a);
 
-	/* This is the sealed-loader ordering that failed in the corpus: the link
-	 * enters A, then the egress Pmove reaches only B.  Both boxes are real
-	 * physical overlaps and B owns the identical two-member mover closure. */
+	/* A sealed direct-trigger approach owns exactly its serialized entry.
+	 * Another trigger may target the same mover closure, but accepting it would
+	 * let a sibling callback consume the one-command ticket. */
 	sibling_pmove_x = 96.0f;
 	sibling_trigger_hit_count = 0;
-	CHECK(SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
 	CHECK(sibling_trigger_hit_count == 2 &&
 	      sibling_trigger_hits[0] == sibling_trigger_a &&
 	      sibling_trigger_hits[1] == sibling_trigger_b);
 
-	/* General generation equivalence can legitimately normalize a canonical
-	 * automatic door trigger.  A sealed direct-trigger replay must not borrow
-	 * that broader law: B is physically overlapped and owns the same team, but
-	 * only a direct Touch_Multi sibling has replay authority. */
+	/* A different automatic trigger is also not the direct plan entry. */
 	sibling_trigger_b->touch = Touch_DoorTrigger;
 	sibling_trigger_b->owner = master;
-	CHECK(SG_DeclaredDoorEquivalentActivation(sibling_trigger_a,
+	CHECK(!SG_DeclaredDoorEquivalentActivation(sibling_trigger_a,
 	    sibling_trigger_b, master, sibling_trigger_b->s.origin));
 	sibling_trigger_hit_count = 0;
 	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
@@ -794,6 +1134,37 @@ static void TestBoundDoorSiblingAliasReplay(void)
 	      sibling_trigger_hits[1] == sibling_trigger_b);
 	sibling_trigger_b->touch = Touch_Multi;
 	sibling_trigger_b->owner = NULL;
+
+	/* AUTO_DOOR keeps its ordinary grounded approach law.  The exact same
+	 * bound route succeeds grounded and rejects one transient-air step. */
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_AUTO_DOOR;
+	sibling_trigger_a->touch = Touch_DoorTrigger;
+	sibling_trigger_a->owner = master;
+	sg_host.trace = StableGroundTrace;
+	sg_host.pointcontents = GroundPointContents;
+	sibling_pmove_preserve_zero = true;
+	sibling_pmove_x = -40.0f;
+	{
+		vec3_t source = { -80.0f, 0.0f, 0.0f };
+		vec3_t anchor = { -40.0f, 0.0f, 0.0f };
+		int arrival = -1;
+		int touch = -1;
+
+		sibling_pmove_airborne = false;
+		CHECK(SG_OracleBoundDoorApproach(source, anchor, &binding,
+		    &arrival, &touch));
+		CHECK(arrival == 25 && touch == 25);
+		sibling_pmove_airborne = true;
+		arrival = touch = -1;
+		CHECK(!SG_OracleBoundDoorApproach(source, anchor, &binding,
+		    &arrival, &touch));
+	}
+	sibling_pmove_preserve_zero = false;
+	sibling_pmove_airborne = false;
+	sibling_trigger_a->touch = Touch_Multi;
+	sibling_trigger_a->owner = NULL;
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	sibling_pmove_x = 96.0f;
 
 	/* B may not retarget an independently safe but different fanout/set. */
 	sibling_trigger_b->target = other_target;
@@ -849,15 +1220,15 @@ static void TestBoundDoorSiblingAliasReplay(void)
 	link.action = RL_DOOR;
 	plan.controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
 
-	/* The same proof applies to a one-member direct door set; the multi-member
-	 * coverage above guards complete team fanout rather than just one leaf. */
+	/* Removing team members does not broaden entry identity: the sibling is
+	 * still not the sealed controller. */
 	member->inuse = false;
 	master->team = NULL;
 	master->teamchain = NULL;
 	sibling_mover_count = 1U;
 	sibling_mover_keys[0] = MOVER_INDEX;
 	sibling_trigger_hit_count = 0;
-	CHECK(SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
 	CHECK(sibling_trigger_hit_count == 2 &&
 	      sibling_trigger_hits[0] == sibling_trigger_a &&
 	      sibling_trigger_hits[1] == sibling_trigger_b);
@@ -1780,6 +2151,7 @@ int main(void)
 	TestStableGroundSource();
 	TestButtonContactAndEndpointTiming();
 	TestBoundDoorSiblingAliasReplay();
+	TestDirectDoorShallowWadeParity();
 	TestTranslationAndBoundary();
 	TestRotatingAndSecretSweeps();
 	TestProspectivePushSweep();

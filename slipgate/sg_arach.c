@@ -6,7 +6,7 @@
  * the field toward the enemy flag -- run home when carrying. No combat, no
  * hook, no speed tricks yet. If a bot cannot get base to base on the rune,
  * nothing fancier deserves to exist; this is the walking skeleton the rest
- * grows on, and it is A/B-able against the legacy bots from the first
+ * grows on, and it is can be compared against the legacy bots from the first
  * frame.
  *
  *   sv sg add        spawn a SLIPGATE bot (team by botctfteam, like legacy)
@@ -46,7 +46,9 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rune_install.h"
-#include "slipgate/sg_rune_loader.h"
+	#include "slipgate/sg_rune_file.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_compound_publication.h"
 #include "slipgate/sg_danger_lease.h"
@@ -70,9 +72,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
-#ifdef SG_ACCEPT_DROP
-#include "slipgate/sg_accept_drop.h"
-#endif
+#include "slipgate/sg_strike_adapter.h"
 
 #include <errno.h>
 #include <math.h>
@@ -84,6 +84,13 @@ static float	sg_role_skew_until[2];
 static int	sg_role_skew[2];
 static int	sg_role_escort_carrier[2] = { -1, -1 };
 static qboolean sg_role_escort_on[2] = { true, true };
+static sg_strike_adapter_t sg_strike_adapter;
+static sg_role_t sg_strike_role_cache[SG_MAXBOTS];
+static qboolean sg_strike_role_valid[SG_MAXBOTS];
+static qboolean sg_strike_frame_ready;
+static qboolean sg_strike_telemetry_valid[2];
+static uint32_t sg_strike_telemetry_epoch[2];
+static sg_strike_phase_t sg_strike_telemetry_phase[2];
 static rune_t	*sg_rune;
 static qboolean sg_physics_warned;
 static float sg_last_frame_time;
@@ -99,6 +106,11 @@ static void Role_LevelReset(void)
 	sg_role_skew[0] = sg_role_skew[1] = 0;
 	sg_role_escort_carrier[0] = sg_role_escort_carrier[1] = -1;
 	sg_role_escort_on[0] = sg_role_escort_on[1] = true;
+	SG_StrikeAdapterReset(&sg_strike_adapter);
+	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	sg_strike_frame_ready = false;
+	memset(sg_strike_telemetry_valid, 0,
+	       sizeof(sg_strike_telemetry_valid));
 }
 
 rune_t *SG_Rune(void)
@@ -284,6 +296,14 @@ void Rune_Free(rune_t *r)
 		sg_host.level_free(r->links);
 	if (r->seeds)
 		sg_host.level_free(r->seeds);
+	if (r->mechanism_strings)
+		sg_host.level_free(r->mechanism_strings);
+	if (r->mechanism_plans)
+		sg_host.level_free(r->mechanism_plans);
+	if (r->mechanism_edges)
+		sg_host.level_free(r->mechanism_edges);
+	if (r->mechanism_nodes)
+		sg_host.level_free(r->mechanism_nodes);
 	sg_host.level_free(r);
 }
 
@@ -419,23 +439,32 @@ static const char *Rune_BuildOutboundIndexes(rune_t *r)
 	return NULL;
 }
 
-static const char *Rune_ReplayOrdinaryDoors(rune_t *r, uint32_t *index_out)
+static const char *Rune_ReplayDoorPlans(rune_t *r, uint32_t *index_out)
 {
 	int i;
 
 	for (i = 0; i < r->hdr.num_links; i++)
 	{
 		rune_link_t *link = &r->links[i];
-		edict_t *trigger;
+		sg_rune_mechanism_binding_t binding;
+		const char *check = NULL;
 
-		if (link->action != RL_DOOR)
+		if (link->action != RL_DOOR && link->action != RL_BUTTON_DOOR)
 			continue;
-		trigger = SG_DeclaredDoorForLink(link->anchor,
-		    r->seeds[link->from].origin);
-		if (!trigger || !SG_OracleValidateDeclaredDoorLink(
+		if (!SG_RuneMechanismBindingCapture(r, (uint32_t)i, &binding))
+			check = "binding-capture";
+		else if (binding.link != link)
+			check = "link-identity";
+		else if (!SG_OracleValidateBoundDoorLink(
 		    r->seeds[link->from].origin, link->anchor,
-		    r->seeds[link->to].origin, trigger, link->cost_ms))
+		    r->seeds[link->to].origin, &binding, link->cost_ms))
+			check = "rollout";
+		else if (!SG_RuneMechanismBindingCurrent(&binding))
+			check = "binding-current";
+		if (check)
 		{
+			sg_host.dprint("rune: door replay reject index=%d check=%s\n",
+				i, check);
 			if (index_out)
 				*index_out = (uint32_t)i;
 			return "invalid live declared-door replay";
@@ -444,261 +473,81 @@ static const char *Rune_ReplayOrdinaryDoors(rune_t *r, uint32_t *index_out)
 	return NULL;
 }
 
-static const char *Rune_LoadStageName(sg_rune_load_stage_t stage)
-{
-	switch (stage)
-	{
-	case SG_RUNE_LOAD_STAGE_ARGUMENT: return "argument";
-	case SG_RUNE_LOAD_STAGE_HEADER: return "header";
-	case SG_RUNE_LOAD_STAGE_FILE_SIZE: return "file-size";
-	case SG_RUNE_LOAD_STAGE_PAYLOAD_CRC: return "payload-crc";
-	case SG_RUNE_LOAD_STAGE_IDENTITY: return "identity";
-	case SG_RUNE_LOAD_STAGE_CAPACITY: return "capacity";
-	case SG_RUNE_LOAD_STAGE_DECODE: return "decode";
-	case SG_RUNE_LOAD_STAGE_SEED: return "seed";
-	case SG_RUNE_LOAD_STAGE_LINK: return "link";
-	case SG_RUNE_LOAD_STAGE_ACTION: return "action";
-	case SG_RUNE_LOAD_STAGE_CONTROL: return "control";
-	case SG_RUNE_LOAD_STAGE_DONE: return "done";
-	default: return "unknown";
-	}
-}
-
-static const char *Rune_WireDiagnosticText(rune_wire_diagnostic_t diagnostic)
-{
-	switch (diagnostic)
-	{
-#define RUNE_WIRE_DIAGNOSTIC_CASE(symbol, id, message) \
-	case symbol: return #symbol ": " message;
-	SG_RUNE_WIRE_DIAGNOSTIC_ROWS(RUNE_WIRE_DIAGNOSTIC_CASE)
-#undef RUNE_WIRE_DIAGNOSTIC_CASE
-	default: return "RLW_UNKNOWN: unknown wire diagnostic";
-	}
-}
-
-static const char *Rune_RejectionReasonText(rune_reject_reason_t reason)
-{
-	switch (reason)
-	{
-#define RUNE_REJECTION_REASON_CASE(symbol, id, message) \
-	case symbol: return #symbol ": " message;
-	SG_RUNE_REJECTION_REASON_ROWS(RUNE_REJECTION_REASON_CASE)
-#undef RUNE_REJECTION_REASON_CASE
-	default: return "RLR_UNKNOWN: unknown rejection reason";
-	}
-}
-
 rune_t *Rune_Load(const char *mapname)
 {
 	char path[MAX_OSPATH];
-	unsigned char encoded_header[SG_RUNE_V3_HEADER_BYTES];
-	FILE *f = NULL;
-	unsigned char *snapshot = NULL;
-	rune_t *r = NULL;
-	sg_rune_v3_seed_t *wire_seeds = NULL;
-	sg_rune_v3_link_t *wire_links = NULL;
-	uint64_t *link_keys = NULL;
-	uint8_t *source_marks = NULL;
-	sg_rune_v3_loader_workspace_t workspace;
-	sg_rune_v3_header_t inspected_header, loaded_header;
-	sg_rune_v3_authority_t captured, active;
-	sg_rune_load_result_t load_result;
+	rune_t *rune = NULL;
+	sg_rune_authority_t captured;
+	sg_rune_authority_t active;
+	sg_rune_file_load_result_t load_result;
 	sg_compound_publication_result_t compound_result;
-	sg_rune_snapshot_kind_t snapshot_kind;
 	const char *failure = NULL;
-	const char *failure_stage = "snapshot";
-	size_t file_size = 0, header_size;
-	long file_length;
-	uint32_t failure_index = SG_RUNE_LOAD_INDEX_NONE;
-	qboolean core_rejection = false;
+	const char *failure_stage = "authority";
+	uint32_t failure_index = UINT32_MAX;
 	qboolean proof_scope_active = false;
 	qboolean accepted = false;
-	qboolean missing = false;
-	qboolean failure_prelogged = false;
 	cvar_t *gamedir;
 	const char *game_directory;
 
-	memset(&workspace, 0, sizeof(workspace));
+	memset(&captured, 0, sizeof(captured));
+	memset(&active, 0, sizeof(active));
 	memset(&load_result, 0, sizeof(load_result));
 	path[0] = '\0';
-	load_result.index = SG_RUNE_LOAD_INDEX_NONE;
 	sg_last_rune_load = RUNE_LOAD_MISSING;
 	SG_HooksInit();
 	gamedir = sg_host.cvar("gamedir", "", 0);
 	game_directory = gamedir && gamedir->string && gamedir->string[0]
-	    ? gamedir->string : ".";
-	if (!SG_RuneV3AuthorityCapture(mapname, &captured))
+		? gamedir->string : ".";
+
+	if (!SG_RuneAuthorityCapture(mapname, &captured))
 	{
-		if (captured.identity_status != SG_IDENTITY_OK)
-			sg_host.dprint("rune: v3 load refused stage=identity status=%d "
-			               "reason=%s\n", (int)captured.identity_status,
-			               SG_LevelIdentityReason(captured.identity_status));
-		else
-			sg_host.dprint("rune: v3 load refused stage=proof-law "
-			               "reason=unsupported-active-law\n");
 		failure_stage = captured.identity_status == SG_IDENTITY_OK
-		    ? "proof-law" : "identity";
-		failure = "active authority unavailable";
-		failure_prelogged = true;
+			? "proof-law" : "identity";
+		failure = "rune authority unavailable";
 		goto cleanup;
 	}
 	if (!SG_RuneInstallDestinationPath(path, sizeof(path), game_directory,
-	        captured.level.mapname))
+	    captured.level.mapname))
 	{
 		failure_stage = "path";
 		failure = "path exceeds MAX_OSPATH or has invalid map identity";
 		goto cleanup;
 	}
-	errno = 0;
-	f = fopen(path, "rb");
-	if (!f)
+	load_result = SG_RuneFileLoad(path, &captured.identity,
+		sg_host.level_alloc, sg_host.level_free, &rune);
+	if (load_result.status == SG_RUNE_FILE_LOAD_MISSING)
 	{
-		if (errno == ENOENT)
-			missing = true;
-		else
-		{
-			failure_stage = "open";
-			failure = "snapshot open failure";
-		}
+		sg_last_rune_load = RUNE_LOAD_MISSING;
+		return NULL;
+	}
+	if (load_result.status != SG_RUNE_FILE_LOAD_READY || !rune)
+	{
+		failure_stage = load_result.stage ? load_result.stage : "decode";
+		failure = load_result.reason ? load_result.reason
+			: "rune artifact rejected";
+		failure_index = load_result.index;
 		goto cleanup;
 	}
-	sg_last_rune_load = RUNE_LOAD_REJECTED;
-	header_size = fread(encoded_header, 1, sizeof(encoded_header), f);
-	if (ferror(f))
+	if (!SG_MechCatalogMatches(rune->mechanism_nodes,
+	    rune->artifact.num_mechanism_nodes, rune->mechanism_edges,
+	    rune->artifact.num_inventory_edges, rune->mechanism_strings,
+	    rune->artifact.string_bytes))
 	{
-		failure_stage = "header-read";
-		failure = "failed header read";
+		failure_stage = "live-catalog-rebind";
+		failure = "decoded mechanism inventory differs from sealed world";
 		goto cleanup;
 	}
-	snapshot_kind = SG_RuneV3Probe(encoded_header, header_size);
-	if (snapshot_kind == SG_RUNE_SNAPSHOT_V2)
+	failure_stage = "outbound-index";
+	failure = Rune_BuildOutboundIndexes(rune);
+	if (failure)
+		goto cleanup;
+	failure_stage = "mechanism-rebind";
+	if (!SG_RuneMechanismBindingsReady(rune, &failure_index))
 	{
-		failure_stage = "version";
-		failure = "runtime requires rune v3; regenerate with 'sv rune'";
+		failure = "live mechanism binding rejected";
 		goto cleanup;
 	}
-	load_result = SG_RuneV3InspectHeader(encoded_header, header_size,
-	    &captured.wire, &inspected_header);
-	if (load_result.diagnostic != RLW_OK ||
-	    load_result.reason != RLR_OK ||
-	    load_result.stage != SG_RUNE_LOAD_STAGE_DONE ||
-	    load_result.index != SG_RUNE_LOAD_INDEX_NONE ||
-	    load_result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
-	    load_result.file_size < SG_RUNE_V3_HEADER_BYTES)
-	{
-		core_rejection = true;
-		goto cleanup;
-	}
-	file_size = load_result.file_size;
-	if (file_size > (size_t)INT_MAX)
-	{
-		failure_stage = "file-size";
-		failure = "snapshot exceeds host allocator range";
-		goto cleanup;
-	}
-	if (fseek(f, 0, SEEK_END) != 0 || (file_length = ftell(f)) < 0 ||
-	    (size_t)file_length != file_size || fseek(f, 0, SEEK_SET) != 0)
-	{
-		failure_stage = "file-size";
-		failure = "snapshot size differs from authenticated header";
-		goto cleanup;
-	}
-	snapshot = sg_host.level_alloc((int)file_size);
-	if (!snapshot)
-	{
-		failure_stage = "allocation";
-		failure = "snapshot allocation failure";
-		goto cleanup;
-	}
-	if (fread(snapshot, 1, file_size, f) != file_size ||
-	    fgetc(f) != EOF || ferror(f))
-	{
-		failure_stage = "read";
-		failure = "short, trailing, or failed snapshot read";
-		goto cleanup;
-	}
-	if (fclose(f) != 0)
-	{
-		f = NULL;
-		failure_stage = "close";
-		failure = "snapshot close failure";
-		goto cleanup;
-	}
-	f = NULL;
-	load_result = SG_RuneV3Inspect(snapshot, file_size, &captured.wire,
-	    &inspected_header);
-	if (load_result.diagnostic != RLW_OK ||
-	    load_result.reason != RLR_OK ||
-	    load_result.stage != SG_RUNE_LOAD_STAGE_DONE ||
-	    load_result.index != SG_RUNE_LOAD_INDEX_NONE ||
-	    load_result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
-	    load_result.file_size != file_size)
-	{
-		core_rejection = true;
-		goto cleanup;
-	}
-
-	r = sg_host.level_alloc(sizeof(*r));
-	if (r)
-		memset(r, 0, sizeof(*r));
-	if (!r)
-	{
-		failure_stage = "allocation";
-		failure = "rune allocation failure";
-		goto cleanup;
-	}
-	r->seeds = sg_host.level_alloc(sizeof(*r->seeds) *
-	    (size_t)inspected_header.num_seeds);
-	if (inspected_header.num_links != 0)
-		r->links = sg_host.level_alloc(sizeof(*r->links) *
-		    (size_t)inspected_header.num_links);
-	wire_seeds = sg_host.level_alloc(sizeof(*wire_seeds) *
-	    (size_t)inspected_header.num_seeds);
-	if (inspected_header.num_links != 0)
-	{
-		wire_links = sg_host.level_alloc(sizeof(*wire_links) *
-		    (size_t)inspected_header.num_links);
-		link_keys = sg_host.level_alloc(sizeof(*link_keys) *
-		    (size_t)inspected_header.num_links);
-	}
-	source_marks = sg_host.level_alloc((size_t)inspected_header.num_seeds);
-	if (!r->seeds || (inspected_header.num_links != 0 && !r->links) ||
-	    !wire_seeds || (inspected_header.num_links != 0 &&
-	    (!wire_links || !link_keys)) || !source_marks)
-	{
-		failure_stage = "allocation";
-		failure = "decode-workspace allocation failure";
-		goto cleanup;
-	}
-	workspace.wire_seeds = wire_seeds;
-	workspace.wire_seed_capacity = (size_t)inspected_header.num_seeds;
-	workspace.wire_links = wire_links;
-	workspace.wire_link_capacity = (size_t)inspected_header.num_links;
-	workspace.graph.link_keys = link_keys;
-	workspace.graph.link_key_capacity = (size_t)inspected_header.num_links;
-	workspace.graph.source_marks = source_marks;
-	workspace.graph.source_mark_capacity = (size_t)inspected_header.num_seeds;
-	load_result = SG_RuneV3Load(snapshot, file_size, &captured.wire,
-	    &loaded_header, r->seeds, (size_t)inspected_header.num_seeds,
-	    r->links, (size_t)inspected_header.num_links, &workspace);
-	if (load_result.diagnostic != RLW_OK ||
-	    load_result.reason != RLR_OK ||
-	    load_result.stage != SG_RUNE_LOAD_STAGE_DONE ||
-	    load_result.index != SG_RUNE_LOAD_INDEX_NONE ||
-	    load_result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
-	    load_result.file_size != file_size)
-	{
-		core_rejection = true;
-		goto cleanup;
-	}
-
-	r->v3_header = loaded_header;
-	r->hdr.magic = (int)SG_RUNE_V3_MAGIC;
-	r->hdr.version = SG_RUNE_V3_VERSION;
-	r->hdr.num_seeds = (int)loaded_header.num_seeds;
-	r->hdr.num_links = (int)loaded_header.num_links;
-	memcpy(r->hdr.mapname, loaded_header.map_name, sizeof(r->hdr.mapname));
-	if (!SG_RuneProofScopeBegin(loaded_header.gravity))
+	if (!SG_RuneProofScopeBegin(rune->artifact.identity.gravity))
 	{
 		failure_stage = "proof-scope";
 		failure = "proof scope busy or invalid";
@@ -706,8 +555,9 @@ rune_t *Rune_Load(const char *mapname)
 	}
 	proof_scope_active = true;
 	failure_stage = "compound-replay";
-	compound_result = SG_CompoundPublicationBuild(r, sg_host.level_alloc,
-	    sg_host.level_free, &r->compound_publication);
+	compound_result = SG_CompoundPublicationBuild(rune,
+		sg_host.level_alloc, sg_host.level_free,
+		&rune->compound_publication);
 	if (compound_result.status != SG_COMPOUND_PUBLICATION_OK)
 	{
 		failure = SG_CompoundPublicationStatusName(compound_result.status);
@@ -715,21 +565,17 @@ rune_t *Rune_Load(const char *mapname)
 		goto cleanup;
 	}
 	failure_stage = "door-replay";
-	failure = Rune_ReplayOrdinaryDoors(r, &failure_index);
+	failure = Rune_ReplayDoorPlans(rune, &failure_index);
 	SG_RuneProofScopeEnd();
 	proof_scope_active = false;
 	if (failure)
 		goto cleanup;
-	failure_stage = "outbound-index";
-	failure = Rune_BuildOutboundIndexes(r);
-	if (failure)
-		goto cleanup;
 	failure_stage = "objective-core";
-	failure = Rune_ValidateObjectiveCore(r);
+	failure = Rune_ValidateObjectiveCore(rune);
 	if (failure)
 		goto cleanup;
-	if (!SG_RuneV3AuthorityCapture(loaded_header.map_name, &active) ||
-	    !SG_RuneV3AuthorityMatchesHeader(&active, &loaded_header))
+	if (!SG_RuneAuthorityCapture(rune->artifact.identity.map_name, &active) ||
+	    !SG_RuneAuthorityMatchesArtifact(&active, &rune->artifact))
 	{
 		failure_stage = "authority-recheck";
 		failure = "active identity or proof law drifted during load";
@@ -740,63 +586,24 @@ rune_t *Rune_Load(const char *mapname)
 cleanup:
 	if (proof_scope_active)
 		SG_RuneProofScopeEnd();
-	if (f)
-	{
-		if (fclose(f) != 0 && !failure)
-			failure = "snapshot close failure";
-		f = NULL;
-	}
-	if (link_keys)
-		sg_host.level_free(link_keys);
-	if (source_marks)
-		sg_host.level_free(source_marks);
-	if (wire_links)
-		sg_host.level_free(wire_links);
-	if (wire_seeds)
-		sg_host.level_free(wire_seeds);
-	if (snapshot)
-		sg_host.level_free(snapshot);
-	if (missing)
-	{
-		sg_last_rune_load = RUNE_LOAD_MISSING;
-		return NULL;
-	}
 	if (!accepted)
 	{
 		sg_last_rune_load = RUNE_LOAD_REJECTED;
-		Rune_Free(r);
-		if (failure_prelogged)
-			return NULL;
-		if (core_rejection &&
-		    load_result.index == SG_RUNE_LOAD_INDEX_NONE)
-			sg_host.dprint("rune: rejected %s stage=%s diagnostic=%s "
-			               "reason=%s index=none\n", path,
-			               Rune_LoadStageName(load_result.stage),
-			               Rune_WireDiagnosticText(load_result.diagnostic),
-			               Rune_RejectionReasonText(load_result.reason));
-		else if (core_rejection)
-			sg_host.dprint("rune: rejected %s stage=%s diagnostic=%s "
-			               "reason=%s index=%u\n", path,
-			               Rune_LoadStageName(load_result.stage),
-			               Rune_WireDiagnosticText(load_result.diagnostic),
-			               Rune_RejectionReasonText(load_result.reason),
-			               (unsigned int)load_result.index);
-		else if (failure_index == SG_RUNE_LOAD_INDEX_NONE)
+		Rune_Free(rune);
+		if (failure_index == UINT32_MAX)
 			sg_host.dprint("rune: rejected %s stage=%s reason=%s\n",
-			               path, failure_stage,
-			               failure ? failure : "unknown");
+				path[0] ? path : "<unresolved>", failure_stage,
+				failure ? failure : "unknown");
 		else
 			sg_host.dprint("rune: rejected %s stage=%s reason=%s "
-			               "index=%u\n", path,
-			               failure_stage,
-			               failure ? failure : "unknown",
-			               (unsigned int)failure_index);
+				"index=%u\n", path[0] ? path : "<unresolved>",
+				failure_stage, failure ? failure : "unknown",
+				(unsigned int)failure_index);
 		return NULL;
 	}
 	sg_last_rune_load = RUNE_LOAD_READY;
-	return r;
+	return rune;
 }
-
 int Rune_NearestSeed(rune_t *r, vec3_t p)
 {
 	/* A seed is a local topology sample, not a global Voronoi label. Beyond two
@@ -850,7 +657,7 @@ int Rune_NearestSeed(rune_t *r, vec3_t p)
 /* --------------------------------------------------------------- fields */
 
 /*
- * THE WAY TO AIR (waves 415-419 forensics). The gurgle override kicked
+ * THE WAY TO AIR (observations analysis). The gurgle override kicked
  * straight up, and straight up is exactly wrong under the smap05 shelf
  * overhang: a drowning bot pinned itself to a ceiling at spd=0 with its
  * nose pointed at rock until "sank like a rock". Air is a GRAPH question
@@ -958,8 +765,8 @@ static void Sidecar_LogPublished(const char *game_directory,
 	if (sg_sidecar_log_mask & bit)
 		return;
 	path[0] = '\0';
-	(void)SG_SidecarV3Path(path, sizeof(path), game_directory, kind,
-		&r->v3_header);
+	(void)SG_SidecarPath(path, sizeof(path), game_directory, kind,
+		&r->artifact);
 	sg_sidecar_log_mask |= bit;
 	sg_host.dprint("slipgate: sidecar %s loaded path=%s bytes=%u\n",
 		SG_SidecarKindName(kind), path[0] ? path : "<invalid>",
@@ -985,12 +792,12 @@ static sg_sidecar_load_result_t Sidecar_LoadCandidate(
 	*payload_out = NULL;
 	*payload_size_out = 0;
 	path[0] = '\0';
-	(void)SG_SidecarV3Path(path, sizeof(path), game_directory, kind,
-		&r->v3_header);
-	SG_SidecarV3DefaultLoadOps(&ops);
+	(void)SG_SidecarPath(path, sizeof(path), game_directory, kind,
+		&r->artifact);
+	SG_SidecarDefaultLoadOps(&ops);
 	ops.allocate = Sidecar_LevelAllocate;
 	ops.deallocate = Sidecar_LevelDeallocate;
-	result = SG_SidecarV3LoadFile(game_directory, kind, &r->v3_header,
+	result = SG_SidecarLoadFile(game_directory, kind, &r->artifact,
 		r->linked_seed, (size_t)r->hdr.num_seeds, payload_out,
 		payload_size_out, &ops);
 	Sidecar_LogLoad(kind, path, &result);
@@ -1087,8 +894,8 @@ static qboolean Danger_PersistenceAcquire(const char *game_directory,
 			"directory is too long\n");
 		return false;
 	}
-	if (SG_SidecarV3Path(danger_path, sizeof(danger_path), game_directory,
-		SG_SIDECAR_DANGER, &r->v3_header) != SCD_OK)
+	if (SG_SidecarPath(danger_path, sizeof(danger_path), game_directory,
+		SG_SIDECAR_DANGER, &r->artifact) != SCD_OK)
 	{
 		sg_host.dprint("slipgate: danger persistence disabled: invalid "
 			"authenticated sidecar path\n");
@@ -1125,102 +932,57 @@ typedef struct danger_checkpoint_context_s
 static sg_sidecar_revalidate_t Danger_InstalledRuneMatches(
 	const danger_checkpoint_context_t *context, int *os_error_out)
 {
-	unsigned char header_bytes[SG_RUNE_V3_HEADER_BYTES];
-	unsigned char expected_bytes[SG_RUNE_V3_HEADER_BYTES];
-	sg_rune_v3_authority_t authority;
-	sg_rune_v3_header_t inspected;
-	sg_rune_load_result_t result;
+	sg_rune_authority_t authority;
+	rune_artifact_t installed_artifact;
+	sg_rune_file_inspect_status_t status;
 	char path[MAX_OSPATH];
-	FILE *file = NULL;
-	long file_length;
-	size_t read_size;
-	int close_status;
 
 	if (os_error_out)
 		*os_error_out = 0;
 	if (!context || !context->rune ||
-		!SG_RuneV3AuthorityCapture(context->rune->v3_header.map_name,
-			&authority) ||
-		!SG_RuneV3AuthorityMatchesHeader(&authority,
-			&context->rune->v3_header) ||
-		SG_RuneV3EncodeHeader(&context->rune->v3_header, expected_bytes,
-			SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
-		!SG_RuneInstallDestinationPath(path, sizeof(path),
-			context->game_directory,
-			context->rune->v3_header.map_name))
+	    !SG_RuneAuthorityCapture(context->rune->artifact.identity.map_name,
+	        &authority) ||
+	    !SG_RuneAuthorityMatchesArtifact(&authority,
+	        &context->rune->artifact) ||
+	    !SG_RuneInstallDestinationPath(path, sizeof(path),
+	        context->game_directory,
+	        context->rune->artifact.identity.map_name))
 		return SG_SIDECAR_REVALIDATE_DRIFT;
-
-	errno = 0;
-	file = fopen(path, "rb");
-	if (!file)
-	{
-		if (os_error_out)
-			*os_error_out = errno ? errno : EIO;
+	status = SG_RuneFileInspect(path, &authority.identity,
+		&installed_artifact, os_error_out);
+	if (status == SG_RUNE_FILE_INSPECT_ERROR)
 		return SG_SIDECAR_REVALIDATE_ERROR;
-	}
-	read_size = fread(header_bytes, 1, sizeof(header_bytes), file);
-	if (read_size != sizeof(header_bytes) || ferror(file) ||
-		fseek(file, 0, SEEK_END) != 0 ||
-		(file_length = ftell(file)) < 0)
-	{
-		int saved_error = errno ? errno : EIO;
-
-		(void)fclose(file);
-		if (os_error_out)
-			*os_error_out = saved_error;
-		return SG_SIDECAR_REVALIDATE_ERROR;
-	}
-	errno = 0;
-	close_status = fclose(file);
-	if (close_status != 0)
-	{
-		if (os_error_out)
-			*os_error_out = errno ? errno : EIO;
-		return SG_SIDECAR_REVALIDATE_ERROR;
-	}
-	result = SG_RuneV3InspectHeader(header_bytes, sizeof(header_bytes),
-		&authority.wire, &inspected);
-	if (result.diagnostic != RLW_OK || result.reason != RLR_OK ||
-		result.stage != SG_RUNE_LOAD_STAGE_DONE ||
-		result.index != SG_RUNE_LOAD_INDEX_NONE ||
-		result.snapshot_kind != SG_RUNE_SNAPSHOT_V3 ||
-		(long)result.file_size != file_length ||
-		memcmp(header_bytes, expected_bytes, sizeof(header_bytes)) != 0)
+	if (status != SG_RUNE_FILE_INSPECT_MATCH)
 		return SG_SIDECAR_REVALIDATE_DRIFT;
-	return SG_SIDECAR_REVALIDATE_MATCH;
+	return SG_RuneArtifactsEqual(&installed_artifact,
+		&context->rune->artifact)
+		? SG_SIDECAR_REVALIDATE_MATCH : SG_SIDECAR_REVALIDATE_DRIFT;
 }
-
 static sg_sidecar_revalidate_t Danger_CheckpointRevalidate(void *opaque,
-	const sg_rune_v3_header_t *rune_header, int *os_error_out)
+	const rune_artifact_t *artifact, int *os_error_out)
 {
 	danger_checkpoint_context_t *context = opaque;
-	unsigned char current_header[SG_RUNE_V3_HEADER_BYTES];
-	unsigned char supplied_header[SG_RUNE_V3_HEADER_BYTES];
 	uint16_t selected_port = 0;
 	const char *game_directory;
 
 	if (os_error_out)
 		*os_error_out = 0;
-	if (!context || !context->rune || !rune_header ||
-		context->rune != SG_Rune() ||
-		!SG_DangerLeaseHeld(&sg_danger_lease) ||
-		sg_danger_game_directory[0] == '\0' ||
-		strcmp(context->game_directory, sg_danger_game_directory) != 0 ||
-		context->selected_port == 0 ||
-		context->selected_port != sg_danger_selected_port ||
-		Danger_Revision() != context->revision ||
-		!Danger_CheckpointPending() ||
-		!SG_RunePhysicsCompatible(context->rune) ||
-		Danger_CurrentPolicy(&selected_port) != SG_DANGER_POLICY_OK ||
-		selected_port != context->selected_port)
+	if (!context || !context->rune || !artifact ||
+	    context->rune != SG_Rune() ||
+	    !SG_RuneArtifactsEqual(&context->rune->artifact, artifact) ||
+	    !SG_DangerLeaseHeld(&sg_danger_lease) ||
+	    sg_danger_game_directory[0] == '\0' ||
+	    strcmp(context->game_directory, sg_danger_game_directory) != 0 ||
+	    context->selected_port == 0 ||
+	    context->selected_port != sg_danger_selected_port ||
+	    Danger_Revision() != context->revision ||
+	    !Danger_CheckpointPending() ||
+	    !SG_RunePhysicsCompatible(context->rune) ||
+	    Danger_CurrentPolicy(&selected_port) != SG_DANGER_POLICY_OK ||
+	    selected_port != context->selected_port)
 		return SG_SIDECAR_REVALIDATE_DRIFT;
 	game_directory = Danger_GameDirectory();
-	if (strcmp(game_directory, context->game_directory) != 0 ||
-		SG_RuneV3EncodeHeader(&context->rune->v3_header, current_header,
-			SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
-		SG_RuneV3EncodeHeader(rune_header, supplied_header,
-			SG_RUNE_V3_HEADER_BYTES) != RLW_OK ||
-		memcmp(current_header, supplied_header, sizeof(current_header)) != 0)
+	if (strcmp(game_directory, context->game_directory) != 0)
 		return SG_SIDECAR_REVALIDATE_DRIFT;
 	return Danger_InstalledRuneMatches(context, os_error_out);
 }
@@ -1265,9 +1027,9 @@ void SG_DangerCheckpoint(const char *event)
 			(unsigned long long)Danger_Revision());
 		return;
 	}
-	payload_capacity = Danger_V3PayloadBytes(r);
+	payload_capacity = Danger_PayloadBytes(r);
 	if (!payload_capacity || payload_capacity > (size_t)INT_MAX ||
-		SG_SidecarV3FileSize(SG_SIDECAR_DANGER, &r->v3_header,
+		SG_SidecarFileSize(SG_SIDECAR_DANGER, &r->artifact,
 			&encoded_capacity) != SCD_OK ||
 		encoded_capacity > (size_t)INT_MAX)
 	{
@@ -1283,9 +1045,9 @@ void SG_DangerCheckpoint(const char *event)
 			"stage=allocation\n", event ? event : "unknown");
 		goto cleanup;
 	}
-	if (!Danger_CaptureV3Payload(payload, payload_capacity, &payload_size,
+	if (!Danger_CapturePayload(payload, payload_capacity, &payload_size,
 		&revision) || payload_size != payload_capacity ||
-		SG_SidecarV3Encode(SG_SIDECAR_DANGER, &r->v3_header,
+		SG_SidecarEncode(SG_SIDECAR_DANGER, &r->artifact,
 			r->linked_seed, (size_t)r->hdr.num_seeds, payload,
 			payload_size, encoded, encoded_capacity, &encoded_size) != SCD_OK ||
 		encoded_size != encoded_capacity)
@@ -1306,8 +1068,8 @@ void SG_DangerCheckpoint(const char *event)
 			"stage=path\n", event ? event : "unknown");
 		goto cleanup;
 	}
-	result = SG_SidecarV3StoreFile(context.game_directory,
-		SG_SIDECAR_DANGER, &r->v3_header, r->linked_seed,
+	result = SG_SidecarStoreFile(context.game_directory,
+		SG_SIDECAR_DANGER, &r->artifact, r->linked_seed,
 		(size_t)r->hdr.num_seeds, encoded, encoded_size,
 		Danger_CheckpointRevalidate, &context, NULL);
 	if (result.diagnostic == SCD_OK && result.stage == SCS_DONE &&
@@ -1439,9 +1201,10 @@ qboolean SG_LevelSetup(void)
 	sg_sidecar_candidates_t sidecars;
 	sg_field_setup_inputs_t field_inputs;
 	sg_sidecar_load_result_t danger_load;
-	sg_rune_v3_authority_t active;
+	sg_rune_authority_t active;
 	cvar_t *game_cvar;
 	const char *game_directory;
+	uint32_t mechanism_failure_index = UINT32_MAX;
 	qboolean fields_ready = false;
 
 	memset(&sidecars, 0, sizeof(sidecars));
@@ -1459,13 +1222,18 @@ qboolean SG_LevelSetup(void)
 			if (SG_RunePhysicsCompatible(sg_rune))
 				return true;
 			sg_host.dprint("slipgate: setup held: active identity or "
-			               "physics law differs from loaded rune v3 header\n");
+			               "physics law differs from loaded artifact\n");
 			return false;
 		}
 		sg_host.dprint("slipgate: disabled: loaded rune identity differs "
 		               "from active map case\n");
 		return false;
 	}
+	SG_StrikeAdapterReset(&sg_strike_adapter);
+	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	sg_strike_frame_ready = false;
+	memset(sg_strike_telemetry_valid, 0,
+	       sizeof(sg_strike_telemetry_valid));
 
 	/* once per map, ahead of the rune: a map with no rune still answers
 	 * `sv sg weights`, and the admin editing the file between maps expects
@@ -1520,7 +1288,7 @@ qboolean SG_LevelSetup(void)
 			sidecars.danger_red = Sidecar_LevelAllocate(NULL, plane_bytes);
 			sidecars.danger_blue = Sidecar_LevelAllocate(NULL, plane_bytes);
 			if (!sidecars.danger_red || !sidecars.danger_blue ||
-				!Danger_DecodeV3Candidate(candidate, sidecars.danger,
+				!Danger_DecodeCandidate(candidate, sidecars.danger,
 					sidecars.danger_size, sidecars.danger_red,
 					sidecars.danger_blue,
 					(size_t)candidate->hdr.num_seeds))
@@ -1587,8 +1355,9 @@ qboolean SG_LevelSetup(void)
 		goto fail;
 	}
 	fields_ready = true;
-	if (!SG_RuneV3AuthorityCapture(candidate->v3_header.map_name, &active) ||
-	    !SG_RuneV3AuthorityMatchesHeader(&active, &candidate->v3_header))
+	if (!SG_RuneAuthorityCapture(candidate->artifact.identity.map_name,
+	    &active) ||
+	    !SG_RuneAuthorityMatchesArtifact(&active, &candidate->artifact))
 	{
 		sg_host.dprint("slipgate: field setup discarded: active identity or "
 		               "proof law drifted before publication\n");
@@ -1609,6 +1378,17 @@ qboolean SG_LevelSetup(void)
 			sg_setup_failed = true;
 			goto fail;
 		}
+	}
+	/* Rebind at the publication boundary as one transaction.  A failed
+	 * incarnation or topology check leaves sg_rune unpublished and follows the
+	 * ordinary candidate cleanup path. */
+	if (!SG_RuneMechanismBindingsReady(candidate,
+	        &mechanism_failure_index))
+	{
+		sg_host.dprint("slipgate: mechanism publication discarded: index=%u\n",
+		    (unsigned int)mechanism_failure_index);
+		sg_setup_failed = true;
+		goto fail;
 	}
 
 	/* This is the sole synchronous publication transaction.  Danger_Publish
@@ -1648,7 +1428,7 @@ qboolean SG_LevelSetup(void)
 		sg_def_icept[0] = sg_defense_payload + plane_size * 2U;
 		sg_def_icept[1] = sg_defense_payload + plane_size * 3U;
 	}
-	memcpy(sg_rune_map, sg_rune->v3_header.map_name,
+	memcpy(sg_rune_map, sg_rune->artifact.identity.map_name,
 	    sizeof(sg_rune_map));
 	if (sg_human_use)
 		Sidecar_LogPublished(game_directory, SG_SIDECAR_HUMAN, sg_rune,
@@ -1674,10 +1454,13 @@ qboolean SG_LevelSetup(void)
 	Escape_Load(sg_rune_map); /* map-keyed configuration, not a graph sidecar */
 	Caco_Reset();
 
-	sg_host.dprint("slipgate: rune v3 %s, %d seeds, %d links, gravity %.0f, "
-	               "all fields up\n", sg_rune->v3_header.map_name,
+	sg_host.dprint("slipgate: rune ready %s, %d seeds, %d links, "
+	               "%u mechanism nodes, %u plans, gravity %.0f, all fields "
+	               "up\n", sg_rune->artifact.identity.map_name,
 	               sg_rune->hdr.num_seeds, sg_rune->hdr.num_links,
-	               sg_rune->v3_header.gravity);
+	               (unsigned int)sg_rune->artifact.num_mechanism_nodes,
+	               (unsigned int)sg_rune->artifact.num_mechanism_plans,
+	               sg_rune->artifact.identity.gravity);
 	return true;
 
 fail:
@@ -1747,6 +1530,18 @@ fail:
  *             the lowest-ranked one that is not the carrier itself.
  *   ATTACK    everyone else.
  */
+static qboolean SG_BotCarrying(edict_t *e)
+{
+	static gitem_t *flagitem;
+
+	if (!e || !e->client)
+		return false;
+	if (!flagitem)
+		flagitem = FindItem("Enemy Flag");
+	return flagitem &&
+	       e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
+}
+
 static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 {
 	int team = bot->ent->client->ctf.teamnum;
@@ -1797,7 +1592,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	 * differently.
 	 *
 	 *   both home        2 DEFEND, rest ATTACK. The base shape.
-	 *   theirs astray    2 DEFEND (the return-kill wave is coming),
+	 *   theirs astray    2 DEFEND (return pressure is coming),
 	 *   (ours home)      1 ESCORT walks the carrier in, rest ATTACK their
 	 *                    base -- they cannot score while we hold theirs,
 	 *                    and the next steal queues behind this capture.
@@ -1824,7 +1619,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		defenders_wanted = ours_astray ? 1 : 2;
 
 		/*
-		 * TEAM SKEW (sg_teamskew, rung-4 tell #2: team-mirror symmetry).
+		 * TEAM SKEW (sg_teamskew) breaks team-mirror symmetry.
 		 * All three set-#1 judges read "identical AI on both sides" off
 		 * the sheets: balanced escort means, alternating presses,
 		 * role-locked plateaus that never rotate. Real pub teams are
@@ -1857,10 +1652,10 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		else if (size == 2)
 		{
 			/*
-			 * DUEL ROLES (sg_duelroles, wave 285+). The hardcoded 1
+			 * DUEL ROLES (sg_duelroles). The hardcoded 1
 			 * was a catch-22 the 268-283 census convicted: dw stuck
-			 * at 1 in 131/138 transitions, zero duel caps in 16
-			 * waves, while the statue defender sat p90=173u from
+			 * at 1 in 131/138 transitions, zero duel caps in the
+			 * observed matches, while the statue defender sat p90=173u from
 			 * its post -- 2v2 could never push together because
 			 * dw=0 required already holding the flag. Under the
 			 * flag, duel teams run the same state machine as
@@ -1941,7 +1736,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		 * and the escort is the NEAREST eligible body, not a rank slot.
 		 * The rank-slot version handed the job to whoever sat at a fixed
 		 * position in the scan order: dead, respawning, or across the
-		 * map. The waves 71-72 census reads accordingly -- no escort at
+		 * map. The observations census reads accordingly -- no escort at
 		 * all for 30-100% of carry seconds, median distance 430-1860
 		 * when one existed, and mactf06's entire 28-second carry walked
 		 * naked. Every bot runs the same argmin over the same shared
@@ -1993,7 +1788,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			if (best_i >= 0 && &sg_bots[best_i] == bot)
 			{
 				/*
-				 * ESCORT DOSE (sg_escortdose, rung-4 set #1 tell #1,
+				 * ESCORT DOSE (sg_escortdose,
 				 * named by all three judges on every bot sheet): the
 				 * fleet escorts EVERY carry at 0.33-0.75 escort
 				 * fraction while pub humans run flags alone (0.02-
@@ -2030,6 +1825,305 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 }
 
 
+
+
+static const char *StrikePhaseName(sg_strike_phase_t phase)
+{
+	switch (phase)
+	{
+	case SG_STRIKE_IDLE:
+		return "IDLE";
+	case SG_STRIKE_ARM:
+		return "ARM";
+	case SG_STRIKE_FORM:
+		return "FORM";
+	case SG_STRIKE_GO:
+		return "GO";
+	case SG_STRIKE_EGRESS:
+		return "EGRESS";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+/* Edge-only production evidence for the reducer's synchronized phase.  The
+ * state cache is updated even with sg_debug off, so enabling diagnostics does
+ * not replay a stale transition; equal epoch/phase frames never print. */
+static void StrikeTelemetryEdge(int team_index)
+{
+	const sg_strike_team_t *team;
+	qboolean edge;
+
+	if (team_index < 0 || team_index >= 2)
+		return;
+	team = SG_StrikeAdapterTeam(&sg_strike_adapter, team_index);
+	if (!team)
+		return;
+	edge = !sg_strike_telemetry_valid[team_index] ||
+	    team->epoch != sg_strike_telemetry_epoch[team_index] ||
+	    team->phase != sg_strike_telemetry_phase[team_index];
+	if (edge && sg_cv.debug && sg_cv.debug->value)
+		sg_host.dprint("STRIKE_EDGE team=%d epoch=%u phase=%s "
+		               "members=0x%08x hold=0x%08x rush=0x%08x "
+		               "carrier=%d\n",
+		               SG_TeamFromIdx(team_index), (unsigned)team->epoch,
+		               StrikePhaseName(team->phase),
+		               (unsigned)team->member_mask,
+		               (unsigned)team->hold_mask,
+		               (unsigned)team->rush_mask,
+		               team->carrier_slot);
+	sg_strike_telemetry_valid[team_index] = true;
+	sg_strike_telemetry_epoch[team_index] = team->epoch;
+	sg_strike_telemetry_phase[team_index] = team->phase;
+}
+
+static void StrikeFrameInit(sg_strike_frame_t *frame)
+{
+	int slot;
+
+	memset(frame, 0, sizeof(*frame));
+	frame->now = level.time;
+	frame->own_flag_home = 0;
+	frame->enemy_flag_home = 0;
+	frame->carrier_slot = -1;
+	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+	{
+		frame->slot[slot].weapon_tier = 0;
+		frame->slot[slot].enemy_flag_goal_ms = -1;
+		frame->slot[slot].recover_goal_ms = -1;
+		frame->slot[slot].carrier_goal_ms = -1;
+	}
+}
+
+static int StrikeFieldCost(const int *field, int seed)
+{
+	if (!field || !SG_Rune() || seed < 0 ||
+	    seed >= SG_Rune()->hdr.num_seeds || field[seed] >= SG_FIELD_INF)
+		return -1;
+	return field[seed];
+}
+
+static const int *StrikeEnemyField(int team)
+{
+	int ti = SG_TeamIdx(team);
+	int enemy = SG_TeamIdx(SG_EnemyTeam(team));
+
+	if (sg_fields.to_flag_now[ti][enemy])
+		return sg_fields.to_flag_now[ti][enemy];
+	return team == CTF_TEAM_RED ? sg_fields.to_blue_flag
+	                            : sg_fields.to_red_flag;
+}
+
+static const int *StrikeOwnField(int team)
+{
+	int ti = SG_TeamIdx(team);
+
+	if (sg_fields.to_flag_now[ti][ti])
+		return sg_fields.to_flag_now[ti][ti];
+	return team == CTF_TEAM_RED ? sg_fields.to_red_flag
+	                            : sg_fields.to_blue_flag;
+}
+
+static const int *StrikeCarrierField(int team)
+{
+	int ti = SG_TeamIdx(team);
+
+	if (sg_fields.our_carrier[ti] && sg_fields.our_carrier_valid[ti])
+		return sg_fields.our_carrier[ti];
+	return StrikeOwnField(team);
+}
+
+static const int *StrikeDutyField(sg_strike_duty_t duty, int team)
+{
+	switch (duty)
+	{
+	case SG_STRIKE_DUTY_CARRY:
+	case SG_STRIKE_DUTY_RECOVER:
+		return StrikeOwnField(team);
+	case SG_STRIKE_DUTY_ESCORT:
+		return StrikeCarrierField(team);
+	case SG_STRIKE_DUTY_BREACH:
+	case SG_STRIKE_DUTY_CLEAR:
+	case SG_STRIKE_DUTY_PRESS:
+		return StrikeEnemyField(team);
+	case SG_STRIKE_DUTY_NONE:
+	default:
+		return NULL;
+	}
+}
+
+static qboolean StrikeApplyDutyRoute(sg_think_t *tc,
+	sg_strike_duty_t duty, int team)
+{
+	const int *route;
+
+	if (!tc)
+		return false;
+	route = StrikeDutyField(duty, team);
+	if (!route && tc->strike_rush)
+		route = StrikeEnemyField(team);
+	if (!route)
+		return false;
+	tc->goal_field = route;
+	tc->route_field = route;
+	tc->route_pure = true;
+	return true;
+}
+
+static void StrikeRetireGenericRail(sg_bot_t *bot, const sg_think_t *tc)
+{
+	if (!bot || !tc || !tc->strike_active)
+		return;
+	bot->rail_link = -1;
+	bot->rail_stage = 0;
+	bot->rail_until = 0.0f;
+}
+
+/* Return true when strike policy consumed the rally decision. */
+static qboolean StrikeApplyRallyPolicy(sg_bot_t *bot, const sg_think_t *tc,
+	qboolean *rally_hold)
+{
+	if (!bot || !tc || !rally_hold || !tc->strike_active)
+		return false;
+	bot->rally_since = 0.0f;
+	*rally_hold = tc->strike_hold && !tc->strike_rush;
+	return true;
+}
+
+static int StrikeCarrierSlot(int team, edict_t *flag)
+{
+	int slot;
+
+	if (!flag || !flag->owner || !flag->owner->inuse ||
+	    !flag->owner->client || flag->owner->client->ctf.teamnum != team ||
+	    ClientHasFlag(flag->owner) != flag)
+		return -1;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+		if (sg_bots[slot].active && sg_bots[slot].ent == flag->owner)
+			return slot;
+	return -1;
+}
+
+static qboolean StrikeEnemyRoomDeath(int team)
+{
+	edict_t *stand = SG_FlagStand(team, false);
+	vec3_t delta;
+
+	if (!stand || !SG_AgeUnder(
+		sg_caco_death_time[SG_TeamIdx(SG_EnemyTeam(team))], 6.0f))
+		return false;
+	VectorSubtract(sg_caco_death_org[SG_TeamIdx(SG_EnemyTeam(team))],
+	               stand->s.origin, delta);
+	return VectorLength(delta) < 1200.0f;
+}
+
+/* This is the only producer of strike input in the game.  It runs after the
+ * level-wide field/belief refresh and before any SG_BotThink call, so all
+ * costs, roles, life identities, and flag edges belong to one immutable
+ * pre-serial observation. */
+static void StrikePrepareFrame(void)
+{
+	sg_strike_frame_t frames[2];
+	int i, team_index;
+
+	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		edict_t *ent = sg_bots[i].ent;
+		qboolean carrying;
+
+		if (!sg_bots[i].active || !ent || !ent->inuse || !ent->client ||
+		    (ent->client->ctf.teamnum != CTF_TEAM_RED &&
+		     ent->client->ctf.teamnum != CTF_TEAM_BLUE))
+			continue;
+		carrying = SG_BotCarrying(ent);
+		sg_strike_role_cache[i] = sg_rune
+			? SG_Role(&sg_bots[i], carrying)
+			: (carrying ? SG_ROLE_CARRY : SG_ROLE_ATTACK);
+		sg_strike_role_valid[i] = true;
+	}
+
+	for (team_index = 0; team_index < 2; team_index++)
+	{
+		int team = SG_TeamFromIdx(team_index);
+		edict_t *own_flag = ctf_getteamflag(team, 0);
+		edict_t *enemy_flag = ctf_getteamflag(team, CTF_TEAM_OPPOSING);
+
+		StrikeFrameInit(&frames[team_index]);
+		frames[team_index].own_flag_home = own_flag && own_flag->inuse &&
+		    !own_flag->owner && ctf_flagathome(own_flag);
+		frames[team_index].enemy_flag_home = enemy_flag && enemy_flag->inuse &&
+		    !enemy_flag->owner && ctf_flagathome(enemy_flag);
+		frames[team_index].enemy_flag_dropped = enemy_flag && enemy_flag->inuse &&
+		    !enemy_flag->owner && !frames[team_index].enemy_flag_home;
+		frames[team_index].carrier_slot =
+		    StrikeCarrierSlot(team, enemy_flag);
+		frames[team_index].recent_enemy_room_death =
+		    StrikeEnemyRoomDeath(team);
+	}
+
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		edict_t *ent = sg_bots[i].ent;
+		int team, team_index, seed;
+		const int *enemy_field, *own_field, *carrier_field;
+		sg_combat_weapon_state_t weapon;
+
+		if (!sg_strike_role_valid[i] || !ent || !ent->client)
+			continue;
+		team = ent->client->ctf.teamnum;
+		team_index = SG_TeamIdx(team);
+		seed = sg_bots[i].seed;
+		enemy_field = StrikeEnemyField(team);
+		own_field = StrikeOwnField(team);
+		carrier_field = StrikeCarrierField(team);
+		frames[team_index].slot[i].present = 1;
+		frames[team_index].slot[i].alive =
+		    ent->inuse && ent->deadflag == DEAD_NO && ent->health > 0;
+		/* DEFEND remains the authoritative reserved role.  CARRY is admitted
+		 * so the core can own its egress duty; RECOVER/ESCORT remain eligible
+		 * pressure bodies rather than globally rewriting the roster law. */
+		frames[team_index].slot[i].attack_eligible =
+		    sg_strike_role_cache[i] != SG_ROLE_DEFEND;
+		frames[team_index].slot[i].carrying = SG_BotCarrying(ent);
+		frames[team_index].slot[i].life_id = (uint32_t)ent->client->ctf.ctfid;
+		if (!SG_CombatWeaponState(ent, &weapon))
+			memset(&weapon, 0, sizeof(weapon));
+		frames[team_index].slot[i].weapon_tier = weapon.available_tier;
+		frames[team_index].slot[i].enemy_flag_goal_ms =
+		    StrikeFieldCost(enemy_field, seed);
+		frames[team_index].slot[i].recover_goal_ms =
+		    StrikeFieldCost(own_field, seed);
+		frames[team_index].slot[i].carrier_goal_ms =
+		    StrikeFieldCost(carrier_field, seed);
+		frames[team_index].slot[i].direct_flag_touch =
+		    frames[team_index].slot[i].alive &&
+		    frames[team_index].slot[i].attack_eligible &&
+		    SG_AttackFlagDirectTouchAuthority(ent, team, NULL);
+	}
+	sg_strike_frame_ready = SG_StrikeAdapterBeginFrame(
+		&sg_strike_adapter, frames) ? true : false;
+	if (sg_strike_frame_ready)
+		for (team_index = 0; team_index < 2; team_index++)
+			StrikeTelemetryEdge(team_index);
+}
+
+void SG_StrikeSlotReset(int slot)
+{
+	SG_StrikeAdapterForgetSlot(&sg_strike_adapter, slot);
+	if (slot >= 0 && slot < SG_MAXBOTS)
+		sg_strike_role_valid[slot] = false;
+}
+
+static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)
+{
+	int slot = bot ? (int)(bot - sg_bots) : -1;
+
+	if (slot >= 0 && slot < SG_MAXBOTS && sg_strike_frame_ready &&
+	    sg_strike_role_valid[slot])
+		return sg_strike_role_cache[slot];
+	return SG_Role((sg_bot_t *)bot, carrying);
+}
 
 
 /*
@@ -2176,6 +2270,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 {
 	int i;
 
+	(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics, "death", "lifecycle");
 	bot->hook_phase = 0;
 	bot->hook_link = -1;
 	bot->hook_bite_logged = false;
@@ -2217,6 +2312,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->rj_fire_until = 0.0f;
 	bot->rj_use_next = 0.0f;
 	bot->nade_phase = 0;
+	SG_NadeTargetClear(bot);
 	bot->nade_until = 0.0f;
 	VectorClear(bot->nade_at);
 
@@ -2241,6 +2337,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->declared_start_frame = -1;
 	bot->declared_touched = false;
 	bot->declared_touch_frame = -1;
+	SG_ButtonExecutionActionReset(bot);
 	bot->declared_triggered = false;
 	bot->declared_trigger_frame = -1;
 	bot->declared_egress_proof_frame = -1;
@@ -2251,6 +2348,9 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->declared_door_recovery_since = 0.0f;
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
+	bot->strike_weapon_link = -1;
+	bot->strike_weapon_until = 0.0f;
+	bot->strike_weapon_draining = false;
 	bot->sticky_link = -1;
 	bot->latch_until = 0.0f;
 	bot->rail_link = -1;
@@ -2294,6 +2394,13 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->tac_role = -1;
 	bot->patrol_seed = -1;
 	bot->patrol_until = 0.0f;
+	bot->def_shift_seed = -1;
+	bot->def_shift_link = -1;
+	bot->def_shift_from = -1;
+	bot->def_shift_until = 0.0f;
+	bot->def_shift_next = 0.0f;
+	SG_DefenseSupplyReset(bot);
+	SG_DefenseCombatLeaseReset(bot);
 	bot->last_role = -1;
 	bot->last_goalcost = -1;
 
@@ -2334,15 +2441,8 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->was_dead = 1;
 }
 
-#ifdef SG_ACCEPT_DROP
-void SG_AcceptDropResetLifeActions(sg_bot_t *bot)
-{
-	Bot_ResetLifeActions(bot);
-}
-#endif
-
 /*
- * THE CORPSE FRAME (split from SG_BotThink, 2026-08-11 standards pass).
+ * THE CORPSE FRAME.
  * Everything a dead bot owes the world: teach the danger and tilt ledgers
  * once, drop every live claim, pulse the respawn button. Returns true when
  * this frame belonged to a corpse and the think ends with it.
@@ -2376,6 +2476,11 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 	 * closed it never ran, and a stale start would date the next one */
 	bot->as_since = 0.0f;
 	bot->as_phase = 0.0f;
+	SG_HumanSpeedTimerReset(&bot->as_landing);
+	bot->as_landing_command = false;
+	bot->as_landing_pending = false;
+	bot->as_landing_flags_before = 0;
+	memset(&bot->as_landing_before, 0, sizeof(bot->as_landing_before));
 	/* a corpse is not standing anybody's pad: release the lease early
 	 * rather than making the next claimant wait it out */
 	Lead_Abort(bot, "died");
@@ -2461,8 +2566,7 @@ static qboolean Think_SpeedhookOwnsSeed(const sg_bot_t *bot)
 }
 
 /*
- * WHERE AM I ON THE RUNE (split from SG_BotThink, 2026-08-11 standards
- * pass; body verbatim): seed relocation on 48 units of travel, the
+ * WHERE AM I ON THE RUNE: seed relocation on 48 units of travel, the
  * previous-seed memory the dither reads, and the pit trace.
  */
 static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
@@ -2678,7 +2782,8 @@ static qboolean Bot_DeclaredDoorGuardAction(sg_bot_t *bot)
 	local_door = bot->declared_started && sg_rune && sg_rune->links &&
 	    bot->commit_link >= 0 &&
 	    bot->commit_link < sg_rune->hdr.num_links &&
-	    sg_rune->links[bot->commit_link].action == RL_DOOR;
+	    (sg_rune->links[bot->commit_link].action == RL_DOOR ||
+	     sg_rune->links[bot->commit_link].action == RL_BUTTON_DOOR);
 	if (bot->declared_guard_paused)
 		return true;
 	/* The process claim is the durable authority identity.  The loaded rune
@@ -2722,11 +2827,18 @@ static qboolean Bot_DeclaredDoorGuardRecord(sg_bot_t *bot,
 
 static void Bot_DeclaredDoorGuardClearAction(sg_bot_t *bot)
 {
+	if (bot->strike_weapon_link >= 0 &&
+	    bot->sticky_link == bot->strike_weapon_link)
+	{
+		bot->sticky_link = -1;
+		bot->latch_until = 0.0f;
+	}
 	bot->declared_activated = false;
 	bot->declared_started = false;
 	bot->declared_start_frame = -1;
 	bot->declared_touched = false;
 	bot->declared_touch_frame = -1;
+	SG_ButtonExecutionActionReset(bot);
 	bot->declared_triggered = false;
 	bot->declared_trigger_frame = -1;
 	bot->declared_egress_proof_frame = -1;
@@ -2737,6 +2849,9 @@ static void Bot_DeclaredDoorGuardClearAction(sg_bot_t *bot)
 	bot->declared_door_recovery_since = 0.0f;
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
+	bot->strike_weapon_link = -1;
+	bot->strike_weapon_until = 0.0f;
+	bot->strike_weapon_draining = false;
 }
 
 /* Return true while the action must remain held.  Only the guard's positive
@@ -2834,6 +2949,16 @@ static qboolean Bot_DeclaredDoorGuardRestore(sg_bot_t *bot)
 	if (!Bot_DeclaredDoorGuardRecord(bot, &record) ||
 	    bot->commit_link != record.link_index)
 		return false;
+	/* A weapon-deadline retirement is one-way.  This paused lease exists only
+	 * because current subjects were not yet proved clear; renew the protective
+	 * TOP hold until release or the existing five-second terminal budget, but
+	 * never resume forward trigger/egress authority for the ended errand. */
+	if (bot->strike_weapon_draining)
+	{
+		if (record.state == SG_MOVER_LEASE_ACTIVE)
+			(void)SG_DeclaredDoorGuardPause(bot);
+		return false;
+	}
 	paused_for = level.time - bot->declared_guard_pause_started;
 	if (!isfinite(level.time) ||
 	    !isfinite(bot->declared_guard_pause_started) ||
@@ -2873,6 +2998,10 @@ void SG_BotThink(sg_bot_t *bot)
 	qboolean carrying;
 	qboolean rune_compatible;
 	qboolean declared_door_guarded;
+	const sg_strike_team_t *strike_team = NULL;
+	const sg_strike_frame_t *strike_frame = NULL;
+	sg_strike_duty_t strike_duty = SG_STRIKE_DUTY_NONE;
+	int strike_slot = -1;
 
 	/* the few frame terms still born outside the context: the seeds the
 	 * stages take through it, and the one flow flag read here */
@@ -2918,6 +3047,8 @@ void SG_BotThink(sg_bot_t *bot)
 		run_state = SG_DeclaredDoorGuardRunState(bot);
 		if (run_state == SG_COMPOUND_GUARD_RUN_TERMINAL)
 		{
+			(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+			    "death", "declared-door");
 			SG_DeclaredDoorTerminalDeath(bot);
 			return;
 		}
@@ -2932,12 +3063,16 @@ void SG_BotThink(sg_bot_t *bot)
 			/* A later bot slot must not enter a newly claimed/released set.  Its
 			 * already-linked hook is independent entity physics, so retire that
 			 * projectile before suppressing the body command. */
+			(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+			    "declared-door-interrupt", "guard-hold");
 			if (e->client->hookstate || e->client->hook)
 				ctf_hook_abort(e);
 			bot->hook_phase = 0;
 			bot->hook_link = -1;
 			bot->hook_entity = NULL;
 			bot->speedhook = false;
+			bot->nade_phase = 0;
+			SG_NadeTargetClear(bot);
 			return;
 		}
 	}
@@ -2948,6 +3083,8 @@ void SG_BotThink(sg_bot_t *bot)
 		/* A runtime cvar change invalidates every stored ballistic witness.
 		 * Leave the body in real physics, but submit no navigation and retire
 		 * every action that could resume under a different law. */
+		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+		    "physics-incompatible", "cvar-hold");
 		if (e->client->hookstate || e->client->hook)
 			ctf_hook_abort(e);
 		bot->hook_phase = 0;
@@ -2974,6 +3111,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->rj_fire_until = 0.0f;
 		bot->rj_use_next = 0.0f;
 		bot->nade_phase = 0;
+		SG_NadeTargetClear(bot);
 		bot->nade_until = 0.0f;
 		/* Progress and retry clocks are action state too. Letting their wall
 		 * time accrue during an authority hold can force or shelf a link the
@@ -3037,6 +3175,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_start_frame = -1;
 		bot->declared_touched = false;
 		bot->declared_touch_frame = -1;
+		SG_ButtonExecutionActionReset(bot);
 		bot->declared_triggered = false;
 		bot->declared_trigger_frame = -1;
 		bot->declared_egress_proof_frame = -1;
@@ -3074,6 +3213,8 @@ void SG_BotThink(sg_bot_t *bot)
 	if (bot->hook_phase == 0 &&
 	    (e->client->hookstate != 0 || e->client->hook != NULL))
 	{
+		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+		    "stale-host-rope", "cleanup");
 		ctf_hook_abort(e);
 		bot->hook_link = -1;
 		bot->speedhook = false;
@@ -3110,6 +3251,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_start_frame = -1;
 		bot->declared_touched = false;
 		bot->declared_touch_frame = -1;
+		SG_ButtonExecutionActionReset(bot);
 		bot->declared_triggered = false;
 		bot->declared_trigger_frame = -1;
 		bot->declared_egress_proof_frame = -1;
@@ -3120,6 +3262,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_door_recovery_since = 0.0f;
 		bot->rj_phase = 0;
 		bot->nade_phase = 0;
+		SG_NadeTargetClear(bot);
 		if (SG_DeclaredDoorGuardRunState(bot) !=
 		    SG_COMPOUND_GUARD_RUN_READY)
 			return;
@@ -3142,17 +3285,10 @@ void SG_BotThink(sg_bot_t *bot)
 		return;
 
 	team = e->client->ctf.teamnum;
-	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). Carrying is
-	 * the same inventory test ctf_flagtouch itself makes. */
-	{
-		static gitem_t *flagitem;
-		if (!flagitem)
-			flagitem = FindItem("Enemy Flag");
-		carrying = flagitem &&
-		           e->client->pers.inventory[ITEM_INDEX(flagitem)] > 0;
-	}
+	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). */
+	carrying = SG_BotCarrying(e);
 
-	role = SG_Role(bot, carrying);
+	role = StrikeRoleForBot(bot, carrying);
 
 	Think_CarryBookends(bot, e, role, team, carrying);
 
@@ -3179,10 +3315,85 @@ void SG_BotThink(sg_bot_t *bot)
 
 	Think_Objective(bot, &tc);
 
+	/* Strike is a coordinator overlay, not a second role allocator.  It may
+	 * select the route owned by a duty (home, carrier, or enemy flag) while
+	 * the role row, defender reservation, and CARRY bookends remain intact. */
+	strike_slot = (int)(bot - sg_bots);
+	if (strike_slot >= 0 && strike_slot < SG_MAXBOTS &&
+	    sg_strike_frame_ready &&
+	    team >= CTF_TEAM_RED && team <= CTF_TEAM_BLUE)
+	{
+		const int ti = SG_TeamIdx(team);
+
+		strike_team = SG_StrikeAdapterTeam(&sg_strike_adapter, ti);
+		strike_frame = SG_StrikeAdapterFrame(&sg_strike_adapter, ti);
+		if (strike_team && strike_frame &&
+		    SG_StrikeParticipant(strike_team, strike_slot))
+		{
+			strike_duty = strike_team->duty[strike_slot];
+			tc.strike_active = true;
+			tc.strike_hold = SG_StrikeMemberShouldHold(
+				strike_team, strike_slot);
+			tc.strike_rush = SG_StrikeMemberRushes(
+				strike_team, strike_slot);
+			/* Egress and attack duties use the existing directed fields. */
+			(void)StrikeApplyDutyRoute(&tc, strike_duty, team);
+			if (tc.strike_rush)
+			{
+				/* A prior approach transaction cannot detour a same-frame
+				 * rush.  Its identity is retired before movement can emit. */
+				bot->nade_phase = 0;
+				SG_NadeTargetClear(bot);
+				bot->nade_until = 0.0f;
+			}
+
+			/* A below-tier member owns the weapon field only while the live
+			 * authority says it is not fighting or already able to touch the
+			 * flag.  The core's immutable per-life deadline ends this branch. */
+			if (SG_StrikeMemberNeedsWeapon(strike_team, strike_slot,
+			                               level.time) &&
+				    !tc.strike_rush && !carrying &&
+				    !SG_CombatWouldEngage(e) &&
+				    !strike_frame->slot[strike_slot].direct_flag_touch &&
+				    !SG_AttackFlagDirectTouchAuthority(e, team, NULL) &&
+				    sg_fields.item[SG_FC_WEAPON] &&
+				    StrikeFieldCost(sg_fields.item[SG_FC_WEAPON],
+				                    sg_bots[strike_slot].seed) >= 0 &&
+				    StrikeFieldCost(sg_fields.item[SG_FC_WEAPON],
+				                    sg_bots[strike_slot].seed) <=
+				        (int)((strike_team->weapon_deadline[strike_slot] -
+				               level.time) * 1000.0f))
+			{
+				tc.goal_field = sg_fields.item[SG_FC_WEAPON];
+				tc.route_field = sg_fields.item[SG_FC_WEAPON];
+				tc.route_pure = true;
+				tc.strike_weapon_pursuit = true;
+				tc.strike_weapon_deadline =
+					strike_team->weapon_deadline[strike_slot];
+			}
+
+			/* Generic proof-line retry has no strike phase/route identity.  Retire
+			 * it for every active strike participant before Pick/Commit: otherwise
+			 * an old lane can move a FORM leader, override GO, or outlive the
+			 * five-second weapon errand.  The ordinary shelf/escape path remains
+			 * the bounded stagnation recovery for coordinated offense. */
+			StrikeRetireGenericRail(bot, &tc);
+		}
+	}
+
 	goal_field = tc.goal_field;
+	/* Objective published the prior route cost before the strike overlay may
+	 * replace its route.  Publish the same live directed cost for downstream
+	 * approach/terminal policy so a duty switch cannot retain stale pricing. */
+	bot->last_goalcost = (bot->seed >= 0 &&
+	                      goal_field[bot->seed] < SG_FIELD_INF)
+	                     ? goal_field[bot->seed] : -1;
 
-
-	rally_hold = Think_ApproachBand(bot, &tc);
+	/* The legacy approach band owns a 15-second/periodic rally clock.  A
+	 * strike member is governed by the same-frame HOLD/RUSH verdict instead;
+	 * non-members retain the existing approach behavior unchanged. */
+	if (!StrikeApplyRallyPolicy(bot, &tc, &rally_hold))
+		rally_hold = Think_ApproachBand(bot, &tc);
 	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
 	bot->terminal = false;
 
@@ -3250,6 +3461,17 @@ void SG_BotThink(sg_bot_t *bot)
 
 	bestlink = Think_PickLink(bot, &tc);
 
+	/* Combat execution remains after movement. Only the optional posted-defense
+	 * shift needs this read-only forward-visible preview before CommitLink so a
+	 * newly seen enemy cannot buy one lateral RUN on the stale engaged_last.
+	 * PickLink keeps its ordinary retained-fight input; this only governs the
+	 * one short shift transaction. */
+	if (isfinite(sg_cv.defshift->value) && sg_cv.defshift->value > 0.0f &&
+	    role == SG_ROLE_DEFEND && bot->def_stand &&
+	    SG_CombatWouldEngage(e))
+		duel = true;
+	tc.duel = duel;
+
 	/* the context already holds PickLink's results; seed the in/out terms
 	 * CommitLink owns and read every one back for the stages below */
 	tc.think_over = false;
@@ -3273,7 +3495,8 @@ void SG_BotThink(sg_bot_t *bot)
 		{
 			if (!sg_rune || !sg_rune->links || record.link_index < 0 ||
 			    record.link_index >= sg_rune->hdr.num_links ||
-			    sg_rune->links[record.link_index].action != RL_DOOR ||
+			    (sg_rune->links[record.link_index].action != RL_DOOR &&
+			     sg_rune->links[record.link_index].action != RL_BUTTON_DOOR) ||
 			    bot->commit_link != record.link_index)
 			{
 				SG_DeclaredDoorTerminalDeath(bot);
@@ -3313,11 +3536,6 @@ void SG_BotThink(sg_bot_t *bot)
 void SG_RunFrame(void)
 {
 	int i;
-
-#ifdef SG_ACCEPT_DROP
-	SG_AcceptDropFrameBegin();
-#endif
-
 	/*
 	 * Level changes are detected here rather than by a hook in the spawn
 	 * code: the rune and fields were TAG_LEVEL so the engine already freed
@@ -3333,7 +3551,7 @@ void SG_RunFrame(void)
 	{
 		if (!sg_physics_warned)
 			sg_host.dprint("slipgate: movement held: active level identity or "
-			               "physics law differs from loaded rune v3 header\n");
+			               "physics law differs from loaded artifact\n");
 		sg_physics_warned = true;
 	}
 	else if (sg_rune && sg_physics_warned)
@@ -3351,17 +3569,21 @@ void SG_RunFrame(void)
 
 	if (sg_rune)
 	{
+		/* A permanent action capability must cross the cached field boundary
+		 * before CACO advects hidden carriers along that topology.  The normal
+		 * refresh below completes dynamic belief fields after CACO updates and
+		 * before any bot consumes them. */
+		(void)Fields_ActionTopologyRefresh(sg_rune);
 		Caco_Frame(sg_rune);
 		Fields_Refresh(sg_rune);
 	}
 	Botfill_Frame();
 	/* the scoreline and the clock, before anybody decides a role from them */
 	Clock_Frame();
-
-#ifdef SG_ACCEPT_DROP
-	SG_AcceptDropArm();
-#endif
-
+	/* Publish both immutable strike snapshots before the serial bot-think
+	 * loop.  SG_StrikeStep therefore runs exactly once per team per server
+	 * frame, never once per bot or from partially updated roster state. */
+	StrikePrepareFrame();
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent;
@@ -3394,9 +3616,6 @@ void SG_RunFrame(void)
 			continue;
 		}
 		SG_BotThink(&sg_bots[i]);
-#ifdef SG_ACCEPT_DROP
-		SG_AcceptDropAfterBot(&sg_bots[i]);
-#endif
 	}
 }
 
@@ -3406,12 +3625,15 @@ void SG_RunFrame(void)
 void SG_LevelChange(void)
 {
 	int i;
+
+	/* Map teardown is a terminal owner in its own right. Finish before the
+	 * roster removal so the original map snapshot remains attached; slot reset
+	 * then sees a closed state and is intentionally idempotent. */
+	for (i = 0; i < SG_MAXBOTS; i++)
+		(void)SG_HookDiagnosticsFinish(&sg_bots[i].hook_diagnostics,
+		    "map-transition", "level-change");
+	SG_ButtonExecutionLevelReset();
 	(void)SG_CompoundGuardGameLevelReset();
-
-#ifdef SG_ACCEPT_DROP
-	SG_AcceptDropLevelReset();
-#endif
-
 	/* The fallback transition path must be as fail-closed as SpawnEntities. */
 	SG_DangerPersistenceReset();
 	SG_LevelIdentityReset();
@@ -3469,3 +3691,34 @@ void SG_LevelChange(void)
 		sg_bots[i].tilt_window = 0.0f;
 	}
 }
+
+#ifdef SG_STRIKE_TRANSITION_TEST_API
+/* Host-free transition probes execute the exact production helpers above.
+ * Release builds contain none of these entry points. */
+void SG_StrikeTestSetRune(rune_t *rune)
+{
+	sg_rune = rune;
+}
+
+qboolean SG_StrikeTestDeclaredDoorGuardRestore(sg_bot_t *bot)
+{
+	return Bot_DeclaredDoorGuardRestore(bot);
+}
+
+qboolean SG_StrikeTestApplyDutyRoute(sg_think_t *tc,
+	sg_strike_duty_t duty, int team)
+{
+	return StrikeApplyDutyRoute(tc, duty, team);
+}
+
+void SG_StrikeTestRetireGenericRail(sg_bot_t *bot, const sg_think_t *tc)
+{
+	StrikeRetireGenericRail(bot, tc);
+}
+
+qboolean SG_StrikeTestApplyRallyPolicy(sg_bot_t *bot,
+	const sg_think_t *tc, qboolean *rally_hold)
+{
+	return StrikeApplyRallyPolicy(bot, tc, rally_hold);
+}
+#endif

@@ -73,10 +73,13 @@ class ButtonGameIntegrationTests(unittest.TestCase):
     def test_oracle_uses_controller_specific_declared_action(self) -> None:
         oracle = (ROOT / "slipgate/sg_oracle.c").read_text(encoding="utf-8")
         conditional = re.compile(
-            r"SG_MECHANISM_CONTROLLER_BUTTON_DOOR\s*"
-            r"\?\s*RL_BUTTON_DOOR\s*:\s*RL_DOOR"
+            r"button_controller\s*\?\s*RL_BUTTON_DOOR\s*:\s*RL_DOOR"
         )
         self.assertGreaterEqual(len(conditional.findall(oracle)), 2)
+        self.assertGreaterEqual(
+            oracle.count("SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR"),
+            2,
+        )
 
     def test_loader_button_traces_ignore_only_transient_population(self) -> None:
         contact = function_body("slipgate/sg_oracle.c",

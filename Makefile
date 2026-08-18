@@ -48,6 +48,7 @@ BUTTON_GAME_TEST_BIN := sg_button_game_test.make
 BUTTON_GAME_TEST_OBJS := .sg_button_game_test.make.o \
 	.sg_button_game_live_under_test.make.o \
 	.sg_button_game_move_under_test.make.o \
+	.sg_door_approach_under_test.make.o \
 	.sg_button_game_func_under_test.make.o \
 	.sg_button_game_q_shared_under_test.make.o
 BUTTON_GAME_TEST_DEPS := $(BUTTON_GAME_TEST_OBJS:.o=.d)
@@ -214,7 +215,10 @@ RUNE_MECHANISM_EXECUTION_TEST_OBJS := \
 	.sg_rune_mechanism_catalog_under_test.make.o \
 	.sg_rune_binding_under_test.make.o .sg_rune_runtime_under_test.make.o \
 	.sg_rune_action_under_test.make.o .sg_rune_crc_under_test.make.o \
+	.sg_door_approach_under_test.make.o .sg_mover_lease_under_test.make.o \
 	.sg_delayed_relay_dispatch_move_under_test.make.o \
+	.sg_delayed_relay_dispatch_util_under_test.make.o \
+	.sg_delayed_relay_dispatch_view_under_test.make.o \
 	.sg_delayed_relay_dispatch_utils_under_test.make.o \
 	.sg_delayed_relay_dispatch_trigger_under_test.make.o \
 	.sg_delayed_relay_dispatch_button_under_test.make.o \
@@ -230,6 +234,10 @@ RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS := \
 	$(foreach flavor,gnu make, \
 	.sg_delayed_relay_dispatch_move_under_test.$(flavor).o \
 	.sg_delayed_relay_dispatch_move_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_util_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_util_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_view_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_view_under_test.$(flavor).d \
 	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).o \
 	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).d \
 	.sg_delayed_relay_dispatch_trigger_under_test.$(flavor).o \
@@ -338,6 +346,17 @@ HUMAN_SPEED_TEST_ALL_ARTIFACTS := \
 	.sg_human_speed_q_shared_under_test.gnu.o \
 	.sg_human_speed_q_shared_under_test.gnu.d \
 	$(HUMAN_SPEED_TEST_OBJS) $(HUMAN_SPEED_TEST_DEPS)
+DOOR_APPROACH_TEST_BIN := sg_door_approach_test.make
+DOOR_APPROACH_TEST_OBJS := .sg_door_approach_test.make.o \
+	.sg_door_approach_under_test.make.o
+DOOR_APPROACH_TEST_DEPS := $(DOOR_APPROACH_TEST_OBJS:.o=.d)
+DOOR_APPROACH_INTEGRATION_TEST := tests/test_door_approach_integration.py
+DOOR_APPROACH_TEST_ALL_ARTIFACTS := \
+	$(foreach flavor,gnu make,sg_door_approach_test.$(flavor) \
+	.sg_door_approach_test.$(flavor).o \
+	.sg_door_approach_test.$(flavor).d \
+	.sg_door_approach_under_test.$(flavor).o \
+	.sg_door_approach_under_test.$(flavor).d)
 DEFENSE_SHIFT_TEST_BIN := sg_defense_shift_test.make
 DEFENSE_SHIFT_TEST_OBJS := .sg_defense_shift_test.make.o \
 	.sg_defense_shift_under_test.make.o
@@ -502,6 +521,9 @@ MOVER_SUBJECT_SWEEP_TEST_BIN := sg_mover_subject_sweep_test.make
 MOVER_SUBJECT_SWEEP_TEST_OBJS := \
 	.sg_mover_subject_sweep_test.make.o \
 	.sg_mover_subject_sweep_oracle_under_test.make.o \
+	.sg_door_approach_under_test.make.o \
+	.sg_mover_subject_sweep_util_under_test.make.o \
+	.sg_mover_subject_sweep_view_under_test.make.o \
 	.sg_mover_subject_sweep_q_shared_under_test.make.o
 MOVER_SUBJECT_SWEEP_TEST_DEPS := \
 	$(MOVER_SUBJECT_SWEEP_TEST_OBJS:.o=.d)
@@ -511,6 +533,10 @@ MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS := \
 	.sg_mover_subject_sweep_test.gnu.d \
 	.sg_mover_subject_sweep_oracle_under_test.gnu.o \
 	.sg_mover_subject_sweep_oracle_under_test.gnu.d \
+	.sg_mover_subject_sweep_util_under_test.gnu.o \
+	.sg_mover_subject_sweep_util_under_test.gnu.d \
+	.sg_mover_subject_sweep_view_under_test.gnu.o \
+	.sg_mover_subject_sweep_view_under_test.gnu.d \
 	.sg_mover_subject_sweep_q_shared_under_test.gnu.o \
 	.sg_mover_subject_sweep_q_shared_under_test.gnu.d \
 	$(MOVER_SUBJECT_SWEEP_TEST_OBJS) \
@@ -857,6 +883,7 @@ OBJS := \
 	sg_client.o \
 	slipgate/sg_pov_identity.o \
 	slipgate/sg_human_speed.o \
+	slipgate/sg_door_approach.o \
 	slipgate/sg_defense_shift.o \
 	slipgate/sg_defense_supply.o \
 	slipgate/sg_strike.o \
@@ -928,6 +955,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-test fields-candidate-test snag-repair-test \
 	spectator-sound-test human-speed-test defense-shift-test \
+	door-approach-test \
 	item-commitment-test hook-diagnostics-test \
 	run-handoff-test \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
@@ -1045,6 +1073,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(SNAG_REPAIR_TEST_DEPS)
 -include $(SPECTATOR_SOUND_TEST_DEPS)
 -include $(HUMAN_SPEED_TEST_DEPS)
+-include $(DOOR_APPROACH_TEST_DEPS)
 -include $(DEFENSE_SHIFT_TEST_DEPS)
 -include $(DEFENSE_SUPPLY_TEST_DEPS)
 -include $(STRIKE_ADAPTER_TEST_DEPS)
@@ -1168,6 +1197,10 @@ $(SNAG_REPAIR_TEST_BIN): $(SNAG_REPAIR_TEST_OBJS)
 $(HUMAN_SPEED_TEST_BIN): $(HUMAN_SPEED_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(HUMAN_SPEED_TEST_OBJS) $(LIBS)
+
+$(DOOR_APPROACH_TEST_BIN): $(DOOR_APPROACH_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(DOOR_APPROACH_TEST_OBJS) $(LIBS)
 
 $(DEFENSE_SHIFT_TEST_BIN): $(DEFENSE_SHIFT_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -1613,6 +1646,23 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
+.sg_delayed_relay_dispatch_util_under_test.make.o: slipgate/sg_util.c \
+		slipgate/sg_util.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_delayed_relay_dispatch_view_under_test.make.o: p_view.c \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -Wno-unused-parameter \
+		-ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
 .sg_delayed_relay_dispatch_utils_under_test.make.o: g_utils.c \
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -1749,6 +1799,20 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_danger_policy_under_test.make.o: slipgate/sg_danger_policy.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_door_approach_test.make.o: tests/sg_door_approach_test.c \
+		slipgate/sg_door_approach.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_door_approach_under_test.make.o: slipgate/sg_door_approach.c \
+		slipgate/sg_door_approach.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -2146,6 +2210,22 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-ffunction-sections -fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_mover_subject_sweep_util_under_test.make.o: \
+		slipgate/sg_util.c slipgate/sg_util.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections \
+		-DSG_ImmutableSupport=SG_MoverSubjectSweepRealImmutableSupport \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_mover_subject_sweep_view_under_test.make.o: p_view.c $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -Wno-unused-parameter \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_mover_subject_sweep_q_shared_under_test.make.o: \
 		q_shared.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -2351,6 +2431,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SNAG_REPAIR_TEST_BIN) $(SNAG_REPAIR_PYTHON_TEST) \
 		$(SPECTATOR_SOUND_TEST_BIN) \
 		$(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST) \
+		$(DOOR_APPROACH_TEST_BIN) $(DOOR_APPROACH_INTEGRATION_TEST) \
 		$(DEFENSE_SHIFT_TEST_BIN) $(DEFENSE_SHIFT_INTEGRATION_TEST) \
 		$(DEFENSE_SUPPLY_TEST_BIN) $(DEFENSE_SUPPLY_INTEGRATION_TEST) \
 		$(STRIKE_ADAPTER_TEST_BIN) $(STRIKE_ADAPTER_INTEGRATION_TEST) \
@@ -2424,6 +2505,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(SPECTATOR_SOUND_TEST_BIN)
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
+	$(Q)./$(DOOR_APPROACH_TEST_BIN)
+	$(Q)python3 -B $(DOOR_APPROACH_INTEGRATION_TEST)
 	$(Q)./$(DEFENSE_SHIFT_TEST_BIN)
 	$(Q)python3 -B $(DEFENSE_SHIFT_INTEGRATION_TEST)
 	$(Q)./$(DEFENSE_SUPPLY_TEST_BIN)
@@ -2625,6 +2708,10 @@ human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
 
+door-approach-test: $(DOOR_APPROACH_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(DOOR_APPROACH_TEST_BIN)
+
 defense-shift-test: $(DEFENSE_SHIFT_TEST_BIN) $(DEFENSE_SHIFT_INTEGRATION_TEST) \
 		$(DEFENSE_COMBAT_INTEGRATION_TEST)
 	$(E) [TEST] $<
@@ -2756,6 +2843,7 @@ clean:
 		$(SNAG_REPAIR_TEST_ALL_ARTIFACTS) \
 		$(SPECTATOR_SOUND_TEST_ALL_ARTIFACTS) \
 		$(HUMAN_SPEED_TEST_ALL_ARTIFACTS) \
+		$(DOOR_APPROACH_TEST_ALL_ARTIFACTS) \
 		$(DEFENSE_SHIFT_TEST_ALL_ARTIFACTS) \
 		$(DEFENSE_SUPPLY_TEST_ALL_ARTIFACTS) \
 		$(STRIKE_ADAPTER_TEST_ALL_ARTIFACTS) \

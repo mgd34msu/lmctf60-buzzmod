@@ -21,20 +21,27 @@
 
 #include <float.h>
 #include <limits.h>
+#include <stdint.h>
 
 #include "g_local.h"
 #include "slipgate/sg_compound.h"
 #include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_replay.h"
+#include "slipgate/sg_rune_binding.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_util.h"
+#include "slipgate/sg_door_approach.h"
 
 void Touch_DoorTrigger(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf);
 void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf);
+void button_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf);
+void button_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_secret_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_go_down(edict_t *self);
@@ -69,6 +76,12 @@ static qboolean sg_oracle_world_only;
 static qboolean sg_oracle_contaminated;
 static edict_t *sg_oracle_declared_expected;
 static edict_t *sg_oracle_declared_door;
+/* The generator may synchronously pose one catalog-authenticated func_button
+ * at its sealed TOP endpoint while proving the post-activation suffix.  This
+ * scope is deliberately private: ordinary admission continues to require the
+ * sealed BOTTOM state. */
+static edict_t *sg_oracle_declared_button_top;
+static const sg_rune_mechanism_binding_t *sg_oracle_bound_door;
 static int sg_oracle_declared_action;
 static qboolean sg_oracle_declared_touched;
 /* Compound PREOPEN owns one exact trigger and one exact translating leaf.
@@ -84,10 +97,46 @@ static qboolean sg_oracle_compound_touched;
 static qboolean sg_oracle_loader_replay;
 
 static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger);
+static qboolean SG_OracleDeclaredButtonDoorSafe(edict_t *button);
+static qboolean SG_OracleDeclaredButtonTopSafe(edict_t *button);
+static qboolean SG_OracleDeclaredDoorSourceSafe(edict_t *source);
 static qboolean SG_OracleDeclaredSameDoorSet(edict_t *a, edict_t *b);
 static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph);
 static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph);
 static int SG_OracleLiveEdictIndex(const edict_t *ent);
+
+/* A synchronous loader replay deliberately poses authenticated movers without
+ * running their callbacks.  During that scope the immutable sealed topology
+ * remains authoritative, while every live controller path continues to
+ * require the controller-owned execution-state law. */
+static qboolean SG_OracleBoundDoorBindingCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	if (!binding || !binding->link ||
+	    (binding->link->action != RL_DOOR &&
+	     binding->link->action != RL_BUTTON_DOOR))
+		return false;
+	return sg_oracle_loader_replay
+	    ? (SG_RuneMechanismBindingTopologyCurrent(binding) ? true : false)
+	    : (SG_RuneMechanismBindingCurrent(binding) ? true : false);
+}
+
+static int SG_OracleBoundDoorMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS], size_t *count)
+{
+	return sg_oracle_loader_replay
+	    ? SG_RuneMechanismBindingTopologyMoverKeys(binding, keys, count)
+	    : SG_RuneMechanismBindingMoverKeys(binding, keys, count);
+}
+
+static edict_t *SG_OracleBoundDoorResolveNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	return sg_oracle_loader_replay
+	    ? SG_RuneMechanismBindingResolveTopologyNode(binding, key)
+	    : SG_RuneMechanismBindingResolveNode(binding, key);
+}
 
 /* func_rotating uses these private g_func.c spawnflag values. */
 #define SG_ROTATOR_X_AXIS 4
@@ -499,9 +548,7 @@ static qboolean SG_OracleDeclaredTrigger(edict_t *trigger)
 	if (sg_oracle_declared_action == RL_LIFT)
 		return trigger->enemy == sg_oracle_declared_expected;
 	if (sg_oracle_declared_action == RL_DOOR)
-		return trigger == sg_oracle_declared_expected ||
-		       SG_OracleDeclaredSameDoorSet(sg_oracle_declared_expected,
-		                                    trigger);
+		return trigger == sg_oracle_declared_expected;
 	return false;
 }
 
@@ -1107,6 +1154,227 @@ static qboolean SG_OracleSegmentBox(const vec3_t start, const vec3_t end,
 	return true;
 }
 
+typedef struct sg_oracle_population_snapshot_s
+{
+	edict_t *entity;
+	int index;
+	solid_t solid;
+	qboolean inuse;
+	int number;
+	gclient_t *client;
+	edict_t *owner;
+	link_t *area_prev;
+	link_t *area_next;
+} sg_oracle_population_snapshot_t;
+
+/* The engine trace is the authority for AREA_SOLID order, independent BBOX
+ * epsilon, ties, startsolid propagation, planes, surfaces, and ownership
+ * exclusions.  Loader replay removes only joined clients and their live
+ * owned BBOXes for the duration of one synchronous native trace.  Merely
+ * changing solid leaves the area links and their order untouched; the host
+ * skips SOLID_NOT exactly where it normally filters an AREA_SOLID result. */
+static qboolean sg_oracle_population_trace_active;
+
+static qboolean SG_OraclePopulationGlobalsValid(void)
+{
+	return g_edicts && globals.edicts == g_edicts &&
+	       globals.edict_size == (int)sizeof(edict_t) &&
+	       globals.num_edicts > 1 && globals.num_edicts <= MAX_EDICTS &&
+	       game.maxentities > BODY_QUEUE_SIZE &&
+	       game.maxentities <= MAX_EDICTS &&
+	       globals.max_edicts == game.maxentities &&
+	       globals.num_edicts <= game.maxentities && game.clients &&
+	       game.maxclients > 0 &&
+	       game.maxclients < game.maxentities - BODY_QUEUE_SIZE;
+}
+
+/* Return 1 for a real client slot, 0 for no client, and -1 for a malformed
+ * non-NULL client identity.  This never performs relational pointer tests. */
+static int SG_OraclePopulationClientIdentity(const edict_t *entity,
+	int index)
+{
+	if (!entity || !entity->client)
+		return 0;
+	if (index <= 0 || index > game.maxclients || !game.clients)
+		return -1;
+	return entity->client == &game.clients[index - 1] ? 1 : -1;
+}
+
+/* Classify client provenance without dereferencing a stale owner pointer.
+ * Client-owned bodies remain population noise even if their owner slot has
+ * just gone inactive; the exact slot/client identity must still be intact. */
+static int SG_OraclePopulationTransientIdentity(const edict_t *entity,
+	int index)
+{
+	int client_identity;
+	int owner_index;
+
+	if (!entity || index <= 0 || index >= globals.num_edicts ||
+	    entity != &g_edicts[index] || entity->s.number != index)
+		return -1;
+	client_identity = SG_OraclePopulationClientIdentity(entity, index);
+	if (client_identity != 0)
+		return client_identity;
+	if (!entity->owner)
+		return 0;
+	owner_index = entity->owner == g_edicts
+	    ? 0 : SG_OracleLiveEdictIndex(entity->owner);
+	if (owner_index < 0)
+		return -1;
+	client_identity = SG_OraclePopulationClientIdentity(entity->owner,
+	    owner_index);
+	return client_identity < 0 ? -1 : client_identity;
+}
+
+static int SG_OraclePopulationTransientBBox(const edict_t *entity,
+	int index)
+{
+	if (!entity || !entity->inuse || entity->solid != SOLID_BBOX ||
+	    !entity->area.prev || !entity->area.next)
+		return 0;
+	return SG_OraclePopulationTransientIdentity(entity, index);
+}
+
+static qboolean SG_OraclePopulationTraceResultValid(const trace_t *trace,
+	edict_t *passent, qboolean population_independent)
+{
+	int axis;
+	int index;
+	int transient;
+
+	if (!trace || !isfinite(trace->fraction) || trace->fraction < 0.0f ||
+	    trace->fraction > 1.0f)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (!isfinite(trace->endpos[axis]))
+			return false;
+	if (!trace->ent)
+		return trace->fraction == 1.0f && !trace->startsolid &&
+		       !trace->allsolid;
+	if (trace->ent == g_edicts)
+		return true;
+	index = SG_OracleLiveEdictIndex(trace->ent);
+	if (index < 0 || !trace->ent->inuse || trace->ent == passent)
+		return false;
+	if (!population_independent)
+		return true;
+	transient = SG_OraclePopulationTransientIdentity(trace->ent, index);
+	if (transient != 0)
+		return false;
+	if (trace->ent->solid != SOLID_BBOX)
+		return true;
+	return SG_ImmutableSupport(trace->ent) ? true : false;
+}
+
+qboolean SG_OracleStablePopulationTrace(const vec3_t start,
+	const vec3_t mins, const vec3_t maxs, const vec3_t end,
+	edict_t *passent, qboolean population_independent, trace_t *trace_out)
+{
+	sg_oracle_population_snapshot_t snapshots[MAX_EDICTS];
+	edict_t *saved_base;
+	edict_t *saved_globals_edicts;
+	gclient_t *saved_clients;
+	int saved_edict_size;
+	int saved_num_edicts;
+	int saved_max_edicts;
+	int saved_maxentities;
+	int saved_maxclients;
+	qboolean integrity = true;
+	int snapshot_count = 0;
+	int axis;
+	int index;
+
+	if (trace_out)
+		memset(trace_out, 0, sizeof(*trace_out));
+	if (!start || !mins || !maxs || !end || !trace_out || !sg_host.trace)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (!isfinite(start[axis]) || !isfinite(mins[axis]) ||
+		    !isfinite(maxs[axis]) || !isfinite(end[axis]) ||
+		    mins[axis] > maxs[axis])
+			return false;
+	if (sg_oracle_population_trace_active)
+		return false;
+	if (!population_independent)
+	{
+		*trace_out = sg_host.trace(start, mins, maxs, end, passent,
+		    MASK_PLAYERSOLID);
+		return SG_OraclePopulationTraceResultValid(trace_out, passent,
+		    false);
+	}
+	if (!SG_OraclePopulationGlobalsValid())
+		return false;
+	saved_base = g_edicts;
+	saved_globals_edicts = globals.edicts;
+	saved_edict_size = globals.edict_size;
+	saved_num_edicts = globals.num_edicts;
+	saved_max_edicts = globals.max_edicts;
+	saved_maxentities = game.maxentities;
+	saved_maxclients = game.maxclients;
+	saved_clients = game.clients;
+	/* Finish all validation and snapshot collection before publishing even a
+	 * temporary SOLID_NOT value, so a malformed owner/client identity leaves
+	 * the world byte-for-byte untouched. */
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		edict_t *entity = &g_edicts[index];
+		int transient;
+
+		if (!entity->inuse || entity->solid != SOLID_BBOX ||
+		    !entity->area.prev || !entity->area.next)
+			continue;
+		if (entity->s.number != index)
+			return false;
+		transient = SG_OraclePopulationTransientBBox(entity, index);
+		if (transient < 0)
+			return false;
+		if (!transient)
+			continue;
+		snapshots[snapshot_count].entity = entity;
+		snapshots[snapshot_count].index = index;
+		snapshots[snapshot_count].solid = entity->solid;
+		snapshots[snapshot_count].inuse = entity->inuse;
+		snapshots[snapshot_count].number = entity->s.number;
+		snapshots[snapshot_count].client = entity->client;
+		snapshots[snapshot_count].owner = entity->owner;
+		snapshots[snapshot_count].area_prev = entity->area.prev;
+		snapshots[snapshot_count].area_next = entity->area.next;
+		snapshot_count++;
+	}
+	sg_oracle_population_trace_active = true;
+	for (index = 0; index < snapshot_count; index++)
+		snapshots[index].entity->solid = SOLID_NOT;
+	*trace_out = sg_host.trace(start, mins, maxs, end, passent,
+	    MASK_PLAYERSOLID);
+	/* Restore first, then inspect or return the native result.  The engine
+	 * trace has no game callbacks, but the identity checks make this boundary
+	 * fail closed under a malformed host or an adversarial test double. */
+	for (index = 0; index < snapshot_count; index++)
+	{
+		edict_t *entity = snapshots[index].entity;
+
+		if (entity->s.number != snapshots[index].number ||
+		    entity->inuse != snapshots[index].inuse ||
+		    entity->client != snapshots[index].client ||
+		    entity->owner != snapshots[index].owner ||
+		    entity->area.prev != snapshots[index].area_prev ||
+		    entity->area.next != snapshots[index].area_next ||
+		    entity->solid != SOLID_NOT)
+			integrity = false;
+		entity->solid = snapshots[index].solid;
+	}
+	sg_oracle_population_trace_active = false;
+	if (g_edicts != saved_base || globals.edicts != saved_globals_edicts ||
+	    globals.edict_size != saved_edict_size ||
+	    globals.num_edicts != saved_num_edicts ||
+	    globals.max_edicts != saved_max_edicts ||
+	    game.maxentities != saved_maxentities ||
+	    game.maxclients != saved_maxclients || game.clients != saved_clients)
+		integrity = false;
+	return integrity &&
+	       SG_OraclePopulationTraceResultValid(trace_out, passent, true);
+}
+
 static qboolean SG_OracleDoorArmed(const sg_phantom_t *ph, edict_t *door)
 {
 	int i, index;
@@ -1128,7 +1396,9 @@ static qboolean SG_OracleDoorMember(edict_t *master, edict_t *ent)
 		return false;
 	/* RL_DOOR stores the unique trigger as its mechanism identity because one
 	 * trigger may legitimately fire several unteamed leaves. */
-	if (master->classname && !strcmp(master->classname, "trigger_multiple"))
+	if (master->classname &&
+	    (!strcmp(master->classname, "trigger_multiple") ||
+	     !strcmp(master->classname, "func_button")))
 	{
 		while ((target = G_Find(target, FOFS(targetname), master->target)) != NULL)
 		{
@@ -1165,6 +1435,22 @@ static qboolean SG_OracleDoorMember(edict_t *master, edict_t *ent)
 
 static qboolean SG_OracleDeclaredSetMember(edict_t *trigger, edict_t *ent)
 {
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	size_t index;
+
+	if (sg_oracle_bound_door)
+	{
+		if (!ent || !SG_OracleBoundDoorMoverKeys(
+		        sg_oracle_bound_door, keys, &count))
+			return false;
+		for (index = 0U; index < count; index++)
+			if (SG_OracleBoundDoorResolveNode(sg_oracle_bound_door,
+			        keys[index]) == ent)
+				return SG_OracleBoundDoorBindingCurrent(
+				    sg_oracle_bound_door);
+		return false;
+	}
 	return SG_OracleDoorMember(trigger, ent);
 }
 
@@ -1178,7 +1464,7 @@ static int SG_OracleDeclaredDoorSet(edict_t *trigger, edict_t **set, int cap)
 	edict_t *target = NULL;
 	int count = 0;
 
-	if (!SG_OracleDeclaredActivatorSafe(trigger) || !set || cap <= 0)
+	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !set || cap <= 0)
 		return -1;
 	if (trigger->touch == Touch_DoorTrigger)
 	{
@@ -1244,14 +1530,15 @@ static qboolean SG_OracleDoorTraceBlocked(sg_phantom_t *ph,
 		if (!door->inuse || !door->classname ||
 		    strncmp(door->classname, "func_door", 9) != 0)
 			continue;
-		/* PREOPEN stages one Stage3a-resolved physical leaf at each exact
+		/* PREOPEN stages one contract-resolved physical leaf at each exact
 		 * mover pose.  Pmove must see that live BSP, not this broad union. */
 		if (door == sg_oracle_compound_member)
 			continue;
 		/* A declared door egress links this exact team at its real open pose.
 		 * Pmove collides with those brushes normally; the broad synthetic sweep
 		 * must not simultaneously pretend the same team is still closed. */
-		if (SG_OracleDeclaredSetMember(sg_oracle_declared_door, door))
+		if (sg_oracle_declared_door &&
+		    SG_OracleDeclaredSetMember(sg_oracle_declared_door, door))
 			continue;
 		SG_OracleDoorBounds(door, hull_mins, hull_maxs, mins, maxs);
 		/* A translating door remains a solid brush at its open destination.
@@ -1322,6 +1609,38 @@ static qboolean SG_OracleSoundOnlyTargets(edict_t *source, int depth)
 	return found;
 }
 
+/* Declared plans may preserve a positive-delay relay as an authenticated
+ * terminal: the runtime consumes that bound source before DelayedUse is
+ * allocated.  Negative-delay relays are malformed scheduling state and stay
+ * outside this controller law.  Every omitted branch must still be provably
+ * sound-only, including nested relays. */
+static qboolean SG_OraclePlanSoundOnlyTargets(edict_t *source, int depth)
+{
+	edict_t *target = NULL;
+	qboolean found = false;
+
+	if (!source || !isfinite(source->delay) || source->delay < 0.0f ||
+	    depth > 4 || source->killtarget ||
+	    !source->target || !source->target[0])
+		return false;
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        source->target)) != NULL)
+	{
+		if (!target->inuse || !target->classname)
+			return false;
+		found = true;
+		if (!Q_stricmp(target->classname, "target_speaker") &&
+		    target->use == Use_Target_Speaker)
+			continue;
+		if (!Q_stricmp(target->classname, "trigger_relay") &&
+		    target->use == trigger_relay_use &&
+		    SG_OraclePlanSoundOnlyTargets(target, depth + 1))
+			continue;
+		return false;
+	}
+	return found;
+}
+
 static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 {
 	edict_t *target = NULL;
@@ -1347,7 +1666,7 @@ static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 			continue;
 		if (!Q_stricmp(target->classname, "trigger_relay") &&
 		    target->use == trigger_relay_use &&
-		    SG_OracleSoundOnlyTargets(target, 1))
+		    SG_OraclePlanSoundOnlyTargets(target, 1))
 			continue;
 		return false;
 	}
@@ -1605,16 +1924,160 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 			continue;
 		if (!Q_stricmp(target->classname, "trigger_relay") &&
 		    target->use == trigger_relay_use &&
-		    SG_OracleSoundOnlyTargets(target, 1))
+		    SG_OraclePlanSoundOnlyTargets(target, 1))
 			continue;
 		return false;
 	}
 	return found;
 }
 
+/* The active BUTTON_DOOR controller intentionally admits only the stock
+ * physical-touch button shape.  Remote, shootable, delayed, named, or
+ * cross-team/effect-target buttons require different execution laws and
+ * remain visible in the mechanism inventory without plan authority.  A
+ * master followed by same-team slave no-ops is one canonical door team. */
+static qboolean SG_OracleDeclaredButtonTargetsSafe(edict_t *button)
+{
+	edict_t *target = NULL;
+	edict_t *master = NULL;
+	int matches = 0;
+
+	if (!button || !button->target || !button->target[0])
+		return false;
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        button->target)) != NULL)
+	{
+		edict_t *target_master;
+
+		matches++;
+		if (!target->classname ||
+		    strncmp(target->classname, "func_door", 9) != 0 ||
+		    !SG_OracleDeclaredDoorTeamCanonical(target, &target_master) ||
+		    !SG_OracleDeclaredDoorTeamSafe(target_master))
+			return false;
+		if (target == target_master)
+		{
+			/* Exactly one canonical team is admitted.  It must be reached at
+			 * its master before G_UseTargets can encounter any same-name slave. */
+			if (master)
+				return false;
+			master = target_master;
+		}
+		else if (!master || target_master != master ||
+		         !(target->flags & FL_TEAMSLAVE))
+			return false;
+	}
+	return matches > 0 && master != NULL;
+}
+
+static qboolean SG_OracleDeclaredButtonDoorSafe(edict_t *button)
+{
+	sg_mech_button_endpoints_t endpoints;
+	int button_key = SG_OracleLiveEdictIndex(button);
+
+	if (!button || button_key <= 0 || !button->inuse || !button->classname ||
+	    strcmp(button->classname, "func_button") != 0 ||
+	    button->movetype != MOVETYPE_STOP || button->solid != SOLID_BSP ||
+	    button->touch != button_touch || button->use != button_use ||
+	    button->think || button->blocked || button->targetname ||
+	    button->killtarget || button->pathtarget || button->message ||
+	    !button->target || !button->target[0] || button->spawnflags != 0 ||
+	    button->health != 0 || button->max_health != 0 ||
+	    button->takedamage != DAMAGE_NO || button->delay != 0.0f ||
+	    button->nextthink != 0.0f ||
+	    button->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+	    !isfinite(button->moveinfo.distance) ||
+	    !isfinite(button->moveinfo.speed) || button->moveinfo.speed <= 0.0f ||
+	    !isfinite(button->moveinfo.accel) ||
+	    !isfinite(button->moveinfo.decel) ||
+	    fabsf(button->moveinfo.accel - button->moveinfo.speed) > 0.01f ||
+	    fabsf(button->moveinfo.decel - button->moveinfo.speed) > 0.01f ||
+	    !isfinite(button->moveinfo.wait) || button->moveinfo.wait <= 0.0f ||
+	    SG_OracleEntityKilltargetable(button) ||
+	    !SG_MechCatalogButtonBottomEndpoints((uint32_t)button_key, NULL,
+	        button, &endpoints))
+		return false;
+	return SG_OracleDeclaredButtonTargetsSafe(button);
+}
+
+/* Validate only the synchronous proof pose installed by the generator.  The
+ * catalog binds the immutable endpoint pair and the private pointer binds the
+ * exact entity/scope; this must never become a general live admission path. */
+static qboolean SG_OracleDeclaredButtonTopSafe(edict_t *button)
+{
+	sg_mech_button_endpoints_t endpoints;
+	int button_key;
+	int axis;
+
+	button_key = SG_OracleLiveEdictIndex(button);
+	if (!button || button != sg_oracle_declared_button_top || button_key <= 0 ||
+	    !button->inuse || !button->classname ||
+	    strcmp(button->classname, "func_button") != 0 ||
+	    button->movetype != MOVETYPE_STOP || button->solid != SOLID_BSP ||
+	    button->touch != button_touch || button->use != button_use ||
+	    button->think || button->blocked || button->targetname ||
+	    button->killtarget || button->pathtarget || button->message ||
+	    !button->target || !button->target[0] || button->spawnflags != 0 ||
+	    button->health != 0 || button->max_health != 0 ||
+	    button->takedamage != DAMAGE_NO || button->delay != 0.0f ||
+	    button->nextthink != 0.0f ||
+	    button->moveinfo.state != SG_PLAT_STATE_TOP ||
+	    !VectorCompare(button->velocity, vec3_origin) ||
+	    !VectorCompare(button->avelocity, vec3_origin) ||
+	    !SG_MechCatalogButtonEndpoints((uint32_t)button_key, NULL, button,
+	        &endpoints))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (button->s.origin[axis] !=
+		        (float)endpoints.end_q8[axis] * 0.125f ||
+		    button->s.old_origin[axis] != button->s.origin[axis])
+			return false;
+	return SG_OracleDeclaredButtonTargetsSafe(button);
+}
+
+static qboolean SG_OracleDeclaredDoorSourceSafe(edict_t *source)
+{
+	return SG_OracleDeclaredActivatorSafe(source) ||
+	       SG_OracleDeclaredButtonDoorSafe(source) ||
+	       SG_OracleDeclaredButtonTopSafe(source);
+}
+
 qboolean SG_DeclaredDoorActivatorSafe(edict_t *trigger)
 {
 	return SG_OracleDeclaredActivatorSafe(trigger);
+}
+
+qboolean SG_DeclaredDoorDirectActivatorSafe(edict_t *trigger)
+{
+	return SG_OracleDeclaredActivatorSafe(trigger) &&
+	       trigger->touch == Touch_Multi;
+}
+
+qboolean SG_DeclaredButtonDoorSafe(edict_t *button)
+{
+	return SG_OracleDeclaredButtonDoorSafe(button);
+}
+
+qboolean SG_OracleButtonCarryClear(edict_t *button, const vec3_t from,
+	const vec3_t to, qboolean population_independent)
+{
+	vec3_t mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+	trace_t trace;
+
+	if (!button || !from || !to ||
+	    (!SG_OracleDeclaredButtonDoorSafe(button) &&
+	     !SG_OracleDeclaredButtonTopSafe(button)))
+		return false;
+	/* The authenticated entry pusher is the support carrying this hull, so it
+	 * is the sole excluded entity. World and every foreign solid remain
+	 * authoritative over the complete endpoint segment. */
+	if (!SG_OracleStablePopulationTrace(from, mins, maxs, to, button,
+	        population_independent, &trace))
+		return false;
+	if (trace.startsolid || trace.allsolid || trace.fraction != 1.0f)
+		return false;
+	return true;
 }
 
 /* Classify the exact trigger selected by the real host's G_TouchTriggers.
@@ -1718,17 +2181,26 @@ qboolean SG_OracleReplaySourceEvents(edict_t *ent,
 
 int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger)
 {
+	double milliseconds;
 	float wait;
 
-	if (!SG_OracleDeclaredActivatorSafe(trigger))
+	if (!SG_OracleDeclaredDoorSourceSafe(trigger))
 		return -1;
-	wait = trigger->touch == Touch_DoorTrigger ? 1.0f : trigger->wait;
+	wait = trigger->touch == Touch_DoorTrigger ? 1.0f :
+	       SG_OracleDeclaredButtonDoorSafe(trigger)
+	           ? trigger->moveinfo.wait : trigger->wait;
 	/* Long trigger cooldowns are not intrinsically unsafe: the complete door
 	 * contract applies its own bounded-duration policy below.  Reject here only
 	 * when the millisecond conversion cannot fit the signed return type. */
-	if (!isfinite(wait) || wait <= 0.0f || wait > 2147483.0f)
+	if (!isfinite(wait) || wait <= 0.0f)
 		return -1;
-	return (int)ceilf(wait * 1000.0f);
+	milliseconds = (double)wait * 1000.0;
+	if (!isfinite(milliseconds) || milliseconds > (double)INT_MAX)
+		return -1;
+	/* Match the sealed catalog's canonical float-to-millisecond conversion.
+	 * Using ceilf here made generation disagree with the wire node by one
+	 * millisecond for values such as 312.0004 seconds. */
+	return (int)lround(milliseconds);
 }
 
 static qboolean SG_OracleDeclaredTriggerContains(edict_t *trigger,
@@ -2102,7 +2574,7 @@ qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin)
 	edict_t *members[SG_PHANTOM_ARMED_DOORS];
 	int count, i;
 
-	if (!SG_OracleDeclaredActivatorSafe(trigger) || !origin)
+	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !origin)
 		return false;
 	count = SG_DeclaredDoorMembers(trigger, members,
 	    SG_PHANTOM_ARMED_DOORS);
@@ -2128,7 +2600,7 @@ qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 	edict_t *members[SG_PHANTOM_ARMED_DOORS];
 	int count, i;
 
-	if (!SG_OracleDeclaredActivatorSafe(trigger) || !from || !to)
+	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !from || !to)
 		return false;
 	count = SG_DeclaredDoorMembers(trigger, members,
 	    SG_PHANTOM_ARMED_DOORS);
@@ -2144,6 +2616,115 @@ qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 			return true;
 	}
 	return false;
+}
+
+static int SG_BoundDoorMembers(
+	const sg_rune_mechanism_binding_t *binding, edict_t **members,
+	int capacity)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	size_t index;
+
+	if (!binding || !members || capacity <= 0 ||
+	    !SG_OracleBoundDoorBindingCurrent(binding) ||
+	    !SG_OracleBoundDoorMoverKeys(binding, keys, &count) ||
+	    count == 0U || count > (size_t)capacity)
+		return -1;
+	for (index = 0U; index < count; index++)
+	{
+		members[index] = SG_OracleBoundDoorResolveNode(binding,
+		    keys[index]);
+		if (!members[index] || !SG_OracleMoverSweepIdentity(members[index]))
+			return -1;
+	}
+	return SG_OracleBoundDoorBindingCurrent(binding) ? (int)count : -1;
+}
+
+qboolean SG_BoundDoorOutsideSweep(
+	const sg_rune_mechanism_binding_t *binding, const vec3_t origin)
+{
+	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
+	edict_t *members[SG_RUNE_BINDING_MAX_MOVERS];
+	int count;
+	int index;
+
+	if (!origin || (count = SG_BoundDoorMembers(binding, members,
+	        SG_RUNE_BINDING_MAX_MOVERS)) <= 0)
+		return false;
+	for (index = 0; index < count; index++)
+	{
+		vec3_t mins, maxs;
+
+		SG_OracleDoorBounds(members[index], hull_mins, hull_maxs,
+		    mins, maxs);
+		if (SG_OracleSegmentBox(origin, origin, mins, maxs))
+			return false;
+	}
+	return SG_OracleBoundDoorBindingCurrent(binding);
+}
+
+qboolean SG_BoundDoorCrossesSweep(
+	const sg_rune_mechanism_binding_t *binding, const vec3_t from,
+	const vec3_t to)
+{
+	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
+	edict_t *members[SG_RUNE_BINDING_MAX_MOVERS];
+	int count;
+	int index;
+
+	if (!from || !to || (count = SG_BoundDoorMembers(binding, members,
+	        SG_RUNE_BINDING_MAX_MOVERS)) <= 0)
+		return false;
+	for (index = 0; index < count; index++)
+	{
+		vec3_t mins, maxs;
+
+		SG_OracleDoorBounds(members[index], hull_mins, hull_maxs,
+		    mins, maxs);
+		if (SG_OracleSegmentBox(from, to, mins, maxs))
+			return SG_OracleBoundDoorBindingCurrent(binding);
+	}
+	return false;
+}
+
+qboolean SG_BoundDoorTouchMatches(
+	const sg_rune_mechanism_binding_t *binding,
+	const vec3_t activator_origin)
+{
+	return binding && activator_origin &&
+	       binding->plan->controller_kind !=
+	           SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	       SG_OracleBoundDoorBindingCurrent(binding) &&
+	       SG_OracleDeclaredTriggerContains(binding->entry_entity,
+	           activator_origin) &&
+	       SG_BoundDoorOutsideSweep(binding, activator_origin) &&
+	       SG_OracleBoundDoorBindingCurrent(binding);
+}
+
+qboolean SG_BoundDoorEntryContactMatches(
+	const sg_rune_mechanism_binding_t *binding, const vec3_t origin)
+{
+	edict_t *entry;
+
+	if (!binding || !origin ||
+	    !SG_OracleBoundDoorBindingCurrent(binding) ||
+	    !(entry = binding->entry_entity))
+		return false;
+	if (binding->plan->controller_kind ==
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR)
+	{
+		/* A solid BSP button fires on the first exact collision trace, not when
+		 * the player merely enters its broad expanded AABB.  The latter can be
+		 * tens of units early on a wide floor plate and made loader replay pause
+		 * before the generated contact point. */
+		return SG_DeclaredButtonDoorContactMatches(entry, origin) &&
+		       SG_OracleBoundDoorBindingCurrent(binding);
+	}
+	return SG_OracleDeclaredTriggerContains(entry, origin) &&
+	       SG_OracleBoundDoorBindingCurrent(binding);
 }
 
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source)
@@ -2209,18 +2790,14 @@ qboolean SG_DeclaredDoorActivationMatches(edict_t *trigger,
 	       SG_OracleDeclaredSetMember(trigger, door_master);
 }
 
-/* The offline approach pauses on the first safe trigger that owns this exact
- * complete mover set.  Maps may place overlapping broad and narrow triggers
- * on opposite sides of the same leaves, so live callbacks must use the same
- * set identity rather than requiring pointer equality with the canonical
- * trigger selected by the loader. */
+/* The serialized controller is one exact trigger entity.  Sharing a complete
+ * mover set does not let a sibling consume its physical-touch transaction. */
 qboolean SG_DeclaredDoorEquivalentTouch(edict_t *expected,
 	edict_t *actual, const vec3_t activator_origin)
 {
 	return expected && actual && activator_origin &&
+	       expected == actual &&
 	       SG_OracleDeclaredActivatorSafe(expected) &&
-	       SG_OracleDeclaredActivatorSafe(actual) &&
-	       SG_OracleDeclaredSameDoorSet(expected, actual) &&
 	       SG_OracleDeclaredTriggerContains(actual, activator_origin) &&
 	       SG_DeclaredDoorOutsideSweep(expected, activator_origin);
 }
@@ -2261,6 +2838,60 @@ qboolean SG_DeclaredDoorApproachSourceClear(edict_t *trigger,
 	return true;
 }
 
+sg_button_contact_status_t SG_DeclaredButtonDoorContactStatus(
+	edict_t *button, const vec3_t origin)
+{
+	vec3_t mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+	vec3_t center, direction, end;
+	float distance;
+	trace_t trace;
+	int axis;
+
+	if (!SG_OracleDeclaredButtonDoorSafe(button))
+		return SG_BUTTON_CONTACT_UNSAFE;
+	if (!origin || !SG_OracleFinite3(origin))
+		return SG_BUTTON_CONTACT_BAD_ORIGIN;
+	if (!SG_DeclaredDoorOutsideSweep(button, origin))
+		return SG_BUTTON_CONTACT_SWEEP_OCCUPIED;
+	for (axis = 0; axis < 3; axis++)
+		center[axis] = 0.5f * (button->absmin[axis] + button->absmax[axis]);
+	VectorSubtract(center, origin, direction);
+	distance = VectorLength(direction);
+	if (!isfinite(distance) || distance <= 0.01f)
+		return SG_BUTTON_CONTACT_DEGENERATE;
+	VectorScale(direction, 4.0f / distance, direction);
+	VectorAdd(origin, direction, end);
+	if (!SG_OracleStablePopulationTrace(origin, mins, maxs, end, NULL,
+	        sg_oracle_loader_replay, &trace))
+		return SG_BUTTON_CONTACT_WRONG_HIT;
+	if (trace.startsolid)
+		return SG_BUTTON_CONTACT_STARTSOLID;
+	if (trace.allsolid)
+		return SG_BUTTON_CONTACT_ALLSOLID;
+	if (trace.fraction >= 1.0f)
+		return SG_BUTTON_CONTACT_NO_HIT;
+	if (trace.ent != button)
+		return SG_BUTTON_CONTACT_WRONG_HIT;
+	return SG_BUTTON_CONTACT_OK;
+}
+
+qboolean SG_DeclaredButtonDoorContactMatches(edict_t *button,
+	const vec3_t origin)
+{
+	return SG_DeclaredButtonDoorContactStatus(button, origin) ==
+	       SG_BUTTON_CONTACT_OK;
+}
+
+qboolean SG_DeclaredButtonDoorApproachSourceClear(edict_t *button,
+	const vec3_t origin)
+{
+	return SG_OracleDeclaredButtonDoorSafe(button) &&
+	       SG_DeclaredDoorOutsideSweep(button, origin) &&
+	       SG_DeclaredButtonDoorContactStatus(button, origin) !=
+	           SG_BUTTON_CONTACT_OK;
+}
+
 qboolean SG_DeclaredDoorEquivalentActivation(edict_t *expected,
 	edict_t *actual, edict_t *door_master,
 	const vec3_t activator_origin)
@@ -2280,12 +2911,13 @@ qboolean SG_DeclaredDoorEquivalentActivation(edict_t *expected,
  * conservatively rejected; only the expected/equivalent trigger contact is
  * admitted.  A false result therefore shelves the action without needing an
  * impossible transaction over game-side touch effects. */
-qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
-	const usercmd_t *cmd)
+static qboolean SG_OracleDoorStepSafe(edict_t *ent, edict_t *trigger,
+	const sg_rune_mechanism_binding_t *binding, const usercmd_t *cmd)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
 	edict_t *old_door = sg_oracle_declared_door;
+	const sg_rune_mechanism_binding_t *old_bound = sg_oracle_bound_door;
 	qboolean old_world = sg_oracle_world_only;
 	qboolean old_contaminated = sg_oracle_contaminated;
 	qboolean old_touched = sg_oracle_declared_touched;
@@ -2296,7 +2928,10 @@ qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
 	int axis;
 
 	if (!ent || !ent->inuse || !ent->client || !trigger || !cmd ||
-	    !SG_DeclaredDoorOutsideSweep(trigger, ent->s.origin))
+	    (binding && (!SG_OracleBoundDoorBindingCurrent(binding) ||
+	                 binding->entry_entity != trigger)) ||
+	    !(binding ? SG_BoundDoorOutsideSweep(binding, ent->s.origin) :
+	                 SG_DeclaredDoorOutsideSweep(trigger, ent->s.origin)))
 		return false;
 	memset(&ph, 0, sizeof(ph));
 	ph.pms = ent->client->ps.pmove;
@@ -2320,7 +2955,9 @@ qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
 	sg_oracle_contaminated = false;
 	sg_oracle_declared_expected = trigger;
 	sg_oracle_declared_door = NULL; /* the complete mover sweep stays blocked */
-	sg_oracle_declared_action = RL_DOOR;
+	sg_oracle_bound_door = binding;
+	sg_oracle_declared_action = binding && binding->plan->controller_kind ==
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR ? RL_BUTTON_DOOR : RL_DOOR;
 	sg_oracle_declared_touched = false;
 	if (!SG_OracleTriggerOverlap(&ph) && !SG_OracleSolidOverlap(&ph))
 	{
@@ -2328,7 +2965,8 @@ qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
 		SG_OracleRun(&ph, &step_cmd, 1);
 		safe = !sg_oracle_contaminated && ph.groundentity &&
 		       ph.waterlevel == 0 &&
-		       SG_DeclaredDoorOutsideSweep(trigger, ph.origin);
+		       (binding ? SG_BoundDoorOutsideSweep(binding, ph.origin) :
+		                  SG_DeclaredDoorOutsideSweep(trigger, ph.origin));
 	}
 
 done:
@@ -2337,9 +2975,143 @@ done:
 	sg_oracle_contaminated = old_contaminated;
 	sg_oracle_declared_expected = old_expected;
 	sg_oracle_declared_door = old_door;
+	sg_oracle_bound_door = old_bound;
 	sg_oracle_declared_action = old_action;
 	sg_oracle_declared_touched = old_touched;
 	return safe;
+}
+
+qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
+	const usercmd_t *cmd)
+{
+	return SG_OracleDoorStepSafe(ent, trigger, NULL, cmd);
+}
+
+qboolean SG_OracleBoundDoorStepSafe(edict_t *ent,
+	const sg_rune_mechanism_binding_t *binding, const usercmd_t *cmd)
+{
+	return binding ? SG_OracleDoorStepSafe(ent, binding->entry_entity,
+	    binding, cmd) : false;
+}
+
+static void SG_OracleDoorApproachObservation(const sg_phantom_t *ph,
+	edict_t *trigger, const sg_rune_mechanism_binding_t *binding,
+	qboolean fall_sampled, float fall_delta,
+	sg_door_approach_observation_t *observation);
+
+qboolean SG_OracleBoundDoorApproachStep(edict_t *ent,
+	const sg_rune_mechanism_binding_t *binding, const usercmd_t *cmd,
+	const sg_door_approach_state_t *state,
+	sg_door_approach_prediction_t *prediction,
+	sg_door_approach_reason_t *reason_out)
+{
+	edict_t *old_passent = sg_oracle_passent;
+	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_door = sg_oracle_declared_door;
+	const sg_rune_mechanism_binding_t *old_bound = sg_oracle_bound_door;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	qboolean old_touched = sg_oracle_declared_touched;
+	int old_action = sg_oracle_declared_action;
+	sg_door_approach_observation_t observation;
+	sg_door_approach_result_t result;
+	sg_phantom_t ph;
+	usercmd_t step_cmd;
+	qboolean ok = false;
+	qboolean fall_sampled;
+	float fall_delta = 0.0f;
+	int axis;
+
+	if (prediction)
+		memset(prediction, 0, sizeof(*prediction));
+	if (reason_out)
+		*reason_out = SG_DOOR_APPROACH_REASON_ARGUMENT;
+	if (!ent || !ent->inuse || !ent->client || !binding || !binding->plan ||
+	    !binding->entry_entity || !cmd || !state || !prediction ||
+	    binding->plan->controller_kind !=
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR ||
+	    !SG_OracleBoundDoorBindingCurrent(binding) ||
+	    !SG_BoundDoorOutsideSweep(binding, ent->s.origin))
+		return false;
+	memset(&ph, 0, sizeof(ph));
+	ph.pms = ent->client->ps.pmove;
+	ph.old_pms = ent->client->old_pmove;
+	for (axis = 0; axis < 3; axis++)
+	{
+		ph.pms.origin[axis] = (short)(ent->s.origin[axis] * 8.0f);
+		ph.pms.velocity[axis] = (short)(ent->velocity[axis] * 8.0f);
+		ph.origin[axis] = ph.pms.origin[axis] * 0.125f;
+		ph.velocity[axis] = ph.pms.velocity[axis] * 0.125f;
+	}
+	if (!sv_gravity)
+		goto done;
+	ph.pms.gravity = (short)sv_gravity->value;
+	ph.groundentity = ent->groundentity != NULL;
+	ph.groundentity_entity = ent->groundentity;
+	ph.watertype = ent->watertype;
+	ph.waterlevel = ent->waterlevel;
+
+	sg_oracle_passent = ent;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = binding->entry_entity;
+	sg_oracle_declared_door = NULL;
+	sg_oracle_bound_door = binding;
+	sg_oracle_declared_action = RL_DOOR;
+	sg_oracle_declared_touched = false;
+	(void)SG_OracleTriggerOverlap(&ph);
+	(void)SG_OracleSolidOverlap(&ph);
+	SG_OracleDoorApproachObservation(&ph, binding->entry_entity, binding,
+	    false, 0.0f, &observation);
+	result = SG_DoorApproachPreStep(state, &observation, cmd->msec);
+	if (result.reason != SG_DOOR_APPROACH_REASON_NONE)
+	{
+		if (reason_out)
+			*reason_out = result.reason;
+		goto done;
+	}
+	step_cmd = *cmd;
+	SG_OracleRun(&ph, &step_cmd, 1);
+	fall_sampled = ((state->elapsed_ms + cmd->msec) %
+	    SG_DOOR_APPROACH_FRAME_MS) == 0;
+	if (fall_sampled)
+		fall_delta = P_FallDelta(state->old_frame_z, ph.velocity[2],
+		    ph.groundentity, ph.waterlevel);
+	SG_OracleDoorApproachObservation(&ph, binding->entry_entity, binding,
+	    fall_sampled, fall_delta, &observation);
+	prediction->state = *state;
+	result = SG_DoorApproachPostStep(&prediction->state, &observation,
+	    cmd->msec);
+	if (result.reason != SG_DOOR_APPROACH_REASON_NONE ||
+	    (sg_oracle_declared_touched && !ph.groundentity) ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+	{
+		if (reason_out)
+			*reason_out = result.reason != SG_DOOR_APPROACH_REASON_NONE
+			    ? result.reason : SG_DOOR_APPROACH_REASON_SUPPORT;
+		goto done;
+	}
+	prediction->pms = ph.pms;
+	VectorCopy(ph.mins, prediction->mins);
+	VectorCopy(ph.maxs, prediction->maxs);
+	prediction->groundentity = ph.groundentity_entity;
+	prediction->watertype = ph.watertype;
+	prediction->waterlevel = ph.waterlevel;
+	prediction->expected_touch = sg_oracle_declared_touched;
+	if (reason_out)
+		*reason_out = SG_DOOR_APPROACH_REASON_NONE;
+	ok = true;
+
+done:
+	sg_oracle_passent = old_passent;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_door = old_door;
+	sg_oracle_bound_door = old_bound;
+	sg_oracle_declared_action = old_action;
+	sg_oracle_declared_touched = old_touched;
+	return ok;
 }
 
 /* Re-prove the remaining TOP-pose egress from the exact authoritative state
@@ -2348,12 +3120,14 @@ done:
  * linked at TOP and remains physical, while its synthetic union is used only
  * as the required terminal escape condition. No mover/entity loop interleaves
  * the four ClientThink commands that consume this grant. */
-qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
-	edict_t *trigger, int *arrival_ms)
+static qboolean SG_OracleDoorContinue(edict_t *ent, const vec3_t target,
+	edict_t *trigger, const sg_rune_mechanism_binding_t *binding,
+	int *arrival_ms)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
 	edict_t *old_door = sg_oracle_declared_door;
+	const sg_rune_mechanism_binding_t *old_bound = sg_oracle_bound_door;
 	qboolean old_world = sg_oracle_world_only;
 	qboolean old_contaminated = sg_oracle_contaminated;
 	qboolean old_touched = sg_oracle_declared_touched;
@@ -2361,9 +3135,15 @@ qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
 	sg_phantom_t ph;
 	usercmd_t cmd;
 	qboolean ok = false;
+	qboolean button_controller;
+	int controller_kind;
 	float old_frame_z;
 	int elapsed, axis;
 
+	controller_kind = binding && binding->plan
+	    ? binding->plan->controller_kind : SG_MECHANISM_CONTROLLER_NONE;
+	button_controller = controller_kind ==
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
 	if (!ent || !ent->inuse || !ent->client || !target || !trigger ||
 	    !arrival_ms || !sv_gravity || ent->health <= 0 || ent->deadflag ||
 	    ent->movetype != MOVETYPE_WALK || ent->s.modelindex != 255 ||
@@ -2373,9 +3153,13 @@ qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
 	        (PMF_TIME_WATERJUMP | PMF_TIME_TELEPORT)) ||
 	    (ent->client->ps.pmove.pm_time &&
 	     !(ent->client->ps.pmove.pm_flags & PMF_TIME_LAND)) ||
-	    ent->client->hookstate != 0 ||
-	    ent->client->hook != NULL || ent->waterlevel != 0 ||
-	    !SG_DeclaredDoorAtTop(trigger))
+	    ent->client->hookstate != 0 || ent->client->hook != NULL ||
+	    !SG_OracleDoorEgressWaterSafe(controller_kind, ent->waterlevel,
+	        ent->watertype) ||
+	    (binding && (!SG_OracleBoundDoorBindingCurrent(binding) ||
+	                 binding->entry_entity != trigger)) ||
+	    !(binding ? SG_BoundDoorAtTop(binding) :
+	                 SG_DeclaredDoorAtTop(trigger)))
 		return false;
 	memset(&ph, 0, sizeof(ph));
 	ph.pms = ent->client->ps.pmove;
@@ -2398,7 +3182,8 @@ qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
 	sg_oracle_contaminated = false;
 	sg_oracle_declared_expected = NULL;
 	sg_oracle_declared_door = trigger;
-	sg_oracle_declared_action = RL_DOOR;
+	sg_oracle_bound_door = binding;
+	sg_oracle_declared_action = button_controller ? RL_BUTTON_DOOR : RL_DOOR;
 	sg_oracle_declared_touched = false;
 	if (SG_OracleTriggerOverlap(&ph) || SG_OracleSolidOverlap(&ph))
 		goto restore;
@@ -2409,7 +3194,9 @@ qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
 		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
 			goto restore;
 		SG_OracleRun(&ph, &cmd, 1);
-		if (sg_oracle_contaminated || ph.waterlevel != 0)
+		if (sg_oracle_contaminated ||
+		    !SG_OracleDoorEgressWaterSafe(controller_kind, ph.waterlevel,
+		        ph.watertype))
 			goto restore;
 		if (((elapsed + 25) % 100) == 0)
 		{
@@ -2422,7 +3209,8 @@ qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
 			(void)P_FallDelta(old_frame_z, ph.velocity[2], ph.groundentity,
 			                  ph.waterlevel);
 			old_frame_z = ph.velocity[2];
-			if (SG_DeclaredDoorOutsideSweep(trigger, ph.origin) &&
+			if ((binding ? SG_BoundDoorOutsideSweep(binding, ph.origin) :
+			               SG_DeclaredDoorOutsideSweep(trigger, ph.origin)) &&
 			    SG_SupportedArrived(ph.origin, target, ph.groundentity,
 			                        ph.watertype, ph.waterlevel, ent))
 			{
@@ -2439,9 +3227,23 @@ restore:
 	sg_oracle_contaminated = old_contaminated;
 	sg_oracle_declared_expected = old_expected;
 	sg_oracle_declared_door = old_door;
+	sg_oracle_bound_door = old_bound;
 	sg_oracle_declared_action = old_action;
 	sg_oracle_declared_touched = old_touched;
 	return ok;
+}
+
+qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
+	edict_t *trigger, int *arrival_ms)
+{
+	return SG_OracleDoorContinue(ent, target, trigger, NULL, arrival_ms);
+}
+
+qboolean SG_OracleBoundDoorContinue(edict_t *ent, const vec3_t target,
+	const sg_rune_mechanism_binding_t *binding, int *arrival_ms)
+{
+	return binding ? SG_OracleDoorContinue(ent, target,
+	    binding->entry_entity, binding, arrival_ms) : false;
 }
 
 /* Runtime completion for a declared trigger set. door_hit_top publishes
@@ -2482,6 +3284,42 @@ qboolean SG_DeclaredDoorAtTopFor(edict_t *trigger, int window_ms)
 qboolean SG_DeclaredDoorAtTop(edict_t *trigger)
 {
 	return SG_DeclaredDoorAtTopFor(trigger, 0);
+}
+
+qboolean SG_BoundDoorAtTopFor(
+	const sg_rune_mechanism_binding_t *binding, int window_ms)
+{
+	edict_t *members[SG_RUNE_BINDING_MAX_MOVERS];
+	float until;
+	int count;
+	int index;
+
+	if (window_ms < 0 || !isfinite(level.time) ||
+	    (count = SG_BoundDoorMembers(binding, members,
+	        SG_RUNE_BINDING_MAX_MOVERS)) <= 0)
+		return false;
+	until = level.time + (float)window_ms * 0.001f + FRAMETIME;
+	if (!isfinite(until))
+		return false;
+	for (index = 0; index < count; index++)
+	{
+		edict_t *member = members[index];
+
+		if (member->moveinfo.state != SG_PLAT_STATE_TOP ||
+		    !SG_MoverCompletionMatches(member, SG_MOVER_COMPLETION_TOP))
+			return false;
+		if (member->moveinfo.wait >= 0.0f &&
+		    (member->think != door_go_down || !isfinite(member->nextthink) ||
+		     member->nextthink <= until))
+			return false;
+	}
+	return SG_OracleBoundDoorBindingCurrent(binding);
+}
+
+qboolean SG_BoundDoorAtTop(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	return SG_BoundDoorAtTopFor(binding, 0);
 }
 
 /* A combat body can transiently block both proved exits after the bot has
@@ -2633,7 +3471,7 @@ int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
 	edict_t *target = NULL;
 	int count = 0;
 
-	if (!SG_OracleDeclaredActivatorSafe(trigger) || !members || capacity <= 0)
+	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !members || capacity <= 0)
 		return -1;
 	if (trigger->touch == Touch_DoorTrigger)
 	{
@@ -2678,46 +3516,95 @@ int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
  * each member's TOP hold is then charged only for the skew after that member
  * can first arrive.  This matters for a single short-hold automatic door: its
  * wait starts at TOP, not when the player first touches its trigger. */
-int SG_DeclaredDoorContractCost(edict_t *trigger, int approach_ms,
+static int SG_DoorContractCost(edict_t *trigger,
+	const sg_rune_mechanism_binding_t *binding, int approach_ms,
 	int touch_ms, int egress_ms)
 {
 	edict_t *members[SG_PHANTOM_ARMED_DOORS];
-	int earliest[SG_PHANTOM_ARMED_DOORS];
-	int count, i, longest = 0, longest_cycle = 0, cyclic = 0;
-	int trigger_ms, cooldown_gap, post_touch_ms, handoff_ms, total;
+	int64_t earliest[SG_PHANTOM_ARMED_DOORS];
+	int64_t hold_floor[SG_PHANTOM_ARMED_DOORS];
+	int count, i, cyclic = 0;
+	int64_t longest = 0, longest_cycle = 0;
+	int64_t post_touch_ms, handoff_ms;
+	int64_t trigger_ms, cooldown_gap, total;
+	int64_t button_press_ms = 0;
+	qboolean button_controller;
 
 	if (approach_ms <= 0 || touch_ms <= 0 || touch_ms > approach_ms ||
 	    egress_ms <= 0 || !trigger)
 		return -1;
-	count = SG_DeclaredDoorMembers(trigger, members,
-	    SG_PHANTOM_ARMED_DOORS);
+	count = binding
+	    ? SG_BoundDoorMembers(binding, members, SG_PHANTOM_ARMED_DOORS)
+	    : SG_DeclaredDoorMembers(trigger, members, SG_PHANTOM_ARMED_DOORS);
 	if (count <= 0)
 		return -1;
-	trigger_ms = SG_DeclaredDoorTriggerWaitMs(trigger);
+	/* DIRECT_TRIGGER_DOOR saturates the redundant plan cooldown field to the
+	 * 30-second wire bound.  The sealed entry node still carries the exact
+	 * mapper wait, and live binding revalidates that node before this cost is
+	 * trusted.  Use the exact value here so 63/304/312-second rearm gaps have
+	 * identical generation and load-time arithmetic. */
+	trigger_ms = binding && binding->plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
+	    ? binding->entry_node->wait_ms
+	    : binding ? (int)binding->plan->cooldown_ms
+	              : SG_DeclaredDoorTriggerWaitMs(trigger);
 	if (trigger_ms <= 0)
 		return -1;
+	button_controller = binding
+	    ? binding->plan->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    : SG_OracleDeclaredButtonDoorSafe(trigger);
+	if (button_controller)
+	{
+		vec3_t travel;
+		double nominal;
+
+		/* SP_func_button stores its immutable endpoints but never initializes
+		 * moveinfo.distance. Derive the stock translation from those endpoints;
+		 * thin floor plates can legitimately travel only a few units. */
+		VectorSubtract(trigger->moveinfo.end_origin,
+		               trigger->moveinfo.start_origin, travel);
+		nominal = (double)VectorLength(travel) /
+		          (double)trigger->moveinfo.speed * 1000.0;
+
+		if (!isfinite(nominal) || nominal <= 0.0 || nominal > 12500.0)
+			return -1;
+		button_press_ms = (int64_t)ceil(nominal) + 200;
+	}
 	for (i = 0; i < count; i++)
 	{
 		edict_t *member = members[i];
-		int travel, hold, cycle;
-		float nominal;
+		int64_t travel, hold, cycle;
+		double hold_ms, nominal;
 
 		if (!isfinite(member->moveinfo.distance) ||
 		    !isfinite(member->moveinfo.speed) ||
 		    member->moveinfo.speed <= 0.0f ||
 		    !isfinite(member->moveinfo.wait))
 			return -1;
-		nominal = fabsf(member->moveinfo.distance) /
-		          member->moveinfo.speed * 1000.0f;
-		if (!isfinite(nominal) || nominal <= 0.0f)
+		nominal = fabs((double)member->moveinfo.distance) /
+		          (double)member->moveinfo.speed * 1000.0;
+		/* The contract already rejects a travel above 12.5 seconds.  Apply
+		 * that bound before converting so an extreme finite map value can
+		 * never reach an out-of-range integer cast. */
+		if (!isfinite(nominal) || nominal <= 0.0 || nominal > 12500.0)
 			return -1;
-		earliest[i] = (int)floorf(nominal);
-		travel = (int)ceilf(nominal) + 200;
+		earliest[i] = (int64_t)floor(nominal);
+		travel = (int64_t)ceil(nominal) + 200;
+		if (travel > 12500)
+			return -1;
 		if (travel > longest)
 			longest = travel;
+		hold_floor[i] = -1;
 		if (member->moveinfo.wait < 0.0f)
 			continue;
-		hold = (int)ceilf(member->moveinfo.wait * 1000.0f);
+		hold_ms = (double)member->moveinfo.wait * 1000.0;
+		if (!isfinite(hold_ms) || hold_ms < 0.0 ||
+		    hold_ms >= (double)INT64_MAX)
+			return -1;
+		hold_floor[i] = (int64_t)floor(hold_ms);
+		hold = (int64_t)ceil(hold_ms);
+		if (hold > INT64_MAX - 2 * travel)
+			return -1;
 		cycle = 2 * travel + hold;
 		if (cycle > longest_cycle)
 			longest_cycle = cycle;
@@ -2728,19 +3615,36 @@ int SG_DeclaredDoorContractCost(edict_t *trigger, int approach_ms,
 	/* A member's TOP hold begins after the accepted touch starts its opening,
 	 * not when the source-to-trigger approach began.  Compare every member's
 	 * relative TOP/close schedule against only the post-touch capture tail. */
-	post_touch_ms = approach_ms - touch_ms;
-	handoff_ms = post_touch_ms > longest ? post_touch_ms : longest;
+	post_touch_ms = (int64_t)approach_ms - (int64_t)touch_ms;
+	handoff_ms = post_touch_ms > button_press_ms + longest
+	    ? post_touch_ms : button_press_ms + longest;
+	/* func_button fires its targets only after reaching TOP, then begins its
+	 * own TOP hold.  The synthetic simultaneous TOP witness is live-reachable
+	 * only when that entry brush remains at the sealed endpoint through the
+	 * slowest target-door opening, complete egress, and one scheduling margin. */
+	if (button_controller &&
+	    button_press_ms + trigger_ms <
+	        handoff_ms + (int64_t)egress_ms + 300)
+		return -1;
 	for (i = 0; i < count; i++)
-		if (members[i]->moveinfo.wait >= 0.0f &&
-		    earliest[i] + (int)floorf(members[i]->moveinfo.wait * 1000.0f) <
-		        handoff_ms + egress_ms + 300)
+		if (hold_floor[i] >= 0 &&
+		    button_press_ms + earliest[i] + hold_floor[i] <
+		        handoff_ms + (int64_t)egress_ms + 300)
 			return -1;
 	cooldown_gap = cyclic && trigger_ms > longest_cycle
 	    ? trigger_ms - longest_cycle : 0;
-	total = approach_ms + 2 * longest + cooldown_gap + egress_ms + 1000;
+	total = (int64_t)approach_ms + button_press_ms + 2 * longest +
+	        cooldown_gap + (int64_t)egress_ms + 1000;
 	if (total <= 0 || total > 30000)
 		return -1;
-	return total;
+	return (int)total;
+}
+
+int SG_DeclaredDoorContractCost(edict_t *trigger, int approach_ms,
+	int touch_ms, int egress_ms)
+{
+	return SG_DoorContractCost(trigger, NULL, approach_ms, touch_ms,
+	    egress_ms);
 }
 
 static qboolean SG_OracleArmDoor(sg_phantom_t *ph, edict_t *door)
@@ -2897,13 +3801,16 @@ static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph)
 		}
 		if (sg_oracle_declared_door &&
 		    (hit == sg_oracle_declared_door ||
-		     (sg_oracle_declared_action == RL_DOOR &&
+		     (!sg_oracle_bound_door &&
+		      (sg_oracle_declared_action == RL_DOOR ||
+		       sg_oracle_declared_action == RL_BUTTON_DOOR) &&
 		      SG_OracleDeclaredSameDoorSet(sg_oracle_declared_door, hit))))
 			continue;
 		/* A declared door approach owns exactly one scripted touch. Do not let
 		 * an unrelated auto-door or trigger_multiple become an unrecorded second
 		 * mechanism merely because its volume overlaps this short rollout. */
-		if (sg_oracle_declared_action == RL_DOOR)
+		if (sg_oracle_declared_action == RL_DOOR ||
+		    sg_oracle_declared_action == RL_BUTTON_DOOR)
 		{
 			if (hit->touch == Touch_Multi &&
 			    SG_OracleSoundOnlyTargets(hit, 0))
@@ -2963,6 +3870,8 @@ static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph)
 		 * solid pedestals are admitted here. */
 		if (SG_ImmutableSupport(hit) || hit == sg_oracle_compound_member ||
 		    hit == sg_oracle_declared_expected ||
+		    (sg_oracle_declared_action == RL_BUTTON_DOOR &&
+		     hit == sg_oracle_declared_door) ||
 		    SG_OracleDeclaredSetMember(sg_oracle_declared_door, hit))
 			continue;
 		/* SV_LinkEdict represents an angled BSP mover with a coarse radius cube.
@@ -2983,18 +3892,28 @@ static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph)
 
 static trace_t SG_PhantomTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 {
-	int mask = sg_oracle_loader_replay
-	    ? (MASK_PLAYERSOLID & ~CONTENTS_MONSTER) : MASK_PLAYERSOLID;
-	trace_t tr = sg_host.trace(start, mins, maxs, end, sg_oracle_passent,
-	                           mask);
+	trace_t tr;
+	qboolean population_stable;
+
+	population_stable = SG_OracleStablePopulationTrace(start, mins, maxs,
+	    end, sg_oracle_passent, sg_oracle_loader_replay, &tr);
+	if (sg_oracle_world_only && !population_stable)
+		sg_oracle_contaminated = true;
 
 	if (sg_oracle_world_only &&
 	    SG_OracleDoorTraceBlocked(sg_oracle_active_phantom,
 	                              start, mins, maxs, end))
 		sg_oracle_contaminated = true;
+	if (sg_oracle_world_only &&
+	    sg_oracle_declared_action == RL_BUTTON_DOOR &&
+	    tr.ent == sg_oracle_declared_expected &&
+	    (tr.startsolid || tr.allsolid || tr.fraction < 1.0f))
+		sg_oracle_declared_touched = true;
 	if (sg_oracle_world_only && !SG_ImmutableSupport(tr.ent) &&
 	    tr.ent != sg_oracle_compound_member &&
 	    tr.ent != sg_oracle_declared_expected &&
+	    !(sg_oracle_declared_action == RL_BUTTON_DOOR &&
+	      tr.ent == sg_oracle_declared_door) &&
 	    !SG_OracleDeclaredSetMember(sg_oracle_declared_door, tr.ent) &&
 	    (tr.startsolid || tr.allsolid || tr.fraction < 1.0f) &&
 	    tr.ent && tr.ent != g_edicts)
@@ -3919,7 +4838,7 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	for (;;)
 	{
 		if (!SG_CompoundTranslateFrame(&translate, &mover_step) ||
-		    mover_step.elapsed_ms > SG_RUNE_V3_MAX_COST_MS ||
+		    mover_step.elapsed_ms > RUNE_MAX_COST_MS ||
 		    !SG_OracleCompoundStageMember(member, resolved, &mover_step))
 		{
 			reason = RLR_RIDE_REPLAY_FAILED;
@@ -3950,9 +4869,9 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	candidate.arrival_ms = suffix.arrival_ms;
 	candidate.sweep_clear_ms = suffix.sweep_clear_ms;
 	if (candidate.touch_frame_end_ms >
-	    SG_RUNE_V3_MAX_COST_MS - candidate.suffix_start_ms ||
+	    RUNE_MAX_COST_MS - candidate.suffix_start_ms ||
 	    candidate.arrival_ms >
-	    SG_RUNE_V3_MAX_COST_MS - candidate.touch_frame_end_ms -
+	    RUNE_MAX_COST_MS - candidate.touch_frame_end_ms -
 	    candidate.suffix_start_ms)
 	{
 		reason = RLR_COST_MISMATCH;
@@ -4155,8 +5074,11 @@ void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 		ph->pms = pm.s;
 		ph->old_pms = pm.s;
 		ph->groundentity = pm.groundentity ? true : false;
+		ph->groundentity_entity = pm.groundentity;
 		ph->watertype = pm.watertype;
 		ph->waterlevel = pm.waterlevel;
+		VectorCopy(pm.mins, ph->mins);
+		VectorCopy(pm.maxs, ph->maxs);
 
 		/* decode the fixed-point state once per step so callers read floats */
 		ph->origin[0] = pm.s.origin[0] * 0.125f;
@@ -4195,6 +5117,119 @@ qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 	sg_oracle_world_only = previous_world_only;
 	sg_oracle_contaminated = previous_contaminated;
 	return clean;
+}
+
+/* A collision trace stops DIST_EPSILON short of its floor.  That float is
+ * not necessarily a legal pmove coordinate: truncating floor+1/32 to signed
+ * eighth units can put the standing hull back on the floor boundary.  Let
+ * Pmove's own initial-snap search select the nearest legal signed-q8 body,
+ * then require that exact state to be clear and grounded.  Ongoing rest
+ * stability remains Seed_SourceUnstable's separate action-source law.  This
+ * scope intentionally permits initial snap before checking the resulting
+ * body for overlap; SG_OracleRunWorld would reject the raw, pre-snap endpoint
+ * before Pmove gets that opportunity. */
+qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
+	vec3_t canonical_origin)
+{
+	static const vec3_t player_mins = { -16.0f, -16.0f, -24.0f };
+	static const vec3_t player_maxs = { 16.0f, 16.0f, 32.0f };
+	edict_t *old_passent = sg_oracle_passent;
+	sg_phantom_t *old_active = sg_oracle_active_phantom;
+	edict_t *old_declared_expected = sg_oracle_declared_expected;
+	edict_t *old_declared_door = sg_oracle_declared_door;
+	const sg_rune_mechanism_binding_t *old_bound_door =
+		sg_oracle_bound_door;
+	edict_t *old_compound_trigger = sg_oracle_compound_trigger;
+	edict_t *old_compound_member = sg_oracle_compound_member;
+	qboolean old_world_only = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	qboolean old_declared_touched = sg_oracle_declared_touched;
+	qboolean old_compound_touched = sg_oracle_compound_touched;
+	qboolean old_loader_replay = sg_oracle_loader_replay;
+	int old_declared_action = sg_oracle_declared_action;
+	sg_phantom_t phantom;
+	usercmd_t command;
+	trace_t clear;
+	qboolean ok = false;
+	int axis;
+
+	if (!floor_endpoint || !canonical_origin || !sg_host.pmove ||
+	    !sg_host.trace || !sg_host.pointcontents)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled;
+		int base;
+
+		if (!isfinite(floor_endpoint[axis]))
+			return false;
+		scaled = floor_endpoint[axis] *
+			(float)SG_RUNE_PROOF_WORLD_FIXED_SCALE;
+		if (scaled < (float)SG_RUNE_PROOF_WORLD_FIXED_MIN ||
+		    scaled > (float)SG_RUNE_PROOF_WORLD_FIXED_MAX)
+			return false;
+		base = (int)scaled;
+		/* PM_InitialSnapPosition may test base-1 and base+1 on every
+		 * coordinate.  Keep those signed-short candidates representable. */
+		if (base <= SG_RUNE_PROOF_WORLD_FIXED_MIN ||
+		    base >= SG_RUNE_PROOF_WORLD_FIXED_MAX)
+			return false;
+	}
+
+	sg_oracle_passent = NULL;
+	sg_oracle_active_phantom = NULL;
+	sg_oracle_world_only = false;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = NULL;
+	sg_oracle_declared_door = NULL;
+	sg_oracle_bound_door = NULL;
+	sg_oracle_declared_action = RL_RUN;
+	sg_oracle_declared_touched = false;
+	sg_oracle_compound_trigger = NULL;
+	sg_oracle_compound_member = NULL;
+	sg_oracle_compound_touched = false;
+	sg_oracle_loader_replay = false;
+
+	SG_OraclePlace(&phantom, (vec_t *)floor_endpoint);
+	/* old_pms is used only to request PM_InitialSnapPosition on this first
+	 * command.  pm.s remains the intended PM_NORMAL candidate. */
+	phantom.old_pms.pm_type = PM_FREEZE;
+	memset(&command, 0, sizeof(command));
+	command.msec = 0;
+	SG_OracleRun(&phantom, &command, 1);
+	if (!phantom.groundentity || phantom.pms.pm_type != PM_NORMAL)
+		goto done;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled = phantom.origin[axis] *
+			(float)SG_RUNE_PROOF_WORLD_FIXED_SCALE;
+
+		if (scaled != (float)phantom.pms.origin[axis])
+			goto done;
+	}
+	clear = sg_host.trace(phantom.origin, (vec_t *)player_mins,
+		(vec_t *)player_maxs, phantom.origin, NULL, MASK_PLAYERSOLID);
+	if (clear.startsolid || clear.allsolid)
+		goto done;
+
+	VectorCopy(phantom.origin, canonical_origin);
+	ok = true;
+
+done:
+	sg_oracle_passent = old_passent;
+	sg_oracle_active_phantom = old_active;
+	sg_oracle_world_only = old_world_only;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_declared_expected;
+	sg_oracle_declared_door = old_declared_door;
+	sg_oracle_bound_door = old_bound_door;
+	sg_oracle_declared_action = old_declared_action;
+	sg_oracle_declared_touched = old_declared_touched;
+	sg_oracle_compound_trigger = old_compound_trigger;
+	sg_oracle_compound_member = old_compound_member;
+	sg_oracle_compound_touched = old_compound_touched;
+	sg_oracle_loader_replay = old_loader_replay;
+	return ok;
 }
 
 /* Prove the exact planar controller from a static graph source until it first
@@ -4342,19 +5377,78 @@ done:
 	return ok;
 }
 
+qboolean SG_OracleDoorApproachContactObserved(qboolean button_controller,
+	qboolean physical_touch, qboolean bound_contact)
+{
+	/* The bound button contact predicate is a four-unit inward lookahead used
+	 * to authenticate the serialized anchor.  It can become true one Pmove
+	 * sample before the solid BSP callback.  Only the callback is the physical
+	 * activation/support event proved by generation; ordinary declared trigger
+	 * volumes retain their bound containment fallback. */
+	return physical_touch || (!button_controller && bound_contact);
+}
+
+qboolean SG_OracleDoorShallowWadeSafe(int waterlevel, int watertype)
+{
+	return waterlevel >= 0 && waterlevel < 2 &&
+	       !(watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
+}
+
+qboolean SG_OracleDoorEgressWaterSafe(int controller_kind, int waterlevel,
+	int watertype)
+{
+	return controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
+	    ? SG_OracleDoorShallowWadeSafe(waterlevel, watertype)
+	    : waterlevel == 0;
+}
+
+static qboolean SG_OracleDoorApproachStaticSupport(const sg_phantom_t *ph)
+{
+	return ph && ph->groundentity &&
+	       (ph->groundentity_entity == g_edicts ||
+	        SG_ImmutableSupport(ph->groundentity_entity));
+}
+
+static void SG_OracleDoorApproachObservation(const sg_phantom_t *ph,
+	edict_t *trigger, const sg_rune_mechanism_binding_t *binding,
+	qboolean fall_sampled, float fall_delta,
+	sg_door_approach_observation_t *observation)
+{
+	memset(observation, 0, sizeof(*observation));
+	if (!ph)
+		return;
+	observation->pms = ph->pms;
+	observation->grounded = ph->groundentity ? 1 : 0;
+	observation->static_support =
+	    SG_OracleDoorApproachStaticSupport(ph) ? 1 : 0;
+	observation->waterlevel = ph->waterlevel;
+	observation->hazardous_liquid =
+	    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
+	observation->population_stable = !sg_oracle_contaminated;
+	observation->sweep_clear = binding
+	    ? SG_BoundDoorOutsideSweep(binding, ph->origin)
+	    : SG_DeclaredDoorOutsideSweep(trigger, ph->origin);
+	observation->physical_touch = sg_oracle_declared_touched;
+	observation->fall_sampled = fall_sampled;
+	observation->fall_delta = fall_delta;
+}
+
 /* Phase one of RL_DOOR: walk from a connected dry graph seed to one exact
  * sweep-clear wait point inside the validated activator. The expected trigger
  * is the only admitted side effect; the door set itself remains in the
  * synthetic full-sweep audit, so this path is safe for every current pose.
  * Arrival is a realizable rest state within the same two-unit canonicalization
  * envelope used live. */
-qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
-	const vec3_t wait_point, edict_t *trigger, int *arrival_ms,
-	int *touch_ms)
+static qboolean SG_OracleDoorApproach(const vec3_t source,
+	const vec3_t wait_point, edict_t *trigger,
+	const sg_rune_mechanism_binding_t *binding, int *arrival_ms,
+	int *touch_ms, sg_button_support_mode_t *support_mode)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
 	edict_t *old_door = sg_oracle_declared_door;
+	const sg_rune_mechanism_binding_t *old_bound = sg_oracle_bound_door;
 	qboolean old_world = sg_oracle_world_only;
 	qboolean old_contaminated = sg_oracle_contaminated;
 	qboolean old_touched = sg_oracle_declared_touched;
@@ -4363,25 +5457,75 @@ qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
 	usercmd_t cmd;
 	qboolean ok = false;
 	qboolean triggered = false;
+	qboolean button_controller;
+	qboolean direct_controller;
+	sg_button_support_mode_t first_support = SG_BUTTON_SUPPORT_NONE;
+	sg_door_approach_state_t direct_state;
+	sg_door_approach_observation_t direct_observation;
+	sg_door_approach_result_t direct_result;
 	int elapsed, resume_ms = 0, first_touch_ms = 0;
 
+	button_controller = binding
+	    ? binding->plan && binding->plan->controller_kind ==
+	          SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    : SG_OracleDeclaredButtonDoorSafe(trigger);
+	direct_controller = binding
+	    ? binding->plan && binding->plan->controller_kind ==
+	          SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
+	    : !button_controller && SG_DeclaredDoorDirectActivatorSafe(trigger);
+	if (support_mode)
+		*support_mode = SG_BUTTON_SUPPORT_NONE;
 	if (!trigger || !arrival_ms || !touch_ms ||
-	    !SG_DeclaredDoorSameSet(
-	        SG_DeclaredDoorForLink(wait_point, source), trigger))
+	    (button_controller && !support_mode) ||
+	    (binding ? (!SG_OracleBoundDoorBindingCurrent(binding) ||
+	                binding->entry_entity != trigger ||
+	                !SG_BoundDoorOutsideSweep(binding, source) ||
+	                !SG_BoundDoorOutsideSweep(binding, wait_point) ||
+	                !SG_BoundDoorEntryContactMatches(binding, wait_point)) :
+	               (button_controller
+	                    ? (!SG_DeclaredButtonDoorApproachSourceClear(trigger,
+	                          source) ||
+	                       !SG_DeclaredButtonDoorContactMatches(trigger,
+	                          wait_point))
+	                    : !SG_DeclaredDoorSameSet(
+	                          SG_DeclaredDoorForLink(wait_point, source),
+	                          trigger))))
 		return false;
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
 	sg_oracle_declared_expected = trigger;
 	sg_oracle_declared_door = NULL; /* keep the complete mover sweep physical */
-	sg_oracle_declared_action = RL_DOOR;
+	sg_oracle_bound_door = binding;
+	sg_oracle_declared_action = button_controller
+	    ? RL_BUTTON_DOOR : RL_DOOR;
 	sg_oracle_declared_touched = false;
 	SG_OraclePlace(&ph, (vec_t *)source);
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 0;
 	if (!SG_OracleRunWorld(&ph, &cmd, 1) || sg_oracle_declared_touched ||
+	    (binding && SG_BoundDoorEntryContactMatches(binding, ph.origin)) ||
 	    !ph.groundentity || ph.waterlevel != 0)
 		goto done;
+	memset(&direct_state, 0, sizeof(direct_state));
+	memset(&direct_result, 0, sizeof(direct_result));
+	if (direct_controller)
+	{
+		short source_q8[3], anchor_q8[3];
+		int axis;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			source_q8[axis] = (short)(source[axis] * 8.0f);
+			anchor_q8[axis] = (short)(wait_point[axis] * 8.0f);
+		}
+		SG_OracleDoorApproachObservation(&ph, trigger, binding, false, 0.0f,
+		    &direct_observation);
+		direct_result = SG_DoorApproachBegin(&direct_state, source_q8,
+		    anchor_q8, &direct_observation);
+		if (direct_result.reason != SG_DOOR_APPROACH_REASON_NONE)
+			goto done;
+	}
 	for (elapsed = 0; elapsed < 5000; elapsed += 25)
 	{
 		vec3_t delta;
@@ -4393,7 +5537,19 @@ qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
 		 * substep observes it and submits zero input for the rest of that
 		 * production 100 ms frame; normal anchor capture resumes on the next
 		 * outer frame.  Reproduce that one synchronous pause here. */
-		if (!triggered || elapsed >= resume_ms)
+		if (direct_controller)
+		{
+			SG_OracleDoorApproachObservation(&ph, trigger, binding, false,
+			    0.0f, &direct_observation);
+			direct_result = SG_DoorApproachPreStep(&direct_state,
+			    &direct_observation, cmd.msec);
+			if (direct_result.reason != SG_DOOR_APPROACH_REASON_NONE)
+				goto done;
+			if (direct_result.drive &&
+			    !SG_DeclaredCommand(ph.origin, wait_point, &ph.pms, &cmd))
+				goto done;
+		}
+		else if (!triggered || elapsed >= resume_ms)
 			if (!SG_DeclaredCommand(ph.origin, wait_point, &ph.pms, &cmd))
 				goto done;
 		VectorSubtract(wait_point, ph.origin, delta);
@@ -4413,15 +5569,84 @@ qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
 		 * trigger.  Before the first admitted touch, keep the small command
 		 * alive all the way to the exact anchor; after touch, retain the normal
 		 * two-unit clear-sweep capture envelope. */
-		if ((!triggered || elapsed >= resume_ms) &&
+		if ((!direct_controller || direct_result.drive) &&
+		    (!triggered || elapsed >= resume_ms) &&
 		    ((!triggered && horiz > 0.01f) ||
 		     (triggered && horiz > 2.0f)) && cmd.forwardmove == 0)
 			cmd.forwardmove = 40;
 		if (!SG_OracleRunWorld(&ph, &cmd, 1) ||
-		    !ph.groundentity || ph.waterlevel != 0)
+		    (!direct_controller && !ph.groundentity) || ph.waterlevel != 0)
 			goto done;
-		if (!triggered && sg_oracle_declared_touched)
+		if (direct_controller)
 		{
+			qboolean fall_sampled = ((elapsed + 25) % 100) == 0;
+			float fall_delta = 0.0f;
+
+			if (fall_sampled)
+			{
+				fall_delta = P_FallDelta(direct_state.old_frame_z, ph.velocity[2],
+				    ph.groundentity, ph.waterlevel);
+			}
+			SG_OracleDoorApproachObservation(&ph, trigger, binding,
+			    fall_sampled, fall_delta, &direct_observation);
+			direct_result = SG_DoorApproachPostStep(&direct_state,
+			    &direct_observation, cmd.msec);
+			if (direct_result.reason != SG_DOOR_APPROACH_REASON_NONE)
+				goto done;
+			triggered = direct_state.touched ? true : false;
+			first_touch_ms = direct_state.first_touch_ms;
+			resume_ms = direct_state.resume_ms;
+			if (direct_result.snap_required)
+			{
+				vec3_t mins = { -16.0f, -16.0f, -24.0f };
+				vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+				trace_t snap;
+				int axis;
+
+				if (!SG_OracleStablePopulationTrace(ph.origin, mins, maxs,
+				        wait_point, NULL, sg_oracle_loader_replay, &snap) ||
+				    snap.startsolid || snap.allsolid || snap.fraction < 1.0f)
+					goto done;
+				direct_result = SG_DoorApproachSnapped(&direct_state,
+				    &direct_observation);
+				if (direct_result.reason != SG_DOOR_APPROACH_REASON_NONE)
+					goto done;
+				ph.pms = direct_state.expected_pms;
+				ph.old_pms = ph.pms;
+				for (axis = 0; axis < 3; axis++)
+				{
+					ph.origin[axis] = ph.pms.origin[axis] * 0.125f;
+					ph.velocity[axis] = 0.0f;
+				}
+			}
+			if (direct_state.phase == SG_DOOR_APPROACH_COMPLETE)
+			{
+				*arrival_ms = direct_state.elapsed_ms;
+				*touch_ms = direct_state.first_touch_ms;
+				ok = true;
+				goto done;
+			}
+			continue;
+		}
+		if (!triggered && SG_OracleDoorApproachContactObserved(
+		        button_controller, sg_oracle_declared_touched,
+		        binding && SG_BoundDoorEntryContactMatches(binding, ph.origin)))
+		{
+			if (button_controller)
+			{
+				/* The support identity at the first physical Pmove contact is
+				 * the carry law.  Bounds alone cannot distinguish a coplanar
+				 * world floor from a button pusher. */
+				if (!sg_oracle_declared_touched)
+					goto done;
+				if (ph.groundentity_entity == trigger)
+					first_support = SG_BUTTON_SUPPORT_RIDER;
+				else if (ph.groundentity_entity == g_edicts ||
+				         SG_ImmutableSupport(ph.groundentity_entity))
+					first_support = SG_BUTTON_SUPPORT_STATIC;
+				else
+					goto done;
+			}
 			first_touch_ms = elapsed + 25;
 
 			triggered = true;
@@ -4441,22 +5666,42 @@ qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
 		{
 			vec3_t mins = { -16.0f, -16.0f, -24.0f };
 			vec3_t maxs = { 16.0f, 16.0f, 32.0f };
-			trace_t snap = sg_host.trace(ph.origin, mins, maxs,
-			                             (vec_t *)wait_point, NULL,
-			                             MASK_PLAYERSOLID);
+			trace_t snap;
 
-			if (snap.startsolid || snap.allsolid || snap.fraction < 1.0f)
+			if (!SG_OracleStablePopulationTrace(ph.origin, mins, maxs,
+			        wait_point, NULL, sg_oracle_loader_replay, &snap) ||
+			    snap.startsolid || snap.allsolid || snap.fraction < 1.0f)
 				goto done;
 		}
 		SG_OraclePlace(&exact, (vec_t *)wait_point);
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 0;
 		if (!SG_OracleRunWorld(&exact, &cmd, 1) || !exact.groundentity ||
-		    exact.waterlevel != 0 || !SG_DeclaredDoorOutsideSweep(trigger,
-		        exact.origin))
+		    exact.waterlevel != 0 ||
+		    !(binding ? SG_BoundDoorOutsideSweep(binding, exact.origin) :
+		                 SG_DeclaredDoorOutsideSweep(trigger, exact.origin)))
 			goto done;
+		if (button_controller)
+		{
+			sg_button_support_mode_t exact_support;
+
+			if (exact.groundentity_entity == trigger)
+				exact_support = SG_BUTTON_SUPPORT_RIDER;
+			else if (exact.groundentity_entity == g_edicts ||
+			         SG_ImmutableSupport(exact.groundentity_entity))
+				exact_support = SG_BUTTON_SUPPORT_STATIC;
+			else
+				goto done;
+			/* The serialized anchor authenticates the same carry law observed at
+			 * first physical touch; an edge/coplanar support change is not the
+			 * proved transaction. */
+			if (exact_support != first_support)
+				goto done;
+		}
 		*arrival_ms = elapsed + 25;
 		*touch_ms = first_touch_ms;
+		if (support_mode)
+			*support_mode = first_support;
 		ok = true;
 		goto done;
 	}
@@ -4467,9 +5712,48 @@ done:
 	sg_oracle_contaminated = old_contaminated;
 	sg_oracle_declared_expected = old_expected;
 	sg_oracle_declared_door = old_door;
+	sg_oracle_bound_door = old_bound;
 	sg_oracle_declared_action = old_action;
 	sg_oracle_declared_touched = old_touched;
 	return ok;
+}
+
+qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
+	const vec3_t wait_point, edict_t *trigger, int *arrival_ms,
+	int *touch_ms)
+{
+	return SG_OracleDoorApproach(source, wait_point, trigger, NULL,
+	    arrival_ms, touch_ms, NULL);
+}
+
+qboolean SG_OracleDeclaredButtonDoorApproach(const vec3_t source,
+	const vec3_t wait_point, edict_t *button, int *arrival_ms,
+	int *touch_ms, sg_button_support_mode_t *support_mode)
+{
+	return SG_OracleDoorApproach(source, wait_point, button, NULL,
+	    arrival_ms, touch_ms, support_mode);
+}
+
+qboolean SG_OracleBoundDoorApproach(const vec3_t source,
+	const vec3_t wait_point,
+	const sg_rune_mechanism_binding_t *binding, int *arrival_ms,
+	int *touch_ms)
+{
+	return binding ? SG_OracleDoorApproach(source, wait_point,
+	    binding->entry_entity, binding, arrival_ms, touch_ms, NULL) : false;
+}
+
+qboolean SG_OracleBoundButtonDoorApproach(const vec3_t source,
+	const vec3_t wait_point,
+	const sg_rune_mechanism_binding_t *binding, int *arrival_ms,
+	int *touch_ms, sg_button_support_mode_t *support_mode)
+{
+	return binding && binding->plan &&
+	    binding->plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    ? SG_OracleDoorApproach(source, wait_point, binding->entry_entity,
+	          binding, arrival_ms, touch_ms, support_mode)
+	    : false;
 }
 
 /* One complete RL_DOOR egress. The caller has synchronously linked every
@@ -4478,13 +5762,15 @@ done:
  * and solids are deterministic members of this declaration. The body begins
  * at the outside-sweep trigger seed where live execution waited motionless,
  * and success is a dry supported endpoint outside the full sweep. */
-qboolean SG_OracleDeclaredDoorEgress(const vec3_t source,
-	const vec3_t target, edict_t *trigger, edict_t *passent,
-	int *arrival_ms)
+static qboolean SG_OracleDoorEgress(const vec3_t source,
+	const vec3_t target, edict_t *trigger,
+	const sg_rune_mechanism_binding_t *binding, edict_t *passent,
+	int *arrival_ms, sg_button_support_mode_t support_mode)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
 	edict_t *old_door = sg_oracle_declared_door;
+	const sg_rune_mechanism_binding_t *old_bound = sg_oracle_bound_door;
 	qboolean old_world = sg_oracle_world_only;
 	qboolean old_contaminated = sg_oracle_contaminated;
 	qboolean old_touched = sg_oracle_declared_touched;
@@ -4492,27 +5778,62 @@ qboolean SG_OracleDeclaredDoorEgress(const vec3_t source,
 	sg_phantom_t ph;
 	usercmd_t cmd;
 	qboolean ok = false;
+	qboolean button_controller;
+	int controller_kind;
 	float old_frame_z;
 	int elapsed;
 
+	button_controller = binding
+	    ? binding->plan && binding->plan->controller_kind ==
+	          SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    : (SG_OracleDeclaredButtonDoorSafe(trigger) ||
+	       SG_OracleDeclaredButtonTopSafe(trigger));
+	controller_kind = binding && binding->plan
+	    ? binding->plan->controller_kind
+	    : (button_controller ? SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	                         : (SG_DeclaredDoorDirectActivatorSafe(trigger)
+	                               ? SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
+	                               : SG_MECHANISM_CONTROLLER_AUTO_DOOR));
 	if (!trigger || !arrival_ms ||
-	    !SG_DeclaredDoorOutsideSweep(trigger, source) ||
-	    !SG_DeclaredDoorOutsideSweep(trigger, target) ||
-	    !SG_DeclaredDoorCrossesSweep(trigger, source, target))
+	    (button_controller != (support_mode != SG_BUTTON_SUPPORT_NONE)) ||
+	    (button_controller && support_mode != SG_BUTTON_SUPPORT_STATIC &&
+	     support_mode != SG_BUTTON_SUPPORT_RIDER) ||
+	    (binding && (!SG_OracleBoundDoorBindingCurrent(binding) ||
+	                 binding->entry_entity != trigger)) ||
+	    !(binding ? SG_BoundDoorOutsideSweep(binding, source) :
+	                 SG_DeclaredDoorOutsideSweep(trigger, source)) ||
+	    !(binding ? SG_BoundDoorOutsideSweep(binding, target) :
+	                 SG_DeclaredDoorOutsideSweep(trigger, target)) ||
+	    !(binding ? SG_BoundDoorCrossesSweep(binding, source, target) :
+	                 SG_DeclaredDoorCrossesSweep(trigger, source, target)))
 		return false;
 	sg_oracle_passent = passent;
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
 	sg_oracle_declared_expected = NULL;
 	sg_oracle_declared_door = trigger;
-	sg_oracle_declared_action = RL_DOOR;
+	sg_oracle_bound_door = binding;
+	sg_oracle_declared_action = button_controller
+	    ? RL_BUTTON_DOOR : RL_DOOR;
 	sg_oracle_declared_touched = false;
 	SG_OraclePlace(&ph, (vec_t *)source);
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 0;
 	SG_OracleRun(&ph, &cmd, 1);
-	if (sg_oracle_contaminated || !ph.groundentity || ph.waterlevel != 0)
+	if (sg_oracle_contaminated || !ph.groundentity ||
+	    !SG_OracleDoorEgressWaterSafe(controller_kind, ph.waterlevel,
+	        ph.watertype))
 		goto done;
+	if (button_controller)
+	{
+		qboolean support_matches = support_mode == SG_BUTTON_SUPPORT_RIDER
+		    ? ph.groundentity_entity == trigger
+		    : (ph.groundentity_entity == g_edicts ||
+		       SG_ImmutableSupport(ph.groundentity_entity));
+
+		if (!support_matches)
+			goto done;
+	}
 	old_frame_z = ph.velocity[2];
 	for (elapsed = 0; elapsed < 5000; elapsed += 25)
 	{
@@ -4521,7 +5842,9 @@ qboolean SG_OracleDeclaredDoorEgress(const vec3_t source,
 		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
 			goto done;
 		SG_OracleRun(&ph, &cmd, 1);
-		if (sg_oracle_contaminated || ph.waterlevel != 0)
+		if (sg_oracle_contaminated ||
+		    !SG_OracleDoorEgressWaterSafe(controller_kind, ph.waterlevel,
+		        ph.watertype))
 			goto done;
 		if (((elapsed + 25) % 100) == 0)
 		{
@@ -4533,7 +5856,8 @@ qboolean SG_OracleDeclaredDoorEgress(const vec3_t source,
 			                ph.waterlevel) > 30.0f)
 				goto done;
 			old_frame_z = ph.velocity[2];
-			if (SG_DeclaredDoorOutsideSweep(trigger, ph.origin) &&
+			if ((binding ? SG_BoundDoorOutsideSweep(binding, ph.origin) :
+			               SG_DeclaredDoorOutsideSweep(trigger, ph.origin)) &&
 			    SG_SupportedArrived(ph.origin, target, ph.groundentity,
 			                        ph.watertype, ph.waterlevel, passent))
 			{
@@ -4550,9 +5874,59 @@ done:
 	sg_oracle_contaminated = old_contaminated;
 	sg_oracle_declared_expected = old_expected;
 	sg_oracle_declared_door = old_door;
+	sg_oracle_bound_door = old_bound;
 	sg_oracle_declared_action = old_action;
 	sg_oracle_declared_touched = old_touched;
 	return ok;
+}
+
+qboolean SG_OracleDeclaredDoorEgress(const vec3_t source,
+	const vec3_t target, edict_t *trigger, edict_t *passent,
+	int *arrival_ms)
+{
+	return SG_OracleDoorEgress(source, target, trigger, NULL, passent,
+	    arrival_ms, SG_BUTTON_SUPPORT_NONE);
+}
+
+qboolean SG_OracleDeclaredButtonDoorTopEgress(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *passent,
+	int *arrival_ms, sg_button_support_mode_t support_mode)
+{
+	edict_t *old_top = sg_oracle_declared_button_top;
+	qboolean ok = false;
+
+	if (button && (support_mode == SG_BUTTON_SUPPORT_STATIC ||
+	               support_mode == SG_BUTTON_SUPPORT_RIDER))
+	{
+		sg_oracle_declared_button_top = button;
+		if (SG_OracleDeclaredButtonTopSafe(button))
+			ok = SG_OracleDoorEgress(source, target, button, NULL, passent,
+			    arrival_ms, support_mode);
+	}
+	sg_oracle_declared_button_top = old_top;
+	return ok;
+}
+
+qboolean SG_OracleBoundDoorEgress(const vec3_t source,
+	const vec3_t target, const sg_rune_mechanism_binding_t *binding,
+	edict_t *passent, int *arrival_ms)
+{
+	return binding ? SG_OracleDoorEgress(source, target,
+	    binding->entry_entity, binding, passent, arrival_ms,
+	    SG_BUTTON_SUPPORT_NONE) : false;
+}
+
+qboolean SG_OracleBoundButtonDoorEgress(const vec3_t source,
+	const vec3_t target, const sg_rune_mechanism_binding_t *binding,
+	edict_t *passent, int *arrival_ms,
+	sg_button_support_mode_t support_mode)
+{
+	return binding && binding->plan &&
+	    binding->plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    ? SG_OracleDoorEgress(source, target, binding->entry_entity, binding,
+	          passent, arrival_ms, support_mode)
+	    : false;
 }
 
 typedef struct
@@ -4568,7 +5942,8 @@ typedef struct
  * changes no areaportal, and the server cannot interleave an entity frame.
  * Snapshot every member before relinking the first one so every successful
  * begin has one complete restoration scope. */
-static int SG_OracleDeclaredDoorTopBegin(edict_t *trigger,
+static int SG_OracleDoorTopBegin(edict_t *trigger,
+	const sg_rune_mechanism_binding_t *binding,
 	sg_declared_door_pose_t *saved, int capacity)
 {
 	edict_t *members[SG_PHANTOM_ARMED_DOORS];
@@ -4576,8 +5951,9 @@ static int SG_OracleDeclaredDoorTopBegin(edict_t *trigger,
 
 	if (!saved || capacity <= 0)
 		return -1;
-	count = SG_DeclaredDoorMembers(trigger, members,
-	    SG_PHANTOM_ARMED_DOORS);
+	count = binding
+	    ? SG_BoundDoorMembers(binding, members, SG_PHANTOM_ARMED_DOORS)
+	    : SG_DeclaredDoorMembers(trigger, members, SG_PHANTOM_ARMED_DOORS);
 	if (count <= 0 || count > capacity)
 		return -1;
 	for (i = 0; i < count; i++)
@@ -4636,47 +6012,200 @@ static void SG_OracleDeclaredDoorTopEnd(sg_declared_door_pose_t *saved,
 	}
 }
 
+static qboolean SG_OracleButtonTopBegin(edict_t *button,
+	const sg_rune_mechanism_binding_t *binding,
+	sg_declared_door_pose_t *saved, vec3_t displacement)
+{
+	const rune_mechanism_node_t *node = binding ? binding->entry_node : NULL;
+	sg_mech_button_endpoints_t endpoints;
+	int button_key = SG_OracleLiveEdictIndex(button);
+	int axis;
+
+	if (displacement)
+		VectorClear(displacement);
+	if (!button || !saved || !displacement || button_key <= 0 ||
+	    !SG_MechCatalogButtonBottomEndpoints((uint32_t)button_key, node,
+	        button, &endpoints))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		int delta = (int)endpoints.end_q8[axis] -
+		    (int)endpoints.start_q8[axis];
+
+		if (delta < INT16_MIN || delta > INT16_MAX)
+			return false;
+		displacement[axis] = (float)delta * 0.125f;
+	}
+	if (VectorCompare(displacement, vec3_origin))
+		return false;
+	memset(saved, 0, sizeof(*saved));
+	saved->ent = button;
+	VectorCopy(button->s.origin, saved->origin);
+	VectorCopy(button->s.old_origin, saved->old_origin);
+	VectorCopy(button->s.angles, saved->angles);
+	VectorCopy(button->velocity, saved->velocity);
+	VectorCopy(button->avelocity, saved->avelocity);
+	saved->state = button->moveinfo.state;
+	saved->solid = button->solid;
+	saved->linkcount = button->linkcount;
+	for (axis = 0; axis < 3; axis++)
+	{
+		button->s.origin[axis] = (float)endpoints.end_q8[axis] * 0.125f;
+		button->s.old_origin[axis] = button->s.origin[axis];
+	}
+	VectorClear(button->velocity);
+	VectorClear(button->avelocity);
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->solid = SOLID_BSP;
+	sg_host.linkentity(button);
+	return true;
+}
+
 /* Loader-side replay of the complete serialized RL_DOOR witness.  Resolving
  * the mechanism and checking the sweep is not enough: a destination may be
  * outside the sweep yet unreachable at TOP, or its egress may outlast a team
  * member's open hold.  Re-run both controller phases against the same temporary
  * TOP collision pose used by generation, apply the shared exact timing formula,
  * then restore the live world before returning on every path. */
+static qboolean SG_OracleValidateDoorLink(const vec3_t source,
+	const vec3_t anchor, const vec3_t target, edict_t *trigger,
+	const sg_rune_mechanism_binding_t *binding, int stored_cost_ms)
+{
+	sg_declared_door_pose_t saved[SG_PHANTOM_ARMED_DOORS];
+	sg_declared_door_pose_t button_saved;
+	edict_t *resolved;
+	vec3_t effective_anchor, displacement;
+	int pose_count = 0, approach_ms, touch_ms, egress_ms, contract_cost;
+	int expected_mode = RLCM_NONE;
+	qboolean button_controller;
+	qboolean button_posed = false;
+	qboolean old_loader_replay;
+	qboolean valid = false;
+
+	if (!source || !anchor || !target || !trigger || stored_cost_ms <= 0 ||
+	    (binding && (!SG_OracleBoundDoorBindingCurrent(binding) ||
+	                 binding->entry_entity != trigger)))
+		return false;
+	button_controller = binding && binding->plan &&
+	    binding->plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	if (!binding && SG_OracleDeclaredButtonDoorSafe(trigger))
+		return false; /* the active button witness requires its authenticated tail */
+	VectorCopy(anchor, effective_anchor);
+	VectorClear(displacement);
+	if (button_controller)
+	{
+		sg_mech_button_endpoints_t endpoints;
+		int axis;
+
+			if ((binding->link->mode != RLCM_PREOPEN &&
+		     binding->link->mode != RLCM_RIDE) ||
+		    binding->link->sweep_clear_ms == 0U ||
+		    binding->link->sweep_clear_ms % 100U != 0U ||
+		    !SG_MechCatalogButtonBottomEndpoints(binding->entry_node->key,
+		        binding->entry_node, trigger, &endpoints))
+			return false;
+		for (axis = 0; axis < 3; axis++)
+		{
+			int delta = (int)endpoints.end_q8[axis] -
+			    (int)endpoints.start_q8[axis];
+
+			if (delta < INT16_MIN || delta > INT16_MAX ||
+			    (float)delta * 0.125f !=
+			        binding->link->mechanism_anchor[axis])
+				return false;
+			displacement[axis] = (float)delta * 0.125f;
+			if (binding->link->mode == RLCM_RIDE)
+				effective_anchor[axis] += displacement[axis];
+		}
+		if (VectorCompare(displacement, vec3_origin) ||
+		    (binding->link->mode == RLCM_RIDE &&
+		     (SG_BoundDoorCrossesSweep(binding, anchor, effective_anchor) ||
+		      !SG_OracleButtonCarryClear(trigger, anchor,
+		          effective_anchor, true))))
+			return false;
+		expected_mode = binding->link->mode;
+	}
+	resolved = binding ? trigger : SG_DeclaredDoorForLink(anchor, source);
+	if ((binding ? resolved != trigger :
+	     !SG_DeclaredDoorSameSet(resolved, trigger)) ||
+	    !(binding ? SG_BoundDoorOutsideSweep(binding, target) :
+	                 SG_DeclaredDoorOutsideSweep(trigger, target)) ||
+	    !(binding ? SG_BoundDoorCrossesSweep(binding, effective_anchor, target) :
+	                 SG_DeclaredDoorCrossesSweep(trigger, anchor, target)))
+		return false;
+	old_loader_replay = sg_oracle_loader_replay;
+	sg_oracle_loader_replay = true;
+	if (button_controller)
+	{
+		sg_button_support_mode_t observed = SG_BUTTON_SUPPORT_NONE;
+		sg_button_support_mode_t expected = expected_mode == RLCM_RIDE
+		    ? SG_BUTTON_SUPPORT_RIDER : SG_BUTTON_SUPPORT_STATIC;
+
+		if (!SG_OracleBoundButtonDoorApproach(source, anchor, binding,
+		        &approach_ms, &touch_ms, &observed) || observed != expected)
+			goto restore;
+	}
+	else if (!(binding ? SG_OracleBoundDoorApproach(source, anchor, binding,
+	              &approach_ms, &touch_ms) :
+	            SG_OracleDeclaredDoorApproach(source, anchor, trigger,
+	              &approach_ms, &touch_ms)))
+		goto restore;
+	pose_count = SG_OracleDoorTopBegin(trigger, binding, saved,
+	    SG_PHANTOM_ARMED_DOORS);
+	if (pose_count <= 0)
+		goto restore;
+	if (button_controller)
+	{
+		vec3_t posed_displacement;
+		sg_button_support_mode_t expected = expected_mode == RLCM_RIDE
+		    ? SG_BUTTON_SUPPORT_RIDER : SG_BUTTON_SUPPORT_STATIC;
+
+		if (!SG_OracleButtonTopBegin(trigger, binding, &button_saved,
+		        posed_displacement))
+			goto restore;
+		button_posed = true;
+		if (!VectorCompare(posed_displacement, displacement))
+			goto restore;
+		if (!SG_OracleBoundButtonDoorEgress(effective_anchor, target, binding,
+		        NULL, &egress_ms, expected))
+			goto restore;
+		if (((egress_ms + 99) / 100) * 100 !=
+		    binding->link->sweep_clear_ms)
+			goto restore;
+	}
+	else if (!(binding ? SG_OracleBoundDoorEgress(anchor, target, binding,
+	              NULL, &egress_ms) :
+	            SG_OracleDeclaredDoorEgress(anchor, target, trigger, NULL,
+	              &egress_ms)))
+		goto restore;
+	contract_cost = SG_DoorContractCost(trigger, binding, approach_ms,
+	    touch_ms, egress_ms);
+	valid = contract_cost > 0 && stored_cost_ms >= contract_cost;
+
+restore:
+	if (button_posed)
+		SG_OracleDeclaredDoorTopEnd(&button_saved, 1);
+	if (pose_count > 0)
+		SG_OracleDeclaredDoorTopEnd(saved, pose_count);
+	sg_oracle_loader_replay = old_loader_replay;
+	return valid && (!binding || SG_RuneMechanismBindingCurrent(binding));
+}
+
 qboolean SG_OracleValidateDeclaredDoorLink(const vec3_t source,
 	const vec3_t anchor, const vec3_t target, edict_t *trigger,
 	int stored_cost_ms)
 {
-	sg_declared_door_pose_t saved[SG_PHANTOM_ARMED_DOORS];
-	edict_t *resolved;
-	int pose_count, approach_ms, touch_ms, egress_ms, contract_cost;
-	qboolean old_loader_replay;
-	qboolean valid = false;
+	return SG_OracleValidateDoorLink(source, anchor, target, trigger, NULL,
+	    stored_cost_ms);
+}
 
-	if (!source || !anchor || !target || !trigger || stored_cost_ms <= 0)
-		return false;
-	resolved = SG_DeclaredDoorForLink(anchor, source);
-	if (!SG_DeclaredDoorSameSet(resolved, trigger) ||
-	    !SG_DeclaredDoorOutsideSweep(trigger, target) ||
-	    !SG_DeclaredDoorCrossesSweep(trigger, anchor, target))
-		return false;
-	pose_count = SG_OracleDeclaredDoorTopBegin(trigger, saved,
-	    SG_PHANTOM_ARMED_DOORS);
-	if (pose_count <= 0)
-		return false;
-	old_loader_replay = sg_oracle_loader_replay;
-	sg_oracle_loader_replay = true;
-	if (!SG_OracleDeclaredDoorApproach(source, anchor, trigger, &approach_ms,
-	        &touch_ms) ||
-	    !SG_OracleDeclaredDoorEgress(anchor, target, trigger, NULL, &egress_ms))
-		goto restore;
-	contract_cost = SG_DeclaredDoorContractCost(trigger, approach_ms, touch_ms,
-	    egress_ms);
-	valid = contract_cost > 0 && stored_cost_ms >= contract_cost;
-
-restore:
-	sg_oracle_loader_replay = old_loader_replay;
-	SG_OracleDeclaredDoorTopEnd(saved, pose_count);
-	return valid;
+qboolean SG_OracleValidateBoundDoorLink(const vec3_t source,
+	const vec3_t anchor, const vec3_t target,
+	const sg_rune_mechanism_binding_t *binding, int stored_cost_ms)
+{
+	return binding ? SG_OracleValidateDoorLink(source, anchor, target,
+	    binding->entry_entity, binding, stored_cost_ms) : false;
 }
 
 /*
@@ -5169,11 +6698,9 @@ void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin)
 	 * overwrites velocity wholesale. One uninitialized field, four failed
 	 * prover designs built on top of it.
 	 */
-	/* Existing v2 loader/runtime replays retain their fixed 800 law exactly.
-	 * Only Rune_Generate owns the short-lived v3 proof scope, populated from
-	 * the exact integral law captured before generation and reset on every
-	 * exit.  This keeps a v2-compatible active value such as 800.5 on the old
-	 * short/800 behavior while allowing an honest v3 proof at gravity 650. */
+	/* Retired replay compatibility retains its fixed 800 law exactly. Active
+	 * generation owns the short-lived proof scope, populated from the exact
+	 * integral law captured before generation and reset on every exit. */
 	ph->pms.gravity = SG_RuneProofGravity();
 	ph->old_pms = ph->pms;
 }

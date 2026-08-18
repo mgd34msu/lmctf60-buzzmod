@@ -3,8 +3,7 @@
  * assembly.  The strafe and air-strafe controllers, run-room and
  * pursuit geometry, the plan beam, Think_Move (aim, feelers, ribbon,
  * lookahead, doors, drops, the hook brake) and Think_Emit (sub-steps,
- * slew, weave, telemetry, ClientThink).  Moved verbatim from
- * sg_arach.c in the 2026-08-12 standards pass.
+ * slew, weave, telemetry, ClientThink).
  */
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -13,14 +12,20 @@
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_persona.h"
+#include "slipgate/sg_defense_shift.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_button_live.h"
 #include "slipgate/sg_declared_door_guard.h"
+#include "slipgate/sg_rune_binding.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_swim_live.h"
+#include "slipgate/sg_hook_discipline.h"
+#include "slipgate/sg_human_speed.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
 #include "slipgate/sg_weights.h"
@@ -29,24 +34,783 @@
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
-#ifdef SG_ACCEPT_DROP
-#include "slipgate/sg_accept_drop.h"
-#endif
+#include "slipgate/sg_strike.h"
+
+#include <stdint.h>
 
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
+
+/* This controller deliberately lives at the command boundary, after combat
+ * has supplied the current target and view. It is not navigation: no seed,
+ * link, goal, or commitment is ever read as an authority or rewritten. */
+static qboolean DefenseCombatEnemyCurrent(edict_t *e, edict_t *enemy, int team)
+{
+	if (!e || !e->client || !enemy || enemy == e || !enemy->inuse ||
+	    !enemy->client || enemy->deadflag || enemy->health <= 0 ||
+	    (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) ||
+	    e->client->ctf.teamnum != team ||
+	    enemy->client->ctf.teamnum == team ||
+	    (enemy->client->ctf.teamnum != CTF_TEAM_RED &&
+	     enemy->client->ctf.teamnum != CTF_TEAM_BLUE))
+		return false;
+	return SG_CombatLiveEnemy(e) == enemy;
+}
+
+static qboolean DefenseCombatCandidateSafe(edict_t *e, edict_t *stand,
+	const sg_defense_combat_move_t *move)
+{
+	vec3_t lookahead, floor_start, floor_end, radial;
+	trace_t body, floor;
+	sg_defense_combat_probe_t probe;
+	float distance;
+	if (!e || !stand || !move || !sg_host.trace)
+		return false;
+	VectorCopy(e->s.origin, lookahead);
+	lookahead[0] += move->x * 48.0f;
+	lookahead[1] += move->y * 48.0f;
+	VectorSubtract(lookahead, stand->s.origin, radial);
+	radial[2] = 0.0f;
+	distance = VectorLength(radial);
+	body = sg_host.trace(e->s.origin, e->mins, e->maxs, lookahead, e,
+	                     MASK_PLAYERSOLID);
+	VectorCopy(lookahead, floor_start);
+	VectorCopy(lookahead, floor_end);
+	floor_start[2] += 24.0f;
+	floor_end[2] -= 48.0f;
+	floor = sg_host.trace(floor_start, e->mins, e->maxs, floor_end, e,
+	                      MASK_PLAYERSOLID);
+	memset(&probe, 0, sizeof(probe));
+	probe.body_clear = !body.startsolid && !body.allsolid &&
+	    body.fraction >= 1.0f;
+	probe.player_clear = !(body.ent && body.ent->client) &&
+	    !(floor.ent && floor.ent->client);
+	probe.floor_clear = !floor.startsolid && !floor.allsolid &&
+	    floor.fraction < 1.0f;
+	probe.stand_distance = distance;
+	probe.vertical_step = floor.endpos[2] - e->s.origin[2];
+	return SG_DefenseCombatProbeAllowed(&probe);
+}
+
+static void DefenseCombatZero(usercmd_t *cmd)
+{
+	if (!cmd)
+		return;
+	cmd->forwardmove = 0;
+	cmd->sidemove = 0;
+	cmd->upmove = 0;
+}
+
+/* This is intentionally the one admission law for both planning and every
+ * sub-step write.  Think_Emit's locals describe this outer frame, but the
+ * entity, flag and combat target may change between ClientThink sub-steps. */
+static qboolean DefenseCombatAuthority(edict_t *e, sg_bot_t *bot, int team,
+	const sg_think_t *tc, qboolean as_ok, edict_t *planned_stand,
+	edict_t *planned_enemy, unsigned long planned_enemy_ctfid,
+	edict_t **stand_out, edict_t **enemy_out)
+{
+	edict_t *flag, *stand, *enemy;
+	rune_t *rune;
+	int bestlink;
+	qboolean proved_control;
+
+	if (stand_out)
+		*stand_out = NULL;
+	if (enemy_out)
+		*enemy_out = NULL;
+	if (!e || !bot || !e->client || !tc || !sg_cv.defcombat ||
+	    !isfinite(sg_cv.defcombat->value) || sg_cv.defcombat->value <= 0.0f ||
+	    !tc->hold_post || tc->role != SG_ROLE_DEFEND || !bot->def_stand ||
+	    ClientHasFlag(e) != NULL || tc->hook_brake || tc->jump_launch ||
+	    tc->door_hold || tc->have_move || as_ok || bot->jump_started ||
+	    bot->drop_started || bot->hook_phase || bot->rj_phase || bot->nade_phase ||
+	    SG_TimerPending(bot->beat_until) || bot->linger_hot ||
+	    bot->term_brake < 1.0f || e->health <= 0 || e->deadflag ||
+	    !e->groundentity ||
+	    (e->groundentity != g_edicts && !SG_ImmutableSupport(e->groundentity)) ||
+	    e->movetype != MOVETYPE_WALK || e->waterlevel ||
+	    (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
+	    e->client->ps.pmove.pm_time)
+		goto denied;
+
+	rune = SG_Rune();
+	bestlink = tc->bestlink;
+	proved_control = bestlink >= 0 && rune && rune->links &&
+	    bestlink < rune->hdr.num_links &&
+	    (rune->links[bestlink].action == RL_DROP ||
+	     rune->links[bestlink].action == RL_JUMP ||
+	     rune->links[bestlink].action == RL_SWIM ||
+	     rune->links[bestlink].action == RL_LIFT ||
+	     rune->links[bestlink].action == RL_TELEPORT ||
+	     rune->links[bestlink].action == RL_DOOR ||
+	     rune->links[bestlink].action == RL_BUTTON_DOOR);
+	if (proved_control)
+		goto denied;
+	flag = SG_OwnFlag(team);
+	stand = SG_FlagStand(team, true);
+	enemy = SG_CombatLiveEnemy(e);
+	if (!flag || !ctf_flagathome(flag) || !stand ||
+	    !DefenseCombatEnemyCurrent(e, enemy, team) ||
+	    (planned_stand && stand != planned_stand) ||
+	    (planned_enemy && (enemy != planned_enemy ||
+	     enemy->client->ctf.ctfid != planned_enemy_ctfid)))
+		goto denied;
+	if (stand_out)
+		*stand_out = stand;
+	if (enemy_out)
+		*enemy_out = enemy;
+	return true;
+
+denied:
+	/* A lease is a current-target preference only.  Never let a rejected B
+	 * probe leave A's sign behind for a later reacquisition. */
+	SG_DefenseCombatLeaseReset(bot);
+	return false;
+}
+
+static qboolean DefenseCombatPlan(edict_t *e, sg_bot_t *bot, int team,
+	const sg_think_t *tc, qboolean as_ok, qboolean engaged,
+	edict_t **stand_out, edict_t **enemy_out, vec3_t move_out)
+{
+	edict_t *flag, *stand, *enemy;
+	sg_defense_combat_request_t request;
+	sg_defense_combat_move_t move, tested;
+	int enemy_slot;
+	int attempt, pass;
+	static const float scales[] = { 1.0f, 0.5f };
+
+	if (stand_out)
+		*stand_out = NULL;
+	if (enemy_out)
+		*enemy_out = NULL;
+	VectorClear(move_out);
+	if (!engaged)
+	{
+		SG_DefenseCombatLeaseReset(bot);
+		return false;
+	}
+	if (!DefenseCombatAuthority(e, bot, team, tc, as_ok, NULL, NULL, 0,
+	    &stand, &enemy))
+		return false;
+	flag = SG_OwnFlag(team);
+	if (!flag || !ctf_flagathome(flag))
+	{
+		SG_DefenseCombatLeaseReset(bot);
+		return false;
+	}
+	enemy_slot = (int)(enemy - g_edicts);
+	if (enemy_slot <= 0)
+	{
+		SG_DefenseCombatLeaseReset(bot);
+		return false;
+	}
+	if (bot->defcombat_enemy_slot || bot->defcombat_enemy_ctfid ||
+	    bot->defcombat_tangent_sign || bot->defcombat_tangent_until)
+		if (bot->defcombat_enemy_slot != enemy_slot ||
+		    bot->defcombat_enemy_ctfid != enemy->client->ctf.ctfid)
+			SG_DefenseCombatLeaseReset(bot);
+	memset(&request, 0, sizeof(request));
+	request.enabled = 1;
+	request.hold_post = 1;
+	request.defend_stand = 1;
+	request.own_flag_home = 1;
+	request.engaged = 1;
+	request.live_enemy = 1;
+	request.identity_valid = 1;
+	request.movement_clear = 1;
+	request.self_x = e->s.origin[0];
+	request.self_y = e->s.origin[1];
+	request.stand_x = stand->s.origin[0];
+	request.stand_y = stand->s.origin[1];
+	request.enemy_x = enemy->s.origin[0];
+	request.enemy_y = enemy->s.origin[1];
+	request.camp_scale = SG_PersonaCampScale(e);
+	request.identity = (int)(e - g_edicts);
+	request.phase = (int)floorf(level.time * 2.0f);
+	if (bot->defcombat_enemy_slot == enemy_slot &&
+	    bot->defcombat_enemy_ctfid == enemy->client->ctf.ctfid &&
+	    bot->defcombat_tangent_until > level.time &&
+	    (bot->defcombat_tangent_sign == -1 ||
+	     bot->defcombat_tangent_sign == 1))
+		request.preferred_tangent_sign = bot->defcombat_tangent_sign;
+	/* Keep the two established 48u probes as the first choice.  Only after
+	 * both reject do we repeat their exact order at half scale: that encodes a
+	 * 24u horizon in the stored world direction and a capped 80 command. */
+	for (pass = 0; pass < 2; pass++)
+	{
+		sg_defense_combat_request_t candidate_request = request;
+
+		for (attempt = 0; attempt < 2; attempt++)
+		{
+			if (attempt)
+			{
+				candidate_request.phase++;
+				if (candidate_request.preferred_tangent_sign)
+					candidate_request.preferred_tangent_sign =
+					    -candidate_request.preferred_tangent_sign;
+			}
+			if (SG_DefenseCombatChoose(&candidate_request, &move))
+			{
+				tested = move;
+				tested.x *= scales[pass];
+				tested.y *= scales[pass];
+				if (!DefenseCombatCandidateSafe(e, stand, &tested))
+					continue;
+				/* Persist only a trace-approved direction, and only long enough to
+				 * bridge the 0.5s phase tick that previously made the orbit saw. */
+				bot->defcombat_enemy_slot = enemy_slot;
+				bot->defcombat_enemy_ctfid = enemy->client->ctf.ctfid;
+				bot->defcombat_tangent_sign = move.tangent_sign;
+				bot->defcombat_tangent_until = level.time + 1.25f;
+				move_out[0] = tested.x;
+				move_out[1] = tested.y;
+				if (enemy_out)
+					*enemy_out = enemy;
+				if (stand_out)
+					*stand_out = stand;
+				return true;
+			}
+		}
+	}
+	SG_DefenseCombatLeaseReset(bot);
+	return false;
+}
+
+void SG_DefenseCombatLeaseReset(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->defcombat_enemy_slot = 0;
+	bot->defcombat_enemy_ctfid = 0;
+	bot->defcombat_tangent_sign = 0;
+	bot->defcombat_tangent_until = 0.0f;
+}
+
+/* Posted defense is its own lateral owner. The ordinary duel weave remains
+ * useful away from a post, but it must never replace a trace-approved post
+ * tangent -- nor create a blind fallback when both tangent probes failed. */
+static qboolean DefenseCombatApplyDuelWeave(qboolean hold_post,
+	qboolean proved_control, qboolean duel_hold, qboolean engaged,
+	short weave_side, usercmd_t *cmd)
+{
+	if (!cmd || hold_post || proved_control || !duel_hold || !engaged)
+		return false;
+	cmd->forwardmove = 0;
+	cmd->sidemove = weave_side;
+	return true;
+}
+
+/* The final ordinary walking writer for a post tangent. It rechecks the
+ * current target and support immediately before the command boundary. */
+static qboolean DefenseCombatWriteFinal(edict_t *e, sg_bot_t *bot, int team,
+	const sg_think_t *tc, qboolean as_ok, qboolean active, edict_t *stand,
+	edict_t *enemy, unsigned long enemy_ctfid, const vec3_t direction,
+	usercmd_t *cmd)
+{
+	vec3_t combat_basis, combat_fwd, combat_right;
+	sg_defense_combat_move_t move;
+	float flat;
+
+	if (!active || !cmd)
+		return false;
+	if (!DefenseCombatAuthority(e, bot, team, tc, as_ok, stand, enemy,
+	    enemy_ctfid, NULL, NULL))
+	{
+		DefenseCombatZero(cmd);
+		return false;
+	}
+	memset(&move, 0, sizeof(move));
+	move.x = direction[0];
+	move.y = direction[1];
+	if (!DefenseCombatCandidateSafe(e, stand, &move))
+	{
+		DefenseCombatZero(cmd);
+		return false;
+	}
+	combat_basis[YAW] = bot->vy_cur;
+	combat_basis[PITCH] = bot->vp_cur / 3.0f;
+	combat_basis[ROLL] = 0.0f;
+	AngleVectors(combat_basis, combat_fwd, combat_right, NULL);
+	flat = sqrtf(combat_fwd[0] * combat_fwd[0] +
+	             combat_fwd[1] * combat_fwd[1]);
+	if (flat <= 0.01f)
+	{
+		DefenseCombatZero(cmd);
+		return false;
+	}
+	cmd->forwardmove = (short)(160.0f *
+	    (direction[0] * combat_fwd[0] + direction[1] * combat_fwd[1]) / flat);
+	cmd->sidemove = (short)(160.0f *
+	    (direction[0] * combat_right[0] + direction[1] * combat_right[1]));
+	cmd->upmove = 0;
+	return true;
+}
+
+#ifdef SG_DEFENSE_COMBAT_TEST
+/* Compiled production-path seam: it invokes the actual post planner (the
+ * ordered long probes and, only when needed, short probes), then the same
+ * generic/final arbitration Think_Emit uses. It exists only in the focused
+ * executable regression. */
+extern void SG_DefenseCombatTestPostPlan(edict_t *e, sg_bot_t *bot,
+	sg_think_t *tc, int mutation_mask);
+
+int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
+	int hold_post, int engaged, int duel_hold, short weave_side,
+	int mutation_mask, usercmd_t *cmd)
+{
+	edict_t *enemy = NULL;
+	edict_t *stand = NULL;
+	vec3_t direction;
+	sg_think_t tc;
+	unsigned long enemy_ctfid = 0;
+	qboolean final_as_ok = false;
+	qboolean active;
+
+	if (!cmd)
+		return 0;
+	memset(&tc, 0, sizeof(tc));
+	tc.e = e;
+	tc.team = team;
+	tc.role = SG_ROLE_DEFEND;
+	tc.hold_post = hold_post != 0;
+	VectorClear(direction);
+	active = DefenseCombatPlan(e, bot, team, &tc, false, engaged != 0,
+	    &stand, &enemy, direction);
+	if (enemy && enemy->client)
+		enemy_ctfid = enemy->client->ctf.ctfid;
+	DefenseCombatApplyDuelWeave(hold_post != 0, false, duel_hold != 0,
+	    engaged != 0, weave_side, cmd);
+	SG_DefenseCombatTestPostPlan(e, bot, &tc, mutation_mask);
+	final_as_ok = (mutation_mask & 32768) != 0; /* MUT_AS test seam */
+	return DefenseCombatWriteFinal(e, bot, team, &tc, final_as_ok, active, stand,
+	    enemy, enemy_ctfid, direction, cmd) ? 1 : 0;
+}
+#endif
+
+/* A dropped flag is private knowledge until it is currently perceived.  Its
+ * home position is public CTF state, but neither fact permits a body to cut
+ * through a wall or a different floor to reach it. */
+static qboolean SG_AttackFlagPerceivable(edict_t *e, edict_t *flag)
+{
+	vec3_t eye, target;
+
+	if (!e || !flag || !sg_host.in_pvs)
+		return false;
+	VectorCopy(e->s.origin, eye);
+	eye[2] += e->viewheight;
+	VectorCopy(flag->s.origin, target);
+	target[2] += 16.0f;
+	return sg_host.in_pvs(eye, target) &&
+	       SG_CanSee(e, flag->s.origin, 16.0f);
+}
+
+/*
+ * The one authority for abandoning the graph to touch the enemy flag.  A
+ * home flag is public, while a dropped flag must be visibly perceived; both
+ * also need to be on this body level and directly reachable by the player
+ * hull.  This deliberately rejects a close XY projection onto another floor
+ * or a flag across an opaque wall.
+ */
+qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
+	edict_t **flag_out)
+{
+	edict_t *flag;
+	trace_t body;
+
+	if (flag_out)
+		*flag_out = NULL;
+	if (!e || !e->client)
+		return false;
+	flag = SG_EnemyFlag(team);
+	if (!flag || SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
+	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f)
+		return false;
+	if (!ctf_flagathome(flag) && !SG_AttackFlagPerceivable(e, flag))
+		return false;
+	body = sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin, e,
+	                     MASK_PLAYERSOLID);
+	if (body.startsolid || body.allsolid ||
+	    (body.fraction < 1.0f && body.ent != flag))
+		return false;
+	if (flag_out)
+		*flag_out = flag;
+	return true;
+}
+
+/*
+ * An attacker who has direct-touch authority over the live enemy flag is no
+ * longer navigating a graph edge.  The touch belongs to the item entity, so
+ * this line deliberately runs THROUGH that entity before a CARRY may route
+ * home.
+ */
+static qboolean SG_AttackFlagTerminalAim(edict_t *e, int team, vec3_t aim)
+{
+	edict_t *flag;
+	vec3_t fd, wend;
+	float fl;
+	trace_t tr;
+
+	if (!SG_AttackFlagDirectTouchAuthority(e, team, &flag))
+		return false;
+	VectorCopy(flag->s.origin, aim);
+	VectorSubtract(flag->s.origin, e->s.origin, fd);
+	fd[2] = 0.0f;
+	fl = VectorLength(fd);
+	if (fl <= 1.0f)
+		return true;
+	VectorScale(fd, (fl + 150.0f) / fl, fd);
+	VectorAdd(e->s.origin, fd, wend);
+	wend[2] = flag->s.origin[2] + 16.0f;
+	tr = sg_host.trace(flag->s.origin, e->mins, e->maxs, wend, e,
+	                   MASK_PLAYERSOLID);
+	if (tr.fraction < 1.0f)
+		VectorCopy(tr.endpos, wend);
+	VectorCopy(wend, aim);
+	aim[2] = flag->s.origin[2];
+	return true;
+}
+
+void SG_NadeTargetClear(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->nade_target_slot = 0;
+	bot->nade_target_ctfid = 0;
+	bot->nade_target_switch_until = 0.0f;
+	bot->nade_target_cook_until = 0.0f;
+}
+
+/* Resolve the exact client life which a pre-breach transaction named.  It
+ * must remain the combat system's current live enemy too: an old visible
+ * body is not permission to finish a cook after combat has lost or replaced
+ * that target. */
+static edict_t *SG_NadeBoundLiveTarget(edict_t *e, const sg_bot_t *bot)
+{
+	edict_t *target;
+	int team;
+
+	if (!e || !e->client || !bot || bot->nade_target_slot <= 0 ||
+	    bot->nade_target_slot > game.maxclients ||
+	    bot->nade_target_ctfid == 0)
+		return NULL;
+	target = g_edicts + bot->nade_target_slot;
+	team = e->client->ctf.teamnum;
+	if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) ||
+	    !target->inuse || !target->client || target->deadflag ||
+	    target->health <= 0 ||
+	    target->client->ctf.teamnum != SG_EnemyTeam(team) ||
+	    target->client->ctf.ctfid != bot->nade_target_ctfid ||
+	    SG_CombatLiveEnemy(e) != target)
+		return NULL;
+	return target;
+}
+
+/* Both pre-breach callers enter through this one transaction.  The approach
+ * band may have expensive graph cost but it cannot pre-empt a direct item
+ * touch; the terminal room follows the same rule.  The target is a current,
+ * visible enemy body, never a danger seed or remembered stand coordinate. */
+qboolean SG_NadeArmPrebreachLiveEnemy(sg_bot_t *bot, edict_t *e, int team,
+	float min_distance, float max_distance)
+{
+	static gitem_t *nades;
+	edict_t *target;
+	vec3_t delta;
+	float distance;
+	int slot;
+
+	if (!bot || !e || !e->client || bot->nade_phase != 0 ||
+	    (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) ||
+	    team != e->client->ctf.teamnum ||
+	    SG_AttackFlagDirectTouchAuthority(e, team, NULL))
+		return false;
+	target = SG_CombatLiveEnemy(e);
+	if (!target || !target->inuse || !target->client || target->deadflag ||
+	    target->health <= 0 ||
+	    target->client->ctf.teamnum != SG_EnemyTeam(team) ||
+	    target->client->ctf.ctfid == 0 ||
+	    !SG_CanSee(e, target->s.origin, target->viewheight))
+		return false;
+	slot = (int)(target - g_edicts);
+	if (slot <= 0 || slot > game.maxclients)
+		return false;
+	VectorSubtract(target->s.origin, e->s.origin, delta);
+	distance = VectorLength(delta);
+	if ((min_distance > 0.0f && distance <= min_distance) ||
+	    (max_distance > 0.0f && distance >= max_distance))
+		return false;
+	if (!nades)
+		nades = FindItem("Grenades");
+	if (!nades || e->client->pers.inventory[ITEM_INDEX(nades)] <= 0)
+		return false;
+
+	/* A new arm starts clean; no deadline or client identity may bleed from a
+	 * failed prior switch into this exact weapon transaction. */
+	SG_NadeTargetClear(bot);
+	VectorCopy(target->s.origin, bot->nade_at);
+	nades->use(e, nades);
+	bot->nade_phase = 1;
+	SG_TimerArm(&bot->nade_until, 0.5f);
+	bot->nade_target_slot = slot;
+	bot->nade_target_ctfid = target->client->ctf.ctfid;
+	bot->nade_target_switch_until = bot->nade_until;
+	return true;
+}
+
+/* A target binding becomes live only when the exact switch deadline armed by
+ * the pre-breach transaction became this cook deadline.  Other grenade users
+ * share nade_phase, so an old binding must never attach itself to their throw. */
+static qboolean SG_NadeTargetSwitching(const sg_bot_t *bot)
+{
+	return bot && bot->nade_target_slot > 0 &&
+	       bot->nade_target_ctfid != 0 &&
+	       bot->nade_target_switch_until > 0.0f &&
+	       bot->nade_target_switch_until == bot->nade_until;
+}
+
+static qboolean SG_NadeTargetCooking(const sg_bot_t *bot)
+{
+	return bot && bot->nade_target_slot > 0 &&
+	       bot->nade_target_ctfid != 0 &&
+	       bot->nade_target_cook_until > 0.0f &&
+	       bot->nade_target_cook_until == bot->nade_until;
+}
+
+static edict_t *SG_NadeArmedTarget(edict_t *e, const sg_bot_t *bot)
+{
+	if (!SG_NadeTargetCooking(bot))
+		return NULL;
+	return SG_NadeBoundLiveTarget(e, bot);
+}
+
+static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
+	float shelf_seconds, qboolean failure, const char *reason,
+	int from_goal, int to_goal);
+
+static void Hook_DiagnosticEmit(void *opaque, const char *line)
+{
+	(void)opaque;
+	if (line)
+		sg_host.dprint("%s", line);
+}
+
+static void Hook_DiagnosticAnchorQ8(const vec3_t anchor, int32_t out[3])
+{
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		double scaled = (double)anchor[axis] * 8.0;
+
+		if (!isfinite(scaled) || scaled < (double)INT32_MIN ||
+		    scaled > (double)INT32_MAX)
+			out[axis] = 0;
+		else
+			out[axis] = (int32_t)lround(scaled);
+	}
+}
+
+static void Hook_DiagnosticBegin(sg_bot_t *bot, sg_role_t role)
+{
+	int32_t anchor_q8[3];
+	const char *bot_name;
+
+	if (!bot)
+		return;
+	Hook_DiagnosticAnchorQ8(bot->hook_anchor, anchor_q8);
+	bot_name = bot->ent && bot->ent->client ?
+	    bot->ent->client->pers.netname : "-";
+	(void)SG_HookDiagnosticsBegin(&bot->hook_diagnostics,
+	    sg_cv.debug && sg_cv.debug->value != 0.0f,
+	    bot->speedhook ? SG_HOOK_DIAGNOSTIC_SPEED : SG_HOOK_DIAGNOSTIC_GRAPH,
+	    bot->speedhook ? -1 : bot->hook_link, (int)role, bot_name,
+	    SG_RuneMapName(), anchor_q8, bot->instance_token,
+	    Hook_DiagnosticEmit, NULL);
+}
+
+static sg_bot_t *HumanSpeed_BotForEntity(edict_t *entity)
+{
+	int index;
+
+	if (!entity)
+		return NULL;
+	for (index = 0; index < SG_MAXBOTS; index++)
+		if (sg_bots[index].active && sg_bots[index].ent == entity)
+			return &sg_bots[index];
+	return NULL;
+}
+
+/* Consume the one-command ownership marker even when ClientThink exits before
+ * Pmove (pause, intermission, observer state).  No later command can inherit
+ * fractional landing time from a command it did not own. */
+void SG_HumanSpeedClientThinkBegin(edict_t *entity)
+{
+	sg_bot_t *bot = HumanSpeed_BotForEntity(entity);
+	qboolean skipped_owned_command;
+	qboolean owned;
+
+	if (!bot)
+		return;
+	skipped_owned_command = bot->as_landing_pending;
+	owned = bot->as_landing_command;
+	bot->as_landing_command = false;
+	/* A still-pending marker means the preceding owned ClientThink returned
+	 * before Pmove.  Even another chain command cannot bridge that missing
+	 * physics step with the old fractional timer remainder. */
+	SG_HumanSpeedCommandBoundary(&bot->as_landing,
+	    owned && !skipped_owned_command);
+	bot->as_landing_pending = owned;
+}
+
+void SG_HumanSpeedPmoveBegin(edict_t *entity, pmove_state_t *pmove,
+	unsigned command_msec)
+{
+	sg_bot_t *bot = HumanSpeed_BotForEntity(entity);
+
+	if (!bot)
+		return;
+	if (!bot->as_landing_pending)
+	{
+		SG_HumanSpeedTimerReset(&bot->as_landing);
+		return;
+	}
+	bot->as_landing_flags_before = pmove ? pmove->pm_flags : 0;
+	bot->as_landing_before = SG_HumanSpeedLandingPrepare(&bot->as_landing,
+	    pmove, command_msec, true);
+}
+
+void SG_HumanSpeedPmoveEnd(edict_t *entity, const pmove_state_t *pmove,
+	unsigned command_msec)
+{
+	sg_bot_t *bot = HumanSpeed_BotForEntity(entity);
+	sg_human_speed_step_t after;
+
+	if (!bot)
+		return;
+	if (!bot->as_landing_pending)
+	{
+		SG_HumanSpeedTimerReset(&bot->as_landing);
+		return;
+	}
+	after = SG_HumanSpeedLandingObserve(&bot->as_landing,
+	    bot->as_landing_flags_before, pmove, command_msec, true);
+	if (sg_cv.debug && sg_cv.debug->value && entity->client &&
+	    (bot->as_landing_before.extra_ticks ||
+	     bot->as_landing_before.expired || after.began))
+		sg_host.dprint("ASSTEP %s ms=%u extra=%u rem=%u "
+		    "begin=%d expired=%d timer=%u\n",
+		    entity->client->pers.netname, command_msec,
+		    bot->as_landing_before.extra_ticks,
+		    after.began ? after.remainder_ms :
+		        bot->as_landing_before.remainder_ms,
+		    after.began ? 1 : 0,
+		    bot->as_landing_before.expired ? 1 : 0,
+		    pmove ? (unsigned)pmove->pm_time : 0u);
+	bot->as_landing_pending = false;
+	bot->as_landing_flags_before = 0;
+	memset(&bot->as_landing_before, 0, sizeof(bot->as_landing_before));
+}
 
 static int sg_hook_reproof_frame = -1;
 static int sg_hook_reproof_slot = 0;
 static int sg_swim_reproof_frame = -1;
 static int sg_swim_reproof_slot = 0;
+static uint32_t sg_mechanism_dispatch_depth;
+static sg_button_callback_token_t sg_button_callbacks[MAX_EDICTS];
+static int DoorStep_EdictKey(const edict_t *entity);
+
+typedef struct door_step_approach_command_s
+{
+	sg_bot_t *bot;
+	unsigned long long bot_instance;
+	int frame;
+	int substep;
+	qboolean active;
+} door_step_approach_command_t;
+
+static door_step_approach_command_t sg_door_approach_command;
+
+_Static_assert(SG_DOOR_APPROACH_MAX_MASTERS ==
+	SG_RUNE_BINDING_MAX_MOVERS,
+	"door approach ticket must cover every sealed mover");
+
+static void DoorStep_ApproachTicketClear(sg_bot_t *bot)
+{
+	if (bot)
+	{
+		if (sg_door_approach_command.active &&
+		    sg_door_approach_command.bot == bot)
+			memset(&sg_door_approach_command, 0,
+			    sizeof(sg_door_approach_command));
+		memset(&bot->declared_door_ticket, 0,
+		    sizeof(bot->declared_door_ticket));
+	}
+}
+
+/* Once an authenticated command has run, any callback or post-command
+ * mismatch permanently poisons this reducer instance.  Clearing only the
+ * ephemeral ticket would let an unchanged zero-input/finalizer pose mint new
+ * authority on the next frame.  The durable guard and frozen mechanism
+ * identity intentionally remain intact for the normal retain/death cleanup. */
+static void DoorStep_ApproachCommandFail(sg_bot_t *bot)
+{
+	if (bot)
+		bot->declared_door_approach.phase = SG_DOOR_APPROACH_FAILED;
+	DoorStep_ApproachTicketClear(bot);
+}
+
+void SG_DeclaredDoorApproachCommandClear(sg_bot_t *bot)
+{
+	DoorStep_ApproachTicketClear(bot);
+}
+
+_Static_assert(MAX_EDICTS == SG_BUTTON_CALLBACK_SOURCE_CAPACITY,
+	"button callback source table must cover every protocol edict key");
+
+void SG_ButtonExecutionLevelReset(void)
+{
+	memset(sg_button_callbacks, 0, sizeof(sg_button_callbacks));
+	memset(&sg_door_approach_command, 0,
+	    sizeof(sg_door_approach_command));
+}
+
+void SG_ButtonExecutionEntityFreed(edict_t *entity)
+{
+	int key = DoorStep_EdictKey(entity);
+
+	if (key > 0)
+		SG_ButtonCallbackTokenReset(&sg_button_callbacks[key]);
+}
+
+void SG_ButtonExecutionActionReset(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->declared_button_latched = false;
+	bot->declared_button_rider = false;
+	memset(bot->declared_button_start_q8, 0,
+		sizeof(bot->declared_button_start_q8));
+	memset(bot->declared_button_end_q8, 0,
+		sizeof(bot->declared_button_end_q8));
+	SG_DoorApproachReset(&bot->declared_door_approach);
+	memset(&bot->declared_door_approach_identity, 0,
+	    sizeof(bot->declared_door_approach_identity));
+	DoorStep_ApproachTicketClear(bot);
+}
 
 void SG_DeclaredDoorTerminalDeath(sg_bot_t *bot)
 {
 	edict_t *ent;
 	extern int meansOfDeath;
 
-	if (!bot || !(ent = bot->ent) || !ent->inuse || !ent->client ||
+	if (!bot)
+		return;
+	SG_ButtonExecutionActionReset(bot);
+	/* This control terminal is a lifecycle boundary too.  Retire a pending
+	 * pre-breach identity before the death edge or a recycled command frame
+	 * can observe it. */
+	bot->nade_phase = 0;
+	SG_NadeTargetClear(bot);
+	if (!(ent = bot->ent) || !ent->inuse || !ent->client ||
 	    (ent->deadflag && ent->solid == SOLID_NOT))
 		return;
 	/* On a first death, player_die begins by transferring the live mover claim
@@ -83,6 +847,7 @@ static qboolean DoorStep_AbortDeclared(sg_bot_t *bot, int link_index)
 	bot->declared_start_frame = -1;
 	bot->declared_touched = false;
 	bot->declared_touch_frame = -1;
+	SG_ButtonExecutionActionReset(bot);
 	bot->declared_triggered = false;
 	bot->declared_trigger_frame = -1;
 	bot->declared_egress_proof_frame = -1;
@@ -102,6 +867,7 @@ static void DoorStep_RetainDeclared(sg_bot_t *bot)
 {
 	if (!bot)
 		return;
+	DoorStep_ApproachTicketClear(bot);
 	if (bot->declared_door_recovery_since == 0.0f)
 		SG_Mark(&bot->declared_door_recovery_since);
 	else if (SG_AgeAtLeast(bot->declared_door_recovery_since, 5.0f))
@@ -119,6 +885,11 @@ static void DoorStep_RetainDeclared(sg_bot_t *bot)
 		(void)SG_DeclaredDoorGuardPause(bot);
 	else
 		SG_DeclaredDoorTerminalDeath(bot);
+}
+
+void SG_DeclaredDoorApproachExecutionRetain(sg_bot_t *bot)
+{
+	DoorStep_RetainDeclared(bot);
 }
 
 static qboolean DoorStep_AbortOrRetain(sg_bot_t *bot, int link_index)
@@ -170,57 +941,408 @@ static sg_bot_t *DoorStep_EventBot(edict_t *activator)
 	return NULL;
 }
 
-static qboolean DoorStep_SupportedActivator(edict_t *source)
+/* Pointer subtraction is undefined for an untrusted callback argument.  The
+ * host array is small and this boundary runs only on a physical mechanism
+ * callback, so use bounded identity comparison just like the mover guard. */
+static int DoorStep_EdictKey(const edict_t *entity)
 {
-	edict_t *members[SG_PHANTOM_ARMED_DOORS];
+	int key;
 
-	return source && SG_DeclaredDoorMembers(source, members,
-	    SG_PHANTOM_ARMED_DOORS) > 0;
+	if (!entity || !g_edicts || globals.edicts != g_edicts ||
+	    globals.edict_size != (int)sizeof(edict_t) || globals.num_edicts <= 1 ||
+	    globals.num_edicts > MAX_EDICTS || game.maxentities <= 1 ||
+	    game.maxentities > MAX_EDICTS ||
+	    globals.num_edicts > game.maxentities)
+		return 0;
+	for (key = 1; key < globals.num_edicts; key++)
+		if (entity == &g_edicts[key])
+			return entity->inuse && entity->s.number == key ? key : 0;
+	return 0;
 }
 
-/* Runtime callbacks can arrive before the next SG compatibility pass.  Treat
- * the published rune as untrusted at this boundary: validate both arrays,
- * header bounds, link endpoints, and finite geometry before copying anything
- * used to identify the expected activator. */
-static qboolean DoorStep_DeclaredLinkSnapshot(const sg_bot_t *bot,
-	vec3_t anchor_out, vec3_t source_out)
+static qboolean DoorStep_SGProvenanceActivator(const edict_t *activator)
+{
+	return activator && activator->client && (activator->flags & FL_BOT);
+}
+
+static qboolean DoorStep_UnownedBotActivator(edict_t *activator)
+{
+	return activator && activator->inuse && activator->client &&
+	       (activator->flags & FL_BOT) && !SG_OwnsBot(activator);
+}
+
+static sg_button_callback_token_t *DoorStep_ButtonToken(edict_t *source,
+	int *source_key_out)
+{
+	int source_key = DoorStep_EdictKey(source);
+
+	if (source_key_out)
+		*source_key_out = source_key;
+	return source_key > 0 ? &sg_button_callbacks[source_key] : NULL;
+}
+
+static qboolean DoorStep_ButtonOrdinaryEvent(
+	sg_button_callback_token_t *token, uint32_t source_key)
+{
+	return SG_ButtonCallbackTokenOrdinaryEvent(token, source_key)
+	    ? true : false;
+}
+
+static qboolean DoorStep_VectorQ8Exact(const vec3_t value, short fixed[3])
+{
+	int axis;
+
+	if (!value)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		double scaled = (double)value[axis] * 8.0;
+		long rounded;
+
+		if (!isfinite(scaled) || scaled < SHRT_MIN || scaled > SHRT_MAX)
+			return false;
+		rounded = lround(scaled);
+		if (scaled != (double)rounded)
+			return false;
+		if (fixed)
+			fixed[axis] = (short)rounded;
+	}
+	return true;
+}
+
+static qboolean DoorStep_ButtonTransactionCurrent(
+	const sg_rune_mechanism_binding_t *binding, const sg_bot_t *bot)
+{
+	const sg_button_callback_token_t *token;
+	int activator_key;
+
+	if (!binding || !binding->entry_node || !bot ||
+	    binding->entry_node->key == 0U ||
+	    binding->entry_node->key >= MAX_EDICTS)
+		return false;
+	token = &sg_button_callbacks[binding->entry_node->key];
+	activator_key = DoorStep_EdictKey(bot->ent);
+	return bot->declared_triggered ||
+	       (binding->entry_entity->activator == bot->ent &&
+	        SG_ButtonCallbackTokenMatchesPending(token,
+	            binding->entry_node->key, activator_key, bot->commit_link,
+	            &bot->compound_guard.owner, &bot->compound_guard.ticket));
+}
+
+static qboolean DoorStep_ButtonPointOnSegment(const short point[3],
+	const short start[3], const short end[3])
+{
+	int64_t dx = (int32_t)end[0] - start[0];
+	int64_t dy = (int32_t)end[1] - start[1];
+	int64_t dz = (int32_t)end[2] - start[2];
+	int64_t px = (int32_t)point[0] - start[0];
+	int64_t py = (int32_t)point[1] - start[1];
+	int64_t pz = (int32_t)point[2] - start[2];
+	int64_t length2 = dx * dx + dy * dy + dz * dz;
+	int64_t dot;
+
+	if (length2 <= 0)
+		return false;
+	/* All inputs are exact signed q8 int16 values.  Literal integer
+	 * collinearity avoids a world-scale floating envelope that could admit a
+	 * distinct lattice point on a long button travel. */
+	if (py * dz - pz * dy != 0 ||
+	    pz * dx - px * dz != 0 ||
+	    px * dy - py * dx != 0)
+		return false;
+	dot = px * dx + py * dy + pz * dz;
+	return dot >= 0 && dot <= length2;
+}
+
+sg_button_execution_anchor_state_t SG_ButtonExecutionAnchor(
+	const sg_rune_mechanism_binding_t *binding, const sg_bot_t *bot,
+	const edict_t *subject, const vec3_t bottom_anchor,
+	const vec3_t serialized_displacement, int serialized_mode,
+	vec3_t effective_anchor)
+{
+	edict_t *button;
+	vec3_t start, end, current, displacement;
+	short start_q8[3], end_q8[3], current_q8[3], displacement_q8[3];
+	short anchor_q8[3], effective_q8[3];
+	int axis;
+	sg_button_execution_anchor_state_t state;
+
+	if (effective_anchor)
+		VectorClear(effective_anchor);
+	if (!binding || !bot || !subject || !bottom_anchor ||
+	    !serialized_displacement || !effective_anchor || !binding->plan ||
+	    !binding->entry_node || !(button = binding->entry_entity) ||
+	    subject != bot->ent || !subject->inuse ||
+	    binding->entry_node->key == 0U ||
+	    binding->entry_node->key >= MAX_EDICTS ||
+	    binding->plan->controller_kind !=
+	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	    DoorStep_EdictKey(button) != (int)binding->entry_node->key ||
+	    !SG_RuneMechanismBindingCurrent(binding) ||
+	    !bot->declared_touched || !bot->declared_button_latched ||
+	    !DoorStep_ButtonTransactionCurrent(binding, bot) ||
+	    (serialized_mode != RLCM_PREOPEN && serialized_mode != RLCM_RIDE) ||
+	    (bot->declared_button_rider != (serialized_mode == RLCM_RIDE)) ||
+	    !DoorStep_VectorQ8Exact(bottom_anchor, anchor_q8) ||
+	    !DoorStep_VectorQ8Exact(serialized_displacement, displacement_q8) ||
+	    !DoorStep_VectorQ8Exact(button->moveinfo.start_origin, start_q8) ||
+	    !DoorStep_VectorQ8Exact(button->moveinfo.end_origin, end_q8) ||
+	    !DoorStep_VectorQ8Exact(button->s.origin, current_q8))
+		return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+	for (axis = 0; axis < 3; axis++)
+	{
+		if (start_q8[axis] != bot->declared_button_start_q8[axis] ||
+		    end_q8[axis] != bot->declared_button_end_q8[axis] ||
+		    end_q8[axis] - start_q8[axis] != displacement_q8[axis])
+			return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+		start[axis] = start_q8[axis] * 0.125f;
+		end[axis] = end_q8[axis] * 0.125f;
+		current[axis] = current_q8[axis] * 0.125f;
+		displacement[axis] = current[axis] - start[axis];
+	}
+	if (VectorCompare(start, end))
+		return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+	switch (button->moveinfo.state)
+	{
+	case SG_PLAT_STATE_BOTTOM:
+		if (!VectorCompare(current, start) ||
+		    !VectorCompare(button->velocity, vec3_origin) ||
+		    !VectorCompare(button->avelocity, vec3_origin))
+			return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+		state = SG_BUTTON_EXECUTION_ANCHOR_BOTTOM;
+		break;
+	case SG_PLAT_STATE_TOP:
+		if (!VectorCompare(current, end) ||
+		    !VectorCompare(button->velocity, vec3_origin) ||
+		    !VectorCompare(button->avelocity, vec3_origin))
+			return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+		state = SG_BUTTON_EXECUTION_ANCHOR_TOP;
+		break;
+	case SG_PLAT_STATE_UP:
+	case SG_PLAT_STATE_DOWN:
+		if (!DoorStep_ButtonPointOnSegment(current_q8, start_q8, end_q8))
+			return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+		state = SG_BUTTON_EXECUTION_ANCHOR_MOVING;
+		break;
+	default:
+		return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+	}
+	for (axis = 0; axis < 3; axis++)
+		effective_anchor[axis] = bottom_anchor[axis] +
+		    (bot->declared_button_rider ? displacement[axis] : 0.0f);
+	if (!DoorStep_VectorQ8Exact(effective_anchor, effective_q8))
+	{
+		VectorClear(effective_anchor);
+		return SG_BUTTON_EXECUTION_ANCHOR_INVALID;
+	}
+	return state;
+}
+
+qboolean SG_ButtonExecutionSupportValid(
+	const sg_rune_mechanism_binding_t *binding, const sg_bot_t *bot,
+	const edict_t *subject)
+{
+	edict_t *support;
+	int ordinary;
+	int button;
+	int current;
+	int entry;
+	int rider;
+	int transaction;
+
+	if (!binding || !bot || !subject || !binding->plan ||
+	    !binding->entry_node || !binding->entry_entity ||
+	    binding->entry_node->key == 0U ||
+	    binding->entry_node->key >= MAX_EDICTS)
+		return false;
+	support = subject->groundentity;
+	ordinary = support &&
+	    (support == g_edicts || SG_ImmutableSupport(support));
+	button = binding->plan->controller_kind ==
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	current = button &&
+	    DoorStep_EdictKey(binding->entry_entity) ==
+	        (int)binding->entry_node->key &&
+	    SG_RuneMechanismBindingCurrent(binding);
+	entry = current && support == binding->entry_entity;
+	rider = current && !support &&
+	    SG_LiftRider(binding->entry_entity, (edict_t *)subject);
+	if (!button)
+		return ordinary;
+	/* Before the first physical touch, both serialized support modes approach
+	 * from ordinary static ground.  Once latched, the wire mode is exact:
+	 * STATIC may not borrow the entry pusher, and RIDER may not fall through to
+	 * an unrelated world floor. */
+	if (!bot->declared_touched)
+		return ordinary;
+	transaction = current && DoorStep_ButtonTransactionCurrent(binding, bot);
+	if (!current || !transaction || !binding->link ||
+	    !bot->declared_button_latched)
+		return false;
+	if (binding->link->mode == RLCM_PREOPEN)
+		return !bot->declared_button_rider && ordinary;
+	if (binding->link->mode == RLCM_RIDE)
+		return bot->declared_button_rider && (entry || rider);
+	return false;
+}
+
+static qboolean DoorStep_DeclaredBindingForLink(int link_index,
+	qboolean owned_execution, sg_rune_mechanism_binding_t *binding_out)
 {
 	rune_t *rune;
-	rune_link_t *link;
 
-	if (!bot || !anchor_out || !source_out || bot->commit_link < 0 ||
-	    !(rune = SG_Rune()) || !SG_RunePublishedShapeValid(rune) ||
+	if (binding_out)
+		memset(binding_out, 0, sizeof(*binding_out));
+	if (!binding_out || link_index < 0 || !(rune = SG_Rune()) ||
 	    !SG_RunePhysicsCompatible(rune) ||
-	    !rune->links || !rune->seeds ||
-	    rune->hdr.num_links <= 0 || rune->hdr.num_links > RUNE_MAX_LINKS ||
-	    rune->hdr.num_seeds <= 0 || rune->hdr.num_seeds > SG_MAX_SEEDS ||
-	    bot->commit_link >= rune->hdr.num_links)
+	    !(owned_execution
+	        ? SG_RuneMechanismBindingCaptureOwned(rune,
+	              (uint32_t)link_index, binding_out)
+	        : SG_RuneMechanismBindingCapture(rune,
+	              (uint32_t)link_index, binding_out)) ||
+	    !SG_RuneMechanismBindingDoorAction(binding_out))
 		return false;
-	link = &rune->links[bot->commit_link];
-	if (link->action != RL_DOOR || link->from < 0 ||
-	    link->from >= rune->hdr.num_seeds || link->to < 0 ||
-	    link->to >= rune->hdr.num_seeds ||
-	    !isfinite(link->anchor[0]) || !isfinite(link->anchor[1]) ||
-	    !isfinite(link->anchor[2]) ||
-	    !isfinite(rune->seeds[link->from].origin[0]) ||
-	    !isfinite(rune->seeds[link->from].origin[1]) ||
-	    !isfinite(rune->seeds[link->from].origin[2]))
-		return false;
-	VectorCopy(link->anchor, anchor_out);
-	VectorCopy(rune->seeds[link->from].origin, source_out);
 	return true;
+}
+
+static qboolean DoorStep_DeclaredBinding(const sg_bot_t *bot,
+	sg_rune_mechanism_binding_t *binding_out)
+{
+	return bot && DoorStep_DeclaredBindingForLink(bot->commit_link,
+	    bot->declared_started, binding_out);
+}
+
+static qboolean DoorStep_BindingContainsMover(
+	const sg_rune_mechanism_binding_t *binding, const edict_t *entity)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	size_t index;
+
+	if (!binding || !entity ||
+	    !SG_RuneMechanismBindingMoverKeys(binding, keys, &count))
+		return false;
+	for (index = 0U; index < count; index++)
+		if (SG_RuneMechanismBindingResolveNode(binding, keys[index]) == entity)
+			return SG_RuneMechanismBindingCurrent(binding) ? true : false;
+	return false;
+}
+
+/* A direct trigger can synchronously target several independent door teams.
+ * Seal the unique canonical masters from the binding's authenticated mover
+ * closure; team slaves never become extra callback authority. */
+static qboolean DoorStep_BindingActivationMasters(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t masters_out[SG_DOOR_APPROACH_MAX_MASTERS],
+	size_t *master_count_out)
+{
+	uint32_t mover_keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t mover_count = 0U;
+	size_t master_count = 0U;
+	size_t index;
+
+	if (master_count_out)
+		*master_count_out = 0U;
+	if (!binding || !masters_out || !master_count_out ||
+	    !SG_RuneMechanismBindingMoverKeys(binding, mover_keys, &mover_count) ||
+	    mover_count == 0U || mover_count > SG_DOOR_APPROACH_MAX_MASTERS)
+		return false;
+	memset(masters_out, 0,
+	    SG_DOOR_APPROACH_MAX_MASTERS * sizeof(masters_out[0]));
+	for (index = 0U; index < mover_count; index++)
+	{
+		edict_t *member = SG_RuneMechanismBindingResolveNode(binding,
+		    mover_keys[index]);
+		edict_t *master;
+		uint32_t master_key;
+		size_t member_index;
+		size_t insert;
+
+		if (!member || !(master = member->teammaster
+		        ? member->teammaster : member) ||
+		    (master_key = (uint32_t)DoorStep_EdictKey(master)) == 0U)
+			return false;
+		for (member_index = 0U; member_index < mover_count; member_index++)
+			if (mover_keys[member_index] == master_key)
+				break;
+		if (member_index == mover_count)
+			return false;
+		for (insert = 0U; insert < master_count; insert++)
+			if (masters_out[insert] >= master_key)
+				break;
+		if (insert < master_count && masters_out[insert] == master_key)
+			continue;
+		if (master_count >= SG_DOOR_APPROACH_MAX_MASTERS)
+			return false;
+		memmove(&masters_out[insert + 1U], &masters_out[insert],
+		    (master_count - insert) * sizeof(masters_out[0]));
+		masters_out[insert] = master_key;
+		master_count++;
+	}
+	if (master_count == 0U)
+		return false;
+	*master_count_out = master_count;
+	return SG_RuneMechanismBindingCurrent(binding) ? true : false;
+}
+
+static qboolean DoorStep_ApproachTicketMastersCurrent(
+	const sg_rune_mechanism_binding_t *binding,
+	const sg_door_approach_ticket_t *ticket)
+{
+	uint32_t keys[SG_DOOR_APPROACH_MAX_MASTERS];
+	uint32_t full_mask;
+	size_t count = 0U;
+
+	if (!binding || !ticket || ticket->activation_master_count == 0U ||
+	    ticket->activation_master_count > SG_DOOR_APPROACH_MAX_MASTERS ||
+	    !DoorStep_BindingActivationMasters(binding, keys, &count) ||
+	    count != ticket->activation_master_count ||
+	    memcmp(keys, ticket->activation_master_keys,
+	        count * sizeof(keys[0])) != 0)
+		return false;
+	full_mask = (UINT32_C(1) << ticket->activation_master_count) -
+	    UINT32_C(1);
+	return (ticket->activation_master_seen_mask & ~full_mask) == 0U;
+}
+
+static qboolean DoorStep_ApproachTicketMasterBit(
+	const sg_door_approach_ticket_t *ticket, edict_t *door_master,
+	uint32_t *bit_out)
+{
+	edict_t *canonical;
+	uint32_t key;
+	uint32_t index;
+
+	if (bit_out)
+		*bit_out = 0U;
+	if (!ticket || !door_master || !bit_out ||
+	    ticket->activation_master_count == 0U ||
+	    ticket->activation_master_count > SG_DOOR_APPROACH_MAX_MASTERS)
+		return false;
+	canonical = door_master->teammaster
+	    ? door_master->teammaster : door_master;
+	if (canonical != door_master ||
+	    (key = (uint32_t)DoorStep_EdictKey(canonical)) == 0U)
+		return false;
+	for (index = 0U; index < ticket->activation_master_count; index++)
+		if (ticket->activation_master_keys[index] == key)
+		{
+			*bit_out = UINT32_C(1) << index;
+			return true;
+		}
+	return false;
 }
 
 static qboolean DoorStep_DeclaredClaimHeld(sg_bot_t *bot)
 {
 	sg_mover_lease_record_t record;
 	qboolean local_door;
-	vec3_t anchor, source;
+	sg_rune_mechanism_binding_t binding;
 
 	if (!bot)
 		return false;
 	local_door = bot->declared_started &&
-	    DoorStep_DeclaredLinkSnapshot(bot, anchor, source);
+	    DoorStep_DeclaredBinding(bot, &binding);
 	if (bot->declared_guard_paused || local_door)
 		return true;
 	/* A malformed live source can be the very drift that made the ordinary
@@ -233,6 +1355,460 @@ static qboolean DoorStep_DeclaredClaimHeld(sg_bot_t *bot)
 	        record.state == SG_MOVER_LEASE_PAUSED);
 }
 
+static int DoorStep_BotSlot(const sg_bot_t *bot)
+{
+	int slot;
+
+	if (!bot)
+		return -1;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+		if (bot == &sg_bots[slot])
+			return slot;
+	return -1;
+}
+
+static qboolean DoorStep_GuardTicketEqual(const sg_mover_ticket_t *left,
+	const sg_mover_ticket_t *right)
+{
+	return left && right && left->epoch == right->epoch &&
+	       left->serial == right->serial && left->slot == right->slot;
+}
+
+static qboolean DoorStep_StaticSupportSignature(edict_t *support,
+	uint32_t *key_out, uint32_t *generation_out)
+{
+	if (key_out)
+		*key_out = 0U;
+	if (generation_out)
+		*generation_out = 0U;
+	if (!support || !key_out || !generation_out)
+		return false;
+	if (support == g_edicts)
+		return true;
+	if (!SG_ImmutableSupport(support))
+		return false;
+	return SG_MechCatalogEntityGeneration(support, key_out,
+	    generation_out) ? true : false;
+}
+
+static qboolean DoorStep_LivePmoveState(const edict_t *entity,
+	pmove_state_t *pms_out)
+{
+	short origin_q8[3], velocity_q8[3];
+	int axis;
+
+	if (pms_out)
+		memset(pms_out, 0, sizeof(*pms_out));
+	if (!entity || !entity->inuse || !entity->client || !pms_out ||
+	    !sv_gravity || !DoorStep_VectorQ8Exact(entity->s.origin, origin_q8) ||
+	    !DoorStep_VectorQ8Exact(entity->velocity, velocity_q8))
+		return false;
+	*pms_out = entity->client->ps.pmove;
+	for (axis = 0; axis < 3; axis++)
+	{
+		pms_out->origin[axis] = origin_q8[axis];
+		pms_out->velocity[axis] = velocity_q8[axis];
+	}
+	pms_out->gravity = (short)sv_gravity->value;
+	return true;
+}
+
+static qboolean DoorStep_ApproachObservation(edict_t *entity,
+	const sg_rune_mechanism_binding_t *binding,
+	sg_door_approach_observation_t *observation)
+{
+	uint32_t support_key, support_generation;
+
+	if (observation)
+		memset(observation, 0, sizeof(*observation));
+	if (!entity || !binding || !observation ||
+	    !DoorStep_LivePmoveState(entity, &observation->pms))
+		return false;
+	observation->grounded = entity->groundentity ? 1 : 0;
+	observation->static_support = entity->groundentity &&
+	    DoorStep_StaticSupportSignature(entity->groundentity, &support_key,
+	        &support_generation);
+	observation->waterlevel = entity->waterlevel;
+	observation->hazardous_liquid =
+	    (entity->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
+	observation->population_stable = 1;
+	observation->sweep_clear =
+	    SG_BoundDoorOutsideSweep(binding, entity->s.origin) ? 1 : 0;
+	return true;
+}
+
+static qboolean DoorStep_RunePublicationCurrent(const rune_t *rune,
+	const rune_artifact_t *artifact)
+{
+	const rune_t *current = SG_Rune();
+	const rune_artifact_t *current_artifact;
+
+	return rune && artifact && current == rune &&
+	       (current_artifact = SG_RuneArtifact(current)) != NULL &&
+	       SG_RuneArtifactsEqual(current_artifact, artifact);
+}
+
+static qboolean DoorStep_ApproachIdentityCurrent(
+	const sg_bot_t *bot, const sg_rune_mechanism_binding_t *binding)
+{
+	const sg_door_approach_identity_t *identity;
+	int slot;
+
+	if (!bot || !binding || !binding->link || !binding->plan ||
+	    !binding->entry_node || !binding->mover_node ||
+	    !(identity = &bot->declared_door_approach_identity)->active ||
+	    (slot = DoorStep_BotSlot(bot)) < 0 || !bot->active || !bot->ent ||
+	    bot->instance_token == 0ULL ||
+	    identity->bot_slot != slot ||
+	    identity->bot_instance != bot->instance_token ||
+	    binding->link_index > INT_MAX ||
+	    identity->link != bot->commit_link ||
+	    identity->link != (int)binding->link_index ||
+	    identity->from != binding->link->from ||
+	    identity->to != binding->link->to ||
+	    identity->action != RL_DOOR || binding->link->action != RL_DOOR ||
+	    identity->controller_kind !=
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR ||
+	    binding->plan->controller_kind !=
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR ||
+	    identity->entry_key != binding->entry_node->key ||
+	    identity->mover_key != binding->mover_node->key ||
+	    identity->rune != binding->rune ||
+	    !DoorStep_RunePublicationCurrent(identity->rune,
+	        &identity->rune_artifact) ||
+	    !SG_MoverOwnerEqual(&identity->guard_owner,
+	        &bot->compound_guard.owner) ||
+	    !DoorStep_GuardTicketEqual(&identity->guard_ticket,
+	        &bot->compound_guard.ticket) ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return false;
+	return true;
+}
+
+static qboolean DoorStep_ApproachTicketRequired(const sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding)
+{
+	return DoorStep_ApproachIdentityCurrent(bot, binding) &&
+	       bot->declared_door_approach.phase != SG_DOOR_APPROACH_IDLE &&
+	       bot->declared_door_approach.phase != SG_DOOR_APPROACH_COMPLETE &&
+	       bot->declared_door_approach.phase != SG_DOOR_APPROACH_FAILED;
+}
+
+static qboolean DoorStep_ApproachCommandScoped(const sg_bot_t *bot)
+{
+	return bot && (bot->declared_door_ticket.armed ||
+	       (sg_door_approach_command.active &&
+	        sg_door_approach_command.bot == bot));
+}
+
+static qboolean DoorStep_ApproachCallbackReject(sg_bot_t *bot,
+	qboolean consume_command)
+{
+	if (consume_command)
+		DoorStep_ApproachCommandFail(bot);
+	return false;
+}
+
+static qboolean DoorStep_ApproachBegin(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding, const short source_q8[3],
+	const short anchor_q8[3])
+{
+	sg_door_approach_observation_t observation;
+	sg_door_approach_result_t result;
+	sg_door_approach_identity_t *identity;
+	const rune_artifact_t *artifact;
+	int slot;
+
+	if (!bot || !binding || !source_q8 || !anchor_q8 ||
+	    !binding->link || !binding->plan || !binding->entry_node ||
+	    !binding->mover_node || binding->link->action != RL_DOOR ||
+	    binding->plan->controller_kind !=
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR ||
+	    binding->rune != SG_Rune() ||
+	    !(artifact = SG_RuneArtifact(binding->rune)))
+		return false;
+	if (bot->declared_door_approach_identity.active)
+		return DoorStep_ApproachIdentityCurrent(bot, binding);
+	if (bot->declared_door_approach.phase != SG_DOOR_APPROACH_IDLE ||
+	    (slot = DoorStep_BotSlot(bot)) < 0 || bot->instance_token == 0ULL ||
+	    !SG_MoverOwnerValid(&bot->compound_guard.owner) ||
+	    !SG_MoverTicketValid(&bot->compound_guard.ticket) ||
+	    !DoorStep_ApproachObservation(bot->ent, binding, &observation))
+		return false;
+	result = SG_DoorApproachBegin(&bot->declared_door_approach,
+	    source_q8, anchor_q8, &observation);
+	if (result.reason != SG_DOOR_APPROACH_REASON_NONE)
+	{
+		SG_DoorApproachReset(&bot->declared_door_approach);
+		return false;
+	}
+	identity = &bot->declared_door_approach_identity;
+	memset(identity, 0, sizeof(*identity));
+	identity->bot_instance = bot->instance_token;
+	identity->bot_slot = slot;
+	identity->link = binding->link_index;
+	identity->from = binding->link->from;
+	identity->to = binding->link->to;
+	identity->action = binding->link->action;
+	identity->controller_kind = binding->plan->controller_kind;
+	identity->entry_key = binding->entry_node->key;
+	identity->mover_key = binding->mover_node->key;
+	identity->rune = binding->rune;
+	identity->rune_artifact = *artifact;
+	identity->guard_owner = bot->compound_guard.owner;
+	identity->guard_ticket = bot->compound_guard.ticket;
+	identity->active = true;
+	return true;
+}
+
+static qboolean DoorStep_ApproachTicketStateCurrent(
+	const sg_bot_t *bot, const sg_rune_mechanism_binding_t *binding,
+	const edict_t *entity, const sg_door_approach_ticket_t *ticket,
+	qboolean require_grounded)
+{
+	pmove_state_t current_pms;
+	short mins_q8[3], maxs_q8[3];
+	uint32_t support_key = 0U, support_generation = 0U;
+	qboolean grounded;
+	int slot;
+
+	if (!bot || !binding || !entity || !ticket || !ticket->armed ||
+	    (slot = DoorStep_BotSlot(bot)) < 0 ||
+	    !DoorStep_ApproachIdentityCurrent(bot, binding) ||
+	    binding->link_index > INT_MAX ||
+	    ticket->bot_slot != slot ||
+	    ticket->bot_instance != bot->instance_token ||
+	    ticket->link != (int)binding->link_index ||
+	    ticket->from != binding->link->from ||
+	    ticket->to != binding->link->to ||
+	    ticket->action != binding->link->action ||
+	    ticket->controller_kind != binding->plan->controller_kind ||
+	    ticket->entry_key != binding->entry_node->key ||
+	    ticket->mover_key != binding->mover_node->key ||
+	    ticket->rune != binding->rune ||
+	    ticket->rune != bot->declared_door_approach_identity.rune ||
+	    !SG_RuneArtifactsEqual(&ticket->rune_artifact,
+	        &bot->declared_door_approach_identity.rune_artifact) ||
+	    !DoorStep_RunePublicationCurrent(ticket->rune,
+	        &ticket->rune_artifact) ||
+	    !DoorStep_ApproachTicketMastersCurrent(binding, ticket) ||
+	    memcmp(&bot->declared_door_approach, &ticket->pre_state,
+	        sizeof(ticket->pre_state)) != 0 ||
+	    memcmp(&ticket->predicted_state, &ticket->sealed_predicted_state,
+	        sizeof(ticket->predicted_state)) != 0 ||
+	    ticket->frame != level.framenum ||
+	    !sg_door_approach_command.active ||
+	    sg_door_approach_command.bot != bot ||
+	    sg_door_approach_command.bot_instance != bot->instance_token ||
+	    sg_door_approach_command.frame != ticket->frame ||
+	    sg_door_approach_command.substep != ticket->substep ||
+	    !SG_MoverOwnerEqual(&ticket->guard_owner,
+	        &bot->compound_guard.owner) ||
+	    !DoorStep_GuardTicketEqual(&ticket->guard_ticket,
+	        &bot->compound_guard.ticket) ||
+	    entity != bot->ent || !entity->inuse || !entity->client ||
+	    entity->health <= 0 || entity->deadflag ||
+	    entity->movetype != MOVETYPE_WALK ||
+	    !DoorStep_LivePmoveState(entity, &current_pms) ||
+	    !SG_DoorApproachPmoveEqual(&current_pms, &ticket->expected_pms) ||
+	    !DoorStep_VectorQ8Exact(entity->mins, mins_q8) ||
+	    !DoorStep_VectorQ8Exact(entity->maxs, maxs_q8) ||
+	    memcmp(mins_q8, ticket->expected_mins_q8, sizeof(mins_q8)) != 0 ||
+	    memcmp(maxs_q8, ticket->expected_maxs_q8, sizeof(maxs_q8)) != 0 ||
+	    entity->waterlevel != 0 ||
+	    (entity->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		return false;
+	grounded = entity->groundentity != NULL;
+	if (grounded != ticket->grounded || (require_grounded && !grounded))
+		return false;
+	if (grounded &&
+	    !DoorStep_StaticSupportSignature(entity->groundentity, &support_key,
+	        &support_generation))
+		return false;
+	return support_key == ticket->support_key &&
+	       support_generation == ticket->support_generation;
+}
+
+static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding,
+	const sg_door_approach_prediction_t *prediction, int substep)
+{
+	sg_door_approach_ticket_t *ticket;
+	sg_door_approach_observation_t observation;
+	sg_door_approach_state_t recomputed;
+	sg_door_approach_result_t transition;
+	pmove_state_t current_pms;
+	vec3_t predicted_origin;
+	uint32_t support_key = 0U, support_generation = 0U;
+	uint32_t activation_master_keys[SG_DOOR_APPROACH_MAX_MASTERS];
+	size_t activation_master_count = 0U;
+	qboolean grounded;
+	int axis, slot;
+
+	if (!bot)
+		return false;
+	if (bot->declared_door_ticket.armed || sg_door_approach_command.active)
+	{
+		DoorStep_ApproachCommandFail(bot);
+		return false;
+	}
+	if (!binding || !prediction || substep < 0 || substep >= 4)
+		return false;
+	DoorStep_ApproachTicketClear(bot);
+	if (
+	    (slot = DoorStep_BotSlot(bot)) < 0 ||
+	    !DoorStep_ApproachIdentityCurrent(bot, binding) ||
+	    !DoorStep_LivePmoveState(bot->ent, &current_pms) ||
+	    !SG_DoorApproachPmoveEqual(&current_pms,
+	        &bot->declared_door_approach.expected_pms) ||
+	    prediction->state.elapsed_ms !=
+	        bot->declared_door_approach.elapsed_ms +
+	            SG_DOOR_APPROACH_STEP_MS ||
+	    memcmp(prediction->state.source_q8,
+	        bot->declared_door_approach.source_q8,
+	        sizeof(prediction->state.source_q8)) != 0 ||
+	    memcmp(prediction->state.anchor_q8,
+	        bot->declared_door_approach.anchor_q8,
+	        sizeof(prediction->state.anchor_q8)) != 0 ||
+	    !SG_DoorApproachPmoveEqual(&prediction->state.expected_pms,
+	        &prediction->pms) || prediction->waterlevel != 0 ||
+	    (prediction->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+	    (prediction->expected_touch && !prediction->groundentity) ||
+	    !DoorStep_VectorQ8Exact(prediction->mins, NULL) ||
+	    !DoorStep_VectorQ8Exact(prediction->maxs, NULL) ||
+	    !DoorStep_BindingActivationMasters(binding, activation_master_keys,
+	        &activation_master_count))
+		return false;
+	if (prediction->groundentity &&
+	    !DoorStep_StaticSupportSignature(prediction->groundentity,
+	        &support_key, &support_generation))
+		return false;
+	grounded = prediction->groundentity != NULL;
+	memset(&observation, 0, sizeof(observation));
+	observation.pms = prediction->pms;
+	observation.grounded = grounded ? 1 : 0;
+	observation.static_support = grounded ? 1 : 0;
+	observation.waterlevel = prediction->waterlevel;
+	observation.hazardous_liquid =
+	    (prediction->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
+	observation.population_stable = 1;
+	for (axis = 0; axis < 3; axis++)
+		predicted_origin[axis] = prediction->pms.origin[axis] * 0.125f;
+	observation.sweep_clear =
+	    SG_BoundDoorOutsideSweep(binding, predicted_origin) ? 1 : 0;
+	observation.physical_touch = prediction->expected_touch ? 1 : 0;
+	observation.fall_sampled =
+	    ((bot->declared_door_approach.elapsed_ms +
+	      SG_DOOR_APPROACH_STEP_MS) % SG_DOOR_APPROACH_FRAME_MS) == 0;
+	if (observation.fall_sampled)
+		observation.fall_delta = P_FallDelta(
+		    bot->declared_door_approach.old_frame_z,
+		    prediction->pms.velocity[2] * 0.125f, grounded,
+		    prediction->waterlevel);
+	recomputed = bot->declared_door_approach;
+	transition = SG_DoorApproachPostStep(&recomputed, &observation,
+	    SG_DOOR_APPROACH_STEP_MS);
+	if (transition.reason != SG_DOOR_APPROACH_REASON_NONE ||
+	    memcmp(&recomputed, &prediction->state, sizeof(recomputed)) != 0)
+		return false;
+	ticket = &bot->declared_door_ticket;
+	ticket->expected_pms = prediction->pms;
+	if (!DoorStep_VectorQ8Exact(prediction->mins,
+	        ticket->expected_mins_q8) ||
+	    !DoorStep_VectorQ8Exact(prediction->maxs,
+	        ticket->expected_maxs_q8))
+	{
+		DoorStep_ApproachTicketClear(bot);
+		return false;
+	}
+	ticket->support_key = support_key;
+	ticket->support_generation = support_generation;
+	ticket->bot_instance = bot->instance_token;
+	ticket->bot_slot = slot;
+	ticket->link = binding->link_index;
+	ticket->from = binding->link->from;
+	ticket->to = binding->link->to;
+	ticket->action = binding->link->action;
+	ticket->controller_kind = binding->plan->controller_kind;
+	ticket->frame = level.framenum;
+	ticket->substep = substep;
+	ticket->entry_key = binding->entry_node->key;
+	ticket->mover_key = binding->mover_node->key;
+	ticket->rune = bot->declared_door_approach_identity.rune;
+	ticket->rune_artifact =
+	    bot->declared_door_approach_identity.rune_artifact;
+	ticket->guard_owner = bot->compound_guard.owner;
+	ticket->guard_ticket = bot->compound_guard.ticket;
+	ticket->pre_state = bot->declared_door_approach;
+	ticket->predicted_state = prediction->state;
+	ticket->sealed_predicted_state = prediction->state;
+	ticket->grounded = prediction->groundentity != NULL;
+	ticket->expected_touch = prediction->expected_touch;
+	memcpy(ticket->activation_master_keys, activation_master_keys,
+	    activation_master_count * sizeof(activation_master_keys[0]));
+	ticket->activation_master_count = (uint8_t)activation_master_count;
+	ticket->armed = true;
+	if (sg_door_approach_command.active)
+	{
+		DoorStep_ApproachTicketClear(bot);
+		return false;
+	}
+	sg_door_approach_command.bot = bot;
+	sg_door_approach_command.bot_instance = bot->instance_token;
+	sg_door_approach_command.frame = level.framenum;
+	sg_door_approach_command.substep = substep;
+	sg_door_approach_command.active = true;
+	return true;
+}
+
+static qboolean DoorStep_ApproachTicketFinish(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding, edict_t *entity)
+{
+	sg_door_approach_ticket_t ticket;
+	qboolean current;
+
+	if (!bot)
+		return false;
+	ticket = bot->declared_door_ticket;
+	current = DoorStep_ApproachTicketStateCurrent(bot, binding, entity,
+	    &ticket, false);
+	if (!current || ticket.touch_seen != ticket.expected_touch ||
+	    (ticket.activation_seen && !ticket.touch_seen) ||
+	    ticket.activation_seen !=
+	        (ticket.activation_master_seen_mask != 0U) ||
+	    (ticket.activation_seen &&
+	     ticket.activation_master_seen_mask !=
+	         ((UINT32_C(1) << ticket.activation_master_count) - UINT32_C(1))) ||
+	    ticket.predicted_state.phase == SG_DOOR_APPROACH_FAILED)
+	{
+		DoorStep_ApproachCommandFail(bot);
+		return false;
+	}
+	DoorStep_ApproachTicketClear(bot);
+	bot->declared_door_approach = ticket.predicted_state;
+	return true;
+}
+
+qboolean SG_DeclaredDoorApproachExecutionBegin(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding, const short source_q8[3],
+	const short anchor_q8[3])
+{
+	return DoorStep_ApproachBegin(bot, binding, source_q8, anchor_q8);
+}
+
+qboolean SG_DeclaredDoorApproachExecutionArm(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding,
+	const sg_door_approach_prediction_t *prediction, int substep)
+{
+	return DoorStep_ApproachTicketArm(bot, binding, prediction, substep);
+}
+
+qboolean SG_DeclaredDoorApproachExecutionFinish(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding, edict_t *entity)
+{
+	return DoorStep_ApproachTicketFinish(bot, binding, entity);
+}
+
 /* Touch_Multi and Touch_DoorTrigger call this after their ordinary player
  * gates but before debounce, activator publication, targets, or door motion.
  * Humans and mechanisms outside the strict declared-door contract keep their
@@ -241,33 +1817,57 @@ static qboolean DoorStep_DeclaredClaimHeld(sg_bot_t *bot)
  * state. */
 qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
 {
-	edict_t *expected;
+	sg_rune_mechanism_binding_t binding;
 	sg_bot_t *bot;
-	vec3_t anchor, source_origin;
+	qboolean command_scoped;
+	qboolean ticket_required;
 
 	bot = DoorStep_EventBot(activator);
 	if (!bot)
 		return true;
-	if (!DoorStep_SupportedActivator(source))
+	command_scoped = DoorStep_ApproachCommandScoped(bot);
+	if (!DoorStep_DeclaredBinding(bot, &binding) ||
+	    binding.entry_entity != source)
+	{
+		if (command_scoped)
+			return DoorStep_ApproachCallbackReject(bot, true);
 		return !DoorStep_DeclaredClaimHeld(bot) &&
 		       !SG_DeclaredDoorGuardAnyClaim();
+	}
+	if (binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    bot->declared_door_approach_identity.active &&
+	    bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED)
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (activator->health <= 0 || activator->deadflag ||
 	    activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
 	    activator->waterlevel != 0)
-		return false;
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (!bot || !bot->declared_started || bot->declared_guard_paused)
-		return false;
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	ticket_required = binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    DoorStep_ApproachTicketRequired(bot, &binding);
+	if (command_scoped != ticket_required)
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	if (ticket_required &&
+	    (!bot->declared_door_ticket.expected_touch ||
+	     bot->declared_door_ticket.touch_seen ||
+	     !DoorStep_ApproachTicketStateCurrent(bot, &binding, activator,
+	         &bot->declared_door_ticket, true)))
+		return DoorStep_ApproachCallbackReject(bot, true);
 	if (SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) !=
 	        SG_COMPOUND_GUARD_OK ||
-	    !DoorStep_DeclaredLinkSnapshot(bot, anchor, source_origin))
-		return false;
-	expected = SG_DeclaredDoorForLink(anchor, source_origin);
-	if (!SG_DeclaredDoorEquivalentTouch(expected, source,
-	        activator->s.origin))
-		return false;
+	    !SG_RuneMechanismBindingCurrent(&binding))
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	if (!SG_BoundDoorTouchMatches(&binding, activator->s.origin) ||
+	    !SG_RuneMechanismBindingCurrent(&binding))
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	if (ticket_required)
+		bot->declared_door_ticket.touch_seen = true;
 	if (!bot->declared_triggered && !bot->declared_activated)
 	{
 		bot->declared_touched = true;
@@ -283,13 +1883,377 @@ qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
 qboolean SG_AuthorizeDoorTriggerUse(edict_t *source, edict_t *activator)
 {
 	sg_bot_t *bot = DoorStep_EventBot(activator);
+	sg_rune_mechanism_binding_t binding;
 
 	if (!bot)
 		return true;
-	if (DoorStep_SupportedActivator(source))
+	if (DoorStep_DeclaredBinding(bot, &binding) &&
+	    binding.entry_entity == source)
 		return false;
 	return !DoorStep_DeclaredClaimHeld(bot) &&
 	       !SG_DeclaredDoorGuardAnyClaim();
+}
+
+static qboolean DoorStep_ButtonBinding(sg_bot_t *bot, edict_t *source,
+	sg_rune_mechanism_binding_t *binding_out)
+{
+	return bot && source && binding_out &&
+	       DoorStep_DeclaredBinding(bot, binding_out) &&
+	       binding_out->plan->controller_kind ==
+	           SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	       binding_out->entry_entity == source;
+}
+
+qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
+{
+	sg_rune_mechanism_binding_t binding;
+	sg_mech_button_endpoints_t endpoints;
+	sg_button_callback_token_t *token;
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+	sg_button_callback_state_t token_state;
+	qboolean rider = false;
+	short displacement_q8[3];
+	int activator_key;
+	int axis;
+	int source_key;
+
+	if (!bot)
+	{
+		token = DoorStep_ButtonToken(source, &source_key);
+		if (!DoorStep_SGProvenanceActivator(activator))
+			return DoorStep_ButtonOrdinaryEvent(token,
+			    (uint32_t)source_key);
+		return DoorStep_UnownedBotActivator(activator) &&
+		       DoorStep_ButtonOrdinaryEvent(token, (uint32_t)source_key);
+	}
+	if (!DoorStep_ButtonBinding(bot, source, &binding))
+		return !DoorStep_DeclaredClaimHeld(bot) &&
+		       !SG_DeclaredDoorGuardAnyClaim();
+	token = DoorStep_ButtonToken(source, &source_key);
+	activator_key = DoorStep_EdictKey(activator);
+	if (!token || source_key <= 0 || activator_key <= 0)
+		return false;
+	token_state = SG_ButtonCallbackTokenState(token);
+	if (!SG_ButtonCallbackTokenPlannedTouchAllowed(token,
+	        (uint32_t)source_key,
+	        source->moveinfo.state == SG_PLAT_STATE_BOTTOM))
+		return false;
+	if (token_state == SG_BUTTON_CALLBACK_CONSUMED)
+	{
+		if (bot->declared_triggered)
+			return false;
+		SG_ButtonCallbackTokenReset(token);
+		token_state = SG_BUTTON_CALLBACK_EMPTY;
+	}
+	if (activator->health <= 0 || activator->deadflag ||
+	    activator->movetype != MOVETYPE_WALK ||
+	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
+	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
+	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
+	    activator->waterlevel != 0 || !bot->declared_started ||
+	    bot->declared_guard_paused ||
+	    SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) !=
+	        SG_COMPOUND_GUARD_OK ||
+	    !SG_RuneMechanismBindingCurrent(&binding))
+		return false;
+	if (token_state == SG_BUTTON_CALLBACK_PENDING)
+	{
+		/* Idempotent physical overlap may recur while the same callback is in
+		 * flight.  It can confirm, but never rewrite, the first-touch support
+		 * mode or sealed endpoint snapshot. */
+		if (!bot->declared_button_latched || !bot->declared_touched ||
+		    !DoorStep_VectorQ8Exact(source->moveinfo.start_origin, NULL) ||
+		    !DoorStep_VectorQ8Exact(source->moveinfo.end_origin, NULL))
+			return false;
+		for (axis = 0; axis < 3; axis++)
+			if ((short)lround((double)source->moveinfo.start_origin[axis] * 8.0) !=
+			        bot->declared_button_start_q8[axis] ||
+			    (short)lround((double)source->moveinfo.end_origin[axis] * 8.0) !=
+			        bot->declared_button_end_q8[axis])
+				return false;
+	}
+	else
+	{
+		if (token_state != SG_BUTTON_CALLBACK_EMPTY ||
+		    !SG_MechCatalogButtonBottomEndpoints((uint32_t)source_key,
+		        binding.entry_node, source, &endpoints))
+			return false;
+		if (activator->groundentity == source)
+			rider = true;
+		else if (activator->groundentity != g_edicts &&
+		         !SG_ImmutableSupport(activator->groundentity))
+			return false;
+		for (axis = 0; axis < 3; axis++)
+		{
+			int delta = (int)endpoints.end_q8[axis] -
+			    (int)endpoints.start_q8[axis];
+
+			if (delta < INT16_MIN || delta > INT16_MAX)
+				return false;
+			displacement_q8[axis] = (short)delta;
+			if ((float)displacement_q8[axis] * 0.125f !=
+			    binding.link->mechanism_anchor[axis])
+				return false;
+		}
+		if ((rider && binding.link->mode != RLCM_RIDE) ||
+		    (!rider && binding.link->mode != RLCM_PREOPEN))
+			return false;
+	}
+	if (!SG_ButtonCallbackTokenBegin(token, (uint32_t)source_key,
+	        activator_key, bot->commit_link, &bot->compound_guard.owner,
+	        &bot->compound_guard.ticket))
+		return false;
+	if (token_state == SG_BUTTON_CALLBACK_EMPTY)
+	{
+		bot->declared_button_latched = true;
+		bot->declared_button_rider = rider;
+		memcpy(bot->declared_button_start_q8, endpoints.start_q8,
+		    sizeof(bot->declared_button_start_q8));
+		memcpy(bot->declared_button_end_q8, endpoints.end_q8,
+		    sizeof(bot->declared_button_end_q8));
+	}
+	bot->declared_touched = true;
+	bot->declared_touch_frame = level.framenum;
+	return true;
+}
+
+/* The admitted button controller is physical touch only.  Targeted use and
+ * damage cannot borrow a bot's active plan. */
+qboolean SG_AuthorizeButtonUse(edict_t *source, edict_t *activator)
+{
+	sg_rune_mechanism_binding_t binding;
+	sg_button_callback_token_t *token;
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+	int source_key;
+
+	if (!bot)
+	{
+		token = DoorStep_ButtonToken(source, &source_key);
+		if (!DoorStep_SGProvenanceActivator(activator))
+			return DoorStep_ButtonOrdinaryEvent(token,
+			    (uint32_t)source_key);
+		return DoorStep_UnownedBotActivator(activator) &&
+		       DoorStep_ButtonOrdinaryEvent(token, (uint32_t)source_key);
+	}
+	if (DoorStep_ButtonBinding(bot, source, &binding))
+		return false;
+	return !DoorStep_DeclaredClaimHeld(bot) &&
+	       !SG_DeclaredDoorGuardAnyClaim();
+}
+
+qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
+{
+	sg_rune_mechanism_binding_t binding;
+	sg_button_callback_token_t *token;
+	sg_button_callback_result_t result;
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+	int activator_key;
+	int authority = 0;
+	int source_key;
+
+	token = DoorStep_ButtonToken(source, &source_key);
+	if (SG_ButtonCallbackTokenState(token) != SG_BUTTON_CALLBACK_EMPTY)
+	{
+		activator_key = DoorStep_EdictKey(activator);
+		if (bot && DoorStep_ButtonBinding(bot, source, &binding) &&
+		    bot->declared_started && bot->declared_touched &&
+		    source->activator == activator && !bot->declared_guard_paused &&
+		    SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) ==
+		        SG_COMPOUND_GUARD_OK &&
+		    SG_RuneMechanismBindingCurrent(&binding))
+			authority = 1;
+		result = SG_ButtonCallbackTokenConsume(token, (uint32_t)source_key,
+		    activator_key, bot ? bot->commit_link : -1,
+		    bot ? &bot->compound_guard.owner : NULL,
+		    bot ? &bot->compound_guard.ticket : NULL, authority);
+		return result == SG_BUTTON_CALLBACK_AUTHORIZE;
+	}
+	if (!DoorStep_SGProvenanceActivator(activator))
+		return true;
+	if (!bot)
+		return DoorStep_UnownedBotActivator(activator);
+	/* A planned button callback cannot be reconstructed from mutable bot state
+	 * after its physical-touch token was lost or consumed. */
+	if (!DoorStep_ButtonBinding(bot, source, &binding))
+		return !DoorStep_DeclaredClaimHeld(bot) &&
+		       !SG_DeclaredDoorGuardAnyClaim();
+	return false;
+}
+
+static qboolean DoorStep_BindingEntityKey(
+	const sg_rune_mechanism_binding_t *binding, const edict_t *entity,
+	uint32_t *key_out)
+{
+	uint32_t ordinal;
+
+	if (key_out)
+		*key_out = UINT32_MAX;
+	if (!binding || !entity || !key_out ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return false;
+	if (binding->entry_entity == entity)
+	{
+		*key_out = binding->entry_node->key;
+		return true;
+	}
+	if (binding->mover_entity == entity)
+	{
+		*key_out = binding->mover_node->key;
+		return true;
+	}
+	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			SG_RuneMechanismBindingEdgeAt(binding, ordinal);
+		uint32_t keys[2];
+		int endpoint;
+
+		if (!edge)
+			return false;
+		keys[0] = edge->from_key;
+		keys[1] = edge->to_key;
+		for (endpoint = 0; endpoint < 2; endpoint++)
+			if (SG_RuneMechanismBindingResolveNode(binding,
+			        keys[endpoint]) == entity)
+			{
+				*key_out = keys[endpoint];
+				return SG_RuneMechanismBindingCurrent(binding) ? true : false;
+			}
+	}
+	return false;
+}
+
+typedef struct door_step_dispatch_s
+{
+	edict_t *source;
+	edict_t *activator;
+} door_step_dispatch_t;
+
+static int DoorStep_InvokeBoundTarget(void *raw_context,
+	struct edict_s *raw_target, uint32_t target_key,
+	uint32_t target_ordinal)
+{
+	door_step_dispatch_t *context = raw_context;
+	edict_t *target = raw_target;
+
+	(void)target_key;
+	(void)target_ordinal;
+	if (!context || !context->source || !context->activator || !target)
+		return 0;
+	if (target->use)
+		target->use(target, context->source, context->activator);
+	return 1;
+}
+
+qboolean SG_HandleMechanismTargets(edict_t *source, edict_t *activator)
+{
+	sg_rune_mechanism_binding_t binding;
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+	door_step_dispatch_t dispatch;
+	uint32_t source_key;
+
+	if (!bot)
+		return false;
+	if (!DoorStep_DeclaredBinding(bot, &binding))
+		return DoorStep_DeclaredClaimHeld(bot) ||
+		       SG_DeclaredDoorGuardAnyClaim();
+	if (!source || !bot->declared_started || bot->declared_guard_paused ||
+	    source->delay != 0.0f || source->killtarget || source->message ||
+	    !DoorStep_BindingEntityKey(&binding, source, &source_key) ||
+	    SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) !=
+	        SG_COMPOUND_GUARD_OK)
+		return true;
+	if (source == binding.entry_entity)
+	{
+		if (!bot->declared_touched)
+			return true;
+		if (binding.plan->controller_kind !=
+		        SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+		    bot->declared_touch_frame != level.framenum)
+			return true;
+	}
+	/* The guarded branch consumes the event before name-based stock traversal,
+	 * executing the exact copied closure or withholding the entire fanout. */
+	if (sg_mechanism_dispatch_depth >= binding.plan->num_edges)
+		return true;
+	dispatch.source = source;
+	dispatch.activator = activator;
+	sg_mechanism_dispatch_depth++;
+	(void)SG_RuneMechanismBindingDispatchTargets(&binding, source_key,
+		DoorStep_InvokeBoundTarget, &dispatch);
+	sg_mechanism_dispatch_depth--;
+	return true;
+}
+
+static qboolean MechanismStep_Binding(const sg_bot_t *bot, int action,
+	sg_rune_mechanism_binding_t *binding_out)
+{
+	rune_t *rune;
+
+	if (binding_out)
+		memset(binding_out, 0, sizeof(*binding_out));
+	return bot && binding_out && bot->commit_link >= 0 &&
+	       (rune = SG_Rune()) != NULL && SG_RunePhysicsCompatible(rune) &&
+	       (bot->declared_started
+	           ? SG_RuneMechanismBindingCaptureOwned(rune,
+	                 (uint32_t)bot->commit_link, binding_out)
+	           : SG_RuneMechanismBindingCapture(rune,
+	                 (uint32_t)bot->commit_link, binding_out)) &&
+	       binding_out->link->action == action;
+}
+
+qboolean SG_AuthorizeLiftTouch(edict_t *source, edict_t *platform,
+	edict_t *activator)
+{
+	sg_rune_mechanism_binding_t binding;
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+
+	if (!bot)
+		return true;
+	if (!MechanismStep_Binding(bot, RL_LIFT, &binding) ||
+	    binding.plan->controller_kind != SG_MECHANISM_CONTROLLER_PLATFORM ||
+	    binding.entry_entity != source || binding.mover_entity != platform ||
+	    !bot->declared_started || activator->health <= 0 ||
+	    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
+	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
+	    !SG_RuneMechanismBindingCurrent(&binding))
+		return false;
+	bot->declared_touched = true;
+	bot->declared_touch_frame = level.framenum;
+	return true;
+}
+
+qboolean SG_AuthorizeLiftUse(edict_t *platform, edict_t *activator)
+{
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+
+	(void)platform;
+	if (!bot)
+		return true;
+	/* The admitted platform controller is the exact synthesized center touch,
+	 * never a remote Use_Plat callback. */
+	return false;
+}
+
+edict_t *SG_ResolveTeleportDestination(edict_t *source,
+	edict_t *activator)
+{
+	sg_rune_mechanism_binding_t binding;
+	sg_bot_t *bot = DoorStep_EventBot(activator);
+	edict_t *destination;
+
+	if (!bot || !MechanismStep_Binding(bot, RL_TELEPORT, &binding) ||
+	    binding.plan->controller_kind != SG_MECHANISM_CONTROLLER_TELEPORT ||
+	    binding.entry_entity != source || binding.mover_entity != source->owner ||
+	    !bot->declared_started || activator->health <= 0 || activator->deadflag ||
+	    activator->movetype != MOVETYPE_WALK ||
+	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
+	    !(destination = SG_RuneMechanismBindingResolveDestination(&binding)) ||
+	    !SG_RuneMechanismBindingCurrent(&binding))
+		return NULL;
+	bot->declared_touched = true;
+	bot->declared_touch_frame = level.framenum;
+	return destination;
 }
 
 /* G_UseTargets reaches door_use synchronously from Touch_Multi, inside the
@@ -302,38 +2266,85 @@ qboolean SG_AuthorizeDoorTriggerUse(edict_t *source, edict_t *activator)
 qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	edict_t *activator)
 {
-	edict_t *expected;
+	sg_rune_mechanism_binding_t binding;
 	sg_bot_t *bot;
-	vec3_t anchor, source_origin;
+	qboolean command_scoped;
+	qboolean ticket_required;
+	uint32_t activation_master_bit = 0U;
 
 	bot = DoorStep_EventBot(activator);
 	if (!bot)
 		return true;
-	if (!DoorStep_SupportedActivator(source))
+	command_scoped = DoorStep_ApproachCommandScoped(bot);
+	if (!DoorStep_DeclaredBinding(bot, &binding) ||
+	    binding.entry_entity != source)
+	{
+		if (command_scoped)
+			return DoorStep_ApproachCallbackReject(bot, true);
 		return !DoorStep_DeclaredClaimHeld(bot) &&
 		       !SG_DeclaredDoorGuardAnyClaim() &&
 		       SG_DeclaredDoorGuardActivationAvailable(door_master);
+	}
+	if (binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    bot->declared_door_approach_identity.active &&
+	    bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED)
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (!door_master || activator->health <= 0 ||
 	    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
 	    activator->waterlevel != 0)
-		return false;
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (!bot || !bot->declared_started || bot->declared_guard_paused)
-		return false;
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	ticket_required = binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    DoorStep_ApproachTicketRequired(bot, &binding);
+	if (command_scoped != ticket_required)
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	if (ticket_required &&
+	    (!bot->declared_door_ticket.expected_touch ||
+	     !bot->declared_door_ticket.touch_seen ||
+	     bot->declared_door_ticket.activation_seen !=
+	         (bot->declared_door_ticket.activation_master_seen_mask != 0U) ||
+	     (bot->declared_triggered &&
+	      bot->declared_door_ticket.activation_master_seen_mask == 0U) ||
+	     bot->declared_activated ||
+	     !DoorStep_ApproachTicketStateCurrent(bot, &binding, activator,
+	         &bot->declared_door_ticket, true) ||
+	     source != binding.entry_entity ||
+	     !DoorStep_ApproachTicketMasterBit(&bot->declared_door_ticket,
+	         door_master, &activation_master_bit) ||
+	     (bot->declared_door_ticket.activation_master_seen_mask &
+	         activation_master_bit) != 0U))
+		return DoorStep_ApproachCallbackReject(bot, true);
 	if (SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) !=
 	        SG_COMPOUND_GUARD_OK ||
-	    !DoorStep_DeclaredLinkSnapshot(bot, anchor, source_origin))
-		return false;
-	expected = SG_DeclaredDoorForLink(anchor, source_origin);
-	if (!SG_DeclaredDoorEquivalentActivation(expected, source, door_master,
-	        activator->s.origin))
-		return false;
+	    !SG_RuneMechanismBindingCurrent(&binding))
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	if (!DoorStep_BindingContainsMover(&binding, door_master) ||
+	    !SG_RuneMechanismBindingCurrent(&binding))
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	if (binding.plan->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR)
+	{
+		if (!bot->declared_touched || source->activator != activator)
+			return false;
+	}
+	else if (!SG_BoundDoorTouchMatches(&binding, activator->s.origin))
+		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	else if (ticket_required)
+	{
+		bot->declared_door_ticket.activation_master_seen_mask |=
+		    activation_master_bit;
+		bot->declared_door_ticket.activation_seen = true;
+	}
 	if (bot->declared_triggered || bot->declared_activated)
 		return true;
 	if (!bot->declared_touched ||
-	    bot->declared_touch_frame != level.framenum)
+	    (binding.plan->controller_kind != SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	     bot->declared_touch_frame != level.framenum))
 		return false;
 	bot->declared_triggered = true;
 	bot->declared_trigger_frame = level.framenum;
@@ -350,16 +2361,9 @@ static sg_bot_t *Drop_LiveEventOwner(edict_t *activator)
 	for (i = 0; i < SG_MAXBOTS; i++)
 		if (sg_bots[i].active && sg_bots[i].ent == activator)
 		{
-			/* Production remains strictly reducer-owned.  The acceptance-only
-			 * legacy A observer is allowed to receive this already-real host
-			 * event through its separate private feed; it never gains reducer
-			 * ownership or executes a new tap. */
+			/* Production remains strictly reducer-owned. */
 			if (sg_bots[i].drop_started && sg_bots[i].drop_replay_active)
 				return &sg_bots[i];
-#ifdef SG_ACCEPT_DROP
-			if (SG_AcceptDropObserverEventOwner(&sg_bots[i]))
-				return &sg_bots[i];
-#endif
 		}
 	return NULL;
 }
@@ -525,7 +2529,7 @@ qboolean SG_BallisticSurvivable(edict_t *e, const rune_link_t *l)
 	    ((int)dmflags->value & DF_NO_FALLING))
 		return true;
 	height = r->seeds[l->from].origin[2] - r->seeds[l->to].origin[2];
-	gravity = r->v3_header.gravity;
+	gravity = r->artifact.identity.gravity;
 	launch = (l->action == RL_JUMP) ? 270.0f : 0.0f;
 	/* Arrival permits the body up to 72 units below the destination seed.
 	 * Include that full envelope and a jump's upward launch energy; this is a
@@ -578,11 +2582,7 @@ static void Drop_LiveObserveDoorPassage(sg_bot_t *bot, const edict_t *e)
 {
 	if (!bot || !e)
 		return;
-	if (!bot->drop_replay_active
-#ifdef SG_ACCEPT_DROP
-	    && !SG_AcceptDropObserverEventOwner(bot)
-#endif
-	   )
+	if (!bot->drop_replay_active)
 		return;
 	if (SG_OracleReplayDoorPassage(bot->drop_live_step_origin, e->s.origin))
 		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, false, true);
@@ -591,7 +2591,7 @@ static void Drop_LiveObserveDoorPassage(sg_bot_t *bot, const edict_t *e)
 	VectorCopy(e->s.origin, bot->drop_live_step_origin);
 }
 
-/* Independent revision-2 shadow of the final live writer.  The callback is
+/* Independent shadow of the final live writer.  The callback is
  * intentionally expressed from reducer state after its handoff latch so a
  * one-field drift in either implementation is visible before ClientThink. */
 static qboolean Drop_LiveShadowCommand(
@@ -685,15 +2685,8 @@ static void Drop_LiveCanonicalFail(edict_t *e, sg_bot_t *bot,
 		bot->bl_link[oldest] = link_index;
 		SG_TimerArm(&bot->bl_until[oldest],
 		    SG_DROP_LIVE_FAILURE_SHELF_SECONDS);
-
-#ifdef SG_ACCEPT_DROP
-		SG_AcceptDropShelf(bot, link_index, SG_ReplayReasonName(reason));
-#endif
 		if (reason == SG_REPLAY_REASON_RECOVERY_LOST)
 		{
-#ifdef SG_ACCEPT_DROP
-			SG_AcceptDropTeach(link_index, "recovery-lost");
-#endif
 			SG_TeachLinkFutility(link_index);
 		}
 	}
@@ -731,7 +2724,7 @@ static void Drop_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
 /*
  * ------------------------------------------------- the air-strafe chain
  *
- * THE VIEW AND THE PATH TURN TOGETHER (sg_airstrafe, default 0 = off).
+ * THE VIEW AND THE PATH TURN TOGETHER (sg_airstrafe, default 2 = chain).
  *
  * What a human does that the body above does not: he rotates the VIEW and
  * the strafe key together while airborne, so the wish direction stays off
@@ -781,7 +2774,7 @@ static void Drop_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
  *
  * WHY THE VIEW HAS TO MOVE FOR ANY OF IT TO PAY. The angle is measured
  * from the direction of TRAVEL, so holding it drags the velocity off the
- * route at roughly the same rate it feeds it -- wave 296's finding, and the
+ * route at roughly the same rate it feeds it -- observations finding, and the
  * reason its dose 2 capped the lean at 40 degrees and harvested little. A
  * human does not hold the lean, he SWINGS it: the view (and with it the
  * strafe axis) sweeps through the heading and out the other side, so the
@@ -801,15 +2794,9 @@ static void Drop_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
  * whole gain comes out of cmd.forwardmove, cmd.sidemove and cmd.angles,
  * through the same PM_Accelerate a human client drives.
  */
-typedef struct
-{
-	float		lean;       /* the sinusoid, -1..1; sign is the lean side */
-	float		vy_cur;     /* the view yaw pmove will use THIS sub-step */
-	float		vp_cur;     /* and its pitch, before the engine's /3 */
-	qboolean	chain;      /* dose 2: hop chaining as well as the lean */
-} sg_air_t;
+typedef sg_human_speed_air_t sg_air_t;
 
-#define SG_AIR_ACCEL	1.0f    /* PM_AirMove's airborne PM_Accelerate accel */
+#define SG_AIR_ACCEL SG_HUMAN_SPEED_AIR_ACCEL
 
 /*
  * ------------------------------------------------------------ the policy
@@ -855,7 +2842,7 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 		return;
 
 	/*
-	 * THE AIR CAP (sg_airgain, wave 296+). PM_AirAccelerate clamps the
+	 * THE AIR CAP (sg_airgain, observations). PM_AirAccelerate clamps the
 	 * wishspeed IT uses to 30 (pmove.c:382) -- the whole strafe-jump
 	 * exploit lives in that clamp: the projection gate is v.wish < 30,
 	 * open at ANY speed for a wish pointed far enough off the velocity.
@@ -919,64 +2906,6 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 	 */
 	cmd->forwardmove = (short)(DotProduct(fwd, d) * 400.0f);
 	cmd->sidemove = (short)(DotProduct(right, d) * 400.0f);
-}
-
-static void SG_AirStrafeCmd(usercmd_t *cmd, const sg_air_t *air,
-                            vec3_t vel, float speed2d, float frametime)
-{
-	vec3_t	basis, vf, vr, vdir, d;
-	float	wishspeed = 300.0f;     /* pm_maxspeed clamps wishvel to this */
-	float	accelspeed, c, th, sn, cs, fl;
-
-	if (speed2d < 1.0f)
-		return;
-
-	accelspeed = SG_AIR_ACCEL * frametime * wishspeed;
-
-	/*
-	 * Under wishspeed - accelspeed the cap is not binding: addspeed is
-	 * saturated pointing straight down the travel line and leaning off it
-	 * would trade heading for nothing. Same early return SG_Strafe makes,
-	 * and the reason this is not a mode the body enters and leaves.
-	 */
-	if (speed2d <= wishspeed - accelspeed)
-		return;
-
-	c = (wishspeed - accelspeed) / speed2d;
-	if (c > 1.0f) c = 1.0f;
-	if (c < -1.0f) c = -1.0f;
-	th = acosf(c) * air->lean;   /* the optimum, swung by the sinusoid */
-
-	vdir[0] = vel[0] / speed2d;
-	vdir[1] = vel[1] / speed2d;
-	vdir[2] = 0.0f;
-
-	sn = sinf(th);
-	cs = cosf(th);
-	d[0] = vdir[0] * cs - vdir[1] * sn;
-	d[1] = vdir[0] * sn + vdir[1] * cs;
-	d[2] = 0.0f;
-
-	/*
-	 * The basis pmove will build from the SLEWED view (PM_AirMove takes
-	 * viewangles with PITCH divided by three), and the same reconstruction
-	 * the per-sub-step course decomposition uses: forward's horizontal part
-	 * is shortened by cos(pitch/3), so it is renormalised before the
-	 * projection or the pair comes out skewed toward the strafe axis.
-	 */
-	basis[YAW] = air->vy_cur;
-	basis[PITCH] = air->vp_cur;
-	if (basis[PITCH] > 180.0f)
-		basis[PITCH] -= 360.0f;
-	basis[PITCH] /= 3.0f;
-	basis[ROLL] = 0.0f;
-	AngleVectors(basis, vf, vr, NULL);
-
-	fl = sqrtf(vf[0] * vf[0] + vf[1] * vf[1]);
-	if (fl < 0.01f)
-		return;
-	cmd->forwardmove = (short)(400.0f * (d[0] * vf[0] + d[1] * vf[1]) / fl);
-	cmd->sidemove = (short)(400.0f * (d[0] * vr[0] + d[1] * vr[1]));
 }
 
 /*
@@ -1160,7 +3089,7 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		 * under 10. The caller releases after every step.
 		 */
 		/*
-		 * 270, not 320: the audit under honest respawns (waves 84-86,
+		 * 270, not 320: the audit under honest respawns (observations,
 		 * 45k live samples) read fleet median 199 against a 300 run
 		 * speed -- and this gate was the circle. Ground friction caps a
 		 * run at 300, the hop is the only way THROUGH 300, and a hop
@@ -1190,7 +3119,7 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 	else
 	{
 		/*
-		 * THE LANDING TICK (sg_landtick, wave 286+). The think runs at
+		 * THE LANDING TICK (sg_landtick, observations). The think runs at
 		 * 10Hz but pmove executes 8 sub-steps per command -- a jump
 		 * decided only on frames that BEGIN grounded is a 1-in-8
 		 * lottery against a mid-frame touchdown, and every lost draw
@@ -1204,7 +3133,7 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		/* 240, not the ground gate's 270: touch-loss drops the landing
 		 * under 270 and disarms the very hold meant to prevent it --
 		 * air speed at arm time understates speed at the touchdown the
-		 * hold is FOR (wave 289-290 read: relaunches +45% where armed) */
+		 * hold is FOR (observations read: relaunches +45% where armed) */
 		/* a chain holds the same jump for the same reason, without
 		 * needing sg_landtick set: the hold IS the chain */
 		if ((sg_cv.landtick->value ||
@@ -1214,7 +3143,7 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 			cmd->upmove = 400;
 
 		if (air)
-			SG_AirStrafeCmd(cmd, air, e->velocity, sp, frametime);
+			SG_HumanSpeedAirCommand(cmd, air, e->velocity, sp, frametime);
 		else
 			SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
 	}
@@ -1334,12 +3263,43 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 }
 
 /*
- * THE GRADIENT MADE FLESH (split from SG_BotThink, 2026-08-11 standards
- * pass; body verbatim): the aim -- link, anchor, or goal-entity
+ * THE GRADIENT MADE FLESH: the aim -- link, anchor, or goal-entity
  * fallback with the through-extension -- the feeler fan, the ribbon,
  * lookahead and pursuit, doors, drops, and the hook brake. Emits the
  * movement policy the command stage executes.
  */
+static qboolean StrikeRailMoveAllowed(const sg_think_t *tc)
+{
+	return tc && SG_StrikeGenericRailAllowed(tc->strike_active);
+}
+
+/* Phase two is the irreversible rocket-jump boundary: this exact production
+ * emitter can launch the rocket before the next reconciliation frame. */
+static qboolean StrikeRocketJumpPhase2Command(const sg_bot_t *bot,
+	const edict_t *e, usercmd_t *cmd, float *view_yaw, float *view_pitch,
+	qboolean *have_move)
+{
+	float ry, rp;
+
+	if (!bot || !e || !e->client || !cmd || !view_yaw || !view_pitch ||
+	    !have_move || bot->rj_phase != 2)
+		return false;
+	ry = atan2f(bot->rj_aim[1], bot->rj_aim[0]) * 180.0f / M_PI;
+	rp = -asinf(bot->rj_aim[2]) * 180.0f / M_PI;
+	cmd->angles[YAW] = ANGLE2SHORT(ry) -
+	    e->client->ps.pmove.delta_angles[YAW];
+	cmd->angles[PITCH] = ANGLE2SHORT(rp) -
+	    e->client->ps.pmove.delta_angles[PITCH];
+	*view_yaw = ry;
+	*view_pitch = rp;
+	cmd->forwardmove = 0;
+	cmd->sidemove = 0;
+	cmd->upmove = 400;
+	cmd->buttons |= BUTTON_ATTACK;
+	*have_move = false;
+	return true;
+}
+
 void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context so the
@@ -1377,7 +3337,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	qboolean jump_brake = false, jump_slow = false;
 	qboolean ballistic_abort = false;
 	qboolean declared_door_link = bestlink >= 0 && SG_Rune() &&
-	    SG_Rune()->links[bestlink].action == RL_DOOR;
+	    (SG_Rune()->links[bestlink].action == RL_DOOR ||
+	     SG_Rune()->links[bestlink].action == RL_BUTTON_DOOR);
 	vec3_t want, d;
 
 	VectorClear(move_dir);
@@ -1431,7 +3392,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * THE PRE-TURN (sg_preturn, wave 224). The grammar census: a
+		 * THE PRE-TURN (sg_preturn, observations). The grammar census: a
 		 * human flies with eyes a median 93 degrees off velocity --
 		 * the body arrives already facing where it goes NEXT. During a
 		 * cut-rope flight the aim slides from the landing spot to the
@@ -1449,30 +3410,34 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 			if (ls >= 0)
 			{
-				int li3, nx3 = -1, nv3;
-				const int *rf3 = goal_field;
+				int link_index, next_link = -1, next_value;
+				const int *route_field = goal_field;
 
-				nv3 = (rf3[ls] < SG_FIELD_INF) ? rf3[ls] : 0x7fffffff;
-				for (li3 = SG_Rune()->first_link[ls]; li3 >= 0;
-				     li3 = SG_Rune()->next_link[li3])
+				next_value = (route_field[ls] < SG_FIELD_INF)
+				    ? route_field[ls] : 0x7fffffff;
+				for (link_index = SG_Rune()->first_link[ls];
+				     link_index >= 0;
+				     link_index = SG_Rune()->next_link[link_index])
 				{
-					rune_link_t *l3 = &SG_Rune()->links[li3];
+					rune_link_t *candidate =
+					    &SG_Rune()->links[link_index];
 
-					if (l3->action != RL_RUN)
+					if (candidate->action != RL_RUN)
 						continue;
-					if (rf3[l3->to] < nv3)
+					if (route_field[candidate->to] < next_value)
 					{
-						nv3 = rf3[l3->to];
-						nx3 = li3;
+						next_value = route_field[candidate->to];
+						next_link = link_index;
 					}
 				}
-				if (nx3 >= 0)
+				if (next_link >= 0)
 				{
 					/* one step: the dose curve peaked here (+46%%
 					 * chains) and flattened at two (226: the far aim
 					 * clips corridor corners). The next tile it is. */
 					VectorCopy(
-					    SG_Rune()->seeds[SG_Rune()->links[nx3].to].origin,
+					    SG_Rune()->seeds[
+					        SG_Rune()->links[next_link].to].origin,
 					    aim);
 					have_aim = true;
 				}
@@ -1492,6 +3457,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (bot->flow_release && !e->groundentity &&
 			    e->velocity[2] < 60.0f)
 			{
+				(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+				    "apex", "flow-release");
 				bot->hook_phase = 0;
 				bot->flow_release = false;
 				bot->commit_link = -1;
@@ -1500,11 +3467,14 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				if (sg_cv.ropetravel->value > 0.0f)
 					SG_TimerArm(&bot->speedhook_next, 0.25f);
 				if (sg_cv.debug->value)
-					sg_host.dprint("HOOKEND %s apex\n",
+					sg_host.dprint("HOOKFLOW %s apex\n",
 					           e->client->pers.netname);
 			}
 			else if (e->groundentity || SG_TimerReadyStrict(bot->hook_deadline))
 			{
+				(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+				    e->groundentity ? "landed" : "landing_timeout",
+				    "phase3");
 				if (sg_cv.debug->value)
 				{
 					if (e->groundentity)
@@ -1520,7 +3490,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					else
 						/* deadline hit still airborne: the throw
 						 * never came down anywhere useful */
-						sg_host.dprint("HOOKEND %s drop\n",
+						sg_host.dprint("HOOKFLOW %s drop\n",
 						           e->client->pers.netname);
 				}
 				bot->hook_phase = 0;
@@ -1531,8 +3501,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * is, the next step is argued fresh from here */
 				bot->commit_link = -1;
 				/*
-				 * HOOK PING-PONG SHELF (sg_hookpong, rung-2 revisit
-				 * diagnosis 2026-08-11): 29% of all A-B-A events sit
+				 * HOOK PING-PONG SHELF (sg_hookpong, movement behavior revisit
+				 *): 29% of all back-and-forth events sit
 				 * on three HOOK-heavy spans at 8-45x the human rate --
 				 * grapple-decision oscillation, not field flatness,
 				 * which is why pricing immediate returns had nothing
@@ -1607,7 +3577,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						 * CONFISCATED: shelving one anchor at a time
 						 * drained a doorway's fan of near-identical
 						 * ropes failure by failure while the door
-						 * itself stood open a walk away (wave 98,
+						 * itself stood open a walk away (observations,
 						 * narrated live in capitals). Twenty seconds
 						 * on the legs beats another lap of the wall.
 						 */
@@ -1664,6 +3634,31 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
+		/*
+		 * The terminal approach is a physical touch, not a graph preference.
+		 * Do this before a committed RUN, ribbon, cover, or homeward lookahead
+		 * can aim beside the live item.  Reset only a plain RUN commitment;
+		 * declared/ballistic controllers retain their own authority.
+		 */
+		if (!have_aim && (role == SG_ROLE_ATTACK || tc->strike_rush) &&
+		    bot->hook_phase == 0 &&
+		    bot->rj_phase == 0 && bot->nade_phase == 0 &&
+		    SG_AttackFlagTerminalAim(e, team, aim))
+		{
+			have_aim = true;
+			bestlink = -1;
+			tc->bestlink = -1;
+			rally_hold = false;
+			tc->rally_hold = false;
+			if (bot->commit_link >= 0 &&
+			    bot->commit_link < SG_Rune()->hdr.num_links &&
+			    SG_Rune()->links[bot->commit_link].action == RL_RUN)
+			{
+				bot->commit_link = -1;
+				bot->commit_until = 0.0f;
+			}
+		}
+
 		if (!have_aim && bestlink >= 0)
 		{
 			rune_link_t *l = &SG_Rune()->links[bestlink];
@@ -1696,7 +3691,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			have_aim = true;
 
 			/*
-			 * THE LOOKAHEAD (sg_lookahead, A/B wave 178+). The Brownian
+			 * THE LOOKAHEAD (sg_lookahead, comparison observations). The Brownian
 			 * hunt's terminal finding: unopposed attackers churn their
 			 * COMMANDED heading 81 degrees a second while goals, seeds,
 			 * links, and dodges all measure stable -- the body servos on
@@ -1768,7 +3763,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 
 			/*
-			 * PURE PURSUIT (sg_pursuit, wave 311+). The demo census
+			 * PURE PURSUIT (sg_pursuit, observations). The demo census
 			 * reconstructed the COMMANDED heading from the rune alone:
 			 * aiming at the next seed center churns 68-78 deg/s at a
 			 * 42-45%% reversal rate -- the whole of the Brownian walk,
@@ -1880,7 +3875,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 			/*
 			 * EDGERIDE (sg_edgeride, owner ruling on Open Question #2).
-			 * The forensics: 62% of the last rung-2 tell is human feet
+			 * The analysis: 62% of the last movement behavior tell is human feet
 			 * 10-40u past the seed edge on walkway margins. Ribbon
 			 * offsets died here twice because lookahead and pursuit
 			 * OVERWRITE the aim after the offset lands ("the steering
@@ -1890,7 +3885,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * The wall trace still collapses a blocked offset; the
 			 * feeler fan and every fall guard run downstream untouched
 			 * -- feet ride AT the safety boundary, never past it.
-			 * Carrier exempt. Falls are the trial's kill switch.
+			 * Carrier exempt. Falls are the case's kill switch.
 			 */
 			if (sg_cv.edgeride->value > 0.0f &&
 			    l->action == RL_RUN && !precision &&
@@ -2041,8 +4036,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * not a lifestyle.
 				 */
 				/*
-				 * FREERIDE (sg_freeride, rung-2 off-graph tell, owner
-				 * signed 2026-08-07). The speed hook was already the
+				 * FREERIDE (sg_freeride, off-graph movement). The speed hook was
+				 * already the
 				 * right tech; the judges' 3-18% human off-graph mass
 				 * against our 0.026 was a DOSE gap: the burst was gated
 				 * to the far half of the map (goal_field > 4000), one
@@ -2065,7 +4060,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				             ? 2000 : 4000))
 				{
 					/*
-					 * ROPE-PRIMARY TRAVEL (sg_ropetravel, rung-2's
+					 * ROPE-PRIMARY TRAVEL (sg_ropetravel, movement behavior
 					 * named blocker): humans TRAVEL by rope -- 3-18%
 					 * of their samples are flight -- and the
 					 * arithmetic killed every occasional-rope cut
@@ -2096,8 +4091,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						heye[1] = e->s.origin[1];
 						heye[2] = e->s.origin[2] + e->viewheight;
 						/*
-						 * WANDER THROW (sg_ropetravel 2). The wave
-						 * reports killed the volume theory: fleet
+						 * WANDER THROW (sg_ropetravel 2). Match reports
+						 * ruled out the volume theory: fleet
 						 * bots already land ~600 ropes a game and
 						 * off-graph never moves, because proven-link
 						 * flight rides exactly the air the node cloud
@@ -2118,13 +4113,13 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 							    : ((hfan == 1) ? 0.384f :
 							       (hfan == 2) ? -0.384f : 0.0f));
 							/*
-							 * FREERIDE v2 (sg_freeride 2, rung-2 set #2:
+							 * HIGH-ARC FREERIDE (sg_freeride 2, movement behavior set #2:
 							 * failed 16/18 on the same off-graph tell).
-							 * v1 doubled ride volume and moved NOTHING,
+							 * The shallow arc doubled ride volume and moved NOTHING,
 							 * because a 30-degree rope skims the corridor
 							 * and its flight never leaves the node cloud;
 							 * human off-graph mass is HIGH arcs through
-							 * open room air. v2 probes ~54 degrees up:
+							 * open room air. The high arc probes ~54 degrees up:
 							 * shorter reach, higher anchor, and the swing
 							 * itself is the off-graph flight.
 							 */
@@ -2133,7 +4128,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 							hend[0] = heye[0] + cosf(hy2) * hfar;
 							hend[1] = heye[1] + sinf(hy2) * hfar;
-							hend[2] = heye[2] + hup;    /* v1 ~30deg, v2 ~54deg */
+							hend[2] = heye[2] + hup;    /* shallow ~30deg, high ~54deg */
 							htr = sg_host.trace(heye, NULL, NULL, hend, e,
 							               MASK_SOLID);
 							/*
@@ -2162,7 +4157,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								break;
 							}
 							{
-								/* wave 218 (sg_legcarrier): the burst is
+								/* observations (sg_legcarrier): the burst is
 								 * the OPTIONAL rope -- a standing aim for
 								 * speed legs already have. The carrier
 								 * keeps climb ropes and loses the
@@ -2239,7 +4234,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * entry-sensitive. Walk to the seed, brake, THEN fire:
 				 * the shot the proof rolled is the shot the body takes.
 				 */
-				/* Version 2 approaches the source cell and brakes before taking
+				/* The current proof approaches the source cell and brakes before taking
 				 * ownership of the exact view. The final post-Pmove fire gate then
 				 * re-proves from the actual fixed-point source; it does not pretend
 				 * every position in this cell shares the nominal seed rollout. */
@@ -2262,6 +4257,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				else
 				{
 					vec3_t proof_source, proof_muzzle, proof_bite;
+					sg_hook_ride_worth_t worth = SG_HookExpectedRideWorth(
+					    goal_field[l->from], goal_field[l->to]);
 
 					proof_source[0] = (short)(SG_Rune()->seeds[l->from].origin[0]
 					                  * 8.0f) * 0.125f;
@@ -2269,7 +4266,12 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					                  * 8.0f) * 0.125f;
 					proof_source[2] = (short)(SG_Rune()->seeds[l->from].origin[2]
 					                  * 8.0f) * 0.125f;
-					if (SG_HookControlDecode(proof_source, 22.0f, RIGHT_HANDED,
+					if (worth == SG_HOOK_RIDE_REJECT)
+					{
+						Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,
+						    "value-skip", goal_field[l->from], goal_field[l->to]);
+					}
+					else if (SG_HookControlDecode(proof_source, 22.0f, RIGHT_HANDED,
 					                         l->anchor, bot->hook_view,
 					                         proof_muzzle, proof_bite))
 					{
@@ -2285,6 +4287,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						 * it with a quantized bolt-flight deadline; attachment then
 						 * starts a fresh three-second pull budget. */
 						SG_TimerArm(&bot->hook_deadline, 3.0f);
+					}
+					else
+					{
+						Hook_DisciplineRetire(e, bot, bestlink, 5.0f, true,
+						    "decode-retire", 0, 0);
 					}
 				}
 			hook_stage_done: ;
@@ -2404,21 +4411,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
 								    source_contaminated, source_door);
 							live_events = Drop_LiveEventsTake(bot);
-#ifdef SG_ACCEPT_DROP
-							/* The shared source-preflight latch above is authoritative.
-							 * Legacy A may take its private authority only after it
-							 * proves the same source is uncontaminated. */
-							if (SG_AcceptDropLegacyAuthority(bot, bestlink) &&
-							    !live_events.contaminated)
-							{
-								tc->drop_source_door_pending = source_door;
-								bot->drop_started = true;
-								SG_TimerArm(&bot->commit_until, 4.5f);
-								SG_AcceptDropActionBegin(bot, bestlink, "legacy");
-							}
-							else
-#endif
-							{
 							live_result = SG_DropLiveBegin(&bot->drop_replay,
 							    &bot->drop_replay_active, &bot->drop_replay_link,
 							    bestlink, SG_Rune()->seeds[l->to].origin, l->anchor,
@@ -2435,9 +4427,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								bot->drop_started = true;
 								SG_TimerArm(&bot->commit_until,
 								    SG_REPLAY_DROP_TOTAL_MS * 0.001f);
-#ifdef SG_ACCEPT_DROP
-								SG_AcceptDropActionBegin(bot, bestlink, "rev2");
-#endif
 							}
 							else
 							{
@@ -2448,7 +4437,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								 * complete production frame as four zero commands. */
 								ballistic_abort = true;
 								tc->think_over = true;
-							}
 							}
 						}
 					}
@@ -2533,24 +4521,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * the jump and the trigger go down together. Weapon_RocketLauncher
 		 * fires along v_angle on its fire frame, same contract as the hook.
 		 */
-		if (bot->rj_phase == 2)
-		{
-			float ry, rp;
-
-			ry = atan2f(bot->rj_aim[1], bot->rj_aim[0]) * 180.0f / M_PI;
-			rp = -asinf(bot->rj_aim[2]) * 180.0f / M_PI;
-			cmd->angles[YAW] = ANGLE2SHORT(ry)
-			                - e->client->ps.pmove.delta_angles[YAW];
-			cmd->angles[PITCH] = ANGLE2SHORT(rp)
-			                - e->client->ps.pmove.delta_angles[PITCH];
-			view_yaw = ry;
-			view_pitch = rp;
-			cmd->forwardmove = 0;
-			cmd->sidemove = 0;
-			cmd->upmove = 400;
-			cmd->buttons |= BUTTON_ATTACK;
-			have_move = false;
-		}
+		(void)StrikeRocketJumpPhase2Command(bot, e, cmd, &view_yaw,
+		    &view_pitch, &have_move);
 
 		/* while aiming to fire, the cmd angles ARE the anchor bearing --
 		 * this overrides the navigation view for exactly one frame */
@@ -2560,7 +4532,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			float ay, ap;
 
 			/* RL_HOOK stores the eye-space control, not the muzzle ray's
-			 * resulting bite. Reconstruct the same quantized command the v2
+			 * resulting bite. Reconstruct the same quantized command the active
 			 * generator traced. */
 			if (!bot->speedhook && bot->hook_link >= 0)
 				VectorCopy(bot->hook_view, shot);
@@ -2617,8 +4589,15 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			/* last resort: the goal itself, by belief */
 			edict_t *gf = NULL;
 
+			/* An early-return claimant that waited short of a pad must cross
+			 * the final body-length after spawn.  The pad seed has no improving
+			 * link, so target the exact live item before generic role homing can
+			 * turn the bot back toward a flag. */
+			if (Lead_PickupTarget(bot, aim))
+				have_aim = true;
+
 			/*
-			 * TERMINAL HOMING (carry forensics, wave 312): the carrier
+			 * TERMINAL HOMING (carry analysis, observations): the carrier
 			 * at its own stand aims at the LIVE FLAG ITEM, not the
 			 * info_flag_* spawn marker. The two usually coincide --
 			 * but the item droptofloors and on several stands settles
@@ -2627,7 +4606,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * wedge orbits, 12 of 19 parity arrivals). The engine's
 			 * own redflag/blueflag pointers name the real entity.
 			 */
-			if (ordered_escort)
+			if (!have_aim && ordered_escort)
 			{
 				VectorCopy(ordered_escort->s.origin, aim);
 				have_aim = true;
@@ -2635,31 +4614,28 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * own flag stand. Hold a useful body-length away instead of
 				 * grinding into them; combat remains free to own view/fire. */
 			}
-			else if (role == SG_ROLE_CARRY)
+			else if (!have_aim && role == SG_ROLE_CARRY)
 				gf = SG_OwnFlag(team);
 
-			if (!have_aim && !gf && role == SG_ROLE_ATTACK)
+			if (!have_aim && !gf &&
+			    (role == SG_ROLE_ATTACK || tc->strike_rush))
 			{
 				/* enemy stand position is common knowledge */
 				edict_t *marker = SG_FlagStand(team, false);
-				edict_t *enemy_item = SG_EnemyFlag(team);
+				edict_t *enemy_item = NULL;
 
 				gf = marker;
 				/*
-				 * THE ROUTE GOES THROUGH THE FLAG (owner's order,
-				 * 2026-08-11 -- his third strike on this disease).
-				 * Wave 312 taught the CARRIER to aim at the live item
+				 * THE ROUTE GOES THROUGH THE FLAG.
+				 * observations taught the CARRIER to aim at the live item
 				 * because droptofloor settles it off the marker far
 				 * enough to orbit; the grab side never got the fix, so
-				 * attackers still walked to the marker and circled a
-				 * flag a body-length away (conduct audit: stand-grind
-				 * cluster, 1.5% vs 3.3% conversion). Aim at the live
-				 * item -- but only while it sits at home: a dropped
-				 * flag elsewhere is Rule 19 intel the bot may not have.
+				 * attackers still walked to the marker and circled a flag a
+				 * body-length away.  The shared authority is stricter than
+				 * home knowledge: it also proves same-floor, hull-clear direct
+				 * contact, and refuses an unseen dropped item.
 				 */
-				if (enemy_item && marker &&
-				    SG_DistXY(enemy_item->s.origin,
-				              marker->s.origin) < 64.0f)
+				if (SG_AttackFlagDirectTouchAuthority(e, team, &enemy_item))
 					gf = enemy_item;
 			}
 			else if (!have_aim && !gf)
@@ -2672,31 +4648,16 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				have_aim = true;
 
 				/*
-				 * GRAB THROUGH, NOT AT. Escape speed in the first five
-				 * seconds of a carry measured 256 -- slower than plain
-				 * running -- because the terminal walk aimed AT the
-				 * flag: arrive, stop, turn, accelerate, die (365 samples
-				 * across six ten-wide waves). A human runs THROUGH the
-				 * stand at full stride, already on the exit line. Inside
-				 * 160 units the aim shifts past the flag to the first
-				 * seed of the route home; the touch happens mid-sprint
-				 * and the grab inherits a running start.
-				 */
-				/*
-				 * CAPTURE THROUGH (owner's point, wave 321): the same
+				 * CAPTURE THROUGH: the same
 				 * disease on the scoring touch -- converge, stop, cap.
 				 * Inside 160 the carrier aims PAST its flag along the
 				 * line it arrived on; the touch happens mid-stride.
 				 */
-				/*
-				 * ...and the GRAB gets the same stride (owner's order,
-				 * 2026-08-11): this block guarded on CARRY alone even
-				 * though its own comment promised the attacker's grab a
-				 * running start. The route now goes THROUGH the flag
-				 * for both touches -- grab and cap.
-				 */
-				if ((role == SG_ROLE_CARRY || role == SG_ROLE_ATTACK) &&
-				    bot->seed >= 0)
+				/* The attacker through-line is owned exclusively by
+				 * SG_AttackFlagTerminalAim and its direct-touch proof.  This
+				 * fallback retains capture behavior only; an attacker without
+				 * that proof must never project through a stand marker. */
+				if (role == SG_ROLE_CARRY && bot->seed >= 0)
 				{
 					vec3_t fd7;
 					float fl7;
@@ -2726,7 +4687,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				}
 
 				/*
-				 * THE TERMINAL BRAKE (set-#4 forensics, wave 397: Field at
+				 * THE TERMINAL BRAKE (movement analysis, observations: Field at
 				 * its own stand, flag home, 118 seconds of full-sprint orbit
 				 * at radius ~90). Pure physics: at 300 u/s under sg_turnrate
 				 * the minimum turn radius IS that orbit -- a missile circling
@@ -2736,11 +4697,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * the turn. Throttle follows alignment inside 220u -- badly
 				 * misaligned means slow, slow means tight, tight means the
 				 * spiral ends in a touch. sg_termbrake 0 restores the orbit
-				 * for A/B; the 5v0 canary's partial conversions are the
-				 * standing instrument that has flagged this for 25 waves.
+				 * for comparison; the 5v0 canary's partial conversions are the
+				 * standing instrument that flagged this in 25 match batches.
 				 */
-				if ((role == SG_ROLE_CARRY || role == SG_ROLE_ATTACK) &&
-				    sg_cv.termbrake->value)
+				if (role == SG_ROLE_CARRY && sg_cv.termbrake->value)
 				{
 					vec3_t tb, tv;
 					float tbl, spd2;
@@ -2759,40 +4719,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 							bot->term_brake = 0.30f;
 						else if (al < 0.85f)
 							bot->term_brake = 0.55f;
-					}
-				}
-				if (role == SG_ROLE_ATTACK && bot->seed >= 0)
-				{
-					vec3_t fd4;
-
-					VectorSubtract(gf->s.origin, e->s.origin, fd4);
-					fd4[2] = 0.0f;
-					if (VectorLength(fd4) < 160.0f)
-					{
-						int fs = Rune_NearestSeed(SG_Rune(), gf->s.origin);
-						int *home4 = (team == CTF_TEAM_RED)
-						             ? sg_fields.to_red_flag
-						             : sg_fields.to_blue_flag;
-
-						if (fs >= 0)
-						{
-							int li4, best4 = -1, bv4 = home4[fs];
-
-							for (li4 = SG_Rune()->first_link[fs]; li4 >= 0;
-							     li4 = SG_Rune()->next_link[li4])
-							{
-								rune_link_t *l4 = &SG_Rune()->links[li4];
-
-								if (home4[l4->to] < bv4)
-								{
-									bv4 = home4[l4->to];
-									best4 = l4->to;
-								}
-							}
-							if (best4 >= 0)
-								VectorCopy(SG_Rune()->seeds[best4].origin,
-								           aim);
-						}
 					}
 				}
 			}
@@ -2816,7 +4742,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the local gradient walk around a doorframe instead of into
 			 * it.
 			 */
-			/* sg_fandense (wave 294+): the census read a full-speed wall
+			/* sg_fandense (observations): the census read a full-speed wall
 			 * bump every ~7 seconds, and the geometry that does it lives
 			 * in the 30-degree blind wedge between the fan's first rays.
 			 * Dense mode adds the 15s; the preference-decay ordering is
@@ -2971,7 +4897,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 
 			/*
-			 * THE STEADY HAND (sg_smooth, A/B wave 195+). The human
+			 * THE STEADY HAND (sg_smooth, comparison observations). The human
 			 * calibration: 52 degrees median heading change per
 			 * travelling second against every bot's 70-73 -- and the
 			 * commanded direction churns 81, so the scribble is born
@@ -2990,7 +4916,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				float sdt = SG_Age(bot->nav_yaw_t);
 				float sdy = chosen_yaw - bot->nav_yaw_cur;
 				/* the cvar IS the slew rate in deg/s (owner's blend,
-				 * wave 321): 1 keeps the legacy 300 */
+				 * observations): 1 keeps the legacy 300 */
 				float srate = sg_cv.smooth->value;
 
 				if (srate <= 1.0f)
@@ -3025,7 +4951,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * writer, so the view never turned to the anchor, the fire
 			 * gate waited for an arrival that could not come, and the
 			 * bot stuck in phase 1 forever -- which gates out COMBAT
-			 * too. Three of wave 92's five games went totally silent,
+			 * too. Three of observations five games went totally silent,
 			 * every bot wedged on its first burst attempt. The burst
 			 * view now steers to the anchor here (yaw now, pitch via
 			 * swim-pitch's slot below), and phase 1 carries a hard
@@ -3047,7 +4973,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the phantom's pmove did. Arrival, a better field value, or
 			 * the clock ends it; a timeout hands the link to the shelf.
 			 */
-			if (bot->rail_stage > 0 && bestlink == bot->rail_link &&
+			if (StrikeRailMoveAllowed(tc) &&
+			    bot->rail_stage > 0 && bestlink == bot->rail_link &&
 			    bestlink >= 0)
 			{
 				rune_link_t *rl = &SG_Rune()->links[bestlink];
@@ -3192,10 +5119,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 */
 			/*
 			 * Carriers get a shorter clearance bar when sg_carryhop is
-			 * set (the trial value IS the distance): escape corridors
+			 * set (the case value IS the distance): escape corridors
 			 * rarely offer 160 clear units, so the fleeing carrier --
 			 * the one role whose touch-loss decides games -- was the
-			 * role hopping least (wave 270 census: 38%% airtime vs the
+			 * role hopping least (observations census: 38%% airtime vs the
 			 * attackers' 51%%).
 			 */
 			{
@@ -3376,7 +5303,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		/*
 		 * BREATH OUTRANKS EVERYTHING. Twelve seconds of air is what the
 		 * game gives; the lmctf01 moat tunnel costs ten at pace and any
-		 * stall drowns the swimmer -- wave 55's first-ever carrier on
+		 * stall drowns the swimmer -- observations first-ever carrier on
 		 * that map 'sank like a rock' mid-return, and the census says
 		 * drowning, not defense, is what kills conversions there. Four
 		 * seconds from the gurgle, the route stops mattering: pitch up,
@@ -3479,16 +5406,27 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		    !bot->jump_started && !bot->drop_started)
 		{
 			vec3_t cvd;
-			qboolean at_cover = true;
+			qboolean cover_valid = bot->rally_cover >= 0 &&
+			    bot->rally_cover < SG_Rune()->hdr.num_seeds;
+			/* Legacy attacker rallies intentionally hold in place when their
+			 * optional cover lookup failed.  A carrier is different: CARRYHOLD
+			 * without a real standoff must never turn its homeward command into
+			 * zero movement. */
+			qboolean at_cover = role != SG_ROLE_CARRY;
 
-			if (bot->rally_cover >= 0)
+			if (cover_valid)
 			{
 				VectorSubtract(SG_Rune()->seeds[bot->rally_cover].origin,
 				               e->s.origin, cvd);
 				cvd[2] = 0.0f;
 				at_cover = (VectorLength(cvd) < 48.0f);
 			}
-			if (at_cover)
+			else if (role == SG_ROLE_CARRY)
+			{
+				rally_hold = false;
+				tc->rally_hold = false;
+			}
+			if (rally_hold && at_cover)
 			{
 				cmd->forwardmove = 0;
 				cmd->sidemove = 0;
@@ -3496,7 +5434,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				bot->nav_drove = false;
 				bot->stuck_time = 0.0f;
 			}
-			else
+			else if (rally_hold)
 			{
 				float cy = atan2f(cvd[1], cvd[0]) * 180.0f / (float)M_PI;
 
@@ -3627,18 +5565,23 @@ static void Hook_GraphRelease(edict_t *e, sg_bot_t *bot,
 	*cut_in_step = true;
 }
 
-static void Hook_Shelve(sg_bot_t *bot, float seconds)
+static void Hook_ShelveLink(sg_bot_t *bot, int link_index, float seconds)
 {
 	int b, oldest = 0;
 
-	if (!SG_Rune() || bot->hook_link < 0 ||
-	    bot->hook_link >= SG_Rune()->hdr.num_links)
+	if (!SG_Rune() || link_index < 0 ||
+	    link_index >= SG_Rune()->hdr.num_links)
 		return;
 	for (b = 0; b < SG_BL_MAX; b++)
 		if (bot->bl_until[b] < bot->bl_until[oldest])
 			oldest = b;
-	bot->bl_link[oldest] = bot->hook_link;
+	bot->bl_link[oldest] = link_index;
 	SG_TimerArm(&bot->bl_until[oldest], seconds);
+}
+
+static void Hook_Shelve(sg_bot_t *bot, float seconds)
+{
+	Hook_ShelveLink(bot, bot->hook_link, seconds);
 }
 
 static void Hook_LiveClearFinalGuard(sg_bot_t *bot)
@@ -3647,8 +5590,10 @@ static void Hook_LiveClearFinalGuard(sg_bot_t *bot)
 		SG_HookLiveCommandGuardClear(&bot->hook_final_guard);
 }
 
-static void Hook_GraphFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
+static void Hook_GraphFailDetail(edict_t *e, sg_bot_t *bot,
+	float shelf_seconds, const char *detail)
 {
+	(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics, "graph-fail", detail);
 	if (e && e->client && e->client->hookstate != 0)
 		ctf_hook_abort(e);
 	Hook_Shelve(bot, shelf_seconds);
@@ -3664,6 +5609,65 @@ static void Hook_GraphFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
 	bot->hook_attached_validated = false;
 	bot->hook_pull_ms = 0;
 	bot->hook_settle_ms = 0;
+}
+
+static void Hook_GraphFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
+{
+	Hook_GraphFailDetail(e, bot, shelf_seconds, "legacy");
+}
+
+/* This is deliberately narrower than Hook_GraphFail: only a selected graph
+ * link that could not be valued, decoded, or aimed owns this discipline. */
+static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
+	float shelf_seconds, qboolean failure, const char *reason,
+	int from_goal, int to_goal)
+{
+	int ban_seconds = 0;
+	int gain = from_goal - to_goal;
+
+	if (!bot || !SG_Rune() || link_index < 0 ||
+	    link_index >= SG_Rune()->hdr.num_links ||
+	    SG_Rune()->links[link_index].action != RL_HOOK)
+		return;
+	Hook_ShelveLink(bot, link_index, shelf_seconds);
+	if (failure)
+	{
+		bot->hookfail_streak = SG_HookFailureStreakAdvance(
+		    bot->hookfail_streak, &ban_seconds);
+		if (ban_seconds > 0)
+			SG_TimerArm(&bot->hookban_until, (float)ban_seconds);
+	}
+	if (sg_cv.debug->value)
+	{
+		if (failure)
+			sg_host.dprint("HOOKDISC %s %s link=%d shelf=%.0f streak=%d ban=%d\n",
+			    e && e->client ? e->client->pers.netname : "?",
+			    reason ? reason : "retire", link_index, shelf_seconds,
+			    bot->hookfail_streak, ban_seconds);
+		else
+			sg_host.dprint("HOOKDISC %s value-skip link=%d from=%d to=%d gain=%d min=%d shelf=%.0f\n",
+			    e && e->client ? e->client->pers.netname : "?", link_index,
+			    from_goal, to_goal, gain, SG_HOOK_DISCIPLINE_SERVED_FIELD_MS,
+			    shelf_seconds);
+	}
+	if (e && e->client && e->client->hookstate != 0)
+		ctf_hook_abort(e);
+	bot->commit_link = -1;
+	bot->hook_phase = 0;
+	bot->hook_link = -1;
+	bot->hook_bite_logged = false;
+	bot->hook_attached_validated = false;
+	bot->hook_deadline = 0.0f;
+	bot->hook_pull_ms = 0;
+	bot->hook_settle_ms = 0;
+	bot->flow_release = false;
+	bot->speedhook = false;
+	SG_HookLiveDeactivate(&bot->hook_replay, &bot->hook_replay_active,
+	    &bot->hook_replay_link);
+	Hook_LiveClearFinalGuard(bot);
+	bot->hook_entity = NULL;
+	bot->hook_legacy_settle = false;
+	bot->hook_legacy_arrived = false;
 }
 
 qboolean SG_HookOffhandReady(edict_t *e)
@@ -4116,6 +6120,7 @@ static int TeleportSwim_OnlineProof(edict_t *e, sg_bot_t *bot,
 {
 	rune_link_t *link;
 	edict_t *pad;
+	sg_rune_mechanism_binding_t binding;
 	sg_phantom_t ph;
 	sg_swim_proof_t proof;
 	vec3_t approach;
@@ -4133,7 +6138,10 @@ static int TeleportSwim_OnlineProof(edict_t *e, sg_bot_t *bot,
 	if (link->action != RL_TELEPORT ||
 	    !(SG_Rune()->seeds[link->from].flags & RSF_WATER))
 		return SWIM_PROOF_FAIL;
-	pad = SG_TeleportForAnchor(link->anchor);
+	if (!SG_RuneMechanismBindingCapture(SG_Rune(), (uint32_t)link_index,
+	        &binding) || binding.link->action != RL_TELEPORT)
+		return SWIM_PROOF_FAIL;
+	pad = binding.mover_entity;
 	if (!pad || !SG_TeleportApproachPoint(pad, approach))
 		return SWIM_PROOF_FAIL;
 	proof_slot = (int)(bot - sg_bots);
@@ -4336,6 +6344,24 @@ static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
 	}
 }
 
+#ifdef SG_STRIKE_TRANSITION_TEST_API
+qboolean SG_StrikeTestRailMoveAllowed(const sg_think_t *tc)
+{
+	return StrikeRailMoveAllowed(tc);
+}
+
+qboolean SG_StrikeTestRocketJumpPhase2Command(const sg_bot_t *bot,
+	const edict_t *e, usercmd_t *cmd)
+{
+	float view_yaw = 0.0f;
+	float view_pitch = 0.0f;
+	qboolean have_move = true;
+
+	return StrikeRocketJumpPhase2Command(bot, e, cmd, &view_yaw,
+	    &view_pitch, &have_move);
+}
+#endif
+
 static void Hook_LiveSync(sg_bot_t *bot)
 {
 	if (!bot)
@@ -4384,6 +6410,8 @@ static qboolean Hook_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
 	{
 		/* The fourth settlement ClientThink has already completed; retain the
 		 * exact terminal 100 ms clock the legacy body left behind. */
+		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+		    "arrived", "reducer");
 		Hook_LiveSync(bot);
 		bot->hookfail_streak = 0;
 		bot->commit_link = -1;
@@ -4395,8 +6423,9 @@ static qboolean Hook_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
 		bot->hook_legacy_arrived = false;
 		return true;
 	}
-	Hook_GraphFail(e, bot,
-	    Hook_LiveShelfSeconds(replay_phase, result->replay_reason));
+	Hook_GraphFailDetail(e, bot,
+	    Hook_LiveShelfSeconds(replay_phase, result->replay_reason),
+	    SG_ReplayReasonName(result->replay_reason));
 	return true;
 }
 
@@ -5005,8 +7034,7 @@ qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
 }
 
 /*
- * THE COMMAND (split from SG_BotThink, 2026-08-11 standards pass; body
- * verbatim): the movement policy becomes a usercmd -- sub-stepping, the
+ * THE COMMAND: the movement policy becomes a usercmd -- sub-stepping, the
  * view slew, the weave, the duel hold, the plan beam and telemetry --
  * and the frame ends in ClientThink.
  */
@@ -5025,6 +7053,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	const int *route_field = tc->route_field;
 	int bestlink = tc->bestlink;
 	qboolean precision = tc->precision;
+	qboolean hold_post = tc->hold_post;
 	qboolean duel = tc->duel;
 	vec_t *move_dir = tc->move_dir;
 	float view_yaw = tc->view_yaw;
@@ -5049,7 +7078,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			if (guard_result != SG_COMPOUND_GUARD_OK ||
 			    !rune || !rune->links || record.link_index < 0 ||
 			    record.link_index >= rune->hdr.num_links ||
-			    rune->links[record.link_index].action != RL_DOOR ||
+			    (rune->links[record.link_index].action != RL_DOOR &&
+			     rune->links[record.link_index].action != RL_BUTTON_DOOR) ||
 			    bot->commit_link != record.link_index)
 			{
 				SG_DeclaredDoorTerminalDeath(bot);
@@ -5084,10 +7114,19 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	    SG_Rune()->links && bestlink < SG_Rune()->hdr.num_links &&
 	    (SG_Rune()->links[bestlink].action == RL_LIFT ||
 	     SG_Rune()->links[bestlink].action == RL_TELEPORT ||
-	     SG_Rune()->links[bestlink].action == RL_DOOR));
+	     SG_Rune()->links[bestlink].action == RL_DOOR ||
+	     SG_Rune()->links[bestlink].action == RL_BUTTON_DOOR));
 	qboolean proved_control = proved_ballistic || proved_swim || declared_control;
 	qboolean declared_door = declared_control &&
-	    SG_Rune()->links[bestlink].action == RL_DOOR;
+	    (SG_Rune()->links[bestlink].action == RL_DOOR ||
+	     SG_Rune()->links[bestlink].action == RL_BUTTON_DOOR);
+	sg_rune_mechanism_binding_t mechanism_binding;
+	qboolean mechanism_bound = !declared_control ||
+	    (bot->declared_started
+	        ? SG_RuneMechanismBindingCaptureOwned(SG_Rune(),
+	              (uint32_t)bestlink, &mechanism_binding)
+	        : SG_RuneMechanismBindingCapture(SG_Rune(),
+	              (uint32_t)bestlink, &mechanism_binding));
 	qboolean water_tele = declared_control &&
 	    SG_Rune()->links[bestlink].action == RL_TELEPORT &&
 	    (SG_Rune()->seeds[SG_Rune()->links[bestlink].from].flags & RSF_WATER);
@@ -5104,10 +7143,16 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	int sub_steps = 1, sub_msec = 0;
 	float slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
 	qboolean duel_hold = false;
+	qboolean defcombat_active = false;
 	qboolean hook_cut_in_step = false;
 	qboolean door_suffix_grant = false;
+	edict_t *defcombat_enemy = NULL;
+	edict_t *defcombat_stand = NULL;
+	unsigned long defcombat_enemy_ctfid = 0;
 	short weave_side = 0;
-	vec3_t d;
+	vec3_t d, defcombat_dir;
+
+	VectorClear(defcombat_dir);
 
 	/* Think_Move uses this one-frame latch only when live DROP Begin could not
 	 * acquire canonical ownership.  Return before any ClientThink: even a zero
@@ -5115,6 +7160,17 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * source.  Generic and legacy movement remain excluded for this frame. */
 	if (tc->think_over)
 		return;
+	if (!mechanism_bound)
+	{
+		if (declared_door && bot->declared_started)
+			DoorStep_RetainFailedAuthority(bot, bestlink);
+		else
+		{
+			bot->commit_link = -1;
+			bot->commit_until = 0.0f;
+		}
+		return;
+	}
 
 	/* Think_Move may retire a previous action after Think_CommitLink selected
 	 * this frame's edge (for example, the grounded tail of a rocket jump).  The
@@ -5229,6 +7285,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		bot->declared_start_frame = -1;
 		bot->declared_touched = false;
 		bot->declared_touch_frame = -1;
+		SG_ButtonExecutionActionReset(bot);
 		bot->declared_triggered = false;
 		bot->declared_trigger_frame = -1;
 		bot->declared_egress_proof_frame = -1;
@@ -5302,14 +7359,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * nothing), and never on the final approach, where the whole point is
 	 * being able to stop on the flag.
 	 */
-	/* sg_noweave (A/B wave 176+): the Brownian census -- median 73
+	/* sg_noweave (comparison observations): the Brownian census -- median 73
 	 * degrees of heading change per travelling second, 32%% outright
 	 * reversals -- with goals, seeds, and links all measured stable.
 	 * The lateral oscillators are the remaining suspects, and they
 	 * trigger on BELIEF-engagement, which at parity is nearly always.
 	 * Dodging nobody's bullets is the owner's "unnecessary movement"
 	 * by definition; this gate measures what the dodge layers cost. */
-	if (duel && role != SG_ROLE_CARRY && !precision &&
+	if (duel && !hold_post && role != SG_ROLE_CARRY && !precision &&
 	    bot->hook_phase == 0 &&
 	    !sg_cv.noweave->value)
 	{
@@ -5353,7 +7410,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 */
 
 	/*
-	 * THE BREATHER (sg_breather, wave 388 trial). The movement-texture
+	 * THE BREATHER (sg_breather, observations case). The movement-texture
 	 * judge, 4/4 blind on mactf06: "constant run plateau with
 	 * instantaneous needle spikes, zero acceleration ramping, no
 	 * burst/rest cadence, texture statistically identical from t=0 to
@@ -5407,7 +7464,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 		if (sub < 1)
 			sub = 1;
-		/* A v2 graph hook is proved as four literal 25 ms client commands in
+		/* A graph hook is proved as four literal 25 ms client commands in
 		 * its water-source aim frame as well as every flight, pull, and settle
 		 * interval. Do not let sg_subframes turn those boundaries into 13/26/39
 		 * ms or make proof semantics configuration-dependent. Optional speed
@@ -5425,9 +7482,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		base = total / sub;
 		rem = total % sub;
 		sub_steps = sub;
-#ifdef SG_ACCEPT_DROP
-		SG_AcceptDropGenericHandoffBegin(bot, bestlink, cmd, sub);
-#endif
 
 		/*
 		 * Combat rides the frame's command: view and trigger only, movement
@@ -5465,11 +7519,30 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		if (!proved_control && bot->nade_phase == 1)
 		{
+			qboolean target_pending = SG_NadeTargetSwitching(bot);
+			edict_t *pending_target = target_pending
+			    ? SG_NadeBoundLiveTarget(e, bot) : NULL;
+
 			/* cook only once the grenade is VERIFIABLY in hand -- the
 			 * switch runs through down/up animations, and holding the
-			 * trigger early fires whatever is still equipped (wave 127:
+			 * trigger early fires whatever is still equipped (observations:
 			 * zero grenades thrown, the cook squeezed the rail) */
-			if (e->client->pers.weapon &&
+			if (target_pending &&
+			    (role != SG_ROLE_ATTACK ||
+			     SG_AttackFlagDirectTouchAuthority(e, team, NULL) ||
+			     !pending_target ||
+			     !SG_CanSee(e, pending_target->s.origin,
+			                pending_target->viewheight)))
+			{
+				/* The target and direct-touch proof are re-read before the
+				 * switch becomes a cook.  A pre-breach transaction never gets
+				 * to borrow one trigger frame after its premise disappeared. */
+				bot->nade_phase = 0;
+				SG_NadeTargetClear(bot);
+				SG_TimerArm(&bot->nade_next, 4.0f);
+				cmd->buttons &= ~BUTTON_ATTACK;
+			}
+			else if (e->client->pers.weapon &&
 			    e->client->pers.weapon->pickup_name &&
 			    !Q_stricmp(e->client->pers.weapon->pickup_name,
 			               "Grenades"))
@@ -5481,8 +7554,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * left ~1s of fuse to spend BOUNCING off the impact
 				 * point at 667 u/s, which is exactly the one-room-off
 				 * miss NADEPOP measured (medians 434 and 717, radius
-				 * 165, waves 140/142) */
+				 * 165, observations) */
 				SG_TimerArm(&bot->nade_until, 3.2f);
+				if (target_pending)
+					bot->nade_target_cook_until = bot->nade_until;
+				else
+					SG_NadeTargetClear(bot);
 				if (sg_cv.debug->value)
 					sg_host.dprint("NADE %s cooking\n",
 					           e->client->pers.netname);
@@ -5490,13 +7567,43 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			else if (SG_TimerReady(bot->nade_until + 1.2f))
 			{
 				bot->nade_phase = 0;    /* switch never landed */
+				SG_NadeTargetClear(bot);
 				SG_TimerArm(&bot->nade_next, 4.0f);
 			}
 		}
 		if (!proved_control && bot->nade_phase == 2)
 		{
+			qboolean armed_target = SG_NadeTargetCooking(bot);
+			edict_t *nade_enemy = armed_target
+			    ? SG_NadeArmedTarget(e, bot) : SG_CombatLiveEnemy(e);
+			vec3_t pickup_aim;
+
+			/* Never release a pre-breach grenade into a room that has gone
+			 * quiet, after a target identity change, or after losing the
+			 * target's current visibility.  The item-through-line resumes on
+			 * the next frame. */
+			if ((armed_target &&
+			     (role != SG_ROLE_ATTACK ||
+			      SG_AttackFlagDirectTouchAuthority(e, team, NULL))) ||
+			    (!armed_target && role == SG_ROLE_ATTACK &&
+			     SG_AttackFlagTerminalAim(e, team, pickup_aim)) ||
+			    !nade_enemy ||
+			    !SG_CanSee(e, nade_enemy->s.origin, nade_enemy->viewheight))
+			{
+				bot->nade_phase = 0;
+				SG_NadeTargetClear(bot);
+				SG_TimerArm(&bot->nade_next, 4.0f);
+				cmd->buttons &= ~BUTTON_ATTACK;
+			}
+			else
+			{
+				/* The target body, not the old arm-time coordinate, owns each
+				 * cook frame.  Airborne lead below may replace this only for the
+				 * current frame, and the next one starts at this live origin. */
+				if (armed_target)
+					VectorCopy(nade_enemy->s.origin, bot->nade_at);
 			/*
-			 * THE BOMB LEADS THE LANDING (sg_nadelead, wave 309+). The
+			 * THE BOMB LEADS THE LANDING (sg_nadelead, observations). The
 			 * owner's doctrine already won this argument for rockets
 			 * (landlead, adopted 249): an airborne enemy is on a
 			 * committed arc. The cooked grenade is the same shot with
@@ -5508,13 +7615,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 */
 			if (sg_cv.nadelead->value)
 			{
-				edict_t *len9 = SG_CombatLiveEnemy(e);
+				edict_t *len9 = nade_enemy;
 
 				if (len9 && !len9->groundentity)
 				{
 					vec3_t lp0, lp1;
 					trace_t lltr;
-					/* The v3 runtime may be bound to a supported non-800 law.
+					/* The runtime may be bound to a supported non-800 law.
 					 * Lead the same authoritative parabola ClientThink applies. */
 					float ltt, lgrav = sv_gravity
 					    ? sv_gravity->value : 800.0f;
@@ -5547,7 +7654,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * our 1.3s cook gives ~575), gravity is the server's, and
 			 * the launch pitch to land ON the post is closed-form -- the
 			 * same equation the ballistic anchor uses. The flat -25
-			 * guess sailed 24 of 24 throws over the room (wave 128,
+			 * guess sailed 24 of 24 throws over the room (observations,
 			 * zero kills, duel ratio unmoved).
 			 */
 			vec3_t na;
@@ -5577,7 +7684,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				nfly = nh * sqrtf(1.0f + ntan * ntan) / nsp;
 
 				/*
-				 * THE ARC CHECK (wave 237). Three timing doses moved
+				 * THE ARC CHECK (observations). Three timing doses moved
 				 * nothing because most throws never get their
 				 * parabola -- from the band, the arc to the stand
 				 * runs through corridor walls, and the grenade
@@ -5618,6 +7725,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (nfly < -1.5f)
 				{
 					bot->nade_phase = 0;    /* abandon, cost-free */
+					SG_NadeTargetClear(bot);
 					SG_TimerArm(&bot->nade_next, 4.0f);
 					cmd->buttons &= ~BUTTON_ATTACK;
 				}
@@ -5626,10 +7734,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
 				         - 30.0f;
 			/*
-			 * THE SILENT COOK (wave 233). The zero-cost audit caught
+			 * THE SILENT COOK (observations). The zero-cost audit caught
 			 * the veer: this block owned the view for the whole cook
 			 * and the legs followed it off the route -- a 33 percent
-			 * steal tax on the trial arm. The owner's cook touches
+			 * steal tax on the case arm. The owner's cook touches
 			 * nothing: the view belongs to navigation until the
 			 * release frame, when the aim exists for exactly one
 			 * command -- the flick. Attack stays held throughout;
@@ -5651,14 +7759,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * bouncing away from the aim point, and NADEPOP measured
 			 * the result: medians 434 and 717 against a 165 radius.
 			 * A degenerate solve means the throw is TOO SLOW SO FAR --
-			 * speed builds with the cook (wave 143: releasing on
+			 * speed builds with the cook (observations: releasing on
 			 * degenerate threw every bomb at 400 u/s on frame one,
-			 * fuse=3.0, two pops all wave) -- so keep cooking until
+			 * fuse=3.0, two pops for the whole match) -- so keep cooking until
 			 * the closed form comes back. The 0.6s floor keeps the POP
 			 * outside our own splash radius (0.4s of fuse is ~250
 			 * units of clearance) and throws whatever the solve says.
 			 */
-			/* wave 236: pop EARLY -- hold the cook until remaining
+			/* observations: pop EARLY -- hold the cook until remaining
 			 * fuse undercuts the flight by 0.15s, so the grenade
 			 * expires airborne short of the floor it would have
 			 * bounced off (235: aim height alone left 69 percent of
@@ -5671,15 +7779,17 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			{
 				cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */
 				bot->nade_phase = 0;
+				SG_NadeTargetClear(bot);
 				SG_TimerArm(&bot->nade_next, 8.0f);
 				if (sg_cv.debug->value)
 					sg_host.dprint("NADE %s thrown fly=%.2f fuse=%.2f\n",
 					           e->client->pers.netname,
-					           nfly, ntmr - 0.2f);
+				           nfly, ntmr - 0.2f);
+			}
 			}
 		}
 		/*
-		 * SOUND-DIRECTED FIRE (sg_soundfire, wave 244). The owner:
+		 * SOUND-DIRECTED FIRE (sg_soundfire, observations). The owner:
 		 * "I can shoot rockets in the direction of sounds while
 		 * travelling a route." The ear places heard_only beliefs that
 		 * combat refuses to aim at -- this aims at them on purpose,
@@ -5715,7 +7825,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (sl15 < 600.0f || sl15 > 1500.0f)
 					continue;   /* too close = own splash; too
 					             * far = pure noise */
-				/* wave 245: never rocket a ghost a teammate is
+				/* observations: never rocket a ghost a teammate is
 				 * standing on -- the one premium this free trick
 				 * could quietly charge is friendly splash */
 				{
@@ -5975,7 +8085,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					if (dur >= SG_AS_MINCHAIN &&
 					    sg_cv.debug->value &&
 					    !(bot->as_said++ & 7))
-						sg_host.dprint("AIRCHAIN %s %.2fs entry=%.0f "
+						sg_host.dprint("ASCHAIN %s %.2fs entry=%.0f "
 						           "peak=%.0f\n",
 						           e->client->pers.netname, dur,
 						           bot->as_entry, bot->as_peak);
@@ -6030,22 +8140,28 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			slew_rate = rate;
 		}
 
-		for (step = 0; step < sub; step++)
+		if (!(as_ok && as_chain && !proved_control))
+			SG_HumanSpeedTimerReset(&bot->as_landing);
+
+		/* The defended stand normally has no leg command because Think_Move
+		 * intentionally made hold_post a statue. A current combat target may
+		 * borrow only this bounded leg, after every other movement owner has
+		 * declined. The planner does not write cmd, view, weapon, or routing. */
+	defcombat_active = DefenseCombatPlan(e, bot, team, tc, as_ok, engaged,
+	    &defcombat_stand, &defcombat_enemy, defcombat_dir);
+	if (defcombat_enemy && defcombat_enemy->client)
+		defcombat_enemy_ctfid = defcombat_enemy->client->ctf.ctfid;
+
+	for (step = 0; step < sub; step++)
 		{
 			qboolean drop_command_owned = false;
 			usercmd_t drop_expected_command;
-#ifdef SG_ACCEPT_DROP
-			qboolean accept_drop_step_owned = false;
-#endif
 
 			memset(&drop_expected_command, 0, sizeof(drop_expected_command));
 			cmd->msec = (byte)(base + (step < rem ? 1 : 0));
 			if (!cmd->msec)
 				continue;
 			sub_msec = cmd->msec;
-#ifdef SG_ACCEPT_DROP
-			accept_drop_step_owned = SG_AcceptDropOwnsStep(bot, bestlink);
-#endif
 
 			if (slew_rate > 0.0f)
 			{
@@ -6177,10 +8293,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->upmove = 0;
 				if (drop_recovery_failed)
 					cmd->forwardmove = 0;
-#ifdef SG_ACCEPT_DROP
-				if (bot->drop_started && bot->commit_link == bestlink)
-					SG_AcceptDropCommandHistorical(bot, bestlink, step, cmd);
-#endif
 				if (bot->drop_started && bot->drop_replay_active &&
 				    bot->commit_link == bestlink)
 				{
@@ -6207,7 +8319,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 			}
-			/* A v2 jump is one direct arc. Once the launch tap is armed, mirror
+			/* A proved jump is one direct arc. Once the launch tap is armed, mirror
 			 * the oracle at every literal 25 ms boundary: re-aim at the endpoint,
 			 * hold forward 400, and never manufacture a second jump on landing. */
 			if (proved_jump && (bot->jump_started || tc->jump_launch))
@@ -6264,12 +8376,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * walked behind a wall two seconds ago is worth holding a range
 			 * against, and is not worth dodging.
 			 */
-			if (!proved_control && duel_hold && engaged)
-			{
-				cmd->forwardmove = 0;
-				cmd->sidemove = weave_side;
-			}
-			else if (have_move && !precision && bot->hook_phase == 0 &&
+			if (!DefenseCombatApplyDuelWeave(hold_post, proved_control,
+				duel_hold, engaged, weave_side, cmd) &&
+				have_move && !precision && bot->hook_phase == 0 &&
 			         !proved_control)
 			{
 				sg_air_t		airs;
@@ -6284,8 +8393,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 					airs.lean = as_lean;
 					airs.chain = as_chain;
-					airs.vy_cur = bot->vy_cur;
-					airs.vp_cur = bot->vp_cur;
+					airs.view_yaw = bot->vy_cur;
+					airs.view_pitch = bot->vp_cur;
 					airp = &airs;
 
 					/*
@@ -6308,10 +8417,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 				/*
 				 * THE LAST TEN METERS, THE MOVEMENT HALF (406 canary
-				 * forensics): the brake slowed the orbit but the strafe
+				 * analysis): the brake slowed the orbit but the strafe
 				 * LEAN kept re-making it -- realign, accelerate past
 				 * 200, lean off-axis, miss, brake, repeat, 80 seconds
-				 * at goal-cost 200. Wave 96 ruled the walk straight;
+				 * at goal-cost 200. observations ruled the walk straight;
 				 * the aim obeyed, the legs never did. In terminal mode
 				 * there is no lean and no hop: plain forward down the
 				 * exact aim, throttle on the brake, touch.
@@ -6322,8 +8431,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				              (float)cmd->msec / 1000.0f, airp);
 
 				/*
-				 * THE CARRIER'S JINK. The parity killer census (waves
-				 * 141-146, 5v5/7v7): 30 of 64 carrier deaths to the
+				 * THE CARRIER'S JINK. In 5v5/7v7 play, 30 of 64 carrier deaths
+				 * went to the
 				 * rail, escorts standing right there for 54 of the 65
 				 * carries -- a screen does not bend a hitscan line, only
 				 * the target's own motion does. This is NOT the weave
@@ -6334,9 +8443,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * fresh contact (3s) is believed and the legs are on the
 				 * ground doing route work.
 				 */
-				/* open ground only: wave 147's first jink census traded
+				/* open ground only: observations first jink census traded
 				 * rails (47%%->25%%) for WEDGES -- carrier suicides went
-				 * from one every other wave to four in one, the
+				 * from one every other match to four in one, the
 				 * serpentine drifting bodies into corners the feelers
 				 * had already vetoed. No open room ahead, no jink: a
 				 * wall stops more rails than it starts. */
@@ -6384,7 +8493,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 
 			/*
-			 * DE-PACE (sg_depace, rung-4 cut #4). The post-zone split
+			 * DE-PACE (sg_depace, behavior cut #4). The post-zone split
 			 * killed the defender hypothesis: 86-89% of the escort
 			 * gap is mid-field co-travel, and the anti-linger
 			 * surcharge nulled because corridors have no lateral room
@@ -6439,6 +8548,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->sidemove = 0;
 				cmd->upmove = 0;
 			}
+
+			/* Convert the world-space tangent against the combat-refreshed,
+			 * actually slewed basis. This is intentionally the final ordinary
+			 * walking writer; any identity/team/support change zeroes the leg
+			 * rather than borrowing an old combat target for one more substep. */
+			(void)DefenseCombatWriteFinal(e, bot, team, tc, as_ok,
+				defcombat_active, defcombat_stand, defcombat_enemy,
+				defcombat_enemy_ctfid, defcombat_dir, cmd);
 
 			/* The shared feedback command is the final writer for RL_SWIM.
 			 * It replaces view, movement, trigger and every optional modifier at
@@ -6509,16 +8626,24 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			{
 				rune_link_t *decl = &SG_Rune()->links[bestlink];
 				vec3_t dd, target, source;
+				vec3_t door_effective_anchor;
 				float yaw, horiz;
 				byte msec = cmd->msec;
 				qboolean hold = false;
 				short source_pms[3];
 				qboolean source_exact, source_rest, source_snapped = false;
 				edict_t *door_trigger = NULL;
-				qboolean door_wait_exact = false, door_wait_rest = false;
+					qboolean door_wait_exact = false, door_wait_rest = false;
 				qboolean door_wait_snapped = false;
+				sg_button_execution_anchor_state_t button_anchor_state =
+				    SG_BUTTON_EXECUTION_ANCHOR_BOTTOM;
+				qboolean button_controller = false;
+				qboolean direct_controller = false;
+				qboolean direct_drive = true;
+				qboolean button_motion_hold = false;
 
 				Ballistic_SourceFixed(decl, source, source_pms);
+				VectorCopy(decl->anchor, door_effective_anchor);
 				source_exact = Ballistic_SourceExact(e, source_pms);
 				source_rest = Ballistic_SourceRest(e);
 				if (!water_tele && !bot->declared_started &&
@@ -6591,9 +8716,42 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (declared_door)
 				{
 					short wait_fixed[3];
+					qboolean binding_ok;
 					int axis;
 
-					door_trigger = SG_DeclaredDoorForLink(decl->anchor, source);
+					binding_ok = DoorStep_DeclaredBindingForLink(bestlink,
+					    bot->declared_started, &mechanism_binding);
+					if (binding_ok)
+					{
+						door_trigger = mechanism_binding.entry_entity;
+						button_controller = mechanism_binding.plan &&
+						    mechanism_binding.plan->controller_kind ==
+						        SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+						direct_controller = mechanism_binding.plan &&
+						    mechanism_binding.plan->controller_kind ==
+						        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+						if (button_controller && bot->declared_touched)
+						{
+							button_anchor_state = SG_ButtonExecutionAnchor(
+							    &mechanism_binding, bot, e, decl->anchor,
+							    decl->mechanism_anchor, decl->mode,
+							    door_effective_anchor);
+							if (button_anchor_state ==
+							    SG_BUTTON_EXECUTION_ANCHOR_INVALID)
+							{
+								DoorStep_RetainFailedAuthority(bot, bestlink);
+								return;
+							}
+							if (button_anchor_state ==
+							        SG_BUTTON_EXECUTION_ANCHOR_MOVING &&
+							    !(bot->declared_activated &&
+							      bot->declared_door_retreat))
+							{
+								button_motion_hold = true;
+								hold = true;
+							}
+						}
+					}
 					/* Reauthenticate the durable claim before this frame can snap,
 					 * relink, arm, hold, or otherwise mutate the live body/action.
 					 * Later checks deliberately remain at their immediate mutation
@@ -6604,6 +8762,21 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					{
 						DoorStep_RetainFailedAuthority(bot, bestlink);
 						return;
+					}
+					if (bot->declared_started && !bot->declared_activated &&
+					    direct_controller &&
+					    bot->declared_start_frame != level.framenum)
+					{
+						for (axis = 0; axis < 3; axis++)
+							wait_fixed[axis] =
+							    (short)(door_effective_anchor[axis] * 8.0f);
+						if (!SG_DeclaredDoorApproachExecutionBegin(bot,
+						        &mechanism_binding,
+						        source_pms, wait_fixed))
+						{
+							DoorStep_RetainFailedAuthority(bot, bestlink);
+							return;
+						}
 					}
 					if (!door_trigger)
 					{
@@ -6625,44 +8798,105 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					}
 					else if (bot->declared_started && !bot->declared_activated)
 					{
-						/* Approach and motion wait are valid only on the dry,
-						 * immutable, full-sweep-clear trajectory the loader replayed.
-						 * A dynamic shove retires the declaration before it can become
-						 * permission to enter a moving brush envelope. */
-						if (!SG_DeclaredDoorOutsideSweep(door_trigger,
-						        e->s.origin) || !e->groundentity ||
-						    (e->groundentity != g_edicts &&
-						     !SG_ImmutableSupport(e->groundentity)) ||
-						    e->waterlevel != 0 ||
-						    e->client->ps.pmove.pm_type != PM_NORMAL ||
-						    (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
-						    e->client->ps.pmove.pm_time)
+						qboolean outside_ok;
+						qboolean support_ok;
+
+						outside_ok = SG_BoundDoorOutsideSweep(&mechanism_binding,
+						    e->s.origin);
+						support_ok = SG_ButtonExecutionSupportValid(
+						    &mechanism_binding, bot, e);
+						if (direct_controller &&
+						    bot->declared_start_frame != level.framenum)
+						{
+							sg_door_approach_observation_t observation;
+							sg_door_approach_result_t result;
+
+							if (!DoorStep_ApproachIdentityCurrent(bot,
+							        &mechanism_binding) ||
+							    !DoorStep_ApproachObservation(e,
+							        &mechanism_binding, &observation))
+							{
+								DoorStep_RetainFailedAuthority(bot, bestlink);
+								return;
+							}
+							if (bot->declared_door_approach.phase !=
+							    SG_DOOR_APPROACH_COMPLETE)
+							{
+								result = SG_DoorApproachPreStep(
+								    &bot->declared_door_approach, &observation,
+								    msec);
+								if (result.reason !=
+								    SG_DOOR_APPROACH_REASON_NONE)
+								{
+									DoorStep_RetainFailedAuthority(bot,
+									    bestlink);
+									return;
+								}
+								direct_drive = result.drive ? true : false;
+								hold = !direct_drive;
+							}
+							else if (!Ballistic_SourceRest(e))
+							{
+								DoorStep_RetainFailedAuthority(bot, bestlink);
+								return;
+							}
+						}
+						else if (!outside_ok || !support_ok ||
+						         e->waterlevel != 0 ||
+						         e->client->ps.pmove.pm_type != PM_NORMAL ||
+						         (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
+						         e->client->ps.pmove.pm_time)
 						{
 							DoorStep_RetainFailedAuthority(bot, bestlink);
 							return;
 						}
-						if (bot->commit_link >= 0)
+						if (!outside_ok || e->waterlevel != 0 ||
+						    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+						{
+							DoorStep_RetainFailedAuthority(bot, bestlink);
+							return;
+						}
+						if (bot->declared_start_frame == level.framenum)
+							hold = true;
+						else if (button_motion_hold ||
+						         (button_controller && bot->declared_touched &&
+						          button_anchor_state !=
+						              SG_BUTTON_EXECUTION_ANCHOR_TOP))
+							hold = true;
+						else if (bot->commit_link >= 0 &&
+						         (!direct_controller ||
+						          bot->declared_door_approach.phase ==
+						              SG_DOOR_APPROACH_COMPLETE))
 						{
 							vec3_t wait_delta;
+
 							for (axis = 0; axis < 3; axis++)
 								wait_fixed[axis] =
-								    (short)(decl->anchor[axis] * 8.0f);
+								    (short)(door_effective_anchor[axis] * 8.0f);
 							door_wait_exact = Ballistic_SourceExact(e,
 							    wait_fixed);
 							door_wait_rest = Ballistic_SourceRest(e);
-							VectorSubtract(decl->anchor, e->s.origin, wait_delta);
-							if (bot->declared_touch_frame != level.framenum &&
+							VectorSubtract(door_effective_anchor, e->s.origin,
+							    wait_delta);
+							if (!direct_controller &&
+							    bot->declared_touch_frame != level.framenum &&
 							    bot->declared_trigger_frame != level.framenum &&
 							    !door_wait_exact && door_wait_rest &&
 							    fabsf(wait_delta[2]) <= 2.0f &&
 							    wait_delta[0] * wait_delta[0] +
 							    wait_delta[1] * wait_delta[1] <= 4.0f)
 								door_wait_snapped = Ballistic_CanonicalizeSource(e,
-								    decl->anchor, wait_fixed);
+								    door_effective_anchor, wait_fixed);
 							if (door_wait_snapped)
 							{
 								door_wait_exact = true;
 								door_wait_rest = true;
+							}
+							if (direct_controller &&
+							    (!door_wait_exact || !door_wait_rest))
+							{
+								DoorStep_RetainFailedAuthority(bot, bestlink);
+								return;
 							}
 							/* When our trigger contact ran inside the preceding ClientThink,
 							 * stop every remaining 25 ms command in this outer frame,
@@ -6690,20 +8924,48 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 								 * share one 100 ms phase.  If anchor/rest becomes exact
 								 * later in this frame, hold and revalidate after movers on
 								 * the next outer-frame boundary. */
-								if (step != 0 ||
+									if (step != 0 ||
 								    SG_DeclaredDoorGuardAuthorize(bot, bestlink) !=
 								        SG_COMPOUND_GUARD_OK ||
-								    !SG_DeclaredDoorAtTop(door_trigger) ||
+								    !SG_BoundDoorAtTop(&mechanism_binding) ||
 								    bot->declared_egress_proof_frame == level.framenum)
-									hold = true;
+									{
+										hold = true;
+								}
 								else
 								{
+									qboolean egress_ok;
+									qboolean window_ok = false;
+
 									bot->declared_egress_proof_frame = level.framenum;
-									if (SG_OracleDeclaredDoorEgress(decl->anchor,
-									        SG_Rune()->seeds[decl->to].origin,
-									        door_trigger, e, &egress_window_ms) &&
-									    SG_DeclaredDoorAtTopFor(door_trigger,
-									        egress_window_ms + 100))
+										egress_ok = button_controller
+										    ? SG_OracleBoundButtonDoorEgress(
+										          door_effective_anchor,
+										          SG_Rune()->seeds[decl->to].origin,
+										          &mechanism_binding, e, &egress_window_ms,
+										          decl->mode == RLCM_RIDE
+										              ? SG_BUTTON_SUPPORT_RIDER
+										              : SG_BUTTON_SUPPORT_STATIC)
+										    : SG_OracleBoundDoorEgress(door_effective_anchor,
+										          SG_Rune()->seeds[decl->to].origin,
+										          &mechanism_binding, e, &egress_window_ms);
+										if (egress_ok && button_controller)
+										{
+											int rounded = ((egress_window_ms + 99) / 100) * 100;
+											float remaining = mechanism_binding.entry_entity->nextthink >
+											        level.time
+											    ? (mechanism_binding.entry_entity->nextthink -
+											       level.time) * 1000.0f : 0.0f;
+
+											egress_ok = rounded == decl->sweep_clear_ms &&
+											    button_anchor_state ==
+											        SG_BUTTON_EXECUTION_ANCHOR_TOP &&
+											    remaining + 0.01f >= egress_window_ms + 100;
+										}
+										if (egress_ok)
+										window_ok = SG_BoundDoorAtTopFor(&mechanism_binding,
+										    egress_window_ms + 100);
+									if (egress_ok && window_ok)
 										bot->declared_activated = true;
 									else
 										hold = true;
@@ -6716,17 +8978,18 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						 * an else-if, so that nominal handoff is immediately covered by
 						 * the authoritative suffix proof and its four-command grant. */
 						if (bot->commit_link >= 0 && bot->declared_started &&
-						    bot->declared_activated)
+						    bot->declared_activated && !button_motion_hold)
 						{
-							qboolean outside = door_trigger &&
-							    SG_DeclaredDoorOutsideSweep(door_trigger, e->s.origin);
+							qboolean outside =
+							    SG_BoundDoorOutsideSweep(&mechanism_binding,
+							        e->s.origin);
 
 							/* A failed forward suffix latches one recovery direction.  Do
 							 * not alternate across the mover on successive live snapshots;
 							 * once retreat owns the action it returns to the exact declared
 							 * anchor and shelves the interrupted attempt there. */
 							if (bot->declared_door_retreat && outside &&
-							    SG_SupportedArrived(e->s.origin, decl->anchor,
+							    SG_SupportedArrived(e->s.origin, door_effective_anchor,
 							        e->groundentity != NULL, e->watertype, e->waterlevel, e))
 							{
 								DoorStep_StopOutside(e);
@@ -6762,20 +9025,36 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 									}
 									return;
 								}
-								if (door_trigger && !bot->declared_door_retreat &&
-								    SG_OracleDeclaredDoorContinue(e,
-								        SG_Rune()->seeds[decl->to].origin, door_trigger,
+								if (!bot->declared_door_retreat &&
+								    SG_OracleBoundDoorContinue(e,
+								        SG_Rune()->seeds[decl->to].origin,
+								        &mechanism_binding,
 								        &suffix_ms) &&
-								    SG_DeclaredDoorAtTopFor(door_trigger, suffix_ms + 100))
+								    SG_BoundDoorAtTopFor(&mechanism_binding,
+								        suffix_ms + 100))
 									proved = true;
 								else if (!bot->declared_door_retreat)
 									bot->declared_door_retreat = true;
 
-								if (!proved && door_trigger && bot->declared_door_retreat &&
-								    SG_OracleDeclaredDoorContinue(e, decl->anchor,
-								        door_trigger, &suffix_ms) &&
-								    SG_DeclaredDoorAtTopFor(door_trigger, suffix_ms + 100))
+								if (!proved && bot->declared_door_retreat &&
+								    SG_OracleBoundDoorContinue(e, door_effective_anchor,
+								        &mechanism_binding, &suffix_ms) &&
+								    SG_BoundDoorAtTopFor(&mechanism_binding,
+								        suffix_ms + 100))
 									proved = true;
+
+								if (proved && button_controller &&
+								    !bot->declared_door_retreat)
+								{
+									float remaining =
+									    mechanism_binding.entry_entity->nextthink > level.time
+									    ? (mechanism_binding.entry_entity->nextthink -
+									       level.time) * 1000.0f : 0.0f;
+
+									proved = button_anchor_state ==
+									    SG_BUTTON_EXECUTION_ANCHOR_TOP &&
+									    remaining + 0.01f >= suffix_ms + 100;
+								}
 
 								if (proved)
 								{
@@ -6825,15 +9104,17 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					else if (bot->declared_activated)
 					{
 						if (declared_door && bot->declared_door_retreat)
-							VectorCopy(decl->anchor, target);
+							VectorCopy(door_effective_anchor, target);
 						else
 							VectorCopy(SG_Rune()->seeds[decl->to].origin, target);
 					}
+				else if (declared_door)
+					VectorCopy(door_effective_anchor, target);
 				else
 					VectorCopy(decl->anchor, target);
 				if (water_tele && !bot->declared_activated)
 				{
-					edict_t *pad = SG_TeleportForAnchor(decl->anchor);
+					edict_t *pad = mechanism_binding.mover_entity;
 
 					if (!pad || !SG_TeleportApproachPoint(pad, target))
 					{
@@ -6850,7 +9131,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (decl->action == RL_LIFT && bot->declared_started &&
 				    !bot->declared_activated)
 				{
-					edict_t *plat = SG_LiftForAnchor(decl->anchor);
+					edict_t *plat = mechanism_binding.mover_entity;
 
 					if (!plat)
 					{
@@ -7008,8 +9289,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			if (drop_replay_failed)
 				SG_DropLiveZeroCommand(cmd);
 			{
-				edict_t *guard_trigger = NULL;
 				qboolean guard_door_step = false;
+				qboolean direct_door_prediction = false;
+				sg_door_approach_prediction_t door_prediction;
+				sg_rune_mechanism_binding_t door_step_binding;
+
+				memset(&door_prediction, 0, sizeof(door_prediction));
+				memset(&door_step_binding, 0, sizeof(door_step_binding));
 
 				/* Projectiles have already applied any knockback this outer frame.
 				 * Preflight the exact authoritative Pmove before ClientThink can run
@@ -7017,12 +9303,30 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (declared_door && bot->commit_link == bestlink &&
 				    !bot->declared_activated)
 				{
-					rune_link_t *door_link = &SG_Rune()->links[bestlink];
+					if (DoorStep_DeclaredBindingForLink(bestlink,
+					        bot->declared_started, &door_step_binding))
+					{
+						if (DoorStep_ApproachTicketRequired(bot,
+						        &door_step_binding))
+						{
+							sg_door_approach_reason_t reason;
 
-					guard_trigger = SG_DeclaredDoorForLink(door_link->anchor,
-					    SG_Rune()->seeds[door_link->from].origin);
-					guard_door_step = guard_trigger &&
-					    SG_OracleDeclaredDoorStepSafe(e, guard_trigger, cmd);
+							guard_door_step =
+							    SG_OracleBoundDoorApproachStep(e,
+							        &door_step_binding, cmd,
+							        &bot->declared_door_approach,
+							        &door_prediction, &reason) &&
+							    SG_RuneMechanismBindingCurrent(
+							        &door_step_binding);
+							direct_door_prediction = guard_door_step;
+						}
+						else
+							guard_door_step =
+							    SG_OracleBoundDoorStepSafe(e,
+							        &door_step_binding, cmd) &&
+							    SG_RuneMechanismBindingCurrent(
+							        &door_step_binding);
+					}
 					if (!guard_door_step)
 					{
 						DoorStep_StopOutside(e);
@@ -7058,20 +9362,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						    true, false);
 					VectorCopy(e->s.origin, bot->drop_live_step_origin);
 				}
-
-#ifdef SG_ACCEPT_DROP
-				else if (proved_drop && accept_drop_step_owned)
-				{
-					if (!SG_AcceptDropObserverBeginCommand(bot, bestlink,
-					        &bot->drop_live_events,
-					        &tc->drop_source_door_pending))
-						(void)SG_DropLiveEventsLatch(&bot->drop_live_events,
-						    true, false);
-					VectorCopy(e->s.origin, bot->drop_live_step_origin);
-				}
-				if (proved_drop && accept_drop_step_owned)
-					SG_AcceptDropCommand(bot, bestlink, step, cmd);
-#endif
 				/* Physics preflight and mover authority are independent.  Re-resolve
 				 * and authorize the exact physical member set immediately before
 				 * every ClientThink owned by a declared door. */
@@ -7086,22 +9376,65 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (declared_door && bot->declared_started &&
 				    bot->commit_link == bestlink)
 					bot->declared_door_recovery_since = 0.0f;
+				if (direct_door_prediction &&
+				    (!SG_RuneMechanismBindingCurrent(&door_step_binding) ||
+				     !SG_DeclaredDoorApproachExecutionArm(bot,
+				         &door_step_binding,
+				         &door_prediction, step)))
+				{
+					DoorStep_RetainFailedAuthority(bot, bestlink);
+					return;
+				}
+				bot->as_landing_command = as_ok && as_chain &&
+				    !proved_control && !door_hold;
 				ClientThink(e, cmd);
-				if (drop_command_owned
-#ifdef SG_ACCEPT_DROP
-				    || (proved_drop && accept_drop_step_owned &&
-				        SG_AcceptDropObserverEventOwner(bot))
-#endif
-				   )
-					Drop_LiveObserveDoorPassage(bot, e);
+				if (direct_door_prediction)
+				{
+					if (!SG_DeclaredDoorApproachExecutionFinish(bot,
+					        &door_step_binding, e))
+					{
+						DoorStep_RetainFailedAuthority(bot, bestlink);
+						return;
+					}
+					if (bot->declared_door_approach.phase ==
+					    SG_DOOR_APPROACH_SNAP)
+					{
+						sg_door_approach_observation_t observation;
+						sg_door_approach_result_t result;
+						vec3_t anchor;
+						short anchor_q8[3];
+						int axis;
 
-#ifdef SG_ACCEPT_DROP
-				if (proved_drop && accept_drop_step_owned)
-					SG_AcceptDropObserverTakeEvents(bot, bestlink, step,
-					    &bot->drop_live_events);
-				if (proved_drop && accept_drop_step_owned)
-					SG_AcceptDropPose(bot, bestlink, step, e);
-#endif
+						for (axis = 0; axis < 3; axis++)
+						{
+							anchor_q8[axis] =
+							    bot->declared_door_approach.anchor_q8[axis];
+							anchor[axis] = anchor_q8[axis] * 0.125f;
+						}
+						if (!Ballistic_CanonicalizeSource(e, anchor,
+						        anchor_q8) ||
+						    !DoorStep_ApproachObservation(e,
+						        &door_step_binding, &observation))
+						{
+							DoorStep_RetainFailedAuthority(bot,
+							    bestlink);
+							return;
+						}
+						result = SG_DoorApproachSnapped(
+						    &bot->declared_door_approach, &observation);
+						if (result.reason !=
+						        SG_DOOR_APPROACH_REASON_NONE ||
+						    !DoorStep_ApproachIdentityCurrent(bot,
+						        &door_step_binding))
+						{
+							DoorStep_RetainFailedAuthority(bot,
+							    bestlink);
+							return;
+						}
+					}
+				}
+				if (drop_command_owned)
+					Drop_LiveObserveDoorPassage(bot, e);
 			}
 			if (proved_swim && bot->swim_replay_active &&
 			    bot->commit_link == bestlink && step < sub - 1)
@@ -7151,7 +9484,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				int b, oldest = 0;
 
 				/* Legacy DROP rejects support loss at each submitted command.
-				 * Revision 2 owns 25/50/75 ms in PostStep and deliberately leaves
+				 * The active reducer owns 25/50/75 ms in PostStep and leaves
 				 * command four pending for terminal-first Boundary evaluation.
 				 * Stop the remaining commands in this frame, shelf the corrupted
 				 * witness, and re-localize from the resulting real body. */
@@ -7160,10 +9493,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						oldest = b;
 				bot->bl_link[oldest] = bestlink;
 				SG_TimerArm(&bot->bl_until[oldest], 10.0f);
-#ifdef SG_ACCEPT_DROP
-				SG_AcceptDropShelf(bot, bestlink, "command-recovery-lost");
-				SG_AcceptDropTeach(bestlink, "command-recovery-lost");
-#endif
 				SG_TeachLinkFutility(bestlink);
 				bot->commit_link = -1;
 				bot->drop_link = -1;
@@ -7177,11 +9506,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				drop_recovery_failed = true;
 				drop_replay_failed = true;
 			}
-#ifdef SG_ACCEPT_DROP
-			if (proved_drop && accept_drop_step_owned &&
-			    SG_AcceptDropAfterStep(bot, bestlink, step, e))
-				return;
-#endif
 			if ((proved_swim || water_tele) && bot->swim_validated &&
 			    !swim_emergency && !swim_hazard &&
 			    bot->commit_link == bestlink)
@@ -7197,7 +9521,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				tc->jump_launch = false;
 			}
 
-			/* The v2 proof permits release between its 25 ms usercmds, but
+			/* The hook proof permits release between its 25 ms usercmds, but
 			 * velocity is not overwritten again until the next 100 ms boundary. */
 			if (!hook_cut_in_step && bot->hook_phase == 2 && !bot->speedhook &&
 			    Hook_GraphReleaseReady(e, bot))
@@ -7215,9 +9539,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			if (cmd->upmove >= 10)
 				cmd->upmove = 0;
 		}
-#ifdef SG_ACCEPT_DROP
-		SG_AcceptDropGenericHandoffEnd(bot, bestlink, sub, total);
-#endif
 		cmd->msec = (byte)sub_msec;
 	}
 
@@ -7283,9 +9604,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * whatever): stand down clean and force a fresh route choice.
 			 * Merely clearing phase 1 leaves Think_CommitLink holding the
 			 * same hook, so the next frame walks straight back into the same
-			 * aim wedge. A graph hook drops its commitment and stale failure
-			 * streak, then gets a short local shelf; a speed hook keeps its RUN
-			 * commitment and is already protected by its own cooldown. */
+			 * aim wedge. A graph hook retires its link and advances the same
+			 * failure streak as other demonstrated bad rides; a speed hook
+			 * keeps its RUN commitment and its own cooldown. */
 			if (failed_speedhook)
 			{
 				/* The first cooldown was armed when aiming began, so it can
@@ -7300,30 +9621,22 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else
 			{
-				bot->commit_link = -1;
-				bot->hookfail_streak = 0;
-				if (SG_Rune() && failed_link >= 0 &&
-				    failed_link < SG_Rune()->hdr.num_links)
-				{
-					int b, oldest = 0;
-
-					for (b = 0; b < SG_BL_MAX; b++)
-						if (bot->bl_until[b] < bot->bl_until[oldest])
-							oldest = b;
-					bot->bl_link[oldest] = failed_link;
-					SG_TimerArm(&bot->bl_until[oldest], 5.0f);
-				}
+				Hook_DisciplineRetire(e, bot, failed_link, 5.0f, true,
+				    "aim-retire", 0, 0);
 			}
 			if (sg_cv.debug->value)
 				sg_host.dprint("HOOKAIMFAIL %s link=%d\n",
 				           e->client->pers.netname,
 				           failed_speedhook ? -1 : failed_link);
-			bot->hook_phase = 0;
-			bot->speedhook = false;
-			bot->flow_release = false;
-			bot->hook_link = -1;
-			bot->hook_bite_logged = false;
-			bot->hook_deadline = 0.0f;
+			if (failed_speedhook)
+			{
+				bot->hook_phase = 0;
+				bot->speedhook = false;
+				bot->flow_release = false;
+				bot->hook_link = -1;
+				bot->hook_bite_logged = false;
+				bot->hook_deadline = 0.0f;
+			}
 		}
 		else if (bot->hook_phase == 1)
 		{
@@ -7367,8 +9680,35 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 			if (!bot->speedhook && bot->hook_link >= 0)
 			{
-				int online = Hook_OnlineProof(e, bot,
-				    SG_Rune()->links[bot->hook_link].anchor[ROLL],
+				rune_t *rune = SG_Rune();
+				rune_link_t *hook_link;
+				sg_hook_ride_worth_t worth;
+				int link_index = bot->hook_link;
+				int online;
+
+				/* Aim can span several outer frames while the objective field is
+				 * refreshed. Recheck the exact current link/field immediately
+				 * before its irreversible proof/fire boundary: a formerly served
+				 * ride must not launch after its current gain falls to the shelf. */
+				if (!goal_field || !rune || !rune->links || link_index < 0 ||
+				    link_index >= rune->hdr.num_links ||
+				    (hook_link = &rune->links[link_index])->action != RL_HOOK ||
+				    hook_link->from < 0 || hook_link->from >= rune->hdr.num_seeds ||
+				    hook_link->to < 0 || hook_link->to >= rune->hdr.num_seeds)
+				{
+					Hook_GraphFail(e, bot, 5.0f);
+					goto hook_wait;
+				}
+				worth = SG_HookExpectedRideWorth(goal_field[hook_link->from],
+				    goal_field[hook_link->to]);
+				if (worth == SG_HOOK_RIDE_REJECT)
+				{
+					Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,
+					    "value-fire-skip", goal_field[hook_link->from],
+					    goal_field[hook_link->to]);
+					goto hook_wait;
+				}
+				online = Hook_OnlineProof(e, bot, hook_link->anchor[ROLL],
 				    &graph_flight_dist);
 
 				if (online == HOOK_PROOF_BUSY)
@@ -7427,13 +9767,15 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			Cmd_Hook_f(e);
 			if (e->client->hookstate != 1 || !e->client->hook)
 				goto hook_wait;
+			/* Latch sg_debug at the irreversible successful-fire boundary. */
+			Hook_DiagnosticBegin(bot, role);
 			bot->hook_phase = 2;
 			if (!bot->speedhook)
 			{
 				if (!Hook_LiveBeginAfterFire(e, bot, bot->hook_link,
 				                             graph_flight_dist))
 				{
-					Hook_GraphFail(e, bot, 15.0f);
+					Hook_GraphFailDetail(e, bot, 15.0f, "begin-failed");
 					goto hook_wait;
 				}
 				/* Bolt flight is quantized in 80-unit entity frames. This clock
@@ -7443,10 +9785,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				          RUNE_HOOK_FRAME_DISTANCE) * 0.1f + 0.2f);
 				bot->hook_attached_validated = false;
 			}
-			if (sg_cv.debug->value)
-				sg_host.dprint("HOOKFIRE %s at (%.0f %.0f %.0f)\n",
-				           e->client->pers.netname, bot->hook_anchor[0],
-				           bot->hook_anchor[1], bot->hook_anchor[2]);
 		}
 		else if (bot->hook_phase == 2)
 		{
@@ -7538,8 +9876,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					 * Cutting a vertical climb throws the body up BESIDE
 					 * the ledge lip to fall straight back down -- one
 					 * shaft room turned the whole fleet into confused
-					 * circlers within a wave of the feature shipping
-					 * (live report, lowest port). Climbs ride to the
+					 * circlers immediately. Climbs ride to the
 					 * top; that is what riding is FOR. And the parabola
 					 * must clear ABOVE the destination, never scrape
 					 * under it.
@@ -7555,7 +9892,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						if (zp - td[2] > 24.0f && zp - td[2] < 260.0f)
 						{
 							/*
-							 * THE BODY HAS A BOX (owner's order, wave 372):
+							 * THE BODY HAS A BOX (, observations):
 							 * the fling arc is flown by a player-sized box,
 							 * not a point. Walk the parabola in six segments
 							 * with the real mins/maxs; an arc that clips
@@ -7583,7 +9920,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 									/*
 									 * aseg 1 exempt: the box leaves from beside the
 									 * wall the rope hangs on. And a CONTACT is not a
-									 * CRASH (wave 378: ~300 vetoes/game survived the
+									 * CRASH (observations: ~300 vetoes/game survived the
 									 * seg-1 exemption -- corridor flings graze walls
 									 * constantly, and pmove clip-slide carries them
 									 * through). Only a head-on hit -- the segment
@@ -7601,7 +9938,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 											VectorScale(sd, 1.0f / sl, sd);
 											/* floors don't veto: descending onto a lip
 											 * near the target is a landing, not a crash
-											 * (wave 380: graze fix halved vetoes but
+											 * (observations: graze fix halved vetoes but
 											 * 100-300/game remained -- late-arc floor
 											 * touchdowns reading as head-on). Walls and
 											 * ceilings only. */
@@ -7629,16 +9966,16 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							SG_TimerArm(&bot->hook_deadline, 1.4f);
 							bot->hookfail_streak = 0;
 							/*
-							 * THE FALL-THROUGH (found wave 285): without
+							 * THE FALL-THROUGH (found observations): without
 							 * this exit, control ran on into the release
 							 * chain below, which saw the rope this cut
 							 * just killed (hookstate 0), printed a false
 							 * "noattach", and reset hook_phase to 0 --
 							 * destroying the flow ride armed two lines
 							 * up. 91% of the noattach mass, ~3,200 rides
-							 * a wave, were the bots' BEST hooks being
-							 * reported as their failures and stripped of
-							 * the landing steer/pre-turn/brake.
+							 * per match, were the bots' BEST hooks being
+						 * reported as failures and stripped of
+						 * the landing steer/pre-turn/brake.
 							 */
 							goto hook_wait;
 						}
@@ -7659,6 +9996,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    SG_TimerReadyStrict(bot->hook_deadline) ||
 				    e->client->hookstate == 0)
 				{
+					const char *speed_end = bs2 > 600.0f * 600.0f ? "burst" :
+					    (e->client->hookstate == 0 ? "noattach" : "burststall");
+
+					(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+					    speed_end, "speed-terminal");
 					if (e->client->hookstate != 0)
 						ctf_hook_abort(e);
 					/* the burst's three ends, named: reached speed
@@ -7666,7 +10008,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					 * denominator a lie), stalled to deadline, or
 					 * the rope never held */
 					if (sg_cv.debug->value)
-						sg_host.dprint("HOOKEND %s %s\n",
+						sg_host.dprint("HOOKSPEED %s %s\n",
 						           e->client->pers.netname,
 						           bs2 > 600.0f * 600.0f ? "burst"
 						           : (e->client->hookstate == 0
@@ -7682,13 +10024,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				qboolean completed = attached &&
 				    (arrived || Hook_GraphReleaseReady(e, bot));
 
+				if (!completed)
+					(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+					    "noattach", "legacy-graph");
 				if (e->client->hookstate != 0)
 					ctf_hook_abort(e);
 				/* a cut live rope hands off to the landing steer; a rope
 				 * that never attached does not */
-				if (!completed && sg_cv.debug->value)
-					sg_host.dprint("HOOKEND %s noattach\n",
-					           e->client->pers.netname);
 				if (!completed)
 				{
 					int failed_link = bot->hook_link;
@@ -7712,7 +10054,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				bot->hook_phase = completed ? 3 : 0;
 				/* this phase-3 entry is a plain rope cut, never a flow
 				 * release -- the flag used to stay latched from an
-				 * earlier wiped release and made ~1,000 rides a wave
+				 * earlier wiped release and made ~1,000 rides per match
 				 * take the apex cut and skip the landing brake */
 				bot->flow_release = false;
 				SG_TimerArm(&bot->hook_deadline, 1.0f);
@@ -7751,7 +10093,7 @@ hook_wait:;
 		/* sgoal: the bot's cost on the STATIC field for its role's true
 		 * destination (attacker -> enemy stand, everyone else -> own).
 		 * The composed goal= number rebuilds under a standing bot --
-		 * item beliefs, danger, re-floods -- and wave 169's traces
+		 * item beliefs, danger, re-floods -- and observations traces
 		 * caught a stationary attacker "receding" 800ms/s in it. Route
 		 * progress gets measured against a number that only moves when
 		 * the body does. */

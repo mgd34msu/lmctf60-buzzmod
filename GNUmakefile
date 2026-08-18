@@ -126,6 +126,7 @@ BUTTON_GAME_TEST_BIN = sg_button_game_test.gnu
 BUTTON_GAME_TEST_OBJS = .sg_button_game_test.gnu.o \
 	.sg_button_game_live_under_test.gnu.o \
 	.sg_button_game_move_under_test.gnu.o \
+	.sg_door_approach_under_test.gnu.o \
 	.sg_button_game_func_under_test.gnu.o \
 	.sg_button_game_q_shared_under_test.gnu.o
 BUTTON_GAME_TEST_DEPS = $(BUTTON_GAME_TEST_OBJS:.o=.d)
@@ -310,7 +311,10 @@ RUNE_MECHANISM_EXECUTION_TEST_OBJS = \
 	.sg_rune_mechanism_catalog_under_test.gnu.o \
 	.sg_rune_binding_under_test.gnu.o .sg_rune_runtime_under_test.gnu.o \
 	.sg_rune_action_under_test.gnu.o .sg_rune_crc_under_test.gnu.o \
+	.sg_door_approach_under_test.gnu.o .sg_mover_lease_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_move_under_test.gnu.o \
+	.sg_delayed_relay_dispatch_util_under_test.gnu.o \
+	.sg_delayed_relay_dispatch_view_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_utils_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_trigger_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_button_under_test.gnu.o \
@@ -326,6 +330,10 @@ RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS = \
 	$(foreach flavor,gnu make, \
 	.sg_delayed_relay_dispatch_move_under_test.$(flavor).o \
 	.sg_delayed_relay_dispatch_move_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_util_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_util_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_view_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_view_under_test.$(flavor).d \
 	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).o \
 	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).d \
 	.sg_delayed_relay_dispatch_trigger_under_test.$(flavor).o \
@@ -434,6 +442,17 @@ HUMAN_SPEED_TEST_ALL_ARTIFACTS = \
 	.sg_human_speed_pmove_under_test.$(flavor).d \
 	.sg_human_speed_q_shared_under_test.$(flavor).o \
 	.sg_human_speed_q_shared_under_test.$(flavor).d)
+DOOR_APPROACH_TEST_BIN = sg_door_approach_test.gnu
+DOOR_APPROACH_TEST_OBJS = .sg_door_approach_test.gnu.o \
+	.sg_door_approach_under_test.gnu.o
+DOOR_APPROACH_TEST_DEPS = $(DOOR_APPROACH_TEST_OBJS:.o=.d)
+DOOR_APPROACH_INTEGRATION_TEST = tests/test_door_approach_integration.py
+DOOR_APPROACH_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_door_approach_test.$(flavor) \
+	.sg_door_approach_test.$(flavor).o \
+	.sg_door_approach_test.$(flavor).d \
+	.sg_door_approach_under_test.$(flavor).o \
+	.sg_door_approach_under_test.$(flavor).d)
 DEFENSE_SHIFT_TEST_BIN = sg_defense_shift_test.gnu
 DEFENSE_SHIFT_TEST_OBJS = .sg_defense_shift_test.gnu.o \
 	.sg_defense_shift_under_test.gnu.o
@@ -606,6 +625,9 @@ MOVER_SUBJECT_SWEEP_TEST_BIN = sg_mover_subject_sweep_test.gnu
 MOVER_SUBJECT_SWEEP_TEST_OBJS = \
 	.sg_mover_subject_sweep_test.gnu.o \
 	.sg_mover_subject_sweep_oracle_under_test.gnu.o \
+	.sg_door_approach_under_test.gnu.o \
+	.sg_mover_subject_sweep_util_under_test.gnu.o \
+	.sg_mover_subject_sweep_view_under_test.gnu.o \
 	.sg_mover_subject_sweep_q_shared_under_test.gnu.o
 MOVER_SUBJECT_SWEEP_TEST_DEPS = \
 	$(MOVER_SUBJECT_SWEEP_TEST_OBJS:.o=.d)
@@ -615,12 +637,20 @@ MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS = \
 	.sg_mover_subject_sweep_test.gnu.d \
 	.sg_mover_subject_sweep_oracle_under_test.gnu.o \
 	.sg_mover_subject_sweep_oracle_under_test.gnu.d \
+	.sg_mover_subject_sweep_util_under_test.gnu.o \
+	.sg_mover_subject_sweep_util_under_test.gnu.d \
+	.sg_mover_subject_sweep_view_under_test.gnu.o \
+	.sg_mover_subject_sweep_view_under_test.gnu.d \
 	.sg_mover_subject_sweep_q_shared_under_test.gnu.o \
 	.sg_mover_subject_sweep_q_shared_under_test.gnu.d \
 	.sg_mover_subject_sweep_test.make.o \
 	.sg_mover_subject_sweep_test.make.d \
 	.sg_mover_subject_sweep_oracle_under_test.make.o \
 	.sg_mover_subject_sweep_oracle_under_test.make.d \
+	.sg_mover_subject_sweep_util_under_test.make.o \
+	.sg_mover_subject_sweep_util_under_test.make.d \
+	.sg_mover_subject_sweep_view_under_test.make.o \
+	.sg_mover_subject_sweep_view_under_test.make.d \
 	.sg_mover_subject_sweep_q_shared_under_test.make.o \
 	.sg_mover_subject_sweep_q_shared_under_test.make.d
 COMPOUND_SWIM_ORACLE_TEST_BIN = sg_compound_swim_oracle_test.gnu
@@ -835,7 +865,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
 		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_publication.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
-		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o slipgate/sg_snag_repair.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
+		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o slipgate/sg_snag_repair.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
 
@@ -965,6 +995,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-test fields-candidate-test snag-repair-test \
 	spectator-sound-test human-speed-test defense-shift-test \
+	door-approach-test \
 	item-commitment-test hook-diagnostics-test \
 	run-handoff-test \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
@@ -1115,6 +1146,9 @@ $(SNAG_REPAIR_TEST_BIN): $(SNAG_REPAIR_TEST_OBJS)
 
 $(HUMAN_SPEED_TEST_BIN): $(HUMAN_SPEED_TEST_OBJS)
 	$(CC) -o $@ $(HUMAN_SPEED_TEST_OBJS) $(LDFLAGS)
+
+$(DOOR_APPROACH_TEST_BIN): $(DOOR_APPROACH_TEST_OBJS)
+	$(CC) -o $@ $(DOOR_APPROACH_TEST_OBJS) $(LDFLAGS)
 
 $(DEFENSE_SHIFT_TEST_BIN): $(DEFENSE_SHIFT_TEST_OBJS)
 	$(CC) -o $@ $(DEFENSE_SHIFT_TEST_OBJS) $(LDFLAGS)
@@ -1472,6 +1506,21 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
+.sg_delayed_relay_dispatch_util_under_test.gnu.o: slipgate/sg_util.c \
+		slipgate/sg_util.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_delayed_relay_dispatch_view_under_test.gnu.o: p_view.c \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -Wno-unused-parameter \
+		-ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
 .sg_delayed_relay_dispatch_utils_under_test.gnu.o: g_utils.c \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1660,6 +1709,18 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_defense_shift_test.gnu.o: tests/sg_defense_shift_test.c \
 		slipgate/sg_defense_shift.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_door_approach_test.gnu.o: tests/sg_door_approach_test.c \
+		slipgate/sg_door_approach.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_door_approach_under_test.gnu.o: slipgate/sg_door_approach.c \
+		slipgate/sg_door_approach.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -1888,6 +1949,20 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_mover_subject_sweep_util_under_test.gnu.o: \
+		slipgate/sg_util.c slipgate/sg_util.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections \
+		-DSG_ImmutableSupport=SG_MoverSubjectSweepRealImmutableSupport \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_mover_subject_sweep_view_under_test.gnu.o: p_view.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -Wno-unused-parameter \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_mover_subject_sweep_q_shared_under_test.gnu.o: \
 		q_shared.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -2069,6 +2144,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SNAG_REPAIR_TEST_BIN) $(SNAG_REPAIR_PYTHON_TEST) \
 		$(SPECTATOR_SOUND_TEST_BIN) \
 		$(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST) \
+		$(DOOR_APPROACH_TEST_BIN) $(DOOR_APPROACH_INTEGRATION_TEST) \
 		$(DEFENSE_SHIFT_TEST_BIN) $(DEFENSE_SHIFT_INTEGRATION_TEST) \
 		$(DEFENSE_SUPPLY_TEST_BIN) $(DEFENSE_SUPPLY_INTEGRATION_TEST) \
 		$(STRIKE_ADAPTER_TEST_BIN) $(STRIKE_ADAPTER_INTEGRATION_TEST) \
@@ -2141,6 +2217,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(SPECTATOR_SOUND_TEST_BIN)
 	./$(HUMAN_SPEED_TEST_BIN)
 	python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
+	./$(DOOR_APPROACH_TEST_BIN)
+	python3 -B $(DOOR_APPROACH_INTEGRATION_TEST)
 	./$(DEFENSE_SHIFT_TEST_BIN)
 	python3 -B $(DEFENSE_SHIFT_INTEGRATION_TEST)
 	./$(DEFENSE_SUPPLY_TEST_BIN)
@@ -2308,6 +2386,9 @@ human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 	./$(HUMAN_SPEED_TEST_BIN)
 	python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
 
+door-approach-test: $(DOOR_APPROACH_TEST_BIN)
+	./$(DOOR_APPROACH_TEST_BIN)
+
 defense-shift-test: $(DEFENSE_SHIFT_TEST_BIN) $(DEFENSE_SHIFT_INTEGRATION_TEST) \
 		$(DEFENSE_COMBAT_INTEGRATION_TEST)
 	./$(DEFENSE_SHIFT_TEST_BIN)
@@ -2405,6 +2486,7 @@ $(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
 		slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_publication.c \
 		slipgate/sg_rune_door_scope.c \
+		slipgate/sg_door_approach.c \
 		slipgate/sg_snag_repair.c, \
 		$(OBJS:.o=.c)) > "$$tmp"; \
 	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_compound_world.o \
@@ -2423,6 +2505,8 @@ $(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
 		slipgate/sg_compound_publication.c >> "$$tmp"; \
 	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_rune_door_scope.o \
 		slipgate/sg_rune_door_scope.c >> "$$tmp"; \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_door_approach.o \
+		slipgate/sg_door_approach.c >> "$$tmp"; \
 	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_snag_repair.o \
 		slipgate/sg_snag_repair.c >> "$$tmp"; \
 	if test -r "$@" && cmp -s "$$tmp" "$@"; then \
@@ -2468,6 +2552,7 @@ clean:
 			$(SNAG_REPAIR_TEST_ALL_ARTIFACTS) \
 			$(SPECTATOR_SOUND_TEST_ALL_ARTIFACTS) \
 			$(HUMAN_SPEED_TEST_ALL_ARTIFACTS) \
+			$(DOOR_APPROACH_TEST_ALL_ARTIFACTS) \
 			$(DEFENSE_SHIFT_TEST_ALL_ARTIFACTS) \
 			$(DEFENSE_SUPPLY_TEST_ALL_ARTIFACTS) \
 			$(STRIKE_ADAPTER_TEST_ALL_ARTIFACTS) \
@@ -2518,6 +2603,7 @@ endif
 -include $(SNAG_REPAIR_TEST_DEPS)
 -include $(SPECTATOR_SOUND_TEST_DEPS)
 -include $(HUMAN_SPEED_TEST_DEPS)
+-include $(DOOR_APPROACH_TEST_DEPS)
 -include $(DEFENSE_SHIFT_TEST_DEPS)
 -include $(DEFENSE_SUPPLY_TEST_DEPS)
 -include $(STRIKE_ADAPTER_TEST_DEPS)

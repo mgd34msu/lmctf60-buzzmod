@@ -358,6 +358,7 @@
     <ClCompile Include="slipgate\sg_strike_adapter.c" />
     <ClCompile Include="slipgate\sg_identity.c" />
     <ClCompile Include="slipgate\sg_human_speed.c" />
+    <ClCompile Include="slipgate\sg_door_approach.c" />
     <ClCompile Include="slipgate\sg_hook_diagnostics.c" />
     <ClCompile Include="slipgate\sg_pov_identity.c" />
     <ClCompile Include="slipgate\sg_rune_codec.c" />
@@ -466,6 +467,7 @@
     <ClInclude Include="slipgate\sg_strike_adapter.h" />
     <ClInclude Include="slipgate\sg_identity.h" />
     <ClInclude Include="slipgate\sg_human_speed.h" />
+    <ClInclude Include="slipgate\sg_door_approach.h" />
     <ClInclude Include="slipgate\sg_snag_repair.h" />
     <ClInclude Include="slipgate\sg_hook_diagnostics.h" />
     <ClInclude Include="slipgate\sg_pov_identity.h" />
