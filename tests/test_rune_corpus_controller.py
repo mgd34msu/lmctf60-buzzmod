@@ -218,16 +218,54 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
     def make_real_private_runtime(self, root: Path) -> Path:
         """Construct a link-free private runtime and its loader --list closure."""
-        version = f"{os.sys.version_info.major}.{os.sys.version_info.minor}"
         runtime = root / "python-runtime"
-        stdlib = Path(os.__file__).resolve(strict=True).parent
-        interpreter = Path(os.sys.executable).resolve(strict=True)
-        loader_name = Path(controller.elf_interpreter(interpreter)).name
-        loader = next(
-            Path(line.rsplit(maxsplit=1)[-1]).resolve(strict=True)
-            for line in Path("/proc/self/maps").read_text().splitlines()
-            if line.rsplit(maxsplit=1)[-1].endswith(loader_name)
-        )
+        required_extensions = {
+            "_bz2", "_ctypes", "_hashlib", "_json", "_lzma", "_socket",
+            "_struct", "array", "fcntl", "math", "select", "zlib",
+        }
+        selected = None
+        candidates = [Path("/usr/bin/python3"), Path(os.sys.executable)]
+        for candidate in dict.fromkeys(candidates):
+            try:
+                interpreter = candidate.resolve(strict=True)
+                details = json.loads(subprocess.run(
+                    [str(interpreter), "-c",
+                     "import json,os,sys; print(json.dumps({"
+                     "'version': list(sys.version_info[:2]), "
+                     "'stdlib': os.path.dirname(os.__file__)}))"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    check=True, text=True,
+                ).stdout)
+                version = ".".join(str(part) for part in details["version"])
+                stdlib = Path(details["stdlib"]).resolve(strict=True)
+                dynload = stdlib / "lib-dynload"
+                extension_names = {path.name for path in dynload.iterdir()
+                                   if path.is_file()}
+                if not all(any(name.startswith(required) for name in extension_names)
+                           for required in required_extensions):
+                    continue
+                loader = Path(controller.elf_interpreter(interpreter)).resolve(
+                    strict=True
+                )
+                listed = subprocess.run(
+                    [str(loader), "--list", str(interpreter)],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    check=True, text=True,
+                ).stdout
+                if not re.search(r"\blibpython[^\s]*\.so", listed):
+                    continue
+                selected = (interpreter, stdlib, version, loader)
+                break
+            except (OSError, KeyError, TypeError, ValueError,
+                    json.JSONDecodeError, subprocess.CalledProcessError,
+                    controller.CorpusError):
+                continue
+        if selected is None:
+            self.skipTest(
+                "host has no dynamically linked Python with the required "
+                "extension closure"
+            )
+        interpreter, stdlib, version, loader = selected
 
         def copy(source: Path, target: Path) -> None:
             source = source.resolve(strict=True)
@@ -247,7 +285,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 if source.is_file():
                     copy(source, runtime / "lib" / f"python{version}" / source.relative_to(stdlib))
 
-        required_extensions = {"_bz2", "_ctypes", "_hashlib", "_json", "_lzma", "_socket", "_struct", "array", "fcntl", "math", "select", "zlib"}
         queue = [runtime / f"bin/python{version}"] + [
             path for path in (runtime / "lib" / f"python{version}" / "lib-dynload").iterdir()
             if path.is_file() and any(path.name.startswith(name) for name in required_extensions)
