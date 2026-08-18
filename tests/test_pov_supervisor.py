@@ -34,8 +34,11 @@ FAKE_SOURCE = r'''
 static void ms(long n){struct timespec t={n/1000,(n%1000)*1000000};while(nanosleep(&t,&t)<0&&errno==EINTR){}}
 static int inventory(void){DIR*d=opendir("/proc/self/fd");struct dirent*e;int bad=0;if(!d)return 2;while((e=readdir(d))){char*x;long n=strtol(e->d_name,&x,10);if(*e->d_name&&!*x&&n>2&&n!=dirfd(d))bad=1;}closedir(d);puts(bad?"fd-inventory=bad":"fd-inventory=0,1,2");FLUSH();return bad;}
 static const char *arg_after(int ac,char**av,const char*w){for(int i=1;i+1<ac;i++)if(!strcmp(av[i],w))return av[i+1];return NULL;}
+#if !defined(ZERO_DEMO) || defined(REPLACE_CONFIG)
+static int write_all(int fd,const char*data,size_t size){size_t done=0;while(done<size){ssize_t wrote=write(fd,data+done,size-done);if(wrote<0&&errno==EINTR)continue;if(wrote<=0)return -1;done+=(size_t)wrote;}return 0;}
+#endif
 #ifdef REPLACE_CONFIG
-static void replace_config(int ac,char**av){const char*game=arg_after(ac,av,"game");const char*cfg=arg_after(ac,av,"+exec");char path[8192],backup[8192];int fd;if(!game)game="testgame";if(!cfg)cfg="waveflags-s3.cfg";if(snprintf(path,sizeof(path),"%s/%s",game,cfg)>=(int)sizeof(path)||snprintf(backup,sizeof(backup),"%s.attacked",path)>=(int)sizeof(backup))return;(void)rename(path,backup);fd=open(path,O_WRONLY|O_CREAT|O_TRUNC,0600);if(fd>=0){const char*evil="set sv_botfill 999\\n";(void)write(fd,evil,strlen(evil));close(fd);}}
+static void replace_config(int ac,char**av){const char*game=arg_after(ac,av,"game");const char*cfg=arg_after(ac,av,"+exec");char path[8192],backup[8192];int fd;if(!game)game="testgame";if(!cfg)cfg="waveflags-s3.cfg";if(snprintf(path,sizeof(path),"%s/%s",game,cfg)>=(int)sizeof(path)||snprintf(backup,sizeof(backup),"%s.attacked",path)>=(int)sizeof(backup))return;(void)rename(path,backup);fd=open(path,O_WRONLY|O_CREAT|O_TRUNC,0600);if(fd>=0){const char*evil="set sv_botfill 999\\n";if(write_all(fd,evil,strlen(evil))<0){close(fd);return;}close(fd);}}
 static void emit_replacement(int ac,char**av){const char*cfg=arg_after(ac,av,"+exec");const char*game=arg_after(ac,av,"game");char path[8192],line[256];FILE*f;if(!cfg||!game||snprintf(path,sizeof(path),"%s/%s",game,cfg)>=(int)sizeof(path))return;f=fopen(path,"r");if(!f)return;while(fgets(line,sizeof(line),f)){printf("command=%s",line);FLUSH();}fclose(f);}
 #endif
 int main(int ac,char**av){
@@ -83,9 +86,7 @@ int main(int ac,char**av){
 #else
   int fd=open(demo,O_WRONLY|O_CREAT|O_EXCL,0600);
   if(fd>=0){
-    ssize_t wrote;
-    do{wrote=write(fd,"demo",4);}while(wrote<0&&errno==EINTR);
-    if(wrote!=4){close(fd);return 7;}
+    if(write_all(fd,"demo",4)<0){close(fd);return 7;}
   }
 #endif
   if(fd>=0)close(fd);
