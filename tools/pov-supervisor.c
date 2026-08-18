@@ -495,7 +495,7 @@ static int run_supervisor(const struct options*o,struct run*r) {
             if(waited<0&&errno!=EINTR){set_failure(r,"finalize poll failed");break;}
             if(final_wait[0].revents&(POLLIN|POLLHUP))drain_available(r,1);
             if(final_wait[1].revents&(POLLIN|POLLHUP))drain_available(r,0);
-            if(final_wait[2].revents&POLLIN){struct signalfd_siginfo si;(void)read(r->signals,&si,sizeof(si));set_failure(r,"signal during finalize");break;}
+            if(final_wait[2].revents&POLLIN){struct signalfd_siginfo si;ssize_t got;do got=read(r->signals,&si,sizeof(si));while(got<0&&errno==EINTR);if(got!=(ssize_t)sizeof(si))set_failure(r,"signal read failed");else set_failure(r,"signal during finalize");break;}
         }
         if(r->failed)goto done;
         event(r,"finalize_client");
