@@ -502,7 +502,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		qboolean hook_policy = SG_ActionUsesHookPolicy(l->action);
 		qboolean hook_water = l->action == RL_HOOK &&
 		    (SG_Rune()->seeds[l->from].flags & RSF_WATER);
-		sg_rune_mechanism_binding_t mechanism_binding;
+		sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean mechanism_bound = false;
 		int b;
 
@@ -2787,7 +2787,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			                     cl->action == RL_TELEPORT ||
 			                     cl->action == RL_DOOR ||
 			                     cl->action == RL_BUTTON_DOOR);
-			sg_rune_mechanism_binding_t mechanism_binding;
+			sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean swim_failed = false;
 		qboolean staging_timed_out = false;
 		qboolean drop_boundary_owned = false;

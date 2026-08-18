@@ -3910,7 +3910,7 @@ static void Link_Doors(void)
 		edict_t *members[16];
 		door_pose_t saved[16];
 		vec3_t door_wait[DOOR_WAIT_MAX];
-		button_wait_stats_t button_stats;
+		button_wait_stats_t button_stats = { 0 };
 		qboolean button_controller;
 		qboolean direct_controller;
 		int controller_kind;

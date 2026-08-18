@@ -1907,7 +1907,7 @@ static qboolean DoorStep_ButtonBinding(sg_bot_t *bot, edict_t *source,
 qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 {
 	sg_rune_mechanism_binding_t binding;
-	sg_mech_button_endpoints_t endpoints;
+	sg_mech_button_endpoints_t endpoints = { 0 };
 	sg_button_callback_token_t *token;
 	sg_bot_t *bot = DoorStep_EventBot(activator);
 	sg_button_callback_state_t token_state;
@@ -3411,10 +3411,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (ls >= 0)
 			{
 				int link_index, next_link = -1, next_value;
-				const int *route_field = goal_field;
+				const int *preturn_route_field = goal_field;
 
-				next_value = (route_field[ls] < SG_FIELD_INF)
-				    ? route_field[ls] : 0x7fffffff;
+				next_value = (preturn_route_field[ls] < SG_FIELD_INF)
+				    ? preturn_route_field[ls] : 0x7fffffff;
 				for (link_index = SG_Rune()->first_link[ls];
 				     link_index >= 0;
 				     link_index = SG_Rune()->next_link[link_index])
@@ -3424,9 +3424,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 					if (candidate->action != RL_RUN)
 						continue;
-					if (route_field[candidate->to] < next_value)
+					if (preturn_route_field[candidate->to] < next_value)
 					{
-						next_value = route_field[candidate->to];
+						next_value = preturn_route_field[candidate->to];
 						next_link = link_index;
 					}
 				}
@@ -7120,7 +7120,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean declared_door = declared_control &&
 	    (SG_Rune()->links[bestlink].action == RL_DOOR ||
 	     SG_Rune()->links[bestlink].action == RL_BUTTON_DOOR);
-	sg_rune_mechanism_binding_t mechanism_binding;
+	sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 	qboolean mechanism_bound = !declared_control ||
 	    (bot->declared_started
 	        ? SG_RuneMechanismBindingCaptureOwned(SG_Rune(),
