@@ -316,6 +316,14 @@ class SupervisorTest(unittest.TestCase):
         tools.mkdir()
         script = tools / "iterate2.sh"
         source = (REPO / "tools/iterate2.sh").read_text()
+        launch = "    (\n        (\n            if ((POV_SELECTED)); then"
+        delayed_launch = (
+            "    (\n        if ((POV_SELECTED)); then\n"
+            "            /usr/bin/sleep 0.05\n        fi\n        (\n"
+            "            if ((POV_SELECTED)); then"
+        )
+        self.assertIn(launch, source)
+        source = source.replace(launch, delayed_launch, 1)
         source = source.replace('        /usr/bin/sleep "$1"', '        : "$1"')
         source = source.replace('        /usr/bin/sleep 7', '        :')
         source = source.replace('/usr/bin/pgrep -x q2ded', '/bin/false')

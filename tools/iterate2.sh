@@ -701,14 +701,20 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 # This shell execs the supervisor, so pin the generation of
                 # its real Linux parent (the pipeline's waiting shell). Bash's
                 # PPID/$$ values are not the OS parent in a backgrounded
-                # pipeline; field 4 of this shell's /proc stat is authoritative.
-                IFS= read -r parent_stat < "/proc/$BASHPID/stat" || exit 2
+                # pipeline. Read the parent PID from this shell's stat, then
+                # read the generation from the parent's own stat; parent and
+                # child can begin on adjacent clock ticks.
+                IFS= read -r self_stat < "/proc/$BASHPID/stat" || exit 2
+                self_tail=${self_stat##*) }
+                read -r -a self_fields <<< "$self_tail"
+                (( ${#self_fields[@]} > 1 )) || exit 2
+                [[ ${self_fields[1]} =~ ^[1-9][0-9]*$ ]] || exit 2
+                parent_pid=${self_fields[1]}
+                IFS= read -r parent_stat < "/proc/$parent_pid/stat" || exit 2
                 parent_tail=${parent_stat##*) }
                 read -r -a parent_fields <<< "$parent_tail"
                 (( ${#parent_fields[@]} > 19 )) || exit 2
-                [[ ${parent_fields[1]} =~ ^[1-9][0-9]*$ ]] || exit 2
                 [[ ${parent_fields[19]} =~ ^[1-9][0-9]*$ ]] || exit 2
-                parent_pid=${parent_fields[1]}
                 parent_start=${parent_fields[19]}
                 exec "/proc/self/fd/$POV_SUPERVISOR_FD" \
                     --q2ded "$Q2DED" \

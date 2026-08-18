@@ -449,9 +449,10 @@ static int run_supervisor(const struct options*o,struct run*r) {
     char why[256],port[16],home[PATH_MAXIMUM],xdg[PATH_MAXIMUM];
     char q2a0[]="q2ded",clienta0[]="quake2";char *q2argv[24],*clientargv[28],*envp[16];
     int rootfd=-1,nullfd=-1,qin[2]={-1,-1},q2_master=-1,q2_slave=-1,client_master=-1,client_slave=-1;
-    sigset_t mask;unsigned long long current_parent_start;
+    sigset_t mask;unsigned long long current_parent_start=0;pid_t current_parent;
     r->state=PREFLIGHT;
-    if(getppid()!=o->parent_pid||pov_read_start_ticks(o->parent_pid,&current_parent_start)<0||current_parent_start!=o->parent_start){set_failure(r,"parent generation mismatch");goto done;}
+    current_parent=getppid();
+    if(current_parent!=o->parent_pid||pov_read_start_ticks(current_parent,&current_parent_start)<0||current_parent_start!=o->parent_start){set_failure(r,"parent generation mismatch: expected %ld/%llu, actual %ld/%llu",(long)o->parent_pid,o->parent_start,(long)current_parent,current_parent_start);goto done;}
     if((r->self_fd=open_self(r->self_hash))<0||validate_pinned_self(r,o->supervisor_fd_text)<0||hash_inherited_regular(o->iterate_fd_text,r->iterate_hash)<0){set_failure(r,"supervisor or iterate image invalid");goto done;}
     if(o->waveloop_fd_text&&hash_inherited_regular(o->waveloop_fd_text,r->waveloop_hash)<0){set_failure(r,"waveloop provenance invalid");goto done;}
     if(pov_open_image(o->q2,&r->q2_image,why,sizeof(why))<0||pov_open_image(o->client,&r->client_image,why,sizeof(why))<0||pov_open_regular(o->config,0,&r->config_image,why,sizeof(why))<0){set_failure(r,"preflight image: %s",why);goto done;}
