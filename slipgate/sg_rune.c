@@ -4130,13 +4130,18 @@ static void Link_Doors(void)
 			DoorPose_Restore(saved, pose_count);
 			if (best_slot[0] < 0 && best_slot[1] < 0)
 				continue;
+			/* DIRECT_TRIGGER_DOOR uses one symmetric safe-wade law for both
+			 * the approach source and egress destination.  AUTO_DOOR and
+			 * BUTTON_DOOR remain dry-only through the same controller gate. */
 			for (source = 0; source < gen_num_seeds; source++)
 			{
 				vec3_t approach_delta;
 				float approach_h2, score;
 
 				if (!gen_source_stable[source] ||
-				    gen_source_waterlevel[source] != 0 ||
+				    !SG_OracleDoorEgressWaterSafe(controller_kind,
+				        gen_source_waterlevel[source],
+				        gen_source_watertype[source]) ||
 				    !Gen_SeedHasIncoming(source) ||
 				    !(button_controller
 				          ? SG_DeclaredButtonDoorApproachSourceClear(door,

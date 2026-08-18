@@ -17,6 +17,7 @@
 #define HOOK_INDEX 12
 #define BUTTON_INDEX 5
 #define DOOR_INDEX 6
+#define CELLAR_WITNESS_WATERTYPE 0x18000020
 
 game_export_t globals;
 game_locals_t game;
@@ -42,6 +43,8 @@ static int sibling_trigger_hit_count;
 static float sibling_pmove_x;
 static qboolean sibling_pmove_preserve_zero;
 static qboolean sibling_pmove_airborne;
+static int sibling_pmove_waterlevel;
+static int sibling_pmove_watertype;
 static qboolean ground_test_active;
 static qboolean ground_test_blocked;
 static qboolean ground_test_drift;
@@ -652,8 +655,8 @@ static void SiblingEgressPmove(pmove_t *pmove)
 	pmove->s.velocity[2] = 0;
 	pmove->groundentity = sibling_pmove_airborne && pmove->cmd.msec != 0
 	    ? NULL : &ents[0];
-	pmove->waterlevel = 0;
-	pmove->watertype = 0;
+	pmove->waterlevel = sibling_pmove_waterlevel;
+	pmove->watertype = sibling_pmove_watertype;
 }
 
 static void CellarWadePmove(pmove_t *pmove)
@@ -700,7 +703,7 @@ static void CellarWadePmove(pmove_t *pmove)
 	     cellar_wade_step >= cellar_wade_water_step);
 	pmove->waterlevel = wet
 	    ? (cellar_wade_mode == CELLAR_WADE_WATER2 ? 2 : 1) : 0;
-	pmove->watertype = wet ? CONTENTS_WATER : 0;
+	pmove->watertype = wet ? CELLAR_WITNESS_WATERTYPE : 0;
 	if (wet && cellar_wade_mode == CELLAR_WADE_LAVA)
 		pmove->watertype |= CONTENTS_LAVA;
 	if (wet && cellar_wade_mode == CELLAR_WADE_SLIME)
@@ -901,6 +904,14 @@ static void CellarContinueSubject(const vec3_t origin, int waterlevel,
 
 static void TestDirectDoorShallowWadeParity(void)
 {
+	static const vec3_t red_approach_source = {
+	    -2752.0f, 2694.0f, -486.875f };
+	static const vec3_t red_approach_anchor = {
+	    -2706.875f, 2701.75f, -486.875f };
+	static const vec3_t blue_approach_source = {
+	    1148.0f, 2398.0f, -486.875f };
+	static const vec3_t blue_approach_anchor = {
+	    1102.875f, 2390.125f, -486.875f };
 	static const vec3_t red_source = { -2213.5f, 2757.5f, -443.875f };
 	static const vec3_t red_mid = { -2408.5f, 2757.5f, -486.875f };
 	static const vec3_t red_target = { -2752.0f, 2758.0f, -486.875f };
@@ -910,6 +921,10 @@ static void TestDirectDoorShallowWadeParity(void)
 	const vec3_t *sources[2] = { &red_source, &blue_source };
 	const vec3_t *middles[2] = { &red_mid, &blue_mid };
 	const vec3_t *targets[2] = { &red_target, &blue_target };
+	const vec3_t *approach_sources[2] = {
+	    &red_approach_source, &blue_approach_source };
+	const vec3_t *approach_anchors[2] = {
+	    &red_approach_anchor, &blue_approach_anchor };
 	rune_link_t link;
 	rune_mechanism_plan_t plan;
 	rune_mechanism_node_t entry_node, mover_node;
@@ -920,17 +935,32 @@ static void TestDirectDoorShallowWadeParity(void)
 
 	CHECK(SG_OracleDoorShallowWadeSafe(0, 0));
 	CHECK(SG_OracleDoorShallowWadeSafe(1, CONTENTS_WATER));
+	CHECK(SG_OracleDoorShallowWadeSafe(1,
+	    CELLAR_WITNESS_WATERTYPE));
+	CHECK(!SG_OracleDoorShallowWadeSafe(1, 0));
+	CHECK(!SG_OracleDoorShallowWadeSafe(1, CONTENTS_MIST));
 	CHECK(!SG_OracleDoorShallowWadeSafe(2, CONTENTS_WATER));
 	CHECK(!SG_OracleDoorShallowWadeSafe(1,
 	    CONTENTS_WATER | CONTENTS_LAVA));
 	CHECK(!SG_OracleDoorShallowWadeSafe(1,
 	    CONTENTS_WATER | CONTENTS_SLIME));
 	CHECK(SG_OracleDoorEgressWaterSafe(
-	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 1, CONTENTS_WATER));
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 1,
+	    CELLAR_WITNESS_WATERTYPE));
 	CHECK(!SG_OracleDoorEgressWaterSafe(
-	    SG_MECHANISM_CONTROLLER_AUTO_DOOR, 1, CONTENTS_WATER));
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 1, 0));
 	CHECK(!SG_OracleDoorEgressWaterSafe(
-	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR, 1, CONTENTS_WATER));
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 1, CONTENTS_MIST));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_AUTO_DOOR, 1,
+	    CELLAR_WITNESS_WATERTYPE));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR, 1,
+	    CELLAR_WITNESS_WATERTYPE));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_AUTO_DOOR, 0, CONTENTS_LAVA));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR, 0, CONTENTS_SLIME));
 
 	for (side = 0; side < 2; side++)
 	{
@@ -941,6 +971,17 @@ static void TestDirectDoorShallowWadeParity(void)
 		CHECK(SG_BoundDoorCrossesSweep(&binding, *sources[side],
 		    *targets[side]));
 		CHECK(SG_BoundDoorAtTop(&binding));
+
+		/* Exact mirrored Door3 reverse candidates: installed seed 466 red
+		 * and 321 blue begin at waterlevel one with raw type 0x18000020.
+		 * Pin the sweep-clear source and exact trigger-contact anchor here;
+		 * the execution test drives each natural wet Touch_Multi chain. */
+		CHECK(SG_BoundDoorOutsideSweep(&binding,
+		    *approach_sources[side]));
+		CHECK(SG_BoundDoorOutsideSweep(&binding,
+		    *approach_anchors[side]));
+		CHECK(SG_BoundDoorEntryContactMatches(&binding,
+		    *approach_anchors[side]));
 
 		ConfigureCellarWade(*sources[side], *targets[side], 72, 23, 0,
 		    CELLAR_WADE_SAFE);
@@ -972,7 +1013,8 @@ static void TestDirectDoorShallowWadeParity(void)
 		    &binding, NULL, &arrival));
 		CHECK(cellar_wade_step == 0);
 
-		CellarContinueSubject(*middles[side], 1, CONTENTS_WATER);
+		CellarContinueSubject(*middles[side], 1,
+		    CELLAR_WITNESS_WATERTYPE);
 		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
 		    CELLAR_WADE_SAFE);
 		arrival = -1;
@@ -1003,7 +1045,8 @@ static void TestDirectDoorShallowWadeParity(void)
 		CHECK(!SG_OracleBoundDoorEgress(*sources[side], *targets[side],
 		    &binding, NULL, &arrival));
 		CHECK(cellar_wade_step == 23);
-		CellarContinueSubject(*middles[side], 1, CONTENTS_WATER);
+		CellarContinueSubject(*middles[side], 1,
+		    CELLAR_WITNESS_WATERTYPE);
 		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
 		    CELLAR_WADE_SAFE);
 		CHECK(!SG_OracleBoundDoorContinue(player, *targets[side], &binding,
@@ -1018,7 +1061,8 @@ static void TestDirectDoorShallowWadeParity(void)
 		    *targets[side], &binding, NULL, &arrival,
 		    SG_BUTTON_SUPPORT_STATIC));
 		CHECK(cellar_wade_step == 23);
-		CellarContinueSubject(*middles[side], 1, CONTENTS_WATER);
+		CellarContinueSubject(*middles[side], 1,
+		    CELLAR_WITNESS_WATERTYPE);
 		ConfigureCellarWade(*middles[side], *targets[side], 44, 1, 1,
 		    CELLAR_WADE_SAFE);
 		CHECK(!SG_OracleBoundDoorContinue(player, *targets[side], &binding,
@@ -1111,6 +1155,24 @@ static void TestBoundDoorSiblingAliasReplay(void)
 	CHECK(sibling_trigger_hit_count == 2 &&
 	      sibling_trigger_hits[0] == sibling_trigger_a &&
 	      sibling_trigger_hits[1] == sibling_trigger_a);
+
+	/* Shallow admission belongs to an authenticated bound DIRECT plan.  The
+	 * legacy unbound wrapper cannot infer controller identity from a trigger
+	 * shape, and AUTO/BUTTON remain dry-only. */
+	player->waterlevel = 1;
+	player->watertype = CONTENTS_WATER;
+	sibling_pmove_waterlevel = 1;
+	sibling_pmove_watertype = CONTENTS_WATER;
+	sibling_pmove_x = -40.0f;
+	CHECK(!SG_OracleDeclaredDoorStepSafe(player, sibling_trigger_a, &cmd));
+	CHECK(SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_AUTO_DOOR;
+	CHECK(!SG_OracleBoundDoorStepSafe(player, &binding, &cmd));
+	plan.controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	player->waterlevel = 0;
+	player->watertype = 0;
+	sibling_pmove_waterlevel = 0;
+	sibling_pmove_watertype = 0;
 
 	/* A sealed direct-trigger approach owns exactly its serialized entry.
 	 * Another trigger may target the same mover closure, but accepting it would

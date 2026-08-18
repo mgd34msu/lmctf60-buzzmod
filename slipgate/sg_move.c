@@ -1428,6 +1428,7 @@ static qboolean DoorStep_ApproachObservation(edict_t *entity,
 	observation->static_support = entity->groundentity &&
 	    DoorStep_StaticSupportSignature(entity->groundentity, &support_key,
 	        &support_generation);
+	observation->watertype = entity->watertype;
 	observation->waterlevel = entity->waterlevel;
 	observation->hazardous_liquid =
 	    (entity->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
@@ -1615,8 +1616,13 @@ static qboolean DoorStep_ApproachTicketStateCurrent(
 	    !DoorStep_VectorQ8Exact(entity->maxs, maxs_q8) ||
 	    memcmp(mins_q8, ticket->expected_mins_q8, sizeof(mins_q8)) != 0 ||
 	    memcmp(maxs_q8, ticket->expected_maxs_q8, sizeof(maxs_q8)) != 0 ||
-	    entity->waterlevel != 0 ||
-	    (entity->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+	    ticket->expected_waterlevel !=
+	        ticket->predicted_state.expected_waterlevel ||
+	    ticket->expected_watertype !=
+	        ticket->predicted_state.expected_watertype ||
+	    entity->waterlevel != ticket->expected_waterlevel ||
+	    entity->watertype != ticket->expected_watertype ||
+	    !SG_DoorApproachWaterSafe(entity->waterlevel, entity->watertype))
 		return false;
 	grounded = entity->groundentity != NULL;
 	if (grounded != ticket->grounded || (require_grounded && !grounded))
@@ -1661,6 +1667,10 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 	    !DoorStep_LivePmoveState(bot->ent, &current_pms) ||
 	    !SG_DoorApproachPmoveEqual(&current_pms,
 	        &bot->declared_door_approach.expected_pms) ||
+	    bot->ent->waterlevel !=
+	        bot->declared_door_approach.expected_waterlevel ||
+	    bot->ent->watertype !=
+	        bot->declared_door_approach.expected_watertype ||
 	    prediction->state.elapsed_ms !=
 	        bot->declared_door_approach.elapsed_ms +
 	            SG_DOOR_APPROACH_STEP_MS ||
@@ -1671,8 +1681,11 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 	        bot->declared_door_approach.anchor_q8,
 	        sizeof(prediction->state.anchor_q8)) != 0 ||
 	    !SG_DoorApproachPmoveEqual(&prediction->state.expected_pms,
-	        &prediction->pms) || prediction->waterlevel != 0 ||
-	    (prediction->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+	        &prediction->pms) ||
+	    prediction->state.expected_waterlevel != prediction->waterlevel ||
+	    prediction->state.expected_watertype != prediction->watertype ||
+	    !SG_DoorApproachWaterSafe(prediction->waterlevel,
+	        prediction->watertype) ||
 	    (prediction->expected_touch && !prediction->groundentity) ||
 	    !DoorStep_VectorQ8Exact(prediction->mins, NULL) ||
 	    !DoorStep_VectorQ8Exact(prediction->maxs, NULL) ||
@@ -1688,6 +1701,7 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 	observation.pms = prediction->pms;
 	observation.grounded = grounded ? 1 : 0;
 	observation.static_support = grounded ? 1 : 0;
+	observation.watertype = prediction->watertype;
 	observation.waterlevel = prediction->waterlevel;
 	observation.hazardous_liquid =
 	    (prediction->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
@@ -1713,6 +1727,8 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 		return false;
 	ticket = &bot->declared_door_ticket;
 	ticket->expected_pms = prediction->pms;
+	ticket->expected_watertype = prediction->watertype;
+	ticket->expected_waterlevel = prediction->waterlevel;
 	if (!DoorStep_VectorQ8Exact(prediction->mins,
 	        ticket->expected_mins_q8) ||
 	    !DoorStep_VectorQ8Exact(prediction->maxs,
@@ -1839,18 +1855,21 @@ qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
 	    bot->declared_door_approach_identity.active &&
 	    bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	ticket_required = binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (activator->health <= 0 || activator->deadflag ||
 	    activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
-	    activator->waterlevel != 0)
+	    (activator->waterlevel != 0 &&
+	     !(ticket_required && command_scoped &&
+	       SG_DoorApproachWaterSafe(activator->waterlevel,
+	           activator->watertype))))
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (!bot || !bot->declared_started || bot->declared_guard_paused)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
-	ticket_required = binding.plan->controller_kind ==
-	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
-	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (command_scoped != ticket_required)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (ticket_required &&
@@ -2290,18 +2309,21 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	    bot->declared_door_approach_identity.active &&
 	    bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	ticket_required = binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (!door_master || activator->health <= 0 ||
 	    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
-	    activator->waterlevel != 0)
+	    (activator->waterlevel != 0 &&
+	     !(ticket_required && command_scoped &&
+	       SG_DoorApproachWaterSafe(activator->waterlevel,
+	           activator->watertype))))
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (!bot || !bot->declared_started || bot->declared_guard_paused)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
-	ticket_required = binding.plan->controller_kind ==
-	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
-	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (command_scoped != ticket_required)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (ticket_required &&
@@ -8637,8 +8659,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				qboolean door_wait_snapped = false;
 				sg_button_execution_anchor_state_t button_anchor_state =
 				    SG_BUTTON_EXECUTION_ANCHOR_BOTTOM;
-				qboolean button_controller = false;
-				qboolean direct_controller = false;
+				qboolean button_controller = declared_door &&
+				    mechanism_binding.plan &&
+				    mechanism_binding.plan->controller_kind ==
+				        SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+				qboolean direct_controller = declared_door &&
+				    mechanism_binding.plan &&
+				    mechanism_binding.plan->controller_kind ==
+				        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
 				qboolean direct_drive = true;
 				qboolean button_motion_hold = false;
 
@@ -8668,7 +8696,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    source_exact && source_rest &&
 				    (e->groundentity == g_edicts ||
 				     SG_ImmutableSupport(e->groundentity)) &&
-				    e->waterlevel == 0 &&
+				    (declared_door
+				         ? SG_OracleDoorEgressWaterSafe(
+				               mechanism_binding.plan->controller_kind,
+				               e->waterlevel, e->watertype)
+				         : e->waterlevel == 0) &&
 				    e->client->ps.pmove.pm_type == PM_NORMAL &&
 				    !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
 				    !e->client->ps.pmove.pm_time && !source_snapped)
@@ -8842,7 +8874,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							}
 						}
 						else if (!outside_ok || !support_ok ||
-						         e->waterlevel != 0 ||
+						         !SG_OracleDoorEgressWaterSafe(
+						             mechanism_binding.plan->controller_kind,
+						             e->waterlevel, e->watertype) ||
 						         e->client->ps.pmove.pm_type != PM_NORMAL ||
 						         (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 						         e->client->ps.pmove.pm_time)
@@ -8850,8 +8884,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							DoorStep_RetainFailedAuthority(bot, bestlink);
 							return;
 						}
-						if (!outside_ok || e->waterlevel != 0 ||
-						    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+						if (!outside_ok ||
+						    !SG_OracleDoorEgressWaterSafe(
+						        mechanism_binding.plan->controller_kind,
+						        e->waterlevel, e->watertype))
 						{
 							DoorStep_RetainFailedAuthority(bot, bestlink);
 							return;

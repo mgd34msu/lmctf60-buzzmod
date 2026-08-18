@@ -45,6 +45,8 @@ typedef struct sg_door_approach_ticket_s
 	pmove_state_t expected_pms;
 	short expected_mins_q8[3];
 	short expected_maxs_q8[3];
+	int expected_watertype;
+	int expected_waterlevel;
 	uint32_t support_key;
 	uint32_t support_generation;
 	unsigned long long bot_instance;

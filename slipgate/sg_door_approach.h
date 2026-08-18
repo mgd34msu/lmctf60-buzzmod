@@ -47,6 +47,7 @@ typedef struct sg_door_approach_observation_s
 	pmove_state_t pms;
 	int grounded;
 	int static_support;
+	int watertype;
 	int waterlevel;
 	int hazardous_liquid;
 	int population_stable;
@@ -61,6 +62,8 @@ typedef struct sg_door_approach_state_s
 	short source_q8[3];
 	short anchor_q8[3];
 	pmove_state_t expected_pms;
+	int expected_watertype;
+	int expected_waterlevel;
 	int elapsed_ms;
 	int consecutive_air_ms;
 	int resume_ms;
@@ -97,6 +100,7 @@ sg_door_approach_result_t SG_DoorApproachSnapped(
 
 int SG_DoorApproachPmoveEqual(const pmove_state_t *left,
 	const pmove_state_t *right);
+int SG_DoorApproachWaterSafe(int waterlevel, int watertype);
 int SG_DoorApproachInsideCapsule(const short source_q8[3],
 	const short anchor_q8[3], const short point_q8[3]);
 const char *SG_DoorApproachReasonName(sg_door_approach_reason_t reason);
