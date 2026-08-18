@@ -481,7 +481,7 @@ void sl_LogPlayerName(game_import_t* gi,
     }
 }
 
-qboolean Match_CanScore();
+qboolean Match_CanScore(void);
 
 void sl_LogScore(game_import_t* gi,
     char* pKillerName,

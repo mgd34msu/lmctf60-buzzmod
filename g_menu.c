@@ -66,7 +66,7 @@ void Ref_Bot_RemoveAll (edict_t *ent);
 void RefTogglePause(edict_t *ent);
 void Ref_Map_Menu (edict_t *ent);
 void SetMapsForMenu (edict_t *ent);
-void SetupShortList ();
+void SetupShortList(void);
 void MapMenu (edict_t *ent, char *maplist[], char *msg);
 void Ref_Match_A_Menu (edict_t *ent);
 void Ref_Match_B_Menu (edict_t *ent);
@@ -1714,7 +1714,7 @@ void SetMapsForMenu( edict_t *ent)
 	}
 	}
 
-void SetupShortList()
+void SetupShortList(void)
 	{
 	if (shortList)
 	{

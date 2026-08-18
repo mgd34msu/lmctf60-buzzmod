@@ -22,17 +22,17 @@ edict_t *Declare_Railgun_Victor(void);
 void Use_Quad (edict_t *ent, gitem_t *item);
 
 
-void Reset_MVP()
+void Reset_MVP(void)
 {
     omvp = dmvp = NULL;
 }
 
-edict_t *Query_OMVP()
+edict_t *Query_OMVP(void)
 {
     return omvp;
 }
 
-edict_t *Query_DMVP()
+edict_t *Query_DMVP(void)
 {
     return dmvp;
 }
@@ -96,7 +96,7 @@ void Match_Start(edict_t *ent)
     }
 }
 
-void Victory()
+void Victory(void)
 {
     long i;
     edict_t *ent=NULL;
@@ -300,22 +300,22 @@ void Match_End(edict_t *ent)
     game.teamslocked = false;
 }
 
-qboolean Match_InCountdown()
+qboolean Match_InCountdown(void)
 {
     return matchstate == MATCH_COUNTDOWN;
 }
 
-qboolean Match_InPlay()
+qboolean Match_InPlay(void)
 {
     return matchstate == MATCH_INPLAY;
 }
 
-qboolean Match_Mode()
+qboolean Match_Mode(void)
 {
     return matchstate > MATCH_ENDLEVEL;
 }
 
-qboolean Match_CanScore()
+qboolean Match_CanScore(void)
 {
     if ((matchstate == MATCH_OVER) || (matchstate == MATCH_COUNTDOWN) || (matchstate == MATCH_RAILGUN_COUNTDOWN)) {
         return false;
@@ -324,12 +324,12 @@ qboolean Match_CanScore()
     }
 }
 
-qboolean Match_Over()
+qboolean Match_Over(void)
 {
     return matchstate == MATCH_OVER;
 }
 
-qboolean GamePaused()
+qboolean GamePaused(void)
 {
     return match_pause;
 }
@@ -523,7 +523,7 @@ void Tourney_Think(edict_t *ent)
     ent->count--;
 }
 
-void KillMatch()
+void KillMatch(void)
 {
     matchstate = MATCH_NONE;
 
@@ -547,7 +547,7 @@ void StartMatch (char *levelname)
     ctf_ChangeMap(levelname, true);
 }
 
-void SpawnTourneyClock ()
+void SpawnTourneyClock(void)
 {
     edict_t    *ent;
 

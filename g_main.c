@@ -348,7 +348,7 @@ MapInfo *getRandomMapByPlayerCount(int count) {
 	return clPtr;
 }
 
-int playerCount() {
+int playerCount(void) {
         edict_t * player = NULL;
         unsigned int num_players = 0;
 

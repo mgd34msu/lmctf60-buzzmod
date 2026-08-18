@@ -501,6 +501,7 @@ HOOK_DISCIPLINE_TEST_ALL_ARTIFACTS := \
 	.sg_hook_discipline_under_test.make.o \
 	.sg_hook_discipline_under_test.make.d
 RUNE_NAMING_TEST := tests/test_rune_naming.py
+RELEASE_WORKFLOW_TEST := tests/test_release_workflow.py
 RUNE_PYTHON_TESTS := tests/test_rune_contracts.py \
 	tests/test_rune_artifact.py \
 	tests/test_sidecario.py \
@@ -2420,6 +2421,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SIDECAR_WIRE_TEST_BIN) $(SIDECAR_LOADER_TEST_BIN) \
 		$(SIDECAR_STORE_TEST_BIN) \
 		$(RUNE_NAMING_TEST) \
+		$(RELEASE_WORKFLOW_TEST) \
 		$(RUNE_PYTHON_TESTS) \
 		$(RUNGEN_TEST) \
 		$(RUNE_CORPUS_CONTROLLER_TEST) \
@@ -2489,6 +2491,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(SIDECAR_LOADER_TEST_BIN)
 	$(Q)./$(SIDECAR_STORE_TEST_BIN)
 	$(Q)python3 $(RUNE_NAMING_TEST)
+	$(Q)python3 $(RELEASE_WORKFLOW_TEST)
 	$(Q)python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers
 	$(Q)python3 $(RUNGEN_TEST)

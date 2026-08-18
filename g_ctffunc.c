@@ -231,7 +231,7 @@ qboolean ctf_teamstring(char * buf, int teamnum, int teamnum_option)
 }
 
 //this function needs to find out if anything is wrong with the flags
-qboolean ctf_validateflags()
+qboolean ctf_validateflags(void)
 {
 	edict_t * tmp_player = NULL;
 	int teamcount= CTF_TEAM_UNDEFINED+1;
@@ -1478,7 +1478,7 @@ void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty)
 	ctf_BSafePrint(PRINT_HIGH, message);
 }
 
-void ctf_SetLogName()
+void ctf_SetLogName(void)
 {
 	//surt automated logfile renaming here
 	if ( strcmp(logrename->string, "") != 0)

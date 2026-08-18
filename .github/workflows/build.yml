@@ -68,6 +68,52 @@ jobs:
           name: lmctf-buzzmod-linux-x86_64
           path: dist/gamex86_64.so
 
+  verification:
+    name: Host gates (${{ matrix.name }})
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GNUmakefile GCC
+            build_file: GNUmakefile
+            compiler: gcc
+          - name: Makefile GCC
+            build_file: Makefile
+            compiler: gcc
+          - name: GNUmakefile Clang
+            build_file: GNUmakefile
+            compiler: clang
+          - name: Makefile Clang
+            build_file: Makefile
+            compiler: clang
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Build module and run complete host suite
+        shell: bash
+        run: |
+          set -o pipefail
+          make -B -f "${{ matrix.build_file }}" -j2 \
+            CC="${{ matrix.compiler }}" all host-test 2>&1 | tee host-test.log
+          module=$(find . -maxdepth 1 -type f -name 'game*-lmctf-*.so' \
+            -print -quit)
+          test -n "$module"
+          ldd -r "$module" 2>&1 | tee module-relocations.log
+
+      - name: Fail on warnings
+        shell: bash
+        run: |
+          if grep -q "warning:" host-test.log; then
+            grep "warning:" host-test.log
+            echo "::error::host verification produced warnings"
+            exit 1
+          fi
+          echo "no warnings"
+
   windows:
     name: Windows ${{ matrix.arch }}
     needs: version
@@ -155,7 +201,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [ version, linux, windows ]
+    needs: [ version, linux, verification, windows ]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

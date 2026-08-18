@@ -605,6 +605,7 @@ HOOK_DISCIPLINE_TEST_ALL_ARTIFACTS = \
 	.sg_hook_discipline_under_test.make.o \
 	.sg_hook_discipline_under_test.make.d
 RUNE_NAMING_TEST = tests/test_rune_naming.py
+RELEASE_WORKFLOW_TEST = tests/test_release_workflow.py
 RUNE_PYTHON_TESTS = tests/test_rune_contracts.py \
 	tests/test_rune_artifact.py \
 	tests/test_sidecario.py \
@@ -842,11 +843,11 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.g_entfile_path_test.make.o .g_entfile_path_test.make.d
 
 # This is for native build
-CFLAGS=-O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
+CFLAGS=-std=c11 -O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
 CPPFLAGS += -I.
 # This is for 32-bit build on 64-bit host
 ifeq ($(ARCH),i386)
-CFLAGS =-m32 -O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"' -I/usr/include
+CFLAGS =-m32 -std=c11 -O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"' -I/usr/include
 endif
 
 ######################################################################
@@ -2133,6 +2134,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SIDECAR_WIRE_TEST_BIN) $(SIDECAR_LOADER_TEST_BIN) \
 		$(SIDECAR_STORE_TEST_BIN) \
 		$(RUNE_NAMING_TEST) \
+		$(RELEASE_WORKFLOW_TEST) \
 		$(RUNE_PYTHON_TESTS) \
 		$(RUNGEN_TEST) \
 		$(RUNE_CORPUS_CONTROLLER_TEST) \
@@ -2201,6 +2203,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(SIDECAR_LOADER_TEST_BIN)
 	./$(SIDECAR_STORE_TEST_BIN)
 	python3 $(RUNE_NAMING_TEST)
+	python3 $(RELEASE_WORKFLOW_TEST)
 	python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers
 	python3 $(RUNGEN_TEST)
