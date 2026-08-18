@@ -81,56 +81,174 @@ def test_shootable_door_authorizes_before_team_reset() -> None:
     assert killed.index("door_use (self->teammaster, attacker, attacker);") > authorized
 
 
-def test_malformed_source_passthrough_excludes_held_claims() -> None:
+def test_generator_serializes_bounded_delayed_sound_terminals() -> None:
+    oracle = source("slipgate/sg_oracle.c")
+    delayed = between(
+        oracle,
+        "static qboolean SG_OraclePlanSoundOnlyTargets",
+        "static qboolean SG_OracleDoorEffectsSafe",
+    )
+    activator = between(
+        oracle,
+        "static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)\n{",
+        "/* The active BUTTON_DOOR controller",
+    )
+    door_effects = between(
+        oracle,
+        "static qboolean SG_OracleDoorEffectsSafe",
+        "/* Static declared mechanisms",
+    )
+    assert "!isfinite(source->delay) || source->delay < 0.0f" in delayed
+    assert "source->killtarget" in delayed
+    assert "depth > 4" in delayed
+    assert "target_speaker" in delayed
+    assert "trigger_relay" in delayed
+    assert "SG_OraclePlanSoundOnlyTargets(target, depth + 1)" in delayed
+    assert "trigger->wait > (float)RUNE_MAX_COST_MS / 1000.0f" not in activator
+    assert "SG_OraclePlanSoundOnlyTargets(target, 1)" in activator
+    assert "SG_OraclePlanSoundOnlyTargets(target, 1)" in door_effects
+
+    generator = between(
+        source("slipgate/sg_rune.c"),
+        "static void Link_Doors(void)",
+        "rune: %d declared door links",
+    )
+    admission = generator.index("SG_DeclaredDoorActivatorSafe(door)")
+    travel = generator.index("Door_TravelMs(door)", admission)
+    insert_call = generator.index("Door_LinkInsert(", travel)
+    assert admission < travel < insert_call
+
+    insert = between(
+        source("slipgate/sg_rune.c"),
+        "static qboolean Door_LinkInsert",
+        "/* Link_Doors runs before objective pruning",
+    )
+    assert "Mechanism_BindDoor" in insert
+
+    materializer = source("slipgate/sg_rune_mechanism_plan.c")
+    delayed_closure = between(
+        materializer,
+        "static int Mechanism_DelayedSoundOnlyRelay",
+        "static int Mechanism_AppendInventoryEdge",
+    )
+    side_effect = between(
+        materializer,
+        "static int Mechanism_AddSideEffect",
+        "static int Mechanism_MaterializePlatform",
+    )
+    direct = between(
+        materializer,
+        "case SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR:",
+        "default:",
+    )
+    assert "node->delay_ms < 0" in delayed_closure
+    assert "edge->delay_ms != (uint32_t)node->delay_ms" in delayed_closure
+    assert "depth > 4" in delayed_closure
+    assert "Mechanism_AppendInventoryEdge(state, inventory_index)" in side_effect
+    assert "destination->delay_ms > 0" in side_effect
+    assert "Mechanism_DelayedSoundOnlyRelay(state, destination_index, 1)" in side_effect
+    assert "entry->wait_ms > RUNE_MAX_COST_MS" in direct
+    assert "binding->cooldown_ms != cooldown" in direct
+
+    codec = source("slipgate/sg_rune_codec.c")
+    assert "static int Codec_DelayedSoundOnlyRelay" in codec
+    assert "nodes[entry_index].wait_ms >" in codec
+    assert "SG_RUNE_CODEC_MAX_TIME_MS" in codec
+
+    use_targets = between(
+        source("g_utils.c"),
+        "void G_UseTargets (edict_t *ent, edict_t *activator)",
+        "if ((ent->message)",
+    )
+    assert use_targets.index("SG_HandleMechanismTargets(ent, activator)") < \
+        use_targets.index("if (ent->delay)")
+    runtime = between(
+        source("slipgate/sg_move.c"),
+        "qboolean SG_HandleMechanismTargets",
+        "static qboolean MechanismStep_Binding",
+    )
+    assert "source->delay != 0.0f" in runtime
+    assert "SG_RuneMechanismBindingDispatchTargets" in runtime
+
+    contract = between(
+        oracle,
+        "static int SG_DoorContractCost",
+        "int SG_DeclaredDoorContractCost",
+    )
+    assert "binding->entry_node->wait_ms" in contract
+    assert "int64_t longest" in contract
+    assert "nominal > 12500.0" in contract
+    assert "hold_ms >= (double)INT64_MAX" in contract
+
+    cooldown = between(
+        source("slipgate/sg_rune.c"),
+        "static int Door_CooldownGapMs",
+        "static void Door_CandidateInsert",
+    )
+    assert "int64_t longest_cycle" in cooldown
+    assert "nominal > 12500.0" in cooldown
+    assert "hold_ms >= (double)INT64_MAX" in cooldown
+
+
+def test_unbound_source_passthrough_excludes_held_claims() -> None:
     move = source("slipgate/sg_move.c")
+    binding = between(
+        move,
+        "static qboolean DoorStep_DeclaredBindingForLink",
+        "static qboolean DoorStep_DeclaredClaimHeld",
+    )
+    assert "SG_RuneMechanismBindingCapture" in binding
+    assert "SG_RunePhysicsCompatible" in binding
+    assert "SG_RuneMechanismBindingMoverKeys" in binding
+    assert "SG_RuneMechanismBindingResolveNode" in binding
+    assert "SG_RuneMechanismBindingCurrent" in binding
+    assert "SG_DeclaredDoorForLink" not in binding
+
     helper = between(
         move,
         "static qboolean DoorStep_DeclaredClaimHeld",
         "/* Touch_Multi and Touch_DoorTrigger",
     )
     assert "bot->declared_guard_paused" in helper
-    assert "DoorStep_DeclaredLinkSnapshot(bot, anchor, source)" in helper
+    assert "DoorStep_DeclaredBinding(bot, &binding)" in helper
     assert "record.law == SG_MOVER_LAW_DECLARED_DOOR" in helper
     assert "record.state == SG_MOVER_LEASE_ACTIVE" in helper
     assert "record.state == SG_MOVER_LEASE_PAUSED" in helper
     assert "record.state == SG_MOVER_LEASE_QUARANTINED" not in helper
+
     touch = between(
         move,
         "qboolean SG_AuthorizeDoorTriggerTouch",
         "/* G_UseTargets reaches",
     )
-    unsupported = touch.index("if (!DoorStep_SupportedActivator(source))")
-    deny = touch.index("return !DoorStep_DeclaredClaimHeld(bot) &&", unsupported)
+    unbound = touch.index("if (!DoorStep_DeclaredBinding(bot, &binding) ||")
+    entry = touch.index("binding.entry_entity != source", unbound)
+    deny = touch.index("return !DoorStep_DeclaredClaimHeld(bot) &&", entry)
     global_gate = touch.index("!SG_DeclaredDoorGuardAnyClaim()", deny)
-    assert unsupported < deny < global_gate
+    authorize = touch.index("SG_DeclaredDoorGuardAuthorizeActivation", global_gate)
+    current = touch.index("SG_RuneMechanismBindingCurrent", authorize)
+    assert unbound < entry < deny < global_gate < authorize < current
+
     activation = between(
         move,
         "qboolean SG_AuthorizeDoorActivation",
         "static sg_bot_t *Drop_LiveEventOwner",
     )
-    unsupported = activation.index("if (!DoorStep_SupportedActivator(source))")
-    deny = activation.index("return !DoorStep_DeclaredClaimHeld(bot) &&", unsupported)
+    unbound = activation.index("if (!DoorStep_DeclaredBinding(bot, &binding) ||")
+    entry = activation.index("binding.entry_entity != source", unbound)
+    deny = activation.index("return !DoorStep_DeclaredClaimHeld(bot) &&", entry)
     available = activation.index(
         "SG_DeclaredDoorGuardActivationAvailable(door_master)", deny
     )
     global_gate = activation.index("!SG_DeclaredDoorGuardAnyClaim()", deny)
-    assert deny < global_gate < available
+    authorize = activation.index("SG_DeclaredDoorGuardAuthorizeActivation", available)
+    mover = activation.index("DoorStep_BindingContainsMover", authorize)
+    current = activation.index("SG_RuneMechanismBindingCurrent", mover)
+    assert unbound < entry < deny < global_gate < available < authorize < mover < current
 
-    snapshot = between(
-        move,
-        "static qboolean DoorStep_DeclaredLinkSnapshot",
-        "static qboolean DoorStep_DeclaredClaimHeld",
-    )
-    assert "!rune->links || !rune->seeds" in snapshot
-    assert "!SG_RunePublishedShapeValid(rune)" in snapshot
-    assert "!SG_RunePhysicsCompatible(rune)" in snapshot
-    assert "rune->hdr.num_links > RUNE_MAX_LINKS" in snapshot
-    assert "rune->hdr.num_seeds > SG_MAX_SEEDS" in snapshot
-    for callback in (touch, activation):
-        assert callback.index("SG_DeclaredDoorGuardAuthorizeActivation") < callback.index(
-            "DoorStep_DeclaredLinkSnapshot"
-        )
-    assert unsupported < deny < available
+    assert "DoorStep_DeclaredLinkSnapshot" not in move
+    assert "DoorStep_SupportedActivator" not in move
+    assert "SG_DeclaredDoorForLink" not in move
 
 
 if __name__ == "__main__":
@@ -140,5 +258,6 @@ if __name__ == "__main__":
     test_auto_door_touch_authorizes_before_debounce_and_use()
     test_door_use_authorizes_before_all_team_mutation()
     test_shootable_door_authorizes_before_team_reset()
-    test_malformed_source_passthrough_excludes_held_claims()
+    test_generator_serializes_bounded_delayed_sound_terminals()
+    test_unbound_source_passthrough_excludes_held_claims()
     print("declared_door_guard_integration: ok")

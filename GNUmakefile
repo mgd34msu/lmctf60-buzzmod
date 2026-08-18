@@ -112,6 +112,44 @@ MOVER_LEASE_TEST_ALL_ARTIFACTS = \
 	.sg_mover_lease_under_test.gnu.o .sg_mover_lease_under_test.gnu.d \
 	.sg_mover_lease_test.make.o .sg_mover_lease_test.make.d \
 	.sg_mover_lease_under_test.make.o .sg_mover_lease_under_test.make.d
+BUTTON_LIVE_TEST_BIN = sg_button_live_test.gnu
+BUTTON_LIVE_TEST_OBJS = .sg_button_live_test.gnu.o \
+	.sg_button_live_under_test.gnu.o
+BUTTON_LIVE_TEST_DEPS = $(BUTTON_LIVE_TEST_OBJS:.o=.d)
+BUTTON_LIVE_TEST_ALL_ARTIFACTS = \
+	sg_button_live_test.gnu sg_button_live_test.make \
+	.sg_button_live_test.gnu.o .sg_button_live_test.gnu.d \
+	.sg_button_live_under_test.gnu.o .sg_button_live_under_test.gnu.d \
+	.sg_button_live_test.make.o .sg_button_live_test.make.d \
+	.sg_button_live_under_test.make.o .sg_button_live_under_test.make.d
+BUTTON_GAME_TEST_BIN = sg_button_game_test.gnu
+BUTTON_GAME_TEST_OBJS = .sg_button_game_test.gnu.o \
+	.sg_button_game_live_under_test.gnu.o \
+	.sg_button_game_move_under_test.gnu.o \
+	.sg_button_game_func_under_test.gnu.o \
+	.sg_button_game_q_shared_under_test.gnu.o
+BUTTON_GAME_TEST_DEPS = $(BUTTON_GAME_TEST_OBJS:.o=.d)
+BUTTON_GAME_INTEGRATION_TEST = tests/test_button_game_integration.py
+BUTTON_GAME_TEST_ALL_ARTIFACTS = \
+	sg_button_game_test.gnu sg_button_game_test.make \
+	.sg_button_game_test.gnu.o .sg_button_game_test.gnu.d \
+	.sg_button_game_live_under_test.gnu.o \
+	.sg_button_game_live_under_test.gnu.d \
+	.sg_button_game_move_under_test.gnu.o \
+	.sg_button_game_move_under_test.gnu.d \
+	.sg_button_game_func_under_test.gnu.o \
+	.sg_button_game_func_under_test.gnu.d \
+	.sg_button_game_q_shared_under_test.gnu.o \
+	.sg_button_game_q_shared_under_test.gnu.d \
+	.sg_button_game_test.make.o .sg_button_game_test.make.d \
+	.sg_button_game_live_under_test.make.o \
+	.sg_button_game_live_under_test.make.d \
+	.sg_button_game_move_under_test.make.o \
+	.sg_button_game_move_under_test.make.d \
+	.sg_button_game_func_under_test.make.o \
+	.sg_button_game_func_under_test.make.d \
+	.sg_button_game_q_shared_under_test.make.o \
+	.sg_button_game_q_shared_under_test.make.d
 COMPOUND_GUARD_TEST_BIN = sg_compound_guard_test.gnu
 COMPOUND_GUARD_TEST_OBJS = .sg_compound_guard_test.gnu.o \
 	.sg_compound_guard_under_test.gnu.o \
@@ -184,6 +222,8 @@ COMPOUND_PUBLICATION_TEST_OBJS = .sg_compound_publication_test.gnu.o \
 COMPOUND_PUBLICATION_TEST_DEPS = $(COMPOUND_PUBLICATION_TEST_OBJS:.o=.d)
 COMPOUND_PUBLICATION_INTEGRATION_TEST = \
 	tests/test_compound_publication_integration.py
+MECHANISM_PUBLICATION_INTEGRATION_TEST = \
+	tests/test_mechanism_publication_integration.py
 COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS = \
 	sg_compound_publication_test.gnu sg_compound_publication_test.make \
 	.sg_compound_publication_test.gnu.o \
@@ -198,27 +238,146 @@ IDENTITY_TEST_BIN = sg_identity_test.gnu
 IDENTITY_TEST_OBJS = .sg_identity_test.gnu.o .sg_identity_under_test.gnu.o \
 	.sg_crc32_under_test.gnu.o
 IDENTITY_TEST_DEPS = $(IDENTITY_TEST_OBJS:.o=.d)
-RUNE_WIRE_TEST_BIN = sg_rune_wire_test.gnu
-RUNE_WIRE_TEST_OBJS = .sg_rune_wire_test.gnu.o \
-	.sg_rune_wire_under_test.gnu.o .sg_rune_wire_action_under_test.gnu.o \
-	.sg_rune_wire_crc_under_test.gnu.o
-RUNE_WIRE_TEST_DEPS = $(RUNE_WIRE_TEST_OBJS:.o=.d)
+RUNE_CODEC_TEST_BIN = sg_rune_codec_test.gnu
+RUNE_CODEC_TEST_OBJS = .sg_rune_codec_test.gnu.o \
+	.sg_rune_codec_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.o
+RUNE_CODEC_TEST_DEPS = $(RUNE_CODEC_TEST_OBJS:.o=.d)
+RUNE_CODEC_TEST_ALL_ARTIFACTS = \
+	sg_rune_codec_test.gnu sg_rune_codec_test.make \
+	.sg_rune_codec_test.gnu.o .sg_rune_codec_test.gnu.d \
+	.sg_rune_codec_under_test.gnu.o .sg_rune_codec_under_test.gnu.d \
+	.sg_rune_codec_test.make.o .sg_rune_codec_test.make.d \
+	.sg_rune_codec_under_test.make.o .sg_rune_codec_under_test.make.d
+RUNE_ARTIFACT_LOADER_TEST_BIN = sg_rune_artifact_loader_test.gnu
+RUNE_ARTIFACT_LOADER_TEST_OBJS = .sg_rune_artifact_loader_test.gnu.o \
+	.sg_rune_artifact_loader_under_test.gnu.o \
+	.sg_rune_codec_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.o
+RUNE_ARTIFACT_LOADER_TEST_DEPS = $(RUNE_ARTIFACT_LOADER_TEST_OBJS:.o=.d)
+RUNE_ARTIFACT_LOADER_TEST_ALL_ARTIFACTS = \
+	sg_rune_artifact_loader_test.gnu sg_rune_artifact_loader_test.make \
+	.sg_rune_artifact_loader_test.gnu.o .sg_rune_artifact_loader_test.gnu.d \
+	.sg_rune_artifact_loader_under_test.gnu.o .sg_rune_artifact_loader_under_test.gnu.d \
+	.sg_rune_artifact_loader_test.make.o .sg_rune_artifact_loader_test.make.d \
+	.sg_rune_artifact_loader_under_test.make.o .sg_rune_artifact_loader_under_test.make.d
+RUNE_ARTIFACT_WRITER_TEST_BIN = sg_rune_artifact_writer_test.gnu
+RUNE_ARTIFACT_WRITER_TEST_OBJS = .sg_rune_artifact_writer_test.gnu.o \
+	.sg_rune_artifact_writer_under_test.gnu.o \
+	.sg_rune_codec_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.o
+RUNE_ARTIFACT_WRITER_TEST_DEPS = $(RUNE_ARTIFACT_WRITER_TEST_OBJS:.o=.d)
+RUNE_ARTIFACT_WRITER_TEST_ALL_ARTIFACTS = \
+	sg_rune_artifact_writer_test.gnu sg_rune_artifact_writer_test.make \
+	.sg_rune_artifact_writer_test.gnu.o .sg_rune_artifact_writer_test.gnu.d \
+	.sg_rune_artifact_writer_under_test.gnu.o .sg_rune_artifact_writer_under_test.gnu.d \
+	.sg_rune_artifact_writer_test.make.o .sg_rune_artifact_writer_test.make.d \
+	.sg_rune_artifact_writer_under_test.make.o .sg_rune_artifact_writer_under_test.make.d
+RUNE_MECHANISM_PLAN_TEST_BIN = sg_rune_mechanism_plan_test.gnu
+RUNE_MECHANISM_PLAN_TEST_OBJS = .sg_rune_mechanism_plan_test.gnu.o \
+	.sg_rune_mechanism_plan_under_test.gnu.o \
+	.sg_rune_codec_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.o
+RUNE_MECHANISM_PLAN_TEST_DEPS = $(RUNE_MECHANISM_PLAN_TEST_OBJS:.o=.d)
+RUNE_MECHANISM_PLAN_TEST_ALL_ARTIFACTS = \
+	sg_rune_mechanism_plan_test.gnu sg_rune_mechanism_plan_test.make \
+	.sg_rune_mechanism_plan_test.gnu.o .sg_rune_mechanism_plan_test.gnu.d \
+	.sg_rune_mechanism_plan_under_test.gnu.o .sg_rune_mechanism_plan_under_test.gnu.d \
+	.sg_rune_mechanism_plan_test.make.o .sg_rune_mechanism_plan_test.make.d \
+	.sg_rune_mechanism_plan_under_test.make.o .sg_rune_mechanism_plan_under_test.make.d
+RUNE_MECHANISM_CATALOG_TEST_BIN = sg_rune_mechanism_catalog_test.gnu
+RUNE_MECHANISM_CATALOG_TEST_OBJS = .sg_rune_mechanism_catalog_test.gnu.o \
+	.sg_rune_mechanism_catalog_under_test.gnu.o
+RUNE_MECHANISM_CATALOG_TEST_DEPS = \
+	$(RUNE_MECHANISM_CATALOG_TEST_OBJS:.o=.d)
+RUNE_MECHANISM_CATALOG_TEST_ALL_ARTIFACTS = \
+	sg_rune_mechanism_catalog_test.gnu sg_rune_mechanism_catalog_test.make \
+	.sg_rune_mechanism_catalog_test.gnu.o \
+	.sg_rune_mechanism_catalog_test.gnu.d \
+	.sg_rune_mechanism_catalog_under_test.gnu.o \
+	.sg_rune_mechanism_catalog_under_test.gnu.d \
+	.sg_rune_mechanism_catalog_test.make.o \
+	.sg_rune_mechanism_catalog_test.make.d \
+	.sg_rune_mechanism_catalog_under_test.make.o \
+	.sg_rune_mechanism_catalog_under_test.make.d
+RUNE_MECHANISM_EXECUTION_TEST_BIN = sg_rune_mechanism_execution_test.gnu
+RUNE_MECHANISM_EXECUTION_TEST_OBJS = \
+	.sg_rune_mechanism_execution_test.gnu.o \
+	.sg_rune_mechanism_catalog_under_test.gnu.o \
+	.sg_rune_binding_under_test.gnu.o .sg_rune_runtime_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.o .sg_rune_crc_under_test.gnu.o \
+	.sg_delayed_relay_dispatch_move_under_test.gnu.o \
+	.sg_delayed_relay_dispatch_utils_under_test.gnu.o \
+	.sg_delayed_relay_dispatch_trigger_under_test.gnu.o \
+	.sg_delayed_relay_dispatch_button_under_test.gnu.o \
+	.sg_delayed_relay_dispatch_q_shared_under_test.gnu.o
+RUNE_MECHANISM_EXECUTION_TEST_DEPS = \
+	$(RUNE_MECHANISM_EXECUTION_TEST_OBJS:.o=.d)
+RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS = \
+	sg_rune_mechanism_execution_test.gnu sg_rune_mechanism_execution_test.make \
+	.sg_rune_mechanism_execution_test.gnu.o \
+	.sg_rune_mechanism_execution_test.gnu.d \
+	.sg_rune_mechanism_execution_test.make.o \
+	.sg_rune_mechanism_execution_test.make.d \
+	$(foreach flavor,gnu make, \
+	.sg_delayed_relay_dispatch_move_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_move_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_trigger_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_trigger_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_button_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_button_under_test.$(flavor).d \
+	.sg_delayed_relay_dispatch_q_shared_under_test.$(flavor).o \
+	.sg_delayed_relay_dispatch_q_shared_under_test.$(flavor).d)
+RUNE_BINDING_TEST_BIN = sg_rune_binding_test.gnu
+RUNE_BINDING_TEST_OBJS = .sg_rune_binding_test.gnu.o \
+	.sg_rune_binding_under_test.gnu.o \
+	.sg_rune_runtime_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.o
+RUNE_BINDING_TEST_DEPS = $(RUNE_BINDING_TEST_OBJS:.o=.d)
+RUNE_BINDING_TEST_ALL_ARTIFACTS = \
+	sg_rune_binding_test.gnu sg_rune_binding_test.make \
+	.sg_rune_binding_test.gnu.o .sg_rune_binding_test.gnu.d \
+	.sg_rune_binding_under_test.gnu.o .sg_rune_binding_under_test.gnu.d \
+	.sg_rune_runtime_under_test.gnu.o .sg_rune_runtime_under_test.gnu.d \
+	.sg_rune_binding_test.make.o .sg_rune_binding_test.make.d \
+	.sg_rune_binding_under_test.make.o .sg_rune_binding_under_test.make.d \
+	.sg_rune_runtime_under_test.make.o .sg_rune_runtime_under_test.make.d
+RUNE_ACCEPT_BIN = runeaccept.gnu
+RUNE_ACCEPT_OBJS = .runeaccept.gnu.o \
+	.sg_rune_file_under_test.gnu.o \
+	.sg_rune_artifact_loader_under_test.gnu.o \
+	.sg_rune_codec_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.o
+RUNE_ACCEPT_DEPS = $(RUNE_ACCEPT_OBJS:.o=.d)
+RUNE_ACCEPT_ALL_ARTIFACTS = \
+	runeaccept.gnu runeaccept.make \
+	.runeaccept.gnu.o .runeaccept.gnu.d \
+	.sg_rune_file_under_test.gnu.o \
+	.sg_rune_file_under_test.gnu.d \
+	.runeaccept.make.o .runeaccept.make.d \
+	.sg_rune_file_under_test.make.o \
+	.sg_rune_file_under_test.make.d
 SIDECAR_WIRE_TEST_BIN = sg_sidecar_wire_test.gnu
 SIDECAR_WIRE_TEST_OBJS = .sg_sidecar_wire_test.gnu.o \
-	.sg_sidecar_wire_under_test.gnu.o .sg_rune_wire_under_test.gnu.o \
-	.sg_rune_wire_action_under_test.gnu.o .sg_rune_wire_crc_under_test.gnu.o
+	.sg_sidecar_wire_under_test.gnu.o .sg_rune_crc_under_test.gnu.o
 SIDECAR_WIRE_TEST_DEPS = $(SIDECAR_WIRE_TEST_OBJS:.o=.d)
 SIDECAR_LOADER_TEST_BIN = sg_sidecar_loader_test.gnu
 SIDECAR_LOADER_TEST_OBJS = .sg_sidecar_loader_test.gnu.o \
 	.sg_sidecar_loader_under_test.gnu.o .sg_sidecar_wire_under_test.gnu.o \
-	.sg_rune_wire_under_test.gnu.o .sg_rune_wire_action_under_test.gnu.o \
-	.sg_rune_wire_crc_under_test.gnu.o
+	.sg_rune_crc_under_test.gnu.o
 SIDECAR_LOADER_TEST_DEPS = $(SIDECAR_LOADER_TEST_OBJS:.o=.d)
 SIDECAR_STORE_TEST_BIN = sg_sidecar_store_test.gnu
 SIDECAR_STORE_TEST_OBJS = .sg_sidecar_store_test.gnu.o \
 	.sg_sidecar_store_under_test.gnu.o .sg_sidecar_loader_under_test.gnu.o \
-	.sg_sidecar_wire_under_test.gnu.o .sg_rune_wire_under_test.gnu.o \
-	.sg_rune_wire_action_under_test.gnu.o .sg_rune_wire_crc_under_test.gnu.o
+	.sg_sidecar_wire_under_test.gnu.o .sg_rune_crc_under_test.gnu.o
 SIDECAR_STORE_TEST_DEPS = $(SIDECAR_STORE_TEST_OBJS:.o=.d)
 DANGER_LEASE_TEST_BIN = sg_danger_lease_test.gnu
 DANGER_LEASE_TEST_OBJS = .sg_danger_lease_test.gnu.o \
@@ -228,37 +387,145 @@ DANGER_POLICY_TEST_BIN = sg_danger_policy_test.gnu
 DANGER_POLICY_TEST_OBJS = .sg_danger_policy_test.gnu.o \
 	.sg_danger_policy_under_test.gnu.o
 DANGER_POLICY_TEST_DEPS = $(DANGER_POLICY_TEST_OBJS:.o=.d)
-DANGER_V3_TEST_BIN = sg_danger_v3_test.gnu
-DANGER_V3_TEST_OBJS = .sg_danger_v3_test.gnu.o \
-	.sg_danger_under_test.gnu.o .sg_rune_wire_under_test.gnu.o \
-	.sg_rune_wire_action_under_test.gnu.o .sg_rune_wire_crc_under_test.gnu.o
-DANGER_V3_TEST_DEPS = $(DANGER_V3_TEST_OBJS:.o=.d)
+DANGER_TEST_BIN = sg_danger_test.gnu
+DANGER_TEST_OBJS = .sg_danger_test.gnu.o .sg_danger_under_test.gnu.o \
+	.sg_rune_runtime_under_test.gnu.o
+DANGER_TEST_DEPS = $(DANGER_TEST_OBJS:.o=.d)
 FIELDS_CANDIDATE_TEST_BIN = sg_fields_candidate_test.gnu
 FIELDS_CANDIDATE_TEST_OBJS = .sg_fields_candidate_test.gnu.o \
-	.sg_fields_candidate_under_test.gnu.o
+	.sg_fields_candidate_under_test.gnu.o \
+	.sg_caco_projection_under_test.gnu.o \
+	.sg_goal_projection_under_test.gnu.o \
+	.sg_snag_repair_under_test.gnu.o
 FIELDS_CANDIDATE_TEST_DEPS = $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
-RUNE_LOADER_TEST_BIN = sg_rune_loader_test.gnu
-RUNE_LOADER_TEST_OBJS = .sg_rune_loader_test.gnu.o \
-	.sg_rune_loader_under_test.gnu.o .sg_rune_wire_under_test.gnu.o \
-	.sg_rune_wire_action_under_test.gnu.o .sg_rune_wire_crc_under_test.gnu.o \
-	.sg_compound_under_test.gnu.o
-RUNE_LOADER_TEST_DEPS = $(RUNE_LOADER_TEST_OBJS:.o=.d)
-RUNE_WRITER_TEST_BIN = sg_rune_writer_test.gnu
-RUNE_WRITER_TEST_OBJS = .sg_rune_writer_test.gnu.o \
-	.sg_rune_writer_under_test.gnu.o .sg_rune_wire_under_test.gnu.o \
-	.sg_rune_wire_action_under_test.gnu.o .sg_rune_wire_crc_under_test.gnu.o \
-	.sg_compound_under_test.gnu.o
-RUNE_WRITER_TEST_DEPS = $(RUNE_WRITER_TEST_OBJS:.o=.d)
+SNAG_REPAIR_TEST_BIN = sg_snag_repair_test.gnu
+SNAG_REPAIR_TEST_OBJS = .sg_snag_repair_test.gnu.o \
+	.sg_fields_candidate_under_test.gnu.o .sg_snag_repair_under_test.gnu.o
+SNAG_REPAIR_TEST_DEPS = $(SNAG_REPAIR_TEST_OBJS:.o=.d)
+SNAG_REPAIR_PYTHON_TEST = tests/test_snagrepair.py
+SNAG_REPAIR_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_snag_repair_test.$(flavor) \
+	.sg_snag_repair_test.$(flavor).o .sg_snag_repair_test.$(flavor).d \
+	.sg_snag_repair_under_test.$(flavor).o \
+	.sg_snag_repair_under_test.$(flavor).d)
+SPECTATOR_SOUND_TEST_BIN = sg_spectator_sound_test.gnu
+SPECTATOR_SOUND_TEST_OBJS = .sg_spectator_sound_test.gnu.o \
+	.sg_spectator_sound_net_under_test.gnu.o
+SPECTATOR_SOUND_TEST_DEPS = $(SPECTATOR_SOUND_TEST_OBJS:.o=.d)
+SPECTATOR_SOUND_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_spectator_sound_test.$(flavor) \
+	.sg_spectator_sound_test.$(flavor).o \
+	.sg_spectator_sound_test.$(flavor).d \
+	.sg_spectator_sound_net_under_test.$(flavor).o \
+	.sg_spectator_sound_net_under_test.$(flavor).d)
+HUMAN_SPEED_TEST_BIN = sg_human_speed_test.gnu
+HUMAN_SPEED_TEST_OBJS = .sg_human_speed_test.gnu.o \
+	.sg_human_speed_under_test.gnu.o \
+	.sg_human_speed_pmove_under_test.gnu.o \
+	.sg_human_speed_q_shared_under_test.gnu.o
+HUMAN_SPEED_TEST_DEPS = $(HUMAN_SPEED_TEST_OBJS:.o=.d)
+HUMAN_SPEED_INTEGRATION_TEST = tests/test_human_speed_integration.py
+HUMAN_SPEED_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_human_speed_test.$(flavor) \
+	.sg_human_speed_test.$(flavor).o .sg_human_speed_test.$(flavor).d \
+	.sg_human_speed_under_test.$(flavor).o \
+	.sg_human_speed_under_test.$(flavor).d \
+	.sg_human_speed_pmove_under_test.$(flavor).o \
+	.sg_human_speed_pmove_under_test.$(flavor).d \
+	.sg_human_speed_q_shared_under_test.$(flavor).o \
+	.sg_human_speed_q_shared_under_test.$(flavor).d)
+DEFENSE_SHIFT_TEST_BIN = sg_defense_shift_test.gnu
+DEFENSE_SHIFT_TEST_OBJS = .sg_defense_shift_test.gnu.o \
+	.sg_defense_shift_under_test.gnu.o
+DEFENSE_SHIFT_TEST_DEPS = $(DEFENSE_SHIFT_TEST_OBJS:.o=.d)
+DEFENSE_SHIFT_INTEGRATION_TEST = tests/test_defense_shift_integration.py
+DEFENSE_COMBAT_INTEGRATION_TEST = tests/test_defense_combat_integration.py
+DEFENSE_SHIFT_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_defense_shift_test.$(flavor) \
+	.sg_defense_shift_test.$(flavor).o .sg_defense_shift_test.$(flavor).d \
+	.sg_defense_shift_under_test.$(flavor).o \
+	.sg_defense_shift_under_test.$(flavor).d)
+DEFENSE_SUPPLY_TEST_BIN = sg_defense_supply_test.gnu
+DEFENSE_SUPPLY_TEST_OBJS = .sg_defense_supply_test.gnu.o \
+	.sg_defense_supply_under_test.gnu.o
+DEFENSE_SUPPLY_TEST_DEPS = $(DEFENSE_SUPPLY_TEST_OBJS:.o=.d)
+DEFENSE_SUPPLY_INTEGRATION_TEST = tests/test_defender_supply_integration.py
+DEFENSE_SUPPLY_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_defense_supply_test.$(flavor) \
+	.sg_defense_supply_test.$(flavor).o .sg_defense_supply_test.$(flavor).d \
+	.sg_defense_supply_under_test.$(flavor).o \
+	.sg_defense_supply_under_test.$(flavor).d)
+STRIKE_ADAPTER_TEST_BIN = sg_strike_adapter_test.gnu
+STRIKE_ADAPTER_TEST_OBJS = .sg_strike_adapter_test.gnu.o \
+	.sg_strike_under_test.gnu.o .sg_strike_adapter_under_test.gnu.o
+STRIKE_ADAPTER_TEST_DEPS = $(STRIKE_ADAPTER_TEST_OBJS:.o=.d)
+STRIKE_ADAPTER_INTEGRATION_TEST = tests/test_strike_integration.py
+STRIKE_ADAPTER_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_strike_adapter_test.$(flavor) \
+	.sg_strike_adapter_test.$(flavor).o .sg_strike_adapter_test.$(flavor).d \
+	.sg_strike_under_test.$(flavor).o .sg_strike_under_test.$(flavor).d \
+	.sg_strike_adapter_under_test.$(flavor).o \
+	.sg_strike_adapter_under_test.$(flavor).d)
+ITEM_COMMITMENT_TEST_BIN = sg_item_commitment_test.gnu
+ITEM_COMMITMENT_TEST_OBJS = .sg_item_commitment_test.gnu.o \
+	.sg_item_commitment_under_test.gnu.o
+ITEM_COMMITMENT_TEST_DEPS = $(ITEM_COMMITMENT_TEST_OBJS:.o=.d)
+ITEM_COMMITMENT_INTEGRATION_TEST = tests/test_item_commitment_integration.py
+ITEM_COMMITMENT_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_item_commitment_test.$(flavor) \
+	.sg_item_commitment_test.$(flavor).o \
+	.sg_item_commitment_test.$(flavor).d \
+	.sg_item_commitment_under_test.$(flavor).o \
+	.sg_item_commitment_under_test.$(flavor).d)
+HOOK_DIAGNOSTICS_TEST_BIN = sg_hook_diagnostics_test.gnu
+HOOK_DIAGNOSTICS_TEST_OBJS = .sg_hook_diagnostics_test.gnu.o \
+	.sg_hook_diagnostics_under_test.gnu.o
+HOOK_DIAGNOSTICS_TEST_DEPS = $(HOOK_DIAGNOSTICS_TEST_OBJS:.o=.d)
+HOOK_DIAGNOSTICS_INTEGRATION_TEST = tests/test_hook_diagnostics_integration.py
+HOOK_DIAGNOSTICS_CONSUMER_TEST = tests/test_hook_diagnostic_consumers.py
+HOOK_EVENTS_TEST = tests/test_hookevents.py
+HOOK_DIAGNOSTICS_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_hook_diagnostics_test.$(flavor) \
+	.sg_hook_diagnostics_test.$(flavor).o \
+	.sg_hook_diagnostics_test.$(flavor).d \
+	.sg_hook_diagnostics_under_test.$(flavor).o \
+	.sg_hook_diagnostics_under_test.$(flavor).d)
+RUN_HANDOFF_TEST_BIN = sg_run_handoff_test.gnu
+RUN_HANDOFF_TEST_OBJS = .sg_run_handoff_test.gnu.o \
+	.sg_run_handoff_descend_under_test.gnu.o \
+	.sg_run_handoff_pmove_under_test.gnu.o \
+	.sg_run_handoff_q_shared_under_test.gnu.o
+RUN_HANDOFF_TEST_DEPS = $(RUN_HANDOFF_TEST_OBJS:.o=.d)
+RUN_HANDOFF_INTEGRATION_TEST = tests/test_run_handoff_integration.py
+RUN_HANDOFF_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_run_handoff_test.$(flavor) \
+	.sg_run_handoff_test.$(flavor).o .sg_run_handoff_test.$(flavor).d \
+	.sg_run_handoff_descend_under_test.$(flavor).o \
+	.sg_run_handoff_descend_under_test.$(flavor).d \
+	.sg_run_handoff_pmove_under_test.$(flavor).o \
+	.sg_run_handoff_pmove_under_test.$(flavor).d \
+	.sg_run_handoff_q_shared_under_test.$(flavor).o \
+	.sg_run_handoff_q_shared_under_test.$(flavor).d)
 RUNE_INSTALL_TEST_BIN = sg_rune_install_test.gnu
 RUNE_INSTALL_TEST_OBJS = .sg_rune_install_test.gnu.o \
-	.sg_rune_install_under_test.gnu.o .sg_rune_writer_under_test.gnu.o \
-	.sg_rune_wire_under_test.gnu.o .sg_rune_wire_action_under_test.gnu.o \
-	.sg_rune_wire_crc_under_test.gnu.o .sg_compound_under_test.gnu.o
+	.sg_rune_install_under_test.gnu.o .sg_rune_stream_under_test.gnu.o \
+	.sg_rune_artifact_writer_under_test.gnu.o \
+	.sg_rune_codec_under_test.gnu.o .sg_rune_action_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.o
 RUNE_INSTALL_TEST_DEPS = $(RUNE_INSTALL_TEST_OBJS:.o=.d)
 RUNE_PROOF_TEST_BIN = sg_rune_proof_test.gnu
 RUNE_PROOF_TEST_OBJS = .sg_rune_proof_test.gnu.o \
 	.sg_rune_proof_under_test.gnu.o
 RUNE_PROOF_TEST_DEPS = $(RUNE_PROOF_TEST_OBJS:.o=.d)
+RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN = sg_rune_objective_diagnostics_test.gnu
+RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS = \
+	.sg_rune_objective_diagnostics_test.gnu.o
+RUNE_OBJECTIVE_DIAGNOSTICS_TEST_DEPS = \
+	$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS:.o=.d)
+RUNE_OBJECTIVE_DIAGNOSTICS_TEST_ALL_ARTIFACTS = \
+	$(foreach flavor,gnu make,sg_rune_objective_diagnostics_test.$(flavor) \
+	.sg_rune_objective_diagnostics_test.$(flavor).o \
+	.sg_rune_objective_diagnostics_test.$(flavor).d)
 REPLAY_TEST_BIN = sg_replay_test.gnu
 REPLAY_TEST_OBJS = .sg_replay_test.gnu.o .sg_replay_under_test.gnu.o
 REPLAY_TEST_DEPS = $(REPLAY_TEST_OBJS:.o=.d)
@@ -306,6 +573,31 @@ HOOK_LIVE_TEST_OBJS = .sg_hook_live_test.gnu.o \
 	.sg_hook_live_under_test.gnu.o .sg_hook_live_replay_under_test.gnu.o
 HOOK_LIVE_TEST_DEPS = $(HOOK_LIVE_TEST_OBJS:.o=.d)
 HOOK_INTEGRATION_TEST = tests/test_hook_live_integration.py
+HOOK_DISCIPLINE_TEST_BIN = sg_hook_discipline_test.gnu
+HOOK_DISCIPLINE_TEST_OBJS = .sg_hook_discipline_test.gnu.o \
+	.sg_hook_discipline_under_test.gnu.o
+HOOK_DISCIPLINE_TEST_DEPS = $(HOOK_DISCIPLINE_TEST_OBJS:.o=.d)
+HOOK_DISCIPLINE_TEST_ALL_ARTIFACTS = \
+	sg_hook_discipline_test.gnu sg_hook_discipline_test.make \
+	.sg_hook_discipline_test.gnu.o .sg_hook_discipline_test.gnu.d \
+	.sg_hook_discipline_under_test.gnu.o \
+	.sg_hook_discipline_under_test.gnu.d \
+	.sg_hook_discipline_test.make.o .sg_hook_discipline_test.make.d \
+	.sg_hook_discipline_under_test.make.o \
+	.sg_hook_discipline_under_test.make.d
+RUNE_NAMING_TEST = tests/test_rune_naming.py
+RUNE_PYTHON_TESTS = tests/test_rune_contracts.py \
+	tests/test_rune_artifact.py \
+	tests/test_sidecario.py \
+	tests/test_rune_tool_readers.py
+RUNGEN_TEST = tests/test_runegen_gate.py
+RUNE_CORPUS_CONTROLLER_TEST = tests/test_rune_corpus_controller.py
+BSPMECHANISMS_TEST = tests/test_bspmechanisms.py
+WAVELOOP_PROCESS_TEST = tests/test_waveloop_process_scope.py
+TEMP_FLAG_DIAGNOSTIC_TEST = tests/test_no_temp_flag_diagnostics.py
+CARRIER_RETURN_TEST = tests/test_carrier_return_progress.py
+COMBAT_AIM_TEST = tests/test_combat_aim_envelope.py
+OFFENSE_FLAG_PICKUP_TEST = tests/test_offense_flag_pickup_recovery.py
 ROTATOR_SWEEP_TEST_BIN = sg_rotator_sweep_test.gnu
 ROTATOR_SWEEP_TEST_OBJS = .sg_rotator_sweep_test.gnu.o .sg_rotator_sweep_under_test.gnu.o \
 	.sg_rotator_sweep_q_shared_under_test.gnu.o
@@ -335,6 +627,7 @@ COMPOUND_SWIM_ORACLE_TEST_BIN = sg_compound_swim_oracle_test.gnu
 COMPOUND_SWIM_ORACLE_TEST_OBJS = \
 	.sg_compound_swim_oracle_test.gnu.o \
 	.sg_compound_swim_oracle_oracle_under_test.gnu.o \
+	.sg_compound_swim_oracle_rune_timing_under_test.gnu.o \
 	.sg_compound_swim_oracle_replay_under_test.gnu.o \
 	.sg_compound_swim_oracle_compound_under_test.gnu.o \
 	.sg_compound_swim_oracle_world_under_test.gnu.o \
@@ -347,6 +640,8 @@ COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS = \
 	.sg_compound_swim_oracle_test.gnu.d \
 	.sg_compound_swim_oracle_oracle_under_test.gnu.o \
 	.sg_compound_swim_oracle_oracle_under_test.gnu.d \
+	.sg_compound_swim_oracle_rune_timing_under_test.gnu.o \
+	.sg_compound_swim_oracle_rune_timing_under_test.gnu.d \
 	.sg_compound_swim_oracle_replay_under_test.gnu.o \
 	.sg_compound_swim_oracle_replay_under_test.gnu.d \
 	.sg_compound_swim_oracle_compound_under_test.gnu.o \
@@ -359,6 +654,8 @@ COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS = \
 	.sg_compound_swim_oracle_test.make.d \
 	.sg_compound_swim_oracle_oracle_under_test.make.o \
 	.sg_compound_swim_oracle_oracle_under_test.make.d \
+	.sg_compound_swim_oracle_rune_timing_under_test.make.o \
+	.sg_compound_swim_oracle_rune_timing_under_test.make.d \
 	.sg_compound_swim_oracle_replay_under_test.make.o \
 	.sg_compound_swim_oracle_replay_under_test.make.d \
 	.sg_compound_swim_oracle_compound_under_test.make.o \
@@ -420,19 +717,14 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_identity_test.make.o .sg_identity_test.make.d \
 	.sg_identity_under_test.make.o .sg_identity_under_test.make.d \
 	.sg_crc32_under_test.make.o .sg_crc32_under_test.make.d \
-	sg_rune_wire_test.gnu sg_rune_wire_test.make \
-	.sg_rune_wire_test.gnu.o .sg_rune_wire_test.gnu.d \
-	.sg_rune_wire_under_test.gnu.o .sg_rune_wire_under_test.gnu.d \
-	.sg_rune_wire_action_under_test.gnu.o \
-	.sg_rune_wire_action_under_test.gnu.d \
-	.sg_rune_wire_crc_under_test.gnu.o \
-	.sg_rune_wire_crc_under_test.gnu.d \
-	.sg_rune_wire_test.make.o .sg_rune_wire_test.make.d \
-	.sg_rune_wire_under_test.make.o .sg_rune_wire_under_test.make.d \
-	.sg_rune_wire_action_under_test.make.o \
-	.sg_rune_wire_action_under_test.make.d \
-	.sg_rune_wire_crc_under_test.make.o \
-	.sg_rune_wire_crc_under_test.make.d \
+	.sg_rune_action_under_test.gnu.o \
+	.sg_rune_action_under_test.gnu.d \
+	.sg_rune_crc_under_test.gnu.o \
+	.sg_rune_crc_under_test.gnu.d \
+	.sg_rune_action_under_test.make.o \
+	.sg_rune_action_under_test.make.d \
+	.sg_rune_crc_under_test.make.o \
+	.sg_rune_crc_under_test.make.d \
 	sg_sidecar_wire_test.gnu sg_sidecar_wire_test.make \
 	.sg_sidecar_wire_test.gnu.o .sg_sidecar_wire_test.gnu.d \
 	.sg_sidecar_wire_under_test.gnu.o .sg_sidecar_wire_under_test.gnu.d \
@@ -458,31 +750,28 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_danger_policy_under_test.gnu.o .sg_danger_policy_under_test.gnu.d \
 	.sg_danger_policy_test.make.o .sg_danger_policy_test.make.d \
 	.sg_danger_policy_under_test.make.o .sg_danger_policy_under_test.make.d \
-	sg_danger_v3_test.gnu sg_danger_v3_test.make \
-	.sg_danger_v3_test.gnu.o .sg_danger_v3_test.gnu.d \
+	sg_danger_test.gnu sg_danger_test.make \
+	.sg_danger_test.gnu.o .sg_danger_test.gnu.d \
 	.sg_danger_under_test.gnu.o .sg_danger_under_test.gnu.d \
-	.sg_danger_v3_test.make.o .sg_danger_v3_test.make.d \
+	.sg_rune_runtime_under_test.gnu.o .sg_rune_runtime_under_test.gnu.d \
+	.sg_danger_test.make.o .sg_danger_test.make.d \
 	.sg_danger_under_test.make.o .sg_danger_under_test.make.d \
 	sg_fields_candidate_test.gnu sg_fields_candidate_test.make \
 	.sg_fields_candidate_test.gnu.o .sg_fields_candidate_test.gnu.d \
 	.sg_fields_candidate_under_test.gnu.o .sg_fields_candidate_under_test.gnu.d \
+	.sg_caco_projection_under_test.gnu.o .sg_caco_projection_under_test.gnu.d \
+	.sg_goal_projection_under_test.gnu.o .sg_goal_projection_under_test.gnu.d \
 	.sg_fields_candidate_test.make.o .sg_fields_candidate_test.make.d \
 	.sg_fields_candidate_under_test.make.o .sg_fields_candidate_under_test.make.d \
-	sg_rune_loader_test.gnu sg_rune_loader_test.make \
-	.sg_rune_loader_test.gnu.o .sg_rune_loader_test.gnu.d \
-	.sg_rune_loader_under_test.gnu.o .sg_rune_loader_under_test.gnu.d \
-	.sg_rune_loader_test.make.o .sg_rune_loader_test.make.d \
-	.sg_rune_loader_under_test.make.o .sg_rune_loader_under_test.make.d \
-	sg_rune_writer_test.gnu sg_rune_writer_test.make \
-	.sg_rune_writer_test.gnu.o .sg_rune_writer_test.gnu.d \
-	.sg_rune_writer_under_test.gnu.o .sg_rune_writer_under_test.gnu.d \
-	.sg_rune_writer_test.make.o .sg_rune_writer_test.make.d \
-	.sg_rune_writer_under_test.make.o .sg_rune_writer_under_test.make.d \
+	.sg_caco_projection_under_test.make.o .sg_caco_projection_under_test.make.d \
+	.sg_goal_projection_under_test.make.o .sg_goal_projection_under_test.make.d \
 	sg_rune_install_test.gnu sg_rune_install_test.make \
 	.sg_rune_install_test.gnu.o .sg_rune_install_test.gnu.d \
 	.sg_rune_install_under_test.gnu.o .sg_rune_install_under_test.gnu.d \
+	.sg_rune_stream_under_test.gnu.o .sg_rune_stream_under_test.gnu.d \
 	.sg_rune_install_test.make.o .sg_rune_install_test.make.d \
 	.sg_rune_install_under_test.make.o .sg_rune_install_under_test.make.d \
+	.sg_rune_stream_under_test.make.o .sg_rune_stream_under_test.make.d \
 	sg_rune_proof_test.gnu sg_rune_proof_test.make \
 	.sg_rune_proof_test.gnu.o .sg_rune_proof_test.gnu.d \
 	.sg_rune_proof_under_test.gnu.o .sg_rune_proof_under_test.gnu.d \
@@ -524,6 +813,7 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 
 # This is for native build
 CFLAGS=-O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
+CPPFLAGS += -I.
 # This is for 32-bit build on 64-bit host
 ifeq ($(ARCH),i386)
 CFLAGS =-m32 -O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"' -I/usr/include
@@ -544,8 +834,8 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o sg_rune_wire.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_loader.o sg_rune_writer.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_publication.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_accept_drop.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
-		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
+		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_publication.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o slipgate/sg_snag_repair.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o sg_price.o sg_descend.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
 
@@ -596,10 +886,6 @@ SHELL = /bin/sh
 #for Windows or when we don't know the OS.
 LIBTOOL = ldd
 CFLAGS += -g -Wall
-CFLAGS += -DSG_ACCEPT_DROP
-ifneq ($(SG_ACCEPT_DROP_LEGACY_A),)
-CFLAGS += -DSG_ACCEPT_DROP_LEGACY_A=$(SG_ACCEPT_DROP_LEGACY_A)
-endif
 
 # Windows / MinGW (incl. MSYS2 MinGW)
 ifeq ($(PLATFORM),Windows)
@@ -647,15 +933,42 @@ SHLIBLDFLAGS = -shared
 # Targets
 ######################################################################
 
+POVLOCK_TEST_BIN = povlock_test.gnu
+POVLOCK_TEST_OBJS = .povlock_test.gnu.o .povlock_under_test.gnu.o \
+	.povlock_endframe_under_test.gnu.o
+POVLOCK_TEST_DEPS = $(POVLOCK_TEST_OBJS:.o=.d)
+POV_SESSION_TEST_BIN = pov_session_production_test.gnu
+POV_SESSION_TEST_OBJS = .pov_session_production_test.gnu.o \
+	.pov_session_chase_under_test.gnu.o \
+	.pov_session_client_under_test.gnu.o \
+	.pov_session_identity_under_test.gnu.o
+POV_SESSION_TEST_DEPS = $(POV_SESSION_TEST_OBJS:.o=.d)
+POVLOCK_DISPATCH_TEST = tests/test_povlock_dispatch.py
+POV_SUPERVISOR_BIN = tools/pov-supervisor
+POV_SUPERVISOR_TEST_BIN = pov_supervisor_unit.gnu
+POV_SUPERVISOR_TEST = tests/test_pov_supervisor.py
+POV_ITERATE_SELECTION_TEST = tests/test_iterate2_pov_selection.py
+POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
+	pov_supervisor_unit.make
+
 .PHONY: all dep host-test action-test compound-test mover-lease-test \
+	povlock-test pov-session-production-test pov-supervisor-test \
+	button-live-test button-game-test \
 	compound-guard-test compound-guard-game-test declared-door-guard-test \
 	compound-world-test \
 	compound-gen-test compound-publication-test \
-	identity-test rune-wire-test \
+	identity-test rune-codec-test rune-artifact-loader-test \
+	rune-artifact-writer-test rune-mechanism-plan-test \
+	rune-mechanism-catalog-test rune-mechanism-execution-test rune-binding-test \
+	rune-accept-tool \
+	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
-	danger-lease-test danger-policy-test danger-v3-test fields-candidate-test \
-	rune-loader-test \
-	rune-writer-test rune-install-test rune-proof-test replay-test \
+	danger-lease-test danger-policy-test danger-test fields-candidate-test snag-repair-test \
+	spectator-sound-test human-speed-test defense-shift-test \
+	item-commitment-test hook-diagnostics-test \
+	run-handoff-test \
+	rune-install-test rune-proof-test rune-objective-diagnostics-test \
+	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test rotator-sweep-test \
 	mover-subject-sweep-test entfile-test \
 	compound-swim-oracle-test rune-door-scope-test \
@@ -691,6 +1004,8 @@ slipgate/sg_compound_world.o: slipgate/sg_compound_world.c \
 		slipgate/sg_compound_world.h slipgate/sg_util.h g_local.h
 slipgate/sg_mover_lease.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h
+slipgate/sg_button_live.o: slipgate/sg_button_live.c \
+		slipgate/sg_button_live.h slipgate/sg_mover_lease.h
 slipgate/sg_compound_guard.o: slipgate/sg_compound_guard.c \
 		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h
 slipgate/sg_compound_guard_game.o: slipgate/sg_compound_guard_game.c \
@@ -701,6 +1016,22 @@ slipgate/sg_declared_door_guard.o: slipgate/sg_declared_door_guard.c \
 		slipgate/sg_declared_door_guard.h slipgate/sg_compound_guard.h \
 		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
 		g_local.h
+slipgate/sg_rune_runtime.o: slipgate/sg_rune_runtime.c \
+		slipgate/sg_rune.h slipgate/sg_rune_contract.h q_shared.h
+slipgate/sg_rune_binding.o: slipgate/sg_rune_binding.c \
+		slipgate/sg_rune_binding.h slipgate/sg_rune.h slipgate/sg_crc32.h \
+		slipgate/sg_rune_mechanism_catalog.h \
+		slipgate/sg_action_contract.generated.h q_shared.h
+slipgate/sg_rune_file.o: slipgate/sg_rune_file.c \
+		slipgate/sg_rune_file.h slipgate/sg_rune_artifact_loader.h \
+		slipgate/sg_rune_codec.h slipgate/sg_rune.h q_shared.h
+slipgate/sg_rune_stream.o: slipgate/sg_rune_stream.c \
+		slipgate/sg_rune_stream.h slipgate/sg_rune_artifact_writer.h \
+		slipgate/sg_rune_codec.h slipgate/sg_rune.h q_shared.h
+slipgate/sg_rune_mechanism_plan.o: slipgate/sg_rune_mechanism_plan.c \
+		slipgate/sg_rune_mechanism_plan.h \
+		slipgate/sg_rune_mechanism_catalog.h slipgate/sg_rune.h \
+		slipgate/sg_crc32.h q_shared.h
 slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
@@ -710,7 +1041,7 @@ slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 
 .c.o:
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -o $@ -c $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SHLIBCFLAGS) -o $@ -c $<
 
 $(TARGET):	$(OBJS) $(L_OBJS)
 		$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(OBJS) $(L_OBJS) $(LDFLAGS)
@@ -733,8 +1064,30 @@ $(ACTION_TEST_BIN): $(ACTION_TEST_OBJS)
 $(IDENTITY_TEST_BIN): $(IDENTITY_TEST_OBJS)
 	$(CC) -o $@ $(IDENTITY_TEST_OBJS) $(LDFLAGS)
 
-$(RUNE_WIRE_TEST_BIN): $(RUNE_WIRE_TEST_OBJS)
-	$(CC) -o $@ $(RUNE_WIRE_TEST_OBJS) $(LDFLAGS)
+$(RUNE_CODEC_TEST_BIN): $(RUNE_CODEC_TEST_OBJS)
+	$(CC) -o $@ $(RUNE_CODEC_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_ARTIFACT_LOADER_TEST_BIN): $(RUNE_ARTIFACT_LOADER_TEST_OBJS)
+	$(CC) -o $@ $(RUNE_ARTIFACT_LOADER_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_ARTIFACT_WRITER_TEST_BIN): $(RUNE_ARTIFACT_WRITER_TEST_OBJS)
+	$(CC) -o $@ $(RUNE_ARTIFACT_WRITER_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_MECHANISM_PLAN_TEST_BIN): $(RUNE_MECHANISM_PLAN_TEST_OBJS)
+	$(CC) -o $@ $(RUNE_MECHANISM_PLAN_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_MECHANISM_CATALOG_TEST_BIN): $(RUNE_MECHANISM_CATALOG_TEST_OBJS)
+	$(CC) -o $@ $(RUNE_MECHANISM_CATALOG_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_MECHANISM_EXECUTION_TEST_BIN): $(RUNE_MECHANISM_EXECUTION_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -Wl,--wrap=G_UseTargets -o $@ \
+		$(RUNE_MECHANISM_EXECUTION_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_BINDING_TEST_BIN): $(RUNE_BINDING_TEST_OBJS)
+	$(CC) -o $@ $(RUNE_BINDING_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_ACCEPT_BIN): $(RUNE_ACCEPT_OBJS)
+	$(CC) -o $@ $(RUNE_ACCEPT_OBJS) $(LDFLAGS)
 
 $(SIDECAR_WIRE_TEST_BIN): $(SIDECAR_WIRE_TEST_OBJS)
 	$(CC) -o $@ $(SIDECAR_WIRE_TEST_OBJS) $(LDFLAGS)
@@ -751,17 +1104,47 @@ $(DANGER_LEASE_TEST_BIN): $(DANGER_LEASE_TEST_OBJS)
 $(DANGER_POLICY_TEST_BIN): $(DANGER_POLICY_TEST_OBJS)
 	$(CC) -o $@ $(DANGER_POLICY_TEST_OBJS) $(LDFLAGS)
 
-$(DANGER_V3_TEST_BIN): $(DANGER_V3_TEST_OBJS)
-	$(CC) -o $@ $(DANGER_V3_TEST_OBJS) $(LDFLAGS)
+$(DANGER_TEST_BIN): $(DANGER_TEST_OBJS)
+	$(CC) -o $@ $(DANGER_TEST_OBJS) $(LDFLAGS)
 
 $(FIELDS_CANDIDATE_TEST_BIN): $(FIELDS_CANDIDATE_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(FIELDS_CANDIDATE_TEST_OBJS) $(LDFLAGS)
+
+$(SNAG_REPAIR_TEST_BIN): $(SNAG_REPAIR_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(SNAG_REPAIR_TEST_OBJS) $(LDFLAGS)
+
+$(HUMAN_SPEED_TEST_BIN): $(HUMAN_SPEED_TEST_OBJS)
+	$(CC) -o $@ $(HUMAN_SPEED_TEST_OBJS) $(LDFLAGS)
+
+$(DEFENSE_SHIFT_TEST_BIN): $(DEFENSE_SHIFT_TEST_OBJS)
+	$(CC) -o $@ $(DEFENSE_SHIFT_TEST_OBJS) $(LDFLAGS)
+
+$(DEFENSE_SUPPLY_TEST_BIN): $(DEFENSE_SUPPLY_TEST_OBJS)
+	$(CC) -o $@ $(DEFENSE_SUPPLY_TEST_OBJS) $(LDFLAGS)
+
+$(STRIKE_ADAPTER_TEST_BIN): $(STRIKE_ADAPTER_TEST_OBJS)
+	$(CC) -o $@ $(STRIKE_ADAPTER_TEST_OBJS) $(LDFLAGS)
+
+$(ITEM_COMMITMENT_TEST_BIN): $(ITEM_COMMITMENT_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(ITEM_COMMITMENT_TEST_OBJS) $(LDFLAGS)
+
+$(HOOK_DIAGNOSTICS_TEST_BIN): $(HOOK_DIAGNOSTICS_TEST_OBJS)
+	$(CC) -o $@ $(HOOK_DIAGNOSTICS_TEST_OBJS) $(LDFLAGS)
+
+$(RUN_HANDOFF_TEST_BIN): $(RUN_HANDOFF_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(RUN_HANDOFF_TEST_OBJS) $(LDFLAGS)
 
 $(COMPOUND_TEST_BIN): $(COMPOUND_TEST_OBJS)
 	$(CC) -o $@ $(COMPOUND_TEST_OBJS) $(LDFLAGS)
 
 $(MOVER_LEASE_TEST_BIN): $(MOVER_LEASE_TEST_OBJS)
 	$(CC) -o $@ $(MOVER_LEASE_TEST_OBJS) $(LDFLAGS)
+
+$(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
+	$(CC) -o $@ $(BUTTON_LIVE_TEST_OBJS) $(LDFLAGS)
+
+$(BUTTON_GAME_TEST_BIN): $(BUTTON_GAME_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(BUTTON_GAME_TEST_OBJS) $(LDFLAGS)
 
 $(COMPOUND_GUARD_TEST_BIN): $(COMPOUND_GUARD_TEST_OBJS)
 	$(CC) -o $@ $(COMPOUND_GUARD_TEST_OBJS) $(LDFLAGS)
@@ -781,17 +1164,16 @@ $(COMPOUND_GEN_TEST_BIN): $(COMPOUND_GEN_TEST_OBJS)
 $(COMPOUND_PUBLICATION_TEST_BIN): $(COMPOUND_PUBLICATION_TEST_OBJS)
 	$(CC) -o $@ $(COMPOUND_PUBLICATION_TEST_OBJS) $(LDFLAGS) -lm
 
-$(RUNE_LOADER_TEST_BIN): $(RUNE_LOADER_TEST_OBJS)
-	$(CC) -o $@ $(RUNE_LOADER_TEST_OBJS) $(LDFLAGS)
-
-$(RUNE_WRITER_TEST_BIN): $(RUNE_WRITER_TEST_OBJS)
-	$(CC) -o $@ $(RUNE_WRITER_TEST_OBJS) $(LDFLAGS)
-
 $(RUNE_INSTALL_TEST_BIN): $(RUNE_INSTALL_TEST_OBJS)
 	$(CC) -o $@ $(RUNE_INSTALL_TEST_OBJS) $(LDFLAGS)
 
 $(RUNE_PROOF_TEST_BIN): $(RUNE_PROOF_TEST_OBJS)
 	$(CC) -o $@ $(RUNE_PROOF_TEST_OBJS) $(LDFLAGS)
+
+$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN): \
+		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ \
+		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS) $(LDFLAGS)
 
 $(REPLAY_TEST_BIN): $(REPLAY_TEST_OBJS)
 	$(CC) -o $@ $(REPLAY_TEST_OBJS) $(LDFLAGS)
@@ -807,6 +1189,9 @@ $(COMPOUND_SWIM_LIVE_TEST_BIN): $(COMPOUND_SWIM_LIVE_TEST_OBJS)
 
 $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(HOOK_LIVE_TEST_OBJS) $(LDFLAGS)
+
+$(HOOK_DISCIPLINE_TEST_BIN): $(HOOK_DISCIPLINE_TEST_OBJS)
+	$(CC) -o $@ $(HOOK_DISCIPLINE_TEST_OBJS) $(LDFLAGS)
 
 $(ROTATOR_SWEEP_TEST_BIN): $(ROTATOR_SWEEP_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(ROTATOR_SWEEP_TEST_OBJS) $(LDFLAGS)
@@ -828,6 +1213,49 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 .sg_action_test.gnu.o: tests/sg_action_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_button_live_test.gnu.o: tests/sg_button_live_test.c \
+		slipgate/sg_button_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_button_live_under_test.gnu.o: slipgate/sg_button_live.c \
+		slipgate/sg_button_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_button_game_test.gnu.o: tests/sg_button_game_test.c \
+		slipgate/sg_button_live.h slipgate/sg_move.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_button_game_live_under_test.gnu.o: slipgate/sg_button_live.c \
+		slipgate/sg_button_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_button_game_move_under_test.gnu.o: slipgate/sg_move.c \
+		slipgate/sg_button_live.h slipgate/sg_move.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_button_game_func_under_test.gnu.o: g_func.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-unused-parameter -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_button_game_q_shared_under_test.gnu.o: q_shared.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
 
 .sg_action_under_test.gnu.o: slipgate/sg_action.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
@@ -967,45 +1395,179 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_wire_test.gnu.o: tests/sg_rune_wire_test.c $(REVISION_HEADER)
+.sg_rune_action_under_test.gnu.o: slipgate/sg_action.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_wire_under_test.gnu.o: slipgate/sg_rune_wire.c $(REVISION_HEADER)
+.sg_rune_crc_under_test.gnu.o: slipgate/sg_crc32.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_wire_action_under_test.gnu.o: slipgate/sg_action.c $(REVISION_HEADER)
+.sg_rune_codec_test.gnu.o: tests/sg_rune_codec_test.c \
+		slipgate/sg_rune_codec.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_wire_crc_under_test.gnu.o: slipgate/sg_crc32.c $(REVISION_HEADER)
+.sg_rune_codec_under_test.gnu.o: slipgate/sg_rune_codec.c \
+		slipgate/sg_rune_codec.h \
+		slipgate/sg_action_contract.generated.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_artifact_loader_test.gnu.o: tests/sg_rune_artifact_loader_test.c \
+		slipgate/sg_rune_artifact_loader.h slipgate/sg_rune_codec.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_artifact_loader_under_test.gnu.o: slipgate/sg_rune_artifact_loader.c \
+		slipgate/sg_rune_artifact_loader.h slipgate/sg_rune_codec.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_artifact_writer_test.gnu.o: tests/sg_rune_artifact_writer_test.c \
+		slipgate/sg_rune_artifact_writer.h slipgate/sg_rune_codec.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_artifact_writer_under_test.gnu.o: slipgate/sg_rune_artifact_writer.c \
+		slipgate/sg_rune_artifact_writer.h slipgate/sg_rune_codec.h \
+		slipgate/sg_crc32.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_mechanism_plan_test.gnu.o: tests/sg_rune_mechanism_plan_test.c \
+		slipgate/sg_rune_mechanism_plan.h slipgate/sg_rune_codec.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_mechanism_plan_under_test.gnu.o: \
+		slipgate/sg_rune_mechanism_plan.c \
+		slipgate/sg_rune_mechanism_plan.h \
+		slipgate/sg_rune_mechanism_catalog.h slipgate/sg_rune.h \
+		slipgate/sg_crc32.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_mechanism_catalog_test.gnu.o: \
+		tests/sg_rune_mechanism_catalog_test.c \
+		slipgate/sg_rune_mechanism_catalog.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_mechanism_execution_test.gnu.o: \
+		tests/sg_rune_mechanism_execution_test.c \
+		slipgate/sg_rune_binding.h slipgate/sg_rune_mechanism_catalog.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_delayed_relay_dispatch_move_under_test.gnu.o: slipgate/sg_move.c \
+		slipgate/sg_move.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_delayed_relay_dispatch_utils_under_test.gnu.o: g_utils.c \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_delayed_relay_dispatch_trigger_under_test.gnu.o: g_trigger.c \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -Wno-unused-parameter \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_delayed_relay_dispatch_button_under_test.gnu.o: \
+		slipgate/sg_button_live.c slipgate/sg_button_live.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_delayed_relay_dispatch_q_shared_under_test.gnu.o: q_shared.c \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_rune_mechanism_catalog_under_test.gnu.o: \
+		slipgate/sg_rune_mechanism_catalog.c \
+		slipgate/sg_rune_mechanism_catalog.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_binding_test.gnu.o: tests/sg_rune_binding_test.c \
+		slipgate/sg_rune_binding.h slipgate/sg_rune.h \
+		slipgate/sg_rune_mechanism_catalog.h slipgate/sg_crc32.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_binding_under_test.gnu.o: slipgate/sg_rune_binding.c \
+		slipgate/sg_rune_binding.h slipgate/sg_rune.h \
+		slipgate/sg_rune_mechanism_catalog.h slipgate/sg_crc32.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.runeaccept.gnu.o: tools/runeaccept.c slipgate/sg_rune_file.h \
+		slipgate/sg_rune_codec.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_file_under_test.gnu.o: \
+		slipgate/sg_rune_file.c slipgate/sg_rune_file.h \
+		slipgate/sg_rune_artifact_loader.h slipgate/sg_rune.h \
+		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_sidecar_wire_test.gnu.o: tests/sg_sidecar_wire_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_wire_under_test.gnu.o: slipgate/sg_sidecar_wire.c $(REVISION_HEADER)
+.sg_sidecar_wire_under_test.gnu.o: slipgate/sg_sidecar_wire.c \
+		slipgate/sg_sidecar_wire.h \
+		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_sidecar_loader_test.gnu.o: tests/sg_sidecar_loader_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_loader_under_test.gnu.o: slipgate/sg_sidecar_loader.c $(REVISION_HEADER)
+.sg_sidecar_loader_under_test.gnu.o: slipgate/sg_sidecar_loader.c \
+		slipgate/sg_sidecar_loader.h \
+		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_sidecar_store_test.gnu.o: tests/sg_sidecar_store_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_store_under_test.gnu.o: slipgate/sg_sidecar_store.c $(REVISION_HEADER)
+.sg_sidecar_store_under_test.gnu.o: slipgate/sg_sidecar_store.c \
+		slipgate/sg_sidecar_store.h \
+		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_danger_lease_test.gnu.o: tests/sg_danger_lease_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1023,7 +1585,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_danger_v3_test.gnu.o: tests/sg_danger_v3_test.c $(REVISION_HEADER)
+.sg_danger_test.gnu.o: tests/sg_danger_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -1032,6 +1594,10 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_runtime_under_test.gnu.o: slipgate/sg_rune_runtime.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_fields_candidate_test.gnu.o: tests/sg_fields_candidate_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1043,27 +1609,157 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Wpedantic -Wno-strict-prototypes -DSG_FIELDS_TEST -ffunction-sections -fdata-sections -I. \
 		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_loader_test.gnu.o: tests/sg_rune_loader_test.c $(REVISION_HEADER)
+.sg_snag_repair_test.gnu.o: tests/sg_snag_repair_test.c \
+		slipgate/sg_snag_repair.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_loader_under_test.gnu.o: slipgate/sg_rune_loader.c $(REVISION_HEADER)
+.sg_snag_repair_under_test.gnu.o: slipgate/sg_snag_repair.c \
+		slipgate/sg_snag_repair.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_writer_test.gnu.o: tests/sg_rune_writer_test.c $(REVISION_HEADER)
+.sg_caco_projection_under_test.gnu.o: slipgate/sg_caco.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -Wno-strict-prototypes -DSG_CACO_TEST -ffunction-sections \
+		-fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_rune_writer_under_test.gnu.o: slipgate/sg_rune_writer.c $(REVISION_HEADER)
+.sg_goal_projection_under_test.gnu.o: slipgate/sg_goal.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+		-Wpedantic -Wno-strict-prototypes -DSG_GOAL_TEST -ffunction-sections \
+		-fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_human_speed_test.gnu.o: tests/sg_human_speed_test.c \
+		slipgate/sg_human_speed.h tests/support/yq2_pmove.c \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_human_speed_under_test.gnu.o: slipgate/sg_human_speed.c \
+		slipgate/sg_human_speed.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_human_speed_pmove_under_test.gnu.o: tests/support/yq2_pmove.c \
+		q_shared.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -DDEDICATED_ONLY -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_human_speed_q_shared_under_test.gnu.o: q_shared.c q_shared.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_defense_shift_test.gnu.o: tests/sg_defense_shift_test.c \
+		slipgate/sg_defense_shift.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_defense_shift_under_test.gnu.o: slipgate/sg_defense_shift.c \
+		slipgate/sg_defense_shift.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_defense_supply_test.gnu.o: tests/sg_defense_supply_test.c \
+		slipgate/sg_defense_supply.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_defense_supply_under_test.gnu.o: slipgate/sg_defense_supply.c \
+		slipgate/sg_defense_supply.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_strike_adapter_test.gnu.o: tests/sg_strike_adapter_test.c \
+		slipgate/sg_strike_adapter.h slipgate/sg_strike.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_strike_under_test.gnu.o: slipgate/sg_strike.c \
+		slipgate/sg_strike.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_strike_adapter_under_test.gnu.o: slipgate/sg_strike_adapter.c \
+		slipgate/sg_strike_adapter.h slipgate/sg_strike.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_item_commitment_test.gnu.o: tests/sg_item_commitment_test.c \
+		slipgate/sg_lead.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_item_commitment_under_test.gnu.o: slipgate/sg_lead.c \
+		slipgate/sg_lead.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hook_diagnostics_test.gnu.o: tests/sg_hook_diagnostics_test.c \
+		slipgate/sg_hook_diagnostics.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hook_diagnostics_under_test.gnu.o: slipgate/sg_hook_diagnostics.c \
+		slipgate/sg_hook_diagnostics.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_run_handoff_test.gnu.o: tests/sg_run_handoff_test.c \
+		slipgate/sg_descend.h tests/support/yq2_pmove.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_run_handoff_descend_under_test.gnu.o: slipgate/sg_descend.c \
+		slipgate/sg_descend.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_run_handoff_pmove_under_test.gnu.o: tests/support/yq2_pmove.c \
+		q_shared.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -DDEDICATED_ONLY \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_run_handoff_q_shared_under_test.gnu.o: q_shared.c q_shared.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_rune_install_test.gnu.o: tests/sg_rune_install_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_rune_install_under_test.gnu.o: slipgate/sg_rune_install.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_stream_under_test.gnu.o: slipgate/sg_rune_stream.c \
+		slipgate/sg_rune_stream.h slipgate/sg_rune_artifact_writer.h \
+		slipgate/sg_rune_codec.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
@@ -1074,6 +1770,13 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 .sg_rune_proof_under_test.gnu.o: slipgate/sg_rune_proof.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_objective_diagnostics_test.gnu.o: \
+		tests/sg_rune_objective_diagnostics_test.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
 
 .sg_replay_test.gnu.o: tests/sg_replay_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1146,6 +1849,16 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_hook_discipline_test.gnu.o: tests/sg_hook_discipline_test.c \
+		slipgate/sg_hook_discipline.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_hook_discipline_under_test.gnu.o: slipgate/sg_hook_discipline.c \
+		slipgate/sg_hook_discipline.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_rotator_sweep_test.gnu.o: tests/sg_rotator_sweep_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
@@ -1196,6 +1909,13 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_swim_oracle_rune_timing_under_test.gnu.o: \
+		slipgate/sg_rune.c $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -DSG_RUNE_TIMING_TEST -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_compound_swim_oracle_replay_under_test.gnu.o: \
 		slipgate/sg_replay.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1240,8 +1960,85 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-pedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+spectator-sound-test: $(SPECTATOR_SOUND_TEST_BIN)
+	@echo "[TEST] $<"
+	@./$(SPECTATOR_SOUND_TEST_BIN)
+
+$(SPECTATOR_SOUND_TEST_BIN): $(SPECTATOR_SOUND_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(SPECTATOR_SOUND_TEST_OBJS) $(LDFLAGS)
+
+.sg_spectator_sound_test.gnu.o: tests/sg_spectator_sound_test.c \
+		g_local.h slipgate/sg_net.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_spectator_sound_net_under_test.gnu.o: slipgate/sg_net.c \
+		g_local.h slipgate/sg_net.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+povlock-test: $(POVLOCK_TEST_BIN) $(POVLOCK_DISPATCH_TEST)
+	@echo "[TEST] $<"
+	@./$(POVLOCK_TEST_BIN)
+	@python3 -B $(POVLOCK_DISPATCH_TEST)
+
+$(POVLOCK_TEST_BIN): $(POVLOCK_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(POVLOCK_TEST_OBJS) $(LDFLAGS)
+
+.povlock_test.gnu.o: tests/povlock_test.c g_local.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.povlock_under_test.gnu.o: g_chase.c g_local.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.povlock_endframe_under_test.gnu.o: p_view.c g_local.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-unused-parameter -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+pov-session-production-test: $(POV_SESSION_TEST_BIN)
+	@echo "[TEST] $<"
+	@./$(POV_SESSION_TEST_BIN)
+
+$(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(POV_SESSION_TEST_OBJS) $(LDFLAGS)
+
+.pov_session_production_test.gnu.o: tests/pov_session_production_test.c \
+		g_local.h g_tourney.h slipgate/sg_bot.h \
+		slipgate/sg_pov_identity.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.pov_session_chase_under_test.gnu.o: g_chase.c g_local.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.pov_session_client_under_test.gnu.o: p_client.c g_local.h g_tourney.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-unused-parameter -ffunction-sections -fdata-sections \
+		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.pov_session_identity_under_test.gnu.o: slipgate/sg_pov_identity.c \
+		g_local.h slipgate/sg_bot.h slipgate/sg_pov_identity.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
-		$(MOVER_LEASE_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
+		$(MOVER_LEASE_TEST_BIN) $(BUTTON_LIVE_TEST_BIN) \
+		$(BUTTON_GAME_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
 		$(DECLARED_DOOR_GUARD_TEST_BIN) \
@@ -1249,24 +2046,61 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
+		$(MECHANISM_PUBLICATION_INTEGRATION_TEST) \
 		$(IDENTITY_TEST_BIN) \
-		$(RUNE_WIRE_TEST_BIN) $(SIDECAR_WIRE_TEST_BIN) \
-		$(SIDECAR_LOADER_TEST_BIN) $(SIDECAR_STORE_TEST_BIN) \
+		$(RUNE_CODEC_TEST_BIN) \
+		$(RUNE_ARTIFACT_LOADER_TEST_BIN) $(RUNE_ARTIFACT_WRITER_TEST_BIN) \
+		$(RUNE_MECHANISM_PLAN_TEST_BIN) \
+		$(RUNE_MECHANISM_CATALOG_TEST_BIN) \
+		$(RUNE_MECHANISM_EXECUTION_TEST_BIN) $(RUNE_BINDING_TEST_BIN) \
+		$(RUNE_INSTALL_TEST_BIN) \
+		$(RUNE_ACCEPT_BIN) \
+		$(SIDECAR_WIRE_TEST_BIN) $(SIDECAR_LOADER_TEST_BIN) \
+		$(SIDECAR_STORE_TEST_BIN) \
+		$(RUNE_NAMING_TEST) \
+		$(RUNE_PYTHON_TESTS) \
+		$(RUNGEN_TEST) \
+		$(RUNE_CORPUS_CONTROLLER_TEST) \
+		$(BSPMECHANISMS_TEST) \
+		$(WAVELOOP_PROCESS_TEST) \
+		$(TEMP_FLAG_DIAGNOSTIC_TEST) \
 		$(DANGER_LEASE_TEST_BIN) $(DANGER_POLICY_TEST_BIN) \
-		$(DANGER_V3_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
-		$(RUNE_LOADER_TEST_BIN) $(RUNE_WRITER_TEST_BIN) \
-		$(RUNE_INSTALL_TEST_BIN) $(RUNE_PROOF_TEST_BIN) \
+		$(DANGER_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
+		$(SNAG_REPAIR_TEST_BIN) $(SNAG_REPAIR_PYTHON_TEST) \
+		$(SPECTATOR_SOUND_TEST_BIN) \
+		$(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST) \
+		$(DEFENSE_SHIFT_TEST_BIN) $(DEFENSE_SHIFT_INTEGRATION_TEST) \
+		$(DEFENSE_SUPPLY_TEST_BIN) $(DEFENSE_SUPPLY_INTEGRATION_TEST) \
+		$(STRIKE_ADAPTER_TEST_BIN) $(STRIKE_ADAPTER_INTEGRATION_TEST) \
+		$(DEFENSE_COMBAT_INTEGRATION_TEST) \
+		$(CARRIER_RETURN_TEST) $(COMBAT_AIM_TEST) \
+		$(OFFENSE_FLAG_PICKUP_TEST) \
+		$(ITEM_COMMITMENT_TEST_BIN) $(ITEM_COMMITMENT_INTEGRATION_TEST) \
+		$(HOOK_DIAGNOSTICS_TEST_BIN) \
+		$(HOOK_DIAGNOSTICS_INTEGRATION_TEST) \
+		$(HOOK_DIAGNOSTICS_CONSUMER_TEST) $(HOOK_EVENTS_TEST) \
+		$(RUN_HANDOFF_TEST_BIN) $(RUN_HANDOFF_INTEGRATION_TEST) \
+		$(RUNE_PROOF_TEST_BIN) \
+		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_INTEGRATION_TEST) \
-		$(HOOK_LIVE_TEST_BIN) $(HOOK_INTEGRATION_TEST) \
+		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
+		$(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
 		$(COMPOUND_SWIM_ORACLE_TEST_BIN) \
-		$(RUNE_DOOR_SCOPE_TEST_BIN) $(ENTFILE_TEST_BIN)
+		$(RUNE_DOOR_SCOPE_TEST_BIN) $(ENTFILE_TEST_BIN) \
+		$(POVLOCK_TEST_BIN) $(POV_SESSION_TEST_BIN) \
+		$(POVLOCK_DISPATCH_TEST) $(POV_SUPERVISOR_TEST_BIN) \
+		$(POV_SUPERVISOR_BIN) $(POV_SUPERVISOR_TEST) \
+		$(POV_ITERATE_SELECTION_TEST)
 	./$(HOST_TEST_BIN)
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
 	./$(MOVER_LEASE_TEST_BIN)
+	./$(BUTTON_LIVE_TEST_BIN)
+	./$(BUTTON_GAME_TEST_BIN)
+	python3 $(BUTTON_GAME_INTEGRATION_TEST)
 	./$(COMPOUND_GUARD_TEST_BIN)
 	./$(COMPOUND_GUARD_GAME_TEST_BIN)
 	python3 $(COMPOUND_GUARD_GAME_INTEGRATION_TEST)
@@ -1277,19 +2111,56 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(COMPOUND_GEN_TEST_BIN)
 	./$(COMPOUND_PUBLICATION_TEST_BIN)
 	python3 $(COMPOUND_PUBLICATION_INTEGRATION_TEST)
+	python3 $(MECHANISM_PUBLICATION_INTEGRATION_TEST)
 	./$(IDENTITY_TEST_BIN)
-	./$(RUNE_WIRE_TEST_BIN)
+	./$(RUNE_CODEC_TEST_BIN)
+	./$(RUNE_ARTIFACT_LOADER_TEST_BIN)
+	./$(RUNE_ARTIFACT_WRITER_TEST_BIN)
+	./$(RUNE_MECHANISM_PLAN_TEST_BIN)
+	./$(RUNE_MECHANISM_CATALOG_TEST_BIN)
+	./$(RUNE_MECHANISM_EXECUTION_TEST_BIN)
+	./$(RUNE_BINDING_TEST_BIN)
+	./$(RUNE_INSTALL_TEST_BIN)
 	./$(SIDECAR_WIRE_TEST_BIN)
 	./$(SIDECAR_LOADER_TEST_BIN)
 	./$(SIDECAR_STORE_TEST_BIN)
+	python3 $(RUNE_NAMING_TEST)
+	python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
+		tests.test_sidecario tests.test_rune_tool_readers
+	python3 $(RUNGEN_TEST)
+	python3 -m unittest tests.test_rune_corpus_controller
+	python3 -B $(BSPMECHANISMS_TEST)
+	python3 $(WAVELOOP_PROCESS_TEST)
+	python3 $(TEMP_FLAG_DIAGNOSTIC_TEST)
 	./$(DANGER_LEASE_TEST_BIN)
 	./$(DANGER_POLICY_TEST_BIN)
-	./$(DANGER_V3_TEST_BIN)
+	./$(DANGER_TEST_BIN)
 	./$(FIELDS_CANDIDATE_TEST_BIN)
-	./$(RUNE_LOADER_TEST_BIN)
-	./$(RUNE_WRITER_TEST_BIN)
-	./$(RUNE_INSTALL_TEST_BIN)
+	./$(SNAG_REPAIR_TEST_BIN)
+	python3 -B $(SNAG_REPAIR_PYTHON_TEST)
+	./$(SPECTATOR_SOUND_TEST_BIN)
+	./$(HUMAN_SPEED_TEST_BIN)
+	python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
+	./$(DEFENSE_SHIFT_TEST_BIN)
+	python3 -B $(DEFENSE_SHIFT_INTEGRATION_TEST)
+	./$(DEFENSE_SUPPLY_TEST_BIN)
+	python3 -B $(DEFENSE_SUPPLY_INTEGRATION_TEST)
+	./$(STRIKE_ADAPTER_TEST_BIN)
+	python3 -B $(STRIKE_ADAPTER_INTEGRATION_TEST)
+	python3 -B $(DEFENSE_COMBAT_INTEGRATION_TEST)
+	python3 -B $(CARRIER_RETURN_TEST)
+	python3 -B $(COMBAT_AIM_TEST)
+	python3 -B $(OFFENSE_FLAG_PICKUP_TEST)
+	./$(ITEM_COMMITMENT_TEST_BIN)
+	python3 -B $(ITEM_COMMITMENT_INTEGRATION_TEST)
+	./$(HOOK_DIAGNOSTICS_TEST_BIN)
+	python3 -B $(HOOK_DIAGNOSTICS_INTEGRATION_TEST)
+	python3 -B $(HOOK_DIAGNOSTICS_CONSUMER_TEST)
+	python3 -B $(HOOK_EVENTS_TEST)
+	./$(RUN_HANDOFF_TEST_BIN)
+	python3 -B $(RUN_HANDOFF_INTEGRATION_TEST)
 	./$(RUNE_PROOF_TEST_BIN)
+	./$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN)
 	./$(REPLAY_TEST_BIN)
 	./$(DROP_LIVE_TEST_BIN)
 	sh tests/sg_drop_begin_wiring_test.sh
@@ -1297,16 +2168,57 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(COMPOUND_SWIM_LIVE_TEST_BIN)
 	python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
 	./$(HOOK_LIVE_TEST_BIN)
+	./$(HOOK_DISCIPLINE_TEST_BIN)
 	python3 $(HOOK_INTEGRATION_TEST)
 	./$(ROTATOR_SWEEP_TEST_BIN)
 	./$(MOVER_SUBJECT_SWEEP_TEST_BIN)
 	./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
 	./$(RUNE_DOOR_SCOPE_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
+	./$(POVLOCK_TEST_BIN)
+	python3 -B $(POVLOCK_DISPATCH_TEST)
+	./$(POV_SESSION_TEST_BIN)
+	./$(POV_SUPERVISOR_TEST_BIN)
+	python3 -B $(POV_SUPERVISOR_TEST)
+	python3 -B $(POV_ITERATE_SELECTION_TEST)
 	./$(ENGINE_SNAPSHOT_TEST)
 
 action-test: $(ACTION_TEST_BIN)
 	./$(ACTION_TEST_BIN)
+
+# Linux tools-only supervisor: intentionally absent from Visual Studio projects.
+pov-supervisor-test: $(POV_SUPERVISOR_TEST_BIN) $(POV_SUPERVISOR_BIN) \
+		$(POV_SUPERVISOR_TEST) $(POV_ITERATE_SELECTION_TEST)
+	./$(POV_SUPERVISOR_TEST_BIN)
+	python3 -B $(POV_SUPERVISOR_TEST)
+	python3 -B $(POV_ITERATE_SELECTION_TEST)
+
+$(POV_SUPERVISOR_BIN): tools/pov-supervisor.c tools/pov-spawn-linux.c tools/pov-spawn-linux.h
+	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -Itools -o $@ \
+		tools/pov-supervisor.c tools/pov-spawn-linux.c
+
+$(POV_SUPERVISOR_TEST_BIN): tests/pov_supervisor_unit.c tools/pov-spawn-linux.c tools/pov-spawn-linux.h
+	$(CC) -std=c11 -O1 -g -Wall -Wextra -Werror -Wpedantic -DPOV_TESTING \
+		-Itools -o $@ tests/pov_supervisor_unit.c tools/pov-spawn-linux.c
+
+button-live-test: $(BUTTON_LIVE_TEST_BIN)
+	./$(BUTTON_LIVE_TEST_BIN)
+
+button-game-test: $(BUTTON_GAME_TEST_BIN)
+	./$(BUTTON_GAME_TEST_BIN)
+	python3 $(BUTTON_GAME_INTEGRATION_TEST)
+
+rune-naming-test: $(RUNE_NAMING_TEST)
+	python3 $(RUNE_NAMING_TEST)
+
+rune-artifact-test: $(RUNE_PYTHON_TESTS)
+	python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
+		tests.test_sidecario tests.test_rune_tool_readers
+
+rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
+		tools/rune_corpus_controller.py tools/RUNE_CORPUS_CONTROLLER.md \
+		tools/rune-corpus-maps.txt
+	python3 -m unittest tests.test_rune_corpus_controller
 
 compound-test: $(COMPOUND_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
@@ -1335,15 +2247,37 @@ compound-gen-test: $(COMPOUND_GEN_TEST_BIN)
 	./$(COMPOUND_GEN_TEST_BIN)
 
 compound-publication-test: $(COMPOUND_PUBLICATION_TEST_BIN) \
-		$(COMPOUND_PUBLICATION_INTEGRATION_TEST)
+		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
+		$(MECHANISM_PUBLICATION_INTEGRATION_TEST)
 	./$(COMPOUND_PUBLICATION_TEST_BIN)
 	python3 $(COMPOUND_PUBLICATION_INTEGRATION_TEST)
+	python3 $(MECHANISM_PUBLICATION_INTEGRATION_TEST)
 
 identity-test: $(IDENTITY_TEST_BIN)
 	./$(IDENTITY_TEST_BIN)
 
-rune-wire-test: $(RUNE_WIRE_TEST_BIN)
-	./$(RUNE_WIRE_TEST_BIN)
+rune-codec-test: $(RUNE_CODEC_TEST_BIN)
+	./$(RUNE_CODEC_TEST_BIN)
+
+rune-artifact-loader-test: $(RUNE_ARTIFACT_LOADER_TEST_BIN)
+	./$(RUNE_ARTIFACT_LOADER_TEST_BIN)
+
+rune-artifact-writer-test: $(RUNE_ARTIFACT_WRITER_TEST_BIN)
+	./$(RUNE_ARTIFACT_WRITER_TEST_BIN)
+
+rune-mechanism-plan-test: $(RUNE_MECHANISM_PLAN_TEST_BIN)
+	./$(RUNE_MECHANISM_PLAN_TEST_BIN)
+
+rune-mechanism-catalog-test: $(RUNE_MECHANISM_CATALOG_TEST_BIN)
+	./$(RUNE_MECHANISM_CATALOG_TEST_BIN)
+
+rune-mechanism-execution-test: $(RUNE_MECHANISM_EXECUTION_TEST_BIN)
+	./$(RUNE_MECHANISM_EXECUTION_TEST_BIN)
+
+rune-binding-test: $(RUNE_BINDING_TEST_BIN)
+	./$(RUNE_BINDING_TEST_BIN)
+
+rune-accept-tool: $(RUNE_ACCEPT_BIN)
 
 sidecar-wire-test: $(SIDECAR_WIRE_TEST_BIN)
 	./$(SIDECAR_WIRE_TEST_BIN)
@@ -1360,23 +2294,59 @@ danger-lease-test: $(DANGER_LEASE_TEST_BIN)
 danger-policy-test: $(DANGER_POLICY_TEST_BIN)
 	./$(DANGER_POLICY_TEST_BIN)
 
-danger-v3-test: $(DANGER_V3_TEST_BIN)
-	./$(DANGER_V3_TEST_BIN)
+danger-test: $(DANGER_TEST_BIN)
+	./$(DANGER_TEST_BIN)
 
 fields-candidate-test: $(FIELDS_CANDIDATE_TEST_BIN)
 	./$(FIELDS_CANDIDATE_TEST_BIN)
 
-rune-loader-test: $(RUNE_LOADER_TEST_BIN)
-	./$(RUNE_LOADER_TEST_BIN)
+snag-repair-test: $(SNAG_REPAIR_TEST_BIN) $(SNAG_REPAIR_PYTHON_TEST)
+	./$(SNAG_REPAIR_TEST_BIN)
+	python3 -B $(SNAG_REPAIR_PYTHON_TEST)
 
-rune-writer-test: $(RUNE_WRITER_TEST_BIN)
-	./$(RUNE_WRITER_TEST_BIN)
+human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
+	./$(HUMAN_SPEED_TEST_BIN)
+	python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
+
+defense-shift-test: $(DEFENSE_SHIFT_TEST_BIN) $(DEFENSE_SHIFT_INTEGRATION_TEST) \
+		$(DEFENSE_COMBAT_INTEGRATION_TEST)
+	./$(DEFENSE_SHIFT_TEST_BIN)
+	python3 -B $(DEFENSE_SHIFT_INTEGRATION_TEST)
+	python3 -B $(DEFENSE_COMBAT_INTEGRATION_TEST)
+
+defense-supply-test: $(DEFENSE_SUPPLY_TEST_BIN) $(DEFENSE_SUPPLY_INTEGRATION_TEST)
+	./$(DEFENSE_SUPPLY_TEST_BIN)
+	python3 -B $(DEFENSE_SUPPLY_INTEGRATION_TEST)
+
+strike-adapter-test: $(STRIKE_ADAPTER_TEST_BIN) $(STRIKE_ADAPTER_INTEGRATION_TEST)
+	./$(STRIKE_ADAPTER_TEST_BIN)
+	python3 -B $(STRIKE_ADAPTER_INTEGRATION_TEST)
+
+item-commitment-test: $(ITEM_COMMITMENT_TEST_BIN) \
+		$(ITEM_COMMITMENT_INTEGRATION_TEST)
+	./$(ITEM_COMMITMENT_TEST_BIN)
+	python3 -B $(ITEM_COMMITMENT_INTEGRATION_TEST)
+
+hook-diagnostics-test: $(HOOK_DIAGNOSTICS_TEST_BIN) \
+		$(HOOK_DIAGNOSTICS_INTEGRATION_TEST) \
+		$(HOOK_DIAGNOSTICS_CONSUMER_TEST) $(HOOK_EVENTS_TEST)
+	./$(HOOK_DIAGNOSTICS_TEST_BIN)
+	python3 -B $(HOOK_DIAGNOSTICS_INTEGRATION_TEST)
+	python3 -B $(HOOK_DIAGNOSTICS_CONSUMER_TEST)
+	python3 -B $(HOOK_EVENTS_TEST)
+
+run-handoff-test: $(RUN_HANDOFF_TEST_BIN) $(RUN_HANDOFF_INTEGRATION_TEST)
+	./$(RUN_HANDOFF_TEST_BIN)
+	python3 -B $(RUN_HANDOFF_INTEGRATION_TEST)
 
 rune-install-test: $(RUNE_INSTALL_TEST_BIN)
 	./$(RUNE_INSTALL_TEST_BIN)
 
 rune-proof-test: $(RUNE_PROOF_TEST_BIN)
 	./$(RUNE_PROOF_TEST_BIN)
+
+rune-objective-diagnostics-test: $(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN)
+	./$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN)
 
 replay-test: $(REPLAY_TEST_BIN)
 	./$(REPLAY_TEST_BIN)
@@ -1398,6 +2368,9 @@ hook-live-test: $(HOOK_LIVE_TEST_BIN)
 
 hook-integration-test:
 	python3 $(HOOK_INTEGRATION_TEST)
+
+hook-discipline-test: $(HOOK_DISCIPLINE_TEST_BIN)
+	./$(HOOK_DISCIPLINE_TEST_BIN)
 
 rotator-sweep-test: $(ROTATOR_SWEEP_TEST_BIN)
 	./$(ROTATOR_SWEEP_TEST_BIN)
@@ -1424,31 +2397,34 @@ $(DEPEND_FILE): $(OBJS:.o=.c) GNUmakefile FORCE | $(REVISION_HEADER)
 	@set -e; \
 	tmp="$@.tmp.$$$$"; \
 	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
-	$(CC) -MM $(filter-out slipgate/sg_compound_world.c \
+	$(CC) $(CPPFLAGS) -MM $(filter-out slipgate/sg_compound_world.c \
 		slipgate/sg_mover_lease.c \
 		slipgate/sg_compound_guard.c \
 		slipgate/sg_compound_guard_game.c \
 		slipgate/sg_declared_door_guard.c \
 		slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_publication.c \
-		slipgate/sg_rune_door_scope.c, \
+		slipgate/sg_rune_door_scope.c \
+		slipgate/sg_snag_repair.c, \
 		$(OBJS:.o=.c)) > "$$tmp"; \
-	$(CC) -MM -MT slipgate/sg_compound_world.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_compound_world.o \
 		slipgate/sg_compound_world.c >> "$$tmp"; \
-	$(CC) -MM -MT slipgate/sg_mover_lease.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_mover_lease.o \
 		slipgate/sg_mover_lease.c >> "$$tmp"; \
-	$(CC) -MM -MT slipgate/sg_compound_guard.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_compound_guard.o \
 		slipgate/sg_compound_guard.c >> "$$tmp"; \
-	$(CC) -MM -I. -MT slipgate/sg_compound_guard_game.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_compound_guard_game.o \
 		slipgate/sg_compound_guard_game.c >> "$$tmp"; \
-	$(CC) -MM -I. -MT slipgate/sg_declared_door_guard.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_declared_door_guard.o \
 		slipgate/sg_declared_door_guard.c >> "$$tmp"; \
-	$(CC) -MM -MT slipgate/sg_compound_gen.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_compound_gen.o \
 		slipgate/sg_compound_gen.c >> "$$tmp"; \
-	$(CC) -MM -MT slipgate/sg_compound_publication.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_compound_publication.o \
 		slipgate/sg_compound_publication.c >> "$$tmp"; \
-	$(CC) -MM -MT slipgate/sg_rune_door_scope.o \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_rune_door_scope.o \
 		slipgate/sg_rune_door_scope.c >> "$$tmp"; \
+	$(CC) $(CPPFLAGS) -MM -MT slipgate/sg_snag_repair.o \
+		slipgate/sg_snag_repair.c >> "$$tmp"; \
 	if test -r "$@" && cmp -s "$$tmp" "$@"; then \
 		rm -f "$$tmp"; \
 	else \
@@ -1469,17 +2445,38 @@ clean:
 		@rm -f $(OBJS) $(OBJS:.o=.d) $(REVISION_HEADER) \
 			$(REVISION_HEADER).tmp.* \
 			$(DEPEND_FILE).tmp.* $(HOST_TEST_ALL_ARTIFACTS) \
+			$(POV_SUPERVISOR_ALL_ARTIFACTS) \
 			$(COMPOUND_GEN_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS) \
+			$(RUNE_CODEC_TEST_ALL_ARTIFACTS) \
+			$(RUNE_ARTIFACT_LOADER_TEST_ALL_ARTIFACTS) \
+			$(RUNE_ARTIFACT_WRITER_TEST_ALL_ARTIFACTS) \
+			$(RUNE_MECHANISM_PLAN_TEST_ALL_ARTIFACTS) \
+			$(RUNE_MECHANISM_CATALOG_TEST_ALL_ARTIFACTS) \
+			$(RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS) \
+			$(RUNE_BINDING_TEST_ALL_ARTIFACTS) \
+			$(RUNE_ACCEPT_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_LIVE_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 			$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
+			$(BUTTON_LIVE_TEST_ALL_ARTIFACTS) \
+			$(BUTTON_GAME_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_GUARD_GAME_TEST_ALL_ARTIFACTS) \
 			$(DECLARED_DOOR_GUARD_TEST_ALL_ARTIFACTS) \
 			$(MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS) \
+			$(SNAG_REPAIR_TEST_ALL_ARTIFACTS) \
+			$(SPECTATOR_SOUND_TEST_ALL_ARTIFACTS) \
+			$(HUMAN_SPEED_TEST_ALL_ARTIFACTS) \
+			$(DEFENSE_SHIFT_TEST_ALL_ARTIFACTS) \
+			$(DEFENSE_SUPPLY_TEST_ALL_ARTIFACTS) \
+			$(STRIKE_ADAPTER_TEST_ALL_ARTIFACTS) \
+			$(ITEM_COMMITMENT_TEST_ALL_ARTIFACTS) \
+			$(HOOK_DIAGNOSTICS_TEST_ALL_ARTIFACTS) \
+			$(HOOK_DISCIPLINE_TEST_ALL_ARTIFACTS) \
+			$(RUN_HANDOFF_TEST_ALL_ARTIFACTS) \
+			$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_ALL_ARTIFACTS) \
 			$(RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS) *.orig ~* core
-
 distclean:	clean
 		@echo "Deleting everything that can be rebuilt..."
 		@rm -f $(TARGET) $(DEPEND_FILE)
@@ -1489,9 +2486,13 @@ ifeq ($(DEPEND_FILE),$(wildcard $(DEPEND_FILE)))
 include $(DEPEND_FILE)
 endif
 -include $(HOST_TEST_DEPS)
+-include $(POVLOCK_TEST_DEPS)
+-include $(POV_SESSION_TEST_DEPS)
 -include $(ACTION_TEST_DEPS)
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
+-include $(BUTTON_LIVE_TEST_DEPS)
+-include $(BUTTON_GAME_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)
 -include $(DECLARED_DOOR_GUARD_TEST_DEPS)
@@ -1499,23 +2500,39 @@ endif
 -include $(COMPOUND_GEN_TEST_DEPS)
 -include $(COMPOUND_PUBLICATION_TEST_DEPS)
 -include $(IDENTITY_TEST_DEPS)
--include $(RUNE_WIRE_TEST_DEPS)
+-include $(RUNE_CODEC_TEST_DEPS)
+-include $(RUNE_ARTIFACT_LOADER_TEST_DEPS)
+-include $(RUNE_ARTIFACT_WRITER_TEST_DEPS)
+-include $(RUNE_MECHANISM_PLAN_TEST_DEPS)
+-include $(RUNE_MECHANISM_CATALOG_TEST_DEPS)
+-include $(RUNE_MECHANISM_EXECUTION_TEST_DEPS)
+-include $(RUNE_BINDING_TEST_DEPS)
+-include $(RUNE_ACCEPT_DEPS)
 -include $(SIDECAR_WIRE_TEST_DEPS)
 -include $(SIDECAR_LOADER_TEST_DEPS)
 -include $(SIDECAR_STORE_TEST_DEPS)
 -include $(DANGER_LEASE_TEST_DEPS)
 -include $(DANGER_POLICY_TEST_DEPS)
--include $(DANGER_V3_TEST_DEPS)
+-include $(DANGER_TEST_DEPS)
 -include $(FIELDS_CANDIDATE_TEST_DEPS)
--include $(RUNE_LOADER_TEST_DEPS)
--include $(RUNE_WRITER_TEST_DEPS)
+-include $(SNAG_REPAIR_TEST_DEPS)
+-include $(SPECTATOR_SOUND_TEST_DEPS)
+-include $(HUMAN_SPEED_TEST_DEPS)
+-include $(DEFENSE_SHIFT_TEST_DEPS)
+-include $(DEFENSE_SUPPLY_TEST_DEPS)
+-include $(STRIKE_ADAPTER_TEST_DEPS)
+-include $(ITEM_COMMITMENT_TEST_DEPS)
+-include $(HOOK_DIAGNOSTICS_TEST_DEPS)
+-include $(RUN_HANDOFF_TEST_DEPS)
 -include $(RUNE_INSTALL_TEST_DEPS)
 -include $(RUNE_PROOF_TEST_DEPS)
+-include $(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_DEPS)
 -include $(REPLAY_TEST_DEPS)
 -include $(DROP_LIVE_TEST_DEPS)
 -include $(SWIM_LIVE_TEST_DEPS)
 -include $(COMPOUND_SWIM_LIVE_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
+-include $(HOOK_DISCIPLINE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
 -include $(MOVER_SUBJECT_SWEEP_TEST_DEPS)
 -include $(COMPOUND_SWIM_ORACLE_TEST_DEPS)

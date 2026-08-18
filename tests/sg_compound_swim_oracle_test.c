@@ -1,5 +1,7 @@
 /* Focused host fixture for dormant PREOPEN D_SWIM oracle replay. */
 #include <math.h>
+#include <float.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +11,8 @@
 #include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_rune_binding.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_util.h"
 
 game_export_t globals;
@@ -17,6 +21,8 @@ edict_t *g_edicts;
 level_locals_t level;
 sg_host_t sg_host;
 cvar_t *sv_gravity;
+
+int SG_RuneTestDoorCooldownGapMs(edict_t *trigger);
 
 short SG_RuneProofGravity(void)
 {
@@ -72,7 +78,7 @@ typedef struct fixture_observation_s
 	usercmd_t first_top_command;
 	int callback_calls;
 	int last_pmove_mask;
-	int loader_pmove_masks;
+	int stripped_pmove_masks;
 	int normal_pmove_masks;
 	int pretop_contact_traces;
 } fixture_observation_t;
@@ -112,6 +118,24 @@ static qboolean CommandZero(const usercmd_t *command)
 	       command->upmove == 0;
 }
 
+int SG_MechCatalogButtonEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	(void)key;
+	(void)node;
+	(void)entity;
+	(void)endpoints_out;
+	return 0;
+}
+
+int SG_MechCatalogButtonBottomEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	return SG_MechCatalogButtonEndpoints(key, node, entity, endpoints_out);
+}
+
 void Touch_DoorTrigger(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surface)
 {
@@ -131,6 +155,63 @@ void Touch_Item(edict_t *self, edict_t *other, cplane_t *plane,
 {
 	(void)self; (void)other; (void)plane; (void)surface;
 	fixture_observation.callback_calls++;
+}
+
+void button_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surface)
+{
+	(void)self; (void)other; (void)plane; (void)surface;
+	fixture_observation.callback_calls++;
+}
+
+void button_use(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+	fixture_observation.callback_calls++;
+}
+
+int SG_RuneMechanismBindingCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	(void)binding;
+	return 0;
+}
+
+int SG_RuneMechanismBindingTopologyCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	(void)binding;
+	return 0;
+}
+
+int SG_RuneMechanismBindingMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	(void)binding; (void)keys_out; (void)key_count_out;
+	return 0;
+}
+
+int SG_RuneMechanismBindingTopologyMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	(void)binding; (void)keys_out; (void)key_count_out;
+	return 0;
+}
+
+edict_t *SG_RuneMechanismBindingResolveNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	(void)binding; (void)key;
+	return NULL;
+}
+
+edict_t *SG_RuneMechanismBindingResolveTopologyNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	(void)binding; (void)key;
+	return NULL;
 }
 
 void door_blocked(edict_t *self, edict_t *other)
@@ -219,7 +300,7 @@ static trace_t HostTrace(const vec3_t start, const vec3_t mins,
 	{
 		fixture_observation.last_pmove_mask = mask;
 		if (mask == (MASK_PLAYERSOLID & ~CONTENTS_MONSTER))
-			fixture_observation.loader_pmove_masks++;
+			fixture_observation.stripped_pmove_masks++;
 		if (mask == MASK_PLAYERSOLID)
 			fixture_observation.normal_pmove_masks++;
 		trace.fraction = 0.5f;
@@ -543,14 +624,24 @@ static fixture_config_t DefaultConfig(int touch, fixture_suffix_t suffix)
 
 static void ResetFixture(const fixture_config_t *config)
 {
+	int key;
+
 	memset(fixture_edicts, 0, sizeof(fixture_edicts));
 	memset(fixture_clients, 0, sizeof(fixture_clients));
 	memset(&fixture_gravity, 0, sizeof(fixture_gravity));
 	memset(&fixture_observation, 0, sizeof(fixture_observation));
+	memset(&globals, 0, sizeof(globals));
+	memset(&game, 0, sizeof(game));
 	memset(&level, 0, sizeof(level));
 	fixture_config = *config;
 	g_edicts = fixture_edicts;
+	globals.edicts = fixture_edicts;
+	globals.edict_size = sizeof(edict_t);
 	globals.num_edicts = 6;
+	globals.max_edicts = FIXTURE_EDICTS;
+	game.maxentities = FIXTURE_EDICTS;
+	game.maxclients = 1;
+	game.clients = fixture_clients;
 	SG_MoverCompletionReset();
 	fixture_gravity.value = 777.0f;
 	sv_gravity = &fixture_gravity;
@@ -568,6 +659,8 @@ static void ResetFixture(const fixture_config_t *config)
 	fixture_edicts[4].classname = "func_wall";
 	fixture_edicts[4].solid = SOLID_BSP;
 	fixture_edicts[4].movetype = MOVETYPE_PUSH;
+	for (key = 0; key < FIXTURE_EDICTS; key++)
+		fixture_edicts[key].s.number = key;
 
 	memset(&sg_host, 0, sizeof(sg_host));
 	sg_host.trace = HostTrace;
@@ -1143,7 +1236,7 @@ static void TestContactDiscoveryRejectsNonFixedReplay(void)
 	CHECK(fixture_observation.pmove_calls == 0);
 }
 
-static void TestLoaderReplayModeAndRestoration(void)
+static void TestLoaderReplayNativeMask(void)
 {
 	const vec3_t mechanism = { 160.0f, 0.0f, 0.0f };
 	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
@@ -1159,11 +1252,13 @@ static void TestLoaderReplayModeAndRestoration(void)
 	InitPhantom(&phantom, false);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
 		destination, true, 0.0f, &proof, NULL, true, true) == RLR_OK);
-	CHECK(fixture_observation.loader_pmove_masks > 0);
-	CHECK(fixture_observation.normal_pmove_masks == 0);
+	/* Loader replay masks transient clients by temporarily publishing
+	 * SOLID_NOT, then runs the ordinary native full-mask trace. */
+	CHECK(fixture_observation.normal_pmove_masks > 0);
+	CHECK(fixture_observation.stripped_pmove_masks == 0);
 
-	/* A direct command after the scoped proof observes the original ordinary
-	 * mask, proving loader mode did not leak out of the transaction. */
+	/* Ordinary replay uses the same full native mask.  The focused population
+	 * trace fixture separately proves transient-solid restoration. */
 	fixture_observation.last_pmove_mask = 0;
 	InitPhantom(&phantom, false);
 	memset(&command, 0, sizeof(command));
@@ -1228,7 +1323,7 @@ static void TestRecoveryFromLiveTop(void)
 		CHECK(proof.sweep_clear_ms <= proof.arrival_ms);
 		CHECK(fixture_observation.first_snapinitial);
 		CHECK(fixture_observation.normal_pmove_masks > 0);
-		CHECK(fixture_observation.loader_pmove_masks == 0);
+		CHECK(fixture_observation.stripped_pmove_masks == 0);
 		CHECK(memcmp(&fixture_edicts[1], &member_before,
 		             sizeof(member_before)) == 0);
 		CHECK(fixture_observation.callback_calls == 0);
@@ -1300,7 +1395,7 @@ static void TestContinueFromLiveTop(void)
 	CHECK(proof.sweep_clear_ms <= proof.arrival_ms);
 	CHECK(fixture_observation.first_snapinitial);
 	CHECK(fixture_observation.normal_pmove_masks > 0);
-	CHECK(fixture_observation.loader_pmove_masks == 0);
+	CHECK(fixture_observation.stripped_pmove_masks == 0);
 	CHECK(memcmp(&fixture_edicts[1], &member_before,
 	             sizeof(member_before)) == 0);
 	CHECK(fixture_observation.callback_calls == 0);
@@ -1600,6 +1695,164 @@ static void TestDeclaredActivatorAcceptsMasterThenSlaveFanout(void)
 	master->targetname = "other";
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+}
+
+static void TestDeclaredActivatorDelayedSoundTerminal(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *relay;
+	edict_t *relay2;
+	edict_t *speaker;
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "TimedGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "TimedGate";
+	relay = &fixture_edicts[GUARD_SOURCE_KEY];
+	relay->inuse = true;
+	relay->classname = "trigger_relay";
+	relay->use = trigger_relay_use;
+	relay->targetname = "TimedGate";
+	relay->target = "TimedGateClose";
+	speaker = &fixture_edicts[GUARD_EXTRA_KEY];
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->use = Use_Target_Speaker;
+	speaker->targetname = "TimedGateClose";
+
+	/* This is the exact supported closure: direct door plus a sound-only relay. */
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 1000);
+
+	/* lmctf58 schedules only the close sound through this relay.  The plan
+	 * authenticates the inbound ordinal but consumes the positive-delay relay
+	 * before DelayedUse allocation, so the physical door remains representable. */
+	relay->delay = 311.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 1000);
+
+	/* Nested relay descendants remain admissible only while every branch is
+	 * sound-only.  Either level may own the delayed terminal. */
+	relay->delay = 0.0f;
+	relay->target = "TimedGateRelay";
+	relay2 = speaker;
+	relay2->classname = "trigger_relay";
+	relay2->use = trigger_relay_use;
+	relay2->targetname = "TimedGateRelay";
+	relay2->target = "TimedGateCloseNested";
+	relay2->delay = 0.0f;
+	speaker = &fixture_edicts[FIXTURE_EDICTS - 1];
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->use = Use_Target_Speaker;
+	speaker->targetname = "TimedGateCloseNested";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	relay2->delay = 0.001f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 1000);
+	relay2->delay = 0.0f;
+	relay2->killtarget = "TimedGate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay2->killtarget = NULL;
+	relay2->target = "TimedGateRelay";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay2->target = "TimedGateCloseNested";
+	speaker->use = door_use;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	speaker->use = Use_Target_Speaker;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+
+	/* The catalog retains the exact rearm wait while the redundant plan field
+	 * saturates separately.  The shared conversion is nearest-millisecond, not
+	 * generation-only ceilf. */
+	trigger->wait = 30.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == RUNE_MAX_COST_MS);
+	trigger->wait = nextafterf(30.0f, INFINITY);
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == RUNE_MAX_COST_MS);
+	trigger->wait = 312.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 312000);
+	trigger->wait = 312.0004f;
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 312000);
+
+	/* Exact lmctf58 controller waits contribute only the true post-close rearm
+	 * gap; a long open hold is not charged as execution time. */
+	trigger->wait = 312.0f;
+	door->moveinfo.distance = 90.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 15.0f;
+	door->moveinfo.wait = 300.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == 14900);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == 0);
+	trigger->wait = 63.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 100.0f;
+	door->moveinfo.wait = 60.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == 5500);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == 800);
+	trigger->wait = 304.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 56.0f;
+	door->moveinfo.wait = 300.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == 6500);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == 384);
+	trigger->wait = nextafterf((float)INT_MAX / 1000.0f, 0.0f);
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) > INT_MAX - 1000);
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == -1);
+	trigger->wait = 312.0f;
+	door->moveinfo.wait = FLT_MAX;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == -1);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == -1);
+	door->moveinfo.wait = 300.0f;
+	door->moveinfo.distance = FLT_MAX;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 1.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == -1);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == -1);
+	door->moveinfo.distance = 90.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 56.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, INT_MAX, 1, INT_MAX) == -1);
+
+	/* Door-member side effects are part of the same materialized closure, not
+	 * merely a direct activator property. */
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "DoorTimedGate";
+	door->target = "DoorTimedRelay";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "DoorTimedGate";
+	relay = &fixture_edicts[GUARD_SOURCE_KEY];
+	relay->inuse = true;
+	relay->classname = "trigger_relay";
+	relay->use = trigger_relay_use;
+	relay->targetname = "DoorTimedRelay";
+	relay->target = "DoorTimedClose";
+	speaker = &fixture_edicts[GUARD_EXTRA_KEY];
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->use = Use_Target_Speaker;
+	speaker->targetname = "DoorTimedClose";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	relay->delay = 61.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	relay->killtarget = "DoorTimedGate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 }
 
 static void TestDeclaredActivatorRejectsTeamAuthorityDrift(void)
@@ -1939,7 +2192,7 @@ int main(void)
 	TestPrepareSource();
 	TestContactDiscovery();
 	TestContactDiscoveryRejectsNonFixedReplay();
-	TestLoaderReplayModeAndRestoration();
+	TestLoaderReplayNativeMask();
 	TestPublicSwimTraverseRegression();
 	TestRecoveryFromLiveTop();
 	TestRecoveryAcceptsStockTopAxialResidual();
@@ -1950,6 +2203,7 @@ int main(void)
 	TestRecoveryRejectsTopAuthorityDrift();
 	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
 	TestDeclaredActivatorAcceptsMasterThenSlaveFanout();
+	TestDeclaredActivatorDelayedSoundTerminal();
 	TestDeclaredActivatorRejectsTeamAuthorityDrift();
 	TestDeclaredActivatorRejectsMalformedWorldBounds();
 	TestDeclaredDoorHoldMembersIsAtomic();

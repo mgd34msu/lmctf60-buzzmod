@@ -36,7 +36,9 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_net.h"                    /* SG_BotClientCommand -- the chat route */
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_bot.h"
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
+#include "slipgate/sg_lead.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
@@ -161,7 +163,7 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 	 * human's peripheral awareness has both too. sg_beliefcone is the
 	 * full cone width in degrees (0 = off; combat's own cone is 120 and
 	 * belief should stay wider); sg_beliefrange is a distance cap in
-	 * units (0 = off). A/B instruments: they make bots strictly worse,
+	 * units (0 = off). These controls intentionally reduce information,
 	 * so they ship dark until the film says the honesty is worth it.
 	 */
 	{
@@ -528,7 +530,7 @@ sg_belief_item_t	sg_caco_items[2][SG_MAX_BELIEF_ITEMS];
 int					sg_caco_num_items;
 
 /*
- * THE OWNER'S RULING, 2026-08-05, verbatim where it binds:
+ * ITEM AND RUNE KNOWLEDGE CONTRACT:
  *
  *   "items can be timed, but runes (the in-game kind) spawn randomly. bots
  *    should know when an item is coming back IF AND ONLY IF another bot on
@@ -746,7 +748,7 @@ static void Caco_ScanItems(rune_t *r, edict_t *viewer)
 		up = (e->solid != SOLID_NOT) ? true : false;
 
 		/*
-		 * SEEING IS KNOWING, AND ONLY THAT (owner's ruling, 2026-08-05).
+		 * SEEING IS KNOWING, AND ONLY THAT.
 		 * A bot walking past the pad learns whether the thing is standing
 		 * there -- that half of the old scan is honest and stays. What the
 		 * scan may no longer do is start a countdown: a player who glances
@@ -993,6 +995,12 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 	if (!SG_ChatItemMajor(item))
 		return;
 
+	/* The physical pickup closes any matching early-return commitment before
+	 * belief/chat bookkeeping can move the clock.  Touch_Item calls us only
+	 * after the engine accepted the pickup, so this covers both inventory and
+	 * instant-use powerups without guessing from client state. */
+	Lead_NoteItemTaken(taker, item);
+
 	takerteam = taker->client->ctf.teamnum;
 
 	for (t = 0; t < 2; t++)
@@ -1120,7 +1128,14 @@ static int caco_proj_cand[SG_PROJ_MAX * SG_PROJ_BRANCH];
  * Neighbours that do not descend are not steps toward his stand and are not
  * offered: a carrier who wanders backwards is not the case we must cover.
  */
-static int Caco_BestSteps(rune_t *r, int seed, const int *field, int *out)
+#ifdef SG_CACO_TEST
+#define SG_CACO_PRIVATE
+#else
+#define SG_CACO_PRIVATE static
+#endif
+
+SG_CACO_PRIVATE int Caco_BestSteps(rune_t *r, int seed,
+	const int *field, int *out)
 {
 	int li, n = 0, i, j;
 	int val[SG_PROJ_BRANCH];
@@ -1135,6 +1150,8 @@ static int Caco_BestSteps(rune_t *r, int seed, const int *field, int *out)
 		int to = r->links[li].to;
 		int v;
 
+		if (!Fields_ActionAdmitted(r->links[li].action))
+			continue;
 		if (to < 0 || to >= r->hdr.num_seeds)
 			continue;
 		v = field[to];
@@ -1164,6 +1181,8 @@ static int Caco_BestSteps(rune_t *r, int seed, const int *field, int *out)
 	}
 	return n;
 }
+
+#undef SG_CACO_PRIVATE
 
 /* one second of travel for the whole set */
 static void Caco_ProjStep(rune_t *r, sg_proj_t *p, const int *field)
@@ -1527,8 +1546,8 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
  *
  * Called from the sound wrappers in sg_net.c for every sg_host.sound and
  * sg_host.positioned_sound the mod issues, AFTER the engine has been handed the
- * call through unchanged. Nothing here touches the wire; this is a tap on a
- * real event, which is the whole difference from what it replaces.
+ * actual call. Nothing here touches the wire; this is a tap on a real event,
+ * which is the whole difference from what it replaces.
  *
  * WHAT A BOT IS ALLOWED TO LEARN. Two engine facts and nothing else: sg_host.in_phs,
  * which is precisely "could a sound made there be heard here", and the
@@ -1664,8 +1683,8 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		    ecl < SG_DMG_CLIENTS)
 			sg_caco_hastefire[SG_TeamIdx(team)][ecl] = level.time;
 
-		/* sampled 1-in-32: wave 390 measured ~9k accepted events per
-		 * game on a busy server -- the ear works, the log need not
+		/* Sampled 1-in-32: a busy-server measurement found roughly 9k
+		 * accepted events per game -- the ear works, the log need not
 		 * relive every footstep */
 		if (sg_cv.debug->value && !(sg_ear_said++ & 31))
 			sg_host.dprint("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
@@ -2121,8 +2140,8 @@ qboolean Caco_EnemyHasDamageRune(int team)
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
 		/* THIS team's row: the whole point of the D4 chain is that it is
-		 * built out of what this side has seen (owner's ruling 2026-08-05 --
-		 * the other team's look at the Damage pad is not ours to reason from) */
+		 * built out of what this side has seen. The other team's look at the
+		 * Damage pad is not ours to reason from. */
 		sg_belief_item_t *it = &sg_caco_items[Caco_TeamRow(team)][i];
 		edict_t *re = (it->ent > 0) ? g_edicts + it->ent : NULL;
 

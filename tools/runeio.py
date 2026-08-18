@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Strict, explicit little-endian RUNE v3 wire codec.
+"""Strict, explicit little-endian RUNE wire codecs.
 
-This module deliberately knows the v3 wire registry without authorizing an
-action for live execution.  Runtime support remains a separate outer-action
-policy in :mod:`rune_contracts_generated`.
+Decoding authenticates the fixed wire contract without authorizing an
+action or mechanism for live execution.  Runtime support remains a separate
+outer policy.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import argparse
+import json
 import math
 import os
 import re
 import struct
-from typing import Iterable
+from typing import Iterable, Mapping
 import zlib
 
 try:
@@ -22,13 +24,196 @@ except ModuleNotFoundError:  # Also support ``python -m tools.runeio``.
     from tools import rune_contracts_generated as contract
 
 
+RUNE_MAGIC = 0x454E5552
+RUNE_PREFIX_HEADER_BYTES = 128
+SEED_BYTES = 16
+RUNE_POLICY_LINK_BYTES = 44
+MAP_NAME_BYTES = 64
+HEADER_CRC_OFFSET = 60
+NONCOMPOUND_TAIL_OFFSET = 28
+NONCOMPOUND_TAIL_BYTES = 16
+MAX_SEEDS = 32768
+MAX_LINKS = 262144
+MIN_COST_MS = 1
+MAX_COST_MS = 30000
+
 HEADER_STRUCT = struct.Struct("<IHHHHIIIIIIIfffHHII64s")
 SEED_STRUCT = struct.Struct("<fffhh")
-LINK_STRUCT = struct.Struct("<IIBBBBBBh3f3fHBB")
+RUNE_POLICY_LINK_STRUCT = struct.Struct("<IIBBBBBBh3f3fHBB")
 
-assert HEADER_STRUCT.size == contract.RUNE_V3_HEADER_BYTES
-assert SEED_STRUCT.size == contract.RUNE_V3_SEED_BYTES
-assert LINK_STRUCT.size == contract.RUNE_V3_LINK_BYTES
+# The fixed header and record geometry are explicit rather than inferred from
+# native C layouts.
+RUNE_HEADER_EXTENSION_STRUCT = struct.Struct("<HHHHIIIIII")
+RUNE_LINK_STRUCT = struct.Struct("<IIBBBBBBh3f3fHBBI")
+RUNE_ACTIVATION_NODE_STRUCT = struct.Struct(
+    "<IHHIIIIIIIHHHHiiIII3h3hI"
+)
+RUNE_ACTIVATION_EDGE_STRUCT = struct.Struct("<IIHHI")
+RUNE_ACTIVATION_PLAN_STRUCT = struct.Struct("<IIIIHHHHII")
+
+RUNE_HEADER_BYTES = 160
+RUNE_SEED_BYTES = 16
+RUNE_LINK_BYTES = 48
+RUNE_ACTIVATION_NODE_BYTES = 80
+RUNE_ACTIVATION_EDGE_BYTES = 16
+RUNE_ACTIVATION_PLAN_BYTES = 32
+RUNE_HEADER_CRC_OFFSET = HEADER_CRC_OFFSET
+RUNE_MAX_ACTIVATION_NODES = 8192
+RUNE_MAX_ACTIVATION_EDGES = 262144
+RUNE_MAX_ACTIVATION_PLANS = 262144
+RUNE_MAX_PLAN_EDGES = 65536
+RUNE_MAX_STRING_BYTES = 1048576
+RUNE_MAX_TIME_MS = 30000
+RUNE_MAX_Q8 = 262136
+RUNE_MAX_TEAM_MEMBERS = 16
+RUNE_NO_KEY = 0xFFFFFFFF
+RUNE_NO_ACTIVATION_PLAN = 0xFFFFFFFF
+
+RUNE_MECHANISM_CONTRACT_CRC32 = (
+    contract.RUNE_MECHANISM_CONTRACT_CRC32
+)
+
+RUNE_CONTROLLER_AUTO_DOOR = contract.SG_MECHANISM_CONTROLLER_AUTO_DOOR
+RUNE_CONTROLLER_DIRECT_TRIGGER_DOOR = (
+    contract.SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
+)
+RUNE_CONTROLLER_BUTTON_DOOR = contract.SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+RUNE_CONTROLLER_RELAY_DOOR = contract.SG_MECHANISM_CONTROLLER_RELAY_DOOR
+RUNE_CONTROLLER_PLATFORM = contract.SG_MECHANISM_CONTROLLER_PLATFORM
+RUNE_CONTROLLER_TELEPORT = contract.SG_MECHANISM_CONTROLLER_TELEPORT
+
+RUNE_CALLBACK_TOUCH_MULTI = 1
+RUNE_CALLBACK_TOUCH_DOOR_TRIGGER = 2
+RUNE_CALLBACK_BUTTON_TOUCH = 3
+RUNE_CALLBACK_BUTTON_USE = 5
+RUNE_CALLBACK_BLOCKED_DOOR = 8
+RUNE_CALLBACK_USE_TRIGGER_RELAY = 9
+RUNE_CALLBACK_USE_DOOR = 10
+RUNE_CALLBACK_THINK_CALC_MOVE_SPEED = 11
+RUNE_CALLBACK_THINK_SPAWN_DOOR_TRIGGER = 12
+RUNE_CALLBACK_TOUCH_PLAT_CENTER = 14
+RUNE_CALLBACK_TELEPORTER_TOUCH = 26
+RUNE_CALLBACK_USE_TARGET_SPEAKER = 32
+RUNE_CALLBACK_USE_AREAPORTAL = 33
+
+RUNE_NODE_NONE = 0
+RUNE_NODE_TRIGGER = 1
+RUNE_NODE_BUTTON = 2
+RUNE_NODE_RELAY = 3
+RUNE_NODE_DOOR_MASTER = 4
+RUNE_NODE_DOOR_MEMBER = 5
+RUNE_NODE_AUTO_DOOR_TRIGGER = 6
+RUNE_NODE_PLATFORM = 7
+RUNE_NODE_PLATFORM_TRIGGER = 8
+RUNE_NODE_TRAIN = 9
+RUNE_NODE_PATH_CORNER = 10
+RUNE_NODE_ELEVATOR = 11
+RUNE_NODE_PUSH_TRIGGER = 12
+RUNE_NODE_TELEPORTER = 13
+RUNE_NODE_TELEPORT_TRIGGER = 14
+RUNE_NODE_TELEPORT_DEST = 15
+RUNE_NODE_OBJECTIVE = 16
+RUNE_NODE_SECRET_DOOR = 17
+RUNE_NODE_OTHER_TRIGGER = 18
+RUNE_NODE_OTHER_MOVER = 19
+RUNE_NODE_CONTEXTUAL = 20
+RUNE_NODE_TARGET_SPEAKER = 21
+RUNE_NODE_AREAPORTAL = 22
+RUNE_NODEF_SYNTHETIC = 1
+RUNE_NODEF_REPEATABLE = 2
+RUNE_NODEF_TOUCHABLE = 4
+RUNE_NODEF_USABLE = 8
+RUNE_NODEF_MOVER = 16
+RUNE_NODEF_TEAM_MASTER = 32
+RUNE_NODEF_TEAM_MEMBER = 64
+RUNE_NODEF_INVENTORY_ONLY = 128
+RUNE_NODEF_ONE_SHOT = 256
+RUNE_NODEF_SHOOTABLE = 512
+RUNE_NODEF_START_DISABLED = 1024
+RUNE_NODEF_FRAME_COMPLETE_MOVER = 2048
+RUNE_NODE_FLAG_MASK = 4095
+RUNE_CALLBACK_UNKNOWN = 0xFFFF
+RUNE_CALLBACK_MAX_KNOWN = 33
+
+_RUNE_TOUCH_CALLBACKS = frozenset((0, 1, 2, 3, 14, 25, 26, 27, 28, 0xFFFF))
+_RUNE_USE_CALLBACKS = frozenset(
+    (0, 4, 5, 9, 10, 13, 15, 18, 23, 30, 32, 33, 0xFFFF)
+)
+_RUNE_THINK_CALLBACKS = frozenset((0, 6, 7, 11, 12, 16, 19, 20, 21, 24, 29, 0xFFFF))
+_RUNE_BLOCKED_CALLBACKS = frozenset((0, 8, 17, 22, 31, 0xFFFF))
+
+RUNE_NODE_KIND_NAMES = {
+    RUNE_NODE_NONE: "none",
+    RUNE_NODE_TRIGGER: "trigger",
+    RUNE_NODE_BUTTON: "button",
+    RUNE_NODE_RELAY: "relay",
+    RUNE_NODE_DOOR_MASTER: "door_master",
+    RUNE_NODE_DOOR_MEMBER: "door_member",
+    RUNE_NODE_AUTO_DOOR_TRIGGER: "auto_door_trigger",
+    RUNE_NODE_PLATFORM: "platform",
+    RUNE_NODE_PLATFORM_TRIGGER: "platform_trigger",
+    RUNE_NODE_TRAIN: "train",
+    RUNE_NODE_PATH_CORNER: "path_corner",
+    RUNE_NODE_ELEVATOR: "elevator",
+    RUNE_NODE_PUSH_TRIGGER: "push_trigger",
+    RUNE_NODE_TELEPORTER: "teleporter",
+    RUNE_NODE_TELEPORT_TRIGGER: "teleport_trigger",
+    RUNE_NODE_TELEPORT_DEST: "teleport_dest",
+    RUNE_NODE_OBJECTIVE: "objective",
+    RUNE_NODE_SECRET_DOOR: "secret_door",
+    RUNE_NODE_OTHER_TRIGGER: "other_trigger",
+    RUNE_NODE_OTHER_MOVER: "other_mover",
+    RUNE_NODE_CONTEXTUAL: "contextual",
+    RUNE_NODE_TARGET_SPEAKER: "target_speaker",
+    RUNE_NODE_AREAPORTAL: "areaportal",
+}
+
+RUNE_EDGE_TARGET = 1
+RUNE_EDGE_KILLTARGET = 2
+RUNE_EDGE_OWNER = 3
+RUNE_EDGE_TEAM = 4
+RUNE_EDGE_PATH_TARGET = 5
+RUNE_EDGE_MOVE_TARGET = 6
+RUNE_EDGE_TARGET_ENT = 7
+RUNE_EDGE_ENEMY = 8
+RUNE_EDGE_ROUTE_TARGET = 9
+
+RUNE_EDGE_KIND_NAMES = {
+    RUNE_EDGE_TARGET: "target",
+    RUNE_EDGE_KILLTARGET: "killtarget",
+    RUNE_EDGE_OWNER: "owner",
+    RUNE_EDGE_TEAM: "team",
+    RUNE_EDGE_PATH_TARGET: "path_target",
+    RUNE_EDGE_MOVE_TARGET: "move_target",
+    RUNE_EDGE_TARGET_ENT: "target_ent",
+    RUNE_EDGE_ENEMY: "enemy",
+    RUNE_EDGE_ROUTE_TARGET: "route_target",
+}
+
+_RUNE_TRIGGER_NODE_KINDS = frozenset(
+    (
+        RUNE_NODE_TRIGGER,
+        RUNE_NODE_BUTTON,
+        RUNE_NODE_RELAY,
+        RUNE_NODE_AUTO_DOOR_TRIGGER,
+        RUNE_NODE_PLATFORM_TRIGGER,
+        RUNE_NODE_ELEVATOR,
+        RUNE_NODE_PUSH_TRIGGER,
+        RUNE_NODE_TELEPORT_TRIGGER,
+        RUNE_NODE_OTHER_TRIGGER,
+    )
+)
+
+assert HEADER_STRUCT.size == 128
+assert RUNE_HEADER_EXTENSION_STRUCT.size == 32
+assert RUNE_LINK_STRUCT.size == RUNE_LINK_BYTES
+assert RUNE_ACTIVATION_NODE_STRUCT.size == RUNE_ACTIVATION_NODE_BYTES
+assert RUNE_ACTIVATION_EDGE_STRUCT.size == RUNE_ACTIVATION_EDGE_BYTES
+assert RUNE_ACTIVATION_PLAN_STRUCT.size == RUNE_ACTIVATION_PLAN_BYTES
+
+assert HEADER_STRUCT.size == RUNE_PREFIX_HEADER_BYTES
+assert SEED_STRUCT.size == SEED_BYTES
+assert RUNE_POLICY_LINK_STRUCT.size == RUNE_POLICY_LINK_BYTES
 
 RSF_WATER = 1
 RSF_TOMBSTONE = 2
@@ -36,7 +221,7 @@ SEED_FLAG_MASK = RSF_WATER | RSF_TOMBSTONE
 
 _MAP_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
 _ZERO_12 = b"\x00" * 12
-_ZERO_16 = b"\x00" * contract.RUNE_V3_NONCOMPOUND_TAIL_BYTES
+_ZERO_16 = b"\x00" * NONCOMPOUND_TAIL_BYTES
 _WORLD_MIN = (
     contract.RUNE_PROOF_WORLD_FIXED_MIN /
     contract.RUNE_PROOF_WORLD_FIXED_SCALE
@@ -46,6 +231,24 @@ _WORLD_MAX = (
     contract.RUNE_PROOF_WORLD_FIXED_SCALE
 )
 
+_RUNE_WIRE_DIAGNOSTICS: Mapping[int, tuple[str, str]] = {
+    128: ("RLRUNE_BAD_MECHANISM_CONTRACT", "bad current mechanism contract"),
+    129: ("RLRUNE_BAD_ACTIVATION_NODE", "bad current activation node"),
+    130: ("RLRUNE_BAD_ACTIVATION_EDGE", "bad current activation edge"),
+    131: ("RLRUNE_BAD_ACTIVATION_PLAN", "bad current activation plan"),
+    132: ("RLRUNE_BAD_STRING_POOL", "bad current string pool"),
+    133: ("RLRUNE_DUPLICATE_NODE_KEY", "duplicate current node key"),
+    134: ("RLRUNE_BAD_MECHANISM_GRAPH", "bad current mechanism graph"),
+}
+
+RLRUNE_BAD_MECHANISM_CONTRACT = 128
+RLRUNE_BAD_ACTIVATION_NODE = 129
+RLRUNE_BAD_ACTIVATION_EDGE = 130
+RLRUNE_BAD_ACTIVATION_PLAN = 131
+RLRUNE_BAD_STRING_POOL = 132
+RLRUNE_DUPLICATE_NODE_KEY = 133
+RLRUNE_BAD_MECHANISM_GRAPH = 134
+
 
 class RuneWireError(ValueError):
     """A stable generated wire diagnostic plus optional record context."""
@@ -53,11 +256,18 @@ class RuneWireError(ValueError):
     def __init__(self, code: int, detail: str | None = None):
         try:
             diagnostic = contract.WIRE_DIAGNOSTIC_BY_ID[code]
-        except (AttributeError, KeyError) as exc:
-            raise AssertionError(f"unknown generated wire diagnostic {code!r}") from exc
-        self.code = diagnostic["id"]
-        self.symbol = diagnostic["symbol"]
-        self.message = diagnostic["message"]
+            symbol = diagnostic["symbol"]
+            message = diagnostic["message"]
+        except (AttributeError, KeyError):
+            try:
+                symbol, message = _RUNE_WIRE_DIAGNOSTICS[code]
+            except KeyError as exc:
+                raise AssertionError(
+                    f"unknown wire diagnostic {code!r}"
+                ) from exc
+        self.code = code
+        self.symbol = symbol
+        self.message = message
         self.detail = detail
         text = f"{self.symbol}: {self.message}"
         if detail:
@@ -70,8 +280,8 @@ def _wire_error(code: int, detail: str | None = None) -> RuneWireError:
 
 
 @dataclass(frozen=True)
-class RuneIdentityV3:
-    """External map and movement identity used to encode or authenticate v3."""
+class RuneIdentity:
+    """External map and movement identity for artifact authentication."""
 
     map_name: str
     bsp_checksum: int
@@ -86,9 +296,36 @@ class RuneIdentityV3:
 
 
 @dataclass(frozen=True)
-class RuneHeaderV3:
+class RuneSeed:
+    origin: tuple[float, float, float]
+    area_hint: int = 0
+    flags: int = 0
+
+
+@dataclass(frozen=True)
+class RunePolicyLink:
+    source: int
+    destination: int
+    action: int
+    provenance: int
+    min_speed: int
+    heading: int
+    heading_slack: int
+    exit_speed: int
+    cost_ms: int
+    suffix_anchor: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    mechanism_anchor: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    sweep_clear_ms: int = 0
+    mode: int = contract.RLCM_NONE
+    reserved: int = 0
+
+
+
+@dataclass(frozen=True)
+class RuneHeader:
+    """Authenticated RUNE header."""
+
     magic: int
-    version: int
     header_bytes: int
     seed_bytes: int
     link_bytes: int
@@ -107,10 +344,19 @@ class RuneHeaderV3:
     host_physics_id: int
     header_crc32: int
     map_name: str
+    activation_node_bytes: int
+    activation_edge_bytes: int
+    activation_plan_bytes: int
+    num_activation_nodes: int
+    num_activation_edges: int
+    num_activation_plans: int
+    string_bytes: int
+    mechanism_contract_crc32: int
+    num_inventory_edges: int
 
     @property
-    def identity(self) -> RuneIdentityV3:
-        return RuneIdentityV3(
+    def identity(self) -> RuneIdentity:
+        return RuneIdentity(
             map_name=self.map_name,
             bsp_checksum=self.bsp_checksum,
             entity_crc32=self.entity_crc32,
@@ -123,16 +369,13 @@ class RuneHeaderV3:
             server_frame_ms=self.server_frame_ms,
         )
 
-
-@dataclass(frozen=True)
-class RuneSeedV3:
-    origin: tuple[float, float, float]
-    area_hint: int = 0
-    flags: int = 0
+    @property
+    def num_plan_edges(self) -> int:
+        return self.num_activation_edges - self.num_inventory_edges
 
 
 @dataclass(frozen=True)
-class RuneLinkV3:
+class RuneLink:
     source: int
     destination: int
     action: int
@@ -142,29 +385,111 @@ class RuneLinkV3:
     heading_slack: int
     exit_speed: int
     cost_ms: int
-    suffix_anchor: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    mechanism_anchor: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    sweep_clear_ms: int = 0
-    mode: int = contract.RLCM_NONE
-    reserved: int = 0
+    suffix_anchor: tuple[float, float, float]
+    mechanism_anchor: tuple[float, float, float]
+    sweep_clear_ms: int
+    mode: int
+    reserved: int
+    activation_plan: int
 
 
 @dataclass(frozen=True)
-class RuneV3:
-    """One decoded v3 file with ordered immutable records and exact payload."""
+class RuneActivationNode:
+    key: int
+    kind: int
+    flags: int
+    classname_offset: int
+    target_offset: int
+    targetname_offset: int
+    killtarget_offset: int
+    owner_key: int
+    team_master_key: int
+    spawnflags: int
+    touch_callback: int
+    use_callback: int
+    think_callback: int
+    blocked_callback: int
+    delay_ms: int
+    wait_ms: int
+    speed_q8: int
+    accel_q8: int
+    decel_q8: int
+    absmin_q8: tuple[int, int, int]
+    absmax_q8: tuple[int, int, int]
+    path_target_offset: int
 
-    header: RuneHeaderV3
-    seeds: tuple[RuneSeedV3, ...]
-    links: tuple[RuneLinkV3, ...]
+    @property
+    def kind_name(self) -> str:
+        return RUNE_NODE_KIND_NAMES.get(self.kind, f"unknown_{self.kind}")
+
+
+@dataclass(frozen=True)
+class RuneActivationEdge:
+    from_key: int
+    to_key: int
+    kind: int
+    ordinal: int
+    delay_ms: int
+
+    @property
+    def kind_name(self) -> str:
+        return RUNE_EDGE_KIND_NAMES.get(self.kind, f"unknown_{self.kind}")
+
+
+@dataclass(frozen=True)
+class RuneActivationPlan:
+    entry_key: int
+    mover_key: int
+    first_edge: int
+    num_edges: int
+    controller_kind: int
+    flags: int
+    expected_members: int
+    cooldown_ms: int
+    closure_crc32: int
+
+
+@dataclass(frozen=True)
+class RuneArtifact:
+    """One authenticated RUNE artifact and its ordered records."""
+
+    header: RuneHeader
+    seeds: tuple[RuneSeed, ...]
+    links: tuple[RuneLink, ...]
+    activation_nodes: tuple[RuneActivationNode, ...]
+    activation_edges: tuple[RuneActivationEdge, ...]
+    activation_plans: tuple[RuneActivationPlan, ...]
+    strings: bytes
     payload: bytes
 
     @property
-    def payload_crc32(self) -> int:
-        return self.header.payload_crc32
+    def identity(self) -> RuneIdentity:
+        return self.header.identity
 
     @property
-    def identity(self) -> RuneIdentityV3:
-        return self.header.identity
+    def inventory_edges(self) -> tuple[RuneActivationEdge, ...]:
+        return self.activation_edges[:self.header.num_inventory_edges]
+
+    @property
+    def plan_edges(self) -> tuple[RuneActivationEdge, ...]:
+        return self.activation_edges[self.header.num_inventory_edges:]
+
+    @property
+    def trigger_count(self) -> int:
+        return sum(
+            node.kind in _RUNE_TRIGGER_NODE_KINDS
+            for node in self.activation_nodes
+        )
+
+    def string_at(self, offset: int) -> str:
+        """Return one already-validated ASCII string-pool entry."""
+
+        if type(offset) is not int or not 0 <= offset < len(self.strings):
+            raise IndexError(offset)
+        end = self.strings.find(b"\0", offset)
+        if end < 0 or (offset and self.strings[offset - 1] != 0):
+            raise IndexError(offset)
+        return self.strings[offset:end].decode("ascii")
 
 
 def _as_tuple(
@@ -231,7 +556,7 @@ def _map_bytes(map_name: object) -> bytes:
     if type(map_name) is not str or not _MAP_NAME.fullmatch(map_name):
         raise _wire_error(contract.RLW_BAD_MAPNAME, repr(map_name))
     encoded = map_name.encode("ascii")
-    return encoded + b"\x00" * (contract.RUNE_V3_MAP_NAME_BYTES - len(encoded))
+    return encoded + b"\x00" * (MAP_NAME_BYTES - len(encoded))
 
 
 def _decode_map_name(raw: bytes) -> str:
@@ -276,10 +601,10 @@ def _on_fixed_lattice(vector: tuple[float, float, float], scale: int) -> bool:
     return True
 
 
-def _normalize_identity(identity: object) -> RuneIdentityV3:
-    if not isinstance(identity, RuneIdentityV3):
+def _normalize_identity(identity: object) -> RuneIdentity:
+    if not isinstance(identity, RuneIdentity):
         raise _wire_error(
-            contract.RLW_INVALID_ARGUMENT, "identity must be RuneIdentityV3"
+            contract.RLW_INVALID_ARGUMENT, "identity must be RuneIdentity"
         )
     _map_bytes(identity.map_name)
     bsp_checksum = _u32(identity.bsp_checksum, "bsp_checksum")
@@ -349,7 +674,7 @@ def _normalize_identity(identity: object) -> RuneIdentityV3:
         raise _wire_error(
             contract.RLW_IDENTITY_UNAVAILABLE, "host physics ID is zero"
         )
-    return RuneIdentityV3(
+    return RuneIdentity(
         map_name=identity.map_name,
         bsp_checksum=bsp_checksum,
         entity_crc32=entity_crc32,
@@ -363,11 +688,11 @@ def _normalize_identity(identity: object) -> RuneIdentityV3:
     )
 
 
-def _encode_seed(seed: object, index: int) -> tuple[RuneSeedV3, bytes]:
-    if not isinstance(seed, RuneSeedV3):
+def _encode_seed(seed: object, index: int) -> tuple[RuneSeed, bytes]:
+    if not isinstance(seed, RuneSeed):
         raise _wire_error(
             contract.RLW_INVALID_ARGUMENT,
-            f"seed {index} must be RuneSeedV3",
+            f"seed {index} must be RuneSeed",
         )
     origin, _ = _vector_f32(
         seed.origin, f"seed {index} origin", contract.RLW_BAD_SEED_RECORD
@@ -387,15 +712,15 @@ def _encode_seed(seed: object, index: int) -> tuple[RuneSeedV3, bytes]:
             contract.RLW_BAD_SEED_RECORD,
             f"seed {index} flags {seed.flags!r}",
         )
-    normalized = RuneSeedV3(origin, seed.area_hint, seed.flags)
+    normalized = RuneSeed(origin, seed.area_hint, seed.flags)
     return normalized, SEED_STRUCT.pack(*origin, seed.area_hint, seed.flags)
 
 
-def _encode_link(link: object, index: int) -> tuple[RuneLinkV3, bytes]:
-    if not isinstance(link, RuneLinkV3):
+def _encode_link(link: object, index: int) -> tuple[RunePolicyLink, bytes]:
+    if not isinstance(link, RunePolicyLink):
         raise _wire_error(
             contract.RLW_INVALID_ARGUMENT,
-            f"link {index} must be RuneLinkV3",
+            f"link {index} must be RunePolicyLink",
         )
     source = _bounded_int(
         link.source,
@@ -437,8 +762,8 @@ def _encode_link(link: object, index: int) -> tuple[RuneLinkV3, bytes]:
     )
     cost_ms = _bounded_int(
         link.cost_ms,
-        contract.RUNE_V3_MIN_COST_MS,
-        contract.RUNE_V3_MAX_COST_MS,
+        MIN_COST_MS,
+        MAX_COST_MS,
         f"link {index} cost_ms",
         contract.RLW_BAD_LINK_RECORD,
     )
@@ -464,7 +789,7 @@ def _encode_link(link: object, index: int) -> tuple[RuneLinkV3, bytes]:
         link.reserved, 0, 255, f"link {index} reserved",
         contract.RLW_BAD_LINK_RECORD,
     )
-    normalized = RuneLinkV3(
+    normalized = RunePolicyLink(
         source=source,
         destination=destination,
         action=action,
@@ -480,7 +805,7 @@ def _encode_link(link: object, index: int) -> tuple[RuneLinkV3, bytes]:
         mode=mode,
         reserved=reserved,
     )
-    encoded = LINK_STRUCT.pack(
+    encoded = RUNE_POLICY_LINK_STRUCT.pack(
         source,
         destination,
         action,
@@ -579,15 +904,15 @@ def _validate_anchor_policy(
 
 
 def _validate_graph(
-    seeds: tuple[RuneSeedV3, ...],
-    links: tuple[RuneLinkV3, ...],
+    seeds: tuple[RuneSeed, ...],
+    links: tuple[RunePolicyLink, ...],
     raw_links: tuple[bytes, ...],
 ) -> None:
-    if not 0 < len(seeds) <= contract.RUNE_V3_MAX_SEEDS:
+    if not 0 < len(seeds) <= MAX_SEEDS:
         raise _wire_error(
             contract.RLW_BAD_COUNTS, f"{len(seeds)} seeds"
         )
-    if not 0 <= len(links) <= contract.RUNE_V3_MAX_LINKS:
+    if not 0 <= len(links) <= MAX_LINKS:
         raise _wire_error(
             contract.RLW_BAD_COUNTS, f"{len(links)} links"
         )
@@ -609,7 +934,7 @@ def _validate_graph(
     linked_sources: set[int] = set()
     identities: set[tuple[int, int, int]] = set()
     for index, (link, raw) in enumerate(zip(links, raw_links)):
-        if len(raw) != contract.RUNE_V3_LINK_BYTES:
+        if len(raw) != RUNE_POLICY_LINK_BYTES:
             raise AssertionError("raw link has wrong internal size")
         if (
             not 0 <= link.source < len(seeds) or
@@ -623,25 +948,21 @@ def _validate_graph(
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD, f"link {index} is a self-link"
             )
-        # The v3 wire namespace is frozen independently of later registry
-        # growth.  Per-action masks refine these bounds; they must never make
-        # a future action, provenance, or mode byte legal in an old v3 file.
-        if not 0 <= link.action <= contract.RL_DOOR_HOOK:
+        if not contract.action_valid(link.action):
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD,
-                f"link {index} has action outside frozen v3 range "
-                f"{link.action}",
+                f"link {index} has an unknown action {link.action}",
             )
         if not 0 <= link.provenance <= contract.RL_CONTRACTED:
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD,
-                f"link {index} has provenance outside frozen v3 range "
+                f"link {index} has an unknown provenance "
                 f"{link.provenance}",
             )
         if not contract.RLCM_NONE <= link.mode <= contract.RLCM_RIDE:
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD,
-                f"link {index} has mode outside frozen v3 range {link.mode}",
+                f"link {index} has an unknown mode {link.mode}",
             )
         try:
             action = contract.action_contract(link.action)
@@ -678,8 +999,8 @@ def _validate_graph(
                 f"link {index} forbids mode {link.mode}",
             )
         if not (
-            contract.RUNE_V3_MIN_COST_MS <= link.cost_ms <=
-            contract.RUNE_V3_MAX_COST_MS
+            MIN_COST_MS <= link.cost_ms <=
+            MAX_COST_MS
         ):
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD,
@@ -719,7 +1040,7 @@ def _validate_graph(
         )
         compound = bool(action["trait_mask"] & contract.SG_ACTF_ATOMIC)
         if not compound:
-            if raw[contract.RUNE_V3_NONCOMPOUND_TAIL_OFFSET:] != _ZERO_16:
+            if raw[NONCOMPOUND_TAIL_OFFSET:] != _ZERO_16:
                 raise _wire_error(
                     contract.RLW_BAD_LINK_RECORD,
                     f"link {index} has nonzero noncompound tail",
@@ -758,6 +1079,34 @@ def _validate_graph(
             index,
             "mechanism anchor",
         )
+        if (
+            link.action == contract.RL_BUTTON_DOOR and
+            all(component == 0.0 for component in link.mechanism_anchor)
+        ):
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has zero BUTTON_DOOR displacement",
+            )
+        if (
+            link.action == contract.RL_BUTTON_DOOR and
+            link.mode == contract.RLCM_RIDE
+        ):
+            scale = contract.RUNE_PROOF_DOOR_ANCHOR_SCALE
+            for axis, (anchor, displacement) in enumerate(zip(
+                link.suffix_anchor, link.mechanism_anchor
+            )):
+                endpoint_q8 = int(anchor * scale) + int(
+                    displacement * scale
+                )
+                if not (
+                    contract.RUNE_PROOF_WORLD_FIXED_MIN <= endpoint_q8 <=
+                    contract.RUNE_PROOF_WORLD_FIXED_MAX
+                ):
+                    raise _wire_error(
+                        contract.RLW_BAD_LINK_RECORD,
+                        f"link {index} BUTTON_DOOR endpoint axis {axis} "
+                        "is outside signed q8 world",
+                    )
 
     for index, seed in enumerate(seeds):
         tombstone = bool(seed.flags & RSF_TOMBSTONE)
@@ -768,356 +1117,1341 @@ def _validate_graph(
             )
 
 
-def _header_crc(header: bytes) -> int:
-    if len(header) != contract.RUNE_V3_HEADER_BYTES:
-        raise AssertionError("header CRC received wrong byte count")
+def _rune_mechanism_contract_crc32() -> int:
+    """Return the generated mechanism-contract pin, or fail closed."""
+
+    value = contract.RUNE_MECHANISM_CONTRACT_CRC32
+    if type(value) is not int or not 0 < value <= 0xFFFFFFFF:
+        raise _wire_error(
+            RLRUNE_BAD_MECHANISM_CONTRACT,
+            "mechanism descriptor CRC is not pinned",
+        )
+    return value
+
+
+def _rune_header_crc(header: bytes) -> int:
+    if len(header) != RUNE_HEADER_BYTES:
+        raise AssertionError("current header CRC received wrong byte count")
     canonical = bytearray(header)
-    struct.pack_into(
-        "<I", canonical, contract.RUNE_V3_HEADER_CRC_OFFSET, 0
-    )
+    struct.pack_into("<I", canonical, RUNE_HEADER_CRC_OFFSET, 0)
     return _crc32(canonical)
 
 
-def encode_v3(
-    identity: RuneIdentityV3,
-    seeds: Iterable[RuneSeedV3],
-    links: Iterable[RuneLinkV3],
-) -> bytes:
-    """Encode one canonical v3 file after complete structural validation."""
+def _rune_file_size(header: RuneHeader) -> int:
+    """Validate count relationships and return exact file size."""
 
-    identity = _normalize_identity(identity)
-    input_seeds = _as_tuple(seeds, "seeds", contract.RUNE_V3_MAX_SEEDS)
-    input_links = _as_tuple(links, "links", contract.RUNE_V3_MAX_LINKS)
-    if not 0 < len(input_seeds) <= contract.RUNE_V3_MAX_SEEDS:
+    if not 0 < header.num_seeds <= MAX_SEEDS:
         raise _wire_error(
-            contract.RLW_BAD_COUNTS, f"{len(input_seeds)} seeds"
+            contract.RLW_BAD_COUNTS, f"{header.num_seeds} seeds"
         )
-    if not 0 <= len(input_links) <= contract.RUNE_V3_MAX_LINKS:
+    if not 0 <= header.num_links <= MAX_LINKS:
         raise _wire_error(
-            contract.RLW_BAD_COUNTS, f"{len(input_links)} links"
+            contract.RLW_BAD_COUNTS, f"{header.num_links} links"
         )
-
-    encoded_seeds = [
-        _encode_seed(seed, index) for index, seed in enumerate(input_seeds)
-    ]
-    encoded_links = [
-        _encode_link(link, index) for index, link in enumerate(input_links)
-    ]
-    normalized_seeds = tuple(item[0] for item in encoded_seeds)
-    normalized_links = tuple(item[0] for item in encoded_links)
-    raw_links = tuple(item[1] for item in encoded_links)
-    _validate_graph(normalized_seeds, normalized_links, raw_links)
-    payload = b"".join(item[1] for item in encoded_seeds) + b"".join(raw_links)
-    payload_crc32 = _crc32(payload)
-    header = HEADER_STRUCT.pack(
-        contract.RUNE_V3_MAGIC,
-        contract.RUNE_V3_VERSION,
-        contract.RUNE_V3_HEADER_BYTES,
-        contract.RUNE_V3_SEED_BYTES,
-        contract.RUNE_V3_LINK_BYTES,
-        len(normalized_seeds),
-        len(normalized_links),
-        payload_crc32,
-        identity.bsp_checksum,
-        identity.entity_crc32,
-        contract.CONTRACT_CRC32,
-        identity.physics_flags,
-        identity.gravity,
-        identity.airaccelerate,
-        identity.maxvelocity,
-        identity.pmove_substep_ms,
-        identity.server_frame_ms,
-        identity.host_physics_id,
-        0,
-        _map_bytes(identity.map_name),
+    if not 0 <= header.num_activation_nodes <= RUNE_MAX_ACTIVATION_NODES:
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS,
+            f"{header.num_activation_nodes} activation nodes",
+        )
+    if not 0 <= header.num_activation_edges <= RUNE_MAX_ACTIVATION_EDGES:
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS,
+            f"{header.num_activation_edges} activation edges",
+        )
+    if not 0 <= header.num_activation_plans <= RUNE_MAX_ACTIVATION_PLANS:
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS,
+            f"{header.num_activation_plans} activation plans",
+        )
+    if header.num_activation_plans > header.num_links:
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS,
+            "activation plans exceed links",
+        )
+    if not 0 < header.string_bytes <= RUNE_MAX_STRING_BYTES:
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS, f"{header.string_bytes} string bytes"
+        )
+    if not 0 <= header.num_inventory_edges <= header.num_activation_edges:
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS,
+            "inventory edges exceed total activation edges",
+        )
+    if header.num_activation_nodes == 0 and (
+        header.num_inventory_edges != 0 or
+        header.num_activation_edges != 0 or
+        header.num_activation_plans != 0
+    ):
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS,
+            "node-free artifact contains mechanism edges or plans",
+        )
+    plan_edges = (
+        header.num_activation_edges - header.num_inventory_edges
     )
-    canonical_header = bytearray(header)
-    struct.pack_into(
-        "<I",
-        canonical_header,
-        contract.RUNE_V3_HEADER_CRC_OFFSET,
-        _header_crc(header),
+    if header.num_activation_plans and (
+        header.num_activation_nodes < 2 or
+        plan_edges < header.num_activation_plans
+    ):
+        raise _wire_error(
+            contract.RLW_BAD_COUNTS,
+            "plans require at least two nodes and one edge each",
+        )
+    return (
+        RUNE_HEADER_BYTES +
+        header.num_seeds * RUNE_SEED_BYTES +
+        header.num_links * RUNE_LINK_BYTES +
+        header.num_activation_nodes * RUNE_ACTIVATION_NODE_BYTES +
+        header.num_activation_edges * RUNE_ACTIVATION_EDGE_BYTES +
+        header.num_activation_plans * RUNE_ACTIVATION_PLAN_BYTES +
+        header.string_bytes
     )
-    return bytes(canonical_header) + payload
 
 
-def _verify_expected_identity(
-    actual: RuneIdentityV3, expected: RuneIdentityV3
+def _decode_rune_header(data: bytes) -> RuneHeader:
+    prefix = HEADER_STRUCT.unpack_from(data)
+    extension = RUNE_HEADER_EXTENSION_STRUCT.unpack_from(data, 128)
+    header = RuneHeader(
+        magic=prefix[0],
+        header_bytes=prefix[2],
+        seed_bytes=prefix[3],
+        link_bytes=prefix[4],
+        num_seeds=prefix[5],
+        num_links=prefix[6],
+        payload_crc32=prefix[7],
+        bsp_checksum=prefix[8],
+        entity_crc32=prefix[9],
+        action_contract_crc32=prefix[10],
+        physics_flags=prefix[11],
+        gravity=prefix[12],
+        airaccelerate=prefix[13],
+        maxvelocity=prefix[14],
+        pmove_substep_ms=prefix[15],
+        server_frame_ms=prefix[16],
+        host_physics_id=prefix[17],
+        header_crc32=prefix[18],
+        map_name=_decode_map_name(prefix[19]),
+        activation_node_bytes=extension[0],
+        activation_edge_bytes=extension[1],
+        activation_plan_bytes=extension[2],
+        num_activation_nodes=extension[4],
+        num_activation_edges=extension[5],
+        num_activation_plans=extension[6],
+        string_bytes=extension[7],
+        mechanism_contract_crc32=extension[8],
+        num_inventory_edges=extension[9],
+    )
+    if header.magic != RUNE_MAGIC:
+        raise _wire_error(contract.RLW_BAD_MAGIC, f"0x{header.magic:08x}")
+    if prefix[1] != 0:
+        raise _wire_error(contract.RLR_NONZERO_RESERVED, str(prefix[1]))
+    if header.header_bytes != RUNE_HEADER_BYTES:
+        raise _wire_error(contract.RLW_BAD_HEADER_SIZE, str(header.header_bytes))
+    if header.seed_bytes != RUNE_SEED_BYTES:
+        raise _wire_error(contract.RLW_BAD_SEED_SIZE, str(header.seed_bytes))
+    if header.link_bytes != RUNE_LINK_BYTES:
+        raise _wire_error(contract.RLW_BAD_LINK_SIZE, str(header.link_bytes))
+    if (
+        header.activation_node_bytes != RUNE_ACTIVATION_NODE_BYTES or
+        header.activation_edge_bytes != RUNE_ACTIVATION_EDGE_BYTES or
+        header.activation_plan_bytes != RUNE_ACTIVATION_PLAN_BYTES
+    ):
+        raise _wire_error(
+            RLRUNE_BAD_MECHANISM_CONTRACT,
+            "record sizes do not match",
+        )
+    if extension[3] != 0:
+        raise _wire_error(contract.RLR_NONZERO_RESERVED, str(extension[3]))
+    expected_mechanism_crc = _rune_mechanism_contract_crc32()
+    if header.mechanism_contract_crc32 != expected_mechanism_crc:
+        raise _wire_error(
+            RLRUNE_BAD_MECHANISM_CONTRACT,
+            f"stored=0x{header.mechanism_contract_crc32:08x}, "
+            f"expected=0x{expected_mechanism_crc:08x}",
+        )
+    expected_action_crc = contract.RUNE_ACTION_CONTRACT_CRC32
+    if header.action_contract_crc32 != expected_action_crc:
+        raise _wire_error(
+            contract.RLW_BAD_ACTION_CONTRACT,
+            f"stored=0x{header.action_contract_crc32:08x}, "
+            f"expected=0x{expected_action_crc:08x}",
+        )
+    _rune_file_size(header)
+    computed_header_crc = _rune_header_crc(data[:RUNE_HEADER_BYTES])
+    if header.header_crc32 != computed_header_crc:
+        raise _wire_error(
+            contract.RLW_BAD_HEADER_CRC,
+            f"stored=0x{header.header_crc32:08x}, "
+            f"computed=0x{computed_header_crc:08x}",
+        )
+    # Normalize the embedded identity before exposing the decoded artifact.
+    _normalize_identity(header.identity)
+    return header
+
+
+def _decode_rune_link(raw: bytes, index: int) -> RuneLink:
+    values = RUNE_LINK_STRUCT.unpack(raw)
+    link = RuneLink(
+        source=values[0],
+        destination=values[1],
+        action=values[2],
+        provenance=values[3],
+        min_speed=values[4],
+        heading=values[5],
+        heading_slack=values[6],
+        exit_speed=values[7],
+        cost_ms=values[8],
+        suffix_anchor=(values[9], values[10], values[11]),
+        mechanism_anchor=(values[12], values[13], values[14]),
+        sweep_clear_ms=values[15],
+        mode=values[16],
+        reserved=values[17],
+        activation_plan=values[18],
+    )
+    if not contract.action_valid(link.action):
+        raise _wire_error(
+            contract.RLW_BAD_LINK_RECORD,
+            f"link {index} has action outside current range {link.action}",
+        )
+    return link
+
+
+def _decode_rune_node(raw: bytes, index: int) -> RuneActivationNode:
+    values = RUNE_ACTIVATION_NODE_STRUCT.unpack(raw)
+    node = RuneActivationNode(
+        key=values[0],
+        kind=values[1],
+        flags=values[2],
+        classname_offset=values[3],
+        target_offset=values[4],
+        targetname_offset=values[5],
+        killtarget_offset=values[6],
+        owner_key=values[7],
+        team_master_key=values[8],
+        spawnflags=values[9],
+        touch_callback=values[10],
+        use_callback=values[11],
+        think_callback=values[12],
+        blocked_callback=values[13],
+        delay_ms=values[14],
+        wait_ms=values[15],
+        speed_q8=values[16],
+        accel_q8=values[17],
+        decel_q8=values[18],
+        absmin_q8=(values[19], values[20], values[21]),
+        absmax_q8=(values[22], values[23], values[24]),
+        path_target_offset=values[25],
+    )
+    callbacks = (
+        node.touch_callback,
+        node.use_callback,
+        node.think_callback,
+        node.blocked_callback,
+    )
+    valid_callbacks = (
+        node.touch_callback in _RUNE_TOUCH_CALLBACKS and
+        node.use_callback in _RUNE_USE_CALLBACKS and
+        node.think_callback in _RUNE_THINK_CALLBACKS and
+        node.blocked_callback in _RUNE_BLOCKED_CALLBACKS
+    )
+    if (
+        node.key in (0, RUNE_NO_KEY) or
+        node.kind not in RUNE_NODE_KIND_NAMES or
+        node.kind == RUNE_NODE_NONE or
+        node.flags & ~RUNE_NODE_FLAG_MASK or
+        node.owner_key == 0 or
+        node.team_master_key == 0 or
+        not valid_callbacks or
+        (
+            RUNE_CALLBACK_UNKNOWN in callbacks and
+            not node.flags & RUNE_NODEF_INVENTORY_ONLY
+        ) or
+        node.speed_q8 > RUNE_MAX_Q8 or
+        node.accel_q8 > RUNE_MAX_Q8 or
+        node.decel_q8 > RUNE_MAX_Q8 or
+        any(
+            minimum > maximum
+            for minimum, maximum in zip(node.absmin_q8, node.absmax_q8)
+        )
+    ):
+        raise _wire_error(RLRUNE_BAD_ACTIVATION_NODE, f"node {index}")
+    if node.flags & RUNE_NODEF_FRAME_COMPLETE_MOVER and (
+        node.kind != RUNE_NODE_BUTTON or
+        node.flags & (RUNE_NODEF_MOVER | RUNE_NODEF_SHOOTABLE) !=
+        (RUNE_NODEF_MOVER | RUNE_NODEF_SHOOTABLE) or
+        node.flags & (RUNE_NODEF_SYNTHETIC | RUNE_NODEF_INVENTORY_ONLY) or
+        node.speed_q8 == 0 or
+        node.accel_q8 != node.speed_q8 or
+        node.decel_q8 != node.speed_q8 or
+        node.speed_q8 % 10
+    ):
+        raise _wire_error(
+            RLRUNE_BAD_ACTIVATION_NODE,
+            f"node {index} has invalid frame-complete mover fields",
+        )
+    if (
+        node.flags & 1 and node.owner_key == RUNE_NO_KEY
+    ):
+        raise _wire_error(
+            RLRUNE_BAD_ACTIVATION_NODE,
+            f"synthetic node {index} has no owner",
+        )
+    if node.kind == RUNE_NODE_DOOR_MEMBER and (
+        node.team_master_key in (RUNE_NO_KEY, node.key)
+    ):
+        raise _wire_error(
+            RLRUNE_BAD_ACTIVATION_NODE,
+            f"door member node {index} has invalid team master",
+        )
+    if (
+        node.kind == RUNE_NODE_DOOR_MASTER and
+        node.team_master_key != node.key
+    ):
+        raise _wire_error(
+            RLRUNE_BAD_ACTIVATION_NODE,
+            f"door master node {index} is not self-mastered",
+        )
+    return node
+
+
+def _decode_rune_edge(raw: bytes, index: int) -> RuneActivationEdge:
+    values = RUNE_ACTIVATION_EDGE_STRUCT.unpack(raw)
+    edge = RuneActivationEdge(*values)
+    if (
+        edge.from_key in (0, RUNE_NO_KEY) or
+        edge.to_key in (0, RUNE_NO_KEY) or
+        edge.kind not in RUNE_EDGE_KIND_NAMES
+    ):
+        raise _wire_error(RLRUNE_BAD_ACTIVATION_EDGE, f"edge {index}")
+    return edge
+
+
+def _decode_rune_plan(raw: bytes, index: int) -> RuneActivationPlan:
+    values = RUNE_ACTIVATION_PLAN_STRUCT.unpack(raw)
+    plan = RuneActivationPlan(
+        values[0], values[1], values[2], values[3], values[4], values[6],
+        values[7], values[8], values[9],
+    )
+    expected_flags = contract.mechanism_controller_plan_flags(
+        plan.controller_kind
+    )
+    if values[5] != 0:
+        raise _wire_error(contract.RLR_NONZERO_RESERVED, str(values[5]))
+    if (
+        plan.entry_key in (0, RUNE_NO_KEY) or
+        plan.mover_key in (0, RUNE_NO_KEY) or
+        plan.entry_key == plan.mover_key or
+        not 0 < plan.num_edges <= RUNE_MAX_PLAN_EDGES or
+        not expected_flags or
+        plan.flags != expected_flags or
+        not 0 < plan.expected_members <= RUNE_MAX_TEAM_MEMBERS or
+        plan.cooldown_ms > RUNE_MAX_TIME_MS or
+        plan.closure_crc32 == 0
+    ):
+        raise _wire_error(RLRUNE_BAD_ACTIVATION_PLAN, f"plan {index}")
+    return plan
+
+
+def _rune_project_link(link: RuneLink) -> RunePolicyLink:
+    action = contract.action_mechanism_link_policy_action(link.action)
+    if action is None:
+        raise _wire_error(
+            contract.RLW_BAD_LINK_RECORD,
+            f"action {link.action} has no current link-policy projection",
+        )
+    return RunePolicyLink(
+        source=link.source,
+        destination=link.destination,
+        action=action,
+        provenance=link.provenance,
+        min_speed=link.min_speed,
+        heading=link.heading,
+        heading_slack=link.heading_slack,
+        exit_speed=link.exit_speed,
+        cost_ms=link.cost_ms,
+        suffix_anchor=link.suffix_anchor,
+        mechanism_anchor=link.mechanism_anchor,
+        sweep_clear_ms=link.sweep_clear_ms,
+        mode=link.mode,
+        reserved=link.reserved,
+    )
+
+
+def _rune_validate_strings(
+    nodes: tuple[RuneActivationNode, ...], strings: bytes
 ) -> None:
-    expected = _normalize_identity(expected)
-    if actual.map_name != expected.map_name:
+    if not strings or strings[0] != 0:
+        raise _wire_error(RLRUNE_BAD_STRING_POOL, "missing leading NUL")
+    referenced: set[int] = set()
+    for index, node in enumerate(nodes):
+        for field, offset in (
+            ("classname", node.classname_offset),
+            ("target", node.target_offset),
+            ("targetname", node.targetname_offset),
+            ("killtarget", node.killtarget_offset),
+            ("path_target", node.path_target_offset),
+        ):
+            if offset == 0:
+                continue
+            if (
+                offset >= len(strings) or
+                strings[offset] == 0 or
+                strings[offset - 1] != 0 or
+                strings.find(b"\0", offset) < 0
+            ):
+                raise _wire_error(
+                    RLRUNE_BAD_STRING_POOL,
+                    f"node {index} has invalid {field} offset {offset}",
+                )
+            referenced.add(offset)
+
+    offsets: list[int] = []
+    previous: bytes | None = None
+    offset = 1
+    while offset < len(strings):
+        end = strings.find(b"\0", offset)
+        if end < 0 or end == offset:
+            raise _wire_error(RLRUNE_BAD_STRING_POOL, f"offset {offset}")
+        value = strings[offset:end]
+        if previous is not None and previous >= value:
+            raise _wire_error(
+                RLRUNE_BAD_STRING_POOL,
+                f"strings are not strictly sorted at {offset}",
+            )
+        offsets.append(offset)
+        previous = value
+        offset = end + 1
+    if set(offsets) != referenced:
         raise _wire_error(
-            contract.RLW_MAPNAME_MISMATCH,
-            f"header={actual.map_name!r}, expected={expected.map_name!r}",
-        )
-    if actual.bsp_checksum != expected.bsp_checksum:
-        raise _wire_error(
-            contract.RLW_BSP_CHECKSUM_MISMATCH,
-            f"header=0x{actual.bsp_checksum:08x}, "
-            f"expected=0x{expected.bsp_checksum:08x}",
-        )
-    if actual.entity_crc32 != expected.entity_crc32:
-        raise _wire_error(
-            contract.RLW_ENTITY_CRC_MISMATCH,
-            f"header=0x{actual.entity_crc32:08x}, "
-            f"expected=0x{expected.entity_crc32:08x}",
-        )
-    if actual.host_physics_id != expected.host_physics_id:
-        raise _wire_error(
-            contract.RLW_PHYSICS_ID_MISMATCH,
-            f"header={actual.host_physics_id}, "
-            f"expected={expected.host_physics_id}",
-        )
-    actual_law = (
-        actual.physics_flags,
-        struct.pack("<f", actual.gravity),
-        struct.pack("<f", actual.airaccelerate),
-        struct.pack("<f", actual.maxvelocity),
-        actual.pmove_substep_ms,
-        actual.server_frame_ms,
-    )
-    expected_law = (
-        expected.physics_flags,
-        struct.pack("<f", expected.gravity),
-        struct.pack("<f", expected.airaccelerate),
-        struct.pack("<f", expected.maxvelocity),
-        expected.pmove_substep_ms,
-        expected.server_frame_ms,
-    )
-    if actual_law != expected_law:
-        raise _wire_error(
-            contract.RLW_BAD_PHYSICS_LAW,
-            "header does not match expected active physics",
+            RLRUNE_BAD_STRING_POOL,
+            "string pool contains unreferenced or missing entries",
         )
 
 
-def decode_v3(
+def _rune_string(strings: bytes, offset: int) -> bytes:
+    if offset == 0:
+        return b""
+    return strings[offset:strings.index(0, offset)]
+
+
+def _rune_node_executable(node: RuneActivationNode) -> bool:
+    return bool(
+        not node.flags & RUNE_NODEF_INVENTORY_ONLY and
+        RUNE_CALLBACK_UNKNOWN not in (
+            node.touch_callback,
+            node.use_callback,
+            node.think_callback,
+            node.blocked_callback,
+        )
+    )
+
+
+def _rune_edge_relation_valid(
+    edge: RuneActivationEdge,
+    node_by_key: Mapping[int, RuneActivationNode],
+    strings: bytes,
+) -> bool:
+    source = node_by_key[edge.from_key]
+    destination = node_by_key[edge.to_key]
+    if edge.kind in (RUNE_EDGE_TARGET, RUNE_EDGE_ROUTE_TARGET):
+        left = source.target_offset
+        right = destination.targetname_offset
+    elif edge.kind == RUNE_EDGE_KILLTARGET:
+        left = source.killtarget_offset
+        right = destination.targetname_offset
+    elif edge.kind == RUNE_EDGE_PATH_TARGET:
+        left = source.path_target_offset
+        right = destination.targetname_offset
+    elif edge.kind == RUNE_EDGE_OWNER:
+        return source.owner_key == destination.key
+    elif edge.kind == RUNE_EDGE_TEAM:
+        return bool(
+            destination.team_master_key == source.key and
+            source.flags & RUNE_NODEF_TEAM_MASTER and
+            destination.flags & RUNE_NODEF_TEAM_MEMBER
+        )
+    else:
+        # MOVE_TARGET, TARGET_ENT, and ENEMY are authenticated inventory
+        # context, but the fixed record carries no independent string/key field with
+        # which an executable plan could re-prove their live relationship.
+        return False
+    return bool(
+        left and right and
+        _rune_string(strings, left).lower() == _rune_string(strings, right).lower()
+    )
+
+
+def _rune_door_node_valid(
+    node: RuneActivationNode,
+    master_key: int,
+    *,
+    master: bool,
+    strings: bytes,
+) -> bool:
+    required_flag = (
+        RUNE_NODEF_TEAM_MASTER if master else RUNE_NODEF_TEAM_MEMBER
+    )
+    forbidden_flag = (
+        RUNE_NODEF_TEAM_MEMBER if master else RUNE_NODEF_TEAM_MASTER
+    )
+    # The spawn function chooses this callback for each brush before team
+    # roles are assigned.  Targeted brushes retain Think_CalcMoveSpeed;
+    # anonymous brushes retain Think_SpawnDoorTrigger, including team slaves
+    # for which that callback is subsequently a no-op.
+    expected_think = (
+        RUNE_CALLBACK_THINK_CALC_MOVE_SPEED
+        if node.targetname_offset else
+        RUNE_CALLBACK_THINK_SPAWN_DOOR_TRIGGER
+    )
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == (
+            RUNE_NODE_DOOR_MASTER if master else
+            RUNE_NODE_DOOR_MEMBER
+        ) and
+        node.flags & (
+            RUNE_NODEF_USABLE | RUNE_NODEF_MOVER | required_flag
+        ) == (RUNE_NODEF_USABLE | RUNE_NODEF_MOVER | required_flag) and
+        not node.flags & forbidden_flag and
+        _rune_string(strings, node.classname_offset) in (
+            b"func_door", b"func_door_rotating"
+        ) and
+        node.owner_key == RUNE_NO_KEY and
+        node.team_master_key == master_key and
+        # START_OPEN mutates the live endpoints and TOGGLE has no bounded
+        # close lease.  REVERSE and CRUSHER are explicitly admissible.
+        not node.spawnflags & (1 | 32) and
+        node.touch_callback == 0 and
+        node.use_callback == RUNE_CALLBACK_USE_DOOR and
+        node.think_callback == expected_think and
+        node.blocked_callback == RUNE_CALLBACK_BLOCKED_DOOR and
+        node.delay_ms == 0 and
+        node.wait_ms > 0 and
+        node.speed_q8 != 0 and
+        node.accel_q8 == node.speed_q8 and
+        node.decel_q8 == node.speed_q8 and
+        node.killtarget_offset == 0 and
+        node.path_target_offset == 0
+    )
+
+
+def _rune_button_node_valid(
+    node: RuneActivationNode,
+    strings: bytes,
+) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_BUTTON and
+        node.flags == (
+            RUNE_NODEF_REPEATABLE |
+            RUNE_NODEF_TOUCHABLE |
+            RUNE_NODEF_USABLE |
+            RUNE_NODEF_MOVER
+        ) and
+        _rune_string(strings, node.classname_offset) == b"func_button" and
+        node.target_offset != 0 and
+        node.targetname_offset == node.killtarget_offset ==
+        node.path_target_offset == 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.spawnflags == 0 and
+        node.touch_callback == RUNE_CALLBACK_BUTTON_TOUCH and
+        node.use_callback == RUNE_CALLBACK_BUTTON_USE and
+        node.think_callback == node.blocked_callback == 0 and
+        node.delay_ms == 0 and node.wait_ms > 0 and
+        node.speed_q8 != 0 and
+        node.accel_q8 == node.speed_q8 and
+        node.decel_q8 == node.speed_q8
+    )
+
+
+def _rune_frame_complete_button_valid(
+    node: RuneActivationNode,
+    strings: bytes,
+) -> bool:
+    expected_flags = (
+        RUNE_NODEF_REPEATABLE |
+        RUNE_NODEF_USABLE |
+        RUNE_NODEF_MOVER |
+        RUNE_NODEF_SHOOTABLE |
+        RUNE_NODEF_FRAME_COMPLETE_MOVER
+    )
+    return bool(
+        node.kind == RUNE_NODE_BUTTON and
+        node.flags == expected_flags and
+        _rune_string(strings, node.classname_offset) == b"func_button" and
+        node.target_offset != 0 and
+        node.targetname_offset == node.killtarget_offset ==
+        node.path_target_offset == 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.spawnflags == 0 and
+        node.touch_callback == 0 and
+        node.use_callback == RUNE_CALLBACK_BUTTON_USE and
+        node.think_callback == node.blocked_callback == 0 and
+        node.delay_ms == 0 and node.wait_ms > 0 and
+        node.speed_q8 != 0 and
+        node.accel_q8 == node.speed_q8 and
+        node.decel_q8 == node.speed_q8 and
+        node.speed_q8 % 10 == 0
+    )
+
+
+def _rune_safe_speaker(node: RuneActivationNode) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_TARGET_SPEAKER and
+        node.use_callback == RUNE_CALLBACK_USE_TARGET_SPEAKER and
+        node.touch_callback == node.think_callback == node.blocked_callback == 0 and
+        # Looped-on/looped-off speakers toggle persistent state when used.
+        not node.spawnflags & 3 and
+        node.target_offset == node.killtarget_offset ==
+        node.path_target_offset == 0
+    )
+
+
+def _rune_safe_areaportal(node: RuneActivationNode) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_AREAPORTAL and
+        node.use_callback == RUNE_CALLBACK_USE_AREAPORTAL and
+        node.touch_callback == node.think_callback == node.blocked_callback == 0 and
+        node.target_offset == node.killtarget_offset ==
+        node.path_target_offset == 0
+    )
+
+
+def _rune_relay_shape(node: RuneActivationNode) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_RELAY and
+        node.use_callback == RUNE_CALLBACK_USE_TRIGGER_RELAY and
+        node.touch_callback == node.think_callback == node.blocked_callback == 0 and
+        node.delay_ms >= 0 and
+        node.killtarget_offset == node.path_target_offset == 0 and
+        node.target_offset != 0
+    )
+
+
+def _rune_safe_relay(node: RuneActivationNode) -> bool:
+    return _rune_relay_shape(node) and node.delay_ms == 0
+
+
+def _rune_validate_production_plan(
+    plan: RuneActivationPlan,
+    plan_edges: tuple[RuneActivationEdge, ...],
+    node_by_key: Mapping[int, RuneActivationNode],
+    inventory_fanout: Mapping[
+        tuple[int, int], tuple[RuneActivationEdge, ...]
+    ],
+    door_members_by_master: Mapping[
+        int, tuple[RuneActivationNode, ...]
+    ],
+    strings: bytes,
+    plan_index: int,
+) -> None:
+    entry = node_by_key.get(plan.entry_key)
+    mover = node_by_key.get(plan.mover_key)
+
+    def fail(detail: str, *, edge: bool = False) -> None:
+        raise _wire_error(
+            RLRUNE_BAD_ACTIVATION_EDGE if edge else RLRUNE_BAD_ACTIVATION_PLAN,
+            f"plan {plan_index} {detail}",
+        )
+
+    if (
+        entry is None or mover is None or
+        not _rune_node_executable(entry) or not _rune_node_executable(mover)
+    ):
+        fail("has a non-executable entry or mover")
+    if len(set(plan_edges)) != len(plan_edges):
+        fail("contains a duplicate executable edge")
+    for edge in plan_edges:
+        source = node_by_key.get(edge.from_key)
+        destination = node_by_key.get(edge.to_key)
+        if (
+            source is None or destination is None or
+            edge.from_key == edge.to_key or
+            not _rune_node_executable(source) or
+            not _rune_node_executable(destination) or
+            not _rune_edge_relation_valid(edge, node_by_key, strings)
+        ):
+            fail("contains an unproved executable relation", edge=True)
+
+    expected: set[RuneActivationEdge] = set()
+    relay_invocations: set[int] = set()
+
+    def delayed_sound_only_relay(
+        node: RuneActivationNode, depth: int
+    ) -> bool:
+        if depth > 4 or not _rune_relay_shape(node):
+            return False
+        fanout = inventory_fanout.get((node.key, RUNE_EDGE_TARGET), ())
+        if not fanout:
+            return False
+        for child in fanout:
+            if child.delay_ms != node.delay_ms:
+                return False
+            destination = node_by_key[child.to_key]
+            if _rune_safe_speaker(destination):
+                continue
+            if not delayed_sound_only_relay(destination, depth + 1):
+                return False
+        return True
+
+    def add_edge(edge: RuneActivationEdge) -> None:
+        if edge.delay_ms != 0:
+            fail("contains a delayed controller edge")
+        if edge in expected:
+            fail("would execute the same inventory edge more than once")
+        expected.add(edge)
+
+    def add_side_effect(
+        edge: RuneActivationEdge, *, allow_areaportal: bool
+    ) -> None:
+        # Use an explicit stack so a hostile 8192-node relay chain cannot
+        # exhaust Python's recursion limit before producing a wire error.
+        pending = [(edge, allow_areaportal)]
+        while pending:
+            current, current_allows_areaportal = pending.pop()
+            if current.kind != RUNE_EDGE_TARGET or current.delay_ms != 0:
+                fail("contains a delayed or non-target side effect")
+            add_edge(current)
+            destination = node_by_key[current.to_key]
+            if _rune_safe_speaker(destination):
+                continue
+            if current_allows_areaportal and _rune_safe_areaportal(destination):
+                continue
+            # Preserve the inbound engine ordinal, but stop before the bound
+            # positive-delay relay can schedule DelayedUse.  Its omitted
+            # inventory suffix must be completely sound-only.
+            if (
+                destination.delay_ms > 0 and
+                delayed_sound_only_relay(destination, 1)
+            ):
+                continue
+            if not _rune_safe_relay(destination):
+                fail("contains a mutable speaker, relay, or side-effect endpoint")
+            if destination.key in relay_invocations:
+                fail("contains a cyclic or multiply invoked relay closure")
+            relay_invocations.add(destination.key)
+            fanout = inventory_fanout.get(
+                (destination.key, RUNE_EDGE_TARGET), ()
+            )
+            if not fanout:
+                fail("contains an empty sound relay")
+            pending.extend((child, False) for child in reversed(fanout))
+
+    controller = plan.controller_kind
+    if controller == RUNE_CONTROLLER_PLATFORM:
+        owner = inventory_fanout.get((entry.key, RUNE_EDGE_OWNER), ())
+        if (
+            entry.kind != RUNE_NODE_PLATFORM_TRIGGER or
+            entry.touch_callback != RUNE_CALLBACK_TOUCH_PLAT_CENTER or
+            not entry.flags & RUNE_NODEF_SYNTHETIC or
+            mover.kind != RUNE_NODE_PLATFORM or
+            len(owner) != 1 or owner[0].to_key != mover.key or
+            plan.expected_members != 1 or plan.cooldown_ms != 0
+        ):
+            fail("does not satisfy the platform controller law")
+        add_edge(owner[0])
+
+    elif controller == RUNE_CONTROLLER_TELEPORT:
+        owner = inventory_fanout.get((entry.key, RUNE_EDGE_OWNER), ())
+        targets = inventory_fanout.get((entry.key, RUNE_EDGE_TARGET), ())
+        if (
+            entry.kind != RUNE_NODE_TELEPORT_TRIGGER or
+            entry.touch_callback != RUNE_CALLBACK_TELEPORTER_TOUCH or
+            not entry.flags & RUNE_NODEF_SYNTHETIC or
+            mover.kind != RUNE_NODE_TELEPORTER or
+            len(owner) != 1 or owner[0].to_key != mover.key or
+            len(targets) != 1 or
+            node_by_key[targets[0].to_key].kind != RUNE_NODE_TELEPORT_DEST or
+            plan.expected_members != 1 or plan.cooldown_ms != 0
+        ):
+            fail("does not satisfy the teleport controller law")
+        add_edge(owner[0])
+        add_edge(targets[0])
+
+    elif controller in (
+        RUNE_CONTROLLER_AUTO_DOOR,
+        RUNE_CONTROLLER_DIRECT_TRIGGER_DOOR,
+        RUNE_CONTROLLER_BUTTON_DOOR,
+    ):
+        masters: list[int] = []
+        if controller == RUNE_CONTROLLER_AUTO_DOOR:
+            owner = inventory_fanout.get((entry.key, RUNE_EDGE_OWNER), ())
+            if (
+                entry.kind != RUNE_NODE_AUTO_DOOR_TRIGGER or
+                entry.touch_callback != RUNE_CALLBACK_TOUCH_DOOR_TRIGGER or
+                not entry.flags & RUNE_NODEF_SYNTHETIC or
+                len(owner) != 1 or owner[0].to_key != mover.key or
+                plan.cooldown_ms != 1000
+            ):
+                fail("does not satisfy the automatic-door entry law")
+            add_edge(owner[0])
+            masters.append(mover.key)
+        elif controller == RUNE_CONTROLLER_BUTTON_DOOR:
+            targets = inventory_fanout.get((entry.key, RUNE_EDGE_TARGET), ())
+            matching_targets = tuple(
+                node for node in node_by_key.values()
+                if node.targetname_offset and
+                _rune_string(strings, node.targetname_offset).lower() ==
+                _rune_string(strings, entry.target_offset).lower()
+            ) if entry.target_offset else ()
+            if (
+                not _rune_button_node_valid(entry, strings) or
+                not targets or
+                len(matching_targets) != len(targets) or
+                plan.cooldown_ms != entry.wait_ms
+            ):
+                fail("does not satisfy the button-door entry law")
+            # Stock G_UseTargets invokes the canonical team master first;
+            # later same-team slave targets are authenticated door_use
+            # no-ops.  Preserve that exhaustive engine-order fanout rather
+            # than narrowing a button controller to a single unteamed brush.
+            if tuple(
+                edge for edge in plan_edges
+                if edge.from_key == entry.key and
+                edge.kind == RUNE_EDGE_TARGET
+            ) != targets:
+                fail("does not preserve ordered button target fanout")
+            target_keys: set[int] = set()
+            for ordinal, edge in enumerate(targets):
+                destination = node_by_key[edge.to_key]
+                if destination.key in target_keys:
+                    fail("targets a button-door destination more than once")
+                target_keys.add(destination.key)
+                if ordinal == 0:
+                    if (
+                        destination.kind != RUNE_NODE_DOOR_MASTER or
+                        destination.key != mover.key
+                    ):
+                        fail("does not target its door master first")
+                elif (
+                    destination.kind != RUNE_NODE_DOOR_MEMBER or
+                    destination.team_master_key != mover.key
+                ):
+                    fail("targets a foreign or non-door button destination")
+                add_edge(edge)
+            masters.append(mover.key)
+        else:
+            targets = inventory_fanout.get((entry.key, RUNE_EDGE_TARGET), ())
+            cooldown = min(entry.wait_ms, RUNE_MAX_TIME_MS)
+            if (
+                entry.kind != RUNE_NODE_TRIGGER or
+                entry.touch_callback != RUNE_CALLBACK_TOUCH_MULTI or
+                not entry.flags & RUNE_NODEF_REPEATABLE or
+                entry.delay_ms != 0 or entry.wait_ms <= 0 or
+                plan.cooldown_ms != cooldown or not targets or
+                entry.killtarget_offset != 0 or
+                entry.path_target_offset != 0
+            ):
+                fail("does not satisfy the direct-trigger entry law")
+            # Filtering preserves the authenticated engine target-fanout
+            # ordinal even when team and side-effect edges are interleaved.
+            if tuple(
+                edge for edge in plan_edges
+                if edge.from_key == entry.key and
+                edge.kind == RUNE_EDGE_TARGET
+            ) != targets:
+                fail("does not preserve ordered entry target fanout")
+            seen_masters: set[int] = set()
+            for edge in targets:
+                destination = node_by_key[edge.to_key]
+                if destination.kind == RUNE_NODE_DOOR_MASTER:
+                    masters.append(destination.key)
+                    seen_masters.add(destination.key)
+                    add_edge(edge)
+                elif destination.kind == RUNE_NODE_DOOR_MEMBER:
+                    if destination.team_master_key not in seen_masters:
+                        fail("targets a door slave before its master")
+                    add_edge(edge)  # authenticated door_use no-op
+                else:
+                    add_side_effect(edge, allow_areaportal=False)
+            if not masters or mover.key != min(masters):
+                fail("does not bind mover_key to the smallest admitted master")
+
+        if len(set(masters)) != len(masters):
+            fail("admits a door master more than once")
+        physical: list[RuneActivationNode] = []
+        for master_key in masters:
+            master_node = node_by_key.get(master_key)
+            if master_node is None or not _rune_door_node_valid(
+                master_node, master_key, master=True, strings=strings
+            ):
+                fail("contains a noncanonical door master")
+            physical.append(master_node)
+            members = door_members_by_master.get(master_key, ())
+            for member in members:
+                if not _rune_door_node_valid(
+                    member, master_key, master=False, strings=strings
+                ):
+                    fail("contains a noncanonical door member")
+            team_edges = inventory_fanout.get(
+                (master_key, RUNE_EDGE_TEAM), ()
+            )
+            if {edge.to_key for edge in team_edges} != {
+                member.key for member in members
+            }:
+                fail("does not authenticate the complete physical door team")
+            for edge in team_edges:
+                add_edge(edge)
+            physical.extend(members)
+
+        if len(physical) != plan.expected_members:
+            fail("expected_members excludes or adds physical door members")
+        for door in physical:
+            for edge in inventory_fanout.get(
+                (door.key, RUNE_EDGE_TARGET), ()
+            ):
+                add_side_effect(edge, allow_areaportal=True)
+    else:
+        fail("uses an unsupported controller")
+
+    if set(plan_edges) != expected or len(plan_edges) != len(expected):
+        fail("edge closure is incomplete or contains controller-foreign edges")
+
+
+def _rune_validate_mechanisms(
+    header: RuneHeader,
+    links: tuple[RuneLink, ...],
+    nodes: tuple[RuneActivationNode, ...],
+    edges: tuple[RuneActivationEdge, ...],
+    raw_edges: tuple[bytes, ...],
+    plans: tuple[RuneActivationPlan, ...],
+    strings: bytes,
+) -> None:
+    node_keys = tuple(node.key for node in nodes)
+    if any(left >= right for left, right in zip(node_keys, node_keys[1:])):
+        raise _wire_error(
+            RLRUNE_DUPLICATE_NODE_KEY,
+            "node keys must be strictly ascending",
+        )
+    key_set = set(node_keys)
+    node_by_key = {node.key: node for node in nodes}
+    for index, node in enumerate(nodes):
+        if (
+            node.owner_key != RUNE_NO_KEY and
+            node.owner_key not in key_set
+        ) or (
+            node.team_master_key != RUNE_NO_KEY and
+            node.team_master_key not in key_set
+        ):
+            raise _wire_error(
+                RLRUNE_BAD_MECHANISM_GRAPH,
+                f"node {index} references an absent key",
+            )
+        if node.flags & 64:
+            master = node_by_key.get(node.team_master_key)
+            if master is None or not master.flags & 32:
+                raise _wire_error(
+                    RLRUNE_BAD_MECHANISM_GRAPH,
+                    f"team member node {index} has no team master",
+                )
+    for index, edge in enumerate(edges):
+        if edge.from_key not in key_set or edge.to_key not in key_set:
+            raise _wire_error(
+                RLRUNE_BAD_MECHANISM_GRAPH,
+                f"edge {index} references an absent key",
+            )
+
+    inventory = edges[:header.num_inventory_edges]
+    for index, edge in enumerate(inventory):
+        previous = inventory[index - 1] if index else None
+        same_fanout = bool(
+            previous is not None and
+            previous.from_key == edge.from_key and
+            previous.kind == edge.kind
+        )
+        expected_ordinal = previous.ordinal + 1 if same_fanout else 0
+        if edge.ordinal != expected_ordinal:
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_EDGE,
+                f"inventory edge {index} has ordinal {edge.ordinal}, "
+                f"expected {expected_ordinal}",
+            )
+        if previous is not None and (
+            previous.from_key > edge.from_key or
+            (
+                previous.from_key == edge.from_key and
+                previous.kind > edge.kind
+            )
+        ):
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_EDGE,
+                f"inventory edge {index} is out of canonical order",
+            )
+
+    fanout_lists: dict[
+        tuple[int, int], list[RuneActivationEdge]
+    ] = {}
+    for edge in inventory:
+        fanout_lists.setdefault((edge.from_key, edge.kind), []).append(edge)
+    inventory_fanout = {
+        key: tuple(fanout) for key, fanout in fanout_lists.items()
+    }
+    member_lists: dict[int, list[RuneActivationNode]] = {}
+    for node in nodes:
+        if node.kind == RUNE_NODE_DOOR_MEMBER:
+            member_lists.setdefault(node.team_master_key, []).append(node)
+    door_members_by_master = {
+        key: tuple(members) for key, members in member_lists.items()
+    }
+
+    plan_references = [0] * len(plans)
+    for index, link in enumerate(links):
+        if not contract.action_mechanism_admitted(link.action):
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} uses disabled action {link.action}",
+            )
+        has_plan = link.activation_plan != RUNE_NO_ACTIVATION_PLAN
+        if has_plan != contract.action_mechanism_plan_required(link.action):
+            state = "missing" if not has_plan else "unexpected"
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"link {index} has {state} activation plan",
+            )
+        if not has_plan:
+            continue
+        if (
+            link.activation_plan >= len(plans) or
+            not contract.action_mechanism_plan_allowed(
+                link.action,
+                plans[link.activation_plan].controller_kind,
+            )
+        ):
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"link {index} has invalid plan binding",
+            )
+        plan_references[link.activation_plan] += 1
+    if any(references != 1 for references in plan_references):
+        raise _wire_error(
+            RLRUNE_BAD_ACTIVATION_PLAN,
+            "each plan must be referenced by exactly one link",
+        )
+
+    expected_first_edge = header.num_inventory_edges
+    if plans:
+        if plans[0].first_edge != header.num_inventory_edges:
+            raise _wire_error(
+                RLRUNE_BAD_MECHANISM_CONTRACT,
+                "inventory-edge count disagrees with first plan",
+            )
+    elif header.num_inventory_edges != len(edges):
+        raise _wire_error(
+            RLRUNE_BAD_MECHANISM_CONTRACT,
+            "planless artifact does not mark every edge as inventory",
+        )
+    inventory_raw = frozenset(raw_edges[:header.num_inventory_edges])
+    for index, plan in enumerate(plans):
+        if plan.entry_key not in key_set or plan.mover_key not in key_set:
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"plan {index} references an absent key",
+            )
+        if plan.first_edge != expected_first_edge:
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"plan {index} does not begin at {expected_first_edge}",
+            )
+        end = plan.first_edge + plan.num_edges
+        if end > len(edges):
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"plan {index} edge range exceeds payload",
+            )
+        plan_raw = raw_edges[plan.first_edge:end]
+        if any(raw not in inventory_raw for raw in plan_raw):
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"plan {index} contains a non-inventory edge",
+            )
+        closure_crc = _crc32(b"".join(plan_raw))
+        if plan.closure_crc32 != closure_crc:
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"plan {index} closure CRC stored=0x{plan.closure_crc32:08x}, "
+                f"computed=0x{closure_crc:08x}",
+            )
+        _rune_validate_production_plan(
+            plan,
+            edges[plan.first_edge:end],
+            node_by_key,
+            inventory_fanout,
+            door_members_by_master,
+            strings,
+            index,
+        )
+        expected_first_edge = end
+    if expected_first_edge != len(edges):
+        raise _wire_error(
+            RLRUNE_BAD_ACTIVATION_PLAN,
+            "plan edge ranges do not partition the post-inventory suffix",
+        )
+
+
+def _rune_validate_seed_lattice(seeds: tuple[RuneSeed, ...]) -> None:
+    """Require every current seed to be an exact signed-q8 pmove origin."""
+
+    for index, seed in enumerate(seeds):
+        if not _on_fixed_lattice(
+            seed.origin, contract.RUNE_PROOF_WORLD_FIXED_SCALE
+        ):
+            raise _wire_error(
+                contract.RLW_BAD_SEED_RECORD,
+                f"seed {index} origin is not exact signed-q8",
+            )
+
+
+def _decode_rune_artifact(
     data: bytes | bytearray | memoryview,
     *,
-    expected_identity: RuneIdentityV3 | None = None,
-) -> RuneV3:
-    """Decode and structurally validate exactly one complete v3 byte string.
-
-    Structural validation alone does not authenticate the currently running
-    map.  Callers loading for execution must provide ``expected_identity``.
-    """
+    expected_identity: RuneIdentity | None = None,
+) -> RuneArtifact:
+    """Decode and structurally lint one authenticated RUNE artifact."""
 
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise _wire_error(
             contract.RLW_INVALID_ARGUMENT, "data must be bytes-like"
         )
     data = bytes(data)
-    if len(data) < contract.RUNE_V3_HEADER_BYTES:
+    if len(data) < RUNE_HEADER_BYTES:
         raise _wire_error(
             contract.RLW_BAD_FILE_SIZE,
-            f"truncated header: {len(data)} bytes",
+            f"truncated current header: {len(data)} bytes",
         )
-    fields = HEADER_STRUCT.unpack_from(data)
-    (
-        magic,
-        version,
-        header_bytes,
-        seed_bytes,
-        link_bytes,
-        num_seeds,
-        num_links,
-        payload_crc32,
-        bsp_checksum,
-        entity_crc32,
-        action_contract_crc32,
-        physics_flags,
-        gravity,
-        airaccelerate,
-        maxvelocity,
-        pmove_substep_ms,
-        server_frame_ms,
-        host_physics_id,
-        header_crc32,
-        raw_map_name,
-    ) = fields
-    if magic != contract.RUNE_V3_MAGIC:
-        raise _wire_error(
-            contract.RLW_BAD_MAGIC,
-            f"0x{magic:08x}",
-        )
-    if version != contract.RUNE_V3_VERSION:
-        raise _wire_error(contract.RLW_UNSUPPORTED_VERSION, str(version))
-    if header_bytes != contract.RUNE_V3_HEADER_BYTES:
-        raise _wire_error(contract.RLW_BAD_HEADER_SIZE, str(header_bytes))
-    if seed_bytes != contract.RUNE_V3_SEED_BYTES:
-        raise _wire_error(contract.RLW_BAD_SEED_SIZE, str(seed_bytes))
-    if link_bytes != contract.RUNE_V3_LINK_BYTES:
-        raise _wire_error(contract.RLW_BAD_LINK_SIZE, str(link_bytes))
-    header_bytes_raw = data[:contract.RUNE_V3_HEADER_BYTES]
-    computed_header_crc32 = _header_crc(header_bytes_raw)
-    if header_crc32 != computed_header_crc32:
-        raise _wire_error(
-            contract.RLW_BAD_HEADER_CRC,
-            f"stored=0x{header_crc32:08x}, "
-            f"computed=0x{computed_header_crc32:08x}",
-        )
-    if not 0 < num_seeds <= contract.RUNE_V3_MAX_SEEDS:
-        raise _wire_error(contract.RLW_BAD_COUNTS, f"{num_seeds} seeds")
-    if not 0 <= num_links <= contract.RUNE_V3_MAX_LINKS:
-        raise _wire_error(contract.RLW_BAD_COUNTS, f"{num_links} links")
-
-    expected_size = (
-        contract.RUNE_V3_HEADER_BYTES +
-        num_seeds * contract.RUNE_V3_SEED_BYTES +
-        num_links * contract.RUNE_V3_LINK_BYTES
-    )
+    header = _decode_rune_header(data)
+    expected_size = _rune_file_size(header)
     if len(data) != expected_size:
         kind = "truncated" if len(data) < expected_size else "trailing bytes"
         raise _wire_error(
             contract.RLW_BAD_FILE_SIZE,
             f"{kind}: got {len(data)}, expected {expected_size}",
         )
-    map_name = _decode_map_name(raw_map_name)
-    if action_contract_crc32 != contract.CONTRACT_CRC32:
-        raise _wire_error(
-            contract.RLW_BAD_ACTION_CONTRACT,
-            f"stored=0x{action_contract_crc32:08x}, "
-            f"expected=0x{contract.CONTRACT_CRC32:08x}",
-        )
-    identity = _normalize_identity(
-        RuneIdentityV3(
-            map_name=map_name,
-            bsp_checksum=bsp_checksum,
-            entity_crc32=entity_crc32,
-            gravity=gravity,
-            airaccelerate=airaccelerate,
-            maxvelocity=maxvelocity,
-            host_physics_id=host_physics_id,
-            physics_flags=physics_flags,
-            pmove_substep_ms=pmove_substep_ms,
-            server_frame_ms=server_frame_ms,
-        )
-    )
-    payload = data[contract.RUNE_V3_HEADER_BYTES:]
-    computed_payload_crc32 = _crc32(payload)
-    if payload_crc32 != computed_payload_crc32:
+    payload = data[RUNE_HEADER_BYTES:]
+    computed_payload_crc = _crc32(payload)
+    if header.payload_crc32 != computed_payload_crc:
         raise _wire_error(
             contract.RLW_BAD_PAYLOAD_CRC,
-            f"stored=0x{payload_crc32:08x}, "
-            f"computed=0x{computed_payload_crc32:08x}",
+            f"stored=0x{header.payload_crc32:08x}, "
+            f"computed=0x{computed_payload_crc:08x}",
         )
 
+    offset = RUNE_HEADER_BYTES
     seeds = []
-    offset = contract.RUNE_V3_HEADER_BYTES
-    for _ in range(num_seeds):
-        x, y, z, area_hint, flags = SEED_STRUCT.unpack_from(data, offset)
-        seeds.append(RuneSeedV3((x, y, z), area_hint, flags))
-        offset += contract.RUNE_V3_SEED_BYTES
+    for _ in range(header.num_seeds):
+        values = SEED_STRUCT.unpack_from(data, offset)
+        seeds.append(RuneSeed((values[0], values[1], values[2]), values[3], values[4]))
+        offset += RUNE_SEED_BYTES
 
     links = []
-    raw_links = []
-    for _ in range(num_links):
-        raw = data[offset:offset + contract.RUNE_V3_LINK_BYTES]
-        values = LINK_STRUCT.unpack(raw)
-        links.append(
-            RuneLinkV3(
-                source=values[0],
-                destination=values[1],
-                action=values[2],
-                provenance=values[3],
-                min_speed=values[4],
-                heading=values[5],
-                heading_slack=values[6],
-                exit_speed=values[7],
-                cost_ms=values[8],
-                suffix_anchor=(values[9], values[10], values[11]),
-                mechanism_anchor=(values[12], values[13], values[14]),
-                sweep_clear_ms=values[15],
-                mode=values[16],
-                reserved=values[17],
-            )
+    raw_prefix_links = []
+    for index in range(header.num_links):
+        raw = data[offset:offset + RUNE_LINK_BYTES]
+        link = _decode_rune_link(raw, index)
+        links.append(link)
+        projected = bytearray(raw[:RUNE_POLICY_LINK_BYTES])
+        projected_action = contract.action_mechanism_link_policy_action(
+            link.action
         )
-        raw_links.append(raw)
-        offset += contract.RUNE_V3_LINK_BYTES
+        if projected_action is None:
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has no current link-policy projection",
+            )
+        projected[8] = projected_action
+        raw_prefix_links.append(bytes(projected))
+        offset += RUNE_LINK_BYTES
+
+    nodes = []
+    for index in range(header.num_activation_nodes):
+        raw = data[offset:offset + RUNE_ACTIVATION_NODE_BYTES]
+        nodes.append(_decode_rune_node(raw, index))
+        offset += RUNE_ACTIVATION_NODE_BYTES
+
+    edges = []
+    raw_edges = []
+    for index in range(header.num_activation_edges):
+        raw = data[offset:offset + RUNE_ACTIVATION_EDGE_BYTES]
+        edges.append(_decode_rune_edge(raw, index))
+        raw_edges.append(raw)
+        offset += RUNE_ACTIVATION_EDGE_BYTES
+
+    plans = []
+    for index in range(header.num_activation_plans):
+        raw = data[offset:offset + RUNE_ACTIVATION_PLAN_BYTES]
+        plans.append(_decode_rune_plan(raw, index))
+        offset += RUNE_ACTIVATION_PLAN_BYTES
+
+    strings = data[offset:offset + header.string_bytes]
+    offset += header.string_bytes
+    if offset != len(data):
+        raise AssertionError("validated current section arithmetic drift")
+
     seeds_tuple = tuple(seeds)
     links_tuple = tuple(links)
-    _validate_graph(seeds_tuple, links_tuple, tuple(raw_links))
-    if expected_identity is not None:
-        _verify_expected_identity(identity, expected_identity)
-
-    header = RuneHeaderV3(
-        magic=magic,
-        version=version,
-        header_bytes=header_bytes,
-        seed_bytes=seed_bytes,
-        link_bytes=link_bytes,
-        num_seeds=num_seeds,
-        num_links=num_links,
-        payload_crc32=payload_crc32,
-        bsp_checksum=bsp_checksum,
-        entity_crc32=entity_crc32,
-        action_contract_crc32=action_contract_crc32,
-        physics_flags=physics_flags,
-        gravity=gravity,
-        airaccelerate=airaccelerate,
-        maxvelocity=maxvelocity,
-        pmove_substep_ms=pmove_substep_ms,
-        server_frame_ms=server_frame_ms,
-        host_physics_id=host_physics_id,
-        header_crc32=header_crc32,
-        map_name=map_name,
+    nodes_tuple = tuple(nodes)
+    edges_tuple = tuple(edges)
+    plans_tuple = tuple(plans)
+    projected_links = tuple(_rune_project_link(link) for link in links_tuple)
+    _validate_graph(
+        seeds_tuple,
+        projected_links,
+        tuple(raw_prefix_links),
     )
-    return RuneV3(header, seeds_tuple, links_tuple, payload)
+    _rune_validate_seed_lattice(seeds_tuple)
+    _rune_validate_strings(nodes_tuple, strings)
+    for index, node in enumerate(nodes_tuple):
+        if (
+            node.flags & RUNE_NODEF_FRAME_COMPLETE_MOVER and
+            not _rune_frame_complete_button_valid(node, strings)
+        ):
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_NODE,
+                f"node {index} has invalid frame-complete button semantics",
+            )
+    _rune_validate_mechanisms(
+        header,
+        links_tuple,
+        nodes_tuple,
+        edges_tuple,
+        tuple(raw_edges),
+        plans_tuple,
+        strings,
+    )
+    if expected_identity is not None:
+        _verify_expected_identity(header.identity, expected_identity)
+    return RuneArtifact(
+        header=header,
+        seeds=seeds_tuple,
+        links=links_tuple,
+        activation_nodes=nodes_tuple,
+        activation_edges=edges_tuple,
+        activation_plans=plans_tuple,
+        strings=strings,
+        payload=payload,
+    )
 
 
-MAX_V3_FILE_BYTES = (
-    contract.RUNE_V3_HEADER_BYTES +
-    contract.RUNE_V3_MAX_SEEDS * contract.RUNE_V3_SEED_BYTES +
-    contract.RUNE_V3_MAX_LINKS * contract.RUNE_V3_LINK_BYTES
+MAX_RUNE_FILE_BYTES = (
+    RUNE_HEADER_BYTES +
+    MAX_SEEDS * RUNE_SEED_BYTES +
+    MAX_LINKS * RUNE_LINK_BYTES +
+    RUNE_MAX_ACTIVATION_NODES * RUNE_ACTIVATION_NODE_BYTES +
+    RUNE_MAX_ACTIVATION_EDGES * RUNE_ACTIVATION_EDGE_BYTES +
+    RUNE_MAX_ACTIVATION_PLANS * RUNE_ACTIVATION_PLAN_BYTES +
+    RUNE_MAX_STRING_BYTES
 )
 
-
-def looks_like_v3_prefix(data: bytes | bytearray | memoryview) -> bool:
-    """Recognize a v3-family prefix before any legacy-layout interpretation.
-
-    The legacy layout stores its version as a 32-bit integer, so the first six
-    bytes of a legacy ``version == 3`` file are indistinguishable from v3's
-    magic plus 16-bit version.  Require either v3's exact header size, or its
-    exact link size.  The latter cannot be an accepted legacy count: byte 44
-    occupies the high half of legacy ``num_seeds`` and therefore implies at
-    least 2,883,584 seeds, beyond the frozen 32,768 cap.
-    Those independent fixed
-    fields keep one-field-corrupt v3 files on the strict v3 diagnostic path
-    without stealing legacy forensic files from the legacy readers.
-    """
-
-    if not isinstance(data, (bytes, bytearray, memoryview)):
-        return False
-    prefix = bytes(data)
-    if (len(prefix) >= 8 and
-            struct.unpack_from("<H", prefix, 6)[0] ==
-            contract.RUNE_V3_HEADER_BYTES):
-        return True
-    return (
-        len(prefix) >= 12 and
-        struct.unpack_from("<H", prefix, 10)[0] ==
-        contract.RUNE_V3_LINK_BYTES
-    )
-
-
-def read_v3(
+def _read_rune_artifact(
     path: str | os.PathLike[str],
     *,
-    expected_identity: RuneIdentityV3 | None = None,
-) -> RuneV3:
-    """Read one bounded v3 file and apply :func:`decode_v3`."""
+    expected_identity: RuneIdentity | None = None,
+) -> RuneArtifact:
+    """Read, authenticate, and structurally lint one bounded current artifact."""
 
     try:
         with open(path, "rb") as stream:
             size = os.fstat(stream.fileno()).st_size
-            if size > MAX_V3_FILE_BYTES:
+            if size > MAX_RUNE_FILE_BYTES:
                 raise _wire_error(
                     contract.RLW_BAD_FILE_SIZE,
-                    f"{size} bytes exceeds {MAX_V3_FILE_BYTES}",
+                    f"{size} bytes exceeds {MAX_RUNE_FILE_BYTES}",
                 )
-            data = stream.read(MAX_V3_FILE_BYTES + 1)
+            data = stream.read(MAX_RUNE_FILE_BYTES + 1)
     except RuneWireError:
         raise
     except (OSError, TypeError, ValueError) as exc:
         raise _wire_error(contract.RLW_IO_ERROR, str(exc)) from exc
-    return decode_v3(data, expected_identity=expected_identity)
+    return _decode_rune_artifact(data, expected_identity=expected_identity)
+
+
+def decode_rune(
+    data: bytes | bytearray | memoryview,
+    *,
+    expected_identity: RuneIdentity | None = None,
+) -> RuneArtifact:
+    """Decode the current production RUNE artifact."""
+
+    return _decode_rune_artifact(data, expected_identity=expected_identity)
+
+
+def read_rune(
+    path: str | os.PathLike[str],
+    *,
+    expected_identity: RuneIdentity | None = None,
+) -> RuneArtifact:
+    """Read the current production RUNE artifact."""
+
+    return _read_rune_artifact(path, expected_identity=expected_identity)
+
+
+# Production spellings resolve to the one RUNE layout.
+decode = decode_rune
+read = read_rune
+load = read_rune
+
+
+def summarize_rune(rune: RuneArtifact) -> dict[str, object]:
+    """Return stable artifact counts suitable for JSON reporting."""
+
+    if not isinstance(rune, RuneArtifact):
+        raise TypeError("rune must be the current RuneArtifact")
+    kind_counts = {
+        name: sum(node.kind == kind for node in rune.activation_nodes)
+        for kind, name in RUNE_NODE_KIND_NAMES.items()
+        if kind != RUNE_NODE_NONE and
+        any(node.kind == kind for node in rune.activation_nodes)
+    }
+    return {
+        "map_name": rune.header.map_name,
+        "seed_count": len(rune.seeds),
+        "link_count": len(rune.links),
+        "trigger_count": rune.trigger_count,
+        "node_count": len(rune.activation_nodes),
+        "inventory_edge_count": rune.header.num_inventory_edges,
+        "plan_edge_count": rune.header.num_plan_edges,
+        "edge_count": len(rune.activation_edges),
+        "plan_count": len(rune.activation_plans),
+        "node_kinds": kind_counts,
+        "payload_crc32": f"{rune.header.payload_crc32:08x}",
+        "mechanism_contract_crc32": (
+            f"{rune.header.mechanism_contract_crc32:08x}"
+        ),
+    }
+
+
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Authenticate and inspect a RUNE artifact."
+    )
+    parser.add_argument(
+        "--require-mechanisms",
+        action="store_true",
+        help="also require nonzero trigger, node, inventory-edge, and plan counts",
+    )
+    parser.add_argument("artifact", help="path to the generated .rune file")
+    args = parser.parse_args(argv)
+    try:
+        summary = summarize_rune(read_rune(args.artifact))
+    except RuneWireError as exc:
+        parser.error(str(exc))
+    if args.require_mechanisms and any(
+        summary[key] == 0
+        for key in (
+            "trigger_count", "node_count", "inventory_edge_count", "plan_count"
+        )
+    ):
+        parser.error(
+            "artifact lacks the required nonzero "
+            "trigger/node/inventory-edge/plan counts"
+        )
+    print(json.dumps(summary, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

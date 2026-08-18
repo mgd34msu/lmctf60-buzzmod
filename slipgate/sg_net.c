@@ -4,7 +4,7 @@
  * Quake II hands the game library a table of engine function pointers at load
  * time and the mod parks it in the global `gi`. SG_NetInstall runs once, on
  * the statement right after that store, takes a private verbatim copy of the
- * table, and then overwrites nineteen of the slots in `gi` with the
+ * table, and then overwrites twenty of the slots in `gi` with the
  * functions below. Every one of them ends up calling through the private
  * copy. From that point on the entire mod -- not just bot code -- issues its
  * console prints, its network writes, its sounds and its console-argument
@@ -31,22 +31,24 @@
  * one away" expressible. Read this buffer as a cancellation point, not as a
  * re-implementation of the engine's writers.
  *
- * THE TWO SOUND SLOTS ARE WRAPPED, BUT NOT FILTERED. sound and
- * positioned_sound forward to the engine first and verbatim, and only then
- * tell SG_NoteSound (sg_caco.c) that a noise happened. They are NOT
- * per-recipient calls -- both resolve through the engine's own client list,
- * which contains no bots -- so there is nothing here to suppress, and
- * filtering them would only break audio for real players. The wrapper exists
- * to give bots an ear on real sounds instead of on server-private player
- * state; see the commentary over SG_NoteSound.
+ * THE SOUND SLOTS. positioned_sound remains a verbatim tap. sound remains a
+ * verbatim tap for humans and every non-sexed sound. One server/client seam
+ * needs more information: an engine-less SG bot can be audible through the
+ * PHS before it has appeared in a spectator's PVS. A wildcard player sound
+ * then asks the client to resolve a missing entity snapshot and spatializes
+ * at a stale origin. soundindex is wrapped solely to precache and remember
+ * the invariant male counterpart of the 17 stock wildcard player sounds.
+ * SG_sound translates that exact bot-only case into ONE positioned_sound with
+ * the same entity/channel and the bot's explicit origin. It never duplicates
+ * or unicasts a sound, and SG_NoteSound sees exactly what went on the wire.
  *
  * WHAT IS DELIBERATELY NOT WRAPPED. dprintf, configstring, error, trace,
  * pointcontents, inPVS, inPHS, SetAreaPortalState, AreasConnected,
  * linkentity, unlinkentity, BoxEdicts, Pmove, TagMalloc, TagFree, FreeTags,
  * cvar, cvar_set, cvar_forceset, AddCommandString, DebugGraph, modelindex,
- * soundindex, imageindex and setmodel all stay the engine's own.
+ * imageindex and setmodel all stay the engine's own.
  *
- * The four index/setmodel slots used to be wrapped so a deleted third-party
+ * modelindex/imageindex/setmodel used to be wrapped so a deleted third-party
  * bot library could keep a name for every registered asset. Those arrays had
  * no reader left, they were allocated under TAG_LEVEL and never cleared when
  * the tag was freed, and the one surviving external call read the dangling
@@ -64,6 +66,83 @@ void ClientCommand(edict_t *ent);
 
 static game_import_t	sg_engine;      /* byte-for-byte as the engine gave it */
 static qboolean		sg_installed;
+
+/* -------------------------------------------------- bot voice translation */
+
+typedef struct
+{
+	char	*wildcard;
+	char	*male;
+	int	wildcard_index;
+	int	male_index;
+} sg_bot_voice_t;
+
+/*
+ * The complete stock wildcard set registered by worldspawn. SG bots all use
+ * the invariant male voice contract, so resolving these names on the server
+ * does not guess at a human client's skin. These use the ordinary sound-root
+ * path so both Yamagi's download scan and sound loader resolve the same stock
+ * asset without attempting a bogus `sound/#players/...` download.
+ */
+static sg_bot_voice_t sg_bot_voice[] =
+{
+	{ "*death1.wav",    "player/male/death1.wav",    0, 0 },
+	{ "*death2.wav",    "player/male/death2.wav",    0, 0 },
+	{ "*death3.wav",    "player/male/death3.wav",    0, 0 },
+	{ "*death4.wav",    "player/male/death4.wav",    0, 0 },
+	{ "*fall1.wav",     "player/male/fall1.wav",     0, 0 },
+	{ "*fall2.wav",     "player/male/fall2.wav",     0, 0 },
+	{ "*gurp1.wav",     "player/male/gurp1.wav",     0, 0 },
+	{ "*gurp2.wav",     "player/male/gurp2.wav",     0, 0 },
+	{ "*jump1.wav",     "player/male/jump1.wav",     0, 0 },
+	{ "*pain25_1.wav",  "player/male/pain25_1.wav",  0, 0 },
+	{ "*pain25_2.wav",  "player/male/pain25_2.wav",  0, 0 },
+	{ "*pain50_1.wav",  "player/male/pain50_1.wav",  0, 0 },
+	{ "*pain50_2.wav",  "player/male/pain50_2.wav",  0, 0 },
+	{ "*pain75_1.wav",  "player/male/pain75_1.wav",  0, 0 },
+	{ "*pain75_2.wav",  "player/male/pain75_2.wav",  0, 0 },
+	{ "*pain100_1.wav", "player/male/pain100_1.wav", 0, 0 },
+	{ "*pain100_2.wav", "player/male/pain100_2.wav", 0, 0 }
+};
+
+#define SG_BOT_VOICE_COUNT \
+	((int)(sizeof(sg_bot_voice) / sizeof(sg_bot_voice[0])))
+
+static int SG_soundindex(char *name)
+{
+	int index, i;
+
+	index = sg_engine.soundindex(name);
+	if (!name)
+		return index;
+
+	for (i = 0; i < SG_BOT_VOICE_COUNT; i++)
+	{
+		if (strcmp(name, sg_bot_voice[i].wildcard))
+			continue;
+
+		sg_bot_voice[i].wildcard_index = index;
+		/* A full table must not turn a valid wildcard into index zero. */
+		sg_bot_voice[i].male_index = sg_engine.soundindex(sg_bot_voice[i].male);
+		return index;
+	}
+
+	return index;
+}
+
+static int SG_BotConcreteVoice(int soundindex)
+{
+	int i;
+
+	if (soundindex <= 0)
+		return 0;
+	for (i = 0; i < SG_BOT_VOICE_COUNT; i++)
+	{
+		if (sg_bot_voice[i].wildcard_index == soundindex)
+			return sg_bot_voice[i].male_index;
+	}
+	return 0;
+}
 
 /*
  * The one question every suppression asks. NULL is legal and means "the
@@ -803,10 +882,11 @@ void SG_BotClientCommand(int clientIndex, char *arg0, ...)
 
 /* --------------------------------------------------------------- sounds
  *
- * These two are pure taps and must stay that way. The engine is handed the
- * call FIRST and verbatim -- same arguments, same order, same everything --
- * so nothing about what a human client hears changes by a byte. Only after
- * the sound is really on its way does the ear get told it happened.
+ * Human and non-wildcard bot calls remain pure taps: the engine gets the
+ * original call first and SG_NoteSound observes it afterward. The one mapped
+ * SG-bot voice case is emitted once through positioned_sound, retaining the
+ * emitter and channel while adding the explicit origin required by a PHS-only
+ * spectator. It is an alternative wire representation, never a second call.
  *
  * They are wrapped for one reason: a sound is the only honest evidence a bot
  * has that something is going on where it cannot see. Reading a player's
@@ -817,6 +897,19 @@ void SG_BotClientCommand(int clientIndex, char *arg0, ...)
 static void SG_sound(edict_t *ent, int channel, int soundindex, float volume,
                      float attenuation, float timeofs)
 {
+	int concrete;
+
+	concrete = (ent && (ent->flags & FL_BOT))
+	           ? SG_BotConcreteVoice(soundindex) : 0;
+	if (concrete > 0)
+	{
+		sg_engine.positioned_sound(ent->s.origin, ent, channel, concrete,
+		                           volume, attenuation, timeofs);
+		SG_NoteSound(ent, ent->s.origin, channel, concrete, volume,
+		             attenuation);
+		return;
+	}
+
 	sg_engine.sound(ent, channel, soundindex, volume, attenuation, timeofs);
 	SG_NoteSound(ent, NULL, channel, soundindex, volume, attenuation);
 }
@@ -907,7 +1000,14 @@ void SG_FreeClientEdict(edict_t *ent)
  */
 void SG_NetNewLevel(void)
 {
+	int i;
+
 	sg_char_said = sg_byte_said = sg_short_said = 0;
+	for (i = 0; i < SG_BOT_VOICE_COUNT; i++)
+	{
+		sg_bot_voice[i].wildcard_index = 0;
+		sg_bot_voice[i].male_index = 0;
+	}
 
 	/*
 	 * SpawnEntities calls this BEFORE it clears `level`, so level.framenum
@@ -954,6 +1054,7 @@ void SG_NetInstall(void)
 
 	gi.sound            = SG_sound;
 	gi.positioned_sound = SG_positioned_sound;
+	gi.soundindex       = SG_soundindex;
 
 	gi.multicast     = SG_multicast;
 	gi.unicast       = SG_unicast;
