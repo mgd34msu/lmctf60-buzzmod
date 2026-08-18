@@ -4,9 +4,11 @@
 #
 # For each map named on the command line: launch a dedicated q2ded server on
 # a unique port, let it boot, issue the console command "sv rune" (which
-# generates the rune for whatever map is CURRENTLY loaded). The server boots
-# in a temporary, portable game-directory mirror, so Rune_Generate writes to
-# staging rather than over the deployed graph. runelint then validates the
+# synchronously generates the rune for whatever map is CURRENTLY loaded), then
+# issue "sv sg add red" to load that fresh artifact through SG_LevelSetup and
+# prove its runtime-ready path. The server boots in a temporary, portable
+# game-directory mirror, so Rune_Generate writes to staging rather than over
+# the deployed graph. runelint then validates the
 # exact layout and both flag-objective reverse components. Only
 # a clean graph is backed up and atomically renamed into the live maps/ tree.
 # Generation, lint, backup, or install failure leaves the old rune untouched.
@@ -420,6 +422,7 @@ run_one() {
     t0=$(date +%s)
 
     ( sleep "$STARTUP_SLEEP"; echo "maxclients"; echo "sv rune"; \
+        echo "sv sg add red"; \
         sleep "$GEN_BUDGET"; echo "quit" ) | \
         ( cd "$GAMEDIR_ROOT" && exec stdbuf -oL timeout "$TIMEOUT_SECS" "$Q2DED_REAL" \
               -portable +set game "$stage_game" +set dedicated 1 \
@@ -764,10 +767,11 @@ for map in "${MAPS[@]}"; do
 
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "[dry-run] map=$map port=$port maxclients=$MAXCLIENTS timeout=${TIMEOUT_SECS}s log=$logfile"
-        echo "[dry-run]   ( sleep $STARTUP_SLEEP; echo \"maxclients\"; echo \"sv rune\"; sleep $GEN_BUDGET; echo \"quit\" ) |" \
+        echo "[dry-run]   ( sleep $STARTUP_SLEEP; echo \"maxclients\"; echo \"sv rune\"; echo \"sv sg add red\"; sleep $GEN_BUDGET; echo \"quit\" ) |" \
              "( cd \"$GAMEDIR_ROOT\" && stdbuf -oL timeout $TIMEOUT_SECS \"$Q2DED\"" \
              "-portable +set game <temporary-stage> +set dedicated 1 +set maxclients $MAXCLIENTS +set port $port +exec $CFG +set maxclients $MAXCLIENTS +map $map ) > \"$logfile\" 2>&1"
         echo "[dry-run]   require the running server to report exact authoritative maxclients=$MAXCLIENTS before generation"
+        echo "[dry-run]   require explicit post-generation SG bot admission via 'sv sg add red' to trigger runtime artifact setup"
         echo "[dry-run]   parse authoritative red/blue roots from the server log"
         echo "[dry-run]   require write and ready banners: seeds, links, mechanism nodes, triggers, inventory edges, activation plans"
         echo "[dry-run]   require the selected C artifact acceptor's explicit build target to be current before generation and again immediately before artifact decoding"

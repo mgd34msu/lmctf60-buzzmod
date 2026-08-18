@@ -21,7 +21,12 @@ MAP = "gatecase"
 
 class RunegenRuneGateTest(unittest.TestCase):
     def run_scenario(
-        self, scenario: str, *, dry_run: bool = False, maxclients: str | None = None
+        self,
+        scenario: str,
+        *,
+        dry_run: bool = False,
+        maxclients: str | None = None,
+        runner_mutation: str | None = None,
     ):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -141,11 +146,6 @@ portable_root="$(cd "$(dirname "$resolved_engine")" && pwd -P)/$game"
 mkdir -p "$portable_root/save" "$portable_root/scrnshot"
 printf 'portable qconsole\\n' > "$portable_root/qconsole.log"
 printf 'fresh-artifact\\n' > "$artifact"
-if [ "${RUNEGEN_FAKE_SCENARIO:-match}" = "linger" ]; then
-    printf 'ready\\n' > "$RUNEGEN_READY_FILE"
-    sleep 30
-    exit 0
-fi
 if [ "${RUNEGEN_FAKE_SCENARIO:-match}" = "prewrite-only" ]; then
     echo "slipgate: rune ready $mapname, 7 seeds, 9 links, 4 mechanism nodes, 5 plans, gravity 800, all fields up"
 fi
@@ -177,6 +177,12 @@ fi
 if [ "${RUNEGEN_FAKE_SCENARIO:-match}" = "duplicate-write" ]; then
     echo "rune: wrote $game/maps/$mapname.rune (7 seeds, 9 links, 4 mechanism nodes, 2 triggers, 3 inventory edges, 5 activation plans)"
 fi
+IFS= read -r sg_add_command || exit 94
+if [ "$sg_add_command" != "sv sg add red" ]; then
+    echo "expected sv sg add red after sv rune completed, got: $sg_add_command" >&2
+    exit 94
+fi
+fake_exit_status=0
 case "${RUNEGEN_FAKE_SCENARIO:-match}" in
     match|retarget-engine|acceptor-stales-during-server|duplicate-write|equal-roots|out-of-range-roots|duplicate-roots|postwrite-roots|artifact-count-mismatch|decoder-mismatch|accept-failed|inspect-failed|lint-failed|missing-maxclients-report|wrong-maxclients-report)
         echo "slipgate: rune ready $mapname, 7 seeds, 9 links, 4 mechanism nodes, 5 plans, gravity 800, all fields up"
@@ -208,16 +214,19 @@ case "${RUNEGEN_FAKE_SCENARIO:-match}" in
         echo "rune: cleanup restored pending door scope; graph remains unwritten"
         echo "slipgate: rune ready $mapname, 7 seeds, 9 links, 4 mechanism nodes, 5 plans, gravity 800, all fields up"
         ;;
+    linger)
+        printf 'ready\\n' > "$RUNEGEN_READY_FILE"
+        ;;
     zero-mechanisms)
         echo "slipgate: rune ready $mapname, 7 seeds, 9 links, 0 mechanism nodes, 0 plans, gravity 800, all fields up"
         ;;
     crash)
         echo "slipgate: rune ready $mapname, 7 seeds, 9 links, 4 mechanism nodes, 5 plans, gravity 800, all fields up"
-        exit 91
+        fake_exit_status=91
         ;;
     timeout)
         echo "slipgate: rune ready $mapname, 7 seeds, 9 links, 4 mechanism nodes, 5 plans, gravity 800, all fields up"
-        exit 124
+        fake_exit_status=124
         ;;
     missing|prewrite-only)
         ;;
@@ -228,6 +237,19 @@ esac
 if [ "${RUNEGEN_FAKE_SCENARIO:-match}" = "acceptor-stales-during-server" ]; then
     touch -d '2038-01-01 00:00:00 UTC' "$RUNEGEN_ACCEPTOR_SOURCE"
 fi
+IFS= read -r quit_command || exit 94
+if [ "$quit_command" != "quit" ]; then
+    echo "expected quit after sv sg add red, got: $quit_command" >&2
+    exit 94
+fi
+if IFS= read -r extra_command; then
+    echo "unexpected command after quit: $extra_command" >&2
+    exit 94
+fi
+if [ "${RUNEGEN_FAKE_SCENARIO:-match}" = "linger" ]; then
+    sleep 30
+fi
+exit "$fake_exit_status"
 """,
                 encoding="utf-8",
             )
@@ -373,7 +395,61 @@ printf '{"edge_count":%s,"inventory_edge_count":%s,"link_count":9,"map_name":"ga
             if maxclients is not None:
                 environment["MAXCLIENTS"] = maxclients
                 environment["RUNEGEN_EXPECT_MAXCLIENTS"] = maxclients
-            arguments = [str(RUNNER)]
+
+            runner = RUNNER
+            if runner_mutation is not None:
+                canonical_producer = (
+                    '    ( sleep "$STARTUP_SLEEP"; echo "maxclients"; '
+                    'echo "sv rune"; \\\n'
+                    '        echo "sv sg add red"; \\\n'
+                    '        sleep "$GEN_BUDGET"; echo "quit" ) | \\\n'
+                )
+                mutated_producers = {
+                    "missing": (
+                        '    ( sleep "$STARTUP_SLEEP"; echo "maxclients"; '
+                        'echo "sv rune"; \\\n'
+                        '        sleep "$GEN_BUDGET"; echo "quit" ) | \\\n'
+                    ),
+                    "pre-rune": (
+                        '    ( sleep "$STARTUP_SLEEP"; echo "maxclients"; '
+                        'echo "sv sg add red"; echo "sv rune"; \\\n'
+                        '        sleep "$GEN_BUDGET"; echo "quit" ) | \\\n'
+                    ),
+                    "wrong": (
+                        '    ( sleep "$STARTUP_SLEEP"; echo "maxclients"; '
+                        'echo "sv rune"; \\\n'
+                        '        echo "sv sg list"; \\\n'
+                        '        sleep "$GEN_BUDGET"; echo "quit" ) | \\\n'
+                    ),
+                    "duplicate": (
+                        '    ( sleep "$STARTUP_SLEEP"; echo "maxclients"; '
+                        'echo "sv rune"; \\\n'
+                        '        echo "sv sg add red"; echo "sv sg add red"; \\\n'
+                        '        sleep "$GEN_BUDGET"; echo "quit" ) | \\\n'
+                    ),
+                    "extra": (
+                        '    ( sleep "$STARTUP_SLEEP"; echo "maxclients"; '
+                        'echo "sv rune"; \\\n'
+                        '        echo "sv sg add red"; \\\n'
+                        '        sleep "$GEN_BUDGET"; echo "quit"; '
+                        'echo "sv sg list" ) | \\\n'
+                    ),
+                }
+                self.assertIn(runner_mutation, mutated_producers)
+                runner_source = RUNNER.read_text(encoding="utf-8")
+                self.assertEqual(1, runner_source.count(canonical_producer))
+                runner_source = runner_source.replace(
+                    canonical_producer, mutated_producers[runner_mutation]
+                )
+                mutated_tools = work / "mutated-project/tools"
+                mutated_tools.mkdir(parents=True)
+                runner = mutated_tools / "runegen.sh"
+                runner.write_text(runner_source, encoding="utf-8")
+                runner.chmod(0o755)
+                for tool in ("runelint.py", "runeio.py"):
+                    (mutated_tools / tool).symlink_to(ROOT / "tools" / tool)
+
+            arguments = [str(runner)]
             if dry_run:
                 arguments.append("--dry-run")
             arguments.append(MAP)
@@ -439,6 +515,22 @@ printf '{"edge_count":%s,"inventory_edge_count":%s,"link_count":9,"map_name":"ga
         self.assertEqual([], stages)
         self.assertTrue(logs)
         self.assertIn("rune: installed", completed.stdout)
+
+    def test_fake_engine_rejects_invalid_sg_add_command_sequences(self):
+        for mutation in ("missing", "pre-rune", "wrong", "duplicate", "extra"):
+            with self.subTest(mutation=mutation):
+                completed, deployed, stages, logs = self.run_scenario(
+                    "match", runner_mutation=mutation
+                )
+                self.assertEqual(
+                    1, completed.returncode, completed.stdout + completed.stderr
+                )
+                self.assertEqual(b"deployed-old", deployed)
+                self.assertEqual([], stages)
+                self.assertTrue(logs)
+                self.assertIn(
+                    "server process exited nonzero status=94", completed.stdout
+                )
 
     def test_maxclients_is_explicit_and_overrideable(self):
         completed, deployed, stages, logs = self.run_scenario(
@@ -668,6 +760,11 @@ printf '{"edge_count":%s,"inventory_edge_count":%s,"link_count":9,"map_name":"ga
         self.assertIn("require exactly one write banner", completed.stdout)
         self.assertIn("distinct in-range roots", completed.stdout)
         self.assertIn("clean server exit", completed.stdout)
+        self.assertIn('echo "sv sg add red"', completed.stdout)
+        self.assertIn(
+            "explicit post-generation SG bot admission via 'sv sg add red'",
+            completed.stdout,
+        )
         self.assertIn(
             "acceptor's explicit build target to be current before generation "
             "and again immediately before artifact decoding",
@@ -693,7 +790,12 @@ printf '{"edge_count":%s,"inventory_edge_count":%s,"link_count":9,"map_name":"ga
             '              +map "$map"'
         )
         self.assertIn(authoritative, source)
-        self.assertIn('echo "maxclients"; echo "sv rune"', source)
+        command_sequence = (
+            'echo "maxclients"; echo "sv rune"; \\\n'
+            '        echo "sv sg add red"; \\\n'
+            '        sleep "$GEN_BUDGET"'
+        )
+        self.assertIn(command_sequence, source)
         self.assertIn("running server did not confirm authoritative maxclients", source)
         self.assertIn(
             'python3 "$RUNE_LINT" --objective-roots "$red_root" "$blue_root"',
