@@ -366,6 +366,30 @@ static void TestImmediateReleaseAndSoloNeverWaits(void)
 	CHECK(!SG_StrikeMemberShouldHold(&team, 0));
 }
 
+static void TestLeaderNeverWaitsForUnreachableFormation(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(330.0f);
+
+	AddAttacker(&frame, 0, 42u, 2, 1000);
+	AddAttacker(&frame, 1, 43u, 2, 8000);
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_GO);
+	CHECK(team.hold_mask == 0u);
+	CHECK(team.rush_mask == team.member_mask);
+
+	/* At the exact reachable boundary the partner can still close to the
+	 * synchronization band before the three-second cap, so formation stays. */
+	frame = Frame(340.0f);
+	AddAttacker(&frame, 0, 52u, 2, 1000);
+	AddAttacker(&frame, 1, 53u, 2, 5500);
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_FORM);
+	CHECK(team.hold_mask == Bit(0));
+}
+
 static void TestOneRecovererPreservesAttack(void)
 {
 	sg_strike_team_t team;
@@ -703,6 +727,7 @@ int main(void)
 	TestMembershipCapsAtFourDeterministically();
 	TestSharedGoAndBoundedForm();
 	TestImmediateReleaseAndSoloNeverWaits();
+	TestLeaderNeverWaitsForUnreachableFormation();
 	TestOneRecovererPreservesAttack();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();

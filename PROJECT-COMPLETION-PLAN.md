@@ -172,10 +172,12 @@ Implement the remaining material deficiencies in this order:
 Every item above requires a production C change, an executable test that calls
 the changed policy or live seam, both Make dialects, and then a matched runtime
 gate. A measurement-only change cannot complete an item. Implemented controller
-slices now include the enabled quiet-defender patrol and a bounded, proved-RUN
+slices now include the enabled quiet-defender patrol, a bounded proved-RUN
 home-flag approach preference that breaks near-stand field plateaus without
-granting touch authority. Their pure policies are executable; runtime outcome
-acceptance remains pending on the persistent fleet.
+granting touch authority, and immediate strike release when no ready teammate
+can reach the synchronization window before its deadline. Their pure policies
+are executable; runtime outcome acceptance remains pending on the persistent
+fleet.
 
 ### Acceptance instrumentation and provenance
 
