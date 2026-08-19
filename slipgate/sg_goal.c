@@ -110,6 +110,59 @@ SG_GOAL_PRIVATE int Intercept_HoldSeed(int team, int fallback)
 
 #undef SG_GOAL_PRIVATE
 
+/* A rally relocation is still navigation.  It may stand on the current seed
+ * or walk one proved ordinary leg; it may not point the command directly at a
+ * merely nearby seed on the other side of a wall, drop, or mechanism. */
+#ifdef SG_GOAL_TEST
+#define SG_GOAL_PRIVATE
+#else
+#define SG_GOAL_PRIVATE static
+#endif
+
+SG_GOAL_PRIVATE int Rally_CoverSeed(const rune_t *r, int from)
+{
+	int best = -1;
+	float best_distance = 0.0f;
+	int link;
+
+	if (!r || !r->seeds || !r->links || !r->first_link || !r->next_link ||
+	    from < 0 || from >= r->hdr.num_seeds)
+		return -1;
+	if (r->seeds[from].area_hint <= 60)
+		return from;
+
+	for (link = r->first_link[from]; link >= 0; link = r->next_link[link])
+	{
+		const rune_link_t *candidate;
+		vec3_t delta;
+		float distance;
+		int to;
+
+		if (link >= r->hdr.num_links)
+			return -1;
+		candidate = &r->links[link];
+		to = candidate->to;
+		if (candidate->from != from || candidate->action != RL_RUN ||
+		    to < 0 || to >= r->hdr.num_seeds ||
+		    r->seeds[to].area_hint > 60)
+			continue;
+		VectorSubtract(r->seeds[to].origin, r->seeds[from].origin, delta);
+		distance = delta[0] * delta[0] + delta[1] * delta[1] +
+		    delta[2] * delta[2] * 4.0f;
+		if (distance >= 800.0f * 800.0f)
+			continue;
+		if (best < 0 || distance < best_distance ||
+		    (distance == best_distance && to < best))
+		{
+			best = to;
+			best_distance = distance;
+		}
+	}
+	return best;
+}
+
+#undef SG_GOAL_PRIVATE
+
 /* ----------------------------------------------------------------- the mega
  *
  * (c) THE ROLE GATE. The state half of the price lives with combat
@@ -303,42 +356,30 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		{
 			if (bot->rally_since <= 0.0f)
 			{
-				int ci2, best_cover = -1;
-				float bestd2 = 1e30f;
+				int best_cover = Rally_CoverSeed(SG_Rune(), bot->seed);
 
-				SG_Mark(&bot->rally_since);
 				/*
 				 * Seven paired pushes on lmctf09 stole
 				 * nothing: the waiter froze wherever the band caught it,
 				 * mid-corridor, lit, and the pairing died before it
 				 * formed. The rune has measured exposure since the
 				 * generator's census pass -- the wait belongs at the
-				 * darkest seed within reach.
+				 * darkest seed within reach. "Reach" here is now current
+				 * ground or one proved ordinary RUN. The former all-seed
+				 * radius search could select cover through a wall or across
+				 * a mechanism, then spend the whole synchronization window
+				 * walking into it. With no proved cover, keep attacking.
 				 */
-				for (ci2 = 0; ci2 < SG_Rune()->hdr.num_seeds; ci2++)
-				{
-					vec3_t cd;
-					float dsq;
-
-					if (SG_Rune()->seeds[ci2].area_hint > 60)
-						continue;
-					VectorSubtract(SG_Rune()->seeds[ci2].origin,
-					               e->s.origin, cd);
-					dsq = cd[0] * cd[0] + cd[1] * cd[1]
-					    + cd[2] * cd[2] * 4.0f;
-					if (dsq < bestd2 && dsq < 800.0f * 800.0f)
-					{
-						bestd2 = dsq;
-						best_cover = ci2;
-					}
-				}
 				bot->rally_cover = best_cover;
-				if (sg_cv.debug->value)
+				if (best_cover >= 0)
+					SG_Mark(&bot->rally_since);
+				if (sg_cv.debug->value && best_cover >= 0)
 					sg_host.dprint("RALLY %s waits (%d coming, cover=%d)\n",
 					           e->client->pers.netname, mates_coming,
 					           best_cover);
 			}
-			if (SG_AgeUnder(bot->rally_since, 15.0f))
+			if (bot->rally_cover >= 0 &&
+			    SG_AgeUnder(bot->rally_since, 15.0f))
 				hold = true;
 		}
 		else

@@ -15,6 +15,7 @@ void Fields_TestFloodFlat(rune_t *r, int *dist,
 	const int *sources, const int *source_cost, int num_sources);
 int Caco_BestSteps(rune_t *r, int seed, const int *field, int *out);
 int Intercept_HoldSeed(int team, int fallback);
+int Rally_CoverSeed(const rune_t *r, int from);
 
 /* Field_Flood's focused production section needs only these host-owned
  * globals.  Everything else in sg_fields.c is discarded by --gc-sections. */
@@ -413,6 +414,46 @@ static void CheckInterceptAdmission(void)
 	test_current_rune = NULL;
 }
 
+static void CheckRallyCoverAdmission(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[5];
+	rune_link_t links[4];
+	int first_link[5] = { 0, -1, -1, -1, -1 };
+	int next_link[4] = { 1, 2, 3, -1 };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	memset(links, 0, sizeof(links));
+	rune.hdr.num_seeds = 5;
+	rune.hdr.num_links = 4;
+	rune.seeds = seeds;
+	rune.links = links;
+	rune.first_link = first_link;
+	rune.next_link = next_link;
+	seeds[0].area_hint = 100;
+	seeds[1].area_hint = 20;
+	seeds[1].origin[0] = 900.0f; /* proved but outside the local cover band */
+	seeds[2].area_hint = 20;
+	seeds[2].origin[0] = 200.0f; /* a hook is not direct-walk authority */
+	seeds[3].area_hint = 20;
+	seeds[3].origin[0] = 400.0f;
+	seeds[4].area_hint = 20;
+	seeds[4].origin[0] = 40.0f;  /* nearby but has no proved edge */
+	Link(&links[0], 0, 1, RL_RUN, 100);
+	Link(&links[1], 0, 2, RL_HOOK, 100);
+	Link(&links[2], 0, 3, RL_RUN, 100);
+	Link(&links[3], 4, 0, RL_RUN, 100);
+
+	CHECK(Rally_CoverSeed(&rune, 0) == 3);
+	seeds[3].area_hint = 100;
+	CHECK(Rally_CoverSeed(&rune, 0) == -1);
+	seeds[0].area_hint = 60;
+	CHECK(Rally_CoverSeed(&rune, 0) == 0);
+	CHECK(Rally_CoverSeed(&rune, -1) == -1);
+	CHECK(Rally_CoverSeed(NULL, 0) == -1);
+}
+
 int main(void)
 {
 	rune_t rune;
@@ -456,6 +497,7 @@ int main(void)
 
 	CheckHookFieldAdmission();
 	CheckInterceptAdmission();
+	CheckRallyCoverAdmission();
 
 	if (failures)
 	{

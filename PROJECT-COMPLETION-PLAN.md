@@ -321,6 +321,11 @@ identity rather than the process-global RNG. Unrelated combat, route, patrol,
 chat, and cosmetic random calls can no longer decide whether a live carrier
 receives its assigned screen, and the escort decision cannot perturb those
 controllers in return.
+Approach synchronization now relocates a waiting attacker only onto its current
+seed or across one proved ordinary RUN edge. A nearby seed behind a wall,
+mechanism, drop, or hook can no longer take direct movement authority for the
+whole rally window; if no proved cover exists, the attacker keeps pressing the
+enemy stand instead of freezing in exposed ground.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 
