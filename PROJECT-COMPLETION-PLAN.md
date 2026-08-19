@@ -248,6 +248,10 @@ Public obituaries now contribute only victim identity and death time. Enemy-base
 surge and strike windows use the freshest still-live seed that the observing
 team had already earned for that client; an unseen death no longer publishes
 the victim's exact server origin.
+Combat target selection now gives a still-visible incumbent a 128-unit distance
+hysteresis. Two enemies crossing by a few units can no longer alternate target
+identity every frame and repeatedly restart reaction/settle, while a materially
+closer threat still wins immediately.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

@@ -104,7 +104,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         preview_end = combat.index("/*\n * Is this edict the enemy flag carrier",
                                    preview)
         preview_body = combat[preview:preview_end]
-        self.assertIn("Combat_Scan(self, eye, forward, NULL, false)", preview_body)
+        self.assertIn("Combat_Scan(self, eye, forward, NULL, -1, false)", preview_body)
         self.assertIn("SG_CombatPreviewCandidateEligible", combat)
         self.assertNotIn("sg_cbt_", preview_body)
 

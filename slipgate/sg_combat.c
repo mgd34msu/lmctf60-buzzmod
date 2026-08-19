@@ -28,6 +28,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_combat_target_policy.h"
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
 
 #include <math.h>
@@ -945,7 +946,9 @@ static void Combat_Center(edict_t *e, vec3_t out)
 
 /*
  * Pick a target: a live enemy client, inside engage range, inside the forward
- * cone, and visible. Nearest wins. Iteration follows sg_caco.c:294-300 --
+ * cone, and visible. Nearest wins outside the bounded incumbent hysteresis;
+ * a still-visible current target survives incidental distance crossings.
+ * Iteration follows sg_caco.c:294-300 --
  * g_edicts + 1 + i over game.maxclients, inuse and client checked.
  *
  * Liveness is the same pair CACO uses (sg_caco.c:213):
@@ -966,7 +969,7 @@ static void Combat_Center(edict_t *e, vec3_t out)
  * not how well it shoots.
  */
 static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
-	const float *threat, qboolean count_diagnostics)
+	const float *threat, int incumbent_index, qboolean count_diagnostics)
 {
 	edict_t	*best = NULL;
 	/*
@@ -974,8 +977,8 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 	 * a refusal to fight across the map (SG_ENGAGE_RANGE); the persona moves
 	 * it by at most 15% either way, which is the difference between a Fiend
 	 * who takes the corridor shot and a Wizard who lets it walk. Nearest
-	 * still wins inside whatever the cap turns out to be -- this bends who
-	 * is a candidate, not how one is chosen. Exactly SG_ENGAGE_RANGE when
+	 * remains the basis inside whatever the cap turns out to be -- this bends
+	 * who is a candidate, not how one is chosen. Exactly SG_ENGAGE_RANGE when
 	 * no persona applies.
 	 *
 	 * The second factor is the tilt clock (sg_arach.c, sg_tilt): for a few
@@ -986,8 +989,9 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 	 * this line changes: a fight this bot DOES take is fought with the
 	 * same aim, the same reaction and the same trigger it always had.
 	 */
-	float	bestdist = SG_ENGAGE_RANGE * SG_PersonaAggression(self) *
+	float	range_limit = SG_ENGAGE_RANGE * SG_PersonaAggression(self) *
 	                   SG_TiltCaution(self);
+	float	bestscore = range_limit;
 	int		myteam = self->client->ctf.teamnum;
 	int		i;
 
@@ -1028,7 +1032,7 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		Combat_Center(p, mid);
 		VectorSubtract(mid, eye, delta);
 		dist = VectorLength(delta);
-		if (dist < 1.0f || dist >= bestdist)
+		if (dist < 1.0f || dist >= range_limit)
 		{
 			if (count_diagnostics)
 				sg_cbt_scan[2]++;
@@ -1060,7 +1064,7 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		candidate.target_health = p->health;
 		candidate.target_noclip = p->movetype == MOVETYPE_NOCLIP;
 		candidate.distance = dist;
-		candidate.range_limit = bestdist;
+		candidate.range_limit = range_limit;
 		candidate.forward_dot = rear_cone ? SG_FOV_COS : dot;
 		candidate.visibility_known = false;
 		candidate.visible = false;
@@ -1080,8 +1084,15 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		if (count_diagnostics)
 			sg_cbt_scan[5]++;
 
-		best = p;
-		bestdist = dist;
+		{
+			float score = SG_CombatTargetScore(dist,
+			    (int)(p - g_edicts), incumbent_index);
+
+			if (score >= bestscore)
+				continue;
+			best = p;
+			bestscore = score;
+		}
 	}
 
 	return best;
@@ -1098,7 +1109,7 @@ qboolean SG_CombatWouldEngage(edict_t *self)
 	VectorCopy(self->s.origin, eye);
 	eye[2] += self->viewheight;
 	AngleVectors(self->client->v_angle, forward, NULL, NULL);
-	return Combat_Scan(self, eye, forward, NULL, false) != NULL;
+	return Combat_Scan(self, eye, forward, NULL, -1, false) != NULL;
 }
 
 /*
@@ -4191,7 +4202,8 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	                                              SG_THREAT_S4), threat);
 
 	sg_cbt_why[7]++;                        /* frames that got this far */
-	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL, true);
+	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL,
+	    st->enemy, true);
 	if (enemy)
 		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)

@@ -19,6 +19,7 @@ SOURCE = SOURCE_PATH.read_text()
 # loop, while its ray/box predicate is deliberately independent.
 PROBE = r"""
 #include "g_local.h"
+#include "slipgate/sg_combat_target_policy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -341,6 +342,21 @@ static int test_clear_shot_predicate(void)
     return 0;
 }
 
+static int test_target_identity_hysteresis(void)
+{
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 4, 4), 372.0f, 0.001f));
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 5, 4), 500.0f, 0.001f));
+    /* A 100-unit closer challenger does not churn the current target; a
+     * 129-unit closer challenger does. */
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4) <
+          SG_CombatTargetScore(400.0f, 5, 4));
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4) >
+          SG_CombatTargetScore(371.0f, 5, 4));
+    CHECK(isinf(SG_CombatTargetScore(NAN, 4, 4)));
+    CHECK(isinf(SG_CombatTargetScore(-1.0f, 4, 4)));
+    return 0;
+}
+
 int main(void)
 {
     CHECK(!test_exact_muzzle_offsets());
@@ -348,6 +364,7 @@ int main(void)
     CHECK(!test_final_physical_rays());
     CHECK(!test_chaingun_source_envelope());
     CHECK(!test_clear_shot_predicate());
+    CHECK(!test_target_identity_hysteresis());
     puts("combat aim production probe: ok");
     return 0;
 }
@@ -416,6 +433,8 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         self.assertIn("else if (self->client->pers.hand == CENTER_HANDED)",
                       SOURCE)
         self.assertIn("Combat_GrenadeImpact", frame)
+        self.assertIn("st->enemy, true", frame)
+        self.assertIn("SG_CombatTargetScore", SOURCE)
         self.assertIn("return enemy_hit;", SOURCE)
         self.assertIn("return enemy_hit || unobstructed;", SOURCE)
 
