@@ -74,6 +74,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_escort_dose.h"
+#include "slipgate/sg_role_skew_random.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
@@ -86,6 +87,7 @@ float	sg_grab_time[2] = { -1000.0f, -1000.0f };  /* per team */
 float	sg_push_until[2];   /* the conductor's window (sg_wavepush) */
 static float	sg_role_skew_until[2];
 static int	sg_role_skew[2];
+static uint32_t sg_role_skew_random[2];
 static int	sg_role_escort_carrier[2] = { -1, -1 };
 static qboolean sg_role_escort_on[2] = { true, true };
 static uint32_t sg_role_escort_epoch[2];
@@ -114,6 +116,8 @@ static void Role_LevelReset(void)
 	sg_push_until[0] = sg_push_until[1] = 0.0f;
 	sg_role_skew_until[0] = sg_role_skew_until[1] = 0.0f;
 	sg_role_skew[0] = sg_role_skew[1] = 0;
+	sg_role_skew_random[0] = SG_RoleSkewRandomInitial(0);
+	sg_role_skew_random[1] = SG_RoleSkewRandomInitial(1);
 	sg_role_escort_carrier[0] = sg_role_escort_carrier[1] = -1;
 	sg_role_escort_on[0] = sg_role_escort_on[1] = true;
 	sg_role_escort_epoch[0] = sg_role_escort_epoch[1] = 0;
@@ -1660,9 +1664,14 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 
 			if (SG_TimerReady(sg_role_skew_until[ts]))
 			{
-				sg_role_skew[ts] = (rand() % 3) - 1;
-				SG_TimerArm(&sg_role_skew_until[ts], 150.0f +
-				            (float)(rand() % 90));
+				sg_role_skew_random[ts] =
+				    SG_RoleSkewRandomNext(sg_role_skew_random[ts]);
+				sg_role_skew[ts] =
+				    SG_RoleSkewRandomValue(sg_role_skew_random[ts]);
+				sg_role_skew_random[ts] =
+				    SG_RoleSkewRandomNext(sg_role_skew_random[ts]);
+				SG_TimerArm(&sg_role_skew_until[ts],
+				    SG_RoleSkewRandomInterval(sg_role_skew_random[ts]));
 			}
 			defenders_wanted += sg_role_skew[ts];
 			if (defenders_wanted < 0)

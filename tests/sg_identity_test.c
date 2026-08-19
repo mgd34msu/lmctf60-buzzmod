@@ -15,6 +15,7 @@
 #include "slipgate/sg_persona_assignment.h"
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_role_skew_random.h"
 #include "slipgate/sg_chat.h"
 
 sg_host_t sg_host;
@@ -146,6 +147,36 @@ static void TestRibbonRandomness(void)
 	interval = SG_RibbonRandomInterval(state);
 	CHECK(interval >= 1.0f && interval < 2.0f);
 	CHECK(SG_RibbonRandomNext(state) != state);
+}
+
+static void TestRoleSkewRandomness(void)
+{
+	uint32_t red, blue, red_after, blue_after;
+	int expected_random;
+
+	srand(9173);
+	expected_random = rand();
+	srand(9173);
+	red = SG_RoleSkewRandomInitial(0);
+	blue = SG_RoleSkewRandomInitial(1);
+	CHECK(red != 0 && blue != 0 && red != blue);
+	CHECK(red == SG_RoleSkewRandomInitial(0));
+	CHECK(blue == SG_RoleSkewRandomInitial(1));
+	CHECK(rand() == expected_random);
+	red_after = SG_RoleSkewRandomNext(red);
+	blue_after = SG_RoleSkewRandomNext(blue);
+	CHECK(red_after != red && blue_after != blue);
+	CHECK(SG_RoleSkewRandomValue(red_after) >= -1);
+	CHECK(SG_RoleSkewRandomValue(red_after) <= 1);
+	CHECK(SG_RoleSkewRandomValue(blue_after) >= -1);
+	CHECK(SG_RoleSkewRandomValue(blue_after) <= 1);
+	CHECK(SG_RoleSkewRandomInterval(red_after) >= 150.0f);
+	CHECK(SG_RoleSkewRandomInterval(red_after) < 240.0f);
+	CHECK(SG_RoleSkewRandomInterval(blue_after) >= 150.0f);
+	CHECK(SG_RoleSkewRandomInterval(blue_after) < 240.0f);
+	/* Advancing red cannot consume or rewrite blue's sequence. */
+	(void)SG_RoleSkewRandomNext(red_after);
+	CHECK(SG_RoleSkewRandomNext(blue) == blue_after);
 }
 
 static void TestLeadRandomness(void)
@@ -546,6 +577,7 @@ int main(void)
 	TestChatObjectivePriority();
 	TestEscortDose();
 	TestRibbonRandomness();
+	TestRoleSkewRandomness();
 	TestLeadRandomness();
 	TestPersonaAssignment();
 	TestEscapeRandomness();

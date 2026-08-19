@@ -347,6 +347,9 @@ The strike frame now represents a live human flag carrier independently of its
 SG-only carrier slot. The stable bot roster assigns a real escort and bounded
 rearguard around that teammate without inventing a bot CARRY duty or reverting
 every available bot to enemy-stand pressure.
+Team-skew formation drift now advances one private sequence per team. Combat,
+chat, route variation, and the opposing team's role evaluation can no longer
+change this team's defender count or the time of its next formation change.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside

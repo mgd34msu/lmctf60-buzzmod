@@ -124,6 +124,20 @@ def armed_target_origin(
 
 
 class OffenseFlagPickupRecoveryTest(unittest.TestCase):
+
+    def test_team_formation_drift_uses_private_independent_sequences(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        skew = between(arach, "TEAM SKEW (sg_teamskew)",
+                       "role-flap diagnostic")
+        self.assertIn("SG_RoleSkewRandomNext(sg_role_skew_random[ts])", skew)
+        self.assertIn("SG_RoleSkewRandomValue(sg_role_skew_random[ts])", skew)
+        self.assertIn("SG_RoleSkewRandomInterval(sg_role_skew_random[ts])", skew)
+        self.assertNotIn("rand()", skew)
+        reset = between(arach, "static void Role_LevelReset(void)",
+                        "rune_t *SG_Rune(void)")
+        self.assertIn("SG_RoleSkewRandomInitial(0)", reset)
+        self.assertIn("SG_RoleSkewRandomInitial(1)", reset)
+
     def test_carrier_belief_aging_revalidates_team_and_exact_flag(self) -> None:
         caco = source("slipgate/sg_caco.c")
         aging = between(caco, "static void Caco_Age", "projection")
