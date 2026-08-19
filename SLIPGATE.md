@@ -32,7 +32,7 @@ in `LEDGER.md` and the git history.
   hear. Item respawn knowledge exists only if a teammate called the
   take in team chat. Rune positions are never clocked. Enemy positions
   are beliefs that age, not entity lookups.
-- **Team play**: roles (attack, defend, escort, recover, intercept)
+- **Team play**: roles (attack, defend, carry, recover, escort)
   argued per-think from shared team state, defender posting by
   sightline, coordinated pushes, and a full radio/chat layer — item
   callouts, quad timing economy ("quad 60"/"quad 30", one voice per
@@ -62,7 +62,7 @@ the matched final-build trials must close.
   discipline, full weapon doctrine from the WEAPONS.md audit.
 - *Carrier*: pause beats, human-mined escape priors, water routes, cover
   pricing, and carry movement texture.
-- *Team*: attack, defend, escort, recover, and intercept assignments;
+- *Team*: attack, defend, carry, recover, and escort assignments;
   defender posts; coordinated strike state; and shared public objective state.
 - *Comms (Rule 19)*: item callouts, radio wavs with human lag, item
   lead returns, quad 60/30 either-or with speaker rotation, mega

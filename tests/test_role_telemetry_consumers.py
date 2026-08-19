@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix="sg-role-consumers-") as tmp:
 
     game = run_gamestat(current)
     assert game.returncode == 0, game.stderr
-    assert "attacker floors: {'[SG]Caco': 12000}" in game.stdout
+    assert "attacker floors: {'[SG]Caco': 7000}" in game.stdout
     assert "defenders: 1 distinct 100u-cells, moving=1 still=0" in game.stdout
 
     role = run_rolestat(current)

@@ -22,7 +22,7 @@ receipts rather than broad name matching. The current `wavewatch.sh` and
 interfaces. Blind instruments must extract the same observable from human and
 bot film without leaking demo shape into rendered sheets.
 
-Runtime debris that is intentionally skipped below but worth knowing the shape of: `iter-<N>/` directories and `iter-<N>-launch.log` files (one pair per wave, produced by `iterate2.sh`/`waveloop.sh`; hundreds accumulate), `aux-<N>/` and `aux-<N>-launch.log` (same pattern for `aux2.sh`'s side fleet), `campaign-<timestamp>/` directories (per-run logs from `campaign.sh`), `rune-logs/` (raw per-server logs from `runegen.sh` runs), `__pycache__/` (Python bytecode cache), `waveloop.log` (the fleet heartbeat's running log), `runs-archive/` (rotated launch logs, atomic-replace target of `waveloop.sh`), and one-off match logs like `ab-<map>-<timestamp>.log` at the tools/ root (from `abmatch.sh`) that appear and disappear as matches run.
+Runtime debris that is intentionally skipped below but worth knowing the shape of: `iter-<N>/` directories and `iter-<N>-launch.log` files (one pair per wave, produced by `iterate2.sh`/`waveloop.sh`; hundreds accumulate), `aux-<N>/` and `aux-<N>-launch.log` (same pattern for `aux2.sh`'s side fleet), `campaign-<timestamp>/` directories (per-run logs from `campaign.sh`), `rune-logs/` (raw per-server logs from `runegen.sh` runs), `__pycache__/` (Python bytecode cache), `waveloop.log` (the fleet heartbeat's running log), `runs-archive/` (launch logs appended by `waveloop.sh`), and one-off match logs like `ab-<map>-<timestamp>.log` at the tools/ root (from `abmatch.sh`) that appear and disappear as matches run.
 
 ---
 
@@ -85,14 +85,15 @@ defects are tracked in `PROJECT-COMPLETION-PLAN.md`.
 - **Usage:** `tools/campaign.sh` (standard five maps) / `tools/campaign.sh lmctf03 lmctf22` (explicit maps) / `GAMES=3 GAME_SECS=300 tools/campaign.sh` (shorter campaign).
 - **Inputs:** `rune.cfg`, the live game build.
 - **Outputs:** `tools/campaign-<timestamp>/` (one log per map per game, plus `lanes.log`).
-- **Dependencies:** `gamestat.sh`. Staggers launches (same-second starts duplicate Q2's RNG — observed duplicate matches from batch runs 28448/28449 and 28450/28453).
+- **Dependencies:** `q2ded` and the configured game directory. It implements
+  its own aggregate grep summary rather than calling `gamestat.sh`.
 
 ### `abmatch.sh`
-- **Purpose:** one A/B match, 4 legacy bots vs 4 SLIPGATE bots, one map — a quick head-to-head sanity check outside the wave format.
-- **Usage:** `tools/abmatch.sh <map> <secs>`.
-- **Inputs:** `rune.cfg`, the live game build.
-- **Outputs:** `tools/ab-<map>-<timestamp>.log`, plus a stdout report (steal/capture totals, per-bot-name frag/death/steal line dump).
-- **Dependencies:** none beyond `q2ded`. Documents the confirmed bot-spawn console syntax for both bot systems in its header comment (`sv addbot <name> <skin> <charfile> <charname>` for legacy bots vs `sv sg add` for SLIPGATE bots).
+- **Status:** not a working current launcher. It attempts `sv addbot` for the
+  legacy side, but the current `ServerCommand` dispatcher has no `addbot`
+  command, so it cannot create the documented 4-vs-4 match.
+- **Disposition:** keep out of production use; the necessity audit must either
+  remove it or pair it with a restored, tested legacy-bot command path.
 
 ### `aux2.sh`
 - **Purpose:** a 4-server auxiliary side-fleet, additive to the main ten — currently running the carrier-cover revalidation and a defense-package decomposition (post-only / react-only / both / neither).
@@ -232,7 +233,8 @@ The shared parsing library and the mining/report/forensics scripts built on it. 
 - **Outputs:** stdout; as a library, `walk_entities()` returns `{map, pov, skins, tracks, frames, svrecord}`.
 - **Dependencies:** `dm2speed.py`, `demokin.parse_playerstate_full` (used only
   to stay in byte-sync). The parser distinguishes client and serverrecord demo
-  shapes and fails closed on an invalid stream.
+  shapes, but catches per-demo parse exceptions and can return partial or empty
+  data; callers must enforce their own nonzero/coverage gate.
 
 ### `demokin.py`
 - **Purpose:** full-fidelity human POV kinematics — velocity, view angles, pm flags, weapon index at 10Hz; the "movement grammar" (air-strafe gain, hop cadence, view-vs-velocity divergence, touchdown friction loss).

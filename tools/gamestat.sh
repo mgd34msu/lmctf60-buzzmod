@@ -25,7 +25,10 @@ for ln in lines:
     recognized += 1
     name = m.group(1)
     role = int(m.group(2))
-    goal = int(m.group(3))
+    # sgoal is the stable destination-field cost.  Current telemetry always
+    # emits it; the dynamic goal remains the compatibility fallback for older
+    # logs that predate sgoal.
+    goal = int(m.group(4)) if m.group(4) is not None else int(m.group(3))
     spd = int(m.group(5))
     if role == 0 and goal > 0:
         goals[name] = min(goals.get(name, 1 << 30), goal)
