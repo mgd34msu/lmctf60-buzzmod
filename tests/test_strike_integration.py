@@ -2,17 +2,21 @@
 """Executable and production-wiring checks for the strike frame adapter."""
 
 from pathlib import Path
+import hashlib
 import json
 import math
+import os
+import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-import snagrepair  # noqa: E402
 import stealstage  # noqa: E402
 
 
@@ -311,7 +315,20 @@ class StrikeIntegrationTest(unittest.TestCase):
             {"name": "thief", "kind": "F Pickup", "time": 20.4},
         ])
         self.assertEqual([match["approach"]["time"] for match in matches],
-                         [20.2, 20.0])
+                         [20.0, 20.2])
+
+        # Nearest/latest matching loses one feasible pair here.  The frozen
+        # earliest-feasible greedy is maximum-cardinality.
+        cardinality = stealstage.match_close_pickups([
+            {"name": "thief", "team": "red", "time": 0.0},
+            {"name": "thief", "team": "red", "time": 1.0},
+        ], [
+            {"name": "thief", "kind": "F Pickup", "time": 1.2},
+            {"name": "thief", "kind": "F Pickup", "time": 2.4},
+        ])
+        self.assertEqual(len(cardinality), 2)
+        self.assertEqual([item["approach"]["time"] for item in cardinality],
+                         [0.0, 1.0])
 
     def test_stage_a_geometry_crop_and_matching_fail_closed(self) -> None:
         valid_track = [
@@ -380,212 +397,6 @@ class StrikeIntegrationTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     stealstage.match_close_pickups(
                         approaches, pickups, delay=delay)
-
-    def test_steal_stage_a_contract_schema_is_frozen(self) -> None:
-        contract = json.loads(
-            (ROOT / "tools/steal-stage-a-contract.json").read_text())
-        self.assertEqual(contract["metric_version"],
-                         "steal-close-stage-a-v1")
-        self.assertEqual(contract["frozen_before_candidate_trial"],
-                         "2026-08-19")
-        self.assertNotIn("frozen_before_candidate_change", contract)
-        identity = contract["match_identity"]
-        self.assertEqual(set(identity["required_equal_fields"]), {
-            "metric_version", "map_bsp_sha256", "configuration_sha256",
-            "roster_and_team_assignment", "active_duration_seconds",
-            "recording_policy", "recording_harness_sha256",
-            "engine_sha256", "rune_sha256", "rune_identity",
-        })
-        self.assertEqual(
-            identity["minimum_duration_seconds_per_round"],
-            int(stealstage.WINDOW_SECONDS))
-        self.assertGreaterEqual(identity["minimum_arm_swapped_rounds"], 2)
-        self.assertGreaterEqual(
-            identity["minimum_authoritative_pickups_per_arm"], 5)
-        self.assertIs(identity["disposable_game_roots_required"], True)
-        self.assertIs(identity["disjoint_ports_required"], True)
-        receipts = contract["receipt_schema"]
-        self.assertEqual(set(receipts["required_per_arm_fields"]), {
-            "metric_version", "source_commit", "source_patch_sha256",
-            "module_sha256",
-            "engine_sha256", "map_bsp_sha256", "configuration_sha256",
-            "roster_and_team_assignment", "port",
-            "evaluation_window_server_seconds", "active_duration_seconds",
-            "recording_policy", "recording_harness_sha256",
-            "server_log_sha256", "stdlog_sha256", "stats_database_sha256",
-            "serverrecord_sha256", "serverrecord_frames",
-            "serverrecord_level_time_end", "rune_sha256", "rune_identity",
-        })
-        rune_fields = receipts["required_rune_identity_fields"]
-        self.assertEqual(set(rune_fields), {
-            "map", *snagrepair.IDENTITY_KEYS, "rune_payload_crc",
-        })
-        self.assertEqual(len(identity["required_equal_fields"]),
-                         len(set(identity["required_equal_fields"])))
-        self.assertLessEqual(set(identity["required_equal_fields"]),
-                             set(receipts["required_per_arm_fields"]))
-        equal_fields = identity["required_equal_fields"]
-        first_receipt = {
-            field: f"same:{field}"
-            for field in receipts["required_per_arm_fields"]
-        }
-        first_receipt["rune_identity"] = {
-            field: f"same:{field}" for field in rune_fields
-        }
-        second_receipt = dict(first_receipt)
-        self.assertEqual(stealstage.receipt_identity_mismatches(
-            (first_receipt, second_receipt), equal_fields,
-            receipts["required_per_arm_fields"], rune_fields), [])
-        for field in equal_fields:
-            changed = dict(second_receipt)
-            if field == "rune_identity":
-                changed[field] = dict(first_receipt[field])
-                changed[field][rune_fields[0]] = "different:rune_identity"
-            else:
-                changed[field] = f"different:{field}"
-            with self.subTest(equal_receipt_field=field):
-                self.assertEqual(stealstage.receipt_identity_mismatches(
-                    (first_receipt, changed), equal_fields,
-                    receipts["required_per_arm_fields"], rune_fields), [field])
-        missing = dict(second_receipt)
-        missing.pop(equal_fields[0])
-        with self.assertRaises(ValueError):
-            stealstage.receipt_identity_mismatches(
-                (first_receipt, missing), equal_fields,
-                receipts["required_per_arm_fields"], rune_fields)
-        missing_non_identity = dict(second_receipt)
-        missing_non_identity.pop("server_log_sha256")
-        with self.assertRaises(ValueError):
-            stealstage.receipt_identity_mismatches(
-                (first_receipt, missing_non_identity), equal_fields,
-                receipts["required_per_arm_fields"], rune_fields)
-        missing_rune_field = dict(second_receipt)
-        missing_rune_field["rune_identity"] = dict(
-            second_receipt["rune_identity"])
-        missing_rune_field["rune_identity"].pop(rune_fields[0])
-        with self.assertRaises(ValueError):
-            stealstage.receipt_identity_mismatches(
-                (first_receipt, missing_rune_field), equal_fields,
-                receipts["required_per_arm_fields"], rune_fields)
-        with self.assertRaises(ValueError):
-            stealstage.receipt_identity_mismatches(
-                (first_receipt, second_receipt),
-                equal_fields + [equal_fields[0]],
-                receipts["required_per_arm_fields"], rune_fields)
-        with self.assertRaises(ValueError):
-            stealstage.receipt_identity_mismatches(
-                (first_receipt, second_receipt),
-                equal_fields + ["not_in_receipt_schema"],
-                receipts["required_per_arm_fields"], rune_fields)
-        self.assertNotIn("source_commit", identity["required_equal_fields"])
-        self.assertNotIn("module_sha256", identity["required_equal_fields"])
-        self.assertNotIn("bsp_crc", json.dumps(contract))
-        self.assertEqual(contract["stratification"],
-                         ["map", "team", "roster_size", "configuration"])
-        self.assertIn("F Pickup", contract["event_authority"]["steal"])
-        self.assertIn("STATS_OFFENSE_FLAG",
-                      contract["event_authority"]["steal"])
-        self.assertIn("host outcome log",
-                      contract["event_authority"]["capture"])
-        self.assertIn("diagnostic only",
-                      contract["event_authority"]["demo_capture"])
-        calculations = contract["metric_calculation"]
-        self.assertEqual(set(calculations), {
-            "evaluation_window", "active_bot_minutes", "active_team_minutes",
-            "active_defender_minutes", "horizontal_distance",
-            "telemetry_time_alignment",
-            "moving_sample_fraction", "world_or_hazard_suicides",
-            "combat", "visible_or_audible_engagements",
-            "forbidden_knowledge_events", "approach",
-            "demo_time_alignment", "close_conversion", "steal",
-            "capture", "steal_to_capture_conversion",
-            "defender_post_dwell_fraction",
-            "defender_moving_sample_fraction", "defender_departure",
-            "captures_conceded", "strata_and_pooling",
-        })
-        for formula in calculations.values():
-            self.assertIsInstance(formula, str)
-            self.assertTrue(formula.strip())
-        self.assertIn("film.TELEPORT_UNITS=180",
-                      calculations["horizontal_distance"])
-        self.assertIn("[t0,t0+600.0)",
-                      calculations["evaluation_window"])
-        self.assertIn("not a clock",
-                      calculations["telemetry_time_alignment"])
-        self.assertIn("duplicate",
-                      calculations["telemetry_time_alignment"])
-        self.assertIn("spd greater than 50",
-                      calculations["moving_sample_fraction"])
-        self.assertIn("0 <= sgoal < 1500",
-                      calculations["defender_post_dwell_fraction"])
-        self.assertIn("eng=1",
-                      calculations["visible_or_audible_engagements"])
-        self.assertIn("current visible target",
-                      calculations["visible_or_audible_engagements"])
-        self.assertIn("not itself an engagement",
-                      calculations["visible_or_audible_engagements"])
-        self.assertIn("through 1.5 seconds",
-                      calculations["close_conversion"])
-        self.assertIn("same-timestamp events execute in ascending production log order",
-                      calculations["approach"])
-        self.assertIn("level.time > droptime+30",
-                      calculations["approach"])
-        self.assertIn("remains dropped at droptime+30",
-                      calculations["approach"])
-        self.assertIn("within 0.2 seconds",
-                      calculations["demo_time_alignment"])
-        self.assertIn("complete timestamped stream",
-                      calculations["steal"])
-
-        expected_band_fields = {
-            "movement": {
-                "horizontal_distance_per_active_bot_minute_ratio_min",
-                "moving_sample_fraction_absolute_delta_min",
-                "world_or_hazard_suicides_per_active_bot_minute_delta_max",
-            },
-            "combat": {
-                "combat_kills_per_active_team_minute_ratio_min",
-                "combat_kills_per_active_team_minute_ratio_max",
-                "combat_deaths_per_active_team_minute_ratio_max",
-            },
-            "perception": {
-                "forbidden_knowledge_events_max",
-                "visible_or_audible_engagements_per_active_team_minute_ratio_min",
-                "visible_or_audible_engagements_per_active_team_minute_ratio_max",
-            },
-            "steal": {
-                "authoritative_pickups_per_active_team_minute_ratio_min",
-                "authoritative_pickups_per_active_team_minute_delta_min",
-                "authoritative_pickup_count_delta_min",
-            },
-            "conversion": {
-                "close_approach_conversion_absolute_delta_min",
-                "close_approach_conversion_ratio_min",
-                "timely_authoritative_pickup_count_delta_min",
-            },
-            "capture": {
-                "authoritative_captures_per_active_team_minute_ratio_min",
-                "steal_to_capture_conversion_absolute_delta_min",
-                "authoritative_reconciliation_mismatches_max",
-            },
-            "defense": {
-                "defender_post_dwell_fraction_ratio_min",
-                "defender_moving_sample_fraction_ratio_min",
-                "defender_departures_per_active_defender_minute_ratio_max",
-                "captures_conceded_per_active_team_minute_ratio_max",
-                "captures_conceded_per_active_team_minute_delta_max",
-            },
-        }
-        self.assertEqual(set(contract["bands"]), set(expected_band_fields))
-        for family, fields in expected_band_fields.items():
-            self.assertEqual(set(contract["bands"][family]), fields)
-            for value in contract["bands"][family].values():
-                self.assertIsInstance(value, (int, float))
-                self.assertNotIsInstance(value, bool)
-                self.assertTrue(math.isfinite(value))
-        self.assertIs(contract["decision"]["require_every_band"], True)
-        self.assertIn("inconclusive",
-                      contract["decision"]["insufficient_event_rule"])
 
     def test_frame_snapshot_precedes_serial_think_and_owns_live_inputs(self) -> None:
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
@@ -708,6 +519,836 @@ class StrikeIntegrationTest(unittest.TestCase):
         restore_body = arach[restore:think]
         self.assertIn("if (bot->strike_weapon_draining)", restore_body)
         self.assertIn("SG_DeclaredDoorGuardPause(bot)", restore_body)
+
+
+class StageAMeasurementAuthorityTest(unittest.TestCase):
+    @staticmethod
+    def _contract_bytes() -> bytes:
+        return (ROOT / "tools/steal-stage-a-contract.json").read_bytes()
+
+    @staticmethod
+    def _source_commit() -> str:
+        return subprocess.run(
+            ("git", "rev-parse", "HEAD"), cwd=ROOT, check=True,
+            stdout=subprocess.PIPE, text=True).stdout.strip()
+
+    @classmethod
+    def _identities(cls):
+        commit = cls._source_commit()
+        return {
+            "baseline": {"source_commit": commit,
+                         "source_patch_sha256": "0" * 64,
+                         "module_sha256": "a" * 64},
+            "candidate": {"source_commit": commit,
+                          "source_patch_sha256": "1" * 64,
+                          "module_sha256": "b" * 64},
+        }
+
+    @staticmethod
+    def _assignment(swapped=False):
+        return {f"bot{index}":
+                ("blue" if (index < 5) == swapped else "red")
+                for index in range(10)}
+
+    @classmethod
+    def _round(cls, arm, round_number, port, root):
+        assignment = cls._assignment(swapped=round_number == 2)
+        artifacts = {
+            name: {"path": f"evidence/{name}", "sha256": "2" * 64}
+            for name in stealstage.REQUIRED_ARTIFACTS
+        }
+        source = cls._identities()[arm]
+        artifacts["module"]["sha256"] = source["module_sha256"]
+        rune_identity = {field: 0 for field in stealstage.RUNE_IDENTITY_FIELDS}
+        rune_identity["map"] = "lmctf22"
+        return {
+            "name": f"r{round_number}-{arm}",
+            "metric_version": stealstage.METRIC_VERSION,
+            "arm": arm, "round": round_number, "treatment": arm,
+            "source_identity": source, "root": root, "port": port,
+            "map": "lmctf22", "roster_and_team_assignment": assignment,
+            "evaluation_window_server_seconds": {"start": 10.0,
+                                                   "end": 610.0},
+            "active_duration_seconds": {"per_bot": 600.0,
+                                        "red_team": 600.0,
+                                        "blue_team": 600.0},
+            "recording_policy":
+                "serverrecord before roster joins through removal after the full-roster allowance; evaluate the exact server-time crop",
+            "artifacts": artifacts,
+            "configuration_artifacts": [
+                {"path": "config/stage-a.cfg", "sha256": "3" * 64}],
+            "configuration_sha256": "4" * 64,
+            "rune_identity": rune_identity,
+        }
+
+    @classmethod
+    def _manifest(cls, tool=None):
+        if tool is None:
+            tool = Path(stealstage.__file__).read_bytes()
+        contract = cls._contract_bytes()
+        rounds = []
+        for index, (round_number, arm) in enumerate((
+                (1, "baseline"), (1, "candidate"),
+                (2, "baseline"), (2, "candidate"))):
+            rounds.append(cls._round(
+                arm, round_number, 47000 + index,
+                f"/tmp/stage-a-r{round_number}-{arm}"))
+        return {
+            "format": stealstage.RECEIPT_FORMAT,
+            "metric_version": stealstage.METRIC_VERSION,
+            "metric_contract_sha256": hashlib.sha256(contract).hexdigest(),
+            "measurement_tool_sha256": hashlib.sha256(tool).hexdigest(),
+            "treatments": cls._identities(), "rounds": rounds,
+        }
+
+    @staticmethod
+    def _stdlog_bytes(rename=False, drift=False, early_leave=False):
+        lines = ["\t\tStdLog\t1.2", "\t\tGameStart\t\t\t0.0"]
+        for index in range(10):
+            name, moment = f"bot{index}", float(index + 1)
+            team = "red" if index < 5 else "blue"
+            lines.extend((
+                f"\t\tPlayerConnect\t{name}\t\t{moment:.1f}",
+                f"\t\tPlayerTeamChange\t{name}\t{team}\t{moment:.1f}",
+            ))
+        if rename:
+            lines.append("\t\tPlayerRename\tbot0\tother\t10.1")
+        if drift:
+            lines.append("\t\tPlayerTeamChange\tbot0\tblue\t10.2")
+        lines.extend((
+            "bot0\t\tF Pickup\t\t0\t10.0",
+            "bot0\t\tF Capture\t\t5\t609.0",
+            "bot0\t\tF Pickup\t\t0\t610.0",
+        ))
+        for index in range(10):
+            leave = 609.9 if early_leave and index == 0 else 610.0
+            lines.append(f"\t\tPlayerLeft\tbot{index}\t\t{leave:.1f}")
+        return ("\n".join(lines) + "\n").encode()
+
+    @classmethod
+    def _result_fixture(cls):
+        identities = cls._identities()
+        rounds = []
+        for index, (round_number, arm) in enumerate((
+                (1, "baseline"), (1, "candidate"),
+                (2, "baseline"), (2, "candidate"))):
+            source = identities[arm]
+            team_demo = {
+                color: {"distance": 100.0, "approaches": 1,
+                        "observed_stand_seconds": 300.0, "timely": 1}
+                for color in ("red", "blue")}
+            team_telemetry = {
+                color: {"samples": 10, "moving": 5, "engaged": 2,
+                        "defenders": 5, "defender_dwell": 4,
+                        "defender_moving": 3, "departures": 1}
+                for color in ("red", "blue")}
+            team_counts = {
+                color: {"suicides": 0, "frags": 2, "fragged": 2,
+                        "pickups": 3, "captures": 1}
+                for color in ("red", "blue")}
+            total_counts = {field: sum(team_counts[color][field]
+                                       for color in ("red", "blue"))
+                            for field in team_counts["red"]}
+            rune_identity = {field: 0
+                             for field in stealstage.RUNE_IDENTITY_FIELDS}
+            rune_identity["map"] = "lmctf22"
+            artifacts = {name: hashlib.sha256(name.encode()).hexdigest()
+                         for name in stealstage.REQUIRED_ARTIFACTS}
+            artifacts["module"] = source["module_sha256"]
+            rounds.append({
+                "name": f"r{round_number}-{arm}", "arm": arm,
+                "round": round_number, "port": 47000 + index,
+                "root_identity": [1, index + 10], "map": "lmctf22",
+                "source_identity": source, "artifact_sha256": artifacts,
+                "roster_and_team_assignment": cls._assignment(
+                    swapped=round_number == 2),
+                "configuration_sha256": "4" * 64,
+                "rune_identity": rune_identity,
+                "stand_origins": {"red": [0.0, 0.0, 0.0],
+                                  "blue": [100.0, 0.0, 0.0]},
+                "evaluation_window_server_seconds": {
+                    "start": 10.0, "end": 610.0},
+                "window_counts": {"total": total_counts,
+                                  "by_team": team_counts},
+                "telemetry": {
+                    **{field: sum(team_telemetry[color][field]
+                                  for color in ("red", "blue"))
+                       for field in team_telemetry["red"]},
+                    "by_team": team_telemetry,
+                    "brackets": {"cutoff_gap_seconds": 1.0}},
+                "database_full_stream": {},
+                "demo": {
+                    "distance": 200.0, "approaches": 2,
+                    "observed_stand_seconds": 600.0, "timely": 2,
+                    "by_team": team_demo},
+                "authority": {"forbidden_knowledge_events": 0,
+                              "reconciliation_mismatches": 0},
+            })
+        baseline = stealstage.aggregate_rounds(rounds, "baseline")
+        candidate = stealstage.aggregate_rounds(rounds, "candidate")
+        contract = stealstage.load_contract(cls._contract_bytes())
+        gate = stealstage.evaluate_bands(baseline, candidate, contract)
+        return {
+            "format": stealstage.RESULT_FORMAT,
+            "metric_version": stealstage.METRIC_VERSION,
+            "metric_contract_sha256": stealstage.METRIC_CONTRACT_SHA256,
+            "measurement_tool_sha256": hashlib.sha256(
+                Path(stealstage.__file__).read_bytes()).hexdigest(),
+            "manifest_sha256": "2" * 64,
+            "round_metrics": rounds,
+            "aggregate": {"baseline": baseline, "candidate": candidate},
+            "report": {"valid_receipts": True, "round_count": 4,
+                       "sufficient_events": gate["sufficient_events"],
+                       "all_bands_pass": gate["all_bands_pass"],
+                       "decision": gate["decision"],
+                       "checks": gate["checks"]},
+        }
+
+    def test_contract_is_typed_exact_and_not_caller_weakenable(self) -> None:
+        payload = self._contract_bytes()
+        contract = stealstage.load_contract(payload)
+        self.assertEqual(contract["receipt_schema"]["required_artifacts"],
+                         list(stealstage.REQUIRED_ARTIFACTS))
+        self.assertEqual(contract["receipt_schema"]["rune_identity_fields"],
+                         list(stealstage.RUNE_IDENTITY_FIELDS))
+        self.assertEqual(contract["trial_design"], {
+            "arms": ["baseline", "candidate"], "rounds": [1, 2],
+            "treatments": ["baseline", "candidate"],
+            "roster_size": 10, "team_size": 5})
+        self.assertIn("approaches_per_observed_stand_minute_ratio_min",
+                      contract["bands"]["steal"])
+        weakened = json.loads(payload)
+        weakened["receipt_schema"]["required_artifacts"].remove("serverrecord")
+        with self.assertRaisesRegex(ValueError, "executable schema"):
+            stealstage.load_contract(json.dumps(weakened).encode())
+        weakened = json.loads(payload)
+        weakened["bands"]["steal"][
+            "authoritative_pickup_count_delta_min"] = -100
+        with self.assertRaisesRegex(ValueError, "checked-in frozen authority"):
+            stealstage.load_contract(json.dumps(weakened).encode())
+        self.assertNotEqual(
+            stealstage._configuration_digest([
+                ("a", b"x"), ("b", b"y")]),
+            stealstage._configuration_digest([
+                ("a", b"xb\0y")]))
+        duplicate = b'{"metric_version":"x","metric_version":"y"}'
+        with self.assertRaisesRegex(ValueError, "duplicate key"):
+            stealstage._strict_json(duplicate, "fixture")
+
+    def test_manifest_hashes_schema_design_and_source_identity_fail_closed(self) -> None:
+        contract = self._contract_bytes()
+        manifest = self._manifest()
+
+        def validate(value):
+            return stealstage.validate_manifest(
+                contract, json.dumps(value).encode(), ROOT)
+
+        wrong = dict(manifest)
+        wrong["metric_contract_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "metric-contract hash"):
+            validate(wrong)
+        wrong = dict(manifest)
+        wrong["measurement_tool_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "measurement-tool hash"):
+            validate(wrong)
+        wrong = dict(manifest)
+        wrong["extra"] = 1
+        with self.assertRaisesRegex(ValueError, "incorrect schema"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["rounds"][1]["port"] = wrong["rounds"][0]["port"]
+        with self.assertRaisesRegex(ValueError, "ports must be distinct"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["rounds"][1]["root"] = wrong["rounds"][0]["root"]
+        with self.assertRaisesRegex(ValueError, "roots must be distinct"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["rounds"][2]["roster_and_team_assignment"] = \
+            dict(wrong["rounds"][0]["roster_and_team_assignment"])
+        wrong["rounds"][3]["roster_and_team_assignment"] = \
+            dict(wrong["rounds"][0]["roster_and_team_assignment"])
+        with self.assertRaisesRegex(ValueError, "not the exact arm-swapped"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["rounds"][0]["source_identity"]["source_commit"] = "A" * 40
+        with self.assertRaisesRegex(ValueError, "lowercase Git commit"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["rounds"][0]["evaluation_window_server_seconds"]["end"] = 609.9
+        with self.assertRaisesRegex(ValueError, "exact 600-second"):
+            validate(wrong)
+
+    def test_result_and_report_hashes_have_explicit_nonself_reference_rule(self) -> None:
+        unbound = self._result_fixture()
+        result = stealstage.bind_result_hashes(unbound)
+        self.assertIs(stealstage.validate_result_hashes(result), result)
+        changed = json.loads(json.dumps(result))
+        changed["report"]["decision"] = "adopt"
+        with self.assertRaisesRegex(ValueError, "report hash"):
+            stealstage.validate_result_hashes(changed)
+        changed = json.loads(json.dumps(result))
+        changed["manifest_sha256"] = "3" * 64
+        with self.assertRaisesRegex(ValueError, "result hash"):
+            stealstage.validate_result_hashes(changed)
+        changed = json.loads(json.dumps(result))
+        changed["aggregate"]["baseline"]["raw"]["pickups"] += 1
+        changed["result_sha256"] = stealstage.result_hash(changed)
+        with self.assertRaisesRegex(ValueError, "does not match round metrics"):
+            stealstage.validate_result_hashes(changed)
+        with self.assertRaisesRegex(ValueError, "digest fields"):
+            stealstage.bind_result_hashes(result)
+
+    def test_retained_reader_rejects_symlinks_hardlinks_and_midread_change(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="steal-reader-") as temporary:
+            root_path = Path(temporary) / "root"
+            root_path.mkdir()
+            artifact = root_path / "artifact"
+            artifact.write_bytes(b"original")
+            with stealstage.RetainedRoot(root_path) as root:
+                self.assertEqual(root.read("artifact", 100, "artifact"),
+                                 b"original")
+                (root_path / "link").symlink_to(artifact)
+                with self.assertRaises((OSError, ValueError)):
+                    root.read("link", 100, "link")
+                with self.assertRaisesRegex(ValueError, "normalized relative"):
+                    root.read("../artifact", 100, "escape")
+                alias = root_path / "alias"
+                os.link(artifact, alias)
+                with self.assertRaisesRegex(ValueError, "unalias"):
+                    root.read("artifact", 100, "hardlink")
+                alias.unlink()
+                real_read = os.read
+                changed = False
+
+                def mutate(fd, count):
+                    nonlocal changed
+                    result = real_read(fd, count)
+                    if not changed:
+                        artifact.write_bytes(b"mutated!")
+                        changed = True
+                    return result
+
+                with mock.patch.object(stealstage.os, "read", side_effect=mutate):
+                    with self.assertRaisesRegex(ValueError, "changed while reading"):
+                        root.read("artifact", 100, "racy")
+            symlink_root = Path(temporary) / "root-link"
+            symlink_root.symlink_to(root_path, target_is_directory=True)
+            with self.assertRaises(OSError):
+                stealstage.RetainedRoot(symlink_root)
+
+            guard_root = Path(temporary) / "guard-root"
+            guard_root.mkdir()
+            artifacts = {}
+            for name in stealstage.REQUIRED_ARTIFACTS:
+                payload = f"retained-{name}".encode()
+                path = f"{name}.evidence"
+                (guard_root / path).write_bytes(payload)
+                artifacts[name] = {
+                    "path": path,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                }
+            configuration = b"set stage_a 1\n"
+            (guard_root / "trial.cfg").write_bytes(configuration)
+            receipt = {
+                "name": "r1-baseline", "root": str(guard_root),
+                "artifacts": artifacts,
+                "configuration_artifacts": [{
+                    "path": "trial.cfg",
+                    "sha256": hashlib.sha256(configuration).hexdigest(),
+                }],
+                "configuration_sha256": stealstage._configuration_digest(
+                    [("trial.cfg", configuration)]),
+            }
+            root_stat = guard_root.stat()
+            metrics = [{"name": "r1-baseline",
+                        "root_identity": [root_stat.st_dev,
+                                          root_stat.st_ino]}]
+            stealstage._revalidate_manifest_files([receipt], metrics)
+            (guard_root / "engine.evidence").write_bytes(b"changed-engine")
+            with self.assertRaisesRegex(ValueError, "engine changed before publication"):
+                stealstage._revalidate_manifest_files([receipt], metrics)
+
+    def test_exact_roster_timeline_window_membership_and_drift_rejection(self) -> None:
+        assignment = self._assignment()
+        stdlog = stealstage.parse_stdlog(self._stdlog_bytes())
+        roster = stealstage.validate_continuous_roster(stdlog, assignment)
+        self.assertEqual(roster["window"], (10.0, 610.0))
+        counts = stealstage._window_counts(stdlog, roster)
+        self.assertEqual(counts["total"]["pickups"], 1)
+        self.assertEqual(counts["total"]["captures"], 1)
+        for payload, message in (
+                (self._stdlog_bytes(rename=True), "PlayerRename"),
+                (self._stdlog_bytes(drift=True), "exactly one team"),
+                (self._stdlog_bytes(early_leave=True), "left before exact")):
+            with self.subTest(message=message):
+                with self.assertRaises(ValueError):
+                    stealstage.validate_continuous_roster(
+                        stealstage.parse_stdlog(payload), assignment)
+        bad = dict(assignment)
+        bad["bot9"] = "red"
+        with self.assertRaisesRegex(ValueError, "exactly ten unique 5v5"):
+            stealstage.validate_continuous_roster(stdlog, bad)
+
+    def test_ordered_host_and_per_player_stats_authorities_must_agree(self) -> None:
+        assignment = self._assignment()
+        stdlog = stealstage.parse_stdlog(self._stdlog_bytes())
+        roster = stealstage.validate_continuous_roster(stdlog, assignment)
+        host = (b"bot0 stole the blue flag.\n"
+                b"bot0 captured the blue flag.\n"
+                b"bot0 stole the blue flag.\n")
+        reconciled = stealstage.reconcile_host_outcomes(
+            host, stdlog, roster["teams"])
+        self.assertEqual(len(reconciled["outcomes"]), 3)
+        with self.assertRaisesRegex(ValueError, "ordered host"):
+            stealstage.reconcile_host_outcomes(
+                b"bot0 captured the blue flag.\n", stdlog,
+                roster["teams"])
+        with self.assertRaisesRegex(ValueError, "ordered host"):
+            stealstage.reconcile_host_outcomes(
+                host.replace(b"blue flag", b"red flag", 1), stdlog,
+                roster["teams"])
+        with self.assertRaisesRegex(ValueError, "malformed host"):
+            stealstage.reconcile_host_outcomes(
+                host + b"bot0 stole the green flag.\n", stdlog,
+                roster["teams"])
+
+        with tempfile.TemporaryDirectory(prefix="steal-db-") as temporary:
+            database = Path(temporary) / "players.db"
+            connection = sqlite3.connect(database)
+            connection.executescript("""
+                CREATE TABLE userdata (char_idx INTEGER, playername TEXT);
+                CREATE TABLE game_stats (
+                    char_idx INTEGER, frags INTEGER, fragged INTEGER,
+                    deaths INTEGER, suicides INTEGER, shots INTEGER,
+                    shots_hit INTEGER);
+                CREATE TABLE ctf_stats (
+                    char_idx INTEGER, flag_pickups INTEGER,
+                    flag_captures INTEGER, flag_returns INTEGER);
+            """)
+            for index, name in enumerate(assignment):
+                pickups = 2 if name == "bot0" else 0
+                captures = 1 if name == "bot0" else 0
+                connection.execute("INSERT INTO userdata VALUES (?, ?)",
+                                   (index, name))
+                connection.execute(
+                    "INSERT INTO game_stats VALUES (?,0,0,0,0,0,0)",
+                    (index,))
+                connection.execute(
+                    "INSERT INTO ctf_stats VALUES (?,?,?,0)",
+                    (index, pickups, captures))
+            connection.commit()
+            connection.close()
+            payload = database.read_bytes()
+        stats = stealstage.parse_stats_database(payload, assignment)
+        stealstage.reconcile_stats(stdlog, stats, roster["roster"])
+        stats["per_player"]["bot0"]["pickups"] = 1
+        with self.assertRaisesRegex(ValueError, "disagrees with StdLog"):
+            stealstage.reconcile_stats(stdlog, stats, roster["roster"])
+
+    def test_knowledge_sidecar_is_exact_bound_and_zero_only(self) -> None:
+        identity = self._identities()["baseline"]
+        report = {
+            "format": "lmctf-steal-knowledge-report-v1",
+            "metric_version": stealstage.METRIC_VERSION,
+            "source_commit": identity["source_commit"],
+            "source_patch_sha256": identity["source_patch_sha256"],
+            "module_sha256": identity["module_sha256"],
+            "measurement_tool_sha256": "2" * 64,
+            "policy_probe_sha256": "3" * 64,
+            "missing_flag_acceptances": 0,
+            "carried_flag_acceptances": 0,
+            "unseen_dropped_flag_acceptances": 0,
+            "wrong_floor_acceptances": 0,
+            "hull_blocked_acceptances": 0,
+            "runtime_violation_markers": 0,
+        }
+        payload = json.dumps(report).encode()
+        self.assertEqual(
+            stealstage.validate_knowledge_report(
+                payload, identity, measurement_tool_sha256="2" * 64,
+                policy_probe_sha256="3" * 64), report)
+        for field in (
+                "missing_flag_acceptances", "carried_flag_acceptances",
+                "unseen_dropped_flag_acceptances", "wrong_floor_acceptances",
+                "hull_blocked_acceptances", "runtime_violation_markers"):
+            changed = dict(report)
+            changed[field] = 1
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "nonzero"):
+                    stealstage.validate_knowledge_report(
+                        json.dumps(changed).encode(), identity,
+                        measurement_tool_sha256="2" * 64,
+                        policy_probe_sha256="3" * 64)
+        changed = dict(report)
+        changed["module_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+            stealstage.validate_knowledge_report(
+                json.dumps(changed).encode(), identity,
+                measurement_tool_sha256="2" * 64,
+                policy_probe_sha256="3" * 64)
+        changed = dict(report)
+        changed["extra"] = 0
+        with self.assertRaisesRegex(ValueError, "incorrect schema"):
+            stealstage.validate_knowledge_report(
+                json.dumps(changed).encode(), identity,
+                measurement_tool_sha256="2" * 64,
+                policy_probe_sha256="3" * 64)
+        with tempfile.TemporaryDirectory(prefix="steal-source-") as temporary:
+            repository = Path(temporary).resolve()
+            subprocess.run(("git", "init", "-q"), cwd=repository, check=True)
+            subprocess.run(("git", "config", "user.name", "Stage A"),
+                           cwd=repository, check=True)
+            subprocess.run(("git", "config", "user.email", "stage@example"),
+                           cwd=repository, check=True)
+            tracked = repository / "tracked.c"
+            tracked.write_text("one\n")
+            subprocess.run(("git", "add", "tracked.c"), cwd=repository,
+                           check=True)
+            subprocess.run(("git", "commit", "-qm", "fixture"),
+                           cwd=repository, check=True)
+            (repository / "untracked.c").write_text("omitted\n")
+            with self.assertRaisesRegex(ValueError, "excludes untracked"):
+                stealstage._source_patch_payload(repository)
+            (repository / "untracked.c").unlink()
+            tracked.write_text("two\n")
+            patch = stealstage._source_patch_payload(repository)
+            self.assertIn(b"-one", patch)
+            self.assertIn(b"+two", patch)
+            with self.assertRaisesRegex(ValueError, "policy probe failed"):
+                stealstage._run_knowledge_probe(repository)
+
+    def test_bsp_authenticated_stands_are_derived_and_ambiguous_maps_rejected(self) -> None:
+        import mapflags
+
+        def bsp(entities):
+            text = "".join("{\n" + "".join(
+                f'"{key}" "{value}"\n' for key, value in entity.items()) +
+                "}\n" for entity in entities).encode("latin-1") + b"\0"
+            header = bytearray(mapflags.BSP_HEADER_SIZE)
+            struct.pack_into("<4si", header, 0, b"IBSP", 38)
+            struct.pack_into("<ii", header, 8,
+                             mapflags.BSP_HEADER_SIZE, len(text))
+            return bytes(header) + text
+
+        payload = bsp((
+            {"classname": "worldspawn"},
+            {"classname": "info_flag_red", "origin": "1 2 3"},
+            {"classname": "item_flag_team2", "origin": "4 5 6"},
+        ))
+        self.assertEqual(stealstage.flag_stands_from_bsp(payload),
+                         {"red": (1.0, 2.0, 3.0),
+                          "blue": (4.0, 5.0, 6.0)})
+        duplicate = bsp((
+            {"classname": "worldspawn"},
+            {"classname": "info_flag_red", "origin": "1 2 3"},
+            {"classname": "info_flag_red", "origin": "2 3 4"},
+            {"classname": "info_flag_blue", "origin": "4 5 6"},
+        ))
+        with self.assertRaisesRegex(ValueError, "exactly one red"):
+            stealstage.flag_stands_from_bsp(duplicate)
+
+    def test_demo_requires_all_clients_integral_consecutive_coverage_and_alignment(self) -> None:
+        assignment = self._assignment()
+        connected = {f"bot{index}": float(index + 1)
+                     for index in range(10)}
+        roster = {"roster": tuple(assignment), "connected": connected,
+                  "teams": assignment, "window": (10.0, 610.0)}
+        tracks = {}
+        for index in range(10):
+            first = index + 1
+            tracks[index + 1] = [
+                (frame, float(frame), 0.0, 0.0, 0)
+                for frame in range(first, 611)]
+        demo = {"svrecord": True, "map": "lmctf22",
+                "frames": 610, "tracks": tracks,
+                "skin_epochs": {
+                    index: [(0, f"bot{index}\\male/grunt")]
+                    for index in range(10)}}
+        aligned = stealstage.validate_demo_alignment(
+            demo, roster, "lmctf22", roster["window"], fps=1.0)
+        self.assertEqual(set(aligned["mapping"]), set(assignment))
+        missing = {**demo, "tracks": dict(tracks)}
+        missing["tracks"].pop(10)
+        with self.assertRaisesRegex(ValueError, "exactly all expected"):
+            stealstage.validate_demo_alignment(
+                missing, roster, "lmctf22", roster["window"], fps=1.0)
+        gap = {**demo, "tracks": dict(tracks)}
+        gap["tracks"][1] = tracks[1][:100] + tracks[1][101:]
+        with self.assertRaisesRegex(ValueError, "consecutive"):
+            stealstage.validate_demo_alignment(
+                gap, roster, "lmctf22", roster["window"], fps=1.0)
+        fractional = {**demo, "tracks": dict(tracks)}
+        fractional["tracks"][1] = list(tracks[1])
+        fractional["tracks"][1][0] = (1.5, 0.0, 0.0, 0.0, 0)
+        with self.assertRaisesRegex(ValueError, "integer"):
+            stealstage.validate_demo_alignment(
+                fractional, roster, "lmctf22", roster["window"], fps=1.0)
+        drifted = dict(roster)
+        drifted["connected"] = dict(connected)
+        drifted["connected"]["bot9"] = 10.2
+        with self.assertRaisesRegex(ValueError, "residual"):
+            stealstage.validate_demo_alignment(
+                demo, drifted, "lmctf22", roster["window"], fps=1.0)
+        short = {**demo, "frames": 609}
+        with self.assertRaisesRegex(ValueError, "total coverage"):
+            stealstage.validate_demo_alignment(
+                short, roster, "lmctf22", roster["window"], fps=1.0)
+        renamed = {**demo, "skin_epochs": dict(demo["skin_epochs"])}
+        renamed["skin_epochs"][0] = [
+            (0, "bot0\\male/grunt"), (100, "other\\male/grunt")]
+        with self.assertRaisesRegex(ValueError, "rename/slot drift"):
+            stealstage.validate_demo_alignment(
+                renamed, roster, "lmctf22", roster["window"], fps=1.0)
+
+    def test_carry_reconciliation_is_one_to_one_same_player_and_bounded(self) -> None:
+        starts = [
+            {"name": "a", "team": "red", "time": 1.1},
+            {"name": "a", "team": "red", "time": 2.1},
+        ]
+        pickups = [
+            {"name": "a", "kind": "F Pickup", "time": 1.0},
+            {"name": "a", "kind": "F Pickup", "time": 2.0},
+        ]
+        matches = stealstage.reconcile_carry_starts(starts, pickups)
+        self.assertEqual(len(matches), 2)
+        for changed in (
+                starts[:1],
+                starts + [{"name": "a", "team": "red", "time": 2.15}],
+                [{**starts[0], "name": "b"}, starts[1]],
+                [{**starts[0], "time": 1.200001}, starts[1]]):
+            with self.subTest(starts=changed):
+                with self.assertRaisesRegex(ValueError, "one-to-one"):
+                    stealstage.reconcile_carry_starts(changed, pickups)
+
+    def test_approach_exposure_denominator_is_separate_from_conversion(self) -> None:
+        track = [
+            (0, 400.0, 0.0, 0.0, 0),
+            (1, 383.0, 0.0, 0.0, 0),
+            (2, 380.0, 0.0, 0.0, 0),
+            (3, 380.0, 0.0, 0.0, 0),
+        ]
+        teams = {"a": "red"}
+        approaches = stealstage.qualifying_approaches(
+            "a", "red", track, (0.0, 0.0, 0.0), 0.0, [], teams,
+            (1.0, 3.0), fps=1.0)
+        exposure = stealstage.observed_stand_seconds(
+            "a", "red", track, 0.0, [], teams, (1.0, 3.0), fps=1.0)
+        self.assertEqual(len(approaches), 1)
+        self.assertEqual(exposure, 2.0)
+        self.assertEqual(stealstage.match_close_pickups(approaches, []), [])
+        assignment = self._assignment()
+        roster = {"roster": tuple(assignment), "teams": assignment,
+                  "window": (1.0, 3.0)}
+        common_track = [(frame, 0.0, 0.0, 0.0, 0)
+                        for frame in range(32)]
+        aligned = {
+            "frames": 31, "offset": 0.0, "level_time_end": 3.1,
+            "residuals": {name: 0.0 for name in assignment},
+            "mapping": {name: {"track": list(common_track)}
+                        for name in assignment},
+        }
+        with mock.patch.object(
+                stealstage, "validate_demo_alignment", return_value=aligned):
+            measured = stealstage.analyze_demo(
+                {}, roster, {"red": (0.0, 0.0, 0.0),
+                             "blue": (0.0, 0.0, 0.0)},
+                {"flag_events": []}, "lmctf22",
+                stealstage.load_contract(self._contract_bytes()))
+        self.assertAlmostEqual(
+            measured["by_team"]["red"]["observed_stand_seconds"], 2.0)
+        self.assertAlmostEqual(
+            measured["by_team"]["blue"]["observed_stand_seconds"], 2.0)
+        self.assertAlmostEqual(measured["observed_stand_seconds"], 4.0)
+
+    def test_sg_diagnostics_validate_fields_enums_rune_and_cutoff(self) -> None:
+        assignment = self._assignment()
+        roster = {"roster": tuple(assignment), "teams": assignment,
+                  "window": (10.0, 610.0)}
+        joins = [f"bot{index} entered the game" for index in range(10)]
+
+        def sg(index, **changes):
+            fields = {"role": 0, "seed": 0, "goal": 0, "sgoal": 0,
+                      "speed": 1, "link": -1, "action": -1,
+                      "stuck": "0.0", "frame": 100 + index}
+            fields.update(changes)
+            return (f"SG bot{index}: role={fields['role']} seed={fields['seed']} "
+                    f"goal={fields['goal']} sgoal={fields['sgoal']} "
+                    f"spd={fields['speed']} org=(0 0 0) link={fields['link']} "
+                    f"act={fields['action']} hp=0 dh=0 dl=0 "
+                    f"st={fields['stuck']} gnd=1 eng=0 frm={fields['frame']}")
+
+        class Rune:
+            seeds = [object()]
+            links = []
+
+        stdlog = {"flag_events": [], "combat_events": [
+            {"kind": "Kill", "attacker": "bot0", "victim": "bot1",
+             "weapon": "Railgun", "time": 609.0, "log_order": 1}]}
+        host = {"lines": joins + [sg(index) for index in range(10)] +
+                ["bot1 was railed by bot0"], "outcomes": []}
+        contract = stealstage.load_contract(self._contract_bytes())
+        metrics = stealstage.diagnostic_metrics(
+            host, stdlog, roster, Rune(), contract)
+        self.assertEqual(metrics["samples"], 10)
+        self.assertEqual(metrics["brackets"]["cutoff_gap_seconds"], 1.0)
+        cases = (
+            {"role": 9}, {"action": 7}, {"seed": 1},
+            {"stuck": "nan"}, {"frame": 2147483648},
+        )
+        for change in cases:
+            lines = joins + [sg(0, **change)] + [sg(index)
+                                                for index in range(1, 10)] + \
+                ["bot1 was railed by bot0"]
+            with self.subTest(change=change):
+                with self.assertRaises(ValueError):
+                    stealstage.diagnostic_metrics(
+                        {"lines": lines, "outcomes": []}, stdlog,
+                        roster, Rune(), contract)
+        late_stdlog = {**stdlog, "combat_events": [
+            {**stdlog["combat_events"][0], "time": 590.0}]}
+        with self.assertRaisesRegex(ValueError, "cutoff gap"):
+            stealstage.diagnostic_metrics(
+                host, late_stdlog, roster, Rune(), contract)
+
+    def test_full_rune_identity_and_numeric_evaluator_are_executable(self) -> None:
+        header = type("Header", (), {
+            "map_name": "lmctf22", "bsp_checksum": 1, "entity_crc32": 2,
+            "physics_flags": 3, "gravity": 800.0, "airaccelerate": 0.0,
+            "maxvelocity": 2000.0, "pmove_substep_ms": 10,
+            "server_frame_ms": 100, "host_physics_id": 1,
+            "payload_crc32": 4, "header_crc32": 5,
+            "action_contract_crc32": 6, "mechanism_contract_crc32": 7,
+            "num_seeds": 8, "num_links": 9,
+            "num_activation_nodes": 10, "num_activation_edges": 11,
+            "num_activation_plans": 12, "num_inventory_edges": 13,
+            "string_bytes": 14,
+        })()
+        identity = stealstage._rune_identity(type("Rune", (), {
+            "header": header})())
+        self.assertEqual(tuple(identity), stealstage.RUNE_IDENTITY_FIELDS)
+
+        rate_names = (
+            "horizontal_distance_per_active_bot_minute",
+            "moving_sample_fraction",
+            "world_or_hazard_suicides_per_active_bot_minute",
+            "combat_kills_per_active_team_minute",
+            "combat_deaths_per_active_team_minute",
+            "visible_or_audible_engagements_per_active_team_minute",
+            "authoritative_pickups_per_active_team_minute",
+            "approaches_per_observed_stand_minute",
+            "close_approach_conversion",
+            "authoritative_captures_per_active_team_minute",
+            "steal_to_capture_conversion",
+            "defender_post_dwell_fraction",
+            "defender_moving_sample_fraction",
+            "defender_departures_per_active_defender_minute",
+            "captures_conceded_per_active_team_minute",
+        )
+        raw = {"pickups": 10, "approaches": 10,
+               "observed_stand_seconds": 600.0, "timely": 5,
+               "forbidden": 0, "mismatches": 0}
+        baseline = {"rates": {name: 1.0 for name in rate_names},
+                    "raw": dict(raw)}
+        candidate = {"rates": {name: 1.0 for name in rate_names},
+                     "raw": dict(raw)}
+        contract = stealstage.load_contract(self._contract_bytes())
+        gate = stealstage.evaluate_bands(baseline, candidate, contract)
+        self.assertIn("steal.approach_rate_ratio", gate["checks"])
+        self.assertTrue(gate["sufficient_events"])
+        candidate["raw"]["forbidden"] = 1
+        gate = stealstage.evaluate_bands(baseline, candidate, contract)
+        self.assertFalse(gate["checks"][
+            "perception.forbidden_knowledge_events"]["pass"])
+        candidate["raw"]["forbidden"] = 0
+        candidate["raw"]["pickups"] = 4
+        baseline["raw"]["pickups"] = 4
+        gate = stealstage.evaluate_bands(baseline, candidate, contract)
+        self.assertFalse(gate["sufficient_events"])
+        self.assertEqual(gate["decision"], "inconclusive")
+
+    def test_measurement_tool_exposes_real_evaluate_and_verify_cli(self) -> None:
+        result = subprocess.run(
+            (sys.executable, "tools/stealstage.py", "--help"), cwd=ROOT,
+            check=True, stdout=subprocess.PIPE, text=True)
+        self.assertIn("evaluate", result.stdout)
+        self.assertIn("verify-result", result.stdout)
+        self.assertIn("knowledge-report", result.stdout)
+        tool = (ROOT / "tools/stealstage.py").read_bytes()
+        generated = stealstage.generate_knowledge_report(
+            ROOT, b"module fixture", tool)
+        identity = {field: generated[field] for field in (
+            "source_commit", "source_patch_sha256", "module_sha256")}
+        validated = stealstage.validate_knowledge_report(
+            json.dumps(generated).encode(), identity,
+            measurement_tool_sha256=generated["measurement_tool_sha256"],
+            policy_probe_sha256=generated["policy_probe_sha256"])
+        self.assertEqual(validated, generated)
+        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+            stealstage.validate_knowledge_report(
+                json.dumps(generated).encode(), identity,
+                measurement_tool_sha256="f" * 64,
+                policy_probe_sha256=generated["policy_probe_sha256"])
+
+    def test_dependency_free_serverrecord_reader_is_strict_and_tracks_effects(self) -> None:
+        serverdata = (bytes([12]) + b"\0" * 9 + b"game\0" +
+                      struct.pack("<H", 0xffff) + b"level\0")
+        map_config = (bytes([13]) + struct.pack("<H", 33) +
+                      b"maps/lmctf22.bsp\0")
+        skin_config = (bytes([13]) + struct.pack("<H", 1312) +
+                       b"bot0\\male/grunt\0")
+        first = (bytes([20]) + struct.pack("<i", 1) + bytes([18]) +
+                 bytes([1, 1]) + struct.pack("<h", 64) + bytes([0, 0]))
+        second = (bytes([20]) + struct.pack("<i", 2) + bytes([18]) +
+                  bytes([0, 1, 0, 0]))
+        messages = b"".join(
+            struct.pack("<i", len(message)) + message for message in
+            (serverdata + map_config + skin_config + first, second))
+        decoded = stealstage._decode_serverrecord(messages)
+        self.assertEqual(decoded["map"], "lmctf22")
+        self.assertEqual(decoded["wire_framenums"], [1, 2])
+        self.assertFalse(decoded["terminated"])
+        self.assertEqual([row[1] for row in decoded["tracks"][1]],
+                         [8.0, 0.0])
+        self.assertEqual(decoded["skin_epochs"][0],
+                         [(1, "bot0\\male/grunt")])
+        gap = messages.replace(struct.pack("<i", 2) + bytes([18]),
+                               struct.pack("<i", 3) + bytes([18]), 1)
+        with self.assertRaisesRegex(ValueError, "wire frames"):
+            stealstage._decode_serverrecord(gap)
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            stealstage._decode_serverrecord(messages[:-1])
+
+    def test_result_publication_is_atomic_noreplace_and_parent_nofollow(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="steal-output-") as temporary:
+            output = Path(temporary) / "result.json"
+            stealstage._write_exclusive(output, b"one\n")
+            self.assertEqual(output.read_bytes(), b"one\n")
+            with self.assertRaises(FileExistsError):
+                stealstage._write_exclusive(output, b"two\n")
+            self.assertEqual(output.read_bytes(), b"one\n")
+            real = Path(temporary) / "real"
+            real.mkdir()
+            alias = Path(temporary) / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            with self.assertRaises(OSError):
+                stealstage._write_exclusive(alias / "result.json", b"x\n")
+            parent = Path(temporary) / "replace-parent"
+            parent.mkdir()
+            moved = Path(temporary) / "opened-parent"
+            real_link = os.link
+
+            def replace_parent(*args, **kwargs):
+                result = real_link(*args, **kwargs)
+                parent.rename(moved)
+                parent.mkdir()
+                return result
+
+            with mock.patch.object(
+                    stealstage.os, "link", side_effect=replace_parent):
+                with self.assertRaisesRegex(ValueError, "parent changed"):
+                    stealstage._write_exclusive(
+                        parent / "result.json", b"authority\n")
 
 
 if __name__ == "__main__":

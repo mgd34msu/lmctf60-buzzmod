@@ -1,50 +1,75 @@
 {
   "metric_version": "steal-close-stage-a-v1",
   "frozen_before_candidate_trial": "2026-08-19",
+  "trial_design": {
+    "arms": ["baseline", "candidate"],
+    "rounds": [1, 2],
+    "treatments": ["baseline", "candidate"],
+    "roster_size": 10,
+    "team_size": 5
+  },
   "match_identity": {
-    "required_equal_fields": [
-      "metric_version",
-      "map_bsp_sha256",
-      "configuration_sha256",
-      "roster_and_team_assignment",
-      "active_duration_seconds",
-      "recording_policy",
-      "recording_harness_sha256",
-      "engine_sha256",
-      "rune_sha256",
-      "rune_identity"
-    ],
     "minimum_duration_seconds_per_round": 600,
     "minimum_arm_swapped_rounds": 2,
     "minimum_authoritative_pickups_per_arm": 5,
     "disposable_game_roots_required": true,
-    "disjoint_ports_required": true
+    "disjoint_ports_required": true,
+    "recording_policy_literal": "serverrecord before roster joins through removal after the full-roster allowance; evaluate the exact server-time crop",
+    "source_patch_rule": "SHA-256 of exact git diff --binary --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD -- bytes; reject every untracked nonignored path"
   },
   "receipt_schema": {
-    "required_per_arm_fields": [
+    "format": "lmctf-steal-stage-a-receipt-v1",
+    "top_level_fields": [
+      "format",
       "metric_version",
+      "metric_contract_sha256",
+      "measurement_tool_sha256",
+      "treatments",
+      "rounds"
+    ],
+    "treatment_fields": [
       "source_commit",
       "source_patch_sha256",
-      "module_sha256",
-      "engine_sha256",
-      "map_bsp_sha256",
-      "configuration_sha256",
-      "roster_and_team_assignment",
+      "module_sha256"
+    ],
+    "round_fields": [
+      "name",
+      "metric_version",
+      "arm",
+      "round",
+      "treatment",
+      "source_identity",
+      "root",
       "port",
+      "map",
+      "roster_and_team_assignment",
       "evaluation_window_server_seconds",
       "active_duration_seconds",
       "recording_policy",
-      "recording_harness_sha256",
-      "server_log_sha256",
-      "stdlog_sha256",
-      "stats_database_sha256",
-      "serverrecord_sha256",
-      "serverrecord_frames",
-      "serverrecord_level_time_end",
-      "rune_sha256",
+      "artifacts",
+      "configuration_artifacts",
+      "configuration_sha256",
       "rune_identity"
     ],
-    "required_rune_identity_fields": [
+    "source_identity_fields": [
+      "source_commit",
+      "source_patch_sha256",
+      "module_sha256"
+    ],
+    "artifact_fields": ["path", "sha256"],
+    "required_artifacts": [
+      "engine",
+      "module",
+      "rune",
+      "bsp",
+      "recording_harness",
+      "server_log",
+      "stdlog",
+      "stats_database",
+      "serverrecord",
+      "knowledge_report"
+    ],
+    "rune_identity_fields": [
       "map",
       "bsp_checksum",
       "entity_crc",
@@ -55,16 +80,74 @@
       "pmove_ms",
       "frame_ms",
       "host_physics_id",
-      "rune_payload_crc"
+      "rune_payload_crc",
+      "rune_header_crc",
+      "action_contract_crc",
+      "mechanism_contract_crc",
+      "num_seeds",
+      "num_links",
+      "num_activation_nodes",
+      "num_activation_edges",
+      "num_activation_plans",
+      "num_inventory_edges",
+      "string_bytes"
     ],
-    "identity_rule": "source and module identify each arm and may differ; metric_version and every other exact top-level receipt key named by match_identity.required_equal_fields is captured in required_per_arm_fields and must match; rune_sha256 pins the complete artifact while rune_identity records the current runtime map and movement-law fields"
+    "knowledge_report_fields": [
+      "format",
+      "metric_version",
+      "source_commit",
+      "source_patch_sha256",
+      "module_sha256",
+      "measurement_tool_sha256",
+      "policy_probe_sha256",
+      "missing_flag_acceptances",
+      "carried_flag_acceptances",
+      "unseen_dropped_flag_acceptances",
+      "wrong_floor_acceptances",
+      "hull_blocked_acceptances",
+      "runtime_violation_markers"
+    ],
+    "configuration_digest_rule": "sort normalized relative paths by UTF-8 bytes; SHA-256 each sequence of unsigned 64-bit big-endian path length, path bytes, unsigned 64-bit big-endian payload length, and exact payload bytes"
+  },
+  "result_schema": {
+    "format": "lmctf-steal-stage-a-result-v1",
+    "top_level_fields": [
+      "format",
+      "metric_version",
+      "metric_contract_sha256",
+      "measurement_tool_sha256",
+      "manifest_sha256",
+      "round_metrics",
+      "aggregate",
+      "report",
+      "report_sha256",
+      "result_sha256"
+    ],
+    "report_fields": [
+      "valid_receipts",
+      "round_count",
+      "sufficient_events",
+      "all_bands_pass",
+      "decision",
+      "checks"
+    ],
+    "hash_rule": "report_sha256 is SHA-256 of canonical JSON report; result_sha256 is SHA-256 of canonical JSON result with only result_sha256 omitted; canonical JSON is UTF-8, sorted keys, compact separators, no non-finite values, and one trailing newline"
+  },
+  "measurement_limits": {
+    "exact_window_seconds": 600.0,
+    "demo_fps": 10.0,
+    "alignment_residual_seconds_max": 0.11,
+    "carry_reconciliation_seconds_max": 0.2,
+    "diagnostic_cutoff_gap_seconds_max": 15.0,
+    "minimum_diagnostic_rows_per_bot": 1
   },
   "event_authority": {
     "steal": "production F Pickup score event reconciled exactly with STATS_OFFENSE_FLAG",
     "capture": "production CTF capture stats and host outcome log, reconciled exactly",
-    "approach": "serverrecord geometry crossing from outside to inside 384 horizontal units of the live enemy stand",
+    "approach": "serverrecord geometry crossing from outside to inside 384 horizontal units of the enemy stand derived from the exact receipt-hashed BSP",
     "close_conversion": "first authoritative carry start no later than 1.5 seconds after a qualifying approach",
-    "demo_capture": "diagnostic only; outcomecard 280-unit carry-end inference is never authoritative"
+    "demo_capture": "diagnostic only; outcomecard 280-unit carry-end inference is never authoritative",
+    "forbidden_knowledge": "exact hashed lmctf-steal-knowledge-report-v1 sidecar generated by the checked-in executable policy probe and bound to source commit, source patch, module, measurement tool, and probe plus runtime violation markers; every acceptance count must be zero"
   },
   "metric_calculation": {
     "evaluation_window": "half-open [t0,t0+600.0) server-time interval where t0 is the last authoritative PlayerTeamChange roster-join timestamp; all ten roster clients must remain continuously joined through t0+600.0",
@@ -77,8 +160,8 @@
     "world_or_hazard_suicides": "timestamped StdLog Suicide events in the evaluation window summed over the roster; complete-stream totals reconcile to fresh unified game_stats.suicides and conservatively include self-weapon suicides",
     "combat": "timestamped StdLog Kill attacker and victim events in the evaluation window summed over the roster; complete-stream totals reconcile to fresh unified game_stats.frags and game_stats.fragged; divide each by active team minutes",
     "visible_or_audible_engagements": "cropped one-second SG telemetry samples with eng=1, whose production source is a current visible target; recent unseen damage evidence may admit a visible rear-cone scan but is not itself an engagement; divide by active team minutes",
-    "forbidden_knowledge_events": "failures from executable production-policy checks covering missing or carried, unseen dropped, wrong-floor, or hull-blocked flag facts, plus every runtime FLAG_KNOWLEDGE_VIOLATION marker if one is emitted; absence of a marker does not replace the policy checks",
-    "approach": "serverrecord consecutive-frame crossing whose second frame is in the evaluation window from horizontal distance at least 384 to less than 384 from the authenticated enemy stand while the complete level-start production F Pickup, FC LostFlag, F Return, and F Capture timeline says that flag is home; a dropped flag remains dropped at droptime+30 and returns only when the production ctf_flagwave comparison level.time > droptime+30 fires; flag events must be sorted by timestamp and unique integer production log_order, and same-timestamp events execute in ascending production log order",
+    "forbidden_knowledge_events": "run the checked-in policy probe, then sum the six exact zero-valued fields in its receipt-hashed lmctf-steal-knowledge-report-v1 sidecar plus runtime FLAG_KNOWLEDGE_VIOLATION markers; the sidecar is bound to the exact source commit, source patch, module, measurement tool, and probe",
+    "approach": "serverrecord consecutive-frame crossing whose second frame is in the evaluation window from horizontal distance at least 384 to less than 384 from the enemy stand derived from the exact receipt-hashed BSP while the complete level-start production F Pickup, FC LostFlag, F Return, and F Capture timeline says that flag is home; a dropped flag remains dropped at droptime+30 and returns only when the production ctf_flagwave comparison level.time > droptime+30 fires; flag events must be sorted by timestamp and unique integer production log_order, and same-timestamp events execute in ascending production log order; report approaches per observed enemy-stand minute, where each attacking team contributes its target stand's consecutive serverrecord ticks in the exact window while that flag is home exactly once, not once per bot",
     "demo_time_alignment": "median over the ten roster clients of StdLog PlayerConnect seconds minus first serverrecord entity-frame seconds; every effects carry start must reconcile to an authoritative same-player F Pickup within 0.2 seconds",
     "close_conversion": "authoritative same-player F Pickup from 0.0 through 1.5 seconds after a qualifying approach; one pickup and one approach may be matched at most once",
     "steal": "timestamped StdLog F Pickup events in the evaluation window divided by active team minutes; the complete timestamped stream must exactly equal host stole outcomes and fresh unified ctf_stats.flag_pickups",
@@ -115,7 +198,8 @@
     "steal": {
       "authoritative_pickups_per_active_team_minute_ratio_min": 1.10,
       "authoritative_pickups_per_active_team_minute_delta_min": 0.10,
-      "authoritative_pickup_count_delta_min": 2
+      "authoritative_pickup_count_delta_min": 2,
+      "approaches_per_observed_stand_minute_ratio_min": 1.10
     },
     "conversion": {
       "close_approach_conversion_absolute_delta_min": 0.05,
