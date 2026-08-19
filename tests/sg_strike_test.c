@@ -637,6 +637,25 @@ static void TestCarrierStandoffKeepsRecovery(void)
 	CHECK(team.duty[3] == SG_STRIKE_DUTY_NONE);
 	CHECK(team.duty[1] == SG_STRIKE_DUTY_RECOVER);
 	CHECK(team.duty[2] == SG_STRIKE_DUTY_ESCORT);
+
+	/* With only one helper left, returning the own flag beats an optional
+	 * escort/clear assignment: the carrier cannot score without it. */
+	frame = Frame(690.0f);
+	AddAttacker(&frame, 0, 610u, 2, 1000);
+	AddAttacker(&frame, 1, 611u, 2, 3000);
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	frame.slot[1].carrier_goal_ms = 100;
+	frame.slot[1].recover_goal_ms = 200;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 0);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
 }
 
 static void TestWeaponRouteRetirementVerdicts(void)

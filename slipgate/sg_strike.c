@@ -573,33 +573,10 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 
 	if (carrier >= 0)
 	{
-		if (frame->now < team->clear_until)
-		{
-			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
-				if ((available & Strike_Bit(slot)) != 0u &&
-				    old[slot] == SG_STRIKE_DUTY_CLEAR)
-				{
-					clear = slot;
-					break;
-				}
-			if (clear < 0)
-				clear = Strike_LowestCost(frame, available, 0);
-			if (clear >= 0)
-			{
-				team->duty[clear] = SG_STRIKE_DUTY_CLEAR;
-				available &= ~Strike_Bit(clear);
-			}
-		}
-		escort = Strike_LowestCost(frame, available, 2);
-		if (escort >= 0)
-		{
-			team->duty[escort] = SG_STRIKE_DUTY_ESCORT;
-			available &= ~Strike_Bit(escort);
-		}
-		/* Carrying the enemy flag does not make an away own flag irrelevant:
-		 * capture is impossible until it returns. Preserve one stable recovery
-		 * mission after the bounded clear and required escort assignments, then
-		 * use only the remaining bodies for enemy-base pressure. */
+		/* In a standoff the carrier cannot score until our flag returns, so
+		 * recovery owns the first scarce body.  Normal egress keeps the original
+		 * short clear-before-escort order; standoff egress orders the essential
+		 * jobs RECOVER, ESCORT, then CLEAR. */
 		if (!frame->own_flag_home)
 		{
 			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
@@ -616,6 +593,46 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 			{
 				team->duty[recover] = SG_STRIKE_DUTY_RECOVER;
 				available &= ~Strike_Bit(recover);
+			}
+		}
+		if (frame->own_flag_home && frame->now < team->clear_until)
+		{
+			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				if ((available & Strike_Bit(slot)) != 0u &&
+				    old[slot] == SG_STRIKE_DUTY_CLEAR)
+				{
+					clear = slot;
+					break;
+				}
+			if (clear < 0)
+				clear = Strike_LowestCost(frame, available, 0);
+			if (clear >= 0)
+			{
+				team->duty[clear] = SG_STRIKE_DUTY_CLEAR;
+				available &= ~Strike_Bit(clear);
+			}
+		}
+			escort = Strike_LowestCost(frame, available, 2);
+		if (escort >= 0)
+		{
+			team->duty[escort] = SG_STRIKE_DUTY_ESCORT;
+			available &= ~Strike_Bit(escort);
+		}
+		if (!frame->own_flag_home && frame->now < team->clear_until)
+		{
+			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				if ((available & Strike_Bit(slot)) != 0u &&
+				    old[slot] == SG_STRIKE_DUTY_CLEAR)
+				{
+					clear = slot;
+					break;
+				}
+			if (clear < 0)
+				clear = Strike_LowestCost(frame, available, 0);
+			if (clear >= 0)
+			{
+				team->duty[clear] = SG_STRIKE_DUTY_CLEAR;
+				available &= ~Strike_Bit(clear);
 			}
 		}
 		for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)

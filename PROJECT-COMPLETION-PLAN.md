@@ -189,9 +189,10 @@ far-field standstill; mechanisms and ballistic actions are never forced by that
 fallback. The strike overlay now preserves one real RECOVER mission whenever
 the team's flag is away, including one- and two-member casualty states, rather
 than redirecting every survivor to an enemy flag the team cannot score. During
-a live carrier standoff it also retains one recovery owner after its bounded
-clearer and required escort, so the carrier can actually complete the capture;
-that owner is reassigned on death without disturbing the carrier or escort.
+a live carrier standoff it prioritizes RECOVER, then ESCORT, then its bounded
+CLEAR task, so casualties cannot spend the only available helper on optional
+room-clearing while the carrier is unable to score. The recovery owner is
+reassigned on death without disturbing the carrier or surviving escort.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 
