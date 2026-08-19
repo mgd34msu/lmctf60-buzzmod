@@ -71,6 +71,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
@@ -2559,7 +2560,8 @@ static void Think_RespawnEdge(sg_bot_t *bot, edict_t *e)
 		SG_Mark(&bot->watch_since);
 		SG_Mark(&bot->stag_since);
 		SG_Mark(&bot->wedge_since);
-		bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
+		bot->dither_salt = SG_RouteDitherInitial(bot->instance_token,
+		    (unsigned)(e - g_edicts - 1));
 	}
 	if (bot->death_taught && sg_cv.tilt->value > 0.0f)
 	{
@@ -2655,7 +2657,8 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 		{
 			bot->prev_seed = was;
 			SG_Mark(&bot->prev_seed_time);
-			bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
+			bot->dither_salt = SG_RouteDitherNext(bot->dither_salt,
+			    was, bot->seed);
 
 			/*
 			 * PITTRACE (sg_debug): the moment a bot's seed enters the

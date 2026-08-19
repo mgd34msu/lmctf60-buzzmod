@@ -328,7 +328,9 @@ Required work:
   route dither, and hook-pong shelving were struck and must not be repeated.
   Preserve the adopted `sg_nobacktrack 60` baseline rather than incorrectly
   describing it as disabled;
-- close the transition-determinism and dither-retry defects;
+- keep the struck route-dither dose disabled; seed transitions now derive its
+  dormant per-visit salt from bot/route state without consuming the global
+  behavior RNG, so route length cannot perturb enabled patrol/ribbon choices;
 - preserve proven pit, water, fall, door, lift, teleport, and grapple safety;
 - generate blind movement film and retain the exact source/demo/metric identity.
 

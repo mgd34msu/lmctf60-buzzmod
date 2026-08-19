@@ -102,9 +102,9 @@ typedef struct sg_bot_s
 	/* hook execution, two-phase: aim this frame (ClientThink turns the cmd
 	 * angles into v_angle), fire immediately after, since Weapon_Hook_Fire
 	 * launches along v_angle; then release before the p_weapon.c brake band */
-	unsigned	dither_salt;    /* route dither: rerolled per seed visit
+	unsigned	dither_salt;    /* route dither: deterministically mixed per visit
 	                             * so a choice holds within a visit but
-	                             * varies across visits */
+	                             * varies without consuming the global RNG */
 	vec3_t		hp_cur_dep;     /* hook ping-pong: this ride's departure */
 	vec3_t		hp_prev_dep;    /* previous ride's departure point */
 	float		hp_prev_land;   /* when the previous ride completed */

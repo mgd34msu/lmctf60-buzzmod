@@ -12,6 +12,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_route_dither.h"
 
 level_locals_t level;
 sg_cvars_t sg_cv;
@@ -390,6 +391,7 @@ static void CheckHighSpeedTeleportHandoff(void)
 	int next_link = LINK_RUN_TO_SOURCE;
 	sg_run_completion_t completion;
 	unsigned expected_dither;
+	int expected_random;
 	usercmd_t zero;
 	char expected_line[256];
 	vec3_t origin = { 299.5f, -1508.375f, -1127.875f };
@@ -420,8 +422,11 @@ static void CheckHighSpeedTeleportHandoff(void)
 	invalidate_on_call = 0;
 	invalidate_mode = INVALIDATE_NONE;
 	ResetDebugCapture(1.0f);
+	expected_dither = SG_RouteDitherNext(0U, SEED_DEPARTURE,
+	    SEED_TELE_SOURCE);
+	CHECK(expected_dither == 0x0c572cbcu);
 	srand(271828U);
-	expected_dither = (unsigned)(rand() & 0x7fffffff);
+	expected_random = rand();
 	srand(271828U);
 
 	completion = SG_RunCommitCompletion(&fixture.rune,
@@ -444,6 +449,7 @@ static void CheckHighSpeedTeleportHandoff(void)
 	CHECK(bot.prev_seed == SEED_DEPARTURE);
 	CHECK(bot.prev_seed_time == level.time);
 	CHECK(bot.dither_salt == expected_dither);
+	CHECK(rand() == expected_random);
 	CHECK(VectorCompare(bot.last_origin, ent.s.origin));
 	CHECK(!bot.seedless_active);
 	CHECK(bot.seedless_since == 0.0f);

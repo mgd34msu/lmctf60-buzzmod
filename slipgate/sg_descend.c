@@ -28,6 +28,7 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_route_policy.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
@@ -1668,7 +1669,8 @@ qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
 	}
 	bot->prev_seed = previous_seed;
 	bot->prev_seed_time = level.time;
-	bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
+	bot->dither_salt = SG_RouteDitherNext(bot->dither_salt,
+	    previous_seed, completed->to);
 	bot->seed = completed->to;
 	VectorCopy(tc->e->s.origin, bot->last_origin);
 	bot->seedless_active = false;
