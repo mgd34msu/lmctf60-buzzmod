@@ -1,4 +1,5 @@
 #include "slipgate/sg_defense_shift.h"
+#include "slipgate/sg_route_policy.h"
 #include "g_local.h"
 #include "slipgate/sg_combat.h"
 
@@ -15,6 +16,19 @@ static int failures;
 		failures++; \
 	} \
 } while (0)
+
+static void TestOneExitRouteStaysMobile(void)
+{
+	CHECK(SG_RouteReturnPenaltyAllowed(4, 4, 1, 2, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 1, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 5, 1, 3, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 0, 3, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, 0.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, NAN));
+	CHECK(!SG_RouteReturnPenaltyAllowed(-1, 4, 1, 3, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 2, 3, 60.0f));
+}
 
 static void TestLateralChoice(void)
 {
@@ -270,6 +284,7 @@ static void TestCombatPreviewCandidateLaw(void)
 
 int main(void)
 {
+	TestOneExitRouteStaysMobile();
 	TestLateralChoice();
 	TestGuardBandAndGeometry();
 	TestFailClosedInputs();

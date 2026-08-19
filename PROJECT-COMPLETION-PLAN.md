@@ -180,8 +180,10 @@ granting touch authority, immediate strike release when no ready teammate can
 reach the synchronization window before its deadline, per-frame release when a
 forming teammate falls behind the remaining synchronization clock, and weapon
 preparation that yields to enemy-stand pressure inside five seconds or when its
-route saves less than one second. Their pure policies are executable; runtime
-outcome acceptance remains pending on the persistent fleet.
+route saves less than one second. The adopted immediate-return preference now
+also yields in a one-finite-exit corridor, so it cannot turn a required reverse
+edge into a three-second standstill. Their pure policies are executable;
+runtime outcome acceptance remains pending on the persistent fleet.
 
 ### Acceptance instrumentation and provenance
 

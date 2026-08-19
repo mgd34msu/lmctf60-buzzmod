@@ -26,6 +26,7 @@
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_route_policy.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
 #include "slipgate/sg_hooks.h"
@@ -287,6 +288,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean supply_route = SG_DefenseSupplyActive(bot) && route_pure;
 	edict_t *approach_flag = NULL;
 	float approach_flag_distance = 0.0f;
+	int finite_route_neighbors = 0;
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
 
@@ -306,6 +308,37 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				approach_flag = flag;
 		}
 	}
+
+	/* The immediate-return price is meaningful only when the field offers a
+	 * choice. Count finite graph neighbors once for the fan so an adopted
+	 * anti-oscillation preference cannot make a one-exit corridor stand still. */
+	if (bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds)
+		for (li = SG_Rune()->first_link[bot->seed]; li >= 0;
+		     li = SG_Rune()->next_link[li])
+		{
+			const rune_link_t *neighbor = &SG_Rune()->links[li];
+			int prior;
+			qboolean duplicate = false;
+
+			if (neighbor->to >= 0 &&
+			    neighbor->to < SG_Rune()->hdr.num_seeds &&
+			    neighbor->to != bot->seed &&
+			    route_field[neighbor->to] < SG_FIELD_INF)
+			{
+				/* Multiple proved actions may reach the same neighbor. They are
+				 * one route choice for this policy, not independent exits. */
+				for (prior = SG_Rune()->first_link[bot->seed];
+				     prior >= 0 && prior != li;
+				     prior = SG_Rune()->next_link[prior])
+					if (SG_Rune()->links[prior].to == neighbor->to)
+					{
+						duplicate = true;
+						break;
+					}
+				if (!duplicate)
+					finite_route_neighbors++;
+			}
+		}
 
 	/* life ticker for the route-jitter seed */
 	if (e->health <= 0)
@@ -1305,8 +1338,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * pricing leaves no other finite way down. A human does turn
 		 * around sometimes; a human does not do-si-do.
 		 */
-		if (li >= 0 && SG_Rune()->links[li].to == bot->prev_seed &&
-		    SG_AgeUnder(bot->prev_seed_time, 3.0f))
+		if (SG_RouteReturnPenaltyAllowed(bot->prev_seed, l->to,
+		        SG_AgeUnder(bot->prev_seed_time, 3.0f),
+		        finite_route_neighbors, sg_cv.nobacktrack->value))
 			v *= 1.0f + sg_cv.nobacktrack->value / 100.0f;
 
 		/*
