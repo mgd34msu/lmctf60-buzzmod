@@ -3573,7 +3573,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (ls >= 0)
 			{
 				int link_index, next_link = -1, next_value;
-				const int *preturn_route_field = goal_field;
+				const int *preturn_route_field = route_field
+				    ? route_field : goal_field;
 
 				next_value = (preturn_route_field[ls] < SG_FIELD_INF)
 				    ? preturn_route_field[ls] : 0x7fffffff;

@@ -258,6 +258,15 @@ assert "goal_field[hook_link->to]" not in fire
 assert "!SG_HookRideLaunchAllowed(worth)" in fire
 assert '"value-fire-unassessed"' in fire
 assert "if (!route_field ||" in fire
+
+# Cut-rope and rocket-jump landing lookahead must follow the route that owns
+# the movement commitment.  Falling back to the strategic goal field is valid
+# only when no tactical route field exists; otherwise touchdown immediately
+# contradicts the view direction chosen in flight.
+preturn = body("THE PRE-TURN (sg_preturn", "if (bot->hook_phase == 3)")
+assert "const int *preturn_route_field = route_field" in preturn
+assert "? route_field : goal_field;" in preturn
+assert "preturn_route_field[candidate->to]" in preturn
 assert 'Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
 assert "goto hook_wait;" in fire[fire_retire:fire_proof]
 assert "Hook_LiveBeginAfterFire" in fire

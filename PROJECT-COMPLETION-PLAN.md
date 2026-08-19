@@ -308,6 +308,10 @@ Autonomous escorts now finish at the source of the selected carrier or moving-
 formation field rather than reverting to the capture stand at their local
 minimum. Exact human cover targets still outrank that field, and SCOOP retains
 its separate dropped-flag terminal law.
+Cut-rope and rocket-jump pre-turn now reads the active movement route field.
+When a tactical or coordinator route owns the landing, the bot faces its next
+step in that same route instead of pre-turning down the strategic goal field
+and reversing direction as soon as the commitment resumes at touchdown.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1303,6 +1307,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       own stand merely because the local gradient reached its minimum.
       ESCORT terminal fallback follows its selected carrier/formation field;
       exact human cover targets and relay SCOOP remain separately authoritative.
+      Cut-rope and rocket-jump landing pre-turn follows the active tactical
+      route field, with the strategic goal field used only when no route owns
+      the movement commitment.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.
