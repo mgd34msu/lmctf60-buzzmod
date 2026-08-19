@@ -320,7 +320,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 				continue;
 			if (mb->ent->client->ctf.teamnum != team)
 				continue;
-			if (mb->last_role != (int)SG_ROLE_ATTACK ||
+			if (!SG_StrikeEnemyPressureSnapshot(mb) ||
 			    mb->last_goalcost < 0)
 				continue;
 			if (mb->last_goalcost < 6000)
@@ -586,11 +586,12 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 			sg_host.dprint("ESCORT %s begins\n", e->client->pers.netname);
 	}
 	/*
-	 * Unconditionally: last_role feeds the rally's partner census, the
-	 * escort head-count, and the wavepush attacker census. It sat inside
-	 * the debug gate above until the 2026-08-11 standards pass -- on any
-	 * server running sg_debug 0 (the fleet included) it never updated,
-	 * and every one of those censuses read a stale role forever.
+	 * Unconditionally: last_role is the observable organic role and the
+	 * escort-assignment incumbent.  Rally pairing reads the pre-frame effective
+	 * pressure snapshot instead, because a coordinator duty can override this
+	 * role before the serial think loop.  This assignment sat inside the debug
+	 * gate until the 2026-08-11 standards pass, leaving every non-debug consumer
+	 * stale forever.
 	 */
 	bot->last_role = (int)role;
 	bot->was_carrying = carrying;

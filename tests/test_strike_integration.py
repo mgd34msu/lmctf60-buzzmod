@@ -490,6 +490,10 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("!tc->strike_active &&", descend)
         self.assertIn("if (tc->rearguard &&", descend)
         self.assertIn("tc->strike_pressure ? 1500", descend)
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        rally = goal[goal.index("THE RALLY."):goal.index("rally_done:")]
+        self.assertIn("SG_StrikeEnemyPressureSnapshot(mb)", rally)
+        self.assertNotIn("mb->last_role != (int)SG_ROLE_ATTACK", rally)
 
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()
