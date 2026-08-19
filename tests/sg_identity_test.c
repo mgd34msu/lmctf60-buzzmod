@@ -389,6 +389,16 @@ static void TestReasons(void)
 static void TestBotPingDoesNotOwnGameplayRandomness(void)
 {
 	int frame;
+	int expected_random;
+	int base;
+
+	srand(5119);
+	expected_random = rand();
+	srand(5119);
+	base = SG_BotPingBase(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(base >= 5 && base <= 15);
+	CHECK(base == SG_BotPingBase(UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
 
 	for (frame = 0; frame < 1000; frame++)
 	{

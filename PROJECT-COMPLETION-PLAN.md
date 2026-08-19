@@ -343,9 +343,9 @@ Required work:
 - keep the struck route-dither dose disabled; seed transitions now derive its
   dormant per-visit salt from bot/route state without consuming the global
   behavior RNG, so route length cannot perturb enabled patrol/ribbon choices;
-- derive the cosmetic per-frame scoreboard-ping flicker from bot instance and
-  frame identity rather than consuming roughly one hundred shared gameplay RNG
-  draws per second in a ten-bot match;
+- keep both the cosmetic scoreboard-ping base and its per-frame flicker derived
+  from bot instance, slot, and frame identity; neither bot creation nor the
+  ten-bot per-frame display path may consume shared gameplay RNG;
 - preserve proven pit, water, fall, door, lift, teleport, and grapple safety;
 - generate blind movement film and retain the exact source/demo/metric identity.
 

@@ -24,6 +24,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_pov_identity.h"
 #include "slipgate/sg_defense_shift.h"
+#include "slipgate/sg_bot_ping.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -562,7 +563,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].patrol_random = SG_DefensePatrolRandomInitial(
 	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
 	sg_bots[slot].active = true;
-	sg_bots[slot].fake_ping = 5 + rand() % 11;
+	sg_bots[slot].fake_ping = SG_BotPingBase(sg_bots[slot].instance_token,
+	    (unsigned)(ent - g_edicts - 1));
 	(void)SG_CompoundGuardGameBotAttach(&sg_bots[slot].compound_guard,
 	    slot, ent);
 	/* A fresh late join has no respawn edge from which to seed the movement
