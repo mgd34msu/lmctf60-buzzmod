@@ -4304,7 +4304,10 @@ stag_done:
 			{
 				/* Dwell begins at proved arrival, never at departure.  A long
 				 * walking leg must still end in an unhurried post observation. */
-				SG_TimerArm(&bot->patrol_until, 2.0f + random() * 4.0f);
+				bot->patrol_random =
+				    SG_DefensePatrolRandomNext(bot->patrol_random);
+				SG_TimerArm(&bot->patrol_until,
+				    SG_DefensePatrolDwell(bot->patrol_random));
 			}
 			else if (bot->patrol_seed >= 0)
 			{
@@ -4352,9 +4355,11 @@ stag_done:
 						nc++;
 					}
 				}
+				bot->patrol_random =
+				    SG_DefensePatrolRandomNext(bot->patrol_random);
 				chosen_link = SG_DefensePatrolChoose(cand, nc,
 				    (int)(1000.0f * SG_PersonaCampScale(e)), bot->prev_seed,
-				    (unsigned)rand(), &chosen_seed);
+				    bot->patrol_random, &chosen_seed);
 				if (chosen_link >= 0)
 				{
 					bot->patrol_seed = chosen_seed;

@@ -372,6 +372,7 @@ typedef struct sg_bot_s
 	float		lead_inferred_until; /* bounded clock-only spawn pursuit */
 	int			patrol_seed;    /* current patrol leg target, -1 = holding */
 	float		patrol_until;   /* when the next leg may start */
+	uint32_t	patrol_random;  /* private route/dwell sequence; never global RNG */
 	int			def_shift_seed; /* threat-responsive guarded RUN target */
 	int			def_shift_link; /* direct RUN authority for that target */
 	int			def_shift_from; /* do not bounce straight back here */

@@ -220,6 +220,9 @@ watchman onto the immutable home route instead of continuing to the weapon.
 Leaving DEFEND now retires the role-local patrol target, dwell clock, and stand
 latch immediately. A later defensive assignment cannot resume a patrol leg
 selected under an older role or topology state.
+Quiet-defender patrol route and dwell choices now advance a private per-bot
+sequence. Other bots' combat, chat, route, and cosmetic randomness cannot
+change a defender's admitted circuit or observation time.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
@@ -325,8 +328,9 @@ production changes above:
 
 Required work:
 
-- finish the enabled quiet-defender patrol and prove that it replaces
-  micro-pacing with non-reversing proved walking legs;
+- validate the enabled quiet-defender patrol against retained movement film;
+  its current executable law uses non-reversing proved walking legs, begins
+  dwell only at proved arrival, and keeps route/dwell draws private per bot;
 - compare bot trajectories with the retained human demo corpus using a frozen
   speed, acceleration, turn, air-gain, and route-shape metric;
 - tune or strike the remaining human-speed air-strafe chain work from measured

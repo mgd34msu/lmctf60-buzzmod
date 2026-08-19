@@ -4,6 +4,33 @@
 #include <float.h>
 #include <math.h>
 
+uint32_t SG_DefensePatrolRandomNext(uint32_t state)
+{
+	if (state == 0)
+		state = UINT32_C(0x6d2b79f5);
+	state ^= state >> 16;
+	state *= UINT32_C(0x7feb352d);
+	state ^= state >> 15;
+	state *= UINT32_C(0x846ca68b);
+	state ^= state >> 16;
+	return state ? state : UINT32_C(0x27d4eb2d);
+}
+
+uint32_t SG_DefensePatrolRandomInitial(uint64_t instance_token,
+	unsigned client_slot)
+{
+	uint32_t state = (uint32_t)instance_token ^
+	    (uint32_t)(instance_token >> 32) ^
+	    (client_slot + 1u) * UINT32_C(0x9e3779b9);
+
+	return SG_DefensePatrolRandomNext(state);
+}
+
+float SG_DefensePatrolDwell(uint32_t draw)
+{
+	return 2.0f + (float)(draw % 4001u) * 0.001f;
+}
+
 float SG_DefensePatrolThrottle(float configured)
 {
 	if (!isfinite(configured) || configured <= 0.0f)

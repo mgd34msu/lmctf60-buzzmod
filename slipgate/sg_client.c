@@ -23,6 +23,7 @@
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_pov_identity.h"
+#include "slipgate/sg_defense_shift.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -558,6 +559,8 @@ qboolean SG_AddBotTeam(int teamnum)
 		BotSlot_Reset(&sg_bots[slot]);
 		return false;
 	}
+	sg_bots[slot].patrol_random = SG_DefensePatrolRandomInitial(
+	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
 	sg_bots[slot].active = true;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
 	(void)SG_CompoundGuardGameBotAttach(&sg_bots[slot].compound_guard,

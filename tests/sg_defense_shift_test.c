@@ -140,6 +140,26 @@ static void TestQuietPatrolCircuit(void)
 	CHECK(SG_DefensePatrolChoose(NULL, 5, 1000, -1, 0, &seed) == -1);
 }
 
+static void TestQuietPatrolOwnsItsRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	float dwell;
+
+	srand(2191);
+	expected_random = rand();
+	srand(2191);
+	state = SG_DefensePatrolRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(state != 0);
+	CHECK(state == SG_DefensePatrolRandomInitial(
+	      UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+	CHECK(SG_DefensePatrolRandomNext(state) != state);
+	dwell = SG_DefensePatrolDwell(state);
+	CHECK(dwell >= 2.0f && dwell <= 6.0f);
+	CHECK(SG_DefensePatrolDwell(state) == dwell);
+}
+
 static void TestQuietPatrolThrottle(void)
 {
 	CHECK(SG_DefensePatrolThrottle(0.55f) == 0.55f);
@@ -320,6 +340,7 @@ int main(void)
 	TestFailClosedInputs();
 	TestInvalidShiftRetiresOnlyExactCommitment();
 	TestQuietPatrolCircuit();
+	TestQuietPatrolOwnsItsRandomness();
 	TestQuietPatrolThrottle();
 	TestQuietPatrolDwellsOnlyAfterArrival();
 	TestCombatAdmissionAndDeterminism();

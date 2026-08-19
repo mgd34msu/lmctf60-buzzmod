@@ -3,6 +3,7 @@
 #define SG_DEFENSE_SHIFT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct sg_defense_shift_candidate_s
 {
@@ -105,5 +106,12 @@ int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed);
 /* sg_patrol is the patrol walking throttle.  Invalid/off values disable the
  * behavior; enabled values are bounded away from both a shuffle and a sprint. */
 float SG_DefensePatrolThrottle(float configured);
+
+/* Private per-bot patrol sequence. Route and dwell choices must not consume
+ * the process-global RNG used by combat and other bots. */
+uint32_t SG_DefensePatrolRandomInitial(uint64_t instance_token,
+	unsigned client_slot);
+uint32_t SG_DefensePatrolRandomNext(uint32_t state);
+float SG_DefensePatrolDwell(uint32_t draw);
 
 #endif /* SG_DEFENSE_SHIFT_H */
