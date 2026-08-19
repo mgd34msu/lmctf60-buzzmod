@@ -2571,6 +2571,35 @@ static qboolean Gen_SeedHasOutgoing(int seed)
 	return false;
 }
 
+/* Candidate discovery is only a budget around the authoritative approach
+ * replay below.  The historical 48-unit vertical budget remains exact for
+ * AUTO/BUTTON and for ordinary dry DIRECT egress.  A DIRECT trigger whose
+ * already-proved best egress ends in supported safe shallow water may use the
+ * same 96-unit vertical discovery budget as that egress: lmctf58's four lower
+ * cellar triggers have a realizable 72-unit descent from their connected dry
+ * source to the only wait point that also crosses into the shallow basin.
+ * Unsafe/deep water cannot enlarge this budget because it must pass the same
+ * shared controller-aware liquid gate used by both egress replay call sites. */
+static qboolean Door_ApproachEnvelopeEligible(int controller_kind,
+	int egress_destination, const vec3_t delta)
+{
+	float max_vertical = 48.0f;
+	float horizontal2;
+
+	if (!delta)
+		return false;
+	if (controller_kind == SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    egress_destination >= 0 && egress_destination < gen_num_seeds &&
+	    gen_source_waterlevel[egress_destination] == 1 &&
+	    SG_OracleDoorEgressWaterSafe(controller_kind,
+	        gen_source_waterlevel[egress_destination],
+	        gen_source_watertype[egress_destination]))
+		max_vertical = 96.0f;
+	horizontal2 = delta[0] * delta[0] + delta[1] * delta[1];
+	return horizontal2 <= 320.0f * 320.0f &&
+	       fabsf(delta[2]) <= max_vertical;
+}
+
 /* Select a graph-connected static endpoint for a declared mechanism.  A
  * Euclidean nearest seed is insufficient: it can be on the far side of a
  * wall, on the mover itself, or an isolated germ.  Trace the complete player
@@ -4137,6 +4166,8 @@ static void Link_Doors(void)
 			{
 				vec3_t approach_delta;
 				float approach_h2, score;
+				int approach_destination = best_slot[0] >= 0
+				    ? dests[best_slot[0]] : -1;
 
 				if (!gen_source_stable[source] ||
 				    !SG_OracleDoorEgressWaterSafe(controller_kind,
@@ -4153,8 +4184,8 @@ static void Link_Doors(void)
 				               approach_delta);
 				approach_h2 = approach_delta[0] * approach_delta[0] +
 				              approach_delta[1] * approach_delta[1];
-				if (approach_h2 > 320.0f * 320.0f ||
-				    fabsf(approach_delta[2]) > 48.0f)
+				if (!Door_ApproachEnvelopeEligible(controller_kind,
+				        approach_destination, approach_delta))
 					continue;
 				score = approach_h2 + approach_delta[2] * approach_delta[2];
 				Door_CandidateInsert(source, score, sources, source_scores,
