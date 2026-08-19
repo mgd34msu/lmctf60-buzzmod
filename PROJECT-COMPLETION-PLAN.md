@@ -330,7 +330,9 @@ When a teammate already carries the enemy flag, the one role-selected escort
 owns the moving carrier field and every remaining attacker keeps the fixed
 enemy-stand field. Attack pressure can no longer collapse into redundant
 carrier-following, nor can an unseen carrier make the enemy-flag belief
-fallback route the whole attack share back toward its own stand.
+fallback route the whole attack share back toward its own stand. The same law
+now owns strike `PRESS`, `BREACH`, and `CLEAR` routes, so the coordinator cannot
+undo that pressure after the role objective selects it.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

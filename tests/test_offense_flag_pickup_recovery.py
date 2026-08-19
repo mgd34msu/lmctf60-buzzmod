@@ -134,6 +134,14 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertLess(fixed_blue, moving)
         self.assertIn("sg_caco_team_belief.carrier[team_index].client", objective)
 
+        arach = source("slipgate/sg_arach.c")
+        strike = between(arach, "static const int *StrikeEnemyField",
+                         "static const int *StrikeOwnField")
+        fixed_gate = strike.index("SG_AttackObjectiveUsesFixedStand(")
+        dynamic = strike.index("sg_fields.to_flag_now", fixed_gate)
+        self.assertLess(fixed_gate, dynamic)
+        self.assertIn("sg_caco_team_belief.carrier[ti].client", strike)
+
     def test_disabled_exit_asymmetry_does_not_draw_randomness(self) -> None:
         goal = source("slipgate/sg_goal.c")
         carry = between(goal, "if (carrying && !bot->was_carrying)",

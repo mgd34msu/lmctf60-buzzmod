@@ -1933,11 +1933,19 @@ static const int *StrikeEnemyField(int team)
 {
 	int ti = SG_TeamIdx(team);
 	int enemy = SG_TeamIdx(SG_EnemyTeam(team));
+	const int *fixed = team == CTF_TEAM_RED ? sg_fields.to_blue_flag
+	                                      : sg_fields.to_red_flag;
 
+	/* PRESS/BREACH/CLEAR remain enemy-base duties after our pickup.  Carrier
+	 * support has its own ESCORT field; using the moving flag belief here
+	 * silently turns every strike member into another escort, and its unknown
+	 * position fallback can point the entire strike home. */
+	if (SG_AttackObjectiveUsesFixedStand(
+	        sg_caco_team_belief.carrier[ti].client))
+		return fixed;
 	if (sg_fields.to_flag_now[ti][enemy])
 		return sg_fields.to_flag_now[ti][enemy];
-	return team == CTF_TEAM_RED ? sg_fields.to_blue_flag
-	                            : sg_fields.to_red_flag;
+	return fixed;
 }
 
 static const int *StrikeOwnField(int team)

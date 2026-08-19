@@ -67,6 +67,8 @@ static int home_field[3];
 static int recover_field[3];
 static int carrier_field[3];
 
+sg_team_belief_t sg_caco_team_belief;
+
 static void GuardCall(int call)
 {
 	if (guard_call_count < (int)(sizeof(guard_calls) / sizeof(guard_calls[0])))
@@ -172,6 +174,9 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 
 static void WorldReset(void)
 {
+	memset(&sg_caco_team_belief, 0, sizeof(sg_caco_team_belief));
+	sg_caco_team_belief.carrier[0].client = -1;
+	sg_caco_team_belief.carrier[1].client = -1;
 	memset(&test_rune, 0, sizeof(test_rune));
 	memset(test_seeds, 0, sizeof(test_seeds));
 	memset(test_links, 0, sizeof(test_links));
@@ -950,6 +955,17 @@ static void TestRailAndCarrierRoute(void)
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == recover_field && tc.route_field == recover_field);
 	CHECK(tc.route_pure);
+	/* PRESS is the enemy base while our carrier owns the flag. It must not
+	 * collapse into a duplicate carrier-support route. */
+	sg_fields.to_flag_now[0][1] = carrier_field;
+	sg_caco_team_belief.carrier[0].client = 3;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_PRESS,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == enemy_field && tc.route_field == enemy_field);
+	sg_caco_team_belief.carrier[0].client = -1;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_PRESS,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == carrier_field && tc.route_field == carrier_field);
 	/* Carrier support is not flooded until the frame after pickup.  The
 	 * transient fallback remains homeward, never thief-bound. */
 	sg_fields.our_carrier_valid[0] = false;
