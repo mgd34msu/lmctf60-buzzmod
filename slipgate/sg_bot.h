@@ -351,6 +351,7 @@ typedef struct sg_bot_s
 	                             * repeated runs spread into a band --
 	                             * the film judge's rope-vs-brush tell */
 	int			ribbon_link;
+	uint32_t	ribbon_random;  /* private lane/drift sequence; never global RNG */
 	float		latch_until;    /* link latch: the incumbent holds its
 	                             * seat until this time unless beaten by
 	                             * 15% -- re-decision cadence matched to

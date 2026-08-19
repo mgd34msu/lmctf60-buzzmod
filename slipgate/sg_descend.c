@@ -30,6 +30,7 @@
 #include "slipgate/sg_route_policy.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_dither.h"
+#include "slipgate/sg_ribbon_random.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
@@ -2593,8 +2594,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->inlinks_n++;
 		}
 		bot->ribbon_link = bestlink;
-		bot->ribbon_off = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
-		                  sg_cv.ribbon->value;
+		bot->ribbon_random = SG_RibbonRandomNext(bot->ribbon_random);
+		bot->ribbon_off = SG_RibbonRandomOffset(bot->ribbon_random,
+		    sg_cv.ribbon->value);
 		bot->ribbon_goal = bot->ribbon_off;
 	}
 	/* Ribbon drift: the film judge's verdict on a fixed per-leg lane -- it
@@ -2602,10 +2604,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * along the run. Low-frequency, trace-clamped downstream. */
 	if (SG_TimerReady(bot->ribbon_next))
 	{
-		bot->ribbon_goal = ((float)(rand() % 2001) / 1000.0f - 1.0f) *
-		                   sg_cv.ribbon->value;
+		bot->ribbon_random = SG_RibbonRandomNext(bot->ribbon_random);
+		bot->ribbon_goal = SG_RibbonRandomOffset(bot->ribbon_random,
+		    sg_cv.ribbon->value);
+		bot->ribbon_random = SG_RibbonRandomNext(bot->ribbon_random);
 		SG_TimerArm(&bot->ribbon_next,
-		    1.0f + (float)(rand() % 100) / 100.0f);
+		    SG_RibbonRandomInterval(bot->ribbon_random));
 	}
 	bot->ribbon_off += 0.20f * (bot->ribbon_goal - bot->ribbon_off);
 	bot->sticky_link = bestlink;

@@ -223,6 +223,9 @@ selected under an older role or topology state.
 Quiet-defender patrol route and dwell choices now advance a private per-bot
 sequence. Other bots' combat, chat, route, and cosmetic randomness cannot
 change a defender's admitted circuit or observation time.
+Enabled lateral ribbon lanes and drift intervals likewise use a separate
+per-bot sequence. A route transition can vary that bot's line without changing
+another bot's movement or consuming combat/chat randomness.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
