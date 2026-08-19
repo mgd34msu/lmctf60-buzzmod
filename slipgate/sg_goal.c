@@ -19,6 +19,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
@@ -1430,7 +1431,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * the flag on the courier's legs, not on luck.
 	 */
 	if (sg_cv.runetoss->value &&
-	    role != SG_ROLE_CARRY && role != SG_ROLE_DEFEND &&
+	    SG_RuneHandoffEligible(role, carrying, SG_ChatOrderedRole(e)) &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
 	     e->client->rune->runetype == RUNE_REGEN) &&

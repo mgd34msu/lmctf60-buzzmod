@@ -28,6 +28,7 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_route_policy.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
 #include "slipgate/sg_hooks.h"
@@ -3720,7 +3721,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * per 20s; combat frames exempt -- a fight is not the moment.
 	 */
 	if (sg_cv.runetoss->value &&
-	    role != SG_ROLE_CARRY && !duel &&
+	    SG_RuneHandoffEligible(role, tc->carrying,
+	        SG_ChatOrderedRole(e)) && !duel &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
 	     e->client->rune->runetype == RUNE_REGEN) &&

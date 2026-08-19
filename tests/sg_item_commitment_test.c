@@ -6,6 +6,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_item_policy.h"
+#include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_persona.h"
 
 #include <math.h>
@@ -309,6 +310,13 @@ static void TestStrongerInterruptsStillWin(void)
 
 int main(void)
 {
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1));
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_DEFEND, false, -1));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_CARRY, true, -1));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, SG_ROLE_ATTACK));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, SG_ROLE_ESCORT));
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 0) ==
 	      SG_ITEM_PICKUP_COMMIT_ONLY);
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 1) ==

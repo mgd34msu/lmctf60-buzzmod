@@ -1777,7 +1777,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_item_commitment_test.gnu.o: tests/sg_item_commitment_test.c \
-		slipgate/sg_lead.h $(REVISION_HEADER)
+		slipgate/sg_lead.h slipgate/sg_rune_handoff_policy.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<

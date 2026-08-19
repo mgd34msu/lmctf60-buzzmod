@@ -208,6 +208,10 @@ objective state outranks an older standing order.
 The timed item-lead controller now aborts an existing pad commitment for every
 ESCORT role, including a human-directed cover order with no flag carrier; the
 escort cannot abandon its live screen for an early item.
+The optional defensive-rune courier now admits only an ordinary attacker or
+organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
+override any live human order, and the same law gates both convergence and the
+irreversible toss frame.
 Defender ranking now counts only live same-team bodies, so a corpse in an early
 bot slot cannot reserve the stand-watch quota while surviving teammates abandon
 the base; escort admission now uses that identical live rank, so it cannot steal
