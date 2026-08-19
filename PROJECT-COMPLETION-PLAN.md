@@ -186,8 +186,11 @@ edge into a three-second standstill. Outside the final 600 ms objective band,
 an attacker whose composed preferences reject every move now takes the best
 fully admitted, strictly descending proved RUN instead of pricing itself into a
 far-field standstill; mechanisms and ballistic actions are never forced by that
-fallback. Their pure policies are executable; runtime outcome acceptance
-remains pending on the persistent fleet.
+fallback. The strike overlay now preserves one real RECOVER mission whenever
+the team's flag is away, including one- and two-member casualty states, rather
+than redirecting every survivor to an enemy flag the team cannot score. Their
+pure policies are executable; runtime outcome acceptance remains pending on the
+persistent fleet.
 
 ### Acceptance instrumentation and provenance
 

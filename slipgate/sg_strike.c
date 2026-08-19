@@ -262,7 +262,12 @@ static void Strike_AssignAttackDuties(sg_strike_team_t *team,
 
 	memcpy(old, team->duty, sizeof(old));
 	Strike_ClearDuties(team);
-	if (!frame->own_flag_home && Strike_Count(attack_mask) >= 3)
+	/* SG_Role assigns every non-watchman to RECOVER while our flag is away.
+	 * The strike overlay may keep pressure with the remaining bodies, but it
+	 * must never erase recovery entirely merely because deaths left fewer than
+	 * three members. One live member recovers; two leave one attacker; larger
+	 * squads still assign exactly one recoverer. */
+	if (!frame->own_flag_home && Strike_Count(attack_mask) >= 1)
 	{
 		for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
 			if ((attack_mask & Strike_Bit(slot)) != 0u &&
@@ -466,7 +471,10 @@ static void Strike_AdvanceAttack(sg_strike_team_t *team,
 
 	if (attack_mask == 0u)
 	{
-		team->phase = SG_STRIKE_IDLE;
+		/* A lone recoverer is an active mission, not an empty strike epoch.
+		 * Keeping ARM avoids clearing/restarting the epoch on every frame while
+		 * its own-flag route remains authoritative. */
+		team->phase = SG_STRIKE_ARM;
 		team->phase_since = frame->now;
 		return;
 	}

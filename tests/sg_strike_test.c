@@ -454,9 +454,31 @@ static void TestOneRecovererPreservesAttack(void)
 	AddAttacker(&frame, 1, 61u, 2, 9000);
 	SG_StrikeReset(&team);
 	CHECK(SG_StrikeStep(&team, &frame));
-	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 0);
-	CHECK(CountDuty(&team, SG_STRIKE_DUTY_BREACH) +
-	    CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 2);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 1);
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_BREACH);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_BREACH) == 1);
+
+	/* When casualties leave only one non-watchman, recovery wins because a
+	 * team cannot capture until its own flag returns. The live recovery mission
+	 * remains ARM rather than restarting an empty epoch every frame. */
+	frame = Frame(420.0f);
+	frame.own_flag_home = 0;
+	AddAttacker(&frame, 0, 62u, 2, 8000);
+	frame.slot[0].recover_goal_ms = 1000;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_ARM);
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.rush_mask == 0u);
+	{
+		uint32_t epoch = team.epoch;
+
+		frame.now = 420.1f;
+		CHECK(SG_StrikeStep(&team, &frame));
+		CHECK(team.epoch == epoch);
+		CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	}
 }
 
 static void TestDutiesStayStableUntilEgress(void)
