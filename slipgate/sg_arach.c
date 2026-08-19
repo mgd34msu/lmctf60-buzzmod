@@ -1930,6 +1930,15 @@ static const int *StrikeOwnField(int team)
 	                            : sg_fields.to_blue_flag;
 }
 
+/* A carrier always returns to the physical capture stand.  The dynamic own
+ * flag field above belongs to RECOVER: during a standoff it leads toward the
+ * enemy thief, which is exactly the wrong route for our carrier. */
+static const int *StrikeHomeField(int team)
+{
+	return team == CTF_TEAM_RED ? sg_fields.to_red_flag
+	                            : sg_fields.to_blue_flag;
+}
+
 static const int *StrikeCarrierField(int team)
 {
 	int ti = SG_TeamIdx(team);
@@ -1944,6 +1953,7 @@ static const int *StrikeDutyField(sg_strike_duty_t duty, int team)
 	switch (duty)
 	{
 	case SG_STRIKE_DUTY_CARRY:
+		return StrikeHomeField(team);
 	case SG_STRIKE_DUTY_RECOVER:
 		return StrikeOwnField(team);
 	case SG_STRIKE_DUTY_ESCORT:

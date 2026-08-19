@@ -424,7 +424,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("sg_fields.item[SG_FC_WEAPON]", arach)
         self.assertIn("SG_StrikeMemberNeedsWeapon", arach)
         self.assertIn("SG_StrikeParticipant", arach)
-        self.assertIn("!tc.strike_rush && !carrying", arach)
+        self.assertIn("tc.strike_rush, carrying", arach)
         self.assertIn("strike_team->weapon_deadline[strike_slot] -",
                       arach)
         move = (ROOT / "slipgate/sg_move.c").read_text()
@@ -1375,7 +1375,7 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
                 stealstage._source_patch_payload(repository)
             (repository / "untracked.c").unlink()
             self.assertEqual(stealstage._run_knowledge_probe(repository), {
-                "tests_run": 9, "failures": 0, "errors": 0,
+                "tests_run": 10, "failures": 0, "errors": 0,
                 "skipped": 0, "successful": True})
             build_inputs = {
                 name: hashlib.sha256((repository / name).read_bytes()).hexdigest()

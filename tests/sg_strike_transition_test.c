@@ -60,6 +60,7 @@ static rune_link_t test_links[3];
 static int weapon_field[3];
 static int enemy_field[3];
 static int home_field[3];
+static int recover_field[3];
 static int carrier_field[3];
 
 static void GuardCall(int call)
@@ -195,12 +196,18 @@ static void WorldReset(void)
 	home_field[0] = 100;
 	home_field[1] = 600;
 	home_field[2] = 900;
+	recover_field[0] = 800;
+	recover_field[1] = 500;
+	recover_field[2] = 0;
 	carrier_field[0] = 300;
 	carrier_field[1] = 100;
 	carrier_field[2] = 800;
 	memset(&sg_fields, 0, sizeof(sg_fields));
 	sg_fields.to_red_flag = home_field;
 	sg_fields.to_blue_flag = enemy_field;
+	/* A live standoff re-floods our current flag field from the enemy thief.
+	 * It must route RECOVER, never the carrier's homeward egress. */
+	sg_fields.to_flag_now[0][0] = recover_field;
 	sg_fields.our_carrier[0] = carrier_field;
 	sg_fields.our_carrier_valid[0] = true;
 	level.time = 10.0f;
@@ -927,14 +934,21 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(bot.def_supply_phase == SG_DEFENSE_SUPPLY_PHASE_RETURN);
 	CHECK(bot.def_supply_armed);
 
-	/* The external carrier's production duty selector uses HOME, stays route
-	 * pure, never opens the weapon diversion, and consumes legacy rally. */
+	/* In a flag standoff the carrier still uses HOME while RECOVER uses the
+	 * thief-bound dynamic own-flag field. */
 	tc = Think();
 	tc.strike_active = true;
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == home_field && tc.route_field == home_field);
 	CHECK(tc.route_pure);
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_RECOVER,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == recover_field && tc.route_field == recover_field);
+	CHECK(tc.route_pure);
+	/* Restore the carrier duty for the downstream weapon/rally assertions. */
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
+	    CTF_TEAM_RED));
 	CHECK(!tc.strike_weapon_pursuit);
 	bot.rally_since = 42.0f;
 	CHECK(SG_StrikeTestApplyRallyPolicy(&bot, &tc, &rally_hold));

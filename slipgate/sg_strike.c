@@ -718,6 +718,8 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 		 * jobs RECOVER, ESCORT, then CLEAR. */
 		if (!frame->own_flag_home)
 		{
+			uint32_t recovery_pool = available;
+
 			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
 				if ((available & Strike_Bit(slot)) != 0u &&
 				    old[slot] == SG_STRIKE_DUTY_RECOVER &&
@@ -726,6 +728,14 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 					recover = slot;
 					break;
 				}
+			/* A dead recoverer does not require shuffling the surviving
+			 * carrier screen.  Prefer any other reachable helper, then fall
+			 * back to the escort only when it is the sole recovery route. */
+			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				if (old[slot] == SG_STRIKE_DUTY_ESCORT)
+					recovery_pool &= ~Strike_Bit(slot);
+			if (recover < 0)
+				recover = Strike_LowestCost(frame, recovery_pool, 1);
 			if (recover < 0)
 				recover = Strike_LowestCost(frame, available, 1);
 			if (recover >= 0)
