@@ -1428,7 +1428,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_identity_test.gnu.o: tests/sg_identity_test.c slipgate/sg_chat.h \
 		slipgate/sg_chat_random.h slipgate/sg_ear_random.h \
-		slipgate/sg_route_jitter.h $(REVISION_HEADER)
+		slipgate/sg_route_jitter.h slipgate/sg_callout_policy.h \
+		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 

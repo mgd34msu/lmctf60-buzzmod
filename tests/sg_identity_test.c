@@ -16,6 +16,7 @@
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_route_jitter.h"
 #include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_callout_policy.h"
 #include "slipgate/sg_chat_random.h"
 #include "slipgate/sg_ear_random.h"
 #include "slipgate/sg_role_skew_random.h"
@@ -656,6 +657,14 @@ static void TestChatObjectivePriority(void)
 	CHECK(SG_ChatTopicStampsBotGap(SG_CHAT_TOPIC_MAJOR));
 }
 
+static void TestCalloutSpeakerIdentity(void)
+{
+	CHECK(SG_CalloutSpeakerCurrent(41, 41));
+	CHECK(!SG_CalloutSpeakerCurrent(41, 42));
+	CHECK(!SG_CalloutSpeakerCurrent(0, 0));
+	CHECK(!SG_CalloutSpeakerCurrent(0, 41));
+}
+
 int main(void)
 {
 	TestCRC32();
@@ -667,6 +676,7 @@ int main(void)
 	TestReasons();
 	TestBotPingDoesNotOwnGameplayRandomness();
 	TestChatObjectivePriority();
+	TestCalloutSpeakerIdentity();
 	TestEscortDose();
 	TestRibbonRandomness();
 	TestRouteJitterIdentity();

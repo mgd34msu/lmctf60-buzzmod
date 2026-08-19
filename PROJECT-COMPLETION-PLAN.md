@@ -1490,6 +1490,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       bound to the current client identity. Speech timing, odds, and line
       choice no longer consume the engine-global RNG that also determines
       weapon spread and other physical match outcomes.
+      Delayed flag callouts now retain the exact CTF client identity that
+      queued them, revalidate it at speech time, and are canceled by the
+      client reset boundary. A replacement bot or respawned body cannot speak
+      a predecessor's pending team intelligence merely by occupying its slot.
       Spread hitscan fire now checks its complete physical pellet envelope
       through the current engagement range against every live same-team client
       before committing the trigger. The check includes machinegun yaw jitter,
@@ -1523,6 +1527,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       and carrier pressure therefore remove range-holding from the complete
       comparison instead of charging only the incumbent and manufacturing a
       route switch on two different cost surfaces.
+      The already-proved RUN fallback now remains available through the final
+      positive route-field band instead of stopping arbitrarily at cost 600;
+      exact direct-touch authority still owns the later physical flag handoff.
       The shared graph-hook value law now rejects negative route-field values
       as unassessed at both staging and the final fire boundary. A malformed or
       unavailable destination can no longer look like positive route progress

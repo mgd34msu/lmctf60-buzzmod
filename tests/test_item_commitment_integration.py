@@ -194,6 +194,29 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             "SG_ChatSayTeam(sp, c->line, SG_CHAT_TOPIC_CACO)", speak
         )
 
+    def test_delayed_callout_is_bound_to_the_queuing_client_life(self):
+        source = self.text("slipgate/sg_caco.c")
+        queue = source[
+            source.index("static void Caco_Queue("):
+            source.index("static void Caco_Speak(void)")
+        ]
+        speak = source[
+            source.index("static void Caco_Speak(void)"):
+            source.index("static void Caco_ScanFlags", source.index(
+                "static void Caco_Speak(void)"))
+        ]
+        reset = source[
+            source.index("void Caco_ResetClient("):
+            source.index("/* ---------------------------------------------------------- the rail rhythm")
+        ]
+        self.assertIn(
+            "c->speaker_ctfid = speaker->client->ctf.ctfid;", queue
+        )
+        self.assertIn(
+            "SG_CalloutSpeakerCurrent(c->speaker_ctfid,", speak
+        )
+        self.assertIn("caco_callout[t][k].speaker == ci", reset)
+
     def test_chat_texture_does_not_consume_gameplay_randomness(self):
         source = self.text("slipgate/sg_chat.c")
         policy = self.text("slipgate/sg_chat_random.h")

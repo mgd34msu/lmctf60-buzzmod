@@ -48,6 +48,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_callout_policy.h"
 #include "slipgate/sg_ear_random.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
@@ -136,6 +137,7 @@ typedef struct
 {
 	qboolean	pending;
 	int			speaker;            /* client number that will say it */
+	unsigned long	speaker_ctfid;     /* exact client life that queued it */
 	float		due;
 	char		line[160];
 } sg_callout_t;
@@ -245,6 +247,8 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 
 	if (!speaker || !speaker->client || !(speaker->flags & FL_BOT))
 		return;
+	if (speaker->client->ctf.ctfid == 0)
+		return;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return;
 	if (topic < 0 || topic >= SG_CALL_TOPICS)
@@ -265,6 +269,7 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 	Caco_Where(origin, place, sizeof(place));
 	Com_sprintf(c->line, sizeof(c->line), "%s %s", what, place);
 	c->speaker = (int)(speaker - g_edicts - 1);
+	c->speaker_ctfid = speaker->client->ctf.ctfid;
 	c->due = level.time + SG_CalloutRandomDelay(
 	    caco_callout_random[SG_TeamIdx(team)][topic],
 	    SG_CALL_DELAY_MIN, SG_CALL_DELAY_MAX);
@@ -307,6 +312,9 @@ static void Caco_Speak(void)
 
 			sp = g_edicts + 1 + c->speaker;
 			if (!sp->inuse || !sp->client)
+				continue;
+			if (!SG_CalloutSpeakerCurrent(c->speaker_ctfid,
+			    sp->client->ctf.ctfid))
 				continue;
 			if (sp->client->ctf.teamnum != SG_TeamFromIdx(t))
 				continue;
@@ -2083,6 +2091,11 @@ void Caco_ResetClient(edict_t *client)
 		sg_caco_damage[ci][k].attacker = -1;
 	for (t = 0; t < 2; t++)
 	{
+		for (k = 0; k < SG_CALL_TOPICS; k++)
+			if (caco_callout[t][k].pending &&
+			    caco_callout[t][k].speaker == ci)
+				memset(&caco_callout[t][k], 0,
+				       sizeof(caco_callout[t][k]));
 		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
 			if (sg_caco_enemies[t][s].client == ci)
 			{
