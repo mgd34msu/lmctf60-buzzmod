@@ -252,6 +252,10 @@ Combat target selection now gives a still-visible incumbent a 128-unit distance
 hysteresis. Two enemies crossing by a few units can no longer alternate target
 identity every frame and repeatedly restart reaction/settle, while a materially
 closer threat still wins immediately.
+Within the same ordinary range, cone, and live-visibility gates, a believed
+enemy flag carrier receives a bounded 256-unit target score priority. Bots can
+therefore prefer the objective thief through a modest range difference without
+ignoring an immediate non-carrier threat or learning any unseen position.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

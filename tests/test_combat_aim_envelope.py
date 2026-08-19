@@ -344,16 +344,26 @@ static int test_clear_shot_predicate(void)
 
 static int test_target_identity_hysteresis(void)
 {
-    CHECK(nearly(SG_CombatTargetScore(500.0f, 4, 4), 372.0f, 0.001f));
-    CHECK(nearly(SG_CombatTargetScore(500.0f, 5, 4), 500.0f, 0.001f));
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 4, 4, false),
+                 372.0f, 0.001f));
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 5, 4, false),
+                 500.0f, 0.001f));
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 5, 4, true),
+                 244.0f, 0.001f));
     /* A 100-unit closer challenger does not churn the current target; a
      * 129-unit closer challenger does. */
-    CHECK(SG_CombatTargetScore(500.0f, 4, 4) <
-          SG_CombatTargetScore(400.0f, 5, 4));
-    CHECK(SG_CombatTargetScore(500.0f, 4, 4) >
-          SG_CombatTargetScore(371.0f, 5, 4));
-    CHECK(isinf(SG_CombatTargetScore(NAN, 4, 4)));
-    CHECK(isinf(SG_CombatTargetScore(-1.0f, 4, 4)));
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) <
+          SG_CombatTargetScore(400.0f, 5, 4, false));
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) >
+          SG_CombatTargetScore(371.0f, 5, 4, false));
+    /* A visible carrier 100 units farther still owns the objective fight;
+     * one 200 units farther does not erase the immediate threat. */
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) >
+          SG_CombatTargetScore(600.0f, 5, 4, true));
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) <
+          SG_CombatTargetScore(700.0f, 5, 4, true));
+    CHECK(isinf(SG_CombatTargetScore(NAN, 4, 4, false)));
+    CHECK(isinf(SG_CombatTargetScore(-1.0f, 4, 4, false)));
     return 0;
 }
 

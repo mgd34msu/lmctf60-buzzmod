@@ -944,6 +944,8 @@ static void Combat_Center(edict_t *e, vec3_t out)
 	VectorScale(out, 0.5f, out);
 }
 
+static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target);
+
 /*
  * Pick a target: a live enemy client, inside engage range, inside the forward
  * cone, and visible. Nearest wins outside the bounded incumbent hysteresis;
@@ -1086,7 +1088,8 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 
 		{
 			float score = SG_CombatTargetScore(dist,
-			    (int)(p - g_edicts), incumbent_index);
+			    (int)(p - g_edicts), incumbent_index,
+			    Combat_IsEnemyCarrier(self, p));
 
 			if (score >= bestscore)
 				continue;
