@@ -181,6 +181,11 @@ int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
 int SG_StrikeDutyCombatPursuit(sg_strike_duty_t duty);
 int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
 	sg_strike_duty_t duty);
+/* Rearguard duty belongs to enemy-room pressure and to the explicit escort,
+ * never to recovery or the carrier itself. */
+int SG_StrikeDutyRearguard(sg_strike_duty_t duty);
+int SG_StrikeRearguardActive(int ordinary_rearguard, int strike_active,
+	sg_strike_duty_t duty);
 /* A concrete coordinator duty is an objective mission, so optional item-pad
  * preparation cannot remain live underneath its route and aim authority. */
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);

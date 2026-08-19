@@ -570,6 +570,7 @@ typedef struct sg_think_s {
 	qboolean		strike_active, strike_hold, strike_rush,
 				strike_pressure,
 				combat_pursuit,
+				rearguard,
 				strike_weapon_pursuit;
 	float			strike_weapon_deadline;
 } sg_think_t;

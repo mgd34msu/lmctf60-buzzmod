@@ -40,6 +40,19 @@ int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
 	                     : ordinary_pursuit;
 }
 
+int SG_StrikeDutyRearguard(sg_strike_duty_t duty)
+{
+	return SG_StrikeDutyEnemyPressure(duty) ||
+	    duty == SG_STRIKE_DUTY_ESCORT;
+}
+
+int SG_StrikeRearguardActive(int ordinary_rearguard, int strike_active,
+	sg_strike_duty_t duty)
+{
+	return strike_active ? SG_StrikeDutyRearguard(duty)
+	                     : ordinary_rearguard;
+}
+
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty)
 {
 	switch (duty)

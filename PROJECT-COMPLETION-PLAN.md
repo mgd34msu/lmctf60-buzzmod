@@ -1198,7 +1198,8 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       rush release and makes lost-contact pursuit follow the coordinator-owned
       pressure/recovery route instead of the superseded organic role. Enemy-room
       clear/grab pairing and pre-breach grenade continuation likewise use the
-      effective pressure roster.
+      effective pressure roster; post-grab rearguard holding follows effective
+      pressure/escort duty and never a superseded recovery assignment.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

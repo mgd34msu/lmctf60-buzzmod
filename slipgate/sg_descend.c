@@ -3544,26 +3544,24 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * ...and not only the ESCORT. In 83 parity carries, 77%% of carriers
 	 * died inside the first
 	 * quarter of the route, median at 3%% -- the room, not the road. At
-	 * the grab moment the fighter still wears ATTACK, and an attacker's
-	 * post-grab field is the enemy flag ON OUR CARRIER'S BACK: it pulls
-	 * him into the carrier's wake out the same door, a second target on
-	 * one rail line. The hold now catches ATTACK too -- the fighter
-	 * plugs the room he is already standing in, which was the pair-split
-	 * doctrine's second half all along.
+	 * the grab moment the pressure fighter must not follow the flag onto
+	 * our carrier's back: that pulls both bodies through the same door and
+	 * gives the defense one rail line.  Effective pressure and the explicit
+	 * escort plug the room; recovery and carry duties keep their route clock.
 	 */
-	if ((role == SG_ROLE_ESCORT || role == SG_ROLE_ATTACK) &&
+	if (tc->rearguard &&
 	    SG_AgeUnder(sg_grab_time[SG_TeamIdx(team)], 8.0f) &&
 	    bot->seed >= 0)
 	{
 		int *att = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
 		                                  : sg_fields.to_red_flag;
 
-		/* escorts hold at 3000 as before; an ATTACKER holds only from
+		/* escorts hold at 3000 as before; a pressure fighter holds only from
 		 * INSIDE the room (the threshold fighter reads under ~1200) --
 		 * at 3000 the hold would freeze attackers still mid-corridor,
 		 * parked on the rail lines they were built to cross */
-		if (att && att[bot->seed] < (role == SG_ROLE_ATTACK ? 1500
-		                                                    : 3000))
+		if (att && att[bot->seed] < (tc->strike_pressure ? 1500
+		                                                   : 3000))
 		{
 			rally_hold = true;      /* stand and fight: the room is the job */
 			/* once per engagement, not per frame: the hold's own
@@ -3571,8 +3569,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			 * could say whether the plug ever engaged at all */
 			if (bot->rally_since <= 0.0f &&
 			    sg_cv.debug->value)
-				sg_host.dprint("PLUG %s role=%d cost=%d\n",
+				sg_host.dprint("PLUG %s role=%d pressure=%d cost=%d\n",
 				           e->client->pers.netname, (int)role,
+				           tc->strike_pressure ? 1 : 0,
 				           att[bot->seed]);
 			if (bot->rally_since <= 0.0f)
 				SG_Mark(&bot->rally_since);

@@ -3416,6 +3416,9 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.combat_pursuit = SG_StrikeCombatPursuitActive(
 	    role == SG_ROLE_ATTACK || role == SG_ROLE_RECOVER,
 	    0, SG_STRIKE_DUTY_NONE);
+	tc.rearguard = SG_StrikeRearguardActive(
+	    role == SG_ROLE_ATTACK || role == SG_ROLE_ESCORT,
+	    0, SG_STRIKE_DUTY_NONE);
 
 	Think_LiveWeights(bot, &tc);    /* fills tc.live */
 	tc.w = &tc.live;
@@ -3457,6 +3460,9 @@ void SG_BotThink(sg_bot_t *bot)
 			    role == SG_ROLE_ATTACK, 1, strike_duty);
 			tc.combat_pursuit = SG_StrikeCombatPursuitActive(
 			    role == SG_ROLE_ATTACK || role == SG_ROLE_RECOVER,
+			    1, strike_duty);
+			tc.rearguard = SG_StrikeRearguardActive(
+			    role == SG_ROLE_ATTACK || role == SG_ROLE_ESCORT,
 			    1, strike_duty);
 			if (SG_StrikeDutyRetiresOptionalErrand(strike_duty))
 				Lead_Abort(bot, "strike duty");

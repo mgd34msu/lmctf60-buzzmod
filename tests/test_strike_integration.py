@@ -485,8 +485,11 @@ class StrikeIntegrationTest(unittest.TestCase):
                       arach)
         self.assertIn("tc.combat_pursuit = SG_StrikeCombatPursuitActive(",
                       arach)
+        self.assertIn("tc.rearguard = SG_StrikeRearguardActive(", arach)
         self.assertIn("tc->combat_pursuit ||", descend)
         self.assertIn("!tc->strike_active &&", descend)
+        self.assertIn("if (tc->rearguard &&", descend)
+        self.assertIn("tc->strike_pressure ? 1500", descend)
 
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()
