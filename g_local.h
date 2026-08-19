@@ -692,6 +692,7 @@ extern  char    motd[1000]; // CTF CODE -- LM_JORM
 
 extern  MapInfo maplist[300]; // CTF CODE -- LM_JORM
 extern  int     maplistindex; // CTF CODE -- LM_JORM
+extern  int     maplistcount;
 
 extern  int     bluescore, redscore; // CTF CODE -- LM_JORM
 
@@ -749,6 +750,11 @@ extern	gitem_t	itemlist[];
 void SortMaplist(MapInfo arr[], int min, int max);
 int MapDivide(MapInfo arr[], int min, int max);
 void flip(MapInfo* x, MapInfo* y);
+void MapList_Configure(MapInfo maps[], int count, qboolean random_maps);
+qboolean MapList_SequentialStartup(const MapInfo maps[], int count,
+	const char *current_map, int *next_index, const MapInfo **startup_map);
+const MapInfo *MapList_SelectNext(const MapInfo maps[], int count,
+	int *next_index, qboolean random_maps, const MapInfo *random_map);
 //
 // g_cmds.c
 //

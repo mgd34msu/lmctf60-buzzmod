@@ -18,8 +18,6 @@ int SG_RemoveBots(void);
 
 #define Function(f) {#f, f}
 
-void Randomize_Map_List(int Num_Of_Maps);
-
 mmove_t mmove_reloc;
 
 field_t fields[] = {
@@ -327,24 +325,29 @@ void InitGame(void)
 				maplistindex++;
 
 			}
-			SortMaplist(maplist, 0, maplistindex - 1);
+			maplistcount = maplistindex;
+			MapList_Configure(maplist, maplistcount,
+				(int)ctfflags->value & CTF_RANDOM_MAPS);
 			//maplist[maplistindex][0] = 0; // Blank last entry
 			sprintf(line, "%d entries in maplist.\n", maplistindex);
 			gi.dprintf(line);
 			fclose(file);
 			if (maplistindex)  // Did we read anything?
 			{
-				Randomize_Map_List(maplistindex);
 				maplistindex = -1; // This means first time through the list
 			}
 			else
+			{
+				maplistcount = 0;
 				maplistindex = -2; // Not going to use it
+			}
 
 		}
 		else
 		{
 			sprintf(line, "Can't find %s.  Reverting to standard maps.\n", fname);
 			gi.dprintf(line);
+			maplistcount = 0;
 			maplistindex = -2; // Not going to use it
 		}
 	}
@@ -404,37 +407,6 @@ void InitGame(void)
 	// END CTF CODE -- LM_JORM
 
 }
-
-void SortMaplist(MapInfo arr[], int min, int max) {
-	if (min < max) {
-		int ndx = MapDivide(arr, min, max);
-		SortMaplist(arr, min, ndx - 1);
-		SortMaplist(arr, ndx + 1, max);
-	}
-}
-
-
-int MapDivide(MapInfo arr[], int min, int max) {
-	MapInfo tmp = arr[max];
-	int nndx = (min - 1);
-
-	for (int x = min; x <= max - 1; x++) {
-		if (strcmp(arr[x].mapname, tmp.mapname) < 0) {
-			nndx++;
-			flip(&arr[nndx], &arr[x]);
-		}
-	}
-	flip(&arr[nndx + 1], &arr[max]);
-	return(nndx + 1);
-}
-
-void flip(MapInfo* x, MapInfo* y) {
-	MapInfo tmp = *x;
-	*x = *y;
-	*y = tmp;
-}
-
-
 
 //=========================================================
 
