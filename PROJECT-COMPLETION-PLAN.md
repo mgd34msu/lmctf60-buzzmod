@@ -253,6 +253,10 @@ otherwise follow it instead of being silently discarded by that chatter.
 The struck `sg_exitasym=0` carrier experiment is now inert even at the grab
 edge; it no longer consumes a hidden global random draw while remaining
 behaviorally disabled.
+Weapon commitment now ships with its real-weapon rule enabled. The spawn
+blaster remains a last-resort fallback instead of becoming the bot's permanent
+"main" gun after it has acquired a stocked weapon; legitimate held weapons
+still retain the existing cross-band commitment behavior.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
@@ -1285,6 +1289,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Defensive-rune convergence and the irreversible toss frame follow the
       effective strike escort, so pressure/recovery duty cannot be interrupted
       by a superseded organic handoff premise.
+      The compiled combat default refuses to commit to the spawn blaster once
+      a stocked real weapon is available, while preserving ordinary weapon
+      commitment for admitted held guns.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

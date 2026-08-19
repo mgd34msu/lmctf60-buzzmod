@@ -94,7 +94,7 @@
 	X(unlinger, "sg_unlinger", "0") \
 	X(watercarry, "sg_watercarry", "0") \
 	X(wavepush, "sg_wavepush", "0") \
-	X(wcommit, "sg_wcommit", "1") \
+	X(wcommit, "sg_wcommit", "2") \
 	X(wetwork, "sg_wetwork", "1") \
 	X(wswitch, "sg_wswitch", "0")
 

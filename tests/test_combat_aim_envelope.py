@@ -19,6 +19,7 @@ SOURCE = SOURCE_PATH.read_text()
 # loop, while its ray/box predicate is deliberately independent.
 PROBE = r"""
 #include "g_local.h"
+#include "slipgate/sg_combat_commit_policy.h"
 #include "slipgate/sg_combat_target_policy.h"
 
 #include <math.h>
@@ -388,6 +389,13 @@ static int test_combat_randomness_is_per_client(void)
 
 int main(void)
 {
+	CHECK(SG_CombatCommitCandidateAllowed(1.0f, 1, 1, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 1, 1, 1));
+	CHECK(SG_CombatCommitCandidateAllowed(2.0f, 0, 1, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 0, 0, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 0, 1, 0));
+	CHECK(!SG_CombatCommitCandidateAllowed(0.0f, 0, 1, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 2, 1, 1));
     CHECK(!test_exact_muzzle_offsets());
     CHECK(!test_machinegun_deterministic_kick());
     CHECK(!test_final_physical_rays());
@@ -402,6 +410,13 @@ int main(void)
 
 
 class CombatAimEnvelopeTest(unittest.TestCase):
+    def test_real_weapon_commitment_is_the_compiled_default(self) -> None:
+        cvars = (ROOT / "slipgate" / "sg_cvars.h").read_text()
+        self.assertIn('X(wcommit, "sg_wcommit", "2")', cvars)
+        choose = SOURCE[SOURCE.index("static int Combat_Choose"):
+                        SOURCE.index("static int Combat_PostWeapon")]
+        self.assertIn("SG_CombatCommitCandidateAllowed(", choose)
+
     def test_strict_syntax_in_both_runtime_and_probe_modes(self) -> None:
         cc = shutil.which("cc")
         if not cc:

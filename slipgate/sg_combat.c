@@ -28,6 +28,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_combat_commit_policy.h"
 #include "slipgate/sg_combat_target_policy.h"
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
 
@@ -1491,12 +1492,10 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 		 * commits to; mode 2 refuses it and lets the ladder walk pick a
 		 * real weapon the moment one is stocked.
 		 */
-		if (sg_cv.wcommit->value >= 2.0f &&
-		    held == SG_W_BLASTER)
-			held = -1;
-
-		if (held >= 0 && Combat_Stocked(self, held) &&
-		    Combat_BandAllows(self, held, dist))
+		if (held >= 0 && SG_CombatCommitCandidateAllowed(
+		        sg_cv.wcommit->value, held == SG_W_BLASTER,
+		        Combat_Stocked(self, held),
+		        Combat_BandAllows(self, held, dist)))
 		{
 			int i;
 
