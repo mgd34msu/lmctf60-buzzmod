@@ -15,6 +15,15 @@ float SG_DefensePatrolThrottle(float configured)
 	return configured;
 }
 
+int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed)
+{
+	if (!target_seed || current_seed < 0 || *target_seed < 0 ||
+	    current_seed != *target_seed)
+		return 0;
+	*target_seed = -1;
+	return 1;
+}
+
 int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 	size_t candidate_count, int max_goal_ms, int previous_seed,
 	unsigned draw, int *seed_out)

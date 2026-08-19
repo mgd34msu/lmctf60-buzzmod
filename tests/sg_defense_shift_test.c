@@ -149,6 +149,19 @@ static void TestQuietPatrolThrottle(void)
 	CHECK(SG_DefensePatrolThrottle(NAN) == 0.0f);
 }
 
+static void TestQuietPatrolDwellsOnlyAfterArrival(void)
+{
+	int target = 80;
+
+	CHECK(!SG_DefensePatrolFinishLeg(79, &target));
+	CHECK(target == 80);
+	CHECK(SG_DefensePatrolFinishLeg(80, &target));
+	CHECK(target == -1);
+	CHECK(!SG_DefensePatrolFinishLeg(80, &target));
+	CHECK(!SG_DefensePatrolFinishLeg(-1, &target));
+	CHECK(!SG_DefensePatrolFinishLeg(80, NULL));
+}
+
 static sg_defense_combat_request_t CombatRequest(void)
 {
 	sg_defense_combat_request_t request;
@@ -308,6 +321,7 @@ int main(void)
 	TestInvalidShiftRetiresOnlyExactCommitment();
 	TestQuietPatrolCircuit();
 	TestQuietPatrolThrottle();
+	TestQuietPatrolDwellsOnlyAfterArrival();
 	TestCombatAdmissionAndDeterminism();
 	TestCombatHullProbeLaw();
 	TestCombatPreviewCandidateLaw();

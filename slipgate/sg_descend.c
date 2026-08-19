@@ -4298,7 +4298,13 @@ stag_done:
 			bot->patrol_seed = -1;
 		if (quiet && sg_cv.patrol->value > 0.0f)
 		{
-			if (bot->patrol_seed >= 0 && bot->seed != bot->patrol_seed)
+			if (SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))
+			{
+				/* Dwell begins at proved arrival, never at departure.  A long
+				 * walking leg must still end in an unhurried post observation. */
+				SG_TimerArm(&bot->patrol_until, 2.0f + random() * 4.0f);
+			}
+			else if (bot->patrol_seed >= 0)
 			{
 				/* mid-leg: ride the direct link if one exists */
 				int pli;
@@ -4314,7 +4320,10 @@ stag_done:
 						break;
 					}
 				if (hold_post)
+				{
 					bot->patrol_seed = -1;  /* leg unreachable: stand */
+					SG_TimerArm(&bot->patrol_until, 5.0f);
+				}
 			}
 			else if (SG_TimerReady(bot->patrol_until))
 			{
@@ -4350,8 +4359,6 @@ stag_done:
 					bestlink = chosen_link;
 					hold_post = false;
 					tc->patrol_walk = true;
-					SG_TimerArm(&bot->patrol_until, 2.0f
-					                  + random() * 4.0f);
 				}
 				else
 					SG_TimerArm(&bot->patrol_until, 5.0f);

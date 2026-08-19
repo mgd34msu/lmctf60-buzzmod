@@ -98,6 +98,10 @@ int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 	size_t candidate_count, int max_goal_ms, int previous_seed,
 	unsigned draw, int *seed_out);
 
+/* Complete a patrol leg only at its selected seed.  Clearing the target is the
+ * caller's authority to start the post-arrival dwell clock. */
+int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed);
+
 /* sg_patrol is the patrol walking throttle.  Invalid/off values disable the
  * behavior; enabled values are bounded away from both a shuffle and a sprint. */
 float SG_DefensePatrolThrottle(float configured);

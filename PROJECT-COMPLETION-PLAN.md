@@ -174,8 +174,11 @@ Implement the remaining material deficiencies in this order:
 Every item above requires a production C change, an executable test that calls
 the changed policy or live seam, both Make dialects, and then a matched runtime
 gate. A measurement-only change cannot complete an item. Implemented controller
-slices now include the enabled quiet-defender patrol, a bounded proved-RUN
-home-flag approach preference that breaks near-stand field plateaus without
+slices now include the enabled quiet-defender patrol. Its unhurried dwell starts
+only after the selected proved leg reaches its target, so a long walk cannot
+consume the hold interval and collapse the circuit into continuous motion.
+Other implemented slices include a bounded proved-RUN home-flag approach
+preference that breaks near-stand field plateaus without
 granting touch authority, immediate strike release when no ready teammate can
 reach the synchronization window before its deadline, per-frame release when a
 forming teammate falls behind the remaining synchronization clock, and weapon
