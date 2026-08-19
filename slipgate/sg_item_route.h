@@ -5,10 +5,10 @@
  * to the class-wide field when this bot has no collectible weapon: that field
  * may be rooted entirely at pads Pickup_Weapon will reject.  Other item
  * classes retain their shared live fields. */
-static inline const int *SG_ItemDetourField(int weapon_class,
-	const int *class_field, const int *collectible_weapon_field)
+static inline const int *SG_ItemDetourField(int has_frame_context,
+	const int *class_field, const int *client_field)
 {
-	return weapon_class ? collectible_weapon_field : class_field;
+	return has_frame_context ? client_field : class_field;
 }
 
 #endif

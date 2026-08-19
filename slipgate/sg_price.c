@@ -72,8 +72,8 @@ qboolean sg_route_pure_now;  /* tactics priced at selection: the
 float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
                           float worth)
 {
-	const int *ifld = SG_ItemDetourField(cls == SG_FC_WEAPON,
-	    sg_fields.item[cls], tc ? tc->collectible_weapon_field : NULL);
+	const int *ifld = SG_ItemDetourField(tc != NULL, sg_fields.item[cls],
+	    tc ? tc->collectible_item_field[cls] : NULL);
 	int to_item;
 	int direct = goal_field[here];
 

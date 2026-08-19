@@ -3,6 +3,7 @@
 #include "g_tourney.h"
 #include "bat.h"
 #include "stdlog.h"
+#include "slipgate/sg_health_pickup.h"
 
 void droptofloor(edict_t* ent);
 
@@ -609,11 +610,18 @@ void MegaHealth_think(edict_t* self)
 		G_FreeEdict(self);
 }
 
+qboolean G_HealthPickupEligible(edict_t *ent, edict_t *other)
+{
+	if (!ent || !ent->item || !other || !other->client)
+		return false;
+	return SG_HealthPickupAllowed(other->health, other->max_health,
+	    (ent->style & HEALTH_IGNORE_MAX) != 0) ? true : false;
+}
+
 qboolean Pickup_Health(edict_t* ent, edict_t* other)
 {
-	if (!(ent->style & HEALTH_IGNORE_MAX))
-		if (other->health >= other->max_health)
-			return false;
+	if (!G_HealthPickupEligible(ent, other))
+		return false;
 
 	other->health += ent->count;
 

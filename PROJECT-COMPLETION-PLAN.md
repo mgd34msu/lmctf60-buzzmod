@@ -1563,6 +1563,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Already-owned `WEAPONS_STAY` pads cannot bend ordinary movement, and a
       bot with no collectible weapon receives no weapon pull rather than the
       old unfiltered class-field fallback.
+      Health attraction now follows the same client-specific rule: ordinary
+      boxes disappear from the bot's route surface at full health while legal
+      stimpack and mega overheal remain roots. The route predicate and
+      `Pickup_Health` share one boundary law.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

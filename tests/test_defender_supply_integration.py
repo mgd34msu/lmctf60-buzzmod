@@ -44,6 +44,38 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
             )
             subprocess.run([str(binary)], cwd=ROOT, check=True)
 
+    def test_health_pickup_policy_executes_full_and_overheal_edges(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include "slipgate/sg_health_pickup.h"
+
+            int main(void)
+            {
+                if (!SG_HealthPickupAllowed(99, 100, 0))
+                    return 1;
+                if (SG_HealthPickupAllowed(100, 100, 0))
+                    return 2;
+                if (SG_HealthPickupAllowed(150, 100, 0))
+                    return 3;
+                if (!SG_HealthPickupAllowed(100, 100, 1) ||
+                    !SG_HealthPickupAllowed(200, 100, 1))
+                    return 4;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-health-route-") as tmp:
+            source = Path(tmp) / "health_route.c"
+            binary = Path(tmp) / "health_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
     def test_phase_and_exact_route_policy_executes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="sg-def-supply-") as tmp:
             binary = Path(tmp) / "sg_defense_supply_test"
@@ -172,8 +204,18 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         self.assertIn("Field_Flood(SG_Rune(), sg_weapon_target_field[bi], seeds",
                       goal)
         self.assertIn("SG_CollectibleWeaponField(bot)", arach)
-        self.assertIn("SG_ItemDetourField(cls == SG_FC_WEAPON", price)
-        self.assertIn("tc ? tc->collectible_weapon_field : NULL", price)
+        self.assertIn("SG_ItemDetourField(tc != NULL", price)
+        self.assertIn("tc ? tc->collectible_item_field[cls] : NULL", price)
+
+    def test_health_surface_uses_physical_overheal_law(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        items = (ROOT / "g_items.c").read_text()
+
+        self.assertIn("qboolean G_HealthPickupEligible", items)
+        self.assertIn("if (!G_HealthPickupEligible(ent, other))", items)
+        self.assertIn("!G_HealthPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_CollectibleHealthField(bot)", arach)
 
     def test_owned_stocked_weapon_flows_through_post_selector(self) -> None:
         combat = (ROOT / "slipgate/sg_combat.c").read_text()

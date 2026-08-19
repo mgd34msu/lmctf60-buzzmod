@@ -44,6 +44,7 @@ void SG_StrikeWeaponNoteItemTouch(edict_t *taker, edict_t *item);
  * collect.  NULL is authoritative: generic pricing must apply no weapon
  * attraction rather than fall back to the unfiltered class field. */
 const int *SG_CollectibleWeaponField(sg_bot_t *bot);
+const int *SG_CollectibleHealthField(sg_bot_t *bot);
 
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);

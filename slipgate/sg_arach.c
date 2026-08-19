@@ -3487,9 +3487,14 @@ void SG_BotThink(sg_bot_t *bot)
 	/* The shared weapon field contains every visible pad, including pads this
 	 * client already owns under WEAPONS_STAY.  Price only the exact live set
 	 * accepted by Pickup_Weapon for this bot. */
-	tc.collectible_weapon_field =
+	for (int item_class = 0; item_class < SG_FIELD_CLASSES; item_class++)
+		tc.collectible_item_field[item_class] = sg_fields.item[item_class];
+	tc.collectible_item_field[SG_FC_WEAPON] =
 	    (tc.live.item[SG_FC_WEAPON] > 0.0f) ?
 	    SG_CollectibleWeaponField(bot) : NULL;
+	tc.collectible_item_field[SG_FC_HEALTH] =
+	    (tc.live.item[SG_FC_HEALTH] > 0.0f) ?
+	    SG_CollectibleHealthField(bot) : NULL;
 
 	tc.support = NULL;
 	tc.intercept = NULL;
