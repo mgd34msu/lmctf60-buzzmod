@@ -1,0 +1,144 @@
+{
+  "metric_version": "steal-close-stage-a-v1",
+  "frozen_before_candidate_trial": "2026-08-19",
+  "match_identity": {
+    "required_equal_fields": [
+      "metric_version",
+      "map_bsp_sha256",
+      "configuration_sha256",
+      "roster_and_team_assignment",
+      "active_duration_seconds",
+      "recording_policy",
+      "recording_harness_sha256",
+      "engine_sha256",
+      "rune_sha256",
+      "rune_identity"
+    ],
+    "minimum_duration_seconds_per_round": 600,
+    "minimum_arm_swapped_rounds": 2,
+    "minimum_authoritative_pickups_per_arm": 5,
+    "disposable_game_roots_required": true,
+    "disjoint_ports_required": true
+  },
+  "receipt_schema": {
+    "required_per_arm_fields": [
+      "metric_version",
+      "source_commit",
+      "source_patch_sha256",
+      "module_sha256",
+      "engine_sha256",
+      "map_bsp_sha256",
+      "configuration_sha256",
+      "roster_and_team_assignment",
+      "port",
+      "evaluation_window_server_seconds",
+      "active_duration_seconds",
+      "recording_policy",
+      "recording_harness_sha256",
+      "server_log_sha256",
+      "stdlog_sha256",
+      "stats_database_sha256",
+      "serverrecord_sha256",
+      "serverrecord_frames",
+      "serverrecord_level_time_end",
+      "rune_sha256",
+      "rune_identity"
+    ],
+    "required_rune_identity_fields": [
+      "map",
+      "bsp_checksum",
+      "entity_crc",
+      "physics_flags",
+      "gravity",
+      "airaccelerate",
+      "maxvelocity",
+      "pmove_ms",
+      "frame_ms",
+      "host_physics_id",
+      "rune_payload_crc"
+    ],
+    "identity_rule": "source and module identify each arm and may differ; metric_version and every other exact top-level receipt key named by match_identity.required_equal_fields is captured in required_per_arm_fields and must match; rune_sha256 pins the complete artifact while rune_identity records the current runtime map and movement-law fields"
+  },
+  "event_authority": {
+    "steal": "production F Pickup score event reconciled exactly with STATS_OFFENSE_FLAG",
+    "capture": "production CTF capture stats and host outcome log, reconciled exactly",
+    "approach": "serverrecord geometry crossing from outside to inside 384 horizontal units of the live enemy stand",
+    "close_conversion": "first authoritative carry start no later than 1.5 seconds after a qualifying approach",
+    "demo_capture": "diagnostic only; outcomecard 280-unit carry-end inference is never authoritative"
+  },
+  "metric_calculation": {
+    "evaluation_window": "half-open [t0,t0+600.0) server-time interval where t0 is the last authoritative PlayerTeamChange roster-join timestamp; all ten roster clients must remain continuously joined through t0+600.0",
+    "active_bot_minutes": "clip the exact ten-bot roster to the evaluation window: 10 bots times 600.0 seconds divided by 60",
+    "active_team_minutes": "clip each full five-bot team to the evaluation window: two teams times 600.0 seconds divided by 60",
+    "active_defender_minutes": "emitted diagnostic SG telemetry samples inside the conservative authoritative log brackets with role=1 divided by 60; no death-time samples are fabricated",
+    "telemetry_time_alignment": "SG Think_Emit rows are absent while a bot is dead and are not a clock: retain emitted rows in server-log order after the final roster-join line through the last host outcome whose matched StdLog timestamp is strictly before t0+600.0; report the cutoff gap and reject malformed, duplicate, or out-of-order emitted rows",
+    "horizontal_distance": "sum serverrecord 10 Hz consecutive-frame horizontal steps whose second frame is in the evaluation window and no greater than film.TELEPORT_UNITS=180; divide by active bot minutes",
+    "moving_sample_fraction": "cropped one-second SG telemetry samples with horizontal spd greater than 50 divided by all cropped recognized SG samples",
+    "world_or_hazard_suicides": "timestamped StdLog Suicide events in the evaluation window summed over the roster; complete-stream totals reconcile to fresh unified game_stats.suicides and conservatively include self-weapon suicides",
+    "combat": "timestamped StdLog Kill attacker and victim events in the evaluation window summed over the roster; complete-stream totals reconcile to fresh unified game_stats.frags and game_stats.fragged; divide each by active team minutes",
+    "visible_or_audible_engagements": "cropped one-second SG telemetry samples with eng=1, whose production source is a current visible target; recent unseen damage evidence may admit a visible rear-cone scan but is not itself an engagement; divide by active team minutes",
+    "forbidden_knowledge_events": "failures from executable production-policy checks covering missing or carried, unseen dropped, wrong-floor, or hull-blocked flag facts, plus every runtime FLAG_KNOWLEDGE_VIOLATION marker if one is emitted; absence of a marker does not replace the policy checks",
+    "approach": "serverrecord consecutive-frame crossing whose second frame is in the evaluation window from horizontal distance at least 384 to less than 384 from the authenticated enemy stand while the complete level-start production F Pickup, FC LostFlag, F Return, and F Capture timeline says that flag is home; a dropped flag remains dropped at droptime+30 and returns only when the production ctf_flagwave comparison level.time > droptime+30 fires; flag events must be sorted by timestamp and unique integer production log_order, and same-timestamp events execute in ascending production log order",
+    "demo_time_alignment": "median over the ten roster clients of StdLog PlayerConnect seconds minus first serverrecord entity-frame seconds; every effects carry start must reconcile to an authoritative same-player F Pickup within 0.2 seconds",
+    "close_conversion": "authoritative same-player F Pickup from 0.0 through 1.5 seconds after a qualifying approach; one pickup and one approach may be matched at most once",
+    "steal": "timestamped StdLog F Pickup events in the evaluation window divided by active team minutes; the complete timestamped stream must exactly equal host stole outcomes and fresh unified ctf_stats.flag_pickups",
+    "capture": "timestamped StdLog F Capture events in the evaluation window divided by active team minutes; the complete timestamped stream must exactly equal host captured outcomes and fresh unified ctf_stats.flag_captures",
+    "steal_to_capture_conversion": "authoritative capture count divided by authoritative F Pickup count",
+    "defender_post_dwell_fraction": "cropped role=1 SG telemetry samples with 0 <= sgoal < 1500 divided by all cropped role=1 samples",
+    "defender_moving_sample_fraction": "cropped role=1 SG telemetry samples with horizontal spd greater than 50 divided by all cropped role=1 samples",
+    "defender_departure": "per bot, a consecutive cropped role=1 telemetry transition from 0 <= sgoal < 1500 to sgoal >= 1500; divide by active defender minutes",
+    "captures_conceded": "opponent authoritative captures divided by that team's active team minutes",
+    "strata_and_pooling": "emit map, team, roster-size, configuration, and round strata; decision bands use the paired aggregate formed only by summing identical map, roster-size, and configuration strata after team strata are reported"
+  },
+  "stratification": [
+    "map",
+    "team",
+    "roster_size",
+    "configuration"
+  ],
+  "bands": {
+    "movement": {
+      "horizontal_distance_per_active_bot_minute_ratio_min": 0.95,
+      "moving_sample_fraction_absolute_delta_min": -0.03,
+      "world_or_hazard_suicides_per_active_bot_minute_delta_max": 0.05
+    },
+    "combat": {
+      "combat_kills_per_active_team_minute_ratio_min": 0.90,
+      "combat_kills_per_active_team_minute_ratio_max": 1.10,
+      "combat_deaths_per_active_team_minute_ratio_max": 1.10
+    },
+    "perception": {
+      "forbidden_knowledge_events_max": 0,
+      "visible_or_audible_engagements_per_active_team_minute_ratio_min": 0.85,
+      "visible_or_audible_engagements_per_active_team_minute_ratio_max": 1.15
+    },
+    "steal": {
+      "authoritative_pickups_per_active_team_minute_ratio_min": 1.10,
+      "authoritative_pickups_per_active_team_minute_delta_min": 0.10,
+      "authoritative_pickup_count_delta_min": 2
+    },
+    "conversion": {
+      "close_approach_conversion_absolute_delta_min": 0.05,
+      "close_approach_conversion_ratio_min": 1.25,
+      "timely_authoritative_pickup_count_delta_min": 2
+    },
+    "capture": {
+      "authoritative_captures_per_active_team_minute_ratio_min": 0.90,
+      "steal_to_capture_conversion_absolute_delta_min": -0.05,
+      "authoritative_reconciliation_mismatches_max": 0
+    },
+    "defense": {
+      "defender_post_dwell_fraction_ratio_min": 0.90,
+      "defender_moving_sample_fraction_ratio_min": 0.90,
+      "defender_departures_per_active_defender_minute_ratio_max": 1.10,
+      "captures_conceded_per_active_team_minute_ratio_max": 1.10,
+      "captures_conceded_per_active_team_minute_delta_max": 0.10
+    }
+  },
+  "decision": {
+    "require_every_band": true,
+    "zero_baseline_ratio_rule": "apply the paired absolute-delta and count rule; do not manufacture a ratio",
+    "insufficient_event_rule": "inconclusive and not adoptable",
+    "failure_rule": "strike or revise the candidate; retain counter-evidence"
+  }
+}
