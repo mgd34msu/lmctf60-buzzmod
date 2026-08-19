@@ -792,6 +792,7 @@ int ArmorIndex (edict_t *ent);
 int PowerArmorType (edict_t *ent);
 gitem_t	*GetItemByIndex (int index);
 qboolean Add_Ammo (edict_t *ent, gitem_t *item, int count);
+qboolean G_PowerupPickupEligible(edict_t *ent, edict_t *other);
 
 // TEAM CODE -- LM_JORM
 //void Drop_Flag(edict_t *ent, gitem_t *item);

@@ -144,7 +144,8 @@ qboolean Lead_PickupTarget(const sg_bot_t *bot, vec3_t target)
 	item = g_edicts + bot->lead_ent;
 	if (!item->inuse || !item->classname ||
 	    (strcmp(item->classname, "item_quad") != 0 &&
-	     strcmp(item->classname, "item_invulnerability") != 0))
+	     strcmp(item->classname, "item_invulnerability") != 0) ||
+	    !G_PowerupPickupEligible(item, bot->ent))
 		return false;
 	VectorCopy(item->s.origin, target);
 	return true;
@@ -266,11 +267,20 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 			return NULL;
 		}
 		b = &sg_caco_items[ti][bot->lead_slot];
-		if (b->ent != bot->lead_ent)
+		if (b->ent != bot->lead_ent || b->ent <= 0 ||
+		    b->ent >= globals.num_edicts)
 		{
 			/* the table was rebuilt under us (level change): the row names a
 			 * different entity now and the errand is about nothing */
 			Lead_Abort(bot, "stale row");
+			return NULL;
+		}
+		if (!G_PowerupPickupEligible(&g_edicts[b->ent], e))
+		{
+			/* The game pickup law is the authority here.  A full inventory may
+			 * make a once-valid errand impossible while the bot is travelling;
+			 * release the team lease instead of camping an untakeable item. */
+			Lead_Abort(bot, "powerup capacity");
 			return NULL;
 		}
 		if (b->believed_up)
@@ -388,6 +398,9 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 
 		b = &sg_caco_items[ti][i];
 		if (b->cls != SG_BI_POWERUP || b->believed_up)
+			continue;
+		if (b->ent <= 0 || b->ent >= globals.num_edicts ||
+		    !G_PowerupPickupEligible(&g_edicts[b->ent], e))
 			continue;
 		if (SG_TimerReady(b->believed_respawn_time))
 			continue;

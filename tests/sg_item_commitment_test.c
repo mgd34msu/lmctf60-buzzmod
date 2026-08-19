@@ -24,6 +24,7 @@ static cvar_t debug_cvar;
 static qboolean itemcomm = true;
 static qboolean combat;
 static qboolean hurt;
+static qboolean accept_powerup = true;
 
 game_locals_t game;
 level_locals_t level;
@@ -101,6 +102,13 @@ qboolean Beat_HurtSince(edict_t *ent, float since)
 	(void)ent;
 	(void)since;
 	return hurt;
+}
+
+qboolean G_PowerupPickupEligible(edict_t *item, edict_t *other)
+{
+	(void)item;
+	(void)other;
+	return accept_powerup;
 }
 
 const sg_persona_t *SG_PersonaFor(edict_t *ent)
@@ -210,6 +218,7 @@ static void ResetWorld(void)
 	itemcomm = true;
 	combat = false;
 	hurt = false;
+	accept_powerup = true;
 }
 
 static void TestClockSpawnContinuesToPhysicalPickup(void)
@@ -312,6 +321,22 @@ static void TestStrongerInterruptsStillWin(void)
 	CHECK(bot->lead_ent == 0);
 }
 
+static void TestPowerupCapacityEndsTheErrand(void)
+{
+	sg_bot_t *bot;
+
+	level.time = 10.0f;
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	accept_powerup = false;
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
+	CHECK(bot->lead_ent == 0);
+	CHECK(sg_caco_items[0][0].claimed_by == -1);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	CHECK(!Lead_PickupTarget(bot, entities[0].s.origin));
+	CHECK(bot->lead_ent == 3);
+}
+
 int main(void)
 {
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1));
@@ -333,6 +358,7 @@ int main(void)
 	TestSightConfirmedSpawnPersistsAndHomes();
 	TestExactPickupOwnershipEndsCommitment();
 	TestStrongerInterruptsStillWin();
+	TestPowerupCapacityEndsTheErrand();
 	if (failures)
 	{
 		fprintf(stderr, "%d sg_item_commitment tests failed\n", failures);

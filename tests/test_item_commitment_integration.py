@@ -89,6 +89,22 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertNotIn("RL_DOOR", body)
         self.assertNotIn("RL_LIFT", body)
 
+    def test_item_planner_uses_the_game_pickup_admission_law(self):
+        items = self.text("g_items.c")
+        admission = items[items.index(
+            "qboolean G_PowerupPickupEligible"):items.index(
+            "void Drop_General")]
+        self.assertIn("ITEM_INDEX(ent->item)", admission)
+        self.assertIn("skill->value", admission)
+        self.assertIn("IT_STAY_COOP", admission)
+        pickup = admission[admission.index("qboolean Pickup_Powerup"):]
+        self.assertIn("if (!G_PowerupPickupEligible(ent, other))", pickup)
+
+        lead = self.text("slipgate/sg_lead.c")
+        self.assertGreaterEqual(
+            lead.count("G_PowerupPickupEligible"), 3)
+        self.assertIn('Lead_Abort(bot, "powerup capacity")', lead)
+
     def test_flag_intelligence_preempts_cosmetic_chat_but_stamps_budget(self):
         source = self.text("slipgate/sg_chat.c")
         start = source.index("qboolean SG_ChatSayTeam(")

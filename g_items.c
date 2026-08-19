@@ -168,15 +168,24 @@ void SetRespawn(edict_t* ent, float delay)
 
 //======================================================================
 
-qboolean Pickup_Powerup(edict_t* ent, edict_t* other)
+qboolean G_PowerupPickupEligible(edict_t *ent, edict_t *other)
 {
 	int		quantity;
 
+	if (!ent || !ent->item || !other || !other->client)
+		return false;
 	quantity = other->client->pers.inventory[ITEM_INDEX(ent->item)];
 	if ((skill->value == 1 && quantity >= 2) || (skill->value >= 2 && quantity >= 1))
 		return false;
 
 	if ((coop->value) && (ent->item->flags & IT_STAY_COOP) && (quantity > 0))
+		return false;
+	return true;
+}
+
+qboolean Pickup_Powerup(edict_t* ent, edict_t* other)
+{
+	if (!G_PowerupPickupEligible(ent, other))
 		return false;
 
 	other->client->pers.inventory[ITEM_INDEX(ent->item)]++;

@@ -281,6 +281,10 @@ The successful `Touch_Item` callback now closes a matching early-return item
 commitment before consulting the item-communication cvar. Disabling team
 callouts suppresses belief/speech only; it cannot leave a bot pursuing a pad
 whose item was physically taken.
+The early-return planner also consults the same inventory/skill/co-op admission
+law as `Pickup_Powerup` before committing, while travelling, and before terminal
+homing. A bot at the legal quad or invulnerability capacity cannot abandon its
+objective to camp an item the authoritative pickup callback would reject.
 Sound belief now admits only finite, positively attenuated client audio.
 Map-wide `ATTN_NONE` CTF, vote, and countdown announcements remain audible but
 cannot turn their protocol emitter edict into an enemy position; ordinary
