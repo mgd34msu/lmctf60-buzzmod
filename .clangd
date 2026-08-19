@@ -1,6 +1,6 @@
-# Analyzer parity with the real build. The GNUmakefile compiles every unit
-# from the repo ROOT through the sg_*.c symlinks, so quoted includes like
-# "g_local.h" resolve there; compile_flags.txt gives clangd the same -I set.
+# Analyzer parity with the current C11 build. The GNUmakefile compiles the
+# aliased SLIPGATE units from the repository root through the sg_*.c symlinks;
+# compile_flags.txt supplies the repository and slipgate include roots.
 # The slipgate headers are deliberately not self-contained (they rely on
 # g_local.h coming first, matching the tree's include convention), so when
 # clangd parses one standalone it needs the same precondition supplied.

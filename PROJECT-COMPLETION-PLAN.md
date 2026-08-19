@@ -463,8 +463,7 @@ Required bundle:
 - both identical module aliases;
 - required client/runtime `assets/lmctf6-buzzmod.pak`;
 - exact production `rune.cfg`, manifest-bound `sv sg` roster policy, and ten
-  generated rotated map-list files; the unconsumed legacy `assets/bots.cfg`
-  roster and its nonfunctional `abmatch.sh` launcher are removed;
+  generated rotated map-list files;
 - the authoritative ordered `tools/topmaps.txt` used to derive those files;
 - all 181 BSP files and all 181 matching RUNE files;
 - escape priors;
@@ -550,8 +549,7 @@ Documentation and necessity audit:
 1. Inventory every tracked path and every relevant untracked path, explicitly
    including authored C/H, Python/shell tools, build/project/workflow files,
    configs, documents, fixtures, datasets, generated artifacts, diagnostics,
-   vendored source, binary PAK/COFF objects, recovery assets, and evidence
-   directories.
+   vendored source, the binary PAK, and evidence directories.
 2. For every item, record its authoring source or producer, reproducible build
    command, direct C/Python/runtime consumers, build/workflow/launcher/test/docs
    and operator references, and classify it as current authority, executable
@@ -576,7 +574,6 @@ Known cleanup candidates that require classification:
 
 - the retired implementation-roadmap stub versus this authoritative plan;
 - the untracked duplicate `docs-layout-isa.md`;
-- tracked `.goodvibes` runtime-session cache entries;
 - untracked `.diag-*.gdb` scripts whose source-line probes are stale;
 - generated `*.gnu`/`*.make` test binaries, Python bytecode, POV temporary
   trees, auxiliary launch logs, and rune-log trees;
@@ -589,7 +586,7 @@ Known cleanup candidates that require classification:
 
 Required repository cleanup:
 
-- remove tracked runtime-session cache entries from the index;
+- keep runtime-session cache entries untracked through a narrow ignore;
 - add narrow ignores for known generated binaries, diagnostics, bytecode,
   temporary POV trees, and rune log roots;
 - preserve final evidence outside Git and commit only concise manifests;

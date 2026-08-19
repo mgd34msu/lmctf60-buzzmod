@@ -1,9 +1,9 @@
 # Repository hygiene and evidence retention
 
-This document records the August 18, 2026 whole-tree necessity audit. It does
-not replace the execution plan. Its purpose is to keep generated debris out of
-Git without deleting source, reproducible inputs, or evidence that is still
-needed to close the project.
+This document defines the repository's current retention rules. It does not
+replace the execution plan. Its purpose is to keep generated debris out of Git
+without deleting source, reproducible inputs, or evidence that is still needed
+to close the project.
 
 ## Decision rule
 
@@ -27,9 +27,9 @@ list, never `git add -A` or a broad recursive cleanup.
 
 ## Retained and required
 
-- Game and SLIPGATE C/H source, root symlink aliases, tests, both Make dialects,
-  Visual Studio projects, workflow, generated action contracts, and their
-  authoring JSON are active build inputs.
+- Game and SLIPGATE C/H source, root `sg_*.c` symlink aliases, tests, both Make
+  dialects, Visual Studio projects, workflow, generated action contracts, and
+  their authoring JSON are active build inputs.
 - `sqlite3.c` and `sqlite3.h` are the vendored SQLite 3.7.13 amalgamation used
   directly by every platform build. Their small local delta is intentional and
   provenance-audited; they are not generated junk.
@@ -51,10 +51,6 @@ list, never `git add -A` or a broad recursive cleanup.
 
 ## Retained pending a final disposition
 
-- `recovery/` contains source fragments, a recovery patch, and three COFF
-  objects. It has no runtime role, but it may be the only provenance for the
-  recovered stats implementation. Keep it until an owner either documents that
-  provenance role or proves that Git history contains an equivalent source.
 - `tools/human/ents/*.json`, `tools/human/pro/*.json`,
   `tools/human/carrywindows.json`, `tools/human/ents/playersamples.json`, and
   `tools/botledger.csv` have incomplete current producer/consumer or final
@@ -66,23 +62,11 @@ list, never `git add -A` or a broad recursive cleanup.
   cutover, each old entry point requires a separate consumer/operator check
   before removal.
 
-## Generated state removed from version control
+## Untracked generated state
 
 `.goodvibes/` contains session cache and health state, is already ignored, and
-has no build, runtime, test, release, or evidence role. Its three tracked files
-are removed from the index in the documentation-hygiene change; local copies
-may be recreated by the tool and remain ignored.
-
-The obsolete `assets/bots.cfg` and `tools/abmatch.sh` paths were also removed.
-Both depended on the deleted legacy `sv addbot` command; current bot admission
-uses the tested `sv sg` command surface, and no runtime, build, or operator path
-consumed the old roster file.
-
-The dated HOOK migration manifest and verbose pre-SemVer release narratives
-were removed from the working documentation. Their temporary paths and old
-milestone claims are not current operator inputs; the exact records remain in
-Git history and tags. `RELEASES.md` now contains the release contract consumed
-by the tag workflow.
+has no build, runtime, test, release, or evidence role. Tool-created local state
+must remain untracked.
 
 The following classes are transient and must not be committed:
 

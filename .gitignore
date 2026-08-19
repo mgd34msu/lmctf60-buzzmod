@@ -13,26 +13,14 @@
 GitRevisionInfo.h
 .depend
 
-# built botlib
-bots/botlib/*.o
-bots/botlib/botlib.so
-
 # server logs and tool output that never belongs in history
-bspc.log
 .goodvibes/
 tools/rune-logs/
 tools/campaign-*/
-tools/ab-*.log
-tools/ab-*.engine/
 tools/iter-*/
-tools/__pycache__/
 
 # development-environment runtime debris (see TOOLING.md)
-tools/iter-*-launch.log
-tools/aux-*-launch.log
 tools/aux-[0-9]*/
-tools/campaign-*/
-tools/waveloop.log
 tools/*.log
 tools/runs-archive/
 
@@ -47,7 +35,3 @@ tools/runs-archive/
 /tools/rune-logs-*/
 __pycache__/
 *.py[cod]
-
-# the versioned game modules: reproducible from any commit by hash, so
-# only the current deployable lives in the root and none are kept
-gamex86_64-*.so
