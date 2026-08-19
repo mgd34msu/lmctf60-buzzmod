@@ -483,9 +483,9 @@ Required bundle:
 
 - both identical module aliases;
 - required client/runtime `assets/lmctf6-buzzmod.pak`;
-- exact production `rune.cfg`, manifest-bound roster policy, and ten generated
-  rotated map-list files; `assets/bots.cfg` is not a current SLIPGATE input and
-  is excluded unless a real `sv addbot` consumer is restored;
+- exact production `rune.cfg`, manifest-bound `sv sg` roster policy, and ten
+  generated rotated map-list files; the unconsumed legacy `assets/bots.cfg`
+  roster and its nonfunctional `abmatch.sh` launcher are removed;
 - the authoritative ordered `tools/topmaps.txt` used to derive those files;
 - all 181 BSP files and all 181 matching RUNE files;
 - escape priors;

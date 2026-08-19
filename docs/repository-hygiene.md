@@ -55,10 +55,6 @@ list, never `git add -A` or a broad recursive cleanup.
   objects. It has no runtime role, but it may be the only provenance for the
   recovered stats implementation. Keep it until an owner either documents that
   provenance role or proves that Git history contains an equivalent source.
-- `assets/bots.cfg` contains legacy `sv addbot` commands, but the current
-  `ServerCommand` dispatcher has no `addbot` command and no current runtime path
-  consumes the file. Keep it out of the server-bundle contract; remove/archive
-  it or restore a real consumer before final cleanup.
 - `tools/human/ents/*.json`, `tools/human/pro/*.json`,
   `tools/human/carrywindows.json`, `tools/human/ents/playersamples.json`, and
   `tools/botledger.csv` have incomplete current producer/consumer or final
@@ -76,6 +72,11 @@ list, never `git add -A` or a broad recursive cleanup.
 has no build, runtime, test, release, or evidence role. Its three tracked files
 are removed from the index in the documentation-hygiene change; local copies
 may be recreated by the tool and remain ignored.
+
+The obsolete `assets/bots.cfg` and `tools/abmatch.sh` paths were also removed.
+Both depended on the deleted legacy `sv addbot` command; current bot admission
+uses the tested `sv sg` command surface, and no runtime, build, or operator path
+consumed the old roster file.
 
 The following classes are transient and must not be committed:
 
