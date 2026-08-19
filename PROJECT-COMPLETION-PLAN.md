@@ -188,11 +188,13 @@ forming teammate falls behind the remaining synchronization clock, and weapon
 preparation that yields to enemy-stand pressure inside five seconds or when its
 route saves less than one second. The adopted immediate-return preference now
 also yields in a one-finite-exit corridor, so it cannot turn a required reverse
-edge into a three-second standstill. Outside the final 600 ms objective band,
-an attacker whose composed preferences reject every move now takes the best
-fully admitted, strictly descending proved RUN instead of pricing itself into a
-far-field standstill; mechanisms and ballistic actions are never forced by that
-fallback. The strike overlay now preserves one real RECOVER mission whenever
+edge into a three-second standstill. An attacker whose composed preferences
+reject every move now takes the best fully admitted, strictly descending proved
+RUN instead of pricing itself into a standstill, including inside the last 600
+ms of the field when physical flag touch has not yet been proved. Mechanisms
+and ballistic actions are never forced by that fallback, and the later exact
+touch controller still clears the ordinary RUN when contact becomes real. The
+strike overlay now preserves one real RECOVER mission whenever
 the team's flag is away, including one- and two-member casualty states, rather
 than redirecting every survivor to an enemy flag the team cannot score. During
 a live carrier standoff it prioritizes RECOVER, then ESCORT, then its bounded

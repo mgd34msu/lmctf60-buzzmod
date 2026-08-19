@@ -36,14 +36,16 @@ static void TestAttackDescentCannotPriceItselfStill(void)
 
 	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 8000, 7875, infinity));
 	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 601, 600, infinity));
-	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 600, 500, infinity));
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 600, 500, infinity));
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 1, 0, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 0, 0, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 0, 8000, 7000, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(0, 1, 8000, 7000, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 8000, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 8001, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, infinity, 10, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(2, 1, 8000, 7000, infinity));
-	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 600));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 0));
 }
 
 static void TestDuelRoutePricingUsesOneSurface(void)
