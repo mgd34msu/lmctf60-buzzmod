@@ -4476,17 +4476,17 @@ no_hold:;
 	              hold_post && role == SG_ROLE_DEFEND && bot->def_stand);
 
 	/*
-	 * Whether this bot may hold a corner on a target it just lost. The role
-	 * decides and nothing else: an attacker and a recoverer are already going
-	 * that way, a defender may watch a doorway only while it is still on its
-	 * own ground -- 2500 ms of the home field, the same order as the post's own
-	 * 400 and the pre-spin's 1200 -- and the carrier and its escort never do,
-	 * because both have a clock running that a camp does not serve. Said every
-	 * frame, so a role change ends a hold on the frame it happens.
+	 * Whether this bot may hold a corner on a target it just lost.  The
+	 * effective objective decides: pressure and recovery routes are already
+	 * going that way, while carrier and escort clocks do not admit a camp.  A
+	 * coordinator duty overrides the earlier organic role on the same frame,
+	 * just as it overrides the route.  An uncoordinated defender may watch a
+	 * doorway only while it remains on its own ground -- 2500 ms of the home
+	 * field, the same order as the post's 400 and pre-spin's 1200.
 	 */
-	SG_CombatPursuit(e, (qboolean)(role == SG_ROLE_ATTACK ||
-	                               role == SG_ROLE_RECOVER ||
-	                               (role == SG_ROLE_DEFEND &&
+	SG_CombatPursuit(e, (qboolean)(tc->combat_pursuit ||
+	                               (!tc->strike_active &&
+	                                role == SG_ROLE_DEFEND &&
 	                                goal_field[bot->seed] < 2500)));
 
 	/*

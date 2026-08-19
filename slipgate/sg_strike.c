@@ -27,6 +27,19 @@ int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
 	                     : ordinary_attack;
 }
 
+int SG_StrikeDutyCombatPursuit(sg_strike_duty_t duty)
+{
+	return SG_StrikeDutyEnemyPressure(duty) ||
+	    duty == SG_STRIKE_DUTY_RECOVER;
+}
+
+int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
+	sg_strike_duty_t duty)
+{
+	return strike_active ? SG_StrikeDutyCombatPursuit(duty)
+	                     : ordinary_pursuit;
+}
+
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty)
 {
 	switch (duty)

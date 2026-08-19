@@ -483,6 +483,10 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("SG_StrikeEnemyPressureSnapshot(bot)", move)
         self.assertIn("tc.strike_pressure = SG_StrikeEnemyPressureActive(",
                       arach)
+        self.assertIn("tc.combat_pursuit = SG_StrikeCombatPursuitActive(",
+                      arach)
+        self.assertIn("tc->combat_pursuit ||", descend)
+        self.assertIn("!tc->strike_active &&", descend)
 
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()

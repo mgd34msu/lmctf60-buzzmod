@@ -1194,6 +1194,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [ ] Bot improvement backlog measured, resolved, and consumer-proven across
       movement, routes, hooks, combat/perception, team/defense/outcomes, items,
       snag, POV, and sound.
+      Current production work separates persistent pressure duty from transient
+      rush release and makes lost-contact pursuit follow the coordinator-owned
+      pressure/recovery route instead of the superseded organic role.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

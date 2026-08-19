@@ -569,6 +569,7 @@ typedef struct sg_think_s {
 	 * deadlines; the ordinary descent/move stages own route execution. */
 	qboolean		strike_active, strike_hold, strike_rush,
 				strike_pressure,
+				combat_pursuit,
 				strike_weapon_pursuit;
 	float			strike_weapon_deadline;
 } sg_think_t;

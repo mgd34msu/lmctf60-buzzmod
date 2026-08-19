@@ -175,6 +175,12 @@ int SG_StrikeGenericRailAllowed(int strike_active);
 int SG_StrikeDutyEnemyPressure(sg_strike_duty_t duty);
 int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
 	sg_strike_duty_t duty);
+/* Corner pursuit follows the objective route it supports.  Pressure and
+ * recovery duties may keep a recently lost contact; escort and carrier duties
+ * may not spend their route clock camping. */
+int SG_StrikeDutyCombatPursuit(sg_strike_duty_t duty);
+int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
+	sg_strike_duty_t duty);
 /* A concrete coordinator duty is an objective mission, so optional item-pad
  * preparation cannot remain live underneath its route and aim authority. */
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);
