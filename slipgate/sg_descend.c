@@ -297,14 +297,15 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	int finite_route_neighbors = 0;
 	int attack_descent_link = -1;
 	float attack_descent_value = 1e30f;
+	qboolean enemy_pressure = SG_StrikeEnemyPressureActive(
+	    role == SG_ROLE_ATTACK, tc->strike_rush);
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
 
 	/* The home enemy flag is public CTF state.  Keep its physical item
 	 * position as a bounded last-room pricing input; dropped/carried flags do
 	 * not enter because their availability/knowledge has different authority. */
-	if (SG_StrikeEnemyPressureActive(role == SG_ROLE_ATTACK,
-	        tc->strike_rush))
+	if (enemy_pressure)
 	{
 		edict_t *flag = SG_EnemyFlag(team);
 
@@ -716,7 +717,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * the goal, and a carrier anywhere on the run home, prefers the
 		 * corridor to the courtyard whenever the costs are close.
 		 */
-		if (role == SG_ROLE_ATTACK && goal_field[bot->seed] < 4000 &&
+		if (enemy_pressure && goal_field[bot->seed] < 4000 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			/* 0.5, not 2.5: the lmctf58 audit caught this surcharge
 			 * out-arguing the ~125/hop goal gradient (exposure bytes run
@@ -734,7 +735,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * axes with no explicit corridor model at all, and the sentry's
 		 * dilemma starts before the threshold.
 		 */
-		if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+		if (enemy_pressure && bot->seed >= 0 &&
 		    goal_field[bot->seed] < SG_FIELD_INF &&
 		    goal_field[bot->seed] > 2500 && goal_field[bot->seed] < 12000)
 		{
@@ -1034,7 +1035,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * there is no fight, which is most of them.
 		 */
 		else if (duel &&
-		         !(role == SG_ROLE_ATTACK &&
+		         !(enemy_pressure &&
 		           sg_cv.press->value) &&
 		         /* CARRIER PRESS (sg_carrypress, observations). The carry
 		          * traces (274-279): 61%% of carrier frames make no
@@ -1165,7 +1166,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * same book as the carrier's, applied to the attacker against
 		 * every fresh eye sighting near the target stand.
 		 */
-		if (tc->role == SG_ROLE_ATTACK &&
+		if (enemy_pressure &&
 		    sg_cv.approachcover->value > 0)
 		{
 			int acs;
@@ -1473,7 +1474,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * final room they may not turn standing still into a free alternative
 		 * to every strictly descending ordinary RUN. Retain the best such road
 		 * as a last-resort movement authority after every live gate above. */
-		if (SG_AttackDescentFallbackAllowed(role == SG_ROLE_ATTACK,
+		if (SG_AttackDescentFallbackAllowed(enemy_pressure,
 		        l->action == RL_RUN, goal_field[bot->seed],
 		        goal_field[l->to], SG_FIELD_INF) && v < attack_descent_value)
 		{
@@ -2339,6 +2340,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean defense_quiet = true;
 	qboolean defense_post = false;
 	qboolean defense_shift_selected = false;
+	qboolean enemy_pressure = SG_StrikeEnemyPressureActive(
+	    role == SG_ROLE_ATTACK, tc->strike_rush);
 	int defense_threat_seed = -1;
 	float post_yaw = tc->post_yaw;
 	float post_sight = tc->post_sight;
@@ -3950,7 +3953,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		SG_Mark(&bot->wedge_since);
 	}
 	else if (SG_AgeOver(bot->wedge_since, 15.0f) &&
-	         role == SG_ROLE_ATTACK &&
+	         enemy_pressure &&
 	         SG_AttackFlagDirectTouchAuthority(e, team, NULL))
 	{
 		/* The live flag is a direct touch recovery, not a reason to respawn.

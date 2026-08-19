@@ -348,6 +348,11 @@ enemy-flag approach preference even when their underlying organic role is
 RECOVER or ESCORT. The strike overlay can no longer grant the enemy route and
 terminal touch controller while accidentally withholding the intervening
 proved RUN preference that converts a near-stand plateau into physical entry.
+That same live pressure authority now owns the approach-cover and exposed-seed
+prices, forward combat pressure, strictly descending RUN fallback, and the
+direct-touch anti-wedge recovery. A repurposed pressure body can no longer
+inherit the enemy route while an obsolete organic-role check makes it recede,
+stand still, or suicide beside the available flag.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 
