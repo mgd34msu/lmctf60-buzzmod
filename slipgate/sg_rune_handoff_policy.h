@@ -57,4 +57,16 @@ static inline qboolean SG_RuneHandoffAim(float delta_x, float delta_y,
 	return isfinite(*yaw_out);
 }
 
+/* Dropping the rune is irreversible.  Distance makes the teammate a courier
+ * candidate; current visibility proves there is not a solid wall between the
+ * physical toss and its intended receiver.  Convergence may continue while
+ * hidden, but the item stays in hand until the path opens. */
+static inline qboolean SG_RuneHandoffTossPathAllowed(float distance,
+	qboolean visible)
+{
+	if ((visible != false && visible != true) || !isfinite(distance))
+		return false;
+	return visible && distance > 0.0f && distance < 400.0f;
+}
+
 #endif

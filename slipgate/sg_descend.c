@@ -3804,14 +3804,19 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			if (carrier_allowed)
 			{
 				vec3_t rd14;
+				float carrier_distance;
+				qboolean toss_path_clear;
 
 				VectorSubtract(ce->s.origin, e->s.origin, rd14);
+				carrier_distance = VectorLength(rd14);
+				toss_path_clear = SG_CanSee(e, ce->s.origin, ce->viewheight);
 				if (sg_cv.debug->value &&
 				    SG_TimerReady(bot->next_report - 0.9f))
 					sg_host.dprint("RTCAND %s dist=%.0f\n",
 					           e->client->pers.netname,
-					           VectorLength(rd14));
-				if (VectorLength(rd14) < 400.0f)
+					           carrier_distance);
+				if (SG_RuneHandoffTossPathAllowed(carrier_distance,
+				        toss_path_clear))
 				{
 					float ry;
 

@@ -1476,6 +1476,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       SG ownership boundary plus distinct life, mission, and carry-time inputs.
       A replacement carrier in a recycled edict slot cannot inherit the former
       bot's sampled escape route.
+      A defensive-rune courier may continue converging around architecture,
+      but the irreversible drop now requires a current clear path to the live
+      carrier as well as the existing exact receiver and distance checks. A
+      nearby carrier behind a solid wall cannot make the bot discard the rune.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

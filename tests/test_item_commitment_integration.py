@@ -141,6 +141,12 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("carrier_team == team && carrying_flag", policy)
         self.assertIn("!receiver_has_rune", policy)
 
+        descend = self.text("slipgate/sg_descend.c")
+        self.assertIn("SG_RuneHandoffTossPathAllowed(carrier_distance,",
+                      descend)
+        self.assertIn("toss_path_clear = SG_CanSee(e, ce->s.origin,",
+                      descend)
+
     def test_rune_handoff_binds_the_immediate_toss_and_submitted_view(self):
         source = self.text("slipgate/sg_descend.c")
         start = source.index("THE RUNE HANDOFF")

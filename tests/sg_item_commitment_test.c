@@ -403,6 +403,13 @@ int main(void)
 		CHECK(!SG_RuneHandoffAim(1.0f, INFINITY, &yaw));
 		CHECK(!SG_RuneHandoffAim(1.0f, 1.0f, NULL));
 	}
+	CHECK(SG_RuneHandoffTossPathAllowed(128.0f, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(128.0f, false));
+	CHECK(!SG_RuneHandoffTossPathAllowed(0.0f, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(400.0f, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(NAN, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(INFINITY, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(128.0f, 2));
 	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
 	    100, false, CTF_TEAM_RED, true, true));
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 0) ==
