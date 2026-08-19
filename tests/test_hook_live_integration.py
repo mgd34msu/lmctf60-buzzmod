@@ -245,8 +245,10 @@ fire_retire = fire.index('"value-fire-skip"')
 fire_proof = fire.index("Hook_OnlineProof")
 fire_command = fire.index("Cmd_Hook_f(e);")
 assert fire_worth < fire_retire < fire_proof < fire_command
-assert "goal_field[hook_link->from]" in fire
-assert "goal_field[hook_link->to]" in fire
+assert "route_field[hook_link->from]" in fire
+assert "route_field[hook_link->to]" in fire
+assert "goal_field[hook_link->from]" not in fire
+assert "goal_field[hook_link->to]" not in fire
 assert "worth == SG_HOOK_RIDE_REJECT" in fire
 assert 'Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
 assert "goto hook_wait;" in fire[fire_retire:fire_proof]

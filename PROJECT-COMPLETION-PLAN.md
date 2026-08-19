@@ -211,6 +211,11 @@ line now owns heading through contact: the generic obstacle fan cannot probe
 past the flag and turn away because of geometry behind it, and route-heading
 smoothing cannot preserve a stale bearing for that terminal frame. This does
 not widen the touch envelope or bypass the authoritative `ctf_flagtouch` path.
+Graph-hook usefulness is now judged against the exact current route field at
+both source staging and the irreversible fire boundary. A tactical waypoint or
+bounded weapon errand can therefore take a ride that advances that live route,
+while a rope that only appears useful against a different strategic field is
+retired before firing.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

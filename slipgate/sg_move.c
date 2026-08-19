@@ -4358,7 +4358,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				{
 					vec3_t proof_source, proof_muzzle, proof_bite;
 					sg_hook_ride_worth_t worth = SG_HookExpectedRideWorth(
-					    goal_field[l->from], goal_field[l->to]);
+					    route_field[l->from], route_field[l->to]);
 
 					proof_source[0] = (short)(SG_Rune()->seeds[l->from].origin[0]
 					                  * 8.0f) * 0.125f;
@@ -4369,7 +4369,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					if (worth == SG_HOOK_RIDE_REJECT)
 					{
 						Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,
-						    "value-skip", goal_field[l->from], goal_field[l->to]);
+						    "value-skip", route_field[l->from], route_field[l->to]);
 					}
 					else if (SG_HookControlDecode(proof_source, 22.0f, RIGHT_HANDED,
 					                         l->anchor, bot->hook_view,
@@ -9859,13 +9859,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					Hook_GraphFail(e, bot, 5.0f);
 					goto hook_wait;
 				}
-				worth = SG_HookExpectedRideWorth(goal_field[hook_link->from],
-				    goal_field[hook_link->to]);
+				worth = SG_HookExpectedRideWorth(route_field[hook_link->from],
+				    route_field[hook_link->to]);
 				if (worth == SG_HOOK_RIDE_REJECT)
 				{
 					Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,
-					    "value-fire-skip", goal_field[hook_link->from],
-					    goal_field[hook_link->to]);
+					    "value-fire-skip", route_field[hook_link->from],
+					    route_field[hook_link->to]);
 					goto hook_wait;
 				}
 				online = Hook_OnlineProof(e, bot, hook_link->anchor[ROLL],
