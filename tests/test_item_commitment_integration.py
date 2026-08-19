@@ -194,6 +194,20 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             "SG_ChatSayTeam(sp, c->line, SG_CHAT_TOPIC_CACO)", speak
         )
 
+    def test_chat_texture_does_not_consume_gameplay_randomness(self):
+        source = self.text("slipgate/sg_chat.c")
+        policy = self.text("slipgate/sg_chat_random.h")
+
+        self.assertNotIn("random()", source)
+        self.assertNotIn("rand()", source)
+        self.assertIn("uint32_t\trandom_state;", source)
+        self.assertIn("SG_ChatRandomInitial(", source)
+        self.assertIn("speaker->client->ctf.ctfid", source)
+        self.assertIn("Chat_RandomUnit(speaker)", source)
+        self.assertIn("Chat_RandomBounded(speaker", source)
+        self.assertIn("SG_ChatRandomNext", policy)
+        self.assertNotIn("rand(", policy)
+
 
 if __name__ == "__main__":
     unittest.main()

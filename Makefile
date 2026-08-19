@@ -1540,7 +1540,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_identity_test.make.o: tests/sg_identity_test.c slipgate/sg_chat.h \
-		slipgate/sg_ear_random.h slipgate/sg_route_jitter.h $(REVISION_HEADER)
+		slipgate/sg_chat_random.h slipgate/sg_ear_random.h \
+		slipgate/sg_route_jitter.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<

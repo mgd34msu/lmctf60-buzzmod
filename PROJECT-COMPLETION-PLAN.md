@@ -1484,6 +1484,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       quad-specific impact danger radius to every live same-team client, not
       only the shooter or the teammate directly intersecting the trace. Human
       and SG teammates beside the predicted impact veto the trigger equally.
+      Default chat and radio texture now advances a private per-client stream
+      bound to the current client identity. Speech timing, odds, and line
+      choice no longer consume the engine-global RNG that also determines
+      weapon spread and other physical match outcomes.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

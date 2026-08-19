@@ -16,6 +16,7 @@
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_route_jitter.h"
 #include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_chat_random.h"
 #include "slipgate/sg_ear_random.h"
 #include "slipgate/sg_role_skew_random.h"
 #include "slipgate/sg_chat.h"
@@ -300,6 +301,27 @@ static void TestCalloutRandomness(void)
 	delay = SG_CalloutRandomDelay(state, 0.5f, 0.9f);
 	CHECK(delay >= 0.5f && delay < 0.9f);
 	CHECK(SG_CalloutRandomNext(state) != state);
+}
+
+static void TestChatRandomness(void)
+{
+	uint32_t first, next;
+	int expected_random;
+	float unit;
+
+	srand(6823);
+	expected_random = rand();
+	srand(6823);
+	first = SG_ChatRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(first != 0);
+	CHECK(first == SG_ChatRandomInitial(UINT64_C(0x123456789abcdef0), 7));
+	CHECK(first != SG_ChatRandomInitial(UINT64_C(0x123456789abcdef1), 7));
+	CHECK(first != SG_ChatRandomInitial(UINT64_C(0x123456789abcdef0), 8));
+	next = SG_ChatRandomNext(first);
+	CHECK(next != 0 && next != first);
+	unit = SG_ChatRandomUnit(next);
+	CHECK(unit >= 0.0f && unit < 1.0f);
+	CHECK(rand() == expected_random);
 }
 
 static void TestEarRandomnessAndListenerSelection(void)
@@ -653,6 +675,7 @@ int main(void)
 	TestPersonaAssignment();
 	TestEscapeRandomness();
 	TestCalloutRandomness();
+	TestChatRandomness();
 	TestEarRandomnessAndListenerSelection();
 
 	if (failures)

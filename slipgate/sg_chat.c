@@ -58,6 +58,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_chat_random.h"
 
 /* ------------------------------------------------------------- constants */
 
@@ -554,6 +555,11 @@ typedef struct
 	qboolean	had_quad;
 	qboolean	had_invul;
 	int			had_rune;       /* edict index, 0 = empty handed */
+
+	/* Chat texture must not consume the engine-global RNG that owns weapon
+	 * spread and other physical outcomes. This stream belongs to the current
+	 * client generation and is retired with the rest of this structure. */
+	uint32_t	random_state;
 } sg_chat_bot_t;
 
 static sg_chat_bot_t chat_bot[MAX_CLIENTS];
@@ -814,6 +820,41 @@ static float Chat_Chatty(int cl)
 	return 0.5f + (float)((cl * 7) % 11) * 0.1f;
 }
 
+static qboolean Chat_RandomDraw(edict_t *speaker, uint32_t *draw)
+{
+	int cl;
+
+	if (!speaker || !speaker->client || !draw)
+		return false;
+	cl = Chat_ClientNum(speaker);
+	if (cl < 0 || cl >= game.maxclients || cl >= MAX_CLIENTS)
+		return false;
+	if (chat_bot[cl].random_state == 0)
+		chat_bot[cl].random_state = SG_ChatRandomInitial(
+		    (uint64_t)speaker->client->ctf.ctfid, (unsigned)cl);
+	chat_bot[cl].random_state = SG_ChatRandomNext(chat_bot[cl].random_state);
+	*draw = chat_bot[cl].random_state;
+	return true;
+}
+
+static float Chat_RandomUnit(edict_t *speaker)
+{
+	uint32_t draw;
+
+	/* Invalid speakers fail personality probability gates instead of getting a
+	 * guaranteed zero roll. Valid queue callers are checked before this point. */
+	return Chat_RandomDraw(speaker, &draw) ? SG_ChatRandomUnit(draw) : 1.0f;
+}
+
+static int Chat_RandomBounded(edict_t *speaker, int count)
+{
+	uint32_t draw;
+
+	if (count <= 0 || !Chat_RandomDraw(speaker, &draw))
+		return -1;
+	return (int)(draw % (uint32_t)count);
+}
+
 /* has this exact line been said by anybody inside the reuse window */
 static qboolean Chat_Recent(const char *line)
 {
@@ -850,12 +891,13 @@ static void Chat_Note(const char *line)
  * would turn the guard into a mute button on exactly the categories with the
  * fewest lines, which is the opposite of what it is for.
  */
-static const char *Chat_Pick(int tone, int cat)
+static const char *Chat_Pick(edict_t *speaker, int tone, int cat)
 {
 	const char	*fresh[SG_CHAT_MAXLINES];
-	int			n = 0, f = 0, i;
+	int			n = 0, f = 0, i, pick;
 
-	if (tone < 0 || tone >= SG_TONES || cat < 0 || cat >= SG_LINE_CATS)
+	if (!speaker || tone < 0 || tone >= SG_TONES ||
+	    cat < 0 || cat >= SG_LINE_CATS)
 		return NULL;
 	while (n < SG_CHAT_MAXLINES && chat_line[tone][cat][n])
 		n++;
@@ -867,8 +909,12 @@ static const char *Chat_Pick(int tone, int cat)
 			fresh[f++] = chat_line[tone][cat][i];
 
 	if (f > 0)
-		return fresh[(int)(random() * f) % f];
-	return chat_line[tone][cat][(int)(random() * n) % n];
+	{
+		pick = Chat_RandomBounded(speaker, f);
+		return pick >= 0 ? fresh[pick] : NULL;
+	}
+	pick = Chat_RandomBounded(speaker, n);
+	return pick >= 0 ? chat_line[tone][cat][pick] : NULL;
 }
 
 /* a live bot of ours on that team, preferring one whose budget is clear */
@@ -1048,7 +1094,8 @@ static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
 	Chat_Copy(q->line, line, sizeof(q->line));
 	q->speaker = Chat_ClientNum(speaker);
 	q->due = level.time + SG_CHAT_DELAY_MIN +
-	         random() * (SG_CHAT_DELAY_MAX - SG_CHAT_DELAY_MIN);
+	         Chat_RandomUnit(speaker) *
+	         (SG_CHAT_DELAY_MAX - SG_CHAT_DELAY_MIN);
 	q->arm_kind = arm_kind;
 	q->arm_slot = arm_slot;
 	q->arm_ent = arm_ent;
@@ -1787,7 +1834,8 @@ static void Chat_RadioQueue(edict_t *speaker, int team, const char *sound)
 
 	q->speaker = cl;
 	q->due = level.time + SG_RADIO_LAG_MIN +
-	         random() * (SG_RADIO_LAG_MAX - SG_RADIO_LAG_MIN);
+	         Chat_RandomUnit(speaker) *
+	         (SG_RADIO_LAG_MAX - SG_RADIO_LAG_MIN);
 	Chat_Copy(q->sound, sound, sizeof(q->sound));
 	q->pending = true;
 }
@@ -1911,7 +1959,8 @@ static void Chat_RadioFrame(void)
 				Chat_QueueArm(sp, SG_TeamFromIdx(t), SG_CHAT_TOPIC_MAJOR, line,
 				              SG_ARM_QUIET, -1, 0, SG_ITEMCALL_MATE,
 				              heard + 33.0f +
-				              ((float)(rand() % 10) / 10.0f - 0.5f), -1);
+				              ((float)Chat_RandomBounded(sp, 10) /
+				               10.0f - 0.5f), -1);
 				Chat_RadioQueue(sp, SG_TeamFromIdx(t), "_quad30");
 			}
 		}
@@ -2320,7 +2369,7 @@ void SG_ChatMegaDeath(edict_t *victim)
 			    strcmp(we->classname, "item_health_mega") != 0)
 				continue;
 			chat_watch[i].back_at[ti] = level.time + 21.0f +
-			    (float)(rand() % 20) / 10.0f;
+			    (float)Chat_RandomBounded(victim, 20) / 10.0f;
 			chat_watch[i].soon_said[ti] = false;
 			if (sg_cv.debug->value)
 				sg_host.dprint("SG itemcomm: mega taker died -- team %d "
@@ -2592,7 +2641,7 @@ void SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier)
 		return;
 
 	Chat_LocNameFor(carrier->s.origin, team, place, sizeof(place));
-	if (random() < 0.5f)
+	if (Chat_RandomUnit(viewer) < 0.5f)
 		Com_sprintf(line, sizeof(line), "enemy fc at %s", place);
 	else
 		Com_sprintf(line, sizeof(line), "fc spotted at %s", place);
@@ -2685,7 +2734,7 @@ static void Chat_Greetings(void)
 		if (level.time < cb->greet_at)
 			continue;
 
-		line = Chat_Pick(Chat_Tone(e), SG_LINE_JOIN);
+		line = Chat_Pick(e, Chat_Tone(e), SG_LINE_JOIN);
 		if (!line)
 		{
 			cb->greeted = true;         /* nothing to say: do not come back */
@@ -2753,10 +2802,10 @@ static void Chat_Conceded(int team)
 		return;
 	if (level.time < chat_bot[cl].next_grumble)
 		return;
-	if (random() >= SG_CHAT_CONCEDE_ODDS * Chat_Chatty(cl))
+	if (Chat_RandomUnit(sp) >= SG_CHAT_CONCEDE_ODDS * Chat_Chatty(cl))
 		return;
 
-	line = Chat_Pick(Chat_Tone(sp), SG_LINE_CONCEDE);
+	line = Chat_Pick(sp, Chat_Tone(sp), SG_LINE_CONCEDE);
 	if (!line)
 		return;                         /* empty pool: nothing to say */
 	if (Chat_SayPooled(sp, line, 0))
@@ -2784,10 +2833,10 @@ static void Chat_Returned(int team)
 	cl = Chat_ClientNum(sp);
 	if (cl < 0 || cl >= game.maxclients)
 		return;
-	if (random() >= SG_CHAT_RETURN_ODDS * Chat_Chatty(cl))
+	if (Chat_RandomUnit(sp) >= SG_CHAT_RETURN_ODDS * Chat_Chatty(cl))
 		return;
 
-	line = Chat_Pick(Chat_Tone(sp), SG_LINE_RETURN);
+	line = Chat_Pick(sp, Chat_Tone(sp), SG_LINE_RETURN);
 	if (!line)
 		return;
 	/* burned at queue time for the reason the steal callout is: Chat_Queue
@@ -2831,7 +2880,7 @@ static void Chat_TeamEvents(void)
 		if (score[t] > chat_lastscore[t])
 		{
 			sp = Chat_Speaker(SG_TeamFromIdx(t));
-			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_CAP) : NULL;
+			line = sp ? Chat_Pick(sp, Chat_Tone(sp), SG_LINE_CAP) : NULL;
 			if (sp && line)
 				Chat_SayPooled(sp, line, 0);
 
@@ -2845,7 +2894,7 @@ static void Chat_TeamEvents(void)
 		if (carrier >= 0 && chat_lastcarrier[t] < 0)
 		{
 			sp = Chat_Speaker(SG_TeamFromIdx(t));
-			line = sp ? Chat_Pick(Chat_Tone(sp), SG_LINE_STEAL) : NULL;
+			line = sp ? Chat_Pick(sp, Chat_Tone(sp), SG_LINE_STEAL) : NULL;
 			if (sp && line)
 			{
 				/*
@@ -2964,10 +3013,10 @@ static void Chat_Bystander(edict_t *victim)
 	cl = Chat_ClientNum(seer);
 	if (cl < 0 || cl >= game.maxclients)
 		return;
-	if (random() >= SG_CHAT_SUICIDE_ODDS * Chat_Chatty(cl))
+	if (Chat_RandomUnit(seer) >= SG_CHAT_SUICIDE_ODDS * Chat_Chatty(cl))
 		return;
 
-	line = Chat_Pick(Chat_Tone(seer), SG_LINE_SUICIDE);
+	line = Chat_Pick(seer, Chat_Tone(seer), SG_LINE_SUICIDE);
 	if (!line)
 		return;                     /* empty pool: nothing to say */
 	if (Chat_SayPooled(seer, line, 0))
@@ -2985,9 +3034,9 @@ void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 		cl = Chat_ClientNum(attacker);
 		if (cl >= 0 && cl < game.maxclients &&
 		    level.time >= chat_bot[cl].next_taunt &&
-		    random() < SG_CHAT_TAUNT_ODDS)
+		    Chat_RandomUnit(attacker) < SG_CHAT_TAUNT_ODDS)
 		{
-			line = Chat_Pick(Chat_Tone(attacker), SG_LINE_KILL);
+			line = Chat_Pick(attacker, Chat_Tone(attacker), SG_LINE_KILL);
 			chat_bot[cl].next_taunt = level.time + SG_CHAT_TAUNT_GAP;
 			if (line)
 				Chat_SayPooled(attacker, line, 0);
@@ -3002,9 +3051,9 @@ void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 		cl = Chat_ClientNum(victim);
 		if (cl >= 0 && cl < game.maxclients &&
 		    level.time >= chat_bot[cl].next_grumble &&
-		    random() < SG_CHAT_GRUMBLE_ODDS)
+		    Chat_RandomUnit(victim) < SG_CHAT_GRUMBLE_ODDS)
 		{
-			line = Chat_Pick(Chat_Tone(victim), SG_LINE_DEATH);
+			line = Chat_Pick(victim, Chat_Tone(victim), SG_LINE_DEATH);
 			chat_bot[cl].next_grumble = level.time + SG_CHAT_GRUMBLE_GAP;
 			/*
 			 * By here the victim is a corpse, which Chat_Playing refuses --
@@ -3072,7 +3121,7 @@ static void Chat_LevelOpen(void)
 			if (cb->greet_at <= 0.0f)
 				continue;               /* not greeted yet: nothing to trail */
 
-			if (random() >= SG_CHAT_OPEN_ODDS * Chat_Chatty(i))
+			if (Chat_RandomUnit(e) >= SG_CHAT_OPEN_ODDS * Chat_Chatty(i))
 			{
 				cb->opened = true;      /* this one has nothing to say */
 				continue;
@@ -3086,14 +3135,14 @@ static void Chat_LevelOpen(void)
 			cb->open_at = cb->greet_at + SG_CHAT_SAY_GAP
 			            + (float)(i % SG_CHAT_ROSTER)
 			              * (SG_CHAT_OPEN_SPAN / (float)SG_CHAT_ROSTER)
-			            + random() * SG_CHAT_OPEN_JITTER;
+			            + Chat_RandomUnit(e) * SG_CHAT_OPEN_JITTER;
 			continue;
 		}
 		if (level.time < cb->open_at)
 			continue;
 
 		cb->opened = true;                  /* one attempt, spoken or not */
-		line = Chat_Pick(Chat_Tone(e), SG_LINE_OPEN);
+		line = Chat_Pick(e, Chat_Tone(e), SG_LINE_OPEN);
 		if (line)
 			Chat_SayPooled(e, line, 0);
 	}
@@ -3156,7 +3205,7 @@ void SG_ChatLevelEnd(void)
 			continue;
 		if (cb->end_cat >= 0)
 			continue;               /* already booked, and once is enough */
-		if (random() >= SG_CHAT_END_ODDS * Chat_Chatty(i))
+		if (Chat_RandomUnit(e) >= SG_CHAT_END_ODDS * Chat_Chatty(i))
 			continue;
 
 		diff = score[SG_TeamIdx(team)] - score[SG_TeamIdx(SG_EnemyTeam(team))];
@@ -3169,7 +3218,7 @@ void SG_ChatLevelEnd(void)
 
 		cb->end_at = level.time
 		           + (float)(i % SG_CHAT_ROSTER) * SG_CHAT_END_STAGGER
-		           + random() * SG_CHAT_END_JITTER;
+		           + Chat_RandomUnit(e) * SG_CHAT_END_JITTER;
 	}
 }
 
@@ -3200,7 +3249,7 @@ static void Chat_LevelEndFlush(void)
 		if (!Chat_OurBot(e))
 			continue;
 
-		line = Chat_Pick(Chat_Tone(e), cat);
+		line = Chat_Pick(e, Chat_Tone(e), cat);
 		if (line)
 		{
 			/*
@@ -3256,7 +3305,7 @@ static void Chat_Idle(void)
 		if (cb->next_idle <= 0.0f)
 		{
 			cb->next_idle = level.time + SG_CHAT_IDLE_GAP
-			              + random() * SG_CHAT_IDLE_JITTER;
+			              + Chat_RandomUnit(e) * SG_CHAT_IDLE_JITTER;
 			continue;
 		}
 		if (level.time < cb->next_idle)
@@ -3265,16 +3314,16 @@ static void Chat_Idle(void)
 		/* the attempt is spent whatever comes of it, or a bot held quiet by
 		 * a long firefight would speak the instant the firefight ended */
 		cb->next_idle = level.time + SG_CHAT_IDLE_GAP
-		              + random() * SG_CHAT_IDLE_JITTER;
+		              + Chat_RandomUnit(e) * SG_CHAT_IDLE_JITTER;
 
 		if (level.time - cb->combat_at < SG_CHAT_IDLE_CALM)
 			continue;
 		if (level.time - chat_team_last[SG_TeamIdx(team)] < SG_CHAT_IDLE_QUIET)
 			continue;
-		if (random() >= SG_CHAT_IDLE_ODDS * Chat_Chatty(i))
+		if (Chat_RandomUnit(e) >= SG_CHAT_IDLE_ODDS * Chat_Chatty(i))
 			continue;
 
-		line = Chat_Pick(Chat_Tone(e), SG_LINE_IDLE);
+		line = Chat_Pick(e, Chat_Tone(e), SG_LINE_IDLE);
 		if (line)
 			Chat_SayPooled(e, line, 0);
 	}
@@ -3354,10 +3403,10 @@ static void Chat_Hurt(void)
 		    Chat_HurtSince(e, level.time - SG_CHAT_HURT_CALM) ||
 		    Chat_EnemySeenNear(e->client->ctf.teamnum, e->s.origin))
 			continue;                   /* still in it */
-		if (random() >= SG_CHAT_HURT_ODDS * Chat_Chatty(i))
+		if (Chat_RandomUnit(e) >= SG_CHAT_HURT_ODDS * Chat_Chatty(i))
 			continue;
 
-		line = Chat_Pick(Chat_Tone(e), SG_LINE_HURT);
+		line = Chat_Pick(e, Chat_Tone(e), SG_LINE_HURT);
 		if (!line)
 			continue;                   /* empty pool: nothing to say */
 		if (Chat_SayPooled(e, line, 0))
@@ -3984,7 +4033,7 @@ static void Chat_ReplyBook(edict_t *bot, const char *heard, qboolean teamchat)
 	if (Chat_Busy(bot))
 		return;                     /* carrying, or being shot at */
 
-	line = Chat_Pick(Chat_Tone(bot), SG_LINE_REPLY);
+	line = Chat_Pick(bot, Chat_Tone(bot), SG_LINE_REPLY);
 	if (!line)
 		return;                     /* empty pool: stay quiet */
 
