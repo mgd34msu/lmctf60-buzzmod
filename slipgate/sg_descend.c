@@ -532,7 +532,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 
 		if ((sg_cv.unlinger->value > 0.0f ||
 		     sg_cv.depace->value > 0.0f) &&
-		    role != SG_ROLE_CARRY && role != SG_ROLE_ESCORT)
+		    SG_AntiLingerEligible(role, tc->escort_mission))
 		{
 			static gitem_t *lg_flag;
 			edict_t *car = NULL;

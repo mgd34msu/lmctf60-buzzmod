@@ -1153,6 +1153,13 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 1));
 	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 3, 2));
 	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 2));
+	CHECK(SG_AntiLingerEligible(SG_ROLE_ATTACK, 0));
+	CHECK(SG_AntiLingerEligible(SG_ROLE_ESCORT, 0));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_ATTACK, 1));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_ESCORT, 1));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_CARRY, 0));
+	CHECK(!SG_AntiLingerEligible(SG_ROLES, 0));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_ATTACK, 2));
 	CHECK(!SG_AttackObjectiveUsesFixedStand(-1));
 	CHECK(SG_AttackObjectiveUsesFixedStand(0));
 	CHECK(SG_AttackObjectiveUsesFixedStand(15));

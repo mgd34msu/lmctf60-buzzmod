@@ -295,6 +295,10 @@ before the shared route argmin. An ordered body can no longer become a phantom
 winner that later obeys its order while suppressing the actually available
 carrier screen; human authority remains intact and the next eligible teammate
 receives the autonomous escort mission.
+Carrier-spacing route pricing now reads the effective escort mission rather
+than the superseded organic role. A coordinator-assigned escort is no longer
+priced away from the carrier it must screen, while an organic escort reassigned
+to pressure or recovery no longer retains an obsolete anti-linger exemption.
 Graph-hook usefulness is now judged against the exact current route field at
 both source staging and the irreversible fire boundary. A tactical waypoint or
 bounded weapon errand can therefore take a ride that advances that live route,
@@ -1259,6 +1263,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Organic escort selection excludes human-ordered teammates before its
       shared argmin, preventing an ordered phantom winner from leaving the live
       carrier without an otherwise available screen.
+      Anti-linger route pricing follows the effective escort mission in both
+      override directions, protecting real carrier screens without preserving
+      a superseded organic escort exemption.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

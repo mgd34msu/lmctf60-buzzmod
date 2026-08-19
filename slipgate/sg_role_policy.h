@@ -85,6 +85,17 @@ static inline int SG_RoleOwnsDefenseState(int role)
 	return role == SG_ROLE_DEFEND;
 }
 
+/* Carrier-spacing applies to bodies without the effective escort mission.
+ * The coordinator may grant escort to an organic attacker or replace an
+ * organic escort with another duty, so the organic role is not authority. */
+static inline int SG_AntiLingerEligible(int role, int escort_mission)
+{
+	if (role < SG_ROLE_ATTACK || role >= SG_ROLES ||
+	    (escort_mission != 0 && escort_mission != 1))
+		return 0;
+	return role != SG_ROLE_CARRY && !escort_mission;
+}
+
 /* Once our team has the enemy flag, one separately assigned ESCORT owns the
  * carrier field. Ordinary attackers keep pressure on the enemy stand instead
  * of turning into duplicate escorts or following an unseen-flag fallback

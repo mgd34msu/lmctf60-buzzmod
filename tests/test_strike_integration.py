@@ -498,6 +498,16 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb)", rally)
         self.assertNotIn("mb->last_role != (int)SG_ROLE_ATTACK", rally)
 
+    def test_effective_escort_mission_controls_carrier_spacing(self) -> None:
+        descend = (ROOT / "slipgate/sg_descend.c").read_text()
+        start = descend.index("ANTI-LINGER (sg_unlinger")
+        end = descend.index("for (li = SG_Rune()->first_link", start)
+        anti_linger = descend[start:end]
+        self.assertIn(
+            "SG_AntiLingerEligible(role, tc->escort_mission)", anti_linger)
+        gate = anti_linger[:anti_linger.index("static gitem_t *lg_flag")]
+        self.assertNotIn("role != SG_ROLE_ESCORT", gate)
+
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()
         start = source.index("static void StrikeTelemetryEdge(int team_index)")
