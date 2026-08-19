@@ -296,15 +296,17 @@ static void TestDirectShallowApproachEnvelope(void)
 		{ 189, { 1351.0f, 1741.0f, -339.875f },
 		       { 1671.0f, 1741.0f, -411.875f } }
 	};
-	rune_seed_t seeds[1];
+	rune_seed_t seeds[2];
 	rune_link_t links[1];
 	edict_t red, blue;
 	vec3_t delta;
 	size_t i;
 
-	ResetGraph(seeds, 1, links, 0, &red, &blue);
+	ResetGraph(seeds, 2, links, 0, &red, &blue);
 	gen_source_waterlevel[0] = 1;
 	gen_source_watertype[0] = CONTENTS_WATER;
+	gen_source_waterlevel[1] = 0;
+	gen_source_watertype[1] = 0;
 	for (i = 0; i < sizeof(cellars) / sizeof(cellars[0]); i++)
 	{
 		CHECK(cellars[i].entry > 0);
@@ -319,6 +321,13 @@ static void TestDirectShallowApproachEnvelope(void)
 		CHECK(!Door_ApproachEnvelopeEligible(
 		    SG_MECHANISM_CONTROLLER_BUTTON_DOOR, 0, delta));
 	}
+	/* A shallow best slot can enable source discovery, but the final
+	 * per-picked-slot gate must reject a dry alternate for the same 72-unit
+	 * approach. Each selected destination authorizes only itself. */
+	CHECK(Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 1, delta));
 
 	/* The production helper must not bootstrap the larger discovery envelope
 	 * from a dry, malformed, hazardous, or deep destination. */

@@ -2579,7 +2579,9 @@ static qboolean Gen_SeedHasOutgoing(int seed)
  * cellar triggers have a realizable 72-unit descent from their connected dry
  * source to the only wait point that also crosses into the shallow basin.
  * Unsafe/deep water cannot enlarge this budget because it must pass the same
- * shared controller-aware liquid gate used by both egress replay call sites. */
+ * shared controller-aware liquid gate used by both egress replay call sites.
+ * Discovery may inspect the best destination, but every selected destination
+ * must pass this gate again immediately before its link is serialized. */
 static qboolean Door_ApproachEnvelopeEligible(int controller_kind,
 	int egress_destination, const vec3_t delta)
 {
@@ -4196,6 +4198,7 @@ static void Link_Doors(void)
 				int approach_ms, touch_ms;
 				int picked[4], picked_count = 0, pi;
 				int mode_index = 0;
+				vec3_t picked_approach_delta;
 				sg_button_support_mode_t support_mode =
 				    SG_BUTTON_SUPPORT_NONE;
 
@@ -4217,6 +4220,8 @@ static void Link_Doors(void)
 					continue;
 				if (mode_index < 0 || best_slot[mode_index] < 0)
 					continue;
+				VectorSubtract(wait_point, gen_seeds[source].origin,
+				    picked_approach_delta);
 
 				/* Preserve the locally cheapest proved controller as a movement
 				 * shortcut, then add only bounded topology-improving witnesses. */
@@ -4283,7 +4288,14 @@ static void Link_Doors(void)
 				for (pi = 0; pi < picked_count; pi++)
 				{
 					int slot = picked[pi];
-					int contract_cost = SG_DeclaredDoorContractCost(door,
+					int contract_cost;
+
+					/* A shallow best egress may admit source discovery, but it
+					 * cannot authorize a dry or otherwise ineligible alternate. */
+					if (!Door_ApproachEnvelopeEligible(controller_kind,
+					        dests[slot], picked_approach_delta))
+						continue;
+					contract_cost = SG_DeclaredDoorContractCost(door,
 					    approach_ms, touch_ms,
 					    egress_ms[mode_index][slot]);
 
