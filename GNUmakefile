@@ -502,6 +502,7 @@ HOOK_DIAGNOSTICS_TEST_OBJS = .sg_hook_diagnostics_test.gnu.o \
 HOOK_DIAGNOSTICS_TEST_DEPS = $(HOOK_DIAGNOSTICS_TEST_OBJS:.o=.d)
 HOOK_DIAGNOSTICS_INTEGRATION_TEST = tests/test_hook_diagnostics_integration.py
 HOOK_DIAGNOSTICS_CONSUMER_TEST = tests/test_hook_diagnostic_consumers.py
+ROLE_TELEMETRY_CONSUMER_TEST = tests/test_role_telemetry_consumers.py
 HOOK_EVENTS_TEST = tests/test_hookevents.py
 HOOK_DIAGNOSTICS_TEST_ALL_ARTIFACTS = \
 	$(foreach flavor,gnu make,sg_hook_diagnostics_test.$(flavor) \
@@ -710,6 +711,9 @@ RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS = \
 ENTFILE_TEST_BIN = g_entfile_path_test.gnu
 ENTFILE_TEST_OBJS = .g_entfile_path_test.gnu.o
 ENTFILE_TEST_DEPS = $(ENTFILE_TEST_OBJS:.o=.d)
+MAPLIST_ROTATION_TEST_BIN = maplist_rotation_test.gnu
+MAPLIST_ROTATION_TEST_ALL_ARTIFACTS = \
+	maplist_rotation_test.gnu maplist_rotation_test.make
 ENGINE_SNAPSHOT_TEST = tests/test_engine_snapshot_name.sh
 HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
@@ -878,7 +882,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 ######################################################################
 
 # Game-related objects
-G_OBJS = g_ai.o g_cmds.o g_combat.o g_func.o g_items.o g_main.o \
+G_OBJS = g_ai.o g_cmds.o g_combat.o g_func.o g_items.o g_main.o g_maplist.o \
          g_misc.o g_monster.o g_phys.o g_save.o g_spawn.o g_svcmds.o \
          g_target.o g_trigger.o g_turret.o g_utils.o g_weapon.o
 
@@ -1002,7 +1006,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
 	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test rotator-sweep-test \
-	mover-subject-sweep-test entfile-test \
+	mover-subject-sweep-test entfile-test maplist-rotation-test \
 	compound-swim-oracle-test rune-door-scope-test \
 	snapshot-test stripcr clean distclean FORCE
 
@@ -2036,6 +2040,11 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-pedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+$(MAPLIST_ROTATION_TEST_BIN): tests/maplist_rotation_test.c g_maplist.c \
+		g_local.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
+		-o $@ tests/maplist_rotation_test.c g_maplist.c $(LDFLAGS)
+
 spectator-sound-test: $(SPECTATOR_SOUND_TEST_BIN)
 	@echo "[TEST] $<"
 	@./$(SPECTATOR_SOUND_TEST_BIN)
@@ -2156,7 +2165,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(ITEM_COMMITMENT_TEST_BIN) $(ITEM_COMMITMENT_INTEGRATION_TEST) \
 		$(HOOK_DIAGNOSTICS_TEST_BIN) \
 		$(HOOK_DIAGNOSTICS_INTEGRATION_TEST) \
-		$(HOOK_DIAGNOSTICS_CONSUMER_TEST) $(HOOK_EVENTS_TEST) \
+		$(HOOK_DIAGNOSTICS_CONSUMER_TEST) $(ROLE_TELEMETRY_CONSUMER_TEST) \
+		$(HOOK_EVENTS_TEST) \
 		$(RUN_HANDOFF_TEST_BIN) $(RUN_HANDOFF_INTEGRATION_TEST) \
 		$(RUNE_PROOF_TEST_BIN) \
 		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN) \
@@ -2168,6 +2178,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
 		$(COMPOUND_SWIM_ORACLE_TEST_BIN) \
 		$(RUNE_DOOR_SCOPE_TEST_BIN) $(ENTFILE_TEST_BIN) \
+		$(MAPLIST_ROTATION_TEST_BIN) \
 		$(POVLOCK_TEST_BIN) $(POV_SESSION_TEST_BIN) \
 		$(POVLOCK_DISPATCH_TEST) $(POV_SUPERVISOR_TEST_BIN) \
 		$(POV_SUPERVISOR_BIN) $(POV_SUPERVISOR_TEST) \
@@ -2237,6 +2248,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(HOOK_DIAGNOSTICS_TEST_BIN)
 	python3 -B $(HOOK_DIAGNOSTICS_INTEGRATION_TEST)
 	python3 -B $(HOOK_DIAGNOSTICS_CONSUMER_TEST)
+	python3 -B $(ROLE_TELEMETRY_CONSUMER_TEST)
 	python3 -B $(HOOK_EVENTS_TEST)
 	./$(RUN_HANDOFF_TEST_BIN)
 	python3 -B $(RUN_HANDOFF_INTEGRATION_TEST)
@@ -2256,6 +2268,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
 	./$(RUNE_DOOR_SCOPE_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
+	./$(MAPLIST_ROTATION_TEST_BIN)
 	./$(POVLOCK_TEST_BIN)
 	python3 -B $(POVLOCK_DISPATCH_TEST)
 	./$(POV_SESSION_TEST_BIN)
@@ -2471,6 +2484,9 @@ rune-door-scope-test: $(RUNE_DOOR_SCOPE_TEST_BIN)
 entfile-test: $(ENTFILE_TEST_BIN)
 	./$(ENTFILE_TEST_BIN)
 
+maplist-rotation-test: $(MAPLIST_ROTATION_TEST_BIN)
+	./$(MAPLIST_ROTATION_TEST_BIN)
+
 snapshot-test:
 	./$(ENGINE_SNAPSHOT_TEST)
 
@@ -2532,6 +2548,7 @@ clean:
 		@rm -f $(OBJS) $(OBJS:.o=.d) $(REVISION_HEADER) \
 			$(REVISION_HEADER).tmp.* \
 			$(DEPEND_FILE).tmp.* $(HOST_TEST_ALL_ARTIFACTS) \
+			$(MAPLIST_ROTATION_TEST_ALL_ARTIFACTS) \
 			$(POV_SUPERVISOR_ALL_ARTIFACTS) \
 			$(COMPOUND_GEN_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS) \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durable controller for the fixed 180-map RUNE corpus.
+"""Durable controller for the fixed 181-map RUNE corpus.
 
 The controller is deliberately fail-closed.  ``dry-run`` never starts an
 engine.  ``smoke`` selects exactly one map; ``run`` selects the fixed corpus.
@@ -37,9 +37,9 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tools/rune-corpus-maps.txt"
 EXPECTED_MANIFEST_SHA256 = (
-    "b39de6fba3c2b2ca89ff4bcbb52f13976a61ec0e2e74ee5815a9107430db2fe3"
+    "9bc55cb287f0b9d99fccf54cc1339e65fba30459e49b0b77cf1b67896c125452"
 )
-CORPUS_SIZE = 180
+CORPUS_SIZE = 181
 DEFAULT_PORT_BASE = 62000
 CORPUS_ENGINE_BASENAME = "q2ded-rune-corpus"
 MAP_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
@@ -87,6 +87,8 @@ TERMINAL_RESULT_FIELDS = frozenset(
         "command_sha256", "owner_record", "evidence", "server_log_sha256",
         "artifact", "artifact_sha256", "objective_roots", "banner_counts",
         "decoded_counts", "gate_output_sha256", "gate_log_sha256",
+        "semantic_gate_labels", "cold_load_owner_record",
+        "cold_load_command_sha256", "cold_load_log_sha256",
     }
 )
 REQUIRED_SNAPSHOT_ROLES = frozenset(
@@ -97,11 +99,17 @@ REQUIRED_SNAPSHOT_ROLES = frozenset(
         "runelint",
         "runeio",
         "contracts",
-        "acceptor",
+        "acceptor_gnu",
+        "acceptor_make",
         "generator_config",
         "map_manifest",
+        "semantic_checker_manifest",
     }
 )
+SEMANTIC_CHECKER_ROLE_PREFIX = "semantic_checker:"
+SEMANTIC_CHECKER_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}\Z")
+REQUIRED_SEMANTIC_CHECKERS = {"lmctf58": ("lmctf58",)}
+BASE_GATE_LABELS = frozenset({"c_gnu", "c_make", "python", "lint"})
 PYTHON_RUNTIME_INPUT_ROLE = "python_runtime"
 PYTHON_RUNTIME_ROLE_PREFIX = "python_runtime:"
 PYTHON_RUNTIME_ROOT = PurePosixPath("python-runtime")
@@ -396,8 +404,8 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> list[str]:
     for name in maps:
         if not MAP_NAME_RE.fullmatch(name):
             raise CorpusError(f"unsafe map name in manifest: {name!r}")
-    if "lmctf02c" not in maps or "lmctf02" in maps:
-        raise CorpusError("manifest violates the lmctf02c map-name law")
+    if "lmctf02" not in maps or "lmctf02c" not in maps:
+        raise CorpusError("manifest must retain both lmctf02 and lmctf02c")
     return maps
 
 
@@ -464,6 +472,51 @@ def _expand_python_runtime_inputs(
     return expanded
 
 
+def load_semantic_checker_manifest(
+    path: Path, maps: Sequence[str]
+) -> list[dict[str, Any]]:
+    """Load the closed map-to-checker authority from one regular file."""
+    data, _record = read_regular_bytes(path)
+    try:
+        value = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CorpusError("semantic checker manifest is not valid JSON") from exc
+    if not isinstance(value, dict) or set(value) != {"checkers"} or not isinstance(
+        value["checkers"], list
+    ):
+        raise CorpusError("semantic checker manifest has an invalid schema")
+    known_maps = set(maps)
+    checkers: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for item in value["checkers"]:
+        if not isinstance(item, dict) or set(item) != {"name", "maps", "role"}:
+            raise CorpusError("semantic checker manifest entry has an invalid schema")
+        name, role, checker_maps = item["name"], item["role"], item["maps"]
+        if not isinstance(name, str) or SEMANTIC_CHECKER_NAME_RE.fullmatch(name) is None:
+            raise CorpusError("semantic checker name is unsafe")
+        if role != SEMANTIC_CHECKER_ROLE_PREFIX + name:
+            raise CorpusError("semantic checker role/name mismatch")
+        if name in seen_names:
+            raise CorpusError("semantic checker names are not unique")
+        if (
+            not isinstance(checker_maps, list)
+            or not checker_maps
+            or checker_maps != sorted(set(checker_maps))
+            or any(not isinstance(map_name, str) or map_name not in known_maps
+                   for map_name in checker_maps)
+        ):
+            raise CorpusError("semantic checker map list is invalid")
+        seen_names.add(name)
+        checkers.append({"name": name, "maps": checker_maps, "role": role})
+    if checkers != sorted(checkers, key=lambda item: item["name"]):
+        raise CorpusError("semantic checker manifest is not name-sorted")
+    by_name = {item["name"]: tuple(item["maps"]) for item in checkers}
+    if any(by_name.get(name) != checker_maps for name, checker_maps in
+           REQUIRED_SEMANTIC_CHECKERS.items()):
+        raise CorpusError("semantic checker manifest omits required applicability")
+    return checkers
+
+
 def create_input_snapshot(
     output: Path,
     inputs: Mapping[str, tuple[str, Path]],
@@ -477,9 +530,13 @@ def create_input_snapshot(
     if output.exists() or output.is_symlink():
         raise CorpusError(f"snapshot output already exists: {output}")
     role_list = [role for role, _source in inputs.values() if not role.startswith("asset:")]
-    roles = set(role_list)
+    semantic_roles = {
+        role for role in role_list if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX)
+    }
+    fixed_role_list = [role for role in role_list if role not in semantic_roles]
+    roles = set(fixed_role_list)
     required_inputs = REQUIRED_SNAPSHOT_ROLES | {PYTHON_RUNTIME_INPUT_ROLE}
-    if roles != required_inputs or len(role_list) != len(required_inputs):
+    if roles != required_inputs or len(fixed_role_list) != len(required_inputs):
         raise CorpusError(
             "snapshot roles mismatch: missing="
             f"{sorted(required_inputs - roles)} extra="
@@ -491,6 +548,16 @@ def create_input_snapshot(
     asset_maps = [role.partition(":")[2] for role, _ in inputs.values() if role.startswith("asset:")]
     if sorted(asset_maps) != sorted(maps) or len(asset_maps) != CORPUS_SIZE:
         raise CorpusError("snapshot assets must cover every manifest map exactly once")
+    semantic_manifest = load_semantic_checker_manifest(
+        next(source for role, source in inputs.values()
+             if role == "semantic_checker_manifest"),
+        maps,
+    )
+    required_semantic_roles = {item["role"] for item in semantic_manifest}
+    if semantic_roles != required_semantic_roles or len(semantic_roles) != sum(
+        role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX) for role in role_list
+    ):
+        raise CorpusError("snapshot semantic checker roles do not match their manifest")
     for logical_name, (role, _source) in inputs.items():
         if role.startswith("asset:"):
             map_name = role.partition(":")[2]
@@ -508,6 +575,23 @@ def create_input_snapshot(
         "module_secondary": "gamex86_64.so",
     }:
         raise CorpusError("production module snapshot names must be game.so and gamex86_64.so")
+    acceptor_paths = {
+        role: (PurePosixPath(logical).name, source.name)
+        for logical, (role, source) in inputs.items()
+        if role in ("acceptor_gnu", "acceptor_make")
+    }
+    if acceptor_paths != {
+        "acceptor_gnu": ("runeaccept.gnu", "runeaccept.gnu"),
+        "acceptor_make": ("runeaccept.make", "runeaccept.make"),
+    }:
+        raise CorpusError(
+            "GNU and Make acceptors must be distinct runeaccept.gnu/runeaccept.make inputs"
+        )
+    for logical, (role, _source) in inputs.items():
+        if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX):
+            name = role.removeprefix(SEMANTIC_CHECKER_ROLE_PREFIX)
+            if PurePosixPath(logical).name != f"{name}_rune_accept.py":
+                raise CorpusError("semantic checker role/path mismatch")
     inputs = _expand_python_runtime_inputs(inputs)
     output.mkdir(parents=True, mode=0o700)
     entries: list[dict[str, Any]] = []
@@ -791,8 +875,13 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         if not role.startswith("asset:")
         and not role.startswith(PYTHON_RUNTIME_ROLE_PREFIX)
     ]
-    roles = set(non_asset_roles)
-    if roles != REQUIRED_SNAPSHOT_ROLES or len(non_asset_roles) != len(REQUIRED_SNAPSHOT_ROLES):
+    semantic_roles = {
+        role for role in non_asset_roles
+        if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX)
+    }
+    fixed_roles = [role for role in non_asset_roles if role not in semantic_roles]
+    roles = set(fixed_roles)
+    if roles != REQUIRED_SNAPSHOT_ROLES or len(fixed_roles) != len(REQUIRED_SNAPSHOT_ROLES):
         raise CorpusError("verified snapshot has incorrect required roles")
     maps = validate_manifest(snapshot / next(
         str(entry["path"]) for entry in entries if entry["role"] == "map_manifest"
@@ -800,6 +889,17 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
     assets = [role.partition(":")[2] for role in seen_roles if role.startswith("asset:")]
     if sorted(assets) != sorted(maps) or len(assets) != CORPUS_SIZE:
         raise CorpusError("verified snapshot has incomplete map assets")
+    semantic_manifest_entry = next(
+        entry for entry in entries if entry["role"] == "semantic_checker_manifest"
+    )
+    semantic_manifest = load_semantic_checker_manifest(
+        snapshot / str(semantic_manifest_entry["path"]), maps
+    )
+    required_semantic_roles = {item["role"] for item in semantic_manifest}
+    if semantic_roles != required_semantic_roles or len(semantic_roles) != sum(
+        role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX) for role in non_asset_roles
+    ):
+        raise CorpusError("verified semantic checker roles do not match their manifest")
     for entry in entries:
         role = str(entry["role"])
         if role.startswith("asset:"):
@@ -814,6 +914,18 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         str(secondary["path"])
     ).name != "gamex86_64.so":
         raise CorpusError("verified module snapshot names are not production names")
+    for role, basename in (
+        ("acceptor_gnu", "runeaccept.gnu"),
+        ("acceptor_make", "runeaccept.make"),
+    ):
+        if PurePosixPath(str(next(
+            entry["path"] for entry in entries if entry["role"] == role
+        ))).name != basename:
+            raise CorpusError("verified GNU/Make acceptor names are not distinct")
+    for item in semantic_manifest:
+        checker = next(entry for entry in entries if entry["role"] == item["role"])
+        if PurePosixPath(str(checker["path"])).name != f"{item['name']}_rune_accept.py":
+            raise CorpusError("verified semantic checker role/path mismatch")
     python_runtime = _python_runtime_layout(entries)
     native_runtime_entries = [python_runtime["interpreter"]] + [
         entry for entry in python_runtime["files"]
@@ -838,6 +950,7 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         "manifest_sha256": sha256_bytes(manifest_bytes),
         "by_role": {entry["role"]: entry for entry in entries},
         "python_runtime": python_runtime,
+        "semantic_checkers": semantic_manifest,
     }
 
 
@@ -901,7 +1014,18 @@ def build_fingerprint_document(
         "mechanism_contract_hash": mechanism_hash,
         "linter_sha256": by_role["runelint"]["sha256"],
         "reader_sha256": by_role["runeio"]["sha256"],
-        "acceptor_sha256": by_role["acceptor"]["sha256"],
+        "acceptor_gnu_sha256": by_role["acceptor_gnu"]["sha256"],
+        "acceptor_make_sha256": by_role["acceptor_make"]["sha256"],
+        "semantic_checker_manifest_sha256": by_role[
+            "semantic_checker_manifest"
+        ]["sha256"],
+        "semantic_checkers": [
+            {
+                **item,
+                "sha256": by_role[item["role"]]["sha256"],
+            }
+            for item in verified["semantic_checkers"]
+        ],
         "generation_timeout_seconds": generation_timeout,
         "startup_timeout_seconds": startup_timeout,
         "job_count": jobs,
@@ -1737,17 +1861,23 @@ def _gate_report(data: bytes, label: str) -> dict[str, Any]:
 
 
 def validate_gate_agreement(
-    c_output: bytes,
+    c_gnu_output: bytes,
+    c_make_output: bytes,
     python_output: bytes,
     map_name: str,
     banner_counts: Mapping[str, int],
 ) -> dict[str, int]:
-    c_report = _gate_report(c_output, "C gate")
+    gnu_report = _gate_report(c_gnu_output, "GNU C gate")
+    make_report = _gate_report(c_make_output, "Make C gate")
     py_report = _gate_report(python_output, "Python gate")
-    if c_report["map_name"] != map_name or py_report["map_name"] != map_name:
+    if any(report["map_name"] != map_name for report in (
+        gnu_report, make_report, py_report
+    )):
         raise CorpusError("gate report map mismatch")
     for field in REPORT_FIELDS:
-        if c_report[field] != py_report[field]:
+        if gnu_report[field] != make_report[field]:
+            raise CorpusError(f"GNU/Make C {field} count mismatch")
+        if gnu_report[field] != py_report[field]:
             raise CorpusError(f"C/Python {field} count mismatch")
     banner_mapping = {
         "seed_count": "seeds",
@@ -1763,15 +1893,30 @@ def validate_gate_agreement(
     return {field: py_report[field] for field in REPORT_FIELDS}
 
 
+def semantic_checkers_for_map(
+    snapshot: Path, verified: Mapping[str, Any], map_name: str
+) -> list[tuple[str, Path]]:
+    """Resolve the immutable, ordered semantic gates applicable to one map."""
+    roles = verified["by_role"]
+    return [
+        (str(item["name"]), snapshot / str(roles[item["role"]]["path"]))
+        for item in verified["semantic_checkers"]
+        if map_name in item["maps"]
+    ]
+
+
 def run_gates(
     artifact: Path,
     map_name: str,
     banner_counts: Mapping[str, int],
     *,
-    acceptor: Path,
+    acceptor_gnu: Path,
+    acceptor_make: Path,
     python_interpreter: Path,
     runeio: Path,
     runelint: Path,
+    objective_roots: Mapping[str, int] | None = None,
+    semantic_checkers: Sequence[tuple[str, Path]] = (),
     log_directory: Path | None,
     runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     fingerprint: str | None = None,
@@ -1789,7 +1934,12 @@ def run_gates(
         layout = None
     else:
         layout = verified["python_runtime"]
-    commands = (("c", [str(acceptor), str(artifact)]),)
+    if acceptor_gnu == acceptor_make:
+        raise GateIntegrityError("GNU and Make C acceptors are not distinct paths")
+    commands = (
+        ("c_gnu", [str(acceptor_gnu), str(artifact)]),
+        ("c_make", [str(acceptor_make), str(artifact)]),
+    )
     outputs: dict[str, bytes] = {}
     log_records: dict[str, dict[str, Any]] = {}
 
@@ -1824,21 +1974,42 @@ def run_gates(
             raise CorpusError(f"{label} gate exited {completed.returncode}")
         if regular_file_record(artifact) != before:
             raise GateIntegrityError(f"artifact changed during {label} gate")
-    for label, target in (("python", runeio), ("lint", runelint)):
+    python_gates: list[tuple[str, Path, list[str]]] = [
+        ("python", runeio, [str(artifact)]),
+        ("lint", runelint, [str(artifact)]),
+    ]
+    semantic_labels: list[str] = []
+    if semantic_checkers:
+        if objective_roots is None or set(objective_roots) != {"red", "blue"}:
+            raise GateIntegrityError("semantic gates require exact objective roots")
+        for name, target in semantic_checkers:
+            if SEMANTIC_CHECKER_NAME_RE.fullmatch(name) is None:
+                raise GateIntegrityError("semantic checker has an unsafe name")
+            label = f"semantic-{name}"
+            semantic_labels.append(label)
+            python_gates.append((
+                label,
+                target,
+                ["--objective-roots", str(objective_roots["red"]),
+                 str(objective_roots["blue"]), str(artifact)],
+            ))
+    if semantic_labels != sorted(set(semantic_labels)):
+        raise GateIntegrityError("semantic checker execution plan is not unique and sorted")
+    for label, target, target_arguments in python_gates:
         gate_started = utc_now()
         lifecycle: Mapping[str, Any] | None = None
         try:
             if layout is None:
                 completed = runner(
                     [str(python_interpreter), *PYTHON_ISOLATION_FLAGS, "-c", PYTHON_GATE_BOOTSTRAP,
-                     str(target.parent), str(target), str(artifact)],
+                     str(target.parent), str(target), *target_arguments],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
                     env=python_child_environment(python_interpreter.parent.parent),
                 )
                 rc, output, lifecycle = completed.returncode, bytes(completed.stdout or b""), {"ready": None, "done": None}
             else:
                 rc, output, lifecycle = run_verified_python(
-                    snapshot, layout, label, target, [str(artifact)], runner=runner
+                    snapshot, layout, label, target, target_arguments, runner=runner
                 )
         except CorpusError as exc:
             write_integrity(label, lifecycle, None, str(exc), gate_started)
@@ -1853,11 +2024,22 @@ def run_gates(
             raise CorpusError(f"{label} gate exited {rc}")
         if regular_file_record(artifact) != before:
             raise GateIntegrityError(f"artifact changed during {label} gate")
-    decoded = validate_gate_agreement(outputs["c"], outputs["python"], map_name, banner_counts)
+        if label.startswith("semantic-"):
+            try:
+                semantic_report = json.loads(output)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise CorpusError(f"{label} did not emit one JSON report") from exc
+            if not isinstance(semantic_report, dict) or semantic_report.get("map_name") != map_name:
+                raise CorpusError(f"{label} report map mismatch")
+    decoded = validate_gate_agreement(
+        outputs["c_gnu"], outputs["c_make"], outputs["python"],
+        map_name, banner_counts,
+    )
     return {
         "decoded_counts": decoded,
         "gate_output_sha256": {key: sha256_bytes(value) for key, value in outputs.items()},
         "gate_logs": log_records,
+        "semantic_gate_labels": semantic_labels,
     }
 
 
@@ -2074,9 +2256,24 @@ def _validate_terminal_schema(
             raise CorpusError("PASS contains a failure line")
         if not _exact_nonnegative_ints(value["decoded_counts"], REPORT_FIELDS):
             raise CorpusError("PASS has invalid decoded counts")
+        semantic_labels = value["semantic_gate_labels"]
+        if (
+            not isinstance(semantic_labels, list)
+            or semantic_labels != sorted(set(semantic_labels))
+            or any(
+                not isinstance(label, str)
+                or not label.startswith("semantic-")
+                or SEMANTIC_CHECKER_NAME_RE.fullmatch(
+                    label.removeprefix("semantic-")
+                ) is None
+                for label in semantic_labels
+            )
+        ):
+            raise CorpusError("PASS has invalid semantic gate labels")
+        expected_gate_labels = BASE_GATE_LABELS | set(semantic_labels)
         for field in ("gate_output_sha256", "gate_log_sha256"):
             hashes = value[field]
-            if not isinstance(hashes, dict) or set(hashes) != {"c", "python", "lint"} or not all(
+            if not isinstance(hashes, dict) or set(hashes) != expected_gate_labels or not all(
                 _is_sha256(item) for item in hashes.values()
             ):
                 raise CorpusError(f"PASS has invalid {field}")
@@ -2087,7 +2284,7 @@ def _validate_terminal_schema(
             ]
             if len(matching) != 1 or matching[0]["sha256"] != expected_hash:
                 raise CorpusError("PASS gate log evidence mismatch")
-        for label in ("python", "lint"):
+        for label in ("python", "lint", *semantic_labels):
             _validate_gate_integrity_evidence(
                 run_root, records, fingerprint=fingerprint, label=label,
             )
@@ -2104,9 +2301,76 @@ def _validate_terminal_schema(
             raise CorpusError("PASS stored gate counts disagree with banner counts")
         if decoded["edge_count"] != decoded["inventory_edge_count"] + decoded["plan_edge_count"]:
             raise CorpusError("PASS stored edge counts are inconsistent")
+
+        cold_owner = attempt / "cold-load" / "owner.json"
+        cold_log = attempt / "cold-load" / "server.log"
+        cold_artifact = (
+            attempt / "cold-load" / "private" / "game" / "maps"
+            / f"{map_name}.rune"
+        )
+        if (
+            value["cold_load_owner_record"]
+            != str(cold_owner.relative_to(run_root))
+            or cold_owner not in paths
+            or cold_log not in paths
+            or cold_artifact not in paths
+        ):
+            raise CorpusError("PASS lacks complete fresh cold-load evidence")
+        if (
+            not _is_sha256(value["cold_load_command_sha256"])
+            or not _is_sha256(value["cold_load_log_sha256"])
+            or value["cold_load_log_sha256"] != sha256_regular(cold_log)
+            or sha256_regular(cold_artifact) != value["artifact_sha256"]
+        ):
+            raise CorpusError("PASS fresh cold-load hashes disagree")
+        cold_owner_value, _cold_owner_raw = _load_json_regular(cold_owner)
+        if (
+            not isinstance(cold_owner_value, dict)
+            or set(cold_owner_value) != owner_fields
+            or cold_owner_value.get("fingerprint") != fingerprint
+            or cold_owner_value.get("map") != map_name
+            or cold_owner_value.get("attempt") != attempt_number
+            or cold_owner_value.get("pidfd_captured") is not True
+            or cold_owner_value.get("command_sha256")
+            != value["cold_load_command_sha256"]
+            or not _is_timestamp(cold_owner_value.get("created_at"))
+        ):
+            raise CorpusError("PASS fresh cold-load owner identity is invalid")
+        try:
+            cold_identity = ProcessIdentity(**cold_owner_value["process"])
+        except (TypeError, ValueError) as exc:
+            raise CorpusError("PASS fresh cold-load process identity is malformed") from exc
+        cold_engine = (
+            attempt / "cold-load" / "private" / CORPUS_ENGINE_BASENAME
+        ).resolve(strict=True)
+        if (
+            type(cold_identity.pid) is not int
+            or cold_identity.pid <= 0
+            or type(cold_identity.start_ticks) is not int
+            or cold_identity.start_ticks < 0
+            or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f-]{27}", cold_identity.boot_id
+            ) is None
+            or not Path(cold_identity.executable).is_absolute()
+            or not _is_sha256(cold_identity.executable_sha256)
+            or not _is_sha256(cold_identity.cmdline_sha256)
+            or Path(cold_identity.executable) != cold_engine
+            or cold_identity.executable_sha256 != sha256_regular(cold_engine)
+            or cold_identity.cmdline_sha256 != value["cold_load_command_sha256"]
+            or (cold_identity.pid, cold_identity.boot_id, cold_identity.start_ticks)
+            == (identity.pid, identity.boot_id, identity.start_ticks)
+        ):
+            raise CorpusError("PASS fresh cold-load is not a distinct authenticated process")
+        try:
+            cold_text = cold_log.read_text(encoding="utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise CorpusError("PASS fresh cold-load log is not valid UTF-8") from exc
+        parse_cold_load_log(cold_text, map_name, banner)
     else:
         if any(value[field] is not None for field in (
-            "decoded_counts", "gate_output_sha256", "gate_log_sha256"
+            "decoded_counts", "gate_output_sha256", "gate_log_sha256",
+            "semantic_gate_labels", "cold_load_owner_record",
+            "cold_load_command_sha256", "cold_load_log_sha256",
         )):
             raise CorpusError("non-PASS result contains successful gate reports")
         failure_line = value["failure_line"]
@@ -2136,10 +2400,15 @@ def _recheck_pass_gates(
         artifact,
         str(result["map"]),
         result["banner_counts"],
-        acceptor=snapshot / roles["acceptor"]["path"],
+        acceptor_gnu=snapshot / roles["acceptor_gnu"]["path"],
+        acceptor_make=snapshot / roles["acceptor_make"]["path"],
         python_interpreter=interpreter,
         runeio=snapshot / roles["runeio"]["path"],
         runelint=snapshot / roles["runelint"]["path"],
+        objective_roots=result["objective_roots"],
+        semantic_checkers=semantic_checkers_for_map(
+            snapshot, verified, str(result["map"])
+        ),
         log_directory=None,
         runner=gate_runner,
         fingerprint=str(result["fingerprint"]),
@@ -2147,6 +2416,7 @@ def _recheck_pass_gates(
     if (
         checked["decoded_counts"] != result["decoded_counts"]
         or checked["gate_output_sha256"] != result["gate_output_sha256"]
+        or checked["semantic_gate_labels"] != result["semantic_gate_labels"]
     ):
         raise CorpusError("rechecked PASS gates disagree with stored reports")
 
@@ -2602,6 +2872,10 @@ def recover_stale_attempts(
                     "decoded_counts": None,
                     "gate_output_sha256": None,
                     "gate_log_sha256": None,
+                    "semantic_gate_labels": None,
+                    "cold_load_owner_record": None,
+                    "cold_load_command_sha256": None,
+                    "cold_load_log_sha256": None,
                 }
                 publish_result(run_root, map_name, result, attempt)
                 recovered += 1
@@ -2622,6 +2896,33 @@ def validate_engine_arguments(arguments: Sequence[str]) -> None:
     values = tuple(arguments)
     if values != DEFAULT_ENGINE_ARGUMENTS:
         raise CorpusError("engine arguments must equal the closed private launch template")
+
+
+def parse_cold_load_log(
+    text: str, map_name: str, banner_counts: Mapping[str, int]
+) -> dict[str, int]:
+    """Accept exactly one ordinary-load READY record and no generation write."""
+    lines = text.splitlines()
+    failure = last_anchored_failure(lines)
+    if failure is not None:
+        raise CorpusError(f"fresh cold-load rejected artifact: {failure}")
+    if any(WRITE_RE.fullmatch(line) is not None for line in lines):
+        raise CorpusError("fresh cold-load unexpectedly generated an artifact")
+    ready = [match for line in lines if (match := READY_RE.fullmatch(line))]
+    matching = [match for match in ready if match.group(1) == map_name]
+    if len(ready) != 1 or len(matching) != 1:
+        raise CorpusError(
+            f"fresh cold-load expected one runtime-ready line, found {len(matching)}"
+        )
+    counts = {
+        "seeds": int(matching[0].group(2)),
+        "links": int(matching[0].group(3)),
+        "mechanism_nodes": int(matching[0].group(4)),
+        "plans": int(matching[0].group(5)),
+    }
+    if any(counts[name] != banner_counts.get(name) for name in counts):
+        raise CorpusError("fresh cold-load counts disagree with generator counts")
+    return counts
 
 
 def stage_private_inputs(
@@ -2646,6 +2947,145 @@ def stage_private_inputs(
     config_name = Path(str(roles["generator_config"]["path"])).name
     _copy_snapshot_file(snapshot, roles["generator_config"], game / config_name)
     return private, engine, artifact, config_name
+
+
+def run_fresh_cold_load(
+    attempt: Path,
+    snapshot: Path,
+    map_name: str,
+    stable_port: int,
+    fingerprint: str,
+    attempt_number: int,
+    source_artifact: Path,
+    banner_counts: Mapping[str, int],
+    generation_identity: ProcessIdentity,
+    *,
+    timeout: float,
+    engine_arguments: Sequence[str] = DEFAULT_ENGINE_ARGUMENTS,
+) -> dict[str, Any]:
+    """Load gated bytes in a second private q2ded and return frozen evidence."""
+    source_before = regular_file_record(source_artifact)
+    cold_root = attempt / "cold-load"
+    private, engine, artifact, config_name = stage_private_inputs(
+        cold_root, snapshot, map_name
+    )
+    shutil.copyfile(source_artifact, artifact, follow_symlinks=False)
+    artifact.chmod(0o444)
+    if regular_file_record(source_artifact) != source_before:
+        raise GateIntegrityError("artifact changed while staging fresh cold-load")
+    staged = regular_file_record(artifact)
+    if staged["sha256"] != source_before["sha256"] or staged["size"] != source_before["size"]:
+        raise GateIntegrityError("fresh cold-load artifact copy mismatch")
+
+    command = [str(engine)] + [
+        value.format(port=stable_port, map=map_name, config=config_name)
+        for value in engine_arguments
+    ]
+    command_hash = sha256_bytes(_nul_argv(command))
+    owner_path = cold_root / "owner.json"
+    log_path = cold_root / "server.log"
+    process: subprocess.Popen[bytes] | None = None
+    identity: ProcessIdentity | None = None
+    pidfd: int | None = None
+    shutdown_error: CorpusError | None = None
+    log_stream = log_path.open("wb")
+    try:
+        atomic_write_json(owner_path, {
+            "fingerprint": fingerprint, "attempt": attempt_number,
+            "map": map_name, "process": None, "pidfd_captured": False,
+            "command_sha256": command_hash, "created_at": utc_now(),
+        }, mode=0o600)
+        verified = verify_snapshot(snapshot)
+        guarded_command = _private_python_command(
+            snapshot, verified["python_runtime"], GUARD_BOOTSTRAP,
+            str(os.getpid()), "--", *command,
+        )
+        process = subprocess.Popen(
+            guarded_command, cwd=private, stdin=subprocess.PIPE,
+            stdout=log_stream, stderr=subprocess.STDOUT, close_fds=True,
+            env=dict(PYTHON_ENVIRONMENT),
+        )
+        pidfd = open_pidfd(process.pid)
+        if pidfd is None:
+            raise GateIntegrityError("fresh cold-load engine has no pidfd")
+        identity = wait_for_exec_identity(process.pid, engine, _nul_argv(command))
+        if (
+            identity.pid, identity.boot_id, identity.start_ticks
+        ) == (
+            generation_identity.pid, generation_identity.boot_id,
+            generation_identity.start_ticks,
+        ):
+            raise GateIntegrityError("fresh cold-load reused the generation process identity")
+        atomic_write_json(owner_path, {
+            "fingerprint": fingerprint, "attempt": attempt_number,
+            "map": map_name, "process": identity.as_dict(),
+            "pidfd_captured": True, "command_sha256": command_hash,
+            "created_at": utc_now(),
+        }, mode=0o600)
+        deadline = time.monotonic() + timeout
+        accepted = False
+        while time.monotonic() < deadline and process.poll() is None:
+            log_stream.flush()
+            try:
+                current = log_path.read_text(encoding="utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise GateIntegrityError("fresh cold-load log is not valid UTF-8") from exc
+            lines = current.splitlines()
+            if last_anchored_failure(lines) is not None:
+                break
+            if any(
+                (match := READY_RE.fullmatch(line)) is not None
+                and match.group(1) == map_name
+                for line in lines
+            ):
+                accepted = True
+                time.sleep(0.25)
+                break
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+        if process.poll() is None:
+            assert process.stdin is not None
+            process.stdin.write(b"quit\n")
+            process.stdin.flush()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                shutdown_captured_child(process, identity, owner_path, pidfd)
+        log_stream.flush()
+        os.fsync(log_stream.fileno())
+        try:
+            final_log = log_path.read_text(encoding="utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise GateIntegrityError("fresh cold-load log is not valid UTF-8") from exc
+        if not accepted:
+            raise CorpusError("fresh cold-load exited or timed out before runtime-ready")
+        parse_cold_load_log(final_log, map_name, banner_counts)
+        if process.returncode != 0:
+            raise CorpusError(f"fresh cold-load engine exited with status {process.returncode}")
+        if regular_file_record(source_artifact) != source_before:
+            raise GateIntegrityError("artifact changed during fresh cold-load")
+        if regular_file_record(artifact) != staged:
+            raise GateIntegrityError("fresh cold-load changed its staged artifact")
+        return {
+            "owner": owner_path,
+            "log": log_path,
+            "command_sha256": command_hash,
+        }
+    finally:
+        if process is not None and process.poll() is None:
+            if identity is None or pidfd is None:
+                shutdown_error = GateIntegrityError(
+                    "fresh cold-load child identity was never captured"
+                )
+            else:
+                try:
+                    shutdown_captured_child(process, identity, owner_path, pidfd)
+                except CorpusError as exc:
+                    shutdown_error = exc
+        if pidfd is not None:
+            os.close(pidfd)
+        log_stream.close()
+        if shutdown_error is not None:
+            raise shutdown_error
 
 
 def run_one_map(
@@ -2686,6 +3126,7 @@ def run_one_map(
     detail = "attempt did not launch"
     parsed: dict[str, Any] | None = None
     gate: dict[str, Any] | None = None
+    cold_load: dict[str, Any] | None = None
     failure_line: str | None = None
     shutdown_error: CorpusError | None = None
     try:
@@ -2860,22 +3301,40 @@ def run_one_map(
                         artifact,
                         map_name,
                         parsed["counts"],
-                        acceptor=snapshot / roles["acceptor"]["path"],
+                        acceptor_gnu=snapshot / roles["acceptor_gnu"]["path"],
+                        acceptor_make=snapshot / roles["acceptor_make"]["path"],
                         python_interpreter=python_interpreter,
                         runeio=snapshot / roles["runeio"]["path"],
                         runelint=snapshot / roles["runelint"]["path"],
+                        objective_roots=parsed["objective_roots"],
+                        semantic_checkers=semantic_checkers_for_map(
+                            snapshot, verified, map_name
+                        ),
                         log_directory=attempt,
                         runner=gate_runner,
                         fingerprint=fingerprint,
                     )
+                    cold_load = run_fresh_cold_load(
+                        attempt, snapshot, map_name, stable_port, fingerprint,
+                        attempt_number, artifact, parsed["counts"], identity,
+                        timeout=startup_timeout,
+                        engine_arguments=engine_arguments,
+                    )
                     classification = "PASS"
-                    detail = "all generation and artifact gates passed"
+                    detail = (
+                        "generation, dual readers, semantic gates, and fresh "
+                        "cold-load passed"
+                    )
                 except GateIntegrityError as exc:
                     classification = "INFRA_FAIL"
                     detail = str(exc)
+                    gate = None
+                    cold_load = None
                 except CorpusError as exc:
                     classification = "LINT_FAIL"
                     detail = str(exc)
+                    gate = None
+                    cold_load = None
     except (CorpusError, OSError, subprocess.SubprocessError) as exc:
         classification = "INFRA_FAIL" if classification == "INFRA_FAIL" else classification
         detail = str(exc)
@@ -2929,6 +3388,16 @@ def run_one_map(
         "gate_log_sha256": (
             {name: record["sha256"] for name, record in gate["gate_logs"].items()}
             if gate else None
+        ),
+        "semantic_gate_labels": gate["semantic_gate_labels"] if gate else None,
+        "cold_load_owner_record": (
+            str(cold_load["owner"].relative_to(run_root)) if cold_load else None
+        ),
+        "cold_load_command_sha256": (
+            cold_load["command_sha256"] if cold_load else None
+        ),
+        "cold_load_log_sha256": (
+            sha256_regular(cold_load["log"]) if cold_load else None
         ),
     }
     publish_result(run_root, map_name, result, attempt)

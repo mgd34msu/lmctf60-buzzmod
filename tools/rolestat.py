@@ -11,19 +11,29 @@ Grades, per game:
 """
 import re, sys, math, collections
 
-pat = re.compile(r'SG (\S+): role=(\d+) seed=-?\d+ goal=(-?\d+) spd=(\d+) '
-                 r'org=\(([-0-9. ]+)\)')
+pat = re.compile(
+    r'SG (?P<name>\S+): role=(?P<role>\d+) seed=-?\d+ '
+    r'goal=(?P<goal>-?\d+)(?: sgoal=(?P<sgoal>-?\d+))? '
+    r'spd=-?\d+ org=\((?P<org>[-0-9. ]+)\)'
+)
 
 def grade(path):
     frames = collections.defaultdict(dict)
     idx = 0
+    recognized = 0
     for l in open(path, errors='replace'):
         idx += 1
         m = pat.search(l)
         if m:
-            frames[idx // 12][m.group(1)] = (
-                int(m.group(2)), int(m.group(3)),
-                tuple(float(x) for x in m.group(5).split()))
+            recognized += 1
+            goal = m.group('sgoal')
+            if goal is None:
+                goal = m.group('goal')
+            frames[idx // 12][m.group('name')] = (
+                int(m.group('role')), int(goal),
+                tuple(float(x) for x in m.group('org').split()))
+    if not recognized:
+        raise ValueError(f"rolestat: no SG telemetry rows recognized: {path}")
     n = d_ok = d_all = a_ok = a_all = 0
     esc_ok = esc_all = wander = total = 0
     for fr in frames.values():
@@ -51,6 +61,18 @@ def grade(path):
           f"escorted-carry {pc(esc_ok,esc_all)} ({esc_all}s) | "
           f"wander {pc(wander,total)}")
 
+def main(argv):
+    if not argv:
+        print("usage: rolestat.py <wave.log> [<wave.log> ...]", file=sys.stderr)
+        return 2
+    try:
+        for path in argv:
+            grade(path)
+    except (OSError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
 if __name__ == '__main__':
-    for p in sys.argv[1:]:
-        grade(p)
+    raise SystemExit(main(sys.argv[1:]))

@@ -2550,12 +2550,13 @@ if __name__ == '__main__':
 #    trigger pulls -- but it is an equally large fraction on both corpora,
 #    and the hook is a mobility tool rather than a duelling weapon.
 #
-# 4. MZ_LOGIN is the death signal, and it is only observable where the
-#    respawn point was inside the recorder's sphere. Under pov-parity that
-#    culls some deaths on the bot side exactly as the engine culls them on
-#    the human side, which is correct -- but it means 'lost contact' absorbs
-#    the deaths neither shape could see, and the disengage mix should be read
-#    as three classes with one soft boundary, not three clean ones.
+# 4. EV_PLAYER_TELEPORT on the entity event is the death signal, and it is
+#    only observable where the dying entity was included in the recorder's
+#    snapshot. Under pov-parity that culls some deaths on the bot side exactly
+#    as the engine culls them on the human side, which is correct -- but it
+#    means 'lost contact' absorbs the deaths neither shape could see, and the
+#    disengage mix should be read as three classes with one soft boundary, not
+#    three clean ones. MZ_LOGIN is discarded because it marks joins, not deaths.
 #
 # 5. Everything on this sheet is capped to F.DURATION_CAP_S, including the
 #    event stream, so two sheets always cover the same time budget. The

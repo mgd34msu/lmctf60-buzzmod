@@ -1,14 +1,15 @@
 # The cathedral, drawn properly
 
-Written 2026-08-12, after the standards pass and the three-territory
-primitive audit (slipgate layer, buzzmod layer, cross-layer seams).
-This is how buzzmod + SLIPGATE would be built knowing what we know —
-and it is a COMPASS for converging the existing tree, not a demolition
-order. The one asset no rewrite can buy back is hundreds of hours of
-film-verified behavior; every move below is film-gated like every
-feature ever was. Companion documents: `slipgate/STYLE.md` (the line
-law), `TOOLING.md` (the development environment), `LEDGER.md` (the
-internal development record, where project coordinates live).
+Written 2026-08-12, after the standards pass and the three-territory primitive
+audit (slipgate layer, buzzmod layer, cross-layer seams). This is a convergence
+design, not the current execution plan and not a statement that every listed
+refactor is still required. Counts and open seams are an August 12 snapshot;
+the August 18 source audit and
+[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) decide what remains.
+Existing film is not final-candidate evidence until it is rebound or rerun
+against the exact source/module/BSP/RUNE/config identity. Companion
+documents: `slipgate/STYLE.md` (line law), `TOOLING.md` (development and server
+bundle environment), and `LEDGER.md` (experiment log).
 
 ## 1. The layering as it should be
 
@@ -30,16 +31,13 @@ engine (yquake2)             id's masonry -- untouched
    └─ RECORD                  stats DB, stdlog -- one write path
 ```
 
-**Scope note (2026-08-12, owner's boundary):** this document describes
-RELEASE ASSETS only -- the code that ships as the three game modules
-plus the pak, nothing else. The development environment (the fleet,
-the film instruments, the judging harness, the corpus and fixtures) is
-deliberately absent from the layering above: it never ships, and
-treating it as platform structure muddies both. Its own architecture
-and law live in `TOOLING.md`. The one place the two worlds touch is
-the release job's Assemble step, which packages exactly four files --
-that list is the boundary, and the release-4 near-miss (a dead
-dev-file bundle in the packaging) is why it stays explicit.
+**Scope note, reconciled 2026-08-18:** the layering below describes the game
+module and its runtime contracts. Tool source, raw corpora, and test evidence
+remain outside it. The public download and the authenticated server bundle are
+distinct boundaries: the former supplies player/admin release assets; the
+latter also binds the exact production config, roster policy, 181 BSP/RUNE
+pairs, rotated top-20 lists, and applicable sidecars needed to reproduce the
+accepted fleet. Both manifests are explicit and hash-bound.
 
 Two seams get formal surfaces:
 - **`sg_hooks.h`** — every game-DLL-facing SLIPGATE entry point, one

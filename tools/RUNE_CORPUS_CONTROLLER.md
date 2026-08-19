@@ -8,13 +8,19 @@ both the C and Python acceptance paths.
 ## Fixed corpus
 
 - Use `tools/rune-corpus-maps.txt` as the sole ordered map manifest.
-- Require exactly 180 safe, unique names.
-- Require `lmctf02c` and reject `lmctf02` even if supplied by an override.
+- Require exactly 181 safe, unique names.
+- Require both the original `lmctf02` BSP and its padded `lmctf02c`
+  replacement as distinct corpus identities. Neither may stand in for the
+  other.
 - The manifest SHA-256 is
-  `b39de6fba3c2b2ca89ff4bcbb52f13976a61ec0e2e74ee5815a9107430db2fe3`.
+  `9bc55cb287f0b9d99fccf54cc1339e65fba30459e49b0b77cf1b67896c125452`.
 - Assign stable ports by manifest index.  The reserved default range is
-  62000-62179; all selected TCP and UDP ports must be bind-tested before any
+  62000-62180; all selected TCP and UDP ports must be bind-tested before any
   engine starts.  A different base is part of the run fingerprint.
+
+This 181-map manifest is the conversion corpus. The production server rotation
+and its cold-load/wave gate use the separate exact-20 runtime map list; passing
+that runtime gate never reduces or substitutes for converting this corpus.
 
 ## Required process discipline
 
@@ -44,7 +50,10 @@ snapshot must contain:
 - both production module filenames, required to have identical SHA-256 bytes;
 - the game assets used to resolve every manifest map;
 - `tools/runelint.py`, `tools/runeio.py`,
-  `tools/rune_contracts_generated.py`, and the compiled `runeaccept` command;
+  `tools/rune_contracts_generated.py`, the distinct GNUmakefile-built
+  `runeaccept.gnu`, and Makefile-built `runeaccept.make` commands;
+- the semantic-checker manifest and every Python checker it names (currently
+  the ten-controller/two-flag-route-core checker for `lmctf58`);
 - the generator configuration and the map manifest.
 
 Write `input-manifest.json` by hashing every regular input file, rejecting
@@ -54,10 +63,11 @@ again before accepting the final summary.
 
 The canonical run fingerprint is the SHA-256 of sorted compact JSON containing
 the complete input-manifest hash, ordered map-manifest hash, engine and module
-hashes, generated action and mechanism contract hashes, linter/reader/acceptor
-hashes, generation and startup timeouts, job count, port base, engine arguments,
-and controller source hash.  Resume is allowed only when the complete stored
-fingerprint document is byte-for-byte equal to the newly computed document.
+hashes, generated action and mechanism contract hashes, linter/reader/both-C-
+acceptor hashes, semantic manifest/checker hashes and applicability, generation
+and startup timeouts, job count, port base, engine arguments, and controller
+source hash. Resume is allowed only when the complete stored fingerprint
+document is byte-for-byte equal to the newly computed document.
 
 ## Current generation and acceptance grammar
 
@@ -73,43 +83,56 @@ a regular newly created artifact inside that attempt, two distinct in-range
 objective roots, no later failure line, and clean shutdown.  Parse and retain
 all six counts.
 
-Before publishing `PASS`, execute all three gates against the same artifact
-bytes:
+Before publishing `PASS`, execute both independently built C acceptors, both
+general Python gates, and every semantic checker applicable to the map against
+the same artifact bytes:
 
 ```sh
-runeaccept ARTIFACT
+runeaccept.gnu ARTIFACT
+runeaccept.make ARTIFACT
 python3 tools/runeio.py ARTIFACT
 python3 tools/runelint.py ARTIFACT
+python3 tools/lmctf58_rune_accept.py --objective-roots RED BLUE ARTIFACT  # lmctf58
 ```
 
-The C and Python JSON reports must agree on map name, seeds, links, mechanism
-nodes, triggers, inventory edges, plan edges, and plans.  Their counts must
-also agree with the generator banner.  Record both outputs and hashes.  Any
+The GNU C, Make C, and Python JSON reports must agree on map name, seeds, links,
+mechanism nodes, triggers, inventory edges, plan edges, and plans. Their counts
+must also agree with the generator banner. Record every output and hash. Any
 missing required plan, controller mismatch, CRC or contract error, count
 disagreement, or nonzero gate exit is `LINT_FAIL`; it is never resumable as
 success.
+
+After those gates, copy the unchanged artifact into a second private game tree
+and start a new, separately authenticated q2ded process. `PASS` requires exactly
+one ordinary runtime-ready banner whose counts agree with generation, with no
+generator write banner. The cold-load process identity, command hash, staged
+artifact, and log are immutable terminal evidence and must differ from the
+generation process identity.
 
 ## Durable per-map result and resume law
 
 Each terminal `runs/MAP/result.json` contains the run fingerprint, map, stable
 port, attempt number, start/end timestamps, classification and normalized
 signature, exact command hash, owner-record path, server and gate-log hashes,
-artifact path/hash, objective roots, and all decoded counts.  Publish it only
-after the attempt files and directories are synced.
+artifact path/hash, objective roots, all decoded counts, applicable semantic
+gate labels, and fresh cold-load owner/command/log hashes. Publish it only after
+the attempt files and directories are synced.
 
 On resume, a previous `PASS` is reusable only if its fingerprint and stable port
 match, every referenced file is regular and still has the recorded hash, the
-artifact is still the exact recorded bytes, and all three gates pass again.
-Otherwise create the next attempt; never overwrite prior evidence.
+artifact is still the exact recorded bytes, both C gates, both general Python
+gates, and all applicable semantic gates pass again, and the stored cold-load
+evidence authenticates a distinct process and the same artifact. Otherwise
+create the next attempt; never overwrite prior evidence.
 
 After each terminal map, atomically regenerate `summary.json`, `summary.tsv`,
-and `heartbeat.json`.  The final summary includes the fingerprint, total 180,
+and `heartbeat.json`.  The final summary includes the fingerprint, total 181,
 counts by classification, every map result/hash, start/end timestamps, and a
-`complete` boolean that is true only when all 180 terminal results validate.
+`complete` boolean that is true only when all 181 terminal results validate.
 
 ## Launch gate
 
-First run only the controller self-tests and a dry-run that prints the 180
+First run only the controller self-tests and a dry-run that prints the 181
 stable map/port assignments and fingerprint.  Then run one approved smoke map
 with a fresh module, inspect its exact bytes through C and Python, and cold-load
 it through the runtime.  The full corpus may start only after that evidence is

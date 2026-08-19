@@ -64,9 +64,10 @@ The project is complete only when all of these statements are true together:
 9. The continuously running ten-server fleet uses ten cyclic rotations of the
    exact same ordered top-20 list. The initial offsets are 0 through 9, native
    `EndDMLevel`/`ExitLevel`/`gamemap` transitions advance each process to its
-   next list entry, and after twenty transitions every server has played all
-   twenty maps exactly once. No launcher-side per-map quit, one-map authority,
-   forced `serverstop`, or process-per-map emulation may satisfy this gate.
+   next list entry, and the initial residence plus the next nineteen
+   transitions visits all twenty maps exactly once; transition twenty returns
+   to the initial map. No launcher-side per-map quit, one-map authority, forced
+   `serverstop`, or process-per-map emulation may satisfy this gate.
 10. The production fleet keeps nine 5v5 servers and only s08 at 7v7, without
     delayed roster mutation. Every map residence proves the expected map and
     RUNE identity, expected roster, positive movement/combat/objective activity,
@@ -429,23 +430,25 @@ q2ded process once; `CheckDMRules` selects an end condition,
 `BeginIntermission` records the next map, `ExitLevel` queues `gamemap`, and
 `SpawnEntities` initializes the next level inside the same process.
 
-Current source facts that must be corrected or deliberately retained:
+Current source behavior:
 
-- `maplist_file` is parsed inline by `InitGame()` in `g_save.c`, then
-  unconditionally passed to `SortMaplist`;
-- non-random `EndDMLevel` increments and wraps `maplistindex`, but skips the
-  entry whose `Maps_Picked` value equals `Last_Map`;
-- `Last_Map` is initialized to zero and has no writer in the tracked source;
+- `maplist_file` is parsed inline by `InitGame()` in `g_save.c`;
+- `MapList_Configure` preserves file order for the non-random branch and sorts
+  only for `CTF_RANDOM_MAPS`;
+- `MapList_SequentialStartup` keeps configured entry zero resident when it is
+  already loaded and sets the next cursor to entry one;
+- `MapList_SelectNext` selects the cursor entry and advances/wraps it without
+  the obsolete `Maps_Picked`/`Last_Map` skip;
 - startup `MAPLISTFORCE` aligns the current map to list entry zero;
 - nonzero `timelimit` and `fraglimit` are the tracked native match-ending
   authorities; there is no tracked `capturelimit` consumer;
 - `ExitLevel` changes maps and preserves the q2ded process; it does not exit.
 
-Required source behavior:
+Required source and runtime behavior:
 
-1. Correct the existing non-`CTF_RANDOM_MAPS` branch to preserve configured
-   order, select the next entry sequentially, and wrap from entry 19 to entry 0
-   without skipping any slot. Do not add a new mode or cvar.
+1. Preserve the implemented non-`CTF_RANDOM_MAPS` behavior: configured order,
+   sequential next-entry selection, and entry-19-to-entry-0 wrap without a new
+   mode or cvar.
 2. Keep the existing `CTF_RANDOM_MAPS` branch separate and unchanged except for
    tests that prove the ordered-branch correction did not leak into it.
 3. Align startup to entry zero of each server's already-rotated list.
@@ -479,8 +482,9 @@ Required bundle:
 
 - both identical module aliases;
 - required client/runtime `assets/lmctf6-buzzmod.pak`;
-- exact production bot roster/config data, including `assets/bots.cfg`;
-- exact production `rune.cfg` and ten generated rotated map-list files;
+- exact production `rune.cfg`, manifest-bound roster policy, and ten generated
+  rotated map-list files; `assets/bots.cfg` is not a current SLIPGATE input and
+  is excluded unless a real `sv addbot` consumer is restored;
 - the authoritative ordered `tools/topmaps.txt` used to derive those files;
 - all 181 BSP files and all 181 matching RUNE files;
 - escape priors;
@@ -918,17 +922,22 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] Shallow-water DIRECT door law committed and green.
 - [x] 181-map/top-20 scope recorded on `slipgate`.
 - [x] Green milestone merged into `main` at `815e0b6`.
-- [ ] This corrected whole-project plan and dependency graph reviewed,
-      committed in the repository, pushed, merged to `main`, and CI-green.
-- [ ] Tracked corpus list contains exactly 181 unique maps, including both
+- [x] Corrected whole-project plan and dependency graph committed as
+      `a337255`, merged to `main` as `ae8f4bb`, and all eight non-publish jobs
+      green in exact-SHA run `32213552503`.
+- [x] Tracked corpus list contains exactly 181 unique maps, including both
       `lmctf02` and `lmctf02c`.
-- [ ] Corpus controller proves generator, dual C readers, Python reader, lint,
+- [x] Corpus controller proves generator, dual C readers, Python reader, lint,
       applicable semantics, and fresh cold load for every terminal PASS.
+- [x] Production role-telemetry consumers parse `seed/goal/sgoal/spd`, use
+      stable goals where required, and fail when no SG rows are recognized.
+- [x] Non-random map-list parsing preserves configured order and its executable
+      tests cover startup, wrap, singleton, and random-branch isolation.
 - [ ] `runeio.py` expected-identity and `corpusgraph.py` duplicate/import defects
       repaired and regression-tested.
 - [ ] Four remaining `lmctf58` cellar controllers retained and checker-green.
-- [ ] Deterministic ordered map-list parsing and native cyclic transitions pass
-      startup, wrap, random-isolation, and same-PID tests.
+- [ ] Real native cyclic transitions preserve the same q2ded PID for a complete
+      20-map cycle; source-level startup/wrap/random-isolation tests are green.
 - [ ] Human/bot measurement data is bound to exact module/BSP/RUNE provenance
       where used; historical unstamped data is not presented as final proof.
 - [ ] Bot improvement backlog measured, resolved, and consumer-proven across

@@ -1,68 +1,99 @@
 # tools/ reference
 
-This directory is the development environment described in `TOOLING.md` (read that first — it is the law this README only documents the surface of, and it defines the vocabulary used below: waves, trials, arms, rungs). Nothing in `tools/` ships; the release boundary is the top-level build's Assemble step, and it packages exactly three game modules and a pak, none of them from here.
+This directory contains development, analysis, and server-operation tools.
+`TOOLING.md` defines their boundaries. Tool source, raw corpora, fixtures, and
+evidence are not public runtime assets. The complete authenticated server bundle
+described by `PROJECT-COMPLETION-PLAN.md` is not implemented in the current
+tracked tools.
 
 At a glance, this directory holds four layers:
 
-- **The fleet** — shell scripts that drive ten local dedicated servers through waves/trials/campaigns, deploy new builds between them, and keep the loop alive unattended (`iterate2.sh`, `waveloop.sh`, `wavewatch.sh`, `deploy.sh`, and friends).
+- **The fleet** — scripts that launch, monitor, record, stop, install, and
+  recover ten dedicated servers (`iterate2.sh`, `waveloop.sh`, `wavewatch.sh`,
+  and `deploy.sh`). They currently create finite per-map processes and do not
+  implement the required persistent native map cycle.
 - **Instruments** — the blind film-judging chain: five "rung" sheet renderers (`film.py` through `outcomecard.py`) plus `conduct.py` and `tripcensus.py`, each with an in-file Stage-A validity record, plus the judging-protocol documents that govern how their output is shown to human judges.
 - **Analysis** — the demo-parsing library and the census/mining/report scripts built on it: entity and kinematics extraction, per-map human defense/escape/traffic mining, carry-ledger forensics, bot telemetry grading, chat mining, hook/rune diagnostics.
 - **Fixtures & data** — the corpus manifest, flag-stand positions, POV exclusion rules, and the baked/mined JSON and CSV files the instruments and analysis scripts read and write.
 
-Two things repeat everywhere in this tree and are worth knowing before reading further: **PID-only process discipline** (fleet scripts never `pgrep -f` / `pkill -f`; a runaway `pgrep -f "q2ded"` once killed its own wrapper — see `runegen.sh`'s docstring), and **the blinding discipline** (every rung-1..5 instrument extracts identically from human and bot demos and puts nothing demo-shape-revealing on the rendered sheet — see `film.py`'s module docstring, MODULE NOTES 1-11).
+Production process ownership must use exact captured PIDs, locks, ports, and
+receipts rather than broad name matching. The current `wavewatch.sh` and
+`deploy.sh` do not yet meet that rule and are not sanctioned production
+interfaces. Blind instruments must extract the same observable from human and
+bot film without leaking demo shape into rendered sheets.
 
-Runtime debris that is intentionally skipped below but worth knowing the shape of: `iter-<N>/` directories and `iter-<N>-launch.log` files (one pair per wave, produced by `iterate2.sh`/`waveloop.sh`; hundreds accumulate), `aux-<N>/` and `aux-<N>-launch.log` (same pattern for `aux2.sh`'s side fleet), `campaign-<timestamp>/` directories (per-run logs from `campaign.sh`), `rune-logs/` (raw per-server logs from `runegen.sh` runs), `__pycache__/` (Python bytecode cache), `waveloop.log` (the fleet heartbeat's running log), `runs-archive/` (rotated launch logs, atomic-replace target of `waveloop.sh`), and one-off match logs like `ab-<map>-<timestamp>.log` at the tools/ root (from `abmatch.sh`) that appear and disappear as matches run.
+Runtime debris that is intentionally skipped below but worth knowing the shape of: `iter-<N>/` directories and `iter-<N>-launch.log` files (one pair per wave, produced by `iterate2.sh`/`waveloop.sh`; hundreds accumulate), `aux-<N>/` and `aux-<N>-launch.log` (same pattern for `aux2.sh`'s side fleet), `campaign-<timestamp>/` directories (per-run logs from `campaign.sh`), `rune-logs/` (raw per-server logs from `runegen.sh` runs), `__pycache__/` (Python bytecode cache), `waveloop.log` (the fleet heartbeat's running log), `runs-archive/` (launch logs appended by `waveloop.sh`), and one-off match logs like `ab-<map>-<timestamp>.log` at the tools/ root (from `abmatch.sh`) that appear and disappear as matches run.
 
 ---
 
-## FLEET (server/wave scripts)
+## FLEET (current tracked scripts)
+
+The entries below document what the scripts do now. Their open production
+defects are tracked in `PROJECT-COMPLETION-PLAN.md`.
 
 ### `iterate2.sh`
-- **Purpose:** the current wave launcher — ten servers, free per-server layout (map, matchup, duration all independently settable per server), the fleet's day-to-day driver.
+- **Purpose:** currently launches ten one-map server processes, waits for the
+  configured duration, stops them, and summarizes their logs.
 - **Usage:** `tools/iterate2.sh <name>` (name becomes the wave number/tag; output lands in `tools/iter-<name>/`).
 - **Inputs:** hardcoded per-server tables at the top of the script (maps, fill, sg_* cvars); `rune.cfg`; the live game build in `$GAMEDIR_ROOT/$GAME`.
 - **Outputs:** `tools/iter-<name>/<label>-<map>.log` per server, plus a `gamestat.sh` summary block per server printed at the end.
-- **Dependencies:** `gamestat.sh` (per-server summary), a `q2ded` binary, the `lmctf-hooktest` game directory. Refuses to run if `q2ded` is already up (overlap guard). PID-only process discipline; ~7s launch stagger (same-second starts duplicate Q2's RNG per the script's own comments).
+- **Dependencies:** `gamestat.sh`, a `q2ded` binary, and the configured game
+  directory. Its `lmctf-hooktest` default, launch stagger, per-map termination,
+  and hard-coded roster/map tables are current limitations and are not the
+  production fleet contract.
 
 ### `iterate.sh`
-- **Purpose:** the older fixed-format wave launcher — the "owner's mixed-density format" (2v2 duel isolation / 5v5 baseline x5 / 7v7 density stress / 5v1 control), superseded day-to-day by `iterate2.sh`'s free layout but still runnable directly.
+- **Purpose:** mixed-density standalone launcher. `waveloop.sh` does not call it;
+  it remains pending an operator/consumer decision in the necessity audit.
 - **Usage:** `tools/iterate.sh <name> <duel_map> <five1> <five2> <five3> <five4> <five5> <dens_map> <ctrl_map>`.
 - **Inputs/Outputs/Dependencies:** same shape as `iterate2.sh` (rune.cfg, `gamestat.sh`, `tools/iter-<name>/` log dir); the five 5v5 maps rotate across servers by wave number rather than being fixed, to avoid confounding an arm comparison with map identity.
 
 ### `waveloop.sh`
-- **Purpose:** the fleet's heartbeat — runs `iterate2.sh` forever, deploying the newest build between waves.
+- **Purpose:** currently runs `iterate2.sh` repeatedly, implicitly deploys a
+  discovered build, and recreates the server processes.
 - **Usage:** `tools/waveloop.sh <first-wave-number>`; stop with `touch tools/waveloop-stop` or by killing the process group.
-- **Inputs:** the newest `*.so` in the repo root; `iterate2.sh`.
+- **Inputs:** currently discovers a repo-root module and calls `iterate2.sh`;
+  this is recorded as behavior to remove, not an approved interface.
 - **Outputs:** `waveloop.log` (timestamped wave/deploy lines); increments the wave number and reinvokes `iterate2.sh` each pass; per-wave launch output into `runs-archive/iter-<N>-launch.log`. A failed/overlap-refused wave never name-kills `q2ded`; `iterate2.sh` owns and waits for its own child PIDs, while unrelated servers are left untouched.
-- **Dependencies:** `deploy.sh` (atomic build install), `iterate2.sh`. Refuses to increment the wave number on a run that "finished" in under two minutes (spin guard — a prior bug burned wave numbers 438-882 in fifteen minutes without this).
+- **Dependencies:** `deploy.sh`, `iterate2.sh`. Refuses to increment the wave
+  number when a run finishes in under two minutes.
 
 ### `wavewatch.sh`
-- **Purpose:** watchdog — relaunches `waveloop.sh` if the fleet is found dead (no `q2ded`, no `waveloop.sh` process), meant to run from a systemd `--user` timer every 5 minutes.
+- **Purpose:** currently restarts `waveloop.sh` based on process-name checks.
+  It does not authenticate an owner generation, lock, ports, or the exact
+  ten-server state.
 - **Usage:** no args; invoked by the `wavewatch` systemd user timer (see `setup.sh` step 6 for install instructions).
 - **Inputs:** `waveloop.log` (to compute the next wave number), `waveloop-stop` (honors the same stop file).
 - **Outputs:** appends a relaunch line to `waveloop.log`; backgrounds a fresh `waveloop.sh <next-wave>`.
-- **Dependencies:** `waveloop.sh`. Born after two host crashes each cost the fleet 30-60 dark minutes.
+- **Dependencies:** `waveloop.sh`.
 
 ### `deploy.sh`
-- **Purpose:** the only sanctioned path to install a freshly built game module into the live game directory.
-- **Usage:** `tools/deploy.sh [<path-to-so>]` (defaults to the newest `*.so` in the repo root); `FORCE=1` overrides the "fleet is live" refusal.
+- **Purpose:** installs a selected or discovered Linux module and optional data
+  files. It does not install or roll back a complete authenticated server
+  bundle.
+- **Usage:** the tracked script still accepts an optional module and can discover
+  a repo-root build. That default and `FORCE` bypass are current defects, not
+  final operator interfaces.
 - **Inputs:** a `.so` build; `tools/escape-priors.json` and `tools/slipgate-weights.cfg` if present (ride along as data files).
 - **Outputs:** `$GAMEDIR/{game,gamex86_64}.so` (and the two data files), installed via `mv` for atomicity.
-- **Dependencies:** none beyond the game directory. Written after a plain `cp` over a live dlopen'd `.so` corrupted mapped pages and segfaulted 18 of 20 servers mid-game (waves 309-310); refuses to run while `q2ded` is up unless `FORCE=1`.
+- **Dependencies:** none beyond the game directory. Refuses to run while
+  `q2ded` is up unless `FORCE=1`; that bypass is not an approved production
+  interface.
 
 ### `campaign.sh`
 - **Purpose:** the validation campaign — N maps in parallel, G consecutive 5v5 games per map (fresh process per game, for honest RNG/level-state reset), one aggregate table at the end.
 - **Usage:** `tools/campaign.sh` (standard five maps) / `tools/campaign.sh lmctf03 lmctf22` (explicit maps) / `GAMES=3 GAME_SECS=300 tools/campaign.sh` (shorter campaign).
 - **Inputs:** `rune.cfg`, the live game build.
 - **Outputs:** `tools/campaign-<timestamp>/` (one log per map per game, plus `lanes.log`).
-- **Dependencies:** `gamestat.sh`. Staggers launches (same-second starts duplicate Q2's RNG — observed duplicate matches from batch runs 28448/28449 and 28450/28453).
+- **Dependencies:** `q2ded` and the configured game directory. It implements
+  its own aggregate grep summary rather than calling `gamestat.sh`.
 
 ### `abmatch.sh`
-- **Purpose:** one A/B match, 4 legacy bots vs 4 SLIPGATE bots, one map — a quick head-to-head sanity check outside the wave format.
-- **Usage:** `tools/abmatch.sh <map> <secs>`.
-- **Inputs:** `rune.cfg`, the live game build.
-- **Outputs:** `tools/ab-<map>-<timestamp>.log`, plus a stdout report (steal/capture totals, per-bot-name frag/death/steal line dump).
-- **Dependencies:** none beyond `q2ded`. Documents the confirmed bot-spawn console syntax for both bot systems in its header comment (`sv addbot <name> <skin> <charfile> <charname>` for legacy bots vs `sv sg add` for SLIPGATE bots).
+- **Status:** not a working current launcher. It attempts `sv addbot` for the
+  legacy side, but the current `ServerCommand` dispatcher has no `addbot`
+  command, so it cannot create the documented 4-vs-4 match.
+- **Disposition:** keep out of production use; the necessity audit must either
+  remove it or pair it with a restored, tested legacy-bot command path.
 
 ### `aux2.sh`
 - **Purpose:** a 4-server auxiliary side-fleet, additive to the main ten — currently running the carrier-cover revalidation and a defense-package decomposition (post-only / react-only / both / neither).
@@ -72,24 +103,46 @@ Runtime debris that is intentionally skipped below but worth knowing the shape o
 - **Dependencies:** same process discipline as `iterate2.sh`; ports 28530-28533, disjoint from the main fleet's range.
 
 ### `runegen.sh`
-- **Purpose:** serial batch RUNE deployment pipeline — boots each map in a temporary portable game-directory mirror, issues `sv rune`, runs the strict authenticated graph and flag-objective quality gate, leaves the installed file unchanged on failure, and atomically installs only a clean result.
-- **Usage:** `tools/runegen.sh [--dry-run] <map1> [map2 ...]`, e.g. `tools/runegen.sh --dry-run $(grep -v '^#' tools/topmaps.txt)`.
-- **Inputs:** `topmaps.txt` (typical map list), the live game build.
+- **Purpose:** single-attempt RUNE generation primitive — boots explicitly named
+  maps in an isolated game-directory mirror, issues `sv rune`, runs artifact
+  gates, and leaves the selected destination unchanged on failure. The 181-map
+  corpus controller owns retries, dual-reader agreement, applicable semantic
+  checks, fresh-process cold loads, and terminal accounting.
+- **Usage:** `tools/runegen.sh [--dry-run] <map1> [map2 ...]`. The authoritative
+  conversion list is `rune-corpus-maps.txt`; `topmaps.txt` is only the
+  production fleet's ordered 20-map rotation.
+- **Inputs:** explicit map names; `Q2DED`; `GAMEDIR_ROOT`/`GAME` containing the
+  selected module, maps, and configs; and `RUNE_ACCEPT` plus its declared build
+  file/target. Snapshot hashing and all-map accounting are controller duties,
+  not standalone `runegen.sh` behavior.
 - **Outputs:** `<gamedir>/maps/<map>.rune` only after the gate passes; the prior rune under `rune-logs/backups/`; server and lint logs under `rune-logs/`; a summary table on stdout. Any failure leaves the deployed rune untouched.
-- **Dependencies:** `q2ded`, Python 3, and `runelint.py`. Its docstring is the canonical statement of this tree's PID-only / no-`pgrep -f` rule, written after four earlier runs were killed by a self-matching `pkill -f` pattern. `--dry-run` only until told otherwise — not safe to run for real while the main fleet owns the ports (documented port conflict).
+- **Dependencies:** `q2ded`, Python 3, `runelint.py`, and the configured C
+  acceptor. Run it only in an isolated root on ports disjoint from the active
+  fleet.
 
 ### `gamestat.sh`
 - **Purpose:** every observable from one game log, in one quoting-safe pass — steals/caps/returns, kills by weapon, hook fire/land/fail counts, SG telemetry-derived attacker floors and defender occupancy, chat line count, per-weapon accuracy tail.
 - **Usage:** `tools/gamestat.sh <log>`.
-- **Inputs:** a wave/campaign/match log file.
+- **Inputs:** a wave/campaign/match log containing production SG rows in
+  `role=... seed=... goal=... sgoal=... spd=... org=(...)` order. Rows without `sgoal`
+  remain readable for existing fixtures.
 - **Outputs:** stdout report; no files written.
-- **Dependencies:** `python3` (inline heredoc for the SG-telemetry parse). Called by every fleet launcher (`iterate.sh`, `iterate2.sh`, `campaign.sh`) as the end-of-wave summary.
+- **Failure:** exits nonzero when no SG telemetry row is recognized; an empty
+  role report is not a successful game summary.
+- **Dependencies:** `python3` (inline heredoc for the SG-telemetry parse).
+  `iterate.sh` and `iterate2.sh` call it; `campaign.sh` currently implements a
+  separate summary rather than invoking this script.
 
 ---
 
 ## INSTRUMENTS (film analysis)
 
-The blind-judging chain, in rung order. Every sheet renderer shares one extraction discipline (see `film.py`'s docstring): identical processing of human client demos and bot serverrecord demos, no duration/roster-count leaks on the rendered PNG, a non-blind `<hash>.json` sidecar for the unblinding step only. Each of the five sheet tools ships its own `--calibrate` Stage-A gate (ROC-AUC separability on a labeled human/bot set, pass bar 0.85) and records at least one full Stage-A run as a trailing MODULE NOTE in the file — read those before trusting a panel.
+The blind-judging chain, in rung order. Every sheet renderer shares one
+extraction discipline (see `film.py`'s docstring): identical processing of
+human client demos and bot serverrecord demos, no duration/roster-count leaks
+on the rendered PNG, and a non-blind `<hash>.json` sidecar for unblinding only.
+Calibration records and limitations live with each instrument and its protocol;
+this reference documents current interfaces, not old trial results.
 
 ### `film.py` — rung 1
 - **Purpose:** the base demo walker and rung-1 film sheet: reuses the effects-bit flag-carry signal (`EF_FLAG1`/`EF_FLAG2`) — the one signal identically available in both demo shapes, unlike `svc_print` (measured: 0 print messages across every serverrecord sample checked) — to detect carry windows and render per-demo route/behavior sheets.
@@ -97,7 +150,10 @@ The blind-judging chain, in rung order. Every sheet renderer shares one extracti
 - **Inputs:** `.dm2` demos; `<runedir>/<map>.rune` for the map silhouette.
 - **Outputs:** `<hash>.png` (sheet) + `<hash>.json` (non-blind sidecar) per demo.
 - **Dependencies:** `dm2speed.py`, `demokin.py` (byte-sync only, its output discarded), `demoents.py`-equivalent auto-detect skeleton (shared logic, reimplemented in-file); `numpy`, `matplotlib` (Agg backend) — the film venv.
-- **Validity record:** coverage measured directly on this corpus — a non-recorder track in a human client demo carries only 11-42% of frames (whole-demo coverage 0.30-0.41), because a client demo only contains entity updates for players inside the recorder's PVS; a serverrecord bot demo has no PVS culling (coverage 1.000). `--pov-parity` exists specifically to remove that asymmetry by simulating a virtual recorder inside bot demos. `film.py` itself has no `--calibrate` Stage-A gate (it is the shared walker the other four rungs calibrate against); its own module docstring's "MODULE NOTES 1-11" is the limitations list every downstream rung inherits and cites.
+- **Measurement boundary:** client demos contain only PVS-visible entity
+  updates, while serverrecord demos do not have that culling. `--pov-parity`
+  simulates the client observation boundary for bot film. `film.py` is the
+  shared walker and has no standalone `--calibrate` gate.
 
 ### `routesheet.py` — rung 2 (ROUTES)
 - **Purpose:** whole-match navigation quality — projects every position sample onto a fixed per-map node graph (quantized from the rune seed cloud, cached at `<runedir>/<map>.nodes.json`) and reads traversal statistics (entropy, edge density, off-graph time, occupancy divergence) off it. Zero new demo parsing — consumes `film.py`'s `d['tracks']` directly.
@@ -105,7 +161,6 @@ The blind-judging chain, in rung order. Every sheet renderer shares one extracti
 - **Inputs:** `.dm2` demos, `<runedir>/<map>.rune`, the cached `.nodes.json` per map (built by `--build-nodes`).
 - **Outputs:** `<hash>.png` + `<hash>.json` sidecar per demo (same hash-naming as `film.py`, so one demo carries one hash across every rung).
 - **Dependencies:** `film.py` (as a library — `walk_demo`, `anonymize`).
-- **Validity record:** Stage A (mactf06, 4 human/13 bot) — of six panels, only panel 5 (map-occupancy divergence, humans spread across more of the map than bots: 0.56 vs 0.40 bits on mactf06, 0.81 vs 0.39 on lmctf22) is behaviorally stable under a pov-parity radius sweep (800/900/1000u) **and** replicates on a second map (lmctf22). `mean_route_entropy_bits` and `edge_density` swing 0.14-0.24 under the same sweep — coverage artifacts, not behavior. `revisit_spike2_mass` inverts direction between maps and must not be trusted. lmctf22 is excluded from rung-2 blind sets entirely per `set-composition.md` (it suppresses off-graph flight for both populations).
 
 ### `fightsheet.py` — rung 3 (FIGHTS)
 - **Purpose:** duel/skirmish behavior — who shoots, at what range, with what weapon, closing or circling, how the fight ends. New parsing layer: decodes `svc_muzzleflash` (entnum + weapon id), previously skipped as 3 bytes by every other walker.
@@ -113,7 +168,6 @@ The blind-judging chain, in rung order. Every sheet renderer shares one extracti
 - **Inputs:** `.dm2` demos.
 - **Outputs:** `<hash>.png` + `<hash>.json` sidecar per demo.
 - **Dependencies:** `film.py` (shared extraction + hashing).
-- **Validity record:** first Stage A (2026-08-06, mactf06, n_human=4, n_bot=38) — gate PASSES on `switch_diagonal_mass` (separability 1.000, radius-stable), but in the **opposite direction the design predicted**: measured, HUMANS are the weapon-diagonal-dominant population (0.899 vs 0.599), because human rapid-fire weapons emit long same-class muzzleflash runs while these bots alternate between two slow weapons (rail/rocket). The panel separates strongly for a different reason than briefed — a judge told the stated reason would read it backwards. Panels 2 and 4 swing >0.10 under the radius perturbation and are flagged unreliable pending a fix. n_human=4 against a design target of >=8 (only 4 of 9 mactf06 human demos clear the 300s duration floor).
 
 ### `teamsheet.py` — rung 4 (TEAM PLAY)
 - **Purpose:** does a team play as a team — spacing, escort presence on carry, defense posture with steal/capture ticks, push synchronization. Zero new parsing (reuses `film.py`'s tracks + carry windows).
@@ -121,7 +175,6 @@ The blind-judging chain, in rung order. Every sheet renderer shares one extracti
 - **Inputs:** `.dm2` demos; `--stands <file.json>` (falls back to `F.flag_stands()`'s in-demo estimate; raises `StandsMissing` and refuses the whole sheet rather than rendering blank panels when neither source answers).
 - **Outputs:** `<hash>.png` + `<hash>.json` sidecar per demo.
 - **Dependencies:** `film.py`.
-- **Validity record:** addendum Stage A (2026-08-07, 5-point pov-parity sweep x 4-way leave-one-out) — the **only** cell to clear 0.85 at every radius and every exclusion is `escort_fraction` on lmctf22 (0.933-0.962). Every other scalar on both maps is either coverage-sensitive (moves with the untuned pov-parity radius) or sub-gate outright; the panel-3 (defense) numbers are sub-gate everywhere. Per `rung4-protocol.md`, `escort_fraction` (panel 2) is the sole judging centerpiece; panels 1/3/4 render (blind fairness requires it) but may not be treated as evidence alone. `rung4-protocol.md`'s own status: **pre-registered, not yet run** — one dry-run pair only, no judge set shown to anyone under this protocol as of writing.
 
 ### `outcomecard.py` — rung 5 (MATCH OUTCOMES)
 - **Purpose:** what actually happened — score progression, cap-timing, momentum/lead changes, pressure balance (cumulative steals + running conversion ratio). Zero new parsing, zero new outcome heuristic — reuses `F.classify_outcome`, the same capture classifier `film.py`'s own panel and `teamsheet.py`'s panel 3 already use.
@@ -129,30 +182,36 @@ The blind-judging chain, in rung order. Every sheet renderer shares one extracti
 - **Inputs:** `.dm2` demos, `--stands <file.json>`.
 - **Outputs:** `<hash>.png` + `<hash>.json` sidecar per demo.
 - **Dependencies:** `film.py`, shares `teamsheet.py`'s `resolve_stands`.
-- **Validity record:** Stage A (2026-08-07, mactf06 + lmctf22) — only `steals_total` on mactf06 clears the gate (separability 0.964); lmctf22 fails outright (best 0.828) and is excluded from rung-5 sets by `set-composition.md`. The passing scalar is a raw carry-window-start count computed *before* `cap_radius` is ever applied, so the design's own +/-100u `cap_radius` stability check is vacuous for it by construction (it can only ever report Delta=0.000); a supplementary pov-parity-radius sweep (800/900/1000u) is the check that actually reaches this scalar and finds it stable (0.966 -> 0.964 -> 0.956). Read as "this bot AI era rushes the flag much less often than humans" (~1.3/min human vs ~0.26/min bot), not a durable population signature — the module's own note expects this to shrink once bot objective-seeking behavior changes. `rung5-protocol.md`'s status: **pre-registered, not yet run**, execution deliberately deferred; four dry-run sheets only.
 
 ### `conduct.py`
-- **Purpose:** the gross-conduct audit (per-player grind/reversal/spin — "is this player visibly doing something stupid") plus the defense-regime card (approach rate, steal conversion, guard fraction) that normalizes bot-vs-bot and bot-vs-human steal volume by the defense actually faced. Born 2026-08-11: "nobody had WATCHED the bots."
+- **Purpose:** per-player grind/reversal/spin audit plus a defense-regime card
+  with approach rate, steal conversion, and guard fraction.
 - **Usage:** `conduct.py <demo.dm2> [...] --scalars` (per-demo JSON lines) / `conduct.py --compare --human <glob> --bot <glob>` (pooled two-column card).
 - **Inputs:** `.dm2` demos, `--stands <file.json>` (via `--stands` arg, used by the defense-regime half).
 - **Outputs:** stdout JSON (JSONL for `--scalars`, one pooled object for `--compare`); no files written directly (see `conduct-baseline.json` below for how a `--compare` run gets saved).
 - **Dependencies:** reuses `film.py`'s walker. Explicitly frames its cross-population numbers as rank/ratio evidence only, per the coverage-honesty rule in `TOOLING.md`.
 
 ### `tripcensus.py`
-- **Purpose:** stage-2 eyes — decomposes conduct.py's steal-gap finding trip by trip: where an attacker's approach to the enemy stand ends (ARRIVED / DIED / TURNED), trips/min, arrival fraction, median distance at death/turn-back. Born 2026-08-12.
+- **Purpose:** decomposes enemy-stand approaches by terminal state (ARRIVED,
+  DIED, TURNED), trips per minute, arrival fraction, and terminal distance.
 - **Usage:** `tripcensus.py --stands <stands.json> <demo.dm2> [...]`.
 - **Inputs:** `.dm2` demos, `stands.json`.
 - **Outputs:** stdout report.
 - **Dependencies:** reuses `film.py`'s walker; same coverage-honest denominators and cross-population caveat as `conduct.py`.
 
 ### `rung4-protocol.md`
-Blind-judging protocol for `teamsheet.py`. Defines the leak checklist, sealed-caption rules, forced-choice + conviction + reasons judging format, and pins `escort_fraction` (panel 2, lmctf22) as the only validated scalar per the Stage-A addendum above. **Status: pre-registered, not yet run.** Explicitly the structural template `rung5-protocol.md` (and by extension any future rung protocol) is written from.
+Blind-judging protocol for `teamsheet.py`: qualification, leak checks, sealed
+captions, forced choice, conviction, and reason capture. It must be rerun on the
+exact final-build receipts before acceptance.
 
 ### `rung5-protocol.md`
-Blind-judging protocol for `outcomecard.py`, structurally derived from `rung4-protocol.md`. Pins panel 4's `steals_total` step lines (mactf06 only) as the sole validated evidence; **execution is deliberately deferred** (see its section 2) pending the stage-2 behavior change the Stage-A note itself says should move this number. **Status: pre-registered, not yet run**, four dry-run sheets only.
+Blind-judging protocol for `outcomecard.py`. It defines the outcome-card leak
+checks and judging procedure; qualified final-build execution remains open.
 
 ### `set-composition.md`
-The blind-set map-qualification rule: a map may appear in a rung's judging set only if that rung's own Stage-A record shows separability >=0.85 *on that map specifically* — separability recorded on a different map does not transfer. Written 2026-08-09 after two sets were damaged by map choice (a unanimous conviction-4 miscall on lmctf22 for rung 2; the outcomecard Stage-A gate failing outright on the same map). Carries the per-rung qualifying/excluded map table (rungs 2 and 4 discriminate on *opposite* maps — not a contradiction, different behaviors) and the secondary rules: roster matching, briefed (not hidden) recording-shape caveats, sealed captions (map/hash/carry-count only), fresh judges per set.
+Defines map-specific qualification, roster matching, disclosed recording-shape
+limits, sealed captions, and fresh judges. Qualification does not transfer
+between maps or instruments.
 
 ---
 
@@ -172,7 +231,10 @@ The shared parsing library and the mining/report/forensics scripts built on it. 
 - **Usage:** `demoents.py <demo.dm2> [...]` (prints per-demo track counts).
 - **Inputs:** `.dm2` demos.
 - **Outputs:** stdout; as a library, `walk_entities()` returns `{map, pov, skins, tracks, frames, svrecord}`.
-- **Dependencies:** `dm2speed.py`, `demokin.parse_playerstate_full` (used only to stay in byte-sync). Verified client-vs-serverrecord shape detection against `wave265-s04-5v5.dm2` (<1% of blocks parse clean under the wrong assumption).
+- **Dependencies:** `dm2speed.py`, `demokin.parse_playerstate_full` (used only
+  to stay in byte-sync). The parser distinguishes client and serverrecord demo
+  shapes, but catches per-demo parse exceptions and can return partial or empty
+  data; callers must enforce their own nonzero/coverage gate.
 
 ### `demokin.py`
 - **Purpose:** full-fidelity human POV kinematics — velocity, view angles, pm flags, weapon index at 10Hz; the "movement grammar" (air-strafe gain, hop cadence, view-vs-velocity divergence, touchdown friction loss).
@@ -180,7 +242,6 @@ The shared parsing library and the mining/report/forensics scripts built on it. 
 - **Inputs:** `.dm2` demos (client shape).
 - **Outputs:** stdout.
 - **Dependencies:** `dm2speed.py`.
-- **Validity record:** first census (40 demos, 2026-08-03) — air gain median +1.5/100ms (p75 +14); view-velocity divergence airborne median 93 degrees.
 
 ### `demoprints.py`
 - **Purpose:** scouting tool — dumps the `svc_print` stream and the playerskin table verbatim, so other extractors can key off real strings instead of guesses.
@@ -365,7 +426,9 @@ reinterpret unrelated seed numbers.
 ### `rolestat.py`
 - **Purpose:** grades a wave's role discipline from telemetry — defense time near own flag, pressure time near enemy flag, escort seconds with a live nearby escort, recover-role field-cost trend, wander fraction (`goal=-1`).
 - **Usage:** `rolestat.py <wave.log>`.
-- **Inputs:** a wave log file (SG telemetry).
+- **Inputs:** one or more wave logs. Current rows use `sgoal` as the stable
+  destination cost; rows without it fall back to `goal`.
+- **Failure:** exits nonzero when a file contains no recognized SG telemetry.
 - **Outputs:** stdout.
 - **Dependencies:** none beyond the stdlib.
 
@@ -384,7 +447,8 @@ reinterpret unrelated seed numbers.
 - **Dependencies:** none beyond the stdlib.
 
 ### `runeview.py`
-- **Purpose:** permanent visual dump tool for rune files (replaces "the throwaway python that used to do that," per the SLIPGATE build order) — top-down component view, directed reachability from a goal seed, optional side-elevation slice, stats block, optional diff against an older rune.
+- **Purpose:** visual RUNE dump: top-down components, directed reachability
+  from a goal seed, optional side elevation, statistics, and artifact diff.
 - **Usage:** `runeview.py <rune> [--goal N] [--region X0,X1,Y0,Y1] [--compare OTHER.rune] [-o/--output PATH]`.
 - **Inputs:** a `.rune` file (and optionally a second one to diff against); looks for the map's `info_flag*` origin next to the rune file to default `--goal`.
 - **Outputs:** a single self-contained HTML file (inlined SVG/CSS/JS, no external resources), default `<rune_file>.html`; also prints a plaintext stats summary.
@@ -421,8 +485,9 @@ Five things it cannot ship, with where each comes from:
 | **A human demo corpus** (`.dm2`) | private recordings | your own — see below |
 
 `tools/setup.sh` checks for all of these and names what's missing.
-Navigation data (`.rune` files) is NOT on the list — the game
-generates it per map with `sv rune` (or batch: `runegen.sh`).
+The accepted server bundle contains the exact 181 BSP/RUNE pairs generated and
+accepted from the final source. They are server runtime inputs, not loose public
+downloads.
 
 ### Bring your own demos
 
@@ -455,7 +520,9 @@ YOUR own demo collection:
    excluding specific recorders' POV-derived kinematics while keeping
    their entity-layer data — edit it for your own corpus.
 
-The shipped data reflects OUR corpus (2020-2023 LMCTF pub play, 268 demos).
+The tracked corpus manifest indexes the LMCTF client-demo inputs used by these
+analysis tools. Final behavioral claims require exact receipt binding as defined
+by the completion plan.
 Non-seed-indexed priors and reports work as reference artifacts, but unstamped
 seed-indexed JSON is not a RUNE input and must be re-mined. For regenerable
 artifacts, the more your maps and community differ from ours, the more
@@ -473,10 +540,15 @@ Index of the human demo corpus: `filename, map, duration_s, players, shape, usab
 Mined output of `escapepriors.py`: per-map (and per-map:color) 8-bucket compass distribution of post-steal exit bearings, plus a `_corpus` block (268 files, 1809 steals seen, 1549 used). Hand-formatted (one map per line) because the game reads it with a hand parser (`sg_arach.c Escape_Load`, `sg_escapeprior`). Deployed to the live game directory by `deploy.sh`.
 
 ### `pov-rules.txt`
-POV kinematics exclusion list (owner ruling, 2026-08-03) — substring match on recorder name; excluded recorders' *POV-derived* data (movement grammar, kinematics) is dropped, but their event-stream/entity-layer data stays usable (the ruling `demoents.py` and `escapee.py` both cite for using ref-cam demos). Carries an explicit "kept despite looking excludable" list and one identity ruling (`serverkill == buzzkill`, "pretty sure").
+POV kinematics exclusion list using recorder-name substring matching. Excluded
+recorders are omitted from POV-derived movement/kinematics but remain usable for
+event-stream and entity-layer analysis. Ambiguous identity entries must not be
+treated as final authority without a receipt-backed identity decision.
 
 ### `topmaps.txt`
-Priority map list (one mapname per line, `#`-comments allowed), ranked by demo popularity analysis. Consumed by `runegen.sh`'s usage example (`tools/runegen.sh $(grep -v '^#' tools/topmaps.txt)`).
+Exact ordered 20-map production fleet list (one mapname per line,
+`#`-comments allowed), ranked by demo popularity analysis. It is not the RUNE
+conversion authority; all 181 names live in `rune-corpus-maps.txt`.
 
 ### `human/`
 Output directory for the demo-mining pipeline — per-map `<map>.human.json` (`demorune.py`), `<map>.escape.json` (`escapee.py`), `<map>.defense.json` (`demodefense.py`); 6.8MB as of writing. Consumed by `humanbake.py`, `escapebake.py`, `defbake.py`, and `defreport.py`. Seed-indexed `<map>.flaglive.json` files without a matching current rune identity are not bake inputs and must be re-mined or spatially migrated before use. The directory also contains `carrywindows.json` and an `ents/` subdirectory of `<map>.ents.json`/`playersamples.json` reference files — see FLAGS.
@@ -510,18 +582,18 @@ Pinned film-venv dependencies (`contourpy`, `cycler`, `fonttools`, `kiwisolver`,
 
 ---
 
-## FLAGS
+## Current maintenance facts
 
-- **`humanbake.py` and `escapebake.py` are near-duplicate implementations** (identical log-scaling tier logic, differing only in which JSON field they read and which sidecar kind they request). The shared authentication and byte encoding live in `sidecario.py`; factor the remaining tier builder if either baker changes again.
+- `humanbake.py` and `escapebake.py` still duplicate their log-scaling tier
+  builder. Authentication and byte encoding are shared in `sidecario.py`.
+- `conduct-baseline.json` has no automated writer or reader. It is a manually
+  captured result and cannot be used as final evidence without a receipt.
+- `botkin_raw.json` is an unconditional write-only side effect of `botkin.py`;
+  no tracked tool reads it.
+- `botledger.csv` is appended by `botledger.py`; no tracked tool reads it.
+- `iterate.sh` is not called by `waveloop.sh` or `wavewatch.sh`. It remains a
+  standalone entry point until an operator-use decision is recorded.
+- `setup.sh` and `requirements.txt` are active environment bootstrap inputs.
 
-- **(RESOLVED 2026-08-12)** `tools/human/`'s producer-less file families are kept as reference data from superseded one-off analyses — documented in FIXTURES & DATA; safe to ignore.
-
-- **(REMOVED 2026-08-12)** `tools/observer-stop` -- (empty file, tools/ root) is not referenced by any `.sh` or `.py` script in this directory (confirmed by grep). The fleet's actual stop file is `waveloop-stop` (checked by `waveloop.sh` and `wavewatch.sh`). `observer-stop` looks like either a dead-man's switch for a removed/unbuilt "observer" script, or a manual note file that never got wired to anything — currently inert either way.
-
-- **`conduct-baseline.json`** has no automated writer or reader in `tools/` (see FIXTURES & DATA above) — flagging in case it's assumed to be kept fresh by some process; as far as the code in this directory shows, it is a manually captured, potentially stale snapshot.
-
-- **`botkin_raw.json`** is written unconditionally every time `botkin.py` is run (not opt-in, no flag to suppress it) but has no reader anywhere in `tools/` — a write-only side effect of a tool whose primary purpose is the stdout report.
-
-- **`setup.sh` and `requirements.txt` appeared in this directory during the course of this inventory** (newer timestamps than everything else read here, and traced to two real git commits — `47db52e` and `a5fa854` — that landed mid-session). Both are legitimate, well-documented dev tooling (environment doctor + its pinned venv requirements) and are included above, but the tree was live and being actively edited by another process while this document was being written, so a re-run of this inventory may find further drift (the same commits also moved `iter-*-launch.log` files into `runs-archive/`, reflected in the debris note at the top of this document).
-
-- **`iterate.sh` (fixed mixed-density format) looks superseded in practice by `iterate2.sh` (free layout)** per `TOOLING.md`'s framing ("driven by tools/iterate2.sh... per the owner's format delegation, 2026-08-04") and `waveloop.sh`/`wavewatch.sh` both hardcode calls to `iterate2.sh`, never `iterate.sh`. `iterate.sh` is still a complete, runnable script, not broken — just not in the live loop's call path anymore. Worth confirming whether it should move to an `attic/` or similar, or whether it's kept deliberately as a fallback fixed format.
+File retention and removal decisions are recorded in
+`docs/repository-hygiene.md`.

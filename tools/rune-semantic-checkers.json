@@ -1,0 +1,11 @@
+{
+  "checkers": [
+    {
+      "maps": [
+        "lmctf58"
+      ],
+      "name": "lmctf58",
+      "role": "semantic_checker:lmctf58"
+    }
+  ]
+}
