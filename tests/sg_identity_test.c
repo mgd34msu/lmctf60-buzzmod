@@ -13,6 +13,7 @@
 #include "slipgate/sg_ribbon_random.h"
 #include "slipgate/sg_lead_random.h"
 #include "slipgate/sg_persona_assignment.h"
+#include "slipgate/sg_escape_random.h"
 
 sg_host_t sg_host;
 
@@ -184,6 +185,28 @@ static void TestPersonaAssignment(void)
 	occupied |= UINT32_C(1) << 3;
 	CHECK(SG_PersonaAssignmentChoose(occupied, 3) == 4);
 	CHECK(SG_PersonaAssignmentChoose(UINT32_C(0xffff), 19) == 3);
+}
+
+static void TestEscapeRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	int yaw;
+	float duration;
+
+	srand(4421);
+	expected_random = rand();
+	srand(4421);
+	state = SG_EscapeRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(state != 0);
+	CHECK(state == SG_EscapeRandomInitial(
+	      UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+	yaw = SG_EscapeRandomYaw(state);
+	CHECK(yaw >= -40 && yaw <= 40);
+	duration = SG_EscapeRandomDuration(state);
+	CHECK(duration >= 1.0f && duration <= 1.8f);
+	CHECK(SG_EscapeRandomNext(state) != state);
 }
 
 static void TestValidAndFloatPrecision(void)
@@ -493,6 +516,7 @@ int main(void)
 	TestRibbonRandomness();
 	TestLeadRandomness();
 	TestPersonaAssignment();
+	TestEscapeRandomness();
 
 	if (failures)
 	{

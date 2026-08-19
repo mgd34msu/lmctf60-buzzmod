@@ -307,6 +307,7 @@ typedef struct sg_bot_s
 	float		fan_side_until;
 	float		escape_until;   /* backing out of a concave pocket */
 	float		escape_yaw;
+	uint32_t	escape_random;  /* private pocket-retreat sequence */
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
 	float		vy_cur, vp_cur; /* the view's ACTUAL heading: slew state */
 	qboolean	view_on;        /* slew state valid (false snaps on respawn) */

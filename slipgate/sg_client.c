@@ -28,6 +28,7 @@
 #include "slipgate/sg_ribbon_random.h"
 #include "slipgate/sg_lead_random.h"
 #include "slipgate/sg_persona_assignment.h"
+#include "slipgate/sg_escape_random.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -571,6 +572,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	sg_bots[slot].ribbon_random = SG_RibbonRandomInitial(
 	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
 	sg_bots[slot].lead_random = SG_LeadRandomInitial(
+	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
+	sg_bots[slot].escape_random = SG_EscapeRandomInitial(
 	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
 	sg_bots[slot].active = true;
 	sg_bots[slot].fake_ping = SG_BotPingBase(sg_bots[slot].instance_token,

@@ -31,6 +31,7 @@
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_ribbon_random.h"
+#include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
@@ -4096,8 +4097,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		/* jittered: identical retreats produce identical re-approaches,
 		 * and an obstacle that beats one line beats it every time */
-		bot->escape_yaw = e->s.angles[YAW] + 180.0f + (float)(rand() % 81 - 40);
-		SG_TimerArm(&bot->escape_until, 1.0f + (float)(rand() % 9) * 0.1f);
+		bot->escape_random = SG_EscapeRandomNext(bot->escape_random);
+		bot->escape_yaw = e->s.angles[YAW] + 180.0f +
+		    (float)SG_EscapeRandomYaw(bot->escape_random);
+		bot->escape_random = SG_EscapeRandomNext(bot->escape_random);
+		SG_TimerArm(&bot->escape_until,
+		    SG_EscapeRandomDuration(bot->escape_random));
 		if (sg_cv.debug->value)
 			sg_host.dprint("STAGSHELVE %s link=%d at seed=%d\n",
 			           e->client->pers.netname, bestlink, bot->seed);
