@@ -103,6 +103,12 @@ int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
  * caller's authority to start the post-arrival dwell clock. */
 int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed);
 
+/* A patrol RUN is an exact role-local transaction.  Contact, role loss, or
+ * disabling the behavior retires only that link and its target before movement
+ * can reuse the ordinary commitment. */
+int SG_DefensePatrolRetireIfInactive(int active, int *patrol_link,
+	int *target_seed, int *commit_link);
+
 /* sg_patrol is the patrol walking throttle.  Invalid/off values disable the
  * behavior; enabled values are bounded away from both a shuffle and a sprint. */
 float SG_DefensePatrolThrottle(float configured);

@@ -2442,6 +2442,27 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 		}
+		{
+			int patrol_link = bot->patrol_link;
+			qboolean patrol_active = role == SG_ROLE_DEFEND &&
+			    bot->def_stand && defense_quiet && !duel &&
+			    !bot->engaged_last &&
+			    isfinite(sg_cv.patrol->value) &&
+			    sg_cv.patrol->value > 0.0f;
+
+			/* Contact/role/config edges retire the exact patrol commitment
+			 * before the generic latch can restore it for this movement frame. */
+			if (SG_DefensePatrolRetireIfInactive(patrol_active,
+			        &bot->patrol_link, &bot->patrol_seed,
+			        &bot->commit_link))
+			{
+				if (bestlink == patrol_link)
+					bestlink = -1;
+				bot->commit_until = 0.0f;
+				SG_TimerArm(&bot->patrol_until, 5.0f);
+				tc->bestlink = bestlink;
+			}
+		}
 		shift_allowed = isfinite(sg_cv.defshift->value) &&
 		    sg_cv.defshift->value > 0.0f && defense_post &&
 		    !SG_DefenseSupplyActive(bot) &&
@@ -4237,13 +4258,6 @@ stag_done:
 	 * defender on an errand is standing the pad, not the stand, and its
 	 * goal field says so.
 	 */
-	/* An administrator may turn patrol off while a defender is between post
-	 * seeds.  Retire that leg before it can extend the hold branch forever. */
-	if (sg_cv.patrol->value <= 0.0f && bot->patrol_seed >= 0)
-	{
-		bot->patrol_seed = -1;
-		bot->patrol_until = 0.0f;
-	}
 	/* RETURN ends only in the real own-flag/post band.  The objective has
 	 * already replaced any astray-flag/intercept goal with the fixed home
 	 * field, so this fence cannot finish on the weapon pad or a mixed tactic. */
@@ -4306,12 +4320,11 @@ stag_done:
 		 * it appears -- the quiet test above already gates entry, and
 		 * combat owns the view the moment anyone shows.
 		 */
-		if (!quiet)
-			bot->patrol_seed = -1;
 		if (quiet && sg_cv.patrol->value > 0.0f)
 		{
 			if (SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))
 			{
+				bot->patrol_link = -1;
 				/* Dwell begins at proved arrival, never at departure.  A long
 				 * walking leg must still end in an unhurried post observation. */
 				bot->patrol_random =
@@ -4321,22 +4334,18 @@ stag_done:
 			}
 			else if (bot->patrol_seed >= 0)
 			{
-				/* mid-leg: ride the direct link if one exists */
-				int pli;
-
-				for (pli = SG_Rune()->first_link[bot->seed]; pli >= 0;
-				     pli = SG_Rune()->next_link[pli])
-					if (SG_Rune()->links[pli].to == bot->patrol_seed &&
-					    SG_Rune()->links[pli].action == RL_RUN)
-					{
-						bestlink = pli;
-						hold_post = false;
-						tc->patrol_walk = true;
-						break;
-					}
-				if (hold_post)
+				/* Mid-leg: only the originally selected direct RUN owns motion. */
+				if (DefenseShiftLinkReady(bot, bot->patrol_link,
+				        bot->seed, bot->patrol_seed))
+				{
+					bestlink = bot->patrol_link;
+					hold_post = false;
+					tc->patrol_walk = true;
+				}
+				else
 				{
 					bot->patrol_seed = -1;  /* leg unreachable: stand */
+					bot->patrol_link = -1;
 					SG_TimerArm(&bot->patrol_until, 5.0f);
 				}
 			}
@@ -4373,6 +4382,7 @@ stag_done:
 				if (chosen_link >= 0)
 				{
 					bot->patrol_seed = chosen_seed;
+					bot->patrol_link = chosen_link;
 					bestlink = chosen_link;
 					hold_post = false;
 					tc->patrol_walk = true;

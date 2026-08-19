@@ -51,6 +51,22 @@ int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed)
 	return 1;
 }
 
+int SG_DefensePatrolRetireIfInactive(int active, int *patrol_link,
+	int *target_seed, int *commit_link)
+{
+	int owned_link;
+
+	if (active || !patrol_link || *patrol_link < 0)
+		return 0;
+	owned_link = *patrol_link;
+	if (commit_link && *commit_link == owned_link)
+		*commit_link = -1;
+	*patrol_link = -1;
+	if (target_seed)
+		*target_seed = -1;
+	return 1;
+}
+
 int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 	size_t candidate_count, int max_goal_ms, int previous_seed,
 	unsigned draw, int *seed_out)

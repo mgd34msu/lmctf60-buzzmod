@@ -182,6 +182,28 @@ static void TestQuietPatrolDwellsOnlyAfterArrival(void)
 	CHECK(!SG_DefensePatrolFinishLeg(80, NULL));
 }
 
+static void TestQuietPatrolContactRetiresExactCommit(void)
+{
+	int patrol_link = 12;
+	int target = 80;
+	int commit = 12;
+
+	CHECK(!SG_DefensePatrolRetireIfInactive(1, &patrol_link, &target,
+	    &commit));
+	CHECK(patrol_link == 12 && target == 80 && commit == 12);
+	CHECK(SG_DefensePatrolRetireIfInactive(0, &patrol_link, &target,
+	    &commit));
+	CHECK(patrol_link == -1 && target == -1 && commit == -1);
+
+	patrol_link = 12;
+	target = 80;
+	commit = 99;
+	CHECK(SG_DefensePatrolRetireIfInactive(0, &patrol_link, &target,
+	    &commit));
+	CHECK(patrol_link == -1 && target == -1 && commit == 99);
+	CHECK(!SG_DefensePatrolRetireIfInactive(0, NULL, &target, &commit));
+}
+
 static sg_defense_combat_request_t CombatRequest(void)
 {
 	sg_defense_combat_request_t request;
@@ -343,6 +365,7 @@ int main(void)
 	TestQuietPatrolOwnsItsRandomness();
 	TestQuietPatrolThrottle();
 	TestQuietPatrolDwellsOnlyAfterArrival();
+	TestQuietPatrolContactRetiresExactCommit();
 	TestCombatAdmissionAndDeterminism();
 	TestCombatHullProbeLaw();
 	TestCombatPreviewCandidateLaw();

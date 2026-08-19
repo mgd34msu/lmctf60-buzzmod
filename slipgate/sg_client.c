@@ -116,6 +116,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->lead_seen_up_at = -1.0f;
 	bot->lead_inferred_until = 0.0f;
 	bot->patrol_seed = -1;
+	bot->patrol_link = -1;
 	bot->def_shift_seed = -1;
 	bot->def_shift_link = -1;
 	bot->def_shift_from = -1;

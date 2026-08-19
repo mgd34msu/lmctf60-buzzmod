@@ -72,6 +72,23 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertIn("SG_DefensePatrolThrottle(sg_cv.patrol->value)", move)
         self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", move)
 
+    def test_contact_retires_exact_patrol_commit_before_latch(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+        retire = source.rfind("int patrol_link = bot->patrol_link", 0,
+                              source.index("SG_DefensePatrolRetireIfInactive(patrol_active"))
+        latch = source.index("THE LINK LATCH", retire)
+
+        self.assertLess(retire, latch)
+        self.assertIn("&bot->patrol_link, &bot->patrol_seed", source[retire:latch])
+        self.assertIn("&bot->commit_link", source[retire:latch])
+        self.assertIn("defense_quiet && !duel", source[retire:latch])
+        self.assertIn("!bot->engaged_last", source[retire:latch])
+        self.assertIn("tc->bestlink = bestlink", source[retire:latch])
+        self.assertIn("SG_TimerArm(&bot->patrol_until, 5.0f)",
+                      source[retire:latch])
+        self.assertIn("bot->patrol_link = chosen_link", source)
+        self.assertIn("DefenseShiftLinkReady(bot, bot->patrol_link", source)
+
     def test_late_shelf_retires_shift_before_post_or_movement(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
         shelf = source.index("if (bot->deaddoor_ahead)")
@@ -134,6 +151,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
 
         for field in (
+            "patrol_link",
             "def_shift_seed",
             "def_shift_link",
             "def_shift_from",

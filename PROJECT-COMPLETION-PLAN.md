@@ -177,6 +177,9 @@ gate. A measurement-only change cannot complete an item. Implemented controller
 slices now include the enabled quiet-defender patrol. Its unhurried dwell starts
 only after the selected proved leg reaches its target, so a long walk cannot
 consume the hold interval and collapse the circuit into continuous motion.
+The patrol retains the exact selected RUN identity; contact, role loss, or
+disablement retires only that commitment before the generic movement latch can
+restore it for another frame.
 Other implemented slices include a bounded proved-RUN home-flag approach
 preference that breaks near-stand field plateaus without
 granting touch authority, immediate strike release when no ready teammate can

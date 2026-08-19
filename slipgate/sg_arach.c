@@ -65,6 +65,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
+#include "slipgate/sg_defense_shift.h"
 #include "slipgate/sg_weights.h"
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
@@ -2496,6 +2497,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->tac_time = 0.0f;
 	bot->tac_role = -1;
 	bot->patrol_seed = -1;
+	bot->patrol_link = -1;
 	bot->patrol_until = 0.0f;
 	bot->def_shift_seed = -1;
 	bot->def_shift_link = -1;
@@ -3398,7 +3400,10 @@ void SG_BotThink(sg_bot_t *bot)
 	{
 		/* A patrol is a role-local leg, not a mission that may sleep through
 		 * ATTACK/RECOVER/ESCORT and resume from stale topology later. */
-		bot->patrol_seed = -1;
+		(void)SG_DefensePatrolRetireIfInactive(0, &bot->patrol_link,
+		    &bot->patrol_seed, &bot->commit_link);
+		if (bot->commit_link < 0)
+			bot->commit_until = 0.0f;
 		bot->patrol_until = 0.0f;
 		bot->def_stand = false;
 	}
