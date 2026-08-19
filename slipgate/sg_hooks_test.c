@@ -150,6 +150,7 @@ static qboolean ResetBoundary(void)
 }
 
 static void Mock_Dprint(const char *fmt, ...) { (void)fmt; }
+static void Mock_Flush(void) {}
 static void Mock_Cprint(edict_t *ent, int level, const char *fmt, ...)
 {
 	(void)ent; (void)level; (void)fmt;
@@ -244,7 +245,8 @@ static void Mock_Multicast(const vec3_t origin, multicast_t to)
 static sg_host_t CompleteHost(void)
 {
 	sg_host_t host = {
-		.dprint = Mock_Dprint, .cprint = Mock_Cprint, .bprint = Mock_Bprint,
+		.dprint = Mock_Dprint, .flush = Mock_Flush,
+		.cprint = Mock_Cprint, .bprint = Mock_Bprint,
 		.trace = Mock_Trace, .pointcontents = Mock_PointContents,
 		.box_edicts = Mock_BoxEdicts, .in_pvs = Mock_InPVS,
 		.in_phs = Mock_InPHS, .pmove = Mock_Pmove,
@@ -406,8 +408,8 @@ static void TestFailClosedAndDynamicImports(void)
 
 int main(void)
 {
-	_Static_assert(SG_HOST_SERVICE_COUNT == 34,
-		"host test must exercise exactly 34 required service slots");
+	_Static_assert(SG_HOST_SERVICE_COUNT == 35,
+		"host test must exercise exactly 35 required service slots");
 
 	TestIncompleteTables();
 	TestInstallAndAllocators();
@@ -418,6 +420,6 @@ int main(void)
 		fprintf(stderr, "sg_hooks_test: %d failure(s)\n", failures);
 		return EXIT_FAILURE;
 	}
-	printf("sg_hooks_test: PASS (34 slots, allocators, reset, dynamic gi)\n");
+	printf("sg_hooks_test: PASS (35 slots, allocators, reset, dynamic gi)\n");
 	return EXIT_SUCCESS;
 }

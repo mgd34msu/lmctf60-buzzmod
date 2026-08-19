@@ -4,10 +4,12 @@
 #
 # For each map named on the command line: launch a dedicated q2ded server on
 # a unique port, let it boot, issue the console command "sv rune" (which
-# generates the rune for whatever map is CURRENTLY loaded). The server boots
-# in a temporary, portable game-directory mirror, so Rune_Generate writes to
-# staging rather than over the deployed graph. runelint's runtime-v3 gate then
-# validates the exact format and both flag-objective reverse components. Only
+# synchronously generates the rune for whatever map is CURRENTLY loaded), then
+# issue "sv sg add red" to load that fresh artifact through SG_LevelSetup and
+# prove its runtime-ready path. The server boots in a temporary, portable
+# game-directory mirror, so Rune_Generate writes to staging rather than over
+# the deployed graph. runelint then validates the
+# exact layout and both flag-objective reverse components. Only
 # a clean graph is backed up and atomically renamed into the live maps/ tree.
 # Generation, lint, backup, or install failure leaves the old rune untouched.
 #
@@ -41,6 +43,8 @@ Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
 GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
+MAXCLIENTS="${MAXCLIENTS:-16}"  # mechanism keys depend on reserved client slots;
+                                 # this must match the target server fleet
 
 PORT_START="${PORT_START:-28500}"  # unique port per run, PORT_START + map
                                    # index; env-overridable so parallel
@@ -54,14 +58,44 @@ for number in "$PORT_START" "$STARTUP_SLEEP" "$GEN_BUDGET" "$SHUTDOWN_MARGIN"; d
         exit 2
     fi
 done
+if [[ ! "$MAXCLIENTS" =~ ^[1-9][0-9]*$ ]] || [ "$MAXCLIENTS" -gt 256 ]; then
+    echo "runegen: MAXCLIENTS must be an integer in [1,256]" >&2
+    exit 2
+fi
 TIMEOUT_SECS=$(( STARTUP_SLEEP + GEN_BUDGET + SHUTDOWN_MARGIN ))
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="${RUNE_LOG_DIR:-$SCRIPT_DIR/rune-logs}"
 RUNE_LINT="$SCRIPT_DIR/runelint.py"
+RUNE_IO="$SCRIPT_DIR/runeio.py"
+RUNE_ACCEPT="${RUNE_ACCEPT:-$PROJECT_ROOT/runeaccept.gnu}"
 RUNE_BACKUP_DIR="${RUNE_BACKUP_DIR:-$LOG_DIR/backups}"
 
 DRY_RUN=0
+
+check_rune_accept_freshness() {
+    local accept_build_status
+
+    # A caller may itself be a forced Make recipe.  Inherited -B would make a
+    # read-only -q freshness query report every target stale regardless of its
+    # timestamps, so this nested query must own its Make flags.
+    ( cd "$PROJECT_ROOT" && \
+	env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS \
+        make --no-print-directory -q -o GitRevisionInfo.h -o .depend \
+            -f "$RUNE_ACCEPT_BUILD_FILE" "$RUNE_ACCEPT_BUILD_TARGET" ) \
+        >/dev/null 2>&1
+    accept_build_status=$?
+    if [ "$accept_build_status" -eq 0 ]; then
+        return 0
+    fi
+    if [ "$accept_build_status" -eq 1 ]; then
+        echo "runegen: C artifact acceptor is stale; rebuild target $RUNE_ACCEPT_BUILD_TARGET before generation" >&2
+    else
+        echo "runegen: C artifact acceptor build-freshness check failed" >&2
+    fi
+    return 1
+}
 
 # --------------------------------------------------------------- parsing
 
@@ -111,12 +145,65 @@ if [ "$DRY_RUN" -eq 0 ] && [ ! -r "$RUNE_LINT" ]; then
     exit 1
 fi
 
+if [ "$DRY_RUN" -eq 0 ] && [ ! -r "$RUNE_IO" ]; then
+    echo "runegen: rune inspector not readable: $RUNE_IO" >&2
+    exit 1
+fi
+
+if [ "$DRY_RUN" -eq 0 ] && [ ! -x "$RUNE_ACCEPT" ]; then
+    echo "runegen: C artifact acceptor not executable: $RUNE_ACCEPT" >&2
+    exit 1
+fi
+
+if [ "$DRY_RUN" -eq 0 ]; then
+    if [ -z "${RUNE_ACCEPT_BUILD_FILE:-}" ] || \
+            [ -z "${RUNE_ACCEPT_BUILD_TARGET:-}" ]; then
+        case "$RUNE_ACCEPT" in
+            "$PROJECT_ROOT/runeaccept.gnu")
+                RUNE_ACCEPT_BUILD_FILE="$PROJECT_ROOT/GNUmakefile"
+                RUNE_ACCEPT_BUILD_TARGET="runeaccept.gnu"
+                ;;
+            "$PROJECT_ROOT/runeaccept.make")
+                RUNE_ACCEPT_BUILD_FILE="$PROJECT_ROOT/Makefile"
+                RUNE_ACCEPT_BUILD_TARGET="runeaccept.make"
+                ;;
+            *)
+                echo "runegen: custom RUNE_ACCEPT requires explicit RUNE_ACCEPT_BUILD_FILE and RUNE_ACCEPT_BUILD_TARGET" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    if [ ! -r "$RUNE_ACCEPT_BUILD_FILE" ] || \
+            [[ ! "$RUNE_ACCEPT_BUILD_TARGET" =~ ^[^-][A-Za-z0-9_./-]*$ ]]; then
+        echo "runegen: invalid C acceptor build check" >&2
+        exit 1
+    fi
+    if ! command -v make >/dev/null 2>&1; then
+        echo "runegen: make is required to verify C acceptor freshness" >&2
+        exit 1
+    fi
+    if ! check_rune_accept_freshness; then
+        exit 1
+    fi
+fi
+
 if ! GAMEDIR_ROOT_ABS="$(cd "$GAMEDIR_ROOT" && pwd)"; then
     echo "runegen: cannot resolve game root: $GAMEDIR_ROOT" >&2
     exit 1
 fi
 GAMEDIR_ROOT="$GAMEDIR_ROOT_ABS"
 LIVE_GAME_DIR="$GAMEDIR_ROOT/$GAME"
+Q2DED_REAL=""
+Q2DED_DIR=""
+if [ "$DRY_RUN" -eq 0 ]; then
+    if ! Q2DED_REAL="$(readlink -f -- "$Q2DED")" || \
+            [ ! -x "$Q2DED_REAL" ] || \
+            ! Q2DED_DIR="$(cd "$(dirname "$Q2DED_REAL")" && pwd -P)" || \
+            [ -z "$Q2DED_DIR" ] || [ "$Q2DED_DIR" = "/" ]; then
+        echo "runegen: cannot resolve a safe q2ded directory: $Q2DED" >&2
+        exit 1
+    fi
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -133,19 +220,71 @@ fi
 # ------------------------------------------------------------ per-map run
 
 RESULT_LINES=()   # "map|seeds|links|secs|status|detail"
+ACTIVE_STAGE_DIR=""
+ACTIVE_SERVER_PID=""
 
 cleanup_stage() {
-    local stage_dir="$1"
+    local stage_dir="$1" stage_name portable_stage
+
     case "$stage_dir" in
         "$GAMEDIR_ROOT"/.runegen-stage.*)
-            rm -rf -- "$stage_dir"
+            stage_name="${stage_dir##*/}"
             ;;
         *)
             echo "runegen: refusing to remove unexpected stage path: $stage_dir" >&2
             return 1
             ;;
     esac
+
+    # Yamagi's -portable mode owns a second write directory beside q2ded.
+    # The artifact is staged under GAMEDIR_ROOT, while qconsole and the
+    # portable save/screenshot trees land here. Derive it only from the exact
+    # validated stage basename; never enumerate or pattern-delete other runs.
+    portable_stage="$Q2DED_DIR/$stage_name"
+    case "$portable_stage" in
+        "$Q2DED_DIR"/.runegen-stage.*)
+            ;;
+        *)
+            echo "runegen: refusing to remove unexpected portable stage path: $portable_stage" >&2
+            return 1
+            ;;
+    esac
+
+    rm -rf -- "$stage_dir"
+    if [ "$portable_stage" != "$stage_dir" ]; then
+        rm -rf -- "$portable_stage"
+    fi
+    if [ "$ACTIVE_STAGE_DIR" = "$stage_dir" ]; then
+        ACTIVE_STAGE_DIR=""
+    fi
 }
+
+cleanup_active_run() {
+    local active_pid="$ACTIVE_SERVER_PID" active_stage="$ACTIVE_STAGE_DIR"
+
+    ACTIVE_SERVER_PID=""
+    if [[ "$active_pid" =~ ^[1-9][0-9]*$ ]] && \
+            kill -0 "$active_pid" 2>/dev/null; then
+        kill -TERM "$active_pid" 2>/dev/null || true
+        wait "$active_pid" 2>/dev/null || true
+    fi
+    if [ -n "$active_stage" ]; then
+        cleanup_stage "$active_stage"
+    fi
+}
+
+handle_runegen_signal() {
+    local signal="$1"
+
+    cleanup_active_run
+    trap - "$signal"
+    kill -s "$signal" "$$"
+}
+
+trap cleanup_active_run EXIT
+trap 'handle_runegen_signal HUP' HUP
+trap 'handle_runegen_signal INT' INT
+trap 'handle_runegen_signal TERM' TERM
 
 prepare_stage() {
     local stage_dir="$1" map="$2" entry base
@@ -248,8 +387,15 @@ PY
 run_one() {
     local map="$1" port="$2" logfile="$3"
     local t0 t1 elapsed pid status detail seeds links runefile status_code
-    local stage_dir stage_game staged_rune lintfile wrote_line wrote_payload
-    local expected_banner_prefix roots_line red_root blue_root backup_file
+    local mechanism_nodes trigger_count inventory_edges activation_plans
+    local stage_dir stage_game staged_rune lintfile acceptfile inspectfile countfile
+    local wrote_count wrote_record wrote_line
+    local wrote_line_number wrote_payload runtime_banner_prefix
+    local runtime_ready_record runtime_ready_line runtime_ready_payload
+    local runtime_seeds runtime_links runtime_nodes runtime_plans
+    local expected_banner_prefix roots_count roots_record roots_line_number roots_line
+    local red_root blue_root backup_file
+    local post_write_failure_line
 
     runefile="$LIVE_GAME_DIR/maps/$map.rune"
     stage_dir="$(mktemp -d "$GAMEDIR_ROOT/.runegen-stage.XXXXXX")" || {
@@ -258,9 +404,13 @@ run_one() {
         RESULT_LINES+=("$map|-|-|0|FAIL|$detail")
         return
     }
+    ACTIVE_STAGE_DIR="$stage_dir"
     stage_game="${stage_dir##*/}"
     staged_rune="$stage_dir/maps/$map.rune"
     lintfile="${logfile%.log}.lint.log"
+    acceptfile="${logfile%.log}.accept.json"
+    inspectfile="${logfile%.log}.inspect.json"
+    countfile="${logfile%.log}.counts.log"
 
     if ! prepare_stage "$stage_dir" "$map"; then
         detail="cannot prepare staging game directory $stage_dir"
@@ -271,15 +421,21 @@ run_one() {
     fi
     t0=$(date +%s)
 
-    ( sleep "$STARTUP_SLEEP"; echo "sv rune"; sleep "$GEN_BUDGET"; echo "quit" ) | \
-        ( cd "$GAMEDIR_ROOT" && exec stdbuf -oL timeout "$TIMEOUT_SECS" "$Q2DED" \
+    ( sleep "$STARTUP_SLEEP"; echo "maxclients"; echo "sv rune"; \
+        echo "sv sg add red"; \
+        sleep "$GEN_BUDGET"; echo "quit" ) | \
+        ( cd "$GAMEDIR_ROOT" && exec stdbuf -oL timeout "$TIMEOUT_SECS" "$Q2DED_REAL" \
               -portable +set game "$stage_game" +set dedicated 1 \
+              +set maxclients "$MAXCLIENTS" \
               +set port "$port" +set net_port "$port" \
-              +exec "$CFG" +map "$map" ) > "$logfile" 2>&1 &
+              +exec "$CFG" +set maxclients "$MAXCLIENTS" \
+              +map "$map" ) > "$logfile" 2>&1 &
     pid=$!
+    ACTIVE_SERVER_PID="$pid"
 
     wait "$pid"
     status_code=$?
+    ACTIVE_SERVER_PID=""
 
     # Belt-and-braces: if something is still alive at this exact PID
     # (should not happen -- `timeout` owns the kill), take it down by PID
@@ -291,33 +447,257 @@ run_one() {
     t1=$(date +%s)
     elapsed=$(( t1 - t0 ))
 
+    if [ "$status_code" -ne 0 ]; then
+        seeds="-"
+        links="-"
+        status="FAIL"
+        detail="server process exited nonzero status=$status_code (see $logfile)"
+        cleanup_stage "$stage_dir"
+        echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+        RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+        return
+    fi
+
+    # `exec` inserts the staged cfg before the remaining command-line text.
+    # A cfg may therefore change this latched server cvar after an earlier
+    # command-line assignment.  The second +set above is the authoritative
+    # pre-map value; require the running server itself to report it before
+    # accepting an artifact whose mechanism keys depend on reserved clients.
+    maxclients_query_count="$(grep -cE '^"maxclients" is "[^"]+"$' \
+        "$logfile" 2>/dev/null || true)"
+    maxclients_expected_count="$(grep -cFx \
+        "\"maxclients\" is \"$MAXCLIENTS\"" "$logfile" 2>/dev/null || true)"
+    if [ "$maxclients_query_count" -ne 1 ] || \
+            [ "$maxclients_expected_count" -ne 1 ]; then
+        seeds="-"
+        links="-"
+        status="FAIL"
+        detail="running server did not confirm authoritative maxclients=$MAXCLIENTS (see $logfile)"
+        cleanup_stage "$stage_dir"
+        echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+        RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+        return
+    fi
+
     expected_banner_prefix="rune: wrote $stage_game/maps/$map.rune ("
-    wrote_line="$(grep -F "$expected_banner_prefix" "$logfile" 2>/dev/null | tail -n1)"
+    wrote_count="$(grep -cF "$expected_banner_prefix" "$logfile" 2>/dev/null || true)"
+    if [ "$wrote_count" -ne 1 ]; then
+        seeds="-"
+        links="-"
+        status="FAIL"
+        detail="expected exactly one write banner for requested map; found $wrote_count (see $logfile)"
+        cleanup_stage "$stage_dir"
+        echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+        RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+        return
+    fi
+    wrote_record="$(grep -nF "$expected_banner_prefix" "$logfile" 2>/dev/null)"
+    wrote_line_number="${wrote_record%%:*}"
+    wrote_line="${wrote_record#*:}"
     wrote_payload="${wrote_line#"$expected_banner_prefix"}"
     if [ -f "$staged_rune" ] && [ ! -L "$staged_rune" ] && \
             [ "$wrote_payload" != "$wrote_line" ] && \
-            [[ "$wrote_payload" =~ ^([0-9]+)\ seeds,\ ([0-9]+)\ links\)$ ]]; then
+            [[ "$wrote_payload" =~ ^([0-9]+)\ seeds,\ ([0-9]+)\ links,\ ([0-9]+)\ mechanism\ nodes,\ ([0-9]+)\ triggers,\ ([0-9]+)\ inventory\ edges,\ ([0-9]+)\ activation\ plans\)$ ]]; then
         seeds="${BASH_REMATCH[1]}"
         links="${BASH_REMATCH[2]}"
-        roots_line="$(grep -E 'rune: objective roots red=[0-9]+ blue=[0-9]+' \
-            "$logfile" | tail -n1)"
-        red_root="$(printf '%s\n' "$roots_line" | \
-            sed -n 's/.*red=\([0-9]\+\) blue=.*/\1/p')"
-        blue_root="$(printf '%s\n' "$roots_line" | \
-            sed -n 's/.*blue=\([0-9]\+\).*/\1/p')"
-        if [ -z "$red_root" ] || [ -z "$blue_root" ]; then
+        mechanism_nodes="${BASH_REMATCH[3]}"
+        trigger_count="${BASH_REMATCH[4]}"
+        inventory_edges="${BASH_REMATCH[5]}"
+        activation_plans="${BASH_REMATCH[6]}"
+        post_write_failure_line="$(awk -v after="$wrote_line_number" '
+            NR > after && ($0 ~ /^rune: rejected / || $0 ~ /^rune: FAILED([: ]|$)/ || $0 ~ /^rune: generation refused / || $0 ~ /^rune: revalidation failed / || $0 ~ /^rune: install failed / || $0 ~ /^rune: cleanup restored pending door scope;/) { line = $0 }
+            END { print line }
+        ' "$logfile" 2>/dev/null)"
+        if [ -n "$post_write_failure_line" ]; then
             status="FAIL"
-            detail="generator omitted authoritative post-spawn objective roots"
+            case "$post_write_failure_line" in
+                "rune: rejected "*)
+                    detail="runtime rejected freshly written artifact (see $logfile)"
+                    ;;
+                *)
+                    detail="generator/runtime failure occurred after write (see $logfile)"
+                    ;;
+            esac
+            cleanup_stage "$stage_dir"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            echo "  $post_write_failure_line"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        runtime_banner_prefix="slipgate: rune ready $map, "
+        runtime_ready_record="$(awk -v after="$wrote_line_number" \
+            -v prefix="$runtime_banner_prefix" \
+            'NR > after && index($0, prefix) == 1 { line = NR ":" $0 } \
+             END { print line }' "$logfile" 2>/dev/null)"
+        runtime_ready_line="${runtime_ready_record#*:}"
+        runtime_ready_payload="${runtime_ready_line#"$runtime_banner_prefix"}"
+        if [ -z "$runtime_ready_record" ] || \
+                [ "$runtime_ready_payload" = "$runtime_ready_line" ] || \
+                [[ ! "$runtime_ready_payload" =~ ^([0-9]+)\ seeds,\ ([0-9]+)\ links,\ ([0-9]+)\ mechanism\ nodes,\ ([0-9]+)\ plans,\ gravity\ -?[0-9]+,\ all\ fields\ up$ ]]; then
+            status="FAIL"
+            detail="runtime acceptance banner missing or malformed after write (see $logfile)"
             cleanup_stage "$stage_dir"
             echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
             RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
             return
         fi
-        if ! python3 "$RUNE_LINT" --runtime-v3 \
-                --objective-roots "$red_root" "$blue_root" \
-                "$staged_rune" > "$lintfile" 2>&1; then
+        runtime_seeds="${BASH_REMATCH[1]}"
+        runtime_links="${BASH_REMATCH[2]}"
+        runtime_nodes="${BASH_REMATCH[3]}"
+        runtime_plans="${BASH_REMATCH[4]}"
+        if [ "$runtime_seeds" != "$seeds" ] || \
+                [ "$runtime_links" != "$links" ] || \
+                [ "$runtime_nodes" != "$mechanism_nodes" ] || \
+                [ "$runtime_plans" != "$activation_plans" ]; then
             status="FAIL"
-            detail="runtime-v3 quality gate failed (see $lintfile)"
+            detail="runtime acceptance counts disagree with write: wrote=$seeds/$links/$mechanism_nodes/$activation_plans runtime=$runtime_seeds/$runtime_links/$runtime_nodes/$runtime_plans (see $logfile)"
+            cleanup_stage "$stage_dir"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        roots_count="$(grep -cE '^rune: objective roots red=[0-9]+ blue=[0-9]+$' \
+            "$logfile" 2>/dev/null || true)"
+        roots_record="$(grep -nE '^rune: objective roots red=[0-9]+ blue=[0-9]+$' \
+            "$logfile" 2>/dev/null || true)"
+        roots_line_number="${roots_record%%:*}"
+        roots_line="${roots_record#*:}"
+        red_root="$(printf '%s\n' "$roots_line" | \
+            sed -n 's/.*red=\([0-9]\+\) blue=.*/\1/p')"
+        blue_root="$(printf '%s\n' "$roots_line" | \
+            sed -n 's/.*blue=\([0-9]\+\).*/\1/p')"
+        if [ "$roots_count" -ne 1 ] || [ -z "$red_root" ] || [ -z "$blue_root" ]; then
+            status="FAIL"
+            detail="expected exactly one authoritative objective-root line; found $roots_count"
+            cleanup_stage "$stage_dir"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        if [ "$roots_line_number" -ge "$wrote_line_number" ]; then
+            status="FAIL"
+            detail="authoritative objective-root line must precede the write banner"
+            cleanup_stage "$stage_dir"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        if [ "$red_root" = "$blue_root" ] || \
+                [ "$red_root" -ge "$seeds" ] || [ "$blue_root" -ge "$seeds" ]; then
+            status="FAIL"
+            detail="objective roots must be distinct seed indexes in [0,$seeds): red=$red_root blue=$blue_root"
+            cleanup_stage "$stage_dir"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        if ! check_rune_accept_freshness; then
+            status="FAIL"
+            detail="C artifact acceptor became stale during generation"
+            cleanup_stage "$stage_dir"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        if ! "$RUNE_ACCEPT" "$staged_rune" \
+                > "$acceptfile" 2>&1; then
+            status="FAIL"
+            detail="C artifact acceptance failed (see $acceptfile)"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            sed 's/^/  /' "$acceptfile"
+            cleanup_stage "$stage_dir"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        if ! python3 "$RUNE_IO" "$staged_rune" \
+                > "$inspectfile" 2>&1; then
+            status="FAIL"
+            detail="Python artifact inspection failed (see $inspectfile)"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            sed 's/^/  /' "$inspectfile"
+            cleanup_stage "$stage_dir"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        if ! python3 - "$acceptfile" "$inspectfile" "$map" \
+                "$seeds" "$links" "$mechanism_nodes" "$trigger_count" \
+                "$inventory_edges" "$activation_plans" \
+                > "$countfile" 2>&1 <<'PY'
+import json
+import sys
+
+accept_path, inspect_path, map_name, *expected_text = sys.argv[1:]
+expected_values = tuple(int(value) for value in expected_text)
+expected = dict(zip(
+    (
+        "seed_count", "link_count", "node_count", "trigger_count",
+        "inventory_edge_count", "plan_count",
+    ),
+    expected_values,
+))
+
+def read_report(path):
+    with open(path, "r", encoding="utf-8") as report_file:
+        value = json.load(report_file)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: report is not a JSON object")
+    return value
+
+try:
+    c_report = read_report(accept_path)
+    python_report = read_report(inspect_path)
+    if c_report.get("map_name") != map_name:
+        raise ValueError(
+            f"C report map mismatch: {c_report.get('map_name')!r} != {map_name!r}"
+        )
+    if python_report.get("map_name") != map_name:
+        raise ValueError(
+            "Python report map mismatch: "
+            f"{python_report.get('map_name')!r} != {map_name!r}"
+        )
+    agreement_fields = (
+        "seed_count", "link_count", "node_count", "trigger_count",
+        "inventory_edge_count", "plan_edge_count", "edge_count", "plan_count",
+    )
+    for report_name, report in (("C", c_report), ("Python", python_report)):
+        for field in agreement_fields:
+            value = report.get(field)
+            if type(value) is not int or value < 0:
+                raise ValueError(
+                    f"{report_name} report has invalid or missing {field}: {value!r}"
+                )
+    for field in agreement_fields:
+        if c_report.get(field) != python_report.get(field):
+            raise ValueError(
+                f"C/Python {field} mismatch: "
+                f"{c_report.get(field)!r} != {python_report.get(field)!r}"
+            )
+    for field, value in expected.items():
+        if python_report.get(field) != value:
+            raise ValueError(
+                f"artifact/write {field} mismatch: "
+                f"{python_report.get(field)!r} != {value!r}"
+            )
+except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+    print(f"runegen: artifact count agreement failed: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+print("runegen: C/Python/write artifact counts agree")
+PY
+        then
+            status="FAIL"
+            detail="C/Python/write artifact counts disagree (see $countfile)"
+            echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
+            sed 's/^/  /' "$countfile"
+            cleanup_stage "$stage_dir"
+            RESULT_LINES+=("$map|$seeds|$links|$elapsed|$status|$detail")
+            return
+        fi
+        if ! python3 "$RUNE_LINT" --objective-roots "$red_root" "$blue_root" \
+                "$staged_rune" \
+                > "$lintfile" 2>&1; then
+            status="FAIL"
+            detail="quality gate failed (see $lintfile)"
             echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
             sed 's/^/  /' "$lintfile"
             cleanup_stage "$stage_dir"
@@ -354,9 +734,9 @@ run_one() {
             return
         fi
         status="ok"
-        detail="runtime-v3 gate clean; backup=$backup_file"
+        detail="rune gate clean; nodes=$mechanism_nodes triggers=$trigger_count inventory_edges=$inventory_edges plans=$activation_plans; backup=$backup_file"
         cleanup_stage "$stage_dir"
-        echo "rune: installed $runefile ($seeds seeds, $links links) -- ${elapsed}s, map=$map port=$port"
+        echo "rune: installed $runefile ($seeds seeds, $links links, $mechanism_nodes mechanism nodes, $trigger_count triggers, $inventory_edges inventory edges, $activation_plans activation plans) -- ${elapsed}s, map=$map port=$port"
     else
         seeds="-"
         links="-"
@@ -386,16 +766,24 @@ for map in "${MAPS[@]}"; do
     logfile="$LOG_DIR/${map}-${ts}.log"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo "[dry-run] map=$map port=$port timeout=${TIMEOUT_SECS}s log=$logfile"
-        echo "[dry-run]   ( sleep $STARTUP_SLEEP; echo \"sv rune\"; sleep $GEN_BUDGET; echo \"quit\" ) |" \
+        echo "[dry-run] map=$map port=$port maxclients=$MAXCLIENTS timeout=${TIMEOUT_SECS}s log=$logfile"
+        echo "[dry-run]   ( sleep $STARTUP_SLEEP; echo \"maxclients\"; echo \"sv rune\"; echo \"sv sg add red\"; sleep $GEN_BUDGET; echo \"quit\" ) |" \
              "( cd \"$GAMEDIR_ROOT\" && stdbuf -oL timeout $TIMEOUT_SECS \"$Q2DED\"" \
-             "-portable +set game <temporary-stage> +set dedicated 1 +set port $port +exec $CFG +map $map ) > \"$logfile\" 2>&1"
+             "-portable +set game <temporary-stage> +set dedicated 1 +set maxclients $MAXCLIENTS +set port $port +exec $CFG +set maxclients $MAXCLIENTS +map $map ) > \"$logfile\" 2>&1"
+        echo "[dry-run]   require the running server to report exact authoritative maxclients=$MAXCLIENTS before generation"
+        echo "[dry-run]   require explicit post-generation SG bot admission via 'sv sg add red' to trigger runtime artifact setup"
         echo "[dry-run]   parse authoritative red/blue roots from the server log"
-        echo "[dry-run]   python3 \"$RUNE_LINT\" --runtime-v3 --objective-roots RED BLUE <staged>/$map.rune"
+        echo "[dry-run]   require write and ready banners: seeds, links, mechanism nodes, triggers, inventory edges, activation plans"
+        echo "[dry-run]   require the selected C artifact acceptor's explicit build target to be current before generation and again immediately before artifact decoding"
+        echo "[dry-run]   require exactly one write banner, distinct in-range roots, clean server exit, and no later failure"
+        echo "[dry-run]   require a later exact 'slipgate: rune ready $map, ...' banner with matching seed/link/node/plan counts"
+        echo "[dry-run]   require production C and Python structural acceptance, including exact action/plan binding"
+        echo "[dry-run]   compare C/Python artifact reports with all six write-banner counts"
+        echo "[dry-run]   python3 \"$RUNE_LINT\" --objective-roots RED BLUE <staged>/$map.rune"
         echo "[dry-run]   preserve old rune under $RUNE_BACKUP_DIR, then atomically install into $LIVE_GAME_DIR/maps/$map.rune"
-        RESULT_LINES+=("$map|-|-|-|DRY-RUN|stage -> runtime-v3 gate -> backup -> atomic install")
+        RESULT_LINES+=("$map|-|-|-|DRY-RUN|stage -> rune gate -> backup -> atomic install")
     else
-        echo "=== runegen: $map (port $port) ==="
+        echo "=== runegen: $map (port $port, maxclients $MAXCLIENTS) ==="
         run_one "$map" "$port" "$logfile"
     fi
 

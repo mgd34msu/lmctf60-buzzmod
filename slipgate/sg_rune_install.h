@@ -1,11 +1,12 @@
-/* sg_rune_install.h -- checked, atomic installation for streamed RUNE v3. */
+/* sg_rune_install.h -- checked, atomic installation for RUNE. */
 #ifndef SG_RUNE_INSTALL_H
 #define SG_RUNE_INSTALL_H
 
 #include <stddef.h>
 #include <stdio.h>
 
-#include "sg_rune_writer.h"
+#include "sg_rune_contract.h"
+#include "sg_rune_stream.h"
 
 #define SG_RUNE_INSTALL_TEMP_ATTEMPTS 64U
 
@@ -35,12 +36,12 @@ typedef struct sg_rune_install_result_s
 	int cleanup_error;
 	unsigned int temp_attempt;
 	int writer_called;
-	sg_rune_write_result_t writer;
+	sg_rune_stream_result_t writer;
 } sg_rune_install_result_t;
 
 /* The stream callback receives the transaction's exact-write sink. */
-typedef sg_rune_write_result_t (*sg_rune_install_stream_fn)(void *context,
-	sg_rune_write_sink_fn sink, void *sink_context);
+typedef sg_rune_stream_result_t (*sg_rune_install_stream_fn)(void *context,
+	sg_rune_stream_sink_fn sink, void *sink_context);
 
 /* Called after the temporary is flushed, synced, and closed, immediately
  * before rename.  It must recheck every authority captured before generation. */
@@ -79,7 +80,7 @@ int SG_RuneInstallTemporaryPath(char *output, size_t output_size,
  * malformed identity/native graphs fail without filesystem access.  A second
  * complete writer pass streams to an exclusive temporary beside the
  * destination.  Rename is the sole commit point. */
-sg_rune_install_result_t SG_RuneInstallV3(
+sg_rune_install_result_t SG_RuneInstall(
 	const char *game_directory, const char *map_name,
 	char *destination_path, size_t destination_path_size,
 	char *temporary_path, size_t temporary_path_size,

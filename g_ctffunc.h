@@ -72,7 +72,7 @@ qboolean ctf_flagatposition(vec3_t a, vec3_t b);
 qboolean ctf_flagathome(edict_t * whichflag);
 edict_t * ctf_getteamflag(int teamnum, int teamnum_option);
 qboolean ctf_teamstring(char * buf, int teamnum, int teamnum_option);
-qboolean ctf_validateflags();
+qboolean ctf_validateflags(void);
 qboolean ctf_resetflagandplayer(edict_t * whichflag, edict_t * whichplayer);
 qboolean ctf_spawnflag(int teamnum);
 edict_t * ctf_findflagposition(edict_t *whichflag);
@@ -108,7 +108,7 @@ qboolean ctf_SpamCheck(edict_t *ent);
 void ctf_TossEnt(edict_t * startent, edict_t * tossent);
 void ctf_SetEntTeamEx(edict_t* ent, int whatteam, int nopenalty);
 void ctf_SetEntTeam(edict_t* ent, int whatteam);
-void ctf_SetLogName();
+void ctf_SetLogName(void);
 void ctf_SafePrint(edict_t * ent, long print_priority, char * buf);
 void ctf_BSafePrint(long print_priority, char * buf);
 void ctf_ChangeMap(char *mapname, qboolean startmatch);
@@ -117,7 +117,3 @@ void ctf_ChangeMap(char *mapname, qboolean startmatch);
 int ClientShowID(edict_t *ent, char * buf);
 void CTFSquadboardMessage (edict_t *ent, edict_t *killer); // ADC
 void ctf_PassItem(edict_t* startent, edict_t* tossent);
-
-/* TEMPORARY DIAGNOSTIC (bot_developer 1) -- flag reachability tracing.
- * Defined at the bottom of g_ctffunc.c, called from G_RunFrame. */
-void BotFlagDiag(void);

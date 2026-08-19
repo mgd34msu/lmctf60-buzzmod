@@ -2,6 +2,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_compound_guard_game.h"
 
 /*
 
@@ -172,7 +173,7 @@ int SV_FlyMove (edict_t *ent, float time, int mask)
 	float		d;
 	int			numplanes;
 	vec3_t		planes[MAX_CLIP_PLANES];
-	vec3_t		primal_velocity, original_velocity, new_velocity;
+	vec3_t		primal_velocity, original_velocity, new_velocity = { 0 };
 	int			i, j;
 	trace_t		trace;
 	vec3_t		end;
@@ -931,6 +932,14 @@ G_RunEntity
 */
 void G_RunEntity (edict_t *ent)
 {
+	/* The world cannot own a door lease.  Every other non-client edict is
+	 * fenced by captured key before prethink or physics, so a drifted captain,
+	 * team slave, or retirement cannot escape through mutable movetype/flags. */
+	if (ent != g_edicts && !SG_CompoundGuardGameEntityMayDispatch(ent))
+	{
+		SG_CompoundGuardGameEntityDeferred(ent);
+		return;
+	}
 	if (ent->prethink)
 		ent->prethink (ent);
 

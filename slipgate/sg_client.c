@@ -15,9 +15,14 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
+#include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_weights.h"    /* sg_role_names -- the roster print */
+#include "slipgate/sg_goal.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_move.h"
+#include "slipgate/sg_lead.h"
+#include "slipgate/sg_pov_identity.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -36,12 +41,33 @@ sg_bot_t sg_bots[SG_MAXBOTS];
 static void BotSlot_Reset(sg_bot_t *bot)
 {
 	int i;
+	int slot = bot ? (int)(bot - sg_bots) : -1;
+	unsigned long long instance_token = bot ? bot->instance_token : 0ULL;
 
+	/* Defensive for non-ClientDisconnect retirement paths: no delayed target
+	 * chain may outlive the SG owner identity stored in this process slot. */
+	if (bot)
+		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
+		    "slot-retirement", "lifecycle");
+	if (bot && bot->active && bot->ent)
+		SG_CancelBotDelayedUses(bot->ent);
+	if (slot >= 0 && slot < SG_MAXBOTS && instance_token != 0ULL)
+		POVLock_SGInstanceRetired(slot, instance_token);
+	if (slot >= 0 && slot < SG_MAXBOTS)
+		SG_StrikeSlotReset(slot);
+	(void)SG_CompoundGuardGameBotSlotReset(&bot->compound_guard);
+	SG_ButtonExecutionActionReset(bot);
+	/* Spell out the grenade identity retirement before raw storage reuse:
+	 * a recycled bot slot must never inherit a client-life binding. */
+	SG_NadeTargetClear(bot);
+	/* This is the only production reset point for the immutable instance. */
+	SG_BotPOVInstanceReset(bot);
 	memset(bot, 0, sizeof(*bot));
 	bot->seed = -1;
 	bot->hook_link = -1;
 	SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,
 	    &bot->hook_replay_link, &bot->hook_final_guard);
+	SG_HookDiagnosticsReset(&bot->hook_diagnostics);
 	bot->hook_entity = NULL;
 	bot->hook_legacy_settle = false;
 	bot->hook_legacy_arrived = false;
@@ -69,6 +95,9 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->declared_door_retreat = false;
 	bot->declared_door_suffix_ms = 0;
 	bot->commit_link = -1;
+	bot->strike_weapon_link = -1;
+	bot->strike_weapon_until = 0.0f;
+	bot->strike_weapon_draining = false;
 	bot->last_goalcost = -1;
 	bot->sticky_link = -1;
 	bot->carry_startcost = -1;
@@ -77,7 +106,22 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->ribbon_link = -1;
 	bot->lead_slot = -1;
 	bot->lead_seed = -1;
+	bot->lead_state = SG_LEAD_WAITING;
+	bot->lead_seen_up_at = -1.0f;
+	bot->lead_inferred_until = 0.0f;
 	bot->patrol_seed = -1;
+	bot->def_shift_seed = -1;
+	bot->def_shift_link = -1;
+	bot->def_shift_from = -1;
+	bot->def_supply_armed = false;
+	bot->def_supply_phase = SG_DEF_SUPPLY_NONE;
+	bot->def_supply_instance = 0ULL;
+	bot->def_supply_ent = -1;
+	bot->def_supply_target_seed = -1;
+	bot->def_supply_route_ms = 0;
+	VectorClear(bot->def_supply_target_org);
+	bot->def_supply_until = 0.0f;
+	bot->def_supply_next = 0.0f;
 	bot->tac_seed = -1;
 	bot->tac_role = -1;
 	bot->rally_cover = -1;
@@ -143,7 +187,7 @@ void Botfill_Reset(void)
  * is asking. Split out of Botfill_RemoveOne so the balancer and the console
  * retire the same bot for the same reason -- two different notions of
  * "worst" is how an admin and an automatic balancer end up fighting over
- * the roster in the middle of a wave.
+ * the roster in the middle of a match.
  */
 static int Botfill_WorstIndex(int team)
 {
@@ -197,8 +241,8 @@ void Botfill_Frame(void)
 
 	/* one value fills both teams to it; "5:1" sets red and blue
 	 * separately -- colon, not space, because the engine's set command
-	 * reads a third token as a serverinfo flag and sets NOTHING (wave
-	 * 139: the 5v1 control ran its whole game with zero bots) */
+	 * reads a third token as a serverinfo flag and sets NOTHING. A 5v1
+	 * control game exposed this by running with zero bots. */
 	if (sscanf(fill->string, "%d:%d", &want[0], &want[1]) < 2)
 		want[1] = want[0] = (int)fill->value;
 
@@ -250,9 +294,9 @@ void Botfill_Frame(void)
 			{
 				/* an EMPTY server fills instantly -- the hysteresis
 				 * exists to damp roster churn in live games, and a
-				 * fresh map after rotation has no roster to damp; a
-				 * human walking in stared at an empty arena for 45
-				 * seconds (the owner, wave 264, four times over) */
+				 * fresh map after rotation has no roster to damp. In four
+				 * observed cases, a human entering an empty arena waited
+				 * 45 seconds. */
 				if (bots[0] + bots[1] == 0 ||
 				    ++sg_botfill_under_streak[t] >= 3)
 				{
@@ -268,8 +312,8 @@ void Botfill_Frame(void)
 }
 
 /*
- * Ownership, for the legacy glue to ask. Two bot systems share the match --
- * that is the A/B harness working -- and the old code's FL_BOT loops must
+ * Ownership, for the compatibility glue to ask. Two bot systems may share
+ * the match, and the old code's FL_BOT loops must
  * not assume every bot is theirs.
  */
 qboolean SG_OwnsBot(edict_t *ent)
@@ -383,7 +427,7 @@ qboolean SG_AddBotTeam(int teamnum)
 	BotSlot_Reset(&sg_bots[slot]);
 
 	memset(userinfo, 0, sizeof(userinfo));
-	/* tag FIRST -- owner's ruling 2026-08-05: "[SG]Arach", not "Arach[SG]".
+	/* Tag first: "[SG]Arach", not "Arach[SG]".
 	 * The name walks past any connected human already wearing it; sixteen
 	 * tries is the whole table, and past that the collision is accepted
 	 * rather than the bot refused -- a duplicate name is a nuisance, a
@@ -463,10 +507,10 @@ qboolean SG_AddBotTeam(int teamnum)
 	 * Again, now that a TEAM exists. The skin force inside the first
 	 * userinfo pass ran while teamnum was still UNDEFINED, its red/blue
 	 * ternary defaulted to blue, and every bot the balancer then sent
-	 * red played the whole match in the wrong colors (reported live
-	 * off the scoreboard portraits, wave 99 era). The second pass sees
+	 * red played the whole match in the wrong colors, visible on the
+	 * scoreboard portraits. The second pass sees
 	 * the real team and paints the uniform right. The REQUEST is also
-	 * re-lettered here (owner's ruling: CTF bots wear their team's CTF
+	 * re-lettered here because CTF bots wear their team's CTF
 	 * skin) so even the no-skin-list fallback path parses to the right
 	 * color.
 	 */
@@ -481,8 +525,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	ClientUserinfoChanged(ent, ent->client->pers.userinfo);
 
 	/*
-	 * THE RADIO IS ON (sg_radio, owner's ruling 2026-08-05: "callout in
-	 * conjunction, that's just good teamplay"). PlayTeamSound (g_cmds.c:121)
+	 * THE RADIO IS ON (sg_radio): team callouts are ordinary teamplay.
+	 * PlayTeamSound (g_cmds.c:121)
 	 * tests these bits TWICE -- once on the sender, where a clear pair is
 	 * "Your radio is off!" and no call at all, and once per recipient, where a
 	 * clear pair skips that client. A human never sees the menu that sets them
@@ -504,9 +548,20 @@ qboolean SG_AddBotTeam(int teamnum)
 	ent->client->ctf.extra_flags |=
 	    (CTF_EXTRAFLAGS_RADIO_TEXT | CTF_EXTRAFLAGS_RADIO_SOUND);
 
+	/* ClientBegin has completed PutClientInServer and assigned the bot's first
+	 * ctfid. Publish one immutable SG instance before ownership becomes live. */
 	sg_bots[slot].ent = ent;
+	if (!SG_BotPOVInstanceAssign(&sg_bots[slot]))
+	{
+		ClientDisconnect(ent);
+		SG_FreeClientEdict(ent);
+		BotSlot_Reset(&sg_bots[slot]);
+		return false;
+	}
 	sg_bots[slot].active = true;
 	sg_bots[slot].fake_ping = 5 + rand() % 11;
+	(void)SG_CompoundGuardGameBotAttach(&sg_bots[slot].compound_guard,
+	    slot, ent);
 	/* A fresh late join has no respawn edge from which to seed the movement
 	 * watchdogs. Initialize every progress sample at the actual spawn now;
 	 * otherwise level.time can make zero-initialized clocks immediately ancient
@@ -564,6 +619,18 @@ int SG_RemoveBots(void)
 		n++;
 	}
 	return n;
+}
+
+/* TAG_GAME owns both edicts and clients.  Retire live fake clients through
+ * their real lifecycle, then erase every process-storage roster slot before
+ * either backing array can disappear. */
+void SG_RosterStorageReset(void)
+{
+	int i;
+
+	(void)SG_RemoveBots();
+	for (i = 0; i < SG_MAXBOTS; i++)
+		BotSlot_Reset(&sg_bots[i]);
 }
 
 /*

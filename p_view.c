@@ -18,6 +18,18 @@ int ClientShowID(edict_t *ent, char * buf); // CTF CODE -- LM_JORM
 void Weapon_Hook_Fire (edict_t *ent); // CTF CODE -- LM_JORM
 void Client_Show_High_Scores(edict_t *ent);
 
+/* The observer's own end-frame work rebuilds player_state_t after its
+ * ClientThink mirror. Keep this as the single final authority so recorder
+ * frames carry the bot's exact in-eyes state, not spectator-local effects. */
+void POVLock_EndFrame(edict_t *ent)
+{
+	if (ent && ent->client && ent->client->povlock_active)
+		(void)POVLock_Update(ent);
+	/* ClientEndServerFrames is index ordered. When this is the watched bot,
+	 * refresh every recorder after its completed p_view state is authoritative. */
+	POVLock_UpdateFollowers(ent);
+}
+
 
 static	edict_t		*current_player;
 static	gclient_t	*current_client;
@@ -1036,6 +1048,7 @@ void ClientEndServerFrame (edict_t *ent)
 		current_client->ps.blend[3] = 0;
 		current_client->ps.fov = 90;
 		G_SetStats (ent);
+		POVLock_EndFrame(ent);
 		return;
 	}
 
@@ -1160,6 +1173,7 @@ void ClientEndServerFrame (edict_t *ent)
 	{
 		ent->s.sound = 0;
 	}
+	POVLock_EndFrame(ent);
 	// Paril
 	// END CTF CODE -- LM_CTF
 }
@@ -1216,7 +1230,7 @@ int ClientShowMOD(edict_t *ent)
 		ui_appendf (&sb,
 			"xv %i yv %i cstring2 \""
 			"You are on the %s team!\n\n"
-			"Welcome to %s\nRunning %s\n"
+			"Welcome to %s\nRunning %s v%s\n"
 			"Pak File is available at:\n\" "
 			"xv %i yv %i cstring2 \""
 			"%s\n\n",
@@ -1224,6 +1238,7 @@ int ClientShowMOD(edict_t *ent)
 			color,
 			hostname->string,
 			GAMEVERSION,
+			BUZZMOD_VERSION,
 			0,85,
 			mod_website->string);
 

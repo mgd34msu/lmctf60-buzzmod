@@ -3,9 +3,9 @@
 
 Reads <map>.rune (link table order is the contract) and tools/human/
 <map>.escape.json (transition counts from demorune.py), writes
-maps/<map>.hme: explicit v3 header then one uint8 per link -- the link's
+maps/<map>.hme: an authenticated header then one uint8 per link -- the link's
 human-traffic tier, log-scaled to 0..255 with 0 = no human ever ran it.
-The sidecar binds both graph counts and the exact validated v3 rune payload,
+The sidecar binds both graph counts and the exact validated rune payload,
 action contract, and header from which it was baked.
 
 A transition a>b credits every rune link a->b (all actions: if a human
@@ -41,7 +41,7 @@ def bake_map(rune_dir, human_dir, mapname):
         raise FileNotFoundError(f'{mapname}: rune={bool(rune_path)} '
                                 f'json={os.path.exists(json_path)}')
 
-    rune = read_rune(rune_path, mapname, versions=(3,))
+    rune = read_rune(rune_path, mapname)
     num_seeds = rune['num_seeds']
     num_links = rune['num_links']
     pairs = rune_link_pairs(rune)
@@ -60,7 +60,7 @@ def bake_map(rune_dir, human_dir, mapname):
 
     output = os.path.join(os.path.dirname(rune_path), f'{mapname}.hme')
     binding = sidecario.binding_from_rune(rune)
-    payload = sidecario.encode_v3(sidecario.HME, binding, tiers)
+    payload = sidecario.encode(sidecario.HME, binding, tiers)
     atomic_write_bytes(
         output, payload,
         precommit=lambda: require_current_rune_binding(

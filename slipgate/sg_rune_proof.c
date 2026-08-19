@@ -9,17 +9,19 @@
 static short sg_rune_scoped_gravity = (short)RUNE_PROOF_GRAVITY;
 static int sg_rune_proof_scope_active;
 
-int SG_RuneV2GravityCompatible(float gravity)
-{
-	return isfinite(gravity) && gravity >= -32768.0f &&
-	       gravity <= 32767.0f &&
-	       (short)gravity == (short)RUNE_PROOF_GRAVITY;
-}
-
-int SG_RuneV3FunkyGravityCompatible(const float *value)
+int SG_RuneFunkyGravityCompatible(const float *value)
 {
 	return value && isfinite(*value) &&
 	       *value == (float)SG_RUNE_PROOF_FUNKY_GRAVITY_REQUIRED;
+}
+
+int SG_RuneProofHookLateralWindow(float horizontal, float rise)
+{
+	return isfinite(horizontal) && isfinite(rise) &&
+	       horizontal >= 0.0f &&
+	       horizontal <= SG_RUNE_PROOF_HOOK_LATERAL_MAX_HORIZONTAL &&
+	       rise >= SG_RUNE_PROOF_HOOK_LATERAL_MIN_RISE &&
+	       rise <= SG_RUNE_PROOF_HOOK_LATERAL_MAX_RISE;
 }
 
 int SG_RuneProofScopeBegin(float gravity)

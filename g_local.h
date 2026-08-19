@@ -79,6 +79,7 @@ extern _CrtMemState startup1;	// memory diagnostics
 #include "game.h"
 
 #include "GitRevisionInfo.h" // Derived from template via GitWCRev
+#include "BuzzmodVersion.h" // Source-controlled Buzzmod semantic version
 
 
 #define ISREF(ent) (ent->client->ctf.extra_flags & CTF_EXTRAFLAGS_REFEREE)
@@ -1039,6 +1040,27 @@ void UpdateChaseCam(edict_t *ent);
 void ChaseNext(edict_t *ent);
 void ChasePrev(edict_t *ent);
 void GetChaseTarget(edict_t *ent);
+qboolean POVLock_CommandNameIs(const char *command);
+qboolean POVLock_Command(edict_t *ent, const char *argument);
+qboolean POVRecord_AdminDirective(const char *spectator_name,
+	const char *target_name, qboolean stop);
+qboolean POVLock_Update(edict_t *ent);
+qboolean SG_BotPOVIdentity(edict_t *ent, int *slot_out,
+	unsigned long long *instance_out);
+edict_t *SG_BotPOVResolve(int slot, unsigned long long instance_token);
+void POVLock_Clear(edict_t *ent);
+void POVLock_ViewerDisconnected(edict_t *ent);
+void POVLock_ClearTarget(edict_t *target);
+void POVLock_TargetRespawning(edict_t *target);
+void POVLock_TargetSpawned(edict_t *target);
+void POVLock_TargetWillNotRespawn(edict_t *target);
+qboolean POVLock_HandleRespawnTerminal(edict_t *target);
+void POVLock_SGInstanceRetired(int sg_slot,
+	unsigned long long instance_token);
+void POVLock_StopAll(void);
+void POVLock_SuppressInput(gclient_t *client);
+void POVLock_UpdateFollowers(edict_t *target);
+void POVLock_EndFrame(edict_t *ent);
 
 // LM_JORM
 void ForceCommand(edict_t *ent, char *command);
@@ -1297,6 +1319,25 @@ struct gclient_s
 
 	edict_t		*chase_target;		// player we are chasing
 	qboolean	update_chase;		// need to update chase info?
+
+	/* Native in-eyes spectator recorder lock. The target's process slot is
+	 * guarded by the monotonically assigned CTF identity as well as its index,
+	 * so a disconnect/reuse cannot turn a named POV request into somebody else. */
+	qboolean	povlock_active;
+	int			povlock_target_index;
+	unsigned long	povlock_target_ctfid;
+
+	/* `povlock` explicitly arms one map-local recording session.  The
+	 * instantaneous ctfid above may disappear across an ordinary respawn;
+	 * this immutable SG identity and viewer generation may not. */
+	qboolean	pov_record_active;
+	qboolean	pov_record_pending;
+	qboolean	pov_record_sent;
+	qboolean	pov_record_stop_sent;
+	qboolean	pov_record_wait_respawn;
+	int			pov_record_sg_slot;
+	unsigned long long pov_record_sg_instance;
+	unsigned long	pov_record_viewer_ctfid;
 
 
 // SKWiD MOD

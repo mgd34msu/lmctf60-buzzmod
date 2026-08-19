@@ -5,13 +5,14 @@ This is an offline inspection aid, not deployment authority: engine entity
 override rules and collision settling can change the final spawned flag
 positions.  Rune generation prints those authoritative post-spawn root seed
 indices and runegen passes them directly to runelint's deployment gate.
-Here we prefer a loose or packed maps/<name>.ent view, then read the entity
-lump from a loose or packed BSP, and report approximate origins/seeds.
+Asset lookup follows the attested Yamagi search path and CRC-qualified ENT
+override preference, then reports approximate origins/seeds.
 
 Usage: mapflags.py [--out PATH] <gamedir> [<map> ...]
        (no maps = every loose rune found; stdout-only unless --out is given)
 """
 import argparse
+import binascii
 import glob
 import json
 import math
@@ -19,6 +20,7 @@ import os
 import re
 import struct
 import sys
+import zipfile
 from functools import lru_cache
 
 from corpusgraph import (atomic_write_json, read_rune, require_safe_mapname,
@@ -28,7 +30,12 @@ from corpusgraph import (atomic_write_json, read_rune, require_safe_mapname,
 MAX_PAK_DIRECTORY = 64 * 1024 * 1024
 MAX_GAME_FILE_BYTES = 512 * 1024 * 1024
 BSP_HEADER_SIZE = 8 + 19 * 8
-MAX_ENTITY_BYTES = 32 * 1024 * 1024
+BSP_LUMP_COUNT = 19
+YQ2_MAX_MAP_ENTSTRING = 0x40000
+MAX_ENTITY_BYTES = YQ2_MAX_MAP_ENTSTRING - 1
+MAX_ENTITY_PADDING_OVERRUN = 64
+MAX_NUMBERED_PAKS = 100
+PACK_SUFFIXES = ('pak', 'pk2', 'pk3', 'pkz', 'zip')
 
 
 @lru_cache(maxsize=64)
@@ -54,36 +61,174 @@ def pak_index(pakpath):
             name = name.split(b'\0')[0].decode('latin-1').lower()
             if pos < 0 or ln < 0 or pos > file_size or ln > file_size - pos:
                 raise ValueError(f'{pakpath}: malformed entry {name!r}')
+            if name in out:
+                raise ValueError(
+                    f'{pakpath}: case-insensitive duplicate entry {name!r}')
             out[name] = (pos, ln)
     return out
 
 
-def read_game_file(gamedir, relpath):
-    """loose file first, then every pak (later paks win, as the engine does)"""
-    loose = os.path.join(gamedir, relpath)
-    if os.path.exists(loose):
-        with open(loose, 'rb') as f:
-            size = os.fstat(f.fileno()).st_size
+@lru_cache(maxsize=64)
+def zip_index(packpath):
+    """Case-insensitive YQ2-style index for one ZIP-family package."""
+
+    out = {}
+    try:
+        with zipfile.ZipFile(packpath) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                name = info.filename.lower()
+                if name in out:
+                    raise ValueError(
+                        f'{packpath}: case-insensitive duplicate entry {name!r}')
+                out[name] = (info.filename, info.file_size)
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f'{packpath}: malformed ZIP package') from exc
+    return out
+
+
+def _pack_paths(gamedir):
+    """Return package paths grouped in YQ2's deterministic type order."""
+
+    grouped = {suffix: [] for suffix in PACK_SUFFIXES}
+    try:
+        names = os.listdir(gamedir)
+    except FileNotFoundError:
+        return grouped
+    for name in names:
+        path = os.path.join(gamedir, name)
+        if not os.path.isfile(path) or '.' not in name:
+            continue
+        suffix = name.rsplit('.', 1)[1]
+        if suffix in grouped:
+            grouped[suffix].append(path)
+    return grouped
+
+
+def _numbered_pack(path, suffix):
+    match = re.fullmatch(r'pak(0|[1-9][0-9]*)\.' + re.escape(suffix),
+                         os.path.basename(path))
+    if not match:
+        return None
+    number = int(match.group(1))
+    return number if number < MAX_NUMBERED_PAKS else None
+
+
+def _package_hit(path, relpath):
+    suffix = path.rsplit('.', 1)[1]
+    if suffix == 'pak':
+        hit = pak_index(path).get(relpath.lower())
+        return ('pak', hit) if hit is not None else None
+    hit = zip_index(path).get(relpath.lower())
+    return ('zip', hit) if hit is not None else None
+
+
+def _read_package_hit(path, hit):
+    kind, location = hit
+    if kind == 'pak':
+        pos, length = location
+        if length > MAX_GAME_FILE_BYTES:
+            raise ValueError(f'{path}: packed map asset is unreasonably large')
+        with open(path, 'rb') as stream:
+            stream.seek(pos)
+            data = stream.read(length)
+        if len(data) != length:
+            raise ValueError(f'{path}: truncated packed map asset')
+        return data
+
+    member, length = location
+    if length > MAX_GAME_FILE_BYTES:
+        raise ValueError(f'{path}: packed map asset is unreasonably large')
+    try:
+        with zipfile.ZipFile(path) as archive:
+            data = archive.read(member)
+    except (KeyError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise ValueError(f'{path}: cannot read packed map asset {member!r}') from exc
+    if len(data) != length:
+        raise ValueError(f'{path}: packed map asset length changed while reading')
+    return data
+
+
+def read_game_file_with_source(gamedir, relpath):
+    """Resolve one YQ2 VFS file and return ``(bytes, provenance)``.
+
+    Within one game directory Yamagi adds the loose directory first, then
+    prepends numbered packages in numeric/type order, then prepends every
+    non-numbered package.  Consequently every package wins over a loose file,
+    non-numbered packages win over numbered packages, later package types win,
+    and a higher numbered package wins within a type.  Enumeration order among
+    same-type non-numbered packages is filesystem-dependent in YQ2; when two
+    such packages contain the requested path, this offline authority fails
+    closed instead of inventing an order.
+    """
+
+    relpath = relpath.replace('\\', '/').lstrip('/')
+    grouped = _pack_paths(gamedir)
+    numbered = []
+    unnumbered = []
+    for type_rank, suffix in enumerate(PACK_SUFFIXES):
+        for path in grouped[suffix]:
+            hit = _package_hit(path, relpath)
+            if hit is None:
+                continue
+            number = _numbered_pack(path, suffix)
+            row = (type_rank, path, hit)
+            if number is None:
+                unnumbered.append(row)
+            else:
+                numbered.append((type_rank, number, path, hit))
+
+    if unnumbered:
+        winning_type = max(row[0] for row in unnumbered)
+        finalists = [row for row in unnumbered if row[0] == winning_type]
+        if len(finalists) != 1:
+            names = ', '.join(sorted(os.path.basename(row[1])
+                                     for row in finalists))
+            raise ValueError(
+                f'{gamedir}: YQ2 non-numbered package order is ambiguous for '
+                f'{relpath!r}: {names}')
+        _, path, hit = finalists[0]
+        return (_read_package_hit(path, hit),
+                f'{os.path.basename(path)}!/{relpath.lower()}')
+
+    if numbered:
+        _, _, path, hit = max(numbered, key=lambda row: (row[0], row[1]))
+        return (_read_package_hit(path, hit),
+                f'{os.path.basename(path)}!/{relpath.lower()}')
+
+    loose_candidates = (os.path.join(gamedir, relpath),
+                        os.path.join(gamedir, relpath.lower()))
+    for loose in dict.fromkeys(loose_candidates):
+        if not os.path.isfile(loose):
+            continue
+        with open(loose, 'rb') as stream:
+            size = os.fstat(stream.fileno()).st_size
             if size > MAX_GAME_FILE_BYTES:
                 raise ValueError(f'{loose}: map asset is unreasonably large')
-            return f.read()
-    found = None
-    for pak in sorted(glob.glob(os.path.join(gamedir, '*.pak'))):
-        idx = pak_index(pak)
-        hit = idx.get(relpath.lower())
-        if hit:
-            found = (pak, hit)
-    if not found:
-        return None
-    pak, (pos, ln) = found
-    if ln > MAX_GAME_FILE_BYTES:
-        raise ValueError(f'{pak}: packed map asset is unreasonably large')
-    with open(pak, 'rb') as f:
-        f.seek(pos)
-        return f.read(ln)
+            return stream.read(), relpath
+    return None, None
 
 
-def bsp_entities(data, source='<BSP>'):
+def read_game_file(gamedir, relpath):
+    """Read one file through the attested Yamagi search-path law."""
+
+    return read_game_file_with_source(gamedir, relpath)[0]
+
+
+def game_package_names(gamedir):
+    """Return all case-folded names present in supported game packages."""
+
+    names = set()
+    for suffix, paths in _pack_paths(gamedir).items():
+        for path in paths:
+            names.update(pak_index(path) if suffix == 'pak' else zip_index(path))
+    return names
+
+
+def bsp_lumps(data, source='<BSP>'):
+    """Validate the common IBSP v38 header and return all lump pairs."""
+
     if data is None:
         raise FileNotFoundError(source)
     if len(data) < BSP_HEADER_SIZE or data[:4] != b'IBSP':
@@ -91,11 +236,106 @@ def bsp_entities(data, source='<BSP>'):
     version = struct.unpack_from('<i', data, 4)[0]
     if version != 38:
         raise ValueError(f'{source}: unsupported BSP version {version}')
-    ofs, ln = struct.unpack_from('<ii', data, 8)  # lump 0 = entities
+    return [struct.unpack_from('<ii', data, 8 + index * 8)
+            for index in range(BSP_LUMP_COUNT)]
+
+
+def bsp_entity_lump(data, source='<BSP>'):
+    """Return the strictly in-bounds raw entity lump."""
+
+    ofs, ln = bsp_lumps(data, source)[0]
     if (ofs < BSP_HEADER_SIZE or ln < 0 or ln > MAX_ENTITY_BYTES or
             ofs > len(data) or ln > len(data) - ofs):
         raise ValueError(f'{source}: entity lump is outside the file')
-    return data[ofs:ofs + ln].split(b'\0', 1)[0].decode('latin-1')
+    return data[ofs:ofs + ln]
+
+
+def bsp_entities_with_provenance(
+        data, source='<BSP>', *, allow_truncated_zero_padding=False,
+        recovery_validator=None):
+    """Return entity text plus explicit bounded-recovery provenance.
+
+    Recovery is limited to a final entity lump whose declared end overruns the
+    file by at most :data:`MAX_ENTITY_PADDING_OVERRUN`.  It is never accepted
+    without a caller-supplied complete entity-stream validator.
+    """
+
+    lumps = bsp_lumps(data, source)
+    ofs, ln = lumps[0]
+    normal = (ofs >= BSP_HEADER_SIZE and ln >= 0 and
+              ln <= MAX_ENTITY_BYTES and ofs <= len(data) and
+              ln <= len(data) - ofs)
+    if normal:
+        raw = data[ofs:ofs + ln]
+        return raw.split(b'\0', 1)[0].decode('latin-1'), None
+
+    if not allow_truncated_zero_padding:
+        raise ValueError(f'{source}: entity lump is outside the file')
+    if (ofs < BSP_HEADER_SIZE or ofs > len(data) or ln < 0 or
+            ln > MAX_ENTITY_BYTES):
+        raise ValueError(f'{source}: entity lump is outside the file')
+    declared_end = ofs + ln
+    overrun = declared_end - len(data)
+    if overrun <= 0 or overrun > MAX_ENTITY_PADDING_OVERRUN:
+        raise ValueError(f'{source}: entity lump is outside the file')
+
+    for index, (other_ofs, other_len) in enumerate(lumps[1:], 1):
+        if other_len < 0:
+            raise ValueError(f'{source}: BSP lump {index} is outside the file')
+        if other_len == 0:
+            continue
+        if (other_ofs < BSP_HEADER_SIZE or other_ofs > len(data) or
+                other_len > len(data) - other_ofs):
+            raise ValueError(f'{source}: BSP lump {index} is outside the file')
+
+    available = data[ofs:]
+    nul = available.find(b'\0')
+    if nul < 0:
+        raise ValueError(
+            f'{source}: truncated entity lump has no in-file terminator')
+    if any(available[nul + 1:]):
+        raise ValueError(
+            f'{source}: truncated entity lump has nonzero bytes after terminator')
+    if recovery_validator is None:
+        raise ValueError(
+            f'{source}: truncated entity lump recovery requires full parsing')
+
+    text = available[:nul].decode('latin-1')
+    try:
+        recovery_validator(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f'{source}: truncated entity lump fails complete entity parsing') from exc
+    recovery = {
+        'kind': 'truncated_zero_padding',
+        'source': source,
+        'entity_offset': ofs,
+        'declared_length': ln,
+        'available_length': len(available),
+        'declared_end': declared_end,
+        'file_size': len(data),
+        'overrun_bytes': overrun,
+        'terminator_offset': ofs + nul,
+        'zero_padding_bytes': len(available) - nul - 1,
+        'all_other_nonempty_lumps_in_bounds': True,
+        'complete_entity_parse': True,
+    }
+    return text, recovery
+
+
+def bsp_entities(data, source='<BSP>'):
+    """Return strict entity text; historical recovery is opt-in elsewhere."""
+
+    return bsp_entities_with_provenance(data, source)[0]
+
+
+def entity_lump_crc16(data, source='<BSP>'):
+    """Return YQ2's CRC_Block value used by ``maps/name@crc.ent``."""
+
+    raw = bsp_entity_lump(data, source)
+    if not raw:
+        return 0
+    return binascii.crc_hqx(raw[:-1], 0xffff)
 
 
 def parse_ents(text):
@@ -109,25 +349,71 @@ def parse_ents(text):
     return out
 
 
-def entity_text(gamedir, mapname):
-    """Return (entity_text, source), preferring an external ENT override."""
-    require_safe_mapname(mapname)
-    ent_rel = f'maps/{mapname}.ent'
-    ent_data = read_game_file(gamedir, ent_rel)
-    if ent_data is not None:
-        if len(ent_data) > MAX_ENTITY_BYTES:
-            raise ValueError(f'{ent_rel}: entity text is unreasonably large')
-        try:
-            return ent_data.split(b'\0', 1)[0].decode('latin-1'), ent_rel
-        except UnicodeDecodeError as e:
-            raise ValueError(f'{ent_rel}: cannot decode entity text') from e
+def entity_text_with_provenance(
+        gamedir, mapname, *, allow_truncated_zero_padding=False,
+        recovery_validator=None):
+    """Return ``(text, source, recovery)`` using YQ2's ENT lookup law."""
 
+    require_safe_mapname(mapname)
     bsp_rel = f'maps/{mapname}.bsp'
-    bsp_data = read_game_file(gamedir, bsp_rel)
+    bsp_data, bsp_source = read_game_file_with_source(gamedir, bsp_rel)
     if bsp_data is None:
         raise FileNotFoundError(
-            f'{gamedir}: no {ent_rel} or {bsp_rel} (loose or in a PAK)')
-    return bsp_entities(bsp_data, bsp_rel), bsp_rel
+            f'{gamedir}: no {bsp_rel} in the Yamagi search path')
+
+    recovery = None
+    try:
+        crc = entity_lump_crc16(bsp_data, bsp_source)
+    except ValueError:
+        if not allow_truncated_zero_padding:
+            raise
+        text, recovery = bsp_entities_with_provenance(
+            bsp_data, bsp_source,
+            allow_truncated_zero_padding=True,
+            recovery_validator=recovery_validator)
+        # The malformed declared length makes YQ2's CRC_Block read envelope
+        # unavailable to an offline authority.  A qualified override could
+        # therefore change the live entity source unpredictably; fail closed.
+        prefix = f'maps/{mapname.lower()}@'
+        qualified = sorted(name for name in game_package_names(gamedir)
+                           if name.startswith(prefix) and name.endswith('.ent'))
+        maps_dir = os.path.join(gamedir, 'maps')
+        if os.path.isdir(maps_dir):
+            qualified.extend(
+                f'maps/{name.lower()}' for name in os.listdir(maps_dir)
+                if name.lower().startswith(f'{mapname.lower()}@') and
+                name.lower().endswith('.ent'))
+        if qualified:
+            raise ValueError(
+                f'{bsp_source}: cannot resolve CRC-qualified ENT override for '
+                f'truncated entity lump: {sorted(set(qualified))!r}')
+    else:
+        qualified_rel = f'maps/{mapname}@{crc:04x}.ent'
+        ent_data, ent_source = read_game_file_with_source(gamedir, qualified_rel)
+        if ent_data is not None:
+            # CMod_LoadEntityString accepts only lengths 2..262142.  An
+            # existing but invalid qualified override suppresses the plain
+            # fallback and the engine uses the BSP entity lump instead.
+            if 1 < len(ent_data) < YQ2_MAX_MAP_ENTSTRING - 1:
+                return (ent_data.split(b'\0', 1)[0].decode('latin-1'),
+                        ent_source, None)
+            return bsp_entities(bsp_data, bsp_source), bsp_source, None
+        text = bsp_entities(bsp_data, bsp_source)
+
+    ent_rel = f'maps/{mapname}.ent'
+    ent_data, ent_source = read_game_file_with_source(gamedir, ent_rel)
+    if ent_data is not None:
+        if 1 < len(ent_data) < YQ2_MAX_MAP_ENTSTRING - 1:
+            return (ent_data.split(b'\0', 1)[0].decode('latin-1'),
+                    ent_source, None)
+    return text, bsp_source, recovery
+
+
+def entity_text(gamedir, mapname):
+    """Return strict ``(entity_text, source)`` under active YQ2 precedence."""
+
+    text, source, _ = entity_text_with_provenance(gamedir, mapname)
+    return text, source
 
 
 @lru_cache(maxsize=64)
@@ -164,7 +450,7 @@ def flag_origins(gamedir, mapname):
 
 
 def read_graph_metadata(path, expected_map=None):
-    rune = read_rune(path, expected_map, versions=(1, 2, 3))
+    rune = read_rune(path, expected_map)
     seeds = rune_seed_origins(rune)
     live = frozenset(rune_live_seed_indices(rune))
     linked = frozenset(source for source, _ in rune_link_pairs(rune))

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """defbake.py -- bake human defensive occupancy into per-map .dpo sidecars.
 
-The game loads this optional sidecar beside the rune. Its explicit v3 header
+The game loads this optional sidecar beside the rune. Its authenticated header
 binds both graph counts plus the rune payload, action contract, and header.
 The payload has four consecutive ``u8[num_seeds]`` planes: post red/blue,
 then intercept red/blue.
@@ -65,7 +65,7 @@ def bake_map(rune_dir, json_dir, mapname):
                                 f'json={os.path.exists(json_path)}')
 
     document = load_corpus(json_path)
-    rune = read_rune(rune_path, mapname, versions=(3,))
+    rune = read_rune(rune_path, mapname)
     num_seeds = rune['num_seeds']
     identity = rune_identity_from_rune(rune)
     require_corpus_identity(document, json_path, identity)
@@ -80,7 +80,7 @@ def bake_map(rune_dir, json_dir, mapname):
                        num_seeds), num_seeds),
     ]
     binding = sidecario.binding_from_rune(rune)
-    payload = sidecario.encode_v3(
+    payload = sidecario.encode(
         sidecario.DPO, binding, b''.join(planes),
         tombstone_indices=rune_tombstone_indices(rune),
     )

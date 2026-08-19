@@ -43,9 +43,12 @@ void		SG_NetNewLevel(void);
 
 /*
  * The ear. Implemented in sg_caco.c and called from the gi.sound /
- * gi.positioned_sound wrappers in sg_net.c once the engine has already been
- * handed the call unchanged -- so this is a tap on a sound that really
- * happened, never a substitute for one.
+ * gi.positioned_sound wrappers in sg_net.c after the engine has been handed
+ * the actual wire call. Ordinary sounds remain unchanged. A mapped wildcard
+ * voice from an engine-less SG bot becomes one concrete, explicitly
+ * positioned call so a PHS-only spectator need not have current snapshot
+ * state for that emitter. This remains a tap on a sound that really happened,
+ * never a duplicate emission.
  *
  * `origin` is the explicit position a positioned_sound carried, or NULL when
  * the sound belongs to the emitter's own origin. The remaining arguments are

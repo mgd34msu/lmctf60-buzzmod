@@ -116,9 +116,9 @@ qboolean SG_HookReplayFixedViewCommand(const sg_replay_pose_t *pose,
 	return true;
 }
 
-/* DROP's v3 generator/proof byte is canonical: M_PI remains a double, so the
+/* DROP's generator/proof byte is canonical: M_PI remains a double, so the
  * atan2f product is rounded as float and the division plus ANGLE2SHORT continue
- * in double precision.  The revision-2 live shadow uses this same expression
+ * in double precision.  The live shadow uses this same expression
  * and compares the complete logical usercmd before production executes it. */
 static qboolean ReplayDropPlanarCommand(const sg_replay_pose_t *pose,
 	const vec3_t target, usercmd_t *command)
@@ -545,7 +545,7 @@ sg_replay_status_t SG_DropReplayPostStep(sg_drop_replay_state_t *state,
 
 	arrived = state->walkoff && airborne_after &&
 	          SG_DropReplayArrived(&state->spec, pose, observation);
-	/* Revision 2 gives the terminal its first and only chance before contact
+	/* The terminal gets its first and only chance before contact
 	 * policy.  A wet destination can never splice a dry shelf recovery, while
 	 * a dry destination may admit exactly one supported, clear, dry recovery. */
 	recovery_start = !arrived && !state->recovery && state->walkoff &&

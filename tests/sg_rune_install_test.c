@@ -1,4 +1,4 @@
-/* Transaction, failure-injection, and path-boundary tests for RUNE v3. */
+/* Transaction, failure-injection, and path-boundary tests for RUNE. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -15,11 +15,70 @@
 
 /* q_shared.h has no include guard; include it once before SLIPGATE headers. */
 #include "q_shared.h"
+#include "slipgate/sg_rune_codec.h"
 #include "slipgate/sg_rune_install.h"
-#include "slipgate/sg_rune_wire.h"
 
-#define TEST_FILE_BYTES (SG_RUNE_V3_HEADER_BYTES + \
-	2U * SG_RUNE_V3_SEED_BYTES + 2U * SG_RUNE_V3_LINK_BYTES)
+enum stream_fragment_index_e
+{
+	STREAM_HEADER = 0,
+	STREAM_SEED_0,
+	STREAM_SEED_1,
+	STREAM_LINK_0,
+	STREAM_LINK_1,
+	STREAM_NODE_0,
+	STREAM_NODE_1,
+	STREAM_INVENTORY_EDGE,
+	STREAM_PLAN_EDGE,
+	STREAM_PLAN,
+	STREAM_STRINGS,
+	STREAM_FRAGMENT_COUNT
+};
+
+#define STREAM_FRAGMENT_CAPACITY SG_RUNE_CODEC_HEADER_BYTES
+#define STREAM_STRING_BYTES 32U
+
+static const size_t stream_fragment_sizes[STREAM_FRAGMENT_COUNT] = {
+	SG_RUNE_CODEC_HEADER_BYTES,
+	SG_RUNE_CODEC_SEED_BYTES,
+	SG_RUNE_CODEC_SEED_BYTES,
+	SG_RUNE_CODEC_LINK_BYTES,
+	SG_RUNE_CODEC_LINK_BYTES,
+	SG_RUNE_CODEC_ACTIVATION_NODE_BYTES,
+	SG_RUNE_CODEC_ACTIVATION_NODE_BYTES,
+	SG_RUNE_CODEC_ACTIVATION_EDGE_BYTES,
+	SG_RUNE_CODEC_ACTIVATION_EDGE_BYTES,
+	SG_RUNE_CODEC_ACTIVATION_PLAN_BYTES,
+	STREAM_STRING_BYTES
+};
+
+static const sg_rune_stream_stage_t
+stream_fragment_stages[STREAM_FRAGMENT_COUNT] = {
+	SG_RUNE_STREAM_STAGE_EMIT_HEADER,
+	SG_RUNE_STREAM_STAGE_EMIT_SEED,
+	SG_RUNE_STREAM_STAGE_EMIT_SEED,
+	SG_RUNE_STREAM_STAGE_EMIT_LINK,
+	SG_RUNE_STREAM_STAGE_EMIT_LINK,
+	SG_RUNE_STREAM_STAGE_EMIT_NODE,
+	SG_RUNE_STREAM_STAGE_EMIT_NODE,
+	SG_RUNE_STREAM_STAGE_EMIT_EDGE,
+	SG_RUNE_STREAM_STAGE_EMIT_EDGE,
+	SG_RUNE_STREAM_STAGE_EMIT_PLAN,
+	SG_RUNE_STREAM_STAGE_EMIT_STRING_POOL
+};
+
+static const uint32_t stream_fragment_indices[STREAM_FRAGMENT_COUNT] = {
+	SG_RUNE_STREAM_INDEX_NONE,
+	0U,
+	1U,
+	0U,
+	1U,
+	0U,
+	1U,
+	0U,
+	1U,
+	0U,
+	SG_RUNE_STREAM_INDEX_NONE
+};
 
 static const unsigned char old_rune[] = "old-rune";
 static int failures;
@@ -32,15 +91,16 @@ static int failures;
 	} \
 } while (0)
 
-typedef struct writer_fixture_s
+typedef struct stream_fixture_s
 {
-	sg_rune_v3_identity_t identity;
-	rune_seed_t seeds[2];
-	rune_link_t links[2];
-	uint64_t keys[2];
-	uint8_t marks[2];
-	sg_rune_v3_workspace_t workspace;
-} writer_fixture_t;
+	unsigned char fragments[STREAM_FRAGMENT_COUNT]
+		[STREAM_FRAGMENT_CAPACITY];
+	int calls;
+	int malformed_call;
+	int mutate_after_call;
+	int torn_call;
+	size_t torn_fragment_count;
+} stream_fixture_t;
 
 typedef struct filesystem_fixture_s
 {
@@ -74,7 +134,7 @@ typedef struct test_io_s
 	size_t remove_calls;
 	unsigned long process_id;
 	int fail_remove;
-	writer_fixture_t *mutate_writer;
+	stream_fixture_t *mutate_stream;
 	size_t mutate_write_call;
 } test_io_t;
 
@@ -90,17 +150,11 @@ typedef struct revalidate_fixture_s
 
 typedef struct forged_stream_s
 {
-	writer_fixture_t *writer;
+	stream_fixture_t *stream;
 	int calls;
 	int forge_call;
 	int forge_index;
 } forged_stream_t;
-
-typedef struct swapping_stream_s
-{
-	writer_fixture_t *writer;
-	int calls;
-} swapping_stream_t;
 
 static int Format(char *output, size_t output_size, const char *format,
 	const char *first, const char *second)
@@ -110,97 +164,136 @@ static int Format(char *output, size_t output_size, const char *format,
 	return written >= 0 && (size_t)written < output_size;
 }
 
-static void SetMap(char output[SG_RUNE_V3_MAP_NAME_BYTES],
-	const char *map_name)
+static size_t StreamSize(size_t fragment_count)
 {
-	size_t length = strlen(map_name);
+	size_t index;
+	size_t total = 0;
 
-	memset(output, 0, SG_RUNE_V3_MAP_NAME_BYTES);
-	CHECK(length < SG_RUNE_V3_MAP_NAME_BYTES);
-	if (length < SG_RUNE_V3_MAP_NAME_BYTES)
-		memcpy(output, map_name, length);
+	for (index = 0; index < fragment_count; index++)
+		total += stream_fragment_sizes[index];
+	return total;
 }
 
-static void InitWriter(writer_fixture_t *writer)
+static uint32_t StreamFingerprint(const stream_fixture_t *stream,
+	size_t fragment_count)
 {
-	memset(writer, 0, sizeof(*writer));
-	SetMap(writer->identity.map_name, "lmctf07");
-	writer->identity.bsp_checksum = UINT32_C(0x12345678);
-	writer->identity.entity_crc32 = UINT32_C(0x9abcdef0);
-	writer->identity.physics_flags =
-		SG_RUNE_PROOF_PHYSICS_FLAGS_SUPPORTED;
-	writer->identity.gravity = 650.0f;
-	writer->identity.airaccelerate = 0.0f;
-	writer->identity.maxvelocity = 2000.0f;
-	writer->identity.pmove_substep_ms = SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
-	writer->identity.server_frame_ms = SG_RUNE_PROOF_SERVER_FRAME_MS;
-	writer->identity.host_physics_id = 1;
+	uint32_t fingerprint = UINT32_C(2166136261);
+	size_t fragment;
 
-	writer->seeds[0].origin[0] = 0.0f;
-	writer->seeds[0].origin[1] = 0.0f;
-	writer->seeds[0].origin[2] = 0.0f;
-	writer->seeds[0].area_hint = 7;
-	writer->seeds[1].origin[0] = 64.0f;
-	writer->seeds[1].origin[1] = 0.0f;
-	writer->seeds[1].origin[2] = 0.0f;
-	writer->seeds[1].area_hint = 255;
-
-	writer->links[0].from = 0;
-	writer->links[0].to = 1;
-	writer->links[0].action = RL_RUN;
-	writer->links[0].provenance = RL_PROVEN;
-	writer->links[0].heading_slack = 255;
-	writer->links[0].cost_ms = 100;
-	writer->links[1].from = 1;
-	writer->links[1].to = 0;
-	writer->links[1].action = RL_RUN;
-	writer->links[1].provenance = RL_PROVEN;
-	writer->links[1].heading_slack = 255;
-	writer->links[1].cost_ms = 125;
-
-	writer->workspace.link_keys = writer->keys;
-	writer->workspace.link_key_capacity = 2;
-	writer->workspace.source_marks = writer->marks;
-	writer->workspace.source_mark_capacity = 2;
-}
-
-static sg_rune_write_result_t StreamWriter(void *context,
-	sg_rune_write_sink_fn sink, void *sink_context)
-{
-	writer_fixture_t *writer = context;
-
-	return SG_RuneV3Write(&writer->identity, writer->seeds, 2,
-		writer->links, 2, &writer->workspace, sink, sink_context);
-}
-
-static sg_rune_write_result_t StreamForged(void *context,
-	sg_rune_write_sink_fn sink, void *sink_context)
-{
-	forged_stream_t *forged = context;
-	sg_rune_write_result_t result = StreamWriter(forged->writer, sink,
-		sink_context);
-
-	forged->calls++;
-	if (forged->calls == forged->forge_call && result.diagnostic == RLW_OK)
+	for (fragment = 0; fragment < fragment_count; fragment++)
 	{
-		if (forged->forge_index)
-			result.index = 0;
-		else
-			result.stage = SG_RUNE_WRITE_STAGE_VERIFY;
+		size_t byte;
+
+		for (byte = 0; byte < stream_fragment_sizes[fragment]; byte++)
+		{
+			fingerprint ^= stream->fragments[fragment][byte];
+			fingerprint *= UINT32_C(16777619);
+		}
 	}
+	return fingerprint;
+}
+
+static void MutateStream(stream_fixture_t *stream)
+{
+	stream->fragments[STREAM_PLAN_EDGE][0] ^= UINT8_C(0x5a);
+}
+
+static void InitStream(stream_fixture_t *stream)
+{
+	size_t fragment;
+
+	memset(stream, 0, sizeof(*stream));
+	for (fragment = 0; fragment < STREAM_FRAGMENT_COUNT; fragment++)
+	{
+		size_t byte;
+
+		for (byte = 0; byte < stream_fragment_sizes[fragment]; byte++)
+			stream->fragments[fragment][byte] =
+				(unsigned char)(17U * (fragment + 1U) + byte);
+	}
+	/* Executable plan edges are byte-exact inventory copies. */
+	memcpy(stream->fragments[STREAM_PLAN_EDGE],
+		stream->fragments[STREAM_INVENTORY_EDGE],
+		stream_fragment_sizes[STREAM_PLAN_EDGE]);
+	memset(stream->fragments[STREAM_STRINGS], 0, STREAM_STRING_BYTES);
+	memcpy(stream->fragments[STREAM_STRINGS] + 1U, "trigger_once", 12U);
+	memcpy(stream->fragments[STREAM_STRINGS] + 14U, "func_door", 9U);
+}
+
+static sg_rune_stream_result_t StreamWriter(void *context,
+	sg_rune_stream_sink_fn sink, void *sink_context)
+{
+	stream_fixture_t *stream = context;
+	sg_rune_stream_result_t result;
+	size_t fragment;
+	size_t fragment_count = STREAM_FRAGMENT_COUNT;
+	uint32_t initial_fingerprint;
+	int call;
+
+	memset(&result, 0, sizeof(result));
+	result.diagnostic = RLW_INVALID_ARGUMENT;
+	result.stage = SG_RUNE_STREAM_STAGE_ARGUMENT;
+	result.index = SG_RUNE_STREAM_INDEX_NONE;
+	if (!stream || !sink)
+		return result;
+	call = ++stream->calls;
+	if (stream->torn_call == call)
+		fragment_count = stream->torn_fragment_count;
+	if (fragment_count > STREAM_FRAGMENT_COUNT)
+		return result;
+	result.file_size = StreamSize(fragment_count);
+	result.payload_crc32 = StreamFingerprint(stream, fragment_count);
+	if (stream->malformed_call == call)
+	{
+		result.diagnostic = RLCODEC_BAD_ACTIVATION_PLAN;
+		result.stage = SG_RUNE_STREAM_STAGE_PREFLIGHT_PLAN;
+		result.index = 0U;
+		return result;
+	}
+	initial_fingerprint = result.payload_crc32;
+	result.diagnostic = RLW_OK;
+	for (fragment = 0; fragment < fragment_count; fragment++)
+	{
+		if (sink(sink_context, stream->fragments[fragment],
+		    stream_fragment_sizes[fragment]) != 0)
+		{
+			result.diagnostic = RLW_IO_ERROR;
+			result.stage = stream_fragment_stages[fragment];
+			result.index = stream_fragment_indices[fragment];
+			return result;
+		}
+		result.bytes_written += stream_fragment_sizes[fragment];
+	}
+	if (StreamFingerprint(stream, fragment_count) != initial_fingerprint)
+	{
+		result.diagnostic = RLW_BAD_PAYLOAD_CRC;
+		result.stage = SG_RUNE_STREAM_STAGE_VERIFY;
+		result.index = SG_RUNE_STREAM_INDEX_NONE;
+		return result;
+	}
+	result.stage = SG_RUNE_STREAM_STAGE_DONE;
+	result.index = SG_RUNE_STREAM_INDEX_NONE;
+	if (stream->mutate_after_call == call)
+		MutateStream(stream);
 	return result;
 }
 
-static sg_rune_write_result_t StreamSwapping(void *context,
-	sg_rune_write_sink_fn sink, void *sink_context)
+static sg_rune_stream_result_t StreamForged(void *context,
+	sg_rune_stream_sink_fn sink, void *sink_context)
 {
-	swapping_stream_t *swapping = context;
-	sg_rune_write_result_t result = StreamWriter(swapping->writer, sink,
+	forged_stream_t *forged = context;
+	sg_rune_stream_result_t result = StreamWriter(forged->stream, sink,
 		sink_context);
 
-	swapping->calls++;
-	if (swapping->calls == 1 && result.diagnostic == RLW_OK)
-		swapping->writer->links[0].cost_ms += 25;
+	forged->calls++;
+	if (forged->calls == forged->forge_call &&
+	    SG_RuneStreamResultSucceeded(&result))
+	{
+		if (forged->forge_index)
+			result.index = 0U;
+		else
+			result.stage = SG_RUNE_STREAM_STAGE_VERIFY;
+	}
 	return result;
 }
 
@@ -322,8 +415,8 @@ static size_t TestWrite(void *context, FILE *file, const void *data,
 	test_io_t *io = context;
 
 	io->write_calls++;
-	if (io->mutate_writer && io->write_calls == io->mutate_write_call)
-		io->mutate_writer->links[0].cost_ms += 25;
+	if (io->mutate_stream && io->write_calls == io->mutate_write_call)
+		MutateStream(io->mutate_stream);
 	if (io->failure == INJECT_WRITE &&
 	    io->write_calls == io->failed_write_call)
 	{
@@ -463,13 +556,13 @@ static void InitRevalidate(revalidate_fixture_t *revalidate, test_io_t *io)
 }
 
 static sg_rune_install_result_t Install(filesystem_fixture_t *filesystem,
-	writer_fixture_t *writer, test_io_t *io, sg_rune_install_ops_t *ops,
+	stream_fixture_t *stream, test_io_t *io, sg_rune_install_ops_t *ops,
 	revalidate_fixture_t *revalidate, char temporary[MAX_OSPATH])
 {
 	char destination[MAX_OSPATH];
-	sg_rune_install_result_t result = SG_RuneInstallV3(filesystem->root,
+	sg_rune_install_result_t result = SG_RuneInstall(filesystem->root,
 		"lmctf07", destination, sizeof(destination), temporary, MAX_OSPATH,
-		StreamWriter, writer, Revalidate, revalidate, ops);
+		StreamWriter, stream, Revalidate, revalidate, ops);
 
 	CHECK(strcmp(destination, filesystem->destination) == 0);
 	(void)io;
@@ -477,35 +570,33 @@ static sg_rune_install_result_t Install(filesystem_fixture_t *filesystem,
 }
 
 static void CheckInstalled(const filesystem_fixture_t *filesystem,
-	const writer_fixture_t *writer)
+	const stream_fixture_t *stream)
 {
-	unsigned char data[TEST_FILE_BYTES];
-	sg_rune_v3_header_t header;
-	sg_rune_v3_seed_t seeds[2];
-	sg_rune_v3_link_t links[2];
-	uint64_t keys[2];
-	uint8_t marks[2];
-	sg_rune_v3_workspace_t workspace;
-	size_t count = ReadFile(filesystem->destination, data, sizeof(data));
+	unsigned char expected[1024];
+	unsigned char actual[1024];
+	struct stat status;
+	size_t offset = 0;
+	size_t fragment;
+	size_t count;
 
-	workspace.link_keys = keys;
-	workspace.link_key_capacity = 2;
-	workspace.source_marks = marks;
-	workspace.source_mark_capacity = 2;
-	CHECK(count == sizeof(data));
-	if (count != sizeof(data))
-		return;
-	CHECK(SG_RuneV3Decode(data, sizeof(data), &writer->identity, &header,
-		seeds, 2, links, 2, &workspace) == RLW_OK);
-	CHECK(header.num_seeds == 2 && header.num_links == 2);
-	CHECK(header.gravity == 650.0f);
-	CHECK(links[0].source == 0 && links[0].destination == 1);
-	CHECK(links[1].source == 1 && links[1].destination == 0);
+	for (fragment = 0; fragment < STREAM_FRAGMENT_COUNT; fragment++)
+	{
+		memcpy(expected + offset, stream->fragments[fragment],
+			stream_fragment_sizes[fragment]);
+		offset += stream_fragment_sizes[fragment];
+	}
+	CHECK(offset == StreamSize(STREAM_FRAGMENT_COUNT));
+	CHECK(stat(filesystem->destination, &status) == 0);
+	CHECK((size_t)status.st_size == offset);
+	count = ReadFile(filesystem->destination, actual, sizeof(actual));
+	CHECK(count == offset);
+	if (count == offset)
+		CHECK(memcmp(actual, expected, offset) == 0);
 }
 
 static void TestPathBoundaries(void)
 {
-	char map_name[64];
+	char map_name[RUNE_MAP_NAME_BYTES];
 	char game_directory[105];
 	char path[MAX_OSPATH];
 	char small[16];
@@ -546,7 +637,7 @@ static void TestPathBoundaries(void)
 static void TestSuccessAndExclusiveCollision(void)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -559,7 +650,7 @@ static void TestSuccessAndExclusiveCollision(void)
 	struct stat collision_stat;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
 	CHECK(SG_RuneInstallTemporaryPath(collision, sizeof(collision),
 		filesystem.root, io.process_id, 0));
@@ -567,22 +658,26 @@ static void TestSuccessAndExclusiveCollision(void)
 		filesystem.root, "collision-target"));
 	CHECK(WriteFile(collision_target, sentinel, sizeof(sentinel)));
 	CHECK(symlink(collision_target, collision) == 0);
-	result = Install(&filesystem, &writer, &io, &ops, &revalidate,
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
 		temporary);
 	CHECK(result.status == SG_RUNE_INSTALL_OK);
 	CHECK(result.writer_called == 2);
 	CHECK(result.writer.diagnostic == RLW_OK);
-	CHECK(result.writer.bytes_written == TEST_FILE_BYTES);
-	CHECK(result.writer.file_size == TEST_FILE_BYTES);
+	CHECK(result.writer.stage == SG_RUNE_STREAM_STAGE_DONE);
+	CHECK(result.writer.index == SG_RUNE_STREAM_INDEX_NONE);
+	CHECK(result.writer.bytes_written == StreamSize(STREAM_FRAGMENT_COUNT));
+	CHECK(result.writer.file_size == StreamSize(STREAM_FRAGMENT_COUNT));
 	CHECK(result.temp_attempt == 1);
 	CHECK(io.open_calls == 2 && io.rename_calls == 1);
+	CHECK(io.flush_calls == 1 && io.sync_calls == 1 && io.close_calls == 1);
+	CHECK(io.write_calls == STREAM_FRAGMENT_COUNT);
 	CHECK(revalidate.calls == 1);
 	CHECK(lstat(collision, &collision_stat) == 0 &&
 		S_ISLNK(collision_stat.st_mode));
 	CHECK(ReadFile(collision, readback, sizeof(readback)) == sizeof(readback));
 	CHECK(memcmp(readback, sentinel, sizeof(sentinel)) == 0);
 	CHECK(CountTemporaries(&filesystem) == 1);
-	CheckInstalled(&filesystem, &writer);
+	CheckInstalled(&filesystem, &stream);
 	CHECK(remove(collision) == 0);
 	CHECK(remove(collision_target) == 0);
 	CHECK(CountTemporaries(&filesystem) == 0);
@@ -592,7 +687,7 @@ static void TestSuccessAndExclusiveCollision(void)
 static void TestAllTemporaryNamesCollide(void)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -604,7 +699,7 @@ static void TestAllTemporaryNamesCollide(void)
 	unsigned int attempt;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
 	for (attempt = 0; attempt < SG_RUNE_INSTALL_TEMP_ATTEMPTS; attempt++)
 	{
@@ -614,17 +709,16 @@ static void TestAllTemporaryNamesCollide(void)
 			attempt));
 		CHECK(WriteFile(collisions[attempt], &expected[attempt], 1));
 	}
-	result = SG_RuneInstallV3(filesystem.root, "lmctf07", destination,
+	result = SG_RuneInstall(filesystem.root, "lmctf07", destination,
 		sizeof(destination), temporary, sizeof(temporary), StreamWriter,
-		&writer, Revalidate, &revalidate, &ops);
+		&stream, Revalidate, &revalidate, &ops);
 	CHECK(result.status == SG_RUNE_INSTALL_TEMP_EXHAUSTED);
 	CHECK(result.writer_called == 1);
 	CHECK(io.open_calls == SG_RUNE_INSTALL_TEMP_ATTEMPTS);
 	CHECK(io.write_calls == 0 && io.remove_calls == 0 &&
 		io.rename_calls == 0);
 	CHECK(PriorRunePreserved(&filesystem));
-	CHECK(CountTemporaries(&filesystem) ==
-		SG_RUNE_INSTALL_TEMP_ATTEMPTS);
+	CHECK(CountTemporaries(&filesystem) == SG_RUNE_INSTALL_TEMP_ATTEMPTS);
 	for (attempt = 0; attempt < SG_RUNE_INSTALL_TEMP_ATTEMPTS; attempt++)
 	{
 		unsigned char actual = 0xff;
@@ -639,7 +733,7 @@ static void TestInjectedFailure(injected_failure_t failure,
 	size_t failed_write_call, sg_rune_install_status_t expected_status)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -647,11 +741,11 @@ static void TestInjectedFailure(injected_failure_t failure,
 	sg_rune_install_result_t result;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
 	io.failure = failure;
 	io.failed_write_call = failed_write_call;
-	result = Install(&filesystem, &writer, &io, &ops, &revalidate,
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
 		temporary);
 	CHECK(result.status == expected_status);
 	CHECK(PriorRunePreserved(&filesystem));
@@ -668,18 +762,14 @@ static void TestInjectedFailure(injected_failure_t failure,
 	}
 	if (failure == INJECT_WRITE)
 	{
+		size_t fragment = failed_write_call - 1U;
+
 		CHECK(result.writer.diagnostic == RLW_IO_ERROR);
-		if (failed_write_call == 1)
-			CHECK(result.writer.stage == SG_RUNE_WRITE_STAGE_EMIT_HEADER);
-		else if (failed_write_call <= 3)
+		CHECK(fragment < STREAM_FRAGMENT_COUNT);
+		if (fragment < STREAM_FRAGMENT_COUNT)
 		{
-			CHECK(result.writer.stage == SG_RUNE_WRITE_STAGE_EMIT_SEED);
-			CHECK(result.writer.index == failed_write_call - 2U);
-		}
-		else
-		{
-			CHECK(result.writer.stage == SG_RUNE_WRITE_STAGE_EMIT_LINK);
-			CHECK(result.writer.index == failed_write_call - 4U);
+			CHECK(result.writer.stage == stream_fragment_stages[fragment]);
+			CHECK(result.writer.index == stream_fragment_indices[fragment]);
 		}
 	}
 	CleanupFilesystem(&filesystem);
@@ -688,7 +778,7 @@ static void TestInjectedFailure(injected_failure_t failure,
 static void TestCleanupFailureIsSurfaced(void)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -696,12 +786,12 @@ static void TestCleanupFailureIsSurfaced(void)
 	sg_rune_install_result_t result;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
 	io.failure = INJECT_WRITE;
 	io.failed_write_call = 1;
 	io.fail_remove = 1;
-	result = Install(&filesystem, &writer, &io, &ops, &revalidate,
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
 		temporary);
 	CHECK(result.status == SG_RUNE_INSTALL_WRITER_FAILED);
 	CHECK(result.cleanup_error == EACCES);
@@ -717,7 +807,7 @@ static void TestCleanupFailureIsSurfaced(void)
 static void TestMalformedPreflightHasNoFilesystemAccess(void)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -725,17 +815,16 @@ static void TestMalformedPreflightHasNoFilesystemAccess(void)
 	sg_rune_install_result_t result;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
-	writer.links[0].action = RL_ROCKETJUMP;
-	result = Install(&filesystem, &writer, &io, &ops, &revalidate,
+	stream.malformed_call = 1;
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
 		temporary);
 	CHECK(result.status == SG_RUNE_INSTALL_WRITER_FAILED);
 	CHECK(result.writer_called == 1);
-	CHECK(result.writer.diagnostic == RLW_BAD_LINK_RECORD);
-	CHECK(result.writer.reason == RLR_ACTION_DISABLED);
-	CHECK(result.writer.stage == SG_RUNE_WRITE_STAGE_ADAPT_LINK);
-	CHECK(result.writer.index == 0);
+	CHECK(result.writer.diagnostic == RLCODEC_BAD_ACTIVATION_PLAN);
+	CHECK(result.writer.stage == SG_RUNE_STREAM_STAGE_PREFLIGHT_PLAN);
+	CHECK(result.writer.index == 0U);
 	CHECK(result.writer.bytes_written == 0);
 	CHECK(io.open_calls == 0 && io.write_calls == 0 && io.remove_calls == 0);
 	CHECK(PriorRunePreserved(&filesystem));
@@ -746,7 +835,7 @@ static void TestMalformedPreflightHasNoFilesystemAccess(void)
 static void TestRevalidationDrift(int identity_drift)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -754,13 +843,13 @@ static void TestRevalidationDrift(int identity_drift)
 	sg_rune_install_result_t result;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
 	if (identity_drift)
 		revalidate.active_identity ^= UINT32_C(1);
 	else
 		revalidate.active_gravity = 800.0f;
-	result = Install(&filesystem, &writer, &io, &ops, &revalidate,
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
 		temporary);
 	CHECK(result.status == SG_RUNE_INSTALL_REVALIDATE_FAILED);
 	CHECK(revalidate.calls == 1 && io.rename_calls == 0);
@@ -772,7 +861,7 @@ static void TestRevalidationDrift(int identity_drift)
 static void TestPassTwoMutation(void)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -780,15 +869,15 @@ static void TestPassTwoMutation(void)
 	sg_rune_install_result_t result;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
-	io.mutate_writer = &writer;
-	io.mutate_write_call = 1; /* after header, before pass-two records */
-	result = Install(&filesystem, &writer, &io, &ops, &revalidate,
+	io.mutate_stream = &stream;
+	io.mutate_write_call = 1;
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
 		temporary);
 	CHECK(result.status == SG_RUNE_INSTALL_WRITER_FAILED);
 	CHECK(result.writer.diagnostic == RLW_BAD_PAYLOAD_CRC);
-	CHECK(result.writer.stage == SG_RUNE_WRITE_STAGE_VERIFY);
+	CHECK(result.writer.stage == SG_RUNE_STREAM_STAGE_VERIFY);
 	CHECK(revalidate.calls == 0 && io.rename_calls == 0);
 	CHECK(PriorRunePreserved(&filesystem));
 	CHECK(CountTemporaries(&filesystem) == 0);
@@ -798,7 +887,7 @@ static void TestPassTwoMutation(void)
 static void TestForgedNonterminalResult(int forge_call, int forge_index)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
@@ -808,13 +897,13 @@ static void TestForgedNonterminalResult(int forge_call, int forge_index)
 	sg_rune_install_result_t result;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
 	memset(&forged, 0, sizeof(forged));
-	forged.writer = &writer;
+	forged.stream = &stream;
 	forged.forge_call = forge_call;
 	forged.forge_index = forge_index;
-	result = SG_RuneInstallV3(filesystem.root, "lmctf07", destination,
+	result = SG_RuneInstall(filesystem.root, "lmctf07", destination,
 		sizeof(destination), temporary, sizeof(temporary), StreamForged,
 		&forged, Revalidate, &revalidate, &ops);
 	CHECK(result.status == SG_RUNE_INSTALL_WRITER_FAILED);
@@ -827,30 +916,53 @@ static void TestForgedNonterminalResult(int forge_call, int forge_index)
 	CleanupFilesystem(&filesystem);
 }
 
-static void TestBetweenPassValidMutation(void)
+static void TestTornSecondPass(void)
 {
 	filesystem_fixture_t filesystem;
-	writer_fixture_t writer;
+	stream_fixture_t stream;
 	test_io_t io;
 	sg_rune_install_ops_t ops = TestOps(&io);
 	revalidate_fixture_t revalidate;
-	swapping_stream_t swapping;
-	char destination[MAX_OSPATH];
 	char temporary[MAX_OSPATH];
 	sg_rune_install_result_t result;
 
 	CHECK(InitFilesystem(&filesystem));
-	InitWriter(&writer);
+	InitStream(&stream);
 	InitRevalidate(&revalidate, &io);
-	memset(&swapping, 0, sizeof(swapping));
-	swapping.writer = &writer;
-	result = SG_RuneInstallV3(filesystem.root, "lmctf07", destination,
-		sizeof(destination), temporary, sizeof(temporary), StreamSwapping,
-		&swapping, Revalidate, &revalidate, &ops);
+	stream.torn_call = 2;
+	stream.torn_fragment_count = STREAM_PLAN;
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
+		temporary);
 	CHECK(result.status == SG_RUNE_INSTALL_WRITER_FAILED);
 	CHECK(result.writer.diagnostic == RLW_BAD_PAYLOAD_CRC);
-	CHECK(result.writer.stage == SG_RUNE_WRITE_STAGE_VERIFY);
-	CHECK(result.writer.index == SG_RUNE_WRITE_INDEX_NONE);
+	CHECK(result.writer.stage == SG_RUNE_STREAM_STAGE_VERIFY);
+	CHECK(result.writer.index == SG_RUNE_STREAM_INDEX_NONE);
+	CHECK(io.open_calls == 1 && io.rename_calls == 0);
+	CHECK(PriorRunePreserved(&filesystem));
+	CHECK(CountTemporaries(&filesystem) == 0);
+	CleanupFilesystem(&filesystem);
+}
+
+static void TestBetweenPassValidMutation(void)
+{
+	filesystem_fixture_t filesystem;
+	stream_fixture_t stream;
+	test_io_t io;
+	sg_rune_install_ops_t ops = TestOps(&io);
+	revalidate_fixture_t revalidate;
+	char temporary[MAX_OSPATH];
+	sg_rune_install_result_t result;
+
+	CHECK(InitFilesystem(&filesystem));
+	InitStream(&stream);
+	InitRevalidate(&revalidate, &io);
+	stream.mutate_after_call = 1;
+	result = Install(&filesystem, &stream, &io, &ops, &revalidate,
+		temporary);
+	CHECK(result.status == SG_RUNE_INSTALL_WRITER_FAILED);
+	CHECK(result.writer.diagnostic == RLW_BAD_PAYLOAD_CRC);
+	CHECK(result.writer.stage == SG_RUNE_STREAM_STAGE_VERIFY);
+	CHECK(result.writer.index == SG_RUNE_STREAM_INDEX_NONE);
 	CHECK(io.open_calls == 1 && io.rename_calls == 0);
 	CHECK(PriorRunePreserved(&filesystem));
 	CHECK(CountTemporaries(&filesystem) == 0);
@@ -866,7 +978,7 @@ int main(void)
 	TestAllTemporaryNamesCollide();
 	TestInjectedFailure(INJECT_OPEN, 0,
 		SG_RUNE_INSTALL_TEMP_OPEN_FAILED);
-	for (write_call = 1; write_call <= 5; write_call++)
+	for (write_call = 1; write_call <= STREAM_FRAGMENT_COUNT; write_call++)
 		TestInjectedFailure(INJECT_WRITE, write_call,
 			SG_RUNE_INSTALL_WRITER_FAILED);
 	TestInjectedFailure(INJECT_FLUSH, 0,
@@ -886,6 +998,7 @@ int main(void)
 	TestForgedNonterminalResult(1, 1);
 	TestForgedNonterminalResult(2, 0);
 	TestForgedNonterminalResult(2, 1);
+	TestTornSecondPass();
 	TestBetweenPassValidMutation();
 
 	if (failures)

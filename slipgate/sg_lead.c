@@ -54,6 +54,24 @@ static qboolean Lead_On(void)
 	return (sg_cv.itemlead->value > 0.0f) ? true : false;
 }
 
+static void Lead_RetireRoute(sg_bot_t *bot)
+{
+	rune_t *r = SG_Rune();
+
+	if (!bot)
+		return;
+	/* A strategy transition may discard an ordinary road.  Serialized action
+	 * controllers keep their authority until their own terminal boundary. */
+	if (r && r->links && bot->commit_link >= 0 &&
+	    bot->commit_link < r->hdr.num_links &&
+	    r->links[bot->commit_link].action == RL_RUN)
+	{
+		bot->commit_link = -1;
+		bot->commit_until = 0.0f;
+	}
+	bot->tac_seed = -1;
+}
+
 void Lead_Abort(sg_bot_t *bot, const char *why)
 {
 	edict_t *e = bot->ent;
@@ -86,11 +104,49 @@ void Lead_Abort(sg_bot_t *bot, const char *why)
 	bot->lead_slot = -1;
 	bot->lead_seed = -1;
 	bot->lead_at = 0.0f;
+	bot->lead_state = SG_LEAD_WAITING;
+	bot->lead_seen_up_at = -1.0f;
+	bot->lead_inferred_until = 0.0f;
 	/* an errand starting or ending is a STRATEGY change, and the tactical
 	 * waypoint's own contract is that a strategy change retires it -- without
 	 * this the bot descends the previous goal's flood for up to ten seconds
 	 * after changing its mind */
-	bot->tac_seed = -1;
+	Lead_RetireRoute(bot);
+}
+
+void Lead_NoteItemTaken(edict_t *taker, edict_t *item)
+{
+	int i, item_ent;
+
+	if (!taker || !item)
+		return;
+	item_ent = (int)(item - g_edicts);
+	if (item_ent <= 0 || item_ent >= globals.num_edicts)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *bot = &sg_bots[i];
+
+		if (!bot->active || !bot->ent || bot->lead_ent != item_ent)
+			continue;
+		Lead_Abort(bot, bot->ent == taker ? "picked" : "other taken");
+	}
+}
+
+qboolean Lead_PickupTarget(const sg_bot_t *bot, vec3_t target)
+{
+	edict_t *item;
+
+	if (!bot || !target || bot->lead_state != SG_LEAD_SPAWNED ||
+	    bot->lead_ent <= 0 || bot->lead_ent >= globals.num_edicts)
+		return false;
+	item = g_edicts + bot->lead_ent;
+	if (!item->inuse || !item->classname ||
+	    (strcmp(item->classname, "item_quad") != 0 &&
+	     strcmp(item->classname, "item_invulnerability") != 0))
+		return false;
+	VectorCopy(item->s.origin, target);
+	return true;
 }
 
 /*
@@ -205,12 +261,51 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		}
 		if (b->believed_up)
 		{
-			/* it is standing there: the ordinary detour arithmetic prices it
-			 * now, and prices it better than a scripted walk would */
-			Lead_Abort(bot, "spawned");
+			if (bot->lead_state != SG_LEAD_SPAWNED)
+			{
+				float hard_until = bot->lead_since + SG_LEAD_MAXWAIT;
+
+				bot->lead_state = SG_LEAD_SPAWNED;
+				/* A sighting newer than the one present at commitment confirms
+				 * the physical spawn.  A clock-only inference gets a short,
+				 * bounded chance to touch the entity and no second respawn wait. */
+				if (b->seen_up_time > bot->lead_seen_up_at)
+					bot->lead_inferred_until = 0.0f;
+				else
+				{
+					bot->lead_inferred_until = level.time + SG_LEAD_INFER_GRACE;
+					if (bot->lead_inferred_until > bot->lead_at + SG_LEAD_GRACE)
+						bot->lead_inferred_until = bot->lead_at + SG_LEAD_GRACE;
+					if (bot->lead_inferred_until > hard_until)
+						bot->lead_inferred_until = hard_until;
+				}
+				bot->lead_seen_up_at = b->seen_up_time;
+				Lead_RetireRoute(bot);
+			}
+			else if (b->seen_up_time > bot->lead_seen_up_at)
+			{
+				bot->lead_seen_up_at = b->seen_up_time;
+				bot->lead_inferred_until = 0.0f;
+			}
+			if (bot->lead_inferred_until > 0.0f &&
+			    SG_TimerReadyStrict(bot->lead_inferred_until))
+			{
+				Lead_Abort(bot, "spawn unconfirmed");
+				return NULL;
+			}
+			if (SG_TimerReadyStrict(bot->lead_since + SG_LEAD_MAXWAIT))
+			{
+				Lead_Abort(bot, "missed pickup");
+				return NULL;
+			}
+		}
+		else if (bot->lead_state == SG_LEAD_SPAWNED)
+		{
+			Lead_Abort(bot, "other taken");
 			return NULL;
 		}
-		if (b->believed_respawn_time <= 0.0f)
+		if (bot->lead_state == SG_LEAD_WAITING &&
+		    b->believed_respawn_time <= 0.0f)
 		{
 			Lead_Abort(bot, "clock gone");
 			return NULL;
@@ -220,8 +315,10 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 			Lead_Abort(bot, "claim lost");
 			return NULL;
 		}
-		bot->lead_at = b->believed_respawn_time;    /* a fresher call moves T */
-		if (SG_TimerReadyStrict(bot->lead_at + SG_LEAD_GRACE))
+		if (bot->lead_state == SG_LEAD_WAITING)
+			bot->lead_at = b->believed_respawn_time; /* a fresher call moves T */
+		if (bot->lead_state == SG_LEAD_WAITING &&
+		    SG_TimerReadyStrict(bot->lead_at + SG_LEAD_GRACE))
 		{
 			Lead_Abort(bot, "waited out");
 			return NULL;
@@ -319,6 +416,9 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	bot->lead_slot = best;
 	bot->lead_seed = padseed;
 	bot->lead_at = b->believed_respawn_time;
+	bot->lead_state = SG_LEAD_WAITING;
+	bot->lead_seen_up_at = b->seen_up_time;
+	bot->lead_inferred_until = 0.0f;
 	b->claimed_by = cl;
 	SG_TimerArm(&b->claimed_until, SG_LEAD_LEASE);
 	bot->tac_seed = -1;                 /* a new strategy retires the tactic */

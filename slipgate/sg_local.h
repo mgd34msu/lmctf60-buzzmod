@@ -13,12 +13,13 @@
  * See slipgate/SLIPGATE.md for the constitution. Principles that bind every
  * file here: physics is read or simulated, never assumed; simulated time
  * sums to real time; facts are measured, only preferences are fitted; every
- * claim is A/B-able against the legacy bots in the same harness.
+ * claim is directly comparable with the compatibility bots in the same harness.
  */
 
 #pragma once
 
 #include "sg_rune.h"
+#include "sg_door_approach.h"
 
 #define SG_MAX_SEEDS	32768
 #define SG_FIELD_INF	0x3fffffff
@@ -37,7 +38,11 @@ typedef struct sg_phantom_s
 	pmove_state_t	old_pms;       /* production snapinitial comparison state */
 	vec3_t			origin;
 	vec3_t			velocity;
+	vec3_t			mins;          /* exact player hull published by Pmove */
+	vec3_t			maxs;
 	qboolean		groundentity;
+	edict_t			*groundentity_entity; /* exact Pmove support identity for
+		                                      * mechanism approach admission */
 	int				watertype;
 	int				waterlevel;
 	/* Doors are made nonsolid while a rune is generated. A proof may enter a
@@ -53,6 +58,21 @@ typedef struct sg_phantom_s
 	int				door_wait_ms;
 	int				door_open_ms;
 } sg_phantom_t;
+
+/* One side-effect-free prediction for the next real DIRECT_TRIGGER_DOOR
+ * ClientThink.  The live adapter separately authenticates the support
+ * incarnation before arming callback authority. */
+typedef struct sg_door_approach_prediction_s
+{
+	sg_door_approach_state_t state;
+	pmove_state_t pms;
+	vec3_t mins;
+	vec3_t maxs;
+	edict_t *groundentity;
+	int watertype;
+	int waterlevel;
+	qboolean expected_touch;
+} sg_door_approach_prediction_t;
 
 typedef struct sg_hook_proof_s
 {
@@ -73,7 +93,59 @@ typedef struct sg_swim_proof_s
 	byte	exit_speed;
 } sg_swim_proof_t;
 
+/* Dormant PREOPEN D_SWIM witness.  Touch and its containing frame end are
+ * source-relative; TOP is mover-schedule-relative; arrival and sweep clearance
+ * are suffix-relative.  The final TOP mover pass and first suffix frame are
+ * the same 100 ms, so total cost uses suffix_start_ms rather than mover_top_ms. */
+typedef struct sg_compound_swim_proof_s
+{
+	int		touch_ms;
+	int		touch_frame_end_ms; /* ceil(touch_ms / 100) * 100 */
+	int		mover_top_ms;    /* raw Stage1 TOP tag (80@200 is 500) */
+	int		suffix_start_ms; /* TOP-frame start (raw tag minus 100) */
+	int		arrival_ms;
+	int		sweep_clear_ms;
+	int		total_cost_ms;   /* frame end + suffix start + arrival */
+	byte	exit_speed;
+	pmove_state_t suffix_pms;
+	pmove_state_t suffix_old_pms;
+	vec3_t		suffix_origin;
+	vec3_t		suffix_velocity;
+	qboolean	suffix_groundentity;
+	int		suffix_watertype;
+	int		suffix_waterlevel;
+	float		suffix_old_frame_z;
+} sg_compound_swim_proof_t;
+
+/* Live-only escape witness from an authoritative body state already inside a
+ * PREOPEN member's complete sweep while that exact member is held at TOP.
+ * Both times are relative to the first recovery command. */
+typedef struct sg_compound_swim_recovery_proof_s
+{
+	int		arrival_ms;
+	int		sweep_clear_ms;
+	byte		exit_speed;
+} sg_compound_swim_recovery_proof_t;
+
+/* Canonical source state owned by the compound oracle.  Keep the complete
+ * phantom, and in particular pms and old_pms as distinct values: snapinitial
+ * is part of the next real Pmove even when a freshly prepared offline source
+ * happens to make those states equal. */
+typedef struct sg_compound_swim_source_s
+{
+	sg_phantom_t	phantom;
+	float		old_frame_z;
+} sg_compound_swim_source_t;
+
+struct sg_compound_world_preopen_s;
+
 void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin);
+/* Convert a collision-trace floor endpoint into the same signed-eighth-unit,
+ * clear, grounded state that live Pmove accepts.  Ongoing rest stability is
+ * deliberately a separate action-source property: slick/current points remain
+ * valid ordinary-navigation graph points. */
+qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
+	vec3_t canonical_origin);
 void SG_TeachFutility(int seed);
 void SG_TeachLinkFutility(int link);
 void SG_NoteDeath(edict_t *victim);
@@ -98,6 +170,40 @@ qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite);
 qboolean SG_OracleSwimTraverse(sg_phantom_t *ph, const vec3_t destination,
 	qboolean destination_water, float old_frame_z, sg_swim_proof_t *proof,
 	edict_t *passent, qboolean world_only);
+rune_reject_reason_t SG_OracleCompoundSwimPrepareSource(
+	const vec3_t source,
+	const struct sg_compound_world_preopen_s *resolved,
+	float old_frame_z, sg_compound_swim_source_t *prepared,
+	edict_t *passent, qboolean world_only, qboolean loader_replay);
+rune_reject_reason_t SG_OracleCompoundSwimDiscoverContact(
+	const sg_compound_swim_source_t *prepared,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t canonical_hint, vec3_t mechanism_anchor,
+	edict_t *passent, qboolean world_only, qboolean loader_replay);
+rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t mechanism_anchor, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_proof_t *proof, edict_t *passent,
+	qboolean world_only, qboolean loader_replay);
+/* Re-prove a bounded SWIM from the exact state the live client's next Pmove
+ * would consume.  The caller owns rune/physics authority and must renew the
+ * TOP lease before calling; this observation-only oracle never touches the
+ * member timer.  Recovery starts inside the sweep.  A caller already outside
+ * is safe to release and is deliberately rejected here. */
+rune_reject_reason_t SG_OracleCompoundSwimRecover(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t destination, qboolean destination_water,
+	float old_frame_z, sg_compound_swim_recovery_proof_t *proof,
+	edict_t *passent);
+/* Re-prove the nominal suffix from the exact live TOP checkpoint.  Unlike
+ * Recover, Continue requires the subject to begin outside the complete mover
+ * sweep; both paths keep the member at canonical TOP throughout replay. */
+rune_reject_reason_t SG_OracleCompoundSwimContinue(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t destination, qboolean destination_water,
+	float old_frame_z, sg_compound_swim_recovery_proof_t *proof,
+	edict_t *passent);
 qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	const vec3_t anchor, edict_t *pad, float old_frame_z,
 	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
@@ -111,6 +217,38 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
  * links the whole set at STATE_TOP before replaying the live direct egress. */
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source);
 qboolean SG_DeclaredDoorActivatorSafe(edict_t *trigger);
+qboolean SG_DeclaredDoorDirectActivatorSafe(edict_t *trigger);
+qboolean SG_DeclaredButtonDoorSafe(edict_t *button);
+qboolean SG_OracleStablePopulationTrace(const vec3_t start,
+	const vec3_t mins, const vec3_t maxs, const vec3_t end,
+	edict_t *passent, qboolean population_independent, trace_t *trace_out);
+qboolean SG_OracleButtonCarryClear(edict_t *button, const vec3_t from,
+	const vec3_t to, qboolean population_independent);
+typedef enum sg_button_support_mode_e
+{
+	SG_BUTTON_SUPPORT_NONE = 0,
+	SG_BUTTON_SUPPORT_STATIC,
+	SG_BUTTON_SUPPORT_RIDER
+} sg_button_support_mode_t;
+typedef enum sg_button_contact_status_e
+{
+	SG_BUTTON_CONTACT_OK = 0,
+	SG_BUTTON_CONTACT_UNSAFE,
+	SG_BUTTON_CONTACT_SWEEP_OCCUPIED,
+	SG_BUTTON_CONTACT_BAD_ORIGIN,
+	SG_BUTTON_CONTACT_DEGENERATE,
+	SG_BUTTON_CONTACT_STARTSOLID,
+	SG_BUTTON_CONTACT_ALLSOLID,
+	SG_BUTTON_CONTACT_NO_HIT,
+	SG_BUTTON_CONTACT_WRONG_HIT,
+	SG_BUTTON_CONTACT_STATUS_COUNT
+} sg_button_contact_status_t;
+sg_button_contact_status_t SG_DeclaredButtonDoorContactStatus(
+	edict_t *button, const vec3_t origin);
+qboolean SG_DeclaredButtonDoorContactMatches(edict_t *button,
+	const vec3_t origin);
+qboolean SG_DeclaredButtonDoorApproachSourceClear(edict_t *button,
+	const vec3_t origin);
 qboolean SG_OracleReplayTriggerEvents(edict_t *trigger,
 	qboolean *contaminated, qboolean *door_passed);
 qboolean SG_OracleReplayDoorPassage(const vec3_t from, const vec3_t to);
@@ -119,11 +257,45 @@ qboolean SG_OracleReplaySourceEvents(edict_t *ent,
 int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
 	int capacity);
 int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger);
+struct sg_rune_mechanism_binding_s;
+/* Game-side mover ownership must not retire while any retained player,
+ * corpse, or grapple bolt still intersects a physical member's complete
+ * sweep.  Both arguments must be exact, currently linked g_edicts entries;
+ * malformed, stale, non-solid, or unsupported identities fail closed. */
+qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject);
+/* Population-independent validation for one immediate pusher dispatch. */
+qboolean SG_MoverProspectivePusherValid(edict_t *member);
+/* Immediate engine-pusher fence: prove a retained physical subject outside
+ * the brush volume swept by the member's next quantized 100 ms push.  This is
+ * intentionally narrower than the complete route sweep above. */
+qboolean SG_MoverSubjectOutsideProspectivePush(edict_t *member,
+	edict_t *subject);
 qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin);
 qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 	const vec3_t to);
 qboolean SG_DeclaredDoorAtTop(edict_t *trigger);
 qboolean SG_DeclaredDoorAtTopFor(edict_t *trigger, int window_ms);
+qboolean SG_BoundDoorOutsideSweep(
+	const struct sg_rune_mechanism_binding_s *binding, const vec3_t origin);
+qboolean SG_BoundDoorCrossesSweep(
+	const struct sg_rune_mechanism_binding_s *binding, const vec3_t from,
+	const vec3_t to);
+qboolean SG_BoundDoorAtTop(
+	const struct sg_rune_mechanism_binding_s *binding);
+qboolean SG_BoundDoorAtTopFor(
+	const struct sg_rune_mechanism_binding_s *binding, int window_ms);
+qboolean SG_BoundDoorTouchMatches(
+	const struct sg_rune_mechanism_binding_s *binding,
+	const vec3_t activator_origin);
+qboolean SG_BoundDoorEntryContactMatches(
+	const struct sg_rune_mechanism_binding_s *binding,
+	const vec3_t activator_origin);
+/* Protective maintenance for an exact already-authorized physical member
+ * set.  This exists for the lifecycle edge where the activator disappears
+ * after acquisition; it validates the entire set before changing any timer. */
+qboolean SG_DeclaredDoorHoldMembers(edict_t *const *members, int count,
+	int lease_ms);
+qboolean SG_DeclaredDoorMembersTerminal(edict_t *const *members, int count);
 qboolean SG_DeclaredDoorHoldOpen(edict_t *trigger, int lease_ms);
 int SG_DeclaredDoorContractCost(edict_t *trigger, int approach_ms,
 	int touch_ms, int egress_ms);
@@ -141,17 +313,57 @@ qboolean SG_DeclaredDoorApproachSourceClear(edict_t *trigger,
 	const vec3_t origin);
 qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
 	const usercmd_t *cmd);
+qboolean SG_OracleBoundDoorStepSafe(edict_t *ent,
+	const struct sg_rune_mechanism_binding_s *binding,
+	const usercmd_t *cmd);
+qboolean SG_OracleBoundDoorApproachStep(edict_t *ent,
+	const struct sg_rune_mechanism_binding_s *binding,
+	const usercmd_t *cmd, const sg_door_approach_state_t *state,
+	sg_door_approach_prediction_t *prediction,
+	sg_door_approach_reason_t *reason_out);
 qboolean SG_OracleDeclaredDoorContinue(edict_t *ent, const vec3_t target,
 	edict_t *trigger, int *arrival_ms);
+qboolean SG_OracleBoundDoorContinue(edict_t *ent, const vec3_t target,
+	const struct sg_rune_mechanism_binding_s *binding, int *arrival_ms);
+qboolean SG_OracleDoorApproachContactObserved(qboolean button_controller,
+	qboolean physical_touch, qboolean bound_contact);
+qboolean SG_OracleDoorShallowWadeSafe(int waterlevel, int watertype);
+qboolean SG_OracleDoorEgressWaterSafe(int controller_kind, int waterlevel,
+	int watertype);
 qboolean SG_OracleDeclaredDoorApproach(const vec3_t source,
 	const vec3_t wait_point, edict_t *trigger, int *arrival_ms,
 	int *touch_ms);
+qboolean SG_OracleDeclaredButtonDoorApproach(const vec3_t source,
+	const vec3_t wait_point, edict_t *button, int *arrival_ms,
+	int *touch_ms, sg_button_support_mode_t *support_mode);
+qboolean SG_OracleBoundDoorApproach(const vec3_t source,
+	const vec3_t wait_point,
+	const struct sg_rune_mechanism_binding_s *binding, int *arrival_ms,
+	int *touch_ms);
+qboolean SG_OracleBoundButtonDoorApproach(const vec3_t source,
+	const vec3_t wait_point,
+	const struct sg_rune_mechanism_binding_s *binding, int *arrival_ms,
+	int *touch_ms, sg_button_support_mode_t *support_mode);
 qboolean SG_OracleDeclaredDoorEgress(const vec3_t source,
 	const vec3_t target, edict_t *trigger, edict_t *passent,
 	int *arrival_ms);
+qboolean SG_OracleDeclaredButtonDoorTopEgress(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *passent,
+	int *arrival_ms, sg_button_support_mode_t support_mode);
+qboolean SG_OracleBoundDoorEgress(const vec3_t source,
+	const vec3_t target,
+	const struct sg_rune_mechanism_binding_s *binding, edict_t *passent,
+	int *arrival_ms);
+qboolean SG_OracleBoundButtonDoorEgress(const vec3_t source,
+	const vec3_t target,
+	const struct sg_rune_mechanism_binding_s *binding, edict_t *passent,
+	int *arrival_ms, sg_button_support_mode_t support_mode);
 qboolean SG_OracleValidateDeclaredDoorLink(const vec3_t source,
 	const vec3_t anchor, const vec3_t target, edict_t *trigger,
 	int stored_cost_ms);
+qboolean SG_OracleValidateBoundDoorLink(const vec3_t source,
+	const vec3_t anchor, const vec3_t target,
+	const struct sg_rune_mechanism_binding_s *binding, int stored_cost_ms);
 
 /* -------------------------------------------------------------------- caco */
 
@@ -414,22 +626,30 @@ typedef struct
 	int		mega_seed[SG_MAX_MEGA];
 	int		mega_ent[SG_MAX_MEGA];
 	int		mega_count;
-	/*
-	 * SUB-STAND SHELF (steal-genesis study, waves 433-439): per-team
-	 * cliff penalty for seeds under the enemy stand -- the measured
-	 * static-cost asymmetry RL_DROP's flat +150 never priced. Zero on
-	 * flat-stand maps (the built-in null). [0]=red attackers (vs blue
-	 * stand), [1]=blue attackers.
-	 */
+	/* Per-team cliff penalty for seeds under the enemy stand. This prices the
+	 * measured static-cost asymmetry that RL_DROP's flat surcharge misses.
+	 * Zero on flat-stand maps. [0]=red attackers, [1]=blue attackers. */
 	int		*shelf_cliff[2];
+
+	/* The action topology used by every cached field.  The offhand-hook bit
+	 * may change during a level; Fields_Refresh rebuilds all cached fields on
+	 * that edge before publishing the new value.  DPO roots are retained as
+	 * seed identities because their source planes are candidate-only setup
+	 * storage and cannot be consulted again during a refresh. */
+	qboolean hook_admitted;
+	qboolean action_topology_pending;
+	unsigned action_topology_epoch;
+	int		post_seed[2];
+	int		icept_seed[2];
+	int		lane_seed[2];
 } sg_fields_t;
 
 extern sg_fields_t sg_fields;
 
 /*
  * Candidate-only inputs consumed while the graph fields are constructed.
- * The DPO order is the v3 wire order and is deliberately named here so the
- * loader cannot silently transpose teams or post/intercept semantics:
+	 * The DPO order is fixed and deliberately named here so sidecar loading
+	 * cannot silently transpose teams or post/intercept semantics:
  * post red, post blue, intercept red, intercept blue.
  *
  * A NULL setup object or NULL plane is neutral.  The pointed-to storage only
@@ -451,6 +671,9 @@ typedef struct sg_field_setup_inputs_s
 
 qboolean	Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs);
 void		Fields_Refresh(rune_t *r);
+qboolean	Fields_ActionTopologyRefresh(rune_t *r);
+qboolean	Fields_ActionAdmitted(int action);
+qboolean	Fields_ActionTopologyCurrent(unsigned epoch);
 /* the one place the sg_megaworth cvar is read, so pricing, flooding and the
  * debug line can never disagree about whether the feature is on */
 qboolean	SG_MegaOn(void);
@@ -489,9 +712,37 @@ typedef struct
 } sg_weights_t;
 
 qboolean	SG_OwnsBot(edict_t *ent);
-void		SG_NoteDoorTriggerTouch(edict_t *source, edict_t *activator);
-void		SG_NoteDoorActivation(edict_t *source, edict_t *door_master,
-							  edict_t *activator);
+/* Ordinary dose-2 bot commands mark one exact ClientThink.  The game boundary
+ * consumes that mark so every other SG Pmove resets fractional landing time. */
+void	SG_HumanSpeedClientThinkBegin(edict_t *ent);
+void	SG_HumanSpeedPmoveBegin(edict_t *ent, pmove_state_t *pmove,
+	unsigned command_msec);
+void	SG_HumanSpeedPmoveEnd(edict_t *ent, const pmove_state_t *pmove,
+	unsigned command_msec);
+/* G_UseTargets marks only transient DelayedUse edicts with this bit.  It
+ * preserves SG provenance across the delay without changing mapper entities
+ * or treating human activators as guarded bots. */
+#define SG_DELAYED_USE_BOT_ACTIVATOR 0x40000000
+void		SG_CancelBotDelayedUses(edict_t *activator);
+qboolean	SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeDoorTriggerUse(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeButtonUse(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator);
+void		SG_ButtonExecutionEntityFreed(edict_t *entity);
+qboolean	SG_HandleMechanismTargets(edict_t *source,
+								      edict_t *activator);
+qboolean	SG_AuthorizeLiftTouch(edict_t *source, edict_t *platform,
+								  edict_t *activator);
+qboolean	SG_AuthorizeLiftUse(edict_t *platform, edict_t *activator);
+edict_t		*SG_ResolveTeleportDestination(edict_t *source,
+								       edict_t *activator);
+qboolean	SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
+								   edict_t *activator);
+struct sg_bot_s;
+/* Last-resort safety terminal: normal player_die lifecycle, deliberately
+ * gibbed nonsolid so an unmaintainable mover cannot close onto a corpse. */
+void		SG_DeclaredDoorTerminalDeath(struct sg_bot_s *bot);
 void		SG_NoteDropTriggerContact(edict_t *source, edict_t *activator);
 void		SG_NoteDropSolidContact(edict_t *source, edict_t *activator);
 qboolean	SG_RetireBotForClient(edict_t *ent);
@@ -517,7 +768,7 @@ float		SG_TiltCaution(edict_t *ent);
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
 void		Botfill_Reset(void);    /* clear level-time cadence and hysteresis */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
-void		SG_DangerCheckpoint(const char *event); /* final dirty DNG3 save */
+void		SG_DangerCheckpoint(const char *event); /* final dirty save */
 void		SG_DangerPersistenceReset(void); /* release lease, forget model */
 
 rune_t		*Rune_Load(const char *mapname);

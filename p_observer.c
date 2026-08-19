@@ -20,6 +20,7 @@ void Observer_Start (edict_t *ent)
 	// If we are STILL on a team yet, don't START observer mode
 	if (ent->client->ctf.teamnum > CTF_TEAM_UNDEFINED)
 		return;
+	POVLock_Clear(ent);
 
 	// remove powerups
 	ent->client->quad_framenum = 0;
@@ -53,6 +54,8 @@ void Observer_Start (edict_t *ent)
 	sprintf(message, "%s is now an observer.\n", ent->client->pers.netname);
 	ctf_BSafePrint(PRINT_HIGH, message);
 	gi.centerprintf (ent, "You are now an observer.");
+	gi.cprintf(ent, PRINT_HIGH,
+		"Observer chase: chasecam [next|prev|off]. SG bots are in-eyes.\n");
 
 }
 

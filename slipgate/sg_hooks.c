@@ -26,6 +26,13 @@ static void Host_Dprint(const char *fmt, ...)
 	gi.dprintf("%s", buf);
 }
 
+static void Host_Flush(void)
+{
+	/* Yamagi's gi.dprintf path ends at Sys_ConsoleOutput/fputs(stdout); this
+	 * makes a complete RUNE diagnostic line visible before the host returns. */
+	fflush(NULL);
+}
+
 static void Host_Cprint(edict_t *ent, int level, const char *fmt, ...)
 {
 	char	buf[1024];
@@ -217,6 +224,7 @@ void SG_HooksInit(void)
 {
 	static const sg_host_t lmctf_host = {
 		.dprint = Host_Dprint,
+		.flush = Host_Flush,
 		.cprint = Host_Cprint,
 		.bprint = Host_Bprint,
 		.trace = Host_Trace,

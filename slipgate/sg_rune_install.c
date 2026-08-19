@@ -1,4 +1,4 @@
-/* sg_rune_install.c -- checked, atomic installation for streamed RUNE v3. */
+/* sg_rune_install.c -- checked, atomic installation for RUNE. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -21,6 +21,7 @@
  * before the internal writer/install headers that consume its native types. */
 #include "q_shared.h"
 #include "slipgate/sg_rune_install.h"
+#include "slipgate/sg_action.h"
 
 typedef struct sg_rune_install_sink_s
 {
@@ -56,7 +57,7 @@ static int Install_MapNameValid(const char *map_name)
 
 	if (!map_name || !Install_MapInitial((unsigned char)map_name[0]))
 		return 0;
-	for (i = 1; i < SG_RUNE_V3_MAP_NAME_BYTES; i++)
+	for (i = 1; i < RUNE_MAP_NAME_BYTES; i++)
 	{
 		if (map_name[i] == '\0')
 			return 1;
@@ -199,7 +200,7 @@ const char *SG_RuneInstallReason(sg_rune_install_status_t status)
 		"path exceeds the checked output boundary",
 		"cannot create exclusive temporary",
 		"exclusive temporary names exhausted",
-		"v3 writer failed",
+		"RUNE writer failed",
 		"temporary flush failed",
 		"temporary sync failed",
 		"temporary close failed",
@@ -270,9 +271,8 @@ static sg_rune_install_result_t Install_Result(void)
 	memset(&result, 0, sizeof(result));
 	result.status = SG_RUNE_INSTALL_INVALID_ARGUMENT;
 	result.writer.diagnostic = RLW_INVALID_ARGUMENT;
-	result.writer.reason = RLR_OK;
-	result.writer.stage = SG_RUNE_WRITE_STAGE_ARGUMENT;
-	result.writer.index = SG_RUNE_WRITE_INDEX_NONE;
+	result.writer.stage = SG_RUNE_STREAM_STAGE_ARGUMENT;
+	result.writer.index = SG_RUNE_STREAM_INDEX_NONE;
 	return result;
 }
 
@@ -290,7 +290,7 @@ static void Install_CleanupOwned(sg_rune_install_result_t *result,
 	}
 }
 
-sg_rune_install_result_t SG_RuneInstallV3(
+sg_rune_install_result_t SG_RuneInstall(
 	const char *game_directory, const char *map_name,
 	char *destination_path, size_t destination_path_size,
 	char *temporary_path, size_t temporary_path_size,
@@ -299,7 +299,7 @@ sg_rune_install_result_t SG_RuneInstallV3(
 	const sg_rune_install_ops_t *ops)
 {
 	sg_rune_install_result_t result = Install_Result();
-	sg_rune_write_result_t dry_writer;
+	sg_rune_stream_result_t dry_writer;
 	sg_rune_install_sink_t sink;
 	sg_rune_install_count_t count;
 	FILE *file = NULL;
@@ -328,20 +328,17 @@ sg_rune_install_result_t SG_RuneInstallV3(
 	}
 
 	/* Full native/identity preflight before the first filesystem operation.
-	 * SG_RuneV3Write itself performs another pass-one validation when invoked
-	 * below, so mutation between this dry stream and emission still fails
-	 * closed and cleans the acquired temporary. */
+	 * The stream performs another complete validation while emitting,
+	 * so mutation between dry and write passes fails closed. */
 	memset(&count, 0, sizeof(count));
 	result.writer_called++;
 	result.writer = stream(stream_context, Install_CountSink, &count);
-	if (result.writer.diagnostic != RLW_OK || result.writer.reason != RLR_OK ||
-	    result.writer.stage != SG_RUNE_WRITE_STAGE_DONE ||
-	    result.writer.index != SG_RUNE_WRITE_INDEX_NONE || count.failed ||
+	if (!SG_RuneStreamResultSucceeded(&result.writer) || count.failed ||
 	    result.writer.bytes_written != count.bytes_written ||
 	    result.writer.file_size != count.bytes_written)
 	{
 		if (result.writer.diagnostic == RLW_OK)
-			result.writer.diagnostic = RLW_IO_ERROR;
+			SG_RuneStreamResultMarkIOFailure(&result.writer, 0);
 		result.status = SG_RUNE_INSTALL_WRITER_FAILED;
 		return result;
 	}
@@ -385,22 +382,12 @@ sg_rune_install_result_t SG_RuneInstallV3(
 	result.writer = stream(stream_context, Install_Sink, &sink);
 	dry_mismatch = result.writer.file_size != dry_writer.file_size ||
 		result.writer.payload_crc32 != dry_writer.payload_crc32;
-	if (result.writer.diagnostic != RLW_OK || result.writer.reason != RLR_OK ||
-	    result.writer.stage != SG_RUNE_WRITE_STAGE_DONE ||
-	    result.writer.index != SG_RUNE_WRITE_INDEX_NONE || sink.failed ||
+	if (!SG_RuneStreamResultSucceeded(&result.writer) || sink.failed ||
 	    result.writer.bytes_written != sink.bytes_written ||
 	    result.writer.file_size != sink.bytes_written || dry_mismatch)
 	{
 		if (result.writer.diagnostic == RLW_OK)
-		{
-			result.writer.diagnostic = dry_mismatch
-				? RLW_BAD_PAYLOAD_CRC : RLW_IO_ERROR;
-			if (dry_mismatch)
-			{
-				result.writer.stage = SG_RUNE_WRITE_STAGE_VERIFY;
-				result.writer.index = SG_RUNE_WRITE_INDEX_NONE;
-			}
-		}
+			SG_RuneStreamResultMarkIOFailure(&result.writer, dry_mismatch);
 		result.status = SG_RUNE_INSTALL_WRITER_FAILED;
 		result.os_error = sink.os_error;
 		goto close_and_cleanup;

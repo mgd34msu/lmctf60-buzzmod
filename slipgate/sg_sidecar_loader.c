@@ -124,7 +124,7 @@ static void Loader_DefaultDeallocate(void *context, void *allocation)
 	free(allocation);
 }
 
-void SG_SidecarV3DefaultLoadOps(sg_sidecar_load_ops_t *ops_out)
+void SG_SidecarDefaultLoadOps(sg_sidecar_load_ops_t *ops_out)
 {
 	if (!ops_out)
 		return;
@@ -144,25 +144,25 @@ static int Loader_OpsValid(const sg_sidecar_load_ops_t *ops)
 	       ops->close_file && ops->allocate && ops->deallocate;
 }
 
-sg_sidecar_diagnostic_t SG_SidecarV3Path(char *output, size_t output_size,
+sg_sidecar_diagnostic_t SG_SidecarPath(char *output, size_t output_size,
 	const char *game_directory, sg_sidecar_kind_t kind,
-	const sg_rune_v3_header_t *rune)
+	const rune_artifact_t *artifact)
 {
 	const char *extension;
 	size_t ignored_size;
 	int written;
 
-	if (output && output_size > 0)
+	if (output && output_size > 0U)
 		output[0] = '\0';
-	if (!output || output_size == 0 || !game_directory ||
-	    game_directory[0] == '\0' || !rune)
+	if (!output || output_size == 0U || !game_directory ||
+	    game_directory[0] == '\0' || !artifact)
 		return SCD_INVALID_ARGUMENT;
 	extension = SG_SidecarKindExtension(kind);
-	if (!extension || SG_SidecarV3FileSize(kind, rune, &ignored_size) !=
+	if (!extension || SG_SidecarFileSize(kind, artifact, &ignored_size) !=
 	    SCD_OK)
 		return SCD_INVALID_ARGUMENT;
 	written = snprintf(output, output_size, "%s/maps/%s%s",
-		game_directory, rune->map_name, extension);
+		game_directory, artifact->identity.map_name, extension);
 	if (written < 0 || (size_t)written >= output_size)
 	{
 		output[0] = '\0';
@@ -216,25 +216,25 @@ static sg_sidecar_stage_t Loader_DecodeStage(
 	return Loader_InspectStage(diagnostic);
 }
 
-static int Loader_SeedMarksValid(sg_sidecar_kind_t kind,
-	const sg_rune_v3_header_t *rune, const uint8_t *marks,
+static int Loader_ArtifactSeedMarksValid(sg_sidecar_kind_t kind,
+	const rune_artifact_t *artifact, const uint8_t *marks,
 	size_t mark_capacity)
 {
 	uint32_t seed;
 
 	if (kind != SG_SIDECAR_DEFENSE && kind != SG_SIDECAR_DANGER)
 		return 1;
-	if (!rune || !marks || mark_capacity < rune->num_seeds)
+	if (!artifact || !marks || mark_capacity < artifact->num_seeds)
 		return 0;
-	for (seed = 0; seed < rune->num_seeds; seed++)
-		if (marks[seed] > 1)
+	for (seed = 0U; seed < artifact->num_seeds; seed++)
+		if (marks[seed] > 1U)
 			return 0;
 	return 1;
 }
 
-sg_sidecar_load_result_t SG_SidecarV3LoadFile(
+sg_sidecar_load_result_t SG_SidecarLoadFile(
 	const char *game_directory, sg_sidecar_kind_t kind,
-	const sg_rune_v3_header_t *rune,
+	const rune_artifact_t *artifact,
 	const uint8_t *live_seed_marks, size_t live_seed_capacity,
 	unsigned char **payload_out, size_t *payload_size_out,
 	const sg_sidecar_load_ops_t *provided_ops)
@@ -242,8 +242,8 @@ sg_sidecar_load_result_t SG_SidecarV3LoadFile(
 	sg_sidecar_load_result_t result = Loader_Result();
 	sg_sidecar_load_ops_t default_ops;
 	const sg_sidecar_load_ops_t *ops = provided_ops;
-	sg_sidecar_v3_header_t inspected;
-	unsigned char header[SG_SIDECAR_V3_HEADER_BYTES];
+	sg_sidecar_header_t inspected;
+	unsigned char header[SG_SIDECAR_HEADER_BYTES];
 	unsigned char trailing;
 	unsigned char *snapshot = NULL;
 	void *file = NULL;
@@ -258,21 +258,21 @@ sg_sidecar_load_result_t SG_SidecarV3LoadFile(
 
 	if (!ops)
 	{
-		SG_SidecarV3DefaultLoadOps(&default_ops);
+		SG_SidecarDefaultLoadOps(&default_ops);
 		ops = &default_ops;
 	}
-	if (!game_directory || !rune || !payload_out || !payload_size_out ||
+	if (!game_directory || !artifact || !payload_out || !payload_size_out ||
 	    !Loader_OpsValid(ops) ||
-	    SG_SidecarV3FileSize(kind, rune, &expected_file_size) != SCD_OK ||
-	    expected_file_size < SG_SIDECAR_V3_HEADER_BYTES)
+	    SG_SidecarFileSize(kind, artifact, &expected_file_size) != SCD_OK ||
+	    expected_file_size < SG_SIDECAR_HEADER_BYTES)
 		return result;
-	expected_payload_size = expected_file_size - SG_SIDECAR_V3_HEADER_BYTES;
+	expected_payload_size = expected_file_size - SG_SIDECAR_HEADER_BYTES;
 	result.expected_file_size = expected_file_size;
-	if (!Loader_SeedMarksValid(kind, rune, live_seed_marks,
+	if (!Loader_ArtifactSeedMarksValid(kind, artifact, live_seed_marks,
 	        live_seed_capacity))
 		return result;
-	result.diagnostic = SG_SidecarV3Path(path, sizeof(path), game_directory,
-		kind, rune);
+	result.diagnostic = SG_SidecarPath(path, sizeof(path), game_directory,
+		kind, artifact);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = SCS_PATH;
@@ -324,8 +324,8 @@ sg_sidecar_load_result_t SG_SidecarV3LoadFile(
 		primary_failure = 1;
 		goto close_file;
 	}
-	result.diagnostic = SG_SidecarV3Inspect(header, sizeof(header),
-		result.observed_file_size, kind, rune, &inspected);
+	result.diagnostic = SG_SidecarInspect(header, sizeof(header),
+		result.observed_file_size, kind, artifact, &inspected);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = Loader_InspectStage(result.diagnostic);
@@ -406,16 +406,16 @@ close_file:
 		return result;
 	}
 
-	result.diagnostic = SG_SidecarV3Decode(snapshot, expected_file_size,
-		kind, rune, live_seed_marks, live_seed_capacity, snapshot,
+	result.diagnostic = SG_SidecarDecode(snapshot, expected_file_size,
+		kind, artifact, live_seed_marks, live_seed_capacity, snapshot,
 		expected_payload_size, &decoded_size);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = Loader_DecodeStage(result.diagnostic);
 		if (result.diagnostic == SCD_BAD_PAYLOAD_VALUE)
-			(void)SG_SidecarV3ValidatePayload(kind, rune,
+			(void)SG_SidecarValidatePayload(kind, artifact,
 				live_seed_marks, live_seed_capacity,
-				snapshot + SG_SIDECAR_V3_HEADER_BYTES,
+				snapshot + SG_SIDECAR_HEADER_BYTES,
 				expected_payload_size, &result.plane,
 				&result.index);
 		ops->deallocate(ops->context, snapshot);

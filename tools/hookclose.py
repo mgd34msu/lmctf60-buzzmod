@@ -2,86 +2,112 @@
 """
 hookclose.py -- did the rope actually PULL?
 
-For every HOOKFIRE ... HOOKEND pair, compare the bot's distance to the anchor in
+For every key/value HOOKFIRE ... HOOKEND pair, compare the bot's distance to the anchor in
 the SG telemetry sample immediately BEFORE the fire with the sample immediately
 AFTER the end.  A rope that attached overwrites velocity with a flat 800 u/s
 straight at the anchor (p_weapon.c:2088-2092), so a pull is unmistakable as
 closure.  A rope that never attached leaves the bot walking.
 
-'burst' / 'apex' / 'drop' are known-pulled controls (sg_arach.c takes those
-branches only with a live rope).  'noattach' is the population under test.
+'burst' / 'apex' / 'arrived' / 'landed' are known-pulled controls (the
+diagnostic terminal owners take those branches only after a live rope or
+completed reducer).  'noattach' is the population under test.
 
 Usage: hookclose.py <iter-dir> [...]
 """
-import sys, os, re, math, glob, statistics
+import sys, os, math, glob, statistics
 from collections import defaultdict, Counter
-
-RE_SG = re.compile(
-    r"^SG (\S+): role=(-?\d+) seed=(-?\d+) goal=(-?\d+) sgoal=(-?\d+) spd=(-?\d+) "
-    r"org=\((-?\d+) (-?\d+) (-?\d+)\) link=(-?\d+) act=(-?\d+) hp=(-?\d+) .*gnd=(\d)")
-RE_FIRE = re.compile(r"^HOOKFIRE (\S+) at \((-?\d+) (-?\d+) (-?\d+)\)")
-RE_END = re.compile(r"^HOOKEND (\S+) (\w+)")
+if os.path.dirname(__file__) not in sys.path:
+    sys.path.insert(0, os.path.dirname(__file__))
+from hookevents import AuxMarker, HookEvent, SGTelemetry, scan_file
 
 
-def parse(path):
+def parse_with_result(path):
     """Return list of dicts, one per fire that got an end and has SG samples
     on both sides."""
     out = []
-    pend = {}        # bot -> record waiting for its post-end SG sample
-    open_f = {}      # bot -> record between fire and end
+    pend = defaultdict(list)  # bot -> records waiting for post-end SG sample
+    open_f = {}      # (id, bot) -> record between fire and end
     last_sg = {}
     armskies = defaultdict(int)
-    with open(path, errors="replace") as fh:
-        for ln, line in enumerate(fh, 1):
-            line = line.rstrip("\n")
-            if line.startswith("SG "):
-                m = RE_SG.match(line)
-                if not m:
-                    continue
-                bot = m.group(1).rstrip(":")
-                org = (float(m.group(7)), float(m.group(8)), float(m.group(9)))
-                spd = int(m.group(6))
-                gnd = int(m.group(13))
-                last_sg[bot] = (org, spd, gnd)
-                r = pend.pop(bot, None)
-                if r is not None:
-                    r["after"] = org
-                    r["spd_after"] = spd
-                    r["gnd_after"] = gnd
-                    r["d_after"] = math.dist(org, r["anchor"])
-                    out.append(r)
-                continue
-            if line.startswith("HOOKSKYHOLD "):
-                armskies[line.split()[1]] += 1
-                continue
-            if line.startswith("HOOKFIRE "):
-                m = RE_FIRE.match(line)
-                if not m:
-                    continue
-                bot = m.group(1)
+    timeline = []
+
+    def collect(item):
+        # scan_file's input ceiling makes this replay list bounded.  Retain
+        # only validated typed records; anomalies remain in PairingResult.
+        if isinstance(item, (HookEvent, SGTelemetry, AuxMarker)):
+            timeline.append(item)
+
+    pairing = scan_file(path, collect)
+    if pairing.global_fatal:
+        return [], pairing
+    fire_events = {pair.fire.line: pair.fire for pair in pairing.pairs}
+    end_events = {pair.end.line: pair.end for pair in pairing.pairs}
+    for item in timeline:
+        if isinstance(item, SGTelemetry):
+            bot = item.bot
+            org = item.org
+            spd = item.spd
+            gnd = item.gnd
+            last_sg[bot] = (org, spd, gnd)
+            for r in pend.pop(bot, []):
+                r["after"] = org
+                r["spd_after"] = spd
+                r["gnd_after"] = gnd
+                r["d_after"] = math.dist(org, r["anchor"])
+                out.append(r)
+            continue
+        if isinstance(item, AuxMarker):
+            if item.kind == "HOOKSKYHOLD":
+                armskies[item.bot] += 1
+            continue
+        if isinstance(item, HookEvent):
+            event = fire_events.get(item.line)
+            if event is not None:
+                anchor = tuple(value / 8.0 for value in event.anchor_q8)
+                bot = event.bot
                 sg = last_sg.get(bot)
                 if not sg:
                     continue
-                anchor = (float(m.group(2)), float(m.group(3)), float(m.group(4)))
-                open_f[bot] = dict(bot=bot, anchor=anchor, before=sg[0],
+                open_f[event.key] = dict(id=event.id, bot=bot,
+                                   anchor=anchor, before=sg[0],
                                    spd_before=sg[1], gnd_before=sg[2],
                                    d_before=math.dist(sg[0], anchor),
-                                   line=ln, armsky=armskies[bot])
+                                   line=event.line, armsky=armskies[bot])
                 armskies[bot] = 0
                 continue
-            if line.startswith("HOOKEND "):
-                m = RE_END.match(line)
-                if not m:
-                    continue
-                bot, tag = m.group(1), m.group(2)
-                r = open_f.pop(bot, None)
+            event = end_events.get(item.line)
+            if event is not None:
+                bot, tag = event.bot, event.reason
+                r = open_f.pop(event.key, None)
                 if r is None:
                     continue
                 r["tag"] = tag
-                r["endline"] = ln
-                pend[bot] = r
+                r["detail"] = event.detail
+                r["endline"] = event.line
+                pend[bot].append(r)
                 continue
-    return out
+    # A fatal telemetry anomaly makes this stream unsuitable for analytics as
+    # a whole.  Never present a partial closure population beside a malformed
+    # sample; the shared policy is the same in hookdiag.
+    if any(anomaly.fatal for anomaly in pairing.telemetry_anomalies):
+        out = []
+    return out, pairing
+
+
+def parse(path):
+    return parse_with_result(path)[0]
+
+
+def report_anomalies(path, pairing):
+    for anomaly in pairing.anomalies:
+        scope = " global-fatal" if anomaly.global_fatal else ""
+        print("%s:%d: hook protocol %s%s: %s" %
+              (path, anomaly.line, anomaly.code, scope, anomaly.message), file=sys.stderr)
+    for anomaly in pairing.telemetry_anomalies:
+        scope = " fatal" if anomaly.fatal else ""
+        print("%s:%d: SG telemetry %s%s: %s" %
+              (path, anomaly.line, anomaly.code, scope, anomaly.message),
+              file=sys.stderr)
 
 
 def report(recs, title):
@@ -108,18 +134,27 @@ def report(recs, title):
 
 def main():
     recs = []
+    bad = False
+    global_fatal = False
     for d in sys.argv[1:]:
         for p in sorted(glob.glob(os.path.join(d, "*.log"))):
-            recs.extend(parse(p))
+            records, pairing = parse_with_result(p)
+            recs.extend(records)
+            report_anomalies(p, pairing)
+            bad = bad or bool(pairing.anomalies) or any(
+                anomaly.fatal for anomaly in pairing.telemetry_anomalies)
+            global_fatal = global_fatal or pairing.global_fatal
+    if global_fatal:
+        return 1
     report(recs, "closure toward the anchor, by HOOKEND tag")
 
     na = [r for r in recs if r["tag"] == "noattach"]
-    pulled = [r for r in recs if r["tag"] in ("apex", "drop", "burst")]
+    pulled = [r for r in recs if r["tag"] in ("apex", "arrived", "landed", "burst")]
 
     print("\n### closure histogram (units closed toward the anchor)")
     bins = [(-10000, -100), (-100, 0), (0, 50), (50, 100), (100, 200),
             (200, 300), (300, 500), (500, 800), (800, 100000)]
-    print("  %-14s %10s %10s" % ("band", "noattach", "apex/drop/burst"))
+    print("  %-14s %10s %10s" % ("band", "noattach", "successful controls"))
     for lo, hi in bins:
         a = sum(1 for r in na if lo <= r["d_before"] - r["d_after"] < hi)
         b = sum(1 for r in pulled if lo <= r["d_before"] - r["d_after"] < hi)
@@ -148,7 +183,7 @@ def main():
 
     print("\n### phase-1 sky-hold frames burned while arming this fire "
           "(each frame ~0.1 s of the 1.0 s deadline)")
-    for t in ("noattach", "apex", "drop", "burst"):
+    for t in ("noattach", "apex", "arrived", "landed", "burst"):
         g = [r["armsky"] for r in recs if r["tag"] == t]
         if not g:
             continue
@@ -159,7 +194,7 @@ def main():
                  100.0 * sum(1 for x in g if x >= 10) / len(g)))
 
     print("\n### reach: distance vs what 800 u/s can cover in the deadline left")
-    for t in ("noattach", "apex", "drop", "burst"):
+    for t in ("noattach", "apex", "arrived", "landed", "burst"):
         g = [r for r in recs if r["tag"] == t]
         if not g:
             continue
@@ -171,7 +206,8 @@ def main():
               "fires whose flight exceeds the visible deadline remainder: %5.1f%%"
               % (t, len(g), statistics.median(d),
                  statistics.median(d) / 800.0, 100.0 * over / len(g)))
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

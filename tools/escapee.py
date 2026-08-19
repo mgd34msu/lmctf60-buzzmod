@@ -15,7 +15,7 @@ the owner's ruling is that game info from any camera is fair game (only
 POV kinematics are restricted to player-body recordings).
 
 Output: tools/human/<map>.escape.json = an identity-stamped corpus containing
-the map and v3 world/physics/seed identity, window count, and transition counts.
+the map and active world/physics/seed identity, window count, and transition counts.
 
 Usage: escapee.py [--rune-dir DIR] [--out DIR] [--replace]
                   <demo.dm2> [<demo.dm2> ...]

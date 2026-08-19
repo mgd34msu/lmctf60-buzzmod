@@ -1,4 +1,4 @@
-/* Failure-atomic transaction tests for authenticated RUNE v3 sidecars. */
+/* Artifact-bound failure-atomic sidecar store tests. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -15,12 +15,10 @@
 /* q_shared.h has no include guard; include it once before sidecar headers. */
 #include "q_shared.h"
 #include "slipgate/sg_crc32.h"
-#include "slipgate/sg_rune_wire.h"
 #include "slipgate/sg_sidecar_loader.h"
 #include "slipgate/sg_sidecar_store.h"
 #include "slipgate/sg_sidecar_wire.h"
 
-#define RUNE_GOLDEN_BYTES 248U
 #define TEST_IMAGE_BYTES 4096U
 #define TEST_PATHS SG_SIDECAR_STORE_TEMP_ATTEMPTS
 #define TEST_TEMP_NONCE UINT64_C(0x0123456789abcdef)
@@ -108,60 +106,27 @@ typedef struct store_fixture_s
 	size_t cleanup_calls;
 } store_fixture_t;
 
-static int HexDigit(int c)
+static void InitArtifact(rune_artifact_t *artifact)
 {
-	if (c >= '0' && c <= '9')
-		return c - '0';
-	if (c >= 'a' && c <= 'f')
-		return c - 'a' + 10;
-	if (c >= 'A' && c <= 'F')
-		return c - 'A' + 10;
-	return -1;
-}
-
-static int LoadHex(const char *path, unsigned char *bytes, size_t size)
-{
-	FILE *file = fopen(path, "rb");
-	size_t count = 0;
-	int high = -1;
-	int c;
-
-	if (!file)
-		return 0;
-	while ((c = fgetc(file)) != EOF)
-	{
-		int digit = HexDigit(c);
-
-		if (digit < 0)
-			continue;
-		if (high < 0)
-			high = digit;
-		else
-		{
-			if (count >= size)
-			{
-				fclose(file);
-				return 0;
-			}
-			bytes[count++] = (unsigned char)((high << 4) | digit);
-			high = -1;
-		}
-	}
-	return fclose(file) == 0 && count == size && high < 0;
-}
-
-static int GoldenRuneHeader(sg_rune_v3_header_t *rune)
-{
-	unsigned char encoded[RUNE_GOLDEN_BYTES];
-
-	return LoadHex("tests/fixtures/rune_v3_wire_golden.hex", encoded,
-		sizeof(encoded)) &&
-		SG_RuneV3DecodeHeader(encoded, SG_RUNE_V3_HEADER_BYTES, rune) ==
-		RLW_OK;
+	memset(artifact, 0, sizeof(*artifact));
+	artifact->magic = RUNE_ARTIFACT_MAGIC;
+	artifact->payload_crc32 = UINT32_C(0x11223344);
+	artifact->header_crc32 = UINT32_C(0x55667788);
+	artifact->action_contract_crc32 = SG_RUNE_ACTION_CONTRACT_CRC32;
+	artifact->mechanism_contract_crc32 =
+		SG_RUNE_MECHANISM_CONTRACT_CRC32;
+	artifact->num_seeds = 2U;
+	artifact->num_links = 2U;
+	artifact->num_mechanism_nodes = 2U;
+	artifact->num_mechanism_edges = 2U;
+	artifact->num_inventory_edges = 1U;
+	artifact->num_mechanism_plans = 1U;
+	artifact->string_bytes = 8U;
+	memcpy(artifact->identity.map_name, "sidecar", sizeof("sidecar"));
 }
 
 static int EncodeImage(sg_sidecar_kind_t kind,
-	const sg_rune_v3_header_t *rune, const uint8_t *marks,
+	const rune_artifact_t *rune, const uint8_t *marks,
 	size_t marks_size, unsigned char fill,
 	unsigned char *encoded, size_t capacity, size_t *encoded_size_out)
 {
@@ -169,12 +134,12 @@ static int EncodeImage(sg_sidecar_kind_t kind,
 	size_t payload_size;
 	unsigned char payload[TEST_IMAGE_BYTES];
 
-	if (SG_SidecarV3FileSize(kind, rune, &file_size) != SCD_OK ||
-	    file_size < SG_SIDECAR_V3_HEADER_BYTES || file_size > capacity)
+	if (SG_SidecarFileSize(kind, rune, &file_size) != SCD_OK ||
+	    file_size < SG_SIDECAR_HEADER_BYTES || file_size > capacity)
 		return 0;
-	payload_size = file_size - SG_SIDECAR_V3_HEADER_BYTES;
+	payload_size = file_size - SG_SIDECAR_HEADER_BYTES;
 	memset(payload, fill, payload_size);
-	return SG_SidecarV3Encode(kind, rune, marks, marks_size, payload,
+	return SG_SidecarEncode(kind, rune, marks, marks_size, payload,
 		payload_size, encoded, capacity, encoded_size_out) == SCD_OK;
 }
 
@@ -332,7 +297,7 @@ static int TestClose(void *context, void *handle, int *os_error_out)
 }
 
 static sg_sidecar_revalidate_t TestRevalidate(void *context,
-	const sg_rune_v3_header_t *rune, int *os_error_out)
+	const rune_artifact_t *rune, int *os_error_out)
 {
 	store_fixture_t *io = context;
 
@@ -442,7 +407,7 @@ static void TestDefaultTempNonces(void)
 	uint64_t first;
 	uint64_t second;
 
-	SG_SidecarV3DefaultStoreOps(&ops);
+	SG_SidecarDefaultStoreOps(&ops);
 	CHECK(ops.temp_nonce != NULL);
 	if (!ops.temp_nonce)
 		return;
@@ -453,7 +418,7 @@ static void TestDefaultTempNonces(void)
 }
 
 static void InitFixture(store_fixture_t *io, const char *game_directory,
-	sg_sidecar_kind_t kind, const sg_rune_v3_header_t *rune)
+	sg_sidecar_kind_t kind, const rune_artifact_t *rune)
 {
 	const unsigned char old[] = { 'o', 'l', 'd' };
 	char *separator;
@@ -463,7 +428,7 @@ static void InitFixture(store_fixture_t *io, const char *game_directory,
 	io->original_size = sizeof(old);
 	memcpy(io->destination, old, sizeof(old));
 	io->destination_size = sizeof(old);
-	CHECK(SG_SidecarV3Path(io->expected_destination,
+	CHECK(SG_SidecarPath(io->expected_destination,
 		sizeof(io->expected_destination), game_directory, kind, rune) ==
 		SCD_OK);
 	(void)snprintf(io->expected_directory, sizeof(io->expected_directory),
@@ -481,13 +446,13 @@ static int DestinationIsOld(const store_fixture_t *io)
 }
 
 static sg_sidecar_store_result_t RunInjected(store_fixture_t *io,
-	const sg_rune_v3_header_t *rune, sg_sidecar_kind_t kind,
+	const rune_artifact_t *rune, sg_sidecar_kind_t kind,
 	const uint8_t *marks, size_t mark_count,
 	const unsigned char *encoded, size_t encoded_size)
 {
 	sg_sidecar_store_ops_t ops = TestOps(io);
 
-	return SG_SidecarV3StoreFile("game", kind, rune, marks, mark_count,
+	return SG_SidecarStoreFile("game", kind, rune, marks, mark_count,
 		encoded, encoded_size, TestRevalidate, io, &ops);
 }
 
@@ -500,7 +465,7 @@ static void CheckPrecommitFailure(const store_fixture_t *io,
 	CHECK(DestinationIsOld(io));
 }
 
-static void TestSuccessAndShortWrites(const sg_rune_v3_header_t *rune,
+static void TestSuccessAndShortWrites(const rune_artifact_t *rune,
 	const unsigned char *encoded, size_t encoded_size)
 {
 	store_fixture_t io;
@@ -540,7 +505,7 @@ static void TestSuccessAndShortWrites(const sg_rune_v3_header_t *rune,
 	CHECK(memcmp(io.destination, encoded, encoded_size) == 0);
 }
 
-static void TestCollisions(const sg_rune_v3_header_t *rune,
+static void TestCollisions(const rune_artifact_t *rune,
 	const unsigned char *encoded, size_t encoded_size)
 {
 	store_fixture_t io;
@@ -569,7 +534,7 @@ static void TestCollisions(const sg_rune_v3_header_t *rune,
 	CHECK(DestinationIsOld(&io));
 }
 
-static void TestWriteFailures(const sg_rune_v3_header_t *rune,
+static void TestWriteFailures(const rune_artifact_t *rune,
 	const unsigned char *encoded, size_t encoded_size)
 {
 	store_fixture_t io;
@@ -614,7 +579,7 @@ static void TestWriteFailures(const sg_rune_v3_header_t *rune,
 	CheckPrecommitFailure(&io, &result, SCS_WRITE);
 }
 
-static void TestFailureStages(const sg_rune_v3_header_t *rune,
+static void TestFailureStages(const rune_artifact_t *rune,
 	const unsigned char *encoded, size_t encoded_size)
 {
 	store_fixture_t io;
@@ -695,7 +660,7 @@ static void TestFailureStages(const sg_rune_v3_header_t *rune,
 	CHECK(memcmp(io.destination, encoded, encoded_size) == 0);
 }
 
-static void TestSecondaryErrors(const sg_rune_v3_header_t *rune,
+static void TestSecondaryErrors(const rune_artifact_t *rune,
 	const unsigned char *encoded, size_t encoded_size)
 {
 	store_fixture_t io;
@@ -726,7 +691,7 @@ static void TestSecondaryErrors(const sg_rune_v3_header_t *rune,
 	CHECK(DestinationIsOld(&io));
 }
 
-static void TestPrevalidation(const sg_rune_v3_header_t *rune,
+static void TestPrevalidation(const rune_artifact_t *rune,
 	const unsigned char *hmn, size_t hmn_size,
 	const unsigned char *dpo, size_t dpo_size,
 	const uint8_t *all_live, size_t seed_count)
@@ -785,7 +750,7 @@ static void TestPrevalidation(const sg_rune_v3_header_t *rune,
 	CHECK(result.stage == SCS_ARGUMENT && io.open_calls == 0);
 
 	/* Destination fits exactly, but the mandatory temp suffix cannot. */
-	fixed_path = strlen("/maps/") + strlen(rune->map_name) +
+	fixed_path = strlen("/maps/") + strlen(rune->identity.map_name) +
 		strlen(SG_SidecarKindExtension(SG_SIDECAR_HUMAN));
 	CHECK((size_t)MAX_OSPATH > fixed_path + 1U);
 	game_length = (size_t)MAX_OSPATH - 1U - fixed_path;
@@ -795,7 +760,7 @@ static void TestPrevalidation(const sg_rune_v3_header_t *rune,
 	{
 		sg_sidecar_store_ops_t ops = TestOps(&io);
 
-		result = SG_SidecarV3StoreFile(game_directory,
+		result = SG_SidecarStoreFile(game_directory,
 			SG_SIDECAR_HUMAN, rune, NULL, 0, hmn, hmn_size,
 			TestRevalidate, &io, &ops);
 	}
@@ -807,12 +772,12 @@ static void TestPrevalidation(const sg_rune_v3_header_t *rune,
 	{
 		sg_sidecar_store_ops_t ops = TestOps(&io);
 
-		result = SG_SidecarV3StoreFile("game", SG_SIDECAR_HUMAN,
+		result = SG_SidecarStoreFile("game", SG_SIDECAR_HUMAN,
 			rune, NULL, 0, hmn, hmn_size, NULL, &io, &ops);
 		CHECK(result.diagnostic == SCD_INVALID_ARGUMENT);
 		CHECK(result.stage == SCS_ARGUMENT && io.open_calls == 0);
 		ops.replace_file = NULL;
-		result = SG_SidecarV3StoreFile("game", SG_SIDECAR_HUMAN,
+		result = SG_SidecarStoreFile("game", SG_SIDECAR_HUMAN,
 			rune, NULL, 0, hmn, hmn_size, TestRevalidate, &io,
 			&ops);
 		CHECK(result.diagnostic == SCD_INVALID_ARGUMENT);
@@ -829,7 +794,7 @@ typedef struct real_revalidate_s
 } real_revalidate_t;
 
 static sg_sidecar_revalidate_t RealRevalidate(void *context,
-	const sg_rune_v3_header_t *rune, int *os_error_out)
+	const rune_artifact_t *rune, int *os_error_out)
 {
 	real_revalidate_t *state = context;
 
@@ -865,7 +830,7 @@ static int ReadBytes(const char *path, unsigned char *data, size_t capacity,
 	return 1;
 }
 
-static void TestRealFilesystem(const sg_rune_v3_header_t *rune,
+static void TestRealFilesystem(const rune_artifact_t *rune,
 	const unsigned char *encoded, size_t encoded_size)
 {
 	char root[] = "/tmp/sg-sidecar-store-XXXXXX";
@@ -885,9 +850,9 @@ static void TestRealFilesystem(const sg_rune_v3_header_t *rune,
 	CHECK(mkdtemp(root) != NULL);
 	CHECK(snprintf(maps, sizeof(maps), "%s/maps", root) > 0);
 	CHECK(mkdir(maps, 0700) == 0);
-	CHECK(SG_SidecarV3Path(destination, sizeof(destination), root,
+	CHECK(SG_SidecarPath(destination, sizeof(destination), root,
 		SG_SIDECAR_HUMAN, rune) == SCD_OK);
-	SG_SidecarV3DefaultStoreOps(&ops);
+	SG_SidecarDefaultStoreOps(&ops);
 	ops.temp_nonce = TestTempNonce;
 	CHECK(snprintf(collision, sizeof(collision), "%s.tmp.%016llx.00",
 		destination, (unsigned long long)TEST_TEMP_NONCE) > 0);
@@ -897,7 +862,7 @@ static void TestRealFilesystem(const sg_rune_v3_header_t *rune,
 	CHECK(symlink(sentinel, collision) == 0);
 	authority.result = SG_SIDECAR_REVALIDATE_MATCH;
 	authority.calls = 0;
-	result = SG_SidecarV3StoreFile(root, SG_SIDECAR_HUMAN, rune,
+	result = SG_SidecarStoreFile(root, SG_SIDECAR_HUMAN, rune,
 		NULL, 0, encoded, encoded_size, RealRevalidate, &authority, &ops);
 	CHECK(result.diagnostic == SCD_OK && result.stage == SCS_DONE);
 	CHECK(result.temp_attempts == 2);
@@ -917,7 +882,7 @@ static void TestRealFilesystem(const sg_rune_v3_header_t *rune,
 	/* A real drift removes only its owned .01 temp and preserves destination. */
 	CHECK(WriteBytes(destination, old, sizeof(old)));
 	authority.result = SG_SIDECAR_REVALIDATE_DRIFT;
-	result = SG_SidecarV3StoreFile(root, SG_SIDECAR_HUMAN, rune,
+	result = SG_SidecarStoreFile(root, SG_SIDECAR_HUMAN, rune,
 		NULL, 0, encoded, encoded_size, RealRevalidate, &authority, &ops);
 	CHECK(result.diagnostic == SCD_STATE_DRIFT);
 	CHECK(result.temp_attempts == 2);
@@ -939,14 +904,14 @@ static void TestRealFilesystem(const sg_rune_v3_header_t *rune,
 
 int main(void)
 {
-	sg_rune_v3_header_t rune;
+	rune_artifact_t rune;
 	unsigned char hmn[TEST_IMAGE_BYTES];
 	unsigned char dpo[TEST_IMAGE_BYTES];
 	uint8_t all_live[TEST_IMAGE_BYTES];
 	size_t hmn_size = 0;
 	size_t dpo_size = 0;
 
-	CHECK(GoldenRuneHeader(&rune));
+	InitArtifact(&rune);
 	TestDefaultTempNonces();
 	CHECK(rune.num_seeds <= sizeof(all_live));
 	memset(all_live, 1, rune.num_seeds);

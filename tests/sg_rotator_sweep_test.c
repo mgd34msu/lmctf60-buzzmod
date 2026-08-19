@@ -7,13 +7,16 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 
 game_export_t globals;
+game_locals_t game;
 edict_t *g_edicts;
 sg_host_t sg_host;
 
 static edict_t *test_trigger_hits[MAX_EDICTS];
 static edict_t *test_solid_hits[MAX_EDICTS];
+static gclient_t test_clients[1];
 static int test_trigger_count;
 static int test_solid_count;
 
@@ -59,6 +62,17 @@ void Touch_Item(edict_t *ent, edict_t *other, cplane_t *plane,
 	(void)ent; (void)other; (void)plane; (void)surf;
 }
 
+void button_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf)
+{
+	(void)self; (void)other; (void)plane; (void)surf;
+}
+
+void button_use(edict_t *self, edict_t *other, edict_t *activator)
+{
+	(void)self; (void)other; (void)activator;
+}
+
 void door_use(edict_t *self, edict_t *other, edict_t *activator)
 {
 	(void)self; (void)other; (void)activator;
@@ -79,6 +93,24 @@ void trigger_relay_use(edict_t *self, edict_t *other,
 	edict_t *activator)
 {
 	(void)self; (void)other; (void)activator;
+}
+
+int SG_MechCatalogButtonEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	(void)key;
+	(void)node;
+	(void)entity;
+	(void)endpoints_out;
+	return 0;
+}
+
+int SG_MechCatalogButtonBottomEndpoints(uint32_t key,
+	const rune_mechanism_node_t *node, const edict_t *entity,
+	sg_mech_button_endpoints_t *endpoints_out)
+{
+	return SG_MechCatalogButtonEndpoints(key, node, entity, endpoints_out);
 }
 
 static void DummyTouch(edict_t *self, edict_t *other, cplane_t *plane,
@@ -149,15 +181,28 @@ static void TestReplayTriggerClassifier(void)
 	edict_t *support = &ents[8], *item = &ents[9];
 	vec3_t from, to;
 	qboolean contaminated, door_passed;
+	int i;
 
 	memset(ents, 0, sizeof(ents));
+	memset(&globals, 0, sizeof(globals));
+	memset(&game, 0, sizeof(game));
+	memset(test_clients, 0, sizeof(test_clients));
 	g_edicts = ents;
+	globals.edicts = ents;
+	globals.edict_size = sizeof(edict_t);
 	globals.num_edicts = 10;
+	globals.max_edicts = 10;
+	game.maxentities = 10;
+	game.maxclients = 1;
+	game.clients = test_clients;
+	for (i = 0; i < 10; i++)
+		ents[i].s.number = i;
 	world_ent->inuse = true;
 
 	door->inuse = true;
 	door->classname = "func_door";
 	door->use = door_use;
+	door->teammaster = door;
 	door->moveinfo.distance = 64.0f;
 	door->moveinfo.speed = 100.0f;
 	door->moveinfo.accel = 100.0f;

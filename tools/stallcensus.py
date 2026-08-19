@@ -20,8 +20,8 @@ it kept trying to move:
             what trips this, not quantization noise on an entity that is
             simply standing still.
   yaw_turn  sustained yaw rate >= STALL_YAW_DPS averaged across the window
-            while position holds -- the body is turning, hunting for a way
-            through, without the ceiling of conduct.py's spinbot-caliber
+            while there is a translational push signal -- the body is turning,
+            hunting for a way through, without the ceiling of conduct.py's spinbot-caliber
             SPIN_DPS (540): a stuck bot reorienting only needs to show
             visible, sustained turning, not a full spin.
 
@@ -60,7 +60,8 @@ PER-DEMO OUTPUT:
   post_hold_frac       total held-post seconds / total observed seconds --
                         printed for contrast, not as a stall metric.
   top_stall_locations  up to 3 clusters (stall episode midpoints grouped
-                        within CLUSTER_R of each other) as {x, y, count},
+                        within CLUSTER_R in 3D) as {x, y, z,
+                        evidence_count, duration_s},
                         sorted by count -- the map's snag spots. Map-
                         specific by construction, so --compare does not
                         pool this field (see below).
@@ -109,14 +110,16 @@ STALL_GROSS_UNITS = 48.0     # gross path length floor for "jitter" -- double
                               # the net ceiling so genuine push-and-cancel
                               # motion trips it, not position quantization
 STALL_YAW_DPS = 120.0        # sustained yaw-rate floor for "yaw_turn"
+STALL_PUSH_UNITS = 8.0       # yaw alone is a deliberate scan, not a snag
 POST_R = 200.0                # own-stand radius counted as holding a post
 CLUSTER_R = 64.0              # stall-midpoint clustering radius
 
 
 def stall_and_post_events(seg, yaw_for_frame, own_stand):
     """Scan one contiguous, teleport-free segment for STALL and POST
-    episodes. Returns (stall_seconds, post_seconds, [stall episode dicts
-    with 'dur','x','y']). See module docstring for the exact trigger rule."""
+episodes. Returns (stall_seconds, post_seconds, [stall episode dicts
+    with 'dur','x','y','z']). See module docstring for the exact trigger
+    rule."""
     n = len(seg)
     win = max(2, int(round(STALL_WIN_S / DT)))
     if n <= win:
@@ -125,32 +128,33 @@ def stall_and_post_events(seg, yaw_for_frame, own_stand):
             for i in range(n - 1)]
     state = [None] * n           # per-frame: None / 'post' / 'stall'
     for i in range(0, n - win):
-        net = math.hypot(seg[i + win][1] - seg[i][1],
-                         seg[i + win][2] - seg[i][2])
+        net = math.dist(seg[i + win][1:4], seg[i][1:4])
         if net >= STALL_NET_UNITS:
             continue
         mid = seg[i + win // 2]
         near_own = (own_stand is not None and
                     math.hypot(mid[1] - own_stand[0],
                                mid[2] - own_stand[1]) <= POST_R)
-        kind = 'post' if near_own else None
-        if kind is None:
-            gross = sum(step[i:i + win])
-            jitter = gross >= STALL_GROSS_UNITS
-            yaw_turn = False
-            if not jitter:
-                dyaw_tot = 0.0
-                ok = True
-                for j in range(i, i + win):
-                    a = yaw_for_frame.get(seg[j][0])
-                    b = yaw_for_frame.get(seg[j + 1][0])
-                    if a is None or b is None:
-                        ok = False
-                        break
-                    dyaw_tot += abs((b - a + 180.0) % 360.0 - 180.0)
-                yaw_turn = ok and dyaw_tot / (win * DT) >= STALL_YAW_DPS
-            if jitter or yaw_turn:
-                kind = 'stall'
+        gross = sum(step[i:i + win])
+        jitter = gross >= STALL_GROSS_UNITS
+        push = gross >= STALL_PUSH_UNITS
+        yaw_turn = False
+        if not jitter:
+            dyaw_tot = 0.0
+            ok = True
+            for j in range(i, i + win):
+                a = yaw_for_frame.get(seg[j][0])
+                b = yaw_for_frame.get(seg[j + 1][0])
+                if a is None or b is None:
+                    ok = False
+                    break
+                dyaw_tot += abs((b - a + 180.0) % 360.0 - 180.0)
+            yaw_turn = (push and ok and
+                        dyaw_tot / (win * DT) >= STALL_YAW_DPS)
+        # A post is deliberate only when it lacks navigation-failure
+        # evidence.  A bot visibly pushing or hunting at its own stand is a
+        # snag, not a successful guard hold.
+        kind = 'stall' if jitter or yaw_turn else ('post' if near_own else None)
         if kind is None:
             continue
         for j in range(i, i + win + 1):
@@ -174,38 +178,56 @@ def stall_and_post_events(seg, yaw_for_frame, own_stand):
         else:
             xs = [seg[t][1] for t in range(j, k)]
             ys = [seg[t][2] for t in range(j, k)]
+            zs = [seg[t][3] for t in range(j, k)]
             episodes.append({'dur': dur, 'x': sum(xs) / len(xs),
-                             'y': sum(ys) / len(ys)})
+                             'y': sum(ys) / len(ys),
+                             'z': sum(zs) / len(zs)})
             stall_s += dur
         j = k
     return stall_s, post_s, episodes
 
 
 def cluster_points(points, radius=CLUSTER_R):
-    """Greedy single-pass clustering: each point joins the nearest existing
-    cluster centroid within radius, else starts a new cluster. Good enough
-    at the scale of one demo's stall count; returns clusters sorted by
-    size, largest first."""
-    clusters = []                # each: {'sx','sy','n'}
-    for x, y in points:
-        best, best_d = None, radius
-        for c in clusters:
-            d = math.hypot(x - c['sx'] / c['n'], y - c['sy'] / c['n'])
-            if d <= best_d:
-                best, best_d = c, d
-        if best is None:
-            clusters.append({'sx': x, 'sy': y, 'n': 1})
-        else:
-            best['sx'] += x
-            best['sy'] += y
-            best['n'] += 1
+    """Connected 3D radius clusters, independent of observation order.
+
+    Edges join episode midpoints no farther than ``radius`` apart.  Taking
+    connected components (rather than greedily comparing a changing centroid)
+    makes transitive runs A--B--C one cluster even when A and C are farther
+    apart, and gives a deterministic result for any input permutation.
+    """
+    points = sorted(points)
+    seen = [False] * len(points)
+    clusters = []
+    for start in range(len(points)):
+        if seen[start]:
+            continue
+        seen[start] = True
+        pending = [start]
+        members = []
+        while pending:
+            index = pending.pop()
+            point = points[index]
+            members.append(point)
+            for other in range(len(points)):
+                if not seen[other] and math.dist(point[:3], points[other][:3]) <= radius:
+                    seen[other] = True
+                    pending.append(other)
+        clusters.append({
+            'sx': sum(point[0] for point in members),
+            'sy': sum(point[1] for point in members),
+            'sz': sum(point[2] for point in members),
+            'dur': sum(point[3] for point in members),
+            'n': len(members),
+        })
     out = [{'x': round(c['sx'] / c['n'], 1), 'y': round(c['sy'] / c['n'], 1),
-           'count': c['n']} for c in clusters]
-    out.sort(key=lambda c: -c['count'])
+            'z': round(c['sz'] / c['n'], 1), 'evidence_count': c['n'],
+            'duration_s': round(c['dur'], 2)} for c in clusters]
+    out.sort(key=lambda c: (-c['evidence_count'], -c['duration_s'],
+                            c['x'], c['y'], c['z']))
     return out
 
 
-def analyze(path, stands_all):
+def analyze(path, stands_all, map_identities=None):
     d = film.walk_demo(path)
     film.cap_tracks_to_duration(d)
     labels = {ent: film.team_of(d['skins'].get(ent, '')) for ent in d['tracks']}
@@ -230,13 +252,14 @@ def analyze(path, stands_all):
             post_s += p_s
             for e in episodes:
                 durations.append(e['dur'])
-                points.append((e['x'], e['y']))
+                points.append((e['x'], e['y'], e['z'], e['dur']))
 
     obs_min = tot_obs / 60.0
     med = round(sorted(durations)[len(durations) // 2], 2) if durations else None
     row = {
         'demo': os.path.basename(path),
         'map': d['map'],
+        'map_identity': (map_identities or {}).get(d['map']),
         'svrecord': d['svrecord'],
         'players_observed_min': round(obs_min, 2),
         'stalls_per_min': round(len(durations) / obs_min, 3) if obs_min else None,
@@ -244,6 +267,9 @@ def analyze(path, stands_all):
         'stall_time_frac': round(stall_s / tot_obs, 4) if tot_obs else None,
         'post_hold_frac': round(post_s / tot_obs, 4) if tot_obs else None,
         'stands_known': stands is not None,
+        # Never aggregate these over maps: their coordinates are meaningful
+        # only under this row's map identity.
+        'snag_clusters': cluster_points(points),
         'top_stall_locations': cluster_points(points)[:3],
         '_durations': durations,      # for --compare's exact pooled median;
         '_obs_min': obs_min,          # stripped before per-demo printing
@@ -287,18 +313,23 @@ def main():
     ap.add_argument('--compare', action='store_true')
     ap.add_argument('--human', action='append', default=[])
     ap.add_argument('--bot', action='append', default=[])
+    ap.add_argument('--map-identity', help='JSON mapping from map name to exact map identity')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, 'stands.json')) as f:
         stands_all = json.load(f)
+    map_identities = {}
+    if args.map_identity:
+        with open(args.map_identity) as f:
+            map_identities = json.load(f)
 
     def run(globs_or_paths):
         rows = []
         for g in globs_or_paths:
             for p in sorted(globmod.glob(os.path.expanduser(g))) or [g]:
                 try:
-                    rows.append(analyze(p, stands_all))
+                    rows.append(analyze(p, stands_all, map_identities))
                 except Exception as e:
                     print(f"# skip {os.path.basename(p)}: {e}",
                           file=sys.stderr)

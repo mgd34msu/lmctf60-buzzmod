@@ -2,32 +2,29 @@
 #ifndef SG_ACTION_CONTRACT_GENERATED_H
 #define SG_ACTION_CONTRACT_GENERATED_H
 
-#define SG_ACTION_CONTRACT_SCHEMA_VERSION 1
-#define SG_ACTION_CONTRACT_CRC32 0x5c64bc3bU
-#define SG_ACTION_CONTRACT_SHA256 "fd7b4c2288845f9c3448aa82aeabfd8921feb5c943a6ac2f4b8abacd49f36ece"
-#define SG_ACTION_COUNT 12
+#include <stdint.h>
+
+#define SG_RUNE_ACTION_CONTRACT_CRC32 0xe1731b32U
+#define SG_RUNE_ACTION_CONTRACT_SHA256 "e796be082c42748203c1dddc64f3eea1b2d64fc4be2dc2be7b65962c5ddd9c0f"
+#define SG_RUNE_ACTION_CONTRACT_DESCRIPTOR "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,door:8,button_door:12;disabled=rocketjump:7,door_drop:9,door_swim:10,door_hook:11;planless=run:0,jump:1,drop:2,hook:3,swim:4;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3;seed.origin=signed_q8_exact;"
+#define SG_MECHANISM_CONTRACT_CRC32 0xdd8de50fU
+#define SG_MECHANISM_CONTRACT_SHA256 "848a2a52cd697ba7527a44ccdae48f1f962027d0292ff7dd7ec81622906688ee"
+#define SG_MECHANISM_CONTRACT_DESCRIPTOR "rune-mechanism-contract;action_contract_crc32=independent;header=160,seed=16,link=48,link.activation_plan=u32@44;header.ext=node_bytes:u16@128=80,edge_bytes:u16@130=16,plan_bytes:u16@132=32,reserved:u16@134=0,nodes:u32@136,edges:u32@140,plans:u32@144,strings:u32@148,contract:u32@152,inventory_edges:u32@156;payload=seeds,links,nodes,edges,plans,strings;node80=key:u32@0,kind:u16@4,flags:u16@6,classname:u32@8,target:u32@12,targetname:u32@16,killtarget:u32@20,owner:u32@24,team_master:u32@28,spawnflags:u32@32,touch:u16@36,use:u16@38,think:u16@40,blocked:u16@42,delay:i32@44,wait:i32@48,speed_q8:u32@52,accel_q8:u32@56,decel_q8:u32@60,absmin_q8:i16x3@64,absmax_q8:i16x3@70,pathtarget:u32@76;edge16=from:u32@0,to:u32@4,kind:u16@8,ordinal:u16@10,delay_ms:u32@12;plan32=entry:u32@0,mover:u32@4,first_edge:u32@8,num_edges:u32@12,controller:u16@16,reserved:u16@18=0,flags:u16@20,members:u16@22,cooldown_ms:u32@24,closure_crc32:u32@28;node.kind=none:0,trigger:1,button:2,relay:3,door_master:4,door_member:5,auto_door_trigger:6,platform:7,platform_trigger:8,train:9,path_corner:10,elevator:11,push:12,teleporter:13,teleport_trigger:14,teleport_dest:15,objective:16,secret_door:17,other_trigger:18,other_mover:19,contextual:20,target_speaker:21,areaportal:22;node.flags=synthetic:1,repeatable:2,touchable:4,usable:8,mover:16,team_master:32,team_member:64,inventory_only:128,one_shot:256,shootable:512,start_disabled:1024,frame_complete_mover:2048,mask:4095;callback=none:0,touch_multi:1,touch_door_trigger:2,button_touch:3,use_multi:4,button_use:5,think_multi_wait:6,think_button_wait:7,blocked_door:8,use_trigger_relay:9,use_door:10,think_calc_move_speed:11,think_spawn_door_trigger:12,trigger_enable:13,touch_plat_center:14,use_plat:15,plat_go_down:16,blocked_plat:17,train_use:18,func_train_find:19,train_next:20,train_wait:21,blocked_train:22,elevator_use:23,elevator_init:24,push_touch:25,teleporter_touch:26,path_corner_touch:27,touch_item:28,think_delay:29,secret_door_use:30,secret_door_blocked:31,use_target_speaker:32,use_areaportal:33,unknown:65535;edge.kind=none:0,target:1,killtarget:2,owner:3,team:4,path_target:5,move_target:6,target_ent:7,enemy:8,route_target:9;controller_ids=none:0,auto_door:1,direct_trigger_door:2,button_door:3,relay_door:4,platform:5,teleport:6;plan.flags=touch:1,use:2,atomic:4,requires_lease:8,mask:15;null_key=4294967295,no_plan=4294967295;limits=seeds:32768,links:262144,nodes:8192,edges:262144,plans:262144,plan_edges:65536,strings:1048576,plan_time_ms:30000,node_time_ms:int32,edge_delay_ms:uint32,q8:262136,members:16;canonical=nodes_key_ascending,inventory_edge_prefix,inventory_exhaustive,inventory_edge_key_order,inventory_fanout_ordinal,plan_edge_partition,plan_edges_copy_inventory,strings_nul_sorted_unique_referenced,closure_crc,target_ascii_casefold;authority=inventory_visible_only,no_plan_no_mechanism_authority;"
+#define SG_RUNE_MECHANISM_CONTRACT_CRC32 SG_MECHANISM_CONTRACT_CRC32
+#define SG_RUNE_MECHANISM_CONTRACT_SHA256 SG_MECHANISM_CONTRACT_SHA256
+#define SG_RUNE_MECHANISM_CONTRACT_DESCRIPTOR SG_MECHANISM_CONTRACT_DESCRIPTOR
+#define SG_ACTION_COUNT 13
 #define SG_PROVENANCE_COUNT 5
 #define SG_COMPOUND_MODE_COUNT 3
 #define SG_ACTION_TRAIT_COUNT 7
 #define SG_ACTION_TRAIT_ALL_MASK 0x007fU
 #define SG_ENDPOINT_POLICY_COUNT 7
-#define SG_RUNE_WIRE_DIAGNOSTIC_COUNT 27
+#define SG_RUNE_WIRE_DIAGNOSTIC_COUNT 26
 
-#define SG_RUNE_V3_MAGIC 0x454e5552U
-#define SG_RUNE_V3_VERSION 3
-#define SG_RUNE_V3_LITTLE_ENDIAN_REQUIRED 1
-#define SG_RUNE_V3_HEADER_BYTES 128
-#define SG_RUNE_V3_SEED_BYTES 16
-#define SG_RUNE_V3_LINK_BYTES 44
-#define SG_RUNE_V3_MAP_NAME_BYTES 64
-#define SG_RUNE_V3_HEADER_CRC_OFFSET 60
-#define SG_RUNE_V3_NONCOMPOUND_TAIL_OFFSET 28
-#define SG_RUNE_V3_NONCOMPOUND_TAIL_BYTES 16
-#define SG_RUNE_V3_LINK_RESERVED_OFFSET 43
-#define SG_RUNE_V3_MAX_SEEDS 32768
-#define SG_RUNE_V3_MAX_LINKS 262144
-#define SG_RUNE_V3_MIN_COST_MS 1
-#define SG_RUNE_V3_MAX_COST_MS 30000
+#define SG_RUNE_HEADER_RESERVED_OFFSET 4U
+#define SG_RUNE_WIRE_ACTION_FIRST 0
+#define SG_RUNE_WIRE_ACTION_MAX RL_BUTTON_DOOR
+#define SG_RUNE_WIRE_ACTION_COUNT 13
 
 #define SG_RUNE_PROOF_PHYSICS_FLAGS_SUPPORTED 0
 #define SG_RUNE_PROOF_HOST_PHYSICS_ID_MIN 1
@@ -89,6 +86,7 @@ typedef enum
 	RL_DOOR_DROP = 9,
 	RL_DOOR_SWIM = 10,
 	RL_DOOR_HOOK = 11,
+	RL_BUTTON_DOOR = 12,
 } rune_action_t;
 
 typedef enum
@@ -223,7 +221,6 @@ typedef enum
 	RLW_INVALID_ARGUMENT = 1,
 	RLW_IO_ERROR = 2,
 	RLW_BAD_MAGIC = 3,
-	RLW_UNSUPPORTED_VERSION = 4,
 	RLW_BAD_HEADER_SIZE = 5,
 	RLW_BAD_SEED_SIZE = 6,
 	RLW_BAD_LINK_SIZE = 7,
@@ -248,25 +245,127 @@ typedef enum
 	RLW_BAD_SIDECAR = 26,
 } rune_wire_diagnostic_t;
 
+typedef enum
+{
+	SG_MECHANISM_CONTROLLER_NONE = 0,
+	SG_MECHANISM_CONTROLLER_AUTO_DOOR = 1,
+	SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR = 2,
+	SG_MECHANISM_CONTROLLER_BUTTON_DOOR = 3,
+	SG_MECHANISM_CONTROLLER_RELAY_DOOR = 4,
+	SG_MECHANISM_CONTROLLER_PLATFORM = 5,
+	SG_MECHANISM_CONTROLLER_TELEPORT = 6,
+} sg_mechanism_controller_t;
+
+/* X(action, admitted, plan_required, link_policy_action) */
+#define SG_ACTION_MECHANISM_REQUIREMENT_ROWS(X) \
+	X(RL_RUN, 1, 0, RL_RUN) \
+	X(RL_JUMP, 1, 0, RL_JUMP) \
+	X(RL_DROP, 1, 0, RL_DROP) \
+	X(RL_HOOK, 1, 0, RL_HOOK) \
+	X(RL_SWIM, 1, 0, RL_SWIM) \
+	X(RL_LIFT, 1, 1, RL_LIFT) \
+	X(RL_TELEPORT, 1, 1, RL_TELEPORT) \
+	X(RL_ROCKETJUMP, 0, 0, RL_ROCKETJUMP) \
+	X(RL_DOOR, 1, 1, RL_DOOR) \
+	X(RL_DOOR_DROP, 0, 0, RL_DOOR_DROP) \
+	X(RL_DOOR_SWIM, 0, 0, RL_DOOR_SWIM) \
+	X(RL_DOOR_HOOK, 0, 0, RL_DOOR_HOOK) \
+	X(RL_BUTTON_DOOR, 1, 1, RL_BUTTON_DOOR)
+
+/* X(action, controller) */
+#define SG_ACTION_MECHANISM_PLAN_ROWS(X) \
+	X(RL_LIFT, SG_MECHANISM_CONTROLLER_PLATFORM) \
+	X(RL_TELEPORT, SG_MECHANISM_CONTROLLER_TELEPORT) \
+	X(RL_DOOR, SG_MECHANISM_CONTROLLER_AUTO_DOOR) \
+	X(RL_DOOR, SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR) \
+	X(RL_BUTTON_DOOR, SG_MECHANISM_CONTROLLER_BUTTON_DOOR)
+
+static inline int SG_ActionMechanismAdmitted(int action)
+{
+	switch (action)
+	{
+	case RL_RUN: case RL_JUMP: case RL_DROP: case RL_HOOK: case RL_SWIM: case RL_LIFT: case RL_TELEPORT: case RL_DOOR: case RL_BUTTON_DOOR: return 1;
+	default: return 0;
+	}
+}
+
+static inline int SG_ActionMechanismPlanRequired(int action)
+{
+	switch (action)
+	{
+	case RL_LIFT: case RL_TELEPORT: case RL_DOOR: case RL_BUTTON_DOOR: return 1;
+	default: return 0;
+	}
+}
+
+static inline int SG_ActionMechanismLinkPolicyAction(int action)
+{
+	switch (action)
+	{
+	case RL_RUN: return RL_RUN;
+	case RL_JUMP: return RL_JUMP;
+	case RL_DROP: return RL_DROP;
+	case RL_HOOK: return RL_HOOK;
+	case RL_SWIM: return RL_SWIM;
+	case RL_LIFT: return RL_LIFT;
+	case RL_TELEPORT: return RL_TELEPORT;
+	case RL_ROCKETJUMP: return RL_ROCKETJUMP;
+	case RL_DOOR: return RL_DOOR;
+	case RL_DOOR_DROP: return RL_DOOR_DROP;
+	case RL_DOOR_SWIM: return RL_DOOR_SWIM;
+	case RL_DOOR_HOOK: return RL_DOOR_HOOK;
+	case RL_BUTTON_DOOR: return RL_BUTTON_DOOR;
+	default: return -1;
+	}
+}
+
+static inline int SG_MechanismControllerPlanFlags(uint16_t controller)
+{
+	switch (controller)
+	{
+	case SG_MECHANISM_CONTROLLER_NONE: return 0;
+	case SG_MECHANISM_CONTROLLER_AUTO_DOOR: return 13;
+	case SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR: return 13;
+	case SG_MECHANISM_CONTROLLER_BUTTON_DOOR: return 13;
+	case SG_MECHANISM_CONTROLLER_RELAY_DOOR: return 0;
+	case SG_MECHANISM_CONTROLLER_PLATFORM: return 13;
+	case SG_MECHANISM_CONTROLLER_TELEPORT: return 5;
+	default: return 0;
+	}
+}
+
+static inline int SG_ActionMechanismPlanAllowed(int action, uint16_t controller)
+{
+	switch (action)
+	{
+	case RL_LIFT: return controller == SG_MECHANISM_CONTROLLER_PLATFORM;
+	case RL_TELEPORT: return controller == SG_MECHANISM_CONTROLLER_TELEPORT;
+	case RL_DOOR: return controller == SG_MECHANISM_CONTROLLER_AUTO_DOOR || controller == SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	case RL_BUTTON_DOOR: return controller == SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	default: return 0;
+	}
+}
+
 /* X(symbol, id, runtime_supported, default_provenance, provenance_mask,
  *   mode_mask, trait_mask, endpoint_policy, suffix_anchor_policy,
  *   preopen_mechanism_anchor_policy, ride_mechanism_anchor_policy,
  *   control_policy, mechanism_policy,
  *   effective_suffix, field_bias_policy, field_bias_ms,
- *   controller_revision, name, short_name, color) */
+ *   name, short_name, color) */
 #define SG_ACTION_CONTRACT_ROWS(X) \
-	X(RL_RUN, 0, 1, RL_PROVEN, 0x000fU, 0x01U, 0x0000U, RLEP_DRY_BOTH, RLAP_RUN_WAYPOINT, RLAP_ZERO, RLAP_ZERO, RLCP_RUN, RLMP_NONE, RL_RUN, RLFB_NONE, 0, 1, "RUN", "RUN", "#9a9a9a") \
-	X(RL_JUMP, 1, 1, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH, RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_JUMP, RLMP_NONE, RL_JUMP, RLFB_NONE, 0, 1, "JUMP", "JUMP", "#00c8d7") \
-	X(RL_DROP, 2, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0003U, RLEP_FROM_DRY, RLAP_DROP_LIP, RLAP_ZERO, RLAP_ZERO, RLCP_DROP, RLMP_NONE, RL_DROP, RLFB_FIXED, 150, 2, "DROP", "DROP", "#e0c000") \
-	X(RL_HOOK, 3, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0001U, RLEP_NOT_BOTH_WATER, RLAP_HOOK_CONTROL, RLAP_ZERO, RLAP_ZERO, RLCP_HOOK, RLMP_NONE, RL_HOOK, RLFB_ROPE_CVAR, 0, 1, "HOOK", "HOOK", "#ff8c1a") \
-	X(RL_SWIM, 4, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0021U, RLEP_AT_LEAST_ONE_WATER, RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_SWIM, RLMP_NONE, RL_SWIM, RLFB_NONE, 0, 1, "SWIM", "SWIM", "#3d7dff") \
-	X(RL_LIFT, 5, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY, RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_LIFT, RLFB_NONE, 0, 1, "LIFT", "LIFT", "#8f5cff") \
-	X(RL_TELEPORT, 6, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY, RLAP_TELEPORT_PAD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_TELEPORT, RLFB_NONE, 0, 1, "TELEPORT", "TELE", "#00d18a") \
-	X(RL_ROCKETJUMP, 7, 0, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH, RLAP_UNSUPPORTED, RLAP_ZERO, RLAP_ZERO, RLCP_UNSUPPORTED, RLMP_NONE, RL_ROCKETJUMP, RLFB_FIXED, 900, 0, "ROCKETJUMP", "RJ", "#ff3b30") \
-	X(RL_DOOR, 8, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_DRY_BOTH, RLAP_DOOR_WAIT, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_DOOR, RLFB_NONE, 0, 1, "DOOR", "DOOR", "#ff66c4") \
-	X(RL_DOOR_DROP, 9, 0, RL_CONTRACTED, 0x0010U, 0x06U, 0x007dU, RLEP_FROM_DRY, RLAP_DROP_LIP, RLAP_DOOR_PREOPEN_CONTACT, RLAP_DOOR_RIDE_INGRESS_LIP, RLCP_DROP, RLMP_DOOR_WORLD_FIXED_1_8, RL_DROP, RLFB_INHERIT, 0, 0, "DOOR_DROP", "D_DROP", "#d4a600") \
-	X(RL_DOOR_SWIM, 10, 0, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_FROM_WATER, RLAP_ZERO, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_SWIM, RLMP_DOOR_WORLD_FIXED_1_8, RL_SWIM, RLFB_INHERIT, 0, 0, "DOOR_SWIM", "D_SWIM", "#5a9cff") \
-	X(RL_DOOR_HOOK, 11, 0, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_WATER_TO_DRY, RLAP_HOOK_CONTROL, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_HOOK, RLMP_DOOR_WORLD_FIXED_1_8, RL_HOOK, RLFB_INHERIT, 0, 0, "DOOR_HOOK", "D_HOOK", "#ff5bbd")
+	X(RL_RUN, 0, 1, RL_PROVEN, 0x000fU, 0x01U, 0x0000U, RLEP_DRY_BOTH, RLAP_RUN_WAYPOINT, RLAP_ZERO, RLAP_ZERO, RLCP_RUN, RLMP_NONE, RL_RUN, RLFB_NONE, 0, "RUN", "RUN", "#9a9a9a") \
+	X(RL_JUMP, 1, 1, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH, RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_JUMP, RLMP_NONE, RL_JUMP, RLFB_NONE, 0, "JUMP", "JUMP", "#00c8d7") \
+	X(RL_DROP, 2, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0003U, RLEP_FROM_DRY, RLAP_DROP_LIP, RLAP_ZERO, RLAP_ZERO, RLCP_DROP, RLMP_NONE, RL_DROP, RLFB_FIXED, 150, "DROP", "DROP", "#e0c000") \
+	X(RL_HOOK, 3, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0001U, RLEP_NOT_BOTH_WATER, RLAP_HOOK_CONTROL, RLAP_ZERO, RLAP_ZERO, RLCP_HOOK, RLMP_NONE, RL_HOOK, RLFB_ROPE_CVAR, 0, "HOOK", "HOOK", "#ff8c1a") \
+	X(RL_SWIM, 4, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0021U, RLEP_AT_LEAST_ONE_WATER, RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_SWIM, RLMP_NONE, RL_SWIM, RLFB_NONE, 0, "SWIM", "SWIM", "#3d7dff") \
+	X(RL_LIFT, 5, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY, RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_LIFT, RLFB_NONE, 0, "LIFT", "LIFT", "#8f5cff") \
+	X(RL_TELEPORT, 6, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY, RLAP_TELEPORT_PAD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_TELEPORT, RLFB_NONE, 0, "TELEPORT", "TELE", "#00d18a") \
+	X(RL_ROCKETJUMP, 7, 0, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH, RLAP_UNSUPPORTED, RLAP_ZERO, RLAP_ZERO, RLCP_UNSUPPORTED, RLMP_NONE, RL_ROCKETJUMP, RLFB_FIXED, 900, "ROCKETJUMP", "RJ", "#ff3b30") \
+	X(RL_DOOR, 8, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_DRY_BOTH, RLAP_DOOR_WAIT, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_DOOR, RLFB_NONE, 0, "DOOR", "DOOR", "#ff66c4") \
+	X(RL_DOOR_DROP, 9, 0, RL_CONTRACTED, 0x0010U, 0x06U, 0x007dU, RLEP_FROM_DRY, RLAP_DROP_LIP, RLAP_DOOR_PREOPEN_CONTACT, RLAP_DOOR_RIDE_INGRESS_LIP, RLCP_DROP, RLMP_DOOR_WORLD_FIXED_1_8, RL_DROP, RLFB_INHERIT, 0, "DOOR_DROP", "D_DROP", "#d4a600") \
+	X(RL_DOOR_SWIM, 10, 0, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_FROM_WATER, RLAP_ZERO, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_SWIM, RLMP_DOOR_WORLD_FIXED_1_8, RL_SWIM, RLFB_INHERIT, 0, "DOOR_SWIM", "D_SWIM", "#5a9cff") \
+	X(RL_DOOR_HOOK, 11, 0, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_WATER_TO_DRY, RLAP_HOOK_CONTROL, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_HOOK, RLMP_DOOR_WORLD_FIXED_1_8, RL_HOOK, RLFB_INHERIT, 0, "DOOR_HOOK", "D_HOOK", "#ff5bbd") \
+	X(RL_BUTTON_DOOR, 12, 1, RL_DECLARED, 0x0008U, 0x06U, 0x007dU, RLEP_DRY_BOTH, RLAP_DOOR_WAIT, RLAP_DOOR_PREOPEN_CONTACT, RLAP_DOOR_RIDE_INGRESS_LIP, RLCP_DECLARED, RLMP_DOOR_WORLD_FIXED_1_8, RL_DOOR, RLFB_INHERIT, 0, "BUTTON_DOOR", "B_DOOR", "#ff9f0a")
 
 /* X(symbol, id, message) */
 #define SG_RUNE_REJECTION_REASON_ROWS(X) \
@@ -284,7 +383,7 @@ typedef enum
 	X(RLR_BAD_ANCHOR_POLICY, 11, "bad anchor policy") \
 	X(RLR_BAD_CONTROL_POLICY, 12, "bad control policy") \
 	X(RLR_BAD_MODE, 13, "bad compound mode") \
-	X(RLR_NONZERO_TAIL, 14, "nonzero legacy tail") \
+	X(RLR_NONZERO_TAIL, 14, "nonzero link tail") \
 	X(RLR_NONZERO_RESERVED, 15, "nonzero reserved field") \
 	X(RLR_BAD_RUN_CONTROL, 32, "bad run control") \
 	X(RLR_BAD_JUMP_CONTROL, 33, "bad jump control") \
@@ -322,7 +421,6 @@ typedef enum
 	X(RLW_INVALID_ARGUMENT, 1, "invalid argument") \
 	X(RLW_IO_ERROR, 2, "I/O error") \
 	X(RLW_BAD_MAGIC, 3, "bad magic") \
-	X(RLW_UNSUPPORTED_VERSION, 4, "unsupported version") \
 	X(RLW_BAD_HEADER_SIZE, 5, "bad header size") \
 	X(RLW_BAD_SEED_SIZE, 6, "bad seed size") \
 	X(RLW_BAD_LINK_SIZE, 7, "bad link size") \

@@ -1,15 +1,8 @@
-/* sg_action.h -- canonical RUNE action metadata and compatibility gates. */
+/* sg_action.h -- canonical RUNE action metadata and admission gates. */
 #ifndef SG_ACTION_H
 #define SG_ACTION_H
 
 #include "sg_action_contract.generated.h"
-
-/* These are wire-format generations, not the active runtime format.  V1/V2
- * keep their historical maxima forever; V3 knows the complete current
- * registry even while an individual controller remains runtime-unsupported. */
-#define SG_RUNE_WIRE_V1 1
-#define SG_RUNE_WIRE_V2 2
-#define SG_RUNE_WIRE_V3 SG_RUNE_V3_VERSION
 
 typedef struct sg_action_desc_s
 {
@@ -28,7 +21,6 @@ typedef struct sg_action_desc_s
 	rune_action_t effective_suffix;
 	rune_field_bias_policy_t field_bias_policy;
 	int field_bias_ms;
-	int controller_revision;
 	const char *symbol;
 	const char *name;
 	const char *short_name;
@@ -42,16 +34,14 @@ const sg_action_desc_t *SG_ActionDescribe(int action);
 int SG_ActionKnown(int action);
 int SG_ActionRuntimeSupported(int action);
 
-/* Wire admission is version-specific and does not imply runtime support.
- * V1 forever admits action 0..7; V2 admits action 0..8. Both admit provenance
- * 0..3 and only mode 0. V3 is likewise frozen at action 0..11, provenance
- * 0..4, and mode 0..2; appending registry rows cannot silently widen an old
- * wire format. Unknown versions always fail closed. */
-int SG_ActionWireValid(int version, int action);
+/* Artifact admission is distinct from implementation support.  A
+ * registered action can be valid in the RUNE file while its controller
+ * remains unavailable; execution still gates on RuntimeSupported. */
+int SG_ActionWireValid(int action);
 int SG_ProvenanceKnown(int provenance);
-int SG_ProvenanceWireValid(int version, int provenance);
+int SG_ProvenanceWireValid(int provenance);
 int SG_ModeKnown(int mode);
-int SG_ModeWireValid(int version, int mode);
+int SG_ModeWireValid(int mode);
 
 /* Declarative policy queries. Invalid action, enum, mask, or endpoint inputs
  * fail closed. Effective-suffix queries are for inherited classification and

@@ -38,12 +38,13 @@ while [ ! -f "$STOP" ]; do
     # A wave that "finished" in under two minutes did not run -- the
     # overlap guard refused (stale q2ded) or the launch failed. Spinning
     # here once burned wave numbers 438-882 in fifteen minutes. Do not
-    # increment on a failed wave; clear stragglers, back off, retry, and
-    # give up loudly after five straight failures.
+    # increment on a failed wave; back off, retry, and give up loudly after
+    # five straight failures. iterate2 owns and waits for its exact children.
+    # A fast return gives this wrapper no authority over any other q2ded on
+    # the host: an overlap refusal specifically means that process is foreign.
     if [ $(( T1 - T0 )) -lt 120 ]; then
         FAILS=$(( ${FAILS:-0} + 1 ))
         echo "$(date +%H:%M:%S) wave $WAVE FAILED in $(( T1 - T0 ))s (streak $FAILS)" >> waveloop.log
-        pkill -x q2ded 2>/dev/null
         if [ "$FAILS" -ge 5 ]; then
             echo "$(date +%H:%M:%S) five straight failures -- stopping" >> waveloop.log
             break

@@ -182,7 +182,7 @@ static void TestFallAndTerminalBoundaries(void)
 	pose.origin[0] = 0.0f;
 	pose.origin[2] = 72.0f;
 	CHECK(!SG_DropReplayRecoveryReady(&drop, &pose, &observation));
-	/* Revision 2 binds recovery admission to a dry serialized destination. */
+	/* Recovery admission is bound to a dry serialized destination. */
 	drop.destination_water = true;
 	pose = TestPose(95.999f, 0.0f, 71.999f);
 	observation.drop_recovery_admitted = false;
@@ -740,10 +740,9 @@ static void TestPlanarAnglePrecision(void)
 	sg_replay_observation_t observation = TestObservation();
 	usercmd_t command;
 
-	/* This exact delta straddles one usercmd-short boundary. Revision-2 live
-	 * DROP independently reconstructs and checks the v3 generator/proof's
-	 * selected -32684 byte. Hook settlement intentionally retains its float
-	 * byte here. */
+	/* This exact delta straddles one usercmd-short boundary. Live DROP
+	 * independently reconstructs and checks the selected -32684 byte. Hook
+	 * settlement intentionally retains its float byte here. */
 	VectorSet(drop.lip, -94.25f, -0.75f, 0.0f);
 	drop.heading = 128;
 	CHECK_STATUS(SG_DropReplayBegin(&drop_state, &drop, &pose, &observation,

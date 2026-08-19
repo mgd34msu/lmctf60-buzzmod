@@ -1,4 +1,4 @@
-/* Direct, host-free regression tests for ordinary revision-2 live DROP. */
+/* Direct, host-free regression tests for ordinary live DROP. */
 #include "q_shared.h"
 
 #include <math.h>

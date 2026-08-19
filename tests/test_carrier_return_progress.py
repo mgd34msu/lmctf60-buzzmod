@@ -1,0 +1,108 @@
+"""Focused source-and-policy checks for carrier return progress."""
+
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DESCEND = (ROOT / "slipgate" / "sg_descend.c").read_text()
+MOVE = (ROOT / "slipgate" / "sg_move.c").read_text()
+
+
+def section(source: str, start: str, end: str) -> str:
+    begin = source.index(start)
+    finish = source.index(end, begin)
+    return source[begin:finish]
+
+
+def cycle_route(links, costs, recent, shelved, alternate_only):
+    """Mirror the finite RUN selection required by Carrier_CycleRoute."""
+    here = costs[0]
+    choices = []
+    for link, target, action in links:
+        cost = costs[target]
+        if action != "RUN" or cost >= 2**31 - 1:
+            continue
+        if not alternate_only:
+            choices.append(link)
+            continue
+        if alternate_only and (cost >= here or link in shelved or target in recent):
+            continue
+        choices.append((cost, link))
+    if not alternate_only:
+        return choices[0] if len(choices) == 1 else -1
+    return min(choices)[1] if choices else -1
+
+
+def test_astray_without_cover_never_zeroes_carrier_movement():
+    rally = section(MOVE, "/* rallying: get to cover first", "/* on post:")
+    assert "qboolean at_cover = role != SG_ROLE_CARRY;" in rally
+    assert "else if (role == SG_ROLE_CARRY)" in rally
+    assert "tc->rally_hold = false;" in rally
+    assert "if (rally_hold && at_cover)" in rally
+    assert "else if (rally_hold)" in rally
+
+
+def test_astray_selects_reachable_standoff_then_holds_only_at_cover():
+    cover = section(DESCEND, "static int Carrier_RallyCover", "static qboolean Carrier_LinkShelved")
+    assert "goal_field[seed] < 600 || goal_field[seed] >= 2500" in cover
+    assert "SG_CanSee(e, SG_Rune()->seeds[seed].origin, 22.0f)" in cover
+    assert "if (distance > 1200.0f)" in cover
+    hold = section(DESCEND, "/*\n\t * HOLD SHORT OF AN UNCAPPABLE STAND", "/*\n\t * A railhold clock")
+    assert "rally_hold = cover >= 0;" in hold
+    assert "bot->rally_cover = cover;" in hold
+    assert "at_cover = (VectorLength(cvd) < 48.0f);" in MOVE
+
+
+def test_flag_return_clears_carrier_hold_and_resumes_homeward_route():
+    hold = section(DESCEND, "/*\n\t * HOLD SHORT OF AN UNCAPPABLE STAND", "/*\n\t * A railhold clock")
+    release = section(hold, "if (!ours_astray)", "else if (bot->seed")
+    assert "bot->rally_cover = -1;" in release
+    assert "rally_hold = false;" in release
+
+
+def test_multiexit_cycle_prefers_nonrecent_unshelved_lower_cost_route():
+    assert cycle_route(
+        [(10, 1, "RUN"), (11, 2, "RUN"), (12, 3, "RUN")],
+        [1000, 500, 400, 300], recent={1}, shelved={11}, alternate_only=True
+    ) == 12
+    select = section(DESCEND, "static int Carrier_CycleRoute", "/*\n * THE COMMITMENT")
+    assert "cost >= here || Carrier_LinkShelved(bot, link) ||" in select
+    assert "Carrier_VisitedRecently(bot, candidate->to)" in select
+
+
+def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
+    links = [(10, 1, "RUN")]
+    costs = [1000, 1100]
+    assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=True) == -1
+    assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=False) == 10
+    cycle = section(DESCEND, "/*\n\t * The wide-orbit detector", "/* Deaddoor")
+    assert "alternate = Carrier_CycleRoute(bot, goal_field, true);" in cycle
+    assert "alternate = Carrier_CycleRoute(bot, goal_field, false);" in cycle
+    assert "memset(bot->bl_until, 0, sizeof(bot->bl_until));" not in cycle
+
+
+def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():
+    links = [(10, 1, "RUN"), (11, 2, "RUN")]
+    costs = [1000, 900, 1200]
+    assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=True) == -1
+    assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=False) == -1
+    assert cycle_route([(10, 1, "RUN")], [1000, 900], recent={1}, shelved={10}, alternate_only=False) == 10
+    select = section(DESCEND, "static int Carrier_CycleRoute", "/*\n * THE COMMITMENT")
+    assert "return finite_count == 1 ? finite_link : -1;" in select
+    assert "candidate->from != bot->seed" in select
+    cycle = section(DESCEND, "/*\n\t * The wide-orbit detector", "/* Deaddoor")
+    assert "A multi-exit fan with no safe alternate" in cycle
+    assert "bestlink = -1;" in cycle
+
+
+if __name__ == "__main__":
+    tests = [
+        value
+        for name, value in sorted(globals().items())
+        if name.startswith("test_") and callable(value)
+    ]
+    result = unittest.TextTestRunner(verbosity=2).run(
+        unittest.TestSuite(unittest.FunctionTestCase(test) for test in tests)
+    )
+    raise SystemExit(0 if result.wasSuccessful() else 1)

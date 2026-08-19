@@ -12,7 +12,7 @@
 #define SG_CVAR_LIST(X) \
 	X(aimtexture, "sg_aimtexture", "1") \
 	X(airgain, "sg_airgain", "0") \
-	X(airstrafe, "sg_airstrafe", "0") \
+	X(airstrafe, "sg_airstrafe", "2") \
 	X(approachcover, "sg_approachcover", "200") \
 	X(atkobj, "sg_atkobj", "125") \
 	X(beliefcone, "sg_beliefcone", "0") \
@@ -26,7 +26,9 @@
 	X(dangerpersistport, "sg_dangerpersistport", "0") \
 	X(debug, "sg_debug", "0") \
 	X(defpost, "sg_defpost", "0") \
+	X(defcombat, "sg_defcombat", "1") \
 	X(defreact, "sg_defreact", "3") \
+	X(defshift, "sg_defshift", "0") \
 	X(depace, "sg_depace", "0") \
 	X(drawplan, "sg_drawplan", "0") \
 	X(duelroles, "sg_duelroles", "1") \
@@ -58,7 +60,7 @@
 	X(nakedcarry, "sg_nakedcarry", "0") \
 	X(nobacktrack, "sg_nobacktrack", "60") \
 	X(noweave, "sg_noweave", "0") \
-	X(patrol, "sg_patrol", "1") \
+	X(patrol, "sg_patrol", "0") \
 	X(persona, "sg_persona", "1") \
 	X(press, "sg_press", "1") \
 	X(preturn, "sg_preturn", "1") \

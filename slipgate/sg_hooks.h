@@ -20,6 +20,10 @@ typedef struct sg_host_s
 {
 	/* diagnostics: the sanctioned print channels */
 	void		(*dprint)(const char *fmt, ...);
+	/* Make complete diagnostic records visible through the host's logging
+	 * route before returning.  This is a visibility boundary, not storage
+	 * durability. */
+	void		(*flush)(void);
 	void		(*cprint)(edict_t *ent, int level, const char *fmt, ...);
 	void		(*bprint)(int level, const char *fmt, ...);
 
@@ -85,6 +89,7 @@ typedef struct sg_host_s
  */
 #define SG_HOST_REQUIRED_SERVICES(X) \
 	X(dprint) \
+	X(flush) \
 	X(cprint) \
 	X(bprint) \
 	X(trace) \
@@ -126,8 +131,8 @@ enum {
 };
 #undef SG_HOST_DECLARE_SERVICE_ID
 
-_Static_assert(SG_HOST_SERVICE_COUNT == 34,
-	"sg_host_t required-service inventory must contain exactly 34 unique slots");
+_Static_assert(SG_HOST_SERVICE_COUNT == 35,
+	"sg_host_t required-service inventory must contain exactly 35 unique slots");
 /* Every member is a function pointer on the supported Quake II ABIs.  This
  * catches a new struct slot that was not added to the required-service list. */
 _Static_assert(sizeof(sg_host_t) ==

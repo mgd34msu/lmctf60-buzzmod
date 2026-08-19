@@ -53,7 +53,7 @@ sg_identity_status_t SG_LevelIdentityCaptureEntities(const char *mapname,
 sg_identity_status_t SG_LevelIdentityCommit(const char *mapname);
 
 /* Consumer boundary.  Snapshot returns a copy, never mutable authority.
- * Every map argument uses the canonical, case-preserving v3 grammar. */
+ * Every map argument uses the canonical, case-preserving artifact grammar. */
 sg_identity_status_t SG_LevelIdentitySnapshot(const char *expected_mapname,
 	sg_level_identity_t *out);
 sg_identity_status_t SG_LevelIdentityMatch(const char *expected_mapname,

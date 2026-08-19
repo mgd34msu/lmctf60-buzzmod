@@ -1,4 +1,4 @@
-/* Regression tests for the legacy/v3 nominal-gravity scope boundary. */
+/* Regression tests for the active nominal-gravity scope boundary. */
 #include <math.h>
 #include <stdio.h>
 
@@ -16,21 +16,27 @@ static int failures;
 
 int main(void)
 {
-	/* The v2 gate historically casts to short before comparing with 800.
-	 * B2 must not tighten that frozen compatibility boundary. */
-	CHECK(SG_RuneV2GravityCompatible(800.0f));
-	CHECK(SG_RuneV2GravityCompatible(800.5f));
-	CHECK(!SG_RuneV2GravityCompatible(799.5f));
-	CHECK(!SG_RuneV2GravityCompatible(INFINITY));
+	/* lmctf54's lower approach -> shelf samples rise 112 and 124 units.
+	 * Admit the complete local seed tier, but not a wider or taller general
+	 * hook traversal; the generator's physical prover remains authoritative. */
+	CHECK(SG_RuneProofHookLateralWindow(32.0f, 112.0f));
+	CHECK(SG_RuneProofHookLateralWindow(96.0f, 124.0f));
+	CHECK(SG_RuneProofHookLateralWindow(128.0f, 128.0f));
+	CHECK(!SG_RuneProofHookLateralWindow(128.125f, 112.0f));
+	CHECK(!SG_RuneProofHookLateralWindow(32.0f, 128.125f));
+	CHECK(!SG_RuneProofHookLateralWindow(32.0f, 31.875f));
+	CHECK(!SG_RuneProofHookLateralWindow(NAN, 112.0f));
+	CHECK(!SG_RuneProofHookLateralWindow(32.0f, NAN));
+
 	{
 		float off = 0.0f;
 		float on = 1.0f;
 		float invalid = NAN;
 
-		CHECK(SG_RuneV3FunkyGravityCompatible(&off));
-		CHECK(!SG_RuneV3FunkyGravityCompatible(&on));
-		CHECK(!SG_RuneV3FunkyGravityCompatible(&invalid));
-		CHECK(!SG_RuneV3FunkyGravityCompatible(NULL));
+		CHECK(SG_RuneFunkyGravityCompatible(&off));
+		CHECK(!SG_RuneFunkyGravityCompatible(&on));
+		CHECK(!SG_RuneFunkyGravityCompatible(&invalid));
+		CHECK(!SG_RuneFunkyGravityCompatible(NULL));
 	}
 
 	SG_RuneProofScopeEnd();
@@ -48,7 +54,7 @@ int main(void)
 	CHECK(SG_RuneProofGravity() == 650);
 
 	/* Simulate every post-begin failure funnel: End is idempotent and the next
-	 * invocation starts from the legacy default, never the prior map's law. */
+	 * invocation starts from the nominal default, never the prior map's law. */
 	SG_RuneProofScopeEnd();
 	SG_RuneProofScopeEnd();
 	CHECK(!SG_RuneProofScopeActive());

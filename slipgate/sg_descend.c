@@ -1,8 +1,7 @@
 /*
  * sg_descend.c -- the descent and the commitment: the candidate walk
  * over every proven link, and everything between the argmin and the
- * aim.  Moved verbatim from sg_arach.c in the 2026-08-12 standards
- * pass; Duel_Price and the bearing bucket are private to it.
+ * aim. Duel_Price and the bearing bucket are private to it.
  */
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -15,10 +14,15 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_declared_door_guard.h"
+#include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
+#include "slipgate/sg_defense_shift.h"
+#include "slipgate/sg_defense_supply.h"
+#include "slipgate/sg_strike.h"
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
@@ -122,6 +126,7 @@ static qboolean Ballistic_Arrived(edict_t *e, const rune_link_t *l)
 {
 	vec3_t d, from, to;
 	trace_t tr;
+	qboolean accepted = false;
 
 	VectorSubtract(SG_Rune()->seeds[l->to].origin, e->s.origin, d);
 	if (d[0] * d[0] + d[1] * d[1] >= 40.0f * 40.0f ||
@@ -133,13 +138,15 @@ static qboolean Ballistic_Arrived(edict_t *e, const rune_link_t *l)
 	         ((!e->groundentity && e->waterlevel < 2) ||
 	          (e->groundentity && e->groundentity != g_edicts &&
 	           !SG_ImmutableSupport(e->groundentity)))))
-		return false;
+		goto result;
 	VectorCopy(e->s.origin, from);
 	VectorCopy(SG_Rune()->seeds[l->to].origin, to);
 	from[2] += 16.0f;
 	to[2] += 16.0f;
 	tr = sg_host.trace(from, NULL, NULL, to, e, MASK_PLAYERSOLID);
-	return !tr.startsolid && tr.fraction >= 1.0f;
+	accepted = !tr.startsolid && tr.fraction >= 1.0f;
+result:
+	return accepted;
 }
 
 /* A DROP may touch down between 64-unit lattice seeds. The proof permits one
@@ -150,24 +157,27 @@ static qboolean Drop_RecoveryReady(edict_t *e, const rune_link_t *l)
 {
 	vec3_t d, from, to;
 	trace_t tr;
+	qboolean accepted = false;
 
 	if (!e || !l || !e->groundentity ||
 	    (e->groundentity != g_edicts &&
 	     !SG_ImmutableSupport(e->groundentity)) ||
 	    e->waterlevel != 0 ||
 	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-		return false;
+		goto result;
 	VectorSubtract(SG_Rune()->seeds[l->to].origin, e->s.origin, d);
 	if (d[0] * d[0] + d[1] * d[1] >=
 	        RUNE_DROP_RECOVERY_RADIUS * RUNE_DROP_RECOVERY_RADIUS ||
 	    d[2] <= -RUNE_DROP_RECOVERY_Z || d[2] >= RUNE_DROP_RECOVERY_Z)
-		return false;
+		goto result;
 	VectorCopy(e->s.origin, from);
 	VectorCopy(SG_Rune()->seeds[l->to].origin, to);
 	from[2] += 16.0f;
 	to[2] += 16.0f;
 	tr = sg_host.trace(from, NULL, NULL, to, e, MASK_PLAYERSOLID);
-	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+	accepted = !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+result:
+	return accepted;
 }
 
 typedef struct drop_live_contact_context_s
@@ -239,8 +249,7 @@ static void Drop_LiveBoundaryLog(const edict_t *e, int link_index,
 }
 
 /*
- * THE DESCENT (split from SG_BotThink, 2026-08-11 standards pass; body
- * verbatim): the incumbent's re-price, the candidate walk over every
+ * THE DESCENT: the incumbent's re-price, the candidate walk over every
  * proven link off this seed -- rail rhythm, latch, no-ropes-in-the-house,
  * shadow pricing, the anti-linger surcharge -- and the argmin that names
  * the next commitment. Returns the chosen link; emits the values the
@@ -275,6 +284,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	int rail_client = -1;
 	float rail_dose = 0.0f;
 	qboolean rail_hold = false;
+	qboolean supply_route = SG_DefenseSupplyActive(bot) && route_pure;
+	sg_defense_supply_neighbor_t supply_neighbors[64];
+	unsigned supply_neighbor_count = 0;
 
 	/* life ticker for the route-jitter seed */
 	if (e->health <= 0)
@@ -326,8 +338,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 	/* the scoreboard ping a human would show from a near-local connection:
 	 * stable per-session base with a +/-1 flicker, never outside 5-15
-	 * (owner's ruling 2026-08-05: bots blend in everywhere, analytics
-	 * included) */
+	 * so bots blend into ordinary scoreboard ranges, analytics included. */
 	e->client->ping = bot->fake_ping + (rand() % 3) - 1;
 	if (e->client->ping < 5) e->client->ping = 5;
 	if (e->client->ping > 15) e->client->ping = 15;
@@ -384,7 +395,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				bestval += duel_expo *
 				    (float)SG_Rune()->seeds[bot->seed].area_hint * 1.8f;
 	/*
-	 * THE CARRIER DOES NOT SINK (pit forensics, waves 383-411: 83
+	 * THE CARRIER DOES NOT SINK (pit analysis, observations: 83
 	 * unopposed smap05 carries, 87% touched the mid-map basin, 33 ended
 	 * "sank like a rock"). The flood's cheapest way out of that basin
 	 * fires its long ropes from the BOTTOM of the water (seeds 541/545/
@@ -417,7 +428,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/*
-	 * ANTI-LINGER (sg_unlinger, rung-4 cut #3). The forensics' surviving
+	 * ANTI-LINGER (sg_unlinger, behavior cut #3). The analysis' surviving
 	 * lead after two nulls: bot single-mate contact streaks beside the
 	 * carrier run 3-10x longer than human ones (3.85-7.69s vs 0.68-
 	 * 1.39s). The mechanism is not attraction -- the role gate and the
@@ -491,7 +502,17 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		qboolean hook_policy = SG_ActionUsesHookPolicy(l->action);
 		qboolean hook_water = l->action == RL_HOOK &&
 		    (SG_Rune()->seeds[l->from].flags & RSF_WATER);
+		sg_rune_mechanism_binding_t mechanism_binding = { 0 };
+		qboolean mechanism_bound = false;
 		int b;
+
+		if (SG_ActionMechanismPlanRequired(l->action))
+		{
+			if (!SG_RuneMechanismBindingCapture(SG_Rune(), (uint32_t)li,
+			        &mechanism_binding))
+				continue;
+			mechanism_bound = true;
+		}
 
 		/* Never begin a second ballistic action in midair. An already committed
 		 * jump/drop is restored below; new candidates wait for a landing. */
@@ -506,7 +527,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			continue;       /* one exact action owns the command at a time */
 		if (l->action == RL_LIFT)
 		{
-			edict_t *plat = SG_LiftForAnchor(l->anchor);
+			edict_t *plat = mechanism_bound
+			    ? mechanism_binding.mover_entity : NULL;
 
 			/* A declared lift is executable only when its exact map entity is
 			 * waiting at the bottom, or this body is already riding it. Do not
@@ -548,7 +570,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		    !SG_BallisticSurvivable(e, l))
 			continue;
 
-		/* Version-2 graph hooks prove the offhand production schedule.  A
+		/* Graph hooks prove the offhand production schedule.  A
 		 * weapon-held grapple has activation/fire frames and is a different
 		 * controller, so it is not an executable edge in this graph. */
 		if (l->action == RL_HOOK)
@@ -581,7 +603,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * ROUTE DITHER (sg_routedither, rung-2 set #1 tell #2): the
+		 * ROUTE DITHER (sg_routedither, movement behavior set #1 tell #2): the
 		 * transition matrices show p=1.0 cells -- at a given seed this
 		 * body always makes the identical next choice, and a judge
 		 * reads the determinism off the sheet. A human's tie-break
@@ -601,7 +623,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * No ropes in the house. Wave 96, watched live: an attacker
+		 * No ropes in the house. observations, watched live: an attacker
 		 * spinning in the flag room firing hooks at the walls while the
 		 * flag sat unguarded a body-length away -- in-room hook links
 		 * ping-pong a bot around the goal minimum, and rope-fire counts
@@ -616,7 +638,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		/*
 		 * COVER ON THE APPROACH. lmctf58's attack front dies at 3.3s out
 		 * with no stalls and no wedges -- moving freely into a covered
-		 * sightline, game after game (waves 112-115). The rune has
+		 * sightline, game after game (observations). The rune has
 		 * carried measured exposure on every seed since the census pass;
 		 * it priced cover for hurting duelists only. Now the final
 		 * approach pays for visible ground too: an attacker inside 4s of
@@ -676,7 +698,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			v += 0.4f * (float)SG_Rune()->seeds[l->to].area_hint; /* was 2.0: same audit */
 
 		if (hook_policy && SG_TimerPending(bot->hookban_until))
-			continue;           /* every v2 rope is offhand and exactly re-proved;
+			continue;           /* every graph rope is offhand and exactly re-proved;
 			                     * a recent live failure shelves all rope attempts */
 
 		for (b = 0; b < SG_BL_MAX; b++)
@@ -713,7 +735,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * Everyone else fights; the carrier's job is the capture point.
 		 */
 		/*
-		 * THE WET ROUTE (sg_watercarry, wave 253). The lmctf01 census:
+		 * THE WET ROUTE (sg_watercarry, observations). The lmctf01 census:
 		 * thirteen of thirteen carrier deaths were rails on the dry
 		 * corridors, while humans convert 71 percent there by swimming
 		 * the moat -- underwater is the one country without railguns.
@@ -727,7 +749,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		/* the sink ban's teeth: 12000 exceeds the basin's worst gap
 		 * (max eff link 4055 + field spread 2221), so any non-sinking
 		 * candidate wins; the pre-pass above guarantees one exists */
-		/* widened per the pre-registered fallback (416 forensics: two
+		/* widened per the pre-registered fallback (416 analysis: two
 		 * carriers FELL dry straight into the cistern -- the wet-trigger
 		 * never saw a choice -- then hooked until the air ran out): a
 		 * DESTINATION inside water counts as sinking regardless of how
@@ -743,7 +765,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		/*
 		 * THE SHELF PAYS ITS CLIFF, at the layer that actually walks
 		 * (sg_shelfcost, steal-genesis study). The first cut priced the
-		 * waypoint surface and read a flat null in three waves: between
+		 * waypoint surface and read a flat null in three match batches: between
 		 * commitments the descent runs on the flood alone, and the flood
 		 * happily steps DOWN onto the zero-yield floor under the enemy
 		 * stand (101 close approaches there, 91% dead in 1.2s, zero
@@ -781,9 +803,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			/*
 			 * The carrier's ROPE is not everyone's rope: phase 1 is a
 			 * standing aim frame with the flag on its back, and a miss
-			 * re-runs the ritual (wave 58: 17s at 10ms/s against a 43%
+			 * re-runs the ritual (observations: 17s at 10ms/s against a 43%
 			 * land rate). But the blanket surcharge overcorrected --
-			 * waves 58-66 show five of fourteen carriers dying of the
+			 * observations show five of fourteen carriers dying of the
 			 * CLOCK, legs too slow for the long returns, while the rope
 			 * at 800 u/s is the fastest thing in clear water. The aim
 			 * frame is only deadly when somebody is watching: the
@@ -815,7 +837,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				if (VectorLength(pd) < 700.0f)
 				{
 					/*
-					 * THE FAST CARRY (sg_fastcarry, A/B wave 205+).
+					 * THE FAST CARRY (sg_fastcarry, comparison observations).
 					 * The human corpus set the bar: a successful
 					 * carry is 14 seconds of covering the WHOLE
 					 * route, and humans convert 12.8 percent of
@@ -839,7 +861,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->carry_startcost = goal_field[bot->seed];
 
 		/*
-		 * THE PROGRESS GUARD. Wave 140's carry traces: the 53-second 5v1
+		 * THE PROGRESS GUARD. observations carry traces: the 53-second 5v1
 		 * carry ran its cost 12800 down to 6400, fell into the pool, and
 		 * finished the fight at 8623 -- a third of the route home handed
 		 * back in one drop, then a crawl. A carrier that loses ground it
@@ -868,7 +890,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				 * the last three seconds is the body reporting from
 				 * where it stands now, and un-shelving those sent
 				 * carriers into retry-fail churn (offgraph frames
-				 * 0->3->5->12%% across waves 141-144). Shelves live
+				 * 0->3->5->12%% across observations). Shelves live
 				 * 120s, so age reads off the expiry. */
 				for (b2 = 0; b2 < SG_BL_MAX; b2++)
 					if (bot->bl_until[b2] < level.time + 117.0f)
@@ -890,11 +912,11 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		          bot->carry_startcost / 2))
 		{
 			/*
-			 * THE BREAKOUT, gauged by STATE, not clock. Wave 69: nine
+			 * THE BREAKOUT, gauged by STATE, not clock. observations: nine
 			 * carries, every one pinned at 0-10% of the way home, the
 			 * flee doctrine's own pricing surcharging every exit of a
 			 * hot flag room until the argmin oscillated between doors.
-			 * A 10-second window (wave 70) freed the ones that broke
+			 * A 10-second window (observations) freed the ones that broke
 			 * fast and re-pinned the ones that didn't -- Trace, 72s at
 			 * 1% -- so the clock is gone: the dodge stays silent until
 			 * the carrier has actually cleared a quarter of the route
@@ -916,8 +938,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 					               SG_Rune()->seeds[en->seed].origin, d);
 					if (VectorLength(d) < 400.0f)
 						/* 1.5, was 3.0: this loop now only speaks in
-						 * open country past the breakout, where wave
-						 * 71's three clock-outs at 64-98% home say the
+						 * open country past the breakout, where three
+						 * clock-outs at 64-98% home show the
 						 * full dodge tax costs more match clock than
 						 * it saves in blood */
 						v += 1.5f * (400.0f - VectorLength(d));
@@ -942,20 +964,20 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		else if (duel &&
 		         !(role == SG_ROLE_ATTACK &&
 		           sg_cv.press->value) &&
-		         /* CARRIER PRESS (sg_carrypress, wave 280+). The carry
+		         /* CARRIER PRESS (sg_carrypress, observations). The carry
 		          * traces (274-279): 61%% of carrier frames make no
 		          * homeward progress at ~190 u/s, and 48 of 49 carries
 		          * die before the route's final tenth -- the carrier
 		          * was still holding duel range against pursuers, the
 		          * receding behavior the press cured for attackers in
-		          * the only parity-cap A/B ever won. A fleeing carrier
+		          * the only parity-cap comparison ever won. A fleeing carrier
 		          * has no business pricing weapon range: forward. */
 		         !(role == SG_ROLE_CARRY &&
 		           sg_cv.carrypress->value))
 		{
 			/*
-			 * THE PRESS (sg_press, A/B wave 169+). The travel
-			 * decomposition (waves 164-168): twenty percent of ALL
+			 * THE PRESS (sg_press, comparison observations). The travel
+			 * decomposition (observations): twenty percent of ALL
 			 * attacker distance is spent actively receding from the
 			 * goal -- and range control is the suspect with the
 			 * motive: an engaged attacker prices its steps toward the
@@ -978,7 +1000,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * THE HUMAN PRIOR (sg_humanprior, A/B wave 188+). Fifty-nine
+		 * THE HUMAN PRIOR (sg_humanprior, comparison observations). Fifty-nine
 		 * hours of recorded play, log-tiered per link: a candidate on
 		 * a human highway prices up to ~380ms cheaper. Humans
 		 * concentrate (top 1%% of transitions carry up to 13%% of all
@@ -991,7 +1013,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			v -= 1.5f * (float)sg_human_use[li];
 
 		/*
-		 * THE FLAG-LIVE PRIOR (sg_flagprior, A/B wave 213+). The
+		 * THE FLAG-LIVE PRIOR (sg_flagprior, comparison observations). The
 		 * global prior nulled -- but the corpus shows humans run 60%%
 		 * DIFFERENT roads while a flag is out (carrywindows census),
 		 * and those are the twenty seconds that decide every game.
@@ -1004,7 +1026,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		    tc->role != SG_ROLE_CARRY &&
 		    (sg_caco_team_belief.flag[0][0].state == SG_FLAG_ASTRAY ||
 		     sg_caco_team_belief.flag[0][1].state == SG_FLAG_ASTRAY))
-			/* the cvar IS the dose. Wave 214 (dose 2): carrier route
+			/* the cvar IS the dose. observations (dose 2): carrier route
 			 * coverage FELL under the discount -- the window corpus
 			 * is hunters' roads, not escapees' (POV-agnostic cut).
 			 * The roads go to the roles they came from: hunters
@@ -1014,7 +1036,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			     (float)sg_human_live[li];
 
 		/*
-		 * DEFENSE DWELL (sg_defpost, wave 286+). The corpus inverted
+		 * DEFENSE DWELL (sg_defpost, observations). The corpus inverted
 		 * the stand-freeze doctrine: only 19% of human defensive
 		 * standing time is within 250u of the stand -- humans post on
 		 * the APPROACHES. Cheap first cut per the extraction's own
@@ -1028,7 +1050,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			     (float)sg_def_post[SG_TeamIdx(team)][l->to];
 
 		/*
-		 * DEFENSE INTERCEPT (sg_defreact, wave 295+). The response
+		 * DEFENSE INTERCEPT (sg_defreact, observations). The response
 		 * census, n=1044: on a steal humans leave the post in 0.9s
 		 * and run the ESCAPE CORRIDOR toward where the carrier will
 		 * be -- aim-at-lead 0.48-0.68 vs aim-at-now ~0. Our defender
@@ -1046,7 +1068,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			     (float)sg_def_icept[SG_TeamIdx(team)][l->to];
 
 		/*
-		 * THE ESCAPE PRIOR (sg_escapeprior, wave 284+). The missing
+		 * THE ESCAPE PRIOR (sg_escapeprior, observations). The missing
 		 * corpus cut: .hml was POV-agnostic and therefore mostly the
 		 * HUNTERS' roads (re-tested null twice). This one is only the
 		 * flag carrier's own entity trajectory in the 20s after each
@@ -1061,8 +1083,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			     (float)sg_human_escape[li];
 
 		/*
-		 * APPROACH COVER (sg_approachcover, wave 314+). The carry
-		 * forensics moved the fight: 90% of early carrier kills came
+		 * APPROACH COVER (sg_approachcover, observations). The carry
+		 * analysis moved the fight: 90% of early carrier kills came
 		 * from defenders ALREADY PARKED within 1000u of the robbed
 		 * stand (81% there five seconds before), rail 47% from
 		 * grounded shooters at 237u -- and the nearest enemy is 210u
@@ -1143,7 +1165,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * CARRIER COVER (sg_carrycover, wave 274+). The 268-273 DMG
+		 * CARRIER COVER (sg_carrycover, observations). The 268-273 DMG
 		 * ledger: rails are still the carrier's top killer (2998 dmg
 		 * to rocket-direct's 2317), fired mostly by GROUNDED defenders
 		 * at 135-415 units -- standing shots down clear lines. A rail
@@ -1182,7 +1204,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				VectorCopy(SG_Rune()->seeds[
 				    sg_caco_enemies[SG_TeamIdx(team)][best_cs].seed].origin, thr);
 				thr[2] += 22.0f;
-				/* range gate (wave 279): the 268-277 ledger kills all
+				/* range gate (observations): the 268-277 ledger kills all
 				 * sit inside ~800u -- a sighting across the map must
 				 * not bend the route (dose 1200 showed the failure:
 				 * 53-second carries that never arrive). */
@@ -1205,7 +1227,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * THE SWITCHING COST (sg_sticky, A/B wave 168+). The owner's
+		 * THE SWITCHING COST (sg_sticky, comparison observations). The owner's
 		 * diagnosis, measured: offense converts 1.6 ms of progress per
 		 * unit walked against the escort's 3.1 on the same maps -- half
 		 * of all offensive walking buys nothing -- and the chosen link
@@ -1219,9 +1241,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * displacement stays free when the route is actually dead.
 		 */
 		/*
-		 * ROUTE JITTER (sg_routejitter, wave 359). The film verdict
-		 * chain: rope-vs-brush (calibrated 8/8 judge) -> ribbon v1
-		 * (lanes, not a band) -> ribbon v2+dose (pooled null: the
+		 * ROUTE JITTER (sg_routejitter, observations). The film verdict
+		 * chain: rope-vs-brush (calibrated 8/8 judge) -> fixed ribbon
+		 * (lanes, not a band) -> wandering ribbon (pooled null: the
 		 * steering re-centers whatever the aim does). The band humans
 		 * paint is ROUTE diversity, not in-lane wander: near-optimal
 		 * link chains differ per player and per run, where our argmin
@@ -1243,10 +1265,10 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * NO IMMEDIATE BACKTRACK (sg_nobacktrack, wave 392 trial). The
-		 * smap05 map-center orbit -- and the chronic ~130 suicides a
-		 * wave behind it -- is two seeds on a field plateau electing
-		 * each other forever at full sprint. The latch (wave 385-390)
+		 * NO IMMEDIATE BACKTRACK (sg_nobacktrack, observations case). The
+		 * smap05 map-center orbit -- and the chronic ~130 suicides per
+		 * match behind it -- is two seeds on a field plateau electing
+		 * each other forever at full sprint. The latch (observations)
 		 * pooled null against it: holding a link longer does not help
 		 * when the flap is BETWEEN legs. This prices the one link that
 		 * returns to the seed just departed, for a few seconds, unless
@@ -1349,6 +1371,24 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				v *= 1.0f - bot->escprior_dose;
 		}
 
+		/* Preserve the exact admitted fan for the explicit supply route
+		 * chooser.  It is collected after all action/geometry gates above,
+		 * before sticky or other generic preferences can perturb the route. */
+		if (supply_route &&
+		    SG_DefenseSupplyActionAllowed(
+		        (sg_defense_supply_phase_t)bot->def_supply_phase,
+		        l->action == RL_RUN) &&
+		    supply_neighbor_count <
+		    sizeof(supply_neighbors) / sizeof(supply_neighbors[0]) &&
+		    route_field[l->to] < SG_FIELD_INF)
+		{
+			supply_neighbors[supply_neighbor_count].link_index = li;
+			supply_neighbors[supply_neighbor_count].to_seed = l->to;
+			supply_neighbors[supply_neighbor_count].route_cost_ms =
+			    route_field[l->to];
+			supply_neighbor_count++;
+		}
+
 		if (bot->sticky_link == li &&
 		    sg_cv.sticky->value)
 			v *= 0.85f;
@@ -1363,6 +1403,33 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 	}       /* anti-linger scope */
+	if (supply_route && route_field[bot->seed] < SG_FIELD_INF)
+	{
+		int exact_link = -1;
+
+		if (supply_neighbor_count > 0)
+			exact_link = SG_DefenseSupplyChooseNeighbor(
+			    supply_neighbors, supply_neighbor_count,
+			    route_field[bot->seed]);
+
+		if (exact_link >= 0)
+		{
+			bestlink = exact_link;
+			bestval = (float)route_field[
+			    SG_Rune()->links[exact_link].to];
+		}
+		else
+		{
+			/* The exact field has no currently admitted descending edge. Do
+			 * not fall through to the ordinary worth/hold argmin.  In particular,
+			 * an OUTBOUND route whose next edge is a mechanism returns now rather
+			 * than waiting at the post for the five-second deadline. */
+			if (bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND)
+				SG_DefenseSupplyBeginReturn(bot);
+			bestlink = -1;
+			bestval = 0.0f;
+		}
+	}
 
 	tc->bestval = bestval;
 	tc->incumbent_v = incumbent_v;
@@ -1374,13 +1441,783 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	return bestlink;
 }
 
+sg_run_completion_t SG_RunCommitCompletion(const rune_t *rune,
+	const rune_link_t *link, int localized_seed, const vec3_t body_origin,
+	const int *goal_field)
+{
+	vec3_t delta;
+
+	if (!rune || !rune->seeds || !link || !body_origin ||
+	    link->action != RL_RUN || link->from < 0 ||
+	    link->from >= rune->hdr.num_seeds || link->to < 0 ||
+	    link->to >= rune->hdr.num_seeds)
+		return SG_RUN_INCOMPLETE;
+	if (localized_seed == link->to)
+		return SG_RUN_ARRIVED;
+	VectorSubtract(rune->seeds[link->to].origin, body_origin, delta);
+	if (VectorLength(delta) < 48.0f)
+		return SG_RUN_ARRIVED;
+	if (goal_field && localized_seed >= 0 &&
+	    localized_seed < rune->hdr.num_seeds &&
+	    goal_field[localized_seed] <= goal_field[link->to])
+		return SG_RUN_OVERACHIEVED;
+	return SG_RUN_INCOMPLETE;
+}
+
+qboolean SG_RunMechanismPlanCandidateValid(const rune_t *rune, int seed,
+	int link_index)
+{
+	const rune_link_t *candidate;
+	const rune_mechanism_plan_t *plan;
+
+	if (!rune || !rune->links || !rune->mechanism_plans || seed < 0 ||
+	    seed >= rune->hdr.num_seeds || link_index < 0 ||
+	    link_index >= rune->hdr.num_links)
+		return false;
+	candidate = &rune->links[link_index];
+	if (candidate->from != seed ||
+	    !SG_ActionMechanismAdmitted(candidate->action) ||
+	    !SG_ActionMechanismPlanRequired(candidate->action) ||
+	    candidate->mechanism_plan == RUNE_NO_MECHANISM_PLAN ||
+	    candidate->mechanism_plan >= rune->artifact.num_mechanism_plans)
+		return false;
+	plan = &rune->mechanism_plans[candidate->mechanism_plan];
+	return SG_ActionMechanismPlanAllowed(candidate->action,
+	    plan->controller_kind);
+}
+
+qboolean SG_RunHasMechanismSuccessor(const rune_t *rune, int seed)
+{
+	int link_index;
+	int walked;
+
+	if (!rune || !rune->links || !rune->first_link || !rune->next_link ||
+	    !rune->mechanism_plans || rune->hdr.num_links <= 0 || seed < 0 ||
+	    seed >= rune->hdr.num_seeds)
+		return false;
+	link_index = rune->first_link[seed];
+	for (walked = 0; link_index >= 0 && walked < rune->hdr.num_links; walked++)
+	{
+		const rune_link_t *candidate;
+
+		if (link_index >= rune->hdr.num_links)
+			return false;
+		candidate = &rune->links[link_index];
+		if (candidate->from != seed)
+			return false;
+		if (SG_RunMechanismPlanCandidateValid(rune, seed, link_index))
+			return true;
+		link_index = rune->next_link[link_index];
+	}
+	return false;
+}
+
+static qboolean Run_HandoffBodyValid(const rune_t *rune, int destination,
+	const edict_t *ent, const gclient_t *client)
+{
+	int water_source;
+
+	if (!rune || !rune->seeds || destination < 0 ||
+	    destination >= rune->hdr.num_seeds || !ent || !ent->inuse ||
+	    !client || ent->client != client || !client->pers.connected ||
+	    ent->health <= 0 ||
+	    ent->deadflag != DEAD_NO || ent->solid == SOLID_NOT ||
+	    !isfinite(ent->s.origin[0]) || !isfinite(ent->s.origin[1]) ||
+	    !isfinite(ent->s.origin[2]))
+		return false;
+	water_source = (rune->seeds[destination].flags & RSF_WATER) != 0;
+	if (water_source)
+		return ent->waterlevel >= 2 &&
+		       !(ent->watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
+	return ent->groundentity != NULL && ent->waterlevel == 0;
+}
+
+/* This transaction runs before link-latch/ribbon bookkeeping. A true stale-
+ * seed arrival at a declared-mechanism source receives one full zero-input
+ * server frame while the incoming RUN is already retired. Only a live body
+ * that remains in the source's dry/water support class may publish the RUN
+ * destination for next-frame pricing. Mere goal-field overachievement is not
+ * authority to publish a source the body did not reach. */
+qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
+	sg_run_completion_t completion, sg_bot_t *bot, sg_think_t *tc,
+	int *next_link)
+{
+	const rune_link_t *completed;
+	gclient_t *client;
+	int previous_seed;
+	int step;
+	usercmd_t coast;
+
+	if (!rune || !rune->links || !bot || !tc || !next_link ||
+	    completed_link < 0 || completed_link >= rune->hdr.num_links ||
+	    completion != SG_RUN_ARRIVED)
+		return false;
+	completed = &rune->links[completed_link];
+	if (completed->action != RL_RUN || completed->from < 0 ||
+	    completed->from >= rune->hdr.num_seeds || completed->to < 0 ||
+	    completed->to >= rune->hdr.num_seeds ||
+	    bot->commit_link != completed_link || bot->seed == completed->to ||
+	    !SG_RunHasMechanismSuccessor(rune, completed->to) ||
+	    !tc->e || !(client = tc->e->client))
+		return false;
+
+	/* Every candidate was priced from the stale departure identity. Retire it
+	 * and the incoming RUN before the first Pmove can execute a trigger touch. */
+	*next_link = -1;
+	tc->bestlink = -1;
+	bot->commit_link = -1;
+	bot->commit_until = 0.0f;
+	memset(&tc->cmd, 0, sizeof(tc->cmd));
+	memset(&coast, 0, sizeof(coast));
+	coast.msec = 25;
+	for (step = 0; step < 4; step++)
+		ClientThink(tc->e, &coast);
+
+	tc->think_over = true;
+	previous_seed = bot->seed;
+	if (!Run_HandoffBodyValid(rune, completed->to, tc->e, client))
+	{
+		bot->seed = -1;
+		return true;
+	}
+	bot->prev_seed = previous_seed;
+	bot->prev_seed_time = level.time;
+	bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
+	bot->seed = completed->to;
+	VectorCopy(tc->e->s.origin, bot->last_origin);
+	bot->seedless_active = false;
+	bot->seedless_since = 0.0f;
+	bot->seedless_turn_until = 0.0f;
+	if (sg_cv.debug->value)
+	{
+		sg_host.dprint("RUNHANDOFF %s frame=%d completed=%d from=%d to=%d "
+		               "outcome=published seed=%d q8=(%d %d %d)\n",
+		    client->pers.netname, level.framenum, completed_link,
+		    completed->from, completed->to, bot->seed,
+		    (int)client->ps.pmove.origin[0],
+		    (int)client->ps.pmove.origin[1],
+		    (int)client->ps.pmove.origin[2]);
+	}
+	return true;
+}
+
+void SG_RunInvalidateCompletedCandidate(const rune_t *rune,
+	int completed_link, sg_run_completion_t completion, int localized_seed,
+	int *next_link)
+{
+	const rune_link_t *completed;
+
+	if (!rune || !rune->links || !next_link ||
+	    completion == SG_RUN_INCOMPLETE || completed_link < 0 ||
+	    completed_link >= rune->hdr.num_links)
+		return;
+	completed = &rune->links[completed_link];
+	if (completed->action != RL_RUN || completed->to < 0 ||
+	    completed->to >= rune->hdr.num_seeds)
+		return;
+	/* A stale localized seed means the entire PickLink result came from the
+	 * departure fan. If localization already published the destination, retain
+	 * only a different, well-formed successor from that exact seed. */
+	if (localized_seed != completed->to || *next_link < 0 ||
+	    *next_link >= rune->hdr.num_links || *next_link == completed_link ||
+	    rune->links[*next_link].from != completed->to)
+		*next_link = -1;
+}
+
+static void DefenseShiftReset(sg_bot_t *bot, qboolean reset_previous)
+{
+	if (!bot)
+		return;
+	bot->def_shift_seed = -1;
+	bot->def_shift_link = -1;
+	bot->def_shift_until = 0.0f;
+	if (reset_previous)
+	{
+		bot->def_shift_from = -1;
+		bot->def_shift_next = 0.0f;
+	}
+}
+
+static qboolean DefenseShiftLinkReady(const sg_bot_t *bot, int link_index,
+	int from_seed, int to_seed)
+{
+	const rune_t *rune = SG_Rune();
+	const rune_link_t *link;
+	int index;
+
+	if (!bot || !rune || !rune->links || link_index < 0 ||
+	    link_index >= rune->hdr.num_links || from_seed < 0 ||
+	    from_seed >= rune->hdr.num_seeds || to_seed < 0 ||
+	    to_seed >= rune->hdr.num_seeds)
+		return false;
+	link = &rune->links[link_index];
+	if (link->action != RL_RUN || link->from != from_seed ||
+	    link->to != to_seed)
+		return false;
+	for (index = 0; index < SG_BL_MAX; index++)
+		if (bot->bl_link[index] == link_index &&
+		    SG_TimerPending(bot->bl_until[index]))
+			return false;
+	return true;
+}
+
+/* Shelf and validity changes can arrive after the shift was committed. Retire
+ * that exact transaction before the post hold or movement stage observes it;
+ * a different commitment remains somebody else's authority. */
+static qboolean DefenseShiftRetireInvalid(sg_bot_t *bot, int *bestlink,
+	qboolean *selected)
+{
+	int shift_link;
+
+	if (!bot || bot->def_shift_seed < 0)
+		return false;
+	shift_link = bot->def_shift_link;
+	if (!SG_DefenseShiftRetireIfInvalid(shift_link,
+	        DefenseShiftLinkReady(bot, shift_link, bot->seed,
+	            bot->def_shift_seed), &bot->commit_link))
+		return false;
+	if (bestlink && *bestlink == shift_link)
+		*bestlink = -1;
+	if (selected)
+		*selected = false;
+	DefenseShiftReset(bot, false);
+	SG_TimerArm(&bot->def_shift_next, 1.25f);
+	return true;
+}
+
+/* A CARRYHOLD is a real standoff, never permission to stop wherever the
+ * return first enters the home band.  The movement stage walks directly to
+ * this seed, so admit only a finite, visible seed outside the terminal zone;
+ * the lowest-exposure reachable one wins, with distance as the tie-break. */
+static int Carrier_RallyCover(sg_bot_t *bot, edict_t *e, const int *goal_field)
+{
+	int cover = -1;
+	float best = 1e30f;
+	int seed;
+
+	if (!bot || !e || !goal_field || !SG_Rune() || !SG_Rune()->seeds)
+		return -1;
+	for (seed = 0; seed < SG_Rune()->hdr.num_seeds; seed++)
+	{
+		vec3_t delta;
+		float distance, score;
+
+		if (goal_field[seed] < 600 || goal_field[seed] >= 2500 ||
+		    !SG_CanSee(e, SG_Rune()->seeds[seed].origin, 22.0f))
+			continue;
+		VectorSubtract(SG_Rune()->seeds[seed].origin, e->s.origin, delta);
+		distance = VectorLength(delta);
+		/* A short clear route avoids asking the local mover to cut through a
+		 * wall; area_hint is the existing exposure measure used by rallies. */
+		if (distance > 1200.0f)
+			continue;
+		score = (float)SG_Rune()->seeds[seed].area_hint * 10000.0f + distance;
+		if (score < best)
+		{
+			best = score;
+			cover = seed;
+		}
+	}
+	return cover;
+}
+
+static qboolean Carrier_LinkShelved(const sg_bot_t *bot, int link)
+{
+	int slot;
+
+	for (slot = 0; bot && slot < SG_BL_MAX; slot++)
+		if (bot->bl_link[slot] == link && SG_TimerPending(bot->bl_until[slot]))
+			return true;
+	return false;
+}
+
+static qboolean Carrier_VisitedRecently(const sg_bot_t *bot, int seed)
+{
+	int visit;
+
+	for (visit = 0; bot && visit < SG_VISIT_RING; visit++)
+		if (bot->visit_seed[visit] == seed &&
+		    SG_AgeUnder(bot->visit_time[visit], 30.0f))
+			return true;
+	return false;
+}
+
+/* After a detected carrier orbit, prefer an unshelved, unvisited RUN that
+ * genuinely descends the finite home field.  A one-exit corridor may have no
+ * such route; its fallback deliberately keeps the shelf as evidence while
+ * allowing the only finite exit to remain mobile. */
+static int Carrier_CycleRoute(sg_bot_t *bot, const int *goal_field,
+	qboolean alternate_only)
+{
+	int link, selected = -1;
+	int selected_cost = SG_FIELD_INF;
+	int finite_count = 0;
+	int finite_link = -1;
+	int here;
+
+	if (!bot || !goal_field || bot->seed < 0 || !SG_Rune() ||
+	    !SG_Rune()->links || !SG_Rune()->first_link || !SG_Rune()->next_link)
+		return -1;
+	here = goal_field[bot->seed];
+	if (here >= SG_FIELD_INF)
+		return -1;
+	for (link = SG_Rune()->first_link[bot->seed]; link >= 0;
+	     link = SG_Rune()->next_link[link])
+	{
+		rune_link_t *candidate = &SG_Rune()->links[link];
+		int cost;
+
+		if (candidate->action != RL_RUN || candidate->from != bot->seed ||
+		    candidate->to < 0 ||
+		    candidate->to >= SG_Rune()->hdr.num_seeds)
+			continue;
+		cost = goal_field[candidate->to];
+		if (cost >= SG_FIELD_INF)
+			continue;
+		finite_count++;
+		finite_link = link;
+		/* Shelves and visit history are bypassable only in a genuine one-exit
+		 * corridor.  With another finite RUN available, re-entering the
+		 * freshly shelved cycle is worse than leaving route choice to the
+		 * ordinary next frame. */
+		if (!alternate_only)
+			continue;
+		if (alternate_only &&
+		    (cost >= here || Carrier_LinkShelved(bot, link) ||
+		     Carrier_VisitedRecently(bot, candidate->to)))
+			continue;
+		if (cost < selected_cost)
+		{
+			selected = link;
+			selected_cost = cost;
+		}
+	}
+	if (!alternate_only)
+		return finite_count == 1 ? finite_link : -1;
+	return selected;
+}
+
 /*
- * THE COMMITMENT (split from SG_BotThink, 2026-08-11 standards pass;
- * body verbatim): everything between the argmin and the aim -- the link
+ * THE COMMITMENT: everything between the argmin and the aim -- the link
  * latch, saddle commitment, dead-door shelving, the straight-line and
  * see-the-flag terminal overrides, the clean grab, the defender post,
  * and the rail hold. Returns the link the body will actually ride.
  */
+static void StrikeWeaponPurposeClear(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	/* If the exact purpose route already lost commit ownership, its generic
+	 * latch is no longer an independent authority.  Retire that matching half-
+	 * transaction too, or a completed physical controller can be resurrected by
+	 * THE LINK LATCH on the first GO frame.  A latch for a different current
+	 * route is deliberately untouched. */
+	if (bot->strike_weapon_link >= 0 &&
+	    bot->sticky_link == bot->strike_weapon_link)
+	{
+		bot->sticky_link = -1;
+		bot->latch_until = 0.0f;
+	}
+	bot->strike_weapon_link = -1;
+	bot->strike_weapon_until = 0.0f;
+	bot->strike_weapon_draining = false;
+}
+
+/* True only after a controller has crossed its physical start boundary.
+ * Source staging, weapon switching, braking, and aim are cancelable; an
+ * airborne body, live rope/swim reducer, or acquired mechanism drains through
+ * the controller's already-bounded completion law. */
+static qboolean StrikeWeaponControllerPhysical(const sg_bot_t *bot, int action)
+{
+	sg_strike_weapon_controller_state_t state;
+
+	if (!bot)
+		return false;
+	memset(&state, 0, sizeof(state));
+	state.action = action;
+	state.hook_phase = bot->hook_phase;
+	state.rocketjump_phase = bot->rj_phase;
+	state.jump_started = bot->jump_started;
+	state.drop_started = bot->drop_started;
+	state.swim_active = bot->swim_replay_active;
+	state.swim_validated = bot->swim_validated;
+	state.declared_started = bot->declared_started;
+	state.declared_touched = bot->declared_touched;
+	state.declared_triggered = bot->declared_triggered;
+	state.declared_activated = bot->declared_activated;
+	state.declared_guard_paused = bot->declared_guard_paused;
+	return SG_StrikeWeaponControllerPhysical(&state) ? true : false;
+}
+
+/* Cancel only a controller which has not crossed the physical boundary above.
+ * This clears the exact staging identity; it never shelves or teaches the
+ * graph because the route did not fail--its five-second mission ended. */
+static void StrikeWeaponCancelStaged(sg_bot_t *bot, int action)
+{
+	if (!bot)
+		return;
+	bot->commit_link = -1;
+	bot->commit_until = 0.0f;
+	bot->sticky_link = -1;
+	bot->latch_until = 0.0f;
+	/* An optional speed hook is layered on an ordinary RUN link.  Phase one
+	 * has not fired and is canceled with that route; phase two/three were
+	 * classified physical above and can never reach this reset. */
+	if (bot->hook_phase == 1)
+	{
+		bot->hook_phase = 0;
+		bot->hook_link = -1;
+		bot->hook_deadline = 0.0f;
+		bot->hook_bite_logged = false;
+		bot->hook_attached_validated = false;
+		bot->speedhook = false;
+		bot->flow_release = false;
+	}
+	/* Rocket-jump staging can likewise be layered over an ordinary RUN before
+	 * the phase-two fire command.  Cancel that reversible overlay with the
+	 * superseded route; phase two/three are classified physical above. */
+	if (bot->rj_phase == 1)
+	{
+		bot->rj_phase = 0;
+		bot->rj_deadline = 0.0f;
+		bot->rj_fire_until = 0.0f;
+		bot->rj_use_next = 0.0f;
+	}
+	switch (action)
+	{
+	case RL_JUMP:
+		bot->jump_link = -1;
+		bot->jump_started = false;
+		break;
+	case RL_DROP:
+		bot->drop_link = -1;
+		bot->drop_started = false;
+		bot->drop_walkoff = false;
+		bot->drop_airborne = false;
+		bot->drop_recover = false;
+		SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+		    &bot->drop_replay_link, &bot->drop_live_events);
+		break;
+	case RL_HOOK:
+		bot->hook_phase = 0;
+		bot->hook_link = -1;
+		bot->hook_deadline = 0.0f;
+		bot->hook_bite_logged = false;
+		bot->hook_attached_validated = false;
+		bot->speedhook = false;
+		bot->flow_release = false;
+		break;
+	case RL_SWIM:
+		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
+		    &bot->swim_replay_link, &bot->swim_validated,
+		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
+		break;
+	case RL_ROCKETJUMP:
+		bot->rj_phase = 0;
+		bot->rj_deadline = 0.0f;
+		bot->rj_fire_until = 0.0f;
+		bot->rj_use_next = 0.0f;
+		break;
+	case RL_LIFT:
+	case RL_TELEPORT:
+	case RL_DOOR:
+	case RL_BUTTON_DOOR:
+		bot->declared_activated = false;
+		bot->declared_started = false;
+		bot->declared_start_frame = -1;
+		bot->declared_touched = false;
+		bot->declared_touch_frame = -1;
+		SG_ButtonExecutionActionReset(bot);
+		bot->declared_triggered = false;
+		bot->declared_trigger_frame = -1;
+		bot->declared_egress_proof_frame = -1;
+		bot->declared_door_retreat = false;
+		bot->declared_door_suffix_ms = 0;
+		bot->declared_guard_paused = false;
+		bot->declared_guard_pause_started = 0.0f;
+		bot->declared_door_recovery_since = 0.0f;
+		break;
+	case RL_RUN:
+	default:
+		break;
+	}
+}
+
+/* A door acquires its shared-mover lease at the canonical source before the
+ * irreversible trigger touch.  Retirement must positively release that lease
+ * before clearing local state.  Failure enters the existing bounded paused
+ * safety law and ends this bot frame; it never authorizes forward activation. */
+static qboolean StrikeWeaponDoorLeaseHeld(sg_bot_t *bot, sg_think_t *tc,
+	int action)
+{
+	sg_compound_guard_result_t result;
+	sg_strike_weapon_door_retirement_t retirement;
+	qboolean expired = false;
+	qboolean hold_ready = false;
+
+	if (!bot || !tc || (action != RL_DOOR && action != RL_BUTTON_DOOR) ||
+	    !bot->declared_started || bot->declared_touched ||
+	    bot->declared_triggered || bot->declared_activated)
+		return false;
+	result = SG_DeclaredDoorGuardReleaseProvedClear(bot);
+	if (result != SG_COMPOUND_GUARD_OK)
+	{
+		if (bot->declared_door_recovery_since == 0.0f)
+			SG_Mark(&bot->declared_door_recovery_since);
+		else
+			expired = SG_AgeAtLeast(bot->declared_door_recovery_since,
+			    5.0f);
+		if (!expired)
+			hold_ready = SG_DeclaredDoorGuardHoldOpen(bot, 500) ==
+			    SG_COMPOUND_GUARD_OK;
+	}
+	retirement = SG_StrikeWeaponDoorRetirement(
+	    result == SG_COMPOUND_GUARD_OK, expired, hold_ready);
+	if (retirement == SG_STRIKE_WEAPON_DOOR_RELEASE)
+		return false;
+	if (retirement == SG_STRIKE_WEAPON_DOOR_TERMINAL)
+	{
+		SG_DeclaredDoorTerminalDeath(bot);
+		tc->think_over = true;
+		return true;
+	}
+	if (!bot->declared_guard_paused)
+	{
+		bot->declared_guard_paused = true;
+		bot->declared_guard_pause_started = level.time;
+	}
+	(void)SG_DeclaredDoorGuardPause(bot);
+	bot->strike_weapon_draining = true;
+	tc->think_over = true;
+	return true;
+}
+
+static qboolean StrikeWeaponPurposeReconcile(sg_bot_t *bot, sg_think_t *tc)
+{
+	qboolean exact;
+	qboolean authority;
+	qboolean physical = false;
+	int action = RL_RUN;
+	sg_strike_weapon_route_verdict_t verdict;
+
+	if (!bot || !tc)
+		return false;
+	exact = bot->strike_weapon_link >= 0 && SG_Rune() && SG_Rune()->links &&
+	    bot->strike_weapon_link < SG_Rune()->hdr.num_links &&
+	    bot->commit_link == bot->strike_weapon_link;
+	authority = exact && !bot->strike_weapon_draining &&
+	    tc->strike_weapon_pursuit &&
+	    isfinite(tc->strike_weapon_deadline) &&
+	    tc->strike_weapon_deadline == bot->strike_weapon_until &&
+	    isfinite(bot->strike_weapon_until) &&
+	    level.time < bot->strike_weapon_until;
+	if (exact)
+	{
+		action = SG_Rune()->links[bot->strike_weapon_link].action;
+		physical = StrikeWeaponControllerPhysical(bot, action);
+		if (!authority && !physical &&
+		    StrikeWeaponDoorLeaseHeld(bot, tc, action))
+			return true;
+	}
+	verdict = SG_StrikeWeaponRouteVerdict(exact, authority, physical,
+	    bot->strike_weapon_draining);
+	if (verdict == SG_STRIKE_WEAPON_ROUTE_OWN)
+	{
+		bot->strike_weapon_draining = false;
+		return false;
+	}
+	if (verdict == SG_STRIKE_WEAPON_ROUTE_DRAIN)
+	{
+		bot->strike_weapon_draining = true;
+		return false;
+	}
+	if (exact)
+		StrikeWeaponCancelStaged(bot, action);
+	StrikeWeaponPurposeClear(bot);
+	return false;
+}
+
+/* This is the purpose-ownership prelude of Think_CommitLink.  Keeping the
+ * ordering in one production-called seam is important: an ended exact weapon
+ * route is reconciled first, then an unrelated staged transaction is retired,
+ * and only then may GO discard an ordinary RUN.  A pre-existing physical
+ * controller is neither relabeled nor canceled. */
+static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
+{
+	rune_t *rune;
+
+	if (!bot || !tc)
+		return false;
+	if (StrikeWeaponPurposeReconcile(bot, tc))
+		return true;
+	rune = SG_Rune();
+	/* GO is a new enemy-field transaction even when the prior generic commit
+	 * already disappeared.  Retire its orphan sticky half before THE LINK LATCH
+	 * can replace the first rush candidate.  This is only route-selection state:
+	 * any live hook, jump, or declared mechanism remains in its controller fields
+	 * and, when still committed, drains under the physical boundary below. */
+	if (tc->strike_rush)
+	{
+		bot->sticky_link = -1;
+		bot->latch_until = 0.0f;
+	}
+	/* The generic sticky latch is not a physical controller.  Retire it on the
+	 * first frame of a weapon purpose even when no commit_link remains; otherwise
+	 * THE LINK LATCH below can replace the fresh weapon-field candidate with an
+	 * unrelated old edge.  A live hook/jump/mechanism remains owned by its exact
+	 * controller fields and commit identity below. */
+	if (tc->strike_weapon_pursuit && bot->strike_weapon_link < 0)
+	{
+		bot->sticky_link = -1;
+		bot->latch_until = 0.0f;
+	}
+
+	/* Entering the five-second diversion cannot spend most of that clock on an
+	 * unrelated retained route.  Cancel an unowned staged transaction before
+	 * restoration, but never relabel it as weapon-owned: a controller which
+	 * already crossed into physics finishes under its original bounded law. */
+	if (tc->strike_weapon_pursuit && bot->strike_weapon_link < 0 && rune &&
+	    rune->links && bot->commit_link >= 0 &&
+	    bot->commit_link < rune->hdr.num_links)
+	{
+		int prior_action = rune->links[bot->commit_link].action;
+
+		if (!StrikeWeaponControllerPhysical(bot, prior_action))
+		{
+			if (StrikeWeaponDoorLeaseHeld(bot, tc, prior_action))
+				return true;
+			StrikeWeaponCancelStaged(bot, prior_action);
+		}
+	}
+
+	/* A same-frame strike RUSH supersedes an ordinary route transaction.  A
+	 * stale RL_RUN can otherwise keep a member on the prior weapon/item
+	 * detour for its three-second latch.  Proved mechanism/ballistic owners
+	 * are intentionally left alone; their own bounded controller must finish. */
+	if (tc->strike_rush && rune && rune->links && bot->commit_link >= 0 &&
+	    bot->commit_link < rune->hdr.num_links &&
+	    rune->links[bot->commit_link].action == RL_RUN &&
+	    !StrikeWeaponControllerPhysical(bot, RL_RUN))
+		StrikeWeaponCancelStaged(bot, RL_RUN);
+	return false;
+}
+
+/* Filter only a fresh weapon-owned selection.  Other candidate policy remains
+ * in Think_CommitLink; this seam merely enforces that a weapon diversion may
+ * acquire purpose identity only on a strict live-field descent. */
+static int StrikeWeaponFilterFreshCandidate(const sg_bot_t *bot,
+	const sg_think_t *tc, int bestlink)
+{
+	rune_t *rune = SG_Rune();
+	const int *route_field;
+
+	if (!bot || !tc || !tc->strike_weapon_pursuit || !tc->route_pure ||
+	    bot->commit_link >= 0 || bestlink < 0)
+		return bestlink;
+	route_field = tc->route_field;
+	if (!rune || !rune->links || bot->seed < 0 ||
+	    bot->seed >= rune->hdr.num_seeds || !route_field ||
+	    bestlink >= rune->hdr.num_links ||
+	    route_field[bot->seed] >= SG_FIELD_INF ||
+	    rune->links[bestlink].to < 0 ||
+	    rune->links[bestlink].to >= rune->hdr.num_seeds ||
+	    route_field[rune->links[bestlink].to] >= SG_FIELD_INF ||
+	    route_field[rune->links[bestlink].to] >= route_field[bot->seed])
+		return -1;
+	return bestlink;
+}
+
+/* The actual fresh-link transaction constructor used by Think_CommitLink.
+ * Weapon purpose is attached here--after generic retained commitments were
+ * handled--so no old controller can be retroactively labeled as a weapon
+ * errand. */
+static void StrikeCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
+	int bestlink)
+{
+	rune_t *rune = SG_Rune();
+	rune_link_t *new_link;
+	float hold = 3.0f;
+
+	if (!bot || !tc || !rune || !rune->links || bot->commit_link >= 0 ||
+	    bestlink < 0 || bestlink >= rune->hdr.num_links)
+		return;
+	new_link = &rune->links[bestlink];
+	bot->commit_link = bestlink;
+	if (tc->strike_weapon_pursuit &&
+	    isfinite(tc->strike_weapon_deadline) &&
+	    tc->strike_weapon_deadline > level.time)
+	{
+		bot->strike_weapon_link = bestlink;
+		bot->strike_weapon_until = tc->strike_weapon_deadline;
+		bot->strike_weapon_draining = false;
+	}
+	bot->jump_link = (new_link->action == RL_JUMP) ? bestlink : -1;
+	bot->jump_started = false;
+	SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
+	    &bot->drop_replay_link, &bot->drop_live_events);
+	SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
+	    &bot->swim_replay_link, &bot->swim_validated,
+	    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
+	bot->declared_activated = false;
+	bot->declared_started = false;
+	bot->declared_start_frame = -1;
+	bot->declared_touched = false;
+	bot->declared_touch_frame = -1;
+	SG_ButtonExecutionActionReset(bot);
+	bot->declared_triggered = false;
+	bot->declared_trigger_frame = -1;
+	bot->declared_egress_proof_frame = -1;
+	bot->declared_door_retreat = false;
+	bot->declared_door_suffix_ms = 0;
+	bot->declared_guard_paused = false;
+	bot->declared_guard_pause_started = 0.0f;
+	bot->declared_door_recovery_since = 0.0f;
+	/* Before a proved ballistic action starts, this is a bounded source-staging
+	 * deadline. Six seconds lets a fast body brake and center; the actual
+	 * JUMP/DROP rollout receives its own deadline only when it starts. */
+	if (new_link->action == RL_DROP || new_link->action == RL_JUMP)
+		hold = 6.0f;
+	else if (new_link->action == RL_LIFT)
+		/* Worst legitimate queue: approach, wait the 3 s top park, ride down
+		 * empty, then ride back up. The record prices one ride. */
+		hold = 8.0f + 2.0f * new_link->cost_ms * 0.001f;
+	else if (new_link->action == RL_DOOR ||
+	         new_link->action == RL_BUTTON_DOOR)
+		/* The record starts at an exact rest source. Live selection may be one
+		 * seed radius away, so source capture gets a bounded six seconds before
+		 * the serialized cooldown/motion/egress budget. */
+		hold = 6.5f + new_link->cost_ms * 0.001f;
+	else if (new_link->cost_ms > 0 &&
+	         new_link->cost_ms * 0.001f + 0.5f > hold)
+		hold = new_link->cost_ms * 0.001f + 0.5f;
+	SG_TimerArm(&bot->commit_until, hold);
+	/* A defense shift is intentionally one short visible adjustment, not a
+	 * general three-second route commitment. */
+	if (new_link->action == RL_RUN && bestlink == bot->def_shift_link &&
+	    new_link->to == bot->def_shift_seed &&
+	    SG_TimerPending(bot->def_shift_until) &&
+	    bot->commit_until > bot->def_shift_until)
+		bot->commit_until = bot->def_shift_until;
+}
+
+static qboolean StrikeRailLateOverrideAllowed(const sg_bot_t *bot,
+	const sg_think_t *tc)
+{
+	return bot && tc && SG_StrikeGenericRailAllowed(tc->strike_active) &&
+	    SG_DefenseSupplyGenericRetryAllowed(
+	        (sg_defense_supply_phase_t)bot->def_supply_phase,
+	        bot->def_supply_armed);
+}
+
+static qboolean StrikeRailWatchdogAllowed(const sg_bot_t *bot,
+	const sg_think_t *tc)
+{
+	return bot && tc && SG_StrikeGenericRailAllowed(tc->strike_active) &&
+	    SG_DefenseSupplyGenericRetryAllowed(
+	        (sg_defense_supply_phase_t)bot->def_supply_phase,
+	        bot->def_supply_armed);
+}
+
 int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context; cmd
@@ -1396,6 +2233,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean duel = tc->duel;
 	float bestval = tc->bestval;
 	float incumbent_v = tc->incumbent_v;
+	const int *route_field = tc->route_field;
 	int rail_seed = tc->rail_seed;
 	int rail_client = tc->rail_client;
 	int bestlink_in = tc->bestlink;
@@ -1407,12 +2245,225 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean rally_hold = tc->rally_hold;
 	qboolean rail_hold = tc->rail_hold;
 	qboolean hold_post = false;
+	qboolean defense_quiet = true;
+	qboolean defense_post = false;
+	qboolean defense_shift_selected = false;
+	int defense_threat_seed = -1;
 	float post_yaw = tc->post_yaw;
 	float post_sight = tc->post_sight;
 	vec3_t d;
 
+	/* Reconcile exact purpose before generic restoration can put it back. */
+	if (StrikeWeaponPrepareCommit(bot, tc))
+		return bot->commit_link;
+
+	/* The supply transaction is a bounded navigation owner, not a second
+	 * objective.  Irrecoverable identity/life/role edges cancel it; edges that
+	 * merely make leaving unsafe enter the route-pure RETURN phase. */
+	if (SG_DefenseSupplyActive(bot))
+	{
+		qboolean invalid_owner = role != SG_ROLE_DEFEND || !bot->def_stand ||
+		    tc->carrying || !e->inuse || !e->client ||
+		    e->deadflag == DEAD_DEAD || e->health <= 0 ||
+		    bot->def_supply_instance != bot->instance_token ||
+		    bot->def_supply_phase == SG_DEF_SUPPLY_NONE;
+
+		if (invalid_owner)
+			SG_DefenseSupplyCancel(bot, true);
+		else if (bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND &&
+		         (!SG_DefenseSupplyHome(team) || SG_DefenseSupplyThreat(team) ||
+		          duel || bot->engaged_last || bot->lead_ent > 0 ||
+		          bot->patrol_seed >= 0 || bot->def_shift_seed >= 0 ||
+		          bot->tac_seed >= 0 || !SG_TimerPending(bot->def_supply_until)))
+		{
+			SG_DefenseSupplyBeginReturn(bot);
+			/* bestlink was selected before this late edge; it is stale even
+			 * when the ordinary RUN commitment had no live ticket. */
+			bestlink = -1;
+		}
+	}
+
+	/* PickLink ran against the frame's published seed. Resolve a completed RUN
+	 * before the latch and ribbon can record that old seed's candidate as a new
+	 * leg. A stale-seed arrival at a mechanism source consumes this frame in the
+	 * zero-input handoff and returns before any other command owner runs. */
+	if (bot->commit_link >= 0 && bot->commit_link < SG_Rune()->hdr.num_links)
+	{
+		rune_link_t *incoming = &SG_Rune()->links[bot->commit_link];
+
+		if (incoming->action == RL_RUN)
+		{
+			sg_run_completion_t completion = SG_RunCommitCompletion(
+			    SG_Rune(), incoming, bot->seed, e->s.origin, goal_field);
+			int completed_link = bot->commit_link;
+
+			SG_RunInvalidateCompletedCandidate(SG_Rune(), completed_link,
+			    completion, bot->seed, &bestlink);
+			tc->bestlink = bestlink;
+			if (completion == SG_RUN_ARRIVED && bot->seed != incoming->to &&
+			    SG_RunCompletionHandoff(SG_Rune(), completed_link,
+			        completion, bot, tc, &bestlink))
+				return -1;
+		}
+	}
+
 	/*
-	 * THE LINK LATCH (sg_linklatch, wave 289+). The demo census: 87
+	 * Threat-responsive post movement must enter before the link latch and
+	 * commitment transaction. A late bestlink override can move the body for
+	 * one frame while commit_link still names a different route; that is not
+	 * navigation authority. Select one guarded RUN here so the ordinary latch,
+	 * timeout, shelf and arrival machinery owns exactly the step we drive.
+	 */
+	{
+		qboolean defense_hold_eligible =
+		    role == SG_ROLE_DEFEND && bot->def_stand && bot->seed >= 0 &&
+		    bot->seed < SG_Rune()->hdr.num_seeds &&
+		    ((float)goal_field[bot->seed] <
+		         400.0f * SG_PersonaCampScale(e) ||
+		     bot->patrol_seed >= 0);
+		qboolean shift_allowed;
+		float threat_time = -1000.0f;
+		int index;
+
+		defense_post = defense_hold_eligible &&
+		    (float)goal_field[bot->seed] <
+		        400.0f * SG_PersonaCampScale(e);
+		if (defense_hold_eligible)
+		{
+			for (index = 0; index < SG_MAX_ENEMY_TRACK; index++)
+			{
+				sg_belief_enemy_t *enemy =
+				    &sg_caco_enemies[SG_TeamIdx(team)][index];
+
+				if (enemy->client < 0 || enemy->seed < 0 ||
+				    enemy->seed >= SG_Rune()->hdr.num_seeds ||
+				    !SG_AgeUnder(enemy->seen_time, 6.0f) ||
+				    goal_field[enemy->seed] >= 2500)
+					continue;
+				defense_quiet = false;
+				if (enemy->seen_time > threat_time)
+				{
+					threat_time = enemy->seen_time;
+					defense_threat_seed = enemy->seed;
+				}
+			}
+		}
+		shift_allowed = isfinite(sg_cv.defshift->value) &&
+		    sg_cv.defshift->value > 0.0f && defense_post &&
+		    !SG_DefenseSupplyActive(bot) &&
+		    bot->lead_ent <= 0 && !defense_quiet &&
+		    defense_threat_seed >= 0 && !duel && !bot->engaged_last &&
+		    bot->rail_stage == 0 &&
+		    sg_caco_team_belief.flag[SG_TeamIdx(team)]
+		        [SG_TeamIdx(team)].state == SG_FLAG_HOME;
+
+		if (!shift_allowed)
+		{
+			if (bot->def_shift_seed >= 0 &&
+			    bot->commit_link == bot->def_shift_link)
+			{
+				bot->commit_until = level.time - 1.0f;
+				bestlink = -1;
+			}
+			DefenseShiftReset(bot,
+			    !isfinite(sg_cv.defshift->value) ||
+			        sg_cv.defshift->value <= 0.0f);
+		}
+		else
+		{
+			if (bot->def_shift_seed >= 0)
+			{
+				qboolean finished = bot->seed == bot->def_shift_seed ||
+				    level.time >= bot->def_shift_until;
+				qboolean owned = bot->commit_link == bot->def_shift_link &&
+				    DefenseShiftLinkReady(bot, bot->def_shift_link,
+				        bot->seed, bot->def_shift_seed);
+
+				if (finished || !owned)
+				{
+					if (bot->commit_link == bot->def_shift_link)
+						bot->commit_until = level.time - 1.0f;
+					bestlink = -1;
+					DefenseShiftReset(bot, false);
+					SG_TimerArm(&bot->def_shift_next, 1.25f);
+				}
+				else
+				{
+					bestlink = bot->def_shift_link;
+					defense_shift_selected = true;
+				}
+			}
+
+			if (bot->def_shift_seed < 0 && bot->commit_link < 0 &&
+			    SG_TimerReady(bot->def_shift_next))
+			{
+				sg_defense_shift_candidate_t candidates[32];
+				sg_defense_shift_request_t request;
+				vec3_t threat_delta;
+				int candidate_count = 0;
+				int chosen_seed = -1;
+				int link_index;
+
+				VectorSubtract(
+				    SG_Rune()->seeds[defense_threat_seed].origin,
+				    e->s.origin, threat_delta);
+				for (link_index = SG_Rune()->first_link[bot->seed];
+				     link_index >= 0 &&
+				     candidate_count < (int)(sizeof(candidates) /
+				         sizeof(candidates[0]));
+				     link_index = SG_Rune()->next_link[link_index])
+				{
+					const rune_link_t *link =
+					    &SG_Rune()->links[link_index];
+					vec3_t delta;
+
+					if (link->action != RL_RUN || link->to < 0 ||
+					    link->to >= SG_Rune()->hdr.num_seeds ||
+					    !DefenseShiftLinkReady(bot, link_index,
+					        bot->seed, link->to))
+						continue;
+					VectorSubtract(SG_Rune()->seeds[link->to].origin,
+					    e->s.origin, delta);
+					candidates[candidate_count].link_index = link_index;
+					candidates[candidate_count].seed_index = link->to;
+					candidates[candidate_count].goal_ms =
+					    goal_field[link->to];
+					candidates[candidate_count].delta_x = delta[0];
+					candidates[candidate_count].delta_y = delta[1];
+					candidates[candidate_count].delta_z = delta[2];
+					candidate_count++;
+				}
+				request.threat_x = threat_delta[0];
+				request.threat_y = threat_delta[1];
+				request.max_distance = 144.0f;
+				request.max_goal_ms = (int)(400.0f *
+				    SG_PersonaCampScale(e));
+				request.previous_seed = bot->def_shift_from;
+				link_index = SG_DefenseShiftChoose(&request,
+				    candidates, (size_t)candidate_count, &chosen_seed);
+				if (link_index >= 0 && chosen_seed >= 0)
+				{
+					bot->def_shift_from = bot->seed;
+					bot->def_shift_seed = chosen_seed;
+					bot->def_shift_link = link_index;
+					bot->def_shift_until = level.time + 1.0f;
+					bestlink = link_index;
+					defense_shift_selected = true;
+					if (sg_cv.debug->value)
+						sg_host.dprint("DEFSHIFT %s from=%d to=%d "
+						    "link=%d threat=%d\n",
+						    e->client->pers.netname, bot->seed,
+						    chosen_seed, link_index,
+						    defense_threat_seed);
+				}
+				else
+					SG_TimerArm(&bot->def_shift_next, 1.25f);
+			}
+		}
+	}
+
+	/*
+	 * THE LINK LATCH (sg_linklatch, observations). The demo census: 87
 	 * deg/s of heading noise, a 49% reversal rate, a full 180 every
 	 * nine seconds -- a 10Hz argmin flapping across noise-level ties
 	 * on a surface whose item terms refresh at 1Hz. The incumbent
@@ -1421,7 +2472,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * from this seed) abdicates immediately. This is the re-decision
 	 * cadence matched to the information's own refresh rate.
 	 */
-	if (sg_cv.linklatch->value > 0 &&
+	if (!defense_shift_selected && sg_cv.linklatch->value > 0 &&
 	    bestlink >= 0 && bot->sticky_link >= 0 &&
 	    bestlink != bot->sticky_link &&
 	    SG_TimerPending(bot->latch_until) &&
@@ -1456,7 +2507,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		                  sg_cv.ribbon->value;
 		bot->ribbon_goal = bot->ribbon_off;
 	}
-	/* v2 drift: the film judge's verdict on v1 -- a fixed per-leg lane
+	/* Ribbon drift: the film judge's verdict on a fixed per-leg lane -- it
 	 * quantizes into railroads; a human band needs the offset to WANDER
 	 * along the run. Low-frequency, trace-clamped downstream. */
 	if (SG_TimerReady(bot->ribbon_next))
@@ -1470,49 +2521,37 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	bot->sticky_link = bestlink;
 
 	/*
-	 * THE LAST TEN METERS ARE A STRAIGHT LINE. An attacker at the goal
-	 * minimum kept arguing with the link graph -- the argmin flaps
-	 * between near-equal links and the bot orbits a flag it could
-	 * TOUCH (wave 96, live witness: every defender dead, the attacker
-	 * spinning beside the stand). Inside 400ms the graph has nothing
-	 * left to teach: drop the link and let the aim fall through to the
-	 * goal-entity fallback -- a straight walk, a touch, done. The
-	 * carrier gets the same grace at its own stand.
+		 * THE LAST TEN METERS ARE A STRAIGHT LINE. A carrier at the goal
+		 * minimum may finish its priced route at its own stand. An attacker,
+		 * however, may leave the graph only when the shared direct-touch
+		 * authority proves that its body can cross the live enemy flag now.
+		 * A cheap seed can still be another floor, a wall-adjacent pocket, or
+		 * a long hook/drop topology; its cost is not touch authority.
 	 */
 	/*
-	 * SEE THE FLAG, GO THROUGH THE FLAG (owner's order, 2026-08-11,
-	 * sharpening wave 96): the 400ms cost gate still let a bot steer
-	 * at seed centers while the flag stood in plain sight across the
-	 * room. Cost is not the trigger anymore -- SIGHT is. An attacker
-	 * with line of sight to the standing flag inside 512 drops the
-	 * graph immediately and the aim falls through to the flag item
-	 * (and through-extension past it). Seeing it is earned perception,
-	 * so a visible dropped enemy flag qualifies the same (Rule 19).
+		 * SEE THE FLAG, GO THROUGH THE FLAG: cost is not the attacker trigger.
+		 * The direct-touch proof includes current live-item availability,
+		 * same-floor body geometry, and the appropriate public/perceived flag
+		 * knowledge. Only that proof releases the graph to the through-line.
 	 */
 	{
 		qboolean flag_los = false;
 
-		if (role == SG_ROLE_ATTACK)
-		{
-			edict_t *fent = SG_EnemyFlag(team);
+		if ((role == SG_ROLE_ATTACK || tc->strike_rush) &&
+		    SG_AttackFlagDirectTouchAuthority(e, team, NULL))
+			flag_los = true;
 
-			if (fent &&
-			    SG_DistXY(fent->s.origin, e->s.origin) < 512.0f &&
-			    SG_CanSee(e, fent->s.origin, 16.0f))
-				flag_los = true;
-		}
-
-		if ((role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY) &&
-		    bot->seed >= 0 &&
-		    ((goal_field[bot->seed] < SG_FIELD_INF &&
-		      goal_field[bot->seed] < 400) || flag_los))
+		if (((role == SG_ROLE_ATTACK || tc->strike_rush) && flag_los) ||
+		    (role == SG_ROLE_CARRY && bot->seed >= 0 &&
+		     goal_field[bot->seed] < SG_FIELD_INF &&
+		     goal_field[bot->seed] < 400))
 		{
 		bestlink = -1;
 		bot->terminal = true;
 
 		/*
 		 * THE CLEAN GRAB. Fifty-one of fifty-four carriers died at a
-		 * median five percent of the way home (waves 111-113) --
+		 * median five percent of the way home (observations) --
 		 * grabbing a hot room hands the flag to the respawn stream
 		 * within seconds. A human clears the room first. An attacker
 		 * inside touch range now holds at the threshold while a
@@ -1525,6 +2564,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		if (role == SG_ROLE_ATTACK)
 		{
 			int s3, room = 0;
+			edict_t *live_enemy = SG_CombatLiveEnemy(e);
+			qboolean live_room_enemy = live_enemy &&
+			    SG_DistXY(live_enemy->s.origin, e->s.origin) < 900.0f &&
+			    SG_CanSee(e, live_enemy->s.origin, live_enemy->viewheight);
+			qboolean live_flag_terminal =
+			    SG_AttackFlagDirectTouchAuthority(e, team, NULL);
 
 			for (s3 = 0; s3 < SG_MAX_ENEMY_TRACK; s3++)
 			{
@@ -1535,7 +2580,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				 * ducks behind the pedestal for four seconds vanished
 				 * from this count while remaining entirely alive, and
 				 * the "cleared" room killed its carrier at 5%% of the
-				 * route (waves 151-153). Absence of sighting is not
+				 * route (observations). Absence of sighting is not
 				 * evidence of death; eight seconds is patience, not
 				 * paranoia. */
 				if (en3->client < 0 || en3->seed < 0 ||
@@ -1551,7 +2596,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 			/*
 			 * THE UNACCOUNTED MAN (strict only). The killer-recency
-			 * census (waves 151-154): ten of thirteen carrier killers
+			 * census (observations): ten of thirteen carrier killers
 			 * had not recently died -- live defenders the sighting
 			 * census never saw, not the respawn stream. A room cannot
 			 * be SIGHTED clear; but the scoreboard is public: count
@@ -1586,7 +2631,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 			bot->last_room = room;
 			/*
-			 * Hold only when OUTNUMBERED at the stand. Wave 114: mactf06
+			 * Hold only when OUTNUMBERED at the stand. observations: mactf06
 			 * attackers reached 250 of the flag and stole nothing all
 			 * game -- the threshold hold against a single sentry is a
 			 * stalemate the sentry wins by existing. One defender: take
@@ -1594,15 +2639,15 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			 * more: the room fight first, as before.
 			 */
 			/*
-			 * A/B, waves 118+: ALWAYS fight the room first. The killer
+			 * comparison, observations: ALWAYS fight the room first. The killer
 			 * census flipped the theory -- all 93 carrier deaths across
-			 * seven waves came from SURVIVORS, zero from the respawn
+			 * seven match batches came from SURVIVORS, zero from the respawn
 			 * stream. Grabbing past a live sentry hands them a free rail
 			 * into a fleeing back; the sprint never mattered. The fight
 			 * happens before the flag moves, at any defender count, and
 			 * the surge still grabs the instant one drops.
 			 */
-			if (room >= 1)
+			if (room >= 1 && live_room_enemy && !live_flag_terminal)
 			{
 				/*
 				 * THE PAIR SPLITS THE SENTRY. When two attackers stand
@@ -1641,8 +2686,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				}
 
 				/*
-				 * THE STRICT GRAB (sg_strictgrab 1, A/B wave 151+).
-				 * Wave 150's verdict on the current doctrine: parity
+				 * THE STRICT GRAB (sg_strictgrab 1, comparison observations).
+				 * observations verdict on the current doctrine: parity
 				 * carriers die at a median ZERO percent of the route --
 				 * at the pedestal -- because both sanctioned grabs
 				 * take the flag under live guns: the 10s stalemate
@@ -1657,8 +2702,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				    sg_cv.strictgrab->value)
 				{
 					/*
-					 * THE CROWD VALVE (sg_crowdhold, wave 343). The 7v7
-					 * forensics: carriers there die at 4.2s median with the
+					 * THE CROWD VALVE (sg_crowdhold, observations). The 7v7
+					 * analysis: carriers there die at 4.2s median with the
 					 * WHOLE route left and 2+ enemies in the room -- the 20s
 					 * patience expires into a crowd the room fight can never
 					 * clear at that density, and the forced grab is a death
@@ -1687,7 +2732,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				 * believed post THROUGH cover. No line of sight, no duel:
 				 * the room softens before the breach.
 				 */
-				/* THE FLYING COOK (sg_flycook, wave 228): the owner
+				/* THE FLYING COOK (sg_flycook, observations): the owner
 				 * cooks on approach, not at a standstill -- the last
 				 * seconds of the run double as the fuse, a death
 				 * drops the live grenade where the fight is, and the
@@ -1695,7 +2740,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				 * motion inside the approach band; the throw target
 				 * stays the stand, which is where the run points
 				 * anyway, so the view-pull steers nothing wrong. */
-				if (rally_hold && !bot->jump_started && !bot->drop_started &&
+				if (rally_hold && live_room_enemy && !live_flag_terminal &&
+				    !bot->jump_started && !bot->drop_started &&
 				    bot->hook_phase == 0 && bot->rj_phase == 0 &&
 				    bot->nade_phase == 0 &&
 				    !(bestlink >= 0 &&
@@ -1707,63 +2753,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				          SG_Rune()->links[bot->commit_link].action)) &&
 				    SG_TimerReady(bot->nade_next))
 				{
-					static gitem_t *nades;
-					int s7;
-
-					if (!nades)
-						nades = FindItem("Grenades");
-					if (nades &&
-					    e->client->pers.inventory[ITEM_INDEX(nades)] > 0)
-					{
-						for (s7 = 0; s7 < SG_MAX_ENEMY_TRACK; s7++)
-						{
-							sg_belief_enemy_t *en7 =
-							    &sg_caco_enemies[SG_TeamIdx(team)][s7];
-							vec3_t nd7;
-							float nl7;
-
-							if (en7->client < 0 || en7->seed < 0 ||
-							    SG_AgeAtLeast(en7->seen_time, 5.0f))
-								continue;
-							VectorSubtract(
-							    SG_Rune()->seeds[en7->seed].origin,
-							    e->s.origin, nd7);
-							nl7 = VectorLength(nd7);
-							if (nl7 > 250.0f && nl7 < 800.0f)
-							{
-								/* NADEPOP's verdict on the stand doctrine
-								 * (wave 140): 25 pops, mean 4847 units
-								 * from the nearest enemy, two inside the
-								 * blast radius -- the airburst shells a
-								 * pedestal nobody stands on. The bomb now
-								 * takes a FRESH sighting (under 2s) at
-								 * face value and falls back to the stand
-								 * only when the belief has gone stale --
-								 * the ghost was the wrong target at ten
-								 * seconds old, not at one. */
-								if (SG_AgeUnder(en7->seen_time, 2.0f))
-									VectorCopy(
-									    SG_Rune()->seeds[en7->seed].origin,
-									    bot->nade_at);
-								else
-								{
-									edict_t *nf = SG_FlagStand(team, false);
-
-									if (nf)
-										VectorCopy(nf->s.origin,
-										           bot->nade_at);
-									else
-										VectorCopy(
-										    SG_Rune()->seeds[en7->seed].origin,
-										    bot->nade_at);
-								}
-								nades->use(e, nades);
-								bot->nade_phase = 1;
-								SG_TimerArm(&bot->nade_until, 0.5f);
-								break;
-							}
-						}
-					}
+					/* The approach and threshold use one arm transaction: only
+					 * the exact current visible enemy body may authorize it, and
+					 * direct flag touch always wins.  The threshold retains its
+					 * historic practical throw envelope. */
+					(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team,
+					    250.0f, 800.0f);
 				}
 			}
 		}
@@ -1782,14 +2777,17 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	if (bot->commit_link >= 0 && bot->commit_link < SG_Rune()->hdr.num_links)
 	{
 		rune_link_t *cl = &SG_Rune()->links[bot->commit_link];
+		sg_run_completion_t run_completion = SG_RUN_INCOMPLETE;
 		qboolean drop_commit = false;
 		qboolean ballistic_failed = false;
 		qboolean proved_ballistic =
 		    (cl->action == RL_JUMP || cl->action == RL_DROP);
 		qboolean proved_swim = (cl->action == RL_SWIM);
-		qboolean declared = (cl->action == RL_LIFT ||
-		                     cl->action == RL_TELEPORT ||
-		                     cl->action == RL_DOOR);
+			qboolean declared = (cl->action == RL_LIFT ||
+			                     cl->action == RL_TELEPORT ||
+			                     cl->action == RL_DOOR ||
+			                     cl->action == RL_BUTTON_DOOR);
+			sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean swim_failed = false;
 		qboolean staging_timed_out = false;
 		qboolean drop_boundary_owned = false;
@@ -1799,12 +2797,21 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		qboolean ballistic = (!e->groundentity && e->waterlevel < 2 &&
 		    (cl->action == RL_JUMP || cl->action == RL_DROP ||
 		     (cl->action == RL_ROCKETJUMP && bot->rj_phase == 3)));
-		int b;
+			int b;
+
+			/* A mechanism commitment never degrades into anchor-based movement.
+			 * Retain the finite commitment while authority is unavailable; the
+			 * execution layer will retire or safely retain its owned mover claim. */
+			if (declared && !(bot->declared_started
+			        ? SG_RuneMechanismBindingCaptureOwned(SG_Rune(),
+			              (uint32_t)bot->commit_link, &mechanism_binding)
+			        : SG_RuneMechanismBindingCapture(SG_Rune(),
+			              (uint32_t)bot->commit_link, &mechanism_binding)))
+				return bot->commit_link;
 
 		/* The fourth literal command is completed here, after the intervening
-		 * entity/pusher pass.  Resolve every production boundary, including an
-		 * airborne one: exact cost and reducer caps are authoritative and cannot
-		 * wait for legacy's first supported contact. */
+		 * entity/pusher pass. Resolve every production boundary: exact cost and
+		 * reducer caps are authoritative. */
 		if (cl->action == RL_DROP && bot->drop_started &&
 		    bot->drop_replay_active)
 		{
@@ -1975,21 +2982,26 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			{
 				qboolean declared_arrived = false;
 
-				if (bot->declared_started && cl->action == RL_TELEPORT)
-				{
-					vec3_t tele_dest, tele_delta;
-
-					if ((e->client->ps.pmove.pm_flags & PMF_TIME_TELEPORT) &&
-					    SG_TeleportDestinationForAnchor(cl->anchor, tele_dest))
+					if (bot->declared_started && cl->action == RL_TELEPORT)
 					{
-						VectorSubtract(e->s.origin, tele_dest, tele_delta);
+						vec3_t tele_dest, tele_delta;
+						edict_t *destination =
+						    SG_RuneMechanismBindingResolveDestination(
+						        &mechanism_binding);
+
+						if ((e->client->ps.pmove.pm_flags & PMF_TIME_TELEPORT) &&
+						    destination)
+						{
+							VectorCopy(destination->s.origin, tele_dest);
+							tele_dest[2] += 10.0f;
+							VectorSubtract(e->s.origin, tele_dest, tele_delta);
 						if (VectorLength(tele_delta) <= 2.0f)
 							bot->declared_activated = true;
 					}
 				}
-				else if (bot->declared_started && cl->action == RL_LIFT)
-				{
-					edict_t *plat = SG_LiftForAnchor(cl->anchor);
+					else if (bot->declared_started && cl->action == RL_LIFT)
+					{
+						edict_t *plat = mechanism_binding.mover_entity;
 
 					if (plat && SG_LiftRider(plat, e) &&
 					    plat->moveinfo.state == SG_PLAT_STATE_TOP)
@@ -2018,11 +3030,10 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				 * the ordinary graph can truthfully continue. */
 				if (bot->declared_activated)
 					{
-						edict_t *plat = (cl->action == RL_LIFT)
-						    ? SG_LiftForAnchor(cl->anchor) : NULL;
-						edict_t *door_trigger = (cl->action == RL_DOOR)
-						    ? SG_DeclaredDoorForLink(cl->anchor,
-						        SG_Rune()->seeds[cl->from].origin) : NULL;
+							edict_t *plat = (cl->action == RL_LIFT)
+							    ? mechanism_binding.mover_entity : NULL;
+							qboolean door_action = cl->action == RL_DOOR ||
+							    cl->action == RL_BUTTON_DOOR;
 						qboolean tele_settled = cl->action != RL_TELEPORT ||
 					    (e->client->ps.pmove.pm_time == 0 &&
 					     !(e->client->ps.pmove.pm_flags & PMF_TIME_TELEPORT));
@@ -2031,9 +3042,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 						    tele_settled &&
 						    (!plat || (!SG_LiftRider(plat, e) &&
 						               e->groundentity != plat)) &&
-						    (cl->action != RL_DOOR ||
-						     (door_trigger && SG_DeclaredDoorOutsideSweep(
-						         door_trigger, e->s.origin))) &&
+							    (!door_action ||
+							     SG_BoundDoorOutsideSweep(&mechanism_binding,
+							         e->s.origin)) &&
 						    SG_SupportedArrived(e->s.origin,
 					        SG_Rune()->seeds[cl->to].origin,
 					        e->groundentity != NULL, e->watertype,
@@ -2047,15 +3058,25 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else
 			{
-				if (bot->seed == cl->to || VectorLength(d) < 48.0f)
-					drop_commit = true;             /* arrived: step complete */
-				/* or overachieved: hook landings scatter up to ~234 units from the
-				 * dest seed -- if the field already prices this spot at or below
-				 * the destination, the step served its purpose (holding on would
-				 * re-fire the hook from its own landing zone; match 6 bounced at
-				 * goal 9979 all game doing exactly that) */
-				if (goal_field[bot->seed] <= goal_field[cl->to])
-					drop_commit = true;
+				if (cl->action == RL_RUN)
+				{
+					run_completion = SG_RunCommitCompletion(SG_Rune(), cl,
+					    bot->seed, e->s.origin, goal_field);
+					if (run_completion != SG_RUN_INCOMPLETE)
+						drop_commit = true;
+				}
+				else
+				{
+					if (bot->seed == cl->to || VectorLength(d) < 48.0f)
+						drop_commit = true;         /* arrived: step complete */
+					/* or overachieved: hook landings scatter up to ~234 units
+					 * from the dest seed -- if the field already prices this spot
+					 * at or below the destination, the step served its purpose
+					 * (holding on would re-fire the hook from its own landing zone;
+					 * match 6 bounced at goal 9979 all game doing exactly that) */
+					if (goal_field[bot->seed] <= goal_field[cl->to])
+						drop_commit = true;
+				}
 			}
 			if (!drop_boundary_owned &&
 			    (!proved_swim || bot->swim_validated) &&
@@ -2068,13 +3089,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				 * cost or combat delay may exhaust the nominal timer; continuing
 				 * toward the proved outside endpoint is safer than handing generic
 				 * navigation a body that the door can occupy next mover frame. */
-				if (cl->action == RL_DOOR && bot->declared_activated)
+					if ((cl->action == RL_DOOR ||
+					     cl->action == RL_BUTTON_DOOR) &&
+					    bot->declared_activated)
 				{
-					edict_t *door_trigger = SG_DeclaredDoorForLink(cl->anchor,
-					    SG_Rune()->seeds[cl->from].origin);
-
-					retain_door = door_trigger &&
-					    !SG_DeclaredDoorOutsideSweep(door_trigger, e->s.origin);
+						retain_door = !SG_BoundDoorOutsideSweep(
+						    &mechanism_binding, e->s.origin);
 				}
 				if (retain_door)
 					SG_TimerArm(&bot->commit_until, 0.5f);
@@ -2123,6 +3143,21 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			if (bot->bl_link[b] == bot->commit_link &&
 			    SG_TimerPending(bot->bl_until[b]))
 				drop_commit = true;
+		/* A declared door commitment may retire only after the shared guard
+		 * positively proves the current body outside every physical member's
+		 * complete sweep.  NOT_CLEAR and every observation/identity failure
+		 * retain the exact action and ticket; no timeout or shelf is allowed to
+		 * turn uncertainty into mover reuse. */
+		if (drop_commit &&
+		    (cl->action == RL_DOOR || cl->action == RL_BUTTON_DOOR) &&
+		    bot->declared_started &&
+		    SG_DeclaredDoorGuardReleaseProvedClear(bot) !=
+		        SG_COMPOUND_GUARD_OK)
+		{
+			drop_commit = false;
+			staging_timed_out = false;
+			bestlink = bot->commit_link;
+		}
 		if (drop_commit)
 		{
 			/* Think_TrackSeed deliberately preserves the departure seed while
@@ -2164,7 +3199,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				bot->bl_link[oldest] = bot->commit_link;
 				SG_TimerArm(&bot->bl_until[oldest], 10.0f);
 				if (drop_boundary_recovery_lost)
+				{
 					SG_TeachLinkFutility(bot->commit_link);
+				}
 				bestlink = -1;
 				if (sg_cv.debug->value)
 					sg_host.dprint("BALLISTICFAIL %s link=%d action=%d %s\n",
@@ -2192,66 +3229,59 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->declared_start_frame = -1;
 			bot->declared_touched = false;
 			bot->declared_touch_frame = -1;
+			SG_ButtonExecutionActionReset(bot);
 			bot->declared_triggered = false;
 			bot->declared_trigger_frame = -1;
 			bot->declared_egress_proof_frame = -1;
 			bot->declared_door_retreat = false;
 			bot->declared_door_suffix_ms = 0;
+			bot->declared_guard_paused = false;
+			bot->declared_guard_pause_started = 0.0f;
+			bot->declared_door_recovery_since = 0.0f;
 		}
 		else
 			bestlink = bot->commit_link;
 	}
+	/* The supply objective is route-pure all the way to the command owner.
+	 * A late generic override (rail/watchdog/hold) must not turn a blocked
+	 * exact-pad/home route into a wandering RUN.  Existing mechanism owners
+	 * are intentionally left alone above; this fence only rejects a fresh
+	 * ordinary candidate that is not a strict live-field descent. */
+	if (bot->strike_weapon_link >= 0 &&
+	    bot->commit_link != bot->strike_weapon_link)
+		StrikeWeaponPurposeClear(bot);
+	if (SG_DefenseSupplyActive(bot) && tc->route_pure &&
+	    (bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND ||
+	     bot->def_supply_phase == SG_DEF_SUPPLY_RETURN) &&
+	    bot->commit_link < 0 && bestlink >= 0 && bot->seed >= 0 &&
+	    bot->seed < SG_Rune()->hdr.num_seeds &&
+    route_field &&
+    (bestlink >= SG_Rune()->hdr.num_links ||
+     !SG_DefenseSupplyActionAllowed(
+         (sg_defense_supply_phase_t)bot->def_supply_phase,
+         bestlink < SG_Rune()->hdr.num_links &&
+         SG_Rune()->links[bestlink].action == RL_RUN) ||
+     route_field[bot->seed] >= SG_FIELD_INF ||
+     SG_Rune()->links[bestlink].to < 0 ||
+     SG_Rune()->links[bestlink].to >= SG_Rune()->hdr.num_seeds ||
+     route_field[SG_Rune()->links[bestlink].to] >= SG_FIELD_INF ||
+     route_field[SG_Rune()->links[bestlink].to] >= route_field[bot->seed]))
+		bestlink = -1;
+	/* The strike weapon diversion is also an exact directed-field owner. */
+	bestlink = StrikeWeaponFilterFreshCandidate(bot, tc, bestlink);
 	if (bot->commit_link < 0 && bestlink >= 0)
-	{
-		rune_link_t *new_link = &SG_Rune()->links[bestlink];
-		float hold = 3.0f;
-
-		bot->commit_link = bestlink;
-		bot->jump_link = (new_link->action == RL_JUMP) ? bestlink : -1;
-		bot->jump_started = false;
-		SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
-		    &bot->drop_replay_link, &bot->drop_live_events);
-		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
-		    &bot->swim_replay_link, &bot->swim_validated,
-		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
-		bot->declared_activated = false;
-		bot->declared_started = false;
-		bot->declared_start_frame = -1;
-		bot->declared_touched = false;
-		bot->declared_touch_frame = -1;
-		bot->declared_triggered = false;
-		bot->declared_trigger_frame = -1;
-		bot->declared_egress_proof_frame = -1;
-		bot->declared_door_retreat = false;
-		bot->declared_door_suffix_ms = 0;
-		/* Before a proved ballistic action starts, this is a bounded source-
-		 * staging deadline. Six seconds lets a fast body brake and center; the
-		 * actual JUMP/DROP rollout receives its own deadline only when it starts. */
-		if (new_link->action == RL_DROP || new_link->action == RL_JUMP)
-			hold = 6.0f;
-		else if (new_link->action == RL_LIFT)
-			/* Worst legitimate queue: approach, wait the 3 s top park, ride
-			 * down empty, then ride back up. The record prices one ride. */
-			hold = 8.0f + 2.0f * new_link->cost_ms * 0.001f;
-		else if (new_link->action == RL_DOOR)
-			/* The record starts at an exact rest source. Live selection may be
-			 * one seed radius away, so source capture gets its own bounded six
-			 * seconds before the serialized cooldown/motion/egress budget. */
-			hold = 6.5f + new_link->cost_ms * 0.001f;
-		else if (new_link->cost_ms > 0 && new_link->cost_ms * 0.001f + 0.5f > hold)
-			hold = new_link->cost_ms * 0.001f + 0.5f;
-		SG_TimerArm(&bot->commit_until, hold);
-	}
+		StrikeCommitFreshLink(bot, tc, bestlink);
 
 	/*
-	 * A rail attempt outranks the argmin outright. Wave 53's ledger: 16
+	 * A rail attempt outranks the argmin outright. observations ledger: 16
 	 * RAILTRY, 1 RAILFAIL, 0 RAILWIN -- fifteen attempts silently stood
 	 * down because futility and the shelf reshaped the surface mid-walk
 	 * and the argmin handed back a different link before the proof's line
 	 * got walked. The retry exists precisely because the surface's local
 	 * answer failed here; letting the surface interrupt it is circular.
 	 */
-	if (bot->rail_stage > 0 && bot->rail_link >= 0 &&
+	if (StrikeRailLateOverrideAllowed(bot, tc) &&
+	    bot->rail_stage > 0 && bot->rail_link >= 0 &&
 	    bot->rail_link < SG_Rune()->hdr.num_links)
 	{
 		int b3;
@@ -2277,7 +3307,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * this removes every class.)
 	 */
 	/*
-	 * Route through a door already known dead: no 4-second trial needed,
+	 * Route through a door already known dead: no 4-second case needed,
 	 * the verdict is in. Shelve on sight -- one link per frame drains a
 	 * 25-link doorway fan in seconds, where the watch alone drained it
 	 * slower than the shelf refilled (Trace, 117 shelves at seed 662,
@@ -2333,8 +3363,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	     * while waiting/riding. Their authoritative state machine and bounded
 	     * commit deadline own failure; the generic orbit watch does not. */
 	    SG_Rune()->links[bestlink].action != RL_LIFT &&
-	    SG_Rune()->links[bestlink].action != RL_TELEPORT &&
-	    SG_Rune()->links[bestlink].action != RL_DOOR &&
+		    SG_Rune()->links[bestlink].action != RL_TELEPORT &&
+		    SG_Rune()->links[bestlink].action != RL_DOOR &&
+		    SG_Rune()->links[bestlink].action != RL_BUTTON_DOOR &&
 	    /* Source centering is part of the exact JUMP/DROP controller and has
 	     * its own bounded deadline. The generic four-second orbit watch must
 	     * not shelve the link before its first proved command is submitted. */
@@ -2396,7 +3427,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * drain this system got burned by (that one shelved at 10Hz).
 	 */
 	/*
-	 * THE REARGUARD. Waves 88-90: nineteen steals, zero captures, ten of
+	 * THE REARGUARD. observations: nineteen steals, zero captures, ten of
 	 * fifteen carriers dead within ten percent of home -- killed in the
 	 * flag room by the respawn stream while their escort dutifully
 	 * followed them toward the exit, duplicating the carrier's path when
@@ -2407,8 +3438,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * escorts, as before, in country where escorting means something.
 	 */
 	/*
-	 * ...and not only the ESCORT. The route-fraction census (waves
-	 * 141-148, 83 parity carries): 77%% of carriers die inside the first
+	 * ...and not only the ESCORT. In 83 parity carries, 77%% of carriers
+	 * died inside the first
 	 * quarter of the route, median at 3%% -- the room, not the road. At
 	 * the grab moment the fighter still wears ATTACK, and an attacker's
 	 * post-grab field is the enemy flag ON OUR CARRIER'S BACK: it pulls
@@ -2433,7 +3464,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		{
 			rally_hold = true;      /* stand and fight: the room is the job */
 			/* once per engagement, not per frame: the hold's own
-			 * evidence trail -- wave 149 moved no census and nothing
+			 * evidence trail -- observations moved no census and nothing
 			 * could say whether the plug ever engaged at all */
 			if (bot->rally_since <= 0.0f &&
 			    sg_cv.debug->value)
@@ -2446,11 +3477,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/*
-	 * THE FLAG HANDOFF (sg_handoff, census gap 10). The owner's rulings:
-	 * "flag handoff can use drop, but it would be better to use the buzzmod
-	 * toss", then "it is another valid way to pass the flag besides drop"
-	 * and "we should probably limit the range of the flag toss a bit". A
-	 * carrier about to die gives the flag to a teammate who is nearer home
+	 * THE FLAG HANDOFF (sg_handoff). The buzzmod toss is an intentional
+	 * alternative to dropping the flag, bounded to a short pass. A carrier
+	 * about to die gives the flag to a teammate who is nearer home
 	 * than it is, instead of dying with it in the open and handing the
 	 * defense a free return.
 	 *
@@ -2517,7 +3546,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 				VectorSubtract(me->s.origin, e->s.origin, md);
 				mdist = VectorLength(md);
-				if (mdist > 350.0f)     /* the cap (owner's ruling) */
+				if (mdist > 350.0f)     /* bounded handoff range */
 					continue;
 
 				ms = Rune_NearestSeed(SG_Rune(), me->s.origin);
@@ -2594,7 +3623,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/*
-	 * THE RUNE HANDOFF (sg_runetoss, wave 240 -- the owner's recovered
+	 * THE RUNE HANDOFF (sg_runetoss, observations -- the owner's recovered
 	 * "extremely important": a teammate holding a defensive rune gives
 	 * it to the carrier). A bot with RESIST or REGEN, within 300 of our
 	 * live carrier who holds nothing better, faces the carrier for one
@@ -2649,26 +3678,40 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/*
-	 * HOLD SHORT OF AN UNCAPPABLE STAND (both-flags doctrine, wave 175).
-	 * A carrier whose own flag is astray cannot score by touching the
-	 * stand -- but it marched there anyway and camped the most
-	 * predictable spot on the map until something killed it. Now it
-	 * closes to earshot of home (2500 of field) and HOLDS off-stand,
-	 * fighting from wherever it stands, until the team returns the
-	 * flag; the last steps happen when they can score. The standoff
-	 * breaks on exactly one event, and ours must survive to convert it.
+	 * HOLD SHORT OF AN UNCAPPABLE STAND (both-flags doctrine, observations).
+	 * A carrier whose own flag is astray cannot score by touching the stand.
+	 * It therefore walks to a real cover seed outside the terminal zone, then
+	 * waits there.  A missing cover is not a hold: it must keep descending.
 	 */
-	if (role == SG_ROLE_CARRY &&
-	    sg_caco_team_belief.flag[SG_TeamIdx(team)][SG_TeamIdx(team)].state ==
-	        SG_FLAG_ASTRAY &&
-	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
-	    goal_field[bot->seed] < 2500)
+	if (role == SG_ROLE_CARRY)
 	{
-		rally_hold = true;
-		if (sg_cv.debug->value &&
-		    SG_TimerReady(bot->next_report - 0.9f))
-			sg_host.dprint("CARRYHOLD %s cost=%d\n",
-			           e->client->pers.netname, goal_field[bot->seed]);
+		qboolean ours_astray =
+		    sg_caco_team_belief.flag[SG_TeamIdx(team)][SG_TeamIdx(team)].state ==
+		        SG_FLAG_ASTRAY;
+
+		if (!ours_astray)
+		{
+			/* The return is the release event: do not carry a stale wait into
+			 * the capture window. */
+			bot->rally_cover = -1;
+			rally_hold = false;
+		}
+		else if (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
+		         goal_field[bot->seed] < 2500)
+		{
+			int cover = bot->rally_cover;
+
+			if (cover < 0 || cover >= SG_Rune()->hdr.num_seeds ||
+			    goal_field[cover] < 600 || goal_field[cover] >= 2500 ||
+			    !SG_CanSee(e, SG_Rune()->seeds[cover].origin, 22.0f))
+				cover = Carrier_RallyCover(bot, e, goal_field);
+			bot->rally_cover = cover;
+			rally_hold = cover >= 0;
+			if (sg_cv.debug->value && rally_hold &&
+			    SG_TimerReady(bot->next_report - 0.9f))
+				sg_host.dprint("CARRYHOLD %s cost=%d cover=%d\n",
+				           e->client->pers.netname, goal_field[bot->seed], cover);
+		}
 	}
 
 	/*
@@ -2789,7 +3832,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 	/*
 	 * THE UNSTICK OF LAST RESORT. A rope through a doorway parked a bot
-	 * on a wall ledge off the navigable mesh (wave 97, screenshot in
+	 * on a wall ledge off the navigable mesh (observations, screenshot in
 	 * hand) and every clever layer beneath this line -- watchdog,
 	 * escape, futility, rail -- churned without physically freeing it.
 	 * Fifteen seconds of true zero displacement, standing exempted only
@@ -2804,6 +3847,25 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		SG_Mark(&bot->wedge_since);
 	}
 	else if (SG_AgeOver(bot->wedge_since, 15.0f) &&
+	         role == SG_ROLE_ATTACK &&
+	         SG_AttackFlagDirectTouchAuthority(e, team, NULL))
+	{
+		/* The live flag is a direct touch recovery, not a reason to respawn.
+		 * Clear only a plain RUN so the next movement frame takes the live
+		 * item through-line; controller-owned commitments keep their bounds. */
+		bot->terminal = true;
+		bot->sticky_link = -1;
+		if (bot->commit_link >= 0 &&
+		    bot->commit_link < SG_Rune()->hdr.num_links &&
+		    SG_Rune()->links[bot->commit_link].action == RL_RUN)
+		{
+			bot->commit_link = -1;
+			bot->commit_until = 0.0f;
+		}
+		SG_Mark(&bot->wedge_since);
+		return -1;
+	}
+	else if (SG_AgeOver(bot->wedge_since, 15.0f) &&
 	         !(role == SG_ROLE_DEFEND &&
 	           goal_field[bot->seed >= 0 ? bot->seed : 0] < 1500) &&
 	         /* Declared mechanisms legitimately park the body while a lift
@@ -2812,10 +3874,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	          * generic statue valve must not kill a correct rider/waiter. */
 	         !(bot->commit_link >= 0 &&
 	           bot->commit_link < SG_Rune()->hdr.num_links &&
-	           (SG_Rune()->links[bot->commit_link].action == RL_LIFT ||
-	            SG_Rune()->links[bot->commit_link].action == RL_TELEPORT ||
-	            SG_Rune()->links[bot->commit_link].action == RL_DOOR)) &&
-	         /* A LIVE CARRIER IS NEVER SUICIDED (carry forensics, 791
+		           (SG_Rune()->links[bot->commit_link].action == RL_LIFT ||
+		            SG_Rune()->links[bot->commit_link].action == RL_TELEPORT ||
+		            SG_Rune()->links[bot->commit_link].action == RL_DOOR ||
+		            SG_Rune()->links[bot->commit_link].action ==
+		                RL_BUTTON_DOOR)) &&
+	         /* A LIVE CARRIER IS NEVER SUICIDED (carry analysis, 791
 	          * episodes): 12 of the 19 parity carries that REACHED
 	          * within 300u of home ended as WEDGEKILL orbits at the
 	          * stand -- zero damage, no enemy inside 900u. The wedge
@@ -2852,16 +3916,17 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	     * hold to the graph link before its own deadline can decide it. */
 	    (bot->commit_link >= 0 &&
 	     bot->commit_link < SG_Rune()->hdr.num_links &&
-	     (SG_Rune()->links[bot->commit_link].action == RL_LIFT ||
-	      SG_Rune()->links[bot->commit_link].action == RL_TELEPORT ||
-	      SG_Rune()->links[bot->commit_link].action == RL_DOOR)))
+		     (SG_Rune()->links[bot->commit_link].action == RL_LIFT ||
+		      SG_Rune()->links[bot->commit_link].action == RL_TELEPORT ||
+		      SG_Rune()->links[bot->commit_link].action == RL_DOOR ||
+		      SG_Rune()->links[bot->commit_link].action == RL_BUTTON_DOOR)))
 	{
 		/*
 		 * Not displacement alone: the clock runs ONLY through frames where
 		 * navigation was actually driving the legs and no fight owned the
 		 * body. The first cut counted every parked second -- corner holds,
 		 * duels, posts -- and shelved the fleet's routes to rags in one
-		 * wave (iter 43: 784 firings, zero steals anywhere, kills gutted).
+		 * match (784 firings, zero steals anywhere, kills gutted).
 		 * Parked-while-driving is the deadlock class; parked-on-purpose
 		 * is not a link's fault.
 		 */
@@ -2892,7 +3957,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 * the fan silenced. If THAT fails, the shelf and the futility
 		 * lesson follow as before.
 		 */
-		if (SG_Rune()->links[bestlink].action == RL_RUN &&
+		if (StrikeRailWatchdogAllowed(bot, tc) &&
+		    SG_Rune()->links[bestlink].action == RL_RUN &&
 		    bot->rail_link != bestlink)
 		{
 			bot->rail_link = bestlink;
@@ -2981,16 +4047,37 @@ stag_done:
 					/* back where it was, and it never once got closer
 					 * in between: an orbit, whatever its diameter */
 					int b, oldest = 0;
+					int cycle_link = bestlink;
+					int alternate;
 
 					for (b = 0; b < SG_BL_MAX; b++)
 						if (bot->bl_until[b] < bot->bl_until[oldest])
 							oldest = b;
-					bot->bl_link[oldest] = bestlink;
+					bot->bl_link[oldest] = cycle_link;
 					SG_TimerArm(&bot->bl_until[oldest], 45.0f);
+					/* A shelf must change this decision now, not merely make the
+					 * next frame rediscover it.  Prefer an unvisited descending
+					 * branch; when this is a one-exit corridor, permit its finite
+					 * exit without deleting the fresh cycle evidence. */
+					alternate = Carrier_CycleRoute(bot, goal_field, true);
+					if (alternate < 0)
+						alternate = Carrier_CycleRoute(bot, goal_field, false);
+					if (bot->commit_link == cycle_link &&
+					    SG_Rune()->links[cycle_link].action == RL_RUN)
+					{
+						bot->commit_link = -1;
+						bot->commit_until = 0.0f;
+					}
+					if (alternate >= 0)
+						bestlink = alternate;
+					else
+						/* A multi-exit fan with no safe alternate must not keep the
+						 * freshly shelved loop alive for this command frame. */
+						bestlink = -1;
 					if (sg_cv.debug->value)
-						sg_host.dprint("CYCLE %s seed=%d link=%d\n",
+						sg_host.dprint("CYCLE %s seed=%d link=%d next=%d\n",
 						           e->client->pers.netname, bot->seed,
-						           bestlink);
+						           cycle_link, bestlink);
 					break;
 				}
 			bot->visit_seed[bot->visit_head] = bot->seed;
@@ -3001,30 +4088,10 @@ stag_done:
 		}
 	}
 
-	/*
-	 * A carrier must NEVER be stranded by its own shelf: trapped with the
-	 * flag is the flag lost. Every link at a finite seed on the shelf and
-	 * nothing improving left? Wipe the shelf and retry the least-bad
-	 * option -- an orbit risked beats a guaranteed strand (mactf06 g3:
-	 * the carrier hung airborne on link=-1 at goal 6684 until the flag
-	 * timed out).
-	 */
-	if (role == SG_ROLE_CARRY && bestlink < 0 &&
-	    goal_field[bot->seed] < SG_FIELD_INF)
-	{
-		int b, any = 0;
-
-		for (b = 0; b < SG_BL_MAX; b++)
-			if (SG_TimerPending(bot->bl_until[b]))
-				any++;
-		if (any)
-		{
-			memset(bot->bl_until, 0, sizeof(bot->bl_until));
-			if (sg_cv.debug->value)
-				sg_host.dprint("CLEARSHELF %s (carrying, stranded at %d)\n",
-				           e->client->pers.netname, bot->seed);
-		}
-	}
+	/* Deaddoor and every later shelf/invalidation above share this retirement
+	 * fence. It runs after those verdicts and before hold_post/Think_Move, so a
+	 * retired lateral RUN cannot release the stand for one command frame. */
+	(void)DefenseShiftRetireInvalid(bot, &bestlink, &defense_shift_selected);
 
 	/*
 	 * A defender that has reached its post stands it. The stand is the
@@ -3065,15 +4132,23 @@ stag_done:
 		bot->patrol_seed = -1;
 		bot->patrol_until = 0.0f;
 	}
+	/* RETURN ends only in the real own-flag/post band.  The objective has
+	 * already replaced any astray-flag/intercept goal with the fixed home
+	 * field, so this fence cannot finish on the weapon pad or a mixed tactic. */
+	if (bot->def_supply_armed &&
+	    bot->def_supply_phase == SG_DEF_SUPPLY_RETURN &&
+	    bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds &&
+	    goal_field[bot->seed] < 400.0f * SG_PersonaCampScale(e))
+		SG_DefenseSupplyFinish(bot);
 
-	if (bot->lead_ent > 0 && goal_field[bot->seed] < SG_LEAD_STANDOFF)
+	if (bot->lead_ent > 0 && bot->lead_state == SG_LEAD_WAITING &&
+	    goal_field[bot->seed] < SG_LEAD_STANDOFF)
 		hold_post = true;
 	else if (role == SG_ROLE_DEFEND && bot->def_stand &&
 	    ((float)goal_field[bot->seed] < 400.0f * SG_PersonaCampScale(e) ||
 	     bot->patrol_seed >= 0))
 	{
-		qboolean quiet = true;
-		int s;
+		qboolean quiet = defense_quiet;
 
 		/*
 		 * A quiet post permits an errand. Quiet means no believed
@@ -3090,22 +4165,22 @@ stag_done:
 		 * defender who has nothing worth fetching or no peace to fetch
 		 * it in.
 		 */
-		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-		{
-			sg_belief_enemy_t *en =
-			    &sg_caco_enemies[SG_TeamIdx(team)][s];
+		if (bot->def_supply_armed)
+			goto no_hold;   /* OUTBOUND owns the weapon leg; RETURN can only
+			                  * reach this branch before its finish fence */
 
-			if (en->client >= 0 && en->seed >= 0 &&
-			    SG_AgeUnder(en->seen_time, 6.0f) &&
-			    goal_field[en->seed] < 2500)
-				quiet = false;
-		}
 		if (quiet &&
 		    (w->item[SG_FC_ARMOR] > 0.9f || w->item[SG_FC_HEALTH] > 0.9f ||
 		     w->item[SG_FC_AMMO] > 0.9f))
 			goto no_hold;   /* needy and unthreatened: run the errand */
 
 		hold_post = true;
+
+		/* The selected step already passed through the normal commitment above.
+		 * Suppress the stand command only while that exact RUN owns the body. */
+		if (defense_shift_selected && bot->def_shift_seed >= 0 &&
+		    bot->commit_link == bot->def_shift_link)
+			hold_post = false;
 
 		/*
 		 * THE PATROL (sg_patrol). Measurement found posted defenders
@@ -3161,7 +4236,7 @@ stag_done:
 					int pick = rand() % nc;
 
 					/* Keep the circuit moving forward when another road exists;
-					 * immediate A-B-A reversals are the shuffle this patrol was
+					 * immediate back-and-forth reversals are the shuffle this patrol was
 					 * meant to replace. */
 					if (nc > 1 && cand[pick] == bot->prev_seed)
 						pick = (pick + 1) % nc;
@@ -3263,7 +4338,8 @@ no_hold:;
 	 * posted", which has to be said every frame or a bot that leaves its stand
 	 * would keep pre-selecting for a post it no longer holds.
 	 */
-	SG_CombatPost(e, hold_post ? post_sight : -1.0f);
+	SG_CombatPost(e, hold_post ? post_sight : -1.0f,
+	              hold_post && role == SG_ROLE_DEFEND && bot->def_stand);
 
 	/*
 	 * Whether this bot may hold a corner on a target it just lost. The role
@@ -3346,6 +4422,18 @@ no_hold:;
 	}
 
 
+	/* HOLD/RUSH is a same-frame coordinator verdict.  Room, rail, and
+	 * rearguard policy above may set their ordinary holds, but none may delay
+	 * a direct-touch or real-room-death RUSH release. */
+	if (tc->strike_rush)
+	{
+		rally_hold = false;
+		rail_hold = false;
+		bot->rally_since = 0.0f;
+		bot->nade_phase = 0;
+		SG_NadeTargetClear(bot);
+		bot->nade_until = 0.0f;
+	}
 	tc->rally_hold = rally_hold;
 	tc->rail_hold = rail_hold;
 	tc->hold_post = hold_post;
@@ -3353,3 +4441,47 @@ no_hold:;
 	tc->post_sight = post_sight;
 	return bestlink;
 }
+
+#ifdef SG_STRIKE_TRANSITION_TEST_API
+/* Host-free transition tests call these wrappers so they execute the exact
+ * production statics above.  They add no alternate policy and are absent from
+ * release builds. */
+qboolean SG_StrikeTestWeaponReconcile(sg_bot_t *bot, sg_think_t *tc)
+{
+	return StrikeWeaponPurposeReconcile(bot, tc);
+}
+
+void SG_StrikeTestWeaponCancelStaged(sg_bot_t *bot, int action)
+{
+	StrikeWeaponCancelStaged(bot, action);
+}
+
+qboolean SG_StrikeTestWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
+{
+	return StrikeWeaponPrepareCommit(bot, tc);
+}
+
+int SG_StrikeTestWeaponFilterFreshCandidate(const sg_bot_t *bot,
+	const sg_think_t *tc, int bestlink)
+{
+	return StrikeWeaponFilterFreshCandidate(bot, tc, bestlink);
+}
+
+void SG_StrikeTestCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
+	int bestlink)
+{
+	StrikeCommitFreshLink(bot, tc, bestlink);
+}
+
+qboolean SG_StrikeTestRailLateOverrideAllowed(const sg_bot_t *bot,
+	const sg_think_t *tc)
+{
+	return StrikeRailLateOverrideAllowed(bot, tc);
+}
+
+qboolean SG_StrikeTestRailWatchdogAllowed(const sg_bot_t *bot,
+	const sg_think_t *tc)
+{
+	return StrikeRailWatchdogAllowed(bot, tc);
+}
+#endif

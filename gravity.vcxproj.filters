@@ -22,7 +22,19 @@
     <ClCompile Include="bat.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ctf_file_io.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ctf_sqlite_core.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ctf_sqlite_player.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ctf_sqlite_unidb.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sqlite3.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="g_ai.c">
@@ -217,10 +229,58 @@
     <ClCompile Include="slipgate\sg_crc32.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_defense_shift.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_defense_supply.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_strike.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_strike_adapter.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_identity.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_wire.c">
+    <ClCompile Include="slipgate\sg_human_speed.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_door_approach.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_hook_diagnostics.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_pov_identity.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_codec.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_artifact_loader.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_artifact_writer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_file.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_stream.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_mechanism_catalog.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_mechanism_plan.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_runtime.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_binding.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_sidecar_wire.c">
@@ -232,12 +292,6 @@
     <ClCompile Include="slipgate\sg_sidecar_store.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_loader.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_writer.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="slipgate\sg_rune_install.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -245,6 +299,36 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_replay.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_mover_lease.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_button_live.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_guard.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_guard_game.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_declared_door_guard.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_world.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_gen.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_publication.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_door_scope.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_drop_live.c">
@@ -260,6 +344,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_cvars.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_hooks.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_util.c">
@@ -311,6 +398,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_fields.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_snag_repair.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_net.c">
@@ -429,6 +519,78 @@
     <ClInclude Include="q_shared.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="slipgate\sg_action.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_action_contract.generated.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_crc32.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_defense_shift.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_defense_supply.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_strike.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_strike_adapter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_identity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_human_speed.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_door_approach.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_snag_repair.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_hook_diagnostics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_pov_identity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_local.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_contract.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_codec.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_artifact_loader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_artifact_writer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_file.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_stream.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_mechanism_catalog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_mechanism_plan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_binding.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="slipgate\sg_sidecar_wire.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -444,12 +606,6 @@
     <ClInclude Include="slipgate\sg_danger_policy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_writer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_loader.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="slipgate\sg_rune_install.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -457,6 +613,36 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_replay.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_mover_lease.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_button_live.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_guard.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_guard_game.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_declared_door_guard.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_world.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_gen.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_publication.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_door_scope.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_drop_live.h">
@@ -491,21 +677,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="deaths.txt">
-      <Filter>Information files</Filter>
-    </None>
-    <None Include="license.txt">
-      <Filter>Information files</Filter>
-    </None>
-    <None Include="readme301.txt">
-      <Filter>Information files</Filter>
-    </None>
-    <None Include="scores.txt">
-      <Filter>Information files</Filter>
-    </None>
-    <None Include="TE todo.txt">
-      <Filter>Information files</Filter>
-    </None>
     <None Include="Makefile" />
     <None Include="team.def">
       <Filter>Resource Files</Filter>

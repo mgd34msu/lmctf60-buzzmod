@@ -40,12 +40,12 @@ static void stats_appendbuf(char* dest, size_t destsize, const char* src)
 }
 
 
-void stats_log_init()
+void stats_log_init(void)
 {
 	p_start_player = NULL;
 }
 
-void stats_log_reset()
+void stats_log_reset(void)
 {
 	stats_player_s* p_current_player;
 
@@ -126,7 +126,7 @@ void stats_set_name(edict_t* ent, char* name)
 	return;
 }
 
-void stats_cleanup()
+void stats_cleanup(void)
 {
 	stats_player_s* p_current_player, * p_prev_player;
 

@@ -3,9 +3,9 @@
 
 Reads <map>.rune (link table order is the contract) and
 <map>.flaglive.json (transition counts recorded while either flag was out),
-then writes <map>.hml beside the rune: an explicit v3 header followed by one
+then writes <map>.hml beside the rune: an authenticated header followed by one
 log-scaled uint8 traffic tier per link. The sidecar header carries the
-validated v3 rune counts, payload CRC, action contract, and header CRC. The
+validated rune counts, payload CRC, action contract, and header CRC. The
 retained unstamped corpus remains reference-only: this tool requires a newly
 mined or spatially migrated corpus carrying the current rune identity.
 
@@ -37,7 +37,7 @@ def bake_map(rune_dir, human_dir, mapname):
         raise FileNotFoundError(f'{mapname}: rune={bool(rune_path)} '
                                 f'json={os.path.exists(json_path)}')
 
-    rune = read_rune(rune_path, mapname, versions=(3,))
+    rune = read_rune(rune_path, mapname)
     num_seeds = rune['num_seeds']
     num_links = rune['num_links']
     pairs = rune_link_pairs(rune)
@@ -58,7 +58,7 @@ def bake_map(rune_dir, human_dir, mapname):
 
     output = os.path.join(os.path.dirname(rune_path), f'{mapname}.hml')
     binding = sidecario.binding_from_rune(rune)
-    payload = sidecario.encode_v3(sidecario.HML, binding, tiers)
+    payload = sidecario.encode(sidecario.HML, binding, tiers)
     atomic_write_bytes(
         output, payload,
         precommit=lambda: require_current_rune_binding(

@@ -2371,6 +2371,7 @@ int numspec;
 	Drop_All(ent);
 	ent->client->ctf.teamnum = Observer_Type;
 	ent->client->chase_target = NULL;
+	POVLock_Clear(ent);
 	//ent->client->pers.spectator = 1;
 	//ent->client->resp.spectator = 1;
 	ForceCommand(ent, "spectator 1");
@@ -2378,8 +2379,8 @@ int numspec;
 	 * The conversion that was never called: spectator_respawn has no call
 	 * sites in this codebase and every Observer_Start site sits behind
 	 * OLDOBSERVERCODE -- so this function set the team number, the lists
-	 * said observer, and the body stayed solid in the world (reported
-	 * live, wave 77 era). Observer_Start is the physical half: non-solid,
+	 * said observer, and the body stayed solid in the world. Observer_Start
+	 * is the physical half: non-solid,
 	 * noclip, model off. The team number is already negative here, so
 	 * its own guard passes.
 	 */
@@ -2587,6 +2588,73 @@ void Cmd_Test_f(edict_t *ent)
 {
 }
 
+static void Cmd_POVLock_f(edict_t *ent)
+{
+	const char *argument = gi.argc() > 1 ? gi.argv(1) : NULL;
+
+	if (!POVLock_Command(ent, argument))
+		gi.cprintf(ent, PRINT_HIGH,
+			"povlock starts one connected SG bot recording (or povlock off).\n");
+}
+
+/* `chasecam` is the normal observer surface.  It deliberately shares the
+ * existing chase target/cycling controls rather than synthesizing a client
+ * command or starting a demo recording.  SG fake clients are copied in-eyes
+ * by g_chase; human targets keep the historical third-person camera. */
+static void Cmd_ChaseCam_f(edict_t *ent)
+{
+	const char *argument = gi.argc() > 1 ? gi.argv(1) : NULL;
+
+	if (!ent || !ent->client || !ent->client->resp.spectator ||
+		(ent->flags & FL_BOT))
+	{
+		gi.cprintf(ent, PRINT_HIGH, "chasecam is for connected observers.\n");
+		return;
+	}
+	/* A dedicated povrecord session owns its target until `povlock off`; a
+	 * casual chase command must never stop its client-side recording. */
+	if (ent->client->pov_record_active)
+	{
+		gi.cprintf(ent, PRINT_HIGH,
+			"povlock recording is active; use povlock off first.\n");
+		return;
+	}
+	if (argument && Q_stricmp(argument, "off") == 0)
+	{
+		ent->client->chase_target = NULL;
+		POVLock_Clear(ent);
+		gi.centerprintf(ent, "Chase camera off.");
+		return;
+	}
+	if (argument && Q_stricmp(argument, "prev") == 0)
+	{
+		if (ent->client->chase_target)
+			ChasePrev(ent);
+		else
+			GetChaseTarget(ent);
+	}
+	else if (!argument || Q_stricmp(argument, "next") == 0)
+	{
+		if (ent->client->chase_target)
+			ChaseNext(ent);
+		else
+			GetChaseTarget(ent);
+	}
+	else
+	{
+		gi.cprintf(ent, PRINT_HIGH,
+			"usage: chasecam [next|prev|off]\n");
+		return;
+	}
+	if (ent->client->chase_target)
+	{
+		UpdateChaseCam(ent);
+		gi.centerprintf(ent, "Now observing: %s%s",
+			ent->client->povlock_active ? "in-eyes " : "",
+			ent->client->chase_target->client->pers.netname);
+	}
+}
+
 /*
 =================
 ClientCommand
@@ -2619,6 +2687,16 @@ void ClientCommand(edict_t* ent)
 	if (Q_stricmp(cmd, "players") == 0)
 	{
 		Cmd_Players_f(ent);
+		return;
+	}
+	if (POVLock_CommandNameIs(cmd))
+	{
+		Cmd_POVLock_f(ent);
+		return;
+	}
+	if (Q_stricmp(cmd, "chasecam") == 0)
+	{
+		Cmd_ChaseCam_f(ent);
 		return;
 	}
 	if (Q_stricmp(cmd, "say") == 0)
@@ -2720,7 +2798,8 @@ void ClientCommand(edict_t* ent)
 	}
 	else if (Q_stricmp(cmd, "gameversion") == 0)
 	{
-		ctf_SafePrint(ent, PRINT_HIGH, va("%s %s %s\n", GAMEVERSION, VER, __DATE__));
+		ctf_SafePrint(ent, PRINT_HIGH, va("%s v%s %s %s\n", GAMEVERSION,
+			BUZZMOD_VERSION, VER, __DATE__));
 		return;
 	}
 	else if (Q_stricmp(cmd, "ctfhelp") == 0)

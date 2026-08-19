@@ -1,5 +1,5 @@
 /*
- * sg_drop_live.h -- host-free live adapter for ordinary revision-2 RL_DROP.
+ * sg_drop_live.h -- host-free live adapter for ordinary RL_DROP.
  *
  * The pure replay reducer owns command, phase and timing law.  The game side
  * supplies authoritative poses, immutable-support truth and the two ordered
@@ -87,7 +87,7 @@ sg_drop_live_result_t SG_DropLiveBegin(sg_drop_replay_state_t *replay,
 	const sg_replay_pose_t *pose, qboolean ground_support_valid,
 	float old_frame_z, const sg_drop_live_events_t *events);
 
-/* The callback independently builds a fully initialized revision-2 shadow
+/* The callback independently builds a fully initialized shadow
  * command.  Logical usercmd fields are compared explicitly; padding never
  * participates. */
 sg_drop_live_result_t SG_DropLivePreStep(sg_drop_replay_state_t *replay,
@@ -97,7 +97,7 @@ sg_drop_live_result_t SG_DropLivePreStep(sg_drop_replay_state_t *replay,
 
 /* Authenticate the genuinely final command immediately before ClientThink.
  * The expected command is the reducer result already checked against the
- * independent revision-2 shadow; only logical usercmd fields participate. */
+ * independent shadow; only logical usercmd fields participate. */
 sg_drop_live_result_t SG_DropLiveValidateFinalCommand(
 	sg_drop_replay_state_t *replay, qboolean *active, int *replay_link,
 	int action_link, const usercmd_t *expected, const usercmd_t *command);

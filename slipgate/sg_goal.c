@@ -19,7 +19,9 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_goal.h"
+#include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_move.h"
 
 static int intercept_field[SG_MAX_SEEDS];
 
@@ -39,7 +41,13 @@ static int intercept_field[SG_MAX_SEEDS];
  * set's own deepest-to-shallowest line. Falls back to the projected seed
  * itself when the set is degenerate.
  */
-static int Intercept_HoldSeed(int team, int fallback)
+#ifdef SG_GOAL_TEST
+#define SG_GOAL_PRIVATE
+#else
+#define SG_GOAL_PRIVATE static
+#endif
+
+SG_GOAL_PRIVATE int Intercept_HoldSeed(int team, int fallback)
 {
 	sg_proj_t *pr = &sg_caco_proj[SG_TeamIdx(team)];
 	vec3_t axis;
@@ -65,11 +73,14 @@ static int Intercept_HoldSeed(int team, int fallback)
 		if (p < 0 || p >= SG_Rune()->hdr.num_seeds)
 			continue;
 		for (li = SG_Rune()->first_link[p]; li >= 0; li = SG_Rune()->next_link[li])
-			fan++;
+			if (Fields_ActionAdmitted(SG_Rune()->links[li].action))
+				fan++;
 		choke = 600.0f / (4.0f + (float)fan);
 
 		for (li = SG_Rune()->first_link[p]; li >= 0; li = SG_Rune()->next_link[li])
 		{
+			if (!Fields_ActionAdmitted(SG_Rune()->links[li].action))
+				continue;
 			int c = SG_Rune()->links[li].to;
 			vec3_t off;
 			float lat, dz, score;
@@ -94,6 +105,8 @@ static int Intercept_HoldSeed(int team, int fallback)
 	}
 	return (best >= 0) ? best : fallback;
 }
+
+#undef SG_GOAL_PRIVATE
 
 /* ----------------------------------------------------------------- the mega
  *
@@ -170,29 +183,29 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	qboolean hold = false;
 
 	/*
-	 * THE RALLY. Wave 61's arrival census: three quarters of all attacks
+	 * THE RALLY. Arrival measurements show three quarters of all attacks
 	 * reach the enemy base ALONE -- one body against three or more armed
 	 * defenders at the stand, dead every time, which is why floors sit
-	 * under 300 while steals stay near one a wave. An attacker in the
+	 * under 300 while steals remain rare. An attacker in the
 	 * approach band (2-5s of field) with no partner inside 6s and at
 	 * least two enemies believed alive holds its ground -- twelve
 	 * seconds at most, gone the moment a mate closes or the wait times
 	 * out. Solo pushes still happen; they just stop being the ONLY kind.
 	 */
 	/*
-	 * THE CONDUCTOR (sg_wavepush, A/B wave 198+). The rally waits for
+	 * THE CONDUCTOR (sg_wavepush). The rally waits for
 	 * partners; the conductor makes partners exist. Once every 40
 	 * seconds, when three or more attackers are alive and the nearest
 	 * is within striking range, the team calls a downbeat: a 12-second
 	 * window in which every rally releases at once and item detours
-	 * stop pulling attackers sideways. Arrivals stack into a wave --
+	 * stop pulling attackers sideways. Arrivals stack into a coordinated push --
 	 * the census's 75-percent-alone number is the target -- and the
 	 * respawn-surge rule still cancels every wait it ever cancelled.
 	 */
 	/*
-	 * v2, THE BROADCAST SURGE. v1's metronome read negative (steals
-	 * 1.3 vs 2.2 pooled 198-200): a downbeat on a clock suppresses the
-	 * organic rally pairing and marches under-armed waves into rooms
+	 * THE BROADCAST SURGE. A clock-driven metronome reduced steals from
+	 * 2.2 to 1.3 in pooled measurements: a downbeat on a clock suppresses the
+	 * organic rally pairing and marches under-armed groups into rooms
 	 * that were never thin. The surge rule was always the true clock --
 	 * a defender dead near their own stand IS the window -- but it
 	 * released only the one attacker who happened to be in the band.
@@ -241,7 +254,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		 * First cut waited only when two enemies were freshly SEEN and
 		 * gave up after 12s -- but an attacker sneaking in alone has
 		 * usually seen nobody, and a trailing mate 8-12s of field back
-		 * cannot close inside the cap: wave 63 paired almost nothing.
+		 * cannot close inside the cap; the long cap paired almost nothing.
 		 * The census already proved solo arrival means death against
 		 * ANY defense, so the belief gate is gone. Wait exactly when a
 		 * partner is genuinely en route (inside 14s of field), as long
@@ -262,9 +275,9 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			if (mb->last_goalcost < 6000)
 				mates_near++;
 			else if (mb->last_goalcost < 20000)
-				/* THE APPEAL. The 20s horizon was convicted (1.6 -> 1.0
-				 * steals/wave, waves 63-67) and shrunk to a 6s sync --
-				 * but that trial ran in the corpse-wait era, when a
+				/* THE APPEAL. The 20s horizon reduced steals from 1.6 to 1.0
+				 * per measurement interval and was shrunk to a 6s sync --
+				 * but that comparison ran in the corpse-wait era, when a
 				 * 'partner en route' was usually a body that would never
 				 * stand up. Bots respawn now; partners genuinely arrive.
 				 * Retried at the full horizon on fresh evidence. */
@@ -273,7 +286,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		{
 			/*
 			 * THE SURGE: a defender dead near their own stand opens a
-			 * respawn-wide window, and waves 84-85 show the thief dying
+			 * respawn-wide window, and traces show the thief dying
 			 * 3-5 seconds after the grab to the respawn stream -- the
 			 * window is the only time the room is thin. A fresh enemy
 			 * death (< 6s) within 1200 of the enemy flag cancels the
@@ -303,7 +316,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 
 				SG_Mark(&bot->rally_since);
 				/*
-				 * Wave 65 paired seven pushes on lmctf09 and stole
+				 * Seven paired pushes on lmctf09 stole
 				 * nothing: the waiter froze wherever the band caught it,
 				 * mid-corridor, lit, and the pairing died before it
 				 * formed. The rune has measured exposure since the
@@ -348,13 +361,13 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 rally_done:;
 
 		/*
-		 * THE FLYING COOK, truly at the band this time (the wave-230
-		 * relocation never landed -- its edit died in a chain that
+		 * THE FLYING COOK, truly at the band this time (an earlier
+		 * relocation never landed because its edit died in a chain that
 		 * kept going; the ledger is corrected). Every attacker in
-		 * the approach band cooks on the run at full volume: the
-		 * silent cook keeps the eyes on the route, the stand takes
-		 * the throw, failure costs nothing, and the successes
-		 * accrue -- sixty-five to five.
+		 * the approach band cooks on the run, but only for a currently
+		 * visible, living enemy body.  A danger seed or a remembered stand
+		 * never owns a grenade transaction; an immediately touchable flag
+		 * owns the body instead.
 		 */
 		if (sg_cv.flycook->value &&
 		    !bot->jump_started && !bot->drop_started &&
@@ -364,53 +377,14 @@ rally_done:;
 		      bot->commit_link < SG_Rune()->hdr.num_links &&
 		      SG_ActionOwnsControl(
 		          SG_Rune()->links[bot->commit_link].action)) &&
-		    SG_TimerReady(bot->nade_next))
+		    SG_TimerReady(bot->nade_next) &&
+		    !SG_AttackFlagDirectTouchAuthority(e, team, NULL))
 		{
-			static gitem_t *nades9;
-			edict_t *nf9;
-
-			if (!nades9)
-				nades9 = FindItem("Grenades");
-			nf9 = SG_FlagStand(team, false);
-			if (nades9 && nf9 &&
-			    e->client->pers.inventory[ITEM_INDEX(nades9)] > 0)
-			{
-				/* wave 238: the target book. Clean arcs delivered
-				 * bombs to an empty pedestal (237: median pop 588
-				 * with clear flights) -- defenders POST 400-600 off
-				 * the stand. The danger field already knows where
-				 * the deaths happen: aim at the hottest seed within
-				 * 600 of their stand, the sentry's actual post. */
-				int ns13 = Rune_NearestSeed(SG_Rune(), nf9->s.origin);
-				int s13, best13 = -1, bv13 = 0;
-
-				VectorCopy(nf9->s.origin, bot->nade_at);
-				if (ns13 >= 0)
-				{
-					for (s13 = 0; s13 < SG_Rune()->hdr.num_seeds &&
-					     s13 < SG_MAX_SEEDS; s13++)
-					{
-						vec3_t dd13;
-
-						VectorSubtract(SG_Rune()->seeds[s13].origin,
-						               nf9->s.origin, dd13);
-						if (VectorLength(dd13) > 600.0f)
-							continue;
-						if (Danger_Field(team)[s13] > bv13)
-						{
-							bv13 = Danger_Field(team)[s13];
-							best13 = s13;
-						}
-					}
-					if (best13 >= 0)
-						VectorCopy(SG_Rune()->seeds[best13].origin,
-						           bot->nade_at);
-				}
-				bot->nade_at[2] += 56.0f;
-				nades9->use(e, nades9);
-				bot->nade_phase = 1;
-				SG_TimerArm(&bot->nade_until, 0.5f);
-			}
+			/* This is the same bound arm used by the clean-grab threshold.
+			 * Open distance bounds preserve the approach band's ordinary
+			 * timing while the shared transaction supplies live identity,
+			 * current visibility, weapon switch and target-body aim. */
+			(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f);
 		}
 	}
 	else
@@ -457,7 +431,7 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 {
 	/* carry bookends: the STATE here is game logic, not telemetry -- the
 	 * breakout gauge and the progress guard read it whether or not anyone
-	 * is watching (it lived inside the debug gate until wave 141, which
+	 * is watching (it once lived inside the debug gate, which
 	 * would have blinded both on any quiet server) */
 	if (carrying && !bot->was_carrying)
 	{
@@ -587,6 +561,399 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 	bot->was_carrying = carrying;
 }
 
+/* ---------------------------------------------------------------- supply */
+
+void SG_DefenseSupplyReset(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->def_supply_armed = false;
+	bot->def_supply_phase = SG_DEF_SUPPLY_NONE;
+	bot->def_supply_instance = 0ULL;
+	bot->def_supply_ent = -1;
+	bot->def_supply_target_seed = -1;
+	bot->def_supply_route_ms = 0;
+	VectorClear(bot->def_supply_target_org);
+	bot->def_supply_until = 0.0f;
+	bot->def_supply_next = 0.0f;
+}
+
+/* A phase edge may be observed after the outbound field has already selected
+ * an ordinary RUN. Retire that exact RUN so the next frame can descend the
+ * home field; never tear down a hook, door, jump, or other command owner here.
+ */
+static void DefenseSupplyRetireRun(sg_bot_t *bot)
+{
+	int link_index;
+
+	if (!bot || bot->commit_link < 0 || !SG_Rune() ||
+	    bot->commit_link >= SG_Rune()->hdr.num_links)
+		return;
+	link_index = bot->commit_link;
+	if (SG_Rune()->links[link_index].action != RL_RUN)
+		return;
+	bot->commit_link = -1;
+	bot->commit_until = 0.0f;
+	if (bot->ribbon_link == link_index)
+		bot->ribbon_link = -1;
+	if (bot->sticky_link == link_index)
+		bot->sticky_link = -1;
+}
+
+/* RETURN owns the home route.  A generic rail retry armed before that phase
+ * edge cannot survive and overwrite the already-validated route later in
+ * Think_CommitLink. */
+static void DefenseSupplyRetireRailRetry(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->rail_link = -1;
+	bot->rail_stage = 0;
+	bot->rail_until = 0.0f;
+}
+
+void SG_DefenseSupplyCancel(sg_bot_t *bot, qboolean backoff)
+{
+	if (!bot)
+		return;
+	DefenseSupplyRetireRun(bot);
+	bot->def_supply_armed = false;
+	bot->def_supply_phase = SG_DEF_SUPPLY_NONE;
+	bot->def_supply_instance = 0ULL;
+	bot->def_supply_ent = -1;
+	bot->def_supply_target_seed = -1;
+	bot->def_supply_route_ms = 0;
+	VectorClear(bot->def_supply_target_org);
+	bot->def_supply_until = 0.0f;
+	if (backoff)
+		SG_TimerArm(&bot->def_supply_next, SG_DEF_SUPPLY_BACKOFF);
+}
+
+void SG_DefenseSupplyBeginReturn(sg_bot_t *bot)
+{
+	if (!bot || !bot->def_supply_armed)
+		return;
+	DefenseSupplyRetireRun(bot);
+	DefenseSupplyRetireRailRetry(bot);
+	bot->def_supply_phase = SG_DEF_SUPPLY_RETURN;
+	bot->def_supply_ent = -1;
+	bot->def_supply_target_seed = -1;
+	bot->def_supply_route_ms = 0;
+	VectorClear(bot->def_supply_target_org);
+}
+
+/* A return has reached the real home field.  Keep a short refusal window so
+ * the same watchman cannot arm a second sortie on the first quiet frame after
+ * touching the post.  The deadline itself is never extended here. */
+void SG_DefenseSupplyFinish(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	SG_DefenseSupplyReset(bot);
+	SG_TimerArm(&bot->def_supply_next, SG_DEF_SUPPLY_BACKOFF);
+}
+
+qboolean SG_DefenseSupplyActive(const sg_bot_t *bot)
+{
+	return bot && bot->def_supply_armed;
+}
+
+qboolean SG_DefenseSupplyHome(int team)
+{
+	edict_t *flag;
+
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return false;
+	flag = SG_OwnFlag(team);
+	return flag && flag->inuse && ctf_flagathome(flag);
+}
+
+qboolean SG_DefenseSupplyThreat(int team)
+{
+	const int *post;
+	int ti, index;
+
+	if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) || !SG_Rune())
+		return false;
+	ti = SG_TeamIdx(team);
+	post = sg_fields.to_post[ti];
+	if (!post || !sg_cv.defpost || sg_cv.defpost->value < 3.0f)
+		post = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
+		                              : sg_fields.to_blue_flag;
+	if (!post)
+		return false;
+	for (index = 0; index < SG_MAX_ENEMY_TRACK; index++)
+	{
+		sg_belief_enemy_t *enemy = &sg_caco_enemies[ti][index];
+
+		if (enemy->client < 0 || enemy->seed < 0 ||
+		    enemy->seed >= SG_Rune()->hdr.num_seeds ||
+		    !SG_AgeUnder(enemy->seen_time, 6.0f))
+			continue;
+		if (post[enemy->seed] < 2500)
+			return true;
+	}
+	return false;
+}
+
+static qboolean DefenseSupplyOtherOwner(const sg_bot_t *bot,
+                                        qboolean active)
+{
+	if (!bot)
+		return true;
+	/* These are already-owned missions.  A supply sortie never steals their
+	 * route, and an active sortie is retired if one is acquired later. */
+	if (bot->lead_ent > 0 || bot->patrol_seed >= 0 ||
+	    bot->def_shift_seed >= 0 || bot->tac_seed >= 0 ||
+	    bot->rail_stage > 0 || bot->rj_phase > 0 || bot->nade_phase > 0 ||
+	    bot->hook_phase > 0 || bot->jump_link >= 0 || bot->drop_link >= 0)
+		return true;
+	/* A pre-existing route commitment belongs to another action.  Once the
+	 * sortie is armed, its own commit is allowed to remain live. */
+	return !active && bot->commit_link >= 0;
+}
+
+static qboolean DefenseSupplyWeaponClass(const edict_t *item)
+{
+	if (!item || !item->inuse || !item->classname ||
+	    strncmp(item->classname, "weapon_", 7) != 0)
+		return false;
+	/* The hook and hand-grenade entries are weapon_ classnames too, but neither
+	 * is a usable non-blaster pickup for this errand. */
+	if (strcmp(item->classname, "weapon_grappling_hook") == 0 ||
+	    strcmp(item->classname, "weapon_grenades") == 0 ||
+	    strcmp(item->classname, "weapon_blaster") == 0)
+		return false;
+	return item->solid != SOLID_NOT && Caco_ItemBelievedUp((edict_t *)item);
+}
+
+static qboolean DefenseSupplyTargetValid(const sg_bot_t *bot)
+{
+	edict_t *item;
+	int seed;
+
+	if (!bot || bot->def_supply_ent < 0 ||
+	    bot->def_supply_ent >= globals.num_edicts || !SG_Rune())
+		return false;
+	item = &g_edicts[bot->def_supply_ent];
+	if (!DefenseSupplyWeaponClass(item))
+		return false;
+	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+	if (seed < 0 || seed != bot->def_supply_target_seed)
+		return false;
+	{
+		vec3_t delta;
+
+		VectorSubtract(item->s.origin, bot->def_supply_target_org, delta);
+		return VectorLength(delta) <= 1.0f;
+	}
+}
+
+/* The broad class field is the live arm/reach guard.  The selected edict below
+ * is the immutable target witness for this transaction; another weapon may
+ * make the broad field reflow while the fixed deadline is pending, but that
+ * unrelated class change is deliberately not an ownership signature. */
+static qboolean DefenseSupplyWeaponFieldReachable(const sg_bot_t *bot)
+{
+	const int *field;
+
+	if (!bot || !SG_Rune() || bot->seed < 0 ||
+	    bot->seed >= SG_Rune()->hdr.num_seeds)
+		return false;
+	field = sg_fields.item[SG_FC_WEAPON];
+	return field && field[bot->seed] < SG_FIELD_INF &&
+	       field[bot->seed] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
+}
+
+static int sg_defense_supply_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_defense_supply_target_epoch[SG_MAXBOTS];
+static int sg_defense_supply_target_cached[SG_MAXBOTS];
+static unsigned char sg_defense_supply_target_ready[SG_MAXBOTS];
+
+static int DefenseSupplyBotIndex(const sg_bot_t *bot)
+{
+	ptrdiff_t index;
+
+	if (!bot)
+		return 0;
+	index = bot - sg_bots;
+	if (index < 0 || index >= SG_MAXBOTS)
+		return 0;
+	return (int)index;
+}
+
+static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
+                                        int *out_seed, int *out_route_ms)
+{
+	int i, best_ent = -1, best_seed = -1, best_cost = SG_FIELD_INF;
+	int bi = DefenseSupplyBotIndex(bot);
+
+	if (!bot || !SG_Rune() || bot->seed < 0 ||
+	    bot->seed >= SG_Rune()->hdr.num_seeds)
+		return false;
+	for (i = 0; i < globals.num_edicts; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed, flood_cost = 0, cost;
+
+		if (!DefenseSupplyWeaponClass(item))
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		Field_Flood(SG_Rune(), sg_defense_supply_target_field[bi],
+		            &seed, &flood_cost, 1);
+		cost = sg_defense_supply_target_field[bi][bot->seed];
+		if (cost < best_cost)
+		{
+			best_cost = cost;
+			best_ent = i;
+			best_seed = seed;
+		}
+	}
+	if (best_ent < 0 || best_cost >= SG_FIELD_INF ||
+	    best_cost > SG_DEF_SUPPLY_MAX_ROUTE_MS)
+		return false;
+	if (out_ent)
+		*out_ent = best_ent;
+	if (out_seed)
+		*out_seed = best_seed;
+	if (out_route_ms)
+		*out_route_ms = best_cost;
+	return true;
+}
+
+static qboolean DefenseSupplyCoreEligible(sg_bot_t *bot, sg_think_t *tc,
+                                          qboolean active)
+{
+	if (!bot || !tc || !tc->e || !tc->e->inuse || !tc->e->client ||
+	    tc->e->deadflag == DEAD_DEAD || tc->e->health <= 0 ||
+	    tc->role != SG_ROLE_DEFEND || !bot->def_stand || tc->carrying ||
+	    (!active && !SG_DefenseSupplyHome(tc->team)) ||
+	    (!active && DefenseSupplyOtherOwner(bot, false)))
+		return false;
+	if (!SG_Rune() || bot->seed < 0 ||
+	    bot->seed >= SG_Rune()->hdr.num_seeds)
+		return false;
+	if (active && bot->def_supply_instance != bot->instance_token)
+		return false;
+	/* Threat/engagement cancels OUTBOUND. RETURN remains a route-pure home
+	 * handoff, so it is allowed to finish while combat owns the view. */
+	if (!active || bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND)
+	{
+		if (SG_DefenseSupplyThreat(tc->team) ||
+		    SG_CombatWouldEngage(tc->e) || bot->engaged_last)
+			return false;
+	}
+	return true;
+}
+
+static qboolean DefenseSupplyTargetFieldReachable(const sg_bot_t *bot);
+
+static qboolean DefenseSupplyEligible(sg_bot_t *bot, sg_think_t *tc,
+                                      qboolean active)
+{
+	if (!DefenseSupplyCoreEligible(bot, tc, active))
+		return false;
+	if (!active)
+		return true;
+	if (bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND)
+		return DefenseSupplyTargetFieldReachable(bot) &&
+		       bot->def_supply_route_ms <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
+	return bot->def_supply_phase == SG_DEF_SUPPLY_RETURN;
+}
+
+static qboolean DefenseSupplyReturnAllowed(const sg_bot_t *bot,
+                                           const sg_think_t *tc)
+{
+	return bot && tc && tc->e && tc->e->inuse && tc->e->client &&
+	       tc->e->deadflag != DEAD_DEAD && tc->e->health > 0 &&
+	       tc->role == SG_ROLE_DEFEND && bot->def_stand && !tc->carrying &&
+	       bot->def_supply_instance == bot->instance_token;
+}
+
+static const int *DefenseSupplyTargetField(sg_bot_t *bot)
+{
+	const int *target_field;
+	int bi;
+	int cost = 0;
+	int target_seed;
+
+	if (!bot || !SG_DefenseSupplyActive(bot) ||
+	    bot->def_supply_phase != SG_DEF_SUPPLY_OUTBOUND ||
+	    !DefenseSupplyTargetValid(bot))
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	target_seed = bot->def_supply_target_seed;
+	if (!sg_defense_supply_target_ready[bi] ||
+	    sg_defense_supply_target_cached[bi] != target_seed ||
+	    sg_defense_supply_target_epoch[bi] !=
+	        sg_fields.action_topology_epoch)
+	{
+		Field_Flood(SG_Rune(), sg_defense_supply_target_field[bi],
+		            &target_seed, &cost, 1);
+		sg_defense_supply_target_epoch[bi] =
+		    sg_fields.action_topology_epoch;
+		sg_defense_supply_target_cached[bi] = target_seed;
+		sg_defense_supply_target_ready[bi] = 1;
+	}
+	target_field = sg_defense_supply_target_field[bi];
+	return target_field;
+}
+
+static qboolean DefenseSupplyTargetFieldReachable(const sg_bot_t *bot)
+{
+	const int *field = DefenseSupplyTargetField((sg_bot_t *)bot);
+
+	return field && bot && bot->seed >= 0 &&
+	       field[bot->seed] < SG_FIELD_INF &&
+	       field[bot->seed] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
+}
+
+static const int *DefenseSupplyRouteField(sg_bot_t *bot,
+                                           const int *goal_field,
+                                           qboolean *pure)
+{
+	const int *target_field;
+	const int *route = NULL;
+
+	if (!bot || !goal_field || !pure || !SG_DefenseSupplyActive(bot))
+		return goal_field;
+	target_field = DefenseSupplyTargetField(bot);
+	if (!SG_DefenseSupplyRoute(
+		    (sg_defense_supply_phase_t)bot->def_supply_phase,
+		    NULL, target_field, goal_field,
+		    bot->seed, SG_DEF_SUPPLY_MAX_ROUTE_MS,
+		    &route))
+		return goal_field;
+	/* Route authority is a fresh flood from the selected valid pad.  The broad
+	 * live class field remains the arm/reach gate, while this exact field avoids
+	 * routing to an excluded blaster, hook, or hand-grenade source.  Topology
+	 * refreshes reflood the same target; an unrelated class change never
+	 * cancels this transaction. */
+	*pure = true;
+	return route;
+}
+
+static const int *DefenseSupplyHomeField(int team)
+{
+	int ti;
+
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return NULL;
+	ti = SG_TeamIdx(team);
+	/* Match the live defender post policy when it is configured.  The flag
+	 * field is the safe fallback for maps/cvars without a distinct post. */
+	if (sg_fields.to_post[ti] && sg_cv.defpost &&
+	    sg_cv.defpost->value >= 3.0f)
+		return sg_fields.to_post[ti];
+	if (team == CTF_TEAM_RED)
+		return sg_fields.to_red_flag;
+	if (team == CTF_TEAM_BLUE)
+		return sg_fields.to_blue_flag;
+	return NULL;
+}
+
 /*
  * THE LIVE ROW (split from SG_BotThink, 2026-08-11 standards pass; body
  * verbatim): the fitted role row modulated by this bot's state -- combat
@@ -600,6 +967,8 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 	sg_role_t role = tc->role;
 	int team = tc->team;
 	sg_weights_t *live = &tc->live;
+	sg_combat_weapon_state_t weapon_state;
+	qboolean supply_active;
 
 	/*
 	 * The role row is a BIAS, not an absolute. What an item is actually worth
@@ -613,6 +982,110 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 	 * 1500 ms scale (Detour_Value, above) makes meaningful.
 	 */
 	SG_CombatWeights(e, Weights_Row(role), live);
+
+	/* A rank-zero watchman gets one bounded, weapon-only supply sortie.  The
+	 * state read is the live inventory predicate from sg_combat, while the
+	 * route and deadline are explicit here so a generic item-weight threshold
+	 * cannot turn the post into an unbounded shopping walk. */
+	supply_active = SG_DefenseSupplyActive(bot);
+	if (!SG_CombatWeaponState(e, &weapon_state))
+	{
+		if (supply_active)
+			SG_DefenseSupplyCancel(bot, true);
+		supply_active = false;
+	}
+	else if (supply_active)
+	{
+		qboolean return_ok = DefenseSupplyReturnAllowed(bot, tc);
+
+		if (bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND)
+		{
+			sg_defense_supply_step_t step;
+			sg_defense_supply_phase_t next_phase;
+
+			/* Acquisition is a phase edge, not a cancellation.  The target
+			 * witness is cleared by BeginReturn and the fixed deadline remains
+			 * unchanged for diagnostics and the home handoff. */
+			memset(&step, 0, sizeof(step));
+			step.identity_valid =
+			    bot->def_supply_instance == bot->instance_token;
+			step.owner_valid = return_ok;
+			step.own_flag_home = SG_DefenseSupplyHome(team);
+			step.threat = SG_DefenseSupplyThreat(team) ||
+			              SG_CombatWouldEngage(e);
+			step.engaged = bot->engaged_last;
+			step.other_owner = DefenseSupplyOtherOwner(bot, true);
+			step.target_valid = DefenseSupplyTargetValid(bot);
+			step.weapon_field_valid = DefenseSupplyTargetFieldReachable(bot);
+			step.deadline_pending = SG_TimerPending(bot->def_supply_until);
+			step.weapon_available = weapon_state.nonblaster_available;
+			next_phase = SG_DefenseSupplyPhaseStep(
+			    SG_DEFENSE_SUPPLY_PHASE_OUTBOUND, &step);
+			if (next_phase == SG_DEFENSE_SUPPLY_PHASE_RETURN)
+			{
+				SG_DefenseSupplyBeginReturn(bot);
+			}
+			else if (next_phase != SG_DEFENSE_SUPPLY_PHASE_OUTBOUND)
+				SG_DefenseSupplyCancel(bot, true);
+		}
+		else if (bot->def_supply_phase == SG_DEF_SUPPLY_RETURN)
+		{
+			sg_defense_supply_step_t step;
+			sg_defense_supply_phase_t next_phase;
+
+			memset(&step, 0, sizeof(step));
+			step.identity_valid =
+			    bot->def_supply_instance == bot->instance_token;
+			step.owner_valid = return_ok;
+			next_phase = SG_DefenseSupplyPhaseStep(
+			    SG_DEFENSE_SUPPLY_PHASE_RETURN, &step);
+			if (next_phase != SG_DEFENSE_SUPPLY_PHASE_RETURN)
+				SG_DefenseSupplyCancel(bot, true);
+		}
+		else
+			SG_DefenseSupplyCancel(bot, true);
+		supply_active = SG_DefenseSupplyActive(bot);
+	}
+	else if (!weapon_state.nonblaster_available &&
+	         SG_TimerReady(bot->def_supply_next) &&
+	         DefenseSupplyEligible(bot, tc, false) &&
+	         DefenseSupplyWeaponFieldReachable(bot))
+	{
+		int target_ent = -1, target_seed = -1, route_ms = SG_FIELD_INF;
+
+		/* The exact live pad is selected once at arm time.  Its per-bot flood
+		 * owns the route; the broad class field was only the bounded arm/reach
+		 * gate.  This identity witness tells us whether acquisition happened or
+		 * the selected pad disappeared. */
+		if (DefenseSupplyFindTarget(bot, &target_ent, &target_seed, &route_ms))
+		{
+			int bi = DefenseSupplyBotIndex(bot);
+
+			bot->def_supply_armed = true;
+			bot->def_supply_phase = SG_DEF_SUPPLY_OUTBOUND;
+			bot->def_supply_instance = bot->instance_token;
+			bot->def_supply_ent = target_ent;
+			bot->def_supply_target_seed = target_seed;
+			bot->def_supply_route_ms = route_ms;
+			sg_defense_supply_target_cached[bi] = -1;
+			sg_defense_supply_target_epoch[bi] = 0;
+			sg_defense_supply_target_ready[bi] = 0;
+			if (target_ent >= 0 && target_ent < globals.num_edicts)
+				VectorCopy(g_edicts[target_ent].s.origin,
+				           bot->def_supply_target_org);
+			SG_TimerArm(&bot->def_supply_until, SG_DEF_SUPPLY_DEADLINE);
+			supply_active = true;
+		}
+	}
+	if (supply_active && bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND)
+	{
+		/* Only the two weapon-related terms are allowed to bias this phase;
+		 * route authority below is pure and does the actual leaving. */
+		if (live->item[SG_FC_WEAPON] < 1.25f)
+			live->item[SG_FC_WEAPON] = 1.25f;
+		if (live->item[SG_FC_AMMO] < 0.90f)
+			live->item[SG_FC_AMMO] = 0.90f;
+	}
 	/*
 	 * Rune threat (WEAPONS.md 2.4-D4, the honest half): a sighted enemy
 	 * glowing with RF_GLOW (p_view.c:792-794) holds SOME rune -- the glow
@@ -701,7 +1174,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		                                    : sg_fields.to_blue_flag;
 
 		/*
-		 * FIELD-MODE DEFENSE (dose 3+, wave 307). The pricing bias (doses
+		 * FIELD-MODE DEFENSE (dose 3+). The pricing bias (doses
 		 * 1-2) read null, as the extraction predicted: it bends wandering
 		 * instead of choosing a post. Field mode CHOOSES: the defender's
 		 * whole goal becomes the corpus's top post seed (the existing
@@ -716,7 +1189,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			         [SG_TeamIdx(team)].state == SG_FLAG_ASTRAY);
 
 			if (!astray && sg_fields.to_post[SG_TeamIdx(team)] &&
-			    sg_cv.defpost->value >= 3)
+			    sg_cv.defpost->value >= 3 &&
+			    !(bot->def_stand && SG_DefenseSupplyActive(bot)))
 				goal_field = sg_fields.to_post[SG_TeamIdx(team)];
 			else if (!astray && !bot->def_stand &&
 			         sg_fields.to_lane[SG_TeamIdx(team)] &&
@@ -746,7 +1220,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		    : sg_fields.our_carrier[SG_TeamIdx(team)];
 
 		/*
-		 * THE SCOOP (sg_scoop, A/B wave 183+). Sixty-two parity drops:
+		 * THE SCOOP (sg_scoop). Across sixty-two parity drops,
 		 * defense returned thirty-four, we re-scooped three. The
 		 * dropped flag is a live steal lying on the ground for up to
 		 * thirty seconds, the escort is standing beside the corpse --
@@ -771,7 +1245,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * THE INTERPOSITION (sg_interpose, A/B wave 180+). The killer
+		 * THE INTERPOSITION (sg_interpose). The killer
 		 * census's standing fact: carriers die to live defenders with
 		 * escorts RIGHT THERE -- near the carrier, which is where the
 		 * support field sends them, and nowhere in particular relative
@@ -818,8 +1292,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					int ms = -1, mc = 0;
 
 					/*
-					 * EXIT ESCORT (sg_interpose dose 2, wave 319). The
-					 * forensics killed the midpoint: 6.8 INTERPOSE calls per
+					 * EXIT ESCORT (sg_interpose dose 2). The
+					 * measurements rejected the midpoint: 6.8 INTERPOSE calls per
 					 * carry-second, 2% of kills with a teammate on the kill
 					 * line -- the midpoint of a carrier and a 269u threat is
 					 * INSIDE the duel, unreachable from the escort's median
@@ -828,8 +1302,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					 * field -- the door the carrier runs through next.
 					 */
 					/*
-					 * THE FORMATION (sg_interpose dose 3, wave 326 -- the
-					 * owner's design). Lead and trail are STATIONS on the
+					 * THE FORMATION (sg_interpose dose 3). Lead and trail are
+					 * STATIONS on the
 					 * carrier's own route, at fixed cost-offsets that move
 					 * with it: the leader sweeps the parked defenders ahead
 					 * (90% of carrier kills), the trailer bodies the chasers,
@@ -944,7 +1418,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		    [SG_TeamIdx(SG_EnemyTeam(team))];
 
 	/*
-	 * THE RUNE COURIER (wave 243). Candidacy is a lottery -- 107
+	 * THE RUNE COURIER. Candidacy is a lottery -- 107
 	 * near-misses one rotation, zero the next -- because holders guard
 	 * while carriers sprint. So candidacy itself becomes the errand: a
 	 * non-carrier holding RESIST or REGEN while a live carrier runs
@@ -991,7 +1465,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/*
-	 * THE EARLY RETURN (sg_itemlead, owner's ruling 2026-08-05). Last of the
+	 * THE EARLY RETURN (sg_itemlead). Last of the
 	 * goal overrides on purpose: the errand is a thing a bot does when nothing
 	 * else is happening, and every branch above -- the carrier's stand, the
 	 * recovery, the scoop, the interposition, the courier -- is something
@@ -1086,7 +1560,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	                     ? goal_field[bot->seed] : -1;
 
 	/*
-	 * STRATEGY AND TACTICS (sg_tactics, A/B wave 177+). The owner's
+	 * STRATEGY AND TACTICS (sg_tactics). The
 	 * architecture: strategy is long-term and hard to change -- the role
 	 * and its destination field, already sticky at 0.3 changes a minute.
 	 * Tactics are room-scale goals that SERVE it: a committed waypoint
@@ -1104,7 +1578,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	route_pure = false;
 	if (sg_cv.tactics->value &&
 	    role != SG_ROLE_ESCORT &&
-	    /* CARRY excluded (trial-prep audit): route_pure suppresses the
+	    /* CARRY excluded: route_pure suppresses the
 	     * danger and detour terms for 10s a commit -- the exact corridors
 	     * cover/carrypress/legcarrier exist to keep carriers off */
 	    role != SG_ROLE_CARRY && bot->seed >= 0 &&
@@ -1112,6 +1586,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	    goal_field[bot->seed] >= 400)
 	{
 		static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
+		static unsigned tac_field_epoch[SG_MAXBOTS];
 		int bi = (int)(bot - sg_bots);
 		qboolean need;
 
@@ -1120,7 +1595,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		 * whatever the prior bot in the serial frame left behind,
 		 * making waypoint quality depend on iteration order */
 		sg_route_pure_now = false;
-		need = (bot->tac_seed < 0 ||
+		need = (!Fields_ActionTopologyCurrent(tac_field_epoch[bi]) ||
+		                 bot->tac_seed < 0 ||
 		                 bot->tac_role != (int)role ||
 		                 /* a tac_time AHEAD of the level clock is a
 		                  * previous map's timestamp (level.time resets
@@ -1201,6 +1677,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				bot->tac_role = (int)role;
 				Field_Flood(SG_Rune(), tac_fields[bi],
 				            &bot->tac_seed, &cost10, 1);
+				tac_field_epoch[bi] = sg_fields.action_topology_epoch;
 				if (sg_cv.debug->value)
 					sg_host.dprint("TACTIC %s seed=%d strat=%d\n",
 					           e->client->pers.netname,
@@ -1210,6 +1687,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				bot->tac_seed = -1;     /* no room ahead: strategy raw */
 		}
 		if (bot->tac_seed >= 0 &&
+		    Fields_ActionTopologyCurrent(tac_field_epoch[bi]) &&
 		    tac_fields[bi][bot->seed] < SG_FIELD_INF)
 		{
 			route_field = tac_fields[bi];
@@ -1217,6 +1695,51 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			                         * the walk itself stays pure */
 		}
 	}
+
+	/* The sortie is the one explicit route owner that may override tactics.
+	 * OUTBOUND follows the current live weapon field with no detour arithmetic;
+	 * RETURN follows the fixed own-flag/post field until the post-band finish
+	 * fence in sg_descend.  A missing pad or field is a phase edge to RETURN,
+	 * never permission to choose another item. */
+	if (SG_DefenseSupplyActive(bot))
+	{
+		const int *home_field = DefenseSupplyHomeField(team);
+
+		if (bot->def_supply_phase == SG_DEF_SUPPLY_RETURN)
+		{
+			if (home_field)
+				goal_field = home_field;
+			route_field = goal_field;
+			route_pure = true;
+		}
+		else if (bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND)
+		{
+			const int *weapon_field = DefenseSupplyRouteField(bot,
+			                                                  goal_field,
+			                                                  &route_pure);
+
+			if (weapon_field == goal_field)
+			{
+				SG_DefenseSupplyBeginReturn(bot);
+				if (home_field)
+					goal_field = home_field;
+				route_field = goal_field;
+				route_pure = true;
+			}
+			else
+			{
+				/* Both halves of the descent contract must name the exact
+				 * selected pad.  Leaving goal_field on the post would let
+				 * late generic filters price/hold against the wrong objective
+				 * even though route_field had already been replaced. */
+				goal_field = weapon_field;
+				route_field = weapon_field;
+			}
+		}
+	}
+	bot->last_goalcost = (bot->seed >= 0 &&
+	                      goal_field[bot->seed] < SG_FIELD_INF)
+	                     ? goal_field[bot->seed] : -1;
 
 	tc->goal_field = goal_field;
 	tc->route_field = route_field;

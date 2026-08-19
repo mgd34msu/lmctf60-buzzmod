@@ -1,0 +1,54 @@
+/*
+ * sg_hook_discipline.h -- pure, live-controller rope admission laws.
+ *
+ * Keep this header host-free: the controller can use the policy without
+ * changing RUNE topology or adding a production object dependency.
+ */
+#ifndef SG_HOOK_DISCIPLINE_H
+#define SG_HOOK_DISCIPLINE_H
+
+#define SG_HOOK_DISCIPLINE_SERVED_FIELD_MS 300
+#define SG_HOOK_DISCIPLINE_FIELD_INF 0x3fffffff
+#define SG_HOOK_DISCIPLINE_FAILURE_LIMIT 2
+#define SG_HOOK_DISCIPLINE_BAN_SECONDS 20
+
+typedef enum sg_hook_ride_worth_s
+{
+	/* A missing field is not authority to suppress a proved RUNE edge. */
+	SG_HOOK_RIDE_UNASSESSED = 0,
+	SG_HOOK_RIDE_REJECT,
+	SG_HOOK_RIDE_ALLOW
+} sg_hook_ride_worth_t;
+
+/* The landing controller already names more than 300 field-ms as a served
+ * ride.  Use the same strict boundary before firing; the static ropecost is
+ * already represented in the fields and must not be charged again here. */
+static inline sg_hook_ride_worth_t SG_HookExpectedRideWorth(int from_goal,
+	int to_goal)
+{
+	if (from_goal >= SG_HOOK_DISCIPLINE_FIELD_INF ||
+	    to_goal >= SG_HOOK_DISCIPLINE_FIELD_INF)
+		return SG_HOOK_RIDE_UNASSESSED;
+	return from_goal > to_goal + SG_HOOK_DISCIPLINE_SERVED_FIELD_MS
+	    ? SG_HOOK_RIDE_ALLOW : SG_HOOK_RIDE_REJECT;
+}
+
+/* Return the stored streak after one graph-only failure.  A ban reports its
+ * existing duration through ban_seconds and resets the streak exactly as the
+ * legacy landing path did. */
+static inline int SG_HookFailureStreakAdvance(int streak, int *ban_seconds)
+{
+	if (ban_seconds)
+		*ban_seconds = 0;
+	if (streak < 0)
+		streak = 0;
+	if (streak >= SG_HOOK_DISCIPLINE_FAILURE_LIMIT - 1)
+	{
+		if (ban_seconds)
+			*ban_seconds = SG_HOOK_DISCIPLINE_BAN_SECONDS;
+		return 0;
+	}
+	return streak + 1;
+}
+
+#endif /* SG_HOOK_DISCIPLINE_H */

@@ -245,7 +245,7 @@ int ui_layout_compile (const ui_screen_t *screen, ui_buf_t *out)
 //
 // See ui_layout.h for the contract. out is re-bound to its own
 // storage/size before every attempt (ui_buf_init), so a rejected
-// attempt's partial bytes never leak into the next rung's compile.
+// attempt's partial bytes never leak into the next layout's compile.
 
 int ui_layout_compile_ladder (void *userdata, ui_board_build_fn build,
 	ui_buf_t *out, ui_board_variant_t *variant_used)

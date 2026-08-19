@@ -320,7 +320,7 @@ static int Store_DefaultRemove(void *context, const char *path,
 	return status;
 }
 
-void SG_SidecarV3DefaultStoreOps(sg_sidecar_store_ops_t *ops_out)
+void SG_SidecarDefaultStoreOps(sg_sidecar_store_ops_t *ops_out)
 {
 	if (!ops_out)
 		return;
@@ -436,9 +436,9 @@ static void Store_Cleanup(sg_sidecar_store_result_t *result,
 	result->cleanup_complete = 1;
 }
 
-sg_sidecar_store_result_t SG_SidecarV3StoreFile(
+sg_sidecar_store_result_t SG_SidecarStoreFile(
 	const char *game_directory, sg_sidecar_kind_t kind,
-	const sg_rune_v3_header_t *rune,
+	const rune_artifact_t *artifact,
 	const uint8_t *live_seed_marks, size_t live_seed_capacity,
 	const unsigned char *encoded, size_t encoded_size,
 	sg_sidecar_store_revalidate_fn revalidate, void *revalidate_context,
@@ -447,7 +447,7 @@ sg_sidecar_store_result_t SG_SidecarV3StoreFile(
 	sg_sidecar_store_result_t result = Store_Result();
 	sg_sidecar_store_ops_t default_ops;
 	const sg_sidecar_store_ops_t *ops = provided_ops;
-	sg_sidecar_v3_header_t inspected;
+	sg_sidecar_header_t inspected;
 	char destination[MAX_OSPATH];
 	char directory[MAX_OSPATH];
 	char temporary[MAX_OSPATH];
@@ -464,29 +464,29 @@ sg_sidecar_store_result_t SG_SidecarV3StoreFile(
 
 	if (!ops)
 	{
-		SG_SidecarV3DefaultStoreOps(&default_ops);
+		SG_SidecarDefaultStoreOps(&default_ops);
 		ops = &default_ops;
 	}
-	if (!game_directory || !rune || !encoded || !revalidate ||
+	if (!game_directory || !artifact || !encoded || !revalidate ||
 	    !Store_OpsValid(ops) ||
-	    SG_SidecarV3FileSize(kind, rune, &result.expected_file_size) !=
+	    SG_SidecarFileSize(kind, artifact, &result.expected_file_size) !=
 	    SCD_OK)
 		return result;
 	if (encoded_size != result.expected_file_size ||
-	    encoded_size < SG_SIDECAR_V3_HEADER_BYTES)
+	    encoded_size < SG_SIDECAR_HEADER_BYTES)
 	{
 		result.diagnostic = SCD_BAD_FILE_SIZE;
 		result.stage = SCS_FILE_SIZE;
 		return result;
 	}
-	result.diagnostic = SG_SidecarV3Inspect(encoded,
-		SG_SIDECAR_V3_HEADER_BYTES, encoded_size, kind, rune, &inspected);
+	result.diagnostic = SG_SidecarInspect(encoded,
+		SG_SIDECAR_HEADER_BYTES, encoded_size, kind, artifact, &inspected);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = Store_InspectStage(result.diagnostic);
 		return result;
 	}
-	if (!SG_CRC32Buffer(encoded + SG_SIDECAR_V3_HEADER_BYTES,
+	if (!SG_CRC32Buffer(encoded + SG_SIDECAR_HEADER_BYTES,
 		inspected.payload_bytes, &payload_crc))
 	{
 		result.diagnostic = SCD_INTERNAL_ERROR;
@@ -499,9 +499,9 @@ sg_sidecar_store_result_t SG_SidecarV3StoreFile(
 		result.stage = SCS_PAYLOAD_CRC;
 		return result;
 	}
-	result.diagnostic = SG_SidecarV3ValidatePayload(kind, rune,
+	result.diagnostic = SG_SidecarValidatePayload(kind, artifact,
 		live_seed_marks, live_seed_capacity,
-		encoded + SG_SIDECAR_V3_HEADER_BYTES, inspected.payload_bytes,
+		encoded + SG_SIDECAR_HEADER_BYTES, inspected.payload_bytes,
 		&result.plane, &result.index);
 	if (result.diagnostic != SCD_OK)
 	{
@@ -509,8 +509,8 @@ sg_sidecar_store_result_t SG_SidecarV3StoreFile(
 			? SCS_PAYLOAD_VALUE : SCS_ARGUMENT;
 		return result;
 	}
-	result.diagnostic = SG_SidecarV3Path(destination, sizeof(destination),
-		game_directory, kind, rune);
+	result.diagnostic = SG_SidecarPath(destination, sizeof(destination),
+		game_directory, kind, artifact);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = SCS_PATH;
@@ -626,7 +626,7 @@ sg_sidecar_store_result_t SG_SidecarV3StoreFile(
 	}
 
 	os_error = 0;
-	authority = revalidate(revalidate_context, rune, &os_error);
+	authority = revalidate(revalidate_context, artifact, &os_error);
 	if (authority != SG_SIDECAR_REVALIDATE_MATCH)
 	{
 		result.stage = SCS_RECHECK;

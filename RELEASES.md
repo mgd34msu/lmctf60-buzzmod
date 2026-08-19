@@ -1,10 +1,14 @@
 # LMCTF BuzzMod — Releases
 
-Releases are numbered and dated. There is no version number tracking upstream; go by the
-release number.
+Buzzmod uses [Semantic Versioning](https://semver.org/) beginning with `v0.5.0`.
+Milestone releases increment the `0.x` series while the remaining SLIPGATE and
+behavioral work is completed. `v1.0.0` is reserved for the fully completed
+project.
 
-Tag a release as `release-1`, `release-2` and so on. Pushing that tag builds all three
-libraries and publishes a release with them attached.
+The source version lives in `BuzzmodVersion.h`. A release tag must be exactly
+`v<version>`; CI rejects a mismatched tag, builds all three libraries, and
+publishes the release with its version, checksums, and runtime assets. The old
+`release-1` through `release-6` tags remain the historical pre-SemVer releases.
 
 ## Release 6 — August 2026
 
@@ -15,7 +19,7 @@ checks the final command immediately before each `ClientThink`; and fails closed
 when the bolt identity, source witness, attachment, liquid state, or command
 differential no longer matches the proved link.
 
-Late physical attachment retains the legacy tolerance without advancing the
+Late physical attachment retains the established tolerance without advancing the
 replay clock: the bot emits four independently checked fixed-view commands and
 acknowledges attachment on the first real attached frame. Lost or replaced
 bolts keep the legacy 15-second shelf priority, while liquid failures retain
@@ -33,14 +37,14 @@ HOOK replay failure.
 This release covers ordinary `RL_HOOK`, not compound `RL_DOOR_HOOK` or the
 other PREOPEN/RIDE compound actions. The focused DROP acceptance harness also
 predates this overlapping HOOK integration and is being recomposed and rerun;
-the full 181-map runtime-v3 acceptance gate remains pending. Those limits are
+the full 181-map runtime acceptance gate remains pending. Those limits are
 recorded explicitly rather than implied complete by this release.
 
 ## Release 5 — August 2026
 
-Release 5 is a visibility-and-compatibility release. For players and admins it
+Release 5 is a visibility-and-contract release. For players and admins it
 adds richer stats reporting and steadier in-game boards. Under the hood it
-replaces the old implicit RUNE assumptions with an explicit fail-closed v3
+replaces implicit RUNE assumptions with an explicit fail-closed
 contract and starts moving live movement execution onto the same deterministic
 replay law used to prove routes offline.
 
@@ -72,21 +76,21 @@ with captures pushed immediately. When a full layout will not fit the wire
 budget, boards now step down cleanly through condensed and minimal variants
 instead of truncating awkwardly.
 
-### RUNE v3 and movement compatibility
+### RUNE and deterministic movement
 
-SLIPGATE's movement graph now has an explicit RUNE v3 contract shared across the
+SLIPGATE's movement graph now has an explicit RUNE contract shared across the
 game code and Python tools: canonical action IDs, generated wire contracts,
 little-endian codecs, authoritative map/entity/physics identity binding,
 transactional writers, strict loaders, and authenticated sidecars.
 
-That contract is intentionally strict. Dense v3 DROP, SWIM, and HOOK links are
+That contract is intentionally strict. Dense DROP, SWIM, and HOOK links are
 accepted only when they carry proved provenance under the exact payload, world
 identity, proof law, and action contract. Mismatched or stale artifacts fail
 closed instead of being silently tolerated.
 
 This release also introduces a deterministic shared replay core for RUNE
 actions. Offline DROP, SWIM, and HOOK proofs now run through that common law,
-live SWIM is routed through it, and live DROP now uses the revision-2 controller
+live SWIM is routed through it, and live DROP now uses the same controller
 on the same shared contract. Rotating topology proofs were hardened too: routes
 around rotating geometry are no longer tied to whatever phase happened to be
 sampled during proof.
@@ -97,10 +101,9 @@ This is not the end of the SLIPGATE movement program yet. Live HOOK has not been
 migrated to the shared replay law, and compound `DOOR_DROP`, `DOOR_SWIM`, and
 `DOOR_HOOK` actions are still future work. The project also keeps an honest
 181-map control corpus with explicit PASS, map failure, timeout, and
-invalid-asset outcomes; it is evidence for the v3 rollout, not a claim that
-every map/action combination is already finished. Old v3 artifacts can also be
-invalidated on purpose when the action contract changes: strict rejection is
-the compatibility policy.
+invalid-asset outcomes; it is evidence for the RUNE rollout, not a claim that
+every map/action combination is already finished. Incompatible artifacts are
+invalidated when the action contract changes; strict rejection is the policy.
 
 ## Release 4 — August 2026
 

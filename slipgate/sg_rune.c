@@ -15,10 +15,6 @@
  * failed), and watch. Arrival within tolerance writes a link with the real
  * elapsed time as its cost and the arrival speed as its exit state. No
  * arrival, no link -- there is no third outcome and no guessing.
- *
- * This first cut proves RL_RUN and RL_JUMP only. Hooks, drops and swims
- * follow once the visual dump has validated the foundation by eye, per the
- * build order in SLIPGATE.md.
  */
 
 #include "g_local.h"
@@ -28,16 +24,24 @@
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_replay.h"
 #include "slipgate/sg_rune_install.h"
+#include "slipgate/sg_rune_stream.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_rune_mechanism_plan.h"
 #include "slipgate/sg_rune_proof.h"
+#include "slipgate/sg_rune_door_scope.h"
 #include "slipgate/sg_util.h"
+
+#include <stdio.h>
+#include <stdint.h>
+#include <time.h>
 
 #define SEED_SPACING	64.0f
 #define SEED_MAX		RUNE_MAX_SEEDS
 #define LINK_MAX		RUNE_MAX_LINKS
-_Static_assert(SEED_MAX == SG_RUNE_V3_MAX_SEEDS,
-	"generator/v3 seed capacity drift");
-_Static_assert(LINK_MAX == SG_RUNE_V3_MAX_LINKS,
-	"generator/v3 link capacity drift");
+_Static_assert(SEED_MAX == RUNE_MAX_SEEDS,
+	"generator seed capacity drift");
+_Static_assert(LINK_MAX == RUNE_MAX_LINKS,
+	"generator link capacity drift");
 #define LINK_REACH		192.0f		/* run/jump pairs within this reach */
 #define HOOK_REACH		448.0f		/* hook pairs may span further */
 #define ARRIVE_RADIUS	40.0f
@@ -46,7 +50,7 @@ _Static_assert(LINK_MAX == SG_RUNE_V3_MAX_LINKS,
 #define DROP_HANDOFF_RADIUS    8.0f	/* runtime's lip-to-walkoff handoff */
 
 _Static_assert(STEP_MSEC == SG_RUNE_PROOF_PMOVE_SUBSTEP_MS,
-	"generator/v3 pmove cadence drift");
+	"generator pmove cadence drift");
 
 /* prover autopsy: where drop attempts actually die */
 static int dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact;
@@ -59,12 +63,129 @@ static int			gen_num_links;
 static qboolean		gen_link_overflow;
 static qboolean		gen_water_overflow;
 
+static sg_mech_catalog_view_t gen_mechanism_catalog;
+static sg_mechanism_plan_binding_t *gen_mechanism_bindings;
+static uint32_t gen_num_mechanism_bindings;
+static qboolean gen_mechanism_failed;
+
+/* RUNE generation can be terminated by an external timeout while a prover is
+ * rolling.  Keep a small, saturating progress snapshot and emit it only at
+ * phase boundaries; the phase-start record is intentionally durable evidence
+ * of where a terminated generation was spending its time. */
+typedef struct rune_telemetry_s
+{
+	uint32_t seed_scans;
+	uint32_t water_scans;
+	uint32_t link_scans;
+	uint32_t pair_scans;
+	uint32_t qualified;
+	uint32_t prover_calls;
+	uint32_t prover_steps;
+	uint32_t door_replays;
+} rune_telemetry_t;
+
+typedef struct rune_phase_telemetry_s
+{
+	const char *name;
+	clock_t cpu_start;
+	time_t wall_start;
+	qboolean running;
+} rune_phase_telemetry_t;
+
+static rune_telemetry_t gen_telemetry;
+static rune_phase_telemetry_t gen_phase_telemetry;
+
+static void Rune_TelemetryAdd(uint32_t *value, uint32_t amount)
+{
+	if (!value)
+		return;
+	if (UINT32_MAX - *value < amount)
+		*value = UINT32_MAX;
+	else
+		*value += amount;
+}
+
+static unsigned long Rune_TelemetryCpuMs(clock_t value)
+{
+	if (value <= (clock_t)0 || CLOCKS_PER_SEC <= 0)
+		return 0UL;
+	return (unsigned long)(((uintmax_t)value * 1000U) / CLOCKS_PER_SEC);
+}
+
+static unsigned long Rune_TelemetryWallMs(time_t value)
+{
+	if (value <= (time_t)0)
+		return 0UL;
+	return (unsigned long)((uintmax_t)value * 1000U);
+}
+
+static void Rune_LogFlush(void)
+{
+	/* The RUNE host contract makes a complete diagnostic record visible before
+	 * this returns.  Every phase record calls this after dprint, never per item. */
+	sg_host.flush();
+}
+
+static void Rune_TelemetryLine(const char *event, const char *phase,
+	clock_t cpu_start, time_t wall_start)
+{
+	clock_t cpu_now = clock();
+	time_t wall_now = time(NULL);
+	unsigned long cpu_ms = Rune_TelemetryCpuMs(cpu_now);
+	unsigned long wall_ms = Rune_TelemetryWallMs(wall_now);
+	unsigned long cpu_elapsed = 0UL;
+	unsigned long wall_elapsed = 0UL;
+
+	if (cpu_start > (clock_t)0 && cpu_now >= cpu_start)
+		cpu_elapsed = Rune_TelemetryCpuMs(cpu_now - cpu_start);
+	if (wall_start > (time_t)0 && wall_now >= wall_start)
+		wall_elapsed = Rune_TelemetryWallMs(wall_now - wall_start);
+	sg_host.dprint("rune: telemetry event=%s phase=%s cpu_ms=%lu wall_ms=%lu "
+	               "cpu_elapsed_ms=%lu wall_elapsed_ms=%lu seed_scans=%u "
+	               "water_scans=%u link_scans=%u pair_scans=%u qualified=%u "
+	               "prover_calls=%u prover_steps=%u door_replays=%u "
+	               "catalog_nodes=%u catalog_edges=%u\n",
+	               event, phase, cpu_ms, wall_ms, cpu_elapsed, wall_elapsed,
+	               (unsigned int)gen_telemetry.seed_scans,
+	               (unsigned int)gen_telemetry.water_scans,
+	               (unsigned int)gen_telemetry.link_scans,
+	               (unsigned int)gen_telemetry.pair_scans,
+	               (unsigned int)gen_telemetry.qualified,
+	               (unsigned int)gen_telemetry.prover_calls,
+	               (unsigned int)gen_telemetry.prover_steps,
+	               (unsigned int)gen_telemetry.door_replays,
+	               (unsigned int)gen_mechanism_catalog.num_nodes,
+	               (unsigned int)gen_mechanism_catalog.num_edges);
+	Rune_LogFlush();
+}
+
+static void Rune_TelemetryPhaseStart(const char *phase)
+{
+	gen_phase_telemetry.name = phase;
+	gen_phase_telemetry.cpu_start = clock();
+	gen_phase_telemetry.wall_start = time(NULL);
+	gen_phase_telemetry.running = true;
+	Rune_TelemetryLine("phase-start", phase, (clock_t)0, (time_t)0);
+}
+
+static void Rune_TelemetryPhaseEnd(void)
+{
+	if (!gen_phase_telemetry.running)
+		return;
+	Rune_TelemetryLine("phase-end", gen_phase_telemetry.name,
+	                  gen_phase_telemetry.cpu_start,
+	                  gen_phase_telemetry.wall_start);
+	gen_phase_telemetry.name = NULL;
+	gen_phase_telemetry.running = false;
+}
+
 /* spatial hash so the lattice dedupes at SEED_SPACING */
 #define HASH_SIZE 4096
 static int hash_head[HASH_SIZE];
 static int hash_next[SEED_MAX];
 static byte gen_source_stable[SEED_MAX];
 static byte gen_source_waterlevel[SEED_MAX];
+static byte gen_source_watertype[SEED_MAX];
 
 static qboolean Seed_Representable(const vec3_t origin)
 {
@@ -74,32 +195,38 @@ static qboolean Seed_Representable(const vec3_t origin)
 	       origin[2] >= -4096.0f && origin[2] <= 4095.875f;
 }
 
-typedef enum rune_v3_recheck_failure_e
+static qboolean Seed_OnPmoveGrid(const vec3_t origin)
 {
-	RUNE_V3_RECHECK_NONE = 0,
-	RUNE_V3_RECHECK_IDENTITY,
-	RUNE_V3_RECHECK_PROOF_LAW
-} rune_v3_recheck_failure_t;
+	int axis;
 
-typedef struct rune_v3_recheck_s
+	if (!Seed_Representable(origin))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled = origin[axis] * 8.0f;
+
+		if (scaled != (float)(int)scaled)
+			return false;
+	}
+	return true;
+}
+
+typedef enum rune_recheck_failure_e
+{
+	RUNE_RECHECK_NONE = 0,
+	RUNE_RECHECK_IDENTITY,
+	RUNE_RECHECK_PROOF_LAW
+} rune_recheck_failure_t;
+
+typedef struct rune_recheck_s
 {
 	const char *mapname;
-	const sg_rune_v3_authority_t *captured;
-	rune_v3_recheck_failure_t failure;
+	const sg_rune_authority_t *captured;
+	rune_recheck_failure_t failure;
 	sg_identity_status_t identity_status;
-} rune_v3_recheck_t;
+} rune_recheck_t;
 
-typedef struct rune_v3_stream_s
-{
-	const sg_rune_v3_identity_t *identity;
-	const rune_seed_t *seeds;
-	uint32_t num_seeds;
-	const rune_link_t *links;
-	uint32_t num_links;
-	sg_rune_v3_workspace_t *workspace;
-} rune_v3_stream_t;
-
-static uint32_t Rune_V3FloatBits(float value)
+static uint32_t Rune_FloatBits(float value)
 {
 	uint32_t bits;
 
@@ -107,13 +234,13 @@ static uint32_t Rune_V3FloatBits(float value)
 	return bits;
 }
 
-static qboolean Rune_V3PhysicsCapture(const sg_level_identity_t *level_id,
-	sg_rune_v3_identity_t *wire_id)
+static qboolean Rune_PhysicsCapture(const sg_level_identity_t *level_id,
+	rune_identity_t *identity)
 {
 	cvar_t *airaccelerate;
 	float gravity;
 
-	if (!level_id || !wire_id || !sg_host.cvar)
+	if (!level_id || !identity || !sg_host.cvar)
 		return false;
 	airaccelerate = sg_host.cvar("sv_airaccelerate", "0", 0);
 	gravity = sv_gravity ? sv_gravity->value : 0.0f;
@@ -127,30 +254,28 @@ static qboolean Rune_V3PhysicsCapture(const sg_level_identity_t *level_id,
 	     airaccelerate->value != 0.0f) ||
 	    !sv_maxvelocity || !isfinite(sv_maxvelocity->value) ||
 	    sv_maxvelocity->value < (float)SG_RUNE_PROOF_MAXVELOCITY_MIN ||
-	    !SG_RuneV3FunkyGravityCompatible(want_funky_gravity
-	        ? &want_funky_gravity->value : NULL) ||
+	    (want_funky_gravity && want_funky_gravity->value != 0.0f) ||
 	    FRAMETIME !=
 	        (float)SG_RUNE_PROOF_SERVER_FRAME_MS / 1000.0f ||
 	    level_id->host_physics_id != SG_HOST_PHYSICS_EPOCH)
 		return false;
 
-	memset(wire_id, 0, sizeof(*wire_id));
-	memcpy(wire_id->map_name, level_id->mapname,
-		SG_RUNE_V3_MAP_NAME_BYTES);
-	wire_id->bsp_checksum = level_id->bsp_checksum;
-	wire_id->entity_crc32 = level_id->entity_crc32;
-	wire_id->physics_flags = SG_RUNE_PROOF_PHYSICS_FLAGS_SUPPORTED;
-	wire_id->gravity = gravity;
-	wire_id->airaccelerate = airaccelerate->value;
-	wire_id->maxvelocity = sv_maxvelocity->value;
-	wire_id->pmove_substep_ms = SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
-	wire_id->server_frame_ms = SG_RUNE_PROOF_SERVER_FRAME_MS;
-	wire_id->host_physics_id = level_id->host_physics_id;
+	memset(identity, 0, sizeof(*identity));
+	memcpy(identity->map_name, level_id->mapname, RUNE_MAP_NAME_BYTES);
+	identity->bsp_checksum = level_id->bsp_checksum;
+	identity->entity_crc32 = level_id->entity_crc32;
+	identity->physics_flags = SG_RUNE_PROOF_PHYSICS_FLAGS_SUPPORTED;
+	identity->gravity = gravity;
+	identity->airaccelerate = airaccelerate->value;
+	identity->maxvelocity = sv_maxvelocity->value;
+	identity->pmove_substep_ms = SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
+	identity->server_frame_ms = SG_RUNE_PROOF_SERVER_FRAME_MS;
+	identity->host_physics_id = level_id->host_physics_id;
 	return true;
 }
 
-qboolean SG_RuneV3AuthorityCapture(const char *mapname,
-	sg_rune_v3_authority_t *authority)
+qboolean SG_RuneAuthorityCapture(const char *mapname,
+	sg_rune_authority_t *authority)
 {
 	if (!authority)
 		return false;
@@ -159,29 +284,51 @@ qboolean SG_RuneV3AuthorityCapture(const char *mapname,
 		&authority->level);
 	if (authority->identity_status != SG_IDENTITY_OK)
 		return false;
-	return Rune_V3PhysicsCapture(&authority->level, &authority->wire);
+	return Rune_PhysicsCapture(&authority->level, &authority->identity);
 }
 
-qboolean SG_RuneV3AuthorityMatchesHeader(
-	const sg_rune_v3_authority_t *authority,
-	const sg_rune_v3_header_t *header)
+static qboolean Rune_IdentityEqual(const rune_identity_t *first,
+	const rune_identity_t *second)
+{
+	return first && second &&
+	       first->bsp_checksum == second->bsp_checksum &&
+	       first->entity_crc32 == second->entity_crc32 &&
+	       first->physics_flags == second->physics_flags &&
+	       Rune_FloatBits(first->gravity) == Rune_FloatBits(second->gravity) &&
+	       Rune_FloatBits(first->airaccelerate) ==
+	           Rune_FloatBits(second->airaccelerate) &&
+	       Rune_FloatBits(first->maxvelocity) ==
+	           Rune_FloatBits(second->maxvelocity) &&
+	       first->pmove_substep_ms == second->pmove_substep_ms &&
+	       first->server_frame_ms == second->server_frame_ms &&
+	       first->host_physics_id == second->host_physics_id &&
+	       memcmp(first->map_name, second->map_name,
+	           RUNE_MAP_NAME_BYTES) == 0;
+}
+
+qboolean SG_RuneAuthorityMatchesArtifact(
+	const sg_rune_authority_t *authority, const rune_artifact_t *artifact)
 {
 	return authority && authority->identity_status == SG_IDENTITY_OK &&
-	       header &&
-	       SG_RuneV3MatchIdentity(header, &authority->wire) == RLW_OK;
+	       artifact && artifact->magic == RUNE_ARTIFACT_MAGIC &&
+	       artifact->action_contract_crc32 ==
+	           SG_RUNE_ACTION_CONTRACT_CRC32 &&
+	       artifact->mechanism_contract_crc32 ==
+	           SG_RUNE_MECHANISM_CONTRACT_CRC32 &&
+	       Rune_IdentityEqual(&authority->identity, &artifact->identity);
 }
 
 qboolean SG_RunePhysicsCompatible(const rune_t *rune)
 {
-	sg_rune_v3_authority_t active;
+	sg_rune_authority_t current;
 
-	if (!rune ||
-	    !SG_RuneV3AuthorityCapture(rune->v3_header.map_name, &active))
+	if (!SG_RunePublishedShapeValid(rune) ||
+	    !SG_RuneAuthorityCapture(rune->artifact.identity.map_name, &current))
 		return false;
-	return SG_RuneV3AuthorityMatchesHeader(&active, &rune->v3_header);
+	return SG_RuneAuthorityMatchesArtifact(&current, &rune->artifact);
 }
 
-static qboolean Rune_V3LevelIdentityEqual(const sg_level_identity_t *first,
+static qboolean Rune_LevelIdentityEqual(const sg_level_identity_t *first,
 	const sg_level_identity_t *second)
 {
 	return first && second &&
@@ -192,65 +339,68 @@ static qboolean Rune_V3LevelIdentityEqual(const sg_level_identity_t *first,
 	           SG_LEVEL_IDENTITY_MAPNAME_BYTES) == 0;
 }
 
-static qboolean Rune_V3ProofLawEqual(const sg_rune_v3_identity_t *first,
-	const sg_rune_v3_identity_t *second)
+static qboolean Rune_ProofLawEqual(const rune_identity_t *first,
+	const rune_identity_t *second)
 {
 	return first && second &&
 	       first->physics_flags == second->physics_flags &&
-	       Rune_V3FloatBits(first->gravity) ==
-	           Rune_V3FloatBits(second->gravity) &&
-	       Rune_V3FloatBits(first->airaccelerate) ==
-	           Rune_V3FloatBits(second->airaccelerate) &&
-	       Rune_V3FloatBits(first->maxvelocity) ==
-	           Rune_V3FloatBits(second->maxvelocity) &&
+	       Rune_FloatBits(first->gravity) == Rune_FloatBits(second->gravity) &&
+	       Rune_FloatBits(first->airaccelerate) ==
+	           Rune_FloatBits(second->airaccelerate) &&
+	       Rune_FloatBits(first->maxvelocity) ==
+	           Rune_FloatBits(second->maxvelocity) &&
 	       first->pmove_substep_ms == second->pmove_substep_ms &&
 	       first->server_frame_ms == second->server_frame_ms;
 }
 
-static int Rune_V3Revalidate(void *context)
+static int Rune_Revalidate(void *context)
 {
-	rune_v3_recheck_t *recheck = context;
-	sg_rune_v3_authority_t active;
+	rune_recheck_t *recheck = context;
+	sg_rune_authority_t current;
 
 	if (!recheck || !recheck->captured)
 		return 0;
-	recheck->failure = RUNE_V3_RECHECK_NONE;
+	recheck->failure = RUNE_RECHECK_NONE;
 	if (!SG_RuneProofScopeActive() ||
-	    (float)SG_RuneProofGravity() != recheck->captured->wire.gravity)
+	    (float)SG_RuneProofGravity() != recheck->captured->identity.gravity)
 	{
-		recheck->failure = RUNE_V3_RECHECK_PROOF_LAW;
+		recheck->failure = RUNE_RECHECK_PROOF_LAW;
 		return 0;
 	}
-	if (!SG_RuneV3AuthorityCapture(recheck->mapname, &active))
+	if (!SG_RuneAuthorityCapture(recheck->mapname, &current))
 	{
-		recheck->identity_status = active.identity_status;
-		recheck->failure = active.identity_status == SG_IDENTITY_OK
-			? RUNE_V3_RECHECK_PROOF_LAW : RUNE_V3_RECHECK_IDENTITY;
+		recheck->identity_status = current.identity_status;
+		recheck->failure = current.identity_status == SG_IDENTITY_OK
+			? RUNE_RECHECK_PROOF_LAW : RUNE_RECHECK_IDENTITY;
 		return 0;
 	}
-	if (!Rune_V3LevelIdentityEqual(&recheck->captured->level,
-	    &active.level))
+	if (!Rune_LevelIdentityEqual(&recheck->captured->level,
+	    &current.level))
 	{
-		recheck->failure = RUNE_V3_RECHECK_IDENTITY;
+		recheck->failure = RUNE_RECHECK_IDENTITY;
 		recheck->identity_status = SG_IDENTITY_UNAVAILABLE;
 		return 0;
 	}
-	if (!Rune_V3ProofLawEqual(&recheck->captured->wire, &active.wire))
+	if (!Rune_ProofLawEqual(&recheck->captured->identity, &current.identity))
 	{
-		recheck->failure = RUNE_V3_RECHECK_PROOF_LAW;
+		recheck->failure = RUNE_RECHECK_PROOF_LAW;
 		return 0;
 	}
 	return 1;
 }
 
-static sg_rune_write_result_t Rune_V3Stream(void *context,
-	sg_rune_write_sink_fn sink, void *sink_context)
+static void *Rune_StreamAllocate(void *context, size_t bytes)
 {
-	rune_v3_stream_t *stream = context;
+	(void)context;
+	return bytes != 0U && bytes <= (size_t)INT_MAX
+		? sg_host.game_alloc((int)bytes) : NULL;
+}
 
-	return SG_RuneV3Write(stream->identity, stream->seeds,
-		stream->num_seeds, stream->links, stream->num_links,
-		stream->workspace, sink, sink_context);
+static void Rune_StreamRelease(void *context, void *allocation)
+{
+	(void)context;
+	if (allocation)
+		sg_host.game_free(allocation);
 }
 
 static int Seed_HashKey(vec3_t p)
@@ -345,8 +495,10 @@ static qboolean Seed_Ground(vec3_t candidate, vec3_t out)
 		return false;                       /* no floor within reach */
 	if (tr.plane.normal[2] < 0.7f)
 		return false;                       /* too steep to stand on */
-	VectorCopy(tr.endpos, out);
-	return true;
+	/* CM backs the trace endpoint off by 1/32 unit.  That float can truncate
+	 * onto the floor when converted to pmove's signed-q8 origin.  Admit only
+	 * the exact legal grounded rest selected and stabilized by Pmove itself. */
+	return SG_OracleCanonicalGroundSource(tr.endpos, out);
 }
 
 /* Flags describe executable source semantics, not which seeding pass happened
@@ -426,7 +578,7 @@ static void Seed_Add(vec3_t origin)
 	/* Pmove stores origin as signed eighth units. Reject before hashing or
 	 * SG_OraclePlace casts, so an oversized/malformed map cannot invoke an
 	 * undefined float-to-short conversion and later write a self-rejected rune. */
-	if (!Seed_Representable(origin))
+	if (!Seed_OnPmoveGrid(origin))
 		return;
 	if (gen_num_seeds >= SEED_MAX)
 	{
@@ -452,6 +604,7 @@ static void Seed_Add(vec3_t origin)
 	gen_source_stable[gen_num_seeds] =
 	    Seed_SourceUnstable(origin) ? 0 : 1;
 	gen_source_waterlevel[gen_num_seeds] = (byte)waterlevel;
+	gen_source_watertype[gen_num_seeds] = (byte)watertype;
 
 	key = Seed_HashKey(origin);
 	hash_next[gen_num_seeds] = hash_head[key];
@@ -481,6 +634,8 @@ static void Seed_Flood(void)
 		for (i = 0; i < 8; i++)
 		{
 			vec3_t cand, ground;
+
+			Rune_TelemetryAdd(&gen_telemetry.seed_scans, 1U);
 
 			VectorCopy(gen_seeds[frontier].origin, cand);
 			cand[0] += dirs[i][0] * SEED_SPACING;
@@ -560,6 +715,7 @@ static void Seed_Germinate(void)
 		{
 			vec3_t ground;
 
+			Rune_TelemetryAdd(&gen_telemetry.seed_scans, 1U);
 			VectorCopy(e->s.origin, center);
 			center[2] += 10.0f; /* teleporter_touch's authoritative arrival */
 			if (Seed_Ground(center, ground))
@@ -573,6 +729,7 @@ static void Seed_Germinate(void)
 			{
 				vec3_t candidate, ground;
 
+				Rune_TelemetryAdd(&gen_telemetry.seed_scans, 1U);
 				VectorCopy(center, candidate);
 				/* The pad model is 32 units from centre and the player hull is
 				 * another 16; linkentity's clip fringe makes 48 still overlap.
@@ -612,6 +769,7 @@ static void Seed_Germinate(void)
 					float outside =
 					    ((d < 2) ? halfx : halfy) + 24.0f;
 
+					Rune_TelemetryAdd(&gen_telemetry.seed_scans, 1U);
 					VectorCopy(center, candidate);
 					candidate[0] += dirs[d][0] * outside;
 					candidate[1] += dirs[d][1] * outside;
@@ -641,6 +799,7 @@ static void Seed_Germinate(void)
 		    strncmp(e->classname, "info_position", 13) != 0)
 			continue;
 
+		Rune_TelemetryAdd(&gen_telemetry.seed_scans, 1U);
 		if (Seed_Ground(e->s.origin, ground))
 			Seed_Add(ground);
 	}
@@ -684,7 +843,7 @@ static int gen_waypoint_links;
  * seed 327's pillar was walked around by every proof and ground against by
  * every body (iters 44-50, the lmctf01 valley). A RUN link's anchor field
  * has sat empty since the format was born; the point of maximum deviation
- * from the straight line now goes there whenever the proof deviated more
+ * from the straight line goes there whenever the proof deviated more
  * than 48 units, and the body steers via it. Zero anchor = straight proof.
  */
 static vec3_t gen_prove_wp;
@@ -692,8 +851,8 @@ static qboolean gen_prove_has_wp;
 
 /*
  * Entry speed for the NEXT Prove roll, consumed by Prove at placement. Zero
- * means the from-rest proof every link has had since the first cut. Nonzero
- * is the momentum experiment: a gap too wide for the runway inside one
+ * means a from-rest proof. Nonzero is the momentum experiment: a gap too
+ * wide for the runway inside one
  * proof's approach can still be crossed by a body that ARRIVES at speed --
  * which is the case min_speed on the envelope was designed to record and
  * never had a writer for.
@@ -715,6 +874,7 @@ static qboolean Prove(int from, int to, qboolean jump,
 	vec3_t wp_path[128];
 	int wp_n = 0;
 
+	Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
 	SG_OraclePlace(&ph, gen_seeds[from].origin);
 	/* Seed_Ground established this as a standing source, and the live bot's
 	 * launch gate likewise knows groundentity before command zero. Pmove will
@@ -735,6 +895,8 @@ static qboolean Prove(int from, int to, qboolean jump,
 	for (elapsed = 0; elapsed < TRY_LIMIT_MS; elapsed += STEP_MSEC)
 	{
 		qboolean arrived = false;
+
+		Rune_TelemetryAdd(&gen_telemetry.prover_steps, 1U);
 
 		if (wp_n < 128 && (elapsed / STEP_MSEC) % 2 == 0)
 		{
@@ -1090,6 +1252,8 @@ static qboolean ProveHook(int from, int to, vec3_t control_out,
 	       muzzle, want;
 	sg_hook_proof_t proof;
 	trace_t tr;
+
+	Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
 	int flight_ms, source_step, open_overhead = 0;
 	qboolean source_water = (gen_seeds[from].flags & RSF_WATER) != 0;
 
@@ -1271,9 +1435,11 @@ static qboolean ProveHook(int from, int to, vec3_t control_out,
 		VectorSubtract(gen_seeds[to].origin, gen_seeds[from].origin, d);
 		horiz = sqrtf(d[0] * d[0] + d[1] * d[1]);
 		/* This is a lip-climb fallback, not a second general hook prover.
-		 * Keep it inside one compact lattice neighbourhood and below one
-		 * ordinary player-height rise. */
-		if (horiz > 2.0f * SEED_SPACING || d[2] < 32.0f || d[2] > 96.0f)
+		 * Keep it inside one compact lattice neighbourhood and one vertical
+		 * seed tier.  lmctf54's symmetric flag shelves rise 112--124 units
+		 * from their lower approach samples; the old 96-unit ceiling rejected
+		 * those hookable entrances before the exact traversal could run. */
+		if (!SG_RuneProofHookLateralWindow(horiz, d[2]))
 			return false;
 		base_yaw = atan2f(d[1], d[0]) * 180.0f / (float)M_PI;
 		base_pitch = -atan2f(d[2] + 2.0f, horiz) *
@@ -1288,7 +1454,7 @@ static qboolean ProveHook(int from, int to, vec3_t control_out,
 }
 
 /*
- * ENTRY ENVELOPE HELPERS (additive).
+ * ENTRY ENVELOPE HELPERS.
  *
  * A link's heading field is the compass direction the traversal was entered
  * on, one byte wrapping the circle: 256 steps of 1.40625 degrees. atan2f
@@ -1333,7 +1499,7 @@ typedef struct sg_drop_trial_s
 static qboolean Drop_FindLip(vec3_t src, vec3_t dir, float limit, vec3_t lip)
 {
 	vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
-	vec3_t probe, down, last;
+	vec3_t probe, down, last = { 0.0f, 0.0f, 0.0f };
 	trace_t tr;
 	float walked;
 	qboolean have_last = false;
@@ -1541,6 +1707,8 @@ static qboolean ProveDrop(int from, int to, vec3_t lip_out,
 	short trial_cost = 0;
 	byte trial_exit = 0, trial_heading = 0;
 	qboolean direct;
+
+	Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
 	sg_drop_trial_t trial, last_trial;
 
 	VectorCopy(gen_seeds[from].origin, src);
@@ -1636,18 +1804,280 @@ static qboolean Link_Add(int from, int to, rune_action_t act,
 	l->cost_ms = cost_ms;
 	l->exit_speed = exit_speed;
 	l->heading_slack = 255;     /* run links: any approach heading works */
+	l->mechanism_plan = RUNE_NO_MECHANISM_PLAN;
 	return true;
 }
 
+static const rune_mechanism_node_t *Mechanism_Node(uint32_t key)
+{
+	uint32_t low = 0U;
+	uint32_t high = gen_mechanism_catalog.num_nodes;
+
+	while (low < high)
+	{
+		uint32_t middle = low + (high - low) / 2U;
+		uint32_t candidate = gen_mechanism_catalog.nodes[middle].key;
+
+		if (candidate < key)
+			low = middle + 1U;
+		else
+			high = middle;
+	}
+	return low < gen_mechanism_catalog.num_nodes &&
+	       gen_mechanism_catalog.nodes[low].key == key
+		? &gen_mechanism_catalog.nodes[low] : NULL;
+}
+
+static uint32_t Mechanism_EntityKey(const edict_t *entity)
+{
+	ptrdiff_t key;
+
+	if (!entity || !g_edicts)
+		return SG_MECH_NO_KEY;
+	key = entity - g_edicts;
+	return key > 0 && key < globals.num_edicts &&
+	       Mechanism_Node((uint32_t)key)
+		? (uint32_t)key : SG_MECH_NO_KEY;
+}
+
+static uint32_t Mechanism_OwnedEntry(uint32_t mover_key, uint16_t kind)
+{
+	uint32_t i;
+	uint32_t match = SG_MECH_NO_KEY;
+
+	for (i = 0U; i < gen_mechanism_catalog.num_nodes; i++)
+	{
+		const rune_mechanism_node_t *node =
+			&gen_mechanism_catalog.nodes[i];
+
+		if (node->kind != kind || node->owner_key != mover_key)
+			continue;
+		if (match != SG_MECH_NO_KEY)
+			return SG_MECH_NO_KEY;
+		match = node->key;
+	}
+	return match;
+}
+
+static const rune_mechanism_edge_t *Mechanism_InventoryEdge(uint32_t from_key,
+	uint16_t kind, uint16_t ordinal)
+{
+	uint32_t i;
+
+	for (i = 0U; i < gen_mechanism_catalog.num_edges; i++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&gen_mechanism_catalog.edges[i];
+
+		if (edge->from_key == from_key && edge->kind == kind &&
+		    edge->ordinal == ordinal)
+			return edge;
+	}
+	return NULL;
+}
+
+static uint32_t Mechanism_TriggerCount(void)
+{
+	uint32_t count = 0U;
+	uint32_t i;
+
+	for (i = 0U; i < gen_mechanism_catalog.num_nodes; i++)
+		switch (gen_mechanism_catalog.nodes[i].kind)
+		{
+		case SG_MECH_NODE_TRIGGER:
+		case SG_MECH_NODE_BUTTON:
+		case SG_MECH_NODE_RELAY:
+		case SG_MECH_NODE_AUTO_DOOR_TRIGGER:
+		case SG_MECH_NODE_PLATFORM_TRIGGER:
+		case SG_MECH_NODE_ELEVATOR:
+		case SG_MECH_NODE_PUSH:
+		case SG_MECH_NODE_TELEPORT_TRIGGER:
+		case SG_MECH_NODE_OTHER_TRIGGER:
+			count++;
+			break;
+		default:
+			break;
+		}
+	return count;
+}
+
+static qboolean Mechanism_Bind(rune_link_t *link, uint32_t entry_key,
+	uint32_t mover_key, uint32_t destination_key, uint16_t controller_kind,
+	uint16_t expected_members, uint32_t cooldown_ms)
+{
+	sg_mechanism_plan_binding_t *binding;
+
+	if (!link || !gen_mechanism_bindings ||
+	    gen_num_mechanism_bindings >= (uint32_t)LINK_MAX ||
+	    !Mechanism_Node(entry_key) || !Mechanism_Node(mover_key) ||
+	    (destination_key != SG_MECH_NO_KEY &&
+	     !Mechanism_Node(destination_key)) || expected_members == 0U ||
+	    expected_members > RUNE_MAX_MECHANISM_MEMBERS)
+	{
+		gen_mechanism_failed = true;
+		return false;
+	}
+	binding = &gen_mechanism_bindings[gen_num_mechanism_bindings];
+	memset(binding, 0, sizeof(*binding));
+	binding->entry_key = entry_key;
+	binding->mover_key = mover_key;
+	binding->destination_key = destination_key;
+	binding->controller_kind = controller_kind;
+	binding->expected_members = expected_members;
+	binding->cooldown_ms = cooldown_ms;
+	link->mechanism_plan = gen_num_mechanism_bindings++;
+	return true;
+}
+
+static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform)
+{
+	uint32_t mover_key = Mechanism_EntityKey(platform);
+	uint32_t entry_key = Mechanism_OwnedEntry(mover_key,
+		SG_MECH_NODE_PLATFORM_TRIGGER);
+
+	return mover_key != SG_MECH_NO_KEY && entry_key != SG_MECH_NO_KEY &&
+	       Mechanism_Bind(link, entry_key, mover_key, SG_MECH_NO_KEY,
+		SG_MECHANISM_CONTROLLER_PLATFORM, 1U, 0U);
+}
+
+static qboolean Mechanism_BindTeleport(rune_link_t *link, edict_t *pad,
+	edict_t *destination)
+{
+	uint32_t mover_key = Mechanism_EntityKey(pad);
+	uint32_t destination_key = Mechanism_EntityKey(destination);
+	uint32_t entry_key = Mechanism_OwnedEntry(mover_key,
+		SG_MECH_NODE_TELEPORT_TRIGGER);
+
+	return mover_key != SG_MECH_NO_KEY && entry_key != SG_MECH_NO_KEY &&
+	       destination_key != SG_MECH_NO_KEY &&
+	       Mechanism_Bind(link, entry_key, mover_key, destination_key,
+		SG_MECHANISM_CONTROLLER_TELEPORT, 1U, 0U);
+}
+
+static qboolean Mechanism_BindDoor(rune_link_t *link, edict_t *trigger)
+{
+	edict_t *members[RUNE_MAX_MECHANISM_MEMBERS];
+	uint32_t primary = SG_MECH_NO_KEY;
+	uint32_t entry_key;
+	uint32_t cooldown;
+	uint16_t controller;
+	const rune_mechanism_node_t *entry_node;
+	int count;
+	int i;
+
+	if (!link || !trigger)
+		return false;
+	count = SG_DeclaredDoorMembers(trigger, members,
+		RUNE_MAX_MECHANISM_MEMBERS);
+	entry_key = Mechanism_EntityKey(trigger);
+	if (count <= 0 || entry_key == SG_MECH_NO_KEY)
+		goto fail;
+	entry_node = Mechanism_Node(entry_key);
+	if (!entry_node)
+		goto fail;
+	for (i = 0; i < count; i++)
+	{
+		edict_t *master = members[i]->teammaster
+			? members[i]->teammaster : members[i];
+		uint32_t key = Mechanism_EntityKey(master);
+
+		if (key == SG_MECH_NO_KEY)
+			goto fail;
+		if (primary == SG_MECH_NO_KEY || key < primary)
+			primary = key;
+	}
+	if (entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_DOOR_TRIGGER)
+	{
+		controller = SG_MECHANISM_CONTROLLER_AUTO_DOOR;
+		cooldown = 1000U;
+	}
+	else if (entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI)
+	{
+		int wait_ms = entry_node->wait_ms;
+
+		if (wait_ms <= 0)
+			goto fail;
+		controller = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+		cooldown = wait_ms > RUNE_MAX_COST_MS
+		    ? (uint32_t)RUNE_MAX_COST_MS : (uint32_t)wait_ms;
+	}
+	else
+		goto fail;
+	return Mechanism_Bind(link, entry_key, primary, SG_MECH_NO_KEY,
+		controller, (uint16_t)count, cooldown);
+
+fail:
+	gen_mechanism_failed = true;
+	return false;
+}
+
+static qboolean Mechanism_BindButtonDoor(rune_link_t *link, edict_t *button)
+{
+	const rune_mechanism_node_t *entry;
+	uint32_t entry_key = Mechanism_EntityKey(button);
+	uint32_t mover_key = SG_MECH_NO_KEY;
+	uint32_t team_members = 0U;
+	uint32_t target_count = 0U;
+	uint32_t i;
+
+	if (!link || entry_key == SG_MECH_NO_KEY)
+		goto fail;
+	entry = Mechanism_Node(entry_key);
+	if (!entry || entry->kind != SG_MECH_NODE_BUTTON ||
+	    entry->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    entry->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    entry->wait_ms <= 0)
+		goto fail;
+	/* A mapper commonly gives every brush in a canonical door team the same
+	 * targetname.  Stock G_UseTargets calls the master first, opening the full
+	 * team, then later same-team slave calls are no-ops.  Bind that exact
+	 * ordered one-team fanout rather than narrowing BUTTON_DOOR to an unteamed
+	 * single brush. */
+	for (;; target_count++)
+	{
+		const rune_mechanism_edge_t *target = Mechanism_InventoryEdge(
+			entry_key, SG_MECH_EDGE_TARGET, target_count);
+		const rune_mechanism_node_t *destination;
+
+		if (!target)
+			break;
+		destination = Mechanism_Node(target->to_key);
+		if (!destination)
+			goto fail;
+		if (destination->kind == SG_MECH_NODE_DOOR_MASTER)
+		{
+			if (mover_key != SG_MECH_NO_KEY)
+				goto fail;
+			mover_key = destination->key;
+		}
+		else if (destination->kind != SG_MECH_NODE_DOOR_MEMBER ||
+		         mover_key == SG_MECH_NO_KEY ||
+		         destination->team_master_key != mover_key)
+			goto fail;
+	}
+	if (target_count == 0U || mover_key == SG_MECH_NO_KEY)
+		goto fail;
+	for (i = 0U; i < gen_mechanism_catalog.num_edges; i++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&gen_mechanism_catalog.edges[i];
+
+		if (edge->from_key == mover_key && edge->kind == SG_MECH_EDGE_TEAM)
+			team_members++;
+	}
+	if (team_members + 1U > RUNE_MAX_MECHANISM_MEMBERS)
+		goto fail;
+	return Mechanism_Bind(link, entry_key, mover_key, SG_MECH_NO_KEY,
+		SG_MECHANISM_CONTROLLER_BUTTON_DOOR,
+		(uint16_t)(team_members + 1U), (uint32_t)entry->wait_ms);
+
+fail:
+	gen_mechanism_failed = true;
+	return false;
+}
+
 /* ===================================================================
- * ADDITIVE BLOCK: water volumes, lifts, teleporters.
- *
- * Everything between this banner and the one that closes it is new. It
- * adds functions and reads the state the existing generator built; it
- * changes nothing above. Two call sites are appended elsewhere, each
- * marked with the same banner word: one line in Rune_Generate (the water
- * seeding pass, after Seed_Flood) and three lines at the very end of
- * Prove_All (the three link passes).
+ * DECLARED MECHANISMS: water volumes, lifts, teleporters.
  *
  * Why these three cannot come out of the pair loop above:
  *
@@ -1672,7 +2102,8 @@ static qboolean Link_Add(int from, int to, rune_action_t act,
 
 static int gen_first_water = -1;        /* index of the first water seed, -1 none */
 static int gen_num_water;
-static int gen_lift_links, gen_tele_links, gen_door_links, gen_swim_links;
+static int gen_lift_links, gen_tele_links, gen_door_links;
+static int gen_button_door_links, gen_swim_links;
 static int gen_env_drop, gen_env_hook, gen_declared_links;
 static int gen_lift_down_drop, gen_lift_down_none;
 
@@ -1731,7 +2162,8 @@ static void Link_Declare_Tail(int mark)
 	{
 		if (gen_links[i].action != RL_LIFT &&
 		    gen_links[i].action != RL_TELEPORT &&
-		    gen_links[i].action != RL_DOOR)
+		    gen_links[i].action != RL_DOOR &&
+		    gen_links[i].action != RL_BUTTON_DOOR)
 			continue;               /* a drop proven by the lift pass stays PROVEN */
 		gen_links[i].provenance = RL_DECLARED;
 		gen_links[i].heading_slack = RUNE_DECLARED_CONTROL_MARKER;
@@ -1750,7 +2182,7 @@ static int Seed_AddWater(vec3_t origin)
 		return -1;
 	if (!(gen_seeds[before].flags & RSF_WATER))
 	{
-		int key = Seed_HashKey(origin);
+		int key = Seed_HashKey(gen_seeds[before].origin);
 
 		/* Seed_Add inserts at the head. Roll back the whole append if the
 		 * exact body categorization disagrees with the water-volume proposal. */
@@ -1779,7 +2211,7 @@ static qboolean Seed_WaterFree(vec3_t p)
 	trace_t tr;
 	int contents;
 
-	if (!Seed_Representable(p))
+	if (!Seed_OnPmoveGrid(p))
 		return false;
 	contents = sg_host.pointcontents(p);
 
@@ -1823,6 +2255,8 @@ static int Seed_WaterNeighbours(vec3_t from)
 	for (k = 0; k < 6; k++)
 	{
 		vec3_t cand;
+
+		Rune_TelemetryAdd(&gen_telemetry.water_scans, 1U);
 
 		cand[0] = from[0] + dirs6[k][0] * SG_WATER_SPACING;
 		cand[1] = from[1] + dirs6[k][1] * SG_WATER_SPACING;
@@ -1884,6 +2318,8 @@ static void Seed_Water(void)
 			for (z = 0; z < 3; z++)
 			{
 				vec3_t cand;
+
+				Rune_TelemetryAdd(&gen_telemetry.water_scans, 1U);
 
 				cand[0] = gen_seeds[i].origin[0] + around[k][0] * SG_WATER_SPACING;
 				cand[1] = gen_seeds[i].origin[1] + around[k][1] * SG_WATER_SPACING;
@@ -2010,11 +2446,12 @@ static void Prove_Swim_Pair(int from, int to)
 	 * here; no existing record is ever converted by changing its action byte. */
 	if (have >= 0)
 		return;
+	Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
 	if (ProveSwim(from, to, &cost, &espeed))
 	{
 		if (Link_Add(from, to, RL_SWIM, cost, espeed))
 		{
-			/* Zero is the v2 exact-controller marker in this otherwise unused
+			/* Zero is the exact-controller marker in this otherwise unused
 			 * field. Old RUN/JUMP records relabelled SWIM retain 255 and are
 			 * rejected by both Rune_Load and runelint. */
 			gen_links[gen_num_links - 1].heading_slack = 0;
@@ -2050,6 +2487,7 @@ static void Prove_Swims(void)
 
 			if (i == j)
 				continue;
+			Rune_TelemetryAdd(&gen_telemetry.pair_scans, 1U);
 			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d);
 			if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >
 			        SG_SWIM_REACH * SG_SWIM_REACH)
@@ -2478,8 +2916,13 @@ static void Link_Plats(void)
 		Link_Add(approach, st_top, RL_LIFT, (short)total_cost, 0);
 		if (gen_num_links > before)
 		{
-			VectorCopy(bottom, gen_links[gen_num_links - 1].anchor);
-			gen_lift_links++;
+			rune_link_t *link = &gen_links[gen_num_links - 1];
+
+			VectorCopy(bottom, link->anchor);
+			if (!Mechanism_BindPlatform(link, e))
+				gen_num_links--;
+			else
+				gen_lift_links++;
 		}
 
 		/*
@@ -2622,8 +3065,13 @@ static void Link_Teleporters(void)
 		         (short)(approach_ms + 300), 0);
 		if (gen_num_links > before)
 		{
-			VectorCopy(pad, gen_links[gen_num_links - 1].anchor);
-			gen_tele_links++;
+			rune_link_t *link = &gen_links[gen_num_links - 1];
+
+			VectorCopy(pad, link->anchor);
+			if (!Mechanism_BindTeleport(link, e, dest))
+				gen_num_links--;
+			else
+				gen_tele_links++;
 		}
 	}
 	if (gen_tele_links)
@@ -2709,6 +3157,71 @@ static void DoorPose_Restore(door_pose_t *saved, int count)
 	}
 }
 
+static qboolean Button_Displacement(edict_t *button, vec3_t displacement)
+{
+	const rune_mechanism_node_t *node;
+	sg_mech_button_endpoints_t endpoints;
+	uint32_t key = Mechanism_EntityKey(button);
+	int axis;
+
+	if (displacement)
+		VectorClear(displacement);
+	node = key == SG_MECH_NO_KEY ? NULL : Mechanism_Node(key);
+	if (!button || !displacement || !node ||
+	    !SG_MechCatalogButtonBottomEndpoints(key, node, button, &endpoints))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		int delta = (int)endpoints.end_q8[axis] -
+		    (int)endpoints.start_q8[axis];
+
+		if (delta < INT16_MIN || delta > INT16_MAX)
+			return false;
+		displacement[axis] = (float)delta * 0.125f;
+	}
+	return !VectorCompare(displacement, vec3_origin);
+}
+
+static qboolean Button_TopPoseBegin(edict_t *button, door_pose_t *saved,
+	const vec3_t displacement)
+{
+	const rune_mechanism_node_t *node;
+	sg_mech_button_endpoints_t endpoints;
+	uint32_t key = Mechanism_EntityKey(button);
+	int axis;
+
+	node = key == SG_MECH_NO_KEY ? NULL : Mechanism_Node(key);
+	if (!button || !saved || !displacement || !node ||
+	    VectorCompare((vec_t *)displacement, vec3_origin) ||
+	    !SG_MechCatalogButtonBottomEndpoints(key, node, button, &endpoints))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if ((float)((int)endpoints.end_q8[axis] -
+		        (int)endpoints.start_q8[axis]) * 0.125f != displacement[axis])
+			return false;
+	memset(saved, 0, sizeof(*saved));
+	saved->ent = button;
+	VectorCopy(button->s.origin, saved->origin);
+	VectorCopy(button->s.old_origin, saved->old_origin);
+	VectorCopy(button->s.angles, saved->angles);
+	VectorCopy(button->velocity, saved->velocity);
+	VectorCopy(button->avelocity, saved->avelocity);
+	saved->state = button->moveinfo.state;
+	saved->solid = button->solid;
+	saved->linkcount = button->linkcount;
+	for (axis = 0; axis < 3; axis++)
+	{
+		button->s.origin[axis] = (float)endpoints.end_q8[axis] * 0.125f;
+		button->s.old_origin[axis] = button->s.origin[axis];
+	}
+	VectorClear(button->velocity);
+	VectorClear(button->avelocity);
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->solid = SOLID_BSP;
+	sg_host.linkentity(button);
+	return true;
+}
+
 static int Door_TravelMs(edict_t *trigger)
 {
 	edict_t *doors[16];
@@ -2724,12 +3237,18 @@ static int Door_TravelMs(edict_t *trigger)
 	{
 		edict_t *member = doors[i];
 		int ms;
+		double nominal;
 
 		if (!isfinite(member->moveinfo.distance) ||
 		    !isfinite(member->moveinfo.speed) || member->moveinfo.speed <= 0.0f)
 			return 0;
-		ms = (int)ceilf(fabsf(member->moveinfo.distance) /
-		                member->moveinfo.speed * 1000.0f) + 200;
+		nominal = fabs((double)member->moveinfo.distance) /
+		    (double)member->moveinfo.speed * 1000.0;
+		if (!isfinite(nominal) || nominal <= 0.0 || nominal > 12500.0)
+			return 0;
+		ms = (int)ceil(nominal) + 200;
+		if (ms > 12500)
+			return 0;
 		if (ms > longest)
 			longest = ms;
 	}
@@ -2745,8 +3264,9 @@ static int Door_TravelMs(edict_t *trigger)
 static int Door_CooldownGapMs(edict_t *trigger)
 {
 	edict_t *doors[16];
-	int count, i, longest_cycle = 0, cyclic = 0;
-	int trigger_ms;
+	int count, i, cyclic = 0;
+	int64_t longest_cycle = 0;
+	int64_t trigger_ms;
 
 	if (!trigger)
 		return -1;
@@ -2759,7 +3279,8 @@ static int Door_CooldownGapMs(edict_t *trigger)
 	for (i = 0; i < count; i++)
 	{
 		edict_t *member = doors[i];
-		int travel, hold, cycle;
+		int64_t travel, hold, cycle;
+		double hold_ms, nominal;
 
 		if (!isfinite(member->moveinfo.distance) ||
 		    !isfinite(member->moveinfo.speed) || member->moveinfo.speed <= 0.0f ||
@@ -2768,17 +3289,36 @@ static int Door_CooldownGapMs(edict_t *trigger)
 		if (member->moveinfo.wait < 0.0f)
 			continue;
 		cyclic++;
-		travel = (int)ceilf(fabsf(member->moveinfo.distance) /
-		                       member->moveinfo.speed * 1000.0f) + 200;
-		hold = (int)ceilf(member->moveinfo.wait * 1000.0f);
+		nominal = fabs((double)member->moveinfo.distance) /
+		    (double)member->moveinfo.speed * 1000.0;
+		if (!isfinite(nominal) || nominal <= 0.0 || nominal > 12500.0)
+			return -1;
+		travel = (int64_t)ceil(nominal) + 200;
+		if (travel > 12500)
+			return -1;
+		hold_ms = (double)member->moveinfo.wait * 1000.0;
+		if (!isfinite(hold_ms) || hold_ms < 0.0 ||
+		    hold_ms >= (double)INT64_MAX)
+			return -1;
+		hold = (int64_t)ceil(hold_ms);
+		if (hold > INT64_MAX - 2 * travel)
+			return -1;
 		cycle = 2 * travel + hold;
 		if (cycle > longest_cycle)
 			longest_cycle = cycle;
 	}
 	if (!cyclic)
 		return 0;
-	return trigger_ms > longest_cycle ? trigger_ms - longest_cycle : 0;
+	return trigger_ms > longest_cycle
+	    ? (int)(trigger_ms - longest_cycle) : 0;
 }
+
+#ifdef SG_RUNE_TIMING_TEST
+int SG_RuneTestDoorCooldownGapMs(edict_t *trigger)
+{
+	return Door_CooldownGapMs(trigger);
+}
+#endif
 
 /* Keep a bounded nearest-first candidate fan. Declared door proof is much
  * more expensive than a point trace (it rolls up to five seconds of Pmove),
@@ -2813,13 +3353,32 @@ static void Door_CandidateInsert(int seed, float score, int *seeds,
  * both candidates have independently passed the complete approach, TOP-pose
  * egress, sweep, and open-window contract. */
 static qboolean Door_LinkInsert(int from, int to, short cost_ms,
-	const vec3_t wait_point)
+	const vec3_t wait_point, edict_t *trigger, rune_action_t action,
+	const vec3_t button_displacement,
+	sg_button_support_mode_t button_support, int egress_ms)
 {
 	int i;
+	uint16_t sweep_ms = 0U;
+
+	if (action == RL_BUTTON_DOOR)
+	{
+		int rounded;
+
+		if (!button_displacement ||
+		    (button_support != SG_BUTTON_SUPPORT_STATIC &&
+		     button_support != SG_BUTTON_SUPPORT_RIDER) || egress_ms <= 0)
+			return false;
+		rounded = ((egress_ms + SG_RUNE_PROOF_SERVER_FRAME_MS - 1) /
+		    SG_RUNE_PROOF_SERVER_FRAME_MS) *
+		    SG_RUNE_PROOF_SERVER_FRAME_MS;
+		if (rounded <= 0 || rounded > UINT16_MAX || rounded > cost_ms)
+			return false;
+		sweep_ms = (uint16_t)rounded;
+	}
 
 	/* A wait point can legitimately select its source seed as the locally
 	 * cheapest open-pose destination.  That proves a controller, but it does
-	 * not prove a traversal and the v2 loader/linter reject self-links. */
+	 * not prove a traversal and the RUNE loader/linter reject self-links. */
 	if (from == to)
 		return false;
 
@@ -2827,18 +3386,45 @@ static qboolean Door_LinkInsert(int from, int to, short cost_ms,
 	{
 		rune_link_t *link = &gen_links[i];
 
-		if (link->from != from || link->to != to || link->action != RL_DOOR)
+		if (link->from != from || link->to != to || link->action != action)
 			continue;
 		if (cost_ms < link->cost_ms)
 		{
+			if (!(action == RL_BUTTON_DOOR
+			      ? Mechanism_BindButtonDoor(link, trigger)
+			      : Mechanism_BindDoor(link, trigger)))
+				return false;
 			link->cost_ms = cost_ms;
 			VectorCopy(wait_point, link->anchor);
+			if (action == RL_BUTTON_DOOR)
+			{
+				VectorCopy(button_displacement, link->mechanism_anchor);
+				link->sweep_clear_ms = sweep_ms;
+				link->mode = button_support == SG_BUTTON_SUPPORT_RIDER
+				    ? RLCM_RIDE : RLCM_PREOPEN;
+			}
 		}
 		return false;
 	}
-	if (!Link_Add(from, to, RL_DOOR, cost_ms, 0))
+	if (!Link_Add(from, to, action, cost_ms, 0))
 		return false;
 	VectorCopy(wait_point, gen_links[gen_num_links - 1].anchor);
+	if (action == RL_BUTTON_DOOR)
+	{
+		VectorCopy(button_displacement,
+		    gen_links[gen_num_links - 1].mechanism_anchor);
+		gen_links[gen_num_links - 1].sweep_clear_ms = sweep_ms;
+		gen_links[gen_num_links - 1].mode =
+		    button_support == SG_BUTTON_SUPPORT_RIDER
+		    ? RLCM_RIDE : RLCM_PREOPEN;
+	}
+	if (!(action == RL_BUTTON_DOOR
+	      ? Mechanism_BindButtonDoor(&gen_links[gen_num_links - 1], trigger)
+	      : Mechanism_BindDoor(&gen_links[gen_num_links - 1], trigger)))
+	{
+		gen_num_links--;
+		return false;
+	}
 	return true;
 }
 
@@ -2853,7 +3439,24 @@ typedef struct
 	byte *objective_mask;
 } door_topology_t;
 
-static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out);
+typedef struct graph_objective_diag_s
+{
+	int nearest;
+	vec3_t objective;
+	vec3_t origin;
+	vec3_t delta;
+	float score;
+	float distance;
+	qboolean has_out;
+	uint32_t spatial_rejects;
+	uint32_t vertical_rejects;
+	uint32_t los_rejects;
+	uint32_t rotator_rejects;
+	uint32_t no_out_rejects;
+} graph_objective_diag_t;
+
+static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out,
+	graph_objective_diag_t *diag);
 
 static void Door_TopologyFree(door_topology_t *topology)
 {
@@ -2988,8 +3591,8 @@ static qboolean Door_TopologyBuild(door_topology_t *topology)
 		int roots[2];
 		int which;
 
-		roots[0] = Graph_ObjectiveRoot(redflag->homeposition, has_out);
-		roots[1] = Graph_ObjectiveRoot(blueflag->homeposition, has_out);
+		roots[0] = Graph_ObjectiveRoot(redflag->homeposition, has_out, NULL);
+		roots[1] = Graph_ObjectiveRoot(blueflag->homeposition, has_out, NULL);
 		for (which = 0; which < 2; which++)
 		{
 			int head = 0, tail = 0;
@@ -3120,6 +3723,169 @@ static int Door_WaitPoints(edict_t *trigger, vec3_t *points)
 	return count;
 }
 
+typedef struct button_wait_stats_s
+{
+	int proposed;
+	int grounded;
+	int accepted;
+	int unrepresentable;
+	int duplicate;
+	int contact[SG_BUTTON_CONTACT_STATUS_COUNT];
+} button_wait_stats_t;
+
+static void Button_WaitInsert(edict_t *button, const vec3_t point,
+	vec3_t *points, int *count, button_wait_stats_t *stats)
+{
+	vec3_t fixed, base;
+	sg_button_contact_status_t status;
+	int axis, i, radius, dx, dy, dz;
+	qboolean found = false;
+
+	if (!button || !point || !points || !count || *count >= DOOR_WAIT_MAX ||
+	    !stats)
+		return;
+	if (!Seed_Representable((vec_t *)point))
+	{
+		stats->unrepresentable++;
+		return;
+	}
+	for (axis = 0; axis < 3; axis++)
+		base[axis] = roundf(point[axis] * 8.0f) * 0.125f;
+	/* Collision traces return contact points just outside a brush, while the
+	 * serialized q8 anchor can round back onto its inclusive boundary. Search
+	 * only the two nearest q8 shells for the closest clear point whose inward
+	 * player-hull trace hits this exact button. The subsequent full Pmove
+	 * approach remains the authority that proves the chosen point is reachable
+	 * and actually fires the stock callback. */
+	for (radius = 0; radius <= 2 && !found; radius++)
+		for (dz = -radius; dz <= radius && !found; dz++)
+			for (dy = -radius; dy <= radius && !found; dy++)
+				for (dx = -radius; dx <= radius; dx++)
+				{
+					if (abs(dx) != radius && abs(dy) != radius &&
+					    abs(dz) != radius)
+						continue;
+					fixed[0] = base[0] + (float)dx * 0.125f;
+					fixed[1] = base[1] + (float)dy * 0.125f;
+					fixed[2] = base[2] + (float)dz * 0.125f;
+					if (!Seed_Representable(fixed))
+					{
+						stats->unrepresentable++;
+						continue;
+					}
+					status = SG_DeclaredButtonDoorContactStatus(button, fixed);
+					if (status >= SG_BUTTON_CONTACT_STATUS_COUNT)
+						continue;
+					stats->contact[status]++;
+					if (status == SG_BUTTON_CONTACT_OK)
+					{
+						found = true;
+						break;
+					}
+				}
+	if (!found)
+		return;
+	for (i = 0; i < *count; i++)
+	{
+		vec3_t delta;
+
+		VectorSubtract(points[i], fixed, delta);
+		if (fabsf(delta[2]) <= 2.0f &&
+		    delta[0] * delta[0] + delta[1] * delta[1] <= 4.0f)
+		{
+			stats->duplicate++;
+			return;
+		}
+	}
+	VectorCopy(fixed, points[*count]);
+	(*count)++;
+	stats->accepted++;
+}
+
+/* A touchable func_button is a solid BSP, not an AREA_TRIGGER.  Sample its
+ * standable top (floor-plate buttons are common) plus the four horizontal
+ * player-hull contact faces one fixed-point unit outside the brush.  Ground
+ * each proposal through the real collision model and retain only points whose
+ * short exact hull trace hits this button first. */
+static int Button_WaitPoints(edict_t *button, vec3_t *points,
+	button_wait_stats_t *stats)
+{
+	static const float fractions[5] = {
+		0.0f, 0.25f, 0.5f, 0.75f, 1.0f
+	};
+	vec3_t raw_min, raw_max;
+	float zprobe[3];
+	int count = 0, i, face, fi, zi;
+
+	if (!button || !points || !stats || !SG_DeclaredButtonDoorSafe(button))
+		return 0;
+	memset(stats, 0, sizeof(*stats));
+	for (i = 0; i < gen_num_seeds; i++)
+		if (gen_source_waterlevel[i] == 0)
+		{
+			stats->proposed++;
+			stats->grounded++;
+			Button_WaitInsert(button, gen_seeds[i].origin, points, &count,
+			    stats);
+		}
+	for (i = 0; i < 3; i++)
+	{
+		raw_min[i] = button->absmin[i] + 1.0f;
+		raw_max[i] = button->absmax[i] - 1.0f;
+	}
+	zprobe[0] = raw_min[2] + 24.0f;
+	zprobe[1] = 0.5f * (raw_min[2] + raw_max[2]);
+	zprobe[2] = raw_max[2] - 32.0f;
+	for (fi = 0; fi < 5 && count < DOOR_WAIT_MAX; fi++)
+		for (zi = 0; zi < 5 && count < DOOR_WAIT_MAX; zi++)
+		{
+			vec3_t candidate, ground;
+
+			candidate[0] = raw_min[0] + fractions[fi] *
+				(raw_max[0] - raw_min[0]);
+			candidate[1] = raw_min[1] + fractions[zi] *
+				(raw_max[1] - raw_min[1]);
+			candidate[2] = raw_max[2] + 24.125f;
+			stats->proposed++;
+			if (Seed_Ground(candidate, ground))
+			{
+				stats->grounded++;
+				Button_WaitInsert(button, ground, points, &count, stats);
+			}
+		}
+	for (face = 0; face < 4 && count < DOOR_WAIT_MAX; face++)
+		for (fi = 0; fi < 5 && count < DOOR_WAIT_MAX; fi++)
+			for (zi = 0; zi < 3 && count < DOOR_WAIT_MAX; zi++)
+			{
+				vec3_t candidate, ground;
+
+				candidate[2] = zprobe[zi];
+				if (face < 2)
+				{
+					candidate[0] = face == 0
+					    ? raw_min[0] - 16.125f
+					    : raw_max[0] + 16.125f;
+					candidate[1] = raw_min[1] + fractions[fi] *
+					    (raw_max[1] - raw_min[1]);
+				}
+				else
+				{
+					candidate[0] = raw_min[0] + fractions[fi] *
+					    (raw_max[0] - raw_min[0]);
+					candidate[1] = face == 2
+					    ? raw_min[1] - 16.125f
+					    : raw_max[1] + 16.125f;
+				}
+				stats->proposed++;
+				if (Seed_Ground(candidate, ground))
+				{
+					stats->grounded++;
+					Button_WaitInsert(button, ground, points, &count, stats);
+				}
+			}
+	return count;
+}
+
 /* A door link is deliberately longer than an ordinary local graph edge. Its
  * exact source already overlaps one validated repeatable player trigger and
  * lies outside every pose the whole team can occupy. Runtime touches from
@@ -3141,46 +3907,99 @@ static void Link_Doors(void)
 	for (di = 1; di < globals.num_edicts; di++)
 	{
 		edict_t *door = &g_edicts[di];
+		edict_t *members[16];
 		door_pose_t saved[16];
 		vec3_t door_wait[DOOR_WAIT_MAX];
-		int wi, num_wait, pose_count, travel_ms, cooldown_gap_ms;
+		button_wait_stats_t button_stats = { 0 };
+		qboolean button_controller;
+		qboolean direct_controller;
+		int controller_kind;
+		rune_action_t door_action;
+		int wi, num_wait, member_count, travel_ms, cooldown_gap_ms;
 
-		if (!SG_DeclaredDoorActivatorSafe(door))
+		button_controller = SG_DeclaredButtonDoorSafe(door);
+		if (!button_controller && !SG_DeclaredDoorActivatorSafe(door))
 			continue;
+		direct_controller = !button_controller &&
+		    SG_DeclaredDoorDirectActivatorSafe(door);
+		controller_kind = button_controller
+		    ? SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+		    : (direct_controller
+		          ? SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
+		          : SG_MECHANISM_CONTROLLER_AUTO_DOOR);
+		door_action = button_controller ? RL_BUTTON_DOOR : RL_DOOR;
 		travel_ms = Door_TravelMs(door);
 		if (travel_ms <= 0 || travel_ms > 12500)
 			continue;
 		cooldown_gap_ms = Door_CooldownGapMs(door);
 		if (cooldown_gap_ms < 0)
 			continue;
-		pose_count = DoorTrigger_Open(door, saved, 16);
-		if (pose_count <= 0)
+		member_count = DoorTrigger_Targets(door, members, 16);
+		if (member_count <= 0)
 			continue;
-		num_wait = Door_WaitPoints(door, door_wait);
+		num_wait = button_controller
+		    ? Button_WaitPoints(door, door_wait, &button_stats)
+		    : Door_WaitPoints(door, door_wait);
+		if (button_controller)
+			sg_host.dprint("rune: button %d members=%d travel=%d cooldown=%d "
+			               "wait=%d proposed=%d grounded=%d accepted=%d "
+			               "unrepresentable=%d duplicate=%d contact="
+			               "%d/%d/%d/%d/%d/%d/%d/%d/%d "
+			               "distance=%.3f speed=%.3f hold=%.3f\n",
+			               di, member_count, travel_ms, cooldown_gap_ms,
+			               num_wait, button_stats.proposed,
+			               button_stats.grounded, button_stats.accepted,
+			               button_stats.unrepresentable,
+			               button_stats.duplicate,
+			               button_stats.contact[SG_BUTTON_CONTACT_OK],
+			               button_stats.contact[SG_BUTTON_CONTACT_UNSAFE],
+			               button_stats.contact[SG_BUTTON_CONTACT_SWEEP_OCCUPIED],
+			               button_stats.contact[SG_BUTTON_CONTACT_BAD_ORIGIN],
+			               button_stats.contact[SG_BUTTON_CONTACT_DEGENERATE],
+			               button_stats.contact[SG_BUTTON_CONTACT_STARTSOLID],
+			               button_stats.contact[SG_BUTTON_CONTACT_ALLSOLID],
+			               button_stats.contact[SG_BUTTON_CONTACT_NO_HIT],
+			               button_stats.contact[SG_BUTTON_CONTACT_WRONG_HIT],
+			               door->moveinfo.distance, door->moveinfo.speed,
+			               door->moveinfo.wait);
 
 		/* Wait points are geometry samples, not graph sources: ordinary proof
 		 * correctly rejects their scripted touch. Prove a continuous approach
 		 * from a connected pre-trigger seed and an open-pose egress to a connected
-		 * post-door seed. */
+ * post-door seed.  Button destinations stay dry; a direct trigger may end in
+ * supported, non-hazardous waterlevel one because the live suffix oracle uses
+ * the same bounded shallow-wade law. */
 		for (wi = 0; wi < num_wait; wi++)
 		{
 			#define DOOR_SOURCE_FAN 24
 			#define DOOR_DEST_FAN 48
+			#define DOOR_SUPPORT_MODES 2
 			int source, dest, ci;
 			int sources[DOOR_SOURCE_FAN], dests[DOOR_DEST_FAN];
-			int egress_ms[DOOR_DEST_FAN];
+			int egress_ms[DOOR_SUPPORT_MODES][DOOR_DEST_FAN];
 			float source_scores[DOOR_SOURCE_FAN], dest_scores[DOOR_DEST_FAN];
-			float egress_scores[DOOR_DEST_FAN];
-			byte egress_proved[DOOR_DEST_FAN];
-			int best = -1, best_slot = -1;
-			float best_score = 1.0e30f;
+			float egress_scores[DOOR_SUPPORT_MODES][DOOR_DEST_FAN];
+			byte egress_proved[DOOR_SUPPORT_MODES][DOOR_DEST_FAN];
+			byte support_enabled[DOOR_SUPPORT_MODES] = { 1, 1 };
+			int best_slot[DOOR_SUPPORT_MODES] = { -1, -1 };
+			float best_score[DOOR_SUPPORT_MODES] = { 1.0e30f, 1.0e30f };
+			vec3_t button_displacement, egress_anchor[DOOR_SUPPORT_MODES];
+			door_pose_t button_saved = { 0 };
+			int pose_count = 0;
+			int support_count = button_controller ? 2 : 1;
 			vec_t *wait_point = door_wait[wi];
 
-			if (!SG_DeclaredDoorTouchMatches(door, wait_point) ||
-			    !SG_DeclaredDoorSameSet(
-			        SG_DeclaredDoorForLink(wait_point, wait_point), door))
+			if (button_controller
+			        ? !SG_DeclaredButtonDoorContactMatches(door, wait_point)
+			        : (!SG_DeclaredDoorTouchMatches(door, wait_point) ||
+			           !SG_DeclaredDoorSameSet(
+			               SG_DeclaredDoorForLink(wait_point, wait_point),
+			               door)))
 				continue;
 			wait_points++;
+			VectorClear(button_displacement);
+			VectorCopy(wait_point, egress_anchor[0]);
+			VectorCopy(wait_point, egress_anchor[1]);
 			for (ci = 0; ci < DOOR_SOURCE_FAN; ci++)
 			{
 				sources[ci] = -1;
@@ -3188,69 +4007,147 @@ static void Link_Doors(void)
 			}
 			for (ci = 0; ci < DOOR_DEST_FAN; ci++)
 			{
+				int mode_index;
+
 				dests[ci] = -1;
 				dest_scores[ci] = 1.0e30f;
-				egress_ms[ci] = 0;
-				egress_scores[ci] = 1.0e30f;
-				egress_proved[ci] = 0;
+				for (mode_index = 0; mode_index < DOOR_SUPPORT_MODES;
+				     mode_index++)
+				{
+					egress_ms[mode_index][ci] = 0;
+					egress_scores[mode_index][ci] = 1.0e30f;
+					egress_proved[mode_index][ci] = 0;
+				}
+			}
+			if (button_controller)
+			{
+				if (!Button_Displacement(door, button_displacement))
+					continue;
+				VectorAdd(wait_point, button_displacement,
+				    egress_anchor[1]);
+				/* A carried body moves before the target doors are activated.  Its
+				 * complete BOTTOM-to-TOP segment must therefore remain outside the
+				 * targeted team sweep, not merely both endpoints. */
+				if (SG_DeclaredDoorCrossesSweep(door, wait_point,
+				        egress_anchor[1]) ||
+				    !SG_OracleButtonCarryClear(door, wait_point,
+				        egress_anchor[1], false))
+					support_enabled[1] = 0;
 			}
 			for (dest = 0; dest < gen_num_seeds; dest++)
 			{
-				vec3_t delta;
-				float h2, score;
+				float score = 1.0e30f;
+				int mode_index;
 
 				if (!gen_source_stable[dest] ||
-				    gen_source_waterlevel[dest] != 0 ||
+				    !SG_OracleDoorEgressWaterSafe(controller_kind,
+				        gen_source_waterlevel[dest],
+				        gen_source_watertype[dest]) ||
 				    !Gen_SeedHasOutgoing(dest) ||
 				    !SG_DeclaredDoorOutsideSweep(door,
 				        gen_seeds[dest].origin))
 					continue;
-				VectorSubtract(gen_seeds[dest].origin, wait_point, delta);
-				h2 = delta[0] * delta[0] + delta[1] * delta[1];
-				if (h2 > 768.0f * 768.0f || fabsf(delta[2]) > 96.0f ||
-				    !SG_DeclaredDoorCrossesSweep(door, wait_point,
-				        gen_seeds[dest].origin))
-					continue;
-				score = h2 + delta[2] * delta[2];
-				Door_CandidateInsert(dest, score, dests, dest_scores,
-				                     DOOR_DEST_FAN);
+				for (mode_index = 0; mode_index < support_count; mode_index++)
+				{
+					vec3_t delta;
+					float h2, candidate_score;
+
+					if (!support_enabled[mode_index])
+						continue;
+
+					VectorSubtract(gen_seeds[dest].origin,
+					    egress_anchor[mode_index], delta);
+					h2 = delta[0] * delta[0] + delta[1] * delta[1];
+					if (h2 > 768.0f * 768.0f ||
+					    fabsf(delta[2]) > 96.0f ||
+					    !SG_DeclaredDoorCrossesSweep(door,
+					        egress_anchor[mode_index],
+					        gen_seeds[dest].origin))
+						continue;
+					candidate_score = h2 + delta[2] * delta[2];
+					if (candidate_score < score)
+						score = candidate_score;
+				}
+				if (score < 1.0e30f)
+					Door_CandidateInsert(dest, score, dests, dest_scores,
+					    DOOR_DEST_FAN);
+			}
+			/* The approach law is proved against the untouched BOTTOM/closed
+			 * world.  Only after candidate discovery do we publish one atomic
+			 * TOP proof pose for the door team and, for BUTTON_DOOR, the sealed
+			 * entry endpoint. */
+			pose_count = DoorTrigger_Open(door, saved, 16);
+			if (pose_count <= 0)
+				continue;
+			if (button_controller &&
+			    !Button_TopPoseBegin(door, &button_saved,
+			        button_displacement))
+			{
+				DoorPose_Restore(saved, pose_count);
+				continue;
 			}
 			for (ci = 0; ci < DOOR_DEST_FAN && dests[ci] >= 0; ci++)
 			{
-				vec3_t delta;
-				float h2, score;
-				int trial_ms;
+				int mode_index;
 
 				dest = dests[ci];
-				egress_trials++;
-				if (!SG_OracleDeclaredDoorEgress(wait_point,
-				        gen_seeds[dest].origin, door, NULL, &trial_ms))
-					continue;
-				VectorSubtract(gen_seeds[dest].origin, wait_point, delta);
-				h2 = delta[0] * delta[0] + delta[1] * delta[1];
-				score = (float)trial_ms + sqrtf(h2) + fabsf(delta[2]);
-				egress_ms[ci] = trial_ms;
-				egress_scores[ci] = score;
-				egress_proved[ci] = 1;
-				if (score < best_score)
+				for (mode_index = 0; mode_index < support_count; mode_index++)
 				{
-					best_score = score;
-					best = dest;
-					best_slot = ci;
+					vec3_t delta;
+					float h2, score;
+					int trial_ms;
+
+					if (!support_enabled[mode_index])
+						continue;
+					egress_trials++;
+					Rune_TelemetryAdd(&gen_telemetry.door_replays, 1U);
+					if (!(button_controller
+					          ? SG_OracleDeclaredButtonDoorTopEgress(
+					                egress_anchor[mode_index],
+					                gen_seeds[dest].origin, door, NULL, &trial_ms,
+					                mode_index == 1 ? SG_BUTTON_SUPPORT_RIDER :
+					                    SG_BUTTON_SUPPORT_STATIC)
+					          : SG_OracleDeclaredDoorEgress(
+					                egress_anchor[mode_index],
+					                gen_seeds[dest].origin, door, NULL, &trial_ms)))
+						continue;
+					VectorSubtract(gen_seeds[dest].origin,
+					    egress_anchor[mode_index], delta);
+					h2 = delta[0] * delta[0] + delta[1] * delta[1];
+					score = (float)trial_ms + sqrtf(h2) + fabsf(delta[2]);
+					egress_ms[mode_index][ci] = trial_ms;
+					egress_scores[mode_index][ci] = score;
+					egress_proved[mode_index][ci] = 1;
+					if (score < best_score[mode_index])
+					{
+						best_score[mode_index] = score;
+						best_slot[mode_index] = ci;
+					}
 				}
 			}
-			if (best < 0)
+			if (button_controller)
+				DoorPose_Restore(&button_saved, 1);
+			DoorPose_Restore(saved, pose_count);
+			if (best_slot[0] < 0 && best_slot[1] < 0)
 				continue;
+			/* DIRECT_TRIGGER_DOOR uses one symmetric safe-wade law for both
+			 * the approach source and egress destination.  AUTO_DOOR and
+			 * BUTTON_DOOR remain dry-only through the same controller gate. */
 			for (source = 0; source < gen_num_seeds; source++)
 			{
 				vec3_t approach_delta;
 				float approach_h2, score;
 
 				if (!gen_source_stable[source] ||
-				    gen_source_waterlevel[source] != 0 ||
+				    !SG_OracleDoorEgressWaterSafe(controller_kind,
+				        gen_source_waterlevel[source],
+				        gen_source_watertype[source]) ||
 				    !Gen_SeedHasIncoming(source) ||
-				    !SG_DeclaredDoorApproachSourceClear(door,
-				        gen_seeds[source].origin))
+				    !(button_controller
+				          ? SG_DeclaredButtonDoorApproachSourceClear(door,
+				                gen_seeds[source].origin)
+				          : SG_DeclaredDoorApproachSourceClear(door,
+				                gen_seeds[source].origin)))
 					continue;
 				VectorSubtract(wait_point, gen_seeds[source].origin,
 				               approach_delta);
@@ -3267,16 +4164,32 @@ static void Link_Doors(void)
 			{
 				int approach_ms, touch_ms;
 				int picked[4], picked_count = 0, pi;
+				int mode_index = 0;
+				sg_button_support_mode_t support_mode =
+				    SG_BUTTON_SUPPORT_NONE;
 
 				source = sources[ci];
 				approach_trials++;
-				if (!SG_OracleDeclaredDoorApproach(gen_seeds[source].origin,
-				        wait_point, door, &approach_ms, &touch_ms))
+				Rune_TelemetryAdd(&gen_telemetry.door_replays, 1U);
+				if (button_controller)
+				{
+					if (!SG_OracleDeclaredButtonDoorApproach(
+					        gen_seeds[source].origin, wait_point, door,
+					        &approach_ms, &touch_ms, &support_mode))
+						continue;
+					mode_index = support_mode == SG_BUTTON_SUPPORT_RIDER ? 1 :
+					    support_mode == SG_BUTTON_SUPPORT_STATIC ? 0 : -1;
+				}
+				else if (!SG_OracleDeclaredDoorApproach(
+				             gen_seeds[source].origin, wait_point, door,
+				             &approach_ms, &touch_ms))
+					continue;
+				if (mode_index < 0 || best_slot[mode_index] < 0)
 					continue;
 
 				/* Preserve the locally cheapest proved controller as a movement
 				 * shortcut, then add only bounded topology-improving witnesses. */
-				picked[picked_count++] = best_slot;
+				picked[picked_count++] = best_slot[mode_index];
 				if (have_topology)
 				{
 					int missing = 3 & ~topology.objective_mask[source];
@@ -3290,12 +4203,12 @@ static void Link_Doors(void)
 						if (!(missing & bit))
 							continue;
 						for (pi = 0; pi < DOOR_DEST_FAN; pi++)
-							if (egress_proved[pi] &&
+							if (egress_proved[mode_index][pi] &&
 							    (topology.objective_mask[dests[pi]] & bit) &&
-							    egress_scores[pi] < choice_score)
+							    egress_scores[mode_index][pi] < choice_score)
 							{
 								choice = pi;
-								choice_score = egress_scores[pi];
+								choice_score = egress_scores[mode_index][pi];
 							}
 						if (choice >= 0)
 						{
@@ -3320,13 +4233,13 @@ static void Link_Doors(void)
 						float choice_score = 1.0e30f;
 
 						for (pi = 0; pi < DOOR_DEST_FAN; pi++)
-							if (egress_proved[pi] &&
+							if (egress_proved[mode_index][pi] &&
 							    topology.component[dests[pi]] !=
 							        topology.component[source] &&
-							    egress_scores[pi] < choice_score)
+							    egress_scores[mode_index][pi] < choice_score)
 							{
 								choice = pi;
-								choice_score = egress_scores[pi];
+								choice_score = egress_scores[mode_index][pi];
 							}
 						if (choice >= 0 && picked_count < 4)
 							picked[picked_count++] = choice;
@@ -3340,37 +4253,41 @@ static void Link_Doors(void)
 				{
 					int slot = picked[pi];
 					int contract_cost = SG_DeclaredDoorContractCost(door,
-					    approach_ms, touch_ms, egress_ms[slot]);
+					    approach_ms, touch_ms,
+					    egress_ms[mode_index][slot]);
 
 					if (contract_cost > 0 && Door_LinkInsert(source,
-					        dests[slot], (short)contract_cost, wait_point))
-						gen_door_links++;
+					        dests[slot], (short)contract_cost, wait_point, door,
+					        door_action, button_controller
+					            ? button_displacement : NULL,
+					        support_mode, egress_ms[mode_index][slot]))
+					{
+						if (button_controller)
+							gen_button_door_links++;
+						else
+							gen_door_links++;
+					}
 				}
 			}
 			#undef DOOR_SOURCE_FAN
 			#undef DOOR_DEST_FAN
+			#undef DOOR_SUPPORT_MODES
 		}
-		DoorPose_Restore(saved, pose_count);
 	}
 	Door_TopologyFree(&topology);
-	if (gen_door_links || wait_points)
-		sg_host.dprint("rune: %d declared door links (%d wait points, "
+	if (gen_door_links || gen_button_door_links || wait_points)
+		sg_host.dprint("rune: %d declared door links, %d button-door links "
+		               "(%d wait points, "
 		               "%d approach/%d egress trials)\n",
-		               gen_door_links, wait_points, approach_trials,
+		               gen_door_links, gen_button_door_links, wait_points,
+		               approach_trials,
 		               egress_trials);
 }
 
 #undef DOOR_WAIT_MAX
 
-/* ============================== end of the ADDITIVE BLOCK ============ */
-
 /* ===================================================================
- * ADDITIVE BLOCK: rocket jumps.
- *
- * Everything between this banner and the one that closes it is new. It adds
- * functions, reads the seeds and the links the earlier passes produced, and
- * changes nothing above; one call site is appended at the very end of
- * Prove_All.
+ * ROCKET JUMPS.
  *
  * A rocket jump is the only traversal in the graph that costs the mover
  * HEALTH, and that single fact shapes the whole pass:
@@ -3798,8 +4715,8 @@ static void Prove_RocketJumps(void)
 	/* No supported wire contract has a launch-state controller.  The old proof
 	 * injected an exact rest state and simultaneous rocket+jump, while live
 	 * execution could arm elsewhere in the seed cell and advance without
-	 * confirming a shot.  Keep the implementation above available for a future
-	 * versioned contract, but write no RL_ROCKETJUMP records until generator
+	 * confirming a shot.  Keep the implementation above available, but write
+	 * no RL_ROCKETJUMP records until the serialized contract
 	 * and executor share one. */
 	(void)Reach_Within;
 	(void)ProveRocketJump;
@@ -3807,9 +4724,7 @@ static void Prove_RocketJumps(void)
 #endif
 }
 
-/* ======================= end of the ROCKET JUMP BLOCK ================ */
-
-static void Prove_All(void)
+static void Prove_BaseLinks(void)
 {
 	int i, j;
 
@@ -3824,11 +4739,13 @@ static void Prove_All(void)
 
 			if (i == j)
 				continue;
+			Rune_TelemetryAdd(&gen_telemetry.pair_scans, 1U);
 			water_pair = ((gen_seeds[i].flags | gen_seeds[j].flags) &
 			              RSF_WATER) != 0;
 			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d);
 			if (d[0] * d[0] + d[1] * d[1] > HOOK_REACH * HOOK_REACH)
 				continue;
+			Rune_TelemetryAdd(&gen_telemetry.qualified, 1U);
 			/* beyond running reach only the hook applies */
 			if (!(gen_seeds[i].flags & RSF_WATER) &&
 			    d[0] * d[0] + d[1] * d[1] > LINK_REACH * LINK_REACH &&
@@ -3970,11 +4887,9 @@ static void Prove_All(void)
 			           i, gen_num_seeds, gen_num_links);
 	}
 
-	/*
-	 * ADDITIVE BLOCK call sites -- appended after the pair loop. Each pass
-	 * reads the seeds and specialized links the loop produced and only adds
-	 * to them; ordinary pairs touching water were reserved for Prove_Swims.
-	 */
+	/* Ordinary pairs touching water are reserved for Prove_Swims.  The
+	 * declared-mechanism passes consume the completed base graph so their
+	 * specialized links can be stamped with declared provenance. */
 	Prove_Swims();          /* swim links: water to water, water to shore */
 	{
 		/*
@@ -3992,14 +4907,6 @@ static void Prove_All(void)
 		Link_Declare_Tail(declared_mark);
 	}
 
-	/*
-	 * ROCKET JUMP BLOCK call site. Last of all, on purpose: the pass asks
-	 * whether the rest of the graph already reaches a place, and it can only
-	 * ask that once the rest of the graph exists. It runs after
-	 * Link_Declare_Tail as well, so the links it writes keep the RL_PROVEN
-	 * stamp Link_Add gives them -- they were rolled, every one of them.
-	 */
-	Prove_RocketJumps();
 }
 
 /* A field is useful only on the greatest part of the directed graph from
@@ -4014,11 +4921,19 @@ static void Prove_All(void)
  * tombstones but remove every incident link. Localization can then identify
  * the nearest visible sample as non-routable instead of searching past it to
  * a farther live seed on the wrong side of a one-way boundary. */
-static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out)
+static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out,
+	graph_objective_diag_t *diag)
 {
 	const float max_horiz2 = 128.0f * 128.0f;
 	int i, best = -1;
 	float bestd = 1e30f;
+
+	if (diag)
+	{
+		memset(diag, 0, sizeof(*diag));
+		diag->nearest = -1;
+		VectorCopy(objective, diag->objective);
+	}
 
 	for (i = 0; i < gen_num_seeds; i++)
 	{
@@ -4027,9 +4942,16 @@ static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out)
 		trace_t tr;
 
 		VectorSubtract(gen_seeds[i].origin, objective, d);
-		if (d[2] > 96.0f || d[2] < -96.0f ||
-		    d[0] * d[0] + d[1] * d[1] > max_horiz2)
+		if (d[2] > 96.0f || d[2] < -96.0f)
+		{
+			if (diag) Rune_TelemetryAdd(&diag->vertical_rejects, 1U);
 			continue;
+		}
+		if (d[0] * d[0] + d[1] * d[1] > max_horiz2)
+		{
+			if (diag) Rune_TelemetryAdd(&diag->spatial_rejects, 1U);
+			continue;
+		}
 		dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] * 0.25f;
 		if (dd >= bestd)
 			continue;
@@ -4038,14 +4960,95 @@ static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out)
 		from[2] += 16.0f;
 		to[2] += 16.0f;
 		tr = sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID);
-		if (tr.startsolid || tr.fraction < 1.0f ||
-		    SG_OracleRotatorSweepBlocks(from, NULL, NULL, to,
-		                                MASK_DEADSOLID))
+		if (tr.startsolid || tr.fraction < 1.0f)
+		{
+			if (diag) Rune_TelemetryAdd(&diag->los_rejects, 1U);
 			continue;
+		}
+		if (SG_OracleRotatorSweepBlocks(from, NULL, NULL, to,
+		                               MASK_DEADSOLID))
+		{
+			if (diag) Rune_TelemetryAdd(&diag->rotator_rejects, 1U);
+			continue;
+		}
 		bestd = dd;
 		best = i;
 	}
+	if (diag && best >= 0)
+	{
+		diag->nearest = best;
+		VectorCopy(gen_seeds[best].origin, diag->origin);
+		VectorSubtract(gen_seeds[best].origin, objective, diag->delta);
+		diag->score = bestd;
+		diag->distance = sqrtf(diag->delta[0] * diag->delta[0] +
+		    diag->delta[1] * diag->delta[1] +
+		    diag->delta[2] * diag->delta[2]);
+		diag->has_out = has_out && has_out[best];
+		if (!diag->has_out)
+			Rune_TelemetryAdd(&diag->no_out_rejects, 1U);
+	}
 	return (best >= 0 && has_out[best]) ? best : -1;
+}
+
+static void Graph_LogObjectiveRoot(const char *team,
+	const graph_objective_diag_t *diag, int root)
+{
+	if (!team || !diag)
+		return;
+	sg_host.dprint("rune: objective-root team=%s root=%d settled=(%.3f %.3f %.3f) "
+	               "nearest=%d origin=(%.3f %.3f %.3f) delta=(%.3f %.3f %.3f) "
+	               "score=%.3f distance=%.3f has_out=%d rejects=spatial:%u vertical:%u "
+	               "los:%u rotator:%u no_out:%u\n",
+	               team, root,
+	               diag->objective[0], diag->objective[1], diag->objective[2],
+	               diag->nearest, diag->origin[0], diag->origin[1],
+	               diag->origin[2], diag->delta[0], diag->delta[1],
+	               diag->delta[2], diag->score, diag->distance,
+	               diag->has_out ? 1 : 0,
+	               (unsigned int)diag->spatial_rejects,
+	               (unsigned int)diag->vertical_rejects,
+	               (unsigned int)diag->los_rejects,
+	               (unsigned int)diag->rotator_rejects,
+	               (unsigned int)diag->no_out_rejects);
+}
+
+static int Graph_ReachCount(const byte *reached)
+{
+	int i, count = 0;
+
+	if (!reached)
+		return 0;
+	for (i = 0; i < gen_num_seeds; i++)
+		if (reached[i])
+			count++;
+	return count;
+}
+
+static void Graph_LogBoundaryLinks(const byte *red_reach,
+	const byte *blue_reach)
+{
+	int i, reported = 0;
+
+	if (!red_reach || !blue_reach)
+		return;
+	for (i = 0; i < gen_num_links && reported < 16; i++)
+	{
+		const rune_link_t *link = &gen_links[i];
+		unsigned int from_mask = (red_reach[link->from] ? 1U : 0U) |
+		    (blue_reach[link->from] ? 2U : 0U);
+		unsigned int to_mask = (red_reach[link->to] ? 1U : 0U) |
+		    (blue_reach[link->to] ? 2U : 0U);
+
+		if (from_mask == to_mask)
+			continue;
+		sg_host.dprint("rune: objective-boundary ordinal=%d link=%d from=%d to=%d "
+		               "from_reach=%u to_reach=%u action=%u provenance=%u plan=%u\n",
+		               reported, i, link->from, link->to, from_mask, to_mask,
+		               (unsigned int)link->action, (unsigned int)link->provenance,
+		               (unsigned int)link->mechanism_plan);
+		reported++;
+	}
+	sg_host.dprint("rune: objective-boundary reported=%d limit=16\n", reported);
 }
 
 static void Graph_ReverseReach(int root, const byte *allowed,
@@ -4079,12 +5082,24 @@ static qboolean Graph_PruneObjectiveCore(void)
 {
 	int *first_in = NULL, *next_in = NULL, *queue = NULL;
 	byte *has_out = NULL, *keep = NULL, *red_reach = NULL, *blue_reach = NULL;
-	int red_root, blue_root, i, old_links, changed;
+	graph_objective_diag_t red_diag, blue_diag;
+	int red_root, blue_root, i, old_links, changed, iteration = 0;
+	int initial_red = 0, initial_blue = 0, final_red = 0, final_blue = 0;
 	int kept_seeds = 0, new_links = 0;
+	uint32_t new_bindings = 0U;
 
 	if (!redflag || !blueflag || !redflag->inuse || !blueflag->inuse)
 	{
 		sg_host.dprint("rune: FAILED: objective flags are unavailable\n");
+		return false;
+	}
+	if (gen_num_seeds <= 0)
+	{
+		sg_host.dprint("rune: objective-core roots red=-1 blue=-1 "
+		               "initial_red_reach=0 initial_blue_reach=0 "
+		               "final_red_reach=0 final_blue_reach=0 "
+		               "red_to_blue=0 blue_to_red=0 reason=no-seeds\n");
+		sg_host.dprint("rune: FAILED: objective-core has no seeds\n");
 		return false;
 	}
 	first_in = sg_host.level_alloc(sizeof(int) * (size_t)gen_num_seeds);
@@ -4108,32 +5123,64 @@ static qboolean Graph_PruneObjectiveCore(void)
 		first_in[i] = -1;
 	for (i = 0; i < gen_num_links; i++)
 	{
+		Rune_TelemetryAdd(&gen_telemetry.link_scans, 1U);
 		has_out[gen_links[i].from] = 1;
 		next_in[i] = first_in[gen_links[i].to];
 		first_in[gen_links[i].to] = i;
 	}
-	red_root = Graph_ObjectiveRoot(redflag->homeposition, has_out);
-	blue_root = Graph_ObjectiveRoot(blueflag->homeposition, has_out);
+	red_root = Graph_ObjectiveRoot(redflag->homeposition, has_out, &red_diag);
+	blue_root = Graph_ObjectiveRoot(blueflag->homeposition, has_out, &blue_diag);
 	if (red_root < 0 || blue_root < 0)
 	{
+		Graph_LogObjectiveRoot("red", &red_diag, red_root);
+		Graph_LogObjectiveRoot("blue", &blue_diag, blue_root);
+		sg_host.dprint("rune: objective-core roots red=%d blue=%d "
+		               "initial_red_reach=0 initial_blue_reach=0 "
+		               "final_red_reach=0 final_blue_reach=0 "
+		               "red_to_blue=0 blue_to_red=0 reason=objective-root\n",
+		               red_root, blue_root);
 		sg_host.dprint("rune: FAILED: cannot bind both flag objectives to graph\n");
 		goto fail;
 	}
 
 	do
 	{
+		int removed = 0;
+
 		changed = 0;
 		Graph_ReverseReach(red_root, keep, first_in, next_in, queue, red_reach);
 		Graph_ReverseReach(blue_root, keep, first_in, next_in, queue, blue_reach);
+		if (iteration == 0)
+		{
+			initial_red = Graph_ReachCount(red_reach);
+			initial_blue = Graph_ReachCount(blue_reach);
+			sg_host.dprint("rune: objective-core initial red_reach=%d blue_reach=%d\n",
+			               initial_red, initial_blue);
+		}
 		for (i = 0; i < gen_num_seeds; i++)
 			if (keep[i] && (!red_reach[i] || !blue_reach[i]))
 			{
 				keep[i] = 0;
 				changed = 1;
+				removed++;
 			}
+		sg_host.dprint("rune: objective-core iteration=%d removed=%d\n",
+		               iteration, removed);
+		iteration++;
 	} while (changed);
+	/* The terminating pass is the fixed point, so these are the final counts
+	 * and the two membership bits used for the deterministic boundary report. */
+	final_red = Graph_ReachCount(red_reach);
+	final_blue = Graph_ReachCount(blue_reach);
+	sg_host.dprint("rune: objective-core final red_reach=%d blue_reach=%d "
+	               "red_to_blue=%d blue_to_red=%d iterations=%d\n",
+	               final_red, final_blue, blue_reach[red_root] ? 1 : 0,
+	               red_reach[blue_root] ? 1 : 0, iteration);
 	if (!keep[red_root] || !keep[blue_root])
 	{
+		Graph_LogObjectiveRoot("red", &red_diag, red_root);
+		Graph_LogObjectiveRoot("blue", &blue_diag, blue_root);
+		Graph_LogBoundaryLinks(red_reach, blue_reach);
 		sg_host.dprint("rune: FAILED: flag objectives share no closed route core\n");
 		goto fail;
 	}
@@ -4158,9 +5205,23 @@ static qboolean Graph_PruneObjectiveCore(void)
 
 		if (!keep[link.from] || !keep[link.to])
 			continue;
+		if (link.mechanism_plan != RUNE_NO_MECHANISM_PLAN)
+		{
+			if (!gen_mechanism_bindings ||
+			    link.mechanism_plan >= gen_num_mechanism_bindings ||
+			    new_bindings >= (uint32_t)LINK_MAX)
+			{
+				gen_mechanism_failed = true;
+				goto fail;
+			}
+			gen_mechanism_bindings[new_bindings] =
+				gen_mechanism_bindings[link.mechanism_plan];
+			link.mechanism_plan = new_bindings++;
+		}
 		gen_links[new_links++] = link;
 	}
 	gen_num_links = new_links;
+	gen_num_mechanism_bindings = new_bindings;
 	sg_host.dprint("rune: objective core retained %d/%d routable seeds, "
 	               "%d/%d links; %d geometry tombstones\n",
 	               kept_seeds, gen_num_seeds, new_links, old_links,
@@ -4199,74 +5260,140 @@ fail:
  * activator, so making the brush nonsolid is not permission to prove through
  * buttons, one-shot scripts, disabled triggers, or the wrong side of a door.
  */
-typedef struct { edict_t *e; solid_t solid; } heldopen_t;
-
-static int Doors_Open(heldopen_t *held, int max)
+static int Doors_TargetIdentity(void *context, void *opaque, int key)
 {
-	edict_t *e;
-	int i, n = 0;
+	edict_t *entity = opaque;
 
-	for (i = 0; i < globals.num_edicts; i++)
-	{
-		e = &g_edicts[i];
-		if (!e->inuse || !e->classname)
-			continue;
-		if (strncmp(e->classname, "func_door", 9) != 0)
-			continue;
-		if (n >= max)
-			return -n;
-		held[n].e = e;
-		held[n].solid = e->solid;
-		e->solid = SOLID_NOT;
-		sg_host.linkentity(e);
-		n++;
-	}
-	return n;
+	(void)context;
+	return entity && g_edicts && key >= 0 && key < globals.num_edicts &&
+	       entity == &g_edicts[key] && entity->inuse && entity->classname &&
+	       strncmp(entity->classname, "func_door", 9) == 0;
 }
 
-static void Doors_Restore(heldopen_t *held, int n)
+static int Doors_GetSolid(void *context, void *opaque)
 {
-	int i;
+	(void)context;
+	return (int)((edict_t *)opaque)->solid;
+}
 
-	for (i = 0; i < n; i++)
+static int Doors_GetLinkcount(void *context, void *opaque)
+{
+	(void)context;
+	return ((edict_t *)opaque)->linkcount;
+}
+
+static void Doors_SetSolid(void *context, void *opaque, int solid)
+{
+	(void)context;
+	((edict_t *)opaque)->solid = (solid_t)solid;
+}
+
+static void Doors_SetLinkcount(void *context, void *opaque, int linkcount)
+{
+	(void)context;
+	((edict_t *)opaque)->linkcount = linkcount;
+}
+
+static void Doors_LinkEntity(void *context, void *opaque)
+{
+	(void)context;
+	sg_host.linkentity((edict_t *)opaque);
+}
+
+static const sg_rune_door_scope_ops_t doors_scope_ops = {
+	Doors_TargetIdentity,
+	Doors_GetSolid,
+	Doors_GetLinkcount,
+	Doors_SetSolid,
+	Doors_SetLinkcount,
+	Doors_LinkEntity
+};
+
+/* Collect the complete target set before SG_RuneDoorScopeOpen changes the
+ * first solid.  The former negative-count convention discovered overflow only
+ * after opening 128 doors and made every caller responsible for partial
+ * rollback. */
+static sg_rune_door_scope_status_t Doors_Open(
+	sg_rune_door_scope_t *scope)
+{
+	sg_rune_door_scope_target_t targets[SG_RUNE_DOOR_SCOPE_MAX];
+	size_t count = 0;
+	int index;
+
+	if (!scope || !g_edicts || globals.num_edicts < 0)
+		return SG_RUNE_DOOR_SCOPE_INVALID_ARGUMENT;
+	for (index = 0; index < globals.num_edicts; index++)
 	{
-		held[i].e->solid = held[i].solid;
-		sg_host.linkentity(held[i].e);
+		edict_t *entity = &g_edicts[index];
+
+		if (!entity->inuse || !entity->classname ||
+		    strncmp(entity->classname, "func_door", 9) != 0)
+			continue;
+		if (count >= SG_RUNE_DOOR_SCOPE_MAX)
+			return SG_RUNE_DOOR_SCOPE_CAPACITY;
+		targets[count].entity = entity;
+		targets[count].key = index;
+		count++;
 	}
+	return SG_RuneDoorScopeOpen(scope, targets, count, (int)SOLID_NOT,
+		&doors_scope_ops, NULL);
+}
+
+static sg_rune_door_scope_status_t Doors_Restore(
+	sg_rune_door_scope_t *scope)
+{
+	return SG_RuneDoorScopeRestore(scope, &doors_scope_ops, NULL);
 }
 
 qboolean Rune_Generate(const char *mapname)
 {
-	sg_rune_v3_authority_t authority;
-	rune_v3_recheck_t recheck;
-	rune_v3_stream_t stream;
-	sg_rune_v3_workspace_t workspace;
+	sg_rune_authority_t authority;
+	rune_recheck_t recheck;
+	sg_rune_stream_source_t stream_source;
+	sg_rune_stream_result_t stream_failure;
+	sg_rune_stream_t *stream = NULL;
+	sg_mechanism_plan_buffers_t mechanism_buffers;
+	sg_mechanism_plan_result_t mechanism_result;
+	rune_mechanism_edge_t *mechanism_edges = NULL;
+	rune_mechanism_plan_t *mechanism_plans = NULL;
+	uint32_t *mechanism_edge_marks = NULL;
+	uint32_t *mechanism_node_marks = NULL;
+	uint32_t *mechanism_node_queue = NULL;
 	sg_rune_install_result_t install_result;
 	const sg_rune_install_ops_t *install_ops;
-	uint64_t *link_keys = NULL;
-	uint8_t *source_marks = NULL;
 	char game_directory[MAX_OSPATH];
 	char path[MAX_OSPATH], tmp_path[MAX_OSPATH];
-	heldopen_t held[128];
-	int ndoors = 0;
+	sg_rune_door_scope_t doors;
+	sg_rune_door_scope_status_t door_status;
+	int door_count = 0;
 	int directory_written;
 	qboolean scope_active = false;
 	qboolean generated = false;
+	qboolean door_restore_failed = false;
 	cvar_t *game_directory_cvar;
 	const char *game_directory_source;
 	const char *canonical_mapname;
 
+	SG_RuneDoorScopeInit(&doors);
 	SG_HooksInit();
-	if (!SG_RuneV3AuthorityCapture(mapname, &authority))
+	memset(&gen_mechanism_catalog, 0, sizeof(gen_mechanism_catalog));
+	if (SG_MechCatalogSnapshot(&gen_mechanism_catalog) !=
+	    SG_MECH_CATALOG_READY)
+	{
+		sg_host.dprint("rune: generation refused stage=mechanism-catalog "
+		               "reason=%s\n", SG_MechCatalogReason());
+		return false;
+	}
+	if (!SG_RuneAuthorityCapture(mapname, &authority))
 	{
 		if (authority.identity_status != SG_IDENTITY_OK)
-			sg_host.dprint("rune: v3 generation refused stage=identity "
+			sg_host.dprint("rune: generation refused stage=identity "
 			               "status=%d reason=%s\n",
 			               (int)authority.identity_status,
 			               SG_LevelIdentityReason(authority.identity_status));
 		else
-			sg_host.dprint("rune: v3 generation refused stage=proof-law "
-			               "reason=unsupported-active-law\n");
+			sg_host.dprint("rune: generation refused stage=proof-law "
+			               "reason=unsupported-law\n");
 		return false;
 	}
 	canonical_mapname = authority.level.mapname;
@@ -4284,13 +5411,13 @@ qboolean Rune_Generate(const char *mapname)
 	    !SG_RuneInstallTemporaryPath(tmp_path, sizeof(tmp_path),
 	        game_directory, install_ops->process_id(install_ops->context), 0))
 	{
-		sg_host.dprint("rune: v3 generation refused stage=path "
+		sg_host.dprint("rune: generation refused stage=path "
 		               "reason=MAX_OSPATH\n");
 		return false;
 	}
-	if (!SG_RuneProofScopeBegin(authority.wire.gravity))
+	if (!SG_RuneProofScopeBegin(authority.identity.gravity))
 	{
-		sg_host.dprint("rune: v3 generation refused stage=proof-scope "
+		sg_host.dprint("rune: generation refused stage=proof-scope "
 		               "reason=busy-or-invalid\n");
 		return false;
 	}
@@ -4298,18 +5425,25 @@ qboolean Rune_Generate(const char *mapname)
 
 	gen_seeds = NULL;
 	gen_links = NULL;
+	gen_mechanism_bindings = NULL;
 	gen_seeds = sg_host.game_alloc(sizeof(rune_seed_t) * SEED_MAX);
 	gen_links = sg_host.game_alloc(sizeof(rune_link_t) * LINK_MAX);
-	if (!gen_seeds || !gen_links)
+	gen_mechanism_bindings = sg_host.game_alloc(
+		sizeof(*gen_mechanism_bindings) * LINK_MAX);
+	if (!gen_seeds || !gen_links || !gen_mechanism_bindings)
 	{
 		sg_host.dprint("rune: FAILED: generator allocation; graph was not written\n");
 		goto cleanup;
 	}
 	gen_num_seeds = 0;
 	gen_num_links = 0;
+	gen_num_mechanism_bindings = 0U;
+	gen_mechanism_failed = false;
 	gen_seed_overflow = false;
 	gen_link_overflow = false;
 	gen_water_overflow = false;
+	memset(&gen_telemetry, 0, sizeof(gen_telemetry));
+	memset(&gen_phase_telemetry, 0, sizeof(gen_phase_telemetry));
 	memset(hash_head, 0xff, sizeof(hash_head));
 	/* Every generator budget and diagnostic belongs to this invocation.  These
 	 * used to be process statics without a reset, so a second `sv rune` inherited
@@ -4323,6 +5457,7 @@ qboolean Rune_Generate(const char *mapname)
 	gen_first_water = -1;
 	gen_num_water = 0;
 	gen_lift_links = gen_tele_links = gen_door_links = 0;
+	gen_button_door_links = 0;
 	gen_swim_links = 0;
 	gen_env_drop = gen_env_hook = gen_declared_links = 0;
 	gen_lift_down_drop = gen_lift_down_none = 0;
@@ -4330,31 +5465,52 @@ qboolean Rune_Generate(const char *mapname)
 	rj_redundant = rj_links = rj_budget_out = 0;
 	rj_query = 0;
 
-	ndoors = Doors_Open(held, 128);
-	if (ndoors < 0)
+	Rune_TelemetryPhaseStart("door-open");
+	door_status = Doors_Open(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
 	{
-		Doors_Restore(held, -ndoors);
-		ndoors = 0;
-		sg_host.dprint("rune: FAILED: more than 128 doors; graph was not written\n");
+		if (door_status == SG_RUNE_DOOR_SCOPE_RESTORE_FAILED)
+			door_restore_failed = true;
+		if (door_status == SG_RUNE_DOOR_SCOPE_CAPACITY)
+			sg_host.dprint("rune: FAILED: more than 128 doors; graph was not written\n");
+		else
+			sg_host.dprint("rune: FAILED: door-open scope reason=%s; "
+			               "graph was not written\n",
+			               SG_RuneDoorScopeStatusName(door_status));
 		goto cleanup;
 	}
-	sg_host.dprint("rune: %d doors held open for proving\n", ndoors);
+	door_count = (int)doors.count;
+	sg_host.dprint("rune: %d doors held open for proving\n", door_count);
+	Rune_TelemetryPhaseEnd();
 
+	Rune_TelemetryPhaseStart("seed-germinate");
 	sg_host.dprint("rune: germinating from entities...\n");
 	Seed_Germinate();
+	Rune_TelemetryPhaseEnd();
+	Rune_TelemetryPhaseStart("seed-flood");
 	sg_host.dprint("rune: %d germs; flooding...\n", gen_num_seeds);
 	Seed_Flood();
-	/* ADDITIVE BLOCK call site: the water volumes the dry passes cannot
-	 * reach into, seeded before anything is proven so the pair loop sees
-	 * them like any other seed */
+	Rune_TelemetryPhaseEnd();
+	Rune_TelemetryPhaseStart("water-seed");
+	/* Seed water volumes that the dry passes cannot reach before proving, so
+	 * the pair loop sees them like any other seed. */
 	Seed_Water();
+	Rune_TelemetryPhaseEnd();
 	if (gen_num_seeds <= 0)
 	{
-		Doors_Restore(held, ndoors);
-		ndoors = 0;
+		door_status = Doors_Restore(&doors);
+		if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+		{
+			door_restore_failed = true;
+			sg_host.dprint("rune: FAILED: base door restore reason=%s; "
+			               "graph was not written\n",
+			               SG_RuneDoorScopeStatusName(door_status));
+			goto cleanup;
+		}
 		sg_host.dprint("rune: FAILED: map produced no executable seeds\n");
 		goto cleanup;
 	}
+	Rune_TelemetryPhaseStart("exposure");
 	/*
 	 * EXPOSURE, into the reserved field. area_hint has been written zero
 	 * since the format was born; it becomes the seed's exposure count --
@@ -4403,27 +5559,69 @@ qboolean Rune_Generate(const char *mapname)
 			    (vis * 255) / sampled : 0);
 		}
 	}
+	Rune_TelemetryPhaseEnd();
 	sg_host.dprint("rune: %d seeds; proving links...\n", gen_num_seeds);
-	Prove_All();
+	Rune_TelemetryPhaseStart("base-links");
+	Prove_BaseLinks();
+	door_status = Doors_Restore(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+	{
+		door_restore_failed = true;
+		sg_host.dprint("rune: FAILED: base door restore reason=%s; "
+		               "graph was not written\n",
+		               SG_RuneDoorScopeStatusName(door_status));
+		goto cleanup;
+	}
+	Rune_TelemetryPhaseEnd();
+	/* Compound proof seam: the base graph is complete and every real door is
+	 * once again linked SOLID_BSP. A later Link_Compounds pass belongs here,
+	 * before the logically-last rocket-jump pass and objective pruning. */
+	Rune_TelemetryPhaseStart("rocket-jumps");
+	door_status = Doors_Open(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+	{
+		if (door_status == SG_RUNE_DOOR_SCOPE_RESTORE_FAILED)
+			door_restore_failed = true;
+		sg_host.dprint("rune: FAILED: rocket-jump door scope reason=%s; "
+		               "graph was not written\n",
+		               SG_RuneDoorScopeStatusName(door_status));
+		goto cleanup;
+	}
+	/* Last of all, as before: RJ asks whether every cheaper prover already
+	 * reaches the destination. The action is dormant today, but retaining this
+	 * call and its open-door world preserves its exact current order. */
+	Prove_RocketJumps();
+	door_status = Doors_Restore(&doors);
+	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+	{
+		door_restore_failed = true;
+		sg_host.dprint("rune: FAILED: rocket-jump door restore reason=%s; "
+		               "graph was not written\n",
+		               SG_RuneDoorScopeStatusName(door_status));
+		goto cleanup;
+	}
+	Rune_TelemetryPhaseEnd();
 	sg_host.dprint("rune: %d links proven\n", gen_num_links);
 	sg_host.dprint("rune: dropstats pairs=%d seek=%d noedge=%d fellsteps=%d arrived=%d nocontact=%d\n",
 	           dg_pairs, dg_seek, dg_noedge, dg_fell, dg_arrived, dg_nocontact);
 	sg_host.dprint("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
 	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
-	sg_host.dprint("rune: envelopes drop=%d hook=%d; declared=%d (lift=%d tele=%d door=%d); "
+	sg_host.dprint("rune: envelopes drop=%d hook=%d; declared=%d "
+	           "(lift=%d tele=%d door=%d button-door=%d); "
 	           "plat-down drop=%d unlinked=%d; momentum=%d waypoints=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
 	           gen_lift_links, gen_tele_links, gen_door_links,
+	           gen_button_door_links,
 	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links,
 	           gen_waypoint_links);
-	Doors_Restore(held, ndoors);
-	ndoors = 0;
 	/* Objective ownership is resolved against the real, restored world.  Mark
 	 * every non-core geometry sample before writing so runtime localization and
 	 * the deployment linter share the same fail-closed topology contract. */
+	Rune_TelemetryPhaseStart("objective-core");
 	if (!Graph_PruneObjectiveCore())
 		goto cleanup;
-	/* SEED_MAX/LINK_MAX are inclusive v3 count limits.  Filling the final
+	Rune_TelemetryPhaseEnd();
+	/* SEED_MAX/LINK_MAX are inclusive graph count limits.  Filling the final
 	 * allocated slot is legal; only an attempted insertion beyond it sets the
 	 * corresponding overflow flag and invalidates the graph. */
 	if (gen_seed_overflow || gen_link_overflow || gen_water_overflow)
@@ -4433,69 +5631,136 @@ qboolean Rune_Generate(const char *mapname)
 		               gen_water_overflow ? "water seed" : "link");
 		goto cleanup;
 	}
+	if (gen_mechanism_failed)
+	{
+		sg_host.dprint("rune: FAILED: exact mechanism binding failed; "
+		               "graph was not written\n");
+		goto cleanup;
+	}
 	if (gen_num_links <= 0)
 	{
 		sg_host.dprint("rune: FAILED: no executable links were proven; graph was not written\n");
 		goto cleanup;
 	}
 
-	if ((size_t)gen_num_links > (size_t)INT_MAX / sizeof(*link_keys) ||
-	    (size_t)gen_num_seeds > (size_t)INT_MAX / sizeof(*source_marks))
+	Rune_TelemetryPhaseStart("mechanism-plan");
+	memset(&mechanism_buffers, 0, sizeof(mechanism_buffers));
+	memset(&mechanism_result, 0, sizeof(mechanism_result));
+	if (gen_mechanism_catalog.num_edges != 0U ||
+	    gen_num_mechanism_bindings != 0U)
 	{
-		sg_host.dprint("rune: FAILED: v3 writer workspace size overflow\n");
+		uint32_t edge_capacity = gen_num_mechanism_bindings != 0U
+			? RUNE_MAX_MECHANISM_EDGES
+			: gen_mechanism_catalog.num_edges;
+
+		mechanism_edges = Rune_StreamAllocate(NULL,
+			(size_t)edge_capacity * sizeof(*mechanism_edges));
+		mechanism_buffers.edges = mechanism_edges;
+		mechanism_buffers.edge_capacity = edge_capacity;
+	}
+	if (gen_num_mechanism_bindings != 0U)
+	{
+		mechanism_plans = Rune_StreamAllocate(NULL,
+			(size_t)gen_num_mechanism_bindings * sizeof(*mechanism_plans));
+		mechanism_edge_marks = Rune_StreamAllocate(NULL,
+			(size_t)gen_mechanism_catalog.num_edges *
+			    sizeof(*mechanism_edge_marks));
+		mechanism_node_marks = Rune_StreamAllocate(NULL,
+			(size_t)gen_mechanism_catalog.num_nodes *
+			    sizeof(*mechanism_node_marks));
+		mechanism_node_queue = Rune_StreamAllocate(NULL,
+			(size_t)gen_mechanism_catalog.num_nodes *
+			    sizeof(*mechanism_node_queue));
+		mechanism_buffers.plans = mechanism_plans;
+		mechanism_buffers.plan_capacity = gen_num_mechanism_bindings;
+		mechanism_buffers.edge_marks = mechanism_edge_marks;
+		mechanism_buffers.edge_mark_capacity =
+			gen_mechanism_catalog.num_edges;
+		mechanism_buffers.node_marks = mechanism_node_marks;
+		mechanism_buffers.node_mark_capacity =
+			gen_mechanism_catalog.num_nodes;
+		mechanism_buffers.node_queue = mechanism_node_queue;
+		mechanism_buffers.node_queue_capacity =
+			gen_mechanism_catalog.num_nodes;
+	}
+	if (!SG_MechanismPlansMaterialize(gen_links, (uint32_t)gen_num_links,
+	    gen_mechanism_bindings, gen_num_mechanism_bindings,
+	    &gen_mechanism_catalog, &mechanism_buffers, &mechanism_result))
+	{
+		sg_host.dprint("rune: FAILED: mechanism plan materialization "
+		               "reason=%s link=%u plan=%u inventory_edges=%u "
+		               "edges=%u plans=%u; graph was not written\n",
+		               SG_MechanismPlanDiagnosticName(
+		                   mechanism_result.diagnostic),
+		               (unsigned int)mechanism_result.link_index,
+		               (unsigned int)mechanism_result.plan_index,
+		               (unsigned int)mechanism_result.num_inventory_edges,
+		               (unsigned int)mechanism_result.num_edges,
+		               (unsigned int)mechanism_result.num_plans);
 		goto cleanup;
 	}
-	link_keys = sg_host.game_alloc((int)(sizeof(*link_keys) *
-		(size_t)gen_num_links));
-	source_marks = sg_host.game_alloc((int)(sizeof(*source_marks) *
-		(size_t)gen_num_seeds));
-	if (!link_keys || !source_marks)
+	Rune_TelemetryPhaseEnd();
+	sg_host.dprint("rune: mechanism plans materialized nodes=%u triggers=%u "
+	               "inventory_edges=%u plan_edges=%u plans=%u\n",
+	               (unsigned int)gen_mechanism_catalog.num_nodes,
+	               (unsigned int)Mechanism_TriggerCount(),
+	               (unsigned int)mechanism_result.num_inventory_edges,
+	               (unsigned int)(mechanism_result.num_edges -
+	                   mechanism_result.num_inventory_edges),
+	               (unsigned int)mechanism_result.num_plans);
+
+	memset(&stream_source, 0, sizeof(stream_source));
+	stream_source.identity = &authority.identity;
+	stream_source.seeds = gen_seeds;
+	stream_source.num_seeds = (uint32_t)gen_num_seeds;
+	stream_source.links = gen_links;
+	stream_source.num_links = (uint32_t)gen_num_links;
+	stream_source.nodes = gen_mechanism_catalog.nodes;
+	stream_source.num_nodes = gen_mechanism_catalog.num_nodes;
+	stream_source.edges = mechanism_edges;
+	stream_source.num_edges = mechanism_result.num_edges;
+	stream_source.plans = mechanism_plans;
+	stream_source.num_plans = mechanism_result.num_plans;
+	stream_source.strings = gen_mechanism_catalog.strings;
+	stream_source.string_bytes = gen_mechanism_catalog.string_bytes;
+	stream = SG_RuneStreamCreate(&stream_source, Rune_StreamAllocate,
+		Rune_StreamRelease, NULL, &stream_failure);
+	if (!stream)
 	{
-		sg_host.dprint("rune: FAILED: v3 writer workspace allocation\n");
+		sg_host.dprint("rune: FAILED: RUNE stream allocation diagnostic=%d "
+		               "stage=%d\n", stream_failure.diagnostic,
+		               (int)stream_failure.stage);
 		goto cleanup;
 	}
-	memset(&workspace, 0, sizeof(workspace));
-	workspace.link_keys = link_keys;
-	workspace.link_key_capacity = (size_t)gen_num_links;
-	workspace.source_marks = source_marks;
-	workspace.source_mark_capacity = (size_t)gen_num_seeds;
-	memset(&stream, 0, sizeof(stream));
-	stream.identity = &authority.wire;
-	stream.seeds = gen_seeds;
-	stream.num_seeds = (uint32_t)gen_num_seeds;
-	stream.links = gen_links;
-	stream.num_links = (uint32_t)gen_num_links;
-	stream.workspace = &workspace;
 	memset(&recheck, 0, sizeof(recheck));
 	recheck.mapname = canonical_mapname;
 	recheck.captured = &authority;
 	recheck.identity_status = SG_IDENTITY_OK;
-	install_result = SG_RuneInstallV3(game_directory, canonical_mapname,
-		path, sizeof(path), tmp_path, sizeof(tmp_path), Rune_V3Stream,
-		&stream, Rune_V3Revalidate, &recheck, install_ops);
+	install_result = SG_RuneInstall(game_directory, canonical_mapname,
+		path, sizeof(path), tmp_path, sizeof(tmp_path), SG_RuneStreamWrite,
+		stream, Rune_Revalidate, &recheck, install_ops);
 	if (install_result.status != SG_RUNE_INSTALL_OK)
 	{
 		if (install_result.status == SG_RUNE_INSTALL_REVALIDATE_FAILED)
 		{
-			if (recheck.failure == RUNE_V3_RECHECK_IDENTITY)
-				sg_host.dprint("rune: v3 revalidation failed "
+			if (recheck.failure == RUNE_RECHECK_IDENTITY)
+				sg_host.dprint("rune: revalidation failed "
 				               "kind=identity status=%d reason=%s\n",
 				               (int)recheck.identity_status,
 				               SG_LevelIdentityReason(recheck.identity_status));
 			else
-				sg_host.dprint("rune: v3 revalidation failed "
+				sg_host.dprint("rune: revalidation failed "
 				               "kind=proof-law\n");
 		}
-		sg_host.dprint("rune: v3 install failed status=%d reason=%s "
+		sg_host.dprint("rune: install failed status=%d reason=%s "
 		               "os_error=%d cleanup_error=%d diagnostic=%d "
-		               "reject_reason=%d writer_stage=%d writer_index=%u "
+		               "writer_stage=%d writer_index=%u "
 		               "bytes=%lu; kept existing %s\n",
 		               (int)install_result.status,
 		               SG_RuneInstallReason(install_result.status),
 		               install_result.os_error,
 		               install_result.cleanup_error,
 		               (int)install_result.writer.diagnostic,
-		               (int)install_result.writer.reason,
 		               (int)install_result.writer.stage,
 		               (unsigned int)install_result.writer.index,
 		               (unsigned long)install_result.writer.bytes_written,
@@ -4503,23 +5768,49 @@ qboolean Rune_Generate(const char *mapname)
 		goto cleanup;
 	}
 
-	sg_host.dprint("rune: wrote %s (%d seeds, %d links)\n",
-	           path, gen_num_seeds, gen_num_links);
+	sg_host.dprint("rune: wrote %s (%d seeds, %d links, %u mechanism "
+	               "nodes, %u triggers, %u inventory edges, %u activation "
+	               "plans)\n", path, gen_num_seeds, gen_num_links,
+	               (unsigned int)gen_mechanism_catalog.num_nodes,
+	               (unsigned int)Mechanism_TriggerCount(),
+	               (unsigned int)mechanism_result.num_inventory_edges,
+	               (unsigned int)mechanism_result.num_plans);
 	generated = true;
 
 cleanup:
-	if (ndoors > 0)
-		Doors_Restore(held, ndoors);
-	if (link_keys)
-		sg_host.game_free(link_keys);
-	if (source_marks)
-		sg_host.game_free(source_marks);
+	Rune_TelemetryPhaseEnd();
+	if (SG_RuneDoorScopeActive(&doors))
+	{
+		door_status = Doors_Restore(&doors);
+		if (door_status != SG_RUNE_DOOR_SCOPE_OK)
+		{
+			sg_host.dprint("rune: FAILED: cleanup door restore reason=%s; "
+			               "graph was not written\n",
+			               SG_RuneDoorScopeStatusName(door_status));
+			generated = false;
+		}
+		else if (door_restore_failed)
+			sg_host.dprint("rune: cleanup restored pending door scope; "
+			               "graph remains unwritten\n");
+	}
+	if (door_restore_failed)
+		generated = false;
+	SG_RuneStreamDestroy(stream);
+	Rune_StreamRelease(NULL, mechanism_edges);
+	Rune_StreamRelease(NULL, mechanism_plans);
+	Rune_StreamRelease(NULL, mechanism_edge_marks);
+	Rune_StreamRelease(NULL, mechanism_node_marks);
+	Rune_StreamRelease(NULL, mechanism_node_queue);
 	if (gen_seeds)
 		sg_host.game_free(gen_seeds);
 	if (gen_links)
 		sg_host.game_free(gen_links);
+	if (gen_mechanism_bindings)
+		sg_host.game_free(gen_mechanism_bindings);
 	gen_seeds = NULL;
 	gen_links = NULL;
+	gen_mechanism_bindings = NULL;
+	gen_num_mechanism_bindings = 0U;
 	gen_num_seeds = 0;
 	gen_num_links = 0;
 	if (scope_active)
