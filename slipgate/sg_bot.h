@@ -212,8 +212,11 @@ typedef struct sg_bot_s
 	int			visit_seed[SG_VISIT_RING];
 	int			visit_goal[SG_VISIT_RING];  /* the seed's value at visit */
 	int			visit_min[SG_VISIT_RING];   /* best goal reached SINCE */
+	const int		*visit_field[SG_VISIT_RING]; /* exact objective field */
+	qboolean		visit_combat[SG_VISIT_RING]; /* fight occurred since visit */
 	float		visit_time[SG_VISIT_RING];
 	int			visit_head;
+	const int		*orbit_field; /* continuous field owning the visit ring */
 	int			orbit_last_seed; /* last seed consumed by the wide-orbit edge;
 		                             * belongs to this bot/life, not the process */
 

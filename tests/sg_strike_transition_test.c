@@ -1167,6 +1167,12 @@ static void TestCombatActivityResetsGenericWedgeClock(void)
 	CHECK(!SG_WedgeKillHoldClear(true, false));
 	CHECK(!SG_WedgeKillHoldClear(false, true));
 	CHECK(!SG_WedgeKillHoldClear(true, true));
+	CHECK(SG_ObjectiveOrbitMayShelf(SG_ROLE_CARRY, false, false, true));
+	CHECK(SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, true, true, false));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, true, true, true));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, true, false, false));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, false, true, false));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_DEFEND, true, true, false));
 }
 
 static void TestMissionAndCombatCannotShelveRoutes(void)

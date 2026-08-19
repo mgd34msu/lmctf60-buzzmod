@@ -82,6 +82,18 @@ static inline int SG_WedgeKillHoldClear(int rally_hold, int rail_hold)
 	return !rally_hold && !rail_hold;
 }
 
+/* A carrier orbit is always failed objective movement. Enemy-stand pressure
+ * may use the same recovery only while the flag is still home and the entire
+ * recorded loop was navigation-owned; a real fight remains resistance, not a
+ * bad road. */
+static inline int SG_ObjectiveOrbitMayShelf(int role, int enemy_pressure,
+	int enemy_flag_home, int combat_since_visit)
+{
+	return role == SG_ROLE_CARRY ||
+	       (role != SG_ROLE_DEFEND && enemy_pressure && enemy_flag_home &&
+	        !combat_since_visit);
+}
+
 /* Route-failure clocks may judge only navigation-owned motion.  Mission holds
  * and combat-owned frames cannot prove that the selected graph link failed. */
 static inline int SG_RouteFailureWatchSuppressed(int role, int goal_cost,

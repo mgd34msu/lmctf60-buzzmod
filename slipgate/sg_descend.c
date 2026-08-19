@@ -1851,22 +1851,24 @@ static qboolean Carrier_LinkShelved(const sg_bot_t *bot, int link)
 	return false;
 }
 
-static qboolean Carrier_VisitedRecently(const sg_bot_t *bot, int seed)
+static qboolean Objective_VisitedRecently(const sg_bot_t *bot, int seed,
+	const int *goal_field)
 {
 	int visit;
 
 	for (visit = 0; bot && visit < SG_VISIT_RING; visit++)
 		if (bot->visit_seed[visit] == seed &&
+		    bot->visit_field[visit] == goal_field &&
 		    SG_AgeUnder(bot->visit_time[visit], 30.0f))
 			return true;
 	return false;
 }
 
-/* After a detected carrier orbit, prefer an unshelved, unvisited RUN that
- * genuinely descends the finite home field.  A one-exit corridor may have no
+/* After a detected objective orbit, prefer an unshelved, unvisited RUN that
+ * genuinely descends the same finite field. A one-exit corridor may have no
  * such route; its fallback deliberately keeps the shelf as evidence while
  * allowing the only finite exit to remain mobile. */
-static int Carrier_CycleRoute(sg_bot_t *bot, const int *goal_field,
+static int Objective_CycleRoute(sg_bot_t *bot, const int *goal_field,
 	qboolean alternate_only)
 {
 	int link, selected = -1;
@@ -1904,7 +1906,7 @@ static int Carrier_CycleRoute(sg_bot_t *bot, const int *goal_field,
 			continue;
 		if (alternate_only &&
 		    (cost >= here || Carrier_LinkShelved(bot, link) ||
-		     Carrier_VisitedRecently(bot, candidate->to)))
+		     Objective_VisitedRecently(bot, candidate->to, goal_field)))
 			continue;
 		if (cost < selected_cost)
 		{
@@ -4226,7 +4228,25 @@ stag_done:
 	{
 		int gv = (goal_field[bot->seed] < SG_FIELD_INF)
 		             ? goal_field[bot->seed] : 0x7ffffff;
+		edict_t *enemy_flag = enemy_pressure ? SG_EnemyFlag(team) : NULL;
+		qboolean enemy_flag_home = enemy_flag && ctf_flagathome(enemy_flag);
 		int v;
+
+		/* A departure onto another objective is not part of this orbit.  Drop
+		 * the whole history at the pointer identity edge so returning later to
+		 * the same seed cannot join two different missions into one loop. */
+		if (bot->orbit_field != goal_field)
+		{
+			for (v = 0; v < SG_VISIT_RING; v++)
+			{
+				bot->visit_seed[v] = -1;
+				bot->visit_field[v] = NULL;
+				bot->visit_combat[v] = false;
+			}
+			bot->visit_head = 0;
+			bot->orbit_last_seed = -1;
+			bot->orbit_field = goal_field;
+		}
 
 		/* every live entry keeps the best goal the bot has touched since
 		 * that visit -- THIS is what distinguishes a loop from a route
@@ -4235,25 +4255,31 @@ stag_done:
 		 * shelved every second visit on the map (campaign 2: steals
 		 * 7 -> 1, lmctf03 shelves 434). */
 		for (v = 0; v < SG_VISIT_RING; v++)
-			if (bot->visit_seed[v] >= 0 && gv < bot->visit_min[v])
-				bot->visit_min[v] = gv;
+			if (bot->visit_seed[v] >= 0 &&
+			    bot->visit_field[v] == goal_field)
+			{
+				if (gv < bot->visit_min[v])
+					bot->visit_min[v] = gv;
+				if (duel || bot->engaged_last)
+					bot->visit_combat[v] = true;
+			}
 
 		if (bot->seed != bot->orbit_last_seed)
 		{
 			bot->orbit_last_seed = bot->seed;
-			/*
-			 * CARRIERS ONLY. Even with the min-since test, a fighter
-			 * repelled by live defense revisits without progress -- that
-			 * is resistance, not a bad link, and no signal here can tell
-			 * them apart (campaign 3: 4099 fires, 164 a game, routes
-			 * shredded map-wide). A carrier's loop loses the flag and its
-			 * fights are ones it fled; for the carrier the test is sound.
-			 */
-			for (v = 0; role == SG_ROLE_CARRY && v < SG_VISIT_RING; v++)
+			/* A carrier's loop always loses objective progress. Pressure
+			 * attackers may now use the same repair only when the same field
+			 * remained live, the enemy flag stayed home, and no duel/combat
+			 * occurred anywhere in the interval. This preserves the campaign-3
+			 * lesson: resistance must never shred a sound route. */
+			for (v = 0; v < SG_VISIT_RING; v++)
 				if (bot->visit_seed[v] == bot->seed &&
+				    bot->visit_field[v] == goal_field &&
 				    SG_AgeUnder(bot->visit_time[v], 30.0f) &&
 				    SG_AgeOver(bot->visit_time[v], 3.0f) &&
 				    bot->visit_min[v] >= bot->visit_goal[v] &&
+				    SG_ObjectiveOrbitMayShelf((int)role, enemy_pressure,
+				        enemy_flag_home, bot->visit_combat[v]) &&
 				    bestlink >= 0)
 				{
 					/* back where it was, and it never once got closer
@@ -4271,9 +4297,9 @@ stag_done:
 					 * next frame rediscover it.  Prefer an unvisited descending
 					 * branch; when this is a one-exit corridor, permit its finite
 					 * exit without deleting the fresh cycle evidence. */
-					alternate = Carrier_CycleRoute(bot, goal_field, true);
+					alternate = Objective_CycleRoute(bot, goal_field, true);
 					if (alternate < 0)
-						alternate = Carrier_CycleRoute(bot, goal_field, false);
+						alternate = Objective_CycleRoute(bot, goal_field, false);
 					if (bot->commit_link == cycle_link &&
 					    SG_Rune()->links[cycle_link].action == RL_RUN)
 					{
@@ -4295,6 +4321,8 @@ stag_done:
 			bot->visit_seed[bot->visit_head] = bot->seed;
 			bot->visit_goal[bot->visit_head] = gv;
 			bot->visit_min[bot->visit_head] = gv;
+			bot->visit_field[bot->visit_head] = goal_field;
+			bot->visit_combat[bot->visit_head] = duel || bot->engaged_last;
 			SG_Mark(&bot->visit_time[bot->visit_head]);
 			bot->visit_head = (bot->visit_head + 1) % SG_VISIT_RING;
 		}
