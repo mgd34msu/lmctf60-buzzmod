@@ -526,8 +526,15 @@ class StrikeIntegrationTest(unittest.TestCase):
         source = (ROOT / "slipgate/sg_arach.c").read_text()
         call = source.index(
             "if (!StrikeApplyRallyPolicy(bot, &tc, &rally_hold))")
-        legacy = source.index("Think_ApproachBand(bot, &tc)", call)
-        self.assertLess(call, legacy)
+        first = source.index("Think_ApproachBand(bot, &tc)", call)
+        second = source.index("Think_ApproachBand(bot, &tc)", first + 1)
+        self.assertLess(call, first)
+        self.assertLess(first, second)
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        approach = goal[goal.index("qboolean Think_ApproachBand"):
+                        goal.index("THE INTERCEPT SURFACE")]
+        self.assertIn("!tc->strike_active &&", approach)
+        self.assertIn("SG_StrikePrebreachApproachAllowed(", approach)
 
     def test_active_strike_retires_unbound_rail_before_route_selection(self) -> None:
         arach = (ROOT / "slipgate/sg_arach.c").read_text()

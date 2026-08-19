@@ -1042,6 +1042,14 @@ static void TestHomeFlagApproachPricing(void)
 	CHECK(!SG_StrikeEscortActive(1, 1, SG_STRIKE_DUTY_RECOVER));
 	CHECK(SG_StrikeEscortActive(0, 1, SG_STRIKE_DUTY_ESCORT));
 	CHECK(!SG_StrikeEscortActive(0, 1, SG_STRIKE_DUTY_PRESS));
+	CHECK(SG_StrikePrebreachApproachAllowed(0, 0, 1, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(0, 0, 0, 3000));
+	CHECK(SG_StrikePrebreachApproachAllowed(1, 1, 0, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, 0, 1, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, 1, 0, 2000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, 1, 0, 5000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(2, 1, 1, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, -1, 1, 3000));
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 500.0f, 300.0f, 0.0f,
 	    500, 500) == -100.0f);
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 350.0f, 0.0f,

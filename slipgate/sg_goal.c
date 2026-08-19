@@ -20,6 +20,7 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_rune_handoff_policy.h"
+#include "slipgate/sg_strike.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
@@ -234,8 +235,17 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	sg_role_t role = tc->role;
 	int team = tc->team;
 	const int *goal_field = tc->goal_field;
+	int goal_ms = -1;
 
 	qboolean hold = false;
+	qboolean pressure_approach;
+
+	if (bot->seed >= 0 && SG_Rune() &&
+	    bot->seed < SG_Rune()->hdr.num_seeds)
+		goal_ms = goal_field[bot->seed];
+	pressure_approach = SG_StrikePrebreachApproachAllowed(
+	    tc->strike_active, tc->strike_pressure,
+	    role == SG_ROLE_ATTACK, goal_ms);
 
 	/*
 	 * THE RALLY. Arrival measurements show three quarters of all attacks
@@ -268,7 +278,10 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	 * into the same respawn-wide window, detours pause only during the
 	 * eight seconds the window is actually open.
 	 */
-	if (sg_cv.wavepush->value &&
+	/* A strike frame owns HOLD/RUSH.  Keep the legacy conductor and rally out
+	 * of that decision, but do not skip the independent live-enemy approach
+	 * action below merely because the coordinator supplied the route. */
+	if (!tc->strike_active && sg_cv.wavepush->value &&
 	    role == SG_ROLE_ATTACK &&
 	    SG_TimerReady(sg_push_until[SG_TeamIdx(team)]))
 	{
@@ -283,7 +296,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	if (!tc->strike_active && role == SG_ROLE_ATTACK && bot->seed >= 0 &&
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF &&
 	    SG_TimerPending(sg_push_until[SG_TeamIdx(team)]))
@@ -293,7 +306,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		goto rally_done;
 	}
 
-	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	if (!tc->strike_active && role == SG_ROLE_ATTACK && bot->seed >= 0 &&
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF)
 	{
@@ -392,36 +405,28 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			bot->rally_since = 0.0f;
 		}
 rally_done:;
-
-		/*
-		 * THE FLYING COOK, truly at the band this time (an earlier
-		 * relocation never landed because its edit died in a chain that
-		 * kept going; the ledger is corrected). Every attacker in
-		 * the approach band cooks on the run, but only for a currently
-		 * visible, living enemy body.  A danger seed or a remembered stand
-		 * never owns a grenade transaction; an immediately touchable flag
-		 * owns the body instead.
-		 */
-		if (sg_cv.flycook->value &&
-		    !bot->jump_started && !bot->drop_started &&
-		    bot->hook_phase == 0 && bot->rj_phase == 0 &&
-		    bot->nade_phase == 0 &&
-		    !(SG_Rune() && bot->commit_link >= 0 &&
-		      bot->commit_link < SG_Rune()->hdr.num_links &&
-		      SG_ActionOwnsControl(
-		          SG_Rune()->links[bot->commit_link].action)) &&
-		    SG_TimerReady(bot->nade_next) &&
-		    !SG_AttackFlagDirectTouchAuthority(e, team, NULL))
-		{
-			/* This is the same bound arm used by the clean-grab threshold.
-			 * Open distance bounds preserve the approach band's ordinary
-			 * timing while the shared transaction supplies live identity,
-			 * current visibility, weapon switch and target-body aim. */
-			(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f);
-		}
 	}
-	else
+	else if (!tc->strike_active)
 		bot->rally_since = 0.0f;
+
+	/* THE FLYING COOK.  The strike coordinator replaces only rally timing;
+	 * BREACH/CLEAR/PRESS still need this live-enemy arm in the same two-to-five
+	 * second band.  Keeping it outside the legacy rally branch lets effective
+	 * pressure override organic RECOVER/ESCORT without granting the action to a
+	 * concrete recovery or escort duty. */
+	if (pressure_approach && sg_cv.flycook->value &&
+	    !bot->jump_started && !bot->drop_started &&
+	    bot->hook_phase == 0 && bot->rj_phase == 0 &&
+	    bot->nade_phase == 0 &&
+	    !(SG_Rune() && bot->commit_link >= 0 &&
+	      bot->commit_link < SG_Rune()->hdr.num_links &&
+	      SG_ActionOwnsControl(
+	          SG_Rune()->links[bot->commit_link].action)) &&
+	    SG_TimerReady(bot->nade_next) &&
+	    !SG_AttackFlagDirectTouchAuthority(e, team, NULL))
+	{
+		(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f);
+	}
 	return hold;
 }
 

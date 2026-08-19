@@ -77,6 +77,20 @@ int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty)
 	}
 }
 
+int SG_StrikePrebreachApproachAllowed(int strike_active,
+	int strike_pressure, int organic_attack, int goal_ms)
+{
+	if ((strike_active != 0 && strike_active != 1) ||
+	    (strike_pressure != 0 && strike_pressure != 1) ||
+	    (organic_attack != 0 && organic_attack != 1) ||
+	    goal_ms <= 2000 || goal_ms >= 5000)
+		return 0;
+	/* A concrete pressure duty may override organic RECOVER/ESCORT.  The
+	 * inverse matters too: a concrete recovery/escort duty suppresses the
+	 * obsolete organic ATTACK premise. */
+	return strike_active ? strike_pressure : organic_attack;
+}
+
 float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,
 	int current_goal_ms, int candidate_goal_ms)

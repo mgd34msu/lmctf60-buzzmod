@@ -3542,6 +3542,10 @@ void SG_BotThink(sg_bot_t *bot)
 	 * non-members retain the existing approach behavior unchanged. */
 	if (!StrikeApplyRallyPolicy(bot, &tc, &rally_hold))
 		rally_hold = Think_ApproachBand(bot, &tc);
+	else
+		/* The coordinator owns HOLD/RUSH, while the approach function still
+		 * owns independent pressure actions such as a live-enemy flying cook. */
+		(void)Think_ApproachBand(bot, &tc);
 	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
 	bot->terminal = false;
 

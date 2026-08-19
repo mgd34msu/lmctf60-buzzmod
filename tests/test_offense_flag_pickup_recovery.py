@@ -497,8 +497,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         )
         flight = between(
             approach,
-            "THE FLYING COOK, truly at the band this time",
-            "\n\telse\n\t\tbot->rally_since = 0.0f;",
+            "THE FLYING COOK.",
+            "\n\treturn hold;",
         )
         self.assertIn(
             "goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000",

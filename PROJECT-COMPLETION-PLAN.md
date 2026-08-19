@@ -381,6 +381,12 @@ duty, not from the transient strike rush mask. CLEAR/PRESS therefore retain
 attack routing and terminal safeguards through carrier egress and standoffs
 where rush is intentionally zero, while a concrete RECOVER or ESCORT duty
 overrides an underlying ATTACK role instead of accidentally keeping it hostile.
+Coordinated HOLD/RUSH now replaces only the legacy rally verdict, not the
+independent live-enemy action in the two-to-five-second stand approach band.
+BREACH, CLEAR, and PRESS bodies can therefore arm their bound flying-cook
+grenade on approach even when their organic role is RECOVER or ESCORT; a
+concrete recovery or escort duty still suppresses that action, and direct flag
+touch retains precedence over every grenade transaction.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 
@@ -1218,6 +1224,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       A rejected physical powerup touch now retires only the touching bot's
       exact item commitment before target callbacks run; another client's
       rejection cannot cancel the claimant's live errand or publish item belief.
+      Coordinated pressure now continues through the live-enemy pre-breach arm
+      in the two-to-five-second approach band instead of skipping the action
+      together with the superseded legacy rally decision.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

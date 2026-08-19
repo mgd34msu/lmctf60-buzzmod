@@ -192,6 +192,12 @@ int SG_StrikeEscortActive(int ordinary_escort, int strike_active,
  * preparation cannot remain live underneath its route and aim authority. */
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);
 
+/* The coordinator replaces rally timing, not independent live-enemy approach
+ * actions.  Resolve those actions from the effective pressure duty and the
+ * exact two-to-five-second route band. */
+int SG_StrikePrebreachApproachAllowed(int strike_active,
+	int strike_pressure, int organic_attack, int goal_ms);
+
 /* Bounded pricing correction for the last proved RUNs toward a home enemy
  * flag.  This never grants touch or movement authority; it only breaks a
  * near-stand field plateau in favor of physical progress toward the item. */
