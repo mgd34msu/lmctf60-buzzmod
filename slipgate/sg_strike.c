@@ -213,6 +213,8 @@ static void Strike_ReconcileMembers(sg_strike_team_t *team,
 
 		for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
 			if ((team->member_mask & Strike_Bit(slot)) != 0u &&
+			    slot != frame->carrier_slot &&
+			    !frame->slot[slot].carrying &&
 			    frame->slot[slot].recover_goal_ms >= 0)
 			{
 				have_recover = 1;
@@ -222,6 +224,8 @@ static void Strike_ReconcileMembers(sg_strike_team_t *team,
 		{
 			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
 				if ((team->member_mask & Strike_Bit(slot)) == 0u &&
+				    slot != frame->carrier_slot &&
+				    !frame->slot[slot].carrying &&
 				    Strike_InputViable(frame, slot) &&
 				    frame->slot[slot].recover_goal_ms >= 0 &&
 				    (candidate < 0 ||
@@ -240,6 +244,70 @@ static void Strike_ReconcileMembers(sg_strike_team_t *team,
 					if ((team->member_mask & Strike_Bit(slot)) == 0u ||
 					    slot == frame->carrier_slot ||
 					    frame->slot[slot].carrying)
+						continue;
+					goal = Strike_GoalForSelection(frame,
+					    &frame->slot[slot]);
+					if (evict < 0 || goal > worst_goal ||
+					    (goal == worst_goal && slot > evict))
+					{
+						evict = slot;
+						worst_goal = goal;
+					}
+				}
+				if (evict >= 0)
+				{
+					Strike_RemoveMember(team, evict);
+					Strike_AddMember(team, frame, candidate);
+				}
+			}
+		}
+	}
+
+	if (frame->carrier_slot >= 0)
+	{
+		int have_escort = 0;
+		int recovery_count = 0;
+		int candidate = -1;
+		int evict = -1;
+		int worst_goal = 0;
+
+		for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+		{
+			if ((team->member_mask & Strike_Bit(slot)) == 0u)
+				continue;
+			if (!frame->own_flag_home &&
+			    frame->slot[slot].recover_goal_ms >= 0)
+				recovery_count++;
+			if (slot != frame->carrier_slot && !frame->slot[slot].carrying &&
+			    frame->slot[slot].carrier_goal_ms >= 0)
+				have_escort = 1;
+		}
+		if (!have_escort)
+		{
+			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				if ((team->member_mask & Strike_Bit(slot)) == 0u &&
+				    slot != frame->carrier_slot &&
+				    !frame->slot[slot].carrying &&
+				    Strike_InputViable(frame, slot) &&
+				    frame->slot[slot].carrier_goal_ms >= 0 &&
+				    (candidate < 0 ||
+				     frame->slot[slot].carrier_goal_ms <
+				         frame->slot[candidate].carrier_goal_ms ||
+				     (frame->slot[slot].carrier_goal_ms ==
+				          frame->slot[candidate].carrier_goal_ms &&
+				      slot < candidate)))
+					candidate = slot;
+			if (candidate >= 0)
+			{
+				for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				{
+					int goal;
+
+					if ((team->member_mask & Strike_Bit(slot)) == 0u ||
+					    slot == frame->carrier_slot ||
+					    frame->slot[slot].carrying ||
+					    (!frame->own_flag_home && recovery_count <= 1 &&
+					     frame->slot[slot].recover_goal_ms >= 0))
 						continue;
 					goal = Strike_GoalForSelection(frame,
 					    &frame->slot[slot]);

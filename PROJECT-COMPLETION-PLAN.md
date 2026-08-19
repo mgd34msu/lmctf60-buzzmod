@@ -203,7 +203,9 @@ an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a
 stable four-person roster is already full when the flag leaves home, it makes
 one bounded replacement only when none of its members has a finite recovery
-route; the actual carrier is never displaced.
+route; the actual carrier is never displaced. The same bounded rule admits an
+otherwise excluded reachable escort when the retained roster cannot reach its
+carrier, while protecting both the carrier and the sole recovery route.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

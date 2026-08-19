@@ -523,6 +523,60 @@ static void TestFullRosterMakesRoomForOnlyRecoverer(void)
 	    CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 3);
 }
 
+static void TestFullRosterMakesRoomForOnlyEscort(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(450.0f);
+	int slot;
+
+	for (slot = 0; slot < 6; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(80 + slot), 2,
+		    slot < 4 ? 100 + slot * 100 : 10000 + slot * 100);
+		frame.slot[slot].carrier_goal_ms = slot == 4 ? 50 : -1;
+	}
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 5;
+	frame.slot[5].carrying = 1;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(!SG_StrikeMember(&team, 3));
+	CHECK(SG_StrikeParticipant(&team, 5));
+	CHECK(team.duty[5] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
+}
+
+static void TestCarrierCannotSatisfyRecoveryCoverage(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(460.0f);
+	int slot;
+
+	for (slot = 0; slot < 5; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(90 + slot), 2,
+		    slot < 4 ? 100 + slot * 100 : 10000);
+		frame.slot[slot].recover_goal_ms = slot == 4 ? 50 : -1;
+	}
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	/* The carrier's home route is finite because carrying uses it, but the
+	 * carrier cannot return the enemy-held own flag. */
+	frame.slot[0].recover_goal_ms = 10;
+	frame.slot[1].carrier_goal_ms = 100;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_RECOVER);
+}
+
 static void TestDutiesStayStableUntilEgress(void)
 {
 	sg_strike_team_t team;
@@ -947,6 +1001,8 @@ int main(void)
 	TestOneRecovererPreservesAttack();
 	TestRecoveryRouteAdmitsDisconnectedAttacker();
 	TestFullRosterMakesRoomForOnlyRecoverer();
+	TestFullRosterMakesRoomForOnlyEscort();
+	TestCarrierCannotSatisfyRecoveryCoverage();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();
