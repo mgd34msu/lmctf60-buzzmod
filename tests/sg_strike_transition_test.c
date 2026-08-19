@@ -26,6 +26,8 @@ qboolean SG_StrikeTestApplyRallyPolicy(sg_bot_t *bot,
 	const sg_think_t *tc, qboolean *rally_hold);
 qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
 	int ordered_role);
+void SG_StrikeTestPureRoutePrepareCommit(sg_bot_t *bot,
+	const sg_think_t *tc);
 
 static int failures;
 
@@ -282,6 +284,7 @@ static void ArmExact(sg_bot_t *bot, sg_think_t *tc, int action)
 	test_links[1].action = (byte)action;
 	bot->commit_link = 1;
 	bot->commit_until = 30.0f;
+	bot->commit_route_field = weapon_field;
 	bot->strike_weapon_link = 1;
 	bot->strike_weapon_until = 20.0f;
 	bot->strike_weapon_target_ent = 6;
@@ -337,6 +340,7 @@ static void TestFreshTagAndOldCommitment(void)
 	CHECK(candidate == 1);
 	SG_StrikeTestCommitFreshLink(&bot, &tc, candidate);
 	CHECK(bot.commit_link == 1);
+	CHECK(bot.commit_route_field == weapon_field);
 	CHECK(bot.strike_weapon_link == 1);
 	CHECK(bot.strike_weapon_until == 15.0f);
 	CHECK(!bot.strike_weapon_draining);
@@ -421,6 +425,63 @@ static void TestFreshTagAndOldCommitment(void)
 	weapon_field[1] = weapon_field[0];
 	bot = Bot();
 	CHECK(SG_StrikeTestWeaponFilterFreshCandidate(&bot, &tc, 1) == -1);
+}
+
+static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
+{
+	sg_bot_t bot;
+	sg_think_t tc;
+
+	WorldReset();
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	bot.sticky_link = 1;
+	bot.latch_until = 25.0f;
+	CHECK(bot.commit_route_field == weapon_field);
+
+	/* PRESS replacing a weapon/recovery route must move on the enemy field
+	 * this frame, not after the generic three-second commitment expires. */
+	tc.goal_field = enemy_field;
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
+	CHECK(bot.commit_route_field == NULL);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+
+	/* The same field retains its anti-flap commitment. */
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1);
+	CHECK(bot.commit_route_field == weapon_field);
+
+	/* A composed surface is not an exact purpose change. */
+	tc.route_pure = false;
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1);
+
+	/* A speed hook which already fired owns physics even though it is layered
+	 * on an ordinary RUN; the new mission waits for its bounded landing. */
+	tc.route_pure = true;
+	bot.hook_phase = 2;
+	bot.hook_link = 1;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
+
+	/* Non-RUN graph controllers likewise retain their exact lifecycle. */
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	test_links[1].action = RL_HOOK;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1);
 }
 
 static void TestDeadlineGoAndCurrentCandidate(void)
@@ -1108,6 +1169,7 @@ static void TestMissionAndCombatCannotShelveRoutes(void)
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
+	TestPureRouteChangeRetiresOnlyReversibleRun();
 	TestDeadlineGoAndCurrentCandidate();
 	TestSpeedHookAndStickyDrain();
 	TestRocketJumpBoundaries();

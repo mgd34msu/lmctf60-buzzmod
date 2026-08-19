@@ -1574,6 +1574,13 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       cannot raise the client's held armor, while shards, empty slots, and real
       upgrades remain available; route admission and `Pickup_Armor` share the
       same calculation.
+      Retained ordinary RUNs now carry the exact route-field identity that
+      authorized them. When a pure mission changes to enemy pressure,
+      recovery, escort, or an exact item route, a reversible RUN and its sticky
+      latch retire in the same frame instead of spending up to three seconds on
+      the superseded objective. Unchanged fields keep anti-flap commitment;
+      hooks, jumps, swims, and declared mechanisms keep their bounded physical
+      lifecycle.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

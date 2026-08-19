@@ -285,6 +285,10 @@ typedef struct sg_bot_s
 		                                           * budget; zero while making progress */
 	int			commit_link;    /* the gradient step being held */
 	float		commit_until;
+	/* Field identity that authorized the retained step.  Pure objective
+	 * changes may retire a still-reversible RUN immediately instead of
+	 * spending the generic three-second latch on the superseded mission. */
+	const int		*commit_route_field;
 	/* Exact route transaction selected while the strike coordinator owns its
 	 * bounded weapon diversion.  The immutable core deadline is copied here;
 	 * draining means authority ended after a physical controller began. */
@@ -544,8 +548,8 @@ typedef struct sg_think_s {
 	usercmd_t		cmd;
 	const int		*goal_field, *support, *intercept;
 	const int		*route_field;
-	/* Per-client item surfaces.  Most classes use the shared live field;
-	 * weapon and health roots are filtered through physical pickup law. */
+	/* Per-client item surfaces.  Runes and powerups use the shared live field;
+	 * weapon, health, ammo, and armor roots follow physical pickup law. */
 	const int		*collectible_item_field[SG_FIELD_CLASSES];
 	qboolean		route_pure;
 	const sg_weights_t *w;
