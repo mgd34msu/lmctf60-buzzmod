@@ -1035,6 +1035,7 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 	 * 60" said about a corpse's quad would be a lie with a number on it.
 	 */
 	SG_DefenseSupplyNoteItemTouch(taker, item);
+	SG_StrikeWeaponNoteItemTouch(taker, item);
 	disposition = SG_ItemPickupDisposition(true,
 	    (item->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)) != 0,
 	    SG_ChatItemMajor(item), SG_ItemComm());
@@ -1083,6 +1084,7 @@ void SG_NoteItemRejected(edict_t *taker, edict_t *item)
 	 * changes team belief nor earns a callout; it only closes the exact local
 	 * errand that has now proved unable to collect its target. */
 	SG_DefenseSupplyNoteItemTouch(taker, item);
+	SG_StrikeWeaponNoteItemTouch(taker, item);
 	Lead_NoteItemRejected(taker, item);
 }
 

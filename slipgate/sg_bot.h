@@ -291,6 +291,13 @@ typedef struct sg_bot_s
 	int			strike_weapon_link;
 	float		strike_weapon_until;
 	qboolean	strike_weapon_draining;
+	/* The bounded strike preparation descends a flood from one exact live
+	 * pickup, not the broad weapon class field.  The edict/seed/origin tuple
+	 * prevents WEAPONS_STAY or an unrelated respawn from silently retargeting
+	 * the mission to a pad this client cannot collect. */
+	int			strike_weapon_target_ent;
+	int			strike_weapon_target_seed;
+	vec3_t		strike_weapon_target_org;
 	vec3_t		stag_org;       /* stagnation ball on the BODY, not the
 	                             * link: the identity watch above resets
 	                             * whenever the argmin flaps, and two

@@ -782,16 +782,16 @@ static qboolean DefenseSupplyOtherOwner(const sg_bot_t *bot,
 	return !active && bot->commit_link >= 0;
 }
 
-static qboolean DefenseSupplyWeaponClass(const edict_t *item,
-                                         const edict_t *taker)
+static qboolean WeaponPickupRouteEligible(const edict_t *item,
+                                          const edict_t *taker)
 {
 	if (!item || !item->inuse || !item->classname ||
 	    strncmp(item->classname, "weapon_", 7) != 0)
 		return false;
-	/* The hook and hand-grenade entries are weapon_ classnames too, but neither
-	 * is a usable non-blaster pickup for this errand. */
-	if (strcmp(item->classname, "weapon_grappling_hook") == 0 ||
-	    strcmp(item->classname, "weapon_grenades") == 0 ||
+	/* The hook is always-owned equipment and the blaster is the spawn weapon;
+	 * neither can improve a below-tier strike member.  Hand grenades are an
+	 * ammo_ classname and therefore never enter this weapon-only predicate. */
+	if (strcmp(item->classname, "weapon_hook") == 0 ||
 	    strcmp(item->classname, "weapon_blaster") == 0)
 		return false;
 	return item->solid != SOLID_NOT && Caco_ItemBelievedUp((edict_t *)item) &&
@@ -807,7 +807,7 @@ static qboolean DefenseSupplyTargetValid(const sg_bot_t *bot)
 	    bot->def_supply_ent >= globals.num_edicts || !SG_Rune())
 		return false;
 	item = &g_edicts[bot->def_supply_ent];
-	if (!DefenseSupplyWeaponClass(item, bot->ent))
+	if (!WeaponPickupRouteEligible(item, bot->ent))
 		return false;
 	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 	if (seed < 0 || seed != bot->def_supply_target_seed)
@@ -836,10 +836,14 @@ static qboolean DefenseSupplyWeaponFieldReachable(const sg_bot_t *bot)
 	       field[bot->seed] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
 }
 
-static int sg_defense_supply_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
-static unsigned sg_defense_supply_target_epoch[SG_MAXBOTS];
-static int sg_defense_supply_target_cached[SG_MAXBOTS];
-static unsigned char sg_defense_supply_target_ready[SG_MAXBOTS];
+/* Defenders and strike attackers are mutually exclusive route owners, so one
+ * per-bot exact-pickup flood cache serves both without another MAX_SEEDS x
+ * SG_MAXBOTS allocation.  Every scan invalidates the cache because its
+ * scratch floods visit several candidate pads before the winner is known. */
+static int sg_weapon_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_weapon_target_epoch[SG_MAXBOTS];
+static int sg_weapon_target_cached[SG_MAXBOTS];
+static unsigned char sg_weapon_target_ready[SG_MAXBOTS];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -851,6 +855,27 @@ static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 	if (index < 0 || index >= SG_MAXBOTS)
 		return 0;
 	return (int)index;
+}
+
+static const int *WeaponTargetField(sg_bot_t *bot, int target_seed)
+{
+	int bi, cost = 0;
+
+	if (!bot || !SG_Rune() || target_seed < 0 ||
+	    target_seed >= SG_Rune()->hdr.num_seeds)
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	if (!sg_weapon_target_ready[bi] ||
+	    sg_weapon_target_cached[bi] != target_seed ||
+	    sg_weapon_target_epoch[bi] != sg_fields.action_topology_epoch)
+	{
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi],
+		            &target_seed, &cost, 1);
+		sg_weapon_target_epoch[bi] = sg_fields.action_topology_epoch;
+		sg_weapon_target_cached[bi] = target_seed;
+		sg_weapon_target_ready[bi] = 1;
+	}
+	return sg_weapon_target_field[bi];
 }
 
 static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
@@ -867,14 +892,14 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 		edict_t *item = &g_edicts[i];
 		int seed, flood_cost = 0, cost;
 
-		if (!DefenseSupplyWeaponClass(item, bot->ent))
+		if (!WeaponPickupRouteEligible(item, bot->ent))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
 			continue;
-		Field_Flood(SG_Rune(), sg_defense_supply_target_field[bi],
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi],
 		            &seed, &flood_cost, 1);
-		cost = sg_defense_supply_target_field[bi][bot->seed];
+		cost = sg_weapon_target_field[bi][bot->seed];
 		if (cost < best_cost)
 		{
 			best_cost = cost;
@@ -882,6 +907,7 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 			best_seed = seed;
 		}
 	}
+	sg_weapon_target_ready[bi] = 0;
 	if (best_ent < 0 || best_cost >= SG_FIELD_INF ||
 	    best_cost > SG_DEF_SUPPLY_MAX_ROUTE_MS)
 		return false;
@@ -892,6 +918,124 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 	if (out_route_ms)
 		*out_route_ms = best_cost;
 	return true;
+}
+
+void SG_StrikeWeaponTargetClear(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->strike_weapon_target_ent = -1;
+	bot->strike_weapon_target_seed = -1;
+	VectorClear(bot->strike_weapon_target_org);
+}
+
+static qboolean StrikeWeaponTargetValid(const sg_bot_t *bot)
+{
+	edict_t *item;
+	int seed;
+	vec3_t delta;
+
+	if (!bot || !bot->ent || !SG_Rune() ||
+	    bot->strike_weapon_target_ent <= 0 ||
+	    bot->strike_weapon_target_ent >= globals.num_edicts)
+		return false;
+	item = &g_edicts[bot->strike_weapon_target_ent];
+	if (!WeaponPickupRouteEligible(item, bot->ent))
+		return false;
+	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+	if (seed < 0 || seed != bot->strike_weapon_target_seed)
+		return false;
+	VectorSubtract(item->s.origin, bot->strike_weapon_target_org, delta);
+	return VectorLength(delta) <= 1.0f;
+}
+
+static qboolean StrikeWeaponFindTarget(sg_bot_t *bot)
+{
+	int i, bi, best_ent = -1, best_seed = -1;
+	int best_cost = SG_FIELD_INF;
+
+	if (!bot || !bot->ent || !SG_Rune() || bot->seed < 0 ||
+	    bot->seed >= SG_Rune()->hdr.num_seeds)
+		return false;
+	bi = DefenseSupplyBotIndex(bot);
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed, ignored = 0, cost;
+
+		if (!WeaponPickupRouteEligible(item, bot->ent))
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi], &seed,
+		            &ignored, 1);
+		cost = sg_weapon_target_field[bi][bot->seed];
+		if (cost < best_cost ||
+		    (cost == best_cost && (best_ent < 0 || i < best_ent)))
+		{
+			best_cost = cost;
+			best_ent = i;
+			best_seed = seed;
+		}
+	}
+	/* The scratch buffer contains the last candidate flood, not necessarily
+	 * the winner.  Force the selected seed to be reflooded before publication. */
+	sg_weapon_target_ready[bi] = 0;
+	if (best_ent < 0 || best_cost >= SG_FIELD_INF)
+		return false;
+	bot->strike_weapon_target_ent = best_ent;
+	bot->strike_weapon_target_seed = best_seed;
+	VectorCopy(g_edicts[best_ent].s.origin, bot->strike_weapon_target_org);
+	return true;
+}
+
+const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms)
+{
+	const int *field;
+
+	if (route_ms)
+		*route_ms = -1;
+	if (!bot || !SG_Rune() || bot->seed < 0 ||
+	    bot->seed >= SG_Rune()->hdr.num_seeds)
+		return NULL;
+	if (!StrikeWeaponTargetValid(bot))
+	{
+		SG_StrikeWeaponTargetClear(bot);
+		if (!StrikeWeaponFindTarget(bot))
+			return NULL;
+	}
+	field = WeaponTargetField(bot, bot->strike_weapon_target_seed);
+	if (!field || field[bot->seed] >= SG_FIELD_INF)
+	{
+		SG_StrikeWeaponTargetClear(bot);
+		return NULL;
+	}
+	if (route_ms)
+		*route_ms = field[bot->seed];
+	return field;
+}
+
+void SG_StrikeWeaponNoteItemTouch(edict_t *taker, edict_t *item)
+{
+	int i, item_ent;
+
+	if (!taker || !item)
+		return;
+	item_ent = (int)(item - g_edicts);
+	if (item_ent <= 0 || item_ent >= globals.num_edicts)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *bot = &sg_bots[i];
+
+		if (bot->active && bot->ent == taker &&
+		    bot->strike_weapon_target_ent == item_ent)
+		{
+			SG_StrikeWeaponTargetClear(bot);
+			return;
+		}
+	}
 }
 
 static qboolean DefenseSupplyCoreEligible(sg_bot_t *bot, sg_think_t *tc,
@@ -947,29 +1091,14 @@ static qboolean DefenseSupplyReturnAllowed(const sg_bot_t *bot,
 static const int *DefenseSupplyTargetField(sg_bot_t *bot)
 {
 	const int *target_field;
-	int bi;
-	int cost = 0;
 	int target_seed;
 
 	if (!bot || !SG_DefenseSupplyActive(bot) ||
 	    bot->def_supply_phase != SG_DEF_SUPPLY_OUTBOUND ||
 	    !DefenseSupplyTargetValid(bot))
 		return NULL;
-	bi = DefenseSupplyBotIndex(bot);
 	target_seed = bot->def_supply_target_seed;
-	if (!sg_defense_supply_target_ready[bi] ||
-	    sg_defense_supply_target_cached[bi] != target_seed ||
-	    sg_defense_supply_target_epoch[bi] !=
-	        sg_fields.action_topology_epoch)
-	{
-		Field_Flood(SG_Rune(), sg_defense_supply_target_field[bi],
-		            &target_seed, &cost, 1);
-		sg_defense_supply_target_epoch[bi] =
-		    sg_fields.action_topology_epoch;
-		sg_defense_supply_target_cached[bi] = target_seed;
-		sg_defense_supply_target_ready[bi] = 1;
-	}
-	target_field = sg_defense_supply_target_field[bi];
+	target_field = WeaponTargetField(bot, target_seed);
 	return target_field;
 }
 
@@ -1140,9 +1269,9 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 			bot->def_supply_ent = target_ent;
 			bot->def_supply_target_seed = target_seed;
 			bot->def_supply_route_ms = route_ms;
-			sg_defense_supply_target_cached[bi] = -1;
-			sg_defense_supply_target_epoch[bi] = 0;
-			sg_defense_supply_target_ready[bi] = 0;
+			sg_weapon_target_cached[bi] = -1;
+			sg_weapon_target_epoch[bi] = 0;
+			sg_weapon_target_ready[bi] = 0;
 			if (target_ent >= 0 && target_ent < globals.num_edicts)
 				VectorCopy(g_edicts[target_ent].s.origin,
 				           bot->def_supply_target_org);

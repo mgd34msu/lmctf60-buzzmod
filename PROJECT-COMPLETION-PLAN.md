@@ -1547,6 +1547,12 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       surface, not only named lead/mega/tactics errands. BREACH, PRESS, CLEAR,
       ESCORT, RECOVER, and CARRY assignments therefore keep their exact route
       instead of being silently bent toward generic shopping opportunities.
+      Bounded strike weapon preparation now selects and retains one exact live
+      weapon pad that the current client can physically collect, then descends
+      a private flood from that pad. Under `DF_WEAPONS_STAY`, a nearer already-
+      owned weapon can no longer attract a below-tier attacker even though the
+      broad class field still sees it; successful and rejected touches both
+      retire the exact target through the physical item authority.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

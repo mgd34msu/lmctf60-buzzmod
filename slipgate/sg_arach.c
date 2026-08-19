@@ -2508,6 +2508,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
+	SG_StrikeWeaponTargetClear(bot);
 	bot->sticky_link = -1;
 	bot->latch_until = 0.0f;
 	bot->rail_link = -1;
@@ -3012,6 +3013,7 @@ static void Bot_DeclaredDoorGuardClearAction(sg_bot_t *bot)
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
+	SG_StrikeWeaponTargetClear(bot);
 }
 
 /* Return true while the action must remain held.  Only the guard's positive
@@ -3546,6 +3548,9 @@ void SG_BotThink(sg_bot_t *bot)
 			int direct_flag_touch;
 			int weapon_goal_ms = -1;
 			int weapon_remaining_ms;
+			int needs_weapon;
+			int combat_would_engage;
+			const int *weapon_target_field = NULL;
 
 			/* Egress and attack duties use the existing directed fields. */
 			(void)StrikeApplyDutyRoute(&tc, strike_duty, team);
@@ -3558,29 +3563,34 @@ void SG_BotThink(sg_bot_t *bot)
 				bot->nade_until = 0.0f;
 			}
 
-			/* A below-tier member owns the weapon field only while the live
-			 * authority says it is not fighting or already able to touch the
-			 * flag.  The core's immutable per-life deadline ends this branch. */
+			/* A below-tier member owns one exact collectible weapon-pad field
+			 * only while the live authority says it is not fighting or already
+			 * able to touch the flag. The core's immutable per-life deadline ends
+			 * this branch. */
 			direct_flag_touch =
 				strike_frame->slot[strike_slot].direct_flag_touch ||
 				SG_AttackFlagDirectTouchAuthority(e, team, NULL);
-			if (sg_fields.item[SG_FC_WEAPON])
-				weapon_goal_ms = StrikeFieldCost(
-					sg_fields.item[SG_FC_WEAPON],
-					sg_bots[strike_slot].seed);
+			combat_would_engage = SG_CombatWouldEngage(e);
+			needs_weapon = SG_StrikeMemberNeedsWeapon(
+				strike_team, strike_slot, level.time);
+			if (needs_weapon && !tc.strike_rush && !carrying &&
+			    !combat_would_engage && !direct_flag_touch)
+				weapon_target_field = SG_StrikeWeaponTargetField(
+					bot, &weapon_goal_ms);
+			else
+				SG_StrikeWeaponTargetClear(bot);
 			weapon_remaining_ms = (int)((
 				strike_team->weapon_deadline[strike_slot] - level.time) *
 				1000.0f);
 			if (SG_StrikeWeaponDetourAllowed(
-				    SG_StrikeMemberNeedsWeapon(strike_team, strike_slot,
-				                               level.time),
-				    tc.strike_rush, carrying, SG_CombatWouldEngage(e),
+				    needs_weapon,
+				    tc.strike_rush, carrying, combat_would_engage,
 				    direct_flag_touch,
 				    strike_frame->slot[strike_slot].enemy_flag_goal_ms,
 				    weapon_goal_ms, weapon_remaining_ms))
 			{
-				tc.goal_field = sg_fields.item[SG_FC_WEAPON];
-				tc.route_field = sg_fields.item[SG_FC_WEAPON];
+				tc.goal_field = weapon_target_field;
+				tc.route_field = weapon_target_field;
 				tc.route_pure = true;
 				tc.strike_weapon_pursuit = true;
 				tc.strike_weapon_deadline =

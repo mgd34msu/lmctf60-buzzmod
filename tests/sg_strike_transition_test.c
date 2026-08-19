@@ -173,6 +173,19 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 	    sizeof(bot->declared_button_end_q8));
 }
 
+/* The transition harness isolates route-purpose ownership from live item
+ * selection. Production clears the exact pad witness at this boundary; this
+ * stub preserves that observable state transition without linking sg_goal.c. */
+void SG_StrikeWeaponTargetClear(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->strike_weapon_target_ent = -1;
+	bot->strike_weapon_target_seed = -1;
+	memset(bot->strike_weapon_target_org, 0,
+	    sizeof(bot->strike_weapon_target_org));
+}
+
 static void WorldReset(void)
 {
 	memset(&sg_caco_team_belief, 0, sizeof(sg_caco_team_belief));
@@ -271,6 +284,9 @@ static void ArmExact(sg_bot_t *bot, sg_think_t *tc, int action)
 	bot->commit_until = 30.0f;
 	bot->strike_weapon_link = 1;
 	bot->strike_weapon_until = 20.0f;
+	bot->strike_weapon_target_ent = 6;
+	bot->strike_weapon_target_seed = 2;
+	bot->strike_weapon_target_org[0] = 128.0f;
 	bot->sticky_link = 1;
 	bot->latch_until = 25.0f;
 	bot->bl_link[0] = 77;
@@ -287,6 +303,9 @@ static void CheckCleared(const sg_bot_t *bot)
 	CHECK(bot->strike_weapon_link == -1);
 	CHECK(bot->strike_weapon_until == 0.0f);
 	CHECK(!bot->strike_weapon_draining);
+	CHECK(bot->strike_weapon_target_ent == -1);
+	CHECK(bot->strike_weapon_target_seed == -1);
+	CHECK(bot->strike_weapon_target_org[0] == 0.0f);
 	CHECK(bot->bl_link[0] == 77);
 	CHECK(bot->bl_until[0] == 88.0f);
 }

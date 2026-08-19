@@ -430,7 +430,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("SG_CombatWeaponState", arach)
         self.assertIn("ctfid", arach)
         self.assertIn("SG_AttackFlagDirectTouchAuthority", arach)
-        self.assertIn("sg_fields.item[SG_FC_WEAPON]", arach)
+        self.assertIn("SG_StrikeWeaponTargetField", arach)
         self.assertIn("SG_StrikeMemberNeedsWeapon", arach)
         self.assertIn("SG_StrikeParticipant", arach)
         duty = arach.index("strike_duty = strike_team->duty[strike_slot]")

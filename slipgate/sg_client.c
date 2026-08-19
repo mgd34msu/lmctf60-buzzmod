@@ -104,6 +104,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
+	SG_StrikeWeaponTargetClear(bot);
 	bot->last_goalcost = -1;
 	bot->sticky_link = -1;
 	bot->carry_startcost = -1;

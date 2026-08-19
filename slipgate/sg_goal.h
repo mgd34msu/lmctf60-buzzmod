@@ -33,6 +33,13 @@ qboolean SG_DefenseSupplyActive(const sg_bot_t *bot);
 qboolean SG_DefenseSupplyHome(int team);
 qboolean SG_DefenseSupplyThreat(int team);
 
+/* Exact collectible-weapon route owned by a bounded strike preparation.
+ * The returned field is private to this bot and remains bound to one live
+ * edict until it is taken, rejected, disappears, or becomes ineligible. */
+const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms);
+void SG_StrikeWeaponTargetClear(sg_bot_t *bot);
+void SG_StrikeWeaponNoteItemTouch(edict_t *taker, edict_t *item);
+
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);
 

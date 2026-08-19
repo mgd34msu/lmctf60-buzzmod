@@ -1938,6 +1938,7 @@ static void StrikeWeaponPurposeClear(sg_bot_t *bot)
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
+	SG_StrikeWeaponTargetClear(bot);
 }
 
 /* True only after a controller has crossed its physical start boundary.

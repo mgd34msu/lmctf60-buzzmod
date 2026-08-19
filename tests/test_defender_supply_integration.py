@@ -35,7 +35,7 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
 
         self.assertIn("sg_fields.item[SG_FC_WEAPON]", goal)
-        self.assertIn("sg_defense_supply_target_field[SG_MAXBOTS]", goal)
+        self.assertIn("sg_weapon_target_field[SG_MAXBOTS]", goal)
         self.assertIn("sg_fields.action_topology_epoch", goal)
         self.assertIn("SG_DefenseSupplyRoute(", goal)
         self.assertIn("goal_field = weapon_field", goal)
@@ -101,6 +101,32 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         self.assertIn("bot->def_supply_ent != item_ent", goal)
         self.assertIn("SG_DefenseSupplyBeginReturn(bot)", goal)
         self.assertEqual(caco.count("SG_DefenseSupplyNoteItemTouch(taker, item);"),
+                         2)
+
+    def test_strike_weapon_route_uses_one_collectible_pad(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+
+        self.assertIn("WeaponPickupRouteEligible", goal)
+        self.assertIn("G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker)",
+                      goal)
+        self.assertIn('strcmp(item->classname, "weapon_hook")', goal)
+        self.assertNotIn('"weapon_grappling_hook"', goal)
+        self.assertIn("StrikeWeaponTargetValid", goal)
+        self.assertIn("bot->strike_weapon_target_ent = best_ent", goal)
+        self.assertIn("WeaponTargetField(bot, bot->strike_weapon_target_seed)",
+                      goal)
+        self.assertIn("SG_StrikeWeaponTargetField(\n\t\t\t\t\tbot",
+                      arach)
+        self.assertIn("tc.goal_field = weapon_target_field", arach)
+        self.assertIn("tc.route_field = weapon_target_field", arach)
+        strike_start = arach.index("/* A below-tier member owns one exact")
+        strike_end = arach.index("Generic proof-line retry", strike_start)
+        strike_route = arach[strike_start:strike_end]
+        self.assertNotIn("tc.goal_field = sg_fields.item[SG_FC_WEAPON]",
+                         strike_route)
+        self.assertEqual(caco.count("SG_StrikeWeaponNoteItemTouch(taker, item);"),
                          2)
 
     def test_owned_stocked_weapon_flows_through_post_selector(self) -> None:
