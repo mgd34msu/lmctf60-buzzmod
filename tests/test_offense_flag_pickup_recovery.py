@@ -3,7 +3,11 @@
 
 from pathlib import Path
 import math
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -124,6 +128,77 @@ def armed_target_origin(
 
 
 class OffenseFlagPickupRecoveryTest(unittest.TestCase):
+
+    def test_teammate_pass_side_is_pair_symmetric_and_executable(self) -> None:
+        """Head-on bots receive opposite world-space lateral velocities."""
+        program = textwrap.dedent(
+            r"""
+            #include <math.h>
+            #include "slipgate/sg_crowd_pass.h"
+
+            int main(void)
+            {
+                static const unsigned long pairs[][2] = {
+                    {1UL, 2UL}, {1UL, 3UL}, {2UL, 4UL},
+                    {17UL, 91UL}, {0x10001UL, 0x20003UL}
+                };
+                unsigned int i;
+
+                if (SG_CrowdPassSide(0UL, 2UL) != 0 ||
+                    SG_CrowdPassSide(2UL, 0UL) != 0 ||
+                    SG_CrowdPassSide(7UL, 7UL) != 0)
+                    return 1;
+
+                for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); ++i) {
+                    int ab = SG_CrowdPassSide(pairs[i][0], pairs[i][1]);
+                    int ba = SG_CrowdPassSide(pairs[i][1], pairs[i][0]);
+                    double a_lateral;
+                    double b_lateral;
+
+                    if ((ab != -1 && ab != 1) || ab != ba)
+                        return 2;
+                    a_lateral = sin((double)ab * 28.0 * 3.141592653589793 / 180.0);
+                    b_lateral = sin((180.0 + (double)ba * 28.0) *
+                                    3.141592653589793 / 180.0);
+                    if (!(a_lateral * b_lateral < 0.0))
+                        return 3;
+                }
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-crowd-pass-") as temp:
+            temp_path = Path(temp)
+            source_path = temp_path / "crowd_pass_test.c"
+            binary_path = temp_path / "crowd_pass_test"
+            source_path.write_text(program, encoding="utf-8")
+            compiler = os.environ.get("CC", "cc")
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c11",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-Wpedantic",
+                    "-I",
+                    str(ROOT),
+                    str(source_path),
+                    "-lm",
+                    "-o",
+                    str(binary_path),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+            subprocess.run([str(binary_path)], cwd=ROOT, check=True)
+
+        move = source("slipgate/sg_move.c")
+        fan = between(move, "Feelers: try the goal heading first", "THE STEADY HAND")
+        self.assertIn("SG_CrowdPassSide(", fan)
+        self.assertIn("e->client->ctf.ctfid", fan)
+        self.assertIn("tr.ent->client->ctf.ctfid", fan)
+        self.assertNotIn("e->client - game.clients", fan)
 
     def test_team_formation_drift_uses_private_independent_sequences(self) -> None:
         arach = source("slipgate/sg_arach.c")

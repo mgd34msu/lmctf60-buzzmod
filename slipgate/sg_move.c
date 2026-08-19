@@ -34,6 +34,7 @@
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_nade_policy.h"
+#include "slipgate/sg_crowd_pass.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
@@ -5156,17 +5157,22 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * A teammate is not terrain. Blocked by one on the goal
 				 * line: remember it (the progress watch must not bill a
 				 * friendly body to the link -- at 5v5 that billed 204-278
-				 * shelves a match), and bias the walk to a side chosen by
-				 * slot parity, so two bots meeting head-on pass on
-				 * opposite shoulders instead of mirroring forever.
+				 * shelves a match), and bias the walk with one symmetric
+				 * decision for the two current client lives. Head-on view
+				 * headings are opposite, so the same relative yaw sign gives
+				 * opposite world-space shoulders. Per-slot signs can instead
+				 * send both bodies into the same lane forever.
 				 */
 				if (k == 0 && tr.fraction < 1.0f && tr.ent &&
 				    tr.ent->client && !tr.ent->deadflag &&
 				    tr.ent->client->ctf.teamnum == team)
 				{
+					int pass_side = SG_CrowdPassSide(
+					    e->client->ctf.ctfid,
+					    tr.ent->client->ctf.ctfid);
+
 					bot->mate_block_last = true;
-					base_yaw += ((int)(e->client - game.clients) & 1)
-					            ? 28.0f : -28.0f;
+					base_yaw += 28.0f * (float)pass_side;
 				}
 				/*
 				 * A closed door is not a wall: walking into it (its

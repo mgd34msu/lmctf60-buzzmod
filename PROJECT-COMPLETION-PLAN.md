@@ -1501,6 +1501,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       seed `-1` and drive undefined route-memory access during a flag run; if
       that current sighting supersedes an older localized row, the disproved
       route position is retired instead of aging as though it were unseen.
+      Teammate collision avoidance now derives one symmetric passing shoulder
+      from the two current client-life identities. Head-on bots therefore take
+      opposite world-space lanes instead of allowing unrelated slot parity to
+      steer both bodies into the same lane and preserve the blockage.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
