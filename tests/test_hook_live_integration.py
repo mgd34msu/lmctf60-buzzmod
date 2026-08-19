@@ -267,6 +267,16 @@ preturn = body("THE PRE-TURN (sg_preturn", "if (bot->hook_phase == 3)")
 assert "const int *preturn_route_field = route_field" in preturn
 assert "? route_field : goal_field;" in preturn
 assert "preturn_route_field[candidate->to]" in preturn
+
+# A completed graph ride is judged by the same active route field that
+# authorized its irreversible fire.  The strategic goal field may describe a
+# different coordinator mission and must not shelf or ban a route-serving ride.
+landing_value = body("A ride that did not SERVE the field failed",
+                     "bot->hook_link = -1;")
+assert "route_field[bot->seed]" in landing_value
+assert "route_field[hl->to]" in landing_value
+assert "goal_field[bot->seed]" not in landing_value
+assert "goal_field[hl->to]" not in landing_value
 assert 'Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
 assert "goto hook_wait;" in fire[fire_retire:fire_proof]
 assert "Hook_LiveBeginAfterFire" in fire

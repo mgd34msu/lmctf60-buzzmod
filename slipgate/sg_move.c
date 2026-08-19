@@ -3720,13 +3720,13 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				if (bot->hook_link >= 0 &&
 				    bot->hook_link < SG_Rune()->hdr.num_links &&
 				    bot->seed >= 0 &&
-				    goal_field[bot->seed] < SG_FIELD_INF)
+				    route_field[bot->seed] < SG_FIELD_INF)
 				{
 					rune_link_t *hl = &SG_Rune()->links[bot->hook_link];
 
-					if (goal_field[hl->to] < SG_FIELD_INF &&
-					    goal_field[bot->seed] >
-					        goal_field[hl->to] + 300)
+					if (route_field[hl->to] < SG_FIELD_INF &&
+					    route_field[bot->seed] >
+					        route_field[hl->to] + 300)
 					{
 						int b, oldest = 0;
 
