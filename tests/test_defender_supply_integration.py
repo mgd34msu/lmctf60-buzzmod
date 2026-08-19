@@ -106,6 +106,39 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
             )
             subprocess.run([str(binary)], cwd=ROOT, check=True)
 
+    def test_armor_pickup_policy_executes_salvage_edges(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include "slipgate/sg_armor_pickup.h"
+
+            int main(void)
+            {
+                if (!SG_ArmorPickupAllowed(1, 1, .8f, 200, 200, .3f, 25))
+                    return 1;
+                if (!SG_ArmorPickupAllowed(0, 0, 0.f, 0, 0, .3f, 25))
+                    return 2;
+                if (!SG_ArmorPickupAllowed(0, 1, .3f, 50, 50, .8f, 100))
+                    return 3;
+                if (SG_ArmorPickupAllowed(0, 1, .8f, 200, 200, .3f, 25))
+                    return 4;
+                if (!SG_ArmorPickupAllowed(0, 1, .8f, 190, 200, .6f, 50))
+                    return 5;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-armor-route-") as tmp:
+            source = Path(tmp) / "armor_route.c"
+            binary = Path(tmp) / "armor_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
     def test_phase_and_exact_route_policy_executes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="sg-def-supply-") as tmp:
             binary = Path(tmp) / "sg_defense_supply_test"
@@ -256,6 +289,16 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         self.assertIn("G_AmmoItemPickupEligible(item, ent)", items)
         self.assertIn("!G_AmmoPickupEligible(item, bot->ent)", goal)
         self.assertIn("SG_CollectibleAmmoField(bot)", arach)
+
+    def test_armor_surface_excludes_zero_salvage_pads(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        items = (ROOT / "g_items.c").read_text()
+
+        self.assertIn("qboolean G_ArmorPickupEligible", items)
+        self.assertIn("if (!G_ArmorPickupEligible(ent, other))", items)
+        self.assertIn("!G_ArmorPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_CollectibleArmorField(bot)", arach)
 
     def test_owned_stocked_weapon_flows_through_post_selector(self) -> None:
         combat = (ROOT / "slipgate/sg_combat.c").read_text()

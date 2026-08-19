@@ -796,6 +796,7 @@ qboolean G_PowerupPickupEligible(edict_t *ent, edict_t *other);
 qboolean G_WeaponPickupEligible(edict_t *ent, edict_t *other);
 qboolean G_HealthPickupEligible(edict_t *ent, edict_t *other);
 qboolean G_AmmoPickupEligible(edict_t *ent, edict_t *other);
+qboolean G_ArmorPickupEligible(edict_t *ent, edict_t *other);
 
 // TEAM CODE -- LM_JORM
 //void Drop_Flag(edict_t *ent, gitem_t *item);

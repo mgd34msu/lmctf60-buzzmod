@@ -46,6 +46,7 @@ void SG_StrikeWeaponNoteItemTouch(edict_t *taker, edict_t *item);
 const int *SG_CollectibleWeaponField(sg_bot_t *bot);
 const int *SG_CollectibleHealthField(sg_bot_t *bot);
 const int *SG_CollectibleAmmoField(sg_bot_t *bot);
+const int *SG_CollectibleArmorField(sg_bot_t *bot);
 
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);

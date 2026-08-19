@@ -1570,6 +1570,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Ammo attraction likewise excludes stacks already at that client's
       capacity while retaining every ammo type the inventory can accept; the
       route and `Add_Ammo` now use the same capacity predicate.
+      Armor attraction now excludes pads whose exact salvage calculation
+      cannot raise the client's held armor, while shards, empty slots, and real
+      upgrades remain available; route admission and `Pickup_Armor` share the
+      same calculation.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

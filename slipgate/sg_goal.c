@@ -864,6 +864,12 @@ static unsigned char sg_ammo_collectible_ready[SG_MAXBOTS];
 static int sg_ammo_collectible_count[SG_MAXBOTS];
 static int sg_ammo_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_ammo_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_armor_collectible_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_armor_collectible_epoch[SG_MAXBOTS];
+static unsigned char sg_armor_collectible_ready[SG_MAXBOTS];
+static int sg_armor_collectible_count[SG_MAXBOTS];
+static int sg_armor_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_armor_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -1082,6 +1088,68 @@ const int *SG_CollectibleAmmoField(sg_bot_t *bot)
 		sg_ammo_collectible_ready[bi] = 1;
 	}
 	return sg_ammo_collectible_field[bi];
+}
+
+const int *SG_CollectibleArmorField(sg_bot_t *bot)
+{
+	int ents[SG_WEAPON_FIELD_SOURCES];
+	int seeds[SG_WEAPON_FIELD_SOURCES];
+	int costs[SG_WEAPON_FIELD_SOURCES];
+	int bi, count = 0, i;
+	qboolean same;
+
+	if (!bot || !bot->ent || !SG_Rune())
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	for (i = 1; i < globals.num_edicts &&
+	     count < SG_WEAPON_FIELD_SOURCES; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed;
+
+		if (!item->inuse || !item->classname ||
+		    strncmp(item->classname, "item_armor", 10) != 0 ||
+		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
+		    !G_ArmorPickupEligible(item, bot->ent))
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		ents[count] = i;
+		seeds[count] = seed;
+		costs[count] = 0;
+		count++;
+	}
+	if (count == 0)
+	{
+		sg_armor_collectible_ready[bi] = 0;
+		sg_armor_collectible_count[bi] = 0;
+		return NULL;
+	}
+
+	same = sg_armor_collectible_ready[bi] &&
+	       sg_armor_collectible_epoch[bi] ==
+	           sg_fields.action_topology_epoch &&
+	       sg_armor_collectible_count[bi] == count;
+	for (i = 0; same && i < count; i++)
+		if (sg_armor_collectible_ent[bi][i] != ents[i] ||
+		    sg_armor_collectible_seed[bi][i] != seeds[i])
+			same = false;
+	if (!same)
+	{
+		Field_Flood(SG_Rune(), sg_armor_collectible_field[bi], seeds,
+		            costs, count);
+		for (i = 0; i < count; i++)
+		{
+			sg_armor_collectible_ent[bi][i] = ents[i];
+			sg_armor_collectible_seed[bi][i] = seeds[i];
+		}
+		sg_armor_collectible_count[bi] = count;
+		sg_armor_collectible_epoch[bi] =
+		    sg_fields.action_topology_epoch;
+		sg_armor_collectible_ready[bi] = 1;
+	}
+	return sg_armor_collectible_field[bi];
 }
 
 static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,

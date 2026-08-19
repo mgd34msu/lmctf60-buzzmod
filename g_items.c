@@ -5,6 +5,7 @@
 #include "stdlog.h"
 #include "slipgate/sg_health_pickup.h"
 #include "slipgate/sg_ammo_pickup.h"
+#include "slipgate/sg_armor_pickup.h"
 
 void droptofloor(edict_t* ent);
 
@@ -710,6 +711,31 @@ int ArmorIndex(edict_t* ent)
 	return 0;
 }
 
+qboolean G_ArmorPickupEligible(edict_t *ent, edict_t *other)
+{
+	int old_index;
+	gitem_armor_t *oldinfo, *newinfo;
+
+	if (!ent || !ent->item || !ent->item->info || !other || !other->client)
+		return false;
+	newinfo = (gitem_armor_t *)ent->item->info;
+	old_index = ArmorIndex(other);
+	if (!old_index)
+		return true;
+	if (old_index == jacket_armor_index)
+		oldinfo = &jacketarmor_info;
+	else if (old_index == combat_armor_index)
+		oldinfo = &combatarmor_info;
+	else if (old_index == body_armor_index)
+		oldinfo = &bodyarmor_info;
+	else
+		return false;
+	return SG_ArmorPickupAllowed(ent->item->tag == ARMOR_SHARD, 1,
+	    oldinfo->normal_protection,
+	    other->client->pers.inventory[old_index], oldinfo->max_count,
+	    newinfo->normal_protection, newinfo->base_count) ? true : false;
+}
+
 qboolean Pickup_Armor(edict_t* ent, edict_t* other)
 {
 	int				old_armor_index;
@@ -718,6 +744,9 @@ qboolean Pickup_Armor(edict_t* ent, edict_t* other)
 	int				newcount;
 	float			salvage;
 	int				salvagecount;
+
+	if (!G_ArmorPickupEligible(ent, other))
+		return false;
 
 	// get info on new armor
 	newinfo = (gitem_armor_t*)ent->item->info;
@@ -773,10 +802,6 @@ qboolean Pickup_Armor(edict_t* ent, edict_t* other)
 			newcount = other->client->pers.inventory[old_armor_index] + salvagecount;
 			if (newcount > oldinfo->max_count)
 				newcount = oldinfo->max_count;
-
-			// if we're already maxed out then we don't need the new armor
-			if (other->client->pers.inventory[old_armor_index] >= newcount)
-				return false;
 
 			// update current armor value
 			other->client->pers.inventory[old_armor_index] = newcount;
