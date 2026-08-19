@@ -188,9 +188,12 @@ fully admitted, strictly descending proved RUN instead of pricing itself into a
 far-field standstill; mechanisms and ballistic actions are never forced by that
 fallback. The strike overlay now preserves one real RECOVER mission whenever
 the team's flag is away, including one- and two-member casualty states, rather
-than redirecting every survivor to an enemy flag the team cannot score. Their
-pure policies are executable; runtime outcome acceptance remains pending on the
-persistent fleet.
+than redirecting every survivor to an enemy flag the team cannot score. During
+a live carrier standoff it also retains one recovery owner after its bounded
+clearer and required escort, so the carrier can actually complete the capture;
+that owner is reassigned on death without disturbing the carrier or escort.
+These pure policies are executable; runtime outcome acceptance remains pending
+on the persistent fleet.
 
 ### Acceptance instrumentation and provenance
 

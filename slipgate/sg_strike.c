@@ -541,6 +541,7 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 	int carrier = frame->carrier_slot;
 	int clear = -1;
 	int escort = -1;
+	int recover = -1;
 	int slot;
 
 	memcpy(old, team->duty, sizeof(old));
@@ -594,6 +595,28 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 		{
 			team->duty[escort] = SG_STRIKE_DUTY_ESCORT;
 			available &= ~Strike_Bit(escort);
+		}
+		/* Carrying the enemy flag does not make an away own flag irrelevant:
+		 * capture is impossible until it returns. Preserve one stable recovery
+		 * mission after the bounded clear and required escort assignments, then
+		 * use only the remaining bodies for enemy-base pressure. */
+		if (!frame->own_flag_home)
+		{
+			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				if ((available & Strike_Bit(slot)) != 0u &&
+				    old[slot] == SG_STRIKE_DUTY_RECOVER &&
+				    frame->slot[slot].recover_goal_ms >= 0)
+				{
+					recover = slot;
+					break;
+				}
+			if (recover < 0)
+				recover = Strike_LowestCost(frame, available, 1);
+			if (recover >= 0)
+			{
+				team->duty[recover] = SG_STRIKE_DUTY_RECOVER;
+				available &= ~Strike_Bit(recover);
+			}
 		}
 		for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
 			if ((available & Strike_Bit(slot)) != 0u)

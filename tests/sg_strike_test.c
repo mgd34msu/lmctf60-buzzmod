@@ -592,6 +592,53 @@ static void TestExternalCarrierDoesNotExpandRoster(void)
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
 }
 
+static void TestCarrierStandoffKeepsRecovery(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(675.0f);
+
+	AddAttacker(&frame, 0, 600u, 2, 1000);
+	AddAttacker(&frame, 1, 601u, 2, 3000);
+	AddAttacker(&frame, 2, 602u, 2, 5000);
+	AddAttacker(&frame, 3, 603u, 2, 7000);
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	frame.slot[1].carrier_goal_ms = 300;
+	frame.slot[2].carrier_goal_ms = 100;
+	frame.slot[3].carrier_goal_ms = 200;
+	frame.slot[1].recover_goal_ms = 300;
+	frame.slot[2].recover_goal_ms = 200;
+	frame.slot[3].recover_goal_ms = 100;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_CLEAR);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 0);
+
+	/* Once the clear window expires, the stable escort and recoverer remain;
+	 * only the freed clearer presses the enemy base. */
+	frame.now = 680.1f;
+	frame.events = SG_STRIKE_EVENT_NONE;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_PRESS);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_RECOVER);
+
+	/* A casualty retires the old recovery owner and reassigns that essential
+	 * mission without changing the carrier or escort. */
+	frame.now = 680.2f;
+	frame.slot[3].alive = 0;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_NONE);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_ESCORT);
+}
+
 static void TestWeaponRouteRetirementVerdicts(void)
 {
 	sg_strike_weapon_controller_state_t state;
@@ -815,6 +862,7 @@ int main(void)
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();
+	TestCarrierStandoffKeepsRecovery();
 	TestWeaponRouteRetirementVerdicts();
 	TestWeaponDetourPreservesStandPressure();
 	TestReturnCaptureAndLifecycleReset();
