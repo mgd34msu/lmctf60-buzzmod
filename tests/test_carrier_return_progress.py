@@ -108,6 +108,25 @@ def test_carrier_screen_uses_the_accepted_moving_formation_by_default():
     assert "else if (interpose_mode == 2)" in interpose
 
 
+def test_carrier_screen_terminal_preserves_the_selected_formation():
+    terminal = section(
+        MOVE,
+        "else if (!have_aim && role == SG_ROLE_ESCORT &&",
+        "if (!have_aim && !gf && tc->scoop_mission)",
+    )
+    assert "!tc->scoop_mission" in terminal
+    assert "SG_TerminalFieldSeed(SG_Rune(), goal_field," in terminal
+    assert "VectorCopy(SG_Rune()->seeds[terminal_seed].origin" in terminal
+    assert "SG_FlagStand" not in terminal
+
+    priority = section(
+        MOVE,
+        "if (!have_aim && ordered_escort)",
+        "else if (!have_aim && role == SG_ROLE_CARRY)",
+    )
+    assert "VectorCopy(ordered_escort->s.origin, aim);" in priority
+
+
 if __name__ == "__main__":
     tests = [
         value

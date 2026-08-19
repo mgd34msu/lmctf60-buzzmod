@@ -4847,6 +4847,21 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					have_aim = true;
 				}
 			}
+			else if (!have_aim && role == SG_ROLE_ESCORT &&
+			         !tc->scoop_mission)
+			{
+				/* An autonomous screen terminates at the selected moving
+				 * carrier/formation field.  A human cover order was resolved to
+				 * its exact teammate above; SCOOP retains its distinct dropped-
+				 * flag belief below. */
+				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
+				    bot->seed);
+				if (terminal_seed >= 0)
+				{
+					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
+					have_aim = true;
+				}
+			}
 
 			if (!have_aim && !gf && tc->scoop_mission)
 			{
