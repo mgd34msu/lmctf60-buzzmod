@@ -389,6 +389,20 @@ int main(void)
 	    100, false, CTF_TEAM_RED, false, false));
 	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, 2, true,
 	    100, false, CTF_TEAM_RED, true, false));
+	{
+		float yaw = 999.0f;
+
+		CHECK(SG_RuneHandoffAim(1.0f, 0.0f, &yaw));
+		CHECK(fabsf(yaw) < 0.001f);
+		CHECK(SG_RuneHandoffAim(0.0f, 1.0f, &yaw));
+		CHECK(fabsf(yaw - 90.0f) < 0.001f);
+		CHECK(SG_RuneHandoffAim(-1.0f, 0.0f, &yaw));
+		CHECK(fabsf(fabsf(yaw) - 180.0f) < 0.001f);
+		CHECK(!SG_RuneHandoffAim(0.0f, 0.0f, &yaw));
+		CHECK(!SG_RuneHandoffAim(NAN, 1.0f, &yaw));
+		CHECK(!SG_RuneHandoffAim(1.0f, INFINITY, &yaw));
+		CHECK(!SG_RuneHandoffAim(1.0f, 1.0f, NULL));
+	}
 	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
 	    100, false, CTF_TEAM_RED, true, true));
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 0) ==

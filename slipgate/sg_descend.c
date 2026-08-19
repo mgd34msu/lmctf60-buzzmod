@@ -3813,19 +3813,30 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					           VectorLength(rd14));
 				if (VectorLength(rd14) < 400.0f)
 				{
-					/* face the carrier for the toss frame: the
-					 * flick, same as the bomb release */
-					float ry = atan2f(rd14[1], rd14[0])
-					           * 180.0f / (float)M_PI;
+					float ry;
 
-					cmd->angles[YAW] = ANGLE2SHORT(ry)
-					    - e->client->ps.pmove.delta_angles[YAW];
-					Drop_Rune(e, e->client->rune->item);
-					SG_TimerArm(&bot->runetoss_next, 20.0f);
-					if (sg_cv.debug->value)
-						sg_host.dprint("RUNETOSS %s to %s\n",
-						           e->client->pers.netname,
-						           ce->client->pers.netname);
+					if (SG_RuneHandoffAim(rd14[0], rd14[1], &ry))
+					{
+						/* Drop_Rune -> ctf_TossEnt reads v_angle now, before
+						 * this command reaches Pmove.  Bind both views to the
+						 * same flat carrier bearing so the physical rune follows
+						 * the handoff decision instead of last frame's aim. */
+						e->client->v_angle[YAW] = ry;
+						e->client->v_angle[PITCH] = 0.0f;
+						e->client->v_angle[ROLL] = 0.0f;
+						cmd->angles[YAW] = ANGLE2SHORT(ry)
+						    - e->client->ps.pmove.delta_angles[YAW];
+						cmd->angles[PITCH] = ANGLE2SHORT(0.0f)
+						    - e->client->ps.pmove.delta_angles[PITCH];
+						cmd->angles[ROLL] = ANGLE2SHORT(0.0f)
+						    - e->client->ps.pmove.delta_angles[ROLL];
+						Drop_Rune(e, e->client->rune->item);
+						SG_TimerArm(&bot->runetoss_next, 20.0f);
+						if (sg_cv.debug->value)
+							sg_host.dprint("RUNETOSS %s to %s\n",
+							           e->client->pers.netname,
+							           ce->client->pers.netname);
+					}
 				}
 			}
 		}

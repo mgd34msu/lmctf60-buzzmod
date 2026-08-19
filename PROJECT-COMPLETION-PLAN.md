@@ -331,6 +331,10 @@ client against current CTF state: bounded slot, live same-team body, actual
 flag possession, and an empty rune slot. A former carrier, dead client, reused
 slot, or carrier already holding any rune cannot receive an uncollectable drop
 merely because the carrier belief has not aged out yet.
+The final defensive-rune toss now binds the synchronous `ctf_TossEnt` view and
+the submitted movement command to one flat carrier bearing. The rune therefore
+travels toward the revalidated carrier rather than inheriting the courier's
+previous-frame combat or route view.
 Combat carrier priority now reads only the belief row for this bot's stolen
 flag and confirms that the visible nominated target still possesses a flag.
 Former carriers and reused slots therefore lose the carrier score and intercept
@@ -1369,6 +1373,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       client to be a current live same-team flag carrier with an empty rune
       slot; stale, reused, or already-occupied receivers cannot authorize the
       irreversible drop.
+      The toss writes the same carrier bearing to the live view consumed by
+      `ctf_TossEnt` and to the submitted command; last-frame aim cannot redirect
+      the physical rune.
       Carrier-priority target scoring and weapon selection require the current
       visible nominated client to still possess a flag in this bot's own stolen-
       flag belief row.

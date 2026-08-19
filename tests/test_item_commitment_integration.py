@@ -141,6 +141,32 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("carrier_team == team && carrying_flag", policy)
         self.assertIn("!receiver_has_rune", policy)
 
+    def test_rune_handoff_binds_the_immediate_toss_and_submitted_view(self):
+        source = self.text("slipgate/sg_descend.c")
+        start = source.index("THE RUNE HANDOFF")
+        end = source.index("HOLD SHORT OF AN UNCAPPABLE STAND", start)
+        handoff = source[start:end]
+        aim = handoff.index("SG_RuneHandoffAim(")
+        live_yaw = handoff.index("e->client->v_angle[YAW] = ry;", aim)
+        live_pitch = handoff.index("e->client->v_angle[PITCH] = 0.0f;", aim)
+        command_yaw = handoff.index("cmd->angles[YAW] = ANGLE2SHORT(ry)", aim)
+        command_pitch = handoff.index("cmd->angles[PITCH] = ANGLE2SHORT(0.0f)", aim)
+        toss = handoff.index("Drop_Rune(e, e->client->rune->item);", aim)
+        self.assertLess(aim, live_yaw)
+        self.assertLess(live_yaw, live_pitch)
+        self.assertLess(live_pitch, command_yaw)
+        self.assertLess(command_yaw, command_pitch)
+        self.assertLess(command_pitch, toss)
+
+        runes = self.text("g_runes.c")
+        drop = runes[runes.index("void Drop_Rune("):runes.index(
+            "void Toss_Rune(")]
+        self.assertIn("ctf_TossEnt(ent, dropped);", drop)
+        ctf = self.text("g_ctffunc.c")
+        toss_body = ctf[ctf.index("void ctf_TossEnt("):ctf.index(
+            "void Drop_Flag_Think")]
+        self.assertIn("AngleVectors (startent->client->v_angle", toss_body)
+
     def test_flag_intelligence_preempts_cosmetic_chat_but_stamps_budget(self):
         source = self.text("slipgate/sg_chat.c")
         start = source.index("qboolean SG_ChatSayTeam(")
