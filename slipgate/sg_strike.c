@@ -29,8 +29,13 @@ int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
 
 int SG_StrikeDutyCombatPursuit(sg_strike_duty_t duty)
 {
-	return SG_StrikeDutyEnemyPressure(duty) ||
-	    duty == SG_STRIKE_DUTY_RECOVER;
+	/* BREACH owns the first physical flag entry.  It still fights every
+	 * currently visible enemy through SG_CombatFrame, but a contact that has
+	 * already broken sight may not replace its objective route with the
+	 * bounded corner camp.  CLEAR and PRESS are the pressure bodies whose
+	 * mission actually includes chasing that defender out of the room. */
+	return duty == SG_STRIKE_DUTY_CLEAR ||
+	    duty == SG_STRIKE_DUTY_PRESS || duty == SG_STRIKE_DUTY_RECOVER;
 }
 
 int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,

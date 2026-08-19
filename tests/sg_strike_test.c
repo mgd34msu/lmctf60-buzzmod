@@ -1104,7 +1104,9 @@ static void TestHomeFlagApproachPricing(void)
 	CHECK(!SG_StrikeEnemyPressureActive(1, 1, SG_STRIKE_DUTY_RECOVER));
 	CHECK(SG_StrikeEnemyPressureActive(0, 1, SG_STRIKE_DUTY_PRESS));
 	CHECK(!SG_StrikeEnemyPressureActive(0, 1, SG_STRIKE_DUTY_ESCORT));
-	CHECK(SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_BREACH));
+	/* The first-entry bot shoots visible defenders but does not trade its flag
+	 * route for Combat's lost-corner camp.  CLEAR/PRESS own that pursuit. */
+	CHECK(!SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_BREACH));
 	CHECK(SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_CLEAR));
 	CHECK(SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_PRESS));
 	CHECK(SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_RECOVER));
@@ -1112,6 +1114,7 @@ static void TestHomeFlagApproachPricing(void)
 	CHECK(!SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_CARRY));
 	CHECK(SG_StrikeCombatPursuitActive(1, 0, SG_STRIKE_DUTY_NONE));
 	CHECK(!SG_StrikeCombatPursuitActive(1, 1, SG_STRIKE_DUTY_ESCORT));
+	CHECK(!SG_StrikeCombatPursuitActive(1, 1, SG_STRIKE_DUTY_BREACH));
 	CHECK(SG_StrikeCombatPursuitActive(0, 1, SG_STRIKE_DUTY_RECOVER));
 	CHECK(SG_StrikeCombatPursuitActive(0, 1, SG_STRIKE_DUTY_CLEAR));
 	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_BREACH));

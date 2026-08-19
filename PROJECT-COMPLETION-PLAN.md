@@ -1553,6 +1553,11 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       owned weapon can no longer attract a below-tier attacker even though the
       broad class field still sees it; successful and rejected touches both
       retire the exact target through the physical item authority.
+      Strike combat pursuit now respects the coordinator's distinct jobs.
+      BREACH still engages every currently visible defender, but once sight is
+      broken it keeps the first physical flag-entry route instead of replacing
+      it with Combat's bounded corner camp. CLEAR and PRESS retain lost-contact
+      pursuit, so the screen can chase while the breach body completes entry.
       Default immediate-return suppression now counts only distinct neighbors
       that hold or reduce the current route cost. A merely finite uphill edge
       can no longer make the controller tax its sole non-worsening reverse edge

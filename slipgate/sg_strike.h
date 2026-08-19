@@ -176,9 +176,10 @@ int SG_StrikeGenericRailAllowed(int strike_active);
 int SG_StrikeDutyEnemyPressure(sg_strike_duty_t duty);
 int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
 	sg_strike_duty_t duty);
-/* Corner pursuit follows the objective route it supports.  Pressure and
- * recovery duties may keep a recently lost contact; escort and carrier duties
- * may not spend their route clock camping. */
+/* Corner pursuit follows the objective route it supports.  CLEAR/PRESS and
+ * recovery duties may keep a recently lost contact.  BREACH still fights a
+ * visible defender but may not abandon the first flag-entry route to camp the
+ * defender after sight breaks; escort and carrier routes have the same ban. */
 int SG_StrikeDutyCombatPursuit(sg_strike_duty_t duty);
 int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
 	sg_strike_duty_t duty);
