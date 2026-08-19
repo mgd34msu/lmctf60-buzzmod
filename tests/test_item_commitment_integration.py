@@ -141,6 +141,15 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             "float Mega_Detour")]
         self.assertIn("Detour_IdentityItemEligible(tc, cls, kent)", detour)
 
+        mega_admission = price[price.index(
+            "static qboolean Detour_MegaEligible"):price.index(
+            "float Detour_Value")]
+        self.assertIn("Caco_ItemBelievedUpFor(tc->team, item)", mega_admission)
+        self.assertIn("G_HealthPickupEligible(item, tc->e)", mega_admission)
+        mega = price[price.index("float Mega_Detour"):price.index(
+            "float Surface_At")]
+        self.assertIn("Detour_MegaEligible(tc, kent)", mega)
+
     def test_rune_handoff_uses_effective_strike_escort_at_both_boundaries(self):
         for relative in ("slipgate/sg_goal.c", "slipgate/sg_descend.c"):
             source = self.text(relative)

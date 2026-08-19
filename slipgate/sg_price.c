@@ -90,6 +90,21 @@ static qboolean Detour_IdentityItemEligible(const sg_think_t *tc, int cls,
 	return SG_IdentityItemRouteAdmission(cls, eligible);
 }
 
+static qboolean Detour_MegaEligible(const sg_think_t *tc, int entnum)
+{
+	edict_t *item;
+
+	if (!tc || !tc->e || !tc->e->client || entnum <= 0 ||
+	    entnum >= globals.num_edicts)
+		return false;
+	item = &g_edicts[entnum];
+	if (!item->item)
+		return false;
+	if (!Caco_ItemBelievedUpFor(tc->team, item))
+		return false;
+	return G_HealthPickupEligible(item, tc->e);
+}
+
 float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
                           float worth)
 {
@@ -173,10 +188,11 @@ float Mega_Detour(sg_think_t *tc, int here, const int *goal_field, int *out_ent)
 	{
 		const int	*kfld = sg_fields.to_mega[k];
 		int			kseed = sg_fields.mega_seed[k];
+		int			kent = sg_fields.mega_ent[k];
 		int			cost_to, pad_to_goal, detour;
 		float		v;
 
-		if (!kfld || kseed < 0)
+		if (!kfld || kseed < 0 || !Detour_MegaEligible(tc, kent))
 			continue;
 		cost_to = kfld[here];
 		pad_to_goal = goal_field[kseed];
@@ -193,7 +209,7 @@ float Mega_Detour(sg_think_t *tc, int here, const int *goal_field, int *out_ent)
 		{
 			best = v;
 			if (out_ent)
-				*out_ent = sg_fields.mega_ent[k];
+				*out_ent = kent;
 		}
 	}
 	return best;
