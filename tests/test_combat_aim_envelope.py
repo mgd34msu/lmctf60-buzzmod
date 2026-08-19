@@ -23,6 +23,7 @@ PROBE = r"""
 #include "slipgate/sg_combat_target_policy.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -38,6 +39,8 @@ int SG_CombatAimTestWeaponRay(int weapon, int hand, int machinegun_shots,
 int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
     int teammate_hit);
 unsigned SG_CombatAimTestRandom(unsigned identity, unsigned steps);
+unsigned SG_CombatAimTestClientRandom(int client_index,
+    uint64_t client_life, unsigned steps);
 
 enum {
     W_BLASTER = 0,
@@ -433,6 +436,12 @@ static int test_combat_randomness_is_per_client(void)
     CHECK(first == SG_CombatAimTestRandom(4, 3));
     CHECK(first != SG_CombatAimTestRandom(5, 3));
     CHECK(first != SG_CombatAimTestRandom(4, 4));
+    first = SG_CombatAimTestClientRandom(4, UINT64_C(9001), 3);
+    CHECK(first == SG_CombatAimTestClientRandom(4, UINT64_C(9001), 3));
+    CHECK(first != SG_CombatAimTestClientRandom(4, UINT64_C(9002), 3));
+    CHECK(first != SG_CombatAimTestClientRandom(5, UINT64_C(9001), 3));
+    CHECK(first != SG_CombatAimTestClientRandom(
+        4, UINT64_C(0x100000000) + UINT64_C(9001), 3));
     CHECK(rand() == expected_random);
     return 0;
 }
@@ -461,6 +470,17 @@ int main(void)
 
 
 class CombatAimEnvelopeTest(unittest.TestCase):
+    def test_spawn_binds_combat_sequence_to_new_client_life(self) -> None:
+        client = (ROOT / "p_client.c").read_text()
+        spawn = client[client.index("client->ctf.ctfid = unique_id++;"):
+                       client.index("// force the current weapon up")]
+
+        self.assertIn("Combat_ResetClient(ent);", spawn)
+        self.assertLess(spawn.index("client->ctf.ctfid = unique_id++;"),
+                        spawn.index("Combat_ResetClient(ent);"))
+        self.assertIn("self->client->ctf.ctfid", SOURCE)
+        self.assertIn("Combat_RandomIdentity(ci", SOURCE)
+
     def test_blocked_grenade_arc_cannot_rearm_the_trigger(self) -> None:
         move = (ROOT / "slipgate" / "sg_move.c").read_text()
         cook = move[move.index("if (!proved_control && bot->nade_phase == 2)"):

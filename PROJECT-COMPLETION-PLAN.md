@@ -1465,6 +1465,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       instead of letting the last client slot overwrite a better observation.
       Its placement error advances a private per-team sequence, so cosmetic
       randomness and listener roster order cannot move tactical enemy belief.
+      Combat aim texture and trigger rhythm are reseeded from the unique client
+      life assigned at spawn. Respawns and recycled slots cannot replay the
+      predecessor's sequence, while each individual life remains deterministic.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

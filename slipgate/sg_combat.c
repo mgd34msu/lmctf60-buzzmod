@@ -748,6 +748,16 @@ static void Combat_ResetState(sg_combat_state_t *st, unsigned identity)
 	st->ws_pre = -1;
 }
 
+static unsigned Combat_RandomIdentity(int client_index,
+	unsigned long client_life)
+{
+	uint64_t life = (uint64_t)client_life;
+	uint32_t folded_life = (uint32_t)life ^ (uint32_t)(life >> 32);
+
+	return (unsigned)(((uint32_t)(client_index + 1) *
+	    UINT32_C(0x9e3779b9)) ^ folded_life ^ UINT32_C(0x27d4eb2d));
+}
+
 static int Combat_ClientIndex(edict_t *self)
 {
 	int ci;
@@ -780,7 +790,8 @@ void Combat_ResetClient(edict_t *self)
 
 	if (ci < 0)
 		return;
-	Combat_ResetState(&sg_combat[ci], (unsigned)ci);
+	Combat_ResetState(&sg_combat[ci], Combat_RandomIdentity(ci,
+	    self->client->ctf.ctfid));
 	sg_combat_initialized[ci] = true;
 }
 
@@ -4830,5 +4841,13 @@ uint32_t SG_CombatAimTestRandom(unsigned identity, unsigned steps)
 	while (steps-- > 0)
 		value = Combat_RandomNext(&st);
 	return value ? value : st.random_state;
+}
+
+uint32_t SG_CombatAimTestClientRandom(int client_index,
+                                      uint64_t client_life,
+                                      unsigned steps)
+{
+	return SG_CombatAimTestRandom(
+	    Combat_RandomIdentity(client_index, (unsigned long)client_life), steps);
 }
 #endif
