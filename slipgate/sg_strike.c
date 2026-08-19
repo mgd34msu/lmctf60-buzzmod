@@ -14,6 +14,11 @@ static int Strike_SlotValid(int slot)
 	return slot >= 0 && slot < SG_STRIKE_MAX_SLOTS;
 }
 
+int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_rush)
+{
+	return ordinary_attack || strike_rush;
+}
+
 float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,
 	int current_goal_ms, int candidate_goal_ms)

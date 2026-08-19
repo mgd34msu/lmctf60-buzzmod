@@ -303,7 +303,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	/* The home enemy flag is public CTF state.  Keep its physical item
 	 * position as a bounded last-room pricing input; dropped/carried flags do
 	 * not enter because their availability/knowledge has different authority. */
-	if (role == SG_ROLE_ATTACK)
+	if (SG_StrikeEnemyPressureActive(role == SG_ROLE_ATTACK,
+	        tc->strike_rush))
 	{
 		edict_t *flag = SG_EnemyFlag(team);
 

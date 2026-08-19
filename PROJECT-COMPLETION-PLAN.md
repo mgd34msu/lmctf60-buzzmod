@@ -343,6 +343,11 @@ replan: dry-versus-water drift, hazardous or air-starved water, and
 water-to-water misuse release the commitment and force fresh localization.
 Those states can no longer skip the hook controller while generic steering
 walks directly toward its unearned landing, and the valid edge is not shelved.
+Coordinated PRESS, BREACH, and CLEAR bodies now retain the bounded last-room
+enemy-flag approach preference even when their underlying organic role is
+RECOVER or ESCORT. The strike overlay can no longer grant the enemy route and
+terminal touch controller while accidentally withholding the intervening
+proved RUN preference that converts a near-stand plateau into physical entry.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

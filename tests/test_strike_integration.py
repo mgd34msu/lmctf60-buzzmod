@@ -441,6 +441,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
         self.assertIn("StrikeWeaponPrepareCommit(bot, tc)", descend)
         self.assertIn("(role == SG_ROLE_ATTACK || tc->strike_rush)", descend)
+        self.assertIn("SG_StrikeEnemyPressureActive(role == SG_ROLE_ATTACK,",
+                      descend)
         self.assertIn("SG_NadeTargetClear(bot)", descend)
         self.assertIn("if (tc->strike_rush)", descend)
         self.assertIn("StrikeWeaponPurposeReconcile(bot, tc)", descend)

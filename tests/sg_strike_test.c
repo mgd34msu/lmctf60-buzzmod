@@ -943,6 +943,10 @@ static void TestInvalidInputDoesNotMutate(void)
 
 static void TestHomeFlagApproachPricing(void)
 {
+	CHECK(SG_StrikeEnemyPressureActive(1, 0));
+	CHECK(SG_StrikeEnemyPressureActive(0, 1));
+	CHECK(SG_StrikeEnemyPressureActive(1, 1));
+	CHECK(!SG_StrikeEnemyPressureActive(0, 0));
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 500.0f, 300.0f, 0.0f,
 	    500, 500) == -100.0f);
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 350.0f, 0.0f,

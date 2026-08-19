@@ -169,6 +169,11 @@ sg_strike_weapon_door_retirement_t SG_StrikeWeaponDoorRetirement(
 	int release_proved_clear, int recovery_expired, int hold_open_ready);
 int SG_StrikeGenericRailAllowed(int strike_active);
 
+/* A coordinated pressure duty owns the same enemy-room conversion policy as
+ * an organic ATTACK role.  Recovery and escort duties pass strike_rush=0 and
+ * retain their own objective authority. */
+int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_rush);
+
 /* Bounded pricing correction for the last proved RUNs toward a home enemy
  * flag.  This never grants touch or movement authority; it only breaks a
  * near-stand field plateau in favor of physical progress toward the item. */
