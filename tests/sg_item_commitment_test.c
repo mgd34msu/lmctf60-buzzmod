@@ -369,6 +369,28 @@ int main(void)
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, false));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, 2, true));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, 2));
+	CHECK(SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, -1, true, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 16, true, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, false, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, false,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    0, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, true, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_BLUE, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_RED, false, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, 2, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_RED, true, true));
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 0) ==
 	      SG_ITEM_PICKUP_COMMIT_ONLY);
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 1) ==

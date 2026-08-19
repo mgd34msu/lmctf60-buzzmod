@@ -131,10 +131,15 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             body = source[call:call + 240]
             self.assertIn("tc->strike_active", body)
             self.assertIn("tc->escort_mission", body)
+            self.assertIn("SG_RuneHandoffCarrierAllowed(team,", source)
+            self.assertIn("ClientHasFlag(", source)
+            self.assertIn("client < game.maxclients", source)
 
         policy = self.text("slipgate/sg_rune_handoff_policy.h")
         self.assertIn("if (strike_active)", policy)
         self.assertIn("return escort_mission;", policy)
+        self.assertIn("carrier_team == team && carrying_flag", policy)
+        self.assertIn("!receiver_has_rune", policy)
 
     def test_flag_intelligence_preempts_cosmetic_chat_but_stamps_budget(self):
         source = self.text("slipgate/sg_chat.c")

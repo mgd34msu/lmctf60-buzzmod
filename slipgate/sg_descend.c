@@ -3773,8 +3773,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	/*
 	 * THE RUNE HANDOFF (sg_runetoss, observations -- the owner's recovered
 	 * "extremely important": a teammate holding a defensive rune gives
-	 * it to the carrier). A bot with RESIST or REGEN, within 300 of our
-	 * live carrier who holds nothing better, faces the carrier for one
+	 * it to the carrier). A bot with RESIST or REGEN, inside 400 of our
+	 * live carrier whose rune slot is empty, faces the carrier for one
 	 * frame and drops the rune into its path; the carrier's own item
 	 * pricing (SG_FC_RUNE) takes it from the floor. One toss per bot
 	 * per 20s; combat frames exempt -- a fight is not the moment.
@@ -3790,14 +3790,17 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	{
 		sg_belief_carrier_t *rc = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
-		if (rc->client >= 0)
+		if (rc->client >= 0 && rc->client < game.maxclients)
 		{
 			edict_t *ce = g_edicts + 1 + rc->client;
+			qboolean carrier_allowed = SG_RuneHandoffCarrierAllowed(team,
+			    game.maxclients, rc->client, ce->inuse, ce->client != NULL,
+			    ce->health, ce->deadflag != DEAD_NO,
+			    ce->client ? ce->client->ctf.teamnum : 0,
+			    ce->client && ClientHasFlag(ce) != NULL,
+			    ce->client && ce->client->rune != NULL);
 
-			if (ce->inuse && ce->client && ce->health > 0 &&
-			    (!ce->client->rune ||
-			     (ce->client->rune->runetype != RUNE_RESIST &&
-			      ce->client->rune->runetype != RUNE_REGEN)))
+			if (carrier_allowed)
 			{
 				vec3_t rd14;
 

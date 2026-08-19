@@ -320,6 +320,11 @@ Enabled sound-directed rocket fire now vetoes splash against every live
 same-team client in the game roster. Human teammates receive the same safety
 as SG teammates instead of disappearing from the check because they have no
 entry in the bot controller array.
+Defensive-rune convergence and the final toss now revalidate the belief-selected
+client against current CTF state: bounded slot, live same-team body, actual
+flag possession, and an empty rune slot. A former carrier, dead client, reused
+slot, or carrier already holding any rune cannot receive an uncollectable drop
+merely because the carrier belief has not aged out yet.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1324,6 +1329,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Sound-directed rockets inspect the complete live client roster before
       firing, so an unrepresented human teammate at the believed impact point
       vetoes speculative splash exactly like an SG teammate.
+      Defensive-rune convergence and toss both require the belief-selected
+      client to be a current live same-team flag carrier with an empty rune
+      slot; stale, reused, or already-occupied receivers cannot authorize the
+      irreversible drop.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.

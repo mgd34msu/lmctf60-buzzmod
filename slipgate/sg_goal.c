@@ -1501,14 +1501,17 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	{
 		sg_belief_carrier_t *rc0 = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
-		if (rc0->client >= 0)
+		if (rc0->client >= 0 && rc0->client < game.maxclients)
 		{
 			edict_t *ce0 = g_edicts + 1 + rc0->client;
+			qboolean carrier_allowed = SG_RuneHandoffCarrierAllowed(team,
+			    game.maxclients, rc0->client, ce0->inuse, ce0->client != NULL,
+			    ce0->health, ce0->deadflag != DEAD_NO,
+			    ce0->client ? ce0->client->ctf.teamnum : 0,
+			    ce0->client && ClientHasFlag(ce0) != NULL,
+			    ce0->client && ce0->client->rune != NULL);
 
-			if (ce0->inuse && ce0->client && ce0->health > 0 &&
-			    (!ce0->client->rune ||
-			     (ce0->client->rune->runetype != RUNE_RESIST &&
-			      ce0->client->rune->runetype != RUNE_REGEN)))
+			if (carrier_allowed)
 			{
 				if (bot->runeconv_until <= 0.0f)
 					SG_TimerArm(&bot->runeconv_until, 8.0f);
