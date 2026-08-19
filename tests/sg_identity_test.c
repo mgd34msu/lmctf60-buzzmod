@@ -14,6 +14,7 @@
 #include "slipgate/sg_lead_random.h"
 #include "slipgate/sg_persona_assignment.h"
 #include "slipgate/sg_escape_random.h"
+#include "slipgate/sg_route_jitter.h"
 #include "slipgate/sg_callout_random.h"
 #include "slipgate/sg_ear_random.h"
 #include "slipgate/sg_role_skew_random.h"
@@ -148,6 +149,29 @@ static void TestRibbonRandomness(void)
 	interval = SG_RibbonRandomInterval(state);
 	CHECK(interval >= 1.0f && interval < 2.0f);
 	CHECK(SG_RibbonRandomNext(state) != state);
+}
+
+static void TestRouteJitterIdentity(void)
+{
+	uint64_t first_instance = UINT64_C(0x123456789abcdef0);
+	uint64_t next_instance = UINT64_C(0x123456789abcdef1);
+	unsigned first;
+	int expected_random;
+
+	srand(2939);
+	expected_random = rand();
+	srand(2939);
+	first = SG_RouteJitterDraw(first_instance, 7, 0, 0, 42);
+	CHECK(first < 1024);
+	CHECK(first == SG_RouteJitterDraw(first_instance, 7, 0, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(next_instance, 7, 0, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 8, 0, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 7, 1, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 7, 0, 1, 42));
+	CHECK(SG_RouteJitterDraw(first_instance, 7, 1, 0, 42) !=
+	      SG_RouteJitterDraw(first_instance, 7, 0, 1, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 7, 0, 0, 43));
+	CHECK(rand() == expected_random);
 }
 
 static void TestRoleSkewRandomness(void)
@@ -607,6 +631,7 @@ int main(void)
 	TestChatObjectivePriority();
 	TestEscortDose();
 	TestRibbonRandomness();
+	TestRouteJitterIdentity();
 	TestRoleSkewRandomness();
 	TestLeadRandomness();
 	TestPersonaAssignment();

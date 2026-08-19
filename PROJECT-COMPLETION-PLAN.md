@@ -1468,6 +1468,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Combat aim texture and trigger rhythm are reseeded from the unique client
       life assigned at spawn. Respawns and recycled slots cannot replay the
       predecessor's sequence, while each individual life remains deterministic.
+      Default route-jitter pricing now includes the immutable SG instance and
+      keeps respawn and objective-leg epochs as separate identity components.
+      Reused client slots cannot replay their predecessor's route preferences,
+      and a death epoch cannot alias an otherwise equal mission-change epoch.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

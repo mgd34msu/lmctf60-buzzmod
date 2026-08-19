@@ -30,6 +30,7 @@
 #include "slipgate/sg_route_policy.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_dither.h"
+#include "slipgate/sg_route_jitter.h"
 #include "slipgate/sg_ribbon_random.h"
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_rune_handoff_policy.h"
@@ -1352,11 +1353,10 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		if (sg_cv.routejitter->value > 0.0f)
 		{
-			unsigned rj = ((unsigned)li * 2654435761u) ^
-			              ((unsigned)(e - g_edicts) * 40503u) ^
-			              ((unsigned)(bot->lives + bot->legs) * 9176u);
+			unsigned rj = SG_RouteJitterDraw(bot->instance_token,
+			    (unsigned)(e - g_edicts - 1), (unsigned)bot->lives,
+			    (unsigned)bot->legs, (unsigned)li);
 
-			rj = (rj >> 4) & 1023u;
 			v *= 1.0f + ((float)rj / 1023.0f - 0.5f) * 0.02f *
 			     sg_cv.routejitter->value;
 		}
