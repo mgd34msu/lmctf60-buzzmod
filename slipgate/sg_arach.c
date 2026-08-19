@@ -91,6 +91,10 @@ static uint32_t sg_role_escort_epoch[2];
 static sg_strike_adapter_t sg_strike_adapter;
 static sg_role_t sg_strike_role_cache[SG_MAXBOTS];
 static qboolean sg_strike_role_valid[SG_MAXBOTS];
+/* Effective enemy-pressure membership is published with the role/strike
+ * snapshot, before serial bot think.  Route coordination must not infer a
+ * teammate's live duty from last frame's organic role. */
+static qboolean sg_strike_enemy_pressure_cache[SG_MAXBOTS];
 static qboolean sg_strike_frame_ready;
 static qboolean sg_strike_telemetry_valid[2];
 static uint32_t sg_strike_telemetry_epoch[2];
@@ -113,6 +117,8 @@ static void Role_LevelReset(void)
 	sg_role_escort_epoch[0] = sg_role_escort_epoch[1] = 0;
 	SG_StrikeAdapterReset(&sg_strike_adapter);
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	memset(sg_strike_enemy_pressure_cache, 0,
+	       sizeof(sg_strike_enemy_pressure_cache));
 	sg_strike_frame_ready = false;
 	memset(sg_strike_telemetry_valid, 0,
 	       sizeof(sg_strike_telemetry_valid));
@@ -1236,6 +1242,8 @@ qboolean SG_LevelSetup(void)
 	}
 	SG_StrikeAdapterReset(&sg_strike_adapter);
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	memset(sg_strike_enemy_pressure_cache, 0,
+	       sizeof(sg_strike_enemy_pressure_cache));
 	sg_strike_frame_ready = false;
 	memset(sg_strike_telemetry_valid, 0,
 	       sizeof(sg_strike_telemetry_valid));
@@ -2072,6 +2080,8 @@ static void StrikePrepareFrame(void)
 	int i, team_index;
 
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	memset(sg_strike_enemy_pressure_cache, 0,
+	       sizeof(sg_strike_enemy_pressure_cache));
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent = sg_bots[i].ent;
@@ -2086,6 +2096,9 @@ static void StrikePrepareFrame(void)
 			? SG_Role(&sg_bots[i], carrying)
 			: (carrying ? SG_ROLE_CARRY : SG_ROLE_ATTACK);
 		sg_strike_role_valid[i] = true;
+		sg_strike_enemy_pressure_cache[i] =
+		    SG_StrikeEnemyPressureActive(
+		        sg_strike_role_cache[i] == SG_ROLE_ATTACK, 0);
 	}
 
 	for (team_index = 0; team_index < 2; team_index++)
@@ -2152,15 +2165,51 @@ static void StrikePrepareFrame(void)
 	sg_strike_frame_ready = SG_StrikeAdapterBeginFrame(
 		&sg_strike_adapter, frames) ? true : false;
 	if (sg_strike_frame_ready)
+	{
+		/* Freeze effective pressure for every teammate now.  Serial movement
+		 * may read this table, but may not rewrite it from a partially advanced
+		 * team.  The one RECOVER/ESCORT owner remains outside rush_mask. */
+		for (i = 0; i < SG_MAXBOTS; i++)
+		{
+			edict_t *ent = sg_bots[i].ent;
+			const sg_strike_team_t *team;
+			int team_index;
+			qboolean strike_rush = false;
+
+			if (!sg_strike_role_valid[i] || !ent || !ent->client)
+				continue;
+			team_index = SG_TeamIdx(ent->client->ctf.teamnum);
+			team = SG_StrikeAdapterTeam(&sg_strike_adapter, team_index);
+			if (team && SG_StrikeParticipant(team, i))
+				strike_rush = SG_StrikeMemberRushes(team, i) ? true : false;
+			sg_strike_enemy_pressure_cache[i] =
+			    SG_StrikeEnemyPressureActive(
+			        sg_strike_role_cache[i] == SG_ROLE_ATTACK,
+			        strike_rush);
+		}
 		for (team_index = 0; team_index < 2; team_index++)
 			StrikeTelemetryEdge(team_index);
+	}
 }
 
 void SG_StrikeSlotReset(int slot)
 {
 	SG_StrikeAdapterForgetSlot(&sg_strike_adapter, slot);
 	if (slot >= 0 && slot < SG_MAXBOTS)
+	{
 		sg_strike_role_valid[slot] = false;
+		sg_strike_enemy_pressure_cache[slot] = false;
+	}
+}
+
+qboolean SG_StrikeEnemyPressureSnapshot(const sg_bot_t *bot)
+{
+	int slot = bot ? (int)(bot - sg_bots) : -1;
+
+	if (slot >= 0 && slot < SG_MAXBOTS && sg_strike_frame_ready &&
+	    sg_strike_role_valid[slot])
+		return sg_strike_enemy_pressure_cache[slot];
+	return bot && bot->last_role == (int)SG_ROLE_ATTACK;
 }
 
 static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)

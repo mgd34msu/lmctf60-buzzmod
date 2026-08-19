@@ -574,6 +574,7 @@ typedef struct sg_think_s {
 
 void SG_BotThink(sg_bot_t *bot);
 void SG_StrikeSlotReset(int slot);
+qboolean SG_StrikeEnemyPressureSnapshot(const sg_bot_t *bot);
 qboolean SG_LevelSetup(void);
 void Botfill_Frame(void);
 

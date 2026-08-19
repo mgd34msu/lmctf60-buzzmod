@@ -353,6 +353,13 @@ prices, forward combat pressure, strictly descending RUN fallback, and the
 direct-touch anti-wedge recovery. A repurposed pressure body can no longer
 inherit the enemy route while an obsolete organic-role check makes it recede,
 stand still, or suicide beside the available flag.
+The coordinator now publishes every bot's effective enemy-pressure membership
+with the immutable pre-serial frame snapshot. Axis spreading therefore sees
+live PRESS, BREACH, and CLEAR teammates even when their organic roles are
+RECOVER or ESCORT, while the one actual recovery/escort owner remains outside
+the pressure set. The ordinary route report uses the same snapshot for its
+static goal, so a pressure body's movement is measured against the enemy stand
+it is actually pursuing rather than the abandoned home-role destination.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

@@ -446,6 +446,12 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(descend.count("enemy_pressure"), 8)
         self.assertIn("SG_AttackDescentFallbackAllowed(enemy_pressure,",
                       descend)
+        axis_start = descend.index("SPREAD THE AXES")
+        axis_end = descend.index("else if (role == SG_ROLE_CARRY)",
+                                 axis_start)
+        axis = descend[axis_start:axis_end]
+        self.assertIn("SG_StrikeEnemyPressureSnapshot(mb6)", axis)
+        self.assertNotIn("mb6->last_role", axis)
         self.assertIn("SG_NadeTargetClear(bot)", descend)
         self.assertIn("if (tc->strike_rush)", descend)
         self.assertIn("StrikeWeaponPurposeReconcile(bot, tc)", descend)
@@ -459,6 +465,17 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("memcpy(next_frame, frames", adapter)
         self.assertIn("SG_StrikeStep(&next_team[team_index]", adapter)
         self.assertIn("exactly once", header)
+        snapshot = arach.index("sg_strike_enemy_pressure_cache[i] =",
+                               arach.index("SG_StrikeAdapterBeginFrame"))
+        serial = arach.index("SG_BotThink(&sg_bots[i]);", snapshot)
+        self.assertLess(snapshot, serial)
+        pressure = arach[arach.index(
+            "qboolean SG_StrikeEnemyPressureSnapshot"):]
+        self.assertIn("sg_strike_enemy_pressure_cache[slot]", pressure)
+        reset = arach[arach.index("void SG_StrikeSlotReset"):]
+        self.assertIn("sg_strike_enemy_pressure_cache[slot] = false", reset)
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+        self.assertIn("SG_StrikeEnemyPressureSnapshot(bot)", move)
 
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()

@@ -752,7 +752,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 					continue;
 				if (mb6->ent->client->ctf.teamnum != team)
 					continue;
-				if (mb6->last_role != (int)SG_ROLE_ATTACK)
+				if (!SG_StrikeEnemyPressureSnapshot(mb6))
 					continue;
 				if ((int)(mb6->ent - g_edicts) >= (int)(e - g_edicts))
 					continue;       /* only the junior spreads */

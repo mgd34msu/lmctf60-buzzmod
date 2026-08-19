@@ -10263,15 +10263,15 @@ hook_wait:;
 	{
 		float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 		                 e->velocity[1] * e->velocity[1]);
-		/* sgoal: the bot's cost on the STATIC field for its role's true
-		 * destination (attacker -> enemy stand, everyone else -> own).
+		/* sgoal: the bot's cost on the STATIC field for its frame-owned
+		 * destination (enemy-pressure body -> enemy stand, everyone else -> own).
 		 * The composed goal= number rebuilds under a standing bot --
 		 * item beliefs, danger, re-floods -- and observations traces
 		 * caught a stationary attacker "receding" 800ms/s in it. Route
 		 * progress gets measured against a number that only moves when
 		 * the body does. */
 		int sgoal = -1;
-		const int *sfld = (role == SG_ROLE_ATTACK)
+		const int *sfld = SG_StrikeEnemyPressureSnapshot(bot)
 		    ? ((team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
 		                              : sg_fields.to_red_flag)
 		    : ((team == CTF_TEAM_RED) ? sg_fields.to_red_flag
