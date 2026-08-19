@@ -1945,7 +1945,10 @@ static const int *StrikeCarrierField(int team)
 
 	if (sg_fields.our_carrier[ti] && sg_fields.our_carrier_valid[ti])
 		return sg_fields.our_carrier[ti];
-	return StrikeOwnField(team);
+	/* Carrier belief is refreshed after the pickup frame.  Until its
+	 * ahead-of-carrier flood is ready, send the escort toward the capture
+	 * stand rather than toward a stolen own flag and the enemy thief. */
+	return StrikeHomeField(team);
 }
 
 static const int *StrikeDutyField(sg_strike_duty_t duty, int team)

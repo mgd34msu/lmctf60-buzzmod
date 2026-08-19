@@ -946,6 +946,14 @@ static void TestRailAndCarrierRoute(void)
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == recover_field && tc.route_field == recover_field);
 	CHECK(tc.route_pure);
+	/* Carrier support is not flooded until the frame after pickup.  The
+	 * transient fallback remains homeward, never thief-bound. */
+	sg_fields.our_carrier_valid[0] = false;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == home_field && tc.route_field == home_field);
+	CHECK(tc.route_pure);
+	sg_fields.our_carrier_valid[0] = true;
 	/* Restore the carrier duty for the downstream weapon/rally assertions. */
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
 	    CTF_TEAM_RED));

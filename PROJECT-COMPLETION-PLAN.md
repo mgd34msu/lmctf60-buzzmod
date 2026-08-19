@@ -198,6 +198,9 @@ home-stand field; only the RECOVER duty follows the dynamic stolen-home-flag
 field toward the enemy thief. A replacement recoverer is chosen around a live
 incumbent escort when another reachable helper exists, so a casualty does not
 unnecessarily reshuffle the carrier screen.
+On the pickup frame before the ahead-of-carrier support flood is valid, the
+escort falls back to that same home-stand route instead of briefly following
+the thief-bound recovery field.
 Defender ranking now counts only live same-team bodies, so a corpse in an early
 bot slot cannot reserve the stand-watch quota while surviving teammates abandon
 the base; escort admission now uses that identical live rank, so it cannot steal
