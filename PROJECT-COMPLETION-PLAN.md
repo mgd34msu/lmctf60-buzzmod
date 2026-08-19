@@ -155,10 +155,12 @@ Implement the remaining material deficiencies in this order:
    expected route progress before fire, exercise the production aim-wedge and
    terminal lifecycle, and shelve only the exact failed link. Never satisfy the
    gate by disabling hook use.
-4. **Improve combat without hidden information.** In `sg_combat.c`, reduce the
-   material hits-per-shot shortfall while retaining reaction delay,
-   overshoot/settle, weapon switching, splash safety, skill-scaled error, and
-   visible/audible information admission.
+4. **Preserve combat strength without hidden information.** Current retained
+   evidence has bots ahead of humans in hits per shot, about 0.58 versus 0.29;
+   that is not a deficiency and must not be tuned downward. In `sg_combat.c`,
+   change only a demonstrated weaker combat dimension while retaining that
+   accuracy advantage, reaction delay, overshoot/settle, weapon switching,
+   splash safety, skill-scaled error, and visible/audible information admission.
 5. **Improve coordinated play.** In `sg_arach.c`, `sg_goal.c`, and the focused
    role modules, increase useful attack pressure and preserve the accepted
    carrier, escort, recover, defender, radio, and persona laws. Team assignment
@@ -250,7 +252,10 @@ Acceptance:
 
 Required work:
 
-- measure and reduce the remaining hits-per-shot gap without creating an aimbot;
+- preserve the measured hits-per-shot advantage instead of mislabeling it as a
+  shortfall or weakening it for human resemblance;
+- identify any actually deficient combat outcome before changing combat
+  policy; no combat C change is required merely to make this section busy;
 - retain reaction delay, overshoot/settle texture, switch discipline, splash
   safety, and skill-scaled error;
 - run instrumented trials for rail-rhythm hearing, belief cone and range,
