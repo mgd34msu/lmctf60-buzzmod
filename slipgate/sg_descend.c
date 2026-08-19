@@ -2831,12 +2831,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				/*
 				 * THE PAIR SPLITS THE SENTRY. When two attackers stand
 				 * at the threshold, holding them BOTH just gives the
-				 * sentry one target at a time. The lower client index
-				 * fights -- holds the sentry's eyes -- and the other
-				 * skips the hold entirely and circles to the grab. A
-				 * sentry cannot watch both; whichever it picks loses
-				 * something. Solo attackers fight first, as the killer
-				 * census demands.
+				 * sentry one target at a time. The coordinator's CLEAR
+				 * body fights -- holds the sentry's eyes -- while BREACH
+				 * skips the hold and completes the physical entry. PRESS
+				 * is the fallback screen; client identity breaks only
+				 * equal-duty ties. A sentry cannot watch both; whichever
+				 * it picks loses something. Solo attackers still fight
+				 * first, as the killer census demands.
 				 */
 				int bi5, mate_holding = 0;
 
@@ -2854,8 +2855,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					mate_goal = SG_StrikeEnemyPressureGoalSnapshot(mb5);
 					if (SG_StrikeEnemyPressureSnapshot(mb5) &&
 					    mate_goal >= 0 && mate_goal < 1200 &&
-					    (int)(mb5->ent - g_edicts) <
-					        (int)(e - g_edicts))
+					    SG_CombatWouldEngage(mb5->ent) &&
+					    SG_StrikeThresholdMateOwnsHold(
+					        SG_StrikeDutySnapshot(bot),
+					        (int)(e - g_edicts),
+					        SG_StrikeDutySnapshot(mb5),
+					        (int)(mb5->ent - g_edicts)))
 						mate_holding = 1;
 				}
 				if (!mate_holding)

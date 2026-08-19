@@ -183,6 +183,11 @@ int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
 int SG_StrikeDutyCombatPursuit(sg_strike_duty_t duty);
 int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
 	sg_strike_duty_t duty);
+/* When several pressure bodies reach a defended flag threshold, the assigned
+ * screen owns the hold and the breach body owns physical entry.  NONE is the
+ * organic-attacker fallback; same-duty ties retain deterministic client order. */
+int SG_StrikeThresholdMateOwnsHold(sg_strike_duty_t self_duty,
+	int self_entity, sg_strike_duty_t mate_duty, int mate_entity);
 /* Rearguard duty belongs to enemy-room pressure and to the explicit escort,
  * never to recovery or the carrier itself. */
 int SG_StrikeDutyRearguard(sg_strike_duty_t duty);

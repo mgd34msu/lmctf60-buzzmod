@@ -1117,6 +1117,24 @@ static void TestHomeFlagApproachPricing(void)
 	CHECK(!SG_StrikeCombatPursuitActive(1, 1, SG_STRIKE_DUTY_BREACH));
 	CHECK(SG_StrikeCombatPursuitActive(0, 1, SG_STRIKE_DUTY_RECOVER));
 	CHECK(SG_StrikeCombatPursuitActive(0, 1, SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 2,
+	      SG_STRIKE_DUTY_CLEAR, 9));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_CLEAR, 9,
+	      SG_STRIKE_DUTY_BREACH, 2));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 2,
+	      SG_STRIKE_DUTY_PRESS, 9));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_PRESS, 9,
+	      SG_STRIKE_DUTY_BREACH, 2));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_PRESS, 9,
+	      SG_STRIKE_DUTY_PRESS, 2));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_PRESS, 2,
+	      SG_STRIKE_DUTY_PRESS, 9));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_NONE, 9,
+	      SG_STRIKE_DUTY_NONE, 2));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 2,
+	      SG_STRIKE_DUTY_RECOVER, 1));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 0,
+	      SG_STRIKE_DUTY_CLEAR, 9));
 	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_BREACH));
 	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_CLEAR));
 	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_PRESS));

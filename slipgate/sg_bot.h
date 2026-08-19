@@ -15,6 +15,7 @@
 #include "sg_human_speed.h"
 #include "sg_door_approach.h"
 #include "sg_rune.h"
+#include "sg_strike.h"
 
 #define SG_MAXBOTS      16
 #define SG_DOOR_APPROACH_MAX_MASTERS 16
@@ -598,6 +599,7 @@ void SG_BotThink(sg_bot_t *bot);
 void SG_StrikeSlotReset(int slot);
 qboolean SG_StrikeEnemyPressureSnapshot(const sg_bot_t *bot);
 int SG_StrikeEnemyPressureGoalSnapshot(const sg_bot_t *bot);
+sg_strike_duty_t SG_StrikeDutySnapshot(const sg_bot_t *bot);
 qboolean SG_LevelSetup(void);
 void Botfill_Frame(void);
 

@@ -1558,6 +1558,12 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       broken it keeps the first physical flag-entry route instead of replacing
       it with Combat's bounded corner camp. CLEAR and PRESS retain lost-contact
       pursuit, so the screen can chase while the breach body completes entry.
+      Defended-threshold pair splitting now consumes those same frozen duties:
+      A CLEAR body with a current visible engagement owns the room fight,
+      PRESS is its fallback, and BREACH owns the physical entry. Client
+      identity breaks only equal-duty ties, and a solo attacker still fights
+      first; slot order can no longer assign the screen job to the bot the
+      coordinator selected to take the flag.
       Default immediate-return suppression now counts only distinct neighbors
       that hold or reduce the current route cost. A merely finite uphill edge
       can no longer make the controller tax its sole non-worsening reverse edge

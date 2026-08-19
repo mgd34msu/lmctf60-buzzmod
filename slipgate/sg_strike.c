@@ -45,6 +45,38 @@ int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
 	                     : ordinary_pursuit;
 }
 
+static int Strike_ThresholdHoldPriority(sg_strike_duty_t duty)
+{
+	switch (duty)
+	{
+	case SG_STRIKE_DUTY_CLEAR:
+		return 3;
+	case SG_STRIKE_DUTY_PRESS:
+		return 2;
+	case SG_STRIKE_DUTY_BREACH:
+	case SG_STRIKE_DUTY_NONE:
+		return 1;
+	case SG_STRIKE_DUTY_ESCORT:
+	case SG_STRIKE_DUTY_RECOVER:
+	case SG_STRIKE_DUTY_CARRY:
+	default:
+		return 0;
+	}
+}
+
+int SG_StrikeThresholdMateOwnsHold(sg_strike_duty_t self_duty,
+	int self_entity, sg_strike_duty_t mate_duty, int mate_entity)
+{
+	int self_priority = Strike_ThresholdHoldPriority(self_duty);
+	int mate_priority = Strike_ThresholdHoldPriority(mate_duty);
+
+	if (self_entity <= 0 || mate_entity <= 0 || mate_entity == self_entity ||
+	    self_priority <= 0 || mate_priority <= 0)
+		return 0;
+	return mate_priority > self_priority ||
+	    (mate_priority == self_priority && mate_entity < self_entity);
+}
+
 int SG_StrikeDutyRearguard(sg_strike_duty_t duty)
 {
 	return SG_StrikeDutyEnemyPressure(duty) ||

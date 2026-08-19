@@ -99,6 +99,7 @@ static qboolean sg_strike_role_valid[SG_MAXBOTS];
  * teammate's live duty from last frame's organic role. */
 static qboolean sg_strike_enemy_pressure_cache[SG_MAXBOTS];
 static int sg_strike_enemy_pressure_goal_cache[SG_MAXBOTS];
+static sg_strike_duty_t sg_strike_duty_cache[SG_MAXBOTS];
 static qboolean sg_strike_frame_ready;
 static qboolean sg_strike_telemetry_valid[2];
 static uint32_t sg_strike_telemetry_epoch[2];
@@ -127,6 +128,7 @@ static void Role_LevelReset(void)
 	       sizeof(sg_strike_enemy_pressure_cache));
 	memset(sg_strike_enemy_pressure_goal_cache, 0xff,
 	       sizeof(sg_strike_enemy_pressure_goal_cache));
+	memset(sg_strike_duty_cache, 0, sizeof(sg_strike_duty_cache));
 	sg_strike_frame_ready = false;
 	memset(sg_strike_telemetry_valid, 0,
 	       sizeof(sg_strike_telemetry_valid));
@@ -1254,6 +1256,7 @@ qboolean SG_LevelSetup(void)
 	       sizeof(sg_strike_enemy_pressure_cache));
 	memset(sg_strike_enemy_pressure_goal_cache, 0xff,
 	       sizeof(sg_strike_enemy_pressure_goal_cache));
+	memset(sg_strike_duty_cache, 0, sizeof(sg_strike_duty_cache));
 	sg_strike_frame_ready = false;
 	memset(sg_strike_telemetry_valid, 0,
 	       sizeof(sg_strike_telemetry_valid));
@@ -2116,6 +2119,7 @@ static void StrikePrepareFrame(void)
 	       sizeof(sg_strike_enemy_pressure_cache));
 	memset(sg_strike_enemy_pressure_goal_cache, 0xff,
 	       sizeof(sg_strike_enemy_pressure_goal_cache));
+	memset(sg_strike_duty_cache, 0, sizeof(sg_strike_duty_cache));
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent = sg_bots[i].ent;
@@ -2234,6 +2238,7 @@ static void StrikePrepareFrame(void)
 			sg_strike_enemy_pressure_goal_cache[i] =
 			    sg_strike_enemy_pressure_cache[i]
 			        ? frames[team_index].slot[i].enemy_flag_goal_ms : -1;
+			sg_strike_duty_cache[i] = duty;
 		}
 		for (team_index = 0; team_index < 2; team_index++)
 			StrikeTelemetryEdge(team_index);
@@ -2248,6 +2253,7 @@ void SG_StrikeSlotReset(int slot)
 		sg_strike_role_valid[slot] = false;
 		sg_strike_enemy_pressure_cache[slot] = false;
 		sg_strike_enemy_pressure_goal_cache[slot] = -1;
+		sg_strike_duty_cache[slot] = SG_STRIKE_DUTY_NONE;
 	}
 }
 
@@ -2270,6 +2276,16 @@ int SG_StrikeEnemyPressureGoalSnapshot(const sg_bot_t *bot)
 		return sg_strike_enemy_pressure_goal_cache[slot];
 	return bot && bot->last_role == (int)SG_ROLE_ATTACK
 	    ? bot->last_goalcost : -1;
+}
+
+sg_strike_duty_t SG_StrikeDutySnapshot(const sg_bot_t *bot)
+{
+	int slot = bot ? (int)(bot - sg_bots) : -1;
+
+	if (slot >= 0 && slot < SG_MAXBOTS && sg_strike_frame_ready &&
+	    sg_strike_role_valid[slot])
+		return sg_strike_duty_cache[slot];
+	return SG_STRIKE_DUTY_NONE;
 }
 
 static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)
