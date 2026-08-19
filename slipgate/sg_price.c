@@ -10,6 +10,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_bot.h"        /* sg_think_t -- the pricing context */
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_util.h"
 
 #define SG_MEGA_MAXDETOUR	4000    /* ms of extra road, hard refusal above */
@@ -302,7 +303,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		 * role except the assigned escort, whose whole job it is.
 		 * 1.0 == today's behavior exactly.
 		 */
-		if (tc->role != SG_ROLE_ESCORT)
+		if (!SG_EscortSupportFullStrength(tc->escort_mission))
 		{
 			cvar_t *lw = sg_cv.lonewolf;
 

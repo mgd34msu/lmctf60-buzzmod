@@ -508,6 +508,15 @@ class StrikeIntegrationTest(unittest.TestCase):
         gate = anti_linger[:anti_linger.index("static gitem_t *lg_flag")]
         self.assertNotIn("role != SG_ROLE_ESCORT", gate)
 
+    def test_effective_escort_mission_controls_support_pull(self) -> None:
+        price = (ROOT / "slipgate/sg_price.c").read_text()
+        start = price.index("LONE WOLF (sg_lonewolf)")
+        end = price.index("v += csup *", start)
+        support = price[start:end]
+        self.assertIn(
+            "!SG_EscortSupportFullStrength(tc->escort_mission)", support)
+        self.assertNotIn("tc->role != SG_ROLE_ESCORT", support)
+
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()
         start = source.index("static void StrikeTelemetryEdge(int team_index)")

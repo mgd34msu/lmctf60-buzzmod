@@ -96,6 +96,11 @@ static inline int SG_AntiLingerEligible(int role, int escort_mission)
 	return role != SG_ROLE_CARRY && !escort_mission;
 }
 
+static inline int SG_EscortSupportFullStrength(int escort_mission)
+{
+	return escort_mission == 1;
+}
+
 /* Once our team has the enemy flag, one separately assigned ESCORT owns the
  * carrier field. Ordinary attackers keep pressure on the enemy stand instead
  * of turning into duplicate escorts or following an unseen-flag fallback
