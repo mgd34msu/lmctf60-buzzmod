@@ -1456,6 +1456,11 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       an invalid physical weapon ray. The former still supplies the exact
       muzzle for obstruction and teammate checks; the latter retires the shot
       before any trace or trigger can consume undefined muzzle state.
+      Combat and sound-directed fire now bind their safety decision to the
+      exact quantized command view submitted to `ClientThink`. Spawn-look and
+      air-strafe writers stand down for that transaction, intermediate slew
+      bearings keep the trigger off, and sound-fire cadence is spent only when
+      the validated bearing reaches the engine.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

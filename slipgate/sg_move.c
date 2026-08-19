@@ -388,6 +388,16 @@ static qboolean DefenseCombatApplyDuelWeave(qboolean hold_post,
 	return true;
 }
 
+/* A combat or sound-fire trace authorizes one exact quantized view, not every
+ * intermediate angle on the way there.  Compare the command bytes which
+ * ClientThink will actually consume; float proximity is not firing authority. */
+static qboolean AimedFireViewReady(const usercmd_t *cmd,
+	short expected_yaw, short expected_pitch)
+{
+	return cmd && cmd->angles[YAW] == expected_yaw &&
+	       cmd->angles[PITCH] == expected_pitch;
+}
+
 /* The final ordinary walking writer for a post tangent. It rechecks the
  * current target and support immediately before the command boundary. */
 static qboolean DefenseCombatWriteFinal(edict_t *e, sg_bot_t *bot, int team,
@@ -472,6 +482,17 @@ int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
 	final_as_ok = (mutation_mask & 32768) != 0; /* MUT_AS test seam */
 	return DefenseCombatWriteFinal(e, bot, team, &tc, final_as_ok, active, stand,
 	    enemy, enemy_ctfid, direction, cmd) ? 1 : 0;
+}
+
+int SG_AimedFireViewReadyTest(short actual_yaw, short actual_pitch,
+	short expected_yaw, short expected_pitch)
+{
+	usercmd_t cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.angles[YAW] = actual_yaw;
+	cmd.angles[PITCH] = actual_pitch;
+	return AimedFireViewReady(&cmd, expected_yaw, expected_pitch) ? 1 : 0;
 }
 #endif
 
@@ -7517,12 +7538,16 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	float slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
 	qboolean duel_hold = false;
 	qboolean defcombat_active = false;
+	qboolean aimed_fire_requested = false;
+	qboolean aimed_fire_view_admitted = false;
+	qboolean soundfire_owned = false;
 	qboolean hook_cut_in_step = false;
 	qboolean door_suffix_grant = false;
 	edict_t *defcombat_enemy = NULL;
 	edict_t *defcombat_stand = NULL;
 	unsigned long defcombat_enemy_ctfid = 0;
 	short weave_side = 0;
+	short aimed_fire_yaw = 0, aimed_fire_pitch = 0;
 	vec3_t d, defcombat_dir;
 
 	VectorClear(defcombat_dir);
@@ -7882,7 +7907,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		if (!proved_control && bot->hook_phase != 1 && bot->hook_phase != 3 &&
 		    !(bot->hook_phase == 2 && !bot->speedhook) &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0)
+		{
 			SG_CombatFrame(e, cmd, &engaged);
+			if (cmd->buttons & BUTTON_ATTACK)
+				aimed_fire_requested = true;
+		}
 
 		/*
 		 * The bomb sequence owns weapon, view, and trigger while it
@@ -8232,7 +8261,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					cmd->angles[PITCH] = ANGLE2SHORT(sp15)
 					    - e->client->ps.pmove.delta_angles[PITCH];
 					cmd->buttons |= BUTTON_ATTACK;
-					SG_TimerArm(&bot->soundfire_next, 8.0f);
+					aimed_fire_requested = true;
+					soundfire_owned = true;
 					if (sg_cv.debug->value)
 						sg_host.dprint("SNDFIRE %s rng=%.0f\n",
 						           e->client->pers.netname, sl15);
@@ -8285,7 +8315,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * catches the shot that came from somewhere the eye had not got
 		 * to yet -- which, spawning, is most of the map.
 		 */
-		if (!nade_release && SG_TimerPending(bot->beat_until))
+		if (!aimed_fire_requested && !nade_release &&
+		    SG_TimerPending(bot->beat_until))
 		{
 			/* bot->engaged_last is this same value by here -- it was
 			 * assigned from `engaged` a few lines up, so the live read
@@ -8350,8 +8381,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 			                 e->velocity[1] * e->velocity[1]);
 
-				if (!proved_control && !nade_release && dose > 0.0f &&
-				    sp >= SG_AS_FLOOR && have_move &&
+			if (!aimed_fire_requested && !proved_control && !nade_release &&
+			    dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
 			    run_link && open_ahead && bestlink >= 0 && SG_Rune() &&
 			    !precision && !engaged &&
 			    bot->hook_phase == 0 && bot->rj_phase == 0 &&
@@ -8478,6 +8509,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		cmd->angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH])
 		                  - e->client->ps.pmove.delta_angles[PITCH];
 		cmd->angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
+	}
+	if (aimed_fire_requested)
+	{
+		aimed_fire_yaw = cmd->angles[YAW];
+		aimed_fire_pitch = cmd->angles[PITCH];
 	}
 
 		/*
@@ -9785,6 +9821,30 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 				bot->as_landing_command = as_ok && as_chain &&
 				    !proved_control && !door_hold;
+				/* The safety trace was made along aimed_fire_yaw/pitch.  Slew and
+				 * every later command owner may move the submitted view, so the
+				 * trigger is re-authorized at the final boundary on exact command
+				 * bytes.  A sound shot keeps trying while its earned belief is fresh
+				 * and spends its cadence only when this command can actually fire. */
+				if (aimed_fire_requested)
+				{
+					/* The trace was taken at the outer frame's starting pose. If
+					 * the first submitted command cannot carry its exact view, wait
+					 * for the next outer frame to re-trace from the new position;
+					 * do not authorize a later sub-step from stale geometry. */
+					if (step == 0 && AimedFireViewReady(cmd, aimed_fire_yaw,
+					                                          aimed_fire_pitch))
+						aimed_fire_view_admitted = true;
+					if (aimed_fire_view_admitted)
+					{
+						cmd->buttons |= BUTTON_ATTACK;
+						if (soundfire_owned &&
+						    SG_TimerReady(bot->soundfire_next))
+							SG_TimerArm(&bot->soundfire_next, 8.0f);
+					}
+					else
+						cmd->buttons &= ~BUTTON_ATTACK;
+				}
 				ClientThink(e, cmd);
 				if (direct_door_prediction)
 				{

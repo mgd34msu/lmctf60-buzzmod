@@ -481,10 +481,10 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         slew = move.index("SG_NadeReleaseSlewRate(nade_release,", release)
         self.assertLess(release, slew)
         self.assertIn(
-            "if (!nade_release && SG_TimerPending(bot->beat_until))",
+            "if (!aimed_fire_requested && !nade_release &&",
             move[release:slew],
         )
-        self.assertIn("if (!proved_control && !nade_release && dose > 0.0f",
+        self.assertIn("if (!aimed_fire_requested && !proved_control && !nade_release &&",
                       move[release:slew])
 
     def test_real_weapon_commitment_is_the_compiled_default(self) -> None:

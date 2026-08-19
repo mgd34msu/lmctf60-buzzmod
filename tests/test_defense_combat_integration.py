@@ -39,6 +39,8 @@ int SG_SoundFireTestTeammateNear(edict_t *self, int team,
     const vec3_t target, float radius);
 int SG_SoundFireTestImpactSafe(edict_t *self, int team,
     const vec3_t target);
+int SG_AimedFireViewReadyTest(short actual_yaw, short actual_pitch,
+    short expected_yaw, short expected_pitch);
 
 static edict_t entities[4];
 static gclient_t clients[3];
@@ -610,10 +612,19 @@ static void TestSoundFireRequiresUsefulSafeImpact(void)
         belief) == 0);
 }
 
+static void TestAimedFireRequiresTheExactValidatedView(void)
+{
+    CHECK(SG_AimedFireViewReadyTest(1200, -300, 1200, -300) == 1);
+    CHECK(SG_AimedFireViewReadyTest(1199, -300, 1200, -300) == 0);
+    CHECK(SG_AimedFireViewReadyTest(1200, -299, 1200, -300) == 0);
+    CHECK(SG_AimedFireViewReadyTest(-32768, 32767, -32768, 32767) == 1);
+}
+
 int main(void)
 {
 	TestSoundFireProtectsHumanTeammates();
 	TestSoundFireRequiresUsefulSafeImpact();
+	TestAimedFireRequiresTheExactValidatedView();
     TestBlockedPostStaysStill();
     TestSafePostOwnsTheFinalLeg();
     TestShortPostFallbackOwnsTheFinalLeg();
@@ -632,6 +643,25 @@ int main(void)
 
 
 class DefenseCombatIntegrationTest(unittest.TestCase):
+    def test_aimed_fire_survives_only_at_its_validated_command_view(self) -> None:
+        move = (ROOT / "slipgate" / "sg_move.c").read_text()
+        combat = move.index("SG_CombatFrame(e, cmd, &engaged)")
+        beat = move.index("THE SPAWN BEAT'S EYES", combat)
+        air = move.index("THE AIR-STRAFE CHAIN", beat)
+        boundary = move.index("if (step == 0 && AimedFireViewReady(cmd, aimed_fire_yaw", air)
+        think = move.index("ClientThink(e, cmd);", boundary)
+
+        self.assertLess(combat, beat)
+        self.assertLess(beat, air)
+        self.assertLess(air, boundary)
+        self.assertLess(boundary, think)
+        self.assertIn("!aimed_fire_requested && !nade_release", move[beat:air])
+        self.assertIn("!aimed_fire_requested && !proved_control", move[air:boundary])
+        self.assertIn("cmd->buttons &= ~BUTTON_ATTACK;", move[boundary:think])
+        self.assertIn("aimed_fire_view_admitted = true;", move[boundary:think])
+        self.assertIn("SG_TimerArm(&bot->soundfire_next, 8.0f);",
+                      move[boundary:think])
+
     def test_sound_fire_splash_veto_uses_the_complete_client_roster(self) -> None:
         move = (ROOT / "slipgate/sg_move.c").read_text()
         helper = move[move.index("static qboolean SoundFireTeammateNear"):
