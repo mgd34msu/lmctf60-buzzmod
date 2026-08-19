@@ -1218,7 +1218,11 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	/* the former parameter list, unpacked from the think context so the
 	 * body below reads exactly as it did when these arrived as arguments */
 	edict_t *e = tc->e;
-	sg_role_t role = tc->role;
+	/* Strike duty is resolved before Objective.  Its effective ESCORT owns the
+	 * same carrier/formation objective as an organic escort; every other duty
+	 * retains the organic role until the coordinator applies its exact route. */
+	sg_role_t role = (sg_role_t)SG_ObjectiveRole(tc->role,
+	    tc->escort_mission);
 	int team = tc->team;
 	qboolean carrying = tc->carrying;
 	const sg_weights_t *w = tc->w;
@@ -1467,6 +1471,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 						Field_Flood(SG_Rune(), interpose_field,
 						            &ms, &mc, 1);
 						goal_field = interpose_field;
+						tc->escort_formation = true;
 						if (sg_cv.debug->value &&
 						    SG_TimerReady(bot->next_report - 0.9f))
 							sg_host.dprint("INTERPOSE %s seed=%d\n",
@@ -1513,6 +1518,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		else
 			goal_field = sg_fields.to_flag_now[team_index][enemy_index];
 	}
+	/* Only principal objective selection borrows the effective strike role.
+	 * Optional item, tactics, and relay policy below continue to read the
+	 * organic role plus their existing explicit strike-duty gates. */
+	role = tc->role;
 
 	/*
 	 * THE RUNE COURIER. Candidacy is a lottery -- 107

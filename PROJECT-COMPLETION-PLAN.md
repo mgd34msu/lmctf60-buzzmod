@@ -261,6 +261,10 @@ Carrier interposition now ships on the moving lead/trail formation rather than
 the rejected carrier/threat midpoint. The escort occupies a reachable station
 on the carrier's homeward route instead of entering the duel it is meant to
 screen; explicit legacy dose overrides remain available.
+Strike egress now preserves that same resolved formation when the coordinator
+promotes an ordinary attacker to ESCORT. The effective escort no longer has
+its lead/trail station overwritten by the generic carrier flood after objective
+selection.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
@@ -1420,6 +1424,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       The compiled interposition default selects the moving lead/trail carrier
       formation; executable mode policy preserves explicit legacy doses and
       rejects nonpositive inputs.
+      Strike-assigned escorts now enter objective selection as effective
+      escorts and retain any resolved lead/trail field through the later duty
+      overlay; the coordinator cannot collapse that formation back to the
+      generic carrier flood.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

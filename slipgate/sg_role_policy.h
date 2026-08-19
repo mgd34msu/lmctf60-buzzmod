@@ -117,6 +117,14 @@ static inline int SG_InterposeMode(float dose)
 	return 1;
 }
 
+/* Coordinator duty is known before objective selection.  Only effective
+ * ESCORT replaces the organic role here; the coordinator applies every other
+ * concrete duty route after the ordinary objective stage. */
+static inline int SG_ObjectiveRole(int organic_role, int escort_mission)
+{
+	return escort_mission ? SG_ROLE_ESCORT : organic_role;
+}
+
 /* Once our team has the enemy flag, one separately assigned ESCORT owns the
  * carrier field. Ordinary attackers keep pressure on the enemy stand instead
  * of turning into duplicate escorts or following an unseen-flag fallback

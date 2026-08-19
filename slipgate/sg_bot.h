@@ -574,6 +574,7 @@ typedef struct sg_think_s {
 				combat_pursuit,
 				rearguard,
 				escort_mission,
+				escort_formation,
 				strike_blocks_optional,
 				strike_weapon_pursuit;
 	float			strike_weapon_deadline;

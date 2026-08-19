@@ -66,6 +66,7 @@ static int enemy_field[3];
 static int home_field[3];
 static int recover_field[3];
 static int carrier_field[3];
+static int formation_field[3];
 
 sg_team_belief_t sg_caco_team_belief;
 
@@ -974,6 +975,27 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(tc.goal_field == home_field && tc.route_field == home_field);
 	CHECK(tc.route_pure);
 	sg_fields.our_carrier_valid[0] = true;
+	/* Objective runs after effective strike duty is known.  A strike-assigned
+	 * escort that already resolved a live lead/trail station must retain that
+	 * formation; the generic carrier overlay used to erase it here. */
+	tc.goal_field = formation_field;
+	tc.route_field = formation_field;
+	tc.route_pure = false;
+	tc.escort_mission = true;
+	tc.escort_formation = true;
+	tc.scoop_mission = true;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == formation_field &&
+	    tc.route_field == formation_field);
+	CHECK(tc.route_pure);
+	CHECK(!tc.scoop_mission);
+	/* A generic effective escort still receives the ordinary carrier field. */
+	tc.escort_formation = false;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == carrier_field && tc.route_field == carrier_field);
+	CHECK(tc.route_pure);
 	/* Restore the carrier duty for the downstream weapon/rally assertions. */
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
 	    CTF_TEAM_RED));

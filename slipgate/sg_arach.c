@@ -2033,6 +2033,19 @@ static qboolean StrikeApplyDutyRoute(sg_think_t *tc,
 
 	if (!tc)
 		return false;
+	/* Objective has already resolved the effective ESCORT mission.  When its
+	 * live carrier/threat inputs produced a moving formation station, that
+	 * exact field is the coordinator's escort route too.  Replacing it here
+	 * with the generic carrier flood silently disabled interposition for every
+	 * attacker promoted to ESCORT by strike egress. */
+	if (duty == SG_STRIKE_DUTY_ESCORT && tc->escort_mission &&
+	    tc->escort_formation && tc->goal_field)
+	{
+		tc->route_field = tc->goal_field;
+		tc->route_pure = true;
+		tc->scoop_mission = false;
+		return true;
+	}
 	route = StrikeDutyField(duty, team);
 	if (!route && tc->strike_rush)
 		route = StrikeEnemyField(team);

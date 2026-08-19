@@ -1218,6 +1218,9 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(SG_InterposeMode(2.99f) == 2);
 	CHECK(SG_InterposeMode(3.0f) == 3);
 	CHECK(SG_InterposeMode(99.0f) == 3);
+	CHECK(SG_ObjectiveRole(SG_ROLE_ATTACK, 0) == SG_ROLE_ATTACK);
+	CHECK(SG_ObjectiveRole(SG_ROLE_ATTACK, 1) == SG_ROLE_ESCORT);
+	CHECK(SG_ObjectiveRole(SG_ROLE_RECOVER, 1) == SG_ROLE_ESCORT);
 	CHECK(!SG_AttackObjectiveUsesFixedStand(-1));
 	CHECK(SG_AttackObjectiveUsesFixedStand(0));
 	CHECK(SG_AttackObjectiveUsesFixedStand(15));
