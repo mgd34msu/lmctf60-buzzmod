@@ -106,11 +106,13 @@ Verified and already pushed:
 - The RUNE Python readers have one strict corpus loader, working authenticated
   expected-identity comparison, and adversarial duplicate/non-finite/oversized
   number regressions.
-- The latest integrated `slipgate` state is `e03188a`, merged without tree
-  drift to `main` as `4d00932`; exact-SHA CI runs `32218254723` and
+- The completed `slipgate`/`main` branch pair immediately preceding this status
+  refresh is `e03188a`/`4d00932`; exact-SHA CI runs `32218254723` and
   `32218447096` passed all eight non-publish jobs. Its latest executable-source
   ancestor is `bf52886`; the later commits reconcile current documentation and
-  remove the dead legacy `abmatch.sh`/`assets/bots.cfg` path.
+  remove the dead legacy `abmatch.sh`/`assets/bots.cfg` path. The containing
+  documentation commit follows the same CI-and-merge cadence and therefore
+  cannot truthfully embed its own eventual merge SHA.
 
 Known incomplete work:
 
@@ -931,9 +933,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] Shallow-water DIRECT door law committed and green.
 - [x] Current project plan, 181 authority/controller, map-list fix, telemetry
       consumers, strict readers, documentation hygiene, and the first reviewed
-      repository cleanup are integrated through `e03188a`, merged without tree
-      drift to `main` as `4d00932`; exact-SHA CI runs `32218254723` and
-      `32218447096` are green.
+      repository cleanup are integrated through the completed branch pair
+      `e03188a`/`4d00932`; exact-SHA CI runs `32218254723` and `32218447096`
+      are green. This status refresh is the next documentation-only milestone.
 - [x] Tracked corpus list contains exactly 181 unique maps, including both
       `lmctf02` and `lmctf02c`.
 - [x] Corpus controller proves generator, dual C readers, Python reader, lint,
