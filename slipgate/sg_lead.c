@@ -414,7 +414,8 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
 		vec3_t	d;
-		float	guess;
+		float	guess, candidate_travel;
+		int	candidate_seed;
 
 		b = &sg_caco_items[ti][i];
 		if (b->cls != SG_BI_POWERUP || b->believed_up)
@@ -439,10 +440,21 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 		if (SG_TimerPending(b->believed_respawn_time - guess - lead))
 			continue;
 
+		/* The earliest clock is not necessarily the earliest reachable pad.
+		 * Prove each candidate before choosing: an isolated or wrong-component
+		 * pad must not suppress a later clock the bot can actually contest. */
+		candidate_seed = Rune_NearestSeed(SG_Rune(), b->org);
+		if (!Lead_Flood(lead_field, candidate_seed, bot->seed))
+			continue;
+		candidate_travel = (float)lead_field[bot->seed] / 1000.0f;
+		if (SG_TimerPending(b->believed_respawn_time - candidate_travel - lead))
+			continue;
+
 		if (best < 0 || b->believed_respawn_time < best_t)
 		{
 			best = i;
 			best_t = b->believed_respawn_time;
+			padseed = candidate_seed;
 		}
 	}
 
@@ -450,15 +462,14 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 		return NULL;
 
 	b = &sg_caco_items[ti][best];
-	padseed = Rune_NearestSeed(SG_Rune(), b->org);
+	/* The candidate loop reuses the scratch flood. Rebuild the winner so the
+	 * returned route and the committed entity are the same exact pad. */
 	if (!Lead_Flood(lead_field, padseed, bot->seed))
-		return NULL;                    /* no road: the clock is somebody
-		                                 * else's problem */
-
-	/* the honest test, on the route the body will actually walk */
-	travel = (float)lead_field[bot->seed] / 1000.0f;
-	if (SG_TimerPending(b->believed_respawn_time - travel - lead))
 		return NULL;
+
+	/* The honest travel time was already the admission gate; retain it for the
+	 * commitment receipt and diagnostic. */
+	travel = (float)lead_field[bot->seed] / 1000.0f;
 
 	bot->lead_ent = b->ent;
 	SG_Mark(&bot->lead_since);   /* the total-wait clock starts here */

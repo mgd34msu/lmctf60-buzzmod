@@ -16,9 +16,9 @@
 #include <string.h>
 
 static int failures;
-static edict_t entities[4];
+static edict_t entities[5];
 static gclient_t clients[2];
-static rune_seed_t seeds[2];
+static rune_seed_t seeds[3];
 static rune_t test_rune;
 static cvar_t itemlead_cvar;
 static cvar_t debug_cvar;
@@ -69,8 +69,7 @@ int SG_TeamIdx(int team)
 int Rune_NearestSeed(rune_t *r, vec3_t point)
 {
 	(void)r;
-	(void)point;
-	return 1;
+	return point[0] < 0.0f ? 2 : 1;
 }
 
 void Field_Flood(rune_t *r, int *dist, const int *sources,
@@ -84,7 +83,8 @@ void Field_Flood(rune_t *r, int *dist, const int *sources,
 	if (count == 1 && sources[0] >= 0 && sources[0] < r->hdr.num_seeds)
 	{
 		dist[sources[0]] = 0;
-		dist[0] = 100;
+		if (sources[0] == 1)
+			dist[0] = 100;
 	}
 }
 
@@ -200,7 +200,7 @@ static void ResetWorld(void)
 	memset(&sg_cv, 0, sizeof(sg_cv));
 	memset(&sg_host, 0, sizeof(sg_host));
 	game.maxclients = 2;
-	globals.num_edicts = 4;
+	globals.num_edicts = 5;
 	entities[1].inuse = true;
 	entities[1].client = &clients[0];
 	entities[1].client->ctf.teamnum = CTF_TEAM_RED;
@@ -210,7 +210,7 @@ static void ResetWorld(void)
 	entities[3].inuse = true;
 	entities[3].classname = "item_quad";
 	VectorSet(entities[3].s.origin, 64.0f, 96.0f, 24.0f);
-	test_rune.hdr.num_seeds = 2;
+	test_rune.hdr.num_seeds = 3;
 	test_rune.seeds = seeds;
 	itemlead_cvar.value = 1.0f;
 	sg_cv.itemlead = &itemlead_cvar;
@@ -354,6 +354,53 @@ static void TestPowerupCapacityEndsTheErrand(void)
 	CHECK(bot->lead_ent == 3);
 }
 
+static void TestUnreachableEarlyPadDoesNotSuppressReachablePad(void)
+{
+	const int *field;
+	sg_bot_t *bot;
+	sg_belief_item_t *early, *reachable;
+
+	ResetWorld();
+	level.time = 10.0f;
+	memset(sg_bots, 0, sizeof(sg_bots));
+	memset(sg_caco_items, 0, sizeof(sg_caco_items));
+	memset(&sg_caco_team_belief, 0, sizeof(sg_caco_team_belief));
+	sg_caco_team_belief.carrier[0].client = -1;
+	sg_caco_team_belief.carrier[1].client = -1;
+
+	bot = &sg_bots[0];
+	bot->active = true;
+	bot->ent = &entities[1];
+	bot->seed = 0;
+	bot->commit_link = -1;
+	bot->tac_seed = -1;
+	bot->lead_slot = -1;
+
+	entities[4].inuse = true;
+	entities[4].classname = "item_quad";
+	VectorSet(entities[4].s.origin, -64.0f, 0.0f, 24.0f);
+	sg_caco_num_items = 2;
+	early = &sg_caco_items[0][0];
+	early->ent = 4;
+	early->cls = SG_BI_POWERUP;
+	early->seed = 2;
+	early->believed_respawn_time = 15.0f;
+	VectorCopy(entities[4].s.origin, early->org);
+	reachable = &sg_caco_items[0][1];
+	reachable->ent = 3;
+	reachable->cls = SG_BI_POWERUP;
+	reachable->seed = 1;
+	reachable->believed_respawn_time = 16.0f;
+	VectorCopy(entities[3].s.origin, reachable->org);
+
+	field = Lead_Field(bot, SG_ROLE_ATTACK, false, -1);
+	CHECK(field != NULL);
+	CHECK(bot->lead_ent == 3);
+	CHECK(bot->lead_seed == 1);
+	CHECK(early->claimed_until == 0.0f);
+	CHECK(reachable->claimed_by == 0);
+}
+
 int main(void)
 {
 	CHECK(SG_IdentityItemRouteAdmission(SG_FC_POWERUP, true));
@@ -440,6 +487,7 @@ int main(void)
 	TestRejectedTouchEndsOnlyExactOwner();
 	TestStrongerInterruptsStillWin();
 	TestPowerupCapacityEndsTheErrand();
+	TestUnreachableEarlyPadDoesNotSuppressReachablePad();
 	if (failures)
 	{
 		fprintf(stderr, "%d sg_item_commitment tests failed\n", failures);
