@@ -94,7 +94,7 @@ under the exact module/BSP/config identity.
 | Area | Current code state |
 |-|-|
 | RUNE corpus | The tracked list/controller now covers 181 distinct maps (including both `lmctf02` and `lmctf02c`), requires GNU/Make C-reader agreement with Python and lint, runs applicable semantic checks, and requires a separate bounded cold-load process before PASS. The 181-map generation run has not yet completed. |
-| `lmctf58` | The current artifact passes structural readers but is missing live DIRECT plans for four CellarDoor/CellarDoor2 identities. It is not accepted. |
+| `lmctf58` | All ten required door-controller identities are retained. The accepted fresh artifact passes both C readers, Python decoding, lint, the exact semantic checker, sanitizers, and a separate fresh-process cold load. |
 | Fleet | Non-random maplists now preserve file order and advance/wrap in the same `q2ded` process. `iterate2.sh` still launches finite one-map processes with hard-coded roster tables, and `waveloop.sh` recreates them and discovers a repo-root module. Persistent ten-process top-20 operation and explicit bundle install are not implemented. |
 | Tool readers | `runeio.py --expected-identity` authenticates a reference RUNE and checks the artifact identity; `corpusgraph.py` has one strict loader with duplicate-key, non-finite-number, and contextual seed-weight validation. |
 | Bot outcomes | Telemetry consumers now parse the production `seed/goal/sgoal/spd` schema and fail on zero recognized rows. Exact-build matched trials for steal initiation, conversion, defense, and captures remain open. |
