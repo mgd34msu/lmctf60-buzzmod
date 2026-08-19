@@ -441,13 +441,20 @@ void SP_damage_rune(edict_t* self)
 }
 
 
+qboolean G_RunePickupEligible(edict_t *ent, edict_t *other)
+{
+	if (!ent || !ent->item || !other || !other->client)
+		return false;
+	return other->client->rune == NULL;
+}
+
 qboolean Pickup_Rune(edict_t* ent, edict_t* other)
 {
 	char* runeName = NULL; // BUZZKILL - IMPROVED ANALYTICS
 	int		runeID = 0; // BUZZKILL - IMPROVED ANALYTICS
 	int		runeHas = 0;
 
-	if (!other->client->rune) // don't already have rune
+	if (G_RunePickupEligible(ent, other)) // don't already have rune
 	{
 		// Make sure it will respawn
 		ent->flags |= FL_RESPAWN;

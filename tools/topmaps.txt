@@ -1,9 +1,8 @@
-# SLIPGATE top-20 map rotation -- from the usable human-demo corpus.
+# SLIPGATE production top-20 map rotation -- from the usable human-demo corpus.
 # Ranked by total usable client-demo duration after case-folding map names.
 # One mapname per line, in priority order. Lines starting with # are
-# comments. Consumed by iterate2.sh and tools/runegen.sh, e.g.:
-#
-#   tools/runegen.sh $(grep -v '^#' tools/topmaps.txt)
+# comments. This is the fleet rotation authority, not the 181-map RUNE corpus
+# authority (`tools/rune-corpus-maps.txt`).
 #
 lmctf09
 lmctf57

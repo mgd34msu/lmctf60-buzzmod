@@ -107,6 +107,18 @@ qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
 	return false;
 }
 
+qboolean SG_OracleDoorEgressWaterSafe(int controller_kind, int waterlevel,
+	int watertype)
+{
+	if (controller_kind ==
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR)
+		return waterlevel >= 0 && waterlevel <= 1 &&
+		    !(watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) &&
+		    (waterlevel == 0 || (watertype & CONTENTS_WATER));
+	return waterlevel == 0 &&
+	    !(watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
+}
+
 static void ResetGraph(rune_seed_t *seeds, int seed_count,
 	rune_link_t *links, int link_count, edict_t *red, edict_t *blue)
 {
@@ -263,6 +275,117 @@ static void TestNearestUnlinked(void)
 	CHECK(strstr(diagnostic_log, "has_out=0") != NULL);
 }
 
+static void TestDirectShallowApproachEnvelope(void)
+{
+	/* Exact lmctf58 source/wait pairs for Red/Blue CellarDoor and
+	 * CellarDoor2.  Each production approach replay succeeds, but the generic
+	 * 48-unit discovery filter used to discard it before replay because the
+	 * only wait sharing a proved shallow egress is 72 units lower. */
+	static const struct
+	{
+		int entry;
+		vec3_t source;
+		vec3_t wait;
+	} cellars[] = {
+		{ 32,  { -2955.0f, 2164.0f, -339.875f },
+		       { -3275.0f, 2164.0f, -411.875f } },
+		{ 35,  { -2955.0f, 3351.0f, -339.875f },
+		       { -3275.0f, 3351.0f, -411.875f } },
+		{ 186, { 1351.0f, 2928.0f, -339.875f },
+		       { 1671.0f, 2928.0f, -411.875f } },
+		{ 189, { 1351.0f, 1741.0f, -339.875f },
+		       { 1671.0f, 1741.0f, -411.875f } }
+	};
+	rune_seed_t seeds[2];
+	rune_link_t links[1];
+	edict_t red, blue;
+	vec3_t delta;
+	size_t i;
+
+	ResetGraph(seeds, 2, links, 0, &red, &blue);
+	gen_source_waterlevel[0] = 1;
+	gen_source_watertype[0] = CONTENTS_WATER;
+	gen_source_waterlevel[1] = 0;
+	gen_source_watertype[1] = 0;
+	for (i = 0; i < sizeof(cellars) / sizeof(cellars[0]); i++)
+	{
+		CHECK(cellars[i].entry > 0);
+		VectorSubtract(cellars[i].wait, cellars[i].source, delta);
+		CHECK(fabsf(delta[0]) == 320.0f);
+		CHECK(delta[1] == 0.0f);
+		CHECK(delta[2] == -72.0f);
+		CHECK(Door_ApproachEnvelopeEligible(
+		    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+		CHECK(!Door_ApproachEnvelopeEligible(
+		    SG_MECHANISM_CONTROLLER_AUTO_DOOR, 0, delta));
+		CHECK(!Door_ApproachEnvelopeEligible(
+		    SG_MECHANISM_CONTROLLER_BUTTON_DOOR, 0, delta));
+	}
+	/* A shallow best slot can enable source discovery, but the final
+	 * per-picked-slot gate must reject a dry alternate for the same 72-unit
+	 * approach. Each selected destination authorizes only itself. */
+	CHECK(Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 1, delta));
+
+	/* The production helper must not bootstrap the larger discovery envelope
+	 * from a dry, malformed, hazardous, or deep destination. */
+	gen_source_waterlevel[0] = 0;
+	gen_source_watertype[0] = 0;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	gen_source_waterlevel[0] = 1;
+	gen_source_watertype[0] = 0;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	gen_source_watertype[0] = CONTENTS_WATER | CONTENTS_LAVA;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	gen_source_watertype[0] = CONTENTS_WATER | CONTENTS_SLIME;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	gen_source_waterlevel[0] = 2;
+	gen_source_watertype[0] = CONTENTS_WATER;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+
+	/* Historical 48-unit DIRECT discovery remains available without water;
+	 * neither path expands beyond the existing egress vertical budget. */
+	gen_source_waterlevel[0] = 0;
+	gen_source_watertype[0] = 0;
+	delta[0] = 320.0f;
+	delta[1] = 0.0f;
+	delta[2] = -48.0f;
+	CHECK(Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	gen_source_waterlevel[0] = 1;
+	gen_source_watertype[0] = CONTENTS_WATER;
+	delta[2] = -72.0f;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, -1, delta));
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, gen_num_seeds, delta));
+	delta[0] = 320.125f;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	delta[0] = 320.0f;
+	delta[2] = -96.0f;
+	CHECK(Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	delta[2] = 96.0f;
+	CHECK(Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	delta[2] = -96.125f;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	delta[2] = 96.125f;
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, delta));
+	CHECK(!Door_ApproachEnvelopeEligible(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR, 0, NULL));
+}
+
 static void TestBoundaryCap(void)
 {
 	rune_seed_t seeds[19];
@@ -378,6 +501,7 @@ int main(void)
 	TestOneWayAndFixedPointFailures();
 	TestObjectiveMetricUnits();
 	TestNearestUnlinked();
+	TestDirectShallowApproachEnvelope();
 	TestBoundaryCap();
 	TestZeroAndAllocationFailures();
 	TestTelemetryFlush();

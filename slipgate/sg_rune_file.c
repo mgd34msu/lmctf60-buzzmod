@@ -10,6 +10,142 @@
 #include <stdio.h>
 #include <string.h>
 
+typedef struct rune_file_sha256_s
+{
+	uint32_t state[8];
+	uint64_t bytes;
+	unsigned char block[64];
+	size_t used;
+} rune_file_sha256_t;
+
+static uint32_t RuneFile_RotateRight(uint32_t value, unsigned bits)
+{
+	return (value >> bits) | (value << (32U - bits));
+}
+
+static void RuneFile_SHA256Transform(rune_file_sha256_t *context,
+	const unsigned char block[64])
+{
+	static const uint32_t constants[64] = {
+		UINT32_C(0x428a2f98), UINT32_C(0x71374491), UINT32_C(0xb5c0fbcf), UINT32_C(0xe9b5dba5),
+		UINT32_C(0x3956c25b), UINT32_C(0x59f111f1), UINT32_C(0x923f82a4), UINT32_C(0xab1c5ed5),
+		UINT32_C(0xd807aa98), UINT32_C(0x12835b01), UINT32_C(0x243185be), UINT32_C(0x550c7dc3),
+		UINT32_C(0x72be5d74), UINT32_C(0x80deb1fe), UINT32_C(0x9bdc06a7), UINT32_C(0xc19bf174),
+		UINT32_C(0xe49b69c1), UINT32_C(0xefbe4786), UINT32_C(0x0fc19dc6), UINT32_C(0x240ca1cc),
+		UINT32_C(0x2de92c6f), UINT32_C(0x4a7484aa), UINT32_C(0x5cb0a9dc), UINT32_C(0x76f988da),
+		UINT32_C(0x983e5152), UINT32_C(0xa831c66d), UINT32_C(0xb00327c8), UINT32_C(0xbf597fc7),
+		UINT32_C(0xc6e00bf3), UINT32_C(0xd5a79147), UINT32_C(0x06ca6351), UINT32_C(0x14292967),
+		UINT32_C(0x27b70a85), UINT32_C(0x2e1b2138), UINT32_C(0x4d2c6dfc), UINT32_C(0x53380d13),
+		UINT32_C(0x650a7354), UINT32_C(0x766a0abb), UINT32_C(0x81c2c92e), UINT32_C(0x92722c85),
+		UINT32_C(0xa2bfe8a1), UINT32_C(0xa81a664b), UINT32_C(0xc24b8b70), UINT32_C(0xc76c51a3),
+		UINT32_C(0xd192e819), UINT32_C(0xd6990624), UINT32_C(0xf40e3585), UINT32_C(0x106aa070),
+		UINT32_C(0x19a4c116), UINT32_C(0x1e376c08), UINT32_C(0x2748774c), UINT32_C(0x34b0bcb5),
+		UINT32_C(0x391c0cb3), UINT32_C(0x4ed8aa4a), UINT32_C(0x5b9cca4f), UINT32_C(0x682e6ff3),
+		UINT32_C(0x748f82ee), UINT32_C(0x78a5636f), UINT32_C(0x84c87814), UINT32_C(0x8cc70208),
+		UINT32_C(0x90befffa), UINT32_C(0xa4506ceb), UINT32_C(0xbef9a3f7), UINT32_C(0xc67178f2)
+	};
+	uint32_t words[64];
+	uint32_t a, b, c, d, e, f, g, h;
+	unsigned i;
+
+	for (i = 0; i < 16U; i++)
+		words[i] = ((uint32_t)block[i * 4U] << 24) |
+			((uint32_t)block[i * 4U + 1U] << 16) |
+			((uint32_t)block[i * 4U + 2U] << 8) |
+			(uint32_t)block[i * 4U + 3U];
+	for (; i < 64U; i++)
+	{
+		uint32_t s0 = RuneFile_RotateRight(words[i - 15U], 7U) ^
+			RuneFile_RotateRight(words[i - 15U], 18U) ^
+			(words[i - 15U] >> 3);
+		uint32_t s1 = RuneFile_RotateRight(words[i - 2U], 17U) ^
+			RuneFile_RotateRight(words[i - 2U], 19U) ^
+			(words[i - 2U] >> 10);
+		words[i] = words[i - 16U] + s0 + words[i - 7U] + s1;
+	}
+	a = context->state[0]; b = context->state[1];
+	c = context->state[2]; d = context->state[3];
+	e = context->state[4]; f = context->state[5];
+	g = context->state[6]; h = context->state[7];
+	for (i = 0; i < 64U; i++)
+	{
+		uint32_t upper = h +
+			(RuneFile_RotateRight(e, 6U) ^ RuneFile_RotateRight(e, 11U) ^
+			 RuneFile_RotateRight(e, 25U)) +
+			((e & f) ^ ((~e) & g)) + constants[i] + words[i];
+		uint32_t lower =
+			(RuneFile_RotateRight(a, 2U) ^ RuneFile_RotateRight(a, 13U) ^
+			 RuneFile_RotateRight(a, 22U)) +
+			((a & b) ^ (a & c) ^ (b & c));
+		h = g; g = f; f = e; e = d + upper;
+		d = c; c = b; b = a; a = upper + lower;
+	}
+	context->state[0] += a; context->state[1] += b;
+	context->state[2] += c; context->state[3] += d;
+	context->state[4] += e; context->state[5] += f;
+	context->state[6] += g; context->state[7] += h;
+}
+
+void SG_RuneFileSHA256Buffer(const unsigned char *bytes, size_t length,
+	char out[65])
+{
+	static const uint32_t initial[8] = {
+		UINT32_C(0x6a09e667), UINT32_C(0xbb67ae85), UINT32_C(0x3c6ef372), UINT32_C(0xa54ff53a),
+		UINT32_C(0x510e527f), UINT32_C(0x9b05688c), UINT32_C(0x1f83d9ab), UINT32_C(0x5be0cd19)
+	};
+	static const char hex[] = "0123456789abcdef";
+	rune_file_sha256_t context;
+	unsigned char digest[32];
+	uint64_t bit_length;
+	size_t offset = 0U;
+	unsigned i;
+
+	memset(&context, 0, sizeof(context));
+	memcpy(context.state, initial, sizeof(initial));
+	context.bytes = length;
+	while (offset < length)
+	{
+		size_t amount = sizeof(context.block) - context.used;
+		if (amount > length - offset)
+			amount = length - offset;
+		memcpy(context.block + context.used, bytes + offset, amount);
+		context.used += amount;
+		offset += amount;
+		if (context.used == sizeof(context.block))
+		{
+			RuneFile_SHA256Transform(&context, context.block);
+			context.used = 0U;
+		}
+	}
+	bit_length = context.bytes * UINT64_C(8);
+	context.block[context.used++] = 0x80U;
+	if (context.used > 56U)
+	{
+		while (context.used < 64U)
+			context.block[context.used++] = 0U;
+		RuneFile_SHA256Transform(&context, context.block);
+		context.used = 0U;
+	}
+	while (context.used < 56U)
+		context.block[context.used++] = 0U;
+	for (i = 0U; i < 8U; i++)
+		context.block[63U - i] = (unsigned char)(bit_length >> (i * 8U));
+	RuneFile_SHA256Transform(&context, context.block);
+	for (i = 0U; i < 8U; i++)
+	{
+		digest[i * 4U] = (unsigned char)(context.state[i] >> 24);
+		digest[i * 4U + 1U] = (unsigned char)(context.state[i] >> 16);
+		digest[i * 4U + 2U] = (unsigned char)(context.state[i] >> 8);
+		digest[i * 4U + 3U] = (unsigned char)context.state[i];
+	}
+	for (i = 0U; i < sizeof(digest); i++)
+	{
+		out[i * 2U] = hex[digest[i] >> 4];
+		out[i * 2U + 1U] = hex[digest[i] & 15U];
+	}
+	out[64] = '\0';
+}
+
 typedef struct rune_decode_storage_s
 {
 	sg_rune_codec_seed_t *seeds;
@@ -561,6 +697,7 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 			"runtime-adapter", failure, failure_index, 0);
 		goto cleanup;
 	}
+	SG_RuneFileSHA256Buffer(snapshot, file_size, rune->encoded_sha256);
 	*rune_out = rune;
 	rune = NULL;
 	result = RuneFile_Result(SG_RUNE_FILE_LOAD_READY, "ready", NULL,

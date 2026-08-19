@@ -21,7 +21,8 @@ MULTICALL = r'''
 #include <sys/stat.h>
 #include <unistd.h>
 static const char*base(const char*p){const char*s=strrchr(p,'/');return s?s+1:p;}
-static void logv(int ac,char**av){const char*t=getenv("TRACE");char b[8192];size_t u=0;if(!t)return;int f=open(t,O_WRONLY|O_CREAT|O_APPEND,0600);if(f<0)return;u+=(size_t)snprintf(b+u,sizeof(b)-u,"%s",base(av[0]));for(int i=1;i<ac&&u<sizeof(b);i++)u+=(size_t)snprintf(b+u,sizeof(b)-u," [%s]",av[i]);if(u<sizeof(b)-1)b[u++]='\n';write(f,b,u);close(f);}
+static int write_all(int fd,const char*data,size_t size){size_t done=0;while(done<size){ssize_t wrote=write(fd,data+done,size-done);if(wrote<0&&errno==EINTR)continue;if(wrote<=0)return -1;done+=(size_t)wrote;}return 0;}
+static void logv(int ac,char**av){const char*t=getenv("TRACE");char b[8192];size_t u=0;if(!t)return;int f=open(t,O_WRONLY|O_CREAT|O_APPEND,0600);if(f<0)return;u+=(size_t)snprintf(b+u,sizeof(b)-u,"%s",base(av[0]));for(int i=1;i<ac&&u<sizeof(b);i++)u+=(size_t)snprintf(b+u,sizeof(b)-u," [%s]",av[i]);if(u<sizeof(b)-1)b[u++]='\n';if(write_all(f,b,u)<0){close(f);return;}close(f);}
 int main(int ac,char**av){const char*n=base(av[0]);logv(ac,av);
  for(int i=1;i<ac;i++)if(!strcmp(av[i],"--q2ded")){int f=open("supervisor.called",O_WRONLY|O_CREAT|O_EXCL,0600);if(f<0)return 93;for(int j=1;j<ac;j++)dprintf(f,"[%s]\n",av[j]);close(f);return 0;}
  if(!strcmp(n,"dirname")){char b[PATH_MAX];snprintf(b,sizeof(b),"%s",av[1]);char*s=strrchr(b,'/');if(!s)puts(".");else{if(s==b)s[1]=0;else*s=0;puts(b);}return 0;}

@@ -202,10 +202,16 @@ assert pull < observe
 # control decode, and malformed control plus a graph aim timeout share the
 # same bounded retirement path.
 hook_stage = body("if (l->action == RL_HOOK", "hook_stage_done: ;")
+assert "SG_HookStageSourceCompatible" in hook_stage
+source_reject = hook_stage.index("if (!SG_HookStageSourceCompatible")
+source_abort = hook_stage.index("ballistic_abort = true;", source_reject)
+source_release = hook_stage.index("bot->commit_link = -1;", source_reject)
+assert source_reject < source_release < source_abort
 worth = hook_stage.index("SG_HookExpectedRideWorth")
 decode = hook_stage.index("SG_HookControlDecode")
 assert worth < decode
-assert "worth == SG_HOOK_RIDE_REJECT" in hook_stage
+assert "!SG_HookRideLaunchAllowed(worth)" in hook_stage
+assert '"value-unassessed"' in hook_stage
 assert '"value-skip"' in hook_stage
 assert 'Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,' in hook_stage
 assert '"decode-retire"' in hook_stage
@@ -245,9 +251,32 @@ fire_retire = fire.index('"value-fire-skip"')
 fire_proof = fire.index("Hook_OnlineProof")
 fire_command = fire.index("Cmd_Hook_f(e);")
 assert fire_worth < fire_retire < fire_proof < fire_command
-assert "goal_field[hook_link->from]" in fire
-assert "goal_field[hook_link->to]" in fire
-assert "worth == SG_HOOK_RIDE_REJECT" in fire
+assert "route_field[hook_link->from]" in fire
+assert "route_field[hook_link->to]" in fire
+assert "goal_field[hook_link->from]" not in fire
+assert "goal_field[hook_link->to]" not in fire
+assert "!SG_HookRideLaunchAllowed(worth)" in fire
+assert '"value-fire-unassessed"' in fire
+assert "if (!route_field ||" in fire
+
+# Cut-rope and rocket-jump landing lookahead must follow the route that owns
+# the movement commitment.  Falling back to the strategic goal field is valid
+# only when no tactical route field exists; otherwise touchdown immediately
+# contradicts the view direction chosen in flight.
+preturn = body("THE PRE-TURN (sg_preturn", "if (bot->hook_phase == 3)")
+assert "const int *preturn_route_field = route_field" in preturn
+assert "? route_field : goal_field;" in preturn
+assert "preturn_route_field[candidate->to]" in preturn
+
+# A completed graph ride is judged by the same active route field that
+# authorized its irreversible fire.  The strategic goal field may describe a
+# different coordinator mission and must not shelf or ban a route-serving ride.
+landing_value = body("A ride that did not SERVE the field failed",
+                     "bot->hook_link = -1;")
+assert "route_field[bot->seed]" in landing_value
+assert "route_field[hl->to]" in landing_value
+assert "goal_field[bot->seed]" not in landing_value
+assert "goal_field[hl->to]" not in landing_value
 assert 'Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
 assert "goto hook_wait;" in fire[fire_retire:fire_proof]
 assert "Hook_LiveBeginAfterFire" in fire

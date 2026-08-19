@@ -19,11 +19,17 @@ SOURCE = SOURCE_PATH.read_text()
 # loop, while its ray/box predicate is deliberately independent.
 PROBE = r"""
 #include "g_local.h"
+#include "slipgate/sg_combat_commit_policy.h"
+#include "slipgate/sg_combat_target_policy.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 level_locals_t level;
+game_locals_t game;
+edict_t *g_edicts;
 
 int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
     int gunframe, float viewheight, const vec3_t origin, const vec3_t lead,
@@ -34,6 +40,14 @@ int SG_CombatAimTestWeaponRay(int weapon, int hand, int machinegun_shots,
     vec3_t muzzle_out, vec3_t dir_out, float *source_pad_out);
 int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
     int teammate_hit);
+int SG_CombatAimTestTeamSplashSafe(edict_t *self, float safe_radius,
+    const vec3_t impact);
+int SG_CombatAimTestTeamHitscanSafe(edict_t *self, int weapon,
+    const vec3_t muzzle, const vec3_t shotdir, float max_forward,
+    float source_pad, int water_path);
+unsigned SG_CombatAimTestRandom(unsigned identity, unsigned steps);
+unsigned SG_CombatAimTestClientRandom(int client_index,
+    uint64_t client_life, unsigned steps);
 
 enum {
     W_BLASTER = 0,
@@ -50,6 +64,7 @@ enum {
 };
 
 enum { HAND_RIGHT = 0, HAND_LEFT = 1, HAND_CENTER = 2 };
+enum { RAY_INVALID = 0, RAY_MISS = 1, RAY_HIT = 2 };
 
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -229,6 +244,28 @@ static int test_machinegun_deterministic_kick(void)
     return 0;
 }
 
+static int test_invalid_physical_ray_is_distinct_from_a_miss(void)
+{
+    vec3_t origin = { 0.0f, 0.0f, 0.0f };
+    vec3_t lead = { 600.0f, 0.0f, 22.0f };
+    vec3_t mins = { -16.0f, -16.0f, -24.0f };
+    vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+    vec3_t requested = { 1.0f, 0.0f, 0.0f };
+    vec3_t muzzle, direction;
+    float source_pad = 0.0f;
+    int status;
+
+    status = SG_CombatAimTestFinalize(W_GRENADE, HAND_RIGHT, 0, 0,
+        22.0f, origin, lead, mins, maxs, requested, 0.2f, muzzle, direction,
+        &source_pad);
+    CHECK(status == RAY_INVALID);
+    status = SG_CombatAimTestFinalize(W_RAIL, HAND_RIGHT, 0, 0,
+        22.0f, origin, lead, mins, maxs, requested, 0.2f, muzzle, direction,
+        &source_pad);
+    CHECK(status == RAY_HIT || status == RAY_MISS);
+    return 0;
+}
+
 static int test_final_physical_rays(void)
 {
     static const int weapons[] = {
@@ -341,13 +378,257 @@ static int test_clear_shot_predicate(void)
     return 0;
 }
 
+static int test_team_splash_uses_the_complete_client_roster(void)
+{
+    edict_t clients[5];
+    gclient_t states[5];
+    vec3_t impact = { 0.0f, 0.0f, 4.0f };
+
+    memset(clients, 0, sizeof(clients));
+    memset(states, 0, sizeof(states));
+    game.maxclients = 4;
+    g_edicts = clients;
+
+    clients[1].inuse = true;
+    clients[1].client = &states[1];
+    clients[1].health = 100;
+    states[1].ctf.teamnum = CTF_TEAM_RED;
+
+    /* This client need not be an SG bot.  A live human teammate beside the
+     * impact vetoes the shot even though the physical trace did not hit it. */
+    clients[2].inuse = true;
+    clients[2].client = &states[2];
+    clients[2].health = 100;
+    states[2].ctf.teamnum = CTF_TEAM_RED;
+    VectorSet(clients[2].absmin, 100.0f, -16.0f, -24.0f);
+    VectorSet(clients[2].absmax, 132.0f, 16.0f, 32.0f);
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+
+    /* Exactly d_safe is outside the strict danger interval. */
+    clients[2].absmin[0] = 105.0f;
+    clients[2].absmax[0] = 137.0f;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+
+    clients[2].absmin[0] = 100.0f;
+    clients[2].absmax[0] = 132.0f;
+    states[2].ctf.teamnum = CTF_TEAM_BLUE;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    states[2].ctf.teamnum = CTF_TEAM_RED;
+    clients[2].deadflag = DEAD_DEAD;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    clients[2].deadflag = DEAD_NO;
+    clients[2].movetype = MOVETYPE_NOCLIP;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    clients[2].movetype = MOVETYPE_WALK;
+
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], NAN, impact));
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], INFINITY, impact));
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 0.0f, impact));
+    impact[0] = NAN;
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    impact[0] = 0.0f;
+    states[1].ctf.teamnum = 0;
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    return 0;
+}
+
+static int test_team_hitscan_uses_the_physical_spread_envelope(void)
+{
+    edict_t clients[5];
+    gclient_t states[5];
+    vec3_t muzzle = { 0.0f, 0.0f, 4.0f };
+    vec3_t forward = { 1.0f, 0.0f, 0.0f };
+
+    memset(clients, 0, sizeof(clients));
+    memset(states, 0, sizeof(states));
+    game.maxclients = 4;
+    g_edicts = clients;
+    clients[1].inuse = true;
+    clients[1].client = &states[1];
+    clients[1].health = 100;
+    states[1].ctf.teamnum = CTF_TEAM_RED;
+    clients[2].inuse = true;
+    clients[2].client = &states[2];
+    clients[2].health = 100;
+    states[2].ctf.teamnum = CTF_TEAM_RED;
+
+    /* At x=400 the nominal y=0 ray misses this ordinary player bbox, but the
+     * machinegun's real yaw+bullet spread can reach it. */
+    VectorSet(clients[2].absmin, 384.0f, 34.0f, -20.0f);
+    VectorSet(clients[2].absmax, 416.0f, 66.0f, 36.0f);
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+
+    /* Outside the dry envelope is clear, but water's second 2x scatter makes
+     * the same teammate reachable. */
+    clients[2].absmin[1] = 54.0f;
+    clients[2].absmax[1] = 86.0f;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 1));
+
+    /* Super-shotgun's two +/-5 degree barrels widen the actual horizontal
+     * envelope beyond the ordinary shotgun at the same range. */
+    clients[2].absmin[1] = 104.0f;
+    clients[2].absmax[1] = 136.0f;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_SHOTGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_SSHOTGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+
+    /* Chaingun's four-unit random muzzle cube is part of the veto. */
+    clients[2].absmin[1] = 37.0f;
+    clients[2].absmax[1] = 69.0f;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_CHAINGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_CHAINGUN,
+        muzzle, forward, 500.0f, 4.0f, 0));
+
+    /* Rail has no stochastic spread.  Non-spread projectile weapons are not
+     * governed by this helper either. */
+    clients[2].absmin[1] = 34.0f;
+    clients[2].absmax[1] = 66.0f;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_RAIL,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_ROCKET,
+        muzzle, forward, 500.0f, 0.0f, 0));
+
+    /* A teammate beyond the evaluated target interval or behind the shooter
+     * cannot be reached during this shot decision. */
+    clients[2].absmin[0] = 584.0f;
+    clients[2].absmax[0] = 616.0f;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    clients[2].absmin[0] = -116.0f;
+    clients[2].absmax[0] = -84.0f;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+
+    /* Enemy, dead, and spectator clients do not suppress fire. */
+    clients[2].absmin[0] = 384.0f;
+    clients[2].absmax[0] = 416.0f;
+    states[2].ctf.teamnum = CTF_TEAM_BLUE;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    states[2].ctf.teamnum = CTF_TEAM_RED;
+    clients[2].deadflag = DEAD_DEAD;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    clients[2].deadflag = DEAD_NO;
+    clients[2].movetype = MOVETYPE_NOCLIP;
+    CHECK(SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+
+    clients[2].movetype = MOVETYPE_WALK;
+    clients[2].absmin[0] = 417.0f;
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    clients[2].absmin[0] = 384.0f;
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, NAN, 0.0f, 0));
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, -1.0f, 0));
+    forward[0] = NAN;
+    CHECK(!SG_CombatAimTestTeamHitscanSafe(&clients[1], W_MACHINEGUN,
+        muzzle, forward, 500.0f, 0.0f, 0));
+    return 0;
+}
+
+static int test_target_identity_hysteresis(void)
+{
+	CHECK(SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_RED,
+	      16, 19, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 102UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 0UL, 0UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 17, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 5, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, false, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, true, true));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(0, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, 2, true, true, false));
+	CHECK(SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, false));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 5, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, -1, 4, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 16, 16, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(0, 16, 4, 4, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, 2));
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 4, 4, false),
+                 372.0f, 0.001f));
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 5, 4, false),
+                 500.0f, 0.001f));
+    CHECK(nearly(SG_CombatTargetScore(500.0f, 5, 4, true),
+                 244.0f, 0.001f));
+    /* A 100-unit closer challenger does not churn the current target; a
+     * 129-unit closer challenger does. */
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) <
+          SG_CombatTargetScore(400.0f, 5, 4, false));
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) >
+          SG_CombatTargetScore(371.0f, 5, 4, false));
+    /* A visible carrier 100 units farther still owns the objective fight;
+     * one 200 units farther does not erase the immediate threat. */
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) >
+          SG_CombatTargetScore(600.0f, 5, 4, true));
+    CHECK(SG_CombatTargetScore(500.0f, 4, 4, false) <
+          SG_CombatTargetScore(700.0f, 5, 4, true));
+    CHECK(isinf(SG_CombatTargetScore(NAN, 4, 4, false)));
+    CHECK(isinf(SG_CombatTargetScore(-1.0f, 4, 4, false)));
+    return 0;
+}
+
+static int test_combat_randomness_is_per_client(void)
+{
+    int expected_random;
+    unsigned first;
+
+    srand(9917);
+    expected_random = rand();
+    srand(9917);
+    first = SG_CombatAimTestRandom(4, 3);
+    CHECK(first != 0);
+    CHECK(first == SG_CombatAimTestRandom(4, 3));
+    CHECK(first != SG_CombatAimTestRandom(5, 3));
+    CHECK(first != SG_CombatAimTestRandom(4, 4));
+    first = SG_CombatAimTestClientRandom(4, UINT64_C(9001), 3);
+    CHECK(first == SG_CombatAimTestClientRandom(4, UINT64_C(9001), 3));
+    CHECK(first != SG_CombatAimTestClientRandom(4, UINT64_C(9002), 3));
+    CHECK(first != SG_CombatAimTestClientRandom(5, UINT64_C(9001), 3));
+    CHECK(first != SG_CombatAimTestClientRandom(
+        4, UINT64_C(0x100000000) + UINT64_C(9001), 3));
+    CHECK(rand() == expected_random);
+    return 0;
+}
+
 int main(void)
 {
+	CHECK(SG_CombatCommitCandidateAllowed(1.0f, 1, 1, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 1, 1, 1));
+	CHECK(SG_CombatCommitCandidateAllowed(2.0f, 0, 1, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 0, 0, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 0, 1, 0));
+	CHECK(!SG_CombatCommitCandidateAllowed(0.0f, 0, 1, 1));
+	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 2, 1, 1));
     CHECK(!test_exact_muzzle_offsets());
     CHECK(!test_machinegun_deterministic_kick());
+    CHECK(!test_invalid_physical_ray_is_distinct_from_a_miss());
     CHECK(!test_final_physical_rays());
     CHECK(!test_chaingun_source_envelope());
     CHECK(!test_clear_shot_predicate());
+    CHECK(!test_team_splash_uses_the_complete_client_roster());
+    CHECK(!test_team_hitscan_uses_the_physical_spread_envelope());
+    CHECK(!test_target_identity_hysteresis());
+    CHECK(!test_combat_randomness_is_per_client());
     puts("combat aim production probe: ok");
     return 0;
 }
@@ -355,6 +636,50 @@ int main(void)
 
 
 class CombatAimEnvelopeTest(unittest.TestCase):
+    def test_spawn_binds_combat_sequence_to_new_client_life(self) -> None:
+        client = (ROOT / "p_client.c").read_text()
+        spawn = client[client.index("client->ctf.ctfid = unique_id++;"):
+                       client.index("// force the current weapon up")]
+
+        self.assertIn("Combat_ResetClient(ent);", spawn)
+        self.assertLess(spawn.index("client->ctf.ctfid = unique_id++;"),
+                        spawn.index("Combat_ResetClient(ent);"))
+        self.assertIn("self->client->ctf.ctfid", SOURCE)
+        self.assertIn("Combat_RandomIdentity(ci", SOURCE)
+
+    def test_blocked_grenade_arc_cannot_rearm_the_trigger(self) -> None:
+        move = (ROOT / "slipgate" / "sg_move.c").read_text()
+        cook = move[move.index("if (!proved_control && bot->nade_phase == 2)"):
+                    move.index("SOUND-DIRECTED FIRE")]
+        blocked = cook.index("nfly = -2.0f;   /* blocked arc */")
+        retire = cook.index("bot->nade_phase = 0;", blocked)
+        guard = cook.index("if (bot->nade_phase == 2)", retire)
+        hold = cook.index("SG_NadeCookShouldHold(bot->nade_phase, ntmr, nfly)",
+                          guard)
+        rearm = cook.index("cmd->buttons |= BUTTON_ATTACK;", hold)
+        self.assertLess(blocked, retire)
+        self.assertLess(retire, guard)
+        self.assertLess(guard, hold)
+        self.assertLess(hold, rearm)
+        self.assertIn("SG_NadeBlockedArcMayCancel(", cook[blocked:guard])
+        self.assertIn("e->client->buttons & BUTTON_ATTACK", cook[blocked:guard])
+        release = cook.index("nade_release = true;", guard)
+        slew = move.index("SG_NadeReleaseSlewRate(nade_release,", release)
+        self.assertLess(release, slew)
+        self.assertIn(
+            "if (!aimed_fire_requested && !nade_release &&",
+            move[release:slew],
+        )
+        self.assertIn("if (!aimed_fire_requested && !proved_control && !nade_release &&",
+                      move[release:slew])
+
+    def test_real_weapon_commitment_is_the_compiled_default(self) -> None:
+        cvars = (ROOT / "slipgate" / "sg_cvars.h").read_text()
+        self.assertIn('X(wcommit, "sg_wcommit", "2")', cvars)
+        choose = SOURCE[SOURCE.index("static int Combat_Choose"):
+                        SOURCE.index("static int Combat_PostWeapon")]
+        self.assertIn("SG_CombatCommitCandidateAllowed(", choose)
+
     def test_strict_syntax_in_both_runtime_and_probe_modes(self) -> None:
         cc = shutil.which("cc")
         if not cc:
@@ -416,6 +741,28 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         self.assertIn("else if (self->client->pers.hand == CENTER_HANDED)",
                       SOURCE)
         self.assertIn("Combat_GrenadeImpact", frame)
+        self.assertIn("SG_CombatTargetScore", SOURCE)
+        self.assertIn("st->enemy_ctfid != enemy->client->ctf.ctfid", SOURCE)
+        self.assertIn("SG_CombatLiveEnemyIdentityAllowed(self_team", SOURCE)
+        self.assertIn("st->enemy_last_ctfid = st->enemy_ctfid;", SOURCE)
+        self.assertIn("st->lost_ctfid = st->enemy_ctfid;", SOURCE)
+        self.assertIn("st->enemy_want_range = (st->enemy_weapon >= 0)",
+                      SOURCE)
+        self.assertIn("float theirs = st->enemy_want_range;", SOURCE)
+        self.assertNotIn("Combat_WantRange(foe, st->enemy_weapon)", SOURCE)
+        self.assertIn("Combat_EnemyIdentityCurrent(self, st->lost_client + 1",
+                      SOURCE)
+        self.assertIn("incumbent = SG_CombatLiveEnemy(self);", frame)
+        self.assertIn("incumbent_index, true", frame)
+        self.assertNotIn("st->enemy, true", frame)
+        carrier_start = SOURCE.index(
+            "static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target)\n{")
+        carrier = SOURCE[carrier_start:
+                         SOURCE.index("static qboolean Combat_Carrying", carrier_start)]
+        self.assertIn("enemy_carrier[SG_TeamIdx(team)]", carrier)
+        self.assertIn("SG_CombatEnemyCarrierAllowed", carrier)
+        self.assertIn("ClientHasFlag(target) != NULL", carrier)
+        self.assertNotIn("for (", carrier)
         self.assertIn("return enemy_hit;", SOURCE)
         self.assertIn("return enemy_hit || unobstructed;", SOURCE)
 

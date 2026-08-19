@@ -46,6 +46,14 @@ int SG_DoorApproachPmoveEqual(const pmove_state_t *left,
 	return 1;
 }
 
+int SG_DoorApproachWaterSafe(int waterlevel, int watertype)
+{
+	if (waterlevel < 0 || waterlevel > 1 ||
+	    (watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		return 0;
+	return waterlevel == 0 || (watertype & CONTENTS_WATER) != 0;
+}
+
 int SG_DoorApproachInsideCapsule(const short source_q8[3],
 	const short anchor_q8[3], const short point_q8[3])
 {
@@ -124,7 +132,8 @@ static sg_door_approach_reason_t DoorApproach_PoseReason(
 	    (observation->pms.pm_flags & PMF_DUCKED) ||
 	    observation->pms.pm_time)
 		return SG_DOOR_APPROACH_REASON_STATE;
-	if (observation->waterlevel != 0 || observation->hazardous_liquid)
+	if (!SG_DoorApproachWaterSafe(observation->waterlevel,
+	        observation->watertype) || observation->hazardous_liquid)
 		return SG_DOOR_APPROACH_REASON_WATER;
 	if (!observation->population_stable)
 		return SG_DOOR_APPROACH_REASON_POPULATION;
@@ -134,8 +143,10 @@ static sg_door_approach_reason_t DoorApproach_PoseReason(
 	        state->anchor_q8, observation->pms.origin))
 		return SG_DOOR_APPROACH_REASON_CORRIDOR;
 	if (require_expected &&
-	    !SG_DoorApproachPmoveEqual(&state->expected_pms,
-	        &observation->pms))
+	    (!SG_DoorApproachPmoveEqual(&state->expected_pms,
+	         &observation->pms) ||
+	     state->expected_waterlevel != observation->waterlevel ||
+	     state->expected_watertype != observation->watertype))
 		return SG_DOOR_APPROACH_REASON_POSE;
 	return SG_DOOR_APPROACH_REASON_NONE;
 }
@@ -164,6 +175,8 @@ sg_door_approach_result_t SG_DoorApproachBegin(
 	}
 	state->phase = SG_DOOR_APPROACH_WALK;
 	state->expected_pms = observation->pms;
+	state->expected_watertype = observation->watertype;
+	state->expected_waterlevel = observation->waterlevel;
 	state->old_frame_z = observation->pms.velocity[2] * 0.125f;
 	reason = DoorApproach_PoseReason(state, observation, 0);
 	if (reason != SG_DOOR_APPROACH_REASON_NONE ||
@@ -256,6 +269,8 @@ sg_door_approach_result_t SG_DoorApproachPostStep(
 		return DoorApproach_Fail(state, SG_DOOR_APPROACH_REASON_FALL);
 	state->elapsed_ms = next_elapsed;
 	state->expected_pms = observation->pms;
+	state->expected_watertype = observation->watertype;
+	state->expected_waterlevel = observation->waterlevel;
 	if (observation->physical_touch && !state->touched)
 	{
 		state->touched = 1U;
@@ -311,7 +326,9 @@ sg_door_approach_result_t SG_DoorApproachSnapped(
 	reason = DoorApproach_PoseReason(state, observation, 0);
 	if (reason != SG_DOOR_APPROACH_REASON_NONE || !observation->grounded ||
 	    !observation->static_support || !DoorApproach_Rest(&observation->pms) ||
-	    !DoorApproach_NearAnchor(state, &observation->pms))
+	    !DoorApproach_NearAnchor(state, &observation->pms) ||
+	    state->expected_waterlevel != observation->waterlevel ||
+	    state->expected_watertype != observation->watertype)
 		return DoorApproach_Fail(state, reason != SG_DOOR_APPROACH_REASON_NONE
 		    ? reason : SG_DOOR_APPROACH_REASON_SNAP);
 	state->expected_pms = observation->pms;

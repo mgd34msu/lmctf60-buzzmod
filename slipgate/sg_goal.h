@@ -28,9 +28,25 @@ void SG_DefenseSupplyReset(sg_bot_t *bot);
 void SG_DefenseSupplyCancel(sg_bot_t *bot, qboolean backoff);
 void SG_DefenseSupplyBeginReturn(sg_bot_t *bot);
 void SG_DefenseSupplyFinish(sg_bot_t *bot);
+void SG_DefenseSupplyNoteItemTouch(edict_t *taker, edict_t *item);
 qboolean SG_DefenseSupplyActive(const sg_bot_t *bot);
 qboolean SG_DefenseSupplyHome(int team);
 qboolean SG_DefenseSupplyThreat(int team);
+
+/* Exact collectible-weapon route owned by a bounded strike preparation.
+ * The returned field is private to this bot and remains bound to one live
+ * edict until it is taken, rejected, disappears, or becomes ineligible. */
+const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms);
+void SG_StrikeWeaponTargetClear(sg_bot_t *bot);
+void SG_StrikeWeaponNoteItemTouch(edict_t *taker, edict_t *item);
+
+/* Cached per-bot flood from every live weapon this client can physically
+ * collect.  NULL is authoritative: generic pricing must apply no weapon
+ * attraction rather than fall back to the unfiltered class field. */
+const int *SG_CollectibleWeaponField(sg_bot_t *bot);
+const int *SG_CollectibleHealthField(sg_bot_t *bot);
+const int *SG_CollectibleAmmoField(sg_bot_t *bot);
+const int *SG_CollectibleArmorField(sg_bot_t *bot);
 
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);

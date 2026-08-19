@@ -1,4 +1,5 @@
 #include "slipgate/sg_defense_shift.h"
+#include "slipgate/sg_route_policy.h"
 #include "g_local.h"
 #include "slipgate/sg_combat.h"
 
@@ -15,6 +16,55 @@ static int failures;
 		failures++; \
 	} \
 } while (0)
+
+static void TestOneExitRouteStaysMobile(void)
+{
+	CHECK(SG_RouteReturnPenaltyAllowed(4, 4, 1, 2, 60.0f));
+	/* A second finite but uphill edge is deliberately absent from this count:
+	 * the only non-worsening reverse edge must remain untaxed. */
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 1, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 5, 1, 3, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 0, 3, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, 0.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, NAN));
+	CHECK(!SG_RouteReturnPenaltyAllowed(-1, 4, 1, 3, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 2, 3, 60.0f));
+}
+
+static void TestAttackDescentCannotPriceItselfStill(void)
+{
+	const int infinity = 0x3fffffff;
+
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 8000, 7875, infinity));
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 601, 600, infinity));
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 600, 500, infinity));
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 1, 0, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 0, 0, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 0, 8000, 7000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(0, 1, 8000, 7000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 8000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 8001, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, infinity, 10, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(2, 1, 8000, 7000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 0));
+}
+
+static void TestDuelRoutePricingUsesOneSurface(void)
+{
+	/* Ordinary defenders/escorts retain range discipline. */
+	CHECK(SG_DuelRoutePriceAllowed(1, 0, 1, 0, 1));
+	/* Default attacker press removes it from both sides of the comparison. */
+	CHECK(!SG_DuelRoutePriceAllowed(1, 1, 1, 0, 1));
+	CHECK(SG_DuelRoutePriceAllowed(1, 1, 0, 0, 1));
+	/* Carrier press is independent of attacker pressure. */
+	CHECK(!SG_DuelRoutePriceAllowed(1, 0, 1, 1, 1));
+	CHECK(SG_DuelRoutePriceAllowed(1, 0, 1, 1, 0));
+	CHECK(!SG_DuelRoutePriceAllowed(0, 0, 0, 0, 0));
+	/* Malformed boolean inputs fail closed. */
+	CHECK(!SG_DuelRoutePriceAllowed(2, 0, 0, 0, 0));
+	CHECK(!SG_DuelRoutePriceAllowed(1, -1, 0, 0, 0));
+}
 
 static void TestLateralChoice(void)
 {
@@ -86,6 +136,92 @@ static void TestInvalidShiftRetiresOnlyExactCommitment(void)
 	CHECK(commitment == 31);
 	CHECK(SG_DefenseShiftRetireIfInvalid(12, 1, &commitment) == 0);
 	CHECK(SG_DefenseShiftRetireIfInvalid(-1, 0, &commitment) == 0);
+}
+
+static void TestQuietPatrolCircuit(void)
+{
+	const sg_defense_patrol_candidate_t candidates[] = {
+		{ 8, 80, 500, 1 },
+		{ 3, 30, 350, 0 },
+		{ 4, 40, 999, 1 },
+		{ 9, 90, 1000, 1 },
+		{ -1, 20, 200, 1 }
+	};
+	int seed = -1;
+
+	CHECK(SG_DefensePatrolChoose(candidates, 5, 1000, -1, 0, &seed) == 8);
+	CHECK(seed == 80);
+	/* Draw the return leg: another admitted road exists, so the circuit
+	 * advances instead of shuffling straight back. */
+	CHECK(SG_DefensePatrolChoose(candidates, 5, 1000, 80, 0, &seed) == 4);
+	CHECK(seed == 40);
+	CHECK(SG_DefensePatrolChoose(candidates, 5, 0, -1, 0, &seed) == -1);
+	CHECK(seed == -1);
+	CHECK(SG_DefensePatrolChoose(NULL, 5, 1000, -1, 0, &seed) == -1);
+}
+
+static void TestQuietPatrolOwnsItsRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	float dwell;
+
+	srand(2191);
+	expected_random = rand();
+	srand(2191);
+	state = SG_DefensePatrolRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(state != 0);
+	CHECK(state == SG_DefensePatrolRandomInitial(
+	      UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+	CHECK(SG_DefensePatrolRandomNext(state) != state);
+	dwell = SG_DefensePatrolDwell(state);
+	CHECK(dwell >= 2.0f && dwell <= 6.0f);
+	CHECK(SG_DefensePatrolDwell(state) == dwell);
+}
+
+static void TestQuietPatrolThrottle(void)
+{
+	CHECK(SG_DefensePatrolThrottle(0.55f) == 0.55f);
+	CHECK(SG_DefensePatrolThrottle(0.1f) == 0.35f);
+	CHECK(SG_DefensePatrolThrottle(2.0f) == 0.75f);
+	CHECK(SG_DefensePatrolThrottle(0.0f) == 0.0f);
+	CHECK(SG_DefensePatrolThrottle(NAN) == 0.0f);
+}
+
+static void TestQuietPatrolDwellsOnlyAfterArrival(void)
+{
+	int target = 80;
+
+	CHECK(!SG_DefensePatrolFinishLeg(79, &target));
+	CHECK(target == 80);
+	CHECK(SG_DefensePatrolFinishLeg(80, &target));
+	CHECK(target == -1);
+	CHECK(!SG_DefensePatrolFinishLeg(80, &target));
+	CHECK(!SG_DefensePatrolFinishLeg(-1, &target));
+	CHECK(!SG_DefensePatrolFinishLeg(80, NULL));
+}
+
+static void TestQuietPatrolContactRetiresExactCommit(void)
+{
+	int patrol_link = 12;
+	int target = 80;
+	int commit = 12;
+
+	CHECK(!SG_DefensePatrolRetireIfInactive(1, &patrol_link, &target,
+	    &commit));
+	CHECK(patrol_link == 12 && target == 80 && commit == 12);
+	CHECK(SG_DefensePatrolRetireIfInactive(0, &patrol_link, &target,
+	    &commit));
+	CHECK(patrol_link == -1 && target == -1 && commit == -1);
+
+	patrol_link = 12;
+	target = 80;
+	commit = 99;
+	CHECK(SG_DefensePatrolRetireIfInactive(0, &patrol_link, &target,
+	    &commit));
+	CHECK(patrol_link == -1 && target == -1 && commit == 99);
+	CHECK(!SG_DefensePatrolRetireIfInactive(0, NULL, &target, &commit));
 }
 
 static sg_defense_combat_request_t CombatRequest(void)
@@ -239,10 +375,18 @@ static void TestCombatPreviewCandidateLaw(void)
 
 int main(void)
 {
+	TestOneExitRouteStaysMobile();
+	TestAttackDescentCannotPriceItselfStill();
+	TestDuelRoutePricingUsesOneSurface();
 	TestLateralChoice();
 	TestGuardBandAndGeometry();
 	TestFailClosedInputs();
 	TestInvalidShiftRetiresOnlyExactCommitment();
+	TestQuietPatrolCircuit();
+	TestQuietPatrolOwnsItsRandomness();
+	TestQuietPatrolThrottle();
+	TestQuietPatrolDwellsOnlyAfterArrival();
+	TestQuietPatrolContactRetiresExactCommit();
 	TestCombatAdmissionAndDeterminism();
 	TestCombatHullProbeLaw();
 	TestCombatPreviewCandidateLaw();

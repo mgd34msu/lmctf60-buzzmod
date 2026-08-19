@@ -27,6 +27,7 @@ typedef struct sg_defense_supply_step_s
 	int own_flag_home;
 	int threat;
 	int engaged;
+	int human_order;
 	int other_owner;
 	int target_valid;
 	int weapon_field_valid;

@@ -2,12 +2,17 @@
 #ifndef SG_RUNE_FILE_H
 #define SG_RUNE_FILE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "sg_rune.h"
 
 typedef void *(*sg_rune_alloc_fn)(int bytes);
 typedef void (*sg_rune_free_fn)(void *allocation);
+
+/* Canonical digest used to bind a sidecar to the exact encoded RUNE bytes. */
+void SG_RuneFileSHA256Buffer(const unsigned char *bytes, size_t length,
+	char out[65]);
 
 typedef enum sg_rune_file_load_status_e
 {

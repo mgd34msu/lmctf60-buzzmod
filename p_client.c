@@ -2132,6 +2132,9 @@ void PutClientInServer (edict_t *ent)
 	client->ctf = ctftemp; //surt restore
 
 	client->ctf.ctfid = unique_id++;
+	/* Combat aim/error/fire-window state belongs to this exact client life.
+	 * A respawn or recycled slot must not replay its predecessor's sequence. */
+	Combat_ResetClient(ent);
 	client->showctfhud = true; // LM_JORM -- Turn on CTF HUD
 	client->ctf.extra_flags |= CTF_EXTRAFLAGS_RADIO_SOUND; // LM_JORM -- Turn on our radio
 	

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 import io
 from pathlib import Path
 import struct
@@ -1891,6 +1892,111 @@ class RuneRuneArtifactTests(unittest.TestCase):
                 )
             self.assertIn('"trigger_count": 2', output.getvalue())
             self.assertIn('"plan_count": 1', output.getvalue())
+
+    def test_expected_identity_gate_and_cli(self):
+        identity = runeio.decode(self.encoded).header.identity
+        self.assertEqual(
+            identity,
+            runeio.decode(
+                self.encoded, expected_identity=identity
+            ).header.identity,
+        )
+        mismatches = (
+            (
+                replace(identity, map_name="othermap"),
+                contract.RLW_MAPNAME_MISMATCH,
+            ),
+            (
+                replace(identity, bsp_checksum=1),
+                contract.RLW_BSP_CHECKSUM_MISMATCH,
+            ),
+            (
+                replace(identity, entity_crc32=1),
+                contract.RLW_ENTITY_CRC_MISMATCH,
+            ),
+            (
+                replace(identity, host_physics_id=2),
+                contract.RLW_PHYSICS_ID_MISMATCH,
+            ),
+            (
+                replace(identity, gravity=800.0),
+                contract.RLW_BAD_PHYSICS_LAW,
+            ),
+        )
+        for expected, diagnostic in mismatches:
+            with self.subTest(diagnostic=diagnostic):
+                self.assert_wire_code(
+                    diagnostic,
+                    lambda expected=expected: runeio.decode(
+                        self.encoded, expected_identity=expected
+                    ),
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "artifact.rune"
+            reference = Path(temporary) / "reference.rune"
+            artifact.write_bytes(self.encoded)
+            reference.write_bytes(self.encoded)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    0,
+                    runeio.main([
+                        "--expected-identity", str(reference), str(artifact)
+                    ]),
+                )
+            self.assertIn('"map_name": "runetest"', output.getvalue())
+
+            mismatched = bytearray(self.encoded)
+            map_offset = runeio.HEADER_STRUCT.size - 64
+            mismatched[map_offset:map_offset + 64] = (
+                b"othermap\0" + b"\0" * (64 - len(b"othermap\0"))
+            )
+            _fix_header_crc(mismatched)
+            reference.write_bytes(mismatched)
+            error = io.StringIO()
+            with (
+                redirect_stderr(error),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                runeio.main([
+                    "--expected-identity", str(reference), str(artifact)
+                ])
+            self.assertEqual(2, raised.exception.code)
+            self.assertIn("RLW_MAPNAME_MISMATCH", error.getvalue())
+
+    def test_corpus_loader_and_seed_weights_are_strict(self):
+        self.assertEqual(
+            {0: 0, 1: 2.5},
+            corpusgraph.validate_seed_weights(
+                {"0": 0, "1": 2.5}, "weights.json", "post", 2
+            ),
+        )
+        for weight in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(weight=weight), self.assertRaises(ValueError):
+                corpusgraph.validate_seed_weights(
+                    {"0": weight}, "weights.json", "post", 1
+                )
+        with self.assertRaisesRegex(
+            ValueError, r"weights\.json: post seed 0 has invalid weight"
+        ):
+            corpusgraph.validate_seed_weights(
+                {"0": 10 ** 309}, "weights.json", "post", 1
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            corpus = Path(temporary) / "corpus.json"
+            corpus.write_text('{"map":"one","map":"two"}')
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                corpusgraph.load_corpus(corpus)
+            corpus.write_text('{"weight":NaN}')
+            with self.assertRaisesRegex(ValueError, "non-finite JSON value"):
+                corpusgraph.load_corpus(corpus)
+            corpus.write_text('{"weight":1e9999}')
+            with self.assertRaisesRegex(
+                ValueError, r"corpus\.json: malformed JSON: non-finite JSON value"
+            ):
+                corpusgraph.load_corpus(corpus)
 
     def test_acceptance_cli_rejects_missing_or_mismatched_plan(self):
         first_link = (

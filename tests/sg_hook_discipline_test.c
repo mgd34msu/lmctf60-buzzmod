@@ -22,6 +22,11 @@ static void TestExpectedRideWorth(void)
 	      SG_HOOK_RIDE_UNASSESSED);
 	CHECK(SG_HookExpectedRideWorth(0, SG_HOOK_DISCIPLINE_FIELD_INF) ==
 	      SG_HOOK_RIDE_UNASSESSED);
+	CHECK(SG_HookExpectedRideWorth(-1, 0) == SG_HOOK_RIDE_UNASSESSED);
+	CHECK(SG_HookExpectedRideWorth(1000, -1) == SG_HOOK_RIDE_UNASSESSED);
+	CHECK(SG_HookRideLaunchAllowed(SG_HOOK_RIDE_ALLOW));
+	CHECK(!SG_HookRideLaunchAllowed(SG_HOOK_RIDE_REJECT));
+	CHECK(!SG_HookRideLaunchAllowed(SG_HOOK_RIDE_UNASSESSED));
 }
 
 static void TestCurrentRideWorthRecheck(void)
@@ -39,6 +44,12 @@ static void TestCurrentRideWorthRecheck(void)
 	from_goal = 1001;
 	CHECK(SG_HookExpectedRideWorth(from_goal, to_goal) ==
 	      SG_HOOK_RIDE_ALLOW);
+	to_goal = SG_HOOK_DISCIPLINE_FIELD_INF;
+	CHECK(!SG_HookRideLaunchAllowed(
+	    SG_HookExpectedRideWorth(from_goal, to_goal)));
+	to_goal = -1;
+	CHECK(!SG_HookRideLaunchAllowed(
+	    SG_HookExpectedRideWorth(from_goal, to_goal)));
 }
 
 static void TestFailureStreak(void)
@@ -59,11 +70,22 @@ static void TestFailureStreak(void)
 	CHECK(streak == 1 && ban_seconds == 0);
 }
 
+static void TestSourceStateAdmission(void)
+{
+	CHECK(SG_HookStageSourceCompatible(0, 0, 1, 0, 1));
+	CHECK(!SG_HookStageSourceCompatible(0, 0, 0, 1, 1));
+	CHECK(SG_HookStageSourceCompatible(1, 0, 0, 1, 1));
+	CHECK(!SG_HookStageSourceCompatible(1, 1, 0, 1, 1));
+	CHECK(!SG_HookStageSourceCompatible(1, 0, 1, 0, 1));
+	CHECK(!SG_HookStageSourceCompatible(1, 0, 0, 1, 0));
+}
+
 int main(void)
 {
 	TestExpectedRideWorth();
 	TestCurrentRideWorthRecheck();
 	TestFailureStreak();
+	TestSourceStateAdmission();
 	if (failures)
 	{
 		fprintf(stderr, "%d sg_hook_discipline tests failed\n", failures);

@@ -4,6 +4,7 @@
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 
@@ -11,6 +12,137 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DefenderSupplyIntegrationTest(unittest.TestCase):
+    def test_generic_weapon_detour_never_falls_back_to_broad_field(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            enum {
+                SG_FC_WEAPON = 0, SG_FC_ARMOR, SG_FC_AMMO,
+                SG_FC_HEALTH, SG_FC_RUNE, SG_FC_POWERUP
+            };
+            #include "slipgate/sg_item_route.h"
+
+            int main(void)
+            {
+                int broad[2] = { 0, 10 };
+                int collectible[2] = { 30, 0 };
+
+                if (SG_ItemDetourField(0, broad, collectible) != broad)
+                    return 1;
+                if (SG_ItemDetourField(1, broad, collectible) != collectible)
+                    return 2;
+                if (SG_ItemDetourField(1, broad, 0) != 0)
+                    return 3;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-item-route-") as tmp:
+            source = Path(tmp) / "item_route.c"
+            binary = Path(tmp) / "item_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
+    def test_health_pickup_policy_executes_full_and_overheal_edges(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include "slipgate/sg_health_pickup.h"
+
+            int main(void)
+            {
+                if (!SG_HealthPickupAllowed(99, 100, 0))
+                    return 1;
+                if (SG_HealthPickupAllowed(100, 100, 0))
+                    return 2;
+                if (SG_HealthPickupAllowed(150, 100, 0))
+                    return 3;
+                if (!SG_HealthPickupAllowed(100, 100, 1) ||
+                    !SG_HealthPickupAllowed(200, 100, 1))
+                    return 4;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-health-route-") as tmp:
+            source = Path(tmp) / "health_route.c"
+            binary = Path(tmp) / "health_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
+    def test_ammo_pickup_policy_executes_capacity_edges(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include "slipgate/sg_ammo_pickup.h"
+
+            int main(void)
+            {
+                if (!SG_AmmoPickupAllowed(0, 200) ||
+                    !SG_AmmoPickupAllowed(199, 200))
+                    return 1;
+                if (SG_AmmoPickupAllowed(200, 200) ||
+                    SG_AmmoPickupAllowed(201, 200) ||
+                    SG_AmmoPickupAllowed(0, -1))
+                    return 2;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-ammo-route-") as tmp:
+            source = Path(tmp) / "ammo_route.c"
+            binary = Path(tmp) / "ammo_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
+    def test_armor_pickup_policy_executes_salvage_edges(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include "slipgate/sg_armor_pickup.h"
+
+            int main(void)
+            {
+                if (!SG_ArmorPickupAllowed(1, 1, .8f, 200, 200, .3f, 25))
+                    return 1;
+                if (!SG_ArmorPickupAllowed(0, 0, 0.f, 0, 0, .3f, 25))
+                    return 2;
+                if (!SG_ArmorPickupAllowed(0, 1, .3f, 50, 50, .8f, 100))
+                    return 3;
+                if (SG_ArmorPickupAllowed(0, 1, .8f, 200, 200, .3f, 25))
+                    return 4;
+                if (!SG_ArmorPickupAllowed(0, 1, .8f, 190, 200, .6f, 50))
+                    return 5;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-armor-route-") as tmp:
+            source = Path(tmp) / "armor_route.c"
+            binary = Path(tmp) / "armor_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
     def test_phase_and_exact_route_policy_executes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="sg-def-supply-") as tmp:
             binary = Path(tmp) / "sg_defense_supply_test"
@@ -35,7 +167,7 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
 
         self.assertIn("sg_fields.item[SG_FC_WEAPON]", goal)
-        self.assertIn("sg_defense_supply_target_field[SG_MAXBOTS]", goal)
+        self.assertIn("sg_weapon_target_field[SG_MAXBOTS]", goal)
         self.assertIn("sg_fields.action_topology_epoch", goal)
         self.assertIn("SG_DefenseSupplyRoute(", goal)
         self.assertIn("goal_field = weapon_field", goal)
@@ -72,6 +204,8 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         self.assertIn("step.deadline_pending = SG_TimerPending(bot->def_supply_until)",
                       goal)
         self.assertIn("DefenseSupplyTargetValid(bot)", goal)
+        self.assertIn("G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker)",
+                      goal)
         self.assertIn("DefenseSupplyOtherOwner(bot, true)", goal)
         self.assertIn("DefenseSupplyRetireRun(bot)", goal)
         self.assertIn("DefenseSupplyRetireRailRetry(bot)", goal)
@@ -86,6 +220,91 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
             supply_header,
         )
         self.assertIn("route_field[SG_Rune()->links[bestlink].to]", descend)
+
+    def test_physical_weapon_touch_closes_exact_outbound_sortie(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        weapon = (ROOT / "p_weapon.c").read_text()
+
+        self.assertIn("qboolean G_WeaponPickupEligible", weapon)
+        self.assertIn("if (!G_WeaponPickupEligible(ent, other))", weapon)
+        self.assertIn("DF_WEAPONS_STAY", weapon)
+        self.assertIn("bot->ent != taker", goal)
+        self.assertIn("bot->def_supply_ent != item_ent", goal)
+        self.assertIn("SG_DefenseSupplyBeginReturn(bot)", goal)
+        self.assertEqual(caco.count("SG_DefenseSupplyNoteItemTouch(taker, item);"),
+                         2)
+
+    def test_strike_weapon_route_uses_one_collectible_pad(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+
+        self.assertIn("WeaponPickupRouteEligible", goal)
+        self.assertIn("G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker)",
+                      goal)
+        self.assertIn('strcmp(item->classname, "weapon_hook")', goal)
+        self.assertNotIn('"weapon_grappling_hook"', goal)
+        self.assertIn("StrikeWeaponTargetValid", goal)
+        self.assertIn("bot->strike_weapon_target_ent = best_ent", goal)
+        self.assertIn("WeaponTargetField(bot, bot->strike_weapon_target_seed)",
+                      goal)
+        self.assertIn("SG_StrikeWeaponTargetField(\n\t\t\t\t\tbot",
+                      arach)
+        self.assertIn("tc.goal_field = weapon_target_field", arach)
+        self.assertIn("tc.route_field = weapon_target_field", arach)
+        strike_start = arach.index("/* A below-tier member owns one exact")
+        strike_end = arach.index("Generic proof-line retry", strike_start)
+        strike_route = arach[strike_start:strike_end]
+        self.assertNotIn("tc.goal_field = sg_fields.item[SG_FC_WEAPON]",
+                         strike_route)
+        self.assertEqual(caco.count("SG_StrikeWeaponNoteItemTouch(taker, item);"),
+                         2)
+
+    def test_generic_weapon_surface_uses_collectible_client_field(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        price = (ROOT / "slipgate/sg_price.c").read_text()
+
+        self.assertIn("const int *SG_CollectibleWeaponField", goal)
+        self.assertIn("WeaponPickupRouteEligible(item, bot->ent)", goal)
+        self.assertIn("Field_Flood(SG_Rune(), sg_weapon_target_field[bi], seeds",
+                      goal)
+        self.assertIn("SG_CollectibleWeaponField(bot)", arach)
+        self.assertIn("SG_ItemDetourField(tc != NULL", price)
+        self.assertIn("tc ? tc->collectible_item_field[cls] : NULL", price)
+
+    def test_health_surface_uses_physical_overheal_law(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        items = (ROOT / "g_items.c").read_text()
+
+        self.assertIn("qboolean G_HealthPickupEligible", items)
+        self.assertIn("if (!G_HealthPickupEligible(ent, other))", items)
+        self.assertIn("!G_HealthPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_CollectibleHealthField(bot)", arach)
+
+    def test_ammo_surface_excludes_capacity_rejected_stacks(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        items = (ROOT / "g_items.c").read_text()
+
+        self.assertIn("qboolean G_AmmoPickupEligible", items)
+        self.assertIn("G_AmmoItemPickupEligible(item, ent)", items)
+        self.assertIn("G_AmmoPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_AmmoRouteAdmission(item->item->tag, held_ammo_tag",
+                      goal)
+        self.assertIn("SG_CollectibleAmmoField(bot)", arach)
+
+    def test_armor_surface_excludes_zero_salvage_pads(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        items = (ROOT / "g_items.c").read_text()
+
+        self.assertIn("qboolean G_ArmorPickupEligible", items)
+        self.assertIn("if (!G_ArmorPickupEligible(ent, other))", items)
+        self.assertIn("!G_ArmorPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_CollectibleArmorField(bot)", arach)
 
     def test_owned_stocked_weapon_flows_through_post_selector(self) -> None:
         combat = (ROOT / "slipgate/sg_combat.c").read_text()
@@ -105,6 +324,12 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         self.assertIn("Combat_PostWeapon(self, st->post_sight, false)",
                       combat)
         self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", descend)
+
+    def test_human_order_blocks_arm_and_turns_outbound_home(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+
+        self.assertIn("(!active && SG_ChatOrderedRole(tc->e) >= 0)", goal)
+        self.assertIn("step.human_order = SG_ChatOrderedRole(e) >= 0;", goal)
 
 
 if __name__ == "__main__":

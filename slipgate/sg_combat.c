@@ -28,6 +28,9 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_combat_commit_policy.h"
+#include "slipgate/sg_combat_target_policy.h"
+#include "slipgate/sg_item_route.h"
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
 
 #include <math.h>
@@ -575,6 +578,7 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 typedef struct
 {
 	int			enemy;			/* edict index of held target, 0 = none */
+	unsigned long	enemy_ctfid;	/* exact target life occupying that slot */
 	float		since;			/* level.time the target was acquired */
 	float		acquired_at;	/* same instant, read by the reaction gate --
 	                             * kept separate from `since` because `since` is
@@ -638,17 +642,19 @@ typedef struct
 	 * behind a wall is still the target the range is being held against; the
 	 * two are separate so the acquisition reset above keeps its exact meaning. */
 	int			enemy_last;		/* edict index, outlives the sighting */
+	unsigned long	enemy_last_ctfid; /* life identity of that sighting */
 	vec3_t		enemy_org;
 	float		enemy_time;		/* level.time of the last successful scan */
 	int			enemy_weapon;	/* weapon index seen in their hands, -1 none */
+	float		enemy_want_range; /* range terms frozen at that sighting */
 
-	/* the corner hold. lost_client is the client number, not an edict index,
-	 * so it compares directly against the belief table's own field. lost_until
-	 * is the validity test rather than lost_client, for the same reason
-	 * alert_until is: this table is static storage that starts as zeroes, and
-	 * an expired deadline is the only sentinel a zeroed record answers
-	 * correctly on the first frame of a level. */
+	/* The corner hold. lost_client is the client number, not an edict index,
+	 * so it compares directly against the belief table's own field. The
+	 * deadline and lost_ctfid jointly validate it: the deadline makes zeroed
+	 * process storage inert on its first frame, while ctfid prevents a later
+	 * life in the same slot from inheriting the pursuit. */
 	int			lost_client;
+	unsigned long	lost_ctfid;		/* exact client life being pursued */
 	int			lost_seed;
 	float		lost_time;		/* when the target was lost */
 	float		lost_until;		/* when the hold expires; <= level.time = none */
@@ -669,6 +675,7 @@ typedef struct
 	float		ws_armed;
 	qboolean	ws_panic;
 	int			ws_pre;
+	uint32_t	random_state;   /* private aim/trigger sequence per client */
 } sg_combat_state_t;
 
 static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
@@ -699,15 +706,57 @@ static float	sg_cbt_why_next;
  * client on one level.  A caller may arrive before the level hook, so every
  * state-bearing public entry goes through Combat_ClientState as well.
  */
-static void Combat_ResetState(sg_combat_state_t *st)
+static uint32_t Combat_RandomNext(sg_combat_state_t *st)
+{
+	uint32_t state = st ? st->random_state : 0;
+
+	if (state == 0)
+		state = UINT32_C(0x6d2b79f5);
+	state ^= state >> 16;
+	state *= UINT32_C(0x7feb352d);
+	state ^= state >> 15;
+	state *= UINT32_C(0x846ca68b);
+	state ^= state >> 16;
+	if (state == 0)
+		state = UINT32_C(0x27d4eb2d);
+	if (st)
+		st->random_state = state;
+	return state;
+}
+
+static float Combat_RandomUnit(sg_combat_state_t *st)
+{
+	return (float)(Combat_RandomNext(st) & UINT32_C(0x00ffffff)) /
+	    16777216.0f;
+}
+
+static float Combat_RandomSigned(sg_combat_state_t *st)
+{
+	return 2.0f * Combat_RandomUnit(st) - 1.0f;
+}
+
+static void Combat_ResetState(sg_combat_state_t *st, unsigned identity)
 {
 	memset(st, 0, sizeof(*st));
+	st->random_state = (identity + 1u) * UINT32_C(0x9e3779b9) ^
+	    UINT32_C(0x85ebca6b);
+	(void)Combat_RandomNext(st);
 	st->band = -1;
 	st->want = -1;
 	st->post_sight = -1.0f;
 	st->alert_range = -1.0f;
 	st->enemy_weapon = -1;
 	st->ws_pre = -1;
+}
+
+static unsigned Combat_RandomIdentity(int client_index,
+	unsigned long client_life)
+{
+	uint64_t life = (uint64_t)client_life;
+	uint32_t folded_life = (uint32_t)life ^ (uint32_t)(life >> 32);
+
+	return (unsigned)(((uint32_t)(client_index + 1) *
+	    UINT32_C(0x9e3779b9)) ^ folded_life ^ UINT32_C(0x27d4eb2d));
 }
 
 static int Combat_ClientIndex(edict_t *self)
@@ -730,7 +779,7 @@ static sg_combat_state_t *Combat_ClientState(edict_t *self)
 		return NULL;
 	if (!sg_combat_initialized[ci])
 	{
-		Combat_ResetState(&sg_combat[ci]);
+		Combat_ResetState(&sg_combat[ci], (unsigned)ci);
 		sg_combat_initialized[ci] = true;
 	}
 	return &sg_combat[ci];
@@ -742,7 +791,8 @@ void Combat_ResetClient(edict_t *self)
 
 	if (ci < 0)
 		return;
-	Combat_ResetState(&sg_combat[ci]);
+	Combat_ResetState(&sg_combat[ci], Combat_RandomIdentity(ci,
+	    self->client->ctf.ctfid));
 	sg_combat_initialized[ci] = true;
 }
 
@@ -752,7 +802,7 @@ void Combat_ResetLevel(void)
 
 	for (i = 0; i < SG_COMBAT_MAXCLIENTS; i++)
 	{
-		Combat_ResetState(&sg_combat[i]);
+		Combat_ResetState(&sg_combat[i], (unsigned)i);
 		sg_combat_initialized[i] = true;
 	}
 	memset(sg_cbt_why, 0, sizeof(sg_cbt_why));
@@ -943,9 +993,13 @@ static void Combat_Center(edict_t *e, vec3_t out)
 	VectorScale(out, 0.5f, out);
 }
 
+static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target);
+
 /*
  * Pick a target: a live enemy client, inside engage range, inside the forward
- * cone, and visible. Nearest wins. Iteration follows sg_caco.c:294-300 --
+ * cone, and visible. Nearest wins outside the bounded incumbent hysteresis;
+ * a still-visible current target survives incidental distance crossings.
+ * Iteration follows sg_caco.c:294-300 --
  * g_edicts + 1 + i over game.maxclients, inuse and client checked.
  *
  * Liveness is the same pair CACO uses (sg_caco.c:213):
@@ -966,7 +1020,7 @@ static void Combat_Center(edict_t *e, vec3_t out)
  * not how well it shoots.
  */
 static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
-	const float *threat, qboolean count_diagnostics)
+	const float *threat, int incumbent_index, qboolean count_diagnostics)
 {
 	edict_t	*best = NULL;
 	/*
@@ -974,8 +1028,8 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 	 * a refusal to fight across the map (SG_ENGAGE_RANGE); the persona moves
 	 * it by at most 15% either way, which is the difference between a Fiend
 	 * who takes the corridor shot and a Wizard who lets it walk. Nearest
-	 * still wins inside whatever the cap turns out to be -- this bends who
-	 * is a candidate, not how one is chosen. Exactly SG_ENGAGE_RANGE when
+	 * remains the basis inside whatever the cap turns out to be -- this bends
+	 * who is a candidate, not how one is chosen. Exactly SG_ENGAGE_RANGE when
 	 * no persona applies.
 	 *
 	 * The second factor is the tilt clock (sg_arach.c, sg_tilt): for a few
@@ -986,8 +1040,9 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 	 * this line changes: a fight this bot DOES take is fought with the
 	 * same aim, the same reaction and the same trigger it always had.
 	 */
-	float	bestdist = SG_ENGAGE_RANGE * SG_PersonaAggression(self) *
+	float	range_limit = SG_ENGAGE_RANGE * SG_PersonaAggression(self) *
 	                   SG_TiltCaution(self);
+	float	bestscore = range_limit;
 	int		myteam = self->client->ctf.teamnum;
 	int		i;
 
@@ -1028,7 +1083,7 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		Combat_Center(p, mid);
 		VectorSubtract(mid, eye, delta);
 		dist = VectorLength(delta);
-		if (dist < 1.0f || dist >= bestdist)
+		if (dist < 1.0f || dist >= range_limit)
 		{
 			if (count_diagnostics)
 				sg_cbt_scan[2]++;
@@ -1060,7 +1115,7 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		candidate.target_health = p->health;
 		candidate.target_noclip = p->movetype == MOVETYPE_NOCLIP;
 		candidate.distance = dist;
-		candidate.range_limit = bestdist;
+		candidate.range_limit = range_limit;
 		candidate.forward_dot = rear_cone ? SG_FOV_COS : dot;
 		candidate.visibility_known = false;
 		candidate.visible = false;
@@ -1080,8 +1135,16 @@ static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 		if (count_diagnostics)
 			sg_cbt_scan[5]++;
 
-		best = p;
-		bestdist = dist;
+		{
+			float score = SG_CombatTargetScore(dist,
+			    (int)(p - g_edicts), incumbent_index,
+			    Combat_IsEnemyCarrier(self, p));
+
+			if (score >= bestscore)
+				continue;
+			best = p;
+			bestscore = score;
+		}
 	}
 
 	return best;
@@ -1098,7 +1161,7 @@ qboolean SG_CombatWouldEngage(edict_t *self)
 	VectorCopy(self->s.origin, eye);
 	eye[2] += self->viewheight;
 	AngleVectors(self->client->v_angle, forward, NULL, NULL);
-	return Combat_Scan(self, eye, forward, NULL, false) != NULL;
+	return Combat_Scan(self, eye, forward, NULL, -1, false) != NULL;
 }
 
 /*
@@ -1108,20 +1171,17 @@ qboolean SG_CombatWouldEngage(edict_t *self)
  */
 static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target)
 {
-	int	team = self->client->ctf.teamnum;
-	int	i;
+	int team = self->client->ctf.teamnum;
+	int target_client;
+	sg_belief_carrier_t *carrier;
 
-	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+	if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) || !target ||
+	    !target->client)
 		return false;
-
-	for (i = 0; i < 2; i++)
-	{
-		sg_belief_carrier_t *c = &sg_caco_team_belief.enemy_carrier[i];
-
-		if (c->client >= 0 && g_edicts + 1 + c->client == target)
-			return true;
-	}
-	return false;
+	target_client = (int)(target - g_edicts) - 1;
+	carrier = &sg_caco_team_belief.enemy_carrier[SG_TeamIdx(team)];
+	return SG_CombatEnemyCarrierAllowed(team, game.maxclients,
+	    carrier->client, target_client, ClientHasFlag(target) != NULL);
 }
 
 static qboolean Combat_Carrying(edict_t *self)
@@ -1236,10 +1296,185 @@ static int Combat_Survivable(edict_t *self)
 	return self->health + (idx ? self->client->pers.inventory[idx] : 0);
 }
 
+/* A clear muzzle ray is not team safety for a splash weapon: a different
+ * teammate can be beside the wall, floor, or target where the shot lands.
+ * Scan the authoritative client roster so human teammates and SG teammates
+ * receive the same protection. */
+static qboolean Combat_TeamSplashSafe(edict_t *self, float dsafe,
+	const vec3_t impact)
+{
+	int team, client_index;
+
+	if (!self || !self->client || !impact || !isfinite(dsafe) ||
+	    dsafe <= 0.0f || !isfinite(impact[0]) || !isfinite(impact[1]) ||
+	    !isfinite(impact[2]))
+		return false;
+	team = self->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return false;
+	for (client_index = 1; client_index <= game.maxclients; client_index++)
+	{
+		edict_t *mate = &g_edicts[client_index];
+		vec3_t centre, delta;
+
+		if (mate == self || !mate->inuse || !mate->client ||
+		    mate->deadflag || mate->health <= 0 ||
+		    mate->movetype == MOVETYPE_NOCLIP ||
+		    mate->client->ctf.teamnum != team)
+			continue;
+		Combat_Center(mate, centre);
+		VectorSubtract(centre, impact, delta);
+		if (VectorLength(delta) < dsafe)
+			return false;
+	}
+	return true;
+}
+
 /*
- * Would firing weapon w right now hurt the bot? impact is the point the
- * pre-fire trace says the shot stops at -- rule R1's own construction:
- * tr.endpos IS the impact point.
+ * fire_lead does not fire the nominal trace ray.  It chooses an independent
+ * horizontal and vertical offset at 8192 units for every bullet/pellet
+ * (g_weapon.c), while the super shotgun also fires two barrels at +/-5
+ * degrees and the machinegun adds a random +/-0.7 degree yaw kick.  A
+ * teammate can therefore be clear of the nominal ray and still be inside the
+ * weapon's real firing envelope.
+ *
+ * Test each live teammate against a conservative sphere around its linked
+ * bbox.  The rectangle grows exactly as fire_lead's endpoint offsets do.  If
+ * the nominal path reaches water, fire_lead can add a second scatter of twice
+ * the ordinary spread after refraction, so the random component grows to
+ * three times its dry value.  Chaingun's independently randomised muzzle is
+ * supplied as source_pad by Combat_WeaponRay and expands both axes here.
+ */
+static qboolean Combat_TeamHitscanSafe(edict_t *self, int weapon,
+	const vec3_t muzzle, const vec3_t shotdir, float max_forward,
+	float source_pad, qboolean water_path)
+{
+	vec3_t angles, forward, right, up;
+	float hspread, vspread, yaw_angle, scatter_scale;
+	int team, client_index;
+
+	if (!self || !self->client || !g_edicts || !muzzle || !shotdir ||
+	    !isfinite(max_forward) || max_forward <= 0.0f ||
+	    !isfinite(source_pad) || source_pad < 0.0f)
+		return false;
+	switch (weapon)
+	{
+	case SG_W_SHOTGUN:
+		hspread = 500.0f;
+		vspread = 500.0f;
+		yaw_angle = 0.0f;
+		break;
+	case SG_W_SSHOTGUN:
+		hspread = DEFAULT_SHOTGUN_HSPREAD;
+		vspread = DEFAULT_SHOTGUN_VSPREAD;
+		yaw_angle = 5.0f;
+		break;
+	case SG_W_MACHINEGUN:
+		hspread = DEFAULT_BULLET_HSPREAD;
+		vspread = DEFAULT_BULLET_VSPREAD;
+		yaw_angle = 0.7f;
+		break;
+	case SG_W_CHAINGUN:
+		hspread = DEFAULT_BULLET_HSPREAD;
+		vspread = DEFAULT_BULLET_VSPREAD;
+		yaw_angle = 0.0f;
+		break;
+	default:
+		return true;
+	}
+	team = self->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return false;
+	if (!isfinite(muzzle[0]) || !isfinite(muzzle[1]) ||
+	    !isfinite(muzzle[2]) || !isfinite(shotdir[0]) ||
+	    !isfinite(shotdir[1]) || !isfinite(shotdir[2]))
+		return false;
+	vectoangles((float *)shotdir, angles);
+	AngleVectors(angles, forward, right, up);
+	scatter_scale = water_path ? 3.0f : 1.0f;
+
+	for (client_index = 1; client_index <= game.maxclients; client_index++)
+	{
+		edict_t *mate = &g_edicts[client_index];
+		vec3_t centre, delta, half;
+		float along, lateral, vertical, radius;
+		float hreach, vreach, hratio, vratio;
+		int axis;
+
+		if (mate == self || !mate->inuse || !mate->client ||
+		    mate->deadflag || mate->health <= 0 ||
+		    mate->movetype == MOVETYPE_NOCLIP ||
+		    mate->client->ctf.teamnum != team)
+			continue;
+		Combat_Center(mate, centre);
+		for (axis = 0; axis < 3; axis++)
+		{
+			if (!isfinite(mate->absmin[axis]) ||
+			    !isfinite(mate->absmax[axis]) ||
+			    mate->absmin[axis] > mate->absmax[axis])
+				return false;
+			half[axis] = 0.5f * (mate->absmax[axis] - mate->absmin[axis]);
+		}
+		VectorSubtract(centre, muzzle, delta);
+		along = DotProduct(delta, forward);
+		radius = VectorLength(half);
+		if (!isfinite(along) || !isfinite(radius))
+			return false;
+		if (along + radius < 0.0f || along - radius > max_forward)
+			continue;
+		if (along < 0.0f)
+			along = 0.0f;
+		lateral = (float)fabs((double)DotProduct(delta, right));
+		vertical = (float)fabs((double)DotProduct(delta, up));
+		if (water_path)
+		{
+			/* The second scatter is expressed in the first scattered ray's
+			 * basis, so tangent addition -- not merely 1x+2x -- is the
+			 * conservative envelope.  Use its full radial cone on both axes. */
+			float radial = (float)sqrt((double)(hspread * hspread +
+			                                     vspread * vspread)) / 8192.0f;
+			float denom = 1.0f - 2.0f * radial * radial;
+			float water_ratio;
+			float yaw_tangent = (float)tan((double)yaw_angle * M_PI / 180.0);
+
+			if (denom <= 0.0f)
+				return false;
+			water_ratio = scatter_scale * radial / denom;
+			denom = 1.0f - yaw_tangent * water_ratio;
+			if (denom <= 0.0f)
+				return false;
+			hratio = (yaw_tangent + water_ratio) / denom;
+			vratio = hratio;
+		}
+		else
+		{
+			/* Exact dry envelope in the nominal ray basis.  The yawed
+			 * machinegun/SSG ray shortens nominal-forward progress while its
+			 * own right-axis spread grows, hence the shared denominator. */
+			float hscatter = hspread / 8192.0f;
+			float vscatter = vspread / 8192.0f;
+			float yaw_radians = yaw_angle * (float)M_PI / 180.0f;
+			float yaw_sine = (float)sin((double)yaw_radians);
+			float yaw_cosine = (float)cos((double)yaw_radians);
+			float denom = yaw_cosine - yaw_sine * hscatter;
+
+			if (denom <= 0.0f)
+				return false;
+			hratio = (yaw_sine + yaw_cosine * hscatter) / denom;
+			vratio = vscatter / denom;
+		}
+		hreach = radius + source_pad + along * hratio;
+		vreach = radius + source_pad + along * vratio;
+		if (lateral <= hreach && vertical <= vreach)
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Would firing weapon w right now hurt the bot or a live teammate? impact is
+ * the point the pre-fire trace says the shot stops at -- rule R1's own
+ * construction: tr.endpos IS the impact point.
  */
 static qboolean Combat_SplashSafe(edict_t *self, int w, vec3_t impact)
 {
@@ -1262,7 +1497,9 @@ static qboolean Combat_SplashSafe(edict_t *self, int w, vec3_t impact)
 
 	Combat_Center(self, me);
 	VectorSubtract(impact, me, v);
-	return VectorLength(v) >= dsafe;
+	if (VectorLength(v) < dsafe)
+		return false;
+	return Combat_TeamSplashSafe(self, dsafe, impact);
 }
 
 /* ------------------------------------------------------------- the ladders
@@ -1444,12 +1681,10 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 		 * commits to; mode 2 refuses it and lets the ladder walk pick a
 		 * real weapon the moment one is stocked.
 		 */
-		if (sg_cv.wcommit->value >= 2.0f &&
-		    held == SG_W_BLASTER)
-			held = -1;
-
-		if (held >= 0 && Combat_Stocked(self, held) &&
-		    Combat_BandAllows(self, held, dist))
+		if (held >= 0 && SG_CombatCommitCandidateAllowed(
+		        sg_cv.wcommit->value, held == SG_W_BLASTER,
+		        Combat_Stocked(self, held),
+		        Combat_BandAllows(self, held, dist)))
 		{
 			int i;
 
@@ -1654,8 +1889,10 @@ static float Combat_WantRange(edict_t *who, int w)
 	 * last word, so a short-preferring bot cannot be talked inside its own
 	 * rocket and a long-preferring one cannot carry a shotgun to a rail
 	 * fight. +/-15%, so it moves the band's centre and never the band.
-	 * `who` may be a human here -- Combat_Duel prices the FOE's preference
-	 * through this same function -- and a human has no row, so this is 1.0.
+	 * `who` may be a human here -- Cbt_Track snapshots the visible foe's
+	 * preference through this same function -- and a human has no row, so this
+	 * is 1.0. The snapshot is retained after sight is lost; this function is
+	 * not called on a hidden opponent.
 	 */
 	want *= SG_PersonaRangeBias(who);
 
@@ -2012,7 +2249,7 @@ static int Combat_Band(sg_combat_state_t *st, float d)
  * removed, so the error is purely lateral and its magnitude maps cleanly onto
  * an angle (an offset of m added to a unit aim vector is an angle of atan(m)).
  */
-static void Combat_SamplePerp(vec3_t dir, vec3_t out)
+static void Combat_SamplePerp(sg_combat_state_t *st, vec3_t dir, vec3_t out)
 {
 	vec3_t	v;
 	float	d, len;
@@ -2020,9 +2257,9 @@ static void Combat_SamplePerp(vec3_t dir, vec3_t out)
 
 	for (tries = 0; tries < 4; tries++)
 	{
-		v[0] = crandom();
-		v[1] = crandom();
-		v[2] = crandom();
+		v[0] = Combat_RandomSigned(st);
+		v[1] = Combat_RandomSigned(st);
+		v[2] = Combat_RandomSigned(st);
 
 		d = DotProduct(v, dir);
 		VectorMA(v, -d, dir, v);
@@ -2041,7 +2278,7 @@ static void Combat_SamplePerp(vec3_t dir, vec3_t out)
 
 static void Combat_SampleError(sg_combat_state_t *st, vec3_t dir)
 {
-	Combat_SamplePerp(dir, st->err);
+	Combat_SamplePerp(st, dir, st->err);
 }
 
 /* ----------------------------------------------------------- aim texture */
@@ -2327,7 +2564,7 @@ static void Combat_TexWander(sg_combat_state_t *st, vec3_t dir)
 	if (w > 1.0f)
 		w = 1.0f;
 
-	Combat_SamplePerp(dir, kick);
+	Combat_SamplePerp(st, dir, kick);
 	VectorScale(st->err, 1.0f - w, st->err);
 	VectorMA(st->err, w, kick, st->err);
 
@@ -2627,16 +2864,26 @@ static qboolean Combat_WeaponRay(edict_t *self, int weapon, usercmd_t *cmd,
 	return true;
 }
 
+typedef enum
+{
+	COMBAT_RAY_INVALID = 0,
+	COMBAT_RAY_MISS,
+	COMBAT_RAY_HIT
+} combat_ray_result_t;
+
 /*
  * The muzzle moves with the packed view.  Three constraint/repack passes plus
  * a bounded final correction close that small fixed point, then the caller
  * receives the actual ray it will trace and fire.
  */
-static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
-                                         int weapon, vec3_t lead,
-                                         sg_combat_state_t *st, vec3_t aim,
-                                         usercmd_t *cmd, vec3_t muzzle,
-                                         vec3_t shotdir, float *source_pad)
+static combat_ray_result_t Combat_FinalizeMuzzleAim(edict_t *self,
+                                                    edict_t *enemy, int weapon,
+                                                    vec3_t lead,
+                                                    sg_combat_state_t *st,
+                                                    vec3_t aim, usercmd_t *cmd,
+                                                    vec3_t muzzle,
+                                                    vec3_t shotdir,
+                                                    float *source_pad)
 {
 	int	pass;
 	qboolean final_hit;
@@ -2645,7 +2892,7 @@ static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
 	{
 		Combat_WriteShotCmd(self, weapon, aim, cmd);
 		if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
-			return false;
+			return COMBAT_RAY_INVALID;
 		Combat_ConstrainAim(enemy, weapon, muzzle, lead, st, shotdir,
 		                    *source_pad);
 		VectorCopy(shotdir, aim);
@@ -2653,11 +2900,11 @@ static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
 
 	Combat_WriteShotCmd(self, weapon, aim, cmd);
 	if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
-		return false;
+		return COMBAT_RAY_INVALID;
 	final_hit = Combat_RayHitsMuzzleEnvelope(muzzle, shotdir, enemy, lead,
 	                                         *source_pad);
 	if (final_hit)
-		return true;
+		return COMBAT_RAY_HIT;
 
 	/* Quantisation can move an edge ray by one short.  Spend one final bounded
 	 * correction rather than accepting a view ray that the physical shot misses. */
@@ -2666,9 +2913,10 @@ static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
 	VectorCopy(shotdir, aim);
 	Combat_WriteShotCmd(self, weapon, aim, cmd);
 	if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
-		return false;
+		return COMBAT_RAY_INVALID;
 	return Combat_RayHitsMuzzleEnvelope(muzzle, shotdir, enemy, lead,
-	                                    *source_pad);
+	                                    *source_pad)
+	       ? COMBAT_RAY_HIT : COMBAT_RAY_MISS;
 }
 
 /* Aim a physical non-ballistic ray at an intentional point (carrier splash). */
@@ -3096,37 +3344,52 @@ static float Worth_Armor(edict_t *e)
  * table can move. A bot spawns with the blaster and the hook and nothing else
  * (p_client.c:1141-1151), so tier 1 is where every bot starts every life.
  */
+static int Weapon_IndexTier(int w)
+{
+	switch (w)
+	{
+	case SG_W_ROCKETLAUNCHER:
+	case SG_W_CHAINGUN:
+		return 5;
+	case SG_W_SSHOTGUN:
+	case SG_W_RAILGUN:
+	case SG_W_HYPERBLASTER:
+		return 4;
+	case SG_W_MACHINEGUN:
+	case SG_W_GRENADELAUNCHER:
+	case SG_W_PLASMA:
+		return 3;
+	case SG_W_SHOTGUN:
+		return 2;
+	case SG_W_BLASTER:
+		return 1;
+	default:
+		/* The BFG is situational combat equipment, not a rung in the
+		 * ordinary acquisition ladder (WEAPONS.md 2.3). */
+		return 0;
+	}
+}
+
 static int Weapon_Tier(edict_t *e)
 {
-	if (Combat_Avail(e, SG_W_ROCKETLAUNCHER) || Combat_Avail(e, SG_W_CHAINGUN))
-		return 5;
-	if (Combat_Avail(e, SG_W_SSHOTGUN) || Combat_Avail(e, SG_W_RAILGUN) ||
-	    Combat_Avail(e, SG_W_HYPERBLASTER))
-		return 4;
-	if (Combat_Avail(e, SG_W_MACHINEGUN) ||
-	    Combat_Avail(e, SG_W_GRENADELAUNCHER) || Combat_Avail(e, SG_W_PLASMA))
-		return 3;
-	if (Combat_Avail(e, SG_W_SHOTGUN))
-		return 2;
-	return 1;
+	int best = 1;
+	int w;
+
+	for (w = SG_W_SHOTGUN; w < SG_NUM_WEAPONS; w++)
+		if (Combat_Avail(e, w) && Weapon_IndexTier(w) > best)
+			best = Weapon_IndexTier(w);
+	return best;
 }
 
 static int Weapon_StockedTier(edict_t *e)
 {
-	if (Combat_Stocked(e, SG_W_ROCKETLAUNCHER) ||
-	    Combat_Stocked(e, SG_W_CHAINGUN))
-		return 5;
-	if (Combat_Stocked(e, SG_W_SSHOTGUN) ||
-	    Combat_Stocked(e, SG_W_RAILGUN) ||
-	    Combat_Stocked(e, SG_W_HYPERBLASTER))
-		return 4;
-	if (Combat_Stocked(e, SG_W_MACHINEGUN) ||
-	    Combat_Stocked(e, SG_W_GRENADELAUNCHER) ||
-	    Combat_Stocked(e, SG_W_PLASMA))
-		return 3;
-	if (Combat_Stocked(e, SG_W_SHOTGUN))
-		return 2;
-	return 1;
+	int best = 1;
+	int w;
+
+	for (w = SG_W_SHOTGUN; w < SG_NUM_WEAPONS; w++)
+		if (Combat_Stocked(e, w) && Weapon_IndexTier(w) > best)
+			best = Weapon_IndexTier(w);
+	return best;
 }
 
 qboolean SG_CombatWeaponState(edict_t *self,
@@ -3149,6 +3412,33 @@ qboolean SG_CombatWeaponState(edict_t *self,
 			out->nonblaster_stocked = true;
 	}
 	return true;
+}
+
+int SG_CombatHeldAmmoTag(edict_t *self)
+{
+	int held;
+
+	if (!self || !self->client)
+		return -1;
+	Combat_CacheItems();
+	held = Combat_Held(self);
+	if (held < 0 || held >= SG_NUM_WEAPONS || sg_wammo[held] < 0 ||
+	    sg_wammo[held] >= game.num_items)
+		return -1;
+	return itemlist[sg_wammo[held]].tag;
+}
+
+int SG_CombatWeaponPickupTier(const edict_t *item)
+{
+	int w;
+
+	if (!item || !item->item)
+		return 0;
+	Combat_CacheItems();
+	for (w = SG_W_BLASTER; w < SG_NUM_WEAPONS; w++)
+		if (item->item == sg_witem[w])
+			return Weapon_IndexTier(w);
+	return 0;
 }
 
 /* 2.3: tier 1 -> 1057 ms of detour, tier 5 -> 199 ms */
@@ -3204,8 +3494,6 @@ static float Worth_Ammo(edict_t *e)
  * pedestal is worse than no field; arriving four seconds early to camp a 60 s
  * item is correct. CACO's belief carries both facts (sg_local.h:186-198).
  */
-#define SG_QUAD_CAMP_LEAD	4.0f
-
 static float Worth_Quad(edict_t *e)
 {
 	int i, ti;
@@ -3235,9 +3523,8 @@ static float Worth_Quad(edict_t *e)
 		if (strcmp(it->classname, "item_quad") != 0)
 			continue;
 
-		if (!b->believed_up &&
-		    b->believed_respawn_time - level.time > SG_QUAD_CAMP_LEAD)
-			continue;			/* an empty pedestal for longer than Q1 allows */
+		if (!Caco_ItemBelievedRouteableFor(e->client->ctf.teamnum, it))
+			continue; /* neither standing nor this exact pad's earned lead */
 
 		/* 2.3: the weapon tier is what makes a quad worth contesting -- a quad
 		 * chaingun is 720 dps, a quad blaster is 120 (1.21's x4 on damage) */
@@ -3252,21 +3539,49 @@ static float Worth_Quad(edict_t *e)
  * multipliers are 2.3's, from the measured effects in 1.22.
  *
  * The class weight is a single scalar while the runes are four different
- * items, so the multiplier taken is the best one CACO believes is standing.
- * That is a real approximation and is recorded as one: the per-item fields
- * (sg_fields.c:130-133) could price each rune exactly, but the weight vector
- * the surface reads has one slot per class (sg_local.h:153).
+ * items, so this cache records the best one CACO believes is standing. Route
+ * pricing later converts that scalar back to the exact entity's proportion
+ * with SG_RuneRouteWorth; the role and live threat multipliers remain intact.
  */
+static float Rune_EntityWorth(edict_t *e, edict_t *rune)
+{
+	float mult;
+	int tier;
+
+	if (!e || !e->client || !rune || !rune->inuse || e->client->rune)
+		return 0.0f;
+	tier = Weapon_Tier(e);
+	switch (rune->runetype)
+	{
+	case RUNE_HASTE:
+		/* Exactly 2x rate of fire, with the same 2x ammunition drain. */
+		mult = (tier <= 2) ? 1.20f : 1.60f;
+		break;
+	case RUNE_DAMAGE:
+		mult = 1.45f;		/* x1.75 outgoing, g_runes.c */
+		break;
+	case RUNE_RESIST:
+		mult = 1.45f;		/* /1.75 incoming, g_runes.c */
+		break;
+	case RUNE_REGEN:
+		mult = 1.20f;		/* 3.33 hp/s, g_runes.c */
+		break;
+	case RUNE_VAMP:
+		mult = 1.00f;		/* half landed player damage heals, g_combat.c */
+		break;
+	default:
+		return 0.0f;
+	}
+	return Combat_Clamp(0.55f * mult);
+}
+
 static float Worth_Rune(edict_t *e)
 {
-	float	best = 0.0f;
-	int		tier;
-	int		i, ti;
+	float best = 0.0f;
+	int i, ti;
 
-	if (e->client->rune)
+	if (!e || !e->client || e->client->rune)
 		return 0.0f;
-
-	tier = Weapon_Tier(e);
 
 	/*
 	 * Bots on the other team know where runes are only when they see them,
@@ -3281,7 +3596,7 @@ static float Worth_Rune(edict_t *e)
 	{
 		sg_belief_item_t	*b = &sg_caco_items[ti][i];
 		edict_t				*it;
-		float				mult;
+		float				worth;
 
 		if (b->cls != SG_BI_RUNE || !b->believed_up)
 			continue;
@@ -3289,37 +3604,24 @@ static float Worth_Rune(edict_t *e)
 		if (!it->inuse)
 			continue;
 
-		switch (it->runetype)
-		{
-		case RUNE_HASTE:
-			/*
-			 * Exactly 2x rate of fire: RuneWeaponThinkHook calls weaponthink
-			 * a second time in the same frame (g_runes.c:800-818). RU1 -- it
-			 * doubles the ammo drain with it, so doubling a blaster is 60 dps
-			 * and not worth the budget.
-			 */
-			mult = (tier <= 2) ? 1.20f : 1.60f;
-			break;
-		case RUNE_DAMAGE:
-			mult = 1.45f;		/* x1.75 outgoing, g_runes.c:716-728 */
-			break;
-		case RUNE_RESIST:
-			mult = 1.45f;		/* /1.75 incoming, g_runes.c:730-743 */
-			break;
-		case RUNE_REGEN:
-			mult = 1.20f;		/* 3.33 hp/s, g_runes.c:745-798 */
-			break;
-		default:
-			mult = 1.00f;
-			break;
-		}
-		if (mult > best)
-			best = mult;
+		worth = Rune_EntityWorth(e, it);
+		if (worth > best)
+			best = worth;
 	}
+	return best;
+}
 
-	if (best <= 0.0f)
+float SG_RuneRouteWorth(edict_t *self, edict_t *rune, float class_worth)
+{
+	float best, exact;
+
+	if (class_worth <= 0.0f)
 		return 0.0f;
-	return Combat_Clamp(0.55f * best);	/* 2.3: 566 ms before type scaling */
+	best = Worth_Rune(self);
+	exact = Rune_EntityWorth(self, rune);
+	if (best <= 0.0f || exact <= 0.0f)
+		return 0.0f;
+	return class_worth * exact / best;
 }
 
 void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
@@ -3400,20 +3702,41 @@ void SG_CombatAlert(edict_t *self, float expect_range)
  * lead wants the enemy's ENTITY -- velocity and box -- not a seed
  * belief). NULL unless this bot re-sighted its enemy this frame-ish.
  */
-edict_t *SG_CombatLiveEnemy(edict_t *self)
+static edict_t *Combat_EnemyIdentityCurrent(edict_t *self, int enemy_index,
+                                            unsigned long enemy_ctfid)
 {
-	sg_combat_state_t *st = Combat_ClientState(self);
 	edict_t *en;
+	int self_team;
 
-	if (!st)
+	if (!self || !self->inuse || !self->client ||
+	    self->movetype == MOVETYPE_NOCLIP)
 		return NULL;
-	if (st->enemy <= 0)
+	if (enemy_index <= 0 || enemy_index > game.maxclients ||
+	    enemy_index >= globals.num_edicts)
 		return NULL;
-	en = g_edicts + st->enemy;
-	if (!en->inuse || !en->client || en->deadflag ||
-	    en->health <= 0)
+	en = g_edicts + enemy_index;
+	if (!en->client)
+		return NULL;
+	self_team = self->client->ctf.teamnum;
+	if (!SG_CombatLiveEnemyIdentityAllowed(self_team,
+	    en->client->ctf.teamnum, game.maxclients, globals.num_edicts,
+	    enemy_index, enemy_ctfid, en->client->ctf.ctfid, en->inuse,
+	    true, !en->deadflag && en->health > 0,
+	    en->movetype == MOVETYPE_NOCLIP))
 		return NULL;
 	return en;
+}
+
+edict_t *SG_CombatLiveEnemy(edict_t *self)
+{
+	sg_combat_state_t *st;
+
+	if (!self || !self->inuse || !self->client)
+		return NULL;
+	st = Combat_ClientState(self);
+	if (!st)
+		return NULL;
+	return Combat_EnemyIdentityCurrent(self, st->enemy, st->enemy_ctfid);
 }
 
 void SG_CombatPursuit(edict_t *self, qboolean allowed)
@@ -3431,7 +3754,6 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
                        float *exposure_w)
 {
 	sg_combat_state_t	*st;
-	edict_t				*foe;
 	vec3_t				org, eye, d;
 	float				dist, want;
 	int					held, team, s;
@@ -3450,6 +3772,9 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 		return false;
 
 	if (st->enemy_last <= 0 || level.time - st->enemy_time > SG_DUEL_FRESH)
+		return false;
+	if (!Combat_EnemyIdentityCurrent(self, st->enemy_last,
+	                                 st->enemy_last_ctfid))
 		return false;
 	VectorCopy(st->enemy_org, org);
 
@@ -3504,12 +3829,9 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	 * back through the same R1/R2d/F6 gates, which is why a super shotgun
 	 * cannot be talked out past 256 by a railgun standing at 690.
 	 */
-	foe = (st->enemy_last > 0 && st->enemy_last < globals.num_edicts)
-	      ? g_edicts + st->enemy_last : NULL;
-	if (foe && foe->inuse && foe->client &&
-	    st->enemy_weapon >= 0 && st->enemy_weapon < SG_NUM_WEAPONS)
+	if (st->enemy_weapon >= 0 && st->enemy_weapon < SG_NUM_WEAPONS)
 	{
-		float theirs = Combat_WantRange(foe, st->enemy_weapon);
+		float theirs = st->enemy_want_range;
 		float dsafe = Combat_DSafe(self, held);
 		float cap = sg_weapons[held].range_cap;
 
@@ -3666,6 +3988,13 @@ static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
 
 	if (!st->pursue || level.time >= st->lost_until)
 		return false;
+	if (!Combat_EnemyIdentityCurrent(self, st->lost_client + 1,
+	                                 st->lost_ctfid))
+	{
+		st->lost_until = 0.0f;
+		st->lost_have = false;
+		return false;
+	}
 
 	/*
 	 * The contact-band exception. A super shotgun, or anything else whose
@@ -3757,7 +4086,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 					st->tap_until = level.time +
 					    sg_cv.tapvar->value *
 					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
-					    (0.4f + 1.2f * random());
+					    (0.4f + 1.2f * Combat_RandomUnit(st));
 					if (sg_cv.debug->value)
 						sg_host.dprint("TAPDBG %s w=%d delay=%.2f\n",
 						           self->client->pers.netname, hw,
@@ -3816,7 +4145,8 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 		base = st->win_fire ? SG_FIRE_ON
 		                    : Combat_SkillLerp(skill, SG_FIRE_OFF_S0,
 		                                       SG_FIRE_OFF_S4);
-		st->win_end = level.time + base * (1.0f + SG_FIRE_JITTER * crandom());
+		st->win_end = level.time + base *
+		    (1.0f + SG_FIRE_JITTER * Combat_RandomSigned(st));
 	}
 
 	if (!st->win_fire)
@@ -3902,6 +4232,7 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 		if (seed >= 0)
 		{
 			st->lost_client = st->enemy - 1;
+			st->lost_ctfid = st->enemy_ctfid;
 			st->lost_seed = seed;
 			st->lost_time = level.time;
 			st->lost_until = level.time + SG_LOST_HOLD;
@@ -3911,6 +4242,7 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 	}
 
 	st->enemy = 0;
+	st->enemy_ctfid = 0;
 	st->ws_panic = false;	/* the exception belongs to a fight in
 	                         * progress; it does not outlive one */
 
@@ -3993,9 +4325,11 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 	/* target continuity: a new target restarts the settle clock, draws a
 	 * fresh tremor and snaps the range band. Holding the same one lets the
 	 * error decay and the band hysteresis do its work. */
-	if (st->enemy != (int)(enemy - g_edicts))
+	if (st->enemy != (int)(enemy - g_edicts) ||
+	    st->enemy_ctfid != enemy->client->ctf.ctfid)
 	{
 		st->enemy = (int)(enemy - g_edicts);
+		st->enemy_ctfid = enemy->client->ctf.ctfid;
 		st->since = level.time;
 		st->acquired_at = level.time;	/* the reaction clock starts here */
 		st->err_next = 0.0f;
@@ -4061,9 +4395,12 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 	 * bot has no business knowing. Anything the eye did not see stays unwritten.
 	 */
 	st->enemy_last = st->enemy;
+	st->enemy_last_ctfid = st->enemy_ctfid;
 	VectorCopy(mid, st->enemy_org);
 	st->enemy_time = level.time;
 	st->enemy_weapon = Combat_Held(enemy);
+	st->enemy_want_range = (st->enemy_weapon >= 0)
+	    ? Combat_WantRange(enemy, st->enemy_weapon) : 0.0f;
 
 	/* re-sight clears the corner hold outright: there is nothing left to
 	 * predict about a target that is standing in front of you */
@@ -4148,6 +4485,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 {
 	sg_combat_state_t	*st;
 	edict_t				*enemy;
+	edict_t				*incumbent;
 	vec3_t				eye, forward, mid, lead, aim, endp, impact;
 	vec3_t				muzzle, shotdir;
 	vec3_t				threat;
@@ -4156,8 +4494,9 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	float				yaw, pitch, skill, settle;
 	float				residual, span, shape;
 	trace_t				tr;
-	int					band, inhand;
+	int					band, inhand, incumbent_index;
 	qboolean			clear_shot, carrier, ballistic, vel_stable, ray_hits;
+	combat_ray_result_t	ray_result;
 	qboolean			rattled, textured;
 
 	if (out_engaged)
@@ -4190,8 +4529,21 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	                             Combat_SkillLerp(skill, SG_THREAT_S0,
 	                                              SG_THREAT_S4), threat);
 
+	/* A target slot only earns hysteresis and a lost-corner continuation while
+	 * the same opposing client life still occupies it.  Death, respawn, team
+	 * change and slot reuse terminate the retained fight before the scan; a
+	 * new occupant must win selection on its own evidence. */
+	incumbent = SG_CombatLiveEnemy(self);
+	if (!incumbent && st->enemy > 0)
+	{
+		st->enemy = 0;
+		st->enemy_ctfid = 0;
+	}
+	incumbent_index = incumbent ? (int)(incumbent - g_edicts) : -1;
+
 	sg_cbt_why[7]++;                        /* frames that got this far */
-	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL, true);
+	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL,
+	    incumbent_index, true);
 	if (enemy)
 		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)
@@ -4254,7 +4606,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		                       * M_PI / 180.0);
 		vec3_t perp;
 
-		Combat_SamplePerp(aim, perp);
+		Combat_SamplePerp(st, aim, perp);
 		VectorMA(lead, jit * len, perp, lead);
 
 		VectorSubtract(lead, eye, aim);
@@ -4325,7 +4677,8 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		else if (level.time >= st->err_next)
 		{
 			Combat_SampleError(st, aim);
-			st->err_next = level.time + 0.25f + 0.25f * random();
+			st->err_next = level.time + 0.25f +
+			    0.25f * Combat_RandomUnit(st);
 		}
 
 	/*
@@ -4391,9 +4744,16 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	}
 	else
 	{
-		ray_hits = Combat_FinalizeMuzzleAim(self, enemy, inhand, lead, st,
+		ray_result = Combat_FinalizeMuzzleAim(self, enemy, inhand, lead, st,
 		                                     aim, cmd, muzzle, shotdir,
 		                                     &source_pad);
+		/* A constrained physical miss still supplies the real muzzle and ray
+		 * for the wall/teammate veto below.  An unsupported or otherwise
+		 * invalid weapon supplies neither; never trace or trigger from
+		 * uninitialised physical state. */
+		if (ray_result == COMBAT_RAY_INVALID)
+			return;
+		ray_hits = (ray_result == COMBAT_RAY_HIT);
 	}
 
 	/*
@@ -4505,6 +4865,27 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		}
 
 		/* ----------------------------------------------------- the vetoes */
+
+		/* The physical bullet/pellet rays fan out after the nominal trace.
+		 * Refuse a spread hitscan shot if any live teammate occupies that
+		 * envelope before the target range. */
+		if (sg_weapons[inhand].speed <= 0.0f)
+		{
+			qboolean water_path;
+			trace_t water_trace;
+
+			water_path = (sg_host.pointcontents(muzzle) & MASK_WATER) != 0;
+			water_trace = sg_host.trace(muzzle, NULL, NULL, endp, self,
+			                            MASK_WATER);
+			if (water_trace.fraction < 1.0f)
+				water_path = true;
+			if (!Combat_TeamHitscanSafe(self, inhand, muzzle, shotdir,
+			                            trace_len, source_pad, water_path))
+			{
+				sg_cbt_why[1]++;
+				return;
+			}
+		}
 
 		/* rule R1: never fire a splash weapon whose impact point is inside its
 		 * own d_safe of the bot's bbox centre. The cliff is hard, not a taper. */
@@ -4641,7 +5022,7 @@ int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
 	usercmd_t	cmd;
 	vec3_t		aim, lead_copy;
 	float		saved_time = level.time;
-	qboolean	ok;
+	combat_ray_result_t result;
 
 	memset(&self, 0, sizeof(self));
 	memset(&enemy, 0, sizeof(enemy));
@@ -4662,10 +5043,11 @@ int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
 	VectorCopy(lead, lead_copy);
 	st.since = 0.0f;
 	level.time = elapsed;
-	ok = Combat_FinalizeMuzzleAim(&self, &enemy, weapon, lead_copy, &st, aim,
-	                              &cmd, muzzle_out, dir_out, source_pad_out);
+	result = Combat_FinalizeMuzzleAim(&self, &enemy, weapon, lead_copy, &st,
+	                                 aim, &cmd, muzzle_out, dir_out,
+	                                 source_pad_out);
 	level.time = saved_time;
-	return ok ? 1 : 0;
+	return (int)result;
 }
 
 int SG_CombatAimTestWeaponRay(int weapon, int hand, int machinegun_shots,
@@ -4701,5 +5083,39 @@ int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
 {
 	return Combat_TraceClears(weapon, enemy_hit != 0, unobstructed != 0,
 	                          teammate_hit != 0) ? 1 : 0;
+}
+
+int SG_CombatAimTestTeamSplashSafe(edict_t *self, float safe_radius,
+                                   const vec3_t impact)
+{
+	return Combat_TeamSplashSafe(self, safe_radius, impact) ? 1 : 0;
+}
+
+int SG_CombatAimTestTeamHitscanSafe(edict_t *self, int weapon,
+                                    const vec3_t muzzle,
+                                    const vec3_t shotdir, float max_forward,
+                                    float source_pad, int water_path)
+{
+	return Combat_TeamHitscanSafe(self, weapon, muzzle, shotdir, max_forward,
+	                              source_pad, water_path != 0) ? 1 : 0;
+}
+
+uint32_t SG_CombatAimTestRandom(unsigned identity, unsigned steps)
+{
+	sg_combat_state_t st;
+	uint32_t value = 0;
+
+	Combat_ResetState(&st, identity);
+	while (steps-- > 0)
+		value = Combat_RandomNext(&st);
+	return value ? value : st.random_state;
+}
+
+uint32_t SG_CombatAimTestClientRandom(int client_index,
+                                      uint64_t client_life,
+                                      unsigned steps)
+{
+	return SG_CombatAimTestRandom(
+	    Combat_RandomIdentity(client_index, (unsigned long)client_life), steps);
 }
 #endif

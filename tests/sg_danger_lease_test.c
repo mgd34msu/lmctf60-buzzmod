@@ -506,14 +506,19 @@ static void TestForkContentionAndCrashRelease(void)
 		sg_danger_lease_result_t child_result;
 		char child_path[TEST_PATH_BYTES];
 		char child_ready;
+		ssize_t child_write;
 
 		(void)close(ready_pipe[0]);
 		child_result = SG_DangerLeaseAcquire(&owner, destination,
 			child_path, sizeof(child_path), NULL);
 		child_ready = child_result.status == SG_DANGER_LEASE_OK &&
 			SG_DangerLeaseHeld(&owner) ? '1' : '0';
-		(void)write(ready_pipe[1], &child_ready, 1);
+		do
+			child_write = write(ready_pipe[1], &child_ready, 1);
+		while (child_write < 0 && errno == EINTR);
 		(void)close(ready_pipe[1]);
+		if (child_write != 1)
+			_exit(3);
 		if (child_ready != '1')
 			_exit(2);
 		for (;;)

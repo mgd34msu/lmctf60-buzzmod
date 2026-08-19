@@ -2925,9 +2925,18 @@ static qboolean SG_OracleDoorStepSafe(edict_t *ent, edict_t *trigger,
 	sg_phantom_t ph;
 	usercmd_t step_cmd;
 	qboolean safe = false;
+	int controller_kind;
 	int axis;
 
+	/* Only a current serialized binding distinguishes a DIRECT controller.
+	 * The legacy unbound wrapper has no authenticated controller identity and
+	 * therefore retains the historical dry-only AUTO law. */
+	controller_kind = binding && binding->plan
+	    ? binding->plan->controller_kind
+	    : SG_MECHANISM_CONTROLLER_AUTO_DOOR;
 	if (!ent || !ent->inuse || !ent->client || !trigger || !cmd ||
+	    !SG_OracleDoorEgressWaterSafe(controller_kind, ent->waterlevel,
+	        ent->watertype) ||
 	    (binding && (!SG_OracleBoundDoorBindingCurrent(binding) ||
 	                 binding->entry_entity != trigger)) ||
 	    !(binding ? SG_BoundDoorOutsideSweep(binding, ent->s.origin) :
@@ -2964,7 +2973,8 @@ static qboolean SG_OracleDoorStepSafe(edict_t *ent, edict_t *trigger,
 		step_cmd = *cmd;
 		SG_OracleRun(&ph, &step_cmd, 1);
 		safe = !sg_oracle_contaminated && ph.groundentity &&
-		       ph.waterlevel == 0 &&
+		       SG_OracleDoorEgressWaterSafe(controller_kind, ph.waterlevel,
+		           ph.watertype) &&
 		       (binding ? SG_BoundDoorOutsideSweep(binding, ph.origin) :
 		                  SG_DeclaredDoorOutsideSweep(trigger, ph.origin));
 	}
@@ -5390,17 +5400,16 @@ qboolean SG_OracleDoorApproachContactObserved(qboolean button_controller,
 
 qboolean SG_OracleDoorShallowWadeSafe(int waterlevel, int watertype)
 {
-	return waterlevel >= 0 && waterlevel < 2 &&
-	       !(watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
+	return SG_DoorApproachWaterSafe(waterlevel, watertype) ? true : false;
 }
 
 qboolean SG_OracleDoorEgressWaterSafe(int controller_kind, int waterlevel,
 	int watertype)
 {
-	return controller_kind ==
-	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
-	    ? SG_OracleDoorShallowWadeSafe(waterlevel, watertype)
-	    : waterlevel == 0;
+	if (controller_kind == SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR)
+		return SG_OracleDoorShallowWadeSafe(waterlevel, watertype);
+	return waterlevel == 0 &&
+	    !(watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
 }
 
 static qboolean SG_OracleDoorApproachStaticSupport(const sg_phantom_t *ph)
@@ -5422,6 +5431,7 @@ static void SG_OracleDoorApproachObservation(const sg_phantom_t *ph,
 	observation->grounded = ph->groundentity ? 1 : 0;
 	observation->static_support =
 	    SG_OracleDoorApproachStaticSupport(ph) ? 1 : 0;
+	observation->watertype = ph->watertype;
 	observation->waterlevel = ph->waterlevel;
 	observation->hazardous_liquid =
 	    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
@@ -5459,6 +5469,7 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	qboolean triggered = false;
 	qboolean button_controller;
 	qboolean direct_controller;
+	int controller_kind;
 	sg_button_support_mode_t first_support = SG_BUTTON_SUPPORT_NONE;
 	sg_door_approach_state_t direct_state;
 	sg_door_approach_observation_t direct_observation;
@@ -5473,6 +5484,11 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	    ? binding->plan && binding->plan->controller_kind ==
 	          SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
 	    : !button_controller && SG_DeclaredDoorDirectActivatorSafe(trigger);
+	controller_kind = button_controller
+	    ? SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    : (direct_controller
+	          ? SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
+	          : SG_MECHANISM_CONTROLLER_AUTO_DOOR);
 	if (support_mode)
 		*support_mode = SG_BUTTON_SUPPORT_NONE;
 	if (!trigger || !arrival_ms || !touch_ms ||
@@ -5505,7 +5521,9 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	cmd.msec = 0;
 	if (!SG_OracleRunWorld(&ph, &cmd, 1) || sg_oracle_declared_touched ||
 	    (binding && SG_BoundDoorEntryContactMatches(binding, ph.origin)) ||
-	    !ph.groundentity || ph.waterlevel != 0)
+	    !ph.groundentity ||
+	    !SG_OracleDoorEgressWaterSafe(controller_kind, ph.waterlevel,
+	        ph.watertype))
 		goto done;
 	memset(&direct_state, 0, sizeof(direct_state));
 	memset(&direct_result, 0, sizeof(direct_result));
@@ -5575,7 +5593,9 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 		     (triggered && horiz > 2.0f)) && cmd.forwardmove == 0)
 			cmd.forwardmove = 40;
 		if (!SG_OracleRunWorld(&ph, &cmd, 1) ||
-		    (!direct_controller && !ph.groundentity) || ph.waterlevel != 0)
+		    (!direct_controller && !ph.groundentity) ||
+		    !SG_OracleDoorEgressWaterSafe(controller_kind, ph.waterlevel,
+		        ph.watertype))
 			goto done;
 		if (direct_controller)
 		{
@@ -5677,7 +5697,8 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 0;
 		if (!SG_OracleRunWorld(&exact, &cmd, 1) || !exact.groundentity ||
-		    exact.waterlevel != 0 ||
+		    !SG_OracleDoorEgressWaterSafe(controller_kind,
+		        exact.waterlevel, exact.watertype) ||
 		    !(binding ? SG_BoundDoorOutsideSweep(binding, exact.origin) :
 		                 SG_DeclaredDoorOutsideSweep(trigger, exact.origin)))
 			goto done;

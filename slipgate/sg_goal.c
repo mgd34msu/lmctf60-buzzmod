@@ -18,6 +18,11 @@
 #include "slipgate/sg_weights.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_item_route.h"
+#include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_rune_handoff_policy.h"
+#include "slipgate/sg_escape_random.h"
+#include "slipgate/sg_strike.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
@@ -108,6 +113,59 @@ SG_GOAL_PRIVATE int Intercept_HoldSeed(int team, int fallback)
 
 #undef SG_GOAL_PRIVATE
 
+/* A rally relocation is still navigation.  It may stand on the current seed
+ * or walk one proved ordinary leg; it may not point the command directly at a
+ * merely nearby seed on the other side of a wall, drop, or mechanism. */
+#ifdef SG_GOAL_TEST
+#define SG_GOAL_PRIVATE
+#else
+#define SG_GOAL_PRIVATE static
+#endif
+
+SG_GOAL_PRIVATE int Rally_CoverSeed(const rune_t *r, int from)
+{
+	int best = -1;
+	float best_distance = 0.0f;
+	int link;
+
+	if (!r || !r->seeds || !r->links || !r->first_link || !r->next_link ||
+	    from < 0 || from >= r->hdr.num_seeds)
+		return -1;
+	if (r->seeds[from].area_hint <= 60)
+		return from;
+
+	for (link = r->first_link[from]; link >= 0; link = r->next_link[link])
+	{
+		const rune_link_t *candidate;
+		vec3_t delta;
+		float distance;
+		int to;
+
+		if (link >= r->hdr.num_links)
+			return -1;
+		candidate = &r->links[link];
+		to = candidate->to;
+		if (candidate->from != from || candidate->action != RL_RUN ||
+		    to < 0 || to >= r->hdr.num_seeds ||
+		    r->seeds[to].area_hint > 60)
+			continue;
+		VectorSubtract(r->seeds[to].origin, r->seeds[from].origin, delta);
+		distance = delta[0] * delta[0] + delta[1] * delta[1] +
+		    delta[2] * delta[2] * 4.0f;
+		if (distance >= 800.0f * 800.0f)
+			continue;
+		if (best < 0 || distance < best_distance ||
+		    (distance == best_distance && to < best))
+		{
+			best = to;
+			best_distance = distance;
+		}
+	}
+	return best;
+}
+
+#undef SG_GOAL_PRIVATE
+
 /* ----------------------------------------------------------------- the mega
  *
  * (c) THE ROLE GATE. The state half of the price lives with combat
@@ -179,8 +237,17 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	sg_role_t role = tc->role;
 	int team = tc->team;
 	const int *goal_field = tc->goal_field;
+	int goal_ms = -1;
 
 	qboolean hold = false;
+	qboolean pressure_approach;
+
+	if (bot->seed >= 0 && SG_Rune() &&
+	    bot->seed < SG_Rune()->hdr.num_seeds)
+		goal_ms = goal_field[bot->seed];
+	pressure_approach = SG_StrikePrebreachApproachAllowed(
+	    tc->strike_active, tc->strike_pressure,
+	    role == SG_ROLE_ATTACK, goal_ms);
 
 	/*
 	 * THE RALLY. Arrival measurements show three quarters of all attacks
@@ -213,28 +280,25 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	 * into the same respawn-wide window, detours pause only during the
 	 * eight seconds the window is actually open.
 	 */
-	if (sg_cv.wavepush->value &&
+	/* A strike frame owns HOLD/RUSH.  Keep the legacy conductor and rally out
+	 * of that decision, but do not skip the independent live-enemy approach
+	 * action below merely because the coordinator supplied the route. */
+	if (!tc->strike_active && sg_cv.wavepush->value &&
 	    role == SG_ROLE_ATTACK &&
 	    SG_TimerReady(sg_push_until[SG_TeamIdx(team)]))
 	{
-		int et9 = SG_TeamIdx(SG_EnemyTeam(team));
 		edict_t *ef9 = SG_FlagStand(team, false);
 
-		if (ef9 && SG_AgeUnder(sg_caco_death_time[et9], 2.0f))
+		if (ef9 && SG_EnemyRoomDeathKnown(team, ef9->s.origin,
+		    2.0f, 1200.0f))
 		{
-			vec3_t dp9;
-
-			VectorSubtract(sg_caco_death_org[et9], ef9->s.origin, dp9);
-			if (VectorLength(dp9) < 1200.0f)
-			{
-				SG_TimerArm(&sg_push_until[SG_TeamIdx(team)], 8.0f);
-				if (sg_cv.debug->value)
-					sg_host.dprint("PUSH team=%d surge\n", team);
-			}
+			SG_TimerArm(&sg_push_until[SG_TeamIdx(team)], 8.0f);
+			if (sg_cv.debug->value)
+				sg_host.dprint("PUSH team=%d surge\n", team);
 		}
 	}
 
-	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	if (!tc->strike_active && role == SG_ROLE_ATTACK && bot->seed >= 0 &&
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF &&
 	    SG_TimerPending(sg_push_until[SG_TeamIdx(team)]))
@@ -244,7 +308,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		goto rally_done;
 	}
 
-	if (role == SG_ROLE_ATTACK && bot->seed >= 0 &&
+	if (!tc->strike_active && role == SG_ROLE_ATTACK && bot->seed >= 0 &&
 	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
 	    goal_field[bot->seed] < SG_FIELD_INF)
 	{
@@ -264,17 +328,22 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		for (bi = 0; bi < SG_MAXBOTS; bi++)
 		{
 			sg_bot_t *mb = &sg_bots[bi];
+			int mate_goal;
 
-			if (!mb->active || mb == bot || !mb->ent || !mb->ent->inuse)
+			if (mb == bot || !mb->ent ||
+			    !SG_CoordinationBodyLive(mb->active, mb->ent->inuse,
+			        mb->ent->deadflag, mb->ent->health))
 				continue;
 			if (mb->ent->client->ctf.teamnum != team)
 				continue;
-			if (mb->last_role != (int)SG_ROLE_ATTACK ||
-			    mb->last_goalcost < 0)
+			if (!SG_StrikeEnemyPressureSnapshot(mb))
 				continue;
-			if (mb->last_goalcost < 6000)
+			mate_goal = SG_StrikeEnemyPressureGoalSnapshot(mb);
+			if (mate_goal < 0)
+				continue;
+			if (mate_goal < 6000)
 				mates_near++;
-			else if (mb->last_goalcost < 20000)
+			else if (mate_goal < 20000)
 				/* THE APPEAL. The 20s horizon reduced steals from 1.6 to 1.0
 				 * per measurement interval and was shrunk to a 6s sync --
 				 * but that comparison ran in the corpse-wait era, when a
@@ -292,61 +361,43 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			 * death (< 6s) within 1200 of the enemy flag cancels the
 			 * wait: push NOW, paired or not.
 			 */
-			int et = SG_TeamIdx(SG_EnemyTeam(team));    /* victim = them */
 			edict_t *ef = SG_FlagStand(team, false);
 
-			if (ef && SG_AgeUnder(sg_caco_death_time[et], 6.0f))
+			if (ef && SG_EnemyRoomDeathKnown(team, ef->s.origin,
+			    6.0f, 1200.0f))
 			{
-				vec3_t dd2;
-
-				VectorSubtract(sg_caco_death_org[et], ef->s.origin, dd2);
-				if (VectorLength(dd2) < 1200.0f)
-				{
-					bot->rally_since = 0.0f;
-					goto rally_done;
-				}
+				bot->rally_since = 0.0f;
+				goto rally_done;
 			}
 		}
 		if (mates_near == 0 && mates_coming > 0)
 		{
 			if (bot->rally_since <= 0.0f)
 			{
-				int ci2, best_cover = -1;
-				float bestd2 = 1e30f;
+				int best_cover = Rally_CoverSeed(SG_Rune(), bot->seed);
 
-				SG_Mark(&bot->rally_since);
 				/*
 				 * Seven paired pushes on lmctf09 stole
 				 * nothing: the waiter froze wherever the band caught it,
 				 * mid-corridor, lit, and the pairing died before it
 				 * formed. The rune has measured exposure since the
 				 * generator's census pass -- the wait belongs at the
-				 * darkest seed within reach.
+				 * darkest seed within reach. "Reach" here is now current
+				 * ground or one proved ordinary RUN. The former all-seed
+				 * radius search could select cover through a wall or across
+				 * a mechanism, then spend the whole synchronization window
+				 * walking into it. With no proved cover, keep attacking.
 				 */
-				for (ci2 = 0; ci2 < SG_Rune()->hdr.num_seeds; ci2++)
-				{
-					vec3_t cd;
-					float dsq;
-
-					if (SG_Rune()->seeds[ci2].area_hint > 60)
-						continue;
-					VectorSubtract(SG_Rune()->seeds[ci2].origin,
-					               e->s.origin, cd);
-					dsq = cd[0] * cd[0] + cd[1] * cd[1]
-					    + cd[2] * cd[2] * 4.0f;
-					if (dsq < bestd2 && dsq < 800.0f * 800.0f)
-					{
-						bestd2 = dsq;
-						best_cover = ci2;
-					}
-				}
 				bot->rally_cover = best_cover;
-				if (sg_cv.debug->value)
+				if (best_cover >= 0)
+					SG_Mark(&bot->rally_since);
+				if (sg_cv.debug->value && best_cover >= 0)
 					sg_host.dprint("RALLY %s waits (%d coming, cover=%d)\n",
 					           e->client->pers.netname, mates_coming,
 					           best_cover);
 			}
-			if (SG_AgeUnder(bot->rally_since, 15.0f))
+			if (bot->rally_cover >= 0 &&
+			    SG_AgeUnder(bot->rally_since, 15.0f))
 				hold = true;
 		}
 		else
@@ -359,36 +410,28 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			bot->rally_since = 0.0f;
 		}
 rally_done:;
-
-		/*
-		 * THE FLYING COOK, truly at the band this time (an earlier
-		 * relocation never landed because its edit died in a chain that
-		 * kept going; the ledger is corrected). Every attacker in
-		 * the approach band cooks on the run, but only for a currently
-		 * visible, living enemy body.  A danger seed or a remembered stand
-		 * never owns a grenade transaction; an immediately touchable flag
-		 * owns the body instead.
-		 */
-		if (sg_cv.flycook->value &&
-		    !bot->jump_started && !bot->drop_started &&
-		    bot->hook_phase == 0 && bot->rj_phase == 0 &&
-		    bot->nade_phase == 0 &&
-		    !(SG_Rune() && bot->commit_link >= 0 &&
-		      bot->commit_link < SG_Rune()->hdr.num_links &&
-		      SG_ActionOwnsControl(
-		          SG_Rune()->links[bot->commit_link].action)) &&
-		    SG_TimerReady(bot->nade_next) &&
-		    !SG_AttackFlagDirectTouchAuthority(e, team, NULL))
-		{
-			/* This is the same bound arm used by the clean-grab threshold.
-			 * Open distance bounds preserve the approach band's ordinary
-			 * timing while the shared transaction supplies live identity,
-			 * current visibility, weapon switch and target-body aim. */
-			(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f);
-		}
 	}
-	else
+	else if (!tc->strike_active)
 		bot->rally_since = 0.0f;
+
+	/* THE FLYING COOK.  The strike coordinator replaces only rally timing;
+	 * BREACH/CLEAR/PRESS still need this live-enemy arm in the same two-to-five
+	 * second band.  Keeping it outside the legacy rally branch lets effective
+	 * pressure override organic RECOVER/ESCORT without granting the action to a
+	 * concrete recovery or escort duty. */
+	if (pressure_approach && sg_cv.flycook->value &&
+	    !bot->jump_started && !bot->drop_started &&
+	    bot->hook_phase == 0 && bot->rj_phase == 0 &&
+	    bot->nade_phase == 0 &&
+	    !(SG_Rune() && bot->commit_link >= 0 &&
+	      bot->commit_link < SG_Rune()->hdr.num_links &&
+	      SG_ActionOwnsControl(
+	          SG_Rune()->links[bot->commit_link].action)) &&
+	    SG_TimerReady(bot->nade_next) &&
+	    !SG_AttackFlagDirectTouchAuthority(e, team, NULL))
+	{
+		(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f);
+	}
 	return hold;
 }
 
@@ -445,8 +488,10 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 		 * roll this carry's coin (sg_exitasym, default 0 = never) */
 		bot->exitasym_n = (bot->inlinks_n < 16) ? bot->inlinks_n : 16;
 		memcpy(bot->exitasym_set, bot->inlinks, sizeof(bot->exitasym_set));
-		bot->exitasym_armed = (random() * 100.0f <
-		                       sg_cv.exitasym->value);
+		bot->exitasym_armed = false;
+		if (sg_cv.exitasym->value > 0.0f)
+			bot->exitasym_armed = (random() * 100.0f <
+			                           sg_cv.exitasym->value);
 
 		/*
 		 * HUMAN ESCAPE PRIORS (sg_escapeprior, enhancement 6). The
@@ -488,14 +533,11 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 			if (sg_escape_total[fk] > 0 && stand >= 0 &&
 			    stand < SG_Rune()->hdr.num_seeds)
 			{
-				unsigned h = ((unsigned)(e - g_edicts) * 2654435761u) ^
-				             ((unsigned)(bot->lives + bot->legs) * 40503u) ^
-				             ((unsigned)(level.time * 10.0f) * 2246822519u);
+				unsigned h = SG_EscapePriorDraw(bot->instance_token,
+				    (unsigned)(e - g_edicts - 1), (unsigned)bot->lives,
+				    (unsigned)bot->legs, (unsigned)(level.time * 10.0f));
 				int b, acc = 0, pick;
 
-				h ^= h >> 13;
-				h *= 2654435761u;
-				h ^= h >> 16;
 				pick = (int)(h % (unsigned)sg_escape_total[fk]);
 				for (b = 0; b < SG_ESC_BUCKETS - 1; b++)
 				{
@@ -551,11 +593,12 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 			sg_host.dprint("ESCORT %s begins\n", e->client->pers.netname);
 	}
 	/*
-	 * Unconditionally: last_role feeds the rally's partner census, the
-	 * escort head-count, and the wavepush attacker census. It sat inside
-	 * the debug gate above until the 2026-08-11 standards pass -- on any
-	 * server running sg_debug 0 (the fleet included) it never updated,
-	 * and every one of those censuses read a stale role forever.
+	 * Unconditionally: last_role is the observable organic role and the
+	 * escort-assignment incumbent.  Rally pairing reads the pre-frame effective
+	 * pressure snapshot instead, because a coordinator duty can override this
+	 * role before the serial think loop.  This assignment sat inside the debug
+	 * gate until the 2026-08-11 standards pass, leaving every non-debug consumer
+	 * stale forever.
 	 */
 	bot->last_role = (int)role;
 	bot->was_carrying = carrying;
@@ -658,6 +701,33 @@ qboolean SG_DefenseSupplyActive(const sg_bot_t *bot)
 	return bot && bot->def_supply_armed;
 }
 
+/* Touch_Item is the final pickup authority.  Close only the touching bot's
+ * exact outbound witness, whether Pickup_Weapon accepted it or proved that
+ * the live game rules refuse it.  This prevents DF_WEAPONS_STAY from leaving
+ * an empty defender pressed against an owned, uncollectable weapon pad. */
+void SG_DefenseSupplyNoteItemTouch(edict_t *taker, edict_t *item)
+{
+	int item_ent, i;
+
+	if (!taker || !item)
+		return;
+	item_ent = (int)(item - g_edicts);
+	if (item_ent <= 0 || item_ent >= globals.num_edicts)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *bot = &sg_bots[i];
+
+		if (!bot->active || bot->ent != taker ||
+		    bot->def_supply_phase != SG_DEF_SUPPLY_OUTBOUND ||
+		    bot->def_supply_instance != bot->instance_token ||
+		    bot->def_supply_ent != item_ent)
+			continue;
+		SG_DefenseSupplyBeginReturn(bot);
+		return;
+	}
+}
+
 qboolean SG_DefenseSupplyHome(int team)
 {
 	edict_t *flag;
@@ -713,18 +783,20 @@ static qboolean DefenseSupplyOtherOwner(const sg_bot_t *bot,
 	return !active && bot->commit_link >= 0;
 }
 
-static qboolean DefenseSupplyWeaponClass(const edict_t *item)
+static qboolean WeaponPickupRouteEligible(const edict_t *item,
+                                          const edict_t *taker)
 {
 	if (!item || !item->inuse || !item->classname ||
 	    strncmp(item->classname, "weapon_", 7) != 0)
 		return false;
-	/* The hook and hand-grenade entries are weapon_ classnames too, but neither
-	 * is a usable non-blaster pickup for this errand. */
-	if (strcmp(item->classname, "weapon_grappling_hook") == 0 ||
-	    strcmp(item->classname, "weapon_grenades") == 0 ||
+	/* The hook is always-owned equipment and the blaster is the spawn weapon;
+	 * neither can improve a below-tier strike member.  Hand grenades are an
+	 * ammo_ classname and therefore never enter this weapon-only predicate. */
+	if (strcmp(item->classname, "weapon_hook") == 0 ||
 	    strcmp(item->classname, "weapon_blaster") == 0)
 		return false;
-	return item->solid != SOLID_NOT && Caco_ItemBelievedUp((edict_t *)item);
+	return item->solid != SOLID_NOT && Caco_ItemBelievedUp((edict_t *)item) &&
+	       G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker);
 }
 
 static qboolean DefenseSupplyTargetValid(const sg_bot_t *bot)
@@ -736,7 +808,7 @@ static qboolean DefenseSupplyTargetValid(const sg_bot_t *bot)
 	    bot->def_supply_ent >= globals.num_edicts || !SG_Rune())
 		return false;
 	item = &g_edicts[bot->def_supply_ent];
-	if (!DefenseSupplyWeaponClass(item))
+	if (!WeaponPickupRouteEligible(item, bot->ent))
 		return false;
 	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 	if (seed < 0 || seed != bot->def_supply_target_seed)
@@ -765,10 +837,43 @@ static qboolean DefenseSupplyWeaponFieldReachable(const sg_bot_t *bot)
 	       field[bot->seed] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
 }
 
-static int sg_defense_supply_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
-static unsigned sg_defense_supply_target_epoch[SG_MAXBOTS];
-static int sg_defense_supply_target_cached[SG_MAXBOTS];
-static unsigned char sg_defense_supply_target_ready[SG_MAXBOTS];
+/* Defenders and strike attackers are mutually exclusive route owners, so one
+ * per-bot exact-pickup flood cache serves both without another MAX_SEEDS x
+ * SG_MAXBOTS allocation.  Every scan invalidates the cache because its
+ * scratch floods visit several candidate pads before the winner is known. */
+static int sg_weapon_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_weapon_target_epoch[SG_MAXBOTS];
+static int sg_weapon_target_cached[SG_MAXBOTS];
+static unsigned char sg_weapon_target_ready[SG_MAXBOTS];
+#define SG_WEAPON_FIELD_NONE        0
+#define SG_WEAPON_FIELD_EXACT       1
+#define SG_WEAPON_FIELD_COLLECTIBLE 2
+#define SG_WEAPON_FIELD_SOURCES     256
+static unsigned char sg_weapon_field_kind[SG_MAXBOTS];
+static int sg_weapon_collectible_count[SG_MAXBOTS];
+static int sg_weapon_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_weapon_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_weapon_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_health_collectible_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_health_collectible_epoch[SG_MAXBOTS];
+static unsigned char sg_health_collectible_ready[SG_MAXBOTS];
+static int sg_health_collectible_count[SG_MAXBOTS];
+static int sg_health_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_health_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_health_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_ammo_collectible_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_ammo_collectible_epoch[SG_MAXBOTS];
+static unsigned char sg_ammo_collectible_ready[SG_MAXBOTS];
+static int sg_ammo_collectible_count[SG_MAXBOTS];
+static int sg_ammo_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_ammo_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_armor_collectible_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_armor_collectible_epoch[SG_MAXBOTS];
+static unsigned char sg_armor_collectible_ready[SG_MAXBOTS];
+static int sg_armor_collectible_count[SG_MAXBOTS];
+static int sg_armor_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_armor_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_armor_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -780,6 +885,316 @@ static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 	if (index < 0 || index >= SG_MAXBOTS)
 		return 0;
 	return (int)index;
+}
+
+static const int *WeaponTargetField(sg_bot_t *bot, int target_seed)
+{
+	int bi, cost = 0;
+
+	if (!bot || !SG_Rune() || target_seed < 0 ||
+	    target_seed >= SG_Rune()->hdr.num_seeds)
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	if (!sg_weapon_target_ready[bi] ||
+	    sg_weapon_field_kind[bi] != SG_WEAPON_FIELD_EXACT ||
+	    sg_weapon_target_cached[bi] != target_seed ||
+	    sg_weapon_target_epoch[bi] != sg_fields.action_topology_epoch)
+	{
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi],
+		            &target_seed, &cost, 1);
+		sg_weapon_target_epoch[bi] = sg_fields.action_topology_epoch;
+		sg_weapon_target_cached[bi] = target_seed;
+		sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_EXACT;
+		sg_weapon_target_ready[bi] = 1;
+	}
+	return sg_weapon_target_field[bi];
+}
+
+const int *SG_CollectibleWeaponField(sg_bot_t *bot)
+{
+	sg_combat_weapon_state_t weapon;
+	int ents[SG_WEAPON_FIELD_SOURCES];
+	int seeds[SG_WEAPON_FIELD_SOURCES];
+	int costs[SG_WEAPON_FIELD_SOURCES];
+	int gains[SG_WEAPON_FIELD_SOURCES];
+	int bi, best_gain = 0, count = 0, i;
+	qboolean same;
+
+	if (!bot || !bot->ent || !SG_Rune() ||
+	    !SG_CombatWeaponState(bot->ent, &weapon))
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	for (i = 1; i < globals.num_edicts &&
+	     count < SG_WEAPON_FIELD_SOURCES; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed;
+
+		if (!WeaponPickupRouteEligible(item, bot->ent))
+			continue;
+		gains[count] = SG_CombatWeaponPickupTier(item) -
+		    weapon.available_tier;
+		if (!SG_WeaponUpgradeRouteAdmission(weapon.available_tier,
+		    weapon.available_tier + gains[count], true))
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		ents[count] = i;
+		seeds[count] = seed;
+		if (gains[count] > best_gain)
+			best_gain = gains[count];
+		count++;
+	}
+	if (count == 0)
+	{
+		sg_weapon_target_ready[bi] = 0;
+		sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_NONE;
+		sg_weapon_collectible_count[bi] = 0;
+		return NULL;
+	}
+	for (i = 0; i < count; i++)
+		costs[i] = SG_ItemGainSourceCost(gains[i], best_gain);
+
+	same = sg_weapon_target_ready[bi] &&
+	       sg_weapon_field_kind[bi] == SG_WEAPON_FIELD_COLLECTIBLE &&
+	       sg_weapon_target_epoch[bi] == sg_fields.action_topology_epoch &&
+	       sg_weapon_collectible_count[bi] == count;
+	for (i = 0; same && i < count; i++)
+		if (sg_weapon_collectible_ent[bi][i] != ents[i] ||
+		    sg_weapon_collectible_seed[bi][i] != seeds[i] ||
+		    sg_weapon_collectible_cost[bi][i] != costs[i])
+			same = false;
+	if (!same)
+	{
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi], seeds,
+		            costs, count);
+		for (i = 0; i < count; i++)
+		{
+			sg_weapon_collectible_ent[bi][i] = ents[i];
+			sg_weapon_collectible_seed[bi][i] = seeds[i];
+			sg_weapon_collectible_cost[bi][i] = costs[i];
+		}
+		sg_weapon_collectible_count[bi] = count;
+		sg_weapon_target_epoch[bi] = sg_fields.action_topology_epoch;
+		sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_COLLECTIBLE;
+		sg_weapon_target_ready[bi] = 1;
+	}
+	return sg_weapon_target_field[bi];
+}
+
+const int *SG_CollectibleHealthField(sg_bot_t *bot)
+{
+	int ents[SG_WEAPON_FIELD_SOURCES];
+	int seeds[SG_WEAPON_FIELD_SOURCES];
+	int costs[SG_WEAPON_FIELD_SOURCES];
+	int gains[SG_WEAPON_FIELD_SOURCES];
+	int bi, best_gain = 0, count = 0, i;
+	qboolean same;
+
+	if (!bot || !bot->ent || !SG_Rune())
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	for (i = 1; i < globals.num_edicts &&
+	     count < SG_WEAPON_FIELD_SOURCES; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed;
+
+		if (!item->inuse || !item->classname ||
+		    strncmp(item->classname, "item_health", 11) != 0 ||
+		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
+		    !SG_HealthClassRouteAdmission(
+		        strcmp(item->classname, "item_health_mega") == 0,
+		        SG_MegaOn(), G_HealthPickupEligible(item, bot->ent)))
+			continue;
+		gains[count] = G_HealthPickupGain(item, bot->ent);
+		if (gains[count] <= 0)
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		ents[count] = i;
+		seeds[count] = seed;
+		if (gains[count] > best_gain)
+			best_gain = gains[count];
+		count++;
+	}
+	if (count == 0)
+	{
+		sg_health_collectible_ready[bi] = 0;
+		sg_health_collectible_count[bi] = 0;
+		return NULL;
+	}
+	for (i = 0; i < count; i++)
+		costs[i] = SG_ItemGainSourceCost(gains[i], best_gain);
+
+	same = sg_health_collectible_ready[bi] &&
+	       sg_health_collectible_epoch[bi] ==
+	           sg_fields.action_topology_epoch &&
+	       sg_health_collectible_count[bi] == count;
+	for (i = 0; same && i < count; i++)
+		if (sg_health_collectible_ent[bi][i] != ents[i] ||
+		    sg_health_collectible_seed[bi][i] != seeds[i] ||
+		    sg_health_collectible_cost[bi][i] != costs[i])
+			same = false;
+	if (!same)
+	{
+		Field_Flood(SG_Rune(), sg_health_collectible_field[bi], seeds,
+		            costs, count);
+		for (i = 0; i < count; i++)
+		{
+			sg_health_collectible_ent[bi][i] = ents[i];
+			sg_health_collectible_seed[bi][i] = seeds[i];
+			sg_health_collectible_cost[bi][i] = costs[i];
+		}
+		sg_health_collectible_count[bi] = count;
+		sg_health_collectible_epoch[bi] =
+		    sg_fields.action_topology_epoch;
+		sg_health_collectible_ready[bi] = 1;
+	}
+	return sg_health_collectible_field[bi];
+}
+
+const int *SG_CollectibleAmmoField(sg_bot_t *bot)
+{
+	int ents[SG_WEAPON_FIELD_SOURCES];
+	int seeds[SG_WEAPON_FIELD_SOURCES];
+	int costs[SG_WEAPON_FIELD_SOURCES];
+	int bi, count = 0, i, held_ammo_tag;
+	qboolean same;
+
+	if (!bot || !bot->ent || !SG_Rune())
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	held_ammo_tag = SG_CombatHeldAmmoTag(bot->ent);
+	if (held_ammo_tag < 0)
+	{
+		sg_ammo_collectible_ready[bi] = 0;
+		sg_ammo_collectible_count[bi] = 0;
+		return NULL;
+	}
+	for (i = 1; i < globals.num_edicts &&
+	     count < SG_WEAPON_FIELD_SOURCES; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed;
+
+		if (!item->inuse || !item->classname || !item->item ||
+		    strncmp(item->classname, "ammo_", 5) != 0 ||
+		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
+		    !SG_AmmoRouteAdmission(item->item->tag, held_ammo_tag,
+		        G_AmmoPickupEligible(item, bot->ent)))
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		ents[count] = i;
+		seeds[count] = seed;
+		costs[count] = 0;
+		count++;
+	}
+	if (count == 0)
+	{
+		sg_ammo_collectible_ready[bi] = 0;
+		sg_ammo_collectible_count[bi] = 0;
+		return NULL;
+	}
+
+	same = sg_ammo_collectible_ready[bi] &&
+	       sg_ammo_collectible_epoch[bi] ==
+	           sg_fields.action_topology_epoch &&
+	       sg_ammo_collectible_count[bi] == count;
+	for (i = 0; same && i < count; i++)
+		if (sg_ammo_collectible_ent[bi][i] != ents[i] ||
+		    sg_ammo_collectible_seed[bi][i] != seeds[i])
+			same = false;
+	if (!same)
+	{
+		Field_Flood(SG_Rune(), sg_ammo_collectible_field[bi], seeds,
+		            costs, count);
+		for (i = 0; i < count; i++)
+		{
+			sg_ammo_collectible_ent[bi][i] = ents[i];
+			sg_ammo_collectible_seed[bi][i] = seeds[i];
+		}
+		sg_ammo_collectible_count[bi] = count;
+		sg_ammo_collectible_epoch[bi] =
+		    sg_fields.action_topology_epoch;
+		sg_ammo_collectible_ready[bi] = 1;
+	}
+	return sg_ammo_collectible_field[bi];
+}
+
+const int *SG_CollectibleArmorField(sg_bot_t *bot)
+{
+	int ents[SG_WEAPON_FIELD_SOURCES];
+	int seeds[SG_WEAPON_FIELD_SOURCES];
+	int costs[SG_WEAPON_FIELD_SOURCES];
+	int gains[SG_WEAPON_FIELD_SOURCES];
+	int bi, best_gain = 0, count = 0, i;
+	qboolean same;
+
+	if (!bot || !bot->ent || !SG_Rune())
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	for (i = 1; i < globals.num_edicts &&
+	     count < SG_WEAPON_FIELD_SOURCES; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed;
+
+		if (!item->inuse || !item->classname ||
+		    strncmp(item->classname, "item_armor", 10) != 0 ||
+		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
+		    !G_ArmorPickupEligible(item, bot->ent))
+			continue;
+		gains[count] = G_ArmorPickupGain(item, bot->ent);
+		if (gains[count] <= 0)
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		ents[count] = i;
+		seeds[count] = seed;
+		if (gains[count] > best_gain)
+			best_gain = gains[count];
+		count++;
+	}
+	if (count == 0)
+	{
+		sg_armor_collectible_ready[bi] = 0;
+		sg_armor_collectible_count[bi] = 0;
+		return NULL;
+	}
+	for (i = 0; i < count; i++)
+		costs[i] = SG_ItemGainSourceCost(gains[i], best_gain);
+
+	same = sg_armor_collectible_ready[bi] &&
+	       sg_armor_collectible_epoch[bi] ==
+	           sg_fields.action_topology_epoch &&
+	       sg_armor_collectible_count[bi] == count;
+	for (i = 0; same && i < count; i++)
+		if (sg_armor_collectible_ent[bi][i] != ents[i] ||
+		    sg_armor_collectible_seed[bi][i] != seeds[i] ||
+		    sg_armor_collectible_cost[bi][i] != costs[i])
+			same = false;
+	if (!same)
+	{
+		Field_Flood(SG_Rune(), sg_armor_collectible_field[bi], seeds,
+		            costs, count);
+		for (i = 0; i < count; i++)
+		{
+			sg_armor_collectible_ent[bi][i] = ents[i];
+			sg_armor_collectible_seed[bi][i] = seeds[i];
+			sg_armor_collectible_cost[bi][i] = costs[i];
+		}
+		sg_armor_collectible_count[bi] = count;
+		sg_armor_collectible_epoch[bi] =
+		    sg_fields.action_topology_epoch;
+		sg_armor_collectible_ready[bi] = 1;
+	}
+	return sg_armor_collectible_field[bi];
 }
 
 static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
@@ -796,14 +1211,14 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 		edict_t *item = &g_edicts[i];
 		int seed, flood_cost = 0, cost;
 
-		if (!DefenseSupplyWeaponClass(item))
+		if (!WeaponPickupRouteEligible(item, bot->ent))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
 			continue;
-		Field_Flood(SG_Rune(), sg_defense_supply_target_field[bi],
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi],
 		            &seed, &flood_cost, 1);
-		cost = sg_defense_supply_target_field[bi][bot->seed];
+		cost = sg_weapon_target_field[bi][bot->seed];
 		if (cost < best_cost)
 		{
 			best_cost = cost;
@@ -811,6 +1226,8 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 			best_seed = seed;
 		}
 	}
+	sg_weapon_target_ready[bi] = 0;
+	sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_NONE;
 	if (best_ent < 0 || best_cost >= SG_FIELD_INF ||
 	    best_cost > SG_DEF_SUPPLY_MAX_ROUTE_MS)
 		return false;
@@ -823,6 +1240,125 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 	return true;
 }
 
+void SG_StrikeWeaponTargetClear(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->strike_weapon_target_ent = -1;
+	bot->strike_weapon_target_seed = -1;
+	VectorClear(bot->strike_weapon_target_org);
+}
+
+static qboolean StrikeWeaponTargetValid(const sg_bot_t *bot)
+{
+	edict_t *item;
+	int seed;
+	vec3_t delta;
+
+	if (!bot || !bot->ent || !SG_Rune() ||
+	    bot->strike_weapon_target_ent <= 0 ||
+	    bot->strike_weapon_target_ent >= globals.num_edicts)
+		return false;
+	item = &g_edicts[bot->strike_weapon_target_ent];
+	if (!WeaponPickupRouteEligible(item, bot->ent))
+		return false;
+	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+	if (seed < 0 || seed != bot->strike_weapon_target_seed)
+		return false;
+	VectorSubtract(item->s.origin, bot->strike_weapon_target_org, delta);
+	return VectorLength(delta) <= 1.0f;
+}
+
+static qboolean StrikeWeaponFindTarget(sg_bot_t *bot)
+{
+	int i, bi, best_ent = -1, best_seed = -1;
+	int best_cost = SG_FIELD_INF;
+
+	if (!bot || !bot->ent || !SG_Rune() || bot->seed < 0 ||
+	    bot->seed >= SG_Rune()->hdr.num_seeds)
+		return false;
+	bi = DefenseSupplyBotIndex(bot);
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed, ignored = 0, cost;
+
+		if (!WeaponPickupRouteEligible(item, bot->ent))
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi], &seed,
+		            &ignored, 1);
+		cost = sg_weapon_target_field[bi][bot->seed];
+		if (cost < best_cost ||
+		    (cost == best_cost && (best_ent < 0 || i < best_ent)))
+		{
+			best_cost = cost;
+			best_ent = i;
+			best_seed = seed;
+		}
+	}
+	/* The scratch buffer contains the last candidate flood, not necessarily
+	 * the winner.  Force the selected seed to be reflooded before publication. */
+	sg_weapon_target_ready[bi] = 0;
+	sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_NONE;
+	if (best_ent < 0 || best_cost >= SG_FIELD_INF)
+		return false;
+	bot->strike_weapon_target_ent = best_ent;
+	bot->strike_weapon_target_seed = best_seed;
+	VectorCopy(g_edicts[best_ent].s.origin, bot->strike_weapon_target_org);
+	return true;
+}
+
+const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms)
+{
+	const int *field;
+
+	if (route_ms)
+		*route_ms = -1;
+	if (!bot || !SG_Rune() || bot->seed < 0 ||
+	    bot->seed >= SG_Rune()->hdr.num_seeds)
+		return NULL;
+	if (!StrikeWeaponTargetValid(bot))
+	{
+		SG_StrikeWeaponTargetClear(bot);
+		if (!StrikeWeaponFindTarget(bot))
+			return NULL;
+	}
+	field = WeaponTargetField(bot, bot->strike_weapon_target_seed);
+	if (!field || field[bot->seed] >= SG_FIELD_INF)
+	{
+		SG_StrikeWeaponTargetClear(bot);
+		return NULL;
+	}
+	if (route_ms)
+		*route_ms = field[bot->seed];
+	return field;
+}
+
+void SG_StrikeWeaponNoteItemTouch(edict_t *taker, edict_t *item)
+{
+	int i, item_ent;
+
+	if (!taker || !item)
+		return;
+	item_ent = (int)(item - g_edicts);
+	if (item_ent <= 0 || item_ent >= globals.num_edicts)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *bot = &sg_bots[i];
+
+		if (bot->active && bot->ent == taker &&
+		    bot->strike_weapon_target_ent == item_ent)
+		{
+			SG_StrikeWeaponTargetClear(bot);
+			return;
+		}
+	}
+}
+
 static qboolean DefenseSupplyCoreEligible(sg_bot_t *bot, sg_think_t *tc,
                                           qboolean active)
 {
@@ -830,6 +1366,7 @@ static qboolean DefenseSupplyCoreEligible(sg_bot_t *bot, sg_think_t *tc,
 	    tc->e->deadflag == DEAD_DEAD || tc->e->health <= 0 ||
 	    tc->role != SG_ROLE_DEFEND || !bot->def_stand || tc->carrying ||
 	    (!active && !SG_DefenseSupplyHome(tc->team)) ||
+	    (!active && SG_ChatOrderedRole(tc->e) >= 0) ||
 	    (!active && DefenseSupplyOtherOwner(bot, false)))
 		return false;
 	if (!SG_Rune() || bot->seed < 0 ||
@@ -875,29 +1412,14 @@ static qboolean DefenseSupplyReturnAllowed(const sg_bot_t *bot,
 static const int *DefenseSupplyTargetField(sg_bot_t *bot)
 {
 	const int *target_field;
-	int bi;
-	int cost = 0;
 	int target_seed;
 
 	if (!bot || !SG_DefenseSupplyActive(bot) ||
 	    bot->def_supply_phase != SG_DEF_SUPPLY_OUTBOUND ||
 	    !DefenseSupplyTargetValid(bot))
 		return NULL;
-	bi = DefenseSupplyBotIndex(bot);
 	target_seed = bot->def_supply_target_seed;
-	if (!sg_defense_supply_target_ready[bi] ||
-	    sg_defense_supply_target_cached[bi] != target_seed ||
-	    sg_defense_supply_target_epoch[bi] !=
-	        sg_fields.action_topology_epoch)
-	{
-		Field_Flood(SG_Rune(), sg_defense_supply_target_field[bi],
-		            &target_seed, &cost, 1);
-		sg_defense_supply_target_epoch[bi] =
-		    sg_fields.action_topology_epoch;
-		sg_defense_supply_target_cached[bi] = target_seed;
-		sg_defense_supply_target_ready[bi] = 1;
-	}
-	target_field = sg_defense_supply_target_field[bi];
+	target_field = WeaponTargetField(bot, target_seed);
 	return target_field;
 }
 
@@ -1014,6 +1536,7 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 			step.threat = SG_DefenseSupplyThreat(team) ||
 			              SG_CombatWouldEngage(e);
 			step.engaged = bot->engaged_last;
+			step.human_order = SG_ChatOrderedRole(e) >= 0;
 			step.other_owner = DefenseSupplyOtherOwner(bot, true);
 			step.target_valid = DefenseSupplyTargetValid(bot);
 			step.weapon_field_valid = DefenseSupplyTargetFieldReachable(bot);
@@ -1067,9 +1590,9 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 			bot->def_supply_ent = target_ent;
 			bot->def_supply_target_seed = target_seed;
 			bot->def_supply_route_ms = route_ms;
-			sg_defense_supply_target_cached[bi] = -1;
-			sg_defense_supply_target_epoch[bi] = 0;
-			sg_defense_supply_target_ready[bi] = 0;
+			sg_weapon_target_cached[bi] = -1;
+			sg_weapon_target_epoch[bi] = 0;
+			sg_weapon_target_ready[bi] = 0;
 			if (target_ent >= 0 && target_ent < globals.num_edicts)
 				VectorCopy(g_edicts[target_ent].s.origin,
 				           bot->def_supply_target_org);
@@ -1143,7 +1666,11 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	/* the former parameter list, unpacked from the think context so the
 	 * body below reads exactly as it did when these arrived as arguments */
 	edict_t *e = tc->e;
-	sg_role_t role = tc->role;
+	/* Strike duty is resolved before Objective.  Its effective ESCORT owns the
+	 * same carrier/formation objective as an organic escort; every other duty
+	 * retains the organic role until the coordinator applies its exact route. */
+	sg_role_t role = (sg_role_t)SG_ObjectiveRole(tc->role,
+	    tc->escort_mission);
 	int team = tc->team;
 	qboolean carrying = tc->carrying;
 	const sg_weights_t *w = tc->w;
@@ -1217,7 +1744,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		goal_field = ht
 		    ? sg_fields.to_flag_now[SG_TeamIdx(team)]
 		        [SG_TeamIdx(SG_EnemyTeam(team))]
-		    : sg_fields.our_carrier[SG_TeamIdx(team)];
+		    : (sg_fields.our_carrier_valid[SG_TeamIdx(team)]
+		        ? sg_fields.our_carrier[SG_TeamIdx(team)]
+		        : (team == CTF_TEAM_RED ? sg_fields.to_red_flag
+		                                : sg_fields.to_blue_flag));
 
 		/*
 		 * THE SCOOP (sg_scoop). Across sixty-two parity drops,
@@ -1256,7 +1786,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		 * eats the escort, carrier keeps the flag. Falls through to
 		 * the ordinary screen when there is no named threat.
 		 */
-		if (sg_cv.interpose->value)
+		{
+			int interpose_mode = SG_InterposeMode(sg_cv.interpose->value);
+
+		if (interpose_mode)
 		{
 			sg_belief_carrier_t *oc =
 			    &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
@@ -1273,6 +1806,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					vec3_t dd11;
 
 					if (en11->client < 0 || en11->seed < 0 ||
+					    en11->seed >= SG_Rune()->hdr.num_seeds ||
 					    SG_AgeAtLeast(en11->seen_time, 4.0f))
 						continue;
 					VectorSubtract(
@@ -1312,12 +1846,15 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					 * slot parity: even leads at -1300ms, odd trails at
 					 * +900ms. Dose 2 (static exit seed) kept as history.
 					 */
-					if (sg_cv.interpose->value >= 3)
+					if (interpose_mode == 3)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
 						int cc = cf[oc->seed], s13;
-						int lead = ((int)(e->client - game.clients) & 1) ? 0 : 1;
+						int threat_seed =
+						    sg_caco_enemies[SG_TeamIdx(team)][ts].seed;
+						int lead = SG_InterposeLeadStation(cc,
+						    cf[threat_seed]);
 						int wcost = lead ? cc - 1300 : cc + 900;
 						int band = 450;
 						float bd13 = -1.0f;
@@ -1343,7 +1880,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 							}
 						}
 					}
-					else if (sg_cv.interpose->value >= 2)
+					else if (interpose_mode == 2)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
@@ -1386,6 +1923,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 						Field_Flood(SG_Rune(), interpose_field,
 						            &ms, &mc, 1);
 						goal_field = interpose_field;
+						tc->escort_formation = true;
 						if (sg_cv.debug->value &&
 						    SG_TimerReady(bot->next_report - 0.9f))
 							sg_host.dprint("INTERPOSE %s seed=%d\n",
@@ -1393,6 +1931,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 			}
+		}
 		}
 		if (ht && ht->inuse && ht->client && !ht->deadflag)
 		{
@@ -1414,8 +1953,27 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 	else
-		goal_field = sg_fields.to_flag_now[SG_TeamIdx(team)]
-		    [SG_TeamIdx(SG_EnemyTeam(team))];
+	{
+		int team_index = SG_TeamIdx(team);
+		int enemy_index = SG_TeamIdx(SG_EnemyTeam(team));
+
+		/* One role-selected escort owns the moving carrier field.  The remaining
+		 * attackers keep the enemy base occupied so defenders cannot turn their
+		 * full roster onto the return.  Following the enemy-flag-now field here
+		 * made every attacker a second escort when the carrier was visible; when
+		 * its position was unknown, that field's honest fallback could even lead
+		 * the whole attack share back to our own stand. */
+		if (SG_AttackObjectiveUsesFixedStand(
+		        sg_caco_team_belief.carrier[team_index].client))
+			goal_field = enemy_index == 0 ? sg_fields.to_red_flag
+			                              : sg_fields.to_blue_flag;
+		else
+			goal_field = sg_fields.to_flag_now[team_index][enemy_index];
+	}
+	/* Only principal objective selection borrows the effective strike role.
+	 * Optional item, tactics, and relay policy below continue to read the
+	 * organic role plus their existing explicit strike-duty gates. */
+	role = tc->role;
 
 	/*
 	 * THE RUNE COURIER. Candidacy is a lottery -- 107
@@ -1427,7 +1985,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * the flag on the courier's legs, not on luck.
 	 */
 	if (sg_cv.runetoss->value &&
-	    role != SG_ROLE_CARRY && role != SG_ROLE_DEFEND &&
+	    SG_RuneHandoffEligible(role, carrying, SG_ChatOrderedRole(e),
+	        tc->strike_active, tc->escort_mission) &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
 	     e->client->rune->runetype == RUNE_REGEN) &&
@@ -1435,14 +1994,17 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	{
 		sg_belief_carrier_t *rc0 = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
-		if (rc0->client >= 0)
+		if (rc0->client >= 0 && rc0->client < game.maxclients)
 		{
 			edict_t *ce0 = g_edicts + 1 + rc0->client;
+			qboolean carrier_allowed = SG_RuneHandoffCarrierAllowed(team,
+			    game.maxclients, rc0->client, ce0->inuse, ce0->client != NULL,
+			    ce0->health, ce0->deadflag != DEAD_NO,
+			    ce0->client ? ce0->client->ctf.teamnum : 0,
+			    ce0->client && ClientHasFlag(ce0) != NULL,
+			    ce0->client && ce0->client->rune != NULL);
 
-			if (ce0->inuse && ce0->client && ce0->health > 0 &&
-			    (!ce0->client->rune ||
-			     (ce0->client->rune->runetype != RUNE_RESIST &&
-			      ce0->client->rune->runetype != RUNE_REGEN)))
+			if (carrier_allowed)
 			{
 				if (bot->runeconv_until <= 0.0f)
 					SG_TimerArm(&bot->runeconv_until, 8.0f);
@@ -1474,8 +2036,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * same thing twice, which is deliberate: this line is the one a reader
 	 * finds first.
 	 */
+	if (!tc->strike_blocks_optional)
 	{
-		const int *lead = Lead_Field(bot, role, carrying);
+		const int *lead = Lead_Field(bot, role, carrying,
+		    SG_ChatOrderedRole(e));
 
 		if (lead)
 			goal_field = lead;
@@ -1487,7 +2051,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * up to ten seconds off one Surface_At sweep, so a term that arrived after
 	 * it would not reach the route until the next commitment.
 	 */
-	tc->mega = Mega_Worth(bot, e, role);
+	tc->mega = tc->strike_blocks_optional ? 0.0f
+	                                      : Mega_Worth(bot, e, role);
 
 	/*
 	 * NO CAMPING THE PAD, and no obsession either -- the offer is bounded in
@@ -1576,7 +2141,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 */
 	route_field = goal_field;
 	route_pure = false;
-	if (sg_cv.tactics->value &&
+	if (!tc->strike_blocks_optional && sg_cv.tactics->value &&
 	    role != SG_ROLE_ESCORT &&
 	    /* CARRY excluded: route_pure suppresses the
 	     * danger and detour terms for 10s a commit -- the exact corridors
@@ -1740,6 +2305,16 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	bot->last_goalcost = (bot->seed >= 0 &&
 	                      goal_field[bot->seed] < SG_FIELD_INF)
 	                     ? goal_field[bot->seed] : -1;
+	/* SCOOP is an enemy-flag touch mission without being an attack-pressure
+	 * mission.  Publish that distinction only after every later objective
+	 * override: terminal movement may finish the physical relay pickup, while
+	 * attack-only rally/grenade policy remains disabled for the escort. */
+	tc->scoop_mission = role == SG_ROLE_ESCORT &&
+	    sg_caco_team_belief.carrier[SG_TeamIdx(team)].client < 0 &&
+	    sg_caco_team_belief.flag[SG_TeamIdx(team)]
+	        [SG_TeamIdx(SG_EnemyTeam(team))].state == SG_FLAG_ASTRAY &&
+	    goal_field == sg_fields.to_flag_now[SG_TeamIdx(team)]
+	        [SG_TeamIdx(SG_EnemyTeam(team))];
 
 	tc->goal_field = goal_field;
 	tc->route_field = route_field;

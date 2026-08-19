@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 DESCEND = (ROOT / "slipgate" / "sg_descend.c").read_text()
 MOVE = (ROOT / "slipgate" / "sg_move.c").read_text()
+GOAL = (ROOT / "slipgate" / "sg_goal.c").read_text()
 
 
 def section(source: str, start: str, end: str) -> str:
@@ -94,6 +95,40 @@ def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():
     cycle = section(DESCEND, "/*\n\t * The wide-orbit detector", "/* Deaddoor")
     assert "A multi-exit fan with no safe alternate" in cycle
     assert "bestlink = -1;" in cycle
+
+
+def test_carrier_screen_uses_the_accepted_moving_formation_by_default():
+    cvars = (ROOT / "slipgate" / "sg_cvars.h").read_text()
+    assert 'X(interpose, "sg_interpose", "3")' in cvars
+    interpose = section(
+        GOAL, "THE INTERPOSITION (sg_interpose)",
+        "Escorting the HUMAN who said \"cover me\"")
+    assert "SG_InterposeMode(sg_cv.interpose->value)" in interpose
+    assert "if (interpose_mode == 3)" in interpose
+    assert "else if (interpose_mode == 2)" in interpose
+    assert "SG_InterposeLeadStation(cc," in interpose
+    assert "cf[threat_seed]" in interpose
+    assert "en11->seed >= SG_Rune()->hdr.num_seeds" in interpose
+    assert "e->client - game.clients" not in interpose
+
+
+def test_carrier_screen_terminal_preserves_the_selected_formation():
+    terminal = section(
+        MOVE,
+        "else if (!have_aim && role == SG_ROLE_ESCORT &&",
+        "if (!have_aim && !gf && tc->scoop_mission)",
+    )
+    assert "!tc->scoop_mission" in terminal
+    assert "SG_TerminalFieldSeed(SG_Rune(), goal_field," in terminal
+    assert "VectorCopy(SG_Rune()->seeds[terminal_seed].origin" in terminal
+    assert "SG_FlagStand" not in terminal
+
+    priority = section(
+        MOVE,
+        "if (!have_aim && ordered_escort)",
+        "else if (!have_aim && role == SG_ROLE_CARRY)",
+    )
+    assert "VectorCopy(ordered_escort->s.origin, aim);" in priority
 
 
 if __name__ == "__main__":

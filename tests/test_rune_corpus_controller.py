@@ -44,6 +44,34 @@ def report(map_name: str, *, seeds: int = 7, links: int = 9,
     })
 
 
+def bootstrap_snag_text(
+    map_name: str, artifact_sha256: str, evidence_sha256: str
+) -> str:
+    """Return canonical-shaped bootstrap bytes for fake controller tests."""
+    return "\n".join((
+        "snag_format 2",
+        f"map {map_name}",
+        "bsp_checksum 1",
+        "entity_crc 2",
+        "physics_flags 0",
+        "gravity 800",
+        "airaccelerate 0",
+        "maxvelocity 2000",
+        "pmove_ms 25",
+        "frame_ms 100",
+        "host_physics_id 1",
+        "rune_payload_crc 3",
+        "rune_header_crc 4",
+        "rune_action_contract_crc 5",
+        "rune_mechanism_contract_crc 6",
+        "rune_num_seeds 7",
+        "rune_num_links 9",
+        f"rune_sha256 {artifact_sha256}",
+        f"evidence_sha256 {evidence_sha256}",
+        "repairs 0",
+    )) + "\n"
+
+
 class FakeGateRunner:
     def __init__(self, map_name: str, *, python_seeds: int | None = None):
         self.map_name = map_name
@@ -98,11 +126,15 @@ class FakeGateRunner:
                 "dont_write_bytecode": True,
             })
             return subprocess.CompletedProcess(command, 0, stdout=output)
-        script = Path(command[-2]).name if "-c" in command else ""
+        script = next(
+            (Path(value).name for value in command if value.endswith(".py")), ""
+        ) if "-c" in command else ""
         if script == "runeio.py":
             output = report(self.map_name, seeds=self.python_seeds or 7)
         elif script == "runelint.py":
             output = b""
+        elif script.endswith("_rune_accept.py"):
+            output = controller.canonical_json({"map_name": self.map_name})
         else:
             output = report(self.map_name)
         return subprocess.CompletedProcess(command, 0, stdout=output)
@@ -180,12 +212,27 @@ class RuneCorpusControllerTests(unittest.TestCase):
         if actual_tools:
             files["tools/runelint.py"] = ("runelint", ROOT / "tools/runelint.py")
             files["tools/runeio.py"] = ("runeio", ROOT / "tools/runeio.py")
+            files["tools/snagrepair.py"] = (
+                "snagrepair", ROOT / "tools/snagrepair.py",
+            )
             files["tools/rune_contracts_generated.py"] = (
                 "contracts", ROOT / "tools/rune_contracts_generated.py",
+            )
+            files["tools/lmctf58_rune_accept.py"] = (
+                "semantic_checker:lmctf58",
+                ROOT / "tools/lmctf58_rune_accept.py",
             )
         else:
             add("tools/runelint.py", "runelint", b"raise SystemExit(0)\n")
             add("tools/runeio.py", "runeio", b"def main(argv):\n print(" + repr(gate_report.decode()).encode() + b")\n return 0\n")
+            add(
+                "tools/snagrepair.py", "snagrepair",
+                b"def main(argv):\n"
+                b" import pathlib\n"
+                b" target=pathlib.Path(argv[argv.index('--output')+1])\n"
+                b" target.write_text('fake snag\\n',encoding='ascii')\n"
+                b" return 0\n",
+            )
             add(
                 "tools/rune_contracts_generated.py",
                 "contracts",
@@ -194,13 +241,27 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 b"RUNE_MECHANISM_CONTRACT_CRC32 = 0x509691fa\n"
                 b"RUNE_MECHANISM_CONTRACT_SHA256 = '" + b"b" * 64 + b"'\n",
             )
+            add(
+                "tools/lmctf58_rune_accept.py", "semantic_checker:lmctf58",
+                b"def main(argv):\n print('{\"map_name\":\"lmctf58\"}')\n return 0\n",
+            )
         add(
-            "bin/runeaccept",
-            "acceptor",
+            "runeaccept.gnu",
+            "acceptor_gnu",
+            b"#!/bin/sh\nprintf '%s\\n' '" + gate_report + b"'\n",
+            0o755,
+        )
+        add(
+            "runeaccept.make",
+            "acceptor_make",
             b"#!/bin/sh\nprintf '%s\\n' '" + gate_report + b"'\n",
             0o755,
         )
         add("game/rune.cfg", "generator_config", b"set dedicated 1\n")
+        add(
+            "tools/rune-semantic-checkers.json", "semantic_checker_manifest",
+            (ROOT / "tools/rune-semantic-checkers.json").read_bytes(),
+        )
         manifest_copy = sources / "rune-corpus-maps.txt"
         manifest_copy.write_bytes((ROOT / "tools/rune-corpus-maps.txt").read_bytes())
         files["tools/rune-corpus-maps.txt"] = ("map_manifest", manifest_copy)
@@ -218,16 +279,54 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
     def make_real_private_runtime(self, root: Path) -> Path:
         """Construct a link-free private runtime and its loader --list closure."""
-        version = f"{os.sys.version_info.major}.{os.sys.version_info.minor}"
         runtime = root / "python-runtime"
-        stdlib = Path(os.__file__).resolve(strict=True).parent
-        interpreter = Path(os.sys.executable).resolve(strict=True)
-        loader_name = Path(controller.elf_interpreter(interpreter)).name
-        loader = next(
-            Path(line.rsplit(maxsplit=1)[-1]).resolve(strict=True)
-            for line in Path("/proc/self/maps").read_text().splitlines()
-            if line.rsplit(maxsplit=1)[-1].endswith(loader_name)
-        )
+        required_extensions = {
+            "_bz2", "_ctypes", "_hashlib", "_json", "_lzma", "_socket",
+            "_struct", "array", "fcntl", "math", "select", "zlib",
+        }
+        selected = None
+        candidates = [Path("/usr/bin/python3"), Path(os.sys.executable)]
+        for candidate in dict.fromkeys(candidates):
+            try:
+                interpreter = candidate.resolve(strict=True)
+                details = json.loads(subprocess.run(
+                    [str(interpreter), "-c",
+                     "import json,os,sys; print(json.dumps({"
+                     "'version': list(sys.version_info[:2]), "
+                     "'stdlib': os.path.dirname(os.__file__)}))"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    check=True, text=True,
+                ).stdout)
+                version = ".".join(str(part) for part in details["version"])
+                stdlib = Path(details["stdlib"]).resolve(strict=True)
+                dynload = stdlib / "lib-dynload"
+                extension_names = {path.name for path in dynload.iterdir()
+                                   if path.is_file()}
+                if not all(any(name.startswith(required) for name in extension_names)
+                           for required in required_extensions):
+                    continue
+                loader = Path(controller.elf_interpreter(interpreter)).resolve(
+                    strict=True
+                )
+                listed = subprocess.run(
+                    [str(loader), "--list", str(interpreter)],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    check=True, text=True,
+                ).stdout
+                if not re.search(r"\blibpython[^\s]*\.so", listed):
+                    continue
+                selected = (interpreter, stdlib, version, loader)
+                break
+            except (OSError, KeyError, TypeError, ValueError,
+                    json.JSONDecodeError, subprocess.CalledProcessError,
+                    controller.CorpusError):
+                continue
+        if selected is None:
+            self.skipTest(
+                "host has no dynamically linked Python with the required "
+                "extension closure"
+            )
+        interpreter, stdlib, version, loader = selected
 
         def copy(source: Path, target: Path) -> None:
             source = source.resolve(strict=True)
@@ -247,7 +346,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 if source.is_file():
                     copy(source, runtime / "lib" / f"python{version}" / source.relative_to(stdlib))
 
-        required_extensions = {"_bz2", "_ctypes", "_hashlib", "_json", "_lzma", "_socket", "_struct", "array", "fcntl", "math", "select", "zlib"}
         queue = [runtime / f"bin/python{version}"] + [
             path for path in (runtime / "lib" / f"python{version}" / "lib-dynload").iterdir()
             if path.is_file() and any(path.name.startswith(name) for name in required_extensions)
@@ -309,7 +407,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     artifact, "runetest",
                     {"seeds": 2, "links": 2, "mechanism_nodes": 3, "triggers": 2,
                      "inventory_edges": 1, "plans": 1},
-                    acceptor=snapshot / verified["by_role"]["acceptor"]["path"],
+                    acceptor_gnu=snapshot / verified["by_role"]["acceptor_gnu"]["path"],
+                    acceptor_make=snapshot / verified["by_role"]["acceptor_make"]["path"],
                     python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
                     runeio=target,
                     runelint=snapshot / verified["by_role"]["runelint"]["path"],
@@ -654,7 +753,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "python_interpreter_sha256", "python_libpython_sha256",
                 "python_runtime_manifest_sha256", "module_hashes", "action_contract_hash",
                 "mechanism_contract_hash", "linter_sha256", "reader_sha256",
-                "acceptor_sha256", "generation_timeout_seconds",
+                "snagrepair_sha256",
+                "acceptor_gnu_sha256", "acceptor_make_sha256",
+                "semantic_checker_manifest_sha256", "semantic_checkers",
+                "generation_timeout_seconds",
                 "startup_timeout_seconds", "job_count", "port_base",
                 "engine_arguments", "python_isolation_flags",
                 "python_gate_bootstrap_sha256", "engine_environment",
@@ -730,6 +832,17 @@ class RuneCorpusControllerTests(unittest.TestCase):
             snapshot.chmod(0o555)
             with self.assertRaisesRegex(controller.CorpusError, "roles"):
                 controller.verify_snapshot(snapshot)
+
+    def test_semantic_manifest_cannot_omit_lmctf58_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = Path(temporary) / "semantic.json"
+            manifest.write_text('{"checkers":[]}\n', encoding="ascii")
+            with self.assertRaisesRegex(
+                controller.CorpusError, "required applicability"
+            ):
+                controller.load_semantic_checker_manifest(
+                    manifest, controller.validate_manifest()
+                )
 
     def test_private_staging_has_only_attempt_local_runtime_inputs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -821,8 +934,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 return None
 
         class FakeProcess:
-            def __init__(self, output, private, ready, failure_line, exit_failure_line):
-                self.pid = 424242
+            def __init__(self, output, private, ready, failure_line, exit_failure_line, pid):
+                self.pid = pid
                 self.returncode = None
                 self.stdin = FakeInput(
                     self, output, private, ready, failure_line, exit_failure_line
@@ -850,11 +963,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ):
                 descriptors: list[int] = []
                 launched_commands: list[list[str]] = []
+                cold_load_timeouts: list[float] = []
+                original_cold_load = controller.run_fresh_cold_load
 
                 def popen(command, **kwargs):
                     self.assertIn(controller.GUARD_BOOTSTRAP, command)
                     self.assertNotIn(str(ROOT / "tools/rune_corpus_controller.py"), command)
                     launched_commands.append(list(command))
+                    launch_number = len(launched_commands)
                     verified = controller.verify_snapshot(snapshot)
                     interpreter = snapshot / verified["python_runtime"]["interpreter"]["path"]
                     self.assertEqual(str(snapshot / verified["python_runtime"]["loader"]["path"]), command[0])
@@ -874,15 +990,34 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         launched_engine,
                     )
                     self.assertNotEqual("q2ded", launched_engine.name[:15])
-                    return FakeProcess(
+                    fake = FakeProcess(
                         kwargs["stdout"], Path(kwargs["cwd"]), ready,
-                        failure_line, exit_failure_line,
+                        failure_line, exit_failure_line, 424241 + launch_number,
                     )
+                    if launch_number == 2:
+                        artifact = Path(kwargs["cwd"]) / "game/maps/lmctf01.rune"
+                        snag = artifact.with_suffix(".snag")
+                        evidence = Path(kwargs["cwd"]).parent / "snag-bootstrap-evidence.json"
+                        kwargs["stdout"].write(
+                            (
+                                "slipgate: snag ready map=lmctf01 repairs=0 "
+                                f"rune_sha256={controller.sha256_regular(artifact)} "
+                                f"evidence_sha256={controller.sha256_regular(evidence)} "
+                                f"snag_sha256={controller.sha256_regular(snag)}\n"
+                            ).encode("ascii")
+                        )
+                        kwargs["stdout"].write(
+                            b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
+                            b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
+                        )
+                        kwargs["stdout"].flush()
+                    return fake
 
                 def identity_for_engine(_pid, executable, expected_argv=None):
                     return dataclasses.replace(
                         base_identity,
-                        pid=424242,
+                        pid=_pid,
+                        start_ticks=base_identity.start_ticks + _pid,
                         executable=str(Path(executable).resolve(strict=True)),
                         executable_sha256=controller.sha256_regular(Path(executable)),
                         cmdline_sha256=controller.sha256_bytes(expected_argv or b""),
@@ -893,9 +1028,39 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     descriptors.append(descriptor)
                     return descriptor
 
+                def cold_load(*args, **kwargs):
+                    cold_load_timeouts.append(kwargs["timeout"])
+                    return original_cold_load(*args, **kwargs)
+
+                def bootstrap_snag(_attempt, _snapshot, _map_name,
+                                   artifact, _fingerprint):
+                    evidence = _attempt / "snag-bootstrap-evidence.json"
+                    controller.atomic_write_json(evidence, {
+                        "artifact_sha256": controller.sha256_regular(artifact),
+                        "classification": "NO_ACCEPTED_OBSERVATION",
+                        "fingerprint": _fingerprint,
+                        "format": "lmctf-snag-bootstrap-v1",
+                        "map": _map_name,
+                    })
+                    target = artifact.with_suffix(".snag")
+                    target.write_text(
+                        bootstrap_snag_text(
+                            _map_name,
+                            controller.sha256_regular(artifact),
+                            controller.sha256_regular(evidence),
+                        ),
+                        encoding="ascii",
+                    )
+                    return {
+                        "evidence": controller.regular_file_record(evidence),
+                        "snag": controller.regular_file_record(target),
+                    }
+
                 with mock.patch.object(controller.subprocess, "Popen", side_effect=popen), \
                         mock.patch.object(controller, "wait_for_exec_identity", side_effect=identity_for_engine), \
-                        mock.patch.object(controller, "open_pidfd", side_effect=pidfd):
+                        mock.patch.object(controller, "open_pidfd", side_effect=pidfd), \
+                        mock.patch.object(controller, "stage_bootstrap_snag", side_effect=bootstrap_snag), \
+                        mock.patch.object(controller, "run_fresh_cold_load", side_effect=cold_load):
                     result = controller.run_one_map(
                         run_root, snapshot, "lmctf01", 62000, "fingerprint",
                         startup_timeout=0.001,
@@ -903,7 +1068,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         gate_runner=FakeGateRunner("lmctf01"),
                     )
                 self.assertTrue(descriptors)
-                self.assertEqual(1, len(launched_commands))
+                self.assertEqual(
+                    2 if result["classification"] == "PASS" else 1,
+                    len(launched_commands),
+                )
+                self.assertEqual(
+                    [0.001] if result["classification"] == "PASS" else [],
+                    cold_load_timeouts,
+                )
                 return result
 
             pass_root = work / "pass-run"
@@ -922,8 +1094,20 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertNotEqual(
                 "q2ded", Path(owner["process"]["executable"]).name[:15]
             )
-            self.assertEqual(3, len(pass_result["gate_log_sha256"]))
+            self.assertEqual(4, len(pass_result["gate_log_sha256"]))
+            self.assertIsNotNone(pass_result["cold_load_owner_record"])
+            self.assertIsNotNone(pass_result["cold_load_log_sha256"])
+            self.assertIsNotNone(pass_result["cold_load_snag_record"])
+            self.assertIsNotNone(pass_result["cold_load_snag_evidence_record"])
             attempt = pass_root / "runs/lmctf01/attempt-0001"
+            self.assertEqual(
+                attempt / "private/game/maps/lmctf01.rune",
+                controller._validate_terminal_schema(
+                    pass_result, run_root=pass_root, attempt=attempt,
+                    map_name="lmctf01", fingerprint="fingerprint",
+                    stable_port=62000,
+                ),
+            )
             self.assertEqual(0, stat.S_IMODE(attempt.stat().st_mode) & 0o222)
             self.assertEqual(0, stat.S_IMODE((attempt / "result.json").stat().st_mode) & 0o222)
 
@@ -960,7 +1144,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             timeout_root = work / "timeout-run"
             timed_out = run_scenario(timeout_root, False, 0.02)
             self.assertEqual("TIMEOUT", timed_out["classification"])
-            self.assertFalse((timeout_root / "runs/lmctf01/attempt-0001/gate-c.log").exists())
+            self.assertFalse((timeout_root / "runs/lmctf01/attempt-0001/gate-c_gnu.log").exists())
             self.thaw(snapshot)
             self.thaw(pass_root)
             self.thaw(rejected_root)
@@ -1187,7 +1371,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 controller.parse_generation_log(bad_later, "gatecase", artifact, attempt)
             with self.assertRaisesRegex(controller.CorpusError, "count mismatch"):
                 controller.validate_gate_agreement(
-                    report("gatecase"), report("gatecase", seeds=8),
+                    report("gatecase"), report("gatecase"),
+                    report("gatecase", seeds=8),
                     "gatecase", parsed["counts"],
                 )
             traversing = good.replace(
@@ -1250,7 +1435,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     artifact, "gatecase",
                     {"seeds": 7, "links": 9, "mechanism_nodes": 4,
                      "triggers": 2, "inventory_edges": 3, "plans": 5},
-                    acceptor=work / "runeaccept",
+                    acceptor_gnu=work / "runeaccept.gnu",
+                    acceptor_make=work / "runeaccept.make",
                     python_interpreter=interpreter,
                     runeio=work / "runeio.py",
                     runelint=work / "runelint.py",
@@ -1263,21 +1449,226 @@ class RuneCorpusControllerTests(unittest.TestCase):
             )
             self.assertEqual("-c", runner.commands[2][4])
             self.assertEqual(str(work), runner.commands[2][-3])
-            self.assertEqual(str(work / "runelint.py"), runner.commands[2][-2])
+            self.assertEqual(str(work / "runeio.py"), runner.commands[2][-2])
             self.assertEqual(str(artifact), runner.commands[2][-1])
+            self.assertEqual(str(work / "runelint.py"), runner.commands[3][-2])
             self.assertEqual(controller.CHILD_ENVIRONMENT, runner.kwargs[0]["env"])
+            self.assertEqual(controller.CHILD_ENVIRONMENT, runner.kwargs[1]["env"])
             expected_python_env = controller.python_child_environment(
                 work / "python-runtime"
             )
-            self.assertEqual(expected_python_env, runner.kwargs[1]["env"])
             self.assertEqual(expected_python_env, runner.kwargs[2]["env"])
+            self.assertEqual(expected_python_env, runner.kwargs[3]["env"])
             forbidden = {
                 "PATH", "LD_PRELOAD", "PYTHONPATH", "MAKEFLAGS", "MFLAGS",
                 "GNUMAKEFLAGS",
             }
             self.assertTrue(all(forbidden.isdisjoint(kwargs["env"]) for kwargs in runner.kwargs))
             self.assertEqual(7, result["decoded_counts"]["seed_count"])
-            self.assertEqual(3, len(result["gate_logs"]))
+            self.assertEqual(4, len(result["gate_logs"]))
+
+    def test_dual_c_readers_must_execute_and_agree(self):
+        counts = {
+            "seeds": 7, "links": 9, "mechanism_nodes": 4,
+            "triggers": 2, "inventory_edges": 3, "plans": 5,
+        }
+        with self.assertRaisesRegex(controller.CorpusError, "GNU/Make C"):
+            controller.validate_gate_agreement(
+                report("gatecase"), report("gatecase", seeds=8),
+                report("gatecase"), "gatecase", counts,
+            )
+
+    def test_applicable_semantic_checker_is_manifested_and_receives_roots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            verified = controller.verify_snapshot(snapshot)
+            artifact = work / "lmctf58.rune"
+            artifact.write_bytes(b"artifact")
+            checkers = controller.semantic_checkers_for_map(
+                snapshot, verified, "lmctf58"
+            )
+            self.assertEqual(["lmctf58"], [name for name, _path in checkers])
+            self.assertEqual([], controller.semantic_checkers_for_map(
+                snapshot, verified, "lmctf01"
+            ))
+            runner = FakeGateRunner("lmctf58")
+            result = controller.run_gates(
+                artifact, "lmctf58",
+                {"seeds": 7, "links": 9, "mechanism_nodes": 4,
+                 "triggers": 2, "inventory_edges": 3, "plans": 5},
+                acceptor_gnu=snapshot / verified["by_role"]["acceptor_gnu"]["path"],
+                acceptor_make=snapshot / verified["by_role"]["acceptor_make"]["path"],
+                python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
+                runeio=snapshot / verified["by_role"]["runeio"]["path"],
+                runelint=snapshot / verified["by_role"]["runelint"]["path"],
+                objective_roots={"red": 1, "blue": 2},
+                semantic_checkers=checkers,
+                log_directory=work / "logs",
+                runner=runner,
+                fingerprint="fingerprint",
+            )
+            self.assertEqual(["semantic-lmctf58"], result["semantic_gate_labels"])
+            self.assertEqual(5, len(runner.commands))
+            self.assertEqual(
+                ["--objective-roots", "1", "2", str(artifact)],
+                runner.commands[-1][-4:],
+            )
+            self.assertTrue((work / "logs/gate-semantic-lmctf58.integrity.json").is_file())
+            self.thaw(snapshot)
+
+    def test_cold_load_grammar_rejects_generation_and_count_drift(self):
+        ready = (
+            "slipgate: rune ready lmctf01, 7 seeds, 9 links, 4 mechanism "
+            "nodes, 5 plans, gravity 800, all fields up\n"
+        )
+        counts = {"seeds": 7, "links": 9, "mechanism_nodes": 4, "plans": 5}
+        self.assertEqual(
+            counts, controller.parse_cold_load_log(ready, "lmctf01", counts)
+        )
+        with self.assertRaisesRegex(controller.CorpusError, "unexpectedly generated"):
+            controller.parse_cold_load_log(
+                "rune: wrote game/maps/lmctf01.rune (7 seeds, 9 links, "
+                "4 mechanism nodes, 2 triggers, 3 inventory edges, "
+                "5 activation plans)\n" + ready,
+                "lmctf01", counts,
+            )
+        with self.assertRaisesRegex(controller.CorpusError, "counts disagree"):
+            controller.parse_cold_load_log(
+                ready.replace("7 seeds", "8 seeds"), "lmctf01", counts
+            )
+
+    def test_cold_load_bootstrap_snag_uses_frozen_tool_and_exact_artifact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            attempt = work / "attempt"
+            artifact = attempt / "private/game/maps/lmctf01.rune"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"authenticated-rune-bytes")
+            before = controller.regular_file_record(artifact)
+
+            def verified(_snapshot, _layout, label, target, arguments):
+                self.assertEqual(label, "snag-bootstrap")
+                roles = controller.verify_snapshot(snapshot)["by_role"]
+                self.assertEqual(
+                    target, snapshot / roles["snagrepair"]["path"])
+                self.assertEqual(arguments[:3], [
+                    "--explicit-zero", "--map", "lmctf01"])
+                self.assertEqual(arguments[3:5], ["--rune", str(artifact)])
+                output = Path(arguments[arguments.index("--output") + 1])
+                evidence = Path(
+                    arguments[arguments.index("--evidence-manifest") + 1])
+                output.write_text(
+                    bootstrap_snag_text(
+                        "lmctf01",
+                        controller.sha256_regular(artifact),
+                        controller.sha256_regular(evidence),
+                    ),
+                    encoding="ascii",
+                )
+                return 0, b"", {"ready": {}, "done": {}}
+
+            with mock.patch.object(
+                    controller, "run_verified_python", side_effect=verified):
+                result = controller.stage_bootstrap_snag(
+                    attempt, snapshot, "lmctf01", artifact, "f" * 64)
+            self.assertEqual(controller.regular_file_record(artifact), before)
+            self.assertEqual(result["snag"]["mode"], 0o444)
+            self.assertEqual(result["evidence"]["mode"], 0o444)
+            evidence = json.loads(
+                (attempt / "snag-bootstrap-evidence.json").read_text())
+            self.assertEqual(evidence, {
+                "artifact_sha256": before["sha256"],
+                "classification": "NO_ACCEPTED_OBSERVATION",
+                "fingerprint": "f" * 64,
+                "format": "lmctf-snag-bootstrap-v1",
+                "map": "lmctf01",
+            })
+            (attempt / "snag-bootstrap-evidence.json").chmod(0o644)
+            (attempt / "snag-bootstrap-evidence.json").write_text(
+                '{"changed":true}\n', encoding="ascii")
+            with self.assertRaisesRegex(
+                    controller.GateIntegrityError, "changed its bootstrap"):
+                controller._validate_retained_bootstrap_snag(
+                    result,
+                    artifact_sha256=before["sha256"],
+                    fingerprint="f" * 64,
+                    map_name="lmctf01",
+                )
+            self.thaw(snapshot)
+
+    def test_cold_load_bootstrap_snag_rejects_gate_and_output_drift(self):
+        scenarios = (
+            ("exit", controller.CorpusError),
+            ("stdout", controller.CorpusError),
+            ("missing", controller.GateIntegrityError),
+            ("artifact", controller.GateIntegrityError),
+            ("hardlink", controller.GateIntegrityError),
+            ("wrong-evidence", controller.CorpusError),
+        )
+        for scenario, error_type in scenarios:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary)
+                snapshot = self.make_snapshot(work)
+                attempt = work / "attempt"
+                artifact = attempt / "private/game/maps/lmctf01.rune"
+                artifact.parent.mkdir(parents=True)
+                artifact.write_bytes(b"authenticated-rune-bytes")
+
+                def verified(_snapshot, _layout, _label, _target, arguments):
+                    output = Path(arguments[arguments.index("--output") + 1])
+                    evidence = Path(
+                        arguments[arguments.index("--evidence-manifest") + 1])
+                    if scenario == "exit":
+                        return 7, b"", {"ready": {}, "done": {}}
+                    if scenario == "missing":
+                        return 0, b"", {"ready": {}, "done": {}}
+                    if scenario == "hardlink":
+                        os.link(artifact, output)
+                    else:
+                        evidence_hash = (
+                            "0" * 64 if scenario == "wrong-evidence"
+                            else controller.sha256_regular(evidence)
+                        )
+                        output.write_text(
+                            bootstrap_snag_text(
+                                "lmctf01",
+                                controller.sha256_regular(artifact),
+                                evidence_hash,
+                            ),
+                            encoding="ascii",
+                        )
+                    if scenario == "artifact":
+                        artifact.write_bytes(b"changed-rune-bytes")
+                    return (
+                        0,
+                        b"unexpected output" if scenario == "stdout" else b"",
+                        {"ready": {}, "done": {}},
+                    )
+
+                with mock.patch.object(
+                        controller, "run_verified_python", side_effect=verified):
+                    with self.assertRaises(error_type):
+                        controller.stage_bootstrap_snag(
+                            attempt, snapshot, "lmctf01", artifact, "f" * 64)
+                self.thaw(snapshot)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            attempt = work / "attempt"
+            artifact = attempt / "private/game/maps/lmctf01.rune"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"authenticated-rune-bytes")
+            artifact.with_suffix(".snag").write_bytes(b"preexisting")
+            with mock.patch.object(controller, "run_verified_python") as runner:
+                with self.assertRaisesRegex(
+                        controller.GateIntegrityError, "already exists"):
+                    controller.stage_bootstrap_snag(
+                        attempt, snapshot, "lmctf01", artifact, "f" * 64)
+            runner.assert_not_called()
+            self.thaw(snapshot)
 
     def test_contaminated_pass_is_not_resumable(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1298,7 +1689,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "created_at": controller.utc_now(), "process": {"pid": 9},
             })
             controller.atomic_write_bytes(server, b"terminal\n")
-            for label in ("c", "python", "lint"):
+            for label in ("c_gnu", "c_make", "python", "lint"):
                 controller.atomic_write_bytes(attempt / f"gate-{label}.log", label.encode())
             document, fingerprint = controller.build_fingerprint_document(
                 snapshot,
@@ -1332,7 +1723,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     item["sha256"] for item in evidence
                     if item["path"].endswith(f"gate-{label}.log")
                 )
-                for label in ("c", "python", "lint")
+                for label in ("c_gnu", "c_make", "python", "lint")
             }
             detail = "all generation and artifact gates passed"
             result = {
@@ -1362,11 +1753,18 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     for field in controller.REPORT_FIELDS
                 },
                 "gate_output_sha256": {
-                    "c": controller.sha256_bytes(report("gatecase")),
+                    "c_gnu": controller.sha256_bytes(report("gatecase")),
+                    "c_make": controller.sha256_bytes(report("gatecase")),
                     "python": controller.sha256_bytes(report("gatecase")),
                     "lint": controller.sha256_bytes(b""),
                 },
                 "gate_log_sha256": gate_logs,
+                "semantic_gate_labels": [],
+                "cold_load_owner_record": None,
+                "cold_load_command_sha256": None,
+                "cold_load_log_sha256": None,
+                "cold_load_snag_record": None,
+                "cold_load_snag_evidence_record": None,
             }
             result_path = controller.publish_result(run_root, "gatecase", result, attempt)
             runner = FakeGateRunner("gatecase")

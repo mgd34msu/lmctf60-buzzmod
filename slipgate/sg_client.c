@@ -23,6 +23,12 @@
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_pov_identity.h"
+#include "slipgate/sg_defense_shift.h"
+#include "slipgate/sg_bot_ping.h"
+#include "slipgate/sg_ribbon_random.h"
+#include "slipgate/sg_lead_random.h"
+#include "slipgate/sg_persona_assignment.h"
+#include "slipgate/sg_escape_random.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -98,6 +104,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
+	SG_StrikeWeaponTargetClear(bot);
 	bot->last_goalcost = -1;
 	bot->sticky_link = -1;
 	bot->carry_startcost = -1;
@@ -110,6 +117,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->lead_seen_up_at = -1.0f;
 	bot->lead_inferred_until = 0.0f;
 	bot->patrol_seed = -1;
+	bot->patrol_link = -1;
 	bot->def_shift_seed = -1;
 	bot->def_shift_link = -1;
 	bot->def_shift_from = -1;
@@ -381,13 +389,14 @@ qboolean SG_AddBot(void)
  * player calling himself "[SG]Arach" -- and it lands on the scoreboard as
  * well as in the telemetry.
  *
- * The seat keeps its identity: the slot number, the skin and everything
- * else derived from the slot are untouched. Only the DISPLAY name walks
- * forward to the next free entry in the table.
+ * The process seat and skin stay put. The displayed name and its authored
+ * persona row walk together to the next free entry, so roster identity never
+ * names one character while the controller plays another.
  */
-static qboolean SG_NameOnHuman(const char *name)
+static uint32_t SG_OccupiedPersonaNames(void)
 {
-	int i;
+	uint32_t occupied = 0;
+	int i, row;
 
 	for (i = 1; i <= game.maxclients; i++)
 	{
@@ -395,13 +404,19 @@ static qboolean SG_NameOnHuman(const char *name)
 
 		if (!e->inuse || !e->client)
 			continue;
-		if (e->flags & FL_BOT)      /* a bot's name is ours to move, not to
-		                             * dodge; the slots already differ */
-			continue;
-		if (!Q_stricmp(e->client->pers.netname, name))
-			return true;
+		for (row = 0; row < 16; row++)
+		{
+			char candidate[32];
+
+			Com_sprintf(candidate, sizeof(candidate), "[SG]%s", sg_names[row]);
+			if (!Q_stricmp(e->client->pers.netname, candidate))
+			{
+				occupied |= UINT32_C(1) << row;
+				break;
+			}
+		}
 	}
-	return false;
+	return occupied;
 }
 
 qboolean SG_AddBotTeam(int teamnum)
@@ -409,7 +424,8 @@ qboolean SG_AddBotTeam(int teamnum)
 	edict_t *ent;
 	char userinfo[MAX_INFO_STRING];
 	char name[32];
-	int i, slot = -1, tries;
+	int i, slot = -1;
+	unsigned persona_slot;
 
 	if (!SG_LevelSetup())
 		return false;
@@ -427,18 +443,13 @@ qboolean SG_AddBotTeam(int teamnum)
 	BotSlot_Reset(&sg_bots[slot]);
 
 	memset(userinfo, 0, sizeof(userinfo));
-	/* Tag first: "[SG]Arach", not "Arach[SG]".
-	 * The name walks past any connected human already wearing it; sixteen
-	 * tries is the whole table, and past that the collision is accepted
-	 * rather than the bot refused -- a duplicate name is a nuisance, a
-	 * short-handed team is a broken match. */
-	for (tries = 0; tries < 16; tries++)
-	{
-		Com_sprintf(name, sizeof(name), "[SG]%s",
-		            sg_names[(slot + tries) & 15]);
-		if (!SG_NameOnHuman(name))
-			break;
-	}
+	/* Tag first: "[SG]Arach", not "Arach[SG]". Names already worn by a
+	 * human or an earlier bot are occupied: skipping a human must not give two
+	 * later bots the same identity. If all sixteen rows are occupied, keep the
+	 * preferred row rather than refusing a needed team body. */
+	persona_slot = SG_PersonaAssignmentChoose(SG_OccupiedPersonaNames(),
+	    (unsigned)slot);
+	Com_sprintf(name, sizeof(name), "[SG]%s", sg_names[persona_slot]);
 	Info_SetValueForKey(userinfo, "name", name);
 	/* a CTF-conforming request from the start; the team letter is corrected
 	 * in the second userinfo pass once the team is known, and servers
@@ -558,8 +569,17 @@ qboolean SG_AddBotTeam(int teamnum)
 		BotSlot_Reset(&sg_bots[slot]);
 		return false;
 	}
+	sg_bots[slot].patrol_random = SG_DefensePatrolRandomInitial(
+	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
+	sg_bots[slot].ribbon_random = SG_RibbonRandomInitial(
+	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
+	sg_bots[slot].lead_random = SG_LeadRandomInitial(
+	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
+	sg_bots[slot].escape_random = SG_EscapeRandomInitial(
+	    sg_bots[slot].instance_token, (unsigned)(ent - g_edicts - 1));
 	sg_bots[slot].active = true;
-	sg_bots[slot].fake_ping = 5 + rand() % 11;
+	sg_bots[slot].fake_ping = SG_BotPingBase(sg_bots[slot].instance_token,
+	    (unsigned)(ent - g_edicts - 1));
 	(void)SG_CompoundGuardGameBotAttach(&sg_bots[slot].compound_guard,
 	    slot, ent);
 	/* A fresh late join has no respawn edge from which to seed the movement
@@ -574,7 +594,7 @@ qboolean SG_AddBotTeam(int teamnum)
 	SG_Mark(&sg_bots[slot].watch_since);
 	SG_Mark(&sg_bots[slot].stag_since);
 	SG_Mark(&sg_bots[slot].wedge_since);
-	SG_PersonaBind(ent, slot);      /* the name now indexes a character */
+	SG_PersonaBind(ent, (int)persona_slot); /* displayed identity owns behavior */
 
 	/*
 	 * The persona in the join print, because the first question asked of a

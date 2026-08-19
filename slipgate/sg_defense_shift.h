@@ -3,6 +3,7 @@
 #define SG_DEFENSE_SHIFT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct sg_defense_shift_candidate_s
 {
@@ -22,6 +23,14 @@ typedef struct sg_defense_shift_request_s
 	int max_goal_ms;
 	int previous_seed;
 } sg_defense_shift_request_t;
+
+typedef struct sg_defense_patrol_candidate_s
+{
+	int link_index;
+	int seed_index;
+	int goal_ms;
+	int is_run;
+} sg_defense_patrol_candidate_t;
 
 /* Pure geometry and admission policy for the stand defender's live-combat
  * leg. Collision and floor truth remain in sg_move.c, where the real player
@@ -82,5 +91,33 @@ int SG_DefenseShiftChoose(const sg_defense_shift_request_t *request,
  * invalid. Returns non-zero when a shift was retired. */
 int SG_DefenseShiftRetireIfInvalid(int shift_link, int link_ready,
 	int *commit_link);
+
+/* Choose one quiet-post patrol leg.  The draw is supplied by the live caller,
+ * but filtering and immediate-reversal avoidance are deterministic and
+ * independently executable. */
+int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
+	size_t candidate_count, int max_goal_ms, int previous_seed,
+	unsigned draw, int *seed_out);
+
+/* Complete a patrol leg only at its selected seed.  Clearing the target is the
+ * caller's authority to start the post-arrival dwell clock. */
+int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed);
+
+/* A patrol RUN is an exact role-local transaction.  Contact, role loss, or
+ * disabling the behavior retires only that link and its target before movement
+ * can reuse the ordinary commitment. */
+int SG_DefensePatrolRetireIfInactive(int active, int *patrol_link,
+	int *target_seed, int *commit_link);
+
+/* sg_patrol is the patrol walking throttle.  Invalid/off values disable the
+ * behavior; enabled values are bounded away from both a shuffle and a sprint. */
+float SG_DefensePatrolThrottle(float configured);
+
+/* Private per-bot patrol sequence. Route and dwell choices must not consume
+ * the process-global RNG used by combat and other bots. */
+uint32_t SG_DefensePatrolRandomInitial(uint64_t instance_token,
+	unsigned client_slot);
+uint32_t SG_DefensePatrolRandomNext(uint32_t state);
+float SG_DefensePatrolDwell(uint32_t draw);
 
 #endif /* SG_DEFENSE_SHIFT_H */

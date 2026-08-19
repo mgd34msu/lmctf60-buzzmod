@@ -60,8 +60,53 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
             self.assertIn(token, source)
         self.assertIn('X(defshift, "sg_defshift", "0")',
                       (ROOT / "slipgate/sg_cvars.h").read_text())
-        self.assertIn('X(patrol, "sg_patrol", "0")',
+        self.assertIn('X(patrol, "sg_patrol", "0.55")',
                       (ROOT / "slipgate/sg_cvars.h").read_text())
+
+    def test_quiet_patrol_is_enabled_and_walk_paced(self) -> None:
+        descend = (ROOT / "slipgate/sg_descend.c").read_text()
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+
+        self.assertIn("SG_DefensePatrolChoose(cand, nc", descend)
+        self.assertIn("tc->patrol_walk = true;", descend)
+        self.assertIn("SG_DefensePatrolThrottle(sg_cv.patrol->value)", move)
+        self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", move)
+
+    def test_defense_terminal_preserves_selected_field(self) -> None:
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+        start = move.index("else if (!have_aim && role == SG_ROLE_DEFEND)")
+        end = move.index("if (!have_aim && !gf && tc->scoop_mission)", start)
+        terminal = move[start:end]
+
+        self.assertIn(
+            "SG_TerminalFieldSeed(SG_Rune(), goal_field,", terminal)
+        self.assertIn("VectorCopy(SG_Rune()->seeds[terminal_seed].origin", terminal)
+        self.assertNotIn("SG_FlagStand", terminal)
+
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        for field in (
+            "sg_fields.to_post[SG_TeamIdx(team)]",
+            "sg_fields.to_lane[SG_TeamIdx(team)]",
+            "sg_fields.to_icept[SG_TeamIdx(team)]",
+        ):
+            self.assertIn(field, goal)
+
+    def test_contact_retires_exact_patrol_commit_before_latch(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+        retire = source.rfind("int patrol_link = bot->patrol_link", 0,
+                              source.index("SG_DefensePatrolRetireIfInactive(patrol_active"))
+        latch = source.index("THE LINK LATCH", retire)
+
+        self.assertLess(retire, latch)
+        self.assertIn("&bot->patrol_link, &bot->patrol_seed", source[retire:latch])
+        self.assertIn("&bot->commit_link", source[retire:latch])
+        self.assertIn("defense_quiet && !duel", source[retire:latch])
+        self.assertIn("!bot->engaged_last", source[retire:latch])
+        self.assertIn("tc->bestlink = bestlink", source[retire:latch])
+        self.assertIn("SG_TimerArm(&bot->patrol_until, 5.0f)",
+                      source[retire:latch])
+        self.assertIn("bot->patrol_link = chosen_link", source)
+        self.assertIn("DefenseShiftLinkReady(bot, bot->patrol_link", source)
 
     def test_late_shelf_retires_shift_before_post_or_movement(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
@@ -95,7 +140,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         preview_end = combat.index("/*\n * Is this edict the enemy flag carrier",
                                    preview)
         preview_body = combat[preview:preview_end]
-        self.assertIn("Combat_Scan(self, eye, forward, NULL, false)", preview_body)
+        self.assertIn("Combat_Scan(self, eye, forward, NULL, -1, false)", preview_body)
         self.assertIn("SG_CombatPreviewCandidateEligible", combat)
         self.assertNotIn("sg_cbt_", preview_body)
 
@@ -125,6 +170,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
 
         for field in (
+            "patrol_link",
             "def_shift_seed",
             "def_shift_link",
             "def_shift_from",

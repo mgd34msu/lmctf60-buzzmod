@@ -7,6 +7,8 @@
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_strike.h"
+#include "slipgate/sg_death_belief.h"
+#include "slipgate/sg_role_policy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -22,6 +24,10 @@ qboolean SG_StrikeTestApplyDutyRoute(sg_think_t *tc,
 void SG_StrikeTestRetireGenericRail(sg_bot_t *bot, const sg_think_t *tc);
 qboolean SG_StrikeTestApplyRallyPolicy(sg_bot_t *bot,
 	const sg_think_t *tc, qboolean *rally_hold);
+qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
+	int ordered_role);
+void SG_StrikeTestPureRoutePrepareCommit(sg_bot_t *bot,
+	const sg_think_t *tc);
 
 static int failures;
 
@@ -60,7 +66,11 @@ static rune_link_t test_links[3];
 static int weapon_field[3];
 static int enemy_field[3];
 static int home_field[3];
+static int recover_field[3];
 static int carrier_field[3];
+static int formation_field[3];
+
+sg_team_belief_t sg_caco_team_belief;
 
 static void GuardCall(int call)
 {
@@ -165,8 +175,24 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 	    sizeof(bot->declared_button_end_q8));
 }
 
+/* The transition harness isolates route-purpose ownership from live item
+ * selection. Production clears the exact pad witness at this boundary; this
+ * stub preserves that observable state transition without linking sg_goal.c. */
+void SG_StrikeWeaponTargetClear(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->strike_weapon_target_ent = -1;
+	bot->strike_weapon_target_seed = -1;
+	memset(bot->strike_weapon_target_org, 0,
+	    sizeof(bot->strike_weapon_target_org));
+}
+
 static void WorldReset(void)
 {
+	memset(&sg_caco_team_belief, 0, sizeof(sg_caco_team_belief));
+	sg_caco_team_belief.carrier[0].client = -1;
+	sg_caco_team_belief.carrier[1].client = -1;
 	memset(&test_rune, 0, sizeof(test_rune));
 	memset(test_seeds, 0, sizeof(test_seeds));
 	memset(test_links, 0, sizeof(test_links));
@@ -195,12 +221,18 @@ static void WorldReset(void)
 	home_field[0] = 100;
 	home_field[1] = 600;
 	home_field[2] = 900;
+	recover_field[0] = 800;
+	recover_field[1] = 500;
+	recover_field[2] = 0;
 	carrier_field[0] = 300;
 	carrier_field[1] = 100;
 	carrier_field[2] = 800;
 	memset(&sg_fields, 0, sizeof(sg_fields));
 	sg_fields.to_red_flag = home_field;
 	sg_fields.to_blue_flag = enemy_field;
+	/* A live standoff re-floods our current flag field from the enemy thief.
+	 * It must route RECOVER, never the carrier's homeward egress. */
+	sg_fields.to_flag_now[0][0] = recover_field;
 	sg_fields.our_carrier[0] = carrier_field;
 	sg_fields.our_carrier_valid[0] = true;
 	level.time = 10.0f;
@@ -252,8 +284,12 @@ static void ArmExact(sg_bot_t *bot, sg_think_t *tc, int action)
 	test_links[1].action = (byte)action;
 	bot->commit_link = 1;
 	bot->commit_until = 30.0f;
+	bot->commit_route_field = weapon_field;
 	bot->strike_weapon_link = 1;
 	bot->strike_weapon_until = 20.0f;
+	bot->strike_weapon_target_ent = 6;
+	bot->strike_weapon_target_seed = 2;
+	bot->strike_weapon_target_org[0] = 128.0f;
 	bot->sticky_link = 1;
 	bot->latch_until = 25.0f;
 	bot->bl_link[0] = 77;
@@ -270,6 +306,9 @@ static void CheckCleared(const sg_bot_t *bot)
 	CHECK(bot->strike_weapon_link == -1);
 	CHECK(bot->strike_weapon_until == 0.0f);
 	CHECK(!bot->strike_weapon_draining);
+	CHECK(bot->strike_weapon_target_ent == -1);
+	CHECK(bot->strike_weapon_target_seed == -1);
+	CHECK(bot->strike_weapon_target_org[0] == 0.0f);
 	CHECK(bot->bl_link[0] == 77);
 	CHECK(bot->bl_until[0] == 88.0f);
 }
@@ -301,6 +340,7 @@ static void TestFreshTagAndOldCommitment(void)
 	CHECK(candidate == 1);
 	SG_StrikeTestCommitFreshLink(&bot, &tc, candidate);
 	CHECK(bot.commit_link == 1);
+	CHECK(bot.commit_route_field == weapon_field);
 	CHECK(bot.strike_weapon_link == 1);
 	CHECK(bot.strike_weapon_until == 15.0f);
 	CHECK(!bot.strike_weapon_draining);
@@ -385,6 +425,80 @@ static void TestFreshTagAndOldCommitment(void)
 	weapon_field[1] = weapon_field[0];
 	bot = Bot();
 	CHECK(SG_StrikeTestWeaponFilterFreshCandidate(&bot, &tc, 1) == -1);
+}
+
+static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
+{
+	sg_bot_t bot;
+	sg_think_t tc;
+
+	WorldReset();
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	bot.sticky_link = 1;
+	bot.latch_until = 25.0f;
+	CHECK(bot.commit_route_field == weapon_field);
+
+	/* PRESS replacing a weapon/recovery route must move on the enemy field
+	 * this frame, not after the generic three-second commitment expires. */
+	tc.goal_field = enemy_field;
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
+	CHECK(bot.commit_route_field == NULL);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+
+	/* The same field retains its anti-flap commitment. */
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1);
+	CHECK(bot.commit_route_field == weapon_field);
+
+	/* A composed surface is not an exact purpose change. */
+	tc.route_pure = false;
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1);
+
+	/* A speed hook which already fired owns physics even though it is layered
+	 * on an ordinary RUN; the new mission waits for its bounded landing. */
+	tc.route_pure = true;
+	bot.hook_phase = 2;
+	bot.hook_link = 1;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
+
+	/* A selected or aiming hook has not fired. Positive progress toward its old
+	 * endpoint is not current-purpose authority, so the new field cancels it. */
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	test_links[1].action = RL_HOOK;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	bot.hook_phase = 1;
+	bot.hook_link = 1;
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
+	CHECK(bot.hook_link == -1 && bot.commit_route_field == NULL);
+
+	/* Once fired, the same graph hook is physical and retains its bounded
+	 * attach/pull/landing lifecycle across a mission change. */
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	test_links[1].action = RL_HOOK;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	bot.hook_phase = 2;
+	bot.hook_link = 1;
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
 }
 
 static void TestDeadlineGoAndCurrentCandidate(void)
@@ -927,14 +1041,61 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(bot.def_supply_phase == SG_DEFENSE_SUPPLY_PHASE_RETURN);
 	CHECK(bot.def_supply_armed);
 
-	/* The external carrier's production duty selector uses HOME, stays route
-	 * pure, never opens the weapon diversion, and consumes legacy rally. */
+	/* In a flag standoff the carrier still uses HOME while RECOVER uses the
+	 * thief-bound dynamic own-flag field. */
 	tc = Think();
 	tc.strike_active = true;
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == home_field && tc.route_field == home_field);
 	CHECK(tc.route_pure);
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_RECOVER,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == recover_field && tc.route_field == recover_field);
+	CHECK(tc.route_pure);
+	/* PRESS is the enemy base while our carrier owns the flag. It must not
+	 * collapse into a duplicate carrier-support route. */
+	sg_fields.to_flag_now[0][1] = carrier_field;
+	sg_caco_team_belief.carrier[0].client = 3;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_PRESS,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == enemy_field && tc.route_field == enemy_field);
+	sg_caco_team_belief.carrier[0].client = -1;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_PRESS,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == carrier_field && tc.route_field == carrier_field);
+	/* Carrier support is not flooded until the frame after pickup.  The
+	 * transient fallback remains homeward, never thief-bound. */
+	sg_fields.our_carrier_valid[0] = false;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == home_field && tc.route_field == home_field);
+	CHECK(tc.route_pure);
+	sg_fields.our_carrier_valid[0] = true;
+	/* Objective runs after effective strike duty is known.  A strike-assigned
+	 * escort that already resolved a live lead/trail station must retain that
+	 * formation; the generic carrier overlay used to erase it here. */
+	tc.goal_field = formation_field;
+	tc.route_field = formation_field;
+	tc.route_pure = false;
+	tc.escort_mission = true;
+	tc.escort_formation = true;
+	tc.scoop_mission = true;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == formation_field &&
+	    tc.route_field == formation_field);
+	CHECK(tc.route_pure);
+	CHECK(!tc.scoop_mission);
+	/* A generic effective escort still receives the ordinary carrier field. */
+	tc.escort_formation = false;
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
+	    CTF_TEAM_RED));
+	CHECK(tc.goal_field == carrier_field && tc.route_field == carrier_field);
+	CHECK(tc.route_pure);
+	/* Restore the carrier duty for the downstream weapon/rally assertions. */
+	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
+	    CTF_TEAM_RED));
 	CHECK(!tc.strike_weapon_pursuit);
 	bot.rally_since = 42.0f;
 	CHECK(SG_StrikeTestApplyRallyPolicy(&bot, &tc, &rally_hold));
@@ -942,9 +1103,100 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(!rally_hold);
 }
 
+static void TestHumanOrderOwnsStrikeAdmission(void)
+{
+	CHECK(SG_StrikeTestAttackEligible(SG_ROLE_ATTACK, false, -1));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_DEFEND, false, -1));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_ATTACK, false,
+	    SG_ROLE_ATTACK));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_ESCORT, false,
+	    SG_ROLE_ESCORT));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_RECOVER, false,
+	    SG_ROLE_RECOVER));
+	/* Flag possession remains physical authority even when an old order is
+	 * still inside its ninety-second lease. */
+	CHECK(SG_StrikeTestAttackEligible(SG_ROLE_CARRY, true,
+	    SG_ROLE_DEFEND));
+}
+
+static void TestDeathLocationRequiresPriorBelief(void)
+{
+	sg_belief_enemy_t records[3];
+
+	memset(records, 0, sizeof(records));
+	records[0].client = 4;
+	records[0].seed = 1;
+	records[0].seen_time = 8.0f;
+	records[1].client = 4;
+	records[1].seed = 2;
+	records[1].seen_time = 9.0f;
+	records[2].client = 5;
+	records[2].seed = 0;
+	records[2].seen_time = 9.5f;
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 10.0f, 8.0f, 3) == 2);
+	CHECK(SG_DeathBeliefSeed(records, 3, 6, 10.0f, 8.0f, 3) == -1);
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 20.0f, 8.0f, 3) == -1);
+	records[1].seen_time = 11.0f;
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 10.0f, 8.0f, 3) == 1);
+	records[0].seed = 3;
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 10.0f, 8.0f, 3) == -1);
+}
+
+static void TestMissionHoldSurvivesGenericWedgeValve(void)
+{
+	CHECK(SG_RoleMissionHold(SG_ROLE_DEFEND, 1499, false));
+	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, 1499, false));
+	CHECK(!SG_RoleMissionHold(SG_ROLE_ESCORT, 1500, false));
+	CHECK(!SG_RoleMissionHold(SG_ROLE_ATTACK, 100, false));
+	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, SG_FIELD_INF, true));
+	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_ATTACK, 100, 3.0f));
+	CHECK(!SG_OptionalItemDetourAllowed(1, 0, SG_ROLE_ATTACK, 100, 3.0f));
+	CHECK(!SG_OptionalItemDetourAllowed(0, 1, SG_ROLE_ATTACK, 100, 3.0f));
+	CHECK(!SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 61, 3.0f));
+	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 60, 3.0f));
+	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 100, 2.99f));
+}
+
+static void TestCombatActivityResetsGenericWedgeClock(void)
+{
+	CHECK(!SG_WedgeClockReset(96.0f, false, false));
+	CHECK(SG_WedgeClockReset(96.01f, false, false));
+	CHECK(SG_WedgeClockReset(0.0f, true, false));
+	CHECK(SG_WedgeClockReset(0.0f, false, true));
+	CHECK(SG_WedgeKillHoldClear(false, false));
+	CHECK(!SG_WedgeKillHoldClear(true, false));
+	CHECK(!SG_WedgeKillHoldClear(false, true));
+	CHECK(!SG_WedgeKillHoldClear(true, true));
+	CHECK(SG_ObjectiveOrbitMayShelf(SG_ROLE_CARRY, false, false, true));
+	CHECK(SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, true, true, false));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, true, true, true));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, true, false, false));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_ATTACK, false, true, false));
+	CHECK(!SG_ObjectiveOrbitMayShelf(SG_ROLE_DEFEND, true, true, false));
+}
+
+static void TestMissionAndCombatCannotShelveRoutes(void)
+{
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ESCORT, 1499, false, false, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ESCORT, SG_FIELD_INF, true, false, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, true, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, false, true));
+	CHECK(!SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, false, false));
+	CHECK(SG_RoleOwnsDefenseState(SG_ROLE_DEFEND));
+	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_ATTACK));
+	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_RECOVER));
+	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_ESCORT));
+}
+
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
+	TestPureRouteChangeRetiresOnlyReversibleRun();
 	TestDeadlineGoAndCurrentCandidate();
 	TestSpeedHookAndStickyDrain();
 	TestRocketJumpBoundaries();
@@ -952,6 +1204,11 @@ int main(void)
 	TestLiftTeleportBoundaries();
 	TestDoorLeaseRetirement();
 	TestRailAndCarrierRoute();
+	TestHumanOrderOwnsStrikeAdmission();
+	TestDeathLocationRequiresPriorBelief();
+	TestMissionHoldSurvivesGenericWedgeValve();
+	TestCombatActivityResetsGenericWedgeClock();
+	TestMissionAndCombatCannotShelveRoutes();
 	if (failures)
 		return 1;
 	puts("sg_strike_transition_test: ok");

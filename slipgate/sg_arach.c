@@ -65,11 +65,16 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
+#include "slipgate/sg_defense_shift.h"
 #include "slipgate/sg_weights.h"
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_route_dither.h"
+#include "slipgate/sg_escort_dose.h"
+#include "slipgate/sg_role_skew_random.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
@@ -82,11 +87,19 @@ float	sg_grab_time[2] = { -1000.0f, -1000.0f };  /* per team */
 float	sg_push_until[2];   /* the conductor's window (sg_wavepush) */
 static float	sg_role_skew_until[2];
 static int	sg_role_skew[2];
+static uint32_t sg_role_skew_random[2];
 static int	sg_role_escort_carrier[2] = { -1, -1 };
 static qboolean sg_role_escort_on[2] = { true, true };
+static uint32_t sg_role_escort_epoch[2];
 static sg_strike_adapter_t sg_strike_adapter;
 static sg_role_t sg_strike_role_cache[SG_MAXBOTS];
 static qboolean sg_strike_role_valid[SG_MAXBOTS];
+/* Effective enemy-pressure membership is published with the role/strike
+ * snapshot, before serial bot think.  Route coordination must not infer a
+ * teammate's live duty from last frame's organic role. */
+static qboolean sg_strike_enemy_pressure_cache[SG_MAXBOTS];
+static int sg_strike_enemy_pressure_goal_cache[SG_MAXBOTS];
+static sg_strike_duty_t sg_strike_duty_cache[SG_MAXBOTS];
 static qboolean sg_strike_frame_ready;
 static qboolean sg_strike_telemetry_valid[2];
 static uint32_t sg_strike_telemetry_epoch[2];
@@ -104,10 +117,18 @@ static void Role_LevelReset(void)
 	sg_push_until[0] = sg_push_until[1] = 0.0f;
 	sg_role_skew_until[0] = sg_role_skew_until[1] = 0.0f;
 	sg_role_skew[0] = sg_role_skew[1] = 0;
+	sg_role_skew_random[0] = SG_RoleSkewRandomInitial(0);
+	sg_role_skew_random[1] = SG_RoleSkewRandomInitial(1);
 	sg_role_escort_carrier[0] = sg_role_escort_carrier[1] = -1;
 	sg_role_escort_on[0] = sg_role_escort_on[1] = true;
+	sg_role_escort_epoch[0] = sg_role_escort_epoch[1] = 0;
 	SG_StrikeAdapterReset(&sg_strike_adapter);
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	memset(sg_strike_enemy_pressure_cache, 0,
+	       sizeof(sg_strike_enemy_pressure_cache));
+	memset(sg_strike_enemy_pressure_goal_cache, 0xff,
+	       sizeof(sg_strike_enemy_pressure_goal_cache));
+	memset(sg_strike_duty_cache, 0, sizeof(sg_strike_duty_cache));
 	sg_strike_frame_ready = false;
 	memset(sg_strike_telemetry_valid, 0,
 	       sizeof(sg_strike_telemetry_valid));
@@ -1231,6 +1252,11 @@ qboolean SG_LevelSetup(void)
 	}
 	SG_StrikeAdapterReset(&sg_strike_adapter);
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	memset(sg_strike_enemy_pressure_cache, 0,
+	       sizeof(sg_strike_enemy_pressure_cache));
+	memset(sg_strike_enemy_pressure_goal_cache, 0xff,
+	       sizeof(sg_strike_enemy_pressure_goal_cache));
+	memset(sg_strike_duty_cache, 0, sizeof(sg_strike_duty_cache));
 	sg_strike_frame_ready = false;
 	memset(sg_strike_telemetry_valid, 0,
 	       sizeof(sg_strike_telemetry_valid));
@@ -1547,6 +1573,8 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	int team = bot->ent->client->ctf.teamnum;
 	int size = 0, defenders_wanted, my_rank = 0, i;
 	int my_client = (int)(bot->ent - g_edicts) - 1;
+	int my_slot = (int)(bot - sg_bots);
+	unsigned char live_team[SG_MAXBOTS];
 	sg_belief_carrier_t *own = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
 	if (carrying)
@@ -1572,17 +1600,21 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		}
 	}
 
+	memset(live_team, 0, sizeof(live_team));
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		if (!sg_bots[i].active || !sg_bots[i].ent || !sg_bots[i].ent->inuse)
 			continue;
 		if (sg_bots[i].ent->client->ctf.teamnum != team)
 			continue;
-		if (&sg_bots[i] == bot)
-			my_rank = size;
-		/* where in the ranking our own carrier sits, if it is one of ours */
-		size++;
+		/* A corpse cannot occupy a defender quota.  Live teammates compress the
+		 * stable slot order until it respawns; the next frame then admits it at
+		 * its ordinary rank again. */
+		if (sg_bots[i].ent->deadflag == DEAD_NO &&
+		    sg_bots[i].ent->health > 0)
+			live_team[i] = 1;
 	}
+	my_rank = SG_RoleLiveRank(live_team, SG_MAXBOTS, my_slot, &size);
 
 	/*
 	 * STRATEGY BY GAME STATE, the way the demos play it. Four states from
@@ -1613,8 +1645,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		qboolean theirs_astray =
 		    (sg_caco_team_belief.flag[belief_team]
 		         [SG_TeamIdx(SG_EnemyTeam(team))].state == SG_FLAG_ASTRAY);
-		qboolean have_carrier = (own->client >= 0 && own->seed >= 0 &&
-		                         sg_fields.our_carrier_valid[SG_TeamIdx(team)]);
+		qboolean have_carrier = own->client >= 0;
 
 		defenders_wanted = ours_astray ? 1 : 2;
 
@@ -1636,9 +1667,14 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 
 			if (SG_TimerReady(sg_role_skew_until[ts]))
 			{
-				sg_role_skew[ts] = (rand() % 3) - 1;
-				SG_TimerArm(&sg_role_skew_until[ts], 150.0f +
-				            (float)(rand() % 90));
+				sg_role_skew_random[ts] =
+				    SG_RoleSkewRandomNext(sg_role_skew_random[ts]);
+				sg_role_skew[ts] =
+				    SG_RoleSkewRandomValue(sg_role_skew_random[ts]);
+				sg_role_skew_random[ts] =
+				    SG_RoleSkewRandomNext(sg_role_skew_random[ts]);
+				SG_TimerArm(&sg_role_skew_until[ts],
+				    SG_RoleSkewRandomInterval(sg_role_skew_random[ts]));
 			}
 			defenders_wanted += sg_role_skew[ts];
 			if (defenders_wanted < 0)
@@ -1745,43 +1781,47 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		 */
 		if (have_carrier && own->client != my_client)
 		{
-			edict_t *car_ent = g_edicts + own->client + 1;
-			float bestd = 1e30f;
-			int best_i = -1, rank_i = 0, k;
+			const int ti = SG_TeamIdx(team);
+			const int *home = team == CTF_TEAM_RED ? sg_fields.to_red_flag
+			                                          : sg_fields.to_blue_flag;
+			int best_score = 0;
+			int best_i = -1, k;
 
 			for (k = 0; k < SG_MAXBOTS; k++)
 			{
-				vec3_t ed;
-				float dd;
+				int route_cost, score;
 
 				if (!sg_bots[k].active || !sg_bots[k].ent ||
 				    !sg_bots[k].ent->inuse)
 					continue;
 				if (sg_bots[k].ent->client->ctf.teamnum != team)
 					continue;
-				if (rank_i++ < defenders_wanted)
-					continue;       /* defenders keep the base */
-				if ((int)(sg_bots[k].ent - g_edicts) - 1 == own->client)
-					continue;       /* the carrier escorts nobody */
-				if (sg_bots[k].ent->deadflag)
-					continue;
-				/* The shared carrier flood can be finite globally but unreachable
-				 * from this bot's directed component. Assign an escort only where
-				 * the mission can actually be descended; another reachable body may
-				 * be available. */
+				/* Use only the team-belief carrier flood while it is current.  An
+				 * unknown teammate position falls back to the public capture stand;
+				 * the exact carrier edict origin never enters assignment. */
 				if (sg_bots[k].seed < 0 ||
 				    sg_bots[k].seed >= SG_Rune()->hdr.num_seeds ||
-				    sg_fields.our_carrier[SG_TeamIdx(team)]
-				        [sg_bots[k].seed] >= SG_FIELD_INF)
+				    !home)
 					continue;
-				VectorSubtract(sg_bots[k].ent->s.origin,
-				               car_ent->s.origin, ed);
-				dd = VectorLength(ed);
-				if (sg_bots[k].last_role == (int)SG_ROLE_ESCORT)
-					dd -= 300.0f;
-				if (dd < bestd)
+				route_cost = SG_EscortRouteCost(
+				    sg_fields.our_carrier_valid[ti],
+				    sg_fields.our_carrier[ti]
+				        ? sg_fields.our_carrier[ti][sg_bots[k].seed]
+				        : SG_FIELD_INF,
+				    home[sg_bots[k].seed]);
+				if (!SG_AutonomousEscortCandidate(live_team[k],
+				        SG_RoleOutsideDefenderQuota(live_team, SG_MAXBOTS,
+				            k, defenders_wanted),
+				        (int)(sg_bots[k].ent - g_edicts) - 1 == own->client,
+				        SG_ChatOrderedRole(sg_bots[k].ent), route_cost))
+					continue;
+				score = SG_EscortAssignmentScore(route_cost,
+				    sg_bots[k].last_role == (int)SG_ROLE_ESCORT);
+				if (score >= 0 &&
+				    (best_i < 0 || score < best_score ||
+				     (score == best_score && k < best_i)))
 				{
-					bestd = dd;
+					best_score = score;
 					best_i = k;
 				}
 			}
@@ -1805,7 +1845,9 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				if (sg_role_escort_carrier[et] != cc)
 				{
 					sg_role_escort_carrier[et] = cc;
-					sg_role_escort_on[et] = ((rand() % 100) <
+					sg_role_escort_epoch[et]++;
+					sg_role_escort_on[et] = SG_EscortDoseEnabled(et, cc,
+					    sg_role_escort_epoch[et],
 					    (int)sg_cv.escortdose->value);
 				}
 				if (sg_role_escort_on[et])
@@ -1903,15 +1945,37 @@ static int StrikeFieldCost(const int *field, int seed)
 	return field[seed];
 }
 
+static qboolean StrikeAttackEligible(sg_role_t role, qboolean carrying,
+	int ordered_role)
+{
+	/* Physical possession outranks every standing order.  Otherwise a human
+	 * order is the complete role authority promised by sg_chat.h; admitting
+	 * that bot to the autonomous strike roster would overwrite its route a few
+	 * stages later. */
+	if (carrying)
+		return true;
+	if (ordered_role >= 0)
+		return false;
+	return role != SG_ROLE_DEFEND;
+}
+
 static const int *StrikeEnemyField(int team)
 {
 	int ti = SG_TeamIdx(team);
 	int enemy = SG_TeamIdx(SG_EnemyTeam(team));
+	const int *fixed = team == CTF_TEAM_RED ? sg_fields.to_blue_flag
+	                                      : sg_fields.to_red_flag;
 
+	/* PRESS/BREACH/CLEAR remain enemy-base duties after our pickup.  Carrier
+	 * support has its own ESCORT field; using the moving flag belief here
+	 * silently turns every strike member into another escort, and its unknown
+	 * position fallback can point the entire strike home. */
+	if (SG_AttackObjectiveUsesFixedStand(
+	        sg_caco_team_belief.carrier[ti].client))
+		return fixed;
 	if (sg_fields.to_flag_now[ti][enemy])
 		return sg_fields.to_flag_now[ti][enemy];
-	return team == CTF_TEAM_RED ? sg_fields.to_blue_flag
-	                            : sg_fields.to_red_flag;
+	return fixed;
 }
 
 static const int *StrikeOwnField(int team)
@@ -1924,13 +1988,25 @@ static const int *StrikeOwnField(int team)
 	                            : sg_fields.to_blue_flag;
 }
 
+/* A carrier always returns to the physical capture stand.  The dynamic own
+ * flag field above belongs to RECOVER: during a standoff it leads toward the
+ * enemy thief, which is exactly the wrong route for our carrier. */
+static const int *StrikeHomeField(int team)
+{
+	return team == CTF_TEAM_RED ? sg_fields.to_red_flag
+	                            : sg_fields.to_blue_flag;
+}
+
 static const int *StrikeCarrierField(int team)
 {
 	int ti = SG_TeamIdx(team);
 
 	if (sg_fields.our_carrier[ti] && sg_fields.our_carrier_valid[ti])
 		return sg_fields.our_carrier[ti];
-	return StrikeOwnField(team);
+	/* Carrier belief is refreshed after the pickup frame.  Until its
+	 * ahead-of-carrier flood is ready, send the escort toward the capture
+	 * stand rather than toward a stolen own flag and the enemy thief. */
+	return StrikeHomeField(team);
 }
 
 static const int *StrikeDutyField(sg_strike_duty_t duty, int team)
@@ -1938,6 +2014,7 @@ static const int *StrikeDutyField(sg_strike_duty_t duty, int team)
 	switch (duty)
 	{
 	case SG_STRIKE_DUTY_CARRY:
+		return StrikeHomeField(team);
 	case SG_STRIKE_DUTY_RECOVER:
 		return StrikeOwnField(team);
 	case SG_STRIKE_DUTY_ESCORT:
@@ -1959,6 +2036,19 @@ static qboolean StrikeApplyDutyRoute(sg_think_t *tc,
 
 	if (!tc)
 		return false;
+	/* Objective has already resolved the effective ESCORT mission.  When its
+	 * live carrier/threat inputs produced a moving formation station, that
+	 * exact field is the coordinator's escort route too.  Replacing it here
+	 * with the generic carrier flood silently disabled interposition for every
+	 * attacker promoted to ESCORT by strike egress. */
+	if (duty == SG_STRIKE_DUTY_ESCORT && tc->escort_mission &&
+	    tc->escort_formation && tc->goal_field)
+	{
+		tc->route_field = tc->goal_field;
+		tc->route_pure = true;
+		tc->scoop_mission = false;
+		return true;
+	}
 	route = StrikeDutyField(duty, team);
 	if (!route && tc->strike_rush)
 		route = StrikeEnemyField(team);
@@ -1967,6 +2057,9 @@ static qboolean StrikeApplyDutyRoute(sg_think_t *tc,
 	tc->goal_field = route;
 	tc->route_field = route;
 	tc->route_pure = true;
+	/* The coordinator replaced the organic objective.  In particular an
+	 * organic escort assigned RECOVER must not retain a stale relay pickup. */
+	tc->scoop_mission = false;
 	return true;
 }
 
@@ -2007,14 +2100,9 @@ static int StrikeCarrierSlot(int team, edict_t *flag)
 static qboolean StrikeEnemyRoomDeath(int team)
 {
 	edict_t *stand = SG_FlagStand(team, false);
-	vec3_t delta;
 
-	if (!stand || !SG_AgeUnder(
-		sg_caco_death_time[SG_TeamIdx(SG_EnemyTeam(team))], 6.0f))
-		return false;
-	VectorSubtract(sg_caco_death_org[SG_TeamIdx(SG_EnemyTeam(team))],
-	               stand->s.origin, delta);
-	return VectorLength(delta) < 1200.0f;
+	return stand && SG_EnemyRoomDeathKnown(team, stand->s.origin,
+	    6.0f, 1200.0f);
 }
 
 /* This is the only producer of strike input in the game.  It runs after the
@@ -2027,6 +2115,11 @@ static void StrikePrepareFrame(void)
 	int i, team_index;
 
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
+	memset(sg_strike_enemy_pressure_cache, 0,
+	       sizeof(sg_strike_enemy_pressure_cache));
+	memset(sg_strike_enemy_pressure_goal_cache, 0xff,
+	       sizeof(sg_strike_enemy_pressure_goal_cache));
+	memset(sg_strike_duty_cache, 0, sizeof(sg_strike_duty_cache));
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent = sg_bots[i].ent;
@@ -2041,6 +2134,10 @@ static void StrikePrepareFrame(void)
 			? SG_Role(&sg_bots[i], carrying)
 			: (carrying ? SG_ROLE_CARRY : SG_ROLE_ATTACK);
 		sg_strike_role_valid[i] = true;
+		sg_strike_enemy_pressure_cache[i] =
+		    SG_StrikeEnemyPressureActive(
+		        sg_strike_role_cache[i] == SG_ROLE_ATTACK, 0,
+		        SG_STRIKE_DUTY_NONE);
 	}
 
 	for (team_index = 0; team_index < 2; team_index++)
@@ -2056,6 +2153,11 @@ static void StrikePrepareFrame(void)
 		    !enemy_flag->owner && ctf_flagathome(enemy_flag);
 		frames[team_index].enemy_flag_dropped = enemy_flag && enemy_flag->inuse &&
 		    !enemy_flag->owner && !frames[team_index].enemy_flag_home;
+		frames[team_index].enemy_flag_carried = enemy_flag && enemy_flag->inuse &&
+		    enemy_flag->owner && enemy_flag->owner->inuse &&
+		    enemy_flag->owner->client &&
+		    enemy_flag->owner->client->ctf.teamnum == team &&
+		    ClientHasFlag(enemy_flag->owner) == enemy_flag;
 		frames[team_index].carrier_slot =
 		    StrikeCarrierSlot(team, enemy_flag);
 		frames[team_index].recent_enemy_room_death =
@@ -2065,54 +2167,125 @@ static void StrikePrepareFrame(void)
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent = sg_bots[i].ent;
-		int team, team_index, seed;
+		int team, bot_team_index, seed;
 		const int *enemy_field, *own_field, *carrier_field;
 		sg_combat_weapon_state_t weapon;
 
 		if (!sg_strike_role_valid[i] || !ent || !ent->client)
 			continue;
 		team = ent->client->ctf.teamnum;
-		team_index = SG_TeamIdx(team);
+		bot_team_index = SG_TeamIdx(team);
 		seed = sg_bots[i].seed;
 		enemy_field = StrikeEnemyField(team);
 		own_field = StrikeOwnField(team);
 		carrier_field = StrikeCarrierField(team);
-		frames[team_index].slot[i].present = 1;
-		frames[team_index].slot[i].alive =
+		frames[bot_team_index].slot[i].present = 1;
+		frames[bot_team_index].slot[i].alive =
 		    ent->inuse && ent->deadflag == DEAD_NO && ent->health > 0;
 		/* DEFEND remains the authoritative reserved role.  CARRY is admitted
 		 * so the core can own its egress duty; RECOVER/ESCORT remain eligible
 		 * pressure bodies rather than globally rewriting the roster law. */
-		frames[team_index].slot[i].attack_eligible =
-		    sg_strike_role_cache[i] != SG_ROLE_DEFEND;
-		frames[team_index].slot[i].carrying = SG_BotCarrying(ent);
-		frames[team_index].slot[i].life_id = (uint32_t)ent->client->ctf.ctfid;
+		frames[bot_team_index].slot[i].carrying = SG_BotCarrying(ent);
+		frames[bot_team_index].slot[i].attack_eligible =
+		    StrikeAttackEligible(sg_strike_role_cache[i],
+		        frames[bot_team_index].slot[i].carrying,
+		        SG_ChatOrderedRole(ent));
+		frames[bot_team_index].slot[i].life_id =
+		    (uint32_t)ent->client->ctf.ctfid;
 		if (!SG_CombatWeaponState(ent, &weapon))
 			memset(&weapon, 0, sizeof(weapon));
-		frames[team_index].slot[i].weapon_tier = weapon.available_tier;
-		frames[team_index].slot[i].enemy_flag_goal_ms =
+		frames[bot_team_index].slot[i].weapon_tier = weapon.available_tier;
+		frames[bot_team_index].slot[i].enemy_flag_goal_ms =
 		    StrikeFieldCost(enemy_field, seed);
-		frames[team_index].slot[i].recover_goal_ms =
+		frames[bot_team_index].slot[i].recover_goal_ms =
 		    StrikeFieldCost(own_field, seed);
-		frames[team_index].slot[i].carrier_goal_ms =
+		frames[bot_team_index].slot[i].carrier_goal_ms =
 		    StrikeFieldCost(carrier_field, seed);
-		frames[team_index].slot[i].direct_flag_touch =
-		    frames[team_index].slot[i].alive &&
-		    frames[team_index].slot[i].attack_eligible &&
+		frames[bot_team_index].slot[i].direct_flag_touch =
+		    frames[bot_team_index].slot[i].alive &&
+		    frames[bot_team_index].slot[i].attack_eligible &&
 		    SG_AttackFlagDirectTouchAuthority(ent, team, NULL);
 	}
 	sg_strike_frame_ready = SG_StrikeAdapterBeginFrame(
 		&sg_strike_adapter, frames) ? true : false;
 	if (sg_strike_frame_ready)
+	{
+		/* Freeze effective pressure for every teammate now.  Serial movement
+		 * may read this table, but may not rewrite it from a partially advanced
+		 * team.  Duty, not the transient rush mask, keeps RECOVER/ESCORT out and
+		 * CLEAR/PRESS active through egress. */
+		for (i = 0; i < SG_MAXBOTS; i++)
+		{
+			edict_t *ent = sg_bots[i].ent;
+			const sg_strike_team_t *team;
+			int team_index;
+			qboolean participant = false;
+			sg_strike_duty_t duty = SG_STRIKE_DUTY_NONE;
+
+			if (!sg_strike_role_valid[i] || !ent || !ent->client)
+				continue;
+			team_index = SG_TeamIdx(ent->client->ctf.teamnum);
+			team = SG_StrikeAdapterTeam(&sg_strike_adapter, team_index);
+			if (team && SG_StrikeParticipant(team, i))
+			{
+				participant = true;
+				duty = team->duty[i];
+			}
+			sg_strike_enemy_pressure_cache[i] =
+			    SG_StrikeEnemyPressureActive(
+			        sg_strike_role_cache[i] == SG_ROLE_ATTACK,
+			        participant, duty);
+			sg_strike_enemy_pressure_goal_cache[i] =
+			    sg_strike_enemy_pressure_cache[i]
+			        ? frames[team_index].slot[i].enemy_flag_goal_ms : -1;
+			sg_strike_duty_cache[i] = duty;
+		}
 		for (team_index = 0; team_index < 2; team_index++)
 			StrikeTelemetryEdge(team_index);
+	}
 }
 
 void SG_StrikeSlotReset(int slot)
 {
 	SG_StrikeAdapterForgetSlot(&sg_strike_adapter, slot);
 	if (slot >= 0 && slot < SG_MAXBOTS)
+	{
 		sg_strike_role_valid[slot] = false;
+		sg_strike_enemy_pressure_cache[slot] = false;
+		sg_strike_enemy_pressure_goal_cache[slot] = -1;
+		sg_strike_duty_cache[slot] = SG_STRIKE_DUTY_NONE;
+	}
+}
+
+qboolean SG_StrikeEnemyPressureSnapshot(const sg_bot_t *bot)
+{
+	int slot = bot ? (int)(bot - sg_bots) : -1;
+
+	if (slot >= 0 && slot < SG_MAXBOTS && sg_strike_frame_ready &&
+	    sg_strike_role_valid[slot])
+		return sg_strike_enemy_pressure_cache[slot];
+	return bot && bot->last_role == (int)SG_ROLE_ATTACK;
+}
+
+int SG_StrikeEnemyPressureGoalSnapshot(const sg_bot_t *bot)
+{
+	int slot = bot ? (int)(bot - sg_bots) : -1;
+
+	if (slot >= 0 && slot < SG_MAXBOTS && sg_strike_frame_ready &&
+	    sg_strike_role_valid[slot])
+		return sg_strike_enemy_pressure_goal_cache[slot];
+	return bot && bot->last_role == (int)SG_ROLE_ATTACK
+	    ? bot->last_goalcost : -1;
+}
+
+sg_strike_duty_t SG_StrikeDutySnapshot(const sg_bot_t *bot)
+{
+	int slot = bot ? (int)(bot - sg_bots) : -1;
+
+	if (slot >= 0 && slot < SG_MAXBOTS && sg_strike_frame_ready &&
+	    sg_strike_role_valid[slot])
+		return sg_strike_duty_cache[slot];
+	return SG_STRIKE_DUTY_NONE;
 }
 
 static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)
@@ -2348,9 +2521,11 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->declared_door_recovery_since = 0.0f;
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
+	bot->commit_route_field = NULL;
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
+	SG_StrikeWeaponTargetClear(bot);
 	bot->sticky_link = -1;
 	bot->latch_until = 0.0f;
 	bot->rail_link = -1;
@@ -2393,6 +2568,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->tac_time = 0.0f;
 	bot->tac_role = -1;
 	bot->patrol_seed = -1;
+	bot->patrol_link = -1;
 	bot->patrol_until = 0.0f;
 	bot->def_shift_seed = -1;
 	bot->def_shift_link = -1;
@@ -2421,9 +2597,12 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 		bot->visit_seed[i] = -1;
 		bot->visit_goal[i] = 0;
 		bot->visit_min[i] = 0;
+		bot->visit_field[i] = NULL;
+		bot->visit_combat[i] = false;
 		bot->visit_time[i] = 0.0f;
 	}
 	bot->visit_head = 0;
+	bot->orbit_field = NULL;
 	bot->orbit_last_seed = -1;
 	bot->inlinks_n = 0;
 	bot->prev_seed = -1;
@@ -2528,7 +2707,8 @@ static void Think_RespawnEdge(sg_bot_t *bot, edict_t *e)
 		SG_Mark(&bot->watch_since);
 		SG_Mark(&bot->stag_since);
 		SG_Mark(&bot->wedge_since);
-		bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
+		bot->dither_salt = SG_RouteDitherInitial(bot->instance_token,
+		    (unsigned)(e - g_edicts - 1));
 	}
 	if (bot->death_taught && sg_cv.tilt->value > 0.0f)
 	{
@@ -2624,7 +2804,8 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 		{
 			bot->prev_seed = was;
 			SG_Mark(&bot->prev_seed_time);
-			bot->dither_salt = (unsigned)(rand() & 0x7fffffff);
+			bot->dither_salt = SG_RouteDitherNext(bot->dither_salt,
+			    was, bot->seed);
 
 			/*
 			 * PITTRACE (sg_debug): the moment a bot's seed enters the
@@ -2852,6 +3033,7 @@ static void Bot_DeclaredDoorGuardClearAction(sg_bot_t *bot)
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
+	SG_StrikeWeaponTargetClear(bot);
 }
 
 /* Return true while the action must remain held.  Only the guard's positive
@@ -3152,9 +3334,12 @@ void SG_BotThink(sg_bot_t *bot)
 				bot->visit_seed[visit] = -1;
 				bot->visit_goal[visit] = 0;
 				bot->visit_min[visit] = 0;
+				bot->visit_field[visit] = NULL;
+				bot->visit_combat[visit] = false;
 				bot->visit_time[visit] = 0.0f;
 			}
 			bot->visit_head = 0;
+			bot->orbit_field = NULL;
 			bot->orbit_last_seed = -1;
 		}
 		bot->jump_link = -1;
@@ -3289,6 +3474,17 @@ void SG_BotThink(sg_bot_t *bot)
 	carrying = SG_BotCarrying(e);
 
 	role = StrikeRoleForBot(bot, carrying);
+	if (!SG_RoleOwnsDefenseState(role))
+	{
+		/* A patrol is a role-local leg, not a mission that may sleep through
+		 * ATTACK/RECOVER/ESCORT and resume from stale topology later. */
+		(void)SG_DefensePatrolRetireIfInactive(0, &bot->patrol_link,
+		    &bot->patrol_seed, &bot->commit_link);
+		if (bot->commit_link < 0)
+			bot->commit_until = 0.0f;
+		bot->patrol_until = 0.0f;
+		bot->def_stand = false;
+	}
 
 	Think_CarryBookends(bot, e, role, team, carrying);
 
@@ -3298,9 +3494,37 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.role = role;
 	tc.team = team;
 	tc.carrying = carrying;
+	tc.strike_pressure = SG_StrikeEnemyPressureActive(
+	    role == SG_ROLE_ATTACK, 0, SG_STRIKE_DUTY_NONE);
+	tc.combat_pursuit = SG_StrikeCombatPursuitActive(
+	    role == SG_ROLE_ATTACK || role == SG_ROLE_RECOVER,
+	    0, SG_STRIKE_DUTY_NONE);
+	tc.rearguard = SG_StrikeRearguardActive(
+	    role == SG_ROLE_ATTACK || role == SG_ROLE_ESCORT,
+	    0, SG_STRIKE_DUTY_NONE);
+	tc.escort_mission = SG_StrikeEscortActive(
+	    role == SG_ROLE_ESCORT, 0, SG_STRIKE_DUTY_NONE);
 
 	Think_LiveWeights(bot, &tc);    /* fills tc.live */
 	tc.w = &tc.live;
+	/* Shared class fields erase client admission and pickup magnitude.  Replace
+	 * them with exact live client fields before optional-item pricing: weapons
+	 * must improve the held tier, ammo must fit the held gun, and health/armor
+	 * source costs retain the number of points the touch would actually add. */
+	for (int item_class = 0; item_class < SG_FIELD_CLASSES; item_class++)
+		tc.collectible_item_field[item_class] = sg_fields.item[item_class];
+	tc.collectible_item_field[SG_FC_WEAPON] =
+	    (tc.live.item[SG_FC_WEAPON] > 0.0f) ?
+	    SG_CollectibleWeaponField(bot) : NULL;
+	tc.collectible_item_field[SG_FC_HEALTH] =
+	    (tc.live.item[SG_FC_HEALTH] > 0.0f) ?
+	    SG_CollectibleHealthField(bot) : NULL;
+	tc.collectible_item_field[SG_FC_AMMO] =
+	    (tc.live.item[SG_FC_AMMO] > 0.0f) ?
+	    SG_CollectibleAmmoField(bot) : NULL;
+	tc.collectible_item_field[SG_FC_ARMOR] =
+	    (tc.live.item[SG_FC_ARMOR] > 0.0f) ?
+	    SG_CollectibleArmorField(bot) : NULL;
 
 	tc.support = NULL;
 	tc.intercept = NULL;
@@ -3313,11 +3537,11 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.push = (role == SG_ROLE_ATTACK &&
 	           SG_TimerPending(sg_push_until[SG_TeamIdx(team)]));
 
-	Think_Objective(bot, &tc);
-
-	/* Strike is a coordinator overlay, not a second role allocator.  It may
-	 * select the route owned by a duty (home, carrier, or enemy flag) while
-	 * the role row, defender reservation, and CARRY bookends remain intact. */
+	/* Resolve coordinator ownership before Objective is allowed to claim an
+	 * optional item, age a mega offer, or commit a tactical waypoint.  The
+	 * later route overlay still owns the exact duty field; this early slice
+	 * supplies only the already-frozen membership/duty policy needed to keep
+	 * superseded preparation from being created and discarded every frame. */
 	strike_slot = (int)(bot - sg_bots);
 	if (strike_slot >= 0 && strike_slot < SG_MAXBOTS &&
 	    sg_strike_frame_ready &&
@@ -3336,6 +3560,39 @@ void SG_BotThink(sg_bot_t *bot)
 				strike_team, strike_slot);
 			tc.strike_rush = SG_StrikeMemberRushes(
 				strike_team, strike_slot);
+			tc.strike_pressure = SG_StrikeEnemyPressureActive(
+			    role == SG_ROLE_ATTACK, 1, strike_duty);
+			tc.combat_pursuit = SG_StrikeCombatPursuitActive(
+			    role == SG_ROLE_ATTACK || role == SG_ROLE_RECOVER,
+			    1, strike_duty);
+			tc.rearguard = SG_StrikeRearguardActive(
+			    role == SG_ROLE_ATTACK || role == SG_ROLE_ESCORT,
+			    1, strike_duty);
+			tc.escort_mission = SG_StrikeEscortActive(
+			    role == SG_ROLE_ESCORT, 1, strike_duty);
+			tc.strike_blocks_optional =
+			    SG_StrikeDutyRetiresOptionalErrand(strike_duty);
+			if (tc.strike_blocks_optional)
+				Lead_Abort(bot, "strike duty");
+		}
+	}
+
+	Think_Objective(bot, &tc);
+
+	/* Strike is a coordinator overlay, not a second role allocator.  It may
+	 * select the route owned by a duty (home, carrier, or enemy flag) while
+	 * the role row, defender reservation, and CARRY bookends remain intact. */
+	if (strike_team && strike_frame && tc.strike_active)
+	{
+		if (SG_StrikeParticipant(strike_team, strike_slot))
+		{
+			int direct_flag_touch;
+			int weapon_goal_ms = -1;
+			int weapon_remaining_ms;
+			int needs_weapon;
+			int combat_would_engage;
+			const int *weapon_target_field = NULL;
+
 			/* Egress and attack duties use the existing directed fields. */
 			(void)StrikeApplyDutyRoute(&tc, strike_duty, team);
 			if (tc.strike_rush)
@@ -3347,25 +3604,34 @@ void SG_BotThink(sg_bot_t *bot)
 				bot->nade_until = 0.0f;
 			}
 
-			/* A below-tier member owns the weapon field only while the live
-			 * authority says it is not fighting or already able to touch the
-			 * flag.  The core's immutable per-life deadline ends this branch. */
-			if (SG_StrikeMemberNeedsWeapon(strike_team, strike_slot,
-			                               level.time) &&
-				    !tc.strike_rush && !carrying &&
-				    !SG_CombatWouldEngage(e) &&
-				    !strike_frame->slot[strike_slot].direct_flag_touch &&
-				    !SG_AttackFlagDirectTouchAuthority(e, team, NULL) &&
-				    sg_fields.item[SG_FC_WEAPON] &&
-				    StrikeFieldCost(sg_fields.item[SG_FC_WEAPON],
-				                    sg_bots[strike_slot].seed) >= 0 &&
-				    StrikeFieldCost(sg_fields.item[SG_FC_WEAPON],
-				                    sg_bots[strike_slot].seed) <=
-				        (int)((strike_team->weapon_deadline[strike_slot] -
-				               level.time) * 1000.0f))
+			/* A below-tier member owns one exact collectible weapon-pad field
+			 * only while the live authority says it is not fighting or already
+			 * able to touch the flag. The core's immutable per-life deadline ends
+			 * this branch. */
+			direct_flag_touch =
+				strike_frame->slot[strike_slot].direct_flag_touch ||
+				SG_AttackFlagDirectTouchAuthority(e, team, NULL);
+			combat_would_engage = SG_CombatWouldEngage(e);
+			needs_weapon = SG_StrikeMemberNeedsWeapon(
+				strike_team, strike_slot, level.time);
+			if (needs_weapon && !tc.strike_rush && !carrying &&
+			    !combat_would_engage && !direct_flag_touch)
+				weapon_target_field = SG_StrikeWeaponTargetField(
+					bot, &weapon_goal_ms);
+			else
+				SG_StrikeWeaponTargetClear(bot);
+			weapon_remaining_ms = (int)((
+				strike_team->weapon_deadline[strike_slot] - level.time) *
+				1000.0f);
+			if (SG_StrikeWeaponDetourAllowed(
+				    needs_weapon,
+				    tc.strike_rush, carrying, combat_would_engage,
+				    direct_flag_touch,
+				    strike_frame->slot[strike_slot].enemy_flag_goal_ms,
+				    weapon_goal_ms, weapon_remaining_ms))
 			{
-				tc.goal_field = sg_fields.item[SG_FC_WEAPON];
-				tc.route_field = sg_fields.item[SG_FC_WEAPON];
+				tc.goal_field = weapon_target_field;
+				tc.route_field = weapon_target_field;
 				tc.route_pure = true;
 				tc.strike_weapon_pursuit = true;
 				tc.strike_weapon_deadline =
@@ -3394,6 +3660,10 @@ void SG_BotThink(sg_bot_t *bot)
 	 * non-members retain the existing approach behavior unchanged. */
 	if (!StrikeApplyRallyPolicy(bot, &tc, &rally_hold))
 		rally_hold = Think_ApproachBand(bot, &tc);
+	else
+		/* The coordinator owns HOLD/RUSH, while the approach function still
+		 * owns independent pressure actions such as a live-enemy flying cook. */
+		(void)Think_ApproachBand(bot, &tc);
 	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
 	bot->terminal = false;
 
@@ -3615,6 +3885,14 @@ void SG_RunFrame(void)
 			SG_RetireBotForClient(ent);
 			continue;
 		}
+		/* One map-local pulse per server second proves the diagnostic stream's
+		 * complete residence coverage even while a bot is dead and therefore
+		 * cannot reach Think_Emit's route-state report. */
+		if (sg_cv.debug->value && level.framenum > 0 &&
+		    level.framenum % 10 == 0)
+			sg_host.dprint("SGCENSUS %s: frm=%d alive=%d\n",
+			    ent->client->pers.netname, level.framenum,
+			    ent->deadflag == DEAD_NO && ent->health > 0);
 		SG_BotThink(&sg_bots[i]);
 	}
 }
@@ -3720,5 +3998,11 @@ qboolean SG_StrikeTestApplyRallyPolicy(sg_bot_t *bot,
 	const sg_think_t *tc, qboolean *rally_hold)
 {
 	return StrikeApplyRallyPolicy(bot, tc, rally_hold);
+}
+
+qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
+	int ordered_role)
+{
+	return StrikeAttackEligible(role, carrying, ordered_role);
 }
 #endif

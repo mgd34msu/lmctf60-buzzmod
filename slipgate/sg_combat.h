@@ -117,6 +117,11 @@ qboolean SG_CombatWouldEngage(edict_t *self);
  */
 void SG_CombatWeights(edict_t *self, const sg_weights_t *role, sg_weights_t *out);
 
+/* Convert the already role/threat-scaled rune-class worth to the worth of one
+ * exact believed rune entity.  Zero means the entity is not a collectible
+ * rune for this client. */
+float SG_RuneRouteWorth(edict_t *self, edict_t *rune, float class_worth);
+
 /* Authoritative weapon state read from the live inventory and ammo pools.
  * `available_tier` uses the same Combat_Avail predicate as Use_Weapon;
  * `stocked_tier` additionally applies the three-second floor used by the
@@ -133,6 +138,15 @@ typedef struct sg_combat_weapon_state_s
 
 qboolean SG_CombatWeaponState(edict_t *self,
 	                         sg_combat_weapon_state_t *out);
+
+/* Ammo tag consumed by the weapon currently in hand, or -1 when that weapon
+ * has no ammo pool.  This is the identity paired with Worth_Ammo. */
+int SG_CombatHeldAmmoTag(edict_t *self);
+
+/* Acquisition tier of this exact weapon entity under the same ladder used by
+ * SG_CombatWeaponState, or 0 when the item is not in the ordinary upgrade
+ * ladder.  Physical pickup admission remains the game item's authority. */
+int SG_CombatWeaponPickupTier(const edict_t *item);
 
 /* Read-only production selector used by posted defenders.  The return value
  * is the combat weapon index (0 is the blaster, negative is invalid input),

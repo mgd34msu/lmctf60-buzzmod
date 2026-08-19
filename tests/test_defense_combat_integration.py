@@ -35,9 +35,15 @@ PRODUCTION_ADAPTER_PROBE = r"""
 int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
     int hold_post, int engaged, int duel_hold, short weave_side,
     int mutation_mask, usercmd_t *cmd);
+int SG_SoundFireTestTeammateNear(edict_t *self, int team,
+    const vec3_t target, float radius);
+int SG_SoundFireTestImpactSafe(edict_t *self, int team,
+    const vec3_t target);
+int SG_AimedFireViewReadyTest(short actual_yaw, short actual_pitch,
+    short expected_yaw, short expected_pitch);
 
 static edict_t entities[4];
-static gclient_t clients[2];
+static gclient_t clients[3];
 static edict_t flag;
 static edict_t stand;
 static edict_t *live_enemy;
@@ -48,6 +54,8 @@ static int trace_calls;
 static int failures;
 static int flag_home;
 static int carrying;
+static int sound_trace_mode;
+static csurface_t sky_surface;
 
 game_locals_t game;
 level_locals_t level;
@@ -56,10 +64,25 @@ edict_t *g_edicts = entities;
 sg_cvars_t sg_cv;
 sg_host_t sg_host;
 
+void G_ProjectSource(vec3_t point, vec3_t distance, vec3_t forward,
+    vec3_t right, vec3_t result)
+{
+    result[0] = point[0] + forward[0] * distance[0] +
+        right[0] * distance[1];
+    result[1] = point[1] + forward[1] * distance[0] +
+        right[1] * distance[1];
+    result[2] = point[2] + forward[2] * distance[0] + distance[2];
+}
+
 enum {
     TRACE_BLOCKED, TRACE_CLEAR, TRACE_FINAL_BODY, TRACE_FINAL_FLOOR,
     TRACE_LONG_BLOCK_SHORT_CLEAR, TRACE_PLAYER_BLOCKED, TRACE_FLOOR_BLOCKED,
     TRACE_VERTICAL_BLOCKED, TRACE_RING_BODY_BLOCKED
+};
+enum {
+    SOUND_TRACE_NONE, SOUND_TRACE_USEFUL, SOUND_TRACE_OPEN,
+    SOUND_TRACE_MUZZLE_BLOCKED, SOUND_TRACE_NEAR_SELF,
+    SOUND_TRACE_TEAMMATE, SOUND_TRACE_SKY, SOUND_TRACE_BEYOND_REGION
 };
 enum {
     MUT_CARRY = 1, MUT_FLAG_AWAY = 2, MUT_STAND = 4, MUT_HOLD = 8,
@@ -94,6 +117,39 @@ static trace_t ProbeTrace(const vec3_t start, const vec3_t mins,
     result.fraction = 1.0f;
     VectorCopy(end, result.endpos);
     trace_calls++;
+    if (contentmask == MASK_SHOT && sound_trace_mode != SOUND_TRACE_NONE) {
+        int muzzle = (trace_calls & 1) != 0;
+
+        if (muzzle) {
+            if (sound_trace_mode == SOUND_TRACE_MUZZLE_BLOCKED) {
+                result.fraction = 0.5f;
+                result.endpos[0] = start[0] + 4.0f;
+            }
+            return result;
+        }
+        if (sound_trace_mode == SOUND_TRACE_OPEN)
+            return result;
+        result.fraction = 0.5f;
+        if (sound_trace_mode == SOUND_TRACE_NEAR_SELF) {
+            result.endpos[0] = entities[1].s.origin[0] + 80.0f;
+            result.endpos[1] = entities[1].s.origin[1];
+            result.endpos[2] = entities[1].s.origin[2];
+        } else if (sound_trace_mode == SOUND_TRACE_BEYOND_REGION) {
+            result.endpos[0] = end[0] + 400.0f;
+        } else {
+            /* Useful impact at the center of the heard region. */
+            result.endpos[0] = 900.0f;
+            result.endpos[1] = 40.0f;
+            result.endpos[2] = 24.0f;
+        }
+        if (sound_trace_mode == SOUND_TRACE_TEAMMATE)
+            result.ent = &entities[3];
+        if (sound_trace_mode == SOUND_TRACE_SKY) {
+            sky_surface.flags = SURF_SKY;
+            result.surface = &sky_surface;
+        }
+        return result;
+    }
     dx = end[0] - start[0];
     dy = end[1] - start[1];
     body_trace = (trace_calls & 1) != 0;
@@ -191,6 +247,7 @@ static void Setup(void)
     memset(&sg_cv, 0, sizeof(sg_cv));
     memset(&sg_host, 0, sizeof(sg_host));
     memset(&level, 0, sizeof(level));
+    game.maxclients = 3;
     self->inuse = true;
     self->client = &clients[0];
     self->health = 100;
@@ -213,7 +270,7 @@ static void Setup(void)
     enemy->client->ctf.teamnum = CTF_TEAM_BLUE;
     enemy->client->ctf.ctfid = 77;
     entities[3].inuse = true;
-    entities[3].client = &clients[1];
+    entities[3].client = &clients[2];
     entities[3].health = 100;
     entities[3].deadflag = DEAD_NO;
     entities[3].client->ctf.teamnum = CTF_TEAM_BLUE;
@@ -486,8 +543,88 @@ static void TestDeathLeaseReset(void)
     CHECK(bot.defcombat_tangent_until == 0.0f);
 }
 
+static void TestSoundFireProtectsHumanTeammates(void)
+{
+    vec3_t belief = { 900.0f, 40.0f, 24.0f };
+    edict_t *human = &entities[3];
+
+    Setup();
+    human->client->ctf.teamnum = CTF_TEAM_RED;
+    VectorCopy(belief, human->s.origin);
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 1);
+
+    human->deadflag = DEAD_DEAD;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+    human->deadflag = DEAD_NO;
+    human->health = 0;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+    human->health = 100;
+    human->client->ctf.teamnum = CTF_TEAM_BLUE;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+    human->client->ctf.teamnum = CTF_TEAM_RED;
+    human->s.origin[0] = belief[0] + 251.0f;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+}
+
+static void TestSoundFireRequiresUsefulSafeImpact(void)
+{
+    vec3_t belief = { 900.0f, 40.0f, 24.0f };
+    edict_t *human = &entities[3];
+
+    Setup();
+    human->client->ctf.teamnum = CTF_TEAM_BLUE;
+    sound_trace_mode = SOUND_TRACE_USEFUL;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 1);
+
+    sound_trace_mode = SOUND_TRACE_OPEN;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_MUZZLE_BLOCKED;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_NEAR_SELF;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_SKY;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_BEYOND_REGION;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+
+    human->client->ctf.teamnum = CTF_TEAM_RED;
+    VectorCopy(belief, human->s.origin);
+    sound_trace_mode = SOUND_TRACE_TEAMMATE;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+}
+
+static void TestAimedFireRequiresTheExactValidatedView(void)
+{
+    CHECK(SG_AimedFireViewReadyTest(1200, -300, 1200, -300) == 1);
+    CHECK(SG_AimedFireViewReadyTest(1199, -300, 1200, -300) == 0);
+    CHECK(SG_AimedFireViewReadyTest(1200, -299, 1200, -300) == 0);
+    CHECK(SG_AimedFireViewReadyTest(-32768, 32767, -32768, 32767) == 1);
+}
+
 int main(void)
 {
+	TestSoundFireProtectsHumanTeammates();
+	TestSoundFireRequiresUsefulSafeImpact();
+	TestAimedFireRequiresTheExactValidatedView();
     TestBlockedPostStaysStill();
     TestSafePostOwnsTheFinalLeg();
     TestShortPostFallbackOwnsTheFinalLeg();
@@ -506,6 +643,125 @@ int main(void)
 
 
 class DefenseCombatIntegrationTest(unittest.TestCase):
+    def test_shared_sound_belief_uses_best_listener_and_private_randomness(self) -> None:
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        ear = (ROOT / "slipgate/sg_ear_random.h").read_text()
+        note = caco[caco.index("void SG_NoteSound"):
+                    caco.index("/* ------------------------------------------------------------ the hit sense */")]
+
+        self.assertIn("best_listener[2]", note)
+        self.assertIn("eteam != CTF_TEAM_RED && eteam != CTF_TEAM_BLUE", note)
+        self.assertIn("team != CTF_TEAM_RED && team != CTF_TEAM_BLUE", note)
+        self.assertIn("SG_EarCandidateBetter(frac, i", note)
+        self.assertIn("for (t = 0; t < 2; t++)", note)
+        self.assertEqual(note.count("Caco_EnemyPlace("), 1)
+        self.assertNotIn("crandom()", note)
+        self.assertEqual(note.count("SG_EarRandomNext(sg_ear_random[t])"), 3)
+        self.assertIn("candidate_fraction < best_fraction", ear)
+        self.assertIn("candidate_client < best_client", ear)
+
+    def test_aimed_fire_survives_only_at_its_validated_command_view(self) -> None:
+        move = (ROOT / "slipgate" / "sg_move.c").read_text()
+        combat = move.index("SG_CombatFrame(e, cmd, &engaged)")
+        beat = move.index("THE SPAWN BEAT'S EYES", combat)
+        air = move.index("THE AIR-STRAFE CHAIN", beat)
+        boundary = move.index("if (step == 0 && AimedFireViewReady(cmd, aimed_fire_yaw", air)
+        think = move.index("ClientThink(e, cmd);", boundary)
+
+        self.assertLess(combat, beat)
+        self.assertLess(beat, air)
+        self.assertLess(air, boundary)
+        self.assertLess(boundary, think)
+        self.assertIn("!aimed_fire_requested && !nade_release", move[beat:air])
+        self.assertIn("!aimed_fire_requested && !proved_control", move[air:boundary])
+        self.assertIn("cmd->buttons &= ~BUTTON_ATTACK;", move[boundary:think])
+        self.assertIn("aimed_fire_view_admitted = true;", move[boundary:think])
+        self.assertIn("SG_TimerArm(&bot->soundfire_next, 8.0f);",
+                      move[boundary:think])
+
+    def test_sound_fire_splash_veto_uses_the_complete_client_roster(self) -> None:
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+        helper = move[move.index("static qboolean SoundFireTeammateNear"):
+                      move.index("static qboolean DefenseCombatEnemyCurrent")]
+        sound = move[move.index("SOUND-DIRECTED FIRE"):
+                     move.index("bot->engaged_last = engaged;")]
+
+        self.assertIn("client_index <= game.maxclients", helper)
+        self.assertIn("&g_edicts[client_index]", helper)
+        self.assertIn("mate->client->ctf.teamnum != team", helper)
+        self.assertIn("mate->deadflag", helper)
+        self.assertIn("SoundFireImpactSafe(e, team", sound)
+        self.assertIn("SoundFireTeammateNear(self, team", helper)
+        self.assertIn("SG_SoundFireObservationFresh(level.time", sound)
+        self.assertIn("SG_SoundFireCandidateBetter(en15->seen_time", sound)
+        self.assertIn("rejected15 |= 1u << best15", sound)
+        self.assertNotIn("SG_AgeAtLeast(en15->seen_time", sound)
+        self.assertIn("muzzle_trace.fraction < 1.0f", helper)
+        self.assertIn("shot_trace.fraction >= 1.0f", helper)
+        self.assertIn("VectorLength(delta) < 180.0f", helper)
+        self.assertNotIn("SG_MAXBOTS", sound)
+
+    def test_aimed_splash_veto_uses_the_complete_client_roster(self) -> None:
+        combat = (ROOT / "slipgate/sg_combat.c").read_text()
+        helper = combat[combat.index("static qboolean Combat_TeamSplashSafe"):
+                        combat.index("static qboolean Combat_SplashSafe")]
+        splash = combat[combat.index("static qboolean Combat_SplashSafe"):
+                        combat.index("/* ------------------------------------------------------------- the ladders")]
+
+        self.assertIn("client_index <= game.maxclients", helper)
+        self.assertIn("&g_edicts[client_index]", helper)
+        self.assertIn("mate->client->ctf.teamnum != team", helper)
+        self.assertIn("mate->deadflag", helper)
+        self.assertIn("mate->movetype == MOVETYPE_NOCLIP", helper)
+        self.assertIn("VectorLength(delta) < dsafe", helper)
+        self.assertIn("Combat_TeamSplashSafe(self, dsafe, impact)", splash)
+        self.assertNotIn("SG_MAXBOTS", helper)
+
+    def test_aimed_hitscan_veto_covers_the_physical_spread_envelope(self) -> None:
+        combat = (ROOT / "slipgate/sg_combat.c").read_text()
+        helper = combat[combat.index("static qboolean Combat_TeamHitscanSafe"):
+                        combat.index("static qboolean Combat_SplashSafe")]
+        frame = combat[combat.index("void SG_CombatFrame"):
+                       combat.index("void SG_CombatHit")]
+
+        self.assertIn("client_index <= game.maxclients", helper)
+        self.assertIn("&g_edicts[client_index]", helper)
+        self.assertIn("mate->client->ctf.teamnum != team", helper)
+        self.assertIn("DEFAULT_BULLET_HSPREAD", helper)
+        self.assertIn("DEFAULT_SHOTGUN_HSPREAD", helper)
+        self.assertIn("yaw_angle = 5.0f", helper)
+        self.assertIn("yaw_angle = 0.7f", helper)
+        self.assertIn("scatter_scale = water_path ? 3.0f : 1.0f", helper)
+        self.assertIn("1.0f - 2.0f * radial * radial", helper)
+        self.assertIn("source_pad + along", helper)
+        self.assertNotIn("SG_MAXBOTS", helper)
+        veto = frame.index("if (!Combat_TeamHitscanSafe(self, inhand")
+        trigger = frame.index("Cbt_Trigger(self, cmd, st, skill, inhand)")
+        self.assertLess(veto, trigger)
+        self.assertIn("sg_host.pointcontents(muzzle) & MASK_WATER", frame)
+        self.assertIn("MASK_WATER", frame[veto - 500:veto])
+
+    def test_seedless_enemy_observations_cannot_enter_route_belief(self) -> None:
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        writer = caco[caco.index("SG_CACO_PLACE_PRIVATE void Caco_EnemyPlace"):
+                      caco.index("static void Caco_ScanEnemies")]
+        descend = (ROOT / "slipgate/sg_descend.c").read_text()
+        carry = descend[descend.index("CARRIER COVER (sg_carrycover"):
+                        descend.index("THE SWITCHING COST", descend.index(
+                            "CARRIER COVER (sg_carrycover"))]
+
+        self.assertIn("Caco_EnemyObservationValid(r, team1, client",
+                      writer)
+        self.assertIn("tab[slot].client == client", writer)
+        self.assertIn("tab[slot].client = -1", writer)
+        self.assertIn("tab[slot].seed = -1", writer)
+        self.assertLess(writer.index("seed < 0 || seed >= r->hdr.num_seeds"),
+                        writer.index("Caco_EnemySlot"))
+        self.assertIn("Caco_EnemyPlace(r, SG_TeamIdx(viewer_team)", caco)
+        self.assertIn("Caco_EnemyPlace(r, t, ecl, seed", caco)
+        self.assertIn("en->seed >= 0", carry)
+        self.assertIn("en->seed < SG_Rune()->hdr.num_seeds", carry)
+
     def test_cvar_and_static_hold_order(self) -> None:
         cvars = (ROOT / "slipgate/sg_cvars.h").read_text()
         move = (ROOT / "slipgate/sg_move.c").read_text()
@@ -616,7 +872,8 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
                 "-fsanitize=address,undefined", "-fno-strict-aliasing",
                 "-ffunction-sections", "-fdata-sections", "-Wall", "-Wextra",
                 "-Werror", "-Wpedantic", "-Wno-strict-prototypes", "-I.",
-                "-DSG_DEFENSE_COMBAT_TEST", "slipgate/sg_move.c",
+                "-DSG_DEFENSE_COMBAT_TEST", "-DSG_SOUND_FIRE_TEST",
+                "slipgate/sg_move.c",
                 "slipgate/sg_defense_shift.c", "q_shared.c", str(probe),
                 "-Wl,--gc-sections", "-lm", "-o", str(binary),
             ]

@@ -3,7 +3,11 @@
 
 from pathlib import Path
 import math
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -49,10 +53,12 @@ def terminal_abandons_graph(
     *,
     goal_cost: int | None,
     direct_touch: bool,
-    strike_rush: bool = False,
+    strike_active: bool = False,
+    strike_pressure: bool = False,
 ) -> bool:
-    """The exact ATTACK/strike-rush/CARRY split in Think_CommitLink."""
-    if role == "ATTACK" or strike_rush:
+    """The exact pressure-duty/CARRY split in Think_CommitLink."""
+    enemy_pressure = strike_pressure if strike_active else role == "ATTACK"
+    if enemy_pressure:
         return direct_touch
     return role == "CARRY" and goal_cost is not None and goal_cost < 400
 
@@ -122,6 +128,306 @@ def armed_target_origin(
 
 
 class OffenseFlagPickupRecoveryTest(unittest.TestCase):
+
+    def test_duel_route_surface_gate_is_shared(self) -> None:
+        descend = source("slipgate/sg_descend.c")
+        setup = between(
+            descend,
+            "qboolean duel_route_price = SG_DuelRoutePriceAllowed",
+            "sg_defense_supply_neighbor_t supply_neighbors",
+        )
+        incumbent = between(
+            descend,
+            "bestval = Surface_At",
+            "THE CARRIER DOES NOT SINK",
+        )
+        candidate = between(
+            descend,
+            "The fighter's two terms",
+            "THE HUMAN PRIOR",
+        )
+
+        self.assertIn("enemy_pressure", setup)
+        self.assertIn("sg_cv.press->value", setup)
+        self.assertIn("role == SG_ROLE_CARRY", setup)
+        self.assertIn("sg_cv.carrypress->value", setup)
+        self.assertIn("if (duel_route_price)", incumbent)
+        self.assertIn("else if (duel_route_price)", candidate)
+        self.assertNotIn("if (duel)", incumbent)
+
+    def test_teammate_pass_side_is_pair_symmetric_and_executable(self) -> None:
+        """Head-on bots receive opposite world-space lateral velocities."""
+        program = textwrap.dedent(
+            r"""
+            #include <math.h>
+            #include "slipgate/sg_crowd_pass.h"
+            #include "slipgate/sg_team_collision.h"
+
+            int main(void)
+            {
+                static const unsigned long pairs[][2] = {
+                    {1UL, 2UL}, {1UL, 3UL}, {2UL, 4UL},
+                    {17UL, 91UL}, {0x10001UL, 0x20003UL}
+                };
+                unsigned int i;
+
+                if (SG_CrowdPassSide(0UL, 2UL) != 0 ||
+                    SG_CrowdPassSide(2UL, 0UL) != 0 ||
+                    SG_CrowdPassSide(7UL, 7UL) != 0)
+                    return 1;
+                if (!SG_TeammateBodyPassable(1, 1, 0, 1) ||
+                    !SG_TeammateBodyPassable(2, 1, 0, 2) ||
+                    SG_TeammateBodyPassable(1, 1, 0, 2) ||
+                    SG_TeammateBodyPassable(2, 1, 0, 1) ||
+                    SG_TeammateBodyPassable(1, 0, 0, 1) ||
+                    SG_TeammateBodyPassable(1, 1, 1, 1) ||
+                    SG_TeammateBodyPassable(0, 1, 0, 0) ||
+                    SG_TeammateBodyPassable(1, 2, 0, 1))
+                    return 4;
+
+                for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); ++i) {
+                    int ab = SG_CrowdPassSide(pairs[i][0], pairs[i][1]);
+                    int ba = SG_CrowdPassSide(pairs[i][1], pairs[i][0]);
+                    double a_lateral;
+                    double b_lateral;
+
+                    if ((ab != -1 && ab != 1) || ab != ba)
+                        return 2;
+                    a_lateral = sin((double)ab * 28.0 * 3.141592653589793 / 180.0);
+                    b_lateral = sin((180.0 + (double)ba * 28.0) *
+                                    3.141592653589793 / 180.0);
+                    if (!(a_lateral * b_lateral < 0.0))
+                        return 3;
+                }
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-crowd-pass-") as temp:
+            temp_path = Path(temp)
+            source_path = temp_path / "crowd_pass_test.c"
+            binary_path = temp_path / "crowd_pass_test"
+            source_path.write_text(program, encoding="utf-8")
+            compiler = os.environ.get("CC", "cc")
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c11",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-Wpedantic",
+                    "-I",
+                    str(ROOT),
+                    str(source_path),
+                    "-lm",
+                    "-o",
+                    str(binary_path),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+            subprocess.run([str(binary_path)], cwd=ROOT, check=True)
+
+        move = source("slipgate/sg_move.c")
+        fan = between(move, "Feelers: try the goal heading first", "THE STEADY HAND")
+        self.assertIn("SG_CrowdPassSide(", fan)
+        self.assertIn("e->client->ctf.ctfid", fan)
+        self.assertIn("tr.ent->client->ctf.ctfid", fan)
+        self.assertNotIn("e->client - game.clients", fan)
+
+        run_room = between(move, "static qboolean SG_RunRoom", "static void SG_MovePolicy")
+        self.assertIn("SG_TeammateBodyPassable(", run_room)
+        self.assertIn("e->client->ctf.teamnum", run_room)
+        self.assertIn("tr.ent->client->ctf.teamnum", run_room)
+        self.assertNotIn("tr.ent->client && !tr.ent->deadflag", run_room)
+
+    def test_dodge_clock_is_bound_to_bot_life_not_client_slot(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include <math.h>
+            #include "slipgate/sg_weave_policy.h"
+
+            int main(void)
+            {
+                static const unsigned long long instances[] = {
+                    1ULL, 2ULL, 17ULL, 0x100000003ULL
+                };
+                unsigned int i;
+                int distinct = 0;
+
+                for (i = 0; i < sizeof(instances) / sizeof(instances[0]); ++i) {
+                    float period = SG_WeavePeriod(instances[i], 101UL + i);
+                    int side = SG_WeaveSideAt(instances[i], 101UL + i, 12.5f);
+
+                    if (period < 0.4f || period > 0.85f ||
+                        (side != -1 && side != 1))
+                        return 1;
+                    if (side != SG_WeaveSideAt(instances[i], 101UL + i, 12.5f))
+                        return 2;
+                    if (i > 0 &&
+                        (period != SG_WeavePeriod(instances[0], 101UL) ||
+                         side != SG_WeaveSideAt(instances[0], 101UL, 12.5f)))
+                        distinct = 1;
+                }
+                if (!distinct)
+                    return 3;
+                if (SG_WeaveIdentityMix(7ULL, 11UL) ==
+                    SG_WeaveIdentityMix(7ULL, 12UL))
+                    return 4;
+                if (SG_AirStrafeInitialPhase(7ULL, 11UL) < 0.0f ||
+                    SG_AirStrafeInitialPhase(7ULL, 11UL) >=
+                        6.2831853071795864769f)
+                    return 5;
+                if (SG_AirStrafeInitialPhase(7ULL, 11UL) ==
+                    SG_AirStrafeInitialPhase(8ULL, 11UL))
+                    return 6;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-weave-policy-") as temp:
+            temp_path = Path(temp)
+            source_path = temp_path / "weave_policy_test.c"
+            binary_path = temp_path / "weave_policy_test"
+            source_path.write_text(program, encoding="utf-8")
+            compiler = os.environ.get("CC", "cc")
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c11",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-Wpedantic",
+                    "-I",
+                    str(ROOT),
+                    str(source_path),
+                    "-lm",
+                    "-o",
+                    str(binary_path),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+            subprocess.run([str(binary_path)], cwd=ROOT, check=True)
+
+        move = source("slipgate/sg_move.c")
+        weave = between(move, "The weave, decided here", "Execute the frame")
+        jink = between(move, "THE CARRIER'S JINK", "THE SPAWN BEAT'S LEGS")
+        for section in (weave, jink):
+            self.assertIn("SG_WeaveSideAt(", section)
+            self.assertIn("bot->instance_token", section)
+            self.assertIn("e->client->ctf.ctfid", section)
+            self.assertNotIn("e->client - game.clients", section)
+
+        air = between(move, "THE AIR-STRAFE CHAIN", "The defended stand")
+        self.assertIn("SG_AirStrafeInitialPhase(", air)
+        self.assertIn("bot->instance_token", air)
+        self.assertIn("e->client->ctf.ctfid", air)
+        self.assertLess(
+            air.index("SG_AirStrafeInitialPhase("),
+            air.index("bot->as_phase += 2.0f"),
+        )
+
+    def test_team_formation_drift_uses_private_independent_sequences(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        skew = between(arach, "TEAM SKEW (sg_teamskew)",
+                       "role-flap diagnostic")
+        self.assertIn("SG_RoleSkewRandomNext(sg_role_skew_random[ts])", skew)
+        self.assertIn("SG_RoleSkewRandomValue(sg_role_skew_random[ts])", skew)
+        self.assertIn("SG_RoleSkewRandomInterval(sg_role_skew_random[ts])", skew)
+        self.assertNotIn("rand()", skew)
+        reset = between(arach, "static void Role_LevelReset(void)",
+                        "rune_t *SG_Rune(void)")
+        self.assertIn("SG_RoleSkewRandomInitial(0)", reset)
+        self.assertIn("SG_RoleSkewRandomInitial(1)", reset)
+
+    def test_carrier_belief_aging_revalidates_team_and_exact_flag(self) -> None:
+        caco = source("slipgate/sg_caco.c")
+        aging = between(caco, "static void Caco_Age", "projection")
+        self.assertEqual(aging.count("SG_CarrierBeliefIdentityCurrent("), 2)
+        self.assertIn("expected = i == 0 ? blueflag : redflag", aging)
+        self.assertIn("expected = i == 0 ? redflag : blueflag", aging)
+        self.assertEqual(aging.count("ClientHasFlag(p) == expected"), 2)
+
+    def test_strike_frame_distinguishes_human_carrier_from_no_carrier(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        prepare = between(arach, "static void StrikePrepareFrame", "void SG_StrikeSlotReset")
+        self.assertIn("enemy_flag_carried = enemy_flag && enemy_flag->inuse", prepare)
+        self.assertIn("ClientHasFlag(enemy_flag->owner) == enemy_flag", prepare)
+        adapter = source("slipgate/sg_strike_adapter.c")
+        self.assertIn(
+            "current->enemy_flag_carried && !previous->enemy_flag_carried",
+            adapter,
+        )
+        self.assertIn(
+            "previous->enemy_flag_carried && !current->enemy_flag_carried",
+            adapter,
+        )
+
+    def test_non_escort_attackers_hold_enemy_base_during_our_carry(self) -> None:
+        goal = source("slipgate/sg_goal.c")
+        objective = between(goal, "void Think_Objective", "THE RUNE COURIER")
+        carrier_gate = objective.index("SG_AttackObjectiveUsesFixedStand(")
+        fixed_red = objective.index("sg_fields.to_red_flag", carrier_gate)
+        fixed_blue = objective.index("sg_fields.to_blue_flag", fixed_red)
+        moving = objective.index("sg_fields.to_flag_now", fixed_blue)
+        self.assertLess(carrier_gate, fixed_red)
+        self.assertLess(fixed_red, fixed_blue)
+        self.assertLess(fixed_blue, moving)
+        self.assertIn("sg_caco_team_belief.carrier[team_index].client", objective)
+
+        arach = source("slipgate/sg_arach.c")
+        strike = between(arach, "static const int *StrikeEnemyField",
+                         "static const int *StrikeOwnField")
+        fixed_gate = strike.index("SG_AttackObjectiveUsesFixedStand(")
+        dynamic = strike.index("sg_fields.to_flag_now", fixed_gate)
+        self.assertLess(fixed_gate, dynamic)
+        self.assertIn("sg_caco_team_belief.carrier[ti].client", strike)
+
+    def test_escort_selection_uses_belief_route_not_hidden_carrier_origin(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        start = arach.index("if (have_carrier && own->client != my_client)")
+        end = arach.index("/* No carrier ends the carry epoch", start)
+        escort = arach[start:end]
+        self.assertIn("SG_EscortRouteCost(", escort)
+        self.assertIn("SG_EscortAssignmentScore(", escort)
+        self.assertIn("sg_fields.our_carrier_valid[ti]", escort)
+        self.assertNotIn("car_ent->s.origin", escort)
+        self.assertNotIn("VectorSubtract(sg_bots[k].ent->s.origin", escort)
+        self.assertIn("SG_AutonomousEscortCandidate(", escort)
+        self.assertIn("SG_ChatOrderedRole(sg_bots[k].ent)", escort)
+
+        goal = source("slipgate/sg_goal.c")
+        objective = between(goal, "else if (role == SG_ROLE_ESCORT)",
+                            "THE RUNE COURIER")
+        self.assertIn("sg_fields.our_carrier_valid", objective)
+        self.assertIn("sg_fields.to_red_flag", objective)
+        self.assertIn("sg_fields.to_blue_flag", objective)
+
+    def test_human_order_cannot_be_phantom_autonomous_escort(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        start = arach.index("if (have_carrier && own->client != my_client)")
+        end = arach.index("/* No carrier ends the carry epoch", start)
+        escort = arach[start:end]
+        candidate = escort.index("SG_AutonomousEscortCandidate(")
+        score = escort.index("SG_EscortAssignmentScore(", candidate)
+        self.assertLess(candidate, score)
+        self.assertIn("SG_ChatOrderedRole(sg_bots[k].ent)",
+                      escort[candidate:score])
+
+    def test_disabled_exit_asymmetry_does_not_draw_randomness(self) -> None:
+        goal = source("slipgate/sg_goal.c")
+        carry = between(goal, "if (carrying && !bot->was_carrying)",
+                        "else if (!carrying && bot->was_carrying)")
+
+        disabled = carry.index("bot->exitasym_armed = false;")
+        gate = carry.index("if (sg_cv.exitasym->value > 0.0f)", disabled)
+        draw = carry.index("random() * 100.0f", gate)
+        self.assertLess(disabled, gate)
+        self.assertLess(gate, draw)
+
     def test_117_unit_attacker_runs_through_live_flag_not_home_seed(self) -> None:
         move = source("slipgate/sg_move.c")
         helper = between(
@@ -161,7 +467,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
             "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
             "ctf_flagathome(flag)",
-            "SG_AttackFlagPerceivable(e, flag)",
+            "SG_FlagPerceivable(e, flag)",
             "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
             "body.startsolid || body.allsolid",
         ):
@@ -280,12 +586,19 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         )
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", terminal)
         self.assertIn(
-            "(role == SG_ROLE_ATTACK || tc->strike_rush) && flag_los",
+            "tc->strike_pressure && flag_los",
             terminal,
         )
         self.assertIn("role == SG_ROLE_CARRY && bot->seed >= 0", terminal)
         self.assertIn("goal_field[bot->seed] < 400", terminal)
         self.assertNotIn("role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY", terminal)
+
+        clean_grab = between(descend, "THE CLEAN GRAB.", "THE REARGUARD.")
+        self.assertIn("if (tc->strike_pressure)", clean_grab)
+        self.assertIn("SG_StrikeEnemyPressureSnapshot(mb5)", clean_grab)
+        self.assertIn("SG_StrikeEnemyPressureGoalSnapshot(mb5)", clean_grab)
+        self.assertNotIn("mb5->last_goalcost", clean_grab)
+        self.assertNotIn("mb5->last_role == (int)SG_ROLE_ATTACK", clean_grab)
 
         blue_flag = (232.0, -816.0, 192.125)
         seed_618_direct = direct_touch_authorized(
@@ -305,7 +618,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
                 "DEFEND",
                 goal_cost=1,
                 direct_touch=seed_618_direct,
-                strike_rush=True,
+                strike_active=True,
+                strike_pressure=True,
             )
         )
 
@@ -322,9 +636,18 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
         self.assertTrue(
             terminal_abandons_graph(
-                "DEFEND", goal_cost=9999, direct_touch=True, strike_rush=True
+                "DEFEND", goal_cost=9999, direct_touch=True,
+                strike_active=True,
+                strike_pressure=True
             )
         )
+
+        # A concrete recovery duty overrides an organic ATTACK role just as a
+        # concrete pressure duty overrides an organic non-attacker role.
+        self.assertFalse(terminal_abandons_graph(
+            "ATTACK", goal_cost=1, direct_touch=True,
+            strike_active=True, strike_pressure=False
+        ))
 
         self.assertTrue(
             terminal_abandons_graph("ATTACK", goal_cost=700, direct_touch=True)
@@ -336,9 +659,43 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             terminal_abandons_graph("CARRY", goal_cost=400, direct_touch=True)
         )
 
+    def test_carrier_does_not_home_on_hidden_dropped_own_flag(self) -> None:
+        move = source("slipgate/sg_move.c")
+        fallback_start = move.index("/* last resort: the goal itself, by belief */")
+        fallback = move[fallback_start:move.index("if (have_aim)", fallback_start)]
+        carrier = between(
+            fallback,
+            "else if (!have_aim && role == SG_ROLE_CARRY)",
+            "else if (!have_aim && role == SG_ROLE_RECOVER)",
+        )
+        self.assertIn("gf = SG_OwnFlag(team);", carrier)
+        self.assertIn("flag_at_home = ctf_flagathome(gf);", carrier)
+        self.assertIn(
+            "SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf)", carrier)
+        self.assertIn(
+            "SG_OwnHomeFlagDirectTouchAuthority(e, team, &gf)", carrier)
+        self.assertIn("SG_StrikeCarrierOwnFlagAimAllowed(", carrier)
+        self.assertIn("flag_touch_terminal = true;", carrier)
+        self.assertIn("gf = NULL;", carrier)
+
+        authority = between(
+            move,
+            "static qboolean SG_OwnDroppedFlagDirectTouchAuthority",
+            "static int SG_TerminalFieldSeed",
+        )
+        for token in (
+            "ctf_flagathome(flag)",
+            "SG_FlagPerceivable(e, flag)",
+            "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
+            "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
+            "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
+        ):
+            self.assertIn(token, authority)
+
     def test_live_flag_priority_precedes_graph_and_clears_hold(self) -> None:
         move = source("slipgate/sg_move.c")
-        priority = move.index("SG_AttackFlagTerminalAim(e, team, aim)")
+        priority = move.index(
+            "SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)")
         graph = move.index("if (!have_aim && bestlink >= 0)", priority)
         fallback = move.index("/* last resort: the goal itself, by belief */", graph)
         self.assertLess(priority, graph)
@@ -357,6 +714,117 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertNotIn("home4", terminal_fallback)
         self.assertNotIn("Rune_NearestSeed", terminal_fallback)
         self.assertNotIn("role == SG_ROLE_ATTACK", terminal_fallback)
+
+    def test_live_flag_touch_owns_terminal_heading(self) -> None:
+        move = source("slipgate/sg_move.c")
+        terminal = between(
+            move,
+            "SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)",
+            "if (!have_aim && bestlink >= 0)",
+        )
+        self.assertIn("flag_touch_terminal = true;", terminal)
+        fan = between(move, "Feelers: try the goal heading first", "THE STEADY HAND")
+        self.assertIn(
+            "FlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        flag_touch_terminal)",
+            fan,
+        )
+        smooth = between(move, "THE STEADY HAND", "at a drop lip")
+        self.assertIn(
+            "FlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        flag_touch_terminal)",
+            smooth,
+        )
+
+    def test_scoop_mission_finishes_the_relay_touch(self) -> None:
+        goal = source("slipgate/sg_goal.c")
+        publish = between(
+            goal,
+            "SCOOP is an enemy-flag touch mission",
+            "tc->goal_field = goal_field;",
+        )
+        for token in (
+            "tc->scoop_mission = role == SG_ROLE_ESCORT",
+            "carrier[SG_TeamIdx(team)].client < 0",
+            "state == SG_FLAG_ASTRAY",
+            "goal_field == sg_fields.to_flag_now",
+        ):
+            self.assertIn(token, publish)
+
+        move = source("slipgate/sg_move.c")
+        priority = between(
+            move,
+            "The terminal approach is a physical touch",
+            "if (!have_aim && bestlink >= 0)",
+        )
+        self.assertIn(
+            "EnemyFlagTouchMissionActive(\n"
+            "\t\t        tc->strike_pressure, tc->scoop_mission)",
+            priority,
+        )
+        fallback = between(
+            move,
+            "if (!have_aim && !gf && tc->scoop_mission)",
+            "else if (!have_aim && !gf && tc->strike_pressure)",
+        )
+        self.assertIn("SG_AttackFlagDirectTouchAuthority", fallback)
+        self.assertIn("SG_TerminalFieldSeed(SG_Rune(),", fallback)
+        self.assertNotIn("SG_FlagStand", fallback)
+
+        pressure = between(
+            move,
+            "else if (!have_aim && !gf && tc->strike_pressure)",
+            "else if (!have_aim && !gf)",
+        )
+        self.assertIn("state == SG_FLAG_ASTRAY", pressure)
+        self.assertIn("SG_TerminalFieldSeed(SG_Rune(), goal_field", pressure)
+        astray = pressure[:pressure.index("else\n\t\t\t\t{")]
+        self.assertNotIn("SG_FlagStand", astray)
+
+        arach = source("slipgate/sg_arach.c")
+        overlay = between(
+            arach,
+            "static qboolean StrikeApplyDutyRoute",
+            "static void StrikeRetireGenericRail",
+        )
+        self.assertIn("tc->scoop_mission = false;", overlay)
+
+    def test_home_flag_touch_owns_carrier_terminal_heading(self) -> None:
+        move = source("slipgate/sg_move.c")
+        authority = between(
+            move,
+            "static qboolean SG_OwnHomeFlagDirectTouchAuthority",
+            "static int SG_TerminalFieldSeed",
+        )
+        for token in (
+            "ctf_flagathome(flag)",
+            "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
+            "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
+            "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
+            "body.startsolid || body.allsolid",
+            "body.fraction < 1.0f && body.ent != flag",
+        ):
+            self.assertIn(token, authority)
+
+        fallback_start = move.index("/* last resort: the goal itself, by belief */")
+        fallback = move[fallback_start:move.index(
+            "\n\t\tif (have_aim)", fallback_start)]
+        carrier = between(
+            fallback,
+            "else if (!have_aim && role == SG_ROLE_CARRY)",
+            "else if (!have_aim && role == SG_ROLE_RECOVER)",
+        )
+        self.assertLess(
+            carrier.index("SG_OwnHomeFlagDirectTouchAuthority"),
+            carrier.index("flag_touch_terminal = true;"),
+        )
+        self.assertIn(
+            "role == SG_ROLE_CARRY && flag_touch_terminal &&", fallback)
+        self.assertIn(
+            "role == SG_ROLE_CARRY && flag_touch_terminal &&\n"
+            "\t\t\t\t    sg_cv.termbrake->value",
+            fallback,
+        )
 
     def test_empty_flag_room_neither_holds_nor_arms_belief_grenade(self) -> None:
         descend = source("slipgate/sg_descend.c")
@@ -384,6 +852,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("SG_NadeTargetSwitching(bot)", switch)
         self.assertIn("SG_NadeBoundLiveTarget(e, bot)", switch)
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", switch)
+        self.assertIn("!tc->strike_pressure ||", switch)
+        self.assertNotIn("role != SG_ROLE_ATTACK", switch)
         self.assertIn("SG_NadeTargetClear(bot);", switch)
 
         cook = between(move, "if (!proved_control && bot->nade_phase == 2)", "\n\t\t/*\n\t\t * SOUND-DIRECTED FIRE")
@@ -391,8 +861,12 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         release = cook.index("cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */")
         self.assertLess(cancel, release)
         self.assertIn("SG_CombatLiveEnemy(e)", cook)
+        self.assertIn("!tc->strike_pressure ||", cook)
+        self.assertIn("!armed_target && tc->strike_pressure &&", cook)
+        self.assertNotIn("role != SG_ROLE_ATTACK", cook)
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", cook)
-        self.assertIn("SG_AttackFlagTerminalAim(e, team, pickup_aim)", cook)
+        self.assertIn(
+            "SG_AttackFlagTerminalAim(e, team, pickup_aim, NULL)", cook)
         self.assertIn("SG_CanSee(e, nade_enemy->s.origin, nade_enemy->viewheight)", cook)
         self.assertIn("bot->nade_phase = 0;", cook[:release])
 
@@ -405,8 +879,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         )
         flight = between(
             approach,
-            "THE FLYING COOK, truly at the band this time",
-            "\n\telse\n\t\tbot->rally_since = 0.0f;",
+            "THE FLYING COOK.",
+            "\n\treturn hold;",
         )
         self.assertIn(
             "goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000",
@@ -592,7 +1066,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         wedge = between(descend, "THE UNSTICK OF LAST RESORT.", "\n\tVectorSubtract(e->s.origin, bot->stag_org, d);")
         recovery = between(
             wedge,
-            "role == SG_ROLE_ATTACK &&",
+            "enemy_pressure &&",
             "\n\telse if (SG_AgeOver(bot->wedge_since, 15.0f) &&",
         )
         kill = wedge.index('sg_host.dprint("WEDGEKILL')

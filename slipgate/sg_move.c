@@ -32,6 +32,12 @@
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
+#include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_nade_policy.h"
+#include "slipgate/sg_crowd_pass.h"
+#include "slipgate/sg_weave_policy.h"
+#include "slipgate/sg_team_collision.h"
+#include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
@@ -40,6 +46,92 @@
 
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
+
+/* Sound-directed splash is admitted against the authoritative client roster,
+ * not the SG controller array. Humans and bots occupy the same damage space;
+ * a human teammate near the heard-only belief is therefore the same veto as
+ * an SG teammate. */
+static qboolean SoundFireTeammateNear(edict_t *self, int team,
+	const vec3_t target, float radius)
+{
+	int client_index;
+
+	if (!self || !target || !isfinite(radius) || radius <= 0.0f ||
+	    (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE))
+		return true;
+	for (client_index = 1; client_index <= game.maxclients; client_index++)
+	{
+		edict_t *mate = &g_edicts[client_index];
+		vec3_t delta;
+
+		if (mate == self || !mate->inuse || !mate->client ||
+		    mate->deadflag || mate->health <= 0 ||
+		    mate->client->ctf.teamnum != team)
+			continue;
+		VectorSubtract(mate->s.origin, target, delta);
+		if (VectorLength(delta) < radius)
+			return true;
+	}
+	return false;
+}
+
+/* Sound fire deliberately aims at a coarse heard-only region rather than a
+ * visible client.  That does not waive ordinary rocket geometry: the exact
+ * weapon muzzle must leave the body cleanly, and the first collision must be
+ * a useful splash surface near that region rather than a wall at the bot's
+ * feet or empty space beyond it. */
+static qboolean SoundFireImpactSafe(edict_t *self, int team,
+	const vec3_t target)
+{
+	vec3_t direction, angles, forward, right, offset, muzzle, shot_end;
+	vec3_t delta;
+	trace_t muzzle_trace, shot_trace;
+
+	if (!self || !self->inuse || !self->client || !target || !sg_host.trace ||
+	    !isfinite(target[0]) || !isfinite(target[1]) || !isfinite(target[2]))
+		return false;
+	VectorSubtract(target, self->s.origin, direction);
+	if (VectorNormalize(direction) < 1.0f)
+		return false;
+	angles[YAW] = atan2f(direction[1], direction[0]) *
+	              180.0f / (float)M_PI;
+	angles[PITCH] = -asinf(direction[2]) * 180.0f / (float)M_PI;
+	angles[ROLL] = 0.0f;
+	AngleVectors(angles, forward, right, NULL);
+	VectorSet(offset, 8.0f, 8.0f, self->viewheight - 8.0f);
+	if (self->client->pers.hand == LEFT_HANDED)
+		offset[1] = -offset[1];
+	else if (self->client->pers.hand == CENTER_HANDED)
+		offset[1] = 0.0f;
+	G_ProjectSource(self->s.origin, offset, forward, right, muzzle);
+	muzzle_trace = sg_host.trace(self->s.origin, NULL, NULL, muzzle, self,
+	                             MASK_SHOT);
+	if (muzzle_trace.startsolid || muzzle_trace.allsolid ||
+	    muzzle_trace.fraction < 1.0f)
+		return false;
+
+	/* The ear's maximum placement uncertainty is 300 units.  Trace through
+	 * that complete region: a collision outside it cannot splash the sound
+	 * source this policy claims to attack. */
+	shot_end[0] = target[0] + 300.0f * forward[0];
+	shot_end[1] = target[1] + 300.0f * forward[1];
+	shot_end[2] = target[2] + 300.0f * forward[2];
+	shot_trace = sg_host.trace(muzzle, NULL, NULL, shot_end, self, MASK_SHOT);
+	if (shot_trace.startsolid || shot_trace.allsolid ||
+	    shot_trace.fraction >= 1.0f ||
+	    (shot_trace.surface && (shot_trace.surface->flags & SURF_SKY)))
+		return false;
+	if (shot_trace.ent && shot_trace.ent->client &&
+	    shot_trace.ent->client->ctf.teamnum == team)
+		return false;
+	VectorSubtract(shot_trace.endpos, self->s.origin, delta);
+	if (VectorLength(delta) < 180.0f)
+		return false;
+	VectorSubtract(shot_trace.endpos, target, delta);
+	if (VectorLength(delta) > 300.0f)
+		return false;
+	return !SoundFireTeammateNear(self, team, shot_trace.endpos, 250.0f);
+}
 
 /* This controller deliberately lives at the command boundary, after combat
  * has supplied the current target and view. It is not navigation: no seed,
@@ -300,6 +392,16 @@ static qboolean DefenseCombatApplyDuelWeave(qboolean hold_post,
 	return true;
 }
 
+/* A combat or sound-fire trace authorizes one exact quantized view, not every
+ * intermediate angle on the way there.  Compare the command bytes which
+ * ClientThink will actually consume; float proximity is not firing authority. */
+static qboolean AimedFireViewReady(const usercmd_t *cmd,
+	short expected_yaw, short expected_pitch)
+{
+	return cmd && cmd->angles[YAW] == expected_yaw &&
+	       cmd->angles[PITCH] == expected_pitch;
+}
+
 /* The final ordinary walking writer for a post tangent. It rechecks the
  * current target and support immediately before the command boundary. */
 static qboolean DefenseCombatWriteFinal(edict_t *e, sg_bot_t *bot, int team,
@@ -385,12 +487,37 @@ int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
 	return DefenseCombatWriteFinal(e, bot, team, &tc, final_as_ok, active, stand,
 	    enemy, enemy_ctfid, direction, cmd) ? 1 : 0;
 }
+
+int SG_AimedFireViewReadyTest(short actual_yaw, short actual_pitch,
+	short expected_yaw, short expected_pitch)
+{
+	usercmd_t cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.angles[YAW] = actual_yaw;
+	cmd.angles[PITCH] = actual_pitch;
+	return AimedFireViewReady(&cmd, expected_yaw, expected_pitch) ? 1 : 0;
+}
+#endif
+
+#ifdef SG_SOUND_FIRE_TEST
+int SG_SoundFireTestTeammateNear(edict_t *self, int team,
+	const vec3_t target, float radius)
+{
+	return SoundFireTeammateNear(self, team, target, radius) ? 1 : 0;
+}
+
+int SG_SoundFireTestImpactSafe(edict_t *self, int team,
+	const vec3_t target)
+{
+	return SoundFireImpactSafe(self, team, target) ? 1 : 0;
+}
 #endif
 
 /* A dropped flag is private knowledge until it is currently perceived.  Its
  * home position is public CTF state, but neither fact permits a body to cut
  * through a wall or a different floor to reach it. */
-static qboolean SG_AttackFlagPerceivable(edict_t *e, edict_t *flag)
+static qboolean SG_FlagPerceivable(edict_t *e, edict_t *flag)
 {
 	vec3_t eye, target;
 
@@ -425,7 +552,7 @@ qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 	if (!flag || SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
 	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f)
 		return false;
-	if (!ctf_flagathome(flag) && !SG_AttackFlagPerceivable(e, flag))
+	if (!ctf_flagathome(flag) && !SG_FlagPerceivable(e, flag))
 		return false;
 	body = sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin, e,
 	                     MASK_PLAYERSOLID);
@@ -437,21 +564,119 @@ qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 	return true;
 }
 
+static qboolean SG_OwnDroppedFlagDirectTouchAuthority(edict_t *e, int team,
+	edict_t **flag_out)
+{
+	edict_t *flag;
+	trace_t body;
+
+	if (flag_out)
+		*flag_out = NULL;
+	if (!e || !e->client || !sg_host.trace)
+		return false;
+	flag = SG_OwnFlag(team);
+	if (!flag || ctf_flagathome(flag) ||
+	    SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
+	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f ||
+	    !SG_FlagPerceivable(e, flag))
+		return false;
+	body = sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin, e,
+	    MASK_PLAYERSOLID);
+	if (body.startsolid || body.allsolid ||
+	    (body.fraction < 1.0f && body.ent != flag))
+		return false;
+	if (flag_out)
+		*flag_out = flag;
+	return true;
+}
+
+/* A home flag is public CTF state, but the carrier earns terminal steering
+ * only inside the same physical touch envelope as every other flag contact.
+ * This is capture approach authority, not capture authority: ctf_flagtouch
+ * remains the only path that scores. */
+static qboolean SG_OwnHomeFlagDirectTouchAuthority(edict_t *e, int team,
+	edict_t **flag_out)
+{
+	edict_t *flag;
+	trace_t body;
+
+	if (flag_out)
+		*flag_out = NULL;
+	if (!e || !e->client || !sg_host.trace)
+		return false;
+	flag = SG_OwnFlag(team);
+	if (!flag || !ctf_flagathome(flag) ||
+	    SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
+	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f)
+		return false;
+	body = sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin, e,
+	    MASK_PLAYERSOLID);
+	if (body.startsolid || body.allsolid ||
+	    (body.fraction < 1.0f && body.ent != flag))
+		return false;
+	if (flag_out)
+		*flag_out = flag;
+	return true;
+}
+
+/* Terminal recovery must end at the source of the admitted belief field, not
+ * at the empty home stand.  Multiple zero/minimum sources are resolved by
+ * physical proximity to the current seed; no entity or hidden position enters
+ * this reducer. */
+static int SG_TerminalFieldSeed(const rune_t *rune, const int *field,
+	int current_seed)
+{
+	int best = -1;
+	int best_value = SG_FIELD_INF;
+	float best_distance = 0.0f;
+	int seed;
+
+	if (!rune || !rune->seeds || !field || current_seed < 0 ||
+	    current_seed >= rune->hdr.num_seeds)
+		return -1;
+	for (seed = 0; seed < rune->hdr.num_seeds; seed++)
+	{
+		vec3_t delta;
+		float distance;
+
+		if (field[seed] < 0 || field[seed] >= SG_FIELD_INF)
+			continue;
+		VectorSubtract(rune->seeds[seed].origin,
+		    rune->seeds[current_seed].origin, delta);
+		distance = DotProduct(delta, delta);
+		if (best < 0 || field[seed] < best_value ||
+		    (field[seed] == best_value && distance < best_distance) ||
+		    (field[seed] == best_value && distance == best_distance &&
+		     seed < best))
+		{
+			best = seed;
+			best_value = field[seed];
+			best_distance = distance;
+		}
+	}
+	return best;
+}
+
 /*
  * An attacker who has direct-touch authority over the live enemy flag is no
  * longer navigating a graph edge.  The touch belongs to the item entity, so
  * this line deliberately runs THROUGH that entity before a CARRY may route
  * home.
  */
-static qboolean SG_AttackFlagTerminalAim(edict_t *e, int team, vec3_t aim)
+static qboolean SG_AttackFlagTerminalAim(edict_t *e, int team, vec3_t aim,
+	edict_t **flag_out)
 {
 	edict_t *flag;
 	vec3_t fd, wend;
 	float fl;
 	trace_t tr;
 
+	if (flag_out)
+		*flag_out = NULL;
 	if (!SG_AttackFlagDirectTouchAuthority(e, team, &flag))
 		return false;
+	if (flag_out)
+		*flag_out = flag;
 	VectorCopy(flag->s.origin, aim);
 	VectorSubtract(flag->s.origin, e->s.origin, fd);
 	fd[2] = 0.0f;
@@ -468,6 +693,26 @@ static qboolean SG_AttackFlagTerminalAim(edict_t *e, int team, vec3_t aim)
 	VectorCopy(wend, aim);
 	aim[2] = flag->s.origin[2];
 	return true;
+}
+
+static void SG_FlagTouchBrake(sg_bot_t *bot, edict_t *e,
+	const vec3_t target, qboolean touch_authorized)
+{
+	vec3_t delta, velocity;
+	float distance, speed, alignment = 1.0f;
+
+	if (!bot || !e || !target)
+		return;
+	VectorSubtract(target, e->s.origin, delta);
+	delta[2] = 0.0f;
+	distance = VectorLength(delta);
+	VectorCopy(e->velocity, velocity);
+	velocity[2] = 0.0f;
+	speed = VectorLength(velocity);
+	if (distance > 1.0f && speed > 0.0f)
+		alignment = DotProduct(velocity, delta) / (speed * distance);
+	bot->term_brake = SG_StrikeFlagTouchThrottle(
+	    touch_authorized ? 1 : 0, distance, speed, alignment);
 }
 
 void SG_NadeTargetClear(sg_bot_t *bot)
@@ -1428,6 +1673,7 @@ static qboolean DoorStep_ApproachObservation(edict_t *entity,
 	observation->static_support = entity->groundentity &&
 	    DoorStep_StaticSupportSignature(entity->groundentity, &support_key,
 	        &support_generation);
+	observation->watertype = entity->watertype;
 	observation->waterlevel = entity->waterlevel;
 	observation->hazardous_liquid =
 	    (entity->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
@@ -1615,8 +1861,13 @@ static qboolean DoorStep_ApproachTicketStateCurrent(
 	    !DoorStep_VectorQ8Exact(entity->maxs, maxs_q8) ||
 	    memcmp(mins_q8, ticket->expected_mins_q8, sizeof(mins_q8)) != 0 ||
 	    memcmp(maxs_q8, ticket->expected_maxs_q8, sizeof(maxs_q8)) != 0 ||
-	    entity->waterlevel != 0 ||
-	    (entity->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+	    ticket->expected_waterlevel !=
+	        ticket->predicted_state.expected_waterlevel ||
+	    ticket->expected_watertype !=
+	        ticket->predicted_state.expected_watertype ||
+	    entity->waterlevel != ticket->expected_waterlevel ||
+	    entity->watertype != ticket->expected_watertype ||
+	    !SG_DoorApproachWaterSafe(entity->waterlevel, entity->watertype))
 		return false;
 	grounded = entity->groundentity != NULL;
 	if (grounded != ticket->grounded || (require_grounded && !grounded))
@@ -1661,6 +1912,10 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 	    !DoorStep_LivePmoveState(bot->ent, &current_pms) ||
 	    !SG_DoorApproachPmoveEqual(&current_pms,
 	        &bot->declared_door_approach.expected_pms) ||
+	    bot->ent->waterlevel !=
+	        bot->declared_door_approach.expected_waterlevel ||
+	    bot->ent->watertype !=
+	        bot->declared_door_approach.expected_watertype ||
 	    prediction->state.elapsed_ms !=
 	        bot->declared_door_approach.elapsed_ms +
 	            SG_DOOR_APPROACH_STEP_MS ||
@@ -1671,8 +1926,11 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 	        bot->declared_door_approach.anchor_q8,
 	        sizeof(prediction->state.anchor_q8)) != 0 ||
 	    !SG_DoorApproachPmoveEqual(&prediction->state.expected_pms,
-	        &prediction->pms) || prediction->waterlevel != 0 ||
-	    (prediction->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+	        &prediction->pms) ||
+	    prediction->state.expected_waterlevel != prediction->waterlevel ||
+	    prediction->state.expected_watertype != prediction->watertype ||
+	    !SG_DoorApproachWaterSafe(prediction->waterlevel,
+	        prediction->watertype) ||
 	    (prediction->expected_touch && !prediction->groundentity) ||
 	    !DoorStep_VectorQ8Exact(prediction->mins, NULL) ||
 	    !DoorStep_VectorQ8Exact(prediction->maxs, NULL) ||
@@ -1688,6 +1946,7 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 	observation.pms = prediction->pms;
 	observation.grounded = grounded ? 1 : 0;
 	observation.static_support = grounded ? 1 : 0;
+	observation.watertype = prediction->watertype;
 	observation.waterlevel = prediction->waterlevel;
 	observation.hazardous_liquid =
 	    (prediction->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
@@ -1713,6 +1972,8 @@ static qboolean DoorStep_ApproachTicketArm(sg_bot_t *bot,
 		return false;
 	ticket = &bot->declared_door_ticket;
 	ticket->expected_pms = prediction->pms;
+	ticket->expected_watertype = prediction->watertype;
+	ticket->expected_waterlevel = prediction->waterlevel;
 	if (!DoorStep_VectorQ8Exact(prediction->mins,
 	        ticket->expected_mins_q8) ||
 	    !DoorStep_VectorQ8Exact(prediction->maxs,
@@ -1839,18 +2100,21 @@ qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
 	    bot->declared_door_approach_identity.active &&
 	    bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	ticket_required = binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (activator->health <= 0 || activator->deadflag ||
 	    activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
-	    activator->waterlevel != 0)
+	    (activator->waterlevel != 0 &&
+	     !(ticket_required && command_scoped &&
+	       SG_DoorApproachWaterSafe(activator->waterlevel,
+	           activator->watertype))))
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (!bot || !bot->declared_started || bot->declared_guard_paused)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
-	ticket_required = binding.plan->controller_kind ==
-	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
-	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (command_scoped != ticket_required)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (ticket_required &&
@@ -1907,7 +2171,7 @@ static qboolean DoorStep_ButtonBinding(sg_bot_t *bot, edict_t *source,
 qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 {
 	sg_rune_mechanism_binding_t binding;
-	sg_mech_button_endpoints_t endpoints;
+	sg_mech_button_endpoints_t endpoints = { 0 };
 	sg_button_callback_token_t *token;
 	sg_bot_t *bot = DoorStep_EventBot(activator);
 	sg_button_callback_state_t token_state;
@@ -2290,18 +2554,21 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	    bot->declared_door_approach_identity.active &&
 	    bot->declared_door_approach.phase == SG_DOOR_APPROACH_FAILED)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
+	ticket_required = binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (!door_master || activator->health <= 0 ||
 	    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
-	    activator->waterlevel != 0)
+	    (activator->waterlevel != 0 &&
+	     !(ticket_required && command_scoped &&
+	       SG_DoorApproachWaterSafe(activator->waterlevel,
+	           activator->watertype))))
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (!bot || !bot->declared_started || bot->declared_guard_paused)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
-	ticket_required = binding.plan->controller_kind ==
-	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
-	    DoorStep_ApproachTicketRequired(bot, &binding);
 	if (command_scoped != ticket_required)
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
 	if (ticket_required &&
@@ -2426,8 +2693,6 @@ static qboolean Hook_LinkWaterSource(const sg_bot_t *bot)
 #define SG_AS_BEND	30.0f       /* degrees the chord may sit off the route */
 #define SG_AS_CHORD	0.80f       /* chord / arc a road has to keep */
 #define SG_WEAVE_SIDE		300
-#define SG_WEAVE_BASE		0.4f
-#define SG_WEAVE_STEP		0.05f
 #define SG_WEAVE_HOLD		150.0f	/* a step this short is a stand, not a run */
 #define SG_DROP_HEALTH_RESERVE	15
 
@@ -3048,8 +3313,13 @@ static qboolean SG_RunRoom(edict_t *e, int seed0, const int *route_field,
 	pend[1] = pp[1];
 	pend[2] = e->s.origin[2] + 18.0f;
 	tr = sg_host.trace(e->s.origin, e->mins, e->maxs, pend, e, MASK_PLAYERSOLID);
-	/* a teammate is not terrain (the fan's exception, same reason) */
-	if (tr.fraction < 1.0f && tr.ent && tr.ent->client && !tr.ent->deadflag)
+	/* A teammate is not terrain (the fan's exception, same reason). An
+	 * opponent is still the exact physical obstruction the road proof must
+	 * reject, including before reaction delay admits combat ownership. */
+	if (tr.fraction < 1.0f && tr.ent &&
+	    SG_TeammateBodyPassable(e->client->ctf.teamnum,
+	        tr.ent->client != NULL, tr.ent->deadflag != 0,
+	        tr.ent->client ? tr.ent->client->ctf.teamnum : 0))
 		return true;
 	return tr.fraction >= 1.0f;
 }
@@ -3273,6 +3543,25 @@ static qboolean StrikeRailMoveAllowed(const sg_think_t *tc)
 	return tc && SG_StrikeGenericRailAllowed(tc->strike_active);
 }
 
+/* Once the current live flag has passed the same-floor and player-hull trace,
+ * generic route steering has no remaining authority before the touch.  Its
+ * probes extend beyond the item and can therefore "avoid" a wall which is
+ * safely behind a pickup or scoring touch; heading smoothing can likewise
+ * preserve a stale route bearing for the only frame that matters. */
+static qboolean FlagTerminalGenericSteeringAllowed(
+	qboolean flag_touch_terminal)
+{
+	return !flag_touch_terminal;
+}
+
+/* A relay scoop owns the same final physical pickup as ordinary enemy
+ * pressure, but none of the attack-only pre-breach behavior. */
+static qboolean EnemyFlagTouchMissionActive(qboolean strike_pressure,
+	qboolean scoop_mission)
+{
+	return strike_pressure || scoop_mission;
+}
+
 /* Phase two is the irreversible rocket-jump boundary: this exact production
  * emitter can launch the rocket before the next reconciliation frame. */
 static qboolean StrikeRocketJumpPhase2Command(const sg_bot_t *bot,
@@ -3325,6 +3614,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	vec3_t move_dir;
 	float view_yaw = tc->view_yaw, view_pitch = tc->view_pitch;
 	qboolean have_move = false, open_ahead = false, run_link = false;
+	qboolean flag_touch_terminal = false;
 	int door_hold = 0;
 	edict_t *door_ent = NULL;
 	edict_t *ordered_escort = (role == SG_ROLE_ESCORT)
@@ -3349,6 +3639,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		qboolean have_aim = false;
 		qboolean aim_is_anchor = false;
 		qboolean jump_now = false;
+		edict_t *terminal_flag = NULL;
 
 		/*
 		 * Just let go of a rope: the prover steered forwardmove 400 at the
@@ -3411,10 +3702,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (ls >= 0)
 			{
 				int link_index, next_link = -1, next_value;
-				const int *route_field = goal_field;
+				const int *preturn_route_field = route_field
+				    ? route_field : goal_field;
 
-				next_value = (route_field[ls] < SG_FIELD_INF)
-				    ? route_field[ls] : 0x7fffffff;
+				next_value = (preturn_route_field[ls] < SG_FIELD_INF)
+				    ? preturn_route_field[ls] : 0x7fffffff;
 				for (link_index = SG_Rune()->first_link[ls];
 				     link_index >= 0;
 				     link_index = SG_Rune()->next_link[link_index])
@@ -3424,9 +3716,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 					if (candidate->action != RL_RUN)
 						continue;
-					if (route_field[candidate->to] < next_value)
+					if (preturn_route_field[candidate->to] < next_value)
 					{
-						next_value = route_field[candidate->to];
+						next_value = preturn_route_field[candidate->to];
 						next_link = link_index;
 					}
 				}
@@ -3557,13 +3849,13 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				if (bot->hook_link >= 0 &&
 				    bot->hook_link < SG_Rune()->hdr.num_links &&
 				    bot->seed >= 0 &&
-				    goal_field[bot->seed] < SG_FIELD_INF)
+				    route_field[bot->seed] < SG_FIELD_INF)
 				{
 					rune_link_t *hl = &SG_Rune()->links[bot->hook_link];
 
-					if (goal_field[hl->to] < SG_FIELD_INF &&
-					    goal_field[bot->seed] >
-					        goal_field[hl->to] + 300)
+					if (route_field[hl->to] < SG_FIELD_INF &&
+					    route_field[bot->seed] >
+					        route_field[hl->to] + 300)
 					{
 						int b, oldest = 0;
 
@@ -3640,12 +3932,14 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * can aim beside the live item.  Reset only a plain RUN commitment;
 		 * declared/ballistic controllers retain their own authority.
 		 */
-		if (!have_aim && (role == SG_ROLE_ATTACK || tc->strike_rush) &&
+		if (!have_aim && EnemyFlagTouchMissionActive(
+		        tc->strike_pressure, tc->scoop_mission) &&
 		    bot->hook_phase == 0 &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0 &&
-		    SG_AttackFlagTerminalAim(e, team, aim))
+		    SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag))
 		{
 			have_aim = true;
+			flag_touch_terminal = true;
 			bestlink = -1;
 			tc->bestlink = -1;
 			rally_hold = false;
@@ -3657,6 +3951,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				bot->commit_link = -1;
 				bot->commit_until = 0.0f;
 			}
+			/* Exact touch authority has already proved the item and clear hull
+			 * line. Tighten only a fast misaligned turn so full throttle cannot
+			 * carry the body around the pickup it is aiming through. */
+			if (sg_cv.termbrake->value)
+				SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true);
 		}
 
 		if (!have_aim && bestlink >= 0)
@@ -4197,24 +4496,37 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			{
 				qboolean source_water =
 				    (SG_Rune()->seeds[l->from].flags & RSF_WATER) != 0;
+				qboolean destination_water =
+				    (SG_Rune()->seeds[l->to].flags & RSF_WATER) != 0;
+				qboolean live_hazard =
+				    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
+				qboolean live_dry = e->waterlevel == 0 &&
+				    (e->groundentity == g_edicts ||
+				     SG_ImmutableSupport(e->groundentity));
+				qboolean live_water = e->waterlevel >= 2 &&
+				    (e->watertype & CONTENTS_WATER) && !live_hazard;
+				qboolean air_safe = e->waterlevel < 3 ||
+				    SG_TimerRemaining(e->air_finished) >=
+				        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f);
 				float hspd = sqrtf(e->velocity[0] * e->velocity[0] +
 				                   e->velocity[1] * e->velocity[1]);
 
 				vec3_t fsd;
 				float fsdist, fsz;
 
-				if ((source_water &&
-				     ((SG_Rune()->seeds[l->to].flags & RSF_WATER) ||
-				      e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||
-				      (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
-				      (e->waterlevel >= 3 &&
-				       SG_TimerRemaining(e->air_finished) <
-				           ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f)))) ||
-				    (!source_water &&
-				     (e->waterlevel != 0 ||
-				      (e->groundentity != g_edicts &&
-				       !SG_ImmutableSupport(e->groundentity)))))
+				if (!SG_HookStageSourceCompatible(source_water,
+				        destination_water, live_dry, live_water, air_safe))
+				{
+					/* The edge remains valid from its proved source.  This body is not
+					 * in that source state, so release the commitment, force fresh
+					 * localization, and spend no generic command toward the landing. */
+					bot->commit_link = -1;
+					bot->commit_until = 0.0f;
+					bot->hook_link = -1;
+					bot->seed = -1;
+					ballistic_abort = true;
 					goto hook_stage_done;
+				}
 
 				VectorSubtract(SG_Rune()->seeds[l->from].origin,
 				               e->s.origin, fsd);
@@ -4258,7 +4570,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				{
 					vec3_t proof_source, proof_muzzle, proof_bite;
 					sg_hook_ride_worth_t worth = SG_HookExpectedRideWorth(
-					    goal_field[l->from], goal_field[l->to]);
+					    route_field[l->from], route_field[l->to]);
 
 					proof_source[0] = (short)(SG_Rune()->seeds[l->from].origin[0]
 					                  * 8.0f) * 0.125f;
@@ -4266,10 +4578,12 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					                  * 8.0f) * 0.125f;
 					proof_source[2] = (short)(SG_Rune()->seeds[l->from].origin[2]
 					                  * 8.0f) * 0.125f;
-					if (worth == SG_HOOK_RIDE_REJECT)
+					if (!SG_HookRideLaunchAllowed(worth))
 					{
 						Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,
-						    "value-skip", goal_field[l->from], goal_field[l->to]);
+						    worth == SG_HOOK_RIDE_UNASSESSED
+						        ? "value-unassessed" : "value-skip",
+						    route_field[l->from], route_field[l->to]);
 					}
 					else if (SG_HookControlDecode(proof_source, 22.0f, RIGHT_HANDED,
 					                         l->anchor, bot->hook_view,
@@ -4588,6 +4902,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		{
 			/* last resort: the goal itself, by belief */
 			edict_t *gf = NULL;
+			int terminal_seed = -1;
 
 			/* An early-return claimant that waited short of a pad must cross
 			 * the final body-length after spawn.  The pad seed has no improving
@@ -4615,28 +4930,129 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * grinding into them; combat remains free to own view/fire. */
 			}
 			else if (!have_aim && role == SG_ROLE_CARRY)
-				gf = SG_OwnFlag(team);
-
-			if (!have_aim && !gf &&
-			    (role == SG_ROLE_ATTACK || tc->strike_rush))
 			{
-				/* enemy stand position is common knowledge */
-				edict_t *marker = SG_FlagStand(team, false);
+				qboolean flag_at_home = false;
+				qboolean direct_touch = false;
+
+				gf = SG_OwnFlag(team);
+				if (gf)
+					flag_at_home = ctf_flagathome(gf);
+				if (flag_at_home)
+					direct_touch =
+					    SG_OwnHomeFlagDirectTouchAuthority(e, team, &gf);
+				else if (gf)
+					direct_touch =
+					    SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf);
+				if (!SG_StrikeCarrierOwnFlagAimAllowed(gf != NULL,
+				    flag_at_home, direct_touch))
+					gf = NULL;
+				else if (direct_touch)
+					flag_touch_terminal = true;
+			}
+			else if (!have_aim && role == SG_ROLE_RECOVER)
+			{
+				if (!SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf))
+				{
+					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
+					    goal_field, bot->seed);
+					if (terminal_seed >= 0)
+					{
+						VectorCopy(SG_Rune()->seeds[terminal_seed].origin,
+						    aim);
+						have_aim = true;
+					}
+				}
+			}
+			else if (!have_aim && role == SG_ROLE_DEFEND)
+			{
+				/* Defense may terminate at a corpus post, rail lane, live
+				 * intercept, or the exact weapon/home half of a supply sortie.
+				 * Falling back unconditionally to the flag stand discards that
+				 * selected mission at the field minimum. */
+				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
+				    bot->seed);
+				if (terminal_seed >= 0)
+				{
+					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
+					have_aim = true;
+				}
+			}
+			else if (!have_aim && role == SG_ROLE_ESCORT &&
+			         !tc->scoop_mission)
+			{
+				/* An autonomous screen terminates at the selected moving
+				 * carrier/formation field.  A human cover order was resolved to
+				 * its exact teammate above; SCOOP retains its distinct dropped-
+				 * flag belief below. */
+				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
+				    bot->seed);
+				if (terminal_seed >= 0)
+				{
+					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
+					have_aim = true;
+				}
+			}
+
+			if (!have_aim && !gf && tc->scoop_mission)
+			{
 				edict_t *enemy_item = NULL;
 
-				gf = marker;
-				/*
-				 * THE ROUTE GOES THROUGH THE FLAG.
-				 * observations taught the CARRIER to aim at the live item
-				 * because droptofloor settles it off the marker far
-				 * enough to orbit; the grab side never got the fix, so
-				 * attackers still walked to the marker and circled a flag a
-				 * body-length away.  The shared authority is stricter than
-				 * home knowledge: it also proves same-floor, hull-clear direct
-				 * contact, and refuses an unseen dropped item.
-				 */
+				/* The relay follows its admitted dropped-flag belief until an
+				 * exact item touch replaces it.  The enemy home stand is not a
+				 * fallback for an astray flag. */
 				if (SG_AttackFlagDirectTouchAuthority(e, team, &enemy_item))
 					gf = enemy_item;
+				else
+				{
+					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
+					    goal_field, bot->seed);
+					if (terminal_seed >= 0)
+					{
+						VectorCopy(SG_Rune()->seeds[terminal_seed].origin,
+						    aim);
+						have_aim = true;
+					}
+				}
+			}
+			else if (!have_aim && !gf && tc->strike_pressure)
+			{
+				int ti = SG_TeamIdx(team);
+				int ei = SG_TeamIdx(SG_EnemyTeam(team));
+
+				if (sg_caco_team_belief.flag[ti][ei].state == SG_FLAG_ASTRAY)
+				{
+					/* The strategy field was admitted from this team's dropped-
+					 * flag belief. At its minimum, keep walking to that same
+					 * source; substituting the empty home stand here discarded the
+					 * objective on the final graphless body-length. */
+					terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
+					    bot->seed);
+					if (terminal_seed >= 0)
+					{
+						VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
+						have_aim = true;
+					}
+				}
+				else
+				{
+					/* The home stand position is common knowledge. */
+					edict_t *marker = SG_FlagStand(team, false);
+					edict_t *enemy_item = NULL;
+
+					gf = marker;
+					/*
+					 * THE ROUTE GOES THROUGH THE FLAG.
+					 * observations taught the CARRIER to aim at the live item
+					 * because droptofloor settles it off the marker far
+					 * enough to orbit; the grab side never got the fix, so
+					 * attackers still walked to the marker and circled a flag a
+					 * body-length away.  The shared authority is stricter than
+					 * home knowledge: it also proves same-floor, hull-clear direct
+					 * contact, and refuses an unseen dropped item.
+					 */
+					if (SG_AttackFlagDirectTouchAuthority(e, team, &enemy_item))
+						gf = enemy_item;
+				}
 			}
 			else if (!have_aim && !gf)
 			{
@@ -4657,7 +5073,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * SG_AttackFlagTerminalAim and its direct-touch proof.  This
 				 * fallback retains capture behavior only; an attacker without
 				 * that proof must never project through a stand marker. */
-				if (role == SG_ROLE_CARRY && bot->seed >= 0)
+				if (role == SG_ROLE_CARRY && flag_touch_terminal &&
+				    bot->seed >= 0)
 				{
 					vec3_t fd7;
 					float fl7;
@@ -4700,27 +5117,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * for comparison; the 5v0 canary's partial conversions are the
 				 * standing instrument that flagged this in 25 match batches.
 				 */
-				if (role == SG_ROLE_CARRY && sg_cv.termbrake->value)
-				{
-					vec3_t tb, tv;
-					float tbl, spd2;
-
-					VectorSubtract(gf->s.origin, e->s.origin, tb);
-					tb[2] = 0.0f;
-					tbl = VectorLength(tb);
-					VectorCopy(e->velocity, tv);
-					tv[2] = 0.0f;
-					spd2 = VectorLength(tv);
-					if (tbl > 1.0f && tbl < 220.0f && spd2 > 120.0f)
-					{
-						float al = DotProduct(tv, tb) / (spd2 * tbl);
-
-						if (al < 0.50f)
-							bot->term_brake = 0.30f;
-						else if (al < 0.85f)
-							bot->term_brake = 0.55f;
-					}
-				}
+				if (role == SG_ROLE_CARRY && flag_touch_terminal &&
+				    sg_cv.termbrake->value)
+					SG_FlagTouchBrake(bot, e, gf->s.origin, true);
 			}
 		}
 
@@ -4747,6 +5146,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * in the 30-degree blind wedge between the fan's first rays.
 			 * Dense mode adds the 15s; the preference-decay ordering is
 			 * preserved (nearest the goal line first). */
+			if (FlagTerminalGenericSteeringAllowed(
+			        flag_touch_terminal))
 			{
 			static const float fan_dense[11] = { 0, -15, 15, -30, 30, -60,
 			                                     60, -100, 100, -145, 145 };
@@ -4782,17 +5183,23 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * A teammate is not terrain. Blocked by one on the goal
 				 * line: remember it (the progress watch must not bill a
 				 * friendly body to the link -- at 5v5 that billed 204-278
-				 * shelves a match), and bias the walk to a side chosen by
-				 * slot parity, so two bots meeting head-on pass on
-				 * opposite shoulders instead of mirroring forever.
+				 * shelves a match), and bias the walk with one symmetric
+				 * decision for the two current client lives. Head-on view
+				 * headings are opposite, so the same relative yaw sign gives
+				 * opposite world-space shoulders. Per-slot signs can instead
+				 * send both bodies into the same lane forever.
 				 */
 				if (k == 0 && tr.fraction < 1.0f && tr.ent &&
-				    tr.ent->client && !tr.ent->deadflag &&
-				    tr.ent->client->ctf.teamnum == team)
+				    SG_TeammateBodyPassable(team, tr.ent->client != NULL,
+				        tr.ent->deadflag != 0,
+				        tr.ent->client ? tr.ent->client->ctf.teamnum : 0))
 				{
+					int pass_side = SG_CrowdPassSide(
+					    e->client->ctf.ctfid,
+					    tr.ent->client->ctf.ctfid);
+
 					bot->mate_block_last = true;
-					base_yaw += ((int)(e->client - game.clients) & 1)
-					            ? 28.0f : -28.0f;
+					base_yaw += 28.0f * (float)pass_side;
 				}
 				/*
 				 * A closed door is not a wall: walking into it (its
@@ -4909,7 +5316,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * drop lip, in precision range, or in water, where the
 			 * snap IS the skill.
 			 */
-			if (sg_cv.smooth->value &&
+			if (FlagTerminalGenericSteeringAllowed(
+			        flag_touch_terminal) && sg_cv.smooth->value &&
 			    !duel && !precision && bot->hook_phase == 0 &&
 			    e->waterlevel < 2)
 			{
@@ -5645,8 +6053,9 @@ static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
 			    reason ? reason : "retire", link_index, shelf_seconds,
 			    bot->hookfail_streak, ban_seconds);
 		else
-			sg_host.dprint("HOOKDISC %s value-skip link=%d from=%d to=%d gain=%d min=%d shelf=%.0f\n",
-			    e && e->client ? e->client->pers.netname : "?", link_index,
+			sg_host.dprint("HOOKDISC %s %s link=%d from=%d to=%d gain=%d min=%d shelf=%.0f\n",
+			    e && e->client ? e->client->pers.netname : "?",
+			    reason ? reason : "value-skip", link_index,
 			    from_goal, to_goal, gain, SG_HOOK_DISCIPLINE_SERVED_FIELD_MS,
 			    shelf_seconds);
 	}
@@ -6345,6 +6754,24 @@ static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
 }
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
+qboolean SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(
+	qboolean attack_flag_terminal)
+{
+	return FlagTerminalGenericSteeringAllowed(attack_flag_terminal);
+}
+
+qboolean SG_StrikeTestEnemyFlagTouchMissionActive(qboolean strike_pressure,
+	qboolean scoop_mission)
+{
+	return EnemyFlagTouchMissionActive(strike_pressure, scoop_mission);
+}
+
+int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
+	int current_seed)
+{
+	return SG_TerminalFieldSeed(rune, field, current_seed);
+}
+
 qboolean SG_StrikeTestRailMoveAllowed(const sg_think_t *tc)
 {
 	return StrikeRailMoveAllowed(tc);
@@ -7120,7 +7547,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean declared_door = declared_control &&
 	    (SG_Rune()->links[bestlink].action == RL_DOOR ||
 	     SG_Rune()->links[bestlink].action == RL_BUTTON_DOOR);
-	sg_rune_mechanism_binding_t mechanism_binding;
+	sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 	qboolean mechanism_bound = !declared_control ||
 	    (bot->declared_started
 	        ? SG_RuneMechanismBindingCaptureOwned(SG_Rune(),
@@ -7144,12 +7571,16 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	float slew_want_y = 0.0f, slew_want_p = 0.0f, slew_rate = 0.0f;
 	qboolean duel_hold = false;
 	qboolean defcombat_active = false;
+	qboolean aimed_fire_requested = false;
+	qboolean aimed_fire_view_admitted = false;
+	qboolean soundfire_owned = false;
 	qboolean hook_cut_in_step = false;
 	qboolean door_suffix_grant = false;
 	edict_t *defcombat_enemy = NULL;
 	edict_t *defcombat_stand = NULL;
 	unsigned long defcombat_enemy_ctfid = 0;
 	short weave_side = 0;
+	short aimed_fire_yaw = 0, aimed_fire_pitch = 0;
 	vec3_t d, defcombat_dir;
 
 	VectorClear(defcombat_dir);
@@ -7350,9 +7781,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * line by construction, and forwardmove is dropped so the weave adds no
 	 * drift along it.
 	 *
-	 * The period is per bot, not per squad: four bots weaving on one clock is
-	 * one wide target. Two-thirds of a rocket's flight time at close range,
-	 * spread across ten phases by client number.
+	 * The period and phase are bound to the immutable bot ownership and current
+	 * client life, not the recyclable slot or the squad-wide clock: four bots
+	 * weaving on one phase are one wide target. The period stays near two-thirds
+	 * of a rocket's flight time at close range.
 	 *
 	 * Never for the carrier (2.4-D2 is a route, not a fight), never with a
 	 * rope out (the hook SETS velocity -- an off-axis input accumulates into
@@ -7381,11 +7813,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 		if (duel_hold)
 		{
-			float period = SG_WEAVE_BASE + SG_WEAVE_STEP *
-			               (float)((int)(e->client - game.clients) % 10);
-
-			weave_side = (fmodf(level.time, period) < period * 0.5f)
-			             ? SG_WEAVE_SIDE : -SG_WEAVE_SIDE;
+			weave_side = (short)(SG_WeaveSideAt(bot->instance_token,
+			    e->client->ctf.ctfid, level.time) * SG_WEAVE_SIDE);
 		}
 	}
 
@@ -7455,6 +7884,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * to the up-to-two-seconds-old belief the surface terms were priced
 		 * from. The weave below needs the live one. */
 		qboolean engaged = false;
+		qboolean nade_release = false;  /* exact-view irreversible throw frame */
 		/* sg_airstrafe, decided once for the frame and spent per sub-step */
 		qboolean as_ok = false;         /* the chain is live this frame */
 		qboolean as_chain = false;      /* dose 2: hop chaining as well */
@@ -7508,7 +7938,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		if (!proved_control && bot->hook_phase != 1 && bot->hook_phase != 3 &&
 		    !(bot->hook_phase == 2 && !bot->speedhook) &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0)
+		{
 			SG_CombatFrame(e, cmd, &engaged);
+			if (cmd->buttons & BUTTON_ATTACK)
+				aimed_fire_requested = true;
+		}
 
 		/*
 		 * The bomb sequence owns weapon, view, and trigger while it
@@ -7528,7 +7962,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * trigger early fires whatever is still equipped (observations:
 			 * zero grenades thrown, the cook squeezed the rail) */
 			if (target_pending &&
-			    (role != SG_ROLE_ATTACK ||
+			    (!tc->strike_pressure ||
 			     SG_AttackFlagDirectTouchAuthority(e, team, NULL) ||
 			     !pending_target ||
 			     !SG_CanSee(e, pending_target->s.origin,
@@ -7583,10 +8017,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * target's current visibility.  The item-through-line resumes on
 			 * the next frame. */
 			if ((armed_target &&
-			     (role != SG_ROLE_ATTACK ||
+			     (!tc->strike_pressure ||
 			      SG_AttackFlagDirectTouchAuthority(e, team, NULL))) ||
-			    (!armed_target && role == SG_ROLE_ATTACK &&
-			     SG_AttackFlagTerminalAim(e, team, pickup_aim)) ||
+			    (!armed_target && tc->strike_pressure &&
+			     SG_AttackFlagTerminalAim(e, team, pickup_aim, NULL)) ||
 			    !nade_enemy ||
 			    !SG_CanSee(e, nade_enemy->s.origin, nade_enemy->viewheight))
 			{
@@ -7716,7 +8150,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						               MASK_SOLID);
 						if (atr.fraction < 1.0f)
 						{
-							nfly = -2.0f;   /* blocked: no throw */
+							nfly = -2.0f;   /* blocked arc */
 							break;
 						}
 						VectorCopy(ap, lp);
@@ -7724,15 +8158,28 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 				if (nfly < -1.5f)
 				{
-					bot->nade_phase = 0;    /* abandon, cost-free */
-					SG_NadeTargetClear(bot);
-					SG_TimerArm(&bot->nade_next, 4.0f);
-					cmd->buttons &= ~BUTTON_ATTACK;
+					if (SG_NadeBlockedArcMayCancel(
+					        (e->client->buttons & BUTTON_ATTACK) != 0))
+					{
+						/* No held-trigger frame exists yet: this switch/cook
+						 * attempt is still reversible at zero projectile cost. */
+						bot->nade_phase = 0;
+						SG_NadeTargetClear(bot);
+						SG_TimerArm(&bot->nade_next, 4.0f);
+						cmd->buttons &= ~BUTTON_ATTACK;
+					}
+					/* Otherwise the grenade is physically live.  Keep phase two
+					 * through the owned aim/release path below; clearing attack is
+					 * the throw, not a cancellation. */
 				}
 			}
 			else
 				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
 				         - 30.0f;
+			/* A pre-hold blocked arc retires the transaction above.  A live cook
+			 * stays in phase two and releases through the owned path below. */
+			if (bot->nade_phase == 2)
+			{
 			/*
 			 * THE SILENT COOK (observations). The zero-cost audit caught
 			 * the veer: this block owned the view for the whole cook
@@ -7743,7 +8190,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * command -- the flick. Attack stays held throughout;
 			 * cooking needs the trigger, not the eyes.
 			 */
-			if (!(sg_cv.flycook->value) ||
+			if (nfly < -1.5f || !(sg_cv.flycook->value) ||
 			    (nfly >= 0.0f && ntmr - 0.2f <= nfly + 0.15f) ||
 			    ntmr <= 0.75f)
 			{
@@ -7772,12 +8219,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * bounced off (235: aim height alone left 69 percent of
 			 * pops grounded -- bounces and clipped arcs land before
 			 * the fuse, and a landed grenade is an announcement) */
-			if (ntmr > 0.6f &&
-			    (nfly < 0.0f || ntmr - 0.2f > nfly - 0.15f))
+			if (SG_NadeCookShouldHold(bot->nade_phase, ntmr, nfly))
 				cmd->buttons |= BUTTON_ATTACK;
 			else
 			{
 				cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */
+				nade_release = true;
 				bot->nade_phase = 0;
 				SG_NadeTargetClear(bot);
 				SG_TimerArm(&bot->nade_next, 8.0f);
@@ -7785,6 +8232,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					sg_host.dprint("NADE %s thrown fly=%.2f fuse=%.2f\n",
 					           e->client->pers.netname,
 				           nfly, ntmr - 0.2f);
+			}
 			}
 			}
 		}
@@ -7806,71 +8254,96 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		    !Q_stricmp(e->client->pers.weapon->pickup_name,
 		               "Rocket Launcher"))
 		{
-			int s15;
+			unsigned rejected15 = 0u;
+			int chosen15 = -1;
+			float chosen_range15 = 0.0f;
+			int attempt15;
 
-			for (s15 = 0; s15 < SG_MAX_ENEMY_TRACK; s15++)
+			/* Rank the earned regions independently of enemy client slot.  If
+			 * the freshest candidate has no useful rocket surface, reject just
+			 * that candidate and try the next-best observation. */
+			for (attempt15 = 0; attempt15 < SG_MAX_ENEMY_TRACK; attempt15++)
 			{
-				sg_belief_enemy_t *en15 =
-				    &sg_caco_enemies[SG_TeamIdx(team)][s15];
-				vec3_t sd15;
-				float sl15;
+				int s15, best15 = -1;
+				float best_time15 = 0.0f, best_range15 = 0.0f;
 
-				if (en15->client < 0 || en15->seed < 0 ||
-				    !en15->heard_only ||
-				    SG_AgeAtLeast(en15->seen_time, 2.0f))
-					continue;
-				VectorSubtract(SG_Rune()->seeds[en15->seed].origin,
-				               e->s.origin, sd15);
-				sl15 = VectorLength(sd15);
-				if (sl15 < 600.0f || sl15 > 1500.0f)
-					continue;   /* too close = own splash; too
-					             * far = pure noise */
-				/* observations: never rocket a ghost a teammate is
-				 * standing on -- the one premium this free trick
-				 * could quietly charge is friendly splash */
+				for (s15 = 0; s15 < SG_MAX_ENEMY_TRACK; s15++)
 				{
-					int bi15, mate15 = 0;
+					sg_belief_enemy_t *en15 =
+					    &sg_caco_enemies[SG_TeamIdx(team)][s15];
+					vec3_t sd15;
+					float sl15;
 
-					for (bi15 = 0; bi15 < SG_MAXBOTS; bi15++)
-					{
-						sg_bot_t *mb15 = &sg_bots[bi15];
-						vec3_t md15;
-
-						if (!mb15->active || mb15 == bot ||
-						    !mb15->ent || !mb15->ent->inuse)
-							continue;
-						if (mb15->ent->client->ctf.teamnum != team)
-							continue;
-						VectorSubtract(mb15->ent->s.origin,
-						    SG_Rune()->seeds[en15->seed].origin, md15);
-						if (VectorLength(md15) < 250.0f)
-						{
-							mate15 = 1;
-							break;
-						}
-					}
-					if (mate15)
+					if ((rejected15 & (1u << s15)) ||
+					    en15->client < 0 ||
+					    en15->client >= game.maxclients ||
+					    en15->seed < 0 ||
+					    en15->seed >= SG_Rune()->hdr.num_seeds ||
+					    !en15->heard_only ||
+					    !SG_SoundFireObservationFresh(level.time,
+					        en15->seen_time, 2.0f))
 						continue;
+					VectorSubtract(SG_Rune()->seeds[en15->seed].origin,
+					               e->s.origin, sd15);
+					sl15 = VectorLength(sd15);
+					if (!isfinite(sl15) || sl15 < 600.0f || sl15 > 1500.0f)
+						continue;   /* too close = own splash; too
+						             * far = pure noise */
+					if (!SG_SoundFireCandidateBetter(en15->seen_time,
+					        sl15, en15->client, best15 >= 0,
+					        best_time15, best_range15,
+					        best15 >= 0 ? sg_caco_enemies[
+					            SG_TeamIdx(team)][best15].client : -1))
+						continue;
+					best15 = s15;
+					best_time15 = en15->seen_time;
+					best_range15 = sl15;
 				}
+				if (best15 < 0)
+					break;
+				/* Use the real rocket muzzle and first impact.  Range to a
+				 * distant belief is not safety when a nearby wall would make
+				 * the shot explode at our feet, and open space beyond the
+				 * heard region cannot deliver the claimed splash. */
+				if (!SoundFireImpactSafe(e, team,
+				        SG_Rune()->seeds[sg_caco_enemies[
+				            SG_TeamIdx(team)][best15].seed].origin))
 				{
-					float sy15 = atan2f(sd15[1], sd15[0])
-					             * 180.0f / (float)M_PI;
-					float sp15 = -atan2f(sd15[2],
+					rejected15 |= 1u << best15;
+					continue;
+				}
+				chosen15 = best15;
+				chosen_range15 = best_range15;
+				break;
+			}
+
+			if (chosen15 >= 0)
+				{
+					sg_belief_enemy_t *en15 = &sg_caco_enemies[
+					    SG_TeamIdx(team)][chosen15];
+					vec3_t sd15;
+					float sy15, sp15;
+
+					VectorSubtract(SG_Rune()->seeds[en15->seed].origin,
+					               e->s.origin, sd15);
+					sy15 = atan2f(sd15[1], sd15[0])
+					       * 180.0f / (float)M_PI;
+					sp15 = -atan2f(sd15[2],
 					    sqrtf(sd15[0]*sd15[0] + sd15[1]*sd15[1]))
-					             * 180.0f / (float)M_PI;
+					       * 180.0f / (float)M_PI;
 
 					cmd->angles[YAW] = ANGLE2SHORT(sy15)
 					    - e->client->ps.pmove.delta_angles[YAW];
 					cmd->angles[PITCH] = ANGLE2SHORT(sp15)
 					    - e->client->ps.pmove.delta_angles[PITCH];
 					cmd->buttons |= BUTTON_ATTACK;
-					SG_TimerArm(&bot->soundfire_next, 8.0f);
+					aimed_fire_requested = true;
+					soundfire_owned = true;
 					if (sg_cv.debug->value)
 						sg_host.dprint("SNDFIRE %s rng=%.0f\n",
-						           e->client->pers.netname, sl15);
+						           e->client->pers.netname,
+						           chosen_range15);
 				}
-				break;
-			}
 		}
 
 		bot->engaged_last = engaged;
@@ -7917,7 +8390,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * catches the shot that came from somewhere the eye had not got
 		 * to yet -- which, spawning, is most of the map.
 		 */
-		if (SG_TimerPending(bot->beat_until))
+		if (!aimed_fire_requested && !nade_release &&
+		    SG_TimerPending(bot->beat_until))
 		{
 			/* bot->engaged_last is this same value by here -- it was
 			 * assigned from `engaged` a few lines up, so the live read
@@ -7982,7 +8456,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 			                 e->velocity[1] * e->velocity[1]);
 
-			if (!proved_control && dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
+			if (!aimed_fire_requested && !proved_control && !nade_release &&
+			    dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
 			    run_link && open_ahead && bestlink >= 0 && SG_Rune() &&
 			    !precision && !engaged &&
 			    bot->hook_phase == 0 && bot->rj_phase == 0 &&
@@ -8024,6 +8499,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					as_ok = true;
 					as_chain = (dose >= 2.0f);
 
+					/* The first lean is part of this bot life, not a squad-wide
+					 * zero phase. Teammates entering one road together therefore
+					 * spread across its width instead of hopping in lockstep. */
+					if (bot->as_since == 0.0f)
+						bot->as_phase = SG_AirStrafeInitialPhase(
+						    bot->instance_token,
+						    e->client->ctf.ctfid);
 					bot->as_phase += 2.0f * (float)M_PI * dt / SG_AS_PERIOD;
 					while (bot->as_phase > 2.0f * (float)M_PI)
 						bot->as_phase -= 2.0f * (float)M_PI;
@@ -8110,6 +8592,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		                  - e->client->ps.pmove.delta_angles[PITCH];
 		cmd->angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
 	}
+	if (aimed_fire_requested)
+	{
+		aimed_fire_yaw = cmd->angles[YAW];
+		aimed_fire_pitch = cmd->angles[PITCH];
+	}
 
 		/*
 		 * THE VIEW SLEWS; IT NO LONGER TELEPORTS. Every writer above --
@@ -8127,7 +8614,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			               e->client->ps.pmove.delta_angles[YAW]));
 			float want_p = SHORT2ANGLE((short)(cmd->angles[PITCH] +
 			               e->client->ps.pmove.delta_angles[PITCH]));
-			float rate = sg_cv.turnrate->value;
+				float rate = SG_NadeReleaseSlewRate(nade_release,
+				    sg_cv.turnrate->value);
 
 			if (!bot->view_on || rate <= 0.0f)
 			{
@@ -8463,10 +8951,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						if (en9->client >= 0 &&
 						    SG_AgeUnder(en9->seen_time, 3.0f))
 						{
-							float jp = SG_WEAVE_BASE + SG_WEAVE_STEP *
-							    (float)((int)(e->client - game.clients) % 10);
-							short js = (fmodf(level.time, jp) < jp * 0.5f)
-							           ? 1 : -1;
+							short js = (short)SG_WeaveSideAt(
+							    bot->instance_token,
+							    e->client->ctf.ctfid, level.time);
 
 							cmd->sidemove = (short)(cmd->sidemove / 2
 							               + js * (cmd->forwardmove > 0
@@ -8512,6 +8999,20 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 				cmd->forwardmove = (short)(cmd->forwardmove * dp);
 				cmd->sidemove = (short)(cmd->sidemove * dp);
+			}
+
+			/* A quiet stand patrol is deliberate walking, not the full-speed
+			 * micro-pacing it replaces.  Threats retire patrol authority in
+			 * CommitLink before this stage, and proved mechanisms keep their
+			 * exact submitted command. */
+			if (tc->patrol_walk && role == SG_ROLE_DEFEND && bot->def_stand &&
+			    !proved_control)
+			{
+				float patrol_throttle =
+				    SG_DefensePatrolThrottle(sg_cv.patrol->value);
+
+				cmd->forwardmove = (short)(cmd->forwardmove * patrol_throttle);
+				cmd->sidemove = (short)(cmd->sidemove * patrol_throttle);
 			}
 
 			/* the terminal brake: cornering throttle at the stands,
@@ -8637,8 +9138,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				qboolean door_wait_snapped = false;
 				sg_button_execution_anchor_state_t button_anchor_state =
 				    SG_BUTTON_EXECUTION_ANCHOR_BOTTOM;
-				qboolean button_controller = false;
-				qboolean direct_controller = false;
+				qboolean button_controller = declared_door &&
+				    mechanism_binding.plan &&
+				    mechanism_binding.plan->controller_kind ==
+				        SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+				qboolean direct_controller = declared_door &&
+				    mechanism_binding.plan &&
+				    mechanism_binding.plan->controller_kind ==
+				        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
 				qboolean direct_drive = true;
 				qboolean button_motion_hold = false;
 
@@ -8668,7 +9175,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    source_exact && source_rest &&
 				    (e->groundentity == g_edicts ||
 				     SG_ImmutableSupport(e->groundentity)) &&
-				    e->waterlevel == 0 &&
+				    (declared_door
+				         ? SG_OracleDoorEgressWaterSafe(
+				               mechanism_binding.plan->controller_kind,
+				               e->waterlevel, e->watertype)
+				         : e->waterlevel == 0) &&
 				    e->client->ps.pmove.pm_type == PM_NORMAL &&
 				    !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
 				    !e->client->ps.pmove.pm_time && !source_snapped)
@@ -8842,7 +9353,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							}
 						}
 						else if (!outside_ok || !support_ok ||
-						         e->waterlevel != 0 ||
+						         !SG_OracleDoorEgressWaterSafe(
+						             mechanism_binding.plan->controller_kind,
+						             e->waterlevel, e->watertype) ||
 						         e->client->ps.pmove.pm_type != PM_NORMAL ||
 						         (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 						         e->client->ps.pmove.pm_time)
@@ -8850,8 +9363,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							DoorStep_RetainFailedAuthority(bot, bestlink);
 							return;
 						}
-						if (!outside_ok || e->waterlevel != 0 ||
-						    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+						if (!outside_ok ||
+						    !SG_OracleDoorEgressWaterSafe(
+						        mechanism_binding.plan->controller_kind,
+						        e->waterlevel, e->watertype))
 						{
 							DoorStep_RetainFailedAuthority(bot, bestlink);
 							return;
@@ -9387,6 +9902,30 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 				bot->as_landing_command = as_ok && as_chain &&
 				    !proved_control && !door_hold;
+				/* The safety trace was made along aimed_fire_yaw/pitch.  Slew and
+				 * every later command owner may move the submitted view, so the
+				 * trigger is re-authorized at the final boundary on exact command
+				 * bytes.  A sound shot keeps trying while its earned belief is fresh
+				 * and spends its cadence only when this command can actually fire. */
+				if (aimed_fire_requested)
+				{
+					/* The trace was taken at the outer frame's starting pose. If
+					 * the first submitted command cannot carry its exact view, wait
+					 * for the next outer frame to re-trace from the new position;
+					 * do not authorize a later sub-step from stale geometry. */
+					if (step == 0 && AimedFireViewReady(cmd, aimed_fire_yaw,
+					                                          aimed_fire_pitch))
+						aimed_fire_view_admitted = true;
+					if (aimed_fire_view_admitted)
+					{
+						cmd->buttons |= BUTTON_ATTACK;
+						if (soundfire_owned &&
+						    SG_TimerReady(bot->soundfire_next))
+							SG_TimerArm(&bot->soundfire_next, 8.0f);
+					}
+					else
+						cmd->buttons &= ~BUTTON_ATTACK;
+				}
 				ClientThink(e, cmd);
 				if (direct_door_prediction)
 				{
@@ -9690,7 +10229,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * refreshed. Recheck the exact current link/field immediately
 				 * before its irreversible proof/fire boundary: a formerly served
 				 * ride must not launch after its current gain falls to the shelf. */
-				if (!goal_field || !rune || !rune->links || link_index < 0 ||
+				if (!route_field || !rune || !rune->links || link_index < 0 ||
 				    link_index >= rune->hdr.num_links ||
 				    (hook_link = &rune->links[link_index])->action != RL_HOOK ||
 				    hook_link->from < 0 || hook_link->from >= rune->hdr.num_seeds ||
@@ -9699,13 +10238,15 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					Hook_GraphFail(e, bot, 5.0f);
 					goto hook_wait;
 				}
-				worth = SG_HookExpectedRideWorth(goal_field[hook_link->from],
-				    goal_field[hook_link->to]);
-				if (worth == SG_HOOK_RIDE_REJECT)
+				worth = SG_HookExpectedRideWorth(route_field[hook_link->from],
+				    route_field[hook_link->to]);
+				if (!SG_HookRideLaunchAllowed(worth))
 				{
 					Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,
-					    "value-fire-skip", goal_field[hook_link->from],
-					    goal_field[hook_link->to]);
+					    worth == SG_HOOK_RIDE_UNASSESSED
+					        ? "value-fire-unassessed" : "value-fire-skip",
+					    route_field[hook_link->from],
+					    route_field[hook_link->to]);
 					goto hook_wait;
 				}
 				online = Hook_OnlineProof(e, bot, hook_link->anchor[ROLL],
@@ -10090,15 +10631,15 @@ hook_wait:;
 	{
 		float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 		                 e->velocity[1] * e->velocity[1]);
-		/* sgoal: the bot's cost on the STATIC field for its role's true
-		 * destination (attacker -> enemy stand, everyone else -> own).
+		/* sgoal: the bot's cost on the STATIC field for its frame-owned
+		 * destination (enemy-pressure body -> enemy stand, everyone else -> own).
 		 * The composed goal= number rebuilds under a standing bot --
 		 * item beliefs, danger, re-floods -- and observations traces
 		 * caught a stationary attacker "receding" 800ms/s in it. Route
 		 * progress gets measured against a number that only moves when
 		 * the body does. */
 		int sgoal = -1;
-		const int *sfld = (role == SG_ROLE_ATTACK)
+		const int *sfld = SG_StrikeEnemyPressureSnapshot(bot)
 		    ? ((team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
 		                              : sg_fields.to_red_flag)
 		    : ((team == CTF_TEAM_RED) ? sg_fields.to_red_flag
@@ -10108,7 +10649,7 @@ hook_wait:;
 			sgoal = sfld[bot->seed];
 		SG_TimerArm(&bot->next_report, 1.0f);
 		sg_host.dprint("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d "
-		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d eng=%d\n",
+		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d eng=%d frm=%d\n",
 		           e->client->pers.netname, role, bot->seed,
 		           (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
 		               ? goal_field[bot->seed] : -1,
@@ -10118,7 +10659,7 @@ hook_wait:;
 		           (bestlink >= 0) ? SG_Rune()->links[bestlink].action : -1,
 		           bot->hook_phase, door_hold, (int)drop_yaw_locked,
 		           bot->stuck_time, e->groundentity != NULL,
-		           (int)bot->engaged_last);
+		           (int)bot->engaged_last, level.framenum);
 	}
 
 	/*

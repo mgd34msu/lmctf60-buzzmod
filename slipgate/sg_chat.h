@@ -44,9 +44,12 @@
 /*
  * Rate-limit topics. One line per team per topic at a time is queued, and
  * chat_topic_gap[] in sg_chat.c holds each topic's team cooldown.
- * SG_CHAT_TOPIC_ORDER is the one exemption from the per-bot budget: an
+ * SG_CHAT_TOPIC_ORDER is fully exempt from the per-bot budget: an
  * acknowledgement that arrives four seconds after the order is worse than
- * none, and the order parser caps it at one ack per order anyway.
+ * none, and the order parser caps it at one ack per order anyway. CACO flag
+ * intelligence may preempt an older lower-priority use of its speaker's
+ * budget, but it stamps the budget when it speaks so ordinary chatter after
+ * the flag line remains suppressed.
  */
 #define SG_CHAT_TOPIC_CACO			0   /* flag callouts queued by sg_caco.c */
 #define SG_CHAT_TOPIC_CARRIER		1   /* enemy flag carrier position */
@@ -79,6 +82,16 @@
  */
 #define SG_CHAT_TOPIC_REPLY			9
 #define SG_CHAT_TOPICS				10
+
+static inline int SG_ChatTopicBlocksOnBotGap(int topic)
+{
+	return topic != SG_CHAT_TOPIC_ORDER && topic != SG_CHAT_TOPIC_CACO;
+}
+
+static inline int SG_ChatTopicStampsBotGap(int topic)
+{
+	return topic != SG_CHAT_TOPIC_ORDER;
+}
 
 /* ------------------------------------------------- the integrator's calls
  *

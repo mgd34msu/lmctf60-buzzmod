@@ -46,7 +46,7 @@
 	X(hookpong, "sg_hookpong", "0") \
 	X(hopfire, "sg_hopfire", "0") \
 	X(humanprior, "sg_humanprior", "0") \
-	X(interpose, "sg_interpose", "1") \
+	X(interpose, "sg_interpose", "3") \
 	X(itemcomm, "sg_itemcomm", "1") \
 	X(itemlead, "sg_itemlead", "1") \
 	X(landlead, "sg_landlead", "1") \
@@ -60,7 +60,7 @@
 	X(nakedcarry, "sg_nakedcarry", "0") \
 	X(nobacktrack, "sg_nobacktrack", "60") \
 	X(noweave, "sg_noweave", "0") \
-	X(patrol, "sg_patrol", "0") \
+	X(patrol, "sg_patrol", "0.55") \
 	X(persona, "sg_persona", "1") \
 	X(press, "sg_press", "1") \
 	X(preturn, "sg_preturn", "1") \
@@ -94,7 +94,7 @@
 	X(unlinger, "sg_unlinger", "0") \
 	X(watercarry, "sg_watercarry", "0") \
 	X(wavepush, "sg_wavepush", "0") \
-	X(wcommit, "sg_wcommit", "1") \
+	X(wcommit, "sg_wcommit", "2") \
 	X(wetwork, "sg_wetwork", "1") \
 	X(wswitch, "sg_wswitch", "0")
 

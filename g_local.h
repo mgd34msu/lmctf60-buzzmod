@@ -692,6 +692,7 @@ extern  char    motd[1000]; // CTF CODE -- LM_JORM
 
 extern  MapInfo maplist[300]; // CTF CODE -- LM_JORM
 extern  int     maplistindex; // CTF CODE -- LM_JORM
+extern  int     maplistcount;
 
 extern  int     bluescore, redscore; // CTF CODE -- LM_JORM
 
@@ -749,6 +750,11 @@ extern	gitem_t	itemlist[];
 void SortMaplist(MapInfo arr[], int min, int max);
 int MapDivide(MapInfo arr[], int min, int max);
 void flip(MapInfo* x, MapInfo* y);
+void MapList_Configure(MapInfo maps[], int count, qboolean random_maps);
+qboolean MapList_SequentialStartup(const MapInfo maps[], int count,
+	const char *current_map, int *next_index, const MapInfo **startup_map);
+const MapInfo *MapList_SelectNext(const MapInfo maps[], int count,
+	int *next_index, qboolean random_maps, const MapInfo *random_map);
 //
 // g_cmds.c
 //
@@ -786,6 +792,13 @@ int ArmorIndex (edict_t *ent);
 int PowerArmorType (edict_t *ent);
 gitem_t	*GetItemByIndex (int index);
 qboolean Add_Ammo (edict_t *ent, gitem_t *item, int count);
+qboolean G_PowerupPickupEligible(edict_t *ent, edict_t *other);
+qboolean G_WeaponPickupEligible(edict_t *ent, edict_t *other);
+qboolean G_HealthPickupEligible(edict_t *ent, edict_t *other);
+int G_HealthPickupGain(edict_t *ent, edict_t *other);
+qboolean G_AmmoPickupEligible(edict_t *ent, edict_t *other);
+qboolean G_ArmorPickupEligible(edict_t *ent, edict_t *other);
+int G_ArmorPickupGain(edict_t *ent, edict_t *other);
 
 // TEAM CODE -- LM_JORM
 //void Drop_Flag(edict_t *ent, gitem_t *item);
@@ -965,6 +978,7 @@ void ED_CallSpawn (edict_t *ent);
 
 void SpawnRune (int type);
 void SP_damage_rune (edict_t *self);
+qboolean G_RunePickupEligible(edict_t *ent, edict_t *other);
 qboolean Pickup_Rune (edict_t *ent, edict_t *other);
 void Drop_Rune (edict_t *ent, gitem_t *item);
 int DamageRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int damage, int knockback, int dflags);

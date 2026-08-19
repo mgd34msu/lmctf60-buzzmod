@@ -2,8 +2,8 @@
 #define __SKINS_H__
 
 qboolean SkinValid(edict_t *ent, char *input);
-void SkinsReadFile();
-qboolean SkinListInUse();
+void SkinsReadFile(void);
+qboolean SkinListInUse(void);
 char *SkinRandom(edict_t *ent);
 char **SkinGetList(edict_t *ent);
 

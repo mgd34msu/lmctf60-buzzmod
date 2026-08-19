@@ -14,7 +14,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate semantic version
         id: version
@@ -37,7 +37,7 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0            # GNUmakefile derives VER from git rev-list
 
@@ -63,10 +63,56 @@ jobs:
           cp game*-lmctf-*.so dist/gamex86_64.so
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lmctf-buzzmod-linux-x86_64
           path: dist/gamex86_64.so
+
+  verification:
+    name: Host gates (${{ matrix.name }})
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GNUmakefile GCC
+            build_file: GNUmakefile
+            compiler: gcc
+          - name: Makefile GCC
+            build_file: Makefile
+            compiler: gcc
+          - name: GNUmakefile Clang
+            build_file: GNUmakefile
+            compiler: clang
+          - name: Makefile Clang
+            build_file: Makefile
+            compiler: clang
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Build module and run complete host suite
+        shell: bash
+        run: |
+          set -o pipefail
+          make -B -f "${{ matrix.build_file }}" -j2 \
+            CC="${{ matrix.compiler }}" all host-test 2>&1 | tee host-test.log
+          module=$(find . -maxdepth 1 -type f -name 'game*-lmctf-*.so' \
+            -print -quit)
+          test -n "$module"
+          ldd -r "$module" 2>&1 | tee module-relocations.log
+
+      - name: Fail on warnings
+        shell: bash
+        run: |
+          if grep -q "warning:" host-test.log; then
+            grep "warning:" host-test.log
+            echo "::error::host verification produced warnings"
+            exit 1
+          fi
+          echo "no warnings"
 
   windows:
     name: Windows ${{ matrix.arch }}
@@ -83,11 +129,11 @@ jobs:
             platform: Win32
             output: gamex86.dll
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: microsoft/setup-msbuild@v2
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
       # The project's pre-build step calls TortoiseGit's GitWCRev, which is not
       # on a runner. Same substitutions, done with plain git.
@@ -148,22 +194,22 @@ jobs:
           cp "$src" dist/
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lmctf-buzzmod-windows-${{ matrix.arch }}
           path: dist/${{ matrix.output }}
 
   release:
     name: Publish release
-    needs: [ version, linux, windows ]
+    needs: [ version, linux, verification, windows ]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
 
@@ -181,7 +227,7 @@ jobs:
           cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: release/*
           body_path: RELEASES.md

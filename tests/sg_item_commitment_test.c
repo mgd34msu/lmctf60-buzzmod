@@ -5,6 +5,9 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_lead.h"
+#include "slipgate/sg_item_policy.h"
+#include "slipgate/sg_item_route.h"
+#include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_persona.h"
 
 #include <math.h>
@@ -13,15 +16,16 @@
 #include <string.h>
 
 static int failures;
-static edict_t entities[4];
+static edict_t entities[5];
 static gclient_t clients[2];
-static rune_seed_t seeds[2];
+static rune_seed_t seeds[3];
 static rune_t test_rune;
 static cvar_t itemlead_cvar;
 static cvar_t debug_cvar;
 static qboolean itemcomm = true;
 static qboolean combat;
 static qboolean hurt;
+static qboolean accept_powerup = true;
 
 game_locals_t game;
 level_locals_t level;
@@ -65,8 +69,7 @@ int SG_TeamIdx(int team)
 int Rune_NearestSeed(rune_t *r, vec3_t point)
 {
 	(void)r;
-	(void)point;
-	return 1;
+	return point[0] < 0.0f ? 2 : 1;
 }
 
 void Field_Flood(rune_t *r, int *dist, const int *sources,
@@ -80,7 +83,8 @@ void Field_Flood(rune_t *r, int *dist, const int *sources,
 	if (count == 1 && sources[0] >= 0 && sources[0] < r->hdr.num_seeds)
 	{
 		dist[sources[0]] = 0;
-		dist[0] = 100;
+		if (sources[0] == 1)
+			dist[0] = 100;
 	}
 }
 
@@ -99,6 +103,13 @@ qboolean Beat_HurtSince(edict_t *ent, float since)
 	(void)ent;
 	(void)since;
 	return hurt;
+}
+
+qboolean G_PowerupPickupEligible(edict_t *item, edict_t *other)
+{
+	(void)item;
+	(void)other;
+	return accept_powerup;
 }
 
 const sg_persona_t *SG_PersonaFor(edict_t *ent)
@@ -189,7 +200,7 @@ static void ResetWorld(void)
 	memset(&sg_cv, 0, sizeof(sg_cv));
 	memset(&sg_host, 0, sizeof(sg_host));
 	game.maxclients = 2;
-	globals.num_edicts = 4;
+	globals.num_edicts = 5;
 	entities[1].inuse = true;
 	entities[1].client = &clients[0];
 	entities[1].client->ctf.teamnum = CTF_TEAM_RED;
@@ -199,7 +210,7 @@ static void ResetWorld(void)
 	entities[3].inuse = true;
 	entities[3].classname = "item_quad";
 	VectorSet(entities[3].s.origin, 64.0f, 96.0f, 24.0f);
-	test_rune.hdr.num_seeds = 2;
+	test_rune.hdr.num_seeds = 3;
 	test_rune.seeds = seeds;
 	itemlead_cvar.value = 1.0f;
 	sg_cv.itemlead = &itemlead_cvar;
@@ -208,6 +219,7 @@ static void ResetWorld(void)
 	itemcomm = true;
 	combat = false;
 	hurt = false;
+	accept_powerup = true;
 }
 
 static void TestClockSpawnContinuesToPhysicalPickup(void)
@@ -222,7 +234,7 @@ static void TestClockSpawnContinuesToPhysicalPickup(void)
 	belief->believed_up = true;
 	belief->seen_up_time = 5.0f;
 	belief->believed_respawn_time = 0.0f;
-	field = Lead_Field(bot, SG_ROLE_ATTACK, false);
+	field = Lead_Field(bot, SG_ROLE_ATTACK, false, -1);
 	CHECK(field != NULL);
 	CHECK(bot->lead_ent == 3);
 	CHECK(bot->lead_state == SG_LEAD_SPAWNED);
@@ -230,7 +242,7 @@ static void TestClockSpawnContinuesToPhysicalPickup(void)
 	CHECK(bot->tac_seed == -1);
 
 	level.time = 12.1f;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
 }
 
@@ -246,7 +258,7 @@ static void TestSightConfirmedSpawnPersistsAndHomes(void)
 	belief->believed_up = true;
 	belief->seen_up_time = 6.0f;
 	belief->believed_respawn_time = 0.0f;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) != NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) != NULL);
 	CHECK(bot->lead_state == SG_LEAD_SPAWNED);
 	CHECK(bot->lead_inferred_until == 0.0f);
 	CHECK(Lead_PickupTarget(bot, target));
@@ -255,10 +267,10 @@ static void TestSightConfirmedSpawnPersistsAndHomes(void)
 	CHECK(target[2] == entities[3].s.origin[2]);
 
 	level.time = 15.0f;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) != NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) != NULL);
 	CHECK(bot->lead_ent == 3);
 	belief->believed_up = false;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
 }
 
@@ -286,6 +298,22 @@ static void TestExactPickupOwnershipEndsCommitment(void)
 	CHECK(bot->lead_ent == 3);
 }
 
+static void TestRejectedTouchEndsOnlyExactOwner(void)
+{
+	sg_bot_t *bot;
+
+	level.time = 10.0f;
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	Lead_NoteItemRejected(&entities[1], &entities[3]);
+	CHECK(bot->lead_ent == 0);
+	CHECK(sg_caco_items[0][0].claimed_by == -1);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	Lead_NoteItemRejected(&entities[2], &entities[3]);
+	CHECK(bot->lead_ent == 3);
+	CHECK(sg_caco_items[0][0].claimed_by == 0);
+}
+
 static void TestStrongerInterruptsStillWin(void)
 {
 	sg_bot_t *bot;
@@ -293,22 +321,202 @@ static void TestStrongerInterruptsStillWin(void)
 	level.time = 10.0f;
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
 	combat = true;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
 	combat = false;
 
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, true) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, true, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	CHECK(Lead_Field(bot, SG_ROLE_ESCORT, false, -1) == NULL);
+	CHECK(bot->lead_ent == 0);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, SG_ROLE_ATTACK) == NULL);
+	CHECK(bot->lead_ent == 0);
+}
+
+static void TestPowerupCapacityEndsTheErrand(void)
+{
+	sg_bot_t *bot;
+
+	level.time = 10.0f;
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	accept_powerup = false;
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
+	CHECK(bot->lead_ent == 0);
+	CHECK(sg_caco_items[0][0].claimed_by == -1);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	CHECK(!Lead_PickupTarget(bot, entities[0].s.origin));
+	CHECK(bot->lead_ent == 3);
+}
+
+static void TestUnreachableEarlyPadDoesNotSuppressReachablePad(void)
+{
+	const int *field;
+	sg_bot_t *bot;
+	sg_belief_item_t *early, *reachable;
+
+	ResetWorld();
+	level.time = 10.0f;
+	memset(sg_bots, 0, sizeof(sg_bots));
+	memset(sg_caco_items, 0, sizeof(sg_caco_items));
+	memset(&sg_caco_team_belief, 0, sizeof(sg_caco_team_belief));
+	sg_caco_team_belief.carrier[0].client = -1;
+	sg_caco_team_belief.carrier[1].client = -1;
+
+	bot = &sg_bots[0];
+	bot->active = true;
+	bot->ent = &entities[1];
+	bot->seed = 0;
+	bot->commit_link = -1;
+	bot->tac_seed = -1;
+	bot->lead_slot = -1;
+
+	entities[4].inuse = true;
+	entities[4].classname = "item_quad";
+	VectorSet(entities[4].s.origin, -64.0f, 0.0f, 24.0f);
+	sg_caco_num_items = 2;
+	early = &sg_caco_items[0][0];
+	early->ent = 4;
+	early->cls = SG_BI_POWERUP;
+	early->seed = 2;
+	early->believed_respawn_time = 15.0f;
+	VectorCopy(entities[4].s.origin, early->org);
+	reachable = &sg_caco_items[0][1];
+	reachable->ent = 3;
+	reachable->cls = SG_BI_POWERUP;
+	reachable->seed = 1;
+	reachable->believed_respawn_time = 16.0f;
+	VectorCopy(entities[3].s.origin, reachable->org);
+
+	field = Lead_Field(bot, SG_ROLE_ATTACK, false, -1);
+	CHECK(field != NULL);
+	CHECK(bot->lead_ent == 3);
+	CHECK(bot->lead_seed == 1);
+	CHECK(early->claimed_until == 0.0f);
+	CHECK(reachable->claimed_by == 0);
 }
 
 int main(void)
 {
+	CHECK(SG_IdentityItemRouteAdmission(SG_FC_POWERUP, true));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_POWERUP, false));
+	CHECK(SG_IdentityItemRouteAdmission(SG_FC_RUNE, true));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_RUNE, false));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_WEAPON, true));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_POWERUP, 2));
+	CHECK(SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, true, false));
+	CHECK(SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, false, true));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, false, false));
+	CHECK(SG_IdentityItemBeliefAdmission(SG_FC_RUNE, true, false));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_RUNE, false, true));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_WEAPON, true, true));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, 2, false));
+	CHECK(SG_AmmoRouteAdmission(AMMO_SHELLS, AMMO_SHELLS, true));
+	CHECK(!SG_AmmoRouteAdmission(AMMO_CELLS, AMMO_SHELLS, true));
+	CHECK(!SG_AmmoRouteAdmission(AMMO_SHELLS, AMMO_SHELLS, false));
+	CHECK(!SG_AmmoRouteAdmission(-1, AMMO_SHELLS, true));
+	CHECK(!SG_AmmoRouteAdmission(AMMO_SHELLS, -1, true));
+	CHECK(!SG_AmmoRouteAdmission(AMMO_SHELLS, AMMO_SHELLS, 2));
+	CHECK(SG_WeaponUpgradeRouteAdmission(1, 2, true));
+	CHECK(SG_WeaponUpgradeRouteAdmission(4, 5, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(3, 3, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(4, 2, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 2, false));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(0, 2, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 0, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 2, 2));
+	CHECK(SG_ItemGainSourceCost(25, 25) == 0);
+	CHECK(SG_ItemGainSourceCost(10, 20) == 1500);
+	CHECK(SG_ItemGainSourceCost(5, 20) == 4500);
+	CHECK(SG_ItemGainSourceCost(2, 100) == 73500);
+	CHECK(SG_ItemGainSourceCost(1, 1000000) ==
+	      SG_ITEM_ROUTE_MAX_SOURCE_COST);
+	CHECK(SG_ItemGainSourceCost(0, 20) == -1);
+	CHECK(SG_ItemGainSourceCost(21, 20) == -1);
+	CHECK(SG_HealthClassRouteAdmission(false, true, true));
+	CHECK(SG_HealthClassRouteAdmission(true, false, true));
+	CHECK(!SG_HealthClassRouteAdmission(true, true, true));
+	CHECK(!SG_HealthClassRouteAdmission(false, false, false));
+	CHECK(!SG_HealthClassRouteAdmission(2, false, true));
+	CHECK(!SG_HealthClassRouteAdmission(false, 2, true));
+	CHECK(!SG_HealthClassRouteAdmission(false, false, 2));
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, false, false));
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_DEFEND, false, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_CARRY, true, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, SG_ROLE_ATTACK,
+	    false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, SG_ROLE_ESCORT,
+	    false, false));
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, true));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, true, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, 2, true));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, 2));
+	CHECK(SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, -1, true, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 16, true, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, false, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, false,
+	    100, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    0, false, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, true, CTF_TEAM_RED, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_BLUE, true, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_RED, false, false));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, 2, true,
+	    100, false, CTF_TEAM_RED, true, false));
+	{
+		float yaw = 999.0f;
+
+		CHECK(SG_RuneHandoffAim(1.0f, 0.0f, &yaw));
+		CHECK(fabsf(yaw) < 0.001f);
+		CHECK(SG_RuneHandoffAim(0.0f, 1.0f, &yaw));
+		CHECK(fabsf(yaw - 90.0f) < 0.001f);
+		CHECK(SG_RuneHandoffAim(-1.0f, 0.0f, &yaw));
+		CHECK(fabsf(fabsf(yaw) - 180.0f) < 0.001f);
+		CHECK(!SG_RuneHandoffAim(0.0f, 0.0f, &yaw));
+		CHECK(!SG_RuneHandoffAim(NAN, 1.0f, &yaw));
+		CHECK(!SG_RuneHandoffAim(1.0f, INFINITY, &yaw));
+		CHECK(!SG_RuneHandoffAim(1.0f, 1.0f, NULL));
+	}
+	CHECK(SG_RuneHandoffTossPathAllowed(128.0f, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(128.0f, false));
+	CHECK(!SG_RuneHandoffTossPathAllowed(0.0f, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(400.0f, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(NAN, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(INFINITY, true));
+	CHECK(!SG_RuneHandoffTossPathAllowed(128.0f, 2));
+	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
+	    100, false, CTF_TEAM_RED, true, true));
+	CHECK(SG_ItemPickupDisposition(1, 0, 1, 0) ==
+	      SG_ITEM_PICKUP_COMMIT_ONLY);
+	CHECK(SG_ItemPickupDisposition(1, 0, 1, 1) ==
+	      SG_ITEM_PICKUP_COMMIT_AND_COMMUNICATE);
+	CHECK(SG_ItemPickupDisposition(0, 0, 1, 1) == SG_ITEM_PICKUP_IGNORE);
+	CHECK(SG_ItemPickupDisposition(1, 1, 1, 1) == SG_ITEM_PICKUP_IGNORE);
+	CHECK(SG_ItemPickupDisposition(1, 0, 0, 1) == SG_ITEM_PICKUP_IGNORE);
 	ResetWorld();
 	TestClockSpawnContinuesToPhysicalPickup();
 	TestSightConfirmedSpawnPersistsAndHomes();
 	TestExactPickupOwnershipEndsCommitment();
+	TestRejectedTouchEndsOnlyExactOwner();
 	TestStrongerInterruptsStillWin();
+	TestPowerupCapacityEndsTheErrand();
+	TestUnreachableEarlyPadDoesNotSuppressReachablePad();
 	if (failures)
 	{
 		fprintf(stderr, "%d sg_item_commitment tests failed\n", failures);

@@ -3,6 +3,9 @@
 #include "g_tourney.h"
 #include "bat.h"
 #include "stdlog.h"
+#include "slipgate/sg_health_pickup.h"
+#include "slipgate/sg_ammo_pickup.h"
+#include "slipgate/sg_armor_pickup.h"
 
 void droptofloor(edict_t* ent);
 
@@ -28,6 +31,7 @@ void Weapon_BFG(edict_t* ent);
 #include "plasma.h"
 
 void SG_NoteItemTaken(edict_t *taker, edict_t *item);
+void SG_NoteItemRejected(edict_t *taker, edict_t *item);
 extern void Weapon_Plasma(edict_t* ent);
 extern void Use_PLASMA(edict_t* ent, gitem_t* inv);
 // END
@@ -168,15 +172,24 @@ void SetRespawn(edict_t* ent, float delay)
 
 //======================================================================
 
-qboolean Pickup_Powerup(edict_t* ent, edict_t* other)
+qboolean G_PowerupPickupEligible(edict_t *ent, edict_t *other)
 {
 	int		quantity;
 
+	if (!ent || !ent->item || !other || !other->client)
+		return false;
 	quantity = other->client->pers.inventory[ITEM_INDEX(ent->item)];
 	if ((skill->value == 1 && quantity >= 2) || (skill->value >= 2 && quantity >= 1))
 		return false;
 
 	if ((coop->value) && (ent->item->flags & IT_STAY_COOP) && (quantity > 0))
+		return false;
+	return true;
+}
+
+qboolean Pickup_Powerup(edict_t* ent, edict_t* other)
+{
+	if (!G_PowerupPickupEligible(ent, other))
 		return false;
 
 	other->client->pers.inventory[ITEM_INDEX(ent->item)]++;
@@ -474,33 +487,52 @@ qboolean Pickup_Key(edict_t* ent, edict_t* other)
 
 //======================================================================
 
+static int G_AmmoCapacity(edict_t *ent, gitem_t *item)
+{
+	if (item->tag == AMMO_BULLETS)
+		return ent->client->pers.max_bullets;
+	else if (item->tag == AMMO_SHELLS)
+		return ent->client->pers.max_shells;
+	else if (item->tag == AMMO_ROCKETS)
+		return ent->client->pers.max_rockets;
+	else if (item->tag == AMMO_GRENADES)
+		return ent->client->pers.max_grenades;
+	else if (item->tag == AMMO_CELLS)
+		return ent->client->pers.max_cells;
+	else if (item->tag == AMMO_SLUGS)
+		return ent->client->pers.max_slugs;
+	return -1;
+}
+
+static qboolean G_AmmoItemPickupEligible(gitem_t *item, edict_t *other)
+{
+	int index, max;
+
+	if (!item || !other || !other->client)
+		return false;
+	max = G_AmmoCapacity(other, item);
+	if (max < 0)
+		return false;
+	index = ITEM_INDEX(item);
+	return SG_AmmoPickupAllowed(other->client->pers.inventory[index], max) ?
+	    true : false;
+}
+
+qboolean G_AmmoPickupEligible(edict_t *ent, edict_t *other)
+{
+	return ent ? G_AmmoItemPickupEligible(ent->item, other) : false;
+}
+
 qboolean Add_Ammo(edict_t* ent, gitem_t* item, int count)
 {
 	int			index;
 	int			max;
 
-	if (!ent->client)
+	if (!G_AmmoItemPickupEligible(item, ent))
 		return false;
-
-	if (item->tag == AMMO_BULLETS)
-		max = ent->client->pers.max_bullets;
-	else if (item->tag == AMMO_SHELLS)
-		max = ent->client->pers.max_shells;
-	else if (item->tag == AMMO_ROCKETS)
-		max = ent->client->pers.max_rockets;
-	else if (item->tag == AMMO_GRENADES)
-		max = ent->client->pers.max_grenades;
-	else if (item->tag == AMMO_CELLS)
-		max = ent->client->pers.max_cells;
-	else if (item->tag == AMMO_SLUGS)
-		max = ent->client->pers.max_slugs;
-	else
-		return false;
+	max = G_AmmoCapacity(ent, item);
 
 	index = ITEM_INDEX(item);
-
-	if (ent->client->pers.inventory[index] == max)
-		return false;
 
 	ent->client->pers.inventory[index] += count;
 
@@ -599,11 +631,32 @@ void MegaHealth_think(edict_t* self)
 		G_FreeEdict(self);
 }
 
+qboolean G_HealthPickupEligible(edict_t *ent, edict_t *other)
+{
+	if (!ent || !ent->item || !other || !other->client)
+		return false;
+	return SG_HealthPickupAllowed(other->health, other->max_health,
+	    (ent->style & HEALTH_IGNORE_MAX) != 0) ? true : false;
+}
+
+int G_HealthPickupGain(edict_t *ent, edict_t *other)
+{
+	int room;
+
+	if (!ent || !ent->item || !other || !other->client || ent->count <= 0)
+		return 0;
+	if (ent->style & HEALTH_IGNORE_MAX)
+		return ent->count;
+	room = other->max_health - other->health;
+	if (room <= 0)
+		return 0;
+	return ent->count < room ? ent->count : room;
+}
+
 qboolean Pickup_Health(edict_t* ent, edict_t* other)
 {
-	if (!(ent->style & HEALTH_IGNORE_MAX))
-		if (other->health >= other->max_health)
-			return false;
+	if (!G_HealthPickupEligible(ent, other))
+		return false;
 
 	other->health += ent->count;
 
@@ -672,6 +725,80 @@ int ArmorIndex(edict_t* ent)
 	return 0;
 }
 
+qboolean G_ArmorPickupEligible(edict_t *ent, edict_t *other)
+{
+	int old_index;
+	gitem_armor_t *oldinfo, *newinfo;
+
+	if (!ent || !ent->item || !other || !other->client)
+		return false;
+	/* Shards deliberately have no armor-info record in itemlist.  Their
+	 * pickup law is the unconditional two-point branch in Pickup_Armor. */
+	if (ent->item->tag == ARMOR_SHARD)
+		return true;
+	if (!ent->item->info)
+		return false;
+	newinfo = (gitem_armor_t *)ent->item->info;
+	old_index = ArmorIndex(other);
+	if (!old_index)
+		return true;
+	if (old_index == jacket_armor_index)
+		oldinfo = &jacketarmor_info;
+	else if (old_index == combat_armor_index)
+		oldinfo = &combatarmor_info;
+	else if (old_index == body_armor_index)
+		oldinfo = &bodyarmor_info;
+	else
+		return false;
+	return SG_ArmorPickupAllowed(false, 1,
+	    oldinfo->normal_protection,
+	    other->client->pers.inventory[old_index], oldinfo->max_count,
+	    newinfo->normal_protection, newinfo->base_count) ? true : false;
+}
+
+int G_ArmorPickupGain(edict_t *ent, edict_t *other)
+{
+	int old_index, old_count, new_count, salvage_count;
+	gitem_armor_t *oldinfo, *newinfo;
+
+	if (!ent || !ent->item || !other || !other->client)
+		return 0;
+	if (ent->item->tag == ARMOR_SHARD)
+		return 2;
+	if (!ent->item->info)
+		return 0;
+	newinfo = (gitem_armor_t *)ent->item->info;
+	old_index = ArmorIndex(other);
+	if (!old_index)
+		return newinfo->base_count > 0 ? newinfo->base_count : 0;
+	if (old_index == jacket_armor_index)
+		oldinfo = &jacketarmor_info;
+	else if (old_index == combat_armor_index)
+		oldinfo = &combatarmor_info;
+	else if (old_index == body_armor_index)
+		oldinfo = &bodyarmor_info;
+	else
+		return 0;
+	old_count = other->client->pers.inventory[old_index];
+	if (newinfo->normal_protection > oldinfo->normal_protection)
+	{
+		salvage_count = (int)((oldinfo->normal_protection /
+		    newinfo->normal_protection) * (float)old_count);
+		new_count = newinfo->base_count + salvage_count;
+		if (new_count > newinfo->max_count)
+			new_count = newinfo->max_count;
+	}
+	else
+	{
+		salvage_count = (int)((newinfo->normal_protection /
+		    oldinfo->normal_protection) * (float)newinfo->base_count);
+		new_count = old_count + salvage_count;
+		if (new_count > oldinfo->max_count)
+			new_count = oldinfo->max_count;
+	}
+	return new_count > old_count ? new_count - old_count : 0;
+}
+
 qboolean Pickup_Armor(edict_t* ent, edict_t* other)
 {
 	int				old_armor_index;
@@ -680,6 +807,9 @@ qboolean Pickup_Armor(edict_t* ent, edict_t* other)
 	int				newcount;
 	float			salvage;
 	int				salvagecount;
+
+	if (!G_ArmorPickupEligible(ent, other))
+		return false;
 
 	// get info on new armor
 	newinfo = (gitem_armor_t*)ent->item->info;
@@ -735,10 +865,6 @@ qboolean Pickup_Armor(edict_t* ent, edict_t* other)
 			newcount = other->client->pers.inventory[old_armor_index] + salvagecount;
 			if (newcount > oldinfo->max_count)
 				newcount = oldinfo->max_count;
-
-			// if we're already maxed out then we don't need the new armor
-			if (other->client->pers.inventory[old_armor_index] >= newcount)
-				return false;
 
 			// update current armor value
 			other->client->pers.inventory[old_armor_index] = newcount;
@@ -955,9 +1081,20 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 	if (other->health < 1)
 		return;		// dead people can't pickup
 	if (!ent->item->pickup)
+	{
+		SG_NoteItemRejected(other, ent);
 		return;		// not a grabbable item?
+	}
 
 	taken = ent->item->pickup(ent, other);
+	if (!taken)
+	{
+		// The exact commitment owner reached the physical item, but the
+		// game's pickup law refused it. Retire that owner's errand before
+		// targets may mutate or free the entity; another client's rejected
+		// touch cannot affect the claimant.
+		SG_NoteItemRejected(other, ent);
+	}
 
 	if (taken)
 	{

@@ -9,7 +9,10 @@
 #include "slipgate/sg_cvars.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_bot.h"        /* sg_think_t -- the pricing context */
+#include "slipgate/sg_combat.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_item_route.h"
 #include "slipgate/sg_util.h"
 
 #define SG_MEGA_MAXDETOUR	4000    /* ms of extra road, hard refusal above */
@@ -67,15 +70,55 @@ float Rune_RoleFactor(int role, int entnum)
 qboolean sg_route_pure_now;  /* tactics priced at selection: the
                                      * per-frame walk stays pure */
 
+static qboolean Detour_IdentityItemEligible(const sg_think_t *tc, int cls,
+	int entnum)
+{
+	edict_t *item;
+	qboolean eligible;
+
+	if (!tc || !tc->e || !tc->e->client || entnum <= 0 ||
+	    entnum >= globals.num_edicts)
+		return false;
+	item = &g_edicts[entnum];
+	if (!item->item)
+		return false;
+	if (!Caco_ItemBelievedRouteableFor(tc->team, item))
+		return false;
+	if (cls == SG_FC_POWERUP)
+		eligible = G_PowerupPickupEligible(item, tc->e);
+	else if (cls == SG_FC_RUNE)
+		eligible = G_RunePickupEligible(item, tc->e);
+	else
+		return false;
+	return SG_IdentityItemRouteAdmission(cls, eligible);
+}
+
+static qboolean Detour_MegaEligible(const sg_think_t *tc, int entnum)
+{
+	edict_t *item;
+
+	if (!tc || !tc->e || !tc->e->client || entnum <= 0 ||
+	    entnum >= globals.num_edicts)
+		return false;
+	item = &g_edicts[entnum];
+	if (!item->item)
+		return false;
+	if (!Caco_ItemBelievedUpFor(tc->team, item))
+		return false;
+	return G_HealthPickupEligible(item, tc->e);
+}
+
 float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
                           float worth)
 {
-	int *ifld = sg_fields.item[cls];
-	int to_item = ifld[here];
+	const int *ifld = SG_ItemDetourField(tc != NULL, sg_fields.item[cls],
+	    tc ? tc->collectible_item_field[cls] : NULL);
+	int to_item;
 	int direct = goal_field[here];
 
-	if (direct >= SG_FIELD_INF)
+	if (!ifld || direct >= SG_FIELD_INF)
 		return 0.0f;
+	to_item = ifld[here];
 
 	/*
 	 * Where per-item fields exist (powerups, runes), the triangle is exact.
@@ -96,23 +139,32 @@ float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
 		{
 			const int *kfld = sg_fields.per_item[cls][k];
 			int kseed = sg_fields.per_item_seed[cls][k];
+			int kent = sg_fields.per_item_ent[cls][k];
 			int cost_to, item_to_goal, detour;
+			float item_worth = worth;
 			float v;
 
-			if (!kfld || kseed < 0)
+			if (!kfld || kseed < 0 ||
+			    !Detour_IdentityItemEligible(tc, cls, kent))
 				continue;
 			cost_to = kfld[here];
 			item_to_goal = goal_field[kseed];
 			if (cost_to >= SG_FIELD_INF || item_to_goal >= SG_FIELD_INF)
 				continue;
+			if (cls == SG_FC_RUNE)
+			{
+				item_worth = SG_RuneRouteWorth(tc->e,
+				    &g_edicts[kent], worth);
+				if (item_worth <= 0.0f)
+					continue;
+			}
 
 			detour = cost_to + item_to_goal - direct;
 			if (detour < 0)
 				detour = 0;      /* an item on the road is free, never a bonus */
-			v = worth / (1.0f + (float)detour / 1500.0f);
+			v = item_worth / (1.0f + (float)detour / 1500.0f);
 			if (cls == SG_FC_RUNE)
-				v *= Rune_RoleFactor(tc->role,
-				                     sg_fields.per_item_ent[cls][k]);
+				v *= Rune_RoleFactor(tc->role, kent);
 			if (v > best)
 				best = v;
 		}
@@ -124,8 +176,9 @@ float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
 	 * unknowable once many interchangeable items share one field, which gives
 	 * cost to the NEAREST of them, so the triangle is approximated by to_item
 	 * alone against scale. Honest limitation, recorded -- it holds for the
-	 * classes whose members are interchangeable (a health box is a health
-	 * box), which is why identity-bearing classes got per-item fields.
+	 * classes whose members share one utility axis.  The live health and armor
+	 * fields encode exact pickup gain as source cost before reaching this
+	 * approximation; identity-bearing classes still need per-item fields.
 	 */
 	if (to_item >= SG_FIELD_INF)
 		return 0.0f;
@@ -147,10 +200,11 @@ float Mega_Detour(sg_think_t *tc, int here, const int *goal_field, int *out_ent)
 	{
 		const int	*kfld = sg_fields.to_mega[k];
 		int			kseed = sg_fields.mega_seed[k];
+		int			kent = sg_fields.mega_ent[k];
 		int			cost_to, pad_to_goal, detour;
 		float		v;
 
-		if (!kfld || kseed < 0)
+		if (!kfld || kseed < 0 || !Detour_MegaEligible(tc, kent))
 			continue;
 		cost_to = kfld[here];
 		pad_to_goal = goal_field[kseed];
@@ -167,7 +221,7 @@ float Mega_Detour(sg_think_t *tc, int here, const int *goal_field, int *out_ent)
 		{
 			best = v;
 			if (out_ent)
-				*out_ent = sg_fields.mega_ent[k];
+				*out_ent = kent;
 		}
 	}
 	return best;
@@ -257,12 +311,15 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		if (w->item[c] > 0.0f)
 			/* legcarrier dose 3: a healthy carrier does not shop --
 			 * humans never detour mid-carry (corpus: 310 u/s flat).
-			 * Hurt carriers keep the detour; health is worth a stop. */
-			v -= (tc->push ||
-			      (tc->role == SG_ROLE_CARRY && tc->health > 60 &&
-			       sg_cv.legcarrier->value >= 3.0f))
-			     ? 0.0f :
-			     1500.0f * Detour_Value(tc, seed, c, goal_field, w->item[c]);
+			 * Hurt carriers keep the detour; health is worth a stop. A
+			 * concrete strike duty has already retired every named optional
+			 * errand and owns this surface too: generic class attraction must
+			 * not silently bend BREACH/PRESS/CLEAR off their duty route. */
+			v -= SG_OptionalItemDetourAllowed(tc->push,
+			          tc->strike_blocks_optional, tc->role, tc->health,
+			          sg_cv.legcarrier->value) ?
+			     1500.0f * Detour_Value(tc, seed, c, goal_field, w->item[c]) :
+			     0.0f;
 
 	/*
 	 * THE MEGA (sg_megaworth). A separate term rather than a bend in the
@@ -302,7 +359,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		 * role except the assigned escort, whose whole job it is.
 		 * 1.0 == today's behavior exactly.
 		 */
-		if (tc->role != SG_ROLE_ESCORT)
+		if (!SG_EscortSupportFullStrength(tc->escort_mission))
 		{
 			cvar_t *lw = sg_cv.lonewolf;
 

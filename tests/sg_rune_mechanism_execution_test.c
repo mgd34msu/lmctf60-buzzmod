@@ -17,6 +17,7 @@
 #define TEST_EDICTS 28
 #define TEST_LINKS 7U
 #define TEST_EDGE_CAPACITY 128U
+#define CELLAR_WITNESS_WATERTYPE 0x18000020
 
 void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surface);
@@ -1194,6 +1195,10 @@ static void DirectPredictionObserved(sg_bot_t *bot,
 	}
 	observation.grounded = 1;
 	observation.static_support = 1;
+	observation.watertype = bot->ent->watertype;
+	observation.waterlevel = bot->ent->waterlevel;
+	observation.hazardous_liquid =
+	    (observation.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
 	observation.population_stable = 1;
 	observation.sweep_clear = 1;
 	observation.physical_touch = physical_touch ? 1 : 0;
@@ -1208,6 +1213,8 @@ static void DirectPredictionObserved(sg_bot_t *bot,
 	VectorCopy(bot->ent->mins, prediction->mins);
 	VectorCopy(bot->ent->maxs, prediction->maxs);
 	prediction->groundentity = &test_edicts[0];
+	prediction->watertype = observation.watertype;
+	prediction->waterlevel = observation.waterlevel;
 	prediction->expected_touch = physical_touch;
 }
 
@@ -1648,6 +1655,205 @@ static void TestDirectApproachLifecycle(execution_fixture_t *fixture)
 	CHECK(!bot->declared_door_ticket.armed);
 }
 
+static void TestDirectApproachShallowMirror(execution_fixture_t *fixture,
+	const short source[3], const short anchor[3], const short touch[3],
+	const short velocity[3])
+{
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	sg_rune_mechanism_binding_t binding;
+	sg_door_approach_prediction_t prediction;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity;
+
+	/* These are the exact mirrored lmctf58 CellarDoor3 wet-source and wet-touch
+	 * states.  The raw type contains nonhazard bits beyond CONTENTS_WATER; it is
+	 * safe but remains sealed byte-for-byte through touch -> relay -> door. */
+	FixtureBuild(fixture);
+	DirectBotPose(source, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    source, anchor));
+	DirectPrediction(bot, touch, velocity, &prediction);
+	CHECK(prediction.state.expected_waterlevel == 1);
+	CHECK(prediction.state.expected_watertype ==
+	    CELLAR_WITNESS_WATERTYPE);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 0));
+	CHECK(bot->declared_door_ticket.expected_waterlevel == 1);
+	CHECK(bot->declared_door_ticket.expected_watertype ==
+	    CELLAR_WITNESS_WATERTYPE);
+	PublishPrediction(&prediction);
+	Touch_Multi(&test_edicts[KEY_CELLAR_TRIGGER], entity, NULL, NULL);
+	CHECK(bot->declared_door_ticket.touch_seen);
+	CHECK(bot->declared_door_ticket.activation_seen);
+	CHECK(SG_DeclaredDoorApproachExecutionFinish(bot, &binding, entity));
+	CHECK(bot->declared_door_approach.expected_waterlevel == 1);
+	CHECK(bot->declared_door_approach.expected_watertype ==
+	    CELLAR_WITNESS_WATERTYPE);
+}
+
+static void TestDirectApproachShallowTicket(execution_fixture_t *fixture)
+{
+	static const short red_source[3] = { -22016, 21552, -3895 };
+	static const short red_anchor[3] = { -21655, 21614, -3895 };
+	static const short red_touch[3] = { -21655, 21613, -3895 };
+	static const short red_velocity[3] = { 80, 40, 0 };
+	static const short blue_source[3] = { 9184, 19184, -3895 };
+	static const short blue_anchor[3] = { 8823, 19121, -3895 };
+	static const short blue_touch[3] = { 8823, 19121, -3895 };
+	static const short blue_velocity[3] = { -80, 0, 0 };
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	sg_rune_mechanism_binding_t binding;
+	sg_door_approach_prediction_t prediction;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity;
+
+	TestDirectApproachShallowMirror(fixture, red_source, red_anchor,
+	    red_touch, red_velocity);
+	TestDirectApproachShallowMirror(fixture, blue_source, blue_anchor,
+	    blue_touch, blue_velocity);
+
+	/* Even another safe shallow classification is drift when it differs from
+	 * the oracle prediction.  The callback consumes the ticket and permanently
+	 * fails the reducer instead of allowing a retry. */
+	FixtureBuild(fixture);
+	DirectBotPose(red_source, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+	DirectPrediction(bot, red_touch, red_velocity, &prediction);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 0));
+	PublishPrediction(&prediction);
+	entity->watertype = CONTENTS_WATER;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	DirectConsumed(&binding);
+
+	FixtureBuild(fixture);
+	DirectBotPose(red_source, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+	DirectPrediction(bot, red_touch, red_velocity, &prediction);
+	CHECK(SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 0));
+	PublishPrediction(&prediction);
+	entity->waterlevel = 0;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+	DirectConsumed(&binding);
+
+	/* Deep and hazardous sources never begin the persistent transaction. */
+	FixtureBuild(fixture);
+	DirectBotPose(red_source, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 2;
+	entity->watertype = CONTENTS_WATER;
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(!SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+	entity->waterlevel = 1;
+	entity->watertype = CONTENTS_WATER | CONTENTS_SLIME;
+	CHECK(!SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+	entity->watertype = 0;
+	CHECK(!SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+	entity->watertype = CONTENTS_MIST;
+	CHECK(!SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+
+	/* Ticket minting independently rejects a forged depth-one classification
+	 * that is nonhazardous but is not actually CONTENTS_WATER. */
+	FixtureBuild(fixture);
+	DirectBotPose(red_source, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+	DirectPrediction(bot, red_touch, red_velocity, &prediction);
+	prediction.watertype = 0;
+	prediction.state.expected_watertype = 0;
+	CHECK(!SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 0));
+
+	FixtureBuild(fixture);
+	DirectBotPose(red_source, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CELLAR_DOOR, &binding));
+	CHECK(SG_DeclaredDoorApproachExecutionBegin(bot, &binding,
+	    red_source, red_anchor));
+	DirectPrediction(bot, red_touch, red_velocity, &prediction);
+	prediction.watertype = CONTENTS_MIST;
+	prediction.state.expected_watertype = CONTENTS_MIST;
+	CHECK(!SG_DeclaredDoorApproachExecutionArm(bot, &binding,
+	    &prediction, 0));
+
+	/* The shallow exception belongs only to the exact current DIRECT ticket.
+	 * Unticketed DIRECT, AUTO, and BUTTON bots keep the dry-only callback law;
+	 * a non-SG player keeps the stock callback behavior. */
+	FixtureBuild(fixture);
+	DirectBotPose(red_touch, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_CELLAR_DOOR);
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+
+	FixtureBuild(fixture);
+	DirectBotPose(zero_velocity, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_AUTO_DOOR);
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_AUTO_TRIGGER], entity));
+
+	FixtureBuild(fixture);
+	DirectBotPose(zero_velocity, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	DirectBotOwner(bot, LINK_BUTTON_DOOR);
+	CHECK(!SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_BUTTON], entity));
+
+	FixtureBuild(fixture);
+	DirectBotPose(zero_velocity, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->waterlevel = 1;
+	entity->watertype = CELLAR_WITNESS_WATERTYPE;
+	CHECK(SG_AuthorizeDoorTriggerTouch(
+	    &test_edicts[KEY_CELLAR_TRIGGER], entity));
+}
+
 int main(void)
 {
 	execution_fixture_t fixture;
@@ -1695,6 +1901,7 @@ int main(void)
 	FixtureBuild(&fixture);
 	TestDirectApproachLifecycle(&fixture);
 	TestDirectApproachMultiMaster(&fixture);
+	TestDirectApproachShallowTicket(&fixture);
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d mechanism execution test(s) failed\n", failures);

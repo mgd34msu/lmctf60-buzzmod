@@ -149,8 +149,8 @@ qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
 void SG_TeachFutility(int seed);
 void SG_TeachLinkFutility(int link);
 void SG_NoteDeath(edict_t *victim);
-extern vec3_t sg_caco_death_org[2];
-extern float sg_caco_death_time[2];
+qboolean SG_EnemyRoomDeathKnown(int team, const vec3_t stand_origin,
+	float max_age, float max_distance);
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 /* Phase-independent exclusion for topology and exposure traces.  It models
@@ -569,7 +569,8 @@ enum
 
 /*
  * Per-item fields: a class field gives cost to the NEAREST item of the class,
- * which is all the detour arithmetic needs when the items are interchangeable.
+ * which is all the detour arithmetic needs when the items share one utility
+ * axis (client-specific fields may encode magnitude as source cost).
  * For the classes where identity decides the worth -- powerups and runes, a
  * handful of entities each -- one field per item is kept as well, so the
  * detour triangle can be evaluated exactly against THAT item's position.
@@ -862,10 +863,15 @@ qboolean	SG_ItemComm(void);
  * sg_caco.c and over the majors table in sg_chat.c.
  */
 void		SG_NoteItemTaken(edict_t *taker, edict_t *item);
+/* A rejected physical touch retires only the matching taker's exact item
+ * commitment. It carries no belief or communication authority. */
+void		SG_NoteItemRejected(edict_t *taker, edict_t *item);
 
 /* the calls sg_fields.c needs to stop reading item entities directly */
 qboolean	Caco_ItemBelievedUp(edict_t *e);
 qboolean	Caco_ItemBelievedUpFor(int team, edict_t *e);
+qboolean	Caco_ItemBelievedRouteableFor(int team, edict_t *e);
+qboolean	Caco_ItemBelievedRouteable(edict_t *e);
 int			Caco_ItemBeliefSeed(rune_t *r, edict_t *e);
 unsigned	Caco_ItemBeliefSig(void);   /* mix into the class rebuild test */
 

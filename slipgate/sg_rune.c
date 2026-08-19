@@ -2571,6 +2571,37 @@ static qboolean Gen_SeedHasOutgoing(int seed)
 	return false;
 }
 
+/* Candidate discovery is only a budget around the authoritative approach
+ * replay below.  The historical 48-unit vertical budget remains exact for
+ * AUTO/BUTTON and for ordinary dry DIRECT egress.  A DIRECT trigger whose
+ * already-proved best egress ends in supported safe shallow water may use the
+ * same 96-unit vertical discovery budget as that egress: lmctf58's four lower
+ * cellar triggers have a realizable 72-unit descent from their connected dry
+ * source to the only wait point that also crosses into the shallow basin.
+ * Unsafe/deep water cannot enlarge this budget because it must pass the same
+ * shared controller-aware liquid gate used by both egress replay call sites.
+ * Discovery may inspect the best destination, but every selected destination
+ * must pass this gate again immediately before its link is serialized. */
+static qboolean Door_ApproachEnvelopeEligible(int controller_kind,
+	int egress_destination, const vec3_t delta)
+{
+	float max_vertical = 48.0f;
+	float horizontal2;
+
+	if (!delta)
+		return false;
+	if (controller_kind == SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+	    egress_destination >= 0 && egress_destination < gen_num_seeds &&
+	    gen_source_waterlevel[egress_destination] == 1 &&
+	    SG_OracleDoorEgressWaterSafe(controller_kind,
+	        gen_source_waterlevel[egress_destination],
+	        gen_source_watertype[egress_destination]))
+		max_vertical = 96.0f;
+	horizontal2 = delta[0] * delta[0] + delta[1] * delta[1];
+	return horizontal2 <= 320.0f * 320.0f &&
+	       fabsf(delta[2]) <= max_vertical;
+}
+
 /* Select a graph-connected static endpoint for a declared mechanism.  A
  * Euclidean nearest seed is insufficient: it can be on the far side of a
  * wall, on the mover itself, or an isolated germ.  Trace the complete player
@@ -3910,7 +3941,7 @@ static void Link_Doors(void)
 		edict_t *members[16];
 		door_pose_t saved[16];
 		vec3_t door_wait[DOOR_WAIT_MAX];
-		button_wait_stats_t button_stats;
+		button_wait_stats_t button_stats = { 0 };
 		qboolean button_controller;
 		qboolean direct_controller;
 		int controller_kind;
@@ -4130,13 +4161,20 @@ static void Link_Doors(void)
 			DoorPose_Restore(saved, pose_count);
 			if (best_slot[0] < 0 && best_slot[1] < 0)
 				continue;
+			/* DIRECT_TRIGGER_DOOR uses one symmetric safe-wade law for both
+			 * the approach source and egress destination.  AUTO_DOOR and
+			 * BUTTON_DOOR remain dry-only through the same controller gate. */
 			for (source = 0; source < gen_num_seeds; source++)
 			{
 				vec3_t approach_delta;
 				float approach_h2, score;
+				int approach_destination = best_slot[0] >= 0
+				    ? dests[best_slot[0]] : -1;
 
 				if (!gen_source_stable[source] ||
-				    gen_source_waterlevel[source] != 0 ||
+				    !SG_OracleDoorEgressWaterSafe(controller_kind,
+				        gen_source_waterlevel[source],
+				        gen_source_watertype[source]) ||
 				    !Gen_SeedHasIncoming(source) ||
 				    !(button_controller
 				          ? SG_DeclaredButtonDoorApproachSourceClear(door,
@@ -4148,8 +4186,8 @@ static void Link_Doors(void)
 				               approach_delta);
 				approach_h2 = approach_delta[0] * approach_delta[0] +
 				              approach_delta[1] * approach_delta[1];
-				if (approach_h2 > 320.0f * 320.0f ||
-				    fabsf(approach_delta[2]) > 48.0f)
+				if (!Door_ApproachEnvelopeEligible(controller_kind,
+				        approach_destination, approach_delta))
 					continue;
 				score = approach_h2 + approach_delta[2] * approach_delta[2];
 				Door_CandidateInsert(source, score, sources, source_scores,
@@ -4160,6 +4198,7 @@ static void Link_Doors(void)
 				int approach_ms, touch_ms;
 				int picked[4], picked_count = 0, pi;
 				int mode_index = 0;
+				vec3_t picked_approach_delta;
 				sg_button_support_mode_t support_mode =
 				    SG_BUTTON_SUPPORT_NONE;
 
@@ -4181,6 +4220,8 @@ static void Link_Doors(void)
 					continue;
 				if (mode_index < 0 || best_slot[mode_index] < 0)
 					continue;
+				VectorSubtract(wait_point, gen_seeds[source].origin,
+				    picked_approach_delta);
 
 				/* Preserve the locally cheapest proved controller as a movement
 				 * shortcut, then add only bounded topology-improving witnesses. */
@@ -4247,7 +4288,14 @@ static void Link_Doors(void)
 				for (pi = 0; pi < picked_count; pi++)
 				{
 					int slot = picked[pi];
-					int contract_cost = SG_DeclaredDoorContractCost(door,
+					int contract_cost;
+
+					/* A shallow best egress may admit source discovery, but it
+					 * cannot authorize a dry or otherwise ineligible alternate. */
+					if (!Door_ApproachEnvelopeEligible(controller_kind,
+					        dests[slot], picked_approach_delta))
+						continue;
+					contract_cost = SG_DeclaredDoorContractCost(door,
 					    approach_ms, touch_ms,
 					    egress_ms[mode_index][slot]);
 

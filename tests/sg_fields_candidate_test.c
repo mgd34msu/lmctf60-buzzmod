@@ -14,7 +14,12 @@ int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
 void Fields_TestFloodFlat(rune_t *r, int *dist,
 	const int *sources, const int *source_cost, int num_sources);
 int Caco_BestSteps(rune_t *r, int seed, const int *field, int *out);
+qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
+	int client, int maxclients, int seed);
+void Caco_EnemyPlace(rune_t *r, int team_index, int client, int seed,
+	qboolean seen, qboolean runed);
 int Intercept_HoldSeed(int team, int fallback);
+int Rally_CoverSeed(const rune_t *r, int from);
 
 /* Field_Flood's focused production section needs only these host-owned
  * globals.  Everything else in sg_fields.c is discarded by --gc-sections. */
@@ -23,6 +28,7 @@ sg_cvars_t sg_cv;
 cvar_t *ctfflags;
 level_locals_t level;
 game_export_t globals;
+game_locals_t game;
 
 static edict_t test_edicts[4];
 edict_t *g_edicts = test_edicts;
@@ -413,6 +419,88 @@ static void CheckInterceptAdmission(void)
 	test_current_rune = NULL;
 }
 
+static void CheckRallyCoverAdmission(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[5];
+	rune_link_t links[4];
+	int first_link[5] = { 0, -1, -1, -1, -1 };
+	int next_link[4] = { 1, 2, 3, -1 };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	memset(links, 0, sizeof(links));
+	rune.hdr.num_seeds = 5;
+	rune.hdr.num_links = 4;
+	rune.seeds = seeds;
+	rune.links = links;
+	rune.first_link = first_link;
+	rune.next_link = next_link;
+	seeds[0].area_hint = 100;
+	seeds[1].area_hint = 20;
+	seeds[1].origin[0] = 900.0f; /* proved but outside the local cover band */
+	seeds[2].area_hint = 20;
+	seeds[2].origin[0] = 200.0f; /* a hook is not direct-walk authority */
+	seeds[3].area_hint = 20;
+	seeds[3].origin[0] = 400.0f;
+	seeds[4].area_hint = 20;
+	seeds[4].origin[0] = 40.0f;  /* nearby but has no proved edge */
+	Link(&links[0], 0, 1, RL_RUN, 100);
+	Link(&links[1], 0, 2, RL_HOOK, 100);
+	Link(&links[2], 0, 3, RL_RUN, 100);
+	Link(&links[3], 4, 0, RL_RUN, 100);
+
+	CHECK(Rally_CoverSeed(&rune, 0) == 3);
+	seeds[3].area_hint = 100;
+	CHECK(Rally_CoverSeed(&rune, 0) == -1);
+	seeds[0].area_hint = 60;
+	CHECK(Rally_CoverSeed(&rune, 0) == 0);
+	CHECK(Rally_CoverSeed(&rune, -1) == -1);
+	CHECK(Rally_CoverSeed(NULL, 0) == -1);
+}
+
+static void CheckEnemyObservationRetirement(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[2];
+	int i;
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	rune.hdr.num_seeds = 2;
+	rune.seeds = seeds;
+	game.maxclients = 16;
+	for (i = 0; i < 2; i++)
+		for (int slot = 0; slot < SG_MAX_ENEMY_TRACK; slot++)
+		{
+			sg_caco_enemies[i][slot].client = -1;
+			sg_caco_enemies[i][slot].seed = -1;
+		}
+
+	level.time = 10.0f;
+	Caco_EnemyPlace(&rune, 0, 7, 1, true, true);
+	CHECK(sg_caco_enemies[0][0].client == 7);
+	CHECK(sg_caco_enemies[0][0].seed == 1);
+	CHECK(sg_caco_enemies[0][0].runed);
+	CHECK(sg_caco_enemies[0][0].seen_time == 10.0f);
+
+	/* The same visible client leaving local topology disproves the old seed;
+	 * it must not remain fresh route authority. */
+	level.time = 11.0f;
+	Caco_EnemyPlace(&rune, 0, 7, -1, true, false);
+	CHECK(sg_caco_enemies[0][0].client == -1);
+	CHECK(sg_caco_enemies[0][0].seed == -1);
+	CHECK(sg_caco_enemies[0][0].seen_time == 0.0f);
+	CHECK(!sg_caco_enemies[0][0].runed);
+
+	/* Malformed team/client inputs cannot clear or create another row. */
+	Caco_EnemyPlace(&rune, 1, 3, 0, false, false);
+	CHECK(sg_caco_enemies[1][0].client == 3);
+	Caco_EnemyPlace(&rune, 2, 3, -1, true, false);
+	Caco_EnemyPlace(&rune, 1, 16, -1, true, false);
+	CHECK(sg_caco_enemies[1][0].client == 3);
+}
+
 int main(void)
 {
 	rune_t rune;
@@ -454,8 +542,24 @@ int main(void)
 	plane[4] = 9;
 	CHECK(Fields_DefensiveRoot(&rune, plane) == 4);
 
+	/* A visible client outside the proved local graph has no route position.
+	 * Reject it at the shared CACO writer boundary instead of exposing -1 (or
+	 * an out-of-range seed) to default carrier-cover indexing. */
+	CHECK(Caco_EnemyObservationValid(&rune, 0, 0, 16, 0));
+	CHECK(Caco_EnemyObservationValid(&rune, 1, 15, 16, 4));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 16, -1));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 16, 5));
+	CHECK(!Caco_EnemyObservationValid(&rune, -1, 0, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 2, 0, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, -1, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 16, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 0, 0));
+	CHECK(!Caco_EnemyObservationValid(NULL, 0, 0, 16, 0));
+
 	CheckHookFieldAdmission();
 	CheckInterceptAdmission();
+	CheckRallyCoverAdmission();
+	CheckEnemyObservationRetirement();
 
 	if (failures)
 	{

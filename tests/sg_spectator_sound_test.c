@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "slipgate/sg_net.h"
+#include "slipgate/sg_sound_policy.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -317,6 +318,48 @@ static void TestLevelResetAndConcreteFailure(void)
 	assert(!note_capture.has_origin);
 }
 
+static void TestSpatialAdmission(void)
+{
+	/* Ordinary player noises retain their honest positional cue. */
+	assert(SG_SoundCarriesPosition(1.0f, ATTN_NORM));
+	assert(SG_SoundCarriesPosition(0.25f, ATTN_STATIC));
+
+	/* CTF/vote/countdown announcements are map-wide, not a locator for the
+	 * player edict selected as their protocol emitter. */
+	assert(!SG_SoundCarriesPosition(1.0f, ATTN_NONE));
+	assert(!SG_SoundCarriesPosition(0.8f, 0.0f));
+
+	assert(!SG_SoundCarriesPosition(0.0f, ATTN_NORM));
+	assert(!SG_SoundCarriesPosition(-1.0f, ATTN_NORM));
+	assert(!SG_SoundCarriesPosition(NAN, ATTN_NORM));
+	assert(!SG_SoundCarriesPosition(1.0f, NAN));
+	assert(!SG_SoundCarriesPosition(INFINITY, ATTN_NORM));
+}
+
+static void TestSoundFireRanksCurrentInformation(void)
+{
+	assert(SG_SoundFireObservationFresh(10.0f, 8.1f, 2.0f));
+	assert(!SG_SoundFireObservationFresh(10.0f, 8.0f, 2.0f));
+	assert(!SG_SoundFireObservationFresh(10.0f, 10.1f, 2.0f));
+	assert(!SG_SoundFireObservationFresh(NAN, 9.0f, 2.0f));
+	assert(!SG_SoundFireObservationFresh(10.0f, NAN, 2.0f));
+
+	/* A newer safe sound outranks a lower client slot. */
+	assert(SG_SoundFireCandidateBetter(9.5f, 1200.0f, 7, 1,
+	    9.0f, 700.0f, 0));
+	assert(!SG_SoundFireCandidateBetter(9.0f, 700.0f, 0, 1,
+	    9.5f, 1200.0f, 7));
+	/* Same-frame reports prefer the nearer region, then stable client id. */
+	assert(SG_SoundFireCandidateBetter(9.5f, 700.0f, 7, 1,
+	    9.5f, 1200.0f, 0));
+	assert(SG_SoundFireCandidateBetter(9.5f, 700.0f, 1, 1,
+	    9.5f, 700.0f, 7));
+	assert(!SG_SoundFireCandidateBetter(NAN, 700.0f, 1, 0,
+	    0.0f, 0.0f, -1));
+	assert(!SG_SoundFireCandidateBetter(9.5f, INFINITY, 1, 0,
+	    0.0f, 0.0f, -1));
+}
+
 int main(void)
 {
 	memset(&gi, 0, sizeof(gi));
@@ -334,6 +377,8 @@ int main(void)
 	TestMappedBotVoice();
 	TestUnchangedPaths();
 	TestLevelResetAndConcreteFailure();
+	TestSpatialAdmission();
+	TestSoundFireRanksCurrentInformation();
 
 	puts("sg_spectator_sound_test: ok");
 	return 0;

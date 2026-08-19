@@ -107,6 +107,7 @@ char	motd[1000]; // CTF CODE -- LM_JORM
 
 MapInfo	maplist[300]; // CTF CODE -- LM_JORM
 int		maplistindex  = 0; // CTF CODE -- LM_JORM
+int		maplistcount = 0;
 
 int		bluescore = 0, redscore = 0; // CTF CODE -- LM_JORM
 char	helptext[1000][25]; // CTF CODE -- LM_JORM
@@ -282,37 +283,6 @@ edict_t *CreateTargetChangeLevel(char *map)
 
 
 
-#define MAX_MAPS	300
-
-short Maps_Picked[MAX_MAPS];
-
-short Last_Map = 0;
-
-void Randomize_Map_List(int Num_Of_Maps)
-{
-	int i;
-	int Rand_Num;
-
-	if (Num_Of_Maps > MAX_MAPS)
-		Num_Of_Maps = MAX_MAPS;
-
-	for (i = 0; i < MAX_MAPS; i++)
-		Maps_Picked[i] = 0;
-
-	for (i = 1; i < Num_Of_Maps; i++)
-	{
-		Rand_Num = rand() % (Num_Of_Maps - 2);
-		while (Maps_Picked[Rand_Num])
-		{
-			Rand_Num++;
-			if (Rand_Num == Num_Of_Maps)
-				Rand_Num = 0;
-		}
-
-		Maps_Picked[Rand_Num] = i;
-	}
-}
-
 MapInfo *getRandomMapByPlayerCount(int count) {
 	MapInfo *criteriaList = NULL;
 	MapInfo *clPtr = NULL;
@@ -348,7 +318,7 @@ MapInfo *getRandomMapByPlayerCount(int count) {
 	return clPtr;
 }
 
-int playerCount() {
+int playerCount(void) {
         edict_t * player = NULL;
         unsigned int num_players = 0;
 
@@ -542,7 +512,7 @@ The timelimit or fraglimit has been exceeded
 void EndDMLevel (void)
 {
 edict_t		*ent;
-int map_count = 0;
+	const MapInfo *selected;
 
 
 	if((matchstate != MATCH_RAILGUN_OVER) && (railtime->value > 0))
@@ -563,37 +533,28 @@ int map_count = 0;
 	}
 
 	// CTF CODE -- LM_JORM
-	else if (maplistindex != -2) // -2 means no list
+	else if (maplistindex != -2 && maplistcount > 0) // -2 means no list
 	{	// go to a specific map
 		ent = G_Spawn ();
 		ent->classname = "target_changelevel";
-		
-		//bat
-		while(Maps_Picked[maplistindex] == Last_Map)
-		{
-			if(maplistindex > -1 && !maplist[maplistindex].mapname) // Did we reach the end of the list?
-				maplistindex = 0;
-
-			maplistindex++;
-
-			//if all the maps are the same, this is a precaution.
-			if(map_count++ > 30)
-				break;
-		}
 
 		if((int)ctfflags->value & CTF_RANDOM_MAPS)
 		{
 			MapInfo *map = getRandomMapByPlayerCount(playerCount());
-			ent->map = map->mapname;
+			selected = MapList_SelectNext(maplist, maplistcount,
+				&maplistindex, true, map);
+			ent->map = selected->mapname;
 			gi.dprintf("Map :  %s\n",  map->mapname);
 		}
 		else
 		{
-			ent->map = maplist[maplistindex].mapname;
-			gi.dprintf("Map #%d:  %s\n", maplistindex+1, maplist[maplistindex].mapname);
+			selected = MapList_SelectNext(maplist, maplistcount,
+				&maplistindex, false, NULL);
+			ent->map = selected->mapname;
+			gi.dprintf("Map #%d:  %s\n",
+				maplistindex ? maplistindex : maplistcount,
+				selected->mapname);
 		}
-
-		maplistindex++; 
 	}
 	// END CTF CODE -- LM_JORM
 
@@ -674,28 +635,40 @@ void CheckDMRules (void)
 	//maplist support stuff
 	if (maplistindex == -1) // First time through the list
 	{
+		const MapInfo *startup_map = NULL;
+
 		gi.dprintf ("Using Maplist.\n");
-		if (!strcmp(maplist[0].mapname, level.mapname))
+		if ((int)ctfflags->value & CTF_RANDOM_MAPS)
 		{
+			if (!strcmp(maplist[0].mapname, level.mapname))
+			{
+				maplistindex = 1;
+				return;
+			}
+			startup_map = getRandomMapByPlayerCount(playerCount());
 			maplistindex = 1;
-			return;
 		}
 		else
 		{
-			MapInfo *firstmap = &maplist[0];
-			ent = G_Spawn ();
-			ent->classname = "target_changelevel";
-	                if((int)ctfflags->value & CTF_RANDOM_MAPS)
-                	        firstmap = getRandomMapByPlayerCount(playerCount());
-			ent->map = firstmap->mapname;
-			maplistindex = 1;
-			level.changemap = ent->map;
-			level.exitintermission = 1;
-                        gi.dprintf("Startup Map :  %s\n",  firstmap->mapname);
-			gi.dprintf("MAPLISTFORCE frame=%d exitintermission=1 changemap=%s\n",
-				level.framenum, level.changemap);
-			return;
+			if (!MapList_SequentialStartup(maplist, maplistcount,
+				level.mapname, &maplistindex, &startup_map))
+			{
+				maplistindex = -2;
+				return;
+			}
+			if (!startup_map)
+				return;
 		}
+
+		ent = G_Spawn ();
+		ent->classname = "target_changelevel";
+		ent->map = startup_map->mapname;
+		level.changemap = ent->map;
+		level.exitintermission = 1;
+		gi.dprintf("Startup Map :  %s\n", startup_map->mapname);
+		gi.dprintf("MAPLISTFORCE frame=%d exitintermission=1 changemap=%s\n",
+			level.framenum, level.changemap);
+		return;
 	}
 	
 	if (timelimit->value && !Match_Mode()) // Don't end a map if a Match is in play

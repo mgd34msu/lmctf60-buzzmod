@@ -112,23 +112,33 @@ void PlayerNoise(edict_t *who, vec3_t where, int type)
 }
 
 
+qboolean G_WeaponPickupEligible(edict_t *ent, edict_t *other)
+{
+	int index;
+
+	/* Keep route selection and the physical pickup on one law.  In
+	 * particular, a world weapon already owned under WEAPONS_STAY is visible
+	 * and solid but cannot be collected by this client. */
+	if (!ent || !ent->item || !other || !other->client ||
+	    matchstate == MATCH_RAILGUN_INPLAY)
+		return false;
+	index = ITEM_INDEX(ent->item);
+	if (((((int)dmflags->value & DF_WEAPONS_STAY) || coop->value) &&
+	     other->client->pers.inventory[index]) &&
+	    !(ent->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)))
+		return false;
+	return true;
+}
+
 qboolean Pickup_Weapon (edict_t *ent, edict_t *other)
 {
 	int			index;
 	gitem_t		*ammo;
 
-
-	if(matchstate == MATCH_RAILGUN_INPLAY)
+	if (!G_WeaponPickupEligible(ent, other))
 		return(false);
 
 	index = ITEM_INDEX(ent->item);
-
-	if ( ( ((int)(dmflags->value) & DF_WEAPONS_STAY) || coop->value) 
-		&& other->client->pers.inventory[index])
-	{
-		if (!(ent->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM) ) )
-			return false;	// leave the weapon for others to pickup
-	}
 
 	other->client->pers.inventory[index]++;
 

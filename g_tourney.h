@@ -1,20 +1,20 @@
 #ifndef _P_TOURNEY_H_
 #define _P_TOURNEY_H_
 
-void     SpawnTourneyClock ();
+void     SpawnTourneyClock(void);
 void     StartMatch (char *levelname);
-void     KillMatch();
-qboolean Match_CanScore();
-qboolean Match_InPlay();
-qboolean Match_Mode();
-qboolean Match_InCountdown();
-qboolean GamePaused();
+void     KillMatch(void);
+qboolean Match_CanScore(void);
+qboolean Match_InPlay(void);
+qboolean Match_Mode(void);
+qboolean Match_InCountdown(void);
+qboolean GamePaused(void);
 void     SetPause(qboolean state);
-void     Victory();
-qboolean Match_Over();
-edict_t  *Query_OMVP();
-edict_t  *Query_DMVP();
-void     Reset_MVP();
+void     Victory(void);
+qboolean Match_Over(void);
+edict_t  *Query_OMVP(void);
+edict_t  *Query_DMVP(void);
+void     Reset_MVP(void);
 void     Match_End(edict_t *ent);
 
 extern int matchstate;

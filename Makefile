@@ -308,18 +308,22 @@ FIELDS_CANDIDATE_TEST_OBJS := .sg_fields_candidate_test.make.o \
 	.sg_fields_candidate_under_test.make.o \
 	.sg_caco_projection_under_test.make.o \
 	.sg_goal_projection_under_test.make.o \
-	.sg_snag_repair_under_test.make.o
+	.sg_snag_repair_under_test.make.o \
+	.sg_rune_file_sha_under_test.make.o
 FIELDS_CANDIDATE_TEST_DEPS := $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
 SNAG_REPAIR_TEST_BIN := sg_snag_repair_test.make
 SNAG_REPAIR_TEST_OBJS := .sg_snag_repair_test.make.o \
-	.sg_fields_candidate_under_test.make.o .sg_snag_repair_under_test.make.o
+	.sg_fields_candidate_under_test.make.o .sg_snag_repair_under_test.make.o \
+	.sg_rune_file_sha_under_test.make.o
 SNAG_REPAIR_TEST_DEPS := $(SNAG_REPAIR_TEST_OBJS:.o=.d)
 SNAG_REPAIR_PYTHON_TEST := tests/test_snagrepair.py
 SNAG_REPAIR_TEST_ALL_ARTIFACTS := \
 	$(foreach flavor,gnu make,sg_snag_repair_test.$(flavor) \
 	.sg_snag_repair_test.$(flavor).o .sg_snag_repair_test.$(flavor).d \
 	.sg_snag_repair_under_test.$(flavor).o \
-	.sg_snag_repair_under_test.$(flavor).d)
+	.sg_snag_repair_under_test.$(flavor).d \
+	.sg_rune_file_sha_under_test.$(flavor).o \
+	.sg_rune_file_sha_under_test.$(flavor).d)
 SPECTATOR_SOUND_TEST_BIN := sg_spectator_sound_test.make
 SPECTATOR_SOUND_TEST_OBJS := .sg_spectator_sound_test.make.o \
 	.sg_spectator_sound_net_under_test.make.o
@@ -406,6 +410,7 @@ HOOK_DIAGNOSTICS_TEST_OBJS := .sg_hook_diagnostics_test.make.o \
 HOOK_DIAGNOSTICS_TEST_DEPS := $(HOOK_DIAGNOSTICS_TEST_OBJS:.o=.d)
 HOOK_DIAGNOSTICS_INTEGRATION_TEST := tests/test_hook_diagnostics_integration.py
 HOOK_DIAGNOSTICS_CONSUMER_TEST := tests/test_hook_diagnostic_consumers.py
+ROLE_TELEMETRY_CONSUMER_TEST := tests/test_role_telemetry_consumers.py
 HOOK_EVENTS_TEST := tests/test_hookevents.py
 HOOK_DIAGNOSTICS_TEST_ALL_ARTIFACTS := \
 	$(foreach flavor,gnu make,sg_hook_diagnostics_test.$(flavor) \
@@ -501,6 +506,7 @@ HOOK_DISCIPLINE_TEST_ALL_ARTIFACTS := \
 	.sg_hook_discipline_under_test.make.o \
 	.sg_hook_discipline_under_test.make.d
 RUNE_NAMING_TEST := tests/test_rune_naming.py
+RELEASE_WORKFLOW_TEST := tests/test_release_workflow.py
 RUNE_PYTHON_TESTS := tests/test_rune_contracts.py \
 	tests/test_rune_artifact.py \
 	tests/test_sidecario.py \
@@ -583,6 +589,9 @@ RUNE_DOOR_SCOPE_TEST_ALL_ARTIFACTS := \
 ENTFILE_TEST_BIN := g_entfile_path_test.make
 ENTFILE_TEST_OBJS := .g_entfile_path_test.make.o
 ENTFILE_TEST_DEPS := $(ENTFILE_TEST_OBJS:.o=.d)
+MAPLIST_ROTATION_TEST_BIN := maplist_rotation_test.make
+MAPLIST_ROTATION_TEST_ALL_ARTIFACTS := \
+	maplist_rotation_test.gnu maplist_rotation_test.make
 ENGINE_SNAPSHOT_TEST := tests/test_engine_snapshot_name.sh
 HOST_TEST_ALL_ARTIFACTS := sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
@@ -788,6 +797,7 @@ OBJS := \
 	g_func.o \
 	g_items.o \
 	g_main.o \
+	g_maplist.o \
 	g_menu.o \
 	g_misc.o \
 	g_monster.o \
@@ -961,7 +971,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
 	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test rotator-sweep-test \
-	mover-subject-sweep-test entfile-test \
+	mover-subject-sweep-test entfile-test maplist-rotation-test \
 	compound-swim-oracle-test rune-door-scope-test \
 	snapshot-test clean strip FORCE
 
@@ -1529,7 +1539,10 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_identity_test.make.o: tests/sg_identity_test.c $(REVISION_HEADER)
+.sg_identity_test.make.o: tests/sg_identity_test.c slipgate/sg_chat.h \
+		slipgate/sg_chat_random.h slipgate/sg_ear_random.h \
+		slipgate/sg_route_jitter.h slipgate/sg_callout_policy.h \
+		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -1901,6 +1914,13 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -Wno-strict-prototypes -DDEDICATED_ONLY \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_rune_file_sha_under_test.make.o: slipgate/sg_rune_file.c \
+		slipgate/sg_rune_file.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_human_speed_q_shared_under_test.make.o: q_shared.c q_shared.h \
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
@@ -1958,7 +1978,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_item_commitment_test.make.o: tests/sg_item_commitment_test.c \
-		slipgate/sg_lead.h $(REVISION_HEADER)
+		slipgate/sg_lead.h slipgate/sg_rune_handoff_policy.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections \
@@ -2310,6 +2330,13 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -pedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+$(MAPLIST_ROTATION_TEST_BIN): tests/maplist_rotation_test.c g_maplist.c \
+		g_local.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -o $@ tests/maplist_rotation_test.c \
+		g_maplist.c $(LIBS)
+
 spectator-sound-test: $(SPECTATOR_SOUND_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(SPECTATOR_SOUND_TEST_BIN)
@@ -2319,6 +2346,7 @@ $(SPECTATOR_SOUND_TEST_BIN): $(SPECTATOR_SOUND_TEST_OBJS)
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(SPECTATOR_SOUND_TEST_OBJS) $(LIBS)
 
 .sg_spectator_sound_test.make.o: tests/sg_spectator_sound_test.c \
+		slipgate/sg_sound_policy.h \
 		g_local.h slipgate/sg_net.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -2420,6 +2448,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SIDECAR_WIRE_TEST_BIN) $(SIDECAR_LOADER_TEST_BIN) \
 		$(SIDECAR_STORE_TEST_BIN) \
 		$(RUNE_NAMING_TEST) \
+		$(RELEASE_WORKFLOW_TEST) \
 		$(RUNE_PYTHON_TESTS) \
 		$(RUNGEN_TEST) \
 		$(RUNE_CORPUS_CONTROLLER_TEST) \
@@ -2441,7 +2470,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(ITEM_COMMITMENT_TEST_BIN) $(ITEM_COMMITMENT_INTEGRATION_TEST) \
 		$(HOOK_DIAGNOSTICS_TEST_BIN) \
 		$(HOOK_DIAGNOSTICS_INTEGRATION_TEST) \
-		$(HOOK_DIAGNOSTICS_CONSUMER_TEST) $(HOOK_EVENTS_TEST) \
+		$(HOOK_DIAGNOSTICS_CONSUMER_TEST) $(ROLE_TELEMETRY_CONSUMER_TEST) \
+		$(HOOK_EVENTS_TEST) \
 		$(RUN_HANDOFF_TEST_BIN) $(RUN_HANDOFF_INTEGRATION_TEST) \
 		$(RUNE_PROOF_TEST_BIN) \
 		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN) \
@@ -2453,6 +2483,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
 		$(COMPOUND_SWIM_ORACLE_TEST_BIN) \
 		$(RUNE_DOOR_SCOPE_TEST_BIN) $(ENTFILE_TEST_BIN) \
+		$(MAPLIST_ROTATION_TEST_BIN) \
 		$(POVLOCK_TEST_BIN) $(POV_SESSION_TEST_BIN) \
 		$(POVLOCK_DISPATCH_TEST) $(POV_SUPERVISOR_TEST_BIN) \
 		$(POV_SUPERVISOR_BIN) $(POV_SUPERVISOR_TEST) \
@@ -2489,6 +2520,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(SIDECAR_LOADER_TEST_BIN)
 	$(Q)./$(SIDECAR_STORE_TEST_BIN)
 	$(Q)python3 $(RUNE_NAMING_TEST)
+	$(Q)python3 $(RELEASE_WORKFLOW_TEST)
 	$(Q)python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers
 	$(Q)python3 $(RUNGEN_TEST)
@@ -2522,6 +2554,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(HOOK_DIAGNOSTICS_TEST_BIN)
 	$(Q)python3 -B $(HOOK_DIAGNOSTICS_INTEGRATION_TEST)
 	$(Q)python3 -B $(HOOK_DIAGNOSTICS_CONSUMER_TEST)
+	$(Q)python3 -B $(ROLE_TELEMETRY_CONSUMER_TEST)
 	$(Q)python3 -B $(HOOK_EVENTS_TEST)
 	$(Q)./$(RUN_HANDOFF_TEST_BIN)
 	$(Q)python3 -B $(RUN_HANDOFF_INTEGRATION_TEST)
@@ -2541,6 +2574,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
 	$(Q)./$(RUNE_DOOR_SCOPE_TEST_BIN)
 	$(Q)./$(ENTFILE_TEST_BIN)
+	$(Q)./$(MAPLIST_ROTATION_TEST_BIN)
 	$(Q)./$(POVLOCK_TEST_BIN)
 	$(Q)python3 -B $(POVLOCK_DISPATCH_TEST)
 	$(Q)./$(POV_SESSION_TEST_BIN)
@@ -2812,6 +2846,10 @@ entfile-test: $(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(ENTFILE_TEST_BIN)
 
+maplist-rotation-test: $(MAPLIST_ROTATION_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(MAPLIST_ROTATION_TEST_BIN)
+
 snapshot-test:
 	$(E) [TEST] $(ENGINE_SNAPSHOT_TEST)
 	$(Q)./$(ENGINE_SNAPSHOT_TEST)
@@ -2820,6 +2858,7 @@ clean:
 	$(E) [CLEAN]
 	$(Q)$(RM) *.o *.d $(OBJS) $(OBJS:.o=.d) $(TARGET) $(REVISION_HEADER) \
 		$(REVISION_HEADER).tmp.* $(HOST_TEST_ALL_ARTIFACTS) \
+		$(MAPLIST_ROTATION_TEST_ALL_ARTIFACTS) \
 		$(POV_SUPERVISOR_ALL_ARTIFACTS) \
 		$(COMPOUND_GEN_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS) \

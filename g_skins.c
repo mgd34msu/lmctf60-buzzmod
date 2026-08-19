@@ -24,7 +24,7 @@ char* CopyString(char* in)
 	return out;
 }
 
-void SkinsReadFile()
+void SkinsReadFile(void)
 {
 	FILE	*fp;
 
@@ -215,7 +215,7 @@ SkinValid(edict_t *ent, char *input)
 	return valid;
 }
 
-qboolean SkinListInUse()
+qboolean SkinListInUse(void)
 {
 	return skinlistinuse;
 }

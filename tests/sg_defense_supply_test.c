@@ -14,7 +14,14 @@ static int failures;
 
 static sg_defense_supply_step_t ReadyStep(void)
 {
-	sg_defense_supply_step_t step = { 1, 1, 1, 0, 0, 0, 1, 1, 1, 0 };
+	sg_defense_supply_step_t step = {
+		.identity_valid = 1,
+		.owner_valid = 1,
+		.own_flag_home = 1,
+		.target_valid = 1,
+		.weapon_field_valid = 1,
+		.deadline_pending = 1
+	};
 
 	return step;
 }
@@ -64,7 +71,11 @@ static void TestPhaseEdges(void)
 	const int *route = NULL;
 
 	CHECK(SG_DefenseSupplyPhaseStep(SG_DEFENSE_SUPPLY_PHASE_OUTBOUND,
-	                                &step) == SG_DEFENSE_SUPPLY_PHASE_OUTBOUND);
+	    &step) == SG_DEFENSE_SUPPLY_PHASE_OUTBOUND);
+	step.human_order = 1;
+	CHECK(SG_DefenseSupplyPhaseStep(SG_DEFENSE_SUPPLY_PHASE_OUTBOUND,
+	    &step) == SG_DEFENSE_SUPPLY_PHASE_RETURN);
+	step.human_order = 0;
 	step.weapon_available = 1;
 	CHECK(SG_DefenseSupplyPhaseStep(SG_DEFENSE_SUPPLY_PHASE_OUTBOUND,
 	                                &step) == SG_DEFENSE_SUPPLY_PHASE_RETURN);

@@ -14,6 +14,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_lead_random.h"
 
 /* -------------------------------------------------- the early-return errand
  *
@@ -133,6 +134,26 @@ void Lead_NoteItemTaken(edict_t *taker, edict_t *item)
 	}
 }
 
+void Lead_NoteItemRejected(edict_t *taker, edict_t *item)
+{
+	int i, item_ent;
+
+	if (!taker || !item)
+		return;
+	item_ent = (int)(item - g_edicts);
+	if (item_ent <= 0 || item_ent >= globals.num_edicts)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *bot = &sg_bots[i];
+
+		if (!bot->active || bot->ent != taker || bot->lead_ent != item_ent)
+			continue;
+		Lead_Abort(bot, "pickup rejected");
+		return;
+	}
+}
+
 qboolean Lead_PickupTarget(const sg_bot_t *bot, vec3_t target)
 {
 	edict_t *item;
@@ -143,7 +164,8 @@ qboolean Lead_PickupTarget(const sg_bot_t *bot, vec3_t target)
 	item = g_edicts + bot->lead_ent;
 	if (!item->inuse || !item->classname ||
 	    (strcmp(item->classname, "item_quad") != 0 &&
-	     strcmp(item->classname, "item_invulnerability") != 0))
+	     strcmp(item->classname, "item_invulnerability") != 0) ||
+	    !G_PowerupPickupEligible(item, bot->ent))
 		return false;
 	VectorCopy(item->s.origin, target);
 	return true;
@@ -173,7 +195,8 @@ static qboolean Lead_Flood(int *field, int padseed, int here)
  * running and NULL otherwise; the caller substitutes it for the role's own
  * goal field, which is what makes the pad a live goal rather than a preference.
  */
-const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
+const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
+	int ordered_role)
 {
 	static int			lead_field[SG_MAX_SEEDS];
 	edict_t				*e = bot->ent;
@@ -209,10 +232,22 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		Lead_Abort(bot, "carrying");
 		return NULL;
 	}
+	if (ordered_role >= 0)
+	{
+		/* A pad timer is optional preparation.  Any live human order is the
+		 * bot's mission and retires an already-running errand immediately. */
+		Lead_Abort(bot, "human order");
+		return NULL;
+	}
 	if (sg_caco_team_belief.flag[ti][ti].state == SG_FLAG_ASTRAY ||
 	    role == SG_ROLE_RECOVER)
 	{
 		Lead_Abort(bot, "our flag out");
+		return NULL;
+	}
+	if (role == SG_ROLE_ESCORT)
+	{
+		Lead_Abort(bot, "escort duty");
 		return NULL;
 	}
 	if (sg_caco_team_belief.carrier[ti].client >= 0)
@@ -252,11 +287,20 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 			return NULL;
 		}
 		b = &sg_caco_items[ti][bot->lead_slot];
-		if (b->ent != bot->lead_ent)
+		if (b->ent != bot->lead_ent || b->ent <= 0 ||
+		    b->ent >= globals.num_edicts)
 		{
 			/* the table was rebuilt under us (level change): the row names a
 			 * different entity now and the errand is about nothing */
 			Lead_Abort(bot, "stale row");
+			return NULL;
+		}
+		if (!G_PowerupPickupEligible(&g_edicts[b->ent], e))
+		{
+			/* The game pickup law is the authority here.  A full inventory may
+			 * make a once-valid errand impossible while the bot is travelling;
+			 * release the team lease instead of camping an untakeable item. */
+			Lead_Abort(bot, "powerup capacity");
 			return NULL;
 		}
 		if (b->believed_up)
@@ -362,16 +406,22 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	/* the cvar is a DOSE: 1 = the shipped earliness; higher arrives
 	 * earlier (a persona-scaled multiplier on the whole window). The
 	 * gate stays >0 -- see Lead_On. */
-	lead = (SG_LEAD_BASE + camp * SG_LEAD_CAMP + random() * SG_LEAD_JITTER)
+	bot->lead_random = SG_LeadRandomNext(bot->lead_random);
+	lead = (SG_LEAD_BASE + camp * SG_LEAD_CAMP +
+	        SG_LeadRandomUnit(bot->lead_random) * SG_LEAD_JITTER)
 	     * sg_cv.itemlead->value;
 
 	for (i = 0; i < sg_caco_num_items; i++)
 	{
 		vec3_t	d;
-		float	guess;
+		float	guess, candidate_travel;
+		int	candidate_seed;
 
 		b = &sg_caco_items[ti][i];
 		if (b->cls != SG_BI_POWERUP || b->believed_up)
+			continue;
+		if (b->ent <= 0 || b->ent >= globals.num_edicts ||
+		    !G_PowerupPickupEligible(&g_edicts[b->ent], e))
 			continue;
 		if (SG_TimerReady(b->believed_respawn_time))
 			continue;
@@ -390,10 +440,21 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		if (SG_TimerPending(b->believed_respawn_time - guess - lead))
 			continue;
 
+		/* The earliest clock is not necessarily the earliest reachable pad.
+		 * Prove each candidate before choosing: an isolated or wrong-component
+		 * pad must not suppress a later clock the bot can actually contest. */
+		candidate_seed = Rune_NearestSeed(SG_Rune(), b->org);
+		if (!Lead_Flood(lead_field, candidate_seed, bot->seed))
+			continue;
+		candidate_travel = (float)lead_field[bot->seed] / 1000.0f;
+		if (SG_TimerPending(b->believed_respawn_time - candidate_travel - lead))
+			continue;
+
 		if (best < 0 || b->believed_respawn_time < best_t)
 		{
 			best = i;
 			best_t = b->believed_respawn_time;
+			padseed = candidate_seed;
 		}
 	}
 
@@ -401,15 +462,14 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		return NULL;
 
 	b = &sg_caco_items[ti][best];
-	padseed = Rune_NearestSeed(SG_Rune(), b->org);
+	/* The candidate loop reuses the scratch flood. Rebuild the winner so the
+	 * returned route and the committed entity are the same exact pad. */
 	if (!Lead_Flood(lead_field, padseed, bot->seed))
-		return NULL;                    /* no road: the clock is somebody
-		                                 * else's problem */
-
-	/* the honest test, on the route the body will actually walk */
-	travel = (float)lead_field[bot->seed] / 1000.0f;
-	if (SG_TimerPending(b->believed_respawn_time - travel - lead))
 		return NULL;
+
+	/* The honest travel time was already the admission gate; retain it for the
+	 * commitment receipt and diagnostic. */
+	travel = (float)lead_field[bot->seed] / 1000.0f;
 
 	bot->lead_ent = b->ent;
 	SG_Mark(&bot->lead_since);   /* the total-wait clock starts here */

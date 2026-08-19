@@ -8,6 +8,19 @@
 #include "slipgate/sg_crc32.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_bot_ping.h"
+#include "slipgate/sg_escort_dose.h"
+#include "slipgate/sg_ribbon_random.h"
+#include "slipgate/sg_lead_random.h"
+#include "slipgate/sg_persona_assignment.h"
+#include "slipgate/sg_escape_random.h"
+#include "slipgate/sg_route_jitter.h"
+#include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_callout_policy.h"
+#include "slipgate/sg_chat_random.h"
+#include "slipgate/sg_ear_random.h"
+#include "slipgate/sg_role_skew_random.h"
+#include "slipgate/sg_chat.h"
 
 sg_host_t sg_host;
 
@@ -95,6 +108,250 @@ static void TestCRC32(void)
 	CHECK(!SG_CRC32Buffer(NULL, 1, &crc));
 	CHECK(crc == 0);
 	CHECK(!SG_CRC32Buffer(vector, sizeof(vector) - 1, NULL));
+}
+
+static void TestEscortDose(void)
+{
+	int expected_random;
+	int first;
+
+	srand(7331);
+	expected_random = rand();
+	srand(7331);
+	first = SG_EscortDoseEnabled(0, 7, UINT32_C(42), 50);
+	CHECK(first == SG_EscortDoseEnabled(0, 7, UINT32_C(42), 50));
+	CHECK(first == 1);
+	CHECK(rand() == expected_random);
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(42), 0));
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(42), -20));
+	CHECK(SG_EscortDoseEnabled(0, 7, UINT32_C(42), 100));
+	CHECK(SG_EscortDoseEnabled(0, 7, UINT32_C(42), 150));
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(42), 16));
+	CHECK(SG_EscortDoseEnabled(0, 7, UINT32_C(42), 17));
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(43), 50));
+}
+
+static void TestRibbonRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	float offset;
+	float interval;
+
+	srand(8123);
+	expected_random = rand();
+	srand(8123);
+	state = SG_RibbonRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(state != 0);
+	CHECK(state == SG_RibbonRandomInitial(
+	      UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+	offset = SG_RibbonRandomOffset(state, 48.0f);
+	CHECK(offset >= -48.0f && offset <= 48.0f);
+	interval = SG_RibbonRandomInterval(state);
+	CHECK(interval >= 1.0f && interval < 2.0f);
+	CHECK(SG_RibbonRandomNext(state) != state);
+}
+
+static void TestRouteJitterIdentity(void)
+{
+	uint64_t first_instance = UINT64_C(0x123456789abcdef0);
+	uint64_t next_instance = UINT64_C(0x123456789abcdef1);
+	unsigned first;
+	int expected_random;
+
+	srand(2939);
+	expected_random = rand();
+	srand(2939);
+	first = SG_RouteJitterDraw(first_instance, 7, 0, 0, 42);
+	CHECK(first < 1024);
+	CHECK(first == SG_RouteJitterDraw(first_instance, 7, 0, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(next_instance, 7, 0, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 8, 0, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 7, 1, 0, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 7, 0, 1, 42));
+	CHECK(SG_RouteJitterDraw(first_instance, 7, 1, 0, 42) !=
+	      SG_RouteJitterDraw(first_instance, 7, 0, 1, 42));
+	CHECK(first != SG_RouteJitterDraw(first_instance, 7, 0, 0, 43));
+	CHECK(rand() == expected_random);
+}
+
+static void TestRoleSkewRandomness(void)
+{
+	uint32_t red, blue, red_after, blue_after;
+	int expected_random;
+
+	srand(9173);
+	expected_random = rand();
+	srand(9173);
+	red = SG_RoleSkewRandomInitial(0);
+	blue = SG_RoleSkewRandomInitial(1);
+	CHECK(red != 0 && blue != 0 && red != blue);
+	CHECK(red == SG_RoleSkewRandomInitial(0));
+	CHECK(blue == SG_RoleSkewRandomInitial(1));
+	CHECK(rand() == expected_random);
+	red_after = SG_RoleSkewRandomNext(red);
+	blue_after = SG_RoleSkewRandomNext(blue);
+	CHECK(red_after != red && blue_after != blue);
+	CHECK(SG_RoleSkewRandomValue(red_after) >= -1);
+	CHECK(SG_RoleSkewRandomValue(red_after) <= 1);
+	CHECK(SG_RoleSkewRandomValue(blue_after) >= -1);
+	CHECK(SG_RoleSkewRandomValue(blue_after) <= 1);
+	CHECK(SG_RoleSkewRandomInterval(red_after) >= 150.0f);
+	CHECK(SG_RoleSkewRandomInterval(red_after) < 240.0f);
+	CHECK(SG_RoleSkewRandomInterval(blue_after) >= 150.0f);
+	CHECK(SG_RoleSkewRandomInterval(blue_after) < 240.0f);
+	/* Advancing red cannot consume or rewrite blue's sequence. */
+	(void)SG_RoleSkewRandomNext(red_after);
+	CHECK(SG_RoleSkewRandomNext(blue) == blue_after);
+}
+
+static void TestLeadRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	float unit;
+
+	srand(1193);
+	expected_random = rand();
+	srand(1193);
+	state = SG_LeadRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(state != 0);
+	CHECK(state == SG_LeadRandomInitial(
+	      UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+	unit = SG_LeadRandomUnit(state);
+	CHECK(unit >= 0.0f && unit < 1.0f);
+	CHECK(SG_LeadRandomNext(state) != state);
+}
+
+static void TestPersonaAssignment(void)
+{
+	uint32_t occupied = 0;
+	unsigned slot;
+
+	for (slot = 0; slot < 10; slot++)
+	{
+		unsigned selected = SG_PersonaAssignmentChoose(occupied, slot);
+
+		CHECK(selected == slot);
+		CHECK((occupied & (UINT32_C(1) << selected)) == 0);
+		occupied |= UINT32_C(1) << selected;
+	}
+	/* A human occupying Rune makes slot 2 take Slip; the following preferred
+	 * slot cannot reuse Slip and advances to Gate. */
+	occupied = UINT32_C(1) << 2;
+	CHECK(SG_PersonaAssignmentChoose(occupied, 2) == 3);
+	occupied |= UINT32_C(1) << 3;
+	CHECK(SG_PersonaAssignmentChoose(occupied, 3) == 4);
+	CHECK(SG_PersonaAssignmentChoose(UINT32_C(0xffff), 19) == 3);
+}
+
+static void TestEscapeRandomness(void)
+{
+	uint32_t state;
+	uint32_t prior;
+	int expected_random;
+	int yaw;
+	float duration;
+
+	srand(4421);
+	expected_random = rand();
+	srand(4421);
+	state = SG_EscapeRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(state != 0);
+	CHECK(state == SG_EscapeRandomInitial(
+	      UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+	yaw = SG_EscapeRandomYaw(state);
+	CHECK(yaw >= -40 && yaw <= 40);
+	duration = SG_EscapeRandomDuration(state);
+	CHECK(duration >= 1.0f && duration <= 1.8f);
+	CHECK(SG_EscapeRandomNext(state) != state);
+	prior = SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7, 0, 0,
+	    9123);
+	CHECK(prior == SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 0, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef1), 7,
+	      0, 0, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      1, 0, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 1, 9123));
+	CHECK(SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7, 1, 0,
+	      9123) != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 1, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 0, 9124));
+}
+
+static void TestCalloutRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	float delay;
+
+	srand(6619);
+	expected_random = rand();
+	srand(6619);
+	state = SG_CalloutRandomInitial(0, 1);
+	CHECK(state != 0);
+	CHECK(state == SG_CalloutRandomInitial(0, 1));
+	CHECK(state != SG_CalloutRandomInitial(1, 1));
+	CHECK(rand() == expected_random);
+	delay = SG_CalloutRandomDelay(state, 0.5f, 0.9f);
+	CHECK(delay >= 0.5f && delay < 0.9f);
+	CHECK(SG_CalloutRandomNext(state) != state);
+}
+
+static void TestChatRandomness(void)
+{
+	uint32_t first, next;
+	int expected_random;
+	float unit;
+
+	srand(6823);
+	expected_random = rand();
+	srand(6823);
+	first = SG_ChatRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(first != 0);
+	CHECK(first == SG_ChatRandomInitial(UINT64_C(0x123456789abcdef0), 7));
+	CHECK(first != SG_ChatRandomInitial(UINT64_C(0x123456789abcdef1), 7));
+	CHECK(first != SG_ChatRandomInitial(UINT64_C(0x123456789abcdef0), 8));
+	next = SG_ChatRandomNext(first);
+	CHECK(next != 0 && next != first);
+	unit = SG_ChatRandomUnit(next);
+	CHECK(unit >= 0.0f && unit < 1.0f);
+	CHECK(rand() == expected_random);
+}
+
+static void TestEarRandomnessAndListenerSelection(void)
+{
+	uint32_t red, blue;
+	int expected_random;
+	float value;
+
+	srand(7253);
+	expected_random = rand();
+	srand(7253);
+	red = SG_EarRandomInitial(0);
+	blue = SG_EarRandomInitial(1);
+	CHECK(red != 0 && blue != 0 && red != blue);
+	CHECK(red == SG_EarRandomInitial(0));
+	CHECK(rand() == expected_random);
+	red = SG_EarRandomNext(red);
+	value = SG_EarRandomSigned(red);
+	CHECK(value >= -1.0f && value < 1.0f);
+	CHECK(SG_EarRandomNext(blue) != SG_EarRandomNext(red));
+
+	CHECK(SG_EarCandidateBetter(0.6f, 8, 0, 0.0f, -1));
+	CHECK(SG_EarCandidateBetter(0.2f, 9, 1, 0.6f, 1));
+	CHECK(!SG_EarCandidateBetter(0.7f, 0, 1, 0.6f, 1));
+	CHECK(SG_EarCandidateBetter(0.6f, 0, 1, 0.6f, 1));
+	CHECK(!SG_EarCandidateBetter(0.6f, 2, 1, 0.6f, 1));
+	CHECK(!SG_EarCandidateBetter(-0.1f, 0, 0, 0.0f, -1));
+	CHECK(!SG_EarCandidateBetter(1.1f, 0, 0, 0.0f, -1));
+	CHECK(!SG_EarCandidateBetter(NAN, 0, 0, 0.0f, -1));
 }
 
 static void TestValidAndFloatPrecision(void)
@@ -363,6 +620,51 @@ static void TestReasons(void)
 	             "unknown level-identity status") == 0);
 }
 
+static void TestBotPingDoesNotOwnGameplayRandomness(void)
+{
+	int frame;
+	int expected_random;
+	int base;
+
+	srand(5119);
+	expected_random = rand();
+	srand(5119);
+	base = SG_BotPingBase(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(base >= 5 && base <= 15);
+	CHECK(base == SG_BotPingBase(UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+
+	for (frame = 0; frame < 1000; frame++)
+	{
+		int ping = SG_BotPingValue(10, UINT64_C(0x123456789abcdef0),
+		    frame);
+
+		CHECK(ping >= 9 && ping <= 11);
+		CHECK(ping == SG_BotPingValue(10,
+		    UINT64_C(0x123456789abcdef0), frame));
+	}
+	CHECK(SG_BotPingValue(5, 1, 0) >= 5);
+	CHECK(SG_BotPingValue(15, 1, 0) <= 15);
+}
+
+static void TestChatObjectivePriority(void)
+{
+	CHECK(!SG_ChatTopicBlocksOnBotGap(SG_CHAT_TOPIC_CACO));
+	CHECK(SG_ChatTopicStampsBotGap(SG_CHAT_TOPIC_CACO));
+	CHECK(!SG_ChatTopicBlocksOnBotGap(SG_CHAT_TOPIC_ORDER));
+	CHECK(!SG_ChatTopicStampsBotGap(SG_CHAT_TOPIC_ORDER));
+	CHECK(SG_ChatTopicBlocksOnBotGap(SG_CHAT_TOPIC_MAJOR));
+	CHECK(SG_ChatTopicStampsBotGap(SG_CHAT_TOPIC_MAJOR));
+}
+
+static void TestCalloutSpeakerIdentity(void)
+{
+	CHECK(SG_CalloutSpeakerCurrent(41, 41));
+	CHECK(!SG_CalloutSpeakerCurrent(41, 42));
+	CHECK(!SG_CalloutSpeakerCurrent(0, 0));
+	CHECK(!SG_CalloutSpeakerCurrent(0, 41));
+}
+
 int main(void)
 {
 	TestCRC32();
@@ -372,6 +674,19 @@ int main(void)
 	TestMapGrammar();
 	TestLifecycleAndMapSwitch();
 	TestReasons();
+	TestBotPingDoesNotOwnGameplayRandomness();
+	TestChatObjectivePriority();
+	TestCalloutSpeakerIdentity();
+	TestEscortDose();
+	TestRibbonRandomness();
+	TestRouteJitterIdentity();
+	TestRoleSkewRandomness();
+	TestLeadRandomness();
+	TestPersonaAssignment();
+	TestEscapeRandomness();
+	TestCalloutRandomness();
+	TestChatRandomness();
+	TestEarRandomnessAndListenerSelection();
 
 	if (failures)
 	{

@@ -15,6 +15,7 @@
 #include "sg_human_speed.h"
 #include "sg_door_approach.h"
 #include "sg_rune.h"
+#include "sg_strike.h"
 
 #define SG_MAXBOTS      16
 #define SG_DOOR_APPROACH_MAX_MASTERS 16
@@ -45,6 +46,8 @@ typedef struct sg_door_approach_ticket_s
 	pmove_state_t expected_pms;
 	short expected_mins_q8[3];
 	short expected_maxs_q8[3];
+	int expected_watertype;
+	int expected_waterlevel;
 	uint32_t support_key;
 	uint32_t support_generation;
 	unsigned long long bot_instance;
@@ -100,9 +103,9 @@ typedef struct sg_bot_s
 	/* hook execution, two-phase: aim this frame (ClientThink turns the cmd
 	 * angles into v_angle), fire immediately after, since Weapon_Hook_Fire
 	 * launches along v_angle; then release before the p_weapon.c brake band */
-	unsigned	dither_salt;    /* route dither: rerolled per seed visit
+	unsigned	dither_salt;    /* route dither: deterministically mixed per visit
 	                             * so a choice holds within a visit but
-	                             * varies across visits */
+	                             * varies without consuming the global RNG */
 	vec3_t		hp_cur_dep;     /* hook ping-pong: this ride's departure */
 	vec3_t		hp_prev_dep;    /* previous ride's departure point */
 	float		hp_prev_land;   /* when the previous ride completed */
@@ -209,8 +212,11 @@ typedef struct sg_bot_s
 	int			visit_seed[SG_VISIT_RING];
 	int			visit_goal[SG_VISIT_RING];  /* the seed's value at visit */
 	int			visit_min[SG_VISIT_RING];   /* best goal reached SINCE */
+	const int		*visit_field[SG_VISIT_RING]; /* exact objective field */
+	qboolean		visit_combat[SG_VISIT_RING]; /* fight occurred since visit */
 	float		visit_time[SG_VISIT_RING];
 	int			visit_head;
+	const int		*orbit_field; /* continuous field owning the visit ring */
 	int			orbit_last_seed; /* last seed consumed by the wide-orbit edge;
 		                             * belongs to this bot/life, not the process */
 
@@ -283,12 +289,23 @@ typedef struct sg_bot_s
 		                                           * budget; zero while making progress */
 	int			commit_link;    /* the gradient step being held */
 	float		commit_until;
+	/* Field identity that authorized the retained step.  Pure objective
+	 * changes may retire a still-reversible RUN immediately instead of
+	 * spending the generic three-second latch on the superseded mission. */
+	const int		*commit_route_field;
 	/* Exact route transaction selected while the strike coordinator owns its
 	 * bounded weapon diversion.  The immutable core deadline is copied here;
 	 * draining means authority ended after a physical controller began. */
 	int			strike_weapon_link;
 	float		strike_weapon_until;
 	qboolean	strike_weapon_draining;
+	/* The bounded strike preparation descends a flood from one exact live
+	 * pickup, not the broad weapon class field.  The edict/seed/origin tuple
+	 * prevents WEAPONS_STAY or an unrelated respawn from silently retargeting
+	 * the mission to a pad this client cannot collect. */
+	int			strike_weapon_target_ent;
+	int			strike_weapon_target_seed;
+	vec3_t		strike_weapon_target_org;
 	vec3_t		stag_org;       /* stagnation ball on the BODY, not the
 	                             * link: the identity watch above resets
 	                             * whenever the argmin flaps, and two
@@ -305,6 +322,7 @@ typedef struct sg_bot_s
 	float		fan_side_until;
 	float		escape_until;   /* backing out of a concave pocket */
 	float		escape_yaw;
+	uint32_t	escape_random;  /* private pocket-retreat sequence */
 	int			last_goalcost;  /* this frame's goal-field cost, for mates */
 	float		vy_cur, vp_cur; /* the view's ACTUAL heading: slew state */
 	qboolean	view_on;        /* slew state valid (false snaps on respawn) */
@@ -349,6 +367,7 @@ typedef struct sg_bot_s
 	                             * repeated runs spread into a band --
 	                             * the film judge's rope-vs-brush tell */
 	int			ribbon_link;
+	uint32_t	ribbon_random;  /* private lane/drift sequence; never global RNG */
 	float		latch_until;    /* link latch: the incumbent holds its
 	                             * seat until this time unless beaten by
 	                             * 15% -- re-decision cadence matched to
@@ -368,8 +387,11 @@ typedef struct sg_bot_s
 	int			lead_state;     /* waiting short of pad, then spawned pickup */
 	float		lead_seen_up_at;/* sight watermark when the errand committed */
 	float		lead_inferred_until; /* bounded clock-only spawn pursuit */
+	uint32_t	lead_random;    /* private early-item timing sequence */
 	int			patrol_seed;    /* current patrol leg target, -1 = holding */
+	int			patrol_link;    /* exact direct RUN authority for that target */
 	float		patrol_until;   /* when the next leg may start */
+	uint32_t	patrol_random;  /* private route/dwell sequence; never global RNG */
 	int			def_shift_seed; /* threat-responsive guarded RUN target */
 	int			def_shift_link; /* direct RUN authority for that target */
 	int			def_shift_from; /* do not bounce straight back here */
@@ -530,6 +552,9 @@ typedef struct sg_think_s {
 	usercmd_t		cmd;
 	const int		*goal_field, *support, *intercept;
 	const int		*route_field;
+	/* Per-client item surfaces.  Runes and powerups use the shared live field;
+	 * weapon, health, ammo, and armor roots follow physical pickup law. */
+	const int		*collectible_item_field[SG_FIELD_CLASSES];
 	qboolean		route_pure;
 	const sg_weights_t *w;
 	sg_weights_t	live;
@@ -546,7 +571,7 @@ typedef struct sg_think_s {
 	vec3_t			move_dir;
 	float			view_yaw, view_pitch;
 	qboolean		have_move, open_ahead, run_link, precision;
-	qboolean		hold_post, rally_hold, rail_hold, think_over;
+	qboolean		hold_post, rally_hold, rail_hold, patrol_walk, think_over;
 	int				rail_seed, rail_client;
 	float			rail_dose, post_yaw, post_sight;
 	int				door_hold;
@@ -562,12 +587,22 @@ typedef struct sg_think_s {
 	/* Frame-scoped strike policy.  The coordinator owns membership and
 	 * deadlines; the ordinary descent/move stages own route execution. */
 	qboolean		strike_active, strike_hold, strike_rush,
+				strike_pressure,
+				scoop_mission,
+				combat_pursuit,
+				rearguard,
+				escort_mission,
+				escort_formation,
+				strike_blocks_optional,
 				strike_weapon_pursuit;
 	float			strike_weapon_deadline;
 } sg_think_t;
 
 void SG_BotThink(sg_bot_t *bot);
 void SG_StrikeSlotReset(int slot);
+qboolean SG_StrikeEnemyPressureSnapshot(const sg_bot_t *bot);
+int SG_StrikeEnemyPressureGoalSnapshot(const sg_bot_t *bot);
+sg_strike_duty_t SG_StrikeDutySnapshot(const sg_bot_t *bot);
 qboolean SG_LevelSetup(void);
 void Botfill_Frame(void);
 

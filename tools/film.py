@@ -332,15 +332,22 @@ def parse_delta_entity_film(r, bits, o, is_svrecord=False):
     if bits & U_SOLID: r.skip(2)
 
 
-def walk_demo(path, maxplayers=32):
+def walk_demo(path, maxplayers=32, *, strict=False):
     """Auto-detects client vs serverrecord .dm2 shape (see demoents.
     walk_entities' docstring for the full rationale -- svrecord is sniffed
     from playernum==0xffff in the signon block, and its svc_frame carries
     only a framenum before an unconditional packetentities, vs the client
     shape's frame+deltaframe+suppresscount+areabits header).
 
-    Returns {'map', 'skins', 'tracks': {entnum: [(frame,x,y,z,effects)]},
-    'yaws': {entnum: {frame: yaw_degrees}}, 'frames', 'svrecord'}. tracks
+    Returns {'map', 'skins', 'skin_epochs', 'tracks':
+    {entnum: [(frame,x,y,z,effects)]}, 'yaws':
+    {entnum: {frame: yaw_degrees}}, 'frames', 'svrecord', 'parse_complete'}.
+    ``strict=True`` rejects malformed/truncated packets instead of retaining a
+    best-effort partial decode; authenticated evidence consumers must use it.
+    ``skin_epochs`` records the first snapshot on which each configstring
+    value is effective, so a caller can reject client-slot reuse.
+
+    tracks
     are filtered to entnum 1..maxplayers (player slots) exactly like
     demoents.py and botkin.py.
 
@@ -349,15 +356,21 @@ def walk_demo(path, maxplayers=32):
     `for f, x, y, z, eff in track`, and widening the tuple would mean
     touching all of them for a field only apply_pov_parity's optional
     facing gate reads."""
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as source:
+        data = source.read()
     off = 0
     mapname = None
     skins = {}
+    skin_epochs = {}
     ents = {}
     tracks = {}
     yaws = {}
+    wire_framenums = []
     frame_idx = 0
     svrecord = None
+    parse_complete = True
+    message_count = 0
+    terminated = False
 
     def read_packetentities():
         while True:
@@ -379,11 +392,25 @@ def walk_demo(path, maxplayers=32):
                     (frame_idx, o[0], o[1], o[2], o[3]))
                 yaws.setdefault(num, {})[frame_idx] = o[4]
 
-    while off + 4 <= len(data):
+    while off < len(data):
+        if off + 4 > len(data):
+            if strict:
+                raise ValueError("truncated demo message length")
+            parse_complete = False
+            break
         (mlen,) = struct.unpack_from('<i', data, off)
         off += 4
         if mlen == -1:
+            terminated = True
+            if strict and off != len(data):
+                raise ValueError("demo has bytes after terminal marker")
             break
+        if mlen < 0 or off + mlen > len(data):
+            if strict:
+                raise ValueError("invalid or truncated demo message")
+            parse_complete = False
+            break
+        message_count += 1
         r = D.R(data[off:off + mlen])
         off += mlen
         try:
@@ -396,7 +423,11 @@ def walk_demo(path, maxplayers=32):
                     idx = r.u16()
                     s = r.str_()
                     if 1312 <= idx < 1312 + 256:
-                        skins[idx - 1312] = s
+                        slot = idx - 1312
+                        if skins.get(slot) != s:
+                            skins[slot] = s
+                            skin_epochs.setdefault(slot, []).append(
+                                (frame_idx + 1, s))
                     elif idx == 33:
                         m = re.match(r'maps/(\w+)\.bsp', s)
                         if m:
@@ -407,12 +438,19 @@ def walk_demo(path, maxplayers=32):
                     parse_delta_entity_film(r, bits, o)
                 elif svc == 20:
                     if svrecord:
-                        r.skip(4)                 # framenum only
+                        wire_framenums.append(r.s32())
                         svc2 = r.u8()
                         if svc2 != 18:
                             raise ValueError(
                                 f"svrecord frame not followed by "
                                 f"packetentities (got {svc2})")
+                        # SV_RecordDemoMessage deltas every entity against an
+                        # all-zero state, not the previous frame.  Each frame
+                        # is therefore a complete independent inventory: an
+                        # omitted entity is absent and an omitted origin field
+                        # is exactly zero.  Retaining ``ents`` here would
+                        # synthesize stale players and stale zero coordinates.
+                        ents.clear()
                         read_packetentities()
                         snapshot()
                     else:
@@ -431,10 +469,30 @@ def walk_demo(path, maxplayers=32):
                 elif svc == 5: r.skip(512)
                 elif svc in (6, 7): pass
                 else: raise ValueError(svc)
-        except Exception:
+            if strict and r.pos() != len(r.b):
+                raise ValueError("demo message was not consumed exactly")
+        except Exception as exc:
+            if strict:
+                raise ValueError(
+                    f"malformed demo message ending at byte {off}") from exc
+            parse_complete = False
             continue
-    return {'map': mapname, 'skins': skins, 'tracks': tracks, 'yaws': yaws,
-            'frames': frame_idx, 'svrecord': bool(svrecord)}
+    if strict:
+        if message_count == 0 or svrecord is None or frame_idx == 0:
+            raise ValueError("strict demo has no serverdata or frame messages")
+        if not terminated:
+            raise ValueError("strict demo has no terminal marker")
+        if svrecord:
+            if len(wire_framenums) != frame_idx:
+                raise ValueError("serverrecord snapshot/frame inventory differs")
+            if any(right != left + 1
+                   for left, right in zip(wire_framenums, wire_framenums[1:])):
+                raise ValueError("serverrecord wire frames are not consecutive")
+    parse_complete = parse_complete and terminated
+    return {'map': mapname, 'skins': skins, 'skin_epochs': skin_epochs,
+            'tracks': tracks, 'yaws': yaws, 'frames': frame_idx,
+            'wire_framenums': wire_framenums, 'svrecord': bool(svrecord),
+            'parse_complete': parse_complete, 'terminated': terminated}
 
 
 # --------------------------------------------------------- duration cap

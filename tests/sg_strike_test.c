@@ -1,5 +1,9 @@
 /* sg_strike_test.c -- host-free deterministic offense coordinator tests. */
+#include "g_local.h"
+#include "slipgate/sg_local.h"
 #include "slipgate/sg_strike.h"
+#include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_nade_policy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -308,7 +312,7 @@ static void TestSharedGoAndBoundedForm(void)
 	CHECK(fabsf(deadline - 103.0f) < 0.001f);
 
 	frame.now = 101.0f;
-	frame.slot[1].enemy_flag_goal_ms = 5000;
+	frame.slot[1].enemy_flag_goal_ms = 4000;
 	CHECK(SG_StrikeStep(&team, &frame));
 	CHECK(team.phase == SG_STRIKE_FORM);
 	CHECK(fabsf(team.form_deadline - deadline) < 0.001f);
@@ -366,6 +370,54 @@ static void TestImmediateReleaseAndSoloNeverWaits(void)
 	CHECK(!SG_StrikeMemberShouldHold(&team, 0));
 }
 
+static void TestLeaderNeverWaitsForUnreachableFormation(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(330.0f);
+
+	AddAttacker(&frame, 0, 42u, 2, 1000);
+	AddAttacker(&frame, 1, 43u, 2, 8000);
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_GO);
+	CHECK(team.hold_mask == 0u);
+	CHECK(team.rush_mask == team.member_mask);
+
+	/* At the exact reachable boundary the partner can still close to the
+	 * synchronization band before the three-second cap, so formation stays. */
+	frame = Frame(340.0f);
+	AddAttacker(&frame, 0, 52u, 2, 1000);
+	AddAttacker(&frame, 1, 53u, 2, 5500);
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_FORM);
+	CHECK(team.hold_mask == Bit(0));
+}
+
+static void TestFormationReleasesWhenPartnerFallsBehind(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(350.0f);
+
+	AddAttacker(&frame, 0, 62u, 2, 1000);
+	AddAttacker(&frame, 1, 63u, 2, 4000);
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_FORM);
+	CHECK(team.hold_mask == Bit(0));
+	CHECK(fabsf(team.form_deadline - 353.0f) < 0.001f);
+
+	/* One second later the partner has taken a slower road.  It fitted the
+	 * original three-second budget but cannot enter the synchronization band
+	 * in the two seconds that remain, so the leader attacks now. */
+	frame.now = 351.0f;
+	frame.slot[1].enemy_flag_goal_ms = 5000;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_GO);
+	CHECK(team.hold_mask == 0u);
+	CHECK(team.rush_mask == team.member_mask);
+}
+
 static void TestOneRecovererPreservesAttack(void)
 {
 	sg_strike_team_t team;
@@ -406,9 +458,190 @@ static void TestOneRecovererPreservesAttack(void)
 	AddAttacker(&frame, 1, 61u, 2, 9000);
 	SG_StrikeReset(&team);
 	CHECK(SG_StrikeStep(&team, &frame));
-	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 0);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 1);
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_BREACH);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_BREACH) == 1);
+
+	/* When casualties leave only one non-watchman, recovery wins because a
+	 * team cannot capture until its own flag returns. The live recovery mission
+	 * remains ARM rather than restarting an empty epoch every frame. */
+	frame = Frame(420.0f);
+	frame.own_flag_home = 0;
+	AddAttacker(&frame, 0, 62u, 2, 8000);
+	frame.slot[0].recover_goal_ms = 1000;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_ARM);
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.rush_mask == 0u);
+	{
+		uint32_t epoch = team.epoch;
+
+		frame.now = 420.1f;
+		CHECK(SG_StrikeStep(&team, &frame));
+		CHECK(team.epoch == epoch);
+		CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	}
+}
+
+static void TestRecoveryRouteAdmitsDisconnectedAttacker(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(430.0f);
+
+	frame.own_flag_home = 0;
+	AddAttacker(&frame, 0, 64u, 2, -1);
+	frame.slot[0].recover_goal_ms = 100;
+	AddAttacker(&frame, 1, 65u, 2, 500);
+	frame.slot[1].recover_goal_ms = -1;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.member_mask == (Bit(0) | Bit(1)));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_BREACH);
+}
+
+static void TestDisconnectedMembersDoNotReceivePressureDuty(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(435.0f);
+
+	frame.own_flag_home = 0;
+	AddAttacker(&frame, 0, 66u, 2, -1);
+	frame.slot[0].recover_goal_ms = 100;
+	AddAttacker(&frame, 1, 67u, 2, -1);
+	frame.slot[1].recover_goal_ms = 200;
+	AddAttacker(&frame, 2, 68u, 2, 500);
+	AddAttacker(&frame, 3, 69u, 2, -1);
+	frame.slot[3].direct_flag_touch = 1;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.member_mask == (Bit(0) | Bit(1) | Bit(2) | Bit(3)));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_NONE);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_BREACH);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_PRESS);
+	CHECK(!SG_StrikeMemberRushes(&team, 1));
+	CHECK(SG_StrikeMemberRushes(&team, 2));
+	CHECK(SG_StrikeMemberRushes(&team, 3));
+}
+
+static void TestFullRosterMakesRoomForOnlyRecoverer(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(440.0f);
+	int slot;
+
+	frame.own_flag_home = 0;
+	for (slot = 0; slot < 5; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(70 + slot), 2,
+		    slot < 4 ? 100 + slot * 100 : 10000);
+		frame.slot[slot].recover_goal_ms = slot == 4 ? 50 : -1;
+	}
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 1);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(!SG_StrikeMember(&team, 3));
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_BREACH) +
-	    CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 2);
+	    CountDuty(&team, SG_STRIKE_DUTY_CLEAR) +
+	    CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 3);
+}
+
+static void TestFullRosterMakesRoomForOnlyEscort(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(450.0f);
+	int slot;
+
+	for (slot = 0; slot < 6; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(80 + slot), 2,
+		    slot < 4 ? 100 + slot * 100 : 10000 + slot * 100);
+		frame.slot[slot].carrier_goal_ms = slot == 4 ? 50 : -1;
+	}
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 5;
+	frame.slot[5].carrying = 1;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(!SG_StrikeMember(&team, 3));
+	CHECK(SG_StrikeParticipant(&team, 5));
+	CHECK(team.duty[5] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
+}
+
+static void TestCarrierCannotSatisfyRecoveryCoverage(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(460.0f);
+	int slot;
+
+	for (slot = 0; slot < 5; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(90 + slot), 2,
+		    slot < 4 ? 100 + slot * 100 : 10000);
+		frame.slot[slot].recover_goal_ms = slot == 4 ? 50 : -1;
+	}
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	/* The carrier's home route is finite because carrying uses it, but the
+	 * carrier cannot return the enemy-held own flag. */
+	frame.slot[0].recover_goal_ms = 10;
+	frame.slot[1].carrier_goal_ms = 100;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_RECOVER);
+}
+
+static void TestEscortAdmissionProtectsOnlyRecoverer(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(470.0f);
+
+	/* Initial ranking fills the four slots with the carrier, two close
+	 * attackers, and the only recoverer.  A fifth body is the only escort.
+	 * The carrier also has a finite own-flag field, but cannot perform recovery
+	 * while carrying; it must not make the real recoverer look redundant. */
+	AddAttacker(&frame, 0, 100u, 2, 100);
+	AddAttacker(&frame, 1, 101u, 2, 1);
+	AddAttacker(&frame, 2, 102u, 2, 2);
+	AddAttacker(&frame, 3, 103u, 2, 1000);
+	AddAttacker(&frame, 4, 104u, 2, 10000);
+	AddAttacker(&frame, 5, 105u, 2, 10000);
+	for (int slot = 0; slot < 6; slot++)
+	{
+		frame.slot[slot].recover_goal_ms = -1;
+		frame.slot[slot].carrier_goal_ms = -1;
+	}
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	frame.slot[0].recover_goal_ms = 10;
+	frame.slot[4].recover_goal_ms = 50;
+	frame.slot[5].carrier_goal_ms = 60;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[5] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(SG_StrikeMember(&team, 5));
+	CHECK(!SG_StrikeMember(&team, 2));
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 1);
 }
 
 static void TestDutiesStayStableUntilEgress(void)
@@ -522,6 +755,147 @@ static void TestExternalCarrierDoesNotExpandRoster(void)
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
 }
 
+static void TestHumanCarrierReceivesBotEscort(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(660.0f);
+	uint32_t roster;
+	int slot;
+
+	for (slot = 0; slot < 4; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(600 + slot), 2,
+		    1000 + slot * 1000);
+		frame.slot[slot].carrier_goal_ms = 800 - slot * 100;
+	}
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	roster = Bit(0) | Bit(1) | Bit(2) | Bit(3);
+	CHECK(team.member_mask == roster);
+
+	/* The live flag owner is a human, so no SG slot may be labeled CARRY.
+	 * The authoritative flag state still requires one bot screen and the
+	 * ordinary short rearguard around that teammate. */
+	frame.now = 660.1f;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.enemy_flag_home = 0;
+	frame.enemy_flag_carried = 1;
+	frame.carrier_slot = -1;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_EGRESS);
+	CHECK(team.member_mask == roster);
+	CHECK(team.carrier_slot == -1);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CARRY) == 0);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 1);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
+
+	frame.now = 666.0f;
+	frame.events = SG_STRIKE_EVENT_NONE;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 3);
+}
+
+static void TestCarrierStandoffKeepsRecovery(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(675.0f);
+
+	AddAttacker(&frame, 0, 600u, 2, 1000);
+	AddAttacker(&frame, 1, 601u, 2, 3000);
+	AddAttacker(&frame, 2, 602u, 2, 5000);
+	AddAttacker(&frame, 3, 603u, 2, 7000);
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	frame.slot[1].carrier_goal_ms = 300;
+	frame.slot[2].carrier_goal_ms = 100;
+	frame.slot[3].carrier_goal_ms = 200;
+	frame.slot[1].recover_goal_ms = 300;
+	frame.slot[2].recover_goal_ms = 200;
+	frame.slot[3].recover_goal_ms = 100;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_CLEAR);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 0);
+
+	/* Once the clear window expires, the stable escort and recoverer remain;
+	 * only the freed clearer presses the enemy base. */
+	frame.now = 680.1f;
+	frame.events = SG_STRIKE_EVENT_NONE;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_PRESS);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_RECOVER);
+
+	/* A casualty retires the old recovery owner and reassigns that essential
+	 * mission without changing the carrier or escort. */
+	frame.now = 680.2f;
+	frame.slot[3].alive = 0;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_NONE);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_ESCORT);
+
+	/* With only one helper left, returning the own flag beats an optional
+	 * escort/clear assignment: the carrier cannot score without it. */
+	frame = Frame(690.0f);
+	AddAttacker(&frame, 0, 610u, 2, 1000);
+	AddAttacker(&frame, 1, 611u, 2, 3000);
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	frame.slot[1].carrier_goal_ms = 100;
+	frame.slot[1].recover_goal_ms = 200;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 0);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
+}
+
+static void TestEgressDoesNotPressAnUnreachableMember(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(695.0f);
+
+	AddAttacker(&frame, 0, 620u, 2, 1000);
+	AddAttacker(&frame, 1, 621u, 2, 2000);
+	AddAttacker(&frame, 2, 622u, 2, 3000);
+	AddAttacker(&frame, 3, 623u, 2, -1);
+	frame.own_flag_home = 0;
+	frame.slot[0].recover_goal_ms = 100;
+	frame.slot[3].recover_goal_ms = 200;
+	frame.slot[1].carrier_goal_ms = 100;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.member_mask == (Bit(0) | Bit(1) | Bit(2) | Bit(3)));
+
+	/* The stable four stay admitted when a fifth bot makes the pickup. */
+	frame.now = 695.1f;
+	AddAttacker(&frame, 4, 624u, 2, 500);
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 4;
+	frame.slot[4].carrying = 1;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_CLEAR);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_NONE);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 0);
+}
+
 static void TestWeaponRouteRetirementVerdicts(void)
 {
 	sg_strike_weapon_controller_state_t state;
@@ -591,6 +965,42 @@ static void TestWeaponRouteRetirementVerdicts(void)
 	    SG_STRIKE_WEAPON_DOOR_TERMINAL);
 	CHECK(SG_StrikeGenericRailAllowed(0));
 	CHECK(!SG_StrikeGenericRailAllowed(1));
+}
+
+static void TestWeaponDetourPreservesStandPressure(void)
+{
+	/* Far from the flag, a materially shorter weapon route may still use the
+	 * immutable per-life preparation window. */
+	CHECK(SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    8000, 2500, 5000));
+	CHECK(SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    6000, 5000, 5000)); /* exact one-second saving */
+
+	/* Once the attacker is inside the strike window, reaching the stand owns
+	 * the route even if a nearby weapon is still deadline-reachable. */
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    5000, 500, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    4999, 500, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    8000, 7001, 8000)); /* less than one second saved */
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    8000, 5001, 5000)); /* misses immutable deadline */
+
+	CHECK(!SG_StrikeWeaponDetourAllowed(0, 0, 0, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 1, 0, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 1, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 1, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 1,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(2, 0, 0, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    -1, 1000, 5000));
 }
 
 static void TestReturnCaptureAndLifecycleReset(void)
@@ -669,6 +1079,230 @@ static void TestInvalidInputDoesNotMutate(void)
 	frame.now = NAN;
 	CHECK(!SG_StrikeStep(&team, &frame));
 	CHECK(memcmp(&team, &before, sizeof(team)) == 0);
+	frame.now = 801.0f;
+	frame.enemy_flag_carried = 2;
+	CHECK(!SG_StrikeStep(&team, &frame));
+	CHECK(memcmp(&team, &before, sizeof(team)) == 0);
+}
+
+static void TestHomeFlagApproachPricing(void)
+{
+	CHECK(!SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_NONE));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_BREACH));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_PRESS));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_ESCORT));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_RECOVER));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_CARRY));
+	CHECK(!SG_StrikeDutyRetiresOptionalErrand((sg_strike_duty_t)-1));
+	CHECK(SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_BREACH));
+	CHECK(SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_PRESS));
+	CHECK(!SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_RECOVER));
+	CHECK(!SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_ESCORT));
+	CHECK(SG_StrikeEnemyPressureActive(1, 0, SG_STRIKE_DUTY_NONE));
+	CHECK(!SG_StrikeEnemyPressureActive(1, 1, SG_STRIKE_DUTY_RECOVER));
+	CHECK(SG_StrikeEnemyPressureActive(0, 1, SG_STRIKE_DUTY_PRESS));
+	CHECK(!SG_StrikeEnemyPressureActive(0, 1, SG_STRIKE_DUTY_ESCORT));
+	/* The first-entry bot shoots visible defenders but does not trade its flag
+	 * route for Combat's lost-corner camp.  CLEAR/PRESS own that pursuit. */
+	CHECK(!SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_BREACH));
+	CHECK(SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_PRESS));
+	CHECK(SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_RECOVER));
+	CHECK(!SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_ESCORT));
+	CHECK(!SG_StrikeDutyCombatPursuit(SG_STRIKE_DUTY_CARRY));
+	CHECK(SG_StrikeCombatPursuitActive(1, 0, SG_STRIKE_DUTY_NONE));
+	CHECK(!SG_StrikeCombatPursuitActive(1, 1, SG_STRIKE_DUTY_ESCORT));
+	CHECK(!SG_StrikeCombatPursuitActive(1, 1, SG_STRIKE_DUTY_BREACH));
+	CHECK(SG_StrikeCombatPursuitActive(0, 1, SG_STRIKE_DUTY_RECOVER));
+	CHECK(SG_StrikeCombatPursuitActive(0, 1, SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 2,
+	      SG_STRIKE_DUTY_CLEAR, 9));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_CLEAR, 9,
+	      SG_STRIKE_DUTY_BREACH, 2));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 2,
+	      SG_STRIKE_DUTY_PRESS, 9));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_PRESS, 9,
+	      SG_STRIKE_DUTY_BREACH, 2));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_PRESS, 9,
+	      SG_STRIKE_DUTY_PRESS, 2));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_PRESS, 2,
+	      SG_STRIKE_DUTY_PRESS, 9));
+	CHECK(SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_NONE, 9,
+	      SG_STRIKE_DUTY_NONE, 2));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 2,
+	      SG_STRIKE_DUTY_RECOVER, 1));
+	CHECK(!SG_StrikeThresholdMateOwnsHold(SG_STRIKE_DUTY_BREACH, 0,
+	      SG_STRIKE_DUTY_CLEAR, 9));
+	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_BREACH));
+	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_PRESS));
+	CHECK(SG_StrikeDutyRearguard(SG_STRIKE_DUTY_ESCORT));
+	CHECK(!SG_StrikeDutyRearguard(SG_STRIKE_DUTY_RECOVER));
+	CHECK(!SG_StrikeDutyRearguard(SG_STRIKE_DUTY_CARRY));
+	CHECK(SG_StrikeRearguardActive(1, 0, SG_STRIKE_DUTY_NONE));
+	CHECK(!SG_StrikeRearguardActive(1, 1, SG_STRIKE_DUTY_RECOVER));
+	CHECK(SG_StrikeRearguardActive(0, 1, SG_STRIKE_DUTY_ESCORT));
+	CHECK(SG_StrikeRearguardActive(0, 1, SG_STRIKE_DUTY_PRESS));
+	CHECK(SG_StrikeEscortActive(1, 0, SG_STRIKE_DUTY_NONE));
+	CHECK(!SG_StrikeEscortActive(1, 1, SG_STRIKE_DUTY_RECOVER));
+	CHECK(SG_StrikeEscortActive(0, 1, SG_STRIKE_DUTY_ESCORT));
+	CHECK(!SG_StrikeEscortActive(0, 1, SG_STRIKE_DUTY_PRESS));
+	CHECK(SG_StrikePrebreachApproachAllowed(0, 0, 1, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(0, 0, 0, 3000));
+	CHECK(SG_StrikePrebreachApproachAllowed(1, 1, 0, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, 0, 1, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, 1, 0, 2000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, 1, 0, 5000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(2, 1, 1, 3000));
+	CHECK(!SG_StrikePrebreachApproachAllowed(1, -1, 1, 3000));
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, 0.49f) == 0.30f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, 0.50f) == 0.55f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, 0.85f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(0, 100.0f, 300.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 220.0f, 300.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 120.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, NAN) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(2, 100.0f, 300.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeCarrierOwnFlagAimAllowed(1, 1, 0));
+	CHECK(SG_StrikeCarrierOwnFlagAimAllowed(1, 0, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(1, 0, 0));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(0, 1, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(2, 1, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(1, -1, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(1, 1, 2));
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 500.0f, 300.0f, 0.0f,
+	    500, 500) == -100.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 350.0f, 0.0f,
+	    500, 625) == -25.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 385.0f, 0.0f,
+	    500, 500) == 0.0f); /* less than a meaningful body step */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 160.0f, 80.0f, 0.0f,
+	    200, 100) == 0.0f); /* direct-touch controller owns this band */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 601.0f, 300.0f, 0.0f,
+	    700, 600) == 0.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 0, 400.0f, 200.0f, 0.0f,
+	    500, 400) == 0.0f); /* mechanisms retain exact authority */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 200.0f, 97.0f,
+	    500, 400) == 0.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 200.0f, 0.0f,
+	    500, 626) == 0.0f); /* not a near-plateau route */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, NAN, 200.0f, 0.0f,
+	    500, 400) == 0.0f);
+}
+
+static void TestDeadSlotsDoNotReserveDefenderRanks(void)
+{
+	unsigned char eligible[6] = { 0, 1, 0, 1, 1, 0 };
+	int count = -1;
+
+	CHECK(SG_CoordinationBodyLive(1, 1, 0, 100));
+	CHECK(!SG_CoordinationBodyLive(0, 1, 0, 100));
+	CHECK(!SG_CoordinationBodyLive(1, 0, 0, 100));
+	CHECK(!SG_CoordinationBodyLive(1, 1, 1, 100));
+	CHECK(!SG_CoordinationBodyLive(1, 1, 0, 0));
+	CHECK(SG_StrikeLiveEnemyRosterMember(1, 1, 1, 0, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 1, 1, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 1, 0, 0));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 0, 0, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(2, 1, 1, 0, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 2, 0, 100));
+
+	CHECK(SG_RoleLiveRank(eligible, 6, 1, &count) == 0);
+	CHECK(count == 3);
+	CHECK(SG_RoleLiveRank(eligible, 6, 3, &count) == 1);
+	CHECK(count == 3);
+	CHECK(SG_RoleLiveRank(eligible, 6, 4, &count) == 2);
+	CHECK(count == 3);
+	/* Dead slot zero ranks after all three live teammates instead of holding
+	 * the first defender reservation merely because its slot number is low. */
+	CHECK(SG_RoleLiveRank(eligible, 6, 0, &count) == 3);
+	CHECK(count == 3);
+	CHECK(SG_RoleLiveRank(NULL, 6, 0, &count) == -1);
+	CHECK(count == 0);
+	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 0, 1));
+	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 1, 1));
+	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 3, 1));
+	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 1));
+	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 3, 2));
+	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 2));
+	CHECK(SG_AntiLingerEligible(SG_ROLE_ATTACK, 0));
+	CHECK(SG_AntiLingerEligible(SG_ROLE_ESCORT, 0));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_ATTACK, 1));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_ESCORT, 1));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_CARRY, 0));
+	CHECK(!SG_AntiLingerEligible(SG_ROLES, 0));
+	CHECK(!SG_AntiLingerEligible(SG_ROLE_ATTACK, 2));
+	CHECK(SG_EscortSupportFullStrength(1));
+	CHECK(!SG_EscortSupportFullStrength(0));
+	CHECK(!SG_EscortSupportFullStrength(-1));
+	CHECK(!SG_EscortSupportFullStrength(2));
+	CHECK(SG_InterposeMode(-1.0f) == 0);
+	CHECK(SG_InterposeMode(0.0f) == 0);
+	CHECK(SG_InterposeMode(1.0f) == 1);
+	CHECK(SG_InterposeMode(1.99f) == 1);
+	CHECK(SG_InterposeMode(2.0f) == 2);
+	CHECK(SG_InterposeMode(2.99f) == 2);
+	CHECK(SG_InterposeMode(3.0f) == 3);
+	CHECK(SG_InterposeMode(99.0f) == 3);
+	CHECK(SG_ObjectiveRole(SG_ROLE_ATTACK, 0) == SG_ROLE_ATTACK);
+	CHECK(SG_ObjectiveRole(SG_ROLE_ATTACK, 1) == SG_ROLE_ESCORT);
+	CHECK(SG_ObjectiveRole(SG_ROLE_RECOVER, 1) == SG_ROLE_ESCORT);
+	CHECK(SG_InterposeLeadStation(3000, 1200));
+	CHECK(SG_InterposeLeadStation(3000, 3000));
+	CHECK(!SG_InterposeLeadStation(3000, 4200));
+	CHECK(SG_InterposeLeadStation(-1, 4200));
+	CHECK(SG_InterposeLeadStation(3000, SG_FIELD_INF));
+	CHECK(SG_NadeBlockedArcMayCancel(0));
+	CHECK(!SG_NadeBlockedArcMayCancel(1));
+	CHECK(SG_NadeReleaseSlewRate(0, 600.0f) == 600.0f);
+	CHECK(SG_NadeReleaseSlewRate(1, 600.0f) == 0.0f);
+	CHECK(SG_NadeCookShouldHold(2, 2.0f, -1.0f));
+	CHECK(SG_NadeCookShouldHold(2, 2.0f, 1.0f));
+	CHECK(!SG_NadeCookShouldHold(0, 2.0f, -1.0f));
+	CHECK(!SG_NadeCookShouldHold(2, 2.0f, -2.0f));
+	CHECK(!SG_NadeCookShouldHold(2, 0.6f, 0.1f));
+	CHECK(!SG_NadeCookShouldHold(2, NAN, 0.1f));
+	CHECK(!SG_AttackObjectiveUsesFixedStand(-1));
+	CHECK(SG_AttackObjectiveUsesFixedStand(0));
+	CHECK(SG_AttackObjectiveUsesFixedStand(15));
+	CHECK(SG_EscortRouteCost(1, 1400, 3000) == 1400);
+	CHECK(SG_EscortRouteCost(0, 1400, 3000) == 3000);
+	CHECK(SG_EscortRouteCost(0, 1400, SG_FIELD_INF) == -1);
+	CHECK(SG_EscortAssignmentScore(1400, 0) == 1400);
+	CHECK(SG_EscortAssignmentScore(1400, 1) == 1100);
+	CHECK(SG_EscortAssignmentScore(100, 1) == 0);
+	CHECK(SG_EscortAssignmentScore(-1, 1) == -1);
+	CHECK(SG_AutonomousEscortCandidate(1, 1, 0, -1, 1400));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 0, SG_ROLE_ATTACK, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 0, SG_ROLE_DEFEND, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 0, 0, -1, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 1, -1, 100));
+	CHECK(!SG_AutonomousEscortCandidate(0, 1, 0, -1, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 0, -1, -1));
+	CHECK(!SG_AutonomousEscortCandidate(2, 1, 0, -1, 100));
+}
+
+static void TestCarrierBeliefRequiresExactCurrentIdentity(void)
+{
+	CHECK(SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_RED, 1, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 1, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_RED, 1, 0));
+	CHECK(SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 0, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_RED, 0, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 0, 0));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(0, CTF_TEAM_BLUE, 0, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 2, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 0, 2));
 }
 
 int main(void)
@@ -681,13 +1315,28 @@ int main(void)
 	TestMembershipCapsAtFourDeterministically();
 	TestSharedGoAndBoundedForm();
 	TestImmediateReleaseAndSoloNeverWaits();
+	TestLeaderNeverWaitsForUnreachableFormation();
+	TestFormationReleasesWhenPartnerFallsBehind();
 	TestOneRecovererPreservesAttack();
+	TestRecoveryRouteAdmitsDisconnectedAttacker();
+	TestDisconnectedMembersDoNotReceivePressureDuty();
+	TestFullRosterMakesRoomForOnlyRecoverer();
+	TestFullRosterMakesRoomForOnlyEscort();
+	TestCarrierCannotSatisfyRecoveryCoverage();
+	TestEscortAdmissionProtectsOnlyRecoverer();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();
+	TestHumanCarrierReceivesBotEscort();
+	TestCarrierStandoffKeepsRecovery();
+	TestEgressDoesNotPressAnUnreachableMember();
 	TestWeaponRouteRetirementVerdicts();
+	TestWeaponDetourPreservesStandPressure();
 	TestReturnCaptureAndLifecycleReset();
 	TestInvalidInputDoesNotMutate();
+	TestHomeFlagApproachPricing();
+	TestDeadSlotsDoNotReserveDefenderRanks();
+	TestCarrierBeliefRequiresExactCurrentIdentity();
 	if (failures)
 	{
 		fprintf(stderr, "sg_strike_test: %d failure(s)\n", failures);

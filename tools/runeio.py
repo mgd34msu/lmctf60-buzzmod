@@ -688,6 +688,58 @@ def _normalize_identity(identity: object) -> RuneIdentity:
     )
 
 
+def _verify_expected_identity(
+    actual: RuneIdentity, expected: RuneIdentity
+) -> None:
+    """Require an artifact identity to match one caller-supplied authority."""
+
+    expected = _normalize_identity(expected)
+    if actual.map_name != expected.map_name:
+        raise _wire_error(
+            contract.RLW_MAPNAME_MISMATCH,
+            f"header={actual.map_name!r}, expected={expected.map_name!r}",
+        )
+    if actual.bsp_checksum != expected.bsp_checksum:
+        raise _wire_error(
+            contract.RLW_BSP_CHECKSUM_MISMATCH,
+            f"header=0x{actual.bsp_checksum:08x}, "
+            f"expected=0x{expected.bsp_checksum:08x}",
+        )
+    if actual.entity_crc32 != expected.entity_crc32:
+        raise _wire_error(
+            contract.RLW_ENTITY_CRC_MISMATCH,
+            f"header=0x{actual.entity_crc32:08x}, "
+            f"expected=0x{expected.entity_crc32:08x}",
+        )
+    if actual.host_physics_id != expected.host_physics_id:
+        raise _wire_error(
+            contract.RLW_PHYSICS_ID_MISMATCH,
+            f"header={actual.host_physics_id}, "
+            f"expected={expected.host_physics_id}",
+        )
+    actual_law = (
+        actual.physics_flags,
+        struct.pack("<f", actual.gravity),
+        struct.pack("<f", actual.airaccelerate),
+        struct.pack("<f", actual.maxvelocity),
+        actual.pmove_substep_ms,
+        actual.server_frame_ms,
+    )
+    expected_law = (
+        expected.physics_flags,
+        struct.pack("<f", expected.gravity),
+        struct.pack("<f", expected.airaccelerate),
+        struct.pack("<f", expected.maxvelocity),
+        expected.pmove_substep_ms,
+        expected.server_frame_ms,
+    )
+    if actual_law != expected_law:
+        raise _wire_error(
+            contract.RLW_BAD_PHYSICS_LAW,
+            "header does not match expected active physics",
+        )
+
+
 def _encode_seed(seed: object, index: int) -> tuple[RuneSeed, bytes]:
     if not isinstance(seed, RuneSeed):
         raise _wire_error(
@@ -2433,10 +2485,25 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also require nonzero trigger, node, inventory-edge, and plan counts",
     )
+    parser.add_argument(
+        "--expected-identity",
+        metavar="REFERENCE_RUNE",
+        help=(
+            "require the artifact identity to match the authenticated identity "
+            "in REFERENCE_RUNE"
+        ),
+    )
     parser.add_argument("artifact", help="path to the generated .rune file")
     args = parser.parse_args(argv)
     try:
-        summary = summarize_rune(read_rune(args.artifact))
+        expected_identity = None
+        if args.expected_identity is not None:
+            expected_identity = read_rune(
+                args.expected_identity
+            ).header.identity
+        summary = summarize_rune(
+            read_rune(args.artifact, expected_identity=expected_identity)
+        )
     except RuneWireError as exc:
         parser.error(str(exc))
     if args.require_mechanisms and any(

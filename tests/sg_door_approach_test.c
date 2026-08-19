@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#define CELLAR_WITNESS_WATERTYPE 0x18000020
+
 static int failures;
 
 #define CHECK(condition_) do { \
@@ -24,6 +26,15 @@ static void Observation(sg_door_approach_observation_t *observation,
 	observation->static_support = grounded;
 	observation->population_stable = 1;
 	observation->sweep_clear = 1;
+}
+
+static void Water(sg_door_approach_observation_t *observation,
+	int waterlevel, int watertype)
+{
+	observation->waterlevel = waterlevel;
+	observation->watertype = watertype;
+	observation->hazardous_liquid =
+	    (watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
 }
 
 static void Initial(pmove_state_t *pms, const short source[3])
@@ -196,10 +207,10 @@ static void TestCapsuleAndFailClosedInputs(void)
 	    &observation).reason == SG_DOOR_APPROACH_REASON_NONE);
 	CHECK(SG_DoorApproachPreStep(&state, &observation, 24).reason ==
 	    SG_DOOR_APPROACH_REASON_CADENCE);
-	observation.waterlevel = 1;
+	Water(&observation, 2, CONTENTS_WATER);
 	CHECK(SG_DoorApproachPreStep(&state, &observation, 25).reason ==
 	    SG_DOOR_APPROACH_REASON_WATER);
-	observation.waterlevel = 0;
+	Water(&observation, 0, 0);
 	observation.population_stable = 0;
 	CHECK(SG_DoorApproachPreStep(&state, &observation, 25).reason ==
 	    SG_DOOR_APPROACH_REASON_POPULATION);
@@ -213,12 +224,74 @@ static void TestCapsuleAndFailClosedInputs(void)
 	    SG_DOOR_APPROACH_REASON_POSE);
 }
 
+static void TestShallowWaterState(void)
+{
+	const short source[3] = { 0, 0, 0 };
+	const short anchor[3] = { 800, 0, 0 };
+	sg_door_approach_observation_t observation;
+	sg_door_approach_result_t result;
+	sg_door_approach_state_t state;
+	pmove_state_t pms;
+
+	CHECK(SG_DoorApproachWaterSafe(0, 0));
+	CHECK(SG_DoorApproachWaterSafe(1, CONTENTS_WATER));
+	CHECK(SG_DoorApproachWaterSafe(1, CELLAR_WITNESS_WATERTYPE));
+	CHECK(!SG_DoorApproachWaterSafe(1, 0));
+	CHECK(!SG_DoorApproachWaterSafe(1, CONTENTS_MIST));
+	CHECK(!SG_DoorApproachWaterSafe(2, CONTENTS_WATER));
+	CHECK(!SG_DoorApproachWaterSafe(1, CONTENTS_WATER | CONTENTS_LAVA));
+	CHECK(!SG_DoorApproachWaterSafe(1, CONTENTS_WATER | CONTENTS_SLIME));
+
+	Initial(&pms, source);
+	Observation(&observation, &pms, 1);
+	Water(&observation, 1, CELLAR_WITNESS_WATERTYPE);
+	CHECK(SG_DoorApproachBegin(&state, source, anchor,
+	    &observation).reason == SG_DOOR_APPROACH_REASON_NONE);
+	CHECK(state.expected_waterlevel == 1);
+	CHECK(state.expected_watertype == CELLAR_WITNESS_WATERTYPE);
+	CHECK(SG_DoorApproachPreStep(&state, &observation, 25).reason ==
+	    SG_DOOR_APPROACH_REASON_NONE);
+
+	/* An externally changed liquid classification is state drift even when the
+	 * fixed-point Pmove bytes are unchanged. */
+	Water(&observation, 1, CONTENTS_WATER);
+	CHECK(SG_DoorApproachPreStep(&state, &observation, 25).reason ==
+	    SG_DOOR_APPROACH_REASON_POSE);
+
+	Initial(&pms, source);
+	Observation(&observation, &pms, 1);
+	CHECK(SG_DoorApproachBegin(&state, source, anchor,
+	    &observation).reason == SG_DOOR_APPROACH_REASON_NONE);
+	pms.origin[0]++;
+	CHECK(SG_DoorApproachPreStep(&state, &observation, 25).reason ==
+	    SG_DOOR_APPROACH_REASON_NONE);
+	Observation(&observation, &pms, 1);
+	Water(&observation, 1, CELLAR_WITNESS_WATERTYPE);
+	result = SG_DoorApproachPostStep(&state, &observation, 25);
+	CHECK(result.reason == SG_DOOR_APPROACH_REASON_NONE);
+	CHECK(state.expected_waterlevel == 1);
+	CHECK(state.expected_watertype == CELLAR_WITNESS_WATERTYPE);
+	CHECK(SG_DoorApproachPreStep(&state, &observation, 25).reason ==
+	    SG_DOOR_APPROACH_REASON_NONE);
+
+	Initial(&pms, source);
+	Observation(&observation, &pms, 1);
+	Water(&observation, 2, CONTENTS_WATER);
+	CHECK(SG_DoorApproachBegin(&state, source, anchor,
+	    &observation).reason == SG_DOOR_APPROACH_REASON_WATER);
+	Observation(&observation, &pms, 1);
+	Water(&observation, 1, CONTENTS_WATER | CONTENTS_LAVA);
+	CHECK(SG_DoorApproachBegin(&state, source, anchor,
+	    &observation).reason == SG_DOOR_APPROACH_REASON_WATER);
+}
+
 int main(void)
 {
 	TestLmctf58Case8Finalizer();
 	TestBoundaryFinalizer();
 	TestAirAndFallBounds();
 	TestCapsuleAndFailClosedInputs();
+	TestShallowWaterState();
 	if (failures)
 	{
 		fprintf(stderr, "sg_door_approach_test: %d failure(s)\n", failures);

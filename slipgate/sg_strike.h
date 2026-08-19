@@ -110,6 +110,7 @@ typedef struct sg_strike_frame_s
 	int own_flag_home;
 	int enemy_flag_home;
 	int enemy_flag_dropped;
+	int enemy_flag_carried;
 	int recent_enemy_room_death;
 	unsigned events;
 	int carrier_slot;
@@ -151,6 +152,13 @@ int SG_StrikeMember(const sg_strike_team_t *team, int slot);
 int SG_StrikeParticipant(const sg_strike_team_t *team, int slot);
 int SG_StrikeMemberNeedsWeapon(const sg_strike_team_t *team, int slot,
 	float now);
+/* A weapon errand is subordinate to stand pressure.  A member already inside
+ * the five-second enemy-flag band stays on the objective; outside that band,
+ * the weapon must be both deadline-reachable and at least one second cheaper
+ * than the current enemy-flag route. */
+int SG_StrikeWeaponDetourAllowed(int needs_weapon, int strike_rush,
+	int carrying, int combat_engaged, int direct_flag_touch,
+	int enemy_flag_goal_ms, int weapon_goal_ms, int remaining_ms);
 int SG_StrikeMemberShouldHold(const sg_strike_team_t *team, int slot);
 int SG_StrikeMemberRushes(const sg_strike_team_t *team, int slot);
 sg_strike_weapon_route_verdict_t SG_StrikeWeaponRouteVerdict(
@@ -161,5 +169,73 @@ int SG_StrikeWeaponControllerPhysical(
 sg_strike_weapon_door_retirement_t SG_StrikeWeaponDoorRetirement(
 	int release_proved_clear, int recovery_expired, int hold_open_ready);
 int SG_StrikeGenericRailAllowed(int strike_active);
+
+/* A concrete pressure duty persists independently of the transient HOLD/RUSH
+ * release mask.  While the coordinator owns a bot, its duty overrides the
+ * organic role for enemy-pressure policy. */
+int SG_StrikeDutyEnemyPressure(sg_strike_duty_t duty);
+int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
+	sg_strike_duty_t duty);
+/* Corner pursuit follows the objective route it supports.  CLEAR/PRESS and
+ * recovery duties may keep a recently lost contact.  BREACH still fights a
+ * visible defender but may not abandon the first flag-entry route to camp the
+ * defender after sight breaks; escort and carrier routes have the same ban. */
+int SG_StrikeDutyCombatPursuit(sg_strike_duty_t duty);
+int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
+	sg_strike_duty_t duty);
+/* When several pressure bodies reach a defended flag threshold, the assigned
+ * screen owns the hold and the breach body owns physical entry.  NONE is the
+ * organic-attacker fallback; same-duty ties retain deterministic client order. */
+int SG_StrikeThresholdMateOwnsHold(sg_strike_duty_t self_duty,
+	int self_entity, sg_strike_duty_t mate_duty, int mate_entity);
+/* Strict room inference counts bodies that can presently defend, not occupied
+ * scoreboard slots.  Death is public and retires the sighting row immediately;
+ * counting the corpse only on the roster side manufactures a defender. */
+static inline int SG_StrikeLiveEnemyRosterMember(int inuse, int has_client,
+	int enemy_team_match, int dead, int health)
+{
+	if ((inuse != 0 && inuse != 1) ||
+	    (has_client != 0 && has_client != 1) ||
+	    (enemy_team_match != 0 && enemy_team_match != 1) ||
+	    (dead != 0 && dead != 1))
+		return 0;
+	return inuse && has_client && enemy_team_match && !dead && health > 0;
+}
+/* Rearguard duty belongs to enemy-room pressure and to the explicit escort,
+ * never to recovery or the carrier itself. */
+int SG_StrikeDutyRearguard(sg_strike_duty_t duty);
+int SG_StrikeRearguardActive(int ordinary_rearguard, int strike_active,
+	sg_strike_duty_t duty);
+int SG_StrikeEscortActive(int ordinary_escort, int strike_active,
+	sg_strike_duty_t duty);
+/* A concrete coordinator duty is an objective mission, so optional item-pad
+ * preparation cannot remain live underneath its route and aim authority. */
+int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);
+
+/* The coordinator replaces rally timing, not independent live-enemy approach
+ * actions.  Resolve those actions from the effective pressure duty and the
+ * exact two-to-five-second route band. */
+int SG_StrikePrebreachApproachAllowed(int strike_active,
+	int strike_pressure, int organic_attack, int goal_ms);
+
+/* Bounded throttle for the exact physical flag-touch envelope.  It tightens a
+ * fast misaligned turn without granting touch, changing aim, or stopping an
+ * aligned run through the item. */
+float SG_StrikeFlagTouchThrottle(int touch_authorized, float distance,
+	float speed, float alignment);
+
+/* A carrier may home on the physical own-flag entity only while that entity is
+ * public at home or the normal visible, same-floor, hull-clear dropped touch
+ * seam has admitted it.  This keeps hidden dropped coordinates out of the
+ * carrier route while leaving the dedicated recovery mission authoritative. */
+int SG_StrikeCarrierOwnFlagAimAllowed(int flag_available, int flag_at_home,
+	int direct_touch);
+
+/* Bounded pricing correction for the last proved RUNs toward a home enemy
+ * flag.  This never grants touch or movement authority; it only breaks a
+ * near-stand field plateau in favor of physical progress toward the item. */
+float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
+	float current_distance, float candidate_distance, float vertical_delta,
+	int current_goal_ms, int candidate_goal_ms);
 
 #endif /* SG_STRIKE_H */

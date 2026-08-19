@@ -61,6 +61,9 @@
     <ClCompile Include="g_main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="g_maplist.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="g_menu.c">
       <Filter>Source Files</Filter>
     </ClCompile>
