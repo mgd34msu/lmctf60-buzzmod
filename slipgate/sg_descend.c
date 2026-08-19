@@ -2658,7 +2658,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 * surge cancels every hold when a defender drops). Ten seconds
 		 * caps the patience: a stalemate grab beats no grab.
 		 */
-		if (role == SG_ROLE_ATTACK)
+		if (tc->strike_pressure)
 		{
 			int s3, room = 0;
 			edict_t *live_enemy = SG_CombatLiveEnemy(e);
@@ -2768,7 +2768,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 						continue;
 					if (mb5->ent->client->ctf.teamnum != team)
 						continue;
-					if (mb5->last_role == (int)SG_ROLE_ATTACK &&
+					if (SG_StrikeEnemyPressureSnapshot(mb5) &&
 					    mb5->last_goalcost >= 0 &&
 					    mb5->last_goalcost < 1200 &&
 					    (int)(mb5->ent - g_edicts) <

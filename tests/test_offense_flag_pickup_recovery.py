@@ -338,6 +338,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("goal_field[bot->seed] < 400", terminal)
         self.assertNotIn("role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY", terminal)
 
+        clean_grab = between(descend, "THE CLEAN GRAB.", "THE REARGUARD.")
+        self.assertIn("if (tc->strike_pressure)", clean_grab)
+        self.assertIn("SG_StrikeEnemyPressureSnapshot(mb5)", clean_grab)
+        self.assertNotIn("mb5->last_role == (int)SG_ROLE_ATTACK", clean_grab)
+
         blue_flag = (232.0, -816.0, 192.125)
         seed_618_direct = direct_touch_authorized(
             (-32.0, -560.0, 40.0), blue_flag,
