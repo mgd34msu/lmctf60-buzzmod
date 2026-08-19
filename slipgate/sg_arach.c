@@ -3507,9 +3507,10 @@ void SG_BotThink(sg_bot_t *bot)
 
 	Think_LiveWeights(bot, &tc);    /* fills tc.live */
 	tc.w = &tc.live;
-	/* The shared weapon field contains every visible pad, including pads this
-	 * client already owns under WEAPONS_STAY.  Price only the exact live set
-	 * accepted by Pickup_Weapon for this bot. */
+	/* Shared class fields erase client admission and pickup magnitude.  Replace
+	 * them with exact live client fields before optional-item pricing: weapons
+	 * must improve the held tier, ammo must fit the held gun, and health/armor
+	 * source costs retain the number of points the touch would actually add. */
 	for (int item_class = 0; item_class < SG_FIELD_CLASSES; item_class++)
 		tc.collectible_item_field[item_class] = sg_fields.item[item_class];
 	tc.collectible_item_field[SG_FC_WEAPON] =

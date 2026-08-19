@@ -15,6 +15,10 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
     def test_generic_weapon_detour_never_falls_back_to_broad_field(self) -> None:
         program = textwrap.dedent(
             r"""
+            enum {
+                SG_FC_WEAPON = 0, SG_FC_ARMOR, SG_FC_AMMO,
+                SG_FC_HEALTH, SG_FC_RUNE, SG_FC_POWERUP
+            };
             #include "slipgate/sg_item_route.h"
 
             int main(void)
@@ -287,7 +291,9 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
 
         self.assertIn("qboolean G_AmmoPickupEligible", items)
         self.assertIn("G_AmmoItemPickupEligible(item, ent)", items)
-        self.assertIn("!G_AmmoPickupEligible(item, bot->ent)", goal)
+        self.assertIn("G_AmmoPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_AmmoRouteAdmission(item->item->tag, held_ammo_tag",
+                      goal)
         self.assertIn("SG_CollectibleAmmoField(bot)", arach)
 
     def test_armor_surface_excludes_zero_salvage_pads(self) -> None:

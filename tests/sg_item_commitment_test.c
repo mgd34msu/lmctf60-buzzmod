@@ -430,6 +430,14 @@ int main(void)
 	CHECK(!SG_WeaponUpgradeRouteAdmission(0, 2, true));
 	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 0, true));
 	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 2, 2));
+	CHECK(SG_ItemGainSourceCost(25, 25) == 0);
+	CHECK(SG_ItemGainSourceCost(10, 20) == 1500);
+	CHECK(SG_ItemGainSourceCost(5, 20) == 4500);
+	CHECK(SG_ItemGainSourceCost(2, 100) == 73500);
+	CHECK(SG_ItemGainSourceCost(1, 1000000) ==
+	      SG_ITEM_ROUTE_MAX_SOURCE_COST);
+	CHECK(SG_ItemGainSourceCost(0, 20) == -1);
+	CHECK(SG_ItemGainSourceCost(21, 20) == -1);
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, false, false));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, false, false));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1, false, false));

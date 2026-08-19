@@ -639,6 +639,20 @@ qboolean G_HealthPickupEligible(edict_t *ent, edict_t *other)
 	    (ent->style & HEALTH_IGNORE_MAX) != 0) ? true : false;
 }
 
+int G_HealthPickupGain(edict_t *ent, edict_t *other)
+{
+	int room;
+
+	if (!ent || !ent->item || !other || !other->client || ent->count <= 0)
+		return 0;
+	if (ent->style & HEALTH_IGNORE_MAX)
+		return ent->count;
+	room = other->max_health - other->health;
+	if (room <= 0)
+		return 0;
+	return ent->count < room ? ent->count : room;
+}
+
 qboolean Pickup_Health(edict_t* ent, edict_t* other)
 {
 	if (!G_HealthPickupEligible(ent, other))
@@ -716,7 +730,13 @@ qboolean G_ArmorPickupEligible(edict_t *ent, edict_t *other)
 	int old_index;
 	gitem_armor_t *oldinfo, *newinfo;
 
-	if (!ent || !ent->item || !ent->item->info || !other || !other->client)
+	if (!ent || !ent->item || !other || !other->client)
+		return false;
+	/* Shards deliberately have no armor-info record in itemlist.  Their
+	 * pickup law is the unconditional two-point branch in Pickup_Armor. */
+	if (ent->item->tag == ARMOR_SHARD)
+		return true;
+	if (!ent->item->info)
 		return false;
 	newinfo = (gitem_armor_t *)ent->item->info;
 	old_index = ArmorIndex(other);
@@ -730,10 +750,53 @@ qboolean G_ArmorPickupEligible(edict_t *ent, edict_t *other)
 		oldinfo = &bodyarmor_info;
 	else
 		return false;
-	return SG_ArmorPickupAllowed(ent->item->tag == ARMOR_SHARD, 1,
+	return SG_ArmorPickupAllowed(false, 1,
 	    oldinfo->normal_protection,
 	    other->client->pers.inventory[old_index], oldinfo->max_count,
 	    newinfo->normal_protection, newinfo->base_count) ? true : false;
+}
+
+int G_ArmorPickupGain(edict_t *ent, edict_t *other)
+{
+	int old_index, old_count, new_count, salvage_count;
+	gitem_armor_t *oldinfo, *newinfo;
+
+	if (!ent || !ent->item || !other || !other->client)
+		return 0;
+	if (ent->item->tag == ARMOR_SHARD)
+		return 2;
+	if (!ent->item->info)
+		return 0;
+	newinfo = (gitem_armor_t *)ent->item->info;
+	old_index = ArmorIndex(other);
+	if (!old_index)
+		return newinfo->base_count > 0 ? newinfo->base_count : 0;
+	if (old_index == jacket_armor_index)
+		oldinfo = &jacketarmor_info;
+	else if (old_index == combat_armor_index)
+		oldinfo = &combatarmor_info;
+	else if (old_index == body_armor_index)
+		oldinfo = &bodyarmor_info;
+	else
+		return 0;
+	old_count = other->client->pers.inventory[old_index];
+	if (newinfo->normal_protection > oldinfo->normal_protection)
+	{
+		salvage_count = (int)((oldinfo->normal_protection /
+		    newinfo->normal_protection) * (float)old_count);
+		new_count = newinfo->base_count + salvage_count;
+		if (new_count > newinfo->max_count)
+			new_count = newinfo->max_count;
+	}
+	else
+	{
+		salvage_count = (int)((newinfo->normal_protection /
+		    oldinfo->normal_protection) * (float)newinfo->base_count);
+		new_count = old_count + salvage_count;
+		if (new_count > oldinfo->max_count)
+			new_count = oldinfo->max_count;
+	}
+	return new_count > old_count ? new_count - old_count : 0;
 }
 
 qboolean Pickup_Armor(edict_t* ent, edict_t* other)

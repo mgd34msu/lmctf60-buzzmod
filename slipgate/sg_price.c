@@ -176,8 +176,9 @@ float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
 	 * unknowable once many interchangeable items share one field, which gives
 	 * cost to the NEAREST of them, so the triangle is approximated by to_item
 	 * alone against scale. Honest limitation, recorded -- it holds for the
-	 * classes whose members are interchangeable (a health box is a health
-	 * box), which is why identity-bearing classes got per-item fields.
+	 * classes whose members share one utility axis.  The live health and armor
+	 * fields encode exact pickup gain as source cost before reaching this
+	 * approximation; identity-bearing classes still need per-item fields.
 	 */
 	if (to_item >= SG_FIELD_INF)
 		return 0.0f;

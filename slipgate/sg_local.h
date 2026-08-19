@@ -569,7 +569,8 @@ enum
 
 /*
  * Per-item fields: a class field gives cost to the NEAREST item of the class,
- * which is all the detour arithmetic needs when the items are interchangeable.
+ * which is all the detour arithmetic needs when the items share one utility
+ * axis (client-specific fields may encode magnitude as source cost).
  * For the classes where identity decides the worth -- powerups and runes, a
  * handful of entities each -- one field per item is kept as well, so the
  * detour triangle can be evaluated exactly against THAT item's position.

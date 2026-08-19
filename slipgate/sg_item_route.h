@@ -2,6 +2,7 @@
 #define SG_ITEM_ROUTE_H
 
 #define SG_ITEM_ROUTE_POWERUP_LEAD_SECONDS 4.0f
+#define SG_ITEM_ROUTE_MAX_SOURCE_COST 0x3ffffffe
 
 /* Weapon attraction is client-specific under WEAPONS_STAY.  Never fall back
  * to the class-wide field when this bot has no collectible weapon: that field
@@ -63,6 +64,23 @@ static inline int SG_WeaponUpgradeRouteAdmission(int current_tier,
 	    (physical_pickup_eligible != 0 && physical_pickup_eligible != 1))
 		return 0;
 	return physical_pickup_eligible && candidate_tier > current_tier;
+}
+
+/* Convert an exact pickup gain into the class field's existing 1500 ms
+ * utility denominator.  The best currently collectible item is cost zero;
+ * half its gain is one denominator (1500 ms), one quarter is three. */
+static inline int SG_ItemGainSourceCost(int gain, int best_gain)
+{
+	long long numerator, cost;
+
+	if (gain <= 0 || best_gain <= 0 || gain > best_gain)
+		return -1;
+	if (gain == best_gain)
+		return 0;
+	numerator = 1500LL * (long long)(best_gain - gain);
+	cost = (numerator + gain - 1) / gain;
+	return cost <= SG_ITEM_ROUTE_MAX_SOURCE_COST ? (int)cost
+	                                             : SG_ITEM_ROUTE_MAX_SOURCE_COST;
 }
 
 #endif

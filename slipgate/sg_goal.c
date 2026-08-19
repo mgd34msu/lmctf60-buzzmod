@@ -859,6 +859,7 @@ static unsigned char sg_health_collectible_ready[SG_MAXBOTS];
 static int sg_health_collectible_count[SG_MAXBOTS];
 static int sg_health_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_health_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_health_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_ammo_collectible_field[SG_MAXBOTS][SG_MAX_SEEDS];
 static unsigned sg_ammo_collectible_epoch[SG_MAXBOTS];
 static unsigned char sg_ammo_collectible_ready[SG_MAXBOTS];
@@ -871,6 +872,7 @@ static unsigned char sg_armor_collectible_ready[SG_MAXBOTS];
 static int sg_armor_collectible_count[SG_MAXBOTS];
 static int sg_armor_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_armor_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_armor_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -977,7 +979,8 @@ const int *SG_CollectibleHealthField(sg_bot_t *bot)
 	int ents[SG_WEAPON_FIELD_SOURCES];
 	int seeds[SG_WEAPON_FIELD_SOURCES];
 	int costs[SG_WEAPON_FIELD_SOURCES];
-	int bi, count = 0, i;
+	int gains[SG_WEAPON_FIELD_SOURCES];
+	int bi, best_gain = 0, count = 0, i;
 	qboolean same;
 
 	if (!bot || !bot->ent || !SG_Rune())
@@ -994,12 +997,16 @@ const int *SG_CollectibleHealthField(sg_bot_t *bot)
 		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
 		    !G_HealthPickupEligible(item, bot->ent))
 			continue;
+		gains[count] = G_HealthPickupGain(item, bot->ent);
+		if (gains[count] <= 0)
+			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
 			continue;
 		ents[count] = i;
 		seeds[count] = seed;
-		costs[count] = 0;
+		if (gains[count] > best_gain)
+			best_gain = gains[count];
 		count++;
 	}
 	if (count == 0)
@@ -1008,6 +1015,8 @@ const int *SG_CollectibleHealthField(sg_bot_t *bot)
 		sg_health_collectible_count[bi] = 0;
 		return NULL;
 	}
+	for (i = 0; i < count; i++)
+		costs[i] = SG_ItemGainSourceCost(gains[i], best_gain);
 
 	same = sg_health_collectible_ready[bi] &&
 	       sg_health_collectible_epoch[bi] ==
@@ -1015,7 +1024,8 @@ const int *SG_CollectibleHealthField(sg_bot_t *bot)
 	       sg_health_collectible_count[bi] == count;
 	for (i = 0; same && i < count; i++)
 		if (sg_health_collectible_ent[bi][i] != ents[i] ||
-		    sg_health_collectible_seed[bi][i] != seeds[i])
+		    sg_health_collectible_seed[bi][i] != seeds[i] ||
+		    sg_health_collectible_cost[bi][i] != costs[i])
 			same = false;
 	if (!same)
 	{
@@ -1025,6 +1035,7 @@ const int *SG_CollectibleHealthField(sg_bot_t *bot)
 		{
 			sg_health_collectible_ent[bi][i] = ents[i];
 			sg_health_collectible_seed[bi][i] = seeds[i];
+			sg_health_collectible_cost[bi][i] = costs[i];
 		}
 		sg_health_collectible_count[bi] = count;
 		sg_health_collectible_epoch[bi] =
@@ -1109,7 +1120,8 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot)
 	int ents[SG_WEAPON_FIELD_SOURCES];
 	int seeds[SG_WEAPON_FIELD_SOURCES];
 	int costs[SG_WEAPON_FIELD_SOURCES];
-	int bi, count = 0, i;
+	int gains[SG_WEAPON_FIELD_SOURCES];
+	int bi, best_gain = 0, count = 0, i;
 	qboolean same;
 
 	if (!bot || !bot->ent || !SG_Rune())
@@ -1126,12 +1138,16 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot)
 		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
 		    !G_ArmorPickupEligible(item, bot->ent))
 			continue;
+		gains[count] = G_ArmorPickupGain(item, bot->ent);
+		if (gains[count] <= 0)
+			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
 			continue;
 		ents[count] = i;
 		seeds[count] = seed;
-		costs[count] = 0;
+		if (gains[count] > best_gain)
+			best_gain = gains[count];
 		count++;
 	}
 	if (count == 0)
@@ -1140,6 +1156,8 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot)
 		sg_armor_collectible_count[bi] = 0;
 		return NULL;
 	}
+	for (i = 0; i < count; i++)
+		costs[i] = SG_ItemGainSourceCost(gains[i], best_gain);
 
 	same = sg_armor_collectible_ready[bi] &&
 	       sg_armor_collectible_epoch[bi] ==
@@ -1147,7 +1165,8 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot)
 	       sg_armor_collectible_count[bi] == count;
 	for (i = 0; same && i < count; i++)
 		if (sg_armor_collectible_ent[bi][i] != ents[i] ||
-		    sg_armor_collectible_seed[bi][i] != seeds[i])
+		    sg_armor_collectible_seed[bi][i] != seeds[i] ||
+		    sg_armor_collectible_cost[bi][i] != costs[i])
 			same = false;
 	if (!same)
 	{
@@ -1157,6 +1176,7 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot)
 		{
 			sg_armor_collectible_ent[bi][i] = ents[i];
 			sg_armor_collectible_seed[bi][i] = seeds[i];
+			sg_armor_collectible_cost[bi][i] = costs[i];
 		}
 		sg_armor_collectible_count[bi] = count;
 		sg_armor_collectible_epoch[bi] =

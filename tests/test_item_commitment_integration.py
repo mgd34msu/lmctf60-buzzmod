@@ -166,6 +166,28 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
                        weapon_start]
         self.assertIn("WeaponPickupRouteEligible(item, bot->ent)", defense)
         self.assertNotIn("SG_WeaponUpgradeRouteAdmission", defense)
+        health_start = goal.index("const int *SG_CollectibleHealthField")
+        health = goal[health_start:ammo_start]
+        self.assertIn("G_HealthPickupGain(item, bot->ent)", health)
+        self.assertIn("SG_ItemGainSourceCost(gains[i], best_gain)", health)
+        self.assertIn("sg_health_collectible_cost[bi][i] != costs[i]", health)
+        armor_start = goal.index("const int *SG_CollectibleArmorField")
+        armor = goal[armor_start:goal.index(
+            "static qboolean DefenseSupplyFindTarget", armor_start)]
+        self.assertIn("G_ArmorPickupGain(item, bot->ent)", armor)
+        self.assertIn("SG_ItemGainSourceCost(gains[i], best_gain)", armor)
+        self.assertIn("sg_armor_collectible_cost[bi][i] != costs[i]", armor)
+
+        health_gain = items[items.index("int G_HealthPickupGain"):
+                            items.index("qboolean Pickup_Health")]
+        self.assertIn("ent->style & HEALTH_IGNORE_MAX", health_gain)
+        self.assertIn("other->max_health - other->health", health_gain)
+        armor_admission = items[items.index("qboolean G_ArmorPickupEligible"):
+                                items.index("qboolean Pickup_Armor")]
+        shard = armor_admission.index("ent->item->tag == ARMOR_SHARD")
+        info = armor_admission.index("if (!ent->item->info)")
+        self.assertLess(shard, info)
+        self.assertIn("int G_ArmorPickupGain", armor_admission)
         detour = price[price.index("float Detour_Value"):price.index(
             "float Mega_Detour")]
         self.assertIn("Detour_IdentityItemEligible(tc, cls, kent)", detour)
