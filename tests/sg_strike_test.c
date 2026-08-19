@@ -3,6 +3,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_nade_policy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1226,6 +1227,12 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(!SG_InterposeLeadStation(3000, 4200));
 	CHECK(SG_InterposeLeadStation(-1, 4200));
 	CHECK(SG_InterposeLeadStation(3000, SG_FIELD_INF));
+	CHECK(SG_NadeCookShouldHold(2, 2.0f, -1.0f));
+	CHECK(SG_NadeCookShouldHold(2, 2.0f, 1.0f));
+	CHECK(!SG_NadeCookShouldHold(0, 2.0f, -1.0f));
+	CHECK(!SG_NadeCookShouldHold(2, 2.0f, -2.0f));
+	CHECK(!SG_NadeCookShouldHold(2, 0.6f, 0.1f));
+	CHECK(!SG_NadeCookShouldHold(2, NAN, 0.1f));
 	CHECK(!SG_AttackObjectiveUsesFixedStand(-1));
 	CHECK(SG_AttackObjectiveUsesFixedStand(0));
 	CHECK(SG_AttackObjectiveUsesFixedStand(15));

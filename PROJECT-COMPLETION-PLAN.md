@@ -269,6 +269,9 @@ The lone autonomous escort also chooses that station from the fresh threat's
 earned position on the homeward route: defenders ahead produce a lead screen,
 chasers behind produce a trail screen, and client-slot parity no longer decides
 which side of the carrier gets protected.
+Blocked grenade arcs now retire the cook without falling through into the
+ordinary fuse path and re-asserting the attack button. A bot cannot forget the
+transaction while the engine continues holding a live grenade.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
@@ -1435,6 +1438,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       The single autonomous escort selects lead versus trail from the fresh
       threat's earned home-route cost, screening a defender ahead or a chaser
       behind instead of letting client-slot parity choose the formation side.
+      A blocked cooked-grenade arc now leaves the transaction and trigger off
+      for the complete command frame; the negative blocked-flight sentinel
+      cannot fall through and masquerade as a still-pending ballistic solve.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

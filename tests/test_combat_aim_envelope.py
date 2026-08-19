@@ -437,6 +437,22 @@ int main(void)
 
 
 class CombatAimEnvelopeTest(unittest.TestCase):
+    def test_blocked_grenade_arc_cannot_rearm_the_trigger(self) -> None:
+        move = (ROOT / "slipgate" / "sg_move.c").read_text()
+        cook = move[move.index("if (!proved_control && bot->nade_phase == 2)"):
+                    move.index("SOUND-DIRECTED FIRE")]
+        blocked = cook.index("nfly = -2.0f;   /* blocked: no throw */")
+        retire = cook.index("bot->nade_phase = 0;    /* abandon, cost-free */",
+                            blocked)
+        guard = cook.index("if (bot->nade_phase == 2)", retire)
+        hold = cook.index("SG_NadeCookShouldHold(bot->nade_phase, ntmr, nfly)",
+                          guard)
+        rearm = cook.index("cmd->buttons |= BUTTON_ATTACK;", hold)
+        self.assertLess(blocked, retire)
+        self.assertLess(retire, guard)
+        self.assertLess(guard, hold)
+        self.assertLess(hold, rearm)
+
     def test_real_weapon_commitment_is_the_compiled_default(self) -> None:
         cvars = (ROOT / "slipgate" / "sg_cvars.h").read_text()
         self.assertIn('X(wcommit, "sg_wcommit", "2")', cvars)

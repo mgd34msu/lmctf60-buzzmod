@@ -33,6 +33,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_nade_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
@@ -8105,6 +8106,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			else
 				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
 				         - 30.0f;
+			/* A blocked arc retires the transaction above.  Do not let the
+			 * ordinary fuse path re-arm BUTTON_ATTACK after that abort. */
+			if (bot->nade_phase == 2)
+			{
 			/*
 			 * THE SILENT COOK (observations). The zero-cost audit caught
 			 * the veer: this block owned the view for the whole cook
@@ -8144,8 +8149,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * bounced off (235: aim height alone left 69 percent of
 			 * pops grounded -- bounces and clipped arcs land before
 			 * the fuse, and a landed grenade is an announcement) */
-			if (ntmr > 0.6f &&
-			    (nfly < 0.0f || ntmr - 0.2f > nfly - 0.15f))
+			if (SG_NadeCookShouldHold(bot->nade_phase, ntmr, nfly))
 				cmd->buttons |= BUTTON_ATTACK;
 			else
 			{
@@ -8157,6 +8161,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					sg_host.dprint("NADE %s thrown fly=%.2f fuse=%.2f\n",
 					           e->client->pers.netname,
 				           nfly, ntmr - 0.2f);
+			}
 			}
 			}
 		}
