@@ -670,6 +670,7 @@ typedef struct
 	float		ws_armed;
 	qboolean	ws_panic;
 	int			ws_pre;
+	uint32_t	random_state;   /* private aim/trigger sequence per client */
 } sg_combat_state_t;
 
 static sg_combat_state_t sg_combat[SG_COMBAT_MAXCLIENTS];
@@ -700,9 +701,41 @@ static float	sg_cbt_why_next;
  * client on one level.  A caller may arrive before the level hook, so every
  * state-bearing public entry goes through Combat_ClientState as well.
  */
-static void Combat_ResetState(sg_combat_state_t *st)
+static uint32_t Combat_RandomNext(sg_combat_state_t *st)
+{
+	uint32_t state = st ? st->random_state : 0;
+
+	if (state == 0)
+		state = UINT32_C(0x6d2b79f5);
+	state ^= state >> 16;
+	state *= UINT32_C(0x7feb352d);
+	state ^= state >> 15;
+	state *= UINT32_C(0x846ca68b);
+	state ^= state >> 16;
+	if (state == 0)
+		state = UINT32_C(0x27d4eb2d);
+	if (st)
+		st->random_state = state;
+	return state;
+}
+
+static float Combat_RandomUnit(sg_combat_state_t *st)
+{
+	return (float)(Combat_RandomNext(st) & UINT32_C(0x00ffffff)) /
+	    16777216.0f;
+}
+
+static float Combat_RandomSigned(sg_combat_state_t *st)
+{
+	return 2.0f * Combat_RandomUnit(st) - 1.0f;
+}
+
+static void Combat_ResetState(sg_combat_state_t *st, unsigned identity)
 {
 	memset(st, 0, sizeof(*st));
+	st->random_state = (identity + 1u) * UINT32_C(0x9e3779b9) ^
+	    UINT32_C(0x85ebca6b);
+	(void)Combat_RandomNext(st);
 	st->band = -1;
 	st->want = -1;
 	st->post_sight = -1.0f;
@@ -731,7 +764,7 @@ static sg_combat_state_t *Combat_ClientState(edict_t *self)
 		return NULL;
 	if (!sg_combat_initialized[ci])
 	{
-		Combat_ResetState(&sg_combat[ci]);
+		Combat_ResetState(&sg_combat[ci], (unsigned)ci);
 		sg_combat_initialized[ci] = true;
 	}
 	return &sg_combat[ci];
@@ -743,7 +776,7 @@ void Combat_ResetClient(edict_t *self)
 
 	if (ci < 0)
 		return;
-	Combat_ResetState(&sg_combat[ci]);
+	Combat_ResetState(&sg_combat[ci], (unsigned)ci);
 	sg_combat_initialized[ci] = true;
 }
 
@@ -753,7 +786,7 @@ void Combat_ResetLevel(void)
 
 	for (i = 0; i < SG_COMBAT_MAXCLIENTS; i++)
 	{
-		Combat_ResetState(&sg_combat[i]);
+		Combat_ResetState(&sg_combat[i], (unsigned)i);
 		sg_combat_initialized[i] = true;
 	}
 	memset(sg_cbt_why, 0, sizeof(sg_cbt_why));
@@ -2026,7 +2059,7 @@ static int Combat_Band(sg_combat_state_t *st, float d)
  * removed, so the error is purely lateral and its magnitude maps cleanly onto
  * an angle (an offset of m added to a unit aim vector is an angle of atan(m)).
  */
-static void Combat_SamplePerp(vec3_t dir, vec3_t out)
+static void Combat_SamplePerp(sg_combat_state_t *st, vec3_t dir, vec3_t out)
 {
 	vec3_t	v;
 	float	d, len;
@@ -2034,9 +2067,9 @@ static void Combat_SamplePerp(vec3_t dir, vec3_t out)
 
 	for (tries = 0; tries < 4; tries++)
 	{
-		v[0] = crandom();
-		v[1] = crandom();
-		v[2] = crandom();
+		v[0] = Combat_RandomSigned(st);
+		v[1] = Combat_RandomSigned(st);
+		v[2] = Combat_RandomSigned(st);
 
 		d = DotProduct(v, dir);
 		VectorMA(v, -d, dir, v);
@@ -2055,7 +2088,7 @@ static void Combat_SamplePerp(vec3_t dir, vec3_t out)
 
 static void Combat_SampleError(sg_combat_state_t *st, vec3_t dir)
 {
-	Combat_SamplePerp(dir, st->err);
+	Combat_SamplePerp(st, dir, st->err);
 }
 
 /* ----------------------------------------------------------- aim texture */
@@ -2341,7 +2374,7 @@ static void Combat_TexWander(sg_combat_state_t *st, vec3_t dir)
 	if (w > 1.0f)
 		w = 1.0f;
 
-	Combat_SamplePerp(dir, kick);
+	Combat_SamplePerp(st, dir, kick);
 	VectorScale(st->err, 1.0f - w, st->err);
 	VectorMA(st->err, w, kick, st->err);
 
@@ -3771,7 +3804,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 					st->tap_until = level.time +
 					    sg_cv.tapvar->value *
 					    Combat_SkillLerp(skill, 0.45f, 0.12f) *
-					    (0.4f + 1.2f * random());
+					    (0.4f + 1.2f * Combat_RandomUnit(st));
 					if (sg_cv.debug->value)
 						sg_host.dprint("TAPDBG %s w=%d delay=%.2f\n",
 						           self->client->pers.netname, hw,
@@ -3830,7 +3863,8 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 		base = st->win_fire ? SG_FIRE_ON
 		                    : Combat_SkillLerp(skill, SG_FIRE_OFF_S0,
 		                                       SG_FIRE_OFF_S4);
-		st->win_end = level.time + base * (1.0f + SG_FIRE_JITTER * crandom());
+		st->win_end = level.time + base *
+		    (1.0f + SG_FIRE_JITTER * Combat_RandomSigned(st));
 	}
 
 	if (!st->win_fire)
@@ -4269,7 +4303,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		                       * M_PI / 180.0);
 		vec3_t perp;
 
-		Combat_SamplePerp(aim, perp);
+		Combat_SamplePerp(st, aim, perp);
 		VectorMA(lead, jit * len, perp, lead);
 
 		VectorSubtract(lead, eye, aim);
@@ -4340,7 +4374,8 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		else if (level.time >= st->err_next)
 		{
 			Combat_SampleError(st, aim);
-			st->err_next = level.time + 0.25f + 0.25f * random();
+			st->err_next = level.time + 0.25f +
+			    0.25f * Combat_RandomUnit(st);
 		}
 
 	/*
@@ -4716,5 +4751,16 @@ int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
 {
 	return Combat_TraceClears(weapon, enemy_hit != 0, unobstructed != 0,
 	                          teammate_hit != 0) ? 1 : 0;
+}
+
+uint32_t SG_CombatAimTestRandom(unsigned identity, unsigned steps)
+{
+	sg_combat_state_t st;
+	uint32_t value = 0;
+
+	Combat_ResetState(&st, identity);
+	while (steps-- > 0)
+		value = Combat_RandomNext(&st);
+	return value ? value : st.random_state;
 }
 #endif

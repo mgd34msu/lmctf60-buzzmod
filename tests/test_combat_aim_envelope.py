@@ -23,6 +23,7 @@ PROBE = r"""
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 level_locals_t level;
 
@@ -35,6 +36,7 @@ int SG_CombatAimTestWeaponRay(int weapon, int hand, int machinegun_shots,
     vec3_t muzzle_out, vec3_t dir_out, float *source_pad_out);
 int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
     int teammate_hit);
+unsigned SG_CombatAimTestRandom(unsigned identity, unsigned steps);
 
 enum {
     W_BLASTER = 0,
@@ -367,6 +369,23 @@ static int test_target_identity_hysteresis(void)
     return 0;
 }
 
+static int test_combat_randomness_is_per_client(void)
+{
+    int expected_random;
+    unsigned first;
+
+    srand(9917);
+    expected_random = rand();
+    srand(9917);
+    first = SG_CombatAimTestRandom(4, 3);
+    CHECK(first != 0);
+    CHECK(first == SG_CombatAimTestRandom(4, 3));
+    CHECK(first != SG_CombatAimTestRandom(5, 3));
+    CHECK(first != SG_CombatAimTestRandom(4, 4));
+    CHECK(rand() == expected_random);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(!test_exact_muzzle_offsets());
@@ -375,6 +394,7 @@ int main(void)
     CHECK(!test_chaingun_source_envelope());
     CHECK(!test_clear_shot_predicate());
     CHECK(!test_target_identity_hysteresis());
+    CHECK(!test_combat_randomness_is_per_client());
     puts("combat aim production probe: ok");
     return 0;
 }

@@ -226,6 +226,10 @@ change a defender's admitted circuit or observation time.
 Enabled lateral ribbon lanes and drift intervals likewise use a separate
 per-bot sequence. A route transition can vary that bot's line without changing
 another bot's movement or consuming combat/chat randomness.
+Aim tremor, aim-texture wander, projectile lead error, tap variance, and
+trigger-window jitter now advance a private per-client combat sequence. Chat,
+movement, and another fighter's shot cadence cannot change a bot's next aim or
+trigger decision.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
