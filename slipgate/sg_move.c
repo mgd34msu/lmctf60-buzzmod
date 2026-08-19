@@ -70,6 +70,64 @@ static qboolean SoundFireTeammateNear(edict_t *self, int team,
 	return false;
 }
 
+/* Sound fire deliberately aims at a coarse heard-only region rather than a
+ * visible client.  That does not waive ordinary rocket geometry: the exact
+ * weapon muzzle must leave the body cleanly, and the first collision must be
+ * a useful splash surface near that region rather than a wall at the bot's
+ * feet or empty space beyond it. */
+static qboolean SoundFireImpactSafe(edict_t *self, int team,
+	const vec3_t target)
+{
+	vec3_t direction, angles, forward, right, offset, muzzle, shot_end;
+	vec3_t delta;
+	trace_t muzzle_trace, shot_trace;
+
+	if (!self || !self->inuse || !self->client || !target || !sg_host.trace ||
+	    !isfinite(target[0]) || !isfinite(target[1]) || !isfinite(target[2]))
+		return false;
+	VectorSubtract(target, self->s.origin, direction);
+	if (VectorNormalize(direction) < 1.0f)
+		return false;
+	angles[YAW] = atan2f(direction[1], direction[0]) *
+	              180.0f / (float)M_PI;
+	angles[PITCH] = -asinf(direction[2]) * 180.0f / (float)M_PI;
+	angles[ROLL] = 0.0f;
+	AngleVectors(angles, forward, right, NULL);
+	VectorSet(offset, 8.0f, 8.0f, self->viewheight - 8.0f);
+	if (self->client->pers.hand == LEFT_HANDED)
+		offset[1] = -offset[1];
+	else if (self->client->pers.hand == CENTER_HANDED)
+		offset[1] = 0.0f;
+	G_ProjectSource(self->s.origin, offset, forward, right, muzzle);
+	muzzle_trace = sg_host.trace(self->s.origin, NULL, NULL, muzzle, self,
+	                             MASK_SHOT);
+	if (muzzle_trace.startsolid || muzzle_trace.allsolid ||
+	    muzzle_trace.fraction < 1.0f)
+		return false;
+
+	/* The ear's maximum placement uncertainty is 300 units.  Trace through
+	 * that complete region: a collision outside it cannot splash the sound
+	 * source this policy claims to attack. */
+	shot_end[0] = target[0] + 300.0f * forward[0];
+	shot_end[1] = target[1] + 300.0f * forward[1];
+	shot_end[2] = target[2] + 300.0f * forward[2];
+	shot_trace = sg_host.trace(muzzle, NULL, NULL, shot_end, self, MASK_SHOT);
+	if (shot_trace.startsolid || shot_trace.allsolid ||
+	    shot_trace.fraction >= 1.0f ||
+	    (shot_trace.surface && (shot_trace.surface->flags & SURF_SKY)))
+		return false;
+	if (shot_trace.ent && shot_trace.ent->client &&
+	    shot_trace.ent->client->ctf.teamnum == team)
+		return false;
+	VectorSubtract(shot_trace.endpos, self->s.origin, delta);
+	if (VectorLength(delta) < 180.0f)
+		return false;
+	VectorSubtract(shot_trace.endpos, target, delta);
+	if (VectorLength(delta) > 300.0f)
+		return false;
+	return !SoundFireTeammateNear(self, team, shot_trace.endpos, 250.0f);
+}
+
 /* This controller deliberately lives at the command boundary, after combat
  * has supplied the current target and view. It is not navigation: no seed,
  * link, goal, or commitment is ever read as an authority or rewritten. */
@@ -421,6 +479,12 @@ int SG_SoundFireTestTeammateNear(edict_t *self, int team,
 	const vec3_t target, float radius)
 {
 	return SoundFireTeammateNear(self, team, target, radius) ? 1 : 0;
+}
+
+int SG_SoundFireTestImpactSafe(edict_t *self, int team,
+	const vec3_t target)
+{
+	return SoundFireImpactSafe(self, team, target) ? 1 : 0;
 }
 #endif
 
@@ -8133,11 +8197,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (sl15 < 600.0f || sl15 > 1500.0f)
 					continue;   /* too close = own splash; too
 					             * far = pure noise */
-				/* observations: never rocket a ghost a teammate is
-				 * standing on -- the one premium this free trick
-				 * could quietly charge is friendly splash */
-				if (SoundFireTeammateNear(e, team,
-				        SG_Rune()->seeds[en15->seed].origin, 250.0f))
+				/* Use the real rocket muzzle and first impact.  Range to a
+				 * distant belief is not safety when a nearby wall would make
+				 * the shot explode at our feet, and open space beyond the
+				 * heard region cannot deliver the claimed splash. */
+				if (!SoundFireImpactSafe(e, team,
+				        SG_Rune()->seeds[en15->seed].origin))
 					continue;
 				{
 					float sy15 = atan2f(sd15[1], sd15[0])

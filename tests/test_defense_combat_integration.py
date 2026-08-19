@@ -37,6 +37,8 @@ int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
     int mutation_mask, usercmd_t *cmd);
 int SG_SoundFireTestTeammateNear(edict_t *self, int team,
     const vec3_t target, float radius);
+int SG_SoundFireTestImpactSafe(edict_t *self, int team,
+    const vec3_t target);
 
 static edict_t entities[4];
 static gclient_t clients[3];
@@ -50,6 +52,8 @@ static int trace_calls;
 static int failures;
 static int flag_home;
 static int carrying;
+static int sound_trace_mode;
+static csurface_t sky_surface;
 
 game_locals_t game;
 level_locals_t level;
@@ -58,10 +62,25 @@ edict_t *g_edicts = entities;
 sg_cvars_t sg_cv;
 sg_host_t sg_host;
 
+void G_ProjectSource(vec3_t point, vec3_t distance, vec3_t forward,
+    vec3_t right, vec3_t result)
+{
+    result[0] = point[0] + forward[0] * distance[0] +
+        right[0] * distance[1];
+    result[1] = point[1] + forward[1] * distance[0] +
+        right[1] * distance[1];
+    result[2] = point[2] + forward[2] * distance[0] + distance[2];
+}
+
 enum {
     TRACE_BLOCKED, TRACE_CLEAR, TRACE_FINAL_BODY, TRACE_FINAL_FLOOR,
     TRACE_LONG_BLOCK_SHORT_CLEAR, TRACE_PLAYER_BLOCKED, TRACE_FLOOR_BLOCKED,
     TRACE_VERTICAL_BLOCKED, TRACE_RING_BODY_BLOCKED
+};
+enum {
+    SOUND_TRACE_NONE, SOUND_TRACE_USEFUL, SOUND_TRACE_OPEN,
+    SOUND_TRACE_MUZZLE_BLOCKED, SOUND_TRACE_NEAR_SELF,
+    SOUND_TRACE_TEAMMATE, SOUND_TRACE_SKY, SOUND_TRACE_BEYOND_REGION
 };
 enum {
     MUT_CARRY = 1, MUT_FLAG_AWAY = 2, MUT_STAND = 4, MUT_HOLD = 8,
@@ -96,6 +115,39 @@ static trace_t ProbeTrace(const vec3_t start, const vec3_t mins,
     result.fraction = 1.0f;
     VectorCopy(end, result.endpos);
     trace_calls++;
+    if (contentmask == MASK_SHOT && sound_trace_mode != SOUND_TRACE_NONE) {
+        int muzzle = (trace_calls & 1) != 0;
+
+        if (muzzle) {
+            if (sound_trace_mode == SOUND_TRACE_MUZZLE_BLOCKED) {
+                result.fraction = 0.5f;
+                result.endpos[0] = start[0] + 4.0f;
+            }
+            return result;
+        }
+        if (sound_trace_mode == SOUND_TRACE_OPEN)
+            return result;
+        result.fraction = 0.5f;
+        if (sound_trace_mode == SOUND_TRACE_NEAR_SELF) {
+            result.endpos[0] = entities[1].s.origin[0] + 80.0f;
+            result.endpos[1] = entities[1].s.origin[1];
+            result.endpos[2] = entities[1].s.origin[2];
+        } else if (sound_trace_mode == SOUND_TRACE_BEYOND_REGION) {
+            result.endpos[0] = end[0] + 400.0f;
+        } else {
+            /* Useful impact at the center of the heard region. */
+            result.endpos[0] = 900.0f;
+            result.endpos[1] = 40.0f;
+            result.endpos[2] = 24.0f;
+        }
+        if (sound_trace_mode == SOUND_TRACE_TEAMMATE)
+            result.ent = &entities[3];
+        if (sound_trace_mode == SOUND_TRACE_SKY) {
+            sky_surface.flags = SURF_SKY;
+            result.surface = &sky_surface;
+        }
+        return result;
+    }
     dx = end[0] - start[0];
     dy = end[1] - start[1];
     body_trace = (trace_calls & 1) != 0;
@@ -517,9 +569,51 @@ static void TestSoundFireProtectsHumanTeammates(void)
         belief, 250.0f) == 0);
 }
 
+static void TestSoundFireRequiresUsefulSafeImpact(void)
+{
+    vec3_t belief = { 900.0f, 40.0f, 24.0f };
+    edict_t *human = &entities[3];
+
+    Setup();
+    human->client->ctf.teamnum = CTF_TEAM_BLUE;
+    sound_trace_mode = SOUND_TRACE_USEFUL;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 1);
+
+    sound_trace_mode = SOUND_TRACE_OPEN;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_MUZZLE_BLOCKED;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_NEAR_SELF;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_SKY;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+    sound_trace_mode = SOUND_TRACE_BEYOND_REGION;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+
+    human->client->ctf.teamnum = CTF_TEAM_RED;
+    VectorCopy(belief, human->s.origin);
+    sound_trace_mode = SOUND_TRACE_TEAMMATE;
+    trace_calls = 0;
+    CHECK(SG_SoundFireTestImpactSafe(&entities[1], CTF_TEAM_RED,
+        belief) == 0);
+}
+
 int main(void)
 {
 	TestSoundFireProtectsHumanTeammates();
+	TestSoundFireRequiresUsefulSafeImpact();
     TestBlockedPostStaysStill();
     TestSafePostOwnsTheFinalLeg();
     TestShortPostFallbackOwnsTheFinalLeg();
@@ -549,7 +643,11 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         self.assertIn("&g_edicts[client_index]", helper)
         self.assertIn("mate->client->ctf.teamnum != team", helper)
         self.assertIn("mate->deadflag", helper)
-        self.assertIn("SoundFireTeammateNear(e, team", sound)
+        self.assertIn("SoundFireImpactSafe(e, team", sound)
+        self.assertIn("SoundFireTeammateNear(self, team", helper)
+        self.assertIn("muzzle_trace.fraction < 1.0f", helper)
+        self.assertIn("shot_trace.fraction >= 1.0f", helper)
+        self.assertIn("VectorLength(delta) < 180.0f", helper)
         self.assertNotIn("SG_MAXBOTS", sound)
 
     def test_cvar_and_static_hold_order(self) -> None:

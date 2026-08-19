@@ -320,6 +320,12 @@ Enabled sound-directed rocket fire now vetoes splash against every live
 same-team client in the game roster. Human teammates receive the same safety
 as SG teammates instead of disappearing from the check because they have no
 entry in the bot controller array.
+The same enabled path now traces the exact rocket muzzle and first collision
+through the complete heard region. A muzzle obstruction, point-blank impact,
+sky surface, open line with no useful splash surface, collision outside the
+ear's bounded region, or live teammate beside the actual impact vetoes the
+shot; distance to a far-away belief alone can no longer authorize self-splash
+or consume a rocket that cannot affect that belief.
 Defensive-rune convergence and the final toss now revalidate the belief-selected
 client against current CTF state: bounded slot, live same-team body, actual
 flag possession, and an empty rune slot. A former carrier, dead client, reused
@@ -1356,6 +1362,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Sound-directed rockets inspect the complete live client roster before
       firing, so an unrepresented human teammate at the believed impact point
       vetoes speculative splash exactly like an SG teammate.
+      They also require a clear exact rocket muzzle and a non-sky first impact
+      inside the bounded heard region, outside the self-splash floor and away
+      from every live teammate; belief range by itself is not fire authority.
       Defensive-rune convergence and toss both require the belief-selected
       client to be a current live same-team flag carrier with an empty rune
       slot; stale, reused, or already-occupied receivers cannot authorize the
