@@ -14,9 +14,11 @@ The project is complete only when all of the following are true together:
 2. Every behavior already developed for the bots remains covered by its focused
    and host regression gates on the final source tree, and release CI runs those
    gates under GNUmakefile and Makefile with both GCC and Clang.
-3. All twenty production maps have current RUNE artifacts that pass both C
-   readers, the Python reader and linter, fresh-process runtime loading, and
-   map-specific semantic checks.
+3. All 181 supported maps, including both `lmctf02` and `lmctf02c`, have
+   current RUNE artifacts that pass both C readers, the Python reader and
+   linter, fresh-process runtime loading, and applicable map-specific semantic
+   checks. The selected twenty-map production rotation is a runtime fleet
+   subset, not the artifact-conversion boundary.
 4. `lmctf58` retains all ten long declared-door controllers, including the six
    mirrored cellar controllers, with real routes from the cellar region to both
    objectives. Objective-core pruning may not be bypassed.
@@ -54,7 +56,7 @@ wave is sufficient by itself.
 - [ ] The symmetric shallow-water declared-door repair is frozen, independently
   reviewed, integrated, and committed.
 - [ ] The repaired module regenerates a semantically complete `lmctf58` artifact.
-- [ ] The exact final module and twenty-artifact corpus pass the cold-load matrix.
+- [ ] The exact final module and 181-artifact corpus pass the cold-load matrix.
 - [ ] The production fleet/bundle transaction and rollback are frozen, reviewed,
   integrated, and committed.
 - [ ] Release CI runs the complete behavior/RUNE host suite for both Make
@@ -104,10 +106,12 @@ After A is committed on the final source base:
   ten-controller checker to agree;
 - prove representative mirrored cellar seeds remain non-tombstoned and route to
   both flag roots after objective-core pruning;
-- rebuild the twenty-map artifact manifest, adapting the cold-matrix runner to
-  the new source/module/artifact hashes;
-- cold-load every map in a fresh exact process, require one RUNE-ready identity,
-  one admitted bot, correct maxclients/physics, no rejection, and clean teardown;
+- rebuild the 181-map artifact manifest, retaining both `lmctf02` and
+  `lmctf02c`, and adapt the cold-matrix runner to the new
+  source/module/artifact hashes;
+- cold-load all 181 maps in fresh exact processes, require one RUNE-ready
+  identity, one admitted bot, correct maxclients/physics, no rejection, and
+  clean teardown;
 - loop any map-specific failure back through implementation and regeneration.
 
 ### C. Production fleet and transactional release bundle
@@ -124,8 +128,9 @@ The final fleet implementation must provide:
   rejection or admission failure, child exit status, and one clean shutdown;
 - an exclusive deploy/launcher interlock and an armed stop sentinel throughout
   cutover;
-- a release manifest that binds both module aliases, `rune.cfg`, the ordered map
-  list, all twenty BSP/RUNE pairs, escape priors, and applicable sidecars;
+- a release manifest that binds both module aliases, `rune.cfg`, the ordered
+  twenty-map fleet list, all 181 BSP/RUNE pairs, escape priors, and applicable
+  sidecars;
 - same-filesystem staging, fsync, exact hash verification, complete prior-bundle
   backup, all-file promotion while quiescent, negative-claim checks, and exact
   rollback after copy, rename, or post-verification failures;
@@ -221,7 +226,7 @@ cross-platform warning repair (complete)
        independent review + commit + CI
                     |
                     v
-      B: lmctf58 regeneration + all20 cold matrix
+      B: lmctf58 regeneration + all181 conversion/cold matrix
                     |
                     +-------------------------------+
                                                     |
