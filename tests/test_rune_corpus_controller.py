@@ -923,6 +923,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ):
                 descriptors: list[int] = []
                 launched_commands: list[list[str]] = []
+                cold_load_timeouts: list[float] = []
+                original_cold_load = controller.run_fresh_cold_load
 
                 def popen(command, **kwargs):
                     self.assertIn(controller.GUARD_BOOTSTRAP, command)
@@ -975,9 +977,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     descriptors.append(descriptor)
                     return descriptor
 
+                def cold_load(*args, **kwargs):
+                    cold_load_timeouts.append(kwargs["timeout"])
+                    return original_cold_load(*args, **kwargs)
+
                 with mock.patch.object(controller.subprocess, "Popen", side_effect=popen), \
                         mock.patch.object(controller, "wait_for_exec_identity", side_effect=identity_for_engine), \
-                        mock.patch.object(controller, "open_pidfd", side_effect=pidfd):
+                        mock.patch.object(controller, "open_pidfd", side_effect=pidfd), \
+                        mock.patch.object(controller, "run_fresh_cold_load", side_effect=cold_load):
                     result = controller.run_one_map(
                         run_root, snapshot, "lmctf01", 62000, "fingerprint",
                         startup_timeout=0.001,
@@ -988,6 +995,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 self.assertEqual(
                     2 if result["classification"] == "PASS" else 1,
                     len(launched_commands),
+                )
+                self.assertEqual(
+                    [0.001] if result["classification"] == "PASS" else [],
+                    cold_load_timeouts,
                 )
                 return result
 

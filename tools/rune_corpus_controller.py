@@ -3317,7 +3317,7 @@ def run_one_map(
                     cold_load = run_fresh_cold_load(
                         attempt, snapshot, map_name, stable_port, fingerprint,
                         attempt_number, artifact, parsed["counts"], identity,
-                        timeout=generation_timeout,
+                        timeout=startup_timeout,
                         engine_arguments=engine_arguments,
                     )
                     classification = "PASS"
