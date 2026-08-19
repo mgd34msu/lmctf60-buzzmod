@@ -248,6 +248,7 @@ static void TestPersonaAssignment(void)
 static void TestEscapeRandomness(void)
 {
 	uint32_t state;
+	uint32_t prior;
 	int expected_random;
 	int yaw;
 	float duration;
@@ -265,6 +266,21 @@ static void TestEscapeRandomness(void)
 	duration = SG_EscapeRandomDuration(state);
 	CHECK(duration >= 1.0f && duration <= 1.8f);
 	CHECK(SG_EscapeRandomNext(state) != state);
+	prior = SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7, 0, 0,
+	    9123);
+	CHECK(prior == SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 0, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef1), 7,
+	      0, 0, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      1, 0, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 1, 9123));
+	CHECK(SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7, 1, 0,
+	      9123) != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 1, 9123));
+	CHECK(prior != SG_EscapePriorDraw(UINT64_C(0x123456789abcdef0), 7,
+	      0, 0, 9124));
 }
 
 static void TestCalloutRandomness(void)

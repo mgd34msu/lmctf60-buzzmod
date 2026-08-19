@@ -20,6 +20,7 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_rune_handoff_policy.h"
+#include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_defense_supply.h"
@@ -531,14 +532,11 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 			if (sg_escape_total[fk] > 0 && stand >= 0 &&
 			    stand < SG_Rune()->hdr.num_seeds)
 			{
-				unsigned h = ((unsigned)(e - g_edicts) * 2654435761u) ^
-				             ((unsigned)(bot->lives + bot->legs) * 40503u) ^
-				             ((unsigned)(level.time * 10.0f) * 2246822519u);
+				unsigned h = SG_EscapePriorDraw(bot->instance_token,
+				    (unsigned)(e - g_edicts - 1), (unsigned)bot->lives,
+				    (unsigned)bot->legs, (unsigned)(level.time * 10.0f));
 				int b, acc = 0, pick;
 
-				h ^= h >> 13;
-				h *= 2654435761u;
-				h ^= h >> 16;
 				pick = (int)(h % (unsigned)sg_escape_total[fk]);
 				for (b = 0; b < SG_ESC_BUCKETS - 1; b++)
 				{
