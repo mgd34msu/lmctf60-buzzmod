@@ -577,6 +577,7 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 typedef struct
 {
 	int			enemy;			/* edict index of held target, 0 = none */
+	unsigned long	enemy_ctfid;	/* exact target life occupying that slot */
 	float		since;			/* level.time the target was acquired */
 	float		acquired_at;	/* same instant, read by the reaction gate --
 	                             * kept separate from `since` because `since` is
@@ -3445,16 +3446,28 @@ void SG_CombatAlert(edict_t *self, float expect_range)
  */
 edict_t *SG_CombatLiveEnemy(edict_t *self)
 {
-	sg_combat_state_t *st = Combat_ClientState(self);
+	sg_combat_state_t *st;
 	edict_t *en;
+	int self_team;
 
+	if (!self || !self->inuse || !self->client ||
+	    self->movetype == MOVETYPE_NOCLIP)
+		return NULL;
+	st = Combat_ClientState(self);
 	if (!st)
 		return NULL;
-	if (st->enemy <= 0)
+	if (st->enemy <= 0 || st->enemy > game.maxclients ||
+	    st->enemy >= globals.num_edicts)
 		return NULL;
 	en = g_edicts + st->enemy;
-	if (!en->inuse || !en->client || en->deadflag ||
-	    en->health <= 0)
+	if (!en->client)
+		return NULL;
+	self_team = self->client->ctf.teamnum;
+	if (!SG_CombatLiveEnemyIdentityAllowed(self_team,
+	    en->client->ctf.teamnum, game.maxclients, globals.num_edicts,
+	    st->enemy, st->enemy_ctfid, en->client->ctf.ctfid, en->inuse,
+	    true, !en->deadflag && en->health > 0,
+	    en->movetype == MOVETYPE_NOCLIP))
 		return NULL;
 	return en;
 }
@@ -3955,6 +3968,7 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 	}
 
 	st->enemy = 0;
+	st->enemy_ctfid = 0;
 	st->ws_panic = false;	/* the exception belongs to a fight in
 	                         * progress; it does not outlive one */
 
@@ -4037,9 +4051,11 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 	/* target continuity: a new target restarts the settle clock, draws a
 	 * fresh tremor and snaps the range band. Holding the same one lets the
 	 * error decay and the band hysteresis do its work. */
-	if (st->enemy != (int)(enemy - g_edicts))
+	if (st->enemy != (int)(enemy - g_edicts) ||
+	    st->enemy_ctfid != enemy->client->ctf.ctfid)
 	{
 		st->enemy = (int)(enemy - g_edicts);
+		st->enemy_ctfid = enemy->client->ctf.ctfid;
 		st->since = level.time;
 		st->acquired_at = level.time;	/* the reaction clock starts here */
 		st->err_next = 0.0f;
@@ -4192,6 +4208,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 {
 	sg_combat_state_t	*st;
 	edict_t				*enemy;
+	edict_t				*incumbent;
 	vec3_t				eye, forward, mid, lead, aim, endp, impact;
 	vec3_t				muzzle, shotdir;
 	vec3_t				threat;
@@ -4200,7 +4217,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	float				yaw, pitch, skill, settle;
 	float				residual, span, shape;
 	trace_t				tr;
-	int					band, inhand;
+	int					band, inhand, incumbent_index;
 	qboolean			clear_shot, carrier, ballistic, vel_stable, ray_hits;
 	qboolean			rattled, textured;
 
@@ -4234,9 +4251,21 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	                             Combat_SkillLerp(skill, SG_THREAT_S0,
 	                                              SG_THREAT_S4), threat);
 
+	/* A target slot only earns hysteresis and a lost-corner continuation while
+	 * the same opposing client life still occupies it.  Death, respawn, team
+	 * change and slot reuse terminate the retained fight before the scan; a
+	 * new occupant must win selection on its own evidence. */
+	incumbent = SG_CombatLiveEnemy(self);
+	if (!incumbent && st->enemy > 0)
+	{
+		st->enemy = 0;
+		st->enemy_ctfid = 0;
+	}
+	incumbent_index = incumbent ? (int)(incumbent - g_edicts) : -1;
+
 	sg_cbt_why[7]++;                        /* frames that got this far */
 	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL,
-	    st->enemy, true);
+	    incumbent_index, true);
 	if (enemy)
 		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)

@@ -347,6 +347,26 @@ static int test_clear_shot_predicate(void)
 
 static int test_target_identity_hysteresis(void)
 {
+	CHECK(SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_RED,
+	      16, 19, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 102UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 0UL, 0UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 17, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 5, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, false, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, true, true));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(0, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, true, true, true, false));
+	CHECK(!SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
+	      16, 19, 5, 101UL, 101UL, 2, true, true, false));
 	CHECK(SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, true));
 	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, false));
 	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 5, true));
@@ -485,8 +505,12 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         self.assertIn("else if (self->client->pers.hand == CENTER_HANDED)",
                       SOURCE)
         self.assertIn("Combat_GrenadeImpact", frame)
-        self.assertIn("st->enemy, true", frame)
         self.assertIn("SG_CombatTargetScore", SOURCE)
+        self.assertIn("st->enemy_ctfid != enemy->client->ctf.ctfid", SOURCE)
+        self.assertIn("SG_CombatLiveEnemyIdentityAllowed(self_team", SOURCE)
+        self.assertIn("incumbent = SG_CombatLiveEnemy(self);", frame)
+        self.assertIn("incumbent_index, true", frame)
+        self.assertNotIn("st->enemy, true", frame)
         carrier_start = SOURCE.index(
             "static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target)\n{")
         carrier = SOURCE[carrier_start:
