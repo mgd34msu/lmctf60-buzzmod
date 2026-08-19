@@ -256,7 +256,10 @@ behaviorally disabled.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
-irreversible toss frame.
+irreversible toss frame. While the strike coordinator owns the body, that law
+narrows again to the effective escort mission: PRESS and RECOVER cannot turn
+away from their route for a carrier handoff, while the assigned screen retains
+the useful transfer.
 Defender ranking now counts only live same-team bodies, so a corpse in an early
 bot slot cannot reserve the stand-watch quota while surviving teammates abandon
 the base; escort admission now uses that identical live rank, so it cannot steal
@@ -1279,6 +1282,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Strike membership is resolved before optional item, mega, and tactical
       preparation, preventing discarded organic plans from churning underneath
       a concrete coordinator route.
+      Defensive-rune convergence and the irreversible toss frame follow the
+      effective strike escort, so pressure/recovery duty cannot be interrupted
+      by a superseded organic handoff premise.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

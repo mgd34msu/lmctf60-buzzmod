@@ -1488,7 +1488,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * the flag on the courier's legs, not on luck.
 	 */
 	if (sg_cv.runetoss->value &&
-	    SG_RuneHandoffEligible(role, carrying, SG_ChatOrderedRole(e)) &&
+	    SG_RuneHandoffEligible(role, carrying, SG_ChatOrderedRole(e),
+	        tc->strike_active, tc->escort_mission) &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
 	     e->client->rune->runetype == RUNE_REGEN) &&

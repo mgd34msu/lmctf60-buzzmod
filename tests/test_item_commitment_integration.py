@@ -124,6 +124,18 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             lead.count("G_PowerupPickupEligible"), 3)
         self.assertIn('Lead_Abort(bot, "powerup capacity")', lead)
 
+    def test_rune_handoff_uses_effective_strike_escort_at_both_boundaries(self):
+        for relative in ("slipgate/sg_goal.c", "slipgate/sg_descend.c"):
+            source = self.text(relative)
+            call = source.index("SG_RuneHandoffEligible(")
+            body = source[call:call + 240]
+            self.assertIn("tc->strike_active", body)
+            self.assertIn("tc->escort_mission", body)
+
+        policy = self.text("slipgate/sg_rune_handoff_policy.h")
+        self.assertIn("if (strike_active)", policy)
+        self.assertIn("return escort_mission;", policy)
+
     def test_flag_intelligence_preempts_cosmetic_chat_but_stamps_budget(self):
         source = self.text("slipgate/sg_chat.c")
         start = source.index("qboolean SG_ChatSayTeam(")

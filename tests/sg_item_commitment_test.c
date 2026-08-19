@@ -355,13 +355,20 @@ static void TestPowerupCapacityEndsTheErrand(void)
 
 int main(void)
 {
-	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1));
-	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1));
-	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1));
-	CHECK(!SG_RuneHandoffEligible(SG_ROLE_DEFEND, false, -1));
-	CHECK(!SG_RuneHandoffEligible(SG_ROLE_CARRY, true, -1));
-	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, SG_ROLE_ATTACK));
-	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, SG_ROLE_ESCORT));
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, false, false));
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_DEFEND, false, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_CARRY, true, -1, false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, SG_ROLE_ATTACK,
+	    false, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, SG_ROLE_ESCORT,
+	    false, false));
+	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, true));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, true, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, false));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, 2, true));
+	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, 2));
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 0) ==
 	      SG_ITEM_PICKUP_COMMIT_ONLY);
 	CHECK(SG_ItemPickupDisposition(1, 0, 1, 1) ==

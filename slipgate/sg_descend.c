@@ -3781,7 +3781,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 */
 	if (sg_cv.runetoss->value &&
 	    SG_RuneHandoffEligible(role, tc->carrying,
-	        SG_ChatOrderedRole(e)) && !duel &&
+	        SG_ChatOrderedRole(e), tc->strike_active,
+	        tc->escort_mission) && !duel &&
 	    e->client->rune &&
 	    (e->client->rune->runetype == RUNE_RESIST ||
 	     e->client->rune->runetype == RUNE_REGEN) &&
