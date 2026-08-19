@@ -25,7 +25,8 @@ enum
 };
 
 void		Lead_Abort(sg_bot_t *bot, const char *why);
-const int	*Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying);
+const int	*Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
+	int ordered_role);
 /* Exact successful Touch_Item handoff.  This is authoritative for normal and
  * instant-use powerups alike; inventory deltas are not. */
 void		Lead_NoteItemTaken(edict_t *taker, edict_t *item);

@@ -211,6 +211,9 @@ objective state outranks an older standing order.
 The timed item-lead controller now aborts an existing pad commitment for every
 ESCORT role, including a human-directed cover order with no flag carrier; the
 escort cannot abandon its live screen for an early item.
+Any live human order now aborts that optional pad commitment, including an
+ordered ATTACK that previously passed the role-specific carrier, recovery,
+escort, and defender checks. Item timing cannot replace an explicit mission.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the

@@ -224,7 +224,7 @@ static void TestClockSpawnContinuesToPhysicalPickup(void)
 	belief->believed_up = true;
 	belief->seen_up_time = 5.0f;
 	belief->believed_respawn_time = 0.0f;
-	field = Lead_Field(bot, SG_ROLE_ATTACK, false);
+	field = Lead_Field(bot, SG_ROLE_ATTACK, false, -1);
 	CHECK(field != NULL);
 	CHECK(bot->lead_ent == 3);
 	CHECK(bot->lead_state == SG_LEAD_SPAWNED);
@@ -232,7 +232,7 @@ static void TestClockSpawnContinuesToPhysicalPickup(void)
 	CHECK(bot->tac_seed == -1);
 
 	level.time = 12.1f;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
 }
 
@@ -248,7 +248,7 @@ static void TestSightConfirmedSpawnPersistsAndHomes(void)
 	belief->believed_up = true;
 	belief->seen_up_time = 6.0f;
 	belief->believed_respawn_time = 0.0f;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) != NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) != NULL);
 	CHECK(bot->lead_state == SG_LEAD_SPAWNED);
 	CHECK(bot->lead_inferred_until == 0.0f);
 	CHECK(Lead_PickupTarget(bot, target));
@@ -257,10 +257,10 @@ static void TestSightConfirmedSpawnPersistsAndHomes(void)
 	CHECK(target[2] == entities[3].s.origin[2]);
 
 	level.time = 15.0f;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) != NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) != NULL);
 	CHECK(bot->lead_ent == 3);
 	belief->believed_up = false;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
 }
 
@@ -295,16 +295,20 @@ static void TestStrongerInterruptsStillWin(void)
 	level.time = 10.0f;
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
 	combat = true;
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
 	combat = false;
 
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
-	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, true) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, true, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
 
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
-	CHECK(Lead_Field(bot, SG_ROLE_ESCORT, false) == NULL);
+	CHECK(Lead_Field(bot, SG_ROLE_ESCORT, false, -1) == NULL);
+	CHECK(bot->lead_ent == 0);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, SG_ROLE_ATTACK) == NULL);
 	CHECK(bot->lead_ent == 0);
 }
 

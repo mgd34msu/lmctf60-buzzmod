@@ -173,7 +173,8 @@ static qboolean Lead_Flood(int *field, int padseed, int here)
  * running and NULL otherwise; the caller substitutes it for the role's own
  * goal field, which is what makes the pad a live goal rather than a preference.
  */
-const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
+const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
+	int ordered_role)
 {
 	static int			lead_field[SG_MAX_SEEDS];
 	edict_t				*e = bot->ent;
@@ -207,6 +208,13 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 	if (carrying)
 	{
 		Lead_Abort(bot, "carrying");
+		return NULL;
+	}
+	if (ordered_role >= 0)
+	{
+		/* A pad timer is optional preparation.  Any live human order is the
+		 * bot's mission and retires an already-running errand immediately. */
+		Lead_Abort(bot, "human order");
 		return NULL;
 	}
 	if (sg_caco_team_belief.flag[ti][ti].state == SG_FLAG_ASTRAY ||

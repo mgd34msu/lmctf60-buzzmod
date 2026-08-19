@@ -1467,7 +1467,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * finds first.
 	 */
 	{
-		const int *lead = Lead_Field(bot, role, carrying);
+		const int *lead = Lead_Field(bot, role, carrying,
+		    SG_ChatOrderedRole(e));
 
 		if (lead)
 			goal_field = lead;
