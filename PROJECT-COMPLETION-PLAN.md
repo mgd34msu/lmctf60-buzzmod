@@ -240,6 +240,9 @@ play a different persona from the identity shown on the roster.
 Concave-pocket retreat direction and duration now advance a private per-bot
 sequence. One bot shelving a failed road cannot change another bot's escape,
 aim, or movement line through shared RNG state.
+Team-belief callout delays now advance a private team/topic sequence. Cosmetic
+banter volume cannot change when earned flag or item information is published
+to teammates and downstream item timing.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the

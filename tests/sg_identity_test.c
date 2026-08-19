@@ -14,6 +14,7 @@
 #include "slipgate/sg_lead_random.h"
 #include "slipgate/sg_persona_assignment.h"
 #include "slipgate/sg_escape_random.h"
+#include "slipgate/sg_callout_random.h"
 
 sg_host_t sg_host;
 
@@ -207,6 +208,25 @@ static void TestEscapeRandomness(void)
 	duration = SG_EscapeRandomDuration(state);
 	CHECK(duration >= 1.0f && duration <= 1.8f);
 	CHECK(SG_EscapeRandomNext(state) != state);
+}
+
+static void TestCalloutRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	float delay;
+
+	srand(6619);
+	expected_random = rand();
+	srand(6619);
+	state = SG_CalloutRandomInitial(0, 1);
+	CHECK(state != 0);
+	CHECK(state == SG_CalloutRandomInitial(0, 1));
+	CHECK(state != SG_CalloutRandomInitial(1, 1));
+	CHECK(rand() == expected_random);
+	delay = SG_CalloutRandomDelay(state, 0.5f, 0.9f);
+	CHECK(delay >= 0.5f && delay < 0.9f);
+	CHECK(SG_CalloutRandomNext(state) != state);
 }
 
 static void TestValidAndFloatPrecision(void)
@@ -517,6 +537,7 @@ int main(void)
 	TestLeadRandomness();
 	TestPersonaAssignment();
 	TestEscapeRandomness();
+	TestCalloutRandomness();
 
 	if (failures)
 	{

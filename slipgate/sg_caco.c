@@ -45,6 +45,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_callout_random.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
@@ -138,6 +139,7 @@ typedef struct
 
 static sg_callout_t	caco_callout[2][SG_CALL_TOPICS];    /* [team-1][topic] */
 static float		caco_teamsaid[2][SG_CALL_TOPICS];
+static uint32_t		caco_callout_random[2][SG_CALL_TOPICS];
 
 /* ------------------------------------------------- human teammate relay */
 
@@ -245,17 +247,24 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 	if (topic < 0 || topic >= SG_CALL_TOPICS)
 		return;
 
-	c = &caco_callout[SG_TeamIdx(team)][topic];
-	if (c->pending)
-		return;                     /* someone is already about to say it */
-	if (level.time < caco_teamsaid[SG_TeamIdx(team)][topic])
-		return;                     /* the team heard this a moment ago */
+	{
+		int team_index = SG_TeamIdx(team);
+
+		c = &caco_callout[team_index][topic];
+		if (c->pending)
+			return;                     /* someone is already about to say it */
+		if (level.time < caco_teamsaid[team_index][topic])
+			return;                     /* the team heard this a moment ago */
+		caco_callout_random[team_index][topic] = SG_CalloutRandomNext(
+		    caco_callout_random[team_index][topic]);
+	}
 
 	Caco_Where(origin, place, sizeof(place));
 	Com_sprintf(c->line, sizeof(c->line), "%s %s", what, place);
 	c->speaker = (int)(speaker - g_edicts - 1);
-	c->due = level.time + SG_CALL_DELAY_MIN +
-	         random() * (SG_CALL_DELAY_MAX - SG_CALL_DELAY_MIN);
+	c->due = level.time + SG_CalloutRandomDelay(
+	    caco_callout_random[SG_TeamIdx(team)][topic],
+	    SG_CALL_DELAY_MIN, SG_CALL_DELAY_MAX);
 	c->pending = true;
 }
 
@@ -2260,6 +2269,14 @@ void Caco_Reset(void)
 	}
 	memset(caco_callout, 0, sizeof(caco_callout));
 	memset(caco_teamsaid, 0, sizeof(caco_teamsaid));
+	{
+		int t, k;
+
+		for (t = 0; t < 2; t++)
+			for (k = 0; k < SG_CALL_TOPICS; k++)
+				caco_callout_random[t][k] =
+				    SG_CalloutRandomInitial((unsigned)t, (unsigned)k);
+	}
 	memset(caco_relay, 0, sizeof(caco_relay));
 	memset(sg_caco_proj, 0, sizeof(sg_caco_proj));
 	for (i = 0; i < 2; i++)
