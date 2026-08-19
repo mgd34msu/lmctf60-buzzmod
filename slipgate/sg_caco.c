@@ -48,6 +48,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_ear_random.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
@@ -1509,6 +1510,7 @@ static int sg_quadsound_idx;
 static int sg_hastesound_idx;
 
 static unsigned sg_ear_said;    /* EAR print sampler */
+static uint32_t sg_ear_random[2]; /* one tactical sequence per listening team */
 
 /*
  * Which row of the sighting table this client gets: his own if he already
@@ -1645,7 +1647,12 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 {
 	rune_t *r = SG_Rune();
 	vec3_t sorg;
-	int eteam, ecl, i;
+	edict_t *best_listener[2] = { NULL, NULL };
+	float best_fraction[2] = { 2.0f, 2.0f };
+	float best_distance[2] = { 0.0f, 0.0f };
+	float best_radius[2] = { 0.0f, 0.0f };
+	int best_client[2] = { -1, -1 };
+	int eteam, ecl, i, t;
 
 	if (!r)
 		return;                     /* no rune loaded: nowhere to place onto */
@@ -1658,7 +1665,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		return;
 
 	eteam = emitter->client->ctf.teamnum;
-	if (eteam <= CTF_TEAM_UNDEFINED)
+	if (eteam != CTF_TEAM_RED && eteam != CTF_TEAM_BLUE)
 		return;
 	/* Global announcements are associated with an edict for protocol/channel
 	 * ownership, not spatial attribution.  Human clients hear ATTN_NONE at full
@@ -1682,9 +1689,9 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 	for (i = 0; i < game.maxclients; i++)
 	{
 		edict_t *b = g_edicts + 1 + i;
-		vec3_t d, guess;
+		vec3_t d;
 		float dist, radius, frac;
-		int seed, team;
+		int team, team_index;
 
 		if (!b->inuse || !b->client || b->deadflag)
 			continue;
@@ -1694,7 +1701,8 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 			continue;               /* only SLIPGATE bots listen through here */
 
 		team = b->client->ctf.teamnum;
-		if (team <= CTF_TEAM_UNDEFINED || team == eteam)
+		if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) ||
+		    team == eteam)
 			continue;               /* teammates are not tracked as enemies */
 
 		VectorSubtract(sorg, b->s.origin, d);
@@ -1710,15 +1718,46 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		if (frac > 1.0f)
 			frac = 1.0f;
 
-		guess[0] = sorg[0] + (float)crandom() * frac * SG_EAR_SPREAD;
-		guess[1] = sorg[1] + (float)crandom() * frac * SG_EAR_SPREAD;
-		guess[2] = sorg[2] + (float)crandom() * frac * SG_EAR_SPREAD;
+		team_index = SG_TeamIdx(team);
+		if (!SG_EarCandidateBetter(frac, i,
+		    best_listener[team_index] != NULL,
+		    best_fraction[team_index], best_client[team_index]))
+			continue;
+		best_listener[team_index] = b;
+		best_fraction[team_index] = frac;
+		best_distance[team_index] = dist;
+		best_radius[team_index] = radius;
+		best_client[team_index] = i;
+	}
+
+	/* Team belief is one shared callout, so file one observation: the closest
+	 * listener heard it most accurately.  Its noise comes from that team's
+	 * private sequence, independent of client-slot order and cosmetic RNG. */
+	for (t = 0; t < 2; t++)
+	{
+		edict_t *b = best_listener[t];
+		vec3_t guess;
+		float frac;
+		int seed;
+
+		if (!b)
+			continue;
+		frac = best_fraction[t];
+		sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
+		guess[0] = sorg[0] + SG_EarRandomSigned(sg_ear_random[t]) *
+		    frac * SG_EAR_SPREAD;
+		sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
+		guess[1] = sorg[1] + SG_EarRandomSigned(sg_ear_random[t]) *
+		    frac * SG_EAR_SPREAD;
+		sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
+		guess[2] = sorg[2] + SG_EarRandomSigned(sg_ear_random[t]) *
+		    frac * SG_EAR_SPREAD;
 
 		seed = Rune_NearestSeed(r, guess);
 		if (seed < 0)
 			continue;
 
-		Caco_EnemyPlace(SG_TeamIdx(team), ecl, seed, false, false);
+		Caco_EnemyPlace(t, ecl, seed, false, false);
 
 		/* the quad announcing its own ending (damage2 = the fade warning,
 		 * played once at 3s remaining). Index resolved lazily -- precache
@@ -1726,14 +1765,14 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		if (!sg_quadsound_idx)
 			sg_quadsound_idx = sg_host.soundindex("items/damage2.wav");
 		if (soundindex == sg_quadsound_idx)
-			sg_caco_quadheard[SG_TeamIdx(team)] = level.time;
+			sg_caco_quadheard[t] = level.time;
 
 		/* the haste rune's firing voice: this client is hasted NOW */
 		if (!sg_hastesound_idx)
 			sg_hastesound_idx = sg_host.soundindex("player/lava1.wav");
 		if (soundindex == sg_hastesound_idx && ecl >= 0 &&
 		    ecl < SG_DMG_CLIENTS)
-			sg_caco_hastefire[SG_TeamIdx(team)][ecl] = level.time;
+			sg_caco_hastefire[t][ecl] = level.time;
 
 		/* Sampled 1-in-32: a busy-server measurement found roughly 9k
 		 * accepted events per game -- the ear works, the log need not
@@ -1743,7 +1782,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 			           "err<=%.0f seed=%i\n",
 			           b->client->pers.netname,
 			           emitter->client->pers.netname,
-			           soundindex, channel, dist, radius,
+			           soundindex, channel, best_distance[t], best_radius[t],
 			           frac * SG_EAR_SPREAD, seed);
 	}
 }
@@ -2294,9 +2333,12 @@ void Caco_Reset(void)
 		int t, k;
 
 		for (t = 0; t < 2; t++)
+		{
+			sg_ear_random[t] = SG_EarRandomInitial((unsigned)t);
 			for (k = 0; k < SG_CALL_TOPICS; k++)
 				caco_callout_random[t][k] =
 				    SG_CalloutRandomInitial((unsigned)t, (unsigned)k);
+		}
 	}
 	memset(caco_relay, 0, sizeof(caco_relay));
 	memset(sg_caco_proj, 0, sizeof(sg_caco_proj));

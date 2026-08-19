@@ -1461,6 +1461,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       air-strafe writers stand down for that transaction, intermediate slew
       bearings keep the trigger off, and sound-fire cadence is spent only when
       the validated bearing reaches the engine.
+      Shared sound belief now uses the closest audible teammate for each team
+      instead of letting the last client slot overwrite a better observation.
+      Its placement error advances a private per-team sequence, so cosmetic
+      randomness and listener roster order cannot move tactical enemy belief.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

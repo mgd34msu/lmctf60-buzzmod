@@ -643,6 +643,23 @@ int main(void)
 
 
 class DefenseCombatIntegrationTest(unittest.TestCase):
+    def test_shared_sound_belief_uses_best_listener_and_private_randomness(self) -> None:
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        ear = (ROOT / "slipgate/sg_ear_random.h").read_text()
+        note = caco[caco.index("void SG_NoteSound"):
+                    caco.index("/* ------------------------------------------------------------ the hit sense */")]
+
+        self.assertIn("best_listener[2]", note)
+        self.assertIn("eteam != CTF_TEAM_RED && eteam != CTF_TEAM_BLUE", note)
+        self.assertIn("team != CTF_TEAM_RED && team != CTF_TEAM_BLUE", note)
+        self.assertIn("SG_EarCandidateBetter(frac, i", note)
+        self.assertIn("for (t = 0; t < 2; t++)", note)
+        self.assertEqual(note.count("Caco_EnemyPlace("), 1)
+        self.assertNotIn("crandom()", note)
+        self.assertEqual(note.count("SG_EarRandomNext(sg_ear_random[t])"), 3)
+        self.assertIn("candidate_fraction < best_fraction", ear)
+        self.assertIn("candidate_client < best_client", ear)
+
     def test_aimed_fire_survives_only_at_its_validated_command_view(self) -> None:
         move = (ROOT / "slipgate" / "sg_move.c").read_text()
         combat = move.index("SG_CombatFrame(e, cmd, &engaged)")

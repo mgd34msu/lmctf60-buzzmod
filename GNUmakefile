@@ -1426,7 +1426,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_identity_test.gnu.o: tests/sg_identity_test.c slipgate/sg_chat.h $(REVISION_HEADER)
+.sg_identity_test.gnu.o: tests/sg_identity_test.c slipgate/sg_chat.h \
+		slipgate/sg_ear_random.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 

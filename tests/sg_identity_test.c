@@ -15,6 +15,7 @@
 #include "slipgate/sg_persona_assignment.h"
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_ear_random.h"
 #include "slipgate/sg_role_skew_random.h"
 #include "slipgate/sg_chat.h"
 
@@ -259,6 +260,35 @@ static void TestCalloutRandomness(void)
 	delay = SG_CalloutRandomDelay(state, 0.5f, 0.9f);
 	CHECK(delay >= 0.5f && delay < 0.9f);
 	CHECK(SG_CalloutRandomNext(state) != state);
+}
+
+static void TestEarRandomnessAndListenerSelection(void)
+{
+	uint32_t red, blue;
+	int expected_random;
+	float value;
+
+	srand(7253);
+	expected_random = rand();
+	srand(7253);
+	red = SG_EarRandomInitial(0);
+	blue = SG_EarRandomInitial(1);
+	CHECK(red != 0 && blue != 0 && red != blue);
+	CHECK(red == SG_EarRandomInitial(0));
+	CHECK(rand() == expected_random);
+	red = SG_EarRandomNext(red);
+	value = SG_EarRandomSigned(red);
+	CHECK(value >= -1.0f && value < 1.0f);
+	CHECK(SG_EarRandomNext(blue) != SG_EarRandomNext(red));
+
+	CHECK(SG_EarCandidateBetter(0.6f, 8, 0, 0.0f, -1));
+	CHECK(SG_EarCandidateBetter(0.2f, 9, 1, 0.6f, 1));
+	CHECK(!SG_EarCandidateBetter(0.7f, 0, 1, 0.6f, 1));
+	CHECK(SG_EarCandidateBetter(0.6f, 0, 1, 0.6f, 1));
+	CHECK(!SG_EarCandidateBetter(0.6f, 2, 1, 0.6f, 1));
+	CHECK(!SG_EarCandidateBetter(-0.1f, 0, 0, 0.0f, -1));
+	CHECK(!SG_EarCandidateBetter(1.1f, 0, 0, 0.0f, -1));
+	CHECK(!SG_EarCandidateBetter(NAN, 0, 0, 0.0f, -1));
 }
 
 static void TestValidAndFloatPrecision(void)
@@ -582,6 +612,7 @@ int main(void)
 	TestPersonaAssignment();
 	TestEscapeRandomness();
 	TestCalloutRandomness();
+	TestEarRandomnessAndListenerSelection();
 
 	if (failures)
 	{

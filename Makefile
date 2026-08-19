@@ -1539,7 +1539,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_identity_test.make.o: tests/sg_identity_test.c slipgate/sg_chat.h $(REVISION_HEADER)
+.sg_identity_test.make.o: tests/sg_identity_test.c slipgate/sg_chat.h \
+		slipgate/sg_ear_random.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
