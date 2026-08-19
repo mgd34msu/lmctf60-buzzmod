@@ -62,4 +62,13 @@ static inline int SG_RoleMissionHold(int role, int goal_cost,
 	       goal_cost >= 0 && goal_cost < 1500;
 }
 
+/* The generic wedge clock measures navigation deadlock, not a stationary
+ * firefight.  A current retained duel or combat ownership from the preceding
+ * frame is positive activity even when the body has not translated. */
+static inline int SG_WedgeClockReset(float displacement, int duel,
+	int engaged_last)
+{
+	return displacement > 96.0f || duel || engaged_last;
+}
+
 #endif /* SG_ROLE_POLICY_H */

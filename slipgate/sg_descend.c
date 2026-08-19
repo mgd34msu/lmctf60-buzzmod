@@ -3931,7 +3931,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * war. A death costs less than a statue.
 	 */
 	VectorSubtract(e->s.origin, bot->wedge_org, d);
-	if (VectorLength(d) > 96.0f)
+	if (SG_WedgeClockReset(VectorLength(d), duel, bot->engaged_last))
 	{
 		VectorCopy(e->s.origin, bot->wedge_org);
 		SG_Mark(&bot->wedge_since);

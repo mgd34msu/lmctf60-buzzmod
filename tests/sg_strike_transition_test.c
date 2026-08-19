@@ -1016,6 +1016,14 @@ static void TestMissionHoldSurvivesGenericWedgeValve(void)
 	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, SG_FIELD_INF, true));
 }
 
+static void TestCombatActivityResetsGenericWedgeClock(void)
+{
+	CHECK(!SG_WedgeClockReset(96.0f, false, false));
+	CHECK(SG_WedgeClockReset(96.01f, false, false));
+	CHECK(SG_WedgeClockReset(0.0f, true, false));
+	CHECK(SG_WedgeClockReset(0.0f, false, true));
+}
+
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
@@ -1029,6 +1037,7 @@ int main(void)
 	TestHumanOrderOwnsStrikeAdmission();
 	TestDeathLocationRequiresPriorBelief();
 	TestMissionHoldSurvivesGenericWedgeValve();
+	TestCombatActivityResetsGenericWedgeClock();
 	if (failures)
 		return 1;
 	puts("sg_strike_transition_test: ok");

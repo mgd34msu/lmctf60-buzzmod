@@ -260,6 +260,9 @@ The generic fifteen-second wedge suicide now recognizes a near-goal organic
 escort as an intentional carrier-screen station, just like the existing
 defender post and exact human cover hold. Escorts outside the bounded goal band
 remain subject to normal stuck recovery.
+The same valve now resets on a current retained duel or combat ownership from
+the preceding frame. A bot holding position to aim and fire is therefore live
+combat activity, not a navigation deadlock eligible for forced suicide.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a
