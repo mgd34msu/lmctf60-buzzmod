@@ -1,15 +1,19 @@
 # LMCTF BuzzMod
 
 Quake II CTF mod. Fork of [QwazyWabbit's LMCTF](https://github.com/QwazyWabbitWOS/lmctf60)
-with persistent player stats.
+with persistent player stats and the native SLIPGATE bot platform.
 
-> **Note:** This mod is in active development and is likely not in working
-> condition at any given moment. Please be patient.
+Tagged releases are the supported install boundary. The development branches
+remain active while the full-project completion gates in
+[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) are being closed;
+do not treat an arbitrary checkout or locally generated server bundle as a
+release.
 
 ## Install
 
-Grab both files from [releases](https://github.com/mgd34msu/lmctf60-buzzmod/releases)
-and drop them in your `lmctf` directory:
+From [releases](https://github.com/mgd34msu/lmctf60-buzzmod/releases), download
+`lmctf6-buzzmod.pak` plus the game module for the server's platform and place
+both in the `lmctf` directory:
 
 | | |
 |-|-|
@@ -28,12 +32,11 @@ The database creates itself. `1` gives one file per player instead; `0` is off.
 
 Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmstats).
 
-## SLIPGATE bots (in development — not yet released)
+## SLIPGATE bots
 
-SLIPGATE is a from-scratch bot system being developed for the mod. **It is
-not part of any release yet** — it lives on a development branch and only
-runs on our internal test servers. It will ship in a future release once
-it's ready.
+SLIPGATE is the mod's from-scratch bot system. It is built into the game module;
+there is no separate bot library. The current source is still closing the
+whole-project gates required for `v1.0.0`.
 
 The goal: bots that
 play LMCTF the way humans play it — grapple-first movement, real flag-carrier
@@ -49,25 +52,53 @@ combat habits are mined from a large corpus of demos from the game's
 competitive era and validated in continuous automated experiments — every
 behavior ships only after winning a controlled A/B trial.
 
-Working today on the development builds: full steal → carry → escort → capture play at every team size
-from 2v2 to 7v7, cooked-grenade area denial, sound-directed speculative fire,
-landing-point rocket leads on airborne targets, covered approach routing,
-route commitment ("stay the course until it stops being good enough"), and
-computed rail-lane defense posts.
+Current source includes steal → carry → escort → capture play, physics-proved
+RUNE navigation, grapple movement, combat and perception controllers, team
+roles, chat, and persistent match instrumentation. Completion still requires:
 
-Looking to add, in general terms:
+- generate, independently accept, and cold-load RUNE artifacts for all 181
+  authoritative maps;
+- finish the measured bot outcome and visible-behavior gaps while preserving
+  the movement, combat, perception, and team-play non-regression gates;
+- run the ten-server production fleet as persistent processes over the exact
+  rotated top-20 lists and retain map-local receipts across native transitions;
+- freeze, install, verify, and publish one hash-bound source/corpus/bundle
+  identity.
 
-- Smarter high-density play — coordinated breaches when the flag room never
-  clears, instead of waiting forever or dying at the pedestal
-- Attackers that exploit a railer's rhythm — sprint windows between shots,
-  fling arcs that end behind cover
-- Smoother travel movement where it still looks bot-like, without giving up
-  any speed or outcomes
-- True air-strafe acceleration chained through hook flights
-- Defense that adapts its posts per map instead of one doctrine everywhere
-- Bots modeled on individual players from the demo archive — styles, not
-  just averages
-- Rune-aware strategy beyond incidental pickups
+See [`SLIPGATE.md`](SLIPGATE.md) for the design and current behavior, and the
+completion plan for the exact gates and dependency graph.
+
+### Server commands
+
+SLIPGATE is administered through the game DLL's `sv` command surface:
+
+| Command | Effect |
+|-|-|
+| `sv rune` | generate and atomically install `<gamedir>/maps/<map>.rune` for the currently loaded map |
+| `sv sg add` | add one bot and let the team balancer place it |
+| `sv sg add red` / `sv sg add blue` | add one bot to an explicit team |
+| `sv sg list` | print the active bot roster |
+| `sv sg remove <name-or-slot>` | remove one bot |
+| `sv sg remove` | remove every bot |
+| `sv sg kick worst` | remove the lowest-ranked active bot |
+| `sv sg weights` | print the active weight source and values |
+| `sv sg weights reload` | reload weights, then print them |
+
+`sv rune` mutates the active game directory when generation succeeds; it is not
+the corpus acceptance command. A production RUNE must also pass both C readers,
+the Python reader, lint, applicable semantic checks, and a fresh-process load
+under the exact module/BSP/config identity.
+
+### Current development blockers
+
+| Area | Current code state |
+|-|-|
+| RUNE corpus | The tracked list/controller now covers 181 distinct maps (including both `lmctf02` and `lmctf02c`), requires GNU/Make C-reader agreement with Python and lint, runs applicable semantic checks, and requires a separate bounded cold-load process before PASS. The 181-map generation run has not yet completed. |
+| `lmctf58` | The current artifact passes structural readers but is missing live DIRECT plans for four CellarDoor/CellarDoor2 identities. It is not accepted. |
+| Fleet | Non-random maplists now preserve file order and advance/wrap in the same `q2ded` process. `iterate2.sh` still launches finite one-map processes with hard-coded roster tables, and `waveloop.sh` recreates them and discovers a repo-root module. Persistent ten-process top-20 operation and explicit bundle install are not implemented. |
+| Tool readers | `runeio.py --expected-identity` reaches an undefined helper; `corpusgraph.py` contains duplicate loader definitions and calls `math.isfinite` without importing `math`. |
+| Bot outcomes | Telemetry consumers now parse the production `seed/goal/sgoal/spd` schema and fail on zero recognized rows. Exact-build matched trials for steal initiation, conversion, defense, and captures remain open. |
+| Release | The workflow builds the Linux/Windows modules and runs both Make-dialect host gates. The complete authenticated server bundle, transactional cutover, persistent-fleet cycle, and final tag are not complete. |
 
 ## What's tracked
 

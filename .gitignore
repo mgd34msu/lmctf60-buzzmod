@@ -36,6 +36,18 @@ tools/waveloop.log
 tools/*.log
 tools/runs-archive/
 
+# transient diagnostics, native POV sandboxes, and host-test products
+/.diag-*.gdb
+/.pov-native-live-*/
+/aux-*-launch.log
+/docs-layout-isa.md
+/*.gnu
+/*.make
+/tools/pov-supervisor
+/tools/rune-logs-*/
+__pycache__/
+*.py[cod]
+
 # the versioned game modules: reproducible from any commit by hash, so
 # only the current deployable lives in the root and none are kept
 gamex86_64-*.so

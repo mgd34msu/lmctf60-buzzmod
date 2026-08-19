@@ -42,38 +42,28 @@ in `LEDGER.md` and the git history.
   per-bot personas (movement taste, hook enthusiasm, chat voice), and
   they flow into server stats like any player.
 
-## This release
+## Current source and evidence status
 
-**Judgment status:** bot play is tested blind at five levels — raw
-movement, route choice, gunfights, team decisions, and match outcomes.
-**Raw movement, gunfights, and team decisions have all passed**: for
-each, three independent fresh judges could not beat chance telling bot
-film from human film — on the gunfight and team sets, the bots were
-called "human" more often than the actual humans were. Route choice is
-closed under an accepted, documented difference (bots never fall off
-ledges; humans do — we declined to teach them). Match outcomes remain
-under active work, tied to raising steal and capture volume to human
-levels.
+The instrumentation measures raw movement, route choice, gunfights, team
+decisions, and match outcomes. No retained result is final-candidate evidence
+until it is rebound or rerun against the exact source/module/BSP/RUNE/config
+identity. The current retained data identifies steal initiation, steal-to-cap
+conversion, defender movement, and captures conceded as the outcome gaps that
+the matched final-build trials must close.
 
-**Adopted and shipping as defaults** (each with trial evidence in the
-ledger):
+**Implemented source behavior:**
 
 - *Movement*: route jitter and ribbon (per-life route variety and
   lateral lane texture), tactics waypoints, no-backtrack pricing,
   lookahead and pure-pursuit steering, air-strafe control, the
-  four-layer pit-safety chain (80% hazard-conversion, zero drownings
-  on census).
+  four-layer pit-safety chain, water traversal, and live mover handoff.
 - *Combat*: weapon commitment (keep the held gun anywhere it is
-  legitimate — the single biggest gunfight-test win), aim texture
-  (human overshoot/settle, +cadence raggedness), honest switch
+  legitimate), aim texture (overshoot/settle and cadence variation), switch
   discipline, full weapon doctrine from the WEAPONS.md audit.
-- *Carrier*: breather pause beats (tripled steal→cap conversion in
-  its dose ladder), human-mined escape priors (first dark feature to
-  earn adoption), water routes, cover pricing, carry movement texture.
-- *Team*: attack-objective weighting (atkobj 125), escort dose 35 —
-  assigned escorts proved to be wasted bodies; freeing two-thirds of
-  them to attack raised captures ~60% across three independent
-  confirmations.
+- *Carrier*: pause beats, human-mined escape priors, water routes, cover
+  pricing, and carry movement texture.
+- *Team*: attack, defend, escort, recover, and intercept assignments;
+  defender posts; coordinated strike state; and shared public objective state.
 - *Comms (Rule 19)*: item callouts, radio wavs with human lag, item
   lead returns, quad 60/30 either-or with speaker rotation, mega
   taker-clocks, the honest ear, hit sense, corpus-mined social chat
@@ -82,39 +72,23 @@ ledger):
   personas, session stats (`sg_sessiondb`) flowing bot games into the
   same analytics database as human games.
 
-**Instruments shipping in `tools/`** (each Stage-A calibrated with its
-validity limits recorded in-file): film.py (blind film sheets),
+**Development instruments in `tools/`** (not runtime release assets): film.py
+(blind film sheets),
 routesheet.py (routes), fightsheet.py (fights, with honest
 hit-attribution), teamsheet.py (team play, coverage-honest escort
 scalar), outcomecard.py (match outcomes), plus the corpus manifest,
-map fixtures for 18 blind-set-capable maps, the set-composition rule,
-and the fleet tooling (server loop, watchdog, atomic deploy) that
-ran hundreds of hours of unattended evaluation during development.
+map fixtures for the currently supported blind sets, the set-composition rule,
+and fleet tooling for unattended evaluation. Instrument validity and retained
+datasets must be rebound to exact source/module/BSP/RUNE receipts before final
+use.
 
-## Planned for the next release
+## Remaining completion work
 
-The active list, verbatim from the working board:
-
-1. **Rung 4 (team decisions) pass.** The over-escort tell is fully
-   decomposed (86–89% mid-field co-travel, five mechanisms tested);
-   the mirror-symmetry tell (identical AI visible as identity on both
-   teams) gets per-team persona spread. Sets run until judges hit
-   chance.
-2. **Rung 5 (match outcomes) pass**, gated on the stage-2 volume work
-   below by design — its only validated instrument measures exactly
-   that gap.
-3. **Stage 2: beat the humans' own numbers while still passing.**
-   Steal initiation (0.26/min vs human 1.3/min), close-approach
-   conversion, and capture volume to human levels.
-4. **Route polish**: plateau tie-break (the A→B→A revisit spike),
-   transition-determinism eye and the dither retry behind it.
-5. **Fights polish**: closing the remaining ~2× hits/shot edge via
-   fire-gate loosening (the honest gap after the hit-marker artifact
-   was fixed — a quarter the size it first appeared).
-6. **Perception features behind their new instruments**, each trialed
-   or struck on measurement the way sg_handoff was: rail-rhythm ear,
-   belief cone/range, item-clock play, spawn-beat knowledge, view
-   tilt, air-strafe chain tuning.
-
-The rule for all of it is unchanged: film → judgment → gap → one
-change → film. Nothing ships on taste.
+[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) is the sole current
+dependency graph and execution authority. In SLIPGATE terms, the remaining work
+is to close all-map RUNE/runtime coverage, repair the telemetry and evidence
+provenance needed for honest comparison, improve the measured steal/capture and
+defense outcomes, verify stable non-mirrored personas in production rosters,
+and rerun qualified matched trials on the exact final build. The rule remains:
+source-grounded mechanism → executable gate → matched film/outcomes → retained
+receipt. Nothing ships on taste or on an old unbound result.

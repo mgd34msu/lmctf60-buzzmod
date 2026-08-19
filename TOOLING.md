@@ -5,12 +5,11 @@ vocabulary is at home — waves, trials, arms, rungs live here freely.
 Everything client- or inheritor-facing (ARCHITECTURE.md, STYLE.md,
 release notes, code comments) speaks self-contained language instead.*
 
-Written 2026-08-12, split out of ARCHITECTURE.md at the owner's
-direction: release assets and development tooling are different worlds,
-and neither document may describe the other's structure. THIS is the
-tooling world. **Nothing described here ships.** The release boundary
-is the build workflow's Assemble step: three game modules and the pak,
-enumerated explicitly, nothing implied.
+Tool source, corpora, raw evidence, and test fixtures are not public runtime
+assets. The current tag workflow publishes the three platform modules, pak,
+`VERSION`, and `SHA256SUMS`. The current tree does not yet build the required
+authenticated server bundle; that missing boundary is tracked in
+`PROJECT-COMPLETION-PLAN.md`.
 
 ## Getting the environment (the zero-contact bar)
 
@@ -25,13 +24,12 @@ ship in `tools/systemd/`. The tool-by-tool reference is
 
 ## What the environment is
 
-- **The fleet** — ten local dedicated servers in paired A/B arms,
-  driven by `tools/iterate2.sh` (per-wave configs, trial arming
-  arrays with the ref-vs-def check), looped by `tools/waveloop.sh`
-  (auto-deploys the newest repo-root .so between waves — which is why
-  local builds get deleted the moment they're verified: a stray
-  mid-edit build once auto-deployed and hung all ten servers),
-  watched by a systemd user timer (`wavewatch`).
+- **The fleet** — ten dedicated servers and the scripts that configure,
+  monitor, record, stop, install, and restart them. Current `iterate2.sh`
+  launches one finite `q2ded` process per lane and `waveloop.sh` recreates the
+  set. `waveloop.sh` also discovers and deploys a repo-root module. These are
+  current defects: production requires ten persistent processes, rotated
+  ordered map lists, native transitions, and explicit bundle selection.
 - **Film** — serverrecord demos landing in the Yamagi data dir, the
   human corpus (2020-2023 client demos) in the game dir, indexed by
   `tools/corpus-manifest.csv`.
@@ -61,17 +59,29 @@ ship in `tools/systemd/`. The tool-by-tool reference is
 4. **Analysis code obeys DRY like release code** — a detector lives in
    one importable place; copy-pasted analysis loops are how two
    instruments drift while reporting the same name.
-5. **Tools never leak into release assets** — the packaging list is
-   explicit; dev sidecars (runes, danger files, priors) are generated
-   server-side, never bundled.
-6. **The fleet never stops; refactors and trials never share a
-   deploy window.**
+5. **Every artifact crosses an explicit boundary.** Tool source, raw film, and
+   corpora do not enter the public download. The required server bundle must
+   include its manifest-bound modules, pak, production configuration, all 181
+   BSP/RUNE pairs, exact top-20 rotated lists, and applicable sidecars.
+6. **Deployment is deliberate and transactional.** A stop sentinel, one owner
+   lock, port/process quiescence, same-filesystem staging, post-verification,
+   and tested rollback are mandatory. Builds are never discovered or installed
+   merely because they exist in the repository root.
+7. **A fleet process owns its full map cycle.** The server changes maps through
+   the game's native `gamemap` lifecycle; launchers do not simulate rotation by
+   killing and recreating the process for each map.
 
-## Boundary checklist (applied at every release)
+## Current release boundary and missing server boundary
 
-- Assemble step packages exactly: gamex86_64.so, gamex86_64.dll,
-  gamex86.dll, lmctf6-buzzmod.pak (+ SHA256SUMS). Nothing from tools/,
-  no cfgs, no fixtures, no corpus.
+- `.github/workflows/build.yml` currently publishes the three platform modules,
+  pak, `VERSION`, and `SHA256SUMS`.
+- No tracked tool currently assembles and publishes the complete server bundle.
+  The required bundle must bind modules, pak, production `rune.cfg`, ordered
+  top-20 authority and rotated lists, all 181 BSP/RUNE pairs, and applicable
+  sidecars. Bot admission uses the `sv sg` command surface; the legacy
+  `assets/bots.cfg` file is not a current SLIPGATE runtime input.
 - Release notes describe player/admin-facing behavior only; the
   development record stays in LEDGER.md and the git history.
 - CI verified per job, never aggregate.
+- The missing bundle/install/rollback/runtime identity gates are execution-plan
+  blockers, not capabilities of the current scripts.

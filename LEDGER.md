@@ -1,5 +1,9 @@
 # SLIPGATE LEDGER
 
+> This is the experiment log, not the current project status. Current code,
+> blockers, dependencies, and execution state live in
+> [`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md).
+
 The internal development record — the one document where project
 coordinates (waves, rungs, trials, arms) are the native language; all
 inheritor-facing documents translate to self-contained findings.
