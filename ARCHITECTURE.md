@@ -1,171 +1,183 @@
-# The cathedral, drawn properly
+# LMCTF BuzzMod architecture
 
-Written 2026-08-12, after the standards pass and the three-territory primitive
-audit (slipgate layer, buzzmod layer, cross-layer seams). This is a convergence
-design, not the current execution plan and not a statement that every listed
-refactor is still required. Counts and open seams are an August 12 snapshot;
-the August 18 source audit and
-[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) decide what remains.
-Existing film is not final-candidate evidence until it is rebound or rerun
-against the exact source/module/BSP/RUNE/config identity. Companion
-documents: `slipgate/STYLE.md` (line law), `TOOLING.md` (development and server
-bundle environment), and `LEDGER.md` (experiment log).
+This document maps the current source tree and its runtime boundaries. It is a
+reference for changing the code, not a roadmap or an experiment log. Remaining
+work and execution order live in
+[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md).
 
-## 1. The layering as it should be
+## Shipped and server-only boundaries
 
-```
-engine (yquake2)             id's masonry -- untouched
-└─ stock game DLL (q2/lmctf) the church -- renovated only at our seams
-   └─ PRIMITIVES              what everything above shares
-   │    field algebra         Field_Alloc/Flood, Surface_At + components
-   │    belief tables         aging sightings, never entity lookups
-   │    frame context         sg_think_t, built once per frame
-   │    registry              sg_cvars X-macro: a value lives once
-   │    util                  SG_DistXY/CanSee/flag resolvers, timers,
-   │                          team-index, RNG helpers
-   │    db core               one SQLite primitive set for both backends
-   └─ PERCEPTION              caco: what a bot has EARNED knowing
-   └─ DECISION                the stage pipeline: goal → price → descend
-   └─ ACTUATION               move/emit: policy becomes a usercmd
-   └─ PRESENTATION            net client shim, personas, chat voice
-   └─ RECORD                  stats DB, stdlog -- one write path
-```
+The project has three distinct artifact classes:
 
-**Scope note, reconciled 2026-08-18:** the layering below describes the game
-module and its runtime contracts. Tool source, raw corpora, and test evidence
-remain outside it. The public download and the authenticated server bundle are
-distinct boundaries: the former supplies player/admin release assets; the
-latter also binds the exact production config, roster policy, 181 BSP/RUNE
-pairs, rotated top-20 lists, and applicable sidecars needed to reproduce the
-accepted fleet. Both manifests are explicit and hash-bound.
+- **Public release assets:** one platform game module plus
+  `assets/lmctf6-buzzmod.pak`, `VERSION`, and `SHA256SUMS`.
+- **Server runtime data:** the two module aliases, pak, production config,
+  BSP/RUNE pairs for all supported maps, the ordered fleet map list, and any
+  applicable sidecars. These belong to one authenticated server-bundle
+  manifest even when they are not public download assets.
+- **Development inputs and evidence:** generators, readers, tests, human/demo
+  corpora, reports, and retained run receipts. These do not belong in the game
+  directory merely because they are tracked by Git.
 
-Two seams get formal surfaces:
-- **`sg_hooks.h`** — every game-DLL-facing SLIPGATE entry point, one
-  line each, so `grep SG_ sg_hooks.h` answers "what can legacy call."
-  Today 8 of 20 hooks are hand-declared in callers and one
-  (SG_CombatHit) has no header prototype anywhere.
-- **Event hooks vs polling, decided per datum**: events for what a poll
-  cannot reconstruct (damage direction, item-taken timing, rail
-  rhythm); polling for what entity state always carries (flag status).
-  The tree already follows this instinctively; it becomes doctrine.
+Code that moves an artifact across one of these boundaries must name the exact
+source and destination, verify content identity, and fail without partially
+publishing a replacement.
 
-## 2. What hindsight validates — keep, unchanged
+## Game module lifecycle
 
-- **Cost-field algebra as the decision language.** Every behavior that
-  passed judgment is expressed as field composition. This is the
-  platform's load-bearing invention.
-- **Earned perception.** Belief tables with ages, Rule 19 comms as the
-  only item intelligence. No judged rung required weakening it.
-- **The film gate.** Instruments + blind judges + pre-registered bars.
-  It caught what code review never would have. (The gate is
-  development process, not release structure -- see TOOLING.md.)
-- **Evidence-carrying banners.** Measured findings in comments are
-  this codebase's institutional memory — self-contained per the
-  refined rule 8, with project coordinates confined to LEDGER.md.
-- **The print shim.** All 164 bprintf/cprintf sites already funnel
-  through one choke point in sg_net.c without either layer knowing —
-  the seam pattern working as intended.
+`g_main.c:GetGameAPI` exports the Quake II game-module interface. The important
+runtime sequence is:
 
-## 3. What we'd do differently from day one → the convergence list
+1. `InitGame` registers cvars and initializes process-lifetime state.
+2. `SpawnEntities` loads one map, initializes LMCTF entities, and establishes
+   SLIPGATE level identity and map-local state.
+3. `G_RunFrame` advances entities, game rules, SLIPGATE, and client end-frame
+   presentation.
+4. `ExitLevel` closes map-local authorities and queues `gamemap`; the engine
+   loads the next map without terminating `q2ded`.
+5. module shutdown flushes process-lifetime resources.
 
-Ranked by (payoff × safety), each item its own film-gated commit.
-Counts are from the audits, not estimates.
+The configured non-random map list is read in `g_save.c`. Its file order is
+preserved. Startup aligns the current map with the sequential cursor, and
+`EndDMLevel` advances and wraps that cursor. The random-map compile-time branch
+has separate selection behavior and does not consume the sequential cursor.
 
-**P1 — primitives with existing proven patterns (do first)**
-1. Timer/cooldown primitives — 171 comparison sites across 59 fields
-   in three identical hand-rolled shapes. `SG_TimerReady/Arm/Expired`,
-   `SG_Stopwatch`.
-2. Team-index primitives — 104 unmarked `team - 1` sites plus a second
-   spelling (`team - CTF_TEAM_RED`, 7) and opponent-index (3).
-   `SG_TEAM_IDX`/`SG_OPP_IDX`.
-3. Adopt `SG_FlagStand` at the 7 sites still hand-rolling the G_Find
-   it was built to replace (think-path re-scans for immobile entities).
-4. Cache the mega entity — two sibling functions each run O(num_edicts)
-   scans per bot-second for a spawn point that never moves; the fix
-   pattern (Combat_CacheItems) already exists in the same file.
-5. `sg_hooks.h` — the legacy seam, one header.
+## LMCTF host layer
 
-**P2 — the buzzmod record layer (one write path)**
-6. `ctf_sqlite_core.{c,h}` — the two backends carry duplicate copies of
-   error/exec/transaction/migration/schema primitives and have ALREADY
-   drifted (WAL tuning exists in one, not the other). One core, both
-   call it.
-7. Prepared-statement reuse — 38 prepare sites re-parse SQL per call;
-   DB_SessionRecord already demonstrates the reset/clear-bindings
-   idiom. Generalize it.
-8. DB_NewID's missing rollback on failed COMMIT; its three va()-built
-   INSERTs become bound parameters.
-9. stdlog joins the gamedir path convention (the one Rule 7 violation
-   in buzzmod); failed log open stops being server-fatal.
-9b. The presentation layer (docs/LAYOUT.md): a stat-slot registry and
-   a layout compiler replacing ten hand-assembled producers with five
-   different overflow-guard styles -- screens as declarative tables,
-   the 1400-byte wire budget enforced by construction, hot data on
-   the free stat/configstring channels. Two unguarded producers
-   (menus, MOTD) were interim-guarded 2026-08-12.
+The root `g_*.c` and `p_*.c` files own CTF rules, entities, weapons, clients,
+HUD/layouts, map transitions, logging, and persistent statistics. This layer is
+the authority for player-visible outcomes:
 
-**P3 — wiring and flow (in progress / opportunistic)**
-10. `sg_think_t` through the eleven stages (defined; wiring underway).
-11. Split the sg_bot.h junk drawer into sg_corpus.h / sg_frame.h.
-12. Player-lookup-by-name-fragment helper (two copies today);
-    spawn_loadout resolution cached across respawns (three itemlist
-    scans per token per spawn today); ctf_BSafePrint stops discarding
-    its priority argument into an unconditional dprintf.
-13. Angle-normalize and RNG-range helpers (7 and 18 sites); the
-    `safe_append` idiom named when its second copy appears.
-14. Control-flow simplification, one flow at a time, canary-gated —
-    the relocated-not-reduced complexity from the standards pass.
-15. Banner-evidence translation — existing comments citing
-    project-internal coordinates (wave numbers, rung labels) are
-    rewritten as self-contained findings when their file is next
-    touched (STYLE.md rule 8 as refined 2026-08-12).
+- `Touch_Item` and `ctf_flagtouch` decide flag pickup, return, and capture;
+- `T_Damage`, `Killed`, and `player_die` decide damage and deaths;
+- `p_stats.c`, StdLog, and the SQLite backends record authoritative counters;
+- `BeginIntermission`, boards, and match reports publish end-of-map results;
+- observer/chase code owns client demo recording and spectator presentation.
 
-**Fixed already during the audit** (2026-08-12): the three stale
-ERR_FATAL gi.error sites (NULL-format on the fatal path) and the two
-FL_BOT-vs-SG_OwnsBot debug gates.
+SLIPGATE may choose commands and consume public events, but it does not bypass
+these host outcomes.
 
-## 4. What the audits cleared
+Root `sg_*.c` paths are tracked symlink aliases for corresponding
+`slipgate/sg_*.c` implementations. Edit the `slipgate/` target, not both names.
 
-Worth recording what needs NO work, so effort doesn't drift there:
-string/buffer safety in both added layers (zero raw sprintf/strcpy in
-slipgate; buzzmod's are all bounds-guarded — the historic crash class
-is dead), ring buffers (two, both correct, deliberately simple),
-reimplemented data structures (none), time representations (four, no
-cross-representation comparison exists), per-frame scans introduced by
-buzzmod (none), and g_ctffunc's zero SG_ hooks (deliberate: flag state
-is pollable).
+## SLIPGATE runtime pipeline
 
-## 5. The coming split (owner's direction, 2026-08-12)
+SLIPGATE bots are native fake clients owned by `slipgate/sg_client.c`.
+`SG_OwnsBot` is the ownership boundary; stock monster AI and human clients do
+not enter the bot controller through a flag or name heuristic.
 
-SLIPGATE will likely become its own repository eventually — the bot
-platform as a standalone project, with LMCTF as its first host. This
-is a LONG-TERM direction, not a near-term task: beyond the seam work
-below, a real split needs game-mode generalization the platform does
-not have today — the decision layer thinks in CTF (roles, flag
-fields, carrier logic would need a DM-only mode or a pluggable
-objective model), and the movement layer assumes LMCTF's offhand
-grapple (a non-offhand-hook or hookless host changes the proof and
-pursuit machinery). Nothing here schedules that work; the direction
-just informs today's choices:
+At map load, `SG_LevelChange` retires the previous level and `SG_LevelSetup`
+binds the new map/RUNE/runtime state. Each `SG_RunFrame` then moves information
+through these layers:
 
-- `sg_hooks.h` (P1 item 5) becomes the platform's public API in
-  waiting — after the split it is the surface a host game implements
-  against.
-- The coupling inventory that matters: slipgate/ currently includes
-  the host's `g_local.h` and `g_ctffunc.h` directly. Pre-split, new
-  code avoids deepening that reach; the split itself will interpose a
-  host-adapter header where those includes are today.
-- The instruments divide naturally: the demo-protocol layer
-  (dm2speed/demoents/demokin) is game-agnostic and travels with
-  SLIPGATE; the CTF-specific instruments (stands, carry windows, flag
-  logic) stay host-side or become the host's instrument pack.
-- Nothing splits until the film gate can run on both sides of the
-  boundary — the split is itself a convergence step, proven like any
-  other.
+1. **Perception (`sg_caco.c`)** records earned sight, sound, damage, item, flag,
+   and teammate information. Enemy state is an aging belief, not a direct
+   entity lookup granted to decision code.
+2. **Team assignment (`sg_arach.c`, `sg_strike*.c`)** assigns attack, defend,
+   carry, recover, and escort responsibilities from public team/objective
+   state.
+3. **Goal and cost fields (`sg_fields.c`, `sg_goal.c`, `sg_price.c`)** compose
+   route cost from objectives, items, danger, cover, support, and role policy.
+4. **Route descent and actuation (`sg_descend.c`, `sg_move.c`)** select a RUNE
+   link and emit a `usercmd_t`. Compound actions keep explicit ownership,
+   replay, guard, and completion state across frames.
+5. **Combat (`sg_combat.c`)** selects weapons, aims, and fires through normal
+   host weapon/client paths.
+6. **Presentation (`sg_net.c`, `sg_chat.c`, personas and identity code)** makes
+   bots ordinary visible clients while keeping identity and communication
+   authority explicit.
 
-## 6. The rule for all of it
+Host events enter SLIPGATE through named hooks such as `SG_NoteItemTaken`,
+`SG_NoteDamage`, `SG_NoteSound`, and `SG_NoteDeath`. A new behavior that needs
+event information should extend a deliberate hook instead of polling private
+host state from an unrelated controller stage.
 
-The fleet never stops, trials never share a window with refactors, and
-a convergence step that cannot prove behavior identity (build gates +
-canary wave) does not land. The cathedral goes up around the services,
-never instead of them.
+## RUNE navigation lifecycle
+
+A `.rune` is a map- and build-bound navigation artifact. It is not a generic
+waypoint file.
+
+### Contract generation
+
+`slipgate/rune_actions.json` is the authoring source for action identifiers and
+their controller/plan requirements. `tools/gen_rune_contracts.py` emits the C
+and Python contract tables. Tests require the generated tables to match the
+authoring JSON.
+
+### Map generation
+
+`slipgate/sg_rune.c` floods fixed-grid seeds and proves links with the actual
+movement/oracle code. It adds ordinary movement, water, grapple, lift,
+teleport, declared-door, and button-controlled traversal only after their
+specific proof gates pass. The mechanism catalog captures exact entity
+topology and materializes plans for actions that need runtime controllers.
+Objective-core pruning retains only graph state that is usable with respect to
+both flag roots.
+
+`sv rune` generates and atomically installs the current map's artifact in the
+active game directory. It is a generator entry point, not corpus acceptance.
+
+### Wire format, loading, and publication
+
+`sg_rune_codec.c` validates the fixed little-endian wire format, section
+arithmetic, identities, action legality, graph/mechanism shape, and CRCs.
+Artifact loading decodes into an unpublished candidate and publishes only after
+the whole candidate and its live mechanism bindings validate. A failed load
+does not replace the previously published graph.
+
+`sg_rune_install.c` and the sidecar store use same-directory temporary files,
+revalidate authority, rename the accepted file, and clean owned temporary state
+on failure.
+
+### Independent acceptance
+
+`tools/rune_corpus_controller.py` is the 181-map conversion controller. A map
+may report PASS only when generation succeeds and the frozen GNU C reader, Make
+C reader, Python reader, linter, applicable semantic checker, and separate
+fresh-process cold load agree on the artifact. `tools/rune-corpus-maps.txt` is
+the 181-map conversion authority; `tools/topmaps.txt` is only the ordered
+20-map production fleet list.
+
+## Sidecars and analysis data
+
+Binary sidecars carry optional map/RUNE-bound human movement, flag-live,
+escape, defense, and danger inputs. Their headers bind them to the exact RUNE
+identity and payload checksum. Runtime loaders reject mismatched identity or
+malformed payloads rather than adapting them to a different graph. `.snag`
+repairs use a separate strict text format and only add bounded field-cost
+surcharges; they do not alter RUNE graph records or proofs.
+
+Tracked analysis JSON is not automatically runtime authority. A report used to
+accept the final build needs a capture receipt binding its demo/log, source,
+module, BSP, RUNE, config, map, participant, and time interval. The ownership
+and retention rules are in
+[`docs/repository-hygiene.md`](docs/repository-hygiene.md).
+
+## Persistence and presentation
+
+`p_stats.c` owns map/session counters. `ctf_file_io.c` implements per-player
+storage, while `ctf_sqlite_core.c`, `ctf_sqlite_player.c`, and
+`ctf_sqlite_unidb.c` implement the shared SQLite paths using the vendored
+`sqlite3.c` amalgamation. UI/layout code consumes the same authoritative
+counters; it does not maintain a competing result model.
+
+Observer recording is map-local. Every native map transition must close the
+current recording before `gamemap`; a subsequent map needs a new recording
+authority and a separately completed file receipt.
+
+## Build and verification
+
+`GNUmakefile` and `Makefile` are independent supported build/test dialects.
+Both aggregate the C host tests and Python/tool tests. GitHub Actions adds GCC
+and Clang host matrices, Linux module/link checks, Windows x86/x64 builds, and
+warning rejection.
+
+Tests have three different scopes and must not be confused:
+
+- pure reducers and host fixtures prove local state laws;
+- integration tests prove the real source wiring and executable call chain;
+- isolated engine runs prove map/runtime behavior and produce hash-bound
+  receipts.
+
+Final acceptance requires the scope named by the completion plan; a narrower
+test cannot stand in for a real engine, corpus, fleet, or outcome gate.

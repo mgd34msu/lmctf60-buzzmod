@@ -78,8 +78,8 @@ ship in `tools/systemd/`. The tool-by-tool reference is
 - No tracked tool currently assembles and publishes the complete server bundle.
   The required bundle must bind modules, pak, production `rune.cfg`, ordered
   top-20 authority and rotated lists, all 181 BSP/RUNE pairs, and applicable
-  sidecars. Bot admission uses the `sv sg` command surface; the legacy
-  `assets/bots.cfg` file is not a current SLIPGATE runtime input.
+  sidecars. Bot admission uses the `sv sg` command surface and exact roster
+  receipts; there is no separate static bot-roster input.
 - Release notes describe player/admin-facing behavior only; the
   development record stays in LEDGER.md and the git history.
 - CI verified per job, never aggregate.

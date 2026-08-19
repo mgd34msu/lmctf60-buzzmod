@@ -6,15 +6,12 @@ code entirely — every line of the navigation, combat, perception, and
 team logic is native to this codebase, written clean-room, with the
 old botlib removed from the tree and the build.
 
-What makes SLIPGATE different is not a feature list but a standard:
-**the bots are judged blind against recorded human games.** Every
-change ships only after film of bot play, rendered through the same
-instruments as film of real pub play from the 2021–2023 human demo
-corpus, goes in front of fresh judges who are not told which is which.
-A change that makes the bots win more but look less human is rejected.
-A change that survives is kept with its evidence. The full record —
-every adoption, every rejected experiment, every measurement — lives
-in `LEDGER.md` and the git history.
+The acceptance standard compares bot play with recorded human play using the
+same measurement tools, matched configurations, sealed blind material, and
+authoritative match outcomes. The repository contains the instruments and
+retained human/reference data, but old unstamped results do not establish that
+the current build meets that standard. The exact remaining trials and receipt
+requirements are in `PROJECT-COMPLETION-PLAN.md`.
 
 ## How the bots work (short version)
 

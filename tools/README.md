@@ -22,7 +22,7 @@ receipts rather than broad name matching. The current `wavewatch.sh` and
 interfaces. Blind instruments must extract the same observable from human and
 bot film without leaking demo shape into rendered sheets.
 
-Runtime debris that is intentionally skipped below but worth knowing the shape of: `iter-<N>/` directories and `iter-<N>-launch.log` files (one pair per wave, produced by `iterate2.sh`/`waveloop.sh`; hundreds accumulate), `aux-<N>/` and `aux-<N>-launch.log` (same pattern for `aux2.sh`'s side fleet), `campaign-<timestamp>/` directories (per-run logs from `campaign.sh`), `rune-logs/` (raw per-server logs from `runegen.sh` runs), `__pycache__/` (Python bytecode cache), `waveloop.log` (the fleet heartbeat's running log), `runs-archive/` (launch logs appended by `waveloop.sh`), and one-off match logs like `ab-<map>-<timestamp>.log` at the tools/ root (from `abmatch.sh`) that appear and disappear as matches run.
+Runtime debris that is intentionally skipped below but worth knowing the shape of: `iter-<N>/` directories and `iter-<N>-launch.log` files (one pair per wave, produced by `iterate2.sh`/`waveloop.sh`; hundreds accumulate), `aux-<N>/` and `aux-<N>-launch.log` (same pattern for `aux2.sh`'s side fleet), `campaign-<timestamp>/` directories (per-run logs from `campaign.sh`), `rune-logs/` (raw per-server logs from `runegen.sh` runs), `__pycache__/` (Python bytecode cache), `waveloop.log` (the fleet heartbeat's running log), and `runs-archive/` (launch logs appended by `waveloop.sh`).
 
 ---
 
@@ -87,13 +87,6 @@ defects are tracked in `PROJECT-COMPLETION-PLAN.md`.
 - **Outputs:** `tools/campaign-<timestamp>/` (one log per map per game, plus `lanes.log`).
 - **Dependencies:** `q2ded` and the configured game directory. It implements
   its own aggregate grep summary rather than calling `gamestat.sh`.
-
-### `abmatch.sh`
-- **Status:** not a working current launcher. It attempts `sv addbot` for the
-  legacy side, but the current `ServerCommand` dispatcher has no `addbot`
-  command, so it cannot create the documented 4-vs-4 match.
-- **Disposition:** keep out of production use; the necessity audit must either
-  remove it or pair it with a restored, tested legacy-bot command path.
 
 ### `aux2.sh`
 - **Purpose:** a 4-server auxiliary side-fleet, additive to the main ten — currently running the carrier-cover revalidation and a defense-package decomposition (post-only / react-only / both / neither).

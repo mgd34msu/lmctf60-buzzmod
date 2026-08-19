@@ -13,7 +13,6 @@ require_assignment() {
     fi
 }
 
-require_assignment tools/abmatch.sh 'Q2DED_SNAPSHOT="$ENGINE_DIR/q2ded"'
 require_assignment tools/campaign.sh 'Q2DED_SNAPSHOT="$LOG_DIR/q2ded"'
 
 for command in chmod cp grep mktemp pgrep rmdir sleep unlink; do
