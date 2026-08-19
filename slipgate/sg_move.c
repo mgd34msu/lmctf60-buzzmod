@@ -464,6 +464,35 @@ static qboolean SG_OwnDroppedFlagDirectTouchAuthority(edict_t *e, int team,
 	return true;
 }
 
+/* A home flag is public CTF state, but the carrier earns terminal steering
+ * only inside the same physical touch envelope as every other flag contact.
+ * This is capture approach authority, not capture authority: ctf_flagtouch
+ * remains the only path that scores. */
+static qboolean SG_OwnHomeFlagDirectTouchAuthority(edict_t *e, int team,
+	edict_t **flag_out)
+{
+	edict_t *flag;
+	trace_t body;
+
+	if (flag_out)
+		*flag_out = NULL;
+	if (!e || !e->client || !sg_host.trace)
+		return false;
+	flag = SG_OwnFlag(team);
+	if (!flag || !ctf_flagathome(flag) ||
+	    SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
+	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f)
+		return false;
+	body = sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin, e,
+	    MASK_PLAYERSOLID);
+	if (body.startsolid || body.allsolid ||
+	    (body.fraction < 1.0f && body.ent != flag))
+		return false;
+	if (flag_out)
+		*flag_out = flag;
+	return true;
+}
+
 /* Terminal recovery must end at the source of the admitted belief field, not
  * at the empty home stand.  Multiple zero/minimum sources are resolved by
  * physical proximity to the current seed; no entity or hidden position enters
@@ -3388,12 +3417,12 @@ static qboolean StrikeRailMoveAllowed(const sg_think_t *tc)
 /* Once the current live flag has passed the same-floor and player-hull trace,
  * generic route steering has no remaining authority before the touch.  Its
  * probes extend beyond the item and can therefore "avoid" a wall which is
- * safely behind the pickup; heading smoothing can likewise preserve a stale
- * route bearing for the only frame that matters. */
-static qboolean AttackFlagTerminalGenericSteeringAllowed(
-	qboolean attack_flag_terminal)
+ * safely behind a pickup or scoring touch; heading smoothing can likewise
+ * preserve a stale route bearing for the only frame that matters. */
+static qboolean FlagTerminalGenericSteeringAllowed(
+	qboolean flag_touch_terminal)
 {
-	return !attack_flag_terminal;
+	return !flag_touch_terminal;
 }
 
 /* Phase two is the irreversible rocket-jump boundary: this exact production
@@ -3448,7 +3477,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	vec3_t move_dir;
 	float view_yaw = tc->view_yaw, view_pitch = tc->view_pitch;
 	qboolean have_move = false, open_ahead = false, run_link = false;
-	qboolean attack_flag_terminal = false;
+	qboolean flag_touch_terminal = false;
 	int door_hold = 0;
 	edict_t *door_ent = NULL;
 	edict_t *ordered_escort = (role == SG_ROLE_ESCORT)
@@ -3771,7 +3800,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		    SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag))
 		{
 			have_aim = true;
-			attack_flag_terminal = true;
+			flag_touch_terminal = true;
 			bestlink = -1;
 			tc->bestlink = -1;
 			rally_hold = false;
@@ -4769,12 +4798,17 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				gf = SG_OwnFlag(team);
 				if (gf)
 					flag_at_home = ctf_flagathome(gf);
-				if (gf && !flag_at_home)
+				if (flag_at_home)
+					direct_touch =
+					    SG_OwnHomeFlagDirectTouchAuthority(e, team, &gf);
+				else if (gf)
 					direct_touch =
 					    SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf);
 				if (!SG_StrikeCarrierOwnFlagAimAllowed(gf != NULL,
 				    flag_at_home, direct_touch))
 					gf = NULL;
+				else if (direct_touch)
+					flag_touch_terminal = true;
 			}
 			else if (!have_aim && role == SG_ROLE_RECOVER)
 			{
@@ -4830,7 +4864,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * SG_AttackFlagTerminalAim and its direct-touch proof.  This
 				 * fallback retains capture behavior only; an attacker without
 				 * that proof must never project through a stand marker. */
-				if (role == SG_ROLE_CARRY && bot->seed >= 0)
+				if (role == SG_ROLE_CARRY && flag_touch_terminal &&
+				    bot->seed >= 0)
 				{
 					vec3_t fd7;
 					float fl7;
@@ -4873,7 +4908,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * for comparison; the 5v0 canary's partial conversions are the
 				 * standing instrument that flagged this in 25 match batches.
 				 */
-				if (role == SG_ROLE_CARRY && sg_cv.termbrake->value)
+				if (role == SG_ROLE_CARRY && flag_touch_terminal &&
+				    sg_cv.termbrake->value)
 					SG_FlagTouchBrake(bot, e, gf->s.origin, true);
 			}
 		}
@@ -4901,8 +4937,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * in the 30-degree blind wedge between the fan's first rays.
 			 * Dense mode adds the 15s; the preference-decay ordering is
 			 * preserved (nearest the goal line first). */
-			if (AttackFlagTerminalGenericSteeringAllowed(
-			        attack_flag_terminal))
+			if (FlagTerminalGenericSteeringAllowed(
+			        flag_touch_terminal))
 			{
 			static const float fan_dense[11] = { 0, -15, 15, -30, 30, -60,
 			                                     60, -100, 100, -145, 145 };
@@ -5065,8 +5101,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * drop lip, in precision range, or in water, where the
 			 * snap IS the skill.
 			 */
-			if (AttackFlagTerminalGenericSteeringAllowed(
-			        attack_flag_terminal) && sg_cv.smooth->value &&
+			if (FlagTerminalGenericSteeringAllowed(
+			        flag_touch_terminal) && sg_cv.smooth->value &&
 			    !duel && !precision && bot->hook_phase == 0 &&
 			    e->waterlevel < 2)
 			{
@@ -6506,7 +6542,7 @@ static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
 qboolean SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(
 	qboolean attack_flag_terminal)
 {
-	return AttackFlagTerminalGenericSteeringAllowed(attack_flag_terminal);
+	return FlagTerminalGenericSteeringAllowed(attack_flag_terminal);
 }
 
 int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,

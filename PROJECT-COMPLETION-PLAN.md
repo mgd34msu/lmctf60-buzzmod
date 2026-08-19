@@ -291,6 +291,11 @@ when a fast attacker is misaligned with the flag. It tightens the last turn
 instead of letting full-speed turn radius carry the body around the live item;
 an aligned attacker keeps full throttle, and no route, visibility, or touch
 authority is widened.
+The carrier's exact scoring touch now receives that same terminal heading
+authority. Only a public home flag on the same floor with a clear player-hull
+trace can suppress generic feelers and stale route smoothing or arm the
+through-line and bounded brake; `ctf_flagtouch` remains the sole capture
+authority.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1273,6 +1278,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       A fast misaligned attacker inside the exact direct-touch envelope now
       receives the same bounded terminal throttle already used at the scoring
       touch; aligned runs remain full speed and `ctf_flagtouch` stays authority.
+      A carrier inside an exact same-floor, hull-clear scoring touch now owns
+      terminal heading through contact, so fan probes and stale smoothing cannot
+      turn it away from a legal capture; no wider position or scoring authority
+      is introduced.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.

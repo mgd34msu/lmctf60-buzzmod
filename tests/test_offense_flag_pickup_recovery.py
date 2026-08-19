@@ -428,7 +428,10 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("flag_at_home = ctf_flagathome(gf);", carrier)
         self.assertIn(
             "SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf)", carrier)
+        self.assertIn(
+            "SG_OwnHomeFlagDirectTouchAuthority(e, team, &gf)", carrier)
         self.assertIn("SG_StrikeCarrierOwnFlagAimAllowed(", carrier)
+        self.assertIn("flag_touch_terminal = true;", carrier)
         self.assertIn("gf = NULL;", carrier)
 
         authority = between(
@@ -475,18 +478,55 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)",
             "if (!have_aim && bestlink >= 0)",
         )
-        self.assertIn("attack_flag_terminal = true;", terminal)
+        self.assertIn("flag_touch_terminal = true;", terminal)
         fan = between(move, "Feelers: try the goal heading first", "THE STEADY HAND")
         self.assertIn(
-            "AttackFlagTerminalGenericSteeringAllowed(\n"
-            "\t\t\t        attack_flag_terminal)",
+            "FlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        flag_touch_terminal)",
             fan,
         )
         smooth = between(move, "THE STEADY HAND", "at a drop lip")
         self.assertIn(
-            "AttackFlagTerminalGenericSteeringAllowed(\n"
-            "\t\t\t        attack_flag_terminal)",
+            "FlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        flag_touch_terminal)",
             smooth,
+        )
+
+    def test_home_flag_touch_owns_carrier_terminal_heading(self) -> None:
+        move = source("slipgate/sg_move.c")
+        authority = between(
+            move,
+            "static qboolean SG_OwnHomeFlagDirectTouchAuthority",
+            "static int SG_TerminalFieldSeed",
+        )
+        for token in (
+            "ctf_flagathome(flag)",
+            "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
+            "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
+            "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
+            "body.startsolid || body.allsolid",
+            "body.fraction < 1.0f && body.ent != flag",
+        ):
+            self.assertIn(token, authority)
+
+        fallback_start = move.index("/* last resort: the goal itself, by belief */")
+        fallback = move[fallback_start:move.index(
+            "\n\t\tif (have_aim)", fallback_start)]
+        carrier = between(
+            fallback,
+            "else if (!have_aim && role == SG_ROLE_CARRY)",
+            "else if (!have_aim && role == SG_ROLE_RECOVER)",
+        )
+        self.assertLess(
+            carrier.index("SG_OwnHomeFlagDirectTouchAuthority"),
+            carrier.index("flag_touch_terminal = true;"),
+        )
+        self.assertIn(
+            "role == SG_ROLE_CARRY && flag_touch_terminal &&", fallback)
+        self.assertIn(
+            "role == SG_ROLE_CARRY && flag_touch_terminal &&\n"
+            "\t\t\t\t    sg_cv.termbrake->value",
+            fallback,
         )
 
     def test_empty_flag_room_neither_holds_nor_arms_belief_grenade(self) -> None:

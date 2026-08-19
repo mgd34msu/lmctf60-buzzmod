@@ -569,7 +569,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         move = (ROOT / "slipgate/sg_move.c").read_text()
         terminal = move[move.index("if (!have_aim && tc->strike_pressure"):
                         move.index("if (!have_aim && bestlink >= 0)")]
-        self.assertIn("attack_flag_terminal = true;", terminal)
+        self.assertIn("flag_touch_terminal = true;", terminal)
         self.assertIn("SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true)",
                       terminal)
         self.assertIn("SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)",
