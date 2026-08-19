@@ -3399,6 +3399,20 @@ qboolean SG_CombatWeaponState(edict_t *self,
 	return true;
 }
 
+int SG_CombatHeldAmmoTag(edict_t *self)
+{
+	int held;
+
+	if (!self || !self->client)
+		return -1;
+	Combat_CacheItems();
+	held = Combat_Held(self);
+	if (held < 0 || held >= SG_NUM_WEAPONS || sg_wammo[held] < 0 ||
+	    sg_wammo[held] >= game.num_items)
+		return -1;
+	return itemlist[sg_wammo[held]].tag;
+}
+
 /* 2.3: tier 1 -> 1057 ms of detour, tier 5 -> 199 ms */
 static const float sg_worth_weapon[6] = {
 	0.0f, 1.20f, 0.80f, 0.50f, 0.30f, 0.15f

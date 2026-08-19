@@ -147,6 +147,14 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
                                           class_build_start)]
         self.assertIn("Caco_ItemBelievedRouteable(e)", class_build)
         self.assertIn("Class_PerItem(cls)", class_build)
+        goal = self.text("slipgate/sg_goal.c")
+        ammo_start = goal.index("const int *SG_CollectibleAmmoField")
+        ammo = goal[ammo_start:goal.index(
+            "const int *SG_CollectibleArmorField", ammo_start)]
+        self.assertIn("SG_CombatHeldAmmoTag(bot->ent)", ammo)
+        self.assertIn("SG_AmmoRouteAdmission(item->item->tag, held_ammo_tag",
+                      ammo)
+        self.assertIn("G_AmmoPickupEligible(item, bot->ent)", ammo)
         detour = price[price.index("float Detour_Value"):price.index(
             "float Mega_Detour")]
         self.assertIn("Detour_IdentityItemEligible(tc, cls, kent)", detour)

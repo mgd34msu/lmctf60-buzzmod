@@ -40,4 +40,15 @@ static inline int SG_IdentityItemBeliefAdmission(int cls, int believed_up,
 	       (cls == SG_FC_POWERUP && respawn_within_lead);
 }
 
+/* Ammo worth is priced from the weapon actually held.  The route must name
+ * that weapon's ammo pool too; capacity in an unrelated pool is not utility. */
+static inline int SG_AmmoRouteAdmission(int candidate_tag, int held_tag,
+	int physical_pickup_eligible)
+{
+	if (candidate_tag < 0 || held_tag < 0 ||
+	    (physical_pickup_eligible != 0 && physical_pickup_eligible != 1))
+		return 0;
+	return physical_pickup_eligible && candidate_tag == held_tag;
+}
+
 #endif

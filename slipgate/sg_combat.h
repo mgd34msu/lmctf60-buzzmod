@@ -139,6 +139,10 @@ typedef struct sg_combat_weapon_state_s
 qboolean SG_CombatWeaponState(edict_t *self,
 	                         sg_combat_weapon_state_t *out);
 
+/* Ammo tag consumed by the weapon currently in hand, or -1 when that weapon
+ * has no ammo pool.  This is the identity paired with Worth_Ammo. */
+int SG_CombatHeldAmmoTag(edict_t *self);
+
 /* Read-only production selector used by posted defenders.  The return value
  * is the combat weapon index (0 is the blaster, negative is invalid input),
  * and is the exact selector consumed by the live combat tick. */

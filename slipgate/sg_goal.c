@@ -18,6 +18,7 @@
 #include "slipgate/sg_weights.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_item_route.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_escape_random.h"
@@ -1033,22 +1034,30 @@ const int *SG_CollectibleAmmoField(sg_bot_t *bot)
 	int ents[SG_WEAPON_FIELD_SOURCES];
 	int seeds[SG_WEAPON_FIELD_SOURCES];
 	int costs[SG_WEAPON_FIELD_SOURCES];
-	int bi, count = 0, i;
+	int bi, count = 0, i, held_ammo_tag;
 	qboolean same;
 
 	if (!bot || !bot->ent || !SG_Rune())
 		return NULL;
 	bi = DefenseSupplyBotIndex(bot);
+	held_ammo_tag = SG_CombatHeldAmmoTag(bot->ent);
+	if (held_ammo_tag < 0)
+	{
+		sg_ammo_collectible_ready[bi] = 0;
+		sg_ammo_collectible_count[bi] = 0;
+		return NULL;
+	}
 	for (i = 1; i < globals.num_edicts &&
 	     count < SG_WEAPON_FIELD_SOURCES; i++)
 	{
 		edict_t *item = &g_edicts[i];
 		int seed;
 
-		if (!item->inuse || !item->classname ||
+		if (!item->inuse || !item->classname || !item->item ||
 		    strncmp(item->classname, "ammo_", 5) != 0 ||
 		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
-		    !G_AmmoPickupEligible(item, bot->ent))
+		    !SG_AmmoRouteAdmission(item->item->tag, held_ammo_tag,
+		        G_AmmoPickupEligible(item, bot->ent)))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
