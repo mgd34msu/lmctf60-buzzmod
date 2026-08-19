@@ -1480,6 +1480,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       but the irreversible drop now requires a current clear path to the live
       carrier as well as the existing exact receiver and distance checks. A
       nearby carrier behind a solid wall cannot make the bot discard the rune.
+      Aimed rockets, grenades, BFG, and plasma now apply their weapon- and
+      quad-specific impact danger radius to every live same-team client, not
+      only the shooter or the teammate directly intersecting the trace. Human
+      and SG teammates beside the predicted impact veto the trigger equally.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

@@ -28,6 +28,8 @@ PROBE = r"""
 #include <stdlib.h>
 
 level_locals_t level;
+game_locals_t game;
+edict_t *g_edicts;
 
 int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
     int gunframe, float viewheight, const vec3_t origin, const vec3_t lead,
@@ -38,6 +40,8 @@ int SG_CombatAimTestWeaponRay(int weapon, int hand, int machinegun_shots,
     vec3_t muzzle_out, vec3_t dir_out, float *source_pad_out);
 int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
     int teammate_hit);
+int SG_CombatAimTestTeamSplashSafe(edict_t *self, float safe_radius,
+    const vec3_t impact);
 unsigned SG_CombatAimTestRandom(unsigned identity, unsigned steps);
 unsigned SG_CombatAimTestClientRandom(int client_index,
     uint64_t client_life, unsigned steps);
@@ -371,6 +375,60 @@ static int test_clear_shot_predicate(void)
     return 0;
 }
 
+static int test_team_splash_uses_the_complete_client_roster(void)
+{
+    edict_t clients[5];
+    gclient_t states[5];
+    vec3_t impact = { 0.0f, 0.0f, 4.0f };
+
+    memset(clients, 0, sizeof(clients));
+    memset(states, 0, sizeof(states));
+    game.maxclients = 4;
+    g_edicts = clients;
+
+    clients[1].inuse = true;
+    clients[1].client = &states[1];
+    clients[1].health = 100;
+    states[1].ctf.teamnum = CTF_TEAM_RED;
+
+    /* This client need not be an SG bot.  A live human teammate beside the
+     * impact vetoes the shot even though the physical trace did not hit it. */
+    clients[2].inuse = true;
+    clients[2].client = &states[2];
+    clients[2].health = 100;
+    states[2].ctf.teamnum = CTF_TEAM_RED;
+    VectorSet(clients[2].absmin, 100.0f, -16.0f, -24.0f);
+    VectorSet(clients[2].absmax, 132.0f, 16.0f, 32.0f);
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+
+    /* Exactly d_safe is outside the strict danger interval. */
+    clients[2].absmin[0] = 105.0f;
+    clients[2].absmax[0] = 137.0f;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+
+    clients[2].absmin[0] = 100.0f;
+    clients[2].absmax[0] = 132.0f;
+    states[2].ctf.teamnum = CTF_TEAM_BLUE;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    states[2].ctf.teamnum = CTF_TEAM_RED;
+    clients[2].deadflag = DEAD_DEAD;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    clients[2].deadflag = DEAD_NO;
+    clients[2].movetype = MOVETYPE_NOCLIP;
+    CHECK(SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    clients[2].movetype = MOVETYPE_WALK;
+
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], NAN, impact));
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], INFINITY, impact));
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 0.0f, impact));
+    impact[0] = NAN;
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    impact[0] = 0.0f;
+    states[1].ctf.teamnum = 0;
+    CHECK(!SG_CombatAimTestTeamSplashSafe(&clients[1], 121.0f, impact));
+    return 0;
+}
+
 static int test_target_identity_hysteresis(void)
 {
 	CHECK(SG_CombatLiveEnemyIdentityAllowed(CTF_TEAM_RED, CTF_TEAM_BLUE,
@@ -461,6 +519,7 @@ int main(void)
     CHECK(!test_final_physical_rays());
     CHECK(!test_chaingun_source_envelope());
     CHECK(!test_clear_shot_predicate());
+    CHECK(!test_team_splash_uses_the_complete_client_roster());
     CHECK(!test_target_identity_hysteresis());
     CHECK(!test_combat_randomness_is_per_client());
     puts("combat aim production probe: ok");

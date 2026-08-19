@@ -1295,10 +1295,44 @@ static int Combat_Survivable(edict_t *self)
 	return self->health + (idx ? self->client->pers.inventory[idx] : 0);
 }
 
+/* A clear muzzle ray is not team safety for a splash weapon: a different
+ * teammate can be beside the wall, floor, or target where the shot lands.
+ * Scan the authoritative client roster so human teammates and SG teammates
+ * receive the same protection. */
+static qboolean Combat_TeamSplashSafe(edict_t *self, float dsafe,
+	const vec3_t impact)
+{
+	int team, client_index;
+
+	if (!self || !self->client || !impact || !isfinite(dsafe) ||
+	    dsafe <= 0.0f || !isfinite(impact[0]) || !isfinite(impact[1]) ||
+	    !isfinite(impact[2]))
+		return false;
+	team = self->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return false;
+	for (client_index = 1; client_index <= game.maxclients; client_index++)
+	{
+		edict_t *mate = &g_edicts[client_index];
+		vec3_t centre, delta;
+
+		if (mate == self || !mate->inuse || !mate->client ||
+		    mate->deadflag || mate->health <= 0 ||
+		    mate->movetype == MOVETYPE_NOCLIP ||
+		    mate->client->ctf.teamnum != team)
+			continue;
+		Combat_Center(mate, centre);
+		VectorSubtract(centre, impact, delta);
+		if (VectorLength(delta) < dsafe)
+			return false;
+	}
+	return true;
+}
+
 /*
- * Would firing weapon w right now hurt the bot? impact is the point the
- * pre-fire trace says the shot stops at -- rule R1's own construction:
- * tr.endpos IS the impact point.
+ * Would firing weapon w right now hurt the bot or a live teammate? impact is
+ * the point the pre-fire trace says the shot stops at -- rule R1's own
+ * construction: tr.endpos IS the impact point.
  */
 static qboolean Combat_SplashSafe(edict_t *self, int w, vec3_t impact)
 {
@@ -1321,7 +1355,9 @@ static qboolean Combat_SplashSafe(edict_t *self, int w, vec3_t impact)
 
 	Combat_Center(self, me);
 	VectorSubtract(impact, me, v);
-	return VectorLength(v) >= dsafe;
+	if (VectorLength(v) < dsafe)
+		return false;
+	return Combat_TeamSplashSafe(self, dsafe, impact);
 }
 
 /* ------------------------------------------------------------- the ladders
@@ -4830,6 +4866,12 @@ int SG_CombatAimTestTraceClear(int weapon, int enemy_hit, int unobstructed,
 {
 	return Combat_TraceClears(weapon, enemy_hit != 0, unobstructed != 0,
 	                          teammate_hit != 0) ? 1 : 0;
+}
+
+int SG_CombatAimTestTeamSplashSafe(edict_t *self, float safe_radius,
+                                   const vec3_t impact)
+{
+	return Combat_TeamSplashSafe(self, safe_radius, impact) ? 1 : 0;
 }
 
 uint32_t SG_CombatAimTestRandom(unsigned identity, unsigned steps)

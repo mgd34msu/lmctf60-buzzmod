@@ -697,6 +697,22 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         self.assertIn("VectorLength(delta) < 180.0f", helper)
         self.assertNotIn("SG_MAXBOTS", sound)
 
+    def test_aimed_splash_veto_uses_the_complete_client_roster(self) -> None:
+        combat = (ROOT / "slipgate/sg_combat.c").read_text()
+        helper = combat[combat.index("static qboolean Combat_TeamSplashSafe"):
+                        combat.index("static qboolean Combat_SplashSafe")]
+        splash = combat[combat.index("static qboolean Combat_SplashSafe"):
+                        combat.index("/* ------------------------------------------------------------- the ladders")]
+
+        self.assertIn("client_index <= game.maxclients", helper)
+        self.assertIn("&g_edicts[client_index]", helper)
+        self.assertIn("mate->client->ctf.teamnum != team", helper)
+        self.assertIn("mate->deadflag", helper)
+        self.assertIn("mate->movetype == MOVETYPE_NOCLIP", helper)
+        self.assertIn("VectorLength(delta) < dsafe", helper)
+        self.assertIn("Combat_TeamSplashSafe(self, dsafe, impact)", splash)
+        self.assertNotIn("SG_MAXBOTS", helper)
+
     def test_cvar_and_static_hold_order(self) -> None:
         cvars = (ROOT / "slipgate/sg_cvars.h").read_text()
         move = (ROOT / "slipgate/sg_move.c").read_text()
