@@ -272,6 +272,10 @@ which side of the carrier gets protected.
 Blocked grenade arcs now retire the cook without falling through into the
 ordinary fuse path and re-asserting the attack button. A bot cannot forget the
 transaction while the engine continues holding a live grenade.
+A blocked arc before the first held-trigger frame cancels at zero projectile
+cost. If cooking already began, the grenade remains under phase-two ownership,
+receives an immediate owned aim/release command, and is never misreported as a
+reversible cancellation.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the

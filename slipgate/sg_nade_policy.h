@@ -3,6 +3,14 @@
 
 #include <math.h>
 
+/* Before the first held-trigger command, a blocked plan is reversible.  Once
+ * the engine has seen attack held, clearing it is the physical throw and must
+ * remain inside the cook transaction until that release command is emitted. */
+static inline int SG_NadeBlockedArcMayCancel(int trigger_was_held)
+{
+	return trigger_was_held == 0;
+}
+
 /* Only a live cook transaction may keep the trigger held.  -1 means the
  * ballistic solve is not ready yet and may continue cooking; values below
  * -1.5 are the production blocked-arc sentinel and must never re-arm attack. */

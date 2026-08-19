@@ -8089,7 +8089,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						               MASK_SOLID);
 						if (atr.fraction < 1.0f)
 						{
-							nfly = -2.0f;   /* blocked: no throw */
+							nfly = -2.0f;   /* blocked arc */
 							break;
 						}
 						VectorCopy(ap, lp);
@@ -8097,17 +8097,26 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 				if (nfly < -1.5f)
 				{
-					bot->nade_phase = 0;    /* abandon, cost-free */
-					SG_NadeTargetClear(bot);
-					SG_TimerArm(&bot->nade_next, 4.0f);
-					cmd->buttons &= ~BUTTON_ATTACK;
+					if (SG_NadeBlockedArcMayCancel(
+					        (e->client->buttons & BUTTON_ATTACK) != 0))
+					{
+						/* No held-trigger frame exists yet: this switch/cook
+						 * attempt is still reversible at zero projectile cost. */
+						bot->nade_phase = 0;
+						SG_NadeTargetClear(bot);
+						SG_TimerArm(&bot->nade_next, 4.0f);
+						cmd->buttons &= ~BUTTON_ATTACK;
+					}
+					/* Otherwise the grenade is physically live.  Keep phase two
+					 * through the owned aim/release path below; clearing attack is
+					 * the throw, not a cancellation. */
 				}
 			}
 			else
 				npitch = -atan2f(na[2], nh) * 180.0f / (float)M_PI
 				         - 30.0f;
-			/* A blocked arc retires the transaction above.  Do not let the
-			 * ordinary fuse path re-arm BUTTON_ATTACK after that abort. */
+			/* A pre-hold blocked arc retires the transaction above.  A live cook
+			 * stays in phase two and releases through the owned path below. */
 			if (bot->nade_phase == 2)
 			{
 			/*
@@ -8120,7 +8129,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * command -- the flick. Attack stays held throughout;
 			 * cooking needs the trigger, not the eyes.
 			 */
-			if (!(sg_cv.flycook->value) ||
+			if (nfly < -1.5f || !(sg_cv.flycook->value) ||
 			    (nfly >= 0.0f && ntmr - 0.2f <= nfly + 0.15f) ||
 			    ntmr <= 0.75f)
 			{
