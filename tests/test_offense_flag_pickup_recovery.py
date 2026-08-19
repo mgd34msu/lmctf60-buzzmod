@@ -471,6 +471,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("SG_NadeTargetSwitching(bot)", switch)
         self.assertIn("SG_NadeBoundLiveTarget(e, bot)", switch)
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", switch)
+        self.assertIn("!tc->strike_pressure ||", switch)
+        self.assertNotIn("role != SG_ROLE_ATTACK", switch)
         self.assertIn("SG_NadeTargetClear(bot);", switch)
 
         cook = between(move, "if (!proved_control && bot->nade_phase == 2)", "\n\t\t/*\n\t\t * SOUND-DIRECTED FIRE")
@@ -478,6 +480,9 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         release = cook.index("cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */")
         self.assertLess(cancel, release)
         self.assertIn("SG_CombatLiveEnemy(e)", cook)
+        self.assertIn("!tc->strike_pressure ||", cook)
+        self.assertIn("!armed_target && tc->strike_pressure &&", cook)
+        self.assertNotIn("role != SG_ROLE_ATTACK", cook)
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", cook)
         self.assertIn("SG_AttackFlagTerminalAim(e, team, pickup_aim)", cook)
         self.assertIn("SG_CanSee(e, nade_enemy->s.origin, nade_enemy->viewheight)", cook)

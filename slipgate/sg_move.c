@@ -7670,7 +7670,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * trigger early fires whatever is still equipped (observations:
 			 * zero grenades thrown, the cook squeezed the rail) */
 			if (target_pending &&
-			    (role != SG_ROLE_ATTACK ||
+			    (!tc->strike_pressure ||
 			     SG_AttackFlagDirectTouchAuthority(e, team, NULL) ||
 			     !pending_target ||
 			     !SG_CanSee(e, pending_target->s.origin,
@@ -7725,9 +7725,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * target's current visibility.  The item-through-line resumes on
 			 * the next frame. */
 			if ((armed_target &&
-			     (role != SG_ROLE_ATTACK ||
+			     (!tc->strike_pressure ||
 			      SG_AttackFlagDirectTouchAuthority(e, team, NULL))) ||
-			    (!armed_target && role == SG_ROLE_ATTACK &&
+			    (!armed_target && tc->strike_pressure &&
 			     SG_AttackFlagTerminalAim(e, team, pickup_aim)) ||
 			    !nade_enemy ||
 			    !SG_CanSee(e, nade_enemy->s.origin, nade_enemy->viewheight))
