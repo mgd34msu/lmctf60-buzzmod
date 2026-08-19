@@ -8427,6 +8427,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					as_ok = true;
 					as_chain = (dose >= 2.0f);
 
+					/* The first lean is part of this bot life, not a squad-wide
+					 * zero phase. Teammates entering one road together therefore
+					 * spread across its width instead of hopping in lockstep. */
+					if (bot->as_since == 0.0f)
+						bot->as_phase = SG_AirStrafeInitialPhase(
+						    bot->instance_token,
+						    e->client->ctf.ctfid);
 					bot->as_phase += 2.0f * (float)M_PI * dt / SG_AS_PERIOD;
 					while (bot->as_phase > 2.0f * (float)M_PI)
 						bot->as_phase -= 2.0f * (float)M_PI;

@@ -1509,6 +1509,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       the immutable bot owner plus current client-life identity. Recycled slots
       and modulo-ten slot collisions can no longer synchronize several bodies
       into one squad-wide lateral target.
+      Default air-strafe chains likewise initialize their lean from that private
+      bot-life identity. Teammates entering the same proved road together no
+      longer begin every hop from the identical zero phase and crowd one side.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

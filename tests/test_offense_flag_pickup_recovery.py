@@ -233,6 +233,13 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
                 if (SG_WeaveIdentityMix(7ULL, 11UL) ==
                     SG_WeaveIdentityMix(7ULL, 12UL))
                     return 4;
+                if (SG_AirStrafeInitialPhase(7ULL, 11UL) < 0.0f ||
+                    SG_AirStrafeInitialPhase(7ULL, 11UL) >=
+                        6.2831853071795864769f)
+                    return 5;
+                if (SG_AirStrafeInitialPhase(7ULL, 11UL) ==
+                    SG_AirStrafeInitialPhase(8ULL, 11UL))
+                    return 6;
                 return 0;
             }
             """
@@ -271,6 +278,15 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             self.assertIn("bot->instance_token", section)
             self.assertIn("e->client->ctf.ctfid", section)
             self.assertNotIn("e->client - game.clients", section)
+
+        air = between(move, "THE AIR-STRAFE CHAIN", "The defended stand")
+        self.assertIn("SG_AirStrafeInitialPhase(", air)
+        self.assertIn("bot->instance_token", air)
+        self.assertIn("e->client->ctf.ctfid", air)
+        self.assertLess(
+            air.index("SG_AirStrafeInitialPhase("),
+            air.index("bot->as_phase += 2.0f"),
+        )
 
     def test_team_formation_drift_uses_private_independent_sequences(self) -> None:
         arach = source("slipgate/sg_arach.c")

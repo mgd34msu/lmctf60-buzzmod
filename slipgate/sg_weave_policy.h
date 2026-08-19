@@ -43,4 +43,17 @@ SG_WeaveSideAt(uint64_t bot_instance, unsigned long client_ctfid,
 	return clock < period * 0.5f ? 1 : -1;
 }
 
+/* A chain begins from a private lean instead of resetting every bot to the
+ * same sine origin.  Use a distinct part of the identity mix so sharing a
+ * weave period does not imply sharing an air-strafe shoulder. */
+static float
+SG_AirStrafeInitialPhase(uint64_t bot_instance, unsigned long client_ctfid)
+{
+	uint64_t mixed = SG_WeaveIdentityMix(
+	    bot_instance ^ UINT64_C(0xd6e8feb86659fd93), client_ctfid);
+
+	return 6.2831853071795864769f *
+	    (float)(mixed & UINT64_C(0x00ffffff)) / 16777216.0f;
+}
+
 #endif
