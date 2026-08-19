@@ -1480,7 +1480,7 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
                 stealstage._source_patch_payload(repository)
             (repository / "untracked.c").unlink()
             self.assertEqual(stealstage._run_knowledge_probe(repository), {
-                "tests_run": 13, "failures": 0, "errors": 0,
+                "tests_run": 19, "failures": 0, "errors": 0,
                 "skipped": 0, "successful": True})
             build_inputs = {
                 name: hashlib.sha256((repository / name).read_bytes()).hexdigest()
