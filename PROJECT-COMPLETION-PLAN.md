@@ -106,27 +106,15 @@ Verified and already pushed:
 - The RUNE Python readers have one strict corpus loader, working authenticated
   expected-identity comparison, and adversarial duplicate/non-finite/oversized
   number regressions.
-- The completed `slipgate`/`main` branch pair immediately preceding this status
-  refresh is `e03188a`/`4d00932`; exact-SHA CI runs `32218254723` and
-  `32218447096` passed all eight non-publish jobs. Its latest executable-source
-  ancestor is `bf52886`; the later commits reconcile current documentation and
-  remove the dead legacy `abmatch.sh`/`assets/bots.cfg` path. The containing
-  documentation commit follows the same CI-and-merge cadence and therefore
-  cannot truthfully embed its own eventual merge SHA.
+- All ten required `lmctf58` door-controller identities survive objective-core.
+  The accepted fresh artifact passes both C readers, Python decoding, lint, the
+  exact semantic checker, sanitizers, and a separate fresh-process cold load.
+- The completed `slipgate`/`main` source pair is `6523af5`/`efc30fd`;
+  exact-SHA CI runs `32234992472` and `32235013292` passed all eight
+  non-publish jobs.
 
 Known incomplete work:
 
-- Four `lmctf58` cellar controllers still disappear after their approaches
-  and egresses pass. The first DIRECT safe-water endpoint-bootstrap candidate
-  was rejected by a complete real-map regeneration: generation finished
-  normally, but the exact checker still found only the front doors, gates, and
-  mirrored CellarDoor3 controllers. That candidate is not integrated. Exact
-  replay of RedCellarDoor entry 32 then found the next rejection: the generic
-  approach prefilter applies a 48-unit vertical envelope before pairing the
-  already-proven DIRECT approach with its safe shallow-water egress, while this
-  route's vertical delta is 72 units. Mirrored verification and a narrow
-  controller/egress-aware envelope are still pending; any replacement must pass
-  the ten-controller checker and fresh cold load.
 - No final-source 181-map generation has run to 181/181 PASS. The controller is
   ready; the accepted artifacts do not yet exist.
 - The current tracked fleet launchers still run finite per-map processes. A
@@ -351,35 +339,17 @@ Acceptance:
 - the exact top-20 persistent-fleet evidence retains the normal demo and
   analysis capture.
 
-## Remaining lmctf58 route blocker
+## lmctf58 route closure
 
-The shallow-water and transient-air approach laws are not the current failure:
-exact red/blue CellarDoor and CellarDoor2 approach and egress witnesses pass.
-The four controllers disappear later in link selection or objective-core
-retention.
-
-Required execution:
-
-1. Capture the exact generated links and endpoint topology before pruning.
-2. Identify whether the incoming/outgoing connectivity gate, topology picker,
-   materializer, or objective-core removes each of the four controllers.
-3. Fix the narrow graph law; do not retain unreachable tombstones or bypass
-   objective-core.
-4. Add executable red/blue Door and Door2 regressions plus the existing Door3,
-   AUTO, BUTTON, liquid, transient-air, ticket, callback, pause, death,
-   multi-master, and replay matrix.
-5. Build and test under both Make dialects, strict GCC and Clang, sanitizers,
-   fresh module linking, and normal code review.
-6. Commit and push the proven fix, require exact `slipgate` CI, merge it into
-   `main`, and require exact `main` CI.
-
-Completion evidence:
-
-- the ten-controller semantic checker passes;
-- all six cellar identities have at least one valid plan;
-- representative mirrored cellar endpoints are not tombstoned;
-- each representative route reaches both flag roots;
-- no plan is preserved merely by disabling pruning.
+The narrow DIRECT approach envelope now admits the four safe shallow-water
+CellarDoor and CellarDoor2 pairings without widening dry, AUTO, BUTTON,
+hazardous-liquid, or deep-water behavior. Each selected destination is checked
+again at insertion, objective-core remains authoritative, all six cellar
+identities retain valid plans, and the representative routes reach both flag
+roots. The exact ten-controller checker, both independent C readers, Python
+reader, lint, strict compiler and sanitizer gates, fresh generation, and a
+separate fresh-process cold load are green. This map is closed; it is one member
+of the still-pending final 181-map corpus, not a substitute for that corpus.
 
 ## Final source and dual build
 
@@ -934,7 +904,7 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] Current project plan, 181 authority/controller, map-list fix, telemetry
       consumers, strict readers, documentation hygiene, and the first reviewed
       repository cleanup are integrated through the completed branch pair
-      `00007c8`/`fa38567`; exact-SHA CI runs `32231389111` and `32231399661`
+      `6523af5`/`efc30fd`; exact-SHA CI runs `32234992472` and `32235013292`
       are green.
 - [x] Tracked corpus list contains exactly 181 unique maps, including both
       `lmctf02` and `lmctf02c`.
