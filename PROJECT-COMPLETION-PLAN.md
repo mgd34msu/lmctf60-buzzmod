@@ -233,6 +233,10 @@ trigger decision.
 Early powerup timing jitter now advances a separate per-bot sequence. Another
 bot's route, chat, or fight cannot change when this bot first becomes eligible
 to leave an ordinary mission for an admitted powerup errand.
+Persona allocation now treats both human and SG names as occupied, selects one
+unique authored row when available, and binds that exact row to the displayed
+name. A human name collision cannot create two same-named bots or make a bot
+play a different persona from the identity shown on the roster.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
@@ -447,9 +451,9 @@ Required execution:
    300 seconds, exact roster parity, ordinary bot POV parity, authenticated
    stand fixture, sealed captions, fresh judges, and the required set
    composition on every qualifying map/panel.
-5. Make persona assignment stable per bot identity, independent across teams,
-   uncorrelated with team mirroring, and unable to use hidden opponent identity
-   or information; add an executable assignment/distribution check.
+5. Preserve the executable unique persona/name assignment check and prove from
+   final receipts that both teams instantiated stable, non-mirrored rows;
+   persona policy may not consume hidden opponent identity or information.
 6. Preserve accepted carrier, escort, recover, intercept, radio, movement,
    combat, and public-information behavior under numeric regression gates.
 7. After the final source is promoted, run the match-outcomes rung on aligned

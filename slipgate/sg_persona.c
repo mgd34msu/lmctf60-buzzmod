@@ -14,7 +14,7 @@
 
 /* ------------------------------------------------------------------ table
  *
- * Sixteen rows, sg_names order (sg_arach.c:6704). The tone column in
+ * Sixteen rows, sg_names order (sg_client.c). The tone column in
  * sg_chat.c's chat_voice[] (sg_chat.c:188) was already a casting decision
  * made by somebody -- four names to a voice, terse / cocky / dry / mech --
  * and these rows are written to AGREE with it. A bot the chat file gives a
@@ -161,7 +161,7 @@ void SG_PersonaBind(edict_t *ent, int slot)
 		return;
 	/* the roster is sixteen and the slot allocator is sixteen wide, but
 	 * the mask is written out rather than assumed -- sg_names is indexed
-	 * `slot & 15` at the join too (sg_arach.c:6749) and the two have to
+	 * by this same selected row at the join (sg_client.c) and the two have to
 	 * agree or the name and the character come apart */
 	persona_of[ci] = &sg_personas[slot & 15];
 

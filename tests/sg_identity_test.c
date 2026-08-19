@@ -12,6 +12,7 @@
 #include "slipgate/sg_escort_dose.h"
 #include "slipgate/sg_ribbon_random.h"
 #include "slipgate/sg_lead_random.h"
+#include "slipgate/sg_persona_assignment.h"
 
 sg_host_t sg_host;
 
@@ -161,6 +162,28 @@ static void TestLeadRandomness(void)
 	unit = SG_LeadRandomUnit(state);
 	CHECK(unit >= 0.0f && unit < 1.0f);
 	CHECK(SG_LeadRandomNext(state) != state);
+}
+
+static void TestPersonaAssignment(void)
+{
+	uint32_t occupied = 0;
+	unsigned slot;
+
+	for (slot = 0; slot < 10; slot++)
+	{
+		unsigned selected = SG_PersonaAssignmentChoose(occupied, slot);
+
+		CHECK(selected == slot);
+		CHECK((occupied & (UINT32_C(1) << selected)) == 0);
+		occupied |= UINT32_C(1) << selected;
+	}
+	/* A human occupying Rune makes slot 2 take Slip; the following preferred
+	 * slot cannot reuse Slip and advances to Gate. */
+	occupied = UINT32_C(1) << 2;
+	CHECK(SG_PersonaAssignmentChoose(occupied, 2) == 3);
+	occupied |= UINT32_C(1) << 3;
+	CHECK(SG_PersonaAssignmentChoose(occupied, 3) == 4);
+	CHECK(SG_PersonaAssignmentChoose(UINT32_C(0xffff), 19) == 3);
 }
 
 static void TestValidAndFloatPrecision(void)
@@ -469,6 +492,7 @@ int main(void)
 	TestEscortDose();
 	TestRibbonRandomness();
 	TestLeadRandomness();
+	TestPersonaAssignment();
 
 	if (failures)
 	{

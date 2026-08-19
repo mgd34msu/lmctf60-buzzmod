@@ -15,7 +15,7 @@
  * the same fights, threw the same ropes and held the same posts; the only
  * thing that varied was how well it did all of it. Sixteen names on the
  * scoreboard and one bot behind them, sixteen times over. The census called
- * that gap 7, and the roster naming its own bots (sg_arach.c:6704, "names
+ * that gap 7, and the roster naming its own bots (sg_client.c, "names
  * are identity; identity is data") was the argument for finishing the job:
  * a name that indexes nothing is decoration.
  *
@@ -43,7 +43,7 @@
 #pragma once
 
 /*
- * One row per sg_names entry, in sg_names order (sg_arach.c:6704). The
+ * One row per sg_names entry, in sg_names order (sg_client.c). The
  * bind is by SLOT, so the order of this table and the order of that one
  * are the same fact stated twice -- and stating a fact twice is how it
  * comes to be stated two different ways. The name string is carried here
@@ -67,10 +67,10 @@ typedef struct
 } sg_persona_t;
 
 /*
- * Bind a persona to a bot's client slot. Called from the join path once the
- * client index is real (sg_arach.c, SG_AddBotTeam). Binding by slot rather
- * than by name means the table is consulted once per join instead of once
- * per read, and a roster edit moves both halves together.
+ * Bind a persona to the exact name-row selected by the join path once the
+ * client index is real (sg_client.c, SG_AddBotTeam). Binding by the selected
+ * row rather than reparsing the name means the table is consulted once per
+ * join, and a collision skip moves the displayed name and behavior together.
  */
 void SG_PersonaBind(edict_t *ent, int slot);
 
