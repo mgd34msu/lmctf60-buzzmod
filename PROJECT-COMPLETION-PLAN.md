@@ -285,6 +285,10 @@ The early-return planner also consults the same inventory/skill/co-op admission
 law as `Pickup_Powerup` before committing, while travelling, and before terminal
 homing. A bot at the legal quad or invulnerability capacity cannot abandon its
 objective to camp an item the authoritative pickup callback would reject.
+Every concrete strike duty now retires an optional early-return commitment
+before applying its objective route. Coordinator routing and terminal item
+homing can no longer coexist while a stale pad lease silently survives beneath
+the bot's live BREACH, CLEAR, PRESS, ESCORT, RECOVER, or CARRY mission.
 Sound belief now admits only finite, positively attenuated client audio.
 Map-wide `ATTN_NONE` CTF, vote, and countdown announcements remain audible but
 cannot turn their protocol emitter edict into an enemy position; ordinary

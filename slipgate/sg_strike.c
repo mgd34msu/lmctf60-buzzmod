@@ -19,6 +19,23 @@ int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_rush)
 	return ordinary_attack || strike_rush;
 }
 
+int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty)
+{
+	switch (duty)
+	{
+	case SG_STRIKE_DUTY_BREACH:
+	case SG_STRIKE_DUTY_CLEAR:
+	case SG_STRIKE_DUTY_PRESS:
+	case SG_STRIKE_DUTY_ESCORT:
+	case SG_STRIKE_DUTY_RECOVER:
+	case SG_STRIKE_DUTY_CARRY:
+		return 1;
+	case SG_STRIKE_DUTY_NONE:
+	default:
+		return 0;
+	}
+}
+
 float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,
 	int current_goal_ms, int candidate_goal_ms)

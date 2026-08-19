@@ -1001,6 +1001,14 @@ static void TestInvalidInputDoesNotMutate(void)
 
 static void TestHomeFlagApproachPricing(void)
 {
+	CHECK(!SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_NONE));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_BREACH));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_PRESS));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_ESCORT));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_RECOVER));
+	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_CARRY));
+	CHECK(!SG_StrikeDutyRetiresOptionalErrand((sg_strike_duty_t)-1));
 	CHECK(SG_StrikeEnemyPressureActive(1, 0));
 	CHECK(SG_StrikeEnemyPressureActive(0, 1));
 	CHECK(SG_StrikeEnemyPressureActive(1, 1));

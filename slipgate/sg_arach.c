@@ -3442,6 +3442,8 @@ void SG_BotThink(sg_bot_t *bot)
 			int weapon_remaining_ms;
 
 			strike_duty = strike_team->duty[strike_slot];
+			if (SG_StrikeDutyRetiresOptionalErrand(strike_duty))
+				Lead_Abort(bot, "strike duty");
 			tc.strike_active = true;
 			tc.strike_hold = SG_StrikeMemberShouldHold(
 				strike_team, strike_slot);

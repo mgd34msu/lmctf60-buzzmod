@@ -433,6 +433,13 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("sg_fields.item[SG_FC_WEAPON]", arach)
         self.assertIn("SG_StrikeMemberNeedsWeapon", arach)
         self.assertIn("SG_StrikeParticipant", arach)
+        duty = arach.index("strike_duty = strike_team->duty[strike_slot]")
+        lead_abort = arach.index(
+            'Lead_Abort(bot, "strike duty")', duty)
+        route = arach.index("StrikeApplyDutyRoute(&tc, strike_duty, team)",
+                            lead_abort)
+        self.assertLess(duty, lead_abort)
+        self.assertLess(lead_abort, route)
         self.assertIn("tc.strike_rush, carrying", arach)
         self.assertIn("strike_team->weapon_deadline[strike_slot] -",
                       arach)

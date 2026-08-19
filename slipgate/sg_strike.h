@@ -173,6 +173,9 @@ int SG_StrikeGenericRailAllowed(int strike_active);
  * an organic ATTACK role.  Recovery and escort duties pass strike_rush=0 and
  * retain their own objective authority. */
 int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_rush);
+/* A concrete coordinator duty is an objective mission, so optional item-pad
+ * preparation cannot remain live underneath its route and aim authority. */
+int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);
 
 /* Bounded pricing correction for the last proved RUNs toward a home enemy
  * flag.  This never grants touch or movement authority; it only breaks a
