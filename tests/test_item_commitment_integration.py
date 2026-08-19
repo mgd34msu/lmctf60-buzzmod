@@ -139,6 +139,14 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("G_RunePickupEligible(item, tc->e)", admission)
         self.assertIn(
             "Caco_ItemBelievedRouteableFor(tc->team, item)", admission)
+        fields = self.text("slipgate/sg_fields.c")
+        class_build_start = fields.index(
+            "static void Class_Build(rune_t *r, int cls)\n{")
+        class_build = fields[class_build_start:
+                             fields.index("#ifdef SG_FIELDS_TEST",
+                                          class_build_start)]
+        self.assertIn("Caco_ItemBelievedRouteable(e)", class_build)
+        self.assertIn("Class_PerItem(cls)", class_build)
         detour = price[price.index("float Detour_Value"):price.index(
             "float Mega_Detour")]
         self.assertIn("Detour_IdentityItemEligible(tc, cls, kent)", detour)

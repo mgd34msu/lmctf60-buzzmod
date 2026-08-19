@@ -925,12 +925,18 @@ qboolean Caco_ItemBelievedRouteableFor(int team, edict_t *e)
 		return e->solid != SOLID_NOT;
 	route_class = b->cls == SG_BI_POWERUP ? SG_FC_POWERUP : SG_FC_RUNE;
 	if (b->cls == SG_BI_POWERUP && !b->believed_up &&
-	    b->believed_respawn_time > level.time &&
+	    b->believed_respawn_time > 0.0f &&
 	    b->believed_respawn_time - level.time <=
 	        SG_ITEM_ROUTE_POWERUP_LEAD_SECONDS)
 		respawn_within_lead = true;
 	return SG_IdentityItemBeliefAdmission(route_class, b->believed_up,
 	    respawn_within_lead);
+}
+
+qboolean Caco_ItemBelievedRouteable(edict_t *e)
+{
+	return (Caco_ItemBelievedRouteableFor(CTF_TEAM_RED, e) ||
+	        Caco_ItemBelievedRouteableFor(CTF_TEAM_BLUE, e)) ? true : false;
 }
 
 /*
@@ -973,8 +979,17 @@ unsigned Caco_ItemBeliefSig(void)
 	for (t = 0; t < 2; t++)
 		for (i = 0; i < sg_caco_num_items; i++)
 		{
-			sig = (sig ^ (unsigned)sg_caco_items[t][i].believed_up) * 16777619u;
-			sig = (sig ^ (unsigned)sg_caco_items[t][i].seed) * 16777619u;
+			sg_belief_item_t *b = &sg_caco_items[t][i];
+			qboolean lead = false;
+
+			if (b->cls == SG_BI_POWERUP && !b->believed_up &&
+			    b->believed_respawn_time > 0.0f &&
+			    b->believed_respawn_time - level.time <=
+			        SG_ITEM_ROUTE_POWERUP_LEAD_SECONDS)
+				lead = true;
+			sig = (sig ^ (unsigned)b->believed_up) * 16777619u;
+			sig = (sig ^ (unsigned)lead) * 16777619u;
+			sig = (sig ^ (unsigned)b->seed) * 16777619u;
 		}
 	return sig;
 }
@@ -992,7 +1007,7 @@ int Caco_ItemBeliefSeed(rune_t *r, edict_t *e)
 	/* the shared field again: seeded from whichever side still believes in
 	 * the thing, for the reason written over Caco_ItemBelievedUp */
 	for (t = 0; t < 2; t++)
-		if (sg_caco_items[t][i].believed_up)
+		if (Caco_ItemBelievedRouteableFor(t ? CTF_TEAM_BLUE : CTF_TEAM_RED, e))
 			return sg_caco_items[t][i].seed;
 	return -1;
 }

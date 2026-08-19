@@ -830,9 +830,16 @@ static void Class_Build(rune_t *r, int cls)
 	for (i = 0; i < globals.num_edicts && n < 256; i++)
 	{
 		e = &g_edicts[i];
-		if (!e->inuse || !e->classname || !Caco_ItemBelievedUp(e))
+		if (!e->inuse || !e->classname)
 			continue;
 		if (!Class_Match(&field_classes[cls], e->classname))
+			continue;
+		if (Class_PerItem(cls))
+		{
+			if (!Caco_ItemBelievedRouteable(e))
+				continue;
+		}
+		else if (!Caco_ItemBelievedUp(e))
 			continue;
 		sources[n] = Caco_ItemBeliefSeed(r, e);
 		costs[n] = 0;
