@@ -32,6 +32,7 @@
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
+#include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
@@ -7858,8 +7859,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						sg_bot_t *mb15 = &sg_bots[bi15];
 						vec3_t md15;
 
-						if (!mb15->active || mb15 == bot ||
-						    !mb15->ent || !mb15->ent->inuse)
+						if (mb15 == bot || !mb15->ent ||
+						    !SG_CoordinationBodyLive(mb15->active,
+						        mb15->ent->inuse, mb15->ent->deadflag,
+						        mb15->ent->health))
 							continue;
 						if (mb15->ent->client->ctf.teamnum != team)
 							continue;

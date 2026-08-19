@@ -966,6 +966,12 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	unsigned char eligible[6] = { 0, 1, 0, 1, 1, 0 };
 	int count = -1;
 
+	CHECK(SG_CoordinationBodyLive(1, 1, 0, 100));
+	CHECK(!SG_CoordinationBodyLive(0, 1, 0, 100));
+	CHECK(!SG_CoordinationBodyLive(1, 0, 0, 100));
+	CHECK(!SG_CoordinationBodyLive(1, 1, 1, 100));
+	CHECK(!SG_CoordinationBodyLive(1, 1, 0, 0));
+
 	CHECK(SG_RoleLiveRank(eligible, 6, 1, &count) == 0);
 	CHECK(count == 3);
 	CHECK(SG_RoleLiveRank(eligible, 6, 3, &count) == 1);

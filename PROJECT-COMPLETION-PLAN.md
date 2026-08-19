@@ -198,6 +198,10 @@ bot slot cannot reserve the stand-watch quota while surviving teammates abandon
 the base; escort admission now uses that identical live rank, so it cannot steal
 the actual stand defender or skip a survivor because a corpse advanced the
 quota. The ordinary stable slot order resumes when that bot respawns.
+The same living-body law now governs rally partners, paired sentry splits,
+attacker lane spreading, and teammate splash suppression: a corpse cannot make
+an attacker wait, masquerade as a diversion, repel a live route, or suppress a
+safe public-sound shot from its stale origin.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

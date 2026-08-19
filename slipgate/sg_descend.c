@@ -27,6 +27,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_route_policy.h"
+#include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
 #include "slipgate/sg_hooks.h"
@@ -739,8 +740,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				sg_bot_t *mb6 = &sg_bots[bi6];
 				vec3_t md6;
 
-				if (!mb6->active || mb6 == bot || !mb6->ent ||
-				    !mb6->ent->inuse)
+				if (mb6 == bot || !mb6->ent ||
+				    !SG_CoordinationBodyLive(mb6->active, mb6->ent->inuse,
+				        mb6->ent->deadflag, mb6->ent->health))
 					continue;
 				if (mb6->ent->client->ctf.teamnum != team)
 					continue;
@@ -2750,8 +2752,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				{
 					sg_bot_t *mb5 = &sg_bots[bi5];
 
-					if (!mb5->active || mb5 == bot || !mb5->ent ||
-					    !mb5->ent->inuse)
+					if (mb5 == bot || !mb5->ent ||
+					    !SG_CoordinationBodyLive(mb5->active, mb5->ent->inuse,
+					        mb5->ent->deadflag, mb5->ent->health))
 						continue;
 					if (mb5->ent->client->ctf.teamnum != team)
 						continue;

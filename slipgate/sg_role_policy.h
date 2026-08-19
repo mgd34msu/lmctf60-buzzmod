@@ -2,10 +2,16 @@
 #ifndef SG_ROLE_POLICY_H
 #define SG_ROLE_POLICY_H
 
+static inline int SG_CoordinationBodyLive(int active, int inuse, int deadflag,
+	int health)
+{
+	return active && inuse && !deadflag && health > 0;
+}
+
 /* Rank one slot among the currently live same-team bodies.  A dead/missing
  * self ranks after every live body, so it cannot reserve a live defender post
  * while waiting to respawn. */
-static int SG_RoleLiveRank(const unsigned char *eligible, int count,
+static inline int SG_RoleLiveRank(const unsigned char *eligible, int count,
 	int self, int *live_count)
 {
 	int rank = 0;
@@ -31,7 +37,7 @@ static int SG_RoleLiveRank(const unsigned char *eligible, int count,
 	return rank;
 }
 
-static int SG_RoleOutsideDefenderQuota(const unsigned char *eligible,
+static inline int SG_RoleOutsideDefenderQuota(const unsigned char *eligible,
 	int count, int slot, int defenders_wanted)
 {
 	int live_count;

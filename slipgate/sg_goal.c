@@ -18,6 +18,7 @@
 #include "slipgate/sg_weights.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
@@ -265,7 +266,9 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		{
 			sg_bot_t *mb = &sg_bots[bi];
 
-			if (!mb->active || mb == bot || !mb->ent || !mb->ent->inuse)
+			if (mb == bot || !mb->ent ||
+			    !SG_CoordinationBodyLive(mb->active, mb->ent->inuse,
+			        mb->ent->deadflag, mb->ent->health))
 				continue;
 			if (mb->ent->client->ctf.teamnum != team)
 				continue;
