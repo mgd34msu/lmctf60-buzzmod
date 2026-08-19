@@ -46,7 +46,7 @@
 	X(hookpong, "sg_hookpong", "0") \
 	X(hopfire, "sg_hopfire", "0") \
 	X(humanprior, "sg_humanprior", "0") \
-	X(interpose, "sg_interpose", "1") \
+	X(interpose, "sg_interpose", "3") \
 	X(itemcomm, "sg_itemcomm", "1") \
 	X(itemlead, "sg_itemlead", "1") \
 	X(landlead, "sg_landlead", "1") \

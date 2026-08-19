@@ -101,6 +101,20 @@ static inline int SG_EscortSupportFullStrength(int escort_mission)
 	return escort_mission == 1;
 }
 
+/* Interposition dose 1 is the legacy carrier/threat midpoint, dose 2 the
+ * static exit, and dose 3+ the moving lead/trail formation.  Nonpositive and
+ * nonfinite-like comparison failures disable the optional override. */
+static inline int SG_InterposeMode(float dose)
+{
+	if (!(dose > 0.0f))
+		return 0;
+	if (dose >= 3.0f)
+		return 3;
+	if (dose >= 2.0f)
+		return 2;
+	return 1;
+}
+
 /* Once our team has the enemy flag, one separately assigned ESCORT owns the
  * carrier field. Ordinary attackers keep pressure on the enemy stand instead
  * of turning into duplicate escorts or following an unseen-flag fallback

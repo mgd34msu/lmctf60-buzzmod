@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 DESCEND = (ROOT / "slipgate" / "sg_descend.c").read_text()
 MOVE = (ROOT / "slipgate" / "sg_move.c").read_text()
+GOAL = (ROOT / "slipgate" / "sg_goal.c").read_text()
 
 
 def section(source: str, start: str, end: str) -> str:
@@ -94,6 +95,17 @@ def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():
     cycle = section(DESCEND, "/*\n\t * The wide-orbit detector", "/* Deaddoor")
     assert "A multi-exit fan with no safe alternate" in cycle
     assert "bestlink = -1;" in cycle
+
+
+def test_carrier_screen_uses_the_accepted_moving_formation_by_default():
+    cvars = (ROOT / "slipgate" / "sg_cvars.h").read_text()
+    assert 'X(interpose, "sg_interpose", "3")' in cvars
+    interpose = section(
+        GOAL, "THE INTERPOSITION (sg_interpose)",
+        "Escorting the HUMAN who said \"cover me\"")
+    assert "SG_InterposeMode(sg_cv.interpose->value)" in interpose
+    assert "if (interpose_mode == 3)" in interpose
+    assert "else if (interpose_mode == 2)" in interpose
 
 
 if __name__ == "__main__":

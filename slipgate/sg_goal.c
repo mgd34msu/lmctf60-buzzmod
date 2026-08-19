@@ -1302,7 +1302,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		 * eats the escort, carrier keeps the flag. Falls through to
 		 * the ordinary screen when there is no named threat.
 		 */
-		if (sg_cv.interpose->value)
+		{
+			int interpose_mode = SG_InterposeMode(sg_cv.interpose->value);
+
+		if (interpose_mode)
 		{
 			sg_belief_carrier_t *oc =
 			    &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
@@ -1358,7 +1361,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					 * slot parity: even leads at -1300ms, odd trails at
 					 * +900ms. Dose 2 (static exit seed) kept as history.
 					 */
-					if (sg_cv.interpose->value >= 3)
+					if (interpose_mode == 3)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
@@ -1389,7 +1392,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 							}
 						}
 					}
-					else if (sg_cv.interpose->value >= 2)
+					else if (interpose_mode == 2)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
@@ -1439,6 +1442,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 			}
+		}
 		}
 		if (ht && ht->inuse && ht->client && !ht->deadflag)
 		{
