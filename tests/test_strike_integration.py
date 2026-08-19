@@ -436,10 +436,20 @@ class StrikeIntegrationTest(unittest.TestCase):
         duty = arach.index("strike_duty = strike_team->duty[strike_slot]")
         lead_abort = arach.index(
             'Lead_Abort(bot, "strike duty")', duty)
+        objective = arach.index("Think_Objective(bot, &tc)", lead_abort)
         route = arach.index("StrikeApplyDutyRoute(&tc, strike_duty, team)",
-                            lead_abort)
+                            objective)
         self.assertLess(duty, lead_abort)
+        self.assertLess(lead_abort, objective)
         self.assertLess(lead_abort, route)
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        lead = goal.index("const int *lead = Lead_Field")
+        self.assertIn("if (!tc->strike_blocks_optional)",
+                      goal[lead - 100:lead])
+        self.assertIn(
+            "tc->mega = tc->strike_blocks_optional ? 0.0f", goal)
+        tactics = goal.index("sg_cv.tactics->value")
+        self.assertIn("!tc->strike_blocks_optional", goal[tactics - 80:tactics])
         self.assertIn("tc.strike_rush, carrying", arach)
         self.assertIn("strike_team->weapon_deadline[strike_slot] -",
                       arach)

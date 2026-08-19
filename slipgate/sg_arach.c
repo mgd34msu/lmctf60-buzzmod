@@ -3442,11 +3442,11 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.push = (role == SG_ROLE_ATTACK &&
 	           SG_TimerPending(sg_push_until[SG_TeamIdx(team)]));
 
-	Think_Objective(bot, &tc);
-
-	/* Strike is a coordinator overlay, not a second role allocator.  It may
-	 * select the route owned by a duty (home, carrier, or enemy flag) while
-	 * the role row, defender reservation, and CARRY bookends remain intact. */
+	/* Resolve coordinator ownership before Objective is allowed to claim an
+	 * optional item, age a mega offer, or commit a tactical waypoint.  The
+	 * later route overlay still owns the exact duty field; this early slice
+	 * supplies only the already-frozen membership/duty policy needed to keep
+	 * superseded preparation from being created and discarded every frame. */
 	strike_slot = (int)(bot - sg_bots);
 	if (strike_slot >= 0 && strike_slot < SG_MAXBOTS &&
 	    sg_strike_frame_ready &&
@@ -3459,11 +3459,12 @@ void SG_BotThink(sg_bot_t *bot)
 		if (strike_team && strike_frame &&
 		    SG_StrikeParticipant(strike_team, strike_slot))
 		{
-			int direct_flag_touch;
-			int weapon_goal_ms = -1;
-			int weapon_remaining_ms;
-
 			strike_duty = strike_team->duty[strike_slot];
+			tc.strike_active = true;
+			tc.strike_hold = SG_StrikeMemberShouldHold(
+				strike_team, strike_slot);
+			tc.strike_rush = SG_StrikeMemberRushes(
+				strike_team, strike_slot);
 			tc.strike_pressure = SG_StrikeEnemyPressureActive(
 			    role == SG_ROLE_ATTACK, 1, strike_duty);
 			tc.combat_pursuit = SG_StrikeCombatPursuitActive(
@@ -3474,13 +3475,26 @@ void SG_BotThink(sg_bot_t *bot)
 			    1, strike_duty);
 			tc.escort_mission = SG_StrikeEscortActive(
 			    role == SG_ROLE_ESCORT, 1, strike_duty);
-			if (SG_StrikeDutyRetiresOptionalErrand(strike_duty))
+			tc.strike_blocks_optional =
+			    SG_StrikeDutyRetiresOptionalErrand(strike_duty);
+			if (tc.strike_blocks_optional)
 				Lead_Abort(bot, "strike duty");
-			tc.strike_active = true;
-			tc.strike_hold = SG_StrikeMemberShouldHold(
-				strike_team, strike_slot);
-			tc.strike_rush = SG_StrikeMemberRushes(
-				strike_team, strike_slot);
+		}
+	}
+
+	Think_Objective(bot, &tc);
+
+	/* Strike is a coordinator overlay, not a second role allocator.  It may
+	 * select the route owned by a duty (home, carrier, or enemy flag) while
+	 * the role row, defender reservation, and CARRY bookends remain intact. */
+	if (strike_team && strike_frame && tc.strike_active)
+	{
+		if (SG_StrikeParticipant(strike_team, strike_slot))
+		{
+			int direct_flag_touch;
+			int weapon_goal_ms = -1;
+			int weapon_remaining_ms;
+
 			/* Egress and attack duties use the existing directed fields. */
 			(void)StrikeApplyDutyRoute(&tc, strike_duty, team);
 			if (tc.strike_rush)

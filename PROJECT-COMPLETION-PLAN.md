@@ -303,6 +303,10 @@ The carrier-support component uses that same effective mission. A concrete
 coordinator escort keeps the full route pull toward its screen position, while
 an organic escort reassigned elsewhere receives the configured non-escort
 cohesion dose instead of drifting back toward the carrier.
+Coordinator authority is now resolved before optional objective preparation.
+A strike member cannot claim an item-pad lease, age a mega-health offer, or
+commit an organic tactical waypoint that the same frame's duty route will
+discard; ordinary nonparticipants retain all three preparation paths.
 Graph-hook usefulness is now judged against the exact current route field at
 both source staging and the irreversible fire boundary. A tactical waypoint or
 bounded weapon errand can therefore take a ride that advances that live route,
@@ -1272,6 +1276,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       a superseded organic escort exemption.
       Carrier-support surface pricing also follows effective escort duty, so
       full support attraction and anti-linger exemption name the same bot.
+      Strike membership is resolved before optional item, mega, and tactical
+      preparation, preventing discarded organic plans from churning underneath
+      a concrete coordinator route.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

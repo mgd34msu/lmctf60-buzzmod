@@ -1535,6 +1535,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * same thing twice, which is deliberate: this line is the one a reader
 	 * finds first.
 	 */
+	if (!tc->strike_blocks_optional)
 	{
 		const int *lead = Lead_Field(bot, role, carrying,
 		    SG_ChatOrderedRole(e));
@@ -1549,7 +1550,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * up to ten seconds off one Surface_At sweep, so a term that arrived after
 	 * it would not reach the route until the next commitment.
 	 */
-	tc->mega = Mega_Worth(bot, e, role);
+	tc->mega = tc->strike_blocks_optional ? 0.0f
+	                                      : Mega_Worth(bot, e, role);
 
 	/*
 	 * NO CAMPING THE PAD, and no obsession either -- the offer is bounded in
@@ -1638,7 +1640,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 */
 	route_field = goal_field;
 	route_pure = false;
-	if (sg_cv.tactics->value &&
+	if (!tc->strike_blocks_optional && sg_cv.tactics->value &&
 	    role != SG_ROLE_ESCORT &&
 	    /* CARRY excluded: route_pure suppresses the
 	     * danger and detour terms for 10s a commit -- the exact corridors
