@@ -1051,17 +1051,23 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 	sg_fields.action_topology_epoch++;
 	if (sg_fields.action_topology_epoch == 0)
 		 sg_fields.action_topology_epoch = 1;
-	/* A missing repair is neutral.  Once an artifact identity is present, a
-	 * present repair must bind exactly to this committed level before any field
-	 * is published.  Unit fixtures that construct only an in-memory graph have
-	 * no artifact identity and therefore retain the historic neutral path. */
+	/* A published artifact requires one exact RUNE-bound snag declaration;
+	 * zero repairs is explicit in that file, never inferred from ENOENT.  Unit
+	 * fixtures that construct only an in-memory graph have no artifact identity
+	 * and therefore do not perform level-file I/O. */
 	if (r->artifact.identity.map_name[0])
 	{
 		gamedir = sg_host.cvar ? sg_host.cvar("gamedir", "", 0) : NULL;
 		game_directory = gamedir && gamedir->string && gamedir->string[0]
 			? gamedir->string : ".";
 		if (!SG_SnagRepairLoadForLevel(r, game_directory))
+		{
+			if (sg_host.dprint)
+				sg_host.dprint("slipgate: snag declaration missing or invalid "
+				               "for map %s; fields rejected\n",
+				               r->artifact.identity.map_name);
 			return false;
+		}
 	}
 	else
 		SG_SnagRepairClear();

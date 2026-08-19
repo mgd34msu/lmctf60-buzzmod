@@ -192,6 +192,42 @@ this reference documents current interfaces, not old trial results.
 - **Outputs:** stdout report.
 - **Dependencies:** reuses `film.py`'s walker; same coverage-honest denominators and cross-population caveat as `conduct.py`.
 
+### `stallcensus.py`, `snagrepair.py`, `snag_corpus.py`
+
+- **Purpose:** turn one completed persistent-fleet cycle into the final
+  RUNE-bound navigation-repair sidecars. `stallcensus.py` strictly decodes the
+  residence serverrecord and exact console segment, checks every admitted
+  name/team/client against every snapshot, and retains both visible stall
+  episodes and exact controller/RUNE route episodes. `snagrepair.py` permits a
+  repair only when those two episode streams join one-to-one for the same
+  player and overlapping server-frame interval. `snag_corpus.py` applies that
+  rule to the first twenty residences of every lane, retains residence 21 as
+  the native wrap proof, and emits all 181 `.snag` files plus their evidence
+  and corpus manifest.
+- **Bootstrap:** `python3 tools/snag_corpus.py --rune-dir RUNES --output OUT`.
+  This writes 181 explicit `repairs 0` sidecars classified
+  `NO_ACCEPTED_OBSERVATION`; it is the cold-load input for corpus generation,
+  not evidence that a map is clean. `OUT` must have an existing, non-symlink
+  parent directory; publication never creates or follows parent components.
+- **Final build:** `python3 tools/snag_corpus.py --rune-dir RUNES --state-root
+  STATE --evidence-root EVIDENCE --fleet-runner tools/fleet-runner.py --output
+  OUT`. The runner must first report a fully stopped, ledger-complete fleet
+  with at least residences 0 through 20 on all ten lanes. Each top-20 map gets
+  exactly ten analyzed residences; the other 161 maps retain an explicit
+  `NO_ACCEPTED_OBSERVATION` sidecar.
+- **Independent verification:** repeat the final command with
+  `--verify-final` and the already-published `OUT`. Verification re-runs the
+  stopped-fleet authority, strict demo/telemetry analysis, exact RUNE join, and
+  byte-for-byte corpus derivation; the directory is never overwritten.
+- **Failure:** any changed runner/owner/ledger/receipt/demo/segment/RUNE, map
+  schedule gap, missing wrap, incomplete census or demo frame, player identity
+  drift, ambiguous visible/controller join, noncanonical sidecar, mutable
+  output, or publish race aborts the whole corpus. No visible cluster is
+  silently converted to a nearby seed.
+- **Dependencies:** the accepted 181 RUNE directory, the exact production
+  `fleet-runner.py`, its stopped state/evidence roots, Python 3, and the film
+  dependencies in `requirements.txt`.
+
 ### `rung4-protocol.md`
 Blind-judging protocol for `teamsheet.py`: qualification, leak checks, sealed
 captions, forced choice, conviction, and reason capture. It must be rerun on the
