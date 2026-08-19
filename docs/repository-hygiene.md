@@ -42,9 +42,9 @@ list, never `git add -A` or a broad recursive cleanup.
   development inputs. Seed-indexed material cannot become final authority until
   it is bound to the exact final RUNE identity or regenerated from retained,
   hash-bound observations.
-- `RELEASES.md`, `LEDGER.md`, `TRIALS.md`, and
-  `HOOK-LIVE-MIGRATION-MANIFEST.md` retain evidence for completed changes. They
-  are reference records, not current status authorities.
+- `RELEASES.md` defines the current publish contract. `LEDGER.md` and
+  `TRIALS.md` retain experiment inputs that are still referenced by analysis
+  tools and judging protocols; they are not current status authorities.
 - `SLIPGATE-IMPLEMENTATION-ROADMAP.md` is a short redirect to the current plan.
   Keeping the redirect prevents old links from silently landing on no guidance;
   the superseded roadmap body remains available through Git history.
@@ -77,6 +77,12 @@ The obsolete `assets/bots.cfg` and `tools/abmatch.sh` paths were also removed.
 Both depended on the deleted legacy `sv addbot` command; current bot admission
 uses the tested `sv sg` command surface, and no runtime, build, or operator path
 consumed the old roster file.
+
+The dated HOOK migration manifest and verbose pre-SemVer release narratives
+were removed from the working documentation. Their temporary paths and old
+milestone claims are not current operator inputs; the exact records remain in
+Git history and tags. `RELEASES.md` now contains the release contract consumed
+by the tag workflow.
 
 The following classes are transient and must not be committed:
 
