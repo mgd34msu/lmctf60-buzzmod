@@ -354,7 +354,7 @@ of the still-pending final 181-map corpus, not a substitute for that corpus.
 ## Final source and dual build
 
 The final source candidate is created only after the bot improvements and the
-route blocker are integrated.
+`lmctf58` route closure are integrated.
 
 Required execution:
 
@@ -901,9 +901,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] Cross-platform warning fixes and immutable Node 24 workflow.
 - [x] `lmctf44` regenerated and independently cold-loaded.
 - [x] Shallow-water DIRECT door law committed and green.
-- [x] Current project plan, 181 authority/controller, map-list fix, telemetry
-      consumers, strict readers, documentation hygiene, and the first reviewed
-      repository cleanup are integrated through the completed branch pair
+- [x] The source/tooling milestones preceding this status refresh—the 181
+      authority/controller, map-list fix, telemetry consumers, strict readers,
+      documentation hygiene, and first reviewed repository cleanup—are integrated
+      through the completed branch pair
       `6523af5`/`efc30fd`; exact-SHA CI runs `32234992472` and `32235013292`
       are green.
 - [x] Tracked corpus list contains exactly 181 unique maps, including both

@@ -89,7 +89,7 @@ the corpus acceptance command. A production RUNE must also pass both C readers,
 the Python reader, lint, applicable semantic checks, and a fresh-process load
 under the exact module/BSP/config identity.
 
-### Current development blockers
+### Current development status
 
 | Area | Current code state |
 |-|-|
