@@ -289,6 +289,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	edict_t *approach_flag = NULL;
 	float approach_flag_distance = 0.0f;
 	int finite_route_neighbors = 0;
+	int attack_descent_link = -1;
+	float attack_descent_value = 1e30f;
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
 
@@ -1460,6 +1462,18 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		if (li == bot->sticky_link)
 			incumbent_v = v;
 
+		/* Preferences may choose among proved attack roads, but outside the
+		 * final room they may not turn standing still into a free alternative
+		 * to every strictly descending ordinary RUN. Retain the best such road
+		 * as a last-resort movement authority after every live gate above. */
+		if (SG_AttackDescentFallbackAllowed(role == SG_ROLE_ATTACK,
+		        l->action == RL_RUN, goal_field[bot->seed],
+		        goal_field[l->to], SG_FIELD_INF) && v < attack_descent_value)
+		{
+			attack_descent_link = li;
+			attack_descent_value = v;
+		}
+
 		if (v < bestval)
 		{
 			bestval = v;
@@ -1467,6 +1481,11 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 	}       /* anti-linger scope */
+	if (bestlink < 0 && attack_descent_link >= 0)
+	{
+		bestlink = attack_descent_link;
+		bestval = attack_descent_value;
+	}
 	if (supply_route && route_field[bot->seed] < SG_FIELD_INF)
 	{
 		int exact_link = -1;

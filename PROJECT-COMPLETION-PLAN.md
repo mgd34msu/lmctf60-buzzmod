@@ -182,8 +182,12 @@ forming teammate falls behind the remaining synchronization clock, and weapon
 preparation that yields to enemy-stand pressure inside five seconds or when its
 route saves less than one second. The adopted immediate-return preference now
 also yields in a one-finite-exit corridor, so it cannot turn a required reverse
-edge into a three-second standstill. Their pure policies are executable;
-runtime outcome acceptance remains pending on the persistent fleet.
+edge into a three-second standstill. Outside the final 600 ms objective band,
+an attacker whose composed preferences reject every move now takes the best
+fully admitted, strictly descending proved RUN instead of pricing itself into a
+far-field standstill; mechanisms and ballistic actions are never forced by that
+fallback. Their pure policies are executable; runtime outcome acceptance
+remains pending on the persistent fleet.
 
 ### Acceptance instrumentation and provenance
 

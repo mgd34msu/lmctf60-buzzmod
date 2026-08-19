@@ -30,6 +30,22 @@ static void TestOneExitRouteStaysMobile(void)
 	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 2, 3, 60.0f));
 }
 
+static void TestAttackDescentCannotPriceItselfStill(void)
+{
+	const int infinity = 0x3fffffff;
+
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 8000, 7875, infinity));
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, 601, 600, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 600, 500, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 0, 8000, 7000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(0, 1, 8000, 7000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 8000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 8001, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, infinity, 10, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(2, 1, 8000, 7000, infinity));
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 600));
+}
+
 static void TestLateralChoice(void)
 {
 	const sg_defense_shift_candidate_t candidates[] = {
@@ -285,6 +301,7 @@ static void TestCombatPreviewCandidateLaw(void)
 int main(void)
 {
 	TestOneExitRouteStaysMobile();
+	TestAttackDescentCannotPriceItselfStill();
 	TestLateralChoice();
 	TestGuardBandAndGeometry();
 	TestFailClosedInputs();
