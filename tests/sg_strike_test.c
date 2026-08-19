@@ -1,5 +1,6 @@
 /* sg_strike_test.c -- host-free deterministic offense coordinator tests. */
 #include "slipgate/sg_strike.h"
+#include "slipgate/sg_role_policy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -865,6 +866,25 @@ static void TestHomeFlagApproachPricing(void)
 	    500, 400) == 0.0f);
 }
 
+static void TestDeadSlotsDoNotReserveDefenderRanks(void)
+{
+	unsigned char eligible[6] = { 0, 1, 0, 1, 1, 0 };
+	int count = -1;
+
+	CHECK(SG_RoleLiveRank(eligible, 6, 1, &count) == 0);
+	CHECK(count == 3);
+	CHECK(SG_RoleLiveRank(eligible, 6, 3, &count) == 1);
+	CHECK(count == 3);
+	CHECK(SG_RoleLiveRank(eligible, 6, 4, &count) == 2);
+	CHECK(count == 3);
+	/* Dead slot zero ranks after all three live teammates instead of holding
+	 * the first defender reservation merely because its slot number is low. */
+	CHECK(SG_RoleLiveRank(eligible, 6, 0, &count) == 3);
+	CHECK(count == 3);
+	CHECK(SG_RoleLiveRank(NULL, 6, 0, &count) == -1);
+	CHECK(count == 0);
+}
+
 int main(void)
 {
 	TestNormalFiveKeepsTwoDefenders();
@@ -887,6 +907,7 @@ int main(void)
 	TestReturnCaptureAndLifecycleReset();
 	TestInvalidInputDoesNotMutate();
 	TestHomeFlagApproachPricing();
+	TestDeadSlotsDoNotReserveDefenderRanks();
 	if (failures)
 	{
 		fprintf(stderr, "sg_strike_test: %d failure(s)\n", failures);

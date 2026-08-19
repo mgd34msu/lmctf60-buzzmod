@@ -70,6 +70,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_price.h"
+#include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
@@ -1547,6 +1548,8 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	int team = bot->ent->client->ctf.teamnum;
 	int size = 0, defenders_wanted, my_rank = 0, i;
 	int my_client = (int)(bot->ent - g_edicts) - 1;
+	int my_slot = (int)(bot - sg_bots);
+	unsigned char live_team[SG_MAXBOTS];
 	sg_belief_carrier_t *own = &sg_caco_team_belief.carrier[SG_TeamIdx(team)];
 
 	if (carrying)
@@ -1572,17 +1575,21 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		}
 	}
 
+	memset(live_team, 0, sizeof(live_team));
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		if (!sg_bots[i].active || !sg_bots[i].ent || !sg_bots[i].ent->inuse)
 			continue;
 		if (sg_bots[i].ent->client->ctf.teamnum != team)
 			continue;
-		if (&sg_bots[i] == bot)
-			my_rank = size;
-		/* where in the ranking our own carrier sits, if it is one of ours */
-		size++;
+		/* A corpse cannot occupy a defender quota.  Live teammates compress the
+		 * stable slot order until it respawns; the next frame then admits it at
+		 * its ordinary rank again. */
+		if (sg_bots[i].ent->deadflag == DEAD_NO &&
+		    sg_bots[i].ent->health > 0)
+			live_team[i] = 1;
 	}
+	my_rank = SG_RoleLiveRank(live_team, SG_MAXBOTS, my_slot, &size);
 
 	/*
 	 * STRATEGY BY GAME STATE, the way the demos play it. Four states from
