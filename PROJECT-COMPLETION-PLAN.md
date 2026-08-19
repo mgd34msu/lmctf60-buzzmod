@@ -285,6 +285,11 @@ hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
 the same visible, same-floor, hull-clear dropped-touch proof used by RECOVER;
 the dedicated recoverer retains the belief route everywhere else.
+Full-roster standoff reconciliation now counts recovery coverage only from a
+non-carrier body that can actually receive the RECOVER duty. A carrier's finite
+home field can no longer make the sole recoverer look redundant and evict it
+while admitting an escort; the carrier therefore keeps both the scoring screen
+and the one mission that can make capture legal.
 Graph-hook usefulness is now judged against the exact current route field at
 both source staging and the irreversible fire boundary. A tactical waypoint or
 bounded weapon errand can therefore take a ride that advances that live route,
@@ -1243,6 +1248,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.
+      Full-roster escort admission no longer counts the carrier as recovery
+      coverage, so it cannot evict the sole teammate able to return the missing
+      own flag during a scoring standoff.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

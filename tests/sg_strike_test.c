@@ -604,6 +604,45 @@ static void TestCarrierCannotSatisfyRecoveryCoverage(void)
 	CHECK(team.duty[4] == SG_STRIKE_DUTY_RECOVER);
 }
 
+static void TestEscortAdmissionProtectsOnlyRecoverer(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(470.0f);
+
+	/* Initial ranking fills the four slots with the carrier, two close
+	 * attackers, and the only recoverer.  A fifth body is the only escort.
+	 * The carrier also has a finite own-flag field, but cannot perform recovery
+	 * while carrying; it must not make the real recoverer look redundant. */
+	AddAttacker(&frame, 0, 100u, 2, 100);
+	AddAttacker(&frame, 1, 101u, 2, 1);
+	AddAttacker(&frame, 2, 102u, 2, 2);
+	AddAttacker(&frame, 3, 103u, 2, 1000);
+	AddAttacker(&frame, 4, 104u, 2, 10000);
+	AddAttacker(&frame, 5, 105u, 2, 10000);
+	for (int slot = 0; slot < 6; slot++)
+	{
+		frame.slot[slot].recover_goal_ms = -1;
+		frame.slot[slot].carrier_goal_ms = -1;
+	}
+	frame.own_flag_home = 0;
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	frame.slot[0].recover_goal_ms = 10;
+	frame.slot[4].recover_goal_ms = 50;
+	frame.slot[5].carrier_goal_ms = 60;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[5] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(SG_StrikeMember(&team, 5));
+	CHECK(!SG_StrikeMember(&team, 2));
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 1);
+}
+
 static void TestDutiesStayStableUntilEgress(void)
 {
 	sg_strike_team_t team;
@@ -1144,6 +1183,7 @@ int main(void)
 	TestFullRosterMakesRoomForOnlyRecoverer();
 	TestFullRosterMakesRoomForOnlyEscort();
 	TestCarrierCannotSatisfyRecoveryCoverage();
+	TestEscortAdmissionProtectsOnlyRecoverer();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();

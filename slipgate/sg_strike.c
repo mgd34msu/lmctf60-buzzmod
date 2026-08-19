@@ -385,6 +385,8 @@ static void Strike_ReconcileMembers(sg_strike_team_t *team,
 			if ((team->member_mask & Strike_Bit(slot)) == 0u)
 				continue;
 			if (!frame->own_flag_home &&
+			    slot != frame->carrier_slot &&
+			    !frame->slot[slot].carrying &&
 			    frame->slot[slot].recover_goal_ms >= 0)
 				recovery_count++;
 			if (slot != frame->carrier_slot && !frame->slot[slot].carrying &&
