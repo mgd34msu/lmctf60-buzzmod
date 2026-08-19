@@ -1330,6 +1330,147 @@ static qboolean Combat_TeamSplashSafe(edict_t *self, float dsafe,
 }
 
 /*
+ * fire_lead does not fire the nominal trace ray.  It chooses an independent
+ * horizontal and vertical offset at 8192 units for every bullet/pellet
+ * (g_weapon.c), while the super shotgun also fires two barrels at +/-5
+ * degrees and the machinegun adds a random +/-0.7 degree yaw kick.  A
+ * teammate can therefore be clear of the nominal ray and still be inside the
+ * weapon's real firing envelope.
+ *
+ * Test each live teammate against a conservative sphere around its linked
+ * bbox.  The rectangle grows exactly as fire_lead's endpoint offsets do.  If
+ * the nominal path reaches water, fire_lead can add a second scatter of twice
+ * the ordinary spread after refraction, so the random component grows to
+ * three times its dry value.  Chaingun's independently randomised muzzle is
+ * supplied as source_pad by Combat_WeaponRay and expands both axes here.
+ */
+static qboolean Combat_TeamHitscanSafe(edict_t *self, int weapon,
+	const vec3_t muzzle, const vec3_t shotdir, float max_forward,
+	float source_pad, qboolean water_path)
+{
+	vec3_t angles, forward, right, up;
+	float hspread, vspread, yaw_angle, scatter_scale;
+	int team, client_index;
+
+	if (!self || !self->client || !g_edicts || !muzzle || !shotdir ||
+	    !isfinite(max_forward) || max_forward <= 0.0f ||
+	    !isfinite(source_pad) || source_pad < 0.0f)
+		return false;
+	switch (weapon)
+	{
+	case SG_W_SHOTGUN:
+		hspread = 500.0f;
+		vspread = 500.0f;
+		yaw_angle = 0.0f;
+		break;
+	case SG_W_SSHOTGUN:
+		hspread = DEFAULT_SHOTGUN_HSPREAD;
+		vspread = DEFAULT_SHOTGUN_VSPREAD;
+		yaw_angle = 5.0f;
+		break;
+	case SG_W_MACHINEGUN:
+		hspread = DEFAULT_BULLET_HSPREAD;
+		vspread = DEFAULT_BULLET_VSPREAD;
+		yaw_angle = 0.7f;
+		break;
+	case SG_W_CHAINGUN:
+		hspread = DEFAULT_BULLET_HSPREAD;
+		vspread = DEFAULT_BULLET_VSPREAD;
+		yaw_angle = 0.0f;
+		break;
+	default:
+		return true;
+	}
+	team = self->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return false;
+	if (!isfinite(muzzle[0]) || !isfinite(muzzle[1]) ||
+	    !isfinite(muzzle[2]) || !isfinite(shotdir[0]) ||
+	    !isfinite(shotdir[1]) || !isfinite(shotdir[2]))
+		return false;
+	vectoangles((float *)shotdir, angles);
+	AngleVectors(angles, forward, right, up);
+	scatter_scale = water_path ? 3.0f : 1.0f;
+
+	for (client_index = 1; client_index <= game.maxclients; client_index++)
+	{
+		edict_t *mate = &g_edicts[client_index];
+		vec3_t centre, delta, half;
+		float along, lateral, vertical, radius;
+		float hreach, vreach, hratio, vratio;
+		int axis;
+
+		if (mate == self || !mate->inuse || !mate->client ||
+		    mate->deadflag || mate->health <= 0 ||
+		    mate->movetype == MOVETYPE_NOCLIP ||
+		    mate->client->ctf.teamnum != team)
+			continue;
+		Combat_Center(mate, centre);
+		for (axis = 0; axis < 3; axis++)
+		{
+			if (!isfinite(mate->absmin[axis]) ||
+			    !isfinite(mate->absmax[axis]) ||
+			    mate->absmin[axis] > mate->absmax[axis])
+				return false;
+			half[axis] = 0.5f * (mate->absmax[axis] - mate->absmin[axis]);
+		}
+		VectorSubtract(centre, muzzle, delta);
+		along = DotProduct(delta, forward);
+		radius = VectorLength(half);
+		if (!isfinite(along) || !isfinite(radius))
+			return false;
+		if (along + radius < 0.0f || along - radius > max_forward)
+			continue;
+		if (along < 0.0f)
+			along = 0.0f;
+		lateral = (float)fabs((double)DotProduct(delta, right));
+		vertical = (float)fabs((double)DotProduct(delta, up));
+		if (water_path)
+		{
+			/* The second scatter is expressed in the first scattered ray's
+			 * basis, so tangent addition -- not merely 1x+2x -- is the
+			 * conservative envelope.  Use its full radial cone on both axes. */
+			float radial = (float)sqrt((double)(hspread * hspread +
+			                                     vspread * vspread)) / 8192.0f;
+			float denom = 1.0f - 2.0f * radial * radial;
+			float water_ratio;
+			float yaw_tangent = (float)tan((double)yaw_angle * M_PI / 180.0);
+
+			if (denom <= 0.0f)
+				return false;
+			water_ratio = scatter_scale * radial / denom;
+			denom = 1.0f - yaw_tangent * water_ratio;
+			if (denom <= 0.0f)
+				return false;
+			hratio = (yaw_tangent + water_ratio) / denom;
+			vratio = hratio;
+		}
+		else
+		{
+			/* Exact dry envelope in the nominal ray basis.  The yawed
+			 * machinegun/SSG ray shortens nominal-forward progress while its
+			 * own right-axis spread grows, hence the shared denominator. */
+			float hscatter = hspread / 8192.0f;
+			float vscatter = vspread / 8192.0f;
+			float yaw_radians = yaw_angle * (float)M_PI / 180.0f;
+			float yaw_sine = (float)sin((double)yaw_radians);
+			float yaw_cosine = (float)cos((double)yaw_radians);
+			float denom = yaw_cosine - yaw_sine * hscatter;
+
+			if (denom <= 0.0f)
+				return false;
+			hratio = (yaw_sine + yaw_cosine * hscatter) / denom;
+			vratio = vscatter / denom;
+		}
+		hreach = radius + source_pad + along * hratio;
+		vreach = radius + source_pad + along * vratio;
+		if (lateral <= hreach && vertical <= vreach)
+			return false;
+	}
+	return true;
+}
+
+/*
  * Would firing weapon w right now hurt the bot or a live teammate? impact is
  * the point the pre-fire trace says the shot stops at -- rule R1's own
  * construction: tr.endpos IS the impact point.
@@ -4670,6 +4811,27 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 
 		/* ----------------------------------------------------- the vetoes */
 
+		/* The physical bullet/pellet rays fan out after the nominal trace.
+		 * Refuse a spread hitscan shot if any live teammate occupies that
+		 * envelope before the target range. */
+		if (sg_weapons[inhand].speed <= 0.0f)
+		{
+			qboolean water_path;
+			trace_t water_trace;
+
+			water_path = (sg_host.pointcontents(muzzle) & MASK_WATER) != 0;
+			water_trace = sg_host.trace(muzzle, NULL, NULL, endp, self,
+			                            MASK_WATER);
+			if (water_trace.fraction < 1.0f)
+				water_path = true;
+			if (!Combat_TeamHitscanSafe(self, inhand, muzzle, shotdir,
+			                            trace_len, source_pad, water_path))
+			{
+				sg_cbt_why[1]++;
+				return;
+			}
+		}
+
 		/* rule R1: never fire a splash weapon whose impact point is inside its
 		 * own d_safe of the bot's bbox centre. The cliff is hard, not a taper. */
 		if (!Combat_SplashSafe(self, inhand, impact))
@@ -4872,6 +5034,15 @@ int SG_CombatAimTestTeamSplashSafe(edict_t *self, float safe_radius,
                                    const vec3_t impact)
 {
 	return Combat_TeamSplashSafe(self, safe_radius, impact) ? 1 : 0;
+}
+
+int SG_CombatAimTestTeamHitscanSafe(edict_t *self, int weapon,
+                                    const vec3_t muzzle,
+                                    const vec3_t shotdir, float max_forward,
+                                    float source_pad, int water_path)
+{
+	return Combat_TeamHitscanSafe(self, weapon, muzzle, shotdir, max_forward,
+	                              source_pad, water_path != 0) ? 1 : 0;
 }
 
 uint32_t SG_CombatAimTestRandom(unsigned identity, unsigned steps)

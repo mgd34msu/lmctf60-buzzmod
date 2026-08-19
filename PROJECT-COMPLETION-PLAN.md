@@ -1488,6 +1488,13 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       bound to the current client identity. Speech timing, odds, and line
       choice no longer consume the engine-global RNG that also determines
       weapon spread and other physical match outcomes.
+      Spread hitscan fire now checks its complete physical pellet envelope
+      through the current engagement range against every live same-team client
+      before committing the trigger. The check includes machinegun yaw jitter,
+      both super-shotgun barrel bearings, chaingun muzzle jitter, and the
+      engine's wider water refraction, so a human or SG teammate just outside
+      the nominal aim ray is no longer exposed to an otherwise unexamined
+      bullet or pellet path.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

@@ -713,6 +713,30 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         self.assertIn("Combat_TeamSplashSafe(self, dsafe, impact)", splash)
         self.assertNotIn("SG_MAXBOTS", helper)
 
+    def test_aimed_hitscan_veto_covers_the_physical_spread_envelope(self) -> None:
+        combat = (ROOT / "slipgate/sg_combat.c").read_text()
+        helper = combat[combat.index("static qboolean Combat_TeamHitscanSafe"):
+                        combat.index("static qboolean Combat_SplashSafe")]
+        frame = combat[combat.index("void SG_CombatFrame"):
+                       combat.index("void SG_CombatHit")]
+
+        self.assertIn("client_index <= game.maxclients", helper)
+        self.assertIn("&g_edicts[client_index]", helper)
+        self.assertIn("mate->client->ctf.teamnum != team", helper)
+        self.assertIn("DEFAULT_BULLET_HSPREAD", helper)
+        self.assertIn("DEFAULT_SHOTGUN_HSPREAD", helper)
+        self.assertIn("yaw_angle = 5.0f", helper)
+        self.assertIn("yaw_angle = 0.7f", helper)
+        self.assertIn("scatter_scale = water_path ? 3.0f : 1.0f", helper)
+        self.assertIn("1.0f - 2.0f * radial * radial", helper)
+        self.assertIn("source_pad + along", helper)
+        self.assertNotIn("SG_MAXBOTS", helper)
+        veto = frame.index("if (!Combat_TeamHitscanSafe(self, inhand")
+        trigger = frame.index("Cbt_Trigger(self, cmd, st, skill, inhand)")
+        self.assertLess(veto, trigger)
+        self.assertIn("sg_host.pointcontents(muzzle) & MASK_WATER", frame)
+        self.assertIn("MASK_WATER", frame[veto - 500:veto])
+
     def test_cvar_and_static_hold_order(self) -> None:
         cvars = (ROOT / "slipgate/sg_cvars.h").read_text()
         move = (ROOT / "slipgate/sg_move.c").read_text()
