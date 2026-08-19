@@ -38,19 +38,19 @@ SLIPGATE is the mod's from-scratch bot system. It is built into the game module;
 there is no separate bot library. The current source is still closing the
 whole-project gates required for `v1.0.0`.
 
-The goal: bots that
-play LMCTF the way humans play it — grapple-first movement, real flag-carrier
-escape runs, escorts that screen the carrier, and defense that guards
-sightlines instead of standing on the flag.
+The target is recognizable, competent LMCTF play: grapple-first movement, real
+flag-carrier escape runs, escorts that screen the carrier, and defense that
+guards sightlines instead of standing on the flag.
 
 The bots navigate on a per-map graph proven by actual physics runs (runs,
 jumps, drops, swimming, grapple swings, lifts, teleports, and declared door
 traversals), price their decisions on a live
 cost surface (items, danger, duel range, cover, teammate support), and share
-one team-wide belief of where enemies and flags are. Movement doctrine and
-combat habits are mined from a large corpus of demos from the game's
-competitive era and validated in continuous automated experiments — every
-behavior ships only after winning a controlled A/B trial.
+one team-wide belief of where enemies and flags are. The repository includes
+demo-derived movement/combat inputs and tools for controlled comparisons. Those
+retained datasets are development inputs, not proof that the current build has
+passed its final matched trials; the completion plan names the measurements and
+runtime receipts still required.
 
 Current source includes steal → carry → escort → capture play, physics-proved
 RUNE navigation, grapple movement, combat and perception controllers, team
