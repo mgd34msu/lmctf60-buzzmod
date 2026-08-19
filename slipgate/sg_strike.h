@@ -204,6 +204,13 @@ int SG_StrikePrebreachApproachAllowed(int strike_active,
 float SG_StrikeFlagTouchThrottle(int touch_authorized, float distance,
 	float speed, float alignment);
 
+/* A carrier may home on the physical own-flag entity only while that entity is
+ * public at home or the normal visible, same-floor, hull-clear dropped touch
+ * seam has admitted it.  This keeps hidden dropped coordinates out of the
+ * carrier route while leaving the dedicated recovery mission authoritative. */
+int SG_StrikeCarrierOwnFlagAimAllowed(int flag_available, int flag_at_home,
+	int direct_touch);
+
 /* Bounded pricing correction for the last proved RUNs toward a home enemy
  * flag.  This never grants touch or movement authority; it only breaks a
  * near-stand field plateau in favor of physical progress toward the item. */

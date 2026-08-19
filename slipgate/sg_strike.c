@@ -106,6 +106,16 @@ float SG_StrikeFlagTouchThrottle(int touch_authorized, float distance,
 	return 1.0f;
 }
 
+int SG_StrikeCarrierOwnFlagAimAllowed(int flag_available, int flag_at_home,
+	int direct_touch)
+{
+	if ((flag_available != 0 && flag_available != 1) ||
+	    (flag_at_home != 0 && flag_at_home != 1) ||
+	    (direct_touch != 0 && direct_touch != 1))
+		return 0;
+	return flag_available && (flag_at_home || direct_touch);
+}
+
 float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,
 	int current_goal_ms, int candidate_goal_ms)

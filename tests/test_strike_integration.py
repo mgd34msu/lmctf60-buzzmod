@@ -543,6 +543,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("attack_flag_terminal = true;", terminal)
         self.assertIn("SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true)",
                       terminal)
+        self.assertIn("SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)",
+                      terminal)
         self.assertLess(terminal.index("SG_AttackFlagTerminalAim"),
                         terminal.index("SG_FlagTouchBrake"))
         helper = move[move.index("static void SG_FlagTouchBrake"):

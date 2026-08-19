@@ -402,9 +402,40 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             terminal_abandons_graph("CARRY", goal_cost=400, direct_touch=True)
         )
 
+    def test_carrier_does_not_home_on_hidden_dropped_own_flag(self) -> None:
+        move = source("slipgate/sg_move.c")
+        fallback_start = move.index("/* last resort: the goal itself, by belief */")
+        fallback = move[fallback_start:move.index("if (have_aim)", fallback_start)]
+        carrier = between(
+            fallback,
+            "else if (!have_aim && role == SG_ROLE_CARRY)",
+            "else if (!have_aim && role == SG_ROLE_RECOVER)",
+        )
+        self.assertIn("gf = SG_OwnFlag(team);", carrier)
+        self.assertIn("flag_at_home = ctf_flagathome(gf);", carrier)
+        self.assertIn(
+            "SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf)", carrier)
+        self.assertIn("SG_StrikeCarrierOwnFlagAimAllowed(", carrier)
+        self.assertIn("gf = NULL;", carrier)
+
+        authority = between(
+            move,
+            "static qboolean SG_OwnDroppedFlagDirectTouchAuthority",
+            "static int SG_TerminalFieldSeed",
+        )
+        for token in (
+            "ctf_flagathome(flag)",
+            "SG_FlagPerceivable(e, flag)",
+            "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
+            "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
+            "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
+        ):
+            self.assertIn(token, authority)
+
     def test_live_flag_priority_precedes_graph_and_clears_hold(self) -> None:
         move = source("slipgate/sg_move.c")
-        priority = move.index("SG_AttackFlagTerminalAim(e, team, aim)")
+        priority = move.index(
+            "SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)")
         graph = move.index("if (!have_aim && bestlink >= 0)", priority)
         fallback = move.index("/* last resort: the goal itself, by belief */", graph)
         self.assertLess(priority, graph)
@@ -428,7 +459,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         move = source("slipgate/sg_move.c")
         terminal = between(
             move,
-            "SG_AttackFlagTerminalAim(e, team, aim)",
+            "SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)",
             "if (!have_aim && bestlink >= 0)",
         )
         self.assertIn("attack_flag_terminal = true;", terminal)
@@ -484,7 +515,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("!armed_target && tc->strike_pressure &&", cook)
         self.assertNotIn("role != SG_ROLE_ATTACK", cook)
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", cook)
-        self.assertIn("SG_AttackFlagTerminalAim(e, team, pickup_aim)", cook)
+        self.assertIn(
+            "SG_AttackFlagTerminalAim(e, team, pickup_aim, NULL)", cook)
         self.assertIn("SG_CanSee(e, nade_enemy->s.origin, nade_enemy->viewheight)", cook)
         self.assertIn("bot->nade_phase = 0;", cook[:release])
 

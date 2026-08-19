@@ -280,6 +280,11 @@ when a fast attacker is misaligned with the flag. It tightens the last turn
 instead of letting full-speed turn radius carry the body around the live item;
 an aligned attacker keeps full throttle, and no route, visibility, or touch
 authority is widened.
+A carrier waiting on its missing home flag no longer reads the dropped entity's
+hidden server coordinate and walks away from the scoring stand. The physical
+own-flag entity may replace that public stand only while it is home or inside
+the same visible, same-floor, hull-clear dropped-touch proof used by RECOVER;
+the dedicated recoverer retains the belief route everywhere else.
 Graph-hook usefulness is now judged against the exact current route field at
 both source staging and the irreversible fire boundary. A tactical waypoint or
 bounded weapon errand can therefore take a ride that advances that live route,
@@ -1235,6 +1240,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       A fast misaligned attacker inside the exact direct-touch envelope now
       receives the same bounded terminal throttle already used at the scoring
       touch; aligned runs remain full speed and `ctf_flagtouch` stays authority.
+      A carrier no longer homes on an unseen dropped own flag's exact server
+      origin; only the public home item or a directly perceived and reachable
+      dropped touch can replace its immutable scoring-stand route.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

@@ -438,7 +438,7 @@ qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 	return true;
 }
 
-static qboolean SG_RecoverFlagDirectTouchAuthority(edict_t *e, int team,
+static qboolean SG_OwnDroppedFlagDirectTouchAuthority(edict_t *e, int team,
 	edict_t **flag_out)
 {
 	edict_t *flag;
@@ -508,15 +508,20 @@ static int SG_TerminalFieldSeed(const rune_t *rune, const int *field,
  * this line deliberately runs THROUGH that entity before a CARRY may route
  * home.
  */
-static qboolean SG_AttackFlagTerminalAim(edict_t *e, int team, vec3_t aim)
+static qboolean SG_AttackFlagTerminalAim(edict_t *e, int team, vec3_t aim,
+	edict_t **flag_out)
 {
 	edict_t *flag;
 	vec3_t fd, wend;
 	float fl;
 	trace_t tr;
 
+	if (flag_out)
+		*flag_out = NULL;
 	if (!SG_AttackFlagDirectTouchAuthority(e, team, &flag))
 		return false;
+	if (flag_out)
+		*flag_out = flag;
 	VectorCopy(flag->s.origin, aim);
 	VectorSubtract(flag->s.origin, e->s.origin, fd);
 	fd[2] = 0.0f;
@@ -3468,6 +3473,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		qboolean have_aim = false;
 		qboolean aim_is_anchor = false;
 		qboolean jump_now = false;
+		edict_t *terminal_flag = NULL;
 
 		/*
 		 * Just let go of a rope: the prover steered forwardmove 400 at the
@@ -3762,10 +3768,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		if (!have_aim && tc->strike_pressure &&
 		    bot->hook_phase == 0 &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0 &&
-		    SG_AttackFlagTerminalAim(e, team, aim))
+		    SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag))
 		{
-			edict_t *terminal_flag = SG_EnemyFlag(team);
-
 			have_aim = true;
 			attack_flag_terminal = true;
 			bestlink = -1;
@@ -3782,7 +3786,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			/* Exact touch authority has already proved the item and clear hull
 			 * line. Tighten only a fast misaligned turn so full throttle cannot
 			 * carry the body around the pickup it is aiming through. */
-			if (sg_cv.termbrake->value && terminal_flag)
+			if (sg_cv.termbrake->value)
 				SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true);
 		}
 
@@ -4758,10 +4762,23 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * grinding into them; combat remains free to own view/fire. */
 			}
 			else if (!have_aim && role == SG_ROLE_CARRY)
+			{
+				qboolean flag_at_home = false;
+				qboolean direct_touch = false;
+
 				gf = SG_OwnFlag(team);
+				if (gf)
+					flag_at_home = ctf_flagathome(gf);
+				if (gf && !flag_at_home)
+					direct_touch =
+					    SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf);
+				if (!SG_StrikeCarrierOwnFlagAimAllowed(gf != NULL,
+				    flag_at_home, direct_touch))
+					gf = NULL;
+			}
 			else if (!have_aim && role == SG_ROLE_RECOVER)
 			{
-				if (!SG_RecoverFlagDirectTouchAuthority(e, team, &gf))
+				if (!SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf))
 				{
 					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
 					    goal_field, bot->seed);
@@ -7739,7 +7756,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			     (!tc->strike_pressure ||
 			      SG_AttackFlagDirectTouchAuthority(e, team, NULL))) ||
 			    (!armed_target && tc->strike_pressure &&
-			     SG_AttackFlagTerminalAim(e, team, pickup_aim)) ||
+			     SG_AttackFlagTerminalAim(e, team, pickup_aim, NULL)) ||
 			    !nade_enemy ||
 			    !SG_CanSee(e, nade_enemy->s.origin, nade_enemy->viewheight))
 			{

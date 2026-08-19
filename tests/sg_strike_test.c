@@ -1058,6 +1058,13 @@ static void TestHomeFlagApproachPricing(void)
 	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 120.0f, 0.0f) == 1.0f);
 	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, NAN) == 1.0f);
 	CHECK(SG_StrikeFlagTouchThrottle(2, 100.0f, 300.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeCarrierOwnFlagAimAllowed(1, 1, 0));
+	CHECK(SG_StrikeCarrierOwnFlagAimAllowed(1, 0, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(1, 0, 0));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(0, 1, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(2, 1, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(1, -1, 1));
+	CHECK(!SG_StrikeCarrierOwnFlagAimAllowed(1, 1, 2));
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 500.0f, 300.0f, 0.0f,
 	    500, 500) == -100.0f);
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 350.0f, 0.0f,
