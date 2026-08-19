@@ -1036,6 +1036,10 @@ static void TestMissionAndCombatCannotShelveRoutes(void)
 	    SG_ROLE_ATTACK, 2000, false, false, true));
 	CHECK(!SG_RouteFailureWatchSuppressed(
 	    SG_ROLE_ATTACK, 2000, false, false, false));
+	CHECK(SG_RoleOwnsDefenseState(SG_ROLE_DEFEND));
+	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_ATTACK));
+	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_RECOVER));
+	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_ESCORT));
 }
 
 int main(void)

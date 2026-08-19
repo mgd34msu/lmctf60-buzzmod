@@ -3323,6 +3323,14 @@ void SG_BotThink(sg_bot_t *bot)
 	carrying = SG_BotCarrying(e);
 
 	role = StrikeRoleForBot(bot, carrying);
+	if (!SG_RoleOwnsDefenseState(role))
+	{
+		/* A patrol is a role-local leg, not a mission that may sleep through
+		 * ATTACK/RECOVER/ESCORT and resume from stale topology later. */
+		bot->patrol_seed = -1;
+		bot->patrol_until = 0.0f;
+		bot->def_stand = false;
+	}
 
 	Think_CarryBookends(bot, e, role, team, carrying);
 

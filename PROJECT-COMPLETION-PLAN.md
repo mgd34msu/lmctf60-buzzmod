@@ -217,6 +217,9 @@ escort, and defender checks. Item timing cannot replace an explicit mission.
 The bounded defender weapon sortie follows the same precedence: it cannot arm
 under a human order, and an order arriving during its outbound phase turns the
 watchman onto the immutable home route instead of continuing to the weapon.
+Leaving DEFEND now retires the role-local patrol target, dwell clock, and stand
+latch immediately. A later defensive assignment cannot resume a patrol leg
+selected under an older role or topology state.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the

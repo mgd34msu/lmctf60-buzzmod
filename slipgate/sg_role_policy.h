@@ -80,4 +80,9 @@ static inline int SG_RouteFailureWatchSuppressed(int role, int goal_cost,
 	       duel || engaged_last;
 }
 
+static inline int SG_RoleOwnsDefenseState(int role)
+{
+	return role == SG_ROLE_DEFEND;
+}
+
 #endif /* SG_ROLE_POLICY_H */
