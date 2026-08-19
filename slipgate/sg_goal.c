@@ -844,6 +844,14 @@ static int sg_weapon_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
 static unsigned sg_weapon_target_epoch[SG_MAXBOTS];
 static int sg_weapon_target_cached[SG_MAXBOTS];
 static unsigned char sg_weapon_target_ready[SG_MAXBOTS];
+#define SG_WEAPON_FIELD_NONE        0
+#define SG_WEAPON_FIELD_EXACT       1
+#define SG_WEAPON_FIELD_COLLECTIBLE 2
+#define SG_WEAPON_FIELD_SOURCES     256
+static unsigned char sg_weapon_field_kind[SG_MAXBOTS];
+static int sg_weapon_collectible_count[SG_MAXBOTS];
+static int sg_weapon_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_weapon_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -866,6 +874,7 @@ static const int *WeaponTargetField(sg_bot_t *bot, int target_seed)
 		return NULL;
 	bi = DefenseSupplyBotIndex(bot);
 	if (!sg_weapon_target_ready[bi] ||
+	    sg_weapon_field_kind[bi] != SG_WEAPON_FIELD_EXACT ||
 	    sg_weapon_target_cached[bi] != target_seed ||
 	    sg_weapon_target_epoch[bi] != sg_fields.action_topology_epoch)
 	{
@@ -873,6 +882,67 @@ static const int *WeaponTargetField(sg_bot_t *bot, int target_seed)
 		            &target_seed, &cost, 1);
 		sg_weapon_target_epoch[bi] = sg_fields.action_topology_epoch;
 		sg_weapon_target_cached[bi] = target_seed;
+		sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_EXACT;
+		sg_weapon_target_ready[bi] = 1;
+	}
+	return sg_weapon_target_field[bi];
+}
+
+const int *SG_CollectibleWeaponField(sg_bot_t *bot)
+{
+	int ents[SG_WEAPON_FIELD_SOURCES];
+	int seeds[SG_WEAPON_FIELD_SOURCES];
+	int costs[SG_WEAPON_FIELD_SOURCES];
+	int bi, count = 0, i;
+	qboolean same;
+
+	if (!bot || !bot->ent || !SG_Rune())
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	for (i = 1; i < globals.num_edicts &&
+	     count < SG_WEAPON_FIELD_SOURCES; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		int seed;
+
+		if (!WeaponPickupRouteEligible(item, bot->ent))
+			continue;
+		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+		if (seed < 0)
+			continue;
+		ents[count] = i;
+		seeds[count] = seed;
+		costs[count] = 0;
+		count++;
+	}
+	if (count == 0)
+	{
+		sg_weapon_target_ready[bi] = 0;
+		sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_NONE;
+		sg_weapon_collectible_count[bi] = 0;
+		return NULL;
+	}
+
+	same = sg_weapon_target_ready[bi] &&
+	       sg_weapon_field_kind[bi] == SG_WEAPON_FIELD_COLLECTIBLE &&
+	       sg_weapon_target_epoch[bi] == sg_fields.action_topology_epoch &&
+	       sg_weapon_collectible_count[bi] == count;
+	for (i = 0; same && i < count; i++)
+		if (sg_weapon_collectible_ent[bi][i] != ents[i] ||
+		    sg_weapon_collectible_seed[bi][i] != seeds[i])
+			same = false;
+	if (!same)
+	{
+		Field_Flood(SG_Rune(), sg_weapon_target_field[bi], seeds,
+		            costs, count);
+		for (i = 0; i < count; i++)
+		{
+			sg_weapon_collectible_ent[bi][i] = ents[i];
+			sg_weapon_collectible_seed[bi][i] = seeds[i];
+		}
+		sg_weapon_collectible_count[bi] = count;
+		sg_weapon_target_epoch[bi] = sg_fields.action_topology_epoch;
+		sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_COLLECTIBLE;
 		sg_weapon_target_ready[bi] = 1;
 	}
 	return sg_weapon_target_field[bi];
@@ -908,6 +978,7 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 		}
 	}
 	sg_weapon_target_ready[bi] = 0;
+	sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_NONE;
 	if (best_ent < 0 || best_cost >= SG_FIELD_INF ||
 	    best_cost > SG_DEF_SUPPLY_MAX_ROUTE_MS)
 		return false;
@@ -982,6 +1053,7 @@ static qboolean StrikeWeaponFindTarget(sg_bot_t *bot)
 	/* The scratch buffer contains the last candidate flood, not necessarily
 	 * the winner.  Force the selected seed to be reflooded before publication. */
 	sg_weapon_target_ready[bi] = 0;
+	sg_weapon_field_kind[bi] = SG_WEAPON_FIELD_NONE;
 	if (best_ent < 0 || best_cost >= SG_FIELD_INF)
 		return false;
 	bot->strike_weapon_target_ent = best_ent;

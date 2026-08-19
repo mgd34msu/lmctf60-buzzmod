@@ -11,6 +11,7 @@
 #include "slipgate/sg_bot.h"        /* sg_think_t -- the pricing context */
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_item_route.h"
 #include "slipgate/sg_util.h"
 
 #define SG_MEGA_MAXDETOUR	4000    /* ms of extra road, hard refusal above */
@@ -71,12 +72,14 @@ qboolean sg_route_pure_now;  /* tactics priced at selection: the
 float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
                           float worth)
 {
-	int *ifld = sg_fields.item[cls];
-	int to_item = ifld[here];
+	const int *ifld = SG_ItemDetourField(cls == SG_FC_WEAPON,
+	    sg_fields.item[cls], tc ? tc->collectible_weapon_field : NULL);
+	int to_item;
 	int direct = goal_field[here];
 
-	if (direct >= SG_FIELD_INF)
+	if (!ifld || direct >= SG_FIELD_INF)
 		return 0.0f;
+	to_item = ifld[here];
 
 	/*
 	 * Where per-item fields exist (powerups, runes), the triangle is exact.

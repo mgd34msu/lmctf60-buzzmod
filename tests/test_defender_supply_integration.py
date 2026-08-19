@@ -4,6 +4,7 @@
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 
@@ -11,6 +12,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DefenderSupplyIntegrationTest(unittest.TestCase):
+    def test_generic_weapon_detour_never_falls_back_to_broad_field(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include "slipgate/sg_item_route.h"
+
+            int main(void)
+            {
+                int broad[2] = { 0, 10 };
+                int collectible[2] = { 30, 0 };
+
+                if (SG_ItemDetourField(0, broad, collectible) != broad)
+                    return 1;
+                if (SG_ItemDetourField(1, broad, collectible) != collectible)
+                    return 2;
+                if (SG_ItemDetourField(1, broad, 0) != 0)
+                    return 3;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-item-route-") as tmp:
+            source = Path(tmp) / "item_route.c"
+            binary = Path(tmp) / "item_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
     def test_phase_and_exact_route_policy_executes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="sg-def-supply-") as tmp:
             binary = Path(tmp) / "sg_defense_supply_test"
@@ -128,6 +161,19 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
                          strike_route)
         self.assertEqual(caco.count("SG_StrikeWeaponNoteItemTouch(taker, item);"),
                          2)
+
+    def test_generic_weapon_surface_uses_collectible_client_field(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        price = (ROOT / "slipgate/sg_price.c").read_text()
+
+        self.assertIn("const int *SG_CollectibleWeaponField", goal)
+        self.assertIn("WeaponPickupRouteEligible(item, bot->ent)", goal)
+        self.assertIn("Field_Flood(SG_Rune(), sg_weapon_target_field[bi], seeds",
+                      goal)
+        self.assertIn("SG_CollectibleWeaponField(bot)", arach)
+        self.assertIn("SG_ItemDetourField(cls == SG_FC_WEAPON", price)
+        self.assertIn("tc ? tc->collectible_weapon_field : NULL", price)
 
     def test_owned_stocked_weapon_flows_through_post_selector(self) -> None:
         combat = (ROOT / "slipgate/sg_combat.c").read_text()

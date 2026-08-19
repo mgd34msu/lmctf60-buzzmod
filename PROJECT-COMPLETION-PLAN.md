@@ -1558,6 +1558,11 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       can no longer make the controller tax its sole non-worsening reverse edge
       and walk away from the objective; genuine plateau choices retain the
       anti-oscillation surcharge.
+      Generic weapon attraction now descends a cached per-bot field rooted only
+      at live pads accepted by the physical weapon-pickup law for that client.
+      Already-owned `WEAPONS_STAY` pads cannot bend ordinary movement, and a
+      bot with no collectible weapon receives no weapon pull rather than the
+      old unfiltered class-field fallback.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

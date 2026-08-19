@@ -3484,6 +3484,12 @@ void SG_BotThink(sg_bot_t *bot)
 
 	Think_LiveWeights(bot, &tc);    /* fills tc.live */
 	tc.w = &tc.live;
+	/* The shared weapon field contains every visible pad, including pads this
+	 * client already owns under WEAPONS_STAY.  Price only the exact live set
+	 * accepted by Pickup_Weapon for this bot. */
+	tc.collectible_weapon_field =
+	    (tc.live.item[SG_FC_WEAPON] > 0.0f) ?
+	    SG_CollectibleWeaponField(bot) : NULL;
 
 	tc.support = NULL;
 	tc.intercept = NULL;

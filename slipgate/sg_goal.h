@@ -40,6 +40,11 @@ const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms);
 void SG_StrikeWeaponTargetClear(sg_bot_t *bot);
 void SG_StrikeWeaponNoteItemTouch(edict_t *taker, edict_t *item);
 
+/* Cached per-bot flood from every live weapon this client can physically
+ * collect.  NULL is authoritative: generic pricing must apply no weapon
+ * attraction rather than fall back to the unfiltered class field. */
+const int *SG_CollectibleWeaponField(sg_bot_t *bot);
+
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);
 

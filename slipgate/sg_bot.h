@@ -544,6 +544,9 @@ typedef struct sg_think_s {
 	usercmd_t		cmd;
 	const int		*goal_field, *support, *intercept;
 	const int		*route_field;
+	/* Per-client weapon surface.  Unlike the class field, every root is a
+	 * live pad the physical pickup law admits for this bot. */
+	const int		*collectible_weapon_field;
 	qboolean		route_pure;
 	const sg_weights_t *w;
 	sg_weights_t	live;
