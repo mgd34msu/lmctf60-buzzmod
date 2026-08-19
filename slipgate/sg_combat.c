@@ -641,17 +641,18 @@ typedef struct
 	 * behind a wall is still the target the range is being held against; the
 	 * two are separate so the acquisition reset above keeps its exact meaning. */
 	int			enemy_last;		/* edict index, outlives the sighting */
+	unsigned long	enemy_last_ctfid; /* life identity of that sighting */
 	vec3_t		enemy_org;
 	float		enemy_time;		/* level.time of the last successful scan */
 	int			enemy_weapon;	/* weapon index seen in their hands, -1 none */
 
-	/* the corner hold. lost_client is the client number, not an edict index,
-	 * so it compares directly against the belief table's own field. lost_until
-	 * is the validity test rather than lost_client, for the same reason
-	 * alert_until is: this table is static storage that starts as zeroes, and
-	 * an expired deadline is the only sentinel a zeroed record answers
-	 * correctly on the first frame of a level. */
+	/* The corner hold. lost_client is the client number, not an edict index,
+	 * so it compares directly against the belief table's own field. The
+	 * deadline and lost_ctfid jointly validate it: the deadline makes zeroed
+	 * process storage inert on its first frame, while ctfid prevents a later
+	 * life in the same slot from inheriting the pursuit. */
 	int			lost_client;
+	unsigned long	lost_ctfid;		/* exact client life being pursued */
 	int			lost_seed;
 	float		lost_time;		/* when the target was lost */
 	float		lost_until;		/* when the hold expires; <= level.time = none */
@@ -3444,32 +3445,41 @@ void SG_CombatAlert(edict_t *self, float expect_range)
  * lead wants the enemy's ENTITY -- velocity and box -- not a seed
  * belief). NULL unless this bot re-sighted its enemy this frame-ish.
  */
-edict_t *SG_CombatLiveEnemy(edict_t *self)
+static edict_t *Combat_EnemyIdentityCurrent(edict_t *self, int enemy_index,
+                                            unsigned long enemy_ctfid)
 {
-	sg_combat_state_t *st;
 	edict_t *en;
 	int self_team;
 
 	if (!self || !self->inuse || !self->client ||
 	    self->movetype == MOVETYPE_NOCLIP)
 		return NULL;
-	st = Combat_ClientState(self);
-	if (!st)
+	if (enemy_index <= 0 || enemy_index > game.maxclients ||
+	    enemy_index >= globals.num_edicts)
 		return NULL;
-	if (st->enemy <= 0 || st->enemy > game.maxclients ||
-	    st->enemy >= globals.num_edicts)
-		return NULL;
-	en = g_edicts + st->enemy;
+	en = g_edicts + enemy_index;
 	if (!en->client)
 		return NULL;
 	self_team = self->client->ctf.teamnum;
 	if (!SG_CombatLiveEnemyIdentityAllowed(self_team,
 	    en->client->ctf.teamnum, game.maxclients, globals.num_edicts,
-	    st->enemy, st->enemy_ctfid, en->client->ctf.ctfid, en->inuse,
+	    enemy_index, enemy_ctfid, en->client->ctf.ctfid, en->inuse,
 	    true, !en->deadflag && en->health > 0,
 	    en->movetype == MOVETYPE_NOCLIP))
 		return NULL;
 	return en;
+}
+
+edict_t *SG_CombatLiveEnemy(edict_t *self)
+{
+	sg_combat_state_t *st;
+
+	if (!self || !self->inuse || !self->client)
+		return NULL;
+	st = Combat_ClientState(self);
+	if (!st)
+		return NULL;
+	return Combat_EnemyIdentityCurrent(self, st->enemy, st->enemy_ctfid);
 }
 
 void SG_CombatPursuit(edict_t *self, qboolean allowed)
@@ -3506,6 +3516,10 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 		return false;
 
 	if (st->enemy_last <= 0 || level.time - st->enemy_time > SG_DUEL_FRESH)
+		return false;
+	foe = Combat_EnemyIdentityCurrent(self, st->enemy_last,
+	                                  st->enemy_last_ctfid);
+	if (!foe)
 		return false;
 	VectorCopy(st->enemy_org, org);
 
@@ -3560,10 +3574,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	 * back through the same R1/R2d/F6 gates, which is why a super shotgun
 	 * cannot be talked out past 256 by a railgun standing at 690.
 	 */
-	foe = (st->enemy_last > 0 && st->enemy_last < globals.num_edicts)
-	      ? g_edicts + st->enemy_last : NULL;
-	if (foe && foe->inuse && foe->client &&
-	    st->enemy_weapon >= 0 && st->enemy_weapon < SG_NUM_WEAPONS)
+	if (st->enemy_weapon >= 0 && st->enemy_weapon < SG_NUM_WEAPONS)
 	{
 		float theirs = Combat_WantRange(foe, st->enemy_weapon);
 		float dsafe = Combat_DSafe(self, held);
@@ -3722,6 +3733,13 @@ static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
 
 	if (!st->pursue || level.time >= st->lost_until)
 		return false;
+	if (!Combat_EnemyIdentityCurrent(self, st->lost_client + 1,
+	                                 st->lost_ctfid))
+	{
+		st->lost_until = 0.0f;
+		st->lost_have = false;
+		return false;
+	}
 
 	/*
 	 * The contact-band exception. A super shotgun, or anything else whose
@@ -3959,6 +3977,7 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 		if (seed >= 0)
 		{
 			st->lost_client = st->enemy - 1;
+			st->lost_ctfid = st->enemy_ctfid;
 			st->lost_seed = seed;
 			st->lost_time = level.time;
 			st->lost_until = level.time + SG_LOST_HOLD;
@@ -4121,6 +4140,7 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 	 * bot has no business knowing. Anything the eye did not see stays unwritten.
 	 */
 	st->enemy_last = st->enemy;
+	st->enemy_last_ctfid = st->enemy_ctfid;
 	VectorCopy(mid, st->enemy_org);
 	st->enemy_time = level.time;
 	st->enemy_weapon = Combat_Held(enemy);

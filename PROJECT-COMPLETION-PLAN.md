@@ -1366,8 +1366,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Retained live-combat targets are bound to the opposing client's unique
       life identity as well as its edict slot. Death, respawn, team change, and
       slot reuse revoke external combat ownership before target hysteresis or
-      lost-corner pursuit, so a teammate or new occupant cannot inherit the old
-      duel and a reacquired enemy starts a fresh reaction/settle state.
+      duel-range terms or lost-corner pursuit, so a teammate or new occupant
+      cannot inherit the old duel and a reacquired enemy starts a fresh
+      reaction/settle state.
       Shared carrier rows survive aging only while the current holder remains
       on the row's expected team and possesses that row's exact flag entity.
       A human teammate carrying the enemy flag receives the same bot escort and
