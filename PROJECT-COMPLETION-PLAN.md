@@ -1204,6 +1204,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       effective pressure roster; post-grab rearguard holding follows effective
       pressure/escort duty and never a superseded recovery assignment. Rally
       partner admission uses that same pre-frame effective-pressure roster.
+      Wedge and route-failure watchdogs exempt only the effective escort
+      mission, so they neither kill its carrier screen nor preserve a stale
+      organic escort exemption under another duty.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

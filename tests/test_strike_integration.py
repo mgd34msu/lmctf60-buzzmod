@@ -486,10 +486,13 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("tc.combat_pursuit = SG_StrikeCombatPursuitActive(",
                       arach)
         self.assertIn("tc.rearguard = SG_StrikeRearguardActive(", arach)
+        self.assertIn("tc.escort_mission = SG_StrikeEscortActive(", arach)
         self.assertIn("tc->combat_pursuit ||", descend)
         self.assertIn("!tc->strike_active &&", descend)
         self.assertIn("if (tc->rearguard &&", descend)
         self.assertIn("tc->strike_pressure ? 1500", descend)
+        self.assertEqual(descend.count("!ThinkMissionHold(bot, tc, goal_field)"),
+                         2)
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         rally = goal[goal.index("THE RALLY."):goal.index("rally_done:")]
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb)", rally)

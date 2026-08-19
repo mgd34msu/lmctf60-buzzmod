@@ -77,6 +77,31 @@ static void Swim_LiveFallbackLog(const edict_t *e, int link_index,
 	    SG_ReplayReasonName(result->replay_reason));
 }
 
+/* Watchdogs judge the route that owns this frame, not the organic role that
+ * preceded a coordinator overlay.  A concrete ESCORT may hold near its carrier;
+ * every other strike duty removes an obsolete organic escort exemption. */
+static qboolean ThinkMissionHold(const sg_bot_t *bot, const sg_think_t *tc,
+	const int *goal_field)
+{
+	int role;
+	int goal_cost;
+	edict_t *ordered_escort = NULL;
+	qboolean ordered_terminal = false;
+
+	if (!bot || !tc || !goal_field)
+		return false;
+	role = tc->escort_mission ? SG_ROLE_ESCORT : tc->role;
+	if (tc->strike_active && !tc->escort_mission)
+		role = SG_ROLE_ATTACK;
+	goal_cost = bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds
+	    ? goal_field[bot->seed] : SG_FIELD_INF;
+	if (!tc->strike_active && tc->escort_mission)
+		ordered_escort = SG_ChatEscortTarget(tc->e);
+	if (ordered_escort)
+		ordered_terminal = SG_EscortTerminal(tc->e, ordered_escort);
+	return SG_RoleMissionHold(role, goal_cost, ordered_terminal);
+}
+
 /*
  * The compass bucket of a planar direction: 45 degrees per bucket, bucket
  * 0 centred on +x and buckets advancing counter-clockwise (E NE N NW W SW
@@ -3990,11 +4015,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		return -1;
 	}
 	else if (SG_AgeOver(bot->wedge_since, 15.0f) &&
-	         !SG_RoleMissionHold(role,
-	             bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds ?
-	                 goal_field[bot->seed] : SG_FIELD_INF,
-	             role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
-	             SG_EscortTerminal(e, SG_ChatEscortTarget(e))) &&
+	         !ThinkMissionHold(bot, tc, goal_field) &&
 	         /* Declared mechanisms legitimately park the body while a lift
 	          * queues, moves beneath it, or carries it.  Their authoritative
 	          * state machine and bounded commit deadline own failure; the
@@ -4059,11 +4080,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		SG_Mark(&bot->stag_since);
 	}
 	else if (bestlink >= 0 &&
-	         !SG_RoleMissionHold(role,
-	             bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds ?
-	                 goal_field[bot->seed] : SG_FIELD_INF,
-	             role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
-	                 SG_EscortTerminal(e, SG_ChatEscortTarget(e))) &&
+	         !ThinkMissionHold(bot, tc, goal_field) &&
 	    /* 1500, not 400: a PATROLLING defender runs full speed inside a
 	     * confined orbit -- Slip circled seed 1704 at 250 u/s, goal 700,
 	     * and the 400 cutoff fed the whole patrol to the shelf (iter 44,

@@ -53,6 +53,13 @@ int SG_StrikeRearguardActive(int ordinary_rearguard, int strike_active,
 	                     : ordinary_rearguard;
 }
 
+int SG_StrikeEscortActive(int ordinary_escort, int strike_active,
+	sg_strike_duty_t duty)
+{
+	return strike_active ? duty == SG_STRIKE_DUTY_ESCORT
+	                     : ordinary_escort;
+}
+
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty)
 {
 	switch (duty)

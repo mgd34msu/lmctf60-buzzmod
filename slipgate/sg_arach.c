@@ -3424,6 +3424,8 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.rearguard = SG_StrikeRearguardActive(
 	    role == SG_ROLE_ATTACK || role == SG_ROLE_ESCORT,
 	    0, SG_STRIKE_DUTY_NONE);
+	tc.escort_mission = SG_StrikeEscortActive(
+	    role == SG_ROLE_ESCORT, 0, SG_STRIKE_DUTY_NONE);
 
 	Think_LiveWeights(bot, &tc);    /* fills tc.live */
 	tc.w = &tc.live;
@@ -3469,6 +3471,8 @@ void SG_BotThink(sg_bot_t *bot)
 			tc.rearguard = SG_StrikeRearguardActive(
 			    role == SG_ROLE_ATTACK || role == SG_ROLE_ESCORT,
 			    1, strike_duty);
+			tc.escort_mission = SG_StrikeEscortActive(
+			    role == SG_ROLE_ESCORT, 1, strike_duty);
 			if (SG_StrikeDutyRetiresOptionalErrand(strike_duty))
 				Lead_Abort(bot, "strike duty");
 			tc.strike_active = true;
