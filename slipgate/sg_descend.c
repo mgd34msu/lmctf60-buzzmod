@@ -2227,10 +2227,13 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 /* A pure route is an exact mission owner: enemy pressure, recovery, escort,
  * or an exact item-pad diversion.  The ordinary link latch predates those
  * identities and otherwise restores a RUN selected by the previous field for
- * up to three seconds after the mission changes.  Retire only that reversible
- * RUN.  A controller that has crossed into physics continues under its own
- * bounded completion law, and composed (non-pure) surfaces keep their normal
- * anti-flap commitment. */
+ * up to three seconds after the mission changes.  A graph hook can be worse:
+ * its fire gate proves that the old endpoint still makes some progress, but
+ * that does not make it useful to the replacement mission.  Retire a
+ * reversible RUN or not-yet-fired hook when its exact field changes.  A
+ * controller that has crossed into physics continues under its own bounded
+ * completion law, and composed (non-pure) surfaces keep their normal anti-flap
+ * commitment. */
 static void PureRoutePrepareCommit(sg_bot_t *bot, const sg_think_t *tc)
 {
 	rune_t *rune = SG_Rune();
@@ -2243,7 +2246,8 @@ static void PureRoutePrepareCommit(sg_bot_t *bot, const sg_think_t *tc)
 	    bot->commit_route_field == tc->route_field)
 		return;
 	action = rune->links[bot->commit_link].action;
-	if (action != RL_RUN || StrikeWeaponControllerPhysical(bot, action))
+	if ((action != RL_RUN && action != RL_HOOK) ||
+	    StrikeWeaponControllerPhysical(bot, action))
 		return;
 	StrikeWeaponCancelStaged(bot, action);
 }

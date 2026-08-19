@@ -1578,9 +1578,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       authorized them. When a pure mission changes to enemy pressure,
       recovery, escort, or an exact item route, a reversible RUN and its sticky
       latch retire in the same frame instead of spending up to three seconds on
-      the superseded objective. Unchanged fields keep anti-flap commitment;
-      hooks, jumps, swims, and declared mechanisms keep their bounded physical
-      lifecycle.
+      the superseded objective. A graph hook that has not fired retires on the
+      same ownership edge, so incidental progress toward its old endpoint
+      cannot authorize an obsolete ride. Unchanged fields keep anti-flap
+      commitment, and an attached rope keeps its bounded physical lifecycle.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

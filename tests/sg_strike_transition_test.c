@@ -473,15 +473,32 @@ static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
 	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
 
-	/* Non-RUN graph controllers likewise retain their exact lifecycle. */
+	/* A selected or aiming hook has not fired. Positive progress toward its old
+	 * endpoint is not current-purpose authority, so the new field cancels it. */
 	bot = Bot();
 	tc = Think();
 	tc.route_pure = true;
 	test_links[1].action = RL_HOOK;
 	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	bot.hook_phase = 1;
+	bot.hook_link = 1;
 	tc.route_field = enemy_field;
 	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
-	CHECK(bot.commit_link == 1);
+	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
+	CHECK(bot.hook_link == -1 && bot.commit_route_field == NULL);
+
+	/* Once fired, the same graph hook is physical and retains its bounded
+	 * attach/pull/landing lifecycle across a mission change. */
+	bot = Bot();
+	tc = Think();
+	tc.route_pure = true;
+	test_links[1].action = RL_HOOK;
+	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	bot.hook_phase = 2;
+	bot.hook_link = 1;
+	tc.route_field = enemy_field;
+	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
 }
 
 static void TestDeadlineGoAndCurrentCandidate(void)
