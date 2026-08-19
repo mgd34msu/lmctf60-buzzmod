@@ -54,6 +54,7 @@ enum {
 };
 
 enum { HAND_RIGHT = 0, HAND_LEFT = 1, HAND_CENTER = 2 };
+enum { RAY_INVALID = 0, RAY_MISS = 1, RAY_HIT = 2 };
 
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -230,6 +231,28 @@ static int test_machinegun_deterministic_kick(void)
           desired[2] * actual[2];
     CHECK(dot > 0.9999f);
     CHECK(nearly(source_pad, 0.0f, 0.0001f));
+    return 0;
+}
+
+static int test_invalid_physical_ray_is_distinct_from_a_miss(void)
+{
+    vec3_t origin = { 0.0f, 0.0f, 0.0f };
+    vec3_t lead = { 600.0f, 0.0f, 22.0f };
+    vec3_t mins = { -16.0f, -16.0f, -24.0f };
+    vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+    vec3_t requested = { 1.0f, 0.0f, 0.0f };
+    vec3_t muzzle, direction;
+    float source_pad = 0.0f;
+    int status;
+
+    status = SG_CombatAimTestFinalize(W_GRENADE, HAND_RIGHT, 0, 0,
+        22.0f, origin, lead, mins, maxs, requested, 0.2f, muzzle, direction,
+        &source_pad);
+    CHECK(status == RAY_INVALID);
+    status = SG_CombatAimTestFinalize(W_RAIL, HAND_RIGHT, 0, 0,
+        22.0f, origin, lead, mins, maxs, requested, 0.2f, muzzle, direction,
+        &source_pad);
+    CHECK(status == RAY_HIT || status == RAY_MISS);
     return 0;
 }
 
@@ -425,6 +448,7 @@ int main(void)
 	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 2, 1, 1));
     CHECK(!test_exact_muzzle_offsets());
     CHECK(!test_machinegun_deterministic_kick());
+    CHECK(!test_invalid_physical_ray_is_distinct_from_a_miss());
     CHECK(!test_final_physical_rays());
     CHECK(!test_chaingun_source_envelope());
     CHECK(!test_clear_shot_predicate());

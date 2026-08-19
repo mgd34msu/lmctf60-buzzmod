@@ -2675,16 +2675,26 @@ static qboolean Combat_WeaponRay(edict_t *self, int weapon, usercmd_t *cmd,
 	return true;
 }
 
+typedef enum
+{
+	COMBAT_RAY_INVALID = 0,
+	COMBAT_RAY_MISS,
+	COMBAT_RAY_HIT
+} combat_ray_result_t;
+
 /*
  * The muzzle moves with the packed view.  Three constraint/repack passes plus
  * a bounded final correction close that small fixed point, then the caller
  * receives the actual ray it will trace and fire.
  */
-static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
-                                         int weapon, vec3_t lead,
-                                         sg_combat_state_t *st, vec3_t aim,
-                                         usercmd_t *cmd, vec3_t muzzle,
-                                         vec3_t shotdir, float *source_pad)
+static combat_ray_result_t Combat_FinalizeMuzzleAim(edict_t *self,
+                                                    edict_t *enemy, int weapon,
+                                                    vec3_t lead,
+                                                    sg_combat_state_t *st,
+                                                    vec3_t aim, usercmd_t *cmd,
+                                                    vec3_t muzzle,
+                                                    vec3_t shotdir,
+                                                    float *source_pad)
 {
 	int	pass;
 	qboolean final_hit;
@@ -2693,7 +2703,7 @@ static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
 	{
 		Combat_WriteShotCmd(self, weapon, aim, cmd);
 		if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
-			return false;
+			return COMBAT_RAY_INVALID;
 		Combat_ConstrainAim(enemy, weapon, muzzle, lead, st, shotdir,
 		                    *source_pad);
 		VectorCopy(shotdir, aim);
@@ -2701,11 +2711,11 @@ static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
 
 	Combat_WriteShotCmd(self, weapon, aim, cmd);
 	if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
-		return false;
+		return COMBAT_RAY_INVALID;
 	final_hit = Combat_RayHitsMuzzleEnvelope(muzzle, shotdir, enemy, lead,
 	                                         *source_pad);
 	if (final_hit)
-		return true;
+		return COMBAT_RAY_HIT;
 
 	/* Quantisation can move an edge ray by one short.  Spend one final bounded
 	 * correction rather than accepting a view ray that the physical shot misses. */
@@ -2714,9 +2724,10 @@ static qboolean Combat_FinalizeMuzzleAim(edict_t *self, edict_t *enemy,
 	VectorCopy(shotdir, aim);
 	Combat_WriteShotCmd(self, weapon, aim, cmd);
 	if (!Combat_WeaponRay(self, weapon, cmd, muzzle, shotdir, source_pad))
-		return false;
+		return COMBAT_RAY_INVALID;
 	return Combat_RayHitsMuzzleEnvelope(muzzle, shotdir, enemy, lead,
-	                                    *source_pad);
+	                                    *source_pad)
+	       ? COMBAT_RAY_HIT : COMBAT_RAY_MISS;
 }
 
 /* Aim a physical non-ballistic ray at an intentional point (carrier splash). */
@@ -4242,6 +4253,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	trace_t				tr;
 	int					band, inhand, incumbent_index;
 	qboolean			clear_shot, carrier, ballistic, vel_stable, ray_hits;
+	combat_ray_result_t	ray_result;
 	qboolean			rattled, textured;
 
 	if (out_engaged)
@@ -4489,9 +4501,16 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	}
 	else
 	{
-		ray_hits = Combat_FinalizeMuzzleAim(self, enemy, inhand, lead, st,
+		ray_result = Combat_FinalizeMuzzleAim(self, enemy, inhand, lead, st,
 		                                     aim, cmd, muzzle, shotdir,
 		                                     &source_pad);
+		/* A constrained physical miss still supplies the real muzzle and ray
+		 * for the wall/teammate veto below.  An unsupported or otherwise
+		 * invalid weapon supplies neither; never trace or trigger from
+		 * uninitialised physical state. */
+		if (ray_result == COMBAT_RAY_INVALID)
+			return;
+		ray_hits = (ray_result == COMBAT_RAY_HIT);
 	}
 
 	/*
@@ -4739,7 +4758,7 @@ int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
 	usercmd_t	cmd;
 	vec3_t		aim, lead_copy;
 	float		saved_time = level.time;
-	qboolean	ok;
+	combat_ray_result_t result;
 
 	memset(&self, 0, sizeof(self));
 	memset(&enemy, 0, sizeof(enemy));
@@ -4760,10 +4779,11 @@ int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
 	VectorCopy(lead, lead_copy);
 	st.since = 0.0f;
 	level.time = elapsed;
-	ok = Combat_FinalizeMuzzleAim(&self, &enemy, weapon, lead_copy, &st, aim,
-	                              &cmd, muzzle_out, dir_out, source_pad_out);
+	result = Combat_FinalizeMuzzleAim(&self, &enemy, weapon, lead_copy, &st,
+	                                 aim, &cmd, muzzle_out, dir_out,
+	                                 source_pad_out);
 	level.time = saved_time;
-	return ok ? 1 : 0;
+	return (int)result;
 }
 
 int SG_CombatAimTestWeaponRay(int weapon, int hand, int machinegun_shots,

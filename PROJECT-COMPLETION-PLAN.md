@@ -1452,6 +1452,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       An irreversible grenade release owns the solved yaw/pitch through
       emission: spawn-look and air-strafe writers stand down, and only that
       frame bypasses ordinary turn slew before the engine observes release.
+      Direct-fire finalization now distinguishes a valid constrained miss from
+      an invalid physical weapon ray. The former still supplies the exact
+      muzzle for obstruction and teammate checks; the latter retires the shot
+      before any trace or trigger can consume undefined muzzle state.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
