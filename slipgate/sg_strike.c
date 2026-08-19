@@ -14,6 +14,28 @@ static int Strike_SlotValid(int slot)
 	return slot >= 0 && slot < SG_STRIKE_MAX_SLOTS;
 }
 
+float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
+	float current_distance, float candidate_distance, float vertical_delta,
+	int current_goal_ms, int candidate_goal_ms)
+{
+	float progress, price;
+
+	if (!flag_available || !run_link || !isfinite(current_distance) ||
+	    !isfinite(candidate_distance) || !isfinite(vertical_delta) ||
+	    current_distance <= 160.0f || current_distance > 600.0f ||
+	    candidate_distance < 0.0f || fabsf(vertical_delta) > 96.0f ||
+	    current_goal_ms < 0 || candidate_goal_ms < 0 ||
+	    candidate_goal_ms > current_goal_ms + 125)
+		return 0.0f;
+	progress = current_distance - candidate_distance;
+	if (!isfinite(progress) || progress < 16.0f)
+		return 0.0f;
+	price = progress * 0.5f;
+	if (price > 100.0f)
+		price = 100.0f;
+	return -price;
+}
+
 static uint32_t Strike_Bit(int slot)
 {
 	return (uint32_t)1u << (unsigned)slot;

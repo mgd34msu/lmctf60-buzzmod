@@ -671,6 +671,28 @@ static void TestInvalidInputDoesNotMutate(void)
 	CHECK(memcmp(&team, &before, sizeof(team)) == 0);
 }
 
+static void TestHomeFlagApproachPricing(void)
+{
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 500.0f, 300.0f, 0.0f,
+	    500, 500) == -100.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 350.0f, 0.0f,
+	    500, 625) == -25.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 385.0f, 0.0f,
+	    500, 500) == 0.0f); /* less than a meaningful body step */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 160.0f, 80.0f, 0.0f,
+	    200, 100) == 0.0f); /* direct-touch controller owns this band */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 601.0f, 300.0f, 0.0f,
+	    700, 600) == 0.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 0, 400.0f, 200.0f, 0.0f,
+	    500, 400) == 0.0f); /* mechanisms retain exact authority */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 200.0f, 97.0f,
+	    500, 400) == 0.0f);
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 200.0f, 0.0f,
+	    500, 626) == 0.0f); /* not a near-plateau route */
+	CHECK(SG_StrikeFlagApproachPrice(1, 1, NAN, 200.0f, 0.0f,
+	    500, 400) == 0.0f);
+}
+
 int main(void)
 {
 	TestNormalFiveKeepsTwoDefenders();
@@ -688,6 +710,7 @@ int main(void)
 	TestWeaponRouteRetirementVerdicts();
 	TestReturnCaptureAndLifecycleReset();
 	TestInvalidInputDoesNotMutate();
+	TestHomeFlagApproachPricing();
 	if (failures)
 	{
 		fprintf(stderr, "sg_strike_test: %d failure(s)\n", failures);

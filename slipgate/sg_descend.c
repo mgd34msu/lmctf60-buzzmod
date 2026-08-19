@@ -285,8 +285,27 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	float rail_dose = 0.0f;
 	qboolean rail_hold = false;
 	qboolean supply_route = SG_DefenseSupplyActive(bot) && route_pure;
+	edict_t *approach_flag = NULL;
+	float approach_flag_distance = 0.0f;
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
+
+	/* The home enemy flag is public CTF state.  Keep its physical item
+	 * position as a bounded last-room pricing input; dropped/carried flags do
+	 * not enter because their availability/knowledge has different authority. */
+	if (role == SG_ROLE_ATTACK)
+	{
+		edict_t *flag = SG_EnemyFlag(team);
+
+		if (flag && ctf_flagathome(flag) && bot->seed >= 0 &&
+		    bot->seed < SG_Rune()->hdr.num_seeds)
+		{
+			approach_flag_distance = SG_DistXY(e->s.origin, flag->s.origin);
+			if (approach_flag_distance <= 600.0f &&
+			    fabsf(flag->s.origin[2] - e->s.origin[2]) <= 96.0f)
+				approach_flag = flag;
+		}
+	}
 
 	/* life ticker for the route-jitter seed */
 	if (e->health <= 0)
@@ -505,6 +524,17 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean mechanism_bound = false;
 		int b;
+
+		if (approach_flag)
+		{
+			float candidate_distance = SG_DistXY(
+			    SG_Rune()->seeds[l->to].origin, approach_flag->s.origin);
+
+			v += SG_StrikeFlagApproachPrice(true, l->action == RL_RUN,
+			    approach_flag_distance, candidate_distance,
+			    SG_Rune()->seeds[l->to].origin[2] - approach_flag->s.origin[2],
+			    goal_field[bot->seed], goal_field[l->to]);
+		}
 
 		if (SG_ActionMechanismPlanRequired(l->action))
 		{

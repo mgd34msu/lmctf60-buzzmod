@@ -169,10 +169,11 @@ Implement the remaining material deficiencies in this order:
 
 Every item above requires a production C change, an executable test that calls
 the changed policy or live seam, both Make dialects, and then a matched runtime
-gate. A measurement-only change cannot complete an item. The first implemented
-slice is the quiet defender patrol: its pure leg chooser and throttle are
-executable, the behavior is enabled by default, and runtime outcome acceptance
-remains pending on the persistent fleet.
+gate. A measurement-only change cannot complete an item. Implemented controller
+slices now include the enabled quiet-defender patrol and a bounded, proved-RUN
+home-flag approach preference that breaks near-stand field plateaus without
+granting touch authority. Their pure policies are executable; runtime outcome
+acceptance remains pending on the persistent fleet.
 
 ### Acceptance instrumentation and provenance
 

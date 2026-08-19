@@ -162,4 +162,11 @@ sg_strike_weapon_door_retirement_t SG_StrikeWeaponDoorRetirement(
 	int release_proved_clear, int recovery_expired, int hold_open_ready);
 int SG_StrikeGenericRailAllowed(int strike_active);
 
+/* Bounded pricing correction for the last proved RUNs toward a home enemy
+ * flag.  This never grants touch or movement authority; it only breaks a
+ * near-stand field plateau in favor of physical progress toward the item. */
+float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
+	float current_distance, float candidate_distance, float vertical_delta,
+	int current_goal_ms, int candidate_goal_ms);
+
 #endif /* SG_STRIKE_H */
