@@ -1553,6 +1553,11 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       owned weapon can no longer attract a below-tier attacker even though the
       broad class field still sees it; successful and rejected touches both
       retire the exact target through the physical item authority.
+      Default immediate-return suppression now counts only distinct neighbors
+      that hold or reduce the current route cost. A merely finite uphill edge
+      can no longer make the controller tax its sole non-worsening reverse edge
+      and walk away from the objective; genuine plateau choices retain the
+      anti-oscillation surcharge.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

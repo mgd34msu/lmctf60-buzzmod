@@ -320,7 +320,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean supply_route = SG_DefenseSupplyActive(bot) && route_pure;
 	edict_t *approach_flag = NULL;
 	float approach_flag_distance = 0.0f;
-	int finite_route_neighbors = 0;
+	int nonworsening_route_neighbors = 0;
 	int attack_descent_link = -1;
 	float attack_descent_value = 1e30f;
 	qboolean enemy_pressure = tc->strike_pressure;
@@ -348,8 +348,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/* The immediate-return price is meaningful only when the field offers a
-	 * choice. Count finite graph neighbors once for the fan so an adopted
-	 * anti-oscillation preference cannot make a one-exit corridor stand still. */
+	 * second route that does not give progress back. Count distinct neighbors
+	 * at or below the current live route cost; a finite uphill exit cannot be
+	 * used as an excuse to tax the only way forward. */
 	if (bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds)
 		for (li = SG_Rune()->first_link[bot->seed]; li >= 0;
 		     li = SG_Rune()->next_link[li])
@@ -361,7 +362,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			if (neighbor->to >= 0 &&
 			    neighbor->to < SG_Rune()->hdr.num_seeds &&
 			    neighbor->to != bot->seed &&
-			    route_field[neighbor->to] < SG_FIELD_INF)
+			    route_field[bot->seed] < SG_FIELD_INF &&
+			    route_field[neighbor->to] <= route_field[bot->seed])
 			{
 				/* Multiple proved actions may reach the same neighbor. They are
 				 * one route choice for this policy, not independent exits. */
@@ -374,7 +376,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 						break;
 					}
 				if (!duplicate)
-					finite_route_neighbors++;
+					nonworsening_route_neighbors++;
 			}
 		}
 
@@ -1375,7 +1377,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		if (SG_RouteReturnPenaltyAllowed(bot->prev_seed, l->to,
 		        SG_AgeUnder(bot->prev_seed_time, 3.0f),
-		        finite_route_neighbors, sg_cv.nobacktrack->value))
+		        nonworsening_route_neighbors,
+		        sg_cv.nobacktrack->value))
 			v *= 1.0f + sg_cv.nobacktrack->value / 100.0f;
 
 		/*

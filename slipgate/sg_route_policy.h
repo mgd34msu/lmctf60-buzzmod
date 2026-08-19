@@ -4,16 +4,20 @@
 
 #include <math.h>
 
-/* The adopted immediate-return surcharge is a choice among routes, not a
- * permission to stop. Never tax the only finite neighbor: in a one-exit
- * corridor the reverse edge is the route forward. */
+/* The immediate-return surcharge is a choice among equally useful routes,
+ * not permission to spend progress.  A merely finite alternative can point
+ * uphill; require two distinct non-worsening neighbors before taxing either
+ * one.  A reverse edge that is the only way to hold or reduce field cost is
+ * the route forward, even when some worse finite edge also exists. */
 static inline int SG_RouteReturnPenaltyAllowed(int previous_seed,
-	int candidate_seed, int previous_recent, int finite_neighbor_count,
+	int candidate_seed, int previous_recent,
+	int nonworsening_neighbor_count,
 	float configured_percent)
 {
 	if (previous_seed < 0 || candidate_seed < 0 ||
 	    (previous_recent != 0 && previous_recent != 1) ||
-	    finite_neighbor_count < 2 || !isfinite(configured_percent) ||
+	    nonworsening_neighbor_count < 2 ||
+	    !isfinite(configured_percent) ||
 	    !(configured_percent > 0.0f))
 		return 0;
 	return previous_recent && candidate_seed == previous_seed;
