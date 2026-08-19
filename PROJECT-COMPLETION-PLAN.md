@@ -177,10 +177,11 @@ gate. A measurement-only change cannot complete an item. Implemented controller
 slices now include the enabled quiet-defender patrol, a bounded proved-RUN
 home-flag approach preference that breaks near-stand field plateaus without
 granting touch authority, immediate strike release when no ready teammate can
-reach the synchronization window before its deadline, and weapon preparation
-that yields to enemy-stand pressure inside five seconds or when its route saves
-less than one second. Their pure policies are executable; runtime outcome
-acceptance remains pending on the persistent fleet.
+reach the synchronization window before its deadline, per-frame release when a
+forming teammate falls behind the remaining synchronization clock, and weapon
+preparation that yields to enemy-stand pressure inside five seconds or when its
+route saves less than one second. Their pure policies are executable; runtime
+outcome acceptance remains pending on the persistent fleet.
 
 ### Acceptance instrumentation and provenance
 
@@ -220,9 +221,10 @@ Required work:
 - tune or strike the remaining human-speed air-strafe chain work from measured
   results, not a synthetic flat-floor Pmove alone;
 - treat the plateau A-to-B-to-A spike as a bounded residual unless a new
-  source-grounded mechanism improves it; global immediate-return pricing,
-  route dither, and hook-pong shelving were already struck and must not be
-  repeated;
+  source-grounded mechanism improves it; the stronger immediate-return dose,
+  route dither, and hook-pong shelving were struck and must not be repeated.
+  Preserve the adopted `sg_nobacktrack 60` baseline rather than incorrectly
+  describing it as disabled;
 - close the transition-determinism and dither-retry defects;
 - preserve proven pit, water, fall, door, lift, teleport, and grapple safety;
 - generate blind movement film and retain the exact source/demo/metric identity.

@@ -413,11 +413,21 @@ static int Strike_FormPartnerReachable(const sg_strike_team_t *team,
 	const sg_strike_frame_t *frame, uint32_t attack_mask, int leader)
 {
 	uint32_t ready = attack_mask & team->mission_ready_mask;
+	int arrival_budget_ms = (int)(SG_STRIKE_FORM_CAP_SECONDS * 1000.0f);
 	int leader_cost;
 	int slot;
 
 	if (!Strike_SlotValid(leader) || (ready & Strike_Bit(leader)) == 0u)
 		return 0;
+	if (team->form_deadline >= 0.0f)
+	{
+		float remaining = (team->form_deadline - frame->now) * 1000.0f;
+
+		if (!isfinite(remaining) || remaining <= 0.0f)
+			return 0;
+		if (remaining < (float)arrival_budget_ms)
+			arrival_budget_ms = (int)remaining;
+	}
 	leader_cost = frame->slot[leader].enemy_flag_goal_ms;
 	if (leader_cost < 0)
 		return 0;
@@ -430,7 +440,7 @@ static int Strike_FormPartnerReachable(const sg_strike_team_t *team,
 		partner_cost = frame->slot[slot].enemy_flag_goal_ms;
 		if (partner_cost >= 0 &&
 		    partner_cost <= leader_cost +
-		        (int)(SG_STRIKE_FORM_CAP_SECONDS * 1000.0f) +
+		        arrival_budget_ms +
 		        SG_STRIKE_SYNC_SPREAD_MS)
 			return 1;
 	}
@@ -488,10 +498,10 @@ static void Strike_AdvanceAttack(sg_strike_team_t *team,
 	leader = Strike_ReadyLeader(team, frame, attack_mask);
 	if (leader >= 0)
 	{
-		/* Holding is useful only when a ready partner can reach the shared
-		 * synchronization band before the bounded form clock expires.  If no
-		 * partner can, waiting reduces stand pressure without creating a team
-		 * attack, so the ready leader goes now. */
+		/* Holding is useful only while a ready partner can still reach the
+		 * synchronization band before the bounded form clock expires.  Recompute
+		 * against the remaining clock every frame: a partner that stalls or takes
+		 * a longer route releases the leader immediately. */
 		if (!Strike_FormPartnerReachable(team, frame, attack_mask, leader))
 		{
 			Strike_EnterGo(team, frame->now);

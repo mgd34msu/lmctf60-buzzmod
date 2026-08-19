@@ -308,7 +308,7 @@ static void TestSharedGoAndBoundedForm(void)
 	CHECK(fabsf(deadline - 103.0f) < 0.001f);
 
 	frame.now = 101.0f;
-	frame.slot[1].enemy_flag_goal_ms = 5000;
+	frame.slot[1].enemy_flag_goal_ms = 4000;
 	CHECK(SG_StrikeStep(&team, &frame));
 	CHECK(team.phase == SG_STRIKE_FORM);
 	CHECK(fabsf(team.form_deadline - deadline) < 0.001f);
@@ -388,6 +388,30 @@ static void TestLeaderNeverWaitsForUnreachableFormation(void)
 	CHECK(SG_StrikeStep(&team, &frame));
 	CHECK(team.phase == SG_STRIKE_FORM);
 	CHECK(team.hold_mask == Bit(0));
+}
+
+static void TestFormationReleasesWhenPartnerFallsBehind(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(350.0f);
+
+	AddAttacker(&frame, 0, 62u, 2, 1000);
+	AddAttacker(&frame, 1, 63u, 2, 4000);
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_FORM);
+	CHECK(team.hold_mask == Bit(0));
+	CHECK(fabsf(team.form_deadline - 353.0f) < 0.001f);
+
+	/* One second later the partner has taken a slower road.  It fitted the
+	 * original three-second budget but cannot enter the synchronization band
+	 * in the two seconds that remain, so the leader attacks now. */
+	frame.now = 351.0f;
+	frame.slot[1].enemy_flag_goal_ms = 5000;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_GO);
+	CHECK(team.hold_mask == 0u);
+	CHECK(team.rush_mask == team.member_mask);
 }
 
 static void TestOneRecovererPreservesAttack(void)
@@ -764,6 +788,7 @@ int main(void)
 	TestSharedGoAndBoundedForm();
 	TestImmediateReleaseAndSoloNeverWaits();
 	TestLeaderNeverWaitsForUnreachableFormation();
+	TestFormationReleasesWhenPartnerFallsBehind();
 	TestOneRecovererPreservesAttack();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
