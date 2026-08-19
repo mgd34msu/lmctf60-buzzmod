@@ -616,8 +616,9 @@ Required repository cleanup:
 - preserve final evidence outside Git and commit only concise manifests;
 - stage from an explicit reviewed file list, never `git add -A`;
 - reconcile README, SLIPGATE, RELEASES, LEDGER, ARCHITECTURE, TOOLING,
-  `tools/README.md`, the RUNE contract, the old roadmap, and historical
-  migration notes with actual final behavior.
+  `tools/README.md`, the RUNE contract, and the retired-roadmap redirect with
+  actual final behavior; obsolete migration notes belong in Git history, not
+  the final working documentation.
 - run link/path/reference checks across all retained Markdown and operator
   commands, and require every named file/target to exist in the final tree;
 - rerun the complete necessity inventory after the final runtime acceptance so
