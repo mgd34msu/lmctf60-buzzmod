@@ -9,6 +9,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_bot_ping.h"
+#include "slipgate/sg_escort_dose.h"
 
 sg_host_t sg_host;
 
@@ -96,6 +97,27 @@ static void TestCRC32(void)
 	CHECK(!SG_CRC32Buffer(NULL, 1, &crc));
 	CHECK(crc == 0);
 	CHECK(!SG_CRC32Buffer(vector, sizeof(vector) - 1, NULL));
+}
+
+static void TestEscortDose(void)
+{
+	int expected_random;
+	int first;
+
+	srand(7331);
+	expected_random = rand();
+	srand(7331);
+	first = SG_EscortDoseEnabled(0, 7, UINT32_C(42), 50);
+	CHECK(first == SG_EscortDoseEnabled(0, 7, UINT32_C(42), 50));
+	CHECK(first == 1);
+	CHECK(rand() == expected_random);
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(42), 0));
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(42), -20));
+	CHECK(SG_EscortDoseEnabled(0, 7, UINT32_C(42), 100));
+	CHECK(SG_EscortDoseEnabled(0, 7, UINT32_C(42), 150));
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(42), 16));
+	CHECK(SG_EscortDoseEnabled(0, 7, UINT32_C(42), 17));
+	CHECK(!SG_EscortDoseEnabled(0, 7, UINT32_C(43), 50));
 }
 
 static void TestValidAndFloatPrecision(void)
@@ -391,6 +413,7 @@ int main(void)
 	TestLifecycleAndMapSwitch();
 	TestReasons();
 	TestBotPingDoesNotOwnGameplayRandomness();
+	TestEscortDose();
 
 	if (failures)
 	{

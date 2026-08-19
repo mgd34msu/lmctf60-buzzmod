@@ -286,6 +286,11 @@ one bounded replacement only when none of its members has a finite recovery
 route; the actual carrier is never displaced. The same bounded rule admits an
 otherwise excluded reachable escort when the retained roster cannot reach its
 carrier, while protecting both the carrier and the sole recovery route.
+The per-carry escort-dose decision now comes from team, carrier, and carry-epoch
+identity rather than the process-global RNG. Unrelated combat, route, patrol,
+chat, and cosmetic random calls can no longer decide whether a live carrier
+receives its assigned screen, and the escort decision cannot perturb those
+controllers in return.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

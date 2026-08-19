@@ -72,6 +72,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_dither.h"
+#include "slipgate/sg_escort_dose.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
@@ -86,6 +87,7 @@ static float	sg_role_skew_until[2];
 static int	sg_role_skew[2];
 static int	sg_role_escort_carrier[2] = { -1, -1 };
 static qboolean sg_role_escort_on[2] = { true, true };
+static uint32_t sg_role_escort_epoch[2];
 static sg_strike_adapter_t sg_strike_adapter;
 static sg_role_t sg_strike_role_cache[SG_MAXBOTS];
 static qboolean sg_strike_role_valid[SG_MAXBOTS];
@@ -108,6 +110,7 @@ static void Role_LevelReset(void)
 	sg_role_skew[0] = sg_role_skew[1] = 0;
 	sg_role_escort_carrier[0] = sg_role_escort_carrier[1] = -1;
 	sg_role_escort_on[0] = sg_role_escort_on[1] = true;
+	sg_role_escort_epoch[0] = sg_role_escort_epoch[1] = 0;
 	SG_StrikeAdapterReset(&sg_strike_adapter);
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
 	sg_strike_frame_ready = false;
@@ -1812,7 +1815,9 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				if (sg_role_escort_carrier[et] != cc)
 				{
 					sg_role_escort_carrier[et] = cc;
-					sg_role_escort_on[et] = ((rand() % 100) <
+					sg_role_escort_epoch[et]++;
+					sg_role_escort_on[et] = SG_EscortDoseEnabled(et, cc,
+					    sg_role_escort_epoch[et],
 					    (int)sg_cv.escortdose->value);
 				}
 				if (sg_role_escort_on[et])
