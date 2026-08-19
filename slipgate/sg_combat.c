@@ -3344,37 +3344,52 @@ static float Worth_Armor(edict_t *e)
  * table can move. A bot spawns with the blaster and the hook and nothing else
  * (p_client.c:1141-1151), so tier 1 is where every bot starts every life.
  */
+static int Weapon_IndexTier(int w)
+{
+	switch (w)
+	{
+	case SG_W_ROCKETLAUNCHER:
+	case SG_W_CHAINGUN:
+		return 5;
+	case SG_W_SSHOTGUN:
+	case SG_W_RAILGUN:
+	case SG_W_HYPERBLASTER:
+		return 4;
+	case SG_W_MACHINEGUN:
+	case SG_W_GRENADELAUNCHER:
+	case SG_W_PLASMA:
+		return 3;
+	case SG_W_SHOTGUN:
+		return 2;
+	case SG_W_BLASTER:
+		return 1;
+	default:
+		/* The BFG is situational combat equipment, not a rung in the
+		 * ordinary acquisition ladder (WEAPONS.md 2.3). */
+		return 0;
+	}
+}
+
 static int Weapon_Tier(edict_t *e)
 {
-	if (Combat_Avail(e, SG_W_ROCKETLAUNCHER) || Combat_Avail(e, SG_W_CHAINGUN))
-		return 5;
-	if (Combat_Avail(e, SG_W_SSHOTGUN) || Combat_Avail(e, SG_W_RAILGUN) ||
-	    Combat_Avail(e, SG_W_HYPERBLASTER))
-		return 4;
-	if (Combat_Avail(e, SG_W_MACHINEGUN) ||
-	    Combat_Avail(e, SG_W_GRENADELAUNCHER) || Combat_Avail(e, SG_W_PLASMA))
-		return 3;
-	if (Combat_Avail(e, SG_W_SHOTGUN))
-		return 2;
-	return 1;
+	int best = 1;
+	int w;
+
+	for (w = SG_W_SHOTGUN; w < SG_NUM_WEAPONS; w++)
+		if (Combat_Avail(e, w) && Weapon_IndexTier(w) > best)
+			best = Weapon_IndexTier(w);
+	return best;
 }
 
 static int Weapon_StockedTier(edict_t *e)
 {
-	if (Combat_Stocked(e, SG_W_ROCKETLAUNCHER) ||
-	    Combat_Stocked(e, SG_W_CHAINGUN))
-		return 5;
-	if (Combat_Stocked(e, SG_W_SSHOTGUN) ||
-	    Combat_Stocked(e, SG_W_RAILGUN) ||
-	    Combat_Stocked(e, SG_W_HYPERBLASTER))
-		return 4;
-	if (Combat_Stocked(e, SG_W_MACHINEGUN) ||
-	    Combat_Stocked(e, SG_W_GRENADELAUNCHER) ||
-	    Combat_Stocked(e, SG_W_PLASMA))
-		return 3;
-	if (Combat_Stocked(e, SG_W_SHOTGUN))
-		return 2;
-	return 1;
+	int best = 1;
+	int w;
+
+	for (w = SG_W_SHOTGUN; w < SG_NUM_WEAPONS; w++)
+		if (Combat_Stocked(e, w) && Weapon_IndexTier(w) > best)
+			best = Weapon_IndexTier(w);
+	return best;
 }
 
 qboolean SG_CombatWeaponState(edict_t *self,
@@ -3411,6 +3426,19 @@ int SG_CombatHeldAmmoTag(edict_t *self)
 	    sg_wammo[held] >= game.num_items)
 		return -1;
 	return itemlist[sg_wammo[held]].tag;
+}
+
+int SG_CombatWeaponPickupTier(const edict_t *item)
+{
+	int w;
+
+	if (!item || !item->item)
+		return 0;
+	Combat_CacheItems();
+	for (w = SG_W_BLASTER; w < SG_NUM_WEAPONS; w++)
+		if (item->item == sg_witem[w])
+			return Weapon_IndexTier(w);
+	return 0;
 }
 
 /* 2.3: tier 1 -> 1057 ms of detour, tier 5 -> 199 ms */

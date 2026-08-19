@@ -909,13 +909,15 @@ static const int *WeaponTargetField(sg_bot_t *bot, int target_seed)
 
 const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 {
+	sg_combat_weapon_state_t weapon;
 	int ents[SG_WEAPON_FIELD_SOURCES];
 	int seeds[SG_WEAPON_FIELD_SOURCES];
 	int costs[SG_WEAPON_FIELD_SOURCES];
 	int bi, count = 0, i;
 	qboolean same;
 
-	if (!bot || !bot->ent || !SG_Rune())
+	if (!bot || !bot->ent || !SG_Rune() ||
+	    !SG_CombatWeaponState(bot->ent, &weapon))
 		return NULL;
 	bi = DefenseSupplyBotIndex(bot);
 	for (i = 1; i < globals.num_edicts &&
@@ -925,6 +927,9 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 		int seed;
 
 		if (!WeaponPickupRouteEligible(item, bot->ent))
+			continue;
+		if (!SG_WeaponUpgradeRouteAdmission(weapon.available_tier,
+		    SG_CombatWeaponPickupTier(item), true))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)

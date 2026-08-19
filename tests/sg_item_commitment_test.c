@@ -422,6 +422,14 @@ int main(void)
 	CHECK(!SG_AmmoRouteAdmission(-1, AMMO_SHELLS, true));
 	CHECK(!SG_AmmoRouteAdmission(AMMO_SHELLS, -1, true));
 	CHECK(!SG_AmmoRouteAdmission(AMMO_SHELLS, AMMO_SHELLS, 2));
+	CHECK(SG_WeaponUpgradeRouteAdmission(1, 2, true));
+	CHECK(SG_WeaponUpgradeRouteAdmission(4, 5, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(3, 3, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(4, 2, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 2, false));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(0, 2, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 0, true));
+	CHECK(!SG_WeaponUpgradeRouteAdmission(1, 2, 2));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, false, false));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, false, false));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1, false, false));

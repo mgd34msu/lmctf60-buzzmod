@@ -155,6 +155,17 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("SG_AmmoRouteAdmission(item->item->tag, held_ammo_tag",
                       ammo)
         self.assertIn("G_AmmoPickupEligible(item, bot->ent)", ammo)
+        weapon_start = goal.index("const int *SG_CollectibleWeaponField")
+        weapon = goal[weapon_start:goal.index(
+            "const int *SG_CollectibleHealthField", weapon_start)]
+        self.assertIn("SG_CombatWeaponState(bot->ent, &weapon)", weapon)
+        self.assertIn("SG_WeaponUpgradeRouteAdmission(weapon.available_tier,",
+                      weapon)
+        self.assertIn("SG_CombatWeaponPickupTier(item)", weapon)
+        defense = goal[goal.index("static qboolean DefenseSupplyTargetValid"):
+                       weapon_start]
+        self.assertIn("WeaponPickupRouteEligible(item, bot->ent)", defense)
+        self.assertNotIn("SG_WeaponUpgradeRouteAdmission", defense)
         detour = price[price.index("float Detour_Value"):price.index(
             "float Mega_Detour")]
         self.assertIn("Detour_IdentityItemEligible(tc, cls, kent)", detour)

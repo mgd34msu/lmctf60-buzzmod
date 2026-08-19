@@ -143,6 +143,11 @@ qboolean SG_CombatWeaponState(edict_t *self,
  * has no ammo pool.  This is the identity paired with Worth_Ammo. */
 int SG_CombatHeldAmmoTag(edict_t *self);
 
+/* Acquisition tier of this exact weapon entity under the same ladder used by
+ * SG_CombatWeaponState, or 0 when the item is not in the ordinary upgrade
+ * ladder.  Physical pickup admission remains the game item's authority. */
+int SG_CombatWeaponPickupTier(const edict_t *item);
+
 /* Read-only production selector used by posted defenders.  The return value
  * is the combat weapon index (0 is the blaster, negative is invalid input),
  * and is the exact selector consumed by the live combat tick. */

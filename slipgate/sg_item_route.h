@@ -51,4 +51,18 @@ static inline int SG_AmmoRouteAdmission(int candidate_tag, int held_tag,
 	return physical_pickup_eligible && candidate_tag == held_tag;
 }
 
+/* The generic weapon class is priced as an upgrade from the best weapon the
+ * bot already owns.  A duplicate or lower-tier pad may be physically
+ * collectible when WEAPONS_STAY is off, but it cannot deliver that utility.
+ * Defense supply has a different purpose (arming a blaster-only defender) and
+ * deliberately does not use this admission law. */
+static inline int SG_WeaponUpgradeRouteAdmission(int current_tier,
+	int candidate_tier, int physical_pickup_eligible)
+{
+	if (current_tier < 1 || candidate_tier < 1 ||
+	    (physical_pickup_eligible != 0 && physical_pickup_eligible != 1))
+		return 0;
+	return physical_pickup_eligible && candidate_tier > current_tier;
+}
+
 #endif
