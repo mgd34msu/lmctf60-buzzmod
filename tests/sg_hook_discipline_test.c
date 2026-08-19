@@ -22,6 +22,8 @@ static void TestExpectedRideWorth(void)
 	      SG_HOOK_RIDE_UNASSESSED);
 	CHECK(SG_HookExpectedRideWorth(0, SG_HOOK_DISCIPLINE_FIELD_INF) ==
 	      SG_HOOK_RIDE_UNASSESSED);
+	CHECK(SG_HookExpectedRideWorth(-1, 0) == SG_HOOK_RIDE_UNASSESSED);
+	CHECK(SG_HookExpectedRideWorth(1000, -1) == SG_HOOK_RIDE_UNASSESSED);
 	CHECK(SG_HookRideLaunchAllowed(SG_HOOK_RIDE_ALLOW));
 	CHECK(!SG_HookRideLaunchAllowed(SG_HOOK_RIDE_REJECT));
 	CHECK(!SG_HookRideLaunchAllowed(SG_HOOK_RIDE_UNASSESSED));
@@ -43,6 +45,9 @@ static void TestCurrentRideWorthRecheck(void)
 	CHECK(SG_HookExpectedRideWorth(from_goal, to_goal) ==
 	      SG_HOOK_RIDE_ALLOW);
 	to_goal = SG_HOOK_DISCIPLINE_FIELD_INF;
+	CHECK(!SG_HookRideLaunchAllowed(
+	    SG_HookExpectedRideWorth(from_goal, to_goal)));
+	to_goal = -1;
 	CHECK(!SG_HookRideLaunchAllowed(
 	    SG_HookExpectedRideWorth(from_goal, to_goal)));
 }

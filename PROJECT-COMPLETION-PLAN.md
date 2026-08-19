@@ -1523,6 +1523,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       and carrier pressure therefore remove range-holding from the complete
       comparison instead of charging only the incumbent and manufacturing a
       route switch on two different cost surfaces.
+      The shared graph-hook value law now rejects negative route-field values
+      as unassessed at both staging and the final fire boundary. A malformed or
+      unavailable destination can no longer look like positive route progress
+      and authorize an irreversible rope launch.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

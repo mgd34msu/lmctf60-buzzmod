@@ -26,7 +26,8 @@ typedef enum sg_hook_ride_worth_s
 static inline sg_hook_ride_worth_t SG_HookExpectedRideWorth(int from_goal,
 	int to_goal)
 {
-	if (from_goal >= SG_HOOK_DISCIPLINE_FIELD_INF ||
+	if (from_goal < 0 || to_goal < 0 ||
+	    from_goal >= SG_HOOK_DISCIPLINE_FIELD_INF ||
 	    to_goal >= SG_HOOK_DISCIPLINE_FIELD_INF)
 		return SG_HOOK_RIDE_UNASSESSED;
 	return from_goal > to_goal + SG_HOOK_DISCIPLINE_SERVED_FIELD_MS
