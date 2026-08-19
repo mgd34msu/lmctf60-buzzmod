@@ -883,6 +883,12 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(count == 3);
 	CHECK(SG_RoleLiveRank(NULL, 6, 0, &count) == -1);
 	CHECK(count == 0);
+	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 0, 1));
+	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 1, 1));
+	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 3, 1));
+	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 1));
+	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 3, 2));
+	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 2));
 }
 
 int main(void)

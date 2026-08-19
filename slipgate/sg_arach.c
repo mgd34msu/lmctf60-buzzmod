@@ -1754,7 +1754,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		{
 			edict_t *car_ent = g_edicts + own->client + 1;
 			float bestd = 1e30f;
-			int best_i = -1, rank_i = 0, k;
+			int best_i = -1, k;
 
 			for (k = 0; k < SG_MAXBOTS; k++)
 			{
@@ -1766,12 +1766,11 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 					continue;
 				if (sg_bots[k].ent->client->ctf.teamnum != team)
 					continue;
-				if (rank_i++ < defenders_wanted)
+				if (!SG_RoleOutsideDefenderQuota(live_team, SG_MAXBOTS,
+				        k, defenders_wanted))
 					continue;       /* defenders keep the base */
 				if ((int)(sg_bots[k].ent - g_edicts) - 1 == own->client)
 					continue;       /* the carrier escorts nobody */
-				if (sg_bots[k].ent->deadflag)
-					continue;
 				/* The shared carrier flood can be finite globally but unreachable
 				 * from this bot's directed component. Assign an escort only where
 				 * the mission can actually be descended; another reachable body may

@@ -31,4 +31,17 @@ static int SG_RoleLiveRank(const unsigned char *eligible, int count,
 	return rank;
 }
 
+static int SG_RoleOutsideDefenderQuota(const unsigned char *eligible,
+	int count, int slot, int defenders_wanted)
+{
+	int live_count;
+	int rank;
+
+	if (!eligible || count <= 0 || slot < 0 || slot >= count ||
+	    defenders_wanted < 0 || !eligible[slot])
+		return 0;
+	rank = SG_RoleLiveRank(eligible, count, slot, &live_count);
+	return rank >= defenders_wanted && rank < live_count;
+}
+
 #endif /* SG_ROLE_POLICY_H */

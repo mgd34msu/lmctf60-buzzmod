@@ -195,7 +195,9 @@ room-clearing while the carrier is unable to score. The recovery owner is
 reassigned on death without disturbing the carrier or surviving escort.
 Defender ranking now counts only live same-team bodies, so a corpse in an early
 bot slot cannot reserve the stand-watch quota while surviving teammates abandon
-the base; the ordinary stable slot order resumes when that bot respawns.
+the base; escort admission now uses that identical live rank, so it cannot steal
+the actual stand defender or skip a survivor because a corpse advanced the
+quota. The ordinary stable slot order resumes when that bot respawns.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 
