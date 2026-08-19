@@ -4833,6 +4833,20 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 			}
+			else if (!have_aim && role == SG_ROLE_DEFEND)
+			{
+				/* Defense may terminate at a corpus post, rail lane, live
+				 * intercept, or the exact weapon/home half of a supply sortie.
+				 * Falling back unconditionally to the flag stand discards that
+				 * selected mission at the field minimum. */
+				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
+				    bot->seed);
+				if (terminal_seed >= 0)
+				{
+					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
+					have_aim = true;
+				}
+			}
 
 			if (!have_aim && !gf && tc->scoop_mission)
 			{

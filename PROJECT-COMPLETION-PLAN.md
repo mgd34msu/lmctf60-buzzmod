@@ -300,6 +300,10 @@ An escort whose carrier dropped the enemy flag now retains its SCOOP mission
 through the final physical pickup. The relay runner receives exact enemy-item
 touch steering without being promoted into attack-pressure rally or grenade
 behavior, and any coordinator route replacement clears the transient scoop.
+Defense terminal movement now finishes at the source of its selected field
+rather than silently reverting to the own-flag stand. Corpus posts, second-
+defender rail lanes, live intercepts, and both halves of a weapon supply sortie
+therefore retain their objective at the exact point where graph descent ends.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1290,6 +1294,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       SCOOP touch mission through terminal movement; it can complete the relay
       pickup without inheriting attack-only pressure actions, and strike route
       replacement retires the scoop explicitly.
+      DEFEND terminal fallback follows the selected goal-field source, so post,
+      lane, intercept, and supply-sortie objectives cannot collapse back to the
+      own stand merely because the local gradient reached its minimum.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.

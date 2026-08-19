@@ -72,6 +72,25 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertIn("SG_DefensePatrolThrottle(sg_cv.patrol->value)", move)
         self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", move)
 
+    def test_defense_terminal_preserves_selected_field(self) -> None:
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+        start = move.index("else if (!have_aim && role == SG_ROLE_DEFEND)")
+        end = move.index("if (!have_aim && !gf && tc->scoop_mission)", start)
+        terminal = move[start:end]
+
+        self.assertIn(
+            "SG_TerminalFieldSeed(SG_Rune(), goal_field,", terminal)
+        self.assertIn("VectorCopy(SG_Rune()->seeds[terminal_seed].origin", terminal)
+        self.assertNotIn("SG_FlagStand", terminal)
+
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        for field in (
+            "sg_fields.to_post[SG_TeamIdx(team)]",
+            "sg_fields.to_lane[SG_TeamIdx(team)]",
+            "sg_fields.to_icept[SG_TeamIdx(team)]",
+        ):
+            self.assertIn(field, goal)
+
     def test_contact_retires_exact_patrol_commit_before_latch(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
         retire = source.rfind("int patrol_link = bot->patrol_link", 0,
