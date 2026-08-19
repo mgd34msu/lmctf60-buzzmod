@@ -9,6 +9,7 @@ uses a seed-payload CRC rather than the sidecar's full-graph CRC.
 """
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -32,32 +33,9 @@ MAP_NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z')
 RSF_TOMBSTONE = runeio.RSF_TOMBSTONE
 
 
-def _unique_object(pairs):
-    document = {}
-    for key, value in pairs:
-        if key in document:
-            raise ValueError(f'duplicate JSON key {key!r}')
-        document[key] = value
-    return document
-
-
-def _reject_constant(value):
-    raise ValueError(f'non-finite JSON value {value}')
-
-
-def load_corpus(path):
-    with open(path, encoding='utf-8') as stream:
-        if os.fstat(stream.fileno()).st_size > MAX_CORPUS_BYTES:
-            raise ValueError(f'{path}: corpus exceeds size limit')
-        return json.load(stream, object_pairs_hook=_unique_object,
-                         parse_constant=_reject_constant)
-
-
 def require_safe_mapname(mapname):
     if not isinstance(mapname, str) or not MAP_NAME.fullmatch(mapname):
         raise ValueError(f'unsafe or invalid map name {mapname!r}')
-
-
 
 def _unique_object(pairs):
     document = {}
@@ -84,6 +62,8 @@ def load_corpus(path):
                              parse_constant=_reject_constant)
         except (UnicodeError, ValueError) as error:
             raise ValueError(f'{path}: malformed JSON: {error}') from error
+
+
 def _artifact_mapping(path, expected_map, data):
     decoded = runeio.decode(data)
     if expected_map is not None and decoded.header.map_name != expected_map:
