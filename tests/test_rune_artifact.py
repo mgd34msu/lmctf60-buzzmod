@@ -1977,6 +1977,12 @@ class RuneRuneArtifactTests(unittest.TestCase):
                 corpusgraph.validate_seed_weights(
                     {"0": weight}, "weights.json", "post", 1
                 )
+        with self.assertRaisesRegex(
+            ValueError, r"weights\.json: post seed 0 has invalid weight"
+        ):
+            corpusgraph.validate_seed_weights(
+                {"0": 10 ** 309}, "weights.json", "post", 1
+            )
 
         with tempfile.TemporaryDirectory() as temporary:
             corpus = Path(temporary) / "corpus.json"
@@ -1985,6 +1991,11 @@ class RuneRuneArtifactTests(unittest.TestCase):
                 corpusgraph.load_corpus(corpus)
             corpus.write_text('{"weight":NaN}')
             with self.assertRaisesRegex(ValueError, "non-finite JSON value"):
+                corpusgraph.load_corpus(corpus)
+            corpus.write_text('{"weight":1e9999}')
+            with self.assertRaisesRegex(
+                ValueError, r"corpus\.json: malformed JSON: non-finite JSON value"
+            ):
                 corpusgraph.load_corpus(corpus)
 
     def test_acceptance_cli_rejects_missing_or_mismatched_plan(self):

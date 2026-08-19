@@ -50,6 +50,14 @@ def _reject_constant(value):
     raise ValueError(f'non-finite JSON value {value}')
 
 
+def _parse_finite_float(value):
+    """Parse JSON floats without allowing exponent overflow to become inf."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f'non-finite JSON value {value}')
+    return parsed
+
+
 def load_corpus(path):
     """Load strict JSON: duplicate keys and NaN/Infinity are malformed."""
     with open(path, encoding='utf-8') as stream:
@@ -59,7 +67,8 @@ def load_corpus(path):
                              f'{MAX_CORPUS_BYTES}')
         try:
             return json.load(stream, object_pairs_hook=_unique_object,
-                             parse_constant=_reject_constant)
+                             parse_constant=_reject_constant,
+                             parse_float=_parse_finite_float)
         except (UnicodeError, ValueError) as error:
             raise ValueError(f'{path}: malformed JSON: {error}') from error
 
@@ -229,9 +238,16 @@ def validate_seed_weights(weights, path, label, num_seeds):
         if seed >= num_seeds:
             raise ValueError(f'{path}: {label} seed {seed} is outside '
                              f'0..{num_seeds - 1}')
-        if (isinstance(weight, bool) or
-                not isinstance(weight, (int, float)) or
-                not math.isfinite(weight) or weight < 0):
+        finite = False
+        if isinstance(weight, (int, float)) and not isinstance(weight, bool):
+            try:
+                finite = math.isfinite(weight)
+            except OverflowError:
+                # ``math.isfinite`` converts integers to double first; an
+                # oversized JSON integer must remain a contextual validation
+                # error rather than leaking that implementation exception.
+                finite = False
+        if (not finite or weight < 0):
             raise ValueError(f'{path}: {label} seed {seed} has invalid '
                              f'weight {weight!r}')
         normalized[seed] = weight

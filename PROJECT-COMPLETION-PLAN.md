@@ -118,10 +118,10 @@ Known incomplete work:
 - Current map-list code sorts configured entries and its non-random successor
   logic skips the slot matching a never-updated `Last_Map`. Deterministic
   ordered cyclic lists therefore require source work and executable tests.
-- `tools/runeio.py` calls an undefined `_verify_expected_identity` when that
-  optional gate is used. `tools/corpusgraph.py` duplicates three definitions
-  and calls `math.isfinite` without importing `math`. These authored-tool
-  defects must be repaired before the 181-map run.
+- `tools/runeio.py --expected-identity REFERENCE_RUNE ARTIFACT` now
+  authenticates the reference identity and checks the artifact. The strict
+  `tools/corpusgraph.py` loader rejects duplicate keys and all non-finite JSON
+  numbers, and its seed-weight validator reports contextual `ValueError`s.
 - The transactional fleet/release bundle and exact per-map-residence health
   gate are still being completed and reviewed.
 - Bot behavior closure and real consumer proofs remain active work. Passing the
@@ -933,8 +933,8 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       stable goals where required, and fail when no SG rows are recognized.
 - [x] Non-random map-list parsing preserves configured order and its executable
       tests cover startup, wrap, singleton, and random-branch isolation.
-- [ ] `runeio.py` expected-identity and `corpusgraph.py` duplicate/import defects
-      repaired and regression-tested.
+- [x] `runeio.py --expected-identity REFERENCE_RUNE ARTIFACT` and
+      `corpusgraph.py` reader defects repaired and adversarially regression-tested.
 - [ ] Four remaining `lmctf58` cellar controllers retained and checker-green.
 - [ ] Real native cyclic transitions preserve the same q2ded PID for a complete
       20-map cycle; source-level startup/wrap/random-isolation tests are green.
