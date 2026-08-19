@@ -125,6 +125,20 @@ static inline int SG_ObjectiveRole(int organic_role, int escort_mission)
 	return escort_mission ? SG_ROLE_ESCORT : organic_role;
 }
 
+/* Item attraction is optional route shaping.  A live push or an exact
+ * coordinator mission owns the route outright; neither may be bent by the
+ * generic shopping surface.  The established healthy-carrier rule remains
+ * the third independent suppression. */
+static inline int SG_OptionalItemDetourAllowed(int push,
+	int strike_blocks_optional, int role, int health, float legcarrier)
+{
+	if (push || strike_blocks_optional)
+		return 0;
+	if (role == SG_ROLE_CARRY && health > 60 && legcarrier >= 3.0f)
+		return 0;
+	return 1;
+}
+
 /* Home-field cost falls toward the capture stand.  The one autonomous escort
  * screens the fresh threat that admitted interposition: lead against a defender
  * ahead of the carrier, trail against a chaser behind it.  An unusable threat

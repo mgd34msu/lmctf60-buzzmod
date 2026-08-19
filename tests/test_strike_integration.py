@@ -450,6 +450,12 @@ class StrikeIntegrationTest(unittest.TestCase):
             "tc->mega = tc->strike_blocks_optional ? 0.0f", goal)
         tactics = goal.index("sg_cv.tactics->value")
         self.assertIn("!tc->strike_blocks_optional", goal[tactics - 80:tactics])
+        price = (ROOT / "slipgate/sg_price.c").read_text()
+        self.assertIn(
+            "SG_OptionalItemDetourAllowed(tc->push,\n"
+            "\t\t\t          tc->strike_blocks_optional",
+            price,
+        )
         self.assertIn("tc.strike_rush, carrying", arach)
         self.assertIn("strike_team->weapon_deadline[strike_slot] -",
                       arach)

@@ -258,12 +258,15 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 		if (w->item[c] > 0.0f)
 			/* legcarrier dose 3: a healthy carrier does not shop --
 			 * humans never detour mid-carry (corpus: 310 u/s flat).
-			 * Hurt carriers keep the detour; health is worth a stop. */
-			v -= (tc->push ||
-			      (tc->role == SG_ROLE_CARRY && tc->health > 60 &&
-			       sg_cv.legcarrier->value >= 3.0f))
-			     ? 0.0f :
-			     1500.0f * Detour_Value(tc, seed, c, goal_field, w->item[c]);
+			 * Hurt carriers keep the detour; health is worth a stop. A
+			 * concrete strike duty has already retired every named optional
+			 * errand and owns this surface too: generic class attraction must
+			 * not silently bend BREACH/PRESS/CLEAR off their duty route. */
+			v -= SG_OptionalItemDetourAllowed(tc->push,
+			          tc->strike_blocks_optional, tc->role, tc->health,
+			          sg_cv.legcarrier->value) ?
+			     1500.0f * Detour_Value(tc, seed, c, goal_field, w->item[c]) :
+			     0.0f;
 
 	/*
 	 * THE MEGA (sg_megaworth). A separate term rather than a bend in the

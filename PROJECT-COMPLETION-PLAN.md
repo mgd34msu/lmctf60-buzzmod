@@ -1543,6 +1543,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       cadence. Enemy client-slot order can no longer divert the shot from newer
       actionable information; an unsafe freshest region is rejected and the
       next earned candidate is considered without weakening splash safety.
+      Concrete strike duties now suppress the complete optional item-attraction
+      surface, not only named lead/mega/tactics errands. BREACH, PRESS, CLEAR,
+      ESCORT, RECOVER, and CARRY assignments therefore keep their exact route
+      instead of being silently bent toward generic shopping opportunities.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
