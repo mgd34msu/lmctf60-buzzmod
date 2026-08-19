@@ -37,6 +37,7 @@
 #include "slipgate/sg_crowd_pass.h"
 #include "slipgate/sg_weave_policy.h"
 #include "slipgate/sg_team_collision.h"
+#include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
@@ -8233,38 +8234,83 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		    !Q_stricmp(e->client->pers.weapon->pickup_name,
 		               "Rocket Launcher"))
 		{
-			int s15;
+			unsigned rejected15 = 0u;
+			int chosen15 = -1;
+			float chosen_range15 = 0.0f;
+			int attempt15;
 
-			for (s15 = 0; s15 < SG_MAX_ENEMY_TRACK; s15++)
+			/* Rank the earned regions independently of enemy client slot.  If
+			 * the freshest candidate has no useful rocket surface, reject just
+			 * that candidate and try the next-best observation. */
+			for (attempt15 = 0; attempt15 < SG_MAX_ENEMY_TRACK; attempt15++)
 			{
-				sg_belief_enemy_t *en15 =
-				    &sg_caco_enemies[SG_TeamIdx(team)][s15];
-				vec3_t sd15;
-				float sl15;
+				int s15, best15 = -1;
+				float best_time15 = 0.0f, best_range15 = 0.0f;
 
-				if (en15->client < 0 || en15->seed < 0 ||
-				    !en15->heard_only ||
-				    SG_AgeAtLeast(en15->seen_time, 2.0f))
-					continue;
-				VectorSubtract(SG_Rune()->seeds[en15->seed].origin,
-				               e->s.origin, sd15);
-				sl15 = VectorLength(sd15);
-				if (sl15 < 600.0f || sl15 > 1500.0f)
-					continue;   /* too close = own splash; too
-					             * far = pure noise */
+				for (s15 = 0; s15 < SG_MAX_ENEMY_TRACK; s15++)
+				{
+					sg_belief_enemy_t *en15 =
+					    &sg_caco_enemies[SG_TeamIdx(team)][s15];
+					vec3_t sd15;
+					float sl15;
+
+					if ((rejected15 & (1u << s15)) ||
+					    en15->client < 0 ||
+					    en15->client >= game.maxclients ||
+					    en15->seed < 0 ||
+					    en15->seed >= SG_Rune()->hdr.num_seeds ||
+					    !en15->heard_only ||
+					    !SG_SoundFireObservationFresh(level.time,
+					        en15->seen_time, 2.0f))
+						continue;
+					VectorSubtract(SG_Rune()->seeds[en15->seed].origin,
+					               e->s.origin, sd15);
+					sl15 = VectorLength(sd15);
+					if (!isfinite(sl15) || sl15 < 600.0f || sl15 > 1500.0f)
+						continue;   /* too close = own splash; too
+						             * far = pure noise */
+					if (!SG_SoundFireCandidateBetter(en15->seen_time,
+					        sl15, en15->client, best15 >= 0,
+					        best_time15, best_range15,
+					        best15 >= 0 ? sg_caco_enemies[
+					            SG_TeamIdx(team)][best15].client : -1))
+						continue;
+					best15 = s15;
+					best_time15 = en15->seen_time;
+					best_range15 = sl15;
+				}
+				if (best15 < 0)
+					break;
 				/* Use the real rocket muzzle and first impact.  Range to a
 				 * distant belief is not safety when a nearby wall would make
 				 * the shot explode at our feet, and open space beyond the
 				 * heard region cannot deliver the claimed splash. */
 				if (!SoundFireImpactSafe(e, team,
-				        SG_Rune()->seeds[en15->seed].origin))
-					continue;
+				        SG_Rune()->seeds[sg_caco_enemies[
+				            SG_TeamIdx(team)][best15].seed].origin))
 				{
-					float sy15 = atan2f(sd15[1], sd15[0])
-					             * 180.0f / (float)M_PI;
-					float sp15 = -atan2f(sd15[2],
+					rejected15 |= 1u << best15;
+					continue;
+				}
+				chosen15 = best15;
+				chosen_range15 = best_range15;
+				break;
+			}
+
+			if (chosen15 >= 0)
+				{
+					sg_belief_enemy_t *en15 = &sg_caco_enemies[
+					    SG_TeamIdx(team)][chosen15];
+					vec3_t sd15;
+					float sy15, sp15;
+
+					VectorSubtract(SG_Rune()->seeds[en15->seed].origin,
+					               e->s.origin, sd15);
+					sy15 = atan2f(sd15[1], sd15[0])
+					       * 180.0f / (float)M_PI;
+					sp15 = -atan2f(sd15[2],
 					    sqrtf(sd15[0]*sd15[0] + sd15[1]*sd15[1]))
-					             * 180.0f / (float)M_PI;
+					       * 180.0f / (float)M_PI;
 
 					cmd->angles[YAW] = ANGLE2SHORT(sy15)
 					    - e->client->ps.pmove.delta_angles[YAW];
@@ -8275,10 +8321,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					soundfire_owned = true;
 					if (sg_cv.debug->value)
 						sg_host.dprint("SNDFIRE %s rng=%.0f\n",
-						           e->client->pers.netname, sl15);
+						           e->client->pers.netname,
+						           chosen_range15);
 				}
-				break;
-			}
 		}
 
 		bot->engaged_last = engaged;

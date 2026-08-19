@@ -1538,6 +1538,11 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       as unassessed at both staging and the final fire boundary. A malformed or
       unavailable destination can no longer look like positive route progress
       and authorize an irreversible rope launch.
+      Default sound-directed rockets now rank every current safe heard region
+      by observation freshness, then range, before spending their eight-second
+      cadence. Enemy client-slot order can no longer divert the shot from newer
+      actionable information; an unsafe freshest region is rejected and the
+      next earned candidate is considered without weakening splash safety.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
