@@ -536,6 +536,20 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("!tc->strike_active &&", approach)
         self.assertIn("SG_StrikePrebreachApproachAllowed(", approach)
 
+    def test_attack_direct_touch_uses_bounded_terminal_throttle(self) -> None:
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+        terminal = move[move.index("if (!have_aim && tc->strike_pressure"):
+                        move.index("if (!have_aim && bestlink >= 0)")]
+        self.assertIn("attack_flag_terminal = true;", terminal)
+        self.assertIn("SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true)",
+                      terminal)
+        self.assertLess(terminal.index("SG_AttackFlagTerminalAim"),
+                        terminal.index("SG_FlagTouchBrake"))
+        helper = move[move.index("static void SG_FlagTouchBrake"):
+                      move.index("void SG_NadeTargetClear")]
+        self.assertIn("SG_StrikeFlagTouchThrottle(", helper)
+        self.assertIn("DotProduct(velocity, delta)", helper)
+
     def test_active_strike_retires_unbound_rail_before_route_selection(self) -> None:
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
         marker = arach.index("Generic proof-line retry has no strike")

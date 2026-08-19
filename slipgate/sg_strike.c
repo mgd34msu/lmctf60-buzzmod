@@ -91,6 +91,21 @@ int SG_StrikePrebreachApproachAllowed(int strike_active,
 	return strike_active ? strike_pressure : organic_attack;
 }
 
+float SG_StrikeFlagTouchThrottle(int touch_authorized, float distance,
+	float speed, float alignment)
+{
+	if ((touch_authorized != 0 && touch_authorized != 1) ||
+	    !touch_authorized || !isfinite(distance) || !isfinite(speed) ||
+	    !isfinite(alignment) || distance <= 1.0f || distance >= 220.0f ||
+	    speed <= 120.0f)
+		return 1.0f;
+	if (alignment < 0.50f)
+		return 0.30f;
+	if (alignment < 0.85f)
+		return 0.55f;
+	return 1.0f;
+}
+
 float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,
 	int current_goal_ms, int candidate_goal_ms)

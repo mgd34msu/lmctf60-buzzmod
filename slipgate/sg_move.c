@@ -535,6 +535,26 @@ static qboolean SG_AttackFlagTerminalAim(edict_t *e, int team, vec3_t aim)
 	return true;
 }
 
+static void SG_FlagTouchBrake(sg_bot_t *bot, edict_t *e,
+	const vec3_t target, qboolean touch_authorized)
+{
+	vec3_t delta, velocity;
+	float distance, speed, alignment = 1.0f;
+
+	if (!bot || !e || !target)
+		return;
+	VectorSubtract(target, e->s.origin, delta);
+	delta[2] = 0.0f;
+	distance = VectorLength(delta);
+	VectorCopy(e->velocity, velocity);
+	velocity[2] = 0.0f;
+	speed = VectorLength(velocity);
+	if (distance > 1.0f && speed > 0.0f)
+		alignment = DotProduct(velocity, delta) / (speed * distance);
+	bot->term_brake = SG_StrikeFlagTouchThrottle(
+	    touch_authorized ? 1 : 0, distance, speed, alignment);
+}
+
 void SG_NadeTargetClear(sg_bot_t *bot)
 {
 	if (!bot)
@@ -3744,6 +3764,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		    bot->rj_phase == 0 && bot->nade_phase == 0 &&
 		    SG_AttackFlagTerminalAim(e, team, aim))
 		{
+			edict_t *terminal_flag = SG_EnemyFlag(team);
+
 			have_aim = true;
 			attack_flag_terminal = true;
 			bestlink = -1;
@@ -3757,6 +3779,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				bot->commit_link = -1;
 				bot->commit_until = 0.0f;
 			}
+			/* Exact touch authority has already proved the item and clear hull
+			 * line. Tighten only a fast misaligned turn so full throttle cannot
+			 * carry the body around the pickup it is aiming through. */
+			if (sg_cv.termbrake->value && terminal_flag)
+				SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true);
 		}
 
 		if (!have_aim && bestlink >= 0)
@@ -4830,26 +4857,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * standing instrument that flagged this in 25 match batches.
 				 */
 				if (role == SG_ROLE_CARRY && sg_cv.termbrake->value)
-				{
-					vec3_t tb, tv;
-					float tbl, spd2;
-
-					VectorSubtract(gf->s.origin, e->s.origin, tb);
-					tb[2] = 0.0f;
-					tbl = VectorLength(tb);
-					VectorCopy(e->velocity, tv);
-					tv[2] = 0.0f;
-					spd2 = VectorLength(tv);
-					if (tbl > 1.0f && tbl < 220.0f && spd2 > 120.0f)
-					{
-						float al = DotProduct(tv, tb) / (spd2 * tbl);
-
-						if (al < 0.50f)
-							bot->term_brake = 0.30f;
-						else if (al < 0.85f)
-							bot->term_brake = 0.55f;
-					}
-				}
+					SG_FlagTouchBrake(bot, e, gf->s.origin, true);
 			}
 		}
 

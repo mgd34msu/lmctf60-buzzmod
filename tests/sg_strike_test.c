@@ -1050,6 +1050,14 @@ static void TestHomeFlagApproachPricing(void)
 	CHECK(!SG_StrikePrebreachApproachAllowed(1, 1, 0, 5000));
 	CHECK(!SG_StrikePrebreachApproachAllowed(2, 1, 1, 3000));
 	CHECK(!SG_StrikePrebreachApproachAllowed(1, -1, 1, 3000));
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, 0.49f) == 0.30f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, 0.50f) == 0.55f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, 0.85f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(0, 100.0f, 300.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 220.0f, 300.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 120.0f, 0.0f) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(1, 100.0f, 300.0f, NAN) == 1.0f);
+	CHECK(SG_StrikeFlagTouchThrottle(2, 100.0f, 300.0f, 0.0f) == 1.0f);
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 500.0f, 300.0f, 0.0f,
 	    500, 500) == -100.0f);
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 350.0f, 0.0f,

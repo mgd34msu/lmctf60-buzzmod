@@ -198,6 +198,12 @@ int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);
 int SG_StrikePrebreachApproachAllowed(int strike_active,
 	int strike_pressure, int organic_attack, int goal_ms);
 
+/* Bounded throttle for the exact physical flag-touch envelope.  It tightens a
+ * fast misaligned turn without granting touch, changing aim, or stopping an
+ * aligned run through the item. */
+float SG_StrikeFlagTouchThrottle(int touch_authorized, float distance,
+	float speed, float alignment);
+
 /* Bounded pricing correction for the last proved RUNs toward a home enemy
  * flag.  This never grants touch or movement authority; it only breaks a
  * near-stand field plateau in favor of physical progress toward the item. */

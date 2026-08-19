@@ -275,6 +275,11 @@ line now owns heading through contact: the generic obstacle fan cannot probe
 past the flag and turn away because of geometry behind it, and route-heading
 smoothing cannot preserve a stale bearing for that terminal frame. This does
 not widen the touch envelope or bypass the authoritative `ctf_flagtouch` path.
+That same exact touch envelope now earns the existing bounded terminal throttle
+when a fast attacker is misaligned with the flag. It tightens the last turn
+instead of letting full-speed turn radius carry the body around the live item;
+an aligned attacker keeps full throttle, and no route, visibility, or touch
+authority is widened.
 Graph-hook usefulness is now judged against the exact current route field at
 both source staging and the irreversible fire boundary. A tactical waypoint or
 bounded weapon errand can therefore take a ride that advances that live route,
@@ -1227,6 +1232,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Coordinated pressure now continues through the live-enemy pre-breach arm
       in the two-to-five-second approach band instead of skipping the action
       together with the superseded legacy rally decision.
+      A fast misaligned attacker inside the exact direct-touch envelope now
+      receives the same bounded terminal throttle already used at the scoring
+      touch; aligned runs remain full speed and `ctf_flagtouch` stays authority.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
