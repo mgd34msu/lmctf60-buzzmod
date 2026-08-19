@@ -95,33 +95,33 @@ Verified and already pushed:
 - `lmctf44` has a regenerated artifact that passed an independent cold load.
 - The shallow-water DIRECT door source, reducer, ticket, and grounded wet
   callback law is committed and its focused and host gates are green.
-- The 181-map/top-20 scope is recorded on `slipgate`, but the tracked corpus
-  list and controller are not yet the final 181-map implementation.
-- `main` contains merge commit `815e0b6`, whose tree matches the green
-  `slipgate` milestone and whose exact CI run is green.
+- The tracked corpus authority contains exactly 181 distinct maps, including
+  both `lmctf02` and `lmctf02c`. Its controller requires generation, GNU and
+  Make C-reader agreement, the Python reader, lint, applicable semantics, and
+  a separate bounded fresh-process cold load before one map can report PASS.
+- Non-random map-list parsing preserves the configured order and advances and
+  wraps sequentially without changing the random-map branch.
+- Role-telemetry consumers parse the production `seed/goal/sgoal/spd` schema,
+  use the stable destination where required, and fail on zero recognized rows.
+- The RUNE Python readers have one strict corpus loader, working authenticated
+  expected-identity comparison, and adversarial duplicate/non-finite/oversized
+  number regressions.
+- The latest pushed source milestone is `dfe0ad7` on `slipgate`, merged without
+  tree drift to `main` as `c65dc28`; exact-SHA CI runs `32215498567` and
+  `32215702624` passed all eight non-publish jobs.
 
 Known incomplete work:
 
 - Four `lmctf58` cellar controllers still disappear after their approaches
   and egresses pass; the remaining fault is later link selection or
-  objective-core retention.
-- The tracked corpus list still contains 180 names. A private change adds the
-  missing original `lmctf02`, brings the list to 181, and strengthens the
-  controller, but it is not integrated and its current controller still lacks
-  the complete dual-reader, semantic-check, and cold-load contract required
-  below.
-- The prior 180-map run is historical evidence only. It produced 137 PASS,
-  39 GEN_FAIL, and 4 TIMEOUT results and therefore does not satisfy this plan.
-- Current fleet launchers and the private replacement still use finite
-  process-per-map execution. They do not implement the required ten persistent
-  q2ded processes with native top-20 transitions.
-- Current map-list code sorts configured entries and its non-random successor
-  logic skips the slot matching a never-updated `Last_Map`. Deterministic
-  ordered cyclic lists therefore require source work and executable tests.
-- `tools/runeio.py` calls an undefined `_verify_expected_identity` when that
-  optional gate is used. `tools/corpusgraph.py` duplicates three definitions
-  and calls `math.isfinite` without importing `math`. These authored-tool
-  defects must be repaired before the 181-map run.
+  objective-core retention. A narrow DIRECT safe-water bootstrap candidate is
+  under real-map regeneration and is not accepted until the exact ten-controller
+  checker and fresh cold load pass.
+- No final-source 181-map generation has run to 181/181 PASS. The controller is
+  ready; the accepted artifacts do not yet exist.
+- The current tracked fleet launchers still run finite per-map processes. A
+  private persistent ten-process runner is under code review and does not yet
+  provide the required full-cycle map/RUNE/roster/activity/POV receipts.
 - The transactional fleet/release bundle and exact per-map-residence health
   gate are still being completed and reviewed.
 - Bot behavior closure and real consumer proofs remain active work. Passing the
@@ -920,11 +920,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] Cross-platform warning fixes and immutable Node 24 workflow.
 - [x] `lmctf44` regenerated and independently cold-loaded.
 - [x] Shallow-water DIRECT door law committed and green.
-- [x] 181-map/top-20 scope recorded on `slipgate`.
-- [x] Green milestone merged into `main` at `815e0b6`.
-- [x] Corrected whole-project plan and dependency graph committed as
-      `a337255`, merged to `main` as `ae8f4bb`, and all eight non-publish jobs
-      green in exact-SHA run `32213552503`.
+- [x] Current project plan, 181 authority/controller, map-list fix, telemetry
+      consumers, documentation hygiene, and repository hygiene are integrated
+      through `dfe0ad7`, merged without tree drift to `main` as `c65dc28`, and
+      exact-SHA CI is green on both branches.
 - [x] Tracked corpus list contains exactly 181 unique maps, including both
       `lmctf02` and `lmctf02c`.
 - [x] Corpus controller proves generator, dual C readers, Python reader, lint,
@@ -933,8 +932,8 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       stable goals where required, and fail when no SG rows are recognized.
 - [x] Non-random map-list parsing preserves configured order and its executable
       tests cover startup, wrap, singleton, and random-branch isolation.
-- [ ] `runeio.py` expected-identity and `corpusgraph.py` duplicate/import defects
-      repaired and regression-tested.
+- [x] `runeio.py --expected-identity REFERENCE_RUNE ARTIFACT` and
+      `corpusgraph.py` reader defects repaired and adversarially regression-tested.
 - [ ] Four remaining `lmctf58` cellar controllers retained and checker-green.
 - [ ] Real native cyclic transitions preserve the same q2ded PID for a complete
       20-map cycle; source-level startup/wrap/random-isolation tests are green.

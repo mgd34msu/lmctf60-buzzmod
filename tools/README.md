@@ -441,7 +441,7 @@ reinterpret unrelated seed numbers.
 
 ### `runeio.py`
 - **Purpose:** authenticates one generated artifact, decodes its seed, link, mechanism-node, inventory-edge, and activation-plan records, and enforces the generated action/controller admission contract. A plan-required link with no plan, an unexpected plan, or a mismatched controller is a hard failure.
-- **Usage:** `runeio.py <generated-rune>`. Add `--require-mechanisms` for a focused fixture gate that additionally requires nonzero trigger, node, inventory-edge, and plan counts. Corpus generation uses normal structural acceptance because valid maps may omit any mechanism class; every plan-required traversal link still requires a unique valid binding.
+- **Usage:** `runeio.py ARTIFACT`. Use `runeio.py --expected-identity REFERENCE_RUNE ARTIFACT` to require the artifact's authenticated map/BSP/entity/physics identity to match a reference RUNE, or add `--require-mechanisms` for a focused fixture gate that additionally requires nonzero trigger, node, inventory-edge, and plan counts. Corpus generation uses normal structural acceptance because valid maps may omit any mechanism class; every plan-required traversal link still requires a unique valid binding.
 - **Inputs:** one `.rune` artifact.
 - **Outputs:** one JSON object including `trigger_count`, `node_count`, `inventory_edge_count`, `plan_edge_count`, and `plan_count`; exits nonzero on any wire, CRC, contract, graph, or plan-law failure.
 - **Dependencies:** none beyond the stdlib.

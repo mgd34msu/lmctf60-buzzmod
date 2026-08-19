@@ -9,6 +9,7 @@ uses a seed-payload CRC rather than the sidecar's full-graph CRC.
 """
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -32,33 +33,10 @@ MAP_NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z')
 RSF_TOMBSTONE = runeio.RSF_TOMBSTONE
 
 
-def _unique_object(pairs):
-    document = {}
-    for key, value in pairs:
-        if key in document:
-            raise ValueError(f'duplicate JSON key {key!r}')
-        document[key] = value
-    return document
-
-
-def _reject_constant(value):
-    raise ValueError(f'non-finite JSON value {value}')
-
-
-def load_corpus(path):
-    with open(path, encoding='utf-8') as stream:
-        if os.fstat(stream.fileno()).st_size > MAX_CORPUS_BYTES:
-            raise ValueError(f'{path}: corpus exceeds size limit')
-        return json.load(stream, object_pairs_hook=_unique_object,
-                         parse_constant=_reject_constant)
-
-
 def require_safe_mapname(mapname):
     if not isinstance(mapname, str) or not MAP_NAME.fullmatch(mapname):
         raise ValueError(f'unsafe or invalid map name {mapname!r}')
 
-
-
 def _unique_object(pairs):
     document = {}
     for key, value in pairs:
@@ -70,6 +48,14 @@ def _unique_object(pairs):
 
 def _reject_constant(value):
     raise ValueError(f'non-finite JSON value {value}')
+
+
+def _parse_finite_float(value):
+    """Parse JSON floats without allowing exponent overflow to become inf."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f'non-finite JSON value {value}')
+    return parsed
 
 
 def load_corpus(path):
@@ -81,9 +67,12 @@ def load_corpus(path):
                              f'{MAX_CORPUS_BYTES}')
         try:
             return json.load(stream, object_pairs_hook=_unique_object,
-                             parse_constant=_reject_constant)
+                             parse_constant=_reject_constant,
+                             parse_float=_parse_finite_float)
         except (UnicodeError, ValueError) as error:
             raise ValueError(f'{path}: malformed JSON: {error}') from error
+
+
 def _artifact_mapping(path, expected_map, data):
     decoded = runeio.decode(data)
     if expected_map is not None and decoded.header.map_name != expected_map:
@@ -249,9 +238,16 @@ def validate_seed_weights(weights, path, label, num_seeds):
         if seed >= num_seeds:
             raise ValueError(f'{path}: {label} seed {seed} is outside '
                              f'0..{num_seeds - 1}')
-        if (isinstance(weight, bool) or
-                not isinstance(weight, (int, float)) or
-                not math.isfinite(weight) or weight < 0):
+        finite = False
+        if isinstance(weight, (int, float)) and not isinstance(weight, bool):
+            try:
+                finite = math.isfinite(weight)
+            except OverflowError:
+                # ``math.isfinite`` converts integers to double first; an
+                # oversized JSON integer must remain a contextual validation
+                # error rather than leaking that implementation exception.
+                finite = False
+        if (not finite or weight < 0):
             raise ValueError(f'{path}: {label} seed {seed} has invalid '
                              f'weight {weight!r}')
         normalized[seed] = weight
