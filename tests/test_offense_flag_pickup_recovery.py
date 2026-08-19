@@ -135,6 +135,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             r"""
             #include <math.h>
             #include "slipgate/sg_crowd_pass.h"
+            #include "slipgate/sg_team_collision.h"
 
             int main(void)
             {
@@ -148,6 +149,15 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
                     SG_CrowdPassSide(2UL, 0UL) != 0 ||
                     SG_CrowdPassSide(7UL, 7UL) != 0)
                     return 1;
+                if (!SG_TeammateBodyPassable(1, 1, 0, 1) ||
+                    !SG_TeammateBodyPassable(2, 1, 0, 2) ||
+                    SG_TeammateBodyPassable(1, 1, 0, 2) ||
+                    SG_TeammateBodyPassable(2, 1, 0, 1) ||
+                    SG_TeammateBodyPassable(1, 0, 0, 1) ||
+                    SG_TeammateBodyPassable(1, 1, 1, 1) ||
+                    SG_TeammateBodyPassable(0, 1, 0, 0) ||
+                    SG_TeammateBodyPassable(1, 2, 0, 1))
+                    return 4;
 
                 for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); ++i) {
                     int ab = SG_CrowdPassSide(pairs[i][0], pairs[i][1]);
@@ -199,6 +209,12 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("e->client->ctf.ctfid", fan)
         self.assertIn("tr.ent->client->ctf.ctfid", fan)
         self.assertNotIn("e->client - game.clients", fan)
+
+        run_room = between(move, "static qboolean SG_RunRoom", "static void SG_MovePolicy")
+        self.assertIn("SG_TeammateBodyPassable(", run_room)
+        self.assertIn("e->client->ctf.teamnum", run_room)
+        self.assertIn("tr.ent->client->ctf.teamnum", run_room)
+        self.assertNotIn("tr.ent->client && !tr.ent->deadflag", run_room)
 
     def test_dodge_clock_is_bound_to_bot_life_not_client_slot(self) -> None:
         program = textwrap.dedent(

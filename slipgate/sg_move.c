@@ -36,6 +36,7 @@
 #include "slipgate/sg_nade_policy.h"
 #include "slipgate/sg_crowd_pass.h"
 #include "slipgate/sg_weave_policy.h"
+#include "slipgate/sg_team_collision.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
@@ -3311,8 +3312,13 @@ static qboolean SG_RunRoom(edict_t *e, int seed0, const int *route_field,
 	pend[1] = pp[1];
 	pend[2] = e->s.origin[2] + 18.0f;
 	tr = sg_host.trace(e->s.origin, e->mins, e->maxs, pend, e, MASK_PLAYERSOLID);
-	/* a teammate is not terrain (the fan's exception, same reason) */
-	if (tr.fraction < 1.0f && tr.ent && tr.ent->client && !tr.ent->deadflag)
+	/* A teammate is not terrain (the fan's exception, same reason). An
+	 * opponent is still the exact physical obstruction the road proof must
+	 * reject, including before reaction delay admits combat ownership. */
+	if (tr.fraction < 1.0f && tr.ent &&
+	    SG_TeammateBodyPassable(e->client->ctf.teamnum,
+	        tr.ent->client != NULL, tr.ent->deadflag != 0,
+	        tr.ent->client ? tr.ent->client->ctf.teamnum : 0))
 		return true;
 	return tr.fraction >= 1.0f;
 }
@@ -5163,8 +5169,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * send both bodies into the same lane forever.
 				 */
 				if (k == 0 && tr.fraction < 1.0f && tr.ent &&
-				    tr.ent->client && !tr.ent->deadflag &&
-				    tr.ent->client->ctf.teamnum == team)
+				    SG_TeammateBodyPassable(team, tr.ent->client != NULL,
+				        tr.ent->deadflag != 0,
+				        tr.ent->client ? tr.ent->client->ctf.teamnum : 0))
 				{
 					int pass_side = SG_CrowdPassSide(
 					    e->client->ctf.ctfid,

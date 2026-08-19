@@ -1512,6 +1512,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Default air-strafe chains likewise initialize their lean from that private
       bot-life identity. Teammates entering the same proved road together no
       longer begin every hop from the identical zero phase and crowd one side.
+      The straight-road air-strafe proof now treats only a live same-team body
+      as its passable teammate exception. An opponent intersecting that hull
+      trace remains a blocker during reaction-delay and settle frames instead
+      of authorizing a hop chain into the enemy.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
