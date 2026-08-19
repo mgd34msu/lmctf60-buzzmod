@@ -265,6 +265,10 @@ Strike egress now preserves that same resolved formation when the coordinator
 promotes an ordinary attacker to ESCORT. The effective escort no longer has
 its lead/trail station overwritten by the generic carrier flood after objective
 selection.
+The lone autonomous escort also chooses that station from the fresh threat's
+earned position on the homeward route: defenders ahead produce a lead screen,
+chasers behind produce a trail screen, and client-slot parity no longer decides
+which side of the carrier gets protected.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
@@ -1428,6 +1432,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       escorts and retain any resolved lead/trail field through the later duty
       overlay; the coordinator cannot collapse that formation back to the
       generic carrier flood.
+      The single autonomous escort selects lead versus trail from the fresh
+      threat's earned home-route cost, screening a defender ahead or a chaser
+      behind instead of letting client-slot parity choose the formation side.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

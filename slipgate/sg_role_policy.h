@@ -125,6 +125,20 @@ static inline int SG_ObjectiveRole(int organic_role, int escort_mission)
 	return escort_mission ? SG_ROLE_ESCORT : organic_role;
 }
 
+/* Home-field cost falls toward the capture stand.  The one autonomous escort
+ * screens the fresh threat that admitted interposition: lead against a defender
+ * ahead of the carrier, trail against a chaser behind it.  An unusable threat
+ * cost fails toward the lead, where retained evidence places most carrier
+ * deaths, rather than deriving tactics from client-slot parity. */
+static inline int SG_InterposeLeadStation(int carrier_home_ms,
+	int threat_home_ms)
+{
+	if (carrier_home_ms < 0 || carrier_home_ms >= SG_FIELD_INF ||
+	    threat_home_ms < 0 || threat_home_ms >= SG_FIELD_INF)
+		return 1;
+	return threat_home_ms <= carrier_home_ms;
+}
+
 /* Once our team has the enemy flag, one separately assigned ESCORT owns the
  * carrier field. Ordinary attackers keep pressure on the enemy stand instead
  * of turning into duplicate escorts or following an unseen-flag fallback

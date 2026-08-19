@@ -1358,6 +1358,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					vec3_t dd11;
 
 					if (en11->client < 0 || en11->seed < 0 ||
+					    en11->seed >= SG_Rune()->hdr.num_seeds ||
 					    SG_AgeAtLeast(en11->seen_time, 4.0f))
 						continue;
 					VectorSubtract(
@@ -1402,7 +1403,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
 						int cc = cf[oc->seed], s13;
-						int lead = ((int)(e->client - game.clients) & 1) ? 0 : 1;
+						int threat_seed =
+						    sg_caco_enemies[SG_TeamIdx(team)][ts].seed;
+						int lead = SG_InterposeLeadStation(cc,
+						    cf[threat_seed]);
 						int wcost = lead ? cc - 1300 : cc + 900;
 						int band = 450;
 						float bd13 = -1.0f;
