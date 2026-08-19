@@ -12,7 +12,7 @@ PRODUCTION_SUFFIXES = {
     '.filters',
 }
 PRODUCTION_FILENAMES = {'GNUmakefile', 'Makefile'}
-EXCLUDED_TOP_LEVEL = {'.git', '.goodvibes', 'assets', 'recovery', 'tests'}
+EXCLUDED_TOP_LEVEL = {'.git', '.goodvibes', 'assets', 'tests'}
 
 
 def production_surface_paths() -> tuple[Path, ...]:
