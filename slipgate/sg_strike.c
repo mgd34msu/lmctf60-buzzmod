@@ -104,6 +104,13 @@ static int Strike_InputViable(const sg_strike_frame_t *frame, int slot)
 	    slot == frame->carrier_slot;
 }
 
+static int Strike_EnemyPressureViable(
+	const sg_strike_slot_input_t *input)
+{
+	return input &&
+	    (input->enemy_flag_goal_ms >= 0 || input->direct_flag_touch);
+}
+
 static int Strike_GoalForSelection(const sg_strike_frame_t *frame,
 	const sg_strike_slot_input_t *input)
 {
@@ -429,6 +436,14 @@ static void Strike_AssignAttackDuties(sg_strike_team_t *team,
 			attack_mask &= ~Strike_Bit(recover);
 		}
 	}
+	/* Membership is deliberately broader than attack reachability: a body may
+	 * be retained because it owns the only recovery or carrier route.  Do not
+	 * turn that useful mission into PRESS on an infinite enemy-flag field.
+	 * Direct physical touch remains sufficient even without a graph cost. */
+	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+		if ((attack_mask & Strike_Bit(slot)) != 0u &&
+		    !Strike_EnemyPressureViable(&frame->slot[slot]))
+			attack_mask &= ~Strike_Bit(slot);
 
 	breach = -1;
 	clear = -1;
@@ -790,7 +805,8 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 			}
 		}
 		for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
-			if ((available & Strike_Bit(slot)) != 0u)
+			if ((available & Strike_Bit(slot)) != 0u &&
+			    Strike_EnemyPressureViable(&frame->slot[slot]))
 				team->duty[slot] = SG_STRIKE_DUTY_PRESS;
 		return;
 	}

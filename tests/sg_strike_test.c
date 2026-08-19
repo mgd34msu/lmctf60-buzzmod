@@ -501,6 +501,31 @@ static void TestRecoveryRouteAdmitsDisconnectedAttacker(void)
 	CHECK(team.duty[1] == SG_STRIKE_DUTY_BREACH);
 }
 
+static void TestDisconnectedMembersDoNotReceivePressureDuty(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(435.0f);
+
+	frame.own_flag_home = 0;
+	AddAttacker(&frame, 0, 66u, 2, -1);
+	frame.slot[0].recover_goal_ms = 100;
+	AddAttacker(&frame, 1, 67u, 2, -1);
+	frame.slot[1].recover_goal_ms = 200;
+	AddAttacker(&frame, 2, 68u, 2, 500);
+	AddAttacker(&frame, 3, 69u, 2, -1);
+	frame.slot[3].direct_flag_touch = 1;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.member_mask == (Bit(0) | Bit(1) | Bit(2) | Bit(3)));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_NONE);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_BREACH);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_PRESS);
+	CHECK(!SG_StrikeMemberRushes(&team, 1));
+	CHECK(SG_StrikeMemberRushes(&team, 2));
+	CHECK(SG_StrikeMemberRushes(&team, 3));
+}
+
 static void TestFullRosterMakesRoomForOnlyRecoverer(void)
 {
 	sg_strike_team_t team;
@@ -754,6 +779,39 @@ static void TestCarrierStandoffKeepsRecovery(void)
 	CHECK(team.duty[1] == SG_STRIKE_DUTY_RECOVER);
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 0);
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
+}
+
+static void TestEgressDoesNotPressAnUnreachableMember(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(695.0f);
+
+	AddAttacker(&frame, 0, 620u, 2, 1000);
+	AddAttacker(&frame, 1, 621u, 2, 2000);
+	AddAttacker(&frame, 2, 622u, 2, 3000);
+	AddAttacker(&frame, 3, 623u, 2, -1);
+	frame.own_flag_home = 0;
+	frame.slot[0].recover_goal_ms = 100;
+	frame.slot[3].recover_goal_ms = 200;
+	frame.slot[1].carrier_goal_ms = 100;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.member_mask == (Bit(0) | Bit(1) | Bit(2) | Bit(3)));
+
+	/* The stable four stay admitted when a fifth bot makes the pickup. */
+	frame.now = 695.1f;
+	AddAttacker(&frame, 4, 624u, 2, 500);
+	frame.enemy_flag_home = 0;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.carrier_slot = 4;
+	frame.slot[4].carrying = 1;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(team.duty[2] == SG_STRIKE_DUTY_CLEAR);
+	CHECK(team.duty[3] == SG_STRIKE_DUTY_NONE);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 0);
 }
 
 static void TestWeaponRouteRetirementVerdicts(void)
@@ -1022,6 +1080,7 @@ int main(void)
 	TestFormationReleasesWhenPartnerFallsBehind();
 	TestOneRecovererPreservesAttack();
 	TestRecoveryRouteAdmitsDisconnectedAttacker();
+	TestDisconnectedMembersDoNotReceivePressureDuty();
 	TestFullRosterMakesRoomForOnlyRecoverer();
 	TestFullRosterMakesRoomForOnlyEscort();
 	TestCarrierCannotSatisfyRecoveryCoverage();
@@ -1029,6 +1088,7 @@ int main(void)
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();
 	TestCarrierStandoffKeepsRecovery();
+	TestEgressDoesNotPressAnUnreachableMember();
 	TestWeaponRouteRetirementVerdicts();
 	TestWeaponDetourPreservesStandPressure();
 	TestReturnCaptureAndLifecycleReset();

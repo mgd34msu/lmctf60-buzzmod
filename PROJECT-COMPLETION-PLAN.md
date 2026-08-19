@@ -360,6 +360,11 @@ RECOVER or ESCORT, while the one actual recovery/escort owner remains outside
 the pressure set. The ordinary route report uses the same snapshot for its
 static goal, so a pressure body's movement is measured against the enemy stand
 it is actually pursuing rather than the abandoned home-role destination.
+Strike membership remains broad enough to retain the only reachable recovery
+or carrier-route owner, but pressure duties are now narrower: BREACH, CLEAR,
+and PRESS require a finite enemy-flag field or an already-proved direct touch.
+An admitted bot can no longer have its usable organic mission replaced by an
+infinite enemy route merely because the four-person coordinator roster is full.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 
