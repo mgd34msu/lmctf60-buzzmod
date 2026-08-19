@@ -3526,6 +3526,9 @@ static float Rune_EntityWorth(edict_t *e, edict_t *rune)
 	case RUNE_REGEN:
 		mult = 1.20f;		/* 3.33 hp/s, g_runes.c */
 		break;
+	case RUNE_VAMP:
+		mult = 1.00f;		/* half landed player damage heals, g_combat.c */
+		break;
 	default:
 		return 0.0f;
 	}

@@ -158,6 +158,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("case RUNE_DAMAGE:", rune_entity)
         self.assertIn("case RUNE_RESIST:", rune_entity)
         self.assertIn("case RUNE_REGEN:", rune_entity)
+        self.assertIn("case RUNE_VAMP:", rune_entity)
         self.assertIn("class_worth * exact / best", rune_entity)
         self.assertIn("SG_RuneRouteWorth(tc->e,", detour)
         self.assertIn("item_worth / (1.0f +", detour)
