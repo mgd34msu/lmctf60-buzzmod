@@ -4102,13 +4102,10 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	         role != SG_ROLE_CARRY &&
 	         /* Near-goal organic escorts and exact "cover me" arrivals were
 	          * classified as mission holds above, not wedged routes. */
-	         /* and a rail-rhythm wait is the same class of standing as a
-	          * rally: parked on purpose, briefly, by a bot that knows
-	          * exactly why. It cannot reach fifteen seconds on its own --
-	          * 1.5s of wait per 5.5s of refractory -- but a bot must never
-	          * be killed for a stand this file asked it to make */
-	         bot->railhold_since <= 0.0f &&
-	         bot->rally_since <= 0.0f)
+	         /* Rail and rally/rearguard timestamps outlive individual holds.
+	          * Exempt only the same-frame intentional hold, not historical
+	          * evidence that this body once waited. */
+	         SG_WedgeKillHoldClear(rally_hold, rail_hold))
 	{
 		sg_host.dprint("WEDGEKILL %s at (%.0f %.0f %.0f)\n",
 		           e->client->pers.netname, e->s.origin[0],

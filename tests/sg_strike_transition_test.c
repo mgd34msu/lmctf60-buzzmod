@@ -1163,6 +1163,10 @@ static void TestCombatActivityResetsGenericWedgeClock(void)
 	CHECK(SG_WedgeClockReset(96.01f, false, false));
 	CHECK(SG_WedgeClockReset(0.0f, true, false));
 	CHECK(SG_WedgeClockReset(0.0f, false, true));
+	CHECK(SG_WedgeKillHoldClear(false, false));
+	CHECK(!SG_WedgeKillHoldClear(true, false));
+	CHECK(!SG_WedgeKillHoldClear(false, true));
+	CHECK(!SG_WedgeKillHoldClear(true, true));
 }
 
 static void TestMissionAndCombatCannotShelveRoutes(void)

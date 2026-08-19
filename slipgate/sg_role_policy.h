@@ -73,6 +73,15 @@ static inline int SG_WedgeClockReset(float displacement, int duel,
 	return displacement > 96.0f || duel || engaged_last;
 }
 
+/* Only a hold that is active on this movement frame can excuse a stationary
+ * body from the last-resort wedge recovery.  The backing timestamps are
+ * histories shared by several bounded policies; their mere presence does not
+ * mean that any of those policies still owns the body. */
+static inline int SG_WedgeKillHoldClear(int rally_hold, int rail_hold)
+{
+	return !rally_hold && !rail_hold;
+}
+
 /* Route-failure clocks may judge only navigation-owned motion.  Mission holds
  * and combat-owned frames cannot prove that the selected graph link failed. */
 static inline int SG_RouteFailureWatchSuppressed(int role, int goal_cost,
