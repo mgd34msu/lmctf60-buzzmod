@@ -15,6 +15,7 @@
 #include "slipgate/sg_persona_assignment.h"
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_callout_random.h"
+#include "slipgate/sg_chat.h"
 
 sg_host_t sg_host;
 
@@ -522,6 +523,16 @@ static void TestBotPingDoesNotOwnGameplayRandomness(void)
 	CHECK(SG_BotPingValue(15, 1, 0) <= 15);
 }
 
+static void TestChatObjectivePriority(void)
+{
+	CHECK(!SG_ChatTopicBlocksOnBotGap(SG_CHAT_TOPIC_CACO));
+	CHECK(SG_ChatTopicStampsBotGap(SG_CHAT_TOPIC_CACO));
+	CHECK(!SG_ChatTopicBlocksOnBotGap(SG_CHAT_TOPIC_ORDER));
+	CHECK(!SG_ChatTopicStampsBotGap(SG_CHAT_TOPIC_ORDER));
+	CHECK(SG_ChatTopicBlocksOnBotGap(SG_CHAT_TOPIC_MAJOR));
+	CHECK(SG_ChatTopicStampsBotGap(SG_CHAT_TOPIC_MAJOR));
+}
+
 int main(void)
 {
 	TestCRC32();
@@ -532,6 +543,7 @@ int main(void)
 	TestLifecycleAndMapSwitch();
 	TestReasons();
 	TestBotPingDoesNotOwnGameplayRandomness();
+	TestChatObjectivePriority();
 	TestEscortDose();
 	TestRibbonRandomness();
 	TestLeadRandomness();

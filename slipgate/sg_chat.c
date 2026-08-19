@@ -920,11 +920,21 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	/*
 	 * An order acknowledgement is exempt from the budget: four seconds late
 	 * it is worse than silence, and the parser only ever asks for one.
+	 *
+	 * CACO's flag line also admits through an older, lower-priority use of this
+	 * bot's voice. The sighting has already paid CACO's team/topic gap and its
+	 * human reaction delay; silently throwing it away because the same bot
+	 * mentioned an item a moment earlier loses earned objective information.
+	 * Unlike ORDER, CACO still stamps the budget below, so the urgent line
+	 * quiets ordinary chatter that follows it.
 	 */
-	if (topic != SG_CHAT_TOPIC_ORDER)
+	if (SG_ChatTopicBlocksOnBotGap(topic))
 	{
 		if (level.time < chat_bot[cl].next_team)
 			return false;
+	}
+	if (SG_ChatTopicStampsBotGap(topic))
+	{
 		if (level.time < chat_teamsaid[SG_TeamIdx(team)][topic])
 			return false;
 	}
@@ -936,7 +946,7 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	 * this to stay off a channel that is carrying something */
 	chat_team_last[SG_TeamIdx(team)] = level.time;
 
-	if (topic != SG_CHAT_TOPIC_ORDER)
+	if (SG_ChatTopicStampsBotGap(topic))
 	{
 		chat_bot[cl].next_team = level.time + SG_CHAT_BOT_GAP;
 		chat_teamsaid[SG_TeamIdx(team)][topic] =

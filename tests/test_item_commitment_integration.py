@@ -89,6 +89,27 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertNotIn("RL_DOOR", body)
         self.assertNotIn("RL_LIFT", body)
 
+    def test_flag_intelligence_preempts_cosmetic_chat_but_stamps_budget(self):
+        source = self.text("slipgate/sg_chat.c")
+        start = source.index("qboolean SG_ChatSayTeam(")
+        end = source.index("static qboolean Chat_SayEx", start)
+        body = source[start:end]
+        admission = body.index("SG_ChatTopicBlocksOnBotGap(topic)")
+        topic_gate = body.index("SG_ChatTopicStampsBotGap(topic)", admission)
+        emit = body.index('SG_BotClientCommand(cl, "say_team"', topic_gate)
+        stamp = body.index("chat_bot[cl].next_team =", emit)
+        self.assertLess(admission, topic_gate)
+        self.assertLess(topic_gate, emit)
+        self.assertLess(emit, stamp)
+        self.assertIn("level.time < chat_bot[cl].next_team", body)
+        self.assertIn("level.time < chat_teamsaid", body)
+
+        caco = self.text("slipgate/sg_caco.c")
+        speak = caco[caco.index("static void Caco_Speak(void)") :]
+        self.assertIn(
+            "SG_ChatSayTeam(sp, c->line, SG_CHAT_TOPIC_CACO)", speak
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

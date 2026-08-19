@@ -243,6 +243,10 @@ aim, or movement line through shared RNG state.
 Team-belief callout delays now advance a private team/topic sequence. Cosmetic
 banter volume cannot change when earned flag or item information is published
 to teammates and downstream item timing.
+Earned flag-position intelligence now also admits through an older cosmetic
+use of the chosen speaker's team-chat budget. The objective line still stamps
+that budget after emission, so it suppresses lower-priority chatter that would
+otherwise follow it instead of being silently discarded by that chatter.
 The struck `sg_exitasym=0` carrier experiment is now inert even at the grab
 edge; it no longer consumes a hidden global random draw while remaining
 behaviorally disabled.
