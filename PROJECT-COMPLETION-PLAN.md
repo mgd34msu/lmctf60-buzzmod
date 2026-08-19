@@ -1498,7 +1498,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Generic enemy route belief now admits only observations localized to a
       valid seed in the active RUNE. A visible player in an intentionally
       seedless region can no longer enter the default carrier-cover scorer as
-      seed `-1` and drive undefined route-memory access during a flag run.
+      seed `-1` and drive undefined route-memory access during a flag run; if
+      that current sighting supersedes an older localized row, the disproved
+      route position is retired instead of aging as though it were unseen.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

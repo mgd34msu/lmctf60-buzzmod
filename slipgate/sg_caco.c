@@ -1567,12 +1567,38 @@ SG_CACO_ENEMY_PRIVATE qboolean Caco_EnemyObservationValid(const rune_t *r,
  * `seen` is what separates the two callers: an eye entry is exact and
  * carries the rune tell, an ear entry is a region and carries neither.
  */
-static void Caco_EnemyPlace(rune_t *r, int team1, int client, int seed,
-                            qboolean seen, qboolean runed)
+#ifdef SG_CACO_TEST
+#define SG_CACO_PLACE_PRIVATE
+#else
+#define SG_CACO_PLACE_PRIVATE static
+#endif
+
+SG_CACO_PLACE_PRIVATE void Caco_EnemyPlace(rune_t *r, int team1, int client,
+                                           int seed, qboolean seen,
+                                           qboolean runed)
 {
 	sg_belief_enemy_t *tab;
 	int slot;
 
+	/* A current eye can prove that a previously localized enemy has left the
+	 * graph without supplying a new graph position.  Retire that exact row;
+	 * otherwise its old seed remains actionable for the normal freshness
+	 * window even though the newer observation disproved it. */
+	if (r && r->seeds && (team1 == 0 || team1 == 1) &&
+	    client >= 0 && client < game.maxclients &&
+	    (seed < 0 || seed >= r->hdr.num_seeds))
+	{
+		tab = sg_caco_enemies[team1];
+		for (slot = 0; slot < SG_MAX_ENEMY_TRACK; slot++)
+			if (tab[slot].client == client)
+			{
+				memset(&tab[slot], 0, sizeof(tab[slot]));
+				tab[slot].client = -1;
+				tab[slot].seed = -1;
+				return;
+			}
+		return;
+	}
 	if (!Caco_EnemyObservationValid(r, team1, client, game.maxclients, seed))
 		return;
 	tab = sg_caco_enemies[team1];
@@ -1590,6 +1616,8 @@ static void Caco_EnemyPlace(rune_t *r, int team1, int client, int seed,
 	if (seen)
 		tab[slot].runed = runed;
 }
+
+#undef SG_CACO_PLACE_PRIVATE
 
 /*
  * Every enemy a teammate lays eyes on, not just carriers: the defender's

@@ -739,7 +739,7 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
 
     def test_seedless_enemy_observations_cannot_enter_route_belief(self) -> None:
         caco = (ROOT / "slipgate/sg_caco.c").read_text()
-        writer = caco[caco.index("static void Caco_EnemyPlace"):
+        writer = caco[caco.index("SG_CACO_PLACE_PRIVATE void Caco_EnemyPlace"):
                       caco.index("static void Caco_ScanEnemies")]
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
         carry = descend[descend.index("CARRIER COVER (sg_carrycover"):
@@ -748,7 +748,10 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
 
         self.assertIn("Caco_EnemyObservationValid(r, team1, client",
                       writer)
-        self.assertLess(writer.index("Caco_EnemyObservationValid"),
+        self.assertIn("tab[slot].client == client", writer)
+        self.assertIn("tab[slot].client = -1", writer)
+        self.assertIn("tab[slot].seed = -1", writer)
+        self.assertLess(writer.index("seed < 0 || seed >= r->hdr.num_seeds"),
                         writer.index("Caco_EnemySlot"))
         self.assertIn("Caco_EnemyPlace(r, SG_TeamIdx(viewer_team)", caco)
         self.assertIn("Caco_EnemyPlace(r, t, ecl, seed", caco)
