@@ -216,6 +216,10 @@ both source staging and the irreversible fire boundary. A tactical waypoint or
 bounded weapon errand can therefore take a ride that advances that live route,
 while a rope that only appears useful against a different strategic field is
 retired before firing.
+The successful `Touch_Item` callback now closes a matching early-return item
+commitment before consulting the item-communication cvar. Disabling team
+callouts suppresses belief/speech only; it cannot leave a bot pursuing a pad
+whose item was physically taken.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

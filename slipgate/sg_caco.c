@@ -39,6 +39,7 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
 #include "slipgate/sg_lead.h"
+#include "slipgate/sg_item_policy.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
@@ -941,8 +942,10 @@ int Caco_ItemBeliefSeed(rune_t *r, edict_t *e)
  * ruling of 2026-08-05 is what it implements: an item's return time is
  * knowledge a bot's MOUTH transmits, not knowledge the server hands out.
  *
- * Nothing here happens with sg_itemcomm 0, so the hook is inert in the
- * shipped default and the shared-belief build is untouched.
+ * The physical commitment handoff is unconditional for a qualifying pickup.
+ * `sg_itemcomm` governs only shared belief and speech; disabling communication
+ * cannot leave a live controller route chasing an item which was already
+ * accepted by Touch_Item.
  */
 
 /* one of ours, on that team, alive, with a clear sight line to the item at the
@@ -979,9 +982,8 @@ static edict_t *Caco_ItemWitness(edict_t *item, int team, edict_t *taker)
 void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 {
 	int takerteam, t;
+	sg_item_pickup_disposition_t disposition;
 
-	if (!SG_ItemComm())
-		return;                     /* shared-belief build: nothing to do */
 	if (!taker || !taker->client || !item || !item->inuse)
 		return;
 	/*
@@ -990,9 +992,10 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 	 * for the same reason Caco_ScanItemSpawns skips it, and "quad is back in
 	 * 60" said about a corpse's quad would be a lie with a number on it.
 	 */
-	if (item->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM))
-		return;
-	if (!SG_ChatItemMajor(item))
+	disposition = SG_ItemPickupDisposition(true,
+	    (item->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)) != 0,
+	    SG_ChatItemMajor(item), SG_ItemComm());
+	if (disposition == SG_ITEM_PICKUP_IGNORE)
 		return;
 
 	/* The physical pickup closes any matching early-return commitment before
@@ -1000,6 +1003,8 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 	 * after the engine accepted the pickup, so this covers both inventory and
 	 * instant-use powerups without guessing from client state. */
 	Lead_NoteItemTaken(taker, item);
+	if (disposition != SG_ITEM_PICKUP_COMMIT_AND_COMMUNICATE)
+		return;                     /* no shared belief or callout */
 
 	takerteam = taker->client->ctf.teamnum;
 

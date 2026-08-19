@@ -32,10 +32,15 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         dropped = body.index("DROPPED_ITEM | DROPPED_PLAYER_ITEM")
         major = body.index("SG_ChatItemMajor(item)")
         lead = body.index("Lead_NoteItemTaken(taker, item);")
+        communication = body.index(
+            "disposition != SG_ITEM_PICKUP_COMMIT_AND_COMMUNICATE", lead
+        )
         team = body.index("takerteam = taker->client->ctf.teamnum;")
         self.assertLess(dropped, major)
         self.assertLess(major, lead)
-        self.assertLess(lead, team)
+        self.assertLess(lead, communication)
+        self.assertLess(communication, team)
+        self.assertIn("SG_ItemPickupDisposition(true,", body)
         self.assertNotIn("pers.inventory", body)
 
     def test_spawned_phase_keeps_the_route_and_bounds_clock_inference(self):

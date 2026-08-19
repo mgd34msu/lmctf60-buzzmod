@@ -5,6 +5,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_lead.h"
+#include "slipgate/sg_item_policy.h"
 #include "slipgate/sg_persona.h"
 
 #include <math.h>
@@ -304,6 +305,13 @@ static void TestStrongerInterruptsStillWin(void)
 
 int main(void)
 {
+	CHECK(SG_ItemPickupDisposition(1, 0, 1, 0) ==
+	      SG_ITEM_PICKUP_COMMIT_ONLY);
+	CHECK(SG_ItemPickupDisposition(1, 0, 1, 1) ==
+	      SG_ITEM_PICKUP_COMMIT_AND_COMMUNICATE);
+	CHECK(SG_ItemPickupDisposition(0, 0, 1, 1) == SG_ITEM_PICKUP_IGNORE);
+	CHECK(SG_ItemPickupDisposition(1, 1, 1, 1) == SG_ITEM_PICKUP_IGNORE);
+	CHECK(SG_ItemPickupDisposition(1, 0, 0, 1) == SG_ITEM_PICKUP_IGNORE);
 	ResetWorld();
 	TestClockSpawnContinuesToPhysicalPickup();
 	TestSightConfirmedSpawnPersistsAndHomes();
