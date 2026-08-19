@@ -4,8 +4,10 @@
 
 #include "sg_rune.h"
 
-/* Missing input is intentionally neutral.  A present but invalid input fails
- * closed: Fields_Setup must not publish a graph with untrusted repairs. */
+/* Every published production graph has an explicit RUNE-bound snag file.  A
+ * zero-repair file states that no authenticated repair evidence was accepted;
+ * it does not claim that the map is clean.  Missing or invalid input fails
+ * closed before Fields_Setup publishes any fields. */
 qboolean SG_SnagRepairLoadForLevel(const rune_t *rune, const char *game_dir);
 qboolean SG_SnagRepairLoadFile(const rune_t *rune, const char *path);
 int SG_SnagRepairSeedSurcharge(int seed);

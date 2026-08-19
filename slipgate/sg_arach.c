@@ -3616,6 +3616,14 @@ void SG_RunFrame(void)
 			SG_RetireBotForClient(ent);
 			continue;
 		}
+		/* One map-local pulse per server second proves the diagnostic stream's
+		 * complete residence coverage even while a bot is dead and therefore
+		 * cannot reach Think_Emit's route-state report. */
+		if (sg_cv.debug->value && level.framenum > 0 &&
+		    level.framenum % 10 == 0)
+			sg_host.dprint("SGCENSUS %s: frm=%d alive=%d\n",
+			    ent->client->pers.netname, level.framenum,
+			    ent->deadflag == DEAD_NO && ent->health > 0);
 		SG_BotThink(&sg_bots[i]);
 	}
 }

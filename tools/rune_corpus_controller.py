@@ -54,6 +54,11 @@ READY_RE = re.compile(
     r"([0-9]+) seeds, ([0-9]+) links, ([0-9]+) mechanism nodes, "
     r"([0-9]+) plans, gravity -?[0-9]+, all fields up$"
 )
+SNAG_READY_RE = re.compile(
+    r"^slipgate: snag ready map=([A-Za-z0-9_][A-Za-z0-9_-]{0,62}) "
+    r"repairs=([0-9]+) rune_sha256=([0-9a-f]{64}) "
+    r"evidence_sha256=([0-9a-f]{64}) snag_sha256=([0-9a-f]{64})$"
+)
 FAILURE_RE = re.compile(
     r"^rune: (?:rejected .+|FAILED(?::| |$).*|generation refused .+|"
     r"revalidation failed .+|install failed .+|"
@@ -89,6 +94,7 @@ TERMINAL_RESULT_FIELDS = frozenset(
         "decoded_counts", "gate_output_sha256", "gate_log_sha256",
         "semantic_gate_labels", "cold_load_owner_record",
         "cold_load_command_sha256", "cold_load_log_sha256",
+        "cold_load_snag_record", "cold_load_snag_evidence_record",
     }
 )
 REQUIRED_SNAPSHOT_ROLES = frozenset(
@@ -98,6 +104,7 @@ REQUIRED_SNAPSHOT_ROLES = frozenset(
         "module_secondary",
         "runelint",
         "runeio",
+        "snagrepair",
         "contracts",
         "acceptor_gnu",
         "acceptor_make",
@@ -233,7 +240,9 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _open_regular(path: Path) -> tuple[int, os.stat_result]:
+def _open_regular(
+    path: Path, *, require_unaliased: bool = False
+) -> tuple[int, os.stat_result]:
     reject_symlink_components(path)
     try:
         before = path.lstat()
@@ -241,26 +250,37 @@ def _open_regular(path: Path) -> tuple[int, os.stat_result]:
         raise CorpusError(f"cannot stat input {path}: {exc}") from exc
     if not stat.S_ISREG(before.st_mode):
         raise CorpusError(f"not a regular file: {path}")
+    if require_unaliased and before.st_nlink != 1:
+        raise CorpusError(f"not one unaliased regular file: {path}")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
     except OSError as exc:
         raise CorpusError(f"cannot safely open regular file {path}: {exc}") from exc
     after = os.fstat(fd)
-    if not stat.S_ISREG(after.st_mode) or (before.st_dev, before.st_ino) != (
+    if not stat.S_ISREG(after.st_mode) or (
+        before.st_dev, before.st_ino
+    ) != (
         after.st_dev,
         after.st_ino,
     ):
         os.close(fd)
         raise CorpusError(f"input changed while opening: {path}")
+    if require_unaliased and after.st_nlink != 1:
+        os.close(fd)
+        raise CorpusError(f"not one unaliased regular file: {path}")
     return fd, after
 
 
 def read_regular_bytes(
-    path: Path, *, logical_path: str | None = None
+    path: Path, *, logical_path: str | None = None,
+    require_unaliased: bool = False,
 ) -> tuple[bytes, dict[str, Any]]:
     """Read and describe one regular file through exactly one open descriptor."""
-    fd, info = _open_regular(path)
+    fd, info = (
+        _open_regular(path, require_unaliased=True)
+        if require_unaliased else _open_regular(path)
+    )
     digest = hashlib.sha256()
     chunks: list[bytes] = []
     try:
@@ -271,15 +291,31 @@ def read_regular_bytes(
             digest.update(chunk)
             chunks.append(chunk)
         final = os.fstat(fd)
+        if require_unaliased:
+            try:
+                named = path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise CorpusError(
+                    f"input disappeared while hashing: {path}"
+                ) from exc
     finally:
         os.close(fd)
     data = b"".join(chunks)
-    if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != (
+    if (
+        info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+    ) != (
         final.st_dev,
         final.st_ino,
         final.st_size,
         final.st_mtime_ns,
     ) or len(data) != final.st_size:
+        raise CorpusError(f"input changed while hashing: {path}")
+    if require_unaliased and (
+        (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns) !=
+        (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns)
+        or final.st_nlink != 1
+        or named.st_nlink != 1
+    ):
         raise CorpusError(f"input changed while hashing: {path}")
     return data, {
         "path": logical_path if logical_path is not None else str(path),
@@ -289,8 +325,13 @@ def read_regular_bytes(
     }
 
 
-def regular_file_record(path: Path, *, logical_path: str | None = None) -> dict[str, Any]:
-    _data, record = read_regular_bytes(path, logical_path=logical_path)
+def regular_file_record(
+    path: Path, *, logical_path: str | None = None,
+    require_unaliased: bool = False,
+) -> dict[str, Any]:
+    _data, record = read_regular_bytes(
+        path, logical_path=logical_path, require_unaliased=require_unaliased,
+    )
     return record
 
 
@@ -658,13 +699,12 @@ def create_input_snapshot(
         raise
 
 
-def _load_json_regular(path: Path) -> tuple[Any, bytes]:
-    fd, _info = _open_regular(path)
-    try:
-        with os.fdopen(fd, "rb", closefd=False) as stream:
-            data = stream.read()
-    finally:
-        os.close(fd)
+def _load_json_regular(
+    path: Path, *, require_unaliased: bool = False
+) -> tuple[Any, bytes]:
+    data, _record = read_regular_bytes(
+        path, require_unaliased=require_unaliased,
+    )
     try:
         return json.loads(data), data
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1014,6 +1054,7 @@ def build_fingerprint_document(
         "mechanism_contract_hash": mechanism_hash,
         "linter_sha256": by_role["runelint"]["sha256"],
         "reader_sha256": by_role["runeio"]["sha256"],
+        "snagrepair_sha256": by_role["snagrepair"]["sha256"],
         "acceptor_gnu_sha256": by_role["acceptor_gnu"]["sha256"],
         "acceptor_make_sha256": by_role["acceptor_make"]["sha256"],
         "semantic_checker_manifest_sha256": by_role[
@@ -2127,6 +2168,88 @@ def _validate_gate_integrity_evidence(
             raise CorpusError("gate integrity command identity disagrees with expected argv")
 
 
+def _validate_bootstrap_snag_evidence(
+    snag: Path,
+    evidence: Path,
+    *,
+    artifact_sha256: str,
+    fingerprint: str,
+    map_name: str,
+) -> None:
+    value, evidence_raw = _load_json_regular(evidence, require_unaliased=True)
+    expected = {
+        "artifact_sha256": artifact_sha256,
+        "classification": "NO_ACCEPTED_OBSERVATION",
+        "fingerprint": fingerprint,
+        "format": "lmctf-snag-bootstrap-v1",
+        "map": map_name,
+    }
+    if value != expected or evidence_raw != canonical_json(expected):
+        raise CorpusError("bootstrap snag evidence identity is invalid")
+    snag_raw, _snag_record = read_regular_bytes(
+        snag, require_unaliased=True,
+    )
+    try:
+        snag_text = snag_raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise CorpusError("bootstrap snag is not ASCII") from exc
+    lines = snag_text.splitlines()
+    keys = (
+        "snag_format", "map", "bsp_checksum", "entity_crc", "physics_flags",
+        "gravity", "airaccelerate", "maxvelocity", "pmove_ms", "frame_ms",
+        "host_physics_id", "rune_payload_crc", "rune_header_crc",
+        "rune_action_contract_crc", "rune_mechanism_contract_crc",
+        "rune_num_seeds", "rune_num_links", "rune_sha256",
+        "evidence_sha256", "repairs",
+    )
+    fields: dict[str, str] = {}
+    for expected_key, line in zip(keys, lines, strict=False):
+        key, separator, field = line.partition(" ")
+        if key != expected_key or separator != " " or not field or " " in field:
+            raise CorpusError("bootstrap snag header is not canonical")
+        fields[key] = field
+    if (
+        not snag_text.endswith("\n")
+        or "\r" in snag_text
+        or len(lines) != len(keys)
+        or fields.get("snag_format") != "2"
+        or fields.get("map") != map_name
+        or fields.get("rune_sha256") != artifact_sha256
+        or fields.get("evidence_sha256") != sha256_bytes(evidence_raw)
+        or fields.get("repairs") != "0"
+    ):
+        raise CorpusError("bootstrap snag is not the exact explicit-zero declaration")
+
+
+def _validate_retained_bootstrap_snag(
+    records: Mapping[str, Mapping[str, Any]],
+    *,
+    artifact_sha256: str,
+    fingerprint: str,
+    map_name: str,
+) -> None:
+    """Require the staged snag/evidence paths to remain the exact same bytes."""
+    if not isinstance(records, Mapping) or set(records) != {"snag", "evidence"}:
+        raise GateIntegrityError("bootstrap snag record set is incomplete")
+    paths: dict[str, Path] = {}
+    for label in ("snag", "evidence"):
+        record = records[label]
+        if not isinstance(record, Mapping) or set(record) != {
+                "path", "mode", "size", "sha256"}:
+            raise GateIntegrityError(f"bootstrap snag {label} record is malformed")
+        path = Path(str(record["path"]))
+        if regular_file_record(path, require_unaliased=True) != dict(record):
+            raise GateIntegrityError(
+                f"fresh cold-load changed its bootstrap snag {label}")
+        paths[label] = path
+    _validate_bootstrap_snag_evidence(
+        paths["snag"], paths["evidence"],
+        artifact_sha256=artifact_sha256,
+        fingerprint=fingerprint,
+        map_name=map_name,
+    )
+
+
 def _validate_terminal_schema(
     value: Mapping[str, Any],
     *,
@@ -2308,12 +2431,20 @@ def _validate_terminal_schema(
             attempt / "cold-load" / "private" / "game" / "maps"
             / f"{map_name}.rune"
         )
+        cold_snag = cold_artifact.with_suffix(".snag")
+        cold_snag_evidence = attempt / "cold-load" / "snag-bootstrap-evidence.json"
         if (
             value["cold_load_owner_record"]
             != str(cold_owner.relative_to(run_root))
+            or value["cold_load_snag_record"]
+            != str(cold_snag.relative_to(run_root))
+            or value["cold_load_snag_evidence_record"]
+            != str(cold_snag_evidence.relative_to(run_root))
             or cold_owner not in paths
             or cold_log not in paths
             or cold_artifact not in paths
+            or cold_snag not in paths
+            or cold_snag_evidence not in paths
         ):
             raise CorpusError("PASS lacks complete fresh cold-load evidence")
         if (
@@ -2323,6 +2454,13 @@ def _validate_terminal_schema(
             or sha256_regular(cold_artifact) != value["artifact_sha256"]
         ):
             raise CorpusError("PASS fresh cold-load hashes disagree")
+        _validate_bootstrap_snag_evidence(
+            cold_snag,
+            cold_snag_evidence,
+            artifact_sha256=value["artifact_sha256"],
+            fingerprint=fingerprint,
+            map_name=map_name,
+        )
         cold_owner_value, _cold_owner_raw = _load_json_regular(cold_owner)
         if (
             not isinstance(cold_owner_value, dict)
@@ -2366,11 +2504,19 @@ def _validate_terminal_schema(
         except UnicodeDecodeError as exc:
             raise CorpusError("PASS fresh cold-load log is not valid UTF-8") from exc
         parse_cold_load_log(cold_text, map_name, banner)
+        validate_cold_load_snag_attestation(
+            cold_text,
+            map_name,
+            artifact_sha256=value["artifact_sha256"],
+            evidence_sha256=sha256_regular(cold_snag_evidence),
+            snag_sha256=sha256_regular(cold_snag),
+        )
     else:
         if any(value[field] is not None for field in (
             "decoded_counts", "gate_output_sha256", "gate_log_sha256",
             "semantic_gate_labels", "cold_load_owner_record",
             "cold_load_command_sha256", "cold_load_log_sha256",
+            "cold_load_snag_record", "cold_load_snag_evidence_record",
         )):
             raise CorpusError("non-PASS result contains successful gate reports")
         failure_line = value["failure_line"]
@@ -2876,6 +3022,8 @@ def recover_stale_attempts(
                     "cold_load_owner_record": None,
                     "cold_load_command_sha256": None,
                     "cold_load_log_sha256": None,
+                    "cold_load_snag_record": None,
+                    "cold_load_snag_evidence_record": None,
                 }
                 publish_result(run_root, map_name, result, attempt)
                 recovered += 1
@@ -2925,6 +3073,38 @@ def parse_cold_load_log(
     return counts
 
 
+def validate_cold_load_snag_attestation(
+    text: str,
+    map_name: str,
+    *,
+    artifact_sha256: str,
+    evidence_sha256: str,
+    snag_sha256: str,
+) -> None:
+    """Require one runtime digest for the exact sidecar bytes actually read."""
+    if not all(_is_sha256(value) for value in (
+        artifact_sha256, evidence_sha256, snag_sha256,
+    )):
+        raise GateIntegrityError("cold-load snag authority has an invalid digest")
+    matches = [
+        match for line in text.splitlines()
+        if (match := SNAG_READY_RE.fullmatch(line)) is not None
+    ]
+    if len(matches) != 1:
+        raise CorpusError(
+            f"fresh cold-load expected one snag-ready line, found {len(matches)}"
+        )
+    match = matches[0]
+    if (
+        match.group(1) != map_name
+        or int(match.group(2)) != 0
+        or match.group(3) != artifact_sha256
+        or match.group(4) != evidence_sha256
+        or match.group(5) != snag_sha256
+    ):
+        raise CorpusError("fresh cold-load snag attestation disagrees with staged bytes")
+
+
 def stage_private_inputs(
     attempt: Path,
     snapshot: Path,
@@ -2947,6 +3127,80 @@ def stage_private_inputs(
     config_name = Path(str(roles["generator_config"]["path"])).name
     _copy_snapshot_file(snapshot, roles["generator_config"], game / config_name)
     return private, engine, artifact, config_name
+
+
+def stage_bootstrap_snag(
+    attempt: Path,
+    snapshot: Path,
+    map_name: str,
+    artifact: Path,
+    fingerprint: str,
+) -> dict[str, Any]:
+    """Create the explicit zero-repair sidecar needed for a fresh cold load."""
+    before = regular_file_record(artifact)
+    verified = verify_snapshot(snapshot)
+    roles = verified["by_role"]
+    evidence = attempt / "snag-bootstrap-evidence.json"
+    atomic_write_json(evidence, {
+        "artifact_sha256": before["sha256"],
+        "classification": "NO_ACCEPTED_OBSERVATION",
+        "fingerprint": fingerprint,
+        "format": "lmctf-snag-bootstrap-v1",
+        "map": map_name,
+    })
+    target = artifact.with_suffix(".snag")
+    if target.exists() or target.is_symlink():
+        raise GateIntegrityError("bootstrap snag target already exists")
+    rc, output, _lifecycle = run_verified_python(
+        snapshot,
+        verified["python_runtime"],
+        "snag-bootstrap",
+        snapshot / roles["snagrepair"]["path"],
+        [
+            "--explicit-zero",
+            "--map", map_name,
+            "--rune", str(artifact),
+            "--evidence-manifest", str(evidence),
+            "--output", str(target),
+        ],
+    )
+    if rc != 0:
+        raise CorpusError(f"snag-bootstrap gate exited {rc}")
+    if output:
+        raise CorpusError("snag-bootstrap gate emitted unexpected output")
+    if regular_file_record(artifact) != before:
+        raise GateIntegrityError("artifact changed while staging bootstrap snag")
+    try:
+        target_info = target.lstat()
+        evidence_info = evidence.lstat()
+        artifact_info = artifact.lstat()
+    except OSError as exc:
+        raise GateIntegrityError(
+            f"bootstrap snag output is unavailable: {exc}"
+        ) from exc
+    if (
+        not stat.S_ISREG(target_info.st_mode)
+        or target_info.st_nlink != 1
+        or (target_info.st_dev, target_info.st_ino) in {
+            (evidence_info.st_dev, evidence_info.st_ino),
+            (artifact_info.st_dev, artifact_info.st_ino),
+        }
+    ):
+        raise GateIntegrityError("bootstrap snag is not one independent regular file")
+    target.chmod(0o444)
+    evidence.chmod(0o444)
+    target_record = regular_file_record(target, require_unaliased=True)
+    result = {
+        "evidence": regular_file_record(evidence, require_unaliased=True),
+        "snag": target_record,
+    }
+    _validate_retained_bootstrap_snag(
+        result,
+        artifact_sha256=before["sha256"],
+        fingerprint=fingerprint,
+        map_name=map_name,
+    )
+    return result
 
 
 def run_fresh_cold_load(
@@ -2976,6 +3230,8 @@ def run_fresh_cold_load(
     staged = regular_file_record(artifact)
     if staged["sha256"] != source_before["sha256"] or staged["size"] != source_before["size"]:
         raise GateIntegrityError("fresh cold-load artifact copy mismatch")
+    snag = stage_bootstrap_snag(
+        cold_root, snapshot, map_name, artifact, fingerprint)
 
     command = [str(engine)] + [
         value.format(port=stable_port, map=map_name, config=config_name)
@@ -3065,10 +3321,24 @@ def run_fresh_cold_load(
             raise GateIntegrityError("artifact changed during fresh cold-load")
         if regular_file_record(artifact) != staged:
             raise GateIntegrityError("fresh cold-load changed its staged artifact")
+        _validate_retained_bootstrap_snag(
+            snag,
+            artifact_sha256=source_before["sha256"],
+            fingerprint=fingerprint,
+            map_name=map_name,
+        )
+        validate_cold_load_snag_attestation(
+            final_log,
+            map_name,
+            artifact_sha256=str(staged["sha256"]),
+            evidence_sha256=str(snag["evidence"]["sha256"]),
+            snag_sha256=str(snag["snag"]["sha256"]),
+        )
         return {
             "owner": owner_path,
             "log": log_path,
             "command_sha256": command_hash,
+            "snag": snag,
         }
     finally:
         if process is not None and process.poll() is None:
@@ -3398,6 +3668,14 @@ def run_one_map(
         ),
         "cold_load_log_sha256": (
             sha256_regular(cold_load["log"]) if cold_load else None
+        ),
+        "cold_load_snag_record": (
+            str(Path(cold_load["snag"]["snag"]["path"]).relative_to(run_root))
+            if cold_load else None
+        ),
+        "cold_load_snag_evidence_record": (
+            str(Path(cold_load["snag"]["evidence"]["path"]).relative_to(run_root))
+            if cold_load else None
         ),
     }
     publish_result(run_root, map_name, result, attempt)

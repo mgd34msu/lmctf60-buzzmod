@@ -934,8 +934,8 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] Current project plan, 181 authority/controller, map-list fix, telemetry
       consumers, strict readers, documentation hygiene, and the first reviewed
       repository cleanup are integrated through the completed branch pair
-      `e03188a`/`4d00932`; exact-SHA CI runs `32218254723` and `32218447096`
-      are green. This status refresh is the next documentation-only milestone.
+      `00007c8`/`fa38567`; exact-SHA CI runs `32231389111` and `32231399661`
+      are green.
 - [x] Tracked corpus list contains exactly 181 unique maps, including both
       `lmctf02` and `lmctf02c`.
 - [x] Corpus controller proves generator, dual C readers, Python reader, lint,
@@ -946,7 +946,14 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       tests cover startup, wrap, singleton, and random-branch isolation.
 - [x] `runeio.py --expected-identity REFERENCE_RUNE ARTIFACT` and
       `corpusgraph.py` reader defects repaired and adversarially regression-tested.
-- [ ] Four remaining `lmctf58` cellar controllers retained and checker-green.
+- [x] All ten `lmctf58` door controllers are retained, including the four
+      lower cellar identities; independent readers, semantic acceptance,
+      sanitizers, fresh generation, and fresh cold load are green.
+- [x] Runtime `.snag` format 2 binds the exact RUNE SHA and evidence SHA;
+      cold-load attestation, explicit 181-map bootstrap construction, strict
+      residence analysis, two-source stall attribution, and immutable final
+      corpus construction have executable source tests. Final production
+      sidecars remain gated on the accepted 181 corpus and persistent cycle.
 - [ ] Real native cyclic transitions preserve the same q2ded PID for a complete
       20-map cycle; source-level startup/wrap/random-isolation tests are green.
 - [ ] Human/bot measurement data is bound to exact module/BSP/RUNE provenance

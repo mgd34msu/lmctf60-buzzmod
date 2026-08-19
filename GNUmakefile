@@ -404,18 +404,22 @@ FIELDS_CANDIDATE_TEST_OBJS = .sg_fields_candidate_test.gnu.o \
 	.sg_fields_candidate_under_test.gnu.o \
 	.sg_caco_projection_under_test.gnu.o \
 	.sg_goal_projection_under_test.gnu.o \
-	.sg_snag_repair_under_test.gnu.o
+	.sg_snag_repair_under_test.gnu.o \
+	.sg_rune_file_sha_under_test.gnu.o
 FIELDS_CANDIDATE_TEST_DEPS = $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
 SNAG_REPAIR_TEST_BIN = sg_snag_repair_test.gnu
 SNAG_REPAIR_TEST_OBJS = .sg_snag_repair_test.gnu.o \
-	.sg_fields_candidate_under_test.gnu.o .sg_snag_repair_under_test.gnu.o
+	.sg_fields_candidate_under_test.gnu.o .sg_snag_repair_under_test.gnu.o \
+	.sg_rune_file_sha_under_test.gnu.o
 SNAG_REPAIR_TEST_DEPS = $(SNAG_REPAIR_TEST_OBJS:.o=.d)
 SNAG_REPAIR_PYTHON_TEST = tests/test_snagrepair.py
 SNAG_REPAIR_TEST_ALL_ARTIFACTS = \
 	$(foreach flavor,gnu make,sg_snag_repair_test.$(flavor) \
 	.sg_snag_repair_test.$(flavor).o .sg_snag_repair_test.$(flavor).d \
 	.sg_snag_repair_under_test.$(flavor).o \
-	.sg_snag_repair_under_test.$(flavor).d)
+	.sg_snag_repair_under_test.$(flavor).d \
+	.sg_rune_file_sha_under_test.$(flavor).o \
+	.sg_rune_file_sha_under_test.$(flavor).d)
 SPECTATOR_SOUND_TEST_BIN = sg_spectator_sound_test.gnu
 SPECTATOR_SOUND_TEST_OBJS = .sg_spectator_sound_test.gnu.o \
 	.sg_spectator_sound_net_under_test.gnu.o
@@ -1674,6 +1678,12 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_file_sha_under_test.gnu.o: slipgate/sg_rune_file.c \
+		slipgate/sg_rune_file.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_caco_projection_under_test.gnu.o: slipgate/sg_caco.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \

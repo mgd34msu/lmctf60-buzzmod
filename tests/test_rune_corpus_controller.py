@@ -44,6 +44,34 @@ def report(map_name: str, *, seeds: int = 7, links: int = 9,
     })
 
 
+def bootstrap_snag_text(
+    map_name: str, artifact_sha256: str, evidence_sha256: str
+) -> str:
+    """Return canonical-shaped bootstrap bytes for fake controller tests."""
+    return "\n".join((
+        "snag_format 2",
+        f"map {map_name}",
+        "bsp_checksum 1",
+        "entity_crc 2",
+        "physics_flags 0",
+        "gravity 800",
+        "airaccelerate 0",
+        "maxvelocity 2000",
+        "pmove_ms 25",
+        "frame_ms 100",
+        "host_physics_id 1",
+        "rune_payload_crc 3",
+        "rune_header_crc 4",
+        "rune_action_contract_crc 5",
+        "rune_mechanism_contract_crc 6",
+        "rune_num_seeds 7",
+        "rune_num_links 9",
+        f"rune_sha256 {artifact_sha256}",
+        f"evidence_sha256 {evidence_sha256}",
+        "repairs 0",
+    )) + "\n"
+
+
 class FakeGateRunner:
     def __init__(self, map_name: str, *, python_seeds: int | None = None):
         self.map_name = map_name
@@ -184,6 +212,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
         if actual_tools:
             files["tools/runelint.py"] = ("runelint", ROOT / "tools/runelint.py")
             files["tools/runeio.py"] = ("runeio", ROOT / "tools/runeio.py")
+            files["tools/snagrepair.py"] = (
+                "snagrepair", ROOT / "tools/snagrepair.py",
+            )
             files["tools/rune_contracts_generated.py"] = (
                 "contracts", ROOT / "tools/rune_contracts_generated.py",
             )
@@ -194,6 +225,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
         else:
             add("tools/runelint.py", "runelint", b"raise SystemExit(0)\n")
             add("tools/runeio.py", "runeio", b"def main(argv):\n print(" + repr(gate_report.decode()).encode() + b")\n return 0\n")
+            add(
+                "tools/snagrepair.py", "snagrepair",
+                b"def main(argv):\n"
+                b" import pathlib\n"
+                b" target=pathlib.Path(argv[argv.index('--output')+1])\n"
+                b" target.write_text('fake snag\\n',encoding='ascii')\n"
+                b" return 0\n",
+            )
             add(
                 "tools/rune_contracts_generated.py",
                 "contracts",
@@ -714,6 +753,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "python_interpreter_sha256", "python_libpython_sha256",
                 "python_runtime_manifest_sha256", "module_hashes", "action_contract_hash",
                 "mechanism_contract_hash", "linter_sha256", "reader_sha256",
+                "snagrepair_sha256",
                 "acceptor_gnu_sha256", "acceptor_make_sha256",
                 "semantic_checker_manifest_sha256", "semantic_checkers",
                 "generation_timeout_seconds",
@@ -955,6 +995,17 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         failure_line, exit_failure_line, 424241 + launch_number,
                     )
                     if launch_number == 2:
+                        artifact = Path(kwargs["cwd"]) / "game/maps/lmctf01.rune"
+                        snag = artifact.with_suffix(".snag")
+                        evidence = Path(kwargs["cwd"]).parent / "snag-bootstrap-evidence.json"
+                        kwargs["stdout"].write(
+                            (
+                                "slipgate: snag ready map=lmctf01 repairs=0 "
+                                f"rune_sha256={controller.sha256_regular(artifact)} "
+                                f"evidence_sha256={controller.sha256_regular(evidence)} "
+                                f"snag_sha256={controller.sha256_regular(snag)}\n"
+                            ).encode("ascii")
+                        )
                         kwargs["stdout"].write(
                             b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
                             b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
@@ -981,9 +1032,34 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     cold_load_timeouts.append(kwargs["timeout"])
                     return original_cold_load(*args, **kwargs)
 
+                def bootstrap_snag(_attempt, _snapshot, _map_name,
+                                   artifact, _fingerprint):
+                    evidence = _attempt / "snag-bootstrap-evidence.json"
+                    controller.atomic_write_json(evidence, {
+                        "artifact_sha256": controller.sha256_regular(artifact),
+                        "classification": "NO_ACCEPTED_OBSERVATION",
+                        "fingerprint": _fingerprint,
+                        "format": "lmctf-snag-bootstrap-v1",
+                        "map": _map_name,
+                    })
+                    target = artifact.with_suffix(".snag")
+                    target.write_text(
+                        bootstrap_snag_text(
+                            _map_name,
+                            controller.sha256_regular(artifact),
+                            controller.sha256_regular(evidence),
+                        ),
+                        encoding="ascii",
+                    )
+                    return {
+                        "evidence": controller.regular_file_record(evidence),
+                        "snag": controller.regular_file_record(target),
+                    }
+
                 with mock.patch.object(controller.subprocess, "Popen", side_effect=popen), \
                         mock.patch.object(controller, "wait_for_exec_identity", side_effect=identity_for_engine), \
                         mock.patch.object(controller, "open_pidfd", side_effect=pidfd), \
+                        mock.patch.object(controller, "stage_bootstrap_snag", side_effect=bootstrap_snag), \
                         mock.patch.object(controller, "run_fresh_cold_load", side_effect=cold_load):
                     result = controller.run_one_map(
                         run_root, snapshot, "lmctf01", 62000, "fingerprint",
@@ -1021,6 +1097,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual(4, len(pass_result["gate_log_sha256"]))
             self.assertIsNotNone(pass_result["cold_load_owner_record"])
             self.assertIsNotNone(pass_result["cold_load_log_sha256"])
+            self.assertIsNotNone(pass_result["cold_load_snag_record"])
+            self.assertIsNotNone(pass_result["cold_load_snag_evidence_record"])
             attempt = pass_root / "runs/lmctf01/attempt-0001"
             self.assertEqual(
                 attempt / "private/game/maps/lmctf01.rune",
@@ -1460,6 +1538,138 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 ready.replace("7 seeds", "8 seeds"), "lmctf01", counts
             )
 
+    def test_cold_load_bootstrap_snag_uses_frozen_tool_and_exact_artifact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            attempt = work / "attempt"
+            artifact = attempt / "private/game/maps/lmctf01.rune"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"authenticated-rune-bytes")
+            before = controller.regular_file_record(artifact)
+
+            def verified(_snapshot, _layout, label, target, arguments):
+                self.assertEqual(label, "snag-bootstrap")
+                roles = controller.verify_snapshot(snapshot)["by_role"]
+                self.assertEqual(
+                    target, snapshot / roles["snagrepair"]["path"])
+                self.assertEqual(arguments[:3], [
+                    "--explicit-zero", "--map", "lmctf01"])
+                self.assertEqual(arguments[3:5], ["--rune", str(artifact)])
+                output = Path(arguments[arguments.index("--output") + 1])
+                evidence = Path(
+                    arguments[arguments.index("--evidence-manifest") + 1])
+                output.write_text(
+                    bootstrap_snag_text(
+                        "lmctf01",
+                        controller.sha256_regular(artifact),
+                        controller.sha256_regular(evidence),
+                    ),
+                    encoding="ascii",
+                )
+                return 0, b"", {"ready": {}, "done": {}}
+
+            with mock.patch.object(
+                    controller, "run_verified_python", side_effect=verified):
+                result = controller.stage_bootstrap_snag(
+                    attempt, snapshot, "lmctf01", artifact, "f" * 64)
+            self.assertEqual(controller.regular_file_record(artifact), before)
+            self.assertEqual(result["snag"]["mode"], 0o444)
+            self.assertEqual(result["evidence"]["mode"], 0o444)
+            evidence = json.loads(
+                (attempt / "snag-bootstrap-evidence.json").read_text())
+            self.assertEqual(evidence, {
+                "artifact_sha256": before["sha256"],
+                "classification": "NO_ACCEPTED_OBSERVATION",
+                "fingerprint": "f" * 64,
+                "format": "lmctf-snag-bootstrap-v1",
+                "map": "lmctf01",
+            })
+            (attempt / "snag-bootstrap-evidence.json").chmod(0o644)
+            (attempt / "snag-bootstrap-evidence.json").write_text(
+                '{"changed":true}\n', encoding="ascii")
+            with self.assertRaisesRegex(
+                    controller.GateIntegrityError, "changed its bootstrap"):
+                controller._validate_retained_bootstrap_snag(
+                    result,
+                    artifact_sha256=before["sha256"],
+                    fingerprint="f" * 64,
+                    map_name="lmctf01",
+                )
+            self.thaw(snapshot)
+
+    def test_cold_load_bootstrap_snag_rejects_gate_and_output_drift(self):
+        scenarios = (
+            ("exit", controller.CorpusError),
+            ("stdout", controller.CorpusError),
+            ("missing", controller.GateIntegrityError),
+            ("artifact", controller.GateIntegrityError),
+            ("hardlink", controller.GateIntegrityError),
+            ("wrong-evidence", controller.CorpusError),
+        )
+        for scenario, error_type in scenarios:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary)
+                snapshot = self.make_snapshot(work)
+                attempt = work / "attempt"
+                artifact = attempt / "private/game/maps/lmctf01.rune"
+                artifact.parent.mkdir(parents=True)
+                artifact.write_bytes(b"authenticated-rune-bytes")
+
+                def verified(_snapshot, _layout, _label, _target, arguments):
+                    output = Path(arguments[arguments.index("--output") + 1])
+                    evidence = Path(
+                        arguments[arguments.index("--evidence-manifest") + 1])
+                    if scenario == "exit":
+                        return 7, b"", {"ready": {}, "done": {}}
+                    if scenario == "missing":
+                        return 0, b"", {"ready": {}, "done": {}}
+                    if scenario == "hardlink":
+                        os.link(artifact, output)
+                    else:
+                        evidence_hash = (
+                            "0" * 64 if scenario == "wrong-evidence"
+                            else controller.sha256_regular(evidence)
+                        )
+                        output.write_text(
+                            bootstrap_snag_text(
+                                "lmctf01",
+                                controller.sha256_regular(artifact),
+                                evidence_hash,
+                            ),
+                            encoding="ascii",
+                        )
+                    if scenario == "artifact":
+                        artifact.write_bytes(b"changed-rune-bytes")
+                    return (
+                        0,
+                        b"unexpected output" if scenario == "stdout" else b"",
+                        {"ready": {}, "done": {}},
+                    )
+
+                with mock.patch.object(
+                        controller, "run_verified_python", side_effect=verified):
+                    with self.assertRaises(error_type):
+                        controller.stage_bootstrap_snag(
+                            attempt, snapshot, "lmctf01", artifact, "f" * 64)
+                self.thaw(snapshot)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            attempt = work / "attempt"
+            artifact = attempt / "private/game/maps/lmctf01.rune"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"authenticated-rune-bytes")
+            artifact.with_suffix(".snag").write_bytes(b"preexisting")
+            with mock.patch.object(controller, "run_verified_python") as runner:
+                with self.assertRaisesRegex(
+                        controller.GateIntegrityError, "already exists"):
+                    controller.stage_bootstrap_snag(
+                        attempt, snapshot, "lmctf01", artifact, "f" * 64)
+            runner.assert_not_called()
+            self.thaw(snapshot)
+
     def test_contaminated_pass_is_not_resumable(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -1553,6 +1763,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "cold_load_owner_record": None,
                 "cold_load_command_sha256": None,
                 "cold_load_log_sha256": None,
+                "cold_load_snag_record": None,
+                "cold_load_snag_evidence_record": None,
             }
             result_path = controller.publish_result(run_root, "gatecase", result, attempt)
             runner = FakeGateRunner("gatecase")

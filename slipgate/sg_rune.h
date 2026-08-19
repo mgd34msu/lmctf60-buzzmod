@@ -222,6 +222,9 @@ typedef struct rune_s
 	 * a checked convenience view for existing graph consumers. Neither is a
 	 * wire image. */
 	rune_artifact_t	artifact;
+	/* SHA-256 of the exact encoded file snapshot accepted by SG_RuneFileLoad.
+	 * Generated, not-yet-installed native graphs leave this empty. */
+	char			encoded_sha256[65];
 	rune_header_t	hdr;
 	rune_seed_t		*seeds;
 	rune_link_t		*links;
