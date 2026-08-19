@@ -3462,7 +3462,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	       !bot->jump_started) ||
 	      (SG_Rune()->links[bestlink].action == RL_DROP &&
 	       !bot->drop_started)) &&
-	    !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 1500) &&
+	    !SG_RouteFailureWatchSuppressed(role,
+	        bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds ?
+	            goal_field[bot->seed] : SG_FIELD_INF,
+	        role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
+	            SG_EscortTerminal(e, SG_ChatEscortTarget(e)),
+	        duel, bot->engaged_last) &&
 	    /* 1500, not 400: a PATROLLING defender runs full speed inside a
 	     * confined orbit -- Slip circled seed 1704 at 250 u/s, goal 700,
 	     * and the 400 cutoff fed the whole patrol to the shelf (iter 44,
@@ -4001,6 +4006,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 	VectorSubtract(e->s.origin, bot->stag_org, d);
 	if (VectorLength(d) > 96.0f || !bot->nav_drove || bot->engaged_last ||
+	    duel ||
 	    /* Waiting/riding is progress for a declared mechanism even when the
 	     * body stays inside the stagnation ball.  Do not bill that intentional
 	     * hold to the graph link before its own deadline can decide it. */
@@ -4024,7 +4030,11 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		SG_Mark(&bot->stag_since);
 	}
 	else if (bestlink >= 0 &&
-	         !(role == SG_ROLE_DEFEND && goal_field[bot->seed] < 1500) &&
+	         !SG_RoleMissionHold(role,
+	             bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds ?
+	                 goal_field[bot->seed] : SG_FIELD_INF,
+	             role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
+	                 SG_EscortTerminal(e, SG_ChatEscortTarget(e))) &&
 	    /* 1500, not 400: a PATROLLING defender runs full speed inside a
 	     * confined orbit -- Slip circled seed 1704 at 250 u/s, goal 700,
 	     * and the 400 cutoff fed the whole patrol to the shelf (iter 44,

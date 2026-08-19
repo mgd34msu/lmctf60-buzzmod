@@ -1024,6 +1024,20 @@ static void TestCombatActivityResetsGenericWedgeClock(void)
 	CHECK(SG_WedgeClockReset(0.0f, false, true));
 }
 
+static void TestMissionAndCombatCannotShelveRoutes(void)
+{
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ESCORT, 1499, false, false, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ESCORT, SG_FIELD_INF, true, false, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, true, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, false, true));
+	CHECK(!SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, false, false));
+}
+
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
@@ -1038,6 +1052,7 @@ int main(void)
 	TestDeathLocationRequiresPriorBelief();
 	TestMissionHoldSurvivesGenericWedgeValve();
 	TestCombatActivityResetsGenericWedgeClock();
+	TestMissionAndCombatCannotShelveRoutes();
 	if (failures)
 		return 1;
 	puts("sg_strike_transition_test: ok");

@@ -71,4 +71,13 @@ static inline int SG_WedgeClockReset(float displacement, int duel,
 	return displacement > 96.0f || duel || engaged_last;
 }
 
+/* Route-failure clocks may judge only navigation-owned motion.  Mission holds
+ * and combat-owned frames cannot prove that the selected graph link failed. */
+static inline int SG_RouteFailureWatchSuppressed(int role, int goal_cost,
+	int ordered_escort_terminal, int duel, int engaged_last)
+{
+	return SG_RoleMissionHold(role, goal_cost, ordered_escort_terminal) ||
+	       duel || engaged_last;
+}
+
 #endif /* SG_ROLE_POLICY_H */
