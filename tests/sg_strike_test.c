@@ -1202,6 +1202,12 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(!SG_CoordinationBodyLive(1, 0, 0, 100));
 	CHECK(!SG_CoordinationBodyLive(1, 1, 1, 100));
 	CHECK(!SG_CoordinationBodyLive(1, 1, 0, 0));
+	CHECK(SG_StrikeLiveEnemyRosterMember(1, 1, 1, 0, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 1, 1, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 1, 0, 0));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 0, 0, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(2, 1, 1, 0, 100));
+	CHECK(!SG_StrikeLiveEnemyRosterMember(1, 1, 2, 0, 100));
 
 	CHECK(SG_RoleLiveRank(eligible, 6, 1, &count) == 0);
 	CHECK(count == 3);

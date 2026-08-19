@@ -188,6 +188,19 @@ int SG_StrikeCombatPursuitActive(int ordinary_pursuit, int strike_active,
  * organic-attacker fallback; same-duty ties retain deterministic client order. */
 int SG_StrikeThresholdMateOwnsHold(sg_strike_duty_t self_duty,
 	int self_entity, sg_strike_duty_t mate_duty, int mate_entity);
+/* Strict room inference counts bodies that can presently defend, not occupied
+ * scoreboard slots.  Death is public and retires the sighting row immediately;
+ * counting the corpse only on the roster side manufactures a defender. */
+static inline int SG_StrikeLiveEnemyRosterMember(int inuse, int has_client,
+	int enemy_team_match, int dead, int health)
+{
+	if ((inuse != 0 && inuse != 1) ||
+	    (has_client != 0 && has_client != 1) ||
+	    (enemy_team_match != 0 && enemy_team_match != 1) ||
+	    (dead != 0 && dead != 1))
+		return 0;
+	return inuse && has_client && enemy_team_match && !dead && health > 0;
+}
 /* Rearguard duty belongs to enemy-room pressure and to the explicit escort,
  * never to recovery or the carrier itself. */
 int SG_StrikeDutyRearguard(sg_strike_duty_t duty);

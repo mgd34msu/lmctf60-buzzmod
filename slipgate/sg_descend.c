@@ -2787,13 +2787,16 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			if (sg_cv.strictgrab->value)
 			{
 				int s8, esz = 0, accounted = 0, i8;
+				int enemy_team = SG_EnemyTeam(team);
 
 				for (i8 = 0; i8 < game.maxclients; i8++)
 				{
 					edict_t *pe = g_edicts + 1 + i8;
 
-					if (pe->inuse && pe->client &&
-					    pe->client->ctf.teamnum == SG_EnemyTeam(team))
+					if (SG_StrikeLiveEnemyRosterMember(
+					    pe->inuse != false, pe->client != NULL,
+					    pe->client && pe->client->ctf.teamnum == enemy_team,
+					    pe->deadflag == DEAD_DEAD, pe->health))
 						esz++;
 				}
 				for (s8 = 0; s8 < SG_MAX_ENEMY_TRACK; s8++)

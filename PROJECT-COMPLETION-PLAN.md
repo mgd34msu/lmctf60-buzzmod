@@ -1564,6 +1564,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       identity breaks only equal-duty ties, and a solo attacker still fights
       first; slot order can no longer assign the screen job to the bot the
       coordinator selected to take the flag.
+      Strict defended-room inference now counts only live enemy roster bodies.
+      A public enemy death retires both sides of the inference instead of
+      disappearing from the sighting ledger while its corpse remains a phantom
+      unaccounted defender that stalls the grab.
       Default immediate-return suppression now counts only distinct neighbors
       that hold or reduce the current route cost. A merely finite uphill edge
       can no longer make the controller tax its sole non-worsening reverse edge

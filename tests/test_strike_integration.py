@@ -507,6 +507,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("SG_StrikeDutySnapshot(bot)", descend)
         self.assertIn("SG_StrikeDutySnapshot(mb5)", descend)
         self.assertIn("SG_CombatWouldEngage(mb5->ent)", descend)
+        self.assertIn("SG_StrikeLiveEnemyRosterMember(\n", descend)
+        self.assertIn("pe->deadflag == DEAD_DEAD", descend)
         self.assertIn("tc.rearguard = SG_StrikeRearguardActive(", arach)
         self.assertIn("tc.escort_mission = SG_StrikeEscortActive(", arach)
         self.assertIn("tc->combat_pursuit ||", descend)
