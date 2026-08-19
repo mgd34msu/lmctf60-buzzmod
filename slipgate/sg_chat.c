@@ -59,6 +59,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_chat_random.h"
+#include "slipgate/sg_callout_policy.h"
 
 /* ------------------------------------------------------------- constants */
 
@@ -598,6 +599,7 @@ typedef struct
 {
 	qboolean	pending;
 	int			speaker;        /* client number */
+	unsigned long	speaker_ctfid; /* exact bot generation that queued it */
 	float		due;
 	char		line[SG_CHAT_LINE];
 
@@ -1080,6 +1082,8 @@ static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
 
 	if (!speaker || !speaker->client || !(speaker->flags & FL_BOT))
 		return false;
+	if (speaker->client->ctf.ctfid == 0)
+		return false;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return false;
 	if (topic < 0 || topic >= SG_CHAT_TOPICS)
@@ -1093,6 +1097,7 @@ static qboolean Chat_QueueArm(edict_t *speaker, int team, int topic,
 
 	Chat_Copy(q->line, line, sizeof(q->line));
 	q->speaker = Chat_ClientNum(speaker);
+	q->speaker_ctfid = speaker->client->ctf.ctfid;
 	q->due = level.time + SG_CHAT_DELAY_MIN +
 	         Chat_RandomUnit(speaker) *
 	         (SG_CHAT_DELAY_MAX - SG_CHAT_DELAY_MIN);
@@ -1141,9 +1146,12 @@ static void Chat_Flush(void)
 			if (held.speaker >= 0 && held.speaker < game.maxclients)
 			{
 				sp = g_edicts + 1 + held.speaker;
-				/* not "he switched sides mid-thought" -- then the line is his
-				 * old team's news said by somebody who is no longer on it */
-				if (!sp->client || sp->client->ctf.teamnum == SG_TeamFromIdx(t))
+				/* The queue belongs to one exact bot generation. A recycled slot
+				 * or a side switch cannot inherit and publish the old body's news. */
+				if (Chat_OurBot(sp) && Chat_Playing(sp) &&
+				    SG_CalloutSpeakerCurrent(held.speaker_ctfid,
+				        sp->client->ctf.ctfid) &&
+				    sp->client->ctf.teamnum == SG_TeamFromIdx(t))
 					said = SG_ChatSayTeam(sp, held.line, k);
 			}
 
@@ -1729,6 +1737,7 @@ typedef struct
 {
 	qboolean	pending;
 	int			speaker;                /* client number */
+	unsigned long	speaker_ctfid;         /* exact bot generation */
 	float		due;
 	char		sound[SG_RADIO_SOUND];
 } sg_radioq_t;
@@ -1833,6 +1842,7 @@ static void Chat_RadioQueue(edict_t *speaker, int team, const char *sound)
 		return;                     /* one hand on the key at a time */
 
 	q->speaker = cl;
+	q->speaker_ctfid = speaker->client->ctf.ctfid;
 	q->due = level.time + SG_RADIO_LAG_MIN +
 	         Chat_RandomUnit(speaker) *
 	         (SG_RADIO_LAG_MAX - SG_RADIO_LAG_MIN);
@@ -1858,6 +1868,9 @@ static void Chat_RadioSay(int t)
 	sp = g_edicts + 1 + q->speaker;
 	if (!Chat_OurBot(sp) || !Chat_Playing(sp))
 		return;                     /* died or left while the hand was moving */
+	if (!SG_CalloutSpeakerCurrent(q->speaker_ctfid,
+	    sp->client->ctf.ctfid))
+		return;
 	if (sp->client->ctf.teamnum != SG_TeamFromIdx(t))
 		return;                     /* switched sides: not his team's news */
 	if (!Chat_RadioSpamClear(sp))

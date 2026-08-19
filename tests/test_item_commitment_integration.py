@@ -217,6 +217,39 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         )
         self.assertIn("caco_callout[t][k].speaker == ci", reset)
 
+        chat = self.text("slipgate/sg_chat.c")
+        queue = chat[
+            chat.index("static qboolean Chat_QueueArm("):
+            chat.index("static void Chat_Queue(")
+        ]
+        flush = chat[
+            chat.index("static void Chat_Flush(void)"):
+            chat.index("/* --------------------------------------------------------- place naming")
+        ]
+        radio_queue = chat[
+            chat.index("static void Chat_RadioQueue("):
+            chat.index("static void Chat_RadioSay(")
+        ]
+        radio_say = chat[
+            chat.index("static void Chat_RadioSay("):
+            chat.index("/*\n * The take call", chat.index(
+                "static void Chat_RadioSay("))
+        ]
+        self.assertIn(
+            "q->speaker_ctfid = speaker->client->ctf.ctfid;", queue
+        )
+        self.assertIn("Chat_OurBot(sp) && Chat_Playing(sp)", flush)
+        self.assertIn(
+            "SG_CalloutSpeakerCurrent(held.speaker_ctfid,", flush
+        )
+        self.assertNotIn("if (!sp->client ||", flush)
+        self.assertIn(
+            "q->speaker_ctfid = speaker->client->ctf.ctfid;", radio_queue
+        )
+        self.assertIn(
+            "SG_CalloutSpeakerCurrent(q->speaker_ctfid,", radio_say
+        )
+
     def test_chat_texture_does_not_consume_gameplay_randomness(self):
         source = self.text("slipgate/sg_chat.c")
         policy = self.text("slipgate/sg_chat_random.h")

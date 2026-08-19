@@ -1494,6 +1494,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       queued them, revalidate it at speech time, and are canceled by the
       client reset boundary. A replacement bot or respawned body cannot speak
       a predecessor's pending team intelligence merely by occupying its slot.
+      Delayed item/team-chat and radio queues use the same exact speaker-life
+      authority. Their flush path now requires a live owned SG bot rather than
+      accepting the prior malformed client predicate, so neither text nor
+      voice can be published by a recycled or externally replaced slot.
       Spread hitscan fire now checks its complete physical pellet envelope
       through the current engagement range against every live same-team client
       before committing the trigger. The check includes machinegun yaw jitter,
