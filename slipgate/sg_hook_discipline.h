@@ -14,7 +14,7 @@
 
 typedef enum sg_hook_ride_worth_s
 {
-	/* A missing field is not authority to suppress a proved RUNE edge. */
+	/* A missing live route field cannot authorize an irreversible fire. */
 	SG_HOOK_RIDE_UNASSESSED = 0,
 	SG_HOOK_RIDE_REJECT,
 	SG_HOOK_RIDE_ALLOW
@@ -31,6 +31,15 @@ static inline sg_hook_ride_worth_t SG_HookExpectedRideWorth(int from_goal,
 		return SG_HOOK_RIDE_UNASSESSED;
 	return from_goal > to_goal + SG_HOOK_DISCIPLINE_SERVED_FIELD_MS
 	    ? SG_HOOK_RIDE_ALLOW : SG_HOOK_RIDE_REJECT;
+}
+
+/* The stored RUNE proof establishes physical feasibility.  Launch authority
+ * is narrower: the current route field must positively establish useful
+ * progress.  An unavailable endpoint is not permission to spend a rope on a
+ * stale objective. */
+static inline int SG_HookRideLaunchAllowed(sg_hook_ride_worth_t worth)
+{
+	return worth == SG_HOOK_RIDE_ALLOW;
 }
 
 /* Return the stored streak after one graph-only failure.  A ban reports its

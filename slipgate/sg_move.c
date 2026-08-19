@@ -4379,10 +4379,12 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					                  * 8.0f) * 0.125f;
 					proof_source[2] = (short)(SG_Rune()->seeds[l->from].origin[2]
 					                  * 8.0f) * 0.125f;
-					if (worth == SG_HOOK_RIDE_REJECT)
+					if (!SG_HookRideLaunchAllowed(worth))
 					{
 						Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,
-						    "value-skip", route_field[l->from], route_field[l->to]);
+						    worth == SG_HOOK_RIDE_UNASSESSED
+						        ? "value-unassessed" : "value-skip",
+						    route_field[l->from], route_field[l->to]);
 					}
 					else if (SG_HookControlDecode(proof_source, 22.0f, RIGHT_HANDED,
 					                         l->anchor, bot->hook_view,
@@ -5775,8 +5777,9 @@ static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
 			    reason ? reason : "retire", link_index, shelf_seconds,
 			    bot->hookfail_streak, ban_seconds);
 		else
-			sg_host.dprint("HOOKDISC %s value-skip link=%d from=%d to=%d gain=%d min=%d shelf=%.0f\n",
-			    e && e->client ? e->client->pers.netname : "?", link_index,
+			sg_host.dprint("HOOKDISC %s %s link=%d from=%d to=%d gain=%d min=%d shelf=%.0f\n",
+			    e && e->client ? e->client->pers.netname : "?",
+			    reason ? reason : "value-skip", link_index,
 			    from_goal, to_goal, gain, SG_HOOK_DISCIPLINE_SERVED_FIELD_MS,
 			    shelf_seconds);
 	}
@@ -9862,7 +9865,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * refreshed. Recheck the exact current link/field immediately
 				 * before its irreversible proof/fire boundary: a formerly served
 				 * ride must not launch after its current gain falls to the shelf. */
-				if (!goal_field || !rune || !rune->links || link_index < 0 ||
+				if (!route_field || !rune || !rune->links || link_index < 0 ||
 				    link_index >= rune->hdr.num_links ||
 				    (hook_link = &rune->links[link_index])->action != RL_HOOK ||
 				    hook_link->from < 0 || hook_link->from >= rune->hdr.num_seeds ||
@@ -9873,10 +9876,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 				worth = SG_HookExpectedRideWorth(route_field[hook_link->from],
 				    route_field[hook_link->to]);
-				if (worth == SG_HOOK_RIDE_REJECT)
+				if (!SG_HookRideLaunchAllowed(worth))
 				{
 					Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,
-					    "value-fire-skip", route_field[hook_link->from],
+					    worth == SG_HOOK_RIDE_UNASSESSED
+					        ? "value-fire-unassessed" : "value-fire-skip",
+					    route_field[hook_link->from],
 					    route_field[hook_link->to]);
 					goto hook_wait;
 				}

@@ -210,7 +210,8 @@ assert source_reject < source_release < source_abort
 worth = hook_stage.index("SG_HookExpectedRideWorth")
 decode = hook_stage.index("SG_HookControlDecode")
 assert worth < decode
-assert "worth == SG_HOOK_RIDE_REJECT" in hook_stage
+assert "!SG_HookRideLaunchAllowed(worth)" in hook_stage
+assert '"value-unassessed"' in hook_stage
 assert '"value-skip"' in hook_stage
 assert 'Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,' in hook_stage
 assert '"decode-retire"' in hook_stage
@@ -254,7 +255,9 @@ assert "route_field[hook_link->from]" in fire
 assert "route_field[hook_link->to]" in fire
 assert "goal_field[hook_link->from]" not in fire
 assert "goal_field[hook_link->to]" not in fire
-assert "worth == SG_HOOK_RIDE_REJECT" in fire
+assert "!SG_HookRideLaunchAllowed(worth)" in fire
+assert '"value-fire-unassessed"' in fire
+assert "if (!route_field ||" in fire
 assert 'Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
 assert "goto hook_wait;" in fire[fire_retire:fire_proof]
 assert "Hook_LiveBeginAfterFire" in fire

@@ -448,6 +448,8 @@ Acceptance:
 Required work:
 
 - retain the existing worthwhile-ride checks at both staging and fire;
+- require positive finite progress in the current route field at both checks;
+  an unreachable endpoint is not launch authority for a stale proved edge;
 - reduce low-value fire/release cadence without suppressing useful long rides;
 - drive the real production controller through the aim-wedge timeout;
 - prove exact failed-link shelving, failure-streak and ban updates, later
@@ -1206,7 +1208,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       partner admission uses that same pre-frame effective-pressure roster.
       Wedge and route-failure watchdogs exempt only the effective escort
       mission, so they neither kill its carrier screen nor preserve a stale
-      organic escort exemption under another duty.
+      organic escort exemption under another duty. Graph-hook staging and the
+      irreversible fire boundary now require positively assessed progress in
+      the live route field; an unreachable endpoint retires the stale ride
+      instead of treating missing route authority as permission to fire.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
