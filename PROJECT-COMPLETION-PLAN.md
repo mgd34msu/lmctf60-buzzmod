@@ -918,8 +918,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] Shallow-water DIRECT door law committed and green.
 - [x] 181-map/top-20 scope recorded on `slipgate`.
 - [x] Green milestone merged into `main` at `815e0b6`.
-- [ ] This corrected whole-project plan and dependency graph reviewed,
-      committed in the repository, pushed, merged to `main`, and CI-green.
+- [x] Corrected whole-project plan and dependency graph committed as
+      `a337255`, merged to `main` as `ae8f4bb`, and all eight non-publish jobs
+      green in exact-SHA run `32213552503`.
 - [ ] Tracked corpus list contains exactly 181 unique maps, including both
       `lmctf02` and `lmctf02c`.
 - [ ] Corpus controller proves generator, dual C readers, Python reader, lint,
