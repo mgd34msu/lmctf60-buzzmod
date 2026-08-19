@@ -11,6 +11,7 @@
 #include "slipgate/sg_bot_ping.h"
 #include "slipgate/sg_escort_dose.h"
 #include "slipgate/sg_ribbon_random.h"
+#include "slipgate/sg_lead_random.h"
 
 sg_host_t sg_host;
 
@@ -141,6 +142,25 @@ static void TestRibbonRandomness(void)
 	interval = SG_RibbonRandomInterval(state);
 	CHECK(interval >= 1.0f && interval < 2.0f);
 	CHECK(SG_RibbonRandomNext(state) != state);
+}
+
+static void TestLeadRandomness(void)
+{
+	uint32_t state;
+	int expected_random;
+	float unit;
+
+	srand(1193);
+	expected_random = rand();
+	srand(1193);
+	state = SG_LeadRandomInitial(UINT64_C(0x123456789abcdef0), 7);
+	CHECK(state != 0);
+	CHECK(state == SG_LeadRandomInitial(
+	      UINT64_C(0x123456789abcdef0), 7));
+	CHECK(rand() == expected_random);
+	unit = SG_LeadRandomUnit(state);
+	CHECK(unit >= 0.0f && unit < 1.0f);
+	CHECK(SG_LeadRandomNext(state) != state);
 }
 
 static void TestValidAndFloatPrecision(void)
@@ -448,6 +468,7 @@ int main(void)
 	TestBotPingDoesNotOwnGameplayRandomness();
 	TestEscortDose();
 	TestRibbonRandomness();
+	TestLeadRandomness();
 
 	if (failures)
 	{

@@ -230,6 +230,9 @@ Aim tremor, aim-texture wander, projectile lead error, tap variance, and
 trigger-window jitter now advance a private per-client combat sequence. Chat,
 movement, and another fighter's shot cadence cannot change a bot's next aim or
 trigger decision.
+Early powerup timing jitter now advances a separate per-bot sequence. Another
+bot's route, chat, or fight cannot change when this bot first becomes eligible
+to leave an ordinary mission for an admitted powerup errand.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the

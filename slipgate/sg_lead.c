@@ -14,6 +14,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_lead_random.h"
 
 /* -------------------------------------------------- the early-return errand
  *
@@ -375,7 +376,9 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 	/* the cvar is a DOSE: 1 = the shipped earliness; higher arrives
 	 * earlier (a persona-scaled multiplier on the whole window). The
 	 * gate stays >0 -- see Lead_On. */
-	lead = (SG_LEAD_BASE + camp * SG_LEAD_CAMP + random() * SG_LEAD_JITTER)
+	bot->lead_random = SG_LeadRandomNext(bot->lead_random);
+	lead = (SG_LEAD_BASE + camp * SG_LEAD_CAMP +
+	        SG_LeadRandomUnit(bot->lead_random) * SG_LEAD_JITTER)
 	     * sg_cv.itemlead->value;
 
 	for (i = 0; i < sg_caco_num_items; i++)

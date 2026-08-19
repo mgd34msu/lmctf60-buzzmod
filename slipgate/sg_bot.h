@@ -371,6 +371,7 @@ typedef struct sg_bot_s
 	int			lead_state;     /* waiting short of pad, then spawned pickup */
 	float		lead_seen_up_at;/* sight watermark when the errand committed */
 	float		lead_inferred_until; /* bounded clock-only spawn pursuit */
+	uint32_t	lead_random;    /* private early-item timing sequence */
 	int			patrol_seed;    /* current patrol leg target, -1 = holding */
 	float		patrol_until;   /* when the next leg may start */
 	uint32_t	patrol_random;  /* private route/dwell sequence; never global RNG */
