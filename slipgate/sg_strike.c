@@ -161,6 +161,8 @@ static int Strike_FrameValid(const sg_strike_frame_t *frame)
 
 	if (!frame || !isfinite(frame->now) || frame->now < 0.0f ||
 	    (frame->events & ~SG_STRIKE_EVENT_MASK) != 0u ||
+	    (frame->enemy_flag_carried != 0 &&
+	     frame->enemy_flag_carried != 1) ||
 	    (frame->carrier_slot != -1 && !Strike_SlotValid(frame->carrier_slot)))
 		return 0;
 	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
@@ -196,7 +198,8 @@ static int Strike_InputViable(const sg_strike_frame_t *frame, int slot)
 		return 0;
 	return input->enemy_flag_goal_ms >= 0 ||
 	    (!frame->own_flag_home && input->recover_goal_ms >= 0) ||
-	    (frame->carrier_slot >= 0 && input->carrier_goal_ms >= 0) ||
+	    ((frame->enemy_flag_carried || frame->carrier_slot >= 0) &&
+	     input->carrier_goal_ms >= 0) ||
 	    input->direct_flag_touch || input->carrying ||
 	    slot == frame->carrier_slot;
 }
@@ -220,7 +223,8 @@ static int Strike_GoalForSelection(const sg_strike_frame_t *frame,
 	if (!frame->own_flag_home && input->recover_goal_ms >= 0 &&
 	    (goal < 0 || input->recover_goal_ms < goal))
 		goal = input->recover_goal_ms;
-	if (frame->carrier_slot >= 0 && input->carrier_goal_ms >= 0 &&
+	if ((frame->enemy_flag_carried || frame->carrier_slot >= 0) &&
+	    input->carrier_goal_ms >= 0 &&
 	    (goal < 0 || input->carrier_goal_ms < goal))
 		goal = input->carrier_goal_ms;
 	return goal;
@@ -372,7 +376,7 @@ static void Strike_ReconcileMembers(sg_strike_team_t *team,
 		}
 	}
 
-	if (frame->carrier_slot >= 0)
+	if (frame->enemy_flag_carried || frame->carrier_slot >= 0)
 	{
 		int have_escort = 0;
 		int recovery_count = 0;
@@ -797,6 +801,7 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 	sg_strike_duty_t old[SG_STRIKE_MAX_SLOTS];
 	uint32_t available = team->member_mask;
 	int carrier = frame->carrier_slot;
+	int carrier_live;
 	int clear = -1;
 	int escort = -1;
 	int recover = -1;
@@ -808,11 +813,12 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 	if (!Strike_SlotValid(carrier) || !frame->slot[carrier].present ||
 	    !frame->slot[carrier].alive || !frame->slot[carrier].carrying)
 		carrier = -1;
+	carrier_live = carrier >= 0 || frame->enemy_flag_carried;
 	if (entering)
 	{
 		team->phase = SG_STRIKE_EGRESS;
 		team->phase_since = frame->now;
-		if (carrier >= 0)
+		if (carrier_live)
 			team->clear_until = frame->now + SG_STRIKE_CLEAR_SECONDS;
 	}
 	team->carrier_slot = carrier;
@@ -829,7 +835,7 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 		available &= ~Strike_Bit(carrier);
 	}
 
-	if (carrier >= 0)
+	if (carrier_live)
 	{
 		/* In a standoff the carrier cannot score until our flag returns, so
 		 * recovery owns the first scarce body.  Normal egress keeps the original
@@ -954,7 +960,7 @@ int SG_StrikeStep(sg_strike_team_t *team, const sg_strike_frame_t *frame)
 
 	entering_egress = next.phase != SG_STRIKE_EGRESS;
 	if ((frame->events & SG_STRIKE_EVENT_PICKUP) != 0u ||
-	    frame->carrier_slot >= 0)
+	    frame->carrier_slot >= 0 || frame->enemy_flag_carried)
 	{
 		Strike_AssignEgress(&next, frame, entering_egress);
 		*team = next;

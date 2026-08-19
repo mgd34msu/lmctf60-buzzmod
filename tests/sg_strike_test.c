@@ -754,6 +754,48 @@ static void TestExternalCarrierDoesNotExpandRoster(void)
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
 }
 
+static void TestHumanCarrierReceivesBotEscort(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(660.0f);
+	uint32_t roster;
+	int slot;
+
+	for (slot = 0; slot < 4; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(600 + slot), 2,
+		    1000 + slot * 1000);
+		frame.slot[slot].carrier_goal_ms = 800 - slot * 100;
+	}
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	roster = Bit(0) | Bit(1) | Bit(2) | Bit(3);
+	CHECK(team.member_mask == roster);
+
+	/* The live flag owner is a human, so no SG slot may be labeled CARRY.
+	 * The authoritative flag state still requires one bot screen and the
+	 * ordinary short rearguard around that teammate. */
+	frame.now = 660.1f;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.enemy_flag_home = 0;
+	frame.enemy_flag_carried = 1;
+	frame.carrier_slot = -1;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_EGRESS);
+	CHECK(team.member_mask == roster);
+	CHECK(team.carrier_slot == -1);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CARRY) == 0);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 1);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
+
+	frame.now = 666.0f;
+	frame.events = SG_STRIKE_EVENT_NONE;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 3);
+}
+
 static void TestCarrierStandoffKeepsRecovery(void)
 {
 	sg_strike_team_t team;
@@ -1036,6 +1078,10 @@ static void TestInvalidInputDoesNotMutate(void)
 	frame.now = NAN;
 	CHECK(!SG_StrikeStep(&team, &frame));
 	CHECK(memcmp(&team, &before, sizeof(team)) == 0);
+	frame.now = 801.0f;
+	frame.enemy_flag_carried = 2;
+	CHECK(!SG_StrikeStep(&team, &frame));
+	CHECK(memcmp(&team, &before, sizeof(team)) == 0);
 }
 
 static void TestHomeFlagApproachPricing(void)
@@ -1235,6 +1281,7 @@ int main(void)
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();
+	TestHumanCarrierReceivesBotEscort();
 	TestCarrierStandoffKeepsRecovery();
 	TestEgressDoesNotPressAnUnreachableMember();
 	TestWeaponRouteRetirementVerdicts();

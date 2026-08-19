@@ -110,6 +110,7 @@ typedef struct sg_strike_frame_s
 	int own_flag_home;
 	int enemy_flag_home;
 	int enemy_flag_dropped;
+	int enemy_flag_carried;
 	int recent_enemy_room_death;
 	unsigned events;
 	int carrier_slot;

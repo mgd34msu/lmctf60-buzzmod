@@ -89,6 +89,7 @@ int main(void)
 	frames[0] = Frame(10.1f);
 	frames[0].own_flag_home = 1;
 	frames[0].enemy_flag_home = 0;
+	frames[0].enemy_flag_carried = 1;
 	frames[0].carrier_slot = 0;
 	AddAttacker(&frames[0], 0, 101u, 2, 900);
 	frames[0].slot[0].carrying = 1;
@@ -110,6 +111,7 @@ int main(void)
 	frames[0] = Frame(10.2f);
 	frames[0].enemy_flag_home = 0;
 	frames[0].enemy_flag_dropped = 1;
+	frames[0].enemy_flag_carried = 0;
 	frames[0].carrier_slot = -1;
 	AddAttacker(&frames[0], 0, 101u, 2, 900);
 	AddAttacker(&frames[0], 1, 102u, 2, 1200);
@@ -132,6 +134,7 @@ int main(void)
 	CHECK(red->member_mask == (Bit(0) | Bit(1) | Bit(2) | Bit(3)));
 	frames[0].now = 20.1f;
 	frames[0].enemy_flag_home = 0;
+	frames[0].enemy_flag_carried = 1;
 	frames[0].carrier_slot = 5;
 	frames[0].slot[5].carrying = 1;
 	CHECK(SG_StrikeAdapterBeginFrame(&carrier_adapter, frames));
@@ -142,6 +145,32 @@ int main(void)
 	CHECK(red->duty[5] == SG_STRIKE_DUTY_CARRY);
 	CHECK(red->duty[1] == SG_STRIKE_DUTY_CLEAR);
 	CHECK(red->duty[0] == SG_STRIKE_DUTY_ESCORT);
+
+	/* A human flag owner has no SG carrier slot.  The adapter still publishes
+	 * the pickup edge and the reducer assigns one bot escort/rearguard. */
+	SG_StrikeAdapterReset(&carrier_adapter);
+	frames[0] = Frame(30.0f);
+	frames[1] = Frame(30.0f);
+	for (int slot = 0; slot < 4; slot++)
+	{
+		AddAttacker(&frames[0], slot, (uint32_t)(400 + slot), 2,
+		    1000 + slot * 1000);
+		frames[0].slot[slot].carrier_goal_ms = 400 + slot * 100;
+	}
+	CHECK(SG_StrikeAdapterBeginFrame(&carrier_adapter, frames));
+	frames[0].now = 30.1f;
+	frames[0].enemy_flag_home = 0;
+	frames[0].enemy_flag_carried = 1;
+	frames[0].carrier_slot = -1;
+	CHECK(SG_StrikeAdapterBeginFrame(&carrier_adapter, frames));
+	red = SG_StrikeAdapterTeam(&carrier_adapter, 0);
+	published = SG_StrikeAdapterFrame(&carrier_adapter, 0);
+	CHECK(red->phase == SG_STRIKE_EGRESS);
+	CHECK(published &&
+	    (published->events & SG_STRIKE_EVENT_PICKUP) != 0u);
+	CHECK(red->carrier_slot == -1);
+	CHECK(red->duty[0] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(red->duty[1] == SG_STRIKE_DUTY_CLEAR);
 
 	SG_StrikeAdapterForgetSlot(&adapter, 1);
 	red = SG_StrikeAdapterTeam(&adapter, 0);

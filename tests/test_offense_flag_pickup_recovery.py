@@ -132,6 +132,21 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("expected = i == 0 ? redflag : blueflag", aging)
         self.assertEqual(aging.count("ClientHasFlag(p) == expected"), 2)
 
+    def test_strike_frame_distinguishes_human_carrier_from_no_carrier(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        prepare = between(arach, "static void StrikePrepareFrame", "void SG_StrikeSlotReset")
+        self.assertIn("enemy_flag_carried = enemy_flag && enemy_flag->inuse", prepare)
+        self.assertIn("ClientHasFlag(enemy_flag->owner) == enemy_flag", prepare)
+        adapter = source("slipgate/sg_strike_adapter.c")
+        self.assertIn(
+            "current->enemy_flag_carried && !previous->enemy_flag_carried",
+            adapter,
+        )
+        self.assertIn(
+            "previous->enemy_flag_carried && !current->enemy_flag_carried",
+            adapter,
+        )
+
     def test_non_escort_attackers_hold_enemy_base_during_our_carry(self) -> None:
         goal = source("slipgate/sg_goal.c")
         objective = between(goal, "void Think_Objective", "THE RUNE COURIER")

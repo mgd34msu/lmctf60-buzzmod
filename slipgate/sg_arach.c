@@ -2120,6 +2120,11 @@ static void StrikePrepareFrame(void)
 		    !enemy_flag->owner && ctf_flagathome(enemy_flag);
 		frames[team_index].enemy_flag_dropped = enemy_flag && enemy_flag->inuse &&
 		    !enemy_flag->owner && !frames[team_index].enemy_flag_home;
+		frames[team_index].enemy_flag_carried = enemy_flag && enemy_flag->inuse &&
+		    enemy_flag->owner && enemy_flag->owner->inuse &&
+		    enemy_flag->owner->client &&
+		    enemy_flag->owner->client->ctf.teamnum == team &&
+		    ClientHasFlag(enemy_flag->owner) == enemy_flag;
 		frames[team_index].carrier_slot =
 		    StrikeCarrierSlot(team, enemy_flag);
 		frames[team_index].recent_enemy_room_death =

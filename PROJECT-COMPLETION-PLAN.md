@@ -333,6 +333,10 @@ The shared carrier-belief aging pass now revalidates the holder's team and the
 exact flag entity named by each row. A recycled slot or a player carrying the
 other objective cannot preserve obsolete escort, intercept, projection, or
 strike authority merely by possessing some flag.
+The strike frame now represents a live human flag carrier independently of its
+SG-only carrier slot. The stable bot roster assigns a real escort and bounded
+rearguard around that teammate without inventing a bot CARRY duty or reverting
+every available bot to enemy-stand pressure.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1346,6 +1350,8 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       flag belief row.
       Shared carrier rows survive aging only while the current holder remains
       on the row's expected team and possesses that row's exact flag entity.
+      A human teammate carrying the enemy flag receives the same bot escort and
+      rearguard allocation as an SG carrier without occupying an SG bot slot.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.

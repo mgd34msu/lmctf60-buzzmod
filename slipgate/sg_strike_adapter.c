@@ -20,9 +20,9 @@ static unsigned StrikeAdapterEvents(const sg_strike_frame_t *previous,
 
 	if (!previous || !current)
 		return events;
-	if (current->carrier_slot >= 0 && previous->carrier_slot < 0)
+	if (current->enemy_flag_carried && !previous->enemy_flag_carried)
 		events |= SG_STRIKE_EVENT_PICKUP;
-	if (previous->carrier_slot >= 0 && current->carrier_slot < 0)
+	if (previous->enemy_flag_carried && !current->enemy_flag_carried)
 	{
 		if (current->enemy_flag_dropped || !current->enemy_flag_home)
 			events |= SG_STRIKE_EVENT_CARRIER_LOSS;
