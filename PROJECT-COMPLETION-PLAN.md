@@ -243,6 +243,9 @@ aim, or movement line through shared RNG state.
 Team-belief callout delays now advance a private team/topic sequence. Cosmetic
 banter volume cannot change when earned flag or item information is published
 to teammates and downstream item timing.
+The struck `sg_exitasym=0` carrier experiment is now inert even at the grab
+edge; it no longer consumes a hidden global random draw while remaining
+behaviorally disabled.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the

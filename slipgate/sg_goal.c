@@ -437,8 +437,10 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 		 * roll this carry's coin (sg_exitasym, default 0 = never) */
 		bot->exitasym_n = (bot->inlinks_n < 16) ? bot->inlinks_n : 16;
 		memcpy(bot->exitasym_set, bot->inlinks, sizeof(bot->exitasym_set));
-		bot->exitasym_armed = (random() * 100.0f <
-		                       sg_cv.exitasym->value);
+		bot->exitasym_armed = false;
+		if (sg_cv.exitasym->value > 0.0f)
+			bot->exitasym_armed = (random() * 100.0f <
+			                           sg_cv.exitasym->value);
 
 		/*
 		 * HUMAN ESCAPE PRIORS (sg_escapeprior, enhancement 6). The

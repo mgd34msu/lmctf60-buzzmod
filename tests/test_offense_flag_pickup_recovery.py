@@ -122,6 +122,17 @@ def armed_target_origin(
 
 
 class OffenseFlagPickupRecoveryTest(unittest.TestCase):
+    def test_disabled_exit_asymmetry_does_not_draw_randomness(self) -> None:
+        goal = source("slipgate/sg_goal.c")
+        carry = between(goal, "if (carrying && !bot->was_carrying)",
+                        "else if (!carrying && bot->was_carrying)")
+
+        disabled = carry.index("bot->exitasym_armed = false;")
+        gate = carry.index("if (sg_cv.exitasym->value > 0.0f)", disabled)
+        draw = carry.index("random() * 100.0f", gate)
+        self.assertLess(disabled, gate)
+        self.assertLess(gate, draw)
+
     def test_117_unit_attacker_runs_through_live_flag_not_home_seed(self) -> None:
         move = source("slipgate/sg_move.c")
         helper = between(
