@@ -17,6 +17,26 @@
     "recording_policy_literal": "serverrecord before roster joins through removal after the full-roster allowance; evaluate the exact server-time crop",
     "source_patch_rule": "SHA-256 of exact git diff --binary --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD -- bytes; reject every untracked nonignored path"
   },
+  "source_authority": {
+    "matched_parent_rule": "baseline and candidate use the same declared clean parent commit; baseline patch is empty and candidate patch is nonempty",
+    "baseline_source_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "policy_probe_path": "tests/test_offense_flag_pickup_recovery.py",
+    "policy_probe_sha256": "325865861fd9aca5f75a13c5c626cad9c9706e70ae335bc11f8e13dbe75d94f8",
+    "build_recipe": "gnu-make-stage-a-v2",
+    "build_year": "2026",
+    "build_authority_paths": ["GNUmakefile", "GitRevisionInfo.tmpl"],
+    "measurement_implementation_paths": [
+      "tools/stealstage.py",
+      "tools/runeio.py",
+      "tools/rune_contracts_generated.py",
+      "tools/bspmechanisms.py",
+      "tools/mapflags.py",
+      "tools/corpusgraph.py",
+      "tools/dm2speed.py",
+      "tools/demokin.py"
+    ],
+    "source_tree_rule": "canonical JSON of every tracked commit-plus-patch path with normalized UTF-8 path, Git mode, byte size, and SHA-256; reconstruct and rehash in a disposable checkout"
+  },
   "receipt_schema": {
     "format": "lmctf-steal-stage-a-receipt-v1",
     "top_level_fields": [
@@ -24,13 +44,18 @@
       "metric_version",
       "metric_contract_sha256",
       "measurement_tool_sha256",
+      "measurement_implementation_sha256",
+      "source_parent_commit",
       "treatments",
       "rounds"
     ],
     "treatment_fields": [
       "source_commit",
       "source_patch_sha256",
-      "module_sha256"
+      "source_tree_sha256",
+      "module_sha256",
+      "source_root",
+      "source_artifacts"
     ],
     "round_fields": [
       "name",
@@ -54,9 +79,16 @@
     "source_identity_fields": [
       "source_commit",
       "source_patch_sha256",
+      "source_tree_sha256",
       "module_sha256"
     ],
     "artifact_fields": ["path", "sha256"],
+    "source_artifacts": [
+      "source_patch",
+      "source_manifest",
+      "build_receipt",
+      "knowledge_report"
+    ],
     "required_artifacts": [
       "engine",
       "module",
@@ -66,8 +98,7 @@
       "server_log",
       "stdlog",
       "stats_database",
-      "serverrecord",
-      "knowledge_report"
+      "serverrecord"
     ],
     "rune_identity_fields": [
       "map",
@@ -92,20 +123,32 @@
       "num_inventory_edges",
       "string_bytes"
     ],
+    "build_receipt_fields": [
+      "format",
+      "metric_version",
+      "recipe",
+      "source_commit",
+      "source_patch_sha256",
+      "source_tree_sha256",
+      "module_sha256",
+      "build_input_sha256",
+      "revision_header_sha256"
+    ],
     "knowledge_report_fields": [
       "format",
       "metric_version",
       "source_commit",
       "source_patch_sha256",
+      "source_tree_sha256",
       "module_sha256",
       "measurement_tool_sha256",
+      "measurement_implementation_sha256",
       "policy_probe_sha256",
-      "missing_flag_acceptances",
-      "carried_flag_acceptances",
-      "unseen_dropped_flag_acceptances",
-      "wrong_floor_acceptances",
-      "hull_blocked_acceptances",
-      "runtime_violation_markers"
+      "tests_run",
+      "failures",
+      "errors",
+      "skipped",
+      "successful"
     ],
     "configuration_digest_rule": "sort normalized relative paths by UTF-8 bytes; SHA-256 each sequence of unsigned 64-bit big-endian path length, path bytes, unsigned 64-bit big-endian payload length, and exact payload bytes"
   },
@@ -116,7 +159,11 @@
       "metric_version",
       "metric_contract_sha256",
       "measurement_tool_sha256",
+      "measurement_implementation_sha256",
+      "measurement_implementation",
       "manifest_sha256",
+      "source_parent_commit",
+      "treatment_authority",
       "round_metrics",
       "aggregate",
       "report",
@@ -139,28 +186,30 @@
     "alignment_residual_seconds_max": 0.11,
     "carry_reconciliation_seconds_max": 0.2,
     "diagnostic_cutoff_gap_seconds_max": 15.0,
-    "minimum_diagnostic_rows_per_bot": 1
+    "minimum_diagnostic_rows_per_bot": 1,
+    "census_cadence_frames": 10,
+    "census_rows_per_bot": 600
   },
   "event_authority": {
     "steal": "production F Pickup score event reconciled exactly with STATS_OFFENSE_FLAG",
     "capture": "production CTF capture stats and host outcome log, reconciled exactly",
     "approach": "serverrecord geometry crossing from outside to inside 384 horizontal units of the enemy stand derived from the exact receipt-hashed BSP",
-    "close_conversion": "first authoritative carry start no later than 1.5 seconds after a qualifying approach",
+    "close_conversion": "authoritative same-player F Pickup from 0.0 through 1.5 seconds after a qualifying approach; every pickup separately reconciles one-to-one with a same-player serverrecord carry start within 0.2 seconds",
     "demo_capture": "diagnostic only; outcomecard 280-unit carry-end inference is never authoritative",
-    "forbidden_knowledge": "exact hashed lmctf-steal-knowledge-report-v1 sidecar generated by the checked-in executable policy probe and bound to source commit, source patch, module, measurement tool, and probe plus runtime violation markers; every acceptance count must be zero"
+    "forbidden_knowledge": "per-arm lmctf-steal-source-policy-report-v1 generated by running the frozen path-and-hash policy probe inside each disposable commit-plus-patch reconstruction; evaluator reruns and exactly compares tests_run, failures, errors, skipped, and successful; this is source-policy authority, not runtime telemetry"
   },
   "metric_calculation": {
     "evaluation_window": "half-open [t0,t0+600.0) server-time interval where t0 is the last authoritative PlayerTeamChange roster-join timestamp; all ten roster clients must remain continuously joined through t0+600.0",
     "active_bot_minutes": "clip the exact ten-bot roster to the evaluation window: 10 bots times 600.0 seconds divided by 60",
     "active_team_minutes": "clip each full five-bot team to the evaluation window: two teams times 600.0 seconds divided by 60",
     "active_defender_minutes": "emitted diagnostic SG telemetry samples inside the conservative authoritative log brackets with role=1 divided by 60; no death-time samples are fabricated",
-    "telemetry_time_alignment": "SG Think_Emit rows are absent while a bot is dead and are not a clock: retain emitted rows in server-log order after the final roster-join line through the last host outcome whose matched StdLog timestamp is strictly before t0+600.0; report the cutoff gap and reject malformed, duplicate, or out-of-order emitted rows",
+    "telemetry_time_alignment": "require exact production SGCENSUS name: frm=N alive=[01] rows for every admitted bot at each 1 Hz frame after t0 through t0+600.0, while preserving valid ordered pre/post-window context; SG Think_Emit route rows may be sparse during death but every retained metric row must fall inside that census authority; report alive and coverage bot-seconds separately",
     "horizontal_distance": "sum serverrecord 10 Hz consecutive-frame horizontal steps whose second frame is in the evaluation window and no greater than film.TELEPORT_UNITS=180; divide by active bot minutes",
     "moving_sample_fraction": "cropped one-second SG telemetry samples with horizontal spd greater than 50 divided by all cropped recognized SG samples",
     "world_or_hazard_suicides": "timestamped StdLog Suicide events in the evaluation window summed over the roster; complete-stream totals reconcile to fresh unified game_stats.suicides and conservatively include self-weapon suicides",
     "combat": "timestamped StdLog Kill attacker and victim events in the evaluation window summed over the roster; complete-stream totals reconcile to fresh unified game_stats.frags and game_stats.fragged; divide each by active team minutes",
     "visible_or_audible_engagements": "cropped one-second SG telemetry samples with eng=1, whose production source is a current visible target; recent unseen damage evidence may admit a visible rear-cone scan but is not itself an engagement; divide by active team minutes",
-    "forbidden_knowledge_events": "run the checked-in policy probe, then sum the six exact zero-valued fields in its receipt-hashed lmctf-steal-knowledge-report-v1 sidecar plus runtime FLAG_KNOWLEDGE_VIOLATION markers; the sidecar is bound to the exact source commit, source patch, module, measurement tool, and probe",
+    "forbidden_knowledge_events": "reconstruct each declared commit plus exact retained patch, require the frozen probe path/hash, run that source-policy probe in isolation, and derive the count from measured failures plus errors; no runtime violation telemetry is claimed by Stage A",
     "approach": "serverrecord consecutive-frame crossing whose second frame is in the evaluation window from horizontal distance at least 384 to less than 384 from the enemy stand derived from the exact receipt-hashed BSP while the complete level-start production F Pickup, FC LostFlag, F Return, and F Capture timeline says that flag is home; a dropped flag remains dropped at droptime+30 and returns only when the production ctf_flagwave comparison level.time > droptime+30 fires; flag events must be sorted by timestamp and unique integer production log_order, and same-timestamp events execute in ascending production log order; report approaches per observed enemy-stand minute, where each attacking team contributes its target stand's consecutive serverrecord ticks in the exact window while that flag is home exactly once, not once per bot",
     "demo_time_alignment": "median over the ten roster clients of StdLog PlayerConnect seconds minus first serverrecord entity-frame seconds; every effects carry start must reconcile to an authoritative same-player F Pickup within 0.2 seconds",
     "close_conversion": "authoritative same-player F Pickup from 0.0 through 1.5 seconds after a qualifying approach; one pickup and one approach may be matched at most once",

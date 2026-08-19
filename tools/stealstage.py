@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from collections.abc import Mapping
+from contextlib import contextmanager
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
@@ -20,6 +22,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
+import shutil
 import sqlite3
 import statistics
 import stat
@@ -40,8 +43,28 @@ FLAG_EVENT_KINDS = frozenset(
 METRIC_VERSION = "steal-close-stage-a-v1"
 RECEIPT_FORMAT = "lmctf-steal-stage-a-receipt-v1"
 RESULT_FORMAT = "lmctf-steal-stage-a-result-v1"
+SOURCE_TREE_FORMAT = "lmctf-steal-source-tree-v1"
+BUILD_RECEIPT_FORMAT = "lmctf-steal-source-build-v1"
+KNOWLEDGE_REPORT_FORMAT = "lmctf-steal-source-policy-report-v1"
+MEASUREMENT_IMPLEMENTATION_FORMAT = "lmctf-steal-measurement-implementation-v1"
+EMPTY_PATCH_SHA256 = hashlib.sha256(b"").hexdigest()
+POLICY_PROBE_PATH = "tests/test_offense_flag_pickup_recovery.py"
+POLICY_PROBE_SHA256 = (
+    "325865861fd9aca5f75a13c5c626cad9c9706e70ae335bc11f8e13dbe75d94f8")
+POLICY_PROBE_IMPORT_SHADOWS = (
+    "json.py", "unittest.py", "pathlib.py", "math.py", "re.py",
+)
+SOURCE_BUILD_RECIPE = "gnu-make-stage-a-v2"
+SOURCE_BUILD_YEAR = "2026"
+SOURCE_BUILD_INPUTS = ("GNUmakefile", "GitRevisionInfo.tmpl")
+MEASUREMENT_IMPLEMENTATION_PATHS = (
+    "tools/stealstage.py", "tools/runeio.py",
+    "tools/rune_contracts_generated.py", "tools/bspmechanisms.py",
+    "tools/mapflags.py", "tools/corpusgraph.py", "tools/dm2speed.py",
+    "tools/demokin.py",
+)
 METRIC_CONTRACT_SHA256 = (
-    "44ad9d98cc0658bcb42aba01a3771f3d2ce69cbc9e2f0328a0d14c7d2ba8fe4a")
+    "e77f18849ebf672a188e2d9b07fd6456c86eba8752f9e3ea81c287c23e9b9a73")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 SAFE_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
@@ -52,7 +75,14 @@ MAX_BINARY_BYTES = 512 * 1024 * 1024
 REQUIRED_ARTIFACTS = (
     "engine", "module", "rune", "bsp", "recording_harness",
     "server_log", "stdlog", "stats_database", "serverrecord",
-    "knowledge_report",
+)
+SOURCE_ARTIFACTS = (
+    "source_patch", "source_manifest", "build_receipt", "knowledge_report",
+)
+BUILD_RECEIPT_FIELDS = (
+    "format", "metric_version", "recipe", "source_commit",
+    "source_patch_sha256", "source_tree_sha256", "module_sha256",
+    "build_input_sha256", "revision_header_sha256",
 )
 RUNE_IDENTITY_FIELDS = (
     "map", "bsp_checksum", "entity_crc", "physics_flags", "gravity",
@@ -64,10 +94,9 @@ RUNE_IDENTITY_FIELDS = (
 )
 KNOWLEDGE_REPORT_FIELDS = (
     "format", "metric_version", "source_commit", "source_patch_sha256",
-    "module_sha256", "measurement_tool_sha256", "policy_probe_sha256",
-    "missing_flag_acceptances", "carried_flag_acceptances",
-    "unseen_dropped_flag_acceptances", "wrong_floor_acceptances",
-    "hull_blocked_acceptances", "runtime_violation_markers",
+    "source_tree_sha256", "module_sha256", "measurement_tool_sha256",
+    "measurement_implementation_sha256", "policy_probe_sha256", "tests_run",
+    "failures", "errors", "skipped", "successful",
 )
 RESULT_ROUND_FIELDS = (
     "name", "arm", "round", "port", "root_identity", "map",
@@ -138,6 +167,9 @@ SG_REPORT_RE = re.compile(
     r'dl=(?P<drop_locked>\d+) '
     r'st=(?P<stuck>\d+\.\d) gnd=(?P<grounded>[01]) '
     r'eng=(?P<engaged>[01]) frm=(?P<frame>\d+)$')
+SG_CENSUS_RE = re.compile(
+    r'^SGCENSUS (?P<name>\S+): frm=(?P<frame>\d+) '
+    r'alive=(?P<alive>[01])$')
 SG_ROLE_VALUES = frozenset(range(5))
 SG_RUNTIME_ACTION_VALUES = frozenset((-1, 0, 1, 2, 3, 4, 5, 6, 8, 12))
 SG_INT_MAX = 2_147_483_647
@@ -188,6 +220,24 @@ def _finite_number(value, label):
     if not math.isfinite(number):
         raise ValueError(f"{label} must be a finite number")
     return number
+
+
+def _decimal_number(value, label):
+    """Return the exact base-10 value represented by a JSON number.
+
+    Python binary floats are first rendered with their shortest round-tripping
+    decimal spelling.  Contract boundaries are then compared in Decimal space;
+    this admits an exact 0.7 -> 2.2 interval while still rejecting the next
+    representable declared decimal unit outside the band.
+    """
+    number = _finite_number(value, label)
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError(f"{label} must be an exact decimal number") from error
+    if not result.is_finite():
+        raise ValueError(f"{label} must be an exact finite decimal number")
+    return result, number
 
 
 def _integer(value, label, minimum=None):
@@ -488,8 +538,8 @@ def qualifying_approaches(name, team, track, stand, level_offset, events,
 
 def match_close_pickups(approaches, pickups, delay=CLOSE_SECONDS):
     """One-to-one same-player matching in the inclusive [0.0, 1.5] band."""
-    delay = _finite_number(delay, "close-pickup delay")
-    if delay < 0.0:
+    exact_delay, delay = _decimal_number(delay, "close-pickup delay")
+    if exact_delay < 0:
         raise ValueError("close-pickup delay must not be negative")
     validated_approaches = _timed_records(
         approaches, "approaches", require_sorted=False)
@@ -517,10 +567,9 @@ def match_close_pickups(approaches, pickups, delay=CLOSE_SECONDS):
         for approach in unused:
             if approach["matched"] or approach["name"] != pickup["name"]:
                 continue
-            elapsed = pickup["time"] - approach["time"]
-            if not math.isfinite(elapsed):
-                raise ValueError("pickup-to-approach delay must be finite")
-            if 0.0 <= elapsed <= delay:
+            elapsed = (Decimal(str(pickup["time"])) -
+                       Decimal(str(approach["time"])))
+            if 0 <= elapsed <= exact_delay:
                 candidates.append(approach)
         if not candidates:
             continue
@@ -530,7 +579,8 @@ def match_close_pickups(approaches, pickups, delay=CLOSE_SECONDS):
         approach = min(candidates, key=lambda item: item["time"])
         approach["matched"] = True
         matches.append({"approach": approach, "pickup": pickup,
-                        "delay": pickup["time"] - approach["time"]})
+                        "delay": float(Decimal(str(pickup["time"])) -
+                                       Decimal(str(approach["time"])))})
     return matches
 
 
@@ -615,6 +665,34 @@ def canonical_json(value):
 
 def sha256_bytes(value):
     return hashlib.sha256(bytes(value)).hexdigest()
+
+
+def measurement_implementation(repository=None):
+    """Rehash the complete repo-local implementation used by Stage A."""
+    repository = (Path(__file__).resolve().parents[1] if repository is None
+                  else Path(repository))
+    if not repository.is_absolute():
+        raise ValueError("measurement implementation root must be absolute")
+    files = {}
+    for relative in MEASUREMENT_IMPLEMENTATION_PATHS:
+        payload = _read_cli_file(repository / relative, MAX_TEXT_BYTES,
+                                 f"measurement implementation {relative}")
+        files[relative] = sha256_bytes(payload)
+    manifest = {"format": MEASUREMENT_IMPLEMENTATION_FORMAT,
+                "files": files}
+    return manifest, sha256_bytes(canonical_json(manifest))
+
+
+def _require_bound_helper(module, relative, implementation):
+    expected = Path(__file__).resolve().parents[1] / relative
+    actual = getattr(module, "__file__", None)
+    if actual is None or Path(os.path.abspath(actual)) != expected:
+        raise ValueError(f"measurement helper loaded from wrong path: {relative}")
+    payload = _read_cli_file(expected, MAX_TEXT_BYTES,
+                             f"loaded measurement helper {relative}")
+    if sha256_bytes(payload) != implementation["files"][relative]:
+        raise ValueError(f"loaded measurement helper hash drifted: {relative}")
+    return module
 
 
 def _sha256(value, label):
@@ -772,23 +850,72 @@ def _validate_round_result(record, index):
     return identity
 
 
+def _validate_result_treatment_authority(value, arm):
+    label = f"result.treatment_authority.{arm}"
+    _exact_object(value, (
+        "source_identity", "source_root_identity", "source_artifact_sha256",
+        "build_input_sha256", "policy_probe",
+    ), label)
+    identity = _validate_source_identity(value["source_identity"],
+                                         f"{label}.source_identity")
+    root = _sequence(value["source_root_identity"],
+                     f"{label}.source_root_identity")
+    if len(root) != 2:
+        raise ValueError(f"{label}.source_root_identity must contain dev/inode")
+    root_identity = tuple(_integer(item, f"{label}.source_root_identity",
+                                   minimum=0) for item in root)
+    artifacts = _exact_object(value["source_artifact_sha256"],
+                              SOURCE_ARTIFACTS,
+                              f"{label}.source_artifact_sha256")
+    for name, digest in artifacts.items():
+        _sha256(digest, f"{label}.source_artifact_sha256.{name}")
+    if artifacts["source_patch"] != identity["source_patch_sha256"] or \
+            artifacts["source_manifest"] != identity["source_tree_sha256"]:
+        raise ValueError(f"{label} source artifact/identity mismatch")
+    build_inputs = _exact_object(
+        value["build_input_sha256"], SOURCE_BUILD_INPUTS,
+        f"{label}.build_input_sha256")
+    for name, digest in build_inputs.items():
+        _sha256(digest, f"{label}.build_input_sha256.{name}")
+    probe = _exact_object(value["policy_probe"], (
+        "tests_run", "failures", "errors", "skipped", "successful",
+    ), f"{label}.policy_probe")
+    for field in ("tests_run", "failures", "errors", "skipped"):
+        _integer(probe[field], f"{label}.policy_probe.{field}", minimum=0)
+    if (probe["tests_run"] <= 0 or probe["failures"] != 0 or
+            probe["errors"] != 0 or probe["successful"] is not True):
+        raise ValueError(f"{label} policy probe did not pass")
+    return identity, root_identity
+
+
 def validate_result_hashes(document):
     _exact_object(document, (
         "format", "metric_version", "metric_contract_sha256",
-        "measurement_tool_sha256", "manifest_sha256", "round_metrics",
+        "measurement_tool_sha256", "measurement_implementation_sha256",
+        "measurement_implementation", "manifest_sha256",
+        "source_parent_commit", "treatment_authority", "round_metrics",
         "aggregate", "report", "report_sha256", "result_sha256",
     ), "result")
     _sha256(document["report_sha256"], "result.report_sha256")
     _sha256(document["result_sha256"], "result.result_sha256")
     for field in ("metric_contract_sha256", "measurement_tool_sha256",
-                  "manifest_sha256"):
+                  "measurement_implementation_sha256", "manifest_sha256"):
         _sha256(document[field], f"result.{field}")
+    source_parent_commit = _commit(
+        document["source_parent_commit"], "result.source_parent_commit")
     if document["metric_contract_sha256"] != METRIC_CONTRACT_SHA256:
         raise ValueError("result metric-contract hash is not current authority")
     current_tool_digest = sha256_bytes(_read_cli_file(
         Path(__file__), MAX_TEXT_BYTES, "measurement tool"))
     if document["measurement_tool_sha256"] != current_tool_digest:
         raise ValueError("result measurement-tool hash is not current authority")
+    current_implementation, current_implementation_digest = \
+        measurement_implementation()
+    if (document["measurement_implementation_sha256"] !=
+            current_implementation_digest or
+            document["measurement_implementation"] != current_implementation):
+        raise ValueError(
+            "result measurement-implementation manifest is not current authority")
     if (document["format"] != RESULT_FORMAT or
             document["metric_version"] != METRIC_VERSION or
             not isinstance(document["round_metrics"], list) or
@@ -802,6 +929,30 @@ def validate_result_hashes(document):
         raise ValueError("result hash mismatch")
     identities = [_validate_round_result(record, index)
                   for index, record in enumerate(document["round_metrics"])]
+    authority = _exact_object(document["treatment_authority"],
+                              ("baseline", "candidate"),
+                              "result.treatment_authority")
+    treatment_ids = {}
+    source_roots = {}
+    for arm in ("baseline", "candidate"):
+        treatment_ids[arm], source_roots[arm] = \
+            _validate_result_treatment_authority(authority[arm], arm)
+    if source_roots["baseline"] == source_roots["candidate"]:
+        raise ValueError("result treatment source roots alias")
+    if authority["baseline"]["build_input_sha256"] != \
+            authority["candidate"]["build_input_sha256"]:
+        raise ValueError("result candidate changed parent build authority")
+    if (treatment_ids["baseline"]["source_commit"] != source_parent_commit or
+            treatment_ids["candidate"]["source_commit"] !=
+            source_parent_commit or
+            treatment_ids["baseline"]["source_patch_sha256"] !=
+            EMPTY_PATCH_SHA256 or
+            treatment_ids["candidate"]["source_patch_sha256"] ==
+            EMPTY_PATCH_SHA256 or
+            treatment_ids["baseline"] == treatment_ids["candidate"] or
+            treatment_ids["baseline"]["module_sha256"] ==
+            treatment_ids["candidate"]["module_sha256"]):
+        raise ValueError("result treatment identities are not frozen baseline/candidate")
     if (len(identities) != 4 or
             {(item["round"], item["arm"]) for item in identities} != {
                 (1, "baseline"), (1, "candidate"),
@@ -810,10 +961,15 @@ def validate_result_hashes(document):
             len({item["port"] for item in identities}) != 4 or
             len({item["root_identity"] for item in identities}) != 4):
         raise ValueError("result round metrics do not preserve the exact 2x2 trial")
+    if set(source_roots.values()) & {item["root_identity"] for item in identities}:
+        raise ValueError("result treatment and round roots alias")
     records_by_pair = {
         (record["round"], record["arm"]): record
         for record in document["round_metrics"]
     }
+    for record in document["round_metrics"]:
+        if record["source_identity"] != treatment_ids[record["arm"]]:
+            raise ValueError("result round/treatment source identity mismatch")
     for round_number in (1, 2):
         if (records_by_pair[(round_number, "baseline")][
                 "roster_and_team_assignment"] !=
@@ -984,7 +1140,7 @@ class RetainedRoot:
             finally:
                 os.close(directory)
 
-    def read(self, relative, maximum, label):
+    def read(self, relative, maximum, label, *, allow_empty=False):
         path = _relative_artifact_path(relative, f"{label}.path")
         directory = os.dup(self.fd)
         try:
@@ -1000,9 +1156,10 @@ class RetainedRoot:
             try:
                 before = os.fstat(fd)
                 if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
-                        before.st_size <= 0 or before.st_size > maximum):
+                        (before.st_size == 0 and not allow_empty) or
+                        before.st_size < 0 or before.st_size > maximum):
                     raise ValueError(
-                        f"{label} must be a bounded unaliased nonempty regular file")
+                        f"{label} must be a bounded unaliased regular file")
                 output = bytearray()
                 while len(output) < before.st_size:
                     block = os.read(fd, min(1024 * 1024,
@@ -1055,9 +1212,9 @@ def load_contract(payload):
     contract = _strict_json(payload, "metric contract")
     _exact_object(contract, (
         "metric_version", "frozen_before_candidate_trial", "trial_design",
-        "match_identity", "receipt_schema", "result_schema", "measurement_limits",
-        "event_authority", "metric_calculation", "stratification", "bands",
-        "decision",
+        "match_identity", "source_authority", "receipt_schema",
+        "result_schema", "measurement_limits", "event_authority",
+        "metric_calculation", "stratification", "bands", "decision",
     ), "metric contract")
     if contract["metric_version"] != METRIC_VERSION:
         raise ValueError("metric contract has wrong literal metric version")
@@ -1088,20 +1245,47 @@ def load_contract(payload):
             "--src-prefix=a/ --dst-prefix=b/ HEAD -- bytes; reject every "
             "untracked nonignored path"):
         raise ValueError("metric contract match identity changed")
+    source_authority = _exact_object(contract["source_authority"], (
+        "matched_parent_rule", "baseline_source_patch_sha256",
+        "policy_probe_path", "policy_probe_sha256", "build_recipe",
+        "build_year", "build_authority_paths",
+        "measurement_implementation_paths", "source_tree_rule",
+    ), "metric contract.source_authority")
+    if dict(source_authority) != {
+            "matched_parent_rule":
+                "baseline and candidate use the same declared clean parent "
+                "commit; baseline patch is empty and candidate patch is nonempty",
+            "baseline_source_patch_sha256": EMPTY_PATCH_SHA256,
+            "policy_probe_path": POLICY_PROBE_PATH,
+            "policy_probe_sha256": POLICY_PROBE_SHA256,
+            "build_recipe": SOURCE_BUILD_RECIPE,
+            "build_year": SOURCE_BUILD_YEAR,
+            "build_authority_paths": list(SOURCE_BUILD_INPUTS),
+            "measurement_implementation_paths":
+                list(MEASUREMENT_IMPLEMENTATION_PATHS),
+            "source_tree_rule":
+                "canonical JSON of every tracked commit-plus-patch path with "
+                "normalized UTF-8 path, Git mode, byte size, and SHA-256; "
+                "reconstruct and rehash in a disposable checkout",
+            }:
+        raise ValueError("metric contract source authority changed")
     schema = _exact_object(contract["receipt_schema"], (
         "format", "top_level_fields", "treatment_fields", "round_fields",
-        "source_identity_fields", "artifact_fields", "required_artifacts",
-        "rune_identity_fields", "knowledge_report_fields",
+        "source_identity_fields", "artifact_fields", "source_artifacts",
+        "required_artifacts", "rune_identity_fields",
+        "build_receipt_fields", "knowledge_report_fields",
         "configuration_digest_rule",
     ), "metric contract.receipt_schema")
     expected_schema = {
         "format": RECEIPT_FORMAT,
         "top_level_fields": [
             "format", "metric_version", "metric_contract_sha256",
-            "measurement_tool_sha256", "treatments", "rounds",
+            "measurement_tool_sha256", "measurement_implementation_sha256",
+            "source_parent_commit", "treatments", "rounds",
         ],
         "treatment_fields": [
-            "source_commit", "source_patch_sha256", "module_sha256",
+            "source_commit", "source_patch_sha256", "source_tree_sha256",
+            "module_sha256", "source_root", "source_artifacts",
         ],
         "round_fields": [
             "name", "metric_version", "arm", "round", "treatment",
@@ -1111,11 +1295,14 @@ def load_contract(payload):
             "configuration_artifacts", "configuration_sha256", "rune_identity",
         ],
         "source_identity_fields": [
-            "source_commit", "source_patch_sha256", "module_sha256",
+            "source_commit", "source_patch_sha256", "source_tree_sha256",
+            "module_sha256",
         ],
         "artifact_fields": ["path", "sha256"],
+        "source_artifacts": list(SOURCE_ARTIFACTS),
         "required_artifacts": list(REQUIRED_ARTIFACTS),
         "rune_identity_fields": list(RUNE_IDENTITY_FIELDS),
+        "build_receipt_fields": list(BUILD_RECEIPT_FIELDS),
         "knowledge_report_fields": [
             *KNOWLEDGE_REPORT_FIELDS,
         ],
@@ -1133,9 +1320,12 @@ def load_contract(payload):
             "format": RESULT_FORMAT,
             "top_level_fields": [
                 "format", "metric_version", "metric_contract_sha256",
-                "measurement_tool_sha256", "manifest_sha256",
-                "round_metrics", "aggregate", "report", "report_sha256",
-                "result_sha256",
+                "measurement_tool_sha256",
+                "measurement_implementation_sha256",
+                "measurement_implementation", "manifest_sha256",
+                "source_parent_commit",
+                "treatment_authority", "round_metrics", "aggregate",
+                "report", "report_sha256", "result_sha256",
             ],
             "report_fields": [
                 "valid_receipts", "round_count", "sufficient_events",
@@ -1151,14 +1341,17 @@ def load_contract(payload):
     limits = _exact_object(contract["measurement_limits"], (
         "exact_window_seconds", "demo_fps", "alignment_residual_seconds_max",
         "carry_reconciliation_seconds_max", "diagnostic_cutoff_gap_seconds_max",
-        "minimum_diagnostic_rows_per_bot",
+        "minimum_diagnostic_rows_per_bot", "census_cadence_frames",
+        "census_rows_per_bot",
     ), "metric contract.measurement_limits")
     exact_limits = (limits["exact_window_seconds"] == WINDOW_SECONDS and
                     limits["demo_fps"] == DEMO_FPS and
                     limits["alignment_residual_seconds_max"] == 0.11 and
                     limits["carry_reconciliation_seconds_max"] == 0.2 and
                     limits["diagnostic_cutoff_gap_seconds_max"] == 15.0 and
-                    limits["minimum_diagnostic_rows_per_bot"] == 1)
+                    limits["minimum_diagnostic_rows_per_bot"] == 1 and
+                    limits["census_cadence_frames"] == 10 and
+                    limits["census_rows_per_bot"] == 600)
     if not exact_limits:
         raise ValueError("metric contract measurement limits changed")
     for family, values in contract["bands"].items():
@@ -1540,42 +1733,105 @@ def reconcile_stats(stdlog, stats, roster):
 
 def validate_knowledge_report(payload, source_identity, *,
                               measurement_tool_sha256,
-                              policy_probe_sha256):
+                              measurement_implementation_sha256,
+                              policy_probe):
     report = _strict_json(payload, "knowledge report")
     _exact_object(report, KNOWLEDGE_REPORT_FIELDS, "knowledge report")
-    if (report["format"] != "lmctf-steal-knowledge-report-v1" or
+    expected_probe = _exact_object(policy_probe, (
+        "tests_run", "failures", "errors", "skipped", "successful",
+    ), "computed policy probe")
+    if (report["format"] != KNOWLEDGE_REPORT_FORMAT or
             report["metric_version"] != METRIC_VERSION or
             report["source_commit"] != source_identity["source_commit"] or
             report["source_patch_sha256"] !=
             source_identity["source_patch_sha256"] or
+            report["source_tree_sha256"] !=
+            source_identity["source_tree_sha256"] or
             report["module_sha256"] != source_identity["module_sha256"] or
             report["measurement_tool_sha256"] != measurement_tool_sha256 or
-            report["policy_probe_sha256"] != policy_probe_sha256):
+            report["measurement_implementation_sha256"] !=
+            measurement_implementation_sha256 or
+            report["policy_probe_sha256"] != POLICY_PROBE_SHA256):
         raise ValueError("knowledge report identity mismatch")
-    for field in KNOWLEDGE_REPORT_FIELDS[7:]:
-        if _integer(report[field], f"knowledge report.{field}", minimum=0) != 0:
-            raise ValueError(f"forbidden knowledge evidence is nonzero: {field}")
+    for field in ("tests_run", "failures", "errors", "skipped"):
+        _integer(report[field], f"knowledge report.{field}", minimum=0)
+    if not isinstance(report["successful"], bool):
+        raise ValueError("knowledge report.successful must be boolean")
+    if {field: report[field] for field in expected_probe} != dict(expected_probe):
+        raise ValueError("knowledge report differs from reconstructed policy probe")
+    if (report["tests_run"] <= 0 or report["failures"] != 0 or
+            report["errors"] != 0 or report["successful"] is not True):
+        raise ValueError("reconstructed forbidden-knowledge policy probe failed")
     return report
 
 
 def _run_knowledge_probe(repository):
+    """Run the frozen source-policy suite and return measured runner output."""
+    probe = Path(repository) / POLICY_PROBE_PATH
+    payload = _read_cli_file(probe, MAX_TEXT_BYTES,
+                             "forbidden-knowledge policy probe")
+    if sha256_bytes(payload) != POLICY_PROBE_SHA256:
+        raise ValueError("reconstructed policy probe differs from frozen authority")
+    for relative in POLICY_PROBE_IMPORT_SHADOWS:
+        tracked = subprocess.run(
+            ("git", "-C", os.fspath(repository), "ls-files",
+             "--error-unmatch", "--", relative), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, check=False)
+        if tracked.returncode == 0:
+            raise ValueError(
+                f"reconstructed policy source shadows a probe import: {relative}")
+    runner = (
+        "import importlib.util,json,sys,unittest;"
+        "p=sys.argv[1];"
+        "q=importlib.util.spec_from_file_location('_stage_a_policy_probe',p);"
+        "m=importlib.util.module_from_spec(q);q.loader.exec_module(m);"
+        "s=unittest.defaultTestLoader.loadTestsFromModule(m);"
+        "r=unittest.TextTestRunner(verbosity=0).run(s);"
+        "print(json.dumps({'tests_run':r.testsRun,'failures':len(r.failures),"
+        "'errors':len(r.errors),'skipped':len(r.skipped),"
+        "'successful':r.wasSuccessful()},sort_keys=True,separators=(',',':')))"
+    )
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     process = subprocess.run(
-        (sys.executable, "-m", "unittest",
-         "tests.test_offense_flag_pickup_recovery"),
-        cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        (sys.executable, "-I", "-S", "-c", runner, os.fspath(probe)),
+        cwd=Path(repository).parent,
+        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         check=False)
     if process.returncode != 0:
         detail = process.stderr.decode("utf-8", errors="replace")[-4000:]
         raise ValueError(f"forbidden-knowledge policy probe failed: {detail}")
+    lines = process.stdout.splitlines()
+    if len(lines) != 1:
+        raise ValueError("forbidden-knowledge policy probe output is ambiguous")
+    result = _strict_json(lines[0], "policy probe output")
+    _exact_object(result, (
+        "tests_run", "failures", "errors", "skipped", "successful",
+    ), "policy probe output")
+    for field in ("tests_run", "failures", "errors", "skipped"):
+        _integer(result[field], f"policy probe output.{field}", minimum=0)
+    if not isinstance(result["successful"], bool):
+        raise ValueError("policy probe success must be boolean")
+    return result
 
 
-def flag_stands_from_bsp(payload):
+def flag_stands_from_bsp(payload, implementation=None):
     """Derive the two stand origins from the exact authenticated BSP bytes."""
     try:
         import bspmechanisms
         import mapflags
     except ModuleNotFoundError:  # python -m tools.stealstage
         from tools import bspmechanisms, mapflags
+    if implementation is not None:
+        _require_bound_helper(
+            bspmechanisms, "tools/bspmechanisms.py", implementation)
+        _require_bound_helper(mapflags, "tools/mapflags.py", implementation)
+        corpusgraph = (sys.modules.get("corpusgraph") or
+                       sys.modules.get("tools.corpusgraph"))
+        if corpusgraph is None:
+            raise ValueError("measurement helper corpusgraph was not loaded")
+        _require_bound_helper(
+            corpusgraph, "tools/corpusgraph.py", implementation)
     text = mapflags.bsp_entities(bytes(payload), "authenticated BSP")
     parsed, issues = bspmechanisms._parse_entity_text(text)
     if issues:
@@ -1623,6 +1879,96 @@ def _host_kill_anchors(lines, combat_events):
     return anchors
 
 
+def _server_frame(value, label):
+    """Convert an exact server-time decimal to the 100 ms production tick."""
+    exact, _number = _decimal_number(value, label)
+    ticks = exact * Decimal(10)
+    integral = ticks.to_integral_value()
+    if ticks != integral or integral < 0 or integral > SG_INT_MAX:
+        raise ValueError(f"{label} is not an integral production frame")
+    return int(integral)
+
+
+def validate_census(lines, roster_info):
+    """Validate the exact 1 Hz production SGCENSUS admission timeline.
+
+    Production emits after frame zero on frames divisible by ten.  The roster
+    admission instant is excluded and the full-roster allowance endpoint is
+    included, yielding exactly 600 observations per bot for a 600-second
+    Stage-A window.  SG route diagnostics remain independently sparse.
+    """
+    roster = tuple(_validated_roster(roster_info["roster"]))
+    if len(roster) != 10:
+        raise ValueError("SGCENSUS authority requires exactly ten clients")
+    start, end = roster_info["window"]
+    start_frame = _server_frame(start, "census window start")
+    end_frame = _server_frame(end, "census window end")
+    first_frame = ((start_frame // 10) + 1) * 10
+    expected = tuple(range(first_frame, end_frame + 1, 10))
+    if len(expected) != 600:
+        raise ValueError("SGCENSUS window does not contain exactly 600 pulses")
+    observed = {name: [] for name in roster}
+    alive = {name: [] for name in roster}
+    previous = {name: None for name in roster}
+    context_before = 0
+    context_after = 0
+    for line_number, line in enumerate(lines):
+        if not line.startswith("SGCENSUS "):
+            continue
+        match = SG_CENSUS_RE.fullmatch(line)
+        if match is None:
+            raise ValueError(f"malformed SGCENSUS row at host line {line_number + 1}")
+        name = match.group("name")
+        if name not in observed:
+            raise ValueError("SGCENSUS row names a non-roster client")
+        frame = int(match.group("frame"))
+        if frame > SG_INT_MAX or frame <= 0 or frame % 10 != 0:
+            raise ValueError("SGCENSUS frame is outside the production cadence")
+        if previous[name] is not None and frame <= previous[name]:
+            raise ValueError("SGCENSUS frames are duplicate, replayed, or nonmonotonic")
+        previous[name] = frame
+        if frame < first_frame:
+            context_before += 1
+        elif frame > end_frame:
+            context_after += 1
+        else:
+            observed[name].append(frame)
+            alive[name].append(int(match.group("alive")))
+    for name in roster:
+        if tuple(observed[name]) != expected:
+            raise ValueError(
+                f"SGCENSUS is not the exact gap-free 1 Hz timeline for {name}")
+    by_bot = {
+        name: {"coverage_seconds": len(observed[name]),
+               "alive_seconds": sum(alive[name]),
+               "dead_frames": [frame for frame, is_alive in
+                               zip(observed[name], alive[name]) if not is_alive]}
+        for name in sorted(roster)
+    }
+    by_team = {
+        color: {
+            "coverage_bot_seconds": sum(
+                by_bot[name]["coverage_seconds"] for name in roster
+                if roster_info["teams"][name] == color),
+            "alive_bot_seconds": sum(
+                by_bot[name]["alive_seconds"] for name in roster
+                if roster_info["teams"][name] == color),
+        }
+        for color in CTF_TEAMS
+    }
+    return {
+        "first_frame": first_frame, "last_frame": end_frame,
+        "expected_frames_per_bot": len(expected), "by_bot": by_bot,
+        "coverage_bot_seconds": sum(item["coverage_seconds"]
+                                    for item in by_bot.values()),
+        "alive_bot_seconds": sum(item["alive_seconds"]
+                                 for item in by_bot.values()),
+        "context_rows_before": context_before,
+        "context_rows_after": context_after,
+        "by_team": by_team,
+    }
+
+
 def diagnostic_metrics(host, stdlog, roster_info, rune, contract):
     lines = host["lines"]
     roster = roster_info["roster"]
@@ -1653,6 +1999,7 @@ def diagnostic_metrics(host, stdlog, roster_info, rune, contract):
     if not 0.0 < cutoff_gap <= maximum_gap:
         raise ValueError("SG telemetry cutoff gap exceeds frozen bound")
 
+    census = validate_census(lines, roster_info)
     rows = []
     prior_frame = {name: None for name in roster}
     for line_number, line in enumerate(lines):
@@ -1711,6 +2058,12 @@ def diagnostic_metrics(host, stdlog, roster_info, rune, contract):
                      "stuck": stuck})
     cropped = crop_diagnostic_rows(
         rows, start_line, cutoff["line"], roster)
+    if any(not census["first_frame"] <= row["frame"] <=
+           census["last_frame"] for row in cropped):
+        raise ValueError("SG diagnostic row falls outside exact census authority")
+    if any(row["frame"] in census["by_bot"][row["name"]]["dead_frames"]
+           for row in cropped):
+        raise ValueError("SG diagnostic row conflicts with dead census state")
     per_bot = Counter(row["name"] for row in cropped)
     minimum = contract["measurement_limits"][
         "minimum_diagnostic_rows_per_bot"]
@@ -1743,6 +2096,7 @@ def diagnostic_metrics(host, stdlog, roster_info, rune, contract):
              for key in next(iter(by_team.values()))}
     return {**total, "by_team": by_team,
             "by_bot_samples": dict(sorted(per_bot.items())),
+            "census": census,
             "brackets": {"start_line": start_line,
                          "end_line": cutoff["line"],
                          "cutoff_server_time": cutoff["time"],
@@ -1892,8 +2246,8 @@ def carry_starts(name, team, track, level_offset, fps=DEMO_FPS):
 
 def reconcile_carry_starts(starts, pickups, tolerance=0.2):
     """One-to-one maximum-cardinality same-player carry reconciliation."""
-    tolerance = _finite_number(tolerance, "carry tolerance")
-    if tolerance < 0:
+    exact_tolerance, tolerance = _decimal_number(tolerance, "carry tolerance")
+    if exact_tolerance < 0:
         raise ValueError("carry tolerance must be nonnegative")
     starts = [dict(record, time=moment) for record, moment in
               _timed_records(starts, "carry starts", require_sorted=False)]
@@ -1912,13 +2266,15 @@ def reconcile_carry_starts(starts, pickups, tolerance=0.2):
                                                     item.get("log_order", 0))):
         candidates = [item for item in unused
                       if item["name"] == pickup["name"] and
-                      abs(item["time"] - pickup["time"]) <= tolerance]
+                      abs(Decimal(str(item["time"])) -
+                          Decimal(str(pickup["time"]))) <= exact_tolerance]
         if not candidates:
             continue
         start = min(candidates, key=lambda item: item["time"])
         unused.remove(start)
         matches.append({"start": start, "pickup": pickup,
-                        "residual": start["time"] - pickup["time"]})
+                        "residual": float(Decimal(str(start["time"])) -
+                                          Decimal(str(pickup["time"])))})
     matched_pickup_ids = {id(match["pickup"]) for match in matches}
     # The sorted copies above are the objects in matches, so identity is stable.
     ordered_pickups = sorted(pickups, key=lambda item: (item["time"],
@@ -2285,12 +2641,14 @@ def evaluate_bands(baseline, candidate, contract):
 
 def _validate_source_identity(value, label):
     _exact_object(value, ("source_commit", "source_patch_sha256",
-                          "module_sha256"), label)
+                          "source_tree_sha256", "module_sha256"), label)
     return {
         "source_commit": _commit(value["source_commit"],
                                   f"{label}.source_commit"),
         "source_patch_sha256": _sha256(
             value["source_patch_sha256"], f"{label}.source_patch_sha256"),
+        "source_tree_sha256": _sha256(
+            value["source_tree_sha256"], f"{label}.source_tree_sha256"),
         "module_sha256": _sha256(value["module_sha256"],
                                   f"{label}.module_sha256"),
     }
@@ -2303,6 +2661,134 @@ def _require_commit(repository, commit):
         stderr=subprocess.PIPE, check=False)
     if process.returncode != 0:
         raise ValueError(f"source commit is not present in repository: {commit}")
+
+
+def _validate_candidate_delta(repository):
+    """Permit production C/H deltas while excluding measurement authority."""
+    raw = subprocess.run(
+        ("git", "-C", os.fspath(repository), "diff", "--name-only", "-z",
+         "HEAD", "--"), check=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE).stdout
+    paths = [item.decode("utf-8") for item in raw.rstrip(b"\0").split(b"\0")
+             if item]
+    if not paths:
+        raise ValueError("candidate source delta is empty")
+    forbidden_exact = {
+        *SOURCE_BUILD_INPUTS, POLICY_PROBE_PATH, "GitRevisionInfo.h",
+    }
+    invalid = [path for path in paths if (
+        path in forbidden_exact or path.startswith(("tools/", "tests/")) or
+        PurePosixPath(path).suffix not in (".c", ".h"))]
+    if invalid:
+        raise ValueError(
+            "candidate delta touches measurement/build authority: " +
+            ", ".join(sorted(invalid)))
+    return tuple(sorted(paths, key=lambda value: value.encode("utf-8")))
+
+
+def _validate_treatment_shape(value, label):
+    _exact_object(value, (
+        "source_commit", "source_patch_sha256", "source_tree_sha256",
+        "module_sha256", "source_root", "source_artifacts",
+    ), label)
+    identity = _validate_source_identity({
+        field: value[field] for field in (
+            "source_commit", "source_patch_sha256", "source_tree_sha256",
+            "module_sha256")
+    }, f"{label}.identity")
+    root = value["source_root"]
+    if not isinstance(root, str) or not Path(root).is_absolute():
+        raise ValueError(f"{label}.source_root must be an absolute path")
+    artifacts = _exact_object(value["source_artifacts"], SOURCE_ARTIFACTS,
+                              f"{label}.source_artifacts")
+    records = {}
+    paths = set()
+    for name in SOURCE_ARTIFACTS:
+        path, digest = _artifact_record(
+            artifacts[name], f"{label}.source_artifacts.{name}")
+        if path in paths:
+            raise ValueError(f"{label} reuses a source-artifact path")
+        paths.add(path)
+        records[name] = (path, digest)
+    if records["source_patch"][1] != identity["source_patch_sha256"]:
+        raise ValueError(f"{label} patch artifact/identity mismatch")
+    if records["source_manifest"][1] != identity["source_tree_sha256"]:
+        raise ValueError(f"{label} source manifest/identity mismatch")
+    return identity, root, records
+
+
+def _load_treatment(value, arm, source_repository, tool_digest,
+                    implementation_digest,
+                    expected_build_inputs=None):
+    label = f"manifest.treatments.{arm}"
+    identity, root_text, records = _validate_treatment_shape(value, label)
+    root = RetainedRoot(root_text)
+    try:
+        payloads = {}
+        for name, (path, expected) in records.items():
+            payload = root.read(
+                path, MAX_TEXT_BYTES, f"{arm} source {name}",
+                allow_empty=name == "source_patch")
+            if sha256_bytes(payload) != expected:
+                raise ValueError(f"{arm} source {name} SHA-256 mismatch")
+            payloads[name] = payload
+        if sha256_bytes(payloads["source_patch"]) != \
+                identity["source_patch_sha256"]:
+            raise ValueError(f"{arm} retained source patch identity mismatch")
+        with _reconstructed_source(
+                source_repository, identity["source_commit"],
+                payloads["source_patch"]) as reconstructed:
+            source_manifest = _source_tree_manifest(reconstructed)
+            if source_manifest != payloads["source_manifest"]:
+                raise ValueError(f"{arm} reconstructed source manifest mismatch")
+            if sha256_bytes(source_manifest) != identity["source_tree_sha256"]:
+                raise ValueError(f"{arm} reconstructed source-tree hash mismatch")
+            if arm == "candidate":
+                _validate_candidate_delta(reconstructed)
+            probe = _run_knowledge_probe(reconstructed)
+            rebuilt_module, revision_header, build_inputs = _rebuild_module(
+                reconstructed, expected_build_inputs, source_manifest)
+        if sha256_bytes(rebuilt_module) != identity["module_sha256"]:
+            raise ValueError(
+                f"{arm} module is not the frozen reconstructed source build")
+        build = _strict_json(payloads["build_receipt"],
+                             f"{arm} source build receipt")
+        _exact_object(build, BUILD_RECEIPT_FIELDS,
+                      f"{arm} source build receipt")
+        expected_build = {
+            "format": BUILD_RECEIPT_FORMAT, "metric_version": METRIC_VERSION,
+            "recipe": SOURCE_BUILD_RECIPE, **identity,
+            "build_input_sha256": build_inputs,
+            "revision_header_sha256": sha256_bytes(revision_header),
+        }
+        if dict(build) != expected_build:
+            raise ValueError(f"{arm} source build receipt mismatch")
+        knowledge = validate_knowledge_report(
+            payloads["knowledge_report"], identity,
+            measurement_tool_sha256=tool_digest,
+            measurement_implementation_sha256=implementation_digest,
+            policy_probe=probe)
+        for name, (path, expected) in records.items():
+            current = root.read(
+                path, MAX_TEXT_BYTES, f"{arm} final source {name}",
+                allow_empty=name == "source_patch")
+            if sha256_bytes(current) != expected:
+                raise ValueError(f"{arm} source authority changed after analysis")
+        root.assert_files_current()
+        root.assert_current()
+        return {
+            "source_identity": identity,
+            "source_root_identity": list(root.identity),
+            "source_artifact_sha256": {
+                name: records[name][1] for name in SOURCE_ARTIFACTS},
+            "build_input_sha256": build_inputs,
+            "policy_probe": {
+                field: knowledge[field] for field in (
+                    "tests_run", "failures", "errors", "skipped",
+                    "successful")},
+        }
+    finally:
+        root.close()
 
 
 def _configuration_digest(records):
@@ -2372,14 +2858,20 @@ def _parse_demo_entity(r, bits, state, *, zero_baseline):
         r.skip(2)
 
 
-def _decode_serverrecord(payload):
+def _decode_serverrecord(payload, implementation=None):
     """Strict dependency-free port of the retained film serverrecord walk."""
     try:
         import dm2speed as demo_wire
-        from demokin import parse_playerstate_full
+        import demokin as demo_kin
     except ModuleNotFoundError:
         from tools import dm2speed as demo_wire
-        from tools.demokin import parse_playerstate_full
+        from tools import demokin as demo_kin
+    if implementation is not None:
+        _require_bound_helper(demo_wire, "tools/dm2speed.py", implementation)
+        _require_bound_helper(demo_kin, "tools/demokin.py", implementation)
+        if getattr(demo_kin, "D", demo_wire) is not demo_wire:
+            raise ValueError("demo helpers do not share one bound wire parser")
+    parse_playerstate_full = demo_kin.parse_playerstate_full
     data = bytes(payload)
     offset = 0
     map_name = None
@@ -2596,7 +3088,7 @@ def _validate_round_shape(round_receipt, contract, treatment_identity):
 
 
 def _load_round(round_receipt, contract, treatment_identity,
-                measurement_tool_sha256, policy_probe_sha256):
+                treatment_authority, implementation):
     identity = _validate_round_shape(round_receipt, contract,
                                      treatment_identity)
     name = identity["name"]
@@ -2652,13 +3144,17 @@ def _load_round(round_receipt, contract, treatment_identity,
             import runeio
         except ModuleNotFoundError:
             from tools import runeio
+        _require_bound_helper(runeio, "tools/runeio.py", implementation)
+        _require_bound_helper(
+            runeio.contract, "tools/rune_contracts_generated.py",
+            implementation)
         rune = runeio.decode(payloads["rune"])
         derived_rune_identity = _rune_identity(rune)
         if derived_rune_identity != round_receipt["rune_identity"]:
             raise ValueError(f"{name} complete RUNE identity mismatch")
         if rune.header.map_name != identity["map"]:
             raise ValueError(f"{name} RUNE map differs from receipt")
-        stands = flag_stands_from_bsp(payloads["bsp"])
+        stands = flag_stands_from_bsp(payloads["bsp"], implementation)
         stdlog = parse_stdlog(payloads["stdlog"])
         roster_info = validate_continuous_roster(
             stdlog, round_receipt["roster_and_team_assignment"])
@@ -2669,17 +3165,10 @@ def _load_round(round_receipt, contract, treatment_identity,
         stats = parse_stats_database(payloads["stats_database"],
                                      roster_info["teams"])
         reconcile_stats(stdlog, stats, roster_info["roster"])
-        knowledge = validate_knowledge_report(
-            payloads["knowledge_report"], treatment_identity,
-            measurement_tool_sha256=measurement_tool_sha256,
-            policy_probe_sha256=policy_probe_sha256)
-        forbidden_markers = sum(
-            line.count("FLAG_KNOWLEDGE_VIOLATION") for line in host["lines"])
-        if forbidden_markers:
-            raise ValueError("runtime forbidden-knowledge marker is nonzero")
         telemetry = diagnostic_metrics(
             host, stdlog, roster_info, rune, contract)
-        demo = _decode_serverrecord(payloads["serverrecord"])
+        demo = _decode_serverrecord(
+            payloads["serverrecord"], implementation)
         demo_metrics = analyze_demo(
             demo, roster_info, stands, stdlog, identity["map"], contract)
         counts = _window_counts(stdlog, roster_info)
@@ -2731,22 +3220,78 @@ def _load_round(round_receipt, contract, treatment_identity,
                 "full_stats_pickups": stats["total"]["pickups"],
                 "full_stats_captures": stats["total"]["captures"],
                 "reconciliation_mismatches": 0,
-                "forbidden_knowledge_events": sum(knowledge[field] for field in (
-                    "missing_flag_acceptances", "carried_flag_acceptances",
-                    "unseen_dropped_flag_acceptances",
-                    "wrong_floor_acceptances", "hull_blocked_acceptances",
-                    "runtime_violation_markers")) + forbidden_markers,
+                "forbidden_knowledge_events": (
+                    treatment_authority["policy_probe"]["failures"] +
+                    treatment_authority["policy_probe"]["errors"]),
             },
         }
     finally:
         root.close()
 
 
-def _revalidate_manifest_files(receipts, metrics):
-    """Hold all four roots while rehashing every retained input authority."""
-    metric_by_name = {item["name"]: item for item in metrics}
+def _preflight_round_files(receipts):
+    """Reject missing, aliased, or hash-drifted round inputs before builds."""
     guards = []
     try:
+        for receipt in receipts:
+            root = RetainedRoot(receipt["root"])
+            guards.append((root, receipt))
+        if len({root.identity for root, _receipt in guards}) != len(guards):
+            raise ValueError("manifest retained roots alias the same directory")
+        for root, receipt in guards:
+            name = receipt["name"]
+            paths = set()
+            for artifact_name in REQUIRED_ARTIFACTS:
+                path, expected = _artifact_record(
+                    receipt["artifacts"][artifact_name],
+                    f"{name}.artifacts.{artifact_name}")
+                if path in paths:
+                    raise ValueError(f"{name} reuses an artifact path")
+                paths.add(path)
+                payload = root.read(path, _artifact_limit(artifact_name),
+                                    f"{name} preflight {artifact_name}")
+                if sha256_bytes(payload) != expected:
+                    raise ValueError(f"{name} {artifact_name} SHA-256 mismatch")
+            configurations = []
+            for index, record in enumerate(receipt["configuration_artifacts"]):
+                path, expected = _artifact_record(
+                    record, f"{name}.configuration_artifacts[{index}]")
+                if path in paths:
+                    raise ValueError(f"{name} reuses a configuration path")
+                paths.add(path)
+                payload = root.read(path, MAX_TEXT_BYTES,
+                                    f"{name} preflight configuration {index}")
+                if sha256_bytes(payload) != expected:
+                    raise ValueError(f"{name} configuration SHA-256 mismatch")
+                configurations.append((path, payload))
+            if _configuration_digest(configurations) != receipt[
+                    "configuration_sha256"]:
+                raise ValueError(f"{name} configuration aggregate mismatch")
+        for root, _receipt in guards:
+            root.assert_files_current()
+            root.assert_current()
+    finally:
+        for root, _receipt in guards:
+            root.close()
+
+
+def _revalidate_manifest_files(receipts, metrics, treatments=None,
+                               treatment_authority=None):
+    """Hold every trial/source root while rehashing retained authority."""
+    metric_by_name = {item["name"]: item for item in metrics}
+    guards = []
+    source_guards = []
+    try:
+        if treatments is not None or treatment_authority is not None:
+            if treatments is None or treatment_authority is None:
+                raise ValueError("treatment revalidation inputs are incomplete")
+            for arm in ("baseline", "candidate"):
+                root = RetainedRoot(treatments[arm]["source_root"])
+                authority = treatment_authority[arm]
+                if tuple(authority["source_root_identity"]) != root.identity:
+                    raise ValueError(
+                        f"{arm} retained source root changed after derivation")
+                source_guards.append((root, arm, treatments[arm], authority))
         for receipt in receipts:
             name = receipt["name"]
             metric = metric_by_name.get(name)
@@ -2756,6 +3301,24 @@ def _revalidate_manifest_files(receipts, metrics):
             guards.append((root, receipt, metric))
             if tuple(metric["root_identity"]) != root.identity:
                 raise ValueError(f"{name} retained root changed after derivation")
+        all_identities = [root.identity for root, _receipt, _metric in guards]
+        all_identities.extend(root.identity for root, _arm, _value, _authority
+                              in source_guards)
+        if len(set(all_identities)) != len(all_identities):
+            raise ValueError("retained trial/source roots alias")
+        for root, arm, treatment, authority in source_guards:
+            for artifact_name in SOURCE_ARTIFACTS:
+                path, expected = _artifact_record(
+                    treatment["source_artifacts"][artifact_name],
+                    f"{arm}.source_artifacts.{artifact_name}")
+                payload = root.read(
+                    path, MAX_TEXT_BYTES,
+                    f"{arm} publication source {artifact_name}",
+                    allow_empty=artifact_name == "source_patch")
+                if sha256_bytes(payload) != expected or expected != \
+                        authority["source_artifact_sha256"][artifact_name]:
+                    raise ValueError(
+                        f"{arm} source {artifact_name} changed before publication")
         for root, receipt, _metric in guards:
             name = receipt["name"]
             for artifact_name in REQUIRED_ARTIFACTS:
@@ -2785,8 +3348,13 @@ def _revalidate_manifest_files(receipts, metrics):
         for root, _receipt, _metric in guards:
             root.assert_files_current()
             root.assert_current()
+        for root, _arm, _treatment, _authority in source_guards:
+            root.assert_files_current()
+            root.assert_current()
     finally:
         for root, _receipt, _metric in guards:
+            root.close()
+        for root, _arm, _treatment, _authority in source_guards:
             root.close()
 
 
@@ -2810,21 +3378,44 @@ def validate_manifest(contract_payload, manifest_payload, source_repository):
     if _sha256(manifest["measurement_tool_sha256"],
                "manifest.measurement_tool_sha256") != tool_digest:
         raise ValueError("receipt manifest measurement-tool hash mismatch")
+    implementation, implementation_digest = measurement_implementation()
+    if _sha256(
+            manifest["measurement_implementation_sha256"],
+            "manifest.measurement_implementation_sha256") != \
+            implementation_digest:
+        raise ValueError(
+            "receipt manifest measurement-implementation hash mismatch")
+    source_parent_commit = _commit(
+        manifest["source_parent_commit"], "manifest.source_parent_commit")
 
     treatments = manifest["treatments"]
     _exact_object(treatments, ("baseline", "candidate"),
                   "manifest.treatments")
-    treatment_ids = {arm: _validate_source_identity(
-        treatments[arm], f"manifest.treatments.{arm}")
-        for arm in ("baseline", "candidate")}
-    if treatment_ids["baseline"]["module_sha256"] == \
-            treatment_ids["candidate"]["module_sha256"]:
-        raise ValueError("baseline and candidate module identities are equal")
     source_repository = Path(source_repository)
     if not source_repository.is_absolute():
         raise ValueError("source repository must be an absolute path")
-    for identity in treatment_ids.values():
-        _require_commit(source_repository, identity["source_commit"])
+    treatment_ids = {
+        arm: _validate_treatment_shape(
+            treatments[arm], f"manifest.treatments.{arm}")[0]
+        for arm in ("baseline", "candidate")}
+    baseline = treatment_ids["baseline"]
+    if (baseline["source_commit"] != source_parent_commit or
+            treatment_ids["candidate"]["source_commit"] !=
+            source_parent_commit):
+        raise ValueError("treatment commits differ from the matched source parent")
+    if (baseline["source_patch_sha256"] != EMPTY_PATCH_SHA256 or
+            treatment_ids["candidate"]["source_patch_sha256"] ==
+            EMPTY_PATCH_SHA256):
+        raise ValueError("baseline must have an empty patch and candidate a delta")
+    if treatment_ids["candidate"] == baseline:
+        raise ValueError("candidate treatment source identity equals baseline")
+    if treatment_ids["baseline"]["module_sha256"] == \
+            treatment_ids["candidate"]["module_sha256"]:
+        raise ValueError("baseline and candidate module identities are equal")
+    source_root_names = [treatments[arm]["source_root"]
+                         for arm in ("baseline", "candidate")]
+    if len(set(source_root_names)) != 2:
+        raise ValueError("treatment source roots must be distinct")
     receipts = _sequence(manifest["rounds"], "manifest.rounds")
     expected_pairs = {(round_number, arm) for round_number in (1, 2)
                       for arm in ("baseline", "candidate")}
@@ -2848,6 +3439,8 @@ def validate_manifest(contract_payload, manifest_payload, source_repository):
     root_names = [receipt["root"] for receipt in receipts]
     if len(set(root_names)) != 4:
         raise ValueError("manifest retained roots must be distinct")
+    if set(root_names) & set(source_root_names):
+        raise ValueError("round and treatment retained roots must be distinct")
 
     receipt_by_pair = {(receipt["round"], receipt["arm"]): receipt
                        for receipt in receipts}
@@ -2865,15 +3458,23 @@ def validate_manifest(contract_payload, manifest_payload, source_repository):
             first_assignment[name] == second_assignment[name]
             for name in first_assignment):
         raise ValueError("round two is not the exact arm-swapped team assignment")
-    policy_probe_payload = _read_cli_file(
-        source_repository / "tests/test_offense_flag_pickup_recovery.py",
-        MAX_TEXT_BYTES, "forbidden-knowledge policy probe")
-    policy_probe_digest = sha256_bytes(policy_probe_payload)
-    _run_knowledge_probe(source_repository)
-
+    _preflight_round_files(receipts)
+    baseline_authority = _load_treatment(
+        treatments["baseline"], "baseline", source_repository, tool_digest,
+        implementation_digest)
+    candidate_authority = _load_treatment(
+        treatments["candidate"], "candidate", source_repository, tool_digest,
+        implementation_digest,
+        baseline_authority["build_input_sha256"])
+    treatment_authority = {
+        "baseline": baseline_authority, "candidate": candidate_authority}
+    if len({tuple(treatment_authority[arm]["source_root_identity"])
+            for arm in ("baseline", "candidate")}) != 2:
+        raise ValueError("treatment source roots alias the same directory")
     metrics = [_load_round(
         receipt, contract, treatment_ids[receipt["arm"]],
-        tool_digest, policy_probe_digest) for receipt in receipts]
+        treatment_authority[receipt["arm"]], implementation)
+        for receipt in receipts]
     if len({tuple(item["root_identity"]) for item in metrics}) != 4:
         raise ValueError("manifest retained roots alias the same directory")
     common_fields = ("map", "configuration_sha256", "rune_identity",
@@ -2905,13 +3506,18 @@ def validate_manifest(contract_payload, manifest_payload, source_repository):
         "format": RESULT_FORMAT, "metric_version": METRIC_VERSION,
         "metric_contract_sha256": contract_digest,
         "measurement_tool_sha256": tool_digest,
+        "measurement_implementation_sha256": implementation_digest,
+        "measurement_implementation": implementation,
         "manifest_sha256": sha256_bytes(manifest_payload),
+        "source_parent_commit": source_parent_commit,
+        "treatment_authority": treatment_authority,
         "round_metrics": metrics,
         "aggregate": {"baseline": baseline, "candidate": candidate},
         "report": report,
     })
     validate_result_hashes(result)
-    _revalidate_manifest_files(receipts, metrics)
+    _revalidate_manifest_files(
+        receipts, metrics, treatments, treatment_authority)
     validate_result_hashes(result)
     return result
 
@@ -3018,9 +3624,215 @@ def _source_patch_payload(repository):
         check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
 
-def generate_knowledge_report(source_repository, module_payload,
+def _source_tree_manifest(repository):
+    """Return canonical tracked worktree bytes, including modes and symlinks."""
+    repository = Path(repository)
+    untracked = subprocess.run(
+        ("git", "-C", os.fspath(repository), "ls-files", "--others",
+         "--exclude-standard", "-z"), check=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE).stdout
+    if untracked:
+        raise ValueError("reconstructed source contains untracked inputs")
+    staged = subprocess.run(
+        ("git", "-C", os.fspath(repository), "ls-files", "--stage", "-z"),
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    raw_entries = staged.rstrip(b"\0").split(b"\0") if staged else ()
+    tracked_modes = {}
+    for raw in raw_entries:
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            index_mode, _object_name, stage = metadata.split(b" ", 2)
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ValueError("source index entry is malformed or non-UTF-8") from error
+        if stage != b"0":
+            raise ValueError("source index contains an unmerged entry")
+        normalized = _relative_artifact_path(path, "source path").as_posix()
+        tracked_modes[normalized] = index_mode.decode("ascii")
+    entries = []
+    for raw in raw_entries:
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            index_mode, _object_name, stage = metadata.split(b" ", 2)
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ValueError("source index entry is malformed or non-UTF-8") from error
+        if stage != b"0":
+            raise ValueError("source index contains an unmerged entry")
+        normalized = _relative_artifact_path(path, "source path").as_posix()
+        target = repository / normalized
+        current = os.lstat(target)
+        if stat.S_ISLNK(current.st_mode):
+            mode = "120000"
+            payload = os.readlink(os.fsencode(target))
+            try:
+                link_text = payload.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError(
+                    f"source symlink target is non-UTF-8: {normalized}") from error
+            link_path = PurePosixPath(link_text)
+            if (link_path.is_absolute() or link_text != link_path.as_posix() or
+                    any(part in ("", ".", "..") for part in link_path.parts)):
+                raise ValueError(
+                    f"source symlink target is not safe and normalized: {normalized}")
+            resolved = (PurePosixPath(normalized).parent / link_path).as_posix()
+            if tracked_modes.get(resolved) not in ("100644", "100755"):
+                raise ValueError(
+                    f"source symlink does not target a tracked regular file: "
+                    f"{normalized}")
+        elif stat.S_ISREG(current.st_mode):
+            mode = "100755" if current.st_mode & stat.S_IXUSR else "100644"
+            fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                before = os.fstat(fd)
+                payload = bytearray()
+                while len(payload) < before.st_size:
+                    block = os.read(fd, min(1024 * 1024,
+                                            before.st_size - len(payload)))
+                    if not block:
+                        raise ValueError(f"source file truncated: {normalized}")
+                    payload.extend(block)
+                after = os.fstat(fd)
+                identity = lambda value: (
+                    value.st_dev, value.st_ino, value.st_size,
+                    value.st_mtime_ns, value.st_ctime_ns,
+                )
+                if identity(before) != identity(after):
+                    raise ValueError(f"source file changed while read: {normalized}")
+                payload = bytes(payload)
+            finally:
+                os.close(fd)
+        else:
+            raise ValueError(f"source path has unsupported type: {normalized}")
+        decoded_mode = index_mode.decode("ascii")
+        if decoded_mode not in ("100644", "100755", "120000"):
+            raise ValueError(f"source index mode is unsupported: {normalized}")
+        if mode != decoded_mode:
+            raise ValueError(f"source worktree mode differs from index: {normalized}")
+        entries.append({
+            "path": normalized, "mode": mode, "size": len(payload),
+            "sha256": sha256_bytes(payload),
+        })
+    entries.sort(key=lambda item: item["path"].encode("utf-8"))
+    return canonical_json({"format": SOURCE_TREE_FORMAT, "entries": entries})
+
+
+@contextmanager
+def _reconstructed_source(source_repository, commit, patch_payload):
+    """Yield a disposable checkout of exactly ``commit + patch_payload``."""
+    repository = Path(source_repository)
+    _require_commit(repository, commit)
+    with tempfile.TemporaryDirectory(prefix="steal-source-reconstruct-") as tmp:
+        temporary = Path(tmp)
+        checkout = temporary / "source"
+        clone = subprocess.run(
+            ("git", "clone", "-q", "--no-hardlinks", "--no-checkout", "--",
+             os.fspath(repository), os.fspath(checkout)),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if clone.returncode != 0:
+            detail = clone.stderr.decode("utf-8", errors="replace")[-4000:]
+            raise ValueError(f"cannot reconstruct source repository: {detail}")
+        subprocess.run(
+            ("git", "-C", os.fspath(checkout), "-c", "core.hooksPath=/dev/null",
+             "checkout", "-q", "--detach", commit), check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if patch_payload:
+            patch_path = temporary / "source.patch"
+            patch_path.write_bytes(patch_payload)
+            applied = subprocess.run(
+                ("git", "-C", os.fspath(checkout),
+                 "-c", "core.hooksPath=/dev/null", "apply", "--binary",
+                 "--index", "--whitespace=nowarn", "--", os.fspath(patch_path)),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            if applied.returncode != 0:
+                detail = applied.stderr.decode("utf-8", errors="replace")[-4000:]
+                raise ValueError(f"retained source patch does not apply: {detail}")
+        reconstructed_patch = _source_patch_payload(checkout)
+        if reconstructed_patch != patch_payload:
+            raise ValueError("reconstructed source patch bytes are not canonical")
+        yield checkout
+
+
+def _revision_header_payload(repository):
+    template = _read_cli_file(
+        Path(repository) / "GitRevisionInfo.tmpl", MAX_TEXT_BYTES,
+        "Git revision template")
+    return (template.replace(b"$", b"")
+            .replace(b"WCLOGCOUNT+2", b"0")
+            .replace(b"WCREV=7", b"stage-a-v1")
+            .replace(b"WCNOW=%Y", SOURCE_BUILD_YEAR.encode("ascii")))
+
+
+def _rebuild_module(repository, expected_build_inputs=None,
+                    expected_source_manifest=None):
+    """Execute the single frozen source-to-module recipe in a fresh checkout."""
+    make = shutil.which("make")
+    compiler = shutil.which("gcc")
+    if make is None or compiler is None:
+        raise ValueError("frozen source build requires make and gcc")
+    build_inputs = {}
+    for relative in SOURCE_BUILD_INPUTS:
+        payload = _read_cli_file(Path(repository) / relative, MAX_TEXT_BYTES,
+                                 f"frozen build input {relative}")
+        build_inputs[relative] = sha256_bytes(payload)
+    if (expected_build_inputs is not None and
+            dict(expected_build_inputs) != build_inputs):
+        raise ValueError("candidate changed matched-parent build authority")
+    source_before = _source_tree_manifest(repository)
+    if (expected_source_manifest is not None and
+            source_before != bytes(expected_source_manifest)):
+        raise ValueError("source tree changed before frozen module build")
+    target = "stage-a-game.so"
+    for generated in ("GitRevisionInfo.h", target):
+        try:
+            os.lstat(Path(repository) / generated)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError(
+                f"frozen build output collides with source authority: {generated}")
+    header = _revision_header_payload(repository)
+    (Path(repository) / "GitRevisionInfo.h").write_bytes(header)
+    environment = dict(os.environ)
+    environment.update({"LC_ALL": "C", "TZ": "UTC",
+                        "SOURCE_DATE_EPOCH": "0"})
+    process = subprocess.run(
+        (make, "-j4", "-f", "GNUmakefile", "REV=0", "VER=stage-a-v1",
+         f"CC={compiler} -std=c11",
+         "CFLAGS=-std=c11 -O3 -DARCH=\"$(ARCH)\" -DSTDC_HEADERS "
+         "-DVER='\"$(VER)\"' -Wall -DLINUX",
+         "REVISION_HEADER=", f"TARGET={target}",
+         target), cwd=repository, env=environment, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False)
+    if process.returncode != 0:
+        detail = (process.stdout + process.stderr).decode(
+            "utf-8", errors="replace")[-8000:]
+        raise ValueError(f"frozen source build failed: {detail}")
+    module = _read_cli_file(Path(repository) / target, MAX_BINARY_BYTES,
+                            "rebuilt module")
+    source_after = _source_tree_manifest(repository)
+    if source_after != source_before:
+        raise ValueError("frozen module build mutated tracked source authority")
+    return module, header, build_inputs
+
+
+def _knowledge_report(source_identity, measurement_tool_sha256,
+                      measurement_implementation_sha256, probe):
+    return {
+        "format": KNOWLEDGE_REPORT_FORMAT,
+        "metric_version": METRIC_VERSION,
+        **dict(source_identity),
+        "measurement_tool_sha256": measurement_tool_sha256,
+        "measurement_implementation_sha256":
+            measurement_implementation_sha256,
+        "policy_probe_sha256": POLICY_PROBE_SHA256,
+        **dict(probe),
+    }
+
+
+def generate_source_authority(source_repository, module_payload,
                               measurement_tool_payload):
-    """Run the checked-in production-policy probe and bind its zero result."""
+    """Generate every retained per-arm authority from the current Git tree."""
     repository = Path(source_repository)
     if not repository.is_absolute():
         raise ValueError("source repository must be an absolute path")
@@ -3028,27 +3840,47 @@ def generate_knowledge_report(source_repository, module_payload,
         ("git", "-C", os.fspath(repository), "rev-parse", "--verify",
          "HEAD^{commit}"), check=True, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE).stdout.decode("ascii").strip()
-    _commit(commit, "knowledge report source_commit")
+    _commit(commit, "source authority commit")
     patch = _source_patch_payload(repository)
-    probe_path = repository / "tests/test_offense_flag_pickup_recovery.py"
-    probe = _read_cli_file(probe_path, MAX_TEXT_BYTES,
-                           "forbidden-knowledge policy probe")
-    _run_knowledge_probe(repository)
-    return {
-        "format": "lmctf-steal-knowledge-report-v1",
-        "metric_version": METRIC_VERSION,
+    with _reconstructed_source(repository, commit, patch) as reconstructed:
+        source_manifest = _source_tree_manifest(reconstructed)
+        probe = _run_knowledge_probe(reconstructed)
+        rebuilt, header, build_inputs = _rebuild_module(
+            reconstructed, expected_source_manifest=source_manifest)
+    if rebuilt != bytes(module_payload):
+        raise ValueError("supplied module is not the frozen reconstructed build")
+    identity = {
         "source_commit": commit,
         "source_patch_sha256": sha256_bytes(patch),
-        "module_sha256": sha256_bytes(module_payload),
-        "measurement_tool_sha256": sha256_bytes(measurement_tool_payload),
-        "policy_probe_sha256": sha256_bytes(probe),
-        "missing_flag_acceptances": 0,
-        "carried_flag_acceptances": 0,
-        "unseen_dropped_flag_acceptances": 0,
-        "wrong_floor_acceptances": 0,
-        "hull_blocked_acceptances": 0,
-        "runtime_violation_markers": 0,
+        "source_tree_sha256": sha256_bytes(source_manifest),
+        "module_sha256": sha256_bytes(rebuilt),
     }
+    build_receipt = {
+        "format": BUILD_RECEIPT_FORMAT, "metric_version": METRIC_VERSION,
+        "recipe": SOURCE_BUILD_RECIPE, **identity,
+        "build_input_sha256": build_inputs,
+        "revision_header_sha256": sha256_bytes(header),
+    }
+    _implementation, implementation_digest = measurement_implementation()
+    report = _knowledge_report(
+        identity, sha256_bytes(measurement_tool_payload),
+        implementation_digest, probe)
+    return {"identity": identity, "source_patch": patch,
+            "source_manifest": source_manifest,
+            "build_receipt": canonical_json(build_receipt),
+            "knowledge_report": canonical_json(report)}
+
+
+def verify_result(contract_payload, manifest_payload, result_payload,
+                  source_repository):
+    """Rerun all retained authority and compare the canonical result exactly."""
+    supplied = _strict_json(result_payload, "result")
+    validate_result_hashes(supplied)
+    expected = validate_manifest(
+        contract_payload, manifest_payload, source_repository)
+    if canonical_json(supplied) != canonical_json(expected):
+        raise ValueError("result differs from complete retained-evidence evaluation")
+    return supplied
 
 
 def main(argv=None):
@@ -3062,14 +3894,26 @@ def main(argv=None):
     evaluate.add_argument("--output")
     verify = subparsers.add_parser("verify-result")
     verify.add_argument("--result", required=True)
+    verify.add_argument("--contract", required=True)
+    verify.add_argument("--manifest", required=True)
+    verify.add_argument("--source-repository", required=True)
     knowledge = subparsers.add_parser("knowledge-report")
     knowledge.add_argument("--source-repository", required=True)
     knowledge.add_argument("--module", required=True)
     knowledge.add_argument("--output", required=True)
+    knowledge.add_argument("--source-patch-output", required=True)
+    knowledge.add_argument("--source-manifest-output", required=True)
+    knowledge.add_argument("--build-receipt-output", required=True)
     args = parser.parse_args(argv)
     if args.command == "verify-result":
-        payload = _read_cli_file(args.result, MAX_TEXT_BYTES, "result")
-        validate_result_hashes(_strict_json(payload, "result"))
+        result_payload = _read_cli_file(args.result, MAX_TEXT_BYTES, "result")
+        contract_payload = _read_cli_file(
+            args.contract, MAX_TEXT_BYTES, "metric contract")
+        manifest_payload = _read_cli_file(
+            args.manifest, MAX_TEXT_BYTES, "receipt manifest")
+        verify_result(
+            contract_payload, manifest_payload, result_payload,
+            Path(args.source_repository).resolve())
         return 0
     if args.command == "knowledge-report":
         repository = Path(args.source_repository).resolve()
@@ -3077,26 +3921,35 @@ def main(argv=None):
             args.module, MAX_BINARY_BYTES, "policy-probed module")
         tool_payload = _read_cli_file(
             Path(__file__).resolve(), MAX_TEXT_BYTES, "measurement tool")
-        report = generate_knowledge_report(
+        authority = generate_source_authority(
             repository, module_payload, tool_payload)
-        output = json.dumps(report, indent=2, sort_keys=True,
-                            allow_nan=False).encode("utf-8") + b"\n"
-        _write_exclusive(args.output, output)
+        _write_exclusive(args.source_patch_output,
+                         authority["source_patch"])
+        _write_exclusive(args.source_manifest_output,
+                         authority["source_manifest"])
+        _write_exclusive(args.build_receipt_output,
+                         authority["build_receipt"])
+        _write_exclusive(args.output, authority["knowledge_report"])
         return 0
     contract_payload = _read_cli_file(
         args.contract, MAX_TEXT_BYTES, "metric contract")
     manifest_payload = _read_cli_file(
         args.manifest, MAX_TEXT_BYTES, "receipt manifest")
-    tool_payload = _read_cli_file(
-        Path(__file__).resolve(), MAX_TEXT_BYTES, "measurement tool")
     result = validate_manifest(
         contract_payload, manifest_payload,
-        Path(args.source_repository).resolve(),
-        measurement_tool_payload=tool_payload)
+        Path(args.source_repository).resolve())
     output = json.dumps(result, indent=2, sort_keys=True,
                         allow_nan=False).encode("utf-8") + b"\n"
     if args.output:
+        parsed_manifest = _strict_json(
+            manifest_payload, "Stage-A receipt manifest")
+        _revalidate_manifest_files(
+            parsed_manifest["rounds"], result["round_metrics"],
+            parsed_manifest["treatments"], result["treatment_authority"])
         _write_exclusive(args.output, output)
+        _revalidate_manifest_files(
+            parsed_manifest["rounds"], result["round_metrics"],
+            parsed_manifest["treatments"], result["treatment_authority"])
     else:
         sys.stdout.buffer.write(output)
     return 0

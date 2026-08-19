@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from unittest import mock
 
 
@@ -308,6 +309,14 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertEqual(stealstage.match_close_pickups(
             approaches, [{"name": "thief", "kind": "F Pickup",
                           "time": 21.5001}]), [])
+        decimal_boundary = [
+            {"name": "thief", "team": "red", "time": 0.7}]
+        self.assertEqual(len(stealstage.match_close_pickups(
+            decimal_boundary, [{"name": "thief", "kind": "F Pickup",
+                                "time": 2.2}])), 1)
+        self.assertEqual(stealstage.match_close_pickups(
+            decimal_boundary, [{"name": "thief", "kind": "F Pickup",
+                                "time": 2.200001}]), [])
         duplicate = approaches + [
             {"name": "thief", "team": "red", "time": 20.2}]
         matches = stealstage.match_close_pickups(duplicate, [
@@ -536,13 +545,36 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
     def _identities(cls):
         commit = cls._source_commit()
         return {
-            "baseline": {"source_commit": commit,
-                         "source_patch_sha256": "0" * 64,
+            "baseline": {
+                         "source_commit": commit,
+                         "source_patch_sha256":
+                             stealstage.EMPTY_PATCH_SHA256,
+                         "source_tree_sha256": "c" * 64,
                          "module_sha256": "a" * 64},
             "candidate": {"source_commit": commit,
                           "source_patch_sha256": "1" * 64,
+                          "source_tree_sha256": "d" * 64,
                           "module_sha256": "b" * 64},
         }
+
+    @classmethod
+    def _treatments(cls):
+        result = {}
+        for arm, identity in cls._identities().items():
+            artifacts = {
+                name: {"path": f"authority/{name}",
+                       "sha256": hashlib.sha256(name.encode()).hexdigest()}
+                for name in stealstage.SOURCE_ARTIFACTS
+            }
+            artifacts["source_patch"]["sha256"] = identity[
+                "source_patch_sha256"]
+            artifacts["source_manifest"]["sha256"] = identity[
+                "source_tree_sha256"]
+            result[arm] = {
+                **identity, "source_root": f"/tmp/stage-a-source-{arm}",
+                "source_artifacts": artifacts,
+            }
+        return result
 
     @staticmethod
     def _assignment(swapped=False):
@@ -586,6 +618,8 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
         if tool is None:
             tool = Path(stealstage.__file__).read_bytes()
         contract = cls._contract_bytes()
+        _implementation, implementation_digest = \
+            stealstage.measurement_implementation()
         rounds = []
         for index, (round_number, arm) in enumerate((
                 (1, "baseline"), (1, "candidate"),
@@ -598,8 +632,281 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
             "metric_version": stealstage.METRIC_VERSION,
             "metric_contract_sha256": hashlib.sha256(contract).hexdigest(),
             "measurement_tool_sha256": hashlib.sha256(tool).hexdigest(),
-            "treatments": cls._identities(), "rounds": rounds,
+            "measurement_implementation_sha256": implementation_digest,
+            "source_parent_commit": cls._source_commit(),
+            "treatments": cls._treatments(), "rounds": rounds,
         }
+
+    @staticmethod
+    def _fixture_bsp() -> bytes:
+        import mapflags
+        entities = (
+            {"classname": "worldspawn"},
+            {"classname": "info_flag_red", "origin": "0 0 0"},
+            {"classname": "info_flag_blue", "origin": "100 0 0"},
+        )
+        text = "".join("{\n" + "".join(
+            f'"{key}" "{value}"\n' for key, value in entity.items()) +
+            "}\n" for entity in entities).encode("latin-1") + b"\0"
+        header = bytearray(mapflags.BSP_HEADER_SIZE)
+        struct.pack_into("<4si", header, 0, b"IBSP", 38)
+        struct.pack_into("<ii", header, 8,
+                         mapflags.BSP_HEADER_SIZE, len(text))
+        return bytes(header) + text
+
+    @staticmethod
+    def _fixture_rune() -> bytes:
+        import runeio
+        import rune_contracts_generated as contract
+        seed = runeio.SEED_STRUCT.pack(
+            0.0, 0.0, 0.0, 0, runeio.RSF_TOMBSTONE)
+        payload = seed + b"\0"
+        map_name = b"lmctf22" + b"\0" * (runeio.MAP_NAME_BYTES - 7)
+        prefix = runeio.HEADER_STRUCT.pack(
+            runeio.RUNE_MAGIC, 0, runeio.RUNE_HEADER_BYTES,
+            runeio.RUNE_SEED_BYTES, runeio.RUNE_LINK_BYTES,
+            1, 0, zlib.crc32(payload) & 0xffffffff,
+            1, 2, contract.RUNE_ACTION_CONTRACT_CRC32,
+            contract.RUNE_PROOF_PHYSICS_FLAGS_SUPPORTED,
+            800.0, 0.0, 2000.0,
+            contract.RUNE_PROOF_PMOVE_SUBSTEP_MS,
+            contract.RUNE_PROOF_SERVER_FRAME_MS,
+            1, 0, map_name)
+        extension = runeio.RUNE_HEADER_EXTENSION_STRUCT.pack(
+            runeio.RUNE_ACTIVATION_NODE_BYTES,
+            runeio.RUNE_ACTIVATION_EDGE_BYTES,
+            runeio.RUNE_ACTIVATION_PLAN_BYTES,
+            0, 0, 0, 0, 1,
+            contract.RUNE_MECHANISM_CONTRACT_CRC32, 0)
+        header = bytearray(prefix + extension)
+        struct.pack_into("<I", header, runeio.RUNE_HEADER_CRC_OFFSET,
+                         runeio._rune_header_crc(header))
+        result = bytes(header) + payload
+        runeio.decode(result)
+        return result
+
+    @staticmethod
+    def _fixture_serverrecord() -> bytes:
+        setup = (bytes([12]) + b"\0" * 9 + b"game\0" +
+                 struct.pack("<H", 0xffff) + b"level\0" +
+                 bytes([13]) + struct.pack("<H", 33) +
+                 b"maps/lmctf22.bsp\0")
+        setup += b"".join(
+            bytes([13]) + struct.pack("<H", 1312 + index) +
+            f"bot{index}\\male/grunt".encode() + b"\0"
+            for index in range(10))
+        messages = [setup]
+        for frame in range(1, 6101):
+            active = range(1, min(10, frame // 10) + 1)
+            entities = b"".join(bytes((0, number)) for number in active)
+            messages.append(bytes([20]) + struct.pack("<i", frame) +
+                            bytes([18]) + entities + b"\0\0")
+        return b"".join(struct.pack("<i", len(message)) + message
+                        for message in messages)
+
+    @classmethod
+    def _fixture_stdlog(cls, assignment) -> bytes:
+        lines = ["\t\tStdLog\t1.2", "\t\tGameStart\t\t\t0.0"]
+        for index in range(10):
+            name = f"bot{index}"
+            moment = float(index + 1)
+            lines.extend((
+                f"\t\tPlayerConnect\t{name}\t\t{moment:.1f}",
+                f"\t\tPlayerTeamChange\t{name}\t{assignment[name]}\t"
+                f"{moment:.1f}",
+            ))
+        lines.append("bot0\tbot1\tKill\tRailgun\t0\t609.0")
+        lines.extend(f"\t\tPlayerLeft\tbot{index}\t\t610.0"
+                     for index in range(10))
+        return ("\n".join(lines) + "\n").encode()
+
+    @staticmethod
+    def _fixture_server_log() -> bytes:
+        lines = [f"bot{index} entered the game" for index in range(10)]
+        lines.extend(
+            f"SGCENSUS bot{index}: frm={frame} alive=1"
+            for frame in range(100, 6120, 10) for index in range(10))
+        lines.extend(
+            f"SG bot{index}: role=1 seed=0 goal=0 sgoal=0 spd=100 "
+            f"org=(0 0 0) link=-1 act=-1 hp=0 dh=0 dl=0 "
+            f"st=0.0 gnd=1 eng=1 frm={110 + index}"
+            for index in range(10))
+        lines.append("bot1 was railed by bot0")
+        return ("\n".join(lines) + "\n").encode()
+
+    @staticmethod
+    def _fixture_stats(path: Path) -> bytes:
+        connection = sqlite3.connect(path)
+        connection.executescript("""
+            CREATE TABLE userdata (char_idx INTEGER, playername TEXT);
+            CREATE TABLE game_stats (
+                char_idx INTEGER, frags INTEGER, fragged INTEGER,
+                deaths INTEGER, suicides INTEGER, shots INTEGER,
+                shots_hit INTEGER);
+            CREATE TABLE ctf_stats (
+                char_idx INTEGER, flag_pickups INTEGER,
+                flag_captures INTEGER, flag_returns INTEGER);
+        """)
+        for index in range(10):
+            connection.execute("INSERT INTO userdata VALUES (?, ?)",
+                               (index, f"bot{index}"))
+            connection.execute(
+                "INSERT INTO game_stats VALUES (?,?,?,?,?,?,?)",
+                (index, int(index == 0), int(index == 1), int(index == 1),
+                 0, 0, 0))
+            connection.execute("INSERT INTO ctf_stats VALUES (?,0,0,0)",
+                               (index,))
+        connection.commit()
+        connection.close()
+        return path.read_bytes()
+
+    @classmethod
+    def _positive_cli_fixture(cls, temporary: Path):
+        parent = cls._source_commit()
+        candidate_checkout = temporary / "candidate-checkout"
+        subprocess.run(("git", "clone", "-q", "--no-hardlinks",
+                        "--no-checkout", ROOT, candidate_checkout), check=True)
+        subprocess.run(("git", "checkout", "-q", "--detach", parent),
+                       cwd=candidate_checkout, check=True)
+        candidate_source = candidate_checkout / "g_main.c"
+        candidate_source.write_text(
+            candidate_source.read_text() +
+            '\nconst char stage_a_fixture_candidate_identity[] = '
+            '"stage-a-candidate";\n')
+        patches = {"baseline": b"", "candidate":
+                   stealstage._source_patch_payload(candidate_checkout)}
+        tool_payload = Path(stealstage.__file__).read_bytes()
+        _implementation, implementation_digest = \
+            stealstage.measurement_implementation()
+        treatments = {}
+        modules = {}
+        for arm in ("baseline", "candidate"):
+            with stealstage._reconstructed_source(
+                    ROOT, parent, patches[arm]) as reconstructed:
+                source_manifest = stealstage._source_tree_manifest(reconstructed)
+                probe = stealstage._run_knowledge_probe(reconstructed)
+                module, revision_header, build_inputs = \
+                    stealstage._rebuild_module(reconstructed)
+            modules[arm] = module
+            identity = {
+                "source_commit": parent,
+                "source_patch_sha256": hashlib.sha256(
+                    patches[arm]).hexdigest(),
+                "source_tree_sha256": hashlib.sha256(
+                    source_manifest).hexdigest(),
+                "module_sha256": hashlib.sha256(module).hexdigest(),
+            }
+            build_receipt = {
+                "format": stealstage.BUILD_RECEIPT_FORMAT,
+                "metric_version": stealstage.METRIC_VERSION,
+                "recipe": stealstage.SOURCE_BUILD_RECIPE,
+                **identity, "build_input_sha256": build_inputs,
+                "revision_header_sha256": hashlib.sha256(
+                    revision_header).hexdigest(),
+            }
+            authority_payloads = {
+                "source_patch": patches[arm],
+                "source_manifest": source_manifest,
+                "build_receipt": stealstage.canonical_json(build_receipt),
+                "knowledge_report": stealstage.canonical_json(
+                    stealstage._knowledge_report(
+                        identity, hashlib.sha256(tool_payload).hexdigest(),
+                        implementation_digest, probe)),
+            }
+            source_root = temporary / f"source-{arm}"
+            (source_root / "authority").mkdir(parents=True)
+            records = {}
+            for name, payload in authority_payloads.items():
+                relative = f"authority/{name}"
+                (source_root / relative).write_bytes(payload)
+                records[name] = {"path": relative,
+                                 "sha256": hashlib.sha256(payload).hexdigest()}
+            treatments[arm] = {
+                **identity, "source_root": str(source_root),
+                "source_artifacts": records,
+            }
+
+        rune = cls._fixture_rune()
+        import runeio
+        rune_identity = stealstage._rune_identity(runeio.decode(rune))
+        shared = {
+            "engine": b"engine fixture\n",
+            "rune": rune,
+            "bsp": cls._fixture_bsp(),
+            "recording_harness": b"serverrecord fixture harness\n",
+            "server_log": cls._fixture_server_log(),
+            "serverrecord": cls._fixture_serverrecord(),
+        }
+        stats = cls._fixture_stats(temporary / "fixture-stats.db")
+        config = b"set stage_a_fixture 1\n"
+        rounds = []
+        tamper_path = None
+        for index, (round_number, arm) in enumerate((
+                (1, "baseline"), (1, "candidate"),
+                (2, "baseline"), (2, "candidate"))):
+            assignment = cls._assignment(swapped=round_number == 2)
+            payloads = {**shared, "module": modules[arm],
+                        "stdlog": cls._fixture_stdlog(assignment),
+                        "stats_database": stats}
+            root = temporary / f"round-{round_number}-{arm}"
+            (root / "evidence").mkdir(parents=True)
+            (root / "config").mkdir()
+            artifacts = {}
+            for name in stealstage.REQUIRED_ARTIFACTS:
+                relative = f"evidence/{name}"
+                path = root / relative
+                path.write_bytes(payloads[name])
+                artifacts[name] = {
+                    "path": relative,
+                    "sha256": hashlib.sha256(payloads[name]).hexdigest()}
+                if index == 0 and name == "server_log":
+                    tamper_path = path
+            config_path = "config/stage-a.cfg"
+            (root / config_path).write_bytes(config)
+            rounds.append({
+                "name": f"r{round_number}-{arm}",
+                "metric_version": stealstage.METRIC_VERSION,
+                "arm": arm, "round": round_number, "treatment": arm,
+                "source_identity": {
+                    field: treatments[arm][field] for field in (
+                        "source_commit", "source_patch_sha256",
+                        "source_tree_sha256", "module_sha256")},
+                "root": str(root), "port": 48000 + index,
+                "map": "lmctf22",
+                "roster_and_team_assignment": assignment,
+                "evaluation_window_server_seconds": {
+                    "start": 10.0, "end": 610.0},
+                "active_duration_seconds": {
+                    "per_bot": 600.0, "red_team": 600.0,
+                    "blue_team": 600.0},
+                "recording_policy":
+                    "serverrecord before roster joins through removal after "
+                    "the full-roster allowance; evaluate the exact server-time crop",
+                "artifacts": artifacts,
+                "configuration_artifacts": [{
+                    "path": config_path,
+                    "sha256": hashlib.sha256(config).hexdigest()}],
+                "configuration_sha256": stealstage._configuration_digest(
+                    [(config_path, config)]),
+                "rune_identity": rune_identity,
+            })
+        contract_payload = cls._contract_bytes()
+        manifest = {
+            "format": stealstage.RECEIPT_FORMAT,
+            "metric_version": stealstage.METRIC_VERSION,
+            "metric_contract_sha256": hashlib.sha256(
+                contract_payload).hexdigest(),
+            "measurement_tool_sha256": hashlib.sha256(
+                tool_payload).hexdigest(),
+            "measurement_implementation_sha256": implementation_digest,
+            "source_parent_commit": parent,
+            "treatments": treatments, "rounds": rounds,
+        }
+        contract_path = temporary / "contract.json"
+        manifest_path = temporary / "manifest.json"
+        contract_path.write_bytes(contract_payload)
+        manifest_path.write_bytes(stealstage.canonical_json(manifest))
+        return contract_path, manifest_path, tamper_path
 
     @staticmethod
     def _stdlog_bytes(rename=False, drift=False, early_leave=False):
@@ -628,6 +935,8 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
     @classmethod
     def _result_fixture(cls):
         identities = cls._identities()
+        implementation, implementation_digest = \
+            stealstage.measurement_implementation()
         rounds = []
         for index, (round_number, arm) in enumerate((
                 (1, "baseline"), (1, "candidate"),
@@ -694,7 +1003,30 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
             "metric_contract_sha256": stealstage.METRIC_CONTRACT_SHA256,
             "measurement_tool_sha256": hashlib.sha256(
                 Path(stealstage.__file__).read_bytes()).hexdigest(),
+            "measurement_implementation_sha256": implementation_digest,
+            "measurement_implementation": implementation,
             "manifest_sha256": "2" * 64,
+            "source_parent_commit": cls._source_commit(),
+            "treatment_authority": {
+                arm: {
+                    "source_identity": identities[arm],
+                    "source_root_identity": [2, index + 20],
+                    "source_artifact_sha256": {
+                        name: (identities[arm]["source_patch_sha256"]
+                               if name == "source_patch" else
+                               identities[arm]["source_tree_sha256"]
+                               if name == "source_manifest" else
+                               hashlib.sha256(
+                                   f"{arm}-{name}".encode()).hexdigest())
+                        for name in stealstage.SOURCE_ARTIFACTS},
+                    "build_input_sha256": {
+                        name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                        for name in stealstage.SOURCE_BUILD_INPUTS},
+                    "policy_probe": {
+                        "tests_run": 9, "failures": 0, "errors": 0,
+                        "skipped": 0, "successful": True},
+                }
+                for index, arm in enumerate(("baseline", "candidate"))},
             "round_metrics": rounds,
             "aggregate": {"baseline": baseline, "candidate": candidate},
             "report": {"valid_receipts": True, "round_count": 4,
@@ -734,6 +1066,25 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
         duplicate = b'{"metric_version":"x","metric_version":"y"}'
         with self.assertRaisesRegex(ValueError, "duplicate key"):
             stealstage._strict_json(duplicate, "fixture")
+        with tempfile.TemporaryDirectory(prefix="steal-implementation-") as tmp:
+            copied = Path(tmp).resolve()
+            for relative in stealstage.MEASUREMENT_IMPLEMENTATION_PATHS:
+                target = copied / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            manifest_before, digest_before = \
+                stealstage.measurement_implementation(copied)
+            helper = copied / "tools/runeio.py"
+            helper.write_bytes(helper.read_bytes() + b"\n# drift\n")
+            manifest_after, digest_after = \
+                stealstage.measurement_implementation(copied)
+            self.assertNotEqual(digest_before, digest_after)
+            self.assertNotEqual(manifest_before, manifest_after)
+            parallel_helper = mock.Mock(
+                __file__=str(copied / "tools/runeio.py"))
+            with self.assertRaisesRegex(ValueError, "loaded from wrong path"):
+                stealstage._require_bound_helper(
+                    parallel_helper, "tools/runeio.py", manifest_before)
 
     def test_manifest_hashes_schema_design_and_source_identity_fail_closed(self) -> None:
         contract = self._contract_bytes()
@@ -752,8 +1103,27 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "measurement-tool hash"):
             validate(wrong)
         wrong = dict(manifest)
+        wrong["measurement_implementation_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "measurement-implementation"):
+            validate(wrong)
+        wrong = dict(manifest)
         wrong["extra"] = 1
         with self.assertRaisesRegex(ValueError, "incorrect schema"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["treatments"]["baseline"], wrong["treatments"]["candidate"] = (
+            wrong["treatments"]["candidate"],
+            wrong["treatments"]["baseline"])
+        with self.assertRaisesRegex(ValueError, "baseline must have an empty"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["treatments"]["candidate"]["source_commit"] = "f" * 40
+        with self.assertRaisesRegex(ValueError, "matched source parent"):
+            validate(wrong)
+        wrong = json.loads(json.dumps(manifest))
+        wrong["treatments"]["candidate"]["source_artifacts"][
+            "source_patch"]["sha256"] = "e" * 64
+        with self.assertRaisesRegex(ValueError, "patch artifact/identity"):
             validate(wrong)
         wrong = json.loads(json.dumps(manifest))
         wrong["rounds"][1]["port"] = wrong["rounds"][0]["port"]
@@ -946,77 +1316,173 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disagrees with StdLog"):
             stealstage.reconcile_stats(stdlog, stats, roster["roster"])
 
-    def test_knowledge_sidecar_is_exact_bound_and_zero_only(self) -> None:
+    def test_policy_report_is_exactly_bound_to_reconstructed_output(self) -> None:
         identity = self._identities()["baseline"]
-        report = {
-            "format": "lmctf-steal-knowledge-report-v1",
-            "metric_version": stealstage.METRIC_VERSION,
-            "source_commit": identity["source_commit"],
-            "source_patch_sha256": identity["source_patch_sha256"],
-            "module_sha256": identity["module_sha256"],
-            "measurement_tool_sha256": "2" * 64,
-            "policy_probe_sha256": "3" * 64,
-            "missing_flag_acceptances": 0,
-            "carried_flag_acceptances": 0,
-            "unseen_dropped_flag_acceptances": 0,
-            "wrong_floor_acceptances": 0,
-            "hull_blocked_acceptances": 0,
-            "runtime_violation_markers": 0,
-        }
+        probe = {"tests_run": 9, "failures": 0, "errors": 0,
+                 "skipped": 0, "successful": True}
+        report = stealstage._knowledge_report(
+            identity, "2" * 64, "4" * 64, probe)
         payload = json.dumps(report).encode()
         self.assertEqual(
             stealstage.validate_knowledge_report(
                 payload, identity, measurement_tool_sha256="2" * 64,
-                policy_probe_sha256="3" * 64), report)
-        for field in (
-                "missing_flag_acceptances", "carried_flag_acceptances",
-                "unseen_dropped_flag_acceptances", "wrong_floor_acceptances",
-                "hull_blocked_acceptances", "runtime_violation_markers"):
-            changed = dict(report)
-            changed[field] = 1
-            with self.subTest(field=field):
-                with self.assertRaisesRegex(ValueError, "nonzero"):
-                    stealstage.validate_knowledge_report(
-                        json.dumps(changed).encode(), identity,
-                        measurement_tool_sha256="2" * 64,
-                        policy_probe_sha256="3" * 64)
+                measurement_implementation_sha256="4" * 64,
+                policy_probe=probe), report)
+        changed = dict(report)
+        changed["tests_run"] = 0
+        with self.assertRaisesRegex(ValueError, "differs from reconstructed"):
+            stealstage.validate_knowledge_report(
+                json.dumps(changed).encode(), identity,
+                measurement_tool_sha256="2" * 64,
+                measurement_implementation_sha256="4" * 64,
+                policy_probe=probe)
+        failed_probe = dict(probe, failures=1, successful=False)
+        failed_report = stealstage._knowledge_report(
+            identity, "2" * 64, "4" * 64, failed_probe)
+        with self.assertRaisesRegex(ValueError, "policy probe failed"):
+            stealstage.validate_knowledge_report(
+                json.dumps(failed_report).encode(), identity,
+                measurement_tool_sha256="2" * 64,
+                measurement_implementation_sha256="4" * 64,
+                policy_probe=failed_probe)
         changed = dict(report)
         changed["module_sha256"] = "f" * 64
         with self.assertRaisesRegex(ValueError, "identity mismatch"):
             stealstage.validate_knowledge_report(
                 json.dumps(changed).encode(), identity,
                 measurement_tool_sha256="2" * 64,
-                policy_probe_sha256="3" * 64)
+                measurement_implementation_sha256="4" * 64,
+                policy_probe=probe)
         changed = dict(report)
         changed["extra"] = 0
         with self.assertRaisesRegex(ValueError, "incorrect schema"):
             stealstage.validate_knowledge_report(
                 json.dumps(changed).encode(), identity,
                 measurement_tool_sha256="2" * 64,
-                policy_probe_sha256="3" * 64)
+                measurement_implementation_sha256="4" * 64,
+                policy_probe=probe)
+
+    def test_source_patch_reconstruction_probe_and_import_shadow_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory(prefix="steal-source-") as temporary:
             repository = Path(temporary).resolve()
-            subprocess.run(("git", "init", "-q"), cwd=repository, check=True)
-            subprocess.run(("git", "config", "user.name", "Stage A"),
-                           cwd=repository, check=True)
-            subprocess.run(("git", "config", "user.email", "stage@example"),
-                           cwd=repository, check=True)
-            tracked = repository / "tracked.c"
-            tracked.write_text("one\n")
-            subprocess.run(("git", "add", "tracked.c"), cwd=repository,
-                           check=True)
-            subprocess.run(("git", "commit", "-qm", "fixture"),
+            subprocess.run(("git", "clone", "-q", "--no-hardlinks", ROOT,
+                            repository), check=True)
+            subprocess.run(("git", "checkout", "-q", "--detach",
+                            self._source_commit()),
                            cwd=repository, check=True)
             (repository / "untracked.c").write_text("omitted\n")
             with self.assertRaisesRegex(ValueError, "excludes untracked"):
                 stealstage._source_patch_payload(repository)
             (repository / "untracked.c").unlink()
-            tracked.write_text("two\n")
-            patch = stealstage._source_patch_payload(repository)
-            self.assertIn(b"-one", patch)
-            self.assertIn(b"+two", patch)
-            with self.assertRaisesRegex(ValueError, "policy probe failed"):
+            self.assertEqual(stealstage._run_knowledge_probe(repository), {
+                "tests_run": 9, "failures": 0, "errors": 0,
+                "skipped": 0, "successful": True})
+            build_inputs = {
+                name: hashlib.sha256((repository / name).read_bytes()).hexdigest()
+                for name in stealstage.SOURCE_BUILD_INPUTS}
+            makefile = repository / "GNUmakefile"
+            original_makefile = makefile.read_bytes()
+            makefile.write_bytes(original_makefile + b"\n# candidate mutation\n")
+            with self.assertRaisesRegex(ValueError, "build authority"):
+                stealstage._rebuild_module(repository, build_inputs)
+            makefile.write_bytes(original_makefile)
+            helper = repository / "tools/runeio.py"
+            original_helper = helper.read_bytes()
+            helper.write_bytes(original_helper + b"\n# candidate mutation\n")
+            with self.assertRaisesRegex(ValueError, "measurement/build"):
+                stealstage._validate_candidate_delta(repository)
+            helper.write_bytes(original_helper)
+            for generated in ("GitRevisionInfo.h", "stage-a-game.so"):
+                collision = repository / generated
+                collision.symlink_to("g_main.c")
+                subprocess.run(("git", "add", "-f", generated),
+                               cwd=repository, check=True)
+                collision_manifest = stealstage._source_tree_manifest(
+                    repository)
+                with self.subTest(generated=generated):
+                    with self.assertRaisesRegex(ValueError, "output collides"):
+                        stealstage._rebuild_module(
+                            repository, build_inputs, collision_manifest)
+                subprocess.run(("git", "reset", "-q", "--", generated),
+                               cwd=repository, check=True)
+                collision.unlink()
+
+            source_manifest = stealstage._source_tree_manifest(repository)
+            real_run = subprocess.run
+            production_source = repository / "g_main.c"
+            production_payload = production_source.read_bytes()
+
+            def mutating_build(command, *args, **kwargs):
+                if (isinstance(command, tuple) and
+                        "stage-a-game.so" in command and
+                        "GNUmakefile" in command):
+                    (repository / "stage-a-game.so").write_bytes(b"module")
+                    production_source.write_bytes(
+                        production_payload + b"\n/* drift */\n")
+                    return subprocess.CompletedProcess(command, 0, b"", b"")
+                return real_run(command, *args, **kwargs)
+
+            with mock.patch.object(
+                    stealstage.subprocess, "run", side_effect=mutating_build):
+                with self.assertRaisesRegex(ValueError, "mutated tracked"):
+                    stealstage._rebuild_module(
+                        repository, build_inputs, source_manifest)
+            production_source.write_bytes(production_payload)
+            (repository / "stage-a-game.so").unlink()
+            (repository / "GitRevisionInfo.h").unlink()
+            for shadow in ("json.py", "unittest.py"):
+                (repository / shadow).write_text(
+                    "raise SystemExit('must never be imported')\n")
+                subprocess.run(("git", "add", shadow), cwd=repository,
+                               check=True)
+                with self.subTest(shadow=shadow):
+                    with self.assertRaisesRegex(
+                            ValueError, "shadows a probe import"):
+                        stealstage._run_knowledge_probe(repository)
+                subprocess.run(("git", "reset", "-q", "--", shadow),
+                               cwd=repository, check=True)
+                (repository / shadow).unlink()
+            probe_path = repository / stealstage.POLICY_PROBE_PATH
+            probe_path.write_text(probe_path.read_text() + "\n# mutation\n")
+            with self.assertRaisesRegex(ValueError, "differs from frozen"):
                 stealstage._run_knowledge_probe(repository)
+            patch = stealstage._source_patch_payload(repository)
+            tampered = patch.replace(b"@@", b"XX", 1)
+            with self.assertRaises(ValueError):
+                with stealstage._reconstructed_source(
+                        ROOT, self._source_commit(), tampered):
+                    pass
+            # The evaluator reconstructs the declared arm and does not probe
+            # an unrelated dirty checkout supplied only as the object source.
+            self.assertNotEqual(
+                stealstage._source_patch_payload(repository), b"")
+            with stealstage._reconstructed_source(
+                    repository, self._source_commit(), b"") as reconstructed:
+                head = subprocess.run(("git", "rev-parse", "HEAD"),
+                                      cwd=reconstructed, check=True,
+                                      stdout=subprocess.PIPE,
+                                      text=True).stdout.strip()
+                self.assertEqual(head, self._source_commit())
+                self.assertTrue(stealstage._run_knowledge_probe(
+                    reconstructed)["successful"])
+
+    def test_source_tree_rejects_absolute_and_escaping_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="steal-symlink-") as temporary:
+            repository = Path(temporary).resolve()
+            subprocess.run(("git", "init", "-q"), cwd=repository, check=True)
+            (repository / "dir").mkdir()
+            (repository / "dir/target.c").write_text("tracked\n")
+            (repository / "alias.c").symlink_to("dir/target.c")
+            subprocess.run(("git", "add", "."), cwd=repository, check=True)
+            stealstage._source_tree_manifest(repository)
+            for target in ("/etc/passwd", "../../etc/passwd"):
+                (repository / "alias.c").unlink()
+                (repository / "alias.c").symlink_to(target)
+                subprocess.run(("git", "add", "alias.c"), cwd=repository,
+                               check=True)
+                with self.subTest(target=target):
+                    with self.assertRaisesRegex(ValueError, "not safe"):
+                        stealstage._source_tree_manifest(repository)
 
     def test_bsp_authenticated_stands_are_derived_and_ambiguous_maps_rejected(self) -> None:
         import mapflags
@@ -1120,6 +1586,15 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
             with self.subTest(starts=changed):
                 with self.assertRaisesRegex(ValueError, "one-to-one"):
                     stealstage.reconcile_carry_starts(changed, pickups)
+        boundary_pickup = [
+            {"name": "a", "kind": "F Pickup", "time": 0.6}]
+        self.assertEqual(len(stealstage.reconcile_carry_starts(
+            [{"name": "a", "team": "red", "time": 0.8}],
+            boundary_pickup)), 1)
+        with self.assertRaisesRegex(ValueError, "one-to-one"):
+            stealstage.reconcile_carry_starts(
+                [{"name": "a", "team": "red", "time": 0.800001}],
+                boundary_pickup)
 
     def test_approach_exposure_denominator_is_separate_from_conversion(self) -> None:
         track = [
@@ -1167,6 +1642,14 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
                   "window": (10.0, 610.0)}
         joins = [f"bot{index} entered the game" for index in range(10)]
 
+        def census(*, dead=None, frames=None):
+            dead = dead or set()
+            frames = frames or range(100, 6120, 10)
+            return [
+                f"SGCENSUS bot{index}: frm={frame} "
+                f"alive={0 if (index, frame) in dead else 1}"
+                for frame in frames for index in range(10)]
+
         def sg(index, **changes):
             fields = {"role": 0, "seed": 0, "goal": 0, "sgoal": 0,
                       "speed": 1, "link": -1, "action": -1,
@@ -1185,7 +1668,8 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
         stdlog = {"flag_events": [], "combat_events": [
             {"kind": "Kill", "attacker": "bot0", "victim": "bot1",
              "weapon": "Railgun", "time": 609.0, "log_order": 1}]}
-        host = {"lines": joins + [sg(index) for index in range(10)] +
+        host = {"lines": joins + census() +
+                [sg(index, frame=110 + index) for index in range(10)] +
                 ["bot1 was railed by bot0"], "outcomes": []}
         contract = stealstage.load_contract(self._contract_bytes())
         metrics = stealstage.diagnostic_metrics(
@@ -1197,7 +1681,8 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
             {"stuck": "nan"}, {"frame": 2147483648},
         )
         for change in cases:
-            lines = joins + [sg(0, **change)] + [sg(index)
+            lines = joins + census() + [sg(0, **{"frame": 110, **change})] + [sg(
+                index, frame=110 + index)
                                                 for index in range(1, 10)] + \
                 ["bot1 was railed by bot0"]
             with self.subTest(change=change):
@@ -1210,6 +1695,27 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cutoff gap"):
             stealstage.diagnostic_metrics(
                 host, late_stdlog, roster, Rune(), contract)
+
+        exact = stealstage.validate_census(host["lines"], roster)
+        self.assertEqual(exact["coverage_bot_seconds"], 6000)
+        self.assertEqual(exact["context_rows_before"], 10)
+        self.assertEqual(exact["context_rows_after"], 10)
+        dead_host = {"lines": joins + census(dead={(0, 110)}) +
+                     [sg(0, frame=110)] + [sg(index, frame=110 + index)
+                                           for index in range(1, 10)] +
+                     ["bot1 was railed by bot0"], "outcomes": []}
+        with self.assertRaisesRegex(ValueError, "dead census"):
+            stealstage.diagnostic_metrics(
+                dead_host, stdlog, roster, Rune(), contract)
+        every_other = joins + census(frames=range(100, 6120, 20))
+        with self.assertRaisesRegex(ValueError, "gap-free"):
+            stealstage.validate_census(every_other, roster)
+        replay = joins + census() + ["SGCENSUS bot0: frm=6110 alive=1"]
+        with self.assertRaisesRegex(ValueError, "replayed"):
+            stealstage.validate_census(replay, roster)
+        malformed = joins + census() + ["SGCENSUS bot0 frm=6120 alive=1"]
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            stealstage.validate_census(malformed, roster)
 
     def test_full_rune_identity_and_numeric_evaluator_are_executable(self) -> None:
         header = type("Header", (), {
@@ -1274,21 +1780,116 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
         self.assertIn("evaluate", result.stdout)
         self.assertIn("verify-result", result.stdout)
         self.assertIn("knowledge-report", result.stdout)
-        tool = (ROOT / "tools/stealstage.py").read_bytes()
-        generated = stealstage.generate_knowledge_report(
-            ROOT, b"module fixture", tool)
-        identity = {field: generated[field] for field in (
-            "source_commit", "source_patch_sha256", "module_sha256")}
-        validated = stealstage.validate_knowledge_report(
-            json.dumps(generated).encode(), identity,
-            measurement_tool_sha256=generated["measurement_tool_sha256"],
-            policy_probe_sha256=generated["policy_probe_sha256"])
-        self.assertEqual(validated, generated)
-        with self.assertRaisesRegex(ValueError, "identity mismatch"):
-            stealstage.validate_knowledge_report(
-                json.dumps(generated).encode(), identity,
-                measurement_tool_sha256="f" * 64,
-                policy_probe_sha256=generated["policy_probe_sha256"])
+        with tempfile.TemporaryDirectory(prefix="steal-cli-") as temporary:
+            temporary = Path(temporary)
+            contract = temporary / "contract.json"
+            manifest = temporary / "manifest.json"
+            result_path = temporary / "result.json"
+            contract.write_bytes(self._contract_bytes())
+            manifest.write_text("{}\n")
+            process = subprocess.run((
+                sys.executable, "tools/stealstage.py", "evaluate",
+                "--contract", str(contract), "--manifest", str(manifest),
+                "--source-repository", str(ROOT)), cwd=ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("incorrect schema", process.stderr)
+            self.assertNotIn("unexpected keyword", process.stderr)
+
+            result_path.write_bytes(canonical := stealstage.canonical_json(
+                stealstage.bind_result_hashes(self._result_fixture())))
+            process = subprocess.run((
+                sys.executable, "tools/stealstage.py", "verify-result",
+                "--result", str(result_path), "--contract", str(contract),
+                "--manifest", str(manifest), "--source-repository",
+                str(ROOT)), cwd=ROOT, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("incorrect schema", process.stderr)
+            missing = subprocess.run((
+                sys.executable, "tools/stealstage.py", "verify-result",
+                "--result", str(result_path), "--contract", str(contract),
+                "--source-repository", str(ROOT)), cwd=ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("--manifest", missing.stderr)
+
+            supplied = stealstage._strict_json(canonical, "fixture result")
+            different = json.loads(json.dumps(supplied))
+            different["manifest_sha256"] = "3" * 64
+            different.pop("result_sha256")
+            different.pop("report_sha256")
+            different = stealstage.bind_result_hashes(different)
+            with mock.patch.object(
+                    stealstage, "validate_manifest", return_value=different):
+                with self.assertRaisesRegex(ValueError, "differs from complete"):
+                    stealstage.verify_result(
+                        self._contract_bytes(), b"{}", canonical, ROOT)
+
+    def test_complete_evaluate_publish_verify_cli_and_postpublish_tamper(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="steal-cli-positive-") as tmp:
+            temporary = Path(tmp).resolve()
+            contract, manifest, tamper_path = self._positive_cli_fixture(
+                temporary)
+            output = temporary / "result.json"
+            evaluated = subprocess.run((
+                sys.executable, "tools/stealstage.py", "evaluate",
+                "--contract", str(contract), "--manifest", str(manifest),
+                "--source-repository", str(ROOT), "--output", str(output)),
+                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True)
+            self.assertEqual(evaluated.returncode, 0, evaluated.stderr[-8000:])
+            published = output.read_bytes()
+            parsed = stealstage._strict_json(published, "published result")
+            self.assertIs(stealstage.validate_result_hashes(parsed), parsed)
+
+            verified = subprocess.run((
+                sys.executable, "tools/stealstage.py", "verify-result",
+                "--result", str(output), "--contract", str(contract),
+                "--manifest", str(manifest), "--source-repository",
+                str(ROOT)), cwd=ROOT, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+            self.assertEqual(verified.returncode, 0, verified.stderr[-8000:])
+            self.assertEqual(output.read_bytes(), published)
+
+            shadow = temporary / "shadow-runner"
+            for relative in stealstage.MEASUREMENT_IMPLEMENTATION_PATHS:
+                destination = shadow / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((ROOT / relative).read_bytes())
+            helper = shadow / "tools/runeio.py"
+            helper.write_bytes(helper.read_bytes() + b"\n# post-receipt drift\n")
+            shadow_tool = shadow / "tools/stealstage.py"
+            shadow_evaluate = subprocess.run((
+                sys.executable, str(shadow_tool), "evaluate",
+                "--contract", str(contract), "--manifest", str(manifest),
+                "--source-repository", str(ROOT), "--output",
+                str(temporary / "shadow-result.json")), cwd=shadow,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(shadow_evaluate.returncode, 0)
+            self.assertIn(
+                "measurement-implementation hash mismatch",
+                shadow_evaluate.stderr)
+            shadow_verify = subprocess.run((
+                sys.executable, str(shadow_tool), "verify-result",
+                "--result", str(output), "--contract", str(contract),
+                "--manifest", str(manifest), "--source-repository",
+                str(ROOT)), cwd=shadow, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(shadow_verify.returncode, 0)
+            self.assertIn(
+                "measurement-implementation",
+                shadow_verify.stderr)
+
+            tamper_path.write_bytes(tamper_path.read_bytes() + b"tampered\n")
+            rejected = subprocess.run((
+                sys.executable, "tools/stealstage.py", "verify-result",
+                "--result", str(output), "--contract", str(contract),
+                "--manifest", str(manifest), "--source-repository",
+                str(ROOT)), cwd=ROOT, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("SHA-256 mismatch", rejected.stderr)
 
     def test_dependency_free_serverrecord_reader_is_strict_and_tracks_effects(self) -> None:
         serverdata = (bytes([12]) + b"\0" * 9 + b"game\0" +
