@@ -83,4 +83,17 @@ static inline int SG_ItemGainSourceCost(int gain, int best_gain)
 	                                             : SG_ITEM_ROUTE_MAX_SOURCE_COST;
 }
 
+/* Mega has its own identity field and role/headroom policy when enabled.  It
+ * must then leave the ordinary health class or the same pad is priced twice.
+ * With the dedicated policy off, mega remains a normal physical health source. */
+static inline int SG_HealthClassRouteAdmission(int is_mega,
+	int dedicated_mega_policy, int physical_pickup_eligible)
+{
+	if ((is_mega != 0 && is_mega != 1) ||
+	    (dedicated_mega_policy != 0 && dedicated_mega_policy != 1) ||
+	    (physical_pickup_eligible != 0 && physical_pickup_eligible != 1))
+		return 0;
+	return physical_pickup_eligible && !(is_mega && dedicated_mega_policy);
+}
+
 #endif

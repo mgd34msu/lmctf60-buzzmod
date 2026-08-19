@@ -438,6 +438,13 @@ int main(void)
 	      SG_ITEM_ROUTE_MAX_SOURCE_COST);
 	CHECK(SG_ItemGainSourceCost(0, 20) == -1);
 	CHECK(SG_ItemGainSourceCost(21, 20) == -1);
+	CHECK(SG_HealthClassRouteAdmission(false, true, true));
+	CHECK(SG_HealthClassRouteAdmission(true, false, true));
+	CHECK(!SG_HealthClassRouteAdmission(true, true, true));
+	CHECK(!SG_HealthClassRouteAdmission(false, false, false));
+	CHECK(!SG_HealthClassRouteAdmission(2, false, true));
+	CHECK(!SG_HealthClassRouteAdmission(false, 2, true));
+	CHECK(!SG_HealthClassRouteAdmission(false, false, 2));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, false, false));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, false, false));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1, false, false));

@@ -171,6 +171,11 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         health_start = goal.index("const int *SG_CollectibleHealthField")
         health = goal[health_start:ammo_start]
         self.assertIn("G_HealthPickupGain(item, bot->ent)", health)
+        self.assertIn("SG_HealthClassRouteAdmission(", health)
+        self.assertIn('strcmp(item->classname, "item_health_mega") == 0',
+                      health)
+        self.assertIn("SG_MegaOn(), G_HealthPickupEligible(item, bot->ent)",
+                      health)
         self.assertIn("SG_ItemGainSourceCost(gains[i], best_gain)", health)
         self.assertIn("sg_health_collectible_cost[bi][i] != costs[i]", health)
         armor_start = goal.index("const int *SG_CollectibleArmorField")

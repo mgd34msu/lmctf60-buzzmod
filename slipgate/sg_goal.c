@@ -1004,7 +1004,9 @@ const int *SG_CollectibleHealthField(sg_bot_t *bot)
 		if (!item->inuse || !item->classname ||
 		    strncmp(item->classname, "item_health", 11) != 0 ||
 		    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
-		    !G_HealthPickupEligible(item, bot->ent))
+		    !SG_HealthClassRouteAdmission(
+		        strcmp(item->classname, "item_health_mega") == 0,
+		        SG_MegaOn(), G_HealthPickupEligible(item, bot->ent)))
 			continue;
 		gains[count] = G_HealthPickupGain(item, bot->ent);
 		if (gains[count] <= 0)
