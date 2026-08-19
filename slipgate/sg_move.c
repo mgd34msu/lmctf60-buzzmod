@@ -3739,7 +3739,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * can aim beside the live item.  Reset only a plain RUN commitment;
 		 * declared/ballistic controllers retain their own authority.
 		 */
-		if (!have_aim && (role == SG_ROLE_ATTACK || tc->strike_rush) &&
+		if (!have_aim && tc->strike_pressure &&
 		    bot->hook_phase == 0 &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0 &&
 		    SG_AttackFlagTerminalAim(e, team, aim))
@@ -4745,8 +4745,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 
-			if (!have_aim && !gf &&
-			    (role == SG_ROLE_ATTACK || tc->strike_rush))
+			if (!have_aim && !gf && tc->strike_pressure)
 			{
 				/* enemy stand position is common knowledge */
 				edict_t *marker = SG_FlagStand(team, false);

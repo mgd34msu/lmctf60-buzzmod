@@ -297,8 +297,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	int finite_route_neighbors = 0;
 	int attack_descent_link = -1;
 	float attack_descent_value = 1e30f;
-	qboolean enemy_pressure = SG_StrikeEnemyPressureActive(
-	    role == SG_ROLE_ATTACK, tc->strike_rush);
+	qboolean enemy_pressure = tc->strike_pressure;
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
 
@@ -2340,8 +2339,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean defense_quiet = true;
 	qboolean defense_post = false;
 	qboolean defense_shift_selected = false;
-	qboolean enemy_pressure = SG_StrikeEnemyPressureActive(
-	    role == SG_ROLE_ATTACK, tc->strike_rush);
+	qboolean enemy_pressure = tc->strike_pressure;
 	int defense_threat_seed = -1;
 	float post_yaw = tc->post_yaw;
 	float post_sight = tc->post_sight;
@@ -2636,11 +2634,11 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	{
 		qboolean flag_los = false;
 
-		if ((role == SG_ROLE_ATTACK || tc->strike_rush) &&
+		if (tc->strike_pressure &&
 		    SG_AttackFlagDirectTouchAuthority(e, team, NULL))
 			flag_los = true;
 
-		if (((role == SG_ROLE_ATTACK || tc->strike_rush) && flag_los) ||
+		if ((tc->strike_pressure && flag_los) ||
 		    (role == SG_ROLE_CARRY && bot->seed >= 0 &&
 		     goal_field[bot->seed] < SG_FIELD_INF &&
 		     goal_field[bot->seed] < 400))

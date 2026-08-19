@@ -373,6 +373,11 @@ or carrier-route owner, but pressure duties are now narrower: BREACH, CLEAR,
 and PRESS require a finite enemy-flag field or an already-proved direct touch.
 An admitted bot can no longer have its usable organic mission replaced by an
 infinite enemy route merely because the four-person coordinator roster is full.
+Pressure authority is now derived from the concrete BREACH, CLEAR, or PRESS
+duty, not from the transient strike rush mask. CLEAR/PRESS therefore retain
+attack routing and terminal safeguards through carrier egress and standoffs
+where rush is intentionally zero, while a concrete RECOVER or ESCORT duty
+overrides an underlying ATTACK role instead of accidentally keeping it hostile.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

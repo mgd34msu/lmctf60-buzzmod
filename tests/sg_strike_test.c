@@ -1009,10 +1009,15 @@ static void TestHomeFlagApproachPricing(void)
 	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_RECOVER));
 	CHECK(SG_StrikeDutyRetiresOptionalErrand(SG_STRIKE_DUTY_CARRY));
 	CHECK(!SG_StrikeDutyRetiresOptionalErrand((sg_strike_duty_t)-1));
-	CHECK(SG_StrikeEnemyPressureActive(1, 0));
-	CHECK(SG_StrikeEnemyPressureActive(0, 1));
-	CHECK(SG_StrikeEnemyPressureActive(1, 1));
-	CHECK(!SG_StrikeEnemyPressureActive(0, 0));
+	CHECK(SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_BREACH));
+	CHECK(SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_CLEAR));
+	CHECK(SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_PRESS));
+	CHECK(!SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_RECOVER));
+	CHECK(!SG_StrikeDutyEnemyPressure(SG_STRIKE_DUTY_ESCORT));
+	CHECK(SG_StrikeEnemyPressureActive(1, 0, SG_STRIKE_DUTY_NONE));
+	CHECK(!SG_StrikeEnemyPressureActive(1, 1, SG_STRIKE_DUTY_RECOVER));
+	CHECK(SG_StrikeEnemyPressureActive(0, 1, SG_STRIKE_DUTY_PRESS));
+	CHECK(!SG_StrikeEnemyPressureActive(0, 1, SG_STRIKE_DUTY_ESCORT));
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 500.0f, 300.0f, 0.0f,
 	    500, 500) == -100.0f);
 	CHECK(SG_StrikeFlagApproachPrice(1, 1, 400.0f, 350.0f, 0.0f,

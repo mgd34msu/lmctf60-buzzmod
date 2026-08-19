@@ -14,9 +14,17 @@ static int Strike_SlotValid(int slot)
 	return slot >= 0 && slot < SG_STRIKE_MAX_SLOTS;
 }
 
-int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_rush)
+int SG_StrikeDutyEnemyPressure(sg_strike_duty_t duty)
 {
-	return ordinary_attack || strike_rush;
+	return duty == SG_STRIKE_DUTY_BREACH ||
+	    duty == SG_STRIKE_DUTY_CLEAR || duty == SG_STRIKE_DUTY_PRESS;
+}
+
+int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
+	sg_strike_duty_t duty)
+{
+	return strike_active ? SG_StrikeDutyEnemyPressure(duty)
+	                     : ordinary_attack;
 }
 
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty)

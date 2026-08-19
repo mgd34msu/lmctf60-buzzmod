@@ -2098,7 +2098,8 @@ static void StrikePrepareFrame(void)
 		sg_strike_role_valid[i] = true;
 		sg_strike_enemy_pressure_cache[i] =
 		    SG_StrikeEnemyPressureActive(
-		        sg_strike_role_cache[i] == SG_ROLE_ATTACK, 0);
+		        sg_strike_role_cache[i] == SG_ROLE_ATTACK, 0,
+		        SG_STRIKE_DUTY_NONE);
 	}
 
 	for (team_index = 0; team_index < 2; team_index++)
@@ -2168,24 +2169,29 @@ static void StrikePrepareFrame(void)
 	{
 		/* Freeze effective pressure for every teammate now.  Serial movement
 		 * may read this table, but may not rewrite it from a partially advanced
-		 * team.  The one RECOVER/ESCORT owner remains outside rush_mask. */
+		 * team.  Duty, not the transient rush mask, keeps RECOVER/ESCORT out and
+		 * CLEAR/PRESS active through egress. */
 		for (i = 0; i < SG_MAXBOTS; i++)
 		{
 			edict_t *ent = sg_bots[i].ent;
 			const sg_strike_team_t *team;
 			int team_index;
-			qboolean strike_rush = false;
+			qboolean participant = false;
+			sg_strike_duty_t duty = SG_STRIKE_DUTY_NONE;
 
 			if (!sg_strike_role_valid[i] || !ent || !ent->client)
 				continue;
 			team_index = SG_TeamIdx(ent->client->ctf.teamnum);
 			team = SG_StrikeAdapterTeam(&sg_strike_adapter, team_index);
 			if (team && SG_StrikeParticipant(team, i))
-				strike_rush = SG_StrikeMemberRushes(team, i) ? true : false;
+			{
+				participant = true;
+				duty = team->duty[i];
+			}
 			sg_strike_enemy_pressure_cache[i] =
 			    SG_StrikeEnemyPressureActive(
 			        sg_strike_role_cache[i] == SG_ROLE_ATTACK,
-			        strike_rush);
+			        participant, duty);
 		}
 		for (team_index = 0; team_index < 2; team_index++)
 			StrikeTelemetryEdge(team_index);
@@ -3405,6 +3411,8 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.role = role;
 	tc.team = team;
 	tc.carrying = carrying;
+	tc.strike_pressure = SG_StrikeEnemyPressureActive(
+	    role == SG_ROLE_ATTACK, 0, SG_STRIKE_DUTY_NONE);
 
 	Think_LiveWeights(bot, &tc);    /* fills tc.live */
 	tc.w = &tc.live;
@@ -3442,6 +3450,8 @@ void SG_BotThink(sg_bot_t *bot)
 			int weapon_remaining_ms;
 
 			strike_duty = strike_team->duty[strike_slot];
+			tc.strike_pressure = SG_StrikeEnemyPressureActive(
+			    role == SG_ROLE_ATTACK, 1, strike_duty);
 			if (SG_StrikeDutyRetiresOptionalErrand(strike_duty))
 				Lead_Abort(bot, "strike duty");
 			tc.strike_active = true;

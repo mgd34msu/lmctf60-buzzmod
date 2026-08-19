@@ -444,12 +444,10 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("strike_team->weapon_deadline[strike_slot] -",
                       arach)
         move = (ROOT / "slipgate/sg_move.c").read_text()
-        self.assertIn("(role == SG_ROLE_ATTACK || tc->strike_rush)", move)
+        self.assertIn("tc->strike_pressure", move)
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
         self.assertIn("StrikeWeaponPrepareCommit(bot, tc)", descend)
-        self.assertIn("(role == SG_ROLE_ATTACK || tc->strike_rush)", descend)
-        self.assertIn("qboolean enemy_pressure = SG_StrikeEnemyPressureActive(",
-                      descend)
+        self.assertIn("qboolean enemy_pressure = tc->strike_pressure", descend)
         self.assertGreaterEqual(descend.count("enemy_pressure"), 8)
         self.assertIn("SG_AttackDescentFallbackAllowed(enemy_pressure,",
                       descend)
@@ -483,6 +481,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("sg_strike_enemy_pressure_cache[slot] = false", reset)
         move = (ROOT / "slipgate/sg_move.c").read_text()
         self.assertIn("SG_StrikeEnemyPressureSnapshot(bot)", move)
+        self.assertIn("tc.strike_pressure = SG_StrikeEnemyPressureActive(",
+                      arach)
 
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()

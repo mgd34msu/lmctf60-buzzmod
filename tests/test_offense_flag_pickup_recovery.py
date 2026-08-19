@@ -49,10 +49,12 @@ def terminal_abandons_graph(
     *,
     goal_cost: int | None,
     direct_touch: bool,
-    strike_rush: bool = False,
+    strike_active: bool = False,
+    strike_pressure: bool = False,
 ) -> bool:
-    """The exact ATTACK/strike-rush/CARRY split in Think_CommitLink."""
-    if role == "ATTACK" or strike_rush:
+    """The exact pressure-duty/CARRY split in Think_CommitLink."""
+    enemy_pressure = strike_pressure if strike_active else role == "ATTACK"
+    if enemy_pressure:
         return direct_touch
     return role == "CARRY" and goal_cost is not None and goal_cost < 400
 
@@ -329,7 +331,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         )
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", terminal)
         self.assertIn(
-            "(role == SG_ROLE_ATTACK || tc->strike_rush) && flag_los",
+            "tc->strike_pressure && flag_los",
             terminal,
         )
         self.assertIn("role == SG_ROLE_CARRY && bot->seed >= 0", terminal)
@@ -354,7 +356,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
                 "DEFEND",
                 goal_cost=1,
                 direct_touch=seed_618_direct,
-                strike_rush=True,
+                strike_active=True,
+                strike_pressure=True,
             )
         )
 
@@ -371,9 +374,18 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
         self.assertTrue(
             terminal_abandons_graph(
-                "DEFEND", goal_cost=9999, direct_touch=True, strike_rush=True
+                "DEFEND", goal_cost=9999, direct_touch=True,
+                strike_active=True,
+                strike_pressure=True
             )
         )
+
+        # A concrete recovery duty overrides an organic ATTACK role just as a
+        # concrete pressure duty overrides an organic non-attacker role.
+        self.assertFalse(terminal_abandons_graph(
+            "ATTACK", goal_cost=1, direct_touch=True,
+            strike_active=True, strike_pressure=False
+        ))
 
         self.assertTrue(
             terminal_abandons_graph("ATTACK", goal_cost=700, direct_touch=True)
@@ -662,7 +674,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         wedge = between(descend, "THE UNSTICK OF LAST RESORT.", "\n\tVectorSubtract(e->s.origin, bot->stag_org, d);")
         recovery = between(
             wedge,
-            "role == SG_ROLE_ATTACK &&",
+            "enemy_pressure &&",
             "\n\telse if (SG_AgeOver(bot->wedge_since, 15.0f) &&",
         )
         kill = wedge.index('sg_host.dprint("WEDGEKILL')

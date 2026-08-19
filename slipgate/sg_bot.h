@@ -568,6 +568,7 @@ typedef struct sg_think_s {
 	/* Frame-scoped strike policy.  The coordinator owns membership and
 	 * deadlines; the ordinary descent/move stages own route execution. */
 	qboolean		strike_active, strike_hold, strike_rush,
+				strike_pressure,
 				strike_weapon_pursuit;
 	float			strike_weapon_deadline;
 } sg_think_t;

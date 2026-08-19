@@ -169,10 +169,12 @@ sg_strike_weapon_door_retirement_t SG_StrikeWeaponDoorRetirement(
 	int release_proved_clear, int recovery_expired, int hold_open_ready);
 int SG_StrikeGenericRailAllowed(int strike_active);
 
-/* A coordinated pressure duty owns the same enemy-room conversion policy as
- * an organic ATTACK role.  Recovery and escort duties pass strike_rush=0 and
- * retain their own objective authority. */
-int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_rush);
+/* A concrete pressure duty persists independently of the transient HOLD/RUSH
+ * release mask.  While the coordinator owns a bot, its duty overrides the
+ * organic role for enemy-pressure policy. */
+int SG_StrikeDutyEnemyPressure(sg_strike_duty_t duty);
+int SG_StrikeEnemyPressureActive(int ordinary_attack, int strike_active,
+	sg_strike_duty_t duty);
 /* A concrete coordinator duty is an objective mission, so optional item-pad
  * preparation cannot remain live underneath its route and aim authority. */
 int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);
