@@ -205,6 +205,9 @@ Live human orders are now excluded from autonomous strike membership, so an
 ordered ATTACK, ESCORT, RECOVER, or DEFEND route cannot be overwritten by the
 coordinator; actual flag possession still admits the carrier because physical
 objective state outranks an older standing order.
+The timed item-lead controller now aborts an existing pad commitment for every
+ESCORT role, including a human-directed cover order with no flag carrier; the
+escort cannot abandon its live screen for an early item.
 Defender ranking now counts only live same-team bodies, so a corpse in an early
 bot slot cannot reserve the stand-watch quota while surviving teammates abandon
 the base; escort admission now uses that identical live rank, so it cannot steal

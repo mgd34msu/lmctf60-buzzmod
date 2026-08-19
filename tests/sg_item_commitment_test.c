@@ -301,6 +301,10 @@ static void TestStrongerInterruptsStillWin(void)
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
 	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, true) == NULL);
 	CHECK(bot->lead_ent == 0);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	CHECK(Lead_Field(bot, SG_ROLE_ESCORT, false) == NULL);
+	CHECK(bot->lead_ent == 0);
 }
 
 int main(void)

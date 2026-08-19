@@ -215,6 +215,11 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying)
 		Lead_Abort(bot, "our flag out");
 		return NULL;
 	}
+	if (role == SG_ROLE_ESCORT)
+	{
+		Lead_Abort(bot, "escort duty");
+		return NULL;
+	}
 	if (sg_caco_team_belief.carrier[ti].client >= 0)
 	{
 		Lead_Abort(bot, "carrier live");
