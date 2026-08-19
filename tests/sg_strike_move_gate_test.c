@@ -35,6 +35,10 @@ int main(void)
 	memset(&tc, 0, sizeof(tc));
 	CHECK(SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(false));
 	CHECK(!SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(true));
+	CHECK(!SG_StrikeTestEnemyFlagTouchMissionActive(false, false));
+	CHECK(SG_StrikeTestEnemyFlagTouchMissionActive(true, false));
+	CHECK(SG_StrikeTestEnemyFlagTouchMissionActive(false, true));
+	CHECK(SG_StrikeTestEnemyFlagTouchMissionActive(true, true));
 	CHECK(SG_StrikeTestRailMoveAllowed(&tc));
 	tc.strike_active = true;
 	CHECK(!SG_StrikeTestRailMoveAllowed(&tc));

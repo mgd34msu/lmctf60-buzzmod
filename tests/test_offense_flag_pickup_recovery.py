@@ -492,6 +492,49 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             smooth,
         )
 
+    def test_scoop_mission_finishes_the_relay_touch(self) -> None:
+        goal = source("slipgate/sg_goal.c")
+        publish = between(
+            goal,
+            "SCOOP is an enemy-flag touch mission",
+            "tc->goal_field = goal_field;",
+        )
+        for token in (
+            "tc->scoop_mission = role == SG_ROLE_ESCORT",
+            "carrier[SG_TeamIdx(team)].client < 0",
+            "state == SG_FLAG_ASTRAY",
+            "goal_field == sg_fields.to_flag_now",
+        ):
+            self.assertIn(token, publish)
+
+        move = source("slipgate/sg_move.c")
+        priority = between(
+            move,
+            "The terminal approach is a physical touch",
+            "if (!have_aim && bestlink >= 0)",
+        )
+        self.assertIn(
+            "EnemyFlagTouchMissionActive(\n"
+            "\t\t        tc->strike_pressure, tc->scoop_mission)",
+            priority,
+        )
+        fallback = between(
+            move,
+            "if (!have_aim && !gf && tc->scoop_mission)",
+            "else if (!have_aim && !gf && tc->strike_pressure)",
+        )
+        self.assertIn("SG_AttackFlagDirectTouchAuthority", fallback)
+        self.assertIn("SG_TerminalFieldSeed(SG_Rune(),", fallback)
+        self.assertNotIn("SG_FlagStand", fallback)
+
+        arach = source("slipgate/sg_arach.c")
+        overlay = between(
+            arach,
+            "static qboolean StrikeApplyDutyRoute",
+            "static void StrikeRetireGenericRail",
+        )
+        self.assertIn("tc->scoop_mission = false;", overlay)
+
     def test_home_flag_touch_owns_carrier_terminal_heading(self) -> None:
         move = source("slipgate/sg_move.c")
         authority = between(

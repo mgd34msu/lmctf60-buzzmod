@@ -3425,6 +3425,14 @@ static qboolean FlagTerminalGenericSteeringAllowed(
 	return !flag_touch_terminal;
 }
 
+/* A relay scoop owns the same final physical pickup as ordinary enemy
+ * pressure, but none of the attack-only pre-breach behavior. */
+static qboolean EnemyFlagTouchMissionActive(qboolean strike_pressure,
+	qboolean scoop_mission)
+{
+	return strike_pressure || scoop_mission;
+}
+
 /* Phase two is the irreversible rocket-jump boundary: this exact production
  * emitter can launch the rocket before the next reconciliation frame. */
 static qboolean StrikeRocketJumpPhase2Command(const sg_bot_t *bot,
@@ -3794,7 +3802,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * can aim beside the live item.  Reset only a plain RUN commitment;
 		 * declared/ballistic controllers retain their own authority.
 		 */
-		if (!have_aim && tc->strike_pressure &&
+		if (!have_aim && EnemyFlagTouchMissionActive(
+		        tc->strike_pressure, tc->scoop_mission) &&
 		    bot->hook_phase == 0 &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0 &&
 		    SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag))
@@ -4825,7 +4834,28 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 
-			if (!have_aim && !gf && tc->strike_pressure)
+			if (!have_aim && !gf && tc->scoop_mission)
+			{
+				edict_t *enemy_item = NULL;
+
+				/* The relay follows its admitted dropped-flag belief until an
+				 * exact item touch replaces it.  The enemy home stand is not a
+				 * fallback for an astray flag. */
+				if (SG_AttackFlagDirectTouchAuthority(e, team, &enemy_item))
+					gf = enemy_item;
+				else
+				{
+					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
+					    goal_field, bot->seed);
+					if (terminal_seed >= 0)
+					{
+						VectorCopy(SG_Rune()->seeds[terminal_seed].origin,
+						    aim);
+						have_aim = true;
+					}
+				}
+			}
+			else if (!have_aim && !gf && tc->strike_pressure)
 			{
 				/* enemy stand position is common knowledge */
 				edict_t *marker = SG_FlagStand(team, false);
@@ -6543,6 +6573,12 @@ qboolean SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(
 	qboolean attack_flag_terminal)
 {
 	return FlagTerminalGenericSteeringAllowed(attack_flag_terminal);
+}
+
+qboolean SG_StrikeTestEnemyFlagTouchMissionActive(qboolean strike_pressure,
+	qboolean scoop_mission)
+{
+	return EnemyFlagTouchMissionActive(strike_pressure, scoop_mission);
 }
 
 int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,

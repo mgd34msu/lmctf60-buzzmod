@@ -2027,6 +2027,9 @@ static qboolean StrikeApplyDutyRoute(sg_think_t *tc,
 	tc->goal_field = route;
 	tc->route_field = route;
 	tc->route_pure = true;
+	/* The coordinator replaced the organic objective.  In particular an
+	 * organic escort assigned RECOVER must not retain a stale relay pickup. */
+	tc->scoop_mission = false;
 	return true;
 }
 

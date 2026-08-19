@@ -567,7 +567,8 @@ class StrikeIntegrationTest(unittest.TestCase):
 
     def test_attack_direct_touch_uses_bounded_terminal_throttle(self) -> None:
         move = (ROOT / "slipgate/sg_move.c").read_text()
-        terminal = move[move.index("if (!have_aim && tc->strike_pressure"):
+        terminal = move[move.index(
+            "if (!have_aim && EnemyFlagTouchMissionActive"):
                         move.index("if (!have_aim && bestlink >= 0)")]
         self.assertIn("flag_touch_terminal = true;", terminal)
         self.assertIn("SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true)",

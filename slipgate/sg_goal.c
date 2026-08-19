@@ -1809,6 +1809,16 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	bot->last_goalcost = (bot->seed >= 0 &&
 	                      goal_field[bot->seed] < SG_FIELD_INF)
 	                     ? goal_field[bot->seed] : -1;
+	/* SCOOP is an enemy-flag touch mission without being an attack-pressure
+	 * mission.  Publish that distinction only after every later objective
+	 * override: terminal movement may finish the physical relay pickup, while
+	 * attack-only rally/grenade policy remains disabled for the escort. */
+	tc->scoop_mission = role == SG_ROLE_ESCORT &&
+	    sg_caco_team_belief.carrier[SG_TeamIdx(team)].client < 0 &&
+	    sg_caco_team_belief.flag[SG_TeamIdx(team)]
+	        [SG_TeamIdx(SG_EnemyTeam(team))].state == SG_FLAG_ASTRAY &&
+	    goal_field == sg_fields.to_flag_now[SG_TeamIdx(team)]
+	        [SG_TeamIdx(SG_EnemyTeam(team))];
 
 	tc->goal_field = goal_field;
 	tc->route_field = route_field;
