@@ -92,17 +92,29 @@ static int Strike_InputViable(const sg_strike_frame_t *frame, int slot)
 	if (!input->present || !input->alive || !input->attack_eligible ||
 	    input->life_id == 0u)
 		return 0;
-	return input->enemy_flag_goal_ms >= 0 || input->direct_flag_touch ||
-	    input->carrying || slot == frame->carrier_slot;
+	return input->enemy_flag_goal_ms >= 0 ||
+	    (!frame->own_flag_home && input->recover_goal_ms >= 0) ||
+	    (frame->carrier_slot >= 0 && input->carrier_goal_ms >= 0) ||
+	    input->direct_flag_touch || input->carrying ||
+	    slot == frame->carrier_slot;
 }
 
-static int Strike_GoalForSelection(const sg_strike_slot_input_t *input)
+static int Strike_GoalForSelection(const sg_strike_frame_t *frame,
+	const sg_strike_slot_input_t *input)
 {
+	int goal = input->enemy_flag_goal_ms;
+
 	if (input->direct_flag_touch)
 		return -2;
 	if (input->carrying)
 		return -1;
-	return input->enemy_flag_goal_ms;
+	if (!frame->own_flag_home && input->recover_goal_ms >= 0 &&
+	    (goal < 0 || input->recover_goal_ms < goal))
+		goal = input->recover_goal_ms;
+	if (frame->carrier_slot >= 0 && input->carrier_goal_ms >= 0 &&
+	    (goal < 0 || input->carrier_goal_ms < goal))
+		goal = input->carrier_goal_ms;
+	return goal;
 }
 
 static void Strike_AddMember(sg_strike_team_t *team,
@@ -175,7 +187,7 @@ static void Strike_ReconcileMembers(sg_strike_team_t *team,
 			if ((team->member_mask & bit) != 0u ||
 			    !Strike_InputViable(frame, slot))
 				continue;
-			goal = Strike_GoalForSelection(&frame->slot[slot]);
+			goal = Strike_GoalForSelection(frame, &frame->slot[slot]);
 			if (best < 0 || goal < best_goal ||
 			    (goal == best_goal && slot < best))
 			{

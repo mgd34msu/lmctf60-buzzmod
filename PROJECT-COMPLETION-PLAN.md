@@ -198,6 +198,9 @@ bot slot cannot reserve the stand-watch quota while surviving teammates abandon
 the base; escort admission now uses that identical live rank, so it cannot steal
 the actual stand defender or skip a survivor because a corpse advanced the
 quota. The ordinary stable slot order resumes when that bot respawns.
+Strike-roster admission now considers every currently relevant proved field:
+an otherwise disconnected bot with the only finite own-flag recovery or carrier
+route cannot be excluded merely because its enemy-base field is infinite.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

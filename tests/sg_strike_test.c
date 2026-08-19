@@ -482,6 +482,23 @@ static void TestOneRecovererPreservesAttack(void)
 	}
 }
 
+static void TestRecoveryRouteAdmitsDisconnectedAttacker(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(430.0f);
+
+	frame.own_flag_home = 0;
+	AddAttacker(&frame, 0, 64u, 2, -1);
+	frame.slot[0].recover_goal_ms = 100;
+	AddAttacker(&frame, 1, 65u, 2, 500);
+	frame.slot[1].recover_goal_ms = -1;
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.member_mask == (Bit(0) | Bit(1)));
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_BREACH);
+}
+
 static void TestDutiesStayStableUntilEgress(void)
 {
 	sg_strike_team_t team;
@@ -904,6 +921,7 @@ int main(void)
 	TestLeaderNeverWaitsForUnreachableFormation();
 	TestFormationReleasesWhenPartnerFallsBehind();
 	TestOneRecovererPreservesAttack();
+	TestRecoveryRouteAdmitsDisconnectedAttacker();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();
