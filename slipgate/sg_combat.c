@@ -645,6 +645,7 @@ typedef struct
 	vec3_t		enemy_org;
 	float		enemy_time;		/* level.time of the last successful scan */
 	int			enemy_weapon;	/* weapon index seen in their hands, -1 none */
+	float		enemy_want_range; /* range terms frozen at that sighting */
 
 	/* The corner hold. lost_client is the client number, not an edict index,
 	 * so it compares directly against the belief table's own field. The
@@ -1699,8 +1700,10 @@ static float Combat_WantRange(edict_t *who, int w)
 	 * last word, so a short-preferring bot cannot be talked inside its own
 	 * rocket and a long-preferring one cannot carry a shotgun to a rail
 	 * fight. +/-15%, so it moves the band's centre and never the band.
-	 * `who` may be a human here -- Combat_Duel prices the FOE's preference
-	 * through this same function -- and a human has no row, so this is 1.0.
+	 * `who` may be a human here -- Cbt_Track snapshots the visible foe's
+	 * preference through this same function -- and a human has no row, so this
+	 * is 1.0. The snapshot is retained after sight is lost; this function is
+	 * not called on a hidden opponent.
 	 */
 	want *= SG_PersonaRangeBias(who);
 
@@ -3497,7 +3500,6 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
                        float *exposure_w)
 {
 	sg_combat_state_t	*st;
-	edict_t				*foe;
 	vec3_t				org, eye, d;
 	float				dist, want;
 	int					held, team, s;
@@ -3517,9 +3519,8 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 
 	if (st->enemy_last <= 0 || level.time - st->enemy_time > SG_DUEL_FRESH)
 		return false;
-	foe = Combat_EnemyIdentityCurrent(self, st->enemy_last,
-	                                  st->enemy_last_ctfid);
-	if (!foe)
+	if (!Combat_EnemyIdentityCurrent(self, st->enemy_last,
+	                                 st->enemy_last_ctfid))
 		return false;
 	VectorCopy(st->enemy_org, org);
 
@@ -3576,7 +3577,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	 */
 	if (st->enemy_weapon >= 0 && st->enemy_weapon < SG_NUM_WEAPONS)
 	{
-		float theirs = Combat_WantRange(foe, st->enemy_weapon);
+		float theirs = st->enemy_want_range;
 		float dsafe = Combat_DSafe(self, held);
 		float cap = sg_weapons[held].range_cap;
 
@@ -4144,6 +4145,8 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 	VectorCopy(mid, st->enemy_org);
 	st->enemy_time = level.time;
 	st->enemy_weapon = Combat_Held(enemy);
+	st->enemy_want_range = (st->enemy_weapon >= 0)
+	    ? Combat_WantRange(enemy, st->enemy_weapon) : 0.0f;
 
 	/* re-sight clears the corner hold outright: there is nothing left to
 	 * predict about a target that is standing in front of you */

@@ -510,6 +510,10 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         self.assertIn("SG_CombatLiveEnemyIdentityAllowed(self_team", SOURCE)
         self.assertIn("st->enemy_last_ctfid = st->enemy_ctfid;", SOURCE)
         self.assertIn("st->lost_ctfid = st->enemy_ctfid;", SOURCE)
+        self.assertIn("st->enemy_want_range = (st->enemy_weapon >= 0)",
+                      SOURCE)
+        self.assertIn("float theirs = st->enemy_want_range;", SOURCE)
+        self.assertNotIn("Combat_WantRange(foe, st->enemy_weapon)", SOURCE)
         self.assertIn("Combat_EnemyIdentityCurrent(self, st->lost_client + 1",
                       SOURCE)
         self.assertIn("incumbent = SG_CombatLiveEnemy(self);", frame)

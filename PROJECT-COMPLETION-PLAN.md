@@ -1368,7 +1368,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       slot reuse revoke external combat ownership before target hysteresis or
       duel-range terms or lost-corner pursuit, so a teammate or new occupant
       cannot inherit the old duel and a reacquired enemy starts a fresh
-      reaction/settle state.
+      reaction/settle state. Opponent range terms are frozen at the last
+      visible sighting; hidden quad, plasma-mode, or other live state changes
+      cannot steer the bot's subsequent corner behavior.
       Shared carrier rows survive aging only while the current holder remains
       on the row's expected team and possesses that row's exact flag entity.
       A human teammate carrying the enemy flag receives the same bot escort and
