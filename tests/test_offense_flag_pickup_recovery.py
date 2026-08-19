@@ -129,6 +129,32 @@ def armed_target_origin(
 
 class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
+    def test_duel_route_surface_gate_is_shared(self) -> None:
+        descend = source("slipgate/sg_descend.c")
+        setup = between(
+            descend,
+            "qboolean duel_route_price = SG_DuelRoutePriceAllowed",
+            "sg_defense_supply_neighbor_t supply_neighbors",
+        )
+        incumbent = between(
+            descend,
+            "bestval = Surface_At",
+            "THE CARRIER DOES NOT SINK",
+        )
+        candidate = between(
+            descend,
+            "The fighter's two terms",
+            "THE HUMAN PRIOR",
+        )
+
+        self.assertIn("enemy_pressure", setup)
+        self.assertIn("sg_cv.press->value", setup)
+        self.assertIn("role == SG_ROLE_CARRY", setup)
+        self.assertIn("sg_cv.carrypress->value", setup)
+        self.assertIn("if (duel_route_price)", incumbent)
+        self.assertIn("else if (duel_route_price)", candidate)
+        self.assertNotIn("if (duel)", incumbent)
+
     def test_teammate_pass_side_is_pair_symmetric_and_executable(self) -> None:
         """Head-on bots receive opposite world-space lateral velocities."""
         program = textwrap.dedent(

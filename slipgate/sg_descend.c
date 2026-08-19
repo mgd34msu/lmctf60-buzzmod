@@ -324,6 +324,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	int attack_descent_link = -1;
 	float attack_descent_value = 1e30f;
 	qboolean enemy_pressure = tc->strike_pressure;
+	qboolean duel_route_price = SG_DuelRoutePriceAllowed(duel,
+	    enemy_pressure, sg_cv.press->value != 0.0f,
+	    role == SG_ROLE_CARRY, sg_cv.carrypress->value != 0.0f);
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
 
@@ -470,16 +473,16 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	bestval = Surface_At(tc, bot->seed, w, route_field, support, intercept);
-	if (duel)
+	if (duel_route_price)
+	{
 		bestval += Duel_Price(e, SG_Rune()->seeds[bot->seed].origin, duel_org,
 		                      duel_want, duel_expo);
-			/* the exposure dimension as a cover prior: a seed the map
-			 * says everyone can SEE costs more while hurting, before
-			 * any runtime trace confirms who is looking (area_hint,
-			 * written by generation; 0 on old runes = no opinion) */
-			if (duel_expo > 0.0f)
-				bestval += duel_expo *
-				    (float)SG_Rune()->seeds[bot->seed].area_hint * 1.8f;
+		/* The incumbent pays the same exposure term as each candidate,
+		 * under the same forward-pressure gate. */
+		if (duel_expo > 0.0f)
+			bestval += duel_expo *
+			    (float)SG_Rune()->seeds[bot->seed].area_hint * 1.8f;
+	}
 	/*
 	 * THE CARRIER DOES NOT SINK (pit analysis, observations: 83
 	 * unopposed smap05 carries, 87% touched the mid-map basin, 33 ended
@@ -1059,9 +1062,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * about 25 links wide, and the whole term is skipped on every frame
 		 * there is no fight, which is most of them.
 		 */
-		else if (duel &&
-		         !(enemy_pressure &&
-		           sg_cv.press->value) &&
+		else if (duel_route_price)
+		{
 		         /* CARRIER PRESS (sg_carrypress, observations). The carry
 		          * traces (274-279): 61%% of carrier frames make no
 		          * homeward progress at ~190 u/s, and 48 of 49 carries
@@ -1070,9 +1072,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		          * receding behavior the press cured for attackers in
 		          * the only parity-cap comparison ever won. A fleeing carrier
 		          * has no business pricing weapon range: forward. */
-		         !(role == SG_ROLE_CARRY &&
-		           sg_cv.carrypress->value))
-		{
 			/*
 			 * THE PRESS (sg_press, comparison observations). The travel
 			 * decomposition (observations): twenty percent of ALL

@@ -1516,6 +1516,11 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       as its passable teammate exception. An opponent intersecting that hull
       trace remains a blocker during reaction-delay and settle frames instead
       of authorizing a hop chain into the enemy.
+      Duel-range and exposure pricing now use one shared admission decision for
+      both the current seed and every candidate link. Default attacker pressure
+      and carrier pressure therefore remove range-holding from the complete
+      comparison instead of charging only the incumbent and manufacturing a
+      route switch on two different cost surfaces.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

@@ -35,4 +35,22 @@ static inline int SG_AttackDescentFallbackAllowed(int attack_role, int run_link,
 	return 1;
 }
 
+/* Incumbent and candidate seeds must be compared on the same combat surface.
+ * Forward-pressure policy removes duel range control for an attacker pressing
+ * the enemy objective and for a carrier fleeing home.  Applying that removal
+ * only to candidates makes the current seed artificially expensive and turns
+ * an otherwise stable route into gratuitous link changes. */
+static inline int SG_DuelRoutePriceAllowed(int duel, int enemy_pressure,
+	int press_enabled, int carrying, int carry_press_enabled)
+{
+	if ((duel != 0 && duel != 1) ||
+	    (enemy_pressure != 0 && enemy_pressure != 1) ||
+	    (press_enabled != 0 && press_enabled != 1) ||
+	    (carrying != 0 && carrying != 1) ||
+	    (carry_press_enabled != 0 && carry_press_enabled != 1))
+		return 0;
+	return duel && !(enemy_pressure && press_enabled) &&
+	       !(carrying && carry_press_enabled);
+}
+
 #endif /* SG_ROUTE_POLICY_H */

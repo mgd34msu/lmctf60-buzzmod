@@ -46,6 +46,22 @@ static void TestAttackDescentCannotPriceItselfStill(void)
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 600));
 }
 
+static void TestDuelRoutePricingUsesOneSurface(void)
+{
+	/* Ordinary defenders/escorts retain range discipline. */
+	CHECK(SG_DuelRoutePriceAllowed(1, 0, 1, 0, 1));
+	/* Default attacker press removes it from both sides of the comparison. */
+	CHECK(!SG_DuelRoutePriceAllowed(1, 1, 1, 0, 1));
+	CHECK(SG_DuelRoutePriceAllowed(1, 1, 0, 0, 1));
+	/* Carrier press is independent of attacker pressure. */
+	CHECK(!SG_DuelRoutePriceAllowed(1, 0, 1, 1, 1));
+	CHECK(SG_DuelRoutePriceAllowed(1, 0, 1, 1, 0));
+	CHECK(!SG_DuelRoutePriceAllowed(0, 0, 0, 0, 0));
+	/* Malformed boolean inputs fail closed. */
+	CHECK(!SG_DuelRoutePriceAllowed(2, 0, 0, 0, 0));
+	CHECK(!SG_DuelRoutePriceAllowed(1, -1, 0, 0, 0));
+}
+
 static void TestLateralChoice(void)
 {
 	const sg_defense_shift_candidate_t candidates[] = {
@@ -357,6 +373,7 @@ int main(void)
 {
 	TestOneExitRouteStaysMobile();
 	TestAttackDescentCannotPriceItselfStill();
+	TestDuelRoutePricingUsesOneSurface();
 	TestLateralChoice();
 	TestGuardBandAndGeometry();
 	TestFailClosedInputs();
