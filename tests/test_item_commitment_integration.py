@@ -150,6 +150,18 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             "float Surface_At")]
         self.assertIn("Detour_MegaEligible(tc, kent)", mega)
 
+        combat = self.text("slipgate/sg_combat.c")
+        rune_entity = combat[combat.index(
+            "static float Rune_EntityWorth"):combat.index(
+            "void SG_CombatWeights")]
+        self.assertIn("case RUNE_HASTE:", rune_entity)
+        self.assertIn("case RUNE_DAMAGE:", rune_entity)
+        self.assertIn("case RUNE_RESIST:", rune_entity)
+        self.assertIn("case RUNE_REGEN:", rune_entity)
+        self.assertIn("class_worth * exact / best", rune_entity)
+        self.assertIn("SG_RuneRouteWorth(tc->e,", detour)
+        self.assertIn("item_worth / (1.0f +", detour)
+
     def test_rune_handoff_uses_effective_strike_escort_at_both_boundaries(self):
         for relative in ("slipgate/sg_goal.c", "slipgate/sg_descend.c"):
             source = self.text(relative)

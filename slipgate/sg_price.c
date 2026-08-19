@@ -9,6 +9,7 @@
 #include "slipgate/sg_cvars.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_bot.h"        /* sg_think_t -- the pricing context */
+#include "slipgate/sg_combat.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_item_route.h"
@@ -138,6 +139,7 @@ float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
 			int kseed = sg_fields.per_item_seed[cls][k];
 			int kent = sg_fields.per_item_ent[cls][k];
 			int cost_to, item_to_goal, detour;
+			float item_worth = worth;
 			float v;
 
 			if (!kfld || kseed < 0 ||
@@ -147,11 +149,18 @@ float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
 			item_to_goal = goal_field[kseed];
 			if (cost_to >= SG_FIELD_INF || item_to_goal >= SG_FIELD_INF)
 				continue;
+			if (cls == SG_FC_RUNE)
+			{
+				item_worth = SG_RuneRouteWorth(tc->e,
+				    &g_edicts[kent], worth);
+				if (item_worth <= 0.0f)
+					continue;
+			}
 
 			detour = cost_to + item_to_goal - direct;
 			if (detour < 0)
 				detour = 0;      /* an item on the road is free, never a bonus */
-			v = worth / (1.0f + (float)detour / 1500.0f);
+			v = item_worth / (1.0f + (float)detour / 1500.0f);
 			if (cls == SG_FC_RUNE)
 				v *= Rune_RoleFactor(tc->role, kent);
 			if (v > best)

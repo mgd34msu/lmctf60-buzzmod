@@ -117,6 +117,11 @@ qboolean SG_CombatWouldEngage(edict_t *self);
  */
 void SG_CombatWeights(edict_t *self, const sg_weights_t *role, sg_weights_t *out);
 
+/* Convert the already role/threat-scaled rune-class worth to the worth of one
+ * exact believed rune entity.  Zero means the entity is not a collectible
+ * rune for this client. */
+float SG_RuneRouteWorth(edict_t *self, edict_t *rune, float class_worth);
+
 /* Authoritative weapon state read from the live inventory and ammo pools.
  * `available_tier` uses the same Combat_Avail predicate as Use_Weapon;
  * `stocked_tier` additionally applies the three-second floor used by the

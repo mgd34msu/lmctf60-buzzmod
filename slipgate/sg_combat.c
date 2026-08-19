@@ -3499,21 +3499,46 @@ static float Worth_Quad(edict_t *e)
  * multipliers are 2.3's, from the measured effects in 1.22.
  *
  * The class weight is a single scalar while the runes are four different
- * items, so the multiplier taken is the best one CACO believes is standing.
- * That is a real approximation and is recorded as one: the per-item fields
- * (sg_fields.c:130-133) could price each rune exactly, but the weight vector
- * the surface reads has one slot per class (sg_local.h:153).
+ * items, so this cache records the best one CACO believes is standing. Route
+ * pricing later converts that scalar back to the exact entity's proportion
+ * with SG_RuneRouteWorth; the role and live threat multipliers remain intact.
  */
+static float Rune_EntityWorth(edict_t *e, edict_t *rune)
+{
+	float mult;
+	int tier;
+
+	if (!e || !e->client || !rune || !rune->inuse || e->client->rune)
+		return 0.0f;
+	tier = Weapon_Tier(e);
+	switch (rune->runetype)
+	{
+	case RUNE_HASTE:
+		/* Exactly 2x rate of fire, with the same 2x ammunition drain. */
+		mult = (tier <= 2) ? 1.20f : 1.60f;
+		break;
+	case RUNE_DAMAGE:
+		mult = 1.45f;		/* x1.75 outgoing, g_runes.c */
+		break;
+	case RUNE_RESIST:
+		mult = 1.45f;		/* /1.75 incoming, g_runes.c */
+		break;
+	case RUNE_REGEN:
+		mult = 1.20f;		/* 3.33 hp/s, g_runes.c */
+		break;
+	default:
+		return 0.0f;
+	}
+	return Combat_Clamp(0.55f * mult);
+}
+
 static float Worth_Rune(edict_t *e)
 {
-	float	best = 0.0f;
-	int		tier;
-	int		i, ti;
+	float best = 0.0f;
+	int i, ti;
 
-	if (e->client->rune)
+	if (!e || !e->client || e->client->rune)
 		return 0.0f;
-
-	tier = Weapon_Tier(e);
 
 	/*
 	 * Bots on the other team know where runes are only when they see them,
@@ -3528,7 +3553,7 @@ static float Worth_Rune(edict_t *e)
 	{
 		sg_belief_item_t	*b = &sg_caco_items[ti][i];
 		edict_t				*it;
-		float				mult;
+		float				worth;
 
 		if (b->cls != SG_BI_RUNE || !b->believed_up)
 			continue;
@@ -3536,37 +3561,24 @@ static float Worth_Rune(edict_t *e)
 		if (!it->inuse)
 			continue;
 
-		switch (it->runetype)
-		{
-		case RUNE_HASTE:
-			/*
-			 * Exactly 2x rate of fire: RuneWeaponThinkHook calls weaponthink
-			 * a second time in the same frame (g_runes.c:800-818). RU1 -- it
-			 * doubles the ammo drain with it, so doubling a blaster is 60 dps
-			 * and not worth the budget.
-			 */
-			mult = (tier <= 2) ? 1.20f : 1.60f;
-			break;
-		case RUNE_DAMAGE:
-			mult = 1.45f;		/* x1.75 outgoing, g_runes.c:716-728 */
-			break;
-		case RUNE_RESIST:
-			mult = 1.45f;		/* /1.75 incoming, g_runes.c:730-743 */
-			break;
-		case RUNE_REGEN:
-			mult = 1.20f;		/* 3.33 hp/s, g_runes.c:745-798 */
-			break;
-		default:
-			mult = 1.00f;
-			break;
-		}
-		if (mult > best)
-			best = mult;
+		worth = Rune_EntityWorth(e, it);
+		if (worth > best)
+			best = worth;
 	}
+	return best;
+}
 
-	if (best <= 0.0f)
+float SG_RuneRouteWorth(edict_t *self, edict_t *rune, float class_worth)
+{
+	float best, exact;
+
+	if (class_worth <= 0.0f)
 		return 0.0f;
-	return Combat_Clamp(0.55f * best);	/* 2.3: 566 ms before type scaling */
+	best = Worth_Rune(self);
+	exact = Rune_EntityWorth(self, rune);
+	if (best <= 0.0f || exact <= 0.0f)
+		return 0.0f;
+	return class_worth * exact / best;
 }
 
 void SG_CombatWeights(edict_t *self, const sg_weights_t *role,

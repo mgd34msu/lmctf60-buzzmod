@@ -1593,6 +1593,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       the current bot team's belief and the physical health-pickup law. One
       team's observation can no longer disclose a specific live mega route to
       the other team, and an uncollectible pad contributes no movement pull.
+      Rune detours now convert the role- and threat-scaled class appetite to
+      each believed rune entity's actual effect value. A low-value Regen or
+      low-tier Haste rune can no longer inherit the best visible rune's full
+      price and displace a better objective route.
       Retained ordinary RUNs now carry the exact route-field identity that
       authorized them. When a pure mission changes to enemy pressure,
       recovery, escort, or an exact item route, a reversible RUN and its sticky
