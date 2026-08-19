@@ -64,7 +64,7 @@ MEASUREMENT_IMPLEMENTATION_PATHS = (
     "tools/demokin.py",
 )
 METRIC_CONTRACT_SHA256 = (
-    "6b37e31a3fd4fdd4380c26a685918111b664583c4e35a3795e0478d27617b451")
+    "7406286b7f2750609e6782466aac7cd388ff0e8b08a523112f6dda53c066f2c3")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 SAFE_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
