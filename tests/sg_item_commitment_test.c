@@ -297,6 +297,22 @@ static void TestExactPickupOwnershipEndsCommitment(void)
 	CHECK(bot->lead_ent == 3);
 }
 
+static void TestRejectedTouchEndsOnlyExactOwner(void)
+{
+	sg_bot_t *bot;
+
+	level.time = 10.0f;
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	Lead_NoteItemRejected(&entities[1], &entities[3]);
+	CHECK(bot->lead_ent == 0);
+	CHECK(sg_caco_items[0][0].claimed_by == -1);
+
+	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	Lead_NoteItemRejected(&entities[2], &entities[3]);
+	CHECK(bot->lead_ent == 3);
+	CHECK(sg_caco_items[0][0].claimed_by == 0);
+}
+
 static void TestStrongerInterruptsStillWin(void)
 {
 	sg_bot_t *bot;
@@ -357,6 +373,7 @@ int main(void)
 	TestClockSpawnContinuesToPhysicalPickup();
 	TestSightConfirmedSpawnPersistsAndHomes();
 	TestExactPickupOwnershipEndsCommitment();
+	TestRejectedTouchEndsOnlyExactOwner();
 	TestStrongerInterruptsStillWin();
 	TestPowerupCapacityEndsTheErrand();
 	if (failures)

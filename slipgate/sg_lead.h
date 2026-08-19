@@ -30,6 +30,9 @@ const int	*Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 /* Exact successful Touch_Item handoff.  This is authoritative for normal and
  * instant-use powerups alike; inventory deltas are not. */
 void		Lead_NoteItemTaken(edict_t *taker, edict_t *item);
+/* Exact rejected Touch_Item handoff: only the touching commitment owner is
+ * retired; another client's refusal leaves the live claim untouched. */
+void		Lead_NoteItemRejected(edict_t *taker, edict_t *item);
 /* Terminal homing for the spawned phase, used only after the route field has
  * reached the pad and has no improving link left. */
 qboolean	Lead_PickupTarget(const sg_bot_t *bot, vec3_t target);

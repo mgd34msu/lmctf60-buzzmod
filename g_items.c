@@ -28,6 +28,7 @@ void Weapon_BFG(edict_t* ent);
 #include "plasma.h"
 
 void SG_NoteItemTaken(edict_t *taker, edict_t *item);
+void SG_NoteItemRejected(edict_t *taker, edict_t *item);
 extern void Weapon_Plasma(edict_t* ent);
 extern void Use_PLASMA(edict_t* ent, gitem_t* inv);
 // END
@@ -964,9 +965,20 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 	if (other->health < 1)
 		return;		// dead people can't pickup
 	if (!ent->item->pickup)
+	{
+		SG_NoteItemRejected(other, ent);
 		return;		// not a grabbable item?
+	}
 
 	taken = ent->item->pickup(ent, other);
+	if (!taken)
+	{
+		// The exact commitment owner reached the physical item, but the
+		// game's pickup law refused it. Retire that owner's errand before
+		// targets may mutate or free the entity; another client's rejected
+		// touch cannot affect the claimant.
+		SG_NoteItemRejected(other, ent);
+	}
 
 	if (taken)
 	{

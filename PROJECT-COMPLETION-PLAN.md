@@ -561,6 +561,9 @@ Required work:
   or retargeted;
 - prove every non-pickup outcome explicitly retires or preserves the commitment
   for a valid stronger reason;
+- retire the exact touching owner's commitment immediately when the production
+  pickup law rejects it, before target callbacks may mutate the item; preserve
+  the claim when a different client owns the rejected touch;
 - retain item communication and public-information constraints.
 
 Acceptance:
@@ -1212,6 +1215,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       irreversible fire boundary now require positively assessed progress in
       the live route field; an unreachable endpoint retires the stale ride
       instead of treating missing route authority as permission to fire.
+      A rejected physical powerup touch now retires only the touching bot's
+      exact item commitment before target callbacks run; another client's
+      rejection cannot cancel the claimant's live errand or publish item belief.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

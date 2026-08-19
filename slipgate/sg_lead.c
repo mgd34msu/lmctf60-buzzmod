@@ -134,6 +134,26 @@ void Lead_NoteItemTaken(edict_t *taker, edict_t *item)
 	}
 }
 
+void Lead_NoteItemRejected(edict_t *taker, edict_t *item)
+{
+	int i, item_ent;
+
+	if (!taker || !item)
+		return;
+	item_ent = (int)(item - g_edicts);
+	if (item_ent <= 0 || item_ent >= globals.num_edicts)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *bot = &sg_bots[i];
+
+		if (!bot->active || bot->ent != taker || bot->lead_ent != item_ent)
+			continue;
+		Lead_Abort(bot, "pickup rejected");
+		return;
+	}
+}
+
 qboolean Lead_PickupTarget(const sg_bot_t *bot, vec3_t target)
 {
 	edict_t *item;

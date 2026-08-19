@@ -15,14 +15,33 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         end = source.index("void drop_temp_touch", start)
         touch = source[start:end]
         pickup = touch.index("taken = ent->item->pickup(ent, other);")
+        rejected = touch.index("SG_NoteItemRejected(other, ent);", pickup)
         note = touch.index("SG_NoteItemTaken(other, ent);", pickup)
         targets = touch.index("G_UseTargets(ent, other);", note)
         accepted = touch.index("if (!taken)\n\t\treturn;", targets)
         release = touch.index("G_FreeEdict(ent);", accepted)
         self.assertLess(pickup, note)
+        self.assertLess(pickup, rejected)
+        self.assertLess(rejected, targets)
         self.assertLess(note, targets)
         self.assertLess(targets, accepted)
         self.assertLess(accepted, release)
+
+    def test_rejected_touch_retires_only_the_exact_commitment_owner(self):
+        source = self.text("slipgate/sg_lead.c")
+        start = source.index("void Lead_NoteItemRejected(")
+        end = source.index("qboolean Lead_PickupTarget", start)
+        body = source[start:end]
+        self.assertIn("bot->ent != taker", body)
+        self.assertIn("bot->lead_ent != item_ent", body)
+        self.assertIn('Lead_Abort(bot, "pickup rejected");', body)
+
+        caco = self.text("slipgate/sg_caco.c")
+        start = caco.index("void SG_NoteItemRejected(")
+        end = caco.index("static void Caco_Age", start)
+        reject = caco[start:end]
+        self.assertIn("Lead_NoteItemRejected(taker, item);", reject)
+        self.assertNotIn("SG_Chat", reject)
 
     def test_major_static_pickup_closes_lead_before_belief_bookkeeping(self):
         source = self.text("slipgate/sg_caco.c")

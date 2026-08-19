@@ -1065,6 +1065,14 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 	}
 }
 
+void SG_NoteItemRejected(edict_t *taker, edict_t *item)
+{
+	/* A refusal is private physical state of the touching bot. It neither
+	 * changes team belief nor earns a callout; it only closes the exact local
+	 * errand that has now proved unable to collect its target. */
+	Lead_NoteItemRejected(taker, item);
+}
+
 static void Caco_Age(rune_t *r)
 {
 	int i, bt;

@@ -862,6 +862,9 @@ qboolean	SG_ItemComm(void);
  * sg_caco.c and over the majors table in sg_chat.c.
  */
 void		SG_NoteItemTaken(edict_t *taker, edict_t *item);
+/* A rejected physical touch retires only the matching taker's exact item
+ * commitment. It carries no belief or communication authority. */
+void		SG_NoteItemRejected(edict_t *taker, edict_t *item);
 
 /* the calls sg_fields.c needs to stop reading item entities directly */
 qboolean	Caco_ItemBelievedUp(edict_t *e);
