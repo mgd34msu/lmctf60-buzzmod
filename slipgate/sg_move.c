@@ -391,7 +391,7 @@ int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
 /* A dropped flag is private knowledge until it is currently perceived.  Its
  * home position is public CTF state, but neither fact permits a body to cut
  * through a wall or a different floor to reach it. */
-static qboolean SG_AttackFlagPerceivable(edict_t *e, edict_t *flag)
+static qboolean SG_FlagPerceivable(edict_t *e, edict_t *flag)
 {
 	vec3_t eye, target;
 
@@ -426,7 +426,7 @@ qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 	if (!flag || SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
 	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f)
 		return false;
-	if (!ctf_flagathome(flag) && !SG_AttackFlagPerceivable(e, flag))
+	if (!ctf_flagathome(flag) && !SG_FlagPerceivable(e, flag))
 		return false;
 	body = sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin, e,
 	                     MASK_PLAYERSOLID);
@@ -436,6 +436,70 @@ qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 	if (flag_out)
 		*flag_out = flag;
 	return true;
+}
+
+static qboolean SG_RecoverFlagDirectTouchAuthority(edict_t *e, int team,
+	edict_t **flag_out)
+{
+	edict_t *flag;
+	trace_t body;
+
+	if (flag_out)
+		*flag_out = NULL;
+	if (!e || !e->client || !sg_host.trace)
+		return false;
+	flag = SG_OwnFlag(team);
+	if (!flag || ctf_flagathome(flag) ||
+	    SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
+	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f ||
+	    !SG_FlagPerceivable(e, flag))
+		return false;
+	body = sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin, e,
+	    MASK_PLAYERSOLID);
+	if (body.startsolid || body.allsolid ||
+	    (body.fraction < 1.0f && body.ent != flag))
+		return false;
+	if (flag_out)
+		*flag_out = flag;
+	return true;
+}
+
+/* Terminal recovery must end at the source of the admitted belief field, not
+ * at the empty home stand.  Multiple zero/minimum sources are resolved by
+ * physical proximity to the current seed; no entity or hidden position enters
+ * this reducer. */
+static int SG_TerminalFieldSeed(const rune_t *rune, const int *field,
+	int current_seed)
+{
+	int best = -1;
+	int best_value = SG_FIELD_INF;
+	float best_distance = 0.0f;
+	int seed;
+
+	if (!rune || !rune->seeds || !field || current_seed < 0 ||
+	    current_seed >= rune->hdr.num_seeds)
+		return -1;
+	for (seed = 0; seed < rune->hdr.num_seeds; seed++)
+	{
+		vec3_t delta;
+		float distance;
+
+		if (field[seed] < 0 || field[seed] >= SG_FIELD_INF)
+			continue;
+		VectorSubtract(rune->seeds[seed].origin,
+		    rune->seeds[current_seed].origin, delta);
+		distance = DotProduct(delta, delta);
+		if (best < 0 || field[seed] < best_value ||
+		    (field[seed] == best_value && distance < best_distance) ||
+		    (field[seed] == best_value && distance == best_distance &&
+		     seed < best))
+		{
+			best = seed;
+			best_value = field[seed];
+			best_distance = distance;
+		}
+	}
+	return best;
 }
 
 /*
@@ -4611,6 +4675,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		{
 			/* last resort: the goal itself, by belief */
 			edict_t *gf = NULL;
+			int terminal_seed = -1;
 
 			/* An early-return claimant that waited short of a pad must cross
 			 * the final body-length after spawn.  The pad seed has no improving
@@ -4639,6 +4704,20 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else if (!have_aim && role == SG_ROLE_CARRY)
 				gf = SG_OwnFlag(team);
+			else if (!have_aim && role == SG_ROLE_RECOVER)
+			{
+				if (!SG_RecoverFlagDirectTouchAuthority(e, team, &gf))
+				{
+					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
+					    goal_field, bot->seed);
+					if (terminal_seed >= 0)
+					{
+						VectorCopy(SG_Rune()->seeds[terminal_seed].origin,
+						    aim);
+						have_aim = true;
+					}
+				}
+			}
 
 			if (!have_aim && !gf &&
 			    (role == SG_ROLE_ATTACK || tc->strike_rush))
@@ -6368,6 +6447,12 @@ static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
 }
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
+int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
+	int current_seed)
+{
+	return SG_TerminalFieldSeed(rune, field, current_seed);
+}
+
 qboolean SG_StrikeTestRailMoveAllowed(const sg_think_t *tc)
 {
 	return StrikeRailMoveAllowed(tc);

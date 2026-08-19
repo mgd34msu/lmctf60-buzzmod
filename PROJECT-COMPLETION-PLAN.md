@@ -202,6 +202,10 @@ The same living-body law now governs rally partners, paired sentry splits,
 attacker lane spreading, and teammate splash suppression: a corpse cannot make
 an attacker wait, masquerade as a diversion, repel a live route, or suppress a
 safe public-sound shot from its stale origin.
+RECOVER terminal homing now finishes at the source of its admitted current or
+belief field instead of turning back toward the empty home stand. An exact
+dropped-flag item can replace that source only inside the same visible,
+same-floor, hull-clear touch envelope used for honest physical contact.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a
