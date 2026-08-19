@@ -869,6 +869,7 @@ void		SG_NoteItemRejected(edict_t *taker, edict_t *item);
 /* the calls sg_fields.c needs to stop reading item entities directly */
 qboolean	Caco_ItemBelievedUp(edict_t *e);
 qboolean	Caco_ItemBelievedUpFor(int team, edict_t *e);
+qboolean	Caco_ItemBelievedRouteableFor(int team, edict_t *e);
 int			Caco_ItemBeliefSeed(rune_t *r, edict_t *e);
 unsigned	Caco_ItemBeliefSig(void);   /* mix into the class rebuild test */
 

@@ -41,6 +41,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_item_policy.h"
+#include "slipgate/sg_item_route.h"
 #include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_death_belief.h"
 #include "slipgate/sg_role_policy.h"
@@ -909,6 +910,27 @@ qboolean Caco_ItemBelievedUpFor(int team, edict_t *e)
 	if (!b)
 		return (e->solid != SOLID_NOT) ? true : false;
 	return b->believed_up;
+}
+
+qboolean Caco_ItemBelievedRouteableFor(int team, edict_t *e)
+{
+	sg_belief_item_t *b;
+	qboolean respawn_within_lead = false;
+	int route_class;
+
+	if (!e || !e->inuse || !e->classname)
+		return false;
+	b = Caco_ItemBelief(team, e);
+	if (!b)
+		return e->solid != SOLID_NOT;
+	route_class = b->cls == SG_BI_POWERUP ? SG_FC_POWERUP : SG_FC_RUNE;
+	if (b->cls == SG_BI_POWERUP && !b->believed_up &&
+	    b->believed_respawn_time > level.time &&
+	    b->believed_respawn_time - level.time <=
+	        SG_ITEM_ROUTE_POWERUP_LEAD_SECONDS)
+		respawn_within_lead = true;
+	return SG_IdentityItemBeliefAdmission(route_class, b->believed_up,
+	    respawn_within_lead);
 }
 
 /*

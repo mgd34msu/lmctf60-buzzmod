@@ -137,6 +137,8 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             "float Detour_Value")]
         self.assertIn("G_PowerupPickupEligible(item, tc->e)", admission)
         self.assertIn("G_RunePickupEligible(item, tc->e)", admission)
+        self.assertIn(
+            "Caco_ItemBelievedRouteableFor(tc->team, item)", admission)
         detour = price[price.index("float Detour_Value"):price.index(
             "float Mega_Detour")]
         self.assertIn("Detour_IdentityItemEligible(tc, cls, kent)", detour)

@@ -30,6 +30,7 @@
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_combat_commit_policy.h"
 #include "slipgate/sg_combat_target_policy.h"
+#include "slipgate/sg_item_route.h"
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
 
 #include <math.h>
@@ -3451,8 +3452,6 @@ static float Worth_Ammo(edict_t *e)
  * pedestal is worse than no field; arriving four seconds early to camp a 60 s
  * item is correct. CACO's belief carries both facts (sg_local.h:186-198).
  */
-#define SG_QUAD_CAMP_LEAD	4.0f
-
 static float Worth_Quad(edict_t *e)
 {
 	int i, ti;
@@ -3482,9 +3481,8 @@ static float Worth_Quad(edict_t *e)
 		if (strcmp(it->classname, "item_quad") != 0)
 			continue;
 
-		if (!b->believed_up &&
-		    b->believed_respawn_time - level.time > SG_QUAD_CAMP_LEAD)
-			continue;			/* an empty pedestal for longer than Q1 allows */
+		if (!Caco_ItemBelievedRouteableFor(e->client->ctf.teamnum, it))
+			continue; /* neither standing nor this exact pad's earned lead */
 
 		/* 2.3: the weapon tier is what makes a quad worth contesting -- a quad
 		 * chaingun is 720 dps, a quad blaster is 120 (1.21's x4 on damage) */

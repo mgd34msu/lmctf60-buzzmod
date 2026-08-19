@@ -362,6 +362,13 @@ int main(void)
 	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_RUNE, false));
 	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_WEAPON, true));
 	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_POWERUP, 2));
+	CHECK(SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, true, false));
+	CHECK(SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, false, true));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, false, false));
+	CHECK(SG_IdentityItemBeliefAdmission(SG_FC_RUNE, true, false));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_RUNE, false, true));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_WEAPON, true, true));
+	CHECK(!SG_IdentityItemBeliefAdmission(SG_FC_POWERUP, 2, false));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, false, false));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, false, false));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1, false, false));

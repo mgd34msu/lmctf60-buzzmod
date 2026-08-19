@@ -82,6 +82,8 @@ static qboolean Detour_IdentityItemEligible(const sg_think_t *tc, int cls,
 	item = &g_edicts[entnum];
 	if (!item->item)
 		return false;
+	if (!Caco_ItemBelievedRouteableFor(tc->team, item))
+		return false;
 	if (cls == SG_FC_POWERUP)
 		eligible = G_PowerupPickupEligible(item, tc->e);
 	else if (cls == SG_FC_RUNE)
