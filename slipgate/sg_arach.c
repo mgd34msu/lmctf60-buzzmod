@@ -3331,6 +3331,10 @@ void SG_BotThink(sg_bot_t *bot)
 		if (strike_team && strike_frame &&
 		    SG_StrikeParticipant(strike_team, strike_slot))
 		{
+			int direct_flag_touch;
+			int weapon_goal_ms = -1;
+			int weapon_remaining_ms;
+
 			strike_duty = strike_team->duty[strike_slot];
 			tc.strike_active = true;
 			tc.strike_hold = SG_StrikeMemberShouldHold(
@@ -3351,19 +3355,23 @@ void SG_BotThink(sg_bot_t *bot)
 			/* A below-tier member owns the weapon field only while the live
 			 * authority says it is not fighting or already able to touch the
 			 * flag.  The core's immutable per-life deadline ends this branch. */
-			if (SG_StrikeMemberNeedsWeapon(strike_team, strike_slot,
-			                               level.time) &&
-				    !tc.strike_rush && !carrying &&
-				    !SG_CombatWouldEngage(e) &&
-				    !strike_frame->slot[strike_slot].direct_flag_touch &&
-				    !SG_AttackFlagDirectTouchAuthority(e, team, NULL) &&
-				    sg_fields.item[SG_FC_WEAPON] &&
-				    StrikeFieldCost(sg_fields.item[SG_FC_WEAPON],
-				                    sg_bots[strike_slot].seed) >= 0 &&
-				    StrikeFieldCost(sg_fields.item[SG_FC_WEAPON],
-				                    sg_bots[strike_slot].seed) <=
-				        (int)((strike_team->weapon_deadline[strike_slot] -
-				               level.time) * 1000.0f))
+			direct_flag_touch =
+				strike_frame->slot[strike_slot].direct_flag_touch ||
+				SG_AttackFlagDirectTouchAuthority(e, team, NULL);
+			if (sg_fields.item[SG_FC_WEAPON])
+				weapon_goal_ms = StrikeFieldCost(
+					sg_fields.item[SG_FC_WEAPON],
+					sg_bots[strike_slot].seed);
+			weapon_remaining_ms = (int)((
+				strike_team->weapon_deadline[strike_slot] - level.time) *
+				1000.0f);
+			if (SG_StrikeWeaponDetourAllowed(
+				    SG_StrikeMemberNeedsWeapon(strike_team, strike_slot,
+				                               level.time),
+				    tc.strike_rush, carrying, SG_CombatWouldEngage(e),
+				    direct_flag_touch,
+				    strike_frame->slot[strike_slot].enemy_flag_goal_ms,
+				    weapon_goal_ms, weapon_remaining_ms))
 			{
 				tc.goal_field = sg_fields.item[SG_FC_WEAPON];
 				tc.route_field = sg_fields.item[SG_FC_WEAPON];

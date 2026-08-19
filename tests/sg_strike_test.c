@@ -617,6 +617,42 @@ static void TestWeaponRouteRetirementVerdicts(void)
 	CHECK(!SG_StrikeGenericRailAllowed(1));
 }
 
+static void TestWeaponDetourPreservesStandPressure(void)
+{
+	/* Far from the flag, a materially shorter weapon route may still use the
+	 * immutable per-life preparation window. */
+	CHECK(SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    8000, 2500, 5000));
+	CHECK(SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    6000, 5000, 5000)); /* exact one-second saving */
+
+	/* Once the attacker is inside the strike window, reaching the stand owns
+	 * the route even if a nearby weapon is still deadline-reachable. */
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    5000, 500, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    4999, 500, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    8000, 7001, 8000)); /* less than one second saved */
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    8000, 5001, 5000)); /* misses immutable deadline */
+
+	CHECK(!SG_StrikeWeaponDetourAllowed(0, 0, 0, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 1, 0, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 1, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 1, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 1,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(2, 0, 0, 0, 0,
+	    8000, 1000, 5000));
+	CHECK(!SG_StrikeWeaponDetourAllowed(1, 0, 0, 0, 0,
+	    -1, 1000, 5000));
+}
+
 static void TestReturnCaptureAndLifecycleReset(void)
 {
 	sg_strike_team_t team;
@@ -733,6 +769,7 @@ int main(void)
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();
 	TestWeaponRouteRetirementVerdicts();
+	TestWeaponDetourPreservesStandPressure();
 	TestReturnCaptureAndLifecycleReset();
 	TestInvalidInputDoesNotMutate();
 	TestHomeFlagApproachPricing();

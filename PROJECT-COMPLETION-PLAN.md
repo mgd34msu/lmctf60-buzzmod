@@ -151,10 +151,12 @@ Implement the remaining material deficiencies in this order:
    qualified stand entries and complete more authoritative `ctf_flagtouch`
    pickups. Do not repeat the struck close-approach pacing suppression and do
    not replace physical touch with controller-owned score state.
-3. **Make hooks choose useful rides.** In `sg_descend.c` and `sg_move.c`, price
-   expected route progress before fire, exercise the production aim-wedge and
-   terminal lifecycle, and shelve only the exact failed link. Never satisfy the
-   gate by disabling hook use.
+3. **Make hooks choose useful rides.** The controller already prices expected
+   route progress at staging and again at the exact fire boundary, and its
+   aim-wedge timeout shelves only the failed graph link while updating its
+   failure streak. Exercise those existing production seams and their terminal
+   lifecycle rather than inventing another hook policy. Never satisfy the gate
+   by disabling hook use.
 4. **Preserve combat strength without hidden information.** Current retained
    evidence has bots ahead of humans in hits per shot, about 0.58 versus 0.29;
    that is not a deficiency and must not be tuned downward. In `sg_combat.c`,
@@ -174,10 +176,11 @@ the changed policy or live seam, both Make dialects, and then a matched runtime
 gate. A measurement-only change cannot complete an item. Implemented controller
 slices now include the enabled quiet-defender patrol, a bounded proved-RUN
 home-flag approach preference that breaks near-stand field plateaus without
-granting touch authority, and immediate strike release when no ready teammate
-can reach the synchronization window before its deadline. Their pure policies
-are executable; runtime outcome acceptance remains pending on the persistent
-fleet.
+granting touch authority, immediate strike release when no ready teammate can
+reach the synchronization window before its deadline, and weapon preparation
+that yields to enemy-stand pressure inside five seconds or when its route saves
+less than one second. Their pure policies are executable; runtime outcome
+acceptance remains pending on the persistent fleet.
 
 ### Acceptance instrumentation and provenance
 
@@ -235,7 +238,7 @@ Acceptance:
 
 Required work:
 
-- require worthwhile expected ride value before firing;
+- retain the existing worthwhile-ride checks at both staging and fire;
 - reduce low-value fire/release cadence without suppressing useful long rides;
 - drive the real production controller through the aim-wedge timeout;
 - prove exact failed-link shelving, failure-streak and ban updates, later

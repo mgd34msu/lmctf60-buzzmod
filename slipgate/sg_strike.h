@@ -151,6 +151,13 @@ int SG_StrikeMember(const sg_strike_team_t *team, int slot);
 int SG_StrikeParticipant(const sg_strike_team_t *team, int slot);
 int SG_StrikeMemberNeedsWeapon(const sg_strike_team_t *team, int slot,
 	float now);
+/* A weapon errand is subordinate to stand pressure.  A member already inside
+ * the five-second enemy-flag band stays on the objective; outside that band,
+ * the weapon must be both deadline-reachable and at least one second cheaper
+ * than the current enemy-flag route. */
+int SG_StrikeWeaponDetourAllowed(int needs_weapon, int strike_rush,
+	int carrying, int combat_engaged, int direct_flag_touch,
+	int enemy_flag_goal_ms, int weapon_goal_ms, int remaining_ms);
 int SG_StrikeMemberShouldHold(const sg_strike_team_t *team, int slot);
 int SG_StrikeMemberRushes(const sg_strike_team_t *team, int slot);
 sg_strike_weapon_route_verdict_t SG_StrikeWeaponRouteVerdict(

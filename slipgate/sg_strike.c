@@ -680,6 +680,28 @@ int SG_StrikeMemberNeedsWeapon(const sg_strike_team_t *team, int slot,
 	    duty == SG_STRIKE_DUTY_PRESS || duty == SG_STRIKE_DUTY_NONE;
 }
 
+int SG_StrikeWeaponDetourAllowed(int needs_weapon, int strike_rush,
+	int carrying, int combat_engaged, int direct_flag_touch,
+	int enemy_flag_goal_ms, int weapon_goal_ms, int remaining_ms)
+{
+	if ((needs_weapon != 0 && needs_weapon != 1) ||
+	    (strike_rush != 0 && strike_rush != 1) ||
+	    (carrying != 0 && carrying != 1) ||
+	    (combat_engaged != 0 && combat_engaged != 1) ||
+	    (direct_flag_touch != 0 && direct_flag_touch != 1))
+		return 0;
+	if (!needs_weapon || strike_rush || carrying || combat_engaged ||
+	    direct_flag_touch ||
+	    enemy_flag_goal_ms <= SG_STRIKE_LEADER_WINDOW_MS ||
+	    weapon_goal_ms < 0 || remaining_ms < 0 ||
+	    weapon_goal_ms > remaining_ms)
+		return 0;
+	/* Requiring a full-second route saving prevents a technically reachable
+	 * weapon from replacing a nearly equal objective route.  Subtraction is
+	 * safe because the enemy goal was already proved greater than 5000. */
+	return weapon_goal_ms <= enemy_flag_goal_ms - 1000;
+}
+
 int SG_StrikeMemberShouldHold(const sg_strike_team_t *team, int slot)
 {
 	return team && Strike_SlotValid(slot) &&
