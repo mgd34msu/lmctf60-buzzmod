@@ -106,9 +106,10 @@ Verified and already pushed:
 - The RUNE Python readers have one strict corpus loader, working authenticated
   expected-identity comparison, and adversarial duplicate/non-finite/oversized
   number regressions.
-- The latest pushed source milestone is `dfe0ad7` on `slipgate`, merged without
-  tree drift to `main` as `c65dc28`; exact-SHA CI runs `32215498567` and
-  `32215702624` passed all eight non-publish jobs.
+- The latest executable-source milestone is `bf52886` on `slipgate`, merged
+  without tree drift to `main` as `c7c8f0f`; exact-SHA CI runs `32216917114`
+  and `32217105470` passed all eight non-publish jobs. Later documentation-only
+  commits do not change that executable baseline.
 
 Known incomplete work:
 
@@ -921,9 +922,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
 - [x] `lmctf44` regenerated and independently cold-loaded.
 - [x] Shallow-water DIRECT door law committed and green.
 - [x] Current project plan, 181 authority/controller, map-list fix, telemetry
-      consumers, documentation hygiene, and repository hygiene are integrated
-      through `dfe0ad7`, merged without tree drift to `main` as `c65dc28`, and
-      exact-SHA CI is green on both branches.
+      consumers, strict readers, documentation hygiene, and repository hygiene
+      are integrated through executable-source commit `bf52886`, merged without
+      tree drift to `main` as `c7c8f0f`; exact-SHA CI runs `32216917114` and
+      `32217105470` are green.
 - [x] Tracked corpus list contains exactly 181 unique maps, including both
       `lmctf02` and `lmctf02c`.
 - [x] Corpus controller proves generator, dual C readers, Python reader, lint,
