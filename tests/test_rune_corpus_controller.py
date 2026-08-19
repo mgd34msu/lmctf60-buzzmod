@@ -334,16 +334,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ))
             self.thaw(snapshot)
 
-    def test_manifest_and_all_180_stable_assignments(self):
+    def test_manifest_and_all_181_stable_assignments(self):
         maps = controller.validate_manifest()
         assignments = controller.stable_assignments(maps)
-        self.assertEqual(180, len(maps))
-        self.assertEqual(180, len(assignments))
-        self.assertEqual(list(range(180)), [item["index"] for item in assignments])
-        self.assertEqual(list(range(62000, 62180)), [item["port"] for item in assignments])
+        self.assertEqual(181, len(maps))
+        self.assertEqual(181, len(assignments))
+        self.assertEqual(list(range(181)), [item["index"] for item in assignments])
+        self.assertEqual(list(range(62000, 62181)), [item["port"] for item in assignments])
         self.assertEqual(maps, [item["map"] for item in assignments])
+        self.assertIn("lmctf02", maps)
         self.assertIn("lmctf02c", maps)
-        self.assertNotIn("lmctf02", maps)
 
     def test_parent_map_authority_rejects_host_basename_inode_device_and_zero_inode(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -496,7 +496,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ):
                 maps = controller.validate_manifest(path)
             self.assertTrue(opened)
-            self.assertEqual(180, len(maps))
+            self.assertEqual(181, len(maps))
             self.assertEqual(b"attacker replacement\n", path.read_bytes())
 
     def test_snapshot_rejects_symlink_and_detects_input_mutation(self):
@@ -1053,9 +1053,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
             assignments = [line for line in lines if re.fullmatch(r"[0-9]{3}\t[^\t]+\t[0-9]+", line)]
             self.assertEqual(0, status)
             self.assertTrue(lines[0].startswith("fingerprint="))
-            self.assertEqual(180, len(assignments))
+            self.assertEqual(181, len(assignments))
             self.assertEqual("000\tlmctf01\t62000", assignments[0])
-            self.assertEqual("179\txmap30\t62179", assignments[-1])
+            self.assertEqual("180\txmap30\t62180", assignments[-1])
             self.thaw(snapshot)
 
     def test_atomic_publication_syncs_temp_published_file_and_parent(self):
@@ -1504,7 +1504,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
     def test_live_heartbeat_is_monotonic_and_finishes_empty(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary)
-            publisher = controller.HeartbeatPublisher(run_root, "fingerprint", 180)
+            publisher = controller.HeartbeatPublisher(
+                run_root, "fingerprint", controller.CORPUS_SIZE
+            )
             initial = json.loads((run_root / "heartbeat.json").read_text())
             publisher.event("active", "lmctf01", {"attempt": 1, "process": {"pid": 9}})
             active = json.loads((run_root / "heartbeat.json").read_text())
@@ -1612,7 +1614,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ))
             self.thaw(run_root)
 
-    def test_summary_rejects_180_incomplete_infra_terminal_records(self):
+    def test_summary_rejects_181_incomplete_infra_terminal_records(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary)
             maps = controller.validate_manifest()

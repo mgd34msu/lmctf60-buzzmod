@@ -8,13 +8,19 @@ both the C and Python acceptance paths.
 ## Fixed corpus
 
 - Use `tools/rune-corpus-maps.txt` as the sole ordered map manifest.
-- Require exactly 180 safe, unique names.
-- Require `lmctf02c` and reject `lmctf02` even if supplied by an override.
+- Require exactly 181 safe, unique names.
+- Require both the original `lmctf02` BSP and its padded `lmctf02c`
+  replacement as distinct corpus identities. Neither may stand in for the
+  other.
 - The manifest SHA-256 is
-  `b39de6fba3c2b2ca89ff4bcbb52f13976a61ec0e2e74ee5815a9107430db2fe3`.
+  `9bc55cb287f0b9d99fccf54cc1339e65fba30459e49b0b77cf1b67896c125452`.
 - Assign stable ports by manifest index.  The reserved default range is
-  62000-62179; all selected TCP and UDP ports must be bind-tested before any
+  62000-62180; all selected TCP and UDP ports must be bind-tested before any
   engine starts.  A different base is part of the run fingerprint.
+
+This 181-map manifest is the conversion corpus. The production server rotation
+and its cold-load/wave gate use the separate exact-20 runtime map list; passing
+that runtime gate never reduces or substitutes for converting this corpus.
 
 ## Required process discipline
 
@@ -103,13 +109,13 @@ artifact is still the exact recorded bytes, and all three gates pass again.
 Otherwise create the next attempt; never overwrite prior evidence.
 
 After each terminal map, atomically regenerate `summary.json`, `summary.tsv`,
-and `heartbeat.json`.  The final summary includes the fingerprint, total 180,
+and `heartbeat.json`.  The final summary includes the fingerprint, total 181,
 counts by classification, every map result/hash, start/end timestamps, and a
-`complete` boolean that is true only when all 180 terminal results validate.
+`complete` boolean that is true only when all 181 terminal results validate.
 
 ## Launch gate
 
-First run only the controller self-tests and a dry-run that prints the 180
+First run only the controller self-tests and a dry-run that prints the 181
 stable map/port assignments and fingerprint.  Then run one approved smoke map
 with a fresh module, inspect its exact bytes through C and Python, and cold-load
 it through the runtime.  The full corpus may start only after that evidence is

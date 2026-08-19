@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durable controller for the fixed 180-map RUNE corpus.
+"""Durable controller for the fixed 181-map RUNE corpus.
 
 The controller is deliberately fail-closed.  ``dry-run`` never starts an
 engine.  ``smoke`` selects exactly one map; ``run`` selects the fixed corpus.
@@ -37,9 +37,9 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tools/rune-corpus-maps.txt"
 EXPECTED_MANIFEST_SHA256 = (
-    "b39de6fba3c2b2ca89ff4bcbb52f13976a61ec0e2e74ee5815a9107430db2fe3"
+    "9bc55cb287f0b9d99fccf54cc1339e65fba30459e49b0b77cf1b67896c125452"
 )
-CORPUS_SIZE = 180
+CORPUS_SIZE = 181
 DEFAULT_PORT_BASE = 62000
 CORPUS_ENGINE_BASENAME = "q2ded-rune-corpus"
 MAP_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
@@ -396,8 +396,8 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> list[str]:
     for name in maps:
         if not MAP_NAME_RE.fullmatch(name):
             raise CorpusError(f"unsafe map name in manifest: {name!r}")
-    if "lmctf02c" not in maps or "lmctf02" in maps:
-        raise CorpusError("manifest violates the lmctf02c map-name law")
+    if "lmctf02" not in maps or "lmctf02c" not in maps:
+        raise CorpusError("manifest must retain both lmctf02 and lmctf02c")
     return maps
 
 
