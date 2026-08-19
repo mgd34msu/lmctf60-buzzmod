@@ -39,6 +39,7 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
 #include "slipgate/sg_lead.h"
+#include "slipgate/sg_goal.h"
 #include "slipgate/sg_item_policy.h"
 #include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_death_belief.h"
@@ -1024,6 +1025,7 @@ void SG_NoteItemTaken(edict_t *taker, edict_t *item)
 	 * for the same reason Caco_ScanItemSpawns skips it, and "quad is back in
 	 * 60" said about a corpse's quad would be a lie with a number on it.
 	 */
+	SG_DefenseSupplyNoteItemTouch(taker, item);
 	disposition = SG_ItemPickupDisposition(true,
 	    (item->spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)) != 0,
 	    SG_ChatItemMajor(item), SG_ItemComm());
@@ -1071,6 +1073,7 @@ void SG_NoteItemRejected(edict_t *taker, edict_t *item)
 	/* A refusal is private physical state of the touching bot. It neither
 	 * changes team belief nor earns a callout; it only closes the exact local
 	 * errand that has now proved unable to collect its target. */
+	SG_DefenseSupplyNoteItemTouch(taker, item);
 	Lead_NoteItemRejected(taker, item);
 }
 

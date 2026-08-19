@@ -699,6 +699,33 @@ qboolean SG_DefenseSupplyActive(const sg_bot_t *bot)
 	return bot && bot->def_supply_armed;
 }
 
+/* Touch_Item is the final pickup authority.  Close only the touching bot's
+ * exact outbound witness, whether Pickup_Weapon accepted it or proved that
+ * the live game rules refuse it.  This prevents DF_WEAPONS_STAY from leaving
+ * an empty defender pressed against an owned, uncollectable weapon pad. */
+void SG_DefenseSupplyNoteItemTouch(edict_t *taker, edict_t *item)
+{
+	int item_ent, i;
+
+	if (!taker || !item)
+		return;
+	item_ent = (int)(item - g_edicts);
+	if (item_ent <= 0 || item_ent >= globals.num_edicts)
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_bot_t *bot = &sg_bots[i];
+
+		if (!bot->active || bot->ent != taker ||
+		    bot->def_supply_phase != SG_DEF_SUPPLY_OUTBOUND ||
+		    bot->def_supply_instance != bot->instance_token ||
+		    bot->def_supply_ent != item_ent)
+			continue;
+		SG_DefenseSupplyBeginReturn(bot);
+		return;
+	}
+}
+
 qboolean SG_DefenseSupplyHome(int team)
 {
 	edict_t *flag;
@@ -754,7 +781,8 @@ static qboolean DefenseSupplyOtherOwner(const sg_bot_t *bot,
 	return !active && bot->commit_link >= 0;
 }
 
-static qboolean DefenseSupplyWeaponClass(const edict_t *item)
+static qboolean DefenseSupplyWeaponClass(const edict_t *item,
+                                         const edict_t *taker)
 {
 	if (!item || !item->inuse || !item->classname ||
 	    strncmp(item->classname, "weapon_", 7) != 0)
@@ -765,7 +793,8 @@ static qboolean DefenseSupplyWeaponClass(const edict_t *item)
 	    strcmp(item->classname, "weapon_grenades") == 0 ||
 	    strcmp(item->classname, "weapon_blaster") == 0)
 		return false;
-	return item->solid != SOLID_NOT && Caco_ItemBelievedUp((edict_t *)item);
+	return item->solid != SOLID_NOT && Caco_ItemBelievedUp((edict_t *)item) &&
+	       G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker);
 }
 
 static qboolean DefenseSupplyTargetValid(const sg_bot_t *bot)
@@ -777,7 +806,7 @@ static qboolean DefenseSupplyTargetValid(const sg_bot_t *bot)
 	    bot->def_supply_ent >= globals.num_edicts || !SG_Rune())
 		return false;
 	item = &g_edicts[bot->def_supply_ent];
-	if (!DefenseSupplyWeaponClass(item))
+	if (!DefenseSupplyWeaponClass(item, bot->ent))
 		return false;
 	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 	if (seed < 0 || seed != bot->def_supply_target_seed)
@@ -837,7 +866,7 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 		edict_t *item = &g_edicts[i];
 		int seed, flood_cost = 0, cost;
 
-		if (!DefenseSupplyWeaponClass(item))
+		if (!DefenseSupplyWeaponClass(item, bot->ent))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)

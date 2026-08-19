@@ -28,6 +28,7 @@ void SG_DefenseSupplyReset(sg_bot_t *bot);
 void SG_DefenseSupplyCancel(sg_bot_t *bot, qboolean backoff);
 void SG_DefenseSupplyBeginReturn(sg_bot_t *bot);
 void SG_DefenseSupplyFinish(sg_bot_t *bot);
+void SG_DefenseSupplyNoteItemTouch(edict_t *taker, edict_t *item);
 qboolean SG_DefenseSupplyActive(const sg_bot_t *bot);
 qboolean SG_DefenseSupplyHome(int team);
 qboolean SG_DefenseSupplyThreat(int team);

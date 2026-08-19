@@ -72,6 +72,8 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         self.assertIn("step.deadline_pending = SG_TimerPending(bot->def_supply_until)",
                       goal)
         self.assertIn("DefenseSupplyTargetValid(bot)", goal)
+        self.assertIn("G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker)",
+                      goal)
         self.assertIn("DefenseSupplyOtherOwner(bot, true)", goal)
         self.assertIn("DefenseSupplyRetireRun(bot)", goal)
         self.assertIn("DefenseSupplyRetireRailRetry(bot)", goal)
@@ -86,6 +88,20 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
             supply_header,
         )
         self.assertIn("route_field[SG_Rune()->links[bestlink].to]", descend)
+
+    def test_physical_weapon_touch_closes_exact_outbound_sortie(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        weapon = (ROOT / "p_weapon.c").read_text()
+
+        self.assertIn("qboolean G_WeaponPickupEligible", weapon)
+        self.assertIn("if (!G_WeaponPickupEligible(ent, other))", weapon)
+        self.assertIn("DF_WEAPONS_STAY", weapon)
+        self.assertIn("bot->ent != taker", goal)
+        self.assertIn("bot->def_supply_ent != item_ent", goal)
+        self.assertIn("SG_DefenseSupplyBeginReturn(bot)", goal)
+        self.assertEqual(caco.count("SG_DefenseSupplyNoteItemTouch(taker, item);"),
+                         2)
 
     def test_owned_stocked_weapon_flows_through_post_selector(self) -> None:
         combat = (ROOT / "slipgate/sg_combat.c").read_text()
