@@ -122,6 +122,18 @@ def armed_target_origin(
 
 
 class OffenseFlagPickupRecoveryTest(unittest.TestCase):
+    def test_non_escort_attackers_hold_enemy_base_during_our_carry(self) -> None:
+        goal = source("slipgate/sg_goal.c")
+        objective = between(goal, "void Think_Objective", "THE RUNE COURIER")
+        carrier_gate = objective.index("SG_AttackObjectiveUsesFixedStand(")
+        fixed_red = objective.index("sg_fields.to_red_flag", carrier_gate)
+        fixed_blue = objective.index("sg_fields.to_blue_flag", fixed_red)
+        moving = objective.index("sg_fields.to_flag_now", fixed_blue)
+        self.assertLess(carrier_gate, fixed_red)
+        self.assertLess(fixed_red, fixed_blue)
+        self.assertLess(fixed_blue, moving)
+        self.assertIn("sg_caco_team_belief.carrier[team_index].client", objective)
+
     def test_disabled_exit_asymmetry_does_not_draw_randomness(self) -> None:
         goal = source("slipgate/sg_goal.c")
         carry = between(goal, "if (carrying && !bot->was_carrying)",

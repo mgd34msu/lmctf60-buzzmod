@@ -85,4 +85,13 @@ static inline int SG_RoleOwnsDefenseState(int role)
 	return role == SG_ROLE_DEFEND;
 }
 
+/* Once our team has the enemy flag, one separately assigned ESCORT owns the
+ * carrier field. Ordinary attackers keep pressure on the enemy stand instead
+ * of turning into duplicate escorts or following an unseen-flag fallback
+ * home. */
+static inline int SG_AttackObjectiveUsesFixedStand(int own_carrier_client)
+{
+	return own_carrier_client >= 0;
+}
+
 #endif /* SG_ROLE_POLICY_H */

@@ -326,6 +326,11 @@ seed or across one proved ordinary RUN edge. A nearby seed behind a wall,
 mechanism, drop, or hook can no longer take direct movement authority for the
 whole rally window; if no proved cover exists, the attacker keeps pressing the
 enemy stand instead of freezing in exposed ground.
+When a teammate already carries the enemy flag, the one role-selected escort
+owns the moving carrier field and every remaining attacker keeps the fixed
+enemy-stand field. Attack pressure can no longer collapse into redundant
+carrier-following, nor can an unseen carrier make the enemy-flag belief
+fallback route the whole attack share back toward its own stand.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

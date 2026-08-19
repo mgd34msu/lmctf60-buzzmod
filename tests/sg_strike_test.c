@@ -1,4 +1,6 @@
 /* sg_strike_test.c -- host-free deterministic offense coordinator tests. */
+#include "g_local.h"
+#include "slipgate/sg_local.h"
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_role_policy.h"
 
@@ -990,6 +992,9 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 1));
 	CHECK(!SG_RoleOutsideDefenderQuota(eligible, 6, 3, 2));
 	CHECK(SG_RoleOutsideDefenderQuota(eligible, 6, 4, 2));
+	CHECK(!SG_AttackObjectiveUsesFixedStand(-1));
+	CHECK(SG_AttackObjectiveUsesFixedStand(0));
+	CHECK(SG_AttackObjectiveUsesFixedStand(15));
 }
 
 int main(void)

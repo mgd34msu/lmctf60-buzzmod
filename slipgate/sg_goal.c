@@ -1451,8 +1451,23 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 	else
-		goal_field = sg_fields.to_flag_now[SG_TeamIdx(team)]
-		    [SG_TeamIdx(SG_EnemyTeam(team))];
+	{
+		int team_index = SG_TeamIdx(team);
+		int enemy_index = SG_TeamIdx(SG_EnemyTeam(team));
+
+		/* One role-selected escort owns the moving carrier field.  The remaining
+		 * attackers keep the enemy base occupied so defenders cannot turn their
+		 * full roster onto the return.  Following the enemy-flag-now field here
+		 * made every attacker a second escort when the carrier was visible; when
+		 * its position was unknown, that field's honest fallback could even lead
+		 * the whole attack share back to our own stand. */
+		if (SG_AttackObjectiveUsesFixedStand(
+		        sg_caco_team_belief.carrier[team_index].client))
+			goal_field = enemy_index == 0 ? sg_fields.to_red_flag
+			                              : sg_fields.to_blue_flag;
+		else
+			goal_field = sg_fields.to_flag_now[team_index][enemy_index];
+	}
 
 	/*
 	 * THE RUNE COURIER. Candidacy is a lottery -- 107
