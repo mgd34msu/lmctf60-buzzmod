@@ -316,6 +316,10 @@ Graph-hook landing value now uses that same active route authority. A ride
 authorized by a tactical route is no longer shelved as a failure, or escalated
 into a global hook ban, merely because the superseded strategic field assigns
 different costs to its landing.
+Enabled sound-directed rocket fire now vetoes splash against every live
+same-team client in the game roster. Human teammates receive the same safety
+as SG teammates instead of disappearing from the check because they have no
+entry in the bot controller array.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1317,6 +1321,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Graph-hook landing service is evaluated against that same active route,
       so a useful tactical ride cannot be punished by a different strategic
       field after its irreversible traversal.
+      Sound-directed rockets inspect the complete live client roster before
+      firing, so an unrepresented human teammate at the believed impact point
+      vetoes speculative splash exactly like an SG teammate.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.

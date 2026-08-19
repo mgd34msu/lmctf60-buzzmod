@@ -35,9 +35,11 @@ PRODUCTION_ADAPTER_PROBE = r"""
 int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
     int hold_post, int engaged, int duel_hold, short weave_side,
     int mutation_mask, usercmd_t *cmd);
+int SG_SoundFireTestTeammateNear(edict_t *self, int team,
+    const vec3_t target, float radius);
 
 static edict_t entities[4];
-static gclient_t clients[2];
+static gclient_t clients[3];
 static edict_t flag;
 static edict_t stand;
 static edict_t *live_enemy;
@@ -191,6 +193,7 @@ static void Setup(void)
     memset(&sg_cv, 0, sizeof(sg_cv));
     memset(&sg_host, 0, sizeof(sg_host));
     memset(&level, 0, sizeof(level));
+    game.maxclients = 3;
     self->inuse = true;
     self->client = &clients[0];
     self->health = 100;
@@ -213,7 +216,7 @@ static void Setup(void)
     enemy->client->ctf.teamnum = CTF_TEAM_BLUE;
     enemy->client->ctf.ctfid = 77;
     entities[3].inuse = true;
-    entities[3].client = &clients[1];
+    entities[3].client = &clients[2];
     entities[3].health = 100;
     entities[3].deadflag = DEAD_NO;
     entities[3].client->ctf.teamnum = CTF_TEAM_BLUE;
@@ -486,8 +489,37 @@ static void TestDeathLeaseReset(void)
     CHECK(bot.defcombat_tangent_until == 0.0f);
 }
 
+static void TestSoundFireProtectsHumanTeammates(void)
+{
+    vec3_t belief = { 900.0f, 40.0f, 24.0f };
+    edict_t *human = &entities[3];
+
+    Setup();
+    human->client->ctf.teamnum = CTF_TEAM_RED;
+    VectorCopy(belief, human->s.origin);
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 1);
+
+    human->deadflag = DEAD_DEAD;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+    human->deadflag = DEAD_NO;
+    human->health = 0;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+    human->health = 100;
+    human->client->ctf.teamnum = CTF_TEAM_BLUE;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+    human->client->ctf.teamnum = CTF_TEAM_RED;
+    human->s.origin[0] = belief[0] + 251.0f;
+    CHECK(SG_SoundFireTestTeammateNear(&entities[1], CTF_TEAM_RED,
+        belief, 250.0f) == 0);
+}
+
 int main(void)
 {
+	TestSoundFireProtectsHumanTeammates();
     TestBlockedPostStaysStill();
     TestSafePostOwnsTheFinalLeg();
     TestShortPostFallbackOwnsTheFinalLeg();
@@ -506,6 +538,20 @@ int main(void)
 
 
 class DefenseCombatIntegrationTest(unittest.TestCase):
+    def test_sound_fire_splash_veto_uses_the_complete_client_roster(self) -> None:
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+        helper = move[move.index("static qboolean SoundFireTeammateNear"):
+                      move.index("static qboolean DefenseCombatEnemyCurrent")]
+        sound = move[move.index("SOUND-DIRECTED FIRE"):
+                     move.index("bot->engaged_last = engaged;")]
+
+        self.assertIn("client_index <= game.maxclients", helper)
+        self.assertIn("&g_edicts[client_index]", helper)
+        self.assertIn("mate->client->ctf.teamnum != team", helper)
+        self.assertIn("mate->deadflag", helper)
+        self.assertIn("SoundFireTeammateNear(e, team", sound)
+        self.assertNotIn("SG_MAXBOTS", sound)
+
     def test_cvar_and_static_hold_order(self) -> None:
         cvars = (ROOT / "slipgate/sg_cvars.h").read_text()
         move = (ROOT / "slipgate/sg_move.c").read_text()
@@ -616,7 +662,8 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
                 "-fsanitize=address,undefined", "-fno-strict-aliasing",
                 "-ffunction-sections", "-fdata-sections", "-Wall", "-Wextra",
                 "-Werror", "-Wpedantic", "-Wno-strict-prototypes", "-I.",
-                "-DSG_DEFENSE_COMBAT_TEST", "slipgate/sg_move.c",
+                "-DSG_DEFENSE_COMBAT_TEST", "-DSG_SOUND_FIRE_TEST",
+                "slipgate/sg_move.c",
                 "slipgate/sg_defense_shift.c", "q_shared.c", str(probe),
                 "-Wl,--gc-sections", "-lm", "-o", str(binary),
             ]

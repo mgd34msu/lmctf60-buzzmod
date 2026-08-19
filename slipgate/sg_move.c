@@ -42,6 +42,34 @@
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
 
+/* Sound-directed splash is admitted against the authoritative client roster,
+ * not the SG controller array. Humans and bots occupy the same damage space;
+ * a human teammate near the heard-only belief is therefore the same veto as
+ * an SG teammate. */
+static qboolean SoundFireTeammateNear(edict_t *self, int team,
+	const vec3_t target, float radius)
+{
+	int client_index;
+
+	if (!self || !target || !isfinite(radius) || radius <= 0.0f ||
+	    (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE))
+		return true;
+	for (client_index = 1; client_index <= game.maxclients; client_index++)
+	{
+		edict_t *mate = &g_edicts[client_index];
+		vec3_t delta;
+
+		if (mate == self || !mate->inuse || !mate->client ||
+		    mate->deadflag || mate->health <= 0 ||
+		    mate->client->ctf.teamnum != team)
+			continue;
+		VectorSubtract(mate->s.origin, target, delta);
+		if (VectorLength(delta) < radius)
+			return true;
+	}
+	return false;
+}
+
 /* This controller deliberately lives at the command boundary, after combat
  * has supplied the current target and view. It is not navigation: no seed,
  * link, goal, or commitment is ever read as an authority or rewritten. */
@@ -385,6 +413,14 @@ int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
 	final_as_ok = (mutation_mask & 32768) != 0; /* MUT_AS test seam */
 	return DefenseCombatWriteFinal(e, bot, team, &tc, final_as_ok, active, stand,
 	    enemy, enemy_ctfid, direction, cmd) ? 1 : 0;
+}
+#endif
+
+#ifdef SG_SOUND_FIRE_TEST
+int SG_SoundFireTestTeammateNear(edict_t *self, int team,
+	const vec3_t target, float radius)
+{
+	return SoundFireTeammateNear(self, team, target, radius) ? 1 : 0;
 }
 #endif
 
@@ -8100,32 +8136,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				/* observations: never rocket a ghost a teammate is
 				 * standing on -- the one premium this free trick
 				 * could quietly charge is friendly splash */
-				{
-					int bi15, mate15 = 0;
-
-					for (bi15 = 0; bi15 < SG_MAXBOTS; bi15++)
-					{
-						sg_bot_t *mb15 = &sg_bots[bi15];
-						vec3_t md15;
-
-						if (mb15 == bot || !mb15->ent ||
-						    !SG_CoordinationBodyLive(mb15->active,
-						        mb15->ent->inuse, mb15->ent->deadflag,
-						        mb15->ent->health))
-							continue;
-						if (mb15->ent->client->ctf.teamnum != team)
-							continue;
-						VectorSubtract(mb15->ent->s.origin,
-						    SG_Rune()->seeds[en15->seed].origin, md15);
-						if (VectorLength(md15) < 250.0f)
-						{
-							mate15 = 1;
-							break;
-						}
-					}
-					if (mate15)
-						continue;
-				}
+				if (SoundFireTeammateNear(e, team,
+				        SG_Rune()->seeds[en15->seed].origin, 250.0f))
+					continue;
 				{
 					float sy15 = atan2f(sd15[1], sd15[0])
 					             * 180.0f / (float)M_PI;
