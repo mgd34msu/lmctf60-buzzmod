@@ -33,6 +33,8 @@ int main(void)
 
 	memset(&bot, 0, sizeof(bot));
 	memset(&tc, 0, sizeof(tc));
+	CHECK(SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(false));
+	CHECK(!SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(true));
 	CHECK(SG_StrikeTestRailMoveAllowed(&tc));
 	tc.strike_active = true;
 	CHECK(!SG_StrikeTestRailMoveAllowed(&tc));

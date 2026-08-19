@@ -3360,6 +3360,17 @@ static qboolean StrikeRailMoveAllowed(const sg_think_t *tc)
 	return tc && SG_StrikeGenericRailAllowed(tc->strike_active);
 }
 
+/* Once the current live flag has passed the same-floor and player-hull trace,
+ * generic route steering has no remaining authority before the touch.  Its
+ * probes extend beyond the item and can therefore "avoid" a wall which is
+ * safely behind the pickup; heading smoothing can likewise preserve a stale
+ * route bearing for the only frame that matters. */
+static qboolean AttackFlagTerminalGenericSteeringAllowed(
+	qboolean attack_flag_terminal)
+{
+	return !attack_flag_terminal;
+}
+
 /* Phase two is the irreversible rocket-jump boundary: this exact production
  * emitter can launch the rocket before the next reconciliation frame. */
 static qboolean StrikeRocketJumpPhase2Command(const sg_bot_t *bot,
@@ -3412,6 +3423,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	vec3_t move_dir;
 	float view_yaw = tc->view_yaw, view_pitch = tc->view_pitch;
 	qboolean have_move = false, open_ahead = false, run_link = false;
+	qboolean attack_flag_terminal = false;
 	int door_hold = 0;
 	edict_t *door_ent = NULL;
 	edict_t *ordered_escort = (role == SG_ROLE_ESCORT)
@@ -3733,6 +3745,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		    SG_AttackFlagTerminalAim(e, team, aim))
 		{
 			have_aim = true;
+			attack_flag_terminal = true;
 			bestlink = -1;
 			tc->bestlink = -1;
 			rally_hold = false;
@@ -4849,6 +4862,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * in the 30-degree blind wedge between the fan's first rays.
 			 * Dense mode adds the 15s; the preference-decay ordering is
 			 * preserved (nearest the goal line first). */
+			if (AttackFlagTerminalGenericSteeringAllowed(
+			        attack_flag_terminal))
 			{
 			static const float fan_dense[11] = { 0, -15, 15, -30, 30, -60,
 			                                     60, -100, 100, -145, 145 };
@@ -5011,7 +5026,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * drop lip, in precision range, or in water, where the
 			 * snap IS the skill.
 			 */
-			if (sg_cv.smooth->value &&
+			if (AttackFlagTerminalGenericSteeringAllowed(
+			        attack_flag_terminal) && sg_cv.smooth->value &&
 			    !duel && !precision && bot->hook_phase == 0 &&
 			    e->waterlevel < 2)
 			{
@@ -6447,6 +6463,12 @@ static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
 }
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
+qboolean SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(
+	qboolean attack_flag_terminal)
+{
+	return AttackFlagTerminalGenericSteeringAllowed(attack_flag_terminal);
+}
+
 int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
 	int current_seed)
 {

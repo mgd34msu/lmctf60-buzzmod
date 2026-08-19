@@ -206,6 +206,11 @@ RECOVER terminal homing now finishes at the source of its admitted current or
 belief field instead of turning back toward the empty home stand. An exact
 dropped-flag item can replace that source only inside the same visible,
 same-floor, hull-clear touch envelope used for honest physical contact.
+Inside the exact enemy-flag touch envelope, the revalidated physical pickup
+line now owns heading through contact: the generic obstacle fan cannot probe
+past the flag and turn away because of geometry behind it, and route-heading
+smoothing cannot preserve a stale bearing for that terminal frame. This does
+not widen the touch envelope or bypass the authoritative `ctf_flagtouch` path.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

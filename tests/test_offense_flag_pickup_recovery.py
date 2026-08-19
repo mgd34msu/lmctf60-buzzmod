@@ -161,7 +161,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
             "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
             "ctf_flagathome(flag)",
-            "SG_AttackFlagPerceivable(e, flag)",
+            "SG_FlagPerceivable(e, flag)",
             "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
             "body.startsolid || body.allsolid",
         ):
@@ -357,6 +357,27 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertNotIn("home4", terminal_fallback)
         self.assertNotIn("Rune_NearestSeed", terminal_fallback)
         self.assertNotIn("role == SG_ROLE_ATTACK", terminal_fallback)
+
+    def test_live_flag_touch_owns_terminal_heading(self) -> None:
+        move = source("slipgate/sg_move.c")
+        terminal = between(
+            move,
+            "SG_AttackFlagTerminalAim(e, team, aim)",
+            "if (!have_aim && bestlink >= 0)",
+        )
+        self.assertIn("attack_flag_terminal = true;", terminal)
+        fan = between(move, "Feelers: try the goal heading first", "THE STEADY HAND")
+        self.assertIn(
+            "AttackFlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        attack_flag_terminal)",
+            fan,
+        )
+        smooth = between(move, "THE STEADY HAND", "at a drop lip")
+        self.assertIn(
+            "AttackFlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        attack_flag_terminal)",
+            smooth,
+        )
 
     def test_empty_flag_room_neither_holds_nor_arms_belief_grenade(self) -> None:
         descend = source("slipgate/sg_descend.c")
