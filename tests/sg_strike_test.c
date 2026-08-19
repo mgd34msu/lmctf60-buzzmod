@@ -1229,6 +1229,8 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(SG_InterposeLeadStation(3000, SG_FIELD_INF));
 	CHECK(SG_NadeBlockedArcMayCancel(0));
 	CHECK(!SG_NadeBlockedArcMayCancel(1));
+	CHECK(SG_NadeReleaseSlewRate(0, 600.0f) == 600.0f);
+	CHECK(SG_NadeReleaseSlewRate(1, 600.0f) == 0.0f);
 	CHECK(SG_NadeCookShouldHold(2, 2.0f, -1.0f));
 	CHECK(SG_NadeCookShouldHold(2, 2.0f, 1.0f));
 	CHECK(!SG_NadeCookShouldHold(0, 2.0f, -1.0f));

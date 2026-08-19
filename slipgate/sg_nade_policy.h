@@ -11,6 +11,13 @@ static inline int SG_NadeBlockedArcMayCancel(int trigger_was_held)
 	return trigger_was_held == 0;
 }
 
+/* Fuse timing makes the release view irreversible in this command.  Ordinary
+ * asks keep the configured human turn rate; the release flick is exact. */
+static inline float SG_NadeReleaseSlewRate(int releasing, float turn_rate)
+{
+	return releasing ? 0.0f : turn_rate;
+}
+
 /* Only a live cook transaction may keep the trigger held.  -1 means the
  * ballistic solve is not ready yet and may continue cooking; values below
  * -1.5 are the production blocked-arc sentinel and must never re-arm attack. */

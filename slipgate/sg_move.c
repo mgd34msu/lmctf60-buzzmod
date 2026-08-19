@@ -7828,6 +7828,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * to the up-to-two-seconds-old belief the surface terms were priced
 		 * from. The weave below needs the live one. */
 		qboolean engaged = false;
+		qboolean nade_release = false;  /* exact-view irreversible throw frame */
 		/* sg_airstrafe, decided once for the frame and spent per sub-step */
 		qboolean as_ok = false;         /* the chain is live this frame */
 		qboolean as_chain = false;      /* dose 2: hop chaining as well */
@@ -8163,6 +8164,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			else
 			{
 				cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */
+				nade_release = true;
 				bot->nade_phase = 0;
 				SG_NadeTargetClear(bot);
 				SG_TimerArm(&bot->nade_next, 8.0f);
@@ -8283,7 +8285,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 * catches the shot that came from somewhere the eye had not got
 		 * to yet -- which, spawning, is most of the map.
 		 */
-		if (SG_TimerPending(bot->beat_until))
+		if (!nade_release && SG_TimerPending(bot->beat_until))
 		{
 			/* bot->engaged_last is this same value by here -- it was
 			 * assigned from `engaged` a few lines up, so the live read
@@ -8348,7 +8350,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 			                 e->velocity[1] * e->velocity[1]);
 
-			if (!proved_control && dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
+				if (!proved_control && !nade_release && dose > 0.0f &&
+				    sp >= SG_AS_FLOOR && have_move &&
 			    run_link && open_ahead && bestlink >= 0 && SG_Rune() &&
 			    !precision && !engaged &&
 			    bot->hook_phase == 0 && bot->rj_phase == 0 &&
@@ -8493,7 +8496,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			               e->client->ps.pmove.delta_angles[YAW]));
 			float want_p = SHORT2ANGLE((short)(cmd->angles[PITCH] +
 			               e->client->ps.pmove.delta_angles[PITCH]));
-			float rate = sg_cv.turnrate->value;
+				float rate = SG_NadeReleaseSlewRate(nade_release,
+				    sg_cv.turnrate->value);
 
 			if (!bot->view_on || rate <= 0.0f)
 			{

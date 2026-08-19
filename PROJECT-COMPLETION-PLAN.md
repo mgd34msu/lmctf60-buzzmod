@@ -276,6 +276,10 @@ A blocked arc before the first held-trigger frame cancels at zero projectile
 cost. If cooking already began, the grenade remains under phase-two ownership,
 receives an immediate owned aim/release command, and is never misreported as a
 reversible cancellation.
+The release frame now owns its solved view through command emission. Spawn-look
+texture cannot overwrite it, and the ordinary turn-rate slew is bypassed only
+for that irreversible throw, so fuse timing and ballistic aim reach the engine
+together.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
@@ -1445,6 +1449,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       A blocked cooked-grenade arc now leaves the transaction and trigger off
       for the complete command frame; the negative blocked-flight sentinel
       cannot fall through and masquerade as a still-pending ballistic solve.
+      An irreversible grenade release owns the solved yaw/pitch through
+      emission: spawn-look and air-strafe writers stand down, and only that
+      frame bypasses ordinary turn slew before the engine observes release.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

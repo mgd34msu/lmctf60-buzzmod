@@ -453,6 +453,15 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         self.assertLess(hold, rearm)
         self.assertIn("SG_NadeBlockedArcMayCancel(", cook[blocked:guard])
         self.assertIn("e->client->buttons & BUTTON_ATTACK", cook[blocked:guard])
+        release = cook.index("nade_release = true;", guard)
+        slew = move.index("SG_NadeReleaseSlewRate(nade_release,", release)
+        self.assertLess(release, slew)
+        self.assertIn(
+            "if (!nade_release && SG_TimerPending(bot->beat_until))",
+            move[release:slew],
+        )
+        self.assertIn("if (!proved_control && !nade_release && dose > 0.0f",
+                      move[release:slew])
 
     def test_real_weapon_commitment_is_the_compiled_default(self) -> None:
         cvars = (ROOT / "slipgate" / "sg_cvars.h").read_text()
