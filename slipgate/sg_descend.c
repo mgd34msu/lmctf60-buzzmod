@@ -3956,8 +3956,11 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		return -1;
 	}
 	else if (SG_AgeOver(bot->wedge_since, 15.0f) &&
-	         !(role == SG_ROLE_DEFEND &&
-	           goal_field[bot->seed >= 0 ? bot->seed : 0] < 1500) &&
+	         !SG_RoleMissionHold(role,
+	             bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds ?
+	                 goal_field[bot->seed] : SG_FIELD_INF,
+	             role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
+	             SG_EscortTerminal(e, SG_ChatEscortTarget(e))) &&
 	         /* Declared mechanisms legitimately park the body while a lift
 	          * queues, moves beneath it, or carries it.  Their authoritative
 	          * state machine and bounded commit deadline own failure; the
@@ -3977,11 +3980,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	          * exists to produce. The progress guard's shelf wipe is
 	          * the carrier's remedy; a death hands the flag back. */
 	         role != SG_ROLE_CARRY &&
-	         /* Reaching the live teammate named by "cover me" is a terminal
-	          * mission hold, not a wedged route. Think_Move uses the same 96u
-	          * standoff and keeps combat active while navigation rests. */
-	         !(role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
-	           SG_EscortTerminal(e, SG_ChatEscortTarget(e))) &&
+	         /* Near-goal organic escorts and exact "cover me" arrivals were
+	          * classified as mission holds above, not wedged routes. */
 	         /* and a rail-rhythm wait is the same class of standing as a
 	          * rally: parked on purpose, briefly, by a bot that knows
 	          * exactly why. It cannot reach fifteen seconds on its own --

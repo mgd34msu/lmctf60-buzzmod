@@ -256,6 +256,10 @@ Within the same ordinary range, cone, and live-visibility gates, a believed
 enemy flag carrier receives a bounded 256-unit target score priority. Bots can
 therefore prefer the objective thief through a modest range difference without
 ignoring an immediate non-carrier threat or learning any unseen position.
+The generic fifteen-second wedge suicide now recognizes a near-goal organic
+escort as an intentional carrier-screen station, just like the existing
+defender post and exact human cover hold. Escorts outside the bounded goal band
+remain subject to normal stuck recovery.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

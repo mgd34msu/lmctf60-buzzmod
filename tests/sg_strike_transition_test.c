@@ -8,6 +8,7 @@
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_death_belief.h"
+#include "slipgate/sg_role_policy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1006,6 +1007,15 @@ static void TestDeathLocationRequiresPriorBelief(void)
 	CHECK(SG_DeathBeliefSeed(records, 3, 4, 10.0f, 8.0f, 3) == -1);
 }
 
+static void TestMissionHoldSurvivesGenericWedgeValve(void)
+{
+	CHECK(SG_RoleMissionHold(SG_ROLE_DEFEND, 1499, false));
+	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, 1499, false));
+	CHECK(!SG_RoleMissionHold(SG_ROLE_ESCORT, 1500, false));
+	CHECK(!SG_RoleMissionHold(SG_ROLE_ATTACK, 100, false));
+	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, SG_FIELD_INF, true));
+}
+
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
@@ -1018,6 +1028,7 @@ int main(void)
 	TestRailAndCarrierRoute();
 	TestHumanOrderOwnsStrikeAdmission();
 	TestDeathLocationRequiresPriorBelief();
+	TestMissionHoldSurvivesGenericWedgeValve();
 	if (failures)
 		return 1;
 	puts("sg_strike_transition_test: ok");

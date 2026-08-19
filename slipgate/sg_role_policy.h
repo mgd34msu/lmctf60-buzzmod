@@ -50,4 +50,16 @@ static inline int SG_RoleOutsideDefenderQuota(const unsigned char *eligible,
 	return rank >= defenders_wanted && rank < live_count;
 }
 
+/* Near-goal defenders and escorts are intentionally stationed.  A human
+ * escort's exact terminal hold remains authoritative even when its fallback
+ * graph cost is not near the ordered teammate. */
+static inline int SG_RoleMissionHold(int role, int goal_cost,
+	int ordered_escort_terminal)
+{
+	if (role == SG_ROLE_ESCORT && ordered_escort_terminal)
+		return 1;
+	return (role == SG_ROLE_DEFEND || role == SG_ROLE_ESCORT) &&
+	       goal_cost >= 0 && goal_cost < 1500;
+}
+
 #endif /* SG_ROLE_POLICY_H */
