@@ -771,6 +771,16 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("SG_TerminalFieldSeed(SG_Rune(),", fallback)
         self.assertNotIn("SG_FlagStand", fallback)
 
+        pressure = between(
+            move,
+            "else if (!have_aim && !gf && tc->strike_pressure)",
+            "else if (!have_aim && !gf)",
+        )
+        self.assertIn("state == SG_FLAG_ASTRAY", pressure)
+        self.assertIn("SG_TerminalFieldSeed(SG_Rune(), goal_field", pressure)
+        astray = pressure[:pressure.index("else\n\t\t\t\t{")]
+        self.assertNotIn("SG_FlagStand", astray)
+
         arach = source("slipgate/sg_arach.c")
         overlay = between(
             arach,

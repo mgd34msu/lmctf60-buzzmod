@@ -5016,23 +5016,43 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else if (!have_aim && !gf && tc->strike_pressure)
 			{
-				/* enemy stand position is common knowledge */
-				edict_t *marker = SG_FlagStand(team, false);
-				edict_t *enemy_item = NULL;
+				int ti = SG_TeamIdx(team);
+				int ei = SG_TeamIdx(SG_EnemyTeam(team));
 
-				gf = marker;
-				/*
-				 * THE ROUTE GOES THROUGH THE FLAG.
-				 * observations taught the CARRIER to aim at the live item
-				 * because droptofloor settles it off the marker far
-				 * enough to orbit; the grab side never got the fix, so
-				 * attackers still walked to the marker and circled a flag a
-				 * body-length away.  The shared authority is stricter than
-				 * home knowledge: it also proves same-floor, hull-clear direct
-				 * contact, and refuses an unseen dropped item.
-				 */
-				if (SG_AttackFlagDirectTouchAuthority(e, team, &enemy_item))
-					gf = enemy_item;
+				if (sg_caco_team_belief.flag[ti][ei].state == SG_FLAG_ASTRAY)
+				{
+					/* The strategy field was admitted from this team's dropped-
+					 * flag belief. At its minimum, keep walking to that same
+					 * source; substituting the empty home stand here discarded the
+					 * objective on the final graphless body-length. */
+					terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
+					    bot->seed);
+					if (terminal_seed >= 0)
+					{
+						VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
+						have_aim = true;
+					}
+				}
+				else
+				{
+					/* The home stand position is common knowledge. */
+					edict_t *marker = SG_FlagStand(team, false);
+					edict_t *enemy_item = NULL;
+
+					gf = marker;
+					/*
+					 * THE ROUTE GOES THROUGH THE FLAG.
+					 * observations taught the CARRIER to aim at the live item
+					 * because droptofloor settles it off the marker far
+					 * enough to orbit; the grab side never got the fix, so
+					 * attackers still walked to the marker and circled a flag a
+					 * body-length away.  The shared authority is stricter than
+					 * home knowledge: it also proves same-floor, hull-clear direct
+					 * contact, and refuses an unseen dropped item.
+					 */
+					if (SG_AttackFlagDirectTouchAuthority(e, team, &enemy_item))
+						gf = enemy_item;
+				}
 			}
 			else if (!have_aim && !gf)
 			{
