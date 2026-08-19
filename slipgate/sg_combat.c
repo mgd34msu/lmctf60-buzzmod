@@ -1156,20 +1156,17 @@ qboolean SG_CombatWouldEngage(edict_t *self)
  */
 static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target)
 {
-	int	team = self->client->ctf.teamnum;
-	int	i;
+	int team = self->client->ctf.teamnum;
+	int target_client;
+	sg_belief_carrier_t *carrier;
 
-	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+	if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) || !target ||
+	    !target->client)
 		return false;
-
-	for (i = 0; i < 2; i++)
-	{
-		sg_belief_carrier_t *c = &sg_caco_team_belief.enemy_carrier[i];
-
-		if (c->client >= 0 && g_edicts + 1 + c->client == target)
-			return true;
-	}
-	return false;
+	target_client = (int)(target - g_edicts) - 1;
+	carrier = &sg_caco_team_belief.enemy_carrier[SG_TeamIdx(team)];
+	return SG_CombatEnemyCarrierAllowed(team, game.maxclients,
+	    carrier->client, target_client, ClientHasFlag(target) != NULL);
 }
 
 static qboolean Combat_Carrying(edict_t *self)

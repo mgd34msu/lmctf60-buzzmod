@@ -325,6 +325,10 @@ client against current CTF state: bounded slot, live same-team body, actual
 flag possession, and an empty rune slot. A former carrier, dead client, reused
 slot, or carrier already holding any rune cannot receive an uncollectable drop
 merely because the carrier belief has not aged out yet.
+Combat carrier priority now reads only the belief row for this bot's stolen
+flag and confirms that the visible nominated target still possesses a flag.
+Former carriers and reused slots therefore lose the carrier score and intercept
+weapon ladder immediately instead of retaining them until belief expiry.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1333,6 +1337,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       client to be a current live same-team flag carrier with an empty rune
       slot; stale, reused, or already-occupied receivers cannot authorize the
       irreversible drop.
+      Carrier-priority target scoring and weapon selection require the current
+      visible nominated client to still possess a flag in this bot's own stolen-
+      flag belief row.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.

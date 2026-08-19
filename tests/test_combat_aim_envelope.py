@@ -347,6 +347,13 @@ static int test_clear_shot_predicate(void)
 
 static int test_target_identity_hysteresis(void)
 {
+	CHECK(SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, false));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 5, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, -1, 4, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 16, 16, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(0, 16, 4, 4, true));
+	CHECK(!SG_CombatEnemyCarrierAllowed(CTF_TEAM_RED, 16, 4, 4, 2));
     CHECK(nearly(SG_CombatTargetScore(500.0f, 4, 4, false),
                  372.0f, 0.001f));
     CHECK(nearly(SG_CombatTargetScore(500.0f, 5, 4, false),
@@ -480,6 +487,14 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         self.assertIn("Combat_GrenadeImpact", frame)
         self.assertIn("st->enemy, true", frame)
         self.assertIn("SG_CombatTargetScore", SOURCE)
+        carrier_start = SOURCE.index(
+            "static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target)\n{")
+        carrier = SOURCE[carrier_start:
+                         SOURCE.index("static qboolean Combat_Carrying", carrier_start)]
+        self.assertIn("enemy_carrier[SG_TeamIdx(team)]", carrier)
+        self.assertIn("SG_CombatEnemyCarrierAllowed", carrier)
+        self.assertIn("ClientHasFlag(target) != NULL", carrier)
+        self.assertNotIn("for (", carrier)
         self.assertIn("return enemy_hit;", SOURCE)
         self.assertIn("return enemy_hit || unobstructed;", SOURCE)
 
