@@ -976,6 +976,7 @@ void ED_CallSpawn (edict_t *ent);
 
 void SpawnRune (int type);
 void SP_damage_rune (edict_t *self);
+qboolean G_RunePickupEligible(edict_t *ent, edict_t *other);
 qboolean Pickup_Rune (edict_t *ent, edict_t *other);
 void Drop_Rune (edict_t *ent, gitem_t *item);
 int DamageRuneHook(edict_t *targ, edict_t *inflictor, edict_t *attacker, int damage, int knockback, int dflags);

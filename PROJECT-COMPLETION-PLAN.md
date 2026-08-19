@@ -1585,6 +1585,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       cannot raise the client's held armor, while shards, empty slots, and real
       upgrades remain available; route admission and `Pickup_Armor` share the
       same calculation.
+      Identity-bearing powerup and rune routes now apply their exact physical
+      pickup law before pricing each pad. Full powerup inventory and an already
+      held rune therefore remove the uncollectible entity from ordinary route
+      attraction instead of waiting for final homing to discover the refusal.
       Retained ordinary RUNs now carry the exact route-field identity that
       authorized them. When a pure mission changes to enemy pressure,
       recovery, escort, or an exact item route, a reversible RUN and its sticky

@@ -124,6 +124,23 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             lead.count("G_PowerupPickupEligible"), 3)
         self.assertIn('Lead_Abort(bot, "powerup capacity")', lead)
 
+        runes = self.text("g_runes.c")
+        rune_law = runes[runes.index(
+            "qboolean G_RunePickupEligible"):runes.index(
+            "// BUZZKILL - TOSS THING")]
+        self.assertIn("other->client->rune == NULL", rune_law)
+        self.assertIn("if (G_RunePickupEligible(ent, other))", rune_law)
+
+        price = self.text("slipgate/sg_price.c")
+        admission = price[price.index(
+            "static qboolean Detour_IdentityItemEligible"):price.index(
+            "float Detour_Value")]
+        self.assertIn("G_PowerupPickupEligible(item, tc->e)", admission)
+        self.assertIn("G_RunePickupEligible(item, tc->e)", admission)
+        detour = price[price.index("float Detour_Value"):price.index(
+            "float Mega_Detour")]
+        self.assertIn("Detour_IdentityItemEligible(tc, cls, kent)", detour)
+
     def test_rune_handoff_uses_effective_strike_escort_at_both_boundaries(self):
         for relative in ("slipgate/sg_goal.c", "slipgate/sg_descend.c"):
             source = self.text(relative)

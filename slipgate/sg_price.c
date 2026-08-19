@@ -69,6 +69,27 @@ float Rune_RoleFactor(int role, int entnum)
 qboolean sg_route_pure_now;  /* tactics priced at selection: the
                                      * per-frame walk stays pure */
 
+static qboolean Detour_IdentityItemEligible(const sg_think_t *tc, int cls,
+	int entnum)
+{
+	edict_t *item;
+	qboolean eligible;
+
+	if (!tc || !tc->e || !tc->e->client || entnum <= 0 ||
+	    entnum >= globals.num_edicts)
+		return false;
+	item = &g_edicts[entnum];
+	if (!item->item)
+		return false;
+	if (cls == SG_FC_POWERUP)
+		eligible = G_PowerupPickupEligible(item, tc->e);
+	else if (cls == SG_FC_RUNE)
+		eligible = G_RunePickupEligible(item, tc->e);
+	else
+		return false;
+	return SG_IdentityItemRouteAdmission(cls, eligible);
+}
+
 float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
                           float worth)
 {
@@ -100,10 +121,12 @@ float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
 		{
 			const int *kfld = sg_fields.per_item[cls][k];
 			int kseed = sg_fields.per_item_seed[cls][k];
+			int kent = sg_fields.per_item_ent[cls][k];
 			int cost_to, item_to_goal, detour;
 			float v;
 
-			if (!kfld || kseed < 0)
+			if (!kfld || kseed < 0 ||
+			    !Detour_IdentityItemEligible(tc, cls, kent))
 				continue;
 			cost_to = kfld[here];
 			item_to_goal = goal_field[kseed];
@@ -115,8 +138,7 @@ float Detour_Value(sg_think_t *tc, int here, int cls, const int *goal_field,
 				detour = 0;      /* an item on the road is free, never a bonus */
 			v = worth / (1.0f + (float)detour / 1500.0f);
 			if (cls == SG_FC_RUNE)
-				v *= Rune_RoleFactor(tc->role,
-				                     sg_fields.per_item_ent[cls][k]);
+				v *= Rune_RoleFactor(tc->role, kent);
 			if (v > best)
 				best = v;
 		}

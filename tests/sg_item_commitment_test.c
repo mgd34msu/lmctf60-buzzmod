@@ -6,6 +6,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_item_policy.h"
+#include "slipgate/sg_item_route.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_persona.h"
 
@@ -355,6 +356,12 @@ static void TestPowerupCapacityEndsTheErrand(void)
 
 int main(void)
 {
+	CHECK(SG_IdentityItemRouteAdmission(SG_FC_POWERUP, true));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_POWERUP, false));
+	CHECK(SG_IdentityItemRouteAdmission(SG_FC_RUNE, true));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_RUNE, false));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_WEAPON, true));
+	CHECK(!SG_IdentityItemRouteAdmission(SG_FC_POWERUP, 2));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, false, false));
 	CHECK(SG_RuneHandoffEligible(SG_ROLE_ESCORT, false, -1, false, false));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_RECOVER, false, -1, false, false));

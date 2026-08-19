@@ -11,4 +11,17 @@ static inline const int *SG_ItemDetourField(int has_frame_context,
 	return has_frame_context ? client_field : class_field;
 }
 
+/* Identity-bearing fields are safe to price only when the exact entity is
+ * physically collectible by this client.  Keep the admitted class set closed:
+ * adding another per-item field must also add its pickup law here. */
+static inline int SG_IdentityItemRouteAdmission(int cls,
+	int physical_pickup_eligible)
+{
+	if (physical_pickup_eligible != 0 && physical_pickup_eligible != 1)
+		return 0;
+	if (cls != SG_FC_POWERUP && cls != SG_FC_RUNE)
+		return 0;
+	return physical_pickup_eligible;
+}
+
 #endif
