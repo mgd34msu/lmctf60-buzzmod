@@ -35,6 +35,7 @@
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_nade_policy.h"
 #include "slipgate/sg_crowd_pass.h"
+#include "slipgate/sg_weave_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
@@ -2690,8 +2691,6 @@ static qboolean Hook_LinkWaterSource(const sg_bot_t *bot)
 #define SG_AS_BEND	30.0f       /* degrees the chord may sit off the route */
 #define SG_AS_CHORD	0.80f       /* chord / arc a road has to keep */
 #define SG_WEAVE_SIDE		300
-#define SG_WEAVE_BASE		0.4f
-#define SG_WEAVE_STEP		0.05f
 #define SG_WEAVE_HOLD		150.0f	/* a step this short is a stand, not a run */
 #define SG_DROP_HEALTH_RESERVE	15
 
@@ -7754,9 +7753,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * line by construction, and forwardmove is dropped so the weave adds no
 	 * drift along it.
 	 *
-	 * The period is per bot, not per squad: four bots weaving on one clock is
-	 * one wide target. Two-thirds of a rocket's flight time at close range,
-	 * spread across ten phases by client number.
+	 * The period and phase are bound to the immutable bot ownership and current
+	 * client life, not the recyclable slot or the squad-wide clock: four bots
+	 * weaving on one phase are one wide target. The period stays near two-thirds
+	 * of a rocket's flight time at close range.
 	 *
 	 * Never for the carrier (2.4-D2 is a route, not a fight), never with a
 	 * rope out (the hook SETS velocity -- an off-axis input accumulates into
@@ -7785,11 +7785,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 		if (duel_hold)
 		{
-			float period = SG_WEAVE_BASE + SG_WEAVE_STEP *
-			               (float)((int)(e->client - game.clients) % 10);
-
-			weave_side = (fmodf(level.time, period) < period * 0.5f)
-			             ? SG_WEAVE_SIDE : -SG_WEAVE_SIDE;
+			weave_side = (short)(SG_WeaveSideAt(bot->instance_token,
+			    e->client->ctf.ctfid, level.time) * SG_WEAVE_SIDE);
 		}
 	}
 
@@ -8875,10 +8872,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						if (en9->client >= 0 &&
 						    SG_AgeUnder(en9->seen_time, 3.0f))
 						{
-							float jp = SG_WEAVE_BASE + SG_WEAVE_STEP *
-							    (float)((int)(e->client - game.clients) % 10);
-							short js = (fmodf(level.time, jp) < jp * 0.5f)
-							           ? 1 : -1;
+							short js = (short)SG_WeaveSideAt(
+							    bot->instance_token,
+							    e->client->ctf.ctfid, level.time);
 
 							cmd->sidemove = (short)(cmd->sidemove / 2
 							               + js * (cmd->forwardmove > 0

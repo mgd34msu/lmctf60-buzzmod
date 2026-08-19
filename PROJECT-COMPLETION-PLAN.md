@@ -1505,6 +1505,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       from the two current client-life identities. Head-on bots therefore take
       opposite world-space lanes instead of allowing unrelated slot parity to
       steer both bodies into the same lane and preserve the blockage.
+      Duel weave and carrier jink clocks now derive both period and phase from
+      the immutable bot owner plus current client-life identity. Recycled slots
+      and modulo-ten slot collisions can no longer synchronize several bodies
+      into one squad-wide lateral target.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

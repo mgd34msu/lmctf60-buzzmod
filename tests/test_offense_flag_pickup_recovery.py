@@ -200,6 +200,78 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("tr.ent->client->ctf.ctfid", fan)
         self.assertNotIn("e->client - game.clients", fan)
 
+    def test_dodge_clock_is_bound_to_bot_life_not_client_slot(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include <math.h>
+            #include "slipgate/sg_weave_policy.h"
+
+            int main(void)
+            {
+                static const unsigned long long instances[] = {
+                    1ULL, 2ULL, 17ULL, 0x100000003ULL
+                };
+                unsigned int i;
+                int distinct = 0;
+
+                for (i = 0; i < sizeof(instances) / sizeof(instances[0]); ++i) {
+                    float period = SG_WeavePeriod(instances[i], 101UL + i);
+                    int side = SG_WeaveSideAt(instances[i], 101UL + i, 12.5f);
+
+                    if (period < 0.4f || period > 0.85f ||
+                        (side != -1 && side != 1))
+                        return 1;
+                    if (side != SG_WeaveSideAt(instances[i], 101UL + i, 12.5f))
+                        return 2;
+                    if (i > 0 &&
+                        (period != SG_WeavePeriod(instances[0], 101UL) ||
+                         side != SG_WeaveSideAt(instances[0], 101UL, 12.5f)))
+                        distinct = 1;
+                }
+                if (!distinct)
+                    return 3;
+                if (SG_WeaveIdentityMix(7ULL, 11UL) ==
+                    SG_WeaveIdentityMix(7ULL, 12UL))
+                    return 4;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-weave-policy-") as temp:
+            temp_path = Path(temp)
+            source_path = temp_path / "weave_policy_test.c"
+            binary_path = temp_path / "weave_policy_test"
+            source_path.write_text(program, encoding="utf-8")
+            compiler = os.environ.get("CC", "cc")
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c11",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-Wpedantic",
+                    "-I",
+                    str(ROOT),
+                    str(source_path),
+                    "-lm",
+                    "-o",
+                    str(binary_path),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+            subprocess.run([str(binary_path)], cwd=ROOT, check=True)
+
+        move = source("slipgate/sg_move.c")
+        weave = between(move, "The weave, decided here", "Execute the frame")
+        jink = between(move, "THE CARRIER'S JINK", "THE SPAWN BEAT'S LEGS")
+        for section in (weave, jink):
+            self.assertIn("SG_WeaveSideAt(", section)
+            self.assertIn("bot->instance_token", section)
+            self.assertIn("e->client->ctf.ctfid", section)
+            self.assertNotIn("e->client - game.clients", section)
+
     def test_team_formation_drift_uses_private_independent_sequences(self) -> None:
         arach = source("slipgate/sg_arach.c")
         skew = between(arach, "TEAM SKEW (sg_teamskew)",
