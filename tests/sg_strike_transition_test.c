@@ -22,6 +22,8 @@ qboolean SG_StrikeTestApplyDutyRoute(sg_think_t *tc,
 void SG_StrikeTestRetireGenericRail(sg_bot_t *bot, const sg_think_t *tc);
 qboolean SG_StrikeTestApplyRallyPolicy(sg_bot_t *bot,
 	const sg_think_t *tc, qboolean *rally_hold);
+qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
+	int ordered_role);
 
 static int failures;
 
@@ -964,6 +966,22 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(!rally_hold);
 }
 
+static void TestHumanOrderOwnsStrikeAdmission(void)
+{
+	CHECK(SG_StrikeTestAttackEligible(SG_ROLE_ATTACK, false, -1));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_DEFEND, false, -1));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_ATTACK, false,
+	    SG_ROLE_ATTACK));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_ESCORT, false,
+	    SG_ROLE_ESCORT));
+	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_RECOVER, false,
+	    SG_ROLE_RECOVER));
+	/* Flag possession remains physical authority even when an old order is
+	 * still inside its ninety-second lease. */
+	CHECK(SG_StrikeTestAttackEligible(SG_ROLE_CARRY, true,
+	    SG_ROLE_DEFEND));
+}
+
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
@@ -974,6 +992,7 @@ int main(void)
 	TestLiftTeleportBoundaries();
 	TestDoorLeaseRetirement();
 	TestRailAndCarrierRoute();
+	TestHumanOrderOwnsStrikeAdmission();
 	if (failures)
 		return 1;
 	puts("sg_strike_transition_test: ok");

@@ -1909,6 +1909,20 @@ static int StrikeFieldCost(const int *field, int seed)
 	return field[seed];
 }
 
+static qboolean StrikeAttackEligible(sg_role_t role, qboolean carrying,
+	int ordered_role)
+{
+	/* Physical possession outranks every standing order.  Otherwise a human
+	 * order is the complete role authority promised by sg_chat.h; admitting
+	 * that bot to the autonomous strike roster would overwrite its route a few
+	 * stages later. */
+	if (carrying)
+		return true;
+	if (ordered_role >= 0)
+		return false;
+	return role != SG_ROLE_DEFEND;
+}
+
 static const int *StrikeEnemyField(int team)
 {
 	int ti = SG_TeamIdx(team);
@@ -2102,9 +2116,11 @@ static void StrikePrepareFrame(void)
 		/* DEFEND remains the authoritative reserved role.  CARRY is admitted
 		 * so the core can own its egress duty; RECOVER/ESCORT remain eligible
 		 * pressure bodies rather than globally rewriting the roster law. */
-		frames[bot_team_index].slot[i].attack_eligible =
-		    sg_strike_role_cache[i] != SG_ROLE_DEFEND;
 		frames[bot_team_index].slot[i].carrying = SG_BotCarrying(ent);
+		frames[bot_team_index].slot[i].attack_eligible =
+		    StrikeAttackEligible(sg_strike_role_cache[i],
+		        frames[bot_team_index].slot[i].carrying,
+		        SG_ChatOrderedRole(ent));
 		frames[bot_team_index].slot[i].life_id =
 		    (uint32_t)ent->client->ctf.ctfid;
 		if (!SG_CombatWeaponState(ent, &weapon))
@@ -3756,5 +3772,11 @@ qboolean SG_StrikeTestApplyRallyPolicy(sg_bot_t *bot,
 	const sg_think_t *tc, qboolean *rally_hold)
 {
 	return StrikeApplyRallyPolicy(bot, tc, rally_hold);
+}
+
+qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
+	int ordered_role)
+{
+	return StrikeAttackEligible(role, carrying, ordered_role);
 }
 #endif
