@@ -162,6 +162,8 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("SG_WeaponUpgradeRouteAdmission(weapon.available_tier,",
                       weapon)
         self.assertIn("SG_CombatWeaponPickupTier(item)", weapon)
+        self.assertIn("SG_ItemGainSourceCost(gains[i], best_gain)", weapon)
+        self.assertIn("sg_weapon_collectible_cost[bi][i] != costs[i]", weapon)
         defense = goal[goal.index("static qboolean DefenseSupplyTargetValid"):
                        weapon_start]
         self.assertIn("WeaponPickupRouteEligible(item, bot->ent)", defense)

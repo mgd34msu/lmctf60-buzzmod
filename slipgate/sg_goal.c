@@ -853,6 +853,7 @@ static unsigned char sg_weapon_field_kind[SG_MAXBOTS];
 static int sg_weapon_collectible_count[SG_MAXBOTS];
 static int sg_weapon_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_weapon_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+static int sg_weapon_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_health_collectible_field[SG_MAXBOTS][SG_MAX_SEEDS];
 static unsigned sg_health_collectible_epoch[SG_MAXBOTS];
 static unsigned char sg_health_collectible_ready[SG_MAXBOTS];
@@ -915,7 +916,8 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 	int ents[SG_WEAPON_FIELD_SOURCES];
 	int seeds[SG_WEAPON_FIELD_SOURCES];
 	int costs[SG_WEAPON_FIELD_SOURCES];
-	int bi, count = 0, i;
+	int gains[SG_WEAPON_FIELD_SOURCES];
+	int bi, best_gain = 0, count = 0, i;
 	qboolean same;
 
 	if (!bot || !bot->ent || !SG_Rune() ||
@@ -930,15 +932,18 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 
 		if (!WeaponPickupRouteEligible(item, bot->ent))
 			continue;
+		gains[count] = SG_CombatWeaponPickupTier(item) -
+		    weapon.available_tier;
 		if (!SG_WeaponUpgradeRouteAdmission(weapon.available_tier,
-		    SG_CombatWeaponPickupTier(item), true))
+		    weapon.available_tier + gains[count], true))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
 			continue;
 		ents[count] = i;
 		seeds[count] = seed;
-		costs[count] = 0;
+		if (gains[count] > best_gain)
+			best_gain = gains[count];
 		count++;
 	}
 	if (count == 0)
@@ -948,6 +953,8 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 		sg_weapon_collectible_count[bi] = 0;
 		return NULL;
 	}
+	for (i = 0; i < count; i++)
+		costs[i] = SG_ItemGainSourceCost(gains[i], best_gain);
 
 	same = sg_weapon_target_ready[bi] &&
 	       sg_weapon_field_kind[bi] == SG_WEAPON_FIELD_COLLECTIBLE &&
@@ -955,7 +962,8 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 	       sg_weapon_collectible_count[bi] == count;
 	for (i = 0; same && i < count; i++)
 		if (sg_weapon_collectible_ent[bi][i] != ents[i] ||
-		    sg_weapon_collectible_seed[bi][i] != seeds[i])
+		    sg_weapon_collectible_seed[bi][i] != seeds[i] ||
+		    sg_weapon_collectible_cost[bi][i] != costs[i])
 			same = false;
 	if (!same)
 	{
@@ -965,6 +973,7 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 		{
 			sg_weapon_collectible_ent[bi][i] = ents[i];
 			sg_weapon_collectible_seed[bi][i] = seeds[i];
+			sg_weapon_collectible_cost[bi][i] = costs[i];
 		}
 		sg_weapon_collectible_count[bi] = count;
 		sg_weapon_target_epoch[bi] = sg_fields.action_topology_epoch;
