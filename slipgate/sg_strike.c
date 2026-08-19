@@ -153,15 +153,19 @@ int SG_StrikeCarrierOwnFlagAimAllowed(int flag_available, int flag_at_home,
 	return flag_available && (flag_at_home || direct_touch);
 }
 
-float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
+float SG_StrikeFlagApproachPrice(int flag_available, int touch_authorized,
+	int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,
 	int current_goal_ms, int candidate_goal_ms)
 {
 	float progress, price;
 
-	if (!flag_available || !run_link || !isfinite(current_distance) ||
+	if ((flag_available != 0 && flag_available != 1) ||
+	    (touch_authorized != 0 && touch_authorized != 1) ||
+	    !flag_available || touch_authorized || !run_link ||
+	    !isfinite(current_distance) ||
 	    !isfinite(candidate_distance) || !isfinite(vertical_delta) ||
-	    current_distance <= 160.0f || current_distance > 600.0f ||
+	    current_distance < 0.0f || current_distance > 600.0f ||
 	    candidate_distance < 0.0f || fabsf(vertical_delta) > 96.0f ||
 	    current_goal_ms < 0 || candidate_goal_ms < 0 ||
 	    candidate_goal_ms > current_goal_ms + 125)

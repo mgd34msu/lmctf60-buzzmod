@@ -234,7 +234,8 @@ int SG_StrikeCarrierOwnFlagAimAllowed(int flag_available, int flag_at_home,
 /* Bounded pricing correction for the last proved RUNs toward a home enemy
  * flag.  This never grants touch or movement authority; it only breaks a
  * near-stand field plateau in favor of physical progress toward the item. */
-float SG_StrikeFlagApproachPrice(int flag_available, int run_link,
+float SG_StrikeFlagApproachPrice(int flag_available, int touch_authorized,
+	int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,
 	int current_goal_ms, int candidate_goal_ms);
 

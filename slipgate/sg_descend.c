@@ -320,6 +320,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean supply_route = SG_DefenseSupplyActive(bot) && route_pure;
 	edict_t *approach_flag = NULL;
 	float approach_flag_distance = 0.0f;
+	qboolean approach_flag_touch = false;
 	int nonworsening_route_neighbors = 0;
 	int attack_descent_link = -1;
 	float attack_descent_value = 1e30f;
@@ -343,7 +344,14 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			approach_flag_distance = SG_DistXY(e->s.origin, flag->s.origin);
 			if (approach_flag_distance <= 600.0f &&
 			    fabsf(flag->s.origin[2] - e->s.origin[2]) <= 96.0f)
+			{
 				approach_flag = flag;
+				/* Distance alone does not hand movement to the pickup. A close
+				 * projection through a wall keeps its proved RUN preference until
+				 * the shared same-floor hull trace authorizes the real touch. */
+				approach_flag_touch =
+				    SG_AttackFlagDirectTouchAuthority(e, team, NULL);
+			}
 		}
 	}
 
@@ -602,7 +610,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			float candidate_distance = SG_DistXY(
 			    SG_Rune()->seeds[l->to].origin, approach_flag->s.origin);
 
-			v += SG_StrikeFlagApproachPrice(true, l->action == RL_RUN,
+			v += SG_StrikeFlagApproachPrice(true, approach_flag_touch,
+			    l->action == RL_RUN,
 			    approach_flag_distance, candidate_distance,
 			    SG_Rune()->seeds[l->to].origin[2] - approach_flag->s.origin[2],
 			    goal_field[bot->seed], goal_field[l->to]);
