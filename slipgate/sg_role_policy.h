@@ -2,6 +2,8 @@
 #ifndef SG_ROLE_POLICY_H
 #define SG_ROLE_POLICY_H
 
+#include "g_ctffunc.h"
+
 static inline int SG_CoordinationBodyLive(int active, int inuse, int deadflag,
 	int health)
 {
@@ -122,6 +124,27 @@ static inline int SG_InterposeMode(float dose)
 static inline int SG_AttackObjectiveUsesFixedStand(int own_carrier_client)
 {
 	return own_carrier_client >= 0;
+}
+
+/* A carrier-belief row names both a side and one exact objective.  Client
+ * slots are reusable and a current occupant carrying some other flag must not
+ * keep an old escort/intercept field alive.  The caller supplies exact_flag
+ * only after comparing ClientHasFlag(holder) with the row's expected entity. */
+static inline int SG_CarrierBeliefIdentityCurrent(int believing_team,
+	int holder_team, int own_carrier, int exact_flag)
+{
+	int expected_holder;
+
+	if ((believing_team != CTF_TEAM_RED &&
+	     believing_team != CTF_TEAM_BLUE) ||
+	    (holder_team != CTF_TEAM_RED && holder_team != CTF_TEAM_BLUE) ||
+	    (own_carrier != 0 && own_carrier != 1) ||
+	    (exact_flag != 0 && exact_flag != 1))
+		return 0;
+	expected_holder = own_carrier ? believing_team
+	                              : (believing_team == CTF_TEAM_RED
+	                                     ? CTF_TEAM_BLUE : CTF_TEAM_RED);
+	return holder_team == expected_holder && exact_flag;
 }
 
 /* Carrier position is sighting-derived. When it is live, route cost—not an

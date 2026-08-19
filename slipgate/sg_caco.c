@@ -42,6 +42,7 @@
 #include "slipgate/sg_item_policy.h"
 #include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_death_belief.h"
+#include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
@@ -1102,8 +1103,12 @@ static void Caco_Age(rune_t *r)
 		if (sg_caco_team_belief.carrier[i].client >= 0)
 		{
 			edict_t *p = g_edicts + 1 + sg_caco_team_belief.carrier[i].client;
+			edict_t *expected = i == 0 ? blueflag : redflag;
 
-				if (!p->inuse || !p->client || !ClientHasFlag(p))
+			if (!p->inuse || !p->client ||
+			    !SG_CarrierBeliefIdentityCurrent(SG_TeamFromIdx(i),
+			        p->client->ctf.teamnum, 1,
+			        expected && ClientHasFlag(p) == expected))
 			{
 				sg_caco_team_belief.carrier[i].client = -1;
 				sg_caco_team_belief.carrier[i].seed = -1;
@@ -1122,11 +1127,16 @@ static void Caco_Age(rune_t *r)
 		{
 			edict_t *p =
 				g_edicts + 1 + sg_caco_team_belief.enemy_carrier[i].client;
+			edict_t *expected = i == 0 ? redflag : blueflag;
 
-				if (!p->inuse || !p->client || !ClientHasFlag(p))
+			if (!p->inuse || !p->client ||
+			    !SG_CarrierBeliefIdentityCurrent(SG_TeamFromIdx(i),
+			        p->client->ctf.teamnum, 0,
+			        expected && ClientHasFlag(p) == expected))
 			{
 				sg_caco_team_belief.enemy_carrier[i].client = -1;
 				sg_caco_team_belief.enemy_carrier[i].seed = -1;
+				sg_caco_team_belief.enemy_carrier[i].seen_time = 0.0f;
 			}
 		}
 	}

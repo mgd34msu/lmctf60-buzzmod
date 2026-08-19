@@ -329,6 +329,10 @@ Combat carrier priority now reads only the belief row for this bot's stolen
 flag and confirms that the visible nominated target still possesses a flag.
 Former carriers and reused slots therefore lose the carrier score and intercept
 weapon ladder immediately instead of retaining them until belief expiry.
+The shared carrier-belief aging pass now revalidates the holder's team and the
+exact flag entity named by each row. A recycled slot or a player carrying the
+other objective cannot preserve obsolete escort, intercept, projection, or
+strike authority merely by possessing some flag.
 A carrier waiting on its missing home flag no longer reads the dropped entity's
 hidden server coordinate and walks away from the scoring stand. The physical
 own-flag entity may replace that public stand only while it is home or inside
@@ -1340,6 +1344,8 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Carrier-priority target scoring and weapon selection require the current
       visible nominated client to still possess a flag in this bot's own stolen-
       flag belief row.
+      Shared carrier rows survive aging only while the current holder remains
+      on the row's expected team and possesses that row's exact flag entity.
       A carrier no longer homes on an unseen dropped own flag's exact server
       origin; only the public home item or a directly perceived and reachable
       dropped touch can replace its immutable scoring-stand route.

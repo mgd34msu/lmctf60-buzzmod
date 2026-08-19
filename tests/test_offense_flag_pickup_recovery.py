@@ -124,6 +124,14 @@ def armed_target_origin(
 
 
 class OffenseFlagPickupRecoveryTest(unittest.TestCase):
+    def test_carrier_belief_aging_revalidates_team_and_exact_flag(self) -> None:
+        caco = source("slipgate/sg_caco.c")
+        aging = between(caco, "static void Caco_Age", "projection")
+        self.assertEqual(aging.count("SG_CarrierBeliefIdentityCurrent("), 2)
+        self.assertIn("expected = i == 0 ? blueflag : redflag", aging)
+        self.assertIn("expected = i == 0 ? redflag : blueflag", aging)
+        self.assertEqual(aging.count("ClientHasFlag(p) == expected"), 2)
+
     def test_non_escort_attackers_hold_enemy_base_during_our_carry(self) -> None:
         goal = source("slipgate/sg_goal.c")
         objective = between(goal, "void Think_Objective", "THE RUNE COURIER")

@@ -1192,6 +1192,27 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(!SG_AutonomousEscortCandidate(2, 1, 0, -1, 100));
 }
 
+static void TestCarrierBeliefRequiresExactCurrentIdentity(void)
+{
+	CHECK(SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_RED, 1, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 1, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_RED, 1, 0));
+	CHECK(SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 0, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_RED, 0, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 0, 0));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(0, CTF_TEAM_BLUE, 0, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 2, 1));
+	CHECK(!SG_CarrierBeliefIdentityCurrent(
+	    CTF_TEAM_RED, CTF_TEAM_BLUE, 0, 2));
+}
+
 int main(void)
 {
 	TestNormalFiveKeepsTwoDefenders();
@@ -1222,6 +1243,7 @@ int main(void)
 	TestInvalidInputDoesNotMutate();
 	TestHomeFlagApproachPricing();
 	TestDeadSlotsDoNotReserveDefenderRanks();
+	TestCarrierBeliefRequiresExactCurrentIdentity();
 	if (failures)
 	{
 		fprintf(stderr, "sg_strike_test: %d failure(s)\n", failures);
