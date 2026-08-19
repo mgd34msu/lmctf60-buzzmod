@@ -2343,6 +2343,7 @@ $(SPECTATOR_SOUND_TEST_BIN): $(SPECTATOR_SOUND_TEST_OBJS)
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(SPECTATOR_SOUND_TEST_OBJS) $(LIBS)
 
 .sg_spectator_sound_test.make.o: tests/sg_spectator_sound_test.c \
+		slipgate/sg_sound_policy.h \
 		g_local.h slipgate/sg_net.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \

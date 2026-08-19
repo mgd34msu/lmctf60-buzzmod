@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "slipgate/sg_net.h"
+#include "slipgate/sg_sound_policy.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -317,6 +318,24 @@ static void TestLevelResetAndConcreteFailure(void)
 	assert(!note_capture.has_origin);
 }
 
+static void TestSpatialAdmission(void)
+{
+	/* Ordinary player noises retain their honest positional cue. */
+	assert(SG_SoundCarriesPosition(1.0f, ATTN_NORM));
+	assert(SG_SoundCarriesPosition(0.25f, ATTN_STATIC));
+
+	/* CTF/vote/countdown announcements are map-wide, not a locator for the
+	 * player edict selected as their protocol emitter. */
+	assert(!SG_SoundCarriesPosition(1.0f, ATTN_NONE));
+	assert(!SG_SoundCarriesPosition(0.8f, 0.0f));
+
+	assert(!SG_SoundCarriesPosition(0.0f, ATTN_NORM));
+	assert(!SG_SoundCarriesPosition(-1.0f, ATTN_NORM));
+	assert(!SG_SoundCarriesPosition(NAN, ATTN_NORM));
+	assert(!SG_SoundCarriesPosition(1.0f, NAN));
+	assert(!SG_SoundCarriesPosition(INFINITY, ATTN_NORM));
+}
+
 int main(void)
 {
 	memset(&gi, 0, sizeof(gi));
@@ -334,6 +353,7 @@ int main(void)
 	TestMappedBotVoice();
 	TestUnchangedPaths();
 	TestLevelResetAndConcreteFailure();
+	TestSpatialAdmission();
 
 	puts("sg_spectator_sound_test: ok");
 	return 0;

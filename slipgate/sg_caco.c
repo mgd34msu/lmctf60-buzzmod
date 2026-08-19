@@ -40,6 +40,7 @@
 #include "slipgate/sg_chat.h"           /* the one owner of the say_team channel */
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_item_policy.h"
+#include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
@@ -1564,15 +1565,15 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
  * (snd_dma.c, S_SpatializeOrigin) with SOUND_FULLVOLUME 80, so a sound is
  * inaudible past 80 + 2000/attenuation units:
  *
- *     ATTN_NONE   (0)  map-wide -- the engine sends it to every client
+ *     ATTN_NONE   (0)  map-wide, non-spatial -- never admits a position
  *     ATTN_NORM   (1)  2080u    -- weapons, pain, most of what matters
  *     ATTN_IDLE   (2)  1080u    -- quieter incidentals
  *     ATTN_STATIC (3)   746u    -- very short
  *
  * scaled by the volume the caller asked for, since a half-volume sound hits
  * the same floor at half the distance. Past that radius the bot is not told.
- * ATTN_NONE skips the PHS test as well as the radius, because the engine
- * itself ignores both for a full-volume-everywhere sound.
+ * ATTN_NONE is heard but cannot enter this spatial belief table: its player
+ * edict owns the protocol channel, not an audible origin.
  *
  * WHAT IT PLACES. A region, not a fix. The error grows with distance and
  * shrinks with volume -- both through the same frac, the share of the audible
@@ -1587,9 +1588,6 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 #define SG_EAR_FULLVOL	80.0f       /* SOUND_FULLVOLUME */
 #define SG_EAR_SPAN	2000.0f     /* 1 / 0.0005, the client's distance slope */
 #define SG_EAR_SPREAD	300.0f      /* worst-case placement error, units */
-#define SG_EAR_MAPWIDE	2080.0f     /* ATTN_NONE has no falloff to measure
-                                     * against, so the ATTN_NORM radius is the
-                                     * yardstick for how vague it is */
 
 void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
                   int soundindex, float volume, float attenuation)
@@ -1611,7 +1609,12 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 	eteam = emitter->client->ctf.teamnum;
 	if (eteam <= CTF_TEAM_UNDEFINED)
 		return;
-	if (volume <= 0.0f)
+	/* Global announcements are associated with an edict for protocol/channel
+	 * ownership, not spatial attribution.  Human clients hear ATTN_NONE at full
+	 * volume without a direction; do not turn that private emitter association
+	 * into an enemy position.  This also fails closed on malformed non-finite
+	 * mixer inputs before they reach radius/seed arithmetic. */
+	if (!SG_SoundCarriesPosition(volume, attenuation))
 		return;
 	if (volume > 1.0f)
 		volume = 1.0f;
@@ -1646,18 +1649,11 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		VectorSubtract(sorg, b->s.origin, d);
 		dist = VectorLength(d);
 
-		if (attenuation > 0.0f)
-		{
-			radius = (SG_EAR_FULLVOL + SG_EAR_SPAN / attenuation) * volume;
-			if (dist > radius)
-				continue;           /* out of earshot */
-			if (!sg_host.in_phs(b->s.origin, sorg))
-				continue;           /* no path for the sound to travel */
-		}
-		else
-		{
-			radius = SG_EAR_MAPWIDE;
-		}
+		radius = (SG_EAR_FULLVOL + SG_EAR_SPAN / attenuation) * volume;
+		if (dist > radius)
+			continue;           /* out of earshot */
+		if (!sg_host.in_phs(b->s.origin, sorg))
+			continue;           /* no path for the sound to travel */
 
 		frac = (radius > 0.0f) ? dist / radius : 1.0f;
 		if (frac > 1.0f)

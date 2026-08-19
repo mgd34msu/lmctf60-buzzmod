@@ -2063,6 +2063,7 @@ $(SPECTATOR_SOUND_TEST_BIN): $(SPECTATOR_SOUND_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(SPECTATOR_SOUND_TEST_OBJS) $(LDFLAGS)
 
 .sg_spectator_sound_test.gnu.o: tests/sg_spectator_sound_test.c \
+		slipgate/sg_sound_policy.h \
 		g_local.h slipgate/sg_net.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections \

@@ -220,6 +220,11 @@ The successful `Touch_Item` callback now closes a matching early-return item
 commitment before consulting the item-communication cvar. Disabling team
 callouts suppresses belief/speech only; it cannot leave a bot pursuing a pad
 whose item was physically taken.
+Sound belief now admits only finite, positively attenuated client audio.
+Map-wide `ATTN_NONE` CTF, vote, and countdown announcements remain audible but
+cannot turn their protocol emitter edict into an enemy position; ordinary
+spatial weapon, pain, movement, and rune sounds retain their range and PHS
+gates.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a
