@@ -106,6 +106,12 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
                       combat)
         self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", descend)
 
+    def test_human_order_blocks_arm_and_turns_outbound_home(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+
+        self.assertIn("(!active && SG_ChatOrderedRole(tc->e) >= 0)", goal)
+        self.assertIn("step.human_order = SG_ChatOrderedRole(e) >= 0;", goal)
+
 
 if __name__ == "__main__":
     unittest.main()

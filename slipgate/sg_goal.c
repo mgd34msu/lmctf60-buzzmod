@@ -822,6 +822,7 @@ static qboolean DefenseSupplyCoreEligible(sg_bot_t *bot, sg_think_t *tc,
 	    tc->e->deadflag == DEAD_DEAD || tc->e->health <= 0 ||
 	    tc->role != SG_ROLE_DEFEND || !bot->def_stand || tc->carrying ||
 	    (!active && !SG_DefenseSupplyHome(tc->team)) ||
+	    (!active && SG_ChatOrderedRole(tc->e) >= 0) ||
 	    (!active && DefenseSupplyOtherOwner(bot, false)))
 		return false;
 	if (!SG_Rune() || bot->seed < 0 ||
@@ -1006,6 +1007,7 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 			step.threat = SG_DefenseSupplyThreat(team) ||
 			              SG_CombatWouldEngage(e);
 			step.engaged = bot->engaged_last;
+			step.human_order = SG_ChatOrderedRole(e) >= 0;
 			step.other_owner = DefenseSupplyOtherOwner(bot, true);
 			step.target_valid = DefenseSupplyTargetValid(bot);
 			step.weapon_field_valid = DefenseSupplyTargetFieldReachable(bot);

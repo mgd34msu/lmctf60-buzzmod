@@ -18,7 +18,8 @@ sg_defense_supply_phase_t SG_DefenseSupplyPhaseStep(
 	if (phase != SG_DEFENSE_SUPPLY_PHASE_OUTBOUND)
 		return SG_DEFENSE_SUPPLY_PHASE_NONE;
 	if (step->weapon_available || !step->own_flag_home || step->threat ||
-	    step->engaged || step->other_owner || !step->target_valid ||
+	    step->engaged || step->human_order || step->other_owner ||
+	    !step->target_valid ||
 	    !step->weapon_field_valid || !step->deadline_pending)
 		return SG_DEFENSE_SUPPLY_PHASE_RETURN;
 	return SG_DEFENSE_SUPPLY_PHASE_OUTBOUND;

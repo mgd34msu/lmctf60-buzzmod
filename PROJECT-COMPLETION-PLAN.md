@@ -214,6 +214,9 @@ escort cannot abandon its live screen for an early item.
 Any live human order now aborts that optional pad commitment, including an
 ordered ATTACK that previously passed the role-specific carrier, recovery,
 escort, and defender checks. Item timing cannot replace an explicit mission.
+The bounded defender weapon sortie follows the same precedence: it cannot arm
+under a human order, and an order arriving during its outbound phase turns the
+watchman onto the immutable home route instead of continuing to the weapon.
 The optional defensive-rune courier now admits only an ordinary attacker or
 organic carrier escort. It cannot redirect a RECOVER/DEFEND/CARRY mission or
 override any live human order, and the same law gates both convergence and the
