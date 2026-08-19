@@ -1624,8 +1624,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		qboolean theirs_astray =
 		    (sg_caco_team_belief.flag[belief_team]
 		         [SG_TeamIdx(SG_EnemyTeam(team))].state == SG_FLAG_ASTRAY);
-		qboolean have_carrier = (own->client >= 0 && own->seed >= 0 &&
-		                         sg_fields.our_carrier_valid[SG_TeamIdx(team)]);
+		qboolean have_carrier = own->client >= 0;
 
 		defenders_wanted = ours_astray ? 1 : 2;
 
@@ -1756,14 +1755,15 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 		 */
 		if (have_carrier && own->client != my_client)
 		{
-			edict_t *car_ent = g_edicts + own->client + 1;
-			float bestd = 1e30f;
+			const int ti = SG_TeamIdx(team);
+			const int *home = team == CTF_TEAM_RED ? sg_fields.to_red_flag
+			                                          : sg_fields.to_blue_flag;
+			int best_score = 0;
 			int best_i = -1, k;
 
 			for (k = 0; k < SG_MAXBOTS; k++)
 			{
-				vec3_t ed;
-				float dd;
+				int route_cost, score;
 
 				if (!sg_bots[k].active || !sg_bots[k].ent ||
 				    !sg_bots[k].ent->inuse)
@@ -1775,23 +1775,26 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 					continue;       /* defenders keep the base */
 				if ((int)(sg_bots[k].ent - g_edicts) - 1 == own->client)
 					continue;       /* the carrier escorts nobody */
-				/* The shared carrier flood can be finite globally but unreachable
-				 * from this bot's directed component. Assign an escort only where
-				 * the mission can actually be descended; another reachable body may
-				 * be available. */
+				/* Use only the team-belief carrier flood while it is current.  An
+				 * unknown teammate position falls back to the public capture stand;
+				 * the exact carrier edict origin never enters assignment. */
 				if (sg_bots[k].seed < 0 ||
 				    sg_bots[k].seed >= SG_Rune()->hdr.num_seeds ||
-				    sg_fields.our_carrier[SG_TeamIdx(team)]
-				        [sg_bots[k].seed] >= SG_FIELD_INF)
+				    !home)
 					continue;
-				VectorSubtract(sg_bots[k].ent->s.origin,
-				               car_ent->s.origin, ed);
-				dd = VectorLength(ed);
-				if (sg_bots[k].last_role == (int)SG_ROLE_ESCORT)
-					dd -= 300.0f;
-				if (dd < bestd)
+				route_cost = SG_EscortRouteCost(
+				    sg_fields.our_carrier_valid[ti],
+				    sg_fields.our_carrier[ti]
+				        ? sg_fields.our_carrier[ti][sg_bots[k].seed]
+				        : SG_FIELD_INF,
+				    home[sg_bots[k].seed]);
+				score = SG_EscortAssignmentScore(route_cost,
+				    sg_bots[k].last_role == (int)SG_ROLE_ESCORT);
+				if (score >= 0 &&
+				    (best_i < 0 || score < best_score ||
+				     (score == best_score && k < best_i)))
 				{
-					bestd = dd;
+					best_score = score;
 					best_i = k;
 				}
 			}

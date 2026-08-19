@@ -333,6 +333,11 @@ carrier-following, nor can an unseen carrier make the enemy-flag belief
 fallback route the whole attack share back toward its own stand. The same law
 now owns strike `PRESS`, `BREACH`, and `CLEAR` routes, so the coordinator cannot
 undo that pressure after the role objective selects it.
+Organic escort assignment now ranks eligible bodies by the admitted
+team-belief carrier route rather than reading the carrier's exact server
+origin. When that sighting expires, one escort uses the fixed capture-stand
+field as an honest rendezvous instead of disappearing until somebody sees the
+carrier again; the incumbent still retains a bounded anti-flap advantage.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

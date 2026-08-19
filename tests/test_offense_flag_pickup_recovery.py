@@ -142,6 +142,24 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertLess(fixed_gate, dynamic)
         self.assertIn("sg_caco_team_belief.carrier[ti].client", strike)
 
+    def test_escort_selection_uses_belief_route_not_hidden_carrier_origin(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        start = arach.index("if (have_carrier && own->client != my_client)")
+        end = arach.index("/* No carrier ends the carry epoch", start)
+        escort = arach[start:end]
+        self.assertIn("SG_EscortRouteCost(", escort)
+        self.assertIn("SG_EscortAssignmentScore(", escort)
+        self.assertIn("sg_fields.our_carrier_valid[ti]", escort)
+        self.assertNotIn("car_ent->s.origin", escort)
+        self.assertNotIn("VectorSubtract(sg_bots[k].ent->s.origin", escort)
+
+        goal = source("slipgate/sg_goal.c")
+        objective = between(goal, "else if (role == SG_ROLE_ESCORT)",
+                            "THE RUNE COURIER")
+        self.assertIn("sg_fields.our_carrier_valid", objective)
+        self.assertIn("sg_fields.to_red_flag", objective)
+        self.assertIn("sg_fields.to_blue_flag", objective)
+
     def test_disabled_exit_asymmetry_does_not_draw_randomness(self) -> None:
         goal = source("slipgate/sg_goal.c")
         carry = between(goal, "if (carrying && !bot->was_carrying)",

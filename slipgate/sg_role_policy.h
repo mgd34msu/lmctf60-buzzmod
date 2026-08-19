@@ -94,4 +94,24 @@ static inline int SG_AttackObjectiveUsesFixedStand(int own_carrier_client)
 	return own_carrier_client >= 0;
 }
 
+/* Carrier position is sighting-derived. When it is live, route cost—not an
+ * omniscient read of the carrier edict—selects the useful escort. When it is
+ * unknown, the capture stand is the honest rendezvous. */
+static inline int SG_EscortRouteCost(int carrier_field_valid,
+	int carrier_cost, int home_cost)
+{
+	int cost = carrier_field_valid ? carrier_cost : home_cost;
+
+	return cost >= 0 && cost < SG_FIELD_INF ? cost : -1;
+}
+
+static inline int SG_EscortAssignmentScore(int route_cost, int incumbent)
+{
+	if (route_cost < 0)
+		return -1;
+	if (incumbent && route_cost < 300)
+		return 0;
+	return route_cost - (incumbent ? 300 : 0);
+}
+
 #endif /* SG_ROLE_POLICY_H */

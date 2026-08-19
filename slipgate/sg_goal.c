@@ -1254,7 +1254,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		goal_field = ht
 		    ? sg_fields.to_flag_now[SG_TeamIdx(team)]
 		        [SG_TeamIdx(SG_EnemyTeam(team))]
-		    : sg_fields.our_carrier[SG_TeamIdx(team)];
+		    : (sg_fields.our_carrier_valid[SG_TeamIdx(team)]
+		        ? sg_fields.our_carrier[SG_TeamIdx(team)]
+		        : (team == CTF_TEAM_RED ? sg_fields.to_red_flag
+		                                : sg_fields.to_blue_flag));
 
 		/*
 		 * THE SCOOP (sg_scoop). Across sixty-two parity drops,

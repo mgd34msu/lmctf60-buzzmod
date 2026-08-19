@@ -995,6 +995,13 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(!SG_AttackObjectiveUsesFixedStand(-1));
 	CHECK(SG_AttackObjectiveUsesFixedStand(0));
 	CHECK(SG_AttackObjectiveUsesFixedStand(15));
+	CHECK(SG_EscortRouteCost(1, 1400, 3000) == 1400);
+	CHECK(SG_EscortRouteCost(0, 1400, 3000) == 3000);
+	CHECK(SG_EscortRouteCost(0, 1400, SG_FIELD_INF) == -1);
+	CHECK(SG_EscortAssignmentScore(1400, 0) == 1400);
+	CHECK(SG_EscortAssignmentScore(1400, 1) == 1100);
+	CHECK(SG_EscortAssignmentScore(100, 1) == 0);
+	CHECK(SG_EscortAssignmentScore(-1, 1) == -1);
 }
 
 int main(void)
