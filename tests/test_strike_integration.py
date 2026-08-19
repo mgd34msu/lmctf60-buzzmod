@@ -97,6 +97,15 @@ class StrikeIntegrationTest(unittest.TestCase):
                 ])
             self.assertIn("sg_strike_transition_test: ok", output)
 
+    def test_public_death_does_not_publish_hidden_origin(self) -> None:
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        self.assertIn("SG_DeathBeliefSeed", caco)
+        self.assertNotIn("VectorCopy(victim->s.origin, sg_caco_death", caco)
+        self.assertIn("SG_EnemyRoomDeathKnown", goal)
+        self.assertIn("SG_EnemyRoomDeathKnown", arach)
+
     def test_production_move_gates_executable(self) -> None:
         with tempfile.TemporaryDirectory(prefix="sg-strike-move-") as tmp:
             output = self._compile_function_section_probe(tmp,

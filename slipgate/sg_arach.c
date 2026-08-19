@@ -2040,14 +2040,9 @@ static int StrikeCarrierSlot(int team, edict_t *flag)
 static qboolean StrikeEnemyRoomDeath(int team)
 {
 	edict_t *stand = SG_FlagStand(team, false);
-	vec3_t delta;
 
-	if (!stand || !SG_AgeUnder(
-		sg_caco_death_time[SG_TeamIdx(SG_EnemyTeam(team))], 6.0f))
-		return false;
-	VectorSubtract(sg_caco_death_org[SG_TeamIdx(SG_EnemyTeam(team))],
-	               stand->s.origin, delta);
-	return VectorLength(delta) < 1200.0f;
+	return stand && SG_EnemyRoomDeathKnown(team, stand->s.origin,
+	    6.0f, 1200.0f);
 }
 
 /* This is the only producer of strike input in the game.  It runs after the

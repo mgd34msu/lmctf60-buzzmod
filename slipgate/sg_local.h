@@ -149,8 +149,8 @@ qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
 void SG_TeachFutility(int seed);
 void SG_TeachLinkFutility(int link);
 void SG_NoteDeath(edict_t *victim);
-extern vec3_t sg_caco_death_org[2];
-extern float sg_caco_death_time[2];
+qboolean SG_EnemyRoomDeathKnown(int team, const vec3_t stand_origin,
+	float max_age, float max_distance);
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 /* Phase-independent exclusion for topology and exposure traces.  It models

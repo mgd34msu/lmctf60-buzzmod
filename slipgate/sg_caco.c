@@ -41,38 +41,59 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_item_policy.h"
 #include "slipgate/sg_sound_policy.h"
+#include "slipgate/sg_death_belief.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
 
-/*
- * The last enemy death each team knows about, by team of the VICTIM.
- * Obituaries are broadcast text -- a kill is common knowledge the frame
- * it happens -- so this is belief, not omniscience. The attack surge
- * reads it: a defender dead near their own stand opens a respawn-wide
- * window, and the window is for sprinting, not waiting.
- */
-vec3_t	sg_caco_death_org[2];
-float	sg_caco_death_time[2] = { -1000.0f, -1000.0f };
+/* Last enemy death position known by each observing team.  The obituary
+ * supplies identity/time; the seed must pre-exist in that team's sensor table. */
+static int sg_caco_enemy_death_seed[2] = { -1, -1 };
+static float sg_caco_enemy_death_time[2] = { -1000.0f, -1000.0f };
 
 void SG_NoteDeath(edict_t *victim)
 {
 	SG_ChatMegaDeath(victim);   /* the mega clock's one honest trigger */
-	int t;
+	int client, observer, seed, t;
 
 	if (!victim->client)
 		return;
 	t = victim->client->ctf.teamnum;
 	if (t != CTF_TEAM_RED && t != CTF_TEAM_BLUE)
 		return;
-	VectorCopy(victim->s.origin, sg_caco_death_org[SG_TeamIdx(t)]);
-	sg_caco_death_time[SG_TeamIdx(t)] = level.time;
+	client = (int)(victim - g_edicts) - 1;
+	observer = SG_TeamIdx(SG_EnemyTeam(t));
+	seed = SG_DeathBeliefSeed(sg_caco_enemies[observer],
+	    SG_MAX_ENEMY_TRACK, client, level.time, SG_BELIEF_STALE,
+	    SG_Rune() ? SG_Rune()->hdr.num_seeds : 0);
+	sg_caco_enemy_death_seed[observer] = seed;
+	sg_caco_enemy_death_time[observer] =
+	    seed >= 0 ? level.time : -1000.0f;
 	/* The obituary is public, so no team may keep pricing this body as a live
-	 * sighting through the respawn window.  Preserve the death marker above,
-	 * then retire every client-indexed sensor fact from the old life. */
+	 * sighting through the respawn window.  Capture the already-earned seed
+	 * above, then retire every client-indexed fact from the old life. */
 	Caco_ResetClient(victim);
+}
+
+qboolean SG_EnemyRoomDeathKnown(int team, const vec3_t stand_origin,
+	float max_age, float max_distance)
+{
+	vec3_t delta;
+	int observer, seed;
+
+	if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) || !stand_origin ||
+	    !SG_Rune() || !isfinite(max_age) || max_age < 0.0f ||
+	    !isfinite(max_distance) || max_distance < 0.0f)
+		return false;
+	observer = SG_TeamIdx(team);
+	seed = sg_caco_enemy_death_seed[observer];
+	if (seed < 0 || seed >= SG_Rune()->hdr.num_seeds ||
+	    !SG_AgeUnder(sg_caco_enemy_death_time[observer], max_age))
+		return false;
+	VectorSubtract(SG_Rune()->seeds[seed].origin, stand_origin, delta);
+	return VectorLength(delta) < max_distance;
 }
 
 static float caco_next_scan;
@@ -2243,8 +2264,8 @@ void Caco_Reset(void)
 	memset(sg_caco_proj, 0, sizeof(sg_caco_proj));
 	for (i = 0; i < 2; i++)
 	{
-		VectorClear(sg_caco_death_org[i]);
-		sg_caco_death_time[i] = -1000.0f;
+		sg_caco_enemy_death_seed[i] = -1;
+		sg_caco_enemy_death_time[i] = -1000.0f;
 		sg_caco_quadheard[i] = 0.0f;
 		sg_caco_team_belief.flag[0][i].where_seed = -1;
 		sg_caco_team_belief.flag[1][i].where_seed = -1;

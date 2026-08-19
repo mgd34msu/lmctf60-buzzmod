@@ -219,20 +219,14 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	    role == SG_ROLE_ATTACK &&
 	    SG_TimerReady(sg_push_until[SG_TeamIdx(team)]))
 	{
-		int et9 = SG_TeamIdx(SG_EnemyTeam(team));
 		edict_t *ef9 = SG_FlagStand(team, false);
 
-		if (ef9 && SG_AgeUnder(sg_caco_death_time[et9], 2.0f))
+		if (ef9 && SG_EnemyRoomDeathKnown(team, ef9->s.origin,
+		    2.0f, 1200.0f))
 		{
-			vec3_t dp9;
-
-			VectorSubtract(sg_caco_death_org[et9], ef9->s.origin, dp9);
-			if (VectorLength(dp9) < 1200.0f)
-			{
-				SG_TimerArm(&sg_push_until[SG_TeamIdx(team)], 8.0f);
-				if (sg_cv.debug->value)
-					sg_host.dprint("PUSH team=%d surge\n", team);
-			}
+			SG_TimerArm(&sg_push_until[SG_TeamIdx(team)], 8.0f);
+			if (sg_cv.debug->value)
+				sg_host.dprint("PUSH team=%d surge\n", team);
 		}
 	}
 
@@ -296,19 +290,13 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			 * death (< 6s) within 1200 of the enemy flag cancels the
 			 * wait: push NOW, paired or not.
 			 */
-			int et = SG_TeamIdx(SG_EnemyTeam(team));    /* victim = them */
 			edict_t *ef = SG_FlagStand(team, false);
 
-			if (ef && SG_AgeUnder(sg_caco_death_time[et], 6.0f))
+			if (ef && SG_EnemyRoomDeathKnown(team, ef->s.origin,
+			    6.0f, 1200.0f))
 			{
-				vec3_t dd2;
-
-				VectorSubtract(sg_caco_death_org[et], ef->s.origin, dd2);
-				if (VectorLength(dd2) < 1200.0f)
-				{
-					bot->rally_since = 0.0f;
-					goto rally_done;
-				}
+				bot->rally_since = 0.0f;
+				goto rally_done;
 			}
 		}
 		if (mates_near == 0 && mates_coming > 0)

@@ -244,6 +244,10 @@ Map-wide `ATTN_NONE` CTF, vote, and countdown announcements remain audible but
 cannot turn their protocol emitter edict into an enemy position; ordinary
 spatial weapon, pain, movement, and rune sounds retain their range and PHS
 gates.
+Public obituaries now contribute only victim identity and death time. Enemy-base
+surge and strike windows use the freshest still-live seed that the observing
+team had already earned for that client; an unseen death no longer publishes
+the victim's exact server origin.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
 route cannot be excluded merely because its enemy-base field is infinite. If a

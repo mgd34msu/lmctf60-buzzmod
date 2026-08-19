@@ -7,6 +7,7 @@
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_strike.h"
+#include "slipgate/sg_death_belief.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -982,6 +983,29 @@ static void TestHumanOrderOwnsStrikeAdmission(void)
 	    SG_ROLE_DEFEND));
 }
 
+static void TestDeathLocationRequiresPriorBelief(void)
+{
+	sg_belief_enemy_t records[3];
+
+	memset(records, 0, sizeof(records));
+	records[0].client = 4;
+	records[0].seed = 1;
+	records[0].seen_time = 8.0f;
+	records[1].client = 4;
+	records[1].seed = 2;
+	records[1].seen_time = 9.0f;
+	records[2].client = 5;
+	records[2].seed = 0;
+	records[2].seen_time = 9.5f;
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 10.0f, 8.0f, 3) == 2);
+	CHECK(SG_DeathBeliefSeed(records, 3, 6, 10.0f, 8.0f, 3) == -1);
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 20.0f, 8.0f, 3) == -1);
+	records[1].seen_time = 11.0f;
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 10.0f, 8.0f, 3) == 1);
+	records[0].seed = 3;
+	CHECK(SG_DeathBeliefSeed(records, 3, 4, 10.0f, 8.0f, 3) == -1);
+}
+
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
@@ -993,6 +1017,7 @@ int main(void)
 	TestDoorLeaseRetirement();
 	TestRailAndCarrierRoute();
 	TestHumanOrderOwnsStrikeAdmission();
+	TestDeathLocationRequiresPriorBelief();
 	if (failures)
 		return 1;
 	puts("sg_strike_transition_test: ok");
