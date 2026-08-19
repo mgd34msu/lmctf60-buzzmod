@@ -4297,24 +4297,37 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			{
 				qboolean source_water =
 				    (SG_Rune()->seeds[l->from].flags & RSF_WATER) != 0;
+				qboolean destination_water =
+				    (SG_Rune()->seeds[l->to].flags & RSF_WATER) != 0;
+				qboolean live_hazard =
+				    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0;
+				qboolean live_dry = e->waterlevel == 0 &&
+				    (e->groundentity == g_edicts ||
+				     SG_ImmutableSupport(e->groundentity));
+				qboolean live_water = e->waterlevel >= 2 &&
+				    (e->watertype & CONTENTS_WATER) && !live_hazard;
+				qboolean air_safe = e->waterlevel < 3 ||
+				    SG_TimerRemaining(e->air_finished) >=
+				        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f);
 				float hspd = sqrtf(e->velocity[0] * e->velocity[0] +
 				                   e->velocity[1] * e->velocity[1]);
 
 				vec3_t fsd;
 				float fsdist, fsz;
 
-				if ((source_water &&
-				     ((SG_Rune()->seeds[l->to].flags & RSF_WATER) ||
-				      e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||
-				      (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
-				      (e->waterlevel >= 3 &&
-				       SG_TimerRemaining(e->air_finished) <
-				           ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f)))) ||
-				    (!source_water &&
-				     (e->waterlevel != 0 ||
-				      (e->groundentity != g_edicts &&
-				       !SG_ImmutableSupport(e->groundentity)))))
+				if (!SG_HookStageSourceCompatible(source_water,
+				        destination_water, live_dry, live_water, air_safe))
+				{
+					/* The edge remains valid from its proved source.  This body is not
+					 * in that source state, so release the commitment, force fresh
+					 * localization, and spend no generic command toward the landing. */
+					bot->commit_link = -1;
+					bot->commit_until = 0.0f;
+					bot->hook_link = -1;
+					bot->seed = -1;
+					ballistic_abort = true;
 					goto hook_stage_done;
+				}
 
 				VectorSubtract(SG_Rune()->seeds[l->from].origin,
 				               e->s.origin, fsd);

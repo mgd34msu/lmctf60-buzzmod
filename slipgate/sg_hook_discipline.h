@@ -51,4 +51,15 @@ static inline int SG_HookFailureStreakAdvance(int streak, int *ban_seconds)
 	return streak + 1;
 }
 
+/* A proved hook source owns its medium.  Source-state drift is not evidence
+ * that the graph edge is bad, but it is absolute authority to refuse generic
+ * movement toward the landing and re-localize before selecting again. */
+static inline int SG_HookStageSourceCompatible(int source_water,
+	int destination_water, int live_dry, int live_water, int air_safe)
+{
+	if (source_water)
+		return !destination_water && live_water && air_safe;
+	return live_dry;
+}
+
 #endif /* SG_HOOK_DISCIPLINE_H */

@@ -59,11 +59,22 @@ static void TestFailureStreak(void)
 	CHECK(streak == 1 && ban_seconds == 0);
 }
 
+static void TestSourceStateAdmission(void)
+{
+	CHECK(SG_HookStageSourceCompatible(0, 0, 1, 0, 1));
+	CHECK(!SG_HookStageSourceCompatible(0, 0, 0, 1, 1));
+	CHECK(SG_HookStageSourceCompatible(1, 0, 0, 1, 1));
+	CHECK(!SG_HookStageSourceCompatible(1, 1, 0, 1, 1));
+	CHECK(!SG_HookStageSourceCompatible(1, 0, 1, 0, 1));
+	CHECK(!SG_HookStageSourceCompatible(1, 0, 0, 1, 0));
+}
+
 int main(void)
 {
 	TestExpectedRideWorth();
 	TestCurrentRideWorthRecheck();
 	TestFailureStreak();
+	TestSourceStateAdmission();
 	if (failures)
 	{
 		fprintf(stderr, "%d sg_hook_discipline tests failed\n", failures);

@@ -338,6 +338,11 @@ team-belief carrier route rather than reading the carrier's exact server
 origin. When that sighting expires, one escort uses the fixed capture-stand
 field as an honest rendezvous instead of disappearing until somebody sees the
 carrier again; the incumbent still retains a bounded anti-flap advantage.
+Graph-hook staging now treats live source-medium mismatch as a zero-command
+replan: dry-versus-water drift, hazardous or air-starved water, and
+water-to-water misuse release the commitment and force fresh localization.
+Those states can no longer skip the hook controller while generic steering
+walks directly toward its unearned landing, and the valid edge is not shelved.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

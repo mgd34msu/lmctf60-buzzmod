@@ -202,6 +202,11 @@ assert pull < observe
 # control decode, and malformed control plus a graph aim timeout share the
 # same bounded retirement path.
 hook_stage = body("if (l->action == RL_HOOK", "hook_stage_done: ;")
+assert "SG_HookStageSourceCompatible" in hook_stage
+source_reject = hook_stage.index("if (!SG_HookStageSourceCompatible")
+source_abort = hook_stage.index("ballistic_abort = true;", source_reject)
+source_release = hook_stage.index("bot->commit_link = -1;", source_reject)
+assert source_reject < source_release < source_abort
 worth = hook_stage.index("SG_HookExpectedRideWorth")
 decode = hook_stage.index("SG_HookControlDecode")
 assert worth < decode
