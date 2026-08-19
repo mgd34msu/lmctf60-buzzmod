@@ -2807,6 +2807,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				for (bi5 = 0; bi5 < SG_MAXBOTS; bi5++)
 				{
 					sg_bot_t *mb5 = &sg_bots[bi5];
+					int mate_goal;
 
 					if (mb5 == bot || !mb5->ent ||
 					    !SG_CoordinationBodyLive(mb5->active, mb5->ent->inuse,
@@ -2814,9 +2815,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 						continue;
 					if (mb5->ent->client->ctf.teamnum != team)
 						continue;
+					mate_goal = SG_StrikeEnemyPressureGoalSnapshot(mb5);
 					if (SG_StrikeEnemyPressureSnapshot(mb5) &&
-					    mb5->last_goalcost >= 0 &&
-					    mb5->last_goalcost < 1200 &&
+					    mate_goal >= 0 && mate_goal < 1200 &&
 					    (int)(mb5->ent - g_edicts) <
 					        (int)(e - g_edicts))
 						mate_holding = 1;

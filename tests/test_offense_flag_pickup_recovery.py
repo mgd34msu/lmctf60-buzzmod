@@ -377,6 +377,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         clean_grab = between(descend, "THE CLEAN GRAB.", "THE REARGUARD.")
         self.assertIn("if (tc->strike_pressure)", clean_grab)
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb5)", clean_grab)
+        self.assertIn("SG_StrikeEnemyPressureGoalSnapshot(mb5)", clean_grab)
+        self.assertNotIn("mb5->last_goalcost", clean_grab)
         self.assertNotIn("mb5->last_role == (int)SG_ROLE_ATTACK", clean_grab)
 
         blue_flag = (232.0, -816.0, 192.125)

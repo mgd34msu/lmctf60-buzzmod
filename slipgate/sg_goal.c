@@ -326,6 +326,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		for (bi = 0; bi < SG_MAXBOTS; bi++)
 		{
 			sg_bot_t *mb = &sg_bots[bi];
+			int mate_goal;
 
 			if (mb == bot || !mb->ent ||
 			    !SG_CoordinationBodyLive(mb->active, mb->ent->inuse,
@@ -333,12 +334,14 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 				continue;
 			if (mb->ent->client->ctf.teamnum != team)
 				continue;
-			if (!SG_StrikeEnemyPressureSnapshot(mb) ||
-			    mb->last_goalcost < 0)
+			if (!SG_StrikeEnemyPressureSnapshot(mb))
 				continue;
-			if (mb->last_goalcost < 6000)
+			mate_goal = SG_StrikeEnemyPressureGoalSnapshot(mb);
+			if (mate_goal < 0)
+				continue;
+			if (mate_goal < 6000)
 				mates_near++;
-			else if (mb->last_goalcost < 20000)
+			else if (mate_goal < 20000)
 				/* THE APPEAL. The 20s horizon reduced steals from 1.6 to 1.0
 				 * per measurement interval and was shrunk to a 6s sync --
 				 * but that comparison ran in the corpse-wait era, when a

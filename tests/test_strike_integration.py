@@ -487,8 +487,10 @@ class StrikeIntegrationTest(unittest.TestCase):
         pressure = arach[arach.index(
             "qboolean SG_StrikeEnemyPressureSnapshot"):]
         self.assertIn("sg_strike_enemy_pressure_cache[slot]", pressure)
+        self.assertIn("sg_strike_enemy_pressure_goal_cache[slot]", pressure)
         reset = arach[arach.index("void SG_StrikeSlotReset"):]
         self.assertIn("sg_strike_enemy_pressure_cache[slot] = false", reset)
+        self.assertIn("sg_strike_enemy_pressure_goal_cache[slot] = -1", reset)
         move = (ROOT / "slipgate/sg_move.c").read_text()
         self.assertIn("SG_StrikeEnemyPressureSnapshot(bot)", move)
         self.assertIn("tc.strike_pressure = SG_StrikeEnemyPressureActive(",
@@ -506,6 +508,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         rally = goal[goal.index("THE RALLY."):goal.index("rally_done:")]
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb)", rally)
+        self.assertIn("SG_StrikeEnemyPressureGoalSnapshot(mb)", rally)
+        self.assertNotIn("mb->last_goalcost", rally)
         self.assertNotIn("mb->last_role != (int)SG_ROLE_ATTACK", rally)
 
     def test_effective_escort_mission_controls_carrier_spacing(self) -> None:

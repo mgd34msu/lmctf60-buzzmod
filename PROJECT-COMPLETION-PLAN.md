@@ -373,6 +373,12 @@ The successful `Touch_Item` callback now closes a matching early-return item
 commitment before consulting the item-communication cvar. Disabling team
 callouts suppresses belief/speech only; it cannot leave a bot pursuing a pad
 whose item was physically taken.
+Defender weapon supply now shares the exact `Pickup_Weapon` admission law.
+Under `DF_WEAPONS_STAY`, an owned world weapon can remain visible and solid
+while being uncollectable by that defender; it is no longer selected as a
+supply destination. An accepted or rejected physical touch also moves only the
+matching outbound sortie onto its home route before item callbacks can mutate
+the entity.
 The early-return planner also consults the same inventory/skill/co-op admission
 law as `Pickup_Powerup` before committing, while travelling, and before terminal
 homing. A bot at the legal quad or invulnerability capacity cannot abandon its
@@ -381,6 +387,10 @@ Every concrete strike duty now retires an optional early-return commitment
 before applying its objective route. Coordinator routing and terminal item
 homing can no longer coexist while a stale pad lease silently survives beneath
 the bot's live BREACH, CLEAR, PRESS, ESCORT, RECOVER, or CARRY mission.
+Rally formation and the split-sentry grab now read both teammate pressure duty
+and enemy-stand route cost from the same immutable pre-serial frame. An early
+bot cannot wait for, or claim cover from, a later bot's previous-frame defender,
+recovery, escort, or other obsolete route.
 Sound belief now admits only finite, positively attenuated client audio.
 Map-wide `ATTN_NONE` CTF, vote, and countdown announcements remain audible but
 cannot turn their protocol emitter edict into an enemy position; ordinary
@@ -1313,6 +1323,11 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       A rejected physical powerup touch now retires only the touching bot's
       exact item commitment before target callbacks run; another client's
       rejection cannot cancel the claimant's live errand or publish item belief.
+      Defender supply selection uses the authoritative weapon-pickup law, and
+      accepted or rejected physical touches return only the matching outbound
+      defender to its home route.
+      Rally and split-sentry partner distance use the same-frame effective-
+      pressure enemy-stand cost rather than serially stale `last_goalcost`.
       Coordinated pressure now continues through the live-enemy pre-breach arm
       in the two-to-five-second approach band instead of skipping the action
       together with the superseded legacy rally decision.
