@@ -50,7 +50,10 @@ snapshot must contain:
 - both production module filenames, required to have identical SHA-256 bytes;
 - the game assets used to resolve every manifest map;
 - `tools/runelint.py`, `tools/runeio.py`,
-  `tools/rune_contracts_generated.py`, and the compiled `runeaccept` command;
+  `tools/rune_contracts_generated.py`, the distinct GNUmakefile-built
+  `runeaccept.gnu`, and Makefile-built `runeaccept.make` commands;
+- the semantic-checker manifest and every Python checker it names (currently
+  the ten-controller/two-flag-route-core checker for `lmctf58`);
 - the generator configuration and the map manifest.
 
 Write `input-manifest.json` by hashing every regular input file, rejecting
@@ -60,10 +63,11 @@ again before accepting the final summary.
 
 The canonical run fingerprint is the SHA-256 of sorted compact JSON containing
 the complete input-manifest hash, ordered map-manifest hash, engine and module
-hashes, generated action and mechanism contract hashes, linter/reader/acceptor
-hashes, generation and startup timeouts, job count, port base, engine arguments,
-and controller source hash.  Resume is allowed only when the complete stored
-fingerprint document is byte-for-byte equal to the newly computed document.
+hashes, generated action and mechanism contract hashes, linter/reader/both-C-
+acceptor hashes, semantic manifest/checker hashes and applicability, generation
+and startup timeouts, job count, port base, engine arguments, and controller
+source hash. Resume is allowed only when the complete stored fingerprint
+document is byte-for-byte equal to the newly computed document.
 
 ## Current generation and acceptance grammar
 
@@ -79,34 +83,47 @@ a regular newly created artifact inside that attempt, two distinct in-range
 objective roots, no later failure line, and clean shutdown.  Parse and retain
 all six counts.
 
-Before publishing `PASS`, execute all three gates against the same artifact
-bytes:
+Before publishing `PASS`, execute both independently built C acceptors, both
+general Python gates, and every semantic checker applicable to the map against
+the same artifact bytes:
 
 ```sh
-runeaccept ARTIFACT
+runeaccept.gnu ARTIFACT
+runeaccept.make ARTIFACT
 python3 tools/runeio.py ARTIFACT
 python3 tools/runelint.py ARTIFACT
+python3 tools/lmctf58_rune_accept.py --objective-roots RED BLUE ARTIFACT  # lmctf58
 ```
 
-The C and Python JSON reports must agree on map name, seeds, links, mechanism
-nodes, triggers, inventory edges, plan edges, and plans.  Their counts must
-also agree with the generator banner.  Record both outputs and hashes.  Any
+The GNU C, Make C, and Python JSON reports must agree on map name, seeds, links,
+mechanism nodes, triggers, inventory edges, plan edges, and plans. Their counts
+must also agree with the generator banner. Record every output and hash. Any
 missing required plan, controller mismatch, CRC or contract error, count
 disagreement, or nonzero gate exit is `LINT_FAIL`; it is never resumable as
 success.
+
+After those gates, copy the unchanged artifact into a second private game tree
+and start a new, separately authenticated q2ded process. `PASS` requires exactly
+one ordinary runtime-ready banner whose counts agree with generation, with no
+generator write banner. The cold-load process identity, command hash, staged
+artifact, and log are immutable terminal evidence and must differ from the
+generation process identity.
 
 ## Durable per-map result and resume law
 
 Each terminal `runs/MAP/result.json` contains the run fingerprint, map, stable
 port, attempt number, start/end timestamps, classification and normalized
 signature, exact command hash, owner-record path, server and gate-log hashes,
-artifact path/hash, objective roots, and all decoded counts.  Publish it only
-after the attempt files and directories are synced.
+artifact path/hash, objective roots, all decoded counts, applicable semantic
+gate labels, and fresh cold-load owner/command/log hashes. Publish it only after
+the attempt files and directories are synced.
 
 On resume, a previous `PASS` is reusable only if its fingerprint and stable port
 match, every referenced file is regular and still has the recorded hash, the
-artifact is still the exact recorded bytes, and all three gates pass again.
-Otherwise create the next attempt; never overwrite prior evidence.
+artifact is still the exact recorded bytes, both C gates, both general Python
+gates, and all applicable semantic gates pass again, and the stored cold-load
+evidence authenticates a distinct process and the same artifact. Otherwise
+create the next attempt; never overwrite prior evidence.
 
 After each terminal map, atomically regenerate `summary.json`, `summary.tsv`,
 and `heartbeat.json`.  The final summary includes the fingerprint, total 181,

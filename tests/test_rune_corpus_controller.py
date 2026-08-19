@@ -98,11 +98,15 @@ class FakeGateRunner:
                 "dont_write_bytecode": True,
             })
             return subprocess.CompletedProcess(command, 0, stdout=output)
-        script = Path(command[-2]).name if "-c" in command else ""
+        script = next(
+            (Path(value).name for value in command if value.endswith(".py")), ""
+        ) if "-c" in command else ""
         if script == "runeio.py":
             output = report(self.map_name, seeds=self.python_seeds or 7)
         elif script == "runelint.py":
             output = b""
+        elif script.endswith("_rune_accept.py"):
+            output = controller.canonical_json({"map_name": self.map_name})
         else:
             output = report(self.map_name)
         return subprocess.CompletedProcess(command, 0, stdout=output)
@@ -183,6 +187,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
             files["tools/rune_contracts_generated.py"] = (
                 "contracts", ROOT / "tools/rune_contracts_generated.py",
             )
+            files["tools/lmctf58_rune_accept.py"] = (
+                "semantic_checker:lmctf58",
+                ROOT / "tools/lmctf58_rune_accept.py",
+            )
         else:
             add("tools/runelint.py", "runelint", b"raise SystemExit(0)\n")
             add("tools/runeio.py", "runeio", b"def main(argv):\n print(" + repr(gate_report.decode()).encode() + b")\n return 0\n")
@@ -194,13 +202,27 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 b"RUNE_MECHANISM_CONTRACT_CRC32 = 0x509691fa\n"
                 b"RUNE_MECHANISM_CONTRACT_SHA256 = '" + b"b" * 64 + b"'\n",
             )
+            add(
+                "tools/lmctf58_rune_accept.py", "semantic_checker:lmctf58",
+                b"def main(argv):\n print('{\"map_name\":\"lmctf58\"}')\n return 0\n",
+            )
         add(
-            "bin/runeaccept",
-            "acceptor",
+            "runeaccept.gnu",
+            "acceptor_gnu",
+            b"#!/bin/sh\nprintf '%s\\n' '" + gate_report + b"'\n",
+            0o755,
+        )
+        add(
+            "runeaccept.make",
+            "acceptor_make",
             b"#!/bin/sh\nprintf '%s\\n' '" + gate_report + b"'\n",
             0o755,
         )
         add("game/rune.cfg", "generator_config", b"set dedicated 1\n")
+        add(
+            "tools/rune-semantic-checkers.json", "semantic_checker_manifest",
+            (ROOT / "tools/rune-semantic-checkers.json").read_bytes(),
+        )
         manifest_copy = sources / "rune-corpus-maps.txt"
         manifest_copy.write_bytes((ROOT / "tools/rune-corpus-maps.txt").read_bytes())
         files["tools/rune-corpus-maps.txt"] = ("map_manifest", manifest_copy)
@@ -346,7 +368,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     artifact, "runetest",
                     {"seeds": 2, "links": 2, "mechanism_nodes": 3, "triggers": 2,
                      "inventory_edges": 1, "plans": 1},
-                    acceptor=snapshot / verified["by_role"]["acceptor"]["path"],
+                    acceptor_gnu=snapshot / verified["by_role"]["acceptor_gnu"]["path"],
+                    acceptor_make=snapshot / verified["by_role"]["acceptor_make"]["path"],
                     python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
                     runeio=target,
                     runelint=snapshot / verified["by_role"]["runelint"]["path"],
@@ -691,7 +714,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "python_interpreter_sha256", "python_libpython_sha256",
                 "python_runtime_manifest_sha256", "module_hashes", "action_contract_hash",
                 "mechanism_contract_hash", "linter_sha256", "reader_sha256",
-                "acceptor_sha256", "generation_timeout_seconds",
+                "acceptor_gnu_sha256", "acceptor_make_sha256",
+                "semantic_checker_manifest_sha256", "semantic_checkers",
+                "generation_timeout_seconds",
                 "startup_timeout_seconds", "job_count", "port_base",
                 "engine_arguments", "python_isolation_flags",
                 "python_gate_bootstrap_sha256", "engine_environment",
@@ -767,6 +792,17 @@ class RuneCorpusControllerTests(unittest.TestCase):
             snapshot.chmod(0o555)
             with self.assertRaisesRegex(controller.CorpusError, "roles"):
                 controller.verify_snapshot(snapshot)
+
+    def test_semantic_manifest_cannot_omit_lmctf58_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = Path(temporary) / "semantic.json"
+            manifest.write_text('{"checkers":[]}\n', encoding="ascii")
+            with self.assertRaisesRegex(
+                controller.CorpusError, "required applicability"
+            ):
+                controller.load_semantic_checker_manifest(
+                    manifest, controller.validate_manifest()
+                )
 
     def test_private_staging_has_only_attempt_local_runtime_inputs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -858,8 +894,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 return None
 
         class FakeProcess:
-            def __init__(self, output, private, ready, failure_line, exit_failure_line):
-                self.pid = 424242
+            def __init__(self, output, private, ready, failure_line, exit_failure_line, pid):
+                self.pid = pid
                 self.returncode = None
                 self.stdin = FakeInput(
                     self, output, private, ready, failure_line, exit_failure_line
@@ -892,6 +928,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     self.assertIn(controller.GUARD_BOOTSTRAP, command)
                     self.assertNotIn(str(ROOT / "tools/rune_corpus_controller.py"), command)
                     launched_commands.append(list(command))
+                    launch_number = len(launched_commands)
                     verified = controller.verify_snapshot(snapshot)
                     interpreter = snapshot / verified["python_runtime"]["interpreter"]["path"]
                     self.assertEqual(str(snapshot / verified["python_runtime"]["loader"]["path"]), command[0])
@@ -911,15 +948,23 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         launched_engine,
                     )
                     self.assertNotEqual("q2ded", launched_engine.name[:15])
-                    return FakeProcess(
+                    fake = FakeProcess(
                         kwargs["stdout"], Path(kwargs["cwd"]), ready,
-                        failure_line, exit_failure_line,
+                        failure_line, exit_failure_line, 424241 + launch_number,
                     )
+                    if launch_number == 2:
+                        kwargs["stdout"].write(
+                            b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
+                            b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
+                        )
+                        kwargs["stdout"].flush()
+                    return fake
 
                 def identity_for_engine(_pid, executable, expected_argv=None):
                     return dataclasses.replace(
                         base_identity,
-                        pid=424242,
+                        pid=_pid,
+                        start_ticks=base_identity.start_ticks + _pid,
                         executable=str(Path(executable).resolve(strict=True)),
                         executable_sha256=controller.sha256_regular(Path(executable)),
                         cmdline_sha256=controller.sha256_bytes(expected_argv or b""),
@@ -940,7 +985,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         gate_runner=FakeGateRunner("lmctf01"),
                     )
                 self.assertTrue(descriptors)
-                self.assertEqual(1, len(launched_commands))
+                self.assertEqual(
+                    2 if result["classification"] == "PASS" else 1,
+                    len(launched_commands),
+                )
                 return result
 
             pass_root = work / "pass-run"
@@ -959,8 +1007,18 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertNotEqual(
                 "q2ded", Path(owner["process"]["executable"]).name[:15]
             )
-            self.assertEqual(3, len(pass_result["gate_log_sha256"]))
+            self.assertEqual(4, len(pass_result["gate_log_sha256"]))
+            self.assertIsNotNone(pass_result["cold_load_owner_record"])
+            self.assertIsNotNone(pass_result["cold_load_log_sha256"])
             attempt = pass_root / "runs/lmctf01/attempt-0001"
+            self.assertEqual(
+                attempt / "private/game/maps/lmctf01.rune",
+                controller._validate_terminal_schema(
+                    pass_result, run_root=pass_root, attempt=attempt,
+                    map_name="lmctf01", fingerprint="fingerprint",
+                    stable_port=62000,
+                ),
+            )
             self.assertEqual(0, stat.S_IMODE(attempt.stat().st_mode) & 0o222)
             self.assertEqual(0, stat.S_IMODE((attempt / "result.json").stat().st_mode) & 0o222)
 
@@ -997,7 +1055,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             timeout_root = work / "timeout-run"
             timed_out = run_scenario(timeout_root, False, 0.02)
             self.assertEqual("TIMEOUT", timed_out["classification"])
-            self.assertFalse((timeout_root / "runs/lmctf01/attempt-0001/gate-c.log").exists())
+            self.assertFalse((timeout_root / "runs/lmctf01/attempt-0001/gate-c_gnu.log").exists())
             self.thaw(snapshot)
             self.thaw(pass_root)
             self.thaw(rejected_root)
@@ -1224,7 +1282,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 controller.parse_generation_log(bad_later, "gatecase", artifact, attempt)
             with self.assertRaisesRegex(controller.CorpusError, "count mismatch"):
                 controller.validate_gate_agreement(
-                    report("gatecase"), report("gatecase", seeds=8),
+                    report("gatecase"), report("gatecase"),
+                    report("gatecase", seeds=8),
                     "gatecase", parsed["counts"],
                 )
             traversing = good.replace(
@@ -1287,7 +1346,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     artifact, "gatecase",
                     {"seeds": 7, "links": 9, "mechanism_nodes": 4,
                      "triggers": 2, "inventory_edges": 3, "plans": 5},
-                    acceptor=work / "runeaccept",
+                    acceptor_gnu=work / "runeaccept.gnu",
+                    acceptor_make=work / "runeaccept.make",
                     python_interpreter=interpreter,
                     runeio=work / "runeio.py",
                     runelint=work / "runelint.py",
@@ -1300,21 +1360,94 @@ class RuneCorpusControllerTests(unittest.TestCase):
             )
             self.assertEqual("-c", runner.commands[2][4])
             self.assertEqual(str(work), runner.commands[2][-3])
-            self.assertEqual(str(work / "runelint.py"), runner.commands[2][-2])
+            self.assertEqual(str(work / "runeio.py"), runner.commands[2][-2])
             self.assertEqual(str(artifact), runner.commands[2][-1])
+            self.assertEqual(str(work / "runelint.py"), runner.commands[3][-2])
             self.assertEqual(controller.CHILD_ENVIRONMENT, runner.kwargs[0]["env"])
+            self.assertEqual(controller.CHILD_ENVIRONMENT, runner.kwargs[1]["env"])
             expected_python_env = controller.python_child_environment(
                 work / "python-runtime"
             )
-            self.assertEqual(expected_python_env, runner.kwargs[1]["env"])
             self.assertEqual(expected_python_env, runner.kwargs[2]["env"])
+            self.assertEqual(expected_python_env, runner.kwargs[3]["env"])
             forbidden = {
                 "PATH", "LD_PRELOAD", "PYTHONPATH", "MAKEFLAGS", "MFLAGS",
                 "GNUMAKEFLAGS",
             }
             self.assertTrue(all(forbidden.isdisjoint(kwargs["env"]) for kwargs in runner.kwargs))
             self.assertEqual(7, result["decoded_counts"]["seed_count"])
-            self.assertEqual(3, len(result["gate_logs"]))
+            self.assertEqual(4, len(result["gate_logs"]))
+
+    def test_dual_c_readers_must_execute_and_agree(self):
+        counts = {
+            "seeds": 7, "links": 9, "mechanism_nodes": 4,
+            "triggers": 2, "inventory_edges": 3, "plans": 5,
+        }
+        with self.assertRaisesRegex(controller.CorpusError, "GNU/Make C"):
+            controller.validate_gate_agreement(
+                report("gatecase"), report("gatecase", seeds=8),
+                report("gatecase"), "gatecase", counts,
+            )
+
+    def test_applicable_semantic_checker_is_manifested_and_receives_roots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            verified = controller.verify_snapshot(snapshot)
+            artifact = work / "lmctf58.rune"
+            artifact.write_bytes(b"artifact")
+            checkers = controller.semantic_checkers_for_map(
+                snapshot, verified, "lmctf58"
+            )
+            self.assertEqual(["lmctf58"], [name for name, _path in checkers])
+            self.assertEqual([], controller.semantic_checkers_for_map(
+                snapshot, verified, "lmctf01"
+            ))
+            runner = FakeGateRunner("lmctf58")
+            result = controller.run_gates(
+                artifact, "lmctf58",
+                {"seeds": 7, "links": 9, "mechanism_nodes": 4,
+                 "triggers": 2, "inventory_edges": 3, "plans": 5},
+                acceptor_gnu=snapshot / verified["by_role"]["acceptor_gnu"]["path"],
+                acceptor_make=snapshot / verified["by_role"]["acceptor_make"]["path"],
+                python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
+                runeio=snapshot / verified["by_role"]["runeio"]["path"],
+                runelint=snapshot / verified["by_role"]["runelint"]["path"],
+                objective_roots={"red": 1, "blue": 2},
+                semantic_checkers=checkers,
+                log_directory=work / "logs",
+                runner=runner,
+                fingerprint="fingerprint",
+            )
+            self.assertEqual(["semantic-lmctf58"], result["semantic_gate_labels"])
+            self.assertEqual(5, len(runner.commands))
+            self.assertEqual(
+                ["--objective-roots", "1", "2", str(artifact)],
+                runner.commands[-1][-4:],
+            )
+            self.assertTrue((work / "logs/gate-semantic-lmctf58.integrity.json").is_file())
+            self.thaw(snapshot)
+
+    def test_cold_load_grammar_rejects_generation_and_count_drift(self):
+        ready = (
+            "slipgate: rune ready lmctf01, 7 seeds, 9 links, 4 mechanism "
+            "nodes, 5 plans, gravity 800, all fields up\n"
+        )
+        counts = {"seeds": 7, "links": 9, "mechanism_nodes": 4, "plans": 5}
+        self.assertEqual(
+            counts, controller.parse_cold_load_log(ready, "lmctf01", counts)
+        )
+        with self.assertRaisesRegex(controller.CorpusError, "unexpectedly generated"):
+            controller.parse_cold_load_log(
+                "rune: wrote game/maps/lmctf01.rune (7 seeds, 9 links, "
+                "4 mechanism nodes, 2 triggers, 3 inventory edges, "
+                "5 activation plans)\n" + ready,
+                "lmctf01", counts,
+            )
+        with self.assertRaisesRegex(controller.CorpusError, "counts disagree"):
+            controller.parse_cold_load_log(
+                ready.replace("7 seeds", "8 seeds"), "lmctf01", counts
+            )
 
     def test_contaminated_pass_is_not_resumable(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1335,7 +1468,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "created_at": controller.utc_now(), "process": {"pid": 9},
             })
             controller.atomic_write_bytes(server, b"terminal\n")
-            for label in ("c", "python", "lint"):
+            for label in ("c_gnu", "c_make", "python", "lint"):
                 controller.atomic_write_bytes(attempt / f"gate-{label}.log", label.encode())
             document, fingerprint = controller.build_fingerprint_document(
                 snapshot,
@@ -1369,7 +1502,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     item["sha256"] for item in evidence
                     if item["path"].endswith(f"gate-{label}.log")
                 )
-                for label in ("c", "python", "lint")
+                for label in ("c_gnu", "c_make", "python", "lint")
             }
             detail = "all generation and artifact gates passed"
             result = {
@@ -1399,11 +1532,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     for field in controller.REPORT_FIELDS
                 },
                 "gate_output_sha256": {
-                    "c": controller.sha256_bytes(report("gatecase")),
+                    "c_gnu": controller.sha256_bytes(report("gatecase")),
+                    "c_make": controller.sha256_bytes(report("gatecase")),
                     "python": controller.sha256_bytes(report("gatecase")),
                     "lint": controller.sha256_bytes(b""),
                 },
                 "gate_log_sha256": gate_logs,
+                "semantic_gate_labels": [],
+                "cold_load_owner_record": None,
+                "cold_load_command_sha256": None,
+                "cold_load_log_sha256": None,
             }
             result_path = controller.publish_result(run_root, "gatecase", result, attempt)
             runner = FakeGateRunner("gatecase")
