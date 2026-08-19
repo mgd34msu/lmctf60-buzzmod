@@ -14,6 +14,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_bot_ping.h"
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_drop_live.h"
@@ -396,9 +397,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	/* the scoreboard ping a human would show from a near-local connection:
 	 * stable per-session base with a +/-1 flicker, never outside 5-15
 	 * so bots blend into ordinary scoreboard ranges, analytics included. */
-	e->client->ping = bot->fake_ping + (rand() % 3) - 1;
-	if (e->client->ping < 5) e->client->ping = 5;
-	if (e->client->ping > 15) e->client->ping = 15;
+	e->client->ping = SG_BotPingValue(bot->fake_ping,
+	    bot->instance_token, level.framenum);
 	/* leg ticker: a new role is a new errand -- new opinion of the map */
 	if ((int)role != bot->last_role_for_legs)
 	{

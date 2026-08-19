@@ -8,6 +8,7 @@
 #include "slipgate/sg_crc32.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_bot_ping.h"
 
 sg_host_t sg_host;
 
@@ -363,6 +364,23 @@ static void TestReasons(void)
 	             "unknown level-identity status") == 0);
 }
 
+static void TestBotPingDoesNotOwnGameplayRandomness(void)
+{
+	int frame;
+
+	for (frame = 0; frame < 1000; frame++)
+	{
+		int ping = SG_BotPingValue(10, UINT64_C(0x123456789abcdef0),
+		    frame);
+
+		CHECK(ping >= 9 && ping <= 11);
+		CHECK(ping == SG_BotPingValue(10,
+		    UINT64_C(0x123456789abcdef0), frame));
+	}
+	CHECK(SG_BotPingValue(5, 1, 0) >= 5);
+	CHECK(SG_BotPingValue(15, 1, 0) <= 15);
+}
+
 int main(void)
 {
 	TestCRC32();
@@ -372,6 +390,7 @@ int main(void)
 	TestMapGrammar();
 	TestLifecycleAndMapSwitch();
 	TestReasons();
+	TestBotPingDoesNotOwnGameplayRandomness();
 
 	if (failures)
 	{
