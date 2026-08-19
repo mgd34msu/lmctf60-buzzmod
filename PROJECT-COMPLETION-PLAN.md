@@ -200,7 +200,10 @@ the actual stand defender or skip a survivor because a corpse advanced the
 quota. The ordinary stable slot order resumes when that bot respawns.
 Strike-roster admission now considers every currently relevant proved field:
 an otherwise disconnected bot with the only finite own-flag recovery or carrier
-route cannot be excluded merely because its enemy-base field is infinite.
+route cannot be excluded merely because its enemy-base field is infinite. If a
+stable four-person roster is already full when the flag leaves home, it makes
+one bounded replacement only when none of its members has a finite recovery
+route; the actual carrier is never displaced.
 These pure policies are executable; runtime outcome acceptance remains pending
 on the persistent fleet.
 

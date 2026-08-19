@@ -499,6 +499,30 @@ static void TestRecoveryRouteAdmitsDisconnectedAttacker(void)
 	CHECK(team.duty[1] == SG_STRIKE_DUTY_BREACH);
 }
 
+static void TestFullRosterMakesRoomForOnlyRecoverer(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(440.0f);
+	int slot;
+
+	frame.own_flag_home = 0;
+	for (slot = 0; slot < 5; slot++)
+	{
+		AddAttacker(&frame, slot, (uint32_t)(70 + slot), 2,
+		    slot < 4 ? 100 + slot * 100 : 10000);
+		frame.slot[slot].recover_goal_ms = slot == 4 ? 50 : -1;
+	}
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_RECOVER) == 1);
+	CHECK(team.duty[4] == SG_STRIKE_DUTY_RECOVER);
+	CHECK(SG_StrikeMember(&team, 4));
+	CHECK(!SG_StrikeMember(&team, 3));
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_BREACH) +
+	    CountDuty(&team, SG_STRIKE_DUTY_CLEAR) +
+	    CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 3);
+}
+
 static void TestDutiesStayStableUntilEgress(void)
 {
 	sg_strike_team_t team;
@@ -922,6 +946,7 @@ int main(void)
 	TestFormationReleasesWhenPartnerFallsBehind();
 	TestOneRecovererPreservesAttack();
 	TestRecoveryRouteAdmitsDisconnectedAttacker();
+	TestFullRosterMakesRoomForOnlyRecoverer();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
 	TestExternalCarrierDoesNotExpandRoster();

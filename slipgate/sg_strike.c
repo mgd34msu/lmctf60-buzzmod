@@ -199,6 +199,65 @@ static void Strike_ReconcileMembers(sg_strike_team_t *team,
 			break;
 		Strike_AddMember(team, frame, best);
 	}
+
+	/* Stable membership is subordinate to the only mission that can make a
+	 * capture legal. If the roster was already full when our flag left home,
+	 * admit the best finite recoverer exactly when nobody retained can recover.
+	 * Never displace the actual carrier. */
+	if (!frame->own_flag_home)
+	{
+		int have_recover = 0;
+		int candidate = -1;
+		int evict = -1;
+		int worst_goal = 0;
+
+		for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+			if ((team->member_mask & Strike_Bit(slot)) != 0u &&
+			    frame->slot[slot].recover_goal_ms >= 0)
+			{
+				have_recover = 1;
+				break;
+			}
+		if (!have_recover)
+		{
+			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				if ((team->member_mask & Strike_Bit(slot)) == 0u &&
+				    Strike_InputViable(frame, slot) &&
+				    frame->slot[slot].recover_goal_ms >= 0 &&
+				    (candidate < 0 ||
+				     frame->slot[slot].recover_goal_ms <
+				         frame->slot[candidate].recover_goal_ms ||
+				     (frame->slot[slot].recover_goal_ms ==
+				          frame->slot[candidate].recover_goal_ms &&
+				      slot < candidate)))
+					candidate = slot;
+			if (candidate >= 0)
+			{
+				for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+				{
+					int goal;
+
+					if ((team->member_mask & Strike_Bit(slot)) == 0u ||
+					    slot == frame->carrier_slot ||
+					    frame->slot[slot].carrying)
+						continue;
+					goal = Strike_GoalForSelection(frame,
+					    &frame->slot[slot]);
+					if (evict < 0 || goal > worst_goal ||
+					    (goal == worst_goal && slot > evict))
+					{
+						evict = slot;
+						worst_goal = goal;
+					}
+				}
+				if (evict >= 0)
+				{
+					Strike_RemoveMember(team, evict);
+					Strike_AddMember(team, frame, candidate);
+				}
+			}
+		}
+	}
 }
 
 static void Strike_RefreshReadiness(sg_strike_team_t *team,
