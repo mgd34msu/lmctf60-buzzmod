@@ -60,8 +60,17 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
             self.assertIn(token, source)
         self.assertIn('X(defshift, "sg_defshift", "0")',
                       (ROOT / "slipgate/sg_cvars.h").read_text())
-        self.assertIn('X(patrol, "sg_patrol", "0")',
+        self.assertIn('X(patrol, "sg_patrol", "0.55")',
                       (ROOT / "slipgate/sg_cvars.h").read_text())
+
+    def test_quiet_patrol_is_enabled_and_walk_paced(self) -> None:
+        descend = (ROOT / "slipgate/sg_descend.c").read_text()
+        move = (ROOT / "slipgate/sg_move.c").read_text()
+
+        self.assertIn("SG_DefensePatrolChoose(cand, nc", descend)
+        self.assertIn("tc->patrol_walk = true;", descend)
+        self.assertIn("SG_DefensePatrolThrottle(sg_cv.patrol->value)", move)
+        self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", move)
 
     def test_late_shelf_retires_shift_before_post_or_movement(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()

@@ -23,6 +23,14 @@ typedef struct sg_defense_shift_request_s
 	int previous_seed;
 } sg_defense_shift_request_t;
 
+typedef struct sg_defense_patrol_candidate_s
+{
+	int link_index;
+	int seed_index;
+	int goal_ms;
+	int is_run;
+} sg_defense_patrol_candidate_t;
+
 /* Pure geometry and admission policy for the stand defender's live-combat
  * leg. Collision and floor truth remain in sg_move.c, where the real player
  * hull and current world are available. */
@@ -82,5 +90,16 @@ int SG_DefenseShiftChoose(const sg_defense_shift_request_t *request,
  * invalid. Returns non-zero when a shift was retired. */
 int SG_DefenseShiftRetireIfInvalid(int shift_link, int link_ready,
 	int *commit_link);
+
+/* Choose one quiet-post patrol leg.  The draw is supplied by the live caller,
+ * but filtering and immediate-reversal avoidance are deterministic and
+ * independently executable. */
+int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
+	size_t candidate_count, int max_goal_ms, int previous_seed,
+	unsigned draw, int *seed_out);
+
+/* sg_patrol is the patrol walking throttle.  Invalid/off values disable the
+ * behavior; enabled values are bounded away from both a shuffle and a sprint. */
+float SG_DefensePatrolThrottle(float configured);
 
 #endif /* SG_DEFENSE_SHIFT_H */

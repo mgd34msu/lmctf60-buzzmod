@@ -4,6 +4,80 @@
 #include <float.h>
 #include <math.h>
 
+float SG_DefensePatrolThrottle(float configured)
+{
+	if (!isfinite(configured) || configured <= 0.0f)
+		return 0.0f;
+	if (configured < 0.35f)
+		return 0.35f;
+	if (configured > 0.75f)
+		return 0.75f;
+	return configured;
+}
+
+int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
+	size_t candidate_count, int max_goal_ms, int previous_seed,
+	unsigned draw, int *seed_out)
+{
+	size_t index, eligible = 0, pick;
+	int selected = -1;
+
+	if (seed_out)
+		*seed_out = -1;
+	if (!candidates || candidate_count == 0 || max_goal_ms < 0)
+		return -1;
+	for (index = 0; index < candidate_count; index++)
+		if (candidates[index].is_run && candidates[index].link_index >= 0 &&
+		    candidates[index].seed_index >= 0 &&
+		    candidates[index].goal_ms >= 0 &&
+		    candidates[index].goal_ms < max_goal_ms)
+			eligible++;
+	if (eligible == 0)
+		return -1;
+
+	pick = (size_t)(draw % (unsigned)eligible);
+	for (index = 0; index < candidate_count; index++)
+	{
+		const sg_defense_patrol_candidate_t *candidate = &candidates[index];
+
+		if (!candidate->is_run || candidate->link_index < 0 ||
+		    candidate->seed_index < 0 || candidate->goal_ms < 0 ||
+		    candidate->goal_ms >= max_goal_ms)
+			continue;
+		if (pick-- == 0)
+		{
+			selected = (int)index;
+			break;
+		}
+	}
+	if (selected < 0)
+		return -1;
+
+	/* A deliberate circuit does not immediately reverse when another admitted
+	 * post-band road exists.  Scan from the drawn choice so different visits
+	 * still choose different non-reversing legs. */
+	if (eligible > 1 && candidates[selected].seed_index == previous_seed)
+		for (index = 1; index < candidate_count; index++)
+		{
+			size_t alternate = ((size_t)selected + index) % candidate_count;
+			const sg_defense_patrol_candidate_t *candidate =
+			    &candidates[alternate];
+
+			if (candidate->is_run && candidate->link_index >= 0 &&
+			    candidate->seed_index >= 0 && candidate->goal_ms >= 0 &&
+			    candidate->goal_ms < max_goal_ms &&
+			    candidate->seed_index != previous_seed)
+			{
+				selected = (int)alternate;
+				break;
+			}
+		}
+
+	if (seed_out)
+		*seed_out = candidates[selected].seed_index;
+	return candidates[selected].link_index;
+}
+
 int SG_DefenseShiftChoose(const sg_defense_shift_request_t *request,
 	const sg_defense_shift_candidate_t *candidates, size_t candidate_count,
 	int *seed_out)

@@ -129,11 +129,52 @@ Known incomplete work:
 
 ## Bot improvement work
 
-Bot improvement runs in parallel with navigation/corpus and fleet work. The
-final source freeze waits for all adopted changes and all required executable
+Bot improvement is production-controller work. Measurement code, Stage A,
+blind cards, and retained reports are acceptance gates for a controller change;
+they are not substitutes for one and are not independent project milestones.
+Bot work runs in parallel with navigation/corpus and fleet work, and the final
+source freeze waits for the adopted controller changes and their executable
 proofs.
 
-### Measurement and provenance foundation
+### Production implementation order
+
+Implement the remaining material deficiencies in this order:
+
+1. **Remove wasted movement.** In `sg_descend.c`,
+   `sg_defense_shift.c`, and `sg_move.c`, replace quiet posted-defender
+   micro-pacing with deliberate, proved, non-reversing post-band patrol legs at
+   walk throttle; contact must cancel patrol authority before movement. Then
+   remove the remaining attacker-stand and far-field grind without weakening
+   objective touch or proven route safety.
+2. **Raise real steal initiation and conversion.** In `sg_goal.c`,
+   `sg_descend.c`, `sg_move.c`, and `sg_arach.c`, make attackers produce more
+   qualified stand entries and complete more authoritative `ctf_flagtouch`
+   pickups. Do not repeat the struck close-approach pacing suppression and do
+   not replace physical touch with controller-owned score state.
+3. **Make hooks choose useful rides.** In `sg_descend.c` and `sg_move.c`, price
+   expected route progress before fire, exercise the production aim-wedge and
+   terminal lifecycle, and shelve only the exact failed link. Never satisfy the
+   gate by disabling hook use.
+4. **Improve combat without hidden information.** In `sg_combat.c`, reduce the
+   material hits-per-shot shortfall while retaining reaction delay,
+   overshoot/settle, weapon switching, splash safety, skill-scaled error, and
+   visible/audible information admission.
+5. **Improve coordinated play.** In `sg_arach.c`, `sg_goal.c`, and the focused
+   role modules, increase useful attack pressure and preserve the accepted
+   carrier, escort, recover, defender, radio, and persona laws. Team assignment
+   must remain stable per identity and independent across teams.
+6. **Close item, POV, and sound behavior.** Drive item commitment through the
+   real `Touch_Item` chain, prove ordinary observer playback and sound
+   attribution, and keep each proof bound to the final controller/module.
+
+Every item above requires a production C change, an executable test that calls
+the changed policy or live seam, both Make dialects, and then a matched runtime
+gate. A measurement-only change cannot complete an item. The first implemented
+slice is the quiet defender patrol: its pure leg chooser and throttle are
+executable, the behavior is enabled by default, and runtime outcome acceptance
+remains pending on the persistent fleet.
+
+### Acceptance instrumentation and provenance
 
 The retained repository data is useful baseline material, but it is not all
 final-release authority:
@@ -146,7 +187,8 @@ final-release authority:
 - several reference families have consumers but no tracked producer, or a
   producer but no durable capture receipt.
 
-Required work:
+Required support work, performed only as needed to accept or reject the
+production changes above:
 
 1. Define one canonical capture receipt binding each demo/log/report to source
    commit, module hash, BSP hash, RUNE hash, map, server, bot/client, and time
@@ -163,11 +205,16 @@ Required work:
 
 Required work:
 
+- finish the enabled quiet-defender patrol and prove that it replaces
+  micro-pacing with non-reversing proved walking legs;
 - compare bot trajectories with the retained human demo corpus using a frozen
   speed, acceleration, turn, air-gain, and route-shape metric;
 - tune or strike the remaining human-speed air-strafe chain work from measured
   results, not a synthetic flat-floor Pmove alone;
-- close the plateau tie-break and A-to-B-to-A revisit spike;
+- treat the plateau A-to-B-to-A spike as a bounded residual unless a new
+  source-grounded mechanism improves it; global immediate-return pricing,
+  route dither, and hook-pong shelving were already struck and must not be
+  repeated;
 - close the transition-determinism and dither-retry defects;
 - preserve proven pit, water, fall, door, lift, teleport, and grapple safety;
 - generate blind movement film and retain the exact source/demo/metric identity.
@@ -244,10 +291,11 @@ Required execution:
 
 1. Fix `gamestat.sh` and `rolestat.py` to consume the current telemetry schema
    containing `sgoal=`, and fail if zero SG rows are recognized.
-2. Implement the actual production-controller change that raises steal
-   initiation/close conversion; a report-only or fixture-only change cannot
+2. Implement the actual production-controller changes in the implementation
+   order above; report-only, fixture-only, and measurement-only changes cannot
    satisfy this milestone.
-3. Run a matched baseline/candidate Stage A and require numeric movement,
+3. After each coherent controller change is executable and both Make dialects
+   pass, run a matched baseline/candidate Stage A and require numeric movement,
    combat, perception, steal, conversion, capture, and defense regression
    thresholds rather than a generic "no regression" statement. Run every
    tuning trial in a disposable isolated game root on disjoint ports; it may
@@ -659,14 +707,14 @@ P0  authoritative plan + current-branch reconciliation
  +--------------------+----------------------+----------------------+
  |                    |                      |                      |
  v                    v                      v                      v
-B0 bot baseline      N0 navigation/tools    F0 fleet lifecycle     Q0 CI/repo hygiene
-metrics + trials     181 authority fixes    ordered map lists      warning/test gaps
+B0 production bot    N0 navigation/tools    F0 fleet lifecycle     Q0 CI/repo hygiene
+controller fixes     181 authority fixes    ordered map lists      warning/test gaps
  |                    |                      bundle/rollback         |
  v                    +----------+-----------+----------+-----------+
-B1 movement/hook/                |                      |
-combat/team/item/POV             v                      v
-consumer fixes              N1 lmctf58 graph       F1 persistent ten-server
- |                           + map regressions       launcher + health
+B1 executable tests +            |                      |
+matched acceptance gates         v                      v
+for changed behavior        N1 map regressions     F1 persistent ten-server
+ |                                                  launcher + health
  +-------------+-------------+                      |
                |                                    |
                v                                    |

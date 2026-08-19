@@ -2253,6 +2253,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	float post_sight = tc->post_sight;
 	vec3_t d;
 
+	tc->patrol_walk = false;
+
 	/* Reconcile exact purpose before generic restoration can put it back. */
 	if (StrikeWeaponPrepareCommit(bot, tc))
 		return bot->commit_link;
@@ -4210,6 +4212,7 @@ stag_done:
 					{
 						bestlink = pli;
 						hold_post = false;
+						tc->patrol_walk = true;
 						break;
 					}
 				if (hold_post)
@@ -4217,30 +4220,38 @@ stag_done:
 			}
 			else if (SG_TimerReady(bot->patrol_until))
 			{
-				/* pick the next leg: a RUN neighbour still in the band */
-				int pli, cand[8], nc = 0;
+				/* Pick a proved RUN neighbour inside the post band.  The pure
+				 * chooser owns admission and reversal avoidance; live randomness
+				 * only chooses among the admitted circuit legs. */
+				int pli, chosen_seed = -1, chosen_link;
+				sg_defense_patrol_candidate_t cand[64];
+				size_t nc = 0;
 
 				for (pli = SG_Rune()->first_link[bot->seed]; pli >= 0;
 				     pli = SG_Rune()->next_link[pli])
 				{
 					rune_link_t *pl = &SG_Rune()->links[pli];
 
-					if (pl->action == RL_RUN && nc < 8 &&
-					    goal_field[pl->to] < SG_FIELD_INF &&
-					    goal_field[pl->to] <
-					        1000.0f * SG_PersonaCampScale(e))
-						cand[nc++] = pl->to;
+					if (pl->action == RL_RUN && pl->to >= 0 &&
+					    pl->to < SG_Rune()->hdr.num_seeds &&
+					    nc < sizeof(cand) / sizeof(cand[0]))
+					{
+						cand[nc].link_index = pli;
+						cand[nc].seed_index = pl->to;
+						cand[nc].goal_ms = goal_field[pl->to];
+						cand[nc].is_run = true;
+						nc++;
+					}
 				}
-				if (nc > 0)
+				chosen_link = SG_DefensePatrolChoose(cand, nc,
+				    (int)(1000.0f * SG_PersonaCampScale(e)), bot->prev_seed,
+				    (unsigned)rand(), &chosen_seed);
+				if (chosen_link >= 0)
 				{
-					int pick = rand() % nc;
-
-					/* Keep the circuit moving forward when another road exists;
-					 * immediate back-and-forth reversals are the shuffle this patrol was
-					 * meant to replace. */
-					if (nc > 1 && cand[pick] == bot->prev_seed)
-						pick = (pick + 1) % nc;
-					bot->patrol_seed = cand[pick];
+					bot->patrol_seed = chosen_seed;
+					bestlink = chosen_link;
+					hold_post = false;
+					tc->patrol_walk = true;
 					SG_TimerArm(&bot->patrol_until, 2.0f
 					                  + random() * 4.0f);
 				}

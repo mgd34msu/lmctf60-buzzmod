@@ -88,6 +88,37 @@ static void TestInvalidShiftRetiresOnlyExactCommitment(void)
 	CHECK(SG_DefenseShiftRetireIfInvalid(-1, 0, &commitment) == 0);
 }
 
+static void TestQuietPatrolCircuit(void)
+{
+	const sg_defense_patrol_candidate_t candidates[] = {
+		{ 8, 80, 500, 1 },
+		{ 3, 30, 350, 0 },
+		{ 4, 40, 999, 1 },
+		{ 9, 90, 1000, 1 },
+		{ -1, 20, 200, 1 }
+	};
+	int seed = -1;
+
+	CHECK(SG_DefensePatrolChoose(candidates, 5, 1000, -1, 0, &seed) == 8);
+	CHECK(seed == 80);
+	/* Draw the return leg: another admitted road exists, so the circuit
+	 * advances instead of shuffling straight back. */
+	CHECK(SG_DefensePatrolChoose(candidates, 5, 1000, 80, 0, &seed) == 4);
+	CHECK(seed == 40);
+	CHECK(SG_DefensePatrolChoose(candidates, 5, 0, -1, 0, &seed) == -1);
+	CHECK(seed == -1);
+	CHECK(SG_DefensePatrolChoose(NULL, 5, 1000, -1, 0, &seed) == -1);
+}
+
+static void TestQuietPatrolThrottle(void)
+{
+	CHECK(SG_DefensePatrolThrottle(0.55f) == 0.55f);
+	CHECK(SG_DefensePatrolThrottle(0.1f) == 0.35f);
+	CHECK(SG_DefensePatrolThrottle(2.0f) == 0.75f);
+	CHECK(SG_DefensePatrolThrottle(0.0f) == 0.0f);
+	CHECK(SG_DefensePatrolThrottle(NAN) == 0.0f);
+}
+
 static sg_defense_combat_request_t CombatRequest(void)
 {
 	sg_defense_combat_request_t request;
@@ -243,6 +274,8 @@ int main(void)
 	TestGuardBandAndGeometry();
 	TestFailClosedInputs();
 	TestInvalidShiftRetiresOnlyExactCommitment();
+	TestQuietPatrolCircuit();
+	TestQuietPatrolThrottle();
 	TestCombatAdmissionAndDeterminism();
 	TestCombatHullProbeLaw();
 	TestCombatPreviewCandidateLaw();

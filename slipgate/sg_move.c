@@ -8536,6 +8536,20 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->sidemove = (short)(cmd->sidemove * dp);
 			}
 
+			/* A quiet stand patrol is deliberate walking, not the full-speed
+			 * micro-pacing it replaces.  Threats retire patrol authority in
+			 * CommitLink before this stage, and proved mechanisms keep their
+			 * exact submitted command. */
+			if (tc->patrol_walk && role == SG_ROLE_DEFEND && bot->def_stand &&
+			    !proved_control)
+			{
+				float patrol_throttle =
+				    SG_DefensePatrolThrottle(sg_cv.patrol->value);
+
+				cmd->forwardmove = (short)(cmd->forwardmove * patrol_throttle);
+				cmd->sidemove = (short)(cmd->sidemove * patrol_throttle);
+			}
+
 			/* the terminal brake: cornering throttle at the stands,
 			 * same final-word slot for the same reason */
 			if (bot->term_brake < 1.0f && !proved_control)
