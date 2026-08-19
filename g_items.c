@@ -4,6 +4,7 @@
 #include "bat.h"
 #include "stdlog.h"
 #include "slipgate/sg_health_pickup.h"
+#include "slipgate/sg_ammo_pickup.h"
 
 void droptofloor(edict_t* ent);
 
@@ -485,33 +486,52 @@ qboolean Pickup_Key(edict_t* ent, edict_t* other)
 
 //======================================================================
 
+static int G_AmmoCapacity(edict_t *ent, gitem_t *item)
+{
+	if (item->tag == AMMO_BULLETS)
+		return ent->client->pers.max_bullets;
+	else if (item->tag == AMMO_SHELLS)
+		return ent->client->pers.max_shells;
+	else if (item->tag == AMMO_ROCKETS)
+		return ent->client->pers.max_rockets;
+	else if (item->tag == AMMO_GRENADES)
+		return ent->client->pers.max_grenades;
+	else if (item->tag == AMMO_CELLS)
+		return ent->client->pers.max_cells;
+	else if (item->tag == AMMO_SLUGS)
+		return ent->client->pers.max_slugs;
+	return -1;
+}
+
+static qboolean G_AmmoItemPickupEligible(gitem_t *item, edict_t *other)
+{
+	int index, max;
+
+	if (!item || !other || !other->client)
+		return false;
+	max = G_AmmoCapacity(other, item);
+	if (max < 0)
+		return false;
+	index = ITEM_INDEX(item);
+	return SG_AmmoPickupAllowed(other->client->pers.inventory[index], max) ?
+	    true : false;
+}
+
+qboolean G_AmmoPickupEligible(edict_t *ent, edict_t *other)
+{
+	return ent ? G_AmmoItemPickupEligible(ent->item, other) : false;
+}
+
 qboolean Add_Ammo(edict_t* ent, gitem_t* item, int count)
 {
 	int			index;
 	int			max;
 
-	if (!ent->client)
+	if (!G_AmmoItemPickupEligible(item, ent))
 		return false;
-
-	if (item->tag == AMMO_BULLETS)
-		max = ent->client->pers.max_bullets;
-	else if (item->tag == AMMO_SHELLS)
-		max = ent->client->pers.max_shells;
-	else if (item->tag == AMMO_ROCKETS)
-		max = ent->client->pers.max_rockets;
-	else if (item->tag == AMMO_GRENADES)
-		max = ent->client->pers.max_grenades;
-	else if (item->tag == AMMO_CELLS)
-		max = ent->client->pers.max_cells;
-	else if (item->tag == AMMO_SLUGS)
-		max = ent->client->pers.max_slugs;
-	else
-		return false;
+	max = G_AmmoCapacity(ent, item);
 
 	index = ITEM_INDEX(item);
-
-	if (ent->client->pers.inventory[index] == max)
-		return false;
 
 	ent->client->pers.inventory[index] += count;
 

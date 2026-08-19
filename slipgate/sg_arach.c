@@ -3495,6 +3495,9 @@ void SG_BotThink(sg_bot_t *bot)
 	tc.collectible_item_field[SG_FC_HEALTH] =
 	    (tc.live.item[SG_FC_HEALTH] > 0.0f) ?
 	    SG_CollectibleHealthField(bot) : NULL;
+	tc.collectible_item_field[SG_FC_AMMO] =
+	    (tc.live.item[SG_FC_AMMO] > 0.0f) ?
+	    SG_CollectibleAmmoField(bot) : NULL;
 
 	tc.support = NULL;
 	tc.intercept = NULL;

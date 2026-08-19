@@ -76,6 +76,36 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
             )
             subprocess.run([str(binary)], cwd=ROOT, check=True)
 
+    def test_ammo_pickup_policy_executes_capacity_edges(self) -> None:
+        program = textwrap.dedent(
+            r"""
+            #include "slipgate/sg_ammo_pickup.h"
+
+            int main(void)
+            {
+                if (!SG_AmmoPickupAllowed(0, 200) ||
+                    !SG_AmmoPickupAllowed(199, 200))
+                    return 1;
+                if (SG_AmmoPickupAllowed(200, 200) ||
+                    SG_AmmoPickupAllowed(201, 200) ||
+                    SG_AmmoPickupAllowed(0, -1))
+                    return 2;
+                return 0;
+            }
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sg-ammo-route-") as tmp:
+            source = Path(tmp) / "ammo_route.c"
+            binary = Path(tmp) / "ammo_route"
+            source.write_text(program, encoding="utf-8")
+            subprocess.run(
+                ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Wpedantic", "-I.", str(source), "-o", str(binary)],
+                cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            subprocess.run([str(binary)], cwd=ROOT, check=True)
+
     def test_phase_and_exact_route_policy_executes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="sg-def-supply-") as tmp:
             binary = Path(tmp) / "sg_defense_supply_test"
@@ -216,6 +246,16 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         self.assertIn("if (!G_HealthPickupEligible(ent, other))", items)
         self.assertIn("!G_HealthPickupEligible(item, bot->ent)", goal)
         self.assertIn("SG_CollectibleHealthField(bot)", arach)
+
+    def test_ammo_surface_excludes_capacity_rejected_stacks(self) -> None:
+        goal = (ROOT / "slipgate/sg_goal.c").read_text()
+        arach = (ROOT / "slipgate/sg_arach.c").read_text()
+        items = (ROOT / "g_items.c").read_text()
+
+        self.assertIn("qboolean G_AmmoPickupEligible", items)
+        self.assertIn("G_AmmoItemPickupEligible(item, ent)", items)
+        self.assertIn("!G_AmmoPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_CollectibleAmmoField(bot)", arach)
 
     def test_owned_stocked_weapon_flows_through_post_selector(self) -> None:
         combat = (ROOT / "slipgate/sg_combat.c").read_text()

@@ -1567,6 +1567,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       boxes disappear from the bot's route surface at full health while legal
       stimpack and mega overheal remain roots. The route predicate and
       `Pickup_Health` share one boundary law.
+      Ammo attraction likewise excludes stacks already at that client's
+      capacity while retaining every ammo type the inventory can accept; the
+      route and `Add_Ammo` now use the same capacity predicate.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
