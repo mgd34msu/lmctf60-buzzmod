@@ -1285,6 +1285,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][cs];
 
 				if (en->client >= 0 && !en->heard_only &&
+				    en->seed >= 0 &&
+				    en->seed < SG_Rune()->hdr.num_seeds &&
 				    SG_AgeUnder(en->seen_time, 3.0f) &&
 				    en->seen_time > best_t)
 				{

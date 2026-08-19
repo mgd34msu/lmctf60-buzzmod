@@ -737,6 +737,24 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         self.assertIn("sg_host.pointcontents(muzzle) & MASK_WATER", frame)
         self.assertIn("MASK_WATER", frame[veto - 500:veto])
 
+    def test_seedless_enemy_observations_cannot_enter_route_belief(self) -> None:
+        caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        writer = caco[caco.index("static void Caco_EnemyPlace"):
+                      caco.index("static void Caco_ScanEnemies")]
+        descend = (ROOT / "slipgate/sg_descend.c").read_text()
+        carry = descend[descend.index("CARRIER COVER (sg_carrycover"):
+                        descend.index("THE SWITCHING COST", descend.index(
+                            "CARRIER COVER (sg_carrycover"))]
+
+        self.assertIn("Caco_EnemyObservationValid(r, team1, client",
+                      writer)
+        self.assertLess(writer.index("Caco_EnemyObservationValid"),
+                        writer.index("Caco_EnemySlot"))
+        self.assertIn("Caco_EnemyPlace(r, SG_TeamIdx(viewer_team)", caco)
+        self.assertIn("Caco_EnemyPlace(r, t, ecl, seed", caco)
+        self.assertIn("en->seed >= 0", carry)
+        self.assertIn("en->seed < SG_Rune()->hdr.num_seeds", carry)
+
     def test_cvar_and_static_hold_order(self) -> None:
         cvars = (ROOT / "slipgate/sg_cvars.h").read_text()
         move = (ROOT / "slipgate/sg_move.c").read_text()

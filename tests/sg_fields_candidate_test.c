@@ -14,6 +14,8 @@ int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
 void Fields_TestFloodFlat(rune_t *r, int *dist,
 	const int *sources, const int *source_cost, int num_sources);
 int Caco_BestSteps(rune_t *r, int seed, const int *field, int *out);
+qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
+	int client, int maxclients, int seed);
 int Intercept_HoldSeed(int team, int fallback);
 int Rally_CoverSeed(const rune_t *r, int from);
 
@@ -494,6 +496,20 @@ int main(void)
 	plane[3] = 255;
 	plane[4] = 9;
 	CHECK(Fields_DefensiveRoot(&rune, plane) == 4);
+
+	/* A visible client outside the proved local graph has no route position.
+	 * Reject it at the shared CACO writer boundary instead of exposing -1 (or
+	 * an out-of-range seed) to default carrier-cover indexing. */
+	CHECK(Caco_EnemyObservationValid(&rune, 0, 0, 16, 0));
+	CHECK(Caco_EnemyObservationValid(&rune, 1, 15, 16, 4));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 16, -1));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 16, 5));
+	CHECK(!Caco_EnemyObservationValid(&rune, -1, 0, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 2, 0, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, -1, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 16, 16, 0));
+	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 0, 0));
+	CHECK(!Caco_EnemyObservationValid(NULL, 0, 0, 16, 0));
 
 	CheckHookFieldAdmission();
 	CheckInterceptAdmission();

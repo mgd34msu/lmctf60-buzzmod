@@ -1540,17 +1540,43 @@ static int Caco_EnemySlot(sg_belief_enemy_t *tab, int client)
 	return slot;
 }
 
+#ifdef SG_CACO_TEST
+#define SG_CACO_ENEMY_PRIVATE
+#else
+#define SG_CACO_ENEMY_PRIVATE static
+#endif
+
+/* A generic enemy row is route belief, so an observed client without a
+ * proved local RUNE seed is not a partial row: it has no position the
+ * controller may consume.  Rune_NearestSeed deliberately returns -1 outside
+ * its bounded local topology.  Reject that at the shared writer rather than
+ * requiring every movement/weapon consumer to survive seeds[-1]. */
+SG_CACO_ENEMY_PRIVATE qboolean Caco_EnemyObservationValid(const rune_t *r,
+	int team_index, int client, int maxclients, int seed)
+{
+	return r && r->seeds && (team_index == 0 || team_index == 1) &&
+	       maxclients > 0 && client >= 0 && client < maxclients &&
+	       seed >= 0 && seed < r->hdr.num_seeds;
+}
+
+#undef SG_CACO_ENEMY_PRIVATE
+
 /*
  * The shared writer over that slot rule, used by the eye
  * (Caco_ScanEnemies, below) and the ear (SG_NoteSound, further down).
  * `seen` is what separates the two callers: an eye entry is exact and
  * carries the rune tell, an ear entry is a region and carries neither.
  */
-static void Caco_EnemyPlace(int team1, int client, int seed, qboolean seen,
-                            qboolean runed)
+static void Caco_EnemyPlace(rune_t *r, int team1, int client, int seed,
+                            qboolean seen, qboolean runed)
 {
-	sg_belief_enemy_t *tab = sg_caco_enemies[team1];
-	int slot = Caco_EnemySlot(tab, client);
+	sg_belief_enemy_t *tab;
+	int slot;
+
+	if (!Caco_EnemyObservationValid(r, team1, client, game.maxclients, seed))
+		return;
+	tab = sg_caco_enemies[team1];
+	slot = Caco_EnemySlot(tab, client);
 
 	/* a fresh eye entry outranks an ear: don't degrade it */
 	if (!seen && tab[slot].client == client && !tab[slot].heard_only &&
@@ -1596,8 +1622,9 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 		if (!Caco_Visible(viewer, p))
 			continue;
 
-		Caco_EnemyPlace(SG_TeamIdx(viewer_team), i, Rune_NearestSeed(r, p->s.origin),
-		                true, (p->s.renderfx & RF_GLOW) != 0);
+		Caco_EnemyPlace(r, SG_TeamIdx(viewer_team), i,
+		                Rune_NearestSeed(r, p->s.origin), true,
+		                (p->s.renderfx & RF_GLOW) != 0);
 	}
 }
 
@@ -1757,7 +1784,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		if (seed < 0)
 			continue;
 
-		Caco_EnemyPlace(t, ecl, seed, false, false);
+		Caco_EnemyPlace(r, t, ecl, seed, false, false);
 
 		/* the quad announcing its own ending (damage2 = the fade warning,
 		 * played once at 3s remaining). Index resolved lazily -- precache

@@ -1495,6 +1495,10 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       engine's wider water refraction, so a human or SG teammate just outside
       the nominal aim ray is no longer exposed to an otherwise unexamined
       bullet or pellet path.
+      Generic enemy route belief now admits only observations localized to a
+      valid seed in the active RUNE. A visible player in an intentionally
+      seedless region can no longer enter the default carrier-cover scorer as
+      seed `-1` and drive undefined route-memory access during a flag run.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.
