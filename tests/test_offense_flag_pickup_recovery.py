@@ -154,6 +154,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("sg_fields.our_carrier_valid[ti]", escort)
         self.assertNotIn("car_ent->s.origin", escort)
         self.assertNotIn("VectorSubtract(sg_bots[k].ent->s.origin", escort)
+        self.assertIn("SG_AutonomousEscortCandidate(", escort)
+        self.assertIn("SG_ChatOrderedRole(sg_bots[k].ent)", escort)
 
         goal = source("slipgate/sg_goal.c")
         objective = between(goal, "else if (role == SG_ROLE_ESCORT)",
@@ -161,6 +163,17 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("sg_fields.our_carrier_valid", objective)
         self.assertIn("sg_fields.to_red_flag", objective)
         self.assertIn("sg_fields.to_blue_flag", objective)
+
+    def test_human_order_cannot_be_phantom_autonomous_escort(self) -> None:
+        arach = source("slipgate/sg_arach.c")
+        start = arach.index("if (have_carrier && own->client != my_client)")
+        end = arach.index("/* No carrier ends the carry epoch", start)
+        escort = arach[start:end]
+        candidate = escort.index("SG_AutonomousEscortCandidate(")
+        score = escort.index("SG_EscortAssignmentScore(", candidate)
+        self.assertLess(candidate, score)
+        self.assertIn("SG_ChatOrderedRole(sg_bots[k].ent)",
+                      escort[candidate:score])
 
     def test_disabled_exit_asymmetry_does_not_draw_randomness(self) -> None:
         goal = source("slipgate/sg_goal.c")

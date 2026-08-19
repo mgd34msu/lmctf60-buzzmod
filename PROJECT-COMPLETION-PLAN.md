@@ -290,6 +290,11 @@ non-carrier body that can actually receive the RECOVER duty. A carrier's finite
 home field can no longer make the sole recoverer look redundant and evict it
 while admitting an escort; the carrier therefore keeps both the scoring screen
 and the one mission that can make capture legal.
+Organic escort assignment now rejects every teammate with a live human order
+before the shared route argmin. An ordered body can no longer become a phantom
+winner that later obeys its order while suppressing the actually available
+carrier screen; human authority remains intact and the next eligible teammate
+receives the autonomous escort mission.
 Graph-hook usefulness is now judged against the exact current route field at
 both source staging and the irreversible fire boundary. A tactical waypoint or
 bounded weapon errand can therefore take a ride that advances that live route,
@@ -1251,6 +1256,9 @@ Phase 1 finishes only when all four lanes meet at one integrated source tree.
       Full-roster escort admission no longer counts the carrier as recovery
       coverage, so it cannot evict the sole teammate able to return the missing
       own flag during a scoring standoff.
+      Organic escort selection excludes human-ordered teammates before its
+      shared argmin, preventing an ordered phantom winner from leaving the live
+      carrier without an otherwise available screen.
 - [ ] Final dual GNU/Make candidate frozen.
 - [ ] All 181 maps generated with exactly 181 PASS results.
 - [ ] All 181 artifacts pass independent readers, lint, semantics, and cold load.

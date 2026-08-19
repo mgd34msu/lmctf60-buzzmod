@@ -1163,6 +1163,14 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(SG_EscortAssignmentScore(1400, 1) == 1100);
 	CHECK(SG_EscortAssignmentScore(100, 1) == 0);
 	CHECK(SG_EscortAssignmentScore(-1, 1) == -1);
+	CHECK(SG_AutonomousEscortCandidate(1, 1, 0, -1, 1400));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 0, SG_ROLE_ATTACK, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 0, SG_ROLE_DEFEND, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 0, 0, -1, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 1, -1, 100));
+	CHECK(!SG_AutonomousEscortCandidate(0, 1, 0, -1, 100));
+	CHECK(!SG_AutonomousEscortCandidate(1, 1, 0, -1, -1));
+	CHECK(!SG_AutonomousEscortCandidate(2, 1, 0, -1, 100));
 }
 
 int main(void)

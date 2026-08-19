@@ -1779,11 +1779,6 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 					continue;
 				if (sg_bots[k].ent->client->ctf.teamnum != team)
 					continue;
-				if (!SG_RoleOutsideDefenderQuota(live_team, SG_MAXBOTS,
-				        k, defenders_wanted))
-					continue;       /* defenders keep the base */
-				if ((int)(sg_bots[k].ent - g_edicts) - 1 == own->client)
-					continue;       /* the carrier escorts nobody */
 				/* Use only the team-belief carrier flood while it is current.  An
 				 * unknown teammate position falls back to the public capture stand;
 				 * the exact carrier edict origin never enters assignment. */
@@ -1797,6 +1792,12 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				        ? sg_fields.our_carrier[ti][sg_bots[k].seed]
 				        : SG_FIELD_INF,
 				    home[sg_bots[k].seed]);
+				if (!SG_AutonomousEscortCandidate(live_team[k],
+				        SG_RoleOutsideDefenderQuota(live_team, SG_MAXBOTS,
+				            k, defenders_wanted),
+				        (int)(sg_bots[k].ent - g_edicts) - 1 == own->client,
+				        SG_ChatOrderedRole(sg_bots[k].ent), route_cost))
+					continue;
 				score = SG_EscortAssignmentScore(route_cost,
 				    sg_bots[k].last_role == (int)SG_ROLE_ESCORT);
 				if (score >= 0 &&

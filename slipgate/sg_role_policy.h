@@ -114,4 +114,18 @@ static inline int SG_EscortAssignmentScore(int route_cost, int incumbent)
 	return route_cost - (incumbent ? 300 : 0);
 }
 
+/* Autonomous escort selection must not nominate a teammate whose live human
+ * order will win when that teammate evaluates its own role.  Such a phantom
+ * winner suppresses every real escort because all bots share the same argmin. */
+static inline int SG_AutonomousEscortCandidate(int live, int outside_defense,
+	int is_carrier, int ordered_role, int route_cost)
+{
+	if ((live != 0 && live != 1) ||
+	    (outside_defense != 0 && outside_defense != 1) ||
+	    (is_carrier != 0 && is_carrier != 1))
+		return 0;
+	return live && outside_defense && !is_carrier && ordered_role < 0 &&
+	       route_cost >= 0;
+}
+
 #endif /* SG_ROLE_POLICY_H */
