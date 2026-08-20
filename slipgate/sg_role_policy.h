@@ -206,10 +206,17 @@ static inline int SG_CarrierJinkAllowed(int terminal,
 	return !terminal && !flag_touch_terminal;
 }
 
+static inline int SG_FlagTouchOptionalPacingAllowed(
+	int flag_touch_terminal)
+{
+	return !flag_touch_terminal;
+}
+
 static inline float SG_SpawnBeatDeadline(float deadline,
 	int flag_touch_terminal)
 {
-	return flag_touch_terminal ? 0.0f : deadline;
+	return SG_FlagTouchOptionalPacingAllowed(flag_touch_terminal)
+	    ? deadline : 0.0f;
 }
 
 static inline int SG_OptionalItemDetourAllowed(int push,

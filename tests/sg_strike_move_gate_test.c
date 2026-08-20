@@ -54,6 +54,8 @@ int main(void)
 
 	memset(&bot, 0, sizeof(bot));
 	memset(&tc, 0, sizeof(tc));
+	CHECK(SG_FlagTouchOptionalPacingAllowed(false));
+	CHECK(!SG_FlagTouchOptionalPacingAllowed(true));
 	CHECK(SG_SpawnBeatDeadline(2.0f, false) == 2.0f);
 	CHECK(SG_SpawnBeatDeadline(2.0f, true) == 0.0f);
 	CHECK(SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(false));

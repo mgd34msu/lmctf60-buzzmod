@@ -7288,12 +7288,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/* Occasionally ease off on safe grounded travel. Carrying, combat, hooks,
-	 * and danger cancel the breather immediately. */
 	{
 		float dose = sg_cv.breather->value;
-
 		if (dose > 0.0f && role != SG_ROLE_CARRY && !proved_control &&
+		    SG_FlagTouchOptionalPacingAllowed(tc->flag_touch_terminal) &&
 		    bot->hook_phase == 0 && !bot->engaged_last &&
 		    e->groundentity != NULL)
 		{
@@ -7311,7 +7309,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 		else
-			bot->breather_until = 0.0f;     /* danger ends the stroll */
+			bot->breather_until = 0.0f;
 	}
 
 	{
