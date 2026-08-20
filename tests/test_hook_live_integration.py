@@ -271,6 +271,12 @@ preturn = body("if (sg_cv.preturn->value &&", "if (bot->hook_phase == 3)")
 assert "const int *preturn_route_field = route_field" in preturn
 assert "? route_field : goal_field;" in preturn
 assert "preturn_route_field[candidate->to]" in preturn
+assert "SG_RouteCandidateGoalMs(" in preturn
+assert "Fields_LinkTraversalCostMs(candidate)" in preturn
+
+run_room = body("static qboolean SG_RunRoom", "static void SG_MovePolicy")
+assert "SG_RouteCandidateGoalMs(route_field[l5->to]" in run_room
+assert "Fields_LinkTraversalCostMs(l5)" in run_room
 
 # A completed graph ride is judged by the same active route field that
 # authorized its irreversible fire.  The strategic goal field may describe a

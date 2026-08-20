@@ -1,10 +1,5 @@
-/*
- * sg_move.c -- the gradient made flesh: movement policy and command
- * assembly.  The strafe and air-strafe controllers, run-room and
- * pursuit geometry, the plan beam, Think_Move (aim, feelers, ribbon,
- * lookahead, doors, drops, the hook brake) and Think_Emit (sub-steps,
- * slew, weave, telemetry, ClientThink).
- */
+/* sg_move.c -- movement policy and command assembly.
+ * Owns route steering, action controllers, avoidance, and user commands. */
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "g_tourney.h"
@@ -33,6 +28,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_route_policy.h"
 #include "slipgate/sg_nade_policy.h"
 #include "slipgate/sg_crowd_pass.h"
 #include "slipgate/sg_weave_policy.h"
@@ -3164,15 +3160,19 @@ static qboolean SG_RunRoom(edict_t *e, int seed0, const int *route_field,
 		for (li5 = SG_Rune()->first_link[cs]; li5 >= 0;
 		     li5 = SG_Rune()->next_link[li5])
 		{
+			int candidate_ms;
+
 			l5 = &SG_Rune()->links[li5];
 			if (l5->action != RL_RUN)
 				continue;
 			if (l5->anchor[0] != 0.0f || l5->anchor[1] != 0.0f ||
 			    l5->anchor[2] != 0.0f)
 				continue;
-			if (route_field[l5->to] < nv5)
+			candidate_ms = SG_RouteCandidateGoalMs(route_field[l5->to],
+			    Fields_LinkTraversalCostMs(l5), SG_FIELD_INF);
+			if (candidate_ms < nv5)
 			{
-				nv5 = route_field[l5->to];
+				nv5 = candidate_ms;
 				nx5 = li5;
 			}
 		}
@@ -3275,7 +3275,6 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 			SG_Strafe(cmd, fwd, right, e->velocity, dir, sp, frametime, 1.0f);
 	}
 }
-
 
 static void SG_PlanBeam(vec3_t from, vec3_t to)
 {
@@ -3534,20 +3533,23 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				{
 					rune_link_t *candidate =
 					    &SG_Rune()->links[link_index];
+					int candidate_ms;
 
 					if (candidate->action != RL_RUN)
 						continue;
-					if (preturn_route_field[candidate->to] < next_value)
+					candidate_ms = SG_RouteCandidateGoalMs(
+					    preturn_route_field[candidate->to],
+					    Fields_LinkTraversalCostMs(candidate), SG_FIELD_INF);
+					if (candidate_ms < next_value)
 					{
-						next_value = preturn_route_field[candidate->to];
+						next_value = candidate_ms;
 						next_link = link_index;
 					}
 				}
 				if (next_link >= 0)
 				{
-					/* one step: the dose curve peaked here (+46%%
-					 * chains) and flattened at two (226: the far aim
-					 * clips corridor corners). The next tile it is. */
+					/* One step faces the landing toward its next tile without
+					 * steering the current flight across a corridor corner. */
 					VectorCopy(
 					    SG_Rune()->seeds[
 					        SG_Rune()->links[next_link].to].origin,
@@ -7325,8 +7327,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			    e->client->ctf.ctfid, level.time) * SG_WEAVE_SIDE);
 		}
 	}
-
-
 
 	/* Occasionally ease off on safe grounded travel. Carrying, combat, hooks,
 	 * and danger cancel the breather immediately. */
