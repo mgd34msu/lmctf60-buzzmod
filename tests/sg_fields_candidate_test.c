@@ -614,6 +614,12 @@ static void CheckCarrierProjectionPricesWholeEdge(void)
 	/* Seed 1 occupies the requested cost band but is on the slow parallel
 	 * branch. The lead station stays on the carrier's selected route. */
 	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 150, 250) == 3);
+	/* A lead station must advance off the carrier's own seed even when the
+	 * requested near-home band also contains the carrier. */
+	home[0] = 300;
+	home[2] = 200;
+	home[3] = 100;
+	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 0, 450) == 2);
 	home[0] = SG_FIELD_INF;
 	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 150, 250) == -1);
 	home[0] = 600;

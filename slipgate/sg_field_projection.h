@@ -108,20 +108,21 @@ static inline int SG_FieldProjectionSteps(const rune_t *r,
 static inline int SG_FieldCarrierLeadStation(const rune_t *r,
 	const int *home, int carrier_seed, int cost_lo, int cost_hi)
 {
-	int seed = carrier_seed;
+	int seed;
 	int hop;
 
 	if (!r || !home || carrier_seed < 0 ||
 	    carrier_seed >= r->hdr.num_seeds || home[carrier_seed] < 0 ||
 	    home[carrier_seed] >= SG_FIELD_INF || cost_lo < 0 || cost_lo > cost_hi)
 		return -1;
+	seed = SG_FieldProjectionStep(r, home, carrier_seed);
 	for (hop = 0; hop < r->hdr.num_seeds; hop++)
 	{
+		if (seed < 0)
+			break;
 		if (home[seed] >= cost_lo && home[seed] <= cost_hi)
 			return seed;
 		seed = SG_FieldProjectionStep(r, home, seed);
-		if (seed < 0)
-			break;
 	}
 	return -1;
 }
