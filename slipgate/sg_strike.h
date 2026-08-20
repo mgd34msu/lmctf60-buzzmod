@@ -233,9 +233,30 @@ float SG_StrikeFlagTouchThrottle(int touch_authorized, float distance,
 int SG_StrikeCarrierOwnFlagAimAllowed(int flag_available, int flag_at_home,
 	int direct_touch);
 
-/* Bounded pricing correction for the last proved RUNs toward a home enemy
- * flag.  This never grants touch or movement authority; it only breaks a
- * near-stand field plateau in favor of physical progress toward the item. */
+typedef enum sg_flag_approach_source_e
+{
+	SG_FLAG_APPROACH_NONE = 0,
+	SG_FLAG_APPROACH_HOME,
+	SG_FLAG_APPROACH_BELIEF
+} sg_flag_approach_source_t;
+
+/* Home position is public. Astray position comes only from the team's bounded
+ * CACO belief seed. No caller may substitute the hidden flag entity origin. */
+static inline sg_flag_approach_source_t SG_StrikeFlagApproachSource(
+	int touch_mission, int flag_at_home, int belief_seed, int seed_count)
+{
+	if ((touch_mission != 0 && touch_mission != 1) ||
+	    (flag_at_home != 0 && flag_at_home != 1) || seed_count <= 0 ||
+	    !touch_mission)
+		return SG_FLAG_APPROACH_NONE;
+	if (flag_at_home)
+		return SG_FLAG_APPROACH_HOME;
+	return belief_seed >= 0 && belief_seed < seed_count
+	    ? SG_FLAG_APPROACH_BELIEF : SG_FLAG_APPROACH_NONE;
+}
+
+/* Bounded pricing correction for the last proved RUNs toward an authorized
+ * flag location. This never grants touch or movement authority. */
 float SG_StrikeFlagApproachPrice(int flag_available, int touch_authorized,
 	int run_link,
 	float current_distance, float candidate_distance, float vertical_delta,

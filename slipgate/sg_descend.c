@@ -1,8 +1,4 @@
-/*
- * sg_descend.c -- the descent and the commitment: the candidate walk
- * over every proven link, and everything between the argmin and the
- * aim. Duel_Price and the bearing bucket are private to it.
- */
+/* Route selection, commitment, and descent for proved links. */
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
@@ -313,7 +309,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	float rail_dose = 0.0f;
 	qboolean rail_hold = false;
 	qboolean supply_route = SG_DefenseSupplyActive(bot) && route_pure;
-	edict_t *approach_flag = NULL;
+	vec3_t approach_flag_origin;
+	sg_flag_approach_source_t approach_source = SG_FLAG_APPROACH_NONE;
 	float approach_flag_distance = 0.0f;
 	qboolean approach_flag_touch = false;
 	int nonworsening_route_neighbors = 0;
@@ -327,31 +324,34 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	    role == SG_ROLE_CARRY, sg_cv.carrypress->value != 0.0f);
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
-
-	/* The home enemy flag is public CTF state.  Keep its physical item
-	 * position as a bounded last-room pricing input; dropped/carried flags do
-	 * not enter because their availability/knowledge has different authority. */
-	if (enemy_pressure)
+	/* Home is public. Astray approach uses only the team's bounded belief seed. */
+	if (enemy_touch_mission && bot->seed >= 0 &&
+	    bot->seed < SG_Rune()->hdr.num_seeds)
 	{
 		edict_t *flag = SG_EnemyFlag(team);
-
-		if (flag && ctf_flagathome(flag) && bot->seed >= 0 &&
-		    bot->seed < SG_Rune()->hdr.num_seeds)
+		sg_belief_flag_t *belief = &sg_caco_team_belief.flag[SG_TeamIdx(team)]
+		    [SG_TeamIdx(SG_EnemyTeam(team))];
+		qboolean home = flag && ctf_flagathome(flag);
+		approach_source = SG_StrikeFlagApproachSource(enemy_touch_mission, home,
+		    belief->where_seed, SG_Rune()->hdr.num_seeds);
+		if (approach_source == SG_FLAG_APPROACH_HOME)
+			VectorCopy(flag->s.origin, approach_flag_origin);
+		else if (approach_source == SG_FLAG_APPROACH_BELIEF)
+			VectorCopy(SG_Rune()->seeds[belief->where_seed].origin,
+			    approach_flag_origin);
+		if (approach_source != SG_FLAG_APPROACH_NONE)
 		{
-			approach_flag_distance = SG_DistXY(e->s.origin, flag->s.origin);
+			approach_flag_distance = SG_DistXY(e->s.origin, approach_flag_origin);
 			if (approach_flag_distance <= 600.0f &&
-			    fabsf(flag->s.origin[2] - e->s.origin[2]) <= 96.0f)
+			    fabsf(approach_flag_origin[2] - e->s.origin[2]) <= 96.0f)
 			{
-				approach_flag = flag;
-				/* Distance alone does not hand movement to the pickup. A close
-				 * projection through a wall keeps its proved RUN preference until
-				 * the shared same-floor hull trace authorizes the real touch. */
+				/* Distance does not grant movement through a wall or other floor;
+				 * the shared hull trace still owns the real touch. */
 				approach_flag_touch =
 				    SG_AttackFlagDirectTouchAuthority(e, team, NULL);
 			}
 		}
 	}
-
 	/* The immediate-return price is meaningful only when the field offers a
 	 * second route that does not give progress back. Count distinct neighbors
 	 * at or below the current live route cost; a finite uphill exit cannot be
@@ -554,14 +554,14 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean mechanism_bound = false;
 		int b;
-		if (approach_flag)
+		if (approach_source != SG_FLAG_APPROACH_NONE)
 		{
 			float candidate_distance = SG_DistXY(
-			    SG_Rune()->seeds[l->to].origin, approach_flag->s.origin);
+			    SG_Rune()->seeds[l->to].origin, approach_flag_origin);
 			v += SG_StrikeFlagApproachPrice(true, approach_flag_touch,
 			    l->action == RL_RUN,
 			    approach_flag_distance, candidate_distance,
-			    SG_Rune()->seeds[l->to].origin[2] - approach_flag->s.origin[2],
+			    SG_Rune()->seeds[l->to].origin[2] - approach_flag_origin[2],
 			    goal_field[bot->seed], candidate_goal_ms);
 		}
 		if (SG_ActionMechanismPlanRequired(l->action))
