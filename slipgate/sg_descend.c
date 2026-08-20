@@ -1040,16 +1040,15 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
-		/* A stable per-life link tilt spreads bots across near-optimal routes
-		 * without per-frame flapping. */
+		/* Stable per-life variety may break a near-tie, but must not scale the
+		 * whole map-wide objective cost. */
 		if (sg_cv.routejitter->value > 0.0f)
 		{
 			unsigned rj = SG_RouteJitterDraw(bot->instance_token,
 			    (unsigned)(e - g_edicts - 1), (unsigned)bot->lives,
 			    (unsigned)bot->legs, (unsigned)li);
 
-			v *= 1.0f + ((float)rj / 1023.0f - 0.5f) * 0.02f *
-			     sg_cv.routejitter->value;
+			v += SG_RouteJitterOffset(rj, sg_cv.routejitter->value);
 		}
 
 		/* Penalize a return to the previous seed when another non-worsening

@@ -748,11 +748,9 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
         carry_start = descend.index(
             "if (tc->role == SG_ROLE_CARRY &&\n"
-            "\t\t    sg_cv.carrycover->value > 0"
-        )
-        carry = descend[carry_start:
-                        descend.index("if (sg_cv.routejitter->value > 0.0f)",
-                                      carry_start)]
+            "\t\t    sg_cv.carrycover->value > 0")
+        carry_end = descend.index("if (sg_cv.routejitter->value > 0.0f)", carry_start)
+        carry = descend[carry_start:carry_end]
 
         self.assertIn("Caco_EnemyObservationValid(r, team1, client",
                       writer)
@@ -765,6 +763,8 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         self.assertIn("Caco_EnemyPlace(r, t, ecl, seed", caco)
         self.assertIn("en->seed >= 0", carry)
         self.assertIn("en->seed < SG_Rune()->hdr.num_seeds", carry)
+        self.assertIn("v += SG_RouteJitterOffset(rj,", descend)
+        self.assertNotIn("v *= 1.0f + ((float)rj", descend)
 
     def test_cvar_and_static_hold_order(self) -> None:
         cvars = (ROOT / "slipgate/sg_cvars.h").read_text()

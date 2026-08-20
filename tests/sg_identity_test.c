@@ -173,6 +173,14 @@ static void TestRouteJitterIdentity(void)
 	CHECK(SG_RouteJitterDraw(first_instance, 7, 1, 0, 42) !=
 	      SG_RouteJitterDraw(first_instance, 7, 0, 1, 42));
 	CHECK(first != SG_RouteJitterDraw(first_instance, 7, 0, 0, 43));
+	CHECK(SG_RouteJitterOffset(0, 8.0f) == -8.0f);
+	CHECK(SG_RouteJitterOffset(1023, 8.0f) == 8.0f);
+	CHECK(SG_RouteJitterOffset(0, 100.0f) == -20.0f);
+	CHECK(SG_RouteJitterOffset(1023, 100.0f) == 20.0f);
+	CHECK(SG_RouteJitterOffset(0, 0.0f) == 0.0f);
+	CHECK(SG_RouteJitterOffset(0, -1.0f) == 0.0f);
+	CHECK(SG_RouteJitterOffset(0, NAN) == 0.0f);
+	CHECK(SG_RouteJitterOffset(1024, 8.0f) == 0.0f);
 	CHECK(rand() == expected_random);
 }
 

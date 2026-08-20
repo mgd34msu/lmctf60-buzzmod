@@ -2,6 +2,7 @@
 #ifndef SG_ROUTE_JITTER_H
 #define SG_ROUTE_JITTER_H
 
+#include <math.h>
 #include <stdint.h>
 
 static inline uint32_t SG_RouteJitterMix(uint32_t value)
@@ -41,6 +42,17 @@ static inline unsigned SG_RouteJitterDraw(uint64_t instance_token,
 	    (link_index + 1u) * UINT32_C(0x27d4eb2d);
 
 	return (SG_RouteJitterMix(value) >> 4) & 1023u;
+}
+
+/* Route variety is a tie-breaker, not a percentage of the whole field cost. */
+static inline float SG_RouteJitterOffset(unsigned draw, float dose)
+{
+	float amplitude;
+
+	if (draw > 1023u || !isfinite(dose) || dose <= 0.0f)
+		return 0.0f;
+	amplitude = dose < 20.0f ? dose : 20.0f;
+	return ((float)draw / 1023.0f * 2.0f - 1.0f) * amplitude;
 }
 
 #endif /* SG_ROUTE_JITTER_H */
