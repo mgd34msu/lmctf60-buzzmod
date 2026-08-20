@@ -284,10 +284,7 @@ typedef struct sg_bot_s
 		                                           * budget; zero while making progress */
 	int			commit_link;    /* the gradient step being held */
 	float		commit_until;
-	/* Field identity that authorized the retained step.  Pure objective
-	 * changes may retire a still-reversible RUN immediately instead of
-	 * spending the generic three-second latch on the superseded mission. */
-	const int		*commit_route_field;
+	sg_field_key_t		commit_route_goal;
 	/* Exact route transaction selected while the strike coordinator owns its
 	 * bounded weapon diversion.  The immutable core deadline is copied here;
 	 * draining means authority ended after a physical controller began. */

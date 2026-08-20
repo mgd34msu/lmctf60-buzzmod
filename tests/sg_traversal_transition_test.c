@@ -8,6 +8,7 @@
 
 static int failures;
 static rune_link_t links[2];
+static int route_field[1];
 static rune_t rune;
 
 void SG_StrikeTestSetRune(rune_t *value);
@@ -49,7 +50,7 @@ static void ArmBallistic(sg_bot_t *bot, int action, qboolean physical)
 	bot->commit_link = bot->sticky_link = 1;
 	bot->commit_until = 30.0f;
 	bot->latch_until = 25.0f;
-	bot->commit_route_field = (const int *)links;
+	bot->commit_route_goal = (sg_field_key_t){ route_field, 0 };
 	if (action == RL_JUMP)
 	{
 		bot->jump_link = 1;
@@ -79,7 +80,7 @@ static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 		ArmBallistic(&bot, actions[index], false);
 		SG_CarryStartRetireSupersededRoute(&bot, true);
 		CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
-		    bot.commit_route_field == NULL);
+		    bot.commit_route_goal.field == NULL);
 		CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 		if (actions[index] == RL_JUMP)
 			CHECK(bot.jump_link == -1 && !bot.jump_started);
@@ -114,11 +115,11 @@ static void TestStrikeDutyRetiresSupersededRoute(void)
 	bot.tac_time = 12.0f;
 	bot.commit_link = bot.sticky_link = 0;
 	bot.commit_until = bot.latch_until = 30.0f;
-	bot.commit_route_field = (const int *)links;
+	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
 	SG_StrikeDutyRetireSupersededRoute(&bot, true);
 	CHECK(bot.tac_seed == -1 && bot.tac_time == 0.0f);
 	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
-	    bot.commit_route_field == NULL);
+	    bot.commit_route_goal.field == NULL);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 
 	bot = Bot();

@@ -1748,26 +1748,20 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 	return false;
 }
 
-/* A pure route is an exact mission owner: enemy pressure, recovery, escort,
- * or an exact item-pad diversion.  The ordinary link latch predates those
- * identities and otherwise restores a RUN selected by the previous field for
- * up to three seconds after the mission changes.  A graph hook can be worse:
- * its fire gate proves that the old endpoint still makes some progress, but
- * that does not make it useful to the replacement mission.  Retire a
- * reversible RUN or not-yet-fired hook when its exact field changes.  A
- * controller that has crossed into physics continues under its own bounded
- * completion law, and composed (non-pure) surfaces keep their normal anti-flap
- * commitment. */
-static void PureRoutePrepareCommit(sg_bot_t *bot, const sg_think_t *tc)
+/* Pure routes retire reversible RUN and unfired HOOK commitments when their
+ * dynamic goal changes.  Physical controllers keep their bounded completion. */
+static void RetireSupersededPureRouteCommit(sg_bot_t *bot, const sg_think_t *tc)
 {
 	rune_t *rune = SG_Rune();
+	sg_field_key_t current_goal;
 	int action;
 
 	if (!bot || !tc || !tc->route_pure || !tc->route_field || !rune ||
 	    !rune->links || bot->commit_link < 0 ||
-	    bot->commit_link >= rune->hdr.num_links ||
-	    !bot->commit_route_field ||
-	    bot->commit_route_field == tc->route_field)
+	    bot->commit_link >= rune->hdr.num_links)
+		return;
+	current_goal = SG_FieldKey(rune, tc->route_field);
+	if (SG_FieldKeyMatches(bot->commit_route_goal, current_goal))
 		return;
 	action = rune->links[bot->commit_link].action;
 	if ((action != RL_RUN && action != RL_HOOK) ||
@@ -1818,7 +1812,7 @@ static void StrikeCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
 		return;
 	new_link = &rune->links[bestlink];
 	bot->commit_link = bestlink;
-	bot->commit_route_field = tc->route_field;
+	bot->commit_route_goal = SG_FieldKey(rune, tc->route_field);
 	if (tc->strike_weapon_pursuit &&
 	    isfinite(tc->strike_weapon_deadline) &&
 	    tc->strike_weapon_deadline > level.time)
@@ -1935,7 +1929,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	/* Reconcile exact purpose before generic restoration can put it back. */
 	if (StrikeWeaponPrepareCommit(bot, tc))
 		return bot->commit_link;
-	PureRoutePrepareCommit(bot, tc);
+	RetireSupersededPureRouteCommit(bot, tc);
 
 	/* The supply transaction is a bounded navigation owner, not a second
 	 * objective.  Irrecoverable identity/life/role edges cancel it; edges that
@@ -3919,10 +3913,10 @@ void SG_StrikeTestCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
 	StrikeCommitFreshLink(bot, tc, bestlink);
 }
 
-void SG_StrikeTestPureRoutePrepareCommit(sg_bot_t *bot,
+void SG_StrikeTestRetireSupersededPureRouteCommit(sg_bot_t *bot,
 	const sg_think_t *tc)
 {
-	PureRoutePrepareCommit(bot, tc);
+	RetireSupersededPureRouteCommit(bot, tc);
 }
 
 qboolean SG_StrikeTestRailLateOverrideAllowed(const sg_bot_t *bot,

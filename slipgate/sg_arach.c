@@ -2255,7 +2255,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->declared_door_recovery_since = 0.0f;
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
-	bot->commit_route_field = NULL;
+	bot->commit_route_goal = (sg_field_key_t){ 0 };
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;

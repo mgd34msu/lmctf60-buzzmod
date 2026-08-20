@@ -30,8 +30,6 @@ qboolean SG_StrikeTestApplyRallyPolicy(sg_bot_t *bot,
 	const sg_think_t *tc, qboolean *rally_hold);
 qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
 	int ordered_role);
-void SG_StrikeTestPureRoutePrepareCommit(sg_bot_t *bot,
-	const sg_think_t *tc);
 int SG_TraversalTransitionTests(void);
 static int failures;
 #define CHECK(condition) do { \
@@ -275,7 +273,7 @@ static void ArmExact(sg_bot_t *bot, sg_think_t *tc, int action)
 	test_links[1].action = (byte)action;
 	bot->commit_link = 1;
 	bot->commit_until = 30.0f;
-	bot->commit_route_field = weapon_field;
+	bot->commit_route_goal = (sg_field_key_t){ weapon_field, 1 };
 	bot->strike_weapon_link = 1;
 	bot->strike_weapon_until = 20.0f;
 	bot->strike_weapon_target_ent = 6;
@@ -286,6 +284,16 @@ static void ArmExact(sg_bot_t *bot, sg_think_t *tc, int action)
 	bot->bl_link[0] = 77;
 	bot->bl_until[0] = 88.0f;
 	tc->strike_weapon_deadline = 20.0f;
+}
+
+static void ArmPureRoute(sg_bot_t *bot, sg_think_t *tc, int action)
+{
+	WorldReset();
+	*bot = Bot();
+	*tc = Think();
+	tc->route_pure = true;
+	test_links[1].action = (byte)action;
+	SG_StrikeTestCommitFreshLink(bot, tc, 1);
 }
 
 static void CheckCleared(const sg_bot_t *bot)
@@ -331,7 +339,8 @@ static void TestFreshTagAndOldCommitment(void)
 	CHECK(candidate == 1);
 	SG_StrikeTestCommitFreshLink(&bot, &tc, candidate);
 	CHECK(bot.commit_link == 1);
-	CHECK(bot.commit_route_field == weapon_field);
+	CHECK(bot.commit_route_goal.field == weapon_field);
+	CHECK(bot.commit_route_goal.root_seed == 1);
 	CHECK(bot.strike_weapon_link == 1);
 	CHECK(bot.strike_weapon_until == 15.0f);
 	CHECK(!bot.strike_weapon_draining);
@@ -408,67 +417,55 @@ static void TestFreshTagAndOldCommitment(void)
 	CHECK(SG_StrikeTestWeaponFilterFreshCandidate(&bot, &tc, 1) == -1);
 }
 
-static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
-	{
-		sg_bot_t bot;
-		sg_think_t tc;
-		WorldReset();
-	bot = Bot();
-	tc = Think();
-	tc.route_pure = true;
-	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+static void TestPureRouteChangeRetiresReversibleCommitments(void)
+{
+	sg_bot_t bot;
+	sg_think_t tc;
+	ArmPureRoute(&bot, &tc, RL_RUN);
 	bot.sticky_link = 1;
 	bot.latch_until = 25.0f;
-	CHECK(bot.commit_route_field == weapon_field);
-
-	tc.goal_field = enemy_field;
+	CHECK(bot.commit_route_goal.field == weapon_field &&
+	    bot.commit_route_goal.root_seed == 1);
 	tc.route_field = enemy_field;
-	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
 	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
-	CHECK(bot.commit_route_field == NULL);
+	CHECK(bot.commit_route_goal.field == NULL);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 
-	bot = Bot();
-	tc = Think();
-	tc.route_pure = true;
-	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
-	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	ArmPureRoute(&bot, &tc, RL_RUN);
+	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1 && bot.commit_route_goal.field == weapon_field);
+	weapon_field[0] = 1200;
+	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
 	CHECK(bot.commit_link == 1);
-	CHECK(bot.commit_route_field == weapon_field);
+	weapon_field[1] = 1200;
+	weapon_field[2] = 300;
+	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
 
+	ArmPureRoute(&bot, &tc, RL_RUN);
 	tc.route_pure = false;
 	tc.route_field = enemy_field;
-	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
 	CHECK(bot.commit_link == 1);
 
-	tc.route_pure = true;
-	bot.hook_phase = 2;
-	bot.hook_link = 1;
-	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
-	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
-
-	bot = Bot();
-	tc = Think();
-	tc.route_pure = true;
-	test_links[1].action = RL_HOOK;
-	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	ArmPureRoute(&bot, &tc, RL_HOOK);
 	bot.hook_phase = 1;
 	bot.hook_link = 1;
-	tc.route_field = enemy_field;
-	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
+	weapon_field[1] = 1200;
+	weapon_field[2] = 300;
+	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
 	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
-	CHECK(bot.hook_link == -1 && bot.commit_route_field == NULL);
+	CHECK(bot.hook_link == -1 && bot.commit_route_goal.field == NULL);
 
-	bot = Bot();
-	tc = Think();
-	tc.route_pure = true;
-	test_links[1].action = RL_HOOK;
-	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
+	ArmPureRoute(&bot, &tc, RL_HOOK);
 	bot.hook_phase = 2;
 	bot.hook_link = 1;
-	tc.route_field = enemy_field;
-	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
-	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
+	weapon_field[1] = 1200;
+	weapon_field[2] = 300;
+	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 &&
+	    bot.commit_route_goal.root_seed == 1);
 }
 
 static void TestDeadlineGoAndCurrentCandidate(void)
@@ -1145,7 +1142,7 @@ static void TestMissionAndCombatCannotShelveRoutes(void)
 int main(void)
 {
 	TestFreshTagAndOldCommitment();
-	TestPureRouteChangeRetiresOnlyReversibleRun();
+	TestPureRouteChangeRetiresReversibleCommitments();
 	failures += SG_TraversalTransitionTests();
 	TestDeadlineGoAndCurrentCandidate();
 	TestSpeedHookAndStickyDrain();

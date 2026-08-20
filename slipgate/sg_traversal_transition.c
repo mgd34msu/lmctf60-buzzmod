@@ -35,7 +35,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		return;
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
-	bot->commit_route_field = NULL;
+	bot->commit_route_goal = (sg_field_key_t){ 0 };
 	bot->sticky_link = -1;
 	bot->latch_until = 0.0f;
 	if (bot->hook_phase == 1)
