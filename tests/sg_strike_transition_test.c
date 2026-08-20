@@ -1151,12 +1151,14 @@ static void TestMissionHoldSurvivesGenericWedgeValve(void)
 	CHECK(!SG_RoleMissionHold(SG_ROLE_ESCORT, 1500, false, false));
 	CHECK(!SG_RoleMissionHold(SG_ROLE_ATTACK, 100, false, false));
 	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, SG_FIELD_INF, true, false));
-	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_ATTACK, 100, 3.0f));
-	CHECK(!SG_OptionalItemDetourAllowed(1, 0, SG_ROLE_ATTACK, 100, 3.0f));
-	CHECK(!SG_OptionalItemDetourAllowed(0, 1, SG_ROLE_ATTACK, 100, 3.0f));
-	CHECK(!SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 61, 3.0f));
-	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 60, 3.0f));
-	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 100, 2.99f));
+	CHECK(!SG_CarrierEscapeActive(SG_ROLE_ATTACK));
+	CHECK(SG_CarrierEscapeActive(SG_ROLE_CARRY));
+	CHECK(!SG_CarrierEscapeActive(SG_ROLES));
+	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_ATTACK, 100));
+	CHECK(!SG_OptionalItemDetourAllowed(1, 0, SG_ROLE_ATTACK, 100));
+	CHECK(!SG_OptionalItemDetourAllowed(0, 1, SG_ROLE_ATTACK, 100));
+	CHECK(!SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 61));
+	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 60));
 }
 
 static void TestCombatActivityResetsGenericWedgeClock(void)

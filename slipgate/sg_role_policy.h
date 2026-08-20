@@ -166,12 +166,17 @@ static inline int SG_ObjectiveRole(int organic_role, int escort_mission)
  * coordinator mission owns the route outright; neither may be bent by the
  * generic shopping surface.  The established healthy-carrier rule remains
  * the third independent suppression. */
+static inline int SG_CarrierEscapeActive(int role)
+{
+	return role == SG_ROLE_CARRY;
+}
+
 static inline int SG_OptionalItemDetourAllowed(int push,
-	int strike_blocks_optional, int role, int health, float legcarrier)
+	int strike_blocks_optional, int role, int health)
 {
 	if (push || strike_blocks_optional)
 		return 0;
-	if (role == SG_ROLE_CARRY && health > 60 && legcarrier >= 3.0f)
+	if (SG_CarrierEscapeActive(role) && health > 60)
 		return 0;
 	return 1;
 }

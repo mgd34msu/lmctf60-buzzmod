@@ -48,7 +48,6 @@
 	X(itemlead, "sg_itemlead", "1") \
 	X(landlead, "sg_landlead", "1") \
 	X(landtick, "sg_landtick", "0") \
-	X(legcarrier, "sg_legcarrier", "0") \
 	X(linklatch, "sg_linklatch", "0") \
 	X(lonewolf, "sg_lonewolf", "1") \
 	X(lookahead, "sg_lookahead", "0") \

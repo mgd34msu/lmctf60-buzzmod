@@ -1804,9 +1804,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	route_pure = false;
 	if (!tc->strike_blocks_optional && sg_cv.tactics->value &&
 	    role != SG_ROLE_ESCORT &&
-	    /* CARRY excluded: route_pure suppresses the
-	     * danger and detour terms for 10s a commit -- the exact corridors
-	     * cover/carrypress/legcarrier exist to keep carriers off */
+	    /* A carrier keeps the live escape field instead of committing to a
+	     * ten-second tactical waypoint. */
 	    role != SG_ROLE_CARRY && bot->seed >= 0 &&
 	    goal_field[bot->seed] < SG_FIELD_INF &&
 	    goal_field[bot->seed] >= 400)

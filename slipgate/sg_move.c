@@ -4147,13 +4147,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								break;
 							}
 							{
-								/* observations (sg_legcarrier): the burst is
-								 * the OPTIONAL rope -- a standing aim for
-								 * speed legs already have. The carrier
-								 * keeps climb ropes and loses the
-								 * ceremony; everyone else bursts on. */
-								if (!(sg_cv.legcarrier->value &&
-								      tc->role == SG_ROLE_CARRY))
+								/* A carrier keeps proved route momentum instead of
+								 * stopping to aim an optional speed rope. */
+								if (!SG_CarrierEscapeActive(tc->role))
 								{
 									VectorCopy(htr.endpos, bot->hook_anchor);
 									VectorCopy(aim, bot->hook_dest);
@@ -5165,15 +5161,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			bot->nav_drove = true;
 		}
 
-		/* and braking OUT of a rope: hold the landing until the body is
-		 * standing where the phantom stood, then argue the next step --
-		 * except a carrier under legcarrier dose 2: the pace ledger
-		 * (218-219: legs +59%% speed) says the flag pays for stillness
-		 * with blood, and a landing run out beats a landing stood */
+		/* Hold an ordinary landing where the proof ended. A carrier runs out
+		 * immediately because the live escape route still owns its legs. */
 		if (SG_TimerPending(bot->hook_landbrake) && e->groundentity &&
 		    !tc->jump_launch && !bot->jump_started && !bot->drop_started &&
-		    !(tc->role == SG_ROLE_CARRY &&
-		      sg_cv.legcarrier->value >= 2.0f))
+		    !SG_CarrierEscapeActive(tc->role))
 		{
 			cmd->forwardmove = 0;
 			cmd->sidemove = 0;
