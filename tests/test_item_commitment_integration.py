@@ -44,15 +44,34 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertNotIn("SG_Chat", reject)
 
     def test_spawned_powerup_homing_requires_local_clear_pickup_access(self):
-        source = self.text("slipgate/sg_lead.c")
-        start = source.index("qboolean Lead_PickupTarget")
-        end = source.index("static qboolean Lead_Flood", start)
+        lead = self.text("slipgate/sg_lead.c")
+        source = self.text("slipgate/sg_pickup_target.c")
+        start = source.index("qboolean SG_LocalPickupTarget")
+        end = source.index("qboolean SG_WeaponPickupRouteEligible", start)
         pickup = source[start:end]
         self.assertIn("160.0f * 160.0f", pickup)
         self.assertIn("fabsf(delta[2]) > 64.0f", pickup)
         self.assertIn("sg_host.trace(self->s.origin, self->mins, self->maxs", pickup)
         self.assertIn("trace.startsolid || trace.allsolid", pickup)
         self.assertIn("trace.ent != item", pickup)
+        self.assertIn(
+            "return SG_LocalPickupTarget(bot->ent, item, target);",
+            lead,
+        )
+
+    def test_selected_weapon_route_finishes_at_the_physical_pickup(self):
+        move = self.text("slipgate/sg_move.c")
+        start = move.index("/* last resort: the goal itself, by belief */")
+        end = move.index("if (!have_aim && SG_OrderedEscortDirectAimAllowed", start)
+        terminal = move[start:end]
+        self.assertIn(
+            "SG_WeaponPickupTarget(bot, tc->strike_weapon_pursuit, aim)",
+            terminal,
+        )
+        self.assertLess(
+            terminal.index("SG_WeaponPickupTarget"),
+            terminal.index("Lead_PickupTarget"),
+        )
 
     def test_major_static_pickup_closes_lead_before_belief_bookkeeping(self):
         source = self.text("slipgate/sg_caco.c")
@@ -100,7 +119,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
 
     def test_terminal_homing_precedes_role_fallback(self):
         source = self.text("slipgate/sg_move.c")
-        pickup = source.index("if (Lead_PickupTarget(bot, aim))")
+        pickup = source.index("SG_WeaponPickupTarget(")
         escort = source.index(
             "if (!have_aim && SG_OrderedEscortDirectAimAllowed(", pickup)
         carry = source.index("else if (!have_aim && role == SG_ROLE_CARRY)", escort)
@@ -176,9 +195,8 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("SG_CombatWeaponPickupTier(item)", weapon)
         self.assertIn("SG_ItemGainSourceCost(gains[i], best_gain)", weapon)
         self.assertIn("sg_weapon_collectible_cost[bi][i] != costs[i]", weapon)
-        defense = goal[goal.index("static qboolean DefenseSupplyTargetValid"):
-                       weapon_start]
-        self.assertIn("WeaponPickupRouteEligible(item, bot->ent)", defense)
+        defense = self.text("slipgate/sg_pickup_target.c")
+        self.assertIn("SG_WeaponPickupRouteEligible(item, bot->ent)", defense)
         self.assertNotIn("SG_WeaponUpgradeRouteAdmission", defense)
         health_start = goal.index("const int *SG_CollectibleHealthField")
         health = goal[health_start:ammo_start]

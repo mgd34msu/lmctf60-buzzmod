@@ -198,6 +198,7 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
     def test_acquisition_and_edges_enter_return_without_rearming(self) -> None:
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
+        pickup = (ROOT / "slipgate/sg_pickup_target.c").read_text()
         supply_header = (ROOT / "slipgate/sg_defense_supply.h").read_text()
 
         self.assertIn("weapon_state.nonblaster_available", goal)
@@ -208,7 +209,7 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
                       goal)
         self.assertIn("DefenseSupplyTargetValid(bot)", goal)
         self.assertIn("G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker)",
-                      goal)
+                      pickup)
         self.assertIn("DefenseSupplyOtherOwner(bot, true)", goal)
         self.assertIn("DefenseSupplyRetireRun(bot)", goal)
         self.assertIn("DefenseSupplyRetireRailRetry(bot)", goal)
@@ -242,12 +243,13 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
         caco = (ROOT / "slipgate/sg_caco.c").read_text()
+        pickup = (ROOT / "slipgate/sg_pickup_target.c").read_text()
 
-        self.assertIn("WeaponPickupRouteEligible", goal)
+        self.assertIn("SG_WeaponPickupRouteEligible", goal)
         self.assertIn("G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker)",
-                      goal)
-        self.assertIn('strcmp(item->classname, "weapon_hook")', goal)
-        self.assertNotIn('"weapon_grappling_hook"', goal)
+                      pickup)
+        self.assertIn('strcmp(item->classname, "weapon_hook")', pickup)
+        self.assertNotIn('"weapon_grappling_hook"', pickup)
         self.assertIn("StrikeWeaponTargetValid", goal)
         self.assertIn("bot->strike_weapon_target_ent = best_ent", goal)
         self.assertIn("WeaponTargetField(bot, bot->strike_weapon_target_seed)",

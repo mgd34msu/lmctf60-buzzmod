@@ -3,12 +3,14 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_item_policy.h"
 #include "slipgate/sg_item_route.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_persona.h"
+#include "slipgate/sg_pickup_target.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -127,6 +129,19 @@ qboolean G_PowerupPickupEligible(edict_t *item, edict_t *other)
 	(void)item;
 	(void)other;
 	return accept_powerup;
+}
+
+qboolean G_WeaponPickupEligible(edict_t *item, edict_t *other)
+{
+	(void)item;
+	(void)other;
+	return true;
+}
+
+qboolean Caco_ItemBelievedUp(edict_t *item)
+{
+	(void)item;
+	return true;
 }
 
 const sg_persona_t *SG_PersonaFor(edict_t *ent)
@@ -340,6 +355,37 @@ static void TestRejectedTouchEndsOnlyExactOwner(void)
 	CHECK(sg_caco_items[0][0].claimed_by == 0);
 }
 
+static void TestSelectedWeaponFinishesAtPhysicalPickup(void)
+{
+	vec3_t target;
+	sg_bot_t *bot;
+
+	ResetWorld();
+	bot = ResetLead(SG_LEAD_WAITING, -1.0f);
+	bot->instance_token = 7ULL;
+	bot->def_supply_armed = true;
+	bot->def_supply_phase = SG_DEFENSE_SUPPLY_PHASE_OUTBOUND;
+	bot->def_supply_instance = 7ULL;
+	bot->def_supply_ent = 3;
+	bot->def_supply_target_seed = 1;
+	entities[3].classname = "weapon_rocketlauncher";
+	entities[3].solid = SOLID_TRIGGER;
+	VectorCopy(entities[3].s.origin, bot->def_supply_target_org);
+	CHECK(SG_WeaponPickupTarget(bot, false, target));
+	CHECK(target[0] == entities[3].s.origin[0]);
+	block_pickup_trace = true;
+	CHECK(!SG_WeaponPickupTarget(bot, false, target));
+	block_pickup_trace = false;
+	bot->def_supply_armed = false;
+	bot->strike_weapon_target_ent = 3;
+	bot->strike_weapon_target_seed = 1;
+	VectorCopy(entities[3].s.origin, bot->strike_weapon_target_org);
+	CHECK(!SG_WeaponPickupTarget(bot, false, target));
+	CHECK(SG_WeaponPickupTarget(bot, true, target));
+	bot->strike_weapon_target_org[0] += 2.0f;
+	CHECK(!SG_WeaponPickupTarget(bot, true, target));
+}
+
 static void TestStrongerInterruptsStillWin(void)
 {
 	sg_bot_t *bot;
@@ -540,6 +586,7 @@ int main(void)
 	TestSightConfirmedSpawnPersistsAndHomes();
 	TestExactPickupOwnershipEndsCommitment();
 	TestRejectedTouchEndsOnlyExactOwner();
+	TestSelectedWeaponFinishesAtPhysicalPickup();
 	TestStrongerInterruptsStillWin();
 	TestPowerupCapacityEndsTheErrand();
 	TestUnreachableEarlyPadDoesNotSuppressReachablePad();

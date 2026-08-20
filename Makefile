@@ -395,13 +395,12 @@ STRIKE_ADAPTER_TEST_ALL_ARTIFACTS := \
 	.sg_strike_adapter_under_test.$(flavor).d)
 ITEM_COMMITMENT_TEST_BIN := sg_item_commitment_test.make
 ITEM_COMMITMENT_TEST_OBJS := .sg_item_commitment_test.make.o \
-	.sg_item_commitment_under_test.make.o
+	.sg_item_commitment_under_test.make.o slipgate/sg_pickup_target.o
 ITEM_COMMITMENT_TEST_DEPS := $(ITEM_COMMITMENT_TEST_OBJS:.o=.d)
 ITEM_COMMITMENT_INTEGRATION_TEST := tests/test_item_commitment_integration.py
 ITEM_COMMITMENT_TEST_ALL_ARTIFACTS := \
 	$(foreach flavor,gnu make,sg_item_commitment_test.$(flavor) \
-	.sg_item_commitment_test.$(flavor).o \
-	.sg_item_commitment_test.$(flavor).d \
+	.sg_item_commitment_test.$(flavor).o .sg_item_commitment_test.$(flavor).d \
 	.sg_item_commitment_under_test.$(flavor).o \
 	.sg_item_commitment_under_test.$(flavor).d)
 HOOK_DIAGNOSTICS_TEST_BIN := sg_hook_diagnostics_test.make
@@ -887,6 +886,7 @@ OBJS := \
 	sg_rune.o \
 	sg_arach.o \
 	slipgate/sg_localization.o \
+	slipgate/sg_pickup_target.o \
 	sg_fields.o \
 	slipgate/sg_snag_repair.o \
 	sg_caco.o \

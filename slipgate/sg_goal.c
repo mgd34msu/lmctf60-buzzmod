@@ -27,6 +27,7 @@
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_move.h"
+#include "slipgate/sg_pickup_target.h"
 
 static int intercept_field[SG_MAX_SEEDS];
 
@@ -562,44 +563,6 @@ static qboolean DefenseSupplyOtherOwner(const sg_bot_t *bot,
 	return !active && bot->commit_link >= 0;
 }
 
-static qboolean WeaponPickupRouteEligible(const edict_t *item,
-                                          const edict_t *taker)
-{
-	if (!item || !item->inuse || !item->classname ||
-	    strncmp(item->classname, "weapon_", 7) != 0)
-		return false;
-	/* The hook is always-owned equipment and the blaster is the spawn weapon;
-	 * neither can improve a below-tier strike member.  Hand grenades are an
-	 * ammo_ classname and therefore never enter this weapon-only predicate. */
-	if (strcmp(item->classname, "weapon_hook") == 0 ||
-	    strcmp(item->classname, "weapon_blaster") == 0)
-		return false;
-	return item->solid != SOLID_NOT && Caco_ItemBelievedUp((edict_t *)item) &&
-	       G_WeaponPickupEligible((edict_t *)item, (edict_t *)taker);
-}
-
-static qboolean DefenseSupplyTargetValid(const sg_bot_t *bot)
-{
-	edict_t *item;
-	int seed;
-
-	if (!bot || bot->def_supply_ent < 0 ||
-	    bot->def_supply_ent >= globals.num_edicts || !SG_Rune())
-		return false;
-	item = &g_edicts[bot->def_supply_ent];
-	if (!WeaponPickupRouteEligible(item, bot->ent))
-		return false;
-	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
-	if (seed < 0 || seed != bot->def_supply_target_seed)
-		return false;
-	{
-		vec3_t delta;
-
-		VectorSubtract(item->s.origin, bot->def_supply_target_org, delta);
-		return VectorLength(delta) <= 1.0f;
-	}
-}
-
 /* The broad class field is the live arm/reach guard.  The selected edict below
  * is the immutable target witness for this transaction; another weapon may
  * make the broad field reflow while the fixed deadline is pending, but that
@@ -709,7 +672,7 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot)
 		edict_t *item = &g_edicts[i];
 		int seed;
 
-		if (!WeaponPickupRouteEligible(item, bot->ent))
+		if (!SG_WeaponPickupRouteEligible(item, bot->ent))
 			continue;
 		gains[count] = SG_CombatWeaponPickupTier(item) -
 		    weapon.available_tier;
@@ -990,7 +953,7 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 		edict_t *item = &g_edicts[i];
 		int seed, flood_cost = 0, cost;
 
-		if (!WeaponPickupRouteEligible(item, bot->ent))
+		if (!SG_WeaponPickupRouteEligible(item, bot->ent))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
@@ -1028,26 +991,6 @@ void SG_StrikeWeaponTargetClear(sg_bot_t *bot)
 	VectorClear(bot->strike_weapon_target_org);
 }
 
-static qboolean StrikeWeaponTargetValid(const sg_bot_t *bot)
-{
-	edict_t *item;
-	int seed;
-	vec3_t delta;
-
-	if (!bot || !bot->ent || !SG_Rune() ||
-	    bot->strike_weapon_target_ent <= 0 ||
-	    bot->strike_weapon_target_ent >= globals.num_edicts)
-		return false;
-	item = &g_edicts[bot->strike_weapon_target_ent];
-	if (!WeaponPickupRouteEligible(item, bot->ent))
-		return false;
-	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
-	if (seed < 0 || seed != bot->strike_weapon_target_seed)
-		return false;
-	VectorSubtract(item->s.origin, bot->strike_weapon_target_org, delta);
-	return VectorLength(delta) <= 1.0f;
-}
-
 static qboolean StrikeWeaponFindTarget(sg_bot_t *bot)
 {
 	int i, bi, best_ent = -1, best_seed = -1;
@@ -1062,7 +1005,7 @@ static qboolean StrikeWeaponFindTarget(sg_bot_t *bot)
 		edict_t *item = &g_edicts[i];
 		int seed, ignored = 0, cost;
 
-		if (!WeaponPickupRouteEligible(item, bot->ent))
+		if (!SG_WeaponPickupRouteEligible(item, bot->ent))
 			continue;
 		seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
 		if (seed < 0)
@@ -1099,7 +1042,7 @@ const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms)
 	if (!bot || !SG_Rune() || bot->seed < 0 ||
 	    bot->seed >= SG_Rune()->hdr.num_seeds)
 		return NULL;
-	if (!StrikeWeaponTargetValid(bot))
+	if (!SG_StrikeWeaponTargetValid(bot))
 	{
 		SG_StrikeWeaponTargetClear(bot);
 		if (!StrikeWeaponFindTarget(bot))
@@ -1195,7 +1138,7 @@ static const int *DefenseSupplyTargetField(sg_bot_t *bot)
 
 	if (!bot || !SG_DefenseSupplyActive(bot) ||
 	    bot->def_supply_phase != SG_DEF_SUPPLY_OUTBOUND ||
-	    !DefenseSupplyTargetValid(bot))
+	    !SG_DefenseSupplyTargetValid(bot))
 		return NULL;
 	target_seed = bot->def_supply_target_seed;
 	target_field = WeaponTargetField(bot, target_seed);
@@ -1298,7 +1241,7 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 			step.engaged = bot->engaged_last;
 			step.human_order = SG_ChatOrderedRole(e) >= 0;
 			step.other_owner = DefenseSupplyOtherOwner(bot, true);
-			step.target_valid = DefenseSupplyTargetValid(bot);
+			step.target_valid = SG_DefenseSupplyTargetValid(bot);
 			step.weapon_field_valid = DefenseSupplyTargetFieldReachable(bot);
 			step.deadline_pending = SG_TimerPending(bot->def_supply_until);
 			step.weapon_available = weapon_state.nonblaster_available;

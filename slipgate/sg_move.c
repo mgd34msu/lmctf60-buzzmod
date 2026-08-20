@@ -37,7 +37,7 @@
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_strike.h"
-
+#include "slipgate/sg_pickup_target.h"
 #include <stdint.h>
 
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
@@ -4545,9 +4545,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the final body-length after spawn.  The pad seed has no improving
 			 * link, so target the exact live item before generic role homing can
 			 * turn the bot back toward a flag. */
-			if (Lead_PickupTarget(bot, aim))
+			if (SG_WeaponPickupTarget(bot, tc->strike_weapon_pursuit, aim) ||
+			    Lead_PickupTarget(bot, aim))
 				have_aim = true;
-
 			/* Terminal homing uses the live flag entity rather than its spawn
 			 * marker, which may be offset after droptofloor. */
 			if (!have_aim && SG_OrderedEscortDirectAimAllowed(
