@@ -194,6 +194,11 @@ endframe = body("void SG_HookLiveEndFrame", "static qboolean Hook_LiveBeginAfter
 assert "SG_HookLivePullApplied" in endframe
 assert "Hook_LiveSync(bot)" in endframe
 assert "bot->hook_replay.phase != SG_HOOK_REPLAY_WAIT_PULL" in endframe
+speed_pull = endframe.index("bot->speedhook_pull_applied = true;")
+graph_guard = endframe.index("if (!bot || !bot->hook_replay_active")
+assert "bot && bot->speedhook && bot->hook_phase == 2" in endframe
+assert "e->client->hookstate == 2 && e->client->hook" in endframe
+assert speed_pull < graph_guard
 
 pull = P_VIEW.index("Weapon_Hook_Fire(ent);")
 observe = P_VIEW.index("SG_HookLiveEndFrame(ent);", pull)

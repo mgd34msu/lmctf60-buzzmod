@@ -2165,14 +2165,8 @@ qboolean Beat_HurtSince(edict_t *e, float since)
 }
 
 
-/*
- * A bot slot and its learned map facts outlive a body.  These do not: active
- * weapon/action phases, route commitments, local progress samples, holds and
- * carry-specific policy.  Clear them once on the death edge so a respawn can
- * never finish a hook, rocket jump, grenade cook or mission chosen by the
- * previous life.  Blacklists, dead-door lessons, danger, persona and tilt are
- * intentionally absent: those are knowledge the next life is meant to keep.
- */
+/* Body actions do not outlive a death. Preserve learned map facts, danger,
+ * persona, tilt, and dead-door lessons. */
 static void Bot_ResetLifeActions(sg_bot_t *bot)
 {
 	int i;
@@ -2208,6 +2202,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->hook_legacy_arrived = false;
 	bot->flow_release = false;
 	bot->speedhook = false;
+	bot->speedhook_pull_applied = false;
 	VectorClear(bot->hp_cur_dep);
 	VectorClear(bot->hp_prev_dep);
 	bot->hp_prev_land = 0.0f;
@@ -2968,6 +2963,7 @@ void SG_BotThink(sg_bot_t *bot)
 			bot->hook_link = -1;
 			bot->hook_entity = NULL;
 			bot->speedhook = false;
+			bot->speedhook_pull_applied = false;
 			bot->nade_phase = 0;
 			SG_NadeTargetClear(bot);
 			return;
@@ -2995,6 +2991,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->hook_legacy_settle = false;
 		bot->hook_legacy_arrived = false;
 		bot->speedhook = false;
+		bot->speedhook_pull_applied = false;
 		bot->flow_release = false;
 		if (declared_door_guarded)
 			bot->declared_door_recovery_since = 0.0f;
@@ -3118,6 +3115,7 @@ void SG_BotThink(sg_bot_t *bot)
 		ctf_hook_abort(e);
 		bot->hook_link = -1;
 		bot->speedhook = false;
+		bot->speedhook_pull_applied = false;
 		bot->flow_release = false;
 		declared_door_guarded = Bot_DeclaredDoorGuardAction(bot);
 		if (declared_door_guarded &&

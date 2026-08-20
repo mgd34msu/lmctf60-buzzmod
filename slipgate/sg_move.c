@@ -4059,18 +4059,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						heye[0] = e->s.origin[0];
 						heye[1] = e->s.origin[1];
 						heye[2] = e->s.origin[2] + e->viewheight;
-						/*
-						 * WANDER THROW (sg_ropetravel 2). Match reports
-						 * ruled out the volume theory: fleet
-						 * bots already land ~600 ropes a game and
-						 * off-graph never moves, because proven-link
-						 * flight rides exactly the air the node cloud
-						 * was mined from. The human 0.03-0.18 is
-						 * IDIOSYNCRATIC flight -- one-off arcs through
-						 * space nobody routes through. Dose 2: one
-						 * throw in ~7 widens the fan to +/-60 degrees
-						 * and takes the arc for its own sake.
-						 */
 						int hwander =
 						    (sg_cv.ropetravel->value
 						     >= 2.0f && (rand() % 7) == 0);
@@ -4081,17 +4069,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 							    ? ((hfan - 1) * 1.05f)
 							    : ((hfan == 1) ? 0.384f :
 							       (hfan == 2) ? -0.384f : 0.0f));
-							/*
-							 * HIGH-ARC FREERIDE (sg_freeride 2, movement behavior set #2:
-							 * failed 16/18 on the same off-graph tell).
-							 * The shallow arc doubled ride volume and moved NOTHING,
-							 * because a 30-degree rope skims the corridor
-							 * and its flight never leaves the node cloud;
-							 * human off-graph mass is HIGH arcs through
-							 * open room air. The high arc probes ~54 degrees up:
-							 * shorter reach, higher anchor, and the swing
-							 * itself is the off-graph flight.
-							 */
 							float hfar = (sg_cv.freeride->value >= 2.0f) ? 300.0f : 480.0f;
 							float hup  = (sg_cv.freeride->value >= 2.0f) ? 420.0f : 280.0f;
 
@@ -4100,18 +4077,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 							hend[2] = heye[2] + hup;    /* shallow ~30deg, high ~54deg */
 							htr = sg_host.trace(heye, NULL, NULL, hend, e,
 							               MASK_SOLID);
-							/*
-						 * The bar the optional rope has to clear, and the
-						 * one number on this gate that is a PREFERENCE
-						 * rather than a fact -- the speed window and the
-						 * ground test are physics, but "is 170 units of
-						 * rope worth the throw" is taste. Slip's taste is
-						 * a shorter rope more often; Vore's is to keep
-						 * running. Divided, not multiplied: enthusiasm
-						 * LOWERS the bar. The cooldown below moves with
-						 * it so an eager bot also comes back to it
-						 * sooner, and both are 1.0 with no persona.
-						 */
+							/* Hook enthusiasm lowers the minimum useful
+							 * rope length. */
 							if (htr.fraction >= 1.0f || htr.startsolid ||
 							    htr.fraction * 560.0f <=
 							        170.0f / SG_PersonaHookScale(e) ||
@@ -4136,6 +4103,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 									bot->hook_phase = 1;
 									SG_TimerArm(&bot->hook_deadline, 1.0f);
 									bot->speedhook = true;
+									bot->speedhook_pull_applied = false;
 									SG_TimerArm(&bot->speedhook_next,
 									    ((sg_cv.ropetravel->value > 0.0f) ? 1.0f :
 									     (sg_cv.freeride->value > 0.0f) ? 2.0f : 4.0f)
@@ -6629,19 +6597,16 @@ static qboolean Hook_LiveActiveFrame(sg_bot_t *bot, edict_t *e)
 
 void SG_HookLiveEndFrame(edict_t *e)
 {
-	sg_bot_t *bot = NULL;
+	sg_bot_t *bot;
 	sg_replay_pose_t pose;
 	sg_hook_live_result_t result;
-	int i;
 
 	if (!e || !e->client)
 		return;
-	for (i = 0; i < SG_MAXBOTS; i++)
-		if (sg_bots[i].active && sg_bots[i].ent == e)
-		{
-			bot = &sg_bots[i];
-			break;
-		}
+	bot = HumanSpeed_BotForEntity(e);
+	if (bot && bot->speedhook && bot->hook_phase == 2 &&
+	    e->client->hookstate == 2 && e->client->hook)
+		bot->speedhook_pull_applied = true;
 	if (!bot || !bot->hook_replay_active ||
 	    bot->hook_replay.phase != SG_HOOK_REPLAY_WAIT_PULL)
 		return;
@@ -9347,6 +9312,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			{
 				bot->hook_phase = 0;
 				bot->speedhook = false;
+				bot->speedhook_pull_applied = false;
 				bot->flow_release = false;
 				bot->hook_link = -1;
 				bot->hook_bite_logged = false;
@@ -9641,37 +9607,35 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 			if (bot->speedhook)
 			{
-				/* the burst release: cut at speed and KEEP it -- no
-				 * landing brake, no shelf accounting, phase straight to
-				 * zero and the legs inherit 600+ */
 				float bs2 = e->velocity[0] * e->velocity[0]
 				          + e->velocity[1] * e->velocity[1]
 				          + e->velocity[2] * e->velocity[2];
+				qboolean reached_speed = bs2 > 600.0f * 600.0f;
+				qboolean rope_present = e->client->hookstate != 0 ||
+				    e->client->hook != NULL;
+				qboolean rope_coherent = e->client->hookstate != 0 &&
+				    e->client->hook != NULL;
 
-				if (bs2 > 600.0f * 600.0f ||
+				if (reached_speed ||
 				    SG_TimerReadyStrict(bot->hook_deadline) ||
-				    e->client->hookstate == 0)
+				    !rope_coherent)
 				{
-					const char *speed_end = bs2 > 600.0f * 600.0f ? "burst" :
-					    (e->client->hookstate == 0 ? "noattach" : "burststall");
+					sg_speedhook_terminal_t terminal =
+					    SG_SpeedHookTerminalFinish(bot, reached_speed,
+					        e->client->hookstate, e->client->hook != NULL);
+					const char *speed_end =
+					    terminal == SG_SPEEDHOOK_TERMINAL_BURST ? "burst" :
+					    (terminal == SG_SPEEDHOOK_TERMINAL_NOATTACH ?
+					         "noattach" : "burststall");
 
 					(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
 					    speed_end, "speed-terminal");
-					if (e->client->hookstate != 0)
+					if (rope_present)
 						ctf_hook_abort(e);
-					/* the burst's three ends, named: reached speed
-					 * (the SILENT SUCCESS that made the land-rate
-					 * denominator a lie), stalled to deadline, or
-					 * the rope never held */
 					if (sg_cv.debug->value)
 						sg_host.dprint("HOOKSPEED %s %s\n",
 						           e->client->pers.netname,
-						           bs2 > 600.0f * 600.0f ? "burst"
-						           : (e->client->hookstate == 0
-						              ? "noattach" : "burststall"));
-					bot->hook_phase = 0;
-					bot->speedhook = false;
-					bot->commit_link = -1;
+						           speed_end);
 				}
 			}
 			else if ((attached && Hook_GraphReleaseReady(e, bot)) ||

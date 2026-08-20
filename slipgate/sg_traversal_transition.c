@@ -60,6 +60,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		bot->hook_bite_logged = false;
 		bot->hook_attached_validated = false;
 		bot->speedhook = false;
+		bot->speedhook_pull_applied = false;
 		bot->flow_release = false;
 	}
 	if (bot->rj_phase == 1)
@@ -91,6 +92,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		bot->hook_bite_logged = false;
 		bot->hook_attached_validated = false;
 		bot->speedhook = false;
+		bot->speedhook_pull_applied = false;
 		bot->flow_release = false;
 		break;
 	case RL_SWIM:
@@ -126,6 +128,34 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 	default:
 		break;
 	}
+}
+
+sg_speedhook_terminal_t SG_SpeedHookTerminalFinish(sg_bot_t *bot,
+	qboolean reached_speed, int hookstate, qboolean hook_present)
+{
+	rune_t *rune = SG_Rune();
+	sg_speedhook_terminal_t terminal = reached_speed ?
+	    SG_SPEEDHOOK_TERMINAL_BURST :
+	    (hookstate == 0 && !hook_present &&
+	         !bot->speedhook_pull_applied ?
+	             SG_SPEEDHOOK_TERMINAL_NOATTACH :
+	             SG_SPEEDHOOK_TERMINAL_BURSTSTALL);
+	qboolean retain_run = terminal == SG_SPEEDHOOK_TERMINAL_NOATTACH &&
+	    rune && rune->links &&
+	    bot->commit_link >= 0 && bot->commit_link < rune->hdr.num_links &&
+	    rune->links[bot->commit_link].action == RL_RUN;
+
+	bot->hook_phase = 0;
+	bot->hook_link = -1;
+	bot->hook_deadline = 0.0f;
+	bot->hook_bite_logged = false;
+	bot->hook_attached_validated = false;
+	bot->speedhook = false;
+	bot->speedhook_pull_applied = false;
+	bot->flow_release = false;
+	if (!retain_run)
+		SG_StagedTraversalCancel(bot, RL_RUN);
+	return terminal;
 }
 
 void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)

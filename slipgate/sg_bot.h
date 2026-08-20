@@ -327,6 +327,7 @@ typedef struct sg_bot_s
 	float		nade_target_cook_until;
 	qboolean	flow_release;   /* cut early on momentum: no landing brake */
 	qboolean	speedhook;      /* this rope is a burst, not a transit */
+	qboolean	speedhook_pull_applied;
 	float		speedhook_next; /* cooldown on burst ropes */
 	int			carry_startcost; /* field cost at the grab: breakout gauge */
 	int			carry_bestcost;  /* least field cost this carry has reached */

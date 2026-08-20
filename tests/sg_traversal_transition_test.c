@@ -178,11 +178,85 @@ static void TestFlagTouchRetiresReversibleCommitment(void)
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
 }
 
+static sg_bot_t ArmedSpeedHook(void)
+{
+	sg_bot_t bot = Bot();
+
+	links[1].action = RL_RUN;
+	bot.hook_phase = 2;
+	bot.hook_link = 9;
+	bot.hook_deadline = 40.0f;
+	bot.hook_bite_logged = true;
+	bot.hook_attached_validated = true;
+	bot.speedhook = true;
+	bot.flow_release = true;
+	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
+	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
+	bot.rail_stage = 1;
+	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
+	return bot;
+}
+
+static void TestSpeedHookTerminalFinish(void)
+{
+	sg_bot_t bot;
+
+	ResetWorld();
+	bot = ArmedSpeedHook();
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 0, false) ==
+	    SG_SPEEDHOOK_TERMINAL_NOATTACH);
+	CHECK(bot.hook_phase == 0 && bot.hook_link == -1 &&
+	    bot.hook_deadline == 0.0f && !bot.speedhook && !bot.flow_release &&
+	    !bot.hook_bite_logged && !bot.hook_attached_validated);
+	CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f &&
+	    bot.commit_route_goal.field == route_field);
+	CHECK(bot.sticky_link == 1 && bot.latch_until == 30.0f &&
+	    bot.rail_link == 1 && bot.rail_stage == 1 && bot.rail_until == 30.0f);
+
+	bot = ArmedSpeedHook();
+	bot.speedhook_pull_applied = true;
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 0, false) ==
+	    SG_SPEEDHOOK_TERMINAL_BURSTSTALL);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+	    bot.commit_route_goal.field == NULL);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f &&
+	    bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+	CHECK(!bot.speedhook_pull_applied);
+
+	bot = ArmedSpeedHook();
+	CHECK(SG_SpeedHookTerminalFinish(&bot, true, 0, false) ==
+	    SG_SPEEDHOOK_TERMINAL_BURST);
+	CHECK(bot.commit_link == -1 && bot.hook_phase == 0 && !bot.speedhook);
+
+	bot = ArmedSpeedHook();
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 1, true) ==
+	    SG_SPEEDHOOK_TERMINAL_BURSTSTALL);
+	CHECK(bot.commit_link == -1 && bot.hook_phase == 0 && !bot.speedhook);
+
+	bot = ArmedSpeedHook();
+	bot.commit_link = 0;
+	links[0].action = RL_HOOK;
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 0, false) ==
+	    SG_SPEEDHOOK_TERMINAL_NOATTACH);
+	CHECK(bot.commit_link == -1);
+
+	bot = ArmedSpeedHook();
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 0, true) ==
+	    SG_SPEEDHOOK_TERMINAL_BURSTSTALL);
+	CHECK(bot.commit_link == -1);
+
+	bot = ArmedSpeedHook();
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 1, false) ==
+	    SG_SPEEDHOOK_TERMINAL_BURSTSTALL);
+	CHECK(bot.commit_link == -1);
+}
+
 int SG_TraversalTransitionTests(void)
 {
 	TestCarryStartRetiresOnlyReversibleTraversal();
 	TestStrikeDutyRetiresSupersededRoute();
 	TestDoorLeaseRetirement();
 	TestFlagTouchRetiresReversibleCommitment();
+	TestSpeedHookTerminalFinish();
 	return failures;
 }
