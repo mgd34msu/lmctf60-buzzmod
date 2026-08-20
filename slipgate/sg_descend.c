@@ -22,6 +22,7 @@
 #include "slipgate/sg_defense_facing.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_strike.h"
+#include "slipgate/sg_traversal_transition.h"
 #include "slipgate/sg_tilt.h"
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
@@ -1587,127 +1588,6 @@ static void StrikeWeaponPurposeClear(sg_bot_t *bot)
 	SG_StrikeWeaponTargetClear(bot);
 }
 
-/* True only after a controller has crossed its physical start boundary.
- * Source staging, weapon switching, braking, and aim are cancelable; an
- * airborne body, live rope/swim reducer, or acquired mechanism drains through
- * the controller's already-bounded completion law. */
-static qboolean StrikeWeaponControllerPhysical(const sg_bot_t *bot, int action)
-{
-	sg_strike_weapon_controller_state_t state;
-
-	if (!bot)
-		return false;
-	memset(&state, 0, sizeof(state));
-	state.action = action;
-	state.hook_phase = bot->hook_phase;
-	state.rocketjump_phase = bot->rj_phase;
-	state.jump_started = bot->jump_started;
-	state.drop_started = bot->drop_started;
-	state.swim_active = bot->swim_replay_active;
-	state.swim_validated = bot->swim_validated;
-	state.declared_started = bot->declared_started;
-	state.declared_touched = bot->declared_touched;
-	state.declared_triggered = bot->declared_triggered;
-	state.declared_activated = bot->declared_activated;
-	state.declared_guard_paused = bot->declared_guard_paused;
-	return SG_StrikeWeaponControllerPhysical(&state) ? true : false;
-}
-
-/* Cancel only a controller which has not crossed the physical boundary above.
- * This clears the exact staging identity; it never shelves or teaches the
- * graph because the route did not fail--its five-second mission ended. */
-static void StrikeWeaponCancelStaged(sg_bot_t *bot, int action)
-{
-	if (!bot)
-		return;
-	bot->commit_link = -1;
-	bot->commit_until = 0.0f;
-	bot->commit_route_field = NULL;
-	bot->sticky_link = -1;
-	bot->latch_until = 0.0f;
-	/* An optional speed hook is layered on an ordinary RUN link.  Phase one
-	 * has not fired and is canceled with that route; phase two/three were
-	 * classified physical above and can never reach this reset. */
-	if (bot->hook_phase == 1)
-	{
-		bot->hook_phase = 0;
-		bot->hook_link = -1;
-		bot->hook_deadline = 0.0f;
-		bot->hook_bite_logged = false;
-		bot->hook_attached_validated = false;
-		bot->speedhook = false;
-		bot->flow_release = false;
-	}
-	/* Rocket-jump staging can likewise be layered over an ordinary RUN before
-	 * the phase-two fire command.  Cancel that reversible overlay with the
-	 * superseded route; phase two/three are classified physical above. */
-	if (bot->rj_phase == 1)
-	{
-		bot->rj_phase = 0;
-		bot->rj_deadline = 0.0f;
-		bot->rj_fire_until = 0.0f;
-		bot->rj_use_next = 0.0f;
-	}
-	switch (action)
-	{
-	case RL_JUMP:
-		bot->jump_link = -1;
-		bot->jump_started = false;
-		break;
-	case RL_DROP:
-		bot->drop_link = -1;
-		bot->drop_started = false;
-		bot->drop_walkoff = false;
-		bot->drop_airborne = false;
-		bot->drop_recover = false;
-		SG_DropLiveReset(&bot->drop_replay, &bot->drop_replay_active,
-		    &bot->drop_replay_link, &bot->drop_live_events);
-		break;
-	case RL_HOOK:
-		bot->hook_phase = 0;
-		bot->hook_link = -1;
-		bot->hook_deadline = 0.0f;
-		bot->hook_bite_logged = false;
-		bot->hook_attached_validated = false;
-		bot->speedhook = false;
-		bot->flow_release = false;
-		break;
-	case RL_SWIM:
-		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
-		    &bot->swim_replay_link, &bot->swim_validated,
-		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
-		break;
-	case RL_ROCKETJUMP:
-		bot->rj_phase = 0;
-		bot->rj_deadline = 0.0f;
-		bot->rj_fire_until = 0.0f;
-		bot->rj_use_next = 0.0f;
-		break;
-	case RL_LIFT:
-	case RL_TELEPORT:
-	case RL_DOOR:
-	case RL_BUTTON_DOOR:
-		bot->declared_activated = false;
-		bot->declared_started = false;
-		bot->declared_start_frame = -1;
-		bot->declared_touched = false;
-		bot->declared_touch_frame = -1;
-		SG_ButtonExecutionActionReset(bot);
-		bot->declared_triggered = false;
-		bot->declared_trigger_frame = -1;
-		bot->declared_egress_proof_frame = -1;
-		bot->declared_door_retreat = false;
-		bot->declared_door_suffix_ms = 0;
-		bot->declared_guard_paused = false;
-		bot->declared_guard_pause_started = 0.0f;
-		bot->declared_door_recovery_since = 0.0f;
-		break;
-	case RL_RUN:
-	default:
-		break;
-	}
-}
-
 /* A door acquires its shared-mover lease at the canonical source before the
  * irreversible trigger touch.  Retirement must positively release that lease
  * before clearing local state.  Failure enters the existing bounded paused
@@ -1779,7 +1659,7 @@ static qboolean StrikeWeaponPurposeReconcile(sg_bot_t *bot, sg_think_t *tc)
 	if (exact)
 	{
 		action = SG_Rune()->links[bot->strike_weapon_link].action;
-		physical = StrikeWeaponControllerPhysical(bot, action);
+		physical = SG_TraversalControllerPhysical(bot, action);
 		if (!authority && !physical &&
 		    StrikeWeaponDoorLeaseHeld(bot, tc, action))
 			return true;
@@ -1797,7 +1677,7 @@ static qboolean StrikeWeaponPurposeReconcile(sg_bot_t *bot, sg_think_t *tc)
 		return false;
 	}
 	if (exact)
-		StrikeWeaponCancelStaged(bot, action);
+		SG_StagedTraversalCancel(bot, action);
 	StrikeWeaponPurposeClear(bot);
 	return false;
 }
@@ -1847,11 +1727,11 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 	{
 		int prior_action = rune->links[bot->commit_link].action;
 
-		if (!StrikeWeaponControllerPhysical(bot, prior_action))
+		if (!SG_TraversalControllerPhysical(bot, prior_action))
 		{
 			if (StrikeWeaponDoorLeaseHeld(bot, tc, prior_action))
 				return true;
-			StrikeWeaponCancelStaged(bot, prior_action);
+			SG_StagedTraversalCancel(bot, prior_action);
 		}
 	}
 
@@ -1862,8 +1742,8 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 	if (tc->strike_rush && rune && rune->links && bot->commit_link >= 0 &&
 	    bot->commit_link < rune->hdr.num_links &&
 	    rune->links[bot->commit_link].action == RL_RUN &&
-	    !StrikeWeaponControllerPhysical(bot, RL_RUN))
-		StrikeWeaponCancelStaged(bot, RL_RUN);
+	    !SG_TraversalControllerPhysical(bot, RL_RUN))
+		SG_StagedTraversalCancel(bot, RL_RUN);
 	return false;
 }
 
@@ -1890,9 +1770,9 @@ static void PureRoutePrepareCommit(sg_bot_t *bot, const sg_think_t *tc)
 		return;
 	action = rune->links[bot->commit_link].action;
 	if ((action != RL_RUN && action != RL_HOOK) ||
-	    StrikeWeaponControllerPhysical(bot, action))
+	    SG_TraversalControllerPhysical(bot, action))
 		return;
-	StrikeWeaponCancelStaged(bot, action);
+	SG_StagedTraversalCancel(bot, action);
 }
 
 /* Filter only a fresh weapon-owned selection.  Other candidate policy remains
@@ -4027,7 +3907,7 @@ qboolean SG_StrikeTestWeaponReconcile(sg_bot_t *bot, sg_think_t *tc)
 
 void SG_StrikeTestWeaponCancelStaged(sg_bot_t *bot, int action)
 {
-	StrikeWeaponCancelStaged(bot, action);
+	SG_StagedTraversalCancel(bot, action);
 }
 
 qboolean SG_StrikeTestWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)

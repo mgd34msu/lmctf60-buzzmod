@@ -912,7 +912,7 @@ OBJS := \
 	sg_lead.o \
 	sg_move.o \
 	sg_price.o \
-	sg_descend.o \
+	sg_descend.o slipgate/sg_traversal_transition.o \
 	sg_goal.o \
 	sg_chat.o \
 	sg_net.o \

@@ -7,6 +7,7 @@
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_strike.h"
+#include "slipgate/sg_traversal_transition.h"
 #include "slipgate/sg_death_belief.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_policy.h"
@@ -14,7 +15,6 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-
 level_locals_t level;
 sg_fields_t sg_fields;
 int Fields_LinkTraversalCostMs(const rune_link_t *link)
@@ -49,7 +49,6 @@ enum guard_call_e
 	CALL_AUTHORIZE,
 	CALL_TERMINAL
 };
-
 static int guard_calls[32];
 static int guard_call_count;
 static sg_compound_guard_result_t release_result;
@@ -60,7 +59,6 @@ static sg_compound_guard_result_t authorize_result;
 static sg_compound_guard_result_t validate_result;
 static sg_mover_lease_record_t durable_record;
 static int terminal_count;
-
 static rune_t test_rune;
 static rune_seed_t test_seeds[3];
 static rune_link_t test_links[3];
@@ -70,15 +68,12 @@ static int home_field[3];
 static int recover_field[3];
 static int carrier_field[3];
 static int formation_field[3];
-
 sg_team_belief_t sg_caco_team_belief;
-
 static void GuardCall(int call)
 {
 	if (guard_call_count < (int)(sizeof(guard_calls) / sizeof(guard_calls[0])))
 		guard_calls[guard_call_count++] = call;
 }
-
 static void GuardReset(void)
 {
 	memset(guard_calls, 0, sizeof(guard_calls));
@@ -96,7 +91,6 @@ static void GuardReset(void)
 	durable_record.link_index = 1;
 	durable_record.mechanism_index = 1U;
 }
-
 static void CheckCalls(const int *expected, int count)
 {
 	int index;
@@ -176,9 +170,6 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 	    sizeof(bot->declared_button_end_q8));
 }
 
-/* The transition harness isolates route-purpose ownership from live item
- * selection. Production clears the exact pad witness at this boundary; this
- * stub preserves that observable state transition without linking sg_goal.c. */
 void SG_StrikeWeaponTargetClear(sg_bot_t *bot)
 {
 	if (!bot)
@@ -231,8 +222,6 @@ static void WorldReset(void)
 	memset(&sg_fields, 0, sizeof(sg_fields));
 	sg_fields.to_red_flag = home_field;
 	sg_fields.to_blue_flag = enemy_field;
-	/* A live standoff re-floods our current flag field from the enemy thief.
-	 * It must route RECOVER, never the carrier's homeward egress. */
 	sg_fields.to_flag_now[0][0] = recover_field;
 	sg_fields.our_carrier[0] = carrier_field;
 	sg_fields.our_carrier_valid[0] = true;
@@ -346,8 +335,6 @@ static void TestFreshTagAndOldCommitment(void)
 	CHECK(bot.strike_weapon_until == 15.0f);
 	CHECK(!bot.strike_weapon_draining);
 
-	/* A generic sticky latch can outlive its commit.  Fresh weapon purpose
-	 * retires that unowned half-transaction before candidate filtering/tagging. */
 	bot = Bot();
 	bot.sticky_link = 0;
 	bot.latch_until = 14.0f;
@@ -359,7 +346,6 @@ static void TestFreshTagAndOldCommitment(void)
 	SG_StrikeTestCommitFreshLink(&bot, &tc, candidate);
 	CHECK(bot.commit_link == 1 && bot.strike_weapon_link == 1);
 
-	/* A staged old RUN is canceled before selection and is never retro-tagged. */
 	bot = Bot();
 	bot.commit_link = 0;
 	bot.commit_until = 14.0f;
@@ -372,8 +358,6 @@ static void TestFreshTagAndOldCommitment(void)
 	SG_StrikeTestCommitFreshLink(&bot, &tc, candidate);
 	CHECK(bot.commit_link == 1 && bot.strike_weapon_link == 1);
 
-	/* A reversible rocket-jump overlay on that old RUN is part of the same
-	 * staged transaction and must not leak into the fresh weapon route. */
 	bot = Bot();
 	bot.commit_link = 0;
 	bot.commit_until = 14.0f;
@@ -391,8 +375,6 @@ static void TestFreshTagAndOldCommitment(void)
 	SG_StrikeTestCommitFreshLink(&bot, &tc, candidate);
 	CHECK(bot.commit_link == 1 && bot.strike_weapon_link == 1);
 
-	/* Once phase two can have emitted fire, the same layered controller is
-	 * physical: fresh weapon authority may neither cancel nor relabel it. */
 	bot = Bot();
 	bot.commit_link = 0;
 	bot.commit_until = 14.0f;
@@ -408,8 +390,6 @@ static void TestFreshTagAndOldCommitment(void)
 	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
 	CHECK(bot.commit_link == 0 && bot.strike_weapon_link == -1);
 
-	/* A layered physical controller drains under its old owner: no cancellation
-	 * and no weapon-purpose relabel. */
 	bot = Bot();
 	bot.commit_link = 0;
 	bot.commit_until = 14.0f;
@@ -422,18 +402,16 @@ static void TestFreshTagAndOldCommitment(void)
 	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
 	CHECK(bot.commit_link == 0 && bot.strike_weapon_link == -1);
 
-	/* A non-descending candidate cannot receive a weapon purpose identity. */
 	weapon_field[1] = weapon_field[0];
 	bot = Bot();
 	CHECK(SG_StrikeTestWeaponFilterFreshCandidate(&bot, &tc, 1) == -1);
 }
 
 static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
-{
-	sg_bot_t bot;
-	sg_think_t tc;
-
-	WorldReset();
+	{
+		sg_bot_t bot;
+		sg_think_t tc;
+		WorldReset();
 	bot = Bot();
 	tc = Think();
 	tc.route_pure = true;
@@ -442,8 +420,6 @@ static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
 	bot.latch_until = 25.0f;
 	CHECK(bot.commit_route_field == weapon_field);
 
-	/* PRESS replacing a weapon/recovery route must move on the enemy field
-	 * this frame, not after the generic three-second commitment expires. */
 	tc.goal_field = enemy_field;
 	tc.route_field = enemy_field;
 	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
@@ -451,7 +427,6 @@ static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
 	CHECK(bot.commit_route_field == NULL);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 
-	/* The same field retains its anti-flap commitment. */
 	bot = Bot();
 	tc = Think();
 	tc.route_pure = true;
@@ -460,22 +435,17 @@ static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
 	CHECK(bot.commit_link == 1);
 	CHECK(bot.commit_route_field == weapon_field);
 
-	/* A composed surface is not an exact purpose change. */
 	tc.route_pure = false;
 	tc.route_field = enemy_field;
 	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
 	CHECK(bot.commit_link == 1);
 
-	/* A speed hook which already fired owns physics even though it is layered
-	 * on an ordinary RUN; the new mission waits for its bounded landing. */
 	tc.route_pure = true;
 	bot.hook_phase = 2;
 	bot.hook_link = 1;
 	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
 
-	/* A selected or aiming hook has not fired. Positive progress toward its old
-	 * endpoint is not current-purpose authority, so the new field cancels it. */
 	bot = Bot();
 	tc = Think();
 	tc.route_pure = true;
@@ -488,8 +458,6 @@ static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
 	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
 	CHECK(bot.hook_link == -1 && bot.commit_route_field == NULL);
 
-	/* Once fired, the same graph hook is physical and retains its bounded
-	 * attach/pull/landing lifecycle across a mission change. */
 	bot = Bot();
 	tc = Think();
 	tc.route_pure = true;
@@ -500,6 +468,72 @@ static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
 	tc.route_field = enemy_field;
 	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
+}
+
+static void ArmCarryBallistic(sg_bot_t *bot, int action, qboolean physical)
+{
+	*bot = Bot();
+	test_links[1].action = action;
+	bot->commit_link = 1;
+	bot->commit_until = 30.0f;
+	bot->commit_route_field = enemy_field;
+	bot->sticky_link = 1;
+	bot->latch_until = 25.0f;
+	if (action == RL_JUMP)
+	{
+		bot->jump_link = 1;
+		bot->jump_started = physical;
+	}
+	else if (action == RL_DROP)
+	{
+		bot->drop_link = 1;
+		bot->drop_started = physical;
+	}
+	else
+	{
+		bot->rj_phase = physical ? 2 : 1;
+		bot->rj_deadline = 30.0f;
+	}
+}
+
+static void TestCarryStartRetiresOnlyReversibleBallistics(void)
+{
+	const int actions[] = { RL_JUMP, RL_DROP, RL_ROCKETJUMP };
+	sg_bot_t bot;
+	int index;
+	for (index = 0; index < 3; index++)
+	{
+		WorldReset();
+		ArmCarryBallistic(&bot, actions[index], false);
+		SG_CarryStartRetireStagedBallistic(&bot, true);
+		CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+		    bot.commit_route_field == NULL);
+		CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+		if (actions[index] == RL_JUMP)
+			CHECK(bot.jump_link == -1 && !bot.jump_started);
+		else if (actions[index] == RL_DROP)
+			CHECK(bot.drop_link == -1 && !bot.drop_started);
+		else
+			CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
+		WorldReset();
+		ArmCarryBallistic(&bot, actions[index], true);
+		SG_CarryStartRetireStagedBallistic(&bot, true);
+		CHECK(bot.commit_link == 1 && (actions[index] == RL_JUMP ?
+		    bot.jump_started : actions[index] == RL_DROP ? bot.drop_started :
+		    bot.rj_phase == 2));
+	}
+	WorldReset();
+	ArmCarryBallistic(&bot, RL_JUMP, false);
+	SG_CarryStartRetireStagedBallistic(&bot, false);
+	CHECK(bot.commit_link == 1 && bot.jump_link == 1);
+	WorldReset();
+	bot = Bot();
+	test_links[1].action = RL_HOOK;
+	bot.commit_link = 1;
+	bot.hook_link = 1;
+	bot.hook_phase = 1;
+	SG_CarryStartRetireStagedBallistic(&bot, true);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 1);
 }
 
 static void TestDeadlineGoAndCurrentCandidate(void)
@@ -513,7 +547,6 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	tc.strike_weapon_pursuit = true;
 	CHECK(!SG_StrikeTestWeaponPrepareCommit(&bot, &tc));
 	CheckCleared(&bot);
-
 	WorldReset();
 	ArmExact(&bot, &tc, RL_RUN);
 	tc.strike_rush = true;
@@ -521,16 +554,11 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	tc.route_field = enemy_field;
 	CHECK(!SG_StrikeTestWeaponPrepareCommit(&bot, &tc));
 	CheckCleared(&bot);
-	/* The same-frame enemy-field candidate now owns the ordinary commit and is
-	 * not mislabeled as the ended weapon diversion. */
 	CHECK(SG_StrikeTestWeaponFilterFreshCandidate(&bot, &tc, 2) == 2);
 	SG_StrikeTestCommitFreshLink(&bot, &tc, 2);
 	CHECK(bot.commit_link == 2);
 	CHECK(bot.strike_weapon_link == -1);
 
-	/* GO must retire both halves of an unrelated ordinary transaction.  A
-	 * pending sticky latch may not resurrect the old route over the current
-	 * enemy-field candidate later in Think_CommitLink. */
 	WorldReset();
 	bot = Bot();
 	tc = Think();
@@ -548,8 +576,6 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	SG_StrikeTestCommitFreshLink(&bot, &tc, 2);
 	CHECK(bot.commit_link == 2 && bot.strike_weapon_link == -1);
 
-	/* GO also retires an orphan generic latch when its commit disappeared before
-	 * this frame.  The first enemy-field candidate must survive selection. */
 	WorldReset();
 	bot = Bot();
 	tc = Think();
@@ -565,8 +591,6 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	SG_StrikeTestCommitFreshLink(&bot, &tc, 2);
 	CHECK(bot.commit_link == 2 && bot.strike_weapon_link == -1);
 
-	/* Purpose completion itself preserves a different current generic latch; a
-	 * same-frame GO owns the stronger boundary and retires it before selection. */
 	WorldReset();
 	ArmExact(&bot, &tc, RL_RUN);
 	bot.commit_link = -1;
@@ -590,9 +614,6 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	CHECK(bot.strike_weapon_link == -1);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 
-	/* The GO boundary retires only generic selection authority.  A pre-existing
-	 * physical controller keeps its commit and controller state and is not
-	 * retroactively tagged as weapon-owned. */
 	WorldReset();
 	bot = Bot();
 	tc = Think();
@@ -609,9 +630,6 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	CHECK(bot.hook_phase == 2 && bot.hook_link == 0);
 	CHECK(bot.strike_weapon_link == -1 && !bot.strike_weapon_draining);
 
-	/* The same rule applies to an exact weapon route already crossing its
-	 * physical speed-hook boundary: it enters sticky DRAIN, while only the
-	 * generic link latch is retired. */
 	WorldReset();
 	ArmExact(&bot, &tc, RL_RUN);
 	bot.hook_phase = 2;
@@ -634,8 +652,6 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	CHECK(bot.rj_phase == 2 && bot.rj_deadline == 40.0f);
 	CHECK(bot.strike_weapon_link == 1 && bot.strike_weapon_draining);
 
-	/* Phase-one overlays have not emitted their physical command and therefore
-	 * cancel with the stale RUN on GO. */
 	WorldReset();
 	bot = Bot();
 	tc = Think();
@@ -702,7 +718,6 @@ static void TestSpeedHookAndStickyDrain(void)
 		CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));
 		CheckDraining(&bot);
 		CHECK(bot.hook_phase == phase && bot.hook_link == 1);
-		/* Authority returning before the immutable deadline cannot undo DRAIN. */
 		tc.strike_weapon_pursuit = true;
 		tc.strike_weapon_deadline = 20.0f;
 		CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));
@@ -908,8 +923,6 @@ static void TestDoorLeaseRetirement(void)
 	};
 	static const int expired_calls[] = { CALL_RELEASE, CALL_TERMINAL };
 
-	/* Both declared door actions release a pre-touch ACTIVE claim before any
-	 * local route fields are cleared. */
 	for (size_t action_index = 0;
 	     action_index < sizeof(door_actions) / sizeof(door_actions[0]);
 	     action_index++)
@@ -933,8 +946,6 @@ static void TestDoorLeaseRetirement(void)
 	CheckDraining(&bot);
 	CHECK(bot.declared_started && bot.declared_guard_paused);
 
-	/* The actual next-frame restore retries proof and TOP maintenance only.  An
-	 * ACTIVE durable record is paused again, never resumed/re-authorized. */
 	GuardReset();
 	release_result = SG_COMPOUND_GUARD_NOT_CLEAR;
 	durable_record.state = SG_MOVER_LEASE_ACTIVE;
@@ -944,8 +955,6 @@ static void TestDoorLeaseRetirement(void)
 	CheckDraining(&bot);
 	CHECK(bot.declared_guard_paused);
 
-	/* A durable PAUSED record needs no second Pause, and likewise may not
-	 * Resume or Authorize the ended errand. */
 	GuardReset();
 	release_result = SG_COMPOUND_GUARD_NOT_CLEAR;
 	durable_record.state = SG_MOVER_LEASE_PAUSED;
@@ -955,7 +964,6 @@ static void TestDoorLeaseRetirement(void)
 	CheckDraining(&bot);
 	CHECK(bot.declared_guard_paused);
 
-	/* Once all subjects are proved clear, restore retires action and purpose. */
 	GuardReset();
 	release_result = SG_COMPOUND_GUARD_OK;
 	level.time = 10.2f;
@@ -984,7 +992,6 @@ static void TestDoorLeaseRetirement(void)
 	CHECK(terminal_count == 1);
 	CHECK(bot.commit_link == 1 && bot.strike_weapon_link == 1);
 
-	/* Physical mechanism boundaries drain and never attempt staged release. */
 	for (size_t action_index = 0;
 	     action_index < sizeof(door_actions) / sizeof(door_actions[0]);
 	     action_index++)
@@ -1034,7 +1041,6 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(SG_StrikeTestRailLateOverrideAllowed(&bot, &tc));
 	CHECK(SG_StrikeTestRailWatchdogAllowed(&bot, &tc));
 
-	/* Accepted defender RETURN state remains an independent immutable owner. */
 	bot.def_supply_phase = SG_DEFENSE_SUPPLY_PHASE_RETURN;
 	bot.def_supply_armed = true;
 	CHECK(!SG_StrikeTestRailLateOverrideAllowed(&bot, &tc));
@@ -1061,17 +1067,12 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_PRESS,
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == carrier_field && tc.route_field == carrier_field);
-	/* Carrier support is not flooded until the frame after pickup.  The
-	 * transient fallback remains homeward, never thief-bound. */
 	sg_fields.our_carrier_valid[0] = false;
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == home_field && tc.route_field == home_field);
 	CHECK(tc.route_pure);
 	sg_fields.our_carrier_valid[0] = true;
-	/* Objective runs after effective strike duty is known.  A strike-assigned
-	 * escort that already resolved a live lead/trail station must retain that
-	 * formation; the generic carrier overlay used to erase it here. */
 	tc.goal_field = formation_field;
 	tc.route_field = formation_field;
 	tc.route_pure = false;
@@ -1108,8 +1109,6 @@ static void TestHumanOrderOwnsStrikeAdmission(void)
 	    SG_ROLE_ESCORT));
 	CHECK(!SG_StrikeTestAttackEligible(SG_ROLE_RECOVER, false,
 	    SG_ROLE_RECOVER));
-	/* Flag possession remains physical authority even when an old order is
-	 * still inside its ninety-second lease. */
 	CHECK(SG_StrikeTestAttackEligible(SG_ROLE_CARRY, true,
 	    SG_ROLE_DEFEND));
 }
@@ -1212,6 +1211,7 @@ int main(void)
 {
 	TestFreshTagAndOldCommitment();
 	TestPureRouteChangeRetiresOnlyReversibleRun();
+	TestCarryStartRetiresOnlyReversibleBallistics();
 	TestDeadlineGoAndCurrentCandidate();
 	TestSpeedHookAndStickyDrain();
 	TestRocketJumpBoundaries();

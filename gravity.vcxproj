@@ -407,6 +407,7 @@
     <ClCompile Include="slipgate\sg_move.c" />
     <ClCompile Include="slipgate\sg_price.c" />
     <ClCompile Include="slipgate\sg_descend.c" />
+    <ClCompile Include="slipgate\sg_traversal_transition.c" />
     <ClCompile Include="slipgate\sg_goal.c" />
     <ClCompile Include="slipgate\sg_caco.c" />
     <ClCompile Include="slipgate\sg_chat.c" />
@@ -467,6 +468,7 @@
     <ClInclude Include="slipgate\sg_defense_shift.h" />
     <ClInclude Include="slipgate\sg_defense_supply.h" />
     <ClInclude Include="slipgate\sg_strike.h" />
+    <ClInclude Include="slipgate\sg_traversal_transition.h" />
     <ClInclude Include="slipgate\sg_strike_adapter.h" />
     <ClInclude Include="slipgate\sg_identity.h" />
     <ClInclude Include="slipgate\sg_human_speed.h" />

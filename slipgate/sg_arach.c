@@ -1,5 +1,3 @@
-
-
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "g_tourney.h"              /* Match_Mode -- the clock read's one caveat */
@@ -53,6 +51,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_traversal_transition.h"
 #include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_escort_dose.h"
 #include "slipgate/sg_role_skew_random.h"
@@ -3206,6 +3205,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->def_stand = false;
 	}
 
+	SG_CarryStartRetireStagedBallistic(bot, carrying && !bot->was_carrying);
 	Think_CarryBookends(bot, e, role, team, carrying);
 
 	/* the context carries the stage contract from here down; the frame

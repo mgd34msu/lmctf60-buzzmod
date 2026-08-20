@@ -316,7 +316,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
         move = source("slipgate/sg_move.c")
         weave = between(move, "if (duel && !hold_post",
-                        "/* Occasionally ease off")
+                        "float dose = sg_cv.breather->value;")
         jink = between(move,
                        "if (role == SG_ROLE_CARRY && cmd->forwardmove != 0",
                        "if (SG_TimerPending(bot->beat_until)")

@@ -50,7 +50,7 @@ MEASUREMENT_IMPLEMENTATION_FORMAT = "lmctf-steal-measurement-implementation-v1"
 EMPTY_PATCH_SHA256 = hashlib.sha256(b"").hexdigest()
 POLICY_PROBE_PATH = "tests/test_offense_flag_pickup_recovery.py"
 POLICY_PROBE_SHA256 = (
-    "d56b5dfab825fb94c0e0e6d57a49453853e3113fa2fc2ea18d499b90e17f6ddd")
+    "6bd37b6e22f12ffdf5d9f941e3fb994831751e34881ed24087d19ed75832b4a1")
 POLICY_PROBE_IMPORT_SHADOWS = (
     "json.py", "unittest.py", "pathlib.py", "math.py", "re.py",
 )
@@ -64,7 +64,7 @@ MEASUREMENT_IMPLEMENTATION_PATHS = (
     "tools/demokin.py",
 )
 METRIC_CONTRACT_SHA256 = (
-    "7f6832553bcc112575801e47f875ad576e43e2a9c369e3276605bdeae0fa0dc9")
+    "9e0512ea38d80a1291cfb16a1929ea405c1a49cf2c248c762b8773b9f0399d61")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 SAFE_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
