@@ -1,8 +1,6 @@
 /*
- * sg_goal.c -- what the bot is FOR this frame: the live row, the carry
- * bookends, the objective switch, the intercept surface, and the
- * approach band.  Moved verbatim from sg_arach.c in the 2026-08-12
- * standards pass; Mega_Worth and the intercept hold seed are private.
+ * sg_goal.c -- frame goals, carry transitions, objective selection,
+ * interception, and approach behavior.
  */
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -223,16 +221,9 @@ static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
 	return SG_WorthMega(e);
 }
 
-/*
- * THE APPROACH BAND (split from SG_BotThink, 2026-08-11 standards pass;
- * body verbatim): the rally, the broadcast surge, and the flying cook --
- * everything an attacker decides between two and five seconds out.
- * Returns whether the bot holds its ground waiting on a partner.
- */
+/* Resolve pre-breach actions and report whether the bot waits for support. */
 qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 {
-	/* the former parameter list, unpacked from the think context so the
-	 * body below reads exactly as it did when these arrived as arguments */
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
 	int team = tc->team;
@@ -435,12 +426,7 @@ rally_done:;
 	return hold;
 }
 
-/*
- * THE INTERCEPT SURFACE (split from SG_BotThink, 2026-08-11 standards
- * pass; body verbatim): everyone but the carrier supports the carrier,
- * and when an enemy thief is believed live, floods the hold ground
- * across its projected motion.
- */
+/* Build carrier-support and enemy-carrier interception fields. */
 void Think_InterceptField(sg_role_t role, int team,
                                  const int **support_out,
                                  const int **intercept_out)
@@ -463,11 +449,7 @@ void Think_InterceptField(sg_role_t role, int team,
 	}
 }
 
-/*
- * THE CARRY BOOKENDS (split from SG_BotThink, 2026-08-11 standards
- * pass; body verbatim): grab and loss edges -- carry clocks, exit-lane
- * snapshot, escape priors, the unconditional last_role update.
- */
+/* Update carry transitions, exit choice, and the last effective role. */
 void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
                                 sg_role_t role, int team,
                                 qboolean carrying)
@@ -493,31 +475,9 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 			bot->exitasym_armed = (random() * 100.0f <
 			                           sg_cv.exitasym->value);
 
-		/*
-		 * HUMAN ESCAPE PRIORS (sg_escapeprior, enhancement 6). The
-		 * corpus says a human leaving a robbed stand does not pick a
-		 * uniform direction -- on lmctf41's red stand 76% of 30 human
-		 * steals left east, on smap26's 74% left north -- and it also
-		 * says he does not pick the SAME one every time. An argmin
-		 * carrier has the opposite failing in both directions: one
-		 * exit, always, and no reason for it to be the one people use.
-		 *
-		 * So the exit is DRAWN, once per carry, from that map's mined
-		 * distribution, and the draw only tilts pricing: the bucket
-		 * drawn gets its own measured probability as a discount for
-		 * the next three seconds (the window the bearings were mined
-		 * over), and every other road stays exactly as priced. A
-		 * bucket humans used a fifth of the time gets drawn a fifth of
-		 * the time and bends the price a fifth as hard as a bucket
-		 * they used always -- the distribution's shape survives into
-		 * behaviour instead of collapsing to its mode.
-		 *
-		 * The draw is a hash of the body, its life, and the clock, not
-		 * random(): two carriers grabbing at once must draw
-		 * independently, and one carrier must draw the same exit for
-		 * the whole three seconds no matter how many times the fan is
-		 * priced in between.
-		 */
+		/* Draw one weighted escape bucket per carry and hold it for the
+		 * three-second sampling window. The bot identity and life make
+		 * simultaneous carriers independent without repricing the draw. */
 		bot->escprior_bucket = -1;
 		bot->escprior_until = 0.0f;
 		bot->escprior_dose = 0.0f;
@@ -592,14 +552,8 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 		if ((int)role != bot->last_role && role == SG_ROLE_ESCORT)
 			sg_host.dprint("ESCORT %s begins\n", e->client->pers.netname);
 	}
-	/*
-	 * Unconditionally: last_role is the observable organic role and the
-	 * escort-assignment incumbent.  Rally pairing reads the pre-frame effective
-	 * pressure snapshot instead, because a coordinator duty can override this
-	 * role before the serial think loop.  This assignment sat inside the debug
-	 * gate until the 2026-08-11 standards pass, leaving every non-debug consumer
-	 * stale forever.
-	 */
+	/* Coordinator duties may override this role, so rally pairing uses its
+	 * separate pre-frame snapshot. */
 	bot->last_role = (int)role;
 	bot->was_carrying = carrying;
 }
@@ -1476,15 +1430,9 @@ static const int *DefenseSupplyHomeField(int team)
 	return NULL;
 }
 
-/*
- * THE LIVE ROW (split from SG_BotThink, 2026-08-11 standards pass; body
- * verbatim): the fitted role row modulated by this bot's state -- combat
- * worths, the rune-threat bump, the patrol appetite.
- */
+/* Modulate the fitted role row with current combat and objective state. */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 {
-	/* the former parameter list, unpacked from the think context; the
-	 * live row is written straight into the context's copy */
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
 	int team = tc->team;
@@ -1638,14 +1586,7 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 	}
-	/*
-	 * The patrol's circuit is an appetite, not a waypoint list: a
-	 * permanently item-hungry second defender oscillates between the
-	 * stand's pull and whatever armor or health just respawned nearby,
-	 * which IS the patrol (it13: without this, the unpinned patrol stood
-	 * at its field minimum -- 592 samples at one point -- because
-	 * standing there is what minimums are for).
-	 */
+	/* Item demand keeps the roaming defender moving through nearby supplies. */
 	if (role == SG_ROLE_DEFEND && !bot->def_stand)
 	{
 		if (live->item[SG_FC_ARMOR] < 1.1f)  live->item[SG_FC_ARMOR] = 1.1f;
@@ -1654,17 +1595,9 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 	}
 }
 
-/*
- * THE OBJECTIVE (split from SG_BotThink, 2026-08-11 standards pass;
- * body verbatim): the role-to-goal-field switch -- carrier/defender
- * stands, the scoop, the interposition and formation stations, the
- * courier, the early return, the mega offer, and the tactics waypoint.
- * Emits the goal field, the route field, and its purity.
- */
+/* Resolve the role objective and its navigation field. */
 void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 {
-	/* the former parameter list, unpacked from the think context so the
-	 * body below reads exactly as it did when these arrived as arguments */
 	edict_t *e = tc->e;
 	/* Strike duty is resolved before Objective.  Its effective ESCORT owns the
 	 * same carrier/formation objective as an organic escort; every other duty

@@ -1,7 +1,6 @@
 /*
- * sg_client.c -- the roster keeps itself: botfill, add/remove/list,
- * the per-frame driver, and level-change bookkeeping.  Moved verbatim
- * from the tail of sg_arach.c in the 2026-08-11 standards pass.
+ * sg_client.c -- botfill, roster commands, the per-frame driver, and
+ * level-change bookkeeping.
  */
 #include "g_local.h"
 #include "g_ctffunc.h"

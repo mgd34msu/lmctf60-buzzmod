@@ -286,64 +286,8 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 #define SG_BAND_DEADBAND	64.0f
 #define SG_SWITCH_HOLD		0.8f
 
-/* ------------------------------------------------- human switch discipline
- *
- * HOW A PLAYER CARRIES A GUN (sg_wswitch, owner enhancement 2).
- *
- * The hysteresis above is a machine's reading of rule S1: want a gun for
- * 800 ms and the 700-1100 ms is paid for. What it does not model is WHEN a
- * human decides. Two halves of that, and the bot gets both of them backwards.
- *
- * A player walking a corridor toward a room they expect company in has the
- * right gun UP before the corner -- the decision was made in the corridor,
- * off nothing but a guess about the room. The bot rounds that corner holding
- * whatever it last shot with and starts thinking about the rail after it is
- * already being shot at. Then, mid-duel, a human with the wrong gun mostly
- * does not switch AT ALL: a switch is a second of being a spectator in your
- * own fight, so they empty what is in their hands and reload their opinion
- * afterwards. The bot swaps the instant a band edge says to, every time, and
- * a band edge is 64 units of a strafing target. Watch two bots cross 400
- * units on a mid-band boundary and they weapon-cycle at each other.
- *
- * So: switch EARLY on a belief, LATE on a surprise. Every number here is
- * FITTED -- this is the taste end of the file, like the fire cadence.
- *
- *   DECIDE    the pause between "the wrong gun is in my hands" and the
- *             request going out, skill-scaled the way the reaction delay is:
- *             600 ms at the bottom of the ladder, 200 ms at the top. It runs
- *             CONCURRENTLY with rule S1's 800 ms want-hold, not on top of it
- *             -- the gate is on the REQUEST, and the arbitration clocks keep
- *             running underneath it, so the delay costs what it says and not
- *             a second and a half. Where the want-hold is the longer of the
- *             two it therefore still wins, and this gate binds on the paths
- *             that used to switch INSTANTLY: a gun that runs dry mid-fight,
- *             an unknown one, and a target re-acquired onto a want the bot
- *             had already been holding before it lost sight. Those are the
- *             swaps that read as machine-fast, and they are the ones that now
- *             cost a visible beat.
- *   COOLDOWN  one mid-fight switch per 4 s. Having committed to the second
- *             gun, finish the fight with it.
- *   PRE_MISS  the corridor switch's bar: the held gun's own wanted range has
- *             to miss the believed contact range by this fraction of that
- *             range before the switch is worth its 700-1100 ms. A third is
- *             about one band wide, which is the resolution the belief has.
- *   PRE_FRESH how old a sighting may be and still be a room to walk into.
- *             The same 3 s the body already prices an idle hand's pre-select
- *             at (sg_arach.c:4399), stated here because this path reads the
- *             belief table itself instead of waiting to be told.
- *   PRE_REACH how far away a believed enemy may be and still be a meeting
- *             rather than a rumour. 1200 units, which is the body's own alert
- *             radius (sg_arach.c:4409) and is deliberately NOT
- *             SG_ENGAGE_RANGE: 2000 units of straight line through map
- *             geometry is not a room the bot is about to walk into, and
- *             readying the long band's answer for it would be a bot carrying
- *             a rail everywhere on the strength of a rumour.
- *
- * The panic exception is not a number: at contact range with a gun that
- * cannot shoot, neither gate applies. That switch is not a preference being
- * revised, it is a dry click at 100 units, and it is the one mid-fight swap a
- * human makes instantly.
- */
+/* Switch before a fresh believed contact, but rate-limit changes during a
+ * duel. A dry weapon at contact range bypasses both delays. */
 #define SG_WS_DECIDE_S0		0.60f
 #define SG_WS_DECIDE_S4		0.20f
 #define SG_WS_COOLDOWN		4.0f
@@ -4036,12 +3980,7 @@ static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
 
 /* ------------------------------------------------------------------ frame */
 
-/*
- * THE TRIGGER (split from SG_CombatFrame, 2026-08-12 standards pass;
- * body verbatim): everything between a firing solution and the button
- * -- tap variance, fire discipline, the ON/OFF windows, and the rule-S3
- * invariant. Ends the combat frame either way.
- */
+/* Apply fire discipline and trigger timing to a firing solution. */
 static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
                         sg_combat_state_t *st, float skill, int inhand)
 {
@@ -4186,12 +4125,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 }
 
 
-/*
- * NO TARGET (split from SG_CombatFrame, 2026-08-12 standards pass; body
- * verbatim, one indent shallower): record where the lost enemy was
- * believed to be, run the pre-select doctrine, and hold the corner.
- * The combat frame ends here whenever the scan comes back empty.
- */
+/* Preserve the last belief and choose the no-target combat posture. */
 static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
                      vec3_t eye)
 {
@@ -4303,12 +4237,7 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 }
 
 
-/*
- * TARGET HELD (split from SG_CombatFrame, 2026-08-12 standards pass;
- * body verbatim): continuity and the settle clock, the engaged flag,
- * the corner-hold clear, and rule F1's stability clock. Emits the
- * range and the projectile-stability verdict the aim model reads.
- */
+/* Update target continuity and the stability state used by aiming. */
 static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
                       edict_t *enemy, float skill, vec3_t eye,
                       vec3_t forward, vec3_t mid, vec3_t aim,
@@ -4417,11 +4346,7 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 }
 
 
-/*
- * THE WEAPON CHOICE (split from SG_CombatFrame, 2026-08-12 standards
- * pass; body verbatim): band, doctrine choice, the wetwork override,
- * the panic test, and the arbitrated request.
- */
+/* Select and request a weapon for the current range and doctrine. */
 static void Cbt_ChooseWeapon(edict_t *self, sg_combat_state_t *st,
                              edict_t *enemy, float dist,
                              qboolean *carrier_out, int *band_out)

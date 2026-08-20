@@ -1,8 +1,6 @@
 /*
- * sg_price.c -- the composed surface: what a seed is WORTH.  The role
- * factor, detour value, the mega detour, and Surface_At, with the
- * frame-scoped pricing state the think loop arms before descending.
- * Moved verbatim from sg_arach.c in the 2026-08-12 standards pass.
+ * sg_price.c -- role, detour, and item value composed into the per-frame
+ * navigation price surface.
  */
 #include "g_local.h"
 #include "slipgate/sg_local.h"

@@ -1,7 +1,4 @@
-/*
- * sg_weights.c -- the weight tables: the one fitted component.
- * Moved verbatim from sg_arach.c in the 2026-08-11 standards pass.
- */
+/* sg_weights.c -- fitted role weight tables. */
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_weights.h"

@@ -1,7 +1,4 @@
-/*
- * sg_clock.c -- clockplay: score posture from public information only.
- * Moved verbatim from sg_arach.c in the 2026-08-11 standards pass.
- */
+/* sg_clock.c -- score posture derived from public match information. */
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "g_tourney.h"

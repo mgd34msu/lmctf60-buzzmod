@@ -1,8 +1,4 @@
-/*
- * sg_lead.c -- the early-return errand (sg_itemlead): get back to the pad
- * early like humans, not at T exactly.  Moved verbatim from sg_arach.c in
- * the 2026-08-11 standards pass.
- */
+/* sg_lead.c -- schedule early item-pad returns instead of arrivals at T. */
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
@@ -16,35 +12,9 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_lead_random.h"
 
-/* -------------------------------------------------- the early-return errand
- *
- * THE OWNER'S RULING, 2026-08-05: a bot whose team clock is armed "should GET
- * BACK EARLY like humans, not arrive at T exactly".
- *
- * The pricing already knew the clock existed -- Worth_Quad (sg_combat.c) prices
- * an empty pedestal at zero unless it is within SG_QUAD_CAMP_LEAD of coming
- * back -- but a weight can only bend a route the bot was already walking. What
- * a player who timed the quad does is not a bend: he stops doing the thing he
- * was doing, leaves with time in hand, and stands NEAR the pad facing the door
- * until it spawns. That is an errand, so it is written as one.
- *
- * WHAT BEING WRONG COSTS, which is where the gates come from. Leaving for a pad
- * is leaving a job. The errand is refused to a carrier, refused while our own
- * flag is out, refused while our team has a live carrier who needs bodies
- * around him, refused to anyone in a fight or freshly hit -- every one of those
- * is a thing the team loses while one bot admires its own timing -- and refused
- * to everybody but ONE bot per team per pad, because five bots on one pedestal
- * is not anticipation, it is a queue.
- *
- * WHY POWERUP PADS ONLY. The errand needs three things and only the powerup
- * rows carry all three: a per-team respawn clock (sg_caco_items, armed under
- * sg_itemcomm by a callout that was actually spoken), a spawn position that is
- * map knowledge, and enough worth to justify the walk. Red armour's clock lives
- * in sg_chat.c's private watch table, which this file cannot read and which has
- * no route field behind it; the day it moves into the belief table this code
- * picks it up with no edit. Runes are excluded by construction -- the ruling
- * gives them no clock at all, so there is never a T to be early for.
- */
+/* Leave early for a known powerup respawn only when doing so does not abandon
+ * a carrier, a threatened flag, or a fight. A per-team lease limits each pad
+ * to one claimant. */
 
 static qboolean Lead_On(void)
 {

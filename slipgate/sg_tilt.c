@@ -1,7 +1,4 @@
-/*
- * sg_tilt.c -- tilt: the grudge the danger dimension cannot hold.
- * Moved verbatim from sg_arach.c in the 2026-08-11 standards pass.
- */
+/* sg_tilt.c -- short-lived opponent pressure not represented by danger. */
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"

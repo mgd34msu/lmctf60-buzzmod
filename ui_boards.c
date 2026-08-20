@@ -133,10 +133,8 @@ static void UI_Build_SeasonTop(ui_buf_t *out)
 
 // -- Server Records --------------------------------------------------------
 
-// One optional line per record: label, holder, value. Built from
-// db_record_t's holder[0]==0 (owner's ruling, ctf_sqlite_unidb.h: "no
-// qualifying row") -- a record nobody has set yet is left off the screen
-// entirely rather than printed as "N/A" or a zero.
+// One optional line per record: label, holder, value. An empty holder means
+// there is no qualifying row, so the record is omitted.
 //
 // Not static: p_view.c's MOTD screen (ClientShowMOD) also calls this, to
 // append up to 3 records without a second copy of the omission rule.

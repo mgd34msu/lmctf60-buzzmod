@@ -810,38 +810,15 @@ typedef struct
 	int			cls;                    /* SG_BI_* */
 	float		respawn_delay;          /* seconds; 0 = no clock to infer from */
 
-	/*
-	 * THE ERRAND LEASE (sg_itemlead, owner's ruling 2026-08-05: "bots with an
-	 * armed team clock should get back early like humans"). Exactly one bot
-	 * per team per pad may leave early for it -- five bots standing on one
-	 * pedestal is not anticipation, it is a queue -- and the claim lives here
-	 * because the row is ALREADY per team, so a red errand cannot reserve the
-	 * pad against blue and neither team can read the other's plan.
-	 *
-	 * It is a LEASE and not a lock: the holder re-stamps claimed_until every
-	 * frame it is still on the errand, so a bot that dies, changes role or
-	 * simply stops asking releases the pad within a second without anybody
-	 * having to remember to unlock it. claimed_by is a CLIENT index so the
-	 * holder can re-take its own lease; -1 is nobody.
-	 */
+	/* Per-team lease for one early-return claimant. The holder refreshes it
+	 * while active; expiry releases abandoned errands. */
 	float		claimed_until;
 	int			claimed_by;
 } sg_belief_item_t;
 
 /*
- * ONE TABLE PER TEAM (sg_itemcomm, owner's ruling 2026-08-05).
- *
- * It used to be one table for the server, which meant red looking at the quad
- * pad taught blue that the quad was gone. sg_caco_enemies has been per team
- * since it was written for exactly that reason; the item table was the last
- * shared belief left, and it was the one carrying a RESPAWN CLOCK -- so the
- * leak was not merely "they know it is empty", it was "they know to the second
- * when it is back".
- *
- * Row [team-1] is what that team believes. The two rows hold the same STATIC
- * geometry -- ent, cls, org and respawn_delay for a powerup pad are map
- * knowledge every player on both sides has -- and differ only in the dynamic
- * part: believed_up, seen_up_time, believed_respawn_time, and a rune's seed.
+ * Each team has an independent dynamic item belief. Static pad geometry is
+ * shared map knowledge; availability and respawn timing are not.
  * Index i names the same entity in both rows, so a caller that has an index
  * from one row may use it on the other.
  *

@@ -1,10 +1,4 @@
-/*
- * sg_bot.h -- the bot slot: the one structure SLIPGATE hangs a bot on.
- *
- * Split out of sg_arach.c in the 2026-08-11 standards pass so the
- * roster lifecycle (sg_client.c) and the think pipeline (sg_arach.c)
- * share the type through a header instead of one 10,800-line file.
- */
+/* sg_bot.h -- shared bot state for roster management and the think pipeline. */
 #ifndef SG_BOT_H
 #define SG_BOT_H
 
@@ -540,13 +534,7 @@ typedef struct sg_bot_s
 
 extern sg_bot_t sg_bots[SG_MAXBOTS];
 
-/*
- * The frame context (2026-08-12 standards pass): everything one think
- * frame decides, built once in SG_BotThink and handed to every stage.
- * Stages unpack what they read at their top and write back what they
- * emit -- one parameter instead of thirty, and a new stage costs a
- * field, not eleven signature edits.
- */
+/* Shared input and output state for one staged think frame. */
 typedef struct sg_think_s {
 	edict_t			*e;
 	usercmd_t		cmd;

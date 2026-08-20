@@ -1,11 +1,4 @@
-/*
- * sg_util.h -- the patterns every SLIPGATE file kept re-typing.
- *
- * Born in the 2026-08-11 standards pass: flag-entity resolution, the
- * stand-marker lookup, XY distance, and the eye-to-point sight trace
- * each existed as five to eleven hand-rolled copies.  One copy each,
- * here, and a call site reads as intent instead of plumbing.
- */
+/* sg_util.h -- shared team, flag, geometry, and visibility helpers. */
 #ifndef SG_UTIL_H
 #define SG_UTIL_H
 
