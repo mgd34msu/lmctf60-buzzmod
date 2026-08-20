@@ -6,6 +6,9 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_route_policy.h"
 
+#define SG_CARRIER_SCREEN_LEAD_MIN_MS 900
+#define SG_CARRIER_SCREEN_LEAD_MAX_MS 2200
+
 static inline int SG_FieldProjectionLinkCostMs(const rune_t *r,
 	const int *home, int seed, int link_index)
 {
@@ -125,6 +128,46 @@ static inline int SG_FieldCarrierLeadStation(const rune_t *r,
 		seed = SG_FieldProjectionStep(r, home, seed);
 	}
 	return -1;
+}
+
+static inline int SG_FieldCarrierScreenStation(const rune_t *r,
+	const int *home, int carrier_seed)
+{
+	int carrier_goal;
+	int previous = -1;
+	int seed;
+	int hop;
+
+	if (!r || !home || carrier_seed < 0 ||
+	    carrier_seed >= r->hdr.num_seeds || home[carrier_seed] < 0 ||
+	    home[carrier_seed] >= SG_FIELD_INF)
+		return -1;
+	carrier_goal = home[carrier_seed];
+	seed = SG_FieldProjectionStep(r, home, carrier_seed);
+	for (hop = 0; hop < r->hdr.num_seeds && seed >= 0; hop++)
+	{
+		int lead_ms = carrier_goal - home[seed];
+
+		if (lead_ms >= SG_CARRIER_SCREEN_LEAD_MIN_MS)
+			return lead_ms <= SG_CARRIER_SCREEN_LEAD_MAX_MS || previous < 0
+			    ? seed : previous;
+		previous = seed;
+		seed = SG_FieldProjectionStep(r, home, seed);
+	}
+	return previous;
+}
+
+static inline int SG_FieldCarrierSupportRoot(const rune_t *r,
+	const int *home, int carrier_known, int carrier_seed)
+{
+	int station;
+
+	if (!r || !home || (carrier_known != 0 && carrier_known != 1) ||
+	    !carrier_known || carrier_seed < 0 ||
+	    carrier_seed >= r->hdr.num_seeds)
+		return -1;
+	station = SG_FieldCarrierScreenStation(r, home, carrier_seed);
+	return station >= 0 ? station : carrier_seed;
 }
 
 static inline int SG_FieldIncomingRunStep(const rune_t *r,

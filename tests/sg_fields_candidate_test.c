@@ -628,6 +628,43 @@ static void CheckCarrierProjectionPricesWholeEdge(void)
 	CHECK(SG_FieldProjectionStep(&rune, home, 0) == -1);
 }
 
+static void CheckCarrierScreenUsesTravelTime(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[5];
+	rune_link_t links[4];
+	int first_link[5] = { 0, 1, 2, 3, -1 };
+	int next_link[4] = { -1, -1, -1, -1 };
+	int home[5] = { 6000, 5300, 4300, 2000, 0 };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	memset(links, 0, sizeof(links));
+	rune.hdr.num_seeds = 5;
+	rune.hdr.num_links = 4;
+	rune.seeds = seeds;
+	rune.links = links;
+	rune.first_link = first_link;
+	rune.next_link = next_link;
+	Link(&links[0], 0, 1, RL_RUN, 700);
+	Link(&links[1], 1, 2, RL_RUN, 1000);
+	Link(&links[2], 2, 3, RL_RUN, 2300);
+	Link(&links[3], 3, 4, RL_RUN, 2000);
+
+	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == 2);
+	CHECK(SG_FieldCarrierSupportRoot(&rune, home, 1, 0) == 2);
+	first_link[1] = -1;
+	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == 1);
+	home[1] = 3000;
+	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == 1);
+	first_link[0] = -1;
+	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == -1);
+	CHECK(SG_FieldCarrierSupportRoot(&rune, home, 1, 0) == 0);
+	CHECK(SG_FieldCarrierSupportRoot(&rune, home, 0, 0) == -1);
+	CHECK(SG_FieldCarrierSupportRoot(&rune, home, 2, 0) == -1);
+	CHECK(SG_FieldCarrierScreenStation(NULL, home, 0) == -1);
+}
+
 int main(void)
 {
 	rune_t rune;
@@ -690,6 +727,7 @@ int main(void)
 	CheckLocalFieldSeedAdmission();
 	CheckEnemyObservationRetirement();
 	CheckCarrierProjectionPricesWholeEdge();
+	CheckCarrierScreenUsesTravelTime();
 
 	if (failures)
 	{
