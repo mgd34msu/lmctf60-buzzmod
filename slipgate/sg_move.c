@@ -4247,9 +4247,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				else
 				{
 					vec3_t proof_source, proof_muzzle, proof_bite;
-					sg_hook_ride_worth_t worth = SG_HookExpectedRideWorth(
-					    route_field[l->from], route_field[l->to]);
-
+					sg_hook_ride_worth_t worth = SG_HookCurrentRideWorth(
+					    route_field[l->from], route_field[l->to],
+					    Fields_LinkTraversalCostMs(l));
 					proof_source[0] = (short)(SG_Rune()->seeds[l->from].origin[0]
 					                  * 8.0f) * 0.125f;
 					proof_source[1] = (short)(SG_Rune()->seeds[l->from].origin[1]
