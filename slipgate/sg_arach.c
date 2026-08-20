@@ -1896,14 +1896,13 @@ static qboolean StrikeApplyRallyPolicy(sg_bot_t *bot, const sg_think_t *tc,
 
 static int StrikeCarrierSlot(int team, edict_t *flag)
 {
+	edict_t *carrier = SG_FlagCarrier(flag);
 	int slot;
 
-	if (!flag || !flag->owner || !flag->owner->inuse ||
-	    !flag->owner->client || flag->owner->client->ctf.teamnum != team ||
-	    ClientHasFlag(flag->owner) != flag)
+	if (!carrier || carrier->client->ctf.teamnum != team)
 		return -1;
 	for (slot = 0; slot < SG_MAXBOTS; slot++)
-		if (sg_bots[slot].active && sg_bots[slot].ent == flag->owner)
+		if (sg_bots[slot].active && sg_bots[slot].ent == carrier)
 			return slot;
 	return -1;
 }
@@ -1957,21 +1956,20 @@ static void StrikePrepareFrame(void)
 		int team = SG_TeamFromIdx(team_index);
 		edict_t *own_flag = ctf_getteamflag(team, 0);
 		edict_t *enemy_flag = ctf_getteamflag(team, CTF_TEAM_OPPOSING);
+		edict_t *own_carrier = SG_FlagCarrier(own_flag);
+		edict_t *enemy_carrier = SG_FlagCarrier(enemy_flag);
 
 		SG_StrikeFrameInit(&frames[team_index], level.time);
 		frames[team_index].own_flag_home = own_flag && own_flag->inuse &&
-		    !own_flag->owner && ctf_flagathome(own_flag);
+		    !own_carrier && ctf_flagathome(own_flag);
 		frames[team_index].enemy_flag_home = enemy_flag && enemy_flag->inuse &&
-		    !enemy_flag->owner && ctf_flagathome(enemy_flag);
+		    !enemy_carrier && ctf_flagathome(enemy_flag);
 		frames[team_index].enemy_flag_dropped = enemy_flag && enemy_flag->inuse &&
-		    !enemy_flag->owner && !frames[team_index].enemy_flag_home;
-		frames[team_index].enemy_flag_carried = enemy_flag && enemy_flag->inuse &&
-		    enemy_flag->owner && enemy_flag->owner->inuse &&
-		    enemy_flag->owner->client &&
-		    enemy_flag->owner->client->ctf.teamnum == team &&
-		    ClientHasFlag(enemy_flag->owner) == enemy_flag;
+		    !enemy_carrier && !frames[team_index].enemy_flag_home;
+		frames[team_index].enemy_flag_carried = enemy_carrier &&
+		    enemy_carrier->client->ctf.teamnum == team;
 		carriers[team_index] = frames[team_index].enemy_flag_carried
-		    ? enemy_flag->owner : NULL;
+		    ? enemy_carrier : NULL;
 		frames[team_index].carrier_slot =
 		    StrikeCarrierSlot(team, enemy_flag);
 		frames[team_index].recent_enemy_room_death =

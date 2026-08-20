@@ -42,11 +42,6 @@ def direct_touch_authorized(
     )
 
 
-def enemy_flag_available(*, inuse: bool, owner_present: bool) -> bool:
-    """The production SG_EnemyFlag availability gate before touch geometry."""
-    return inuse and not owner_present
-
-
 def terminal_abandons_graph(
     role: str,
     *,
@@ -359,8 +354,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
     def test_strike_frame_distinguishes_human_carrier_from_no_carrier(self) -> None:
         arach = source("slipgate/sg_arach.c")
         prepare = between(arach, "static void StrikePrepareFrame", "void SG_StrikeSlotReset")
-        self.assertIn("enemy_flag_carried = enemy_flag && enemy_flag->inuse", prepare)
-        self.assertIn("ClientHasFlag(enemy_flag->owner) == enemy_flag", prepare)
+        self.assertIn("enemy_carrier = SG_FlagCarrier(enemy_flag)", prepare)
+        self.assertIn("enemy_flag_carried = enemy_carrier &&", prepare)
         adapter = source("slipgate/sg_strike_adapter.c")
         self.assertIn(
             "current->enemy_flag_carried && !previous->enemy_flag_carried",
@@ -469,6 +464,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         )
         for token in (
             "flag = SG_EnemyFlag(team);",
+            "SG_FlagApproachAvailableTo(flag, e)",
             "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
             "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
             "ctf_flagathome(flag)",
@@ -488,15 +484,6 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertNotIn("Rune_NearestSeed", helper)
         self.assertEqual(move.count("SG_EnemyFlag(team)"), 1)
 
-        util = source("slipgate/sg_util.c")
-        enemy_flag = between(
-            util, "edict_t *SG_EnemyFlag", "edict_t *SG_FlagStand"
-        )
-        self.assertIn("return (f && f->inuse && !f->owner) ? f : NULL;", enemy_flag)
-        # A carried flag stays at the stand coordinate but is unavailable to
-        # the direct-touch seam before its home geometry can authorize aim.
-        self.assertFalse(enemy_flag_available(inuse=True, owner_present=True))
-
     def test_direct_touch_authority_rejects_wrong_topology_height_wall_and_unseen_drop(self) -> None:
         blue_flag = (232.0, -816.0, 192.125)
 
@@ -505,9 +492,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             direct_touch_authorized(
                 (229.0, -699.0, 168.0),
                 blue_flag,
-                enemy_flag_available=enemy_flag_available(
-                    inuse=True, owner_present=False
-                ),
+                enemy_flag_available=True,
                 at_home=True,
                 perceivable=False,
                 body_clear=True,
@@ -567,15 +552,12 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             )
         )
 
-        # A carried flag's hidden entity may still be geometrically at home;
-        # SG_EnemyFlag rejects its owner before that public geometry is used.
+        # A carried flag edict can retain its home coordinates.
         self.assertFalse(
             direct_touch_authorized(
                 (229.0, -699.0, 168.0),
                 blue_flag,
-                enemy_flag_available=enemy_flag_available(
-                    inuse=True, owner_present=True
-                ),
+                enemy_flag_available=False,
                 at_home=True,
                 perceivable=True,
                 body_clear=True,

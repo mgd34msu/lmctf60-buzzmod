@@ -2260,7 +2260,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	python3 -B $(CARRIER_RETURN_TEST)
 	python3 -B $(COMBAT_AIM_TEST)
 	python3 -B -m unittest tests.test_offense_flag_pickup_recovery \
-		tests.botfill_selector_test
+		tests.botfill_selector_test tests.test_flag_state
 	./$(ITEM_COMMITMENT_TEST_BIN)
 	python3 -B $(ITEM_COMMITMENT_INTEGRATION_TEST)
 	./$(HOOK_DIAGNOSTICS_TEST_BIN)

@@ -87,18 +87,41 @@ qboolean SG_EscortTerminal(edict_t *bot, edict_t *target)
 	       (tr.fraction >= 1.0f || tr.ent == target);
 }
 
+edict_t *SG_FlagCarrier(edict_t *flag)
+{
+	edict_t *owner;
+
+	if (!flag || !flag->inuse)
+		return NULL;
+	owner = flag->owner;
+	if (!owner || !owner->inuse || !owner->client ||
+	    ClientHasFlag(owner) != flag)
+		return NULL;
+	return owner;
+}
+
+qboolean SG_FlagApproachAvailableTo(edict_t *flag, edict_t *player)
+{
+	if (!flag || !flag->inuse || !player || !player->inuse ||
+	    !player->client || player->health < 1)
+		return false;
+	if (SG_FlagCarrier(flag))
+		return false;
+	return flag->owner != player;
+}
+
 edict_t *SG_OwnFlag(int team)
 {
 	edict_t *f = (team == CTF_TEAM_RED) ? redflag : blueflag;
 
-	return (f && f->inuse && !f->owner) ? f : NULL;
+	return (f && f->inuse && !SG_FlagCarrier(f)) ? f : NULL;
 }
 
 edict_t *SG_EnemyFlag(int team)
 {
 	edict_t *f = (team == CTF_TEAM_RED) ? blueflag : redflag;
 
-	return (f && f->inuse && !f->owner) ? f : NULL;
+	return (f && f->inuse && !SG_FlagCarrier(f)) ? f : NULL;
 }
 
 edict_t *SG_FlagStand(int team, qboolean own)

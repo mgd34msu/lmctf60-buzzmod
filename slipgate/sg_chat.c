@@ -3617,7 +3617,7 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 static qboolean Chat_OrderLive(int cl)
 {
 	sg_chat_bot_t	*cb;
-	edict_t			*bot, *from, *flag;
+	edict_t			*bot, *from, *flag, *carrier;
 	qboolean		carried;
 
 	if (cl < 0 || cl >= game.maxclients)
@@ -3649,13 +3649,9 @@ static qboolean Chat_OrderLive(int cl)
 		flag = (cb->order_team == CTF_TEAM_RED) ? redflag : blueflag;
 		if (!flag || !flag->inuse)
 			return false;
-		carried = flag->owner && flag->owner->inuse && flag->owner->client &&
-		          flag->owner->client->ctf.teamnum ==
-		              SG_EnemyTeam(cb->order_team) &&
-		          ClientHasFlag(flag->owner) == flag;
-		/* A carried flag entity remains hidden at its take origin, which may
-		 * still satisfy ctf_flagathome().  Inventory/owner is authoritative for
-		 * that state; the position test is authoritative only when uncarried. */
+		carrier = SG_FlagCarrier(flag);
+		carried = carrier && carrier->client->ctf.teamnum ==
+		    SG_EnemyTeam(cb->order_team);
 		if (!carried && ctf_flagathome(flag))
 			return false;
 	}

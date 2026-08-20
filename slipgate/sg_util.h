@@ -10,8 +10,13 @@ int	SG_EnemyTeam(int team);
 /* Deterministic non-world supports admitted by offline movement proofs. */
 qboolean SG_ImmutableSupport(edict_t *ent);
 
-/* The live flag ITEMS (droptofloor-settled, the thing a touch scores
- * on), by the engine's own pointers.  NULL when absent or carried. */
+/* A carried flag edict remains at its take origin. During the one-second drop
+ * grace, owner names only the former carrier; inventory identifies a carrier. */
+edict_t *SG_FlagCarrier(edict_t *flag);
+qboolean SG_FlagApproachAvailableTo(edict_t *flag, edict_t *player);
+
+/* The live flag ITEMS (droptofloor-settled, the thing a touch scores on),
+ * by the engine's own pointers. NULL when absent or actually carried. */
 edict_t	*SG_OwnFlag(int team);      /* the flag this team defends */
 edict_t	*SG_EnemyFlag(int team);    /* the flag this team steals */
 

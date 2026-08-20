@@ -527,13 +527,8 @@ static qboolean SG_FlagPerceivable(edict_t *e, edict_t *flag)
 	       SG_CanSee(e, flag->s.origin, 16.0f);
 }
 
-/*
- * The one authority for abandoning the graph to touch the enemy flag.  A
- * home flag is public, while a dropped flag must be visibly perceived; both
- * also need to be on this body level and directly reachable by the player
- * hull.  This deliberately rejects a close XY projection onto another floor
- * or a flag across an opaque wall.
- */
+/* Abandon the graph only for a same-floor, hull-clear flag contact. Home is
+ * public; a dropped flag requires sight. */
 qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 	edict_t **flag_out)
 {
@@ -545,7 +540,8 @@ qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 	if (!e || !e->client)
 		return false;
 	flag = SG_EnemyFlag(team);
-	if (!flag || SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
+	if (!SG_FlagApproachAvailableTo(flag, e) ||
+	    SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
 	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f)
 		return false;
 	if (!ctf_flagathome(flag) && !SG_FlagPerceivable(e, flag))
@@ -571,7 +567,7 @@ static qboolean SG_OwnDroppedFlagDirectTouchAuthority(edict_t *e, int team,
 	if (!e || !e->client || !sg_host.trace)
 		return false;
 	flag = SG_OwnFlag(team);
-	if (!flag || ctf_flagathome(flag) ||
+	if (!SG_FlagApproachAvailableTo(flag, e) || ctf_flagathome(flag) ||
 	    SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
 	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f ||
 	    !SG_FlagPerceivable(e, flag))
@@ -601,7 +597,7 @@ static qboolean SG_OwnHomeFlagDirectTouchAuthority(edict_t *e, int team,
 	if (!e || !e->client || !sg_host.trace)
 		return false;
 	flag = SG_OwnFlag(team);
-	if (!flag || !ctf_flagathome(flag) ||
+	if (!SG_FlagApproachAvailableTo(flag, e) || !ctf_flagathome(flag) ||
 	    SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f ||
 	    fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f)
 		return false;

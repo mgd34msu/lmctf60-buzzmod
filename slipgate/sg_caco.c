@@ -292,12 +292,7 @@ static void Caco_ScanFlags(rune_t *r, edict_t *viewer, int viewer_team)
 		edict_t *look;
 		qboolean was_unknown, carried;
 
-		/* LMCTF hides a carried flag but leaves its entity at the take
-		 * position, which is normally the stand.  Geometry alone therefore
-		 * reports HOME throughout an ordinary carry; the owner/inventory pair
-		 * is the authoritative HUD-level fact. */
-		carried = e->owner && e->owner->inuse && e->owner->client &&
-		          ClientHasFlag(e->owner) == e;
+		carried = SG_FlagCarrier(e) != NULL;
 
 		/* common knowledge: home or not (HUD) */
 		if (!carried && ctf_flagathome(e))
