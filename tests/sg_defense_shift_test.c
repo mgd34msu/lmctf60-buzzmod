@@ -83,6 +83,11 @@ static void TestGoalProgressChargesImmediateTraversal(void)
 	CHECK(SG_RouteCandidateGoalMs(100, -1, infinity) == infinity);
 	CHECK(SG_RouteCandidateGoalMs(infinity - 50, 50, infinity) == infinity);
 	CHECK(SG_RouteCandidateGoalMs(100, 100, 0) == 0);
+	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, run, slow_hook, infinity));
+	CHECK(SG_AttackDescentFallbackAllowed(1, 1, run, fast_hook, infinity));
+	CHECK(!SG_RouteCandidateDescends(run, 300, 1100, infinity));
+	CHECK(SG_RouteCandidateDescends(run, 100, 1100, infinity));
+	CHECK(!SG_RouteCandidateDescends(infinity, 0, 1, infinity));
 }
 
 static void TestDuelRoutePricingUsesOneSurface(void)

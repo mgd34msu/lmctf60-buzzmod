@@ -88,11 +88,18 @@ def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=False) == 10
     pick = section(DESCEND, "int Think_PickLink", "static int Carrier_RallyCover")
     assert "SG_RouteCandidateGoalMs(route_field[neighbor->to]" in pick
+    assert "SG_RouteCandidateGoalMs(goal_field[l->to]" in pick
     cycle = section(DESCEND, "int cycle_link = bestlink;",
                     "bot->visit_seed[bot->visit_head]")
     assert "alternate = Objective_CycleRoute(bot, goal_field, true);" in cycle
     assert "alternate = Objective_CycleRoute(bot, goal_field, false);" in cycle
     assert "memset(bot->bl_until, 0, sizeof(bot->bl_until));" not in cycle
+
+
+def test_exact_route_owners_require_complete_edge_progress():
+    weapon = section(DESCEND, "static int StrikeWeaponFilterFreshCandidate",
+                     "static void StrikeCommitFreshLink")
+    assert "SG_RouteCandidateDescends(route_field[bot->seed]" in weapon
 
 
 def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():

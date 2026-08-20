@@ -15,11 +15,9 @@ import unittest
 import zlib
 from unittest import mock
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import stealstage  # noqa: E402
-
 
 class StrikeIntegrationTest(unittest.TestCase):
     def _compile_function_section_probe(
@@ -94,6 +92,7 @@ class StrikeIntegrationTest(unittest.TestCase):
                     "slipgate/sg_drop_live.c",
                     "slipgate/sg_swim_live.c",
                     "slipgate/sg_defense_supply.c",
+                    "slipgate/sg_action.c",
                 ])
             self.assertIn("sg_strike_transition_test: ok", output)
 

@@ -182,6 +182,9 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
             descend,
         )
         self.assertIn("supply_neighbors[supply_neighbor_count]", descend)
+        self.assertIn(
+            "SG_RouteCandidateGoalMs(route_field[l->to]", descend
+        )
         self.assertIn("SG_DEF_SUPPLY_OUTBOUND", header)
         self.assertIn("SG_DEF_SUPPLY_RETURN", header)
         self.assertIn("selected_target_field", supply)

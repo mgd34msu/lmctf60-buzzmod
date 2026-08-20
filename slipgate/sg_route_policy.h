@@ -27,6 +27,14 @@ static inline int SG_RouteCandidateGoalMs(int destination_ms,
 	return destination_ms + traversal_ms;
 }
 
+static inline int SG_RouteCandidateDescends(int current_ms,
+	int destination_ms, int traversal_ms, int infinity)
+{
+	return current_ms >= 0 && current_ms < infinity &&
+	    SG_RouteCandidateGoalMs(destination_ms, traversal_ms, infinity) <
+	        current_ms;
+}
+
 /* The immediate-return surcharge is a choice among equally useful routes,
  * not permission to spend progress.  A merely finite alternative can point
  * uphill; require two distinct non-worsening neighbors before taxing either

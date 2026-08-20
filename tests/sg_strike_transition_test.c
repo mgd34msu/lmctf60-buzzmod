@@ -17,7 +17,10 @@
 
 level_locals_t level;
 sg_fields_t sg_fields;
-
+int Fields_LinkTraversalCostMs(const rune_link_t *link)
+{
+	return link->cost_ms + SG_ActionFieldBiasMs(link->action, 1000);
+}
 void SG_StrikeTestSetRune(rune_t *rune);
 qboolean SG_StrikeTestDeclaredDoorGuardRestore(sg_bot_t *bot);
 qboolean SG_StrikeTestApplyDutyRoute(sg_think_t *tc,
@@ -29,9 +32,7 @@ qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
 	int ordered_role);
 void SG_StrikeTestPureRoutePrepareCommit(sg_bot_t *bot,
 	const sg_think_t *tc);
-
 static int failures;
-
 #define CHECK(condition) do { \
 	if (!(condition)) { \
 		fprintf(stderr, "%s:%d: check failed: %s\n", __FILE__, __LINE__, \
@@ -39,7 +40,6 @@ static int failures;
 		failures++; \
 	} \
 } while (0)
-
 enum guard_call_e
 {
 	CALL_RELEASE = 1,

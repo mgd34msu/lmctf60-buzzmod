@@ -538,9 +538,14 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	for (li = SG_Rune()->first_link[bot->seed]; li >= 0; li = SG_Rune()->next_link[li])
 	{
 		rune_link_t *l = &SG_Rune()->links[li];
+		int edge_ms = Fields_LinkTraversalCostMs(l);
+		int candidate_goal_ms =
+		    SG_RouteCandidateGoalMs(goal_field[l->to], edge_ms, SG_FIELD_INF);
+		int candidate_route_ms =
+		    SG_RouteCandidateGoalMs(route_field[l->to], edge_ms, SG_FIELD_INF);
 		float v = SG_RouteCandidatePrice(
 		    Surface_At(tc, l->to, w, route_field, support, intercept),
-		    Fields_LinkTraversalCostMs(l), Surface_ObjectiveWeight(tc, w));
+		    edge_ms, Surface_ObjectiveWeight(tc, w));
 		/* Route policy inherits the suffix; hook_water and the readiness branch
 		 * below remain exact bare-HOOK controller checks. */
 		qboolean hook_policy = SG_ActionUsesHookPolicy(l->action);
@@ -549,19 +554,16 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean mechanism_bound = false;
 		int b;
-
 		if (approach_flag)
 		{
 			float candidate_distance = SG_DistXY(
 			    SG_Rune()->seeds[l->to].origin, approach_flag->s.origin);
-
 			v += SG_StrikeFlagApproachPrice(true, approach_flag_touch,
 			    l->action == RL_RUN,
 			    approach_flag_distance, candidate_distance,
 			    SG_Rune()->seeds[l->to].origin[2] - approach_flag->s.origin[2],
-			    goal_field[bot->seed], goal_field[l->to]);
+			    goal_field[bot->seed], candidate_goal_ms);
 		}
-
 		if (SG_ActionMechanismPlanRequired(l->action))
 		{
 			if (!SG_RuneMechanismBindingCapture(SG_Rune(), (uint32_t)li,
@@ -569,7 +571,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				continue;
 			mechanism_bound = true;
 		}
-
 		/* Never begin a second ballistic action in midair. An already committed
 		 * jump/drop is restored below; new candidates wait for a landing. */
 		if (e->groundentity != g_edicts &&
@@ -585,7 +586,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		{
 			edict_t *plat = mechanism_bound
 			    ? mechanism_binding.mover_entity : NULL;
-
 			/* A declared lift is executable only when its exact map entity is
 			 * waiting at the bottom, or this body is already riding it. Do not
 			 * walk into an empty shaft while the platform is parked above. */
@@ -1135,7 +1135,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			supply_neighbors[supply_neighbor_count].link_index = li;
 			supply_neighbors[supply_neighbor_count].to_seed = l->to;
 			supply_neighbors[supply_neighbor_count].route_cost_ms =
-			    route_field[l->to];
+			    candidate_route_ms;
 			supply_neighbor_count++;
 		}
 
@@ -1152,7 +1152,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * as a last-resort movement authority after every live gate above. */
 		if (SG_AttackDescentFallbackAllowed(enemy_touch_mission,
 		        l->action == RL_RUN, goal_field[bot->seed],
-		        goal_field[l->to], SG_FIELD_INF) && v < attack_descent_value)
+		        candidate_goal_ms, SG_FIELD_INF) && v < attack_descent_value)
 		{
 			attack_descent_link = li;
 			attack_descent_value = v;
@@ -1182,8 +1182,10 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		if (exact_link >= 0)
 		{
 			bestlink = exact_link;
-			bestval = (float)route_field[
-			    SG_Rune()->links[exact_link].to];
+			bestval = (float)SG_RouteCandidateGoalMs(
+			    route_field[SG_Rune()->links[exact_link].to],
+			    Fields_LinkTraversalCostMs(&SG_Rune()->links[exact_link]),
+			    SG_FIELD_INF);
 		}
 		else
 		{
@@ -1913,8 +1915,9 @@ static int StrikeWeaponFilterFreshCandidate(const sg_bot_t *bot,
 	    route_field[bot->seed] >= SG_FIELD_INF ||
 	    rune->links[bestlink].to < 0 ||
 	    rune->links[bestlink].to >= rune->hdr.num_seeds ||
-	    route_field[rune->links[bestlink].to] >= SG_FIELD_INF ||
-	    route_field[rune->links[bestlink].to] >= route_field[bot->seed])
+	    !SG_RouteCandidateDescends(route_field[bot->seed],
+	        route_field[rune->links[bestlink].to],
+	        Fields_LinkTraversalCostMs(&rune->links[bestlink]), SG_FIELD_INF))
 		return -1;
 	return bestlink;
 }
@@ -2991,8 +2994,10 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
      route_field[bot->seed] >= SG_FIELD_INF ||
      SG_Rune()->links[bestlink].to < 0 ||
      SG_Rune()->links[bestlink].to >= SG_Rune()->hdr.num_seeds ||
-     route_field[SG_Rune()->links[bestlink].to] >= SG_FIELD_INF ||
-     route_field[SG_Rune()->links[bestlink].to] >= route_field[bot->seed]))
+     !SG_RouteCandidateDescends(route_field[bot->seed],
+         route_field[SG_Rune()->links[bestlink].to],
+         Fields_LinkTraversalCostMs(&SG_Rune()->links[bestlink]),
+         SG_FIELD_INF)))
 		bestlink = -1;
 	/* The strike weapon diversion is also an exact directed-field owner. */
 	bestlink = StrikeWeaponFilterFreshCandidate(bot, tc, bestlink);
@@ -3404,7 +3409,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->railhold_enemy = -1;
 	}
 
-
 	if (rail_seed >= 0 && rail_client >= 0 && bestlink >= 0 &&
 	    !rally_hold && !precision && bot->lead_ent == 0 &&
 	    bot->seed >= 0 &&
@@ -3729,8 +3733,6 @@ stag_done:
 	 * retired lateral RUN cannot release the stand for one command frame. */
 	(void)DefenseShiftRetireInvalid(bot, &bestlink, &defense_shift_selected);
 
-
-
 	/* RETURN ends only in the real own-flag/post band.  The objective has
 	 * already replaced any astray-flag/intercept goal with the fixed home
 	 * field, so this fence cannot finish on the weapon pad or a mixed tactic. */
@@ -3748,7 +3750,6 @@ stag_done:
 	     bot->patrol_seed >= 0))
 	{
 		qboolean quiet = defense_quiet;
-
 
 		if (bot->def_supply_armed)
 			goto no_hold;   /* OUTBOUND owns the weapon leg; RETURN can only
@@ -4011,7 +4012,6 @@ no_hold:;
 				}
 			}
 	}
-
 
 	/* HOLD/RUSH is a same-frame coordinator verdict.  Room, rail, and
 	 * rearguard policy above may set their ordinary holds, but none may delay
