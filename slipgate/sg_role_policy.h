@@ -154,6 +154,16 @@ static inline int SG_InterposeMode(float dose)
 	return 1;
 }
 
+static inline int SG_InterposeFallbackSeed(int mode, int carrier_seed,
+	int midpoint_seed)
+{
+	if (carrier_seed < 0 || mode < 1 || mode > 3)
+		return -1;
+	if (mode == 1 && midpoint_seed >= 0)
+		return midpoint_seed;
+	return carrier_seed;
+}
+
 /* Coordinator duty is known before objective selection.  Only effective
  * ESCORT replaces the organic role here; the coordinator applies every other
  * concrete duty route after the ordinary objective stage. */

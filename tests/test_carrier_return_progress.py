@@ -130,6 +130,7 @@ def test_carrier_screen_uses_the_accepted_moving_formation_by_default():
     assert "SG_InterposeLeadStation(cc," in interpose
     assert "SG_FieldCarrierLeadStation(SG_Rune(), cf, oc->seed" in interpose
     assert "SG_FieldNearestBandSeed(SG_Rune(), cf, oc->seed" in interpose
+    assert "SG_InterposeFallbackSeed(interpose_mode," in interpose
     assert "cf[threat_seed]" in interpose
     assert "en11->seed >= SG_Rune()->hdr.num_seeds" in interpose
     assert "e->client - game.clients" not in interpose

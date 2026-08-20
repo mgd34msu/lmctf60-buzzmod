@@ -1514,7 +1514,6 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					static int interpose_field[SG_MAX_SEEDS];
 					vec3_t mid;
 					int ms = -1, mc = 0;
-
 					/* Mode 3 selects route-bound lead and nearby trail stations. */
 					if (interpose_mode == 3)
 					{
@@ -1558,7 +1557,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 						        sg_caco_enemies[SG_TeamIdx(team)][ts].seed].origin,
 						    mid);
 						VectorScale(mid, 0.5f, mid);
-						ms = Rune_NearestSeed(SG_Rune(), mid);
+						ms = SG_InterposeFallbackSeed(interpose_mode,
+						    oc->seed, Rune_NearestSeed(SG_Rune(), mid));
 					}
 					if (ms >= 0)
 					{

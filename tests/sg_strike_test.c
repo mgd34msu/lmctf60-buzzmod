@@ -1170,14 +1170,14 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(!SG_EscortSupportFullStrength(0));
 	CHECK(!SG_EscortSupportFullStrength(-1));
 	CHECK(!SG_EscortSupportFullStrength(2));
-	CHECK(SG_InterposeMode(-1.0f) == 0);
-	CHECK(SG_InterposeMode(0.0f) == 0);
-	CHECK(SG_InterposeMode(1.0f) == 1);
-	CHECK(SG_InterposeMode(1.99f) == 1);
-	CHECK(SG_InterposeMode(2.0f) == 2);
-	CHECK(SG_InterposeMode(2.99f) == 2);
-	CHECK(SG_InterposeMode(3.0f) == 3);
-	CHECK(SG_InterposeMode(99.0f) == 3);
+	CHECK(SG_InterposeMode(-1.0f) == 0 && SG_InterposeMode(1.99f) == 1);
+	CHECK(SG_InterposeMode(2.0f) == 2 && SG_InterposeMode(3.0f) == 3 &&
+	      SG_InterposeMode(99.0f) == 3);
+	CHECK(SG_InterposeFallbackSeed(1, 7, 9) == 9);
+	CHECK(SG_InterposeFallbackSeed(2, 7, 9) == 7 &&
+	      SG_InterposeFallbackSeed(3, 7, 9) == 7);
+	CHECK(SG_InterposeFallbackSeed(3, -1, 9) == -1 &&
+	      SG_InterposeFallbackSeed(0, 7, 9) == -1);
 	CHECK(SG_ObjectiveRole(SG_ROLE_ATTACK, 0) == SG_ROLE_ATTACK);
 	CHECK(SG_ObjectiveRole(SG_ROLE_ATTACK, 1) == SG_ROLE_ESCORT);
 	CHECK(SG_ObjectiveRole(SG_ROLE_RECOVER, 1) == SG_ROLE_ESCORT);
