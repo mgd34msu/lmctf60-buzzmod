@@ -78,6 +78,21 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertIn("SG_DefensePatrolThrottle(sg_cv.patrol->value)", move)
         self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", move)
 
+    def test_post_steps_charge_their_run_edge(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+        shift = source[source.index("sg_defense_shift_candidate_t candidates"):
+                       source.index("request.threat_x", source.index(
+                           "sg_defense_shift_candidate_t candidates"))]
+        patrol = source[source.index("sg_defense_patrol_candidate_t cand"):
+                        source.index("bot->patrol_random =", source.index(
+                            "sg_defense_patrol_candidate_t cand"))]
+
+        self.assertIn("SG_RouteCandidateGoalMs(", shift)
+        self.assertIn("goal_field[link->to]", shift)
+        self.assertIn("Fields_LinkTraversalCostMs(link)", shift)
+        self.assertIn("SG_RouteCandidateGoalMs(goal_field[pl->to]", patrol)
+        self.assertIn("Fields_LinkTraversalCostMs(pl)", patrol)
+
     def test_defense_terminal_preserves_selected_field(self) -> None:
         move = (ROOT / "slipgate/sg_move.c").read_text()
         start = move.index("else if (!have_aim && role == SG_ROLE_DEFEND)")

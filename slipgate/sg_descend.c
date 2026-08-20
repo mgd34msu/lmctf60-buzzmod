@@ -2237,7 +2237,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					const rune_link_t *link =
 					    &SG_Rune()->links[link_index];
 					vec3_t delta;
-
 					if (link->action != RL_RUN || link->to < 0 ||
 					    link->to >= SG_Rune()->hdr.num_seeds ||
 					    !DefenseShiftLinkReady(bot, link_index,
@@ -2248,7 +2247,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					candidates[candidate_count].link_index = link_index;
 					candidates[candidate_count].seed_index = link->to;
 					candidates[candidate_count].goal_ms =
-					    goal_field[link->to];
+					    SG_RouteCandidateGoalMs(goal_field[link->to],
+					        Fields_LinkTraversalCostMs(link), SG_FIELD_INF);
 					candidates[candidate_count].delta_x = delta[0];
 					candidates[candidate_count].delta_y = delta[1];
 					candidates[candidate_count].delta_z = delta[2];
@@ -3800,13 +3800,10 @@ stag_done:
 			}
 			else if (SG_TimerReady(bot->patrol_until))
 			{
-				/* Pick a proved RUN neighbour inside the post band.  The pure
-				 * chooser owns admission and reversal avoidance; live randomness
-				 * only chooses among the admitted circuit legs. */
+				/* Choose a complete RUN inside the post band. */
 				int pli, chosen_seed = -1, chosen_link;
 				sg_defense_patrol_candidate_t cand[64];
 				size_t nc = 0;
-
 				for (pli = SG_Rune()->first_link[bot->seed]; pli >= 0;
 				     pli = SG_Rune()->next_link[pli])
 				{
@@ -3818,7 +3815,10 @@ stag_done:
 					{
 						cand[nc].link_index = pli;
 						cand[nc].seed_index = pl->to;
-						cand[nc].goal_ms = goal_field[pl->to];
+						cand[nc].goal_ms =
+						    SG_RouteCandidateGoalMs(goal_field[pl->to],
+						        Fields_LinkTraversalCostMs(pl),
+						        SG_FIELD_INF);
 						cand[nc].is_run = true;
 						nc++;
 					}
