@@ -39,13 +39,7 @@
  * shotgun, and the two forms are switched between per item, not per line.
  */
 #define SG_CHAT_TOPIC_TIMER			7
-/*
- * Majors take/witness calls (sg_itemcomm). Their own lane, not ITEM_GONE's
- * (smoke, 2026-08-05): the first quad call of a game got eaten by shotgun
- * chatter sharing the topic, and per Rule 19 an eaten call leaves the team
- * ignorant -- honest, but a human prioritizes "QUAD TAKEN" over "took
- * shells", so the channel should too.
- */
+/* Major-item calls use a separate cooldown from ordinary item chatter. */
 #define SG_CHAT_TOPIC_MAJOR			8
 /*
  * Answering a human who typed this bot's name and no order the grammar

@@ -2529,15 +2529,7 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	if (sg_weapons[w].speed <= 0.0f)
 		return 0.0f;			/* hitscan: aim at the centre, rule F2 */
 
-	/*
-	 * THE LANDING-POINT LEAD (sg_landlead):
-	 * airborne players are on a committed arc -- judge where they
-	 * land and put the rocket there. Linear lead extends velocity
-	 * into the sky gravity will never let them reach; this branch
-	 * steps the target's own parabola to its touchdown and aims the
-	 * splash at the floor that catches them. Rockets only: the
-	 * splash forgives timing the way rule D1 promises.
-	 */
+	/* Lead rockets toward an airborne target's predicted landing point. */
 	if (w == SG_W_ROCKETLAUNCHER && !enemy->groundentity &&
 	    sg_cv.landlead->value)
 	{
@@ -2783,16 +2775,7 @@ float SG_WorthMega(edict_t *self)
 	if (!st)
 		return 0.0f;
 
-	/*
-	 * NO CAMPING THE PAD. The tiers above are recomputed once a second like
-	 * every other worth, but the headroom test is re-asked HERE, every frame:
-	 * the instant the mega lands the bot is at 200 and the pull has to be
-	 * gone on that frame. A second of stale worth is a second of standing on
-	 * an empty pedestal, and standing on it buys nothing -- MegaHealth_think
-	 * bleeds the overheal back off at 1 hp/s from the moment of pickup
-	 * (g_items.c:569-592) and the pad itself is 20 s from respawning, so
-	 * every second waited is a point of the prize spent. Take it and push.
-	 */
+	/* Remove mega-health pull immediately when the bot has no headroom. */
 	if (self->health >= SG_MEGA_HEADROOM)
 		return 0.0f;
 	return st->worth_mega;
@@ -3535,13 +3518,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 		    hw == SG_W_ROCKETLAUNCHER || hw == SG_W_GRENADELAUNCHER ||
 		    hw == SG_W_SHOTGUN || hw == SG_W_BFG)
 		{
-			/*
-			 * Shot detection by AMMO DECREMENT, not weaponstate: under
-			 * a held trigger the gun re-enters FIRING inside the same
-			 * server frame and a 10Hz think never observes READY -- the
-			 * first cut of this feature was inert for exactly that
-			 * reason (probe: 0 taps in 400s of 5v5). Ammo cannot lie.
-			 */
+			/* Detect shots by ammo decrement because READY may occur between ticks. */
 			{
 				int ta = (self->client->ammo_index > 0)
 				    ? self->client->pers.inventory[self->client->ammo_index]

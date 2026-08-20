@@ -1,94 +1,9 @@
 #!/usr/bin/env python3
-"""stallcensus.py -- navigation stalls: bots pushing on geometry instead of
-moving through it.
+"""Correlate authenticated route telemetry with visible stall episodes.
 
-An eyewitness watching a live game reported bots getting physically stuck on
-map objects while trying to cross them -- pressed against a ledge, jittering
-in a doorway, hunting for a path that isn't there. Every other instrument in
-this toolset reads outcomes (steals, carries, conduct.py's grind/spin) off
-the film; none of them measures whether the underlying navigation is fluent.
-This one does, directly from the same per-0.1s entity tracks film.py already
-parses.
-
-WHAT COUNTS AS A STALL: a window of >= STALL_WIN_S seconds where an entity's
-net displacement stays under STALL_NET_UNITS while there is direct evidence
-it kept trying to move:
-
-  jitter    gross path length inside the window (sum of frame-to-frame step
-            lengths) is >= STALL_GROSS_UNITS -- at least double the net
-            ceiling, so real back-and-forth pushing against a surface is
-            what trips this, not quantization noise on an entity that is
-            simply standing still.
-  yaw_turn  sustained yaw rate >= STALL_YAW_DPS averaged across the window
-            while there is a translational push signal -- the body is turning,
-            hunting for a way through, without the ceiling of conduct.py's spinbot-caliber
-            SPIN_DPS (540): a stuck bot reorienting only needs to show
-            visible, sustained turning, not a full spin.
-
-A low-mobility window that shows NEITHER signal is ordinary standing still
-(camping, holding a corridor) and is not counted as anything -- this
-instrument only flags navigation failure, not stillness by itself.
-Overlapping/adjacent triggering windows are merged into one stall episode so
-the reported duration reflects how long the entity actually stayed stuck,
-not the fixed probe length.
-
-EXCLUDED:
-  dead/respawn ticks   reuses conduct.py's contiguous_segments, which is
-                        itself built on film.TELEPORT_UNITS: a respawn
-                        teleport reads as a segment break, never as a giant
-                        one-tick "displacement", and slivers shorter than
-                        conduct.MIN_SEG_S are dropped outright.
-  intentional posts    a low-mobility window whose midpoint lies within
-                        POST_R of the entity's OWN team's flag stand (from
-                        stands.json, same fixture conduct.py/tripcensus.py
-                        use) is guarding, not stuck. It is never counted as
-                        a stall; its time is tallied separately as
-                        "held post time" so the two are never conflated. If
-                        a window's stall evidence (jitter/yaw) and its post
-                        proximity disagree with each other on the same
-                        frame, stall wins -- a bot that is visibly fighting
-                        geometry two steps from its own stand is still
-                        stuck, not posted.
-
-PER-DEMO OUTPUT:
-  stalls_per_min       stall episodes / players_observed_min (coverage-
-                        honest: same denominator convention as conduct.py --
-                        a player-second counts only where that player has a
-                        contiguous track sample that second).
-  stall_dur_median_s   median stall episode duration.
-  stall_time_frac      total stall seconds / total observed seconds.
-  post_hold_frac       total held-post seconds / total observed seconds --
-                        printed for contrast, not as a stall metric.
-  top_stall_locations  up to 3 clusters (stall episode midpoints grouped
-                        within CLUSTER_R in 3D) as {x, y, z,
-                        evidence_count, duration_s},
-                        sorted by count -- the map's snag spots. Map-
-                        specific by construction, so --compare does not
-                        pool this field (see below).
-  stands_known         false if the demo's map has no stands.json fixture:
-                        with no own-stand coordinate, post detection cannot
-                        run and every qualifying low-mobility window on that
-                        map is counted as a stall even if it was a post.
-                        Read stall numbers for such demos as an upper bound.
-
-COVERAGE HONESTY: human film is client POV -- entities exist in the track
-dict only while inside the recorder's PVS, so a human demo's
-players_observed_min is real observed time, not wall time; bot serverrecord
-film sees everything, so its observed time ~= wall time. Rates here are
-each population's own rate over its own denominator -- rank/ratio evidence
-across populations, not calibrated absolutes, same caveat conduct.py states
-for grind_spm/approach_pm.
-
---compare pools stalls_per_min, stall_dur_median_s (true median of the
-pooled episode durations, not an average of per-demo medians),
-stall_time_frac and post_hold_frac, weighted by players_observed_min exactly
-like conduct.py's pool(). top_stall_locations is left out of the pooled
-card: clustering stall midpoints from different maps together would produce
-meaningless coordinates.
-
-Usage:
-  stallcensus.py <demo.dm2> [...]                     per-demo JSON lines
-  stallcensus.py --compare --human <glob> --bot <glob>  pooled two-column card
+Strict analysis requires complete serverrecord frames, stable player identity,
+exact receipt windows, one-second census coverage, and RUNE-bound route rows.
+The output describes evidence; snagrepair owns repair selection and encoding.
 """
 
 import argparse

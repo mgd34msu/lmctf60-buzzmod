@@ -374,7 +374,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
     def test_non_escort_attackers_hold_enemy_base_during_our_carry(self) -> None:
         goal = source("slipgate/sg_goal.c")
-        objective = between(goal, "void Think_Objective", "THE RUNE COURIER")
+        objective = between(goal, "void Think_Objective", "if (sg_cv.runetoss->value")
         carrier_gate = objective.index("SG_AttackObjectiveUsesFixedStand(")
         fixed_red = objective.index("sg_fields.to_red_flag", carrier_gate)
         fixed_blue = objective.index("sg_fields.to_blue_flag", fixed_red)
@@ -407,7 +407,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
         goal = source("slipgate/sg_goal.c")
         objective = between(goal, "else if (role == SG_ROLE_ESCORT)",
-                            "THE RUNE COURIER")
+                            "if (sg_cv.runetoss->value")
         self.assertIn("sg_fields.our_carrier_valid", objective)
         self.assertIn("sg_fields.to_red_flag", objective)
         self.assertIn("sg_fields.to_blue_flag", objective)

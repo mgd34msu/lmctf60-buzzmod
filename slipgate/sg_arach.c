@@ -1588,18 +1588,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			defenders_wanted = 0;
 		else if (size == 2)
 		{
-			/*
-			 * DUEL ROLES (sg_duelroles). The hardcoded 1
-			 * was a catch-22 the 268-283 census convicted: dw stuck
-			 * at 1 in 131/138 transitions, zero duel caps in the
-			 * observed matches, while the statue defender sat p90=173u from
-			 * its post -- 2v2 could never push together because
-			 * dw=0 required already holding the flag. Under the
-			 * flag, duel teams run the same state machine as
-			 * everyone: theirs-astray pushes BOTH bots (they cannot
-			 * score while we hold theirs), ours-astray keeps the
-			 * watchman. Off, the old pin stands.
-			 */
+			/* In 2v2, an enemy flag away from home commits both bots to attack. */
 			if (sg_cv.duelroles->value)
 				defenders_wanted = theirs_astray ? 0 : 1;
 			else
@@ -2429,12 +2418,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->was_dead = 1;
 }
 
-/*
- * THE CORPSE FRAME.
- * Everything a dead bot owes the world: teach the danger and tilt ledgers
- * once, drop every live claim, pulse the respawn button. Returns true when
- * this frame belonged to a corpse and the think ends with it.
- */
+/* Handle one dead-bot frame, including death learning and respawn input. */
 static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 	qboolean allow_command)
 {
@@ -2542,10 +2526,7 @@ static qboolean Think_SpeedhookOwnsSeed(const sg_bot_t *bot)
 	       sg_rune->linked_seed && sg_rune->linked_seed[bot->seed];
 }
 
-/*
- * WHERE AM I ON THE RUNE: seed relocation on 48 units of travel, the
- * previous-seed memory the dither reads, and the pit trace.
- */
+/* Refresh the bot's current RUNE seed and prior-seed memory. */
 static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 {
 	vec3_t d;

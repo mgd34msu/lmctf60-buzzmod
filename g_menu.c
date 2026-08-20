@@ -746,18 +746,7 @@ void Ref_Main_Menu (edict_t *ent)
 	Menu_Draw (ent);
 }
 
-/*
- * The referee's bot roster. A referee standing in the server has no console,
- * so every verb an admin can type at `sv sg` that changes the roster needs a
- * seat here too -- this entry point existed before, and went out with the
- * legacy bot library it used to drive. It is back, driving SLIPGATE's own
- * entry points directly: nothing below knows the old bl_ library ever
- * existed, and there is no second copy of the "which bot goes" rule.
- *
- * Each action redraws this menu rather than returning to the referee menu,
- * because adding a full team is four presses and bouncing out after every
- * one of them is how you end up with three bots and a confused referee.
- */
+/* Expose the SLIPGATE roster commands to an in-game referee. */
 void Ref_Bots_Menu (edict_t *ent)
 {
 	Menu_Free(ent);

@@ -1,10 +1,7 @@
 /*
  * sg_cvars.h -- the one place a SLIPGATE cvar name or default lives.
- * Generated 2026-08-11 from the 82 cvars then present in the
- * tree (215 scattered gi.cvar() sites, each re-stating its own default;
- * two sites disagreeing silently would have shipped both).  Add a cvar
- * by adding an X() line; the struct field, registration, and lookup all
- * derive from it.
+ * Add a cvar with one X() entry. The struct field, registration, and lookup
+ * derive from this list.
  */
 #ifndef SG_CVARS_H
 #define SG_CVARS_H

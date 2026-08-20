@@ -1,17 +1,7 @@
-"""Bounded readers and pairing authority for hook diagnostic logs.
+"""Bounded parsers and pairing authority for hook diagnostic logs.
 
-The diagnostic writer has two machine-readable line families:
-
-* ``HOOKFIRE``/``HOOKEND`` records, whose exact key order is part of the
-  writer contract; and
-* the ``SG`` telemetry records consumed by the offline hook reports; and
-* bounded auxiliary markers (abort/bite/sky-hold/death) used by ``hookdiag``.
-
-This module is deliberately the only parser for both families.  In
-particular, every decimal token is checked for an ASCII, canonical, bounded
-grammar before it is converted.  A malformed ``SG `` line is represented by a
-typed :class:`TelemetryAnomaly`; consumers share the fatal/reporting policy
-declared below.
+The module validates canonical HOOKFIRE, HOOKEND, SG telemetry, and auxiliary
+marker records before exposing typed events to report consumers.
 """
 
 from dataclasses import dataclass, replace

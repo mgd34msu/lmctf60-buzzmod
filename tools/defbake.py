@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-"""defbake.py -- bake human defensive occupancy into per-map .dpo sidecars.
+"""Bake defensive occupancy into authenticated DPO sidecars.
 
-The game loads this optional sidecar beside the rune. Its authenticated header
-binds both graph counts plus the rune payload, action contract, and header.
-The payload has four consecutive ``u8[num_seeds]`` planes: post red/blue,
-then intercept red/blue.
-
-A tier is log-scaled 0..255 exactly as humanbake.py scales link traffic,
-with 0 meaning "no human ever held this seed".  Post tiers come from
-seconds of standing-still time inside defradius of the team's own flag
-stand while that flag was home; intercept tiers come from where defenders
-ended up ten seconds after an enemy steal.
-
-Usage: defbake.py <rune_dir> <defense_json_dir> [<map> ...]
+Four seed-indexed byte planes encode red and blue post and intercept weights.
+Inputs and output bind the complete validated RUNE identity.
 """
 import glob
 import math

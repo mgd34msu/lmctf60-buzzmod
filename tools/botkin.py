@@ -1,23 +1,9 @@
 #!/usr/bin/env python3
-"""botkin.py -- bot movement grammar from serverrecord .dm2 demos, at 10Hz,
-comparable to demokin.py's human POV grammar (air_gain, view_div, touch_loss,
-relaunches) plus extra "visible jank" metrics: stop-start frequency, in-place
-180-degree turnarounds, wall bumps, standing-still time share, straight-vs-
-curved segment mix, and the 1Hz turn gauge (median turn / reversal rate).
+"""Measure visible bot movement grammar from serverrecord demos.
 
-Self-contained: does not reuse demoents.parse_delta_entity_track (which
-only tracks origin) because it also needs the entity's yaw angle (ANGLE2)
-to get a body-facing proxy for view-vs-velocity divergence. Reuses only the
-low-level byte reader and entity-bits parser from dm2speed.
-
-Bot entities have no player_state_t in serverrecord demos (see
-demoents.walk_entities docstring) -- there is no engine-reported velocity
-or PM flags. Everything here is derived from 10Hz origin deltas:
-    v = (pos[i] - pos[i-1]) / 0.1
-which is the ONLY way to get bot kinematics out of these demos, and is
-exactly what a spectator would see, i.e. what makes movement look janky.
-
-Usage: botkin.py <demo.dm2> [...]  -- prints per-bot and pooled grammar.
+Kinematics are derived from 10 Hz entity-origin deltas because serverrecord bot
+entities do not carry player-state velocity. Output includes pooled and per-bot
+movement, turn, stop, wall-contact, and route-texture metrics.
 """
 import struct, sys, math, os, statistics as st
 import collections

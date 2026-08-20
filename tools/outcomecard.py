@@ -1,73 +1,9 @@
 #!/usr/bin/env python3
-"""outcomecard.py -- rung 5 (MATCH OUTCOMES): a blind match-outcome sheet.
+"""Summarize flag pickups, carries, captures, and match outcomes.
 
-Same blinding discipline as film.py, routesheet.py, fightsheet.py and
-teamsheet.py: identical extraction for client (human) and serverrecord (bot)
-demos, no durations, no roster counts, fixed geometry, constant axis scales.
-See film.py's MODULE NOTES 1-11; notes 2, 7 and 10 apply here verbatim.
-Nothing on the PNG reveals demo shape; the sidecar is the unblinding
-artifact.
-
-WHAT THIS SHEET ASKS: not "can this player fight" (rung 3) or "does this
-team play as a team" (rung 4), but what actually HAPPENED in the match --
-who scored, when, how the lead moved, and whether steals turned into
-captures. It is the closest thing on this ladder to a scoreboard, built the
-same blind way as everything else: from the effects-bit carry-window stream
-film.py already proved, never from the print stream (asymmetric between the
-two demo shapes, see film.py's module docstring).
-
-ZERO NEW DEMO PARSING, ZERO NEW OUTCOME HEURISTIC. Every event on this sheet
-is either a carry-window START (F.carry_windows: a steal) or a carry-window
-END classified 'captured' by F.classify_outcome -- the SAME outcome
-classifier film.py's own carry-route-dissimilarity panel and teamsheet.py's
-panel 3 (defense) capture ticks already use: a carry that ends within
-cap_radius (280u) of the thief's OWN flag stand (F.flag_stands / --stands)
-counts as a capture. This module invents no new "did they score" logic; it
-only counts and times the labels F.classify_outcome already produces.
-
-FLAG STAND POSITIONS. Reused verbatim from teamsheet.py's resolve_stands:
-primary source is F.flag_stands(windows) (median carry-start position per
-colour, from this demo's own carries); --stands (a JSON file of
-{"mapname": {"red": [x,y,z], "blue": [x,y,z]}}) fills in a colour this demo
-never had a carry of; StandsMissing is raised (and reported as SKIP, not
-FAIL) when neither source has an answer for a colour, because captures
-cannot be classified at all without a stand estimate for the color being
-carried home.
-
-REQUIRED PANELS, one figure per demo:
-  1. score progression -- cumulative captures per team, exact step function
-                           over normalized match time (event-driven, not
-                           binned: capture counts are already discrete).
-  2. cap timing         -- histogram of inter-capture intervals (normalized
-                           time), plus a vertical tick at each team's first
-                           capture time.
-  3. momentum           -- cap differential (red - blue) over normalized
-                           time, lead changes (leader identity flips)
-                           marked.
-  4. pressure balance   -- cumulative steals per team over normalized time
-                           (carry-window starts), overlaid with the running
-                           conversion ratio (captures / steals so far) on a
-                           second axis.
-
-FAIRNESS RULE (ABSOLUTE). The caption may show ONLY: map name, the 12-char
-content hash of the demo file, and the count of carry windows -- the exact
-set film.py's own caption uses (see film.py's caption comment) and the exact
-line teamsheet.py's caption builds. No duration, no player counts, no
-filenames, no population-conditional annotations: nothing whose presence or
-format differs between a bot and a human demo.
-
-CLI:
-    outcomecard.py <demo.dm2> [...] --out <dir> [--stands <file.json>]
-                   [--pov-parity [--pov-ent N] [--pov-radius U] [--pov-fov D]]
-    outcomecard.py <demo.dm2> [...] --scalars [--stands <file.json>]
-                   [--pov-parity] [--cache <path>]
-    outcomecard.py --calibrate [--human <glob>...] [--bot <glob>...]
-                   [--maps mactf06 ...] [--radius-check]
-
-Writes <hash>.png (the sheet) and <hash>.json (source-mapping sidecar, NOT
-blind -- that file exists for the unblinding step only) per demo, hash-named
-by film.py's hash_demo so one demo carries one hash across every rung and a
-single unblinding table serves all of them.
+The tool reads the same demo shapes as the film tools and can emit scalar or
+card output. Geometric carry-end classification is diagnostic; authoritative
+release measurements must reconcile CTF logs and persisted statistics.
 """
 import argparse
 import json
@@ -627,7 +563,7 @@ def collect_scalars(paths, pov_parity, cap_radius, stands_file, stands_path,
 
 def run_calibration(human_paths, bot_paths, cap_radius, stands_file,
                     stands_path, cache, maps=None):
-    """Stage A of the design's two-stage gate, ported from teamsheet.py's
+    """calibration of the design's two-stage gate, ported from teamsheet.py's
     run_calibration with the same math (RS.roc_auc, same separability
     definition) and the same rationale: the instrument has to prove it has
     power on data where the answer is known before it is allowed to certify
@@ -666,7 +602,7 @@ def run_calibration(human_paths, bot_paths, cap_radius, stands_file,
     return out
 
 
-def print_calibration(res, title='STAGE A'):
+def print_calibration(res, title='CALIBRATION'):
     print(f"\n=== {title}: maps={','.join(res['maps']) or '(none shared)'} "
          f"n_human={res['n_human']} n_bot={res['n_bot']} ===")
     print(f"{'scalar':22s} {'human_mean':>11s} {'bot_mean':>11s} "
@@ -690,7 +626,7 @@ def print_calibration(res, title='STAGE A'):
              f"(separability {best[1]:.3f}, {direction}, "
              f"{SCALAR_PANEL[best[0]]})")
         gate = 'PASS' if best[1] >= 0.85 else 'FAIL'
-        print(f"Stage A gate (separability >= 0.85 on at least one "
+        print(f"calibration gate (separability >= 0.85 on at least one "
              f"scalar): {gate}")
     hot = [k for k in SCALAR_KEYS
           if (res['auc'][k]['separability'] or 0) >= 0.95]
@@ -726,7 +662,7 @@ def main():
                     help='parse cache for --scalars, keyed on file path, '
                          'mtime, size and parity/stands settings')
     ap.add_argument('--calibrate', action='store_true',
-                    help='Stage A gate: run the instrument over a labeled '
+                    help='calibration gate: run the instrument over a labeled '
                          'known-set and report ROC AUC per scalar. Renders '
                          'nothing and never writes a label onto any sheet.')
     ap.add_argument('--human', nargs='+', default=[DEFAULT_HUMAN_GLOB],
@@ -765,7 +701,7 @@ def main():
                 cr2 = CAP_RADIUS + dr
                 alt = run_calibration(human, bot, cr2, stands_file,
                                       args.stands, cache, maps=args.maps)
-                print_calibration(alt, title=f'STAGE A (cap_radius {cr2:.0f}u)')
+                print_calibration(alt, title=f'CALIBRATION (cap_radius {cr2:.0f}u)')
                 print("  radius-perturbation swing vs baseline:")
                 for k in SCALAR_KEYS:
                     a0 = res['auc'][k]['auc_bot_over_human']

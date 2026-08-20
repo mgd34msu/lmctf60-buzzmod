@@ -1,58 +1,9 @@
 #!/usr/bin/env python3
-"""escapepriors.py -- which way humans LEAVE the stand, per map.
+"""Derive map-specific flag-carrier escape priors from human demos.
 
-Enhancement 6, part A. Every other human prior in this toolbox is about
-WHERE the roads are (humanbake/escapebake: per-link traffic tiers). This
-one is about the first decision of a carry: a human who just took the flag
-picks a direction out of the room, and on any given map that choice is not
-uniform -- some exits are the ones people actually use, and different
-people use different ones. The bot's descent, being an argmin, always
-leaves the same way. This mines the human answer as a DISTRIBUTION so the
-game can sample from it instead of copying one player's habit (the owner's
-standing ruling: mine the best behavior from EACH human, never conform to
-one).
-
-The measurement, per steal:
-
-  * the steal itself comes from the effects-bit carry state machine in
-    film.py (carry_windows: EF_FLAG1/EF_FLAG2 transitions on the player
-    entity). No print-stream text is used, so this reads the same in
-    either demo shape.
-  * the flag STAND is film.flag_stands()'s per-color estimate for the demo
-    (median of that color's carry-start positions -- the flag is always
-    picked up at its own stand), falling back to this window's own start
-    point when the color was only stolen once.
-  * the EXIT BEARING is the compass direction from that stand to where the
-    carrier actually was ~3 seconds later, quantized to 8 buckets of 45
-    degrees. Bucket 0 is +x (E) and buckets advance counter-clockwise:
-    E NE N NW W SW S SE. Three seconds is long enough for the exit taken
-    to be unambiguous and short enough that it is still the exit and not
-    the route home.
-
-Sample selection inside the 3s window matters because a HUMAN .dm2 is a
-client recording: entity updates only arrive for players inside the
-recorder's PVS, so a carrier who is not the recorder has holes in his
-track (film.py's module docstring measures 11-42% frame coverage on this
-corpus). The bearing therefore uses the LAST sample at or before t0+3.0s
-that is at least MIN_ELAPSED_S after the grab and at least MIN_RUN_U from
-the stand -- a real displacement, whenever in the window it was actually
-observed -- and the steal is skipped outright when no such sample exists.
-
-Only client (human) demos are counted. A serverrecord capture is our own
-bots playing and would poison the prior with the very habit this is meant
-to replace; walk_demo auto-detects the shape and those files are skipped
-and reported.
-
-Usage:
-    escapepriors.py <demo.dm2|dir> [...] [--out tools/escape-priors.json]
-                    [--min-events N] [--verbose]
-
-Writes the per-map bucket counts as escape-priors.json. The game reads
-that file with a hand parser (sg_arach.c Escape_Load, cvar
-sg_escapeprior), so the shape is a contract: a "maps" object whose values
-are flat 8-element integer arrays in bucket order. Nothing else in the
-file is read by the game, and no map name may appear anywhere outside
-that object.
+Inputs are decoded through the shared demo parser and associated with map and
+flag identities. Output remains development data until rebound to the exact
+release RUNE and receipt authority.
 """
 import argparse
 import collections

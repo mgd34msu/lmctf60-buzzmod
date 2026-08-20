@@ -166,12 +166,7 @@ enum {
 	SG_LINE_OPEN,                   /* the map just came up */
 	SG_LINE_WIN, SG_LINE_LOSE, SG_LINE_CLOSE,   /* how the match ended */
 	SG_LINE_IDLE,                   /* nothing happening, filling the air */
-	/*
-	 * The reactions the census named as missing. APPENDED, never inserted:
-	 * the row order below is this enum's order and nothing but a comment
-	 * keeps them in step, so a category slotted into the middle would shift
-	 * every row after it into the wrong category in all four voices at once.
-	 */
+	/* Append categories because the voice tables use this numeric order. */
 	SG_LINE_HURT,                   /* took a big one and lived */
 	SG_LINE_SUICIDE,                /* an enemy killed himself, we watched */
 	SG_LINE_REPLY,                  /* a human said this bot's name */
@@ -1468,14 +1463,7 @@ static sg_radioq_t	radio_q[2];         /* per team-1 */
 
 #define SG_QUAD_LIVE	(300.0f * FRAMETIME)
 
-/*
- * EITHER 60 OR 30, never both (owner's correction, 2026-08-05, his words:
- * "quad 30 when they hear an enemy quad sound dying off and there was no
- * other quad callout, or quad 60 when they take the quad themselves or see
- * the quad taken"). A called take at 60 SILENCES the 30 for that cycle;
- * the 30 exists for the quad nobody called -- its trigger is the EAR
- * (sg_caco_quadheard) noticing the enemy quad's voice has died away.
- */
+/* A take call suppresses the later fade-warning call for the same quad. */
 static struct
 {
 	float		called_until;           /* a 60-call covered this cycle */
@@ -1821,15 +1809,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		return;
 	}
 
-	/*
-	 * ONE VOICE PER QUAD CYCLE PER TEAM (owner, 2026-08-05: "we don't
-	 * like when multiple people on the team call the same quad timer...
-	 * it creates confusion"). ANY armed quad clock -- take-call, fade
-	 * call, a parsed human line -- marks the cycle covered, and every
-	 * other would-be caller (the fade watcher, the countdown reminder)
-	 * checks this mark and stays quiet. Set here, not in the radio path,
-	 * so a text-only server gets the same discipline.
-	 */
+	/* Any armed quad clock suppresses duplicate calls for that team. */
 	{
 		const char *acls = NULL;
 
@@ -1884,12 +1864,7 @@ static void Chat_ArmClock(int ti, const sg_chatq_t *q, qboolean said)
 		chat_watch[q->arm_slot].soon_said[ti] = false;
 	}
 
-	/*
-	 * IN CONJUNCTION (owner, 2026-08-05). The radio call belongs to the same
-	 * instant as the clock: the line was spoken, the team believes the number,
-	 * and the noise that goes with it is queued behind a human's hand time.
-	 * Inert with sg_radio 0.
-	 */
+	/* Queue the radio cue with the accepted clock update. */
 	Chat_RadioTaken(ti, q);
 
 	if (dbg)
@@ -3542,13 +3517,7 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 	if (n < 1)
 		return;
 
-	/*
-	 * The item-call ear, ahead of the order parser and ahead of the bot
-	 * test, because a bot's call is a call (owner, 2026-08-05: "there should
-	 * be no difference in parsing a human"). Team channel only: an item call
-	 * is knowledge for the side that heard it, and the public channel is
-	 * heard by both.
-	 */
+	/* Parse team item calls before orders, including calls from bots. */
 	if (teamchat)
 		Chat_HearItemCall(speaker, tok, n, team);
 

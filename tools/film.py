@@ -1,61 +1,11 @@
 #!/usr/bin/env python3
-"""film.py -- the eyes: a blind film renderer for LMCTF .dm2 demos.
+"""Render comparable movement sheets from LMCTF demos.
 
-Produces one PNG "film sheet" per demo, built identically regardless of
-whether the demo is a HUMAN client recording or a BOT serverrecord capture,
-so a judge can compare sheets without being told which is which.
-
-Reuses the low-level machinery already proven in this toolbox:
-  * dm2speed.py    -- byte reader, entity-bits parser, sound/TE shapes.
-  * demokin.py     -- parse_playerstate_full (svc_playerinfo), used only to
-                       stay in byte-sync; its output is discarded here.
-  * demoents.py    -- the auto-detect skeleton for client vs serverrecord
-                       .dm2 shape (see its docstring for why svc_frame is
-                       parsed two different ways).
-  * runeio.py      -- the authenticated RUNE reader used to draw the map
-                       silhouette.
-
-What's new here (nothing else in tools/ captures it): the player entity's
-`effects` field. This mod's flag-carry visual (p_view.c G_SetClientEffects:
-`if (redflag->owner == ent) ent->s.effects |= EF_FLAG1;` and the EF_FLAG2
-mirror for blue) is broadcast on the normal delta-entity effects bits like
-any other entity field, and it is IDENTICALLY available in both demo
-shapes -- unlike the svc_print stream, which carries flag/obituary text
-for client demos but is completely absent from serverrecord bot demos
-(verified empirically: 0 svc_print messages across every wave*.dm2
-serverrecord sample checked, despite thousands of sound/temp-entity
-messages in the same files -- prints are per-client unicast in this
-engine, never multicast, so serverrecord's multicast-only capture never
-sees them). Because prints are asymmetric between the two demo shapes and
-effects bits are not, this tool uses ONLY the effects-bit signal for event
-detection, on purpose, even though prints would give more precise labels
-on human demos -- using the richer signal on one demo type and not the
-other would itself be a tell, breaking the blind. See MODULE NOTES at the
-bottom for the full limitations list.
-
-CORPUS ASYMMETRY / --pov-parity (see apply_pov_parity and MODULE NOTE 10):
-a HUMAN .dm2 is a client recording, so it only contains entity updates for
-players inside the recorder's PVS -- other players' tracks are full of
-holes (measured on this corpus: every non-recorder track carries 11-42% of
-the frames, whole-demo coverage 0.30-0.41), and every sheet panel inherits
-those holes as scars: sparse density maps, thin corridor histograms, carry
-windows that end when the recorder looks away. A BOT serverrecord demo has
-no PVS culling at all -- every player is sampled every frame, coverage
-1.000 -- so bot sheets render CLEANER than human sheets for reasons that
-have nothing to do with how the players moved. --pov-parity removes that
-asymmetry by picking a virtual recorder inside a serverrecord demo and
-dropping every other entity's samples that a real client at that recorder's
-position would not have received.
-
-CLI:
-    film.py <demo.dm2> [...more demos] --out <dir> [--runedir <dir>]
-            [--pov-parity [--pov-ent N] [--pov-radius U] [--pov-fov DEG]]
-
-Writes <hash>.png (the sheet) and <hash>.json (source-mapping sidecar,
-NOT blind -- this file exists for the unblinding step only) per demo.
-Nothing about --pov-parity is ever drawn on the PNG: whether a sheet was
-filtered is recorded ONLY in the sidecar, because a caption saying
-"pov-parity" would itself unblind the sheet as a bot demo.
+The parser supports client and serverrecord streams. Event detection uses
+entity effects available in both shapes. --pov-parity filters complete
+serverrecord tracks through a virtual client view so visibility coverage does
+not identify the recording type. PNGs are blind artifacts; JSON sidecars retain
+source and filter metadata.
 """
 import argparse
 import collections
@@ -145,49 +95,14 @@ HANDOFF_TIME_S = 2.0
 HANDOFF_TIME_TOLERANCE_S = 0.15
 HANDOFF_DIST_U = 300.0
 
-# --- duration normalization (judge round 3: sheets were leaking identity
-# via raw duration -- bot waves cluster tight around ~895s while human POV
-# recordings vary widely, so "how long is this demo" was itself a tell
-# before any other panel got read). Every stat on the sheet (trajectories,
-# carries, corridors, kinematic strip -- everything) is computed from at
-# most DURATION_CAP_S seconds of track data, and demos shorter than
-# DURATION_MIN_S are refused outright rather than rendered, because a
-# histogram/heatmap built from too few samples reads as "tight" for
-# sample-size reasons that have nothing to do with route consistency. -----
-DURATION_CAP_S = 850.0      # see cap_tracks_to_duration
-DURATION_MIN_S = 300.0      # see render_sheet's refusal check
+# Fixed duration bounds prevent recording length from identifying a corpus.
+DURATION_CAP_S = 850.0
+DURATION_MIN_S = 300.0
 
 
-# --- POV parity (see apply_pov_parity and MODULE NOTE 10) ---------------
-# Radius, in world units, of the sphere around the virtual recorder inside
-# which another player's sample is kept. This is the calibrated stand-in
-# for a BSP PVS test: without map visibility data we cannot ask "is this
-# entity's leaf visible from the recorder's leaf", so we ask "is it near
-# enough that a real client would usually have had it" and pick the radius
-# empirically. Calibration (2026-08-05, mactf06): the target statistic is
-# whole-demo visible-player-seconds coverage (coverage_stats below --
-# kept samples over players*frames), measured on the real client demos of
-# the same map with the same code. The four renderable mactf06 human demos
-# in the corpus read 0.300 / 0.320 / 0.375 / 0.410, median 0.348. Sweeping
-# this radius over two 5v5 serverrecord waves (film.py --coverage-report
-# --pov-parity --pov-radius R), with the virtual recorder chosen by
-# pick_pov_entity:
-#     R      wave368   wave369   mean
-#     400     0.165     0.137    0.151
-#     800     0.310     0.301    0.306
-#     850     0.333     0.320    0.327
-#     875     0.347     0.329    0.338
-#     900     0.360     0.339    0.350   <- matches human median 0.348
-#     950     0.388     0.361    0.375
-#    1000     0.413     0.381    0.397
-#    2000     ~0.80     ~0.65    ~0.72
-# 900u is the value whose bot-corpus mean coverage equals the human median,
-# and it puts both waves inside the human per-demo spread rather than only
-# on average. ONE radius is used for every demo on purpose: fitting a
-# radius per demo would guarantee a match by construction and measure
-# nothing.
+# Fixed virtual-view radius used for every POV-parity sheet.
 POV_RADIUS_DEFAULT = 900.0
-POV_FOV_DEG_DEFAULT = None   # facing gate off by default -- see MODULE NOTE 10
+POV_FOV_DEG_DEFAULT = None
 
 
 class DemoUndersampled(Exception):
@@ -249,46 +164,12 @@ ROW_HEIGHTS = [3.6, 1.35, 1.55, 1.55, 1.7, 1.7]
 
 # ------------------------------------------------------------ low-level walk
 def parse_delta_entity_film(r, bits, o, is_svrecord=False):
-    """o = [x, y, z, effects, yaw]. Same field order as
-    dm2speed.parse_delta_entity, but captures origin, the full effects value
-    (needed for EF_FLAG1/EF_FLAG2 carry detection) and the entity yaw angle
-    instead of skipping them. Mirrors demoents.parse_delta_entity_track's
-    shape with two additions.
+    """Decode origin, effects, and view yaw into ``o``.
 
-    yaw (the U_ANGLE2 byte, angles[YAW]) is the recording-relevant one: for
-    a player entity this mod writes the client's actual look direction into
-    it -- p_view.c line 1033, `ent->s.angles[YAW] = ent->client->
-    v_angle[YAW]` -- so it is a real view angle, not a movement heading, and
-    it is present in BOTH demo shapes (measured: the U_ANGLE2 bit is set on
-    79.8% of player-entity updates in a serverrecord wave and 71.2% in a
-    human client demo). It is captured here for the optional facing gate in
-    apply_pov_parity; nothing else on the sheet uses it.
-
-    is_svrecord matters ONLY for the effects field, and only because of a
-    real quirk in yquake2's demo writer (server/sv_entities.c
-    SV_RecordDemoMessage): unlike a normal client update -- which deltas
-    each entity against the state actually last SENT to that client, so an
-    absent field bit genuinely means "unchanged since last frame" -- a
-    serverrecord capture calls
-        MSG_WriteDeltaEntity(&nostate, &ent->s, &buf, false, true)
-    with an all-zero `nostate` as the "from" state on EVERY frame, for
-    EVERY entity, not the previous frame's actual state. DeltaEntityBits()
-    (common/movemsg.c) only sets a field's bit when it differs from `from`,
-    so once effects goes back to 0 (flag dropped/captured, powerup
-    expired), `to->effects (0) == from->effects (0)` and the bit is simply
-    omitted -- exactly like when it was already 0 and stayed 0. A reader
-    that treats "bit absent" as "retain last known value" (correct for
-    client demos, where that IS the delta semantics) will see the entity's
-    effects value get stuck at its last nonzero reading forever, because
-    the wire never re-asserts zero. Verified empirically against
-    wave360-s03-5v5.dm2 (serverrecord, game log shows a completed steal+
-    capture): every tracked player's effects value went nonzero at some
-    point and then simply never changed again for the rest of the file.
-    The fix: for serverrecord demos only, re-derive effects from scratch
-    every frame -- absent bits mean the field equals its zero default,
-    because that IS what "from" was. Client demos are unaffected (the
-    'retain previous value when bit absent' behavior stays default there,
-    matching their true incremental delta wire semantics)."""
+    Serverrecord entities are encoded against a zero baseline every frame, so
+    absent effects and yaw fields reset to zero. Client demos retain prior
+    values when those delta bits are absent.
+    """
     if is_svrecord:
         o[3] = 0
         o[4] = 0.0
@@ -301,13 +182,7 @@ def parse_delta_entity_film(r, bits, o, is_svrecord=False):
     if (bits & U_SKIN8) and (bits & U_SKIN16): r.skip(4)
     elif bits & U_SKIN8: r.skip(1)
     elif bits & U_SKIN16: r.skip(2)
-    # effects: vanilla q2 wire rule (verified against dm2speed.parse_delta_entity
-    # and against this mod's actual EF_FLAG1/2 bits, see MODULE NOTES) --
-    # EFFECTS8 alone = 1 byte, EFFECTS16 alone = 1 short, BOTH set = one
-    # 4-byte long (NOT a byte followed by a short: an earlier draft of this
-    # walker read u8()+u16() here, under-consuming by one byte and silently
-    # desyncing the rest of the block -- caught by cross-checking error
-    # counts before/after the fix).
+    # EFFECTS8 and EFFECTS16 together encode one 32-bit value.
     if (bits & U_EFFECTS8) and (bits & U_EFFECTS16):
         o[3] = r.u32()
     elif bits & U_EFFECTS8:
@@ -333,29 +208,7 @@ def parse_delta_entity_film(r, bits, o, is_svrecord=False):
 
 
 def walk_demo(path, maxplayers=32, *, strict=False):
-    """Auto-detects client vs serverrecord .dm2 shape (see demoents.
-    walk_entities' docstring for the full rationale -- svrecord is sniffed
-    from playernum==0xffff in the signon block, and its svc_frame carries
-    only a framenum before an unconditional packetentities, vs the client
-    shape's frame+deltaframe+suppresscount+areabits header).
-
-    Returns {'map', 'skins', 'skin_epochs', 'tracks':
-    {entnum: [(frame,x,y,z,effects)]}, 'yaws':
-    {entnum: {frame: yaw_degrees}}, 'frames', 'svrecord', 'parse_complete'}.
-    ``strict=True`` rejects malformed/truncated packets instead of retaining a
-    best-effort partial decode; authenticated evidence consumers must use it.
-    ``skin_epochs`` records the first snapshot on which each configstring
-    value is effective, so a caller can reject client-slot reuse.
-
-    tracks
-    are filtered to entnum 1..maxplayers (player slots) exactly like
-    demoents.py and botkin.py.
-
-    'yaws' is kept in a SEPARATE dict rather than as a sixth element of each
-    track tuple on purpose: every consumer in this module unpacks tracks as
-    `for f, x, y, z, eff in track`, and widening the tuple would mean
-    touching all of them for a field only apply_pov_parity's optional
-    facing gate reads."""
+    """Decode client or serverrecord DM2 packets into player tracks, yaws, and skin epochs."""
     with open(path, 'rb') as source:
         data = source.read()
     off = 0
@@ -497,26 +350,7 @@ def walk_demo(path, maxplayers=32, *, strict=False):
 
 # --------------------------------------------------------- duration cap
 def cap_tracks_to_duration(d, cap_s=DURATION_CAP_S):
-    """Truncates every track in d['tracks'] (mutated in place) to at most
-    cap_s seconds (cap_s * FPS frames) and updates d['frames'] to match, so
-    EVERY stat computed downstream -- trajectory density, carry windows,
-    corridors, the kinematic strip, the route-dissimilarity panel -- comes
-    from an identical time budget regardless of how long the source demo
-    actually ran. This runs immediately after walk_demo, before anonymize
-    or any analysis, specifically so nothing downstream has to know or care
-    whether it happened; it just sees a shorter d['tracks']/d['frames'].
-
-    Why this exists: raw duration was itself an identity leak -- bot
-    serverrecord waves cluster tightly around ~895s while human POV
-    recordings vary a lot, so a judge could tell demo shapes apart from the
-    caption line alone before reading a single panel.
-
-    A carry window still in progress at the cutoff is never closed (the
-    effects-bit state machine in carry_windows never sees a return to
-    zero), so it simply doesn't appear in the windows list -- this is
-    reported via render_sheet's notes, not silently.
-
-    Returns (capped: bool, original_duration_s: float)."""
+    """Mutate decoded tracks and frame count to one common maximum duration."""
     orig_duration = d['frames'] / FPS
     cap_frames = int(round(cap_s * FPS))
     if d['frames'] <= cap_frames:
@@ -565,30 +399,7 @@ def track_travel(track):
 
 
 def anonymize(d):
-    """Assigns P1..Pn by entnum ascending. Drops short/noise tracks AND
-    entities whose skin doesn't resolve to a red/blue team -- these are
-    refs, spectators, and (seen in both demo shapes, not a bot-vs-human
-    tell) idle reserve slots the test harness or a pickup server leaves
-    connected without ever joining a side. A 'player' on this sheet is a
-    roster participant; entnum range alone (1..maxclients) isn't enough
-    to tell a competitor from a bystander, but a resolved team is.
-
-    Also drops PARKED entities: a track that never moves at all (zero total
-    travel, i.e. one single distinct position for its whole life) is not a
-    roster participant either -- it is a connected-but-not-playing slot
-    whose entity the server wrote once and never updated again, so the
-    walker's persistent entity table re-snapshots that one frozen position
-    every frame. Five such entities exist in lmctf-2022-02-08-mactf06-20.37
-    (each with 3831 samples at exactly 1 distinct position). Left in, they
-    do three bad things: they pile thousands of samples into a single
-    density cell, they inflate the visible-player-seconds coverage number
-    used for POV parity calibration, and -- because they have the most
-    samples of any track in the demo -- they used to win the kinematic
-    strip's "busiest 3 tracks" selection and render it as three flat 0.00
-    u/s lines (see draw_kinematic_strip). The rule is applied to both demo
-    shapes identically; serverrecord demos simply have no such entities.
-
-    Returns (labels: {entnum: 'Pk'}, teams: {entnum: 'red'/'blue'})."""
+    """Assign stable anonymous player labels and discard non-roster or noise tracks."""
     tracks = d['tracks']
     keep = []
     teams = {}
@@ -609,19 +420,7 @@ def anonymize(d):
 
 # -------------------------------------------------------------- POV parity
 def coverage_stats(tracks, labels, frames):
-    """Visible-player-seconds coverage: how much of a full omniscient
-    recording of this match the demo actually contains.
-
-    visible_fraction = (sum of samples over all rostered tracks) /
-                       (n_players * frames)
-    i.e. 1.0 for a serverrecord capture (every player sampled every frame)
-    and, measured across this corpus's mactf06 client demos, 0.32-0.40 for
-    a real human POV recording. This is the statistic --pov-parity is
-    calibrated against; it is computed by this one function for both demo
-    shapes so the two corpora are never measured by different code.
-
-    Returns {'visible_fraction', 'per_track': {entnum: fraction},
-    'max_track_fraction', 'median_other_fraction', 'players', 'frames'}."""
+    """Measure visible player-seconds against a complete recording."""
     n = len(labels)
     if not n or not frames:
         return {'visible_fraction': 0.0, 'per_track': {}, 'players': n,
@@ -653,30 +452,11 @@ def track_cells(track, bin_size=None):
 
 
 def pick_pov_entity(tracks, labels):
-    """The virtual recorder for --pov-parity: the rostered entity whose own
-    track visits the most distinct map cells (track_cells), ties broken by
-    most samples, then most travel, then lowest entnum.
+    """Select the rostered track with the broadest map coverage.
 
-    WHY THIS RULE, VALIDATED: it is the same rule for both demo shapes, and
-    on a client demo it recovers the ACTUAL recorder every time -- on all
-    four renderable mactf06 human demos in this corpus it selects entity 1,
-    the recording player's own entity, whose per-track coverage is 0.83,
-    0.94, 1.00, 1.00 (i.e. the one track the engine never culled). That is
-    the check that makes it legitimate to apply to a serverrecord demo,
-    where every track is complete and the rule instead selects the bot that
-    actually roamed the map.
-
-    Two rules that look reasonable and are NOT used, because they select
-    the wrong kind of player: most samples (in a serverrecord demo every
-    player has the identical count, so it decides nothing), and most travel
-    (in wave369 the top traveler, ent 15 at 203k units, paces a confined
-    area -- as a virtual recorder it produces a sheet with a density fill
-    fraction of 0.244 against a human range of 0.417-0.502, because its
-    visibility bubble never sweeps most of the map). Recorder choice is the
-    single biggest lever on a parity sheet: across the ten candidates in
-    wave369 the resulting fill fraction ranges 0.228-0.448. Anyone reading
-    a parity sheet should know the rotation spread exists; --pov-ent N
-    exists to reproduce it."""
+    Ties prefer more samples, then more travel, then the lowest entity number.
+    The same deterministic rule applies to both demo shapes.
+    """
     best = None
     for n in sorted(labels):
         t = tracks.get(n, [])
@@ -688,43 +468,7 @@ def pick_pov_entity(tracks, labels):
 
 def apply_pov_parity(d, labels, pov_ent=None, radius=POV_RADIUS_DEFAULT,
                      fov_deg=POV_FOV_DEG_DEFAULT):
-    """Rewrites d['tracks'] in place so a serverrecord (omniscient) demo
-    carries the same partial-view scars a client demo does.
-
-    WHY: see the module docstring. A human .dm2 only contains entity
-    updates for players the recording client's server-side PVS test let
-    through (server/sv_ents.c SV_BuildClientFrame: leaf of the client's
-    view origin -> CM_ClusterPVS -> per-entity cluster test; entities that
-    fail it are sent as U_REMOVE and vanish from the client's entity list,
-    which is why 37% of the player-entity updates in a human demo here are
-    removes and 0% of them are in a serverrecord wave). A serverrecord
-    capture runs no such test, so every bot sheet is built from complete
-    tracks while every human sheet is built from shredded ones.
-
-    HOW: pick a virtual recorder (pick_pov_entity, or --pov-ent), then keep
-    another entity's sample at frame f only when the recorder also has a
-    sample at f and the two are within `radius` world units (3D). The
-    recorder's own track is never filtered -- a real client always has
-    itself.
-
-    WHY A DISTANCE GATE AND NOT A CONE: the real cull is position-only.
-    SV_BuildClientFrame tests the client's view ORIGIN's PVS cluster; it
-    never consults the client's view angles, so a player standing behind
-    the recorder is received exactly like one in front. A facing gate is
-    therefore available (fov_deg, using the real view yaw this mod writes
-    into the entity's angles[YAW] -- p_view.c:1033) but OFF by default,
-    because switching it on would impose a scar on the bot corpus that the
-    human corpus does not have. Distance is the honest approximation: it is
-    the one property of the PVS test we can evaluate without the BSP, it is
-    monotone in the same direction as real visibility, and it has exactly
-    one free parameter to calibrate (POV_RADIUS_DEFAULT). What it cannot
-    reproduce is occlusion -- a player on the far side of a wall 200u away
-    is kept here and would have been culled for real -- which is precisely
-    why the radius is fit to the human coverage statistic rather than
-    guessed from map geometry: the fitted radius absorbs the missing
-    wall-culling into a smaller sphere.
-
-    Returns an info dict (recorded in the JSON sidecar, never on the PNG)."""
+    """Filter serverrecord tracks through a deterministic virtual-client view."""
     tracks = d['tracks']
     if pov_ent is not None:
         # An explicitly requested recorder that doesn't exist is an error,
@@ -848,19 +592,7 @@ def classify_outcome(w, tracks, stands, cap_radius=280.0, lookahead_s=1.6,
                       windows=None, teams=None,
                       handoff_time_s=HANDOFF_TIME_S,
                       handoff_dist_u=HANDOFF_DIST_U):
-    """Best-effort outcome label from position + teleport geometry only
-    (no print text, see module docstring). thief_team is the OTHER color
-    from the flag carried (you can only carry the enemy flag).
-
-    windows/teams are OPTIONAL (default None, meaning "not supplied") and
-    only enable the 'handed_off' label -- every existing call site that
-    omits them (teamsheet.py, outcomecard.py) gets the exact original
-    'captured'/'died'/'lost' behavior, unchanged. When both are supplied
-    (film.py's own render_sheet does this), a 'died' or 'lost' ending is
-    upgraded to 'handed_off' if another carry window for the SAME flag
-    color, a DIFFERENT entnum on the SAME team as this carrier, begins
-    within handoff_time_s of this window's end and within handoff_dist_u
-    of this window's ending position -- see HANDOFF_* constants."""
+    """Infer a carry outcome from flag effects, positions, and teleport geometry."""
     thief_color = 'blue' if w['color'] == 'red' else 'red'
     end_pos = w['path'][-1][1:3]
     stand = stands.get(thief_color)
@@ -967,27 +699,7 @@ def discrete_frechet(P, Q):
 
 def carry_route_dissimilarity(windows, n_resample=FRECHET_RESAMPLE_N,
                                cluster_frac=FRECHET_CLUSTER_FRAC):
-    """Pairwise discrete-Frechet distance between every sane carry route in
-    this demo (judge round 3 request), plus two summary numbers computed
-    from that matrix.
-
-    mean_pairwise: mean of all N*(N-1)/2 off-diagonal distances (world
-      units). Expectation per the judge's request: humans read high-mean
-      (varied routes across the map), bots read low-mean (near-identical
-      routes run over and over).
-
-    entropy_bits: Shannon entropy (bits) of the cluster-SIZE distribution
-      after single-linkage clustering the routes at cluster_frac of this
-      demo's own max pairwise distance (self-normalizing -- see
-      FRECHET_CLUSTER_FRAC). A field of near-identical routes collapses to
-      ~1 cluster (entropy -> 0 bits, "blocky low-distance cluster" per the
-      judge's framing); a field of genuinely distinct routes spreads across
-      more, more-evenly-sized clusters (higher entropy).
-
-    Returns (dist_matrix: NxN ndarray or None, mean_pairwise: float or
-    None, entropy_bits: float or None, n_clusters: int). All None/0 when
-    fewer than 2 carries -- there is no pair to compare, and clustering one
-    route is not meaningful."""
+    """Return pairwise discrete Frechet distances and route-cluster summaries."""
     n = len(windows)
     if n < 2:
         return None, None, None, 0
@@ -1112,24 +824,7 @@ def nearest_seed_counts(seed_arr, pts_xy, chunk=4000):
 
 
 def find_corridors(seeds, tracks, labels, n=N_CORRIDORS):
-    """The N highest-traffic straight corridor segments.
-
-    Method: bin every trajectory point (all kept tracks, both teams
-    pooled) onto its nearest rune seed -- the seed cloud approximates the
-    walkable floor, so this rasterizes foot traffic onto map geometry
-    instead of an arbitrary grid. Then scan candidate corridor directions
-    every CORRIDOR_ANGLE_STEP_DEG degrees: rotate the seed cloud into that
-    direction's (along, across) frame, group seeds into
-    CORRIDOR_BAND_WIDTH-wide across-axis strips (candidate lanes), and
-    within each strip slide a CORRIDOR_SCAN_LEN-long window along the
-    along-axis to find the traffic-densest run in that lane. The
-    traffic-highest windows overall, kept spatially distinct (see
-    CORRIDOR_MIN_SEPARATION), are returned as corridor candidates.
-
-    Returns a list of dicts {p0: (x,y), p1: (x,y), traffic: int,
-    seed_idx: [...]}, sorted by traffic descending, len <= n. Empty if no
-    rune was loaded or traffic is too sparse to clear
-    CORRIDOR_MIN_TRAFFIC anywhere."""
+    """Return the highest-traffic straight corridors over the RUNE seed cloud."""
     if not seeds:
         return []
     seed_arr = np.asarray(seeds, dtype=np.float64)
@@ -1241,32 +936,7 @@ LANE_MIN_SHARE = 0.05    # a bin must hold >= this fraction of a corridor's
 
 def corridor_diversity(offsets, bin_width=CROSS_SECTION_BIN,
                         cap=CORRIDOR_OFFSET_CAP, min_share=LANE_MIN_SHARE):
-    """Three diversity numbers for a corridor's perpendicular-offset
-    distribution (see corridor_offsets docstring for what this distribution
-    means -- "rope vs band"): a single-file lane and a spread-out crowd
-    should NOT look the same on a judge's sheet, and a raw histogram alone
-    makes that judgment call visually rather than numerically.
-
-    lane_count: number of distinct local maxima (a bin, or flat run of
-      equal-height bins, strictly higher than both its neighbors -- or
-      higher than its one neighbor if it's an edge bin) whose share of
-      total crossings is >= min_share. A tight single-file corridor scores
-      1; a corridor with genuinely separate paths (e.g. two door-width
-      lanes either side of an obstacle) scores >1.
-
-    top_lane_share: the tallest bin's share of total crossings (0..1) --
-      how dominant the single most-used lane is, regardless of whether it
-      clears the min_share bar on its own (it always will, being the max).
-
-    width_fraction: (max(offsets) - min(offsets)) / (2 * cap), i.e. the
-      observed spread of crossings as a fraction of the widest possible
-      capture window (see CORRIDOR_OFFSET_CAP). Close to 0 means everyone
-      threads the same narrow line; close to 1 means traffic is spread
-      across the full width this panel can even see. This is a numeric
-      read of the same "rope vs band" signal the histogram shows visually.
-
-    Returns {'lane_count': int, 'top_lane_share': float,
-    'width_fraction': float}, all zero if offsets is empty."""
+    """Summarize corridor offsets by lane count, dominant share, and width fraction."""
     zero = {'lane_count': 0, 'top_lane_share': 0.0, 'width_fraction': 0.0}
     if not offsets:
         return zero
@@ -1752,35 +1422,7 @@ def draw_window_panel(ax, tracks, labels, teams, f0, f1):
 
 
 def draw_kinematic_strip(ax, tracks, labels, death_by_ent):
-    """BUG FIX (flat 0.00 strip): this panel used to pick the three tracks
-    with the most SAMPLES. On a client demo that is the wrong ranking -- a
-    parked, never-updated entity is sampled on every single frame (the
-    walker re-snapshots its frozen position), so it outranks every real
-    player, and the strip came out as three flat 0.00 u/s lines while the
-    map panel above it plainly showed players moving. Observed on
-    lmctf-2022-02-08-mactf06-20.37.dm2, where entities 2/9/10/12/13 each had
-    3831 samples at ONE distinct position and won the old selection outright
-    (a human sheet with a dead strip is exactly the kind of artifact that
-    gets a human judged as a bot).
-
-    Two independent guards now:
-      1. rank by TRAVEL, not sample count (track_travel), so the panel shows
-         the demo's three busiest MOVERS. anonymize() already drops
-         zero-travel entities from the roster, so this is belt-and-braces
-         against any track that is merely mostly-frozen.
-      2. reject a candidate whose speed series is empty or all-zero/NaN and
-         fall through to the next candidate, so a degenerate series can
-         never occupy one of the three slots. If every candidate is
-         degenerate the panel says so in words rather than drawing a
-         convincing-looking flat line.
-
-    Speed itself is derived from positions (hspeed_series), for both demo
-    shapes, deliberately: the playerstate stream (svc_playerinfo) carries a
-    real pmove velocity, but ONLY for the recording client and ONLY in
-    client demos -- serverrecord captures contain no playerstate at all.
-    Using it where available would make the strip a different instrument on
-    human demos than on bot demos, which is the exact corpus asymmetry this
-    tool exists to avoid."""
+    """Draw speed traces for the three tracks with the greatest travel."""
     candidates = sorted(
         ((n, t) for n, t in tracks.items() if n in labels),
         key=lambda kv: -track_travel(kv[1]))
@@ -1817,15 +1459,7 @@ def draw_kinematic_strip(ax, tracks, labels, death_by_ent):
 def draw_dissimilarity_panel(ax_heat, ax_text, windows, dist_matrix,
                               mean_pairwise, entropy_bits, n_clusters,
                               outcome_summary):
-    """Judge round-3 panel: a triangular pairwise discrete-Frechet heatmap
-    (left axes) of every sane carry route in this demo, plus a text summary
-    (right axes) of the two requested numbers -- mean pairwise distance and
-    route-choice entropy -- and the carry outcome/duration breakdown.
-    Colormap is a single perceptually-uniform sequential hue (viridis):
-    this panel encodes a magnitude (distance), not team identity, so it
-    deliberately does NOT reuse the red/blue team hues used elsewhere on
-    this sheet. See carry_route_dissimilarity/carry_outcome_summary for
-    what each number means and MODULE NOTES for caveats."""
+    """Draw carry-route distance, entropy, and outcome summaries."""
     n = len(windows)
     if dist_matrix is None or n < 2:
         ax_heat.axis('off')

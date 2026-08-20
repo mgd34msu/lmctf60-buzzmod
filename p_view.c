@@ -1256,12 +1256,7 @@ int ClientShowMOD(edict_t *ent)
 			line = strtok(temp, "\n");
 			while (line)
 			{
-				/* 1400-byte wire ceiling, no fragmentation: an
-				 * over-long motd used to silently drop the whole
-				 * frame -- an invisible welcome screen. ui_appendf
-				 * (ui_text.h) refuses an append that would cross
-				 * storage's 1380-byte cutoff instead of overflowing
-				 * it; truncate the motd, keep the screen. */
+				/* Truncate MOTD lines at the bounded layout budget. */
 				if (!ui_appendf (&sb, "xv 0 yv %d cstring \"%s\" ", i, line))
 					break;
 				i+=8;

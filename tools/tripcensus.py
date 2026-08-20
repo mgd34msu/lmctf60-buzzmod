@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
-"""tripcensus.py -- where attacker trips end.
+"""Classify how attacker approaches terminate.
 
-Born 2026-08-12 for stage 2: the defense-regime card says bot games
-generate 3.7 stand entries/min against the humans' 9.1, and conversion
-explains only part of the steal gap.  This census decomposes the
-pressure gap trip by trip: a TRIP starts when a player crosses from
-outside APPROACH_START of the enemy stand to inside it while closing,
-and ends in exactly one of three ways -- ARRIVED (inside STAND_R),
-DIED (respawn-teleport before arriving), or TURNED (distance re-opens
-by TURN_MARGIN without arriving).  Per demo it reports trips/min,
-arrival fraction, the died/turned split, and the median distance at
-which death and turn-back happen.  Same coverage-honest denominators as
-conduct.py; same rank/ratio caveat across populations.
-
-Usage: tripcensus.py --stands <stands.json> <demo.dm2> [...]
+Trips begin when a player enters the enemy-stand approach zone while closing
+and end as arrived, turned away, or lost at a track boundary. Output uses the
+coverage-aware denominators from conduct.py.
 """
 import json, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,12 +16,7 @@ STAND_R = 384.0
 TURN_MARGIN = 600.0
 
 def trips_for_track(tr, sx):
-    """One trip per genuine approach: after any trip ends (arrival,
-    turn-back, or death) a NEW trip cannot start until the player has
-    left the approach zone entirely -- without this hysteresis a bot
-    loitering at the stand re-triggered an "arrival" every few frames
-    and the counts were inflated bounds, not rates (the first published
-    run of this census carried exactly that inflation)."""
+    """Require a complete exit from the approach zone before rearming."""
     out = []
     for seg in conduct.contiguous_segments(tr):
         cur = None                       # (start_i, min_dist, min_i)

@@ -796,10 +796,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 		(void)POVLock_HandleRespawnTerminal(self);
 		(void)SG_CompoundGuardGamePlayerDie(self);
 		SG_NoteDeath(self);     /* the obituary is common knowledge */
-		/* the mouth that was always wired shut: taunt/grumble lines were
-		 * written waves ago and called from nowhere (capability census,
-		 * 2026-08-05). Bots that never react to a kill or a death read
-		 * as bots. */
+		/* Death chat belongs to the first death edge. */
 		SG_ChatDeath(self, attacker, meansOfDeath);
 	}
 	int		n;
@@ -1907,14 +1904,7 @@ a deathmatch.
 */
 void PutClientInServer (edict_t *ent)
 {
-	/*
-	 * THE UNIFORM IS PART OF THE SPAWN. Third fix in the skin saga: the
-	 * first repaint ran before the team existed (painted at team=0,
-	 * proven by SKIN telemetry), the second hooked a team-setter that
-	 * TeamJoin never calls. Every client on a real team passes through
-	 * HERE at every spawn -- so the color is forced here, every time,
-	 * and there is no path left that can dodge it.
-	 */
+	/* Reapply the team skin after the spawn has a final team assignment. */
 	if (ent->client &&
 	    (ent->client->ctf.teamnum == CTF_TEAM_RED ||
 	     ent->client->ctf.teamnum == CTF_TEAM_BLUE))
@@ -2262,15 +2252,7 @@ void ClientBeginDeathmatch (edict_t *ent)
 	//-bat
 	if(oldteam == CTF_TEAM_UNDEFINED)
 	{
-		/*
-		 * Only a BOT gets drafted onto a random team here. This branch
-		 * used to draft every undefined client -- including a human who
-		 * connected to watch and never formally took an observer slot --
-		 * into the game on every map change, and once on a team the
-		 * (also broken) observer command could not pull them back out.
-		 * A teamless human now stays teamless: the join menu decides,
-		 * and Observer_Start below parks the body out of the world.
-		 */
+		/* Only bots are auto-drafted. Teamless humans remain observers. */
 		if (ent->flags & FL_BOT)
 			TeamJoin(ent);						// Join random team
 	}

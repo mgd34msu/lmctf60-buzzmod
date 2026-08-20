@@ -663,8 +663,8 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
     def test_aimed_fire_survives_only_at_its_validated_command_view(self) -> None:
         move = (ROOT / "slipgate" / "sg_move.c").read_text()
         combat = move.index("SG_CombatFrame(e, cmd, &engaged)")
-        beat = move.index("THE SPAWN BEAT'S EYES", combat)
-        air = move.index("THE AIR-STRAFE CHAIN", beat)
+        beat = move.index("if (!aimed_fire_requested && !nade_release", combat)
+        air = move.index("if (!aimed_fire_requested && !proved_control", beat)
         boundary = move.index("if (step == 0 && AimedFireViewReady(cmd, aimed_fire_yaw", air)
         think = move.index("ClientThink(e, cmd);", boundary)
 

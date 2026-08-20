@@ -1,91 +1,60 @@
 # SLIPGATE
 
-SLIPGATE is a from-scratch bot platform for LMCTF (Loki's Minions
-Capture the Flag, Quake II). It replaces the legacy Q2/Q3-derived bot
-code entirely — every line of the navigation, combat, perception, and
-team logic is native to this codebase, written clean-room, with the
-old botlib removed from the tree and the build.
+SLIPGATE is LMCTF's native bot system. Navigation, combat, perception, team
+logic, client presentation, and RUNE loading are built into the game module.
+The project does not use the removed Q2/Q3 bot library.
 
-The acceptance standard compares bot play with recorded human play using the
-same measurement tools, matched configurations, sealed blind material, and
-authoritative match outcomes. The repository contains the instruments and
-retained human/reference data, but old unstamped results do not establish that
-the current build meets that standard. The exact remaining trials and receipt
-requirements are in `PROJECT-COMPLETION-PLAN.md`.
+## Runtime model
 
-## How the bots work (short version)
+- **Navigation:** Each map uses a physics-proved RUNE graph. Links cover ground
+  movement, jumps, drops, swimming, grapple rides, lifts, teleports, and
+  declared mechanisms. Live cost fields combine objectives, items, danger,
+  cover, and teammate support.
+- **Movement:** Route descent emits normal `usercmd_t` input. Collision feelers,
+  edge guards, braking, action ownership, and fallback rules keep movement
+  inside proved runtime contracts.
+- **Combat:** Bots use reaction delay, skill-scaled aim error, weapon range
+  policy, switch discipline, fire windows, and splash-safety checks. Damage and
+  kills still pass through the normal game code.
+- **Perception:** Enemy state comes from visible, audible, damage, chat, and
+  public objective events. Beliefs age. Decision code does not receive hidden
+  opponent state.
+- **Team play:** Bots take attack, defend, carry, recover, and escort roles from
+  shared public state. Defenders cover approaches, attackers pressure the enemy
+  stand, and escorts support a live carrier.
+- **Presentation:** Bots are normal visible clients with stable identities,
+  personas, chat, synthetic ping, and ordinary statistics.
 
-- **Navigation** rides a per-map "rune" graph of proven movement links
-  (runs, jumps, drops, swimming, grapple swings, lifts, and teleports),
-  flooded into cost fields that price every seed on the map
-  against every objective. Movement between commitments descends those
-  fields; a feeler fan and safety layers (terminal braking, sink ban,
-  edge guards) keep the body honest on the geometry.
-- **Combat** models a player, not an aimbot: skill-scaled reaction
-  delays, aim error with human overshoot/settle texture, range-band
-  weapon doctrine with human switch discipline, fire windows, and
-  splash/self-damage safety rules audited against the game source.
-- **Perception is earned, not given.** Bots know what they see and
-  hear. Item respawn knowledge exists only if a teammate called the
-  take in team chat. Rune positions are never clocked. Enemy positions
-  are beliefs that age, not entity lookups.
-- **Team play**: roles (attack, defend, carry, recover, escort)
-  argued per-think from shared team state, defender posting by
-  sightline, coordinated pushes, and a full radio/chat layer — item
-  callouts, quad timing economy ("quad 60"/"quad 30", one voice per
-  cycle), mega clocks armed only from public information, and social
-  chat mined from the human corpus.
-- **Presentation**: bots are real clients with synthetic 5–15 ms ping,
-  per-bot personas (movement taste, hook enthusiasm, chat voice), and
-  they flow into server stats like any player.
+## Source layout
 
-## Current source and evidence status
+The controller lives under `slipgate/`:
 
-The instrumentation measures raw movement, route choice, gunfights, team
-decisions, and match outcomes. No retained result is final-candidate evidence
-until it is rebound or rerun against the exact source/module/BSP/RUNE/config
-identity. The current retained data identifies steal initiation, steal-to-cap
-conversion, defender movement, and captures conceded as the outcome gaps that
-the matched final-build trials must close.
+- `sg_client.c` owns fake-client lifecycle;
+- `sg_caco.c` owns perception and learned state;
+- `sg_arach.c` and `sg_strike*.c` own team and attack policy;
+- `sg_fields.c`, `sg_goal.c`, and `sg_price.c` own route costs;
+- `sg_descend.c` and `sg_move.c` own route selection and actuation;
+- `sg_combat.c` owns weapon, aim, and fire decisions;
+- `sg_net.c`, `sg_chat.c`, identity, and persona modules own presentation;
+- `sg_rune*.c` and mechanism modules own graph generation, loading, proof, and
+  runtime action contracts.
 
-**Implemented source behavior:**
+Host code remains authoritative for flag touches, captures, damage, death,
+weapons, map transitions, logging, and persistent statistics. SLIPGATE chooses
+client commands and consumes named host events. It does not synthesize outcomes.
 
-- *Movement*: route jitter and ribbon (per-life route variety and
-  lateral lane texture), tactics waypoints, no-backtrack pricing,
-  lookahead and pure-pursuit steering, air-strafe control, the
-  four-layer pit-safety chain, water traversal, and live mover handoff.
-- *Combat*: weapon commitment (keep the held gun anywhere it is
-  legitimate), aim texture (overshoot/settle and cadence variation), switch
-  discipline, full weapon doctrine from the WEAPONS.md audit.
-- *Carrier*: pause beats, human-mined escape priors, water routes, cover
-  pricing, and carry movement texture.
-- *Team*: attack, defend, carry, recover, and escort assignments;
-  defender posts; coordinated strike state; and shared public objective state.
-- *Comms (Rule 19)*: item callouts, radio wavs with human lag, item
-  lead returns, quad 60/30 either-or with speaker rotation, mega
-  taker-clocks, the honest ear, hit sense, corpus-mined social chat
-  with unified human/bot team-chat parsing.
-- *Platform*: native sg_net client layer, synthetic near-local ping,
-  personas, session stats (`sg_sessiondb`) flowing bot games into the
-  same analytics database as human games.
+## Current work
 
-**Development instruments in `tools/`** (not runtime release assets): film.py
-(blind film sheets),
-routesheet.py (routes), fightsheet.py (fights, with honest
-hit-attribution), teamsheet.py (team play, coverage-honest escort
-scalar), outcomecard.py (match outcomes), plus the corpus manifest,
-map fixtures for the currently supported blind sets, the set-composition rule,
-and fleet tooling for unattended evaluation. Instrument validity and retained
-datasets must be rebound to exact source/module/BSP/RUNE receipts before final
-use.
+The source implements the complete controller path, 181-map RUNE authority,
+ordered native map rotation, and all ten required `lmctf58` declared-door
+controllers. Open work is direct bot quality, final 181-map generation,
+persistent fleet integration, transactional bundle integration, production
+acceptance, and release publication.
 
-## Remaining completion work
+Bot changes must modify the production controller, receive an executable policy
+or live-path test, and survive observed play. Reports and matched evidence help
+decide whether to keep a change; they are not substitutes for implementation.
 
-[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) is the sole current
-dependency graph and execution authority. In SLIPGATE terms, the remaining work
-is to close all-map RUNE/runtime coverage, repair the telemetry and evidence
-provenance needed for honest comparison, improve the measured steal/capture and
-defense outcomes, verify stable non-mirrored personas in production rosters,
-and rerun qualified matched trials on the exact final build. The rule remains:
-source-grounded mechanism → executable gate → matched film/outcomes → retained
-receipt. Nothing ships on taste or on an old unbound result.
+[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) is the current work
+order and completion authority. [`ARCHITECTURE.md`](ARCHITECTURE.md) documents
+the runtime boundaries in more detail.

@@ -223,21 +223,7 @@ void Show_String(int x, int y, char *string, char *Text)
 	strcat(string, DBuffer);
 }
 
-// Board_LineLen -- legacy-cap byte accounting for the ui_layout.h
-// conversions below (StatboardMessage, TeamStatboardMessage,
-// CTFSquadboardMessage, DeathmatchScoreboardMessage).
-//
-// Every producer converted here used to test its own running
-// "stringlength" against a hand-picked ceiling (1024 bytes; the
-// squadboard used 1000) before strcpy-ing one more formatted line in.
-// ui_layout_compile() now has a bigger budget to work with
-// (UI_LAYOUT_BUDGET, 1380 bytes, ui_layout.h) -- but letting that
-// larger budget decide how many rows/lines survive would be a visible
-// content change (more rows shown than before), which this pass does
-// not make. The extra headroom is deliberately left unspent until a
-// future change spends it on purpose.
-//
-// This measures the byte length of one already-formatted wire line
+/* Preserve each board's legacy row-admission byte cap. */
 // (or, for a multi-token header, one caller sums several calls) the
 // same way each producer's own Com_sprintf-then-strlen call did, so
 // the admission decisions below land on the exact old truncation
@@ -478,15 +464,7 @@ static int DMScore_BuildCompact(dmscore_ctx_t *ctx, ui_board_variant_t variant, 
 	return 0;
 }
 
-// Builds DeathmatchScoreboardMessage's screen for UI_BOARD_FULL. This
-// is the pre-ladder producer's own roster-building logic, moved
-// verbatim (STYLE.md rule 9) from what used to be the rest of
-// DeathmatchScoreboardMessage directly -- see this function's
-// original banner (top of file) for why the roster rows are built as
-// raw ui_elem_t entries instead of a UI_TABLE.
-//
-// Additions made ONLY to compute this attempt's pre-filter count
-// (returned to ui_layout_compile_ladder, see ui_layout.h):
+// Build the full deathmatch scoreboard and report its pre-filter count.
 // red_rows_shown/blue_rows_shown track how far each team's roster got
 // before its own 1024-byte admission check -- or the original's own
 // 21-a-side clamp -- cut it short; mvp_admitted/footer_admitted/
@@ -1289,13 +1267,7 @@ static int DMScore_BuildFull(dmscore_ctx_t *ctx, ui_screen_t *screen)
     //   rne  S/H/G/R  = strength, haste, regen, resist
     {
         rows = (red > blue) ? red : blue;
-        // The footer sits BELOW the roster, and the roster's row height
-        // depends on which scoreboard this is: the small layout packs
-        // players at 8 pixels (y = 48 + 8i), the big portrait layout at
-        // 32 (y = 32 + 32i).  The first cut assumed 8 always -- at five
-        // players a side the footer landed at y=96, printed straight
-        // over the third portrait row (reported live from the big
-        // board).  Compute from the layout actually in effect.
+        // Place the footer below the active scoreboard's roster rows.
         fy = showsmall ? (48 + 8 * rows + 8)
                        : (32 + 32 * ((rows > 6 ? 6 : rows)) + 8);
 
@@ -1411,9 +1383,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
     int     red_item_shield = 0;
     int     bfctest = 0;
     int     rfctest = 0;
-    /* BUZZKILL - never hand NULL to the formatter: glibc renders it as
-     * a literal "(null)" on every player's HUD (the owner's screenshot,
-     * wave 266 era). A dash is the honest empty. */
+    /* The layout formatter requires a non-NULL empty value. */
     char*   redfc = "-";
     char*   bluefc = "-";
     char*   red_runes = "-";
@@ -1659,11 +1629,7 @@ void DeathmatchScoreboardMessage (edict_t *ent, edict_t *killer)
 		}
     }
 
-    // Hand the just-gathered per-team aggregates to the density ladder
-    // (ui_layout.h): DMScore_Build tries UI_BOARD_FULL first (see
-    // DMScore_BuildFull for the unchanged roster-building logic that
-    // used to sit directly in this function) and, only if that drops
-    // rows or elements, rebuilds the whole screen at a denser rung.
+    // Hand the per-team aggregates to the density ladder.
     memcpy(ctx.redsorted, redsorted, sizeof(ctx.redsorted));
     memcpy(ctx.bluesorted, bluesorted, sizeof(ctx.bluesorted));
     ctx.red = red;
@@ -3784,4 +3750,3 @@ void G_SetSpectatorStats (edict_t *ent)
 	else
 		cl->ps.stats[STAT_CHASE] = 0;
 }
-

@@ -295,17 +295,7 @@ void SVCmd_QuadTime_f(void)
         }
 }
 
-/*
- * SLIPGATE bots, the admin surface. Dispatched here now; it used to reach
- * SLIPGATE through the legacy bot glue's BotCmd, which forwarded unclaimed
- * "sv" commands.
- *
- * Backward compatibility is load-bearing on exactly one verb: bare
- * `sv sg remove` still removes EVERY bot. That is what the launch scripts
- * and the match harness have typed since the format began, and quietly
- * giving it a narrower meaning would empty the wrong roster mid-wave. The
- * per-bot removal is the argument form, which nothing existing sends.
- */
+/* Dispatch SLIPGATE roster commands. Bare `sv sg remove` removes all bots. */
 static void SVCmd_SG_f (void)
 {
 	char *sub = gi.argv(2);

@@ -1,122 +1,54 @@
-# SLIPGATE C style guide
+# SLIPGATE C style
 
-Every rule below was earned by a real failure in this codebase's
-development — none is imported taste. The failures are described in
-plain terms so the rules stand on their own; the project's internal
-development record (LEDGER.md, git history) holds the full forensics
-for anyone who wants them.
+## Modules
 
-## 1. Files are modules
+- Keep one subsystem in each translation unit.
+- Keep private state and helpers `static`.
+- Put only cross-module declarations in headers.
+- Split a file when unrelated state or lifecycle rules appear in it.
 
-One topic per translation unit. `static` file-scope symbols are the
-module's private state — that is C's encapsulation mechanism, use it.
-The header is the interface and says one thing: if a header
-accumulates externs from unrelated subsystems, it is a junk drawer and
-gets split. A file's honest size is whatever its one topic needs — a
-4,000-line chat module around one emit pipeline is correct; a
-10,000-line file mixing navigation, combat, roles, and telemetry is
-not, and this tree once had exactly that.
+## Functions and state
 
-## 2. Functions are stages
+- Give each function one job with a name that states the decision it makes.
+- Pass shared per-frame state through a context struct such as `sg_think_t`.
+- Define cvars and defaults only in `sg_cvars.h`.
+- Extract a helper when production logic repeats.
+- Keep mutable state owned by one module and one lifecycle.
 
-A function does one nameable job. Soft budget: ~150 lines. Over 300
-requires a banner justifying why the logic is irreducible (the combat
-aim model qualifies: one solve, twenty interlocking locals). Over 700
-is forbidden outright — this tree's think function once reached 6,800
-lines, and its size hid three shipped bugs from every disciplined
-reading of it.
+## Runtime boundaries
 
-## 3. Pipelines pass a context
+- Debug gates may emit diagnostics. They may not assign production state.
+- Derive paths from the game directory and configuration. Do not embed local
+  checkout paths, ports, or operator names.
+- Admit enemy and objective knowledge only through the perception and public
+  game-state interfaces.
+- Keep navigation, combat, and presentation authority in their owning modules.
 
-When stages share frame state, they share ONE context struct built at
-the pipeline's top (`sg_think_t`), not twenty-parameter signatures and
-not file-scope mutable globals. A new stage costs a field, not a dozen
-signature edits.
+## Comments
 
-## 4. A value lives in one place
+Comments may state an external protocol rule, a non-obvious invariant, units,
+or why a tempting implementation is wrong. Keep them short. Do not record trial
+results, implementation history, reviewer conversations, dates, ownership
+rulings, or the code's control flow. Git history holds that material.
 
-Cvar names and defaults exist only in the registry X-macro
-(sg_cvars.h). Two call sites restating a default is a fork waiting to
-ship — before the registry existed, this tree restated defaults at
-over two hundred sites and correctness was luck. Tuning constants are
-named defines with units in the comment; fitted values say what
-measurement fitted them.
+`tools/deslop_audit.py` rejects narrative patterns and oversized SLIPGATE block
+comments. Tests must anchor to functions or executable statements, never prose.
 
-## 5. The second copy is the last
+## Changes and verification
 
-The moment a pattern appears twice, it becomes a helper with a name
-(SG_EnemyFlag, SG_CanSee, SG_DistXY). This applies to analysis tooling
-with equal force: two scripts copy-pasting one detector is how two
-instruments drift apart while reporting the same number's name.
+- Keep mechanical cleanup separate from behavior changes.
+- Build the complete module and read raw compiler output.
+- Test changed policy through executable state, not source comments.
+- Run both Make dialects before merging a source milestone.
+- Verify each CI job rather than trusting an aggregate label.
 
-## 6. Debug gates wrap output, never state
+## Naming
 
-`if (debug)` may print. It may never compute, assign, or advance a
-clock. A role-tracking field in this tree once had its only write
-inside a debug gate — with diagnostics off, every consumer of that
-field silently read stale data in production for weeks. If a debug
-block needs a value, the value is computed outside the gate.
+- Use a module prefix for private function families.
+- Use `SG_` for cross-module interfaces.
+- Name a function after the decision or action it owns.
+- Include units in names or adjacent compact comments when the type cannot.
 
-## 7. No hardcoded environment
-
-Paths derive from the gamedir cvar; ports, directories, and map lists
-come from configuration. A persistence path in this tree once
-hardcoded a specific server's directory name and worked only by
-coincidence until read closely.
-
-## 8. Comments carry constraints and self-contained evidence
-
-A banner states what the code must honor and the measured finding that
-proved it — in language a stranger inheriting this code can use
-without our project records. "Trials determined that hot-room grabs
-got the carrier killed within seconds nearly every time" carries
-everything; a citation into our internal test numbering carries
-nothing to anyone but us. Project-internal coordinates stay in
-LEDGER.md and git history, which exist to hold them. Source line
-references to THIS tree remain welcome — they travel with the code.
-What comments never do: narrate the next line, address a reviewer, or
-require an archaeology session to decode.
-
-## 9. Restructuring and behavior never share a commit
-
-Moves are verbatim — a moved body that cannot see its old scope makes
-the compiler the verifier. Behavior changes are their own commits with
-their own acceptance bars, and deploy alone: one variable at a time is
-a code rule, not just a testing rule.
-
-## 10. The gates are not optional
-
-Every commit: full rebuild, RAW output read — a grep-filtered warning
-count once declared a broken build clean because the failure text
-didn't contain the word "error". Zero warnings on every compiler in
-CI, each CI job's conclusion verified individually, never through an
-aggregate exit code (the aggregate has lied). The strictest compiler
-stays load-bearing: MSVC's uninitialized-variable analysis caught an
-infinite loop that gcc shipped quietly — the one that once hung every
-test server simultaneously.
-
-## 11. Naming
-
-Module prefix on internal families (Think_, Cbt_, Chat_, Lead_,
-Danger_); SG_ prefix on cross-module surface. A name says what the
-thing decides, not how ("Think_ApproachBand", not "Think_Helper2").
-Loop counters are unique within their function — a careless rename
-collision between nested scopes is what produced the server hang in
-rule 10.
-
-## 12. The client never sees development-speak
-
-Every string a player or admin can encounter — broadcasts, command
-output, menu text, chat lines, cvar names, release notes — speaks the
-game's language, never the workshop's. Development vocabulary lives
-only in code comments (within rule 8's limits), the LEDGER, and behind
-the debug cvar (default off), which is the one sanctioned diagnostic
-channel. Development tools may live in the repository; they are never
-part of what the client needs to see.
-
-## 13. Working beats beautiful; the ledger arbitrates
-
-When a cleanup risks behavior during live evaluation, the cleanup
-waits for a safe window. When beauty and verified behavior conflict,
-behavior wins and the ugliness gets a LEDGER entry so it is a debt,
-not a secret.
+Player and administrator output uses game language. Development terms belong in
+debug output and development tools, not menus, broadcasts, commands, or release
+notes.

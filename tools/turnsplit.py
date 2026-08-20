@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""turnsplit.py -- the honest turn gauge, split three ways.
+"""Split SG telemetry heading changes into travel, hook, and combat classes.
 
-Reads SG telemetry (1Hz per bot: org= positions, eng= combat flag,
-hp= hook phase) from wave logs and reports median 1Hz heading change
-for three disjoint frame classes:
-
-  ground travel   eng=0 hp=0   the walk itself -- the polish target
-  hook travel     eng=0 hp>0   swing arcs; pendulums read as churn
-                               and most of it is the technique working
-  combat          eng=1        deliberate dodging; noise here is skill
-
-Usage: turnsplit.py <iter-dir> [<iter-dir> ...]
+Each sample is classified only when both endpoints belong to the same activity
+class. Output reports per-class one-second heading-change distributions.
 """
 import re, sys, math, glob, statistics
 

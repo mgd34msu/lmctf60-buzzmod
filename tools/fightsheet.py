@@ -1,112 +1,10 @@
 #!/usr/bin/env python3
-"""fightsheet.py -- rung 3 (FIGHTS): a blind duel/skirmish sheet.
+"""Render comparable combat sheets from LMCTF demos.
 
-Same blinding discipline as film.py and routesheet.py: identical extraction
-for client (human) and serverrecord (bot) demos, no durations, no roster
-counts, fixed geometry, constant axis scales.  See film.py's MODULE NOTES
-1-11; notes 2, 7 and 10 apply here verbatim.  Nothing on the PNG reveals demo
-shape; the sidecar is the unblinding artifact.
-
-WHAT THIS SHEET ASKS: when two players on opposite teams are close enough to
-fight, what happens?  Who shoots, at what range, with what weapon, closing
-straight in or moving across, how ragged is the trigger, and how does the
-fight end?
-
-WHY IT NEEDS A NEW PARSING LAYER, unlike rung 2.  Rungs 1 and 2 are built
-entirely from the entity position stream.  A fight is an *event*, and the
-events are in message types both existing walkers skip to stay in byte-sync:
-
-  svc_muzzleflash (svc 1)  short entnum + byte MZ_*   -- skipped as 3 bytes
-  svc_temp_entity (svc 3)  byte type + payload        -- skipped by shape table
-
-That first one is the whole rung.  It names the shooter's entity number AND
-the weapon, it is emitted by every player weapon in p_weapon.c, and every
-emission is gi.multicast(ent->s.origin, MULTICAST_PVS) -- the same scoping
-the entity stream already has.  So the event stream carries the same partial
--view scars a client demo's entity stream does, pov-parity generalizes to it
-(apply_pov_parity_events), and one 3-byte message makes the rung possible.
-
-WIRE FACTS THIS MODULE DEPENDS ON, all verified against the lmctf60 game
-source rather than vanilla id Software behaviour:
-
-  * svc_muzzleflash payload is WriteShort(ent-g_edicts) + WriteByte(MZ_*),
-    3 bytes, at every call site (p_weapon.c 814/893/942/1163/1302/1374/
-    1490/1559/1644/1699, p_client.c 1740/2168/2280/2560, p_observer.c 103).
-    MZ_SILENCED (128) is a bit flag ORed onto the weapon id.
-  * The ONLY non-weapon MZ_* values this game ever emits are MZ_LOGIN (9)
-    and MZ_LOGOUT (10).  MZ_RESPAWN and MZ_ITEMRESPAWN appear in q_shared.h
-    but are written nowhere in the game source, so this module's discard
-    rules for them are belt-and-braces, not load-bearing.
-  * MZ_LOGIN IS NOT A RESPAWN SIGNAL IN THIS GAME, and the death signal is
-    somewhere else entirely.  This is the one place the rung's design brief
-    was wrong about the wire, it was checked rather than assumed, and the
-    correction is load-bearing, so it is written out in full:
-
-    The brief expected vanilla Quake II behaviour, where respawn() sends
-    MZ_LOGIN and it therefore marks every death.  In lmctf60 it does not.
-    respawn() (p_client.c:1620) sends no muzzle flash at all -- it sets
-    `self->s.event = EV_PLAYER_TELEPORT` (p_client.c:1642).  Every MZ_LOGIN
-    call site in this game is a JOIN path, not a death path: spectator_
-    respawn (p_client.c:1740), the two team-join paths that print "%s
-    entered the game" (2168, 2280), and observer exit (p_observer.c:103).
-
-    Measured, exactly as the shape of the code predicts: a 383-second human
-    client demo contains ZERO MZ_LOGINs, and a full 15-minute bot wave
-    contains 7, in near-simultaneous pairs -- scheduled team joins, not
-    deaths.  So MZ_LOGIN here carries no death information and its entire
-    remaining content is roster churn: who joined or switched teams and
-    when.  That is the same class of signal as MZ_LOGOUT, and it favours
-    the same corpus (fixed bot rosters vs pub churn).  It is therefore
-    discarded outright, not merely inside a leading window.
-
-    The real death signal is EV_PLAYER_TELEPORT on the entity's `event`
-    field, which this module captures (see parse_delta_entity_fight).  It is
-    better than the MZ_LOGIN the brief wanted: it rides the entity stream,
-    so it is scoped by exactly the same PVS test the positions are and needs
-    no separate parity gate, and it fires on the death itself rather than on
-    a rejoin.  It is shared with map teleporters (g_misc.c:1903), which is
-    the same ambiguity film.py's >180u/tick heuristic already carries, and
-    the two are used together.
-  * MZ_LOGOUT is POISON and never enters this module past the parse
-    boundary.  Bot waves have fixed rosters and never disconnect mid-match;
-    human pub demos have people leaving constantly.  Any panel whose shape
-    changed when a LOGOUT occurred would be a bot tell of the instrument's
-    own making.  MZ_LOGIN is discarded beside it, for the reason above.
-  * svc_muzzleflash2 (svc 2) is the monster stream.  Discarded entirely.
-  * TE_BLOOD is emitted from exactly one call site, g_combat.c:553, and only
-    when `take` damage lands on a client or monster, and SpawnDamage
-    (g_combat.c:123) multicasts it MULTICAST_PVS from the impact point.  It
-    is an honest DAMAGE signal, but T_Damage is called for more than a
-    weapon hit landing: lava/slime tick damage (p_view.c, no per-victim
-    cooldown -- it fires every 0.1s a player stands in it), rocket/grenade
-    splash hitting everyone in the blast radius from one shot, a rail slug
-    piercing several stacked players, and grapple contact damage all fire
-    the same TE_BLOOD.  Counting every one as "a shot landed" measured
-    hits=1236 against shots=180 on a bot demo, with 47% of blood events
-    having no preceding shot at all -- see attribute_hits, which ties a
-    blood event to a plausible preceding shot before it is allowed to draw
-    an engagement-timeline "hit landed" triangle, and keeps the
-    unattributed count alongside it rather than dropping it.
-
-    Hand-audited limitation, symmetric across both shapes and stated in the
-    notes strip: the hook (p_weapon.c:1943) and the plasma gun
-    (p_weapon.c:2205) have their muzzleflash calls COMMENTED OUT in this
-    game's source, so shots from those two weapons are invisible to this
-    instrument.  They are invisible on human and bot demos alike.
-
-CLI:
-    fightsheet.py <demo.dm2> [...] --out <dir>
-                  [--pov-parity [--pov-ent N] [--pov-radius U] [--pov-fov D]]
-    fightsheet.py <demo.dm2> [...] --scalars [--pov-parity]
-    fightsheet.py <demo.dm2> [...] --verify-parser
-    fightsheet.py <demo.dm2> [...] --out <dir> --leak-audit
-    fightsheet.py --calibrate [--human <glob>...] [--bot <glob>...]
-                  [--maps mactf06 ...] [--radius-check]
-
-Writes <hash>.png (the sheet) and <hash>.json (source-mapping sidecar, NOT
-blind -- that file exists for the unblinding step only) per demo, hash-named
-by film.py's hash_demo so one demo carries one hash across every rung and a
-single unblinding table serves all of them.
+The parser extends the shared demo walker with muzzle flashes, damage effects,
+and player teleport events. It discards join and logout flashes because roster
+churn differs between client recordings and serverrecord captures. Optional POV
+parity applies the same visibility filter to entities and combat events.
 """
 import argparse
 import bisect
@@ -123,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import film as F
 import dm2speed as D
 import routesheet as RS          # roc_auc / _ranks / glob helpers ONLY, so
-                                 # every rung's Stage A uses one AUC function
+                                 # every rung's calibration uses one AUC function
 from demokin import parse_playerstate_full
 
 import numpy as np
@@ -263,17 +161,8 @@ CLASS_COLOR = {
 # ---------------------------------------------------------- temp entities
 TE_BLOOD = 1
 
-# Structured field layout per TE_ type.  The BYTE COUNTS here are exactly
-# dm2speed.parse_temp_entity's audited shape table -- that audit (dm2speed.py
-# lines 120-153, 2026-08-03, against this game DLL's actual gi.Write* call
-# sites) is the expensive part and it is already done.  The only thing added
-# is which bytes are a position and which are a direction, so a TE can be
-# decoded instead of skipped.  _assert_shapes_match() below verifies at
-# import time that no entry here consumes a different number of bytes than
-# the audited table; if it ever does, this module refuses to load rather than
-# silently desyncing every block after the first temp entity.  Wire-format
-# work has bitten this toolbox twice (the EFFECTS8|EFFECTS16 4-byte read, the
-# TE shape corrections), and this assertion is the cheap insurance.
+# Field layout per temp-entity type. _assert_shapes_match verifies that these
+# decoded fields consume the same bytes as dm2speed's skip table.
 POS, DIR, ENT, BYTE = 'POS', 'DIR', 'ENT', 'BYTE'
 _FIELD_SIZE = {POS: 6, DIR: 1, ENT: 2, BYTE: 1}
 
@@ -335,7 +224,7 @@ ENGAGE_MIN_S = 1.0         # shorter contacts are passing traffic, not fights
 TARGET_FOV_DEG = 35.0      # half-width of the cone a shot is attributed in
 REAR_ACQUIRE_CONE_DEG = 120.0  # full width of the forward-facing cone used by
                            # rear_acquire() -- matches combat's own firing
-                           # cone per TRIALS.md's sg_beliefcone note
+                           # belief-cone threshold
                            # (sg_arach.c: belief is meant to stay WIDER than
                            # the 120-degree firing cone). A target more than
                            # half this, 60 degrees, off the shooter's view
@@ -443,30 +332,7 @@ def parse_temp_entity_full(r):
 
 
 def parse_delta_entity_fight(r, bits, o, is_svrecord=False):
-    """F.parse_delta_entity_film with ONE line changed: the U_EVENT byte is
-    captured into o[5] instead of being skipped.
-
-    Everything else -- field order, the EFFECTS8|EFFECTS16 4-byte rule, the
-    serverrecord zero-reference handling for effects and yaw -- is identical,
-    and F.parse_delta_entity_film's docstring is the reference for why each
-    of those is the way it is.  Read it before touching this.
-
-    Duplicating a wire parser is a real cost and it is taken deliberately:
-    the alternative is editing film.py, and film.py is the frozen rung-1
-    instrument that four judge sets were rendered by.  The duplication is
-    kept honest by --verify-parser, which requires this walker to produce
-    frame counts and per-entity sample counts identical to F.walk_demo's on
-    every demo before any sheet may be rendered -- so a drift between the two
-    parsers is a loud failure, not a silent one.
-
-    THE EVENT FIELD IS ONE-SHOT, and is handled the way the vanilla client
-    handles it, on both demo shapes without a branch: it is reset to 0 at the
-    top of every delta and set only when the U_EVENT bit is present.  That is
-    correct for both shapes for the same reason -- MSG_WriteDeltaEntity sets
-    the bit whenever `to->event` is nonzero, without comparing it to the
-    `from` state, precisely because an event describes one frame rather than
-    a persistent value.  So unlike effects and yaw (see the film.py
-    docstring), event needs no serverrecord special case."""
+    """Decode one entity delta and retain its one-frame event field."""
     if is_svrecord:
         o[3] = 0
         o[4] = 0.0
@@ -502,39 +368,7 @@ def parse_delta_entity_fight(r, bits, o, is_svrecord=False):
 
 
 def walk_demo_events(path, maxplayers=32, capture_events=True):
-    """A sibling of film.py's walk_demo that also captures the event stream.
-
-    The entity side is not reimplemented: this calls F.parse_delta_entity_film
-    for every delta, so tracks and yaws come out of the identical code rung 1
-    and rung 2 use, and `capture_events=False` reproduces walk_demo's exact
-    message dispatch (svc 1 skipped as 3 bytes, svc 3 skipped by shape).  That
-    flag exists so --verify-parser can A/B the two paths on the same file and
-    show the error counters do not rise when events are captured, which §2.2
-    of the design makes a mandatory precondition for rendering any sheet.
-
-    Returns walk_demo's dict plus:
-      'events': [ {'kind': 'shot',  'frame', 'ent', 'mz', 'silenced'},
-                  {'kind': 'blood', 'frame', 'pos': (x,y,z)} ]
-      'respawns': [ {'frame', 'ent'} ]   -- EV_PLAYER_TELEPORT, the death
-                                            signal; rides the entity stream,
-                                            so it is listed separately from
-                                            the multicast events
-      'te_counts': {te_type: n}      -- parser health, sidecar only
-      'block_errors': n              -- blocks abandoned mid-parse
-      'blocks': n
-
-    EVENT TIMING.  An event is stamped with the frame index most recently
-    completed by a packetentities snapshot, i.e. the 10Hz position grid the
-    rest of the toolbox already runs on.  Within one demo message the
-    multicast datagram and the entity snapshot can be written in either
-    order, so an event can land one frame early or late; that granularity is
-    the same on both demo shapes and no panel here resolves finer than a
-    server tick.
-
-    WHAT IS DISCARDED AT THIS BOUNDARY, and never reaches any consumer:
-    svc_muzzleflash2 (monsters), MZ_LOGOUT, MZ_LOGIN, MZ_RESPAWN and
-    MZ_ITEMRESPAWN.  Discarding here rather than downstream means no panel
-    can accidentally grow a dependency on them."""
+    """Decode a demo with the shared entity parser and retain combat events."""
     data = open(path, 'rb').read()
     off = 0
     mapname = None
@@ -667,39 +501,7 @@ def walk_demo_events(path, maxplayers=32, capture_events=True):
 
 
 def forward_fill_yaws(d):
-    """Make the view-yaw series mean the same thing on both demo shapes.
-
-    A small symmetric normalization, and the measurement that sizes it is
-    recorded here because the reasoning that motivated it was wrong and the
-    correction is worth more than the guess.
-
-    The worry was this: film.py's walker resets the yaw accumulator to 0.0 at
-    the top of every serverrecord delta, because a serverrecord capture
-    deltas every entity against an all-zero reference state (see
-    parse_delta_entity_film's docstring).  On a serverrecord demo an absent
-    U_ANGLE2 bit therefore reads as yaw 0, while on a client demo the same
-    absent bit means "unchanged".  Since film.py's docstring reports the bit
-    present on only 79.8% of serverrecord player updates, that looked like it
-    would hand a fifth of all bot frames a spurious 0-degree view angle and
-    none of the human ones -- which would matter here, because this rung
-    reads the yaw at the exact frame of every shot and a bogus yaw produces a
-    bogus target, range and aim offset on one corpus only.
-
-    MEASURED, it is nothing like that.  Restricted to ROSTERED players -- the
-    only entities any panel uses -- yaw reads exactly 0.0 on 0.95% of
-    serverrecord samples and 0.82% of client samples (wave431 and
-    lmctf-2022-02-08-mactf06-20.37, n = 81198 and 15703).  The 20% figure is
-    dominated by the non-player entities that share the 1..32 entnum range
-    and never carry an angle at all; F.anonymize drops every one of them.
-    The reason the zero-reference does no harm is that the bit is omitted
-    precisely when the quantized yaw IS zero, so "absent" and "zero" agree.
-
-    So this function is kept, but as what it actually is: one rule applied to
-    both shapes without a branch, which takes a 0.95%/0.82% residual to
-    0%/0%.  A yaw of exactly 0.0 is treated as "not reported this frame" and
-    the last reported yaw is carried forward.  The cost is that a genuine yaw
-    in bin 0 of 256 is replaced by the previous one, on both corpora
-    equally."""
+    """Forward-fill zero yaw bins under one rule for both demo shapes."""
     for ent, series in d.get('yaws', {}).items():
         last = None
         for f in sorted(series):
@@ -724,33 +526,7 @@ def cap_events_to_duration(d):
 
 
 def apply_pov_parity_events(d, labels, pov_info, prepos):
-    """Extend --pov-parity from the entity stream to the event stream (L5).
-
-    Both multicast messages this rung reads are MULTICAST_PVS from a world
-    origin: the shooter's origin for svc_muzzleflash (p_weapon.c:817 etc.)
-    and the impact point for TE_BLOOD (g_combat.c:132).  A client demo
-    therefore only contains the events whose origin was in the recording
-    client's PVS, and a serverrecord demo contains all of them.  So the event
-    stream needs the same treatment the entity stream gets, and it can share
-    the recorder and radius F.apply_pov_parity already picked -- same virtual
-    recorder, same sphere, one calibration.
-
-    Respawns are handled differently and more simply, because they are not a
-    multicast at all: EV_PLAYER_TELEPORT arrives on the entity's own delta,
-    so it has ALREADY been scoped by whatever scoping the entity stream got.
-    Filtering them to the frames that survived the entity gate reproduces
-    that exactly, with no second radius test to calibrate -- a respawn is
-    visible precisely when the respawning player is.
-
-    `prepos` is the PRE-PARITY position index: the gate must be evaluated
-    against the event's true world origin, which for a muzzle flash is the
-    shooter's real position at that frame, not the punched-through copy that
-    survives filtering.  (The two agree wherever it matters: a flash passes
-    the gate exactly when the shooter's own sample at that frame also passes
-    it, so a surviving shot always has a surviving shooter position.)
-
-    The recorder's own events are always kept -- distance zero from itself --
-    so there is no self-asymmetry, exactly as in the entity gate."""
+    """Apply the entity parity gate to multicast combat events and respawns."""
     if not pov_info.get('applied'):
         return {'applied': False}
     rec_ent = pov_info['pov_entnum']
@@ -852,23 +628,7 @@ def split_events(d, labels):
 
 
 def attribute_shots(shots, posidx, yaws, teams, labels):
-    """Give every shot a target, a range and an aim offset, where one can be
-    argued for.
-
-    The rule, identical on both demo shapes: among opposite-team players
-    sampled at that frame, keep those whose bearing from the shooter is
-    within TARGET_FOV_DEG of the shooter's captured view yaw, and take the
-    nearest.  The yaw is a REAL view angle -- this mod writes the client's
-    v_angle[YAW] into the entity's angles[YAW] at p_view.c:1033 -- not a
-    movement heading, which is what makes this worth doing at all.
-
-    THIS IS A HYPOTHESIS, NOT GROUND TRUTH, and it has exactly the status
-    rung 1's captured/died/lost labels have (film.py MODULE NOTE 3).  A shot
-    down a corridor at nobody, with an enemy incidentally in the cone behind
-    a wall, is attributed to that enemy.  The notes strip says so on every
-    sheet, in identical words, so a judge weighs it the same way on both
-    corpora.  Shots with no candidate get no range and simply do not appear
-    in the range panel; they still appear as shots everywhere else."""
+    """Assign each shot the nearest visible opposing target inside the aim cone."""
     out = []
     for s in shots:
         f, e = s['frame'], s['ent']
@@ -914,55 +674,7 @@ def _other_team(t):
 
 
 def attribute_hits(bloods, shots, teams, posidx, labels):
-    """A TE_BLOOD is attributed to the nearest rostered player within
-    HIT_RADIUS of it at that frame -- that part is unchanged, and still
-    correctly identifies the VICTIM: TE_BLOOD comes from exactly one call
-    site (g_combat.c:553) and only fires when damage actually lands on a
-    client or monster.
-
-    What TE_BLOOD does NOT tell you is who or what caused it, and that is
-    the artifact this function exists to fix.  T_Damage -- the one call
-    site -- fires for a weapon hit, but also for lava/slime tick damage
-    (p_view.c has no per-victim cooldown on it: it fires every 0.1s a
-    player stands in it), for a rocket/grenade splashing everyone in its
-    blast radius from one shot, for a rail slug piercing every stacked
-    player it passes through, and for grapple contact damage.  Counting
-    every blood event as "a shot landed" measured hits=1236 against
-    shots=180 on a bot demo, with 47% of blood events having no preceding
-    shot at all -- and that inflated count is what drives the "hit landed"
-    triangle markers on the engagement timeline, which is not a cosmetic
-    bug: judges have quoted "hit triangles over almost every bar" as
-    evidence of bot-ness, when the triangles were mostly lava.
-
-    So: a blood event is additionally attributed to a SHOT when a shot was
-    fired by a player on the team opposite the victim, no more than
-    HIT_ATTRIB_WINDOW_FRAMES frames before the blood frame (never after --
-    a shot cannot cause damage that already happened), and the (shot,
-    victim) pair has not already been used.  Ties among legal candidates
-    resolve to the most recent shot, the more causally plausible one.
-
-    The cap is on the (shot, victim) PAIR, not on the shot alone, on
-    purpose: one shotgun blast or rail slug legitimately hitting three
-    stacked players is three real hits and must stay three.  What the pair
-    cap forecloses is a single shot being blamed for a whole run of
-    unrelated blood ticks against the SAME victim -- e.g. that victim
-    wandering through lava for the next second, which would otherwise ride
-    the shot's attribution window and look like the shot kept landing.
-
-    A blood event that finds no legal candidate shot is still returned,
-    marked unattributed, rather than dropped -- so environmental damage
-    stays visible in the totals (console/sidecar) instead of silently
-    vanishing.  Requiring an opposite-team shooter means a friendly-fire
-    hit on a server running FF on would show up unattributed too; accepted
-    as the conservative side to be wrong on, since the alternative (any
-    shot by anyone) reopens the door to crediting an unrelated bystander's
-    shot for damage it did not cause.
-
-    Returns a list of dicts: frame, victim, dist, attributed (bool),
-    shot_frame, shot_ent, shot_idx -- the last three are None when
-    unattributed.  shot_idx indexes into `shots` and is what the caller
-    uses to dedupe multiple attributed hits from one splash shot down to a
-    single "landed" marker."""
+    """Match blood events to recent opposing shots without reusing a shot-victim pair."""
     shots_by_shooter_team = collections.defaultdict(list)
     for i, s in enumerate(shots):
         shots_by_shooter_team[teams.get(s['ent'])].append((i, s))
@@ -1082,23 +794,7 @@ def segment_engagements(tracks, labels, teams, shots):
 
 
 def classify_disengage(eng, respawns, posidx, deaths_by_ent):
-    """How did this fight end: killed, broke off, or lost contact?
-
-    `killed` is decided by EV_PLAYER_TELEPORT -- a respawn by either fighter
-    within DEATH_LOOKAHEAD_S of the end.  That is a real death signal off the
-    wire (respawn() sets it at p_client.c:1642) and it is the correction to
-    the design brief's MZ_LOGIN, which in this game marks a team join and not
-    a death; see the module docstring.  film.py's >180u/tick teleport
-    heuristic is kept alongside it, because the two are complementary: the
-    event catches a respawn whose position jump the sampling missed, and the
-    jump catches a respawn whose event frame was culled.  Both are shared
-    with map teleporters, and both are equally so on either corpus.
-
-    `broke off` requires that both players are still being sampled after the
-    end -- otherwise we cannot tell a retreat from the recording simply
-    losing sight of them, and calling that a retreat would credit the losing
-    side of a fight to whichever demo shape has the worse coverage.  That
-    distinction is the entire reason `lost contact` is a class."""
+    """Classify a fight ending as killed, broke off, or lost contact."""
     a, b = eng['pair']
     f1 = eng['f1']
     look = int(round(DEATH_LOOKAHEAD_S * F.FPS))
@@ -1160,32 +856,7 @@ def approach_angle(eng, posidx):
 
 
 def rear_acquire(eng, posidx, yaws):
-    """Whether the fight's opening shot was aimed at a target outside the
-    shooter's forward REAR_ACQUIRE_CONE_DEG-wide cone -- a target the shooter
-    had not turned to face before opening fire.
-
-    FACING PROXY.  The design brief for this scalar asked for the shooter's
-    movement heading over the prior 0.5s, on the assumption that view angles
-    "may not be in the demo stream." They are: this mod writes the client's
-    real v_angle[YAW] into the entity's angles[YAW] on the wire
-    (p_view.c:1033) and `forward_fill_yaws` already normalizes the one
-    serverrecord-only quirk in it (a zero-reference delta reads as an absent
-    bit exactly when the true yaw quantizes to 0, so "absent" and "zero"
-    agree on both demo shapes -- see that function's docstring for the
-    measurement). `attribute_shots` already trusts this same series as
-    ground truth for "what was this player looking at" when it assigns a
-    shot's target. View yaw is used here instead of movement heading for the
-    same reason: target ACQUISITION is a facing/vision-cone question, not a
-    footwork one -- a player can walk one direction while looking another,
-    and sg_beliefcone/sg_beliefrange gate on facing (a human-like FOV), not
-    on where the feet are pointed. Movement heading (approach_angle, above)
-    stays movement heading because that panel asks a different question --
-    how a player WALKS into a fight -- and is left unchanged.
-
-    Returns True (target outside the cone -- a "rear acquire"), False
-    (target inside it), or None where the shot frame has no usable yaw or
-    position for either player. Kept in that three-way shape, matching
-    approach_angle, so a caller can drop the Nones without special-casing."""
+    """Report whether the opening target was outside the shooter's facing cone."""
     s = eng['shots'][0]
     e, f = s['ent'], s['frame']
     other = eng['pair'][1] if eng['pair'][0] == e else eng['pair'][0]
@@ -1200,7 +871,7 @@ def rear_acquire(eng, posidx, yaws):
 
 
 # --------------------------------------------------- rail-rhythm crossings
-# sg_railrhythm (TRIALS.md #2) has no scalar that can see it: the doctrine
+# Rail rhythm has no scalar that can see it: the doctrine
 # it drives -- a bot timing a lane crossing against a believed railer's
 # reload window -- fires in open movement, before any fight is detected, so
 # it sits upstream of every engagement-scoped scalar above (approach_angle,
@@ -1226,35 +897,7 @@ RAIL_MIN_CROSSINGS = 8     # per-team sample gate before a team's fraction is
 
 
 def rail_window_crossings(engs, teams, shots):
-    """Per-team (qualify, total) crossing counts for rail_window_exposure.
-
-    A CROSSING is the frame a player begins exposure to one specific
-    opposing player: an engagement's start frame (e['f0']) or, only when the
-    engagement ends in class == 'broke off' (classify_disengage), its end
-    frame (e['f1']) as well. classify_disengage is decided at the PAIR level
-    -- fightsheet does not record which of the two players initiated a
-    break -- so both members of the pair are credited at both frames,
-    exactly as every other pair-level fact on this sheet (disengage class,
-    the engagement itself) already applies to both players alike.
-
-    A crossing is ELIGIBLE only when the opposing player's held weapon class
-    at the crossing frame is rail. There is no inventory signal on this
-    wire, so "held" is read the only way the shot stream allows: the class
-    of that player's most recent shot at or before the crossing frame (a
-    player with no prior shot has no known held class and is not eligible).
-    Because eligibility is defined by that shot, the shot making a crossing
-    eligible for CLASS_RAIL IS the enemy's last rail shot -- there is no
-    separate "find the last rail shot" step once held-class is read.
-
-    A crossing QUALIFIES when it begins within RAIL_WINDOW_S seconds of that
-    shot (0 <= time_since <= RAIL_WINDOW_S; a crossing cannot be timed
-    against a shot that has not happened yet, so a negative gap cannot
-    occur here -- the held-class lookup only ever looks backward).
-
-    Returns {'red': (qualify, total), 'blue': (qualify, total)} -- counts,
-    not a fraction, so the caller pools before dividing: 'weighted by
-    crossing count' in the spec, not an unweighted mean of per-player
-    fractions."""
+    """Count per-team crossings that occur inside a recent enemy rail window."""
     by_ent = collections.defaultdict(list)
     for s in shots:
         by_ent[s['ent']].append(s)
@@ -1388,9 +1031,9 @@ SCALAR_PANEL = {
     'intershot_cv': 'panel 5 (fire discipline)',
     'slow_cadence_cv': 'panel 5 (fire discipline, slow weapons only)',
     'mean_aim_offset_deg': '(no panel -- diagnostic scalar only)',
-    'rail_window_exposure': '(no panel -- scalar only, see TRIALS.md #2 '
+    'rail_window_exposure': '(no panel -- scalar only '
                             'sg_railrhythm)',
-    'rear_acquire_share': '(no panel -- scalar only, see TRIALS.md #3 '
+    'rear_acquire_share': '(no panel -- scalar only '
                           'sg_beliefcone/sg_beliefrange)',
 }
 
@@ -1550,7 +1193,7 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
 def _compute_scalars(ranges_by_class, intervals, approaches, dis_mix,
                      dis_total, P_by_team, counts_by_team, shots,
                      rail_crossings, rear_by_shooter):
-    """The Stage A headline scalars.
+    """The calibration headline scalars.
 
     Every one is a shape statistic -- a dispersion, a distance between two
     densities, a fraction -- never a count, because counts are PVS-sensitive
@@ -1678,23 +1321,7 @@ def _blank_axes(ax, title, xlabel=None, ylabel=None):
 
 
 def draw_engagement_timeline(ax, engs, frames):
-    """Panel 1 -- the panel a judge actually reads.
-
-    One row per engagement, TIMELINE_ROWS rows always: the busiest fights by
-    shot count, then laid out top to bottom in the order they happened so the
-    panel reads as a timeline, and padded with empty rows.  x is normalized
-    match time, never seconds (L1).  Within a row: the pair's separation as a
-    faint background trace scaled over 0..ENGAGE_RADIUS, a tick per shot
-    coloured by weapon class, and a filled triangle per landed hit -- ATTRIBUTED
-    hits only (attribute_hits), one triangle per shot even when that shot's
-    splash is attributed to several victims, so this panel cannot be read as
-    "hit triangle over almost every bar" off environmental damage that was
-    never a weapon hit in the first place.
-
-    Selecting by shot count and DRAWING in time order are deliberately
-    different things: which fights get a slot must not depend on when they
-    happened, but once chosen, sorting the rows by start time costs nothing
-    and turns a scatter of blobs into something a reader can follow."""
+    """Draw the busiest engagements in chronological order."""
     engs = sorted(engs[:TIMELINE_ROWS], key=lambda e: e['f0'])
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(TIMELINE_ROWS, 0)
@@ -1832,19 +1459,7 @@ def draw_fire_discipline(axes, intervals):
 
 
 def draw_disengage_traces(axes, engs):
-    """Panel 4 -- how each fight ended.
-
-    DISENGAGE_SLOTS fixed slots, always all of them, showing the pair's
-    separation over the trailing window, normalized on both axes so neither
-    the length of the window nor the absolute distance can be read off as a
-    duration (L1).  The line colour is the class.
-
-    The classes are NOT written next to the traces.  A text label reading
-    "broke off" would appear on the sheets where someone broke off and nowhere
-    else, and the pre-set string audit would (correctly) flag a string that
-    shows up on all of one group and none of the other.  The legend below the
-    panel lists all three classes on every sheet instead, so the string set is
-    constant and only the colours carry the information (L2)."""
+    """Draw normalized trailing separation for each disengagement class."""
     engs = sorted(engs[:DISENGAGE_SLOTS], key=lambda e: e['f0'])
     win = int(round(DISENGAGE_WINDOW_S * F.FPS))
     for i in range(DISENGAGE_SLOTS):
@@ -2227,19 +1842,7 @@ def collect_scalars(paths, pov_parity, radius, fov, cache, maps=None,
 
 
 def run_calibration(human_paths, bot_paths, radius, fov, cache, maps=None):
-    """Stage A of the design's two-stage gate.
-
-    Machine-side only, and it never renders or labels a sheet: it walks a
-    known-set, computes the sheet's headline scalars, and reports how
-    separable the two arms are.  The point of running this first is that the
-    judge pass standard rewards an instrument that cannot see anything -- a
-    blank sheet convicts both arms at the same rate and 'passes' forever --
-    so the instrument has to prove it has power on data where the answer is
-    known before it is allowed to certify anything.
-
-    pov-parity is forced ON for the bot arm (L5): without it the bot side is
-    an omniscient recording and any separation could be coverage rather than
-    behaviour."""
+    """Measure whether the fixed instrument separates a labeled calibration set."""
     hr = collect_scalars(human_paths, False, radius, fov, cache, maps=maps,
                          label='human')
     br = collect_scalars(bot_paths, True, radius, fov, cache, maps=maps,
@@ -2267,7 +1870,7 @@ def run_calibration(human_paths, bot_paths, radius, fov, cache, maps=None):
     return out
 
 
-def print_calibration(res, title='STAGE A'):
+def print_calibration(res, title='CALIBRATION'):
     print(f"\n=== {title}: maps={','.join(res['maps']) or '(none shared)'} "
           f"n_human={res['n_human']} n_bot={res['n_bot']} ===")
     print(f"{'scalar':28s} {'human_mean':>11s} {'bot_mean':>11s} "
@@ -2293,7 +1896,7 @@ def print_calibration(res, title='STAGE A'):
               f"(separability {best[1]:.3f}, {direction}, "
               f"{SCALAR_PANEL[best[0]]})")
         gate = 'PASS' if best[1] >= 0.85 else 'FAIL'
-        print(f"Stage A gate (separability >= 0.85 on at least one "
+        print(f"calibration gate (separability >= 0.85 on at least one "
               f"scalar): {gate}")
     hot = [k for k in SCALAR_KEYS
            if (res['auc'][k]['separability'] or 0) >= 0.95]
@@ -2370,7 +1973,7 @@ def main():
     ap.add_argument('--pov-radius', type=float, default=F.POV_RADIUS_DEFAULT)
     ap.add_argument('--pov-fov', type=float, default=F.POV_FOV_DEG_DEFAULT)
     ap.add_argument('--scalars', action='store_true',
-                    help='render nothing; print one CSV row of Stage A '
+                    help='render nothing; print one CSV row of calibration '
                          'scalars per demo')
     ap.add_argument('--verify-parser', action='store_true',
                     help='A/B the event-capturing walker against the frozen '
@@ -2381,7 +1984,7 @@ def main():
                          'sets and panel geometry of the human sheets '
                          'against the bot sheets (design appendix)')
     ap.add_argument('--calibrate', action='store_true',
-                    help='Stage A gate: run the instrument over a labeled '
+                    help='calibration gate: run the instrument over a labeled '
                          'known-set and report ROC AUC per scalar. Renders '
                          'nothing and never writes a label onto any sheet.')
     ap.add_argument('--human', nargs='+', default=[DEFAULT_HUMAN_GLOB],
@@ -2420,7 +2023,7 @@ def main():
                 r2 = args.pov_radius + dr
                 alt = run_calibration(human, bot, r2, args.pov_fov, cache,
                                       maps=args.maps)
-                print_calibration(alt, title=f'STAGE A (parity radius '
+                print_calibration(alt, title=f'CALIBRATION (parity radius '
                                              f'{r2:.0f}u)')
                 print("  radius-perturbation swing vs baseline:")
                 for k in SCALAR_KEYS:

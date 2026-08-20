@@ -1,45 +1,10 @@
 #!/usr/bin/env python3
-"""routesheet.py -- rung 2 (ROUTES): a blind game-scale route-graph sheet.
+"""Render comparable route-choice sheets from LMCTF demos.
 
-Same blinding discipline as film.py: identical extraction for client (human)
-and serverrecord (bot) demos, no durations, no roster counts, fixed geometry,
-map-derived axes.  See film.py's MODULE NOTES 1-11; notes 2, 7 and 10 apply
-here verbatim.  Nothing on the PNG reveals demo shape; the sidecar is the
-unblinding artifact.
-
-WHAT THIS SHEET ASKS, and how it differs from rung 1: film.py measures route
-shape only *inside carry windows* and only pairwise (Frechet distance between
-flag runs, plus a self-normalized cluster entropy).  This sheet asks the
-whole-match question -- over an entire game, does this player navigate the map
-like someone who understands it, or like a solver walking a graph -- by
-projecting every position sample onto a fixed per-map node graph and reading
-the traversal statistics off that graph.
-
-THE NODE GRAPH IS A PROPERTY OF THE MAP, NOT OF THE DEMO.  It is quantized out
-of the map's rune seed cloud (the same file film.py already draws its
-silhouette from), cached at <runedir>/<map>.nodes.json, and ordered by the
-node set's own principal axis.  Two sheets of the same map therefore carry the
-identical 28 nodes with the identical indices, drawn on the identical axes, so
-a bot sheet and a human sheet of mactf06 are directly comparable and no axis,
-node position or matrix index can encode which demo produced it (leak
-checklist L8).
-
-ZERO NEW DEMO PARSING.  Input is d['tracks'] from film.py's walk_demo, exactly
-as rung 1 consumes it.  There is one extraction path and it is shared, so
-nothing here can be richer on one demo shape than on the other (L6).
-
-CLI:
-    routesheet.py <demo.dm2> [...] --out <dir> [--runedir <dir>]
-                  [--pov-parity [--pov-ent N] [--pov-radius U] [--pov-fov D]]
-    routesheet.py <demo.dm2> [...] --build-nodes [--runedir <dir>]
-    routesheet.py <demo.dm2> [...] --scalars [--pov-parity]
-    routesheet.py --calibrate [--human <glob>...] [--bot <glob>...]
-                  [--maps mactf06 ...] [--radius-check]
-
-Writes <hash>.png (the sheet) and <hash>.json (source-mapping sidecar, NOT
-blind -- this file exists for the unblinding step only) per demo, hash-named
-by film.py's hash_demo so one demo carries one hash across every rung and a
-single unblinding table serves all of them.
+The tool derives movement occupancy and transition scalars from the shared demo
+walker and authenticated RUNE geometry. Optional POV parity applies the client
+visibility model to serverrecord tracks. PNG output is blind; JSON sidecars
+retain source and extraction metadata.
 """
 import argparse
 import collections
@@ -125,24 +90,7 @@ def _occupied_cells(seeds_xy, xmin, ymin, cell):
 
 
 def build_node_set(seeds, extent, target=ROUTE_NODE_TARGET):
-    """Quantize a map's rune seed cloud into `target` graph nodes.
-
-    Deterministic end to end -- same rune file always yields the same nodes,
-    in the same order, forever (L8).  No RNG is used anywhere, including the
-    k-means initialization.
-
-    1. Grid the seeds over `extent` at a cell size chosen by bisection so the
-       occupied-cell count lands near target * ROUTE_CELL_TARGET.  Solving for
-       the cell size rather than fixing it means no per-map tuning constant:
-       a large sprawling map and a tight one both arrive at the clustering
-       step with a comparable number of input cells.
-    2. Weight each occupied cell by its seed count and take cell centers as
-       the clustering points, so node placement follows walkable floor area
-       rather than raw seed density artifacts.
-    3. Lloyd's k-means, ROUTE_KMEANS_ITERS iterations, initialized by sorting
-       the occupied cells on (x, y) and taking every floor(n/target)-th one.
-
-    Returns (nodes: [(x, y), ...], cell_size: float)."""
+    """Quantize the RUNE seed cloud into a deterministic weighted node set."""
     pts = np.asarray(seeds, dtype=np.float64)
     if len(pts) == 0:
         raise RouteFixtureMissing("rune file carries no seeds")
@@ -373,28 +321,7 @@ def offgraph_fraction(tracks, labels, seeds, radius=OFFGRAPH_RADIUS):
 
 
 def node_sequences(assign, dwell_min_s=ROUTE_DWELL_MIN_S):
-    """Collapse each player's (frame, node) series into a node SEQUENCE.
-
-    Consecutive repeats collapse into one visit; a visit observed for less
-    than `dwell_min_s` is boundary chatter (a sample that clipped the far side
-    of a node boundary while running past) and is dropped, after which the
-    sequence is re-collapsed so a dropped visit never manufactures a
-    transition between its two neighbours.
-
-    Dwell is measured as (samples in the run) / FPS, i.e. how long the player
-    was actually OBSERVED at that node, rather than the run's frame span.
-    Under a PVS hole the span keeps running while no samples arrive, and using
-    the span would credit the hole as dwell -- which would read differently on
-    the two demo shapes.  Counting samples errs the same way on both.
-
-    WHY THIS RUNG SURVIVES THE COVERAGE ASYMMETRY (see film.py MODULE NOTE
-    10a): because this collapses runs, a PVS hole in the middle of a corridor
-    crossing produces the SAME node sequence as a continuous crossing -- the
-    player disappears at node A and reappears at node B either way.  Rung 1's
-    per-sample panels inherit every hole as a visible scar; a node sequence
-    mostly does not.
-
-    Returns (seqs: {entnum: [node, ...]}, visits: {entnum: Counter(node)})."""
+    """Collapse sampled node tracks into dwell-filtered visit sequences."""
     seqs, visits = {}, {}
     for n, series in assign.items():
         runs = []
@@ -433,19 +360,7 @@ def transition_matrix(seqs, n_nodes, ents=None):
 
 
 def transition_entropy(seqs, n_nodes, min_transitions=ROUTE_MIN_TRANSITIONS):
-    """{entnum: H(next node | current node) in bits} plus the per-player
-    transition counts.
-
-    H = sum_i pi_i * H(P[i]) with pi the player's own occupancy over nodes
-    (the row sums of that player's transition counts, normalized).  A player
-    who always leaves node i for the same node j contributes zero; a player
-    who picks among several exits contributes the log of how many.
-
-    Players with fewer than `min_transitions` transitions get None rather than
-    a noisy estimate -- a demo with thin coverage produces short sequences,
-    and a short sequence's entropy is biased low for sample-size reasons that
-    have nothing to do with route choice.  The bar slot for a dropped player
-    renders empty, so the panel's shape does not change (L3)."""
+    """Return per-player conditional next-node entropy and transition counts."""
     ent, ntr = {}, {}
     for n, seq in seqs.items():
         P, counts = transition_matrix({n: seq}, n_nodes)
@@ -491,20 +406,7 @@ def revisit_intervals(seqs, cap=REVISIT_CAP, ents=None):
 
 
 def occupancy_kl(visits, n_nodes, ents=None):
-    """KL(visit distribution || uniform over the map's nodes), in bits.
-
-    Zero means the team spread its time evenly over the whole map graph; the
-    ceiling log2(n_nodes) means it lived in one node.  This is the "does this
-    team use the map, or a corridor of it" number.
-
-    DEVIATION, declared: the design says to take the reference support from
-    F.density_fill_stats's reachable-cell mask.  That mask is a property of
-    the SEED CLOUD, and every node here is a weighted centroid of occupied
-    seed cells -- so every node is reachable by construction and the reachable
-    node set is always the full node set.  Using the full set keeps the
-    denominator a constant (log2(28)) for every sheet of every map rather than
-    a per-demo quantity, which is strictly more blind than what was specified:
-    a demo-varying denominator would have let coverage move this bar."""
+    """Measure visit-distribution divergence from uniform node occupancy."""
     c = np.zeros(n_nodes, dtype=np.float64)
     for n, ctr in visits.items():
         if ents is not None and n not in ents:
@@ -538,23 +440,7 @@ def edge_density(P, p_min=EDGE_P_MIN):
 # cell-level determinism a judge actually reads off panel 2 was never
 # measured on its own.  max_transition_mass is that missing cell-level eye.
 def max_transition_mass(counts, min_transitions=8):
-    """Transition-count-weighted mean of each qualifying node's most-frequent
-    next-node share -- how deterministic this team's node-to-node choices are.
-
-    For every node with at least `min_transitions` outgoing transitions
-    recorded, max_p = (count of its most common next node) / (its total
-    outgoing count).  Those per-node max_p values are combined with a mean
-    weighted by each node's own outgoing transition count, not by node count,
-    for the same reason intershot_cv (fightsheet.py) is count-weighted across
-    weapon classes: a node passed through constantly and always exited the
-    same way should outweigh a barely-visited node that happens to have a
-    single recorded exit, or a handful of thin nodes could swing the number as
-    much as the busiest lane on the sheet. High = deterministic.
-
-    Returns None when no node on this matrix clears `min_transitions` --
-    the same "not enough to estimate" convention ROUTE_MIN_TRANSITIONS uses
-    elsewhere on this sheet, rather than a noisy number built from one or two
-    node visits."""
+    """Measure transition-weighted next-node determinism at qualified nodes."""
     rs = counts.sum(axis=1)
     qual = rs >= min_transitions
     if not qual.any():
@@ -1072,19 +958,7 @@ def collect_scalars(paths, rune_dir, pov_parity, radius, fov, cache,
 
 def run_calibration(human_paths, bot_paths, rune_dir, radius, fov, cache,
                     maps=None):
-    """Stage A of the design's two-stage gate.
-
-    Machine-side only, and it never renders or labels a sheet: it walks a
-    known-set, computes the sheet's headline scalars, and reports how
-    separable the two arms are.  The point of running this first is that the
-    judge pass standard rewards an instrument that cannot see anything -- a
-    blank sheet convicts both arms at the same rate and 'passes' forever -- so
-    the instrument has to prove it has power on data where the answer is known
-    before it is allowed to certify anything.
-
-    pov-parity is forced ON for the bot arm (L5): without it the bot side is
-    an omniscient recording and any separation could be coverage rather than
-    behaviour."""
+    """Measure whether the fixed route instrument separates a labeled calibration set."""
     hr = collect_scalars(human_paths, rune_dir, False, radius, fov, cache,
                          maps=maps, label='human')
     br = collect_scalars(bot_paths, rune_dir, True, radius, fov, cache,
@@ -1112,7 +986,7 @@ def run_calibration(human_paths, bot_paths, rune_dir, radius, fov, cache,
     return out
 
 
-def print_calibration(res, title='STAGE A'):
+def print_calibration(res, title='CALIBRATION'):
     print(f"\n=== {title}: maps={','.join(res['maps']) or '(none shared)'} "
           f"n_human={res['n_human']} n_bot={res['n_bot']} ===")
     print(f"{'scalar':28s} {'human_mean':>11s} {'bot_mean':>11s} "
@@ -1136,7 +1010,7 @@ def print_calibration(res, title='STAGE A'):
               f"(separability {best[1]:.3f}, {direction}, "
               f"{SCALAR_PANEL[best[0]]})")
         gate = 'PASS' if best[1] >= 0.85 else 'FAIL'
-        print(f"Stage A gate (separability >= 0.85 on at least one "
+        print(f"calibration gate (separability >= 0.85 on at least one "
               f"scalar): {gate}")
         if best[1] >= 0.95:
             print("WARNING: separability >= 0.95 -- the design requires this "
@@ -1171,10 +1045,10 @@ def main():
     ap.add_argument('--rebuild-nodes', action='store_true',
                     help='with --build-nodes, ignore an existing cache')
     ap.add_argument('--scalars', action='store_true',
-                    help='render nothing; print one CSV row of Stage A '
+                    help='render nothing; print one CSV row of calibration '
                          'scalars per demo')
     ap.add_argument('--calibrate', action='store_true',
-                    help='Stage A gate: run the instrument over a labeled '
+                    help='calibration gate: run the instrument over a labeled '
                          'known-set and report ROC AUC per scalar. Renders '
                          'nothing and never writes a label onto any sheet.')
     ap.add_argument('--human', nargs='+', default=[DEFAULT_HUMAN_GLOB],
@@ -1186,7 +1060,7 @@ def main():
                          'sets are the point; without this the two arms are '
                          'auto-restricted to whatever maps they share)')
     ap.add_argument('--radius-check', action='store_true',
-                    help='re-run the Stage A gate with the parity radius at '
+                    help='re-run the calibration gate with the parity radius at '
                          '+/-100u. Any scalar whose AUC swings more than '
                          '~0.10 is measuring coverage, not behaviour.')
     ap.add_argument('--cache', default=DEFAULT_CACHE,
@@ -1213,7 +1087,7 @@ def main():
                 r2 = args.pov_radius + dr
                 alt = run_calibration(human, bot, args.runedir, r2,
                                       args.pov_fov, cache, maps=args.maps)
-                print_calibration(alt, title=f'STAGE A (parity radius '
+                print_calibration(alt, title=f'CALIBRATION (parity radius '
                                              f'{r2:.0f}u)')
                 print("  radius-perturbation swing vs baseline:")
                 for k in SCALAR_KEYS:

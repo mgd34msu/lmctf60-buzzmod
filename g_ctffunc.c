@@ -1161,7 +1161,7 @@ void ctf_hook_abort(edict_t *ent)
 			if (ent->client->weaponstate == WEAPON_FIRING)
 				ent->client->weaponstate = WEAPON_READY;
 		}
-		ent->client->hookstate = 0; //Surt: this used to be ==, obviously broken
+		ent->client->hookstate = 0;
 		ent->client->hooklength = 0;
 		if (ent->client->hook)
 		{

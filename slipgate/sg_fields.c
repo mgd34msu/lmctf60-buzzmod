@@ -43,16 +43,7 @@ void SG_TeachFutility(int seed)
 
 	if (seed < 0 || seed >= SG_MAX_SEEDS)
 		return;
-	/*
-	 * A wall that keeps winning earns a compounding lesson. The flat 3s
-	 * (capped 20s) surcharge cannot break a corridor MONOPOLY: on lmctf01
-	 * the valley is the only 26s route, the alternatives cost more than
-	 * the cap, so the flood funneled Gate back into seed 327 between
-	 * every escape -- 136 firings, one game, one pillar (iter 49). Repeat
-	 * firings at one seed now scale the charge up to 5x with no ceiling
-	 * but the decay itself, which heals a 45s lesson in under four
-	 * minutes. A seed that stops biting resets the streak.
-	 */
+	/* Repeated failures at one seed compound until decay clears the lesson. */
 	if (seed == sg_futile_last_seed)
 		sg_futile_streak = (sg_futile_streak < 5) ?
 		                     sg_futile_streak + 1 : 5;
@@ -65,17 +56,7 @@ void SG_TeachFutility(int seed)
 		sg_futile[seed] = 60000;
 }
 
-/*
- * THE ROPE'S PRICE AS A DOSE (sg_ropecost). Three blind
- * judges named the same tell on every caught route sheet: off-graph
- * fraction -- humans spend 3-18% of samples >96u from any nav node
- * (grapple flight through open air), bots pin near zero. The +1000
- * ritual surcharge below is why: it prices legs over ropes nearly
- * everywhere. It was fitted from a carrier's observed flailing; the rest
- * of the roster inherited it. Default 1000 keeps today's flood
-	* exactly; configuration may lower it for comparison. Read once per field
- * build (Fields_Setup), not per relaxation.
- */
+/* Static route cost added to grapple links during field construction. */
 static int sg_ropecost_ms = 1000;
 
 void SG_RopecostRefresh(void)
@@ -686,18 +667,7 @@ static qboolean Class_PerItem(int cls)
 	return (cls == SG_FC_POWERUP || cls == SG_FC_RUNE);
 }
 
-/*
- * THE MEGA PADS (sg_megaworth), one field each.
- *
- * Built off the back of the health class rather than on a clock of its own:
- * item_health_mega carries the "item_health" prefix, so a mega going up or
- * down already moves SG_FC_HEALTH's signature and already calls Class_Build
- * here. One hook, no second cadence, no second scan of the edict list to
- * decide whether a rebuild is due.
- *
- * Off by default, and "off" means no flood at all -- mega_count stays 0, the
- * buffers stay untouched, and every consumer's first test fails.
- */
+/* Build a distinct field for each available mega-health spawn. */
 qboolean SG_MegaOn(void)
 {
 	return (sg_cv.megaworth->value > 0.0f) ? true : false;
@@ -1044,18 +1014,7 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 		Field_FromOne(r, sg_fields.to_blue_flag, sg_fields.blue_flag_seed);
 	}
 
-	/*
-	 * THE SUB-STAND SHELF (steal-genesis study, 2026-08-06). mactf06
-	 * film: 101 of 280 close approaches terminated on the floor 141u
-	 * BELOW the flag platform -- 91% died there in ~1.2s, zero steals
-	 * ever -- because RL_DROP prices every drop at +150 while the climb
-	 * back costs ~1275. Per team, for every seed within 350u horizontal
-	 * of the ENEMY stand and 96u+ below it, store the measured cliff:
-	 * this seed's static cost to that flag minus the best platform-level
-	 * seed's inside the same radius. Flat stands store nothing -- lmctf22
-	 * and lmctf44 are the built-in null arms. Consumed by the ATTACK
-	 * pricing behind sg_shelfcost (default 0).
-	 */
+	/* Price low shelves near an enemy stand against the best platform route. */
 	{
 		int t;
 
@@ -1181,16 +1140,7 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 		}
 	}
 
-	/*
-	 * THE RAIL LANE (sg_raillane): "rails
-	 * guard sight lines; I held them so well the enemy couldn't reach
-	 * our base"). Per team, once per level: among candidate posts near
-	 * the stand, pick the seed that SEES the most of the approach
-	 * corridor -- the band of seeds an attacker must cross on its way
-	 * in. Geometry, not corpus dwell: the .dpo posts failed because
-	 * they pulled defenders off the stand; the lane is defined by
-	 * covering the way TO the stand.
-	 */
+	/* Choose the nearby defensive seed with the widest approach visibility. */
 	{
 		int t, li, j;
 

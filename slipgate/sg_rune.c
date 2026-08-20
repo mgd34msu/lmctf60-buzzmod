@@ -2047,14 +2047,7 @@ static int gen_button_door_links, gen_swim_links;
 static int gen_env_drop, gen_env_hook, gen_declared_links;
 static int gen_lift_down_drop, gen_lift_down_none;
 
-/*
- * ENTRY ENVELOPES, written where the prover knows them (PLAN item 8).
- *
- * Each of these is called immediately after the Link_Add that created the
- * link, on that link, and records what the proof it just came from actually
- * used. Nothing is inferred: a drop link's cone is the direction the phantom
- * walked off the lip, a hook link's is the direction the rope was fired.
- */
+/* Record the control envelope supplied by the link proof. */
 static void Link_Env_Drop(rune_link_t *l, byte heading)
 {
 	l->heading = heading;
@@ -2085,15 +2078,7 @@ static void Link_Env_Hook(rune_link_t *l, const vec3_t control)
 	gen_env_hook++;
 }
 
-/*
- * PROVENANCE for the links that were never simulated. Link_Add stamps every
- * link RL_PROVEN because every link it was written for had been rolled by the
- * oracle. The lift and teleport passes are the exception -- they read the
- * map's spawn data -- so the tail of the link array those passes appended is
- * walked backwards afterwards and re-stamped. Backwards from the end, down to
- * the mark taken before the passes ran: nothing earlier is touched, and
- * Link_Add itself is left exactly as it was.
- */
+/* Mark map-declared controller links appended after a recorded array offset. */
 static void Link_Declare_Tail(int mark)
 {
 	int i;
@@ -4690,12 +4675,7 @@ static void Prove_BaseLinks(void)
 					VectorCopy(anchor, l->anchor);
 						Link_Env_Hook(l, anchor);
 				}
-				/* Momentum-entry jumps used to be proved from one exact 320-u/s
-				 * vector but serialized as a broad minimum-speed/cone envelope. No
-				 * finite gate could make that claim true for every faster or angled
-				 * live entry. Until the format carries a complete entry state (or the
-				 * prover covers the envelope), fail closed and keep only from-rest
-				 * one-jump proofs. */
+				/* Keep only from-rest jumps until entry state is fully serialized. */
 			}
 		}
 		if ((i & 255) == 0)
@@ -5261,9 +5241,7 @@ qboolean Rune_Generate(const char *mapname)
 	memset(&gen_telemetry, 0, sizeof(gen_telemetry));
 	memset(&gen_phase_telemetry, 0, sizeof(gen_phase_telemetry));
 	memset(hash_head, 0xff, sizeof(hash_head));
-	/* Every generator budget and diagnostic belongs to this invocation.  These
-	 * used to be process statics without a reset, so a second `sv rune` inherited
-	 * exhausted momentum/RJ budgets and silently generated a weaker graph. */
+	/* Reset every generator budget and diagnostic for this invocation. */
 	dg_pairs = dg_seek = dg_noedge = dg_fell = dg_arrived = dg_nocontact = 0;
 	dd_last_heading = 0;
 	dd_nolip = dd_fenced = dd_flew = dd_landed = dd_won = 0;

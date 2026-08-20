@@ -1,73 +1,9 @@
 #!/usr/bin/env python3
-"""demo2view.py -- rewrites a serverrecord .dm2 capture into a client-playable
-.dm2 demo for the yq2 client (protocol 34).
+"""Project demo player samples into an observer view.
 
-WHY: SV_RecordDemoMessage (yquake2 server/sv_entities.c) writes a stripped
-capture format meant for offline analysis, not client playback: the signon
-block is svc_serverdata + every configstring (no spawnbaselines -- none are
-needed, see below), and each subsequent block is svc_frame + framenum(int32)
-+ svc_packetentities + full-state delta entities (deltaed against an
-all-zero state, force=true, so every field is written explicitly every
-frame -- no baseline is ever referenced) + a terminating short 0, followed
-by that frame's accumulated multicast bytes verbatim (sounds, temp
-entities, configstring updates -- svc_print is never present in this
-capture shape, see film.py's docstring for why). There is no
-player_state_t, no areabits, and SV_ServerRecord_f (server/sv_cmd.c)
-hardwires playernum to -1 in the signon block.
-
-None of that plays in a real client. CL_ParseServerData (client/cl_parse.c)
-treats playernum == -1 as "this is a cinematic, not a level" and never
-loads a map -- confirmed against SV_New_f (server/sv_user.c): for a
-`demomap`-launched local server (sv.state == ss_demo), SV_New_f skips
-building its own svc_serverdata entirely ("demo servers just dump the file
-message") and just opens the .dm2 -- SV_SendClientMessages /
-SV_NextDemoChunk (server/sv_send.c) then streams this file's
-length-prefixed blocks straight to the client's netchan, one block per
-server frame tick, unmodified. So the signon block THIS TOOL writes is,
-byte for byte (modulo the playernum patch), what CL_ParseServerData
-actually receives -- there is no other synthesis step in between. And even
-with a valid playernum, CL_ParseFrame (client/cl_parse.c) requires a
-frame message shaped serverframe(int32) + deltaframe(int32) +
-suppresscount(byte) + areabytes(byte)+areabits + svc_playerinfo (a
-player_state_t delta) + svc_packetentities -- fields this capture format
-never had.
-
-This tool bridges the gap:
-  * patches the signon block's playernum from -1 to PLAYERNUM_SENTINEL
-    (-2), a value CL_ParseServerData's `== -1` cinematic check will never
-    match, and which `cl.playernum + 1` equality checks elsewhere
-    (CL_AddPacketEntities' own-viewmodel hide in client/cl_entities.c,
-    CL_ParsePredictedMovement in cl_prediction.c, the hook-cable-owner
-    check in cl_tempentities.c) can never match either, because a real
-    entity_state_t.number is never negative. Everything else in the signon
-    block -- protocol, spawncount, attractloop, gamedir, levelname, every
-    configstring -- passes through unchanged.
-  * turns every svc_frame block into a real client frame: svc_frame +
-    serverframe(original framenum, so servertime pacing at 10Hz is
-    unchanged) + deltaframe(-1, uncompressed -- CL_ParseFrame treats
-    deltaframe <= 0 as "valid, delta from nothing") + suppresscount(0) +
-    areabytes(32)+areabits(32 bytes of 0xff, full visibility -- the
-    client's cl.frame.areabits buffer is exactly MAX_MAP_AREAS/8 = 32
-    bytes and MSG_ReadData does no bounds check, so 32 is both the
-    generous choice and the only safe one) + svc_playerinfo carrying a
-    synthesized spectator player_state_t (pm_type PM_FREEZE; see
-    build_playerstate below for why this makes the client use the sent
-    origin/viewangles directly every frame instead of predicting movement
-    from usercmds that a demo playback never has) + svc_packetentities
-    with the ORIGINAL entity-delta bytes copied verbatim -- they are
-    already exactly what an uncompressed full-state client frame wants,
-    see copy_entity_payload -- + the original multicast tail, also copied
-    verbatim (CL_ParseServerMessage keeps reading svc commands from the
-    same message after CL_ParseFrame returns, exactly like a live game
-    would with its own per-frame extras appended after the frame message).
-
-The camera is a synthetic spectator, not a reconstruction of what any
-recorded player actually saw -- see build_camera_path / --chase.
-
-CLI:
-    demo2view.py <in.dm2> [-o out.dm2] [--chase auto|<playername>]
-
-Default output name is <in>-view.dm2 in the same directory as the input.
+The tool decodes client or serverrecord streams, selects a camera entity, and
+emits view-relative samples for downstream visualization. Parsing and identity
+errors fail before output publication.
 """
 import argparse
 import math
@@ -160,25 +96,7 @@ def pack_coord16(u, warned=[False]):
 
 
 def build_playerstate(eye, yaw, pitch, roll):
-    """svc_playerinfo payload: a player_state_t delta against the null
-    state CL_ParsePlayerstate resets to whenever deltaframe <= 0 (every
-    frame here, since deltaframe is always sent as -1). Only the fields
-    the camera needs are flagged; everything else -- velocity, gravity,
-    blend, weapon, stats -- stays at its zero default, which is correct
-    for a pure spectator view.
-
-    pm_type = PM_FREEZE matters twice on the client side:
-      * common/pmove.c's Pmove() returns immediately for PM_FREEZE, so
-        CL_PredictMovement's client-side prediction never moves
-        cl.predicted_origin away from the origin this function writes.
-      * CL_CalcViewValues (client/cl_entities.c) only uses
-        cl.predicted_angles (built from accumulated mouse-look deltas
-        that a demo playback never receives) when pm_type < PM_DEAD;
-        PM_FREEZE is ordered after PM_DEAD/PM_GIB, so it takes the
-        `else` branch and interpolates cl.refdef.viewangles directly from
-        this playerstate's viewangles instead -- exactly the field this
-        function writes every frame.
-    """
+    """Build the minimal frozen spectator player-state payload for one camera frame."""
     flags = PS_M_TYPE | PS_M_ORIGIN | PS_VIEWANGLES | PS_FOV
     out = bytearray()
     out += struct.pack('<H', flags)
@@ -244,23 +162,7 @@ def resolve_player_name(d, labels, name):
 
 
 def compute_camera_targets(d, labels, chase_arg):
-    """Per-frame (target_pos, facing_yaw_or_None, mode) for frames 1..N,
-    mode in {'chase', 'orbit'}. Chase mode's facing_yaw is the chased
-    entity's own yaw (for the behind-and-above offset in
-    build_camera_path); orbit mode has no facing (None).
-
-    --chase auto: chases whichever rostered player's effects field carries
-    EF_FLAG1/EF_FLAG2 that frame (film.py's own carry signal, see
-    EF_FLAG_MASK), preferring to KEEP the current carrier across a frame
-    where multiple players show a flag bit simultaneously (a handoff tick)
-    rather than flapping between them. With no carrier that frame, the
-    target is the centroid of every rostered player position sampled that
-    frame (mode='orbit').
-
-    --chase <playername>: locks onto that one entity's own track for the
-    whole demo (mode='chase' throughout); its position is held at the last
-    known sample for frames before it has one (e.g. before that player's
-    entity first appears)."""
+    """Return each frame's chase or orbit target and optional facing yaw."""
     tracks = d['tracks']
     yaws = d.get('yaws', {})
     frames = d['frames']

@@ -3367,12 +3367,7 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 	}
 }
 
-/*
- * THE GRADIENT MADE FLESH: the aim -- link, anchor, or goal-entity
- * fallback with the through-extension -- the feeler fan, the ribbon,
- * lookahead and pursuit, doors, drops, and the hook brake. Emits the
- * movement policy the command stage executes.
- */
+/* Allow generic rail movement only outside a committed strike action. */
 static qboolean StrikeRailMoveAllowed(const sg_think_t *tc)
 {
 	return tc && SG_StrikeGenericRailAllowed(tc->strike_active);
@@ -3903,15 +3898,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					nchain++;
 				}
 
-				/*
-				 * THE CORNER GUARD. A chord held 300 units out crosses
-				 * whatever stands inside the bend. The fan's own
-				 * player-box trace, run to the pursuit point; if the box
-				 * does not fit, walk the point back down the chain a
-				 * vertex at a time. At k == 1 the point IS the seed
-				 * center -- the guard can only cost the improvement,
-				 * never the safety.
-				 */
+				/* Shorten the pursuit chord until the player hull fits. */
 				for (k = nchain; k >= 1; k--)
 				{
 					vec3_t pp, pend;
@@ -4089,17 +4076,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			{
 				run_link = true;
 
-				/*
-				 * THE SPEED HOOK -- the tech that made LMCTF movement an
-				 * art: a short rope thrown high-ahead on an open runway,
-				 * ridden three tenths of a second to the pull's 800 u/s,
-				 * released, momentum kept. Fired ON THE RUN (no brake, no
-				 * standing frame -- the anchor sits near the current view
-				 * line so the slew arrives in a step or two), gated to
-				 * long clear stretches when nobody is engaged and the
-				 * legs are the bottleneck. Cooldown keeps it a burst,
-				 * not a lifestyle.
-				 */
+				/* Use a short grapple burst on a clear, uncontested run. */
 
 				if (bot->hook_phase == 0 && !bot->engaged_last &&
 				    SG_TimerReady(bot->hookban_until) &&
@@ -4274,18 +4251,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				fsd[2] = 0.0f;
 				fsdist = VectorLength(fsd);
 
-				/*
-				 * A dry proof fired from THE SEED at rest. A water proof starts
-				 * from the seed's categorized state, then the online witness
-				 * replaces it with the live fixed-point position and velocity.
-				 * In both cases rope-line clearance
-				 * was traced from the seed's eye -- fired from 50 units
-				 * away the same ray clips different geometry and the
-				 * rope bites en route (smap05: 2552 attaches 150-650
-				 * from their proven anchors) -- and the swing arc is
-				 * entry-sensitive. Walk to the seed, brake, THEN fire:
-				 * the shot the proof rolled is the shot the body takes.
-				 */
+				/* Reach the proved source state before firing the grapple. */
 				/* The current proof approaches the source cell and brakes before taking
 				 * ownership of the exact view. The final post-Pmove fire gate then
 				 * re-proves from the actual fixed-point source; it does not pretend
@@ -4978,16 +4944,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * road blocked inside ~94%, while an actually open goal line wins. */
 				clearance = tr.fraction * reach;
 				score = clearance - fabsf(fan[k]) * 0.20f;
-				/*
-				 * Side latch. A pillar dead ahead leaves -30 and +30 both
-				 * open and equal; the winner then alternates as each
-				 * sidestep swings the goal bearing, and the body flaps in
-				 * place against the obstacle -- seed 327 on lmctf01, the
-				 * main valley route, whole matches lost to one pillar
-				 * (iter 44-45). Once a detour side is chosen it stays
-				 * preferred for 0.7s: enough to clear a pillar, too short
-				 * to matter anywhere else. An open goal line clears it.
-				 */
+				/* Latch a detour side briefly to prevent obstacle-side flapping. */
 				if (bot->fan_side && SG_TimerPending(bot->fan_side_until) &&
 				    fan[k] * (float)bot->fan_side < 0.0f)
 					score -= reach * 0.35f;
@@ -5135,15 +5092,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					chosen_yaw = bot->escape_yaw;
 			}
 
-			/*
-			 * THE AIM FRAME OWNS THE VIEW. Phase 1 wrote the anchor
-			 * bearing above; this write, running after it, was flattening
-			 * every rope's pitch to zero and pointing it down the goal
-			 * line -- 1519 of 1533 bad bites flew off the aim line
-			 * (iteration 23), every under-climb since the first match
-			 * traces here. The aim frame is a standing frame, exactly
-			 * the posture the proofs fired from.
-			 */
+			/* A normal grapple aim frame owns both view and stationary command. */
 			if (bot->hook_phase == 1 && !bot->speedhook)
 			{
 				cmd->forwardmove = 0;
@@ -5155,15 +5104,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			{
 			float swim_pitch = 0.0f;
 
-			/*
-			 * PM_WaterMove runs along the FULL view vector: with the
-			 * pitch flattened to zero a swimming body can only paddle
-			 * horizontally, and every swim link whose destination is
-			 * above or below is physically unexecutable -- lmctf01
-			 * carries 65k swim links and iter 41 shows zero ever taken,
-			 * the attack fields plateauing at the water. Underwater the
-			 * pitch belongs to the line to the target.
-			 */
+			/* Underwater movement needs the target's vertical view angle. */
 			if (e->waterlevel > 1 && have_aim)
 			{
 				vec3_t wd;
@@ -7118,11 +7059,7 @@ qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
 	return true;
 }
 
-/*
- * THE COMMAND: the movement policy becomes a usercmd -- sub-stepping, the
- * view slew, the weave, the duel hold, the plan beam and telemetry --
- * and the frame ends in ClientThink.
- */
+/* Convert the selected movement policy into one client command. */
 void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context so the
@@ -8043,17 +7980,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		aimed_fire_pitch = cmd->angles[PITCH];
 	}
 
-		/*
-		 * THE VIEW SLEWS; IT NO LONGER TELEPORTS. Every writer above --
-		 * navigation, combat, the rope aim, the swim pitch -- asks for a
-		 * heading, and until now the ask was granted instantly: a 180
-		 * happened in one server frame, superhuman to play against and
-		 * unwatchable in chase-cam (reported live). The desired heading
-		 * is decoded once here, and each subframe advances the actual
-		 * view toward it along the shortest arc at sg_turnrate degrees a
-		 * second (default 600: a competitive flick, half a second for a
-		 * full 360). Zero restores the teleport.
-		 */
+		/* Slew toward the requested view at the configured angular rate. */
 		{
 			float want_y = SHORT2ANGLE((short)(cmd->angles[YAW] +
 			               e->client->ps.pmove.delta_angles[YAW]));
@@ -8332,16 +8259,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					AngleVectors(vb, mf, mr, NULL);
 				}
 
-				/*
-				 * THE LAST TEN METERS, THE MOVEMENT HALF (406 canary
-				 * analysis): the brake slowed the orbit but the strafe
-				 * LEAN kept re-making it -- realign, accelerate past
-				 * 200, lean off-axis, miss, brake, repeat, 80 seconds
-				 * at goal-cost 200. observations ruled the walk straight;
-				 * the aim obeyed, the legs never did. In terminal mode
-				 * there is no lean and no hop: plain forward down the
-				 * exact aim, throttle on the brake, touch.
-				 */
+				/* Terminal movement stays on the direct aim without lean or hop. */
 				if (!bot->terminal)
 				SG_MovePolicy(e, cmd, mf, mr, move_dir,
 				              open_ahead, run_link,
@@ -8378,14 +8296,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 
-			/*
-			 * THE SPAWN BEAT'S LEGS, applied last so nothing downstream
-			 * can hand the throttle back. The breather scales the
-			 * command where it is first built and SG_MovePolicy rebuilds
-			 * it afterwards from the course; a beat that wants the body
-			 * genuinely idling has to be the final word, and this is the
-			 * only place that exists.
-			 */
+			/* Apply spawn-beat throttle after all movement reconstruction. */
 			if (SG_TimerPending(bot->beat_until) && !proved_control)
 			{
 				cmd->forwardmove = (short)(cmd->forwardmove * 0.30f);
@@ -9935,10 +9846,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					bot->hook_link = -1;
 				}
 				bot->hook_phase = completed ? 3 : 0;
-				/* this phase-3 entry is a plain rope cut, never a flow
-				 * release -- the flag used to stay latched from an
-				 * earlier wiped release and made ~1,000 rides per match
-				 * take the apex cut and skip the landing brake */
+				/* This plain rope cut must not inherit a prior flow release. */
 				bot->flow_release = false;
 				SG_TimerArm(&bot->hook_deadline, 1.0f);
 			}

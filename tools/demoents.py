@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""demoents.py -- the entity layer: every visible player's trajectory.
+"""Decode visible player-entity trajectories from LMCTF demos.
 
-Decodes what every other tool skips: the delta-entity stream. Maintains
-per-entity origin state across frames and emits 10Hz trajectories for
-every player entity in view (entity numbers 1..maxclients), not just the
-POV. This is the corpus multiplier: a single POV demo carries the partial
-trajectories of everyone the recorder ever saw -- including players who
-never recorded a demo of their own.
-
-Output per demo: {entnum: [(frame, x, y, z), ...]} plus the POV entity
-number, map name, and the playerskin table for entity->name resolution.
-
-The POV exclusion rules do NOT apply here: a ref cam's view of players is
-player data (the owner's ruling -- game info from any camera, POV
-kinematics only from player bodies).
+The result maps entity numbers to 10 Hz origin samples and includes map, POV,
+and playerskin identity. Tracks reflect the recording camera visibility.
 """
 import struct, sys, math
 sys.path.insert(0, __file__.rsplit('/', 1)[0])
@@ -79,27 +68,11 @@ def parse_delta_entity_track(r, bits, org):
 
 
 def walk_entities(path, maxplayers=32):
-    """Auto-detects and decodes either of two on-disk .dm2 shapes:
+    """Decode client or serverrecord entity streams.
 
-    1. Client demos (recorded by a playing/spectating client): svc_frame
-       carries frame+deltaframe+suppresscount+areabits, followed by a
-       separate svc_playerinfo and svc_packetentities per server frame --
-       the format every other tool in this file assumes.
-
-    2. Server demos (recorded via the `serverrecord` console command --
-       see SV_RecordDemoMessage in yquake2's src/server/sv_entities.c):
-       svc_frame carries ONLY a 4-byte framenum (no deltaframe/suppress/
-       areabits), immediately followed by svc_packetentities with NO
-       svc_playerinfo at all, entities always sent in full (delta'd
-       against an all-zero baseline every frame, never against the prior
-       frame), terminated the usual way, then the frame's accumulated
-       multicast traffic (temp entities, sounds, prints, ...) appended
-       raw with normal svc tags. The signon block (svc_serverdata +
-       configstrings) is unmodified vanilla shape; SV_ServerRecord_f
-       hardcodes playernum to -1 (0xffff) in that block, which is what
-       this function sniffs to pick the mode -- getting this wrong
-       desyncs almost every block (verified: <1% of blocks parsed clean
-       under the client-demo assumption on wave265-s04-5v5.dm2).
+    Client frames carry player state and delta entities. Serverrecord frames
+    carry a frame number followed by entities encoded against a zero baseline.
+    A signon player number of -1 selects the serverrecord shape.
     """
     data = open(path, 'rb').read()
     off = 0

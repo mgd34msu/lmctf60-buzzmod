@@ -281,13 +281,7 @@ static void Drop_LiveBoundaryLog(const edict_t *e, int link_index,
 	    SG_ReplayReasonName(result->replay_reason));
 }
 
-/*
- * THE DESCENT: the incumbent's re-price, the candidate walk over every
- * proven link off this seed -- rail rhythm, latch, no-ropes-in-the-house,
- * shadow pricing, the anti-linger surcharge -- and the argmin that names
- * the next commitment. Returns the chosen link; emits the values the
- * later stages read.
- */
+/* Price proven outgoing links and select the next commitment. */
 int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context so the
@@ -680,22 +674,10 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * costs are otherwise close. */
 		if (enemy_pressure && goal_field[bot->seed] < 4000 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
-			/* 0.5, not 2.5: the lmctf58 audit caught this surcharge
-			 * out-arguing the ~125/hop goal gradient (exposure bytes run
-			 * 200+ on open approaches) -- six attackers orbited a pure
-			 * flat run to the flag for ten minutes behind a wall made of
-			 * preference. A preference stays UNDER the gradient. */
+		/* Keep exposure preference below one typical goal-field step. */
 			v += 0.5f * (float)SG_Rune()->seeds[l->to].area_hint;
 
-		/*
-		 * SPREAD THE AXES. Two attackers on the same cheapest gradient
-		 * arrive down the same corridor into the same sightline -- the
-		 * perimeter maps (lmctf58, mactf06 before the pair-split) eat
-		 * that single file forever. En route, the junior of any attacker
-		 * pair pays for steps NEAR its senior: pressure splits into two
-		 * axes with no explicit corridor model at all, and the sentry's
-		 * dilemma starts before the threshold.
-		 */
+		/* Penalize nearby senior attackers to spread pressure across routes. */
 		if (enemy_pressure && bot->seed >= 0 &&
 		    goal_field[bot->seed] < SG_FIELD_INF &&
 		    goal_field[bot->seed] > 2500 && goal_field[bot->seed] < 12000)
@@ -1587,21 +1569,12 @@ static int Objective_CycleRoute(sg_bot_t *bot, const int *goal_field,
 	return selected;
 }
 
-/*
- * THE COMMITMENT: everything between the argmin and the aim -- the link
- * latch, saddle commitment, dead-door shelving, the straight-line and
- * see-the-flag terminal overrides, the clean grab, the defender post,
- * and the rail hold. Returns the link the body will actually ride.
- */
+/* Clear the route ownership associated with a strike weapon action. */
 static void StrikeWeaponPurposeClear(sg_bot_t *bot)
 {
 	if (!bot)
 		return;
-	/* If the exact purpose route already lost commit ownership, its generic
-	 * latch is no longer an independent authority.  Retire that matching half-
-	 * transaction too, or a completed physical controller can be resurrected by
-	 * THE LINK LATCH on the first GO frame.  A latch for a different current
-	 * route is deliberately untouched. */
+		/* Retire only the latch owned by the completed strike route. */
 	if (bot->strike_weapon_link >= 0 &&
 	    bot->sticky_link == bot->strike_weapon_link)
 	{
@@ -1844,8 +1817,8 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 		return true;
 	rune = SG_Rune();
 	/* GO is a new enemy-field transaction even when the prior generic commit
-	 * already disappeared.  Retire its orphan sticky half before THE LINK LATCH
-	 * can replace the first rush candidate.  This is only route-selection state:
+	 * already disappeared. Retire its orphan sticky half before link selection
+	 * can replace the first rush candidate. This is only route-selection state:
 	 * any live hook, jump, or declared mechanism remains in its controller fields
 	 * and, when still committed, drains under the physical boundary below. */
 	if (tc->strike_rush)
@@ -1853,9 +1826,9 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 		bot->sticky_link = -1;
 		bot->latch_until = 0.0f;
 	}
-	/* The generic sticky latch is not a physical controller.  Retire it on the
+	/* The generic sticky latch is not a physical controller. Retire it on the
 	 * first frame of a weapon purpose even when no commit_link remains; otherwise
-	 * THE LINK LATCH below can replace the fresh weapon-field candidate with an
+	 * link selection can replace the fresh weapon-field candidate with an
 	 * unrelated old edge.  A live hook/jump/mechanism remains owned by its exact
 	 * controller fields and commit identity below. */
 	if (tc->strike_weapon_pursuit && bot->strike_weapon_link < 0)
@@ -2361,20 +2334,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	bot->ribbon_off += 0.20f * (bot->ribbon_goal - bot->ribbon_off);
 	bot->sticky_link = bestlink;
 
-	/*
-		 * THE LAST TEN METERS ARE A STRAIGHT LINE. A carrier at the goal
-		 * minimum may finish its priced route at its own stand. An attacker,
-		 * however, may leave the graph only when the shared direct-touch
-		 * authority proves that its body can cross the live enemy flag now.
-		 * A cheap seed can still be another floor, a wall-adjacent pocket, or
-		 * a long hook/drop topology; its cost is not touch authority.
-	 */
-	/*
-		 * SEE THE FLAG, GO THROUGH THE FLAG: cost is not the attacker trigger.
-		 * The direct-touch proof includes current live-item availability,
-		 * same-floor body geometry, and the appropriate public/perceived flag
-		 * knowledge. Only that proof releases the graph to the through-line.
-	 */
+	/* Attackers leave the graph only after the direct-touch proof validates the
+	 * current item, floor, hull path, and known flag state. */
 	{
 		qboolean flag_los = false;
 
@@ -3140,17 +3101,10 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	        role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
 	            SG_EscortTerminal(e, SG_ChatEscortTarget(e)),
 	        duel, bot->engaged_last) &&
-	    /* 1500, not 400: a PATROLLING defender runs full speed inside a
-	     * confined orbit -- Slip circled seed 1704 at 250 u/s, goal 700,
-	     * and the 400 cutoff fed the whole patrol to the shelf (iter 44,
-	     * lmctf58: 314 firings, defense routes in rags). The patrol
-	     * radius is part of the post. */
+	    /* A defender patrol inside the post radius is intentional movement. */
 	    !bot->door_held_last && !bot->mate_block_last)
 	{
-		/* door_held_last: standing at a door on command is not the link's
-		 * failure -- billing it to the link shelved seed 429's whole fan
-		 * through the WATCH path even after the fast-drain was gated
-		 * (batch 2: 753 attacker-seconds on link=-1) */
+		/* Waiting at a commanded door is not a route failure. */
 		VectorSubtract(e->s.origin, bot->watch_org, d);
 		if (VectorLength(d) > 96.0f)
 		{
@@ -3181,28 +3135,10 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		VectorCopy(e->s.origin, bot->watch_org);
 	}
 
-	/*
-	 * The identity watch above cannot see a flap: commit holds a link for
-	 * three seconds, the argmin at a saddle then hands back the OTHER
-	 * near-equal link, and the four-second clock resets every swap while
-	 * the body stands still for minutes (Fiend and Trace, one drop lip
-	 * each, the whole of lmctf01 iter 41). This ball is on the body. Parked
-	 * eight seconds -> shelve whatever link is current, then one more every
-	 * two seconds while still parked: the flap-set at a saddle is two or
-	 * three links and drains in seconds, nothing like the doorway-fan
-	 * drain this system got burned by (that one shelved at 10Hz).
-	 */
+	/* The body-centered watch detects stalls even when route selection flaps. */
 	/* For eight seconds after a nearby grab, an escort still in the enemy
 	 * base covers the carrier's exit instead of duplicating its route. */
-	/*
-	 * ...and not only the ESCORT. In 83 parity carries, 77%% of carriers
-	 * died inside the first
-	 * quarter of the route, median at 3%% -- the room, not the road. At
-	 * the grab moment the pressure fighter must not follow the flag onto
-	 * our carrier's back: that pulls both bodies through the same door and
-	 * gives the defense one rail line.  Effective pressure and the explicit
-	 * escort plug the room; recovery and carry duties keep their route clock.
-	 */
+	/* Pressure attackers cover the enemy room instead of following the carrier. */
 	if (tc->rearguard &&
 	    SG_AgeUnder(sg_grab_time[SG_TeamIdx(team)], 8.0f) &&
 	    bot->seed >= 0)
@@ -3622,42 +3558,20 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		      SG_Rune()->links[bot->commit_link].action == RL_DOOR ||
 		      SG_Rune()->links[bot->commit_link].action == RL_BUTTON_DOOR)))
 	{
-		/*
-		 * Not displacement alone: the clock runs ONLY through frames where
-		 * navigation was actually driving the legs and no fight owned the
-		 * body. The first cut counted every parked second -- corner holds,
-		 * duels, posts -- and shelved the fleet's routes to rags in one
-		 * match (784 firings, zero steals anywhere, kills gutted).
-		 * Parked-while-driving is the deadlock class; parked-on-purpose
-		 * is not a link's fault.
-		 */
+		/* Stagnation counts only while navigation owns the legs. */
 		VectorCopy(e->s.origin, bot->stag_org);
 		SG_Mark(&bot->stag_since);
 	}
 	else if (bestlink >= 0 &&
 	         !ThinkMissionHold(bot, tc, goal_field) &&
-	    /* 1500, not 400: a PATROLLING defender runs full speed inside a
-	     * confined orbit -- Slip circled seed 1704 at 250 u/s, goal 700,
-	     * and the 400 cutoff fed the whole patrol to the shelf (iter 44,
-	     * lmctf58: 314 firings, defense routes in rags). The patrol
-	     * radius is part of the post. */
+	    /* A defender patrol inside the post radius is intentional movement. */
 	         !bot->door_held_last && !bot->mate_block_last &&
 	         SG_AgeOver(bot->stag_since, 8.0f) &&
 	         SG_TimerReady(bot->stag_next))
 	{
 		int b, oldest = 0;
 
-		/*
-		 * A RUN link earns one retry THE PROOF'S WAY before the shelf.
-		 * Seed 327's passage is a slit the phantom threads dead-center
-		 * from the seed origin -- proofs deviate under 48 units, so no
-		 * waypoint, and the feelers deflect off the slit's edges away
-		 * from the one line that works (iter 51: 135 firings, zero
-		 * waypointed links to store). Rail mode walks to the from-seed
-		 * exactly as the proof did, then drives the straight line with
-		 * the fan silenced. If THAT fails, the shelf and the futility
-		 * lesson follow as before.
-		 */
+		/* Retry a stalled RUN from its proved source before shelving it. */
 		if (StrikeRailWatchdogAllowed(bot, tc) &&
 		    SG_Rune()->links[bestlink].action == RL_RUN &&
 		    bot->rail_link != bestlink)
@@ -3681,14 +3595,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		SG_TimerArm(&bot->stag_next, 2.0f);
 		bot->commit_link = -1;
 		SG_TeachLinkFutility(bestlink); /* the LINK failed, not the ground */
-		/*
-		 * A U-pocket defeats even the side latch: each detour side walks
-		 * into the pocket's own wall and the latch just alternates walls
-		 * (iter 48: Field, 102 firings at lmctf01 seed 1239, one pocket,
-		 * one game). By the time the watchdog fires, local navigation has
-		 * definitively failed -- so back OUT along the reverse of the
-		 * current facing for 1.2s and retry the approach from open ground.
-		 */
+		/* Back out of a failed local pocket before retrying the approach. */
 		/* jittered: identical retreats produce identical re-approaches,
 		 * and an obstacle that beats one line beats it every time */
 		bot->escape_random = SG_EscapeRandomNext(bot->escape_random);
@@ -3862,18 +3769,7 @@ stag_done:
 		    bot->commit_link == bot->def_shift_link)
 			hold_post = false;
 
-		/*
-		 * THE PATROL (sg_patrol). Measurement found posted defenders
-		 * covering their no-idle obligation by pacing in place --
-		 * high-effort movement going nowhere, a shuffle no human
-		 * produces. A human at post either stands or walks a
-		 * deliberate loop. When the post is quiet, walk one: pick a
-		 * neighbouring seed that stays inside the post band, ride the
-		 * proven link there, hold and face, and after a few unhurried
-		 * seconds walk another leg. Contact cancels the leg the frame
-		 * it appears -- the quiet test above already gates entry, and
-		 * combat owns the view the moment anyone shows.
-		 */
+		/* On a quiet post, patrol a proved local link between dwell periods. */
 		if (quiet && sg_cv.patrol->value > 0.0f)
 		{
 			if (SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))

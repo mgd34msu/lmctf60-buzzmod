@@ -300,12 +300,7 @@ typedef struct sg_bot_s
 	int			strike_weapon_target_ent;
 	int			strike_weapon_target_seed;
 	vec3_t		strike_weapon_target_org;
-	vec3_t		stag_org;       /* stagnation ball on the BODY, not the
-	                             * link: the identity watch above resets
-	                             * whenever the argmin flaps, and two
-	                             * near-equal links flapping at the commit
-	                             * period parked Fiend on one drop lip for
-	                             * a full lmctf01 match (iter 41) */
+	vec3_t		stag_org;       /* body-centered stagnation watch */
 	float		stag_since;
 	float		stag_next;      /* escalation: one shelve per 2s while parked */
 	vec3_t		wedge_org;      /* the unstick of last resort watches from here */
@@ -342,24 +337,14 @@ typedef struct sg_bot_s
 	float		rally_since;    /* waiting for a partner before the push */
 	int			sticky_link;    /* incumbent route link: challengers must
 	                             * beat it by the switching margin */
-	int			legs;           /* objective-leg counter: the jitter seed
-	                             * re-rolls when the GOAL changes, not
-	                             * only on death. Without this, ten bots
-	                             * rode one tilt each for 15 minutes and
-	                             * stacked back into ropes. */
+	int			legs;           /* objective-leg counter for route jitter */
 	int			last_role_for_legs;
 	int			lives;          /* respawn count: the route-jitter seed
 	                             * (a LIFE rides one opinion of the map) */
 	int			was_dead;
 	float		ribbon_off;
-	float		ribbon_goal;    /* the offset DRIFTS toward a goal
-	                             * resampled every ~1.5s -- one run
-	                             * sweeps the band instead of riding a
-	                             * lane (the railroad-artifact verdict) */
-	float		ribbon_next;     /* per-leg lateral offset (sg_ribbon):
-	                             * sampled once per committed link so
-	                             * repeated runs spread into a band --
-	                             * the film judge's rope-vs-brush tell */
+	float		ribbon_goal;    /* target lateral route offset */
+	float		ribbon_next;    /* next lateral offset update */
 	int			ribbon_link;
 	uint32_t	ribbon_random;  /* private lane/drift sequence; never global RNG */
 	float		latch_until;    /* link latch: the incumbent holds its
@@ -367,12 +352,7 @@ typedef struct sg_bot_s
 	                             * 15% -- re-decision cadence matched to
 	                             * the surface's 1Hz refresh, not the
 	                             * 10Hz physics tick (sg_linklatch) */
-	/*
-	 * THE EARLY-RETURN ERRAND (sg_itemlead). The pad this bot left for ahead
-	 * of the team's clock, and the clock it left on. lead_ent 0 is "no errand"
-	 * -- entity 0 is the world and can never be a pad -- so the whole feature
-	 * is off for a bot until something sets it.
-	 */
+	/* Early item-return errand. Entity zero means no active errand. */
 	int			lead_ent;       /* edict index of the pad, 0 = no errand */
 	int			lead_slot;      /* its row in sg_caco_items */
 	int			lead_seed;      /* the pad's seed: where the errand goes */
@@ -405,13 +385,7 @@ typedef struct sg_bot_s
 	float		def_supply_next;  /* cancellation backoff before re-arming */
 	float		lead_next;      /* attempt cadence while nothing is claimed */
 
-	/*
-	 * THE MEGA OFFER (sg_megaworth), for the debug line only -- the pricing
-	 * itself is stateless. mega_on is last frame's offer, so the commit prints
-	 * on the edge; mega_hp is last frame's health, so a +100 jump is a take.
-	 * mega_hp 0 means "no reading" and is what a corpse leaves behind, which
-	 * is why a respawn from 5 to 100 cannot read as a pickup.
-	 */
+	/* Previous mega-health offer state, used for edge-triggered diagnostics. */
 	qboolean	mega_on;
 	int			mega_hp;
 	float		mega_since;     /* when the standing offer turned on */
@@ -432,26 +406,14 @@ typedef struct sg_bot_s
 	float		tac_time;       /* when the waypoint was committed */
 	int			tac_role;       /* role the waypoint serves: strategy
 	                             * change retires the tactic */
-	float		strict_since;   /* the strict grab-hold's OWN clock -- it
-	                             * once shared rally_since long enough for
-	                             * the approach-band rally reset it every
-	                             * pairing pass: the 20s hold never ran 20s,
-	                             * and GRABMODE showed grabs at room=5
-	                             * stamped "clean". */
+	float		strict_since;   /* independent strict grab-hold clock */
 	int			last_room;      /* defenders believed at the stand, last census */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
 	int			rail_link;      /* RUN link being retried the proof's way */
 	int			rail_stage;     /* 0 off, 1 walk to from-seed, 2 drive line */
 	float		rail_until;
 
-	/*
-	 * THE RAIL RHYTHM (sg_railrhythm). The lane this bot is waiting out:
-	 * who is believed to be holding it, when the wait started, and how
-	 * long this bot is willing to let it last. railhold_since is the
-	 * sentinel -- 0 is "not waiting", the same way rally_since is -- so
-	 * that a slot never zeroed between maps cannot arrive wearing a wait
-	 * it did not choose.
-	 */
+	/* Bounded wait for a believed rail lane occupant. */
 	float		railhold_since;
 	float		railhold_patience;
 	float		railhold_next;      /* refractory: earliest a NEW wait may be

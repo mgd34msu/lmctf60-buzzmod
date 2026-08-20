@@ -1,15 +1,4 @@
-// ctf_file_io.c -- path handling and backend dispatch for the stats database.
-//
-// Reconstructed 2026-07. The original was compiled on 2020-07-28 but never
-// committed; only Debug/ctf_file_io.obj survived. Function names, the
-// "<name>.ctf" path shape and the operator messages below are taken from that
-// object's symbol and string tables. The bodies are new.
-//
-// Differences from the 2020 original, all deliberate:
-//   - player names are sanitised before they reach the filesystem. The original
-//     pasted the raw netname into the path, so a name containing '/' or ".."
-//     wrote outside the players directory.
-//   - every buffer is bounded and every truncation is reported.
+// Stats database path handling and backend dispatch.
 
 #include <string.h>
 #include <sys/types.h>
@@ -38,11 +27,7 @@
 #include "ctf_sqlite_player.h"
 #include "ctf_sqlite_unidb.h"
 
-/*
- * "bot_stats" used to be read through BotStatsEnabled() in bl_ctf.c. That file
- * went with the legacy bot, but the cvar still governs whether SLIPGATE's bots
- * reach the leaderboards, so the read moved here unchanged.
- */
+/* bot_stats controls whether SG bots reach the leaderboards. */
 static qboolean BotStatsEnabled(void)
 {
 	cvar_t *c = gi.cvar("bot_stats", "0", 0);

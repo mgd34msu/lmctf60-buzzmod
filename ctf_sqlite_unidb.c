@@ -1,20 +1,4 @@
-// ctf_sqlite_unidb.c -- unified SQLite backend, one players.db for the server.
-//
-// Reconstructed 2026-07. The original was compiled on 2020-07-28 but never
-// committed; only Debug/ctf_sqlite_unidb.obj survived. The schema, the
-// "%s/players.db" path, the "sqlite error %d: %s" and "SQLite (single mode):
-// creating initial data for player id %d.." messages and the function names
-// are all recovered from that object's string table. The bodies are new.
-//
-// One database, one connection held open for the life of the game module, and
-// every table keyed on char_idx.
-//
-// Differences from the 2020 original, all deliberate:
-//   - the player name is bound, not pasted into the SELECT with sprintf.
-//   - DB_NewID uses MAX(char_idx)+1 rather than COUNT(*). COUNT(*) hands out an
-//     id that already belongs to somebody as soon as one row is ever deleted.
-//   - a saved player who is not yet in the database gets a row instead of
-//     silently losing the session.
+// Unified SQLite backend. One players.db connection serves the game module.
 
 #include <string.h>
 #include <stdio.h>

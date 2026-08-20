@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-#
-# wavewatch.sh -- relaunch the waveloop if the fleet is dead.
-#
-# Born after two host crashes on 2026-08-07 each cost the fleet 30-60
-# dark minutes. Runs from a systemd --user timer every 5 minutes: if no
-# q2ded AND no waveloop.sh process exist, compute the next wave number
-# from waveloop.log and relaunch detached. The spin guard inside
-# waveloop.sh still owns failure handling; this only answers "is anyone
-# even trying".
+# Restart the development wave loop when neither it nor q2ded is running.
 set -u
 cd "$(dirname "$0")"
 pgrep -x q2ded >/dev/null && exit 0

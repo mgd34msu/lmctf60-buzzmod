@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""escapebake.py -- bake escapee (carrier post-steal) traffic into per-map .hme sidecars.
+"""Bake carrier-escape traffic into authenticated HME sidecars.
 
-Reads <map>.rune (link table order is the contract) and tools/human/
-<map>.escape.json (transition counts from demorune.py), writes
-maps/<map>.hme: an authenticated header then one uint8 per link -- the link's
-human-traffic tier, log-scaled to 0..255 with 0 = no human ever ran it.
-The sidecar binds both graph counts and the exact validated rune payload,
-action contract, and header from which it was baked.
-
-A transition a>b credits every rune link a->b (all actions: if a human
-moved seam-to-seam, the road is real regardless of gait). The game loads
-the sidecar beside the rune and prices carrier escape routes cheaper under
-sg_escapeprior.
-
-Usage: escapebake.py <rune_dir> <human_json_dir> <map> [<map> ...]
+Transition counts are mapped to the exact RUNE link order and log-scaled into
+one byte per link. The output binds the complete validated RUNE identity.
 """
 import math
 import os

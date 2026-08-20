@@ -1,54 +1,9 @@
 #!/usr/bin/env python3
-"""chatmine.py -- mine real pub chat out of the human demo corpus.
+"""Extract and normalize player chat from LMCTF demo corpora.
 
-The bots in slipgate/ talk. Until now every line they said was written by
-hand to SOUND like 1998 Quake 2 CTF chat, which is a different thing from
-being it: written banter has a tell -- it is too complete, too on-topic,
-and it never has a typo. This reads the actual thing off the wire.
-
-Where the chat lives. A .dm2 is the recorded server->client message
-stream, and chat arrives as svc_print (10) at level 3 (PRINT_CHAT). Two
-shapes come through at that level:
-
-    "name: text"     -- public say
-    "(name): text"   -- say_team
-
-tools/demoprints.py already walks the message stream and hands back every
-print with its level, so this reuses walk_prints() rather than re-deriving
-the parser. It also hands back the playerskin configstring table, which is
-where the corpus's roster of real player names comes from -- 112 of them
-across 268 demos -- and that roster is what the name filter keys off.
-
-What survives the filter is a small fraction of what is said, because most
-of what is said is not chat in the sense we want:
-
-  * TEAM CHAT IS MOSTLY MACHINE. The "(name):" channel in this corpus is
-    dominated by client item-report binds -- "ARMOR TAKEN at Body Armor",
-    "Available rune west of Base", "<:QUAD IN 60:>". Those are a script
-    talking, not a person, and the bots already have their own item radio.
-  * MATCH LOGISTICS. This corpus is organised games, so a lot of the
-    public channel is who-plays-which-team, map votes, observe commands,
-    console cvars and "5 more minutes". None of that is voice; all of it
-    is dropped.
-  * NAMES. Any line with a token matching a real player's name is dropped
-    outright rather than scrubbed, because a bot saying a stranger's
-    handle back at them is worse than a bot saying nothing.
-
-Everything else is kept AS TYPED -- the missing apostrophes, the "ggs",
-the bare ":)" -- and sorted into six buckets the mod can draw from:
-
-    GREETING     arriving, match about to start
-    TAUNT        after-kill flavoured
-    GRUMBLE      after-death flavoured
-    GG_ENDGAME   end of match
-    REACTION     generic, fits anywhere
-    CALL         tactical-sounding, for the team channel
-
-Usage:
-    chatmine.py [demo-dir]        writes tools/chat-corpus.json, prints
-                                  the kept list bucketed for review
-
-Default demo-dir is ~/Games/Quake2/lmctf-hooktest/demos.
+The tool parses chat records, removes protocol and control text, and emits the
+corpus consumed by SLIPGATE chat tooling. Generated output is development data,
+not a runtime or release claim.
 """
 import json
 import os
@@ -64,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DEMOS = os.path.expanduser('~/Games/Quake2/lmctf-hooktest/demos')
 OUT_JSON = os.path.join(HERE, 'chat-corpus.json')
 
-MAX_LEN = 40            # the owner's cap; a longer line reads as an essay
+MAX_LEN = 40
 MIN_LEN = 2
 
 PRINT_CHAT = 3

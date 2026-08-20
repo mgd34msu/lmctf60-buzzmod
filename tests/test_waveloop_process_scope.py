@@ -22,7 +22,9 @@ class WaveloopProcessScopeTest(unittest.TestCase):
         self.assertNotIn("killall", source)
         self.assertNotIn("kill -", source)
         self.assertIn("./iterate2.sh", source)
-        self.assertIn("iterate2 owns and waits for its exact children", source)
+        launch = next(line for line in source.splitlines()
+                      if line.lstrip().startswith("./iterate2.sh"))
+        self.assertNotRegex(launch, r"&\s*$")
 
     def test_fast_failure_leaves_foreign_q2ded_alive(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -154,17 +154,7 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 	if (!sg_host.in_pvs(eye, mid))
 		return false;
 
-	/*
-	 * BELIEF HAS EYES, NOT SONAR (census gap 11, both default off).
-	 * PVS+trace alone forms a sighting of a man directly behind the
-	 * viewer at any distance the map allows -- the legacy knowledge
-	 * system carried both an is-infront test and a range cap, and a
-	 * human's peripheral awareness has both too. sg_beliefcone is the
-	 * full cone width in degrees (0 = off; combat's own cone is 120 and
-	 * belief should stay wider); sg_beliefrange is a distance cap in
-	 * units (0 = off). These controls intentionally reduce information,
-	 * so they ship dark until the film says the honesty is worth it.
-	 */
+	/* Optional cone and range limits reduce visual belief acquisition. */
 	{
 		float cone = sg_cv.beliefcone->value;
 		float range = sg_cv.beliefrange->value;
@@ -615,16 +605,7 @@ static void Caco_ScanItemSpawns(void)
 	}
 }
 
-/*
- * THE MEGA ENTITY CACHE. sg_combat.c's worth pricing used to walk every
- * entity in the map looking for classname item_health_mega, twice a bot per
- * second (the H1 bump and Worth_Mega both did it independently) -- exactly
- * the globals.num_edicts scan Caco_ScanItemSpawns exists to avoid for the
- * powerup and rune classes. Mega is not itself a belief class (its own worth
- * model reads the entity directly, per Worth_Mega's header), so it gets its
- * own equally small cache built the same way and on the same clock: once, at
- * setup, because a mega's SPAWN LOCATION is exactly as constant as a quad's.
- */
+/* Cache fixed mega-health spawn entities for direct worth checks. */
 static int	sg_mega_ents[SG_MAX_MEGA];
 static int	sg_mega_ent_count;
 
@@ -645,15 +626,7 @@ static void Caco_ScanMegaSpawns(void)
 	}
 }
 
-/*
- * The read side, for sg_combat.c: the entity NUMBERS found at setup, in the
- * order the setup scan found them (ascending, the same order a live
- * globals.num_edicts walk would visit them in). Up/down state is not baked
- * in here -- a mega toggles SOLID_NOT while held and comes back on its own
- * clock, so the caller still checks inuse and belief the way it always did;
- * this only replaces the WALK that used to find the entity in the first
- * place.
- */
+/* Return cached mega-health entity numbers in ascending scan order. */
 int SG_MegaEntities(const int **out_ents)
 {
 	*out_ents = sg_mega_ents;
@@ -1385,15 +1358,7 @@ static void Caco_RelayFlush(rune_t *r)
  */
 sg_belief_enemy_t sg_caco_enemies[2][SG_MAX_ENEMY_TRACK];
 
-/*
- * When each team last heard an enemy quad ANNOUNCE ITS OWN ENDING. The
- * owner's correction (2026-08-05): the "quad 30" cue is not silence after
- * the hit sounds -- it is the fade warning itself, items/damage2.wav,
- * which p_view.c:435 plays exactly once at 3.0s remaining ("beginning to
- * fade"). Hear that from an enemy and you KNOW: 3s left + 30 to respawn.
- * EITHER the take was called at 60, OR nobody called it and this fade
- * sound earns the 30. Never both.
- */
+/* Last enemy quad fade warning heard by each team. */
 float sg_caco_quadheard[2];
 static int sg_quadsound_idx;
 static int sg_hastesound_idx;
@@ -1669,9 +1634,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 		    ecl < SG_DMG_CLIENTS)
 			sg_caco_hastefire[t][ecl] = level.time;
 
-		/* Sampled 1-in-32: a busy-server measurement found roughly 9k
-		 * accepted events per game -- the ear works, the log need not
-		 * relive every footstep */
+		/* Sample debug output to avoid flooding the server log. */
 		if (sg_cv.debug->value && !(sg_ear_said++ & 31))
 			sg_host.dprint("EAR %s heard %s snd=%i chan=%i d=%.0f r=%.0f "
 			           "err<=%.0f seed=%i\n",
@@ -1742,15 +1705,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 	if (ci < 0 || ci >= SG_DMG_CLIENTS || ac < 0)
 		return;
 
-	/*
-	 * THE FELT HALF OF THE RAIL RHYTHM. A slug that lands is a slug that
-	 * was fired, and the man it landed on is in no doubt about when. The
-	 * heard half (SG_NoteRailShot) already covers this case -- a hitscan
-	 * hit means a sight line, and a sight line is inside the PHS -- so
-	 * this is belt and braces rather than new knowledge. It is written
-	 * anyway because it is the reading that survives: the ear is a tap on
-	 * one call site in a game file and the pain is the bot's own body.
-	 */
+	/* A rail hit is direct evidence of the attacker's firing cadence. */
 	if (mod == MOD_RAILGUN && ac < SG_DMG_CLIENTS && SG_RailRhythm())
 		sg_caco_railshot[SG_TeamIdx(team)][ac] = level.time;
 
@@ -1938,16 +1893,7 @@ void Caco_ResetClient(edict_t *client)
 
 float		sg_caco_railshot[2][SG_DMG_CLIENTS];
 
-/*
- * When each team last heard a client firing WITH HASTE -- the rune plays
- * player/lava1.wav on CHAN_ITEM every firing frame (RuneWeaponThinkHook,
- * g_runes.c:807-814), a server-side sound the honest ear genuinely hears.
- * A hasted railer's weapon frames advance twice per tick, so his rail
- * cycles at RELOAD/2 = 0.8s. The owner's own FYI (2026-08-05): pros ran
- * custom rail sounds with reload-ready cues, so precise rhythm reading
- * is period-authentic, and haste-on-rail is exactly why haste defends
- * long corridors so well.
- */
+/* Last audible haste firing cue for each client and listening team. */
 float		sg_caco_hastefire[2][SG_DMG_CLIENTS];
 static unsigned	sg_rail_said;       /* RAILSHOT print sampler */
 

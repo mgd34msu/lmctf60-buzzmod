@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
-"""demorune.py -- extrapolate human routing from .dm2 demos onto rune graphs.
+"""Map human demo trajectories onto authenticated RUNE graphs.
 
-For each demo: decode the POV player's origin trace (reusing dm2speed's
-protocol-34 walker), map every frame to the nearest rune seed of the map it
-was recorded on, compress to a seed-visit sequence, and record every
-seed-to-seed transition as one count of human traffic. Flag events from the
-print stream (steals/captures/losses) are kept with timestamps so carry
-segments can be cut later.
-
-Aggregated output (one JSON per map beside the rune):
-    { "map": ..., "demos": N, "frames": N,
-      "transitions": {"a>b": count, ...},
-      "seed_dwell": {seed: seconds, ...},
-      "events": [[t, "text"], ...] }
-
-Usage: demorune.py <rune_dir> <out_dir> <demo> [<demo> ...]
-The map is read from configstring 33 ("maps/<name>.bsp"); demos whose map
-has no rune in <rune_dir> are skipped with a note.
+Each visible position is localized to a live seed and compressed into visit and
+transition counts. Output also retains map identity, dwell, and flag-event times.
 """
 import struct, sys, os, re, collections
 

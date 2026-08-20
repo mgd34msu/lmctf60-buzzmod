@@ -356,15 +356,7 @@ static void SG_NetReset(void)
 	sg_netmsg_over = false;
 }
 
-/*
- * The engine's own message buffer detects overflow and discards the message
- * rather than writing past the end; this one used to do neither. Nothing in
- * the mod comes close today -- the scoreboard layout is the largest producer
- * at roughly 1.5 KB -- but "nothing today" is not a bound, and the writers
- * are reached from every temp entity in the game. Match the engine: refuse
- * the append, remember that the message is ruined, and drop the whole thing
- * at flush time so a half-message never reaches a client.
- */
+/* Reject an append that would exceed the engine message limit. */
 static qboolean SG_NetRoom(int need, char *where)
 {
 	if (sg_netmsg_over)
@@ -842,11 +834,7 @@ void SG_FreeClientEdict(edict_t *ent)
 	ent->flags &= ~FL_BOT;
 }
 
-/*
- * Called at every level spawn so the capped range reports start over --
- * a lifetime cap on a long-running server means a fault that develops on
- * map twelve is invisible (refutation review, 2026-08-05).
- */
+/* Reset capped diagnostics and rotate the event stream at each level spawn. */
 void SG_NetNewLevel(void)
 {
 	int i;
@@ -881,16 +869,7 @@ void SG_NetNewLevel(void)
 
 void SG_NetInstall(void)
 {
-	/*
-	 * Idempotence, done by inspection rather than a static flag
-	 * (refutation review, 2026-08-05): the caller re-copies the engine's
-	 * table into gi immediately before calling us, so a repeated install
-	 * is harmless -- UNLESS gi already holds our own functions, which is
-	 * the only state that could feed the shim to itself. A static guard
-	 * gets this wrong across library reloads that preserve statics
-	 * (sanitizer builds use RTLD_NODELETE): it would silently leave the
-	 * whole layer uninstalled.
-	 */
+	/* Inspect the imported table because static state can survive a reload. */
 	if (gi.unicast == SG_unicast)
 		return;
 	sg_installed = true;

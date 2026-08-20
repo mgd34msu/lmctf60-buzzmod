@@ -1,29 +1,8 @@
 #!/usr/bin/env python3
-"""seedservo.py -- is the bot's heading noise made by seed-center servoing?
+"""Compare seed-center steering with route lookahead on recorded paths.
 
-The hypothesis under test: the navigator steers at the CENTER of the current
-link's destination seed (sg_arach.c ~3808, `VectorCopy(seeds[l->to].origin,
-aim)`), and on arrival snaps to the next seed center. A bearing servo's
-angular rate goes as v_perp / d, so a target only one link away (a few tens of
-units) makes the commanded heading churn violently even on a straight chain.
-
-Instruments, all from 10Hz serverrecord .dm2 origins (botkin.py kinematics)
-plus the map's .rune:
-
-  A) retarget rate: how often the nearest seed changes = how often the aim
-     jumps to a new center.
-  B) chain turn vs body turn at each retarget: if the seed polyline is
-     straight there but the body still turns, the turn is not geometry.
-  C) COUNTERFACTUAL COMMANDED HEADING. Along the SAME recorded trajectory,
-     recompute what the steering rule would have commanded:
-        servo   = bearing to the next seed center (what the code does now)
-        pursuit = bearing to the point at arc-length L ahead on the polyline
-                  through the next K seed centers (the proposed fix)
-     and compare the churn of each against the churn the body actually shows.
-     This prices the fix before a line of game code is touched.
-
-Usage: seedservo.py <rune_dir> <demo.dm2> [<demo.dm2> ...]
-       env SS_LOOK=250  pure-pursuit arc distance in units (default 250)
+The tool localizes serverrecord positions to a RUNE and reports retargeting,
+body turns, route turns, and counterfactual lookahead-heading churn.
 """
 import sys, os, math, collections
 import statistics as st

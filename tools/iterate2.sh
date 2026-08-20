@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
-#
-# iterate2.sh <name>
-#
-# Free-layout wave launcher (owner's format delegation, 2026-08-04:
-# "everything is up to you. only constraint is 1) 10 servers always,
-# and 2) never stop.") Layout, matchups (xvx or xvy), maps, and match
-# time are set per server in the tables below; different servers may
-# run different tests in the same wave, each server's test kept clean.
-#
-# Everything the fixed-format launcher learned the hard way is kept:
-# PID-only process discipline, ~7s launch stagger (same-second starts
-# duplicate Q2's RNG), flags travel by per-server cfg (argv ceiling),
-# maplist_file defused (the deferred-gamemap join bomb), overlap guard.
+# Launch one isolated ten-server development wave.
+# Usage: iterate2.sh <wave-name>
 
-# POV authority begins only for the exact opt-in value.  Re-open this source
-# before any POV path access and run the already-open bytes in a sterile Bash.
 if [[ ${POV_ENABLE-} == 1 && ! ${BASH_SOURCE[0]} =~ ^/proc/self/fd/[0-9]+$ ]]; then
     ITERATE_SOURCE_DIR=${BASH_SOURCE[0]%/*}
     [[ $ITERATE_SOURCE_DIR != "${BASH_SOURCE[0]}" ]] || ITERATE_SOURCE_DIR=.
@@ -70,26 +57,7 @@ if { ((POV_ENABLED)) && /usr/bin/pgrep -x q2ded >/dev/null 2>&1; } ||
     exit 3
 fi
 
-# ---------------------------------------------------------------- layout
-# One column per server. FILL is sv_botfill ("N" or "R:B" asymmetric).
-# SECS is the game window; timelimit is set to 0 in the cfg so nothing
-# ends a long game early -- the pipe's quit ends the window.
-# same-map A/B pairs: s03/s04 (5v5 lmctf22, escape off/on) and s06/s07
-# (5v3 lmctf44 carry farms, escape on/off). Escape corpus is strongest on
-# lmctf22/lmctf44/mactf06/smap05 -- the test runs where the data lives.
-# 298: s08 becomes the defense-package OFF comparator on mactf06 --
-# s05's zero-conceded read was confounded by map identity (mactf06
-# concedes ~nothing regardless); the pair settles it. 7v7 shelved.
-# 301: defense A/B moves to the farms (they concede 1-7/wave -- the
-# sensitive instrument; mactf06 concedes nothing to anyone). s08 back
-# to 7v7 density coverage.
-# RUNE canaries: s02 is the permanent no-opposition lane and s10 is the
-# fixed-matchup lane.  Their roster shapes stay fixed while their maps rotate.
 LABELS=(s01-2v2  s02-5v0  s03-5v5  s04-5v5  s05-5v5   s06-5v3  s07-5v3   s08-7v7  s09-ctrl s10-5v5)
-# Map identity rotates independently of roster shape.  topmaps.txt is the
-# ranked 20-map human-demo corpus.  Even offsets spread ten servers across
-# half the pool each wave; advancing the wave by one covers the other half,
-# so two consecutive waves cover all 20 maps and every lane visits all 20.
 MAP_POOL=()
 while IFS= read -r map || [[ -n $map ]]; do
     [[ -z $map || $map == \#* ]] && continue
@@ -119,457 +87,85 @@ for map_slot in 0 1 2 3 4 5 6 7 8 9; do
 done
 FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
-# 295 relayout: ONE variable per pair (284-294 stacked escape+movement
-# trials on shared servers -- reads were cross-contaminated).
-# s03/s04: fandense dose-2 A/B (escape OFF both).
-# s06/s07: escape A/B alone (landtick OFF both).
-# s05: defpost+defreact together (defense package vs history).
-# escape prior NULL on clean pairs (295-299: 16 ON vs 18 OFF). Ledger:
-# the contaminated-era 13v7 was noise. The corpus cut survives for
-# future re-derivation (windows were hunter-biased at the SEED level?
-# open question) but the flag is parked.
-# LONE WOLF null 2026-08-10 (0.629 vs 0.638): the SECOND mechanism to
-# miss this tell after escortdose's role gate. Removing the carrier
-# support pull does not separate teammates from the carrier -- so the
-# proximity is not produced by any pull we control. Forensics before a
-# third cut (the rung-2 lesson: seven mechanisms died guessing at a
-# tell whose model was wrong). Also flagged: bot escort_fraction on
-# mactf06 read 0.351 at Stage A (waves 498-535) and 0.63 now -- a
-# possible regression the forensics must explain.
 LONEWOLF=(1    1        1        1        1         1        1         1        1        1)
 
-# ESCORT DOSE 35 CONFIRMED 2026-08-10 and fully adopted. Three
-# independent samples agree: 86v54 (side effect), 42v22 (original
-# 8-wave trial), 83v52 over 17 waves/arm (this confirmation, 4.88 vs
-# 3.06 caps/game, steals 201 vs 118). The early fleet-wide peek that
-# read caps DOWN was confounded as suspected -- mixed maps and formats
-# the trial never covered, and a pre-adopt window containing the
-# winning arm. Peeks are not censuses. s09-ctrl stays 100.
 ESCORTDOSE=(35  35       35       35       35        35       35        35       100      35)
 
-# ESCAPE PRIORS ADOPTED fleet-wide 2026-08-07 (8 waves/arm, lmctf22):
-# conversion 0.413 vs 0.355, caps 42 vs 31, steals 102 vs 76 -- volume
-# AND conversion up, the cleanest dark-feature win. Mined from 1549
-# human steals. s09-ctrl stays 0. s05/s08 become the rung-4 film pair
-# (escort_fraction is validated on lmctf22).
 ESCAPE=(1        1        1        1        1         1        1         1        0        1)
-# duel-roles A/B (285+): s01 ON s02 OFF -- breaks the size==2 dw=1 pin
-# (2v2 census: dw stuck 131/138, zero caps in 16 waves)
-# duelroles NULL (285-299 pooled: 7 ON vs 10 OFF, zero caps both) --
-# the dw pin was not the binding constraint at duel density. Ledger.
-# duel-roles ADOPTED wave 332 (aux verdict 7 caps to 0 over three
-# rounds -- the old null was the broken-carrier era's artifact)
 DUEL=(  1        1        0        0        0         0        0         0        0        0)
-# defense dwell A/B (286+): s05 ON vs s03 OFF (both have .dpo data);
-# landing-tick A/B (286+): s06 ON vs s07 OFF (farms feel it most --
-# read = touch_loss and relaunch rate from the serverrecord demos,
-# plus carrier speed).
-# defense frontier re-trial (333+): field-mode on s03 vs s04 OFF --
-# the old null is void (measured on broken offense). Read: steals
-# CONCEDED on the pair (defense quality), caps as cost column.
-# defpost PARKED permanently (2x2: posts concede 28-30 vs 18-21 --
-# corpus posts pull defenders off the stand and bots punish it)
 DEFPOST=(0       0        0        0        0         0        0         0        0        0)
-# defreact ADOPTED fleet-wide wave 337 (react-only = fewest conceded)
 DEFREACT=(3      3        3        3        3         3        3         3        0        3)
 LANDTICK=(0      0        0        0        0         0        0         0        0        0)
-# link latch A/B (290+): s04 ON vs s03 OFF (5v5 pair, demos on s03) --
-# read = turn1hz/reversals/180s from botkin, plus steals as the cost
-# column. 700ms latch ~= the 1Hz surface refresh with margin.
-# link latch NULL (290-291): turn grammar unchanged -- the incumbent
-# dies at every seed crossing, same within-seed-only trap as sticky.
-# 385 trial: the smap05 map-center orbit (wave 383 canary, 11 steals 1 cap)
-# is two seeds flapping on a field plateau at full sprint until the 15s
-# stuck self-kill -- the chronic ~130 suicides/wave burn, flat since at
-# least wave 340. The latch was built for exactly this (wave 289) and has
-# been dark since tactics won the WAYPOINT-level verdict; this is the
-# LINK-level residue. 600ms = the field's own 1Hz refresh cadence, on the
-# A arms of the matched pairs; canaries and clean control untouched.
-# LATCH: NULL, retired (pooled 385-390 matched pairs 50 vs 53; wave
-# 385's 7v17 was noise). Ledgered with film. The orbit trap's real fix
-# is NOBACKTRACK below.
 LINKLATCH=(0     0        0        0        0         0        0         0        0        0)
 
-# 392 trial: the do-si-do killer. Prices the immediate-return link for
-# 3s after leaving a seed. s06 armed vs s07 control; metric = suicides
-# on the pair + the 5v0 canary's failed-carry count.
-# ADOPTED wave 396 (pooled 392-395: 29 vs 39 suicides on the matched
-# pair, right direction all four waves -- the do-si-do killer works, and
-# two set-#3 judges saw the orbit it kills on film). s09 stays clean.
-# NOBACKTRACK-150 struck 2026-08-08: revisit2 flat (0.284 vs 0.273)
-# and caps 8 vs 18 -- over-pricing breaks legitimate returns without
-# touching the ping-pong, which lives in field-plateau oscillation
-# BETWEEN legs (the smap05 orbit lesson). Retry gate: plateau-level
-# tie-breaking diagnosis, not pricing dose.
 NOBACKTRACK=(60 60      60       60       60        60       60        60       0        60)
-# weave A/B (292+): s04 no-weave vs s03 weave -- the demo census ranked
-# the metronomic combat weave the #1 visible jank; sg_noweave is the
-# existing switch and botkin the honest instrument the old gauges never
-# were. Read: turn1hz/reversals/180s + steals as the cost column.
-# noweave NULL on the demo instrument (292-293 pooled: turn metrics and
-# steals even) -- the 176 null stands, honestly measured this time.
 NOWEAVE=(0       0        0        0        0         0        0         0        0        0)
-# fan densify A/B (294+): s04 ON vs s03 OFF -- read = wallbumps_per_min
-# fandense NULL at both doses (294-295: bumps flat, dose-2 speed cost).
 FANDENSE=(0      0        0        0        0         0        0         0        0        0)
-# air-gain fix A/B (296+): s04 ON vs s03 OFF -- SG_Strafe derived its
-# air angle from wishspeed 300 against an engine that clamps air
-# wishspeed to 30 (pmove.c:382). Read: air_gain_med from botkin.
-# airgain PARKED (296-297: negative at both doses -- the harvest turns
-# velocity off the route; needs view/path co-rotation, ledgered).
 AIRGAIN=(0       0        0        0        0         0        0         0        0        0)
-# wetwork A/B (300+): s04 ON vs s03 OFF -- swimmers are half-speed rail
-# targets and rails pierce water; read = DMG mod-11 kills on waterlevel
-# targets + steals. Water maps matter: lmctf22 has the canal.
 WETWORK=(1       1        1        1        1         1        1         1        0        0)
-# nadelead A/B (309+): s04 ON vs s03 OFF -- cooked grenade re-aims at
-# an airborne live enemy's touchdown while cooking (rocket landlead's
-# solver, better fuse). Read: NADEPOP proximity + grenade obituaries.
-# nadelead ADOPTED wave 335 (6 aux rounds: zero cost, slight lean --
-# the owner's zero-cost-volume economy: free attempts at max volume)
 NADELEAD=(1      1        1        1        1         1        1         1        0        1)
-# courier dose 2 (310+): escorts out-price defenders for resist/regen
-# (starvation fix for the adopted handoff: 10,098 candidates, 40 tosses,
-# 74% of games form no pairing at all). Read is within-arm: RTCAND
-# distance distribution + RUNETOSS conversions, fleet history as base.
 RUNEDOSE=(0      0        2        2        2         2        2         0        0        0)
-# pure pursuit A/B (311+): value = arc distance. s03/s04/s06 at 300,
-# s07 + s09 control. Read: turn1hz_med (predict 92->55-65), reversals
-# (50->38-42%), wallbumps as the corner-cut guard-rail, steals/caps.
-# 313: s04 becomes the honest OFF comparator (311 ran the 5v5 pair
-# ON/ON by mistake -- no contrast); pursuitz 18 lifts the stair veto.
-# pursuit PARKED (311+313: chord active 92% of ticks, body grammar
-# unchanged 83.5v85.3 -- command-level fix real, body noise lives in
-# the fan/combat/hook layers; falsifiable prediction failed honestly).
 PURSUIT=(0       0        0        0        0         0        0         0        0        0)
 PURSUITZ=(8      8        8        8        8         8        8         8        8        8)
-# approach cover A/B (314+): s03 ON vs s04 OFF, s06 ON vs s07 OFF --
-# attackers price steps visible to fresh sightings near the target
-# stand. Read: steals (should HOLD or rise -- covered approach means
-# arriving alive), carrier survival post-grab, early-kill share.
-# appcover ADOPTED fleet-wide wave 333 (healthy-era reval 28v18 caps)
 APPCOVER=(200    200      200      200      200       200      200       200      0        200)
-# exit-escort A/B (319+): interpose dose 2 -- escorts occupy the exit
-# seed ahead of the carrier on its homeward field instead of the
-# unreachable midpoint. s03/s06 ON (dose 2), s04/s07 stock interpose.
-# formation NULL (326-329: 15v14, flat) -- and the pair was doubly
-# loaded with appcover. Parked; midpoint stays. s03/s04 and s06/s07
-# are now clean APPCOVER revalidation pairs (ON=200 vs OFF).
 INTERDOSE=(0     0        0        0        0         0        0         0        0        0)
-# owner's blend (321+): sg_smooth value = slew deg/s. s04 ON 240 vs
-# s03 OFF (5v5 pair, demos both) -- read: turn1hz/reversals/steals.
-# blend PARKED (321-322: ON worse both waves -- slew lag fights the fan)
-# gentle-blend residue test (337+): 500 deg/s on s03 vs s04 OFF,
-# demos both -- only adopts if post-tactics jitter still shows
 SMOOTHDOSE=(0    0        0        0        0         0        0         0        0        0)
-# rail-lane A/B (345+): s03 ON vs s04 OFF -- second defender holds the
-# computed sightline post. Read: steals CONCEDED per arm + the per-map
-# lane-coverage print (low coverage = geometry has no lane; gate later).
 RAILLANE=(1      1        1        1        1         1        1         1        0        1)
-# THE RIBBON (351+): the calibrated blind judge's first verdict, 8/8 --
-# "rope vs brush": every bot traversal lands on the same polyline.
-# Per-leg persistent lateral offset (value = max units). A/B s03 ON
-# vs s04 OFF; the verdict is the NEXT FILM, not a number.
-# ribbon NULL, both variants and doses (351-357 pooled 32.8v34.1u):
-# aim offsets are re-centered by the steering stack. Ledger. The band
-# is ROUTE diversity -- see ROUTEJITTER.
-# ribbon RESURRECTED (376+): its "null" was measured on the morgue'd
-# corridor-std metric -- but the RUNE film showed railroad lanes, i.e.
-# the mechanism DOES move the body. The fair judges' last tell is the
-# needle-over-empty-base, exactly what a drifting per-traversal offset
-# fills. A/B s03 ON (48u drift) vs s04 control; verdict on parity film
-# needle shape, not on any single number.
-# ADOPTED wave 380 (pooled 377/378/379, three independent blind readers):
-# control arm carried the needle-over-empty-base corridors every wave
-# (3-4/2/2 vs 2/1/1) and every extreme lane concentration (43%, 25%).
-# s04 + s09 stay 0 as the standing controls, same pattern as ROUTEJITTER.
-# s04 equalized to fleet values 2026-08-07: its ribbon/jitter-0 control
-# state silently confounded every film-pair A/B (the dead breather flag,
-# the shelf trial's arms). s09 is the ONLY control from here on.
-# RIBBON DOSE TRIAL 2026-08-08 (off-graph forensics): the tell is a
-# 60u boundary strip at the seed-cloud edge and 62% of the human gap is
-# grounded EDGE-HUGGING 96-160u off centerline -- ribbon 48 keeps feet
-# inside the 96u seed radius by construction. s03 at 112 pushes the
-# oscillation into the margin ring. Bars: off-graph 0.024 -> 0.05+;
-# caps hold; canary flawless (rung-1 film risk noted -- amplitude is
-# raw-movement texture).
-# ribbon 112 was null #8 BECAUSE lookahead/pursuit overwrite the aim
-# after the ribbon offset lands. EDGERIDE re-applies the offset LAST on
-# the final road point (owner ruling on OQ#2: one trial, falls = kill
-# switch). Wall trace and every fall guard untouched; carrier exempt.
 RIBBON=(48       48       48       48       48        48       48        48       0        48)
 
-# EDGERIDE STRUCK BY ITS KILL SWITCH 2026-08-08: off-graph flat (0.026
-# vs 0.031) AND falls 3 vs 1. Per the owner's ruling the edge-strip
-# tell is ACCEPTED AS RESIDUAL -- nine mechanisms, forensics, and a
-# measured fall cost on the record. Never falling is the accepted
-# signature.
 EDGERIDE=(0     0        0        0        0         0        0         0        0        0)
-# route jitter (359+): per-bot-per-life deterministic pricing tilt
-# (value = max percent). Near-ties split the population across roads;
-# a life rides one opinion of the map. A/B s03 ON vs s04 OFF; read =
-# corridor band width on film (human bar 69u).
-# jitter ADOPTED at dose 8 (pooled verdict: 2.41 bits vs control 1.99
-# vs dose-20 2.21; pooled humans 2.62). s04 stays the clean control.
-# ROUTEJITTER-25 struck 2026-08-11: escort WRONG WAY (0.648 vs 0.547)
-# and conversion down -- second consecutive backfire, fifth mechanism
-# dead on the co-travel tell. Reverted to the adopted 8.
-# A/A NULL TEST now running: the last three trials all read s03
-# conversion BELOW s04 by similar margins regardless of which feature
-# was armed (0.120/0.177, 0.110/0.177, 0.089/0.140). Both arms are now
-# IDENTICAL for 16 waves; if the gap persists with nothing armed, the
-# pair is biased and every caps read on it needs paired-block
-# correction -- including evidence behind past strikes.
 ROUTEJITTER=(8   8        8        8        8         8        8         8        0        8)
 
-# EXIT-LANE ASYMMETRY (379 trial, ruled 2026-08-05): a human tends to
-# leave with the flag by a different road than the one ridden in -- but
-# not always. Coin per carry at dose%; armed carries price the inbound
-# links 1.5x. s06 armed vs s07 control (the 5v3 pair: carry-rich).
-# ADOPTED (2026-08-06, 30-wave pool: comm 36% vs ctrl 34% conversion,
-# cap-positive, every subsystem verified live). The communication
-# economy runs fleet-wide except the clean control; the freed pair
-# carries MEGAWORTH next (stage-2 volume program lever 2).
 COMMSTACK=(1     1        1        1        1         1        1         1        0        1)
 
-# megaworth PARKED (11-wave verdict: 17% vs 24% conversion -- the
-# detour costs more than the overheal buys at these gates). Honest
-# negative to the ledger with its film; retriable with a tighter
-# detour budget (4000ms was too generous) or attack-role-only gating.
 MEGAWORTH=(0     0        0        0        0         0        0         0        0        0)
 
-# stage-2 lever 3: attack-objective commitment. sg_atkobj is percent
-# (100 = shipped). 125 on s06 vs 100 control: do attackers who price
-# the flag 25% harder steal at human volume without dying broke?
-# ADOPTED at 125 (22 A/B waves across doses: pooled +7% steals, caps
-# dead even; 150 converged null -- the mild dose is the real one).
-# Free volume, right film direction; the 2.2x gap needs a different
-# class of lever (steal-genesis study queued).
 ATKOBJ=(125    125      125      125      125       125      125       125      100      125)
 
-# wswitch A/B takes the pair: the fight-sheet's switch-diagonal scalar
-# is the primary instrument (humans commit to a gun; bots alternate).
-# STRUCK 2026-08-07 (40 waves each arm, fightsheet pooled): wswitch=1
-# moved switch_diagonal_mass 0.696 -> 0.676, AWAY from the human anchor
-# (0.897 on lmctf44; commitment is the tell and HIGH is human), caps 40
-# -> 35. The named rung-3 gap is commitment (bot 0.68 vs human 0.90) --
-# the successor feature must SUPPRESS mid-fight switches, not add them.
 WSWITCH=(0     0        0        0        0         0        0         0        0        0)
 
-# WEAPON COMMITMENT: ADOPTED fleet-wide 2026-08-07 (12 waves/arm,
-# lmctf44): switch_diagonal 0.828 armed vs 0.691 control vs 0.897 human
-# -- two-thirds of the strongest rung-3 tell closed, zero overlap
-# between arms -- and caps 25 vs 13 (committed guns convert; less
-# mid-fight spectator time). s09-ctrl stays 0. Residual 0.83 -> 0.90
-# gap stays on the rung-3 list.
-# Mode 2 STRUCK 2026-08-07 (9 waves/arm): caps CRASHED 7 vs 22 and
-# diagonal moved AWAY (0.758 vs 0.813) -- refusing blaster commitment
-# sends fresh spawns into the switch ritual at first contact. Mode 1
-# fleet-wide stays. The blaster tell's accuracy half goes to aimtexture.
 WCOMMIT=(1     1        1        1        1         1        1         1        0        1)
 
-# AIMTEXTURE stays at dose 1.0. Ladder 2.5 STRUCK 2026-08-09: aim
-# offset went the WRONG way (6.54 vs 6.74 -- further from the 10.89
-# human anchor, not closer). Mechanism: the trigger's own aim gate
-# censors the texture. A bigger overshoot does not produce sloppier
-# SHOTS, it produces shots that the clear-shot/lead checks veto, so
-# only well-settled aim survives to fire time. Amplitude cannot move a
-# fire-time scalar; reaching the human offset needs a looser fire gate,
-# which is a different (and riskier) feature.
 AIMTEX=(1     1        1        1        1         1        1         1        0        1)
 
-# TAPVAR RE-TRIAL against its new eye (slow_cadence_cv, sep 0.9375;
-# the old aggregate diluted it to a false null). s06 armed vs s07.
-# Bars: slow_cadence_cv 0.13 -> toward the 0.25-0.30 human band; caps
-# hold.
 
-# RUNG-2 SET #1 (2026-08-07, judges 11/18): the named tell is OFF-GRAPH
-# FRACTION -- humans grapple through open air 3-18% of samples, bots pin
-# near zero because the flood prices every rope +1000ms of ritual. The
-# dose trial: s03 at 400 vs s04 control at 1000. Bars: off-graph mass
-# into the human band on the next route sheets; caps must not fall; the
-# 5v0 canary must stay flawless (a rope-happy wreck there kills it).
-# FREERIDE follow-up struck 2026-08-08: off-graph 0.024 vs 0.027 -- and the
-# arithmetic seals the family: doubled ride volume is ~0.3% of player
-# time against a 3-18% human band. The tell is LOCOMOTION IDENTITY --
-# humans travel by rope. Rope-primary travel is the named rung-2
-# feature; gate-widening cannot reach it. Dark until built.
 FREERIDE=(0    0        0        0        0         0        0         0        0        0)
 
-# ROPETRAVEL family CLOSED 2026-08-08: dose 2 (wander throw) null too,
-# 0.022 vs 0.027 -- SEVEN rope-side mechanisms flat on this instrument.
-# The tell's model is under forensic dissection (what physically makes
-# human off-graph samples: flight? camping? AFK residue, which Rule 20
-# accepts as permanent?). No further cuts until the film answers.
 ROPETRAVEL=(0  0        0        0        0         0        0         0        0        0)
 
-# tapvar parked at 0 pending its cadence-spread eye (built 2026-08-07,
-# separability 0.9375); re-trials on the next free pair.
-# FIRE DISCIPLINE struck 2026-08-08: planted-shot gating SYNCHRONIZES
-# fire with stability windows -- cadence got MORE regular (0.121 vs
-# 0.162), caps up 16v12 but the bar is the bar. Fifth cadence mechanism
-# down; no sixth blind cut -- set #3 asks the judges what they still
-# see.
 FIREDISC=(0    0        0        0        0         0        0         0        0        0)
 
-# TAPVAR STRUCK FINAL 2026-08-08: dose 3 flat too (0.144 vs 0.147) with
-# caps leaning down 10 vs 18. Executed, measured, never moved the eye at
-# any dose. The cadence tell needs FIRE DISCIPLINE (hold while
-# repositioning) -- design work, not jitter. Ledgered.
 TAPVAR=(0     0        0        0        0         0        0         0        0        0)
 
-# TEAM SKEW (sg_teamskew, rung-4 tell #2: team-mirror symmetry -- the
-# untried tell). Each team's defender count skews by -1/0/+1 on an
-# independent ~3-minute reroll clock, so the two sides' role mixes
-# decorrelate like unrelated pub rosters. Armed s05=1 vs s08 control
-# (lmctf22, the validated rung-4 map). Bars: judged at the SET level
-# (this is a judge-visible texture, not a single-scalar target) plus
-# escort/defense panel asymmetry between teams; caps at the 16-wave
-# floor.
 TEAMSKEW=(1    1        1        1        1         1        1         1        1        1)
-# ESCORTDOSE dose-down DISARMED 2026-08-12 (Rule 23, the owner's order:
-# bots better than humans do not get dumbed down). The dose-down chased
-# a judge tell by degrading escort consistency below the caps-optimal
-# 35; rung 4 passed with the gap intact. Accepted bots-better residual.
 ESCORTDOSE2=(0 0        0        0        0         0        0         0        0        0)
-# STRICTGRAB ruled 2026-08-12 at the 16-wave floor and ADOPTED OFF:
-# equal approach volume, 3x steal conversion with the hold released
-# (0.003 vs 0.001), caps dead even (20 v 21), guard held. The clean-
-# grab hold WAS the conversion gap.
 STRICTGRAB=(0  0        0        0        0         0        0         0        0        0)
-# RAILRHYTHM (low-dose retrial, armed 2026-08-12 post-deploy): the first
-# trial was ruled against an aggregate; dose 0.5 on s03 vs s04 control,
-# eye = fightsheet rail_window_exposure (0.896), 16-wave floor from the
-# arming wave. Prior hookpong (s03) struck null on revisit_spike2_mass.
 RAILRHYTHM=(0  0        0        0        0         0        0         0        0        0)
-# PATROL struck 2026-08-12 at the 16-wave floor: null on every
-# defensive metric (grind 16.35 v 16.36, guard 0.48 v 0.49, approach
-# 3.50 v 3.49). Walking legs neither helped nor hurt; the grind gap
-# needs a different lever.
 PATROL=(1      1        1        1        1         1        1         1        1        1)
 
-# Grind lever search 2026-08-12: patrol struck null, and defpost is
-# already permanently parked above (posts concede more). No third guess
-# without forensics -- the mactf06 pair holds as a clean control while
-# the stand-split decomposition produces the next real lever.
 
-# FASTCARRY (armed 2026-08-12, the conversion chain's next link: with
-# the clean-grab hold released steals tripled, so steal->cap survival
-# is the live bottleneck). s06=1 vs s07 control on lmctf09; bars:
-# carry survival fraction, caps/wave up, steals held, 16 waves.
 FASTCARRY=(0   0        0        0        0         1        0         0        0        0)
 
-# HOOKPONG (rung-2 revisit fix, targeted per the plateau diagnosis:
-# three HOOK-heavy spans carry 29% of A-B-A events at 8-45x human).
-# A landing that returns the body to the previous ride's departure
-# within 8s shelves the ridden link for 45s. Armed s03=1 vs s04.
-# Bars: revisit_spike2_mass toward human 0.20 from 0.31; caps read
-# with the MEASURED ARM BIAS correction (A/A: s03 converts 0.076 lower
-# than s04 with nothing armed -- the raw caps comparison is invalid on
-# this pair; compare against the A/A baseline delta).
 HOOKPONG=(0    0        0        0        0         0        0         0        0        0)
 
-# DITHER RETRY 2026-08-11 on its NEW eye (max_transition_mass, sep
-# 0.901 -- the cell-level scalar whose absence voided the first trial's
-# read). s06=120 vs s07=0. Bars: max_transition_mass down toward the
-# human 0.344 from bot 0.387; caps at the 16-wave floor.
-# Original strike record below kept for provenance:
-# ROUTE DITHER struck 2026-08-08 (9 waves/arm): entropy 1.493 vs 1.570
-# (wrong direction on the proxy), off/caps flat. The aggregate scalar
-# cannot see cell-level determinism; a max-transition-mass eye is the
-# prerequisite for any retry. Dark.
 ROUTEDITHER=(0 0        0        0        0         0        0         0        0        0)
 
-# NULL at 400 AND 100 (6 waves each, off-graph 0.026-0.027 all arms,
-# dead flat): the flood layer is exonerated -- a 90% rope-price cut
-# changes nothing observable. Mediator probes (rope rides at 1000 vs
-# 100, sg_debug) locate the binding gate; the next change goes where
-# they point. Pair returned to steady state.
 ROPECOST=(1000  1000     1000     1000     1000      1000     1000      1000     1000     1000)
 
-# PARKED (owner's standing law, re-affirmed 2026-08-05): nothing trades
-# caps for cosmetics. Dose 70 cost 31% relative conversion over 22
-# pooled waves; no judge ever named the tell it was built for. Off,
-# ledgered with its film, retriable only with proof it is free.
 EXITASYM=(0      0        0        0        0         0        0         0        0        0)
 
-# 388 trial: the movement-texture judge (4/4 blind) named bang-bang
-# throttle the biggest remaining tell. sg_breather = mean seconds of safe
-# travel between sub-max windows; s03 armed vs s04 control on the
-# mactf06 film pair.
-# dose-response (390+): first blind read at 8 was marginal-correct --
-# rest structure appeared (a held 25s stop, doubled stopped-time) but
-# aggregate texture tied. 4 doubles the cadence; same 0.35 throttle.
-# equalized 4/4 on the film pair (the 84-wave pool read a conversion
-# cost -- Rule 21 flag on the ledger, dedicated dose ladder owed) so the
-# pair is single-variable for SHELFCOST.
-# ADOPTED fleet-wide 2026-08-07 (dose ladder 0/4/8, 19 waves/arm,
-# mactf06): conversion 0.046 / 0.114 / 0.116 -- the clean s03/s10 pair
-# (identical ribbon/jitter) shows the pause near-tripling steal->cap
-# conversion; 4 and 8 indistinguishable, smaller dose taken. The old
-# 84-wave "breather costs conversion" flag died with the discovery that
-# its control arm also ran ribbon/jitter 0 -- three variables, not one.
-# s09-ctrl stays 0 as always.
-# DE-PACE struck 2026-08-11 at the 16-wave floor, double miss: escort
-# WRONG WAY (0.638 vs 0.564) and conversion down (0.110 vs 0.177).
-# Backfire mechanism: slowing a lingering teammate keeps it in the
-# bubble LONGER when the carrier approaches from behind. Fourth
-# mechanism dead on this tell.
 DEPACE=(0      0        0        0        0         0        0         0        0        0)
 
-# ANTI-LINGER struck 2026-08-11 at the 16-wave floor: the 7-wave film
-# delta was noise (0.601 vs 0.636 final, ~0.5 sem), conversion leaning
-# down (0.120 vs 0.168). THIRD mechanism dead on this tell. A routing
-# surcharge cannot separate bodies whose destinations coincide -- and
-# the forensics' position data suggests the streaks are POSTED
-# DEFENDERS: the carrier comes home to a defended stand and ends its
-# run inside 400u of a camper. Split diagnostic running before any
-# fourth mechanism.
 UNLINGER=(0    0        0        0        0         0        0         0        0        0)
 
-# BREATHER stays at the adopted dose 4. The dose-2 probe is VOID: its
-# control arm (s04, unchanged dose 4) read conversion 0.224 in the
-# ablation and 0.118 in the dose-2 trial -- same config, adjacent wave
-# ranges, ~2x apart. Control drift that large swamps the effect, so no
-# conversion verdict at this sample size means anything.
-# STANDING RULE from this (see LEDGER): conversion/caps bars need 16+
-# waves per arm; the 8-wave standard is only sound for film scalars,
-# which carry per-demo n and tight sem. Escortdose held up precisely
-# because it was confirmed at 17.
 BREATHER=(4      4        4        4        4         4        4         4        0        4)
 
-# THE SHELF TRIAL (steal-genesis study): sg_shelfcost 1 on s03 vs s04
-# control, mactf06 -- the map with the measured 1275-cost shelf. Bars
-# pre-registered: below-terminal share 0.36 -> <0.10; steals/game up
-# toward the 8.5 arithmetic ceiling; caps must not fall.
-# STRUCK 2026-08-07 (waves 489-496 census): entries into the pit
-# collapsed 89->23 in probes, but steals fell 5.0->4.5/game and close
-# approaches -19% -- the doomed low road was cheap TEMPO, and rerouting
-# it cost more than the zero-yield room wasted. Rule 21. Code stays,
-# cvar stays dark.
 SHELFCOST=(0     0        0        0        0         0        0         0        0        0)
-# owner's satisficing (321+): sg_tactics on the farm pair s07 ON vs
-# s06 OFF (crossed with interdose so each pair carries one variable).
-# Waypoint commitment = "is this route still good enough" at 10s holds.
-# tactics ADOPTED wave 327 (4-wave verdict 323-326: caps 9v3 on more
-# steals, led every wave). The owner's satisficing architecture -- the
-# largest doctrine effect ever measured here. s09 control stays clean.
 TACTICS=(1       1        1        1        1         1        1         1        0        1)
 
-# ------------------------------------------------------- doctrine flags
-# Adopted stack fleet-wide except s09 (the clean-control server: every
-# sg_ flag 0 -- the honest drift baseline the fixed format never had).
-# Per-server experiments get their own rows; keep each server's test
-# clean rather than each wave's.
 ADOPT_ON=( 1 1 1 1 1 1 1 1 0 0 )     # strictgrab/press/interpose/scoop/preturn/flycook/runetoss/soundfire/landlead
 COVER=(  800 800 800 800 800 800 800 800 0 0 )
 
-# SESSION SHAPE (judge set #3): human pub film has late joins, a leaver,
-# a refill; wave film had sixteen bots at t=0 and wall-to-wall presence,
-# and a judge sorted the corpus on exactly that. The film pair now fills
-# like a pub: 2v2 at the whistle, a body every ~70s to full, one leaves
-# at 7:30 and the seat refills a minute later. SAME schedule both arms --
-# the ramp is scenery, not a variable.
 STAGGER=(0       0        1        1        0         0        0         0        0        1)
 
 declare -a FLEET_PIDS
@@ -698,12 +294,6 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_approachcover ${APPCOVER[$i]}"
             } > "$GAMEDIR_ROOT/$GAME/$WCFG"
             if ((POV_SELECTED)); then
-                # This shell execs the supervisor, so pin the generation of
-                # its real Linux parent (the pipeline's waiting shell). Bash's
-                # PPID/$$ values are not the OS parent in a backgrounded
-                # pipeline. Read the parent PID from this shell's stat, then
-                # read the generation from the parent's own stat; parent and
-                # child can begin on adjacent clock ticks.
                 IFS= read -r self_stat < "/proc/$BASHPID/stat" || exit 2
                 self_tail=${self_stat##*) }
                 read -r -a self_fields <<< "$self_tail"

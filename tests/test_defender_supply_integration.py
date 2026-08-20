@@ -253,8 +253,8 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
                       arach)
         self.assertIn("tc.goal_field = weapon_target_field", arach)
         self.assertIn("tc.route_field = weapon_target_field", arach)
-        strike_start = arach.index("/* A below-tier member owns one exact")
-        strike_end = arach.index("Generic proof-line retry", strike_start)
+        strike_start = arach.index("int direct_flag_touch;")
+        strike_end = arach.index("goal_field = tc.goal_field;", strike_start)
         strike_route = arach[strike_start:strike_end]
         self.assertNotIn("tc.goal_field = sg_fields.item[SG_FC_WEAPON]",
                          strike_route)
@@ -278,10 +278,14 @@ class DefenderSupplyIntegrationTest(unittest.TestCase):
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
         items = (ROOT / "g_items.c").read_text()
+        start = goal.index("const int *SG_CollectibleHealthField")
+        end = goal.index("static qboolean DefenseSupplyFindTarget", start)
+        health_field = goal[start:end]
 
         self.assertIn("qboolean G_HealthPickupEligible", items)
         self.assertIn("if (!G_HealthPickupEligible(ent, other))", items)
-        self.assertIn("!G_HealthPickupEligible(item, bot->ent)", goal)
+        self.assertIn("SG_HealthClassRouteAdmission(", health_field)
+        self.assertIn("G_HealthPickupEligible(item, bot->ent)", health_field)
         self.assertIn("SG_CollectibleHealthField(bot)", arach)
 
     def test_ammo_surface_excludes_capacity_rejected_stacks(self) -> None:

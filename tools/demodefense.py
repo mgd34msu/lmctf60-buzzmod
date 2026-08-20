@@ -1,28 +1,9 @@
 #!/usr/bin/env python3
-"""demodefense.py -- what human defenders actually do, per map.
+"""Derive map-specific human defense behavior from demos.
 
-Reads the entity layer of every demo (all visible players, not just the
-POV -- same ruling as demoents.py), pins each player to a team from the
-CS_PLAYERSKINS table ("...\\male/rb-rm3" = red, "rb-b*" = blue), rebuilds
-the two flags' home/away timeline from the svc_print stream, and then
-answers three questions per map:
-
-  1. who was DEFENDING -- a player who spends more than --defshare of the
-     frames he is visible (while his own flag is at home) inside
-     --defradius units of his own flag stand;
-  2. where defenders DWELL -- the rune seeds those players stand still on,
-     ranked by occupancy seconds, thinned so two posts are never within
-     --postsep units of each other;
-  3. how they REACT to a steal -- for each "X stole the <color> flag"
-     print, the defender's next 10 seconds: how long before he leaves the
-     post, whether the gap to the carrier closes (chase), whether he
-     heads for the enemy base instead (cut-off), or whether he never
-     moves (hold).
-
-Output: tools/human/<map>.defense.json
-
-Usage:
-  demodefense.py --gamedir DIR --out DIR [--jobs N] [--map NAME] <demo> ...
+The tool identifies defenders from team skins and flag state, then measures
+stand occupancy and post-steal reactions. Output is identity-stamped development
+data for optional defense sidecars.
 """
 import struct, sys, os, re, json, math, glob, argparse, collections
 import multiprocessing as mp

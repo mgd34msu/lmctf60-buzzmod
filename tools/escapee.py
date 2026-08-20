@@ -1,24 +1,8 @@
 #!/usr/bin/env python3
-"""escapee.py -- flag-carrier escape trajectories, mapped onto rune seeds.
+"""Extract flag-carrier escape trajectories from LMCTF demos.
 
-For every flag steal print in a .dm2 demo, resolves the stealer's name to
-an entity number (via the playerskins configstrings) and cuts that
-entity's origin track for the next 200 demo frames (10Hz ~= 20s) or until
-a window-ender print names the same player -- a capture, a return, or a
-death obituary -- whichever comes first. Each cut track is mapped onto
-the nearest rune seed per frame (demorune's spatial-hash method) and the
-seed-to-seed transitions are counted. Counts are aggregated across the
-whole demo corpus, one output file per map.
-
-Entity-layer data is used from every demo, including ref-cam recordings:
-the owner's ruling is that game info from any camera is fair game (only
-POV kinematics are restricted to player-body recordings).
-
-Output: tools/human/<map>.escape.json = an identity-stamped corpus containing
-the map and active world/physics/seed identity, window count, and transition counts.
-
-Usage: escapee.py [--rune-dir DIR] [--out DIR] [--replace]
-                  <demo.dm2> [<demo.dm2> ...]
+Steal events open bounded carrier windows. Visible positions are localized to
+the map RUNE and aggregated into identity-stamped transition counts.
 """
 import argparse
 import collections

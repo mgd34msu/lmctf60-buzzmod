@@ -1,38 +1,6 @@
-// ctf_sqlite_player.c -- per-player SQLite backend.
-//
-// Reconstructed 2026-07. The original was compiled on 2020-07-28 but never
-// committed; only Debug/ctf_sqlite_player.obj survived. Every CREATE TABLE,
-// INSERT, SELECT and UPDATE below is the exact statement text recovered from
-// that object's string table, as are the function names and the two operator
-// messages. The bodies are new.
-//
-// Each player gets their own database file, so every table holds exactly one
-// row and the UPDATE statements carry no WHERE clause -- that is how the
-// original was written and the schema still reflects it.
-//
-// Differences from the 2020 original, all deliberate:
-//   - values are bound with sqlite3_bind_*, not pasted into the SQL with
-//     sprintf. A player named  Bob" or "1"="1  can no longer corrupt a write.
-//   - every sqlite3_stmt is finalised and every handle closed on all paths.
-//   - writes run inside one transaction, so a crash mid-save cannot leave a
-//     player half-written.
-//
-// This file intentionally does NOT use ctf_sqlite_core.h's db_stmt()
-// prepared-statement cache, unlike ctf_sqlite_unidb.c. That cache is safe
-// only when the cache variable and the sqlite3 connection it was prepared
-// against live for the same span of time -- see the banner on db_stmt() in
-// ctf_sqlite_core.h. Here they don't: CTF_LoadPlayer and CTF_SavePlayer
-// each open their OWN sqlite3 handle at the top of the call (a different
-// player's file, or the same player's file reopened later) and close it
-// before returning. A `static sqlite3_stmt *` cached across calls would
-// hold a handle bound to whichever connection was open the first time
-// through -- every later call, for every other player, would hand back a
-// statement pointing at a database file sqlite3_close() already tore down.
-// Every sqlite3_stmt in this file is also used exactly once per call (one
-// row per table, no batch loop), so there is no reset-per-row loop for
-// caching to speed up within a single call either -- the only place this
-// pattern could possibly pay off is across calls, which is precisely the
-// case that is unsafe here. Plain prepare-then-finalize stays correct.
+// Per-player SQLite backend.
+// Each call owns a short-lived connection, so statements cannot use the
+// connection-lifetime cache in ctf_sqlite_core.h.
 
 #include <string.h>
 #include <stdio.h>

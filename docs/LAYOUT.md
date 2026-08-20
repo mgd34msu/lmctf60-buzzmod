@@ -1,96 +1,46 @@
-# The screen budget: what the protocol actually gives us
+# Layout system
 
-Written 2026-08-12 from two ground-truth surveys: the yquake2 layout
-interpreter read from engine source (`docs/layout-isa.md`, the full
-token table with citations) and a complete inventory of this game
-DLL's current usage. Every number below is measured, not remembered.
+LMCTF UI code compiles bounded Quake II layout programs and serves them through
+shared caches. [`layout-isa.md`](layout-isa.md) documents the client protocol.
 
-The design this document dictated is now BUILT: the stat-slot registry
-(ui_stats.h), the bounded appender (ui_text), the layout compiler with
-its wire-budget enforcement (ui_layout), the density variant ladder
-(ui_layout_compile_ladder -- whole-screen downgrade, never partial
-truncation), and all three serving tiers (ui_boards: settled once per
-game, ticked 1 Hz dirty-gated, milestone immediate). Sections below
-describe the rationale; where they speak of the design as future work,
-read them as the reasons the code is shaped the way it is.
+## Limits
 
-## The hard numbers
+| Resource | Limit |
+|-|-|
+| Network message | 1400 bytes (`MAX_MSGLEN`) |
+| Client layout buffer | 1024 bytes |
+| Statusbar program | 1535 bytes |
+| Player stats | 32 signed 16-bit slots |
+| General configstrings | 512 slots of 64 bytes |
 
-| Resource | Limit | Consequence of exceeding |
-|---|---|---|
-| One layout update on the wire | **1400 bytes** (MAX_MSGLEN), no fragmentation | multicast: fatal server crash; unicast: the frame silently drops |
-| Client layout buffer | 1024 bytes | excess ignored |
-| Statusbar program (CS_STATUSBAR) | 1535 bytes (special multi-slot span) | — |
-| Player stats | 32 × 16-bit, delta-compressed per frame | 5 engine-reserved for HUD basics + 22 in use = **5 free slots** (27-31) |
-| General configstrings | **512 slots, all free**, live-updatable | — |
-| Ordinary configstring length | 64 bytes | — |
+A layout update shares its network message with the rest of the frame. UI code
+therefore uses a lower enforced budget and never relies on client truncation.
 
-## How the interpreter wants to be used
+## Components
 
-A layout string is a PROGRAM re-executed by the client every rendered
-frame. `num/hnum/anum` render live stat values; `stat_string`
-dereferences a configstring through a stat; `if <stat>` skips a
-following block when the stat is zero. Therefore:
+- `ui_stats.h` assigns stat slots in one registry.
+- `ui_text.c` provides bounded text assembly.
+- `ui_layout.c` compiles rows and cells, validates tokens, enforces the wire
+  budget, and selects a complete density variant. It never publishes a partial
+  screen.
+- `ui_boards.c` owns board data and cache lifetimes.
 
-- **Structure rides the layout; data rides stats and configstrings.**
-  Resend the program only when a screen's shape changes; scores,
-  timers, names, and conditional rows flow through the delta-compressed
-  stat pipeline (near-free) and configstring updates.
-- Layouts re-parse every frame with no client cache, so a configstring
-  update is visible immediately with zero layout resend.
-- The interpreter fails silent (bad tokens skipped, `if` is
-  non-nesting, numeric fields clamp width) — a compiler must validate
-  because the client never will.
+## Serving policy
 
-## What our current code does (the case for the builder)
+- **Settled boards** rebuild after the match-end statistics commit. One result
+  serves every viewer for the next map.
+- **Ticked boards** rebuild at most once per second when their input is dirty.
+- **Milestone boards** rebuild immediately for rare events such as captures and
+  match end.
 
-Ten hand-assembled producers, five different overflow-guard styles,
-and until today two producers with none: the menu system (unguarded
-strcat into 2000 bytes) and the MOTD screen (unguarded into 5000) —
-both now guarded at 1380, but the guard-per-producer pattern is the
-disease, not the cure. The boards cap themselves at 1024 (an arbitrary
-sub-limit leaving ~376 bytes unused), one board at 1000, comments in
-five places warn "it isn't that hard to overflow the 1400 byte
-message limit!", and menus silently truncate at a fixed 18 slots
-(paginated by hand where anyone noticed). Ping is repainted as literal
-layout text on every refresh instead of riding a stat slot. All of it
-is the same missing primitive.
+Layouts carry structure. Frequently changing values use stats or configstrings
+so the client can redraw without receiving a new program. Content too deep for
+one bounded passive screen belongs in console output rather than pagination.
 
-## The design the numbers dictate
+## Change rules
 
-1. **A stat-slot registry** (X-macro, like the cvar registry): 27-31
-   free today; the registry makes every allocation explicit and
-   collision-proof, and frees slots by moving layout-text data
-   (e.g. ping columns) onto stats where refresh is free.
-2. **A layout compiler**: screens declared as tables/rows/cells with
-   truncation priorities; the compiler emits tokens, enforces the
-   1380-byte wire budget (crash-proof by construction), and assigns
-   hot data to stats/configstring indirection. Boards NEVER paginate
-   (owner's ruling: page-flipping demands inputs a passive screen
-   does not own) -- density is absorbed by a variant ladder (full /
-   condensed / minimal formats, breakpoint-selected by roster size,
-   fit-verified by measurement, whole-screen downgrade never partial
-   truncation), and content too deep for any single screen belongs to
-   the console print stream, which composes across frames without
-   practical limit. Serving is push-on-change in three tiers, cheap
-   to expensive: SETTLED boards (season standings, records, lifetime,
-   activity) rebuild exactly once per game at the match-end stats
-   commit -- one DB query per map serves every viewer all match;
-   TICKED boards (in-match scoreboards) rebuild on a 1 Hz dirty-gated
-   coalescing tick; MILESTONE events (captures, match end, the match
-   report) push immediately, their rarity being their own rate limit.
-   Caches serve all requests instantly; match end fires the milestone
-   and settled tiers together. The pipe is asymmetric: the uplink is
-   free-form (any client command with arguments reaches our handler),
-   so request-driven DB reports are unlimited in what they ask -- only
-   the response must dress in the fixed vocabulary.
-3. **Configstring-backed dynamic text**: 512 free slots is a huge
-   untapped surface — team names, top-scorer lines, rotating info,
-   per-client strings via stat_string, all updatable without layout
-   resends.
-
-All of the above is implemented. What remains from the original
-design space, deliberately deferred rather than forgotten: the token
-peephole pass on compiled output, ping columns migrating from layout
-text onto stat slots, and per-viewer row highlighting on the settled
-boards (which needs stat-indirection to keep the shared cache).
+- Register new stat slots centrally and prove that indices do not collide.
+- Add tokens only when the client interpreter supports them.
+- Test the largest roster and longest values against the compiled byte budget.
+- Select full, condensed, or minimal variants as a whole.
+- Keep database queries out of per-viewer render paths.

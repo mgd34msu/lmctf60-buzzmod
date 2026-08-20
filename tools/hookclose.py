@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-"""
-hookclose.py -- did the rope actually PULL?
+"""Measure rope closure from paired hook diagnostics and SG telemetry.
 
-For every key/value HOOKFIRE ... HOOKEND pair, compare the bot's distance to the anchor in
-the SG telemetry sample immediately BEFORE the fire with the sample immediately
-AFTER the end.  A rope that attached overwrites velocity with a flat 800 u/s
-straight at the anchor (p_weapon.c:2088-2092), so a pull is unmistakable as
-closure.  A rope that never attached leaves the bot walking.
-
-'burst' / 'apex' / 'arrived' / 'landed' are known-pulled controls (the
-diagnostic terminal owners take those branches only after a live rope or
-completed reducer).  'noattach' is the population under test.
-
-Usage: hookclose.py <iter-dir> [...]
+Each completed fire/end pair compares the nearest telemetry samples before the
+fire and after termination. Malformed or globally invalid input fails closed.
 """
 import sys, os, math, glob, statistics
 from collections import defaultdict, Counter

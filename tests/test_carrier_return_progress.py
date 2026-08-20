@@ -17,7 +17,7 @@ def section(source: str, start: str, end: str) -> str:
 
 
 def cycle_route(links, costs, recent, shelved, alternate_only):
-    """Mirror the finite RUN selection required by Carrier_CycleRoute."""
+    """Mirror the finite RUN selection required by Objective_CycleRoute."""
     here = costs[0]
     choices = []
     for link, target, action in links:
@@ -49,14 +49,16 @@ def test_astray_selects_reachable_standoff_then_holds_only_at_cover():
     assert "goal_field[seed] < 600 || goal_field[seed] >= 2500" in cover
     assert "SG_CanSee(e, SG_Rune()->seeds[seed].origin, 22.0f)" in cover
     assert "if (distance > 1200.0f)" in cover
-    hold = section(DESCEND, "/*\n\t * HOLD SHORT OF AN UNCAPPABLE STAND", "/*\n\t * A railhold clock")
+    hold = section(DESCEND, "if (role == SG_ROLE_CARRY)",
+                   "if (bot->railhold_since > level.time")
     assert "rally_hold = cover >= 0;" in hold
     assert "bot->rally_cover = cover;" in hold
     assert "at_cover = (VectorLength(cvd) < 48.0f);" in MOVE
 
 
 def test_flag_return_clears_carrier_hold_and_resumes_homeward_route():
-    hold = section(DESCEND, "/*\n\t * HOLD SHORT OF AN UNCAPPABLE STAND", "/*\n\t * A railhold clock")
+    hold = section(DESCEND, "if (role == SG_ROLE_CARRY)",
+                   "if (bot->railhold_since > level.time")
     release = section(hold, "if (!ours_astray)", "else if (bot->seed")
     assert "bot->rally_cover = -1;" in release
     assert "rally_hold = false;" in release
@@ -67,9 +69,9 @@ def test_multiexit_cycle_prefers_nonrecent_unshelved_lower_cost_route():
         [(10, 1, "RUN"), (11, 2, "RUN"), (12, 3, "RUN")],
         [1000, 500, 400, 300], recent={1}, shelved={11}, alternate_only=True
     ) == 12
-    select = section(DESCEND, "static int Carrier_CycleRoute", "/*\n * THE COMMITMENT")
+    select = section(DESCEND, "static int Objective_CycleRoute", "static void StrikeWeaponPurposeClear")
     assert "cost >= here || Carrier_LinkShelved(bot, link) ||" in select
-    assert "Carrier_VisitedRecently(bot, candidate->to)" in select
+    assert "Objective_VisitedRecently(bot, candidate->to, goal_field)" in select
 
 
 def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
@@ -77,9 +79,10 @@ def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
     costs = [1000, 1100]
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=True) == -1
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=False) == 10
-    cycle = section(DESCEND, "/*\n\t * The wide-orbit detector", "/* Deaddoor")
-    assert "alternate = Carrier_CycleRoute(bot, goal_field, true);" in cycle
-    assert "alternate = Carrier_CycleRoute(bot, goal_field, false);" in cycle
+    cycle = section(DESCEND, "int cycle_link = bestlink;",
+                    "bot->visit_seed[bot->visit_head]")
+    assert "alternate = Objective_CycleRoute(bot, goal_field, true);" in cycle
+    assert "alternate = Objective_CycleRoute(bot, goal_field, false);" in cycle
     assert "memset(bot->bl_until, 0, sizeof(bot->bl_until));" not in cycle
 
 
@@ -89,10 +92,11 @@ def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=True) == -1
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=False) == -1
     assert cycle_route([(10, 1, "RUN")], [1000, 900], recent={1}, shelved={10}, alternate_only=False) == 10
-    select = section(DESCEND, "static int Carrier_CycleRoute", "/*\n * THE COMMITMENT")
+    select = section(DESCEND, "static int Objective_CycleRoute", "static void StrikeWeaponPurposeClear")
     assert "return finite_count == 1 ? finite_link : -1;" in select
     assert "candidate->from != bot->seed" in select
-    cycle = section(DESCEND, "/*\n\t * The wide-orbit detector", "/* Deaddoor")
+    cycle = section(DESCEND, "int cycle_link = bestlink;",
+                    "bot->visit_seed[bot->visit_head]")
     assert "A multi-exit fan with no safe alternate" in cycle
     assert "bestlink = -1;" in cycle
 
@@ -101,8 +105,8 @@ def test_carrier_screen_uses_the_accepted_moving_formation_by_default():
     cvars = (ROOT / "slipgate" / "sg_cvars.h").read_text()
     assert 'X(interpose, "sg_interpose", "3")' in cvars
     interpose = section(
-        GOAL, "THE INTERPOSITION (sg_interpose)",
-        "Escorting the HUMAN who said \"cover me\"")
+        GOAL, "int interpose_mode = SG_InterposeMode",
+        "if (ht && ht->inuse && ht->client && !ht->deadflag)")
     assert "SG_InterposeMode(sg_cv.interpose->value)" in interpose
     assert "if (interpose_mode == 3)" in interpose
     assert "else if (interpose_mode == 2)" in interpose

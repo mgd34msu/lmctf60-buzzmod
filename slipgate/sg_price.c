@@ -259,13 +259,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 			v = w->objective * ao * (float)goal_field[seed];
 	}
 
-	/*
-	 * THE SHELF PAYS ITS CLIFF (sg_shelfcost, steal-genesis study): an
-	 * attacker pricing a seed under the enemy stand pays the measured
-	 * climb-back asymmetry RL_DROP never charged. 101 attempts on that
-	 * floor, 91% dead in 1.2s, zero steals -- removing a zero-yield room
-	 * cannot cost caps. Zero everywhere on flat-stand maps.
-	 */
+	/* Charge attackers for the climb from a low shelf to the enemy stand. */
 	if (tc->role == SG_ROLE_ATTACK &&
 	    sg_cv.shelfcost->value > 0.0f)
 	{

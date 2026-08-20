@@ -33,7 +33,11 @@ class HumanSpeedIntegrationTest(unittest.TestCase):
         )
         marker_at = source.index(marker)
         think_at = source.index("ClientThink(e, cmd);", marker_at)
-        self.assertLess(think_at - marker_at, 160)
+        pending = source[marker_at + len(marker) : think_at]
+        self.assertNotIn("return;", pending)
+        self.assertNotIn("continue;", pending)
+        self.assertNotIn("as_landing_command", pending)
+        self.assertNotIn("ClientThink(", pending)
         self.assertIn("!proved_control && !door_hold", marker)
         self.assertEqual(
             source.count("SG_HumanSpeedLandingPrepare("),

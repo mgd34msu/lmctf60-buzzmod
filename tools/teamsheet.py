@@ -1,72 +1,10 @@
 #!/usr/bin/env python3
-"""teamsheet.py -- rung 4 (TEAM PLAY): a blind team-behavior sheet.
+"""Render comparable team-play sheets from LMCTF demos.
 
-Same blinding discipline as film.py, routesheet.py and fightsheet.py:
-identical extraction for client (human) and serverrecord (bot) demos, no
-durations, no roster counts, fixed geometry, constant axis scales.  See
-film.py's MODULE NOTES 1-11; notes 2, 7 and 10 apply here verbatim.  Nothing
-on the PNG reveals demo shape; the sidecar is the unblinding artifact.
-
-WHAT THIS SHEET ASKS: not "can this player fight" (rung 3) or "does this
-player navigate the map well" (rung 2), but does this TEAM play as a team --
-do teammates stay in supporting distance of each other, does a flag carrier
-get escorted home, is the home flag actually watched, and does an attack
-arrive as a coordinated push or as five separate solo runs.
-
-ZERO NEW DEMO PARSING.  Every panel here is built entirely from
-F.walk_demo's position stream (d['tracks']) and F.carry_windows' effects-bit
-flag-carry detection -- both already proven by film.py and routesheet.py.
-There is one extraction path and it is shared, so nothing here can be
-richer on one demo shape than on the other (L6).
-
-FLAG STAND POSITIONS.  film.py's walker tracks only player entities
-(entnum 1..maxplayers); the flag item entities are never captured, so there
-is no first-frame flag-entity position to read off the wire.  The stand
-position this module uses instead is F.flag_stands' existing estimate: the
-median (x, y) of this demo's own carry-start positions for that color --
-already computed and used by film.py's outcome classifier, reused here
-rather than re-derived.  That only gives an answer for a color that was
-actually stolen at least once in THIS demo.  When it wasn't (including the
-common case of zero steals of one color, or a demo with no carries at all),
-this module falls back to --stands, a JSON file of
-{"mapname": {"red": [x,y,z], "blue": [x,y,z]}}, and RAISES StandsMissing
-with a clear message identifying the map and the missing color(s) when
-neither source has an answer.  Panels 3 and 4 need both stand positions to
-mean anything (a defense radius around an unknown point, a push axis with
-one endpoint missing); panels 1 and 2 do not, but the sheet is refused as a
-whole rather than rendered with two panels silently blank, because a sheet
-some demos have a panel and some don't is exactly the kind of drawn-string-
-set asymmetry the leak checklist (L2/L3) exists to catch.
-
-REQUIRED PANELS, one figure per demo:
-  1. spacing      -- pairwise teammate distance, median + IQR band, per team,
-                      over normalized match time.
-  2. escort       -- carry windows plotted over time, colour = fraction of
-                      the window with a teammate within ESCORT_RADIUS of the
-                      carrier; companion bar shows the per-team mean.
-  3. defense      -- fraction of time each team has >=1 player within
-                      DEFENSE_RADIUS of its own flag stand, with steal/
-                      capture tick marks.
-  4. push sync    -- count of each team's players simultaneously on the
-                      enemy side of the axis connecting the two flag stands.
-
-FAIRNESS RULE (ABSOLUTE).  The caption may show ONLY: map name, an 8-char
-content hash of the demo file, and the count of carry windows -- the exact
-set film.py's own caption uses (see film.py's caption comment).  No
-duration, no player counts, no filenames, no population-conditional
-annotations: nothing whose presence or format differs between a bot and a
-human demo.
-
-CLI:
-    teamsheet.py <demo.dm2> [...] --out <dir> [--stands <file.json>]
-                 [--pov-parity [--pov-ent N] [--pov-radius U] [--pov-fov D]]
-    teamsheet.py <demo.dm2> [...] --scalars [--stands <file.json>]
-                 [--pov-parity] [--cache <path>]
-
-Writes <hash>.png (the sheet) and <hash>.json (source-mapping sidecar, NOT
-blind -- that file exists for the unblinding step only) per demo, hash-named
-by film.py's hash_demo so one demo carries one hash across every rung and a
-single unblinding table serves all of them.
+Panels measure spacing, carrier escort, home-stand coverage, and synchronized
+pushes from the shared position and flag-carry streams. Missing stand positions
+must be supplied by a map fixture. PNGs contain fixed-scale blind output; JSON
+sidecars retain source identities and derived scalars.
 """
 import argparse
 import collections
@@ -265,26 +203,7 @@ def bin_median_iqr(bins):
 
 
 def window_escort_fraction(w, posidx, teams, labels, radius=ESCORT_RADIUS):
-    """Fraction of `w`'s sampled carrier frames (w['path']) during which at
-    least one OTHER rostered player on the carrier's own team was sampled
-    within `radius` of the carrier.  Returns (fraction or None, total,
-    escorted, team) -- total/escorted are frame counts, kept so the
-    demo-level scalar can be a duration-weighted mean rather than a mean of
-    per-window fractions (a 2-second window and a 90-second window should
-    not count equally).
-
-    KNOWN DISTORTION, kept for the record rather than fixed in place (see
-    window_escort_fraction_obs below for the fix): `total` here is every
-    carrier-sampled frame, escorted or not, and a frame where the carrier
-    was sampled but no teammate's position was sampled ANYWHERE in the demo
-    (occluded, off the recorder's PVS, out of the bot pov-parity sphere --
-    the module cannot tell which) is silently counted in `total` and NOT in
-    `escorted`, i.e. scored as unescorted. Human demos hit this far more
-    than bot demos (real BSP occlusion vs a 900u distance sphere with no
-    occlusion at all), so this scalar deflates the human number specifically
-    rather than measuring escort behaviour on equal footing. This function
-    is left exactly as it was -- the Stage-A record above is keyed to this
-    exact number and must stay reproducible -- do not redefine it here."""
+    """Measure carrier frames with a nearby sampled teammate."""
     carrier = w['entnum']
     team = teams.get(carrier)
     mates = [n for n in labels if teams.get(n) == team and n != carrier]
@@ -306,23 +225,7 @@ def window_escort_fraction(w, posidx, teams, labels, radius=ESCORT_RADIUS):
 
 
 def window_escort_fraction_obs(w, posidx, teams, labels, radius=ESCORT_RADIUS):
-    """Same question as window_escort_fraction (is the carrier escorted),
-    but with an honest denominator: a carrier-sampled frame only counts
-    (in either the numerator or the denominator) when at least one of the
-    carrier's teammates was ALSO sampled somewhere in the demo at that same
-    frame -- i.e. the demo stream could, in principle, have shown a nearby
-    teammate at that instant. A frame where the carrier was sampled but no
-    teammate's position exists anywhere in the demo at that frame gives no
-    information about whether an escort was present (occlusion, PVS, or the
-    bot pov-parity sphere could each explain the absence) and is dropped
-    from both the numerator and the denominator, rather than being read as
-    "not escorted" the way window_escort_fraction reads it.
-
-    Returns (fraction_obs or None, total_obs, escorted_obs, implied_frames,
-    team). implied_frames is the window's nominal frame span (last sampled
-    carrier frame minus first, +1) -- what carry_coverage's denominator
-    uses, i.e. how many frames the window would have spanned under
-    continuous sampling regardless of what was actually captured."""
+    """Measure escort fraction only when at least one teammate is observable."""
     carrier = w['entnum']
     team = teams.get(carrier)
     mates = [n for n in labels if teams.get(n) == team and n != carrier]
@@ -355,29 +258,12 @@ def window_escort_fraction_obs(w, posidx, teams, labels, radius=ESCORT_RADIUS):
 
 
 def major_item_locations(mapname, gamedir, items_file):
-    """[(x, y, z), ...] major-item (mega health / body armor) origins for
-    `mapname`, plus a short provenance string.
+    """Return major-item origins and their provenance.
 
-    Primary source: the map's own BSP entity lump, read with mapflags.py's
-    existing read_game_file/bsp_entities/parse_ents (reused verbatim, not
-    re-implemented here -- the same rule resolve_stands already follows by
-    reusing F.flag_stands rather than re-deriving flag positions).
-    Requires --gamedir, a Quake2 game directory containing
-    maps/<mapname>.bsp, loose or inside a .pak (mapflags.read_game_file
-    checks both, later pak wins, matching the engine's own search order).
-
-    Fallback: --items, a JSON file of {mapname: [[x,y,z], ...]}, for a map
-    whose BSP is unavailable. That is NOT the same case as a map whose BSP
-    IS available but simply has no item_health_mega/item_armor_body
-    entity in it at all -- lmctf22 is exactly this case (confirmed by
-    running this function against it; see the measurement note at the
-    bottom of this file). A map with zero major items is a real map fact,
-    not a missing-data gap --items can fix, and is reported as a distinct
-    'none: bsp read but no major item entity' reason rather than silently
-    falling through to --items and reading as "nobody supplied it".
-
-    Returns (locations, source) where source is 'bsp', 'items-file', or a
-    'none: ...' string naming why neither source had an answer."""
+    The BSP entity lump is authoritative when available. The JSON fallback is
+    used only when the BSP cannot be read; an available BSP with no major item
+    is a valid empty result.
+    """
     if gamedir:
         try:
             data = MF.read_game_file(gamedir, f'maps/{mapname}.bsp')
@@ -404,22 +290,7 @@ def major_item_locations(mapname, gamedir, items_file):
 
 
 def _item_take_events(loc, tracks, labels, radius=ITEM_PICKUP_RADIUS):
-    """Probable-take moments (seconds) for one major-item location: a
-    maximal run of consecutive-frame samples, from ANY rostered player on
-    either team, within `radius` of `loc`, that is followed by a sampled
-    frame OUTSIDE `radius` for that same player -- the 'dwelling ... then
-    leaving' signal the design brief specifies. t_take is the episode's
-    FIRST frame, not its last: the item is claimed on contact, so the
-    entry frame is the closer approximation of the true touch instant;
-    'leaving' is only used to CONFIRM the episode was a real visit rather
-    than a still-in-progress approach the track happens to end during (a
-    dangling episode still `in_radius` at the track's last sample is
-    dropped, not promoted to a take on a guess).
-
-    Episodes from DIFFERENT players that start within ITEM_TAKE_MERGE_S of
-    each other are merged into one take event (earliest start kept) -- a
-    contested pickup with two players in the area at once must not read
-    as two independent respawn cycles."""
+    """Infer major-item take times from completed in-radius visits."""
     raw = []
     r2 = radius * radius
     for n in labels:
@@ -457,40 +328,7 @@ def item_pre_respawn_windows(take_times, respawn_s=MAJOR_ITEM_RESPAWN_S,
 
 
 def major_item_scalars(tracks, teams, members, locations, radius=MAJOR_ITEM_RADIUS):
-    """EYE 1 (gates the item-timing dark feature -- see the measurement
-    note at the bottom of this file for the exact match/mismatch against
-    TRIALS.md's own sg_clockplay entry, which as written models score/
-    clock-margin posture, not item timing; this eye was built to the
-    brief given to this module, and that naming tension is reported rather
-    than papered over).
-
-    Returns (major_item_presence, major_item_presence_dwell_overall,
-    n_locations, n_take_events):
-
-    major_item_presence -- the PRIMARY number. For each major-item
-    location, build its own pre-respawn windows (item_pre_respawn_windows)
-    from take events observed AT THAT LOCATION; within those windows only,
-    accumulate per team how many sampled player-frames were within
-    `radius` of that item (numerator) against every sampled player-frame
-    that fell in one of that item's own windows regardless of distance
-    (denominator). Multiple major-item locations are POOLED BY SUMMING
-    their counts -- the same pooling compute_scalars already uses for
-    escort_fraction's tot/esc across every carry window in a demo,
-    regardless of which carrier produced it. Per-team fractions are then
-    averaged unweighted into one demo-level number, mirroring how
-    compute_scalars' defense_fraction averages defense_frac_overall across
-    TEAMS -- consistent treatment for two scalars asking the same shape of
-    question ('what fraction of team X's time was spent doing Y').
-
-    major_item_presence_dwell_overall -- the FALLBACK proxy, computed
-    unconditionally alongside the primary number rather than only when
-    asked for: fraction of a team's TOTAL player-time (the whole capped
-    demo, no take/respawn inference at all) spent within `radius` of ANY
-    major-item location (a single per-frame minimum-distance check, so a
-    player near two items at once is not double-counted the way the
-    windowed primary's sum-across-locations pooling would double-count
-    it). This is the number the module docstring's escape hatch points to
-    if the take/respawn inference above proves too noisy to trust."""
+    """Measure team presence during inferred major-item respawn windows."""
     r2 = radius * radius
 
     win_num = {t: 0 for t in TEAMS}
@@ -538,33 +376,7 @@ def major_item_scalars(tracks, teams, members, locations, radius=MAJOR_ITEM_RADI
 
 def postspawn_heading_consistency(tracks, labels, window_s=POSTSPAWN_WINDOW_S,
                                   min_frames=POSTSPAWN_MIN_FRAMES):
-    """EYE 2 (gates sg_spawnbeat). Per-demo mean of (net displacement /
-    path length) over the first `window_s` seconds after each detected
-    respawn, pooled across every rostered player -- 1.0 is a straight
-    beeline away from the landing spot, low is doubling back or standing
-    and turning ('wander'). Returns (mean or None, n_events).
-
-    Respawn moments are F.death_ticks' own teleport-jump detector (already
-    proven by the kinematic strip and classify_outcome, ZERO NEW PARSING
-    per this module's own rule) -- the frame where a track's position
-    jumps by more than F.TELEPORT_UNITS on a single consecutive-frame step
-    is read as the landing frame of a new life, the same convention every
-    other consumer of death_ticks in this toolbox uses. This also fires on
-    a map-opening spawn this module never saw a preceding death for; that
-    life still begins somewhere the player could not have pre-planned a
-    heading for, so it is kept rather than filtered on unavailable death
-    evidence.
-
-    The window is walked frame-by-frame from the landing frame and CUT
-    SHORT at the first non-consecutive frame gap or the first jump beyond
-    TELEPORT_UNITS (a life that ends again inside the 3-second window has
-    no intact 3-second path to measure) -- whatever was captured before
-    the cut still counts, as long as it clears min_frames. A life that
-    dies again, or goes unobserved, before min_frames of clean path exist
-    is dropped rather than scored on 1-2 samples, where the ratio is close
-    to structurally 1.0 or undefined regardless of intent -- the same
-    trade window_escort_fraction_obs makes when it drops an unobservable
-    frame instead of guessing at it."""
+    """Measure straight-line displacement over each observable post-spawn window."""
     window_frames = int(round(window_s * F.FPS))
     ratios = []
     for n in labels:
@@ -768,26 +580,7 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
                  pov_fov=F.POV_FOV_DEG_DEFAULT, stands_file=None,
                  escort_radius=ESCORT_RADIUS, defense_radius=DEFENSE_RADIUS,
                  gamedir=None, items_file=None):
-    """Everything --scalars and the renderer both need, computed once.
-
-    Control flow mirrors F.render_sheet's / routesheet.analyze_demo's /
-    fightsheet.analyze_demo's exactly -- refuse, cap, anonymize, parity-
-    filter, re-anonymize -- because that ordering was debugged there and
-    re-deriving it would be a good way to reintroduce a fixed bug.
-
-    escort_radius/defense_radius default to the sheet's own fixed instrument
-    constants and only ever move away from them inside --calibrate's
-    +/-100u radius-stability check (run_calibration below); render_team_sheet
-    never passes anything but the defaults, so what gets drawn on a PNG is
-    never a function of a calibration run (L7/L8 still hold).
-
-    gamedir/items_file feed EYE 1 (major_item_presence) only -- see
-    major_item_locations. Neither is drawn on any panel (FAIRNESS RULE),
-    so a demo analyzed without either still renders and scores normally;
-    major_item_presence and major_item_presence_dwell_overall simply come
-    back None (this map's major-item locations are unknown), the same
-    "None means unavailable, not zero" convention every other optional
-    scalar in this module already follows."""
+    """Decode, cap, anonymize, parity-filter, and summarize one demo."""
     d = F.walk_demo(demo_path)
     uncapped = d['frames'] / F.FPS
     if uncapped < F.DURATION_MIN_S:
@@ -1265,24 +1058,7 @@ def collect_scalars(paths, pov_parity, escort_radius, defense_radius,
 def run_calibration(human_paths, bot_paths, escort_radius, defense_radius,
                     stands_file, stands_path, cache, maps=None,
                     gamedir=None, items_file=None, items_path=None):
-    """Stage A of the design's two-stage gate, ported from fightsheet.py's
-    run_calibration with the same math (RS.roc_auc, same separability
-    definition) and the same rationale: the instrument has to prove it has
-    power on data where the answer is known before it is allowed to certify
-    anything.
-
-    pov-parity is forced ON for the bot arm (L5): without it the bot side is
-    an omniscient recording and any separation could be coverage rather than
-    behaviour.  Unlike fightsheet.py, the radius knob under test here is not
-    the pov-parity radius (left at F.POV_RADIUS_DEFAULT throughout) but
-    escort_radius/defense_radius -- the two thresholds panels 2 and 3
-    actually draw with -- because those are this sheet's own free
-    parameters, the ones a Stage-A run has to show are not doing the
-    separating by themselves.
-
-    gamedir/items_file feed EYE 1 only, identically on both arms (same
-    map, same BSP, so the item locations an arm gets are never a function
-    of demo shape)."""
+    """Measure whether the fixed team instrument separates a labeled calibration set."""
     hr = collect_scalars(human_paths, False, escort_radius, defense_radius,
                          stands_file, stands_path, cache, maps=maps,
                          label='human', gamedir=gamedir,
@@ -1314,7 +1090,7 @@ def run_calibration(human_paths, bot_paths, escort_radius, defense_radius,
     return out
 
 
-def print_calibration(res, title='STAGE A'):
+def print_calibration(res, title='CALIBRATION'):
     print(f"\n=== {title}: maps={','.join(res['maps']) or '(none shared)'} "
          f"n_human={res['n_human']} n_bot={res['n_bot']} ===")
     print(f"{'scalar':30s} {'human_mean':>11s} {'bot_mean':>11s} "
@@ -1338,7 +1114,7 @@ def print_calibration(res, title='STAGE A'):
              f"(separability {best[1]:.3f}, {direction}, "
              f"{SCALAR_PANEL[best[0]]})")
         gate = 'PASS' if best[1] >= 0.85 else 'FAIL'
-        print(f"Stage A gate (separability >= 0.85 on at least one "
+        print(f"calibration gate (separability >= 0.85 on at least one "
              f"scalar): {gate}")
     hot = [k for k in SCALAR_KEYS
           if (res['auc'][k]['separability'] or 0) >= 0.95]
@@ -1386,7 +1162,7 @@ def main():
                     help='parse cache for --scalars, keyed on file path, '
                          'mtime, size and parity/stands settings')
     ap.add_argument('--calibrate', action='store_true',
-                    help='Stage A gate: run the instrument over a labeled '
+                    help='calibration gate: run the instrument over a labeled '
                          'known-set and report ROC AUC per scalar. Renders '
                          'nothing and never writes a label onto any sheet.')
     ap.add_argument('--human', nargs='+', default=[DEFAULT_HUMAN_GLOB],
@@ -1433,7 +1209,7 @@ def main():
                                       gamedir=args.gamedir,
                                       items_file=items_file,
                                       items_path=args.items)
-                print_calibration(alt, title=f'STAGE A (escort {er2:.0f}u, '
+                print_calibration(alt, title=f'CALIBRATION (escort {er2:.0f}u, '
                                              f'defense {dr2:.0f}u)')
                 print("  radius-perturbation swing vs baseline:")
                 for k in SCALAR_KEYS:

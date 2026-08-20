@@ -239,13 +239,7 @@ void Victory(void)
         level.sweeps_awarded = true;
     }
 
-    // Record the match. Done after the sweep award above so the per-player rows
-    // carry the sweep, and before matchstate flips to MATCH_OVER so stats_get
-    // still returns real numbers.
-    // Victory() runs from Match_End AND again from BeginIntermission when the
-    // ended match reaches the scoreboard -- the sweep award above always had
-    // its once-guard, this block never did, and every tourney match wrote its
-    // matches/match_players rows twice (owner-ordered fix, 2026-08-05).
+    // Record once after sweep awards and before MATCH_OVER hides live stats.
     if (!level.match_recorded && CTF_StatsDBMode() == CTF_STATSDB_UNIFIED) {
         int winner_team = CTF_TEAM_UNDEFINED;
         int db_match_id;

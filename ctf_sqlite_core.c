@@ -1,7 +1,4 @@
-// ctf_sqlite_core.c -- primitives shared by the two stats backends.
-//
-// See ctf_sqlite_core.h for why this file exists and what it deliberately
-// changes versus the two private copies it replaces.
+// SQLite primitives shared by the two stats backends.
 
 #include <string.h>
 #include <stdio.h>
@@ -59,10 +56,7 @@ qboolean db_open_tuned(const char *path, int flags, sqlite3 **out)
 
 	if (ok)
 	{
-		// keep a crash from truncating the file mid-write. Applied on every
-		// tuned open, load or save, per-player or unified -- see the banner
-		// in ctf_sqlite_core.h for why the per-player backend didn't have
-		// this before.
+		/* Use crash-tolerant settings for both stats backends. */
 		db_exec(db, "PRAGMA journal_mode=WAL;");
 		db_exec(db, "PRAGMA synchronous=NORMAL;");
 	}

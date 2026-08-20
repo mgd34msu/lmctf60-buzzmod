@@ -1,7 +1,6 @@
 # yquake2 svc_layout / statusbar protocol — capability reference
 
-Engine tree surveyed: `/home/buzzkill/Games/Quake2/engines/yquake2/`
-All citations are `file:line` against that tree, current checkout.
+All citations are `file:line` paths in the surveyed yquake2 source tree.
 
 ## 1. Layout-string interpreter token vocabulary
 

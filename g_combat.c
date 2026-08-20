@@ -615,15 +615,7 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 	if (!(dflags & DAMAGE_NO_PROTECTION) && CheckTeamDamage(targ, attacker))
 		return;
 
-	// BUZZKILL - ADVANCED ANALYTICS - START
-	//
-	// This used to read attacker->client->pers.weapon->classname with no null
-	// check, and pers.weapon is null often enough that the rest of the codebase
-	// tests it. It also attributed the hit to whatever the attacker happened to
-	// be holding at the moment the damage landed, so a rocket still in flight
-	// while its owner switched to the railgun was recorded as a rail hit.
-	// Attribution now comes from the means of death, which describes what
-	// actually did the damage.
+	/* Attribute the hit to its means of death, not the current held weapon. */
 	if (attacker && attacker->client && attacker != targ &&
 		damage > 0 && mod != MOD_TELEFRAG)
 	{
@@ -652,19 +644,13 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 
 		targ->health = targ->health - take;
 
-		// BUZZKILL - SLIPGATE accuracy telemetry: one call where damage
-		// actually lands, so fires-vs-hits means what it says
+		// Record accuracy only after damage lands.
 		SG_CombatHit(attacker, targ);
 
-		// BUZZKILL - SLIPGATE: the hit sense. A bot shot by someone it
-		// cannot see learns it here or nowhere; every test that decides
-		// whether the hit means anything is on the slipgate side
+		// Publish the hit to SG perception after damage lands.
 		SG_NoteDamage(targ, attacker, take, mod, dir);
 
-		/* DMG census (sg_debug, telemetry grant 2026-08-03): the true
-		 * damage ledger at the one site where it lands -- attacker,
-		 * victim, amount, mod, carrier state, both airborne states,
-		 * and range. Observation only; the game plays identically. */
+		/* Debug damage telemetry records the committed hit. */
 		if (sg_cv.debug->value && client &&
 		    attacker && attacker->client)
 		{

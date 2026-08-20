@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
-#
-# aux2.sh <name> -- auxiliary 4-server side-fleet (owner-ordered,
-# 2026-08-04): knocks out the 2v2 duel-roles revisit and the nadelead
-# A/B in parallel with the main fleet. Ports 28530-28533, same process
-# discipline as iterate2.sh (per-server cfg, defused maplist, stagger,
-# PID-safe). Runs alongside the main 10 -- additive, never replacing.
-#
-#   a1: 2v2 lmctf03 duelroles ON     a2: 2v2 lmctf03 duelroles OFF
-#   a3: 5v5 lmctf09 nadelead ON      a4: 5v5 lmctf09 nadelead OFF
-#
-# 2v2 games run 20 minutes (duel steals are rare; sample needs time).
+# Launch the four-server auxiliary development wave.
+# Usage: aux2.sh <wave-name>
 
 set -u
 
@@ -24,12 +15,6 @@ NAME="$1"
 LOG_DIR="$SCRIPT_DIR/aux-$NAME"
 mkdir -p "$LOG_DIR"
 
-# duel verdict in (7-0, adopted): a1/a2 repurposed to the carrier-cover
-# revalidation (last broken-era adoption unchecked). a1 cover 800 ON,
-# a2 cover 0 -- the only pair anywhere with cover OFF.
-# cover reval closed (survives, stays 800); nadelead adopted (zero
-# cost). Aux decomposes the defense package: which half concedes?
-#   a1 defpost-only  a2 defreact-only  a3 both  a4 neither
 LABELS=(a1-5v5-post  a2-5v5-react a3-5v5-both  a4-5v5-none)
 MAPS=(  lmctf22      lmctf22      lmctf22      lmctf22)
 FILLS=( "5"          "5"          "5"          "5")

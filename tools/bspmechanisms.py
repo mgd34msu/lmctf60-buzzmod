@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
-"""Deterministic Quake II BSP entity/mechanism inventory.
+"""Inventory deterministic Quake II BSP entities and mechanisms.
 
-The tool is deliberately offline: it records the entity activation graph that
-the game will construct, but it does not claim that a graph edge is traversable
-by a bot.  Asset lookup reuses :mod:`mapflags`, including Yamagi's
-package-before-loose search path and CRC-qualified
-``maps/<map>@<crc>.ent`` preference.
-
-Usage::
-
-    tools/bspmechanisms.py --format json /path/to/game
-    tools/bspmechanisms.py --format tsv maps/foo.bsp maps/bar.bsp
-
-Directories may be a game directory, its ``maps`` directory, or any directory
-containing loose BSP files.  JSON contains full per-entity detail; TSV is a
-stable summary table with one aggregate row followed by one row per map.
+The tool resolves loose and packaged map assets through mapflags. It records
+activation topology but makes no claim that a mechanism is bot-traversable.
+JSON contains entity detail; TSV contains stable map summaries.
 """
 
 from __future__ import annotations

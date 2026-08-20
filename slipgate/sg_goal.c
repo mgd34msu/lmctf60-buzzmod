@@ -32,18 +32,7 @@ static int intercept_field[SG_MAX_SEEDS];
 #define SG_MEGA_BACKOFF		20.0f   /* ...and the refusal after, the pad's own
                                      * respawn (SetRespawn 20, g_items.c:596) */
 
-/*
- * Intercept micro-positioning: being ON the carrier's escape line is the
- * naive hold -- it closes at rope speed and blocks your own team's shots.
- * The right ground sits ACROSS the motion: off the axis (the carrier
- * crosses the view laterally instead of head-on), above it (a missed
- * rocket still splashes the floor, and escape ropes mostly pull UP), and
- * beside a narrow crossing (few links out = a corridor the projection
- * says they must thread, where speed stops helping them). Scored over
- * the projection set's members and their link-neighbors; the axis is the
- * set's own deepest-to-shallowest line. Falls back to the projected seed
- * itself when the set is degenerate.
- */
+/* Prefer elevated lateral choke points across the carrier's projected route. */
 #ifdef SG_GOAL_TEST
 #define SG_GOAL_PRIVATE
 #else
@@ -214,37 +203,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	    tc->strike_active, tc->strike_pressure,
 	    role == SG_ROLE_ATTACK, goal_ms);
 
-	/*
-	 * THE RALLY. Arrival measurements show three quarters of all attacks
-	 * reach the enemy base ALONE -- one body against three or more armed
-	 * defenders at the stand, dead every time, which is why floors sit
-	 * under 300 while steals remain rare. An attacker in the
-	 * approach band (2-5s of field) with no partner inside 6s and at
-	 * least two enemies believed alive holds its ground -- twelve
-	 * seconds at most, gone the moment a mate closes or the wait times
-	 * out. Solo pushes still happen; they just stop being the ONLY kind.
-	 */
-	/*
-	 * THE CONDUCTOR (sg_wavepush). The rally waits for
-	 * partners; the conductor makes partners exist. Once every 40
-	 * seconds, when three or more attackers are alive and the nearest
-	 * is within striking range, the team calls a downbeat: a 12-second
-	 * window in which every rally releases at once and item detours
-	 * stop pulling attackers sideways. Arrivals stack into a coordinated push --
-	 * the census's 75-percent-alone number is the target -- and the
-	 * respawn-surge rule still cancels every wait it ever cancelled.
-	 */
-	/*
-	 * THE BROADCAST SURGE. A clock-driven metronome reduced steals from
-	 * 2.2 to 1.3 in pooled measurements: a downbeat on a clock suppresses the
-	 * organic rally pairing and marches under-armed groups into rooms
-	 * that were never thin. The surge rule was always the true clock --
-	 * a defender dead near their own stand IS the window -- but it
-	 * released only the one attacker who happened to be in the band.
-	 * Now the kill rings the whole team's bell: every rally releases
-	 * into the same respawn-wide window, detours pause only during the
-	 * eight seconds the window is actually open.
-	 */
+	/* A recent enemy-room death releases every approach-band attacker. */
 	/* A strike frame owns HOLD/RUSH.  Keep the legacy conductor and rally out
 	 * of that decision, but do not skip the independent live-enemy approach
 	 * action below merely because the coordinator supplied the route. */
@@ -279,17 +238,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	{
 		int bi, mates_near = 0, mates_coming = 0;
 
-		/*
-		 * First cut waited only when two enemies were freshly SEEN and
-		 * gave up after 12s -- but an attacker sneaking in alone has
-		 * usually seen nobody, and a trailing mate 8-12s of field back
-		 * cannot close inside the cap; the long cap paired almost nothing.
-		 * The census already proved solo arrival means death against
-		 * ANY defense, so the belief gate is gone. Wait exactly when a
-		 * partner is genuinely en route (inside 14s of field), as long
-		 * as it takes them to close -- capped at 20s -- and push solo
-		 * without ceremony when nobody is coming at all.
-		 */
+		/* Wait only for a live teammate that can reach the approach band. */
 		for (bi = 0; bi < SG_MAXBOTS; bi++)
 		{
 			sg_bot_t *mb = &sg_bots[bi];
@@ -309,23 +258,10 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			if (mate_goal < 6000)
 				mates_near++;
 			else if (mate_goal < 20000)
-				/* THE APPEAL. The 20s horizon reduced steals from 1.6 to 1.0
-				 * per measurement interval and was shrunk to a 6s sync --
-				 * but that comparison ran in the corpse-wait era, when a
-				 * 'partner en route' was usually a body that would never
-				 * stand up. Bots respawn now; partners genuinely arrive.
-				 * Retried at the full horizon on fresh evidence. */
 				mates_coming++;
 		}
 		{
-			/*
-			 * THE SURGE: a defender dead near their own stand opens a
-			 * respawn-wide window, and traces show the thief dying
-			 * 3-5 seconds after the grab to the respawn stream -- the
-			 * window is the only time the room is thin. A fresh enemy
-			 * death (< 6s) within 1200 of the enemy flag cancels the
-			 * wait: push NOW, paired or not.
-			 */
+			/* A recent death near the stand cancels the rally wait. */
 			edict_t *ef = SG_FlagStand(team, false);
 
 			if (ef && SG_EnemyRoomDeathKnown(team, ef->s.origin,
@@ -341,18 +277,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 			{
 				int best_cover = Rally_CoverSeed(SG_Rune(), bot->seed);
 
-				/*
-				 * Seven paired pushes on lmctf09 stole
-				 * nothing: the waiter froze wherever the band caught it,
-				 * mid-corridor, lit, and the pairing died before it
-				 * formed. The rune has measured exposure since the
-				 * generator's census pass -- the wait belongs at the
-				 * darkest seed within reach. "Reach" here is now current
-				 * ground or one proved ordinary RUN. The former all-seed
-				 * radius search could select cover through a wall or across
-				 * a mechanism, then spend the whole synchronization window
-				 * walking into it. With no proved cover, keep attacking.
-				 */
+				/* Rally cover is the current seed or one proved RUN away. */
 				bot->rally_cover = best_cover;
 				if (best_cover >= 0)
 					SG_Mark(&bot->rally_since);
@@ -379,11 +304,7 @@ rally_done:;
 	else if (!tc->strike_active)
 		bot->rally_since = 0.0f;
 
-	/* THE FLYING COOK.  The strike coordinator replaces only rally timing;
-	 * BREACH/CLEAR/PRESS still need this live-enemy arm in the same two-to-five
-	 * second band.  Keeping it outside the legacy rally branch lets effective
-	 * pressure override organic RECOVER/ESCORT without granting the action to a
-	 * concrete recovery or escort duty. */
+	/* Strike pressure shares this live-enemy approach action. */
 	if (pressure_approach && sg_cv.flycook->value &&
 	    !bot->jump_started && !bot->drop_started &&
 	    bot->hook_phase == 0 && bot->rj_phase == 0 &&
@@ -428,10 +349,7 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
                                 sg_role_t role, int team,
                                 qboolean carrying)
 {
-	/* carry bookends: the STATE here is game logic, not telemetry -- the
-	 * breakout gauge and the progress guard read it whether or not anyone
-	 * is watching (it once lived inside the debug gate, which
-	 * would have blinded both on any quiet server) */
+	/* Carry state is game logic and must not depend on debug output. */
 	if (carrying && !bot->was_carrying)
 	{
 		SG_Mark(&bot->carry_start);
@@ -507,12 +425,7 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 		if (carrying && !bot->was_carrying)
 		{
 			sg_host.dprint("CARRY %s begins\n", e->client->pers.netname);
-			/* the grab's honesty, on the record: how many defenders
-			 * the last census believed present, and whether the
-			 * patience valve had already expired (a FORCED grab into
-			 * a room the hold never cleared). If parity grabs are
-			 * ~all forced, the strict hold never wins at parity and
-			 * the doctrine pivot is evidence, not taste. */
+			/* Record defender belief and whether the hold expired. */
 			sg_host.dprint("GRABMODE %s room=%d %s\n",
 			           e->client->pers.netname, bot->last_room,
 			           (bot->strict_since > 0.0f &&
@@ -1414,23 +1327,10 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 	sg_combat_weapon_state_t weapon_state;
 	qboolean supply_active;
 
-	/*
-	 * The role row is a BIAS, not an absolute. What an item is actually worth
-	 * to THIS bot right now -- health as its own health drops, armour by
-	 * deficit, a weapon when it has none worth the name, ammo against the
-	 * floor of the weapon it holds, the quad against its respawn clock, a rune
-	 * it is allowed to pick up -- is state, and SG_CombatWeights supplies it
-	 * from WEAPONS.md 2.3. Every worth there is derived from a cited line of
-	 * this tree; the row below stays exactly as fitted and is multiplied
-	 * through. The result is clamped to the same [0, 2.0] the detour decay's
-	 * 1500 ms scale (Detour_Value, above) makes meaningful.
-	 */
+	/* Combine the fitted role row with current inventory and combat demand. */
 	SG_CombatWeights(e, Weights_Row(role), live);
 
-	/* A rank-zero watchman gets one bounded, weapon-only supply sortie.  The
-	 * state read is the live inventory predicate from sg_combat, while the
-	 * route and deadline are explicit here so a generic item-weight threshold
-	 * cannot turn the post into an unbounded shopping walk. */
+	/* A rank-zero watchman may take one bounded weapon-supply sortie. */
 	supply_active = SG_DefenseSupplyActive(bot);
 	if (!SG_CombatWeaponState(e, &weapon_state))
 	{
@@ -1498,10 +1398,7 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 	{
 		int target_ent = -1, target_seed = -1, route_ms = SG_FIELD_INF;
 
-		/* The exact live pad is selected once at arm time.  Its per-bot flood
-		 * owns the route; the broad class field was only the bounded arm/reach
-		 * gate.  This identity witness tells us whether acquisition happened or
-		 * the selected pad disappeared. */
+		/* The selected live pad owns the outbound route until its deadline. */
 		if (DefenseSupplyFindTarget(bot, &target_ent, &target_seed, &route_ms))
 		{
 			int bi = DefenseSupplyBotIndex(bot);
@@ -1531,13 +1428,7 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 		if (live->item[SG_FC_AMMO] < 0.90f)
 			live->item[SG_FC_AMMO] = 0.90f;
 	}
-	/*
-	 * Rune threat (WEAPONS.md 2.4-D4, the honest half): a sighted enemy
-	 * glowing with RF_GLOW (p_view.c:792-794) holds SOME rune -- the glow
-	 * never says which, so this is a generic bump to how much OUR side
-	 * should want rune-class pickups, not the dossier's Damage-specific
-	 * Resist play, which is unknowable from a sighting.
-	 */
+	/* RF_GLOW proves a rune exists but does not identify its type. */
 	{
 		int s;
 
@@ -1548,10 +1439,7 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 			if (en->client >= 0 && en->runed &&
 			    SG_AgeUnder(en->seen_time, 15.0f))
 			{
-				/* generic: someone glows, runes matter more. When the
-				 * inference chain can NAME the Damage rune in enemy
-				 * hands, the dossier's full Resist posture applies
-				 * (WEAPONS.md 2.4-D4: x1.80). */
+				/* A known Damage rune earns the stronger response. */
 				live->item[SG_FC_RUNE] *=
 				    Caco_EnemyHasDamageRune(team) ? 1.80f : 1.45f;
 				if (live->item[SG_FC_RUNE] > 2.0f)
@@ -1594,15 +1482,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
 		                                    : sg_fields.to_blue_flag;
 
-		/*
-		 * FIELD-MODE DEFENSE (dose 3+). The pricing bias (doses
-		 * 1-2) read null, as the extraction predicted: it bends wandering
-		 * instead of choosing a post. Field mode CHOOSES: the defender's
-		 * whole goal becomes the corpus's top post seed (the existing
-		 * near-goal hold then keeps it there), and while our flag is
-		 * astray the goal becomes the top intercept seed -- the human
-		 * response's END position, not the carrier's current one.
-		 */
+		/* Field mode selects the learned post or intercept field directly. */
 		if (role == SG_ROLE_DEFEND)
 		{
 			qboolean astray =
@@ -1643,18 +1523,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		        : (team == CTF_TEAM_RED ? sg_fields.to_red_flag
 		                                : sg_fields.to_blue_flag));
 
-		/*
-		 * THE SCOOP (sg_scoop). Across sixty-two parity drops,
-		 * defense returned thirty-four, we re-scooped three. The
-		 * dropped flag is a live steal lying on the ground for up to
-		 * thirty seconds, the escort is standing beside the corpse --
-		 * and it keeps descending a dead carrier's field while a
-		 * defender walks over and touches the flag home. No live
-		 * carrier plus enemy flag astray: the escort takes the
-		 * attacker's -now field, which floods from the believed drop
-		 * spot. First body to the flag wins the relay; ours is
-		 * closest by construction.
-		 */
+		/* An escort pursues a dropped enemy flag when no carrier remains. */
 		if (sg_cv.scoop->value &&
 		    sg_caco_team_belief.carrier[SG_TeamIdx(team)].client < 0 &&
 		    sg_caco_team_belief.flag[SG_TeamIdx(team)]
@@ -1668,18 +1537,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				sg_host.dprint("SCOOP %s\n", e->client->pers.netname);
 		}
 
-		/*
-		 * THE INTERPOSITION (sg_interpose). The killer
-		 * census's standing fact: carriers die to live defenders with
-		 * escorts RIGHT THERE -- near the carrier, which is where the
-		 * support field sends them, and nowhere in particular relative
-		 * to the gun. A bodyguard does not stand next to the client; he
-		 * stands on the line the bullet takes. With a live carrier and
-		 * a fresh threat believed near it, the escort's goal becomes
-		 * the MIDPOINT of carrier and threat: body on the line, rail
-		 * eats the escort, carrier keeps the flag. Falls through to
-		 * the ordinary screen when there is no named threat.
-		 */
+		/* A named nearby threat selects a route-relative escort station. */
 		{
 			int interpose_mode = SG_InterposeMode(sg_cv.interpose->value);
 
@@ -1719,27 +1577,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					vec3_t mid;
 					int ms = -1, mc = 0;
 
-					/*
-					 * EXIT ESCORT (sg_interpose dose 2). The
-					 * measurements rejected the midpoint: 6.8 INTERPOSE calls per
-					 * carry-second, 2% of kills with a teammate on the kill
-					 * line -- the midpoint of a carrier and a 269u threat is
-					 * INSIDE the duel, unreachable from the escort's median
-					 * 1131u start. Dose 2 occupies the EXIT: the seed a
-					 * fixed cost-lead AHEAD of the carrier on its homeward
-					 * field -- the door the carrier runs through next.
-					 */
-					/*
-					 * THE FORMATION (sg_interpose dose 3). Lead and trail are
-					 * STATIONS on the
-					 * carrier's own route, at fixed cost-offsets that move
-					 * with it: the leader sweeps the parked defenders ahead
-					 * (90% of carrier kills), the trailer bodies the chasers,
-					 * and the spacing keeps both out of the rail-and-splash
-					 * envelope that made the midpoint useless. Station by
-					 * slot parity: even leads at -1300ms, odd trails at
-					 * +900ms. Dose 2 (static exit seed) kept as history.
-					 */
+					/* Mode 3 alternates lead and trail stations on the carrier route. */
 					if (interpose_mode == 3)
 					{
 						int *cf = (team == CTF_TEAM_RED)
@@ -1829,12 +1667,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		}
 		if (ht && ht->inuse && ht->client && !ht->deadflag)
 		{
-			/*
-			 * Escorting the HUMAN who said "cover me": their position is
-			 * team knowledge, the same rule our own carrier lives under
-			 * (sg_caco.c's header). Flooded fresh each frame, the same
-			 * cheap on-demand flood the intercept field uses.
-			 */
+			/* A cover order floods from the live teammate each frame. */
 			static int escort_field[SG_MAX_SEEDS];
 			int hs = Rune_NearestSeed(SG_Rune(), ht->s.origin), hc = 0;
 
@@ -1851,12 +1684,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		int team_index = SG_TeamIdx(team);
 		int enemy_index = SG_TeamIdx(SG_EnemyTeam(team));
 
-		/* One role-selected escort owns the moving carrier field.  The remaining
-		 * attackers keep the enemy base occupied so defenders cannot turn their
-		 * full roster onto the return.  Following the enemy-flag-now field here
-		 * made every attacker a second escort when the carrier was visible; when
-		 * its position was unknown, that field's honest fallback could even lead
-		 * the whole attack share back to our own stand. */
+		/* Non-escort attackers keep pressure on the enemy stand. */
 		if (SG_AttackObjectiveUsesFixedStand(
 		        sg_caco_team_belief.carrier[team_index].client))
 			goal_field = enemy_index == 0 ? sg_fields.to_red_flag
@@ -1869,15 +1697,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	 * organic role plus their existing explicit strike-duty gates. */
 	role = tc->role;
 
-	/*
-	 * THE RUNE COURIER. Candidacy is a lottery -- 107
-	 * near-misses one rotation, zero the next -- because holders guard
-	 * while carriers sprint. So candidacy itself becomes the errand: a
-	 * non-carrier holding RESIST or REGEN while a live carrier runs
-	 * bare re-goals onto the carrier's support field for up to eight
-	 * seconds, closes, and the toss fires at 400. The rune rides to
-	 * the flag on the courier's legs, not on luck.
-	 */
+	/* A RESIST or REGEN holder may close on a bare carrier for a handoff. */
 	if (sg_cv.runetoss->value &&
 	    SG_RuneHandoffEligible(role, carrying, SG_ChatOrderedRole(e),
 	        tc->strike_active, tc->escort_mission) &&
@@ -1920,16 +1740,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			bot->runeconv_until = 0.0f;
 	}
 
-	/*
-	 * THE EARLY RETURN (sg_itemlead). Last of the
-	 * goal overrides on purpose: the errand is a thing a bot does when nothing
-	 * else is happening, and every branch above -- the carrier's stand, the
-	 * recovery, the scoop, the interposition, the courier -- is something
-	 * happening. Lead_Field refuses the errand outright while any of the jobs
-	 * it names is live, so the ordering here and the gates in there say the
-	 * same thing twice, which is deliberate: this line is the one a reader
-	 * finds first.
-	 */
+	/* Optional item leads run only after principal objective selection. */
 	if (!tc->strike_blocks_optional)
 	{
 		const int *lead = Lead_Field(bot, role, carrying,
@@ -1939,12 +1750,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			goal_field = lead;
 	}
 
-	/*
-	 * THE MEGA OFFER (sg_megaworth), resolved once for the whole frame and
-	 * BEFORE the tactical waypoint is scored -- the waypoint is committed for
-	 * up to ten seconds off one Surface_At sweep, so a term that arrived after
-	 * it would not reach the route until the next commitment.
-	 */
+	/* Resolve mega demand before committing a tactical waypoint. */
 	tc->mega = tc->strike_blocks_optional ? 0.0f
 	                                      : Mega_Worth(bot, e, role);
 
@@ -1967,10 +1773,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 
 	if (SG_MegaOn() && sg_cv.debug->value)
 	{
-		/* the commit: the frame the offer turns on. The detour reported is
-		 * the best one standing from where the bot is now, in ms of extra
-		 * road -- back-solved from the value, which is what the surface
-		 * actually spends. */
+		/* Report the detour when the offer turns on. */
 		if (tc->mega > 0.0f && !bot->mega_on && bot->seed >= 0)
 		{
 			int		pad = -1;
@@ -1984,13 +1787,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				           e->client->pers.netname, pad, e->health,
 				           tc->mega, det, 1500.0f * val);
 		}
-		/*
-		 * The take. No pickup hook is needed and none is added: the mega is
-		 * the only thing in the game that moves a player's health by 100 in
-		 * one frame (count 100 with HEALTH_IGNORE_MAX, g_items.c:598-604),
-		 * and a respawn cannot forge it because the dead branch above zeroes
-		 * mega_hp on the way through.
-		 */
+		/* A 90-point health jump identifies a mega pickup. */
 		if (bot->mega_hp > 0 && e->health - bot->mega_hp >= 90)
 			sg_host.dprint("MEGA %s take: hp %d -> %d\n",
 			           e->client->pers.netname, bot->mega_hp, e->health);
@@ -2019,18 +1816,12 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		int bi = (int)(bot - sg_bots);
 		qboolean need;
 
-		/* the waypoint must be scored with the FULL surface (the
-		 * design's own guarantee) -- this global was previously
-		 * whatever the prior bot in the serial frame left behind,
-		 * making waypoint quality depend on iteration order */
+		/* Score the waypoint with the full route surface. */
 		sg_route_pure_now = false;
 		need = (!Fields_ActionTopologyCurrent(tac_field_epoch[bi]) ||
 		                 bot->tac_seed < 0 ||
 		                 bot->tac_role != (int)role ||
-		                 /* a tac_time AHEAD of the level clock is a
-		                  * previous map's timestamp (level.time resets
-		                  * to 0 on changelevel; the bots[] array does
-		                  * not) -- stale by definition */
+		                 /* A timestamp ahead of level.time belongs to another map. */
 		                 SG_TimerPending(bot->tac_time) ||
 		                 SG_AgeOver(bot->tac_time, 10.0f) ||
 		                 tac_fields[bi][bot->seed] >= SG_FIELD_INF ||

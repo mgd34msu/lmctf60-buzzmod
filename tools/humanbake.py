@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""humanbake.py -- bake human demo traffic into per-map .hmn sidecars.
+"""Bake human route traffic into authenticated HMN sidecars.
 
-Reads <map>.rune (link table order is the contract) and tools/human/
-<map>.human.json (transition counts from demorune.py), writes
-maps/<map>.hmn: an authenticated header then one uint8 per link -- the link's
-human-traffic tier, log-scaled to 0..255 with 0 = no human ever ran it.
-The sidecar binds both graph counts and the exact validated rune payload,
-action contract, and header from which it was baked.
-
-A transition a>b credits every rune link a->b (all actions: if a human
-moved seam-to-seam, the road is real regardless of gait). The game loads
-the sidecar beside the rune and prices highways cheaper under
-sg_humanprior.
-
-Usage: humanbake.py <rune_dir> <human_json_dir> <map> [<map> ...]
+Transition counts are mapped to the exact RUNE link order and log-scaled into
+one byte per link. The output binds the complete validated RUNE identity.
 """
 import math
 import os

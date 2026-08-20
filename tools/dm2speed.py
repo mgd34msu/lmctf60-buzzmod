@@ -123,7 +123,7 @@ def parse_sound(r):
 # POS = WritePosition (3x s16, 6 bytes). DIR = WriteDir (1 byte, packed
 # lookup index). ENT = WriteShort (2 bytes).
 #
-# Verified call sites (2026-08-03 audit, lmctf60 g_*.c/p_*.c/plasma.c):
+# Shapes verified against the game module's Write* call sites:
 #   0  TE_GUNSHOT             fire_lead: WritePosition+WriteDir      = POS+DIR (7)
 #   1  TE_BLOOD               SpawnDamage: WritePosition+WriteDir    = POS+DIR (7)
 #   2  TE_BLASTER             WritePosition+WriteDir                 = POS+DIR (7)

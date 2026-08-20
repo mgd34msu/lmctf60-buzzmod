@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""effstat.py <log> -- progress-efficiency grades for one game log.
+"""Report route-progress efficiency from SG telemetry.
 
-The owner's metric: distance walked vs route progress made, from the 1Hz SG
-telemetry, measured against sgoal= (the static stand field -- a cost that
-cannot change unless the body moves) with goal= as fallback on old logs.
-A bot running its route cleanly at ~300 u/s converts ~3.3 ms/u; near zero
-is motion without progress.
-
-Output: one EFF line per role (aggregate, trend-comparable across waves)
-and one BOT line per individual -- efficiency, mean/max speed, distance --
-because a fleet average hides exactly the laggard or the star the owner
-wants found.
+Progress uses stable sgoal when present and falls back to legacy goal. Output
+contains aggregate role grades and per-bot distance, speed, and efficiency.
 """
 import re, sys, math, collections
 

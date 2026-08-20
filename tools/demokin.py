@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""demokin.py -- full-fidelity POV kinematics from .dm2 demos.
+"""Measure POV kinematics from LMCTF demos.
 
-Decodes what demorune skips: velocity vectors, view angles, pm flags, and
-weapon index at 10Hz. Produces the human movement grammar -- air-strafe
-gain, hop cadence (touchdown-relaunch gaps), view-vs-velocity divergence
-airborne (the pre-turn), per-touchdown friction losses.
-
-First census (40 demos, 2026-08-03): air gain median +1.5/100ms (p75 +14);
-view-velocity divergence airborne median 93 degrees -- the eyes fly free
-of the feet. Usage: demokin.py <demo> [...] -- prints per-demo and pooled
-grammar lines.
+The decoder reads velocity, view angles, movement flags, and weapon state at
+10 Hz. Output covers air gain, hop cadence, view/velocity divergence, and
+touchdown friction loss.
 """
 import struct, sys, math
 sys.path.insert(0, __file__.rsplit('/', 1)[0])

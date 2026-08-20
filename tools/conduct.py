@@ -1,58 +1,10 @@
 #!/usr/bin/env python3
-"""conduct.py -- the gross-conduct audit and the defense-regime card.
+"""Measure flag-stand approach and carry behavior from demos.
 
-Born 2026-08-11 from the owner's charge: nobody had WATCHED the bots.
-Every instrument to date reads a chosen scalar off the film; none asks
-the pedestrian question "is this player doing something visibly stupid
--- grinding into a wall, oscillating in a doorway, spinning in place --
-that a human spectator would laugh at?"  And none asks whether the two
-populations' numbers are on equal footing: in bot-vs-bot film the steal
-volume is jointly produced by bot offense AND bot defense, while the
-human corpus's steal volume was earned against human pub defense.  A
-raw steals/min comparison silently assumes the defense faced is the
-same.  This tool measures both gaps directly, from the same demos the
-other instruments read.
-
-PART 1 -- CONDUCT (per-player-observed-minute, alive segments only):
-
-  grind_spm    seconds/min where gross path speed > GRIND_SPEED_UPS but
-               net displacement over the window < GRIND_NET_UNITS: the
-               body is working hard and going nowhere (wall-grind,
-               corner-hump, doorway oscillation).  Camping does NOT
-               trigger it (camping is low gross speed); neither does
-               normal dodging in a fight (dodging displaces).
-  revrate      direction reversals/sec inside grind windows -- splits
-               "pinned against geometry" (low) from "oscillating" (high).
-  spin_spm     seconds/min of sustained |yaw rate| >= SPIN_DPS with the
-               body near-stationary: the spinbot look.  Railgun flicks
-               are instantaneous and do not sustain.
-
-PART 2 -- DEFENSE REGIME (per game, both teams pooled):
-
-  approach_pm  distinct enemy entries into STAND_R of a flag stand, per
-               observed-minute of that stand.  The opportunity rate.
-  steal_conv   fraction of approaches that become a flag pickup within
-               STEAL_LOOKAHEAD_S (carry-window start near the stand).
-  guard_frac   fraction of observed stand-time with >= 1 defender (same
-               team as the stand) inside STAND_R; guard2_frac for >= 2.
-
-COVERAGE HONESTY (the teamsheet lesson, applied from birth): human film
-is client POV -- entities exist in the track dict only while in the
-recorder's PVS.  Every denominator here is OBSERVED time, never wall
-time: a player-second counts only where that player has consecutive
-track samples; a stand-second counts only when at least one entity
-sample lies within STAND_OBS_R of the stand that second.  Bot film
-(serverrecord) sees everything, so its observed time ~= wall time; the
-comparison is rate-vs-rate over each population's own denominator.
-Residual bias this does NOT remove: a client-POV stand-second requires
-someone near the stand, which conditions human stand observations
-toward busy moments.  Read guard_frac/approach_pm across populations as
-rank/ratio evidence, not as calibrated absolutes -- same rule as
-escort_fraction_obs.
-
-Usage:
-  conduct.py <demo.dm2> [...] --scalars          per-demo JSON lines
-  conduct.py --compare --human <glob> --bot <glob>   pooled two-column card
+Approaches are entries into a fixed stand radius per observed stand-minute.
+Close conversion is a qualifying carry start within the configured delay after
+an approach. Results are diagnostic unless reconciled with authoritative CTF
+events and exact build receipts.
 """
 
 import argparse
