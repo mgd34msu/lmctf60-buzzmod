@@ -199,15 +199,12 @@ pull = P_VIEW.index("Weapon_Hook_Fire(ent);")
 observe = P_VIEW.index("SG_HookLiveEndFrame(ent);", pull)
 assert pull < observe
 
-# Rope discipline is a graph-hook admission/retirement seam, not a replay or
-# optional speedhook rewrite. It decides at the exact proved source before
-# control decode, and malformed control plus a graph aim timeout share the
-# same bounded retirement path.
 hook_stage = body("if (l->action == RL_HOOK", "hook_stage_done: ;")
 assert "SG_HookStageSourceCompatible" in hook_stage
 source_reject = hook_stage.index("if (!SG_HookStageSourceCompatible")
 source_abort = hook_stage.index("ballistic_abort = true;", source_reject)
-source_release = hook_stage.index("bot->commit_link = -1;", source_reject)
+source_release = hook_stage.index(
+    "SG_StagedTraversalCancel(bot, RL_HOOK);", source_reject)
 assert source_reject < source_release < source_abort
 worth = hook_stage.index("SG_HookCurrentRideWorth")
 decode = hook_stage.index("SG_HookControlDecode")
@@ -225,9 +222,7 @@ assert "from_goal > to_goal + SG_HOOK_DISCIPLINE_SERVED_FIELD_MS" in DISCIPLINE
 discipline_retire = body("static void Hook_DisciplineRetire",
                          "qboolean SG_HookOffhandReady")
 assert "Hook_ShelveLink(bot, link_index, shelf_seconds);" in discipline_retire
-assert "bot->commit_link = -1;" in discipline_retire
-assert "bot->hook_phase = 0;" in discipline_retire
-assert "bot->hook_link = -1;" in discipline_retire
+assert "SG_StagedTraversalCancel(bot, RL_HOOK);" in discipline_retire
 assert "SG_Rune()->links[link_index].action != RL_HOOK" in discipline_retire
 assert "if (failure)" in discipline_retire
 assert "hookban_until" not in discipline_retire

@@ -33,6 +33,7 @@
 #include "slipgate/sg_feeler_probe.h"
 #include "slipgate/sg_weave_policy.h"
 #include "slipgate/sg_team_collision.h"
+#include "slipgate/sg_traversal_transition.h"
 #include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
@@ -4185,9 +4186,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					/* The edge remains valid from its proved source.  This body is not
 					 * in that source state, so release the commitment, force fresh
 					 * localization, and spend no generic command toward the landing. */
-					bot->commit_link = -1;
-					bot->commit_until = 0.0f;
-					bot->hook_link = -1;
+					SG_StagedTraversalCancel(bot, RL_HOOK);
 					bot->seed = -1;
 					ballistic_abort = true;
 					goto hook_stage_done;
@@ -5487,16 +5486,13 @@ static void Hook_GraphFailDetail(edict_t *e, sg_bot_t *bot,
 	if (e && e->client && e->client->hookstate != 0)
 		ctf_hook_abort(e);
 	Hook_Shelve(bot, shelf_seconds);
-	bot->commit_link = -1;
-	bot->hook_phase = 0;
-	bot->hook_link = -1;
+	SG_StagedTraversalCancel(bot, RL_HOOK);
 	SG_HookLiveDeactivate(&bot->hook_replay, &bot->hook_replay_active,
 	    &bot->hook_replay_link);
 	Hook_LiveClearFinalGuard(bot);
 	bot->hook_entity = NULL;
 	bot->hook_legacy_settle = false;
 	bot->hook_legacy_arrived = false;
-	bot->hook_attached_validated = false;
 	bot->hook_pull_ms = 0;
 	bot->hook_settle_ms = 0;
 }
@@ -5534,16 +5530,9 @@ static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
 	}
 	if (e && e->client && e->client->hookstate != 0)
 		ctf_hook_abort(e);
-	bot->commit_link = -1;
-	bot->hook_phase = 0;
-	bot->hook_link = -1;
-	bot->hook_bite_logged = false;
-	bot->hook_attached_validated = false;
-	bot->hook_deadline = 0.0f;
+	SG_StagedTraversalCancel(bot, RL_HOOK);
 	bot->hook_pull_ms = 0;
 	bot->hook_settle_ms = 0;
-	bot->flow_release = false;
-	bot->speedhook = false;
 	SG_HookLiveDeactivate(&bot->hook_replay, &bot->hook_replay_active,
 	    &bot->hook_replay_link);
 	Hook_LiveClearFinalGuard(bot);
