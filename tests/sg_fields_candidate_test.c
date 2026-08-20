@@ -1,4 +1,3 @@
-/* Focused contract test for candidate DPO root selection. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -361,7 +360,7 @@ static void CheckHookFieldAdmission(void)
 	CHECK(memcmp(lane_field, initial_lane, sizeof(initial_lane)) == 0);
 	CHECK(sg_fields.shelf_cliff[0][2] == 1000);
 	CHECK(sg_fields.to_flag_now[1][0][0] == 200);
-	CHECK(sg_fields.our_carrier[0][5] == 100);
+	CHECK(sg_fields.our_carrier[0][5] == 0);
 
 	/* A missing host cvar is the same capability edge as an explicit zero. */
 	ctfflags = NULL;
@@ -655,7 +654,8 @@ static void CheckCarrierScreenUsesTravelTime(void)
 	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == 2);
 	CHECK(SG_FieldCarrierSupportRoot(&rune, home, 1, 0) == 2);
 	first_link[1] = -1;
-	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == 1);
+	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == -1);
+	CHECK(SG_FieldCarrierSupportRoot(&rune, home, 1, 0) == 0);
 	home[1] = 3000;
 	CHECK(SG_FieldCarrierScreenStation(&rune, home, 0) == 1);
 	first_link[0] = -1;

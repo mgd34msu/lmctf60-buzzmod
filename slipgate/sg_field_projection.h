@@ -179,7 +179,7 @@ static inline int SG_FieldCarrierScreenStation(const rune_t *r,
 		previous = seed;
 		seed = SG_FieldProjectionStep(r, home, seed);
 	}
-	return previous;
+	return -1;
 }
 
 static inline int SG_FieldCarrierSupportRoot(const rune_t *r,
