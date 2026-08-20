@@ -724,8 +724,7 @@ static edict_t *SG_NadeBoundLiveTarget(edict_t *e, const sg_bot_t *bot)
  * band may have expensive graph cost but it cannot pre-empt a direct item
  * touch; the terminal room follows the same rule.  The target is a current,
  * visible enemy body, never a danger seed or remembered stand coordinate. */
-qboolean SG_NadeArmPrebreachLiveEnemy(sg_bot_t *bot, edict_t *e, int team,
-	float min_distance, float max_distance)
+qboolean SG_NadeArmPrebreachLiveEnemy(sg_bot_t *bot, edict_t *e, int team)
 {
 	static gitem_t *nades;
 	edict_t *target;
@@ -750,8 +749,7 @@ qboolean SG_NadeArmPrebreachLiveEnemy(sg_bot_t *bot, edict_t *e, int team,
 		return false;
 	VectorSubtract(target->s.origin, e->s.origin, delta);
 	distance = VectorLength(delta);
-	if ((min_distance > 0.0f && distance <= min_distance) ||
-	    (max_distance > 0.0f && distance >= max_distance))
+	if (!SG_StrikePrebreachGrenadeDistanceAllowed(distance))
 		return false;
 	if (!nades)
 		nades = FindItem("Grenades");

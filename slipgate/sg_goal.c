@@ -249,7 +249,7 @@ rally_done:;
 	    SG_TimerReady(bot->nade_next) &&
 	    !SG_AttackFlagDirectTouchAuthority(e, team, NULL))
 	{
-		(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f);
+		(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team);
 	}
 	return hold;
 }

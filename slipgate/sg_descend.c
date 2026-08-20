@@ -2481,12 +2481,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				          SG_Rune()->links[bot->commit_link].action)) &&
 				    SG_TimerReady(bot->nade_next))
 				{
-					/* The approach and threshold use one arm transaction: only
-					 * the exact current visible enemy body may authorize it, and
-					 * direct flag touch always wins.  The threshold retains its
-					 * historic practical throw envelope. */
-					(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team,
-					    250.0f, 800.0f);
+					/* Both entry paths use the same live target and practical
+					 * throw envelope. Direct flag touch always wins. */
+					(void)SG_NadeArmPrebreachLiveEnemy(bot, e, team);
 				}
 			}
 		}

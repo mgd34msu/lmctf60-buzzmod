@@ -89,11 +89,10 @@ qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
 
 /* Flag-room flying cooks are one transaction regardless of whether the
  * approach band or the terminal room starts them: bind only a current,
- * visible live enemy, and erase every identity/deadline field when the
- * transaction is retired.  A zero distance bound means that side is open. */
+ * visible live enemy inside the strike throw envelope, and erase every
+ * identity/deadline field when the transaction is retired. */
 void SG_NadeTargetClear(sg_bot_t *bot);
-qboolean SG_NadeArmPrebreachLiveEnemy(sg_bot_t *bot, edict_t *e, int team,
-	float min_distance, float max_distance);
+qboolean SG_NadeArmPrebreachLiveEnemy(sg_bot_t *bot, edict_t *e, int team);
 
 /* Candidate selection and the exact-source launch gate use one conservative
  * P_FallingDamage contract. Combat may change health while staging, so both

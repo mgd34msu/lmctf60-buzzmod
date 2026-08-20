@@ -52,6 +52,12 @@ int main(void)
 	const sg_strike_frame_t *published;
 	unsigned red_epoch;
 
+	CHECK(!SG_StrikePrebreachGrenadeDistanceAllowed(NAN));
+	CHECK(!SG_StrikePrebreachGrenadeDistanceAllowed(250.0f));
+	CHECK(SG_StrikePrebreachGrenadeDistanceAllowed(250.1f));
+	CHECK(SG_StrikePrebreachGrenadeDistanceAllowed(799.9f));
+	CHECK(!SG_StrikePrebreachGrenadeDistanceAllowed(800.0f));
+
 	SG_StrikeAdapterReset(&adapter);
 	frames[0] = Frame(10.0f);
 	frames[1] = Frame(10.0f);

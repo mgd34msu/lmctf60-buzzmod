@@ -260,6 +260,13 @@ int SG_StrikeDutyRetiresOptionalErrand(sg_strike_duty_t duty);
 int SG_StrikePrebreachApproachAllowed(int strike_active,
 	int strike_pressure, int organic_attack, int goal_ms);
 
+/* Grenade prebreach is useful only across a practical throw lane.  Outside
+ * this open interval, keep the current weapon and continue the flag route. */
+static inline int SG_StrikePrebreachGrenadeDistanceAllowed(float distance)
+{
+	return isfinite(distance) && distance > 250.0f && distance < 800.0f;
+}
+
 /* Bounded throttle for the exact physical flag-touch envelope.  It tightens a
  * fast misaligned turn without granting touch, changing aim, or stopping an
  * aligned run through the item. */

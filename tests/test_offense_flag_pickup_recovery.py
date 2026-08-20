@@ -861,7 +861,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "if (rally_hold && live_room_enemy && !live_flag_terminal"
         ):]
         self.assertIn("if (rally_hold && live_room_enemy && !live_flag_terminal", grenade)
-        self.assertIn("SG_NadeArmPrebreachLiveEnemy(bot, e, team,", grenade)
+        self.assertIn("SG_NadeArmPrebreachLiveEnemy(bot, e, team)", grenade)
         self.assertNotIn("FindItem(\"Grenades\")", grenade)
         self.assertNotIn("VectorCopy(live_enemy->s.origin, bot->nade_at);", grenade)
         self.assertNotIn("sg_caco_enemies", grenade)
@@ -914,12 +914,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             approach,
         )
         direct = flight.index("!SG_AttackFlagDirectTouchAuthority(e, team, NULL)")
-        arm = flight.index("SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f)")
+        arm = flight.index("SG_NadeArmPrebreachLiveEnemy(bot, e, team)")
         self.assertLess(direct, arm)
         self.assertNotIn("Danger_Field(team)", flight)
         self.assertNotIn("Rune_NearestSeed", flight)
         self.assertNotIn("SG_FlagStand(team, false)", flight)
-
         common = dict(
             live_enemy=True,
             alive=True,
@@ -1050,8 +1049,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "nade_target_cook_until",
         ):
             self.assertIn(token, bot)
-        self.assertIn("SG_NadeArmPrebreachLiveEnemy(bot, e, team,", descend)
-        self.assertIn("SG_NadeArmPrebreachLiveEnemy(bot, e, team, 0.0f, 0.0f)", goal)
+        self.assertIn("SG_NadeArmPrebreachLiveEnemy(bot, e, team)", descend)
+        self.assertIn("SG_NadeArmPrebreachLiveEnemy(bot, e, team)", goal)
         arm = between(
             move,
             "qboolean SG_NadeArmPrebreachLiveEnemy",
@@ -1061,6 +1060,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "target = SG_CombatLiveEnemy(e);",
             "SG_AttackFlagDirectTouchAuthority(e, team, NULL)",
             "SG_CanSee(e, target->s.origin, target->viewheight)",
+            "SG_StrikePrebreachGrenadeDistanceAllowed(distance)",
             "VectorCopy(target->s.origin, bot->nade_at);",
             "bot->nade_target_slot = slot;",
             "bot->nade_target_ctfid = target->client->ctf.ctfid;",
