@@ -1,6 +1,7 @@
 #include "slipgate/sg_defense_shift.h"
 #include "slipgate/sg_route_policy.h"
 #include "g_local.h"
+#include "slipgate/sg_defense_facing.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_cvars.h"
 
@@ -88,6 +89,39 @@ static void TestGoalProgressChargesImmediateTraversal(void)
 	CHECK(!SG_RouteCandidateDescends(run, 300, 1100, infinity));
 	CHECK(SG_RouteCandidateDescends(run, 100, 1100, infinity));
 	CHECK(!SG_RouteCandidateDescends(infinity, 0, 1, infinity));
+}
+
+static void TestDefenderFacesTheIncomingScoringRoute(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[4];
+	rune_link_t links[3];
+	const int goal_field[4] = { 100, 200, 300, 250 };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	memset(links, 0, sizeof(links));
+	rune.hdr.num_seeds = 4;
+	rune.hdr.num_links = 3;
+	rune.seeds = seeds;
+	rune.links = links;
+	links[0].from = 0;
+	links[0].to = 1;       /* attractive one-way departure */
+	links[0].action = RL_RUN;
+	links[0].cost_ms = 100;
+	links[1].from = 2;
+	links[1].to = 0;       /* exact scoring-route arrival */
+	links[1].action = RL_RUN;
+	links[1].cost_ms = 200;
+	links[2].from = 3;
+	links[2].to = 0;       /* incoming, but not this field's route */
+	links[2].action = RL_RUN;
+	links[2].cost_ms = 200;
+
+	CHECK(SG_DefenseFacingSeed(&rune, 0, goal_field, 0x3fffffff) == 2);
+	links[1].action = RL_TELEPORT;
+	CHECK(SG_DefenseFacingSeed(&rune, 0, goal_field, 0x3fffffff) == -1);
+	CHECK(SG_DefenseFacingSeed(&rune, -1, goal_field, 0x3fffffff) == -1);
 }
 
 static void TestDuelRoutePricingUsesOneSurface(void)
@@ -442,6 +476,7 @@ int main(void)
 	TestAttackDescentCannotPriceItselfStill();
 	TestCandidateChargesImmediateTraversal();
 	TestGoalProgressChargesImmediateTraversal();
+	TestDefenderFacesTheIncomingScoringRoute();
 	TestDuelRoutePricingUsesOneSurface();
 	TestObjectiveRunsDoNotSpendMovementOnRibbon();
 	TestDefenseShiftShippingDefault();

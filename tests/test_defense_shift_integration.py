@@ -93,6 +93,12 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertIn("SG_RouteCandidateGoalMs(goal_field[pl->to]", patrol)
         self.assertIn("Fields_LinkTraversalCostMs(pl)", patrol)
 
+    def test_post_facing_uses_an_incoming_scoring_route(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+
+        self.assertIn("SG_DefenseFacingSeed(SG_Rune(), bot->seed", source)
+        self.assertNotIn("int facev = 0x7fffffff", source)
+
     def test_defense_terminal_preserves_selected_field(self) -> None:
         move = (ROOT / "slipgate/sg_move.c").read_text()
         start = move.index("else if (!have_aim && role == SG_ROLE_DEFEND)")

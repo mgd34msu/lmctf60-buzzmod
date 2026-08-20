@@ -18,6 +18,7 @@
 #include "slipgate/sg_clock.h"
 #include "slipgate/sg_danger.h"
 #include "slipgate/sg_defense_shift.h"
+#include "slipgate/sg_defense_facing.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_tilt.h"
@@ -2037,7 +2038,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * duel_want, duel_expo, rail_dose -- turned out never to be read by
 	 * this body and have no unpack */
 	int bestlink = bestlink_in;
-	int li;
 	qboolean rally_hold = tc->rally_hold;
 	qboolean rail_hold = tc->rail_hold;
 	qboolean hold_post = false;
@@ -3843,26 +3843,13 @@ stag_done:
 	}
 
 	/*
-	 * The facing, shared by both holds: whichever seed an arrival would
-	 * descend on this one through -- the neighbour whose field value sits
-	 * closest above ours. Combat still owns the view the moment anyone shows.
+	 * The facing, shared by both holds, follows the nearest exact incoming RUN
+	 * on this scoring field. Combat still owns the view when anyone appears.
 	 */
 	if (hold_post)
 	{
-		int facev = 0x7fffffff, face = -1;
-
-		for (li = SG_Rune()->first_link[bot->seed]; li >= 0;
-		     li = SG_Rune()->next_link[li])
-		{
-			rune_link_t *l = &SG_Rune()->links[li];
-			int v = goal_field[l->to];
-
-			if (v > goal_field[bot->seed] && v < facev)
-			{
-				facev = v;
-				face = l->to;
-			}
-		}
+		int face = SG_DefenseFacingSeed(SG_Rune(), bot->seed, goal_field,
+		    SG_FIELD_INF);
 		if (face >= 0)
 		{
 			vec3_t	pdir, peye, pend;
