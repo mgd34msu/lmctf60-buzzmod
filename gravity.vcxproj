@@ -405,6 +405,7 @@
     <ClCompile Include="slipgate\sg_tilt.c" />
     <ClCompile Include="slipgate\sg_lead.c" />
     <ClCompile Include="slipgate\sg_move.c" />
+    <ClCompile Include="slipgate\sg_feeler_probe.c" />
     <ClCompile Include="slipgate\sg_price.c" />
     <ClCompile Include="slipgate\sg_descend.c" />
     <ClCompile Include="slipgate\sg_traversal_transition.c" />
@@ -468,6 +469,7 @@
     <ClInclude Include="slipgate\sg_defense_shift.h" />
     <ClInclude Include="slipgate\sg_defense_supply.h" />
     <ClInclude Include="slipgate\sg_strike.h" />
+    <ClInclude Include="slipgate\sg_feeler_probe.h" />
     <ClInclude Include="slipgate\sg_traversal_transition.h" />
     <ClInclude Include="slipgate\sg_strike_adapter.h" />
     <ClInclude Include="slipgate\sg_identity.h" />

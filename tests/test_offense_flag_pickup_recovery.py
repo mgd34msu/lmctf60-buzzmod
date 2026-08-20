@@ -10,7 +10,6 @@ import tempfile
 import textwrap
 import unittest
 
-from botfill_selector_test import BotfillSelectorTest
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -153,7 +152,6 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertNotIn("if (duel)", incumbent)
 
     def test_teammate_pass_side_is_pair_symmetric_and_executable(self) -> None:
-        """Head-on bots receive opposite world-space lateral velocities."""
         program = textwrap.dedent(
             r"""
             #include <math.h>
@@ -233,10 +231,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "if (FlagTerminalGenericSteeringAllowed(\n"
             "\t\t\t        flag_touch_terminal) && sg_cv.smooth->value",
         )
-        self.assertIn("SG_CrowdPassSide(", fan)
-        self.assertIn("e->client->ctf.ctfid", fan)
-        self.assertIn("tr.ent->client->ctf.ctfid", fan)
-        self.assertNotIn("e->client - game.clients", fan)
+        self.assertIn("SG_FeelerProbe(", fan)
+        self.assertIn("feeler.trace", fan)
 
         run_room = between(move, "static qboolean SG_RunRoom", "static void SG_MovePolicy")
         self.assertIn("SG_TeammateBodyPassable(", run_room)

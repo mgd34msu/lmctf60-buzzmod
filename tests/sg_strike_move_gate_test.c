@@ -1,6 +1,8 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_crowd_pass.h"
+#include "slipgate/sg_feeler_probe.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_role_policy.h"
@@ -13,6 +15,11 @@ int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
 
 sg_host_t sg_host;
 static qboolean block_terminal_trace;
+static int crowd_trace_mode;
+static int crowd_trace_calls;
+static edict_t *crowd_trace_hits[2];
+static float crowd_trace_fractions[2];
+static vec3_t crowd_trace_ends[2];
 
 static trace_t TerminalTrace(const vec3_t start, const vec3_t mins,
 	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
@@ -25,6 +32,19 @@ static trace_t TerminalTrace(const vec3_t start, const vec3_t mins,
 	(void)passent;
 	(void)contentmask;
 	memset(&trace, 0, sizeof(trace));
+	if (crowd_trace_mode)
+	{
+		int call = crowd_trace_calls++;
+
+		if (call < 2)
+		{
+			VectorCopy(end, crowd_trace_ends[call]);
+			trace.ent = crowd_trace_hits[call];
+			trace.fraction = crowd_trace_fractions[call];
+			VectorCopy(end, trace.endpos);
+			return trace;
+		}
+	}
 	trace.fraction = block_terminal_trace ? 0.5f : 1.0f;
 	VectorCopy(end, trace.endpos);
 	return trace;
@@ -51,6 +71,10 @@ int main(void)
 	rune_seed_t seeds[3];
 	byte linked[3] = { 1, 1, 1 };
 	int field[3] = { 500, 0, 0 };
+	edict_t mate, door;
+	gclient_t mate_client;
+	sg_feeler_probe_t feeler;
+	int pass_side;
 
 	memset(&bot, 0, sizeof(bot));
 	memset(&tc, 0, sizeof(tc));
@@ -107,6 +131,68 @@ int main(void)
 	seeds[2].flags = RSF_TOMBSTONE;
 	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == -1);
 	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, -1) == -1);
+
+	memset(&mate, 0, sizeof(mate));
+	memset(&door, 0, sizeof(door));
+	memset(&mate_client, 0, sizeof(mate_client));
+	mate.client = &mate_client;
+	mate_client.ctf.teamnum = CTF_TEAM_RED;
+	mate_client.ctf.ctfid = 2;
+	client.ctf.teamnum = CTF_TEAM_RED;
+	client.ctf.ctfid = 1;
+	pass_side = SG_CrowdPassSide(client.ctf.ctfid,
+	    mate_client.ctf.ctfid);
+	crowd_trace_mode = 1;
+	crowd_trace_hits[0] = &mate;
+	crowd_trace_hits[1] = &door;
+	crowd_trace_fractions[0] = 0.25f;
+	crowd_trace_fractions[1] = 0.5f;
+	crowd_trace_calls = 0;
+	feeler = SG_FeelerProbe(&ent, CTF_TEAM_RED, 0.0f, 96.0f, true);
+	CHECK(crowd_trace_calls == 2);
+	CHECK(feeler.teammate_blocked);
+	CHECK(feeler.trace.ent == &door && feeler.trace.fraction == 0.5f);
+	CHECK(fabsf(feeler.yaw - 28.0f * pass_side) < 0.001f);
+	CHECK(fabsf(crowd_trace_ends[1][0] -
+	    96.0f * cosf(feeler.yaw * (float)M_PI / 180.0f)) < 0.001f);
+	CHECK(fabsf(crowd_trace_ends[1][1] -
+	    96.0f * sinf(feeler.yaw * (float)M_PI / 180.0f)) < 0.001f);
+
+	crowd_trace_hits[1] = &mate;
+	crowd_trace_calls = 0;
+	feeler = SG_FeelerProbe(&ent, CTF_TEAM_RED, 0.0f, 96.0f, true);
+	CHECK(crowd_trace_calls == 2);
+
+	crowd_trace_hits[0] = &door;
+	crowd_trace_calls = 0;
+	feeler = SG_FeelerProbe(&ent, CTF_TEAM_RED, 11.0f, 96.0f, true);
+	CHECK(crowd_trace_calls == 1);
+	CHECK(!feeler.teammate_blocked && feeler.yaw == 11.0f);
+	CHECK(feeler.trace.ent == &door && feeler.trace.fraction == 0.25f);
+
+	crowd_trace_hits[0] = &mate;
+	crowd_trace_calls = 0;
+	feeler = SG_FeelerProbe(&ent, CTF_TEAM_RED, 13.0f, 96.0f, false);
+	CHECK(crowd_trace_calls == 1);
+	CHECK(!feeler.teammate_blocked && feeler.yaw == 13.0f);
+
+	mate_client.ctf.teamnum = CTF_TEAM_BLUE;
+	crowd_trace_calls = 0;
+	feeler = SG_FeelerProbe(&ent, CTF_TEAM_RED, 15.0f, 96.0f, true);
+	CHECK(crowd_trace_calls == 1 && !feeler.teammate_blocked);
+	mate_client.ctf.teamnum = CTF_TEAM_RED;
+	mate.deadflag = DEAD_DEAD;
+	crowd_trace_calls = 0;
+	feeler = SG_FeelerProbe(&ent, CTF_TEAM_RED, 16.0f, 96.0f, true);
+	CHECK(crowd_trace_calls == 1 && !feeler.teammate_blocked);
+	mate.deadflag = DEAD_NO;
+
+	client.ctf.ctfid = 0;
+	crowd_trace_calls = 0;
+	feeler = SG_FeelerProbe(&ent, CTF_TEAM_RED, 17.0f, 96.0f, true);
+	CHECK(crowd_trace_calls == 1);
+	CHECK(feeler.teammate_blocked && feeler.yaw == 17.0f);
+	crowd_trace_mode = 0;
 
 	if (failures)
 		return 1;

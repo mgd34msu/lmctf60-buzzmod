@@ -30,7 +30,7 @@
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_policy.h"
 #include "slipgate/sg_nade_policy.h"
-#include "slipgate/sg_crowd_pass.h"
+#include "slipgate/sg_feeler_probe.h"
 #include "slipgate/sg_weave_policy.h"
 #include "slipgate/sg_team_collision.h"
 #include "slipgate/sg_sound_policy.h"
@@ -3388,6 +3388,14 @@ static qboolean StrikeRocketJumpPhase2Command(const sg_bot_t *bot,
 	return true;
 }
 
+typedef enum
+{
+	SG_DOOR_DRIVE_NONE,
+	SG_DOOR_DRIVE_WAIT,
+	SG_DOOR_DRIVE_RETREAT,
+	SG_DOOR_DRIVE_FORWARD
+} sg_door_drive_t;
+
 void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context so the
@@ -3414,7 +3422,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	float view_yaw = tc->view_yaw, view_pitch = tc->view_pitch;
 	qboolean have_move = false, open_ahead = false, run_link = false;
 	qboolean flag_touch_terminal = false;
-	int door_hold = 0;
+	sg_door_drive_t door_hold = SG_DOOR_DRIVE_NONE;
 	edict_t *door_ent = NULL;
 	edict_t *ordered_escort = (role == SG_ROLE_ESCORT)
 	    ? SG_ChatEscortTarget(e) : NULL;
@@ -4732,10 +4740,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 		if (have_aim)
 		{
-			vec3_t fwd, probe;
+			vec3_t probe;
 			trace_t tr;
 			float best_open = -1.0e30f;
-			float try_yaw, base_yaw, chosen_yaw;
+			float base_yaw, chosen_yaw;
 			int k;
 
 			VectorSubtract(aim, e->s.origin, want);
@@ -4748,8 +4756,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the local gradient walk around a doorframe instead of into
 			 * it.
 			 */
-			/* Dense mode adds 15-degree probes while preserving nearest-heading
-			 * preference. */
 			if (FlagTerminalGenericSteeringAllowed(
 			        flag_touch_terminal))
 			{
@@ -4763,13 +4769,12 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 			for (k = 0; k < fan_n; k++)
 			{
+				sg_feeler_probe_t feeler;
 				float score, clearance;
 
 				float reach = 96.0f;
 
-				/* dose 2: reach scales with speed -- a fixed 96u probe
-				 * at 400 u/s is 0.24s of warning, and the census's
-				 * full-speed wall bumps live exactly there */
+				/* Scale lookahead with speed to preserve wall-warning time. */
 				if (sg_cv.fandense->value >= 2)
 				{
 					float fsp = sqrtf(e->velocity[0] * e->velocity[0] +
@@ -4777,48 +4782,18 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					reach = 96.0f + (fsp > 274.0f ? (fsp - 274.0f) * 0.5f : 0.0f);
 					if (reach > 220.0f) reach = 220.0f;
 				}
-				try_yaw = (base_yaw + fan[k]) * M_PI / 180.0f;
-				fwd[0] = cosf(try_yaw); fwd[1] = sinf(try_yaw); fwd[2] = 0;
-				VectorMA(e->s.origin, reach, fwd, probe);
-				probe[2] += 8.0f;
-				tr = sg_host.trace(e->s.origin, e->mins, e->maxs, probe,
-				              e, MASK_PLAYERSOLID);
-				/*
-				 * A teammate is not terrain. Blocked by one on the goal
-				 * line: remember it (the progress watch must not bill a
-				 * friendly body to the link -- at 5v5 that billed 204-278
-				 * shelves a match), and bias the walk with one symmetric
-				 * decision for the two current client lives. Head-on view
-				 * headings are opposite, so the same relative yaw sign gives
-				 * opposite world-space shoulders. Per-slot signs can instead
-				 * send both bodies into the same lane forever.
-				 */
-				if (k == 0 && tr.fraction < 1.0f && tr.ent &&
-				    SG_TeammateBodyPassable(team, tr.ent->client != NULL,
-				        tr.ent->deadflag != 0,
-				        tr.ent->client ? tr.ent->client->ctf.teamnum : 0))
+				feeler = SG_FeelerProbe(e, team, base_yaw + fan[k], reach,
+				    k == 0);
+				if (feeler.teammate_blocked)
 				{
-					int pass_side = SG_CrowdPassSide(
-					    e->client->ctf.ctfid,
-					    tr.ent->client->ctf.ctfid);
-
 					bot->mate_block_last = true;
-					base_yaw += 28.0f * (float)pass_side;
+					base_yaw = feeler.yaw;
 				}
-				/*
-				 * A closed door is not a wall: walking into it (its
-				 * auto-spawned trigger, g_func.c Think_SpawnDoorTrigger,
-				 * reaches ~60 units out) is precisely how it opens. The
-				 * rune proved these routes with doors held open; a feeler
-				 * that deflects off a door steers away from the only
-				 * action that makes the route real. Every shelve cluster
-				 * in match 7 sat beside a door complex. Doors that only a
-				 * button opens will fail to yield and the progress watch
-				 * shelves that link -- the net below the honesty.
-				 */
-				if (!declared_door_link && tr.fraction < 1.0f && tr.ent &&
-				    tr.ent->classname &&
-				    strncmp(tr.ent->classname, "func_door", 9) == 0)
+				/* Closed doors need a direct approach to reach the trigger.
+				 * Button-only failures are retired by progress shelving. */
+				if (!declared_door_link && feeler.trace.fraction < 1.0f &&
+				    feeler.trace.ent && feeler.trace.ent->classname &&
+				    strncmp(feeler.trace.ent->classname, "func_door", 9) == 0)
 				{
 					int dd;
 					qboolean dead = false;
@@ -4826,52 +4801,38 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					/* a door that already refused to yield from here is a
 					 * wall: no fraction override, the fan walks around */
 					for (dd = 0; dd < SG_DEAD_DOORS; dd++)
-						if (bot->dead_door[dd] == tr.ent &&
+						if (bot->dead_door[dd] == feeler.trace.ent &&
 						    SG_TimerPending(bot->dead_door_until[dd]))
 							dead = true;
 					if (dead && k == 0)
 					{
 						bot->deaddoor_ahead = true;
-						VectorCopy(tr.endpos, bot->deaddoor_spot);
+						VectorCopy(feeler.trace.endpos, bot->deaddoor_spot);
 					}
 					if (!dead &&
-					    tr.ent->moveinfo.state != SG_PLAT_STATE_TOP)
+					    feeler.trace.ent->moveinfo.state != SG_PLAT_STATE_TOP)
 					{
-						/*
-						 * A ROTATING door swings through the space in
-						 * front of it; a body pressing at it blocks the
-						 * swing and the door reverses shut, forever
-						 * (match 8: one bot, 75 shelves, jamming the door
-						 * with its own face). Stand outside the arc, or
-						 * back out of it, and let the floor trigger swing
-						 * it. Sliding doors travel out of the path and
-						 * are safe to press.
-						 */
+						/* A body in a rotating door's arc blocks its swing.
+						 * Moving rotating doors require retreat; sliding doors do not. */
 						if (k == 0)
 						{
-							/* A closed door still needs the body to enter its
-							 * activator.  Once motion starts, stop feeding the
-							 * pusher a blocking body; rotating doors need an
-							 * actual retreat from their swept arc. */
-							if (tr.ent->moveinfo.state == SG_PLAT_STATE_BOTTOM)
-								door_hold = 3; /* drive the validated trigger */
-							else if (!strcmp(tr.ent->classname,
+							if (feeler.trace.ent->moveinfo.state ==
+							    SG_PLAT_STATE_BOTTOM)
+								door_hold = SG_DOOR_DRIVE_FORWARD;
+							else if (!strcmp(feeler.trace.ent->classname,
 							                 "func_door_rotating") &&
-							         tr.fraction * reach < 64.0f)
-								door_hold = 2; /* leave the swing envelope */
+							         feeler.trace.fraction *
+							             reach < 64.0f)
+								door_hold = SG_DOOR_DRIVE_RETREAT;
 							else
-								door_hold = 1; /* wait for the moving brush */
-							door_ent = tr.ent;
+								door_hold = SG_DOOR_DRIVE_WAIT;
+							door_ent = feeler.trace.ent;
 						}
-						tr.fraction = 1.0f;
+						feeler.trace.fraction = 1.0f;
 					}
 				}
-				/* Score physical clearance, then pay a symmetric turn cost.
-				 * Index-based decay made -30 and +30 unequal and could prefer a
-				 * 90%-blocked straight probe over a fully clear detour. At the
-				 * 96-unit base reach a clear 30-degree road now beats a straight
-				 * road blocked inside ~94%, while an actually open goal line wins. */
-				clearance = tr.fraction * reach;
+				/* Score physical clearance with a symmetric turn cost. */
+				clearance = feeler.trace.fraction * reach;
 				score = clearance - fabsf(fan[k]) * 0.20f;
 				/* Latch a detour side briefly to prevent obstacle-side flapping. */
 				if (bot->fan_side && SG_TimerPending(bot->fan_side_until) &&
@@ -4880,9 +4841,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				if (score > best_open)
 				{
 					best_open = score;
-					chosen_yaw = base_yaw + fan[k];
+					chosen_yaw = feeler.yaw;
 				}
-				if (tr.fraction >= 1.0f && k == 0)
+				if (feeler.trace.fraction >= 1.0f && k == 0)
 				{
 					bot->fan_side = 0;  /* goal line open: latch released */
 					break;
@@ -5143,12 +5104,12 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		{
 			door_ent = bot->door_hold_ent;
 			if (door_ent->moveinfo.state == SG_PLAT_STATE_BOTTOM)
-				door_hold = 3;
+				door_hold = SG_DOOR_DRIVE_FORWARD;
 			else if (door_ent->classname &&
 			         !strcmp(door_ent->classname, "func_door_rotating"))
-				door_hold = 2;
+				door_hold = SG_DOOR_DRIVE_RETREAT;
 			else
-				door_hold = 1;
+				door_hold = SG_DOOR_DRIVE_WAIT;
 		}
 
 		/* Door activation/motion owns the route command: drive into a closed
@@ -5177,8 +5138,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				    &bot->drop_replay_active, &bot->drop_replay_link,
 				    &bot->drop_live_events);
 			}
-			cmd->forwardmove = (door_hold == 2) ? -200
-			                 : (door_hold == 3 ? 400 : 0);
+			cmd->forwardmove = (door_hold == SG_DOOR_DRIVE_RETREAT) ? -200
+			                 : (door_hold == SG_DOOR_DRIVE_FORWARD ? 400 : 0);
 			cmd->sidemove = 0;
 			cmd->upmove = 0;
 			bot->door_held_last = true;
@@ -5217,7 +5178,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					bot->door_hold_ent = NULL;
 					bot->door_hold_link = -1;
 					bot->door_hold_deadline = 0.0f;
-					door_hold = 1; /* fail closed for this final command */
+					door_hold = SG_DOOR_DRIVE_WAIT;
 					/* a door with no trigger on this side is one-way by the
 					 * mapper's hand (lmctf03: both bd doors trigger only from
 					 * the base side). The 30s memory reroutes THIS bot; the
@@ -5240,7 +5201,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					bot->door_hold_ent = NULL;
 					bot->door_hold_link = -1;
 					bot->door_hold_deadline = 0.0f;
-					door_hold = 0;
+					door_hold = SG_DOOR_DRIVE_NONE;
 				}
 				if (bot->door_hold_ent &&
 			    (!bot->door_hold_ent->inuse ||
@@ -8994,8 +8955,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 			if (door_hold && !declared_door && !drop_replay_failed)
 			{
-				short door_speed = door_hold == 2 ? -200
-				                 : (door_hold == 3 ? 400 : 0);
+				short door_speed = door_hold == SG_DOOR_DRIVE_RETREAT ? -200
+				                 : (door_hold == SG_DOOR_DRIVE_FORWARD ? 400 : 0);
 
 				cmd->upmove = 0;
 				if (door_speed != 0 && e->waterlevel <= 1)

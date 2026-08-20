@@ -910,7 +910,7 @@ OBJS := \
 	sg_weights.o \
 	sg_tilt.o \
 	sg_lead.o \
-	sg_move.o \
+	sg_move.o slipgate/sg_feeler_probe.o \
 	sg_price.o \
 	sg_descend.o slipgate/sg_traversal_transition.o \
 	sg_goal.o \
@@ -2472,7 +2472,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(STRIKE_ADAPTER_TEST_BIN) $(STRIKE_ADAPTER_INTEGRATION_TEST) \
 		$(DEFENSE_COMBAT_INTEGRATION_TEST) \
 		$(CARRIER_RETURN_TEST) $(COMBAT_AIM_TEST) \
-		$(OFFENSE_FLAG_PICKUP_TEST) \
+		$(OFFENSE_FLAG_PICKUP_TEST) tests/botfill_selector_test.py \
 		$(ITEM_COMMITMENT_TEST_BIN) $(ITEM_COMMITMENT_INTEGRATION_TEST) \
 		$(HOOK_DIAGNOSTICS_TEST_BIN) \
 		$(HOOK_DIAGNOSTICS_INTEGRATION_TEST) \
@@ -2554,7 +2554,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)python3 -B $(DEFENSE_COMBAT_INTEGRATION_TEST)
 	$(Q)python3 -B $(CARRIER_RETURN_TEST)
 	$(Q)python3 -B $(COMBAT_AIM_TEST)
-	$(Q)python3 -B $(OFFENSE_FLAG_PICKUP_TEST)
+	$(Q)python3 -B -m unittest tests.test_offense_flag_pickup_recovery \
+		tests.botfill_selector_test
 	$(Q)./$(ITEM_COMMITMENT_TEST_BIN)
 	$(Q)python3 -B $(ITEM_COMMITMENT_INTEGRATION_TEST)
 	$(Q)./$(HOOK_DIAGNOSTICS_TEST_BIN)
@@ -2910,7 +2911,6 @@ clean:
 strip: $(TARGET)
 	$(E) [STRIP]
 	$(Q)$(STRIP) $(TARGET)
-
 
 # Third-party SQLite amalgamation: own rule, warnings off, single-threaded.
 SQLITE_CFLAGS = -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 \

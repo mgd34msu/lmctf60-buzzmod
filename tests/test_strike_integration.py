@@ -110,7 +110,7 @@ class StrikeIntegrationTest(unittest.TestCase):
             output = self._compile_function_section_probe(tmp,
                 "sg_strike_move_gate_test", [
                     "tests/sg_strike_move_gate_test.c",
-                    "slipgate/sg_move.c",
+                    "slipgate/sg_move.c", "slipgate/sg_feeler_probe.c",
                     "slipgate/sg_localization.c",
                     "slipgate/sg_strike.c",
                 ])
