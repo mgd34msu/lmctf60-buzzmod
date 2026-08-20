@@ -2331,12 +2331,12 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 		bot->visit_seed[i] = -1;
 		bot->visit_goal[i] = 0;
 		bot->visit_min[i] = 0;
-		bot->visit_field[i] = NULL;
+		bot->visit_key[i] = (sg_field_key_t){ 0 };
 		bot->visit_combat[i] = false;
 		bot->visit_time[i] = 0.0f;
 	}
 	bot->visit_head = 0;
-	bot->orbit_field = NULL;
+	bot->orbit_goal = (sg_field_key_t){ 0 };
 	bot->orbit_last_seed = -1;
 	bot->inlinks_n = 0;
 	bot->prev_seed = -1;
@@ -3048,12 +3048,12 @@ void SG_BotThink(sg_bot_t *bot)
 				bot->visit_seed[visit] = -1;
 				bot->visit_goal[visit] = 0;
 				bot->visit_min[visit] = 0;
-				bot->visit_field[visit] = NULL;
+				bot->visit_key[visit] = (sg_field_key_t){ 0 };
 				bot->visit_combat[visit] = false;
 				bot->visit_time[visit] = 0.0f;
 			}
 			bot->visit_head = 0;
-			bot->orbit_field = NULL;
+			bot->orbit_goal = (sg_field_key_t){ 0 };
 			bot->orbit_last_seed = -1;
 		}
 		bot->jump_link = -1;

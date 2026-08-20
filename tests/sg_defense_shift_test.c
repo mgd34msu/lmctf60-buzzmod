@@ -1,5 +1,6 @@
 #include "slipgate/sg_defense_shift.h"
 #include "slipgate/sg_route_policy.h"
+#include "slipgate/sg_field_key.h"
 #include "g_local.h"
 #include "slipgate/sg_defense_facing.h"
 #include "slipgate/sg_combat.h"
@@ -34,6 +35,20 @@ static void TestOneExitRouteStaysMobile(void)
 	CHECK(!SG_RouteReturnPenaltyAllowed(-1, 4, 1, 3, 0, 60.0f));
 	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 2, 3, 0, 60.0f));
 	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, 2, 60.0f));
+}
+
+static void TestMovingObjectiveStartsANewOrbit(void)
+{
+	int moving_field[3];
+	int fixed_field[3];
+	sg_field_key_t first = { moving_field, 1 };
+	sg_field_key_t moved = { moving_field, 2 };
+	sg_field_key_t other = { fixed_field, 1 };
+
+	CHECK(SG_FieldKeyMatches(first, first));
+	CHECK(!SG_FieldKeyMatches(first, moved));
+	CHECK(!SG_FieldKeyMatches(first, other));
+	CHECK(!SG_FieldKeyMatches((sg_field_key_t){ 0 }, first));
 }
 
 static void TestAttackDescentCannotPriceItselfStill(void)
@@ -507,6 +522,7 @@ static void TestCombatPreviewCandidateLaw(void)
 int main(void)
 {
 	TestOneExitRouteStaysMobile();
+	TestMovingObjectiveStartsANewOrbit();
 	TestAttackDescentCannotPriceItselfStill();
 	TestNearGoalHookNeedsFootProgress();
 	TestCandidateChargesImmediateTraversal();

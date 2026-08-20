@@ -10,6 +10,7 @@
 #include "sg_door_approach.h"
 #include "sg_rune.h"
 #include "sg_strike.h"
+#include "sg_field_key.h"
 
 #define SG_MAXBOTS      16
 #define SG_DOOR_APPROACH_MAX_MASTERS 16
@@ -206,11 +207,11 @@ typedef struct sg_bot_s
 	int			visit_seed[SG_VISIT_RING];
 	int			visit_goal[SG_VISIT_RING];  /* the seed's value at visit */
 	int			visit_min[SG_VISIT_RING];   /* best goal reached SINCE */
-	const int		*visit_field[SG_VISIT_RING]; /* exact objective field */
+	sg_field_key_t	visit_key[SG_VISIT_RING]; /* exact objective field/root */
 	qboolean		visit_combat[SG_VISIT_RING]; /* fight occurred since visit */
 	float		visit_time[SG_VISIT_RING];
 	int			visit_head;
-	const int		*orbit_field; /* continuous field owning the visit ring */
+	sg_field_key_t	orbit_goal; /* continuous objective owning the visit ring */
 	int			orbit_last_seed; /* last seed consumed by the wide-orbit edge;
 		                             * belongs to this bot/life, not the process */
 

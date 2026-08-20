@@ -706,7 +706,7 @@ static void CheckTacticCacheTracksObjectiveIdentity(void)
 	CHECK(SG_TacticCacheNeedsRefresh(&cache)); \
 } while (0)
 	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
-	CHECK_REFRESH(cache.current_goal.minimum_seed = 0);
+	CHECK_REFRESH(cache.current_goal.root_seed = 0);
 	CHECK_REFRESH(cache.current_goal.field = fixed_field);
 	CHECK_REFRESH(cache.current_role = SG_ROLE_RECOVER);
 	CHECK_REFRESH(cache.committed_at = 12.0f);

@@ -3,12 +3,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
-
-typedef struct
-{
-	const int *field;
-	int minimum_seed;
-} sg_tactic_goal_t;
+#include "slipgate/sg_field_key.h"
 
 typedef struct
 {
@@ -16,8 +11,8 @@ typedef struct
 	int tactic_seed;
 	int cached_role;
 	int current_role;
-	sg_tactic_goal_t cached_goal;
-	sg_tactic_goal_t current_goal;
+	sg_field_key_t cached_goal;
+	sg_field_key_t current_goal;
 	float committed_at;
 	float now;
 	int route_cost;
@@ -28,8 +23,7 @@ static inline qboolean SG_TacticCacheNeedsRefresh(
 {
 	return !cache->topology_current || cache->tactic_seed < 0 ||
 	    cache->cached_role != cache->current_role ||
-	    cache->cached_goal.field != cache->current_goal.field ||
-	    cache->cached_goal.minimum_seed != cache->current_goal.minimum_seed ||
+	    !SG_FieldKeyMatches(cache->cached_goal, cache->current_goal) ||
 	    cache->committed_at > cache->now ||
 	    cache->now - cache->committed_at > 10.0f ||
 	    cache->route_cost >= SG_FIELD_INF || cache->route_cost < 300;

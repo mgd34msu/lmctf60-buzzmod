@@ -80,7 +80,15 @@ def test_multiexit_cycle_prefers_nonrecent_unshelved_lower_cost_route():
     select = section(DESCEND, "static int Objective_CycleRoute", "static void StrikeWeaponPurposeClear")
     assert "SG_RouteCandidateGoalMs(goal_field[candidate->to]" in select
     assert "cost >= here || Carrier_LinkShelved(bot, link) ||" in select
-    assert "Objective_VisitedRecently(bot, candidate->to, goal_field)" in select
+    assert "Objective_VisitedRecently(bot, candidate->to, goal)" in select
+
+
+def test_moving_objective_retires_prior_orbit_history():
+    orbit = section(DESCEND, "/* Detect loops wider than the route watch",
+                    "/* Deaddoor and every later shelf")
+    assert "SG_FieldKey(SG_Rune(), goal_field)" in orbit
+    assert "SG_FieldKeyMatches(bot->orbit_goal, goal)" in orbit
+    assert "SG_FieldKeyMatches(bot->visit_key[v], goal)" in orbit
 
 
 def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
@@ -93,8 +101,8 @@ def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
     assert "SG_RouteCandidateGoalMs(goal_field[l->to]" in pick
     cycle = section(DESCEND, "int cycle_link = bestlink;",
                     "bot->visit_seed[bot->visit_head]")
-    assert "alternate = Objective_CycleRoute(bot, goal_field, true);" in cycle
-    assert "alternate = Objective_CycleRoute(bot, goal_field, false);" in cycle
+    assert "alternate = Objective_CycleRoute(bot, goal, true);" in cycle
+    assert "alternate = Objective_CycleRoute(bot, goal, false);" in cycle
     assert "memset(bot->bl_until, 0, sizeof(bot->bl_until));" not in cycle
 
 

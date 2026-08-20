@@ -1659,11 +1659,9 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	{
 		static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
 		static unsigned tac_field_epoch[SG_MAXBOTS];
-		static sg_tactic_goal_t tac_goal[SG_MAXBOTS];
+		static sg_field_key_t tac_goal[SG_MAXBOTS];
 		int bi = (int)(bot - sg_bots);
-		sg_tactic_goal_t goal = {
-			goal_field, SG_FieldRootSeed(SG_Rune(), goal_field)
-		};
+		sg_field_key_t goal = SG_FieldKey(SG_Rune(), goal_field);
 		sg_tactic_cache_t cache = {
 			.topology_current = Fields_ActionTopologyCurrent(tac_field_epoch[bi]),
 			.tactic_seed = bot->tac_seed, .cached_role = bot->tac_role,

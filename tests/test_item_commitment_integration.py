@@ -301,7 +301,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         start = source.index("static int tac_fields")
         end = source.index("if (SG_DefenseSupplyActive(bot))", start)
         tactics = source[start:end]
-        root = tactics.index("SG_FieldRootSeed(SG_Rune(), goal_field)")
+        root = tactics.index("SG_FieldKey(SG_Rune(), goal_field)")
         refresh = tactics.index("SG_TacticCacheNeedsRefresh(&cache)")
         publish = tactics.index("tac_goal[bi] = goal")
         flood = tactics.index("Field_Flood(SG_Rune(), tac_fields[bi]")

@@ -5,6 +5,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_route_policy.h"
+#include "slipgate/sg_field_key.h"
 
 #define SG_CARRIER_SCREEN_LEAD_MIN_MS 900
 #define SG_CARRIER_SCREEN_LEAD_MAX_MS 2200
@@ -26,6 +27,11 @@ static inline int SG_FieldRootSeed(const rune_t *r, const int *field)
 		}
 	}
 	return best;
+}
+
+static inline sg_field_key_t SG_FieldKey(const rune_t *r, const int *field)
+{
+	return (sg_field_key_t){ field, SG_FieldRootSeed(r, field) };
 }
 
 static inline int SG_FieldProjectionLinkCostMs(const rune_t *r,

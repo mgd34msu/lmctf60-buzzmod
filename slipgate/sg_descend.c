@@ -33,6 +33,7 @@
 #include "slipgate/sg_ribbon_random.h"
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_rune_handoff_policy.h"
+#include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
 #include "slipgate/sg_hooks.h"
@@ -1501,13 +1502,13 @@ static qboolean Carrier_LinkShelved(const sg_bot_t *bot, int link)
 }
 
 static qboolean Objective_VisitedRecently(const sg_bot_t *bot, int seed,
-	const int *goal_field)
+	sg_field_key_t goal)
 {
 	int visit;
 
 	for (visit = 0; bot && visit < SG_VISIT_RING; visit++)
 		if (bot->visit_seed[visit] == seed &&
-		    bot->visit_field[visit] == goal_field &&
+		    SG_FieldKeyMatches(bot->visit_key[visit], goal) &&
 		    SG_AgeUnder(bot->visit_time[visit], 30.0f))
 			return true;
 	return false;
@@ -1517,9 +1518,10 @@ static qboolean Objective_VisitedRecently(const sg_bot_t *bot, int seed,
  * genuinely descends the same finite field. A one-exit corridor may have no
  * such route; its fallback deliberately keeps the shelf as evidence while
  * allowing the only finite exit to remain mobile. */
-static int Objective_CycleRoute(sg_bot_t *bot, const int *goal_field,
+static int Objective_CycleRoute(sg_bot_t *bot, sg_field_key_t goal,
 	qboolean alternate_only)
 {
+	const int *goal_field = goal.field;
 	int link, selected = -1;
 	int selected_cost = SG_FIELD_INF;
 	int finite_count = 0;
@@ -1556,7 +1558,7 @@ static int Objective_CycleRoute(sg_bot_t *bot, const int *goal_field,
 			continue;
 		if (alternate_only &&
 		    (cost >= here || Carrier_LinkShelved(bot, link) ||
-		     Objective_VisitedRecently(bot, candidate->to, goal_field)))
+		     Objective_VisitedRecently(bot, candidate->to, goal)))
 			continue;
 		if (cost < selected_cost)
 		{
@@ -3554,36 +3556,28 @@ stag_done:
 	 * still there this frame */
 	bot->mate_block_last = false;
 
-	/*
-	 * The wide-orbit detector. On arriving at a seed, check the ring: if
-	 * this seed was here within 30 seconds and the goal has not improved
-	 * since, the route is a cycle -- shelve the link about to be taken
-	 * from it. Loops wider than the watch's ball (the lmctf01 carrier's
-	 * 250-unit hook triangle) die here; honest revisits (a defender
-	 * patrolling, a fight's back-and-forth) pass because their goal
-	 * values move or their clocks expire.
-	 */
+	/* Detect loops wider than the route watch from recent objective visits
+	 * and the best cost reached after each one. */
 	{
 		int gv = (goal_field[bot->seed] < SG_FIELD_INF)
 		             ? goal_field[bot->seed] : 0x7ffffff;
+		sg_field_key_t goal = SG_FieldKey(SG_Rune(), goal_field);
 		edict_t *enemy_flag = enemy_pressure ? SG_EnemyFlag(team) : NULL;
 		qboolean enemy_flag_home = enemy_flag && ctf_flagathome(enemy_flag);
 		int v;
 
-		/* A departure onto another objective is not part of this orbit.  Drop
-		 * the whole history at the pointer identity edge so returning later to
-		 * the same seed cannot join two different missions into one loop. */
-		if (bot->orbit_field != goal_field)
+		/* A departure onto another field or moving source starts new history. */
+		if (!SG_FieldKeyMatches(bot->orbit_goal, goal))
 		{
 			for (v = 0; v < SG_VISIT_RING; v++)
 			{
 				bot->visit_seed[v] = -1;
-				bot->visit_field[v] = NULL;
+				bot->visit_key[v] = (sg_field_key_t){ 0 };
 				bot->visit_combat[v] = false;
 			}
 			bot->visit_head = 0;
 			bot->orbit_last_seed = -1;
-			bot->orbit_field = goal_field;
+			bot->orbit_goal = goal;
 		}
 
 		/* every live entry keeps the best goal the bot has touched since
@@ -3594,7 +3588,7 @@ stag_done:
 		 * 7 -> 1, lmctf03 shelves 434). */
 		for (v = 0; v < SG_VISIT_RING; v++)
 			if (bot->visit_seed[v] >= 0 &&
-			    bot->visit_field[v] == goal_field)
+			    SG_FieldKeyMatches(bot->visit_key[v], goal))
 			{
 				if (gv < bot->visit_min[v])
 					bot->visit_min[v] = gv;
@@ -3612,7 +3606,7 @@ stag_done:
 			 * lesson: resistance must never shred a sound route. */
 			for (v = 0; v < SG_VISIT_RING; v++)
 				if (bot->visit_seed[v] == bot->seed &&
-				    bot->visit_field[v] == goal_field &&
+				    SG_FieldKeyMatches(bot->visit_key[v], goal) &&
 				    SG_AgeUnder(bot->visit_time[v], 30.0f) &&
 				    SG_AgeOver(bot->visit_time[v], 3.0f) &&
 				    bot->visit_min[v] >= bot->visit_goal[v] &&
@@ -3635,9 +3629,9 @@ stag_done:
 					 * next frame rediscover it.  Prefer an unvisited descending
 					 * branch; when this is a one-exit corridor, permit its finite
 					 * exit without deleting the fresh cycle evidence. */
-					alternate = Objective_CycleRoute(bot, goal_field, true);
+					alternate = Objective_CycleRoute(bot, goal, true);
 					if (alternate < 0)
-						alternate = Objective_CycleRoute(bot, goal_field, false);
+						alternate = Objective_CycleRoute(bot, goal, false);
 					if (bot->commit_link == cycle_link &&
 					    SG_Rune()->links[cycle_link].action == RL_RUN)
 					{
@@ -3659,7 +3653,7 @@ stag_done:
 			bot->visit_seed[bot->visit_head] = bot->seed;
 			bot->visit_goal[bot->visit_head] = gv;
 			bot->visit_min[bot->visit_head] = gv;
-			bot->visit_field[bot->visit_head] = goal_field;
+			bot->visit_key[bot->visit_head] = goal;
 			bot->visit_combat[bot->visit_head] = duel || bot->engaged_last;
 			SG_Mark(&bot->visit_time[bot->visit_head]);
 			bot->visit_head = (bot->visit_head + 1) % SG_VISIT_RING;
