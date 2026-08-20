@@ -22,6 +22,13 @@ static inline qboolean SG_RuneHandoffEligible(sg_role_t role,
 	return role == SG_ROLE_ATTACK || role == SG_ROLE_ESCORT;
 }
 
+static inline qboolean SG_RuneHandoffAllowsOptional(qboolean route_active)
+{
+	if (route_active != false && route_active != true)
+		return false;
+	return !route_active;
+}
+
 /* A belief selects the candidate slot, but the current CTF state authorizes
  * convergence and the irreversible toss.  Bounds, life, team and actual flag
  * possession and an empty rune slot are all required; a former carrier,

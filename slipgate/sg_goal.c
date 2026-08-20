@@ -88,7 +88,6 @@ SG_GOAL_PRIVATE int Rally_CoverSeed(const rune_t *r, int from)
 
 #undef SG_GOAL_PRIVATE
 
-
 static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
 {
 	int team = e->client->ctf.teamnum;
@@ -1352,12 +1351,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	const sg_weights_t *w = tc->w;
 	const int *support = tc->support;
 	const int *intercept = tc->intercept;
-
 	const int *goal_field;
 	const int *route_field;
 	qboolean route_pure;
-
-
+	qboolean rune_handoff_route = false;
 	if (role == SG_ROLE_CARRY || role == SG_ROLE_DEFEND)
 	{
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
@@ -1579,7 +1576,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				    bot->seed >= 0 &&
 				    sg_fields.our_carrier[SG_TeamIdx(team)][bot->seed] <
 				        SG_FIELD_INF)
+				{
 					goal_field = sg_fields.our_carrier[SG_TeamIdx(team)];
+					rune_handoff_route = true;
+				}
 				else
 				{
 					bot->runeconv_until = 0.0f;
@@ -1594,7 +1594,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/* Optional item leads run only after principal objective selection. */
-	if (!tc->strike_blocks_optional)
+	if (!tc->strike_blocks_optional && SG_RuneHandoffAllowsOptional(rune_handoff_route))
 	{
 		const int *lead = Lead_Field(bot, role, carrying,
 		    SG_ChatOrderedRole(e));
@@ -1604,10 +1604,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	}
 
 	/* Resolve mega demand before committing a tactical waypoint. */
-	tc->mega = tc->strike_blocks_optional ? 0.0f
-	                                      : Mega_Worth(bot, e, role);
-
-
+	tc->mega = (tc->strike_blocks_optional || !SG_RuneHandoffAllowsOptional(
+	    rune_handoff_route)) ? 0.0f : Mega_Worth(bot, e, role);
 	if (tc->mega > 0.0f && SG_TimerPending(bot->mega_next))
 		tc->mega = 0.0f;
 	if (tc->mega > 0.0f)
@@ -1651,11 +1649,11 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	bot->last_goalcost = (bot->seed >= 0 &&
 	                      goal_field[bot->seed] < SG_FIELD_INF)
 	                     ? goal_field[bot->seed] : -1;
-
-
 	route_field = goal_field;
-	route_pure = false;
-	if (!tc->strike_blocks_optional && sg_cv.tactics->value &&
+	route_pure = rune_handoff_route;
+	if (SG_RuneHandoffAllowsOptional(rune_handoff_route) &&
+	    !tc->strike_blocks_optional &&
+	    sg_cv.tactics->value &&
 	    role != SG_ROLE_ESCORT &&
 	    /* A carrier keeps the live escape field instead of committing to a
 	     * ten-second tactical waypoint. */

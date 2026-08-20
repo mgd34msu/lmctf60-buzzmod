@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -273,6 +274,27 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
                       descend)
         self.assertIn("toss_path_clear = SG_CanSee(e, ce->s.origin,",
                       descend)
+
+    def test_rune_handoff_route_blocks_optional_objective_replacement(self):
+        source = self.text("slipgate/sg_goal.c")
+        start = source.index("if (sg_cv.runetoss->value &&")
+        end = source.index("if (SG_DefenseSupplyActive(bot))", start)
+        handoff = source[start:end]
+        self.assertIn("rune_handoff_route = true;", handoff)
+        self.assertIn(
+            "SG_RuneHandoffAllowsOptional(rune_handoff_route)",
+            handoff,
+        )
+        self.assertIn(
+            "!SG_RuneHandoffAllowsOptional(",
+            handoff,
+        )
+        optional_guards = re.findall(
+            r"SG_RuneHandoffAllowsOptional\(\s*rune_handoff_route\s*\)",
+            handoff,
+        )
+        self.assertEqual(len(optional_guards), 3)
+        self.assertIn("route_pure = rune_handoff_route;", handoff)
 
     def test_rune_handoff_binds_the_immediate_toss_and_submitted_view(self):
         source = self.text("slipgate/sg_descend.c")

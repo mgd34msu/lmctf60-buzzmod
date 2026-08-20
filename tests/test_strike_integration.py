@@ -444,12 +444,12 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertLess(lead_abort, route)
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         lead = goal.index("const int *lead = Lead_Field")
-        self.assertIn("if (!tc->strike_blocks_optional)",
-                      goal[lead - 100:lead])
-        self.assertIn(
-            "tc->mega = tc->strike_blocks_optional ? 0.0f", goal)
         tactics = goal.index("sg_cv.tactics->value")
-        self.assertIn("!tc->strike_blocks_optional", goal[tactics - 80:tactics])
+        for route_guard in (goal[lead - 140:lead], goal[tactics - 140:tactics]):
+            self.assertIn("!tc->strike_blocks_optional", route_guard)
+            self.assertIn("SG_RuneHandoffAllowsOptional", route_guard)
+        mega = goal.index("tc->mega =")
+        self.assertIn("tc->strike_blocks_optional", goal[mega:mega + 160])
         price = (ROOT / "slipgate/sg_price.c").read_text()
         self.assertIn(
             "SG_OptionalItemDetourAllowed(tc->push,\n"

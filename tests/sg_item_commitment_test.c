@@ -531,6 +531,9 @@ int main(void)
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, false));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, 2, true));
 	CHECK(!SG_RuneHandoffEligible(SG_ROLE_ATTACK, false, -1, true, 2));
+	CHECK(SG_RuneHandoffAllowsOptional(false));
+	CHECK(!SG_RuneHandoffAllowsOptional(true));
+	CHECK(!SG_RuneHandoffAllowsOptional(2));
 	CHECK(SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
 	    100, false, CTF_TEAM_RED, true, false));
 	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, -1, true, true,
