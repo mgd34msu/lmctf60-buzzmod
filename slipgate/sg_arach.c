@@ -2256,6 +2256,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
 	bot->commit_route_goal = (sg_field_key_t){ 0 };
+	bot->commit_retirement_pending = false;
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
@@ -2722,8 +2723,7 @@ static qboolean Bot_DeclaredDoorGuardRecord(sg_bot_t *bot,
 
 static void Bot_DeclaredDoorGuardClearAction(sg_bot_t *bot)
 {
-	if (bot->strike_weapon_link >= 0 &&
-	    bot->sticky_link == bot->strike_weapon_link)
+	if (bot->commit_link >= 0 && bot->sticky_link == bot->commit_link)
 	{
 		bot->sticky_link = -1;
 		bot->latch_until = 0.0f;
@@ -2744,6 +2744,8 @@ static void Bot_DeclaredDoorGuardClearAction(sg_bot_t *bot)
 	bot->declared_door_recovery_since = 0.0f;
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
+	bot->commit_route_goal = (sg_field_key_t){ 0 };
+	bot->commit_retirement_pending = false;
 	bot->strike_weapon_link = -1;
 	bot->strike_weapon_until = 0.0f;
 	bot->strike_weapon_draining = false;
@@ -2845,11 +2847,10 @@ static qboolean Bot_DeclaredDoorGuardRestore(sg_bot_t *bot)
 	if (!Bot_DeclaredDoorGuardRecord(bot, &record) ||
 	    bot->commit_link != record.link_index)
 		return false;
-	/* A weapon-deadline retirement is one-way.  This paused lease exists only
-	 * because current subjects were not yet proved clear; renew the protective
-	 * TOP hold until release or the existing five-second terminal budget, but
-	 * never resume forward trigger/egress authority for the ended errand. */
-	if (bot->strike_weapon_draining)
+	/* Retirement is one-way.  This paused lease exists only because current
+	 * subjects were not yet proved clear; renew its protective TOP hold, but
+	 * never resume forward activation for the superseded route. */
+	if (bot->strike_weapon_draining || bot->commit_retirement_pending)
 	{
 		if (record.state == SG_MOVER_LEASE_ACTIVE)
 			(void)SG_DeclaredDoorGuardPause(bot);
@@ -3688,8 +3689,6 @@ void SG_LevelChange(void)
 }
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
-/* Host-free transition probes execute the exact production helpers above.
- * Release builds contain none of these entry points. */
 void SG_StrikeTestSetRune(rune_t *rune)
 {
 	sg_rune = rune;

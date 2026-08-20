@@ -50,13 +50,6 @@ typedef enum sg_strike_weapon_route_verdict_e
 	SG_STRIKE_WEAPON_ROUTE_DRAIN
 } sg_strike_weapon_route_verdict_t;
 
-typedef enum sg_strike_weapon_door_retirement_e
-{
-	SG_STRIKE_WEAPON_DOOR_RELEASE = 0,
-	SG_STRIKE_WEAPON_DOOR_HOLD,
-	SG_STRIKE_WEAPON_DOOR_TERMINAL
-} sg_strike_weapon_door_retirement_t;
-
 /* Minimal production controller snapshot used to distinguish cancelable
  * source staging from irreversible live physics.  Hook and rocket-jump state
  * are checked before link action because an optional speed hook may ride an
@@ -215,8 +208,6 @@ sg_strike_weapon_route_verdict_t SG_StrikeWeaponRouteVerdict(
 	int physical_controller_active, int retirement_latched);
 int SG_StrikeWeaponControllerPhysical(
 	const sg_strike_weapon_controller_state_t *state);
-sg_strike_weapon_door_retirement_t SG_StrikeWeaponDoorRetirement(
-	int release_proved_clear, int recovery_expired, int hold_open_ready);
 int SG_StrikeGenericRailAllowed(int strike_active);
 
 /* A concrete pressure duty persists independently of the transient HOLD/RUSH

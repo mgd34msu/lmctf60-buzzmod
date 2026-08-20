@@ -1593,11 +1593,11 @@ static void StrikeWeaponPurposeClear(sg_bot_t *bot)
  * irreversible trigger touch.  Retirement must positively release that lease
  * before clearing local state.  Failure enters the existing bounded paused
  * safety law and ends this bot frame; it never authorizes forward activation. */
-static qboolean StrikeWeaponDoorLeaseHeld(sg_bot_t *bot, sg_think_t *tc,
+static qboolean DoorLeaseBlocksRetirement(sg_bot_t *bot, sg_think_t *tc,
 	int action)
 {
 	sg_compound_guard_result_t result;
-	sg_strike_weapon_door_retirement_t retirement;
+	sg_door_lease_retirement_t retirement;
 	qboolean expired = false;
 	qboolean hold_ready = false;
 
@@ -1617,11 +1617,11 @@ static qboolean StrikeWeaponDoorLeaseHeld(sg_bot_t *bot, sg_think_t *tc,
 			hold_ready = SG_DeclaredDoorGuardHoldOpen(bot, 500) ==
 			    SG_COMPOUND_GUARD_OK;
 	}
-	retirement = SG_StrikeWeaponDoorRetirement(
+	retirement = SG_DoorLeaseRetirement(
 	    result == SG_COMPOUND_GUARD_OK, expired, hold_ready);
-	if (retirement == SG_STRIKE_WEAPON_DOOR_RELEASE)
+	if (retirement == SG_DOOR_LEASE_RELEASE)
 		return false;
-	if (retirement == SG_STRIKE_WEAPON_DOOR_TERMINAL)
+	if (retirement == SG_DOOR_LEASE_TERMINAL)
 	{
 		SG_DeclaredDoorTerminalDeath(bot);
 		tc->think_over = true;
@@ -1633,7 +1633,6 @@ static qboolean StrikeWeaponDoorLeaseHeld(sg_bot_t *bot, sg_think_t *tc,
 		bot->declared_guard_pause_started = level.time;
 	}
 	(void)SG_DeclaredDoorGuardPause(bot);
-	bot->strike_weapon_draining = true;
 	tc->think_over = true;
 	return true;
 }
@@ -1662,8 +1661,11 @@ static qboolean StrikeWeaponPurposeReconcile(sg_bot_t *bot, sg_think_t *tc)
 		action = SG_Rune()->links[bot->strike_weapon_link].action;
 		physical = SG_TraversalControllerPhysical(bot, action);
 		if (!authority && !physical &&
-		    StrikeWeaponDoorLeaseHeld(bot, tc, action))
+		    DoorLeaseBlocksRetirement(bot, tc, action))
+		{
+			bot->strike_weapon_draining = true;
 			return true;
+		}
 	}
 	verdict = SG_StrikeWeaponRouteVerdict(exact, authority, physical,
 	    bot->strike_weapon_draining);
@@ -1730,8 +1732,11 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 
 		if (!SG_TraversalControllerPhysical(bot, prior_action))
 		{
-			if (StrikeWeaponDoorLeaseHeld(bot, tc, prior_action))
+			if (DoorLeaseBlocksRetirement(bot, tc, prior_action))
+			{
+				bot->strike_weapon_draining = true;
 				return true;
+			}
 			SG_StagedTraversalCancel(bot, prior_action);
 		}
 	}
@@ -1748,9 +1753,10 @@ static qboolean StrikeWeaponPrepareCommit(sg_bot_t *bot, sg_think_t *tc)
 	return false;
 }
 
-/* Pure routes retire reversible RUN and unfired HOOK commitments when their
- * dynamic goal changes.  Physical controllers keep their bounded completion. */
-static void RetireSupersededPureRouteCommit(sg_bot_t *bot, const sg_think_t *tc)
+/* A pure route's exact dynamic goal owns every staged traversal.  Goal changes
+ * cancel nonphysical work after durable guards release; physical controllers
+ * keep bounded completion. */
+static qboolean PureRouteRetirementBlocksFrame(sg_bot_t *bot, sg_think_t *tc)
 {
 	rune_t *rune = SG_Rune();
 	sg_field_key_t current_goal;
@@ -1759,15 +1765,20 @@ static void RetireSupersededPureRouteCommit(sg_bot_t *bot, const sg_think_t *tc)
 	if (!bot || !tc || !tc->route_pure || !tc->route_field || !rune ||
 	    !rune->links || bot->commit_link < 0 ||
 	    bot->commit_link >= rune->hdr.num_links)
-		return;
+		return false;
 	current_goal = SG_FieldKey(rune, tc->route_field);
 	if (SG_FieldKeyMatches(bot->commit_route_goal, current_goal))
-		return;
+		return false;
 	action = rune->links[bot->commit_link].action;
-	if ((action != RL_RUN && action != RL_HOOK) ||
-	    SG_TraversalControllerPhysical(bot, action))
-		return;
+	if (SG_TraversalControllerPhysical(bot, action))
+		return false;
+	if (DoorLeaseBlocksRetirement(bot, tc, action))
+	{
+		bot->commit_retirement_pending = true;
+		return true;
+	}
 	SG_StagedTraversalCancel(bot, action);
+	return false;
 }
 
 /* Filter only a fresh weapon-owned selection.  Other candidate policy remains
@@ -1813,6 +1824,7 @@ static void StrikeCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
 	new_link = &rune->links[bestlink];
 	bot->commit_link = bestlink;
 	bot->commit_route_goal = SG_FieldKey(rune, tc->route_field);
+	bot->commit_retirement_pending = false;
 	if (tc->strike_weapon_pursuit &&
 	    isfinite(tc->strike_weapon_deadline) &&
 	    tc->strike_weapon_deadline > level.time)
@@ -1929,7 +1941,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	/* Reconcile exact purpose before generic restoration can put it back. */
 	if (StrikeWeaponPrepareCommit(bot, tc))
 		return bot->commit_link;
-	RetireSupersededPureRouteCommit(bot, tc);
+	if (PureRouteRetirementBlocksFrame(bot, tc))
+		return bot->commit_link;
 
 	/* The supply transaction is a bounded navigation owner, not a second
 	 * objective.  Irrecoverable identity/life/role edges cancel it; edges that
@@ -3883,9 +3896,6 @@ no_hold:;
 }
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
-/* Host-free transition tests call these wrappers so they execute the exact
- * production statics above.  They add no alternate policy and are absent from
- * release builds. */
 qboolean SG_StrikeTestWeaponReconcile(sg_bot_t *bot, sg_think_t *tc)
 {
 	return StrikeWeaponPurposeReconcile(bot, tc);
@@ -3913,10 +3923,10 @@ void SG_StrikeTestCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
 	StrikeCommitFreshLink(bot, tc, bestlink);
 }
 
-void SG_StrikeTestRetireSupersededPureRouteCommit(sg_bot_t *bot,
-	const sg_think_t *tc)
+qboolean SG_StrikeTestPureRouteRetirementBlocksFrame(sg_bot_t *bot,
+	sg_think_t *tc)
 {
-	RetireSupersededPureRouteCommit(bot, tc);
+	return PureRouteRetirementBlocksFrame(bot, tc);
 }
 
 qboolean SG_StrikeTestRailLateOverrideAllowed(const sg_bot_t *bot,

@@ -982,14 +982,6 @@ static void TestWeaponRouteRetirementVerdicts(void)
 	state.swim_active = 1;
 	CHECK(SG_StrikeWeaponControllerPhysical(&state));
 
-	CHECK(SG_StrikeWeaponDoorRetirement(1, 0, 0) ==
-	    SG_STRIKE_WEAPON_DOOR_RELEASE);
-	CHECK(SG_StrikeWeaponDoorRetirement(0, 0, 1) ==
-	    SG_STRIKE_WEAPON_DOOR_HOLD);
-	CHECK(SG_StrikeWeaponDoorRetirement(0, 1, 1) ==
-	    SG_STRIKE_WEAPON_DOOR_TERMINAL);
-	CHECK(SG_StrikeWeaponDoorRetirement(0, 0, 0) ==
-	    SG_STRIKE_WEAPON_DOOR_TERMINAL);
 	CHECK(SG_StrikeGenericRailAllowed(0));
 	CHECK(!SG_StrikeGenericRailAllowed(1));
 }

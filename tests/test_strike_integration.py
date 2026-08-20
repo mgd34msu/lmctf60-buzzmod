@@ -636,27 +636,6 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("bot->strike_weapon_link = -1", client)
         self.assertIn("bot->strike_weapon_link = -1", arach)
 
-    def test_weapon_door_retirement_uses_guard_release_and_sticky_pause(self) -> None:
-        descend = (ROOT / "slipgate/sg_descend.c").read_text()
-        arach = (ROOT / "slipgate/sg_arach.c").read_text()
-        start = descend.index("static qboolean StrikeWeaponDoorLeaseHeld")
-        end = descend.index("static qboolean StrikeWeaponPurposeReconcile",
-                            start)
-        boundary = descend[start:end]
-        self.assertIn("SG_DeclaredDoorGuardReleaseProvedClear(bot)", boundary)
-        self.assertIn("result == SG_COMPOUND_GUARD_OK", boundary)
-        self.assertIn("SG_DeclaredDoorGuardHoldOpen(bot, 500)", boundary)
-        self.assertIn("SG_StrikeWeaponDoorRetirement", boundary)
-        self.assertIn("SG_DeclaredDoorGuardPause(bot)", boundary)
-        self.assertIn("bot->strike_weapon_draining = true", boundary)
-        self.assertIn("tc->think_over = true", boundary)
-        restore = arach.index("static qboolean Bot_DeclaredDoorGuardRestore")
-        think = arach.index("void SG_BotThink", restore)
-        restore_body = arach[restore:think]
-        self.assertIn("if (bot->strike_weapon_draining)", restore_body)
-        self.assertIn("SG_DeclaredDoorGuardPause(bot)", restore_body)
-
-
 class StageAMeasurementAuthorityTest(unittest.TestCase):
     @staticmethod
     def _contract_bytes() -> bytes:

@@ -1157,16 +1157,6 @@ int SG_StrikeWeaponControllerPhysical(
 	}
 }
 
-sg_strike_weapon_door_retirement_t SG_StrikeWeaponDoorRetirement(
-	int release_proved_clear, int recovery_expired, int hold_open_ready)
-{
-	if (release_proved_clear)
-		return SG_STRIKE_WEAPON_DOOR_RELEASE;
-	if (recovery_expired || !hold_open_ready)
-		return SG_STRIKE_WEAPON_DOOR_TERMINAL;
-	return SG_STRIKE_WEAPON_DOOR_HOLD;
-}
-
 int SG_StrikeGenericRailAllowed(int strike_active)
 {
 	return strike_active == 0;

@@ -285,6 +285,7 @@ typedef struct sg_bot_s
 	int			commit_link;    /* the gradient step being held */
 	float		commit_until;
 	sg_field_key_t		commit_route_goal;
+	qboolean	commit_retirement_pending;
 	/* Exact route transaction selected while the strike coordinator owns its
 	 * bounded weapon diversion.  The immutable core deadline is copied here;
 	 * draining means authority ended after a physical controller began. */

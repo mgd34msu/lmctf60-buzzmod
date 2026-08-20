@@ -133,9 +133,18 @@ static void TestStrikeDutyRetiresSupersededRoute(void)
 	CHECK(bot.tac_seed == -1 && bot.commit_link == 0 && bot.hook_phase == 2);
 }
 
+static void TestDoorLeaseRetirement(void)
+{
+	CHECK(SG_DoorLeaseRetirement(1, 0, 0) == SG_DOOR_LEASE_RELEASE);
+	CHECK(SG_DoorLeaseRetirement(0, 0, 1) == SG_DOOR_LEASE_HOLD);
+	CHECK(SG_DoorLeaseRetirement(0, 1, 1) == SG_DOOR_LEASE_TERMINAL);
+	CHECK(SG_DoorLeaseRetirement(0, 0, 0) == SG_DOOR_LEASE_TERMINAL);
+}
+
 int SG_TraversalTransitionTests(void)
 {
 	TestCarryStartRetiresOnlyReversibleTraversal();
 	TestStrikeDutyRetiresSupersededRoute();
+	TestDoorLeaseRetirement();
 	return failures;
 }

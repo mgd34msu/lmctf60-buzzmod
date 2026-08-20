@@ -29,6 +29,16 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 	return SG_StrikeWeaponControllerPhysical(&state) ? true : false;
 }
 
+sg_door_lease_retirement_t SG_DoorLeaseRetirement(
+	int release_proved_clear, int recovery_expired, int hold_open_ready)
+{
+	if (release_proved_clear)
+		return SG_DOOR_LEASE_RELEASE;
+	if (recovery_expired || !hold_open_ready)
+		return SG_DOOR_LEASE_TERMINAL;
+	return SG_DOOR_LEASE_HOLD;
+}
+
 void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 {
 	if (!bot)
@@ -36,6 +46,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 	bot->commit_link = -1;
 	bot->commit_until = 0.0f;
 	bot->commit_route_goal = (sg_field_key_t){ 0 };
+	bot->commit_retirement_pending = false;
 	bot->sticky_link = -1;
 	bot->latch_until = 0.0f;
 	if (bot->hook_phase == 1)

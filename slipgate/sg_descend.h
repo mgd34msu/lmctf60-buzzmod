@@ -54,8 +54,8 @@ int SG_StrikeTestWeaponFilterFreshCandidate(const sg_bot_t *bot,
 	const sg_think_t *tc, int bestlink);
 void SG_StrikeTestCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
 	int bestlink);
-void SG_StrikeTestRetireSupersededPureRouteCommit(sg_bot_t *bot,
-	const sg_think_t *tc);
+qboolean SG_StrikeTestPureRouteRetirementBlocksFrame(sg_bot_t *bot,
+	sg_think_t *tc);
 qboolean SG_StrikeTestRailLateOverrideAllowed(const sg_bot_t *bot,
 	const sg_think_t *tc);
 qboolean SG_StrikeTestRailWatchdogAllowed(const sg_bot_t *bot,

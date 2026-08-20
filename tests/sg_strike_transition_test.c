@@ -1,4 +1,3 @@
-/* Host-free execution of the real strike route-transition seams. */
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
@@ -300,6 +299,7 @@ static void CheckCleared(const sg_bot_t *bot)
 {
 	CHECK(bot->commit_link == -1);
 	CHECK(bot->commit_until == 0.0f);
+	CHECK(!bot->commit_retirement_pending);
 	CHECK(bot->sticky_link == -1);
 	CHECK(bot->latch_until == 0.0f);
 	CHECK(bot->strike_weapon_link == -1);
@@ -421,40 +421,78 @@ static void TestPureRouteChangeRetiresReversibleCommitments(void)
 {
 	sg_bot_t bot;
 	sg_think_t tc;
+	static const int release_only[] = { CALL_RELEASE };
+	static const int hold_pause[] = {
+		CALL_RELEASE, CALL_HOLD_OPEN, CALL_PAUSE
+	};
 	ArmPureRoute(&bot, &tc, RL_RUN);
 	bot.sticky_link = 1;
 	bot.latch_until = 25.0f;
 	CHECK(bot.commit_route_goal.field == weapon_field &&
 	    bot.commit_route_goal.root_seed == 1);
 	tc.route_field = enemy_field;
-	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
 	CHECK(bot.commit_route_goal.field == NULL);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 
 	ArmPureRoute(&bot, &tc, RL_RUN);
-	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == 1 && bot.commit_route_goal.field == weapon_field);
 	weapon_field[0] = 1200;
-	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == 1);
 	weapon_field[1] = 1200;
-	weapon_field[2] = 300;
-	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
 
+	ArmPureRoute(&bot, &tc, RL_JUMP);
+	weapon_field[1] = 1200;
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
+	CHECK(bot.commit_link == -1 && bot.jump_link == -1);
+	ArmPureRoute(&bot, &tc, RL_DOOR);
+	bot.declared_started = true;
+	durable_record.link_index = 1;
+	weapon_field[1] = 1200;
+	CHECK(!SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc));
+	CheckCalls(release_only, 1);
+	CHECK(bot.commit_link == -1 && !bot.declared_started);
+	CHECK(!bot.commit_retirement_pending);
+	ArmPureRoute(&bot, &tc, RL_BUTTON_DOOR);
+	bot.declared_started = true;
+	bot.sticky_link = 1;
+	bot.latch_until = 25.0f;
+	durable_record.link_index = 1;
+	release_result = SG_COMPOUND_GUARD_NOT_CLEAR;
+	weapon_field[1] = 1200;
+	CHECK(SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc));
+	CheckCalls(hold_pause, 3);
+	CHECK(tc.think_over && bot.commit_link == 1);
+	CHECK(bot.declared_started && bot.declared_guard_paused);
+	CHECK(bot.commit_retirement_pending);
+	GuardReset();
+	release_result = SG_COMPOUND_GUARD_NOT_CLEAR;
+	durable_record.state = SG_MOVER_LEASE_PAUSED;
+	level.time = 10.1f;
+	CHECK(!SG_StrikeTestDeclaredDoorGuardRestore(&bot));
+	CHECK(bot.commit_retirement_pending && bot.declared_guard_paused);
+	GuardReset();
+	CHECK(SG_StrikeTestDeclaredDoorGuardRestore(&bot));
+	CheckCalls(release_only, 1);
+	CHECK(bot.commit_link == -1 && bot.commit_route_goal.field == NULL);
+	CHECK(!bot.commit_retirement_pending && bot.sticky_link == -1);
+	CHECK(bot.latch_until == 0.0f && !bot.declared_started);
 	ArmPureRoute(&bot, &tc, RL_RUN);
 	tc.route_pure = false;
 	tc.route_field = enemy_field;
-	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == 1);
 
 	ArmPureRoute(&bot, &tc, RL_HOOK);
 	bot.hook_phase = 1;
 	bot.hook_link = 1;
 	weapon_field[1] = 1200;
-	weapon_field[2] = 300;
-	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
 	CHECK(bot.hook_link == -1 && bot.commit_route_goal.field == NULL);
 
@@ -462,8 +500,7 @@ static void TestPureRouteChangeRetiresReversibleCommitments(void)
 	bot.hook_phase = 2;
 	bot.hook_link = 1;
 	weapon_field[1] = 1200;
-	weapon_field[2] = 300;
-	SG_StrikeTestRetireSupersededPureRouteCommit(&bot, &tc);
+	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 &&
 	    bot.commit_route_goal.root_seed == 1);
 }
