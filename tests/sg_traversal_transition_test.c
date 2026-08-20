@@ -69,6 +69,49 @@ static void ArmBallistic(sg_bot_t *bot, int action, qboolean physical)
 	}
 }
 
+static sg_bot_t SpeedHookRun(void)
+{
+	sg_bot_t bot = Bot();
+
+	links[1].action = RL_RUN;
+	bot.hook_deadline = 40.0f;
+	bot.speedhook = true;
+	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
+	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
+	bot.rail_stage = 1;
+	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
+	return bot;
+}
+
+static sg_bot_t AimingSpeedHook(void)
+{
+	sg_bot_t bot = SpeedHookRun();
+
+	bot.hook_phase = 1;
+	return bot;
+}
+
+static sg_bot_t PullingSpeedHook(void)
+{
+	sg_bot_t bot = SpeedHookRun();
+
+	bot.hook_phase = 2;
+	bot.speedhook_pull_applied = true;
+	return bot;
+}
+
+static sg_bot_t ArmedSpeedHook(void)
+{
+	sg_bot_t bot = SpeedHookRun();
+
+	bot.hook_phase = 2;
+	bot.hook_link = 9;
+	bot.hook_bite_logged = true;
+	bot.hook_attached_validated = true;
+	bot.flow_release = true;
+	return bot;
+}
+
 static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 {
 	const int actions[] = { RL_JUMP, RL_DROP, RL_ROCKETJUMP };
@@ -104,6 +147,22 @@ static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 	bot.hook_phase = 1;
 	SG_CarryStartRetireSupersededRoute(&bot, true);
 	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
+
+	bot = AimingSpeedHook();
+	SG_CarryStartRetireSupersededRoute(&bot, true);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+	    bot.commit_route_goal.field == NULL);
+	CHECK(bot.hook_phase == 0 && !bot.speedhook &&
+	    bot.hook_deadline == 0.0f);
+	CHECK(bot.hook_link == -1 && !bot.hook_bite_logged &&
+	    !bot.hook_attached_validated);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f &&
+	    bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+
+	bot = PullingSpeedHook();
+	SG_CarryStartRetireSupersededRoute(&bot, true);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 && bot.speedhook &&
+	    bot.speedhook_pull_applied);
 }
 
 static void TestStrikeDutyRetiresSupersededRoute(void)
@@ -176,25 +235,6 @@ static void TestFlagTouchRetiresReversibleCommitment(void)
 	bot.hook_phase = 2;
 	CHECK(SG_StrikeTestFlagTouchTerminalRetainsCommit(&bot, &tc, true));
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
-}
-
-static sg_bot_t ArmedSpeedHook(void)
-{
-	sg_bot_t bot = Bot();
-
-	links[1].action = RL_RUN;
-	bot.hook_phase = 2;
-	bot.hook_link = 9;
-	bot.hook_deadline = 40.0f;
-	bot.hook_bite_logged = true;
-	bot.hook_attached_validated = true;
-	bot.speedhook = true;
-	bot.flow_release = true;
-	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
-	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
-	bot.rail_stage = 1;
-	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
-	return bot;
 }
 
 static void TestSpeedHookTerminalFinish(void)
