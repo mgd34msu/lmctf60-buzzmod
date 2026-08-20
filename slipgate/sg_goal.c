@@ -17,6 +17,7 @@
 #include "slipgate/sg_lead.h"
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_item_route.h"
+#include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_escape_random.h"
@@ -1577,67 +1578,39 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 					vec3_t mid;
 					int ms = -1, mc = 0;
 
-					/* Mode 3 alternates lead and trail stations on the carrier route. */
+					/* Mode 3 selects route-bound lead and nearby trail stations. */
 					if (interpose_mode == 3)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
-						int cc = cf[oc->seed], s13;
+						int cc = cf[oc->seed];
 						int threat_seed =
 						    sg_caco_enemies[SG_TeamIdx(team)][ts].seed;
 						int lead = SG_InterposeLeadStation(cc,
 						    cf[threat_seed]);
 						int wcost = lead ? cc - 1300 : cc + 900;
 						int band = 450;
-						float bd13 = -1.0f;
+						int cost_lo;
 
 						if (wcost < 0)
 							wcost = 0;  /* carrier nearly home: lead collapses to the stand */
-						for (s13 = 0; s13 < SG_Rune()->hdr.num_seeds &&
-						     s13 < SG_MAX_SEEDS; s13++)
-						{
-							vec3_t dd13;
-							float dl13;
-
-							if (cf[s13] >= SG_FIELD_INF ||
-							    cf[s13] < wcost - band || cf[s13] > wcost + band)
-								continue;
-							VectorSubtract(SG_Rune()->seeds[s13].origin,
-							    SG_Rune()->seeds[oc->seed].origin, dd13);
-							dl13 = VectorLength(dd13);
-							if (bd13 < 0.0f || dl13 < bd13)
-							{
-								bd13 = dl13;
-								ms = s13;
-							}
-						}
+						cost_lo = wcost > band ? wcost - band : 0;
+						ms = lead
+						    ? SG_FieldCarrierLeadStation(SG_Rune(), cf, oc->seed,
+						          cost_lo, wcost + band)
+						    : SG_FieldNearestBandSeed(SG_Rune(), cf, oc->seed,
+						          cost_lo, wcost + band);
 					}
 					else if (interpose_mode == 2)
 					{
 						int *cf = (team == CTF_TEAM_RED)
 						    ? sg_fields.to_red_flag : sg_fields.to_blue_flag;
-						int cc = cf[oc->seed], s12;
-						int want_lo = cc - 2200, want_hi = cc - 900;
-						float bd12 = -1.0f;
+						int cc = cf[oc->seed];
+						int want_lo = cc > 2200 ? cc - 2200 : 0;
+						int want_hi = cc - 900;
 
-						for (s12 = 0; s12 < SG_Rune()->hdr.num_seeds &&
-						     s12 < SG_MAX_SEEDS; s12++)
-						{
-							vec3_t dd12;
-							float dl12;
-
-							if (cf[s12] >= SG_FIELD_INF ||
-							    cf[s12] < want_lo || cf[s12] > want_hi)
-								continue;
-							VectorSubtract(SG_Rune()->seeds[s12].origin,
-							    SG_Rune()->seeds[oc->seed].origin, dd12);
-							dl12 = VectorLength(dd12);
-							if (bd12 < 0.0f || dl12 < bd12)
-							{
-								bd12 = dl12;
-								ms = s12;
-							}
-						}
+						ms = SG_FieldCarrierLeadStation(SG_Rune(), cf,
+						    oc->seed, want_lo, want_hi);
 					}
 
 					if (ms < 0)

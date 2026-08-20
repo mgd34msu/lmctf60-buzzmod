@@ -506,24 +506,38 @@ static void CheckEnemyObservationRetirement(void)
 static void CheckCarrierProjectionPricesWholeEdge(void)
 {
 	rune_t rune;
-	rune_link_t links[2];
-	int first_link[3] = { 0, -1, -1 };
-	int next_link[2] = { 1, -1 };
-	int home[3] = { 600, 100, 500 };
+	rune_seed_t seeds[4];
+	rune_link_t links[3];
+	int first_link[4] = { 0, -1, 2, -1 };
+	int next_link[3] = { 1, -1, -1 };
+	int home[4] = { 600, 200, 500, 200 };
 
 	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
 	memset(links, 0, sizeof(links));
-	rune.hdr.num_seeds = 3;
-	rune.hdr.num_links = 2;
+	rune.hdr.num_seeds = 4;
+	rune.hdr.num_links = 3;
+	rune.seeds = seeds;
 	rune.links = links;
 	rune.first_link = first_link;
 	rune.next_link = next_link;
 	Link(&links[0], 0, 1, RL_RUN, 1000);
 	Link(&links[1], 0, 2, RL_RUN, 100);
+	Link(&links[2], 2, 3, RL_RUN, 100);
+	seeds[1].origin[0] = 10.0f;
+	seeds[3].origin[0] = 50.0f;
 
 	/* The smallest destination suffix owns the slow edge. Projection must
 	 * follow the cheaper complete route instead. */
 	CHECK(SG_FieldCarrierProjectionStep(&rune, home, 0) == 2);
+	/* Seed 1 occupies the requested cost band but is on the slow parallel
+	 * branch. The lead station stays on the carrier's selected route. */
+	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 150, 250) == 3);
+	CHECK(SG_FieldNearestBandSeed(&rune, home, 0, 150, 250) == 1);
+	home[0] = SG_FIELD_INF;
+	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 150, 250) == -1);
+	CHECK(SG_FieldNearestBandSeed(&rune, home, 0, 150, 250) == -1);
+	home[0] = 600;
 	home[1] = 700;
 	home[2] = 800;
 	CHECK(SG_FieldCarrierProjectionStep(&rune, home, 0) == -1);
