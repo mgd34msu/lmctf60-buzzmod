@@ -1,11 +1,5 @@
-/* sg_hook_live.h -- host-free live adapter for ordinary RL_HOOK.
- *
- * This interface deliberately contains no edicts, trace calls, ClientThink,
- * or hook-entity mutation.  The integration layer supplies fresh ownership
- * identity, poses and observations, and calls the three production events in
- * their actual order.  The frozen replay reducer remains the sole owner of
- * command, phase, timing, and terminal law.
- */
+/* Host-free adapter for RL_HOOK. The integration layer supplies runtime
+ * inputs; the replay reducer owns command and phase state. */
 #ifndef SG_HOOK_LIVE_H
 #define SG_HOOK_LIVE_H
 

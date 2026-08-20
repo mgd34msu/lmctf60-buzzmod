@@ -121,95 +121,15 @@ void		SG_ChatResetClient(edict_t *client);
 
 #define SG_CHAT_ORDER_TTL	90.0f   /* an unrepeated order stops binding */
 
-/* ------------------------------------------------------ hooks and emission
- *
- * SG_ChatReset / SG_ChatFrame / SG_ChatSee hang off the matching CACO
- * entry points (sg_caco.c), which are already the once-per-level, once-per-
- * frame and once-per-bot-eye moments. SG_ChatSee runs this module's own
- * sighting scan for the items CACO does not track (body armour, power
- * armour) using the same PVS-plus-trace test.
- *
- * SG_ChatCarrierSeen and SG_ChatItemSeen are belief TRANSITIONS, passed the
- * bot that saw them. Neither is called from anywhere but a sighting.
- *
- * SG_ChatHear takes chat from any speaker. teamchat says whether it arrived
- * on say_team: an unaddressed order ("defend") is only obeyed on team chat,
- * while an addressed one ("arach defend") is obeyed either way.
- *
- * Two readers sit behind it and they treat the speaker differently on
- * purpose. The ORDER parser ignores FL_BOT speakers outright -- bots do not
- * order bots. The ITEM-CALL parser does not look at FL_BOT at all: a team
- * line naming a major arms that team's respawn clock whether a human or one
- * of ours typed it, per the owner's ruling of 2026-08-05 ("there should be
- * no difference in parsing a human"). A bot's own say_team comes back
- * through here, so that path dedupes against the clock it is about to be
- * handed by Chat_ArmClock; see the war story over Chat_HearItemCall.
- *
- *     It also feeds the ADDRESSED REPLY. A line that names one of ours and
- *     carries no verb the grammar recognises is somebody talking TO that
- *     bot, and the bot answers once, on the channel it was spoken on, after
- *     a delay that models a typist. One reply per bot per 30 seconds, never
- *     while carrying a flag or in contact, and never to another bot -- the
- *     FL_BOT refusal above is what makes the last one structural rather
- *     than a rule somebody has to remember.
- *
- *     Wired in Cmd_Say_f (g_cmds.c), right after the message text is
- *     assembled into `temp`, as SG_ChatHear(ent, temp, team). It is called
- *     directly rather than through the legacy bot's chat hook so the team
- *     flag survives: routed as public chat, a bare team-chat verb would need
- *     an addressee before it was obeyed.
- *
- * SG_ChatDeath is the taunt/grumble feed; it takes the victim, the attacker
- * and the means of death. The means of death is read now rather than
- * ignored: a death nobody can take credit for -- the lava, the ledge, his
- * own rocket -- gets a BYSTANDER line out of one enemy who watched it, which
- * is the one death a pub server always has a word for.
- *
- *     Wired in player_die (p_client.c) as
- *     SG_ChatDeath(self, attacker, meansOfDeath). It fed nothing for several
- *     waves -- the legacy bot's own death hook, BotChat_NotifyDeath, fed that
- *     bot and never this one, so there was never a connection to remove.
- *
- * SG_ChatLevelEnd is the match-end feed: winners gloat, losers grumble, and a
- * close game is called close by both sides.
- *
- *     Wired in BeginIntermission (p_hud.c), immediately after Victory(), which
- *     is the one place every way of ending a level converges -- timelimit,
- *     fraglimit, a target_changelevel and a match end all arrive there, and
- *     its own `if (level.intermissiontime) return;` makes it fire once. The
- *     lines are booked, not spoken: they go out over the following four
- *     seconds from SG_ChatFrame, which keeps running through intermission
- *     (G_RunFrame calls SG_RunFrame past the exitintermission check), and
- *     four seconds fits inside the five a client must wait before it can end
- *     intermission.
- *
- *     Read the outcome the way the scoreboard reads it: summed per-player
- *     STATS_SCORE per team, the same sum Victory() announces.
- */
+/* Sight-based callbacks receive the observing bot. SG_ChatHear accepts human
+ * and bot text but ignores bot-issued orders. */
 void		SG_ChatReset(void);
 void		SG_ChatFrame(void);
 void		SG_ChatSee(edict_t *viewer);
 void		SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier);
 void		SG_ChatItemSeen(edict_t *viewer, int index, qboolean up);
 
-/* ------------------------------------------------------ the taken callout
- *
- * The owner's ruling of 2026-08-05: a team learns when an item is coming back
- * IF AND ONLY IF one of its own bots called the take out loud, and a callout
- * that the channel swallowed teaches nobody anything. sg_caco.c owns the
- * pickup hook (SG_NoteItemTaken) and the eyes; this side owns the words, the
- * one-speaker discipline, and the clock -- which is armed at EMISSION, inside
- * Chat_Flush, and never when the line is merely queued.
- *
- * Who is speaking, which decides the wording and the sg_debug label:
- *
- *   SG_ITEMCALL_TAKER   one of ours took it and is saying so. Needs no
- *                       sighting from anybody: the bot is holding the thing.
- *   SG_ITEMCALL_MATE    a human or legacy bot on OUR side took it and one of
- *                       ours watched. Humans do not narrate their own pickups.
- *   SG_ITEMCALL_ENEMY   the other side took it and one of ours watched. The
- *                       team told is the WITNESS's, never the taker's.
- */
+/* Taken-call sources select wording. Non-taker sources require a witness. */
 #define SG_ITEMCALL_TAKER	0
 #define SG_ITEMCALL_MATE	1
 #define SG_ITEMCALL_ENEMY	2

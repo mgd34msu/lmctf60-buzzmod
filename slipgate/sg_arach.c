@@ -186,22 +186,8 @@ unsigned char *sg_human_live; /* same, cut from the 20s windows
                                       * after a steal: how humans move
                                       * when a flag is OUT (.hml) */
 
-/*
- * THE ESCAPE PRIORS (sg_escapeprior, enhancement 6, escapepriors.py).
- * Which WAY humans leave a stand they just robbed, per map and per stolen
- * flag, as an eight-bucket compass distribution: counts of the bearing
- * from the stand to where the human carrier actually was three seconds
- * after the grab. Mined from 268 client demos / 1549 usable steals.
- *
- * Held here as raw counts, one distribution for the CURRENT map, chosen
- * at load time by the same key order the mining tool writes:
- * "<map>:<stolen flag colour>" first, plain "<map>" as the fallback. A
- * CTF map is usually a mirror of itself, so the two stands' exits are
- * mirror bearings of one habit; pooling them is a real loss of signal
- * (measured over the corpus: the pooled entry's bucket entropy is
- * 0.3-0.8 bits higher than either colour's on most maps), and the
- * carrier always knows which stand he just robbed.
- */
+/* Eight exit-bearing counts per stolen flag. A color-specific map key takes
+ * precedence over the plain map key. */
 int	sg_escape_count[2][SG_ESC_BUCKETS];  /* [0]=red flag stolen, [1]=blue */
 int	sg_escape_total[2];                  /* 0 = no prior for that flag */
 
@@ -677,18 +663,8 @@ int Rune_NearestSeed(rune_t *r, vec3_t p)
 
 /* --------------------------------------------------------------- fields */
 
-/*
- * THE WAY TO AIR (observations analysis). The gurgle override kicked
- * straight up, and straight up is exactly wrong under the smap05 shelf
- * overhang: a drowning bot pinned itself to a ceiling at spd=0 with its
- * nose pointed at rock until "sank like a rock". Air is a GRAPH question
- * -- so answer it once per map: a multi-source relaxation from every dry
- * seed backward through swimmable links gives each water seed its next
- * hop toward breathable surface. The override then swims the actual way
- * out, overhangs and all. NULL on maps with no water; -1 for a water
- * seed with no path (a sealed pool -- then straight up remains the only
- * prayer and the old behavior stands).
- */
+/* Next graph hop toward a dry seed. NULL means no water seeds; -1 means the
+ * water seed has no graph path to air. */
 int	*sg_airnext;
 
 typedef struct sg_sidecar_candidates_s
@@ -1767,18 +1743,8 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 			return SG_ROLE_DEFEND;
 		}
 
-		/*
-		 * One escort whenever we have a live carrier that is not me --
-		 * and the escort is the NEAREST eligible body, not a rank slot.
-		 * The rank-slot version handed the job to whoever sat at a fixed
-		 * position in the scan order: dead, respawning, or across the
-		 * map. The observations census reads accordingly -- no escort at
-		 * all for 30-100% of carry seconds, median distance 430-1860
-		 * when one existed, and mactf06's entire 28-second carry walked
-		 * naked. Every bot runs the same argmin over the same shared
-		 * positions; the incumbent gets a 300-unit head start so the
-		 * job does not flap between two equidistant mates.
-		 */
+		/* Assign the nearest eligible teammate. A 300-unit incumbent bonus
+		 * prevents equal candidates from exchanging the role every frame. */
 		if (have_carrier && own->client != my_client)
 		{
 			const int ti = SG_TeamIdx(team);
@@ -2671,15 +2637,7 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 	bot->mega_next = 0.0f;
 	bot->beat_ready = true; /* dead HERE, on this level: the spawn beat
 	                         * has something to be the far side of */
-	/*
-	 * PULSE the trigger, never hold it. Respawn keys off
-	 * latched_buttons -- fresh presses only (p_client.c:3203) -- and
-	 * a button held from the first dead frame latches exactly once,
-	 * before respawn_time has elapsed, then never again: the corpse
-	 * waits forever for a press that cannot re-arrive. Observed live
-	 * the moment a human watched a body instead of a stat line.
-	 * Toggling at 5Hz lands a fresh latch every other frame.
-	 */
+	/* Respawn consumes a fresh latched press, so pulse attack at 5 Hz. */
 	cmd->buttons = (((int)(level.time * 10.0f)) & 2)
 	              ? BUTTON_ATTACK : 0;
 	if (allow_command)
@@ -2687,11 +2645,7 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 	return true;
 }
 
-/*
- * THE RESPAWN EDGE (same split, body verbatim): the first live frame
- * after a death, where the tilt clocks start -- a window started on the
- * corpse would spend a second and a half of itself lying on the floor.
- */
+/* Start life-local movement and tilt clocks on the first live frame. */
 static void Think_RespawnEdge(sg_bot_t *bot, edict_t *e)
 {
 	if (bot->death_taught)

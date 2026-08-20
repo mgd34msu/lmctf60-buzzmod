@@ -203,12 +203,7 @@
 #define SG_CHAT_IDLE_CALM	10.0f   /* out of contact at least this long */
 #define SG_CHAT_IDLE_QUIET	10.0f   /* team channel silent at least this long */
 
-/*
- * THE REUSE GUARD. A line that has gone out in the last SG_CHAT_REUSE_GAP
- * seconds is not offered to anybody -- the same bot or any other. The ring
- * holds pointers into the pool table below, never a caller's buffer, so a
- * recorded entry stays valid for the life of the process.
- */
+/* Suppress recently emitted pool entries across all bots. */
 #define SG_CHAT_REUSE_GAP	20.0f
 /*
  * Deep enough that the ring cannot wrap inside its own window and quietly
@@ -224,17 +219,7 @@
 #define SG_CHAT_TAKER_RANGE	512.0f  /* and only this close to the pad */
 #define SG_CHAT_SOON		10.0f    /* "up in ~Ns" fires this far ahead */
 
-/*
- * THE TIMER CALL (sg_timercall, enhancement 8). A team that knows the clock
- * says so in four characters, and it says it once. "quad up in ~9s" is a
- * sentence; what actually went over say_team in 1998 was "quad 9" -- and one
- * voice said it, not five, because the fifth is what makes a team channel
- * unreadable. The pieces are already here: the respawn clock this file keeps
- * off ent->item->quantity, Chat_Speaker's single owner, and the per-topic
- * team cooldown. This gives the short form its own topic so the gap can be a
- * generous twenty seconds without slowing the ordinary item chatter down,
- * and leaves everything at sg_timercall 0 exactly as it was.
- */
+/* Timer calls use their own team cooldown. */
 #define SG_CHAT_TIMER_GAP	20.0f   /* one timer call per team per this */
 
 /*
@@ -565,24 +550,7 @@ typedef struct
 
 static sg_chat_bot_t chat_bot[MAX_CLIENTS];
 
-/*
- * THE CLOCK RIDES ON THE LINE (owner's ruling, 2026-08-05).
- *
- *   "bots should know when an item is coming back IF AND ONLY IF another bot
- *    on the team has called it out in team chat when the item is taken."
- *
- * Which makes WHEN the clock is armed the whole question, and the answer is
- * not "when the bot decided to speak". A queued line still has two gates to
- * clear -- the reaction delay below, then SG_ChatSayTeam's per-bot budget and
- * per-topic team cooldown -- and a line the cooldown eats was never heard by
- * anybody. Arming at queue time would give the team a countdown off a sentence
- * that never reached the channel, which is the omniscience this whole file
- * exists to take away.
- *
- * So the arm travels WITH the line, in the fields below, and is applied by
- * Chat_ArmClock at the moment SG_ChatSayTeam reports the line actually went
- * out. Suppressed line, no clock, and sg_debug says so.
- */
+/* A team learns an item clock only when its queued callout is emitted. */
 enum { SG_ARM_NONE = 0, SG_ARM_ITEM, SG_ARM_WATCH, SG_ARM_QUIET,
        SG_ARM_MEGATAKE };
 
@@ -1527,13 +1495,7 @@ void SG_ChatItemSeen(edict_t *viewer, int index, qboolean up)
 	c->up[ti] = false;
 	c->soon_said[ti] = false;
 
-	/*
-	 * SIGHTING, NOT STOPWATCH (owner's ruling, 2026-08-05). An empty pad is
-	 * evidence that the thing is gone and evidence of nothing else -- this bot
-	 * has no idea whether it emptied a second ago or fifty, so it cannot count
-	 * down to the return. Under sg_itemcomm the countdown comes from the bot
-	 * who was THERE saying so; here it stays at whatever the team was told.
-	 */
+		/* An empty pad proves absence, not when the item was taken. */
 	if (!SG_ItemComm())
 		c->back_at[ti] = (b->respawn_delay > 0.0f)
 		               ? level.time + b->respawn_delay
@@ -1575,15 +1537,7 @@ static void Chat_ScanWatched(void)
 		/* g_items.c:912 -- Pickup_PowerArmor uses ent->item->quantity */
 		{ "item_power_shield",  -1.0f },
 		{ "item_power_screen",  -1.0f },
-		/*
-		 * The mega, respawn 0: watched for presence and for the call,
-		 * never auto-timed -- its pad timer only starts when the bonus
-		 * decays off the taker (g_items.c:568-596), so the only honest
-		 * clocks are the taker's DEATH (decay ends within a think tick,
-		 * then SetRespawn 20) and a sighting. Owner's ruling 2026-08-05.
-		 * Skipped when sg_itemcomm is off so the stock build's callouts
-		 * stay byte-identical.
-		 */
+			/* Mega has no take-time countdown; death or a later sighting starts it. */
 		{ "item_health_mega",    0.0f },
 		{ NULL, 0.0f }
 	};
@@ -1665,8 +1619,7 @@ void SG_ChatSee(edict_t *viewer)
 			w->up[ti] = false;
 			w->soon_said[ti] = false;
 
-			/* the same rule as the powerup pads: seeing the armour gone is
-			 * knowledge, knowing when it is back is a callout (2026-08-05) */
+			/* Seeing armor gone does not reveal its take time. */
 			if (!SG_ItemComm())
 				w->back_at[ti] = level.time + w->respawn;
 
@@ -1680,43 +1633,8 @@ void SG_ChatSee(edict_t *viewer)
 }
 
 /* ------------------------------------------------------------- the radio
- *
- * THE OWNER'S RULING, 2026-08-05: "callout in conjunction, that's just good
- * teamplay."
- *
- * LMCTF has had a real radio since it shipped and the bots have never touched
- * it. PlayTeamSound (g_cmds.c:121) stuffs `play radio/<sound>` at every
- * same-team client running radio sound, prints the radiotext line at the ones
- * running text mode, and refuses a sender whose own radio bits are clear --
- * which is why sg_arach.c now sets those bits on a joining bot. A team callout
- * and the radio call that goes with it are ONE act to a player, so this rides
- * the itemcomm line rather than growing a second opinion about who speaks: the
- * same emission moment, the same single speaker, the same team. sg_radio 0
- * (the default) makes every function here return before it does anything.
- *
- * THREE THINGS IT IS NOT.
- *
- *   It is NOT frame-perfect. A human hears the pickup, moves a hand to the
- *   key and presses it, and the hand is a second or three behind the eye.
- *   Firing the radio inside the pickup frame is the tell that gave every
- *   previous generation of bot away, so the call is queued with
- *   SG_RADIO_LAG_MIN..MAX of hand time on it and flushed from the chat frame.
- *
- *   It is NOT a second channel of information. Everything said here has just
- *   gone out as text to the same team from the same mouth. sg_radio adds a
- *   noise a human teammate can act on without reading, and adds no fact.
- *
- *   It is NOT exempt from spam control. ctf_SpamCheck (g_ctffunc.c:1314)
- *   gates humans on the radio and gates bots identically. The one thing done
- *   differently is that a refused call is dropped SILENTLY: the three refusal
- *   tests are READ here rather than tripped, because tripping ctf_SpamCheck
- *   prints "blocked by spam control" at the bot AND re-arms its lockout, so a
- *   call nobody asked for would go on making the bot quieter.
- *
- * The sounds are the ones the paks actually carry, and every one of them is
- * `_`-prefixed -- PlayTeamSound plays those verbatim instead of prepending a
- * gender (g_cmds.c:150-153), so one name works for any skin.
- */
+ * Radio mirrors an emitted team call after a human-scale delay. It adds no
+ * knowledge and uses the normal spam limits. */
 
 #define SG_RADIO_LAG_MIN	1.0f
 #define SG_RADIO_LAG_MAX	3.0f
@@ -1983,33 +1901,8 @@ static void Chat_RadioFrame(void)
 }
 
 /* ------------------------------------------------------ the taken callout
- *
- * THE OWNER'S RULING, 2026-08-05, in his words:
- *
- *   "items can be timed, but runes (the in-game kind) spawn randomly. bots
- *    should know when an item is coming back IF AND ONLY IF another bot on the
- *    team has called it out in team chat when the item is taken ... So if quad
- *    is taken and a bot says 'i just took quad at __location__' then we know in
- *    exactly [live-time plus respawn] it will be back ... A bot on the other
- *    team could see a bot on a different team take the red armor or quad, and
- *    they could call that out ... calling the item specifically will help and
- *    it should count even without the location."
- *
- * Three ways a clock is earned, and there is no fourth:
- *
- *   (a) TAKER'S CALL. One of ours picks the thing up and says so. No sighting
- *       needed by anybody -- it is holding the item, which is the one unseen
- *       claim SLIPGATE.md has always allowed.
- *   (b) WITNESS CALL. Somebody else took it and one of ours WATCHED, from the
- *       other team. That bot may say "enemy took quad at the rl", and its own
- *       team gets the clock. Note which team: the witness's, never the taker's.
- *   (c) TEAMMATE'S TAKE, WITNESSED. A human (or a legacy bot) on our side takes
- *       it and says nothing, because humans do not narrate. One of ours who saw
- *       it happen calls it, and our team gets the clock off that.
- *
- * The respawn interval is read, never guessed, per item -- the ruling says
- * "live-time plus respawn" and the mod's own numbers are the respawn.
- */
+ * A taker may report its held item. Other pickup reports require a witness.
+ * The emitted line teaches the speaker's team the item's real respawn time. */
 
 static const struct { const char *cls; float respawn; } chat_major[] = {
 	/* g_items.c:198 -- Pickup_Powerup: SetRespawn(ent, ent->item->quantity).
@@ -2036,15 +1929,7 @@ static const struct { const char *cls; float respawn; } chat_major[] = {
 	{ "resist_rune",             0.0f },
 	{ "regen_rune",              0.0f },
 	{ "vampire_rune",            0.0f },
-	/*
-	 * The mega: call-worthy, never AUTO-timed (owner's ruling 2026-08-05).
-	 * Its respawn only schedules when the +100 finishes decaying off the
-	 * taker -- damage-dependent, and a regen rune halves the decay and
-	 * releases the pad early at max+25 (g_items.c:568-596) -- so a number
-	 * at take time would be invented. The take call goes out NUMBERLESS;
-	 * the clock arms from the taker's death (public obituary + SetRespawn
-	 * 20) or a sighting, in SG_ChatMegaDeath and SG_ChatSee.
-	 */
+		/* Mega respawn begins after its bonus decays, so take time cannot time it. */
 	{ "item_health_mega",        0.0f },
 	{ NULL, 0.0f }
 };
@@ -2350,16 +2235,7 @@ void SG_ChatItemTaken(edict_t *speaker, int team, edict_t *item, int src,
 		           chat_arm_src[(src >= 0 && src < 3) ? src : 0], name, team);
 }
 
-/*
- * THE MEGA OBITUARY (owner's ruling, 2026-08-05). The pad's timer starts
- * when the bonus stops decaying, and the one public event that pins that
- * moment is the taker's death: a dead owner fails MegaHealth_think's
- * decay checks on its next tick (<=1s, g_items.c:568-596) and SetRespawn
- * runs at 20. Death + ~21s, jittered by the tick. A team knows whose
- * death matters only if it heard the take call -- that is what
- * chat_mega_taker holds -- and the regen-rune path never reaches here
- * alive, which is exactly the uncertainty a human keeps.
- */
+/* A known mega taker's death starts the approximate 21-second return clock. */
 void SG_ChatMegaDeath(edict_t *victim)
 {
 	int ci, ti, i;
@@ -2537,16 +2413,7 @@ static void Chat_SelfPickups(void)
 	char	line[SG_CHAT_LINE];
 	int		i;
 
-	/*
-	 * Superseded wholesale by the taken callout above when sg_itemcomm is on
-	 * (owner's ruling, 2026-08-05). This scan is a once-a-frame poll of what
-	 * bots are HOLDING, which is a second-hand way of noticing a pickup: it
-	 * sees quad, invuln and runes and is blind to red armour, it cannot name
-	 * where the thing was, and it arms a clock at queue time rather than at
-	 * emission. SG_NoteItemTaken sees the pickup itself, covers every major,
-	 * names the spot, and arms only what was actually said. Two mouths on one
-	 * event would also mean the team hears it twice.
-	 */
+	/* The pickup event owns item communication when enabled. */
 	if (SG_ItemComm())
 		return;
 
@@ -3565,42 +3432,9 @@ static void Chat_Order(edict_t *bot, edict_t *from, int role, qboolean clear)
 	chat_bot[cl].order_team = from->client->ctf.teamnum;
 }
 
-/* ------------------------------------------------- the item call, PARSED
- *
- * THE OWNER'S RULING, 2026-08-05, in his words:
- *
- *   "just be able to parse team messages from your own bot teammates, and
- *    there should be no difference in parsing a human, right??"
- *
- * Right. Everything below reads the say_team TEXT and nothing else. It does
- * not ask whether the speaker is a bot, and there is deliberately no branch
- * in here that could: FL_BOT is not tested once between this comment and the
- * end of Chat_HearItemCall. A human typing "quad 30" and a bot emitting
- * "quad 30" put the same eleven characters on the same channel, and a
- * teammate reading them learns the same thing, which is the entire point.
- *
- * That makes the itemcomm knowledge two-routed. The direct route is the one
- * that was already here -- SG_ChatItemTaken queues the line with its clock
- * riding along, Chat_ArmClock applies it when SG_ChatSayTeam reports the line
- * went out. The parse route is this one, and a bot's own line arrives down it
- * too, because SG_ChatSayTeam's say_team goes SG_BotClientCommand ->
- * ClientCommand -> Cmd_Say_f -> SG_ChatHear (g_cmds.c:2239) like anybody
- * else's. Hence the dedupe below. One knowledge event, two routes, one clock.
- *
- * Order of the two, for whoever debugs this later: the parse fires FIRST. It
- * happens inside SG_ChatSayTeam's say_team, and Chat_ArmClock runs after
- * SG_ChatSayTeam returns (Chat_QueueDrain). For an ordinary take both arm the
- * same number in the same frame, so the second write is a no-op; for the
- * ear-driven "quad 30", whose real arm is jittered off when the quad was
- * HEARD rather than off now, the direct route lands second and correctly
- * wins. The dedupe is therefore aimed at what it is actually for: a human
- * repeating himself, an echoed line, and the "soon" callouts ("quad in 12"),
- * which say a number the team is already holding.
- *
- * The suppression law is untouched and gets a little stronger here. A line
- * the per-bot budget or the topic cooldown ate is never handed to say_team at
- * all, so it never reaches this parser either. No line, no clock, both ways.
- */
+/* ------------------------------------------------- the item call, parsed
+ * Human and bot team messages share this parser. Repeated calls within
+ * SG_CHAT_PARSE_SAME describe the same clock event. */
 
 /* how close two clocks have to be before the second one is the same event */
 #define SG_CHAT_PARSE_SAME	3.0f
