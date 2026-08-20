@@ -250,13 +250,14 @@ assert "Hook_DisciplineRetire" not in speedhook_timeout
 
 fire_end = text.index("else if (bot->hook_phase == 2)", aim_end)
 fire = text[aim_end:fire_end]
-fire_worth = fire.index("SG_HookExpectedRideWorth")
+fire_worth = fire.index("SG_HookCurrentRideWorth")
 fire_retire = fire.index('"value-fire-skip"')
 fire_proof = fire.index("Hook_OnlineProof")
 fire_command = fire.index("Cmd_Hook_f(e);")
 assert fire_worth < fire_retire < fire_proof < fire_command
 assert "route_field[hook_link->from]" in fire
 assert "route_field[hook_link->to]" in fire
+assert "Fields_LinkTraversalCostMs(hook_link)" in fire
 assert "goal_field[hook_link->from]" not in fire
 assert "goal_field[hook_link->to]" not in fire
 assert "!SG_HookRideLaunchAllowed(worth)" in fire

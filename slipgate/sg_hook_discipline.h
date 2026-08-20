@@ -1,9 +1,4 @@
-/*
- * sg_hook_discipline.h -- pure, live-controller rope admission laws.
- *
- * Keep this header host-free: the controller can use the policy without
- * changing RUNE topology or adding a production object dependency.
- */
+/* Host-free graph-hook launch policy. */
 #ifndef SG_HOOK_DISCIPLINE_H
 #define SG_HOOK_DISCIPLINE_H
 
@@ -18,9 +13,7 @@ typedef enum sg_hook_ride_worth_s
 	SG_HOOK_RIDE_ALLOW
 } sg_hook_ride_worth_t;
 
-/* The landing controller already names more than 300 field-ms as a served
- * ride.  Use the same strict boundary before firing; the static ropecost is
- * already represented in the fields and must not be charged again here. */
+/* Require useful endpoint progress before staging a proved ride. */
 static inline sg_hook_ride_worth_t SG_HookExpectedRideWorth(int from_goal,
 	int to_goal)
 {
@@ -29,6 +22,26 @@ static inline sg_hook_ride_worth_t SG_HookExpectedRideWorth(int from_goal,
 	    to_goal >= SG_HOOK_DISCIPLINE_FIELD_INF)
 		return SG_HOOK_RIDE_UNASSESSED;
 	return from_goal > to_goal + SG_HOOK_DISCIPLINE_SERVED_FIELD_MS
+	    ? SG_HOOK_RIDE_ALLOW : SG_HOOK_RIDE_REJECT;
+}
+
+/* Fire only while this edge remains no worse than the refreshed best route. */
+static inline sg_hook_ride_worth_t SG_HookCurrentRideWorth(int from_goal,
+	int to_goal, int hook_traversal_ms)
+{
+	sg_hook_ride_worth_t endpoint_worth;
+	int complete_hook_ms;
+
+	if (from_goal < 0 || to_goal < 0 || hook_traversal_ms < 0 ||
+	    from_goal >= SG_HOOK_DISCIPLINE_FIELD_INF ||
+	    to_goal >= SG_HOOK_DISCIPLINE_FIELD_INF ||
+	    hook_traversal_ms >= SG_HOOK_DISCIPLINE_FIELD_INF - to_goal)
+		return SG_HOOK_RIDE_UNASSESSED;
+	endpoint_worth = SG_HookExpectedRideWorth(from_goal, to_goal);
+	if (endpoint_worth != SG_HOOK_RIDE_ALLOW)
+		return endpoint_worth;
+	complete_hook_ms = to_goal + hook_traversal_ms;
+	return complete_hook_ms <= from_goal
 	    ? SG_HOOK_RIDE_ALLOW : SG_HOOK_RIDE_REJECT;
 }
 

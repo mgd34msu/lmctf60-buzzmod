@@ -9501,10 +9501,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				int link_index = bot->hook_link;
 				int online;
 
-				/* Aim can span several outer frames while the objective field is
-				 * refreshed. Recheck the exact current link/field immediately
-				 * before its irreversible proof/fire boundary: a formerly served
-				 * ride must not launch after its current gain falls to the shelf. */
+				/* Aim may outlive its route field. Reprice the complete edge at
+				 * the irreversible fire boundary. */
 				if (!route_field || !rune || !rune->links || link_index < 0 ||
 				    link_index >= rune->hdr.num_links ||
 				    (hook_link = &rune->links[link_index])->action != RL_HOOK ||
@@ -9514,8 +9512,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					Hook_GraphFail(e, bot, 5.0f);
 					goto hook_wait;
 				}
-				worth = SG_HookExpectedRideWorth(route_field[hook_link->from],
-				    route_field[hook_link->to]);
+				worth = SG_HookCurrentRideWorth(route_field[hook_link->from],
+				    route_field[hook_link->to],
+				    Fields_LinkTraversalCostMs(hook_link));
 				if (!SG_HookRideLaunchAllowed(worth))
 				{
 					Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,

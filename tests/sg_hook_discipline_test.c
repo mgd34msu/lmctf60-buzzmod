@@ -31,25 +31,19 @@ static void TestExpectedRideWorth(void)
 
 static void TestCurrentRideWorthRecheck(void)
 {
-	int from_goal = 1001;
-	int to_goal = 700;
-
-	/* A 301 ms admission may wait for aim/proof. The fire boundary must use
-	 * the refreshed field, not this stale allowance. */
-	CHECK(SG_HookExpectedRideWorth(from_goal, to_goal) ==
+	CHECK(SG_HookCurrentRideWorth(2500, 1000, 1500) ==
 	      SG_HOOK_RIDE_ALLOW);
-	from_goal = 1000;
-	CHECK(SG_HookExpectedRideWorth(from_goal, to_goal) ==
+	CHECK(SG_HookCurrentRideWorth(2499, 1000, 1500) ==
 	      SG_HOOK_RIDE_REJECT);
-	from_goal = 1001;
-	CHECK(SG_HookExpectedRideWorth(from_goal, to_goal) ==
+	CHECK(SG_HookCurrentRideWorth(3000, 1000, 1500) ==
 	      SG_HOOK_RIDE_ALLOW);
-	to_goal = SG_HOOK_DISCIPLINE_FIELD_INF;
-	CHECK(!SG_HookRideLaunchAllowed(
-	    SG_HookExpectedRideWorth(from_goal, to_goal)));
-	to_goal = -1;
-	CHECK(!SG_HookRideLaunchAllowed(
-	    SG_HookExpectedRideWorth(from_goal, to_goal)));
+	CHECK(SG_HookCurrentRideWorth(1000, 700, 200) ==
+	      SG_HOOK_RIDE_REJECT);
+	CHECK(SG_HookCurrentRideWorth(2500, 1000, -1) ==
+	      SG_HOOK_RIDE_UNASSESSED);
+	CHECK(SG_HookCurrentRideWorth(2500,
+	    SG_HOOK_DISCIPLINE_FIELD_INF - 1, 2) ==
+	      SG_HOOK_RIDE_UNASSESSED);
 }
 
 static void TestSourceStateAdmission(void)
