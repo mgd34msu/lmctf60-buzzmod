@@ -717,6 +717,29 @@ static void TestPickupEscortLossAndReplacement(void)
 	CHECK(team.epoch == epoch);
 }
 
+static void TestSoleEgressHelperEscortsImmediately(void)
+{
+	sg_strike_team_t team;
+	sg_strike_frame_t frame = Frame(625.0f);
+
+	AddAttacker(&frame, 0, 180u, 2, 1000);
+	AddAttacker(&frame, 1, 181u, 2, 3000);
+	SG_StrikeReset(&team);
+	CHECK(SG_StrikeStep(&team, &frame));
+
+	frame.now = 626.0f;
+	frame.events = SG_STRIKE_EVENT_PICKUP;
+	frame.enemy_flag_home = 0;
+	frame.carrier_slot = 0;
+	frame.slot[0].carrying = 1;
+	frame.slot[1].carrier_goal_ms = 300;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.phase == SG_STRIKE_EGRESS);
+	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
+	CHECK(team.duty[1] == SG_STRIKE_DUTY_ESCORT);
+	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
+}
+
 static void TestExternalCarrierDoesNotExpandRoster(void)
 {
 	sg_strike_team_t team;
@@ -1332,6 +1355,7 @@ int main(void)
 	TestEscortAdmissionProtectsOnlyRecoverer();
 	TestDutiesStayStableUntilEgress();
 	TestPickupEscortLossAndReplacement();
+	TestSoleEgressHelperEscortsImmediately();
 	TestExternalCarrierDoesNotExpandRoster();
 	TestHumanCarrierReceivesBotEscort();
 	TestCarrierStandoffKeepsRecovery();

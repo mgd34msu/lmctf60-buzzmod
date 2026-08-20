@@ -910,7 +910,11 @@ static void Strike_AssignEgress(sg_strike_team_t *team,
 				available &= ~Strike_Bit(recover);
 			}
 		}
-		if (frame->own_flag_home && frame->now < team->clear_until)
+		/* One surviving helper cannot clear and escort.  Give that scarce
+		 * body to the live carrier; CLEAR is useful only when another body
+		 * remains to own the screen. */
+		if (frame->own_flag_home && frame->now < team->clear_until &&
+		    (available & (available - 1u)) != 0u)
 		{
 			for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
 				if ((available & Strike_Bit(slot)) != 0u &&
