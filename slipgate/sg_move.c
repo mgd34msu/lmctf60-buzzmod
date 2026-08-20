@@ -3384,12 +3384,10 @@ static qboolean FlagTerminalGenericSteeringAllowed(
 	return !flag_touch_terminal;
 }
 
-/* A relay scoop owns the same final physical pickup as ordinary enemy
- * pressure, but none of the attack-only pre-breach behavior. */
 static qboolean EnemyFlagTouchMissionActive(qboolean strike_pressure,
 	qboolean scoop_mission)
 {
-	return strike_pressure || scoop_mission;
+	return SG_EnemyFlagTouchMissionActive(strike_pressure, scoop_mission);
 }
 
 /* Phase two is the irreversible rocket-jump boundary: this exact production

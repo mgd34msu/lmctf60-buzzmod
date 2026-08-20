@@ -9,6 +9,7 @@
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_death_belief.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_route_policy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1144,11 +1145,12 @@ static void TestDeathLocationRequiresPriorBelief(void)
 
 static void TestMissionHoldSurvivesGenericWedgeValve(void)
 {
-	CHECK(SG_RoleMissionHold(SG_ROLE_DEFEND, 1499, false));
-	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, 1499, false));
-	CHECK(!SG_RoleMissionHold(SG_ROLE_ESCORT, 1500, false));
-	CHECK(!SG_RoleMissionHold(SG_ROLE_ATTACK, 100, false));
-	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, SG_FIELD_INF, true));
+	CHECK(SG_RoleMissionHold(SG_ROLE_DEFEND, 1499, false, false));
+	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, 1499, false, false));
+	CHECK(!SG_RoleMissionHold(SG_ROLE_ESCORT, 1499, false, true));
+	CHECK(!SG_RoleMissionHold(SG_ROLE_ESCORT, 1500, false, false));
+	CHECK(!SG_RoleMissionHold(SG_ROLE_ATTACK, 100, false, false));
+	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, SG_FIELD_INF, true, false));
 	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_ATTACK, 100, 3.0f));
 	CHECK(!SG_OptionalItemDetourAllowed(1, 0, SG_ROLE_ATTACK, 100, 3.0f));
 	CHECK(!SG_OptionalItemDetourAllowed(0, 1, SG_ROLE_ATTACK, 100, 3.0f));
@@ -1178,15 +1180,24 @@ static void TestCombatActivityResetsGenericWedgeClock(void)
 static void TestMissionAndCombatCannotShelveRoutes(void)
 {
 	CHECK(SG_RouteFailureWatchSuppressed(
-	    SG_ROLE_ESCORT, 1499, false, false, false));
-	CHECK(SG_RouteFailureWatchSuppressed(
-	    SG_ROLE_ESCORT, SG_FIELD_INF, true, false, false));
-	CHECK(SG_RouteFailureWatchSuppressed(
-	    SG_ROLE_ATTACK, 2000, false, true, false));
-	CHECK(SG_RouteFailureWatchSuppressed(
-	    SG_ROLE_ATTACK, 2000, false, false, true));
+	    SG_ROLE_ESCORT, 1499, false, false, false, false));
 	CHECK(!SG_RouteFailureWatchSuppressed(
-	    SG_ROLE_ATTACK, 2000, false, false, false));
+	    SG_ROLE_ESCORT, 1499, false, true, false, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ESCORT, SG_FIELD_INF, true, false, false, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, false, true, false));
+	CHECK(SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, false, false, true));
+	CHECK(!SG_RouteFailureWatchSuppressed(
+	    SG_ROLE_ATTACK, 2000, false, false, false, false));
+	CHECK(SG_EnemyFlagTouchMissionActive(false, true));
+	CHECK(SG_EnemyFlagTouchMissionActive(true, false));
+	CHECK(!SG_EnemyFlagTouchMissionActive(false, false));
+	CHECK(!SG_EnemyFlagTouchMissionActive(2, false));
+	CHECK(SG_AttackDescentFallbackAllowed(
+	    SG_EnemyFlagTouchMissionActive(false, true), true, 600, 500,
+	    SG_FIELD_INF));
 	CHECK(SG_RoleOwnsDefenseState(SG_ROLE_DEFEND));
 	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_ATTACK));
 	CHECK(!SG_RoleOwnsDefenseState(SG_ROLE_RECOVER));

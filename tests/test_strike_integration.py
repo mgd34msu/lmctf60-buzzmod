@@ -465,8 +465,14 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("StrikeWeaponPrepareCommit(bot, tc)", descend)
         self.assertIn("qboolean enemy_pressure = tc->strike_pressure", descend)
         self.assertGreaterEqual(descend.count("enemy_pressure"), 8)
-        self.assertIn("SG_AttackDescentFallbackAllowed(enemy_pressure,",
+        self.assertIn("SG_AttackDescentFallbackAllowed(enemy_touch_mission,",
                       descend)
+        mission_hold = descend[descend.index("static qboolean ThinkMissionHold"):
+                               descend.index("int Think_PickLink")]
+        self.assertIn("tc->scoop_mission", mission_hold)
+        failure_watch = descend[descend.index(
+            "!SG_RouteFailureWatchSuppressed(role,"):]
+        self.assertIn("tc->scoop_mission", failure_watch[:700])
         axis_start = descend.index("if (enemy_pressure && bot->seed >= 0 &&")
         axis_end = descend.index("else if (role == SG_ROLE_CARRY)",
                                  axis_start)

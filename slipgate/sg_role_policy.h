@@ -52,12 +52,26 @@ static inline int SG_RoleOutsideDefenderQuota(const unsigned char *eligible,
 	return rank >= defenders_wanted && rank < live_count;
 }
 
-/* Near-goal defenders and escorts are intentionally stationed.  A human
- * escort's exact terminal hold remains authoritative even when its fallback
- * graph cost is not near the ordered teammate. */
-static inline int SG_RoleMissionHold(int role, int goal_cost,
-	int ordered_escort_terminal)
+/* A relay scoop keeps escort team semantics but owns a physical enemy-flag
+ * touch, so movement and route-failure policy treat it as urgent. */
+static inline int SG_EnemyFlagTouchMissionActive(int strike_pressure,
+	int scoop_mission)
 {
+	if ((strike_pressure != 0 && strike_pressure != 1) ||
+	    (scoop_mission != 0 && scoop_mission != 1))
+		return 0;
+	return strike_pressure || scoop_mission;
+}
+
+/* Near-goal defenders and escorts are intentionally stationed. A flag-touch
+ * mission may not inherit that stationary exemption. */
+static inline int SG_RoleMissionHold(int role, int goal_cost,
+	int ordered_escort_terminal, int enemy_flag_touch_mission)
+{
+	if (enemy_flag_touch_mission != 0 && enemy_flag_touch_mission != 1)
+		return 0;
+	if (enemy_flag_touch_mission)
+		return 0;
 	if (role == SG_ROLE_ESCORT && ordered_escort_terminal)
 		return 1;
 	return (role == SG_ROLE_DEFEND || role == SG_ROLE_ESCORT) &&
@@ -97,9 +111,11 @@ static inline int SG_ObjectiveOrbitMayShelf(int role, int enemy_pressure,
 /* Route-failure clocks may judge only navigation-owned motion.  Mission holds
  * and combat-owned frames cannot prove that the selected graph link failed. */
 static inline int SG_RouteFailureWatchSuppressed(int role, int goal_cost,
-	int ordered_escort_terminal, int duel, int engaged_last)
+	int ordered_escort_terminal, int enemy_flag_touch_mission, int duel,
+	int engaged_last)
 {
-	return SG_RoleMissionHold(role, goal_cost, ordered_escort_terminal) ||
+	return SG_RoleMissionHold(role, goal_cost, ordered_escort_terminal,
+	           enemy_flag_touch_mission) ||
 	       duel || engaged_last;
 }
 

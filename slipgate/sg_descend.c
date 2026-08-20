@@ -100,7 +100,8 @@ static qboolean ThinkMissionHold(const sg_bot_t *bot, const sg_think_t *tc,
 		ordered_escort = SG_ChatEscortTarget(tc->e);
 	if (ordered_escort)
 		ordered_terminal = SG_EscortTerminal(tc->e, ordered_escort);
-	return SG_RoleMissionHold(role, goal_cost, ordered_terminal);
+	return SG_RoleMissionHold(role, goal_cost, ordered_terminal,
+	    tc->scoop_mission);
 }
 
 /*
@@ -319,6 +320,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	int attack_descent_link = -1;
 	float attack_descent_value = 1e30f;
 	qboolean enemy_pressure = tc->strike_pressure;
+	qboolean enemy_touch_mission = SG_EnemyFlagTouchMissionActive(
+	    tc->strike_pressure, tc->scoop_mission);
 	qboolean duel_route_price = SG_DuelRoutePriceAllowed(duel,
 	    enemy_pressure, sg_cv.press->value != 0.0f,
 	    role == SG_ROLE_CARRY, sg_cv.carrypress->value != 0.0f);
@@ -1152,7 +1155,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * final room they may not turn standing still into a free alternative
 		 * to every strictly descending ordinary RUN. Retain the best such road
 		 * as a last-resort movement authority after every live gate above. */
-		if (SG_AttackDescentFallbackAllowed(enemy_pressure,
+		if (SG_AttackDescentFallbackAllowed(enemy_touch_mission,
 		        l->action == RL_RUN, goal_field[bot->seed],
 		        goal_field[l->to], SG_FIELD_INF) && v < attack_descent_value)
 		{
@@ -3099,7 +3102,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	        bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds ?
 	            goal_field[bot->seed] : SG_FIELD_INF,
 	        role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
-	            SG_EscortTerminal(e, SG_ChatEscortTarget(e)),
+	            SG_EscortTerminal(e, SG_ChatEscortTarget(e)), tc->scoop_mission,
 	        duel, bot->engaged_last) &&
 	    /* A defender patrol inside the post radius is intentional movement. */
 	    !bot->door_held_last && !bot->mate_block_last)
