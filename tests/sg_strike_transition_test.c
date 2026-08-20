@@ -496,7 +496,7 @@ static void ArmCarryBallistic(sg_bot_t *bot, int action, qboolean physical)
 	}
 }
 
-static void TestCarryStartRetiresOnlyReversibleBallistics(void)
+static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 {
 	const int actions[] = { RL_JUMP, RL_DROP, RL_ROCKETJUMP };
 	sg_bot_t bot;
@@ -505,7 +505,7 @@ static void TestCarryStartRetiresOnlyReversibleBallistics(void)
 	{
 		WorldReset();
 		ArmCarryBallistic(&bot, actions[index], false);
-		SG_CarryStartRetireStagedBallistic(&bot, true);
+		SG_CarryStartRetireStagedTraversal(&bot, true);
 		CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
 		    bot.commit_route_field == NULL);
 		CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
@@ -517,14 +517,14 @@ static void TestCarryStartRetiresOnlyReversibleBallistics(void)
 			CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
 		WorldReset();
 		ArmCarryBallistic(&bot, actions[index], true);
-		SG_CarryStartRetireStagedBallistic(&bot, true);
+		SG_CarryStartRetireStagedTraversal(&bot, true);
 		CHECK(bot.commit_link == 1 && (actions[index] == RL_JUMP ?
 		    bot.jump_started : actions[index] == RL_DROP ? bot.drop_started :
 		    bot.rj_phase == 2));
 	}
 	WorldReset();
 	ArmCarryBallistic(&bot, RL_JUMP, false);
-	SG_CarryStartRetireStagedBallistic(&bot, false);
+	SG_CarryStartRetireStagedTraversal(&bot, false);
 	CHECK(bot.commit_link == 1 && bot.jump_link == 1);
 	WorldReset();
 	bot = Bot();
@@ -532,8 +532,8 @@ static void TestCarryStartRetiresOnlyReversibleBallistics(void)
 	bot.commit_link = 1;
 	bot.hook_link = 1;
 	bot.hook_phase = 1;
-	SG_CarryStartRetireStagedBallistic(&bot, true);
-	CHECK(bot.commit_link == 1 && bot.hook_phase == 1);
+	SG_CarryStartRetireStagedTraversal(&bot, true);
+	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
 }
 
 static void TestDeadlineGoAndCurrentCandidate(void)
@@ -1211,7 +1211,7 @@ int main(void)
 {
 	TestFreshTagAndOldCommitment();
 	TestPureRouteChangeRetiresOnlyReversibleRun();
-	TestCarryStartRetiresOnlyReversibleBallistics();
+	TestCarryStartRetiresOnlyReversibleTraversal();
 	TestDeadlineGoAndCurrentCandidate();
 	TestSpeedHookAndStickyDrain();
 	TestRocketJumpBoundaries();

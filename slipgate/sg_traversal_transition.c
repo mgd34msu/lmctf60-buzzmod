@@ -115,7 +115,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 	}
 }
 
-void SG_CarryStartRetireStagedBallistic(sg_bot_t *bot,
+void SG_CarryStartRetireStagedTraversal(sg_bot_t *bot,
 	qboolean carry_started)
 {
 	rune_t *rune;
@@ -128,7 +128,7 @@ void SG_CarryStartRetireStagedBallistic(sg_bot_t *bot,
 	    bot->commit_link < 0 || bot->commit_link >= rune->hdr.num_links)
 		return;
 	action = rune->links[bot->commit_link].action;
-	if ((action != RL_JUMP && action != RL_DROP &&
+	if ((action != RL_HOOK && action != RL_JUMP && action != RL_DROP &&
 	     action != RL_ROCKETJUMP) ||
 	    SG_TraversalControllerPhysical(bot, action))
 		return;
