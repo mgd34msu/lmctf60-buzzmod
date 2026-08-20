@@ -9,7 +9,7 @@ FIELD_INF = 0x3FFFFFFF
 DESCEND = (ROOT / "slipgate" / "sg_descend.c").read_text()
 MOVE = (ROOT / "slipgate" / "sg_move.c").read_text()
 GOAL = (ROOT / "slipgate" / "sg_goal.c").read_text()
-ARACH = (ROOT / "slipgate" / "sg_arach.c").read_text()
+LOCALIZATION = (ROOT / "slipgate" / "sg_localization.c").read_text()
 
 
 def section(source: str, start: str, end: str) -> str:
@@ -196,13 +196,13 @@ def test_off_surface_recovery_uses_only_local_trace_checked_field_seeds():
     assert "for (i = 0; i < SG_Rune()->hdr.num_seeds" not in recovery
 
     localization = section(
-        ARACH,
+        LOCALIZATION,
         "int Rune_NearestFieldSeed",
         "int Rune_NearestSeed",
     )
-    assert "SG_LocalSeedScore(r, field, i" in localization
+    assert "SG_LocalSeedScore(r, field, seed" in localization
     assert "sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID)" in localization
-    assert "tr.startsolid || tr.fraction < 1.0f" in localization
+    assert "trace.startsolid || trace.fraction < 1.0f" in localization
 
 
 if __name__ == "__main__":

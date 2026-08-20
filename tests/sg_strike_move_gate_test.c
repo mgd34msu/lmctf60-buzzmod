@@ -2,6 +2,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_hooks.h"
 #include "slipgate/sg_move.h"
 
 #include <stdio.h>
@@ -9,6 +10,25 @@
 
 int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
 	int current_seed);
+
+sg_host_t sg_host;
+static qboolean block_terminal_trace;
+
+static trace_t TerminalTrace(const vec3_t start, const vec3_t mins,
+	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
+{
+	trace_t trace;
+
+	(void)start;
+	(void)mins;
+	(void)maxs;
+	(void)passent;
+	(void)contentmask;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = block_terminal_trace ? 0.5f : 1.0f;
+	VectorCopy(end, trace.endpos);
+	return trace;
+}
 
 static int failures;
 
@@ -29,6 +49,7 @@ int main(void)
 	usercmd_t cmd;
 	rune_t rune;
 	rune_seed_t seeds[3];
+	byte linked[3] = { 1, 1, 1 };
 	int field[3] = { 500, 0, 0 };
 
 	memset(&bot, 0, sizeof(bot));
@@ -63,12 +84,24 @@ int main(void)
 	memset(seeds, 0, sizeof(seeds));
 	rune.hdr.num_seeds = 3;
 	rune.seeds = seeds;
+	rune.linked_seed = linked;
+	sg_host.trace = TerminalTrace;
 	seeds[0].origin[0] = 0.0f;
 	seeds[1].origin[0] = 100.0f;
 	seeds[2].origin[0] = 200.0f;
 	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == 1);
 	field[1] = 20;
+	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == -1);
+	seeds[2].origin[0] = 120.0f;
 	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == 2);
+	block_terminal_trace = true;
+	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == -1);
+	block_terminal_trace = false;
+	linked[2] = 0;
+	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == -1);
+	linked[2] = 1;
+	seeds[2].flags = RSF_TOMBSTONE;
+	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == -1);
 	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, -1) == -1);
 
 	if (failures)

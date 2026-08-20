@@ -55,7 +55,6 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_escort_dose.h"
-#include "slipgate/sg_localization.h"
 #include "slipgate/sg_role_skew_random.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
@@ -593,46 +592,6 @@ cleanup:
 	sg_last_rune_load = RUNE_LOAD_READY;
 	return rune;
 }
-int Rune_NearestFieldSeed(rune_t *r, vec3_t p, const int *field)
-{
-	/* A seed is a local topology sample, not a global Voronoi label. Beyond two
-	 * lattice steps the body may be in an intentionally omitted/unreachable
-	 * region; snapping it to a distant visible component makes commands claim a
-	 * route through geometry the graph never proved. Seedless recovery owns that
-	 * fail-closed case. */
-	int i, best = -1;
-	float bestd = 1e30f;
-
-	if (!r || !r->seeds)
-		return -1;
-	for (i = 0; i < r->hdr.num_seeds; i++)
-	{
-		vec3_t d, from, to;
-		float dd;
-		trace_t tr;
-
-		VectorSubtract(r->seeds[i].origin, p, d);
-		dd = SG_LocalSeedScore(r, field, i, d[0], d[1], d[2]);
-		if (dd < 0.0f || dd >= bestd)
-			continue;
-		VectorCopy(p, from);
-		VectorCopy(r->seeds[i].origin, to);
-		from[2] += 16.0f;
-		to[2] += 16.0f;
-		tr = sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID);
-		if (tr.startsolid || tr.fraction < 1.0f)
-			continue;
-		bestd = dd;
-		best = i;
-	}
-	return best;
-}
-
-int Rune_NearestSeed(rune_t *r, vec3_t p)
-{
-	return Rune_NearestFieldSeed(r, p, NULL);
-}
-
 /* --------------------------------------------------------------- fields */
 
 /* Next graph hop toward a dry seed. NULL means no water seeds; -1 means the

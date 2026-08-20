@@ -111,6 +111,7 @@ class StrikeIntegrationTest(unittest.TestCase):
                 "sg_strike_move_gate_test", [
                     "tests/sg_strike_move_gate_test.c",
                     "slipgate/sg_move.c",
+                    "slipgate/sg_localization.c",
                     "slipgate/sg_strike.c",
                 ])
             self.assertIn("sg_strike_move_gate_test: ok", output)

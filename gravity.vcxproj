@@ -391,6 +391,7 @@
     <ClCompile Include="slipgate\sg_swim_live.c" />
     <ClCompile Include="slipgate\sg_hook_live.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
+    <ClCompile Include="slipgate\sg_localization.c" />
     <ClCompile Include="slipgate\sg_cvars.c" />
     <ClCompile Include="slipgate\sg_hooks.c" />
     <ClCompile Include="slipgate\sg_util.c" />

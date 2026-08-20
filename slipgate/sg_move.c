@@ -615,42 +615,16 @@ static qboolean SG_OwnHomeFlagDirectTouchAuthority(edict_t *e, int team,
 	return true;
 }
 
-/* Terminal recovery must end at the source of the admitted belief field, not
- * at the empty home stand.  Multiple zero/minimum sources are resolved by
- * physical proximity to the current seed; no entity or hidden position enters
- * this reducer. */
+/* Terminal recovery must end at a local, trace-clear source of the admitted
+ * belief field, not at an empty stand or a remote minimum across geometry. */
 static int SG_TerminalFieldSeed(const rune_t *rune, const int *field,
 	int current_seed)
 {
-	int best = -1;
-	int best_value = SG_FIELD_INF;
-	float best_distance = 0.0f;
-	int seed;
-
 	if (!rune || !rune->seeds || !field || current_seed < 0 ||
 	    current_seed >= rune->hdr.num_seeds)
 		return -1;
-	for (seed = 0; seed < rune->hdr.num_seeds; seed++)
-	{
-		vec3_t delta;
-		float distance;
-
-		if (field[seed] < 0 || field[seed] >= SG_FIELD_INF)
-			continue;
-		VectorSubtract(rune->seeds[seed].origin,
-		    rune->seeds[current_seed].origin, delta);
-		distance = DotProduct(delta, delta);
-		if (best < 0 || field[seed] < best_value ||
-		    (field[seed] == best_value && distance < best_distance) ||
-		    (field[seed] == best_value && distance == best_distance &&
-		     seed < best))
-		{
-			best = seed;
-			best_value = field[seed];
-			best_distance = distance;
-		}
-	}
-	return best;
+	return Rune_NearestFieldMinimumSeed(rune,
+	    rune->seeds[current_seed].origin, field);
 }
 
 /*

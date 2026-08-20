@@ -886,6 +886,7 @@ OBJS := \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
+	slipgate/sg_localization.o \
 	sg_fields.o \
 	slipgate/sg_snag_repair.o \
 	sg_caco.o \

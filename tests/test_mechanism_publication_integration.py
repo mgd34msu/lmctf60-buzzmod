@@ -15,7 +15,11 @@ def between(text: str, start: str, end: str) -> str:
 
 def test_all_mechanisms_rebind_before_loader_acceptance() -> None:
     arach = (ROOT / "slipgate/sg_arach.c").read_text(encoding="utf-8")
-    loader = between(arach, "rune_t *Rune_Load", "int Rune_NearestSeed")
+    loader = between(
+        arach,
+        "rune_t *Rune_Load",
+        "/* --------------------------------------------------------------- fields */",
+    )
     decoded = loader.index("SG_RuneFileLoad(")
     catalog = loader.index("SG_MechCatalogMatches(")
     indexes = loader.index("Rune_BuildOutboundIndexes(")
