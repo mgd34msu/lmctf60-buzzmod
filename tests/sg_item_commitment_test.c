@@ -578,6 +578,11 @@ int main(void)
 	CHECK(SG_RuneHandoffAllowsOptional(false));
 	CHECK(!SG_RuneHandoffAllowsOptional(true));
 	CHECK(!SG_RuneHandoffAllowsOptional(2));
+	CHECK(SG_RuneHandoffEnemyPressure(false, true));
+	CHECK(!SG_RuneHandoffEnemyPressure(true, true));
+	CHECK(!SG_RuneHandoffEnemyPressure(true, false));
+	CHECK(!SG_RuneHandoffEnemyPressure(false, 2));
+	CHECK(!SG_RuneHandoffEnemyPressure(2, true));
 	CHECK(SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, 3, true, true,
 	    100, false, CTF_TEAM_RED, true, false));
 	CHECK(!SG_RuneHandoffCarrierAllowed(CTF_TEAM_RED, 16, -1, true, true,

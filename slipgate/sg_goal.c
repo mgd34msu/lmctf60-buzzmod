@@ -126,10 +126,12 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	int team = tc->team;
 	const int *goal_field = tc->goal_field;
 	int goal_ms = -1;
-
-	qboolean hold = false;
-	qboolean pressure_approach;
-
+	qboolean hold = false, pressure_approach;
+	if (tc->rune_handoff_route)
+	{
+		bot->rally_since = 0.0f;
+		return false;
+	}
 	if (bot->seed >= 0 && SG_Rune() &&
 	    bot->seed < SG_Rune()->hdr.num_seeds)
 		goal_ms = goal_field[bot->seed];
@@ -137,10 +139,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 	    tc->strike_active, tc->strike_pressure,
 	    role == SG_ROLE_ATTACK, goal_ms);
 
-	/* A recent enemy-room death releases every approach-band attacker. */
-	/* A strike frame owns HOLD/RUSH.  Keep the legacy conductor and rally out
-	 * of that decision, but do not skip the independent live-enemy approach
-	 * action below merely because the coordinator supplied the route. */
+	/* A strike frame owns HOLD/RUSH, outside the organic rally conductor. */
 	if (!tc->strike_active && sg_cv.wavepush->value &&
 	    role == SG_ROLE_ATTACK &&
 	    SG_TimerReady(sg_push_until[SG_TeamIdx(team)]))
@@ -1341,9 +1340,8 @@ void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc)
 void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 {
 	edict_t *e = tc->e;
-	/* Strike duty is resolved before Objective.  Its effective ESCORT owns the
-	 * same carrier/formation objective as an organic escort; every other duty
-	 * retains the organic role until the coordinator applies its exact route. */
+	/* Strike ESCORT owns carrier formation. Other duties retain organic role
+	 * until the coordinator applies their exact route. */
 	sg_role_t role = (sg_role_t)SG_ObjectiveRole(tc->role,
 	    tc->escort_mission);
 	int team = tc->team;
@@ -1353,7 +1351,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	const int *intercept = tc->intercept;
 	const int *goal_field;
 	const int *route_field;
-	qboolean route_pure, rune_handoff_route = false;
+	qboolean route_pure;
+	tc->rune_handoff_route = false;
 	tc->mega_target_ent = -1;
 	if (role == SG_ROLE_CARRY || role == SG_ROLE_DEFEND)
 	{
@@ -1578,7 +1577,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				        SG_FIELD_INF)
 				{
 					goal_field = sg_fields.our_carrier[SG_TeamIdx(team)];
-					rune_handoff_route = true;
+					tc->rune_handoff_route = true;
 				}
 				else
 				{
@@ -1592,9 +1591,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		else
 			bot->runeconv_until = 0.0f;
 	}
-
-	/* Optional item leads run only after principal objective selection. */
-	if (!tc->strike_blocks_optional && SG_RuneHandoffAllowsOptional(rune_handoff_route))
+	tc->strike_pressure = SG_RuneHandoffEnemyPressure(tc->rune_handoff_route,
+	    tc->strike_pressure);
+	if (!tc->strike_blocks_optional && SG_RuneHandoffAllowsOptional(
+	    tc->rune_handoff_route))
 	{
 		const int *lead = Lead_Field(bot, role, carrying,
 		    SG_ChatOrderedRole(e));
@@ -1603,7 +1603,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			goal_field = lead;
 	}
 	tc->mega = (tc->strike_blocks_optional || !SG_RuneHandoffAllowsOptional(
-	    rune_handoff_route)) ? 0.0f : Mega_Worth(bot, e, role);
+	    tc->rune_handoff_route)) ? 0.0f : Mega_Worth(bot, e, role);
 	if (tc->mega > 0.0f && SG_Rune() && bot->seed >= 0 &&
 	    bot->seed < SG_Rune()->hdr.num_seeds)
 		Mega_Detour(tc, bot->seed, goal_field, &tc->mega_target_ent);
@@ -1650,8 +1650,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	                      goal_field[bot->seed] < SG_FIELD_INF)
 	                     ? goal_field[bot->seed] : -1;
 	route_field = goal_field;
-	route_pure = rune_handoff_route;
-	if (SG_RuneHandoffAllowsOptional(rune_handoff_route) &&
+	route_pure = tc->rune_handoff_route;
+	if (SG_RuneHandoffAllowsOptional(tc->rune_handoff_route) &&
 	    !tc->strike_blocks_optional &&
 	    sg_cv.tactics->value &&
 	    role != SG_ROLE_ESCORT &&

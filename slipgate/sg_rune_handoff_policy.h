@@ -29,6 +29,15 @@ static inline qboolean SG_RuneHandoffAllowsOptional(qboolean route_active)
 	return !route_active;
 }
 
+static inline qboolean SG_RuneHandoffEnemyPressure(qboolean route_active,
+	qboolean enemy_pressure)
+{
+	if ((route_active != false && route_active != true) ||
+	    (enemy_pressure != false && enemy_pressure != true))
+		return false;
+	return !route_active && enemy_pressure;
+}
+
 /* A belief selects the candidate slot, but the current CTF state authorizes
  * convergence and the irreversible toss.  Bounds, life, team and actual flag
  * possession and an empty rune slot are all required; a former carrier,

@@ -280,9 +280,9 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         start = source.index("if (sg_cv.runetoss->value &&")
         end = source.index("if (SG_DefenseSupplyActive(bot))", start)
         handoff = source[start:end]
-        self.assertIn("rune_handoff_route = true;", handoff)
+        self.assertIn("tc->rune_handoff_route = true;", handoff)
         self.assertIn(
-            "SG_RuneHandoffAllowsOptional(rune_handoff_route)",
+            "SG_RuneHandoffAllowsOptional(tc->rune_handoff_route)",
             handoff,
         )
         self.assertIn(
@@ -290,11 +290,37 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             handoff,
         )
         optional_guards = re.findall(
-            r"SG_RuneHandoffAllowsOptional\(\s*rune_handoff_route\s*\)",
+            r"SG_RuneHandoffAllowsOptional\(\s*tc->rune_handoff_route\s*\)",
             handoff,
         )
         self.assertEqual(len(optional_guards), 3)
-        self.assertIn("route_pure = rune_handoff_route;", handoff)
+        self.assertIn("route_pure = tc->rune_handoff_route;", handoff)
+
+    def test_rune_handoff_route_retires_enemy_flag_pressure(self):
+        goal = self.text("slipgate/sg_goal.c")
+        move = self.text("slipgate/sg_move.c")
+        bot = self.text("slipgate/sg_bot.h")
+        self.assertRegex(bot, r"\bqboolean\s+rune_handoff_route\b")
+        self.assertIn("tc->rune_handoff_route = false;", goal)
+        self.assertIn("tc->rune_handoff_route = true;", goal)
+        self.assertIn(
+            "tc->strike_pressure = SG_RuneHandoffEnemyPressure(", goal
+        )
+        approach = goal[goal.index("qboolean Think_ApproachBand"):
+                        goal.index("void Think_InterceptField")]
+        self.assertIn("if (tc->rune_handoff_route)", approach)
+        self.assertIn("bot->rally_since = 0.0f;", approach)
+        terminal_start = move.index("/* last resort: the goal itself")
+        terminal_end = move.index("CAPTURE THROUGH", terminal_start)
+        terminal = move[terminal_start:terminal_end]
+        handoff = terminal.index("tc->rune_handoff_route")
+        pressure = terminal.index("tc->strike_pressure")
+        self.assertLess(handoff, pressure)
+        self.assertIn("SG_TerminalFieldSeed(SG_Rune(), goal_field", terminal)
+        ribbon_start = move.index("SG_RouteRibbonAllowed(")
+        ribbon = move[ribbon_start:move.index("l->action == RL_RUN",
+                                              ribbon_start)]
+        self.assertIn("tc->route_pure", ribbon)
 
     def test_mega_detour_finishes_at_the_selected_pickup(self):
         goal = self.text("slipgate/sg_goal.c")

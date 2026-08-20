@@ -3712,7 +3712,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			rune_link_t *l = &SG_Rune()->links[bestlink];
 			VectorCopy(SG_Rune()->seeds[l->to].origin, aim);
 			if (sg_cv.ribbon->value > 0.0f &&
-			    SG_RouteRibbonAllowed(role == SG_ROLE_CARRY,
+			    SG_RouteRibbonAllowed(role == SG_ROLE_CARRY || tc->route_pure,
 			        EnemyFlagTouchMissionActive(tc->strike_pressure,
 			            tc->scoop_mission)) &&
 			    l->action == RL_RUN && bot->ribbon_off != 0.0f)
@@ -4517,14 +4517,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		else if (bot->seed >= 0 &&
 		         goal_field[bot->seed] >= SG_FIELD_INF)
 		{
-			/*
-			 * Off the known surface: the field is infinite here. The right
-			 * move is not the goal line -- greedy steering at a distant
-			 * goal orbits concave geometry forever, and did, for four
-			 * minutes straight. It is the shortest walk ONTO the surface:
-			 * the nearest seed where the field turns finite. From there
-			 * the links take over.
-			 */
+			/* Rejoin the nearest finite field seed instead of orbiting the goal. */
 			int best = Rune_NearestFieldSeed(SG_Rune(), e->s.origin,
 			    goal_field);
 
@@ -4534,13 +4527,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				VectorCopy(e->s.origin, aim);
 			have_aim = true;
 		}
-
 		if (!have_aim)
 		{
 			/* last resort: the goal itself, by belief */
 			edict_t *gf = NULL;
 			int terminal_seed = -1;
-
 			/* An item route can end at a pad seed before the physical pickup.
 			 * Cross the final body-length to the exact live item before generic
 			 * role homing turns the bot back toward a flag. */
@@ -4643,11 +4634,20 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 			}
+			else if (!have_aim && !gf && tc->rune_handoff_route)
+			{
+				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
+				    bot->seed);
+				if (terminal_seed >= 0)
+				{
+					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
+					have_aim = true;
+				}
+			}
 			else if (!have_aim && !gf && tc->strike_pressure)
 			{
 				int ti = SG_TeamIdx(team);
 				int ei = SG_TeamIdx(SG_EnemyTeam(team));
-
 				if (sg_caco_team_belief.flag[ti][ei].state == SG_FLAG_ASTRAY)
 				{
 					/* The strategy field was admitted from this team's dropped-

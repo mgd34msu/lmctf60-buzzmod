@@ -503,7 +503,7 @@ typedef struct sg_think_s {
 	/* Per-client item surfaces.  Runes and powerups use the shared live field;
 	 * weapon, health, ammo, and armor roots follow physical pickup law. */
 	const int		*collectible_item_field[SG_FIELD_CLASSES];
-	qboolean		route_pure;
+	qboolean		rune_handoff_route, route_pure;
 	const sg_weights_t *w;
 	sg_weights_t	live;
 	sg_role_t		role;
