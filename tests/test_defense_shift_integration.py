@@ -64,7 +64,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         )
         for token in required:
             self.assertIn(token, source)
-        self.assertIn('X(defshift, "sg_defshift", "0")',
+        self.assertIn('X(defshift, "sg_defshift", "1")',
                       (ROOT / "slipgate/sg_cvars.h").read_text())
         self.assertIn('X(patrol, "sg_patrol", "0.55")',
                       (ROOT / "slipgate/sg_cvars.h").read_text())

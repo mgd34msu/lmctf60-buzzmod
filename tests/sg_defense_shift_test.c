@@ -2,6 +2,7 @@
 #include "slipgate/sg_route_policy.h"
 #include "g_local.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_cvars.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -83,6 +84,19 @@ static void TestLateralChoice(void)
 	request.previous_seed = 30;
 	CHECK(SG_DefenseShiftChoose(&request, candidates, 3, &seed) == 4);
 	CHECK(seed == 40);
+}
+
+static void TestDefenseShiftShippingDefault(void)
+{
+	int found = 0;
+
+#define X(field, name, default_value) \
+	if (strcmp(name, "sg_defshift") == 0) { \
+		found = 1; CHECK(strcmp(default_value, "1") == 0); \
+	}
+	SG_CVAR_LIST(X)
+#undef X
+	CHECK(found);
 }
 
 static void TestGuardBandAndGeometry(void)
@@ -378,6 +392,7 @@ int main(void)
 	TestOneExitRouteStaysMobile();
 	TestAttackDescentCannotPriceItselfStill();
 	TestDuelRoutePricingUsesOneSurface();
+	TestDefenseShiftShippingDefault();
 	TestLateralChoice();
 	TestGuardBandAndGeometry();
 	TestFailClosedInputs();

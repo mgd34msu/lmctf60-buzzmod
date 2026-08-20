@@ -25,7 +25,7 @@
 	X(defpost, "sg_defpost", "0") \
 	X(defcombat, "sg_defcombat", "1") \
 	X(defreact, "sg_defreact", "3") \
-	X(defshift, "sg_defshift", "0") \
+	X(defshift, "sg_defshift", "1") \
 	X(depace, "sg_depace", "0") \
 	X(drawplan, "sg_drawplan", "0") \
 	X(duelroles, "sg_duelroles", "1") \
