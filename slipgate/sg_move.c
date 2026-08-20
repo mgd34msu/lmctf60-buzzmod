@@ -3736,14 +3736,15 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		if (!have_aim && bestlink >= 0)
 		{
 			rune_link_t *l = &SG_Rune()->links[bestlink];
-
 			VectorCopy(SG_Rune()->seeds[l->to].origin, aim);
 			if (sg_cv.ribbon->value > 0.0f &&
+			    SG_RouteRibbonAllowed(role == SG_ROLE_CARRY,
+			        EnemyFlagTouchMissionActive(tc->strike_pressure,
+			            tc->scoop_mission)) &&
 			    l->action == RL_RUN && bot->ribbon_off != 0.0f)
 			{
 				vec3_t rdir, roff, rprobe;
 				trace_t rtr;
-
 				VectorSubtract(aim, e->s.origin, rdir);
 				rdir[2] = 0.0f;
 				if (VectorLength(rdir) > 32.0f)
@@ -3756,8 +3757,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					VectorAdd(aim, roff, rprobe);
 					rtr = sg_host.trace(e->s.origin, e->mins, e->maxs, rprobe,
 					               e, MASK_PLAYERSOLID);
-					/* the corridor decides: a blocked offset collapses to the
-					 * seed line -- the band is only as wide as the room */
+					/* A blocked offset collapses to the seed line. */
 					if (rtr.fraction >= 1.0f)
 						VectorCopy(rprobe, aim);
 				}

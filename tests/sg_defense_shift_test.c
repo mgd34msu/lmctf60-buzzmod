@@ -106,6 +106,16 @@ static void TestDuelRoutePricingUsesOneSurface(void)
 	CHECK(!SG_DuelRoutePriceAllowed(1, -1, 0, 0, 0));
 }
 
+static void TestObjectiveRunsDoNotSpendMovementOnRibbon(void)
+{
+	CHECK(SG_RouteRibbonAllowed(0, 0));
+	CHECK(!SG_RouteRibbonAllowed(1, 0));
+	CHECK(!SG_RouteRibbonAllowed(0, 1));
+	CHECK(!SG_RouteRibbonAllowed(1, 1));
+	CHECK(!SG_RouteRibbonAllowed(-1, 0));
+	CHECK(!SG_RouteRibbonAllowed(0, 2));
+}
+
 static void TestLateralChoice(void)
 {
 	const sg_defense_shift_candidate_t candidates[] = {
@@ -433,6 +443,7 @@ int main(void)
 	TestCandidateChargesImmediateTraversal();
 	TestGoalProgressChargesImmediateTraversal();
 	TestDuelRoutePricingUsesOneSurface();
+	TestObjectiveRunsDoNotSpendMovementOnRibbon();
 	TestDefenseShiftShippingDefault();
 	TestLateralChoice();
 	TestGuardBandAndGeometry();

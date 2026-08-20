@@ -152,6 +152,12 @@ def test_carrier_screen_terminal_preserves_the_selected_formation():
     assert "VectorCopy(ordered_escort->s.origin, aim);" in priority
 
 
+def test_immediate_flag_objectives_do_not_apply_route_ribbon():
+    ribbon = section(MOVE, "if (sg_cv.ribbon->value > 0.0f", "have_aim = true;")
+    assert "SG_RouteRibbonAllowed(role == SG_ROLE_CARRY" in ribbon
+    assert "EnemyFlagTouchMissionActive(tc->strike_pressure" in ribbon
+
+
 if __name__ == "__main__":
     tests = [
         value

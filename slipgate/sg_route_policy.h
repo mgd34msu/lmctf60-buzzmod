@@ -35,6 +35,16 @@ static inline int SG_RouteCandidateDescends(int current_ms,
 	        current_ms;
 }
 
+/* Carriers and flag-touch runners own an immediate contact objective. Their
+ * route may bend for proved traversal, but not for cosmetic lateral texture. */
+static inline int SG_RouteRibbonAllowed(int carrying, int flag_touch_mission)
+{
+	if ((carrying != 0 && carrying != 1) ||
+	    (flag_touch_mission != 0 && flag_touch_mission != 1))
+		return 0;
+	return !carrying && !flag_touch_mission;
+}
+
 /* The immediate-return surcharge is a choice among equally useful routes,
  * not permission to spend progress.  A merely finite alternative can point
  * uphill; require two distinct non-worsening neighbors before taxing either
