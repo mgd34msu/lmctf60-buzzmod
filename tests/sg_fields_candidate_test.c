@@ -499,7 +499,6 @@ static void CheckCarrierTrailFollowsTheScoringRoute(void)
 	Link(&links[0], 1, 0, RL_RUN, 500);
 	Link(&links[1], 2, 1, RL_RUN, 500);
 
-	CHECK(SG_FieldNearestBandSeed(&rune, home, 0, 1400, 1600) == 3);
 	CHECK(SG_FieldCarrierTrailStation(&rune, home, 0, 1400, 1600) == 1);
 	CHECK(SG_FieldCarrierTrailStation(&rune, home, 0, 1900, 2100) == 2);
 	links[0].cost_ms = 600;
@@ -588,10 +587,8 @@ static void CheckCarrierProjectionPricesWholeEdge(void)
 	/* Seed 1 occupies the requested cost band but is on the slow parallel
 	 * branch. The lead station stays on the carrier's selected route. */
 	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 150, 250) == 3);
-	CHECK(SG_FieldNearestBandSeed(&rune, home, 0, 150, 250) == 1);
 	home[0] = SG_FIELD_INF;
 	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 150, 250) == -1);
-	CHECK(SG_FieldNearestBandSeed(&rune, home, 0, 150, 250) == -1);
 	home[0] = 600;
 	home[1] = 700;
 	home[2] = 800;

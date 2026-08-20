@@ -182,35 +182,4 @@ static inline int SG_FieldCarrierTrailStation(const rune_t *r,
 	return -1;
 }
 
-static inline int SG_FieldNearestBandSeed(const rune_t *r, const int *field,
-	int origin_seed, int cost_lo, int cost_hi)
-{
-	int best = -1;
-	float best_distance = -1.0f;
-	int seed;
-
-	if (!r || !r->seeds || !field || origin_seed < 0 ||
-	    origin_seed >= r->hdr.num_seeds || field[origin_seed] < 0 ||
-	    field[origin_seed] >= SG_FIELD_INF || cost_lo < 0 || cost_lo > cost_hi)
-		return -1;
-	for (seed = 0; seed < r->hdr.num_seeds && seed < SG_MAX_SEEDS; seed++)
-	{
-		vec3_t delta;
-		float distance;
-
-		if (field[seed] < cost_lo || field[seed] > cost_hi ||
-		    field[seed] >= SG_FIELD_INF)
-			continue;
-		VectorSubtract(r->seeds[seed].origin,
-		    r->seeds[origin_seed].origin, delta);
-		distance = VectorLength(delta);
-		if (best_distance < 0.0f || distance < best_distance)
-		{
-			best_distance = distance;
-			best = seed;
-		}
-	}
-	return best;
-}
-
 #endif /* SG_FIELD_PROJECTION_H */
