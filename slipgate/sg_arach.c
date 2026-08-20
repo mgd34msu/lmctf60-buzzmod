@@ -2047,9 +2047,7 @@ static void StrikePrepareFrame(void)
 		frames[bot_team_index].slot[i].present = 1;
 		frames[bot_team_index].slot[i].alive =
 		    ent->inuse && ent->deadflag == DEAD_NO && ent->health > 0;
-		/* DEFEND remains the authoritative reserved role.  CARRY is admitted
-		 * so the core can own its egress duty; RECOVER/ESCORT remain eligible
-		 * pressure bodies rather than globally rewriting the roster law. */
+		/* Preserve reserved defenders while admitting the real carrier. */
 		frames[bot_team_index].slot[i].carrying = SG_BotCarrying(ent);
 		frames[bot_team_index].slot[i].attack_eligible =
 		    StrikeAttackEligible(sg_strike_role_cache[i],
@@ -2069,9 +2067,11 @@ static void StrikePrepareFrame(void)
 		if (carriers[bot_team_index])
 		{
 			vec3_t delta;
-
 			VectorSubtract(ent->s.origin, carriers[bot_team_index]->s.origin, delta);
 			frames[bot_team_index].slot[i].carrier_distance = VectorLength(delta);
+			frames[bot_team_index].slot[i].carrier_screen_clear =
+			    SG_CanSee(ent, carriers[bot_team_index]->s.origin,
+			        carriers[bot_team_index]->viewheight);
 		}
 		frames[bot_team_index].slot[i].direct_flag_touch =
 		    frames[bot_team_index].slot[i].alive &&

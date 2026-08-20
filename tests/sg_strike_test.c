@@ -710,7 +710,6 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 {
 	sg_strike_team_t team;
 	sg_strike_frame_t frame = Frame(625.0f);
-
 	CHECK(!SG_StrikeCarrierScreened(NULL, NULL));
 	CHECK(SG_StrikeCarrierHookRisk(0) == 2000.0f);
 	CHECK(SG_StrikeCarrierHookRisk(1) == 500.0f);
@@ -722,7 +721,6 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
 	CHECK(SG_StrikeStep(&team, &frame));
 	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
-
 	frame.now = 626.0f;
 	frame.events = SG_STRIKE_EVENT_PICKUP;
 	frame.enemy_flag_home = 0;
@@ -737,6 +735,8 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
 	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
 	frame.slot[1].carrier_distance = 700.0f;
+	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
+	frame.slot[1].carrier_screen_clear = 1;
 	CHECK(SG_StrikeCarrierScreened(&team, &frame));
 	frame.slot[1].carrier_distance = NAN;
 	CHECK(!SG_StrikeCarrierScreened(&team, &frame));

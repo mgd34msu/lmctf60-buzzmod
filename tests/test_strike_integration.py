@@ -419,7 +419,6 @@ class StrikeIntegrationTest(unittest.TestCase):
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
         adapter = (ROOT / "slipgate/sg_strike_adapter.c").read_text()
         header = (ROOT / "slipgate/sg_strike_adapter.h").read_text()
-
         prepare = arach.index("StrikePrepareFrame();")
         serial = arach.index("for (i = 0; i < SG_MAXBOTS; i++)", prepare)
         think = arach.index("SG_BotThink(&sg_bots[i]);", serial)
@@ -428,13 +427,14 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("SG_StrikeAdapterBeginFrame", arach)
         self.assertIn("SG_CombatWeaponState", arach)
         self.assertIn("ctfid", arach)
+        self.assertIn("carrier_screen_clear", arach)
+        self.assertIn("SG_CanSee(ent, carriers[bot_team_index]->s.origin", arach)
         self.assertIn("SG_AttackFlagDirectTouchAuthority", arach)
         self.assertIn("SG_StrikeWeaponTargetField", arach)
         self.assertIn("SG_StrikeMemberNeedsWeapon", arach)
         self.assertIn("SG_StrikeParticipant", arach)
         duty = arach.index("strike_duty = strike_team->duty[strike_slot]")
-        lead_abort = arach.index(
-            'Lead_Abort(bot, "strike duty")', duty)
+        lead_abort = arach.index('Lead_Abort(bot, "strike duty")', duty)
         objective = arach.index("Think_Objective(bot, &tc)", lead_abort)
         route = arach.index("StrikeApplyDutyRoute(&tc, strike_duty, team)",
                             objective)

@@ -105,6 +105,7 @@ typedef struct sg_strike_slot_input_s
 	int recover_goal_ms;
 	int carrier_goal_ms;
 	float carrier_distance;
+	int carrier_screen_clear;
 	int direct_flag_touch;
 } sg_strike_slot_input_t;
 
@@ -182,7 +183,8 @@ static inline int SG_StrikeCarrierScreened(const sg_strike_team_t *team,
 		const sg_strike_slot_input_t *input = &frame->slot[slot];
 
 		if (team->duty[slot] == SG_STRIKE_DUTY_ESCORT && input->present &&
-		    input->alive && isfinite(input->carrier_distance) &&
+		    input->alive && input->carrier_screen_clear == 1 &&
+		    isfinite(input->carrier_distance) &&
 		    input->carrier_distance >= 0.0f &&
 		    input->carrier_distance <= SG_STRIKE_SCREEN_DISTANCE)
 			return 1;

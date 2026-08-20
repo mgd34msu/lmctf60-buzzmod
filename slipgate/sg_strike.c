@@ -209,11 +209,11 @@ static int Strike_FrameValid(const sg_strike_frame_t *frame)
 	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
 	{
 		const sg_strike_slot_input_t *input = &frame->slot[slot];
-
 		if (input->weapon_tier < 0 ||
 		    input->enemy_flag_goal_ms < -1 ||
 		    input->recover_goal_ms < -1 ||
 		    input->carrier_goal_ms < -1 ||
+		    input->carrier_screen_clear < 0 || input->carrier_screen_clear > 1 ||
 		    !isfinite(input->carrier_distance) ||
 		    input->carrier_distance < -1.0f)
 			return 0;
