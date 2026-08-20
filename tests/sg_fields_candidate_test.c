@@ -9,6 +9,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_field_projection.h"
+#include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_hooks.h"
 
 int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
@@ -18,7 +19,6 @@ qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
 	int client, int maxclients, int seed);
 void Caco_EnemyPlace(rune_t *r, int team_index, int client, int seed,
 	qboolean seen, qboolean runed);
-int Intercept_HoldSeed(int team, int fallback);
 int Rally_CoverSeed(const rune_t *r, int from);
 
 /* Field_Flood's focused production section needs only these host-owned
@@ -384,27 +384,31 @@ static void CheckHookFieldAdmission(void)
 static void CheckInterceptAdmission(void)
 {
 	rune_t rune;
-	rune_seed_t seeds[4];
-	rune_link_t links[2];
-	int first_link[4] = { 0, -1, -1, -1 };
-	int next_link[2] = { 1, -1 };
+	rune_seed_t seeds[5];
+	rune_link_t links[3];
+	int first_link[5] = { 0, -1, -1, -1, -1 };
+	int next_link[3] = { 1, 2, -1 };
+	int to_blue[5] = { 500, 0, 300, 400, 600 };
 
 	memset(&rune, 0, sizeof(rune));
 	memset(seeds, 0, sizeof(seeds));
 	memset(links, 0, sizeof(links));
-	rune.hdr.num_seeds = 4;
-	rune.hdr.num_links = 2;
+	rune.hdr.num_seeds = 5;
+	rune.hdr.num_links = 3;
 	rune.seeds = seeds;
 	rune.links = links;
 	rune.first_link = first_link;
 	rune.next_link = next_link;
 	seeds[0].origin[0] = 0.0f;
 	seeds[1].origin[0] = 400.0f;
-	seeds[2].origin[1] = 250.0f;
-	seeds[2].origin[2] = 200.0f;
+	seeds[2].origin[1] = 150.0f;
+	seeds[2].origin[2] = 100.0f;
 	seeds[3].origin[1] = 50.0f;
+	seeds[4].origin[1] = 300.0f;
+	seeds[4].origin[2] = 300.0f;
 	Link(&links[0], 0, 2, RL_HOOK, 100);
 	Link(&links[1], 0, 3, RL_RUN, 100);
+	Link(&links[2], 0, 4, RL_RUN, 100);
 
 	memset(sg_caco_proj, 0, sizeof(sg_caco_proj));
 	sg_caco_proj[0].client = 0;
@@ -414,9 +418,9 @@ static void CheckInterceptAdmission(void)
 	test_current_rune = &rune;
 
 	sg_fields.hook_admitted = true;
-	CHECK(Intercept_HoldSeed(CTF_TEAM_RED, 1) == 2);
+	CHECK(SG_InterceptHoldSeed(&rune, &sg_caco_proj[0], to_blue, 1) == 2);
 	sg_fields.hook_admitted = false;
-	CHECK(Intercept_HoldSeed(CTF_TEAM_RED, 1) == 3);
+	CHECK(SG_InterceptHoldSeed(&rune, &sg_caco_proj[0], to_blue, 1) == 3);
 	test_current_rune = NULL;
 }
 
@@ -531,9 +535,8 @@ static void CheckCarrierProjectionPricesWholeEdge(void)
 	/* The smallest destination suffix owns the slow edge. Projection must
 	 * follow the cheaper complete route instead. */
 	CHECK(SG_FieldProjectionStep(&rune, home, 0) == 2);
-	CHECK(SG_FieldProjectionSteps(&rune, home, 0, steps) == 2);
+	CHECK(SG_FieldProjectionSteps(&rune, home, 0, steps) == 1);
 	CHECK(steps[0] == 2);
-	CHECK(steps[1] == 1);
 	links[3].cost_ms = 50;
 	CHECK(SG_FieldProjectionStep(&rune, home, 0) == 1);
 	CHECK(SG_FieldProjectionSteps(&rune, home, 0, steps) == 2);

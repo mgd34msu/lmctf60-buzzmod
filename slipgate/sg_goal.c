@@ -18,6 +18,7 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_item_route.h"
 #include "slipgate/sg_field_projection.h"
+#include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_rune_handoff_policy.h"
 #include "slipgate/sg_escape_random.h"
@@ -32,74 +33,6 @@ static int intercept_field[SG_MAX_SEEDS];
 #define SG_MEGA_PATIENCE	12.0f   /* seconds an offer may stand unspent */
 #define SG_MEGA_BACKOFF		20.0f   /* ...and the refusal after, the pad's own
                                      * respawn (SetRespawn 20, g_items.c:596) */
-
-/* Prefer elevated lateral choke points across the carrier's projected route. */
-#ifdef SG_GOAL_TEST
-#define SG_GOAL_PRIVATE
-#else
-#define SG_GOAL_PRIVATE static
-#endif
-
-SG_GOAL_PRIVATE int Intercept_HoldSeed(int team, int fallback)
-{
-	sg_proj_t *pr = &sg_caco_proj[SG_TeamIdx(team)];
-	vec3_t axis;
-	float axlen, bestscore = -1.0f;
-	int i, best = -1;
-
-	if (pr->n < 2 || pr->client < 0)
-		return fallback;
-
-	VectorSubtract(SG_Rune()->seeds[pr->seed[0]].origin,
-	               SG_Rune()->seeds[pr->seed[pr->n - 1]].origin, axis);
-	axis[2] = 0.0f;
-	axlen = VectorLength(axis);
-	if (axlen < 64.0f)
-		return fallback;            /* no meaningful motion to be across */
-	axis[0] /= axlen; axis[1] /= axlen;
-
-	for (i = 0; i < pr->n; i++)
-	{
-		int p = pr->seed[i], li, fan = 0;
-		float choke;
-
-		if (p < 0 || p >= SG_Rune()->hdr.num_seeds)
-			continue;
-		for (li = SG_Rune()->first_link[p]; li >= 0; li = SG_Rune()->next_link[li])
-			if (Fields_ActionAdmitted(SG_Rune()->links[li].action))
-				fan++;
-		choke = 600.0f / (4.0f + (float)fan);
-
-		for (li = SG_Rune()->first_link[p]; li >= 0; li = SG_Rune()->next_link[li])
-		{
-			if (!Fields_ActionAdmitted(SG_Rune()->links[li].action))
-				continue;
-			int c = SG_Rune()->links[li].to;
-			vec3_t off;
-			float lat, dz, score;
-
-			VectorSubtract(SG_Rune()->seeds[c].origin,
-			               SG_Rune()->seeds[p].origin, off);
-			dz = off[2];
-			off[2] = 0.0f;
-			/* perpendicular component of the offset against the axis */
-			lat = fabsf(off[0] * axis[1] - off[1] * axis[0]);
-			if (lat > 250.0f)
-				lat = 250.0f;
-			score = lat + choke;
-			if (dz > 0.0f)
-				score += (dz > 200.0f) ? 200.0f : dz;
-			if (score > bestscore)
-			{
-				bestscore = score;
-				best = c;
-			}
-		}
-	}
-	return (best >= 0) ? best : fallback;
-}
-
-#undef SG_GOAL_PRIVATE
 
 /* A rally relocation is still navigation.  It may stand on the current seed
  * or walk one proved ordinary leg; it may not point the command directly at a
@@ -329,13 +262,17 @@ void Think_InterceptField(sg_role_t role, int team,
 {
 	if (role != SG_ROLE_CARRY)
 	{
-		sg_belief_carrier_t *ec = &sg_caco_team_belief.enemy_carrier[SG_TeamIdx(team)];
+		int ti = SG_TeamIdx(team);
+		sg_belief_carrier_t *ec = &sg_caco_team_belief.enemy_carrier[ti];
 
-		*support_out = sg_fields.our_carrier[SG_TeamIdx(team)];
+		*support_out = sg_fields.our_carrier[ti];
 		if (ec->seed >= 0)
 		{
+			const int *home = team == CTF_TEAM_RED
+			    ? sg_fields.to_blue_flag : sg_fields.to_red_flag;
 			int cost = 0;
-			int hold = Intercept_HoldSeed(team, ec->seed);
+			int hold = SG_InterceptHoldSeed(SG_Rune(),
+			    &sg_caco_proj[ti], home, ec->seed);
 
 			/* the hold ground across the thief's projected motion --
 			 * or their believed position when the projection is thin */

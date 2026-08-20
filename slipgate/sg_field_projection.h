@@ -10,6 +10,7 @@ static inline int SG_FieldProjectionLinkCostMs(const rune_t *r,
 	const int *home, int seed, int link_index)
 {
 	const rune_link_t *link;
+	int candidate;
 
 	if (!r || !r->links || !home || seed < 0 ||
 	    seed >= r->hdr.num_seeds || link_index < 0 ||
@@ -21,8 +22,9 @@ static inline int SG_FieldProjectionLinkCostMs(const rune_t *r,
 	    !Fields_ActionAdmitted(link->action) || home[link->to] < 0 ||
 	    home[link->to] >= home[seed])
 		return SG_FIELD_INF;
-	return SG_RouteCandidateGoalMs(home[link->to],
+	candidate = SG_RouteCandidateGoalMs(home[link->to],
 	    Fields_LinkTraversalCostMs(link), SG_FIELD_INF);
+	return candidate <= home[seed] ? candidate : SG_FIELD_INF;
 }
 
 static inline int SG_FieldProjectionStep(const rune_t *r,
