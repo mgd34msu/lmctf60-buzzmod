@@ -722,10 +722,17 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	sg_strike_team_t team;
 	sg_strike_frame_t frame = Frame(625.0f);
 
+	CHECK(!SG_StrikeCarrierScreened(NULL));
+	CHECK(SG_StrikeCarrierHookRisk(0) == 2000.0f);
+	CHECK(SG_StrikeCarrierHookRisk(1) == 500.0f);
+	CHECK(SG_StrikeCarrierHookRisk(-1) == 2000.0f);
+	CHECK(SG_StrikeCarrierHookRisk(2) == 2000.0f);
 	AddAttacker(&frame, 0, 180u, 2, 1000);
 	AddAttacker(&frame, 1, 181u, 2, 3000);
 	SG_StrikeReset(&team);
+	CHECK(!SG_StrikeCarrierScreened(&team));
 	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(!SG_StrikeCarrierScreened(&team));
 
 	frame.now = 626.0f;
 	frame.events = SG_STRIKE_EVENT_PICKUP;
@@ -738,6 +745,7 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
 	CHECK(team.duty[1] == SG_STRIKE_DUTY_ESCORT);
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
+	CHECK(SG_StrikeCarrierScreened(&team));
 }
 
 static void TestExternalCarrierDoesNotExpandRoster(void)

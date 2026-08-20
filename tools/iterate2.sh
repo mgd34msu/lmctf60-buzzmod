@@ -144,8 +144,6 @@ RAILRHYTHM=(0  0        0        0        0         0        0         0        
 PATROL=(1      1        1        1        1         1        1         1        1        1)
 
 
-FASTCARRY=(0   0        0        0        0         1        0         0        0        0)
-
 HOOKPONG=(0    0        0        0        0         0        0         0        0        0)
 
 ROUTEDITHER=(0 0        0        0        0         0        0         0        0        0)
@@ -267,7 +265,6 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                 echo "set sg_railrhythm ${RAILRHYTHM[$i]}"
                 echo "set sg_strictgrab ${STRICTGRAB[$i]}"
                 echo "set sg_patrol ${PATROL[$i]}"
-                echo "set sg_fastcarry ${FASTCARRY[$i]}"
                 if [ "${ESCORTDOSE2[$i]}" != "0" ]; then
                     echo "set sg_escortdose ${ESCORTDOSE2[$i]}"
                 fi

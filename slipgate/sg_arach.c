@@ -3348,6 +3348,7 @@ void SG_BotThink(sg_bot_t *bot)
 			    1, strike_duty);
 			tc.escort_mission = SG_StrikeEscortActive(
 			    role == SG_ROLE_ESCORT, 1, strike_duty);
+			tc.carrier_screened = SG_StrikeCarrierScreened(strike_team);
 			tc.strike_blocks_optional =
 			    SG_StrikeDutyRetiresOptionalErrand(strike_duty);
 			if (tc.strike_blocks_optional)

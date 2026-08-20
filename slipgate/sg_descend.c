@@ -811,9 +811,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				               e->s.origin, pd);
 				if (VectorLength(pd) < 700.0f)
 				{
-					/* Escort support lowers the risk premium on a carrier hook. */
-					v += sg_cv.fastcarry->value
-					     ? 500.0f : 2000.0f;
+					/* A coordinator-assigned screen lowers the risk of the
+					 * carrier's stationary hook aim. */
+					v += SG_StrikeCarrierHookRisk(tc->carrier_screened);
 					break;
 				}
 			}

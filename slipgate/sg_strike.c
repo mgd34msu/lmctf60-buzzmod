@@ -1040,6 +1040,23 @@ int SG_StrikeParticipant(const sg_strike_team_t *team, int slot)
 	    team->duty[slot] == SG_STRIKE_DUTY_CARRY;
 }
 
+int SG_StrikeCarrierScreened(const sg_strike_team_t *team)
+{
+	int slot;
+
+	if (!team || team->phase != SG_STRIKE_EGRESS)
+		return 0;
+	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+		if (team->duty[slot] == SG_STRIKE_DUTY_ESCORT)
+			return 1;
+	return 0;
+}
+
+float SG_StrikeCarrierHookRisk(int carrier_screened)
+{
+	return carrier_screened == 1 ? 500.0f : 2000.0f;
+}
+
 int SG_StrikeMemberNeedsWeapon(const sg_strike_team_t *team, int slot,
 	float now)
 {

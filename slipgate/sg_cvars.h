@@ -34,7 +34,6 @@
 	X(escortdose, "sg_escortdose", "35") \
 	X(exitasym, "sg_exitasym", "0") \
 	X(fandense, "sg_fandense", "2") \
-	X(fastcarry, "sg_fastcarry", "0") \
 	X(firedisc, "sg_firedisc", "0") \
 	X(flagprior, "sg_flagprior", "0") \
 	X(flycook, "sg_flycook", "1") \

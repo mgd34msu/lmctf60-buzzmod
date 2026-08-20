@@ -540,6 +540,7 @@ typedef struct sg_think_s {
 				combat_pursuit,
 				rearguard,
 				escort_mission,
+				carrier_screened,
 				escort_formation,
 				strike_blocks_optional,
 				strike_weapon_pursuit;

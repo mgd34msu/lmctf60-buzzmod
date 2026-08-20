@@ -150,6 +150,8 @@ int SG_StrikeMember(const sg_strike_team_t *team, int slot);
 /* Participants are the capped attacker roster plus an actual external
  * carrier during EGRESS.  The carrier never enters member_mask. */
 int SG_StrikeParticipant(const sg_strike_team_t *team, int slot);
+int SG_StrikeCarrierScreened(const sg_strike_team_t *team);
+float SG_StrikeCarrierHookRisk(int carrier_screened);
 int SG_StrikeMemberNeedsWeapon(const sg_strike_team_t *team, int slot,
 	float now);
 /* A weapon errand is subordinate to stand pressure.  A member already inside
