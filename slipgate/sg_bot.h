@@ -515,6 +515,7 @@ typedef struct sg_think_s {
 	qboolean		push;
 	int				health;
 	float			mega;
+	int				mega_target_ent;
 	qboolean		carrying;
 	vec3_t			move_dir;
 	float			view_yaw, view_pitch;

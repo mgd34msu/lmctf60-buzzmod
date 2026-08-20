@@ -28,6 +28,7 @@ static qboolean itemcomm = true;
 static qboolean combat;
 static qboolean hurt;
 static qboolean accept_powerup = true;
+static qboolean accept_health = true;
 static qboolean block_pickup_trace;
 
 game_locals_t game;
@@ -138,10 +139,24 @@ qboolean G_WeaponPickupEligible(edict_t *item, edict_t *other)
 	return true;
 }
 
+qboolean G_HealthPickupEligible(edict_t *item, edict_t *other)
+{
+	(void)item;
+	(void)other;
+	return accept_health;
+}
+
 qboolean Caco_ItemBelievedUp(edict_t *item)
 {
 	(void)item;
 	return true;
+}
+
+qboolean Caco_ItemBelievedUpFor(int team, edict_t *item)
+{
+	(void)team;
+	(void)item;
+	return accept_health;
 }
 
 const sg_persona_t *SG_PersonaFor(edict_t *ent)
@@ -253,6 +268,7 @@ static void ResetWorld(void)
 	combat = false;
 	hurt = false;
 	accept_powerup = true;
+	accept_health = true;
 	block_pickup_trace = false;
 }
 
@@ -384,6 +400,34 @@ static void TestSelectedWeaponFinishesAtPhysicalPickup(void)
 	CHECK(SG_WeaponPickupTarget(bot, true, target));
 	bot->strike_weapon_target_org[0] += 2.0f;
 	CHECK(!SG_WeaponPickupTarget(bot, true, target));
+}
+
+static void TestSelectedMegaFinishesAtPhysicalPickup(void)
+{
+	sg_think_t tc;
+	vec3_t target;
+
+	ResetWorld();
+	memset(&tc, 0, sizeof(tc));
+	tc.e = &entities[1];
+	tc.team = CTF_TEAM_RED;
+	tc.mega = 1.0f;
+	tc.mega_target_ent = 3;
+	entities[3].classname = "item_health_mega";
+	entities[3].solid = SOLID_TRIGGER;
+	CHECK(SG_MegaPickupTarget(&tc, target));
+	tc.route_pure = true;
+	CHECK(!SG_MegaPickupTarget(&tc, target));
+	tc.route_pure = false;
+	block_pickup_trace = true;
+	CHECK(!SG_MegaPickupTarget(&tc, target));
+	block_pickup_trace = false;
+	accept_health = false;
+	CHECK(!SG_MegaPickupTarget(&tc, target));
+	accept_health = true;
+	entities[3].s.origin[0] = 161.0f;
+	entities[3].s.origin[1] = 0.0f;
+	CHECK(!SG_MegaPickupTarget(&tc, target));
 }
 
 static void TestStrongerInterruptsStillWin(void)
@@ -590,6 +634,7 @@ int main(void)
 	TestExactPickupOwnershipEndsCommitment();
 	TestRejectedTouchEndsOnlyExactOwner();
 	TestSelectedWeaponFinishesAtPhysicalPickup();
+	TestSelectedMegaFinishesAtPhysicalPickup();
 	TestStrongerInterruptsStillWin();
 	TestPowerupCapacityEndsTheErrand();
 	TestUnreachableEarlyPadDoesNotSuppressReachablePad();

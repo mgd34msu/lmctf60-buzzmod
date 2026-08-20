@@ -12,5 +12,6 @@ qboolean SG_DefenseSupplyTargetValid(const sg_bot_t *bot);
 qboolean SG_StrikeWeaponTargetValid(const sg_bot_t *bot);
 qboolean SG_WeaponPickupTarget(const sg_bot_t *bot, qboolean strike_pursuit,
 	vec3_t target);
+qboolean SG_MegaPickupTarget(const sg_think_t *tc, vec3_t target);
 
 #endif /* SG_PICKUP_TARGET_H */

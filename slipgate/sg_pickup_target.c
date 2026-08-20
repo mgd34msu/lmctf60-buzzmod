@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
@@ -86,4 +87,24 @@ qboolean SG_WeaponPickupTarget(const sg_bot_t *bot, qboolean strike_pursuit,
 	else if (strike_pursuit && SG_StrikeWeaponTargetValid(bot))
 		item = &g_edicts[bot->strike_weapon_target_ent];
 	return item && SG_LocalPickupTarget(bot->ent, item, target);
+}
+
+qboolean SG_MegaPickupTarget(const sg_think_t *tc, vec3_t target)
+{
+	edict_t *item;
+
+	if (!tc || !tc->e || !target || tc->route_pure ||
+	    !isfinite(tc->mega) || tc->mega <= 0.0f ||
+	    (tc->team != CTF_TEAM_RED && tc->team != CTF_TEAM_BLUE) ||
+	    tc->mega_target_ent <= 0 ||
+	    tc->mega_target_ent >= globals.num_edicts)
+		return false;
+	item = &g_edicts[tc->mega_target_ent];
+	if (!item->inuse || !item->classname ||
+	    strcmp(item->classname, "item_health_mega") != 0 ||
+	    item->solid == SOLID_NOT ||
+	    !Caco_ItemBelievedUpFor(tc->team, item) ||
+	    !G_HealthPickupEligible(item, tc->e))
+		return false;
+	return SG_LocalPickupTarget(tc->e, item, target);
 }

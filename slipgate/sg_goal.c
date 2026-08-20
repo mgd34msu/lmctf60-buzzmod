@@ -1353,8 +1353,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	const int *intercept = tc->intercept;
 	const int *goal_field;
 	const int *route_field;
-	qboolean route_pure;
-	qboolean rune_handoff_route = false;
+	qboolean route_pure, rune_handoff_route = false;
+	tc->mega_target_ent = -1;
 	if (role == SG_ROLE_CARRY || role == SG_ROLE_DEFEND)
 	{
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
@@ -1602,10 +1602,11 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		if (lead)
 			goal_field = lead;
 	}
-
-	/* Resolve mega demand before committing a tactical waypoint. */
 	tc->mega = (tc->strike_blocks_optional || !SG_RuneHandoffAllowsOptional(
 	    rune_handoff_route)) ? 0.0f : Mega_Worth(bot, e, role);
+	if (tc->mega > 0.0f && SG_Rune() && bot->seed >= 0 &&
+	    bot->seed < SG_Rune()->hdr.num_seeds)
+		Mega_Detour(tc, bot->seed, goal_field, &tc->mega_target_ent);
 	if (tc->mega > 0.0f && SG_TimerPending(bot->mega_next))
 		tc->mega = 0.0f;
 	if (tc->mega > 0.0f)
@@ -1621,7 +1622,6 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				           e->client->pers.netname, SG_MEGA_PATIENCE);
 		}
 	}
-
 	if (SG_MegaOn() && sg_cv.debug->value)
 	{
 		/* Report the detour when the offer turns on. */

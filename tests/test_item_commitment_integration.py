@@ -296,6 +296,21 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertEqual(len(optional_guards), 3)
         self.assertIn("route_pure = rune_handoff_route;", handoff)
 
+    def test_mega_detour_finishes_at_the_selected_pickup(self):
+        goal = self.text("slipgate/sg_goal.c")
+        move = self.text("slipgate/sg_move.c")
+        bot = self.text("slipgate/sg_bot.h")
+        self.assertRegex(bot, r"\bint\s+mega_target_ent;")
+        self.assertIn("tc->mega_target_ent = -1;", goal)
+        self.assertIn(
+            "Mega_Detour(tc, bot->seed, goal_field, &tc->mega_target_ent)",
+            goal,
+        )
+        terminal = move[move.index("SG_WeaponPickupTarget(") :]
+        pickup = terminal.index("SG_MegaPickupTarget(tc, aim)")
+        flag = terminal.index("role == SG_ROLE_CARRY")
+        self.assertLess(pickup, flag)
+
     def test_rune_handoff_binds_the_immediate_toss_and_submitted_view(self):
         source = self.text("slipgate/sg_descend.c")
         start = source.index("if (sg_cv.runetoss->value &&")

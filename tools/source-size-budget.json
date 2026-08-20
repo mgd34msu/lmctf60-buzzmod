@@ -79,7 +79,7 @@
     "slipgate/sg_fields.c": 1394,
     "slipgate/sg_goal.c": 1815,
     "slipgate/sg_local.h": 814,
-    "slipgate/sg_move.c": 9842,
+    "slipgate/sg_move.c": 9841,
     "slipgate/sg_net.c": 905,
     "slipgate/sg_oracle.c": 6619,
     "slipgate/sg_replay.c": 1140,
