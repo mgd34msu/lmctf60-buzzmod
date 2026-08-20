@@ -171,6 +171,13 @@ int SG_StrikeMember(const sg_strike_team_t *team, int slot);
 /* Participants are the capped attacker roster plus an actual external
  * carrier during EGRESS.  The carrier never enters member_mask. */
 int SG_StrikeParticipant(const sg_strike_team_t *team, int slot);
+static inline int SG_StrikeCarrierScreenClear(int line_clear,
+	int escort_home_goal_ms, int carrier_home_goal_ms)
+{
+	return line_clear == 1 && escort_home_goal_ms >= 0 &&
+	    carrier_home_goal_ms >= 0 &&
+	    escort_home_goal_ms <= carrier_home_goal_ms;
+}
 static inline int SG_StrikeCarrierScreened(const sg_strike_team_t *team,
 	const sg_strike_frame_t *frame)
 {

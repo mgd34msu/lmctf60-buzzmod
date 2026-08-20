@@ -710,6 +710,13 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 {
 	sg_strike_team_t team;
 	sg_strike_frame_t frame = Frame(625.0f);
+	CHECK(!SG_StrikeCarrierScreenClear(0, 800, 1000));
+	CHECK(SG_StrikeCarrierScreenClear(1, 800, 1000));
+	CHECK(SG_StrikeCarrierScreenClear(1, 1000, 1000));
+	CHECK(!SG_StrikeCarrierScreenClear(1, 1200, 1000));
+	CHECK(!SG_StrikeCarrierScreenClear(1, -1, 1000));
+	CHECK(!SG_StrikeCarrierScreenClear(1, 800, -1));
+	CHECK(!SG_StrikeCarrierScreenClear(2, 800, 1000));
 	CHECK(!SG_StrikeCarrierScreened(NULL, NULL));
 	CHECK(SG_StrikeCarrierHookRisk(0) == 2000.0f);
 	CHECK(SG_StrikeCarrierHookRisk(1) == 500.0f);
@@ -743,14 +750,12 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	frame.slot[1].alive = 0;
 	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
 }
-
 static void TestExternalCarrierDoesNotExpandRoster(void)
 {
 	sg_strike_team_t team;
 	sg_strike_frame_t frame = Frame(650.0f);
 	uint32_t roster;
 	int slot;
-
 	for (slot = 0; slot < 6; slot++)
 		AddAttacker(&frame, slot, (uint32_t)(500 + slot), 2,
 		    1000 + slot * 1000);
@@ -759,7 +764,6 @@ static void TestExternalCarrierDoesNotExpandRoster(void)
 	roster = Bit(0) | Bit(1) | Bit(2) | Bit(3);
 	CHECK(team.member_mask == roster);
 	CHECK(!SG_StrikeMember(&team, 5));
-
 	/* A fifth eligible attacker made the actual pickup.  The stable four keep
 	 * their roster and supply CLEAR/ESCORT; slot five alone owns CARRY/home. */
 	frame.now = 650.1f;
@@ -788,7 +792,6 @@ static void TestHumanCarrierReceivesBotEscort(void)
 	sg_strike_frame_t frame = Frame(660.0f);
 	uint32_t roster;
 	int slot;
-
 	for (slot = 0; slot < 4; slot++)
 	{
 		AddAttacker(&frame, slot, (uint32_t)(600 + slot), 2,
@@ -799,7 +802,6 @@ static void TestHumanCarrierReceivesBotEscort(void)
 	CHECK(SG_StrikeStep(&team, &frame));
 	roster = Bit(0) | Bit(1) | Bit(2) | Bit(3);
 	CHECK(team.member_mask == roster);
-
 	/* The live flag owner is a human, so no SG slot may be labeled CARRY.
 	 * The authoritative flag state still requires one bot screen and the
 	 * ordinary short rearguard around that teammate. */
@@ -823,12 +825,10 @@ static void TestHumanCarrierReceivesBotEscort(void)
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_ESCORT) == 1);
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_PRESS) == 3);
 }
-
 static void TestCarrierStandoffKeepsRecovery(void)
 {
 	sg_strike_team_t team;
 	sg_strike_frame_t frame = Frame(675.0f);
-
 	AddAttacker(&frame, 0, 600u, 2, 1000);
 	AddAttacker(&frame, 1, 601u, 2, 3000);
 	AddAttacker(&frame, 2, 602u, 2, 5000);

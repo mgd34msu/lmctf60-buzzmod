@@ -1981,8 +1981,9 @@ static void StrikePrepareFrame(void)
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent = sg_bots[i].ent;
+		sg_strike_slot_input_t *input;
 		int team, bot_team_index, seed;
-		const int *enemy_field, *own_field, *carrier_field;
+		const int *enemy_field, *own_field, *carrier_field, *home_field;
 		sg_combat_weapon_state_t weapon;
 
 		if (!sg_strike_role_valid[i] || !ent || !ent->client)
@@ -1993,38 +1994,34 @@ static void StrikePrepareFrame(void)
 		enemy_field = StrikeEnemyField(team);
 		own_field = StrikeOwnField(team);
 		carrier_field = StrikeCarrierField(team);
-		frames[bot_team_index].slot[i].present = 1;
-		frames[bot_team_index].slot[i].alive =
-		    ent->inuse && ent->deadflag == DEAD_NO && ent->health > 0;
+		home_field = StrikeHomeField(team);
+		input = &frames[bot_team_index].slot[i];
+		input->present = 1;
+		input->alive = ent->inuse && ent->deadflag == DEAD_NO && ent->health > 0;
 		/* Preserve reserved defenders while admitting the real carrier. */
-		frames[bot_team_index].slot[i].carrying = SG_BotCarrying(ent);
-		frames[bot_team_index].slot[i].attack_eligible =
-		    StrikeAttackEligible(sg_strike_role_cache[i],
-		        frames[bot_team_index].slot[i].carrying,
-		        SG_ChatOrderedRole(ent));
-		frames[bot_team_index].slot[i].life_id =
-		    (uint32_t)ent->client->ctf.ctfid;
+		input->carrying = SG_BotCarrying(ent);
+		input->attack_eligible = StrikeAttackEligible(sg_strike_role_cache[i],
+		    input->carrying, SG_ChatOrderedRole(ent));
+		input->life_id = (uint32_t)ent->client->ctf.ctfid;
 		if (!SG_CombatWeaponState(ent, &weapon))
 			memset(&weapon, 0, sizeof(weapon));
-		frames[bot_team_index].slot[i].weapon_tier = weapon.available_tier;
-		frames[bot_team_index].slot[i].enemy_flag_goal_ms =
-		    StrikeFieldCost(enemy_field, seed);
-		frames[bot_team_index].slot[i].recover_goal_ms =
-		    StrikeFieldCost(own_field, seed);
-		frames[bot_team_index].slot[i].carrier_goal_ms =
-		    StrikeFieldCost(carrier_field, seed);
+		input->weapon_tier = weapon.available_tier;
+		input->enemy_flag_goal_ms = StrikeFieldCost(enemy_field, seed);
+		input->recover_goal_ms = StrikeFieldCost(own_field, seed);
+		input->carrier_goal_ms = StrikeFieldCost(carrier_field, seed);
 		if (carriers[bot_team_index])
 		{
 			vec3_t delta;
 			VectorSubtract(ent->s.origin, carriers[bot_team_index]->s.origin, delta);
-			frames[bot_team_index].slot[i].carrier_distance = VectorLength(delta);
-			frames[bot_team_index].slot[i].carrier_screen_clear =
+			input->carrier_distance = VectorLength(delta);
+			input->carrier_screen_clear = SG_StrikeCarrierScreenClear(
 			    SG_CanSee(ent, carriers[bot_team_index]->s.origin,
-			        carriers[bot_team_index]->viewheight);
+			        carriers[bot_team_index]->viewheight),
+			        StrikeFieldCost(home_field, seed),
+			        StrikeFieldCost(home_field,
+			            sg_caco_team_belief.carrier[bot_team_index].seed));
 		}
-		frames[bot_team_index].slot[i].direct_flag_touch =
-		    frames[bot_team_index].slot[i].alive &&
-		    frames[bot_team_index].slot[i].attack_eligible &&
+		input->direct_flag_touch = input->alive && input->attack_eligible &&
 		    SG_AttackFlagDirectTouchAuthority(ent, team, NULL);
 	}
 	sg_strike_frame_ready = SG_StrikeAdapterBeginFrame(
