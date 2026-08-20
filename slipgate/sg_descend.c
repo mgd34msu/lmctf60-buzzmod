@@ -1046,7 +1046,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 
 		/* Stable per-life variety may break a near-tie, but must not scale the
 		 * whole map-wide objective cost. */
-		if (sg_cv.routejitter->value > 0.0f)
+		if (SG_RouteJitterAllowed(route_pure, sg_cv.routejitter->value))
 		{
 			unsigned rj = SG_RouteJitterDraw(bot->instance_token,
 			    (unsigned)(e - g_edicts - 1), (unsigned)bot->lives,

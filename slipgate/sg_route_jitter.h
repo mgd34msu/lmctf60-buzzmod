@@ -55,4 +55,11 @@ static inline float SG_RouteJitterOffset(unsigned draw, float dose)
 	return ((float)draw / 1023.0f * 2.0f - 1.0f) * amplitude;
 }
 
+static inline int SG_RouteJitterAllowed(int route_pure, float dose)
+{
+	if ((route_pure != 0 && route_pure != 1) || !isfinite(dose))
+		return 0;
+	return !route_pure && dose > 0.0f;
+}
+
 #endif /* SG_ROUTE_JITTER_H */

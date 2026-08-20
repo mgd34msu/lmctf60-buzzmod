@@ -749,7 +749,7 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         carry_start = descend.index(
             "if (tc->role == SG_ROLE_CARRY &&\n"
             "\t\t    sg_cv.carrycover->value > 0")
-        carry_end = descend.index("if (sg_cv.routejitter->value > 0.0f)", carry_start)
+        carry_end = descend.index("if (SG_RouteJitterAllowed(route_pure,", carry_start)
         carry = descend[carry_start:carry_end]
 
         self.assertIn("Caco_EnemyObservationValid(r, team1, client",
