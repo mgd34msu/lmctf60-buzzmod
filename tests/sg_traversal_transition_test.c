@@ -251,6 +251,21 @@ static void TestSpeedHookTerminalFinish(void)
 	CHECK(bot.commit_link == -1);
 }
 
+static void TestSpeedHookReleaseFinishRetiresRun(void)
+{
+	sg_bot_t bot = ArmedSpeedHook();
+
+	bot.hook_phase = 3;
+	SG_SpeedHookReleaseFinish(&bot);
+	CHECK(bot.hook_phase == 0 && bot.hook_deadline == 0.0f);
+	CHECK(!bot.speedhook && !bot.speedhook_pull_applied && !bot.flow_release);
+	CHECK(!bot.hook_bite_logged && !bot.hook_attached_validated);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+	    bot.commit_route_goal.field == NULL && bot.hook_link == 9);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+}
+
 int SG_TraversalTransitionTests(void)
 {
 	TestCarryStartRetiresOnlyReversibleTraversal();
@@ -258,5 +273,6 @@ int SG_TraversalTransitionTests(void)
 	TestDoorLeaseRetirement();
 	TestFlagTouchRetiresReversibleCommitment();
 	TestSpeedHookTerminalFinish();
+	TestSpeedHookReleaseFinishRetiresRun();
 	return failures;
 }

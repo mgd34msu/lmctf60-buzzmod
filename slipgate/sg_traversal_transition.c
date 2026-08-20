@@ -130,6 +130,18 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 	}
 }
 
+void SG_SpeedHookReleaseFinish(sg_bot_t *bot)
+{
+	bot->hook_phase = 0;
+	bot->hook_deadline = 0.0f;
+	bot->hook_bite_logged = false;
+	bot->hook_attached_validated = false;
+	bot->speedhook = false;
+	bot->speedhook_pull_applied = false;
+	bot->flow_release = false;
+	SG_StagedTraversalCancel(bot, RL_RUN);
+}
+
 sg_speedhook_terminal_t SG_SpeedHookTerminalFinish(sg_bot_t *bot,
 	qboolean reached_speed, int hookstate, qboolean hook_present)
 {

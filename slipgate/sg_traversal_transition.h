@@ -19,6 +19,7 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action);
 sg_door_lease_retirement_t SG_DoorLeaseRetirement(
 	int release_proved_clear, int recovery_expired, int hold_open_ready);
 void SG_StagedTraversalCancel(sg_bot_t *bot, int action);
+void SG_SpeedHookReleaseFinish(sg_bot_t *bot);
 sg_speedhook_terminal_t SG_SpeedHookTerminalFinish(sg_bot_t *bot,
 	qboolean reached_speed, int hookstate, qboolean hook_present);
 void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started);

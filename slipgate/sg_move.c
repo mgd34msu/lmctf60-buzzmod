@@ -3551,9 +3551,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			{
 				(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
 				    "apex", "flow-release");
-				bot->hook_phase = 0;
-				bot->flow_release = false;
-				bot->commit_link = -1;
+				SG_SpeedHookReleaseFinish(bot);
 				/* ropetravel: a clean apex is a link in the chain --
 				 * the next rope is legal on the next beat */
 				if (sg_cv.ropetravel->value > 0.0f)
@@ -3585,13 +3583,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						sg_host.dprint("HOOKFLOW %s drop\n",
 						           e->client->pers.netname);
 				}
-				bot->hook_phase = 0;
 				if (!bot->flow_release)
 					SG_TimerArm(&bot->hook_landbrake, 0.3f);
-				bot->flow_release = false;
-				/* a rope ride ENDS its commitment: wherever this landing
-				 * is, the next step is argued fresh from here */
-				bot->commit_link = -1;
+				SG_SpeedHookReleaseFinish(bot);
 				/*
 				 * HOOK PING-PONG SHELF (sg_hookpong, movement behavior revisit
 				 *): 29% of all back-and-forth events sit
