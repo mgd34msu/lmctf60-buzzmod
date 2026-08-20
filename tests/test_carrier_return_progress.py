@@ -125,7 +125,7 @@ def test_carrier_screen_uses_the_accepted_moving_formation_by_default():
     assert 'X(interpose, "sg_interpose", "3")' in cvars
     interpose = section(
         GOAL, "int interpose_mode = SG_InterposeMode",
-        "if (ht && ht->inuse && ht->client && !ht->deadflag)")
+        "if (ht && ht->inuse && ht->client && !ht->deadflag &&")
     assert "SG_InterposeMode(sg_cv.interpose->value)" in interpose
     assert "if (interpose_mode == 3)" in interpose
     assert "else if (interpose_mode == 2)" in interpose
@@ -157,6 +157,16 @@ def test_carrier_screen_terminal_preserves_the_selected_formation():
     )
     assert "ordered_escort != NULL, escort_terminal_hold" in priority
     assert "VectorCopy(ordered_escort->s.origin, aim);" in priority
+
+
+def test_ordered_escort_route_requires_current_sight():
+    route = section(
+        GOAL,
+        "if (ht && ht->inuse && ht->client && !ht->deadflag",
+        "else\n\t{\n\t\tint team_index",
+    )
+    assert "SG_OrderedEscortRouteAllowed(1," in route
+    assert "SG_CanSee(e, ht->s.origin, ht->viewheight)" in route
 
 
 def test_immediate_flag_objectives_do_not_apply_route_ribbon():

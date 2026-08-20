@@ -123,6 +123,11 @@ static void TestMissionAndFlagApproachPolicy(void)
 	CHECK(!SG_AntiLingerCarrierNearby(2, 100.0f));
 	CHECK(!SG_AntiLingerCarrierNearby(1, -1.0f));
 	CHECK(!SG_AntiLingerCarrierNearby(1, NAN));
+	CHECK(SG_OrderedEscortRouteAllowed(1, 1));
+	CHECK(!SG_OrderedEscortRouteAllowed(1, 0));
+	CHECK(!SG_OrderedEscortRouteAllowed(0, 1));
+	CHECK(!SG_OrderedEscortRouteAllowed(2, 1));
+	CHECK(!SG_OrderedEscortRouteAllowed(1, -1));
 }
 
 #endif /* SG_STRIKE_MISSION_POLICY_CASES_H */

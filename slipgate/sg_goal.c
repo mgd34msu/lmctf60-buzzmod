@@ -1388,10 +1388,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	{
 		edict_t *ht = SG_ChatEscortTarget(e);
 
-		/* A human cover order may name a live teammate outside the rune or in
-		 * an unreachable component. Start from the team's ordinary attack
-		 * objective; replace it only when the target flood is reachable from
-		 * this bot, so a valid body is never misclassified as seedless. */
+		/* Start from the ordinary attack objective. Replace it only while the
+		 * bot sees the ordered teammate and the target flood reaches this bot. */
 		goal_field = ht
 		    ? sg_fields.to_flag_now[SG_TeamIdx(team)]
 		        [SG_TeamIdx(SG_EnemyTeam(team))]
@@ -1514,12 +1512,12 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 		}
-		if (ht && ht->inuse && ht->client && !ht->deadflag)
+		if (ht && ht->inuse && ht->client && !ht->deadflag &&
+		    SG_OrderedEscortRouteAllowed(1,
+		        SG_CanSee(e, ht->s.origin, ht->viewheight)))
 		{
-			/* A cover order floods from the live teammate each frame. */
 			static int escort_field[SG_MAX_SEEDS];
 			int hs = Rune_NearestSeed(SG_Rune(), ht->s.origin), hc = 0;
-
 			if (hs >= 0)
 			{
 				Field_Flood(SG_Rune(), escort_field, &hs, &hc, 1);
@@ -1532,7 +1530,6 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	{
 		int team_index = SG_TeamIdx(team);
 		int enemy_index = SG_TeamIdx(SG_EnemyTeam(team));
-
 		/* Non-escort attackers keep pressure on the enemy stand. */
 		if (SG_AttackObjectiveUsesFixedStand(
 		        sg_caco_team_belief.carrier[team_index].client))
