@@ -326,8 +326,6 @@ typedef struct sg_bot_s
 	unsigned long	nade_target_ctfid;      /* current-life CTF identity for that slot */
 	float		nade_target_switch_until;
 	float		nade_target_cook_until;
-	int			hookfail_streak; /* consecutive failed rides */
-	float		hookban_until;  /* streak of 2: the rope is confiscated */
 	qboolean	flow_release;   /* cut early on momentum: no landing brake */
 	qboolean	speedhook;      /* this rope is a burst, not a transit */
 	float		speedhook_next; /* cooldown on burst ropes */

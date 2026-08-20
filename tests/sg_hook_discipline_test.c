@@ -52,24 +52,6 @@ static void TestCurrentRideWorthRecheck(void)
 	    SG_HookExpectedRideWorth(from_goal, to_goal)));
 }
 
-static void TestFailureStreak(void)
-{
-	int ban_seconds = -1;
-	int streak;
-
-	/* A low-value rejection never calls this policy, so its caller keeps its
-	 * existing zero streak; only graph decode/aim failures advance it. */
-	streak = 0;
-	CHECK(streak == 0);
-	streak = SG_HookFailureStreakAdvance(streak, &ban_seconds);
-	CHECK(streak == 1 && ban_seconds == 0);
-	streak = SG_HookFailureStreakAdvance(streak, &ban_seconds);
-	CHECK(streak == 0 && ban_seconds == SG_HOOK_DISCIPLINE_BAN_SECONDS);
-	/* A fresh graph failure starts a fresh two-failure sequence. */
-	streak = SG_HookFailureStreakAdvance(streak, &ban_seconds);
-	CHECK(streak == 1 && ban_seconds == 0);
-}
-
 static void TestSourceStateAdmission(void)
 {
 	CHECK(SG_HookStageSourceCompatible(0, 0, 1, 0, 1));
@@ -84,7 +66,6 @@ int main(void)
 {
 	TestExpectedRideWorth();
 	TestCurrentRideWorthRecheck();
-	TestFailureStreak();
 	TestSourceStateAdmission();
 	if (failures)
 	{

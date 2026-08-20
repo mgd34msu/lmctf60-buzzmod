@@ -34,6 +34,8 @@ ADAPTER_TEST = (Path(__file__).resolve().parents[1] / "tests" /
                 "sg_hook_live_test.c").read_text(encoding="utf-8")
 DISCIPLINE = (Path(__file__).resolve().parents[1] / "slipgate" /
               "sg_hook_discipline.h").read_text(encoding="utf-8")
+DESCEND = (Path(__file__).resolve().parents[1] / "slipgate" /
+           "sg_descend.c").read_text(encoding="utf-8")
 
 
 def body(start: str, end: str) -> str:
@@ -227,9 +229,11 @@ assert "bot->hook_phase = 0;" in discipline_retire
 assert "bot->hook_link = -1;" in discipline_retire
 assert "SG_Rune()->links[link_index].action != RL_HOOK" in discipline_retire
 assert "if (failure)" in discipline_retire
-assert "SG_HookFailureStreakAdvance" in discipline_retire
-assert "SG_TimerArm(&bot->hookban_until" in discipline_retire
+assert "hookban_until" not in discipline_retire
+assert "hookfail_streak" not in discipline_retire
 assert "HOOKDISC" in discipline_retire
+assert "hookban_until" not in DESCEND
+assert "hookban_until" not in BOT
 
 graph_fail = body("static void Hook_GraphFail", "static void Hook_DisciplineRetire")
 assert "SG_HookFailureStreakAdvance" not in graph_fail
@@ -239,7 +243,7 @@ aim_end = text.index("else if (bot->hook_phase == 1)", aim_start + 1)
 aim = text[aim_start:aim_end]
 assert 'Hook_DisciplineRetire(e, bot, failed_link, 5.0f, true,' in aim
 assert '"aim-retire"' in aim
-assert "bot->hookfail_streak = 0;" not in aim
+assert "hookfail_streak" not in aim
 assert "if (failed_speedhook)" in aim
 speedhook_timeout = aim[aim.index("if (failed_speedhook)"):aim.index("else", aim.index("if (failed_speedhook)"))]
 assert "Hook_DisciplineRetire" not in speedhook_timeout

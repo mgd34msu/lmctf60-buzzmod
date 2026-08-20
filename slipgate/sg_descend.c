@@ -716,10 +716,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		else if (role == SG_ROLE_CARRY)
 			v += 0.4f * (float)SG_Rune()->seeds[l->to].area_hint; /* was 2.0: same audit */
 
-		if (hook_policy && SG_TimerPending(bot->hookban_until))
-			continue;           /* every graph rope is offhand and exactly re-proved;
-			                     * a recent live failure shelves all rope attempts */
-
 		for (b = 0; b < SG_BL_MAX; b++)
 			if (bot->bl_link[b] == li && SG_TimerPending(bot->bl_until[b]))
 				break;

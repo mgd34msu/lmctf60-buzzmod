@@ -9,8 +9,6 @@
 
 #define SG_HOOK_DISCIPLINE_SERVED_FIELD_MS 300
 #define SG_HOOK_DISCIPLINE_FIELD_INF 0x3fffffff
-#define SG_HOOK_DISCIPLINE_FAILURE_LIMIT 2
-#define SG_HOOK_DISCIPLINE_BAN_SECONDS 20
 
 typedef enum sg_hook_ride_worth_s
 {
@@ -41,24 +39,6 @@ static inline sg_hook_ride_worth_t SG_HookExpectedRideWorth(int from_goal,
 static inline int SG_HookRideLaunchAllowed(sg_hook_ride_worth_t worth)
 {
 	return worth == SG_HOOK_RIDE_ALLOW;
-}
-
-/* Return the stored streak after one graph-only failure.  A ban reports its
- * existing duration through ban_seconds and resets the streak exactly as the
- * legacy landing path did. */
-static inline int SG_HookFailureStreakAdvance(int streak, int *ban_seconds)
-{
-	if (ban_seconds)
-		*ban_seconds = 0;
-	if (streak < 0)
-		streak = 0;
-	if (streak >= SG_HOOK_DISCIPLINE_FAILURE_LIMIT - 1)
-	{
-		if (ban_seconds)
-			*ban_seconds = SG_HOOK_DISCIPLINE_BAN_SECONDS;
-		return 0;
-	}
-	return streak + 1;
 }
 
 /* A proved hook source owns its medium.  Source-state drift is not evidence

@@ -3655,8 +3655,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				/* ropetravel: a grounded landing chains too -- the beat
 				 * is slightly longer than the apex's because the legs
 				 * carry a step before the next throw */
-				if (sg_cv.ropetravel->value > 0.0f &&
-				    e->groundentity && bot->hookfail_streak == 0)
+				if (sg_cv.ropetravel->value > 0.0f && e->groundentity)
 					SG_TimerArm(&bot->speedhook_next, 0.35f);
 
 				/*
@@ -3685,32 +3684,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								oldest = b;
 						bot->bl_link[oldest] = bot->hook_link;
 						SG_TimerArm(&bot->bl_until[oldest], 60.0f);
-						/* Two consecutive failed rides disable hooks for twenty
-						 * seconds so replanning can choose a walking route. */
-						bot->hookfail_streak++;
-						if (bot->hookfail_streak >= 2)
-						{
-							SG_TimerArm(&bot->hookban_until, 20.0f);
-							bot->hookfail_streak = 0;
-
-							if (bot->commit_link >= 0 &&
-							    bot->commit_link < SG_Rune()->hdr.num_links &&
-							    SG_Rune()->links[bot->commit_link].action ==
-							        RL_HOOK)
-								bot->commit_link = -1;
-							if (sg_cv.debug->value)
-								sg_host.dprint("HOOKBAN %s 20s\n",
-								           e->client->pers.netname);
-						}
 						if (sg_cv.debug->value)
 							sg_host.dprint("HOOKFAIL %s link=%d\n",
 							           e->client->pers.netname,
 							           bot->hook_link);
-					}
-					else
-					{
-						/* the ride served: forgiveness */
-						bot->hookfail_streak = 0;
 					}
 				}
 				bot->hook_link = -1;
@@ -4077,7 +4054,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				/* Use a short grapple burst on a clear, uncontested run. */
 
 				if (bot->hook_phase == 0 && !bot->engaged_last &&
-				    SG_TimerReady(bot->hookban_until) &&
 				    SG_TimerReady(bot->speedhook_next) &&
 				    e->groundentity && e->waterlevel == 0 &&
 				    goal_field[bot->seed] >
@@ -5627,7 +5603,6 @@ static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
 	float shelf_seconds, qboolean failure, const char *reason,
 	int from_goal, int to_goal)
 {
-	int ban_seconds = 0;
 	int gain = from_goal - to_goal;
 
 	if (!bot || !SG_Rune() || link_index < 0 ||
@@ -5635,20 +5610,12 @@ static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
 	    SG_Rune()->links[link_index].action != RL_HOOK)
 		return;
 	Hook_ShelveLink(bot, link_index, shelf_seconds);
-	if (failure)
-	{
-		bot->hookfail_streak = SG_HookFailureStreakAdvance(
-		    bot->hookfail_streak, &ban_seconds);
-		if (ban_seconds > 0)
-			SG_TimerArm(&bot->hookban_until, (float)ban_seconds);
-	}
 	if (sg_cv.debug->value)
 	{
 		if (failure)
-			sg_host.dprint("HOOKDISC %s %s link=%d shelf=%.0f streak=%d ban=%d\n",
+			sg_host.dprint("HOOKDISC %s %s link=%d shelf=%.0f\n",
 			    e && e->client ? e->client->pers.netname : "?",
-			    reason ? reason : "retire", link_index, shelf_seconds,
-			    bot->hookfail_streak, ban_seconds);
+			    reason ? reason : "retire", link_index, shelf_seconds);
 		else
 			sg_host.dprint("HOOKDISC %s %s link=%d from=%d to=%d gain=%d min=%d shelf=%.0f\n",
 			    e && e->client ? e->client->pers.netname : "?",
@@ -6437,7 +6404,6 @@ static qboolean Hook_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
 		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
 		    "arrived", "reducer");
 		Hook_LiveSync(bot);
-		bot->hookfail_streak = 0;
 		bot->commit_link = -1;
 		bot->hook_phase = 0;
 		bot->hook_link = -1;
@@ -7049,7 +7015,6 @@ qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
 	}
 	if (!failed && cut)
 	{
-		bot->hookfail_streak = 0;
 		bot->commit_link = -1;
 		bot->hook_phase = 0;
 		bot->hook_link = -1;
@@ -9766,7 +9731,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							bot->hook_phase = 3;
 							bot->flow_release = true;
 							SG_TimerArm(&bot->hook_deadline, 1.4f);
-							bot->hookfail_streak = 0;
 							/* Stop processing after a successful early cut so the
 							 * generic release path cannot cancel phase three. */
 							goto hook_wait;
