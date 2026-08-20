@@ -18,6 +18,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_snag_repair.h"
 
 sg_fields_t sg_fields;
@@ -1371,20 +1372,8 @@ void Fields_Refresh(rune_t *r)
 
 			for (hop = 0; hop < 3; hop++)
 			{
-				int li2, best = -1, bv = home[seed];
+				int best = SG_FieldCarrierProjectionStep(r, home, seed);
 
-				for (li2 = r->first_link[seed]; li2 >= 0;
-				     li2 = r->next_link[li2])
-				{
-					rune_link_t *l2 = &r->links[li2];
-
-					if (Field_LinkAdmitted(l2) &&
-					    home[l2->to] < bv)
-					{
-						bv = home[l2->to];
-						best = l2->to;
-					}
-				}
 				if (best < 0)
 					break;
 				seed = best;

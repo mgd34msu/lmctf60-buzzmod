@@ -8,6 +8,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_hooks.h"
 
 int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
@@ -502,6 +503,32 @@ static void CheckEnemyObservationRetirement(void)
 	CHECK(sg_caco_enemies[1][0].client == 3);
 }
 
+static void CheckCarrierProjectionPricesWholeEdge(void)
+{
+	rune_t rune;
+	rune_link_t links[2];
+	int first_link[3] = { 0, -1, -1 };
+	int next_link[2] = { 1, -1 };
+	int home[3] = { 600, 100, 500 };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(links, 0, sizeof(links));
+	rune.hdr.num_seeds = 3;
+	rune.hdr.num_links = 2;
+	rune.links = links;
+	rune.first_link = first_link;
+	rune.next_link = next_link;
+	Link(&links[0], 0, 1, RL_RUN, 1000);
+	Link(&links[1], 0, 2, RL_RUN, 100);
+
+	/* The smallest destination suffix owns the slow edge. Projection must
+	 * follow the cheaper complete route instead. */
+	CHECK(SG_FieldCarrierProjectionStep(&rune, home, 0) == 2);
+	home[1] = 700;
+	home[2] = 800;
+	CHECK(SG_FieldCarrierProjectionStep(&rune, home, 0) == -1);
+}
+
 int main(void)
 {
 	rune_t rune;
@@ -561,6 +588,7 @@ int main(void)
 	CheckInterceptAdmission();
 	CheckRallyCoverAdmission();
 	CheckEnemyObservationRetirement();
+	CheckCarrierProjectionPricesWholeEdge();
 
 	if (failures)
 	{
