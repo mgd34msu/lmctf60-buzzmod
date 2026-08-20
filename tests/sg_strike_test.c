@@ -1299,9 +1299,12 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(SG_EscortRouteCost(1, 1400, 3000) == 1400);
 	CHECK(SG_EscortRouteCost(0, 1400, 3000) == 3000);
 	CHECK(SG_EscortRouteCost(0, 1400, SG_FIELD_INF) == -1);
-	CHECK(SG_EscortAssignmentScore(1400, 0) == 1400);
-	CHECK(SG_EscortAssignmentScore(1400, 1) == 1100);
-	CHECK(SG_EscortAssignmentScore(100, 1) == 0);
+	CHECK(SG_EscortAssignmentScore(1400, 0) == 1700);
+	CHECK(SG_EscortAssignmentScore(1400, 1) == 1400);
+	CHECK(SG_EscortAssignmentScore(100, 1) == 100);
+	CHECK(SG_EscortAssignmentScore(0, 0) == 300);
+	CHECK(SG_EscortAssignmentScore(0, 0) >
+	      SG_EscortAssignmentScore(100, 1));
 	CHECK(SG_EscortAssignmentScore(-1, 1) == -1);
 	CHECK(SG_AutonomousEscortCandidate(1, 1, 0, -1, 1400));
 	CHECK(!SG_AutonomousEscortCandidate(1, 1, 0, SG_ROLE_ATTACK, 100));

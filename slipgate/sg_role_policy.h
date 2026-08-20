@@ -240,9 +240,9 @@ static inline int SG_EscortAssignmentScore(int route_cost, int incumbent)
 {
 	if (route_cost < 0)
 		return -1;
-	if (incumbent && route_cost < 300)
-		return 0;
-	return route_cost - (incumbent ? 300 : 0);
+	/* Shift every valid score up instead of clamping a near-carrier
+	 * incumbent to zero. The ordering keeps the full 300 ms hysteresis. */
+	return route_cost + (incumbent ? 0 : 300);
 }
 
 /* Autonomous escort selection must not nominate a teammate whose live human
