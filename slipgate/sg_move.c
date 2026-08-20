@@ -4551,29 +4551,14 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the nearest seed where the field turns finite. From there
 			 * the links take over.
 			 */
-			int i, best = -1;
-			float bestd = 1e30f;
+			int best = Rune_NearestFieldSeed(SG_Rune(), e->s.origin,
+			    goal_field);
 
-			for (i = 0; i < SG_Rune()->hdr.num_seeds; i++)
-			{
-				vec3_t dd;
-				float dsq;
-
-				if (goal_field[i] >= SG_FIELD_INF)
-					continue;
-				VectorSubtract(SG_Rune()->seeds[i].origin, e->s.origin, dd);
-				dsq = dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2] * 4.0f;
-				if (dsq < bestd)
-				{
-					bestd = dsq;
-					best = i;
-				}
-			}
 			if (best >= 0)
-			{
 				VectorCopy(SG_Rune()->seeds[best].origin, aim);
-				have_aim = true;
-			}
+			else
+				VectorCopy(e->s.origin, aim);
+			have_aim = true;
 		}
 
 		if (!have_aim)

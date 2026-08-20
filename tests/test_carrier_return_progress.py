@@ -9,6 +9,7 @@ FIELD_INF = 0x3FFFFFFF
 DESCEND = (ROOT / "slipgate" / "sg_descend.c").read_text()
 MOVE = (ROOT / "slipgate" / "sg_move.c").read_text()
 GOAL = (ROOT / "slipgate" / "sg_goal.c").read_text()
+ARACH = (ROOT / "slipgate" / "sg_arach.c").read_text()
 
 
 def section(source: str, start: str, end: str) -> str:
@@ -181,6 +182,27 @@ def test_run_lookahead_preserves_complete_route_ordering():
     assert "SG_RouteCandidateGoalMs(route_field[l5->to]" in pursuit
     assert "Fields_LinkTraversalCostMs(l5)" in pursuit
     assert "if (cv5 <= nv5)" in pursuit
+
+
+def test_off_surface_recovery_uses_only_local_trace_checked_field_seeds():
+    recovery = section(
+        MOVE,
+        "else if (bot->seed >= 0 &&",
+        "if (!have_aim)",
+    )
+    assert "Rune_NearestFieldSeed(SG_Rune(), e->s.origin," in recovery
+    assert "goal_field);" in recovery
+    assert "VectorCopy(e->s.origin, aim);" in recovery
+    assert "for (i = 0; i < SG_Rune()->hdr.num_seeds" not in recovery
+
+    localization = section(
+        ARACH,
+        "int Rune_NearestFieldSeed",
+        "int Rune_NearestSeed",
+    )
+    assert "SG_LocalSeedScore(r, field, i" in localization
+    assert "sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID)" in localization
+    assert "tr.startsolid || tr.fraction < 1.0f" in localization
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_field_projection.h"
+#include "slipgate/sg_localization.h"
 #include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_carrier_cover.h"
 #include "slipgate/sg_hooks.h"
@@ -505,6 +506,32 @@ static void CheckCarrierTrailFollowsTheScoringRoute(void)
 	CHECK(SG_FieldCarrierTrailStation(&rune, home, 0, 1400, 2100) == -1);
 }
 
+static void CheckLocalFieldSeedAdmission(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[2];
+	byte linked[2] = { 1, 1 };
+	int field[2] = { SG_FIELD_INF, 500 };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	rune.hdr.num_seeds = 2;
+	rune.seeds = seeds;
+	rune.linked_seed = linked;
+
+	CHECK(SG_LocalSeedScore(&rune, field, 1, 64.0f, 0.0f, 32.0f) >= 0.0f);
+	CHECK(SG_LocalSeedScore(&rune, field, 0, 1.0f, 0.0f, 0.0f) < 0.0f);
+	CHECK(SG_LocalSeedScore(&rune, field, 1, 129.0f, 0.0f, 0.0f) < 0.0f);
+	CHECK(SG_LocalSeedScore(&rune, field, 1, 0.0f, 0.0f, 97.0f) < 0.0f);
+	seeds[1].flags = RSF_TOMBSTONE;
+	CHECK(SG_LocalSeedScore(&rune, field, 1, 1.0f, 0.0f, 0.0f) < 0.0f);
+	seeds[1].flags = 0;
+	linked[1] = 0;
+	CHECK(SG_LocalSeedScore(&rune, field, 1, 1.0f, 0.0f, 0.0f) < 0.0f);
+	linked[1] = 1;
+	CHECK(SG_LocalSeedScore(&rune, NULL, 1, 1.0f, 0.0f, 0.0f) >= 0.0f);
+}
+
 static void CheckEnemyObservationRetirement(void)
 {
 	rune_t rune;
@@ -654,6 +681,7 @@ int main(void)
 	CheckInterceptAdmission();
 	CheckRallyCoverAdmission();
 	CheckCarrierTrailFollowsTheScoringRoute();
+	CheckLocalFieldSeedAdmission();
 	CheckEnemyObservationRetirement();
 	CheckCarrierProjectionPricesWholeEdge();
 

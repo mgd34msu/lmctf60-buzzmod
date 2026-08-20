@@ -703,6 +703,7 @@ void		SG_DangerPersistenceReset(void); /* release lease, forget model */
 
 rune_t		*Rune_Load(const char *mapname);
 int			Rune_NearestSeed(rune_t *r, vec3_t p);
+int			Rune_NearestFieldSeed(rune_t *r, vec3_t p, const int *field);
 rune_t		*SG_Rune(void);
 const char	*SG_RuneMapName(void);         /* the loaded rune, NULL before setup --
                                      * combat reads reachability from it */

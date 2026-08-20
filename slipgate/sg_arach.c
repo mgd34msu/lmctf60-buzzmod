@@ -27,7 +27,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rune_install.h"
-	#include "slipgate/sg_rune_file.h"
+#include "slipgate/sg_rune_file.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_proof.h"
@@ -55,6 +55,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_escort_dose.h"
+#include "slipgate/sg_localization.h"
 #include "slipgate/sg_role_skew_random.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
@@ -592,54 +593,44 @@ cleanup:
 	sg_last_rune_load = RUNE_LOAD_READY;
 	return rune;
 }
-int Rune_NearestSeed(rune_t *r, vec3_t p)
+int Rune_NearestFieldSeed(rune_t *r, vec3_t p, const int *field)
 {
 	/* A seed is a local topology sample, not a global Voronoi label. Beyond two
 	 * lattice steps the body may be in an intentionally omitted/unreachable
 	 * region; snapping it to a distant visible component makes commands claim a
 	 * route through geometry the graph never proved. Seedless recovery owns that
 	 * fail-closed case. */
-	const float max_horiz2 = 128.0f * 128.0f;
 	int i, best = -1;
 	float bestd = 1e30f;
 
+	if (!r || !r->seeds)
+		return -1;
 	for (i = 0; i < r->hdr.num_seeds; i++)
 	{
-		vec3_t d;
+		vec3_t d, from, to;
 		float dd;
+		trace_t tr;
 
 		VectorSubtract(r->seeds[i].origin, p, d);
-		if (d[2] > 96.0f || d[2] < -96.0f)
+		dd = SG_LocalSeedScore(r, field, i, d[0], d[1], d[2]);
+		if (dd < 0.0f || dd >= bestd)
 			continue;
-		if (d[0] * d[0] + d[1] * d[1] > max_horiz2)
+		VectorCopy(p, from);
+		VectorCopy(r->seeds[i].origin, to);
+		from[2] += 16.0f;
+		to[2] += 16.0f;
+		tr = sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID);
+		if (tr.startsolid || tr.fraction < 1.0f)
 			continue;
-		dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] * 0.25f;
-		if (dd < bestd)
-		{
-			vec3_t from, to;
-			trace_t tr;
-
-			/* Adjacent rooms and stacked walkways can have closer Euclidean
-			 * seeds on the wrong side of solid architecture. Localizing there
-			 * makes every perfectly good outgoing link point into the wall.
-			 * Use a chest-height world line as the minimum topology test; a
-			 * closed mover also correctly keeps the bot on its current side. */
-			VectorCopy(p, from);
-			VectorCopy(r->seeds[i].origin, to);
-			from[2] += 16.0f;
-			to[2] += 16.0f;
-			tr = sg_host.trace(from, NULL, NULL, to, NULL, MASK_DEADSOLID);
-			if (tr.startsolid || tr.fraction < 1.0f)
-				continue;
-			bestd = dd;
-			best = i;
-		}
+		bestd = dd;
+		best = i;
 	}
-	if (best >= 0 &&
-	    ((r->seeds[best].flags & RSF_TOMBSTONE) ||
-	     (r->linked_seed && !r->linked_seed[best])))
-		return -1;
 	return best;
+}
+
+int Rune_NearestSeed(rune_t *r, vec3_t p)
+{
+	return Rune_NearestFieldSeed(r, p, NULL);
 }
 
 /* --------------------------------------------------------------- fields */
