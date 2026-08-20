@@ -13,6 +13,7 @@
 #include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_death_belief.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
@@ -1042,68 +1043,6 @@ sg_proj_t sg_caco_proj[2];
 /* scratch for one step: every member's successors before dedupe and cull */
 static int caco_proj_cand[SG_PROJ_MAX * SG_PROJ_BRANCH];
 
-/*
- * The best SG_PROJ_BRANCH descending neighbours of one seed, written into
- * out[] in ascending field order (out[0] is the step the old code took).
- * Neighbours that do not descend are not steps toward his stand and are not
- * offered: a carrier who wanders backwards is not the case we must cover.
- */
-#ifdef SG_CACO_TEST
-#define SG_CACO_PRIVATE
-#else
-#define SG_CACO_PRIVATE static
-#endif
-
-SG_CACO_PRIVATE int Caco_BestSteps(rune_t *r, int seed,
-	const int *field, int *out)
-{
-	int li, n = 0, i, j;
-	int val[SG_PROJ_BRANCH];
-
-	if (!r || !field || seed < 0 || seed >= r->hdr.num_seeds)
-		return 0;
-	if (field[seed] >= SG_FIELD_INF)
-		return 0;                   /* no route priced from here */
-
-	for (li = r->first_link[seed]; li >= 0; li = r->next_link[li])
-	{
-		int to = r->links[li].to;
-		int v;
-
-		if (!Fields_ActionAdmitted(r->links[li].action))
-			continue;
-		if (to < 0 || to >= r->hdr.num_seeds)
-			continue;
-		v = field[to];
-		if (v >= field[seed])
-			continue;
-
-		for (i = 0; i < n; i++)
-			if (out[i] == to)
-				break;
-		if (i < n)
-			continue;               /* two links to the same seed */
-
-		for (i = 0; i < n && val[i] <= v; i++)
-			;
-		if (i >= SG_PROJ_BRANCH)
-			continue;               /* worse than the three we hold */
-
-		for (j = (n < SG_PROJ_BRANCH ? n : SG_PROJ_BRANCH - 1); j > i; j--)
-		{
-			out[j] = out[j - 1];
-			val[j] = val[j - 1];
-		}
-		out[i] = to;
-		val[i] = v;
-		if (n < SG_PROJ_BRANCH)
-			n++;
-	}
-	return n;
-}
-
-#undef SG_CACO_PRIVATE
-
 /* one second of travel for the whole set */
 static void Caco_ProjStep(rune_t *r, sg_proj_t *p, const int *field)
 {
@@ -1112,7 +1051,7 @@ static void Caco_ProjStep(rune_t *r, sg_proj_t *p, const int *field)
 	for (i = 0; i < p->n; i++)
 	{
 		int step[SG_PROJ_BRANCH];
-		int ns = Caco_BestSteps(r, p->seed[i], field, step);
+		int ns = SG_FieldProjectionSteps(r, field, p->seed[i], step);
 
 		if (ns == 0)
 		{

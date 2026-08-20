@@ -14,7 +14,6 @@
 int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
 void Fields_TestFloodFlat(rune_t *r, int *dist,
 	const int *sources, const int *source_cost, int num_sources);
-int Caco_BestSteps(rune_t *r, int seed, const int *field, int *out);
 qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
 	int client, int maxclients, int seed);
 void Caco_EnemyPlace(rune_t *r, int team_index, int client, int seed,
@@ -283,7 +282,7 @@ static void CheckHookFieldAdmission(void)
 	memcpy(initial_lane, lane_field, sizeof(initial_lane));
 	initial_lane_seed = sg_fields.lane_seed[0];
 	CHECK(sg_fields.shelf_cliff[0][2] == 1000);
-	num_steps = Caco_BestSteps(&rune, 1, projection_field, steps);
+	num_steps = SG_FieldProjectionSteps(&rune, projection_field, 1, steps);
 	CHECK(num_steps == 2);
 	CHECK(steps[0] == 3);
 	CHECK(steps[1] == 0);
@@ -302,7 +301,7 @@ static void CheckHookFieldAdmission(void)
 	level.time = 1.0f;
 	CHECK(Fields_ActionTopologyRefresh(&rune));
 	CHECK(sg_fields.action_topology_pending);
-	num_steps = Caco_BestSteps(&rune, 1, projection_field, steps);
+	num_steps = SG_FieldProjectionSteps(&rune, projection_field, 1, steps);
 	CHECK(num_steps == 1);
 	CHECK(steps[0] == 0);
 	Fields_Refresh(&rune);
@@ -341,7 +340,7 @@ static void CheckHookFieldAdmission(void)
 	level.time = 1.25f;
 	CHECK(Fields_ActionTopologyRefresh(&rune));
 	CHECK(sg_fields.action_topology_pending);
-	num_steps = Caco_BestSteps(&rune, 1, projection_field, steps);
+	num_steps = SG_FieldProjectionSteps(&rune, projection_field, 1, steps);
 	CHECK(num_steps == 2);
 	CHECK(steps[0] == 3);
 	CHECK(steps[1] == 0);
@@ -365,7 +364,7 @@ static void CheckHookFieldAdmission(void)
 	ctfflags = NULL;
 	level.time = 1.5f;
 	CHECK(Fields_ActionTopologyRefresh(&rune));
-	num_steps = Caco_BestSteps(&rune, 1, projection_field, steps);
+	num_steps = SG_FieldProjectionSteps(&rune, projection_field, 1, steps);
 	CHECK(num_steps == 1);
 	CHECK(steps[0] == 0);
 	Fields_Refresh(&rune);
@@ -507,16 +506,17 @@ static void CheckCarrierProjectionPricesWholeEdge(void)
 {
 	rune_t rune;
 	rune_seed_t seeds[4];
-	rune_link_t links[3];
+	rune_link_t links[4];
 	int first_link[4] = { 0, -1, 2, -1 };
-	int next_link[3] = { 1, -1, -1 };
+	int next_link[4] = { 1, 3, -1, -1 };
 	int home[4] = { 600, 200, 500, 200 };
+	int steps[SG_PROJ_BRANCH];
 
 	memset(&rune, 0, sizeof(rune));
 	memset(seeds, 0, sizeof(seeds));
 	memset(links, 0, sizeof(links));
 	rune.hdr.num_seeds = 4;
-	rune.hdr.num_links = 3;
+	rune.hdr.num_links = 4;
 	rune.seeds = seeds;
 	rune.links = links;
 	rune.first_link = first_link;
@@ -524,12 +524,22 @@ static void CheckCarrierProjectionPricesWholeEdge(void)
 	Link(&links[0], 0, 1, RL_RUN, 1000);
 	Link(&links[1], 0, 2, RL_RUN, 100);
 	Link(&links[2], 2, 3, RL_RUN, 100);
+	Link(&links[3], 0, 1, RL_RUN, 1500);
 	seeds[1].origin[0] = 10.0f;
 	seeds[3].origin[0] = 50.0f;
 
 	/* The smallest destination suffix owns the slow edge. Projection must
 	 * follow the cheaper complete route instead. */
-	CHECK(SG_FieldCarrierProjectionStep(&rune, home, 0) == 2);
+	CHECK(SG_FieldProjectionStep(&rune, home, 0) == 2);
+	CHECK(SG_FieldProjectionSteps(&rune, home, 0, steps) == 2);
+	CHECK(steps[0] == 2);
+	CHECK(steps[1] == 1);
+	links[3].cost_ms = 50;
+	CHECK(SG_FieldProjectionStep(&rune, home, 0) == 1);
+	CHECK(SG_FieldProjectionSteps(&rune, home, 0, steps) == 2);
+	CHECK(steps[0] == 1);
+	CHECK(steps[1] == 2);
+	links[3].cost_ms = 1500;
 	/* Seed 1 occupies the requested cost band but is on the slow parallel
 	 * branch. The lead station stays on the carrier's selected route. */
 	CHECK(SG_FieldCarrierLeadStation(&rune, home, 0, 150, 250) == 3);
@@ -540,7 +550,7 @@ static void CheckCarrierProjectionPricesWholeEdge(void)
 	home[0] = 600;
 	home[1] = 700;
 	home[2] = 800;
-	CHECK(SG_FieldCarrierProjectionStep(&rune, home, 0) == -1);
+	CHECK(SG_FieldProjectionStep(&rune, home, 0) == -1);
 }
 
 int main(void)

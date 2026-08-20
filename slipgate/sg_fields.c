@@ -1372,7 +1372,7 @@ void Fields_Refresh(rune_t *r)
 
 			for (hop = 0; hop < 3; hop++)
 			{
-				int best = SG_FieldCarrierProjectionStep(r, home, seed);
+				int best = SG_FieldProjectionStep(r, home, seed);
 
 				if (best < 0)
 					break;

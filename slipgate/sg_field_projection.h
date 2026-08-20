@@ -6,30 +6,101 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_route_policy.h"
 
-static inline int SG_FieldCarrierProjectionStep(const rune_t *r,
+static inline int SG_FieldProjectionLinkCostMs(const rune_t *r,
+	const int *home, int seed, int link_index)
+{
+	const rune_link_t *link;
+
+	if (!r || !r->links || !home || seed < 0 ||
+	    seed >= r->hdr.num_seeds || link_index < 0 ||
+	    link_index >= r->hdr.num_links || home[seed] < 0 ||
+	    home[seed] >= SG_FIELD_INF)
+		return SG_FIELD_INF;
+	link = &r->links[link_index];
+	if (link->to < 0 || link->to >= r->hdr.num_seeds ||
+	    !Fields_ActionAdmitted(link->action) || home[link->to] < 0 ||
+	    home[link->to] >= home[seed])
+		return SG_FIELD_INF;
+	return SG_RouteCandidateGoalMs(home[link->to],
+	    Fields_LinkTraversalCostMs(link), SG_FIELD_INF);
+}
+
+static inline int SG_FieldProjectionStep(const rune_t *r,
 	const int *home, int seed)
 {
 	int best = -1;
 	int best_ms = SG_FIELD_INF;
 	int li;
 
+	if (!r || !r->first_link || !r->next_link || seed < 0 ||
+	    seed >= r->hdr.num_seeds)
+		return -1;
+
 	for (li = r->first_link[seed]; li >= 0; li = r->next_link[li])
 	{
-		const rune_link_t *link = &r->links[li];
-		int candidate_ms;
+		int candidate_ms = SG_FieldProjectionLinkCostMs(r, home, seed, li);
 
-		if (!Fields_ActionAdmitted(link->action) ||
-		    home[link->to] >= home[seed])
-			continue;
-		candidate_ms = SG_RouteCandidateGoalMs(home[link->to],
-		    Fields_LinkTraversalCostMs(link), SG_FIELD_INF);
 		if (candidate_ms < best_ms)
 		{
 			best_ms = candidate_ms;
-			best = link->to;
+			best = r->links[li].to;
 		}
 	}
 	return best;
+}
+
+static inline int SG_FieldProjectionSteps(const rune_t *r,
+	const int *home, int seed, int *out)
+{
+	int cost[SG_PROJ_BRANCH];
+	int count = 0;
+	int li;
+
+	if (!r || !r->first_link || !r->next_link || !out || seed < 0 ||
+	    seed >= r->hdr.num_seeds)
+		return 0;
+	for (li = r->first_link[seed]; li >= 0; li = r->next_link[li])
+	{
+		int candidate = SG_FieldProjectionLinkCostMs(r, home, seed, li);
+		int destination = r->links[li].to;
+		int i;
+
+		if (candidate >= SG_FIELD_INF)
+			continue;
+		for (i = 0; i < count && out[i] != destination; i++)
+			;
+		if (i < count)
+		{
+			int j;
+
+			if (candidate >= cost[i])
+				continue;
+			for (j = i; j + 1 < count; j++)
+			{
+				out[j] = out[j + 1];
+				cost[j] = cost[j + 1];
+			}
+			count--;
+		}
+		for (i = 0; i < count && cost[i] <= candidate; i++)
+			;
+		if (i < SG_PROJ_BRANCH)
+		{
+			int j;
+			int end = count < SG_PROJ_BRANCH ? count : SG_PROJ_BRANCH - 1;
+
+			for (j = end; j > i; j--)
+			{
+				out[j] = out[j - 1];
+				cost[j] = cost[j - 1];
+			}
+			out[i] = destination;
+			cost[i] = candidate;
+			if (count < SG_PROJ_BRANCH)
+				count++;
+		}
+	}
+	return count;
 }
 
 static inline int SG_FieldCarrierLeadStation(const rune_t *r,
@@ -46,7 +117,7 @@ static inline int SG_FieldCarrierLeadStation(const rune_t *r,
 	{
 		if (home[seed] >= cost_lo && home[seed] <= cost_hi)
 			return seed;
-		seed = SG_FieldCarrierProjectionStep(r, home, seed);
+		seed = SG_FieldProjectionStep(r, home, seed);
 		if (seed < 0)
 			break;
 	}
