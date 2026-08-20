@@ -52,6 +52,15 @@ static void TestAttackDescentCannotPriceItselfStill(void)
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, infinity, 10, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(2, 1, 8000, 7000, infinity));
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 0));
+	CHECK(SG_AttackDescentOverrideNeeded(1, 8000, 8000, infinity));
+	CHECK(SG_AttackDescentOverrideNeeded(1, 8000, 9000, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(1, 8000, 7999, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(1, 2500, 2500, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(0, 8000, 9000, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(2, 8000, 9000, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(1, infinity, 9000, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(1, 8000, -1, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(1, 8000, 9000, 2500));
 }
 
 static void TestNearGoalHookNeedsFootProgress(void)

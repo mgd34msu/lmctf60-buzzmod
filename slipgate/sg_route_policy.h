@@ -4,6 +4,8 @@
 
 #include <math.h>
 
+#define SG_ATTACK_FINAL_APPROACH_MS 2500
+
 /* An outgoing choice owns the edge it is about to traverse. The destination
  * surface alone is only the suffix and can make a slow edge look free. */
 static inline float SG_RouteCandidatePrice(float destination_price,
@@ -82,6 +84,18 @@ static inline int SG_AttackDescentFallbackAllowed(int attack_role, int run_link,
 	    candidate_goal_ms < 0 || candidate_goal_ms >= current_goal_ms)
 		return 0;
 	return 1;
+}
+
+static inline int SG_AttackDescentOverrideNeeded(int attack_role,
+	int current_goal_ms, int selected_goal_ms, int field_infinite)
+{
+	if ((attack_role != 0 && attack_role != 1) || !attack_role ||
+	    field_infinite <= SG_ATTACK_FINAL_APPROACH_MS ||
+	    current_goal_ms <= SG_ATTACK_FINAL_APPROACH_MS ||
+	    current_goal_ms >= field_infinite || selected_goal_ms < 0 ||
+	    selected_goal_ms > field_infinite)
+		return 0;
+	return selected_goal_ms >= current_goal_ms;
 }
 
 /* Near-goal hook suppression is an optimization, not route authority. */

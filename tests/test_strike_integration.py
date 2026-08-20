@@ -464,7 +464,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
         self.assertIn("StrikeWeaponPrepareCommit(bot, tc)", descend)
         self.assertIn("qboolean enemy_pressure = tc->strike_pressure", descend)
-        self.assertGreaterEqual(descend.count("enemy_pressure"), 8)
+        self.assertIn("SG_AttackDescentOverrideNeeded(", descend)
         self.assertIn("SG_AttackDescentFallbackAllowed(enemy_touch_mission,",
                       descend)
         mission_hold = descend[descend.index("static qboolean ThinkMissionHold"):

@@ -317,7 +317,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	float approach_flag_distance = 0.0f;
 	qboolean approach_flag_touch = false;
 	int nonworsening_route_neighbors = 0, descending_run_available = 0;
-	int attack_descent_link = -1;
+	int attack_descent_link = -1, best_candidate_goal_ms = SG_FIELD_INF;
 	float attack_descent_value = 1e30f;
 	qboolean enemy_pressure = tc->strike_pressure;
 	qboolean enemy_touch_mission = SG_EnemyFlagTouchMissionActive(
@@ -1149,10 +1149,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		if (li == bot->sticky_link)
 			incumbent_v = v;
 
-		/* Preferences may choose among proved attack roads, but outside the
-		 * final room they may not turn standing still into a free alternative
-		 * to every strictly descending ordinary RUN. Retain the best such road
-		 * as a last-resort movement authority after every live gate above. */
 		if (SG_AttackDescentFallbackAllowed(enemy_touch_mission,
 		        l->action == RL_RUN, goal_field[bot->seed],
 		        candidate_goal_ms, SG_FIELD_INF) && v < attack_descent_value)
@@ -1165,10 +1161,14 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		{
 			bestval = v;
 			bestlink = li;
+			best_candidate_goal_ms = candidate_goal_ms;
 		}
 	}
 	}       /* anti-linger scope */
-	if (bestlink < 0 && attack_descent_link >= 0)
+	if (attack_descent_link >= 0 &&
+	    (bestlink < 0 || SG_AttackDescentOverrideNeeded(
+	        enemy_touch_mission, goal_field[bot->seed],
+	        best_candidate_goal_ms, SG_FIELD_INF)))
 	{
 		bestlink = attack_descent_link;
 		bestval = attack_descent_value;
