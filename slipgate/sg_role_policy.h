@@ -220,12 +220,12 @@ static inline float SG_SpawnBeatDeadline(float deadline,
 }
 
 static inline int SG_OptionalItemDetourAllowed(int push,
-	int strike_blocks_optional, int role, int health)
+	int strike_blocks_optional, int role, int health, int health_item)
 {
 	if (push || strike_blocks_optional)
 		return 0;
-	if (SG_CarrierEscapeActive(role) && health > 60)
-		return 0;
+	if (SG_CarrierEscapeActive(role))
+		return health <= 60 && health_item;
 	return 1;
 }
 

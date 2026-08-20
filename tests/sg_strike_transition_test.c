@@ -1155,11 +1155,12 @@ static void TestMissionHoldSurvivesGenericWedgeValve(void)
 	CHECK(!SG_CarrierJinkAllowed(1, 0));
 	CHECK(!SG_CarrierJinkAllowed(0, 1));
 	CHECK(!SG_CarrierJinkAllowed(1, 1));
-	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_ATTACK, 100));
-	CHECK(!SG_OptionalItemDetourAllowed(1, 0, SG_ROLE_ATTACK, 100));
-	CHECK(!SG_OptionalItemDetourAllowed(0, 1, SG_ROLE_ATTACK, 100));
-	CHECK(!SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 61));
-	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 60));
+	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_ATTACK, 100, 0));
+	CHECK(!SG_OptionalItemDetourAllowed(1, 0, SG_ROLE_ATTACK, 100, 1));
+	CHECK(!SG_OptionalItemDetourAllowed(0, 1, SG_ROLE_ATTACK, 100, 1));
+	CHECK(!SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 61, 1));
+	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 60, 1));
+	CHECK(!SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_CARRY, 60, 0));
 }
 
 static void TestCombatActivityResetsGenericWedgeClock(void)
@@ -1182,8 +1183,7 @@ static void TestCombatActivityResetsGenericWedgeClock(void)
 
 static void TestMissionAndCombatCannotShelveRoutes(void)
 {
-	CHECK(SG_RouteFailureWatchSuppressed(
-	    SG_ROLE_ESCORT, 1499, false, false, false, false));
+	CHECK(SG_RouteFailureWatchSuppressed(SG_ROLE_ESCORT, 1499, false, false, false, false));
 	CHECK(!SG_RouteFailureWatchSuppressed(
 	    SG_ROLE_ESCORT, 1499, false, true, false, false));
 	CHECK(SG_RouteFailureWatchSuppressed(

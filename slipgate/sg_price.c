@@ -295,7 +295,8 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 			 * still take a health detour. Concrete strike duties also own their
 			 * route without generic class attraction. */
 			v -= SG_OptionalItemDetourAllowed(tc->push,
-			          tc->strike_blocks_optional, tc->role, tc->health) ?
+			          tc->strike_blocks_optional, tc->role, tc->health,
+			          c == SG_FC_HEALTH) ?
 			     1500.0f * Detour_Value(tc, seed, c, goal_field, w->item[c]) :
 			     0.0f;
 

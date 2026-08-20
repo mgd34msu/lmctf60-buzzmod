@@ -453,9 +453,9 @@ class StrikeIntegrationTest(unittest.TestCase):
         price = (ROOT / "slipgate/sg_price.c").read_text()
         self.assertIn(
             "SG_OptionalItemDetourAllowed(tc->push,\n"
-            "\t\t\t          tc->strike_blocks_optional, tc->role, tc->health)",
-            price,
-        )
+            "\t\t\t          tc->strike_blocks_optional, tc->role, tc->health,\n"
+            "\t\t\t          c == SG_FC_HEALTH)",
+            price)
         self.assertIn("tc.strike_rush, carrying", arach)
         self.assertIn("strike_team->weapon_deadline[strike_slot] -",
                       arach)
