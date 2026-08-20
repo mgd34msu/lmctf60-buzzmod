@@ -122,7 +122,7 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 		return;
 	bot->rail_link = bot->rally_cover = -1;
 	bot->rail_stage = 0;
-	bot->rail_until = bot->rally_since = 0.0f;
+	bot->rail_until = bot->rally_since = bot->escape_until = bot->escape_yaw = 0.0f;
 	rune = SG_Rune();
 	if (!rune || !rune->links ||
 	    bot->commit_link < 0 || bot->commit_link >= rune->hdr.num_links)

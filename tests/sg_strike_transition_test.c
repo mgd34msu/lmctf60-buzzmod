@@ -1028,16 +1028,16 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 	CHECK(!SG_StrikeTestRailLateOverrideAllowed(&bot, &tc));
 	CHECK(!SG_StrikeTestRailWatchdogAllowed(&bot, &tc));
-
 	bot.rail_link = 0;
 	bot.rail_stage = 2;
-	bot.rail_until = 99.0f;
+	bot.rail_until = bot.escape_until = 99.0f;
 	bot.rally_cover = 1;
-	bot.rally_since = 42.0f;
+	bot.rally_since = bot.escape_yaw = 42.0f;
 	tc.strike_active = false;
 	SG_CarryStartRetireSupersededRoute(&bot, true);
-	CHECK(bot.rail_link == -1 && bot.rail_stage == 0);
-	CHECK(bot.rail_until == 0.0f && bot.rally_cover == -1 && bot.rally_since == 0.0f);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+	CHECK(bot.rally_cover == -1 && bot.rally_since == 0.0f &&
+	      bot.escape_until == 0.0f && bot.escape_yaw == 0.0f);
 	CHECK(SG_StrikeTestRailLateOverrideAllowed(&bot, &tc));
 	CHECK(SG_StrikeTestRailWatchdogAllowed(&bot, &tc));
 
