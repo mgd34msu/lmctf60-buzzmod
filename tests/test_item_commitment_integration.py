@@ -43,6 +43,17 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertIn("Lead_NoteItemRejected(taker, item);", reject)
         self.assertNotIn("SG_Chat", reject)
 
+    def test_spawned_powerup_homing_requires_local_clear_pickup_access(self):
+        source = self.text("slipgate/sg_lead.c")
+        start = source.index("qboolean Lead_PickupTarget")
+        end = source.index("static qboolean Lead_Flood", start)
+        pickup = source[start:end]
+        self.assertIn("160.0f * 160.0f", pickup)
+        self.assertIn("fabsf(delta[2]) > 64.0f", pickup)
+        self.assertIn("sg_host.trace(self->s.origin, self->mins, self->maxs", pickup)
+        self.assertIn("trace.startsolid || trace.allsolid", pickup)
+        self.assertIn("trace.ent != item", pickup)
+
     def test_major_static_pickup_closes_lead_before_belief_bookkeeping(self):
         source = self.text("slipgate/sg_caco.c")
         start = source.index("void SG_NoteItemTaken(")

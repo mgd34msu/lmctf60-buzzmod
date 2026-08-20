@@ -26,6 +26,7 @@ static qboolean itemcomm = true;
 static qboolean combat;
 static qboolean hurt;
 static qboolean accept_powerup = true;
+static qboolean block_pickup_trace;
 
 game_locals_t game;
 level_locals_t level;
@@ -49,6 +50,22 @@ sg_host_t sg_host;
 static void TestDprint(const char *fmt, ...)
 {
 	(void)fmt;
+}
+
+static trace_t TestTrace(const vec3_t start, const vec3_t mins,
+	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
+{
+	trace_t trace;
+
+	(void)start;
+	(void)mins;
+	(void)maxs;
+	(void)passent;
+	(void)contentmask;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = block_pickup_trace ? 0.5f : 1.0f;
+	VectorCopy(end, trace.endpos);
+	return trace;
 }
 
 qboolean SG_ItemComm(void)
@@ -216,10 +233,12 @@ static void ResetWorld(void)
 	sg_cv.itemlead = &itemlead_cvar;
 	sg_cv.debug = &debug_cvar;
 	sg_host.dprint = TestDprint;
+	sg_host.trace = TestTrace;
 	itemcomm = true;
 	combat = false;
 	hurt = false;
 	accept_powerup = true;
+	block_pickup_trace = false;
 }
 
 static void TestClockSpawnContinuesToPhysicalPickup(void)
@@ -265,6 +284,13 @@ static void TestSightConfirmedSpawnPersistsAndHomes(void)
 	CHECK(target[0] == entities[3].s.origin[0]);
 	CHECK(target[1] == entities[3].s.origin[1]);
 	CHECK(target[2] == entities[3].s.origin[2]);
+	block_pickup_trace = true;
+	CHECK(!Lead_PickupTarget(bot, target));
+	block_pickup_trace = false;
+	entities[3].s.origin[0] = 161.0f;
+	entities[3].s.origin[1] = 0.0f;
+	CHECK(!Lead_PickupTarget(bot, target));
+	VectorSet(entities[3].s.origin, 64.0f, 96.0f, 24.0f);
 
 	level.time = 15.0f;
 	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) != NULL);

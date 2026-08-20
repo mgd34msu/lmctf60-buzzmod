@@ -127,15 +127,29 @@ void Lead_NoteItemRejected(edict_t *taker, edict_t *item)
 qboolean Lead_PickupTarget(const sg_bot_t *bot, vec3_t target)
 {
 	edict_t *item;
+	edict_t *self;
+	vec3_t delta;
+	trace_t trace;
 
 	if (!bot || !target || bot->lead_state != SG_LEAD_SPAWNED ||
-	    bot->lead_ent <= 0 || bot->lead_ent >= globals.num_edicts)
+	    bot->lead_ent <= 0 || bot->lead_ent >= globals.num_edicts ||
+	    !bot->ent || !bot->ent->inuse || !bot->ent->client || !sg_host.trace)
 		return false;
+	self = bot->ent;
 	item = g_edicts + bot->lead_ent;
 	if (!item->inuse || !item->classname ||
 	    (strcmp(item->classname, "item_quad") != 0 &&
 	     strcmp(item->classname, "item_invulnerability") != 0) ||
-	    !G_PowerupPickupEligible(item, bot->ent))
+	    !G_PowerupPickupEligible(item, self))
+		return false;
+	VectorSubtract(item->s.origin, self->s.origin, delta);
+	if (delta[0] * delta[0] + delta[1] * delta[1] >= 160.0f * 160.0f ||
+	    fabsf(delta[2]) > 64.0f)
+		return false;
+	trace = sg_host.trace(self->s.origin, self->mins, self->maxs,
+	    item->s.origin, self, MASK_PLAYERSOLID);
+	if (trace.startsolid || trace.allsolid ||
+	    (trace.fraction < 1.0f && trace.ent != item))
 		return false;
 	VectorCopy(item->s.origin, target);
 	return true;
