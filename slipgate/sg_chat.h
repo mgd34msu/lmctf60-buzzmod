@@ -1,30 +1,4 @@
-/*
- * sg_chat.h -- SLIPGATE's voice: team callouts, personality, human orders.
- *
- * Include AFTER g_local.h: everything here is spelled in edict_t, vec3_t,
- * qboolean and int on purpose. No SLIPGATE-internal type appears in this
- * header, so bl_chat.c can include it without pulling in sg_local.h or
- * sg_rune.h.
- *
- * Three things live behind this header.
- *
- *   1. ONE authority over the say_team channel. Every SLIPGATE line to a
- *      team -- CACO's flag callouts included -- goes out through
- *      SG_ChatSayTeam, which holds the per-bot budget and the per-topic
- *      team cooldown. There is deliberately no second emitter: two of them
- *      cannot keep a channel readable, whatever each one's own limits say.
- *
- *   2. Belief discipline, unchanged (slipgate/SLIPGATE.md, sg_caco.c head
- *      comment). A callout is emitted by the bot that SAW the thing, about
- *      what its own team believes. The only two claims here that no
- *      teammate looked at are (a) a bot naming an item it picked up itself,
- *      and (b) a respawn clock read off ent->item->quantity, which is map
- *      knowledge every player has.
- *
- *   3. Orders from HUMAN teammates over chat, stored here and read back by
- *      the role code through SG_ChatOrderedRole / SG_ChatEscortTarget. This
- *      module never sets a role itself.
- */
+
 
 #pragma once
 
@@ -93,28 +67,7 @@ static inline int SG_ChatTopicStampsBotGap(int topic)
 	return topic != SG_CHAT_TOPIC_ORDER;
 }
 
-/* ------------------------------------------------- the integrator's calls
- *
- * These two are what SG_Role() in sg_arach.c wires in. Nothing else in this
- * module touches roles.
- *
- * SG_ChatOrderedRole(bot)
- *     SG_CHAT_ROLE_NONE (-1) when this bot has no live human order, else the
- *     ordered role as an sg_role_t value. A role returned here is meant to
- *     REPLACE whatever SG_Role would have chosen, not to bias it. The order
- *     dies on its own after SG_CHAT_ORDER_TTL seconds (90), when the human
- *     who gave it leaves, or when either of them changes team; the caller
- *     needs no expiry logic of its own.
- *
- *     Safe to call every frame for any edict: a NULL, a non-client, a
- *     non-bot or a bot nobody has ordered all answer -1.
- *
- * SG_ChatEscortTarget(bot)
- *     NULL unless the standing order is SG_CHAT_ROLE_ESCORT, in which case
- *     it is the edict of the HUMAN who asked to be escorted -- not our own
- *     flag carrier. The escort weights point at whoever this returns; a
- *     caller that assumes the carrier will follow the wrong player.
- */
+
 int			SG_ChatOrderedRole(edict_t *bot);
 edict_t		*SG_ChatEscortTarget(edict_t *bot);
 void		SG_ChatResetClient(edict_t *client);

@@ -379,19 +379,7 @@ qboolean SG_AddBot(void)
 	return SG_AddBotTeam(0);
 }
 
-/*
- * DUPLICATE-NAME GUARD (capability census gap 12b).
- *
- * The sixteen names above exist because two clients wearing one name merge
- * in every per-name analysis. A HUMAN wearing the name a bot is about to
- * take is the same fault arriving from the other side -- nothing stops a
- * player calling himself "[SG]Arach" -- and it lands on the scoreboard as
- * well as in the telemetry.
- *
- * The process seat and skin stay put. The displayed name and its authored
- * persona row walk together to the next free entry, so roster identity never
- * names one character while the controller plays another.
- */
+
 static uint32_t SG_OccupiedPersonaNames(void)
 {
 	uint32_t occupied = 0;
@@ -534,27 +522,7 @@ qboolean SG_AddBotTeam(int teamnum)
 	}
 	ClientUserinfoChanged(ent, ent->client->pers.userinfo);
 
-	/*
-	 * THE RADIO IS ON (sg_radio): team callouts are ordinary teamplay.
-	 * PlayTeamSound (g_cmds.c:121)
-	 * tests these bits TWICE -- once on the sender, where a clear pair is
-	 * "Your radio is off!" and no call at all, and once per recipient, where a
-	 * clear pair skips that client. A human never sees the menu that sets them
-	 * for a bot, so a bot with them clear is a bot that can neither speak on
-	 * the radio nor be spoken to, and every call it made would be refused at
-	 * the first test with a print aimed at itself.
-	 *
-	 * Both bits, not just the sound one: the text half is what a receiver
-	 * running radiotext reads, and a bot is a receiver too when a teammate
-	 * calls. The bot-bound half costs nothing -- ForceCommand's unicast at a
-	 * bot is retracted by the net shim (sg_net.c SG_unicast: bots have no
-	 * engine-side client to address) and the radiotext print goes down the
-	 * suppressed print path in the same file.
-	 *
-	 * Set unconditionally rather than under sg_radio: the cvar decides whether
-	 * bots CALL, and a bot that joined while it was 0 must still be reachable
-	 * by a human's radio the moment it goes to 1.
-	 */
+
 	ent->client->ctf.extra_flags |=
 	    (CTF_EXTRAFLAGS_RADIO_TEXT | CTF_EXTRAFLAGS_RADIO_SOUND);
 

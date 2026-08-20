@@ -10,56 +10,7 @@
 
 /* ------------------------------------------------------------- clockplay */
 
-/*
- * MATCH CONTEXT (sg_clockplay, default 0 = off).
- *
- * No bot in this tree has ever known the score or the clock. It shows on
- * film: minute 19 is played exactly the way minute 2 was played. Two caps
- * down with ninety seconds left, the quota still parks two bodies on a
- * stand that nothing can be lost from -- losing is already decided, and
- * the garrison is guarding a result. One cap up with ninety seconds left,
- * the same quota sends the same four bodies into the enemy base to hand
- * back the game. Humans do not play either of those: a lead buys
- * insurance, a deficit spends it, and a tie in the last minute makes
- * everybody an attacker.
- *
- * Two numbers, read once a second, and one LATCHED posture per team:
- *
- *   AHEAD LATE    >= 1 cap up, under a quarter of the clock left. One more
- *                 body on defence, and the carrier prices cover 1.3x. A
- *                 lead is a thing you carry home, not a thing you spend.
- *   BEHIND LATE   >= 1 cap down, same window. One body OFF defence and
- *                 into the enemy base, and the carrier prices cover 0.8x:
- *                 the flag has to arrive before the horn, and a safe route
- *                 that lands late is worth what no route at all is worth.
- *   CLOSE LATE    level, inside the last tenth. BOTH sides push the extra
- *                 attacker -- the overtime scramble, where the only losing
- *                 move is the one that ends it nil-nil.
- *
- * The posture latches on a 15-second tick. Evaluated per frame it would
- * chatter across the 25% line and across every cap that ties the game, and
- * the defensive quota is the exact input observed doing that (600 flips in
- * 600 samples on it18). A strategy that
- * changes its mind four times a second is not a strategy.
- *
- * WHERE THE SCORE COMES FROM. The team capture total is summed per player
- * from STATS_CAPTURES -- where the scoreboard gets it (p_hud.c:329 red,
- * p_hud.c:399 blue), where the match result gets it (g_tourney.c:126), and
- * where a capture is credited in the first place (p_stats.c:305). There is
- * no ctfgame struct in this mod holding a team's caps; the players ARE the
- * counter. The globals named redscore/bluescore look like the answer and
- * are not: they are summed player SCORE, rebuilt every frame from
- * STATS_SCORE (g_main.c:807-828), so they move on every frag. A lead read
- * off them would call a fragfest a rout and go turtle two caps down.
- *
- * WHERE THE CLOCK COMES FROM. timelimit against level.time, the same pair
- * that ends the map (g_main.c:704). Match mode runs its own countdown on a
- * spawned timer entity and skips that check entirely (g_main.c:689,
- * g_tourney.c:93), so level.time there is counting warmup as well as play
- * and the fraction would be a lie -- the feature reads the clock as unknown
- * and stays neutral rather than guessing. Same on a server with no
- * timelimit at all. Unknown clock, no posture, byte-identical play.
- */
+
 
 enum {
 	SG_CLOCK_EVEN = 0,      /* no posture: early, unknown clock, or off */

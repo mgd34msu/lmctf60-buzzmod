@@ -54,23 +54,7 @@ typedef struct sg_rune_artifact_write_result_s
 	uint32_t payload_crc32;
 } sg_rune_artifact_write_result_t;
 
-/* Validate and stream one already-native RUNE artifact file without allocation,
- * filesystem access, input mutation, reordering, sorting, or culling.
- * workspace is caller-owned validation scratch and is intentionally mutable;
- * its used ranges must be pairwise disjoint and must not overlap any input.
- *
- * Before the first sink call, pass one validates the identity, computes the
- * exact bounded file size, encodes every record in canonical section order,
- * computes the payload CRC, validates the whole graph/string contract, and
- * encodes the authenticated 160-byte header.  Pass two emits exactly one
- * header fragment, one complete fragment per record, and one complete string
- * pool fragment.  It re-encodes and re-hashes the payload; a final re-hash also
- * catches mutation performed by a sink after accepting a fragment.  Success
- * therefore proves that the emitted bytes still match the preflight header.
- *
- * The identity, arrays, strings, counts, and workspace configuration must stay
- * stable for the duration of the call.  Structural acceptance of action 12
- * does not grant it live runtime authority. */
+
 sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
 	const sg_rune_codec_identity_t *identity,
 	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,

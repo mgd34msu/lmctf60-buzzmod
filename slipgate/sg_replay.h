@@ -1,17 +1,4 @@
-/*
- * sg_replay.h -- pure pose/controller law for proved RUNE actions.
- *
- * This layer deliberately knows nothing about edicts, traces, Pmove,
- * ClientThink, rune action dispatch, or hook entities.  A generator, loader
- * publication replay, or live executor supplies authoritative poses and the
- * already-resolved world observations after each command.  In return it gets
- * the same literal command stream, phase transitions, terminal decisions, and
- * timing result.
- *
- * In particular, this file does not accept an RL_* action id.  Compound action
- * dispatch cannot be widened by calling a suffix reducer directly; the caller
- * that owns the outer action remains responsible for admission and leases.
- */
+
 #ifndef SG_REPLAY_H
 #define SG_REPLAY_H
 
@@ -90,22 +77,7 @@ typedef struct sg_replay_pose_s
 	int waterlevel;
 } sg_replay_pose_t;
 
-/* World-dependent answers are data, never hidden calls from the reducer.
- *
- * contact_clear: the caller's chest-height player-solid trace policy for
- *   SWIM/HOOK.
- * ground_support_valid: DROP's caller-specific world/immutable support law.
- * drop_arrival_contact_clear/drop_recovery_contact_clear: the two ordered
- *   DROP chest traces.  They are separate because a failed terminal trace is
- *   followed by the conditional recovery trace at the same 100 ms boundary.
- * drop_recovery_admitted/drop_landing_observed are retained as initialized
- *   adapter diagnostics.  Admission and landing are derived directly
- *   from the serialized destination policy and authoritative pose instead of
- *   permitting either field to select a different controller law.
- * contaminated: a disallowed trigger, solid overlap, or non-world oracle hit.
- * door_passed: a door transition hidden inside an ordinary action.
- * hook_rope_valid/hook_rope_length: the host hook law evaluated at this pose.
- */
+
 typedef struct sg_replay_observation_s
 {
 	qboolean contact_clear;

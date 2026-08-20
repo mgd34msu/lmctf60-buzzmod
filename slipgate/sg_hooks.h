@@ -1,18 +1,4 @@
-/*
- * sg_hooks.h -- the host boundary: every service SLIPGATE takes from the
- * game it lives in, gathered into one table the host fills at load.
- *
- * The bot code's only legitimate reach into its host is through this
- * table. Today the host is LMCTF and SG_HooksInit() fills the table
- * straight from the engine import block plus the handful of game
- * services the pipeline uses; a future host fills the same table from
- * whatever it has, and the bot code neither knows nor cares. Modules
- * migrate onto the table call by call -- a gi. reference in slipgate/
- * is coupling this header exists to retire.
- *
- * Include after g_local.h (q_shared.h has no include guard; the chain
- * convention is documented in ui_boards.h).
- */
+
 #ifndef SG_HOOKS_H
 #define SG_HOOKS_H
 

@@ -467,7 +467,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(descend.count("enemy_pressure"), 8)
         self.assertIn("SG_AttackDescentFallbackAllowed(enemy_pressure,",
                       descend)
-        axis_start = descend.index("SPREAD THE AXES")
+        axis_start = descend.index("if (enemy_pressure && bot->seed >= 0 &&")
         axis_end = descend.index("else if (role == SG_ROLE_CARRY)",
                                  axis_start)
         axis = descend[axis_start:axis_end]
@@ -518,7 +518,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertEqual(descend.count("!ThinkMissionHold(bot, tc, goal_field)"),
                          2)
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
-        rally = goal[goal.index("THE RALLY."):goal.index("rally_done:")]
+        rally = goal[goal.index("qboolean Think_ApproachBand"):
+                     goal.index("rally_done:")]
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb)", rally)
         self.assertIn("SG_StrikeEnemyPressureGoalSnapshot(mb)", rally)
         self.assertNotIn("mb->last_goalcost", rally)
@@ -526,7 +527,7 @@ class StrikeIntegrationTest(unittest.TestCase):
 
     def test_effective_escort_mission_controls_carrier_spacing(self) -> None:
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
-        start = descend.index("ANTI-LINGER (sg_unlinger")
+        start = descend.index("qboolean linger_hot = false")
         end = descend.index("for (li = SG_Rune()->first_link", start)
         anti_linger = descend[start:end]
         self.assertIn(
@@ -536,7 +537,7 @@ class StrikeIntegrationTest(unittest.TestCase):
 
     def test_effective_escort_mission_controls_support_pull(self) -> None:
         price = (ROOT / "slipgate/sg_price.c").read_text()
-        start = price.index("LONE WOLF (sg_lonewolf)")
+        start = price.index("if (support && w->carrier_support")
         end = price.index("v += csup *", start)
         support = price[start:end]
         self.assertIn(
@@ -600,8 +601,7 @@ class StrikeIntegrationTest(unittest.TestCase):
 
     def test_active_strike_retires_unbound_rail_before_route_selection(self) -> None:
         arach = (ROOT / "slipgate/sg_arach.c").read_text()
-        marker = arach.index("Generic proof-line retry has no strike")
-        clear = arach.index("StrikeRetireGenericRail(bot, &tc)", marker)
+        clear = arach.index("StrikeRetireGenericRail(bot, &tc)")
         pick = arach.index("bestlink = Think_PickLink(bot, &tc)", clear)
         self.assertLess(clear, pick)
 

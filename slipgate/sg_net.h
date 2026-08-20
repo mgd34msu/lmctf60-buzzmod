@@ -1,32 +1,4 @@
-/*
- * sg_net.h -- SLIPGATE's seat between the mod and the engine.
- *
- * Include AFTER g_local.h. Everything here is spelled in edict_t, int and
- * char *, so any translation unit in the tree can take it without pulling a
- * SLIPGATE-internal type along.
- *
- * WHY THIS MODULE EXISTS AT ALL
- *
- * A SLIPGATE bot is built entirely inside the game library (sg_arach.c,
- * SG_AddBotTeam). The engine is never told about it: there is no
- * svs.clients[] entry, no netchan, no reliable message buffer. That single
- * fact is the root of both halves of this file.
- *
- *   - Anything the engine would do PER RECIPIENT -- a console print, a
- *     center print, a unicast layout -- walks into a zero-sized buffer when
- *     the recipient is one of ours. Stock Quake II answers that with
- *     Com_Error and the server is gone. So the mod's prints and network
- *     writes are routed through this module, which drops per-recipient
- *     traffic aimed at an engine-less client and lets everything else
- *     through untouched.
- *
- *   - The client SLOT still has to come from somewhere, and it has to come
- *     from the end of the range the engine hands out from. That is the
- *     spawn/release pair below.
- *
- * The two halves share this file because they share that premise, not
- * because they share code.
- */
+
 
 #pragma once
 
@@ -41,44 +13,11 @@
 void		SG_NetInstall(void);
 void		SG_NetNewLevel(void);
 
-/*
- * The ear. Implemented in sg_caco.c and called from the gi.sound /
- * gi.positioned_sound wrappers in sg_net.c after the engine has been handed
- * the actual wire call. Ordinary sounds remain unchanged. A mapped wildcard
- * voice from an engine-less SG bot becomes one concrete, explicitly
- * positioned call so a PHS-only spectator need not have current snapshot
- * state for that emitter. This remains a tap on a sound that really happened,
- * never a duplicate emission.
- *
- * `origin` is the explicit position a positioned_sound carried, or NULL when
- * the sound belongs to the emitter's own origin. The remaining arguments are
- * the caller's verbatim: they are what the ear measures audible range from,
- * and passing anything else would make bots hear a different world than the
- * one the humans on the server are listening to.
- *
- * Declared here rather than in sg_local.h because sg_net.c must not pull in
- * SLIPGATE-internal types to make one call; every parameter is a base type.
- */
+
 void		SG_NoteSound(edict_t *emitter, vec3_t origin, int channel,
                              int soundindex, float volume, float attenuation);
 
-/*
- * Inject a console command on a client's behalf and run it through the
- * mod's own ClientCommand, the same entry point the engine uses when a
- * human types. Variadic: client index (0-based, edict 0 is the world),
- * argv(0), then the tail arguments, then a NULL terminator.
- *
- *     SG_BotClientCommand(cl, "say_team", line, NULL);
- *
- * The arguments are visible to gi.argc / gi.argv / gi.args for the duration
- * of the nested ClientCommand call and cleared on the way out, so a bot's
- * chat takes the identical route a human's does -- spam check, name
- * prefixing, SG_ChatHear, broadcast -- rather than arriving by a side
- * channel that skips all of it.
- *
- * Returns nothing: the caller cannot learn whether the command was
- * accepted, because ClientCommand does not say.
- */
+
 void		SG_BotClientCommand(int clientIndex, char *arg0, ...);
 
 /*

@@ -141,11 +141,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "bestval = Surface_At",
             "qboolean sink_ban = false;",
         )
-        candidate = between(
-            descend,
-            "The fighter's two terms",
-            "if (sg_human_use &&",
-        )
+        candidate = between(descend, "else if (duel_route_price)",
+                            "if (sg_human_use &&")
 
         self.assertIn("enemy_pressure", setup)
         self.assertIn("sg_cv.press->value", setup)
@@ -318,15 +315,19 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             subprocess.run([str(binary_path)], cwd=ROOT, check=True)
 
         move = source("slipgate/sg_move.c")
-        weave = between(move, "The weave, decided here", "Execute the frame")
-        jink = between(move, "THE CARRIER'S JINK", "THE SPAWN BEAT'S LEGS")
+        weave = between(move, "if (duel && !hold_post",
+                        "/* Occasionally ease off")
+        jink = between(move,
+                       "if (role == SG_ROLE_CARRY && cmd->forwardmove != 0",
+                       "if (SG_TimerPending(bot->beat_until)")
         for section in (weave, jink):
             self.assertIn("SG_WeaveSideAt(", section)
             self.assertIn("bot->instance_token", section)
             self.assertIn("e->client->ctf.ctfid", section)
             self.assertNotIn("e->client - game.clients", section)
 
-        air = between(move, "THE AIR-STRAFE CHAIN", "The defended stand")
+        air = between(move, "float dose = sg_cv.airstrafe->value",
+                      "/* A proved graph ride")
         self.assertIn("SG_AirStrafeInitialPhase(", air)
         self.assertIn("bot->instance_token", air)
         self.assertIn("e->client->ctf.ctfid", air)
@@ -350,7 +351,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
     def test_carrier_belief_aging_revalidates_team_and_exact_flag(self) -> None:
         caco = source("slipgate/sg_caco.c")
-        aging = between(caco, "static void Caco_Age", "projection")
+        aging = between(caco, "static void Caco_Age", "static void Caco_Project")
         self.assertEqual(aging.count("SG_CarrierBeliefIdentityCurrent("), 2)
         self.assertIn("expected = i == 0 ? blueflag : redflag", aging)
         self.assertIn("expected = i == 0 ? redflag : blueflag", aging)

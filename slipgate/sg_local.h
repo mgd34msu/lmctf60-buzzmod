@@ -1,20 +1,4 @@
-/*
- * sg_local.h -- SLIPGATE internals.
- *
- *     SLIPGATE = RUNE + ARACHNOTRON + CACO
- *
- * RUNE        what the map affords: a link graph over phase space, every
- *             link proven by rolling the real physics before it was written
- * ARACHNOTRON the brain with legs: fields over the rune, a value surface
- *             per bot per moment, a body descending it at physics rate
- * CACO        the eye: belief instead of omniscience, sightings aging into
- *             uncertainty, learning into the rune and the weights
- *
- * See slipgate/SLIPGATE.md for the constitution. Principles that bind every
- * file here: physics is read or simulated, never assumed; simulated time
- * sums to real time; facts are measured, only preferences are fitted; every
- * claim is directly comparable with the compatibility bots in the same harness.
- */
+
 
 #pragma once
 
@@ -427,25 +411,7 @@ void Caco_Frame(rune_t *r);                     /* shared HUD scan + aging */
 void Caco_Reset(void);
 void Caco_ResetClient(edict_t *client);
 
-/*
- * The damage ring: the third sense, after the eye and the ear.
- *
- * A bot railed from behind gets nothing from either of the other two. The
- * eye needs a sight line it does not have. The ear (Caco_ScanEnemies, the
- * PHS test) needs the shooter to be SAMPLED mid-WEAPON_FIRING, and a
- * hitscan weapon is back to WEAPON_READY long before the next scan frame
- * comes round -- the shot is over before anyone looks. The hit itself is
- * the only evidence that ever arrives, so T_Damage hands it here, where
- * the rest of what a bot BELIEVES lives, rather than to the combat file
- * that only deals in what a bot can see.
- *
- * Four entries is the whole ring. This exists to answer one question --
- * "am I under fire, and roughly from where" -- and a fifth simultaneous
- * attacker does not change that answer. The table is per client and sized
- * to a fixed ceiling, bounds-checked, exactly the way sg_combat.c sizes
- * its own per-client state and for the same reason: this file does not own
- * the bot body and cannot add a field to it.
- */
+
 #define SG_DMG_RING			4
 #define SG_DMG_CLIENTS		256
 
@@ -477,30 +443,7 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from);
  * world just object" and neither needs a sense of its own. */
 qboolean Beat_HurtSince(edict_t *e, float since);
 
-/* ------------------------------------------------------------ the rail rhythm
- *
- * The owner, describing his own play: "rails guard sight lines on many maps
- * ... the hard counter to my sight-lines coverage was raw speed". A rail is
- * not a stream of harm, it is one slug and then a long wait, and a human who
- * has to cross a guarded lane counts that wait. He hears the shot, steps out
- * while the shooter is empty, and ends the burst behind something before the
- * next one is loaded. Nothing here reads the enemy's weaponstate or his
- * ammunition; the only clock is the one every player in earshot shares.
- *
- * THE RELOAD, read off p_weapon.c rather than remembered.
- *
- * Weapon_Railgun calls Weapon_Generic(ent, 3, 18, 56, 61, ..., fire_frames
- * {4}), so FRAME_ACTIVATE_LAST is 3, FRAME_FIRE_FIRST is 4, FRAME_FIRE_LAST
- * is 18 and FRAME_IDLE_FIRST is 19. On the frame the trigger is accepted the
- * state goes READY -> FIRING with gunframe 4; that same call falls straight
- * on into the FIRING block, matches fire_frames[0], and runs
- * weapon_railgun_fire, which advances gunframe to 5 itself. Every later frame
- * advances it by one, and the state returns to READY the frame gunframe
- * reaches FRAME_IDLE_FIRST + 1 = 20 -- fifteen frames after the shot, by
- * which time the READY branch of that call has already been passed. The
- * earliest the next slug can leave is therefore the frame after that:
- * sixteen server frames at FRAMETIME 0.1, or 1.6 seconds shot to shot.
- */
+
 #define SG_RAIL_RELOAD	1.6f
 
 /*
@@ -577,21 +520,7 @@ enum
  */
 #define SG_MAX_PER_ITEM		8
 
-/*
- * THE MEGA (sg_megaworth). item_health_mega matches the "item_health" prefix,
- * so it is already inside SG_FC_HEALTH's class flood -- and that is exactly
- * the problem the census found. A class field answers "cost to the NEAREST
- * health box", and a 10-point stimpack two rooms nearer hides the mega behind
- * it; the class worth then collapses to 0.05 at full health because the class
- * is priced as HEALTH, which a healthy bot does not want. The mega is not
- * health: it is +100 OVER max (HEALTH_IGNORE_MAX | HEALTH_TIMED,
- * g_items.c:598-640), which is why a human takes it at 100/100.
- *
- * Identity worth needs identity fields, the same argument that gave the
- * powerups and runes theirs -- so the megas get one field each, flooded FROM
- * the pad, and the detour triangle can be evaluated exactly against THAT pad.
- * Four is generous: no shipped map carries more than two.
- */
+
 #define SG_MAX_MEGA			4
 
 typedef struct

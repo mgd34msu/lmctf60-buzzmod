@@ -38,19 +38,7 @@ static const sg_weights_t sg_weight_compiled[SG_ROLES] = {
 	{ 1.00f, { 0.10f, 0.25f, 0.10f, 0.25f, 0.05f, 0.10f }, 0.00f, 0.80f },  /* escort */
 };
 
-/*
- * The LIVE table the body actually reads. It starts as a copy of the
- * compiled rows above and stays that way unless <gamedir>/slipgate-weights.cfg
- * or this map's <gamedir>/slipgate-weights-<mapname>.cfg says otherwise --
- * no files, no difference, byte for byte.
- *
- * The reason this exists: the weights are the one fitted component, and
- * fitting them meant a rebuild and a fleet restart per candidate row. Ten
- * servers that are never supposed to stop cannot pay that, so the numbers
- * that get TUNED now live where they can be edited between maps, while the
- * numbers that get SHIPPED stay in the const table above as the thing a
- * fresh install runs and the thing a bad file falls back to.
- */
+
 static sg_weights_t	sg_weight_table[SG_ROLES];
 static qboolean		sg_weights_ready;
 
@@ -217,19 +205,7 @@ static qboolean Weights_ReadFile(const char *path)
 	return true;
 }
 
-/*
- * Always from the compiled rows up, then the global file, then this map's
- * playbook. A reload that DROPS a key has to put the shipped value back;
- * leaving the previous file's number standing would make the live table
- * depend on the order the admin edited things in, which is the kind of state
- * nobody can reason about during a live match. The same argument is why the map
- * layer is re-applied from scratch here rather than patched on a map change:
- * the only way the table can say what q2dm1 means is to be rebuilt for it.
- *
- * Map layer last because it is the narrower statement. A map whose flag room
- * punishes armour detours wants ONE row different from the fleet's, and the
- * global file stays the place the fleet-wide sweep lives.
- */
+
 void Weights_Load(void)
 {
 	char	path[MAX_OSPATH];

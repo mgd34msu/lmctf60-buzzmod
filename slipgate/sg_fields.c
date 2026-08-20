@@ -31,34 +31,8 @@ sg_fields_t sg_fields;
  * what it costs to get from a seed TO the source, so settling a seed u relaxes
  * every link that ARRIVES at u and writes the cost of its .from.
  */
-/*
- * What a link REALLY costs the body, not just what the traversal took the
- * phantom. The proofs fired hooks from the seed at rest and walked drops
- * onto their recorded lip line, so the body does too -- and that approach
- * time is part of the price. A flood that ignores it systematically
- * over-prefers hooks against runs and swims (smap05: every route funneled
- * onto ropes).
- *
- * These stay exactly as they were, and they are NOT the envelope: they price
- * the entry RITUAL -- walking into position, braking, raising a weapon and
- * paying health -- which the body pays whatever state it shows up in. The
- * velocity mismatch is priced separately, below.
- */
-/*
- * FUTILITY -- the surface's answer to a wall the body cannot solve.
- *
- * A proven link is a claim the ORACLE made good on; the runtime body is a
- * worse navigator, and on lmctf01 one bare corner near each side's exit
- * corridor defeats the feeler fan forever: the bot grinds the wall, the
- * stagnation watchdog shelves the local fan -- and the FIELD, which never
- * heard, funnels the bot straight back in from every neighboring seed
- * (iter 44: Gate, 90 shelve events at seed 327, attack floors pinned at
- * 21.5s all game). Shelves are per-bot and local; the funnel is global.
- * So the watchdog now also teaches the seed itself: a decaying surcharge
- * on every route THROUGH it, charged in the flood, so within a second the
- * whole map reprices and the fleet approaches by another corridor. Decay
- * (200ms/s) retries the corridor eventually; re-sticking re-teaches.
- */
+
+
 static int sg_futile[SG_MAX_SEEDS];
 static int sg_futile_last_seed = -1;
 static int sg_futile_streak;
@@ -155,49 +129,7 @@ qboolean Fields_ActionTopologyCurrent(unsigned epoch)
 	return epoch != 0 && epoch == sg_fields.action_topology_epoch;
 }
 
-/* ------------------------------------------------------ envelope transitions
- *
- * A rune link is conditioned on the state it is entered in: min_speed (stored
- * as speed/4), heading (0-255 around the circle) and heading_slack, and it
- * reports the exit_speed the traversal ended with (sg_rune.h:85-95). A flat
- * flood throws all of that away and prices a route as if the body could enter
- * any link from any state for free, which it cannot: arriving at 40 u/s in
- * front of a link that needs 400 costs the time to build 360 u/s, and arriving
- * pointed the wrong way costs the time to swing the BODY round (the view
- * re-aims within a frame, the velocity does not).
- *
- * So the price of taking link B after link A is
- *
- *     Link_EffCost(B)                             the ritual, as before
- *   + Env_AccelCost(A.exit_speed, B.min_speed)    build the speed B needs
- *   + Env_TurnCost(A.heading, B.heading, B.heading_slack)
- *
- * which is a cost on the PAIR, not on the link -- the line graph, 250k nodes
- * and every in/out pair of a seed an edge. That does not fit in a field
- * rebuilt every second, so the predecessor is remembered only to the precision
- * that changes the answer: which of four speed bands it arrived in.
- *
- *   state       (seed, bucket)   bucket = exit_speed / 64, i.e. stored
- *               0-63 / 64-127 / 128-191 / 192-255 == 0-252 / 256-508 /
- *               512-764 / 768-1020 u/s. Four states per seed, and the
- *               representative speed of a bucket is its midpoint
- *               (31/95/159/223 stored = 124/380/636/892 u/s).
- *   value       cost from that seed to the source given the body arrives
- *               there in that speed band.
- *
- * The speed term is charged when the state is written (the arrival band is the
- * state's own key). The heading term needs BOTH headings, and the arriving
- * link's is not in the key -- so each settled state also remembers the heading
- * and slack of the link its plan leaves on, and the turn is charged when a
- * predecessor reads it, where both headings are concrete. That is exact for
- * the plan the state holds; the approximation is that the state chose that
- * plan without knowing which heading would arrive. Costs stay non-negative, so
- * Dijkstra is still Dijkstra and no seed becomes reachable that a flat flood
- * could not reach.
- *
- * The field a consumer reads is unchanged: one int per seed, the MIN over the
- * four buckets -- the best band to arrive in is the field's own business.
- */
+
 
 #define SG_ENV_BUCKETS		4
 #define SG_ENV_BUCKET_SPAN	(256 / SG_ENV_BUCKETS)  /* stored units per band */
@@ -235,23 +167,7 @@ static int Env_BucketSpeed(int bucket)      /* representative, stored units */
 	return bucket * SG_ENV_BUCKET_SPAN + SG_ENV_BUCKET_SPAN / 2 - 1;
 }
 
-/*
- * Time to build the speed a link's entry envelope demands.
- *
- * PM_Accelerate adds accelspeed = accel * frametime * wishspeed along wishdir;
- * on the ground accel is 10 and pm_maxspeed clamps wishspeed to 300, so the
- * body gains 10 * 300 = 3000 u/s of speed per second of running while it is
- * below the cap (the body's own derivation of this, read off the engine, is at
- * sg_arach.c:636-650 -- pmove.c itself is not in this tree). One u/s therefore
- * costs 1000/3000 ms, and one STORED unit is 4 u/s, so a stored unit costs
- * 4/3 ms.
- *
- * FITTED in one respect: the real gain tapers as addspeed closes on wishspeed,
- * and above 300 only the strafe keeps it climbing at a fraction of this. This
- * charges the full rate the whole way, so it UNDER-prices the top of the
- * range -- deliberately, because over-pricing it would push routes back onto
- * the ropes that the surcharges above exist to hold them off.
- */
+
 static int Env_AccelCost(int have_stored, int need_stored)
 {
 	if (need_stored <= have_stored)
@@ -1092,20 +1008,7 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 	sg_fields.to_red_flag = Field_Alloc(r);
 	sg_fields.to_blue_flag = Field_Alloc(r);
 
-	/*
-	 * THE LOW ROAD PAYS AT THE FIELD (sg_shelfcost, third cut). Entry
-	 * measurements on the first two nulls: 238 of 345 pit entries WALKED IN
-	 * LATERALLY at pit-floor height (median entry drop 0u) -- the floor
-	 * under the enemy stand is the terminus of a whole low approach
-	 * corridor the flag field genuinely prefers, because one cheap hook
-	 * link connects pit to platform. No step-layer surcharge can fire on
-	 * a flat walk-in. So the flag floods themselves now charge it: any
-	 * link whose DESTINATION is a sub-stand seed of the flooded flag adds
-	 * sg_shelfcost x 12000, which propagates back up the entire low
-	 * corridor and re-routes the approach to platform level. The hook OUT
-	 * lands on the platform (not sub-stand), so a knocked-in bot's escape
-	 * still prices clean.
-	 */
+
 	if (sg_cv.shelfcost->value > 0.0f)
 	{
 		int t;

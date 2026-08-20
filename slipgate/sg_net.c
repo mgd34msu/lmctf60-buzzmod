@@ -1,60 +1,4 @@
-/*
- * sg_net.c -- the layer the whole mod's prints and network writes go through.
- *
- * Quake II hands the game library a table of engine function pointers at load
- * time and the mod parks it in the global `gi`. SG_NetInstall runs once, on
- * the statement right after that store, takes a private verbatim copy of the
- * table, and then overwrites twenty of the slots in `gi` with the
- * functions below. Every one of them ends up calling through the private
- * copy. From that point on the entire mod -- not just bot code -- issues its
- * console prints, its network writes, its sounds and its console-argument
- * reads through here.
- *
- * THE PREMISE. SLIPGATE bots are created inside the game library
- * (sg_arach.c, SG_AddBotTeam). The engine is never told. svs.clients[] has
- * no entry for a bot's slot and the bot has no netchan, so any engine call
- * that appends bytes to "that client's reliable message" is appending to a
- * zero-sized buffer. Stock Quake II answers with Com_Error and takes the
- * server down with it. The predicate below is therefore not "is this a bot";
- * it is "does this entity have an engine-side client to address at all".
- *
- * WHY THE NETWORK WRITERS STAGE INTO A PRIVATE BUFFER. The engine already
- * accumulates game-side Write* calls into one message and only ships it on
- * multicast/unicast, so the staging here buys nothing in ordering terms and
- * costs a full copy of every message. It earns its keep on exactly one path:
- * a unicast aimed at a bot has to be RETRACTED. By the time the wrapper
- * learns who the recipient is, an unstaged message would already be sitting
- * inside the engine's buffer, and game_import_t has no call that takes bytes
- * back out of it. The choices would be to send the bot's layout to somebody
- * else or to leave it in the buffer where it prepends itself to the next
- * real recipient's message and garbles it. Staging is what makes "throw this
- * one away" expressible. Read this buffer as a cancellation point, not as a
- * re-implementation of the engine's writers.
- *
- * THE SOUND SLOTS. positioned_sound remains a verbatim tap. sound remains a
- * verbatim tap for humans and every non-sexed sound. One server/client seam
- * needs more information: an engine-less SG bot can be audible through the
- * PHS before it has appeared in a spectator's PVS. A wildcard player sound
- * then asks the client to resolve a missing entity snapshot and spatializes
- * at a stale origin. soundindex is wrapped solely to precache and remember
- * the invariant male counterpart of the 17 stock wildcard player sounds.
- * SG_sound translates that exact bot-only case into ONE positioned_sound with
- * the same entity/channel and the bot's explicit origin. It never duplicates
- * or unicasts a sound, and SG_NoteSound sees exactly what went on the wire.
- *
- * WHAT IS DELIBERATELY NOT WRAPPED. dprintf, configstring, error, trace,
- * pointcontents, inPVS, inPHS, SetAreaPortalState, AreasConnected,
- * linkentity, unlinkentity, BoxEdicts, Pmove, TagMalloc, TagFree, FreeTags,
- * cvar, cvar_set, cvar_forceset, AddCommandString, DebugGraph, modelindex,
- * imageindex and setmodel all stay the engine's own.
- *
- * modelindex/imageindex/setmodel used to be wrapped so a deleted third-party
- * bot library could keep a name for every registered asset. Those arrays had
- * no reader left, they were allocated under TAG_LEVEL and never cleared when
- * the tag was freed, and the one surviving external call read the dangling
- * copies on every map load. The whole apparatus is gone; the slots are the
- * engine's again.
- */
+
 
 #include "g_local.h"
 #include "slipgate/sg_net.h"
@@ -156,26 +100,7 @@ static qboolean SG_IsEngineless(edict_t *ent)
 	return (ent->flags & FL_BOT) ? true : false;
 }
 
-/* ---------------------------------------------------- the event recorder
- *
- * Everything the mod says to a client and every message it puts on the wire
- * already passes through this file, so the cheapest honest record of "what
- * did this server actually send, to whom, when" is a tap at the five points
- * that finish those operations: the two flush points (SG_multicast,
- * SG_unicast) and the three print paths.
- *
- * OFF BY DEFAULT and free when off. sg_eventlog gates it, and the gate is
- * tested before any formatting happens -- in the suppressed print paths, which
- * are the hot ones with bots on the server, a disabled recorder costs one
- * pointer test and one float compare and the wrapper returns exactly as it did
- * before. Nothing here can change what reaches a client: every call site
- * records and then takes the same branch it always took, and the suppression
- * and retraction semantics are untouched. A bot-bound unicast is still thrown
- * away, and is recorded as DROPPED precisely because it was.
- *
- * File is per match: <sg_eventlog_dir or gamedir>/events-<map>-<frame>.log,
- * opened on the first recorded event and closed at level change.
- */
+
 
 #define SG_PRINT_MAX	2048    /* formatting scratch, bounded */
 
@@ -484,20 +409,7 @@ static void SG_EvBinary(char *recipient, char *kind)
 	SG_EvLine(recipient, kind, size);
 }
 
-/* ------------------------------------------------------------ the writers
- *
- * Where the stock engine's writers call Com_Error on a range violation,
- * these substitute a value and keep going. That tolerance is load-bearing:
- * the laser-target thinker writes an entity skin number as a byte and that
- * field is a full-width integer, so stock Quake II would kill the server
- * over a cosmetic value. It is kept.
- *
- * What is NOT kept is the silence. Two of the three substitutions used to
- * happen with no output at all, which meant a laser quietly rendering with
- * skin byte zero and no way to find out why. They now say so in the server
- * log, capped, because an uncapped per-write print in this file is how the
- * console got flooded before (see the unicast drop below).
- */
+
 
 #define SG_RANGE_REPORTS	8
 
@@ -672,24 +584,7 @@ static void SG_WriteDir(vec3_t dir)
 
 static void SG_WriteAngle(float f)
 {
-	/*
-	 * INTEGER FIRST, and that is not a typo.
-	 *
-	 * The engine computes (int)(f * 256 / 360) & 255 -- float multiply and
-	 * divide, then truncate. This computes ((int)f * 256) / 360 & 255 --
-	 * truncate, then integer multiply and divide. The two disagree whenever
-	 * f has a fractional part large enough to have carried the float form
-	 * across an integer boundary: at f = 1.5 the engine writes 1 and this
-	 * writes 0. One byte step is 360/256 = 1.40625 degrees.
-	 *
-	 * Every angle the mod puts on the wire carries that difference, and it
-	 * has for as long as this layer has existed. It is preserved here on
-	 * purpose so that "demo streams are byte-identical" stays available as
-	 * the acceptance test for this rewrite -- nothing reads these angles
-	 * back, they are display-only, so switching to the engine's form is a
-	 * safe change but it belongs in its own commit where the only thing that
-	 * moved is the angle bytes.
-	 */
+
 	SG_WriteByte((((int)f * 256) / 360) & 255);
 }
 
@@ -880,19 +775,7 @@ void SG_BotClientCommand(int clientIndex, char *arg0, ...)
 	SG_ClearBotArgs();
 }
 
-/* --------------------------------------------------------------- sounds
- *
- * Human and non-wildcard bot calls remain pure taps: the engine gets the
- * original call first and SG_NoteSound observes it afterward. The one mapped
- * SG-bot voice case is emitted once through positioned_sound, retaining the
- * emitter and channel while adding the explicit origin required by a PHS-only
- * spectator. It is an alternative wire representation, never a second call.
- *
- * They are wrapped for one reason: a sound is the only honest evidence a bot
- * has that something is going on where it cannot see. Reading a player's
- * weaponstate to guess at it, which is what CACO used to do, is knowledge no
- * player has and it arrived with an exactness no sound carries.
- */
+
 
 static void SG_sound(edict_t *ent, int channel, int soundindex, float volume,
                      float attenuation, float timeofs)
@@ -925,23 +808,7 @@ static void SG_positioned_sound(vec3_t origin, edict_t *ent, int channel,
 
 /* --------------------------------------------------- client slot handling */
 
-/*
- * Take a client edict, scanning the client range from the TOP down.
- *
- * The direction is load-bearing and cost a round of "a human joined and
- * became a bot" to learn. The engine seats real connecting players from the
- * low end of the client range and does not consult ent->inuse when it picks,
- * so a bot parked in a low slot can simply be overwritten by the next person
- * who connects. Filling downward keeps the game-side clients at the top of
- * the range and leaves the bottom, where the engine is going to write
- * anyway, for people.
- *
- * Note what this does NOT do: it does not clear the gclient_t. Persistent
- * and respawn state from the slot's last occupant survives untouched. The
- * caller's connect sequence is what initializes it, and it is written that
- * way on purpose -- see SG_AddBotTeam, which writes the team number into the
- * client while inuse is still false.
- */
+
 edict_t *SG_SpawnClientEdict(void)
 {
 	int	i;
@@ -961,25 +828,7 @@ edict_t *SG_SpawnClientEdict(void)
 	return NULL;
 }
 
-/*
- * The idempotent tail of a release. The caller runs the mod's
- * ClientDisconnect first, which has already broadcast the logout flash,
- * unlinked the entity and zeroed the model index and solidity -- so this
- * overlaps it deliberately and adds the two things ClientDisconnect does not
- * do: park the class name and clear the connected flag.
- *
- * It has to survive being called on an edict that was spawned but never
- * finished connecting, because that is exactly the failure path in
- * SG_AddBotTeam when ClientConnect refuses. No unlink here (the entity was
- * never linked on that path).
- *
- * FL_BOT is CLEARED, deliberately (refutation review, 2026-08-05): the
- * flag is what SG_IsEngineless reads, and the engine assigns client slots
- * without consulting ent->inuse -- so a human who lands on an edict a
- * departed bot once wore would inherit the flag and silently lose every
- * cprintf, centerprint and unicast addressed to them. A freed slot must
- * carry nothing that outlives its owner.
- */
+
 void SG_FreeClientEdict(edict_t *ent)
 {
 	ent->s.modelindex = 0;

@@ -1,44 +1,4 @@
-/*
- * sg_persona.h -- who each bot IS, as data.
- *
- * Include AFTER g_local.h. Everything here is spelled in edict_t and float,
- * so any translation unit can take it without pulling a SLIPGATE-internal
- * type along.
- *
- * WHY THIS MODULE EXISTS AT ALL
- *
- * Skill used to be arithmetic on a client index:
- *
- *     s = team - ((client_index * 7) % 5) * 0.25
- *
- * -- five grades of ONE trait curve. Every bot wanted the same range, took
- * the same fights, threw the same ropes and held the same posts; the only
- * thing that varied was how well it did all of it. Sixteen names on the
- * scoreboard and one bot behind them, sixteen times over. The census called
- * that gap 7, and the roster naming its own bots (sg_client.c, "names
- * are identity; identity is data") was the argument for finishing the job:
- * a name that indexes nothing is decoration.
- *
- * So the modulo is replaced by a hand-authored row per name. aim_offset
- * carries the old skill spread -- the SAME envelope, team-1.0 to team, just
- * chosen rather than computed -- and the other five fields are the traits
- * the formula never had. The rows are authored, not fitted: SLIPGATE's rule
- * is that facts are measured and only preferences are fitted, and which bot
- * is the loud one is neither. It is a casting decision, and it is made in
- * the table where it can be read.
- *
- * WHAT THE TRAITS ARE ALLOWED TO DO
- *
- * Bend behaviour, never invent it. Every consumer scales an existing number
- * by at most +/-15%, which is the band where a trait reads as character
- * across a match and never as a second, worse bot: an aggressive bot picks
- * its fights a little farther out, it does not stop taking cover. Anything
- * that wanted a new branch belongs in the system that owns the behaviour,
- * not here.
- *
- * sg_persona 0 turns the whole thing off: every consumer falls back to the
- * exact expression it used before this file existed, byte for byte.
- */
+
 
 #pragma once
 

@@ -304,7 +304,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         ]
         reset = source[
             source.index("void Caco_ResetClient("):
-            source.index("/* ---------------------------------------------------------- the rail rhythm")
+            source.index("float\t\tsg_caco_railshot[2][SG_DMG_CLIENTS]")
         ]
         self.assertIn(
             "c->speaker_ctfid = speaker->client->ctf.ctfid;", queue
@@ -321,7 +321,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         ]
         flush = chat[
             chat.index("static void Chat_Flush(void)"):
-            chat.index("/* --------------------------------------------------------- place naming")
+            chat.index("static qboolean Chat_LocNameSkip")
         ]
         radio_queue = chat[
             chat.index("static void Chat_RadioQueue("):
@@ -329,7 +329,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         ]
         radio_say = chat[
             chat.index("static void Chat_RadioSay("):
-            chat.index("/*\n * The take call", chat.index(
+            chat.index("static void Chat_RadioTaken", chat.index(
                 "static void Chat_RadioSay("))
         ]
         self.assertIn(

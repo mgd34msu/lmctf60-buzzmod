@@ -69,31 +69,7 @@ typedef struct rune_link_s
 	byte	heading_slack;  /* +/- tolerance, same units */
 	byte	exit_speed;     /* speed/4 the traversal ended with */
 	short	cost_ms;        /* real traversal time, milliseconds */
-	/*
-	 * anchor: three floats whose meaning is the ACTION's, claimed in the order
-	 * the actions were added and never shared. A reader that does not know an
-	 * action must not read its anchor.
-	 *
-	 *   RL_HOOK       NOT a point. anchor[PITCH] and anchor[YAW] are the exact
-	 *                 SHORT-quantized view angles used by the proof;
-	 *                 anchor[ROLL] is the distance from the handed muzzle to the
-	 *                 static-world bite along that ray. Together they reproduce
-	 *                 both the shot control and expected bite without an inverse
-	 *                 floating-point solve.
-	 *   RL_DROP       a world point: the lip the mover steps off, found by
-	 *                 ProveDrop and walked to before the fall was rolled.
-	 *   RL_RUN        zero for a direct proof, otherwise the world-space
-	 *                 detour apex the proved controller walked through.
-	 *   RL_LIFT       the world-space bottom ride point that owns the plat's
-	 *                 center trigger.
-	 *   RL_TELEPORT   the world-space teleporter pad/trigger point.
-	 *   RL_DOOR       the exact dry, sweep-clear wait point inside one unique
-	 *                 validated repeatable trigger. That trigger may own several
-	 *                 independent door teams; `from` begins the proved approach
-	 *                 and `to` ends the proved open-pose egress.
-	 *   RL_JUMP/RL_SWIM  unused, written as zero.
-	 *   RL_ROCKETJUMP    registered but unsupported by the native runtime.
-	 */
+
 	vec3_t	anchor;
 	/* Compound records retain their independent mechanism witness and
 	 * temporal boundary in the native graph.  Noncompound records keep these

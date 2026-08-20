@@ -12,38 +12,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_hooks.h"
 
-/* ------------------------------------------------------------------ table
- *
- * Sixteen rows, sg_names order (sg_client.c). The tone column in
- * sg_chat.c's chat_voice[] (sg_chat.c:188) was already a casting decision
- * made by somebody -- four names to a voice, terse / cocky / dry / mech --
- * and these rows are written to AGREE with it. A bot the chat file gives a
- * swaggering line to and the combat file plays as a cautious long-range
- * specialist is two characters wearing one name, which is the thing this
- * whole change exists to stop.
- *
- * So, by voice:
- *
- *   TERSE (arach, trace, ogre, knight)   soldiers. Few words, no theatre.
- *                                        Spread wide on aim: the voice says
- *                                        nothing about competence.
- *   COCKY (caco, slip, fiend, spawn)     the loud ones. Aggressive, short,
- *                                        rope-happy, allergic to standing
- *                                        still, and -- the joke the tone
- *                                        table set up -- not actually the
- *                                        best shots on the roster.
- *   DRY   (rune, phase, wizard, scrag)   the observers. Long, patient,
- *                                        accurate, content to hold a lane.
- *   MECH  (gate, field, vore, shal)      the machines. Methodical, posted,
- *                                        quiet, and utterly unbothered.
- *
- * aim_offset sums to ZERO across the sixteen, which is deliberate: the mean
- * grade stays 2.0, exactly where (ci * 7) % 5 put it, so turning personas
- * on redistributes the roster's skill without making the team as a whole
- * better or worse than the formula it replaced. Any future edit to this
- * column should keep that sum, or say in its commit message why the roster
- * is now meant to be stronger.
- */
+
 /*
  * ROW ORDER IS sg_names ORDER, NOT VOICE ORDER. The bind is
  * sg_personas[slot & 15] against a name of sg_names[slot & 15], so the two

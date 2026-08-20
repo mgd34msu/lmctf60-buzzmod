@@ -1,23 +1,4 @@
-/*
- * sg_arach.c -- ARACHNOTRON: the brain with legs. First walking cut.
- *
- * This is deliberately the minimum that PLAYS: load the rune, flood one
- * cost field per flag, spawn a real client, and every ClientThink descend
- * the field toward the enemy flag -- run home when carrying. No combat, no
- * hook, no speed tricks yet. If a bot cannot get base to base on the rune,
- * nothing fancier deserves to exist; this is the walking skeleton the rest
- * grows on, and it is can be compared against the legacy bots from the first
- * frame.
- *
- *   sv sg add        spawn a SLIPGATE bot (team by botctfteam, like legacy)
- *   sv sg remove     remove them all
- *
- * Movement per think: pick among the current seed's outgoing links (and
- * staying put) by field value at the destination, steer at the chosen
- * link's endpoint, run at full command. Jump links jump. Arrival needs no
- * test -- the next think re-reads position and field wherever we ended up,
- * which is the whole point of descending a field instead of chasing nodes.
- */
+
 
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -1492,46 +1473,10 @@ fail:
 
 
 
-/*
- * (d) THE DETOUR BUDGET for the mega, Worth_Quad's own arithmetic applied to
- * the mega's own fields.
- *
- * The triangle is the one Detour_Value evaluates for the per-item classes and
- * it is exact here for the same reason: to_mega[k] was flooded FROM pad k, so
- * it reads as cost from anywhere TO that pad, and the far leg is the goal field
- * sampled at the pad's own seed.
- *
- *     detour = cost_to_pad + pad_to_goal - direct
- *     value  = worth / (1 + max(0, detour) / 1500)
- *
- * plus one thing the class arithmetic does not have: a HARD ceiling. The decay
- * alone never quite reaches zero, and a mega on the far side of the map would
- * still tug a little at every seed forever. Four seconds of extra road is the
- * bound -- past that the bot is not detouring for the mega, it is going to the
- * mega and calling the flag a detour, which is the failure mode this whole
- * feature has to not have.
- */
 
 
-/*
- * Role assignment: the owner's quota, then the two situational roles.
- *
- * Two in five defend (nearest-rounded), carrier counts toward defence, a side
- * of one attacks. Rank is slot order among SLIPGATE bots of the team, so the
- * assignment is stable frame to frame.
- *
- * Precedence, in order:
- *
- *   CARRY     I have the flag. Nothing else applies.
- *   DEFEND    my rank falls inside the quota -- the post is kept whatever
- *             else is happening; the situational roles are drawn from the
- *             attacking share only, which is what "attackers convert" means.
- *   RECOVER   our own flag is astray. EVERY attacker converts: getting it
- *             back outranks escorting, so no escort is named this frame.
- *   ESCORT    we have a live carrier who is not me: exactly one attacker,
- *             the lowest-ranked one that is not the carrier itself.
- *   ATTACK    everyone else.
- */
+
+
 static qboolean SG_BotCarrying(edict_t *e)
 {
 	static gitem_t *flagitem;
@@ -1592,27 +1537,7 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 	}
 	my_rank = SG_RoleLiveRank(live_team, SG_MAXBOTS, my_slot, &size);
 
-	/*
-	 * STRATEGY BY GAME STATE, the way the demos play it. Four states from
-	 * two common-knowledge bits (each flag home or astray -- the HUD tells
-	 * everyone), and each state names its shape. The old static 2-in-5
-	 * quota played every state identically; games are won by playing them
-	 * differently.
-	 *
-	 *   both home        2 DEFEND, rest ATTACK. The base shape.
-	 *   theirs astray    2 DEFEND (return pressure is coming),
-	 *   (ours home)      1 ESCORT walks the carrier in, rest ATTACK their
-	 *                    base -- they cannot score while we hold theirs,
-	 *                    and the next steal queues behind this capture.
-	 *   ours astray      1 DEFEND holds the stand for the return; the
-	 *   (theirs home)    rest RECOVER. An empty stand needs a watchman,
-	 *                    not a garrison.
-	 *   both astray      the decisive state. 1 DEFEND stand-watch,
-	 *                    1 ESCORT keeps our carrier alive, rest RECOVER --
-	 *                    the standoff breaks on exactly one event, their
-	 *                    carrier's death, and ours must survive to convert
-	 *                    it.
-	 */
+
 	{
 		int belief_team = SG_TeamIdx(team);
 		qboolean ours_astray =
@@ -2265,100 +2190,18 @@ static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)
 }
 
 
-/*
- * The chain's shape, all of it fitted rather than derived -- the ANGLE is
- * the engine's and is computed above; these are the preferences around it.
- *
- * SG_AS_PERIOD     seconds per full swing. A hop off 270 up under 800
- *                  gravity is airborne 0.675s, so one period is two hops:
- *                  one shoulder per flight, which is the cadence a player
- *                  swaps strafe keys on.
- * SG_AS_VIEWSHARE  how much of the angle the VIEW carries; the input
- *                  carries the rest, exactly as forward+strafe does.
- * SG_AS_VIEWMAX    and the ceiling on that, in degrees. At the period
- *                  above this peaks near 150 deg/s of view movement --
- *                  inside sg_turnrate's 600 and inside a human wrist.
- * SG_AS_CORR       heading error, in degrees, that saturates the bias on
- *                  the swing. The bias is what keeps the mean of the S on
- *                  the road instead of walking it off one shoulder.
- * SG_AS_ABORT      heading error that ends the chain outright: past this
- *                  the body needs to turn, not to harvest.
- * SG_AS_RUN        straight road a chain wants before it commits, units.
- * SG_AS_HOLD       and the fraction of that a chain already running is
- *                  held to, so the road test cannot chatter a chain to
- *                  death across its own bar.
- * SG_AS_FLOOR      2D speed under which there is nothing to chain.
- * SG_AS_FLAGKEEP   never this close to either stand: speed is for TRAVEL.
- * SG_AS_MINCHAIN   a chain shorter than this is not worth a log line.
- */
-
-
-/*
- * One physics step of movement, decided from where the bot actually is.
- *
- * The caller has already put the plain command in place -- forward down the
- * view, no strafe -- so every early return here leaves honest, unaltered
- * running. Three things can be added to it:
- *
- *   ground strafe   accel 10, the strong half of this engine
- *   air strafe      accel 1, the same derivation, only A changes
- *   landing jump    Pmove runs PM_CheckJump before PM_Friction, and a jump
- *                   clears groundentity -- which is the condition PM_Friction
- *                   tests before applying any ground friction at all. A jump
- *                   issued on the step the bot touches down therefore pays no
- *                   friction; one issued a step late pays speed * 6 * ft.
- *                   That single step is the whole of bunny hopping here.
- */
-
-
-/*
- * Is there a straight, clear road ahead worth committing a hop chain to?
- *
- * The same walk the pursuit point makes -- plain RUN links, no rounding
- * anchors, strictly down the field -- collected into a chain, and then two
- * questions asked of the point `want` units of ARC down it:
- *
- *   the chord      how far that point actually is in a straight line. The
- *                  seed centers are beads on a road and the polyline
- *                  through them zigzags even where the road does not (the
- *                  pursuit census: 40 deg/s of churn on geometrically
- *                  straight chain), so leg-by-leg bend angles measure the
- *                  beads, not the road. Chord over arc does not: a road
- *                  that goes somewhere gives back most of what was walked.
- *   the room       the fan's own player-box trace, run to that point. A
- *                  chain in the air cannot dodge, so the corridor has to
- *                  be there before the first hop, not discovered on the
- *                  third.
- *
- * SG_AS_CHORD is the fraction of the arc the chord has to keep, and the
- * chord also has to point within SG_AS_BEND of the heading the body is
- * actually steering on -- a road that doubles back scores well on chord
- * alone.
- */
 
 
 
 
-/*
- * The duel, priced onto the same surface as everything else.
- *
- * Dueling is not a mode the body enters; it is two more terms in the sum, in
- * the same milliseconds every other term is denominated in (Surface_At). What
- * combat supplies is the target's believed position, the range the weapon in
- * hand wants, and what being seen costs right now (SG_CombatDuel, sg_combat.h).
- *
- * SG_DUEL_RANGE_MS   value per unit of range error. Half the carrier's own
- *                    threat repulsion above, which prices a step toward a
- *                    believed contact at 3.0 per unit: a carrier being caught
- *                    loses the match, a fighter standing a hundred units off
- *                    its best range loses some damage. The relation between
- *                    the two is the claim; the absolute is fitted.
- * SG_DUEL_COVER_MS   value for standing where the target can see you, scaled
- *                    by exposure. At exposure 1 it is 900 ms -- comparable to
- *                    the 1500 ms scale the detour arithmetic uses for an item
- *                    worth taking, so cover competes with a pickup and loses
- *                    to the objective. Fitted.
- */
+
+
+
+
+
+
+
+
 
 
 /*

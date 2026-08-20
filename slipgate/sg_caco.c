@@ -1,36 +1,4 @@
-/*
- * sg_caco.c -- CACO: the eye. Belief, not omniscience.
- *
- * Everything a SLIPGATE bot decides from goes through here. The rule is the
- * one a fair player lives under:
- *
- *   - flag ON its stand or not: common knowledge, it is on everyone's HUD
- *     (LMCTF maintains that via ctf_flagathome / matchstate on the score
- *     displays); WHERE a flag is when it is not home is not.
- *   - a dropped flag's position, an enemy carrier's position: known only if
- *     some teammate has actually seen it -- PVS plus a trace, the same
- *     visibility LMCTF's own code uses -- and the belief carries the time it
- *     was seen so it ages.
- *   - own team's carrier: teammates know who carries (HUD icon) and learn
- *     position from sightings.
- *
- * Team belief is shared per team: bots on one team pool their sightings the
- * way humans pool callouts. Aging past SG_BELIEF_STALE clears a position
- * back to unknown.
- *
- * Three things the eye does beyond recording:
- *
- *   - it TALKS. A sighting that materially changes what the team believes
- *     goes out on say_team, through the game's own chat, so the humans on
- *     the team get the callout too. Same route bl_know.c uses.
- *   - it LISTENS to the humans. We cannot read a human teammate's mind, but
- *     a human who can see the enemy carrier would call it out, so the same
- *     visibility test is run from human eyes at a lower rate and with a
- *     delay standing in for the time it takes to say it.
- *   - it lets a stale belief MOVE. A carrier running our flag home is not
- *     standing where we last saw them; the believed seed walks one link a
- *     second down the route field toward their own stand.
- */
+
 
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -277,19 +245,7 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 	c->pending = true;
 }
 
-/*
- * Say the queued lines whose moment has come, through the game's real chat:
- * SG_BotClientCommand(client, "say_team", line, NULL) routes the arguments into
- * the redirected sg_host.argv and runs ClientCommand -> Cmd_Say_f for that client,
- * exactly as bl_know.c's Know_Speak does. Teammates -- human ones included --
- * read it in their own chat.
- *
- * The call itself is made by sg_chat.c: one module owns the say_team channel
- * so that the per-bot budget is counted once across every SLIPGATE line, not
- * once per emitter. The team gap below is only recorded when the line
- * actually went out -- a suppressed line the team never heard must not be
- * booked as said.
- */
+
 static void Caco_Speak(void)
 {
 	int t, k;
@@ -528,44 +484,7 @@ static void Caco_ScanCarriers(rune_t *r, edict_t *viewer, int viewer_team)
 	}
 }
 
-/*
- * ---------------------------------------------------- powerups and runes
- *
- * sg_fields.c prices the powerup and rune classes by walking g_edicts and
- * asking each item entity whether it is SOLID_NOT -- which is to say, asking
- * the world whether the quad is up. Nobody in the server room can do that.
- * What a player actually holds is:
- *
- *   - WHERE a powerup spawns: map knowledge, constant, free. Scanned once
- *     here at Caco_Reset and never asked of the world again.
- *   - whether it is up right now: only if somebody has looked at the pad
- *     since it last came back, or watched it get taken and counted.
- *
- * The respawn clock is fact, read from the item definition rather than
- * assumed: Pickup_Powerup calls SetRespawn(ent, ent->item->quantity)
- * (g_items.c:198), and the quantity field of item_quad is
- * LM_QUAD_DEFAULT_TIME (g_items.c:2025), which is 60 (g_local.h:1513).
- * item_invulnerability carries 300 in the same slot (g_items.c:2048). So the
- * delay comes from ent->item->quantity per entity and quad lands on 60.
- *
- * RUNES DO NOT WORK THAT WAY IN LMCTF and must not be modelled as if they
- * did. Three facts from g_runes.c:
- *
- *   - a rune is one persistent entity created at map load (SpawnRune, called
- *     from g_spawn.c:1037-1045), not a respawning map item;
- *   - it RELOCATES on its own every RUNETHINKTIME = 30 seconds (g_runes.c:10)
- *     to a randomly chosen item_health* spot (Rune_Think, g_runes.c:334-352,
- *     via SelectRuneSpawnPoint, g_runes.c:79). Its position is therefore NOT
- *     map knowledge at all, not even approximately, past 30 seconds;
- *   - when picked up it goes SOLID_NOT and stays in the carrier's hands with
- *     NO respawn scheduled (Pickup_Rune, g_runes.c:450-460, sets think=NULL
- *     and calls no SetRespawn). It comes back where and when the carrier dies
- *     or drops it (Drop_Rune, g_runes.c:628-673).
- *
- * So a rune gets no spawn location from map knowledge and no respawn clock to
- * infer from: its whereabouts are a sighting and nothing else, and a sighting
- * expires after SG_RUNE_WANDER because by then the thing has moved itself.
- */
+
 
 /* g_runes.c:10, RUNETHINKTIME -- how long before a rune moves on its own */
 #define SG_RUNE_WANDER	30.0f
@@ -573,28 +492,7 @@ static void Caco_ScanCarriers(rune_t *r, edict_t *viewer, int viewer_team)
 sg_belief_item_t	sg_caco_items[2][SG_MAX_BELIEF_ITEMS];
 int					sg_caco_num_items;
 
-/*
- * ITEM AND RUNE KNOWLEDGE CONTRACT:
- *
- *   "items can be timed, but runes (the in-game kind) spawn randomly. bots
- *    should know when an item is coming back IF AND ONLY IF another bot on
- *    the team has called it out in team chat when the item is taken ...
- *    BOTS ON THE OTHER TEAM WILL ONLY KNOW WHERE RUNES ARE IF THEY SEE THEM,
- *    NOT FROM THE DIFFERENT TEAM'S KNOWLEDGE."
- *
- * Three things follow, and this cvar switches all three on together because
- * any one of them alone is incoherent:
- *
- *   1. item belief is per team (the [2] on the table above);
- *   2. a respawn clock is armed by a callout that was ACTUALLY SPOKEN, not by
- *      a bot walking past a pad with a stopwatch in its head;
- *   3. runes never get a clock at all -- LMCTF runes relocate themselves at
- *      random every 30 seconds and respawn nowhere on a schedule, so a rune
- *      timer would be a fabricated fact and not a modelling shortcut.
- *
- * Default 0 keeps the shared-belief build byte-identical: every site that
- * writes belief writes both rows, and nothing here arms a clock from a call.
- */
+
 qboolean SG_ItemComm(void)
 {
 	return (sg_cv.itemcomm->value > 0.0f) ? true : false;
@@ -939,23 +837,7 @@ qboolean Caco_ItemBelievedRouteable(edict_t *e)
 	        Caco_ItemBelievedRouteableFor(CTF_TEAM_BLUE, e)) ? true : false;
 }
 
-/*
- * The SHARED view, and the one place in SLIPGATE where the split is knowingly
- * flattened. sg_fields.c floods one set of item-class fields for the whole
- * server -- a cost surface over the map, not a bot's opinion -- and it has no
- * team to ask. Splitting the floods would double every item field's memory
- * and put a team on the signature of every reader in sg_arach.c, to move a
- * distance number that does not by itself send anyone anywhere.
- *
- * What actually decides a detour is the WORTH (sg_combat.c Worth_Quad,
- * Worth_Rune), and that is priced from the bot's own team row -- a team that
- * believes the quad is gone prices it at zero and walks past the pad however
- * the field reads. So the union here costs a slightly stale nearest-of-class
- * distance and never a route to an item the team does not believe in.
- *
- * With sg_itemcomm 0 the two rows are identical and this is the old answer
- * exactly.
- */
+
 qboolean Caco_ItemBelievedUp(edict_t *e)
 {
 	return (Caco_ItemBelievedUpFor(CTF_TEAM_RED, e) ||
@@ -1012,20 +894,7 @@ int Caco_ItemBeliefSeed(rune_t *r, edict_t *e)
 	return -1;
 }
 
-/*
- * ------------------------------------------------------ the pickup hand-off
- *
- * Touch_Item (g_items.c) is the one place in the game every successful pickup
- * passes through, bot or human, so it is where the hook goes -- one call, and
- * every decision about whether this pickup matters made on this side. The
- * ruling of 2026-08-05 is what it implements: an item's return time is
- * knowledge a bot's MOUTH transmits, not knowledge the server hands out.
- *
- * The physical commitment handoff is unconditional for a qualifying pickup.
- * `sg_itemcomm` governs only shared belief and speech; disabling communication
- * cannot leave a live controller route chasing an item which was already
- * accepted by Touch_Item.
- */
+
 
 /* one of ours, on that team, alive, with a clear sight line to the item at the
  * moment it went. Prefers a bot whose say_team budget is free, exactly as
@@ -1193,34 +1062,7 @@ static void Caco_Age(rune_t *r)
 	}
 }
 
-/*
- * ------------------------------------------------------------ projection
- *
- * A believed position that is only allowed to sit still is a lie that gets
- * worse every second, and a believed position advanced as a single point is
- * a lie that is merely better dressed: it claims to know which way he turned
- * at the junction. SLIPGATE.md asks for the honest object -- "other agents
- * are tracked as phase mass, not points" -- so what ages here is a SET.
- *
- * From the last sighting we hold up to SG_PROJ_MAX plausible seeds. Once a
- * second every member takes its best descending step along the carrier's own
- * route-home field, and where the route genuinely forks the next two
- * descending neighbours come along as well: a member in a corridor produces
- * one successor, a member at a junction produces three. Duplicates collapse
- * on the way in, so the set does not explode along parallel paths that meet.
- *
- * When the candidates overflow the cap, the ones kept are those DEEPEST along
- * his route -- the ones we have least time to answer. The single seed the
- * older consumers read (enemy_carrier[i].seed) is the deepest member of all,
- * which is the worst case for us; consumers that want the spread read
- * sg_caco_proj[i] directly and intersect it with their own reachable set.
- *
- * The sighting time is NOT touched. The belief still ages out at
- * SG_BELIEF_STALE; between now and then it spreads toward somewhere plausible
- * rather than staying pinned to a spot he has certainly left.
- *
- * All storage is fixed and static. Nothing here allocates on a frame.
- */
+
 
 sg_proj_t sg_caco_proj[2];
 
@@ -1666,21 +1508,7 @@ SG_CACO_PLACE_PRIVATE void Caco_EnemyPlace(rune_t *r, int team1, int client,
 
 #undef SG_CACO_PLACE_PRIVATE
 
-/*
- * Every enemy a teammate lays eyes on, not just carriers: the defender's
- * pre-spin and the rune-threat weighting both need "someone is out there
- * and roughly where". The RF_GLOW test is the rune tell (p_view.c:792-794).
- *
- * EYES ONLY. This used to grow an "ear" here by polling two server-private
- * fields -- client->weaponstate == WEAPON_FIRING and client->hookstate --
- * and, when either was set inside the PHS, filing the enemy's EXACT origin
- * as a heard_only belief. That was fabricated hearing twice over: it heard
- * states rather than sounds (so it was deaf to every other noise a player
- * makes, and it "heard" a held-down trigger continuously rather than per
- * shot), and having no sound to measure it had no distance or volume to
- * degrade the position with, so the ear was quietly as accurate as the eye.
- * Hearing now enters through SG_NoteSound, off the real sound calls.
- */
+
 static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 {
 	int i;
@@ -1703,42 +1531,7 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 	}
 }
 
-/* ------------------------------------------------------------------- the ear
- *
- * Called from the sound wrappers in sg_net.c for every sg_host.sound and
- * sg_host.positioned_sound the mod issues, AFTER the engine has been handed the
- * actual call. Nothing here touches the wire; this is a tap on a real event,
- * which is the whole difference from what it replaces.
- *
- * WHAT A BOT IS ALLOWED TO LEARN. Two engine facts and nothing else: sg_host.in_phs,
- * which is precisely "could a sound made there be heard here", and the
- * attenuation the caller passed, which is what decides how far the sound
- * actually carries for a human client. No server-private player state is read.
- *
- * THE RADII. Quake II's client mixes a sound at
- * scale = 1 - (dist - SOUND_FULLVOLUME) * attenuation * 0.0005
- * (snd_dma.c, S_SpatializeOrigin) with SOUND_FULLVOLUME 80, so a sound is
- * inaudible past 80 + 2000/attenuation units:
- *
- *     ATTN_NONE   (0)  map-wide, non-spatial -- never admits a position
- *     ATTN_NORM   (1)  2080u    -- weapons, pain, most of what matters
- *     ATTN_IDLE   (2)  1080u    -- quieter incidentals
- *     ATTN_STATIC (3)   746u    -- very short
- *
- * scaled by the volume the caller asked for, since a half-volume sound hits
- * the same floor at half the distance. Past that radius the bot is not told.
- * ATTN_NONE is heard but cannot enter this spatial belief table: its player
- * edict owns the protocol channel, not an audible origin.
- *
- * WHAT IT PLACES. A region, not a fix. The error grows with distance and
- * shrinks with volume -- both through the same frac, the share of the audible
- * radius the sound had to cross -- and the belief is snapped to the nearest
- * rune seed of a point offset from the truth by up to frac * 300 units. A shot
- * at the edge of hearing lands the enemy up to three hundred units from where
- * they really are; a shot in the next room lands close. It is filed
- * heard_only, which every consumer already reads as "warn a post, never aim"
- * (sg_combat.c, sg_arach.c, sg_chat.c).
- */
+
 
 #define SG_EAR_FULLVOL	80.0f       /* SOUND_FULLVOLUME */
 #define SG_EAR_SPAN	2000.0f     /* 1 / 0.0005, the client's distance slope */
@@ -1917,35 +1710,7 @@ static qboolean Caco_Hitscan(int mod)
  * believed to be, world permitting -- a region, deliberately coarse */
 #define SG_DMG_BACKTRACK	512.0f
 
-/*
- * The third sense, called from T_Damage at the one site where damage
- * actually lands (g_combat.c, beside SG_CombatHit). Every test that decides
- * whether a hit is interesting lives here: the game file is not the place
- * to know what a bot believes.
- *
- * What a hit tells you depends entirely on what hit you, and the split is
- * hitscan against flight:
- *
- *   A slug or a burst of machinegun arrives down a straight line that
- *   existed for zero time. The shooter WAS at the far end of it at the
- *   instant it landed, so his real origin is honest evidence and is what
- *   gets believed. A hit genuinely reveals the man.
- *
- *   A rocket or a grenade was fired seconds ago from somewhere the shooter
- *   has since left, and has been travelling ever since. Its arrival says
- *   only "from that way", so the belief is placed back along the line as
- *   far as the world allows and no further -- a region, not a point.
- *
- *   Splash is looser still. For MOD_*_SPLASH the direction T_Damage hands
- *   over runs from the DETONATION, not from the shooter, so what gets
- *   believed is roughly where the thing went off. Worth knowing, and not
- *   the same fact; this is written down so nobody later reads it as one.
- *
- * Neither branch clears heard_only. The bot did not see the man. A belief
- * placed by pain is good enough to warn a post and to swing a scan cone
- * around, and never good enough to aim at, which is what that flag has
- * meant downstream since the ear first set it.
- */
+
 void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
                    vec3_t dir)
 {
@@ -2169,28 +1934,7 @@ void Caco_ResetClient(edict_t *client)
 				       sizeof(caco_relay[k][t]));
 }
 
-/* ---------------------------------------------------------- the rail rhythm
- *
- * The fourth sense, and the narrowest: not WHERE an enemy is but WHEN his
- * gun was last empty. The numbers and the reasoning are in sg_local.h, over
- * SG_RAIL_RELOAD.
- *
- * WHAT A BOT IS ALLOWED TO LEARN, again. One engine fact: sg_host.in_phs. In
- * Quake II the railgun makes no server-side sound at all -- weapon_railgun_fire
- * calls no sg_host.sound, so the ear in this same file never hears one. What a
- * human client actually gets is two client-side sounds off two network
- * messages: railgf1a.wav on the MZ_RAILGUN muzzle flash (multicast PVS,
- * ATTN_NORM) and railgf1a.wav again on the TE_RAILTRAIL temp entity
- * (multicast PHS, ATTN_NONE). The second is the wider of the two and it has
- * no distance falloff to measure against, so the audibility test that matches
- * what a player in that room would really hear is the PHS and nothing else.
- * No radius, no weaponstate, no ammunition count.
- *
- * WHAT IT PLACES: nothing. This writes a TIME and no position. The eye, the
- * ear and the hit sense between them already decide where an enemy is
- * believed to be, and a rail shot heard through three rooms would place him
- * worse than any of them. All this knows is that somebody's rail went off.
- */
+
 
 float		sg_caco_railshot[2][SG_DMG_CLIENTS];
 

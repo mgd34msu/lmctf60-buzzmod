@@ -283,19 +283,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 	if (sg_route_pure_now)
 		return v;
 
-	/*
-	 * THE NAKED CARRY (sg_nakedcarry). Every navigation
-	 * link from map file to field flood verified sound tonight, yet
-	 * parity carriers drift away from a correct destination -- and one
-	 * price term is self-reinforcing: the learned danger field records
-	 * every carrier death along the road home and taxes that road for
-	 * the next carrier. At parity the deaths are dense, so the tax
-	 * compounds until home costs more than wandering. Naked mode prices
-	 * a carrier's step by time-to-home and NOTHING else: no danger, no
-	 * item detours, no cover terms. If naked carriers close on their
-	 * stands, the wall was the pricing; if they still wander, the
-	 * descent itself goes under the microscope.
-	 */
+
 	if (tc->role == SG_ROLE_CARRY &&
 	    sg_cv.nakedcarry->value)
 		return v;
@@ -319,19 +307,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 			     1500.0f * Detour_Value(tc, seed, c, goal_field, w->item[c]) :
 			     0.0f;
 
-	/*
-	 * THE MEGA (sg_megaworth). A separate term rather than a bend in the
-	 * health class, because the two say opposite things at 100 hp: the class
-	 * is worth 0.05 there and the mega is worth its whole budget. The mega worth
-	 * is already zero unless the role, the belief, the headroom and the fight
-	 * all permit it (Mega_Worth), so this line is an OFFER and never a
-	 * requirement -- the objective term is untouched and a bot that finds
-	 * nothing cheap enough simply walks its road.
-	 *
-	 * Below the naked-carry and route-pure early returns above on purpose: a
-	 * carrier does not shop, and a committed tactical waypoint was scored
-	 * with this term already in it.
-	 */
+
 	if (tc->mega > 0.0f && sg_fields.mega_count > 0)
 		v -= 1500.0f * Mega_Detour(tc, seed, goal_field, NULL);
 
@@ -339,24 +315,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 	{
 		float csup = w->carrier_support;
 
-		/*
-		 * LONE WOLF (sg_lonewolf). All three
-		 * judges read the same thing off every bot sheet: our carries
-		 * run escorted 0.33-0.75 of their length while pub humans run
-		 * flags alone at 0.02-0.32. sg_escortdose gated the ESCORT
-		 * ROLE and moved nothing, because escort_fraction measures
-		 * teammate PROXIMITY and the proximity is incidental -- every
-		 * non-escort role also carries a carrier_support pull (defend
-		 * 0.40, attack 0.10), so the whole team drifts down the
-		 * carrier's lane whatever its assignment.
-		 *
-		 * This is the honest cut: REMOVE the artificial cohesion
-		 * rather than add artificial dispersion. A pub is not a team
-		 * fleeing its own carrier -- it is players whose objectives
-		 * simply diverge. The dose scales the support pull for every
-		 * role except the assigned escort, whose whole job it is.
-		 * 1.0 == today's behavior exactly.
-		 */
+
 		if (!SG_EscortSupportFullStrength(tc->escort_mission))
 		{
 			cvar_t *lw = sg_cv.lonewolf;

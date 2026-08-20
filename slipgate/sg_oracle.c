@@ -1,23 +1,4 @@
-/*
- * sg_oracle.c -- the physics, used as truth.
- *
- * Everything SLIPGATE knows about movement it knows because this file rolled
- * the engine's own Pmove forward and watched what happened. There is no model
- * of the physics anywhere in the system -- there is only the physics, called
- * on phantom state that belongs to no client and touches no entity.
- *
- * sg_host.pmove is the same function the server runs for every real player
- * (game.h:122, "player movement code common with client prediction"), with
- * the world queried through the trace and pointcontents callbacks we supply.
- * We pass the engine's own sg_host.trace against the live collision world.
- * Offline generation has no owner; a live reproof scopes its actual bot as
- * passent so the phantom cannot collide with the body whose state it cloned.
- *
- * The one thing Pmove does NOT simulate is the LMCTF grapple, which lives in
- * the game code (p_weapon.c). SG_OracleHookStep calls the same pure muzzle
- * transform and integer-truncated pull ladder as the production weapon; the
- * oracle no longer carries an almost-the-same body-origin/float-rope copy.
- */
+
 
 #include <float.h>
 #include <limits.h>
@@ -5050,19 +5031,7 @@ done:
 	return ok;
 }
 
-/*
- * Roll the real physics forward.
- *
- * in:  state (position, velocity, pm flags), a command, how many steps and
- *      how long each one is (msec must be what a real client could send --
- *      the caller owns making steps sum to honest time, principle 2).
- * out: the state Pmove left behind, plus what happened on the way.
- *
- * The command is applied unchanged every step. Callers who want per-step
- * decisions (the generator proving a strafe link, say) call this once per
- * step with steps=1 and change the command between calls -- the exact
- * structure a real client has, one usercmd per step of simulation.
- */
+
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 {
 	pmove_t pm;
@@ -6458,61 +6427,7 @@ done:
 	return result;
 }
 
-/*
- * ------------------------------------------------------------- rocket jump
- *
- * A rocket jump is not a movement rule. It is a DAMAGE event the mover
- * arranges to happen underneath himself: the splash of his own rocket pushes
- * him, and the push stacks on the jump pmove already gave him. Nothing here
- * is tuned; every number is read out of this tree.
- *
- *   the shot    Weapon_RocketLauncher_Fire calls fire_rocket with speed 650,
- *               damage_radius 120 and radius_damage 120 -- the live #else
- *               branch (p_weapon.c:864-866, :889). The CTF_WEAP_BALANCE
- *               numbers above them sit inside #ifdef WEAP_BALANCE_OK, which
- *               nothing in the build defines, so they are dead text.
- *   the muzzle  VectorSet(offset, 8, 8, ent->viewheight-8) then
- *               P_ProjectSource (p_weapon.c:880-881), which is
- *               G_ProjectSource (g_utils.c:7-12) for a right-handed client:
- *               origin + forward*8 + right*8 + (0,0,14), viewheight being 22
- *               (p_client.c:1923).
- *   the flight  MOVETYPE_FLYMISSILE with mins and maxs cleared
- *               (g_weapon.c:692-696): a POINT travelling a straight line at
- *               650 u/s, clipped by MASK_SHOT, no gravity. A point trace is
- *               therefore the projectile's own path, not an approximation of
- *               it. Sky ends the rocket without an explosion
- *               (rocket_touch, g_weapon.c:635-637).
- *   the owner   rocket_touch returns the instant it strikes its owner
- *               (g_weapon.c:631-632), so the jumper never eats the 100-119
- *               direct hit (p_weapon.c:851) and never takes its knockback,
- *               which is zero anyway (g_weapon.c:653). ALL of the push and
- *               ALL of the self-damage come from T_RadiusDamage.
- *   the splash  T_RadiusDamage (g_combat.c:698-756): the distance is measured
- *               from the explosion to the target's bbox CENTRE, not its
- *               origin (g_combat.c:716-718); points = damage - 0.5*dist
- *               (g_combat.c:742); halved because the jumper is his own
- *               attacker (g_combat.c:745-746); and findradius hard-culls
- *               anything past the radius (g_utils.c:60-83), so outside 120
- *               units nothing happens at all -- there is no taper to zero.
- *               (int)points is passed as BOTH the damage and the knockback
- *               (g_combat.c:752).
- *   the push    T_Damage normalises dir (g_combat.c:471) and, because the
- *               attacker IS the target, scales by 1600 instead of 500 -- the
- *               line id itself labelled "the rocket jump hack"
- *               (g_combat.c:491-494). Mass is 200 for a player
- *               (p_client.c:1926), floored at 50, so the kick is exactly
- *               8 units/s per point of knockback. A body still standing on
- *               the floor cannot be pushed down into it (g_combat.c:505-508).
- *   the health  take starts at (int)points and only ever comes DOWN from
- *               there -- power armour, the Resist rune, armour
- *               (g_combat.c:534-548). A link records the WORST case, which is
- *               also the honest one for a generator that cannot know what the
- *               jumper will be wearing: an unarmoured body pays all of it.
- *
- * Nothing above says anything about how high the jumper goes. That is
- * pmove's business and it is never assumed here: the caller applies this
- * force and then lets SG_OracleRun integrate, exactly as with the hook.
- */
+
 #define SG_RJ_RADIUS_DAMAGE	120.0f		/* p_weapon.c:865 */
 #define SG_RJ_DAMAGE_RADIUS	120.0f		/* p_weapon.c:866 */
 #define SG_RJ_ROCKET_SPEED	650.0f		/* p_weapon.c:889 */
@@ -6657,30 +6572,7 @@ int SG_OracleRocketJumpStep(sg_phantom_t *ph, vec3_t boom)
 	return knockback;               /* == the damage taken, worst case */
 }
 
-/*
- * The highest a rocket jump can possibly lift a body, from the arithmetic
- * above and nothing else. This is a CANDIDATE FILTER, not a claim: it says
- * which pairs are worth handing to the prover, and the prover still has to
- * roll the real physics for a link to exist.
- *
- * The strongest burst the game can produce under a standing player is one on
- * the floor directly beneath him: his box bottom is 24 below his origin
- * (p_client.c's player mins) and the centre the damage is measured to sits 4
- * above it, so the shortest distance is 28 and no arrangement of aim can beat
- * it. That gives points = (120 - 14)/2 = 53, a kick of 8*53 = 424 up.
- *
- * On top of that goes the jump pmove hands out. PM_CheckJump lives in the
- * engine, not in this tree, so its 270 is the one constant here that cannot
- * carry a line number from these sources -- which is exactly why it is
- * confined to this filter and kept out of every proof: SG_OracleRun gets the
- * real number from sg_host.pmove every time it steps.
- *
- * Ballistic rise for the stacked launch speed, under the server's own
- * gravity: v^2 / 2g. At sv_gravity 800 that is (424+270)^2/1600 = 301 units.
- * Any real jump comes in under it -- the rocket takes time to reach the
- * floor, and by the time it detonates the body has already left, which puts
- * the burst further away and costs it kick.
- */
+
 float SG_OracleRocketJumpCeiling(void)
 {
 	float points = (SG_RJ_RADIUS_DAMAGE - 0.5f * (24.0f + SG_RJ_BBOX_CENTRE))

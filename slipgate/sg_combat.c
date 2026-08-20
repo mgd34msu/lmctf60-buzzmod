@@ -1,29 +1,4 @@
-/*
- * sg_combat.c -- SLIPGATE combat: the view, the weapon and the trigger.
- *
- * The constitution's rule for this file is a single sentence: "Combat runs
- * concurrently with navigation. There is no state that suspends movement."
- * So this is not a behaviour, a state, or a mode. It is a modifier applied to
- * a usercmd_t that the Body has already filled in. It writes cmd->angles and
- * cmd->buttons, and it asks the engine for a weapon through the same entry
- * point a player's "use <name>" runs. It never touches forwardmove, sidemove
- * or upmove.
- *
- * Everything here that is a claim about the game is read from the game, per
- * principle 1 (read the engine, never assume it). The doctrine -- which weapon
- * at which range, which shot is safe to take, what an item is worth -- is
- * slipgate/WEAPONS.md, which derives every rule it states from a cited line of
- * this tree. Constants below carry the WEAPONS.md section AND the source line
- * the section read them from. The numbers that are NOT cited -- fire cadence,
- * aim error, settle time, hysteresis windows -- are preferences, not facts,
- * and are named as such where they are defined.
- *
- * Perception is CACO's gate and nothing wider: sg_host.in_pvs plus a trace from the
- * eyes to the target's centre against MASK_OPAQUE (sg_caco.c:100-114), plus a
- * forward-cone test so a bot does not shoot at something behind its head.
- * There is no g_edicts omniscience here; an enemy that fails the gate does not
- * exist as far as this file is concerned.
- */
+
 
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -61,42 +36,7 @@
  * muzzle-clear one.
  */
 
-/*
- * The weapon table.
- *
- * pickup     the FindItem key Cmd_Use_f looks up (g_cmds.c:667). Names are
- *            g_items.c's own pickup_name strings: :1622, :1645, :1668, :1691,
- *            :1714, :1760, :1783, :1806, :1829, :1852, and PLASMA_PICKUP
- *            "Plasma Rifle" (plasma.h:50, used at g_items.c:1875).
- *
- * speed      projectile speed in units/second, 0 for hitscan. WEAPONS.md
- *            2.2 table: blaster and hyperblaster 1000 (p_weapon.c:939, shared
- *            Blaster_Fire), plasma 1200 (plasma.h:25-26), rocket 650
- *            (p_weapon.c:889), BFG 400 (p_weapon.c:1741), grenade launcher 600
- *            forward (p_weapon.c:812) which is BALLISTIC and solved separately.
- *            Hitscan: shotgun, super shotgun, machinegun, chaingun, railgun
- *            (fire_bullet/fire_shotgun/fire_rail -> fire_lead, g_weapon.c:268,
- *            :747).
- *
- * windup     seconds between the trigger and the projectile leaving. Only the
- *            BFG has one: gunframe 9 is the muzzle flash, gunframe 17 is the
- *            launch, 8 gunframes at 100 ms (p_weapon.c:1698-1710, WEAPONS.md
- *            1.12 and 0.3).
- *
- * range_cap  WEAPONS.md 2.2-F6: the range at which a spread weapon's expected
- *            damage falls below the blaster's 30 dps. MG 740, CG 1100,
- *            shotgun 560, SSG 400 (spreads at p_weapon.c:1160, :1298, :1369,
- *            :1555). The railgun has zero spread and no cap (g_weapon.c:747);
- *            projectiles are not capped here, rule F1 governs them instead.
- *
- * floor      WEAPONS.md 2.2-R2: the ammo count below which the weapon stops
- *            being the right tool -- about three seconds of fire at its own
- *            drain rate. CG 90 bullets at 30/s (1.5), MG 30 at 10/s (1.4),
- *            HB 30 cells at 10/s (1.3), SSG 6 shells, shotgun 3 shells,
- *            RL 4 rockets, GL 3 grenades, railgun 2 slugs, plasma 34 cells at
- *            11.1/s (1.13), BFG 50 cells which is also its hard floor
- *            (g_items.c:1854).
- */
+
 
 enum
 {
@@ -297,22 +237,7 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 
 #define SG_WEIGHT_TICK		1.0f	/* item worths, same cadence as Fields_Refresh */
 
-/*
- * The duel terms. Preferences, all of them -- what they COMPOSE is measured
- * (the 2.1 ladders, the band edges, R1b's survivability floor), but how long a
- * lost target stays interesting and how hard a mismatched weapon should push
- * are fitted.
- *
- * SG_DUEL_FRESH matches the belief table's own short window: sg_arach.c prices
- * a "fresh contact" at 4 s for the carrier's flee term and 3 s for the idle
- * hand's pre-select. Two seconds is tighter than both, because this one is
- * about a firing position rather than a warning.
- *
- * SG_DUEL_MATCH_BIAS is how far the range preference moves off the bot's own
- * optimum toward the side its opponent's weapon is worse at. A quarter of the
- * gap: enough to make a railgun back away from a super shotgun, small enough
- * that it never overrides the weapon's own band gates below.
- */
+
 #define SG_DUEL_FRESH		2.0f
 #define SG_DUEL_MATCH_BIAS	0.25f
 
@@ -329,41 +254,7 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 #define SG_LOST_BFS			24
 #define SG_LOST_TICK		0.2f
 
-/* --------------------------------------------------------------- skill spans
- *
- * bot_skill, applied per bot. The cvar names the team's BEST; each bot then
- * plays at or below it, so the sixteen names sg_arach.c spawns are
- * distinguishable opponents at one server setting instead of sixteen copies of
- * the same shooter.
- *
- * The cvar is read as 0..4 and clamped there (g_botmenu.c:77 and bl_main.c:1542
- * already pass it around; the test config runs bot_skill 4). The personal
- * offset is deterministic in the client index -- -((ci * 7) % 5) * 0.25, so
- * 0 to -1 skill levels -- and a given client number therefore plays the same
- * way for the whole match and for every match after it. 7 and 5 are coprime,
- * so the five grades spread evenly over consecutive client numbers instead of
- * clustering.
- *
- * The offset is one-sided DOWNWARD on purpose. A symmetric offset would be
- * clamped at the ceiling exactly where the tests run -- at bot_skill 4 half
- * the bots would land on 4.0 and the variety the offset exists for would
- * disappear at the one setting that matters most. One-sided, bot_skill 4
- * fields five distinct grades (4.00, 3.75, 3.50, 3.25, 3.00), the best of them
- * being the shipped behaviour and none of them better than it.
- *
- * Every number below is FITTED. Nothing here is measured from anything; this
- * is the taste end of the file, exactly like the fire cadence above it.
- *
- * The design constraint the endpoints are chosen against: at bot_skill 4 the
- * behaviour that already shipped is the CEILING. So each skill-4 endpoint is
- * written as the constant that was already in use, textually, and only the
- * skill-0 endpoint is worse. Lower skills are honestly worse; top skill is not
- * made stronger than it was.
- *
- * The single exception is the reaction delay, which did not exist at all
- * before: at skill 4 it is 0.12 s, a little over one server frame (FRAMETIME
- * 0.1, g_local.h:150) and well inside the jitter the fire windows already had.
- */
+
 #define SG_SKILL_MAX		4.0f
 #define SG_SKILL_SPREAD		0.25f	/* skill levels per step of personal offset */
 
@@ -384,58 +275,10 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 
 #define SG_LEAD_JITTER_S0	4.0f	/* per-shot lead error in degrees; 0 at skill 4 */
 
-/* ------------------------------------------------------------ aim texture
- *
- * The block above gets the SIZE of a human's aim error right and the SHAPE of
- * it wrong. Watch a demo: nobody's crosshair converges on a target the way a
- * decaying cone does. The hand swings, it goes PAST, it comes back, it goes
- * past again a little less, and the second correction is the one that lands.
- * Then, holding the target, the crosshair does not sit still and it does not
- * buzz -- it wanders off a fraction of a degree and gets pulled back, on a
- * cycle you can count in seconds.
- *
- * Three things are missing, and they are all shape, not magnitude:
- *
- *   1. the overshoot on acquisition, and its one-or-two damped corrections
- *   2. the settle window growing with the size of the swing -- Fitts's law,
- *      which is about a hand and a target and is as true of a mouse as it is
- *      of a finger and a button
- *   3. the tracking wander, which is slow and continuous, where this file's
- *      tremor was a fresh random direction stamped down every 0.25-0.5 s
- *
- * All of it is behind sg_aimtexture, default 0. With the cvar off every
- * expression below is the one that shipped, textually, and the state fields
- * this block adds are never written.
- *
- * The numbers are FITTED, like the whole block above them. The one that is
- * not free is SG_TEX_FITTS_REF: the settle multiplier is written so that it
- * comes out at exactly 1.0 at that flick angle, so the reference is the flick
- * at which the settle window is UNCHANGED from today. It is set at 30 deg
- * because the scan gate only admits targets inside a 120 deg cone
- * (SG_FOV_COS), which puts the median acquisition swing in the twenties --
- * so the multiplier is centred on the roster's own typical flick and the
- * AVERAGE settle length across a match is what it always was. Only its
- * distribution changes: a small re-acquisition converges sooner, a wide
- * swing later.
- */
+
 #define SG_TEX_OVER_TRACK	0.08f	/* overshoot, as a fraction of the swing, */
 #define SG_TEX_OVER_FLICK	0.15f	/* for style 0 and style 1 respectively */
-/*
- * Ceiling on the overshoot, in degrees, and it is NOT a taste number -- it is
- * the point where the compensation below runs out of ramp to pay with. The
- * budget Combat_TexSpan has to spend is res*span + span^2/3, tightest at
- * skill 4 (0.8 and 8.2), which caps the overshoot's own mean square at
- *
- *     sqrt((0.8*8.2 + 8.2^2/3) / SG_TEX_SHAPE_MS) == 12.9 deg
- *
- * Past that the ramp is already at zero and the extra overshoot is a straight
- * accuracy loss with nothing on the other side of the ledger. 12 rather than
- * 12.9 for the margin. It binds in practice only where it should: the scan
- * gate's 120 deg cone puts most acquisitions well under it, and the swings
- * that reach it are the threat-cone ones -- a bot spun round by a shot in the
- * back, which is exactly the case where 15% of the swing stops being an
- * overshoot and becomes a pirouette.
- */
+
 #define SG_TEX_OVER_CAP		12.0f
 /*
  * Overshoot is a defect, so the file's own rule applies: skill 4 is the
@@ -490,22 +333,7 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
  */
 #define SG_TEX_SHAPE_MS		0.173f
 
-/*
- * How long a hit from a shooter the bot could not see keeps steering where
- * the bot looks (sg_caco.c's damage ring supplies the bearing). A human
- * spins on being hit and then gets on with it; this is the length of the
- * "and then gets on with it".
- *
- * The span runs the other way from every other one in this block, and that
- * is deliberate rather than an oversight: the low-skill bot stays rattled
- * LONGER, still checking a bearing the shot has long since left, while the
- * skill-4 bot checks once and returns to the fight in front of it. Stated
- * plainly because it does not fit the block's own rule that skill 4 is the
- * ceiling -- the bias only ever ADDS candidates to the scan, so a longer
- * window is not strictly worse for the bot that has it. It is a fluster
- * clock, not a skill ladder, and it is written here with the skill spans
- * because it is scaled by the same number.
- */
+
 #define SG_THREAT_S0		2.40f	/* rattled this long at bot_skill 0 */
 #define SG_THREAT_S4		1.20f
 
@@ -795,20 +623,7 @@ static qboolean Combat_TexOn(void)
 	return (qboolean)(sg_aimtexture && sg_aimtexture->value != 0.0f);
 }
 
-/*
- * The bot's effective skill, a float in [0, 4]: the team level the cvar names,
- * plus this client's own fixed offset. The cvar POINTER is resolved once --
- * sg_host.cvar walks the engine's list on every call, and this is read several times
- * per engaged bot per frame -- while the VALUE is read fresh every time, so
- * changing bot_skill mid-match takes effect on the next frame.
- *
- * The offset used to be (ci * 7) % 5 -- five grades handed out by arithmetic
- * on a client index, which made the roster a skill ladder and nothing else.
- * The persona table names the grade instead (sg_persona.c), over the SAME
- * envelope: grade 0 is the team's full skill, grade 4 a full point under it,
- * and the sixteen rows average grade 2.0 exactly as the modulo did. With
- * sg_persona 0 there is no row and the modulo runs, unchanged.
- */
+
 static float Combat_Skill(edict_t *self)
 {
 	float	team, s;
@@ -939,51 +754,12 @@ static void Combat_Center(edict_t *e, vec3_t out)
 
 static qboolean Combat_IsEnemyCarrier(edict_t *self, edict_t *target);
 
-/*
- * Pick a target: a live enemy client, inside engage range, inside the forward
- * cone, and visible. Nearest wins outside the bounded incumbent hysteresis;
- * a still-visible current target survives incidental distance crossings.
- * Iteration follows sg_caco.c:294-300 --
- * g_edicts + 1 + i over game.maxclients, inuse and client checked.
- *
- * Liveness is the same pair CACO uses (sg_caco.c:213):
- *     deadflag == DEAD_DEAD || health <= 0
- * Team is client->ctf.teamnum (g_local.h:1122), CTF_TEAM_RED/BLUE from
- * g_ctffunc.h:12-13. A client not on a team -- observer, connecting, or
- * mid-join -- has neither value and is skipped, which is what we want.
- *
- * `threat`, when it is not NULL, is a second cone of the same half-angle
- * pointed back down the line something just shot the bot along (the damage
- * ring, sg_caco.c). A candidate inside EITHER cone is considered. This is
- * the whole of the reaction: nothing here turns the bot by hand. If the
- * shooter is actually standing back there, the scan now returns him and the
- * ordinary aim path swings the view around -- which is a bot spinning on
- * being hit. If he is behind a wall, Combat_Visible fails exactly as it
- * always did and the bot does not turn, because there is nothing to see.
- * Aim error and the fire windows are untouched: this is where a bot LOOKS,
- * not how well it shoots.
- */
+
 static edict_t *Combat_Scan(edict_t *self, vec3_t eye, vec3_t forward,
 	const float *threat, int incumbent_index, qboolean count_diagnostics)
 {
 	edict_t	*best = NULL;
-	/*
-	 * How far out this bot is willing to START something. The cap itself is
-	 * a refusal to fight across the map (SG_ENGAGE_RANGE); the persona moves
-	 * it by at most 15% either way, which is the difference between a Fiend
-	 * who takes the corridor shot and a Wizard who lets it walk. Nearest
-	 * remains the basis inside whatever the cap turns out to be -- this bends
-	 * who is a candidate, not how one is chosen. Exactly SG_ENGAGE_RANGE when
-	 * no persona applies.
-	 *
-	 * The second factor is the tilt clock (sg_arach.c, sg_tilt): for a few
-	 * skill-scaled seconds after a respawn the bot starts fewer fights --
-	 * it takes the corridor shot it would otherwise have taken, but not
-	 * the one across the room. Exactly 1.0 with sg_tilt off, outside the
-	 * window, and for anything that is not a SLIPGATE bot. Nothing below
-	 * this line changes: a fight this bot DOES take is fought with the
-	 * same aim, the same reaction and the same trigger it always had.
-	 */
+
 	float	range_limit = SG_ENGAGE_RANGE * SG_PersonaAggression(self) *
 	                   SG_TiltCaution(self);
 	float	bestscore = range_limit;
@@ -1274,21 +1050,7 @@ static qboolean Combat_TeamSplashSafe(edict_t *self, float dsafe,
 	return true;
 }
 
-/*
- * fire_lead does not fire the nominal trace ray.  It chooses an independent
- * horizontal and vertical offset at 8192 units for every bullet/pellet
- * (g_weapon.c), while the super shotgun also fires two barrels at +/-5
- * degrees and the machinegun adds a random +/-0.7 degree yaw kick.  A
- * teammate can therefore be clear of the nominal ray and still be inside the
- * weapon's real firing envelope.
- *
- * Test each live teammate against a conservative sphere around its linked
- * bbox.  The rectangle grows exactly as fire_lead's endpoint offsets do.  If
- * the nominal path reaches water, fire_lead can add a second scatter of twice
- * the ordinary spread after refraction, so the random component grows to
- * three times its dry value.  Chaingun's independently randomised muzzle is
- * supplied as source_pad by Combat_WeaponRay and expands both axes here.
- */
+
 static qboolean Combat_TeamHitscanSafe(edict_t *self, int weapon,
 	const vec3_t muzzle, const vec3_t shotdir, float max_forward,
 	float source_pad, qboolean water_path)
@@ -1598,21 +1360,7 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 
 	ladder = Combat_Ladder(band);
 
-	/*
-	 * WEAPON COMMITMENT (sg_wcommit). The strongest observed tell
-	 * (separability 1.000): consecutive human shots stay on ONE gun --
-	 * switch_diagonal_mass 0.90 against this body's 0.68 -- because a
-	 * human carries a main weapon across bands and switches only when
-	 * forced. The band arbitration re-derives the optimal gun per 64
-	 * units of range and spends the whole fight commuting between local
-	 * optima (wswitch, which only slowed the REQUESTS down, was struck
-	 * for moving the tell the wrong way). Under commitment the held gun
-	 * is KEPT whenever it appears anywhere in the current band's ladder,
-	 * has ammo, and the band gates allow it -- rail fights at every
-	 * range like it does in the corpus; the SSG at 900 units still
-	 * switches because BandAllows already refuses it. Doctrine ladders
-	 * above (carrier, intercept) outrank commitment on purpose.
-	 */
+
 	if (sg_cv.wcommit->value != 0.0f)
 	{
 		int held = Combat_Held(self);
@@ -1781,23 +1529,7 @@ static int Combat_LadderRank(const int *ladder, int w)
 	return -1;
 }
 
-/*
- * The range a weapon wants, from the ladders and nothing else.
- *
- * Every band whose ladder names the weapon votes for that band's centre, with
- * a weight of 1/(1+rank) -- the dossier ranked it, so the rank is the strength
- * of the opinion. The mean of those votes is the preference. The railgun, at
- * rank 0 in mid AND long and rank 5 in the two near bands, lands near 690; the
- * super shotgun, rank 0 at contact and rank 3 at close, lands near 105; the
- * chaingun, ranked 1 in both near bands and 3 in mid, lands near 260. Nothing
- * here is a number somebody chose; it is the ladder table read as a curve.
- *
- * The same gates Combat_BandAllows applies to a SELECTION then apply to the
- * preference: never inside the weapon's own d_safe (R1), never past the super
- * shotgun's 256 (R2d), never past a hitscan cap (F6). `who` supplies the state
- * d_safe depends on -- quad and plasma mode -- so an opponent's preference is
- * computed against the opponent.
- */
+
 static float Combat_WantRange(edict_t *who, int w)
 {
 	static const int bands[4] = {
@@ -1851,21 +1583,7 @@ static float Combat_WantRange(edict_t *who, int w)
 	return want;
 }
 
-/*
- * What standing in the open costs this bot right now, 0 to 1.
- *
- * Two independent reasons to want cover, added and clamped. The first is
- * damage taken: R1b's 90 points of health-plus-absorbable-armour is the line
- * the dossier already draws for "healthy enough to accept a trade", so twice
- * it is the healthy end -- at 180 or better this term is zero, at 90 it is a
- * half, at nothing it is one. The second is the weapon: a shot the bot cannot
- * take is exposure paid for nothing, so a weapon Combat_BandAllows refuses at
- * this distance scores a full one, and one that is merely off its preferred
- * range scores the fractional miss.
- *
- * Healthy, in band, at the range the gun wants -- zero. That is the point: a
- * fight already being won is not one to break line of sight over.
- */
+
 static float Combat_Exposure(edict_t *self, int w, float dist, float want)
 {
 	float hurt, miss, e;
@@ -1892,26 +1610,7 @@ static float Combat_Exposure(edict_t *self, int w, float dist, float want)
 	return e;
 }
 
-/*
- * Ask for a weapon, exactly the way Cmd_Use_f does (g_cmds.c:667-687): the
- * item, its use handler, the inventory test, then it->use. Use_Weapon does not
- * switch immediately -- it sets client->newweapon (p_weapon.c:376) and
- * ChangeWeapon performs the change when the current weapon is down
- * (p_weapon.c:171-232, :427-433).
- *
- * Rule S3 is enforced here and only here: the grapple is never asked for. With
- * CTF_OFFHAND_HOOK set the weapon-cycle commands already skip it
- * (g_cmds.c:885-887, :933-935), so an explicit use is the only way to reach it
- * and this file simply never issues one.
- *
- * The plasma is a special case that is deliberately NOT exercised: Use_PLASMA
- * toggles bounce/spread mode instead of switching when the plasma is already
- * pers.weapon, and prints a line to the console every time (plasma.c:357-370).
- * A bot that toggled to reach a preferred mode would spam the server, so the
- * bot fires whichever mode it holds and prices the splash from plasma_mode
- * (see Combat_DSafe). Calling use to SELECT the plasma from another weapon
- * runs Use_PLASMA's ordinary Use_Weapon path and is fine.
- */
+
 static void Combat_Request(edict_t *self, sg_combat_state_t *st, int w)
 {
 	gitem_t		*it;
@@ -2024,29 +1723,7 @@ static void Combat_Arbitrate(edict_t *self, sg_combat_state_t *st, int want)
 	Combat_Request(self, st, want);
 }
 
-/*
- * THE CORRIDOR SWITCH (sg_wswitch, the pre-switch half of the discipline).
- *
- * Called only from the idle path, and only where that path used to do nothing
- * at all: the bot is not posted, not carrying, and has no alert from the body,
- * and the gun in its hands is loaded and is not the spawn blaster. Today that
- * bot walks the whole corridor holding the last thing it fired.
- *
- * The range prior is the cheapest honest one available: the straight-line
- * distance to the nearest FRESH enemy the belief table has a seed for
- * (sg_caco_enemies -- a teammate's eye or an ear, aged out at SG_WS_PRE_FRESH).
- * Corridors bend that line, but the answer only has to be right to within a
- * band, and a band is a factor of three wide. The bar for acting on it is the
- * one number this file already has for "the gun in my hands is wrong for this
- * distance": Combat_WantRange, the 2.1 ladders read as a curve. If what is
- * held wants 690 units and the meeting is coming at 150, that is a rail being
- * carried into a shotgun room and it is worth the 700-1100 ms NOW, in a
- * corridor, where the cost is nothing but walking.
- *
- * It asks through Combat_Arbitrate like every other selection, so rule S1's
- * rate limit and 800 ms want-hold and rule S3's grapple ban all still hold: a
- * belief that flickers between two seeds cannot make the bot cycle guns.
- */
+
 static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 {
 	rune_t	*r = SG_Rune();
@@ -2227,29 +1904,7 @@ static void Combat_SampleError(sg_combat_state_t *st, vec3_t dir)
 
 /* ----------------------------------------------------------- aim texture */
 
-/*
- * Track or flick, 0..1, derived rather than authored.
- *
- * The persona table was NOT given a flick_style column, and that is a ruling
- * rather than laziness. sg_persona.h says it out loud: "Bend behaviour, never
- * invent it... Anything that wanted a new branch belongs in the system that
- * owns the behaviour, not here." A correction shape is a branch in the aim
- * code; the table's job is to say who the bot is, and it already does, in a
- * column that answers this question. Aggression IS the tell. The roster's
- * loud ones -- Fiend 1.50, Spawn 1.40, Caco 1.30 -- are the ones the chat
- * file gives the swaggering lines to and the ones the table's own comment
- * calls "not actually the best shots"; a snatch-and-correct flick is exactly
- * how that plays. The patient end -- Wizard 0.65, Gate 0.70, Rune 0.75, the
- * dry observers holding a lane -- tracks smoothly and settles slowly.
- *
- * Read through SG_PersonaAggression rather than off the row, so this lands
- * inside the same +/-15% squeeze every other consumer gets and cannot widen
- * the band from out here. That maps the roster's 0.5-1.5 onto 0.85-1.15,
- * which is why the rescale below is exactly that span: the sixteen rows use
- * the full 0..1 of style and nothing clamps in practice. With sg_persona 0
- * the multiplier is 1.0 and every bot comes out at 0.5 -- dead centre, which
- * is the right answer when the roster has no characters in it.
- */
+
 static float Combat_FlickStyle(edict_t *self)
 {
 	float	s = (SG_PersonaAggression(self) - 0.85f) / 0.30f;
@@ -2281,54 +1936,7 @@ static float Combat_TexFitts(float flick)
 	return m;
 }
 
-/*
- * THE COMPENSATION. Read this before touching any number above it.
- *
- * The overshoot is a new error term, and a new error term makes the bot worse
- * unless something else gives. The rule this feature was accepted under is
- * that it changes the SHAPE of the miss and not the SIZE of it, so the ramp
- * pays for the overshoot out of its own width.
- *
- * The quantity held fixed is the mean square angular error over the settle
- * window, because that is what a cone-shaped error's hit probability actually
- * tracks. Today, with the offset ramping linearly from (res + span) down to
- * res over x in [0,1]:
- *
- *     E_off^2 = mean of (res + span*(1-x))^2 = res^2 + res*span + span^2/3
- *
- * With the texture on, the overshoot rides in a direction that is independent
- * of the tremor's, so it adds in mean square rather than coherently, and its
- * own mean square is (SG_TEX_SHAPE_MS * over^2):
- *
- *     E_on^2 = res^2 + res*span' + span'^2/3 + SHAPE_MS*over^2
- *
- * Setting the two equal and solving the quadratic for span' is this function.
- * With over == 0 it returns span exactly -- which is the test that matters,
- * because it means a flick too small to be armed (SG_TEX_FLICK_MIN) is not
- * quietly handed a narrower cone.
- *
- * What this does NOT compensate, and does not have to:
- *
- *   - the tracking wander. It only changes how st->err MOVES, never how long
- *     it is, so the magnitude statistics are untouched by construction. That
- *     is the whole reason it was written as a direction process instead of an
- *     added offset -- an added offset would have needed a second term here
- *     and a second argument about it.
- *   - the settle window's Fitts scaling. It is centred on the median
- *     acquisition flick (see SG_TEX_FITTS_REF), so it moves length between
- *     acquisitions without changing the average.
- *
- * Size of the correction, for the record: at skill 4 (res 0.8, span 8.2) and
- * a 30 deg flick at mid style, over is about 3.5 deg and span' comes out at
- * 7.9 -- a 4% narrower ramp buying a 3.5 deg overshoot. At the worst case the
- * cvar can produce (style 1, skill 0, a swing past SG_TEX_OVER_CAP) the two
- * mean squares still come out equal to four decimal places at every skill,
- * which is what the cap was chosen to guarantee.
- *
- * Degrees are combined here rather than tangents, as everywhere else in this
- * block; tan is applied once at the end and the two agree to within a couple
- * of percent across the whole cone.
- */
+
 static float Combat_TexSpan(float span, float res, float over)
 {
 	float	target, root;
@@ -2409,19 +2017,7 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 
 	st->tex_over = over;
 	st->tex_win = win;
-	/*
-	 * One correction or two. Integer cycles are not a rounding convenience:
-	 * the envelope below is linear, and
-	 *
-	 *     integral of (1-x)*cos(2*pi*n*x) over [0,1] == 0 for integer n
-	 *
-	 * exactly. That is what makes the overshoot zero-mean over the window
-	 * with no bias term to subtract and no step left at the end of it, so
-	 * the bot is not quietly aiming a fraction of a degree to one side for
-	 * the whole settle. Interpolating n between 1 and 2 would have broken
-	 * that for a difference nobody can see, so style picks a shape instead:
-	 * the flicker snatches and double-corrects, the tracker slides in once.
-	 */
+
 	st->tex_cyc = (style >= 0.5f) ? 2.0f : 1.0f;
 
 	if (sg_cv.debug->value)
@@ -2464,24 +2060,7 @@ static float Combat_TexShape(sg_combat_state_t *st, vec3_t dir)
 	return (1.0f - x) * (float)cos(2.0 * M_PI * st->tex_cyc * (double)x);
 }
 
-/*
- * Tracking, between acquisitions: the error DIRECTION wanders instead of
- * jumping.
- *
- * What this replaces is a fresh random lateral stamped down every 0.25-0.5 s,
- * which is white noise -- the crosshair teleports around the target at 2-4 Hz.
- * Nobody's hand does that. A hand drifts off a fraction of a degree over a
- * second or so and gets pulled back, and the pull-back is the correction the
- * player is not aware of making. Blending a fresh perpendicular in at
- * dt/tau per frame is that: an exponential filter over white noise is a
- * random walk with a spring on it, which is the drift-and-recentre in one
- * line and no extra state.
- *
- * The vector is put back to unit length every step. That is load-bearing, not
- * tidiness: the ramp multiplies this direction, so a direction allowed to
- * shrink would become a smaller error, and this term would stop being a pure
- * shape change and start owing the compensation above an argument.
- */
+
 static void Combat_TexWander(sg_combat_state_t *st, vec3_t dir)
 {
 	vec3_t	kick;
@@ -3142,29 +2721,7 @@ static float Worth_Health(edict_t *e)
 	return Combat_Clamp(worth);
 }
 
-/*
- * THE MEGA, priced as OVERHEAL (sg_megaworth). The measurement is the whole
- * argument: zero megas taken by bots in 850 s on a map that has one,
- * while the humans on the same map take it AT FULL HEALTH -- because +100 over
- * max is not health, it is a second life's worth of margin that lets an
- * attacker push deeper and survive the steal. Pickup_Health takes the mega at
- * any health (HEALTH_IGNORE_MAX, g_items.c:598-604) and adds its full count of
- * 100 over max_health; only the ordinary boxes are refused at 100.
- *
- * Worth_Health cannot say this. It is the price of THE HEALTH CLASS given the
- * bot's state, and at 100 hp that price is correctly 0.05 -- a healthy bot does
- * not want a health box. The 2.5x H1 bump above tries to speak for the mega
- * through that number and cannot: 0.05 x 2.5 is 0.125, about 190 ms of detour
- * budget, and it is spent on a field that points at the NEAREST health item of
- * any kind. So the mega gets its own worth and its own fields, and when this
- * feature is on the H1 bump stands down rather than double-counting.
- *
- * (b) THE HEADROOM GATE, and the one place this must not read like health:
- * a bot at 100/100 PASSES. Taking at full is the entire point. The cap only
- * refuses a bot that is already carrying the overheal -- at 170 a second mega
- * buys 30 points and hands the other 70 to whoever comes next, which is a
- * donation, not a detour.
- */
+
 #define SG_MEGA_HEADROOM	170
 
 static float Worth_Mega(edict_t *e)
@@ -3799,20 +3356,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	return true;
 }
 
-/* ------------------------------------------------------------ corner hold
- *
- * A target that stepped behind a corner has not vanished; it is somewhere in
- * the set of seeds it could have walked to since, and the rune knows exactly
- * which those are. Flood outward from where it was last believed to be,
- * spending link cost_ms against the time that has passed -- the rune's costs
- * are real traversal milliseconds (sg_rune.h:80), so the budget is the elapsed
- * clock and no conversion is needed. The members of that set this bot can
- * SEE are the mouths it might come out of.
- *
- * This is belief plus reachability, which is what CACO and RUNE are for. It is
- * not prediction of intent: every reachable seed is equally admitted, and the
- * bot simply looks at the nearest one it can cover.
- */
+
 static void Combat_LostAim(edict_t *self, sg_combat_state_t *st, vec3_t eye)
 {
 	rune_t	*r = SG_Rune();
@@ -3909,20 +3453,7 @@ static void Combat_LostAim(edict_t *self, sg_combat_state_t *st, vec3_t eye)
 	st->lost_have = true;
 }
 
-/*
- * Hold the view on the best emergence point, if there is a hold to keep.
- * Returns true when it wrote cmd->angles. The trigger is not touched here and
- * never will be: the scan has no target, so the pre-fire trace never ran, and
- * the veto that authorises every shot in this file is that trace.
- *
- * Known consequence, stated rather than hidden: the Body runs plain forward
- * down whatever view the frame ends up with (sg_arach.c sets forwardmove 400
- * along the chosen yaw, and pmove builds its move basis from the angles this
- * file may have overwritten). Holding a view therefore also leans the walk
- * toward it -- which is the same thing that already happens on every frame a
- * target is held, and is why SG_CombatPursuit's role bound is the guard: only
- * roles that were heading that way anyway are allowed a hold at all.
- */
+
 static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
                                 usercmd_t *cmd, vec3_t eye)
 {
@@ -4094,24 +3625,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 		return;
 	}
 
-	/*
-	 * The invariant, last thing before the button.
-	 *
-	 * BUTTON_ATTACK is the ROPE whenever the grapple is pers.weapon: Cmd_Hook_f
-	 * degenerates to ForceCommand("+attack") (g_cmds.c:1405-1412) and
-	 * Weapon_Hook aborts the rope the moment the button is not held
-	 * (p_weapon.c:2139-2144). Combat_Held returns -1 for the grapple and for
-	 * anything else it cannot name, so this single test is the whole of rule
-	 * S3's enforcement at the trigger. Rule S2 is the second half: while
-	 * newweapon is non-NULL a switch is in flight (p_weapon.c:376) and the
-	 * trigger stays off until ChangeWeapon lands it.
-	 *
-	 * Note what is NOT tested: hookstate. An OFFHAND rope is sustained every
-	 * server frame by ClientEndServerFrame with no button input at all
-	 * (p_view.c:988-990), which is what makes WEAPONS.md 2.4-D2 possible --
-	 * a bot can grapple and shoot at the same time, provided the grapple is
-	 * never pers.weapon.
-	 */
+
 	if (Combat_Held(self) < 0 || self->client->newweapon)
 	{
 		sg_cbt_why[6]++;
@@ -4508,22 +4022,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		return;
 	VectorScale(aim, 1.0f / len, aim);
 
-	/* ---------------------------------------------------------- lead error
-	 *
-	 * Leading a moving target is the skill this file models most directly, so
-	 * it gets its own error rather than being folded into the tremor: an
-	 * angular jitter of SG_LEAD_JITTER_S0 * (4 - skill) / 4 degrees, resampled
-	 * every frame, which is per shot or finer. At skill 4 the term is exactly
-	 * zero and the solve is untouched.
-	 *
-	 * It displaces the lead POINT and re-derives the aim from it, rather than
-	 * bending the aim ray on its own. That keeps the muzzle-ray wall check below
-	 * tracing the same predicted bearing the physical shot takes, so a lead
-	 * error comes out as a MISS rather than a false clear.
-	 *
-	 * Hitscan is skipped: flight is 0, there is no lead to get wrong. So is
-	 * the grenade launcher, whose aim rule F4 replaces outright below.
-	 */
+
 	if (flight > 0.0f && inhand != SG_W_GRENADELAUNCHER && skill < SG_SKILL_MAX)
 	{
 		float jit = (float)tan(SG_LEAD_JITTER_S0
@@ -4579,20 +4078,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		}
 	}
 
-	/* ----------------------------------------------------------- aim error
-	 *
-	 * A human does not snap onto a target; they overshoot and settle. The
-	 * error is a lateral offset that shrinks over SG_SETTLE seconds of held
-	 * contact down to a residual that never reaches zero. The direction is
-	 * resampled on a slow tick so it reads as tremor rather than a fixed bias
-	 * that a target could out-run in one direction.
-	 *
-	 * That first sentence was aspirational: the cone shrinks, it never goes
-	 * past. sg_aimtexture is the branch that makes it true -- the overshoot,
-	 * its corrections, and a tracking direction that wanders instead of
-	 * jumping. Off, this is the code that shipped and the three tex_ lines
-	 * below are no-ops.
-	 */
+
 	if (!ballistic)
 	{
 		textured = Combat_TexOn();

@@ -436,20 +436,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	 * two values Objective contributes before this final link fan. */
 	sg_route_pure_now = route_pure;
 
-	/*
-	 * THE RAIL RHYTHM, resolved ONCE for the whole fan (sg_railrhythm).
-	 * The candidate loop runs about twenty-five links wide at ten hertz;
-	 * scanning the sighting table inside it would pay for the same answer
-	 * twenty-five times. Off by default: SG_RailThreat returns false on
-	 * the cvar read before it touches anything, and both the pricing term
-	 * and the hold below are dead behind rail_seed < 0.
-	 *
-	 * Four seconds of sighting age, the same freshness the approach-cover
-	 * term uses, and eye or ear both count. An ear placement is a region
-	 * up to three hundred units wide, which is a room -- coarse for
-	 * shooting at and good enough for "do not walk into that doorway
-	 * yet", which is the only thing it is asked here.
-	 */
+
 	if (SG_RailThreat(team, 4.0f, &rail_client, &rail_seed))
 	{
 		/* a carrier is what rails punish: 274-279 put rails at the top of
@@ -498,20 +485,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->sink_ban = sink_ban;
 	}
 
-	/*
-	 * ANTI-LINGER (sg_unlinger, behavior cut #3). The analysis' surviving
-	 * lead after two nulls: bot single-mate contact streaks beside the
-	 * carrier run 3-10x longer than human ones (3.85-7.69s vs 0.68-
-	 * 1.39s). The mechanism is not attraction -- the role gate and the
-	 * support pull both nulled -- it is LINGERING: identical pacing on
-	 * identical cheapest roads means a teammate that falls in beside the
-	 * carrier simply stays there. Humans pass their carrier constantly
-	 * (the relay pattern); they do not co-jog. So the cut is targeted:
-	 * a non-escort continuously within 400u of its own carrier for
-	 * >1.5s pays a surcharge on links that KEEP it there, until it
-	 * separates. Passing stays free; only the co-jog is priced. The
-	 * escort is exempt -- lingering is its entire job.
-	 */
+
 	{
 		qboolean linger_hot = false;
 		vec3_t car_org = { 0, 0, 0 };
@@ -925,21 +899,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 		}
-		/*
-		 * The fighter's two terms, the mirror of the carrier's one.
-		 *
-		 * Range control: a candidate is priced by how far it puts the bot from
-		 * the range the weapon in hand actually wants -- WEAPONS.md 2.1's
-		 * ladders, read back out as a distance by SG_CombatDuel.
-		 *
-		 * Cover: a candidate the target can SEE costs what this bot's own
-		 * state says being seen is worth -- near nothing when healthy and in
-		 * band, the full 900 ms when hurt or holding the wrong gun for the
-		 * distance. One MASK_OPAQUE ray per candidate, the same mask and the
-		 * same shape as the sight gate itself (sg_caco.c:100-114). A fan runs
-		 * about 25 links wide, and the whole term is skipped on every frame
-		 * there is no fight, which is most of them.
-		 */
+
 		else if (duel_route_price)
 		{
 			/* Pressing attackers and fleeing carriers do not sacrifice route
@@ -1119,20 +1079,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		        sg_cv.nobacktrack->value))
 			v *= 1.0f + sg_cv.nobacktrack->value / 100.0f;
 
-		/*
-		 * NOT THROUGH THERE AGAIN (sg_tilt). The lane the last life
-		 * ended in costs a third more for the first twenty-five
-		 * seconds of this one -- fifty if the same lane took two
-		 * lives inside a minute. A third is deliberately a
-		 * PREFERENCE and not a wall: where the map offers a second
-		 * road the bot takes it, and where it does not, the tilt
-		 * loses to the gradient and the bot walks the only corridor
-		 * there is, which is also what the human does after standing
-		 * at the respawn swearing about it. Nothing here is
-		 * permanent and nothing here is written down: the window
-		 * runs out, the lane is forgotten, and the map's real
-		 * lessons stay in the danger dimension where they belong.
-		 */
+
 		if (bot->tilt_lane_n > 0 && SG_TimerPending(bot->tilt_until) &&
 		    sg_cv.tilt->value > 0.0f &&
 		    Tilt_InLane(bot, l->to))
@@ -1182,24 +1129,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				}
 		}
 
-		/*
-		 * THE ESCAPE PRIOR (sg_escapeprior). The exit drawn at the
-		 * grab, spent here: a candidate that leaves the robbed stand
-		 * on the drawn compass bearing is cheaper by the human
-		 * probability of that bearing, for the three seconds the
-		 * bearings were mined over. The bearing is measured from the
-		 * STAND, not from the body -- that is what the corpus
-		 * measured, and it keeps the whole first leg pointed at one
-		 * exit instead of re-deciding as the carrier drifts.
-		 *
-		 * Candidates inside 160 units of the stand carry no bearing
-		 * worth the name and are left alone -- the same displacement
-		 * floor escapepriors.py MIN_RUN_U demanded before it would
-		 * believe a human's bearing. The v > 0 guard is for the one
-		 * case a multiplicative discount inverts: a candidate the
-		 * human-highway prior has already priced below zero would be
-		 * made MORE expensive by scaling toward zero.
-		 */
+
 		if (role == SG_ROLE_CARRY && bot->escprior_bucket >= 0 &&
 		    SG_TimerPending(bot->escprior_until) && v > 0.0f)
 		{
@@ -3302,31 +3232,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/*
-	 * THE FLAG HANDOFF (sg_handoff). The buzzmod toss is an intentional
-	 * alternative to dropping the flag, bounded to a short pass. A carrier
-	 * about to die gives the flag to a teammate who is nearer home
-	 * than it is, instead of dying with it in the open and handing the
-	 * defense a free return.
-	 *
-	 * WHAT drop AND toss ACTUALLY DO HERE. They are the same act. "toss
-	 * flag" is special-cased in Cmd_ItemToss_f (g_cmds.c) into
-	 * ctf_playerdropflag because the flag item's toss slot is NULL; "drop
-	 * flag" reaches ctf_playerdropflag through the item's drop slot
-	 * (g_items.c). Both end in ctf_TossEnt, which lobs at a FIXED
-	 * forward*200 with z=300 -- about 150 units of ground range, not
-	 * settable from the command. So the command word is the owner's
-	 * preference, and the RANGE CAP below is the whole of "limit the range
-	 * a bit": the carrier does not attempt a pass it cannot make. Widening
-	 * the lob itself would mean editing ctf_TossEnt, which also throws
-	 * runes and every death-drop -- game code, not a bot decision.
-	 *
-	 * The receiver is priced on the CARRIER'S OWN home field (goal_field is
-	 * to_{red,blue}_flag for a CARRY bot, set above and not reassigned for
-	 * this role), so "nearer home" means nearer along the route rather than
-	 * nearer in a straight line through a wall, and the line of sight is
-	 * checked so the flag is not lobbed into a doorframe.
-	 */
+
 	if (sg_cv.handoff->value &&
 	    role == SG_ROLE_CARRY && goal_field &&
 	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
@@ -3564,34 +3470,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->railhold_enemy = -1;
 	}
 
-	/*
-	 * TIMING THE CROSSING (sg_railrhythm). Last of the holds and
-	 * deliberately the weakest of them: everything above -- the room
-	 * fight, the plug, the standoff, a defender's post -- is a decision
-	 * about the game, and this is a decision about one doorway. It yields
-	 * to all of them and never argues with the terminal brake or an item
-	 * errand.
-	 *
-	 * THE SHAPE OF IT. The step the surface just chose enters a believed
-	 * railer's sight line, this bot is standing somewhere that same
-	 * railer cannot see, and his last heard shot is old enough that the
-	 * gun is loaded again. That is the moment a human waits -- not for
-	 * long, and not for the shot to be aimed at him. Any rail going off
-	 * anywhere opens the window (SG_RailCold reads the shot table, which
-	 * the ear stamps for every slug in the PHS), and when it does the
-	 * hold releases on the next frame and the crossing happens inside the
-	 * reload.
-	 *
-	 * TWO TRACES, and only when a railer is already known and a step is
-	 * already chosen. Both are the approach-cover ray: candidate seed to
-	 * believed post, and body to believed post.
-	 *
-	 * THE CAP IS THE POINT. Patience runs 0.8s at skill 0 to 1.5s at
-	 * skill 4, a carrier takes the top of that band, and the wait cannot
-	 * be renewed while it is running -- so the worst this feature can
-	 * cost a capture is a second and a half of one leg, once, against a
-	 * lane that was going to be crossed in front of a loaded rail.
-	 */
+
 	if (rail_seed >= 0 && rail_client >= 0 && bestlink >= 0 &&
 	    !rally_hold && !precision && bot->lead_ent == 0 &&
 	    bot->seed >= 0 &&
@@ -3945,38 +3824,8 @@ stag_done:
 	 * retired lateral RUN cannot release the stand for one command frame. */
 	(void)DefenseShiftRetireInvalid(bot, &bestlink, &defense_shift_selected);
 
-	/*
-	 * A defender that has reached its post stands it. The stand is the
-	 * surface's minimum, so descent has nowhere left to go -- pushing
-	 * forwardmove into the pedestal just grinds the wall (Caco spent 66
-	 * straight seconds at spd=68 doing exactly that). Inside 400ms of the
-	 * post: stop, and face the seed an attacker descending on the stand
-	 * would arrive through -- the neighbor whose field value sits closest
-	 * above this one. Combat still owns the view the moment anyone shows.
-	 *
-	 * That 400 is the pin radius, and it is therefore the one live number on
-	 * this path that means "willingness to hold a post" -- so it is what
-	 * camp_tendency scales. Gate widens it by up to 15% and Fiend narrows it
-	 * by the same: the camper settles from farther out, the roamer keeps
-	 * walking until it is standing on the thing. The errand release below is
-	 * untouched, so a needy bot still leaves whatever its persona says. 400
-	 * exactly when no persona applies.
-	 */
-	/*
-	 * THE PAD WAIT (sg_itemlead). An errand that has ARRIVED is the same
-	 * problem the post solved: the goal field's minimum is the pedestal, and
-	 * descent with nowhere left to go grinds the body into it. A player who
-	 * came back early does not stand ON the pad either -- he stops short of
-	 * it, where the approaches are in front of him rather than behind, and
-	 * waits. The standoff is 400ms of field, which at pm_maxspeed is about
-	 * 120 units, and the facing below is the post's own: the neighbour an
-	 * arrival would descend through, overridden by wherever a fresh contact
-	 * says the noise actually is.
-	 *
-	 * First in the chain, so an errand's hold outranks the defender's -- a
-	 * defender on an errand is standing the pad, not the stand, and its
-	 * goal field says so.
-	 */
+
+
 	/* RETURN ends only in the real own-flag/post band.  The objective has
 	 * already replaced any astray-flag/intercept goal with the fixed home
 	 * field, so this fence cannot finish on the weapon pad or a mixed tactic. */
@@ -3995,21 +3844,7 @@ stag_done:
 	{
 		qboolean quiet = defense_quiet;
 
-		/*
-		 * A quiet post permits an errand. Quiet means no believed
-		 * contact -- eye or ear -- near THIS post in six seconds. A fight
-		 * across the map is not a reason for the rank-zero defender to
-		 * become a permanent statue. The own-stand field is already the
-		 * route-time measure used by the rest of this post policy; 2500 ms
-		 * is also the defender pursuit band below. The errand means the
-		 * hold releases and the surface runs, and the surface already
-		 * knows the way: the defend objective pulls back toward the
-		 * stand, the need-weighted item terms pull toward the armor the
-		 * defender is missing, and the sum walks out, grabs, and walks
-		 * back without a single scripted step. The hold only pins a
-		 * defender who has nothing worth fetching or no peace to fetch
-		 * it in.
-		 */
+
 		if (bot->def_supply_armed)
 			goto no_hold;   /* OUTBOUND owns the weapon leg; RETURN can only
 			                  * reach this branch before its finish fence */

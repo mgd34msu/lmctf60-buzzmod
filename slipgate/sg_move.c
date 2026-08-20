@@ -3276,29 +3276,7 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 	}
 }
 
-/*
- * IN-WORLD PLAN DRAWING (sg_drawplan, capability census gap 9).
- *
- * A route defect is obvious to the eye and nearly invisible in a log: an
- * orbit, a chain that doubles back on itself, a belief parked inside a
- * wall. Set sg_drawplan to a bot's client number PLUS ONE (or -1 for every
- * bot) and once a second that bot draws what it has committed to -- a beam
- * from the body to the current link's destination, a second beam on to
- * where the route field goes after that, and a short post at every enemy
- * position its own team still believes in. A spectator then watches the
- * decision instead of reconstructing it.
- *
- * Cost when the cvar is 0, which is always in a real match: one float
- * compare per bot per frame. The cvar itself is read inside, so it is read
- * at most once per bot per second and never on a hot path.
- *
- * The wire format is the mod's own bfg-laser emission, copied from
- * g_weapon.c (bfg_think, the TE_BFG_LASER block): svc_temp_entity, the
- * effect byte, two positions, one multicast. The scope is the single
- * deviation -- MULTICAST_ALL instead of that site's MULTICAST_PHS, because
- * the spectator doing the diagnosing is rarely within earshot of the bot he
- * is watching, and a debug overlay that is off by default can afford it.
- */
+
 static void SG_PlanBeam(vec3_t from, vec3_t to)
 {
 	sg_host.write_byte(svc_temp_entity);
@@ -3721,25 +3699,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						{
 							SG_TimerArm(&bot->hookban_until, 20.0f);
 							bot->hookfail_streak = 0;
-							/*
-							 * Arming the hook ban releases any committed
-							 * leg that needs the hook, so the pricing skip
-							 * can take effect at the next replan.
-							 * Think_CommitLink (sg_descend.c) holds a
-							 * chosen link across frames until it arrives,
-							 * overachieves, times out, or gets shelved --
-							 * none of which fires just because a rope got
-							 * banned this frame. Left holding a hook leg,
-							 * the router keeps re-affirming the same
-							 * banned link every think and the body has
-							 * nothing left it is allowed to execute: it
-							 * stands at the anchor point for the length of
-							 * the ban. Clearing the commitment through the
-							 * same field a finished ride clears (commit_link
-							 * = -1) forces a fresh pick next think, and the
-							 * RL_HOOK skip already in the pricing loop
-							 * steers that pick onto a walking route.
-							 */
+
 							if (bot->commit_link >= 0 &&
 							    bot->commit_link < SG_Rune()->hdr.num_links &&
 							    SG_Rune()->links[bot->commit_link].action ==
@@ -4140,21 +4100,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * legs are the bottleneck. Cooldown keeps it a burst,
 				 * not a lifestyle.
 				 */
-				/*
-				 * FREERIDE (sg_freeride, off-graph movement). The speed hook was
-				 * already the
-				 * right tech; the judges' 3-18% human off-graph mass
-				 * against our 0.026 was a DOSE gap: the burst was gated
-				 * to the far half of the map (goal_field > 4000), one
-				 * rope per 4s, and a straight-ahead probe only. Under
-				 * freeride the runway reaches the approach (> 2000 --
-				 * the no-ropes-in-the-house rule still owns the flag
-				 * room), the cooldown halves, the speed window's top
-				 * lifts to 560 (humans chain ropes off fast runs), and
-				 * a missed straight probe retries once at +/-22 deg --
-				 * the corner sling. Everything else -- persona taste,
-				 * the worth bar, the plane test, hookban -- unchanged.
-				 */
+
 				if (bot->hook_phase == 0 && !bot->engaged_last &&
 				    SG_TimerReady(bot->hookban_until) &&
 				    SG_TimerReady(bot->speedhook_next) &&
@@ -4164,19 +4110,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				          sg_cv.ropetravel->value > 0.0f)
 				             ? 2000 : 4000))
 				{
-					/*
-					 * ROPE-PRIMARY TRAVEL (sg_ropetravel, movement behavior
-					 * named blocker): humans TRAVEL by rope -- 3-18%
-					 * of their samples are flight -- and the
-					 * arithmetic killed every occasional-rope cut
-					 * (0.3% of player time at doubled volume). Under
-					 * ropetravel the successful ride's cooldown drops
-					 * to a 0.25s chain beat (set at the landing/apex
-					 * sites), the speed ceiling lifts to 700 so fast
-					 * landings chain, and the apex-chaining machinery
-					 * already in the tree does the rest. The rope
-					 * becomes the gait; legs become the connector.
-					 */
+
 					float hsp2 = e->velocity[0] * e->velocity[0]
 					           + e->velocity[1] * e->velocity[1];
 					float hcap = (sg_cv.ropetravel->value > 0.0f) ? 700.0f :
@@ -5522,20 +5456,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			bot->nav_drove = false;     /* not the route's fault */
 		}
 
-		/*
-		 * WAITING OUT A RELOAD (sg_railrhythm). The wait happens where
-		 * the body already is, because the decision above only arms it
-		 * from a spot the railer cannot see -- the last cover point is
-		 * the one being stood on. No walk to it, no facing change: the
-		 * eyes stay on the route and combat, which never stops, keeps
-		 * whatever target it was holding.
-		 *
-		 * THE TERMINAL BRAKE OUTRANKS IT, literally: bot->term_brake is
-		 * set earlier in this same stage and a value under 1.0 means the
-		 * body is throttling into a link that has to be entered at a
-		 * measured speed. A hold dropped on top of that would strand the
-		 * bot mid-corner. The brake wins and the crossing goes ahead.
-		 */
+
 		if (rail_hold && have_move && bot->term_brake >= 1.0f &&
 		    !tc->jump_launch && !bot->jump_started && !bot->drop_started)
 		{
@@ -7478,20 +7399,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		return;
 	}
 
-	/*
-	 * The basis the engine will actually use, not a convenient one.
-	 *
-	 * Pmove builds it before every land move (pmove.c, PM_AirMove; quoted at
-	 * bl_main.c:347-370): the view angles with PITCH divided by three, and
-	 * then wishvel[i] = forward[i]*fmove + right[i]*smove for i in {0,1}. So
-	 * forward's horizontal length is scaled by cos(pitch/3) while right stays
-	 * fully horizontal. Solving against a pitch-zero basis makes the engine
-	 * reconstruct a different direction than the one asked for -- shorter, and
-	 * skewed toward the strafe axis, which lowers wishspeed and with it the
-	 * acceleration. Here the navigation view is pitch zero, so the division
-	 * changes nothing today; it is written the engine's way so that it stays
-	 * correct the moment the body pitches.
-	 */
+
 	{
 		vec3_t basis;
 
@@ -7504,30 +7412,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		AngleVectors(basis, basis_fwd, basis_right, NULL);
 	}
 
-	/*
-	 * The weave, decided here and applied per step below.
-	 *
-	 * A bot whose route has run out -- no improving link, or a destination it
-	 * is already standing on top of -- has nothing left to spend its movement
-	 * on, and standing still in a firefight is the one thing that is certainly
-	 * wrong. So it oscillates sideways instead. The direction needs no work:
-	 * combat has already put the view on the target, and pmove's own basis
-	 * makes `right` exactly perpendicular to that view in the horizontal plane
-	 * -- with roll zero, right = (sin yaw, -cos yaw, 0) regardless of pitch
-	 * (AngleVectors, q_shared.c). sidemove alone is therefore across the enemy
-	 * line by construction, and forwardmove is dropped so the weave adds no
-	 * drift along it.
-	 *
-	 * The period and phase are bound to the immutable bot ownership and current
-	 * client life, not the recyclable slot or the squad-wide clock: four bots
-	 * weaving on one phase are one wide target. The period stays near two-thirds
-	 * of a rocket's flight time at close range.
-	 *
-	 * Never for the carrier (2.4-D2 is a route, not a fight), never with a
-	 * rope out (the hook SETS velocity -- an off-axis input accumulates into
-	 * nothing), and never on the final approach, where the whole point is
-	 * being able to stop on the flag.
-	 */
+
 	/* sg_noweave disables lateral combat oscillation for comparison. */
 	if (duel && !hold_post && role != SG_ROLE_CARRY && !precision &&
 	    bot->hook_phase == 0 &&
@@ -7549,25 +7434,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/*
-	 * Execute the frame in physics steps, and decide the movement again on
-	 * every one of them.
-	 *
-	 * The angle that keeps PM_Accelerate paying depends on the current
-	 * velocity, and the velocity is exactly what the previous step just
-	 * changed: a command computed at 300 is the wrong command by the time the
-	 * bot is doing 500. The landing jump wants the very step the bot touches
-	 * down, and a bot that only gets one chance per tenth of a second spends
-	 * far longer on the floor than a player whose client sends a dozen
-	 * commands in the same window. A real client does this continuously; this
-	 * is the bot catching up to that, not overtaking it.
-	 *
-	 * The clock is not touched. msec is the frame's real time, and the steps
-	 * are that integer split with the remainder spread over the first few, so
-	 * they sum to exactly what passed -- eight steps of 13ms for a 100ms frame
-	 * would be 104ms of simulation for 100ms of play, which is free speed
-	 * rather than finer movement. Finer decisions, never a longer clock.
-	 */
+
 
 	/* Occasionally ease off on safe grounded travel. Carrying, combat, hooks,
 	 * and danger cancel the breather immediately. */
@@ -7634,28 +7501,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		rem = total % sub;
 		sub_steps = sub;
 
-		/*
-		 * Combat rides the frame's command: view and trigger only, movement
-		 * untouched. It writes the base cmd once and every subframe inherits
-		 * it. Ordering rule from sg_combat.h: at hook_phase 1 the cmd angles
-		 * ARE the anchor bearing (the rope fires along v_angle), so combat
-		 * must not steal the view that frame.
-		 *
-		 * Phase 2 -- rope out, being pulled -- used to be gated out too, on the
-		 * assumption that shooting and grappling could not share the attack
-		 * button. That is true only when the grapple is pers.weapon
-		 * (g_cmds.c:1405-1412), which SG_CombatFrame now guarantees never
-		 * happens (WEAPONS.md rule S3). An OFFHAND rope is sustained by
-		 * ClientEndServerFrame with no button and no view input
-		 * (p_view.c:988-990), and while it pulls it SETS velocity outright
-		 * (p_weapon.c:2071-2102) -- so the view costs the movement nothing on
-		 * those frames and the trigger is free. That is WEAPONS.md 2.4-D2's
-		 * flee doctrine: a carrier that grapples and shoots at the same time.
-		 *
-		 * Phase 3 stays gated out for the opposite reason: the rope is gone,
-		 * the bot is flying its own landing on forwardmove down the chosen yaw
-		 * (above), and a view stolen there is a landing missed.
-		 */
+
 		if (!proved_control && bot->hook_phase != 1 && bot->hook_phase != 3 &&
 		    !(bot->hook_phase == 2 && !bot->speedhook) &&
 		    bot->rj_phase == 0 && bot->nade_phase == 0)
@@ -8025,25 +7871,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			AngleVectors(basis, basis_fwd, basis_right, NULL);
 		}
 
-		/*
-		 * THE SPAWN BEAT'S EYES. The last writer before the slew, so it
-		 * is looking around rather than arguing with navigation about
-		 * where to look; the slew below then carries the sweep at
-		 * sg_turnrate like any other ask, which is why this asks for an
-		 * ANGLE and not a rate.
-		 *
-		 * The sweep is centred on the heading the frame already wanted --
-		 * the route's, this early -- so the beat ends looking down the
-		 * road it is about to run instead of snapping back onto it. One
-		 * full sine over the window is centre, one shoulder, through
-		 * centre, the other shoulder, centre: what a player's mouse does
-		 * in the half second after the screen comes back.
-		 *
-		 * Danger ends it on the frame danger arrives. `engaged` is
-		 * combat's live answer, not last frame's, and the damage ring
-		 * catches the shot that came from somewhere the eye had not got
-		 * to yet -- which, spawning, is most of the map.
-		 */
+
 		if (!aimed_fire_requested && !nade_release &&
 		    SG_TimerPending(bot->beat_until))
 		{
@@ -8067,44 +7895,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
-		/*
-		 * THE AIR-STRAFE CHAIN, armed once a frame and spent per sub-step
-		 * (sg_airstrafe: 0 off, 1 the lean, 2 the lean and the hops).
-		 *
-		 * The angle is the engine's and is derived at SG_AirStrafeCmd; what
-		 * is decided here is whether the body is allowed to fly it, and
-		 * which way the swing is leaning at this instant.
-		 *
-		 * THE SWING. sin() over SG_AS_PERIOD, plus the standing heading
-		 * error over SG_AS_CORR. The bias is the whole of the anti-drift:
-		 * the lean is measured off the direction of TRAVEL, so a swing held
-		 * one way walks the body off its road, and adding the error to the
-		 * sinusoid gives the correcting shoulder the longer half of every
-		 * cycle. Past SG_AS_ABORT the error is not a lean to be biased, it
-		 * is a turn to be made, and the chain ends.
-		 *
-		 * THE VETOES, in the order they are worth stating: never on a rope
-		 * (the hook SETS velocity and an off-axis input accumulates into
-		 * nothing), never while combat is live (`engaged`, this frame's
-		 * answer, not the belief), never with the terminal brake down
-		 * (bot->term_brake is the carrier's cornering throttle -- a chain
-		 * there is a flag missed), never inside SG_AS_FLAGKEEP of a stand,
-		 * never on the final approach, in water, ducked, mid-rocket-jump,
-		 * mid-bomb, or through the spawn beat.
-		 *
-		 * THE ROAD. A hop chain commits the body for the length of a
-		 * flight, so it wants a road to spend that on: run_link and
-		 * open_ahead say the next step is ground running with room in it,
-		 * and SG_RunRoom walks the same seeds the lookahead trusts, holds
-		 * the point a stride down them, and asks whether the chord to it is
-		 * straight, on-heading, and clear of the player box.
-		 *
-		 * THE APPETITE. The bar on that road is divided by the persona's
-		 * hook enthusiasm -- the trait that already means "appetite for the
-		 * optional piece of movement tech" -- so the keen bots commit on
-		 * roads the cautious ones walk. Same +/-15% band every other
-		 * consumer gets, and sixteen bots stop doing it identically.
-		 */
+
 		{
 			float dose = sg_cv.airstrafe->value;
 			float sp = sqrtf(e->velocity[0] * e->velocity[0] +
@@ -8328,23 +8119,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				                  - e->client->ps.pmove.delta_angles[PITCH];
 			}
 
-			/*
-			 * THE LEGS ARE FREE OF THE EYES. Movement was welded to the
-			 * view -- forwardmove always ran down the gaze -- which is
-			 * why the look-ahead experiment steered bodies into walls,
-			 * why hook aim needed a standing frame, and why the fleet
-			 * read as a mob of people walking wherever they happened to
-			 * be staring (called out in exactly those words). A Quake
-			 * body translates in four directions relative to ANY view:
-			 * the course is a world-space fact (move_dir, the fan's
-			 * answer), the view is whatever combat or the rope or the
-			 * route wants, and forward/side are just the course
-			 * decomposed into the ACTUAL slewed view frame, every
-			 * subframe, so even mid-turn the body holds its line.
-			 * Underwater stays welded -- pmove swims along the full
-			 * view vector by design, and the swim pitch already aims
-			 * the view down the course.
-			 */
+
 			if (plain_forward > 0 && have_move && e->waterlevel <= 1)
 			{
 				vec3_t vb, vf, vr;
@@ -8572,19 +8347,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				              open_ahead, run_link,
 				              (float)cmd->msec / 1000.0f, airp);
 
-				/*
-				 * THE CARRIER'S JINK. In 5v5/7v7 play, 30 of 64 carrier deaths
-				 * went to the
-				 * rail, escorts standing right there for 54 of the 65
-				 * carries -- a screen does not bend a hitscan line, only
-				 * the target's own motion does. This is NOT the weave
-				 * (2.4-D2 stands: a carrier never trades its route for a
-				 * fight): forward motion is kept whole and a half-rate
-				 * side component serpentines the line of travel, ~26
-				 * degrees of wander for ~11%% of the pace, only while a
-				 * fresh contact (3s) is believed and the legs are on the
-				 * ground doing route work.
-				 */
+
 				/* Carrier jinks require open ground so lateral motion cannot
 				 * override a nearby collision veto. */
 				if (role == SG_ROLE_CARRY && cmd->forwardmove != 0 &&
@@ -8629,19 +8392,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->sidemove = (short)(cmd->sidemove * 0.30f);
 			}
 
-			/*
-			 * DE-PACE (sg_depace, behavior cut #4). The post-zone split
-			 * killed the defender hypothesis: 86-89% of the escort
-			 * gap is mid-field co-travel, and the anti-linger
-			 * surcharge nulled because corridors have no lateral room
-			 * -- every candidate link sits inside the carrier's 400u
-			 * bubble, so a spatial price has no gradient. Humans
-			 * separate TEMPORALLY: varied speeds, item stops,
-			 * staggered starts. A lingering non-escort eases off the
-			 * throttle (cvar = the scale) until it falls out of the
-			 * bubble; the carrier never slows, the convoy de-phases,
-			 * and in film it reads as pacing variation, not flight.
-			 */
+
 			if (bot->linger_hot && !proved_control &&
 			    sg_cv.depace->value > 0.0f)
 			{
@@ -9982,24 +9733,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			vec3_t td;
 			qboolean arrived, attached;
 
-			/*
-			 * NO attach-point verification, on evidence. Release
-			 * conditions track the DESTINATION, so a rope biting 50-150
-			 * off its proven anchor still flies a working ride -- lmctf03
-			 * converted 95% that way all along. Policing the anchor
-			 * (tried at 48, then 96) turned every imperfect rope into a
-			 * 10Hz fire-abort strobe: 2704 aborts, 9 landings, zero
-			 * kills. Rides that genuinely fail are caught where failure
-			 * is real -- the field-served check at landing, which
-			 * shelves the link (HOOKFAIL).
-			 *
-			 * But MEASURE the bite: 78-87 percent of rides fail the
-			 * field test across four maps, and the two suspects for
-			 * wrong bites at scale are teammates' bodies (the bolt
-			 * clips MASK_SHOT, which includes players) and doors closed
-			 * at runtime that generation held open for the rope-line
-			 * proof. The attach entity's classname names the culprit.
-			 */
+
 			if (sg_cv.debug->value &&
 			    e->client->hook && e->client->hook->hook_target &&
 			    !bot->hook_bite_logged)
@@ -10036,20 +9770,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			arrived = (td[0] * td[0] + td[1] * td[1] < 80.0f * 80.0f &&
 			           td[2] > -96.0f && td[2] < 96.0f);
 
-			/*
-			 * THE EARLY RELEASE -- ride the rope only as long as the
-			 * rope is doing something momentum cannot. The old release
-			 * conditions rode every rope to its terminus (observed
-			 * live: a bot riding all the way onto the platform where a
-			 * human cuts loose under the ceiling and lets the throw
-			 * fling them through the door into a bhop chain). Each ride
-			 * frame projects the ballistic throw: velocity toward the
-			 * destination within ~35 degrees, arrival inside 1.2s, and
-			 * the parabola landing within a jumpable window of the
-			 * destination height -- cut NOW, fly the rest, keep every
-			 * unit of speed. flow_release skips the landing brake: the
-			 * whole point of the cut is what happens after it.
-			 */
+
 			if (bot->speedhook && attached)
 			{
 				float hd2 = sqrtf(td[0] * td[0] + td[1] * td[1]);

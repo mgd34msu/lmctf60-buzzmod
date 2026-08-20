@@ -164,33 +164,7 @@ SG_GOAL_PRIVATE int Rally_CoverSeed(const rune_t *r, int from)
 
 #undef SG_GOAL_PRIVATE
 
-/* ----------------------------------------------------------------- the mega
- *
- * (c) THE ROLE GATE. The state half of the price lives with combat
- * (SG_WorthMega); this is the half that knows what the bot is FOR, and every
- * branch of it errs the same way -- toward not detouring. A mega taken is
- * worth 100 points of margin; a mega taken by the wrong bot at the wrong
- * moment is a flag, and those do not trade evenly.
- *
- *   CARRY    never. The carrier's job is the ground between here and home and
- *            nothing else; legcarrier dose 3 already says a healthy carrier
- *            does not shop, and this says the hurt one does not either -- a
- *            carrier stopping for 100 hp is a carrier standing still on a pad
- *            the enemy knows the location of.
- *   ESCORT   never, and for the same reason from the other side: the escort
- *            role exists only while there IS a live carrier of ours, so an
- *            escort on an errand is a carrier without a screen.
- *   RECOVER  never. Our flag is astray; there is no lull to spend.
- *   ATTACK   yes, except under the conductor's downbeat -- the push is a bar
- *            the team steps off on together and detours wait for the next one.
- *            "Pre-push" is exactly what the un-armed window is.
- *   DEFEND   yes on a lull, which is the same six seconds of no believed
- *            contact the pad wait already asks for. A defender who can hear
- *            somebody is a defender at the stand.
- *
- * And nobody in a fight: a bot with a live duel has a better use for the next
- * four seconds than a walk.
- */
+
 static float Mega_Worth(sg_bot_t *bot, edict_t *e, sg_role_t role)
 {
 	int team = e->client->ctf.teamnum;
@@ -1614,20 +1588,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	const int *route_field;
 	qboolean route_pure;
 
-	/*
-	 * The role's principal field:
-	 *   carrier  -> own stand (the capture point)
-	 *   defender -> own stand's surroundings (the home field IS the post)
-	 *   recover  -> OUR flag where belief puts it: the -now field for our own
-	 *               flag, which floods from the believed position when it is
-	 *               astray and from home otherwise
-	 *   escort   -> our carrier's believed position (the support field, used
-	 *               here as the objective rather than as a side term)
-	 *   attacker -> the enemy flag WHERE BELIEF PUTS IT (home stand, or the
-	 *               spot it was last seen lying, via the -now field)
-	 * When our flag is astray and its taker was seen, the intercept field
-	 * (their believed position) joins the composition for non-carriers.
-	 */
+
 	if (role == SG_ROLE_CARRY || role == SG_ROLE_DEFEND)
 	{
 		goal_field = (team == CTF_TEAM_RED) ? sg_fields.to_red_flag
@@ -1987,23 +1948,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	tc->mega = tc->strike_blocks_optional ? 0.0f
 	                                      : Mega_Worth(bot, e, role);
 
-	/*
-	 * NO CAMPING THE PAD, and no obsession either -- the offer is bounded in
-	 * TIME as well as in road.
-	 *
-	 * The term's shape has a well at the pad: detour is zero standing on it
-	 * and grows in every direction, which is what makes the bot walk there.
-	 * Ordinarily the well destroys itself -- arriving means touching the
-	 * item, the health goes to 200, SG_WorthMega reads 0 on that same frame
-	 * and the well is gone. But a bot that cannot quite reach the pad (a lip
-	 * the body will not climb, a door it cannot open) would otherwise sit in
-	 * the well indefinitely, and sitting there is worth exactly nothing:
-	 * MegaHealth_think bleeds the overheal back off at 1 hp/s from the moment
-	 * of pickup and the pad itself is on a 20 s respawn, so the prize is not
-	 * something you can wait for the way you wait for a quad. Twelve seconds
-	 * of standing offer without a pickup is a route that is not working; drop
-	 * it and refuse another for the pad's own respawn period.
-	 */
+
 	if (tc->mega > 0.0f && SG_TimerPending(bot->mega_next))
 		tc->mega = 0.0f;
 	if (tc->mega > 0.0f)
@@ -2057,21 +2002,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	                      goal_field[bot->seed] < SG_FIELD_INF)
 	                     ? goal_field[bot->seed] : -1;
 
-	/*
-	 * STRATEGY AND TACTICS (sg_tactics). The
-	 * architecture: strategy is long-term and hard to change -- the role
-	 * and its destination field, already sticky at 0.3 changes a minute.
-	 * Tactics are room-scale goals that SERVE it: a committed waypoint
-	 * picked from the band 0.8-2.5 seconds down the strategic gradient,
-	 * scored ONCE with the full composed surface -- items, danger,
-	 * cover, all of it -- then held. Between commitments the per-frame
-	 * descent runs on the waypoint's own flood, a single stable field
-	 * with nothing to tie against: strategy and tactics stop fighting
-	 * in one equation at ten hertz, which is where the Brownian walk
-	 * was born. The waypoint retires on arrival, on strategy change,
-	 * on staleness (10s), or on unreachability -- the smooth
-	 * transition, priced at the tactical boundary and nowhere else.
-	 */
+
 	route_field = goal_field;
 	route_pure = false;
 	if (!tc->strike_blocks_optional && sg_cv.tactics->value &&
@@ -2107,19 +2038,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 
 		if (need)
 		{
-			/*
-			 * The owner's five questions, as code. (1) this room's
-			 * goal: the waypoint, picked from the band one room down
-			 * the strategic gradient. (2) the NEXT room's goal: g2,
-			 * picked the same way from the band beyond. (3)+(4) the
-			 * next room reaches back into this one: each waypoint
-			 * candidate pays the graph cost from itself to g2, so
-			 * the door chosen out of this room is the one that faces
-			 * onward -- a decision here made better because of what
-			 * comes next. (5) every band descends the role's own
-			 * strategic field: tactics can only ever serve strategy,
-			 * never replace it.
-			 */
+
 			static int g2_field[SG_MAX_SEEDS];
 			int s10, best10 = -1, g2 = -1, cur = goal_field[bot->seed];
 			float bv10 = 1e30f, gv10 = 1e30f;

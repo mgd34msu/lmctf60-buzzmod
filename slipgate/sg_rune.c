@@ -1,21 +1,4 @@
-/*
- * sg_rune.c -- generating what the map affords.
- *
- * Seeding: players verifiably stand where the map put things -- spawn
- * points, items, flags. Those are the germs. From each, candidates spread
- * outward on a lattice; each candidate is kept only if a player-sized box
- * can stand there (trace down finds a floor, the box does not start solid).
- * The spread repeats from every kept seed until nothing new survives, so
- * the seed set grows to cover exactly the ground a player could reach by
- * existing there -- not the void, not the unreachable dark.
- *
- * Proving: for every pair of seeds within reach of each other, the oracle
- * rolls the real physics: stand a phantom on the source, aim it at the
- * target, feed it honest usercmds (run first; one direct jump if plain running
- * failed), and watch. Arrival within tolerance writes a link with the real
- * elapsed time as its cost and the arrival speed as its exit state. No
- * arrival, no link -- there is no third outcome and no guessing.
- */
+
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
@@ -1020,7 +1003,7 @@ static qboolean Prove(int from, int to, qboolean jump,
 			 * seeds sit 64 or more from any lip, so eight drop links existed
 			 * on a map of balconies and 53 frontier plateaus stayed cut off
 			 * for want of one run-off each. Probe out to three ranges, and
-			 * once an edge heading is chosen HOLD it between steps -- 
+			 * once an edge heading is chosen HOLD it between steps --
 			 * re-deciding every step turned the walk to the lip into a
 			 * dither at the lip.
 			 */
@@ -1075,19 +1058,7 @@ static qboolean Prove(int from, int to, qboolean jump,
 			}
 		}
 
-		/*
-		 * Steer like a mover, not a moth. Aiming dead at the target walks
-		 * the phantom into doorframes and pillar corners, where it grinds
-		 * until the budget dies -- and because the offending corner differs
-		 * with direction, the same pair proves one way and fails the other.
-		 * That asymmetry, 118 flat one-way cuts on lmctf03, is what severed
-		 * the map. Feelers: take the openest heading nearest the target
-		 * line, the same fan the live bot walks with.
-		 *
-		 * This is the RUN controller only. A JUMP is a replayable direct arc:
-		 * every 25 ms command aims at the destination itself, with no fan-selected
-		 * detour that would need additional serialized state at runtime.
-		 */
+
 		if (!jump)
 		{
 			static const float fan[5] = { 0, -35, 35, -75, 75 };
@@ -1453,21 +1424,7 @@ static qboolean ProveHook(int from, int to, vec3_t control_out,
 	return false;
 }
 
-/*
- * ENTRY ENVELOPE HELPERS.
- *
- * A link's heading field is the compass direction the traversal was entered
- * on, one byte wrapping the circle: 256 steps of 1.40625 degrees. atan2f
- * returns -pi..pi, so the angle is folded into 0..2pi before it is scaled --
- * casting a negative float to byte is not a wrap, it is undefined, and the
- * fold costs nothing.
- *
- * Only a prover that actually knows the entry direction fills these in. Run
- * and jump links keep the slack of 255 Link_Add gives them, which says
- * plainly "this was entered from wherever the phantom happened to be facing
- * and the record cannot claim better". Recording a made-up cone would be
- * worse than recording none.
- */
+
 static byte Heading_Quantize(float dx, float dy)
 {
 	float a = atan2f(dy, dx);
@@ -2076,24 +2033,7 @@ fail:
 	return false;
 }
 
-/* ===================================================================
- * DECLARED MECHANISMS: water volumes, lifts, teleporters.
- *
- * Why these three cannot come out of the pair loop above:
- *
- *   water   Seed_Ground only ever returns FLOOR points, and only floors
- *           within its down-trace. A pool deeper than that seeds nothing,
- *           and the volume between surface and floor -- where a swimmer
- *           actually is -- was never a candidate at all. lmctf03's pools
- *           are therefore holes that cut the graph in two.
- *   lift    a func_plat does not move during generation (no think runs),
- *           so no phantom can ride one. The traversal is real but
- *           unprovable by simulation; it is recorded from the plat's own
- *           spawn data instead, with the cost read out of g_func.c.
- *   teleport the transport is not movement at all -- teleporter_touch
- *           assigns the destination origin. There is nothing to prove
- *           beyond both ends existing.
- * =================================================================== */
+
 
 #define SG_WATER_SPACING	64.0f		/* the water lattice, 3D */
 #define SG_WATER_MAX		8192		/* cap: a big ocean must not eat SEED_MAX */
@@ -2273,22 +2213,7 @@ static int Seed_WaterNeighbours(vec3_t from)
 	return added;
 }
 
-/*
- * Seed the water. Two stages, the same shape as Seed_Germinate + Seed_Flood:
- *
- *   entry  every seed the dry passes produced looks one lattice step around
- *          its own body height for water. A shore seed beside a pool finds
- *          it horizontally; a seed standing in the shallows finds it below.
- *   flood  from every water seed already found, breadth-first through the
- *          volume in 3D until the water runs out.
- *
- * There is deliberately no walk-path check here -- the box trace Seed_Flood
- * runs between parent and child asks "could a walker get there", which is
- * the wrong question about a body that is swimming. The water flood is its
- * own pass precisely so that test does not apply to it; whether the two
- * ends are actually connected is settled later, by Prove(), which rolls the
- * real physics through the water like any other link.
- */
+
 static void Seed_Water(void)
 {
 	static const float around[4][2] = {
@@ -2755,35 +2680,7 @@ static int Gen_LiftEgressSeed(vec3_t top_body, float horiz, edict_t *plat,
 	return best;
 }
 
-/*
- * What a plat costs to ride, read out of g_func.c rather than guessed.
- *
- * SP_func_plat (g_func.c:494) defaults speed to 20 and otherwise scales the
- * mapper's value by 0.1 (g_func.c:504-507); accel and decel default to 5 the
- * same way (g_func.c:509-517), and all three are copied into moveinfo
- * (g_func.c:548-550). Move_Calc then picks one of two integrators
- * (g_func.c:101):
- *
- *   speed == accel == decel -- Move_Begin sets velocity = dir * speed and
- *       waits remaining_distance / speed SECONDS (g_func.c:86-89). speed is
- *       units per second in this branch.
- *
- *   otherwise -- the accelerative branch, Think_AccelMove, which subtracts
- *       current_speed from the remaining distance once per 0.1s frame and
- *       pushes at current_speed * 10 (g_func.c:317, 328). speed is units per
- *       FRAME here, so the default plat really travels 200 units a second,
- *       which is why SP_func_plat divides the mapper's number by ten. This
- *       is the branch a default plat takes: 20 != 5.
- *
- * The ramp comes from plat_CalcAcceleratedMove: AccelerationDistance is
- * target * ((target / rate) + 1) / 2 (g_func.c:212), and when the move is
- * too short to reach full speed the peak comes out of its own quadratic
- * (g_func.c:230-237). Frames become seconds at FRAMETIME.
- *
- * Only the travel is charged. plat_hit_top parks the plat for three seconds
- * before it returns (g_func.c:344) and a rider may have to wait for it to
- * arrive; that is a queueing cost the runtime can see and the graph cannot.
- */
+
 static short Plat_TravelMs(edict_t *e)
 {
 	float speed = e->moveinfo.speed;
@@ -2835,25 +2732,7 @@ static short Plat_TravelMs(edict_t *e)
 	return (short)(secs * 1000.0f);
 }
 
-/*
- * Lift links. A plat's two positions are fixed at spawn: pos1 is the top and
- * is the entity's spawn origin, pos2 is the top minus the height (st.height,
- * or the model's own thickness less st.lip) -- SP_func_plat, g_func.c:525-531,
- * comment included. A plat with no targetname is then moved to pos2 and
- * starts at the bottom (g_func.c:541-546), which is where it stands while the
- * rune is generated: the seeds on top of it are at its bottom height.
- *
- * A brush model's mins/maxs come from sg_host.setmodel and are relative to the
- * entity origin, so the standable face at either position is
- * (position + maxs[2]) with the model's own centre in x and y.
- *
- * The two ends are the nearest seed to the bottom face (the seed sitting on
- * the plat itself) and the nearest seed to the top face (the ledge the plat
- * delivers to -- there is no seed hanging in the air where the plat is not).
- * The search reaches the plat's own half-diagonal plus a lattice step out.
- * The ride point is stored in the link's anchor, the way drop and hook links
- * store theirs: it is where the body has to stand for the plat's trigger.
- */
+
 static void Link_Plats(void)
 {
 	edict_t *e;
@@ -2956,29 +2835,7 @@ static void Link_Plats(void)
 				gen_lift_links++;
 		}
 
-		/*
-		 * The way back down. The lift link is one-way by construction, and a
-		 * plat cannot carry a body down on demand:
-		 *
-		 *   Touch_Plat_Center (g_func.c:417-430) sends the plat UP when it is
-		 *   at STATE_BOTTOM, but when it is at STATE_TOP the touch does the
-		 *   opposite of a ride -- "ent->nextthink = level.time + 1; // the
-		 *   player is still on the plat, so delay going down" (g_func.c:429).
-		 *   Standing on a top-parked plat therefore postpones its descent for
-		 *   as long as the body keeps standing there. The descent that does
-		 *   happen is the timer plat_hit_top arms (think = plat_go_down,
-		 *   nextthink = level.time + 3, g_func.c:349-350), and it fires only
-		 *   once the rider has stopped touching the trigger -- i.e. once they
-		 *   have already left.
-		 *
-		 * So there is no reverse RL_LIFT to write, and none is written. What
-		 * covers the downward direction is ordinary physics: step off the
-		 * ledge beside the plat. ProveDrop is asked for exactly that, top seed
-		 * to bottom seed, and if it proves, the link is a real proven drop
-		 * with a real lip in its anchor. If it does not prove, the hole is
-		 * named out loud rather than papered over with a link no body could
-		 * follow.
-		 */
+
 		if (Link_Exists(st_top, approach))
 			continue;               /* the pair loop already got down there */
 		{
@@ -3015,20 +2872,7 @@ static void Link_Plats(void)
 		           gen_lift_links, gen_lift_down_drop, gen_lift_down_none);
 }
 
-/*
- * Teleporter links. SP_misc_teleporter (g_misc.c:1925) frees any pad without
- * a target and spawns a small trigger over the pad origin carrying the pad's
- * target (g_misc.c:1946-1955). On touch, teleporter_touch resolves the
- * destination with G_Find (NULL, FOFS(targetname), self->target)
- * (g_misc.c:1883) -- the same one call made here -- copies the destination
- * origin onto the player and lifts it ten units (g_misc.c:1893-1895), clears
- * velocity and holds the body for 160ms (g_misc.c:1898-1900).
- *
- * Nothing here is proven, because nothing here is movement: the game assigns
- * the arrival. The only claim the link makes is that both ends are places a
- * body can be, which is what having a seed within SG_PAD_REACH of each means.
- * The 500ms cost covers the walk onto the pad and the engine's hold.
- */
+
 static void Link_Teleporters(void)
 {
 	edict_t *e, *dest;
@@ -4329,29 +4173,7 @@ static void Link_Doors(void)
 
 #undef DOOR_WAIT_MAX
 
-/* ===================================================================
- * ROCKET JUMPS.
- *
- * A rocket jump is the only traversal in the graph that costs the mover
- * HEALTH, and that single fact shapes the whole pass:
- *
- *   - it runs LAST, after every other prover, because a rocket jump is only
- *     worth recording where nothing cheaper already gets there;
- *   - a pair is only offered to the prover when it needs the lift (the
- *     destination is well above the source) and could plausibly get it (below
- *     the ceiling the physics itself implies, SG_OracleRocketJumpCeiling);
- *   - a proven traversal is still THROWN AWAY if the graph already reaches
- *     the destination for less than three times what the jump cost, because
- *     a link that adds no reach is a link that only ever costs blood;
- *   - the price is recorded in the link (anchor[2], see sg_rune.h) so the
- *     runtime spends it deliberately.
- *
- * The proof itself is the oracle's, not this file's: pmove supplies the jump,
- * SG_OracleRocketJumpAim supplies the detonation point and the rocket's own
- * travel time, SG_OracleRocketJumpStep supplies the push exactly as
- * T_RadiusDamage and T_Damage would, and SG_OracleRun integrates the flight.
- * The prover only chooses the aim and judges the landing.
- * =================================================================== */
+
 
 #define SG_RJ_MIN_RISE		80.0f	/* below this a plain jump (or a jump link
                                      * the pair loop already proved) does the
@@ -4372,28 +4194,7 @@ static void Link_Doors(void)
 static int rj_pairs, rj_tries, rj_noboom, rj_nolift, rj_arrived,
            rj_redundant, rj_links, rj_budget_out;
 
-/*
- * Is the destination already reachable from the source for less than cap_ms,
- * using only the links the OTHER passes proved?
- *
- * A bounded Dijkstra, not a "does a direct link exist" test and not an
- * unbounded search. The direct-link test was rejected because it answers the
- * wrong question: two seeds with no direct link between them are very often
- * one stair-flight apart, and buying that with 50 health would be absurd.
- * Dijkstra answers the question actually being asked -- is there a route home
- * for less than three rocket jumps' worth of time -- and the cost cap keeps
- * it cheap on its own, because the frontier can only grow as far as cap_ms of
- * travel reaches. The expansion and open-list caps are belt and braces: if
- * either is hit the answer returned is TRUE, i.e. assume the map already
- * reaches it and do not write the expensive link. An unproven link costs
- * nothing; a health-priced link that adds no reach costs blood every time the
- * runtime is talked into it.
- *
- * The snapshot deliberately does not contain the rocket-jump links this pass
- * is itself adding. That is not an approximation: the question is whether the
- * map reaches the destination WITHOUT buying another rocket jump, so a route
- * that pays for one is not an answer to it.
- */
+
 static int *rj_dist, *rj_stamp, rj_query;
 
 static qboolean Reach_Within(int from, int to, int cap_ms)
@@ -4451,35 +4252,7 @@ static qboolean Reach_Within(int from, int to, int cap_ms)
 	return false;
 }
 
-/*
- * Prove one rocket jump, the way a player performs one: stand still, aim down
- * and back over the shoulder, jump, and fire so the rocket goes off under the
- * feet as the body leaves the floor.
- *
- * The classic technique is a family, not a single move, so the aim is
- * parameterised over three pitches -- straight down, and 15 and 30 degrees
- * behind vertical. Straight down buys the most height and no distance; the
- * tilted ones trade height for a horizontal throw toward the destination. The
- * first that arrives wins, which orders them the way a player would: take the
- * cheapest-looking shot that works.
- *
- * The sequencing is the game's, and it matters. The body jumps FIRST and the
- * rocket detonates when it arrives -- SG_OracleRocketJumpAim returns the
- * rocket's own travel time and the roll pays it, step by honest step, before
- * calling SG_OracleRocketJumpStep. Applying the blast and the jump in one
- * instant would have been wrong twice over: the game does not do it (the
- * rocket has to fly the 38-odd units to the floor first), and pmove would
- * have refused the jump anyway, because PM_CatagorizePosition takes a body
- * with a large upward velocity off the ground before PM_CheckJump ever looks
- * at it. Paying the flight time makes the proof weaker than the arithmetic --
- * the body has already risen when the burst goes off, so the burst is further
- * away and pushes less. That is the point: the arithmetic is not the claim,
- * the roll is.
- *
- * Entry state is a body at rest, so min_speed on the link is 0 and no
- * approach speed is claimed. The one thing the mover must get right is the
- * AIM, and that is what goes in the anchor.
- */
+
 static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
                                 short *cost_ms, byte *exit_speed,
                                 byte *heading_out)

@@ -1,52 +1,4 @@
-/*
- * sg_chat.c -- SLIPGATE's voice.
- *
- * Three jobs, one channel authority.
- *
- *   1. TEAM CALLOUTS. What a bot saw, said to its own team, named by the
- *      landmark a player would name it by. Every line here is emitted by the
- *      bot that SAW the transition, about what that bot's team believes --
- *      the rule sg_caco.c's head comment sets out and SLIPGATE.md makes
- *      absolute. Two claims in this file were not looked at by anybody:
- *        - a bot naming an item it picked up itself (it knows: it is holding
- *          the thing);
- *        - a respawn countdown, which is arithmetic on ent->item->quantity
- *          (g_items.c:198) -- map knowledge every player carries.
- *      Nothing else is said that no teammate has seen.
- *
- *   2. PERSONALITY. Sixteen bots, four voices, keyed by the netname prefix
- *      sg_arach.c gives them ("Arach[SG]"). Public chat only: greeting,
- *      map open, taunt, grumble, celebration, match end, idle banter -- plus
- *      the five reactions the capability census found missing, which a human
- *      has and the bots did not: surviving a big hit, watching an enemy kill
- *      himself, being spoken to by name, conceding a capture, and getting the
- *      flag back. Short, lowercase, rate-limited, and probabilistic so it is
- *      not a script.
- *
- *      Three things keep sixteen mouths from reading as one. Every line is
- *      rolled, not scheduled, so a category firing is never certain. Every
- *      line a bot speaks is off the table for EVERY bot for the next
- *      SG_CHAT_REUSE_GAP seconds (Chat_Recent), because the tell is not one
- *      bot repeating itself, it is two bots saying the same four words a
- *      breath apart. And each bot's odds are scaled by a fixed per-slot
- *      chattiness (Chat_Chatty), so the loud ones and the quiet ones are the
- *      same loud ones and quiet ones all night.
- *
- *   3. HUMAN ORDERS. A human teammate's chat is parsed for
- *      "[addressee] <verb>" and stored as a role override with a 90-second
- *      life. This module never applies a role; SG_Role reads it back through
- *      SG_ChatOrderedRole / SG_ChatEscortTarget (see sg_chat.h).
- *
- * ONE emitter owns say_team. SG_ChatSayTeam holds the per-bot budget and the
- * per-topic team cooldown, and sg_caco.c's Caco_Speak routes through it
- * rather than calling SG_BotClientCommand itself. Two emitters with separate
- * limits cannot keep a channel readable no matter how tight each one is.
- *
- * The chat route is the game's own: SG_BotClientCommand(client, "say_team",
- * line, NULL) fills the redirected sg_host.argv and runs ClientCommand ->
- * Cmd_Say_f for that client (slipgate/sg_net.c), so human teammates read it in
- * their own chat window. Same route bl_know.c and sg_caco.c use.
- */
+
 
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -85,20 +37,7 @@
 #define SG_CHAT_GRUMBLE_GAP	45.0f
 #define SG_CHAT_GRUMBLE_ODDS	0.15f
 
-/*
- * HURT AND STILL HERE. A rocket lands, the bot walks away on twenty health,
- * and three seconds later nothing is shooting at it any more. That is when a
- * player says "lucky shot" -- not during, when his hands are on the keys that
- * matter, and not a minute later, when it is somebody else's fight.
- *
- * The reader is the damage ring sg_caco.c already keeps (four entries per
- * client, every landed enemy hit with the number on it), so "something big
- * landed and I am still standing" needs no sense of its own. The read idiom is
- * Beat_HurtSince's (sg_arach.c:2380): walk the four slots, take anything newer
- * than a stamp. Note what the ring does NOT hold -- SG_NoteDamage refuses a
- * teammate's splash and refuses the world -- so a fall down a lift shaft
- * cannot produce "lucky shot", which is exactly right.
- */
+
 #define SG_CHAT_HURT_DMG	30      /* one hit at least this big */
 #define SG_CHAT_HURT_WAIT	3.0f    /* said this long after it, never during */
 #define SG_CHAT_HURT_CALM	3.0f    /* and only if it has stayed quiet since */
@@ -116,21 +55,7 @@
  */
 #define SG_CHAT_SUICIDE_ODDS	0.15f
 
-/*
- * ADDRESSED REPLY. A human types a bot's name and nothing the order grammar
- * recognises -- "arach where are you", "nice one arach", "arach?" -- and the
- * bot answers. Sixteen names that answer to being called is the difference
- * between a roster and a scoreboard; the limits below are what keep it from
- * becoming a way to make the server talk to itself.
- *
- * THE DELAY IS A TYPIST, not a timer. The census's note is the whole model: a
- * human reads the line at SG_CHAT_REPLY_READ characters a second, takes
- * SG_CHAT_REPLY_THINK to decide there is anything worth saying, and then types
- * his own answer at SG_CHAT_REPLY_TYPE -- a fast player's mid-game rate, which
- * is nothing like his desk rate, because one hand is still on the mouse. The
- * sum is clamped into MIN..MAX: under two seconds reads as a macro, over five
- * and he is answering a conversation that has moved on.
- */
+
 #define SG_CHAT_REPLY_GAP	30.0f   /* one reply per bot per this */
 #define SG_CHAT_REPLY_MIN	2.0f
 #define SG_CHAT_REPLY_MAX	5.0f
@@ -139,20 +64,7 @@
 #define SG_CHAT_REPLY_THINK	0.6f    /* the beat before the hands move */
 #define SG_CHAT_REPLY_CALM	3.0f    /* nothing has hit it for this long */
 
-/*
- * THE FLAG EVENTS NOBODY HAD A WORD FOR. Our own capture has had a voice since
- * the personality pools went in (SG_LINE_CAP, off Chat_Captures) and so has the
- * steal (SG_LINE_STEAL, off the carrier belief). The two that were silent are
- * the two a pub server is loudest about: the enemy scoring ON us, and our own
- * flag coming back to its stand.
- *
- * Those two events are the same event half the time, which is why the window
- * below exists. A capture puts the CONCEDING side's flag back on its stand --
- * red carries blue's flag over red's line, blue's flag goes home -- so a flag
- * that came home inside SG_CHAT_RETURN_CAPWIN of the other side scoring came
- * home because they scored, and has already been groaned about. Only a return
- * outside that window is a return somebody earned.
- */
+
 #define SG_CHAT_CONCEDE_ODDS	0.50f
 #define SG_CHAT_RETURN_ODDS		0.40f
 #define SG_CHAT_RETURN_CAPWIN	1.0f
@@ -275,49 +187,7 @@ enum {
 
 #define SG_CHAT_MAXLINES	12
 
-/*
- * Four voices across sixteen bots, not sixteen voices: a server full of
- * individually written characters reads as a script the second two of them
- * speak in the same minute. Era-appropriate deathmatch banter, lowercase,
- * nothing over ~50 characters -- a long line is the tell that a bot wrote it.
- *
- * MOST OF THESE LINES ARE NOT WRITTEN. They were mined out of the human demo
- * corpus by tools/chatmine.py -- 268 client .dm2 recordings from 2020-2023,
- * 4459 chat lines said, filtered down to what a stranger could say again --
- * and every mined line here is verbatim, as typed, down to the missing
- * apostrophe in "thats game" and the caps-lock in "DIE !!". The buckets that
- * fed each row:
- *
- *   GREETING   -> JOIN, OPEN        TAUNT      -> KILL, STEAL (cocky)
- *   GRUMBLE    -> DEATH             GG_ENDGAME -> WIN, LOSE, CLOSE
- *   REACTION   -> CAP, DEATH, IDLE  CALL       -> STEAL, IDLE
- *
- * tools/chat-corpus.json is the mined list, and re-running the miner reports
- * any line in it that has stopped appearing in the corpus. Written lines that
- * survived are the ones no human in the corpus had occasion to type -- the
- * dry voice's asides and the whole mech register, which is a character rather
- * than an imitation of pub chat. The lines that read like an assistant doing
- * an impression of 1998 ("nice game", "gg easy", "outclassed") are gone,
- * replaced by what people actually said.
- *
- * The pools are deeper than the four-per-category the first eight bots ran
- * on. Four bots now share each voice rather than two, so a category with
- * four lines in it would have the same phrase come back around inside a
- * single firefight -- the echo the deeper pool exists to break up. Rows are
- * NULL-terminated where they are short of SG_CHAT_MAXLINES; Chat_Pick counts
- * to the first NULL, so a row may be any length up to the maximum.
- *
- * Row order is the SG_LINE_* enum's order, and nothing but this comment keeps
- * the two in step: a category added there needs a row added to all four
- * voices here, or a voice reads its neighbour's lines.
- *
- * A row tagged MINE is a STRUCTURE with placeholder text in it. The category
- * is wired, gated and rate-limited exactly like every other row -- what it has
- * not had yet is a pass over the real chat corpus, so the lines read as
- * somebody's guess at how a player phrases it rather than as how a player
- * phrased it. Replacing the strings is the whole job; nothing else about the
- * category changes when they are.
- */
+
 static const char *chat_line[SG_TONES][SG_LINE_CATS][SG_CHAT_MAXLINES] = {
 	/* SG_TONE_TERSE  -- arach, trace, ogre, knight.
 	 * The corpus's two-letter classics live here: gg, ns, n1, rdy, hf. */
@@ -762,20 +632,7 @@ static int Chat_Tone(edict_t *e)
 	return SG_TONE_TERSE;               /* a renamed bot still gets a voice */
 }
 
-/*
- * How chatty this particular bot is: 0.5 to 1.5, fixed for the life of the
- * slot, multiplying the odds of every rolled personality line.
- *
- * (slot * 7) % 11 is the whole derivation. 7 and 11 are coprime, so the eleven
- * rates are hit in a stride that puts NEIGHBOURING slots far apart -- slots 0,
- * 1, 2, 3 come out 0.5, 1.2, 0.8, 1.5 -- and bots are added into consecutive
- * slots, so a run of adjacent rates would have made the first half of a
- * botfilled team uniformly quiet and the second half uniformly loud. It is
- * deterministic rather than rolled because a bot that is talkative tonight and
- * withdrawn tomorrow is not a personality, it is noise. Eleven rates over
- * sixteen slots means a few pairs share one; that is fine, they still differ
- * in voice.
- */
+
 static float Chat_Chatty(int cl)
 {
 	float pf;
@@ -971,25 +828,7 @@ qboolean SG_ChatSayTeam(edict_t *speaker, const char *line, int topic)
 	return true;
 }
 
-/*
- * The public channel: personality only, and on its own slower budget.
- *
- * Two things speak from outside the ordinary alive-and-well case, so they are
- * flags here rather than a second copy of the emitter:
- *
- *   SG_SAYF_DEAD    the speaker is a corpse or is frozen at the intermission
- *                   point. A grumble comes from a bot that just died, and a
- *                   match-end line comes from one the level has already
- *                   stopped; Chat_Playing refuses both, correctly, for
- *                   callouts -- but neither of these is a callout.
- *   SG_SAYF_NOGAP   skip the public say budget, still stamping it. Used only
- *                   by the match-end line, which is one line per bot at a
- *                   moment that will not come again this level; letting a
- *                   taunt from four seconds earlier eat it would silence
- *                   whoever was busiest at the whistle.
- *
- * The speaker must still be one of ours and on a team either way.
- */
+
 #define SG_SAYF_DEAD	1
 #define SG_SAYF_NOGAP	2
 
@@ -1192,25 +1031,7 @@ static void Chat_ScanLandmarks(void)
 	}
 }
 
-/*
- * Name a position the way a player would. Nearest landmark inside
- * SG_CHAT_LM_RANGE wins; failing that the two flag stands split the map into
- * three, which is how a callout with no landmark to hand is phrased. Team
- * neutral -- see Chat_LocNameFor for the "our/their" form the callouts use.
- *
- * `skip` is a landmark position to leave out of the running, or NULL for none,
- * and it exists for one case: naming the spot where an item was just taken.
- * Half the majors ARE landmarks, so without it a bot says
- * "took quad at the quad", which tells a teammate nothing he did not already
- * have from the first two words. Skipping the item's own landmark makes the
- * call fall through to the next thing in sight, or to the base thirds.
- *
- * False means it had nothing to name the place by -- no landmark in range and
- * no flag stands to divide the map with -- and `out` is untouched. The caller
- * then says the item without a place, which is the owner's own instruction:
- * "calling the item specifically will help and it should count even without
- * the location" (2026-08-05).
- */
+
 static qboolean Chat_LocNameSkip(vec3_t pos, const float *skip,
                                  char *out, int len)
 {
@@ -1351,25 +1172,7 @@ static qboolean Chat_EnemySeenNear(int team, vec3_t org)
 	return false;
 }
 
-/* ------------------------------------------------------ the damage ring
- *
- * sg_caco.c books every landed hit on one of our bots in a four-slot ring per
- * client (sg_local.h:143), with the attacker, the number and the moment. Two
- * questions are asked of it here and both are Beat_HurtSince's question
- * (sg_arach.c:2380) with a different filter on it: "has anything landed since
- * X" and "has anything BIG landed since X".
- *
- * The idiom is copied rather than shared for the reason the ring exists at
- * all: it is the module boundary. Exporting a four-line loop out of sg_arach.c
- * so this file could call it would put a private beat helper in a public header
- * and buy nothing.
- *
- * What the ring does not hold is as load-bearing as what it does. SG_NoteDamage
- * refuses a hit with no client attacker, refuses a teammate's splash, and
- * refuses the world -- so a fall, the lava and a crusher are all invisible
- * here. That is correct for both readers: "lucky shot" is a thing said about a
- * shooter, and being in contact means somebody is shooting at you.
- */
+
 
 static qboolean Chat_HurtSince(edict_t *e, float since)
 {
@@ -1662,27 +1465,7 @@ typedef struct
 
 static sg_radioq_t	radio_q[2];         /* per team-1 */
 
-/*
- * THE QUAD-30 CALL.
- *
- * "when the enemy's quad has just worn off and respawn is ~30s out" is a call
- * a human makes off nothing but a clock he started himself, and it is the
- * second half of timing quad: the first half tells the team when to leave, the
- * second tells them the danger is over and the pad is worth walking to.
- *
- * The thirty seconds is READ, not assumed. Use_Quad (g_items.c:367-389) sets
- * quad_framenum to level.framenum + 300 and FRAMETIME is 0.1 (g_local.h:141),
- * so a quad taken off its pad burns for thirty seconds while the pad's own
- * respawn runs sixty (LM_QUAD_DEFAULT_TIME, the item's quantity). Wear-off is
- * therefore the armed clock minus thirty, which is also exactly halfway -- and
- * saying so in arithmetic rather than writing 30.0f twice is what keeps the
- * two halves from drifting apart if the mod ever retunes one of them.
- *
- * The one modelling assumption is the one a player makes out loud: that the
- * quad went live at the pickup. Without DF_INSTANT_ITEMS a taker can sit on it
- * (Pickup_Powerup, g_items.c:195-205), and a human calling "quad's dead" at
- * thirty is wrong in exactly the same way and for exactly the same reason.
- */
+
 #define SG_QUAD_LIVE	(300.0f * FRAMETIME)
 
 /*
@@ -2531,49 +2314,7 @@ void SG_ChatCarrierSeen(edict_t *viewer, int team, edict_t *carrier)
 
 /* ------------------------------------------------------------- personality */
 
-/*
- * Why the greeting used to be a line nobody ever read.
- *
- * The old version picked a line the first frame the bot was alive on a team
- * and set greeted = true right there, "once, whether or not it lands". Both
- * halves of that were wrong at exactly the same moment.
- *
- * Every chat line in this mod goes through Cmd_Say_f, which asks
- * ctf_SpamCheck first (g_cmds.c:2201). ctf_SpamCheck refuses when
- *
- *     level.time - ent->client->spam_lock_time < CTF_SPAM_LOCKOUT_TIME
- *
- * (g_ctffunc.c:1313). Nothing ever initialises spam_lock_time -- ClientConnect
- * seeds spam_band_count and spam_freq_count and stops there (p_client.c:2523)
- * -- so it is the zero the client struct was memset to. For the first
- * CTF_SPAM_LOCKOUT_TIME (5) seconds of a level, level.time - 0 < 5 is true for
- * every client on the server, and every say and say_team is dropped as "already
- * in penalty box". Bots are added at map load, spawn inside that window, and
- * greet inside it. The say was swallowed, and the failed check then set
- * spam_lock_time = level.time, re-arming the lockout on the way out.
- *
- * The once-flag is what made it permanent. greeted was set from the return-
- * less call, so the one attempt each bot got was spent on a frame where the
- * line could not possibly go out, and it was never retried. Item callouts
- * survived the same bug because they fire repeatedly and well past the five
- * second mark, so they simply land on a later attempt -- which is why the
- * smoke test saw callouts and no greetings.
- *
- * The fix that matters is the schedule: book a time instead of speaking on
- * sight, and put the first attempt past the lockout window, where the say can
- * actually go out. Everything else is belt and braces.
- *
- * Note what Chat_SayEx can and cannot tell us. It returns false for its own
- * refusals -- the public say budget, a bot that died before its turn -- and
- * those are worth retrying. It cannot see spam control's verdict at all:
- * SG_BotClientCommand returns void, so once the line is handed to Cmd_Say_f,
- * it reports true whether ctf_SpamCheck passed it or ate it. So the
- * retry below is not a delivery check, and the greeting's correctness rests on
- * being scheduled late enough rather than on noticing a rejection. The retry
- * gap is still longer than the lockout, because a refused attempt re-arms
- * spam_lock_time -- retrying faster than the lockout would let a bot hold
- * itself in the penalty box with its own retries.
- */
+
 static void Chat_Greetings(void)
 {
 	int i;
@@ -2726,23 +2467,7 @@ static void Chat_Returned(int team)
 	Chat_Note(line);
 }
 
-/*
- * Captures and who holds a flag are on everyone's screen -- the scoreboard
- * and the HUD carrier icon -- so celebrating either leaks nothing. A steal
- * goes to the team as information; a capture goes public, because everybody
- * watched it happen anyway.
- *
- * The stored total is overwritten every frame, not only when it rises: a
- * capturer who disconnects takes his captures off the board with him, and a
- * counter that only ever climbed would fire again on the next one.
- *
- * TWO PASSES, and the split is load-bearing. A capture puts the conceding
- * side's flag back on its stand in the same frame it moves the score, and the
- * return pass has to be able to see that the concession happened -- to BOTH
- * sides -- before it decides whether a flag coming home is worth cheering.
- * One pass would let blue's capture stamp red's concession after red's flag
- * had already been examined, and red would cheer a return it did not earn.
- */
+
 static void Chat_TeamEvents(void)
 {
 	int	score[2];
@@ -2808,22 +2533,7 @@ static void Chat_TeamEvents(void)
 	}
 }
 
-/*
- * A death nobody else can take credit for. Two shapes, and the mod is only
- * half the answer:
- *
- *   The map killed him. MOD_LAVA, MOD_SLIME, MOD_WATER, MOD_FALLING,
- *   MOD_CRUSH, MOD_TRIGGER_HURT and the console MOD_SUICIDE are the deaths
- *   the game's own obituary phrases without an attacker.
- *
- *   He killed himself with something of his own. The mod then names a weapon
- *   -- his rocket, his grenade, the barrel he shot -- and what identifies it
- *   is the attacker field pointing back at him, or at the world.
- *
- * MOD_TELEFRAG is deliberately absent from the list: somebody else stood on
- * the pad. meansOfDeath arrives with the friendly-fire bit still set on it,
- * so it is masked here the way SG_NoteDamage masks it.
- */
+
 static qboolean Chat_SelfInflicted(edict_t *victim, edict_t *attacker, int mod)
 {
 	switch (mod & ~MOD_FRIENDLY_FIRE)
@@ -2843,20 +2553,7 @@ static qboolean Chat_SelfInflicted(edict_t *victim, edict_t *attacker, int mod)
 	     ? true : false;
 }
 
-/*
- * BYSTANDER. One of theirs has just killed himself and one of OURS watched it
- * happen. Everything about the line is off that watching: the speaker must
- * have had the body in sight, or at least inside its PHS -- a scream carries
- * through a wall, and a player laughs at what he heard as readily as at what
- * he saw -- and exactly one bot on that side gets to say it, because two bots
- * laughing at one death is the tell this whole file is built around avoiding.
- *
- * The first candidate whose taunt cooldown is clear wins, which is the same
- * "prefer a mouth that is free" rule Chat_Speaker applies to callouts. The
- * roll comes after the pick rather than before it, so a server where the only
- * witness happens to be on cooldown stays quiet instead of hunting for a
- * second one.
- */
+
 static void Chat_Bystander(edict_t *victim)
 {
 	edict_t		*seer = NULL;
@@ -2957,23 +2654,7 @@ void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod)
 		Chat_Bystander(victim);
 }
 
-/*
- * THE MAP-OPEN LINE. One per bot per level, at roughly a third of them, so a
- * full server opens with five or six voices rather than sixteen or none.
- *
- * Two things about the schedule are load-bearing.
- *
- * It sits behind the bot's OWN greeting plus the public say budget. Both lines
- * go out on the same budgeted channel, and the greeting is booked first
- * (Chat_Greetings runs ahead of this in SG_ChatFrame), so a map-open line
- * booked any earlier is refused by SG_CHAT_SAY_GAP and lost. Scheduling it
- * off greet_at rather than off level.time is what keeps the low slots -- the
- * ones a botfilled team fills first -- from being silenced every map.
- *
- * And the roll is made ONCE, when the line is booked, not when it comes due.
- * Rolling at the due moment would mean rerolling every frame from then on,
- * which is not a 35% chance of speaking, it is a certainty with a delay.
- */
+
 static void Chat_LevelOpen(void)
 {
 	int i;
@@ -3052,19 +2733,7 @@ static int Chat_TeamScore(int team)
 	return total;
 }
 
-/*
- * THE MATCH-END LINE, booked from BeginIntermission (p_hud.c) and delivered
- * over the next four seconds by Chat_LevelEndFlush.
- *
- * Booked rather than spoken on the spot for the ordinary reason -- sixteen
- * lines in one frame is a wall, not a conversation -- and the whole stagger is
- * kept inside four seconds because a client may exit intermission five seconds
- * in (p_client.c:2823) and take the rest of the lines with it.
- *
- * A margin inside SG_CHAT_CLOSE_MARGIN either way, ties included, is a close
- * game and both sides say so. Gloating over two points reads as a bot that
- * only knows how to compare two numbers.
- */
+
 void SG_ChatLevelEnd(void)
 {
 	int	score[2], i;
@@ -3142,24 +2811,7 @@ static void Chat_LevelEndFlush(void)
 	}
 }
 
-/*
- * IDLE BANTER. The lull filler, and the easiest line in the file to get wrong:
- * it carries no information, so every time it lands on top of something that
- * does, it has cost more than it gave.
- *
- * Hence three gates before the roll. The bot must be out of contact for
- * SG_CHAT_IDLE_CALM -- nothing has hurt it and its side has no fresh eyes on an
- * enemy standing near it. Its team's channel must have been silent for
- * SG_CHAT_IDLE_QUIET. And the attempt itself is booked no sooner than
- * SG_CHAT_IDLE_GAP, then rolled, so the mean gap between two idle lines from
- * one mouth runs past two minutes even at the chattiest slot rate.
- *
- * "In contact" is read off pain_debounce_time, which T_Damage pushes to
- * level.time + 2 whenever it hurts a player (g_combat.c:528-531), plus CACO's
- * enemy sightings through Chat_EnemySeenNear. Neither is a perfect combat
- * flag; together they cover the two cases that matter, being shot at and
- * standing next to somebody who will.
- */
+
 static void Chat_Idle(void)
 {
 	int i;
@@ -3209,31 +2861,7 @@ static void Chat_Idle(void)
 	}
 }
 
-/*
- * HURT AND STILL HERE. The other half of SG_ChatDeath's grumble: a bot says
- * something when it dies, and until now said nothing at all when it nearly
- * did. "ouch" three seconds after a rocket you walked away from is one of the
- * most ordinary noises on a pub server.
- *
- * The shape is Chat_Idle's, and for the same reason -- this line carries no
- * information, so it has to stay out of the way of everything that does.
- *
- *   NOTICING is off the damage ring. Chat_BigHitSince returns the newest hit
- *   of at least SG_CHAT_HURT_DMG that is newer than the stamp this bot has
- *   already accounted for, so one rocket is noticed once no matter how many
- *   frames it sits in the four-slot ring, and a second bigger hit while the
- *   first is still being waited out simply becomes the one it mentions.
- *
- *   WAITING is what makes it a reaction rather than a scream. Nothing is said
- *   for SG_CHAT_HURT_WAIT, and then only if the fight has actually ended --
- *   nothing landed in SG_CHAT_HURT_CALM, no pain still on the clock, no fresh
- *   enemy on the team's books nearby. A bot narrating its own health mid
- *   firefight is the tell.
- *
- *   AND THE ATTEMPT IS SPENT either way. A bot held quiet by a long fight
- *   must not open its mouth about a rocket from forty seconds ago the instant
- *   the fight ends; the grievance expires with the moment.
- */
+
 static void Chat_Hurt(void)
 {
 	int i;
@@ -3442,20 +3070,7 @@ static void Chat_Order(edict_t *bot, edict_t *from, int role, qboolean clear)
 /* longest sane call, and invuln's own 300 is the reason for the number */
 #define SG_CHAT_PARSE_MAXSEC	300
 
-/*
- * The majors vocabulary, as spoken. Both columns matter: the left is what
- * the bots themselves emit through Chat_ItemName ("invuln", "red armor",
- * "power shield"), the right is what a human types instead, and neither is
- * privileged. Two-word rows sit ahead of any single-word row that would
- * shadow them, so "power shield" is read whole rather than as a stray
- * "shield" one token late.
- *
- * Runes are absent on purpose and permanently: they carry no clock anywhere
- * in this build (see chat_major), so "haste taken" has no number to arm.
- * Mega is present and will simply find no row -- it is neither a CACO belief
- * class nor on the watch list -- which is the same standing absence
- * chat_timer_major already writes down.
- */
+
 static const struct { const char *w1; const char *w2; const char *cls; }
 chat_call_word[] = {
 	{ "quad",            NULL,       "item_quad" },
@@ -3773,34 +3388,7 @@ static void Chat_HearItemCall(edict_t *speaker,
 		           take ? "take" : "timer", team, respawn, back_at);
 }
 
-/* ------------------------------------------------------ addressed replies
- *
- * BEING SPOKEN TO IS NOT BEING ORDERED. The order grammar reads the FIRST
- * token because "arach defend" is how an order gets typed mid-fight. Being
- * talked to is not typed that way: "arach?", "hey arach", "nice one arach"
- * are all somebody addressing that bot and only one of them puts the name in
- * front. So the reply looks for a name anywhere in the line.
- *
- * WHICH IS A PROBLEM, because half the roster's names are ordinary CTF
- * vocabulary. gate, field, rune, spawn, slip and trace all turn up in lines
- * that are about the map and not about a bot -- "quad at the gate", "rune is
- * up", "watch the spawn" -- and a bot answering "?" to those is the noise this
- * file spends three thousand lines avoiding.
- *
- * Two word lists sort it out, and they are deliberately about GRAMMAR rather
- * than about a blocklist of phrases:
- *
- *   A name after a locator ("at the gate", "by the rune") is a place. The
- *   speaker is naming where something is.
- *
- *   A name in front of a state word ("rune is up", "gate was clear") is a
- *   subject. The speaker is telling his team a fact about a thing.
- *
- * Anything else that names one of ours is taken as addressing it. The cost of
- * the rule is the occasional real question phrased as a statement going
- * unanswered, which is the right way round: a bot that misses one is quiet,
- * and a bot that answers the map is broken.
- */
+
 
 static const char *chat_locator[] = {
 	"at", "the", "by", "near", "on", "in", "to", "from", "our", "their",
@@ -3996,19 +3584,7 @@ void SG_ChatHear(edict_t *speaker, const char *msg, qboolean teamchat)
 		idx = 0;
 	}
 
-	/*
-	 * Who, if anybody, this line is TALKING TO, as opposed to who it is
-	 * ordering. The addressee above is the first token because that is how an
-	 * order is typed; this looks at the whole line. Worked out before either
-	 * of the not-an-order exits below, because both of them are the reply's
-	 * cue and only one of them ever reaches the verb parser.
-	 *
-	 * Deliberately NOT short-circuited on `named`. The order parser's first
-	 * token match has no grammar filter on it, so "gate is up" -- a human
-	 * calling the power screen -- makes Gate the addressee of an order that
-	 * turns out not to exist, and answering it would be the exact false
-	 * positive Chat_Mentioned's two word lists are there to catch.
-	 */
+
 	mentioned = Chat_Mentioned(tok, n, team);
 
 	/* an unaddressed order is only an order on the team channel */

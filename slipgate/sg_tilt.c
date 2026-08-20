@@ -8,39 +8,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 
-/* ------------------------------------------------------------------- tilt
- *
- * TILT: the grudge the danger dimension cannot hold.
- *
- * Danger is the TEAM's ledger and it is slow on purpose -- one death adds
- * 1200ms to one seed, decayed a percent a second, persisted across matches.
- * That is the map's reputation, and it should be slow. It is not what a
- * human does thirty seconds after being railed in the same doorway twice.
- *
- * What a human does is personal, short and lopsided: he comes out of the
- * respawn, looks at the door he just died in, and takes the other way --
- * not because the arithmetic changed but because he remembers. He plays the
- * next twenty seconds a shade smaller than the twenty before them, and if
- * the same lane kills him twice inside a minute he stays away from it twice
- * as long. Then it wears off and he is himself again.
- *
- * Three things this is NOT, stated here because every one of them is the
- * obvious next step and every one of them is wrong:
- *
- *   - it is not aim. Tilt never touches the gun. A rattled player is not a
- *     worse SHOT in any way this tree is willing to model; he goes to
- *     different places and starts fewer fights. Skill is the shooter's,
- *     tilt is the router's, and the two do not meet.
- *   - it is not danger. It never writes sg_danger, never persists, and dies
- *     with the level. A grudge that outlives the match is a weight, not a
- *     grudge.
- *   - it is not permanent. Every term here has an expiry measured in
- *     seconds. A bot that permanently refuses a lane has been lobotomised,
- *     not humanised -- and on a two-lane map it would simply stop playing.
- *
- * Off by default (sg_tilt 0): nothing is recorded, nothing is priced, and
- * the surface is the byte it was before this existed.
- */
+
 
 /* tuning constants live in sg_tilt.h */
 
@@ -52,25 +20,7 @@
  */
 static unsigned char *sg_tilt_mark;
 
-/*
- * "Within two links" of a seed, the undirected way.
- *
- * The rune's adjacency index (first_link/next_link) runs OUTWARD only, and
- * outward alone is the wrong neighbourhood here: a bot walking INTO the
- * doorway it died in arrives on seeds that reach the death seed, which the
- * outgoing index cannot name. Most links are proven in both directions and
- * the two sets nearly coincide -- but "nearly" is how a bot ends up
- * strolling back through its own killer's sightline, so this reads both
- * endpoints of every link and treats the graph as undirected.
- *
- * Two whole passes over the link array, at most, and only when somebody
- * dies -- a few tens of thousands of comparisons a death, against a body
- * that just stopped playing for a second and a half. The lane is capped at
- * SG_TILT_LANE seeds: a two-hop ball on a dense map can be larger, and the
- * truncation is by link order rather than by distance, which is honest
- * enough for a preference and keeps the per-candidate membership test a
- * short linear walk instead of another allocation.
- */
+
 void Tilt_Lane(sg_bot_t *bot, int seed)
 {
 	rune_t	*r = SG_Rune();
@@ -127,20 +77,7 @@ qboolean Tilt_InLane(const sg_bot_t *bot, int seed)
 	return false;
 }
 
-/*
- * The death note. Called from the one place that already knows a bot has
- * died at a seed it still remembers -- beside Danger_Learn, before the
- * corpse's seed is dropped.
- *
- * Who did it comes from the bot's OWN damage ring (sg_caco.c): the freshest
- * entry in it is the last thing that hurt this body, which is the killer in
- * every case that is not a fall or a lava pool -- and for those the ring is
- * empty and the killer stays unnamed, which is correct. Where he was comes
- * from the enemy belief table and nowhere else: the ring names a client,
- * belief places him, and if belief cannot, the lane is still the lane. The
- * killer's seed is recorded for the debug line and for whatever reads it
- * later; the aversion itself is about the GROUND, not the man.
- */
+
 void Tilt_Note(edict_t *e, sg_bot_t *bot)
 {
 	float	window = SG_TILT_WINDOW, best = -1.0f;
@@ -199,19 +136,7 @@ void Tilt_Note(edict_t *e, sg_bot_t *bot)
 		           window, window > SG_TILT_WINDOW ? " REPEAT" : "");
 }
 
-/*
- * POST-DEATH CAUTION, the part combat has to know about: how far out this
- * bot is willing to start something, as a factor on whatever the persona
- * already decided. One number, read by sg_combat.c's target scan, and it is
- * 1.0 for every bot that is not a SLIPGATE bot inside its own caution
- * window -- including every legacy bot and every human, who have no window
- * and no entry in this table.
- *
- * The willingness is the whole of it. Aim, reaction, trigger cadence and
- * lead are the skill model's and tilt does not touch them: a player who
- * just died shoots exactly as well as he did a minute ago and merely picks
- * fewer fights to shoot in.
- */
+
 float SG_TiltCaution(edict_t *ent)
 {
 	int i;
