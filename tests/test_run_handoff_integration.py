@@ -19,7 +19,7 @@ def main() -> None:
     handoff = commit.index("SG_RunCompletionHandoff(")
     invalidate = commit.index("SG_RunInvalidateCompletedCandidate(")
     latch = commit.index(
-        "if (!defense_shift_selected && sg_cv.linklatch->value > 0"
+        "if (!defense_shift_selected && !defense_patrol_selected &&"
     )
     assert invalidate < handoff < latch
     assert commit.count("SG_RunCompletionHandoff(") == 1

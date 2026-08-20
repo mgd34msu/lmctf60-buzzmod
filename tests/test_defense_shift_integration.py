@@ -14,7 +14,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         source = (ROOT / "slipgate/sg_descend.c").read_text()
         chooser = source.index("SG_DefenseShiftChoose(&request")
         latch = source.index(
-            "if (!defense_shift_selected && sg_cv.linklatch->value > 0",
+            "if (!defense_shift_selected && !defense_patrol_selected &&",
             chooser,
         )
         commitment = source.index(
@@ -26,7 +26,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertLess(latch, commitment)
         self.assertEqual(source.count("SG_DefenseShiftChoose(&request"), 1)
         self.assertIn(
-            "if (!defense_shift_selected && sg_cv.linklatch->value > 0",
+            "if (!defense_shift_selected && !defense_patrol_selected &&",
             source,
         )
 
@@ -73,8 +73,13 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
         move = (ROOT / "slipgate/sg_move.c").read_text()
 
-        self.assertIn("SG_DefensePatrolChoose(cand, nc", descend)
+        self.assertIn("SG_DefensePatrolChoose(candidates,", descend)
         self.assertIn("tc->patrol_walk = true;", descend)
+        self.assertIn("!defense_patrol_selected &&", descend)
+        self.assertIn("bot->patrol_link == bot->commit_link", descend)
+        self.assertLess(descend.index("SG_DefensePatrolChoose(candidates,"),
+                        descend.index(
+                            "StrikeCommitFreshLink(bot, tc, bestlink)"))
         self.assertIn("SG_DefensePatrolThrottle(sg_cv.patrol->value)", move)
         self.assertIn("role == SG_ROLE_DEFEND && bot->def_stand", move)
 
@@ -83,15 +88,16 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         shift = source[source.index("sg_defense_shift_candidate_t candidates"):
                        source.index("request.threat_x", source.index(
                            "sg_defense_shift_candidate_t candidates"))]
-        patrol = source[source.index("sg_defense_patrol_candidate_t cand"):
+        patrol = source[source.index(
+                            "sg_defense_patrol_candidate_t candidates[64]"):
                         source.index("bot->patrol_random =", source.index(
-                            "sg_defense_patrol_candidate_t cand"))]
+                            "sg_defense_patrol_candidate_t candidates[64]"))]
 
         self.assertIn("SG_RouteCandidateGoalMs(", shift)
         self.assertIn("goal_field[link->to]", shift)
         self.assertIn("Fields_LinkTraversalCostMs(link)", shift)
-        self.assertIn("SG_RouteCandidateGoalMs(goal_field[pl->to]", patrol)
-        self.assertIn("Fields_LinkTraversalCostMs(pl)", patrol)
+        self.assertIn("SG_RouteCandidateGoalMs(goal_field[link->to]", patrol)
+        self.assertIn("Fields_LinkTraversalCostMs(link)", patrol)
 
     def test_pure_routes_skip_organic_return_penalty(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
@@ -144,9 +150,11 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
     def test_contact_retires_exact_patrol_commit_before_latch(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
         retire = source.rfind("int patrol_link = bot->patrol_link", 0,
-                              source.index("SG_DefensePatrolRetireIfInactive(patrol_active"))
+                              source.index(
+                                  "SG_DefensePatrolRetireIfInactive("
+                                  "patrol_allowed"))
         latch = source.index(
-            "if (!defense_shift_selected && sg_cv.linklatch->value > 0",
+            "if (!defense_shift_selected && !defense_patrol_selected &&",
             retire,
         )
 
@@ -159,7 +167,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertIn("SG_TimerArm(&bot->patrol_until, 5.0f)",
                       source[retire:latch])
         self.assertIn("bot->patrol_link = chosen_link", source)
-        self.assertIn("DefenseShiftLinkReady(bot, bot->patrol_link", source)
+        self.assertIn("DefenseLocalRunReady(bot, bot->patrol_link", source)
 
     def test_late_shelf_retires_shift_before_post_or_movement(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()

@@ -1410,7 +1410,7 @@ static void DefenseShiftReset(sg_bot_t *bot, qboolean reset_previous)
 	}
 }
 
-static qboolean DefenseShiftLinkReady(const sg_bot_t *bot, int link_index,
+static qboolean DefenseLocalRunReady(const sg_bot_t *bot, int link_index,
 	int from_seed, int to_seed)
 {
 	const rune_t *rune = SG_Rune();
@@ -1445,7 +1445,7 @@ static qboolean DefenseShiftRetireInvalid(sg_bot_t *bot, int *bestlink,
 		return false;
 	shift_link = bot->def_shift_link;
 	if (!SG_DefenseShiftRetireIfInvalid(shift_link,
-	        DefenseShiftLinkReady(bot, shift_link, bot->seed,
+	        DefenseLocalRunReady(bot, shift_link, bot->seed,
 	            bot->def_shift_seed), &bot->commit_link))
 		return false;
 	if (bestlink && *bestlink == shift_link)
@@ -1921,6 +1921,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	qboolean defense_quiet = true;
 	qboolean defense_post = false;
 	qboolean defense_shift_selected = false;
+	qboolean defense_patrol_selected = false;
 	qboolean enemy_pressure = tc->strike_pressure;
 	int defense_threat_seed = -1;
 	float post_yaw = tc->post_yaw;
@@ -2027,15 +2028,22 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 		{
 			int patrol_link = bot->patrol_link;
-			qboolean patrol_active = role == SG_ROLE_DEFEND &&
+			qboolean patrol_allowed = role == SG_ROLE_DEFEND &&
 			    bot->def_stand && defense_quiet && !duel &&
-			    !bot->engaged_last &&
+			    !bot->engaged_last && !tc->strike_active &&
+			    !tc->strike_weapon_pursuit &&
+			    !SG_DefenseSupplyActive(bot) &&
+			    !(bot->lead_ent > 0 &&
+			      bot->lead_state == SG_LEAD_WAITING) &&
+			    w->item[SG_FC_ARMOR] <= 0.9f &&
+			    w->item[SG_FC_HEALTH] <= 0.9f &&
+			    w->item[SG_FC_AMMO] <= 0.9f &&
 			    isfinite(sg_cv.patrol->value) &&
 			    sg_cv.patrol->value > 0.0f;
 
 			/* Contact/role/config edges retire the exact patrol commitment
 			 * before the generic latch can restore it for this movement frame. */
-			if (SG_DefensePatrolRetireIfInactive(patrol_active,
+			if (SG_DefensePatrolRetireIfInactive(patrol_allowed,
 			        &bot->patrol_link, &bot->patrol_seed,
 			        &bot->commit_link))
 			{
@@ -2044,6 +2052,91 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				bot->commit_until = 0.0f;
 				SG_TimerArm(&bot->patrol_until, 5.0f);
 				tc->bestlink = bestlink;
+			}
+
+			/* Select before link commitment so the route transaction records
+			 * the patrol link. */
+			if (patrol_allowed &&
+			    SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))
+			{
+				bot->patrol_link = -1;
+				bot->patrol_random =
+				    SG_DefensePatrolRandomNext(bot->patrol_random);
+				SG_TimerArm(&bot->patrol_until,
+				    SG_DefensePatrolDwell(bot->patrol_random));
+			}
+			else if (patrol_allowed && bot->patrol_seed >= 0)
+			{
+				qboolean owned = bot->patrol_link >= 0 &&
+				    bot->patrol_link == bot->commit_link;
+
+				if (owned && DefenseLocalRunReady(bot,
+				        bot->patrol_link, bot->seed, bot->patrol_seed))
+					bestlink = bot->patrol_link;
+				else
+				{
+					int stale_link = bot->patrol_link;
+
+					(void)SG_DefensePatrolRetireIfInactive(0,
+					    &bot->patrol_link, &bot->patrol_seed,
+					    &bot->commit_link);
+					if (owned)
+						bot->commit_until = 0.0f;
+					if (bestlink == stale_link)
+						bestlink = -1;
+					SG_TimerArm(&bot->patrol_until, 5.0f);
+				}
+			}
+			else if (patrol_allowed && defense_post &&
+			         bot->commit_link < 0 &&
+			         SG_TimerReady(bot->patrol_until))
+			{
+				int link_index, chosen_seed = -1, chosen_link;
+				sg_defense_patrol_candidate_t candidates[64];
+				size_t candidate_count = 0;
+
+				for (link_index = SG_Rune()->first_link[bot->seed];
+				     link_index >= 0 &&
+				     candidate_count < sizeof(candidates) /
+				         sizeof(candidates[0]);
+				     link_index = SG_Rune()->next_link[link_index])
+				{
+					const rune_link_t *link =
+					    &SG_Rune()->links[link_index];
+
+					if (link->action != RL_RUN || link->to < 0 ||
+					    link->to >= SG_Rune()->hdr.num_seeds ||
+					    !DefenseLocalRunReady(bot, link_index,
+					        bot->seed, link->to))
+						continue;
+					candidates[candidate_count].link_index = link_index;
+					candidates[candidate_count].seed_index = link->to;
+					candidates[candidate_count].goal_ms =
+					    SG_RouteCandidateGoalMs(goal_field[link->to],
+					        Fields_LinkTraversalCostMs(link),
+					        SG_FIELD_INF);
+					candidates[candidate_count].is_run = true;
+					VectorSubtract(SG_Rune()->seeds[link->to].origin,
+					    SG_Rune()->seeds[bot->seed].origin, d);
+					candidates[candidate_count].distance =
+					    VectorLength(d);
+					candidate_count++;
+				}
+				bot->patrol_random =
+				    SG_DefensePatrolRandomNext(bot->patrol_random);
+				chosen_link = SG_DefensePatrolChoose(candidates,
+				    candidate_count,
+				    (int)(1000.0f * SG_PersonaCampScale(e)),
+				    bot->prev_seed, bot->patrol_random, &chosen_seed);
+				if (chosen_link >= 0)
+				{
+					bot->patrol_seed = chosen_seed;
+					bot->patrol_link = chosen_link;
+					bestlink = chosen_link;
+					defense_patrol_selected = true;
+				}
+				else
+					SG_TimerArm(&bot->patrol_until, 5.0f);
 			}
 		}
 		shift_allowed = isfinite(sg_cv.defshift->value) &&
@@ -2074,7 +2167,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				qboolean finished = bot->seed == bot->def_shift_seed ||
 				    level.time >= bot->def_shift_until;
 				qboolean owned = bot->commit_link == bot->def_shift_link &&
-				    DefenseShiftLinkReady(bot, bot->def_shift_link,
+				    DefenseLocalRunReady(bot, bot->def_shift_link,
 				        bot->seed, bot->def_shift_seed);
 
 				if (finished || !owned)
@@ -2116,7 +2209,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					vec3_t delta;
 					if (link->action != RL_RUN || link->to < 0 ||
 					    link->to >= SG_Rune()->hdr.num_seeds ||
-					    !DefenseShiftLinkReady(bot, link_index,
+					    !DefenseLocalRunReady(bot, link_index,
 					        bot->seed, link->to))
 						continue;
 					VectorSubtract(SG_Rune()->seeds[link->to].origin,
@@ -2162,7 +2255,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 	/* Hold the incumbent link across near-ties until the latch expires. A
 	 * missing or materially worse incumbent yields immediately. */
-	if (!defense_shift_selected && sg_cv.linklatch->value > 0 &&
+	if (!defense_shift_selected && !defense_patrol_selected &&
+	    sg_cv.linklatch->value > 0 &&
 	    bestlink >= 0 && bot->sticky_link >= 0 &&
 	    bestlink != bot->sticky_link &&
 	    SG_TimerPending(bot->latch_until) &&
@@ -2178,15 +2272,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 	if (bestlink >= 0 && bestlink != bot->ribbon_link)
 	{
-		/* new leg: sample the lane offset once and hold it. The film
-		 * verdict (calibrated blind judge, 8/8): every traversal lands
-		 * on the SAME polyline -- a rope, where humans paint a 50-150u
-		 * brush. Per-tick noise would be jitter, not diversity; the
-		 * offset must PERSIST across the leg. */
-		/* the leg just closed out goes into the exit-lane ring
-		 * (sg_exitasym): this rollover is the only true per-link
-		 * advance -- the role-change ticker fires far too rarely
-		 * to remember an inbound route */
+		/* Sample one persistent lane offset per link and retain the closed
+		 * link in the exit-asymmetry ring. */
 		if (bot->ribbon_link >= 0)
 		{
 			bot->inlinks[bot->inlinks_n % 16] = bot->ribbon_link;
@@ -2198,9 +2285,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		    sg_cv.ribbon->value);
 		bot->ribbon_goal = bot->ribbon_off;
 	}
-	/* Ribbon drift: the film judge's verdict on a fixed per-leg lane -- it
-	 * quantizes into railroads; a human band needs the offset to WANDER
-	 * along the run. Low-frequency, trace-clamped downstream. */
+	/* Drift slowly within the trace-clamped lane band. */
 	if (SG_TimerReady(bot->ribbon_next))
 	{
 		bot->ribbon_random = SG_RibbonRandomNext(bot->ribbon_random);
@@ -2369,15 +2454,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 	}
 
-	/*
-	 * Commitment. The composed surface has saddles -- goal one way, a
-	 * shotgun the other, health a third, the item terms refreshed every
-	 * second -- and a per-frame argmin at a saddle flaps between near-equal
-	 * links. Both t2 attackers churned a full match at one such point
-	 * (seeds 429/430, the room north of the rotating door). A chosen step
-	 * is HELD until it finishes, times out, or gets shelved; the surface
-	 * proposes, the body disposes.
-	 */
+	/* Retain a chosen link until it finishes, times out, or is shelved. */
 	if (bot->commit_link >= 0 && bot->commit_link < SG_Rune()->hdr.num_links)
 	{
 		rune_link_t *cl = &SG_Rune()->links[bot->commit_link];
@@ -2897,22 +2974,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->rail_stage = 0;
 	}
 
-	/*
-	 * Progress watch. The same link chosen for four seconds while the bot
-	 * stays inside a 96-unit ball is an orbit -- a lip behind a railing,
-	 * a door the rune cannot see, a ledge the feelers cannot round. The
-	 * cause does not matter here: shelve the link for thirty seconds and
-	 * the surface reroutes through the next-best gradient. (Field orbited
-	 * one drop lip for a full match; the generator fix removes that class,
-	 * this removes every class.)
-	 */
-	/*
-	 * Route through a door already known dead: no 4-second case needed,
-	 * the verdict is in. Shelve on sight -- one link per frame drains a
-	 * 25-link doorway fan in seconds, where the watch alone drained it
-	 * slower than the shelf refilled (Trace, 117 shelves at seed 662,
-	 * match 12: a shelve-expire-reshelve treadmill).
-	 */
+	/* Shelf a stationary link after four seconds. A known dead door may
+	 * invalidate its approaching link immediately. */
 	if (bot->deaddoor_ahead)
 	{
 		/*
@@ -3642,78 +3705,14 @@ stag_done:
 		    bot->commit_link == bot->def_shift_link)
 			hold_post = false;
 
-		/* On a quiet post, patrol a proved local link between dwell periods. */
-		if (quiet && sg_cv.patrol->value > 0.0f)
+		if (quiet && bot->patrol_link >= 0 &&
+		    bot->patrol_link == bot->commit_link &&
+		    DefenseLocalRunReady(bot, bot->patrol_link,
+		        bot->seed, bot->patrol_seed))
 		{
-			if (SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))
-			{
-				bot->patrol_link = -1;
-				/* Dwell begins only after proved arrival. */
-				bot->patrol_random =
-				    SG_DefensePatrolRandomNext(bot->patrol_random);
-				SG_TimerArm(&bot->patrol_until,
-				    SG_DefensePatrolDwell(bot->patrol_random));
-			}
-			else if (bot->patrol_seed >= 0)
-			{
-				/* Mid-leg: only the originally selected direct RUN owns motion. */
-				if (DefenseShiftLinkReady(bot, bot->patrol_link,
-				        bot->seed, bot->patrol_seed))
-				{
-					bestlink = bot->patrol_link;
-					hold_post = false;
-					tc->patrol_walk = true;
-				}
-				else
-				{
-					bot->patrol_seed = -1;  /* leg unreachable: stand */
-					bot->patrol_link = -1;
-					SG_TimerArm(&bot->patrol_until, 5.0f);
-				}
-			}
-			else if (SG_TimerReady(bot->patrol_until))
-			{
-				int pli, chosen_seed = -1, chosen_link;
-				sg_defense_patrol_candidate_t cand[64];
-				size_t nc = 0;
-				for (pli = SG_Rune()->first_link[bot->seed]; pli >= 0;
-				     pli = SG_Rune()->next_link[pli])
-				{
-					rune_link_t *pl = &SG_Rune()->links[pli];
-
-					if (pl->action == RL_RUN && pl->to >= 0 &&
-					    pl->to < SG_Rune()->hdr.num_seeds &&
-					    nc < sizeof(cand) / sizeof(cand[0]))
-					{
-						cand[nc].link_index = pli;
-						cand[nc].seed_index = pl->to;
-						cand[nc].goal_ms =
-						    SG_RouteCandidateGoalMs(goal_field[pl->to],
-						        Fields_LinkTraversalCostMs(pl),
-						        SG_FIELD_INF);
-						cand[nc].is_run = true;
-						VectorSubtract(SG_Rune()->seeds[pl->to].origin,
-						    SG_Rune()->seeds[bot->seed].origin, d);
-						cand[nc].distance = VectorLength(d);
-						nc++;
-					}
-				}
-				bot->patrol_random =
-				    SG_DefensePatrolRandomNext(bot->patrol_random);
-				chosen_link = SG_DefensePatrolChoose(cand, nc,
-				    (int)(1000.0f * SG_PersonaCampScale(e)), bot->prev_seed,
-				    bot->patrol_random, &chosen_seed);
-				if (chosen_link >= 0)
-				{
-					bot->patrol_seed = chosen_seed;
-					bot->patrol_link = chosen_link;
-					bestlink = chosen_link;
-					hold_post = false;
-					tc->patrol_walk = true;
-				}
-				else
-					SG_TimerArm(&bot->patrol_until, 5.0f);
-			}
+			bestlink = bot->patrol_link;
+			hold_post = false;
+			tc->patrol_walk = true;
 		}
 	}
 
