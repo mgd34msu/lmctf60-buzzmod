@@ -153,6 +153,7 @@ sg_speedhook_terminal_t SG_SpeedHookTerminalFinish(sg_bot_t *bot,
 	             SG_SPEEDHOOK_TERMINAL_NOATTACH :
 	             SG_SPEEDHOOK_TERMINAL_BURSTSTALL);
 	qboolean retain_run = terminal == SG_SPEEDHOOK_TERMINAL_NOATTACH &&
+	    !bot->commit_retirement_pending &&
 	    rune && rune->links &&
 	    bot->commit_link >= 0 && bot->commit_link < rune->hdr.num_links &&
 	    rune->links[bot->commit_link].action == RL_RUN;
@@ -214,4 +215,39 @@ void SG_StrikeDutyRetireSupersededRoute(sg_bot_t *bot,
 	if (SG_TraversalControllerPhysical(bot, action))
 		return;
 	SG_StagedTraversalCancel(bot, action);
+}
+
+qboolean SG_DefensePatrolRetire(sg_bot_t *bot, qboolean patrol_allowed)
+{
+	qboolean owned;
+	int retired_link;
+
+	if (!bot || patrol_allowed || bot->patrol_link < 0)
+		return false;
+	retired_link = bot->patrol_link;
+	owned = bot->commit_link == retired_link;
+	bot->patrol_link = -1;
+	bot->patrol_seed = -1;
+	if (owned)
+	{
+		if (SG_TraversalControllerPhysical(bot, RL_RUN))
+			bot->commit_retirement_pending = true;
+		else
+			SG_StagedTraversalCancel(bot, RL_RUN);
+	}
+	else
+	{
+		if (bot->sticky_link == retired_link)
+		{
+			bot->sticky_link = -1;
+			bot->latch_until = 0.0f;
+		}
+		if (bot->rail_link == retired_link)
+		{
+			bot->rail_link = -1;
+			bot->rail_stage = 0;
+			bot->rail_until = 0.0f;
+		}
+	}
+	return true;
 }

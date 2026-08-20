@@ -42,28 +42,20 @@ float SG_DefensePatrolThrottle(float configured)
 	return configured;
 }
 
+int SG_DefensePatrolAllowed(const sg_defense_patrol_request_t *request)
+{
+	return request && request->holds_post && request->own_flag_home &&
+	    request->quiet && !request->busy && request->armor_need <= 0.9f &&
+	    request->health_need <= 0.9f && request->ammo_need <= 0.9f &&
+	    isfinite(request->configured) && request->configured > 0.0f;
+}
+
 int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed)
 {
 	if (!target_seed || current_seed < 0 || *target_seed < 0 ||
 	    current_seed != *target_seed)
 		return 0;
 	*target_seed = -1;
-	return 1;
-}
-
-int SG_DefensePatrolRetireIfInactive(int active, int *patrol_link,
-	int *target_seed, int *commit_link)
-{
-	int owned_link;
-
-	if (active || !patrol_link || *patrol_link < 0)
-		return 0;
-	owned_link = *patrol_link;
-	if (commit_link && *commit_link == owned_link)
-		*commit_link = -1;
-	*patrol_link = -1;
-	if (target_seed)
-		*target_seed = -1;
 	return 1;
 }
 

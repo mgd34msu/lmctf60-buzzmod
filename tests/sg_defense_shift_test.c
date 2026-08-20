@@ -335,6 +335,50 @@ static void TestQuietPatrolThrottle(void)
 	CHECK(SG_DefensePatrolThrottle(NAN) == 0.0f);
 }
 
+static void TestQuietPatrolAdmission(void)
+{
+	sg_defense_patrol_request_t request = {
+		.holds_post = 1,
+		.own_flag_home = 1,
+		.quiet = 1,
+		.armor_need = 0.9f,
+		.health_need = 0.9f,
+		.ammo_need = 0.9f,
+		.configured = 0.55f
+	};
+
+	CHECK(SG_DefensePatrolAllowed(&request));
+	CHECK(!SG_DefensePatrolAllowed(NULL));
+	request.holds_post = 0;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.holds_post = 1;
+	request.quiet = 0;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.quiet = 1;
+	request.busy = 1;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.busy = 0;
+	request.armor_need = 0.9001f;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.armor_need = 0.9f;
+	request.health_need = 0.9001f;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.health_need = 0.9f;
+	request.ammo_need = 0.9001f;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.ammo_need = 0.9f;
+	request.armor_need = NAN;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.armor_need = 0.9f;
+	request.configured = 0.0f;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.configured = NAN;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+	request.configured = 0.55f;
+	request.own_flag_home = 0;
+	CHECK(!SG_DefensePatrolAllowed(&request));
+}
+
 static void TestQuietPatrolDwellsOnlyAfterArrival(void)
 {
 	int target = 80;
@@ -346,28 +390,6 @@ static void TestQuietPatrolDwellsOnlyAfterArrival(void)
 	CHECK(!SG_DefensePatrolFinishLeg(80, &target));
 	CHECK(!SG_DefensePatrolFinishLeg(-1, &target));
 	CHECK(!SG_DefensePatrolFinishLeg(80, NULL));
-}
-
-static void TestQuietPatrolContactRetiresExactCommit(void)
-{
-	int patrol_link = 12;
-	int target = 80;
-	int commit = 12;
-
-	CHECK(!SG_DefensePatrolRetireIfInactive(1, &patrol_link, &target,
-	    &commit));
-	CHECK(patrol_link == 12 && target == 80 && commit == 12);
-	CHECK(SG_DefensePatrolRetireIfInactive(0, &patrol_link, &target,
-	    &commit));
-	CHECK(patrol_link == -1 && target == -1 && commit == -1);
-
-	patrol_link = 12;
-	target = 80;
-	commit = 99;
-	CHECK(SG_DefensePatrolRetireIfInactive(0, &patrol_link, &target,
-	    &commit));
-	CHECK(patrol_link == -1 && target == -1 && commit == 99);
-	CHECK(!SG_DefensePatrolRetireIfInactive(0, NULL, &target, &commit));
 }
 
 static sg_defense_combat_request_t CombatRequest(void)
@@ -538,8 +560,8 @@ int main(void)
 	TestQuietPatrolCircuit();
 	TestQuietPatrolOwnsItsRandomness();
 	TestQuietPatrolThrottle();
+	TestQuietPatrolAdmission();
 	TestQuietPatrolDwellsOnlyAfterArrival();
-	TestQuietPatrolContactRetiresExactCommit();
 	TestCombatAdmissionAndDeterminism();
 	TestCombatHullProbeLaw();
 	TestCombatPreviewCandidateLaw();

@@ -25,5 +25,6 @@ sg_speedhook_terminal_t SG_SpeedHookTerminalFinish(sg_bot_t *bot,
 void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started);
 void SG_StrikeDutyRetireSupersededRoute(sg_bot_t *bot,
 	qboolean duty_replaces_route);
+qboolean SG_DefensePatrolRetire(sg_bot_t *bot, qboolean patrol_allowed);
 
 #endif

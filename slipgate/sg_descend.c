@@ -1928,9 +1928,6 @@ static qboolean StrikeRailWatchdogAllowed(const sg_bot_t *bot,
 
 int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 {
-	/* the former parameter list, unpacked from the think context; cmd
-	 * stays a real parameter until the movement stage speaks context.
-	 * The six in/out pointers became direct context access in the body. */
 	usercmd_t *cmd = &tc->cmd;
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
@@ -1945,9 +1942,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	int rail_seed = tc->rail_seed;
 	int rail_client = tc->rail_client;
 	int bestlink_in = tc->bestlink;
-	/* six of the former parameters -- carrying, live, duel_org,
-	 * duel_want, duel_expo, rail_dose -- turned out never to be read by
-	 * this body and have no unpack */
 	int bestlink = bestlink_in;
 	qboolean rally_hold = tc->rally_hold;
 	qboolean rail_hold = tc->rail_hold;
@@ -2062,35 +2056,32 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 		{
+			edict_t *own_flag = SG_OwnFlag(team);
 			int patrol_link = bot->patrol_link;
-			qboolean patrol_allowed = role == SG_ROLE_DEFEND &&
-			    bot->def_stand && defense_quiet && !duel &&
-			    !bot->engaged_last && !tc->strike_active &&
-			    !tc->strike_weapon_pursuit &&
-			    !SG_DefenseSupplyActive(bot) &&
-			    !(bot->lead_ent > 0 &&
-			      bot->lead_state == SG_LEAD_WAITING) &&
-			    w->item[SG_FC_ARMOR] <= 0.9f &&
-			    w->item[SG_FC_HEALTH] <= 0.9f &&
-			    w->item[SG_FC_AMMO] <= 0.9f &&
-			    isfinite(sg_cv.patrol->value) &&
-			    sg_cv.patrol->value > 0.0f;
+			sg_defense_patrol_request_t patrol_request = {
+				.holds_post = role == SG_ROLE_DEFEND && bot->def_stand,
+				.own_flag_home = own_flag && ctf_flagathome(own_flag),
+				.quiet = defense_quiet,
+				.busy = duel || bot->engaged_last || tc->strike_active ||
+				    tc->strike_weapon_pursuit || SG_DefenseSupplyActive(bot) ||
+				    (bot->lead_ent > 0 && bot->lead_state == SG_LEAD_WAITING),
+				.armor_need = w->item[SG_FC_ARMOR],
+				.health_need = w->item[SG_FC_HEALTH],
+				.ammo_need = w->item[SG_FC_AMMO],
+				.configured = sg_cv.patrol->value
+			};
+			qboolean patrol_allowed = SG_DefensePatrolAllowed(&patrol_request);
 
-			/* Contact/role/config edges retire the exact patrol commitment
-			 * before the generic latch can restore it for this movement frame. */
-			if (SG_DefensePatrolRetireIfInactive(patrol_allowed,
-			        &bot->patrol_link, &bot->patrol_seed,
-			        &bot->commit_link))
+			/* Admission loss retires the patrol before the generic latch. */
+			if (SG_DefensePatrolRetire(bot, patrol_allowed))
 			{
 				if (bestlink == patrol_link)
 					bestlink = -1;
-				bot->commit_until = 0.0f;
 				SG_TimerArm(&bot->patrol_until, 5.0f);
 				tc->bestlink = bestlink;
 			}
 
-			/* Select before link commitment so the route transaction records
-			 * the patrol link. */
+			/* Select before commitment so the route transaction owns the patrol. */
 			if (patrol_allowed &&
 			    SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))
 			{
@@ -2112,11 +2103,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				{
 					int stale_link = bot->patrol_link;
 
-					(void)SG_DefensePatrolRetireIfInactive(0,
-					    &bot->patrol_link, &bot->patrol_seed,
-					    &bot->commit_link);
-					if (owned)
-						bot->commit_until = 0.0f;
+					(void)SG_DefensePatrolRetire(bot, false);
 					if (bestlink == stale_link)
 						bestlink = -1;
 					SG_TimerArm(&bot->patrol_until, 5.0f);
@@ -2871,6 +2858,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		    bot->declared_started &&
 		    SG_DeclaredDoorGuardReleaseProvedClear(bot) !=
 		        SG_COMPOUND_GUARD_OK)
+		{
+			drop_commit = false;
+			staging_timed_out = false;
+			bestlink = bot->commit_link;
+		}
+		if (bot->commit_retirement_pending && SG_TraversalControllerPhysical(
+		        bot, cl->action))
 		{
 			drop_commit = false;
 			staging_timed_out = false;

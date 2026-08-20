@@ -66,7 +66,7 @@
   "oversized_files": {
     "GNUmakefile": 2681,
     "Makefile": 2920,
-    "slipgate/sg_arach.c": 3722,
+    "slipgate/sg_arach.c": 3721,
     "slipgate/sg_caco.c": 2109,
     "slipgate/sg_chat.c": 3834,
     "slipgate/sg_combat.c": 4509,
@@ -75,7 +75,7 @@
     "slipgate/sg_compound_publication.c": 901,
     "slipgate/sg_compound_swim_live.c": 1171,
     "slipgate/sg_compound_world.c": 1268,
-    "slipgate/sg_descend.c": 3934,
+    "slipgate/sg_descend.c": 3928,
     "slipgate/sg_fields.c": 1377,
     "slipgate/sg_goal.c": 1810,
     "slipgate/sg_local.h": 814,

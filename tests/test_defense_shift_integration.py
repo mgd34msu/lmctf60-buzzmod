@@ -147,27 +147,43 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         ):
             self.assertIn(field, goal)
 
-    def test_contact_retires_exact_patrol_commit_before_latch(self) -> None:
+    def test_admission_loss_retires_patrol_before_latch(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
         retire = source.rfind("int patrol_link = bot->patrol_link", 0,
                               source.index(
-                                  "SG_DefensePatrolRetireIfInactive("
-                                  "patrol_allowed"))
+                                  "SG_DefensePatrolRetire(bot, "
+                                  "patrol_allowed)"))
         latch = source.index(
             "if (!defense_shift_selected && !defense_patrol_selected &&",
             retire,
         )
 
         self.assertLess(retire, latch)
-        self.assertIn("&bot->patrol_link, &bot->patrol_seed", source[retire:latch])
-        self.assertIn("&bot->commit_link", source[retire:latch])
-        self.assertIn("defense_quiet && !duel", source[retire:latch])
-        self.assertIn("!bot->engaged_last", source[retire:latch])
+        self.assertIn("SG_DefensePatrolRetire(bot, patrol_allowed)",
+                      source[retire:latch])
+        self.assertIn(".own_flag_home = own_flag && ctf_flagathome(own_flag)",
+                      source[retire:latch])
+        self.assertIn(".quiet = defense_quiet", source[retire:latch])
+        self.assertIn(".busy = duel || bot->engaged_last", source[retire:latch])
+        self.assertIn("SG_DefensePatrolAllowed(&patrol_request)",
+                      source[retire:latch])
         self.assertIn("tc->bestlink = bestlink", source[retire:latch])
         self.assertIn("SG_TimerArm(&bot->patrol_until, 5.0f)",
                       source[retire:latch])
         self.assertIn("bot->patrol_link = chosen_link", source)
         self.assertIn("DefenseLocalRunReady(bot, bot->patrol_link", source)
+
+    def test_pending_patrol_retirement_is_checked_before_drop(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+        pending = source.index("if (bot->commit_retirement_pending &&")
+        drop = source.index("if (drop_commit)", pending)
+        hold = source[pending:drop]
+
+        self.assertIn("SG_TraversalControllerPhysical(", hold)
+        self.assertIn("bot, cl->action", hold)
+        self.assertIn("drop_commit = false", hold)
+        self.assertIn("staging_timed_out = false", hold)
+        self.assertIn("bestlink = bot->commit_link", hold)
 
     def test_late_shelf_retires_shift_before_post_or_movement(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()

@@ -3191,8 +3191,7 @@ void SG_BotThink(sg_bot_t *bot)
 	{
 		/* A patrol is a role-local leg, not a mission that may sleep through
 		 * ATTACK/RECOVER/ESCORT and resume from stale topology later. */
-		(void)SG_DefensePatrolRetireIfInactive(0, &bot->patrol_link,
-		    &bot->patrol_seed, &bot->commit_link);
+		(void)SG_DefensePatrolRetire(bot, false);
 		if (bot->commit_link < 0)
 			bot->commit_until = 0.0f;
 		bot->patrol_until = 0.0f;

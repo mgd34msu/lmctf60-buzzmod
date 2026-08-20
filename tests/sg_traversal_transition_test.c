@@ -306,6 +306,65 @@ static void TestSpeedHookReleaseFinishRetiresRun(void)
 	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 }
 
+static void TestDefensePatrolRetirement(void)
+{
+	sg_bot_t bot = SpeedHookRun();
+
+	bot.speedhook = false;
+	bot.patrol_link = 1;
+	bot.patrol_seed = 9;
+	CHECK(!SG_DefensePatrolRetire(&bot, true));
+	CHECK(bot.patrol_link == 1 && bot.commit_link == 1);
+	CHECK(SG_DefensePatrolRetire(&bot, false));
+	CHECK(bot.patrol_link == -1 && bot.patrol_seed == -1);
+	CHECK(bot.commit_link == -1 && bot.commit_route_goal.field == NULL);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+
+	bot = PullingSpeedHook();
+	bot.patrol_link = 1;
+	bot.patrol_seed = 9;
+	CHECK(SG_DefensePatrolRetire(&bot, false));
+	CHECK(bot.patrol_link == -1 && bot.patrol_seed == -1);
+	CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f &&
+	    bot.sticky_link == 1 && bot.hook_phase == 2 &&
+	    bot.commit_retirement_pending);
+
+	bot = SpeedHookRun();
+	bot.hook_phase = 2;
+	bot.patrol_link = 1;
+	bot.patrol_seed = 9;
+	CHECK(SG_DefensePatrolRetire(&bot, false));
+	CHECK(bot.commit_retirement_pending && bot.commit_link == 1);
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 0, false) ==
+	    SG_SPEEDHOOK_TERMINAL_NOATTACH);
+	CHECK(bot.commit_link == -1 && bot.sticky_link == -1 &&
+	    bot.rail_link == -1 && !bot.commit_retirement_pending);
+
+	bot = SpeedHookRun();
+	bot.speedhook = false;
+	bot.patrol_link = 0;
+	bot.patrol_seed = 9;
+	bot.sticky_link = 0;
+	bot.rail_link = 0;
+	CHECK(SG_DefensePatrolRetire(&bot, false));
+	CHECK(bot.patrol_link == -1 && bot.patrol_seed == -1);
+	CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f &&
+	    bot.commit_route_goal.field == route_field);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+
+	bot = SpeedHookRun();
+	bot.speedhook = false;
+	bot.patrol_link = 0;
+	bot.patrol_seed = 9;
+	CHECK(SG_DefensePatrolRetire(&bot, false));
+	CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f &&
+	    bot.commit_route_goal.field == route_field);
+	CHECK(bot.sticky_link == 1 && bot.latch_until == 30.0f);
+	CHECK(bot.rail_link == 1 && bot.rail_stage == 1 && bot.rail_until == 30.0f);
+}
+
 int SG_TraversalTransitionTests(void)
 {
 	TestCarryStartRetiresOnlyReversibleTraversal();
@@ -314,5 +373,6 @@ int SG_TraversalTransitionTests(void)
 	TestFlagTouchRetiresReversibleCommitment();
 	TestSpeedHookTerminalFinish();
 	TestSpeedHookReleaseFinishRetiresRun();
+	TestDefensePatrolRetirement();
 	return failures;
 }

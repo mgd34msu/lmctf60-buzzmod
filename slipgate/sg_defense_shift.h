@@ -33,6 +33,18 @@ typedef struct sg_defense_patrol_candidate_s
 	float distance;
 } sg_defense_patrol_candidate_t;
 
+typedef struct sg_defense_patrol_request_s
+{
+	int holds_post;
+	int own_flag_home;
+	int quiet;
+	int busy;
+	float armor_need;
+	float health_need;
+	float ammo_need;
+	float configured;
+} sg_defense_patrol_request_t;
+
 /* Pure geometry and admission policy for the stand defender's live-combat
  * leg. Collision and floor truth remain in sg_move.c, where the real player
  * hull and current world are available. */
@@ -100,15 +112,11 @@ int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 	size_t candidate_count, int max_goal_ms, int previous_seed,
 	unsigned draw, int *seed_out);
 
+int SG_DefensePatrolAllowed(const sg_defense_patrol_request_t *request);
+
 /* Complete a patrol leg only at its selected seed.  Clearing the target is the
  * caller's authority to start the post-arrival dwell clock. */
 int SG_DefensePatrolFinishLeg(int current_seed, int *target_seed);
-
-/* A patrol RUN is an exact role-local transaction.  Contact, role loss, or
- * disabling the behavior retires only that link and its target before movement
- * can reuse the ordinary commitment. */
-int SG_DefensePatrolRetireIfInactive(int active, int *patrol_link,
-	int *target_seed, int *commit_link);
 
 /* sg_patrol is the patrol walking throttle.  Invalid/off values disable the
  * behavior; enabled values are bounded away from both a shuffle and a sprint. */
