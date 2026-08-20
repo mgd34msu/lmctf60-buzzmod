@@ -10,7 +10,7 @@ import tempfile
 import textwrap
 import unittest
 
-
+from botfill_selector_test import BotfillSelectorTest
 ROOT = Path(__file__).resolve().parents[1]
 
 

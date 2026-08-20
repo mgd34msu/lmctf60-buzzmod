@@ -128,6 +128,19 @@ static void TestMissionAndFlagApproachPolicy(void)
 	CHECK(!SG_OrderedEscortRouteAllowed(0, 1));
 	CHECK(!SG_OrderedEscortRouteAllowed(2, 1));
 	CHECK(!SG_OrderedEscortRouteAllowed(1, -1));
+	CHECK(SG_BotfillRemovalAllowed(1, 0));
+	CHECK(!SG_BotfillRemovalAllowed(1, 1));
+	CHECK(SG_BotfillRemovalAllowed(0, 1));
+	CHECK(!SG_BotfillRemovalAllowed(2, 0));
+	CHECK(!SG_BotfillRemovalAllowed(1, -1));
+	CHECK(!SG_BotfillRemovalAllowed(0, 2));
+	CHECK(SG_BotfillOverfillStreak(0, 0) == 1);
+	CHECK(SG_BotfillOverfillStreak(2, 0) == 3);
+	CHECK(SG_BotfillOverfillStreak(3, 0) == 3);
+	CHECK(SG_BotfillOverfillStreak(3, 1) == 0);
+	CHECK(SG_BotfillOverfillStreak(-1, 0) == 0);
+	CHECK(SG_BotfillOverfillStreak(4, 0) == 0);
+	CHECK(SG_BotfillOverfillStreak(2, 2) == 0);
 }
 
 #endif /* SG_STRIKE_MISSION_POLICY_CASES_H */

@@ -77,6 +77,23 @@ static inline int SG_OrderedEscortDirectAimAllowed(int target_live,
 	return SG_OrderedEscortRouteAllowed(target_live, terminal);
 }
 
+static inline int SG_BotfillRemovalAllowed(int automatic, int carrying)
+{
+	if ((automatic != 0 && automatic != 1) ||
+	    (carrying != 0 && carrying != 1))
+		return 0;
+	return !automatic || !carrying;
+}
+
+static inline int SG_BotfillOverfillStreak(int streak, int removed)
+{
+	if (streak < 0 || streak > 3 || (removed != 0 && removed != 1))
+		return 0;
+	if (removed)
+		return 0;
+	return streak < 3 ? streak + 1 : 3;
+}
+
 /* Near-goal defenders and escorts are intentionally stationed. A flag-touch
  * mission may not inherit that stationary exemption. */
 static inline int SG_RoleMissionHold(int role, int goal_cost,

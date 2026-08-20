@@ -28,6 +28,7 @@
 #include "slipgate/sg_lead_random.h"
 #include "slipgate/sg_persona_assignment.h"
 #include "slipgate/sg_escape_random.h"
+#include "slipgate/sg_role_policy.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -179,24 +180,10 @@ void Botfill_Reset(void)
 }
 
 /*
- * BOTFILL -- the roster keeps itself. sv_botfill names the players each
- * team should field; bots make up whatever humans do not, one change per
- * second so joins stagger like the launch scripts always staggered them.
- * A human connecting displaces a bot on the team the balancer gives them;
- * a human leaving is backfilled the next second. Zero (the default) turns
- * the whole thing off and the manual `sv sg add` world works as before.
- * Only SLIPGATE's own bots are ever removed -- the legacy library's bots
- * belong to the legacy library (SG_OwnsBot is the property line).
+ * BOTFILL -- sv_botfill names the players each team should field. Bots fill
+ * vacancies and yield surplus slots one at a time. Zero disables balancing.
  */
-/*
- * Which bot goes, by the only rule the roster has ever used: lowest score.
- * team 0 means "either team", which is what an admin typing `kick worst`
- * is asking. Split out of Botfill_RemoveOne so the balancer and the console
- * retire the same bot for the same reason -- two different notions of
- * "worst" is how an admin and an automatic balancer end up fighting over
- * the roster in the middle of a match.
- */
-static int Botfill_WorstIndex(int team)
+static int Botfill_WorstIndex(int team, qboolean automatic)
 {
 	int i, worst = -1, worst_score = 0x7fffffff;
 
@@ -206,6 +193,9 @@ static int Botfill_WorstIndex(int team)
 			continue;
 		if (team && sg_bots[i].ent->client->ctf.teamnum != team)
 			continue;
+		if (!SG_BotfillRemovalAllowed(automatic,
+		    ClientHasFlag(sg_bots[i].ent) != NULL))
+			continue;
 		if (sg_bots[i].ent->client->resp.score < worst_score)
 		{
 			worst_score = sg_bots[i].ent->client->resp.score;
@@ -214,6 +204,13 @@ static int Botfill_WorstIndex(int team)
 	}
 	return worst;
 }
+
+#ifdef SG_BOTFILL_TEST_API
+int SG_BotfillTestWorstIndex(int team, int automatic)
+{
+	return Botfill_WorstIndex(team, (qboolean)automatic);
+}
+#endif
 
 /* the teardown half, shared by every path that retires a bot: disconnect,
  * free the edict, and clear the slot in that order -- the slot must not be
@@ -229,7 +226,7 @@ static void Botfill_Drop(int slot)
 
 static qboolean Botfill_RemoveOne(int team)
 {
-	int worst = Botfill_WorstIndex(team);
+	int worst = Botfill_WorstIndex(team, true);
 
 	if (worst < 0)
 		return false;
@@ -273,9 +270,8 @@ void Botfill_Frame(void)
 			humans[SG_TeamIdx(t)]++;
 	}
 
-	/* hysteresis: act only when the imbalance has stood three checks --
-	 * a roster decision is not an emergency, and patience ends every
-	 * oscillation a second controller could start */
+	/* Three consecutive samples damp transient joins and leaves. A protected
+	 * overfill remains ready so removal can retry after the carry ends. */
 	{
 		qboolean acted = false;
 
@@ -283,10 +279,13 @@ void Botfill_Frame(void)
 		{
 			if (humans[t] + bots[t] > want[t] && bots[t] > 0)
 			{
-				if (++sg_botfill_over_streak[t] >= 3)
+				sg_botfill_over_streak[t] = SG_BotfillOverfillStreak(
+				    sg_botfill_over_streak[t], false);
+				if (sg_botfill_over_streak[t] >= 3 &&
+				    Botfill_RemoveOne(SG_TeamFromIdx(t)))
 				{
-					Botfill_RemoveOne(SG_TeamFromIdx(t));
-					sg_botfill_over_streak[t] = 0;
+					sg_botfill_over_streak[t] = SG_BotfillOverfillStreak(
+					    sg_botfill_over_streak[t], true);
 					acted = true;
 				}
 			}
@@ -720,7 +719,7 @@ qboolean SG_RemoveBotNamed(const char *who)
 
 qboolean SG_KickWorst(void)
 {
-	int worst = Botfill_WorstIndex(0);   /* 0: either team */
+	int worst = Botfill_WorstIndex(0, false);   /* 0: either team */
 
 	if (worst < 0)
 		return false;
