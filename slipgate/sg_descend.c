@@ -1059,7 +1059,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * route exists. */
 		if (SG_RouteReturnPenaltyAllowed(bot->prev_seed, l->to,
 		        SG_AgeUnder(bot->prev_seed_time, 3.0f),
-		        nonworsening_route_neighbors,
+		        nonworsening_route_neighbors, route_pure,
 		        sg_cv.nobacktrack->value))
 			v *= 1.0f + sg_cv.nobacktrack->value / 100.0f;
 

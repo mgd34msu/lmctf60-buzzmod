@@ -45,23 +45,24 @@ static inline int SG_RouteRibbonAllowed(int carrying, int flag_touch_mission)
 	return !carrying && !flag_touch_mission;
 }
 
-/* The immediate-return surcharge is a choice among equally useful routes,
- * not permission to spend progress.  A merely finite alternative can point
- * uphill; require two distinct non-worsening neighbors before taxing either
- * one.  A reverse edge that is the only way to hold or reduce field cost is
- * the route forward, even when some worse finite edge also exists. */
+/* The immediate-return surcharge chooses among equally useful organic routes;
+ * it cannot spend progress or override a pure route.  A merely finite
+ * alternative can point uphill, so require two non-worsening neighbors.  A
+ * reverse edge that alone holds or reduces field cost is the route forward,
+ * even when some worse finite edge also exists. */
 static inline int SG_RouteReturnPenaltyAllowed(int previous_seed,
 	int candidate_seed, int previous_recent,
-	int nonworsening_neighbor_count,
+	int nonworsening_neighbor_count, int route_pure,
 	float configured_percent)
 {
 	if (previous_seed < 0 || candidate_seed < 0 ||
 	    (previous_recent != 0 && previous_recent != 1) ||
+	    (route_pure != 0 && route_pure != 1) ||
 	    nonworsening_neighbor_count < 2 ||
 	    !isfinite(configured_percent) ||
 	    !(configured_percent > 0.0f))
 		return 0;
-	return previous_recent && candidate_seed == previous_seed;
+	return !route_pure && previous_recent && candidate_seed == previous_seed;
 }
 
 /* An attacker without physical touch authority must not make standing still

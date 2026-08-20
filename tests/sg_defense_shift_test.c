@@ -21,17 +21,19 @@ static int failures;
 
 static void TestOneExitRouteStaysMobile(void)
 {
-	CHECK(SG_RouteReturnPenaltyAllowed(4, 4, 1, 2, 60.0f));
+	CHECK(SG_RouteReturnPenaltyAllowed(4, 4, 1, 2, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 2, 1, 60.0f));
 	/* A second finite but uphill edge is deliberately absent from this count:
 	 * the only non-worsening reverse edge must remain untaxed. */
-	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 1, 60.0f));
-	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 0, 60.0f));
-	CHECK(!SG_RouteReturnPenaltyAllowed(4, 5, 1, 3, 60.0f));
-	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 0, 3, 60.0f));
-	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, 0.0f));
-	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, NAN));
-	CHECK(!SG_RouteReturnPenaltyAllowed(-1, 4, 1, 3, 60.0f));
-	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 2, 3, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 1, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 0, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 5, 1, 3, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 0, 3, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, 0, 0.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, 0, NAN));
+	CHECK(!SG_RouteReturnPenaltyAllowed(-1, 4, 1, 3, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 2, 3, 0, 60.0f));
+	CHECK(!SG_RouteReturnPenaltyAllowed(4, 4, 1, 3, 2, 60.0f));
 }
 
 static void TestAttackDescentCannotPriceItselfStill(void)

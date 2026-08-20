@@ -93,6 +93,14 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertIn("SG_RouteCandidateGoalMs(goal_field[pl->to]", patrol)
         self.assertIn("Fields_LinkTraversalCostMs(pl)", patrol)
 
+    def test_pure_routes_skip_organic_return_penalty(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+        call = source[source.index("SG_RouteReturnPenaltyAllowed("):
+                      source.index("sg_cv.nobacktrack->value", source.index(
+                          "SG_RouteReturnPenaltyAllowed("))]
+
+        self.assertIn("nonworsening_route_neighbors, route_pure", call)
+
     def test_post_facing_uses_an_incoming_scoring_route(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
 
