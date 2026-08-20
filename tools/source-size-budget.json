@@ -105,7 +105,7 @@
     "tests/sg_sidecar_loader_test.c": 872,
     "tests/sg_sidecar_store_test.c": 941,
     "tests/sg_strike_test.c": 1283,
-    "tests/sg_strike_transition_test.c": 1231,
+    "tests/sg_strike_transition_test.c": 1166,
     "tests/test_bspmechanisms.py": 1268,
     "tests/test_defense_combat_integration.py": 894,
     "tests/test_offense_flag_pickup_recovery.py": 1117,

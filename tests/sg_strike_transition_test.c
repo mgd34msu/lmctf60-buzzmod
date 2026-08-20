@@ -32,6 +32,7 @@ qboolean SG_StrikeTestAttackEligible(sg_role_t role, qboolean carrying,
 	int ordered_role);
 void SG_StrikeTestPureRoutePrepareCommit(sg_bot_t *bot,
 	const sg_think_t *tc);
+int SG_TraversalTransitionTests(void);
 static int failures;
 #define CHECK(condition) do { \
 	if (!(condition)) { \
@@ -468,72 +469,6 @@ static void TestPureRouteChangeRetiresOnlyReversibleRun(void)
 	tc.route_field = enemy_field;
 	SG_StrikeTestPureRoutePrepareCommit(&bot, &tc);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
-}
-
-static void ArmCarryBallistic(sg_bot_t *bot, int action, qboolean physical)
-{
-	*bot = Bot();
-	test_links[1].action = action;
-	bot->commit_link = 1;
-	bot->commit_until = 30.0f;
-	bot->commit_route_field = enemy_field;
-	bot->sticky_link = 1;
-	bot->latch_until = 25.0f;
-	if (action == RL_JUMP)
-	{
-		bot->jump_link = 1;
-		bot->jump_started = physical;
-	}
-	else if (action == RL_DROP)
-	{
-		bot->drop_link = 1;
-		bot->drop_started = physical;
-	}
-	else
-	{
-		bot->rj_phase = physical ? 2 : 1;
-		bot->rj_deadline = 30.0f;
-	}
-}
-
-static void TestCarryStartRetiresOnlyReversibleTraversal(void)
-{
-	const int actions[] = { RL_JUMP, RL_DROP, RL_ROCKETJUMP };
-	sg_bot_t bot;
-	int index;
-	for (index = 0; index < 3; index++)
-	{
-		WorldReset();
-		ArmCarryBallistic(&bot, actions[index], false);
-		SG_CarryStartRetireSupersededRoute(&bot, true);
-		CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
-		    bot.commit_route_field == NULL);
-		CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
-		if (actions[index] == RL_JUMP)
-			CHECK(bot.jump_link == -1 && !bot.jump_started);
-		else if (actions[index] == RL_DROP)
-			CHECK(bot.drop_link == -1 && !bot.drop_started);
-		else
-			CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
-		WorldReset();
-		ArmCarryBallistic(&bot, actions[index], true);
-		SG_CarryStartRetireSupersededRoute(&bot, true);
-		CHECK(bot.commit_link == 1 && (actions[index] == RL_JUMP ?
-		    bot.jump_started : actions[index] == RL_DROP ? bot.drop_started :
-		    bot.rj_phase == 2));
-	}
-	WorldReset();
-	ArmCarryBallistic(&bot, RL_JUMP, false);
-	SG_CarryStartRetireSupersededRoute(&bot, false);
-	CHECK(bot.commit_link == 1 && bot.jump_link == 1);
-	WorldReset();
-	bot = Bot();
-	test_links[1].action = RL_HOOK;
-	bot.commit_link = 1;
-	bot.hook_link = 1;
-	bot.hook_phase = 1;
-	SG_CarryStartRetireSupersededRoute(&bot, true);
-	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
 }
 
 static void TestDeadlineGoAndCurrentCandidate(void)
@@ -1211,7 +1146,7 @@ int main(void)
 {
 	TestFreshTagAndOldCommitment();
 	TestPureRouteChangeRetiresOnlyReversibleRun();
-	TestCarryStartRetiresOnlyReversibleTraversal();
+	failures += SG_TraversalTransitionTests();
 	TestDeadlineGoAndCurrentCandidate();
 	TestSpeedHookAndStickyDrain();
 	TestRocketJumpBoundaries();

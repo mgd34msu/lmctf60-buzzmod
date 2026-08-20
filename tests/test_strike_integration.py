@@ -84,7 +84,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="sg-strike-transition-") as tmp:
             output = self._compile_function_section_probe(tmp,
                 "sg_strike_transition_test", [
-                    "tests/sg_strike_transition_test.c",
+                    "tests/sg_strike_transition_test.c", "tests/sg_traversal_transition_test.c",
                     "slipgate/sg_descend.c",
                     "slipgate/sg_arach.c",
                     "slipgate/sg_strike.c",

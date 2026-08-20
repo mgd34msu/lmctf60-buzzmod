@@ -3294,11 +3294,11 @@ void SG_BotThink(sg_bot_t *bot)
 			    strike_frame);
 			tc.strike_blocks_optional =
 			    SG_StrikeDutyRetiresOptionalErrand(strike_duty);
+			SG_StrikeDutyRetireSupersededRoute(bot, tc.strike_blocks_optional);
 			if (tc.strike_blocks_optional)
 				Lead_Abort(bot, "strike duty");
 		}
 	}
-
 	Think_Objective(bot, &tc);
 
 	/* Strike is a coordinator overlay, not a second role allocator.  It may

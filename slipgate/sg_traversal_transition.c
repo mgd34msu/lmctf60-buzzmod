@@ -134,3 +134,23 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 		return;
 	SG_StagedTraversalCancel(bot, action);
 }
+
+void SG_StrikeDutyRetireSupersededRoute(sg_bot_t *bot,
+	qboolean duty_replaces_route)
+{
+	rune_t *rune;
+	int action;
+
+	if (!bot || !duty_replaces_route)
+		return;
+	bot->tac_seed = -1;
+	bot->tac_time = 0.0f;
+	rune = SG_Rune();
+	if (!rune || !rune->links || bot->commit_link < 0 ||
+	    bot->commit_link >= rune->hdr.num_links)
+		return;
+	action = rune->links[bot->commit_link].action;
+	if (SG_TraversalControllerPhysical(bot, action))
+		return;
+	SG_StagedTraversalCancel(bot, action);
+}
