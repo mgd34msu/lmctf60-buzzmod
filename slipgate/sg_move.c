@@ -6999,6 +6999,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean open_ahead = tc->open_ahead;
 	qboolean run_link = tc->run_link;
 	int door_hold = tc->door_hold;
+	bot->beat_until = SG_SpawnBeatDeadline(bot->beat_until,
+	    tc->flag_touch_terminal);
 	{
 		sg_mover_lease_record_t record;
 		sg_compound_guard_result_t guard_result;
@@ -7720,8 +7722,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			basis[ROLL] = 0.0f;
 			AngleVectors(basis, basis_fwd, basis_right, NULL);
 		}
-
-
 		if (!aimed_fire_requested && !nade_release &&
 		    SG_TimerPending(bot->beat_until))
 		{

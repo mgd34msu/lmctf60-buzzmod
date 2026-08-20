@@ -206,6 +206,12 @@ static inline int SG_CarrierJinkAllowed(int terminal,
 	return !terminal && !flag_touch_terminal;
 }
 
+static inline float SG_SpawnBeatDeadline(float deadline,
+	int flag_touch_terminal)
+{
+	return flag_touch_terminal ? 0.0f : deadline;
+}
+
 static inline int SG_OptionalItemDetourAllowed(int push,
 	int strike_blocks_optional, int role, int health)
 {

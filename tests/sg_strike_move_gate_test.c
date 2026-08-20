@@ -1,9 +1,9 @@
-/* Execute the real sg_move strike rail gate and RJ phase-two command writer. */
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_move.h"
+#include "slipgate/sg_role_policy.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -54,6 +54,8 @@ int main(void)
 
 	memset(&bot, 0, sizeof(bot));
 	memset(&tc, 0, sizeof(tc));
+	CHECK(SG_SpawnBeatDeadline(2.0f, false) == 2.0f);
+	CHECK(SG_SpawnBeatDeadline(2.0f, true) == 0.0f);
 	CHECK(SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(false));
 	CHECK(!SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(true));
 	CHECK(!SG_StrikeTestEnemyFlagTouchMissionActive(false, false));
