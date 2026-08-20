@@ -101,6 +101,19 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
 
         self.assertIn("nonworsening_route_neighbors, route_pure", call)
 
+    def test_near_goal_hook_skip_requires_a_descending_run(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+        start = source.index("neighbor->action == RL_RUN")
+        end = source.index("/* life ticker", start)
+        proof = source[start:end]
+        call = source[source.index("SG_HookNearGoalSkipAllowed("):
+                      source.index("continue;", source.index(
+                          "SG_HookNearGoalSkipAllowed("))]
+
+        self.assertIn("goal_field[neighbor->to]", proof)
+        self.assertIn("descending_run_available = true", proof)
+        self.assertIn("descending_run_available", call)
+
     def test_post_facing_uses_an_incoming_scoring_route(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
 

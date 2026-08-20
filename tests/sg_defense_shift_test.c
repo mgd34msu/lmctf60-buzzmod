@@ -54,6 +54,20 @@ static void TestAttackDescentCannotPriceItselfStill(void)
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 0));
 }
 
+static void TestNearGoalHookNeedsFootProgress(void)
+{
+	const int infinity = 0x3fffffff;
+
+	CHECK(SG_HookNearGoalSkipAllowed(1, 0, 1, 599, infinity));
+	CHECK(!SG_HookNearGoalSkipAllowed(1, 0, 0, 599, infinity));
+	CHECK(!SG_HookNearGoalSkipAllowed(1, 1, 1, 599, infinity));
+	CHECK(!SG_HookNearGoalSkipAllowed(0, 0, 1, 599, infinity));
+	CHECK(!SG_HookNearGoalSkipAllowed(1, 0, 1, 600, infinity));
+	CHECK(!SG_HookNearGoalSkipAllowed(1, 0, 1, -1, infinity));
+	CHECK(!SG_HookNearGoalSkipAllowed(1, 0, 1, infinity, infinity));
+	CHECK(!SG_HookNearGoalSkipAllowed(2, 0, 1, 599, infinity));
+}
+
 static void TestCandidateChargesImmediateTraversal(void)
 {
 	float run = SG_RouteCandidatePrice(1200.0f, 100, 1.0f);
@@ -478,6 +492,7 @@ int main(void)
 {
 	TestOneExitRouteStaysMobile();
 	TestAttackDescentCannotPriceItselfStill();
+	TestNearGoalHookNeedsFootProgress();
 	TestCandidateChargesImmediateTraversal();
 	TestGoalProgressChargesImmediateTraversal();
 	TestDefenderFacesTheIncomingScoringRoute();

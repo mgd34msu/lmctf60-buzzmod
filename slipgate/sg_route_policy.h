@@ -84,6 +84,20 @@ static inline int SG_AttackDescentFallbackAllowed(int attack_role, int run_link,
 	return 1;
 }
 
+/* Near-goal hook suppression is an optimization, not route authority. */
+static inline int SG_HookNearGoalSkipAllowed(int hook_policy, int carrying,
+	int descending_run_available, int current_goal_ms, int field_infinite)
+{
+	if ((hook_policy != 0 && hook_policy != 1) ||
+	    (carrying != 0 && carrying != 1) ||
+	    (descending_run_available != 0 && descending_run_available != 1) ||
+	    field_infinite <= 0 || current_goal_ms < 0 ||
+	    current_goal_ms >= field_infinite)
+		return 0;
+	return hook_policy && !carrying && descending_run_available &&
+	       current_goal_ms < 600;
+}
+
 /* Incumbent and candidate seeds must be compared on the same combat surface.
  * Forward-pressure policy removes duel range control for an attacker pressing
  * the enemy objective and for a carrier fleeing home.  Applying that removal

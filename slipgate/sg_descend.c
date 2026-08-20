@@ -315,7 +315,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	sg_flag_approach_source_t approach_source = SG_FLAG_APPROACH_NONE;
 	float approach_flag_distance = 0.0f;
 	qboolean approach_flag_touch = false;
-	int nonworsening_route_neighbors = 0;
+	int nonworsening_route_neighbors = 0, descending_run_available = 0;
 	int attack_descent_link = -1;
 	float attack_descent_value = 1e30f;
 	qboolean enemy_pressure = tc->strike_pressure;
@@ -354,10 +354,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 	}
-	/* The immediate-return price is meaningful only when the field offers a
-	 * second route that does not give progress back. Count distinct neighbors
-	 * at or below the current live route cost; a finite uphill exit cannot be
-	 * used as an excuse to tax the only way forward. */
+	/* Count non-worsening neighbors and prove a descending RUN exists. */
 	if (bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds)
 		for (li = SG_Rune()->first_link[bot->seed]; li >= 0;
 		     li = SG_Rune()->next_link[li])
@@ -366,16 +363,21 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			int prior;
 			qboolean duplicate = false;
 
-			if (neighbor->to >= 0 &&
-			    neighbor->to < SG_Rune()->hdr.num_seeds &&
-			    neighbor->to != bot->seed &&
-			    route_field[bot->seed] < SG_FIELD_INF &&
+			if (neighbor->to < 0 || neighbor->to >= SG_Rune()->hdr.num_seeds ||
+			    neighbor->to == bot->seed)
+				continue;
+			if (neighbor->action == RL_RUN &&
+			    goal_field[bot->seed] < SG_FIELD_INF &&
+			    SG_RouteCandidateGoalMs(goal_field[neighbor->to],
+			        Fields_LinkTraversalCostMs(neighbor), SG_FIELD_INF) <
+			        goal_field[bot->seed])
+				descending_run_available = true;
+			if (route_field[bot->seed] < SG_FIELD_INF &&
 			    SG_RouteCandidateGoalMs(route_field[neighbor->to],
 			        Fields_LinkTraversalCostMs(neighbor), SG_FIELD_INF) <=
 			        route_field[bot->seed])
 			{
-				/* Multiple proved actions may reach the same neighbor. They are
-				 * one route choice for this policy, not independent exits. */
+				/* Different actions to one seed are one route choice. */
 				for (prior = SG_Rune()->first_link[bot->seed];
 				     prior >= 0 && prior != li;
 				     prior = SG_Rune()->next_link[prior])
@@ -671,11 +673,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			     (float)(dh & 1023) / 1023.0f;
 		}
 
-		/* Non-carriers within 600 ms of the objective finish on foot instead
-		 * of oscillating across nearby hook links. */
-		if (hook_policy && role != SG_ROLE_CARRY &&
-		    goal_field[bot->seed] < 600 &&
-		    goal_field[bot->seed] < SG_FIELD_INF)
+		if (SG_HookNearGoalSkipAllowed(hook_policy,
+		        role == SG_ROLE_CARRY, descending_run_available,
+		        goal_field[bot->seed], SG_FIELD_INF))
 			continue;
 		/* Under enemy pressure, prefer covered final approaches when route
 		 * costs are otherwise close. */
