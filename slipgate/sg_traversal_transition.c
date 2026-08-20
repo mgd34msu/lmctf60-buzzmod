@@ -49,6 +49,9 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 	bot->commit_retirement_pending = false;
 	bot->sticky_link = -1;
 	bot->latch_until = 0.0f;
+	bot->rail_link = -1;
+	bot->rail_stage = 0;
+	bot->rail_until = 0.0f;
 	if (bot->hook_phase == 1)
 	{
 		bot->hook_phase = 0;

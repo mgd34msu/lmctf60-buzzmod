@@ -427,14 +427,14 @@ static void TestPureRouteChangeRetiresReversibleCommitments(void)
 	};
 	ArmPureRoute(&bot, &tc, RL_RUN);
 	bot.sticky_link = 1;
-	bot.latch_until = 25.0f;
-	CHECK(bot.commit_route_goal.field == weapon_field &&
-	    bot.commit_route_goal.root_seed == 1);
+	bot.rail_link = bot.rail_stage = 1;
+	bot.rail_until = 30.0f;
 	tc.route_field = enemy_field;
 	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
-	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
-	CHECK(bot.commit_route_goal.field == NULL);
-	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+	    bot.commit_route_goal.field == NULL);
+	CHECK(bot.sticky_link == -1);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 
 	ArmPureRoute(&bot, &tc, RL_RUN);
 	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
