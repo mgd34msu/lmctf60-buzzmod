@@ -67,6 +67,15 @@ int SG_DefensePatrolRetireIfInactive(int active, int *patrol_link,
 	return 1;
 }
 
+static int DefensePatrolCandidateEligible(
+	const sg_defense_patrol_candidate_t *candidate, int max_goal_ms)
+{
+	return candidate && candidate->is_run && candidate->link_index >= 0 &&
+	    candidate->seed_index >= 0 && candidate->goal_ms >= 0 &&
+	    candidate->goal_ms < max_goal_ms && isfinite(candidate->distance) &&
+	    candidate->distance >= 96.0f;
+}
+
 int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 	size_t candidate_count, int max_goal_ms, int previous_seed,
 	unsigned draw, int *seed_out)
@@ -79,10 +88,7 @@ int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 	if (!candidates || candidate_count == 0 || max_goal_ms < 0)
 		return -1;
 	for (index = 0; index < candidate_count; index++)
-		if (candidates[index].is_run && candidates[index].link_index >= 0 &&
-		    candidates[index].seed_index >= 0 &&
-		    candidates[index].goal_ms >= 0 &&
-		    candidates[index].goal_ms < max_goal_ms)
+		if (DefensePatrolCandidateEligible(&candidates[index], max_goal_ms))
 			eligible++;
 	if (eligible == 0)
 		return -1;
@@ -92,9 +98,7 @@ int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 	{
 		const sg_defense_patrol_candidate_t *candidate = &candidates[index];
 
-		if (!candidate->is_run || candidate->link_index < 0 ||
-		    candidate->seed_index < 0 || candidate->goal_ms < 0 ||
-		    candidate->goal_ms >= max_goal_ms)
+		if (!DefensePatrolCandidateEligible(candidate, max_goal_ms))
 			continue;
 		if (pick-- == 0)
 		{
@@ -115,9 +119,7 @@ int SG_DefensePatrolChoose(const sg_defense_patrol_candidate_t *candidates,
 			const sg_defense_patrol_candidate_t *candidate =
 			    &candidates[alternate];
 
-			if (candidate->is_run && candidate->link_index >= 0 &&
-			    candidate->seed_index >= 0 && candidate->goal_ms >= 0 &&
-			    candidate->goal_ms < max_goal_ms &&
+			if (DefensePatrolCandidateEligible(candidate, max_goal_ms) &&
 			    candidate->seed_index != previous_seed)
 			{
 				selected = (int)alternate;

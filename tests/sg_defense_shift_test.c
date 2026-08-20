@@ -240,21 +240,23 @@ static void TestInvalidShiftRetiresOnlyExactCommitment(void)
 static void TestQuietPatrolCircuit(void)
 {
 	const sg_defense_patrol_candidate_t candidates[] = {
-		{ 8, 80, 500, 1 },
-		{ 3, 30, 350, 0 },
-		{ 4, 40, 999, 1 },
-		{ 9, 90, 1000, 1 },
-		{ -1, 20, 200, 1 }
+		{ 7, 70, 100, 1, 95.0f },
+		{ 8, 80, 500, 1, 96.0f },
+		{ 3, 30, 350, 0, 96.0f },
+		{ 4, 40, 999, 1, 128.0f },
+		{ 9, 90, 1000, 1, 96.0f },
+		{ -1, 20, 200, 1, 96.0f },
+		{ 6, 60, 200, 1, NAN }
 	};
 	int seed = -1;
 
-	CHECK(SG_DefensePatrolChoose(candidates, 5, 1000, -1, 0, &seed) == 8);
+	CHECK(SG_DefensePatrolChoose(candidates, 7, 1000, -1, 0, &seed) == 8);
 	CHECK(seed == 80);
 	/* Draw the return leg: another admitted road exists, so the circuit
 	 * advances instead of shuffling straight back. */
-	CHECK(SG_DefensePatrolChoose(candidates, 5, 1000, 80, 0, &seed) == 4);
+	CHECK(SG_DefensePatrolChoose(candidates, 7, 1000, 80, 0, &seed) == 4);
 	CHECK(seed == 40);
-	CHECK(SG_DefensePatrolChoose(candidates, 5, 0, -1, 0, &seed) == -1);
+	CHECK(SG_DefensePatrolChoose(candidates, 7, 0, -1, 0, &seed) == -1);
 	CHECK(seed == -1);
 	CHECK(SG_DefensePatrolChoose(NULL, 5, 1000, -1, 0, &seed) == -1);
 }

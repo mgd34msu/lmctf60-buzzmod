@@ -3751,8 +3751,7 @@ stag_done:
 		qboolean quiet = defense_quiet;
 
 		if (bot->def_supply_armed)
-			goto no_hold;   /* OUTBOUND owns the weapon leg; RETURN can only
-			                  * reach this branch before its finish fence */
+			goto no_hold; /* The supply sortie owns movement. */
 
 		if (quiet &&
 		    (w->item[SG_FC_ARMOR] > 0.9f || w->item[SG_FC_HEALTH] > 0.9f ||
@@ -3773,8 +3772,7 @@ stag_done:
 			if (SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))
 			{
 				bot->patrol_link = -1;
-				/* Dwell begins at proved arrival, never at departure.  A long
-				 * walking leg must still end in an unhurried post observation. */
+				/* Dwell begins only after proved arrival. */
 				bot->patrol_random =
 				    SG_DefensePatrolRandomNext(bot->patrol_random);
 				SG_TimerArm(&bot->patrol_until,
@@ -3799,7 +3797,6 @@ stag_done:
 			}
 			else if (SG_TimerReady(bot->patrol_until))
 			{
-				/* Choose a complete RUN inside the post band. */
 				int pli, chosen_seed = -1, chosen_link;
 				sg_defense_patrol_candidate_t cand[64];
 				size_t nc = 0;
@@ -3819,6 +3816,9 @@ stag_done:
 						        Fields_LinkTraversalCostMs(pl),
 						        SG_FIELD_INF);
 						cand[nc].is_run = true;
+						VectorSubtract(SG_Rune()->seeds[pl->to].origin,
+						    SG_Rune()->seeds[bot->seed].origin, d);
+						cand[nc].distance = VectorLength(d);
 						nc++;
 					}
 				}

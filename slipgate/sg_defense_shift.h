@@ -30,6 +30,7 @@ typedef struct sg_defense_patrol_candidate_s
 	int seed_index;
 	int goal_ms;
 	int is_run;
+	float distance;
 } sg_defense_patrol_candidate_t;
 
 /* Pure geometry and admission policy for the stand defender's live-combat
