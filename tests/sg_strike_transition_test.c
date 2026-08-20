@@ -1035,9 +1035,9 @@ static void TestRailAndCarrierRoute(void)
 	bot.rail_stage = 2;
 	bot.rail_until = 99.0f;
 	tc.strike_active = false;
-	SG_StrikeTestRetireGenericRail(&bot, &tc);
-	CHECK(bot.rail_link == 0 && bot.rail_stage == 2);
-	CHECK(bot.rail_until == 99.0f);
+	SG_CarryStartRetireStagedTraversal(&bot, true);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0);
+	CHECK(bot.rail_until == 0.0f);
 	CHECK(SG_StrikeTestRailLateOverrideAllowed(&bot, &tc));
 	CHECK(SG_StrikeTestRailWatchdogAllowed(&bot, &tc));
 

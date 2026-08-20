@@ -109,20 +109,20 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		bot->declared_guard_pause_started = 0.0f;
 		bot->declared_door_recovery_since = 0.0f;
 		break;
-	case RL_RUN:
 	default:
 		break;
 	}
 }
 
-void SG_CarryStartRetireStagedTraversal(sg_bot_t *bot,
-	qboolean carry_started)
+void SG_CarryStartRetireStagedTraversal(sg_bot_t *bot, qboolean carry_started)
 {
 	rune_t *rune;
 	int action;
-
 	if (!bot || !carry_started)
 		return;
+	bot->rail_link = -1;
+	bot->rail_stage = 0;
+	bot->rail_until = 0.0f;
 	rune = SG_Rune();
 	if (!rune || !rune->links ||
 	    bot->commit_link < 0 || bot->commit_link >= rune->hdr.num_links)

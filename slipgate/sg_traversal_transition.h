@@ -3,7 +3,6 @@
 
 qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action);
 void SG_StagedTraversalCancel(sg_bot_t *bot, int action);
-void SG_CarryStartRetireStagedTraversal(sg_bot_t *bot,
-	qboolean carry_started);
+void SG_CarryStartRetireStagedTraversal(sg_bot_t *bot, qboolean carry_started);
 
 #endif
