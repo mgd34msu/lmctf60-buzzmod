@@ -22,19 +22,10 @@ static unsigned Bit(int slot)
 static sg_strike_frame_t Frame(float now)
 {
 	sg_strike_frame_t frame;
-	int slot;
 
-	memset(&frame, 0, sizeof(frame));
-	frame.now = now;
+	SG_StrikeFrameInit(&frame, now);
 	frame.own_flag_home = 1;
 	frame.enemy_flag_home = 1;
-	frame.carrier_slot = -1;
-	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
-	{
-		frame.slot[slot].enemy_flag_goal_ms = -1;
-		frame.slot[slot].recover_goal_ms = -1;
-		frame.slot[slot].carrier_goal_ms = -1;
-	}
 	return frame;
 }
 

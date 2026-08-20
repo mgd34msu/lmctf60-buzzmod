@@ -2,7 +2,9 @@
 #ifndef SG_STRIKE_H
 #define SG_STRIKE_H
 
+#include <math.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "slipgate/sg_action_contract.generated.h"
 
@@ -15,6 +17,7 @@
 #define SG_STRIKE_SYNC_SPREAD_MS 1500
 #define SG_STRIKE_LEADER_WINDOW_MS 5000
 #define SG_STRIKE_CLEAR_SECONDS 5.0f
+#define SG_STRIKE_SCREEN_DISTANCE 700.0f
 
 typedef enum sg_strike_phase_e
 {
@@ -101,6 +104,7 @@ typedef struct sg_strike_slot_input_s
 	int enemy_flag_goal_ms;
 	int recover_goal_ms;
 	int carrier_goal_ms;
+	float carrier_distance;
 	int direct_flag_touch;
 } sg_strike_slot_input_t;
 
@@ -116,6 +120,22 @@ typedef struct sg_strike_frame_s
 	int carrier_slot;
 	sg_strike_slot_input_t slot[SG_STRIKE_MAX_SLOTS];
 } sg_strike_frame_t;
+
+static inline void SG_StrikeFrameInit(sg_strike_frame_t *frame, float now)
+{
+	int slot;
+
+	memset(frame, 0, sizeof(*frame));
+	frame->now = now;
+	frame->carrier_slot = -1;
+	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+	{
+		frame->slot[slot].enemy_flag_goal_ms = -1;
+		frame->slot[slot].recover_goal_ms = -1;
+		frame->slot[slot].carrier_goal_ms = -1;
+		frame->slot[slot].carrier_distance = -1.0f;
+	}
+}
 
 typedef struct sg_strike_team_s
 {
@@ -150,7 +170,25 @@ int SG_StrikeMember(const sg_strike_team_t *team, int slot);
 /* Participants are the capped attacker roster plus an actual external
  * carrier during EGRESS.  The carrier never enters member_mask. */
 int SG_StrikeParticipant(const sg_strike_team_t *team, int slot);
-int SG_StrikeCarrierScreened(const sg_strike_team_t *team);
+static inline int SG_StrikeCarrierScreened(const sg_strike_team_t *team,
+	const sg_strike_frame_t *frame)
+{
+	int slot;
+
+	if (!team || !frame || team->phase != SG_STRIKE_EGRESS)
+		return 0;
+	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
+	{
+		const sg_strike_slot_input_t *input = &frame->slot[slot];
+
+		if (team->duty[slot] == SG_STRIKE_DUTY_ESCORT && input->present &&
+		    input->alive && isfinite(input->carrier_distance) &&
+		    input->carrier_distance >= 0.0f &&
+		    input->carrier_distance <= SG_STRIKE_SCREEN_DISTANCE)
+			return 1;
+	}
+	return 0;
+}
 float SG_StrikeCarrierHookRisk(int carrier_screened);
 int SG_StrikeMemberNeedsWeapon(const sg_strike_team_t *team, int slot,
 	float now);

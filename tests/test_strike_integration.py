@@ -552,7 +552,7 @@ class StrikeIntegrationTest(unittest.TestCase):
     def test_strike_telemetry_is_debug_gated_and_edge_only(self) -> None:
         source = (ROOT / "slipgate/sg_arach.c").read_text()
         start = source.index("static void StrikeTelemetryEdge(int team_index)")
-        end = source.index("static void StrikeFrameInit", start)
+        end = source.index("static int StrikeFieldCost", start)
         telemetry = source[start:end]
         self.assertIn("STRIKE_EDGE team=%d epoch=%u phase=%s", telemetry)
         for field in (

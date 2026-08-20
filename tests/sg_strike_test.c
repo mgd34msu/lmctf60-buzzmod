@@ -38,19 +38,10 @@ static int CountDuty(const sg_strike_team_t *team, sg_strike_duty_t duty)
 static sg_strike_frame_t Frame(float now)
 {
 	sg_strike_frame_t frame;
-	int slot;
 
-	memset(&frame, 0, sizeof(frame));
-	frame.now = now;
+	SG_StrikeFrameInit(&frame, now);
 	frame.own_flag_home = 1;
 	frame.enemy_flag_home = 1;
-	frame.carrier_slot = -1;
-	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
-	{
-		frame.slot[slot].enemy_flag_goal_ms = -1;
-		frame.slot[slot].recover_goal_ms = -1;
-		frame.slot[slot].carrier_goal_ms = -1;
-	}
 	return frame;
 }
 
@@ -610,10 +601,8 @@ static void TestEscortAdmissionProtectsOnlyRecoverer(void)
 	sg_strike_team_t team;
 	sg_strike_frame_t frame = Frame(470.0f);
 
-	/* Initial ranking fills the four slots with the carrier, two close
-	 * attackers, and the only recoverer.  A fifth body is the only escort.
-	 * The carrier also has a finite own-flag field, but cannot perform recovery
-	 * while carrying; it must not make the real recoverer look redundant. */
+	/* The carrier has a finite own-flag field but cannot recover while carrying.
+	 * The only real recoverer must remain beside the fifth-slot escort. */
 	AddAttacker(&frame, 0, 100u, 2, 100);
 	AddAttacker(&frame, 1, 101u, 2, 1);
 	AddAttacker(&frame, 2, 102u, 2, 2);
@@ -722,7 +711,7 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	sg_strike_team_t team;
 	sg_strike_frame_t frame = Frame(625.0f);
 
-	CHECK(!SG_StrikeCarrierScreened(NULL));
+	CHECK(!SG_StrikeCarrierScreened(NULL, NULL));
 	CHECK(SG_StrikeCarrierHookRisk(0) == 2000.0f);
 	CHECK(SG_StrikeCarrierHookRisk(1) == 500.0f);
 	CHECK(SG_StrikeCarrierHookRisk(-1) == 2000.0f);
@@ -730,9 +719,9 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	AddAttacker(&frame, 0, 180u, 2, 1000);
 	AddAttacker(&frame, 1, 181u, 2, 3000);
 	SG_StrikeReset(&team);
-	CHECK(!SG_StrikeCarrierScreened(&team));
+	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
 	CHECK(SG_StrikeStep(&team, &frame));
-	CHECK(!SG_StrikeCarrierScreened(&team));
+	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
 
 	frame.now = 626.0f;
 	frame.events = SG_STRIKE_EVENT_PICKUP;
@@ -740,12 +729,19 @@ static void TestSoleEgressHelperEscortsImmediately(void)
 	frame.carrier_slot = 0;
 	frame.slot[0].carrying = 1;
 	frame.slot[1].carrier_goal_ms = 300;
+	frame.slot[1].carrier_distance = 701.0f;
 	CHECK(SG_StrikeStep(&team, &frame));
 	CHECK(team.phase == SG_STRIKE_EGRESS);
 	CHECK(team.duty[0] == SG_STRIKE_DUTY_CARRY);
 	CHECK(team.duty[1] == SG_STRIKE_DUTY_ESCORT);
 	CHECK(CountDuty(&team, SG_STRIKE_DUTY_CLEAR) == 0);
-	CHECK(SG_StrikeCarrierScreened(&team));
+	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
+	frame.slot[1].carrier_distance = 700.0f;
+	CHECK(SG_StrikeCarrierScreened(&team, &frame));
+	frame.slot[1].carrier_distance = NAN;
+	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
+	frame.slot[1].alive = 0;
+	CHECK(!SG_StrikeCarrierScreened(&team, &frame));
 }
 
 static void TestExternalCarrierDoesNotExpandRoster(void)

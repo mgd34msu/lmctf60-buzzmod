@@ -213,7 +213,9 @@ static int Strike_FrameValid(const sg_strike_frame_t *frame)
 		if (input->weapon_tier < 0 ||
 		    input->enemy_flag_goal_ms < -1 ||
 		    input->recover_goal_ms < -1 ||
-		    input->carrier_goal_ms < -1)
+		    input->carrier_goal_ms < -1 ||
+		    !isfinite(input->carrier_distance) ||
+		    input->carrier_distance < -1.0f)
 			return 0;
 	}
 	return 1;
@@ -1038,18 +1040,6 @@ int SG_StrikeParticipant(const sg_strike_team_t *team, int slot)
 		return 1;
 	return team->phase == SG_STRIKE_EGRESS && team->carrier_slot == slot &&
 	    team->duty[slot] == SG_STRIKE_DUTY_CARRY;
-}
-
-int SG_StrikeCarrierScreened(const sg_strike_team_t *team)
-{
-	int slot;
-
-	if (!team || team->phase != SG_STRIKE_EGRESS)
-		return 0;
-	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
-		if (team->duty[slot] == SG_STRIKE_DUTY_ESCORT)
-			return 1;
-	return 0;
 }
 
 float SG_StrikeCarrierHookRisk(int carrier_screened)

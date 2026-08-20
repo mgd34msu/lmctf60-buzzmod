@@ -1799,24 +1799,6 @@ static void StrikeTelemetryEdge(int team_index)
 	sg_strike_telemetry_phase[team_index] = team->phase;
 }
 
-static void StrikeFrameInit(sg_strike_frame_t *frame)
-{
-	int slot;
-
-	memset(frame, 0, sizeof(*frame));
-	frame->now = level.time;
-	frame->own_flag_home = 0;
-	frame->enemy_flag_home = 0;
-	frame->carrier_slot = -1;
-	for (slot = 0; slot < SG_STRIKE_MAX_SLOTS; slot++)
-	{
-		frame->slot[slot].weapon_tier = 0;
-		frame->slot[slot].enemy_flag_goal_ms = -1;
-		frame->slot[slot].recover_goal_ms = -1;
-		frame->slot[slot].carrier_goal_ms = -1;
-	}
-}
-
 static int StrikeFieldCost(const int *field, int seed)
 {
 	if (!field || !SG_Rune() || seed < 0 ||
@@ -1992,6 +1974,7 @@ static qboolean StrikeEnemyRoomDeath(int team)
 static void StrikePrepareFrame(void)
 {
 	sg_strike_frame_t frames[2];
+	edict_t *carriers[2] = { NULL, NULL };
 	int i, team_index;
 
 	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
@@ -2026,7 +2009,7 @@ static void StrikePrepareFrame(void)
 		edict_t *own_flag = ctf_getteamflag(team, 0);
 		edict_t *enemy_flag = ctf_getteamflag(team, CTF_TEAM_OPPOSING);
 
-		StrikeFrameInit(&frames[team_index]);
+		SG_StrikeFrameInit(&frames[team_index], level.time);
 		frames[team_index].own_flag_home = own_flag && own_flag->inuse &&
 		    !own_flag->owner && ctf_flagathome(own_flag);
 		frames[team_index].enemy_flag_home = enemy_flag && enemy_flag->inuse &&
@@ -2038,6 +2021,8 @@ static void StrikePrepareFrame(void)
 		    enemy_flag->owner->client &&
 		    enemy_flag->owner->client->ctf.teamnum == team &&
 		    ClientHasFlag(enemy_flag->owner) == enemy_flag;
+		carriers[team_index] = frames[team_index].enemy_flag_carried
+		    ? enemy_flag->owner : NULL;
 		frames[team_index].carrier_slot =
 		    StrikeCarrierSlot(team, enemy_flag);
 		frames[team_index].recent_enemy_room_death =
@@ -2081,6 +2066,13 @@ static void StrikePrepareFrame(void)
 		    StrikeFieldCost(own_field, seed);
 		frames[bot_team_index].slot[i].carrier_goal_ms =
 		    StrikeFieldCost(carrier_field, seed);
+		if (carriers[bot_team_index])
+		{
+			vec3_t delta;
+
+			VectorSubtract(ent->s.origin, carriers[bot_team_index]->s.origin, delta);
+			frames[bot_team_index].slot[i].carrier_distance = VectorLength(delta);
+		}
 		frames[bot_team_index].slot[i].direct_flag_touch =
 		    frames[bot_team_index].slot[i].alive &&
 		    frames[bot_team_index].slot[i].attack_eligible &&
@@ -3348,7 +3340,8 @@ void SG_BotThink(sg_bot_t *bot)
 			    1, strike_duty);
 			tc.escort_mission = SG_StrikeEscortActive(
 			    role == SG_ROLE_ESCORT, 1, strike_duty);
-			tc.carrier_screened = SG_StrikeCarrierScreened(strike_team);
+			tc.carrier_screened = SG_StrikeCarrierScreened(strike_team,
+			    strike_frame);
 			tc.strike_blocks_optional =
 			    SG_StrikeDutyRetiresOptionalErrand(strike_duty);
 			if (tc.strike_blocks_optional)
