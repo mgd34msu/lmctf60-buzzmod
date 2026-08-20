@@ -325,6 +325,9 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             self.assertIn("bot->instance_token", section)
             self.assertIn("e->client->ctf.ctfid", section)
             self.assertNotIn("e->client - game.clients", section)
+        self.assertIn("SG_CarrierJinkThreat(", jink)
+        self.assertIn("en9->heard_only", jink)
+        self.assertIn("VectorLength(threat_delta)", jink)
 
         air = between(move, "float dose = sg_cv.airstrafe->value",
                       "/* A proved graph ride")

@@ -171,6 +171,16 @@ static inline int SG_CarrierEscapeActive(int role)
 	return role == SG_ROLE_CARRY;
 }
 
+static inline int SG_CarrierJinkThreat(int client, int seed, int seed_count,
+	int heard_only, int recent, float distance)
+{
+	if ((heard_only != 0 && heard_only != 1) ||
+	    (recent != 0 && recent != 1))
+		return 0;
+	return client >= 0 && seed >= 0 && seed < seed_count && !heard_only &&
+	    recent && distance >= 0.0f && distance < 700.0f;
+}
+
 static inline int SG_OptionalItemDetourAllowed(int push,
 	int strike_blocks_optional, int role, int health)
 {

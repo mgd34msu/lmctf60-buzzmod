@@ -1271,6 +1271,16 @@ static void TestDeadSlotsDoNotReserveDefenderRanks(void)
 	CHECK(!SG_AntiLingerEligible(SG_ROLE_CARRY, 0));
 	CHECK(!SG_AntiLingerEligible(SG_ROLES, 0));
 	CHECK(!SG_AntiLingerEligible(SG_ROLE_ATTACK, 2));
+	CHECK(SG_CarrierJinkThreat(3, 7, 20, 0, 1, 699.0f));
+	CHECK(!SG_CarrierJinkThreat(3, 7, 20, 0, 1, 700.0f));
+	CHECK(!SG_CarrierJinkThreat(3, 7, 20, 1, 1, 100.0f));
+	CHECK(!SG_CarrierJinkThreat(3, 7, 20, 0, 0, 100.0f));
+	CHECK(!SG_CarrierJinkThreat(-1, 7, 20, 0, 1, 100.0f));
+	CHECK(!SG_CarrierJinkThreat(3, -1, 20, 0, 1, 100.0f));
+	CHECK(!SG_CarrierJinkThreat(3, 20, 20, 0, 1, 100.0f));
+	CHECK(!SG_CarrierJinkThreat(3, 7, 20, 2, 1, 100.0f));
+	CHECK(!SG_CarrierJinkThreat(3, 7, 20, 0, -1, 100.0f));
+	CHECK(!SG_CarrierJinkThreat(3, 7, 20, 0, 1, NAN));
 	CHECK(SG_EscortSupportFullStrength(1));
 	CHECK(!SG_EscortSupportFullStrength(0));
 	CHECK(!SG_EscortSupportFullStrength(-1));

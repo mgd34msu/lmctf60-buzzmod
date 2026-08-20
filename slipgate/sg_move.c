@@ -8221,8 +8221,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				              (float)cmd->msec / 1000.0f, airp);
 
 
-				/* Carrier jinks require open ground so lateral motion cannot
-				 * override a nearby collision veto. */
+				/* Carrier jinks require open ground and one fresh visual threat
+				 * inside the same 700-unit envelope used by hook-risk pricing. */
 				if (role == SG_ROLE_CARRY && cmd->forwardmove != 0 &&
 				    open_ahead &&
 				    !sg_cv.noweave->value)
@@ -8233,10 +8233,19 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					{
 						sg_belief_enemy_t *en9 =
 						    &sg_caco_enemies[SG_TeamIdx(team)][s9];
+						vec3_t threat_delta;
 
-						if (en9->client >= 0 &&
-						    SG_AgeUnder(en9->seen_time, 3.0f))
+						if (en9->seed >= 0 &&
+						    en9->seed < SG_Rune()->hdr.num_seeds)
 						{
+							VectorSubtract(
+							    SG_Rune()->seeds[en9->seed].origin,
+							    e->s.origin, threat_delta);
+							if (!SG_CarrierJinkThreat(en9->client, en9->seed,
+							        SG_Rune()->hdr.num_seeds, en9->heard_only,
+							        SG_AgeUnder(en9->seen_time, 3.0f),
+							        VectorLength(threat_delta)))
+								continue;
 							short js = (short)SG_WeaveSideAt(
 							    bot->instance_token,
 							    e->client->ctf.ctfid, level.time);
