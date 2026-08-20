@@ -155,6 +155,7 @@ PYTHON_ENVIRONMENT = dict(ENGINE_ENVIRONMENT)
 # dynamic-loader authority: every Python invocation names its loader directly.
 CHILD_ENVIRONMENT = ENGINE_ENVIRONMENT
 PSEUDO_MAP_ALLOWLIST = frozenset({"[heap]", "[stack]", "[vdso]", "[vvar]", "[vvar_vclock]", "[vsyscall]"})
+HOST_DATA_MAP_ALLOWLIST = frozenset({"/etc/ld.so.cache"})
 PYTHON_RUNTIME_PROBE = r"""
 import _hashlib, _json, _struct, argparse, array, collections, concurrent.futures, ctypes, dataclasses, encodings, fcntl, hashlib, json, math, os, re, runpy, select, shutil, signal, socket, struct, sys, tempfile, threading, typing, zlib
 def physical(path):
@@ -163,6 +164,8 @@ loaded_libraries = []
 with open('/proc/self/maps', encoding='ascii') as stream:
     for line in stream:
         candidate = line.rstrip().split()[-1]
+        if candidate == '/etc/ld.so.cache':
+            continue
         if candidate.startswith('/') and ('.so' in os.path.basename(candidate) or os.path.basename(candidate).startswith('ld-linux-')):
             resolved = physical(candidate)
             if resolved not in loaded_libraries:
@@ -1238,7 +1241,9 @@ def _retained_snapshot_files(snapshot: Path, verified: Mapping[str, Any]) -> Ret
 
 
 _PROC_MAP_RE = re.compile(
-    r"^(?P<range>[0-9a-f]+-[0-9a-f]+)\s+\S+\s+\S+\s+(?P<major>[0-9a-f]+):(?P<minor>[0-9a-f]+)\s+(?P<inode>[0-9]+)(?:\s+(?P<path>.*))?$"
+    r"^(?P<range>[0-9a-f]+-[0-9a-f]+)\s+(?P<permissions>[-rwxps]{4})\s+"
+    r"(?P<offset>[0-9a-f]+)\s+(?P<major>[0-9a-f]+):(?P<minor>[0-9a-f]+)\s+"
+    r"(?P<inode>[0-9]+)(?:\s+(?P<path>.*))?$"
 )
 
 
@@ -1246,6 +1251,39 @@ def _pidfd_is_live(pidfd: int) -> bool:
     poller = select.poll()
     poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
     return not poller.poll(0)
+
+
+def _validate_host_data_mapping(
+    pathname: str, permissions: str, offset: int, _dev: int, inode: int,
+) -> bool:
+    if pathname not in HOST_DATA_MAP_ALLOWLIST:
+        return False
+    if permissions != "r--p" or offset != 0:
+        raise ProcessIntegrityError(f"host data mapping has unsafe access: {pathname}")
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(pathname, flags)
+    except OSError as exc:
+        raise ProcessIntegrityError(f"cannot authenticate host data mapping: {pathname}") from exc
+    try:
+        before = os.fstat(fd)
+        _sha256_fd(fd)
+        after = os.fstat(fd)
+        named = os.lstat(pathname)
+    finally:
+        os.close(fd)
+    identity = lambda info: (
+        info.st_dev, info.st_ino, info.st_size, stat.S_IMODE(info.st_mode),
+        info.st_uid, info.st_gid, info.st_nlink, info.st_mtime_ns, info.st_ctime_ns,
+    )
+    if (identity(before) != identity(after) or identity(after) != identity(named)
+            or not stat.S_ISREG(after.st_mode) or after.st_uid != 0 or after.st_gid != 0
+            or stat.S_IMODE(after.st_mode) & 0o022 or after.st_nlink != 1
+            or after.st_ino != inode):
+        raise ProcessIntegrityError(f"host data mapping identity is unsafe: {pathname}")
+    return True
 
 
 def _validate_retained_path(snapshot: Path, record: Mapping[str, Any]) -> None:
@@ -1297,6 +1335,10 @@ def _validate_verified_python_process(
         inode = int(match.group("inode"))
         if inode == 0:
             raise ProcessIntegrityError(f"filesystem mapping has zero inode: {pathname}")
+        if _validate_host_data_mapping(
+            pathname, match.group("permissions"), int(match.group("offset"), 16), dev, inode,
+        ):
+            continue
         record = retained.records.get((dev, inode))
         if record is None:
             raise ProcessIntegrityError(f"mapped device/inode is not manifested: {pathname}")

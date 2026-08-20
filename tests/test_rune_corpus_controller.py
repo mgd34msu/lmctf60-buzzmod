@@ -460,8 +460,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 )
                 original_read_text = Path.read_text
 
-                def validate(pathname: str, dev: int, inode: int, expected: str):
-                    line = f"00400000-00401000 r-xp 00000000 {os.major(dev):02x}:{os.minor(dev):02x} {inode} {pathname}\n"
+                def validate(
+                    pathname: str, dev: int, inode: int, expected: str,
+                    *, permissions: str = "r-xp", offset: int = 0,
+                ):
+                    line = (
+                        f"00400000-00401000 {permissions} {offset:08x} "
+                        f"{os.major(dev):02x}:{os.minor(dev):02x} {inode} {pathname}\n"
+                    )
 
                     def read_text(path, *args, **kwargs):
                         if str(path) == "/proc/4242/maps":
@@ -477,6 +483,17 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         )
 
                 validate(record["canonical_path"], record["dev"], record["ino"], "accepted")
+                cache = os.stat("/etc/ld.so.cache", follow_symlinks=False)
+                validate(
+                    "/etc/ld.so.cache", cache.st_dev, cache.st_ino, "host data",
+                    permissions="r--p",
+                )
+                for permissions, offset in (("r-xp", 0), ("rw-p", 0), ("r--p", 1)):
+                    with self.assertRaisesRegex(controller.ProcessIntegrityError, "unsafe access"):
+                        validate(
+                            "/etc/ld.so.cache", cache.st_dev, cache.st_ino, "host data",
+                            permissions=permissions, offset=offset,
+                        )
                 for pseudo in controller.PSEUDO_MAP_ALLOWLIST:
                     validate(pseudo, 0, 0, "pseudo")
                 for pathname, dev, inode, label in (
