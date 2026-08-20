@@ -1,6 +1,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_descend.h"
 #include "slipgate/sg_traversal_transition.h"
 
 #include <stdio.h>
@@ -141,10 +142,47 @@ static void TestDoorLeaseRetirement(void)
 	CHECK(SG_DoorLeaseRetirement(0, 0, 0) == SG_DOOR_LEASE_TERMINAL);
 }
 
+static void TestFlagTouchRetiresReversibleCommitment(void)
+{
+	sg_bot_t bot;
+	sg_think_t tc;
+
+	ResetWorld();
+	memset(&tc, 0, sizeof(tc));
+	bot = Bot();
+	links[1].action = RL_RUN;
+	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
+	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
+	bot.rail_stage = 1;
+	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
+	CHECK(!SG_StrikeTestFlagTouchTerminalRetainsCommit(&bot, &tc, true));
+	CHECK(bot.commit_link == -1 && bot.sticky_link == -1 &&
+	    bot.rail_link == -1 && bot.commit_route_goal.field == NULL);
+
+	bot = Bot();
+	bot.commit_link = bot.sticky_link = 1;
+	CHECK(!SG_StrikeTestFlagTouchTerminalRetainsCommit(&bot, &tc, false));
+	CHECK(bot.commit_link == 1 && bot.sticky_link == 1);
+
+	bot.hook_link = 1;
+	bot.hook_phase = 1;
+	links[1].action = RL_HOOK;
+	CHECK(!SG_StrikeTestFlagTouchTerminalRetainsCommit(&bot, &tc, true));
+	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
+
+	bot = Bot();
+	links[1].action = RL_HOOK;
+	bot.commit_link = bot.sticky_link = bot.hook_link = 1;
+	bot.hook_phase = 2;
+	CHECK(SG_StrikeTestFlagTouchTerminalRetainsCommit(&bot, &tc, true));
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2);
+}
+
 int SG_TraversalTransitionTests(void)
 {
 	TestCarryStartRetiresOnlyReversibleTraversal();
 	TestStrikeDutyRetiresSupersededRoute();
 	TestDoorLeaseRetirement();
+	TestFlagTouchRetiresReversibleCommitment();
 	return failures;
 }

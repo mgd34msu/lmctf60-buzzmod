@@ -81,10 +81,11 @@ void SG_HookLiveEndFrame(edict_t *e);
 /* Capability contract shared by link selection and execution. */
 qboolean SG_HookOffhandReady(edict_t *e);
 
-/* The one authority for an ATTACK bot to leave graph movement and touch the
- * live enemy flag item.  It is shared by terminal movement and every
- * pre-breach action that must yield to an immediate pickup. */
+/* Exact direct-touch authorities shared by route commitment and terminal
+ * movement. Enemy-flag authority also preempts optional prebreach actions. */
 qboolean SG_AttackFlagDirectTouchAuthority(edict_t *e, int team,
+	edict_t **flag_out);
+qboolean SG_OwnHomeFlagDirectTouchAuthority(edict_t *e, int team,
 	edict_t **flag_out);
 
 /* Flag-room flying cooks are one transaction regardless of whether the

@@ -56,6 +56,8 @@ void SG_StrikeTestCommitFreshLink(sg_bot_t *bot, const sg_think_t *tc,
 	int bestlink);
 qboolean SG_StrikeTestPureRouteRetirementBlocksFrame(sg_bot_t *bot,
 	sg_think_t *tc);
+qboolean SG_StrikeTestFlagTouchTerminalRetainsCommit(sg_bot_t *bot,
+	sg_think_t *tc, qboolean touch_authorized);
 qboolean SG_StrikeTestRailLateOverrideAllowed(const sg_bot_t *bot,
 	const sg_think_t *tc);
 qboolean SG_StrikeTestRailWatchdogAllowed(const sg_bot_t *bot,

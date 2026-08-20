@@ -1781,6 +1781,32 @@ static qboolean PureRouteRetirementBlocksFrame(sg_bot_t *bot, sg_think_t *tc)
 	return false;
 }
 
+static qboolean FlagTouchTerminalRetainsCommit(sg_bot_t *bot, sg_think_t *tc,
+	qboolean touch_authorized)
+{
+	rune_t *rune = SG_Rune();
+	int action;
+
+	if (!bot || !tc || !touch_authorized)
+		return false;
+	if (!rune || !rune->links || bot->commit_link < 0 ||
+	    bot->commit_link >= rune->hdr.num_links)
+	{
+		SG_StagedTraversalCancel(bot, RL_RUN);
+		return false;
+	}
+	action = rune->links[bot->commit_link].action;
+	if (SG_TraversalControllerPhysical(bot, action))
+		return true;
+	if (DoorLeaseBlocksRetirement(bot, tc, action))
+	{
+		bot->commit_retirement_pending = true;
+		return true;
+	}
+	SG_StagedTraversalCancel(bot, action);
+	return false;
+}
+
 /* Filter only a fresh weapon-owned selection.  Other candidate policy remains
  * in Think_CommitLink; this seam merely enforces that a weapon diversion may
  * acquire purpose identity only on a strict live-field descent. */
@@ -2307,19 +2333,22 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	bot->ribbon_off += 0.20f * (bot->ribbon_goal - bot->ribbon_off);
 	bot->sticky_link = bestlink;
 
-	/* Attackers leave the graph only after the direct-touch proof validates the
-	 * current item, floor, hull path, and known flag state. */
+	/* Terminal movement requires direct-touch authority; field cost is insufficient. */
 	{
-		qboolean flag_los = false;
+		qboolean attack_touch = false;
+		qboolean capture_touch = false;
 
 		if (tc->strike_pressure &&
 		    SG_AttackFlagDirectTouchAuthority(e, team, NULL))
-			flag_los = true;
+			attack_touch = true;
+		if (role == SG_ROLE_CARRY &&
+		    SG_OwnHomeFlagDirectTouchAuthority(e, team, NULL))
+			capture_touch = true;
+		if (FlagTouchTerminalRetainsCommit(bot, tc,
+		    attack_touch || capture_touch))
+			return bot->commit_link;
 
-		if ((tc->strike_pressure && flag_los) ||
-		    (role == SG_ROLE_CARRY && bot->seed >= 0 &&
-		     goal_field[bot->seed] < SG_FIELD_INF &&
-		     goal_field[bot->seed] < 400))
+		if (attack_touch || capture_touch)
 		{
 		bestlink = -1;
 		bot->terminal = true;
@@ -2333,8 +2362,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			qboolean live_room_enemy = live_enemy &&
 			    SG_DistXY(live_enemy->s.origin, e->s.origin) < 900.0f &&
 			    SG_CanSee(e, live_enemy->s.origin, live_enemy->viewheight);
-			qboolean live_flag_terminal =
-			    SG_AttackFlagDirectTouchAuthority(e, team, NULL);
+			qboolean live_flag_terminal = attack_touch;
 
 			for (s3 = 0; s3 < SG_MAX_ENEMY_TRACK; s3++)
 			{
@@ -2983,20 +3011,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->rail_stage = 0;
 	}
 
-	/* Shelf a stationary link after four seconds. A known dead door may
-	 * invalidate its approaching link immediately. */
+	/* Shelf a stationary link, or one proved to enter a known dead door. */
 	if (bot->deaddoor_ahead)
 	{
-		/*
-		 * Shelve ONLY a link that actually heads into the dead door. The
-		 * first version shelved whatever bestlink was current whenever a
-		 * dead door lay on the goal line -- at ten frames a second that
-		 * emptied seed 429's whole fan into a 120-second shelf and left
-		 * the bot orbiting on link=-1 for 23 aggregate minutes (batch,
-		 * ports 28446-49). The goal line pointing at a door is a fact
-		 * about the door; it is not a verdict on a link that leaves in
-		 * another direction.
-		 */
 		if (bestlink >= 0)
 		{
 			vec3_t to_door, to_dest;
@@ -3069,8 +3086,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				if (bot->bl_until[b] < bot->bl_until[oldest])
 					oldest = b;
 			bot->bl_link[oldest] = bestlink;
-			/* an honest traversal failure: 45s. The 120s figure is for
-			 * links proven to head into a dead door, nothing else. */
+			/* Dead-door proof alone earns the longer 120-second shelf. */
 			SG_TimerArm(&bot->bl_until[oldest], 45.0f);
 			if (sg_cv.debug->value)
 				sg_host.dprint("SHELVE %s link=%d at seed=%d\n",
@@ -3096,17 +3112,11 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		int *att = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
 		                                  : sg_fields.to_red_flag;
 
-		/* escorts hold at 3000 as before; a pressure fighter holds only from
-		 * INSIDE the room (the threshold fighter reads under ~1200) --
-		 * at 3000 the hold would freeze attackers still mid-corridor,
-		 * parked on the rail lines they were built to cross */
+		/* Pressure holds only inside the room; escorts retain the wider hold. */
 		if (att && att[bot->seed] < (tc->strike_pressure ? 1500
 		                                                   : 3000))
 		{
 			rally_hold = true;      /* stand and fight: the room is the job */
-			/* once per engagement, not per frame: the hold's own
-			 * evidence trail -- observations moved no census and nothing
-			 * could say whether the plug ever engaged at all */
 			if (bot->rally_since <= 0.0f &&
 			    sg_cv.debug->value)
 				sg_host.dprint("PLUG %s role=%d pressure=%d cost=%d\n",
@@ -3124,12 +3134,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	    SG_TimerReady(bot->handoff_next) &&
 	    (bot->engaged_last || duel))
 	{
-		/*
-		 * The bail-out health, skill-scaled: skill 4 backs itself to live
-		 * and holds the flag down to 35; skill 0 lets go at 60. The low
-		 * skill passes EARLIER on purpose -- it is the one least likely to
-		 * finish the run, so its flag is worth more in better hands.
-		 */
+		/* Lower skill passes sooner because its carrier is less likely to finish. */
 		float	sk = (float)SG_CombatSkill(e) / 100.0f;     /* 0 .. 4 */
 		float	hp_thr = 60.0f + (35.0f - 60.0f) * (sk / 4.0f);
 
@@ -3157,7 +3162,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					continue;
 				if (me->client->ctf.teamnum != team)
 					continue;
-				/* observers and the not-yet-joined cannot receive */
 				if (!ctf_validateplayer(me, CTF_TEAM_ANYTEAM))
 					continue;
 
@@ -3214,12 +3218,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				SG_BotClientCommand((int)(e - g_edicts) - 1,
 				                    word, "flag", NULL);
 
-				/*
-				 * The carry gauges belong to the carry that just ended --
-				 * the same three the grab resets. The role itself follows
-				 * next think, because SG_Role derives CARRY from actually
-				 * holding the flag.
-				 */
 				bot->carry_startcost = -1;
 				bot->carry_bestcost = -1;
 				bot->carry_lost_at = 0.0f;
@@ -3318,8 +3316,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 		if (!ours_astray)
 		{
-			/* The return is the release event: do not carry a stale wait into
-			 * the capture window. */
 			bot->rally_cover = -1;
 			rally_hold = false;
 		}
@@ -3342,12 +3338,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/*
-	 * A railhold clock AHEAD of the level clock is a previous map's
-	 * timestamp: level.time restarts at zero on changelevel and sg_bots[]
-	 * does not, the same trap the tactical waypoint's tac_time documents.
-	 * Stale by definition, and cleared before anything below reads it.
-	 */
+	/* level.time restarts on map change; discard a future-map timestamp. */
 	if (bot->railhold_since > level.time ||
 	    bot->railhold_next > level.time + SG_RAIL_HOLD_GAP)
 	{
@@ -3400,11 +3391,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 						           (role == SG_ROLE_CARRY)
 						               ? " carrier" : "");
 				}
-				/* re-stamped every waiting frame, not only at the arm:
-				 * if the freshest railer changes identity mid-wait the
-				 * release line must name the man actually waited out --
-				 * and the patience clock deliberately does NOT restart,
-				 * or a room with two railers in it would have no cap */
+				/* Refresh identity without restarting the bounded
+				 * patience clock. */
 				bot->railhold_enemy = rail_client;
 				if (SG_AgeUnder(bot->railhold_since,
 				    bot->railhold_patience))
@@ -3414,10 +3402,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	}
 	if (!rail_hold && bot->railhold_since > 0.0f)
 	{
-		/* one line per crossing, and it says which of the two things
-		 * ended the wait: the rail going off (the window is open and the
-		 * crossing is timed) or the patience running out (humans do not
-		 * wait forever, and neither does this) */
+		/* Record whether the rail window or patience ended the hold. */
 		if (sg_cv.debug->value)
 			sg_host.dprint("RAILCROSS %s waited %.1fs on cl=%d (%s)\n",
 			           e->client->pers.netname,
@@ -3927,6 +3912,12 @@ qboolean SG_StrikeTestPureRouteRetirementBlocksFrame(sg_bot_t *bot,
 	sg_think_t *tc)
 {
 	return PureRouteRetirementBlocksFrame(bot, tc);
+}
+
+qboolean SG_StrikeTestFlagTouchTerminalRetainsCommit(sg_bot_t *bot,
+	sg_think_t *tc, qboolean touch_authorized)
+{
+	return FlagTouchTerminalRetainsCommit(bot, tc, touch_authorized);
 }
 
 qboolean SG_StrikeTestRailLateOverrideAllowed(const sg_bot_t *bot,

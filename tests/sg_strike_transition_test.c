@@ -10,7 +10,6 @@
 #include "slipgate/sg_death_belief.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_route_policy.h"
-
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -92,7 +91,6 @@ static void GuardReset(void)
 static void CheckCalls(const int *expected, int count)
 {
 	int index;
-
 	CHECK(guard_call_count == count);
 	for (index = 0; index < count && index < guard_call_count; index++)
 		CHECK(guard_calls[index] == expected[index]);
@@ -465,7 +463,7 @@ static void TestPureRouteChangeRetiresReversibleCommitments(void)
 	durable_record.link_index = 1;
 	release_result = SG_COMPOUND_GUARD_NOT_CLEAR;
 	weapon_field[1] = 1200;
-	CHECK(SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc));
+	CHECK(SG_StrikeTestFlagTouchTerminalRetainsCommit(&bot, &tc, true));
 	CheckCalls(hold_pause, 3);
 	CHECK(tc.think_over && bot.commit_link == 1);
 	CHECK(bot.declared_started && bot.declared_guard_paused);
@@ -482,12 +480,17 @@ static void TestPureRouteChangeRetiresReversibleCommitments(void)
 	CHECK(bot.commit_link == -1 && bot.commit_route_goal.field == NULL);
 	CHECK(!bot.commit_retirement_pending && bot.sticky_link == -1);
 	CHECK(bot.latch_until == 0.0f && !bot.declared_started);
+	ArmPureRoute(&bot, &tc, RL_BUTTON_DOOR);
+	bot.declared_started = true;
+	release_result = SG_COMPOUND_GUARD_NOT_CLEAR;
+	weapon_field[1] = 1200;
+	CHECK(SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc) &&
+	    bot.commit_retirement_pending);
 	ArmPureRoute(&bot, &tc, RL_RUN);
 	tc.route_pure = false;
 	tc.route_field = enemy_field;
 	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == 1);
-
 	ArmPureRoute(&bot, &tc, RL_HOOK);
 	bot.hook_phase = 1;
 	bot.hook_link = 1;
@@ -495,7 +498,6 @@ static void TestPureRouteChangeRetiresReversibleCommitments(void)
 	SG_StrikeTestPureRouteRetirementBlocksFrame(&bot, &tc);
 	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
 	CHECK(bot.hook_link == -1 && bot.commit_route_goal.field == NULL);
-
 	ArmPureRoute(&bot, &tc, RL_HOOK);
 	bot.hook_phase = 2;
 	bot.hook_link = 1;
@@ -509,7 +511,6 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 {
 	sg_bot_t bot;
 	sg_think_t tc;
-
 	WorldReset();
 	ArmExact(&bot, &tc, RL_RUN);
 	level.time = 20.0f;
@@ -1085,7 +1086,6 @@ static void TestHumanOrderOwnsStrikeAdmission(void)
 static void TestDeathLocationRequiresPriorBelief(void)
 {
 	sg_belief_enemy_t records[3];
-
 	memset(records, 0, sizeof(records));
 	records[0].client = 4;
 	records[0].seed = 1;

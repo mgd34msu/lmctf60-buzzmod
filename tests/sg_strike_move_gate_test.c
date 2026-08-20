@@ -15,11 +15,40 @@ int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
 
 sg_host_t sg_host;
 static qboolean block_terminal_trace;
+static qboolean terminal_trace_startsolid;
+static qboolean terminal_trace_allsolid;
 static int crowd_trace_mode;
 static int crowd_trace_calls;
 static edict_t *crowd_trace_hits[2];
 static float crowd_trace_fractions[2];
 static vec3_t crowd_trace_ends[2];
+static edict_t *own_flag;
+static qboolean own_flag_available;
+static qboolean own_flag_home;
+
+edict_t *SG_OwnFlag(int team)
+{
+	(void)team;
+	return own_flag;
+}
+
+qboolean SG_FlagApproachAvailableTo(edict_t *flag, edict_t *player)
+{
+	return own_flag_available && flag == own_flag && player != NULL;
+}
+
+qboolean ctf_flagathome(edict_t *flag)
+{
+	return flag == own_flag && own_flag_home;
+}
+
+float SG_DistXY(const vec3_t a, const vec3_t b)
+{
+	float dx = a[0] - b[0];
+	float dy = a[1] - b[1];
+
+	return sqrtf(dx * dx + dy * dy);
+}
 
 static trace_t TerminalTrace(const vec3_t start, const vec3_t mins,
 	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
@@ -46,6 +75,8 @@ static trace_t TerminalTrace(const vec3_t start, const vec3_t mins,
 		}
 	}
 	trace.fraction = block_terminal_trace ? 0.5f : 1.0f;
+	trace.startsolid = terminal_trace_startsolid;
+	trace.allsolid = terminal_trace_allsolid;
 	VectorCopy(end, trace.endpos);
 	return trace;
 }
@@ -71,7 +102,8 @@ int main(void)
 	rune_seed_t seeds[3];
 	byte linked[3] = { 1, 1, 1 };
 	int field[3] = { 500, 0, 0 };
-	edict_t mate, door;
+	edict_t mate, door, flag;
+	edict_t *flag_result;
 	gclient_t mate_client;
 	sg_feeler_probe_t feeler;
 	int pass_side;
@@ -131,6 +163,41 @@ int main(void)
 	seeds[2].flags = RSF_TOMBSTONE;
 	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, 0) == -1);
 	CHECK(SG_StrikeTestTerminalFieldSeed(&rune, field, -1) == -1);
+
+	memset(&flag, 0, sizeof(flag));
+	flag.inuse = true;
+	own_flag = &flag;
+	own_flag_available = true;
+	own_flag_home = true;
+	ent.inuse = true;
+	ent.health = 100;
+	VectorClear(ent.s.origin);
+	VectorClear(flag.s.origin);
+	flag.s.origin[0] = 159.0f;
+	flag_result = NULL;
+	CHECK(SG_OwnHomeFlagDirectTouchAuthority(&ent, CTF_TEAM_RED,
+	    &flag_result));
+	CHECK(flag_result == &flag);
+	flag.s.origin[0] = 160.0f;
+	flag_result = &flag;
+	CHECK(!SG_OwnHomeFlagDirectTouchAuthority(&ent, CTF_TEAM_RED,
+	    &flag_result));
+	CHECK(flag_result == NULL);
+	flag.s.origin[0] = 100.0f;
+	flag.s.origin[2] = 65.0f;
+	CHECK(!SG_OwnHomeFlagDirectTouchAuthority(&ent, CTF_TEAM_RED, NULL));
+	flag.s.origin[2] = 0.0f;
+	block_terminal_trace = true;
+	CHECK(!SG_OwnHomeFlagDirectTouchAuthority(&ent, CTF_TEAM_RED, NULL));
+	block_terminal_trace = false;
+	terminal_trace_startsolid = true;
+	CHECK(!SG_OwnHomeFlagDirectTouchAuthority(&ent, CTF_TEAM_RED, NULL));
+	terminal_trace_startsolid = false;
+	terminal_trace_allsolid = true;
+	CHECK(!SG_OwnHomeFlagDirectTouchAuthority(&ent, CTF_TEAM_RED, NULL));
+	terminal_trace_allsolid = false;
+	own_flag_home = false;
+	CHECK(!SG_OwnHomeFlagDirectTouchAuthority(&ent, CTF_TEAM_RED, NULL));
 
 	memset(&mate, 0, sizeof(mate));
 	memset(&door, 0, sizeof(door));

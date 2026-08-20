@@ -587,7 +587,7 @@ static qboolean SG_OwnDroppedFlagDirectTouchAuthority(edict_t *e, int team,
  * only inside the same physical touch envelope as every other flag contact.
  * This is capture approach authority, not capture authority: ctf_flagtouch
  * remains the only path that scores. */
-static qboolean SG_OwnHomeFlagDirectTouchAuthority(edict_t *e, int team,
+qboolean SG_OwnHomeFlagDirectTouchAuthority(edict_t *e, int team,
 	edict_t **flag_out)
 {
 	edict_t *flag;

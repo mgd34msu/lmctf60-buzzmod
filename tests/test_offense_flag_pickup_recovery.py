@@ -42,21 +42,6 @@ def direct_touch_authorized(
     )
 
 
-def terminal_abandons_graph(
-    role: str,
-    *,
-    goal_cost: int | None,
-    direct_touch: bool,
-    strike_active: bool = False,
-    strike_pressure: bool = False,
-) -> bool:
-    """The exact pressure-duty/CARRY split in Think_CommitLink."""
-    enemy_pressure = strike_pressure if strike_active else role == "ATTACK"
-    if enemy_pressure:
-        return direct_touch
-    return role == "CARRY" and goal_cost is not None and goal_cost < 400
-
-
 def approach_prebreach_binding(
     goal_cost: int,
     *,
@@ -564,20 +549,20 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             )
         )
 
-    def test_only_direct_touch_releases_attack_graph_but_carry_keeps_cost_terminal(self) -> None:
+    def test_flag_touch_authority_controls_graph_exit(self) -> None:
         descend = source("slipgate/sg_descend.c")
         terminal = between(
             descend,
-            "qboolean flag_los = false;",
+            "qboolean attack_touch = false;",
             "if (tc->strike_pressure)",
         )
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", terminal)
-        self.assertIn(
-            "tc->strike_pressure && flag_los",
-            terminal,
-        )
-        self.assertIn("role == SG_ROLE_CARRY && bot->seed >= 0", terminal)
-        self.assertIn("goal_field[bot->seed] < 400", terminal)
+        self.assertIn("if (tc->strike_pressure &&", terminal)
+        self.assertIn("role == SG_ROLE_CARRY", terminal)
+        self.assertIn("SG_OwnHomeFlagDirectTouchAuthority(e, team, NULL)", terminal)
+        self.assertIn("if (attack_touch || capture_touch)", terminal)
+        self.assertNotIn("goal_field[bot->seed]", terminal)
+        self.assertNotIn("bot->seed", terminal)
         self.assertNotIn("role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY", terminal)
 
         clean_grab = between(
@@ -596,59 +581,13 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             (-32.0, -560.0, 40.0), blue_flag,
             at_home=True, perceivable=True, body_clear=True,
         )
-        # xmap28 seed 618 is deliberately made cheap here: its 368u, 11.3s
-        # hook/drop route still cannot abandon the graph without direct touch.
         self.assertFalse(seed_618_direct)
-        self.assertFalse(
-            terminal_abandons_graph(
-                "ATTACK", goal_cost=1, direct_touch=seed_618_direct
-            )
-        )
-        self.assertFalse(
-            terminal_abandons_graph(
-                "DEFEND",
-                goal_cost=1,
-                direct_touch=seed_618_direct,
-                strike_active=True,
-                strike_pressure=True,
-            )
-        )
 
         seed_2_direct = direct_touch_authorized(
             (153.0, -848.0, 376.0), blue_flag,
             at_home=True, perceivable=True, body_clear=True,
         )
         self.assertFalse(seed_2_direct)
-        self.assertFalse(
-            terminal_abandons_graph(
-                "ATTACK", goal_cost=1, direct_touch=seed_2_direct
-            )
-        )
-
-        self.assertTrue(
-            terminal_abandons_graph(
-                "DEFEND", goal_cost=9999, direct_touch=True,
-                strike_active=True,
-                strike_pressure=True
-            )
-        )
-
-        # A concrete recovery duty overrides an organic ATTACK role just as a
-        # concrete pressure duty overrides an organic non-attacker role.
-        self.assertFalse(terminal_abandons_graph(
-            "ATTACK", goal_cost=1, direct_touch=True,
-            strike_active=True, strike_pressure=False
-        ))
-
-        self.assertTrue(
-            terminal_abandons_graph("ATTACK", goal_cost=700, direct_touch=True)
-        )
-        self.assertTrue(
-            terminal_abandons_graph("CARRY", goal_cost=399, direct_touch=False)
-        )
-        self.assertFalse(
-            terminal_abandons_graph("CARRY", goal_cost=400, direct_touch=True)
-        )
 
     def test_carrier_does_not_home_on_hidden_dropped_own_flag(self) -> None:
         move = source("slipgate/sg_move.c")
@@ -786,21 +725,6 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
     def test_home_flag_touch_owns_carrier_terminal_heading(self) -> None:
         move = source("slipgate/sg_move.c")
-        authority = between(
-            move,
-            "static qboolean SG_OwnHomeFlagDirectTouchAuthority",
-            "static int SG_TerminalFieldSeed",
-        )
-        for token in (
-            "ctf_flagathome(flag)",
-            "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
-            "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
-            "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
-            "body.startsolid || body.allsolid",
-            "body.fraction < 1.0f && body.ent != flag",
-        ):
-            self.assertIn(token, authority)
-
         fallback_start = move.index("/* last resort: the goal itself, by belief */")
         fallback = move[fallback_start:move.index(
             "\n\t\tif (have_aim)", fallback_start)]
@@ -832,7 +756,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("live_enemy = SG_CombatLiveEnemy(e);", clean)
         self.assertIn(live_gate, clean)
         self.assertIn("SG_CanSee(e, live_enemy->s.origin, live_enemy->viewheight)", clean)
-        self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", clean)
+        self.assertIn("qboolean live_flag_terminal = attack_touch;", clean)
         self.assertIn("if (room >= 1 && live_room_enemy && !live_flag_terminal)", clean)
 
         grenade = clean[clean.index(
