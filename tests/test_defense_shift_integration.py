@@ -103,7 +103,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
 
     def test_near_goal_hook_skip_requires_a_descending_run(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
-        start = source.index("neighbor->action == RL_RUN")
+        start = source.index("descends = goal_field[bot->seed]")
         end = source.index("/* life ticker", start)
         proof = source[start:end]
         call = source[source.index("SG_HookNearGoalSkipAllowed("):
@@ -111,6 +111,8 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
                           "SG_HookNearGoalSkipAllowed("))]
 
         self.assertIn("goal_field[neighbor->to]", proof)
+        self.assertIn("shelved = Carrier_LinkShelved(bot, li)", proof)
+        self.assertIn("SG_HookFootRouteAvailable", proof)
         self.assertIn("descending_run_available = true", proof)
         self.assertIn("descending_run_available", call)
 

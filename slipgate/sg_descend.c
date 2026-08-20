@@ -282,6 +282,7 @@ static void Drop_LiveBoundaryLog(const edict_t *e, int link_index,
 }
 
 /* Price proven outgoing links and select the next commitment. */
+static qboolean Carrier_LinkShelved(const sg_bot_t *bot, int link);
 int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 {
 	/* the former parameter list, unpacked from the think context so the
@@ -362,16 +363,18 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		{
 			const rune_link_t *neighbor = &SG_Rune()->links[li];
 			int prior;
-			qboolean duplicate = false;
+			qboolean duplicate = false, descends, shelved;
 
 			if (neighbor->to < 0 || neighbor->to >= SG_Rune()->hdr.num_seeds ||
 			    neighbor->to == bot->seed)
 				continue;
-			if (neighbor->action == RL_RUN &&
-			    goal_field[bot->seed] < SG_FIELD_INF &&
+			descends = goal_field[bot->seed] < SG_FIELD_INF &&
 			    SG_RouteCandidateGoalMs(goal_field[neighbor->to],
 			        Fields_LinkTraversalCostMs(neighbor), SG_FIELD_INF) <
-			        goal_field[bot->seed])
+			        goal_field[bot->seed];
+			shelved = Carrier_LinkShelved(bot, li);
+			if (SG_HookFootRouteAvailable(neighbor->action == RL_RUN,
+			        descends, shelved))
 				descending_run_available = true;
 			if (route_field[bot->seed] < SG_FIELD_INF &&
 			    SG_RouteCandidateGoalMs(route_field[neighbor->to],
@@ -558,7 +561,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		    (SG_Rune()->seeds[l->from].flags & RSF_WATER);
 		sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean mechanism_bound = false;
-		int b;
 		if (approach_source != SG_FLAG_APPROACH_NONE)
 		{
 			float candidate_distance = SG_DistXY(
@@ -721,10 +723,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		else if (role == SG_ROLE_CARRY)
 			v += 0.4f * (float)SG_Rune()->seeds[l->to].area_hint; /* was 2.0: same audit */
 
-		for (b = 0; b < SG_BL_MAX; b++)
-			if (bot->bl_link[b] == li && SG_TimerPending(bot->bl_until[b]))
-				break;
-		if (b < SG_BL_MAX)
+		if (Carrier_LinkShelved(bot, li))
 			continue;               /* shelved: the body could not run it */
 
 		/*

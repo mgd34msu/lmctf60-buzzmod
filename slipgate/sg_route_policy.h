@@ -98,6 +98,18 @@ static inline int SG_AttackDescentOverrideNeeded(int attack_role,
 	return selected_goal_ms >= current_goal_ms;
 }
 
+/* A foot route can suppress a hook only while that exact RUN remains usable.
+ * A failure shelf is live traversal evidence, not a pricing preference. */
+static inline int SG_HookFootRouteAvailable(int run_link, int descends,
+	int shelved)
+{
+	if ((run_link != 0 && run_link != 1) ||
+	    (descends != 0 && descends != 1) ||
+	    (shelved != 0 && shelved != 1))
+		return 0;
+	return run_link && descends && !shelved;
+}
+
 /* Near-goal hook suppression is an optimization, not route authority. */
 static inline int SG_HookNearGoalSkipAllowed(int hook_policy, int carrying,
 	int descending_run_available, int current_goal_ms, int field_infinite)

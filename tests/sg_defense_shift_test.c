@@ -67,6 +67,13 @@ static void TestNearGoalHookNeedsFootProgress(void)
 {
 	const int infinity = 0x3fffffff;
 
+	CHECK(SG_HookFootRouteAvailable(1, 1, 0));
+	CHECK(!SG_HookFootRouteAvailable(1, 1, 1));
+	CHECK(!SG_HookFootRouteAvailable(1, 0, 0));
+	CHECK(!SG_HookFootRouteAvailable(0, 1, 0));
+	CHECK(!SG_HookFootRouteAvailable(2, 1, 0));
+	CHECK(!SG_HookFootRouteAvailable(1, 2, 0));
+	CHECK(!SG_HookFootRouteAvailable(1, 1, -1));
 	CHECK(SG_HookNearGoalSkipAllowed(1, 0, 1, 599, infinity));
 	CHECK(!SG_HookNearGoalSkipAllowed(1, 0, 0, 599, infinity));
 	CHECK(!SG_HookNearGoalSkipAllowed(1, 1, 1, 599, infinity));
