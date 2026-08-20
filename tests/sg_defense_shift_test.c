@@ -51,6 +51,22 @@ static void TestAttackDescentCannotPriceItselfStill(void)
 	CHECK(!SG_AttackDescentFallbackAllowed(1, 1, 8000, 7000, 0));
 }
 
+static void TestCandidateChargesImmediateTraversal(void)
+{
+	float run = SG_RouteCandidatePrice(1200.0f, 100, 1.0f);
+	float slow_hook = SG_RouteCandidatePrice(300.0f, 1100, 1.0f);
+	float fast_hook = SG_RouteCandidatePrice(100.0f, 1100, 1.0f);
+
+	CHECK(run == 1300.0f);
+	CHECK(slow_hook == 1400.0f);
+	CHECK(fast_hook == 1200.0f);
+	CHECK(run < slow_hook);
+	CHECK(fast_hook < run);
+	CHECK(isinf(SG_RouteCandidatePrice(NAN, 100, 1.0f)));
+	CHECK(isinf(SG_RouteCandidatePrice(100.0f, -1, 1.0f)));
+	CHECK(isinf(SG_RouteCandidatePrice(100.0f, 100, NAN)));
+}
+
 static void TestDuelRoutePricingUsesOneSurface(void)
 {
 	/* Ordinary defenders/escorts retain range discipline. */
@@ -391,6 +407,7 @@ int main(void)
 {
 	TestOneExitRouteStaysMobile();
 	TestAttackDescentCannotPriceItselfStill();
+	TestCandidateChargesImmediateTraversal();
 	TestDuelRoutePricingUsesOneSurface();
 	TestDefenseShiftShippingDefault();
 	TestLateralChoice();

@@ -66,7 +66,7 @@ void SG_RopecostRefresh(void)
 		sg_ropecost_ms = 0;
 }
 
-static int Link_EffCost(const rune_link_t *l)
+int Fields_LinkTraversalCostMs(const rune_link_t *l)
 {
 	/* 1000, not 400: the rope's REAL ritual is a standing aim frame (the
 	 * body halts, the aiming state owns the view), the fire, and a landing
@@ -422,7 +422,7 @@ static void Field_FloodRun(rune_t *r, int *dist,
 			if (nb > 1 && Env_Bucket(b->exit_speed) != ku)
 				continue;
 
-			base = env_dist[id] + Link_EffCost(b) + sg_futile[x]
+			base = env_dist[id] + Fields_LinkTraversalCostMs(b) + sg_futile[x]
 			     + sg_link_futile[li] + sg_shelf_pen[u]
 			     + SG_SnagRepairSeedSurcharge(x)
 			     + SG_SnagRepairLinkSurcharge(li);

@@ -433,7 +433,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	 * two values Objective contributes before this final link fan. */
 	sg_route_pure_now = route_pure;
 
-
 	if (SG_RailThreat(team, 4.0f, &rail_client, &rail_seed))
 	{
 		/* a carrier is what rails punish: 274-279 put rails at the top of
@@ -481,7 +480,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 		bot->sink_ban = sink_ban;
 	}
-
 
 	{
 		qboolean linger_hot = false;
@@ -538,7 +536,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	for (li = SG_Rune()->first_link[bot->seed]; li >= 0; li = SG_Rune()->next_link[li])
 	{
 		rune_link_t *l = &SG_Rune()->links[li];
-		float v = Surface_At(tc, l->to, w, route_field, support, intercept);
+		float v = SG_RouteCandidatePrice(
+		    Surface_At(tc, l->to, w, route_field, support, intercept),
+		    Fields_LinkTraversalCostMs(l), Surface_ObjectiveWeight(tc, w));
 		/* Route policy inherits the suffix; hook_water and the readiness branch
 		 * below remain exact bare-HOOK controller checks. */
 		qboolean hook_policy = SG_ActionUsesHookPolicy(l->action);

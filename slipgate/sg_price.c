@@ -231,6 +231,15 @@ float Mega_Detour(sg_think_t *tc, int here, const int *goal_field, int *out_ent)
  * subtract because they add value. This is V(x | bot) from the design,
  * evaluated at the handful of seeds one step away.
  */
+float Surface_ObjectiveWeight(const sg_think_t *tc, const sg_weights_t *w)
+{
+	float weight = w->objective;
+
+	if (tc->role == SG_ROLE_ATTACK && sg_cv.atkobj->value != 100.0f)
+		weight *= sg_cv.atkobj->value / 100.0f;
+	return weight;
+}
+
 float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
                         const int *goal_field, const int *support,
                         const int *intercept)
@@ -250,14 +259,7 @@ float Surface_At(sg_think_t *tc, int seed, const sg_weights_t *w,
 	 * the hypothesis being that human-level steal VOLUME comes from
 	 * commitment, not routes. It remains configurable for comparison.
 	 */
-	v = w->objective * (float)goal_field[seed];
-	if (tc->role == SG_ROLE_ATTACK)
-	{
-		float ao = sg_cv.atkobj->value / 100.0f;
-
-		if (ao != 1.0f)
-			v = w->objective * ao * (float)goal_field[seed];
-	}
+	v = Surface_ObjectiveWeight(tc, w) * (float)goal_field[seed];
 
 	/* Charge attackers for the climb from a low shelf to the enemy stand. */
 	if (tc->role == SG_ROLE_ATTACK &&

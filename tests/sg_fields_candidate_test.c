@@ -220,6 +220,7 @@ static void CheckHookFieldAdmission(void)
 	Link(&links[7], 5, 3, RL_HOOK, 100);
 	/* Seed 6 is an independent non-hook reachability control. */
 	Link(&links[8], 6, 3, RL_RUN, 700);
+	CHECK(Fields_LinkTraversalCostMs(&links[3]) == 1000);
 	for (i = 8; i >= 0; i--)
 	{
 		next_link[i] = first_link[links[i].from];

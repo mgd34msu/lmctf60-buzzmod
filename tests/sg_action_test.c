@@ -216,6 +216,7 @@ static void TestActions(void)
 	CHECK(SG_ActionUsesHookPolicy(RL_DOOR_HOOK));
 	CHECK(SG_ActionFieldBiasMs(RL_ROCKETJUMP, 1000) == 900);
 	CHECK(SG_ActionFieldBiasMs(RL_DOOR_DROP, 1000) == 150);
+	CHECK(SG_ActionFieldBiasMs(RL_HOOK, 1000) == 1000);
 	CHECK(SG_ActionFieldBiasMs(RL_DOOR_HOOK, 1000) == 1000);
 	CHECK(SG_ActionRuntimeSupported(RL_BUTTON_DOOR));
 	CHECK(SG_ActionEffectiveSuffix(RL_BUTTON_DOOR) == RL_DOOR);

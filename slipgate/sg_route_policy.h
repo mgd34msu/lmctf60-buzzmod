@@ -4,6 +4,20 @@
 
 #include <math.h>
 
+/* An outgoing choice owns the edge it is about to traverse. The destination
+ * surface alone is only the suffix and can make a slow edge look free. */
+static inline float SG_RouteCandidatePrice(float destination_price,
+	int traversal_ms, float objective_weight)
+{
+	float price;
+
+	if (!isfinite(destination_price) || traversal_ms < 0 ||
+	    !isfinite(objective_weight) || objective_weight < 0.0f)
+		return INFINITY;
+	price = destination_price + (float)traversal_ms * objective_weight;
+	return isfinite(price) ? price : INFINITY;
+}
+
 /* The immediate-return surcharge is a choice among equally useful routes,
  * not permission to spend progress.  A merely finite alternative can point
  * uphill; require two distinct non-worsening neighbors before taxing either

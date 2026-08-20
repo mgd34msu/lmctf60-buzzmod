@@ -604,12 +604,12 @@ void		Fields_Refresh(rune_t *r);
 qboolean	Fields_ActionTopologyRefresh(rune_t *r);
 qboolean	Fields_ActionAdmitted(int action);
 qboolean	Fields_ActionTopologyCurrent(unsigned epoch);
+int		Fields_LinkTraversalCostMs(const rune_link_t *link);
 /* the one place the sg_megaworth cvar is read, so pricing, flooding and the
  * debug line can never disagree about whether the feature is on */
 qboolean	SG_MegaOn(void);
 void		Field_Flood(rune_t *r, int *dist,
 		            const int *sources, const int *source_cost, int n);
-
 /* ------------------------------------------------------------- arachnotron */
 
 /*
