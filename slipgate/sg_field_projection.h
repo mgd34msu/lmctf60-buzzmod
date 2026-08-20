@@ -9,6 +9,25 @@
 #define SG_CARRIER_SCREEN_LEAD_MIN_MS 900
 #define SG_CARRIER_SCREEN_LEAD_MAX_MS 2200
 
+static inline int SG_FieldRootSeed(const rune_t *r, const int *field)
+{
+	int best = -1;
+	int best_cost = SG_FIELD_INF;
+	int seed;
+
+	if (!r || !field || r->hdr.num_seeds <= 0)
+		return -1;
+	for (seed = 0; seed < r->hdr.num_seeds; seed++)
+	{
+		if (field[seed] < best_cost)
+		{
+			best = seed;
+			best_cost = field[seed];
+		}
+	}
+	return best;
+}
+
 static inline int SG_FieldProjectionLinkCostMs(const rune_t *r,
 	const int *home, int seed, int link_index)
 {

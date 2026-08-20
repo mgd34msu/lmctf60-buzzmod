@@ -9,6 +9,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_field_projection.h"
+#include "slipgate/sg_tactic_policy.h"
 #include "slipgate/sg_localization.h"
 #include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_carrier_cover.h"
@@ -665,6 +666,64 @@ static void CheckCarrierScreenUsesTravelTime(void)
 	CHECK(SG_FieldCarrierScreenStation(NULL, home, 0) == -1);
 }
 
+static void CheckObjectiveFieldRootTracksMovingGoals(void)
+{
+	rune_t rune;
+	int field[5] = { 900, 500, 0, 700, SG_FIELD_INF };
+
+	memset(&rune, 0, sizeof(rune));
+	rune.hdr.num_seeds = 5;
+	CHECK(SG_FieldRootSeed(&rune, field) == 2);
+	field[4] = 0;
+	CHECK(SG_FieldRootSeed(&rune, field) == 2);
+	field[4] = SG_FIELD_INF;
+	field[2] = 800;
+	field[3] = 0;
+	CHECK(SG_FieldRootSeed(&rune, field) == 3);
+	field[3] = SG_FIELD_INF;
+	CHECK(SG_FieldRootSeed(&rune, field) == 1);
+	field[1] = SG_FIELD_INF;
+	field[2] = SG_FIELD_INF;
+	field[0] = SG_FIELD_INF;
+	CHECK(SG_FieldRootSeed(&rune, field) == -1);
+	CHECK(SG_FieldRootSeed(NULL, field) == -1);
+}
+
+static void CheckTacticCacheTracksObjectiveIdentity(void)
+{
+	int fixed_field[2] = { 500, 0 };
+	int moving_field[2] = { 0, 500 };
+	sg_tactic_cache_t cache = {
+		.topology_current = true, .tactic_seed = 4,
+		.cached_role = SG_ROLE_ATTACK, .current_role = SG_ROLE_ATTACK,
+		.cached_goal = { moving_field, 1 },
+		.current_goal = { moving_field, 1 },
+		.committed_at = 10.0f, .now = 11.0f, .route_cost = 900
+	};
+	sg_tactic_cache_t base = cache;
+#define CHECK_REFRESH(statement) do { \
+	cache = base; statement; \
+	CHECK(SG_TacticCacheNeedsRefresh(&cache)); \
+} while (0)
+	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
+	CHECK_REFRESH(cache.current_goal.minimum_seed = 0);
+	CHECK_REFRESH(cache.current_goal.field = fixed_field);
+	CHECK_REFRESH(cache.current_role = SG_ROLE_RECOVER);
+	CHECK_REFRESH(cache.committed_at = 12.0f);
+	cache = base;
+	cache.now = 20.0f;
+	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
+	CHECK_REFRESH(cache.now = 20.1f);
+	CHECK_REFRESH(cache.topology_current = false);
+	CHECK_REFRESH(cache.tactic_seed = -1);
+	CHECK_REFRESH(cache.route_cost = 299);
+	cache = base;
+	cache.route_cost = 300;
+	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
+	CHECK_REFRESH(cache.route_cost = SG_FIELD_INF);
+#undef CHECK_REFRESH
+}
+
 int main(void)
 {
 	rune_t rune;
@@ -728,6 +787,8 @@ int main(void)
 	CheckEnemyObservationRetirement();
 	CheckCarrierProjectionPricesWholeEdge();
 	CheckCarrierScreenUsesTravelTime();
+	CheckObjectiveFieldRootTracksMovingGoals();
+	CheckTacticCacheTracksObjectiveIdentity();
 
 	if (failures)
 	{

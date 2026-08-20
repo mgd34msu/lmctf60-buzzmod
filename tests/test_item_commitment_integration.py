@@ -296,6 +296,20 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertEqual(len(optional_guards), 3)
         self.assertIn("route_pure = tc->rune_handoff_route;", handoff)
 
+    def test_tactic_cache_is_wired_to_objective_identity(self):
+        source = self.text("slipgate/sg_goal.c")
+        start = source.index("static int tac_fields")
+        end = source.index("if (SG_DefenseSupplyActive(bot))", start)
+        tactics = source[start:end]
+        root = tactics.index("SG_FieldRootSeed(SG_Rune(), goal_field)")
+        refresh = tactics.index("SG_TacticCacheNeedsRefresh(&cache)")
+        publish = tactics.index("tac_goal[bi] = goal")
+        flood = tactics.index("Field_Flood(SG_Rune(), tac_fields[bi]")
+
+        self.assertLess(root, refresh)
+        self.assertLess(refresh, publish)
+        self.assertLess(publish, flood)
+
     def test_rune_handoff_route_retires_enemy_flag_pressure(self):
         goal = self.text("slipgate/sg_goal.c")
         move = self.text("slipgate/sg_move.c")

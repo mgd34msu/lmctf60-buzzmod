@@ -18,6 +18,7 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_item_route.h"
 #include "slipgate/sg_field_projection.h"
+#include "slipgate/sg_tactic_policy.h"
 #include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_rune_handoff_policy.h"
@@ -1538,9 +1539,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		else
 			goal_field = sg_fields.to_flag_now[team_index][enemy_index];
 	}
-	/* Only principal objective selection borrows the effective strike role.
-	 * Optional item, tactics, and relay policy below continue to read the
-	 * organic role plus their existing explicit strike-duty gates. */
+	/* Optional policies use the organic role and explicit strike-duty gates. */
 	role = tc->role;
 
 	/* A RESIST or REGEN holder may close on a bare carrier for a handoff. */
@@ -1660,23 +1659,24 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	{
 		static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
 		static unsigned tac_field_epoch[SG_MAXBOTS];
+		static sg_tactic_goal_t tac_goal[SG_MAXBOTS];
 		int bi = (int)(bot - sg_bots);
+		sg_tactic_goal_t goal = {
+			goal_field, SG_FieldRootSeed(SG_Rune(), goal_field)
+		};
+		sg_tactic_cache_t cache = {
+			.topology_current = Fields_ActionTopologyCurrent(tac_field_epoch[bi]),
+			.tactic_seed = bot->tac_seed, .cached_role = bot->tac_role,
+			.current_role = (int)role, .cached_goal = tac_goal[bi],
+			.current_goal = goal, .committed_at = bot->tac_time,
+			.now = level.time, .route_cost = tac_fields[bi][bot->seed]
+		};
 		qboolean need;
-
-		/* Score the waypoint with the full route surface. */
 		sg_route_pure_now = false;
-		need = (!Fields_ActionTopologyCurrent(tac_field_epoch[bi]) ||
-		                 bot->tac_seed < 0 ||
-		                 bot->tac_role != (int)role ||
-		                 /* A timestamp ahead of level.time belongs to another map. */
-		                 SG_TimerPending(bot->tac_time) ||
-		                 SG_AgeOver(bot->tac_time, 10.0f) ||
-		                 tac_fields[bi][bot->seed] >= SG_FIELD_INF ||
-		                 tac_fields[bi][bot->seed] < 300);
+		need = SG_TacticCacheNeedsRefresh(&cache);
 
 		if (need)
 		{
-
 			static int g2_field[SG_MAX_SEEDS];
 			int s10, best10 = -1, g2 = -1, cur = goal_field[bot->seed];
 			float bv10 = 1e30f, gv10 = 1e30f;
@@ -1730,6 +1730,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				bot->tac_seed = best10;
 				SG_Mark(&bot->tac_time);
 				bot->tac_role = (int)role;
+				tac_goal[bi] = goal;
 				Field_Flood(SG_Rune(), tac_fields[bi],
 				            &bot->tac_seed, &cost10, 1);
 				tac_field_epoch[bi] = sg_fields.action_topology_epoch;
@@ -1746,8 +1747,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 		    tac_fields[bi][bot->seed] < SG_FIELD_INF)
 		{
 			route_field = tac_fields[bi];
-			route_pure = true;      /* tactics were priced at selection:
-			                         * the walk itself stays pure */
+			route_pure = true;
 		}
 	}
 
