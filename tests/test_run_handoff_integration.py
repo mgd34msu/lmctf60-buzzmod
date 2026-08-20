@@ -18,7 +18,9 @@ def main() -> None:
     commit = descend[descend.index("int Think_CommitLink(") :]
     handoff = commit.index("SG_RunCompletionHandoff(")
     invalidate = commit.index("SG_RunInvalidateCompletedCandidate(")
-    latch = commit.index("THE LINK LATCH")
+    latch = commit.index(
+        "if (!defense_shift_selected && sg_cv.linklatch->value > 0"
+    )
     assert invalidate < handoff < latch
     assert commit.count("SG_RunCompletionHandoff(") == 1
     early = commit[invalidate:latch]

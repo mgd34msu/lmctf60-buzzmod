@@ -13,8 +13,14 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
     def test_selection_precedes_latch_and_commitment(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
         chooser = source.index("SG_DefenseShiftChoose(&request")
-        latch = source.index("THE LINK LATCH", chooser)
-        commitment = source.index("Commitment. The composed surface", latch)
+        latch = source.index(
+            "if (!defense_shift_selected && sg_cv.linklatch->value > 0",
+            chooser,
+        )
+        commitment = source.index(
+            "if (bot->commit_link >= 0 && bot->commit_link <",
+            latch,
+        )
 
         self.assertLess(chooser, latch)
         self.assertLess(latch, commitment)
@@ -95,7 +101,10 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         source = (ROOT / "slipgate/sg_descend.c").read_text()
         retire = source.rfind("int patrol_link = bot->patrol_link", 0,
                               source.index("SG_DefensePatrolRetireIfInactive(patrol_active"))
-        latch = source.index("THE LINK LATCH", retire)
+        latch = source.index(
+            "if (!defense_shift_selected && sg_cv.linklatch->value > 0",
+            retire,
+        )
 
         self.assertLess(retire, latch)
         self.assertIn("&bot->patrol_link, &bot->patrol_seed", source[retire:latch])

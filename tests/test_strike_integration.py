@@ -577,7 +577,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertLess(first, second)
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         approach = goal[goal.index("qboolean Think_ApproachBand"):
-                        goal.index("THE INTERCEPT SURFACE")]
+                        goal.index("void Think_InterceptField")]
         self.assertIn("!tc->strike_active &&", approach)
         self.assertIn("SG_StrikePrebreachApproachAllowed(", approach)
 

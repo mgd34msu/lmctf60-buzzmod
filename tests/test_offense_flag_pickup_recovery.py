@@ -139,12 +139,12 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         incumbent = between(
             descend,
             "bestval = Surface_At",
-            "THE CARRIER DOES NOT SINK",
+            "qboolean sink_ban = false;",
         )
         candidate = between(
             descend,
             "The fighter's two terms",
-            "THE HUMAN PRIOR",
+            "if (sg_human_use &&",
         )
 
         self.assertIn("enemy_pressure", setup)
@@ -582,7 +582,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         terminal = between(
             descend,
             "qboolean flag_los = false;",
-            "THE CLEAN GRAB.",
+            "if (tc->strike_pressure)",
         )
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", terminal)
         self.assertIn(
@@ -593,7 +593,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("goal_field[bot->seed] < 400", terminal)
         self.assertNotIn("role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY", terminal)
 
-        clean_grab = between(descend, "THE CLEAN GRAB.", "THE REARGUARD.")
+        clean_grab = between(
+            descend,
+            "if (tc->strike_pressure)",
+            "if (bot->lead_ent > 0",
+        )
         self.assertIn("if (tc->strike_pressure)", clean_grab)
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb5)", clean_grab)
         self.assertIn("SG_StrikeEnemyPressureGoalSnapshot(mb5)", clean_grab)
@@ -828,7 +832,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
     def test_empty_flag_room_neither_holds_nor_arms_belief_grenade(self) -> None:
         descend = source("slipgate/sg_descend.c")
-        clean = between(descend, "THE CLEAN GRAB.", "\n\t/*\n\t * Commitment.")
+        clean = between(
+            descend,
+            "if (tc->strike_pressure)",
+            "if (bot->commit_link >= 0 && bot->commit_link <",
+        )
         live_gate = "live_room_enemy = live_enemy &&"
         self.assertIn("live_enemy = SG_CombatLiveEnemy(e);", clean)
         self.assertIn(live_gate, clean)
@@ -836,7 +844,9 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("SG_AttackFlagDirectTouchAuthority(e, team, NULL)", clean)
         self.assertIn("if (room >= 1 && live_room_enemy && !live_flag_terminal)", clean)
 
-        grenade = clean[clean.index("THE PRE-BREACH BOMB."):]
+        grenade = clean[clean.index(
+            "if (rally_hold && live_room_enemy && !live_flag_terminal"
+        ):]
         self.assertIn("if (rally_hold && live_room_enemy && !live_flag_terminal", grenade)
         self.assertIn("SG_NadeArmPrebreachLiveEnemy(bot, e, team,", grenade)
         self.assertNotIn("FindItem(\"Grenades\")", grenade)
@@ -875,11 +885,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         approach = between(
             goal,
             "qboolean Think_ApproachBand",
-            "\n/*\n * THE INTERCEPT SURFACE",
+            "void Think_InterceptField",
         )
         flight = between(
             approach,
-            "THE FLYING COOK.",
+            "if (pressure_approach && sg_cv.flycook->value",
             "\n\treturn hold;",
         )
         self.assertIn(
@@ -1063,7 +1073,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
 
     def test_wedgekill_exempts_only_live_enemy_flag_terminal(self) -> None:
         descend = source("slipgate/sg_descend.c")
-        wedge = between(descend, "THE UNSTICK OF LAST RESORT.", "\n\tVectorSubtract(e->s.origin, bot->stag_org, d);")
+        wedge = between(
+            descend,
+            "VectorSubtract(e->s.origin, bot->wedge_org, d);",
+            "\n\tVectorSubtract(e->s.origin, bot->stag_org, d);",
+        )
         recovery = between(
             wedge,
             "enemy_pressure &&",

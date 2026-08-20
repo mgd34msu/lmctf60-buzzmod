@@ -397,25 +397,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		bot->lives++;
 		bot->inlinks_n = 0;     /* a new life rides in on its own roads */
 
-		/*
-		 * THE SPAWN BEAT (sg_spawnbeat, enhancement 7). Watched in
-		 * chase-cam, the tell is not the route, it is the START of the
-		 * route: the bot materialises and is already at full pace down a
-		 * corridor it cannot have looked at yet. A player spawns, checks
-		 * a shoulder, and THEN goes -- half a second of orientation that
-		 * every human pays and no bot ever did.
-		 *
-		 * Half a second is the whole feature. The beat is skill-scaled
-		 * because the better player pays less of it (0.9s at bot_skill
-		 * 0, 0.4s at 4), the cvar is a multiplier on that so the beat
-		 * can be widened without touching the ladder, and 0 -- the
-		 * default -- is the fleet exactly as it shipped.
-		 *
-		 * Never on the first spawn of a level: joins already arrive
-		 * staggered across their own greeting window, and sixteen bots
-		 * all pausing on the opening whistle is a tell of its own.
-		 * beat_ready is what makes that test honest (see its field).
-		 */
+		/* Add a skill-scaled orientation delay after respawn, but not on the
+		 * initial level spawn where joins are already staggered. */
 		{
 			float	mult = sg_cv.spawnbeat->value;
 
@@ -493,19 +476,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			bestval += duel_expo *
 			    (float)SG_Rune()->seeds[bot->seed].area_hint * 1.8f;
 	}
-	/*
-	 * THE CARRIER DOES NOT SINK (pit analysis, observations: 83
-	 * unopposed smap05 carries, 87% touched the mid-map basin, 33 ended
-	 * "sank like a rock"). The flood's cheapest way out of that basin
-	 * fires its long ropes from the BOTTOM of the water (seeds 541/545/
-	 * 551/554 at z=-744), so the descent walks a carrier 250 units DOWN
-	 * to reach a rope it then has four seconds of air to land. Breath
-	 * doctrine is a motor override at the gurgle; it cannot un-choose
-	 * the step that spent the air. A wet carrier prices every downward
-	 * step out of contention -- but ONLY when some candidate is not
-	 * downward, so a genuine one-way underwater tunnel still runs and
-	 * no carrier is ever stranded.
-	 */
+	/* A submerged carrier refuses descending links when a level or ascending
+	 * exit exists. One-way underwater routes remain traversable. */
 	{
 		qboolean sink_ban = false;
 
@@ -713,17 +685,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				v += sg_cv.unlinger->value;
 		}
 
-		/*
-		 * ROUTE DITHER (sg_routedither, movement behavior set #1 tell #2): the
-		 * transition matrices show p=1.0 cells -- at a given seed this
-		 * body always makes the identical next choice, and a judge
-		 * reads the determinism off the sheet. A human's tie-break
-		 * varies. Per-visit pseudo-noise under one hop of gradient
-		 * (~125ms at dose 120): ties and near-ties resolve differently
-		 * on different visits, the gradient itself never overruled.
-		 * The salt rerolls on seed entry so the choice HOLDS within a
-		 * visit -- no flip-flop -- and varies across visits.
-		 */
+		/* Per-visit noise breaks near-ties without overruling one hop of route
+		 * gradient. The salt remains stable until the bot changes seed. */
 		if (sg_cv.routedither->value > 0.0f)
 		{
 			unsigned dh = bot->dither_salt ^ (unsigned)li * 2654435761u;
@@ -733,29 +696,14 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			     (float)(dh & 1023) / 1023.0f;
 		}
 
-		/*
-		 * No ropes in the house. observations, watched live: an attacker
-		 * spinning in the flag room firing hooks at the walls while the
-		 * flag sat unguarded a body-length away -- in-room hook links
-		 * ping-pong a bot around the goal minimum, and rope-fire counts
-		 * tripled the day the slew made firing cheap. Inside 600ms of
-		 * the objective the legs beat any rope ritual; only a fleeing
-		 * carrier keeps the choice.
-		 */
+		/* Non-carriers within 600 ms of the objective finish on foot instead
+		 * of oscillating across nearby hook links. */
 		if (hook_policy && role != SG_ROLE_CARRY &&
 		    goal_field[bot->seed] < 600 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			continue;
-		/*
-		 * COVER ON THE APPROACH. lmctf58's attack front dies at 3.3s out
-		 * with no stalls and no wedges -- moving freely into a covered
-		 * sightline, game after game (observations). The rune has
-		 * carried measured exposure on every seed since the census pass;
-		 * it priced cover for hurting duelists only. Now the final
-		 * approach pays for visible ground too: an attacker inside 4s of
-		 * the goal, and a carrier anywhere on the run home, prefers the
-		 * corridor to the courtyard whenever the costs are close.
-		 */
+		/* Under enemy pressure, prefer covered final approaches when route
+		 * costs are otherwise close. */
 		if (enemy_pressure && goal_field[bot->seed] < 4000 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 			/* 0.5, not 2.5: the lmctf58 audit caught this surcharge
@@ -846,14 +794,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * extra travel, up to ~1200ms for walking straight into them.
 		 * Everyone else fights; the carrier's job is the capture point.
 		 */
-		/*
-		 * THE WET ROUTE (sg_watercarry, observations). The lmctf01 census:
-		 * thirteen of thirteen carrier deaths were rails on the dry
-		 * corridors, while humans convert 71 percent there by swimming
-		 * the moat -- underwater is the one country without railguns.
-		 * A carrier prices swim links 800 cheaper; breath doctrine
-		 * already owns the drowning risk.
-		 */
+		/* Let breath handling own the risk while carriers prefer protected
+		 * swim routes. */
 		if (role == SG_ROLE_CARRY && l->action == RL_SWIM &&
 		    sg_cv.watercarry->value)
 			v -= 800.0f;
@@ -874,23 +816,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		        SG_Rune()->seeds[bot->seed].origin[2] - 16.0f)
 			v += 12000.0f;
 
-		/*
-		 * THE SHELF PAYS ITS CLIFF, at the layer that actually walks
-		 * (sg_shelfcost, steal-genesis study). The first cut priced the
-		 * waypoint surface and read a flat null in three match batches: between
-		 * commitments the descent runs on the flood alone, and the flood
-		 * happily steps DOWN onto the zero-yield floor under the enemy
-		 * stand (101 close approaches there, 91% dead in 1.2s, zero
-		 * steals). Fourth cut, per PITTRACE: 74 of 89 pit entries were
-		 * plain attack-role link descent, LATERAL at floor height -- and
-		 * the field-layer surcharge alone made it worse, because link
-		 * selection scores the DESTINATION's potential and the pit basin
-		 * stays cheap (its hook out is free by design) while the corridor
-		 * around it got dearer. So the movement layer now charges ANY
-		 * step whose destination is a masked sub-stand seed, downward or
-		 * flat; steps OUT of the pit still pay nothing -- a knocked-in
-		 * bot climbs like it means it.
-		 */
+		/* Charge movement into a masked sub-stand shelf, including lateral
+		 * entries. Ascending exits from the shelf remain free. */
 		if (sg_cv.shelfcost->value > 0.0f)
 		{
 			int shti = SG_TeamIdx(team);
@@ -912,18 +839,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 
 		if (role == SG_ROLE_CARRY && hook_policy)
 		{
-			/*
-			 * The carrier's ROPE is not everyone's rope: phase 1 is a
-			 * standing aim frame with the flag on its back, and a miss
-			 * re-runs the ritual (observations: 17s at 10ms/s against a 43%
-			 * land rate). But the blanket surcharge overcorrected --
-			 * observations show five of fourteen carriers dying of the
-			 * CLOCK, legs too slow for the long returns, while the rope
-			 * at 800 u/s is the fastest thing in clear water. The aim
-			 * frame is only deadly when somebody is watching: the
-			 * surcharge now applies under fresh contact and stands down
-			 * when the country is quiet.
-			 */
+			/* Price the hook's stationary aim phase only when a fresh nearby
+			 * contact can punish it. */
 			int s2;
 
 			for (s2 = 0; s2 < SG_MAX_ENEMY_TRACK; s2++)
@@ -934,34 +851,12 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				if (en->client < 0 || en->seed < 0 ||
 				    SG_AgeAtLeast(en->seen_time, 4.0f))
 					continue;
-				/*
-				 * CLOSE contact only. 'Seen recently anywhere' kept
-				 * pursued carriers on their legs the whole run home,
-				 * and 32 games of the fast-respawn meta produced zero
-				 * captures with rail-armed pursuit running them down.
-				 * A pursuer 1500 units back cannot punish a half-second
-				 * aim stand -- the rope at 800 u/s GAINS on them. Only
-				 * an enemy believed inside 700 makes the standing frame
-				 * a real gamble.
-				 */
+				/* A distant pursuer cannot punish the hook's brief aim phase. */
 				VectorSubtract(SG_Rune()->seeds[en->seed].origin,
 				               e->s.origin, pd);
 				if (VectorLength(pd) < 700.0f)
 				{
-					/*
-					 * THE FAST CARRY (sg_fastcarry, comparison observations).
-					 * The human corpus set the bar: a successful
-					 * carry is 14 seconds of covering the WHOLE
-					 * route, and humans convert 12.8 percent of
-					 * steals doing it. Our carriers survive human
-					 * lengths (interpose) and cover a third of the
-					 * ground -- this 2000ms rope tax under contact
-					 * was tuned in the era before escorts, screens,
-					 * or the scoop existed to spend it. With a
-					 * bodyguard on the line, the aim-stand gamble is
-					 * priced at 500: the rope comes back to the run
-					 * home.
-					 */
+					/* Escort support lowers the risk premium on a carrier hook. */
 					v += sg_cv.fastcarry->value
 					     ? 500.0f : 2000.0f;
 					break;
@@ -972,18 +867,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
 			bot->carry_startcost = goal_field[bot->seed];
 
-		/*
-		 * THE PROGRESS GUARD. observations carry traces: the 53-second 5v1
-		 * carry ran its cost 12800 down to 6400, fell into the pool, and
-		 * finished the fight at 8623 -- a third of the route home handed
-		 * back in one drop, then a crawl. A carrier that loses ground it
-		 * already paid for is off its route (act=-1 frames, 61 of them
-		 * that game); the shelf that priced the old position is stale
-		 * testimony there. On a 2500-cost regression from the carry's
-		 * best: wipe the shelf, re-arm the breakout gauge from here, and
-		 * say so in the log. The descent replans from where the body
-		 * actually is, not where the plan thought it would be.
-		 */
+		/* A 2500-cost regression means the carrier left its planned route.
+		 * Retire stale shelves and rebase progress at the current seed. */
 		if (role == SG_ROLE_CARRY && bot->seed >= 0 &&
 		    goal_field[bot->seed] < SG_FIELD_INF)
 		{
@@ -997,13 +882,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				int b2, was_best = bot->carry_bestcost;
 
 				SG_Mark(&bot->carry_lost_at);
-				/* wipe STALE testimony only: a shelf priced at the
-				 * old position is hearsay here, but one recorded in
-				 * the last three seconds is the body reporting from
-				 * where it stands now, and un-shelving those sent
-				 * carriers into retry-fail churn (offgraph frames
-				 * 0->3->5->12%% across observations). Shelves live
-				 * 120s, so age reads off the expiry. */
+				/* Keep shelves observed within the last three seconds. */
 				for (b2 = 0; b2 < SG_BL_MAX; b2++)
 					if (bot->bl_until[b2] < level.time + 117.0f)
 						bot->bl_until[b2] = 0.0f;
@@ -1023,20 +902,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		      goal_field[bot->seed] >
 		          bot->carry_startcost / 2))
 		{
-			/*
-			 * THE BREAKOUT, gauged by STATE, not clock. observations: nine
-			 * carries, every one pinned at 0-10% of the way home, the
-			 * flee doctrine's own pricing surcharging every exit of a
-			 * hot flag room until the argmin oscillated between doors.
-			 * A 10-second window (observations) freed the ones that broke
-			 * fast and re-pinned the ones that didn't -- Trace, 72s at
-			 * 1% -- so the clock is gone: the dodge stays silent until
-			 * the carrier has actually cleared a quarter of the route
-			 * home, and resumes in open country, where it was ever
-			 * wise. lmctf05's carrier rode the silent window to 44%,
-			 * three times the old ceiling; the gate now follows the
-			 * body instead of the wall clock.
-			 */
+			/* Suppress flee dodging until the carrier has made enough route
+			 * progress to leave the breakout area. */
 			int s;
 
 			for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
@@ -1075,27 +942,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		else if (duel_route_price)
 		{
-		         /* CARRIER PRESS (sg_carrypress, observations). The carry
-		          * traces (274-279): 61%% of carrier frames make no
-		          * homeward progress at ~190 u/s, and 48 of 49 carries
-		          * die before the route's final tenth -- the carrier
-		          * was still holding duel range against pursuers, the
-		          * receding behavior the press cured for attackers in
-		          * the only parity-cap comparison ever won. A fleeing carrier
-		          * has no business pricing weapon range: forward. */
-			/*
-			 * THE PRESS (sg_press, comparison observations). The travel
-			 * decomposition (observations): twenty percent of ALL
-			 * attacker distance is spent actively receding from the
-			 * goal -- and range control is the suspect with the
-			 * motive: an engaged attacker prices its steps toward the
-			 * range its weapon wants, which for the long guns means
-			 * BACKWARD, and at parity engagement never ends. Under
-			 * press, attackers keep the aim, keep the weave, and keep
-			 * walking forward; only defenders and escorts hold range
-			 * discipline. The escort's 3.1 efficiency against the
-			 * attacker's 1.6 was always this contrast.
-			 */
+			/* Pressing attackers and fleeing carriers do not sacrifice route
+			 * progress to maintain their weapon's preferred duel range. */
 			v += Duel_Price(e, SG_Rune()->seeds[l->to].origin, duel_org,
 			                duel_want, duel_expo);
 			/* the exposure dimension as a cover prior: a seed the map
@@ -1107,66 +955,31 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				    (float)SG_Rune()->seeds[l->to].area_hint * 1.8f;
 		}
 
-		/*
-		 * THE HUMAN PRIOR (sg_humanprior, comparison observations). Fifty-nine
-		 * hours of recorded play, log-tiered per link: a candidate on
-		 * a human highway prices up to ~380ms cheaper. Humans
-		 * concentrate (top 1%% of transitions carry up to 13%% of all
-		 * traffic) and their concentration encodes twenty years of
-		 * knowing which roads survive contact -- the discount lets
-		 * the descent inherit that without a single scripted route.
-		 */
+		/* Discount links in proportion to observed human use. */
 		if (sg_human_use &&
 		    sg_cv.humanprior->value)
 			v -= 1.5f * (float)sg_human_use[li];
 
-		/*
-		 * THE FLAG-LIVE PRIOR (sg_flagprior, comparison observations). The
-		 * global prior nulled -- but the corpus shows humans run 60%%
-		 * DIFFERENT roads while a flag is out (carrywindows census),
-		 * and those are the twenty seconds that decide every game.
-		 * The discount applies only inside the window the evidence
-		 * came from: either flag astray, up to ~380ms off the roads
-		 * humans run when it matters.
-		 */
+		/* During live-flag play, discount links from the matching human
+		 * route sample for non-carriers. */
 		if (sg_human_live &&
 		    sg_cv.flagprior->value &&
 		    tc->role != SG_ROLE_CARRY &&
 		    (sg_caco_team_belief.flag[0][0].state == SG_FLAG_ASTRAY ||
 		     sg_caco_team_belief.flag[0][1].state == SG_FLAG_ASTRAY))
-			/* the cvar IS the dose. observations (dose 2): carrier route
-			 * coverage FELL under the discount -- the window corpus
-			 * is hunters' roads, not escapees' (POV-agnostic cut).
-			 * The roads go to the roles they came from: hunters
-			 * inherit them, the carrier keeps its pure homeward
-			 * pricing. */
+			/* This sample represents hunters, not carrier escape routes. */
 			v -= 1.5f * sg_cv.flagprior->value *
 			     (float)sg_human_live[li];
 
-		/*
-		 * DEFENSE DWELL (sg_defpost, observations). The corpus inverted
-		 * the stand-freeze doctrine: only 19% of human defensive
-		 * standing time is within 250u of the stand -- humans post on
-		 * the APPROACHES. Cheap first cut per the extraction's own
-		 * sequencing: defenders price steps toward high-dwell seeds
-		 * cheaper (their team's plane), same idiom as every prior.
-		 */
+		/* Bias defenders toward high-dwell approach posts. */
 		if (tc->role == SG_ROLE_DEFEND &&
 		    sg_def_post[SG_TeamIdx(team)] &&
 		    sg_cv.defpost->value > 0)
 			v -= 1.5f * sg_cv.defpost->value *
 			     (float)sg_def_post[SG_TeamIdx(team)][l->to];
 
-		/*
-		 * DEFENSE INTERCEPT (sg_defreact, observations). The response
-		 * census, n=1044: on a steal humans leave the post in 0.9s
-		 * and run the ESCAPE CORRIDOR toward where the carrier will
-		 * be -- aim-at-lead 0.48-0.68 vs aim-at-now ~0. Our defender
-		 * already chases the believed CURRENT position (the flag
-		 * field re-floods from it); this term bends that pursuit
-		 * toward the corpus's learned cut-off seeds while our flag
-		 * is astray. Direct chase is 8% of human responses.
-		 */
+		/* When the flag is stolen, bias defenders toward learned interception
+		 * seeds instead of only the carrier's current position. */
 		if (tc->role == SG_ROLE_DEFEND &&
 		    sg_def_icept[SG_TeamIdx(team)] &&
 		    sg_caco_team_belief.flag[SG_TeamIdx(team)][SG_TeamIdx(team)].state ==
@@ -1175,32 +988,14 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			v -= 1.5f * sg_cv.defreact->value *
 			     (float)sg_def_icept[SG_TeamIdx(team)][l->to];
 
-		/*
-		 * THE ESCAPE PRIOR (sg_escapeprior, observations). The missing
-		 * corpus cut: .hml was POV-agnostic and therefore mostly the
-		 * HUNTERS' roads (re-tested null twice). This one is only the
-		 * flag carrier's own entity trajectory in the 20s after each
-		 * steal -- the roads humans actually flee on. Applied to the
-		 * carry role alone; cvar value is the dose, same scale as the
-		 * other priors (1.5ms per tier point per dose).
-		 */
+		/* Carrier-only prior derived from post-steal carrier trajectories. */
 		if (sg_human_escape &&
 		    tc->role == SG_ROLE_CARRY &&
 		    sg_cv.escapeprior->value > 0)
 			v -= 1.5f * sg_cv.escapeprior->value *
 			     (float)sg_human_escape[li];
 
-		/*
-		 * APPROACH COVER (sg_approachcover, observations). The carry
-		 * analysis moved the fight: 90% of early carrier kills came
-		 * from defenders ALREADY PARKED within 1000u of the robbed
-		 * stand (81% there five seconds before), rail 47% from
-		 * grounded shooters at 237u -- and the nearest enemy is 210u
-		 * away at the grab. Cover bought after the grab arrives too
-		 * late; the line must be chosen on the way IN. Same trace,
-		 * same book as the carrier's, applied to the attacker against
-		 * every fresh eye sighting near the target stand.
-		 */
+		/* Price exposed attack approaches against fresh nearby sightings. */
 		if (enemy_pressure &&
 		    sg_cv.approachcover->value > 0)
 		{
@@ -1233,27 +1028,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
-		/*
-		 * RAIL COVER (sg_railrhythm). The other half of the counter-play,
-		 * and the half that runs when there is no lane to time: a burst
-		 * that ENDS somewhere the railer can see is a burst that ends in
-		 * front of a loaded gun. The trace is the approach-cover trace --
-		 * same eye height, same mask, same 900-unit gate, MASK_SOLID from
-		 * the candidate seed to the believed post -- but the sighting was
-		 * chosen once for the whole fan above, so this costs exactly one
-		 * ray per candidate rather than one per candidate per enemy.
-		 *
-		 * Every role pays it. Approach cover is an attacker's term and
-		 * carrier cover is a carrier's; a rail lane is neither, it is a
-		 * fact about the room, and the defender walking back to a post
-		 * across it dies the same way. The carrier's dose is the larger
-		 * one, folded in where the sighting was resolved.
-		 *
-		 * A PREFERENCE, not a wall, for the reason the lmctf58 audit
-		 * wrote down two terms above: the dose is the cvar's and it
-		 * belongs under the ~125/hop goal gradient. There is no branch
-		 * here that can make a seed unreachable.
-		 */
+		/* Price candidate endpoints visible to the selected rail threat. The
+		 * surcharge remains below one hop of goal gradient. */
 		if (rail_seed >= 0)
 		{
 			vec3_t	reye, rthr, rspan;
@@ -1272,18 +1048,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
-		/*
-		 * CARRIER COVER (sg_carrycover, observations). The 268-273 DMG
-		 * ledger: rails are still the carrier's top killer (2998 dmg
-		 * to rocket-direct's 2317), fired mostly by GROUNDED defenders
-		 * at 135-415 units -- standing shots down clear lines. A rail
-		 * needs line of sight; a human carrier buys cover with corners
-		 * the way this graph buys speed with links. For the carrier
-		 * only, while the team's freshest EYE sighting is under 3s
-		 * old, a candidate step the sighted enemy can see costs the
-		 * cvar's value in ms extra. One trace per candidate, against
-		 * the one sighting that matters most.
-		 */
+		/* Carriers pay for candidate steps visible to the freshest nearby
+		 * eye-confirmed enemy. */
 		if (tc->role == SG_ROLE_CARRY &&
 		    sg_cv.carrycover->value > 0)
 		{
@@ -1314,10 +1080,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 				VectorCopy(SG_Rune()->seeds[
 				    sg_caco_enemies[SG_TeamIdx(team)][best_cs].seed].origin, thr);
 				thr[2] += 22.0f;
-				/* range gate (observations): the 268-277 ledger kills all
-				 * sit inside ~800u -- a sighting across the map must
-				 * not bend the route (dose 1200 showed the failure:
-				 * 53-second carries that never arrive). */
+				/* Distant sightings do not bend the carrier route. */
 				VectorSubtract(thr, eye, span);
 				if (VectorLength(span) < 900.0f)
 				{
@@ -1336,33 +1099,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
-		/*
-		 * THE SWITCHING COST (sg_sticky, comparison observations). The owner's
-		 * diagnosis, measured: offense converts 1.6 ms of progress per
-		 * unit walked against the escort's 3.1 on the same maps -- half
-		 * of all offensive walking buys nothing -- and the chosen link
-		 * changes every ~2.4 seconds. The surface offers ties, and the
-		 * per-frame argmin flips between them: a bot following a LINE
-		 * on the gradient, not the gradient. The incumbent route now
-		 * holds its seat unless a challenger beats it by 15 percent --
-		 * a mind-change gets priced at the moment it is made, which is
-		 * the owner's wasted-distance penalty moved to where it can
-		 * steer. Shelved, blocked, or completed incumbents pay nothing:
-		 * displacement stays free when the route is actually dead.
-		 */
-		/*
-		 * ROUTE JITTER (sg_routejitter, observations). The film verdict
-		 * chain: rope-vs-brush (calibrated 8/8 judge) -> fixed ribbon
-		 * (lanes, not a band) -> wandering ribbon (pooled null: the
-		 * steering re-centers whatever the aim does). The band humans
-		 * paint is ROUTE diversity, not in-lane wander: near-optimal
-		 * link chains differ per player and per run, where our argmin
-		 * rides the single optimum every time. Each bot-life gets a
-		 * deterministic per-link pricing tilt (cvar = max percent);
-		 * ties and near-ties then split the population across
-		 * different roads. Deterministic per life: no per-frame noise,
-		 * no flapping -- a LIFE rides one opinion of the map.
-		 */
+		/* A stable per-life link tilt spreads bots across near-optimal routes
+		 * without per-frame flapping. */
 		if (sg_cv.routejitter->value > 0.0f)
 		{
 			unsigned rj = SG_RouteJitterDraw(bot->instance_token,
@@ -1373,17 +1111,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			     sg_cv.routejitter->value;
 		}
 
-		/*
-		 * NO IMMEDIATE BACKTRACK (sg_nobacktrack, observations case). The
-		 * smap05 map-center orbit -- and the chronic ~130 suicides per
-		 * match behind it -- is two seeds on a field plateau electing
-		 * each other forever at full sprint. The latch (observations)
-		 * pooled null against it: holding a link longer does not help
-		 * when the flap is BETWEEN legs. This prices the one link that
-		 * returns to the seed just departed, for a few seconds, unless
-		 * pricing leaves no other finite way down. A human does turn
-		 * around sometimes; a human does not do-si-do.
-		 */
+		/* Penalize a return to the previous seed when another non-worsening
+		 * route exists. */
 		if (SG_RouteReturnPenaltyAllowed(bot->prev_seed, l->to,
 		        SG_AgeUnder(bot->prev_seed_time, 3.0f),
 		        nonworsening_route_neighbors,
@@ -2649,16 +2378,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/*
-	 * THE LINK LATCH (sg_linklatch, observations). The demo census: 87
-	 * deg/s of heading noise, a 49% reversal rate, a full 180 every
-	 * nine seconds -- a 10Hz argmin flapping across noise-level ties
-	 * on a surface whose item terms refresh at 1Hz. The incumbent
-	 * keeps its seat for the cvar's milliseconds unless a challenger
-	 * beats it by 15%; a dead incumbent (infinite v, no longer offered
-	 * from this seed) abdicates immediately. This is the re-decision
-	 * cadence matched to the information's own refresh rate.
-	 */
+	/* Hold the incumbent link across near-ties until the latch expires. A
+	 * missing or materially worse incumbent yields immediately. */
 	if (!defense_shift_selected && sg_cv.linklatch->value > 0 &&
 	    bestlink >= 0 && bot->sticky_link >= 0 &&
 	    bestlink != bot->sticky_link &&
@@ -2739,18 +2460,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		bestlink = -1;
 		bot->terminal = true;
 
-		/*
-		 * THE CLEAN GRAB. Fifty-one of fifty-four carriers died at a
-		 * median five percent of the way home (observations) --
-		 * grabbing a hot room hands the flag to the respawn stream
-		 * within seconds. A human clears the room first. An attacker
-		 * inside touch range now holds at the threshold while a
-		 * defender is believed alive within 900 of the stand -- combat
-		 * runs free from the hold, the room fight happens BEFORE the
-		 * grab -- and takes the flag the moment the room dies (the
-		 * surge cancels every hold when a defender drops). Ten seconds
-		 * caps the patience: a stalemate grab beats no grab.
-		 */
+		/* Fight a live nearby defender before touching the flag, subject to
+		 * the patience and coordinated-breach rules below. */
 		if (tc->strike_pressure)
 		{
 			int s3, room = 0;
@@ -2766,13 +2477,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				sg_belief_enemy_t *en3 = &sg_caco_enemies[SG_TeamIdx(team)][s3];
 				vec3_t dd3;
 
-				/* strict mode remembers twice as long: a sentry who
-				 * ducks behind the pedestal for four seconds vanished
-				 * from this count while remaining entirely alive, and
-				 * the "cleared" room killed its carrier at 5%% of the
-				 * route (observations). Absence of sighting is not
-				 * evidence of death; eight seconds is patience, not
-				 * paranoia. */
+				/* Strict mode does not treat a four-second loss of sight as a
+				 * cleared room. */
 				if (en3->client < 0 || en3->seed < 0 ||
 				    SG_AgeAtLeast(en3->seen_time,
 				        (sg_cv.strictgrab->value
@@ -2784,17 +2490,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					room++;
 			}
 
-			/*
-			 * THE UNACCOUNTED MAN (strict only). The killer-recency
-			 * census (observations): ten of thirteen carrier killers
-			 * had not recently died -- live defenders the sighting
-			 * census never saw, not the respawn stream. A room cannot
-			 * be SIGHTED clear; but the scoreboard is public: count
-			 * the enemy roster, subtract everyone believed anywhere
-			 * fresh, and if a man is missing from the ledger, assume
-			 * exactly one of the missing is home. The 20s patience
-			 * valve still forces the grab eventually.
-			 */
+			/* In strict mode, a live enemy missing from fresh public belief is
+			 * conservatively counted as one possible room defender. */
 			if (sg_cv.strictgrab->value)
 			{
 				int s8, esz = 0, accounted = 0, i8;
@@ -2823,36 +2520,11 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					room++;
 			}
 			bot->last_room = room;
-			/*
-			 * Hold only when OUTNUMBERED at the stand. observations: mactf06
-			 * attackers reached 250 of the flag and stole nothing all
-			 * game -- the threshold hold against a single sentry is a
-			 * stalemate the sentry wins by existing. One defender: take
-			 * the grab and make them turn their back to chase. Two or
-			 * more: the room fight first, as before.
-			 */
-			/*
-			 * comparison, observations: ALWAYS fight the room first. The killer
-			 * census flipped the theory -- all 93 carrier deaths across
-			 * seven match batches came from SURVIVORS, zero from the respawn
-			 * stream. Grabbing past a live sentry hands them a free rail
-			 * into a fleeing back; the sprint never mattered. The fight
-			 * happens before the flag moves, at any defender count, and
-			 * the surge still grabs the instant one drops.
-			 */
+			/* Any live visible room defender can authorize a threshold fight. */
 			if (room >= 1 && live_room_enemy && !live_flag_terminal)
 			{
-				/*
-				 * THE PAIR SPLITS THE SENTRY. When two attackers stand
-				 * at the threshold, holding them BOTH just gives the
-				 * sentry one target at a time. The coordinator's CLEAR
-				 * body fights -- holds the sentry's eyes -- while BREACH
-				 * skips the hold and completes the physical entry. PRESS
-				 * is the fallback screen; client identity breaks only
-				 * equal-duty ties. A sentry cannot watch both; whichever
-				 * it picks loses something. Solo attackers still fight
-				 * first, as the killer census demands.
-				 */
+				/* With two attackers present, one holds the defender while the
+				 * coordinator assigns the other to breach. */
 				int bi5, mate_holding = 0;
 
 				for (bi5 = 0; bi5 < SG_MAXBOTS; bi5++)
@@ -2885,33 +2557,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 						rally_hold = true;
 				}
 
-				/*
-				 * THE STRICT GRAB (sg_strictgrab 1, comparison observations).
-				 * observations verdict on the current doctrine: parity
-				 * carriers die at a median ZERO percent of the route --
-				 * at the pedestal -- because both sanctioned grabs
-				 * take the flag under live guns: the 10s stalemate
-				 * grab, and the pair-split circle-grab into a watched
-				 * room. Strict mode holds while ANY defender is
-				 * believed alive in the room, mate or no mate, twenty
-				 * seconds of patience before conceding to the old
-				 * rule. Three 5v5 servers run strict against two on
-				 * current; the steals-vs-caps trade decides.
-				 */
+				/* Strict mode holds against any believed room defender for up to
+				 * twenty seconds, regardless of a teammate's breach duty. */
 				if (room >= 1 &&
 				    sg_cv.strictgrab->value)
 				{
-					/*
-					 * THE CROWD VALVE (sg_crowdhold, observations). The 7v7
-					 * analysis: carriers there die at 4.2s median with the
-					 * WHOLE route left and 2+ enemies in the room -- the 20s
-					 * patience expires into a crowd the room fight can never
-					 * clear at that density, and the forced grab is a death
-					 * sentence (1 cap in 23 carries; 5v5 converts 36%). With
-					 * the valve, patience only concedes while the room holds
-					 * at most the cvar's count; a fuller room re-arms the
-					 * clock -- no grab into a crowd, ever.
-					 */
+					/* A room above the configured crowd limit re-arms patience
+					 * instead of forcing a grab. */
 					if (sg_cv.crowdhold->value > 0 &&
 					    room > (int)sg_cv.crowdhold->value)
 						SG_Mark(&bot->strict_since);
@@ -2923,23 +2575,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				else
 					bot->strict_since = 0.0f;
 
-				/*
-				 * THE PRE-BREACH BOMB. Threshold duels run 99-58 against
-				 * us: a posted rail beats an arriving one, structurally.
-				 * The unfair tool has sat in the loadout unthrown all
-				 * campaign -- five hand grenades a spawn. During a
-				 * threshold fight, cook one and lob it onto the sentry's
-				 * believed post THROUGH cover. No line of sight, no duel:
-				 * the room softens before the breach.
-				 */
-				/* THE FLYING COOK (sg_flycook, observations): the owner
-				 * cooks on approach, not at a standstill -- the last
-				 * seconds of the run double as the fuse, a death
-				 * drops the live grenade where the fight is, and the
-				 * threshold ceremony disappears. The cook engages in
-				 * motion inside the approach band; the throw target
-				 * stays the stand, which is where the run points
-				 * anyway, so the view-pull steers nothing wrong. */
+				/* While the threshold fight holds movement, cook a grenade for
+				 * the visible defender without stealing action-controller authority. */
 				if (rally_hold && live_room_enemy && !live_flag_terminal &&
 				    !bot->jump_started && !bot->drop_started &&
 				    bot->hook_phase == 0 && bot->rj_phase == 0 &&
@@ -3472,14 +3109,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	if (bot->commit_link < 0 && bestlink >= 0)
 		StrikeCommitFreshLink(bot, tc, bestlink);
 
-	/*
-	 * A rail attempt outranks the argmin outright. observations ledger: 16
-	 * RAILTRY, 1 RAILFAIL, 0 RAILWIN -- fifteen attempts silently stood
-	 * down because futility and the shelf reshaped the surface mid-walk
-	 * and the argmin handed back a different link before the proof's line
-	 * got walked. The retry exists precisely because the surface's local
-	 * answer failed here; letting the surface interrupt it is circular.
-	 */
+	/* A rail retry owns traversal until completion or failure; the surface
+	 * that selected the failed route may not interrupt its recovery. */
 	if (StrikeRailLateOverrideAllowed(bot, tc) &&
 	    bot->rail_stage > 0 && bot->rail_link >= 0 &&
 	    bot->rail_link < SG_Rune()->hdr.num_links)
@@ -3631,17 +3262,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 * three links and drains in seconds, nothing like the doorway-fan
 	 * drain this system got burned by (that one shelved at 10Hz).
 	 */
-	/*
-	 * THE REARGUARD. observations: nineteen steals, zero captures, ten of
-	 * fifteen carriers dead within ten percent of home -- killed in the
-	 * flag room by the respawn stream while their escort dutifully
-	 * followed them toward the exit, duplicating the carrier's path when
-	 * the carrier needed the ROOM plugged behind it. For eight seconds
-	 * after a grab, an escort still deep in the enemy base stands and
-	 * fights where it is -- combat runs free, navigation holds -- and
-	 * the respawn stream meets a gun instead of a fleeing back. Then it
-	 * escorts, as before, in country where escorting means something.
-	 */
+	/* For eight seconds after a nearby grab, an escort still in the enemy
+	 * base covers the carrier's exit instead of duplicating its route. */
 	/*
 	 * ...and not only the ESCORT. In 83 parity carries, 77%% of carriers
 	 * died inside the first
@@ -3826,15 +3448,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/*
-	 * THE RUNE HANDOFF (sg_runetoss, observations -- the owner's recovered
-	 * "extremely important": a teammate holding a defensive rune gives
-	 * it to the carrier). A bot with RESIST or REGEN, inside 400 of our
-	 * live carrier whose rune slot is empty, faces the carrier for one
-	 * frame and drops the rune into its path; the carrier's own item
-	 * pricing (SG_FC_RUNE) takes it from the floor. One toss per bot
-	 * per 20s; combat frames exempt -- a fight is not the moment.
-	 */
+	/* Outside combat, offer a nearby unruned carrier RESIST or REGEN. The
+	 * carrier's normal item pricing completes the pickup. */
 	if (sg_cv.runetoss->value &&
 	    SG_RuneHandoffEligible(role, tc->carrying,
 	        SG_ChatOrderedRole(e), tc->strike_active,
@@ -3902,12 +3517,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/*
-	 * HOLD SHORT OF AN UNCAPPABLE STAND (both-flags doctrine, observations).
-	 * A carrier whose own flag is astray cannot score by touching the stand.
-	 * It therefore walks to a real cover seed outside the terminal zone, then
-	 * waits there.  A missing cover is not a hold: it must keep descending.
-	 */
+	/* When the home flag is astray, wait at a valid cover seed outside the
+	 * terminal zone. Without cover, keep moving. */
 	if (role == SG_ROLE_CARRY)
 	{
 		qboolean ours_astray =
@@ -4055,16 +3666,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		SG_TimerArm(&bot->railhold_next, SG_RAIL_HOLD_GAP);
 	}
 
-	/*
-	 * THE UNSTICK OF LAST RESORT. A rope through a doorway parked a bot
-	 * on a wall ledge off the navigable mesh (observations, screenshot in
-	 * hand) and every clever layer beneath this line -- watchdog,
-	 * escape, futility, rail -- churned without physically freeing it.
-	 * Fifteen seconds of true zero displacement, standing exempted only
-	 * for a defender on post or a rally hold, and the bot does what
-	 * every stuck player has done since 1997: kill, respawn, rejoin the
-	 * war. A death costs less than a statue.
-	 */
+	/* After fifteen seconds of unexplained zero displacement, respawn rather
+	 * than leave a permanently stranded bot in play. */
 	VectorSubtract(e->s.origin, bot->wedge_org, d);
 	if (SG_WedgeClockReset(VectorLength(d), duel, bot->engaged_last))
 	{

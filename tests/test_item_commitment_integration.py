@@ -246,8 +246,8 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
 
     def test_rune_handoff_binds_the_immediate_toss_and_submitted_view(self):
         source = self.text("slipgate/sg_descend.c")
-        start = source.index("THE RUNE HANDOFF")
-        end = source.index("HOLD SHORT OF AN UNCAPPABLE STAND", start)
+        start = source.index("if (sg_cv.runetoss->value &&")
+        end = source.index("if (role == SG_ROLE_CARRY)", start)
         handoff = source[start:end]
         aim = handoff.index("SG_RuneHandoffAim(")
         live_yaw = handoff.index("e->client->v_angle[YAW] = ry;", aim)
