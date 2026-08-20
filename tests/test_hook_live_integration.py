@@ -263,7 +263,7 @@ assert "if (!route_field ||" in fire
 # the movement commitment.  Falling back to the strategic goal field is valid
 # only when no tactical route field exists; otherwise touchdown immediately
 # contradicts the view direction chosen in flight.
-preturn = body("THE PRE-TURN (sg_preturn", "if (bot->hook_phase == 3)")
+preturn = body("if (sg_cv.preturn->value &&", "if (bot->hook_phase == 3)")
 assert "const int *preturn_route_field = route_field" in preturn
 assert "? route_field : goal_field;" in preturn
 assert "preturn_route_field[candidate->to]" in preturn

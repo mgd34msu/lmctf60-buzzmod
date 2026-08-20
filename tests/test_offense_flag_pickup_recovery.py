@@ -230,7 +230,12 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             subprocess.run([str(binary_path)], cwd=ROOT, check=True)
 
         move = source("slipgate/sg_move.c")
-        fan = between(move, "Feelers: try the goal heading first", "THE STEADY HAND")
+        fan = between(
+            move,
+            "Feelers: try the goal heading first",
+            "if (FlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        flag_touch_terminal) && sg_cv.smooth->value",
+        )
         self.assertIn("SG_CrowdPassSide(", fan)
         self.assertIn("e->client->ctf.ctfid", fan)
         self.assertIn("tr.ent->client->ctf.ctfid", fan)
@@ -727,13 +732,17 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "if (!have_aim && bestlink >= 0)",
         )
         self.assertIn("flag_touch_terminal = true;", terminal)
-        fan = between(move, "Feelers: try the goal heading first", "THE STEADY HAND")
+        smooth_start = (
+            "if (FlagTerminalGenericSteeringAllowed(\n"
+            "\t\t\t        flag_touch_terminal) && sg_cv.smooth->value"
+        )
+        fan = between(move, "Feelers: try the goal heading first", smooth_start)
         self.assertIn(
             "FlagTerminalGenericSteeringAllowed(\n"
             "\t\t\t        flag_touch_terminal)",
             fan,
         )
-        smooth = between(move, "THE STEADY HAND", "at a drop lip")
+        smooth = between(move, smooth_start, "at a drop lip")
         self.assertIn(
             "FlagTerminalGenericSteeringAllowed(\n"
             "\t\t\t        flag_touch_terminal)",
@@ -866,7 +875,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertNotIn("role != SG_ROLE_ATTACK", switch)
         self.assertIn("SG_NadeTargetClear(bot);", switch)
 
-        cook = between(move, "if (!proved_control && bot->nade_phase == 2)", "\n\t\t/*\n\t\t * SOUND-DIRECTED FIRE")
+        cook = between(
+            move,
+            "if (!proved_control && bot->nade_phase == 2)",
+            "if (!proved_control && sg_cv.soundfire->value",
+        )
         cancel = cook.index("if ((armed_target &&")
         release = cook.index("cmd->buttons &= ~BUTTON_ATTACK;   /* the release throws */")
         self.assertLess(cancel, release)
@@ -1064,7 +1077,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("bot->nade_target_cook_until == bot->nade_until", binding)
         self.assertIn("bot->nade_target_switch_until == bot->nade_until", binding)
 
-        cook = between(move, "if (!proved_control && bot->nade_phase == 2)", "\n\t\t/*\n\t\t * SOUND-DIRECTED FIRE")
+        cook = between(
+            move,
+            "if (!proved_control && bot->nade_phase == 2)",
+            "if (!proved_control && sg_cv.soundfire->value",
+        )
         refresh = cook.index("VectorCopy(nade_enemy->s.origin, bot->nade_at);")
         lead = cook.index("if (sg_cv.nadelead->value)", refresh)
         self.assertLess(refresh, lead)

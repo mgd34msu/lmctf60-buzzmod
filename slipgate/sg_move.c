@@ -2986,115 +2986,15 @@ static void Drop_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
 		Drop_LiveIntegrationAbort(bot);
 }
 
-/*
- * ------------------------------------------------- the air-strafe chain
- *
- * THE VIEW AND THE PATH TURN TOGETHER (sg_airstrafe, default 2 = chain).
- *
- * What a human does that the body above does not: he rotates the VIEW and
- * the strafe key together while airborne, so the wish direction stays off
- * the velocity for the whole flight instead of for the instant the route
- * happens to bend. Chained across hops that is 800-1600 u/s on a pub
- * server; this fleet's sustained runs have never exceeded ground speed.
- *
- * WHICH ENGINE IS ACTUALLY RUNNING. SG_Strafe's air branch offers a
- * derivation from PM_AirAccelerate's 30-unit clamp (sg_arach.c:1984), and
- * that dose measured NEGATIVE. It had to: PM_AirAccelerate is only reached
- * when air acceleration is switched on, and it is not. The fleet's engine
- * is yquake2 (engines/yquake2/release/q2ded); in its pmove
- *
- *     src/common/pmove.c:62      float pm_airaccelerate = 0;
- *     src/server/sv_main.c:636   Cvar_Get("sv_airaccelerate", "0", LATCH)
- *
- * and PM_AirMove's airborne branch (pmove.c:673-680) reads
- *
- *     if (pm_airaccelerate) PM_AirAccelerate(wishdir, wishspeed, 10);
- *     else                  PM_Accelerate(wishdir, wishspeed, 1);
- *
- * so with the cvar at its default the air runs the SAME function the
- * ground does, at accel 1 instead of 10 and with PM_Friction skipped
- * because groundentity is NULL. (q2repro agrees line for line:
- * src/server/main.c:2145 and game3_pmove/template.c, PM_AirMove.) So the
- * angle to fly is the one SG_Strafe's own comment derives at
- * sg_arach.c:1958, with the engine's real constants:
- *
- *     addspeed   = wishspeed - (velocity . wishdir)      PM_Accelerate
- *     accelspeed = accel * frametime * wishspeed, capped at addspeed
- *
- *     cos(theta) = (wishspeed - accelspeed) / speed
- *
- * wishspeed is pm_maxspeed = 300 (PM_AirMove clamps wishvel to it before
- * accelerating), accel is 1, and frametime is ONE SUB-STEP -- 12 or 13 ms
- * at sg_subframes 8 -- so accelspeed = 1 * 0.0125 * 300 = 3.75 u/s.
- *
- *     speed  300    400    500    600    800   1000
- *     theta  9.0d  42.2d  53.6d  60.5d  68.3d  72.8d
- *
- * and the gain at that angle is accelspeed * cos(theta) = 3.75 * 296.25 /
- * speed ~= 1111 / speed per sub-step: 2.8 u/s per step at 400, and eighty
- * steps go by in a second. Below 296.25 there is no angle to find -- the
- * cap is not binding and straight ahead is already the fastest input --
- * which is exactly why this only ever touches a body that has already been
- * pushed through the ground cap by a hop.
- *
- * WHY THE VIEW HAS TO MOVE FOR ANY OF IT TO PAY. The angle is measured
- * from the direction of TRAVEL, so holding it drags the velocity off the
- * route at roughly the same rate it feeds it -- observations finding, and the
- * reason its dose 2 capped the lean at 40 degrees and harvested little. A
- * human does not hold the lean, he SWINGS it: the view (and with it the
- * strafe axis) sweeps through the heading and out the other side, so the
- * path is a shallow S whose mean is the road and whose every instant is
- * off-axis. Here that swing is a sinusoid centred on the route heading,
- * amplitude theta, biased by the standing heading error so the swing that
- * corrects gets the longer half. The lean is a signed unit number; this
- * function turns it into the command.
- *
- * WHERE THE ROTATION IS SPENT. The view carries SG_AS_VIEWSHARE of theta
- * and the input carries the rest, exactly as a player's forward+strafe
- * diagonal does. The split costs nothing in physics because the wish
- * direction is decomposed against the view pmove will ACTUALLY use this
- * sub-step (bot->vy_cur, post-slew) rather than the view that was asked
- * for -- so a slewed, lagging, rate-limited view still reconstructs the
- * commanded direction to the degree. Nothing here writes velocity: the
- * whole gain comes out of cmd.forwardmove, cmd.sidemove and cmd.angles,
- * through the same PM_Accelerate a human client drives.
- */
+/* Air-strafe commands split rotation between view and input so the requested
+ * wish direction survives view slew. Movement still passes through pmove;
+ * this code never writes velocity. */
 typedef sg_human_speed_air_t sg_air_t;
 
 #define SG_AIR_ACCEL SG_HUMAN_SPEED_AIR_ACCEL
 
-/*
- * ------------------------------------------------------------ the policy
- *
- * Movement, closed-form, from the engine rather than from feel. This is the
- * legacy body's proven policy (bl_main.c:92-175, BotAirStrafe and its
- * derivation) moved into the SLIPGATE body unchanged in substance; only the
- * inputs are re-expressed in SLIPGATE terms -- the route direction is the
- * heading the surface descent chose, not a botlib bi->dir.
- *
- * pm_maxspeed caps wishspeed, not velocity. PM_Accelerate adds
- *
- *     accelspeed = accel * frametime * wishspeed
- *
- * along wishdir for as long as addspeed = wishspeed - (velocity . wishdir)
- * stays positive, so an input held off the direction of travel keeps that
- * term alive and the speed climbing. The smallest angle that still leaves
- * addspeed at the cap is
- *
- *     cos(theta) = (wishspeed - accelspeed) / speed
- *
- * On the ground accel is 10 and the limit is friction, speed * 6 * frametime,
- * which scales with speed while the gain at the best angle does not: they meet
- * near 370. Driving forwardmove straight down the heading converges on 300 and
- * stops there. In the air accel is 1 -- a tenth the rate, but no friction and
- * therefore no ceiling.
- *
- * Which way to lean is not a coin flip: leaning toward the side the route
- * turns accelerates and steers at once, so the velocity is pulled onto the
- * path instead of away from it. The view is not involved -- the bot names the
- * direction and decomposes it against the view it is already holding, so none
- * of this costs any aim.
- */
+/* Derive the smallest off-velocity wish angle that keeps PM_Accelerate at its
+ * per-step cap, leaning toward the route turn. */
 static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
                       vec3_t vel, vec3_t dir,
                       float speed2d, float frametime, float accel)
@@ -3106,16 +3006,7 @@ static void SG_Strafe(usercmd_t *cmd, vec3_t fwd, vec3_t right,
 	if (speed2d < 1.0f)
 		return;
 
-	/*
-	 * THE AIR CAP (sg_airgain, observations). PM_AirAccelerate clamps the
-	 * wishspeed IT uses to 30 (pmove.c:382) -- the whole strafe-jump
-	 * exploit lives in that clamp: the projection gate is v.wish < 30,
-	 * open at ANY speed for a wish pointed far enough off the velocity.
-	 * This derivation with wishspeed 300 computes an air angle for an
-	 * engine that does not exist; measured air gain ran NEGATIVE
-	 * (-0.8/100ms vs the pub human's +3.0). In air, derive from the
-	 * engine's real constant.
-	 */
+	/* The optional air-gain mode uses PM_AirAccelerate's 30-unit clamp. */
 	if (accel < 5.0f && sg_cv.airgain->value)
 		wishspeed = 30.0f;
 
@@ -3358,28 +3249,8 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 		 * refuses every jump after it until a command arrives with upmove
 		 * under 10. The caller releases after every step.
 		 */
-		/*
-		 * 270, not 320: the audit under honest respawns (observations,
-		 * 45k live samples) read fleet median 199 against a 300 run
-		 * speed -- and this gate was the circle. Ground friction caps a
-		 * run at 300, the hop is the only way THROUGH 300, and a hop
-		 * gated at 320 waits for a speed that running cannot reach. Hop
-		 * at the approach to the cap, let the air-strafe harvest do the
-		 * exceeding: the carrier control group (median 310, straight
-		 * sprints) already proved the ceiling is real.
-		 */
-		/*
-		 * JUMP CHAINING (sg_airstrafe dose 2). Inside a live chain the
-		 * gate is not "fast enough to be worth a hop" but "on the ground
-		 * at all": PM_CheckJump runs BEFORE PM_Friction and a jump clears
-		 * groundentity, which is the condition PM_Friction tests, so the
-		 * step that leaves pays nothing and the step that stays pays
-		 * speed * 6 * frametime. 270 was chosen to keep bots from hopping
-		 * on the way up to running speed; a chain is already through it,
-		 * and every ground step it spends waiting is the friction the
-		 * whole feature exists to skip. TIME_LAND still binds -- the
-		 * engine refuses the jump outright while it is set.
-		 */
+		/* Start chains near the 300-unit ground cap. An active chain jumps on
+		 * the first legal grounded sub-step to avoid friction. */
 		if (run_link && open_ahead && !(pmf & PMF_TIME_LAND) &&
 		    (sp > 270.0f || (air && air->chain)))
 			cmd->upmove = 400;
@@ -3388,22 +3259,8 @@ static void SG_MovePolicy(edict_t *e, usercmd_t *cmd, vec3_t fwd,
 	}
 	else
 	{
-		/*
-		 * THE LANDING TICK (sg_landtick, observations). The think runs at
-		 * 10Hz but pmove executes 8 sub-steps per command -- a jump
-		 * decided only on frames that BEGIN grounded is a 1-in-8
-		 * lottery against a mid-frame touchdown, and every lost draw
-		 * pays speed * 6 * ft in friction. The demo census priced it:
-		 * bots lose 66 u/s per touchdown (humans 34-46) and chain half
-		 * the relaunches of a pub player. The human technique is the
-		 * fix: HOLD jump while falling, and the landing sub-step fires
-		 * it frictionless (PMF_JUMP_HELD was already released the
-		 * frame after the previous hop, so the hold is armed).
-		 */
-		/* 240, not the ground gate's 270: touch-loss drops the landing
-		 * under 270 and disarms the very hold meant to prevent it --
-		 * air speed at arm time understates speed at the touchdown the
-		 * hold is FOR (observations read: relaunches +45% where armed) */
+		/* Hold jump while descending so a mid-command landing can relaunch.
+		 * The lower speed threshold tolerates normal touchdown loss. */
 		/* a chain holds the same jump for the same reason, without
 		 * needing sg_landtick set: the hold IS the chain */
 		if ((sg_cv.landtick->value ||
@@ -3682,15 +3539,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			have_aim = true;
 		}
 
-		/*
-		 * THE PRE-TURN (sg_preturn, observations). The grammar census: a
-		 * human flies with eyes a median 93 degrees off velocity --
-		 * the body arrives already facing where it goes NEXT. During a
-		 * cut-rope flight the aim slides from the landing spot to the
-		 * best onward step from the landing seed, so touchdown exits
-		 * at speed instead of standing to re-argue. Ballistics are
-		 * unchanged -- only the eyes and the landing basis pre-align.
-		 */
+		/* During ballistic flight, turn toward the best onward link from the
+		 * landing seed without changing the trajectory. */
 		if (sg_cv.preturn->value &&
 		    ((bot->hook_phase == 3 && bot->flow_release) ||
 		     bot->rj_phase == 3) &&
@@ -3864,15 +3714,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 								oldest = b;
 						bot->bl_link[oldest] = bot->hook_link;
 						SG_TimerArm(&bot->bl_until[oldest], 60.0f);
-						/*
-						 * Two failed rides in a row and the rope is
-						 * CONFISCATED: shelving one anchor at a time
-						 * drained a doorway's fan of near-identical
-						 * ropes failure by failure while the door
-						 * itself stood open a walk away (observations,
-						 * narrated live in capitals). Twenty seconds
-						 * on the legs beats another lap of the wall.
-						 */
+						/* Two consecutive failed rides disable hooks for twenty
+						 * seconds so replanning can choose a walking route. */
 						bot->hookfail_streak++;
 						if (bot->hookfail_streak >= 2)
 						{
@@ -3989,22 +3832,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 			have_aim = true;
 
-			/*
-			 * THE LOOKAHEAD (sg_lookahead, comparison observations). The Brownian
-			 * hunt's terminal finding: unopposed attackers churn their
-			 * COMMANDED heading 81 degrees a second while goals, seeds,
-			 * links, and dodges all measure stable -- the body servos on
-			 * the center of a seed it is about to overrun, overshoots,
-			 * turns back, orbits. A runner does not stare at his next
-			 * footprint; he looks down the road. When the immediate seed
-			 * is close (inside 160) and the route continues, the aim
-			 * slides one RUN link further down the gradient: the seed
-			 * underfoot becomes something passed THROUGH, the heading
-			 * derives from where the route goes next, and the fan still
-			 * owns the last arm's-length via precision mode. Only plain
-			 * runs chain -- hooks, jumps, drops keep exact aim, their
-			 * geometry is the point.
-			 */
+			/* Near a RUN destination, aim one link farther down the gradient to
+			 * avoid steering around a seed center that is about to be passed. */
 			if (sg_cv.lookahead->value &&
 			    !sg_cv.pursuit->value &&
 			    l->action == RL_RUN && !precision)
@@ -4061,19 +3890,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 
-			/*
-			 * PURE PURSUIT (sg_pursuit, observations). The demo census
-			 * reconstructed the COMMANDED heading from the rune alone:
-			 * aiming at the next seed center churns 68-78 deg/s at a
-			 * 42-45%% reversal rate -- the whole of the Brownian walk,
-			 * before the fan or combat touch it -- because the target
-			 * sits a median 54-60 units out and jumps 3.2 times a
-			 * second. Where the chain is GEOMETRICALLY STRAIGHT the
-			 * body still turns 40 deg/s. The same reconstruction on a
-			 * point held 300 units down the chain reads 36-43 deg at
-			 * 29-31%%. The seed centers are beads on a road; steer at
-			 * the road. The cvar value IS the arc distance.
-			 */
+			/* Aim at a point along the RUN chain rather than at each seed center.
+			 * The cvar sets the lookahead arc distance. */
 			if (sg_cv.pursuit->value > 0.0f &&
 			    !aim_is_anchor && l->action == RL_RUN && !precision &&
 			    e->waterlevel < 2 && bot->hook_phase == 0 &&
@@ -4172,20 +3990,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 			}
-			/*
-			 * EDGERIDE (sg_edgeride, owner ruling on Open Question #2).
-			 * The analysis: 62% of the last movement behavior tell is human feet
-			 * 10-40u past the seed edge on walkway margins. Ribbon
-			 * offsets died here twice because lookahead and pursuit
-			 * OVERWRITE the aim after the offset lands ("the steering
-			 * re-centers whatever the aim does"). So the offset is
-			 * re-applied LAST, to the final road point, per-leg side
-			 * and amplitude from the ribbon state scaled to the cvar.
-			 * The wall trace still collapses a blocked offset; the
-			 * feeler fan and every fall guard run downstream untouched
-			 * -- feet ride AT the safety boundary, never past it.
-			 * Carrier exempt. Falls are the case's kill switch.
-			 */
+			/* Reapply the per-leg lateral offset after lookahead chooses the final
+			 * road point. Collision and fall guards still bound the offset. */
 			if (sg_cv.edgeride->value > 0.0f &&
 			    l->action == RL_RUN && !precision &&
 			    e->groundentity && bot->hook_phase == 0 &&
@@ -4911,16 +4717,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (Lead_PickupTarget(bot, aim))
 				have_aim = true;
 
-			/*
-			 * TERMINAL HOMING (carry analysis, observations): the carrier
-			 * at its own stand aims at the LIVE FLAG ITEM, not the
-			 * info_flag_* spawn marker. The two usually coincide --
-			 * but the item droptofloors and on several stands settles
-			 * offset enough that a bot walking exactly onto the marker
-			 * orbits 16u from the touch that scores (the 200-second
-			 * wedge orbits, 12 of 19 parity arrivals). The engine's
-			 * own redflag/blueflag pointers name the real entity.
-			 */
+			/* Terminal homing uses the live flag entity rather than its spawn
+			 * marker, which may be offset after droptofloor. */
 			if (!have_aim && ordered_escort)
 			{
 				VectorCopy(ordered_escort->s.origin, aim);
@@ -5040,16 +4838,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					edict_t *enemy_item = NULL;
 
 					gf = marker;
-					/*
-					 * THE ROUTE GOES THROUGH THE FLAG.
-					 * observations taught the CARRIER to aim at the live item
-					 * because droptofloor settles it off the marker far
-					 * enough to orbit; the grab side never got the fix, so
-					 * attackers still walked to the marker and circled a flag a
-					 * body-length away.  The shared authority is stricter than
-					 * home knowledge: it also proves same-floor, hull-clear direct
-					 * contact, and refuses an unseen dropped item.
-					 */
+					/* Direct-touch authority selects the live flag entity only after
+					 * proving perception, floor alignment, and hull clearance. */
 					if (SG_AttackFlagDirectTouchAuthority(e, team, &enemy_item))
 						gf = enemy_item;
 				}
@@ -5103,20 +4893,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 
-				/*
-				 * THE TERMINAL BRAKE (movement analysis, observations: Field at
-				 * its own stand, flag home, 118 seconds of full-sprint orbit
-				 * at radius ~90). Pure physics: at 300 u/s under sg_turnrate
-				 * the minimum turn radius IS that orbit -- a missile circling
-				 * a target it aims at perfectly, and CAPTURE THROUGH feeds it
-				 * by projecting the aim along an arrival line that rotates
-				 * with the body. The human answer at every stand: brake into
-				 * the turn. Throttle follows alignment inside 220u -- badly
-				 * misaligned means slow, slow means tight, tight means the
-				 * spiral ends in a touch. sg_termbrake 0 restores the orbit
-				 * for comparison; the 5v0 canary's partial conversions are the
-				 * standing instrument that flagged this in 25 match batches.
-				 */
+				/* Throttle a misaligned carrier near the stand so its turn radius
+				 * converges on the capture touch. */
 				if (role == SG_ROLE_CARRY && flag_touch_terminal &&
 				    sg_cv.termbrake->value)
 					SG_FlagTouchBrake(bot, e, gf->s.origin, true);
@@ -5141,11 +4919,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the local gradient walk around a doorframe instead of into
 			 * it.
 			 */
-			/* sg_fandense (observations): the census read a full-speed wall
-			 * bump every ~7 seconds, and the geometry that does it lives
-			 * in the 30-degree blind wedge between the fan's first rays.
-			 * Dense mode adds the 15s; the preference-decay ordering is
-			 * preserved (nearest the goal line first). */
+			/* Dense mode adds 15-degree probes while preserving nearest-heading
+			 * preference. */
 			if (FlagTerminalGenericSteeringAllowed(
 			        flag_touch_terminal))
 			{
@@ -5303,19 +5078,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				bot->fan_side = side;
 			}
 
-			/*
-			 * THE STEADY HAND (sg_smooth, comparison observations). The human
-			 * calibration: 52 degrees median heading change per
-			 * travelling second against every bot's 70-73 -- and the
-			 * commanded direction churns 81, so the scribble is born
-			 * here, where the fan re-picks the walk ten times a
-			 * second. A human wrist turns through headings; it does
-			 * not teleport between them. The walk heading now slews
-			 * at 300 degrees a second -- fast enough for any corner
-			 * at 1Hz, too slow to flap -- except in a fight, at a
-			 * drop lip, in precision range, or in water, where the
-			 * snap IS the skill.
-			 */
+			/* Slew ordinary navigation headings to suppress fan-induced flapping.
+			 * Combat, precision movement, hooks, and water retain snap turns. */
 			if (FlagTerminalGenericSteeringAllowed(
 			        flag_touch_terminal) && sg_cv.smooth->value &&
 			    !duel && !precision && bot->hook_phase == 0 &&
@@ -5323,8 +5087,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			{
 				float sdt = SG_Age(bot->nav_yaw_t);
 				float sdy = chosen_yaw - bot->nav_yaw_cur;
-				/* the cvar IS the slew rate in deg/s (owner's blend,
-				 * observations): 1 keeps the legacy 300 */
+				/* A value of 1 selects the default 300 degrees per second. */
 				float srate = sg_cv.smooth->value;
 
 				if (srate <= 1.0f)
@@ -5353,18 +5116,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (drop_yaw_locked)
 				chosen_yaw = drop_yaw;
 
-			/*
-			 * A burst rope aims WHILE RUNNING: the exemption that kept
-			 * the speedhook's legs moving also skipped the phase-1 aim
-			 * writer, so the view never turned to the anchor, the fire
-			 * gate waited for an arrival that could not come, and the
-			 * bot stuck in phase 1 forever -- which gates out COMBAT
-			 * too. Three of observations five games went totally silent,
-			 * every bot wedged on its first burst attempt. The burst
-			 * view now steers to the anchor here (yaw now, pitch via
-			 * swim-pitch's slot below), and phase 1 carries a hard
-			 * deadline as the belt to this suspender.
-			 */
+			/* A speedhook keeps moving during its aim phase, so write the anchor
+			 * bearing here instead of using the stationary hook path. */
 			if (bot->hook_phase == 1 && bot->speedhook)
 			{
 				vec3_t sha;
@@ -5525,14 +5278,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * player-box trace the feelers use, run further out along the
 			 * heading that was chosen.
 			 */
-			/*
-			 * Carriers get a shorter clearance bar when sg_carryhop is
-			 * set (the case value IS the distance): escape corridors
-			 * rarely offer 160 clear units, so the fleeing carrier --
-			 * the one role whose touch-loss decides games -- was the
-			 * role hopping least (observations census: 38%% airtime vs the
-			 * attackers' 51%%).
-			 */
+			/* sg_carryhop may shorten the carrier's forward-clearance distance. */
 			{
 				float hop_reach = 160.0f;
 				if (tc->role == SG_ROLE_CARRY &&
@@ -5708,17 +5454,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			bot->door_held_last = false;
 		}
 
-		/*
-		 * BREATH OUTRANKS EVERYTHING. Twelve seconds of air is what the
-		 * game gives; the lmctf01 moat tunnel costs ten at pace and any
-		 * stall drowns the swimmer -- observations first-ever carrier on
-		 * that map 'sank like a rock' mid-return, and the census says
-		 * drowning, not defense, is what kills conversions there. Four
-		 * seconds from the gurgle, the route stops mattering: pitch up,
-		 * kick for the surface, breathe, and let the field resume from
-		 * wherever the gasp happened. The rope is the one thing faster
-		 * than swimming, so a live pull is left alone.
-		 */
+		/* Low air overrides route following until the swimmer reaches a valid
+		 * surface path. An active hook pull retains control. */
 		if (e->waterlevel >= 3 && bot->hook_phase != 2 &&
 		    SG_TimerRemaining(e->air_finished) <
 		        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f))
@@ -7791,13 +7528,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * nothing), and never on the final approach, where the whole point is
 	 * being able to stop on the flag.
 	 */
-	/* sg_noweave (comparison observations): the Brownian census -- median 73
-	 * degrees of heading change per travelling second, 32%% outright
-	 * reversals -- with goals, seeds, and links all measured stable.
-	 * The lateral oscillators are the remaining suspects, and they
-	 * trigger on BELIEF-engagement, which at parity is nearly always.
-	 * Dodging nobody's bullets is the owner's "unnecessary movement"
-	 * by definition; this gate measures what the dodge layers cost. */
+	/* sg_noweave disables lateral combat oscillation for comparison. */
 	if (duel && !hold_post && role != SG_ROLE_CARRY && !precision &&
 	    bot->hook_phase == 0 &&
 	    !sg_cv.noweave->value)
@@ -7838,18 +7569,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * rather than finer movement. Finer decisions, never a longer clock.
 	 */
 
-	/*
-	 * THE BREATHER (sg_breather, observations case). The movement-texture
-	 * judge, 4/4 blind on mactf06: "constant run plateau with
-	 * instantaneous needle spikes, zero acceleration ramping, no
-	 * burst/rest cadence, texture statistically identical from t=0 to
-	 * t=850." A human's throttle is not a switch: they ease off checking
-	 * corners, after fights, waiting on timers. This eases off ONLY on
-	 * safe legs -- never carrying, never on the rope, never engaged, feet
-	 * on the floor -- for 0.5-1.8s at a time, on average once per
-	 * cvar-seconds of safe travel. Danger cancels it instantly; the cap
-	 * on cost is a fraction of a second of arrival time per leg.
-	 */
+	/* Occasionally ease off on safe grounded travel. Carrying, combat, hooks,
+	 * and danger cancel the breather immediately. */
 	{
 		float dose = sg_cv.breather->value;
 
@@ -7957,10 +7678,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			edict_t *pending_target = target_pending
 			    ? SG_NadeBoundLiveTarget(e, bot) : NULL;
 
-			/* cook only once the grenade is VERIFIABLY in hand -- the
-			 * switch runs through down/up animations, and holding the
-			 * trigger early fires whatever is still equipped (observations:
-			 * zero grenades thrown, the cook squeezed the rail) */
+			/* Do not hold attack until the grenade switch has completed. */
 			if (target_pending &&
 			    (!tc->strike_pressure ||
 			     SG_AttackFlagDirectTouchAuthority(e, team, NULL) ||
@@ -7982,13 +7700,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			               "Grenades"))
 			{
 				bot->nade_phase = 2;
-				/* the engine's in-hand deadline: cook_start + TIMER +
-				 * 0.2. The release moment is computed against FLIGHT
-				 * TIME each aim frame below -- the fixed 2.2s cook
-				 * left ~1s of fuse to spend BOUNCING off the impact
-				 * point at 667 u/s, which is exactly the one-room-off
-				 * miss NADEPOP measured (medians 434 and 717, radius
-				 * 165, observations) */
+				/* Release timing below compares the remaining fuse with the
+				 * solved flight time. */
 				SG_TimerArm(&bot->nade_until, 3.2f);
 				if (target_pending)
 					bot->nade_target_cook_until = bot->nade_until;
@@ -8036,17 +7749,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * current frame, and the next one starts at this live origin. */
 				if (armed_target)
 					VectorCopy(nade_enemy->s.origin, bot->nade_at);
-			/*
-			 * THE BOMB LEADS THE LANDING (sg_nadelead, observations). The
-			 * owner's doctrine already won this argument for rockets
-			 * (landlead, adopted 249): an airborne enemy is on a
-			 * committed arc. The cooked grenade is the same shot with
-			 * a better fuse -- while cooking, if the live enemy is in
-			 * the air, walk its parabola to the touchdown and put the
-			 * bomb THERE instead of at the danger book's historic
-			 * post. Ground targets keep the book (a runner outlives
-			 * the fuse; the eight nulled mechanisms all chased them).
-			 */
+			/* Lead an airborne target to its predicted landing point. Grounded
+			 * targets keep the current observed position. */
 			if (sg_cv.nadelead->value)
 			{
 				edict_t *len9 = nade_enemy;
@@ -8082,15 +7786,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 
-			/*
-			 * The bomb aims like the rope: solve the projectile. Throw
-			 * speed scales with cook (400 to 800 across the 3s timer;
-			 * our 1.3s cook gives ~575), gravity is the server's, and
-			 * the launch pitch to land ON the post is closed-form -- the
-			 * same equation the ballistic anchor uses. The flat -25
-			 * guess sailed 24 of 24 throws over the room (observations,
-			 * zero kills, duel ratio unmoved).
-			 */
+			/* Solve launch pitch from current cook-scaled speed and server
+			 * gravity. */
 			vec3_t na;
 			float nyaw, npitch, nh;
 			/* the engine's clock: timer remaining if released this frame
@@ -8117,16 +7814,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * range over horizontal speed */
 				nfly = nh * sqrtf(1.0f + ntan * ntan) / nsp;
 
-				/*
-				 * THE ARC CHECK (observations). Three timing doses moved
-				 * nothing because most throws never get their
-				 * parabola -- from the band, the arc to the stand
-				 * runs through corridor walls, and the grenade
-				 * bounces to a random floor pop (air%% pinned at 30,
-				 * median 556). Sample the intended arc; a blocked
-				 * flight is an attempt abandoned at zero cost, per
-				 * the owner's economy. Volume falls to what is real.
-				 */
+				/* Trace the solved arc before committing the throw. */
 				{
 					vec3_t ap, lp;
 					trace_t atr;
@@ -8180,16 +7868,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			 * stays in phase two and releases through the owned path below. */
 			if (bot->nade_phase == 2)
 			{
-			/*
-			 * THE SILENT COOK (observations). The zero-cost audit caught
-			 * the veer: this block owned the view for the whole cook
-			 * and the legs followed it off the route -- a 33 percent
-			 * steal tax on the case arm. The owner's cook touches
-			 * nothing: the view belongs to navigation until the
-			 * release frame, when the aim exists for exactly one
-			 * command -- the flick. Attack stays held throughout;
-			 * cooking needs the trigger, not the eyes.
-			 */
+			/* Keep navigation view during the cook and aim only on release. */
 			if (nfly < -1.5f || !(sg_cv.flycook->value) ||
 			    (nfly >= 0.0f && ntmr - 0.2f <= nfly + 0.15f) ||
 			    ntmr <= 0.75f)
@@ -8199,26 +7878,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->angles[PITCH] = ANGLE2SHORT(npitch)
 				                  - e->client->ps.pmove.delta_angles[PITCH];
 			}
-			/*
-			 * THE TRUE AIRBURST. Release when the fuse remaining equals
-			 * the flight ahead, so the pop happens ON ARRIVAL -- the
-			 * fixed cook landed the bomb with a second to spend
-			 * bouncing away from the aim point, and NADEPOP measured
-			 * the result: medians 434 and 717 against a 165 radius.
-			 * A degenerate solve means the throw is TOO SLOW SO FAR --
-			 * speed builds with the cook (observations: releasing on
-			 * degenerate threw every bomb at 400 u/s on frame one,
-			 * fuse=3.0, two pops for the whole match) -- so keep cooking until
-			 * the closed form comes back. The 0.6s floor keeps the POP
-			 * outside our own splash radius (0.4s of fuse is ~250
-			 * units of clearance) and throws whatever the solve says.
-			 */
-			/* observations: pop EARLY -- hold the cook until remaining
-			 * fuse undercuts the flight by 0.15s, so the grenade
-			 * expires airborne short of the floor it would have
-			 * bounced off (235: aim height alone left 69 percent of
-			 * pops grounded -- bounces and clipped arcs land before
-			 * the fuse, and a landed grenade is an announcement) */
+			/* Hold until the remaining fuse slightly undercuts flight time,
+			 * producing an airburst before a floor bounce. */
 			if (SG_NadeCookShouldHold(bot->nade_phase, ntmr, nfly))
 				cmd->buttons |= BUTTON_ATTACK;
 			else
@@ -8236,15 +7897,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 			}
 		}
-		/*
-		 * SOUND-DIRECTED FIRE (sg_soundfire, observations). The owner:
-		 * "I can shoot rockets in the direction of sounds while
-		 * travelling a route." The ear places heard_only beliefs that
-		 * combat refuses to aim at -- this aims at them on purpose,
-		 * once per cadence, launcher already in hand, one flick
-		 * frame, zero route seconds. Free speculation; the splash
-		 * does the rest or nothing does.
-		 */
+		/* Fire an opportunistic rocket toward a fresh sound-only belief when
+		 * the impact is safe and the launcher is already equipped. */
 		if (!proved_control && sg_cv.soundfire->value &&
 		    !duel && !engaged && role != SG_ROLE_CARRY &&
 		    bot->nade_phase == 0 && bot->hook_phase == 0 &&
@@ -8931,12 +8585,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				 * fresh contact (3s) is believed and the legs are on the
 				 * ground doing route work.
 				 */
-				/* open ground only: observations first jink census traded
-				 * rails (47%%->25%%) for WEDGES -- carrier suicides went
-				 * from one every other match to four in one, the
-				 * serpentine drifting bodies into corners the feelers
-				 * had already vetoed. No open room ahead, no jink: a
-				 * wall stops more rails than it starts. */
+				/* Carrier jinks require open ground so lateral motion cannot
+				 * override a nearby collision veto. */
 				if (role == SG_ROLE_CARRY && cmd->forwardmove != 0 &&
 				    open_ahead &&
 				    !sg_cv.noweave->value)
@@ -10432,15 +10082,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 						if (zp - td[2] > 24.0f && zp - td[2] < 260.0f)
 						{
-							/*
-							 * THE BODY HAS A BOX (, observations):
-							 * the fling arc is flown by a player-sized box,
-							 * not a point. Walk the parabola in six segments
-							 * with the real mins/maxs; an arc that clips
-							 * architecture is not released -- keep riding the
-							 * rope, which is the safe fallback and also what
-							 * a human does when the fling line is not there.
-							 */
+							/* Trace the fling parabola with the player's hull. A blocked
+							 * arc keeps riding the rope. */
 							{
 								vec3_t ap0, ap1;
 								trace_t atr;
@@ -10458,16 +10101,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 									       - 0.5f * grav * at * at;
 									atr = sg_host.trace(ap0, e->mins, e->maxs, ap1,
 									               e, MASK_PLAYERSOLID);
-									/*
-									 * aseg 1 exempt: the box leaves from beside the
-									 * wall the rope hangs on. And a CONTACT is not a
-									 * CRASH (observations: ~300 vetoes/game survived the
-									 * seg-1 exemption -- corridor flings graze walls
-									 * constantly, and pmove clip-slide carries them
-									 * through). Only a head-on hit -- the segment
-									 * direction driving into the plane -- kills the
-									 * fling; grazes fly on. Seg 6 is landing contact.
-									 */
+									/* Ignore launch and landing contact. Intermediate
+									 * segments reject only head-on wall or ceiling hits. */
 									if (atr.fraction < 1.0f && aseg > 1 && aseg < 6)
 									{
 										vec3_t sd;
@@ -10477,12 +10112,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 										if (sl > 1.0f)
 										{
 											VectorScale(sd, 1.0f / sl, sd);
-											/* floors don't veto: descending onto a lip
-											 * near the target is a landing, not a crash
-											 * (observations: graze fix halved vetoes but
-											 * 100-300/game remained -- late-arc floor
-											 * touchdowns reading as head-on). Walls and
-											 * ceilings only. */
+											/* A descending floor contact is a landing, not a
+											 * collision veto. */
 											if (atr.plane.normal[2] < 0.7f &&
 											    DotProduct(sd, atr.plane.normal) < -0.7f)
 											{
@@ -10506,18 +10137,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							bot->flow_release = true;
 							SG_TimerArm(&bot->hook_deadline, 1.4f);
 							bot->hookfail_streak = 0;
-							/*
-							 * THE FALL-THROUGH (found observations): without
-							 * this exit, control ran on into the release
-							 * chain below, which saw the rope this cut
-							 * just killed (hookstate 0), printed a false
-							 * "noattach", and reset hook_phase to 0 --
-							 * destroying the flow ride armed two lines
-							 * up. 91% of the noattach mass, ~3,200 rides
-							 * per match, were the bots' BEST hooks being
-						 * reported as failures and stripped of
-						 * the landing steer/pre-turn/brake.
-							 */
+							/* Stop processing after a successful early cut so the
+							 * generic release path cannot cancel phase three. */
 							goto hook_wait;
 						}
 					}
@@ -10631,13 +10252,8 @@ hook_wait:;
 	{
 		float sp = sqrtf(e->velocity[0] * e->velocity[0] +
 		                 e->velocity[1] * e->velocity[1]);
-		/* sgoal: the bot's cost on the STATIC field for its frame-owned
-		 * destination (enemy-pressure body -> enemy stand, everyone else -> own).
-		 * The composed goal= number rebuilds under a standing bot --
-		 * item beliefs, danger, re-floods -- and observations traces
-		 * caught a stationary attacker "receding" 800ms/s in it. Route
-		 * progress gets measured against a number that only moves when
-		 * the body does. */
+		/* sgoal is the static destination-field cost used for route progress;
+		 * unlike the composed goal, it changes only when the body moves. */
 		int sgoal = -1;
 		const int *sfld = SG_StrikeEnemyPressureSnapshot(bot)
 		    ? ((team == CTF_TEAM_RED) ? sg_fields.to_blue_flag

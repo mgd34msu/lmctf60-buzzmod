@@ -650,7 +650,7 @@ class CombatAimEnvelopeTest(unittest.TestCase):
     def test_blocked_grenade_arc_cannot_rearm_the_trigger(self) -> None:
         move = (ROOT / "slipgate" / "sg_move.c").read_text()
         cook = move[move.index("if (!proved_control && bot->nade_phase == 2)"):
-                    move.index("SOUND-DIRECTED FIRE")]
+                    move.index("if (!proved_control && sg_cv.soundfire->value")]
         blocked = cook.index("nfly = -2.0f;   /* blocked arc */")
         retire = cook.index("bot->nade_phase = 0;", blocked)
         guard = cook.index("if (bot->nade_phase == 2)", retire)

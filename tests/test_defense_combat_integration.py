@@ -683,7 +683,7 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         move = (ROOT / "slipgate/sg_move.c").read_text()
         helper = move[move.index("static qboolean SoundFireTeammateNear"):
                       move.index("static qboolean DefenseCombatEnemyCurrent")]
-        sound = move[move.index("SOUND-DIRECTED FIRE"):
+        sound = move[move.index("if (!proved_control && sg_cv.soundfire->value"):
                      move.index("bot->engaged_last = engaged;")]
 
         self.assertIn("client_index <= game.maxclients", helper)
@@ -746,9 +746,13 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
         writer = caco[caco.index("SG_CACO_PLACE_PRIVATE void Caco_EnemyPlace"):
                       caco.index("static void Caco_ScanEnemies")]
         descend = (ROOT / "slipgate/sg_descend.c").read_text()
-        carry = descend[descend.index("CARRIER COVER (sg_carrycover"):
-                        descend.index("THE SWITCHING COST", descend.index(
-                            "CARRIER COVER (sg_carrycover"))]
+        carry_start = descend.index(
+            "if (tc->role == SG_ROLE_CARRY &&\n"
+            "\t\t    sg_cv.carrycover->value > 0"
+        )
+        carry = descend[carry_start:
+                        descend.index("if (sg_cv.routejitter->value > 0.0f)",
+                                      carry_start)]
 
         self.assertIn("Caco_EnemyObservationValid(r, team1, client",
                       writer)
