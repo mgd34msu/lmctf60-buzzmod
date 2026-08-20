@@ -1145,6 +1145,10 @@ static void TestDeathLocationRequiresPriorBelief(void)
 
 static void TestMissionHoldSurvivesGenericWedgeValve(void)
 {
+	CHECK(SG_OrderedEscortDirectAimAllowed(true, true));
+	CHECK(!SG_OrderedEscortDirectAimAllowed(false, true));
+	CHECK(!SG_OrderedEscortDirectAimAllowed(true, false));
+	CHECK(!SG_OrderedEscortDirectAimAllowed(2, true));
 	CHECK(SG_RoleMissionHold(SG_ROLE_DEFEND, 1499, false, false));
 	CHECK(SG_RoleMissionHold(SG_ROLE_ESCORT, 1499, false, false));
 	CHECK(!SG_RoleMissionHold(SG_ROLE_ESCORT, 1499, false, true));

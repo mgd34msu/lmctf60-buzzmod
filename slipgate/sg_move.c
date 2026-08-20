@@ -4550,7 +4550,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 			/* Terminal homing uses the live flag entity rather than its spawn
 			 * marker, which may be offset after droptofloor. */
-			if (!have_aim && ordered_escort)
+			if (!have_aim && SG_OrderedEscortDirectAimAllowed(
+			        ordered_escort != NULL, escort_terminal_hold))
 			{
 				VectorCopy(ordered_escort->s.origin, aim);
 				have_aim = true;

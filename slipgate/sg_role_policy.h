@@ -63,6 +63,15 @@ static inline int SG_EnemyFlagTouchMissionActive(int strike_pressure,
 	return strike_pressure || scoop_mission;
 }
 
+static inline int SG_OrderedEscortDirectAimAllowed(int target_live,
+	int terminal)
+{
+	if ((target_live != 0 && target_live != 1) ||
+	    (terminal != 0 && terminal != 1))
+		return 0;
+	return target_live && terminal;
+}
+
 /* Near-goal defenders and escorts are intentionally stationed. A flag-touch
  * mission may not inherit that stationary exemption. */
 static inline int SG_RoleMissionHold(int role, int goal_cost,

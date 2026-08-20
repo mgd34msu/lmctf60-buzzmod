@@ -90,7 +90,8 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
     def test_terminal_homing_precedes_role_fallback(self):
         source = self.text("slipgate/sg_move.c")
         pickup = source.index("if (Lead_PickupTarget(bot, aim))")
-        escort = source.index("if (!have_aim && ordered_escort)", pickup)
+        escort = source.index(
+            "if (!have_aim && SG_OrderedEscortDirectAimAllowed(", pickup)
         carry = source.index("else if (!have_aim && role == SG_ROLE_CARRY)", escort)
         flag = source.index("SG_FlagStand(team, true)", carry)
         self.assertLess(pickup, escort)

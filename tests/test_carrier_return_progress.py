@@ -152,9 +152,10 @@ def test_carrier_screen_terminal_preserves_the_selected_formation():
 
     priority = section(
         MOVE,
-        "if (!have_aim && ordered_escort)",
+        "if (!have_aim && SG_OrderedEscortDirectAimAllowed(",
         "else if (!have_aim && role == SG_ROLE_CARRY)",
     )
+    assert "ordered_escort != NULL, escort_terminal_hold" in priority
     assert "VectorCopy(ordered_escort->s.origin, aim);" in priority
 
 
