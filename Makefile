@@ -507,6 +507,9 @@ HOOK_DISCIPLINE_TEST_ALL_ARTIFACTS := \
 	.sg_hook_discipline_under_test.make.d
 RUNE_NAMING_TEST := tests/test_rune_naming.py
 RELEASE_WORKFLOW_TEST := tests/test_release_workflow.py
+DESLOP_AUDIT := tools/deslop_audit.py
+DESLOP_AUDIT_TEST := tests/test_deslop_audit.py
+SOURCE_SIZE_BUDGET := tools/source-size-budget.json
 RUNE_PYTHON_TESTS := tests/test_rune_contracts.py \
 	tests/test_rune_artifact.py \
 	tests/test_sidecario.py \
@@ -962,6 +965,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-mechanism-catalog-test rune-mechanism-execution-test rune-binding-test \
 	rune-accept-tool \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
+	deslop-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-test fields-candidate-test snag-repair-test \
 	spectator-sound-test human-speed-test defense-shift-test \
@@ -2449,6 +2453,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SIDECAR_STORE_TEST_BIN) \
 		$(RUNE_NAMING_TEST) \
 		$(RELEASE_WORKFLOW_TEST) \
+		$(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) $(SOURCE_SIZE_BUDGET) \
 		$(RUNE_PYTHON_TESTS) \
 		$(RUNGEN_TEST) \
 		$(RUNE_CORPUS_CONTROLLER_TEST) \
@@ -2582,6 +2587,14 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)python3 -B $(POV_SUPERVISOR_TEST)
 	$(Q)python3 -B $(POV_ITERATE_SELECTION_TEST)
 	$(Q)./$(ENGINE_SNAPSHOT_TEST)
+	$(Q)python3 -B $(DESLOP_AUDIT_TEST)
+	$(Q)python3 -B $(DESLOP_AUDIT)
+
+deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
+		$(SOURCE_SIZE_BUDGET)
+	$(E) [TEST] deslop
+	$(Q)python3 -B $(DESLOP_AUDIT_TEST)
+	$(Q)python3 -B $(DESLOP_AUDIT)
 
 action-test: $(ACTION_TEST_BIN)
 	$(E) [TEST] $<

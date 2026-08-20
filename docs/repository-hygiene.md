@@ -34,6 +34,22 @@ dialects and the relevant focused tests afterward.
 - Historical experiments and superseded plans belong in Git history, not in
   tracked diary documents or source comments.
 
+## Authored source limits
+
+The authored-source policy covers `slipgate/`, `tools/`, `tests/`, `GNUmakefile`,
+and `Makefile`. It excludes generated files and `tests/support/` imports. It does
+not classify the root Quake II and LMCTF source or vendored SQLite as new project
+code.
+
+`tools/deslop_audit.py` reads `tools/source-size-budget.json`. The audit rejects
+new files over 800 lines. It also rejects lines over 100 columns in files that
+have no exception. An existing exception may not grow. A smaller exception makes
+the audit fail until the budget is lowered. Run `make deslop-test` with either
+Make dialect.
+
+Split source at an ownership or lifecycle boundary. Keep the public interface in
+one header. Do not use arbitrary line ranges or numbered files as boundaries.
+
 The human entity/pro files, carry-window data, `botledger.csv`, and similar
 analysis data do not have complete final receipt chains. Preserve them until
 the completion plan either reproduces and binds them or removes them through an

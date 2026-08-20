@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import re
 import subprocess
 import tokenize
@@ -12,8 +13,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_BUDGET_PATH = ROOT / "tools" / "source-size-budget.json"
 SOURCE_SUFFIXES = {".c", ".h"}
 EXCLUDED = {"sqlite3.c", "sqlite3.h"}
+AUTHORED_ROOTS = {"slipgate", "tests", "tools"}
+AUTHORED_SUFFIXES = {".c", ".h", ".py", ".sh"}
+AUTHORED_FILES = {"GNUmakefile", "Makefile"}
 MAX_SLIPGATE_COMMENT_LINES = 12
 MAX_PYTHON_MODULE_DOCSTRING_LINES = 12
 MAX_PYTHON_MEMBER_DOCSTRING_LINES = 12
@@ -168,31 +173,113 @@ def narrative_tool_rule(line: str) -> str | None:
     return None
 
 
-def tracked_source_files() -> list[Path]:
+def tracked_files() -> list[Path]:
     result = subprocess.run(
         ["git", "ls-files", "-z"],
         cwd=ROOT,
         check=True,
         stdout=subprocess.PIPE,
     )
-    paths = []
-    for raw in result.stdout.split(b"\0"):
-        if not raw:
+    return [
+        Path(raw.decode("utf-8"))
+        for raw in result.stdout.split(b"\0")
+        if raw
+    ]
+
+
+def tracked_source_files(paths: list[Path]) -> list[Path]:
+    return [
+        path for path in paths
+        if path.suffix in SOURCE_SUFFIXES
+        and path.as_posix() not in EXCLUDED
+        and not (ROOT / path).is_symlink()
+    ]
+
+
+def tracked_authored_files(paths: list[Path]) -> list[Path]:
+    authored = []
+    for path in paths:
+        name = path.as_posix()
+        if name not in AUTHORED_FILES and (
+                not path.parts or path.parts[0] not in AUTHORED_ROOTS):
             continue
-        path = Path(raw.decode("utf-8"))
-        absolute = ROOT / path
-        if (
-            path.suffix in SOURCE_SUFFIXES
-            and path.as_posix() not in EXCLUDED
-            and not absolute.is_symlink()
-        ):
-            paths.append(path)
-    return paths
+        if name not in AUTHORED_FILES and path.suffix not in AUTHORED_SUFFIXES:
+            continue
+        if "generated" in path.name or path.parts[:2] == ("tests", "support"):
+            continue
+        if not (ROOT / path).is_symlink():
+            authored.append(path)
+    return authored
+
+
+def source_budget_findings(text: str, default_max_lines: int,
+        max_line_length: int, line_allowance: int | None,
+        overlong_allowance: int | None) -> list[str]:
+    lines = text.splitlines()
+    line_count = len(lines)
+    overlong = sum(
+        len(line.expandtabs(8)) > max_line_length
+        for line in lines
+    )
+    max_lines = line_allowance or default_max_lines
+    max_overlong = overlong_allowance or 0
+
+    findings = []
+    if line_count > max_lines:
+        findings.append(f"source-lines: {line_count} > {max_lines}")
+    if overlong > max_overlong:
+        findings.append(
+            f"overlong-lines: {overlong} > {max_overlong} "
+            f"at {max_line_length} columns"
+        )
+    if line_allowance is not None and line_count < max_lines:
+        findings.append(
+            f"stale-source-lines-budget: lower {max_lines} to {line_count}"
+        )
+    if overlong_allowance is not None and overlong < max_overlong:
+        findings.append(
+            f"stale-overlong-lines-budget: lower {max_overlong} to {overlong}"
+        )
+    return findings
+
+
+def load_source_budget() -> tuple[int, int, dict[str, int], dict[str, int]]:
+    document = json.loads(SOURCE_BUDGET_PATH.read_text(encoding="utf-8"))
+    required = {
+        "default_max_lines", "format", "max_line_length",
+        "overlong_files", "oversized_files",
+    }
+    if set(document) != required:
+        raise ValueError("source budget has unexpected top-level fields")
+    if document["format"] != "lmctf-authored-source-budget-v1":
+        raise ValueError("source budget format is not supported")
+
+    for field in ("default_max_lines", "max_line_length"):
+        value = document[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"source budget {field} must be a positive integer")
+
+    for field in ("oversized_files", "overlong_files"):
+        allowances = document[field]
+        if not isinstance(allowances, dict):
+            raise ValueError(f"source budget {field} must be an object")
+        for path, value in allowances.items():
+            if not isinstance(path, str) or Path(path).as_posix() != path:
+                raise ValueError("source budget paths must be normalized strings")
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"source budget {field} {path} is invalid")
+    return (
+        document["default_max_lines"],
+        document["max_line_length"],
+        document["oversized_files"],
+        document["overlong_files"],
+    )
 
 
 def main() -> int:
     findings = 0
-    for relative in tracked_source_files():
+    tracked = tracked_files()
+    for relative in tracked_source_files(tracked):
         text = (ROOT / relative).read_text(encoding="utf-8")
         for line_number, line in comment_fragments(text):
             for name, pattern in RULES:
@@ -244,7 +331,23 @@ def main() -> int:
             if rule:
                 print(f"{relative.relative_to(ROOT)}:{line_number}: {rule}: {line.strip()}")
                 findings += 1
-    print(f"narrative comment findings: {findings}")
+
+    default_max_lines, max_line_length, oversized, overlong = load_source_budget()
+    authored = tracked_authored_files(tracked)
+    authored_names = {path.as_posix() for path in authored}
+    budget_names = set(oversized) | set(overlong)
+    for stale in sorted(budget_names - authored_names):
+        print(f"{SOURCE_BUDGET_PATH.relative_to(ROOT)}: stale-path: {stale}")
+        findings += 1
+    for relative in authored:
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        name = relative.as_posix()
+        for message in source_budget_findings(
+                text, default_max_lines, max_line_length,
+                oversized.get(name), overlong.get(name)):
+            print(f"{relative}: {message}")
+            findings += 1
+    print(f"deslop findings: {findings}")
     return 1 if findings else 0
 
 

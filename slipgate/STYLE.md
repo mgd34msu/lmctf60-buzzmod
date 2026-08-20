@@ -7,6 +7,15 @@
 - Put only cross-module declarations in headers.
 - Split a file when unrelated state or lifecycle rules appear in it.
 
+`tools/source-size-budget.json` records current size debt in authored source.
+New files may contain at most 800 lines. Files without a recorded line-length
+exception may not contain lines over 100 columns after tab expansion. Existing
+exceptions may not grow. When a change reduces an exception, lower the recorded
+value in the same commit.
+
+The budget is a ceiling, not a target. Split a file at a subsystem, state owner,
+or lifecycle boundary. Do not split a file into numbered fragments.
+
 ## Functions and state
 
 - Give each function one job with a name that states the decision it makes.
@@ -31,8 +40,9 @@ or why a tempting implementation is wrong. Keep them short. Do not record trial
 results, implementation history, reviewer conversations, dates, ownership
 rulings, or the code's control flow. Git history holds that material.
 
-`tools/deslop_audit.py` rejects narrative patterns and oversized SLIPGATE block
-comments. Tests must anchor to functions or executable statements, never prose.
+`tools/deslop_audit.py` rejects narrative patterns, oversized SLIPGATE block
+comments, source-budget growth, and unbudgeted lines over 100 columns. Tests
+must anchor to functions or executable statements, never prose.
 
 ## Changes and verification
 
