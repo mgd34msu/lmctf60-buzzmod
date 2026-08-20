@@ -368,7 +368,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			    neighbor->to < SG_Rune()->hdr.num_seeds &&
 			    neighbor->to != bot->seed &&
 			    route_field[bot->seed] < SG_FIELD_INF &&
-			    route_field[neighbor->to] <= route_field[bot->seed])
+			    SG_RouteCandidateGoalMs(route_field[neighbor->to],
+			        Fields_LinkTraversalCostMs(neighbor), SG_FIELD_INF) <=
+			        route_field[bot->seed])
 			{
 				/* Multiple proved actions may reach the same neighbor. They are
 				 * one route choice for this policy, not independent exits. */
@@ -1059,7 +1061,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		        sg_cv.nobacktrack->value))
 			v *= 1.0f + sg_cv.nobacktrack->value / 100.0f;
 
-
 		if (bot->tilt_lane_n > 0 && SG_TimerPending(bot->tilt_until) &&
 		    sg_cv.tilt->value > 0.0f &&
 		    Tilt_InLane(bot, l->to))
@@ -1108,7 +1109,6 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 					break;
 				}
 		}
-
 
 		if (role == SG_ROLE_CARRY && bot->escprior_bucket >= 0 &&
 		    SG_TimerPending(bot->escprior_until) && v > 0.0f)
@@ -1541,7 +1541,8 @@ static int Objective_CycleRoute(sg_bot_t *bot, const int *goal_field,
 		    candidate->to < 0 ||
 		    candidate->to >= SG_Rune()->hdr.num_seeds)
 			continue;
-		cost = goal_field[candidate->to];
+		cost = SG_RouteCandidateGoalMs(goal_field[candidate->to],
+		    Fields_LinkTraversalCostMs(candidate), SG_FIELD_INF);
 		if (cost >= SG_FIELD_INF)
 			continue;
 		finite_count++;
@@ -3165,7 +3166,6 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				SG_Mark(&bot->rally_since);
 		}
 	}
-
 
 	if (sg_cv.handoff->value &&
 	    role == SG_ROLE_CARRY && goal_field &&

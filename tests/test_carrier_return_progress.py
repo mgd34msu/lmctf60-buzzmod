@@ -5,6 +5,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIELD_INF = 0x3FFFFFFF
 DESCEND = (ROOT / "slipgate" / "sg_descend.c").read_text()
 MOVE = (ROOT / "slipgate" / "sg_move.c").read_text()
 GOAL = (ROOT / "slipgate" / "sg_goal.c").read_text()
@@ -20,9 +21,9 @@ def cycle_route(links, costs, recent, shelved, alternate_only):
     """Mirror the finite RUN selection required by Objective_CycleRoute."""
     here = costs[0]
     choices = []
-    for link, target, action in links:
-        cost = costs[target]
-        if action != "RUN" or cost >= 2**31 - 1:
+    for link, target, action, traversal_ms in links:
+        cost = costs[target] + traversal_ms
+        if action != "RUN" or cost >= FIELD_INF:
             continue
         if not alternate_only:
             choices.append(link)
@@ -66,19 +67,27 @@ def test_flag_return_clears_carrier_hold_and_resumes_homeward_route():
 
 def test_multiexit_cycle_prefers_nonrecent_unshelved_lower_cost_route():
     assert cycle_route(
-        [(10, 1, "RUN"), (11, 2, "RUN"), (12, 3, "RUN")],
+        [(8, 1, "RUN", 1100), (9, 2, "RUN", 100)],
+        [2000, 300, 1200], recent=set(), shelved=set(), alternate_only=True
+    ) == 9
+    assert cycle_route(
+        [(10, 1, "RUN", 100), (11, 2, "RUN", 100),
+         (12, 3, "RUN", 100)],
         [1000, 500, 400, 300], recent={1}, shelved={11}, alternate_only=True
     ) == 12
     select = section(DESCEND, "static int Objective_CycleRoute", "static void StrikeWeaponPurposeClear")
+    assert "SG_RouteCandidateGoalMs(goal_field[candidate->to]" in select
     assert "cost >= here || Carrier_LinkShelved(bot, link) ||" in select
     assert "Objective_VisitedRecently(bot, candidate->to, goal_field)" in select
 
 
 def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
-    links = [(10, 1, "RUN")]
+    links = [(10, 1, "RUN", 100)]
     costs = [1000, 1100]
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=True) == -1
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=False) == 10
+    pick = section(DESCEND, "int Think_PickLink", "static int Carrier_RallyCover")
+    assert "SG_RouteCandidateGoalMs(route_field[neighbor->to]" in pick
     cycle = section(DESCEND, "int cycle_link = bestlink;",
                     "bot->visit_seed[bot->visit_head]")
     assert "alternate = Objective_CycleRoute(bot, goal_field, true);" in cycle
@@ -87,11 +96,12 @@ def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
 
 
 def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():
-    links = [(10, 1, "RUN"), (11, 2, "RUN")]
+    links = [(10, 1, "RUN", 100), (11, 2, "RUN", 100)]
     costs = [1000, 900, 1200]
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=True) == -1
     assert cycle_route(links, costs, recent={1}, shelved={10}, alternate_only=False) == -1
-    assert cycle_route([(10, 1, "RUN")], [1000, 900], recent={1}, shelved={10}, alternate_only=False) == 10
+    assert cycle_route([(10, 1, "RUN", 100)], [1000, 900],
+                       recent={1}, shelved={10}, alternate_only=False) == 10
     select = section(DESCEND, "static int Objective_CycleRoute", "static void StrikeWeaponPurposeClear")
     assert "return finite_count == 1 ? finite_link : -1;" in select
     assert "candidate->from != bot->seed" in select

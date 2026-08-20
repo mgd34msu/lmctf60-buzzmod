@@ -18,6 +18,15 @@ static inline float SG_RouteCandidatePrice(float destination_price,
 	return isfinite(price) ? price : INFINITY;
 }
 
+static inline int SG_RouteCandidateGoalMs(int destination_ms,
+	int traversal_ms, int infinity)
+{
+	if (infinity <= 0 || destination_ms < 0 || destination_ms >= infinity ||
+	    traversal_ms < 0 || traversal_ms >= infinity - destination_ms)
+		return infinity;
+	return destination_ms + traversal_ms;
+}
+
 /* The immediate-return surcharge is a choice among equally useful routes,
  * not permission to spend progress.  A merely finite alternative can point
  * uphill; require two distinct non-worsening neighbors before taxing either

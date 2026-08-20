@@ -67,6 +67,24 @@ static void TestCandidateChargesImmediateTraversal(void)
 	CHECK(isinf(SG_RouteCandidatePrice(100.0f, 100, NAN)));
 }
 
+static void TestGoalProgressChargesImmediateTraversal(void)
+{
+	const int infinity = 0x3fffffff;
+	int run = SG_RouteCandidateGoalMs(1200, 100, infinity);
+	int slow_hook = SG_RouteCandidateGoalMs(300, 1100, infinity);
+	int fast_hook = SG_RouteCandidateGoalMs(100, 1100, infinity);
+
+	CHECK(run == 1300);
+	CHECK(slow_hook == 1400);
+	CHECK(fast_hook == 1200);
+	CHECK(run < slow_hook);
+	CHECK(fast_hook < run);
+	CHECK(SG_RouteCandidateGoalMs(infinity, 100, infinity) == infinity);
+	CHECK(SG_RouteCandidateGoalMs(100, -1, infinity) == infinity);
+	CHECK(SG_RouteCandidateGoalMs(infinity - 50, 50, infinity) == infinity);
+	CHECK(SG_RouteCandidateGoalMs(100, 100, 0) == 0);
+}
+
 static void TestDuelRoutePricingUsesOneSurface(void)
 {
 	/* Ordinary defenders/escorts retain range discipline. */
@@ -408,6 +426,7 @@ int main(void)
 	TestOneExitRouteStaysMobile();
 	TestAttackDescentCannotPriceItselfStill();
 	TestCandidateChargesImmediateTraversal();
+	TestGoalProgressChargesImmediateTraversal();
 	TestDuelRoutePricingUsesOneSurface();
 	TestDefenseShiftShippingDefault();
 	TestLateralChoice();
