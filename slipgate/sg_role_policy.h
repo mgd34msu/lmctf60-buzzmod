@@ -200,6 +200,12 @@ static inline int SG_CarrierJinkThreat(int client, int seed, int seed_count,
 	    recent && distance >= 0.0f && distance < 700.0f;
 }
 
+static inline int SG_CarrierJinkAllowed(int terminal,
+	int flag_touch_terminal)
+{
+	return !terminal && !flag_touch_terminal;
+}
+
 static inline int SG_OptionalItemDetourAllowed(int push,
 	int strike_blocks_optional, int role, int health)
 {

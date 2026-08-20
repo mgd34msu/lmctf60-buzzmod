@@ -5456,6 +5456,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	tc->have_move = have_move;
 	tc->open_ahead = open_ahead;
 	tc->run_link = run_link;
+	tc->flag_touch_terminal = flag_touch_terminal;
 	tc->door_hold = door_hold;
 	tc->door_ent = door_ent;
 	tc->drop_yaw_locked = drop_yaw_locked;
@@ -8176,11 +8177,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				SG_MovePolicy(e, cmd, mf, mr, move_dir,
 				              open_ahead, run_link,
 				              (float)cmd->msec / 1000.0f, airp);
-
-
-				/* Carrier jinks require open ground and one fresh visual threat
-				 * inside the same 700-unit envelope used by hook-risk pricing. */
 				if (role == SG_ROLE_CARRY && cmd->forwardmove != 0 &&
+				    SG_CarrierJinkAllowed(bot->terminal,
+				        tc->flag_touch_terminal) &&
 				    open_ahead &&
 				    !sg_cv.noweave->value)
 				{

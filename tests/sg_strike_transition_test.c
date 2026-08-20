@@ -1042,8 +1042,6 @@ static void TestRailAndCarrierRoute(void)
 	CHECK(bot.def_supply_phase == SG_DEFENSE_SUPPLY_PHASE_RETURN);
 	CHECK(bot.def_supply_armed);
 
-	/* In a flag standoff the carrier still uses HOME while RECOVER uses the
-	 * thief-bound dynamic own-flag field. */
 	tc = Think();
 	tc.strike_active = true;
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
@@ -1054,8 +1052,6 @@ static void TestRailAndCarrierRoute(void)
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == recover_field && tc.route_field == recover_field);
 	CHECK(tc.route_pure);
-	/* PRESS is the enemy base while our carrier owns the flag. It must not
-	 * collapse into a duplicate carrier-support route. */
 	sg_fields.to_flag_now[0][1] = carrier_field;
 	sg_caco_team_belief.carrier[0].client = 3;
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_PRESS,
@@ -1088,13 +1084,11 @@ static void TestRailAndCarrierRoute(void)
 	    tc.route_field == formation_field);
 	CHECK(tc.route_pure);
 	CHECK(!tc.scoop_mission);
-	/* A generic effective escort still receives the ordinary carrier field. */
 	tc.escort_formation = false;
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_ESCORT,
 	    CTF_TEAM_RED));
 	CHECK(tc.goal_field == carrier_field && tc.route_field == carrier_field);
 	CHECK(tc.route_pure);
-	/* Restore the carrier duty for the downstream weapon/rally assertions. */
 	CHECK(SG_StrikeTestApplyDutyRoute(&tc, SG_STRIKE_DUTY_CARRY,
 	    CTF_TEAM_RED));
 	CHECK(!tc.strike_weapon_pursuit);
@@ -1158,6 +1152,10 @@ static void TestMissionHoldSurvivesGenericWedgeValve(void)
 	CHECK(!SG_CarrierEscapeActive(SG_ROLE_ATTACK));
 	CHECK(SG_CarrierEscapeActive(SG_ROLE_CARRY));
 	CHECK(!SG_CarrierEscapeActive(SG_ROLES));
+	CHECK(SG_CarrierJinkAllowed(0, 0));
+	CHECK(!SG_CarrierJinkAllowed(1, 0));
+	CHECK(!SG_CarrierJinkAllowed(0, 1));
+	CHECK(!SG_CarrierJinkAllowed(1, 1));
 	CHECK(SG_OptionalItemDetourAllowed(0, 0, SG_ROLE_ATTACK, 100));
 	CHECK(!SG_OptionalItemDetourAllowed(1, 0, SG_ROLE_ATTACK, 100));
 	CHECK(!SG_OptionalItemDetourAllowed(0, 1, SG_ROLE_ATTACK, 100));
