@@ -158,6 +158,26 @@ def test_immediate_flag_objectives_do_not_apply_route_ribbon():
     assert "EnemyFlagTouchMissionActive(tc->strike_pressure" in ribbon
 
 
+def test_run_lookahead_preserves_complete_route_ordering():
+    lookahead = section(
+        MOVE,
+        "/* Near a RUN destination",
+        "/*\n\t\t\t * A RUN link with a stored waypoint",
+    )
+    assert "SG_RouteCandidateGoalMs(route_field[l2->to]" in lookahead
+    assert "Fields_LinkTraversalCostMs(l2)" in lookahead
+    assert "if (cv <= nv)" in lookahead
+
+    pursuit = section(
+        MOVE,
+        "/* Aim along the complete cheapest RUN chain.",
+        "/* Shorten the pursuit chord",
+    )
+    assert "SG_RouteCandidateGoalMs(route_field[l5->to]" in pursuit
+    assert "Fields_LinkTraversalCostMs(l5)" in pursuit
+    assert "if (cv5 <= nv5)" in pursuit
+
+
 if __name__ == "__main__":
     tests = [
         value

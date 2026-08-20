@@ -3764,8 +3764,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 			have_aim = true;
 
-			/* Near a RUN destination, aim one link farther down the gradient to
-			 * avoid steering around a seed center that is about to be passed. */
+			/* Near a RUN destination, aim through its complete cheapest RUN. */
 			if (sg_cv.lookahead->value &&
 			    !sg_cv.pursuit->value &&
 			    l->action == RL_RUN && !precision)
@@ -3783,12 +3782,14 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					     li2 >= 0; li2 = SG_Rune()->next_link[li2])
 					{
 						rune_link_t *l2 = &SG_Rune()->links[li2];
-
+						int cv;
 						if (l2->action != RL_RUN)
 							continue;
-						if (route_field[l2->to] < nv)
+						cv = SG_RouteCandidateGoalMs(route_field[l2->to],
+						    Fields_LinkTraversalCostMs(l2), SG_FIELD_INF);
+						if (cv <= nv)
 						{
-							nv = route_field[l2->to];
+							nv = cv;
 							nx = li2;
 						}
 					}
@@ -3822,8 +3823,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				}
 			}
 
-			/* Aim at a point along the RUN chain rather than at each seed center.
-			 * The cvar sets the lookahead arc distance. */
+			/* Aim along the complete cheapest RUN chain. */
 			if (sg_cv.pursuit->value > 0.0f &&
 			    !aim_is_anchor && l->action == RL_RUN && !precision &&
 			    e->waterlevel < 2 && bot->hook_phase == 0 &&
@@ -3847,21 +3847,21 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					     li5 = SG_Rune()->next_link[li5])
 					{
 						rune_link_t *l5 = &SG_Rune()->links[li5];
+						int cv5;
 
-						/* plain runs only: jumps/ropes/drops are
-						 * geometry executed exactly, and a pursuit
-						 * point across a gap steers off the lip */
+						/* Do not chord exact actions. */
 						if (l5->action != RL_RUN)
 							continue;
-						/* a link whose proof had to ROUND something is
-						 * not a chord -- its anchor IS the route */
+						/* A proved detour must retain its waypoint. */
 						if (l5->anchor[0] != 0.0f ||
 						    l5->anchor[1] != 0.0f ||
 						    l5->anchor[2] != 0.0f)
 							continue;
-						if (route_field[l5->to] < nv5)
+						cv5 = SG_RouteCandidateGoalMs(route_field[l5->to],
+						    Fields_LinkTraversalCostMs(l5), SG_FIELD_INF);
+						if (cv5 <= nv5)
 						{
-							nv5 = route_field[l5->to];
+							nv5 = cv5;
 							nx5 = li5;
 						}
 					}
