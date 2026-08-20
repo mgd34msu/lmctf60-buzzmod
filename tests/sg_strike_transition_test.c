@@ -505,7 +505,7 @@ static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 	{
 		WorldReset();
 		ArmCarryBallistic(&bot, actions[index], false);
-		SG_CarryStartRetireStagedTraversal(&bot, true);
+		SG_CarryStartRetireSupersededRoute(&bot, true);
 		CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
 		    bot.commit_route_field == NULL);
 		CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
@@ -517,14 +517,14 @@ static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 			CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
 		WorldReset();
 		ArmCarryBallistic(&bot, actions[index], true);
-		SG_CarryStartRetireStagedTraversal(&bot, true);
+		SG_CarryStartRetireSupersededRoute(&bot, true);
 		CHECK(bot.commit_link == 1 && (actions[index] == RL_JUMP ?
 		    bot.jump_started : actions[index] == RL_DROP ? bot.drop_started :
 		    bot.rj_phase == 2));
 	}
 	WorldReset();
 	ArmCarryBallistic(&bot, RL_JUMP, false);
-	SG_CarryStartRetireStagedTraversal(&bot, false);
+	SG_CarryStartRetireSupersededRoute(&bot, false);
 	CHECK(bot.commit_link == 1 && bot.jump_link == 1);
 	WorldReset();
 	bot = Bot();
@@ -532,7 +532,7 @@ static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 	bot.commit_link = 1;
 	bot.hook_link = 1;
 	bot.hook_phase = 1;
-	SG_CarryStartRetireStagedTraversal(&bot, true);
+	SG_CarryStartRetireSupersededRoute(&bot, true);
 	CHECK(bot.commit_link == -1 && bot.hook_phase == 0);
 }
 
@@ -1017,7 +1017,6 @@ static void TestRailAndCarrierRoute(void)
 	sg_bot_t bot;
 	sg_think_t tc;
 	qboolean rally_hold = true;
-
 	WorldReset();
 	bot = Bot();
 	tc = Think();
@@ -1026,18 +1025,19 @@ static void TestRailAndCarrierRoute(void)
 	bot.rail_until = 99.0f;
 	tc.strike_active = true;
 	SG_StrikeTestRetireGenericRail(&bot, &tc);
-	CHECK(bot.rail_link == -1 && bot.rail_stage == 0);
-	CHECK(bot.rail_until == 0.0f);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 	CHECK(!SG_StrikeTestRailLateOverrideAllowed(&bot, &tc));
 	CHECK(!SG_StrikeTestRailWatchdogAllowed(&bot, &tc));
 
 	bot.rail_link = 0;
 	bot.rail_stage = 2;
 	bot.rail_until = 99.0f;
+	bot.rally_cover = 1;
+	bot.rally_since = 42.0f;
 	tc.strike_active = false;
-	SG_CarryStartRetireStagedTraversal(&bot, true);
+	SG_CarryStartRetireSupersededRoute(&bot, true);
 	CHECK(bot.rail_link == -1 && bot.rail_stage == 0);
-	CHECK(bot.rail_until == 0.0f);
+	CHECK(bot.rail_until == 0.0f && bot.rally_cover == -1 && bot.rally_since == 0.0f);
 	CHECK(SG_StrikeTestRailLateOverrideAllowed(&bot, &tc));
 	CHECK(SG_StrikeTestRailWatchdogAllowed(&bot, &tc));
 

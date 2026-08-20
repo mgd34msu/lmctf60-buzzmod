@@ -3205,7 +3205,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->def_stand = false;
 	}
 
-	SG_CarryStartRetireStagedTraversal(bot, carrying && !bot->was_carrying);
+	SG_CarryStartRetireSupersededRoute(bot, carrying && !bot->was_carrying);
 	Think_CarryBookends(bot, e, role, team, carrying);
 
 	/* the context carries the stage contract from here down; the frame
