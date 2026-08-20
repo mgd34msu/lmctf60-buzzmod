@@ -75,7 +75,7 @@
     "slipgate/sg_compound_publication.c": 901,
     "slipgate/sg_compound_swim_live.c": 1171,
     "slipgate/sg_compound_world.c": 1268,
-    "slipgate/sg_descend.c": 4071,
+    "slipgate/sg_descend.c": 4070,
     "slipgate/sg_fields.c": 1394,
     "slipgate/sg_goal.c": 1874,
     "slipgate/sg_local.h": 811,

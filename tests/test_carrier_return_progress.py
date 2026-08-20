@@ -47,6 +47,7 @@ def test_astray_without_cover_never_zeroes_carrier_movement():
 
 def test_astray_selects_reachable_standoff_then_holds_only_at_cover():
     cover = section(DESCEND, "static int Carrier_RallyCover", "static qboolean Carrier_LinkShelved")
+    assert "SG_CarrierCoverRouteAllowed(SG_Rune(), bot->seed, seed)" in cover
     assert "goal_field[seed] < 600 || goal_field[seed] >= 2500" in cover
     assert "SG_CanSee(e, SG_Rune()->seeds[seed].origin, 22.0f)" in cover
     assert "if (distance > 1200.0f)" in cover

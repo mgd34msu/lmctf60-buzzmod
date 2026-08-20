@@ -11,6 +11,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_bot_ping.h"
+#include "slipgate/sg_carrier_cover.h"
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_drop_live.h"
@@ -1456,16 +1457,13 @@ static qboolean DefenseShiftRetireInvalid(sg_bot_t *bot, int *bestlink,
 	return true;
 }
 
-/* A CARRYHOLD is a real standoff, never permission to stop wherever the
- * return first enters the home band.  The movement stage walks directly to
- * this seed, so admit only a finite, visible seed outside the terminal zone;
- * the lowest-exposure reachable one wins, with distance as the tie-break. */
+/* A CARRYHOLD walks to finite visible cover on the current or one proved RUN.
+ * Lowest exposure wins, with distance as the tie-break. */
 static int Carrier_RallyCover(sg_bot_t *bot, edict_t *e, const int *goal_field)
 {
 	int cover = -1;
 	float best = 1e30f;
 	int seed;
-
 	if (!bot || !e || !goal_field || !SG_Rune() || !SG_Rune()->seeds)
 		return -1;
 	for (seed = 0; seed < SG_Rune()->hdr.num_seeds; seed++)
@@ -1473,13 +1471,13 @@ static int Carrier_RallyCover(sg_bot_t *bot, edict_t *e, const int *goal_field)
 		vec3_t delta;
 		float distance, score;
 
-		if (goal_field[seed] < 600 || goal_field[seed] >= 2500 ||
+		if (!SG_CarrierCoverRouteAllowed(SG_Rune(), bot->seed, seed) ||
+		    goal_field[seed] < 600 || goal_field[seed] >= 2500 ||
 		    !SG_CanSee(e, SG_Rune()->seeds[seed].origin, 22.0f))
 			continue;
 		VectorSubtract(SG_Rune()->seeds[seed].origin, e->s.origin, delta);
 		distance = VectorLength(delta);
-		/* A short clear route avoids asking the local mover to cut through a
-		 * wall; area_hint is the existing exposure measure used by rallies. */
+		/* area_hint is the existing exposure measure used by rallies. */
 		if (distance > 1200.0f)
 			continue;
 		score = (float)SG_Rune()->seeds[seed].area_hint * 10000.0f + distance;
@@ -3383,6 +3381,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			int cover = bot->rally_cover;
 
 			if (cover < 0 || cover >= SG_Rune()->hdr.num_seeds ||
+			    !SG_CarrierCoverRouteAllowed(SG_Rune(), bot->seed, cover) ||
 			    goal_field[cover] < 600 || goal_field[cover] >= 2500 ||
 			    !SG_CanSee(e, SG_Rune()->seeds[cover].origin, 22.0f))
 				cover = Carrier_RallyCover(bot, e, goal_field);

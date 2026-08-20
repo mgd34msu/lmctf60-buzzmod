@@ -10,6 +10,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_intercept_policy.h"
+#include "slipgate/sg_carrier_cover.h"
 #include "slipgate/sg_hooks.h"
 
 int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
@@ -455,6 +456,16 @@ static void CheckRallyCoverAdmission(void)
 	Link(&links[2], 0, 3, RL_RUN, 100);
 	Link(&links[3], 4, 0, RL_RUN, 100);
 
+	CHECK(SG_CarrierCoverRouteAllowed(&rune, 0, 0));
+	CHECK(SG_CarrierCoverRouteAllowed(&rune, 0, 1));
+	CHECK(SG_CarrierCoverRouteAllowed(&rune, 0, 3));
+	CHECK(!SG_CarrierCoverRouteAllowed(&rune, 0, 2));
+	CHECK(!SG_CarrierCoverRouteAllowed(&rune, 0, 4));
+	CHECK(!SG_CarrierCoverRouteAllowed(&rune, 0, 5));
+	rune.links = NULL;
+	CHECK(SG_CarrierCoverRouteAllowed(&rune, 0, 0));
+	CHECK(!SG_CarrierCoverRouteAllowed(&rune, 0, 1));
+	rune.links = links;
 	CHECK(Rally_CoverSeed(&rune, 0) == 3);
 	seeds[3].area_hint = 100;
 	CHECK(Rally_CoverSeed(&rune, 0) == -1);
