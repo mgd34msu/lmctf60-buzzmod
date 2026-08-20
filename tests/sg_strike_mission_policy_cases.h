@@ -117,6 +117,12 @@ static void TestMissionAndFlagApproachPolicy(void)
 	    500, 400) == 0.0f);
 	CHECK(SG_StrikeFlagApproachPrice(1, 2, 1, 400.0f, 200.0f, 0.0f,
 	    500, 400) == 0.0f);
+	CHECK(SG_AntiLingerCarrierNearby(1, 399.0f));
+	CHECK(!SG_AntiLingerCarrierNearby(1, 400.0f));
+	CHECK(!SG_AntiLingerCarrierNearby(0, 100.0f));
+	CHECK(!SG_AntiLingerCarrierNearby(2, 100.0f));
+	CHECK(!SG_AntiLingerCarrierNearby(1, -1.0f));
+	CHECK(!SG_AntiLingerCarrierNearby(1, NAN));
 }
 
 #endif /* SG_STRIKE_MISSION_POLICY_CASES_H */

@@ -538,8 +538,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         anti_linger = descend[start:end]
         self.assertIn(
             "SG_AntiLingerEligible(role, tc->escort_mission)", anti_linger)
-        gate = anti_linger[:anti_linger.index("static gitem_t *lg_flag")]
-        self.assertNotIn("role != SG_ROLE_ESCORT", gate)
+        self.assertIn("SG_AntiLingerCarrierNearby(", anti_linger)
+        self.assertIn("SG_CanSee(e, car->s.origin", anti_linger)
 
     def test_effective_escort_mission_controls_support_pull(self) -> None:
         price = (ROOT / "slipgate/sg_price.c").read_text()

@@ -144,6 +144,11 @@ static inline int SG_AntiLingerEligible(int role, int escort_mission)
 	return role != SG_ROLE_CARRY && !escort_mission;
 }
 
+static inline int SG_AntiLingerCarrierNearby(int visible, float distance)
+{
+	return visible == 1 && distance >= 0.0f && distance < 400.0f;
+}
+
 static inline int SG_EscortSupportFullStrength(int escort_mission)
 {
 	return escort_mission == 1;

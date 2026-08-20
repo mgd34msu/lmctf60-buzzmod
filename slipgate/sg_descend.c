@@ -523,10 +523,10 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			if (car)
 			{
 				vec3_t cd;
-
 				VectorCopy(car->s.origin, car_org);
 				VectorSubtract(e->s.origin, car_org, cd);
-				if (VectorLength(cd) < 400.0f)
+				if (SG_AntiLingerCarrierNearby(SG_CanSee(e, car->s.origin,
+				        car->viewheight), VectorLength(cd)))
 				{
 					if (bot->linger_since <= 0.0f)
 						SG_Mark(&bot->linger_since);
