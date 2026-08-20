@@ -1534,7 +1534,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 						ms = lead
 						    ? SG_FieldCarrierLeadStation(SG_Rune(), cf, oc->seed,
 						          cost_lo, wcost + band)
-						    : SG_FieldNearestBandSeed(SG_Rune(), cf, oc->seed,
+						    : SG_FieldCarrierTrailStation(SG_Rune(), cf, oc->seed,
 						          cost_lo, wcost + band);
 					}
 					else if (interpose_mode == 2)

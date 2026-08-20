@@ -130,7 +130,8 @@ def test_carrier_screen_uses_the_accepted_moving_formation_by_default():
     assert "else if (interpose_mode == 2)" in interpose
     assert "SG_InterposeLeadStation(cc," in interpose
     assert "SG_FieldCarrierLeadStation(SG_Rune(), cf, oc->seed" in interpose
-    assert "SG_FieldNearestBandSeed(SG_Rune(), cf, oc->seed" in interpose
+    assert "SG_FieldCarrierTrailStation(SG_Rune(), cf, oc->seed" in interpose
+    assert "SG_FieldNearestBandSeed(SG_Rune(), cf, oc->seed" not in interpose
     assert "SG_InterposeFallbackSeed(interpose_mode," in interpose
     assert "cf[threat_seed]" in interpose
     assert "en11->seed >= SG_Rune()->hdr.num_seeds" in interpose

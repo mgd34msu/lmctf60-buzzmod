@@ -126,6 +126,62 @@ static inline int SG_FieldCarrierLeadStation(const rune_t *r,
 	return -1;
 }
 
+static inline int SG_FieldIncomingRunStep(const rune_t *r,
+	const int *home, int seed)
+{
+	int best = -1;
+	int best_ms = SG_FIELD_INF;
+	int link_index;
+
+	if (!r || !r->links || !home || seed < 0 ||
+	    seed >= r->hdr.num_seeds || home[seed] < 0 ||
+	    home[seed] >= SG_FIELD_INF)
+		return -1;
+	for (link_index = 0; link_index < r->hdr.num_links; link_index++)
+	{
+		const rune_link_t *link = &r->links[link_index];
+		int candidate;
+
+		if (link->action != RL_RUN || link->to != seed || link->from < 0 ||
+		    link->from >= r->hdr.num_seeds || home[link->from] <= home[seed])
+			continue;
+		candidate = SG_FieldProjectionLinkCostMs(r, home, link->from,
+		    link_index);
+		if (candidate != home[link->from])
+			continue;
+		if (candidate < best_ms ||
+		    (candidate == best_ms && link->from < best))
+		{
+			best = link->from;
+			best_ms = candidate;
+		}
+	}
+	return best;
+}
+
+static inline int SG_FieldCarrierTrailStation(const rune_t *r,
+	const int *home, int carrier_seed, int cost_lo, int cost_hi)
+{
+	int seed = carrier_seed;
+	int hop;
+
+	if (!r || !home || carrier_seed < 0 ||
+	    carrier_seed >= r->hdr.num_seeds || home[carrier_seed] < 0 ||
+	    home[carrier_seed] >= SG_FIELD_INF || cost_lo < 0 || cost_lo > cost_hi)
+		return -1;
+	for (hop = 0; hop < r->hdr.num_seeds; hop++)
+	{
+		if (home[seed] >= cost_lo && home[seed] <= cost_hi)
+			return seed;
+		if (home[seed] > cost_hi)
+			break;
+		seed = SG_FieldIncomingRunStep(r, home, seed);
+		if (seed < 0)
+			break;
+	}
+	return -1;
+}
+
 static inline int SG_FieldNearestBandSeed(const rune_t *r, const int *field,
 	int origin_seed, int cost_lo, int cost_hi)
 {

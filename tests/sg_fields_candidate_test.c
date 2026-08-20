@@ -475,6 +475,37 @@ static void CheckRallyCoverAdmission(void)
 	CHECK(Rally_CoverSeed(NULL, 0) == -1);
 }
 
+static void CheckCarrierTrailFollowsTheScoringRoute(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[4];
+	rune_link_t links[2];
+	int first_link[4] = { -1, 0, 1, -1 };
+	int next_link[2] = { -1, -1 };
+	int home[4] = { 1000, 1500, 2000, 1500 };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	memset(links, 0, sizeof(links));
+	rune.hdr.num_seeds = 4;
+	rune.hdr.num_links = 2;
+	rune.seeds = seeds;
+	rune.links = links;
+	rune.first_link = first_link;
+	rune.next_link = next_link;
+	seeds[1].origin[0] = 100.0f;
+	seeds[2].origin[0] = 200.0f;
+	seeds[3].origin[0] = 1.0f;
+	Link(&links[0], 1, 0, RL_RUN, 500);
+	Link(&links[1], 2, 1, RL_RUN, 500);
+
+	CHECK(SG_FieldNearestBandSeed(&rune, home, 0, 1400, 1600) == 3);
+	CHECK(SG_FieldCarrierTrailStation(&rune, home, 0, 1400, 1600) == 1);
+	CHECK(SG_FieldCarrierTrailStation(&rune, home, 0, 1900, 2100) == 2);
+	links[0].cost_ms = 600;
+	CHECK(SG_FieldCarrierTrailStation(&rune, home, 0, 1400, 2100) == -1);
+}
+
 static void CheckEnemyObservationRetirement(void)
 {
 	rune_t rune;
@@ -625,6 +656,7 @@ int main(void)
 	CheckHookFieldAdmission();
 	CheckInterceptAdmission();
 	CheckRallyCoverAdmission();
+	CheckCarrierTrailFollowsTheScoringRoute();
 	CheckEnemyObservationRetirement();
 	CheckCarrierProjectionPricesWholeEdge();
 
