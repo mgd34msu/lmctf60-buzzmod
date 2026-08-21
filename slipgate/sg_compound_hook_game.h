@@ -49,6 +49,8 @@ sg_compound_hook_game_authorization_t SG_CompoundHookGameAuthorizeActivation(
 	struct sg_bot_s *bot,
 	struct edict_s *source, struct edict_s *door_master,
 	struct edict_s *activator, int frame_serial);
+sg_compound_guard_result_t SG_CompoundHookGameOrphan(
+	struct sg_bot_s *bot);
 sg_compound_hook_live_result_t SG_CompoundHookGameRecoverOwnedFailure(
 	struct sg_bot_s *bot, usercmd_t *same_slot_command);
 

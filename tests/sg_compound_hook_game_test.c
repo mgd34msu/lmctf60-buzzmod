@@ -39,6 +39,7 @@ static int touch_calls;
 static int activate_calls;
 static int recover_calls;
 static int prestep_calls;
+static int live_orphan_calls;
 static int stub_failed;
 
 static sg_compound_hook_live_result_t Result(
@@ -399,6 +400,24 @@ sg_compound_hook_live_result_t SG_CompoundHookLiveRecover(
 	return Result(SG_COMPOUND_HOOK_LIVE_RECOVERING);
 }
 
+sg_compound_hook_live_result_t SG_CompoundHookLiveOrphan(
+	sg_compound_hook_live_state_t *state,
+	const sg_compound_hook_live_host_t *host)
+{
+	const sg_compound_hook_live_bolt_t *bolt;
+
+	STUB_CHECK(state == &bot.compound_hook_live && host && host->orphan);
+	live_orphan_calls++;
+	bolt = state->bolt_linked ? &state->bolt : NULL;
+	if (host->orphan(host->context, &state->snapshot, bolt) !=
+	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
+		return Result(SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	memset(state, 0, sizeof(*state));
+	state->swim_link = -1;
+	state->hook_link = -1;
+	return Result(SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
+}
+
 sg_compound_hook_live_result_t SG_CompoundHookLivePreStep(
 	sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host,
@@ -456,6 +475,7 @@ static void FixtureInit(void)
 	events_reset_calls = abort_begin_calls = abort_end_calls = 0;
 	physical_abort_calls = 0;
 	touch_calls = activate_calls = recover_calls = prestep_calls = 0;
+	live_orphan_calls = 0;
 	stub_failed = 0;
 	expected_frame = 17;
 }
@@ -687,6 +707,61 @@ static int TerminalFixture(void)
 	return 1;
 }
 
+static int OrphanWrapperFixture(void)
+{
+	sg_compound_hook_live_state_t retained;
+
+	FixtureInit();
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RUNNING);
+	events_idle = false;
+	CHECK(SG_CompoundHookGameOrphan(&bot) == SG_COMPOUND_GUARD_OK);
+	CHECK(live_orphan_calls == 1 && events_reset_calls == 1 && events_idle);
+	CHECK(!bot.compound_hook_live.guard_owned &&
+	    !bot.compound_hook_live.local_owned &&
+	    !bot.compound_hook_game.angle_bias_valid);
+	CHECK(SG_CompoundHookGameOrphan(&bot) ==
+	    SG_COMPOUND_GUARD_INVALID_ARGUMENT);
+	CHECK(live_orphan_calls == 1 && events_reset_calls == 1);
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RUNNING);
+
+	bot.compound_hook_live.bolt_linked = true;
+	bot.compound_hook_live.bolt.key = 6;
+	bot.compound_hook_live.bolt.generation = 56U;
+	events_idle = false;
+	retained = bot.compound_hook_live;
+	CHECK(SG_CompoundHookGameOrphan(&bot) ==
+	    SG_COMPOUND_GUARD_HOST_ERROR);
+	CHECK(memcmp(&bot.compound_hook_live, &retained, sizeof(retained)) == 0);
+	CHECK(bot.compound_hook_game.angle_bias_valid && !events_idle &&
+	    events_reset_calls == 1);
+	bot.compound_hook_live.bolt.generation = 0U;
+	retained = bot.compound_hook_live;
+	CHECK(SG_CompoundHookGameOrphan(&bot) ==
+	    SG_COMPOUND_GUARD_HOST_ERROR);
+	CHECK(memcmp(&bot.compound_hook_live, &retained, sizeof(retained)) == 0);
+	CHECK(bot.compound_hook_game.angle_bias_valid && !events_idle &&
+	    events_reset_calls == 1);
+
+	bot.compound_hook_live.bolt.generation = 55U;
+	hook_observation = SG_COMPOUND_GUARD_YES;
+	client.hook = &entities[6];
+	CHECK(SG_CompoundHookGameOrphan(&bot) == SG_COMPOUND_GUARD_OK);
+	CHECK(live_orphan_calls == 4 && events_reset_calls == 2 && events_idle);
+	CHECK(!bot.compound_hook_live.guard_owned &&
+	    !bot.compound_hook_live.local_owned &&
+	    !bot.compound_hook_game.angle_bias_valid);
+	client.hook = NULL;
+	client.hookstate = 0;
+	hook_observation = SG_COMPOUND_GUARD_NO;
+	hook_absent = SG_COMPOUND_GUARD_YES;
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(!stub_failed);
+	return 1;
+}
+
 static int CurrentFixture(void)
 {
 	const sg_compound_publication_binding_t *found_binding;
@@ -713,7 +788,8 @@ int main(void)
 {
 	if (!HostFixture() || !TransactionFixture() || !IdleFixture() ||
 	    !SafetyFixture() ||
-	    !ClearFixture() || !TerminalFixture() || !CurrentFixture())
+	    !ClearFixture() || !TerminalFixture() || !OrphanWrapperFixture() ||
+	    !CurrentFixture())
 		return 1;
 	puts("sg_compound_hook_game_test: ok");
 	return 0;
