@@ -388,7 +388,9 @@
     <ClCompile Include="slipgate\sg_compound_world.c" />
     <ClCompile Include="slipgate\sg_compound_gen.c" />
     <ClCompile Include="slipgate\sg_compound_gen_game.c" />
+    <ClCompile Include="slipgate\sg_compound_action_gen.c" />
     <ClCompile Include="slipgate\sg_compound_publication.c" />
+    <ClCompile Include="slipgate\sg_compound_action_publication.c" />
     <ClCompile Include="slipgate\sg_rune_door_scope.c" />
     <ClCompile Include="slipgate\sg_drop_live.c" />
     <ClCompile Include="slipgate\sg_swim_live.c" />

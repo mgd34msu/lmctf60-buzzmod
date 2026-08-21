@@ -139,6 +139,7 @@ COMPOUND_PUBLICATION_TEST_OBJS := .sg_compound_publication_test.make.o \
 COMPOUND_PUBLICATION_TEST_DEPS := $(COMPOUND_PUBLICATION_TEST_OBJS:.o=.d)
 COMPOUND_PUBLICATION_INTEGRATION_TEST := \
 	tests/test_compound_publication_integration.py
+COMPOUND_ACTION_INTEGRATION_TEST := tests/test_compound_action_contracts.sh
 MECHANISM_PUBLICATION_INTEGRATION_TEST := \
 	tests/test_mechanism_publication_integration.py
 COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS := \
@@ -933,7 +934,9 @@ OBJS := \
 	slipgate/sg_compound_world.o \
 	slipgate/sg_compound_gen.o \
 	slipgate/sg_compound_gen_game.o \
+	slipgate/sg_compound_action_gen.o \
 	slipgate/sg_compound_publication.o \
+	slipgate/sg_compound_action_publication.o \
 	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
 	sg_swim_live.o \
@@ -1111,9 +1114,17 @@ slipgate/sg_rune_mechanism_plan.o: slipgate/sg_rune_mechanism_plan.c \
 		slipgate/sg_crc32.h q_shared.h
 slipgate/sg_compound_gen.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h slipgate/sg_rune.h q_shared.h
+slipgate/sg_compound_action_gen.o: slipgate/sg_compound_action_gen.c \
+		slipgate/sg_compound_action_gen.h slipgate/sg_compound.h \
+		slipgate/sg_action.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
 		slipgate/sg_compound_publication.h slipgate/sg_compound_world.h \
 		slipgate/sg_local.h slipgate/sg_rune.h g_local.h
+slipgate/sg_compound_action_publication.o: \
+		slipgate/sg_compound_action_publication.c \
+		slipgate/sg_compound_action_publication.h \
+		slipgate/sg_compound_publication.h slipgate/sg_compound.h \
+		slipgate/sg_replay.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
@@ -2631,6 +2642,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
+		$(COMPOUND_ACTION_INTEGRATION_TEST) \
 		$(MECHANISM_PUBLICATION_INTEGRATION_TEST) \
 		$(IDENTITY_TEST_BIN) \
 		$(RUNE_CODEC_TEST_BIN) \
@@ -2708,6 +2720,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
 	$(Q)./$(COMPOUND_PUBLICATION_TEST_BIN)
 	$(Q)python3 $(COMPOUND_PUBLICATION_INTEGRATION_TEST)
+	$(Q)sh $(COMPOUND_ACTION_INTEGRATION_TEST)
 	$(Q)python3 $(MECHANISM_PUBLICATION_INTEGRATION_TEST)
 	$(Q)./$(IDENTITY_TEST_BIN)
 	$(Q)./$(RUNE_CODEC_TEST_BIN)
@@ -2896,6 +2909,10 @@ compound-gen-test: $(COMPOUND_GEN_TEST_BIN) $(COMPOUND_GEN_GAME_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
 	$(Q)./$(COMPOUND_GEN_GAME_TEST_BIN)
+
+compound-action-test: $(COMPOUND_ACTION_INTEGRATION_TEST)
+	$(E) [TEST] $<
+	$(Q)sh $(COMPOUND_ACTION_INTEGRATION_TEST)
 
 compound-publication-test: $(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
