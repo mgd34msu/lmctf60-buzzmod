@@ -37,22 +37,6 @@ qboolean CompoundHookLiveBoltEqual(const sg_compound_hook_live_bolt_t *first,
 	return first && second && first->key == second->key &&
 	       first->generation == second->generation;
 }
-static qboolean CommandEqual(const usercmd_t *first,
-	const usercmd_t *second)
-{
-	int axis;
-	if (!first || !second || first->msec != second->msec ||
-	    first->buttons != second->buttons ||
-	    first->forwardmove != second->forwardmove ||
-	    first->sidemove != second->sidemove ||
-	    first->upmove != second->upmove || first->impulse != second->impulse ||
-	    first->lightlevel != second->lightlevel)
-		return false;
-	for (axis = 0; axis < 3; axis++)
-		if (first->angles[axis] != second->angles[axis])
-			return false;
-	return true;
-}
 static qboolean SnapshotValid(
 	const sg_compound_hook_live_snapshot_t *snapshot, uint32_t link_index,
 	sg_hook_replay_spec_t *hook_spec)
@@ -392,35 +376,6 @@ sg_compound_hook_live_result_t SG_CompoundHookLivePreStep(
 	return CompoundHookLiveActive(state, true);
 }
 
-sg_compound_hook_live_result_t SG_CompoundHookLiveApproveCommand(
-	sg_compound_hook_live_state_t *state, const usercmd_t *command)
-{
-	sg_hook_live_result_t hook_result;
-	if (!state || !state->guard_owned || !state->local_owned ||
-	    !state->command_pending || state->command_approved || !command)
-		return state && state->guard_owned ?
-		       CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE,
-		                    SG_REPLAY_REASON_INVALID_STATE) :
-		       CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		           SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
-		           SG_REPLAY_REASON_INVALID_ARGUMENT, false);
-	if (state->control == SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX)
-	{
-		hook_result = SG_HookLiveValidateStoredFinalCommand(&state->hook,
-		    &state->hook_active, &state->hook_link,
-		    (int)state->snapshot.binding.link_index, true,
-		    &state->hook_command_guard, command);
-		if (hook_result.outcome != SG_HOOK_LIVE_RUNNING)
-			return CompoundHookLiveOwnedFailure(state,
-			    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
-			    hook_result.replay_reason);
-	}
-	else if (!CommandEqual(&state->expected_command, command))
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
-		                    SG_REPLAY_REASON_INVALID_CONTROL);
-	state->command_approved = true;
-	return CompoundHookLiveActive(state, false);
-}
 static sg_compound_hook_live_result_t SweepBoundary(
 	sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host,

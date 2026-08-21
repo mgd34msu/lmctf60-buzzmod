@@ -152,6 +152,79 @@ static void TestIssuedCommandFailurePadsBeforeRecovery(void)
 	CHECK(state.transaction_elapsed_ms == 325);
 }
 
+static void TestRejectedApprovalDiscardsUnconsumedCommand(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	usercmd_t command;
+
+	Setup(&fixture, &host, &pose, &observation);
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	command.forwardmove++;
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(state.transaction_elapsed_ms == 0);
+	CHECK(!state.command_pending && !state.aborted_command_pending);
+	CHECK(state.control == SG_COMPOUND_HOOK_LIVE_CONTROL_NONE);
+	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
+	                                    0.0f);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
+	CHECK(fixture.release_calls == 1 && fixture.abort_calls == 0);
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.guard_owned && state.transaction_elapsed_ms == 0);
+	result = SG_CompoundHookLiveOrphan(&state, &host);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
+
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	(void)DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	command.angles[YAW]++;
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(state.transaction_elapsed_ms == 300);
+	CHECK(!state.command_pending && !state.aborted_command_pending);
+	CHECK(state.control == SG_COMPOUND_HOOK_LIVE_CONTROL_NONE);
+	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
+	                                    0.0f);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
+	CHECK(fixture.abort_calls == 1 && fixture.release_calls == 1);
+
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	(void)DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.transaction_elapsed_ms == 325);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	command.buttons ^= BUTTON_ATTACK;
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(state.transaction_elapsed_ms == 325);
+	CHECK(!state.command_pending && !state.aborted_command_pending);
+	CHECK(state.control == SG_COMPOUND_HOOK_LIVE_CONTROL_PADDING);
+	PadRetainedFailureToBoundary(&state, &host, &pose, &observation);
+	CHECK(state.transaction_elapsed_ms == 400);
+	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
+	                                    0.0f);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
+	CHECK(fixture.abort_calls == 1 && fixture.release_calls == 1);
+}
+
 static void TestWaitAttachSafetyObservation(void)
 {
 	static const sg_replay_reason_t reasons[] = {
@@ -469,6 +542,7 @@ void RunCompoundHookSafetyTests(void)
 {
 	TestCheckpointAndFirstBoltAuthority();
 	TestIssuedCommandFailurePadsBeforeRecovery();
+	TestRejectedApprovalDiscardsUnconsumedCommand();
 	TestWaitAttachSafetyObservation();
 	TestOpeningSafetyObservation();
 	TestOpeningAndWaitAttachUseFrameEntryFallSpeed();

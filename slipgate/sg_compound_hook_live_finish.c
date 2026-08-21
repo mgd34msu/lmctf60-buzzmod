@@ -1,5 +1,78 @@
 #include "slipgate/sg_compound_hook_live_internal.h"
 
+static qboolean CommandEqual(const usercmd_t *first,
+	const usercmd_t *second)
+{
+	int axis;
+
+	if (!first || !second || first->msec != second->msec ||
+	    first->buttons != second->buttons ||
+	    first->forwardmove != second->forwardmove ||
+	    first->sidemove != second->sidemove ||
+	    first->upmove != second->upmove || first->impulse != second->impulse ||
+	    first->lightlevel != second->lightlevel)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (first->angles[axis] != second->angles[axis])
+			return false;
+	return true;
+}
+
+static void DiscardUnconsumedCommand(sg_compound_hook_live_state_t *state)
+{
+	memset(&state->expected_command, 0, sizeof(state->expected_command));
+	state->command_pending = false;
+	state->command_approved = false;
+	state->command_replay_consumed = false;
+	state->aborted_command_pending = false;
+	SG_HookLiveCommandGuardClear(&state->hook_command_guard);
+}
+
+sg_compound_hook_live_result_t SG_CompoundHookLiveApproveCommand(
+	sg_compound_hook_live_state_t *state, const usercmd_t *command)
+{
+	sg_hook_live_result_t hook_result;
+
+	if (!state || !state->guard_owned || !state->local_owned ||
+	    !state->command_pending || state->command_approved)
+		return state && state->guard_owned ?
+		       CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE,
+		                    SG_REPLAY_REASON_INVALID_STATE) :
+		       CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
+		           SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
+		           SG_REPLAY_REASON_INVALID_ARGUMENT, false);
+	if (!command)
+	{
+		DiscardUnconsumedCommand(state);
+		return CompoundHookLiveOwnedFailure(state,
+		    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
+		    SG_REPLAY_REASON_INVALID_CONTROL);
+	}
+	if (state->control == SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX)
+	{
+		hook_result = SG_HookLiveValidateStoredFinalCommand(&state->hook,
+		    &state->hook_active, &state->hook_link,
+		    (int)state->snapshot.binding.link_index, true,
+		    &state->hook_command_guard, command);
+		if (hook_result.outcome != SG_HOOK_LIVE_RUNNING)
+		{
+			DiscardUnconsumedCommand(state);
+			return CompoundHookLiveOwnedFailure(state,
+			    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
+			    hook_result.replay_reason);
+		}
+	}
+	else if (!CommandEqual(&state->expected_command, command))
+	{
+		DiscardUnconsumedCommand(state);
+		return CompoundHookLiveOwnedFailure(state,
+		    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
+		    SG_REPLAY_REASON_INVALID_CONTROL);
+	}
+	state->command_approved = true;
+	return CompoundHookLiveActive(state, false);
+}
+
 static qboolean HookEventFrameValid(
 	const sg_compound_hook_live_state_t *state,
 	sg_compound_hook_live_event_t event, int frame_serial)
@@ -142,7 +215,6 @@ sg_compound_hook_live_result_t SG_CompoundHookLiveRecover(
 		    SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE,
 		    SG_REPLAY_REASON_INVALID_STATE, false);
 	if (state->control == SG_COMPOUND_HOOK_LIVE_CONTROL_PADDING ||
-	    state->transaction_elapsed_ms <= 0 ||
 	    state->transaction_elapsed_ms % SG_REPLAY_FRAME_MS != 0 ||
 	    state->last_boundary_ms != state->transaction_elapsed_ms)
 		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_RECOVERING,
