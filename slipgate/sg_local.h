@@ -112,6 +112,19 @@ typedef struct sg_compound_swim_recovery_proof_s
 	byte		exit_speed;
 } sg_compound_swim_recovery_proof_t;
 
+typedef struct sg_compound_drop_proof_s
+{
+	int	touch_ms;
+	int	touch_frame_end_ms;
+	int	mover_top_ms;
+	int	suffix_start_ms;
+	int	arrival_ms;
+	int	sweep_clear_ms;
+	int	total_cost_ms;
+	byte	heading;
+	byte	exit_speed;
+} sg_compound_drop_proof_t;
+
 /* Canonical source state owned by the compound oracle.  Keep the complete
  * phantom, and in particular pms and old_pms as distinct values: snapinitial
  * is part of the next real Pmove even when a freshly prepared offline source
@@ -138,6 +151,8 @@ qboolean SG_EnemyRoomDeathKnown(int team, const vec3_t stand_origin,
 	float max_age, float max_distance);
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps);
+qboolean SG_OracleRunCompoundWorld(sg_phantom_t *ph, usercmd_t *cmd,
+	int steps, edict_t *trigger, edict_t *member);
 /* Phase-independent exclusion for topology and exposure traces.  It models
  * the full swept volume of canonical func_rotating brushes, not their
  * instantaneous phase.  It deliberately does not make Pmove/action proofs
@@ -181,6 +196,17 @@ rune_reject_reason_t SG_OracleCompoundSwimPlanLive(sg_phantom_t *ph,
 	qboolean destination_water, float old_frame_z,
 	sg_compound_swim_proof_t *proof, vec3_t contact_anchor,
 	edict_t *passent);
+rune_reject_reason_t SG_OracleCompoundDropDiscoverContact(
+	const vec3_t source,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t canonical_hint, vec3_t mechanism_anchor,
+	qboolean loader_replay);
+rune_reject_reason_t SG_OracleCompoundDropPreopen(
+	const vec3_t source,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t mechanism_anchor, const vec3_t destination,
+	const vec3_t lip, byte heading, qboolean destination_water,
+	sg_compound_drop_proof_t *proof, qboolean loader_replay);
 /* Re-prove a bounded SWIM from the exact state the live client's next Pmove
  * would consume.  The caller owns rune/physics authority and must renew the
  * TOP lease before calling; this observation-only oracle never touches the

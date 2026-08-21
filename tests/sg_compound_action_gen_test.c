@@ -171,6 +171,25 @@ static void TestDoorHook(void)
 	CHECK(output.heading_slack == SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER);
 }
 
+static void TestLocallyCheapestSameComponent(void)
+{
+	sg_compound_action_gen_seed_t seeds[2];
+	sg_compound_action_gen_candidate_t candidate;
+	sg_compound_action_gen_request_t request;
+	sg_compound_action_gen_result_t result;
+	proof_context_t context = { 0, 0 };
+	rune_link_t output;
+
+	Seed(&seeds[0], 3, 1, 0, 1, 1);
+	Seed(&seeds[1], 3, 1, 0, 1, 1);
+	Candidate(&candidate, 0, 1, RLCM_PREOPEN);
+	request = Request(RL_DOOR_DROP, seeds, 2, &candidate, &output, &context);
+	result = SG_CompoundActionGenPlan(&request);
+	CHECK(result.status == SG_COMPOUND_ACTION_GEN_OK);
+	CHECK(result.proof_calls == 1 && result.emitted == 1);
+	CHECK(output.from == 0 && output.to == 1);
+}
+
 static void TestDisabledAndFailuresAreAtomic(void)
 {
 	sg_compound_action_gen_seed_t seeds[2];
@@ -223,6 +242,7 @@ int main(void)
 {
 	TestDoorDrop();
 	TestDoorHook();
+	TestLocallyCheapestSameComponent();
 	TestDisabledAndFailuresAreAtomic();
 	if (failures)
 	{

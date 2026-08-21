@@ -5,7 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef GAME_INCLUDE
 #include "../q_shared.h"
+#endif
 #include "sg_rune.h"
 
 #define SG_COMPOUND_ACTION_GEN_MAX_CANDIDATES 256U

@@ -261,7 +261,7 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 		ActionGenResult(SG_COMPOUND_ACTION_GEN_INVALID);
 	size_t proven_count = 0;
 	size_t group_start;
-	int saw_improvement = 0;
+	int saw_candidate = 0;
 
 	if (!request)
 		return result;
@@ -378,9 +378,7 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 			new_bits = (uint8_t)(destination->objective_mask & missing);
 			crosses = source->component >= 0 && destination->component >= 0 &&
 			          source->component != destination->component;
-			if (!new_bits && !crosses)
-				continue;
-			saw_improvement = 1;
+			saw_candidate = 1;
 			memset(&proof, 0, sizeof(proof));
 			result.proof_calls++;
 			if (request->prove(request->context, request->action, candidate,
@@ -443,7 +441,7 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 		group_start = group_end;
 	}
 	result.selected = proven_count;
-	if (!saw_improvement)
+	if (!saw_candidate)
 	{
 		result.status = SG_COMPOUND_ACTION_GEN_NO_IMPROVEMENT;
 		return result;
