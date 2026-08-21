@@ -6,6 +6,7 @@
 #include "slipgate/sg_compound_drop_game.h"
 #include "slipgate/sg_compound_guard.h"
 #include "slipgate/sg_compound_swim_game.h"
+#include "slipgate/sg_compound_hook_game.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rune.h"
 #include "slipgate/sg_rune_binding.h"
@@ -105,6 +106,7 @@ static char callback_order[CHAIN_COUNT][8];
 static size_t callback_order_count[CHAIN_COUNT];
 static int compound_drop_probe_calls;
 static int compound_drop_delayed_tags;
+static int compound_hook_probe_calls;
 
 #define CHECK(condition_) do { \
 	if (!(condition_)) { \
@@ -168,6 +170,25 @@ void SG_CompoundDropGameTagDelayedTarget(edict_t *source,
 {
 	(void)source; (void)activator; (void)delayed;
 	compound_drop_delayed_tags++;
+}
+
+sg_compound_hook_game_authorization_t SG_CompoundHookGameAuthorizeTouch(
+	sg_bot_t *bot, edict_t *source, edict_t *activator, int frame_serial)
+{
+	(void)source; (void)activator; (void)frame_serial;
+	compound_hook_probe_calls++;
+	CHECK(!bot || !bot->compound_hook_live.guard_owned);
+	return SG_COMPOUND_HOOK_GAME_BYPASS;
+}
+
+sg_compound_hook_game_authorization_t
+SG_CompoundHookGameAuthorizeActivation(sg_bot_t *bot, edict_t *source,
+	edict_t *door_master, edict_t *activator, int frame_serial)
+{
+	(void)source; (void)door_master; (void)activator; (void)frame_serial;
+	compound_hook_probe_calls++;
+	CHECK(!bot || !bot->compound_hook_live.guard_owned);
+	return SG_COMPOUND_HOOK_GAME_BYPASS;
 }
 
 TOUCH_CALLBACK(Touch_DoorTrigger)
@@ -1965,6 +1986,7 @@ int main(void)
 	TestDirectApproachShallowTicket(&fixture);
 	CHECK(compound_drop_probe_calls > 0);
 	CHECK(compound_drop_delayed_tags == 0);
+	CHECK(compound_hook_probe_calls > 0);
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d mechanism execution test(s) failed\n", failures);

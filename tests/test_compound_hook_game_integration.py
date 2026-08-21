@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def source(name: str) -> str:
+    return (ROOT / name).read_text(encoding="utf-8")
+
+
+def between(text: str, start: str, end: str) -> str:
+    begin = text.index(start)
+    finish = text.index(end, begin)
+    return text[begin:finish]
+
+
+def ordered(text: str, *needles: str) -> None:
+    cursor = 0
+    for needle in needles:
+        cursor = text.index(needle, cursor) + len(needle)
+
+
+def main() -> None:
+    weapon = source("p_weapon.c")
+    launch = between(weapon, "edict_t *fire_hook", "void Draw_Hook")
+    ordered(
+        launch,
+        "SG_CompoundGuardGameHookLinked(",
+        "SG_CompoundHookGameLinked(",
+        "tr = gi.trace",
+        "self->client->hook = bolt",
+        "bolt->touch",
+        "if (self->client->hook != bolt)",
+        "return NULL",
+    )
+    assert "G_FreeEdict" in launch
+    assert "return NULL" in launch
+
+    touch = between(weapon, "void hook_touch", "void Grapple_Bolt_Think")
+    ordered(
+        touch,
+        "SG_CompoundHookGameAttachWillApply(",
+        "VectorClear (self->velocity)",
+        "self->hook_target = other",
+        "gi.linkentity(self)",
+        "SG_CompoundHookGameAttached(",
+    )
+
+    pull = between(weapon, "void CTF_HookPullStep", "void Weapon_Hook_Fire")
+    ordered(
+        pull,
+        "ent->client->hooklength = speed",
+        "VectorCopy (velocity, ent->velocity)",
+        "VectorCopy (ent->velocity, ent->client->oldvelocity)",
+        "SG_CompoundHookGamePullApplied(",
+    )
+
+    fire = between(
+        weapon, "void Weapon_Hook_Fire", "void Weapon_Hook (edict_t *ent)"
+    )
+    assert "if (!ent->client->hook)" in fire
+
+    abort = between(source("g_ctffunc.c"), "void ctf_hook_abort", "char *")
+    ordered(
+        abort,
+        "SG_CompoundHookGameAbortBegin(",
+        "ent->client->hookstate = 0",
+        "G_FreeEdict",
+        "ent->client->hook = NULL",
+        "SG_CompoundHookGameAbortEnd(",
+    )
+
+    disconnect = between(
+        source("p_client.c"), "void ClientDisconnect", "void ClientThink"
+    )
+    ordered(
+        disconnect,
+        "SG_CancelBotDelayedUses(ent)",
+        "SG_CompoundGuardGameClientDisconnecting(ent)",
+        "G_FreeEdict (dead_hook)",
+        "ent->client->hook = NULL",
+        "SG_CompoundGuardGameBoltEvicted(",
+        "gi.unlinkentity (ent)",
+        "ent->inuse = false",
+        "SG_CompoundGuardGameClientDisconnected(",
+    )
+
+    move = source("slipgate/sg_move.c")
+    trigger = between(
+        move,
+        "qboolean SG_AuthorizeDoorTriggerTouch",
+        "qboolean SG_AuthorizeDoorTriggerUse",
+    )
+    assert trigger.index("SG_CompoundDropGameAuthorizeTouch(") < trigger.index(
+        "SG_CompoundHookGameAuthorizeTouch("
+    )
+    activation = between(
+        move,
+        "qboolean SG_AuthorizeDoorActivation",
+        "static sg_bot_t *TraversalLiveEventOwner",
+    )
+    assert activation.index(
+        "SG_CompoundDropGameAuthorizeActivation("
+    ) < activation.index("SG_CompoundHookGameAuthorizeActivation(")
+
+    command_loop = between(move, "for (step = 0; step < sub; step++)", "hook_wait:;")
+    ordered(
+        command_loop,
+        "SG_CompoundHookLivePreStep(",
+        "SG_CompoundHookLiveApproveCommand(",
+        "ClientThink(e, cmd)",
+    )
+    approval = between(
+        command_loop,
+        "result = SG_CompoundHookLiveApproveCommand(",
+        "ClientThink(e, cmd)",
+    )
+    ordered(
+        approval,
+        "!bot->compound_hook_live.command_pending",
+        "!bot->compound_hook_live.command_approved",
+        "SG_CompoundHookGameRecoverOwnedFailure(",
+    )
+    assert command_loop.index("if (bot->compound_hook_live.guard_owned)") < command_loop.index(
+        "ctf_hook_abort(e)"
+    )
+    after_client = command_loop[command_loop.index("ClientThink(e, cmd)") :]
+    hook_step = between(
+        after_client,
+        "if (compound_hook && bot->compound_hook_live.guard_owned)",
+        "if (proved_swim && bot->swim_replay_active",
+    )
+    assert "step < sub - 1 ?" in hook_step
+    assert "SG_CompoundHookLivePostStep(" in hook_step
+    assert "SG_CompoundHookLiveBoundary(" in hook_step
+    assert "step == sub - 1" in hook_step
+    ordered(
+        hook_step,
+        "SG_COMPOUND_HOOK_LIVE_COMPLETE",
+        "SG_CompoundHookGameApplyRequestedRelease(",
+        "Cmd_Hook_f(e)",
+    )
+    begin = between(
+        move,
+        "if (compound_hook && !bot->compound_hook_live.guard_owned)",
+        "if (tc->think_over)",
+    )
+    assert "SG_HookOffhandReady(e)" in begin
+
+    offhand = between(move, "qboolean SG_HookOffhandReady", "static qboolean Hook_LiveWitnessOK")
+    for required in (
+        "CTF_OFFHAND_HOOK",
+        "RIGHT_HANDED",
+        "pers.inventory",
+        "pers.weapon != hook",
+        "newweapon != hook",
+        "hookstate == 0",
+        "hook == NULL",
+    ):
+        assert required in offhand
+
+    dominance = between(
+        move,
+        "guard_result = SG_CompoundGuardValidate",
+        "qboolean drop_yaw_locked",
+    )
+    assert "RL_DOOR_DROP" in dominance and "RL_DOOR_HOOK" in dominance
+    assert "bot->compound_drop_live.guard_owned" in dominance
+    assert "bot->compound_hook_live.guard_owned" in dominance
+
+    descend = source("slipgate/sg_descend.c")
+    assert "SG_CompoundHookLiveBoundary(" not in descend
+    assert "Cmd_Hook_f(e)" not in descend
+    assert "l->action == RL_HOOK || l->action == RL_DOOR_HOOK" in descend
+
+
+if __name__ == "__main__":
+    main()
+    print("test_compound_hook_game_integration: ok")

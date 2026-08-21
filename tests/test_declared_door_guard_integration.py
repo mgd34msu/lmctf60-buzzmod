@@ -232,7 +232,7 @@ def test_unbound_source_passthrough_excludes_held_claims() -> None:
     activation = between(
         move,
         "qboolean SG_AuthorizeDoorActivation",
-        "static sg_bot_t *Drop_LiveEventOwner",
+        "static sg_bot_t *TraversalLiveEventOwner",
     )
     unbound = activation.index("if (!DoorStep_DeclaredBinding(bot, &binding) ||")
     entry = activation.index("binding.entry_entity != source", unbound)

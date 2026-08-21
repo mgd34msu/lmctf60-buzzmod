@@ -33,7 +33,7 @@ qboolean SG_CompoundHookGameTakeObservation(struct sg_bot_s *bot,
 	sg_replay_observation_t *observation_out);
 qboolean SG_CompoundHookGameIdleAdmission(const struct sg_bot_s *bot);
 sg_compound_hook_live_result_t SG_CompoundHookGameBegin(
-	struct sg_bot_s *bot, uint32_t link_index);
+	struct sg_bot_s *bot, uint32_t link_index, qboolean offhand_ready);
 qboolean SG_CompoundHookGameCurrent(struct sg_bot_s *bot,
 	const sg_compound_hook_live_snapshot_t *snapshot,
 	const sg_compound_publication_binding_t **binding_out,
@@ -53,5 +53,6 @@ sg_compound_guard_result_t SG_CompoundHookGameOrphan(
 	struct sg_bot_s *bot);
 sg_compound_hook_live_result_t SG_CompoundHookGameRecoverOwnedFailure(
 	struct sg_bot_s *bot, usercmd_t *same_slot_command);
+qboolean SG_CompoundHookGameApplyRequestedRelease(struct sg_bot_s *bot);
 
 #endif

@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
+#include "slipgate/sg_compound_hook_game_events.h"
 #include "g_tourney.h"
 #include "stdlog.h"
 #include "p_stats.h"
@@ -1137,6 +1138,8 @@ void ctf_hook_abort(edict_t *ent)
 {
 	if (ent && ent->client)
 	{
+		sg_compound_hook_game_event_gate_t compound_gate =
+		    SG_CompoundHookGameAbortBegin(ent, ent->client->hook);
 //		ent->client->fall_time = 0;
 //		ent->client->fall_value = 0;
 //		ent->client->bobtime = 0.0625;
@@ -1171,6 +1174,8 @@ void ctf_hook_abort(edict_t *ent)
 			G_FreeEdict (ent->client->hook);
 			ent->client->hook = NULL;
 		}
+		if (compound_gate != SG_COMPOUND_HOOK_GAME_EVENT_BYPASS)
+			(void)SG_CompoundHookGameAbortEnd(ent);
 	}
 }
 

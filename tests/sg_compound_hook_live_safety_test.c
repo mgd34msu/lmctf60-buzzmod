@@ -358,6 +358,35 @@ static void TestRejectedApprovalDiscardsUnconsumedCommand(void)
 	                                    0.0f);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
 	CHECK(fixture.abort_calls == 1 && fixture.release_calls == 1);
+
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	fixture.body_clear = 0;
+	fixture.bolt_clear = 0;
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose,
+	                                  &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	command.forwardmove++;
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(!state.command_pending && !state.command_approved);
+	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
+	                                    0.0f);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(state.control == SG_COMPOUND_HOOK_LIVE_CONTROL_RECOVERY);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(state.command_pending && state.command_approved);
+	result = SG_CompoundHookLivePostStep(&state, &host, &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(state.transaction_elapsed_ms == 25);
+	CHECK(fixture.release_calls == 0);
 }
 
 static void TestWaitAttachSafetyObservation(void)

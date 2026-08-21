@@ -2,6 +2,7 @@
 
 #include "g_local.h"
 #include "slipgate/sg_compound_guard_game.h"
+#include "slipgate/sg_compound_hook_game_events.h"
 #include "m_player.h"
 #include "g_tourney.h"
 
@@ -1799,6 +1800,7 @@ Touch function for the grappling hook
 void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *surf)
 {
 	vec3_t dest;
+	sg_compound_hook_game_event_gate_t compound_gate;
 
 	if (!other)
 		return;
@@ -1849,6 +1851,15 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 		ctf_hook_abort(self->owner);
 		return;
 	}
+	compound_gate = SG_CompoundHookGameAttachWillApply(self, other, surf);
+	if (compound_gate == SG_COMPOUND_HOOK_GAME_EVENT_DENIED)
+	{
+		if (self->owner && self->owner->client &&
+		    !self->owner->client->hook)
+			self->owner->client->hook = self;
+		ctf_hook_abort(self->owner);
+		return;
+	}
 
 	VectorClear (self->velocity);
 
@@ -1893,15 +1904,26 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 		ctf_hook_abort(self->owner);
 		return;
 	}
-
 		
 	if (!self->hook_target)
 	{
+		sg_compound_hook_live_result_t compound_result;
+
 		self->hook_target = other;
 		VectorSubtract(self->s.origin, self->hook_target->absmin, dest);
 		VectorCopy(dest, self->hook_offset);
 		self->solid = SOLID_TRIGGER;
 		gi.linkentity(self);
+		compound_result = SG_CompoundHookGameAttached(self);
+		if (compound_result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING ||
+		    compound_result.outcome == SG_COMPOUND_HOOK_LIVE_REJECTED)
+		{
+			if (self->owner && self->owner->client &&
+			    !self->owner->client->hook)
+				self->owner->client->hook = self;
+			ctf_hook_abort(self->owner);
+			return;
+		}
 	}
 
 	gi.WriteByte (svc_temp_entity);
@@ -1949,6 +1971,9 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 {
 	edict_t	*bolt;
 	trace_t	tr;
+	sg_compound_hook_live_result_t compound_result;
+	sg_compound_guard_result_t guard_result;
+	sg_mover_subject_t subject;
 
 	VectorNormalize (dir);
 
@@ -1975,7 +2000,20 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	bolt->takedamage = DAMAGE_YES;
 	bolt->health = 59;	 // after 59 damage, hook destoyed
 	gi.linkentity (bolt);
-	(void)SG_CompoundGuardGameHookLinked(self, bolt, NULL);
+	guard_result = SG_CompoundGuardGameHookLinked(self, bolt, &subject);
+	if (guard_result != SG_COMPOUND_GUARD_OK)
+	{
+		G_FreeEdict(bolt);
+		return NULL;
+	}
+	compound_result = SG_CompoundHookGameLinked(self, bolt, &subject);
+	if (compound_result.outcome != SG_COMPOUND_HOOK_LIVE_IDLE &&
+	    compound_result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
+	{
+		self->client->hook = bolt;
+		ctf_hook_abort(self);
+		return NULL;
+	}
 
 
 	//surt the muzzle flash code also causes a shotgun noise!!!!
@@ -2002,7 +2040,10 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	if (tr.fraction < 1.0)
 	{
 		VectorMA (bolt->s.origin, -10, dir, bolt->s.origin);
+		self->client->hook = bolt;
 		bolt->touch (bolt, tr.ent, NULL, NULL);
+		if (self->client->hook != bolt)
+			return NULL;
 	}
 	return bolt;
 }	
@@ -2133,6 +2174,14 @@ void CTF_HookPullStep (edict_t *ent, qboolean draw_cable)
 
 	VectorCopy (velocity, ent->velocity);
 	VectorCopy (ent->velocity, ent->client->oldvelocity);
+	{
+		sg_compound_hook_live_result_t compound_result =
+		    SG_CompoundHookGamePullApplied(ent, ent->client->hook);
+
+		if (compound_result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING ||
+		    compound_result.outcome == SG_COMPOUND_HOOK_LIVE_REJECTED)
+			ctf_hook_abort(ent);
+	}
 }
 
 
@@ -2167,6 +2216,11 @@ void Weapon_Hook_Fire (edict_t *ent)
 		ent->client->isfiring = 1;
 
 		ent->client->hook = fire_hook (ent, start, forward, GRAPPLE_FIRE_HOOK_SPEED);
+		if (!ent->client->hook)
+		{
+			ent->client->hookstate = 0;
+			break;
+		}
 
 		//-bat.  Let's see this right away!
 		Draw_Hook(ent, start, ent->client->hook->s.origin);

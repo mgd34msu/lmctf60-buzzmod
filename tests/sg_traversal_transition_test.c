@@ -97,6 +97,19 @@ static sg_bot_t CompoundDrop(void)
 	return bot;
 }
 
+static sg_bot_t CompoundHook(void)
+{
+	sg_bot_t bot = Bot();
+
+	links[1].action = RL_DOOR_HOOK;
+	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
+	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
+	bot.rail_stage = 1;
+	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
+	bot.compound_hook_live.guard_owned = true;
+	return bot;
+}
+
 static void TestCompoundDropSurvivesRouteRetirement(void)
 {
 	sg_bot_t bot;
@@ -124,6 +137,37 @@ static void TestCompoundDropSurvivesRouteRetirement(void)
 
 	bot = CompoundDrop();
 	bot.compound_drop_live.guard_owned = false;
+	SG_CarryStartRetireSupersededRoute(&bot, true);
+	CHECK(bot.commit_link == -1 && !bot.commit_retirement_pending);
+}
+
+static void TestCompoundHookSurvivesRouteRetirement(void)
+{
+	sg_bot_t bot;
+
+	ResetWorld();
+	bot = CompoundHook();
+	SG_CarryStartRetireSupersededRoute(&bot, true);
+	CHECK(bot.commit_link == 1 && bot.compound_hook_live.guard_owned);
+
+	bot = CompoundHook();
+	CHECK(SG_NonCarryHandoffRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT));
+	CHECK(bot.commit_link == 1 && bot.compound_hook_live.guard_owned);
+
+	bot = CompoundHook();
+	SG_StrikeDutyRetireSupersededRoute(&bot, true);
+	CHECK(bot.commit_link == 1 && bot.compound_hook_live.guard_owned);
+
+	bot = CompoundHook();
+	bot.patrol_link = 1;
+	bot.patrol_seed = 9;
+	CHECK(SG_DefensePatrolRetire(&bot, false));
+	CHECK(bot.commit_link == 1 && bot.compound_hook_live.guard_owned &&
+	      bot.commit_retirement_pending);
+
+	bot = CompoundHook();
+	bot.compound_hook_live.guard_owned = false;
 	SG_CarryStartRetireSupersededRoute(&bot, true);
 	CHECK(bot.commit_link == -1 && !bot.commit_retirement_pending);
 }
@@ -540,6 +584,7 @@ static void TestDefensePatrolRetirement(void)
 int SG_TraversalTransitionTests(void)
 {
 	TestCompoundDropSurvivesRouteRetirement();
+	TestCompoundHookSurvivesRouteRetirement();
 	TestCarryStartRetiresOnlyReversibleTraversal();
 	TestStrikeDutyRetiresSupersededRoute();
 	TestNonCarryHandoffRetiresSupersededRoute();

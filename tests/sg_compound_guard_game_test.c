@@ -9,6 +9,7 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_compound_guard_game.h"
+#include "slipgate/sg_compound_hook_game.h"
 
 #define TEST_EDICTS 24
 
@@ -371,25 +372,51 @@ sg_compound_guard_result_t SG_CompoundDropGameOrphan(sg_bot_t *bot,
 	return result;
 }
 
-sg_compound_guard_result_t SG_CompoundHookGameOrphan(sg_bot_t *bot)
+qboolean SG_CompoundHookGameHost(sg_bot_t *bot,
+	sg_compound_hook_live_host_t *host)
 {
-	sg_compound_guard_result_t result;
+	if (!bot || !host)
+		return false;
+	memset(host, 0, sizeof(*host));
+	host->context = bot;
+	return true;
+}
+
+sg_compound_hook_live_result_t SG_CompoundHookLiveOrphan(
+	sg_compound_hook_live_state_t *state,
+	const sg_compound_hook_live_host_t *host)
+{
+	sg_compound_hook_live_result_t result;
+	sg_compound_guard_result_t orphan_result;
+	sg_bot_t *bot;
 	int bolt_key;
 
+	memset(&result, 0, sizeof(result));
 	hook_action_orphan_calls++;
 	if (hook_action_orphan_result != SG_COMPOUND_GUARD_OK)
-		return hook_action_orphan_result;
-	bolt_key = bot->compound_hook_live.bolt_linked ?
-	    bot->compound_hook_live.bolt.key : 0;
-	result = SG_CompoundGuardOrphan(&bot->compound_guard, bolt_key);
-	if (result == SG_COMPOUND_GUARD_OK)
 	{
-		bot->compound_hook_live.guard_owned = false;
-		bot->compound_hook_live.local_owned = false;
+		result.outcome = SG_COMPOUND_HOOK_LIVE_RECOVERING;
+		return result;
+	}
+	bot = host ? host->context : NULL;
+	if (!state || !bot || state != &bot->compound_hook_live)
+	{
+		result.outcome = SG_COMPOUND_HOOK_LIVE_REJECTED;
+		return result;
+	}
+	bolt_key = state->bolt_linked ? state->bolt.key : 0;
+	orphan_result = SG_CompoundGuardOrphan(&bot->compound_guard, bolt_key);
+	if (orphan_result == SG_COMPOUND_GUARD_OK)
+	{
+		state->guard_owned = false;
+		state->local_owned = false;
 		validate_result = SG_COMPOUND_GUARD_OK;
 		validate_record.law = SG_MOVER_LAW_COMPOUND_PREOPEN;
 		validate_record.state = SG_MOVER_LEASE_ORPHAN;
+		result.outcome = SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED;
+		return result;
 	}
+	result.outcome = SG_COMPOUND_HOOK_LIVE_RECOVERING;
 	return result;
 }
 
@@ -1417,7 +1444,7 @@ static void SetupCompoundHookBot(int linked)
 	entities[11].solid = SOLID_BBOX;
 	entities[11].touch = hook_touch;
 	entities[11].die = hook_die;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11], NULL) ==
 	    SG_COMPOUND_GUARD_OK);
 	CHECK(captured_host.identity(captured_host.context, 11,
 	    &bolt_generation) == SG_COMPOUND_GUARD_YES);

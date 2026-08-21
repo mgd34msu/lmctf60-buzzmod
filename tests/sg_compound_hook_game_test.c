@@ -31,6 +31,7 @@ static qboolean latched_door;
 static qboolean latched_contaminated;
 static qboolean at_top;
 static int events_reset_calls;
+static int acquire_calls;
 static int abort_begin_calls;
 static int abort_end_calls;
 static int physical_abort_calls;
@@ -104,6 +105,7 @@ sg_compound_guard_result_t SG_CompoundGuardAcquireCompoundPreopen(
 	sg_compound_guard_bot_t *guard, const sg_mover_key_t *keys,
 	size_t count, int link, uint32_t trigger)
 {
+	acquire_calls++;
 	STUB_CHECK(guard == &bot.compound_guard && keys && count == 1U);
 	STUB_CHECK(keys[0] == mechanism.mover_key && link == (int)binding.link_index);
 	STUB_CHECK(trigger == (uint32_t)mechanism.trigger_key);
@@ -472,7 +474,7 @@ static void FixtureInit(void)
 	latched_door = false;
 	latched_contaminated = false;
 	at_top = true;
-	events_reset_calls = abort_begin_calls = abort_end_calls = 0;
+	events_reset_calls = acquire_calls = abort_begin_calls = abort_end_calls = 0;
 	physical_abort_calls = 0;
 	touch_calls = activate_calls = recover_calls = prestep_calls = 0;
 	live_orphan_calls = 0;
@@ -516,22 +518,24 @@ static int TransactionFixture(void)
 {
 	sg_compound_hook_live_result_t result;
 	usercmd_t command;
-
 	FixtureInit();
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index, false).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_REJECTED);
+	CHECK(acquire_calls == 0 && SG_CompoundHookGameIdleAdmission(&bot));
 	bot.compound_drop_live.guard_owned = true;
 	CHECK(!SG_CompoundHookGameIdleAdmission(&bot));
-	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index, true).outcome ==
 	    SG_COMPOUND_HOOK_LIVE_REJECTED);
 	bot.compound_drop_live.guard_owned = false;
 	acquire_result = SG_COMPOUND_GUARD_NOT_CLEAR;
-	result = SG_CompoundHookGameBegin(&bot, binding.link_index);
+	result = SG_CompoundHookGameBegin(&bot, binding.link_index, true);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_WAIT);
 	CHECK(!bot.compound_hook_game.angle_bias_valid);
 	CHECK(!bot.compound_hook_live.guard_owned &&
 	    bot.compound_hook_live.outer.phase == SG_COMPOUND_NONE);
 	CHECK(SG_CompoundHookGameIdleAdmission(&bot));
 	acquire_result = SG_COMPOUND_GUARD_OK;
-	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index, true).outcome ==
 	    SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(SG_CompoundHookGameAuthorizeTouch(&bot, &entities[4], bot.ent,
 	    expected_frame) == SG_COMPOUND_HOOK_GAME_ACCEPTED);
@@ -712,7 +716,7 @@ static int OrphanWrapperFixture(void)
 	sg_compound_hook_live_state_t retained;
 
 	FixtureInit();
-	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index, true).outcome ==
 	    SG_COMPOUND_HOOK_LIVE_RUNNING);
 	events_idle = false;
 	CHECK(SG_CompoundHookGameOrphan(&bot) == SG_COMPOUND_GUARD_OK);
@@ -723,7 +727,7 @@ static int OrphanWrapperFixture(void)
 	CHECK(SG_CompoundHookGameOrphan(&bot) ==
 	    SG_COMPOUND_GUARD_INVALID_ARGUMENT);
 	CHECK(live_orphan_calls == 1 && events_reset_calls == 1);
-	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index, true).outcome ==
 	    SG_COMPOUND_HOOK_LIVE_RUNNING);
 
 	bot.compound_hook_live.bolt_linked = true;
@@ -756,7 +760,7 @@ static int OrphanWrapperFixture(void)
 	client.hookstate = 0;
 	hook_observation = SG_COMPOUND_GUARD_NO;
 	hook_absent = SG_COMPOUND_GUARD_YES;
-	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index).outcome ==
+	CHECK(SG_CompoundHookGameBegin(&bot, binding.link_index, true).outcome ==
 	    SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(!stub_failed);
 	return 1;

@@ -78,7 +78,8 @@ COMPOUND_GUARD_TEST_ALL_ARTIFACTS := \
 	$(COMPOUND_GUARD_TEST_OBJS) $(COMPOUND_GUARD_TEST_DEPS)
 COMPOUND_GUARD_GAME_TEST_BIN := sg_compound_guard_game_test.make
 COMPOUND_GUARD_GAME_TEST_OBJS := .sg_compound_guard_game_test.make.o \
-	.sg_compound_guard_game_under_test.make.o
+	.sg_compound_guard_game_under_test.make.o \
+	.sg_compound_hook_game_lifecycle_under_test.make.o
 COMPOUND_GUARD_GAME_TEST_DEPS := $(COMPOUND_GUARD_GAME_TEST_OBJS:.o=.d)
 COMPOUND_GUARD_GAME_INTEGRATION_TEST := \
 	tests/test_compound_guard_game_integration.py
@@ -88,6 +89,8 @@ COMPOUND_GUARD_GAME_TEST_ALL_ARTIFACTS := \
 	.sg_compound_guard_game_test.gnu.d \
 	.sg_compound_guard_game_under_test.gnu.o \
 	.sg_compound_guard_game_under_test.gnu.d \
+	.sg_compound_hook_game_lifecycle_under_test.gnu.o \
+	.sg_compound_hook_game_lifecycle_under_test.gnu.d \
 	$(COMPOUND_GUARD_GAME_TEST_OBJS) \
 	$(COMPOUND_GUARD_GAME_TEST_DEPS)
 DECLARED_DOOR_GUARD_TEST_BIN := sg_declared_door_guard_test.make
@@ -587,8 +590,10 @@ COMPOUND_HOOK_LIVE_TEST_OBJS := .sg_compound_hook_live_test.make.o \
 COMPOUND_HOOK_LIVE_TEST_DEPS := $(COMPOUND_HOOK_LIVE_TEST_OBJS:.o=.d)
 COMPOUND_HOOK_GAME_TEST_BIN := sg_compound_hook_game_test.make
 COMPOUND_HOOK_GAME_TEST_OBJS := .sg_compound_hook_game_test.make.o \
-	.sg_compound_hook_game_under_test.make.o
+	.sg_compound_hook_game_under_test.make.o \
+	.sg_compound_hook_game_lifecycle_under_test.make.o
 COMPOUND_HOOK_GAME_TEST_DEPS := $(COMPOUND_HOOK_GAME_TEST_OBJS:.o=.d)
+COMPOUND_HOOK_GAME_INTEGRATION_TEST := tests/test_compound_hook_game_integration.py
 COMPOUND_HOOK_GAME_EVENTS_TEST_BIN := sg_compound_hook_game_events_test.make
 COMPOUND_HOOK_GAME_EVENTS_TEST_OBJS := \
 	.sg_compound_hook_game_events_test.make.o \
@@ -627,7 +632,9 @@ COMPOUND_HOOK_TEST_ALL_ARTIFACTS := \
 	.sg_compound_hook_game_test.$(flavor).o \
 	.sg_compound_hook_game_test.$(flavor).d \
 	.sg_compound_hook_game_under_test.$(flavor).o \
-	.sg_compound_hook_game_under_test.$(flavor).d)
+	.sg_compound_hook_game_under_test.$(flavor).d \
+	.sg_compound_hook_game_lifecycle_under_test.$(flavor).o \
+	.sg_compound_hook_game_lifecycle_under_test.$(flavor).d)
 HOOK_LIVE_TEST_BIN := sg_hook_live_test.make
 HOOK_LIVE_TEST_OBJS := .sg_hook_live_test.make.o \
 	.sg_hook_live_under_test.make.o .sg_hook_live_replay_under_test.make.o
@@ -1094,6 +1101,7 @@ OBJS := \
 	slipgate/sg_compound_hook_live.o \
 	slipgate/sg_compound_hook_live_finish.o \
 	slipgate/sg_compound_hook_game.o \
+	slipgate/sg_compound_hook_game_lifecycle.o \
 	slipgate/sg_compound_hook_game_events.o \
 	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
@@ -2724,6 +2732,16 @@ $(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
 		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
 		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_hook_game_lifecycle_under_test.make.o: \
+		slipgate/sg_compound_hook_game_lifecycle.c \
+		slipgate/sg_compound_hook_game.h slipgate/sg_bot.h \
+		slipgate/sg_local.h g_local.h \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_compound_hook_game_events_test.make.o: \
 		tests/sg_compound_hook_game_events_test.c \
 		tests/sg_compound_hook_game_events_fixture.h \
@@ -3166,6 +3184,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_DROP_TRANSITION_TEST_BIN) \
 		$(COMPOUND_HOOK_LIVE_TEST_BIN) \
 		$(COMPOUND_HOOK_GAME_TEST_BIN) \
+		$(COMPOUND_HOOK_GAME_INTEGRATION_TEST) \
 		$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
 		$(HOOK_INTEGRATION_TEST) \
@@ -3273,6 +3292,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_DROP_TRANSITION_TEST_BIN)
 	$(Q)./$(COMPOUND_HOOK_LIVE_TEST_BIN)
 	$(Q)./$(COMPOUND_HOOK_GAME_TEST_BIN)
+	$(Q)python3 -B $(COMPOUND_HOOK_GAME_INTEGRATION_TEST)
 	$(Q)./$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN)
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
 	$(Q)./$(HOOK_DISCIPLINE_TEST_BIN)
@@ -3573,9 +3593,11 @@ compound-hook-live-test: $(COMPOUND_HOOK_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_HOOK_LIVE_TEST_BIN)
 
-compound-hook-game-test: $(COMPOUND_HOOK_GAME_TEST_BIN)
+compound-hook-game-test: $(COMPOUND_HOOK_GAME_TEST_BIN) \
+		$(COMPOUND_HOOK_GAME_INTEGRATION_TEST)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_HOOK_GAME_TEST_BIN)
+	$(Q)python3 -B $(COMPOUND_HOOK_GAME_INTEGRATION_TEST)
 
 compound-hook-game-events-test: $(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN)
 	$(E) [TEST] $<

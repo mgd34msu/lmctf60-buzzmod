@@ -569,7 +569,7 @@ qboolean SG_CompoundHookGameIdleAdmission(const sg_bot_t *bot)
 }
 
 sg_compound_hook_live_result_t SG_CompoundHookGameBegin(sg_bot_t *bot,
-	uint32_t link_index)
+	uint32_t link_index, qboolean offhand_ready)
 {
 	sg_compound_hook_live_host_t host;
 	sg_replay_pose_t pose;
@@ -580,7 +580,7 @@ sg_compound_hook_live_result_t SG_CompoundHookGameBegin(sg_bot_t *bot,
 	result.outcome = SG_COMPOUND_HOOK_LIVE_REJECTED;
 	result.failure = SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT;
 	result.replay_reason = SG_REPLAY_REASON_INVALID_ARGUMENT;
-	if (!SG_CompoundHookGameIdleAdmission(bot) ||
+	if (!offhand_ready || !SG_CompoundHookGameIdleAdmission(bot) ||
 	    !SG_CompoundHookGameHost(bot, &host) ||
 	    !SG_CompoundHookGamePose(bot->ent, &pose) ||
 	    !SG_CompoundHookGameObservation(bot, bot->ent, &observation))
@@ -637,20 +637,6 @@ SG_CompoundHookGameAuthorizeActivation(sg_bot_t *bot, edict_t *source,
 	    SG_COMPOUND_HOOK_GAME_ACCEPTED : SG_COMPOUND_HOOK_GAME_DENIED;
 }
 
-sg_compound_guard_result_t SG_CompoundHookGameOrphan(sg_bot_t *bot)
-{
-	sg_compound_hook_live_host_t host;
-	sg_compound_hook_live_result_t result;
-
-	if (!bot || !bot->compound_hook_live.guard_owned ||
-	    !bot->compound_hook_live.local_owned ||
-	    !SG_CompoundHookGameHost(bot, &host))
-		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
-	result = SG_CompoundHookLiveOrphan(&bot->compound_hook_live, &host);
-	return result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED ?
-	    SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_HOST_ERROR;
-}
-
 sg_compound_hook_live_result_t SG_CompoundHookGameRecoverOwnedFailure(
 	sg_bot_t *bot, usercmd_t *same_slot_command)
 {
@@ -675,4 +661,23 @@ sg_compound_hook_live_result_t SG_CompoundHookGameRecoverOwnedFailure(
 		return result;
 	return SG_CompoundHookLivePreStep(&bot->compound_hook_live, &host,
 	    &pose, &observation, same_slot_command);
+}
+
+qboolean SG_CompoundHookGameApplyRequestedRelease(sg_bot_t *bot)
+{
+	sg_compound_hook_game_event_gate_t gate;
+
+	if (!bot || !bot->ent || !bot->ent->client ||
+	    !bot->compound_hook_live.guard_owned)
+		return false;
+	if (!bot->compound_hook_live.hook.release_requested ||
+	    bot->compound_hook_live.hook_released)
+		return true;
+	gate = SG_CompoundHookGameReleaseRequested(bot->ent,
+	    bot->ent->client->hook);
+	if (gate != SG_COMPOUND_HOOK_GAME_EVENT_ACCEPTED)
+		return false;
+	ctf_hook_abort(bot->ent);
+	return bot->compound_hook_live.hook_released ||
+	       bot->compound_hook_live.recovering;
 }

@@ -14,6 +14,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_compound_drop_game.h"
+#include "slipgate/sg_compound_hook_game.h"
 #include "slipgate/sg_button_live.h"
 #include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_declared_door_guard.h"
@@ -2067,6 +2068,13 @@ qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
 		if (compound >= 0)
 			return compound ? true : false;
 	}
+	{
+		int compound = SG_CompoundHookGameAuthorizeTouch(bot, source,
+		    activator, level.framenum);
+
+		if (compound >= 0)
+			return compound ? true : false;
+	}
 	command_scoped = DoorStep_ApproachCommandScoped(bot);
 	if (!DoorStep_DeclaredBinding(bot, &binding) ||
 	    binding.entry_entity != source)
@@ -2532,6 +2540,13 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 		if (compound >= 0)
 			return compound ? true : false;
 	}
+	{
+		int compound = SG_CompoundHookGameAuthorizeActivation(bot, source,
+		    door_master, activator, level.framenum);
+
+		if (compound >= 0)
+			return compound ? true : false;
+	}
 	command_scoped = DoorStep_ApproachCommandScoped(bot);
 	if (!DoorStep_DeclaredBinding(bot, &binding) ||
 	    binding.entry_entity != source)
@@ -2611,7 +2626,7 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	return true;
 }
 
-static sg_bot_t *Drop_LiveEventOwner(edict_t *activator)
+static sg_bot_t *TraversalLiveEventOwner(edict_t *activator)
 {
 	int i;
 
@@ -2624,7 +2639,8 @@ static sg_bot_t *Drop_LiveEventOwner(edict_t *activator)
 			/* Production remains strictly reducer-owned. */
 			if ((sg_bots[i].drop_started &&
 			     sg_bots[i].drop_replay_active) ||
-		    sg_bots[i].compound_drop_live.guard_owned)
+		    sg_bots[i].compound_drop_live.guard_owned ||
+		    sg_bots[i].compound_hook_live.guard_owned)
 				return &sg_bots[i];
 		}
 	return NULL;
@@ -2634,47 +2650,63 @@ static sg_bot_t *Drop_LiveEventOwner(edict_t *activator)
  * They never replay a trace, touch, use, or pusher side effect. */
 void SG_NoteDropTriggerContact(edict_t *source, edict_t *activator)
 {
-	sg_bot_t *bot = Drop_LiveEventOwner(activator);
+	sg_bot_t *bot = TraversalLiveEventOwner(activator);
 	qboolean contaminated, door_passed;
 
 	if (!bot)
 		return;
 	if (!SG_OracleReplayTriggerEvents(source, &contaminated, &door_passed))
 	{
-		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, true, false);
+		if (bot->drop_started && bot->drop_replay_active)
+			(void)SG_DropLiveEventsLatch(
+			    &bot->drop_live_events, true, false);
 		if (bot->compound_drop_live.guard_owned)
 			(void)SG_DropLiveEventsLatch(
 			    &bot->compound_drop_live.drop_events, true, false);
+		if (bot->compound_hook_live.guard_owned)
+			SG_CompoundHookGameObserveSafety(bot, false, true);
 		return;
 	}
-	(void)SG_DropLiveEventsLatch(&bot->drop_live_events, contaminated,
-	                            door_passed);
+	if (bot->drop_started && bot->drop_replay_active)
+		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, contaminated,
+		                            door_passed);
 	if (bot->compound_drop_live.guard_owned)
 		(void)SG_DropLiveEventsLatch(&bot->compound_drop_live.drop_events,
 		    contaminated, door_passed);
+	if (bot->compound_hook_live.guard_owned)
+		SG_CompoundHookGameObserveSafety(bot, door_passed, contaminated);
 }
 
 void SG_NoteDropSolidContact(edict_t *source, edict_t *activator)
 {
-	sg_bot_t *bot = Drop_LiveEventOwner(activator);
+	sg_bot_t *bot = TraversalLiveEventOwner(activator);
 
 	if (!bot || !source || source == g_edicts || SG_ImmutableSupport(source))
 		return;
 	if (source->classname &&
 	    strncmp(source->classname, "func_door", 9) == 0)
 	{
-		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, false, true);
+		if (bot->drop_started && bot->drop_replay_active)
+			(void)SG_DropLiveEventsLatch(
+			    &bot->drop_live_events, false, true);
 		if (bot->compound_drop_live.guard_owned &&
 		    source->s.number != bot->compound_drop_live.snapshot.mover_key)
 			(void)SG_DropLiveEventsLatch(
 			    &bot->compound_drop_live.drop_events, false, true);
+		if (bot->compound_hook_live.guard_owned &&
+		    source->s.number != bot->compound_hook_live.snapshot.mover_key)
+			SG_CompoundHookGameObserveSafety(bot, true, false);
 	}
 	else
 	{
-		(void)SG_DropLiveEventsLatch(&bot->drop_live_events, true, false);
+		if (bot->drop_started && bot->drop_replay_active)
+			(void)SG_DropLiveEventsLatch(
+			    &bot->drop_live_events, true, false);
 		if (bot->compound_drop_live.guard_owned)
 			(void)SG_DropLiveEventsLatch(
 			    &bot->compound_drop_live.drop_events, true, false);
+		if (bot->compound_hook_live.guard_owned)
+			SG_CompoundHookGameObserveSafety(bot, false, true);
 	}
 }
 
@@ -6882,7 +6914,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			     rune->links[record.link_index].action != RL_DOOR &&
 			     rune->links[record.link_index].action != RL_BUTTON_DOOR) ||
 			    (record.law == SG_MOVER_LAW_COMPOUND_PREOPEN &&
-			     rune->links[record.link_index].action != RL_DOOR_DROP) ||
+			     !((rune->links[record.link_index].action == RL_DOOR_DROP &&
+			        bot->compound_drop_live.guard_owned &&
+			        !bot->compound_hook_live.guard_owned) ||
+			       (rune->links[record.link_index].action == RL_DOOR_HOOK &&
+			        bot->compound_hook_live.guard_owned &&
+			        !bot->compound_drop_live.guard_owned))) ||
 			    bot->commit_link != record.link_index)
 			{
 				if (sg_cv.debug && sg_cv.debug->value > 0.0f &&
@@ -6932,6 +6969,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean compound_drop = (bestlink >= 0 && SG_Rune() &&
 	    SG_Rune()->links && bestlink < SG_Rune()->hdr.num_links &&
 	    SG_Rune()->links[bestlink].action == RL_DOOR_DROP);
+	qboolean compound_hook = (bestlink >= 0 && SG_Rune() &&
+	    SG_Rune()->links && bestlink < SG_Rune()->hdr.num_links &&
+	    SG_Rune()->links[bestlink].action == RL_DOOR_HOOK);
 	qboolean declared_control = (bestlink >= 0 && SG_Rune() &&
 	    SG_Rune()->links && bestlink < SG_Rune()->hdr.num_links &&
 	    (SG_Rune()->links[bestlink].action == RL_LIFT ||
@@ -6939,7 +6979,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	     SG_Rune()->links[bestlink].action == RL_DOOR ||
 	     SG_Rune()->links[bestlink].action == RL_BUTTON_DOOR));
 	qboolean proved_control = proved_ballistic || proved_swim ||
-	    compound_drop || declared_control;
+	    compound_drop || compound_hook || declared_control;
 	qboolean declared_door = declared_control &&
 	    (SG_Rune()->links[bestlink].action == RL_DOOR ||
 	     SG_Rune()->links[bestlink].action == RL_BUTTON_DOOR);
@@ -7006,6 +7046,22 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		if (result.outcome != SG_COMPOUND_DROP_LIVE_RUNNING)
 		{
 			bot->commit_link = -1;
+			return;
+		}
+		bot->commit_link = bestlink;
+	}
+	if (compound_hook && !bot->compound_hook_live.guard_owned)
+	{
+		sg_compound_hook_live_result_t result =
+		    SG_CompoundHookGameBegin(bot, (uint32_t)bestlink,
+		        SG_HookOffhandReady(e));
+
+		if (result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
+		{
+			bot->commit_link = -1;
+			bot->commit_until = 0.0f;
+			bot->sticky_link = -1;
+			bot->latch_until = 0.0f;
 			return;
 		}
 		bot->commit_link = bestlink;
@@ -9087,6 +9143,73 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						}
 					}
 				}
+				if (compound_hook && bot->compound_hook_live.guard_owned)
+				{
+					sg_compound_hook_live_host_t host;
+					sg_compound_hook_live_result_t result;
+					sg_replay_observation_t observation;
+					sg_replay_pose_t pose;
+
+					if (!SG_CompoundHookGameHost(bot, &host) ||
+					    !SG_CompoundHookGamePose(e, &pose) ||
+					    !SG_CompoundHookGameObservation(bot, e, &observation))
+					{
+						SG_DeclaredDoorTerminalDeath(bot);
+						return;
+					}
+					result = SG_CompoundHookLivePreStep(
+					    &bot->compound_hook_live, &host, &pose,
+					    &observation, cmd);
+					if (!result.command_ready &&
+					    result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING)
+						result = SG_CompoundHookGameRecoverOwnedFailure(
+						    bot, cmd);
+					if (!result.command_ready)
+					{
+						if (result.outcome ==
+						    SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED)
+							bot->commit_link = -1;
+						else
+							SG_DeclaredDoorTerminalDeath(bot);
+						return;
+					}
+					result = SG_CompoundHookLiveApproveCommand(
+					    &bot->compound_hook_live, cmd);
+					if (!bot->compound_hook_live.command_pending ||
+					    !bot->compound_hook_live.command_approved)
+					{
+						if (result.outcome ==
+						    SG_COMPOUND_HOOK_LIVE_RECOVERING)
+						{
+							result =
+							    SG_CompoundHookGameRecoverOwnedFailure(
+							        bot, cmd);
+						if (result.command_ready)
+							result =
+							    SG_CompoundHookLiveApproveCommand(
+							        &bot->compound_hook_live,
+							        cmd);
+						}
+						if (result.outcome ==
+						    SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED)
+						{
+							bot->commit_link = -1;
+							return;
+						}
+						if (!bot->compound_hook_live.command_pending ||
+						    !bot->compound_hook_live.command_approved)
+						{
+							SG_DeclaredDoorTerminalDeath(bot);
+							return;
+						}
+					}
+					if (result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING &&
+					    result.outcome != SG_COMPOUND_HOOK_LIVE_RECOVERING)
+					{
+						SG_DeclaredDoorTerminalDeath(bot);
+						return;
+					}
+				}
 				bot->as_landing_command = as_ok && as_chain &&
 				    !proved_control && !door_hold;
 				ClientThink(e, cmd);
@@ -9183,6 +9306,64 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				{
 					SG_DeclaredDoorTerminalDeath(bot);
 					return;
+				}
+			}
+			if (compound_hook && bot->compound_hook_live.guard_owned)
+			{
+				sg_compound_hook_live_host_t host;
+				sg_compound_hook_live_result_t result;
+				sg_replay_observation_t observation;
+				sg_replay_pose_t pose;
+
+				if (!SG_CompoundHookGameHost(bot, &host) ||
+				    !SG_CompoundHookGamePose(e, &pose) ||
+				    !SG_CompoundHookGameTakeObservation(bot, e, &observation))
+				{
+					SG_DeclaredDoorTerminalDeath(bot);
+					return;
+				}
+				result = step < sub - 1 ?
+				    SG_CompoundHookLivePostStep(&bot->compound_hook_live, &host,
+				        &pose, &observation) :
+				    SG_CompoundHookLiveBoundary(&bot->compound_hook_live, &host,
+				        &pose, &observation);
+				if (result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING)
+					result = SG_CompoundHookGameRecoverOwnedFailure(bot, NULL);
+				if (result.outcome == SG_COMPOUND_HOOK_LIVE_COMPLETE ||
+				    result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED)
+				{
+					bot->commit_link = -1;
+					return;
+				}
+				if (result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING &&
+				    result.outcome != SG_COMPOUND_HOOK_LIVE_RECOVERING)
+				{
+					SG_DeclaredDoorTerminalDeath(bot);
+					return;
+				}
+				if (bot->compound_hook_live.hook.release_requested &&
+				    !bot->compound_hook_live.hook_released &&
+				    !SG_CompoundHookGameApplyRequestedRelease(bot))
+				{
+					SG_DeclaredDoorTerminalDeath(bot);
+					return;
+				}
+				if (step == sub - 1 &&
+				    result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING &&
+				    bot->compound_hook_live.outer.phase == SG_COMPOUND_TOP &&
+				    !bot->compound_hook_live.bolt_linked)
+				{
+					if (!SG_HookOffhandReady(e))
+					{
+						SG_DeclaredDoorTerminalDeath(bot);
+						return;
+					}
+					Cmd_Hook_f(e);
+					if (!bot->compound_hook_live.bolt_linked)
+					{
+						SG_DeclaredDoorTerminalDeath(bot);
+						return;
+					}
 				}
 			}
 			if (proved_swim && bot->swim_replay_active &&
@@ -9307,6 +9488,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		qboolean wet_aim_emergency = wet_graph_aim && e->waterlevel >= 3 &&
 		    SG_TimerRemaining(e->air_finished) <
 		        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f);
+
+		if (bot->compound_hook_live.guard_owned)
+			goto hook_wait;
 
 		/*
 		 * A rope this bot does not think it owns is a rope it cannot ever

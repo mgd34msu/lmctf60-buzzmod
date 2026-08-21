@@ -15,6 +15,8 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 		return false;
 	if (action == RL_DOOR_DROP && bot->compound_drop_live.guard_owned)
 		return true;
+	if (action == RL_DOOR_HOOK && bot->compound_hook_live.guard_owned)
+		return true;
 	memset(&state, 0, sizeof(state));
 	state.action = action;
 	state.hook_phase = bot->hook_phase;
@@ -194,7 +196,8 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 		return;
 	action = rune->links[bot->commit_link].action;
 	if ((action != RL_HOOK && action != RL_JUMP && action != RL_DROP &&
-	     action != RL_ROCKETJUMP && action != RL_DOOR_DROP) ||
+	     action != RL_ROCKETJUMP && action != RL_DOOR_DROP &&
+	     action != RL_DOOR_HOOK) ||
 	    SG_TraversalControllerPhysical(bot, action))
 		return;
 	SG_StagedTraversalCancel(bot, action);

@@ -634,10 +634,11 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		/* Graph hooks prove the offhand production schedule.  A
 		 * weapon-held grapple has activation/fire frames and is a different
 		 * controller, so it is not an executable edge in this graph. */
+		if ((l->action == RL_HOOK || l->action == RL_DOOR_HOOK) &&
+		    !SG_HookOffhandReady(e))
+			continue;
 		if (l->action == RL_HOOK)
 		{
-			if (!SG_HookOffhandReady(e))
-				continue;
 			if (hook_water)
 			{
 				if ((SG_Rune()->seeds[l->to].flags & RSF_WATER) ||
@@ -2575,6 +2576,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 * cannot clear its graph identity while its mover lease remains active. */
 		if (SG_CompoundDropCommitRetained(cl->action,
 		        bot->compound_drop_live.guard_owned))
+			return bot->commit_link;
+		if (cl->action == RL_DOOR_HOOK &&
+		    bot->compound_hook_live.guard_owned)
 			return bot->commit_link;
 		if (cl->action == RL_DROP && bot->drop_started &&
 		    bot->drop_replay_active)
