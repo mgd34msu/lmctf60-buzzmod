@@ -612,6 +612,11 @@ static int test_combat_randomness_is_per_client(void)
 
 int main(void)
 {
+	CHECK(SG_CombatTargetClaimTrigger(BUTTON_ATTACK | BUTTON_USE, false) ==
+	    (BUTTON_ATTACK | BUTTON_USE));
+	CHECK(SG_CombatTargetClaimTrigger(BUTTON_ATTACK | BUTTON_USE, true) ==
+	    BUTTON_USE);
+	CHECK(SG_CombatTargetClaimTrigger(BUTTON_USE, true) == BUTTON_USE);
 	CHECK(SG_CombatCommitCandidateAllowed(1.0f, 1, 1, 1));
 	CHECK(!SG_CombatCommitCandidateAllowed(2.0f, 1, 1, 1));
 	CHECK(SG_CombatCommitCandidateAllowed(2.0f, 0, 1, 1));
@@ -735,6 +740,9 @@ class CombatAimEnvelopeTest(unittest.TestCase):
 
     def test_source_preserves_physical_order_and_strict_clear_rule(self) -> None:
         frame = SOURCE[SOURCE.index("void SG_CombatFrame"):]
+        scan = frame.index("enemy = Combat_Scan")
+        trigger_owner = frame.index("SG_CombatTargetClaimTrigger")
+        idle = frame.index("if (!enemy)")
         finalise = frame.index("Combat_FinalizeMuzzleAim")
         trace = frame.index("sg_host.trace(muzzle, NULL, NULL, endp, self, MASK_SHOT)")
         ballistic = frame.index("if (ballistic)")
@@ -742,6 +750,8 @@ class CombatAimEnvelopeTest(unittest.TestCase):
         splash = frame.index("if (!Combat_SplashSafe(self, inhand, impact))",
                              no_clear)
 
+        self.assertLess(scan, trigger_owner)
+        self.assertLess(trigger_owner, idle)
         self.assertLess(finalise, trace)
         self.assertLess(ballistic, trace)
         self.assertLess(no_clear, splash)

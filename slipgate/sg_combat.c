@@ -3893,7 +3893,6 @@ static void Cbt_ChooseWeapon(edict_t *self, sg_combat_state_t *st,
 	*band_out = band;
 }
 
-
 void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 {
 	sg_combat_state_t	*st;
@@ -3957,6 +3956,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	sg_cbt_why[7]++;                        /* frames that got this far */
 	enemy = Combat_Scan(self, eye, forward, rattled ? threat : NULL,
 	    incumbent_index, true);
+	cmd->buttons = SG_CombatTargetClaimTrigger(cmd->buttons, enemy != NULL);
 	if (enemy)
 		sg_cbt_why[8]++;                    /* frames with a target */
 	if (!enemy)

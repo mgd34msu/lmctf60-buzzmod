@@ -7,6 +7,14 @@
 #define SG_COMBAT_TARGET_STICK_UNITS 128.0f
 #define SG_COMBAT_CARRIER_PRIORITY_UNITS 256.0f
 
+static inline byte SG_CombatTargetClaimTrigger(byte buttons,
+	qboolean target_acquired)
+{
+	if (target_acquired)
+		buttons &= ~BUTTON_ATTACK;
+	return buttons;
+}
+
 /* A retained combat target is an observation about one client life, not an
  * enduring claim on an edict slot.  Client slots are recycled and team
  * changes respawn through a new ctfid, so every external consumer of the
